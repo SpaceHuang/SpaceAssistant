@@ -58,6 +58,7 @@ describe('ChatMessageList memo isolation', () => {
           <ChatMessageList
             messages={messages}
             actions={stableActions}
+            confirmationReadyBySession={{}}
             onBubbleRender={probe.track}
             resolveToolsInteractive={() => undefined}
             showArchiveToWiki={() => false}
@@ -94,6 +95,7 @@ describe('ChatMessageList memo isolation', () => {
       <ChatMessageList
         messages={[msg]}
         actions={actions}
+        confirmationReadyBySession={{}}
         workDir="/a"
         onBubbleRender={probe.track}
         resolveToolsInteractive={() => undefined}
@@ -107,6 +109,7 @@ describe('ChatMessageList memo isolation', () => {
       <ChatMessageList
         messages={[msg]}
         actions={actions}
+        confirmationReadyBySession={{}}
         workDir="/b"
         onBubbleRender={probe.track}
         resolveToolsInteractive={() => undefined}
@@ -134,6 +137,7 @@ describe('ChatMessageList memo isolation', () => {
       <ChatMessageList
         messages={[msg]}
         actions={actions}
+        confirmationReadyBySession={{}}
         shellConfig={shellA}
         onBubbleRender={probe.track}
         resolveToolsInteractive={() => undefined}
@@ -147,6 +151,7 @@ describe('ChatMessageList memo isolation', () => {
       <ChatMessageList
         messages={[msg]}
         actions={actions}
+        confirmationReadyBySession={{}}
         shellConfig={shellB}
         onBubbleRender={probe.track}
         resolveToolsInteractive={() => undefined}
@@ -180,6 +185,7 @@ describe('ChatMessageList memo isolation', () => {
       <ChatMessageList
         messages={[failed, queued]}
         actions={actions}
+        confirmationReadyBySession={{}}
         resolveToolsInteractive={() => undefined}
         showArchiveToWiki={() => false}
         canRetry={(m) => m.status === 'failed'}

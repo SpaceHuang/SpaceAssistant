@@ -12,6 +12,7 @@ import {
   isPreferredModelAvailable,
   sortModelsFastFirst
 } from '../../../shared/llmModelConfig'
+import { THINKING_EFFORT_LEVELS } from '../../../shared/thinkingEffort'
 import {
   ConfigModelFastBadge,
   ConfigModelOptionContent,
@@ -135,6 +136,8 @@ export function ModelsSettingsTab({
   const [addMaxTokens, setAddMaxTokens] = useState<number | null>(null)
   const [addFast, setAddFast] = useState(false)
   const [addVision, setAddVision] = useState(false)
+  // §5.3：默认勾选 = 缺省支持（与运行时语义一致：只有显式 false 才触发降级）
+  const [addSupportsThinking, setAddSupportsThinking] = useState(true)
 
   const enabledModels = useMemo(() => models.filter((m) => m.enabled), [models])
   const sortedModels = useMemo(() => sortModelsFastFirst(models), [models])
@@ -180,7 +183,8 @@ export function ModelsSettingsTab({
       isDefault: false,
       isFast: addFast,
       isVision: addVision,
-      enabled: true
+      enabled: true,
+      ...(addSupportsThinking ? {} : { supportsThinking: false })
     }
     onModelsChange([...models, entry])
     setAddName('')
@@ -188,6 +192,7 @@ export function ModelsSettingsTab({
     setAddMaxTokens(null)
     setAddFast(false)
     setAddVision(false)
+    setAddSupportsThinking(true)
     setAddOpen(false)
   }
 
@@ -240,6 +245,9 @@ export function ModelsSettingsTab({
         </Checkbox>
         <Checkbox checked={addVision} onChange={(e) => setAddVision(e.target.checked)}>
           {t('models.add.visionLabel')}
+        </Checkbox>
+        <Checkbox checked={addSupportsThinking} onChange={(e) => setAddSupportsThinking(e.target.checked)}>
+          {t('models.add.supportsThinking')}
         </Checkbox>
       </div>
       <Button type="primary" size="small" block onClick={addModel} disabled={!addName.trim()}>
@@ -378,6 +386,14 @@ export function ModelsSettingsTab({
                       <span className="config-models-catalog-row__name" title={m.name}>
                         {m.name}
                       </span>
+                      {m.supportsThinking === false ? (
+                        <span
+                          className="config-models-catalog-row__no-thinking"
+                          title={t('models.effort.notSupported')}
+                        >
+                          {t('models.effort.unsupportedBadge')}
+                        </span>
+                      ) : null}
                     </div>
                     <div className="config-models-catalog__col config-models-catalog__col--cap-fast">
                       {m.isFast ? <ConfigModelFastBadge /> : null}
@@ -413,11 +429,18 @@ export function ModelsSettingsTab({
           <div className="config-models-panel config-models-panel--inline">
             <div className="config-field-row config-models-thinking-row">
               <div className="config-models-thinking-row__text">
-                <span className="config-field__label">{t('models.defaults.thinkingLabel')}</span>
-                <p className="config-field__hint">{t('models.defaults.thinkingHint')}</p>
+                <span className="config-field__label">{t('models.defaults.effortLabel')}</span>
+                <p className="config-field__hint">{t('models.defaults.effortHint')}</p>
               </div>
-              <Form.Item name="thinkingEnabled" valuePropName="checked" noStyle preserve>
-                <Switch aria-label={t('models.defaults.thinkingAria')} />
+              <Form.Item name="thinkingEffort" noStyle>
+                <Select
+                  className="config-models-effort-select"
+                  aria-label={t('models.defaults.effortAria')}
+                  options={THINKING_EFFORT_LEVELS.map((level) => ({
+                    value: level,
+                    label: t(`models.effort.${level}`)
+                  }))}
+                />
               </Form.Item>
             </div>
           </div>

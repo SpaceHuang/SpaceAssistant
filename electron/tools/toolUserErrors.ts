@@ -117,21 +117,18 @@ export interface SanitizedToolOutput {
   visibleBytes: number
 }
 
-/** 面向 Agent 的输出脱敏：保留错误类型、行号和上下文，不把普通目录名当作错误。 */
+/** 面向 Agent 的输出脱敏：秘密与主目录折叠由 sanitizeAgentText 统一处理。 */
 export function sanitizeToolOutput(text: string, _toolName?: string): SanitizedToolOutput {
   const originalBytes = Buffer.byteLength(text, 'utf8')
   if (!text) return { text, redacted: false, originalBytes, visibleBytes: 0 }
-  const agentSafeText = sanitizeAgentText(text)
-  const redactedText = agentSafeText.text
-    .replace(/((?:API[_-]?KEY|TOKEN|SECRET|COOKIE|PASSWORD)\s*[=:]\s*)([^\s,;]+)/gi, '$1<secret:redacted>')
-    .replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1<secret:redacted>')
-    .replace(/-----BEGIN [A-Z ]+-----[\s\S]*?-----END [A-Z ]+-----/g, '<secret:redacted>')
-    .replace(/ERR_REQUIRE_ESM/g, '<module-error>')
+  // ERR_REQUIRE_ESM 是终端输出的稳定化变换，不属于通用秘密规则，故在此处单独做。
+  const sanitized = sanitizeAgentText(text)
+  const redactedText = sanitized.text.replace(/ERR_REQUIRE_ESM/g, '<module-error>')
   const redacted = redactedText !== text
   return {
     text: redactedText,
     redacted,
-    ...(redacted && agentSafeText.redactionReason ? { redactionReason: agentSafeText.redactionReason } : {}),
+    ...(redacted && sanitized.redactionReason ? { redactionReason: sanitized.redactionReason } : {}),
     originalBytes,
     visibleBytes: Buffer.byteLength(redactedText, 'utf8')
   }

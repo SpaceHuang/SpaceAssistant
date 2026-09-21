@@ -65,7 +65,15 @@ vi.mock('./chatCancelRegistry', () => ({
   registerChatCancel: vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
   clearChatCancel: vi.fn(),
   throwIfChatCancelled: vi.fn(),
-  ChatCancelledError: class ChatCancelledError extends Error {}
+  ChatCancelledError: class ChatCancelledError extends Error {},
+  // A2(偏差 18):runtime 工厂经本模块取类构造实例
+  ChatCancelRegistry: class ChatCancelRegistry {
+    register = vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }))
+    signalChatCancel = vi.fn()
+    clear = vi.fn()
+    throwIfCancelled = vi.fn()
+    cancelAllActiveChats = vi.fn()
+  }
 }))
 
 vi.mock('./sessionTitleSuggest', () => ({
@@ -99,7 +107,23 @@ vi.mock('./database', async (importOriginal) => {
 })
 
 import { runToolChatSession } from './toolChatLoop'
+import { assembleInvocation } from './runtime/invocationAssembler'
+import { writePolicyPackages } from './confirmation/policyRulesRuntime'
+
+/** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
+function runAssembledSession(materials: unknown) {
+  const { invocation, ports } = assembleInvocation(materials as never)
+  return runToolChatSession(invocation, ports)
+}
 import { createMemoryAppDb } from './database/testHelpers'
+import { createAgentRuntime } from './runtime/agentRuntime'
+import { setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
+import { createBuiltinToolRegistry } from './tools/builtinExecutors'
+import { ConfirmIdSpace } from './remote/confirmId'
+import { ChatCancelRegistry } from './chatCancelRegistry'
+import { ToolRevocationRegistry } from './toolRevocationRegistry'
+import { McpConcurrencyGate } from './mcp/mcpToolExecutor'
+
 
 function makeSender(): WebContents {
   return { send: vi.fn(), isDestroyed: vi.fn(() => false) } as unknown as WebContents
@@ -108,6 +132,17 @@ function makeSender(): WebContents {
 function makeDb(locale: 'zh-CN' | 'en-US' = 'zh-CN'): AppDatabase {
   return createMemoryAppDb(locale)
 }
+
+// P8:显式装配含真 builtin registry 的默认 runtime(兼容转发打到真实注册表)
+setDefaultAgentRuntime(
+  createAgentRuntime({
+    confirmIds: new ConfirmIdSpace(),
+    chatCancels: new ChatCancelRegistry(),
+    toolRevocations: new ToolRevocationRegistry(),
+    mcpGate: new McpConcurrencyGate(),
+    builtinRegistry: createBuiltinToolRegistry()
+  })
+)
 
 describe('runToolChatSession locale injection', () => {
   beforeEach(() => {
@@ -139,9 +174,13 @@ describe('runToolChatSession locale injection', () => {
         cancel: vi.fn()
       })
     })
+    // P1：desktop standard 的 write_file 走「自动」快通道；人工确认路径取 strict 档（ask 不变换 → user）
+    const strictDb = makeDb('zh-CN')
+    writePolicyPackages(strictDb, { desktop: 'strict', wechat: 'standard', feishu: 'standard', automation: 'standard' })
     const run = runSession({
       requestId: 'remote-race',
-      toolsConfig: { ...DEFAULT_TOOLS_CONFIG, confirmMode: 'always' }
+      toolsConfig: { ...DEFAULT_TOOLS_CONFIG },
+      appDb: strictDb
     })
     await confirmStarted
     const { revokeToolForAllLanes } = await import('./toolRevocationRegistry')
@@ -156,7 +195,7 @@ describe('runToolChatSession locale injection', () => {
 
 
   async function runSession(overrides: Partial<Parameters<typeof runToolChatSession>[0]> = {}) {
-    return runToolChatSession({
+    return runAssembledSession({
       sender: makeSender(),
       requestId: 'req-1',
       sessionId: 'sess-1',
@@ -166,6 +205,8 @@ describe('runToolChatSession locale injection', () => {
       workDir: '/tmp',
       userDataDir: '/tmp',
       getApiKey: async () => 'test-key',
+      emitFactEvent: () => undefined,
+      emitSessionEvent: async () => undefined,
       appDb: makeDb('zh-CN'),
       ...overrides
     })

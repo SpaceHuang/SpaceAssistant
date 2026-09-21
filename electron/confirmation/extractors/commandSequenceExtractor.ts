@@ -19,7 +19,10 @@ function normalizeToken(tok: string): string {
 
 /** 规范化 shell 命令签名（与缓存键同源）：归一化引号/空白/大小写，供对账与变体绕过防护。 */
 export function normalizeShellSignature(command: string): string {
-  const tokens = tokenizeShellArgv(command) ?? []
+  // §3 不变量 6：解析失败（未闭合引号）禁止折叠为空签名——空串会把全部失败输入
+  // 合并为同一等价类（fail-open）。回退为剥离引号前的原始文本（只拆分、不合并）。
+  const tokens = tokenizeShellArgv(command)
+  if (!tokens) return command.trim()
   return tokens.map(normalizeToken).filter(Boolean).join(' ')
 }
 
@@ -107,16 +110,40 @@ export function extractCommandSignals(command: string, _env: EnvFacts): {
   // 仅单分段 + 无元语法的简单命令才允许派生信任缓存键（等价于现 parseShellCommandForTrust 的 persistable 判定）；
   // 复合命令（`a && b`、管道等）不得因任一分段被信任而放行整条命令（B1 / §5.2 变体绕过）。
   const persistable = segments.length === 1 && isPersistableTrustCommand(command)
-  const signature = commands
-    .map((c) => c.signature)
-    .filter(Boolean)
-    .join(' && ')
+  // P1-E(b)（D6）：按真实连接符渲染，管道段不再被拆成 && 拼接的独立命令
+  const signature = renderCommandSequence(
+    commands.map((c) => ({ text: c.signature ?? '', connector: c.connector }))
+  )
   return {
     signals: [{ kind: 'command-sequence', commands, ...(persistable ? { persistable } : {}) }],
     summary: {
       text: signature ? `${CONFIRMATION_LABELS.summaryCommandSequencePrefix}${signature}` : CONFIRMATION_LABELS.summaryEmptyCommand
     }
   }
+}
+
+/** 可渲染的子命令片段：文本 + 与下一片段之间的真实连接符。 */
+export interface RenderableCommandPart {
+  text: string
+  connector?: string
+}
+
+/**
+ * P1-E(b)（D6）：按真实连接符渲染子命令序列。
+ * 旧实现用 ' && ' 硬拼，把 `A; B | Out-Null; C` 渲染成 `A && B && Out-Null && C`——
+ * 管道段被拆成独立命令，审批者看到的比实际更可疑。缺省连接符回退 '&&'（未知来源保底）。
+ */
+export function renderCommandSequence(parts: readonly RenderableCommandPart[]): string {
+  const kept = parts.filter((p) => p.text)
+  const out: string[] = []
+  kept.forEach((part, index) => {
+    if (index === 0) {
+      out.push(part.text)
+      return
+    }
+    out.push(part.connector ?? '&&', part.text)
+  })
+  return out.join(' ')
 }
 
 /** 校验命令是否可用于信任缓存（仅单条简单命令且无元语法才可持久化信任）。 */

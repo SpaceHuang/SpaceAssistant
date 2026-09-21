@@ -18,7 +18,6 @@ let pendingPaths = new Map<string, Exclude<FileContentSyncReason, 'refreshExpand
 let pendingRefreshExpanded = false
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let settleAbort: AbortController | null = null
-let ipcSubscribed = false
 let metadataGetter: MetadataGetter | null = null
 
 function clearDebounceTimer(): void {
@@ -168,11 +167,13 @@ export function cancelFileContentSync(): void {
   pendingRefreshExpanded = false
 }
 
-export function ensureFileContentSyncIpc(): void {
-  if (ipcSubscribed) return
-  ipcSubscribed = true
-  window.api.fileOnTreeChanged(onTreeChanged)
-  window.api.fileOnContentChanged(onContentChanged)
+// 偏差 11/3c:文件域失效统一经 invalidationService(scope:invalidated)驱动,旧 IPC 直连通道退役。
+export function applyFileTreeInvalidation(event: import('../../shared/fileTreeSync').FileTreeChangeEvent): void {
+  onTreeChanged(event)
+}
+
+export function applyFileContentInvalidation(relPath: string): void {
+  enqueuePath(relPath, 'watch')
 }
 
 /** @internal test helper */
@@ -184,7 +185,6 @@ export function setFileContentMetadataGetterForTests(getter: MetadataGetter | nu
 export function resetFileContentSyncBusForTests(): void {
   readyListeners.clear()
   cancelFileContentSync()
-  ipcSubscribed = false
   metadataGetter = null
 }
 

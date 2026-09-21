@@ -1,0 +1,18 @@
+{
+  "id": "a01-print-literal",
+  "group": "legacy-parseable",
+  "legacyParsed": true,
+  "verdict": "allow",
+  "patterns": [
+    "A0"
+  ],
+  "signals": [
+    {
+      "kind": "script-analysis",
+      "signal": "clean",
+      "patterns": [
+        "A0"
+      ]
+    }
+  ]
+}

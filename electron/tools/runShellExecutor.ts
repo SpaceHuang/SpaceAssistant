@@ -24,11 +24,14 @@ import { ProgressThrottle } from '../shell/progressThrottle'
 import { ExecutionLifecycle } from '../shell/executionLifecycle'
 import { ProcessSupervisor } from '../shell/processSupervisor'
 import { DialectRetryBreaker } from '../shell/dialectRetryBreaker'
+import { snapshotEnvForLog } from '../shell/envSnapshot'
 import { buildShellArgs, profileForPlatform } from '../shell/shellProfiles'
 import { cleanupExpiredOutputArtifacts } from '../shell/outputArtifactCleanup'
 import { SHELL_CASE_IDS } from '../shell/shellCaseIds'
 import { type PreparedShellExecution } from '../shell/preparedShellExecution'
 import { planRunShellExecution, revalidatePreparedShellExecution, RunShellPlanError } from './runShellPlan'
+import { runShellWithHostFallback } from './runShellHostDegrade'
+import { shouldAttemptHostDegrade } from '../shell/shellHostFallback'
 
 const PROGRESS_TAIL = 4000
 /** 进度用滚动文本窗口：只需覆盖 PROGRESS_TAIL，避免为进度保留全量文本。 */
@@ -128,8 +131,31 @@ export const runShellExecutor: ToolExecutor = {
 
     logShellAgentEvent('info', 'shell.exec.start', baseLog)
 
-    return executePreparedShellExecution(prepared, ctx, started, baseLog)
+    return executePreparedShellExecutionWithHostFallback(prepared, ctx, started, baseLog)
   }
+}
+
+/**
+ * 执行一次 prepared shell invocation，并在宿主初始化失败（0xFFFF0000 / 0xC0000142）时
+ * 沿 powershell → pwsh → cmd 降级（P0-C）。其余失败（超时/取消/普通退出/方言错配）不触发。
+ * run_shell 的全部执行入口（legacy executor / planned registration / 确认后重执行）统一走这里。
+ */
+export async function executePreparedShellExecutionWithHostFallback(
+  prepared: PreparedShellExecution,
+  ctx: ToolExecutionContext,
+  started: number,
+  baseLog: Record<string, unknown>
+): Promise<ToolExecutorResult> {
+  const primary = await executePreparedShellExecution(prepared, ctx, started, baseLog)
+  if (!shouldAttemptHostDegrade(primary)) return primary
+  return runShellWithHostFallback({
+    prepared,
+    ctx,
+    started,
+    baseLog,
+    primaryResult: primary,
+    runPrepared: executePreparedShellExecution
+  })
 }
 
 /**
@@ -160,6 +186,8 @@ export async function executePreparedShellExecution(
   const timeoutSec = prepared.timeoutMs / 1000
   const ioMax = prepared.ioMaxBytes
   const contract = prepared.profile.outputEncoding
+  // P0-D3 组 5（§5.4.3）：env 快照（键计数 + 哈希，值不落盘），与 run_script 的 finish 对齐后可双路径 diff
+  const envSnapshot = snapshotEnvForLog(prepared.environment)
   const spec: ShellSpawnSpec = {
     executable: prepared.spawnSpec.executable,
     args: [...prepared.spawnSpec.args],
@@ -477,6 +505,12 @@ export async function executePreparedShellExecution(
           exitCodeHint,
           exitCodeFamily: exitDetails?.family,
           exitCodeSemantics: exitDetails?.semantics,
+          // P0-B（D2）：诊断字段进入日志，宿主初始化类故障无需回到 events.jsonl 取证
+          hresult,
+          exitCodeAdvice: exitDetails?.advice,
+          envKeyCount: envSnapshot.keyCount,
+          envKeysSha256: envSnapshot.keysSha256,
+          envEntriesSha256: envSnapshot.entriesSha256,
           interrupted,
           timedOut,
           cancelled,

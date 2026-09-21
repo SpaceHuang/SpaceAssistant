@@ -1,5 +1,6 @@
 import { decide } from '../../src/shared/policy/policyEngine'
-import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
+import type { PolicyRule } from '../../src/shared/confirmation/types'
+import { validatePolicyRulesFloor } from '../../src/shared/policy/policyFloor'
 import { getBuiltinToolMetadata } from '../../src/shared/builtinToolMetadata'
 import type {
   AutoApproveFallback,
@@ -24,7 +25,8 @@ import type {
 } from '../../src/shared/confirmation/types'
 import { runExtractors } from './extractors/runExtractors'
 import { extractScriptSignals } from './extractors/scriptAnalysisExtractor'
-import { analyzeScriptContent, type ScriptAnalysisResult } from '../shell/scriptContentSecurity'
+import { analyzeScriptContent, parsePythonModule, type ScriptAnalysisResult } from '../shell/scriptContentSecurity'
+import type { IrModule } from '../shell/scriptIr/types'
 import { precheckRunShellTool } from '../shell/shellToolLoopHelpers'
 import { getBuiltinSensitivePrefixes } from '../shell/shellSensitivePaths'
 import { evaluateFileToolAutoApproval } from '../tools/writeFileAutoApproval'
@@ -33,21 +35,17 @@ import type { ActDangerAssessment } from '../browser/browserActionPolicy'
 import { classifyLarkCliImpact } from '../feishu/larkCliImpactPolicy'
 import type { McpToolSnapshotEntry } from '../mcp/mcpToolRegistry'
 import type { RemoteContext } from '../tools/types'
-import type { AppDatabase } from '../database'
-import { getDbConnection } from '../database'
 import { checkRemoteTaskBudget, type RemoteTaskBudgetState } from '../remote/remoteTaskBudget'
 import {
   isRemoteSecurityMigrationComplete,
   shouldSkipRemoteBrowserActConfirm
 } from '../remote/remoteToolPolicy'
 import { AuditedDecisionCache } from './auditedDecisionCache'
-import { SqliteDecisionCache } from './sqliteDecisionCache'
 import { getSecurityAuditLog } from './audit'
-import { loadEffectivePolicyRules } from './policyRulesRuntime'
+import { effectiveActionFor, type PolicyPackage } from '../../src/shared/policy/policyPackages'
 import type { ShellAnalysisResult } from '../shell/shellTypes'
 import type { ShellSecurityHints } from '../../src/shared/domainTypes'
 
-const EMPTY_CACHE: DecisionCacheView = { lookup: () => null }
 
 /** 出站写工具判定（等价现 toolChatLoop.isOutboundWriteTool：未知/非读 fail-closed 计写）。 */
 export function isOutboundWriteTool(toolName: string, toolInput: Record<string, unknown>): boolean {
@@ -56,19 +54,44 @@ export function isOutboundWriteTool(toolName: string, toolInput: Record<string, 
   return classifyLarkCliImpact(toolInput.args).impact !== 'read'
 }
 
+export { validatePolicyRulesFloor }
+
+/** 门控消费的决策缓存完整形状（lookup + 写/清理族；由装配期注入 SqliteDecisionCache 或等价内存实现）。 */
+export type GateDecisionCache = import('./auditedDecisionCache').AuditedDecisionCacheDeps['cache']
+
 export interface ToolCallGateArgs {
   toolName: string
   toolInput: Record<string, unknown>
   sessionId: string
   workDir: string
   userDataDir: string
+  /** 显式 lane（偏差 21：由驱动源层解析后随调用传入）；缺省回退 remoteContext 推导，最终 desktop。 */
+  lane?: ExecutionLane
   remoteContext?: RemoteContext
   toolsConfig: ToolsConfig
   shellConfig?: ShellConfig | null
   browserConfig?: BrowserConfig | null
   feishuConfig?: FeishuConfig
   wechatConfig?: WeChatConfig
-  appDb?: AppDatabase
+  /** 装配期解析的生效规则集（B1：必填，缺料 fail-loud，不回退内置默认规则）。 */
+  effectiveRules: PolicyRule[]
+  /**
+   * 「自动」变换的档位来源（§2.1 LANE_PROFILES，与 effectiveRules 同源装配注入）；
+   * 缺省 standard——装配方未显式声明时按恒等处理（fail-safe：少自动化不多自动化）。
+   */
+  lanePackage?: PolicyPackage
+  /** 装配期随规则集携带的来源标注（P3）；审计据此回答规则为何未生效。 */
+  policyOrigins?: Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }>
+  /**
+   * P5（偏差 4）factsProvider 端口：宿主补充审批可见输入（返回 undefined = 本次无补充；
+   * 未提供端口 = 忘了声明——两者在 facts.factsProviderDeclared 上可区分）。
+   */
+  factsProvider?: (input: { toolName: string; toolInput: Record<string, unknown> }) =>
+    import('../../src/shared/confirmation/types').FactSignal[] | undefined
+  /** 装配期构造的决策缓存视图（B1：必填，缺料 fail-loud，不回退空缓存）。 */
+  decisionCache: GateDecisionCache
+  /** 装配期注入的 shell 预检材料（B1：必填；trusted-command 记账写不允许静默停写）。 */
+  shellPrecheck: { touchTrustedCommand: (command: string) => void }
   remoteBudgetState?: RemoteTaskBudgetState | null
   /** 浏览器 act 的危险评估结论（由执行链路先行评估注入）。 */
   dangerAssessment?: ActDangerAssessment | null
@@ -80,6 +103,12 @@ export interface ToolCallGateArgs {
   /** 测试注入：替代 shell 预检 / 文件自动审批（生产默认真实实现）。 */
   runShellPrecheck?: typeof precheckRunShellTool
   fileAutoApproval?: typeof evaluateFileToolAutoApproval
+  /**
+   * P2-4 递归守卫（I5，硬约束）：审批执行链调用时传入的内部标记（代码写死，不进配置与规则集）。
+   * gate 看到 require-confirm 决策 + 该标记 → 改写为 deny(cause=recursion-blocked)。
+   * 守卫只认标记不认业务身份；豁免失效兜底由 AgentChannel 深度计数承担。
+   */
+  internalConfirmExemption?: 'approval-agent'
 }
 
 export interface ToolCallGateResult {
@@ -98,13 +127,16 @@ export interface ToolCallGateResult {
   budgetPause?: { message: string; reason: string }
   /** 桌面写/编辑自动审批回退原因（确认卡片展示）。 */
   autoApproveFallback?: AutoApproveFallback
+  /** H2：写文件自动批准（快通道批准 && 决策放行）——审计与持久 meta 的判定来源 */
+  fileAutoApproved?: boolean
   /** MCP 条目回传（确认卡片载荷）。 */
   mcpEntry?: McpToolSnapshotEntry
   /** run_script 原始分析（拒绝消息桥接 / 日志 patterns）。 */
   rawScriptAnalysis?: ScriptAnalysisResult
 }
 
-function laneOf(remoteContext?: RemoteContext): ExecutionLane {
+function laneOf(remoteContext: RemoteContext | undefined, explicitLane?: ExecutionLane): ExecutionLane {
+  if (explicitLane) return explicitLane
   if (!remoteContext) return 'desktop'
   return remoteContext.source === 'feishu' ? 'feishu' : 'wechat'
 }
@@ -114,7 +146,7 @@ function laneOf(remoteContext?: RemoteContext): ExecutionLane {
  * 通道确认、记账（recordOutboundWrite / grant reserve）与拒绝消息映射仍由主循环承担。
  */
 export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<ToolCallGateResult> {
-  const lane = laneOf(args.remoteContext)
+  const lane = laneOf(args.remoteContext, args.lane)
   const origin: OriginInfo = { kind: 'direct-owner' }
   const channelConfig = args.remoteContext
     ? args.remoteContext.source === 'feishu'
@@ -127,6 +159,66 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     facts: undefined as unknown as ContentFacts
   }
 
+  // ===== B1 缺料 fail-loud：端口材料缺失 = 调用失败 + 审计（不回退任何静默默认）=====
+  const materialsMissing: string[] = []
+  if (!Array.isArray(args.effectiveRules)) materialsMissing.push('effectiveRules')
+  if (!args.decisionCache || typeof args.decisionCache.lookup !== 'function') materialsMissing.push('decisionCache')
+  if (!args.shellPrecheck || typeof args.shellPrecheck.touchTrustedCommand !== 'function') materialsMissing.push('shellPrecheck')
+  if (materialsMissing.length > 0) {
+    audit.record({
+      ts: Date.now(),
+      event: 'policy.decision',
+      lane,
+      origin,
+      sessionId: args.sessionId,
+      toolName: args.toolName,
+      riskLevel: 'high',
+      factsSummary: args.toolName,
+      signals: [],
+      decision: 'deny',
+      ruleId: 'gate-materials-missing',
+      reason: `TOOL_GATE_MATERIALS_MISSING(${materialsMissing.join(',')})`,
+      cause: 'gate-materials-missing',
+      actor: 'system'
+    })
+    throw new Error(`TOOL_GATE_MATERIALS_MISSING(${materialsMissing.join(',')})`)
+  }
+
+  // ===== P3 底线校验（§7.1 判据 2）：传入规则集相对 locked 底线可收紧不可放宽 =====
+  // 违规 → 拒绝本次工具调用 + cause=rules-violated 审计（与正常拒绝、缺料失败互斥不混计）
+  const floorCheck = validatePolicyRulesFloor(args.effectiveRules)
+  if (!floorCheck.ok) {
+    result.decision = {
+      type: 'deny',
+      ruleId: 'rules-violated',
+      reason: `POLICY_RULES_FLOOR_VIOLATED(${floorCheck.violations.join(',')})`
+    }
+    result.facts = {
+      toolName: args.toolName,
+      actionClass: 'execute',
+      baseRiskLevel: 'high',
+      signals: [],
+      summary: { text: args.toolName }
+    }
+    audit.record({
+      ts: Date.now(),
+      event: 'policy.decision',
+      lane,
+      origin,
+      sessionId: args.sessionId,
+      toolName: args.toolName,
+      riskLevel: 'high',
+      factsSummary: args.toolName,
+      signals: [],
+      decision: 'deny',
+      ruleId: 'rules-violated',
+      reason: `POLICY_RULES_FLOOR_VIOLATED(${floorCheck.violations.join(',')})`,
+      cause: 'rules-violated',
+      actor: 'system'
+    })
+    return result
+  }
+
   // ===== 前置 validator：run_shell 预检（deny 短路，不进引擎）=====
   let shellLegacyAutoAllowEligible = false
   if (args.toolName === 'run_shell') {
@@ -135,7 +227,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       workDir: args.workDir,
       userDataDir: args.userDataDir,
       shellConfig: args.shellConfig,
-      appDb: args.appDb
+      shellPrecheck: args.shellPrecheck
     })
     if (!precheck.ok) {
       result.shellPrecheckDeny = {
@@ -180,23 +272,18 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     shellLegacyAutoAllowEligible = precheck.legacyAutoAllowEligible
   }
 
-  // ===== 生效规则集（套餐/覆盖，§4 第 1 区）：默认 standard 返回 DEFAULT_POLICY_RULES 引用 =====
-  // 提前加载：桌面写/编辑自动审批的预计算条件要看 desktop-auto-approve 的生效动作
-  const rules = args.appDb ? loadEffectivePolicyRules(args.appDb, lane) : DEFAULT_POLICY_RULES
+  // ===== 生效规则集（§4 第 1 区 + §2.1「自动」语义）：装配期解析注入（B1，门控不持库）=====
+  // 规则集由装配期按 lane+档位解析（resolveEffectivePolicyRulesWithOrigin），引擎合成规则的
+  // 档位变换经 lanePackage 同源注入（desktop standard 非 locked ask→auto-evaluator）。
+  const rules = args.effectiveRules
+  const lanePackage = args.lanePackage ?? 'standard'
 
   // ===== 桌面写/编辑自动审批（预计算，评估器闭包消费）=====
-  // 生效条件：desktop-auto-approve 动作为 auto-evaluator；默认规则带 confirmMode=auto 门控，
-  // 覆盖后（门控剥离，见 applyCustom）由规则动作直接决定——确认模式已并入规则列表统一受套餐管理
-  const autoApproveRule = rules.find((r) => r.id === 'desktop-auto-approve')
-  const autoApproveActive =
-    autoApproveRule?.action === 'auto-evaluator' &&
-    (autoApproveRule.configRequires ? args.toolsConfig.confirmMode === 'auto' : true)
+  // P1 起「自动」是 standard 桌面的默认路径：write_file/edit_file 恒预计算确定性快通道
+  // （基于 autoApproveMaxBytes / autoApproveMaxEditChars）；未通过时记录 fallback 原因，
+  // 由审批 Agent 裁决（custom 覆盖为 ask 时该原因随确认卡展示）。
   let fileAutoApprove: boolean | undefined
-  if (
-    !args.remoteContext &&
-    (args.toolName === 'write_file' || args.toolName === 'edit_file') &&
-    autoApproveActive
-  ) {
+  if (lane === 'desktop' && (args.toolName === 'write_file' || args.toolName === 'edit_file')) {
     const autoEval = await (args.fileAutoApproval ?? evaluateFileToolAutoApproval)({
       workDir: args.workDir,
       userDataDir: args.userDataDir,
@@ -263,7 +350,14 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     result.mcpEntry = args.mcpEntry
   } else if (args.toolName === 'run_script') {
     const code = typeof args.toolInput.code === 'string' ? args.toolInput.code : ''
-    const { signals, summary } = extractScriptSignals(code, env)
+    // P1-T3：解析一次（恰好 1 次 parse），IR 同时供信号提取与 rawScriptAnalysis；判定逻辑零改动
+    let preParsedIr: IrModule | undefined
+    try {
+      preParsedIr = parsePythonModule(code)
+    } catch {
+      // 解析失败（语法错误 / 服务未就绪 / IrCoverageError）：下游经既有 catch 通道产出 A-fail / extraction-failed
+    }
+    const { signals, summary } = extractScriptSignals(code, env, preParsedIr)
     facts = {
       toolName: 'run_script',
       actionClass: 'execute',
@@ -271,7 +365,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       signals,
       summary
     }
-    result.rawScriptAnalysis = analyzeScriptContent(code, { remote: lane !== 'desktop' })
+    result.rawScriptAnalysis = analyzeScriptContent(code, { remote: lane !== 'desktop' }, preParsedIr)
   } else {
     const descriptor = getBuiltinToolMetadata(args.toolName)
     if (descriptor) {
@@ -303,7 +397,6 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   }
   // ===== 配置袋（规则 configRequires/askUnless 消费）=====
   const config: Record<string, unknown> = {
-    confirmMode: args.toolsConfig.confirmMode,
     deniedTools: args.toolsConfig.deniedTools,
     remoteDenyOutbound: channelConfig?.remoteDenyOutbound ?? false,
     // 现状仅在 browserConfig 存在且未开放远程会话时阻断；无配置等价放行
@@ -320,35 +413,81 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   }
 
   // ===== 决策（缓存走 AuditedDecisionCache，落 cache.hit 审计）=====
-  const cache: DecisionCacheView = args.appDb
-    ? new AuditedDecisionCache({
-        cache: new SqliteDecisionCache(getDbConnection(args.appDb)),
-        audit,
-        sessionId: args.sessionId,
-        lane,
-        origin
-      })
-    : EMPTY_CACHE
+  // 底层视图由装配期注入（B1）；审计装饰仍在此完成，保证 args.audit 注入语义不变
+  const cache: DecisionCacheView = new AuditedDecisionCache({
+    cache: args.decisionCache,
+    audit,
+    sessionId: args.sessionId,
+    lane,
+    origin
+  })
+  // P5（偏差 4）AutoEvaluator 数据化：预过滤器路由由生效规则数据驱动（action='auto-evaluator'
+  // 条目的 match.toolName + match.lane 声明评估域与 lane 标注），不再是按工具名写死的代码分支。
+  // 确定性预过滤地位保留在回答者之前（审批计划已拍板，复核记录留痕）。
+  const autoEvaluatorRoutes = new Map<string, string>()
+  if (lane === 'desktop') {
+    // §2.3：「自动」动作的内建快通道——desktop 下 write_file/edit_file 恒注册（不依赖基线规则，
+    // desktop-auto-approve 规则已删；custom 覆盖为 ask 时规则动作不再消费评估器，路由天然旁路）
+    autoEvaluatorRoutes.set('write_file', 'file-fast-track')
+    autoEvaluatorRoutes.set('edit_file', 'file-fast-track')
+  }
+  for (const rule of rules) {
+    if (rule.action !== 'auto-evaluator') continue
+    const laneMatch = rule.match?.lane
+    if (laneMatch && !laneMatch.includes(lane)) continue
+    const names = rule.match?.toolName === undefined
+      ? []
+      : Array.isArray(rule.match.toolName)
+        ? rule.match.toolName
+        : [rule.match.toolName]
+    for (const name of names) autoEvaluatorRoutes.set(name, rule.id)
+  }
   const deps: PolicyEngineDeps = {
     cache,
     config,
     migrationComplete: isRemoteSecurityMigrationComplete(channelConfig),
+    // 档位动作变换（§2.1）：引擎合成规则（default-write-execute-ask）经同源变换参与「自动」
+    transform: (r) => effectiveActionFor(lane, lanePackage, r),
     autoEvaluator: (f) => {
-      if (f.toolName === 'run_shell') {
+      const route = autoEvaluatorRoutes.get(f.toolName)
+      if (!route) return { approve: false as const, reason: '无评估器' }
+      if (route === 'shell-precheck-auto-allow') {
         return shellLegacyAutoAllowEligible
           ? { approve: true as const, reason: 'shell-precheck' }
           : { approve: false as const, reason: 'shell-precheck 未放行' }
       }
-      if (f.toolName === 'write_file' || f.toolName === 'edit_file') {
+      if (route === 'file-fast-track') {
         return fileAutoApprove === true
-          ? { approve: true as const, reason: 'desktop-auto-approve' }
+          ? { approve: true as const, reason: 'file-fast-track' }
           : { approve: false as const, reason: '文件自动审批未通过' }
       }
       return { approve: false as const, reason: '无评估器' }
     }
   }
+  // P5：factsProvider 补充并入（工具契约 ∪ 宿主环境，逐项标注来源半区）
+  let providerSignals: import('../../src/shared/confirmation/types').FactSignal[] | undefined
+  if (args.factsProvider) {
+    providerSignals = args.factsProvider({ toolName: args.toolName, toolInput: args.toolInput })
+  }
+  const factSources: Record<string, 'tool-contract' | 'host-environment'> = {}
+  for (const signal of facts.signals) factSources[signal.kind] = 'tool-contract'
+  for (const signal of providerSignals ?? []) {
+    if (!(signal.kind in factSources)) factSources[signal.kind] = 'host-environment'
+  }
+  facts.signals = [...facts.signals, ...(providerSignals ?? [])]
+  facts.factSources = factSources
+  facts.factsProviderDeclared = args.factsProvider !== undefined
+
   // 生效规则集已在上方加载（自动审批预计算依赖），此处直接判定
-  const decision = decide(facts, context, rules, deps)
+  let decision = decide(facts, context, rules, deps)
+
+  // ===== P2-4 递归守卫（I5）：审批会话内的 require-confirm 一律 fail-closed =====
+  // 守卫在回答者解析之前生效，否则内层 require-confirm 会被再次解析到 AgentChannel 造成递归。
+  // 不可进规则集：进规则集就会被 custom/loose 改坏，收紧致自动审批静默停摆（不可变集，非 locked 底线集）。
+  if (decision.type === 'require-confirm' && args.internalConfirmExemption === 'approval-agent') {
+    const reason = '安全策略无法完成裁决：审批会话内不允许再进入确认流程（递归守卫）'
+    decision = { type: 'deny', ruleId: 'recursion-guard', reason }
+  }
 
   // 判定即记录（§5.6）：policy.decision 事件
   audit.record({
@@ -365,12 +504,23 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     decision: decision.type,
     ruleId: decision.ruleId,
     reason: decision.type === 'require-confirm' ? decision.ruleId : decision.reason,
+    ...(decision.type === 'require-confirm' ? { answerer: decision.answerer } : {}),
+    ...(decision.type === 'deny' && decision.ruleId === 'recursion-guard'
+      ? { cause: 'recursion-blocked' as const }
+      : {}),
+    ...(args.policyOrigins?.[decision.ruleId]
+      ? { ruleOrigin: args.policyOrigins[decision.ruleId]!.source }
+      : {}),
+    ...(args.factsProvider ? { factSources } : {}),
     actor: 'system'
   })
 
   if (decision.type === 'deny' && decision.ruleId.startsWith('remote-outbound-budget-pause-')) {
     result.budgetPause = outboundBudgetMessage ?? { message: decision.reason, reason: 'remote_task_budget' }
   }
+  // H2：写文件自动批准的显式结果（快通道批准 && 决策为放行）——审计与 meta 的判定来源，
+  // 不再用已删除的 desktop-auto-approve ruleId 匹配
+  result.fileAutoApproved = fileAutoApprove === true && decision.type === 'auto-allow'
   result.decision = decision
   result.facts = facts
   return result

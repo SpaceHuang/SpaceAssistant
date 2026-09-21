@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto'
 import type { Message, MessageStatus, Session } from '../../src/shared/domainTypes'
 import type { SessionUsage } from '../../src/shared/sessionUsage'
+import type { SessionOwnership, SessionVisibility } from '../../src/shared/sessionOwnership'
+import { normalizeOwnership, normalizeVisibility } from '../../src/shared/sessionOwnership'
 import type { TurnExecutionConfig } from '../../src/shared/assistantFactAggregator'
 import {
   CURRENT_SCHEMA_VERSION,
@@ -19,8 +21,10 @@ import {
 } from '../messageCodec'
 import { getDbConnection, type AppDatabase } from './sqliteStore'
 import { changesToNumber, runInTransaction } from './transaction'
+import { bumpScopeVersionInTx } from './scopeVersion'
 import { isMessageEligibleForChatApi } from '../../src/shared/chatMessageQueue'
 import { migrateBuiltinModelName } from '../../src/shared/llmModelConfig'
+import { isThinkingEffort } from '../../src/shared/thinkingEffort'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import {
   estimateThinkingTokensFromMessage,
@@ -42,6 +46,9 @@ type SessionRow = {
   metadata: string
   schema_version: number
   work_dir_profile_id: string | null
+  ownership: string | null
+  visibility: string | null
+  thinking_effort: string | null
 }
 
 type MessageRow = {
@@ -85,7 +92,12 @@ function rowToSession(row: SessionRow): Session {
     skillsState: parseJsonObject(row.skills_state, { ...DEFAULT_SESSION_SKILLS_STATE }),
     metadata: parseJsonObject(row.metadata, {}),
     schemaVersion: row.schema_version,
-    ...(row.work_dir_profile_id ? { workDirProfileId: row.work_dir_profile_id } : {})
+    ...(row.work_dir_profile_id ? { workDirProfileId: row.work_dir_profile_id } : {}),
+    // 偏差 7：归属/可见性缺失或损坏时按谓词模块归一（历史行等价 user/primary）
+    ...(row.ownership ? { ownership: normalizeOwnership(row.ownership) } : {}),
+    ...(row.visibility ? { visibility: normalizeVisibility(row.visibility) } : {}),
+    // Thinking 强度覆盖：NULL = 继承全局（不产出字段即继承）；损坏值视为继承
+    ...(isThinkingEffort(row.thinking_effort) ? { thinkingEffort: row.thinking_effort } : {})
   })
 }
 
@@ -116,9 +128,24 @@ function normalizeSession(session: Session): Session {
   }
 }
 
-export function listSessions(db: AppDatabase): Session[] {
+/** 列表视图（偏差 7）：all 全量（内部调用方）；user-visible 用户可见（排除 internal/hidden，含 section 分区行）。 */
+export type SessionListView = 'all' | 'user-visible'
+
+export function listSessions(db: AppDatabase, options?: { view?: SessionListView }): Session[] {
   const conn = getDbConnection(db)
-  const rows = conn.prepare('SELECT * FROM sessions ORDER BY updated_at DESC').all() as SessionRow[]
+  const view = options?.view ?? 'all'
+  const rows = (
+    view === 'user-visible'
+      ? conn
+          .prepare(
+            `SELECT * FROM sessions
+             WHERE ownership IS NOT NULL AND ownership != 'internal'
+               AND visibility IS NOT NULL AND visibility != 'hidden'
+             ORDER BY updated_at DESC`
+          )
+          .all()
+      : conn.prepare('SELECT * FROM sessions ORDER BY updated_at DESC').all()
+  ) as SessionRow[]
   return rows.map(rowToSession)
 }
 
@@ -147,6 +174,12 @@ export function createSession(
     maxTokens?: number
     metadata?: Record<string, unknown>
     workDirProfileId?: string
+    /** 偏差 7：创建强制声明归属；缺省 user（历史调用方行为不变）。 */
+    ownership?: SessionOwnership
+    /** 偏差 7：创建强制声明可见性；缺省 primary。 */
+    visibility?: SessionVisibility
+    /** Thinking 强度覆盖（composer 草稿带入场景）；缺省 = 继承全局。 */
+    thinkingEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort
   }
 ): Session {
   const now = Date.now()
@@ -154,6 +187,8 @@ export function createSession(
   const model = input.model ?? resolveDefaultSessionModel(db)
   const temperature = input.temperature ?? DEFAULT_LLM_TEMPERATURE
   const maxTokens = input.maxTokens ?? 4096
+  const ownership = normalizeOwnership(input.ownership)
+  const visibility = normalizeVisibility(input.visibility)
   const session: Session = {
     id,
     name: input.name,
@@ -168,36 +203,48 @@ export function createSession(
     skillsState: { ...DEFAULT_SESSION_SKILLS_STATE },
     metadata: input.metadata ? { ...input.metadata } : {},
     schemaVersion: CURRENT_SCHEMA_VERSION,
-    workDirProfileId: input.workDirProfileId
+    workDirProfileId: input.workDirProfileId,
+    ownership,
+    visibility,
+    ...(isThinkingEffort(input.thinkingEffort) ? { thinkingEffort: input.thinkingEffort } : {})
   }
 
   const conn = getDbConnection(db)
-  conn
-    .prepare(
-      `INSERT INTO sessions (
-        id, name, preview, model, llm_service_id, temperature, max_tokens,
-        created_at, updated_at, message_count, skills_state, metadata, schema_version, work_dir_profile_id
-      ) VALUES (
-        @id, @name, @preview, @model, @llmServiceId, @temperature, @maxTokens,
-        @createdAt, @updatedAt, @messageCount, @skillsState, @metadata, @schemaVersion, @workDirProfileId
-      )`
-    )
-    .run({
-      id: session.id,
-      name: session.name,
-      preview: session.preview,
-      model: session.model,
-      llmServiceId: session.llmServiceId ?? null,
-      temperature: session.temperature,
-      maxTokens: session.maxTokens,
-      createdAt: session.createdAt,
-      updatedAt: session.updatedAt,
-      messageCount: session.messageCount,
-      skillsState: JSON.stringify(session.skillsState),
-      metadata: JSON.stringify(session.metadata),
-      schemaVersion: session.schemaVersion,
-      workDirProfileId: session.workDirProfileId ?? null
-    })
+  runInTransaction(conn, () => {
+    conn
+      .prepare(
+        `INSERT INTO sessions (
+          id, name, preview, model, llm_service_id, temperature, max_tokens,
+          created_at, updated_at, message_count, skills_state, metadata, schema_version, work_dir_profile_id,
+          ownership, visibility, thinking_effort
+        ) VALUES (
+          @id, @name, @preview, @model, @llmServiceId, @temperature, @maxTokens,
+          @createdAt, @updatedAt, @messageCount, @skillsState, @metadata, @schemaVersion, @workDirProfileId,
+          @ownership, @visibility, @thinkingEffort
+        )`
+      )
+      .run({
+        id: session.id,
+        name: session.name,
+        preview: session.preview,
+        model: session.model,
+        llmServiceId: session.llmServiceId ?? null,
+        temperature: session.temperature,
+        maxTokens: session.maxTokens,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        messageCount: session.messageCount,
+        skillsState: JSON.stringify(session.skillsState),
+        metadata: JSON.stringify(session.metadata),
+        schemaVersion: session.schemaVersion,
+        workDirProfileId: session.workDirProfileId ?? null,
+        ownership,
+        visibility,
+        thinkingEffort: session.thinkingEffort ?? null
+      })
+    // 偏差 11:会话列表版本在同一事务内递增
+    bumpScopeVersionInTx(db, 'session-list')
+  })
   db.save()
   return session
 }
@@ -218,21 +265,30 @@ export function updateSession(
       | 'messageCount'
       | 'skillsState'
       | 'workDirProfileId'
-    >
+      | 'ownership'
+      | 'visibility'
+    > & {
+      /** Thinking 强度覆盖；传 null = 清除覆盖（回到继承全局）。 */
+      thinkingEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort | null
+    }
   >
 ): Session | undefined {
   const cur = getSession(db, sessionId)
   if (!cur) return undefined
   const metadata = patch.metadata ?? cur.metadata
+  // thinkingEffort 单独处理：patch 允许 null（清除覆盖），Session 语义为「缺省 = 继承」
+  const { thinkingEffort: patchedEffort, ...restPatch } = patch
   const next: Session = {
     ...cur,
-    ...patch,
+    ...restPatch,
     metadata,
     skillsState: patch.skillsState ? normalizeSessionSkillsState(patch.skillsState) : cur.skillsState,
-    updatedAt: Date.now()
+    updatedAt: Date.now(),
+    ...(patchedEffort !== undefined ? { thinkingEffort: patchedEffort ?? undefined } : {})
   }
 
   const conn = getDbConnection(db)
+  runInTransaction(conn, () => {
   conn
     .prepare(
       `UPDATE sessions SET
@@ -246,7 +302,10 @@ export function updateSession(
         message_count = @messageCount,
         skills_state = @skillsState,
         metadata = @metadata,
-        work_dir_profile_id = @workDirProfileId
+        work_dir_profile_id = @workDirProfileId,
+        ownership = @ownership,
+        visibility = @visibility,
+        thinking_effort = @thinkingEffort
       WHERE id = @id`
     )
     .run({
@@ -261,16 +320,26 @@ export function updateSession(
       messageCount: next.messageCount,
       skillsState: JSON.stringify(next.skillsState),
       metadata: JSON.stringify(next.metadata),
-      workDirProfileId: next.workDirProfileId ?? null
+      workDirProfileId: next.workDirProfileId ?? null,
+      ownership: normalizeOwnership(next.ownership),
+      visibility: normalizeVisibility(next.visibility),
+      // 合法档位写值；null / 未设置 / 损坏值写 NULL（= 继承全局）
+      thinkingEffort: isThinkingEffort(next.thinkingEffort) ? next.thinkingEffort : null
     })
+    // 偏差 11:列表与单会话版本同事务递增
+    bumpScopeVersionInTx(db, 'session-list')
+    bumpScopeVersionInTx(db, `session:${sessionId}`)
+  })
   db.save()
-  return next
+  // 清除覆盖（null）时返回不含该字段的对象，保持 Session.thinkingEffort 语义为「缺省 = 继承」
+  return isThinkingEffort(next.thinkingEffort) ? next : { ...next, thinkingEffort: undefined }
 }
 
 export function deleteSession(db: AppDatabase, sessionId: string, options?: { flush?: boolean }): void {
   const conn = getDbConnection(db)
   runInTransaction(conn, () => {
     conn.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId)
+    bumpScopeVersionInTx(db, 'session-list')
   })
   deleteSessionUsage(db, sessionId)
   if (options?.flush !== false) db.flushSave()
@@ -688,17 +757,30 @@ export interface MessagesPage {
   nextSequence: number
 }
 
+export interface MessagesPageRow {
+  message: Message
+  /** 行的真实 sequence（Message 本体不携带；删除产生空洞后 cursor+index 会错标，评审 S3） */
+  sequence: number
+}
+
+export interface MessagesPageWithSequence {
+  rows: MessagesPageRow[]
+  /** 下一页应从此 sequence（含）开始读取；页为空时回填传入的 fromSequence，供调用方判定翻页结束 */
+  nextSequence: number
+}
+
 /**
  * 按 sequence 游标分页读取消息，不受固定条数上限约束。较 `getMessages()` 的 offset 分页更适合
  * 大会话完整导出：游标基于稳定的 sequence 而非行位置，翻页期间新增消息不会导致重复或跳过。
  * `fromSequence` 为闭区间下界，初始调用传 0（消息 sequence 从 0 开始递增）。
+ * 每行附带真实 sequence——消息删除会产生 sequence 空洞，调用方不得以 cursor+index 合成。
  */
-export function getMessagesPage(
+export function getMessagesPageWithSequence(
   db: AppDatabase,
   sessionId: string,
   fromSequence: number,
   pageSize: number
-): MessagesPage {
+): MessagesPageWithSequence {
   const conn = getDbConnection(db)
   const rows = conn
     .prepare(
@@ -709,8 +791,21 @@ export function getMessagesPage(
     )
     .all(sessionId, fromSequence, pageSize) as MessageRow[]
   return {
-    messages: rows.map(rowToStoredMessage),
+    rows: rows.map((row) => ({ message: rowToStoredMessage(row), sequence: row.sequence })),
     nextSequence: rows.length > 0 ? rows[rows.length - 1]!.sequence + 1 : fromSequence
+  }
+}
+
+export function getMessagesPage(
+  db: AppDatabase,
+  sessionId: string,
+  fromSequence: number,
+  pageSize: number
+): MessagesPage {
+  const page = getMessagesPageWithSequence(db, sessionId, fromSequence, pageSize)
+  return {
+    messages: page.rows.map((r) => r.message),
+    nextSequence: page.nextSequence
   }
 }
 
@@ -719,6 +814,7 @@ export function appendMessage(
   msg: Omit<Message, 'schemaVersion'> & { schemaVersion?: number }
 ): { message: Message; sequence: number } {
   const conn = getDbConnection(db)
+  return runInTransaction(conn, () => {
   const seqRow = conn
     .prepare('SELECT COALESCE(MAX(sequence), -1) AS maxSeq FROM messages WHERE session_id = ?')
     .get(msg.sessionId) as { maxSeq: number }
@@ -766,7 +862,10 @@ export function appendMessage(
     preview: full.content.slice(0, 120),
     messageCount: countRow.c
   })
+  // 偏差 11:消息列表版本同事务递增(嵌套事务为 SAVEPOINT,与外层兼容)
+  bumpScopeVersionInTx(db, `session:${full.sessionId}:messages`)
   return { message: full, sequence: maxSeq }
+  })
 }
 
 /** 在同一连接事务中追加一组消息；用于 turn prepare，保证 user/assistant 占位不会半成功。 */
@@ -1071,22 +1170,25 @@ export function deleteQueuedUserMessage(
   if (row.role !== 'user' || row.status !== 'queued') return { ok: false, error: 'message_not_queued' }
 
   const sessionId = row.session_id
-  const receipt = conn.prepare('SELECT session_id, request_id FROM queue_input_requests WHERE queued_message_id = ?').get(messageId) as { session_id: string; request_id: string } | undefined
-  if (receipt) updateQueueInputReceiptState(db, receipt.session_id, receipt.request_id, 'cancelled')
-  conn.prepare('DELETE FROM messages WHERE id = ?').run(messageId)
+  return runInTransaction(conn, () => {
+    const receipt = conn.prepare('SELECT session_id, request_id FROM queue_input_requests WHERE queued_message_id = ?').get(messageId) as { session_id: string; request_id: string } | undefined
+    if (receipt) updateQueueInputReceiptState(db, receipt.session_id, receipt.request_id, 'cancelled')
+    conn.prepare('DELETE FROM messages WHERE id = ?').run(messageId)
 
-  const last = conn
-    .prepare('SELECT content FROM messages WHERE session_id = ? ORDER BY sequence DESC LIMIT 1')
-    .get(sessionId) as { content: string } | undefined
-  const countRow = conn
-    .prepare('SELECT COUNT(*) AS c FROM messages WHERE session_id = ?')
-    .get(sessionId) as { c: number }
+    const last = conn
+      .prepare('SELECT content FROM messages WHERE session_id = ? ORDER BY sequence DESC LIMIT 1')
+      .get(sessionId) as { content: string } | undefined
+    const countRow = conn
+      .prepare('SELECT COUNT(*) AS c FROM messages WHERE session_id = ?')
+      .get(sessionId) as { c: number }
 
-  updateSession(db, sessionId, {
-    messageCount: countRow.c,
-    preview: last ? last.content.slice(0, 120) : ''
+    updateSession(db, sessionId, {
+      messageCount: countRow.c,
+      preview: last ? last.content.slice(0, 120) : ''
+    })
+    bumpScopeVersionInTx(db, `session:${sessionId}:messages`)
+    return { ok: true, sessionId }
   })
-  return { ok: true, sessionId }
 }
 
 export type PersistedMessageEntry = {
@@ -1275,6 +1377,7 @@ export function searchMessages(
        INNER JOIN sessions s ON s.id = m.session_id
        WHERE m.content LIKE ? ESCAPE '\\'
          AND (s.work_dir_profile_id IS NULL OR s.work_dir_profile_id = ?)
+         AND (s.ownership IS NULL OR s.ownership != 'internal')
        ORDER BY m.timestamp DESC
        LIMIT ?`
     )
@@ -1299,4 +1402,327 @@ export function listSessionsMissingWorkDirProfile(db: AppDatabase): Session[] {
     .prepare('SELECT * FROM sessions WHERE work_dir_profile_id IS NULL OR work_dir_profile_id = ?')
     .all('') as SessionRow[]
   return rows.map(rowToSession)
+}
+
+// ---------- Agent Token 用量统计（v16）：事实表读写 ----------
+
+export type UsageStepFactInput = {
+  sessionId: string
+  turnId: string
+  stepId: string
+  createdAt: number
+  day: string
+  model?: string | null
+  llmServiceId?: string | null
+  appVersion?: string | null
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  cacheSemantics?: string | null
+  source: string
+}
+
+export type UsageStepFactRow = {
+  id: number
+  sessionId: string
+  turnId: string
+  stepId: string
+  createdAt: number
+  day: string
+  model: string | null
+  llmServiceId: string | null
+  appVersion: string | null
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  cacheSemantics: string | null
+  source: string
+}
+
+type UsageStepFactSqlRow = {
+  id: number
+  session_id: string
+  turn_id: string
+  step_id: string
+  created_at: number
+  day: string
+  model: string | null
+  llm_service_id: string | null
+  app_version: string | null
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_creation_tokens: number
+  cache_semantics: string | null
+  source: string
+}
+
+function rowToUsageStepFact(row: UsageStepFactSqlRow): UsageStepFactRow {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    turnId: row.turn_id,
+    stepId: row.step_id,
+    createdAt: row.created_at,
+    day: row.day,
+    model: row.model,
+    llmServiceId: row.llm_service_id,
+    appVersion: row.app_version,
+    inputTokens: row.input_tokens,
+    outputTokens: row.output_tokens,
+    cacheReadTokens: row.cache_read_tokens,
+    cacheCreationTokens: row.cache_creation_tokens,
+    cacheSemantics: row.cache_semantics,
+    source: row.source
+  }
+}
+
+/** 幂等写入逐步用量事实（重复写按 UNIQUE(session_id, turn_id, step_id) 覆盖，不累加）。 */
+export function insertUsageStepFact(db: AppDatabase, fact: UsageStepFactInput): void {
+  const conn = getDbConnection(db)
+  conn
+    .prepare(
+      `INSERT INTO usage_step_facts (
+        session_id, turn_id, step_id, created_at, day, model, llm_service_id, app_version,
+        input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cache_semantics, source
+      ) VALUES (
+        @sessionId, @turnId, @stepId, @createdAt, @day, @model, @llmServiceId, @appVersion,
+        @inputTokens, @outputTokens, @cacheReadTokens, @cacheCreationTokens, @cacheSemantics, @source
+      )
+      ON CONFLICT(session_id, turn_id, step_id) DO UPDATE SET
+        created_at = excluded.created_at,
+        day = excluded.day,
+        model = excluded.model,
+        llm_service_id = excluded.llm_service_id,
+        app_version = excluded.app_version,
+        input_tokens = excluded.input_tokens,
+        output_tokens = excluded.output_tokens,
+        cache_read_tokens = excluded.cache_read_tokens,
+        cache_creation_tokens = excluded.cache_creation_tokens,
+        cache_semantics = excluded.cache_semantics,
+        source = excluded.source`
+    )
+    .run({
+      sessionId: fact.sessionId,
+      turnId: fact.turnId,
+      stepId: fact.stepId,
+      createdAt: fact.createdAt,
+      day: fact.day,
+      model: fact.model ?? null,
+      llmServiceId: fact.llmServiceId ?? null,
+      appVersion: fact.appVersion ?? null,
+      inputTokens: fact.inputTokens,
+      outputTokens: fact.outputTokens,
+      cacheReadTokens: fact.cacheReadTokens,
+      cacheCreationTokens: fact.cacheCreationTokens,
+      cacheSemantics: fact.cacheSemantics ?? null,
+      source: fact.source
+    })
+  db.save()
+}
+
+export function getUsageStepFactsForTurn(db: AppDatabase, sessionId: string, turnId: string): UsageStepFactRow[] {
+  const conn = getDbConnection(db)
+  const rows = conn
+    .prepare('SELECT * FROM usage_step_facts WHERE session_id = ? AND turn_id = ? ORDER BY created_at, id')
+    .all(sessionId, turnId) as UsageStepFactSqlRow[]
+  return rows.map(rowToUsageStepFact)
+}
+
+export type UsageTurnFactInput = {
+  turnId: string
+  sessionId: string
+  createdAt: number
+  day: string
+  model?: string | null
+  llmServiceId?: string | null
+  appVersion?: string | null
+  stepCount: number
+  toolCallCount: number
+  toolErrorCount: number
+  toolSkippedCount: number
+  /** 回填的台账缺 turn_end 时为 null（不臆断结果） */
+  outcome: string | null
+}
+
+export type UsageTurnFactRow = {
+  turnId: string
+  sessionId: string
+  createdAt: number
+  day: string
+  model: string | null
+  llmServiceId: string | null
+  appVersion: string | null
+  stepCount: number
+  toolCallCount: number
+  toolErrorCount: number
+  toolSkippedCount: number
+  outcome: string | null
+}
+
+type UsageTurnFactSqlRow = {
+  turn_id: string
+  session_id: string
+  created_at: number
+  day: string
+  model: string | null
+  llm_service_id: string | null
+  app_version: string | null
+  step_count: number
+  tool_call_count: number
+  tool_error_count: number
+  tool_skipped_count: number
+  outcome: string | null
+}
+
+function rowToUsageTurnFact(row: UsageTurnFactSqlRow): UsageTurnFactRow {
+  return {
+    turnId: row.turn_id,
+    sessionId: row.session_id,
+    createdAt: row.created_at,
+    day: row.day,
+    model: row.model,
+    llmServiceId: row.llm_service_id,
+    appVersion: row.app_version,
+    stepCount: row.step_count,
+    toolCallCount: row.tool_call_count,
+    toolErrorCount: row.tool_error_count,
+    toolSkippedCount: row.tool_skipped_count,
+    outcome: row.outcome
+  }
+}
+
+/** 幂等写入按 Turn 汇总事实（重复写按主键 turn_id 覆盖）。 */
+export function upsertUsageTurnFact(db: AppDatabase, fact: UsageTurnFactInput): void {
+  const conn = getDbConnection(db)
+  conn
+    .prepare(
+      `INSERT INTO usage_turn_facts (
+        turn_id, session_id, created_at, day, model, llm_service_id, app_version,
+        step_count, tool_call_count, tool_error_count, tool_skipped_count, outcome
+      ) VALUES (
+        @turnId, @sessionId, @createdAt, @day, @model, @llmServiceId, @appVersion,
+        @stepCount, @toolCallCount, @toolErrorCount, @toolSkippedCount, @outcome
+      )
+      ON CONFLICT(turn_id) DO UPDATE SET
+        session_id = excluded.session_id,
+        created_at = excluded.created_at,
+        day = excluded.day,
+        model = excluded.model,
+        llm_service_id = excluded.llm_service_id,
+        app_version = excluded.app_version,
+        step_count = excluded.step_count,
+        tool_call_count = excluded.tool_call_count,
+        tool_error_count = excluded.tool_error_count,
+        tool_skipped_count = excluded.tool_skipped_count,
+        outcome = excluded.outcome`
+    )
+    .run({
+      turnId: fact.turnId,
+      sessionId: fact.sessionId,
+      createdAt: fact.createdAt,
+      day: fact.day,
+      model: fact.model ?? null,
+      llmServiceId: fact.llmServiceId ?? null,
+      appVersion: fact.appVersion ?? null,
+      stepCount: fact.stepCount,
+      toolCallCount: fact.toolCallCount,
+      toolErrorCount: fact.toolErrorCount,
+      toolSkippedCount: fact.toolSkippedCount,
+      outcome: fact.outcome
+    })
+  db.save()
+}
+
+export function getUsageTurnFact(db: AppDatabase, turnId: string): UsageTurnFactRow | undefined {
+  const conn = getDbConnection(db)
+  const row = conn.prepare('SELECT * FROM usage_turn_facts WHERE turn_id = ?').get(turnId) as
+    | UsageTurnFactSqlRow
+    | undefined
+  return row ? rowToUsageTurnFact(row) : undefined
+}
+
+export type OrphanUsageTurn = {
+  sessionId: string
+  turnId: string
+  stepCount: number
+  firstCreatedAt: number
+  day: string
+  model: string | null
+  llmServiceId: string | null
+  appVersion: string | null
+}
+
+/**
+ * 崩溃补齐：有 usage_step_facts 行、但缺 usage_turn_facts 行的 Turn。
+ * step_count 由其 step 行数得出；工具计数崩溃时不可知，补齐时按 0 写入（需求 §7.3.1）。
+ */
+export function listOrphanUsageTurns(db: AppDatabase): OrphanUsageTurn[] {
+  const conn = getDbConnection(db)
+  const rows = conn
+    .prepare(
+      `SELECT s.session_id, s.turn_id, COUNT(*) AS step_count, MIN(s.created_at) AS first_created_at,
+              MIN(s.day) AS day,
+              (SELECT m.model FROM usage_step_facts m WHERE m.session_id = s.session_id AND m.turn_id = s.turn_id AND m.model IS NOT NULL ORDER BY m.created_at, m.id LIMIT 1) AS model,
+              (SELECT m.llm_service_id FROM usage_step_facts m WHERE m.session_id = s.session_id AND m.turn_id = s.turn_id AND m.llm_service_id IS NOT NULL ORDER BY m.created_at, m.id LIMIT 1) AS llm_service_id,
+              (SELECT m.app_version FROM usage_step_facts m WHERE m.session_id = s.session_id AND m.turn_id = s.turn_id AND m.app_version IS NOT NULL ORDER BY m.created_at, m.id LIMIT 1) AS app_version
+       FROM usage_step_facts s
+       LEFT JOIN usage_turn_facts t ON t.turn_id = s.turn_id
+       WHERE t.turn_id IS NULL
+       GROUP BY s.session_id, s.turn_id
+       ORDER BY first_created_at`
+    )
+    .all() as Array<{
+    session_id: string
+    turn_id: string
+    step_count: number
+    first_created_at: number
+    day: string
+    model: string | null
+    llm_service_id: string | null
+    app_version: string | null
+  }>
+  return rows.map((row) => ({
+    sessionId: row.session_id,
+    turnId: row.turn_id,
+    stepCount: row.step_count,
+    firstCreatedAt: row.first_created_at,
+    day: row.day,
+    model: row.model,
+    llmServiceId: row.llm_service_id,
+    appVersion: row.app_version
+  }))
+}
+
+export type UsageFactsCleanupResult = {
+  deletedStepRows: number
+  deletedTurnRows: number
+  earliestDeletedDay: string | null
+  latestDeletedDay: string | null
+}
+
+/** 保留期清理：删除 day 早于 cutoffDayExclusive 的两表行（事务内，返回留痕信息）。 */
+export function deleteUsageFactsBeforeDay(db: AppDatabase, cutoffDayExclusive: string): UsageFactsCleanupResult {
+  const conn = getDbConnection(db)
+  return runInTransaction(conn, () => {
+    const stepRange = conn
+      .prepare('SELECT MIN(day) AS min_day, MAX(day) AS max_day, COUNT(*) AS c FROM usage_step_facts WHERE day < ?')
+      .get(cutoffDayExclusive) as { min_day: string | null; max_day: string | null; c: number }
+    const turnRange = conn
+      .prepare('SELECT MIN(day) AS min_day, MAX(day) AS max_day, COUNT(*) AS c FROM usage_turn_facts WHERE day < ?')
+      .get(cutoffDayExclusive) as { min_day: string | null; max_day: string | null; c: number }
+    conn.prepare('DELETE FROM usage_step_facts WHERE day < ?').run(cutoffDayExclusive)
+    conn.prepare('DELETE FROM usage_turn_facts WHERE day < ?').run(cutoffDayExclusive)
+    db.save()
+    const earliest = [stepRange.min_day, turnRange.min_day].filter((d): d is string => d !== null).sort()
+    const latest = [stepRange.max_day, turnRange.max_day].filter((d): d is string => d !== null).sort()
+    return {
+      deletedStepRows: stepRange.c,
+      deletedTurnRows: turnRange.c,
+      earliestDeletedDay: earliest.length > 0 ? earliest[0] : null,
+      latestDeletedDay: latest.length > 0 ? latest[latest.length - 1] : null
+    }
+  })
 }

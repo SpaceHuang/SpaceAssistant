@@ -1,0 +1,1 @@
+open("relative.txt", "w")

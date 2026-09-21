@@ -34,10 +34,14 @@ export function detectShellDialectMismatch(command: string, profile: ShellProfil
     if (command.includes('$null')) signals.push('powershell-null')
     if (/\b(?:Remove-Item|Get-ChildItem|Write-Output)\b/.test(command)) signals.push('powershell-cmdlet')
     if (/\{[^\n]*\}/.test(command)) signals.push('powershell-script-block')
+    // 本分支同时覆盖 posix-bash 与 windows-cmd 两类非 PowerShell 目标；hints 按目标方言给出（评审观察项 3）
+    const hints = profile.dialect === 'windows-cmd'
+      ? ['使用 cmd 语法重写命令', '环境变量使用 %NAME%，目录列举用 dir，删除用 del /q']
+      : ['使用 POSIX Bash 语法重写命令', '环境变量使用 $NAME，空输出使用 /dev/null']
     return {
       code: 'SHELL_DIALECT_MISMATCH', detectedSyntax: 'windows-powershell', expectedDialect: profile.dialect,
       shellProfileId: profile.id, executable: profile.executable, signals,
-      hints: ['使用 POSIX Bash 语法重写命令', '环境变量使用 $NAME，空输出使用 /dev/null']
+      hints
     }
   }
   return undefined

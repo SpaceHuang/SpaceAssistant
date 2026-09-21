@@ -14,11 +14,9 @@ export type ToolRiskLevel = 'low' | 'medium' | 'high'
 
 export type ToolCallStatus = 'calling' | 'confirming' | 'executing' | 'completed' | 'failed' | 'rejected'
 
-export type FileConfirmMode = 'diff' | 'direct' | 'auto'
 
 export interface ToolsConfig {
   enabled: boolean
-  confirmMode: FileConfirmMode
   allowedTools: string[]
   deniedTools: string[]
   pythonPath: string
@@ -32,7 +30,6 @@ export interface ToolsConfig {
 
 export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
   enabled: true,
-  confirmMode: 'diff',
   allowedTools: [],
   deniedTools: [],
   pythonPath: 'python',
@@ -544,7 +541,8 @@ export interface AutoApprovedWriteMeta {
   added: number
   removed: number
   bytesWritten: number
-  diff?: { oldContent: string; newContent: string; oldPath: string }
+  /** P1-3(a)：不再携带 diff 全文（oldContent/newContent）——渲染层零引用（UI diff 卡片走 confirmDiff 链路），
+   *  历史重建白名单投影也一律丢弃；写入全文曾占 events.jsonl/DB 约 10.83 MB/会话（实测 b680b181）。 */
 }
 
 export interface ToolCallResultPersisted {
@@ -556,6 +554,15 @@ export interface ToolCallResultPersisted {
   autoApprovedWrite?: AutoApprovedWriteMeta
   /** 已由主进程解析的 MCP 展示投影；不参与模型上下文。 */
   displayData?: import('./mcpToolResultDisplay').McpResultDisplay
+  /** 工具未进入执行流程（被授权 / 确认 / 策略 / 预算拦下，或调用整体被放弃），区别于「执行了但失败」（需求 §7.6）。 */
+  notExecuted?: true
+  /** 未执行的原因码，便于聚合与今后回填区分「未执行」与「执行失败」。
+   *  agent_denied：安全审批 Agent 机审拒绝（P1-D，区别于 user_rejected 的真人拒绝）。 */
+  notExecutedReason?:
+    | 'user_rejected' | 'agent_denied' | 'confirm_timeout' | 'remote_read_only'
+    | 'authorization_revoked' | 'policy_denied' | 'budget_paused'
+    | 'remote_budget_exhausted' | 'not_authorized' | 'unknown_tool'
+    | 'model_output_truncated'
 }
 
 /** 工具调用记录（持久化到消息中） */
@@ -574,6 +581,8 @@ export interface ToolCallRecord {
   shellSecurityHints?: ShellSecurityHints
   /** 文件 auto 模式回落 diff 时的原因 */
   autoApproveFallback?: AutoApproveFallback
+  /** H1：本次确认由审批 Agent 裁决（无 waiter）——渲染端出只读「自动审批中」卡，不渲染交互按钮 */
+  autoAnswerer?: true
   confirmedAt?: number
   startedAt?: number
   completedAt?: number
@@ -678,6 +687,12 @@ export interface Session {
   schemaVersion: number
   /** 所属工作目录 profile；缺省时视为当前激活目录（向后兼容） */
   workDirProfileId?: string
+  /** 会话归属（偏差 7）；缺省等价 user（历史会话向后兼容） */
+  ownership?: import('./sessionOwnership').SessionOwnership
+  /** 可见性（偏差 7）；缺省等价 primary */
+  visibility?: import('./sessionOwnership').SessionVisibility
+  /** Thinking 强度覆盖；缺省 / null = 继承全局 config.thinkingEffort（继承语义，非快照） */
+  thinkingEffort?: import('./agent/invocation').AgentReasoningEffort
 }
 
 /** 用户消息附带的图片（DB 只存引用，不存 base64） */
@@ -718,6 +733,8 @@ export interface Message {
 }
 
 export interface ModelEntry {
+  /** P4（偏差 6）：模型能力标记——显式 false 表示不支持 thinking（effort 将被降级为 off 并落审计）。缺省视为支持。 */
+  supportsThinking?: boolean
   id: string
   name: string
   maximumContext: number
@@ -773,7 +790,10 @@ export interface AppConfig {
   preferredFastLanguageModelId: string
   preferredVisionModelId: string
   models: ModelEntry[]
+  /** @deprecated 由 thinkingEnabled 迁移而来，迁移后仅作只读镜像，运行时不再消费 */
   thinkingEnabled: boolean
+  /** 全局 Thinking 强度（默认值提供者）；会话可按 Session.thinkingEffort 覆盖 */
+  thinkingEffort: import('./agent/invocation').AgentReasoningEffort
   workDir: string
   workDirProfiles: WorkDirProfile[]
   activeWorkDirProfileId: string

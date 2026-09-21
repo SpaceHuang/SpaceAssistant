@@ -1,0 +1,23 @@
+{
+  "id": "a17-from-import-as",
+  "group": "legacy-parseable",
+  "legacyParsed": true,
+  "verdict": "ask",
+  "patterns": [
+    "B7",
+    "A1"
+  ],
+  "signals": [
+    {
+      "kind": "script-analysis",
+      "signal": "suspicious",
+      "patterns": [
+        "B7",
+        "A1"
+      ]
+    },
+    {
+      "kind": "script-uncertified"
+    }
+  ]
+}

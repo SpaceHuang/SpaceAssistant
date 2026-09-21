@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { App as AntdApp, Empty, Input } from 'antd'
 import { Square, Trash2 } from 'lucide-react'
 import type { Session } from '../../../shared/domainTypes'
+import { isButlerSectionSession } from '../../../shared/sessionOwnership'
 import { useAppDispatch, useTypedSelector } from '../../hooks'
 import { removeSession } from '../../store/sessionSlice'
 import { setConfirmFocusToolUseId, setSession } from '../../store/chatSlice'
@@ -48,7 +49,13 @@ export function SessionListPane() {
   const filtered = sessions.filter((s) =>
     sessionDisplayName(s.name).toLowerCase().includes(query.toLowerCase())
   )
-  const groups = groupSessionsByTime(filtered)
+  // 偏差 7：按可见性分组——管家分区（automation+section）独立于时间分组的主列表
+  const butlerSessions = filtered.filter(isButlerSectionSession)
+  const primarySessions = filtered.filter((s) => !isButlerSectionSession(s))
+  const groups =
+    butlerSessions.length > 0
+      ? [{ label: t('session.butlerSection'), sessions: butlerSessions }, ...groupSessionsByTime(primarySessions)]
+      : groupSessionsByTime(primarySessions)
 
   const stopRun = (id: string) => {
     abortSessionRun(id)

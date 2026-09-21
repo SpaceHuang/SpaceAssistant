@@ -1,5 +1,33 @@
-const SENSITIVE_KEY_PATTERN =
+import { CREDENTIAL_KEY_PATTERN, isEnvCarrierKey, isEnvSecretMapKey } from '../src/shared/capabilityParamSanitize'
+
+/**
+ * 键级脱敏：精确匹配历史清单 + 凭据词包含匹配（v2 评审 S1'）。
+ * 精确锚定不匹配 accessToken/headerValue/env 内 API_TOKEN 等复合键，toolkit.call 的
+ * tool.request 日志经此落盘，故补「键名含凭据词」的宽匹配——误伤（普通值被 [REDACTED]）
+ * 代价小于漏报（token 明文落 180 天日志）。
+ */
+const SENSITIVE_KEY_EXACT_PATTERN =
   /^(api[_-]?key|password|passwd|secret|token|authorization|x-api-key|credentials?|private[_-]?key)$/i
+
+/**
+ * 宽匹配否定白名单（v3 评审建议 2 / v4 建议 1）：`max_tokens`、`maxTokens`、`tokenLimit`
+ * 等量化字段名含 token 词但非凭据，误伤会把 LLM 400 排障关键字段打成 [REDACTED]。
+ * 覆盖 snake_case 前后缀与 camelCase（量化词后跟大写字母开头段落）。
+ * 已知理论假阴性（记录在案，无现实触发路径）：`limit_api_key` 等量化词与凭据词组合的键
+ * 会被豁免——现网无此类键名；新增凭据键时须检查是否撞白名单。
+ */
+const NON_CREDENTIAL_KEY_PATTERN =
+  /^(?:max|min|total|remaining|used|limit|budget)(?:[_-]|[A-Z])|[_-](?:max|min|total|remaining|used|limit|budget|count)$|[a-z](?:Max|Min|Total|Remaining|Used|Limit|Budget)$|[A-Z_-](?:max|min|total|remaining|used|limit|budget|count)$/i
+
+function isSensitiveKey(key: string): boolean {
+  if (SENSITIVE_KEY_EXACT_PATTERN.test(key)) return true
+  // env 键值表的载体键（toolkit.call 入参 env: { KEY: value }）与其 secret-map 变体
+  if (isEnvCarrierKey(key) || isEnvSecretMapKey(key)) return true
+  if (NON_CREDENTIAL_KEY_PATTERN.test(key)) return false
+  if (CREDENTIAL_KEY_PATTERN.test(key)) return true
+  // 复合键名含凭据词（accessToken / API_TOKEN / refreshToken…）：宽匹配兜底
+  return /(?:token|secret|password|passwd|api[_-]?key|private[_-]?key|authorization|credential)/i.test(key)
+}
 
 const ANTHROPIC_KEY_PATTERN = /sk-ant-[a-zA-Z0-9_-]+/g
 const BEARER_PATTERN = /Bearer\s+\S+/gi
@@ -17,10 +45,6 @@ function sanitizeString(value: string): string {
   s = s.replace(BEARER_PATTERN, 'Bearer [REDACTED]')
   s = s.replace(LONG_B64_PATTERN, '[REDACTED_B64]')
   return s
-}
-
-function isSensitiveKey(key: string): boolean {
-  return SENSITIVE_KEY_PATTERN.test(key)
 }
 
 export function sanitizeForLog(value: unknown, options?: SanitizeOptions): unknown {

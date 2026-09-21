@@ -1,10 +1,17 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { AppConfig, FileInfo, Message, SearchResult, Session } from '../src/shared/domainTypes'
-import type { SpaceAssistantApi, TurnExecutePayload } from '../src/shared/api'
+import type { SpaceAssistantApi } from '../src/shared/api'
 
 const api: SpaceAssistantApi = {
   ping: () => ipcRenderer.invoke('ping'),
   appOpenExternal: (url) => ipcRenderer.invoke('app:open-external', url),
+  appGetTrayEnabled: () => ipcRenderer.invoke('app:get-tray-enabled') as Promise<boolean>,
+
+  butlerListTasks: () => ipcRenderer.invoke('butler:list') as Promise<import('../src/shared/automationTaskTypes').AutomationTask[]>,
+  butlerCreateTask: (payload) => ipcRenderer.invoke('butler:create', payload) as Promise<import('../src/shared/automationTaskTypes').ButlerTaskWriteResult>,
+  butlerUpdateTask: (payload) => ipcRenderer.invoke('butler:update', payload) as Promise<{ ok: boolean; error?: string }>,
+  butlerDeleteTask: (payload) => ipcRenderer.invoke('butler:delete', payload) as Promise<{ ok: boolean; error?: string }>,
+  butlerRunTask: (payload) => ipcRenderer.invoke('butler:run-task', payload) as Promise<import('../src/shared/automationTaskTypes').ButlerRunTaskResult>,
 
   sessionList: () => ipcRenderer.invoke('session:list'),
   sessionCreate: (payload) => ipcRenderer.invoke('session:create', payload),
@@ -25,14 +32,17 @@ const api: SpaceAssistantApi = {
   chatGetContextHistorySummaryBaseline: (payload) =>
     ipcRenderer.invoke('chat:get-context-history-summary-baseline', payload),
   chatGetSearchCorpusPage: (payload) => ipcRenderer.invoke('chat:get-search-corpus-page', payload),
-  chatGetNextQueuedMessage: (payload) => ipcRenderer.invoke('chat:get-next-queued-message', payload),
   chatEnqueueQueuedMessage: (payload) => ipcRenderer.invoke('chat:enqueue-queued-message', payload),
   chatResolveRetryContext: (payload) => ipcRenderer.invoke('chat:resolve-retry-context', payload),
   chatGetMessageSequence: (payload) => ipcRenderer.invoke('chat:get-message-sequence', payload),
   messageAppendNonTurn: (msg) => ipcRenderer.invoke('message:append-non-turn', msg),
   messagePatchNonTurn: (payload) => ipcRenderer.invoke('message:patch-non-turn', payload),
-  chatPrepareTurn: (intent) => ipcRenderer.invoke('chat:prepare-turn', intent),
-  chatExecuteTurn: (payload: TurnExecutePayload) => ipcRenderer.invoke('chat:execute-turn', payload),
+  chatSubmitOutbound: (intent) => ipcRenderer.invoke('chat:submit-outbound', intent),
+  onScopeInvalidated: (cb: (payload: { scope: string; version: number }) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, payload: { scope: string; version: number }) => cb(payload)
+    ipcRenderer.on('scope:invalidated', listener)
+    return () => ipcRenderer.removeListener('scope:invalidated', listener)
+  },
   chatCancelTurn: (turnId) => ipcRenderer.invoke('chat:cancel-turn', turnId),
   chatGetTurnTerminal: (turnId) => ipcRenderer.invoke('chat:get-turn-terminal', turnId),
   chatRetryTurnCheckpoint: (turnId) => ipcRenderer.invoke('chat:retry-turn-checkpoint', turnId),
@@ -112,25 +122,28 @@ const api: SpaceAssistantApi = {
   fileRename: (relPath, newName) => ipcRenderer.invoke('file:rename', relPath, newName),
   fileMove: (srcRelPath, destDirRelPath) => ipcRenderer.invoke('file:move', srcRelPath, destDirRelPath),
   fileCopy: (payload) => ipcRenderer.invoke('file:copy', payload),
-  fileOnTreeChanged: (cb) => {
-    const fn = (_e: unknown, data: import('../src/shared/fileTreeSync').FileTreeChangeEvent) => cb(data)
-    ipcRenderer.on('file:tree-changed', fn)
-    return () => ipcRenderer.removeListener('file:tree-changed', fn)
-  },
+
   fileWatchContent: (relPath) => ipcRenderer.invoke('file:watch-content', { relPath }),
-  fileOnContentChanged: (cb) => {
-    const fn = (_e: unknown, data: import('../src/shared/fileContentSync').FileContentChangedEvent) => cb(data)
-    ipcRenderer.on('file:content-changed', fn)
-    return () => ipcRenderer.removeListener('file:content-changed', fn)
-  },
+
 
   searchExecute: (query) => ipcRenderer.invoke('search:execute', query),
   searchGetHistory: () => ipcRenderer.invoke('search:get-history'),
+  treesitterGetStatus: () =>
+    ipcRenderer.invoke('treesitter:get-status') as Promise<import('../src/shared/api').ScriptParserStatusPayload>,
+
+  usageStatsDaily: (args) => ipcRenderer.invoke('usage-stats:daily', args),
+  usageStatsSummary: (args) => ipcRenderer.invoke('usage-stats:summary', args),
+  usageStatsDimensions: () => ipcRenderer.invoke('usage-stats:dimensions'),
 
   onOpenSettings: (cb) => {
     const fn = () => cb()
     ipcRenderer.on('app:open-settings', fn)
     return () => ipcRenderer.removeListener('app:open-settings', fn)
+  },
+  onOpenUsageStats: (cb) => {
+    const fn = () => cb()
+    ipcRenderer.on('app:open-usage-stats', fn)
+    return () => ipcRenderer.removeListener('app:open-usage-stats', fn)
   },
   onOpenAbout: (cb) => {
     const fn = () => cb()
@@ -155,6 +168,12 @@ const api: SpaceAssistantApi = {
     const fn = (_e: unknown, data: { session: Session }) => cb(data)
     ipcRenderer.on('session:title-generated', fn)
     return () => ipcRenderer.removeListener('session:title-generated', fn)
+  },
+
+  sessionOnCreated: (cb) => {
+    const fn = (_e: unknown, data: { session: Session }) => cb(data)
+    ipcRenderer.on('session:created', fn)
+    return () => ipcRenderer.removeListener('session:created', fn)
   },
 
   toolConfirmResponse: (payload: import('../src/shared/api').ToolConfirmResponsePayload) =>

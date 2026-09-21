@@ -20,22 +20,15 @@ import { openSettings } from '../../store/configSlice'
 import type { LastUsage } from '../../store/chatSlice'
 import {
   clearLiveSession,
-  countRunningSessions,
-  finishSessionRun,
   getLiveMessages,
   initLiveSessionFromStore,
-  getMaxParallelChatSessions,
   abortSessionRun,
-  registerSessionRun,
   routeAddMessage,
-  isSessionRunning,
 } from '../../services/chatRunnerService'
-import { resolveSessionContextForApi, ackApiContextMessagePersisted } from '../../services/apiContextService'
+import { ackApiContextMessagePersisted } from '../../services/apiContextService'
 import {
   commitMessageDelete,
   commitMessagePatch,
-  prepareSendContext,
-  type SendContextIntent
 } from '../../services/messageMutationGateway'
 import {
   applyContextSummaryDbBaseline,
@@ -51,30 +44,21 @@ import { resolveMessageToolsInteractive } from '../../services/resolveMessageToo
 import { usePendingConfirmSnapshot } from '../../hooks/usePendingConfirmSnapshot'
 import { upsertSession } from '../../store/sessionSlice'
 import { store } from '../../store'
-import {
-  computeEstimatedOccupancy,
-  estimateThinkingTokensFromMessage,
-  estimateTokensFromHistoryImages,
-  estimateTokensFromImageAttachments,
-  resolveEffectiveMaximumContext
-} from '../../../shared/contextUsageEstimate'
+import { registerMessagesReloadHandler } from '../../services/invalidationService'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import { resolveChatLocale } from '../../utils/resolveChatLocale'
 import { buildToolChatPayload } from '../../services/chatToolSessionService'
 import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
 import { ComposerModelPicker } from './ComposerModelPicker'
-import { resolveSessionModelBinding } from '../../services/sessionModelBinding'
+import { resolveSessionModelBinding, resolveSessionThinkingBinding } from '../../services/sessionModelBinding'
+import type { AgentReasoningEffort } from '../../../shared/agent/invocation'
+import { ComposerThinkingPicker } from './ComposerThinkingPicker'
 import { resolveFailureReasonForMessage } from '../../services/turnFailureDisplay'
 import { loadTurnFailureReasons } from '../../services/turnFailureHydration'
 import type { ChatModelOption } from '../../../shared/llmModelConfig'
-import { parseSkillCommand } from '../../services/skillCommandService'
-import { parseTestCardsCommand } from '../../services/testCardsCommandService'
 import { runTestCardsPreview } from '../../services/testCardsPreviewService'
-import { parseTestPopCommand } from '../../services/testPopCommandService'
-import { parseWikiCommand } from '../../services/wikiCommandService'
-import { appendArchivedQuery, patchSessionWikiState } from '../../services/wikiSessionState'
+import { appendArchivedQuery } from '../../../shared/wikiSessionState'
 import { requestFilePaneSelect, isUnderWikiRoot } from '../../services/filePaneNavigation'
-import { ensureWorkDirForSession } from '../../services/workDirSessionSync'
 import { activateBrowserRecoverySkillIfNeeded } from '../../services/browserRecoverySkillService'
 import { activateRecoverySkillInState, BROWSER_SETUP_RECOVERY_SKILL } from '../../../shared/browserDependencyRecovery'
 import { clearChatLaunchIntent } from '../../store/chatLaunchSlice'
@@ -82,7 +66,7 @@ import { filterBuiltinToolsForRenderer } from '../../../shared/toolsConfigFilter
 import { getCachedToolExposure, subscribeToolExposure } from '../../services/toolExposureService'
 import { appendSkillHintRecord, createSkillHintRecord, createSkillHintSystemMessage } from '../../../shared/skillHintRecords'
 import type { ChatImageAttachment, Message } from '../../../shared/domainTypes'
-import { CURRENT_SCHEMA_VERSION, DEFAULT_LLM_TEMPERATURE, DEFAULT_SESSION_SKILLS_STATE, DEFAULT_WIKI_CONFIG, normalizeSessionSkillsState, type SessionSkillsState } from '../../../shared/domainTypes'
+import { DEFAULT_WIKI_CONFIG, type SessionSkillsState } from '../../../shared/domainTypes'
 import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
 import { ChatMessageList } from './ChatMessageList'
 import { CompactionMarker } from './CompactionMarker'
@@ -98,24 +82,16 @@ import { patchSvg } from '../../utils/patchSvg'
 const scrollToLatestIconSvg = patchSvg(arrowDownLineRaw, 16)
 import { useChatMessageEnter } from '../../hooks/useChatMessageEnter'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
-import {
-  countQueuedUserMessages,
-  filterMessagesForChatApi,
-  MAX_CHAT_MESSAGE_QUEUE_SIZE
-} from '../../../shared/chatMessageQueue'
-import { classifyOutboundMessage } from '../../services/chatOutboundClassifier'
+import { countQueuedUserMessages, filterMessagesForChatApi } from '../../../shared/chatMessageQueue'
+import type { OutboundContextIntent } from '../../../shared/outboundProtocol'
 import { ChatMessageListSearch } from '../Search/ChatMessageListSearch'
-import {
-  requestNeedsVisionModel,
-  resolveVisionRouteForImageSend
-} from '../../../shared/visionModelRouting'
 
 type SendInternalOptions = {
   targetSessionId?: string
-  /** 会话执行中仍允许执行的即时命令（/skill list 等） */
-  bypassRunningGuard?: boolean
-  /** 显式发送上下文意图；缺省为 create-user */
-  contextIntent?: SendContextIntent
+  /** 显式发送上下文意图；缺省为 create-user。决定（排队/发起/拒绝）由主进程受理端口做出 */
+  contextIntent?: OutboundContextIntent
+  /** 无会话时的代建偏好（B2）：model / llmServiceId / thinkingEffort 草稿 */
+  sessionPrefs?: import('../../../shared/outboundProtocol').OutboundSessionPrefs
 }
 
 function buildClaudePayload(history: Message[]) {
@@ -150,12 +126,31 @@ export function ChatView() {
   const cfg = useTypedSelector((s) => s.config.config)
   const currentSession = useTypedSelector((s) => s.session.list.find((x) => x.id === s.chat.currentSessionId))
   const [draftModelOption, setDraftModelOption] = useState<ChatModelOption | undefined>(undefined)
+  const [draftThinkingEffort, setDraftThinkingEffort] = useState<AgentReasoningEffort | undefined>(undefined)
   const sessionBinding = useMemo(
     () => (cfg ? resolveSessionModelBinding(cfg, currentSession, draftModelOption) : null),
     [cfg, currentSession, draftModelOption]
   )
+  // 会话级 Thinking 强度（§4.2 两层解析）：会话覆盖 > composer 草稿 > 全局默认
+  const thinkingBinding = useMemo(
+    () => (cfg ? resolveSessionThinkingBinding(cfg, currentSession, draftThinkingEffort) : null),
+    [cfg, currentSession, draftThinkingEffort]
+  )
+  // 评审 N6：草稿只服务「composer 先于首个会话」的窗口；一旦存在会话（含侧边栏新建）即清除，
+  // 防止草稿在回到无会话状态时「复活」并被带入无关会话（draftModelOption 同款沿袭缺陷一并修复）
+  const currentSessionId = currentSession?.id
+  useEffect(() => {
+    if (currentSessionId) {
+      setDraftThinkingEffort(undefined)
+      setDraftModelOption(undefined)
+    }
+  }, [currentSessionId])
   const chatModelName = sessionBinding?.modelName ?? cfg?.model ?? ''
   const chatLlmServiceId = sessionBinding?.llmServiceId
+  const currentModelEntry = useMemo(
+    () => (cfg && chatModelName ? cfg.models.find((m) => m.name === chatModelName) : undefined),
+    [cfg, chatModelName]
+  )
   const chatBaseUrl = useMemo(() => {
     if (!cfg) return undefined
     const svc = cfg.llmServices.find((s) => s.id === chatLlmServiceId)
@@ -169,12 +164,13 @@ export function ChatView() {
   const viewportRef = useRef<ChatMessageViewportHandle>(null)
   const stickToBottomRef = useRef(true)
   const composerRef = useRef<MessageInputHandle>(null)
-  const abortRequestedRef = useRef(false)
-  const prevRunningSessionsRef = useRef<Record<string, true>>({})
-  const drainingQueueRef = useRef(false)
   const sendInternalRef = useRef<
-    (text: string, skillsStateOverride?: SessionSkillsState, options?: SendInternalOptions) => Promise<void>
-  >(async () => {})
+    (
+      text: string,
+      skillsStateOverride?: SessionSkillsState,
+      options?: SendInternalOptions
+    ) => Promise<unknown | undefined>
+  >(async () => undefined)
   const [testPreviewMessageIds, setTestPreviewMessageIds] = useState<Set<string>>(() => new Set())
   const [showScrollToLatest, setShowScrollToLatest] = useState(false)
 
@@ -346,18 +342,20 @@ export function ChatView() {
     [dispatch, fetchMessagePage]
   )
 
+  // 偏差 11:入站消息等 Storage 变更统一由失效通知驱动重取(主进程广播 session:<id>:messages);
+  // 渲染端只注册当前重载通道,不再各自直连订阅。会话元数据刷新保留(轻量、乐观路径)。
   useEffect(() => {
     const refreshSessionMeta = (targetSessionId: string) => {
       void window.api.sessionGet(targetSessionId).then((s) => {
         if (s) dispatch(upsertSession(s))
       })
     }
-    const offInbound = window.api.feishuOnInboundMessage(({ sessionId: inboundSessionId }) => {
-      refreshSessionMeta(inboundSessionId)
-      void reloadSessionMessagesFromDb(inboundSessionId)
+    registerMessagesReloadHandler((targetSessionId) => {
+      refreshSessionMeta(targetSessionId)
+      void reloadSessionMessagesFromDb(targetSessionId)
     })
     return () => {
-      offInbound()
+      registerMessagesReloadHandler(null)
     }
   }, [dispatch, reloadSessionMessagesFromDb])
 
@@ -443,7 +441,6 @@ export function ChatView() {
   )
 
   const abort = useCallback(() => {
-    abortRequestedRef.current = true
     const turnId = sessionId ? runningSessions[sessionId]?.turnId : undefined
     if (turnId) void window.api.chatCancelTurn(turnId)
   }, [runningSessions, sessionId])
@@ -460,26 +457,6 @@ export function ChatView() {
     [dispatch, scrollBottom]
   )
 
-  const enqueueChatMessage = useCallback(
-    async (runSessionId: string, text: string, attachments?: ChatImageAttachment[]) => {
-      const chatText = text.trim()
-      if (!chatText) return
-
-      const queuedCount = countQueuedUserMessages(store.getState().chat.messages, runSessionId)
-      if (queuedCount >= MAX_CHAT_MESSAGE_QUEUE_SIZE) {
-        message.warning(t('chatView.warnings.queueFull', { max: MAX_CHAT_MESSAGE_QUEUE_SIZE }))
-        return
-      }
-
-      const requestId = crypto.randomUUID()
-      const queued = await window.api.chatEnqueueQueuedMessage({ sessionId: runSessionId, requestId, content: chatText, attachments })
-      stickToBottomRef.current = true
-      dispatch(ackDisplayMessagePersisted({ messageId: queued.persisted.messageId, sequence: queued.persisted.sequence }))
-      scrollBottom(true)
-    },
-    [dispatch, message, scrollBottom, t]
-  )
-
   const cancelQueuedMessage = useCallback(
     async (messageId: string) => {
       const msg = store.getState().chat.messages.find((m) => m.id === messageId)
@@ -493,380 +470,142 @@ export function ChatView() {
     [message, t]
   )
 
-  const drainQueueForSession = useCallback(
-    async (runSessionId: string) => {
-      if (drainingQueueRef.current || isSessionRunning(runSessionId)) return
 
-      const next = await window.api.chatGetNextQueuedMessage({ sessionId: runSessionId })
-      if (!next || next.message.role !== 'user' || next.message.status !== 'queued') return
-
-      drainingQueueRef.current = true
-      try {
-        await sendInternalRef.current(next.message.content, undefined, {
-          targetSessionId: runSessionId,
-          contextIntent: {
-            kind: 'reuse-user',
-            currentUser: {
-              message: next.message,
-              order: { kind: 'persisted', sequence: next.sequence }
-            },
-            requestId: next.requestId
-          }
-        })
-      } finally {
-        drainingQueueRef.current = false
-      }
-    },
-    []
-  )
-
-  useEffect(() => {
-    const prev = prevRunningSessionsRef.current
-    const currKeys = new Set(Object.keys(runningSessions))
-    for (const sid of new Set([...Object.keys(prev), ...currKeys])) {
-      if (prev[sid] && !currKeys.has(sid)) {
-        void drainQueueForSession(sid)
-      }
-    }
-    const nextPrev: Record<string, true> = {}
-    for (const sid of currKeys) nextPrev[sid] = true
-    prevRunningSessionsRef.current = nextPrev
-  }, [runningSessions, drainQueueForSession])
-
-  const sendInternal = useCallback(
-    async (text: string, skillsStateOverride?: SessionSkillsState, options?: SendInternalOptions) => {
-      const runSessionId = options?.targetSessionId ?? sessionId
-
-      // /test-pop 无需 API key、会话或 cfg，优先处理
-      const testPopCmd = parseTestPopCommand(text)
-      if (testPopCmd.type === 'command') {
-        if (runSessionId) {
-          await persistSkillHintSystemMessage(runSessionId, testPopCmd.hint)
-        } else {
-          message.info(testPopCmd.hint)
-        }
+  const showSkillHint = useCallback(
+    (targetSessionId: string, hint: string, persisted?: { messageId: string; sequence: number }) => {
+      if (!persisted) {
+        // 无会话快路径：仅展示（主进程同样未落库）
+        message.info(hint)
         return
       }
-      if (testPopCmd.type === 'run') {
-        await window.api.testPopShow()
-        message.info('浮动通知已弹出（测试数据），点击通知或手动关闭 ✕ 按钮关闭。')
-        return
-      }
-
-      if (!runSessionId || !cfg) {
-        message.warning(t('chatView.warnings.selectSession'))
-        return
-      }
-
-      const runSession =
-        store.getState().session.list.find((x) => x.id === runSessionId) ??
-        (currentSession?.id === runSessionId ? currentSession : undefined)
-
-      if (runSession) {
-        const sync = await ensureWorkDirForSession(runSession, cfg, dispatch)
-        if (!sync.ok) {
-          message.error(formatUserFacingError(sync.error))
-          return
-        }
-      }
-
-      if (isSessionRunning(runSessionId) && !options?.bypassRunningGuard) {
-        message.warning(t('chatView.warnings.sessionRunning'))
-        return
-      }
-      const maxParallel = getMaxParallelChatSessions()
-      if (countRunningSessions() >= maxParallel) {
-        message.warning(t('chatView.warnings.maxParallel', { max: maxParallel }))
-        return
-      }
-
-      const testCmd = parseTestCardsCommand(text)
-      if (testCmd.type === 'command') {
-        await persistSkillHintSystemMessage(runSessionId, testCmd.hint)
-        return
-      }
-      if (testCmd.type === 'run') {
-        await runTestCardsPreview({
-          sessionId: runSessionId,
-          text,
-          dispatch,
-          scrollBottom,
-          onPreviewMessageId: (messageId) => {
-            setTestPreviewMessageIds((prev) => new Set([...prev, messageId]))
-          },
-          persistSystemHint: (hint) => persistSkillHintSystemMessage(runSessionId, hint)
-        })
-        return
-      }
-
-      if (!cfg.apiKeyPresent) {
-        message.warning(t('chatView.warnings.apiKeyMissing'))
-        dispatch(openSettings({ tab: 'models' }))
-        return
-      }
-      const wikiConfig = cfg.wiki ?? DEFAULT_WIKI_CONFIG
-      let sessionSkillsState = normalizeSessionSkillsState(
-        skillsStateOverride ?? runSession?.skillsState ?? DEFAULT_SESSION_SKILLS_STATE
-      )
-      let chatText = text
-      let wikiModeRun = false
-
-      const wikiCmd = await parseWikiCommand(text, wikiConfig, sessionSkillsState)
-      if (wikiCmd.type === 'command') {
-        await persistSkillHintSystemMessage(runSessionId, wikiCmd.hint)
-        if (wikiCmd.skillsState) {
-          const updated = await window.api.sessionUpdate({ sessionId: runSessionId, skillsState: wikiCmd.skillsState })
-          if (updated) dispatch(upsertSession(updated))
-        }
-        return
-      }
-      if (wikiCmd.type === 'run') {
-        await persistSkillHintSystemMessage(runSessionId, wikiCmd.hint)
-        chatText = wikiCmd.text
-        sessionSkillsState = wikiCmd.skillsState
-        wikiModeRun = true
-        const updated = await window.api.sessionUpdate({
-          sessionId: runSessionId,
-          skillsState: wikiCmd.skillsState,
-          metadata: patchSessionWikiState(runSession?.metadata, { wikiModeActive: true })
-        })
-        if (updated) dispatch(upsertSession(updated))
-      }
-
-      const cmd = await parseSkillCommand(chatText, sessionSkillsState)
-      if (cmd.type === 'command') {
-        await persistSkillHintSystemMessage(runSessionId, cmd.hint)
-        if (cmd.skillsState) {
-          const updated = await window.api.sessionUpdate({ sessionId: runSessionId, skillsState: cmd.skillsState })
-          if (updated) dispatch(upsertSession(updated))
-        }
-        return
-      }
-
-      const createUserAttachments =
-        options?.contextIntent?.kind === 'create-user'
-          ? options.contextIntent.attachments
-          : undefined
-      const intent: SendContextIntent =
-        options?.contextIntent ??
-        ({
-          kind: 'create-user',
-          text: chatText,
-          attachments: undefined
-        } as const)
-
-      // create-user 使用解析后的 chatText（可能被 skill/wiki 改写）
-      const resolvedIntent: SendContextIntent =
-        intent.kind === 'create-user'
-          ? { kind: 'create-user', text: chatText, attachments: intent.attachments }
-          : intent
-
-      if (resolvedIntent.kind === 'create-user') {
-        stickToBottomRef.current = true
-      }
-
-      let apiRequest
-      const requestId = resolvedIntent.kind === 'reuse-user' && resolvedIntent.requestId ? resolvedIntent.requestId : crypto.randomUUID()
-      try {
-        apiRequest = await prepareSendContext(
-          runSessionId,
-          resolvedIntent,
-          requestId as Parameters<typeof prepareSendContext>[2]
-        )
-      } catch (err) {
-        message.error(err instanceof Error ? err.message : String(err))
-        return
-      }
-      bumpContextSummary()
-
-      let historyForApi: Message[]
-      try {
-        const resolved = await resolveSessionContextForApi(apiRequest)
-        historyForApi = resolved.historyForApi
-      } catch (err) {
-        message.error(err instanceof Error ? err.message : String(err))
-        return
-      }
-
-      const requiredUser = apiRequest.requiredCurrentUser.message
-
-      const modelEntry = cfg.models.find((m) => m.name === chatModelName)
-      let requestModel = chatModelName
-      let requestLlmServiceId = chatLlmServiceId
-      let effectiveModelForUsage: string | undefined
-
-      if (requestNeedsVisionModel(historyForApi)) {
-        const visionRoute = resolveVisionRouteForImageSend(cfg, chatModelName, chatLlmServiceId)
-        if (!visionRoute.ok) {
-          message.error(tErrors('chat.noVisionModel'))
-          return
-        }
-        if (visionRoute.switched) {
-          requestModel = visionRoute.modelName
-          requestLlmServiceId = visionRoute.llmServiceId
-          effectiveModelForUsage = visionRoute.modelName
-        }
-      }
-
-      const requestBaseUrl = (() => {
-        const svc = cfg.llmServices.find((s) => s.id === requestLlmServiceId)
-        return svc?.baseUrl || cfg.baseUrl || undefined
-      })()
-      const requestModelEntry = cfg.models.find((m) => m.name === requestModel) ?? modelEntry
-
-      const lastUsage = store.getState().chat.lastUsage
-      const pendingAttachments =
-        resolvedIntent.kind === 'create-user' ? requiredUser.attachments : undefined
-      const pendingImageTokens = pendingAttachments?.length
-        ? estimateTokensFromImageAttachments(pendingAttachments)
-        : 0
-      const historyImageTokens = estimateTokensFromHistoryImages(historyForApi)
-      const lastAssistantThinking = (() => {
-        for (let i = historyForApi.length - 1; i >= 0; i--) {
-          const m = historyForApi[i]
-          if (m?.role === 'assistant' && m.thinking) return m.thinking
-        }
-        return undefined
-      })()
-      const thinkingTokensToExclude = estimateThinkingTokensFromMessage(lastAssistantThinking)
-      if (requestModelEntry) {
-        const cap = resolveEffectiveMaximumContext(requestModel, requestModelEntry.maximumContext)
-        const occupancy = lastUsage
-          ? computeEstimatedOccupancy(lastUsage, { thinkingTokensToExclude })
-          : 0
-        if (cap > 0 && historyImageTokens + pendingImageTokens + occupancy > cap * 0.8) {
-          message.warning(
-            tContextUsage('sendWarning', {
-              imageTokens: historyImageTokens + pendingImageTokens,
-              percent: Math.round(((historyImageTokens + pendingImageTokens + occupancy) / cap) * 100)
-            })
-          )
-        }
-      }
-
-      registerSessionRun(runSessionId, requestId)
-      abortRequestedRef.current = false
-      dispatch(setChatStatus({ status: 'streaming', requestId, sessionId: runSessionId }))
-
-      if (abortRequestedRef.current) {
-        dispatch(setChatStatus({ status: 'completed', requestId: null, sessionId: runSessionId }))
-        finishSessionRun(runSessionId, requestId)
-        message.info(CHAT_CANCELLED_MESSAGE)
-        scrollBottom()
-        return
-      }
-
-      const preparedTurn = apiRequest.coordinatorTurn
-      if (!preparedTurn) throw new Error('CORE_PREPARE_TURN_REQUIRED')
-      registerSessionRun(runSessionId, requestId, preparedTurn.turnId)
-      dispatch(setChatStatus({ status: 'streaming', requestId, sessionId: runSessionId, turnId: preparedTurn.turnId }))
-      const assistantId = preparedTurn.assistantMessage.id
-      const findAssistantRow = () =>
-        getLiveMessages(runSessionId)?.find((m) => m.id === assistantId) ??
-        store.getState().chat.messages.find((m) => m.id === assistantId)
-      const assistantMsg: Message = preparedTurn.assistantMessage
-      routeAddMessage(runSessionId, assistantMsg)
-      initLiveSessionFromStore(runSessionId)
-      const sequence = await window.api.chatGetMessageSequence({ sessionId: runSessionId, messageId: assistantId })
-      if (sequence != null) {
-        ackApiContextMessagePersisted({ messageId: assistantId, sequence }, runSessionId)
-        dispatch(ackDisplayMessagePersisted({ messageId: assistantId, sequence }))
-      }
-      stickToBottomRef.current = true
+      // 主进程已落库的提示消息：用落库凭据本地路由真实 id（幂等归并，不重复 append）
+      const local = createSkillHintSystemMessage(targetSessionId, hint)
+      routeAddMessage(targetSessionId, { ...local, id: persisted.messageId })
+      dispatch(ackDisplayMessagePersisted({ messageId: persisted.messageId, sequence: persisted.sequence }))
       scrollBottom(true)
-
-      if (abortRequestedRef.current) {
-        finishSessionRun(runSessionId, requestId, assistantId)
-        return
-      }
-
-      {
-        // 新 turn 的事实和工具状态全部来自应用级 TurnProjection；ChatView 只负责启动和清理展示运行索引。
-        const cleanup = () => undefined
-        try {
-          const payload = buildToolChatPayload({
-            requestId,
-            sessionId: runSessionId,
-            turnId: preparedTurn.turnId,
-            turnStartToken: preparedTurn.startToken
-          })
-          const res = await window.api.chatExecuteTurn(payload)
-          void res
-          return
-        } catch (e) {
-          const err = e instanceof Error ? e.message : String(e)
-          dispatch(setChatStatus({ status: 'error', error: err, requestId: null, sessionId: runSessionId }))
-          finishSessionRun(runSessionId, requestId, assistantId)
-          clearLiveSession(runSessionId)
-          message.error(formatUserFacingError(err))
-        } finally {
-          cleanup()
-        }
-        return
-      }
     },
-    [cfg, chatModelName, chatBaseUrl, chatLlmServiceId, currentSession, dispatch, sessionId, message, persistSkillHintSystemMessage, t, tErrors, tContextUsage]
+    [dispatch, message, scrollBottom]
   )
 
-  sendInternalRef.current = sendInternal
+  // 出站提交（Phase 1c）：渲染端只表达意图；发起/排队/本地命令/守卫决定全部在主进程受理端口（偏差 9）。
+  // 协议注释：turn 投影（chatOnTurnProjection）是唯一事实源；submitOutbound 返回载荷仅供即时展示，
+  // 渲染端按 turnId/messageId 幂等归并，不得据此双写状态（投影事件可能先于 invoke 返回到达）。
+  const submitOutbound = useCallback(
+    async (
+      text: string,
+      skillsStateOverride?: SessionSkillsState,
+      options?: SendInternalOptions
+    ): Promise<Awaited<ReturnType<typeof window.api.chatSubmitOutbound>> | undefined> => {
+      void skillsStateOverride
+      const runSessionId = options?.targetSessionId ?? sessionId
+      let result: Awaited<ReturnType<typeof window.api.chatSubmitOutbound>>
+      try {
+        result = await window.api.chatSubmitOutbound({
+          ...(runSessionId ? { sessionId: runSessionId } : {}),
+          text,
+          ...(options?.contextIntent ? { contextIntent: options.contextIntent } : {}),
+          ...(options?.sessionPrefs ? { sessionPrefs: options.sessionPrefs } : {})
+        })
+      } catch (err) {
+        message.error(formatUserFacingError(err instanceof Error ? err.message : String(err)))
+        return undefined
+      }
+
+      if ('rejected' in result) {
+        for (const w of result.rejected.warnings ?? []) message.warning(formatUserFacingError(w))
+        message.error(formatUserFacingError(result.rejected.reason))
+        // main 基线语义:缺 API Key 时引导用户打开设置页
+        if (result.rejected.reason === 'OUTBOUND_API_KEY_MISSING') {
+          dispatch(openSettings({ tab: 'models' }))
+        }
+        return result
+      }
+
+      if (result.accepted === 'local-command') {
+        const cmd = result.command
+        // v2-B1:主进程为命令代建会话时,先切视图再路由提示/预览(否则提示塞进 undefined 键、预览静默)
+        const effectiveSessionId = result.sessionId ?? runSessionId
+        if (effectiveSessionId && effectiveSessionId !== sessionId) dispatch(setSession(effectiveSessionId))
+        if (cmd.kind === 'test-pop-run') {
+          await window.api.testPopShow()
+          message.info('浮动通知已弹出（测试数据），点击通知或手动关闭 ✕ 按钮关闭。')
+          return result
+        }
+        if (cmd.kind === 'test-cards-run') {
+          if (!effectiveSessionId) return
+          await runTestCardsPreview({
+            sessionId: effectiveSessionId,
+            text,
+            dispatch,
+            scrollBottom,
+            onPreviewMessageId: (messageId) => {
+              setTestPreviewMessageIds((prev) => new Set([...prev, messageId]))
+            },
+            persistSystemHint: (hint) => persistSkillHintSystemMessage(effectiveSessionId, hint)
+          })
+          return result
+        }
+        showSkillHint(
+          effectiveSessionId!,
+          cmd.hint,
+          cmd.messageId ? { messageId: cmd.messageId, sequence: cmd.sequence ?? 0 } : undefined
+        )
+        return result
+      }
+
+      if (result.accepted === 'queued') {
+        stickToBottomRef.current = true
+        dispatch(ackDisplayMessagePersisted({ messageId: result.queued.messageId, sequence: result.queued.sequence }))
+        scrollBottom(true)
+        return result
+      }
+
+      // turn-started：建立即时展示状态；后续事实流由投影驱动
+      const { sessionId: sid, turnId, assistantMessage, warnings } = result
+      for (const w of warnings ?? []) message.warning(formatUserFacingError(w))
+      // 主进程代建会话（渲染端无会话发送）→ 切换当前会话视图
+      if (sid !== sessionId) dispatch(setSession(sid))
+      bumpContextSummary()
+      stickToBottomRef.current = true
+      dispatch(setChatStatus({ status: 'streaming', requestId: null, sessionId: sid, turnId }))
+      routeAddMessage(sid, assistantMessage)
+      initLiveSessionFromStore(sid)
+      const sequence = await window.api.chatGetMessageSequence({ sessionId: sid, messageId: assistantMessage.id })
+      if (sequence != null) {
+        ackApiContextMessagePersisted({ messageId: assistantMessage.id, sequence }, sid)
+        dispatch(ackDisplayMessagePersisted({ messageId: assistantMessage.id, sequence }))
+      }
+      scrollBottom(true)
+      return result
+    },
+    [sessionId, dispatch, message, showSkillHint, persistSkillHintSystemMessage, bumpContextSummary]
+  )
+
+  sendInternalRef.current = submitOutbound
 
   const send = useCallback(
     async (text: string, attachments?: ChatImageAttachment[]) => {
       if (!text.trim()) return
-
-      const hasAttachments = (attachments?.length ?? 0) > 0
-      // 图片是否可发送由模型视觉能力校验，不由工具开关决定。
-
-      let targetSessionId = sessionId
-      if (!targetSessionId) {
-        if (!cfg) {
-          message.warning(t('chatView.warnings.selectSession'))
-          return
-        }
-        try {
-          const newSession = await window.api.sessionCreate({
-            model: chatModelName,
-            temperature: DEFAULT_LLM_TEMPERATURE,
-            ...(chatLlmServiceId ? { llmServiceId: chatLlmServiceId } : {}),
-            name: '',
-            metadata: {}
-          })
-          dispatch(upsertSession(newSession))
-          dispatch(setSession(newSession.id))
-          targetSessionId = newSession.id
-        } catch (e) {
-          message.error(formatUserFacingError(e instanceof Error ? e.message : String(e)))
-          return
-        }
-      }
-
-      if (isSessionRunning(targetSessionId)) {
-        const runSession =
-          store.getState().session.list.find((x) => x.id === targetSessionId) ??
-          (currentSession?.id === targetSessionId ? currentSession : undefined)
-        const sessionSkillsState = normalizeSessionSkillsState(
-          runSession?.skillsState ?? DEFAULT_SESSION_SKILLS_STATE
-        )
-        const wikiConfig = cfg?.wiki ?? DEFAULT_WIKI_CONFIG
-        const kind = await classifyOutboundMessage(text, { wikiConfig, sessionSkillsState })
-        if (kind === 'immediate-command') {
-          await sendInternal(text, sessionSkillsState, { targetSessionId, bypassRunningGuard: true })
-          return
-        }
-        await enqueueChatMessage(targetSessionId, text, attachments)
-        return
-      }
-
-      await sendInternal(text, undefined, {
-        targetSessionId,
-        contextIntent: {
-          kind: 'create-user',
-          text,
-          attachments
-        }
+      // 无会话 → 主进程创建（附带 composer 草稿偏好，B2）；运行中 → 主进程分类立即命令/排队；决定全部回主进程（偏差 9）
+      const result = await submitOutbound(text, undefined, {
+        targetSessionId: sessionId ?? undefined,
+        contextIntent: { kind: 'create-user', text, attachments },
+        ...(sessionId
+          ? {}
+          : {
+              sessionPrefs: {
+                model: chatModelName,
+                ...(chatLlmServiceId ? { llmServiceId: chatLlmServiceId } : {}),
+                ...(draftThinkingEffort ? { thinkingEffort: draftThinkingEffort } : {})
+              }
+            })
       })
+      // §5.2 草稿保持:档位随主进程代建的首个会话落库后即清理
+      if (result && 'accepted' in result && result.accepted === 'turn-started' && result.sessionId !== sessionId) {
+        setDraftThinkingEffort(undefined)
+      }
     },
-    [sessionId, cfg, sendInternal, dispatch, message, t, tErrors, currentSession, enqueueChatMessage]
+    [sessionId, submitOutbound, chatModelName, chatLlmServiceId, draftThinkingEffort]
   )
 
   const retryFailedAssistant = useCallback(
@@ -882,7 +621,7 @@ export function ChatView() {
       }
 
       dispatch(removeMessage(assistantMessageId))
-      await sendInternal(target.currentUser.message.content, undefined, {
+      await submitOutbound(target.currentUser.message.content, undefined, {
         contextIntent: {
           kind: 'reuse-user',
           currentUser: {
@@ -893,7 +632,7 @@ export function ChatView() {
         }
       })
     },
-    [dispatch, message, sendInternal, t, sessionId]
+    [dispatch, message, submitOutbound, t, sessionId]
   )
 
   const launchIntentConsumedRef = useRef<string | null>(null)
@@ -920,10 +659,10 @@ export function ChatView() {
       })
       if (updated) dispatch(upsertSession(updated))
       dispatch(clearChatLaunchIntent())
-      await sendInternal(chatLaunchIntent.initialUserMessage, updated?.skillsState ?? skillsState)
+      await submitOutbound(chatLaunchIntent.initialUserMessage, updated?.skillsState ?? skillsState)
     }
     void consume()
-  }, [chatLaunchIntent, sessionId, cfg, currentSession, dispatch, sendInternal])
+  }, [chatLaunchIntent, sessionId, cfg, currentSession, dispatch, submitOutbound])
 
   const running = sessionRunning
   const queueCount = sessionId ? countQueuedUserMessages(messages, sessionId) : 0
@@ -973,12 +712,24 @@ export function ChatView() {
 
   const pendingConfirmItems = usePendingConfirmSnapshot()
 
+  // 按 sessionId 预分组的确认就绪映射：同一份 pendingConfirmItems 下引用稳定，
+  // 使各行 ChatBubble 的 memo 浅比较生效（J-03）。值原样透传三态：
+  // undefined（未知/旧路径）/ false（未就绪）/ true（就绪），
+  // 下游 ToolCallCard 门禁为 confirmationReady !== false，禁止把 undefined 归一为 false。
+  const confirmationReadyBySession = useMemo(() => {
+    const map: Record<string, Record<string, boolean | undefined>> = {}
+    for (const item of pendingConfirmItems) {
+      const byTool = (map[item.sessionId] ??= {})
+      byTool[item.toolUseId] = item.confirmationReady
+    }
+    return map
+  }, [pendingConfirmItems])
+
   const testPreviewToolsInteractive = useMemo(
     () =>
       cfg
         ? {
             requestId: 'test-cards-preview',
-            confirmMode: cfg.tools.confirmMode,
             onToolConfirm: (_toolUseId: string, approved: boolean) => {
               message.info(approved ? '测试预览：已确认（无实际操作）' : '测试预览：已拒绝（无实际操作）')
             },
@@ -1014,7 +765,6 @@ export function ChatView() {
       return resolveMessageToolsInteractive({
         message: m,
         sessionId,
-        confirmMode: cfg.tools.confirmMode,
         pendingItems: pendingConfirmItems,
         streamingAssistantId,
         streamingRequestId
@@ -1023,7 +773,6 @@ export function ChatView() {
     [
       sessionId,
       cfg?.tools.enabled,
-      cfg?.tools.confirmMode,
       pendingConfirmItems,
       streamingAssistantId,
       streamingRequestId,
@@ -1064,6 +813,23 @@ export function ChatView() {
     [sessionId, dispatch]
   )
 
+  /** §5.2：会话级强度选择；null = 清除覆盖（回到继承全局）。无会话时保留为草稿，随创建写入。 */
+  const handleThinkingSelect = useCallback(
+    async (effort: AgentReasoningEffort | null) => {
+      if (!sessionId) {
+        setDraftThinkingEffort(effort ?? undefined)
+        return
+      }
+      try {
+        const updated = await window.api.sessionUpdate({ sessionId, thinkingEffort: effort })
+        if (updated) dispatch(upsertSession(updated))
+      } catch (e) {
+        message.error(formatUserFacingError(e instanceof Error ? e.message : String(e)))
+      }
+    },
+    [sessionId, dispatch, message]
+  )
+
   const scrollToLatestLabel = t('scrollToLatest.label')
 
   const resolveFailureReason = useCallback(
@@ -1087,6 +853,7 @@ export function ChatView() {
         turnId={sessionId && streamingAssistant?.id === m.id ? runningSessions[sessionId]?.turnId : undefined}
         enterMessageId={enterMessageId}
         actions={messageActions}
+        confirmationReadyBySession={confirmationReadyBySession}
         resolveToolsInteractive={resolveToolsInteractive}
         showArchiveToWiki={showArchiveToWikiFor}
         canRetry={canRetryMessage}
@@ -1104,6 +871,7 @@ export function ChatView() {
     [
       enterMessageId,
       messageActions,
+      confirmationReadyBySession,
       resolveToolsInteractive,
       showArchiveToWikiFor,
       canRetryMessage,
@@ -1190,6 +958,18 @@ export function ChatView() {
               displayName={sessionBinding?.displayName ?? chatModelName}
               unavailable={Boolean(sessionBinding && !sessionBinding.option)}
               onSelect={(opt) => void handleModelSelect(opt)}
+            />
+          ) : null
+        }
+        thinkingSlot={
+          cfg && thinkingBinding ? (
+            <ComposerThinkingPicker
+              value={thinkingBinding.effort}
+              overridden={thinkingBinding.overridden}
+              globalEffort={thinkingBinding.globalEffort}
+              disabled={currentModelEntry?.supportsThinking === false}
+              disabledReason={currentModelEntry?.supportsThinking === false ? t('composer.thinking.notSupported') : undefined}
+              onSelect={(effort) => void handleThinkingSelect(effort)}
             />
           ) : null
         }

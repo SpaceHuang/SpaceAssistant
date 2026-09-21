@@ -1,3 +1,4 @@
+import { DEFAULT_POLICY_RULES } from '../src/shared/policy/defaultRules'
 import { describe, expect, it } from 'vitest'
 import { evaluateToolCallGate, type ToolCallGateArgs } from './confirmation/toolCallGate'
 import { DEFAULT_WECHAT_CONFIG, type WeChatConfig } from '../src/shared/wechatTypes'
@@ -31,8 +32,25 @@ function gate(
     userDataDir: '/tmp/ud',
     toolsConfig,
     audit: { record: () => undefined },
+    ...gateDefaultMaterials(),
     ...overrides
   })
+}
+
+
+/** P2（B1）：显式默认门控材料（原 appDb 缺失静默回退的显式化）。 */
+function gateDefaultMaterials() {
+  return {
+    effectiveRules: DEFAULT_POLICY_RULES,
+    decisionCache: {
+      lookup: () => null,
+      record: () => undefined,
+      clear: () => 0,
+      clearAllSession: () => 0,
+      expireDormant: () => 0
+    },
+    shellPrecheck: { touchTrustedCommand: () => undefined }
+  }
 }
 
 describe('wechat outbound confirm removal（经 toolCallGate + 规则表）', () => {
@@ -86,8 +104,10 @@ describe('wechat outbound confirm removal（经 toolCallGate + 规则表）', ()
     }
   })
 
-  it('write_file still needs confirmation under builtin policy without remote context', async () => {
-    const r = await gate('write_file', { path: 'a.txt', content: 'x' })
+  it('wechat write_file still needs confirmation under builtin policy without remote context', async () => {
+    // P1：desktop 的 write_file 走「自动」（快通道/Agent）；远程写确认（零行为变化）取 wechat lane
+    const r = await gate('write_file', { path: 'a.txt', content: 'x' }, { lane: 'wechat' })
     expect(r.decision.type).toBe('require-confirm')
+    if (r.decision.type === 'require-confirm') expect(r.decision.answerer).toBe('user')
   })
 })

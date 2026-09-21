@@ -1,7 +1,12 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 13
+export const DB_SCHEMA_VERSION = 17
 
 export const CREATE_TABLES_SQL = `
+CREATE TABLE IF NOT EXISTS scope_versions (
+  scope TEXT PRIMARY KEY NOT NULL,
+  version INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS schema_meta (
   key TEXT PRIMARY KEY NOT NULL,
   value TEXT NOT NULL
@@ -160,9 +165,128 @@ CREATE INDEX IF NOT EXISTS idx_turns_session_assistant_state
   ON turns(session_id, assistant_message_id, state);
 `
 
+/**
+ * 偏差 7：会话归属与可见性成为 sessions 的独立维度。
+ * 存量行默认 user/primary（行为不变）；IM 来源会话（metadata.source ∈ feishu/wechat）按创建特征回填 remote。
+ */
+export const MIGRATION_V14_SESSION_OWNERSHIP_SQL = `
+ALTER TABLE sessions ADD COLUMN ownership TEXT NOT NULL DEFAULT 'user';
+ALTER TABLE sessions ADD COLUMN visibility TEXT NOT NULL DEFAULT 'primary';
+`
+
+/** 归属回填：IM 创建的存量会话按 metadata.source 特征标记为 remote。
+ *  json_valid 防护：损坏/篡改的 metadata 不得阻断迁移（该行保持默认 user，评审观察项）。 */
+export const MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL = `
+UPDATE sessions SET ownership = 'remote'
+  WHERE json_valid(metadata)
+    AND json_extract(metadata, '$.source') IN ('feishu', 'wechat');
+`
+
+/**
+ * P4 管家任务表：任务定义 + 运行记录。
+ * client_id 唯一幂等键（`${taskId}:${scheduledFor}`）防 tick 重入 / 双投递；
+ * 手动触发用 `${taskId}:manual:${requestId}`。
+ */
+export const MIGRATION_V15_BUTLER_TABLES_SQL = `
+CREATE TABLE IF NOT EXISTS automation_tasks (
+  id TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL,
+  schedule_json TEXT NOT NULL,
+  prompt TEXT NOT NULL,
+  delivery_pref TEXT NOT NULL DEFAULT 'desktop',
+  delivery_target TEXT,
+  model_override TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  last_run_at INTEGER,
+  next_run_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS automation_task_runs (
+  id TEXT PRIMARY KEY NOT NULL,
+  task_id TEXT NOT NULL REFERENCES automation_tasks(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL UNIQUE,
+  trigger TEXT NOT NULL DEFAULT 'schedule',
+  scheduled_for INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  error TEXT,
+  session_id TEXT,
+  result_summary TEXT,
+  usage_json TEXT,
+  delivery_status TEXT NOT NULL DEFAULT 'pending',
+  delivered_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_runs_task ON automation_task_runs(task_id, scheduled_for);
+`
+
+/**
+ * Agent Token 用量统计（v16）：逐步明细 + 按 Turn 汇总两张事实表。
+ * 不对 sessions 建外键 —— 会话删除后统计行必须保留（需求 §9.1）。
+ * UNIQUE(session_id, turn_id, step_id) 保证重试 / 恢复场景幂等（重复写为覆盖）。
+ */
+export const MIGRATION_V16_USAGE_STATS_SQL = `
+CREATE TABLE IF NOT EXISTS usage_step_facts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  step_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  model TEXT,
+  llm_service_id TEXT,
+  app_version TEXT,
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_semantics TEXT,
+  source TEXT NOT NULL DEFAULT 'api',
+  UNIQUE(session_id, turn_id, step_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_step_day ON usage_step_facts(day);
+CREATE INDEX IF NOT EXISTS idx_usage_step_session_day ON usage_step_facts(session_id, day);
+CREATE INDEX IF NOT EXISTS idx_usage_step_model_day ON usage_step_facts(model, day);
+CREATE INDEX IF NOT EXISTS idx_usage_step_app_version_day ON usage_step_facts(app_version, day);
+
+CREATE TABLE IF NOT EXISTS usage_turn_facts (
+  turn_id TEXT PRIMARY KEY NOT NULL,
+  session_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  model TEXT,
+  llm_service_id TEXT,
+  app_version TEXT,
+  step_count INTEGER NOT NULL DEFAULT 0,
+  tool_call_count INTEGER NOT NULL DEFAULT 0,
+  tool_error_count INTEGER NOT NULL DEFAULT 0,
+  tool_skipped_count INTEGER NOT NULL DEFAULT 0,
+  outcome TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_turn_day ON usage_turn_facts(day);
+CREATE INDEX IF NOT EXISTS idx_usage_turn_session_day ON usage_turn_facts(session_id, day);
+CREATE INDEX IF NOT EXISTS idx_usage_turn_model_day ON usage_turn_facts(model, day);
+CREATE INDEX IF NOT EXISTS idx_usage_turn_app_version_day ON usage_turn_facts(app_version, day);
+`
+
+/**
+ * Thinking 强度（v17）：会话级覆盖列。
+ * NULL = 继承全局 config.thinkingEffort（§4.2 继承语义）——存量行不加默认值即天然兼容，禁止回填。
+ */
+export const MIGRATION_V17_SESSION_THINKING_EFFORT_SQL = `
+ALTER TABLE sessions ADD COLUMN thinking_effort TEXT;
+`
+
 export const SCHEMA_META_KEYS = {
   schemaVersion: 'schema_version',
   migratedFromJsonAt: 'migrated_from_json_at',
   migratedFromJsonPath: 'migrated_from_json_path',
-  legacyWorkspaceLayoutCleanedAt: 'legacy_workspace_layout_cleaned_at'
+  legacyWorkspaceLayoutCleanedAt: 'legacy_workspace_layout_cleaned_at',
+  /** 用量统计一次性历史回填完成时间（C7）；缺失时启动重试，成功即写。 */
+  usageStatsBackfillAt: 'usage_stats_backfill_at'
 } as const

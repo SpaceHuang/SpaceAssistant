@@ -3,7 +3,6 @@ import type { AppIpcContext } from '../appIpc'
 import {
   McpSaveProfilesPayloadSchema,
   McpTestConnectionPayloadSchema,
-  MCP_CONNECT_TIMEOUT_MS,
   type McpServerProfile,
   type McpServerWriteInput
 } from '../../src/shared/mcpTypes'
@@ -18,13 +17,15 @@ import { rejectPendingConfirmsForToolAcrossLanes } from '../toolConfirmRegistry'
 import { revokeToolForAllLanes } from '../toolRevocationRegistry'
 import { clearSecret, getSecret } from './mcpSecretStore'
 import { clearDiagnostics, getDiagnostics, safeAppendDiagnostic } from './mcpDiagnostics'
-import { McpConnectionManager, testConnection } from './mcpConnectionManager'
-import { buildMappedToolDescriptors, discoverToolsFromSession, getCachedTools } from './mcpToolRegistry'
+import { McpConnectionManager } from './mcpConnectionManager'
+import { discoverToolsFromSession, getCachedTools } from './mcpToolRegistry'
 import {
   createMcpOAuthClientProvider,
   isOAuthFlowActive,
+  MCP_AUTH_REQUIRED_MESSAGE,
   startOAuthFlow
 } from './mcpOauthService'
+import { testMcpConnection } from './mcpService'
 
 /**
  * mcp:* IPC 处理器注册（被 appIpc.ts 调用）。
@@ -110,47 +111,8 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
 
   ipcMain.handle('mcp:test-connection', async (_e, payload: unknown) => {
     const parsed = McpTestConnectionPayloadSchema.parse(payload)
-    const input = parsed.server
-    const profile = writeInputToProfile(input)
-
-    const draftSecrets: Record<string, string> = {}
-    if (input.auth.accessToken?.trim()) draftSecrets['access-token'] = input.auth.accessToken.trim()
-    if (input.auth.headerValue?.trim()) draftSecrets['auth-header'] = input.auth.headerValue.trim()
-    for (const env of input.stdio?.env ?? []) {
-      if (env.value !== undefined && env.value !== '') draftSecrets[`env:${env.key}`] = env.value
-    }
-    // 草稿未填写的新值优先；已保存服务编辑草稿留空时回退到已保存 Secret，
-    // 避免「已配好 token 只是没重填」被误判为未认证。
-    const secretProvider = async (kind: string): Promise<string | null> =>
-      draftSecrets[kind] ?? (await getSecret(ctx.db, profile.id, kind))
-
-    // OAuth 服务：已保存 token 直接携带；未授权则先跑一次授权流程（草稿 profile），
-    // 授权成功后 token 落在草稿 id 下，再按已授权状态连接。
-    let oauthProvider: ReturnType<typeof createMcpOAuthClientProvider> | undefined
-    if (profile.auth.mode === 'oauth') {
-      oauthProvider = createMcpOAuthClientProvider(ctx.db, profile)
-      const hasToken = await getSecret(ctx.db, profile.id, 'access-token')
-      if (!hasToken) {
-        const oauthResult = await startOAuthFlow(ctx.db, profile.id, { profile })
-        if (!oauthResult.ok) return oauthResult
-      }
-    }
-
-    const result = await testConnection(profile, {
-      connectTimeoutMs: MCP_CONNECT_TIMEOUT_MS,
-      secretProvider,
-      oauthProvider
-    })
-    if (!result.ok) return result
-    const { descriptors, skipped } = buildMappedToolDescriptors(input.id, input.name, result.tools)
-    return {
-      ok: true,
-      serverName: result.serverInfo.name,
-      protocolVersion: result.protocolVersion,
-      capabilities: result.capabilities,
-      tools: descriptors,
-      skipped
-    }
+    // 编排逻辑已抽取到 mcpService（前案 §5.2.1）；IPC 仅做载荷解析与委托
+    return testMcpConnection(ctx.db, parsed.server)
   })
 
   ipcMain.handle('mcp:delete-server', async (_e, payload: { serverId?: unknown }) => {
@@ -208,30 +170,67 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     const manager = new McpConnectionManager({
       appendDiagnostic: (id, entry) => safeAppendDiagnostic(ctx.db, id, entry)
     })
+    // 后台刷新禁止静默发起交互式授权：token 失效时返回 auth-required，引导用户点「连接账户」。
+    let interactiveAuthRequired = false
     try {
       const secretProvider = async (kind: string): Promise<string | null> => getSecret(ctx.db, serverId, kind)
       const oauthProvider =
-        profile.auth.mode === 'oauth' ? createMcpOAuthClientProvider(ctx.db, profile) : undefined
+        profile.auth.mode === 'oauth'
+          ? createMcpOAuthClientProvider(ctx.db, profile, {
+              interactive: false,
+              onInteractiveAuthRequired: () => {
+                interactiveAuthRequired = true
+              }
+            })
+          : undefined
       const session = await manager.connect(profile, secretProvider, { oauthProvider })
       const discovery = await discoverToolsFromSession(ctx.db, profile, session)
       if (!discovery.ok) {
-        updateServerStatus(ctx.db, serverId, {
+        if (interactiveAuthRequired) {
+          await updateServerStatus(ctx.db, serverId, {
+            status: 'auth-required',
+            lastError: { code: 'auth-required', message: MCP_AUTH_REQUIRED_MESSAGE, occurredAt: new Date().toISOString() }
+          })
+          return { ok: false, code: 'auth-required', message: MCP_AUTH_REQUIRED_MESSAGE }
+        }
+        await updateServerStatus(ctx.db, serverId, {
           status: 'failed',
           lastError: { code: discovery.code, message: discovery.message, occurredAt: new Date().toISOString() }
         })
         return discovery
       }
-      updateServerStatus(ctx.db, serverId, {
+      // 白名单自动回填：服务启用且从未勾选过工具（如会话内 action.mcp.add 创建后仅在设置页完成授权）
+      // 时，刷新发现成功即全选本次工具，消除「已连接但 0 工具注入」的静默不可用态；已有选择不覆盖。
+      const current = listProfiles(ctx.db).find((p) => p.id === serverId)
+      const shouldAutoFillEnabledTools =
+        current?.enabled === true && current.enabledToolNames.length === 0 && discovery.tools.length > 0
+      await updateServerStatus(ctx.db, serverId, {
         status: discovery.tools.length > 0 ? 'connected' : 'no-tools',
         discoveredAt: new Date().toISOString(),
         discoveredProtocolVersion: discovery.protocolVersion,
-        clearLastError: true
+        clearLastError: true,
+        ...(shouldAutoFillEnabledTools
+          ? { enabledToolNames: discovery.tools.map((tool) => tool.originalName) }
+          : {})
       })
-      return { ok: true, serverName: discovery.serverName, tools: discovery.tools }
+      return {
+        ok: true,
+        serverName: discovery.serverName,
+        tools: discovery.tools,
+        // 回填告知标记：UI 据此提示「已自动启用 N 个工具」，避免静默改库
+        ...(shouldAutoFillEnabledTools ? { autoEnabledToolCount: discovery.tools.length } : {})
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       safeAppendDiagnostic(ctx.db, serverId, { code: 'refresh-failed', message })
-      updateServerStatus(ctx.db, serverId, {
+      if (interactiveAuthRequired) {
+        await updateServerStatus(ctx.db, serverId, {
+          status: 'auth-required',
+          lastError: { code: 'auth-required', message: MCP_AUTH_REQUIRED_MESSAGE, occurredAt: new Date().toISOString() }
+        })
+        return { ok: false, code: 'auth-required', message: MCP_AUTH_REQUIRED_MESSAGE }
+      }
+      await updateServerStatus(ctx.db, serverId, {
         status: 'failed',
         lastError: { code: 'refresh-failed', message, occurredAt: new Date().toISOString() }
       })

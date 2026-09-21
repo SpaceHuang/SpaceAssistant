@@ -1,0 +1,90 @@
+{
+  "id": "p09-backtick-continuation",
+  "dialect": "windows-powershell",
+  "platform": "linux",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "Get-ChildItem `\n  -Recurse"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [],
+      "warnings": [],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": false
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": false,
+      "outsideWorkDirRisk": false,
+      "warnings": [],
+      "scannedPaths": []
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "Get-ChildItem",
+          "args": [
+            "`"
+          ],
+          "segmentIndex": 0
+        },
+        {
+          "verb": "-Recurse",
+          "args": [],
+          "segmentIndex": 1
+        }
+      ],
+      "connectors": [
+        ";"
+      ],
+      "paths": [],
+      "cwdChanges": [],
+      "analysisCompleteness": "complete",
+      "unresolved": []
+    }
+  },
+  "signature": {
+    "normalized": "Get-ChildItem ` -Recurse",
+    "trust": {
+      "executable": "",
+      "argv": [],
+      "hasMetasyntax": true,
+      "persistable": false
+    },
+    "persistableSingle": false
+  },
+  "facts": {
+    "dialect": "windows-powershell",
+    "operations": [
+      {
+        "verb": "Get-ChildItem",
+        "args": [
+          "`"
+        ],
+        "segmentIndex": 0
+      },
+      {
+        "verb": "-Recurse",
+        "args": [],
+        "segmentIndex": 1
+      }
+    ],
+    "connectors": [
+      ";"
+    ],
+    "paths": [],
+    "cwdChanges": [],
+    "analysisCompleteness": "complete",
+    "unresolved": []
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "complete",
+    "persistable": false,
+    "hasMetasyntax": true
+  }
+}

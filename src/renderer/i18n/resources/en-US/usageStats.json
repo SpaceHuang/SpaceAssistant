@@ -1,0 +1,45 @@
+{
+  "title": "Token Usage",
+  "refresh": "Refresh",
+  "range": {
+    "label": "Time range",
+    "last7": "Last 7 days",
+    "last30": "Last 30 days",
+    "last90": "Last 90 days",
+    "custom": "Custom"
+  },
+  "timezoneHint": "Timezone {{tz}}",
+  "filters": {
+    "model": "Model",
+    "session": "Session",
+    "version": "App version",
+    "deletedSession": "Deleted session",
+    "noOptions": "No filter options"
+  },
+  "kpi": {
+    "totalTokens": "Total Tokens",
+    "inputTokens": "Input Tokens",
+    "outputTokens": "Output Tokens",
+    "cacheRead": "Cache Read Tokens",
+    "cacheWrite": "Cache Write Tokens",
+    "hitRate": "Input Cache Hit Rate",
+    "toolCalls": "Tool Calls",
+    "toolErrors": "Errors",
+    "toolSkipped": "Skipped",
+    "toolErrorRate": "Tool Error Rate",
+    "avgStepsPerTurn": "Avg Steps per Turn",
+    "turns": "Turns",
+    "steps": "Steps"
+  },
+  "chart": {
+    "legendInput": "Input Tokens",
+    "legendOutput": "Output Tokens",
+    "legendHitRate": "Input Cache Hit Rate",
+    "tokensAxis": "Tokens",
+    "hitRateAxis": "Hit rate",
+    "empty": "No usage data in the selected range"
+  },
+  "empty": "No usage yet. Start a conversation to see token consumption, cache hit rate and tool call statistics.",
+  "rangeTooLong": "Maximum range is 365 days; showing the last 365 days",
+  "loadFailed": "Failed to load usage statistics"
+}

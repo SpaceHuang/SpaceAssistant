@@ -1,0 +1,87 @@
+// P3-T3：PowerShell 结构性危险模式（树事实驱动，结构匹配）。
+import os from 'node:os'
+import path from 'node:path'
+import type { PsCommandFacts } from './powershellCommandFacts'
+import { isSensitivePath, type ShellPathPlatform } from './shellSensitivePaths'
+import { normalizeWindowsPath } from './shellPathAnalysis'
+
+export interface PsPatternHit {
+  id: string
+  verdict: 'ask' | 'deny'
+  reason: string
+}
+
+const IEX_NAMES = new Set(['iex', 'invoke-expression'])
+const DOWNLOAD_MARKERS = ['downloadstring', 'downloadfile', 'invoke-webrequest', 'invoke-restmethod', 'curl']
+const DESTRUCTIVE_CMLETS = new Set(['format-volume', 'clear-disk', 'remove-item', 'rd', 'del', 'erase'])
+const PS_HOSTS = new Set(['powershell', 'pwsh', 'powershell.exe', 'pwsh.exe'])
+const ENCODED_FLAGS = new Set(['-encodedcommand', '-enc', '-e'])
+
+function expandHomeTilde(target: string): string {
+  if (target.startsWith('~/') || target === '~') return path.join(os.homedir(), target.slice(1))
+  return target
+}
+
+export function matchPsDangerousPatterns(
+  facts: PsCommandFacts,
+  userDataDir?: string,
+  customSensitivePrefixes?: string[],
+  platform: ShellPathPlatform = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'posix'
+): PsPatternHit | null {
+  const hits: PsPatternHit[] = []
+
+  for (const cmd of facts.commands) {
+    // P1-a 评审修复：& "Format-Volume" 形态的命令名/参数带引号——匹配前剥除（引号不改变语义）
+    const verb = cmd.name.replace(/^["']+|["']+$/g, '').toLowerCase()
+    const argsLower = cmd.args.map((a) => a.replace(/^["']+|["']+$/g, '').toLowerCase())
+
+    // 1) ps-iex-cradle：iex/Invoke-Expression 包裹下载调用（结构匹配：参数文本含下载方法）
+    if (IEX_NAMES.has(verb)) {
+      const joined = cmd.args.join(' ').toLowerCase()
+      if (DOWNLOAD_MARKERS.some((m) => joined.includes(m))) {
+        hits.push({ id: 'ps-iex-cradle', verdict: 'deny', reason: 'IEX 包裹远程下载执行（IEX cradle），已拒绝' })
+      }
+    }
+
+    // 2) ps-encoded-command：powershell/pwsh -EncodedCommand（隐藏 payload）
+    if (PS_HOSTS.has(verb) && argsLower.some((a) => ENCODED_FLAGS.has(a))) {
+      hits.push({ id: 'ps-encoded-command', verdict: 'ask', reason: 'powershell -EncodedCommand 隐藏载荷，需人工确认' })
+    }
+
+    // 3) ps-destructive：破坏性 cmdlet（Remove-Item 递归强删根/用户根；Format-Volume/Clear-Disk）
+    if (DESTRUCTIVE_CMLETS.has(verb)) {
+      if (verb === 'remove-item' || verb === 'rd' || verb === 'del' || verb === 'erase') {
+        const recursive = argsLower.some((a) => a === '-recurse' || a === '-r')
+        const force = argsLower.some((a) => a === '-force' || a === '-f')
+        if (recursive) {
+          // P1（v3 复验残留）修复：targets 从剥引号后的参数取（"C:\" 引号降级 deny→ask 的根因）
+          const targets = cmd.args
+            .map((a) => a.replace(/^["']+|["']+$/g, '').toLowerCase())
+            .filter((a) => a !== '' && !a.startsWith('-'))
+          for (const t of targets) {
+            const norm = normalizeWindowsPath(t).toLowerCase()
+            const isRoot = /^[a-z]:\/?$/.test(norm) || norm === '/' || norm === '~' || norm === '$home' || norm === '\\'
+            if (isRoot || (force && norm.startsWith('c:/'))) {
+              hits.push({ id: 'ps-destructive', verdict: 'deny', reason: `Remove-Item 递归删除根/家目录目标（${t}），已拒绝` })
+              break
+            }
+          }
+        }
+      } else {
+        hits.push({ id: 'ps-destructive', verdict: 'deny', reason: `破坏性卷/磁盘操作（${cmd.name}），已拒绝` })
+      }
+    }
+
+    // 4) ps-redirect-sensitive：重定向目标落敏感路径（v3 复验建议：target 套用同一剥引号）
+    for (const r of cmd.redirects) {
+      if (!r.target) continue
+      const expanded = expandHomeTilde(r.target.replace(/^["']+|["']+$/g, ''))
+      if (isSensitivePath(normalizeWindowsPath(expanded), userDataDir, customSensitivePrefixes, platform)) {
+        hits.push({ id: 'ps-redirect-sensitive', verdict: 'ask', reason: `重定向目标为敏感路径（${r.target}），需人工确认` })
+      }
+    }
+  }
+
+  if (hits.length === 0) return null
+  return hits.find((h) => h.verdict === 'deny') ?? hits[0]!
+}

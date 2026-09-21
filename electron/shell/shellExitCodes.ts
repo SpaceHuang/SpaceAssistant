@@ -28,9 +28,11 @@ const WINDOWS_HOST_CODES: Record<number, { semantics: string; hint: string; advi
   0xffff0000: {
     semantics: 'WINDOWS_HOST_INIT_FAILED',
     hint: 'Windows 宿主进程初始化失败（0xFFFF0000）',
+    // P0-A（D3）：建议禁止引导换工具——「改用 run_script」会把 Agent 训练成
+    // Python 包装 shell、绕过 shell 策略与方言预检；改为重试 + 上报 + 降级说明。
     advice: [
-      '改用 run_script（Python subprocess）执行同一命令',
-      '检查宿主机的安全/加密组件（如 0x8009001D 指向加密服务提供程序 DLL 加载失败）后重试',
+      'shell 宿主不可用，属宿主机环境问题，请勿改写命令或改用其他执行工具',
+      '稍后重试一次；宿主级降级链会自动尝试其他 shell 宿主，若持续失败，按诊断字段上报（含 hresult 原文）',
       '读取本次执行的原始字节 artifact，确认宿主自身写出的原始报错'
     ]
   },
@@ -54,7 +56,10 @@ const WINDOWS_HOST_CODES: Record<number, { semantics: string; hint: string; advi
   0xc0000142: {
     semantics: 'STATUS_DLL_INIT_FAILED',
     hint: '宿主依赖 DLL 初始化失败（STATUS_DLL_INIT_FAILED）',
-    advice: ['疑似安全软件拦截或系统组件缺失，重试一次后再改用 run_script']
+    advice: [
+      '宿主依赖 DLL 初始化失败，属宿主机环境问题，请勿改写命令或改用其他执行工具',
+      '宿主级降级链会尝试其他 shell 宿主；若持续失败，按诊断字段上报'
+    ]
   },
   0xc0000005: {
     semantics: 'STATUS_ACCESS_VIOLATION',
@@ -124,7 +129,10 @@ export function describeHresult(text: string): HresultDescription | undefined {
       code: '0x8009001D',
       name: 'NTE_PROVIDER_DLL_FAIL',
       meaning: '加密服务提供程序 DLL 加载或初始化失败',
-      advice: ['疑似宿主机安全/加密组件拦截，重试一次；仍失败则改用 run_script']
+      advice: [
+        '疑似宿主机安全/加密组件拦截；宿主级降级链会自动尝试其他 shell 宿主，无需改写命令',
+        '不要用脚本执行工具包装同一命令——那会绕过 shell 策略与方言预检'
+      ]
     }
   }
   return undefined

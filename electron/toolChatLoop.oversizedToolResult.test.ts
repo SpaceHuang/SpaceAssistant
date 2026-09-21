@@ -2,10 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
 import type { AppDatabase } from './database'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
-import {
-  OVERSIZED_TOOL_RESULT_PLACEHOLDER_PREFIX,
-  formatOversizedToolResultPlaceholder
-} from '../src/shared/oversizedToolResult'
+import { isTruncatedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 
 const mockLogAgentEvent = vi.fn()
@@ -67,7 +64,15 @@ vi.mock('./chatCancelRegistry', () => ({
   registerChatCancel: vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
   clearChatCancel: vi.fn(),
   throwIfChatCancelled: vi.fn(),
-  ChatCancelledError: class ChatCancelledError extends Error {}
+  ChatCancelledError: class ChatCancelledError extends Error {},
+  // A2(偏差 18):runtime 工厂经本模块取类构造实例
+  ChatCancelRegistry: class ChatCancelRegistry {
+    register = vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }))
+    signalChatCancel = vi.fn()
+    clear = vi.fn()
+    throwIfCancelled = vi.fn()
+    cancelAllActiveChats = vi.fn()
+  }
 }))
 
 vi.mock('./sessionTitleSuggest', () => ({
@@ -111,6 +116,13 @@ vi.mock('./database', async (importOriginal) => {
 })
 
 import { runToolChatSession } from './toolChatLoop'
+import { assembleInvocation } from './runtime/invocationAssembler'
+
+/** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
+function runAssembledSession(materials: unknown) {
+  const { invocation, ports } = assembleInvocation(materials as never)
+  return runToolChatSession(invocation, ports)
+}
 import { createMemoryAppDb } from './database/testHelpers'
 
 function makeSender(): WebContents {
@@ -139,7 +151,7 @@ describe('toolChatLoop oversized tool_result gate 3', () => {
   })
 
   async function runSession() {
-    return runToolChatSession({
+    return runAssembledSession({
       sender: makeSender(),
       requestId: 'req-over',
       sessionId: 'sess-over',
@@ -149,6 +161,8 @@ describe('toolChatLoop oversized tool_result gate 3', () => {
       workDir: '/tmp',
       userDataDir: '/tmp',
       getApiKey: async () => 'test-key',
+      emitFactEvent: () => undefined,
+      emitSessionEvent: async () => undefined,
       appDb: makeDb(),
       locale: 'zh-CN'
     })
@@ -190,9 +204,9 @@ describe('toolChatLoop oversized tool_result gate 3', () => {
     const results = secondRoundToolResults()
     const block = results.find((b) => b.tool_use_id === 'tu-oversize')
     expect(block).toBeDefined()
-    expect(block!.content).toBe(
-      formatOversizedToolResultPlaceholder(oversized.length, MAX_TOOL_RESULT_CONTENT_CHARS)
-    )
+    // P1-4：中段截断（保留头尾 + 标记），不再整体替换为占位符
+    expect(isTruncatedToolResultContent(block!.content)).toBe(true)
+    expect(block!.content).toContain('xxxx')
     expect(block!.content.length).toBeLessThanOrEqual(MAX_TOOL_RESULT_CONTENT_CHARS)
     expect(block!.is_error).toBeUndefined()
     expect(mockLogAgentEvent).toHaveBeenCalledWith(
@@ -218,7 +232,7 @@ describe('toolChatLoop oversized tool_result gate 3', () => {
     const block = results.find((b) => b.tool_use_id === 'tu-oversize')
     expect(block).toBeDefined()
     expect(block!.is_error).toBe(true)
-    expect(block!.content.startsWith(OVERSIZED_TOOL_RESULT_PLACEHOLDER_PREFIX)).toBe(true)
+    expect(isTruncatedToolResultContent(block!.content)).toBe(true)
     expect(block!.content.length).toBeLessThanOrEqual(MAX_TOOL_RESULT_CONTENT_CHARS)
   })
 })

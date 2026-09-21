@@ -43,7 +43,6 @@ describe('ToolCallCard file write expand behavior', () => {
           status: 'failed', riskLevel: 'high',
           result: { success: false, error: 'SCRIPT_PROCESS_EXIT', userMessage: '脚本执行失败，请检查代码后重试' }
         }}
-        confirmMode="direct"
       />
     )
     expect(screen.getByText('脚本执行失败，请检查代码后重试')).toBeDefined()
@@ -63,7 +62,6 @@ describe('ToolCallCard file write expand behavior', () => {
           result: { success: true },
           completedAt: Date.now()
         }}
-        confirmMode="direct"
         focus
       />
     )
@@ -76,7 +74,6 @@ describe('ToolCallCard file write expand behavior', () => {
         record={writeRecord('confirming', {
           confirmDiff: { oldContent: '', newContent: 'hello', oldPath: 'notes.txt' }
         })}
-        confirmMode="diff"
         onConfirm={vi.fn()}
       />
     )
@@ -91,7 +88,6 @@ describe('ToolCallCard file write expand behavior', () => {
     const { rerender } = render(
       <ToolCallCard
         record={writeRecord('confirming')}
-        confirmMode="direct"
         onConfirm={vi.fn()}
       />
     )
@@ -104,7 +100,6 @@ describe('ToolCallCard file write expand behavior', () => {
           completedAt: Date.now(),
           confirmDiff: { oldContent: '', newContent: 'hello', oldPath: 'notes.txt' }
         })}
-        confirmMode="direct"
         onOpenFile={onOpenFile}
       />
     )
@@ -127,7 +122,6 @@ describe('ToolCallCard file write expand behavior', () => {
           result: { success: true, data: [{ name: 'a.ts', type: 'file' }] },
           completedAt: Date.now()
         }}
-        confirmMode="direct"
       />
     )
     expect(document.querySelector('.tool-row--expanded')).toBeNull()
@@ -137,7 +131,7 @@ describe('ToolCallCard file write expand behavior', () => {
   it('calls onConfirm when allow or deny icon is clicked', () => {
     const onConfirm = vi.fn()
     render(
-      <ToolCallCard record={writeRecord('confirming')} confirmMode="direct" onConfirm={onConfirm} />
+      <ToolCallCard record={writeRecord('confirming')} onConfirm={onConfirm} />
     )
     fireEvent.click(screen.getByRole('button', { name: '允许写入' }))
     expect(onConfirm).toHaveBeenCalledWith(true, {})
@@ -155,7 +149,6 @@ describe('ToolCallCard file write expand behavior', () => {
           status: 'executing',
           riskLevel: 'medium'
         }}
-        confirmMode="direct"
         onCancel={vi.fn()}
       />
     )
@@ -172,7 +165,6 @@ describe('ToolCallCard file write expand behavior', () => {
           status: 'executing',
           riskLevel: 'medium'
         }}
-        confirmMode="direct"
         onCancel={vi.fn()}
       />
     )
@@ -189,7 +181,6 @@ describe('ToolCallCard file write expand behavior', () => {
           status: 'executing',
           riskLevel: 'low'
         }}
-        confirmMode="direct"
         onCancel={vi.fn()}
       />
     )
@@ -206,7 +197,6 @@ describe('ToolCallCard file write expand behavior', () => {
           status: 'executing',
           riskLevel: 'low'
         }}
-        confirmMode="direct"
         onCancel={vi.fn()}
       />
     )
@@ -223,7 +213,6 @@ describe('ToolCallCard file write expand behavior', () => {
           status: 'executing',
           riskLevel: 'low'
         }}
-        confirmMode="direct"
       />
     )
     expect(container.querySelector('.tool-row--expanded')).toBeNull()
@@ -247,7 +236,6 @@ describe('ToolCallCard file write expand behavior', () => {
           },
           completedAt: Date.now()
         }}
-        confirmMode="direct"
       />
     )
     expect(container.querySelector('.tool-row--expanded')).toBeNull()
@@ -265,7 +253,6 @@ describe('ToolCallCard file write expand behavior', () => {
           riskLevel: 'low',
           result: { success: false, error: '检测超时' }
         }}
-        confirmMode="direct"
       />
     )
     expect(document.querySelector('.tool-row--expanded')).not.toBeNull()
@@ -298,7 +285,7 @@ describe('ToolCallCard file write expand behavior', () => {
       }
     ]
     for (const record of cases) {
-      const { container, unmount } = render(<ToolCallCard record={record} confirmMode="direct" />)
+      const { container, unmount } = render(<ToolCallCard record={record} />)
       expect(container.querySelector('.tool-row--expanded')).toBeNull()
       if (record.status === 'failed') {
         expect(container.querySelector('.tool-row-detail--collapsed')).not.toBeNull()
@@ -320,7 +307,6 @@ describe('ToolCallCard file write expand behavior', () => {
           status: 'executing',
           riskLevel: 'high'
         }}
-        confirmMode="direct"
         onCancel={onCancel}
       />
     )
@@ -338,7 +324,6 @@ describe('ToolCallCard file write expand behavior', () => {
           status: 'confirming',
           riskLevel: 'medium'
         }}
-        confirmMode="direct"
         onConfirm={vi.fn()}
       />
     )
@@ -372,7 +357,6 @@ describe('ToolCallCard run_shell output display', () => {
     render(
       <ToolCallCard
         record={shellRecord('executing', { progressOutput: 'added 47 packages in 3s' })}
-        confirmMode="direct"
         {...plainShellCardProps}
       />
     )
@@ -386,7 +370,6 @@ describe('ToolCallCard run_shell output display', () => {
     render(
       <ToolCallCard
         record={shellRecord('executing', { progressOutput: 'added 47 packages in 3s' })}
-        confirmMode="direct"
         {...terminalShellCardProps}
       />
     )
@@ -406,7 +389,6 @@ describe('ToolCallCard run_shell output display', () => {
           },
           completedAt: Date.now()
         })}
-        confirmMode="direct"
         {...plainShellCardProps}
       />
     )
@@ -426,7 +408,6 @@ describe('ToolCallCard run_shell output display', () => {
           },
           completedAt: Date.now()
         })}
-        confirmMode="direct"
         {...plainShellCardProps}
       />
     )
@@ -446,7 +427,6 @@ describe('ToolCallCard run_shell output display', () => {
           },
           completedAt: Date.now()
         })}
-        confirmMode="direct"
         {...plainShellCardProps}
       />
     )
@@ -468,7 +448,6 @@ describe('ToolCallCard run_shell output display', () => {
           },
           completedAt: Date.now()
         })}
-        confirmMode="direct"
         {...plainShellCardProps}
       />
     )
@@ -480,7 +459,6 @@ describe('ToolCallCard run_shell output display', () => {
     render(
       <ToolCallCard
         record={shellRecord('executing', { progressOutput: 'added 47 packages', input: { command: 'npm install' } })}
-        confirmMode="direct"
         {...plainShellCardProps}
       />
     )
@@ -491,7 +469,6 @@ describe('ToolCallCard run_shell output display', () => {
     render(
       <ToolCallCard
         record={shellRecord('executing', { input: { command: 'less README.md' } })}
-        confirmMode="direct"
         workDir="E:\\work"
         {...terminalShellCardProps}
       />
@@ -505,7 +482,6 @@ describe('ToolCallCard run_shell output display', () => {
     render(
       <ToolCallCard
         record={shellRecord('confirming', { input: { command: 'rm -rf /tmp/test' } })}
-        confirmMode="direct"
         onConfirm={vi.fn()}
       />
     )
@@ -523,7 +499,6 @@ describe('ToolCallCard run_shell output display', () => {
           status: 'confirming',
           riskLevel: 'high'
         }}
-        confirmMode="direct"
         onConfirm={vi.fn()}
       />
     )
@@ -546,7 +521,6 @@ describe('ToolCallCard run_shell output display', () => {
             data: { exitCode: 0, stdout: 'hello\n', stderr: '' }
           }
         }}
-        confirmMode="direct"
       />
     )
     expect(document.querySelector('.tool-row--clickable')).not.toBeNull()
@@ -571,7 +545,6 @@ describe('ToolCallCard run_shell output display', () => {
             data: { exitCode: 0, stdout: '', stderr: '' }
           }
         }}
-        confirmMode="direct"
       />
     )
     fireEvent.click(document.querySelector('.tool-row__main')!)
@@ -589,7 +562,6 @@ describe('ToolCallCard run_shell output display', () => {
           status: 'confirming',
           riskLevel: 'high'
         }}
-        confirmMode="direct"
         onConfirm={vi.fn()}
       />
     )
@@ -664,7 +636,6 @@ describe('ToolCallCard run_shell terminal trust notice (M3)', () => {
     render(
       <ToolCallCard
         record={suspectTerminalRecord()}
-        confirmMode="direct"
         messageId="msg-shell"
         {...terminalShellCardProps}
       />
@@ -682,7 +653,6 @@ describe('ToolCallCard run_shell terminal collapse', () => {
     render(
       <ToolCallCard
         record={shellRecord('executing', { progressOutputRaw: raw })}
-        confirmMode="direct"
         {...terminalShellCardProps}
       />
     )
@@ -711,12 +681,79 @@ describe('ToolCallCard deferred stringify', () => {
           result: { success: true, data: bigInput.entries },
           completedAt: Date.now()
         }}
-        confirmMode="direct"
       />
     )
     expect(document.querySelector('.tool-row--expanded')).toBeNull()
     const callsOnInput = stringifySpy.mock.calls.filter((c) => c[0] === bigInput)
     expect(callsOnInput.length).toBe(0)
     stringifySpy.mockRestore()
+  })
+describe('ToolCallCard toolkit 凭据净化（v2 评审 R1 / v3 建议 5 回归）', () => {
+  it('确认窗口内搜索兜底渲染的 toolkit 入参文本不落明文（v3 评审 S + R1 联合回归）', async () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView })
+    const { container } = render(
+      <ToolCallCard
+        record={{
+          id: 'toolkit-r1',
+          toolName: 'toolkit_call',
+          status: 'confirming',
+          riskLevel: 'high',
+          input: {
+            id: 'action.mcp.add',
+            params: { name: 'scys', accessToken: 'ghp_leakcheck123', env: { API_TOKEN: 'tok-leak' } }
+          }
+        }}
+        onConfirm={vi.fn()}
+        messageId="msg-1"
+        activeSearchTarget={{
+          messageId: 'msg-1',
+          fragmentId: 'msg-1|tool-input:toolkit-r1',
+          start: 0,
+          end: 5,
+          order: { kind: 'live', createdAt: 1 },
+          source: { kind: 'tool-input', toolUseId: 'toolkit-r1' },
+          renderStrategy: 'anchored-text',
+          revealPath: { toolUseId: 'toolkit-r1', toolSection: 'input' },
+          // 生产中该文本来自 chatSearchFragments 的净化片段（v3 评审 S 修复后的 corpus）
+          searchableText:
+            '{\n  "id": "action.mcp.add",\n  "params": { "name": "scys", "accessToken": true }\n}'
+        }}
+      />
+    )
+    // 搜索兜底 pre 渲染的是净化后的片段文本（锚点断言：确有内容渲染，防假绿）
+    await waitFor(() => {
+      const pre = container.querySelector('.sa-search-reveal-source')
+      expect(pre?.textContent ?? '').toContain('action.mcp.add')
+    })
+    expect(container.textContent).not.toContain('ghp_leakcheck123')
+    expect(container.textContent).not.toContain('tok-leak')
+    expect(container.textContent).toContain('scys')
+  })
+})
+it('completed 展开态的 paramPreview 凭据不落 DOM（v2 评审 R1 主路径回归）', async () => {
+    const scrollIntoView = vi.fn()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView })
+    const { container } = render(
+      <ToolCallCard
+        record={{
+          id: 'toolkit-r1-completed',
+          toolName: 'toolkit_call',
+          status: 'completed',
+          riskLevel: 'high',
+          input: {
+            id: 'action.mcp.add',
+            params: { name: 'scys', accessToken: 'ghp_leakcheck123' }
+          },
+          completedAt: Date.now()
+        }}
+        focus
+      />
+    )
+    await waitFor(() => {
+      const pre = container.querySelector('.sa-command-inset')
+      expect(pre?.textContent ?? '').toContain('action.mcp.add')
+    })
+    expect(container.textContent).not.toContain('ghp_leakcheck123')
   })
 })

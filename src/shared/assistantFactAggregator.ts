@@ -5,14 +5,21 @@ export type TurnOutcome = 'completed' | 'failed' | 'cancelled' | 'timed-out' | '
 
 /** prepare 时冻结的非敏感执行快照；API key、授权凭据和工具 permit 禁止进入该结构。 */
 export type TurnExecutionConfig = {
-  lane?: 'desktop' | 'feishu' | 'wechat'
+  lane?: 'desktop' | 'feishu' | 'wechat' | 'automation'
   model?: string
   maximumContext?: number
   llmServiceId?: string
-  baseUrl?: string
   system?: string
   skillFragments?: string[]
   maxTokens?: number
+  /** Thinking 强度最终档位（发起时解析、调用内冻结）；远程 / Butler lane 恒 off（OQ-10） */
+  thinkingEffort?: import('./agent/invocation').AgentReasoningEffort
+  /**
+   * 能力降级前的请求档位（评审 B1）：仅当模型 supportsThinking === false 导致降级时产出（≠ thinkingEffort）。
+   * 主链路把它作为装配器 effort 入参，装配层照旧落 agent.profile.reasoning_degraded 并写 degraded 字段。
+   */
+  requestedThinkingEffort?: import('./agent/invocation').AgentReasoningEffort
+  /** @deprecated 由 thinkingEffort 派生（≠off 即 true），保留一个发布周期做兼容映射 */
   enableThinking?: boolean
   locale?: string
   projectMemoryEnabled?: boolean
@@ -30,6 +37,7 @@ export type TurnTerminal = {
 
 type AssistantFactEventPayload =
   | { type: 'content-delta'; text: string }
+  | { type: 'content-reconciled'; text: string }
   | { type: 'thinking-delta'; text: string }
   | { type: 'tool-use'; id: string; toolName: string; input: Record<string, unknown>; riskLevel?: ToolCallRecord['riskLevel']; mcp?: ToolCallRecord['mcp'] }
   | { type: 'tool-progress'; id: string; seq: number; text: string; rawDelta?: string; rawEncoding?: string; processPid?: number; processGroupId?: number; processOwnerToken?: string }
@@ -46,6 +54,8 @@ type AssistantFactEventPayload =
       dangerInfo?: ToolCallRecord['dangerInfo']
       sessionTrustedHint?: true
       mcp?: ToolCallRecord['mcp']
+      /** H1：agent 裁决路径（AgentChannel）——渲染端据此出只读「自动审批中」卡，无交互按钮 */
+      autoAnswerer?: true
     }
   | { type: 'tool-confirmed'; id: string; approved: boolean; reason?: string }
   | { type: 'tool-result'; id: string; result: NonNullable<ToolCallRecord['result']> }
@@ -75,6 +85,9 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
     if (last && !last.endTime) segments[segments.length - 1] = { ...last, content: last.content + event.text }
     else segments.push({ content: event.text, startTime: deps.now })
     next.contentSegments = segments
+  } else if (event.type === 'content-reconciled') {
+    next.content = event.text
+    next.contentSegments = event.text.length > 0 ? [{ content: event.text, startTime: deps.now, endTime: deps.now }] : []
   } else if (event.type === 'thinking-delta') {
     if (next.contentSegments) next.contentSegments = next.contentSegments.map((segment) => ({ ...segment, endTime: segment.endTime ?? deps.now }))
     const thinking = next.thinking ?? { content: '', isVisible: true, startTime: deps.now, segments: [] }
@@ -122,7 +135,8 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
           ...(event.currentPageUrl ? { currentPageUrl: event.currentPageUrl } : {}),
           ...(event.dangerInfo ? { dangerInfo: event.dangerInfo } : {}),
           ...(event.sessionTrustedHint ? { sessionTrustedHint: true as const } : {}),
-          ...(event.mcp ? { mcp: event.mcp } : {})
+          ...(event.mcp ? { mcp: event.mcp } : {}),
+          ...(event.autoAnswerer ? { autoAnswerer: true as const } : {})
         }
       : tool)
   } else if (event.type === 'tool-confirmed') {

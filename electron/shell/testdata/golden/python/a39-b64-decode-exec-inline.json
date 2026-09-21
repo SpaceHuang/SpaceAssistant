@@ -1,0 +1,23 @@
+{
+  "id": "a39-b64-decode-exec-inline",
+  "group": "legacy-parseable",
+  "legacyParsed": true,
+  "verdict": "ask",
+  "patterns": [
+    "A3",
+    "B11"
+  ],
+  "signals": [
+    {
+      "kind": "script-analysis",
+      "signal": "suspicious",
+      "patterns": [
+        "A3",
+        "B11"
+      ]
+    },
+    {
+      "kind": "script-uncertified"
+    }
+  ]
+}

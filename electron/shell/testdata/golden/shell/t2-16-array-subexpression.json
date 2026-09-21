@@ -1,0 +1,82 @@
+{
+  "id": "t2-16-array-subexpression",
+  "dialect": "windows-powershell",
+  "platform": "linux",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "$v = @(Get-ChildItem).Count"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [],
+      "warnings": [],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": false
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": false,
+      "outsideWorkDirRisk": false,
+      "warnings": [],
+      "scannedPaths": []
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "$v",
+          "args": [
+            "=",
+            "@(Get-ChildItem).Count"
+          ],
+          "segmentIndex": 0
+        }
+      ],
+      "connectors": [],
+      "paths": [],
+      "cwdChanges": [],
+      "analysisCompleteness": "partial",
+      "unresolved": [
+        "segment:0:shell-control-flow"
+      ]
+    }
+  },
+  "signature": {
+    "normalized": "$v = @(Get-ChildItem).Count",
+    "trust": {
+      "executable": "",
+      "argv": [],
+      "hasMetasyntax": true,
+      "persistable": false
+    },
+    "persistableSingle": false
+  },
+  "facts": {
+    "dialect": "windows-powershell",
+    "operations": [
+      {
+        "verb": "$v",
+        "args": [
+          "=",
+          "@(Get-ChildItem).Count"
+        ],
+        "segmentIndex": 0
+      }
+    ],
+    "connectors": [],
+    "paths": [],
+    "cwdChanges": [],
+    "analysisCompleteness": "partial",
+    "unresolved": [
+      "segment:0:shell-control-flow"
+    ]
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "partial",
+    "persistable": false,
+    "hasMetasyntax": true
+  }
+}

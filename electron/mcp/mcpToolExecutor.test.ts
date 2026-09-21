@@ -105,7 +105,7 @@ function makeContext(overrides: Partial<ToolExecutionContext> = {}): ToolExecuti
     sendProgress: () => undefined,
     signal: new AbortController().signal,
     fileStateCache: undefined as never,
-    toolsConfig: { enabled: true, deniedTools: [], allowedTools: [], confirmMode: 'direct' },
+    toolsConfig: { enabled: true, deniedTools: [], allowedTools: [] },
     ...overrides
   }
 }

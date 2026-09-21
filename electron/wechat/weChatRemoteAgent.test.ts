@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
-import type { AppDatabase } from '../database'
+import { AppDatabase, openDatabase, setConfigValue } from '../database'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { DEFAULT_WECHAT_CONFIG } from '../../src/shared/wechatTypes'
 import { makeIncomingMessage } from './__mocks__/wechatBotMock'
@@ -13,9 +13,13 @@ vi.mock('../toolChatLoop', () => ({
   runToolChatSession: (...args: unknown[]) => mockRunToolChatSession(...args)
 }))
 
-vi.mock('../database', () => ({
-  getMessages: (...args: unknown[]) => mockGetMessages(...args)
-}))
+vi.mock('../database', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../database')>()
+  return {
+    ...actual,
+    getMessages: (...args: unknown[]) => mockGetMessages(...args)
+  }
+})
 
 vi.mock('../appIpc', () => ({
   readAppLocale: () => 'zh-CN'
@@ -49,10 +53,9 @@ vi.mock('../workDirManager', async (importOriginal) => {
 import { runWeChatRemoteAgent } from './weChatRemoteAgent'
 
 function makeDb(): AppDatabase {
-  return {
-    data: { configs: {}, sessions: [], messages: [] },
-    save: vi.fn()
-  } as unknown as AppDatabase
+  const db = openDatabase(':memory:')
+  setConfigValue(db, 'config.locale', 'en-US')
+  return db
 }
 
 function makeWorkDirManager() {
@@ -111,8 +114,8 @@ describe('runWeChatRemoteAgent', () => {
 
   it('invokes runToolChatSession with wechat appendix', async () => {
     let capturedSystem: string | undefined
-    mockRunToolChatSession.mockImplementation(async (args: { system?: string }) => {
-      capturedSystem = args.system
+    mockRunToolChatSession.mockImplementation(async (invocation: { profile: { system?: string } }) => {
+      capturedSystem = invocation.profile.system
       return { ok: true, content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn' }
     })
 
@@ -130,24 +133,33 @@ describe('runWeChatRemoteAgent', () => {
     await runWeChatRemoteAgent(baseCtx(() => sender))
     expect(mockRunToolChatSession).toHaveBeenCalledWith(
       expect.objectContaining({
-        shellConfig: expect.objectContaining({ maxInlineOutputBytes: 1024 })
-      })
+        profile: expect.objectContaining({
+          tools: expect.objectContaining({
+            shellConfig: expect.objectContaining({ maxInlineOutputBytes: 1024 })
+          })
+        })
+      }),
+      expect.anything()
     )
   })
 
   it('works when main webContents is null', async () => {
     await runWeChatRemoteAgent(baseCtx(() => null))
     expect(mockRunToolChatSession).toHaveBeenCalledWith(
-      expect.objectContaining({ appDb: expect.anything() })
+      expect.anything(),
+      expect.objectContaining({ legacy: expect.objectContaining({ appDb: expect.anything() }) })
     )
   })
 
   it('passes workDirManager and resolveWorkDir to runToolChatSession', async () => {
     await runWeChatRemoteAgent(baseCtx(() => null))
     expect(mockRunToolChatSession).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({
-        workDirManager: expect.anything(),
-        resolveWorkDir: expect.any(Function)
+        workspace: expect.objectContaining({
+          workDirManager: expect.anything(),
+          resolveWorkDir: expect.any(Function)
+        })
       })
     )
   })

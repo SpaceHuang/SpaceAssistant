@@ -10,6 +10,7 @@ import type { LarkCliRunner } from '../feishu/larkCliRunner'
 import type { ImChannel } from '../confirmation/imChannel'
 import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
 import type { HistoryFact } from '../../src/shared/historyReader'
+import type { ChildProcess, spawn as nodeSpawn } from 'child_process'
 
 export interface RemoteContext {
   source: 'feishu' | 'wechat'
@@ -69,6 +70,12 @@ export interface ToolExecutionContext {
   sendProgress: (status: string, payload?: string | ToolProgressPayload) => void
   /** 仅记录不含 pattern、cwd、命中文本或文件名的工具诊断。 */
   recordDiagnostic?: (entry: { code: string; message: string }) => void | Promise<void>
+  /** 测试缝：grep 进程注入（同 grepWithRg 的 spawnProcess 参数形态），缺省用真实 spawn。 */
+  grepSpawnProcess?: (
+    binary: string,
+    args: string[],
+    options: Parameters<typeof nodeSpawn>[2]
+  ) => ChildProcess
   /** run_shell 有效输出模式（主进程在 toolChatLoop 解析） */
   shellOutputMode?: 'plain' | 'terminal'
   signal: AbortSignal
@@ -88,6 +95,10 @@ export interface ToolExecutionContext {
   /** 用户已在确认卡片（或飞书确认）中明确批准执行本次工具调用 */
   toolUserConfirmed?: boolean
   getBrowserDetectContext?: () => BrowserDetectContext
+  /** 本次请求的产品语言（resolveRequestLocale 结果）；toolkit 能力的 env.agent/env.time 用（评审 S2） */
+  requestLocale?: string
+  /** 本次请求的执行 lane；toolkit 能力的 lane 校验用（评审 S2） */
+  lane?: string
 }
 
 import type { BrowserDependencyToolError } from '../../src/shared/browserTypes'

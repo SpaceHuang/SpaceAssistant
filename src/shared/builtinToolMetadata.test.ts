@@ -7,7 +7,7 @@ const ALL_TOOLS = BUILTIN_TOOL_DEFINITIONS.map((d) => d.name)
 
 describe('builtin tool metadata（P0 概念收敛）', () => {
   it('每个内置工具都注册了 actionClass / riskLevel / extractors 元数据', () => {
-    expect(ALL_TOOLS).toHaveLength(18)
+    expect(ALL_TOOLS).toHaveLength(19)
     for (const name of ALL_TOOLS) {
       const meta = getBuiltinToolMetadata(name)
       expect(meta, `${name} 缺元数据`).toBeDefined()
@@ -25,7 +25,7 @@ describe('builtin tool metadata（P0 概念收敛）', () => {
 describe('builtinToolRiskLevel 读元数据且对外行为不变', () => {
   it('read / outbound 低风险工具保持 low', () => {
     for (const name of [
-      'read_file', 'grep', 'list_directory', 'browser_detect', 'read_feishu_attachment',
+      'read_file', 'grep', 'list_directory', 'toolkit.find', 'read_feishu_attachment',
       'list_work_dirs', 'switch_work_dir', 'switch_session', 'browser'
     ]) {
       expect(builtinToolRiskLevel(name)).toBe('low')
@@ -54,12 +54,15 @@ describe('builtinToolNeedsConfirmation 读元数据且对外行为不变', () =>
   })
   it('read / outbound 工具不需要确认', () => {
     for (const name of [
-      'read_file', 'grep', 'list_directory', 'browser_detect', 'read_feishu_attachment',
+      'read_file', 'grep', 'list_directory', 'read_feishu_attachment',
       'list_work_dirs', 'switch_work_dir', 'switch_session', 'browser',
       'wechat_reply', 'wechat_send'
     ]) {
       expect(builtinToolNeedsConfirmation(name)).toBe(false)
     }
+  })
+  it('browser_detect 已收编为 env.browserDetect 能力，元数据不再注册（评审建议 13）', () => {
+    expect(getBuiltinToolMetadata('browser_detect')).toBeUndefined()
   })
   it('未知工具默认不确认（保持现状）', () => {
     expect(builtinToolNeedsConfirmation('non_existent_tool')).toBe(false)

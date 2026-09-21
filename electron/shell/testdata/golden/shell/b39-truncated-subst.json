@@ -1,0 +1,68 @@
+{
+  "id": "b39-truncated-subst",
+  "dialect": "posix-bash",
+  "platform": "linux",
+  "analysis": {
+    "verdict": "deny",
+    "denyReason": "命令语法解析失败，无法进行安全分析",
+    "segments": [],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [
+        {
+          "code": "PARSE_ERROR",
+          "message": "命令语法解析失败，无法进行安全分析",
+          "severity": "warning"
+        }
+      ],
+      "warnings": [
+        "命令语法解析失败，无法进行安全分析"
+      ],
+      "outsideWorkDirRisk": true,
+      "requiresRiskAck": true
+    },
+    "shellSecurityHints": {
+      "requiresRiskAck": true,
+      "outsideWorkDirRisk": true,
+      "warnings": [
+        "命令语法解析失败，无法进行安全分析"
+      ]
+    },
+    "facts": {
+      "dialect": "posix-bash",
+      "operations": [],
+      "connectors": [],
+      "paths": [],
+      "cwdChanges": [],
+      "analysisCompleteness": "partial",
+      "unresolved": [
+        "parse:tree-error"
+      ]
+    }
+  },
+  "signature": {
+    "normalized": "echo $(",
+    "trust": {
+      "executable": "",
+      "argv": [],
+      "hasMetasyntax": true,
+      "persistable": false
+    },
+    "persistableSingle": false
+  },
+  "facts": {
+    "dialect": "posix-bash",
+    "operations": [],
+    "connectors": [],
+    "paths": [],
+    "cwdChanges": [],
+    "analysisCompleteness": "partial",
+    "unresolved": [
+      "parse:tree-error"
+    ]
+  },
+  "precheck": {
+    "ok": false,
+    "auditReason": "命令语法解析失败，无法进行安全分析"
+  }
+}

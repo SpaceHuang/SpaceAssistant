@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import type { FileConfirmMode, ToolCallRecord } from '../../../shared/domainTypes'
+import type { ToolCallRecord } from '../../../shared/domainTypes'
 import type { ToolConfirmHandler } from '../../../shared/toolConfirm'
 import { ConfirmCardCollapsible } from './ConfirmCardCollapsible'
 import { ConfirmCardDecision } from './ConfirmCardDecision'
@@ -10,13 +10,12 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
   record: ToolCallRecord
-  confirmMode: FileConfirmMode
   onConfirm: ToolConfirmHandler
 }
 
 const DISPLAY_MAX_LINES = 500
 
-function resolveDiffContent(record: ToolCallRecord, confirmMode: FileConfirmMode): { oldText: string; newText: string; path: string } {
+function resolveDiffContent(record: ToolCallRecord): { oldText: string; newText: string; path: string } {
   const path =
     record.confirmDiff?.oldPath ??
     (typeof record.input.path === 'string' ? record.input.path : '') ??
@@ -31,9 +30,7 @@ function resolveDiffContent(record: ToolCallRecord, confirmMode: FileConfirmMode
   if (record.toolName === 'write_file' && typeof record.input.content === 'string') {
     return { path, oldText: '', newText: record.input.content }
   }
-  if (confirmMode === 'direct' && !record.confirmDiff && typeof record.input.path === 'string') {
-    return { path: record.input.path, oldText: '', newText: '' }
-  }
+  // P1 起 user 写确认卡始终展示 diff（原 confirmMode='direct' 语义退役，UI 无入口）
   return { path, oldText: '', newText: '' }
 }
 
@@ -42,13 +39,13 @@ function capDiffLines(lines: DiffLine[], max: number, truncatedLine: string): { 
   return { lines: [...lines.slice(0, max), { type: 'context', text: truncatedLine }], truncated: true }
 }
 
-export function WriteConfirmCard({ record, confirmMode, onConfirm }: Props) {
+export function WriteConfirmCard({ record, onConfirm }: Props) {
   const { t } = useTypedTranslation('chat')
   const [memoryTier, setMemoryTier] = useState<number | null>(null)
 
   const { oldText, newText, path } = useMemo(
-    () => resolveDiffContent(record, confirmMode),
-    [record, confirmMode]
+    () => resolveDiffContent(record),
+    [record]
   )
   const fileName = path ? pathBasename(path) : formatToolLabelFallback(record.toolName, t)
 

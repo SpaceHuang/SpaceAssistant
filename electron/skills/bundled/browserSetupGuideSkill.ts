@@ -17,7 +17,7 @@ author: "SpaceAssistant"
 
 ## 可用工具
 
-- \`browser_detect\`：检测依赖是否就绪（**必须**在开场与用户表示「装好了」后调用；复检时传 \`force: true\`）
+- \`toolkit.call { id: 'env.browserDetect' }\`：检测依赖是否就绪（**必须**在开场与用户表示「装好了」后调用；复检时参数传 \`{ "force": true }\`）
 - \`run_shell\`：在会话工作目录下执行 shell 命令（Chromium 安装**优先**使用；执行前弹出确认卡片）。**仅当系统注入的「当前可用工具」列表中包含 \`run_shell\` 时才可调用**；与 \`run_script\`（Python）完全不同，**禁止**用 \`run_script\` 替代
 - 若 \`run_shell\` 不在可用工具列表中：说明用户尚未在 **设置 → 工具 → 工具开关** 中开启 \`run_shell\`；立即走 fallback（口述安装步骤，或引导用户点击 UI「在终端中打开」），并简要说明可在工具开关中开启以便下次代为安装
 - 不要向用户展示 API Key、完整 node_modules 路径或堆栈信息
@@ -26,7 +26,7 @@ author: "SpaceAssistant"
 
 ### S0 开场
 
-简短说明将要修复什么，然后**立即调用** \`browser_detect\`。
+简短说明将要修复什么，然后**立即调用** \`toolkit.call { id: 'env.browserDetect' }\`。
 
 ### S1 解读结果
 
@@ -43,7 +43,7 @@ author: "SpaceAssistant"
 
 #### Chromium 安装命令（经 \`run_shell\`）
 
-从 \`browser_detect\` 返回的 \`recommendedCwd\` 构造命令（**不要**在对话中朗读绝对路径）：
+从 \`env.browserDetect\` 能力返回的 \`recommendedCwd\` 构造命令（**不要**在对话中朗读绝对路径）：
 
 - Windows：\`cd /d <recommendedCwd> && npx playwright install chromium\`（路径含空格时可加引号；执行器会自动在正确目录运行 \`npx\`，勿使用 PowerShell 的 \`Set-Location\`）
 - macOS / Linux：\`cd "<recommendedCwd>" && npx playwright install chromium\`
@@ -64,7 +64,7 @@ author: "SpaceAssistant"
 
 ### S4 复检
 
-用户表示完成或 \`run_shell\` 退出码为 0 → 再次 \`browser_detect\`（\`force: true\`）。
+用户表示完成或 \`run_shell\` 退出码为 0 → 再次 \`toolkit.call { id: 'env.browserDetect', params: { "force": true } }\`。
 
 ### S5 结束
 

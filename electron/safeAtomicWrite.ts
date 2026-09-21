@@ -128,6 +128,23 @@ export type SafeAtomicWriteOptions = {
   signal?: AbortSignal
 }
 
+/** Windows 瞬时锁（杀软/索引器短暂持住 rename/link 目标）下的有界重试；仅针对瞬时拒绝类错误码。 */
+export async function withTransientLockRetry<T>(op: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      return await op()
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException)?.code
+      if (code !== 'EPERM' && code !== 'EACCES') throw e
+      lastError = e
+    }
+    throwIfAborted(signal)
+    await new Promise((resolve) => setTimeout(resolve, 50 * 2 ** attempt))
+  }
+  throw lastError
+}
+
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     const err = new Error('用户取消执行')
@@ -186,7 +203,7 @@ export async function safeAtomicWrite(opts: SafeAtomicWriteOptions): Promise<Fil
     if (expectedIdentity === null) {
       // 新文件：link 提交，目标已存在则失败（不替换）
       try {
-        await fs.link(tmpPath, targetPath)
+        await withTransientLockRetry(() => fs.link(tmpPath, targetPath), signal)
       } catch (e: unknown) {
         const code = e && typeof e === 'object' && 'code' in e ? String((e as { code: unknown }).code) : ''
         if (code === 'EEXIST') {
@@ -229,7 +246,7 @@ export async function safeAtomicWrite(opts: SafeAtomicWriteOptions): Promise<Fil
     }
 
     throwIfAborted(signal)
-    await fs.rename(tmpPath, targetPath)
+    await withTransientLockRetry(() => fs.rename(tmpPath, targetPath), signal)
 
     const finalFh = await fs.open(targetPath, openFlagsReadNoFollow())
     try {

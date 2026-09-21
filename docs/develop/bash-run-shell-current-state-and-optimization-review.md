@@ -727,7 +727,14 @@ Shell 内部的变量展开、命令替换、运行时创建的路径以及并�
 
 - 引入 `ShellProfile` 与 `ShellAdapter`；移除 basename 推断和隐式 `-lc`。
 - 实现并验证 macOS Bash 与 Windows PowerShell 两种 profile；移除 cmd profile、cmd 参数模板和 cmd 专用执行分支。
-- Windows 固定使用系统内置 `powershell.exe`，由 Adapter 生成 UTF-16LE Base64 的 `-EncodedCommand` 载荷并注入统一 UTF-8 输出 prelude；本阶段不自动探测或回退到 `pwsh`/cmd/Git Bash/WSL。找不到 `powershell.exe` 时返回明确的环境诊断错误，不静默切换方言。
+- Windows 固定使用系统内置 `powershell.exe`，由 Adapter 生成 UTF-16LE Base64 的 `-EncodedCommand` 载荷并注入统一 UTF-8 输出 prelude；本阶段不自动探测或回退到 Git Bash/WSL。找不到 `powershell.exe` 时返回明确的环境诊断错误，不静默切换方言。
+> **P0-C 更新（2026-09-21，宿主初始化故障案 §5.3）**：上句「不自动探测或回退」已按 P0-C 修订——
+> 默认 profile 仍为 `powershell.exe`，但当执行遭遇宿主初始化类失败（exitCode 0xFFFF0000 / 0xC0000142）时，
+> 执行层会沿 `powershell.exe → pwsh.exe → cmd.exe` 链序自动降级：候选宿主重跑方言预检（不兼容即跳过、
+> 全部不兼容返回 `SHELL_HOST_DEGRADE_DIALECT_INCOMPATIBLE` 结构化错误，不硬跑），cmd 使用 `/d /s /c`
+> 参数模板，结果标注 `degradedFrom` 并落 `shell.exec.degrade` 审计事件。规格见
+> `docs/develop/run-shell-windows-host-init-failure-diagnosis-and-improvement-plan.md` §5.3 与
+> `electron/shell/shellHostFallback.ts`、`electron/tools/runShellHostDegrade.ts`。
 - 对已有 Windows 自定义 Shell 配置执行显式迁移：能验证为 Windows PowerShell 5.1 的配置归一化到内置 profile；其他 executable 标记为不受支持并要求用户重新确认设置，不能继续携带旧 `argsPrefix` 执行。
 - Agent 工具面统一只暴露 `run_shell`，移除内置 `bash` 别名及相关提示；必须兼容的外部 `Bash` 协议名称仅在边界适配层规范化为 `run_shell`。
 - 权限、信任、审计、指标和重试状态全部使用规范化 `run_shell` tool id，防止兼容别名形成第二套策略或绕过既有授权。

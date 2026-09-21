@@ -39,6 +39,13 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         // high_impact / unknown 归并到 write 域（fail-closed，与 isOutboundWriteTool 一致）
         if (signal.impact !== 'read') tokens.add('lark-write')
         break
+      case 'toolkit-capability':
+        // toolkit.call 能力级信号：网关 + 子实体（需求 §5）。
+        // `toolkit-capability:${id}` 支持按能力定制策略；read/act 二值由描述符风险级决定。
+        tokens.add(signal.kind)
+        tokens.add(`toolkit-capability:${signal.capabilityId}`)
+        tokens.add(signal.risk === 'act' ? 'toolkit-act' : 'toolkit-read')
+        break
       case 'browser-action':
         tokens.add(signal.kind)
         tokens.add(`browser-${signal.action}`)
@@ -201,16 +208,23 @@ function askUnlessHolds(rule: PolicyRule, deps: PolicyEngineDeps): boolean {
   return true
 }
 
+/** 回答者派生（§2.2）：ask 类动作按 lane 落回答者——automation 无人可问恒为 agent，其余人工。 */
+export function askAnswererFor(lane?: ExecutionLane): 'user' | 'agent' {
+  return lane === 'automation' ? 'agent' : 'user'
+}
+
 function requireConfirm(
   rule: PolicyRule,
   facts: ContentFacts,
   sessionId?: string,
   lane?: ExecutionLane,
-  constraints?: InvocationPolicyConstraints
+  constraints?: InvocationPolicyConstraints,
+  answerer: 'user' | 'agent' = askAnswererFor(lane)
 ): Decision {
   return {
     type: 'require-confirm',
     ruleId: rule.id,
+    answerer,
     riskLevel: facts.baseRiskLevel,
     facts,
     memoryTiers: buildMemoryTiers(facts, sessionId, lane, constraints),
@@ -235,27 +249,55 @@ function lookupCache(
 ): Decision | null {
   if (deriveMemoryEligibility(facts, lane ?? 'desktop').eligibility === 'none') return null
   for (const key of deriveCacheKeys(facts, sessionId, lane, constraints)) {
-    const entry = cache.lookup(key)
+    const entry = cache.lookup(key, lane)
     if (entry && entry.decision === 'allow') return autoAllow('cache-hit', facts, key)
     if (entry && entry.decision === 'deny') return deny('cache-hit', '缓存记忆为拒绝')
   }
   return null
 }
 
-function applyDefault(facts: ContentFacts, sessionId?: string, lane?: ExecutionLane): Decision {
+function applyDefault(
+  facts: ContentFacts,
+  deps: PolicyEngineDeps,
+  context: ExecutionContext
+): Decision {
+  const { sessionId, lane } = context
   const tokens = signalTokenSet(facts)
   if (tokens.has('extraction-failed')) {
+    // M3 不变换例外：提取失败 = 输入畸形/对抗性，「信息不足 → 问人」，任何档位恒落人工
+    // （automation 经 lane 规则落 agent，不会到达此兜底——automation-default-confirm 全量拦截）。
     return requireConfirm(
       { id: 'default-extraction-failed', when: 'invocation', action: 'ask', reason: '提取失败，信息不足' },
       facts,
       sessionId,
-      lane
+      lane,
+      undefined,
+      'user'
     )
   }
   // 缺元数据 / 无信号一律按"信息不足宁可多问"处理
   if (facts.actionClass === 'read' || facts.actionClass === 'outbound') {
     return autoAllow('default-read-outbound-allow', facts)
   }
+  // default-write-execute-ask 照常参与档位变换（desktop standard → auto-evaluator，§5.2）：
+  // 变换后先走快通道（确定性预判），未裁决交审批 Agent（answerer=agent）。
+  const effective = deps.transform ? deps.transform({ action: 'ask' }) : 'ask'
+  if (effective === 'auto-evaluator') {
+    if (deps.autoEvaluator) {
+      const res = deps.autoEvaluator(facts, context)
+      if (res.approve) return autoAllow('default-write-execute-ask', facts)
+    }
+    return requireConfirm(
+      { id: 'default-write-execute-ask', when: 'invocation', action: 'ask', reason: '默认按动作类别询问' },
+      facts,
+      sessionId,
+      lane,
+      undefined,
+      'agent'
+    )
+  }
+  if (effective === 'allow') return autoAllow('default-write-execute-ask', facts)
+  if (effective === 'deny') return deny('default-write-execute-ask', '默认兜底按档位变换为拒绝')
   return requireConfirm(
     { id: 'default-write-execute-ask', when: 'invocation', action: 'ask', reason: '默认按动作类别询问' },
     facts,
@@ -317,7 +359,10 @@ export function decide(
   const confirmEveryTime = invocationRules.find(
     (r) => r.locked && r.action === 'confirm-every-time' && ruleMatchesInvocation(r, facts, context, deps)
   )
-  if (confirmEveryTime) return requireConfirm(confirmEveryTime, facts, context.sessionId, context.lane, constraints)
+  if (confirmEveryTime) {
+    // 决策 3：confirm-every-time 始终人工逐次确认（不因 lane 落 agent）
+    return requireConfirm(confirmEveryTime, facts, context.sessionId, context.lane, constraints, 'user')
+  }
 
   // 第 2 步：缓存命中（会话级键按 context.sessionId 绑定）
   const cacheHit = lookupCache(facts, deps.cache, context.sessionId, context.lane, constraints)
@@ -329,33 +374,55 @@ export function decide(
     return autoAllow('declared-capability', facts)
   }
 
-  // 第 4 步：自动审批器（auto-evaluator）。命中不产生 Decision；评估器批准才返回，否则交还规则链。
+  // 第 4 步：自动审批器（auto-evaluator =「自动」动作）。确定性快通道批准即放行；
+  // 未裁决 → 交审批 Agent（require-confirm answerer='agent'，§5.2：不再交还默认表问人）。
   const autoRules = invocationRules.filter((r) => r.action === 'auto-evaluator')
+  let lastAutoRule: PolicyRule | undefined
   for (const rule of autoRules) {
     if (!ruleMatchesInvocation(rule, facts, context, deps)) continue
+    lastAutoRule = rule
     if (deps.autoEvaluator) {
       const res = deps.autoEvaluator(facts, context)
       if (res.approve) return autoAllow(rule.id, facts)
     }
-    // 约定 2：评估器不裁决 → 继续评估后续条目（M3，不再 break 截断后续 auto 条目），最终通常落到默认表 ask
+    // 约定 2（M3）：评估器不裁决 → 继续评估后续 auto 条目（多快通道级联）；
+    // 全部未裁决则由末次命中条目落 Agent 裁决
     continue
+  }
+  if (lastAutoRule) {
+    return requireConfirm(lastAutoRule, facts, context.sessionId, context.lane, undefined, 'agent')
   }
 
   // 第 5 步：链路软约束（只影响体验，纯决策层无操作）
 
-  // 第 6 步：默认表（ask / allow，首条命中即返回）
+  // 第 6 步：默认表（ask / allow，首条命中即返回）。生效动作按档位产出时变换
+  // （deps.transform = effectiveActionFor 同源）：standard 桌面的 ask → auto-evaluator
+  // 走快通道/审批 Agent，且不改变规则间优先级（mcp-readonly-allow 等先命中条目不受影响）。
   const defaultRules = invocationRules.filter((r) => r.action === 'ask' || r.action === 'allow')
   for (const rule of defaultRules) {
     if (!ruleMatchesInvocation(rule, facts, context, deps)) continue
-    if (rule.action === 'ask') {
-      return askUnlessHolds(rule, deps)
-        ? autoAllow(rule.id, facts)
-        : requireConfirm(rule, facts, context.sessionId, context.lane)
+    const effective = deps.transform ? deps.transform(rule) : rule.action
+    // askUnless 门控放行先于动作解释：开关已声明「不问」（如 larkCliWriteRequiresConfirm=false）
+    // 时无论生效动作是 ask 还是「自动」都直接放行，档位不接管已放行的调用
+    if ((effective === 'ask' || effective === 'auto-evaluator') && askUnlessHolds(rule, deps)) {
+      return autoAllow(rule.id, facts)
     }
-    if (rule.action === 'allow') return autoAllow(rule.id, facts)
+    if (effective === 'ask') {
+      return requireConfirm(rule, facts, context.sessionId, context.lane)
+    }
+    if (effective === 'auto-evaluator') {
+      if (deps.autoEvaluator) {
+        const res = deps.autoEvaluator(facts, context)
+        if (res.approve) return autoAllow(rule.id, facts)
+      }
+      // 「自动」：确定性快通道未裁决 → 审批 Agent（answerer=agent）
+      return requireConfirm(rule, facts, context.sessionId, context.lane, undefined, 'agent')
+    }
+    if (effective === 'allow') return autoAllow(rule.id, facts)
+    if (effective === 'deny') return deny(rule.id, rule.reason)
   }
 
-  return applyDefault(facts, context.sessionId, context.lane)
+  return applyDefault(facts, deps, context)
 }
 
 /**

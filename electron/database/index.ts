@@ -2,6 +2,7 @@ import path from 'path'
 import { resolveDbPath, resolveJsonPathForDb } from './jsonSnapshot'
 import { migrateFromJsonIfNeeded } from './migrateFromJson'
 import { openSqliteDatabase, type AppDatabase } from './sqliteStore'
+import { migrateThinkingEffortConfig } from './thinkingEffortMigration'
 
 export type { AppDatabase } from './sqliteStore'
 export type { StoredMessage } from './types'
@@ -77,12 +78,17 @@ export {
 
 export function openDatabase(inputPath: string): AppDatabase {
   if (inputPath === ':memory:') {
-    return openSqliteDatabase(':memory:')
+    const memoryDb = openSqliteDatabase(':memory:')
+    // §8.1：全局档位启动迁移（幂等；已合法时不写）
+    migrateThinkingEffortConfig(memoryDb)
+    return memoryDb
   }
   const dbPath = resolveDbPath(inputPath)
   const db = openSqliteDatabase(dbPath)
   const jsonPath = resolveJsonPathForDb(dbPath)
   migrateFromJsonIfNeeded(db, jsonPath)
+  // §8.1：全局档位启动迁移须在旧 JSON 导入之后——导入的 thinkingEnabled 同样走等价推导
+  migrateThinkingEffortConfig(db)
   return db
 }
 

@@ -23,12 +23,12 @@ describe('run_lark_cli result contract', () => {
     expect(result).toMatchObject({ success: false, error: 'LARK_RUNNER_UNAVAILABLE', data: { processResult: null } })
   })
 
-  it('脱敏 CLI 输出中的 token 与路径，但保留错误上下文', async () => {
+  it('遮盖 CLI 输出中的 token，路径与错误上下文保留', async () => {
     const result = await runLarkCliExecutor.execute({ args: ['doc', 'get'] }, ctx({
       run: vi.fn().mockResolvedValue({ exitCode: 2, stdout: '', stderr: 'ValueError /tmp/x API_KEY=secret', timedOut: false })
     }))
     expect(String((result.data as { stderr: string }).stderr)).toContain('ValueError')
     expect(String((result.data as { stderr: string }).stderr)).not.toContain('API_KEY=secret')
-    expect(String((result.data as { stderr: string }).stderr)).toContain('<path:redacted>')
+    expect(String((result.data as { stderr: string }).stderr)).toContain('/tmp/x')
   })
 })

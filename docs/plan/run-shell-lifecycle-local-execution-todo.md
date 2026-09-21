@@ -288,7 +288,7 @@
 - [x] 统一发现 nvm、fnm、Volta 和系统 node/npm 路径的接口。
   - 新增 `resolveNodeToolchainPath()`，并接入 Windows PATH 增强逻辑；覆盖 macOS/Windows 环境 fixture。
 - [x] 处理 Windows `Path` / `PATH` 大小写合并规则。
-  - resolver 合并 `PATH`、`Path`、`path`，按出现顺序去重；Windows fixture 已覆盖。
+  - `environmentResolver` 只做白名单过滤，不做 PATH 合并；三键（`PATH`/`Path`/`path`）合并、按出现顺序去重发生在 `toolchainResolver.resolveNodeToolchainPath()`（P2-G(b) 口径更正，原文误记为 resolver）。
 - [x] 过滤敏感环境变量并增加测试。
 - [x] 生成 `environmentFingerprint`。
 - [x] 为 GUI PATH 缺失、locale 和敏感变量泄漏增加测试。

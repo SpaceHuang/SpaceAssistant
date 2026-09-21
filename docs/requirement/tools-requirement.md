@@ -157,7 +157,7 @@ SpaceAssistant 当前采用**委托式工具调用**模式：应用将用户消�
 ```json
 {
   "name": "edit_file",
-  "description": "通过字符串替换对文件进行增量编辑。保留原文件换行符格式和文件特性。适用于修改现有文件的部分内容、创建新文件（old_string 为空）、删除内容（new_string 为空）。",
+  "description": "通过字符串替换对文件进行增量编辑。保留原文件换行符格式和文件特性。适用于修改现有文件的部分内容、创建新文件（old_string 为空）、删除内容（new_string 为空）。路径字段名为 path（小写），请勿使用 filePath 或 file_path。old_string 未命中时返回结构化诊断（diagnosis，含最相似块行号、字符级差异与反斜杠计数），并在通过可用性预检后附上可直接重试的 suggestedOldString——请按诊断修正 old_string 后重试本工具，不要改用脚本写文件。",
   "input_schema": {
     "type": "object",
     "properties": {
@@ -176,6 +176,10 @@ SpaceAssistant 当前采用**委托式工具调用**模式：应用将用户消�
       "replace_all": {
         "type": "boolean",
         "description": "是否全局替换（替换所有匹配项），默认 false"
+      },
+      "tolerate_escape_layer": {
+        "type": "boolean",
+        "description": "可选（默认 false）。开启后，当 old_string 未命中且存在「仅反斜杠层数或字面 \n 形态不同」的唯一变体恰好在文件中命中一次时，自动按该变体完成编辑并在结果中标注 matchedVariant/notice；多个变体命中或命中多次时不回退，仍返回诊断。"
       }
     },
     "required": ["path", "old_string", "new_string"]
@@ -190,6 +194,7 @@ SpaceAssistant 当前采用**委托式工具调用**模式：应用将用户消�
 - **字符串唯一性检查**：
   - 若 `replace_all=false` 且 `old_string` 在文件中出现多次 → 返回错误：`"找到多个匹配，请提供更精确的上下文或使用 replace_all"`
   - 若 `replace_all=true` → 执行全局替换
+- **匹配失败诊断**：`old_string` 未命中（occ === 0）时返回稳定错误码 `EDIT_OLD_STRING_NOT_FOUND`（`userMessage` 保持原文案 `"未找到待替换的字符串"`）与结构化 `data.diagnosis`，详见下节「edit_file 匹配失败诊断规格」
 - **智能引号规范化**：
   - 匹配时自动处理弯引号（`"` `'`）与直引号（`"` `'`）的差异
   - 替换时保留原文件的引号风格
@@ -198,6 +203,46 @@ SpaceAssistant 当前采用**委托式工具调用**模式：应用将用户消�
   - 比较文件修改时间戳（mtime），若文件在读取后被外部程序修改，触发内容比较回退机制
   - Windows 系统直接比较文件内容（避免云同步、杀毒软件导致的时间戳不稳定问题）
   - 并发冲突时返回错误：`"文件已被外部程序修改，请重新读取后再编辑"`
+
+**匹配失败诊断规格（`EDIT_OLD_STRING_NOT_FOUND`）**：
+
+失败结果的 `data.diagnosis` 结构（字段均为追加，不影响既有消费者）：
+
+```jsonc
+{
+  "kind": "escape-layer-mismatch",      // 见下方 kind 枚举
+  "candidateLineRange": [58, 58],       // 最相似块行号范围（1-based，多行时为 [X, Y]）
+  "similarity": 0.991,                  // top1 候选相似度（0～1）
+  "diffs": [                             // 字符级差异（非 equal 段，最多 5 处）
+    { "index": 184, "submittedBackslashRun": 1, "fileBackslashRun": 2 }
+  ],
+  "totalLines": 120,                     // 归一视图下文件总行数
+  "oldLineCount": 1,                     // old_string 行数
+  "suggestedOldString": "...",           // 候选块真实内容（仅在可用性预检通过时下发）
+  "suggestedOldStringLength": 246,
+  "usableAsOldString": true,
+  "suppressionReason": "too-long",       // 建议被抑制时的原因
+  "hint": "..."                          // 恢复路径提示（P1-E：指引按诊断重试 edit_file，不改用脚本）
+}
+```
+
+`kind` 枚举与建议下发的关系：
+
+| kind | 含义 | 是否下发 `suggestedOldString` |
+|---|---|---|
+| `escape-layer-mismatch` | 差异仅为反斜杠连续个数不同 | 是（须通过可用性预检） |
+| `invisible-char-mismatch` | 差异含 ``、制表符等不可见字符 | 是（须通过可用性预检） |
+| `content-mismatch` | 一般内容差异 | 是（须通过可用性预检） |
+| `no-similar-line` | 未找到相似块 | 否（只给计数与首行预览） |
+| `ambiguous-candidate` | 候选多或 top1/top2 相似度差过小 | 否（只给 top1 行号与相似度） |
+| `block-too-large` | old_string 或候选块超过诊断块上限 | 否 |
+
+**可用性预检与抑制**：`suggestedOldString` 下发前经与投影层同一个 `sanitizeAgentText` 预检（主目录折叠 + 秘密脱敏，同一 `homeRules` 状态）；凡会被出口脱敏改写（`suppressionReason: "sanitize-would-rewrite"`）或长度超过 `MAX_SUGGESTED_OLD_STRING_CHARS`（4000 字符，`suppressionReason: "too-long"`）的候选一律抑制下发，`hint` 退化为「行号范围 + 反斜杠计数」指引，避免「模型照抄被改写的建议 → 连续失败 → 触发重试熔断」。
+
+**转义归一回退（可选入参）**：`tolerate_escape_layer: true`（默认 `false`）时，在有限变体集（每个连续反斜杠段 ±1 层、字面 `
+` 与真实换行互转）中「恰好一个变体命中且该变体在文件中恰好出现一次」才自动完成编辑，成功结果附 `data.matchedVariant`（`{ kind, backslashRunDelta }`）与 `notice`；多个变体命中或命中多次时不回退，退回诊断路径。匹配语义保持确定性，不做模糊匹配。
+
+**护栏不变**：诊断与回退不改变既有写路径——未读校验、外部修改检测、检查点备份（`backupIfEnabled`）、原子写（`safeAtomicWrite`）仍然生效。
 - **文件历史备份**：编辑前自动创建备份文件，存储在 `~/.spaceassistant/file-history/{sessionId}/` 目录
 - **原子性写入**：先写入临时文件再原子性重命名，确保写入过程不会导致文件损坏
 - 返回编辑结果和 diff 信息
@@ -423,7 +468,7 @@ Error: <错误信息>
 ```json
 {
   "name": "run_script",
-  "description": "执行一段 Python 脚本代码。脚本在工作目录下执行，有超时限制。执行前需用户确认。",
+  "description": "执行一段 Python 脚本代码（仅 Python）。脚本在工作目录下执行，有超时限制。执行前需用户确认。修改文件请优先使用 edit_file——它带未读校验、外部修改检测、检查点备份与原子写保护；edit_file 匹配失败时按其返回的 diagnosis 修正 old_string 后重试，不要改用脚本直接读写文件。",
   "input_schema": {
     "type": "object",
     "properties": {

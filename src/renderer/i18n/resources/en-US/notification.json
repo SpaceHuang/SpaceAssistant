@@ -10,5 +10,6 @@
     "itemClick": "Return to main window to confirm pending action",
     "closeButton": "Close notification",
     "backToMainButton": "Back to main window"
-  }
+  },
+  "desktopButlerTitle": "SpaceAssistant Butler"
 }

@@ -182,4 +182,127 @@ describe('pendingConfirmStore', () => {
       diff: { oldContent: '', newContent: 'x', oldPath: 'a.txt' }
     })])
   })
+
+  // ---- J-04（docs/develop/chat-message-list-streaming-jitter-fix-plan.md）：
+  // 幂等守卫语义特征测试。fixture 携带 startedAt 以固定 createdAt
+  // （无 startedAt 时 createdAt 走 Date.now() 兜底，任何守卫实现都会判定"已变化"，见方案 §J-04 已知边界）。
+  const guardSync = (options?: { input?: unknown; retryAttempt?: number }): void => {
+    pendingConfirmStore.syncFromProjection({
+      sessionId: 's-guard',
+      requestId: 'r-guard',
+      ...(options?.retryAttempt ? { retryAttempt: options.retryAttempt } : {}),
+      message: {
+        id: 'a-guard',
+        sessionId: 's-guard',
+        role: 'assistant',
+        content: '',
+        timestamp: 1,
+        status: 'streaming',
+        schemaVersion: 1,
+        toolCalls: [{
+          id: 'tool-guard',
+          toolName: 'write_file',
+          input: (options?.input ?? { path: 'a.ts' }) as Record<string, unknown>,
+          riskLevel: 'medium',
+          status: 'confirming',
+          startedAt: 1000
+        }]
+      }
+    })
+  }
+
+  it('同一 projection 重复 sync 不触发 notify（幂等守卫）', () => {
+    guardSync()
+    let calls = 0
+    const unsubscribe = pendingConfirmStore.subscribe(() => {
+      calls += 1
+    })
+    try {
+      guardSync()
+      expect(calls).toBe(0)
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it('confirmationReady 翻转后，相同 projection 的再次 sync 仍触发 notify', async () => {
+    const getConfirmation = vi.fn().mockResolvedValue({
+      sessionId: 's-guard',
+      turnId: 't-guard',
+      requestId: 'r-guard',
+      turnVersion: 1,
+      toolCallId: 'tool-guard',
+      confirmation: { complete: true, riskLevel: 'medium', memoryTiers: [], browser: {} }
+    })
+    vi.stubGlobal('window', { api: { chatGetPendingConfirmation: getConfirmation, toolConfirmResponse: vi.fn() } })
+    const args = {
+      sessionId: 's-guard',
+      requestId: 'r-guard',
+      turnId: 't-guard',
+      turnVersion: 1,
+      message: {
+        id: 'a-guard',
+        sessionId: 's-guard',
+        role: 'assistant',
+        content: '',
+        timestamp: 1,
+        status: 'streaming',
+        schemaVersion: 1,
+        toolCalls: [{
+          id: 'tool-guard',
+          toolName: 'write_file',
+          input: { path: 'a.ts' } as Record<string, unknown>,
+          riskLevel: 'medium',
+          status: 'confirming',
+          startedAt: 1000
+        }]
+      }
+    }
+    pendingConfirmStore.syncFromProjection(args)
+    let calls = 0
+    const unsubscribe = pendingConfirmStore.subscribe(() => {
+      calls += 1
+    })
+    try {
+      // IPC 快照返回后 confirmationReady 翻转为 true 并 notify
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      const afterFlip = calls
+      expect(afterFlip).toBeGreaterThanOrEqual(1)
+      // 再次相同 sync：重建的 next 恒为 confirmationReady:false，与当前 true 不同 → 必须 notify
+      pendingConfirmStore.syncFromProjection(args)
+      expect(calls).toBeGreaterThan(afterFlip)
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it('retryAttempt > 0 时即使 projection 相同也执行 notify（保持重试放行语义）', () => {
+    guardSync()
+    let calls = 0
+    const unsubscribe = pendingConfirmStore.subscribe(() => {
+      calls += 1
+    })
+    try {
+      guardSync()
+      expect(calls).toBe(0)
+      guardSync({ retryAttempt: 1 })
+      expect(calls).toBe(1)
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it('仅 input 内容不同的两次 sync 触发 notify（深度字段感知）', () => {
+    guardSync()
+    let calls = 0
+    const unsubscribe = pendingConfirmStore.subscribe(() => {
+      calls += 1
+    })
+    try {
+      guardSync({ input: { path: 'b.ts' } })
+      expect(calls).toBe(1)
+    } finally {
+      unsubscribe()
+    }
+  })
 })

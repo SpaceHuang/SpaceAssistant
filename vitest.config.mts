@@ -8,13 +8,17 @@ export default defineConfig({
         // 主进程测试：Windows 上 threads 池易出现 worker 启动超时，保持 forks + 单 worker
         test: {
           name: 'electron',
-          include: ['electron/**/*.test.ts'],
+          // SDK 包级测试(A3):纯 node,随 electron 项目 forks 单 worker 跑
+          include: ['electron/**/*.test.ts', 'packages/agent-core/**/*.test.ts'],
           environment: 'node',
+          // Windows 慢机满载下 5s 默认值会误杀重 IO 用例（如 1000 并发台账写盘）；断言本身不受影响
+          testTimeout: 15_000,
           globals: true,
           pool: 'forks',
           maxWorkers: 1,
           fileParallelism: false,
-          setupFiles: ['./src/test/setup.ts']
+          // electron 项目专属第二 setup:脚本安全解析服务初始化(§2.3 归属约束)+ 默认 runtime 装配(batch3)
+          setupFiles: ['./src/test/setup.ts', './src/test/setup-electron-parser.ts', './electron/testSetup.ts']
         }
       },
       {
@@ -22,6 +26,8 @@ export default defineConfig({
         test: {
           name: 'renderer',
           include: ['src/**/*.test.{ts,tsx}'],
+          // 同上：jsdom 组件交互用例在满载下 5s 不够（性能界限类用例自行断言更紧的界）
+          testTimeout: 15_000,
           exclude: ['src/**/*.perf.*.test.tsx', '**/node_modules/**'],
           environment: 'jsdom',
           globals: true,

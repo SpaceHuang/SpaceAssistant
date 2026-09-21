@@ -1,0 +1,96 @@
+{
+  "id": "t2-20-using-namespace",
+  "dialect": "windows-powershell",
+  "platform": "linux",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "using namespace System.IO\n[File]::Exists(\"a\")"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [],
+      "warnings": [],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": false
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": false,
+      "outsideWorkDirRisk": false,
+      "warnings": [],
+      "scannedPaths": []
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "using",
+          "args": [
+            "namespace",
+            "System.IO"
+          ],
+          "segmentIndex": 0
+        },
+        {
+          "verb": "[File]::Exists(a)",
+          "args": [],
+          "segmentIndex": 1
+        }
+      ],
+      "connectors": [
+        ";"
+      ],
+      "paths": [],
+      "cwdChanges": [],
+      "analysisCompleteness": "partial",
+      "unresolved": [
+        "segment:1:shell-control-flow"
+      ]
+    }
+  },
+  "signature": {
+    "normalized": "using namespace System.IO [File]::Exists(a)",
+    "trust": {
+      "executable": "",
+      "argv": [],
+      "hasMetasyntax": true,
+      "persistable": false
+    },
+    "persistableSingle": false
+  },
+  "facts": {
+    "dialect": "windows-powershell",
+    "operations": [
+      {
+        "verb": "using",
+        "args": [
+          "namespace",
+          "System.IO"
+        ],
+        "segmentIndex": 0
+      },
+      {
+        "verb": "[File]::Exists(a)",
+        "args": [],
+        "segmentIndex": 1
+      }
+    ],
+    "connectors": [
+      ";"
+    ],
+    "paths": [],
+    "cwdChanges": [],
+    "analysisCompleteness": "partial",
+    "unresolved": [
+      "segment:1:shell-control-flow"
+    ]
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "partial",
+    "persistable": false,
+    "hasMetasyntax": true
+  }
+}

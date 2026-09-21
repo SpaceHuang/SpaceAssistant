@@ -3,13 +3,17 @@ import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+const sendMock = vi.fn()
+vi.mock('./windowRef', () => ({
+  getMainWindow: () => ({ webContents: { send: sendMock } })
+}))
+
 describe('fileContentWatcher', () => {
   let tmpDir: string
-  let sendMock: ReturnType<typeof vi.fn>
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'fcw-test-'))
-    sendMock = vi.fn()
+    sendMock.mockClear()
     const { stopAllContentWatches } = await import('./fileContentWatcher')
     stopAllContentWatches()
   })
@@ -20,20 +24,25 @@ describe('fileContentWatcher', () => {
     await fs.rm(tmpDir, { recursive: true, force: true })
   })
 
-  it('pushes file:content-changed immediately on file change', async () => {
+  it('broadcasts scope:invalidated { file:<path>, version } immediately on file change (偏差 11/3c)', async () => {
     const filePath = path.join(tmpDir, 'watch.txt')
     await fs.writeFile(filePath, 'v1', 'utf8')
 
     const { startContentWatch, getWatchedRelPathForTests } = await import('./fileContentWatcher')
-    const sender = { send: sendMock, isDestroyed: () => false } as never
-
-    startContentWatch(tmpDir, 'watch.txt', sender)
+    // 新契约:不再经 sender 直连;广播走统一出口(windowRef.getMainWindow)
+    startContentWatch(tmpDir, 'watch.txt')
     expect(getWatchedRelPathForTests()).toBe('watch.txt')
 
     await fs.writeFile(filePath, 'v2', 'utf8')
     await new Promise((r) => setTimeout(r, 100))
 
-    expect(sendMock).toHaveBeenCalledWith('file:content-changed', { relPath: 'watch.txt' })
+    const invocations = sendMock.mock.calls.filter((c) => c[0] === 'scope:invalidated')
+    expect(invocations.length).toBeGreaterThanOrEqual(1)
+    const payload = invocations[0]![1] as { scope: string; version: number }
+    expect(payload.scope).toBe('file:watch.txt')
+    expect(payload.version).toBeGreaterThan(0)
+    // 载荷不含真相(无文件内容字段)
+    expect(Object.keys(payload).sort()).toEqual(['scope', 'version'])
   })
 
   it('stops previous watch when switching files', async () => {

@@ -1,0 +1,138 @@
+{
+  "id": "t2-01-class-def",
+  "dialect": "windows-powershell",
+  "platform": "linux",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "class Point {\n  [int]$x\n  [int]$y\n}\n$p = [Point]::new()"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [],
+      "warnings": [],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": false
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": false,
+      "outsideWorkDirRisk": false,
+      "warnings": [],
+      "scannedPaths": []
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "class",
+          "args": [
+            "Point",
+            "{"
+          ],
+          "segmentIndex": 0
+        },
+        {
+          "verb": "[int]$x",
+          "args": [],
+          "segmentIndex": 1
+        },
+        {
+          "verb": "[int]$y",
+          "args": [],
+          "segmentIndex": 2
+        },
+        {
+          "verb": "}",
+          "args": [],
+          "segmentIndex": 3
+        },
+        {
+          "verb": "$p",
+          "args": [
+            "=",
+            "[Point]::new()"
+          ],
+          "segmentIndex": 4
+        }
+      ],
+      "connectors": [
+        ";",
+        ";",
+        ";",
+        ";"
+      ],
+      "paths": [],
+      "cwdChanges": [],
+      "analysisCompleteness": "partial",
+      "unresolved": [
+        "segment:4:shell-control-flow"
+      ]
+    }
+  },
+  "signature": {
+    "normalized": "class Point { [int]$x [int]$y } $p = [Point]::new()",
+    "trust": {
+      "executable": "",
+      "argv": [],
+      "hasMetasyntax": true,
+      "persistable": false
+    },
+    "persistableSingle": false
+  },
+  "facts": {
+    "dialect": "windows-powershell",
+    "operations": [
+      {
+        "verb": "class",
+        "args": [
+          "Point",
+          "{"
+        ],
+        "segmentIndex": 0
+      },
+      {
+        "verb": "[int]$x",
+        "args": [],
+        "segmentIndex": 1
+      },
+      {
+        "verb": "[int]$y",
+        "args": [],
+        "segmentIndex": 2
+      },
+      {
+        "verb": "}",
+        "args": [],
+        "segmentIndex": 3
+      },
+      {
+        "verb": "$p",
+        "args": [
+          "=",
+          "[Point]::new()"
+        ],
+        "segmentIndex": 4
+      }
+    ],
+    "connectors": [
+      ";",
+      ";",
+      ";",
+      ";"
+    ],
+    "paths": [],
+    "cwdChanges": [],
+    "analysisCompleteness": "partial",
+    "unresolved": [
+      "segment:4:shell-control-flow"
+    ]
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "partial",
+    "persistable": false,
+    "hasMetasyntax": true
+  }
+}

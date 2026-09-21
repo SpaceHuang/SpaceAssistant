@@ -2,6 +2,7 @@ import { randomBytes } from 'crypto'
 import fs from 'fs/promises'
 import path from 'path'
 import type { ImCliLogLevel } from './imCliLogger'
+import { withTransientLockRetry } from '../safeAtomicWrite'
 
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 /** Claim lease: if process dies before executing, reclaim after this. */
@@ -154,7 +155,7 @@ export class ImProcessedStore {
     } finally {
       await fh.close()
     }
-    await fs.rename(tmp, this.filePath)
+    await withTransientLockRetry(() => fs.rename(tmp, this.filePath))
   }
 
   /**

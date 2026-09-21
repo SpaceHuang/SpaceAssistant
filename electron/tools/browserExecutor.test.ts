@@ -63,7 +63,6 @@ function baseCtx(overrides?: Partial<ToolExecutionContext>): ToolExecutionContex
     fileStateCache: {} as ToolExecutionContext['fileStateCache'],
     toolsConfig: {
       enabled: true,
-      confirmMode: 'diff',
       allowedTools: [],
       deniedTools: [],
       pythonPath: 'python',

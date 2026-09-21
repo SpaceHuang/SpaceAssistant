@@ -104,7 +104,10 @@ export const ChatMessageViewport = memo(
       onStartReached?.()
     }, [onStartReached])
 
-    const followOutput = useCallback(() => (stickRef.current ? ('smooth' as const) : false), [])
+    // 流式跟随必须瞬时贴底：内容每帧增长时 'smooth' 动画永远追不上目标，
+    // 与位置补偿叠加会引发整列表抖动（见 docs/develop/chat-message-list-streaming-jitter-fix-plan.md J-02）。
+    // 平滑滚动仅保留给用户手势（scrollToBottom/scrollToIndex 的显式 behavior 参数）。
+    const followOutput = useCallback(() => stickRef.current, [])
 
     const atBottomStateChange = useCallback(
       (atBottom: boolean) => {

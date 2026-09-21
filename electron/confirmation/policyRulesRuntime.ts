@@ -24,7 +24,20 @@ export function readPolicyPackages(db: AppDatabase): PolicyPackageMap {
   const raw = getConfigValue(db, POLICY_PACKAGES_CONFIG_KEY)
   if (!raw) return { ...DEFAULT_POLICY_PACKAGES }
   try {
-    return normalizePolicyPackages(JSON.parse(raw))
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const normalized = normalizePolicyPackages(parsed)
+    // M2 告警（评审低项）：伪造/不可用档位被收敛 standard 时留痕（shared 模块无日志依赖，告警在装配侧落）
+    for (const lane of ['desktop', 'wechat', 'feishu', 'automation'] as const) {
+      if (parsed[lane] !== undefined && parsed[lane] !== normalized[lane]) {
+        void import('../agentLogger/agentLogger').then((m) =>
+          m.logAgentEvent('warn', 'policy.package.normalized', {
+            detail: `policy package for lane ${lane} normalized: ${String(parsed[lane])} -> ${normalized[lane]}`,
+            timestamp: Date.now()
+          })
+        )
+      }
+    }
+    return normalized
   } catch {
     return { ...DEFAULT_POLICY_PACKAGES }
   }
@@ -70,24 +83,75 @@ export function isPolicyRuleDisabled(db: AppDatabase, ruleId: string): boolean {
 }
 
 /**
- * 按链路加载生效规则集：默认（standard 且无覆盖）返回 DEFAULT_POLICY_RULES 引用，
- * 保证未配置套餐/覆盖时与 P1–P3 行为逐项等价；strict/loose/custom 经 resolvePolicyRules 变换。
+ * 按链路加载生效规则集 + 当前档位（toolCallGate 装配 deps.transform 用）。
+ * desktop standard 的「自动」变换在此生效；恒等 lane（standard 无变换）返回 DEFAULT_POLICY_RULES 引用。
  */
-export function loadEffectivePolicyRules(db: AppDatabase, lane: ExecutionLane): PolicyRule[] {
+/** 规则来源（P3：审计能回答「我设的 allow 为什么没生效」）。 */
+export type PolicyRuleOriginSource = 'builtin' | 'package' | 'user-override' | 'migration'
+
+export interface PolicyRuleOrigin {
+  source: PolicyRuleOriginSource
+  /** 被遮蔽规则的痕迹（哪条被哪条盖住）。 */
+  shadowed?: Array<{ source: PolicyRuleOriginSource }>
+}
+
+/**
+ * 带来源的生效规则解析（P3）：规则集与 loadEffectivePolicyRules 同判，
+ * 额外携带每条生效规则的来源维度与被遮蔽痕迹。
+ * （合并适配：回答者由动作派生后不再有 answererKind 套餐约束，standard 恒等快路径全 lane 一致。）
+ */
+export function resolveEffectivePolicyRulesWithOrigin(
+  db: AppDatabase,
+  lane: ExecutionLane
+): { rules: PolicyRule[]; origins: Record<string, PolicyRuleOrigin> } {
+  const origins: Record<string, PolicyRuleOrigin> = {}
+  const packages = readPolicyPackages(db)
+  const disabledRuleIds = readDisabledPolicyRuleIds(db)
+  const lockedIds = new Set(DEFAULT_POLICY_RULES.filter((rule) => rule.locked).map((rule) => rule.id))
+  const safeDisabledRuleIds = disabledRuleIds.filter((id) => !lockedIds.has(id))
+  const pkg = packages[lane] ?? 'standard'
+  const baseRules = safeDisabledRuleIds.length
+    ? (DEFAULT_POLICY_RULES.filter((r) => !safeDisabledRuleIds.includes(r.id)) as PolicyRule[])
+    : DEFAULT_POLICY_RULES
+  const overrides = pkg === 'custom' ? new PolicyRuleStore(getDbConnection(db)).listOverrides() : []
+  const resolved = resolvePolicyRules({ lane, packages, overrides, rules: baseRules })
+  const overrideById = new Map(overrides.map((o) => [o.ruleId, o]))
+  const baseById = new Map(baseRules.map((r) => [r.id, r]))
+  for (const rule of resolved) {
+    const override = overrideById.get(rule.id)
+    if (override && rule.action !== baseById.get(rule.id)?.action) {
+      origins[rule.id] = { source: 'user-override', shadowed: [{ source: 'builtin' }] }
+    } else if (baseById.get(rule.id)?.action !== rule.action) {
+      // 档位范围条目（scope-*，S1 偏差 15）改变了默认动作来源
+      origins[rule.id] = { source: 'package', shadowed: [{ source: 'builtin' }] }
+    } else {
+      origins[rule.id] = { source: 'builtin' }
+    }
+  }
+  return { rules: resolved, origins }
+}
+
+export function loadLanePolicyContext(db: AppDatabase, lane: ExecutionLane): { rules: PolicyRule[]; pkg: PolicyPackage } {
   const packages = readPolicyPackages(db)
   const disabledRuleIds = readDisabledPolicyRuleIds(db)
   const lockedIds = new Set(DEFAULT_POLICY_RULES.filter((rule) => rule.locked).map((rule) => rule.id))
   const safeDisabledRuleIds = disabledRuleIds.filter((id) => !lockedIds.has(id))
   if (safeDisabledRuleIds.length !== disabledRuleIds.length) writeDisabledPolicyRuleIds(db, safeDisabledRuleIds)
   const pkg = packages[lane] ?? 'standard'
-  // 未被「不启用」的系统保护规则，拦截其作为第 1 步硬拒绝被评估。
   const baseRules = safeDisabledRuleIds.length
     ? (DEFAULT_POLICY_RULES.filter((r) => !safeDisabledRuleIds.includes(r.id)) as PolicyRule[])
     : DEFAULT_POLICY_RULES
-  // 默认（standard 且无禁用规则）返回 DEFAULT_POLICY_RULES 引用，保持零行为变化快路径。
-  if (pkg === 'standard' && safeDisabledRuleIds.length === 0) return DEFAULT_POLICY_RULES
   const overrides = pkg === 'custom' ? new PolicyRuleStore(getDbConnection(db)).listOverrides() : []
-  return resolvePolicyRules({ lane, packages, overrides, rules: baseRules })
+  return { rules: resolvePolicyRules({ lane, packages, overrides, rules: baseRules }), pkg }
+}
+
+/**
+ * 按链路加载生效规则集：恒等情形（standard、无清单目标命中的 strict/loose）返回 DEFAULT_POLICY_RULES
+ * 引用（零行为变化快路径）；strict / loose 为范围档（scope-* 条目取代目标，S1 偏差 15）；
+ * desktop standard 的「自动」ask→auto-evaluator 由引擎产出层经 deps.transform 解释，不在规则集层面。
+ */
+export function loadEffectivePolicyRules(db: AppDatabase, lane: ExecutionLane): PolicyRule[] {
+  return loadLanePolicyContext(db, lane).rules
 }
 
 /** 设置页展示用：默认规则 + 当前覆盖合并视图（overridden 标记）。 */

@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FeishuImChannel, buildFeishuConfirmPromptText } from './feishuImChannel'
 import type { ConfirmRequest } from '../../src/shared/confirmation/types'
+import { createAgentRuntime } from '../runtime/agentRuntime'
+import { setDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
+import { createBuiltinToolRegistry } from '../tools/builtinExecutors'
+import { ConfirmIdSpace } from '../remote/confirmId'
+import { ChatCancelRegistry } from '../chatCancelRegistry'
+import { ToolRevocationRegistry } from '../toolRevocationRegistry'
+import { McpConcurrencyGate } from '../mcp/mcpToolExecutor'
+
 
 vi.mock('./feishuReply', () => ({
   replyFeishuText: vi.fn().mockResolvedValue(undefined)
@@ -42,6 +50,17 @@ function p2p(overrides: {
   }
 }
 
+// P8:显式装配含真 builtin registry 的默认 runtime(兼容转发打到真实注册表)
+setDefaultAgentRuntime(
+  createAgentRuntime({
+    confirmIds: new ConfirmIdSpace(),
+    chatCancels: new ChatCancelRegistry(),
+    toolRevocations: new ToolRevocationRegistry(),
+    mcpGate: new McpConcurrencyGate(),
+    builtinRegistry: createBuiltinToolRegistry()
+  })
+)
+
 describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
   it('does not resolve confirm from group chat', async () => {
     const im = new FeishuImChannel()
@@ -57,7 +76,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
     ).toBe(false)
     expect(im.countPending()).toBe(1)
     im.cancelAllPending()
-    await expect(p).resolves.toEqual({ kind: 'rejected' })
+    await expect(p).resolves.toEqual({ kind: 'rejected', cause: 'user-denied' })
   })
 
   it('does not resolve confirm from non-owner', async () => {
@@ -74,7 +93,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
     ).toBe(false)
     expect(im.countPending()).toBe(1)
     im.cancelAllPending()
-    await expect(p).resolves.toEqual({ kind: 'rejected' })
+    await expect(p).resolves.toEqual({ kind: 'rejected', cause: 'user-denied' })
   })
 
   it('does not resolve confirm when owner unbound', async () => {
@@ -89,7 +108,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
     expect(im.tryResolveFromInboundMessage(p2p({ content: 'Y' }), {})).toBe(false)
     expect(im.countPending()).toBe(1)
     im.cancelAllPending()
-    await expect(p).resolves.toEqual({ kind: 'rejected' })
+    await expect(p).resolves.toEqual({ kind: 'rejected', cause: 'user-denied' })
   })
 
   it('builds browser navigate confirm text', () => {
@@ -148,7 +167,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
     ).toBe(true)
     expect(im.countPending()).toBe(1)
     im.tryResolveFromInboundMessage(p2p({ messageId: 'm3', content: `Y ${cid}` }), confirmOpts)
-    await expect(p).resolves.toEqual({ kind: 'approved' })
+    await expect(p).resolves.toEqual({ kind: 'approved', cause: 'user-approved' })
   })
 
   it('approve_and_trust without eligibility does not resolve', async () => {
@@ -168,6 +187,6 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
     ).toBe(true)
     expect(im.countPending()).toBe(1)
     im.tryResolveFromInboundMessage(p2p({ messageId: 'm3', content: `N ${cid}` }), confirmOpts)
-    await expect(p).resolves.toEqual({ kind: 'rejected' })
+    await expect(p).resolves.toEqual({ kind: 'rejected', cause: 'user-denied' })
   })
 })

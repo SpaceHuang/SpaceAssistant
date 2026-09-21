@@ -50,6 +50,13 @@ export type ToolConfirmResponsePayload = {
   memoryTierOptionId?: number
 }
 
+/** P0-T4：脚本安全解析服务状态（主进程 ScriptParserService.getStatus() 的 IPC 投影）。 */
+export type ScriptParserStatusPayload = {
+  ready: boolean
+  failedReason?: string
+  notReadyParseCount: number
+}
+
 export type ShellManageTrustedCommandsAction =
   | { action: 'list' }
   | { action: 'add'; command: string }
@@ -159,6 +166,15 @@ export type SpaceAssistantApi = {
 
   appOpenExternal: (url: string) => Promise<{ ok: true } | { ok: false; error: string }>
 
+  /** P0 托盘常驻前提：管家定时任务依赖「关窗进程存活」，设置页据此提示。 */
+  appGetTrayEnabled: () => Promise<boolean>
+
+  butlerListTasks: () => Promise<import('./automationTaskTypes').AutomationTask[]>
+  butlerCreateTask: (payload: Partial<import('./automationTaskTypes').AutomationTaskInput>) => Promise<import('./automationTaskTypes').ButlerTaskWriteResult>
+  butlerUpdateTask: (payload: { id: string; patch: Partial<import('./automationTaskTypes').AutomationTask> }) => Promise<{ ok: boolean; error?: string }>
+  butlerDeleteTask: (payload: { id: string }) => Promise<{ ok: boolean; error?: string }>
+  butlerRunTask: (payload: { taskId: string; requestId?: string }) => Promise<import('./automationTaskTypes').ButlerRunTaskResult>
+
   sessionList: () => Promise<Session[]>
   sessionCreate: (payload: {
     name: string
@@ -167,6 +183,8 @@ export type SpaceAssistantApi = {
     temperature?: number
     maxTokens?: number
     metadata?: Record<string, unknown>
+    /** composer 草稿带入的会话级 Thinking 强度覆盖 */
+    thinkingEffort?: import('./agent/invocation').AgentReasoningEffort
   }) => Promise<Session>
   sessionGet: (sessionId: string) => Promise<Session | undefined>
   sessionUpdate: (payload: {
@@ -178,6 +196,8 @@ export type SpaceAssistantApi = {
     maxTokens?: number
     skillsState?: SessionSkillsState
     metadata?: Record<string, unknown>
+    /** 会话级 Thinking 强度覆盖；null = 清除覆盖（回到继承全局） */
+    thinkingEffort?: import('./agent/invocation').AgentReasoningEffort | null
   }) => Promise<Session | undefined>
   sessionBackfillAutoTitleIfNeeded: (payload: { sessionId: string }) => Promise<Session | undefined>
   sessionDelete: (sessionId: string) => Promise<void>
@@ -217,9 +237,6 @@ export type SpaceAssistantApi = {
     nextSequence: number
     hasMore: boolean
   }>
-  chatGetNextQueuedMessage: (payload: {
-    sessionId: string
-  }) => Promise<import('./displayOrder').QueuedMessageEntry | null>
   chatEnqueueQueuedMessage: (payload: { sessionId: string; requestId: string; content: string; attachments?: ChatImageAttachment[] }) => Promise<{ receipt: unknown; persisted: import('./displayOrder').PersistedMessageAck; duplicate: boolean }>
   chatResolveRetryContext: (payload: {
     sessionId: string
@@ -248,8 +265,8 @@ export type SpaceAssistantApi = {
       >
     >
   }) => Promise<{ message: Message; sequence: number } | null>
-  chatPrepareTurn: (intent: import('./assistantFactAggregator').TurnIntent) => Promise<import('./turnCoordinator').TurnStarted>
-  chatExecuteTurn: (payload: TurnExecutePayload) => Promise<{ ok: true; accepted: true; turnId: string }>
+  chatSubmitOutbound: (intent: import('./outboundProtocol').OutboundSubmitIntent) => Promise<import('./outboundProtocol').OutboundSubmitResult>
+  onScopeInvalidated: (cb: (payload: { scope: string; version: number; hint?: unknown }) => void) => () => void
   chatCancelTurn: (turnId: string) => Promise<boolean>
   chatGetTurnTerminal: (turnId: string) => Promise<(import('./assistantFactAggregator').TurnTerminal & { committedVersion?: number; commitStatus?: 'pending' | 'committed' | 'failed' }) | undefined>
   chatRetryTurnCheckpoint: (turnId: string) => Promise<boolean>
@@ -304,6 +321,8 @@ export type SpaceAssistantApi = {
   securitySetRuleOverride: (payload: {
     ruleId: string
     action: PolicyAction
+    /** 覆盖提交所在链路（B2 动作域校验；缺省按最严格 3 态域） */
+    lane?: ExecutionLane
     params?: Record<string, unknown>
   }) => Promise<{ ok: true } | { ok: false; error: string }>
   /** 系统保护（禁止类）规则「启用/不启用」：启用=在策略链中生效，不启用=不再作为硬拒绝。 */
@@ -330,6 +349,7 @@ export type SpaceAssistantApi = {
       defaultModel: string
       models: import('./domainTypes').ModelEntry[]
       thinkingEnabled: boolean
+      thinkingEffort?: import('./agent/invocation').AgentReasoningEffort
       workDir: string
       apiKey: string
       llmServices: import('./domainTypes').LlmServiceProfile[]
@@ -384,14 +404,20 @@ export type SpaceAssistantApi = {
   fileRename: (relPath: string, newName: string) => Promise<void>
   fileMove: (srcRelPath: string, destDirRelPath: string) => Promise<void>
   fileCopy: (payload: { srcRelPath: string; destRelPath: string }) => Promise<void>
-  fileOnTreeChanged: (cb: (event: import('./fileTreeSync').FileTreeChangeEvent) => void) => () => void
   fileWatchContent: (relPath: string | null) => Promise<void>
-  fileOnContentChanged: (cb: (event: import('./fileContentSync').FileContentChangedEvent) => void) => () => void
 
   searchExecute: (query: string) => Promise<SearchResult[]>
   searchGetHistory: () => Promise<string[]>
 
+  // P0-T4：脚本安全解析服务状态（诊断展示）
+  treesitterGetStatus: () => Promise<ScriptParserStatusPayload>
+
+  usageStatsDaily: (args: import('./usageStatsTypes').UsageStatsRangeArgs) => Promise<import('./usageStatsTypes').UsageDailyPoint[]>
+  usageStatsSummary: (args: import('./usageStatsTypes').UsageStatsRangeArgs) => Promise<import('./usageStatsTypes').UsageSummary>
+  usageStatsDimensions: () => Promise<import('./usageStatsTypes').UsageDimensions>
+
   onOpenSettings: (cb: () => void) => () => void
+  onOpenUsageStats: (cb: () => void) => () => void
   onOpenAbout: (cb: () => void) => () => void
 
   windowGetPlatform: () => Promise<NodeJS.Platform>
@@ -404,6 +430,8 @@ export type SpaceAssistantApi = {
   appToggleDevTools: () => Promise<void>
 
   sessionOnTitleGenerated: (cb: (data: { session: Session }) => void) => () => void
+  /** 管家定时 / 手动触发的会话创建推送：渲染端即时 upsert 进会话列表，无需重启。 */
+  sessionOnCreated: (cb: (data: { session: Session }) => void) => () => void
 
   toolConfirmResponse: (payload: ToolConfirmResponsePayload) => Promise<void>
   toolCancel: (payload: { requestId: string; toolUseId: string }) => Promise<void>

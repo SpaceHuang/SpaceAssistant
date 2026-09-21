@@ -14,6 +14,15 @@ function apply(events: AssistantFactEvent[]) {
 }
 
 describe('AssistantFactAggregator', () => {
+  it('用权威最终正文替换流式草稿，避免完成时重复追加', () => {
+    const result = apply([
+      { type: 'content-delta', text: 'partial' },
+      { type: 'content-reconciled', text: 'A + B' },
+      { type: 'source-completed' }
+    ])
+    expect(result.content).toBe('A + B')
+    expect(result.contentSegments?.map((segment) => segment.content).join('')).toBe('A + B')
+  })
   it('压缩提交标记不会阻断后续 assistant 正文写入', () => {
     const result = apply([
       { type: 'content-delta', text: 'before' },
@@ -176,5 +185,23 @@ describe('AssistantFactAggregator', () => {
   it('tool-use 即使未进入确认也保留 MCP 来源元数据', () => {
     const result = apply([{ type: 'tool-use', id: 'mcp-auto', toolName: 'mcp_s_t_hash', input: {}, mcp: { serverId: 's', serverName: '服务', originalToolName: 'tool' } }])
     expect(result.toolCalls?.[0]?.mcp).toEqual({ serverId: 's', serverName: '服务', originalToolName: 'tool' })
+  })
+})
+
+describe('AssistantFactAggregator：agent 裁决路径标记（H1）', () => {
+  it('confirm-requested 带 autoAnswerer 时写入 tool record（渲染端据此出只读「自动审批中」卡）', () => {
+    const result = apply([
+      { type: 'tool-use', id: 't-auto', toolName: 'run_shell', input: { command: 'ls' } },
+      { type: 'confirm-requested', id: 't-auto', riskLevel: 'high', autoAnswerer: true }
+    ])
+    expect(result.toolCalls?.[0]).toMatchObject({ status: 'confirming', autoAnswerer: true })
+  })
+
+  it('user 确认路径不带 autoAnswerer（交互卡不受影响）', () => {
+    const result = apply([
+      { type: 'tool-use', id: 't-user', toolName: 'run_shell', input: { command: 'ls' } },
+      { type: 'confirm-requested', id: 't-user', riskLevel: 'high' }
+    ])
+    expect(result.toolCalls?.[0]?.autoAnswerer).toBeUndefined()
   })
 })

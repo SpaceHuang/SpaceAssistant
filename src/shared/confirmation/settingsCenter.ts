@@ -1,4 +1,3 @@
-import type { FileConfirmMode } from '../domainTypes'
 import type { PolicyPackage, PolicyPackageMap } from '../policy/policyPackages'
 import type {
   CacheKey,
@@ -33,11 +32,9 @@ export interface SecuritySettingsRuleView {
 
 /** 五区数据装配结果。 */
 export interface SecuritySettingsModelPayload {
-  /** 1. 策略套餐（每链路） */
+  /** 1. 策略套餐（每链路）；规则行的生效动作由渲染端按 LANE_PROFILES.effectiveActionFor 计算 */
   packages: PolicyPackageMap
-  /** 2. 确认模式 */
-  confirmMode: FileConfirmMode
-  /** 3. 工具开关（deniedTools） */
+  /** 2. 工具开关（deniedTools） */
   deniedTools: string[]
   /** 4. 确认记忆（decision_cache 全量，渲染端按档位分组） */
   memoryEntries: DecisionCacheEntry[]

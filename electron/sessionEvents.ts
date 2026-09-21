@@ -3,6 +3,7 @@ import path from 'path'
 import { randomUUID } from 'crypto'
 import type { SessionUsage } from '../src/shared/sessionUsage'
 import { foldCompactionEvents, projectCompactionMarkers, type CompactionReplay, type CompactionMarker } from '../src/shared/compactionEvents'
+import { withTransientLockRetry } from './safeAtomicWrite'
 
 export type SessionEventPayload = Record<string, unknown>
 export type SessionEventType = 'turn_start' | 'turn_end' | 'step_start' | 'step_end' | 'assistant_chunk' | 'tool_call' | 'tool_result' | 'request_header' | 'request_context' | 'request_usage' | 'request_retry' | 'compaction_start' | 'compaction_summary' | 'compaction_end' | 'session_end_seed'
@@ -70,6 +71,18 @@ const DEFAULT_OPTIONS: SessionEventSinkOptions = {
 }
 const EVENT_TYPES = new Set<SessionEventType>(['turn_start', 'turn_end', 'step_start', 'step_end', 'assistant_chunk', 'tool_call', 'tool_result', 'request_header', 'request_context', 'request_usage', 'request_retry', 'compaction_start', 'compaction_summary', 'compaction_end', 'session_end_seed'])
 
+/**
+ * R1（评审复验）：assistant_chunk 的 tool_call_delta.partialJson 是工具入参原文的流式分片
+ * ——chunk 顺序拼接即可还原 toolkit 凭据明文，且台账无任何重放消费者（tool_call 事件的
+ * 净化 args 承担入参审计职责）。JSONL sink 落盘前必须剥离（置空串保留事件结构）。
+ */
+export function stripPartialJsonForPersist<T extends { type: string; payload: Record<string, unknown> }>(event: T): T {
+  if (event.type !== 'assistant_chunk') return event
+  const delta = event.payload.delta as { type?: string; partialJson?: string } | undefined
+  if (delta?.type !== 'tool_call_delta' || typeof delta.partialJson !== 'string') return event
+  return { ...event, payload: { ...event.payload, delta: { ...delta, partialJson: '' } } }
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object')
 }
@@ -134,8 +147,6 @@ export type SessionRecoverySummary = {
   sessions: Array<{ sessionName: string; fixed: number; integrity: SessionEventIntegrity; issues: SessionEventIssue[] }>
   failures: SessionRecoveryFailure[]
 }
-export type SessionRetentionSummary = { removed: number; failures: SessionRecoveryFailure[] }
-
 /** 事件流唯一的压缩重放入口；未提交候选不会改变模型面。 */
 export function replayCompactionEvents(events: readonly SessionEvent[]): CompactionReplay {
   return foldCompactionEvents(events.filter((event) => event.type === 'compaction_start' || event.type === 'compaction_summary' || event.type === 'compaction_end').map((event) => ({ seq: event.seq, type: event.type as 'compaction_start' | 'compaction_summary' | 'compaction_end', payload: event.payload })))
@@ -426,7 +437,7 @@ export class SessionEventWriter implements SessionEventSink {
     const temp = path.join(this.directory, `.events-index-${randomUUID()}.tmp`)
     try {
       await fs.writeFile(temp, JSON.stringify({ formatVersion: 2, seq: this.seq, eventCount: this.eventCount, bytes: this.bytes, lastAt: lastEvent.time }))
-      await fs.rename(temp, this.indexPath)
+      await withTransientLockRetry(() => fs.rename(temp, this.indexPath))
     } finally {
       await fs.rm(temp, { force: true }).catch(() => undefined)
     }
@@ -608,7 +619,7 @@ export async function reconcileSessionEventFilesDetailed(workDir: string): Promi
       const temp = path.join(root, entry.name, `.events-index-${randomUUID()}.tmp`)
       try {
         await fs.writeFile(temp, JSON.stringify({ formatVersion: 2, seq: last.seq, lastAt: last.time, eventCount: readResult.events.length + repairs.length, bytes }))
-        await fs.rename(temp, path.join(root, entry.name, 'events.index.json'))
+        await withTransientLockRetry(() => fs.rename(temp, path.join(root, entry.name, 'events.index.json')))
       } finally {
         await fs.rm(temp, { force: true }).catch(() => undefined)
       }
@@ -617,37 +628,6 @@ export async function reconcileSessionEventFilesDetailed(workDir: string): Promi
     }
   }
   return summary
-}
-
-export async function enforceSessionEventRetention(workDir: string, maxSessions: number): Promise<number> {
-  return (await enforceSessionEventRetentionDetailed(workDir, maxSessions)).removed
-}
-
-export async function enforceSessionEventRetentionDetailed(workDir: string, maxSessions: number): Promise<SessionRetentionSummary> {
-  if (!Number.isInteger(maxSessions) || maxSessions < 1) throw new Error('maxSessions must be positive')
-  const root = path.join(workDir, 'sessions')
-  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => [])
-  const candidates: Array<{ name: string; lastAt: number }> = []
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue
-    try {
-      const index = JSON.parse(await fs.readFile(path.join(root, entry.name, 'events.index.json'), 'utf8')) as { lastAt?: number }
-      candidates.push({ name: entry.name, lastAt: typeof index.lastAt === 'number' ? index.lastAt : 0 })
-    } catch { /* no event stream, leave ordinary backups untouched */ }
-  }
-  candidates.sort((a, b) => b.lastAt - a.lastAt)
-  const removed = candidates.slice(maxSessions)
-  const failures: SessionRecoveryFailure[] = []
-  let count = 0
-  for (const entry of removed) {
-    try {
-      await fs.rm(path.join(root, entry.name), { recursive: true, force: true })
-      count += 1
-    } catch (error) {
-      failures.push({ sessionName: entry.name, phase: 'retention-delete', error, jsonlCommitted: false })
-    }
-  }
-  return { removed: count, failures }
 }
 
 export function reconcileSessionEvents(events: SessionEvent[], startSeq = events.reduce((m, e) => Math.max(m, e.seq), 0) + 1): SessionEvent[] {

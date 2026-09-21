@@ -22,20 +22,20 @@ function createV10Database(): DatabaseSync {
   return conn
 }
 
-describe('schema v11-v13 turn context, execution config, and routing index migrations', () => {
+describe('schema v11-v16 turn context, execution config, and routing index migrations', () => {
   it('当前 schema version 与最新 DDL 保持一致', () => {
-    expect(DB_SCHEMA_VERSION).toBe(13)
+    expect(DB_SCHEMA_VERSION).toBe(17)
   })
 
   it('将 v10 的 turn context 字段升级到 v11 并更新 metadata', () => {
     const conn = createV10Database()
     runMigrations(conn)
 
-    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('13')
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('17')
     expect((conn.prepare('PRAGMA table_info(turns)').all() as Array<{ name: string }>).map((column) => column.name))
       .toContain('exclude_message_ids_json')
     expect(() => runMigrations(conn)).not.toThrow()
-    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('13')
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('17')
     conn.close()
   })
 
@@ -45,7 +45,7 @@ describe('schema v11-v13 turn context, execution config, and routing index migra
     conn.exec(MIGRATION_V11_TURN_CONTEXT_SQL)
 
     expect(() => runMigrations(conn)).not.toThrow()
-    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('13')
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('17')
     expect((conn.prepare('PRAGMA table_info(turns)').all() as Array<{ name: string }>).filter((column) => column.name === 'exclude_message_ids_json')).toHaveLength(1)
     conn.close()
   })
@@ -57,7 +57,7 @@ describe('schema v11-v13 turn context, execution config, and routing index migra
 
     runMigrations(conn)
 
-    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('13')
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('17')
     expect((conn.prepare('PRAGMA table_info(turns)').all() as Array<{ name: string }>).map((column) => column.name)).toContain('execution_config_json')
     expect(() => runMigrations(conn)).not.toThrow()
     conn.close()
@@ -72,18 +72,18 @@ describe('schema v11-v13 turn context, execution config, and routing index migra
 
     runMigrations(conn)
 
-    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('13')
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('17')
     const indexNames = (conn.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'turns'").all() as Array<{ name: string }>).map((index) => index.name)
     expect(indexNames).toContain('idx_turns_session_assistant_state')
     expect(indexNames).toContain('idx_turns_session_user')
     conn.close()
   })
 
-  it('拒绝高于 v13 的数据库', () => {
+  it('拒绝高于 v17 的数据库', () => {
     const conn = new DatabaseSync(':memory:')
     conn.exec(`
       CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
-      INSERT INTO schema_meta (key, value) VALUES ('schema_version', '14');
+      INSERT INTO schema_meta (key, value) VALUES ('schema_version', '18');
     `)
     expect(() => runMigrations(conn)).toThrow(DatabaseUpgradeRequiredError)
     conn.close()

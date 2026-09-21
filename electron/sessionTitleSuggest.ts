@@ -1,4 +1,3 @@
-import type { WebContents } from 'electron'
 import Anthropic from '@anthropic-ai/sdk'
 import { createAnthropicClient } from './anthropicClientFactory'
 import { readAppLocale } from './appIpc'
@@ -104,14 +103,15 @@ function normalizeSuggestedTitle(raw: string): string {
 
 export function scheduleSessionTitleSuggestion(args: {
   db: AppDatabase
-  sender: WebContents
+  /** 标题落库完成后的界面通知出口；不传即 no-op（落库照常）。 */
+  onTitleGenerated?: (session: Session) => void
   sessionId: string
   model: string
   baseUrl?: string
   messagesForApi: Anthropic.MessageParam[]
   getApiKey: () => Promise<string | null>
 }): void {
-  const { db, sender, sessionId, model, baseUrl, messagesForApi, getApiKey } = args
+  const { db, onTitleGenerated, sessionId, model, baseUrl, messagesForApi, getApiKey } = args
   const locale = readAppLocale(db)
 
   const cur = getSession(db, sessionId)
@@ -175,7 +175,7 @@ export function scheduleSessionTitleSuggestion(args: {
         metadata: { ...again.metadata, [SESSION_META_TITLE_GENERATED]: true }
       })
       if (updated) {
-        sender.send('session:title-generated', { session: updated })
+        onTitleGenerated?.(updated)
       }
     } catch {
       // 静默忽略
@@ -192,12 +192,12 @@ export function scheduleSessionTitleSuggestion(args: {
  */
 export function scheduleSessionTitleOpenBackfillIfNeeded(args: {
   db: AppDatabase
-  sender: WebContents
+  onTitleGenerated?: (session: Session) => void
   sessionId: string
   baseUrl?: string
   getApiKey: () => Promise<string | null>
 }): Session | undefined {
-  const { db, sender, sessionId, baseUrl, getApiKey } = args
+  const { db, onTitleGenerated, sessionId, baseUrl, getApiKey } = args
   const locale = readAppLocale(db)
 
   const session = getSession(db, sessionId)
@@ -239,7 +239,7 @@ export function scheduleSessionTitleOpenBackfillIfNeeded(args: {
 
   scheduleSessionTitleSuggestion({
     db,
-    sender,
+    onTitleGenerated,
     sessionId,
     model: session.model,
     baseUrl,

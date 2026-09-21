@@ -43,10 +43,11 @@ export function normalizeTurnExecutionConfig(config: TurnExecutionConfig): TurnE
     ...(config.model?.trim() ? { model: config.model.trim() } : {}),
     ...(Number.isFinite(config.maximumContext) && config.maximumContext! > 0 ? { maximumContext: config.maximumContext } : {}),
     ...(config.llmServiceId?.trim() ? { llmServiceId: config.llmServiceId.trim() } : {}),
-    ...(config.baseUrl?.trim() ? { baseUrl: config.baseUrl.trim().replace(/\/+$/, '') } : {}),
     ...(config.system?.trim() ? { system: config.system.trim() } : {}),
     ...(config.skillFragments?.length ? { skillFragments: config.skillFragments.filter((fragment) => typeof fragment === 'string' && fragment.trim()).map((fragment) => fragment.trim()) } : {}),
     ...(config.maxTokens !== undefined ? { maxTokens: config.maxTokens } : {}),
+    ...(config.thinkingEffort !== undefined ? { thinkingEffort: config.thinkingEffort } : {}),
+    ...(config.requestedThinkingEffort !== undefined ? { requestedThinkingEffort: config.requestedThinkingEffort } : {}),
     ...(config.enableThinking !== undefined ? { enableThinking: config.enableThinking } : {}),
     ...(config.locale?.trim() ? { locale: config.locale.trim() } : {}),
     ...(config.projectMemoryEnabled !== undefined ? { projectMemoryEnabled: config.projectMemoryEnabled } : {}),
@@ -86,8 +87,8 @@ export class TurnCoordinator {
     let userMessage: Message | undefined
     if (intent.mode === 'reuse-user') {
       userMessage = this.storage.getMessage(intent.userMessageId)
-      if (!userMessage || userMessage.sessionId !== intent.sessionId) throw new Error('reuse user message session mismatch')
-      if (userMessage.role !== 'user' || (userMessage.status !== 'sent' && userMessage.status !== 'queued')) throw new Error('reuse target must be a user message')
+      if (!userMessage || userMessage.sessionId !== intent.sessionId) throw new Error('TURN_REUSE_SESSION_MISMATCH')
+      if (userMessage.role !== 'user' || (userMessage.status !== 'sent' && userMessage.status !== 'queued')) throw new Error('TURN_REUSE_TARGET_NOT_USER')
       if (userMessage.status === 'queued') {
         const turnId = this.deps.id()
         const assistantId = this.deps.id()

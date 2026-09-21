@@ -24,6 +24,8 @@ import { UTF8_CONTRACT } from '../processOutput/contracts'
 import { createChildStreamDecoder } from '../processOutput/decodeChildOutput'
 import { processTreeKiller, runCommandWithTimeout } from '../spawnUtil'
 import { ProcessSupervisor } from '../shell/processSupervisor'
+import { snapshotEnvForLog } from '../shell/envSnapshot'
+import { logAgentEvent } from '../agentLogger/agentLogger'
 import {
   classifyRipgrepSpawnError,
   inspectRipgrepBinary,
@@ -34,15 +36,18 @@ import { runLarkCliExecutor } from './runLarkCliExecutor'
 import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
 import { wechatReplyExecutor, wechatSendExecutor } from './wechatExecutors'
 import { browserExecutor } from './browserExecutor'
-import { browserDetectExecutor } from './browserDetectExecutor'
 import { runShellExecutor } from './runShellExecutor'
 import { TypedToolRegistry } from './plannedToolRegistry'
 import { runShellRegisteredTool } from './runShellRegisteredTool'
 import { skillsReadTool } from './skillsReadTool'
 import { historyReadTool } from './historyTool'
+import { toolkitFindTool, toolkitCallTool } from '../capabilities/toolkitTool'
+import '../capabilities/registerBuiltinCapabilities'
 import { listWorkDirsExecutor, switchWorkDirExecutor } from './workDirExecutors'
 import { switchSessionExecutor } from './remoteSessionExecutors'
 import { READ_FILE_MAX_CHARS } from '../../src/shared/toolResultLimits'
+import { ErrorCodes } from '../../src/shared/errorCodes'
+import { buildEscapeLayerVariants, diagnoseMissingOldString } from './editDiagnosis'
 import type { FileState } from '../fileStateCache'
 import { sliceFileTailLines } from '../../src/shared/readFileRange'
 import {
@@ -56,7 +61,7 @@ function recordReadFileCache(
   cache: ToolExecutionContext['fileStateCache'],
   abs: string,
   mtimeMs: number,
-  opts: { content: string; truncated: boolean; rangeRequested: boolean }
+  opts: { content: string; truncated: boolean; rangeRequested: boolean; size: number }
 ): void {
   const prev = cache.get(abs)
   if (opts.rangeRequested) {
@@ -80,7 +85,8 @@ function recordReadFileCache(
     mtime: mtimeMs,
     readAt: Date.now(),
     isPartial: opts.truncated,
-    isRangeView: false
+    isRangeView: false,
+    size: opts.size
   })
 }
 
@@ -89,7 +95,8 @@ async function assertDiskMatchesReadCache(
   stCache: FileState,
   cur: string,
   op: AbortSignal,
-  errorMessage: string
+  errorMessage: string,
+  cache: ToolExecutionContext['fileStateCache']
 ): Promise<ToolExecutorResult | null> {
   if (stCache.isRangeView) {
     throwIfAborted(op)
@@ -100,11 +107,14 @@ async function assertDiskMatchesReadCache(
       return null
     }
     if (stNow.mtimeMs !== stCache.mtime) {
+      // 评审 P1-1：报「外部修改」即失效缓存，保证随后的重读绕过去重提示拿到真实内容（自愈出口）
+      cache.invalidate(abs)
       return { success: false, error: errorMessage }
     }
     return null
   }
   if (cur !== stCache.content) {
+    cache.invalidate(abs)
     return { success: false, error: errorMessage }
   }
   return null
@@ -225,12 +235,35 @@ export const readFileExecutor: ToolExecutor = {
       const hasLimit = limitRaw !== undefined && limitRaw !== null
       const rangeRequested = hasTail || hasOffset || hasLimit
 
+      // P1-5（agent-context-token-cost-optimization-plan §5.5）：会话内已完整读取过且文件未变化
+      // （mtime 一致）时，不再重发全文，只返回提示——实测 read_file 重复率 43%（69 读 / 39 路径）。
+      // 只提示不拒绝：需要特定区间传 offset/limit；需要强制重读全文传 offset=0。
+      // 评审 P1-1：mtime 单判据会被 FAT32 2s 精度 / 同步软件保留时间戳绕过（内容已变却提示
+      // 「已在上下文」→ edit 护栏报外部修改 → 重读又命中提示，不可自愈），故加 size 双重校验。
+      if (!rangeRequested) {
+        const cached = ctx.fileStateCache.get(abs)
+        if (cached && !cached.isPartial && !cached.isRangeView && cached.mtime === st.mtimeMs && (cached.size === undefined || cached.size === st.size)) {
+          return {
+            success: true,
+            data: {
+              path: rel,
+              content: '',
+              unchangedSinceLastRead: true,
+              byteSize: st.size,
+              note: '该文件已在本次会话中完整读取且此后未变化，正文不再重复返回。如需特定区间请传 offset/limit；如需强制重读全文请传 offset=0。'
+            },
+            duration: Date.now() - started
+          }
+        }
+      }
+
       // Meta：大文件且无范围参数
       if (!rangeRequested && st.size > READ_FILE_MAX_CHARS) {
         recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
           content: '',
           truncated: true,
-          rangeRequested: false
+          rangeRequested: false,
+          size: st.size
         })
         return {
           success: true,
@@ -264,7 +297,8 @@ export const readFileExecutor: ToolExecutor = {
           recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
             content: limited.content,
             truncated,
-            rangeRequested: true
+            rangeRequested: true,
+            size: st.size
           })
           return {
             success: true,
@@ -299,7 +333,8 @@ export const readFileExecutor: ToolExecutor = {
           recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
             content: limited.content,
             truncated,
-            rangeRequested: true
+            rangeRequested: true,
+            size: st.size
           })
           const data: Record<string, unknown> = {
             path: rel,
@@ -330,7 +365,8 @@ export const readFileExecutor: ToolExecutor = {
           recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
             content: '',
             truncated: true,
-            rangeRequested: false
+            rangeRequested: false,
+            size: st.size
           })
           return {
             success: true,
@@ -349,7 +385,8 @@ export const readFileExecutor: ToolExecutor = {
         recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
           content: text,
           truncated: false,
-          rangeRequested: false
+          rangeRequested: false,
+          size: st.size
         })
         return {
           success: true,
@@ -488,8 +525,27 @@ function countOccurrencesWithEolTolerance(hay: string, needle: string): number {
   return countOccurrences(normalizeLineEndingsForMatch(hay), normalizeLineEndingsForMatch(needle))
 }
 
+/**
+ * P1-C：转义归一后唯一命中回退（§5.3，默认关闭，入参 tolerate_escape_layer 显式开启）。
+ * 仅在有限变体集（反斜杠 run ±1、字面 \n ↔ 真实换行）中「恰好一个变体、且该变体在
+ * 文件中恰好命中一次」时返回该变体；否则返回 null，退回诊断路径。不做任何模糊匹配。
+ */
+function applyEditWithEscapeTolerance(
+  cur: string,
+  oldS: string
+): { variant: string; kind: 'escape-layer' | 'literal-newline'; backslashRunDelta: number } | null {
+  const curNorm = normalizeLineEndingsForMatch(cur)
+  const oldNorm = normalizeLineEndingsForMatch(oldS)
+  const hits = buildEscapeLayerVariants(oldNorm)
+    .map((v) => ({ variant: v.text, kind: v.kind, backslashRunDelta: v.backslashRunDelta }))
+    .filter((v) => countOccurrences(curNorm, v.variant) === 1)
+  if (hits.length !== 1) return null
+  return hits[0]
+}
+
 import { toolErrMissingPath } from '../toolInputGuards'
 import { extractPathField } from '../toolPathField'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 
 const ERR_FILE_NOT_READ_FOR_EDIT =
   '文件尚未在本会话中通过 read_file 读取，请先读取后再编辑'
@@ -581,48 +637,77 @@ export const editFileExecutor: ToolExecutor = {
           stCache,
           cur,
           op,
-          '文件已被外部程序修改，请重新读取后再编辑'
+          '文件已被外部程序修改，请重新读取后再编辑',
+          ctx.fileStateCache
         )
         if (mismatch) return { ...mismatch, duration: Date.now() - started }
       }
       const occ = countOccurrencesWithEolTolerance(cur, oldS)
-      if (occ === 0 && oldS !== '') {
-        return { success: false, error: '未找到待替换的字符串', duration: Date.now() - started }
-      }
-      if (!replaceAll && oldS !== '' && occ > 1) {
-        return { success: false, error: '找到多个匹配，请提供更精确的上下文或使用 replace_all', duration: Date.now() - started }
-      }
-      const next = applyEditWithEolTolerance(cur, oldS, newS, replaceAll)
-      throwIfAborted(op)
-      if (existed && ctx.toolsConfig.fileCheckpointingEnabled) {
+      // 写路径（检查点备份 + 原子写 + 身份校验）对正常编辑与 P1-C 回退共用；
+      // 护栏次序保持不变：backupIfEnabled → safeAtomicWrite → recordFileStateAfterWrite。
+      const applyAndWrite = async (oldForEdit: string, extraData?: Record<string, unknown>): Promise<ToolExecutorResult> => {
+        const next = applyEditWithEolTolerance(cur, oldForEdit, newS, replaceAll)
+        throwIfAborted(op)
+        if (existed && ctx.toolsConfig.fileCheckpointingEnabled) {
+          try {
+            await backupIfEnabled(ctx, rel.replace(/\\/g, '/'), Buffer.from(cur, 'utf8'), op)
+          } catch (e) {
+            const ab = fileToolAbortResult(op, '编辑超时', started)
+            if (ab) return ab
+            throw e
+          }
+        }
+        throwIfAborted(op)
         try {
-          await backupIfEnabled(ctx, rel.replace(/\\/g, '/'), Buffer.from(cur, 'utf8'), op)
+          await safeAtomicWrite({
+            targetPath: abs,
+            parentReal: writeTarget.parentReal,
+            body: next,
+            expectedIdentity,
+            signal: op
+          })
         } catch (e) {
           const ab = fileToolAbortResult(op, '编辑超时', started)
           if (ab) return ab
           throw e
         }
+        await recordFileStateAfterWrite(ctx.fileStateCache, abs, next)
+        return {
+          success: true,
+          data: { path: rel, bytesWritten: Buffer.byteLength(next, 'utf8'), ...extraData },
+          duration: Date.now() - started
+        }
       }
-      throwIfAborted(op)
-      try {
-        await safeAtomicWrite({
-          targetPath: abs,
-          parentReal: writeTarget.parentReal,
-          body: next,
-          expectedIdentity,
-          signal: op
-        })
-      } catch (e) {
-        const ab = fileToolAbortResult(op, '编辑超时', started)
-        if (ab) return ab
-        throw e
+      // P1-C：显式开启 tolerate_escape_layer 时，先尝试转义归一后的唯一命中回退；
+      // 恰好一个变体命中才执行，其余情况一律走诊断分支，匹配语义保持确定性。
+      if (occ === 0 && oldS !== '' && input.tolerate_escape_layer === true) {
+        const hit = applyEditWithEscapeTolerance(cur, oldS)
+        if (hit) {
+          const submitRun = (normalizeLineEndingsForMatch(oldS).match(/\\+/g) ?? []).reduce((n, r) => n + r.length, 0)
+          return await applyAndWrite(hit.variant, {
+            matchedVariant: { kind: hit.kind, backslashRunDelta: hit.backslashRunDelta },
+            notice: hit.kind === 'escape-layer'
+              ? `已按转义层归一匹配（提交 ${submitRun} 个反斜杠，文件 ${submitRun + hit.backslashRunDelta} 个）`
+              : '已按字面换行归一匹配（字面 \\n 与真实换行视为等价）'
+          })
+        }
       }
-      await recordFileStateAfterWrite(ctx.fileStateCache, abs, next)
-      return {
-        success: true,
-        data: { path: rel, bytesWritten: Buffer.byteLength(next, 'utf8') },
-        duration: Date.now() - started
+      if (occ === 0 && oldS !== '') {
+        // P0-A/P0-B/P1-E：结构化诊断 + 可用性预检后的建议片段 + 恢复路径提示（§5.1/§5.2/§5.5）。
+        // error 为稳定错误码（投影层原样保留），userMessage 保持原文案以兼容展示层。
+        const diagnosis = diagnoseMissingOldString(cur, oldS)
+        return {
+          success: false,
+          error: ErrorCodes.EDIT_OLD_STRING_NOT_FOUND,
+          userMessage: '未找到待替换的字符串',
+          data: { diagnosis },
+          duration: Date.now() - started
+        }
       }
+      if (!replaceAll && oldS !== '' && occ > 1) {
+        return { success: false, error: '找到多个匹配，请提供更精确的上下文或使用 replace_all', duration: Date.now() - started }
+      }
+      return await applyAndWrite(oldS)
     } finally {
       dispose()
     }
@@ -676,7 +761,8 @@ export const writeFileExecutor: ToolExecutor = {
             stCache,
             cur,
             op,
-            '文件已被外部程序修改，请重新读取后再写入'
+            '文件已被外部程序修改，请重新读取后再写入',
+            ctx.fileStateCache
           )
           if (mismatch) return { ...mismatch, duration: Date.now() - started }
         }
@@ -1138,7 +1224,7 @@ export const grepExecutor: ToolExecutor = {
     }
     const text = await grepWithRg(resolved.path, ctx.workDir, absSearch, pattern, gargs, timeoutMs, ctx.signal, (m) =>
       ctx.sendProgress('grep', m)
-    )
+    , ctx.grepSpawnProcess)
     if (text.kind === 'success' || text.kind === 'no_match') {
       return { success: true, data: { output: text.output }, duration: Date.now() - started }
     }
@@ -1220,6 +1306,25 @@ export const runScriptExecutor: ToolExecutor = {
     let stdout = ''
     let stderr = ''
     let timedOut = false
+    // P0-D3 组 1（§5.4.3 缺口）：run_script 此前没有执行期埋点，"成功路径"无事后证据。
+    // 事件字段与 shell.exec.* 对齐；code 传原始值、指纹化由投影层负责（评审观察项 5，
+    // 与 run_shell 的 command 同模式）；env 只留键计数与哈希（组 5）。
+    const scriptBaseLog = {
+      requestId: ctx.requestId,
+      sessionId: ctx.sessionId,
+      toolUseId: ctx.toolUseId,
+      code,
+      interpreter: path.basename(interpreter.command),
+      timeoutSec,
+      envKeyCount: 0,
+      envKeysSha256: '',
+      envEntriesSha256: ''
+    }
+    const envSnapshot = snapshotEnvForLog(env)
+    scriptBaseLog.envKeyCount = envSnapshot.keyCount
+    scriptBaseLog.envKeysSha256 = envSnapshot.keysSha256
+    scriptBaseLog.envEntriesSha256 = envSnapshot.entriesSha256
+    logAgentEvent('info', 'script.exec.start', scriptBaseLog)
     return await new Promise((resolve) => {
       const proc = spawn(py, ['-c', code], {
         cwd: ctx.workDir,
@@ -1227,6 +1332,7 @@ export const runScriptExecutor: ToolExecutor = {
         windowsHide: true,
         shell: false
       })
+      logAgentEvent('info', 'script.exec.spawned', { ...scriptBaseLog, pid: proc.pid ?? null })
       const supervisor = new ProcessSupervisor(proc, processTreeKiller)
       const onDataOut = (b: Buffer) => {
         stdout += stdoutDecoder.write(b)
@@ -1250,6 +1356,15 @@ export const runScriptExecutor: ToolExecutor = {
       proc.on('error', (err) => {
         clearTimeout(killTimer)
         ctx.signal.removeEventListener('abort', onAbort)
+        logAgentEvent('error', 'script.exec.finish', {
+          ...scriptBaseLog,
+          pid: proc.pid ?? null,
+          exitCode: null,
+          status: 'spawn_failed',
+          success: false,
+          error: 'SCRIPT_SPAWN_ERROR',
+          durationMs: Date.now() - started
+        })
         resolve({
           success: false,
           error: 'SCRIPT_SPAWN_ERROR',
@@ -1274,6 +1389,24 @@ export const runScriptExecutor: ToolExecutor = {
           status,
           terminationReason: ctx.signal.aborted ? 'user_cancel' : timedOut ? 'timeout' : signal ? 'external_signal' : 'process_exit'
         }
+        // P0-D3 组 1：finish 与 shell.exec.finish 字段对齐（exitCode/status/字节口径/时长），
+        // 文本正文与秘密不落盘（allowlist 之外的 stdout/stderr 会被丢弃）。
+        logAgentEvent(status === 'succeeded' ? 'info' : 'warn', 'script.exec.finish', {
+          ...scriptBaseLog,
+          pid: proc.pid ?? null,
+          exitCode: signal ? null : code,
+          signal: signal ?? undefined,
+          status,
+          success: status === 'succeeded',
+          interrupted: ctx.signal.aborted,
+          timedOut,
+          cancelled: ctx.signal.aborted,
+          stdoutBytes: Buffer.byteLength(stdoutSafe.text, 'utf8'),
+          stderrBytes: Buffer.byteLength(stderrSafe.text, 'utf8'),
+          stdoutRedacted: stdoutSafe.redacted,
+          stderrRedacted: stderrSafe.redacted,
+          durationMs: Date.now() - started
+        })
         if (ctx.signal.aborted) {
           resolve({ success: false, error: 'SCRIPT_CANCELLED', userMessage: '用户取消执行', data, duration: Date.now() - started })
           return
@@ -1299,35 +1432,46 @@ export const runScriptExecutor: ToolExecutor = {
   }
 }
 
-const registry = new TypedToolRegistry()
-registry.register(runShellRegisteredTool)
-registry.register(skillsReadTool)
-registry.register(historyReadTool)
-for (const executor of [
-  readFileExecutor,
-  listDirectoryExecutor,
-  editFileExecutor,
-  writeFileExecutor,
-  grepExecutor,
-  runScriptExecutor,
-  runLarkCliExecutor,
-  readFeishuAttachmentExecutor,
-  wechatReplyExecutor,
-  wechatSendExecutor,
-  browserExecutor,
-  browserDetectExecutor,
-  runShellExecutor,
-  listWorkDirsExecutor,
-  switchWorkDirExecutor,
-  switchSessionExecutor
-]) {
-  registry.registerLegacyExecutor(executor)
+/**
+ * 内置工具注册表(A2,偏差 18):registry 随 runtime 实例走——
+ * 工厂每次构建全新 registry(工具定义与 executor 为模块级无状态纯函数,可安全共享引用)。
+ */
+export function createBuiltinToolRegistry(): TypedToolRegistry {
+  const registry = new TypedToolRegistry()
+  registry.register(runShellRegisteredTool)
+  registry.register(skillsReadTool)
+  registry.register(historyReadTool)
+  // toolkit 网关：能力集合的两个稳定工具（browser_detect 已收编为 env.browserDetect 能力）
+  registry.register(toolkitFindTool)
+  registry.register(toolkitCallTool)
+  for (const executor of [
+    readFileExecutor,
+    listDirectoryExecutor,
+    editFileExecutor,
+    writeFileExecutor,
+    grepExecutor,
+    runScriptExecutor,
+    runLarkCliExecutor,
+    readFeishuAttachmentExecutor,
+    wechatReplyExecutor,
+    wechatSendExecutor,
+    browserExecutor,
+    runShellExecutor,
+    listWorkDirsExecutor,
+    switchWorkDirExecutor,
+    switchSessionExecutor
+  ]) {
+    registry.registerLegacyExecutor(executor)
+  }
+  return registry
 }
 
+/** @deprecated 兼容转发(偏差 18,一个发布周期,P8 评估删除):经默认 runtime 实例。 */
 export function getToolExecutor(name: string): ToolExecutor | undefined {
-  return registry.getLegacyExecutor(name)
+  return getDefaultAgentRuntime().builtinRegistry.getLegacyExecutor(name) as ToolExecutor | undefined
 }
 
-export function getRegisteredTool(name: string) {
-  return registry.get(name)
+/** @deprecated 兼容转发(偏差 18)。 */
+export function getRegisteredTool(name: string): import('./plannedToolRegistry').RegisteredTool | undefined {
+  return getDefaultAgentRuntime().builtinRegistry.get(name) as import('./plannedToolRegistry').RegisteredTool | undefined
 }

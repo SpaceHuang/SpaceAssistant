@@ -76,6 +76,11 @@ async function downloadArchiveOnce(url, fetchImpl) {
   throw new Error('ripgrep redirect limit exceeded')
 }
 
+// 仅瞬时故障值得重试；重定向超限、不可信主机、超限等永久错误重试只会放大请求次数。
+function isTransientDownloadError(error) {
+  return error instanceof TypeError || /timed out|abort/i.test(String(error?.message))
+}
+
 export async function downloadArchive(url, fetchImpl = fetch) {
   let lastError
   for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt += 1) {
@@ -83,16 +88,18 @@ export async function downloadArchive(url, fetchImpl = fetch) {
       return await downloadArchiveOnce(url, fetchImpl)
     } catch (error) {
       lastError = error
-      // 安全策略拒绝类错误是确定性的，重试会重复请求并削弱重定向上限。
-      if (error instanceof Error && /redirect limit|untrusted ripgrep redirect|redirect missing location/.test(error.message)) throw error
+      if (!isTransientDownloadError(error)) throw error
       if (attempt < DOWNLOAD_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** (attempt - 1)))
     }
   }
   throw lastError
 }
 export function safeJoin(base, relative) {
-  const resolved = path.resolve(base, relative)
-  if (resolved !== base && !resolved.startsWith(`${base}${path.sep}`)) throw new Error(`unsafe archive path: ${relative}`)
+  // base 必须先归一化：Windows 上 resolve 会补盘符（/tmp/extract → E:	mp\extract），
+  // 未归一化的原始 base 会让前缀判断必假、合法相对路径被误判为穿越
+  const normalizedBase = path.resolve(base)
+  const resolved = path.resolve(normalizedBase, relative)
+  if (resolved !== normalizedBase && !resolved.startsWith(`${normalizedBase}${path.sep}`)) throw new Error(`unsafe archive path: ${relative}`)
   return resolved
 }
 

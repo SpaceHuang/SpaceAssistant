@@ -8,7 +8,9 @@ import {
 import type { ChatImageAttachment, Message, ToolCallRecord } from './domainTypes'
 import {
   OVERSIZED_TOOL_RESULT_PLACEHOLDER_PREFIX,
-  formatOversizedToolResultPlaceholder
+  formatOversizedToolResultPlaceholder,
+  TRUNCATED_TOOL_RESULT_MARKER_PREFIX,
+  isTruncatedToolResultContent
 } from './oversizedToolResult'
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from './toolResultLimits'
 import { SYNTHETIC_TOOL_RESULT_PLACEHOLDER } from './toolResultPairing'
@@ -305,9 +307,10 @@ describe('buildToolResultBlock', () => {
     )
     expect(block.isError).toBe(false)
     expect(block.content.length).toBeLessThanOrEqual(MAX_TOOL_RESULT_CONTENT_CHARS)
-    expect(block.content).toBe(
-      formatOversizedToolResultPlaceholder(data.length, MAX_TOOL_RESULT_CONTENT_CHARS)
-    )
+    // P1-4：中段截断保留头尾，不再整体替换为占位符
+    expect(block.content).toContain(TRUNCATED_TOOL_RESULT_MARKER_PREFIX)
+    expect(block.content).toContain('xxxx')
+    expect(isTruncatedToolResultContent(block.content)).toBe(true)
   })
 
   it('compacts oversized JSON-stringified object data', () => {
@@ -317,7 +320,7 @@ describe('buildToolResultBlock', () => {
     )
     expect(block.isError).toBe(false)
     expect(block.content.length).toBeLessThanOrEqual(MAX_TOOL_RESULT_CONTENT_CHARS)
-    expect(block.content.startsWith(OVERSIZED_TOOL_RESULT_PLACEHOLDER_PREFIX)).toBe(true)
+    expect(isTruncatedToolResultContent(block.content)).toBe(true)
   })
 
   it('compacts oversized error content while keeping isError', () => {
@@ -327,7 +330,7 @@ describe('buildToolResultBlock', () => {
     )
     expect(block.isError).toBe(true)
     expect(block.content.length).toBeLessThanOrEqual(MAX_TOOL_RESULT_CONTENT_CHARS)
-    expect(block.content.startsWith(OVERSIZED_TOOL_RESULT_PLACEHOLDER_PREFIX)).toBe(true)
+    expect(isTruncatedToolResultContent(block.content)).toBe(true)
   })
 })
 
@@ -340,7 +343,8 @@ describe('buildToolResultBlock oversized callback', () => {
     })
     expect(events).toHaveLength(1)
     expect(events[0]!.originalLength).toBe(data.length)
-    expect(events[0]!.compactedLength).toBeLessThan(500)
+    expect(events[0]!.compactedLength).toBeLessThanOrEqual(MAX_TOOL_RESULT_CONTENT_CHARS)
+    expect(events[0]!.compactedLength).toBeLessThan(data.length)
   })
 
   it('does not invoke callback for short content', () => {
@@ -370,7 +374,7 @@ describe('buildClaudeToolChatMessages oversized callback', () => {
       expect.objectContaining({ toolUseId: 'toolu_big', originalLength: data.length })
     ])
     const resultBlocks = api[2]!.content as Array<{ content: string }>
-    expect(resultBlocks[0]!.content.startsWith(OVERSIZED_TOOL_RESULT_PLACEHOLDER_PREFIX)).toBe(true)
+    expect(isTruncatedToolResultContent(resultBlocks[0]!.content)).toBe(true)
   })
 })
 

@@ -1,8 +1,17 @@
+import fs from 'fs'
 import path from 'path'
 
 export interface ToolchainResolution {
   pathEntries: string[]
   sources: string[]
+}
+
+export interface ResolveNodeToolchainOptions {
+  /**
+   * 候选目录存在性检查（P2-G/D8）：注入的 nodejs/npm 目录此前无条件推到 PATH 最前，
+   * 实测三者常不存在；生产默认 fs.existsSync 过滤。已有 PATH 条目不受此过滤。
+   */
+  exists?: (dir: string) => boolean
 }
 
 /**
@@ -19,8 +28,10 @@ function pathForPlatform(platform: NodeJS.Platform): path.PlatformPath {
  */
 export function resolveNodeToolchainPath(
   env: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  options: ResolveNodeToolchainOptions = {}
 ): ToolchainResolution {
+  const exists = options.exists ?? ((dir: string) => fs.existsSync(dir))
   const pathApi = pathForPlatform(platform)
   const delimiter = pathApi.delimiter
   const existing = [env.PATH, env.Path, env.path]
@@ -39,6 +50,8 @@ export function resolveNodeToolchainPath(
   const sources: string[] = []
   for (const [source, value] of candidates) {
     if (!value || pathEntries.includes(value)) continue
+    // P2-G(a)（D8）：不存在的候选目录不注入 PATH，也不记入 sources（保持两数组平行）
+    if (!exists(value)) continue
     pathEntries.push(value)
     sources.push(source)
   }

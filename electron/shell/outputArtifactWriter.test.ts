@@ -14,6 +14,23 @@ describe('OutputArtifactWriter', () => {
     await writer.close()
     expect(await fs.readFile(file, 'utf8')).toBe('你')
   })
+
+  it.each([
+    ['a', 1],
+    ['é', 2],
+    ['你', 3],
+    ['😀', 4]
+  ])('keeps a complete UTF-8 character (%s) when the limit is exact', async (text, bytes) => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'utf8-artifact-exact-'))
+    const file = path.join(dir, 'output.log')
+    const writer = new OutputArtifactWriter(file, bytes)
+    await writer.open()
+    writer.append(`${text}tail`)
+    const result = await writer.close()
+
+    expect(result.bytes).toBe(bytes)
+    expect(await fs.readFile(file, 'utf8')).toBe(text)
+  })
   afterEach(() => vi.restoreAllMocks())
 
   it('按顺序增量写入并限制 artifact 字节数', async () => {

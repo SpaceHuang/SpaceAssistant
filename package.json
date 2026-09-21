@@ -1,6 +1,6 @@
 {
   "name": "spaceassistant",
-  "version": "0.1.8",
+  "version": "0.2.0",
   "private": true,
   "license": "Apache-2.0",
   "description": "Electron + React + TypeScript desktop assistant",
@@ -31,8 +31,12 @@
     "build:electron:incremental": "tsc -p tsconfig.electron.json",
     "build": "npm run build:tray-icons && npm run build:renderer && npm run build:electron",
     "typecheck:renderer": "tsc -p tsconfig.renderer.json --noEmit",
+    "typecheck:agent-core": "tsc -p packages/agent-core/tsconfig.json",
     "typecheck:shared": "node scripts/check-shared-config-types.mjs",
     "check:message-fact-ownership": "node scripts/check-message-fact-ownership.mjs",
+    "check:no-nul": "node scripts/check-no-nul.mjs",
+    "check:treesitter-wasm": "node scripts/check-treesitter-wasm.mjs",
+    "check:agent-core": "node scripts/check-agent-core-boundary.mjs",
     "probe:sqlite": "electron scripts/probe-node-sqlite.mjs",
     "probe:chat-ipc-transport": "electron scripts/probe-chat-ipc-transport.cjs",
     "probe:chat-business-ipc": "electron scripts/probe-chat-business-ipc.cjs",
@@ -76,12 +80,17 @@
     "react-redux": "^9.2.0",
     "react-syntax-highlighter": "^15.6.1",
     "react-virtuoso": "^4.12.8",
+    "recharts": "^3.10.1",
     "rehype-external-links": "^3.0.0",
     "rehype-katex": "^7.0.1",
     "rehype-stringify": "^10.0.1",
     "remark-gfm": "^4.0.0",
     "remark-math": "^6.0.0",
     "shiki": "^4.0.2",
+    "tree-sitter-bash": "0.25.1",
+    "tree-sitter-powershell": "0.26.4",
+    "tree-sitter-python": "0.25.0",
+    "web-tree-sitter": "0.27.0",
     "yaml": "^2.9.0",
     "zod": "^3.24.0"
   },
@@ -131,6 +140,14 @@
       {
         "from": "resources/tray",
         "to": "tray"
+      },
+      {
+        "from": "resources/tree-sitter",
+        "to": "tree-sitter"
+      },
+      {
+        "from": "src/renderer/i18n/resources",
+        "to": "i18n-resources"
       },
       {
         "from": "res/icons",
@@ -183,5 +200,16 @@
         "AppImage"
       ]
     }
-  }
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "sharp@0.33.5": true,
+    "@google/genai@1.52.0": true,
+    "bufferutil@4.1.0": true,
+    "protobufjs@7.6.5": true,
+    "electron@44.1.1": true
+  },
+  "workspaces": [
+    "packages/agent-core"
+  ]
 }

@@ -1,4 +1,4 @@
-import type { ContentFacts, ExecutionLane } from '../confirmation/types'
+import type { ConfirmAnswererKind, ContentFacts, ExecutionLane } from '../confirmation/types'
 
 export type MemoryEligibility = 'none' | 'session' | 'persistent'
 
@@ -10,12 +10,18 @@ export interface MemoryEligibilityResult {
 /**
  * 统一确认记忆资格：缓存读取、确认 UI 档位和缓存写入必须共享这层结果。
  * 该函数只基于事实和链路，不执行任何缓存读写，也不决定本次执行是否允许。
+ * 回答者维度（I3）：记忆只源于人类——answererKind 非 'user' 一律无资格。
  */
 export function deriveMemoryEligibility(
   facts: ContentFacts,
-  lane: ExecutionLane
+  lane: ExecutionLane,
+  answererKind: ConfirmAnswererKind = 'user'
 ): MemoryEligibilityResult {
   const reasons: string[] = []
+  if (answererKind !== 'user') {
+    reasons.push('non-human-answerer')
+    return { eligibility: 'none', reasons }
+  }
   if (facts.signals.some((signal) => signal.kind === 'script-network' || signal.kind === 'script-uncertified')) {
     reasons.push('script-network-or-uncertified')
     return { eligibility: 'none', reasons }

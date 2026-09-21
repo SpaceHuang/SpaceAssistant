@@ -14,7 +14,6 @@ export const BUILTIN_TOOL_METADATA: Record<string, ToolActionDescriptor> = {
   read_file: { toolName: 'read_file', actionClass: 'read', riskLevel: 'low', extractors: [] },
   grep: { toolName: 'grep', actionClass: 'read', riskLevel: 'low', extractors: [] },
   list_directory: { toolName: 'list_directory', actionClass: 'read', riskLevel: 'low', extractors: [] },
-  browser_detect: { toolName: 'browser_detect', actionClass: 'read', riskLevel: 'low', extractors: [] },
   read_feishu_attachment: {
     toolName: 'read_feishu_attachment',
     actionClass: 'read',
@@ -83,6 +82,20 @@ export const BUILTIN_TOOL_METADATA: Record<string, ToolActionDescriptor> = {
     actionClass: 'read',
     riskLevel: 'low',
     extractors: []
+  },
+  // toolkit 网关（需求 §5）：find 只读免确认；call 静态兜底取保守值，动态裁决走
+  // toolkit-capability 提取器信号（toolkit-read/toolkit-act + toolkit-capability:${id}）
+  'toolkit.find': {
+    toolName: 'toolkit.find',
+    actionClass: 'read',
+    riskLevel: 'low',
+    extractors: []
+  },
+  'toolkit.call': {
+    toolName: 'toolkit.call',
+    actionClass: 'execute',
+    riskLevel: 'high',
+    extractors: ['toolkit-capability']
   }
 }
 

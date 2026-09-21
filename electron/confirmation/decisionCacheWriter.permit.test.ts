@@ -29,6 +29,7 @@ describe('recordUserAnswerFromDecision', () => {
   }
   const args = (key: Decision['type'] extends never ? never : { kind: 'shell-command'; verb: string; level: 'exact' }) => ({
     db: {} as never, lane: 'desktop' as const, sessionId: 's', key, decision,
+    answererKind: 'user' as const,
     source: 'user-confirm' as const
   })
 

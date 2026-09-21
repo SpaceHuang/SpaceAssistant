@@ -484,6 +484,51 @@ describe('McpSettingsTab', () => {
     expect(payload.servers[0]!.enabledToolNames).toContain('hello')
   })
 
+  it('auto-selects discovered tools after a successful test when the whitelist is empty (degenerate branch)', async () => {
+    // 存在未命名草稿时无法整体落盘，测试成功只更新内存缓存——
+    // 此时白名单为空的已启用草稿应直接在草稿上自动勾选本次发现的全部工具。
+    const discovered = (name: string) => ({
+      serverId: 'server-1',
+      originalName: name,
+      mappedName: `mcp_new_${name}_12345678`,
+      description: '',
+      inputSchema: {},
+      discoveredAt: new Date().toISOString()
+    })
+    mcpList.mockResolvedValue({
+      servers: [
+        { ...SAVED_SERVER, enabled: true, enabledToolNames: [] },
+        { ...SAVED_SERVER, id: 'unnamed-1', name: '', enabledToolNames: [] }
+      ],
+      toolCaches: {}
+    })
+    mcpTestConnection.mockResolvedValue({
+      ok: true,
+      serverName: 'test-server',
+      protocolVersion: '2025-06-18',
+      tools: [discovered('alpha'), discovered('beta')],
+      skipped: []
+    })
+    renderTab()
+    await screen.findByText('GitHub')
+    const card = screen.getByText('GitHub').closest('.mcp-server-card') as HTMLElement
+    fireEvent.click(within(card).getByRole('button', { name: '编辑' }))
+    fireEvent.click(await screen.findByRole('button', { name: '测试连接' }))
+    await waitFor(() => expect(mcpTestConnection).toHaveBeenCalledTimes(1))
+
+    expect(await screen.findByText('alpha')).toBeTruthy()
+    const toolSwitches = document.querySelectorAll('.mcp-server-tools .ant-switch')
+    expect(toolSwitches.length).toBe(2)
+    for (const sw of toolSwitches) {
+      expect(sw.className).toContain('ant-switch-checked')
+    }
+    // 退化分支特征：不落盘、不走 refresh（后者由主进程负责回填）
+    expect(mcpSaveProfiles).not.toHaveBeenCalled()
+    expect(mcpRefreshTools).not.toHaveBeenCalled()
+    // 自动勾选对用户可见：以提示告知「已自动启用」，不静默改草稿
+    expect(await screen.findByText(/已自动启用 2 个新发现的工具/)).toBeTruthy()
+  })
+
   it('tests an unsaved server draft from the card with draft credentials', async () => {
     renderTab()
     fireEvent.click(await screen.findByRole('button', { name: '添加服务' }))
@@ -509,6 +554,23 @@ describe('McpSettingsTab', () => {
     fireEvent.click(await screen.findByRole('button', { name: '测试并刷新' }))
     await waitFor(() => expect(mcpRefreshTools).toHaveBeenCalled())
     expect(mcpTestConnection).not.toHaveBeenCalled()
+  })
+
+  it('shows an auto-enabled notice when refresh-tools backfills the whitelist', async () => {
+    mcpList.mockResolvedValue({
+      servers: [{ ...SAVED_SERVER, enabled: true, enabledToolNames: [] }],
+      toolCaches: {}
+    })
+    mcpRefreshTools.mockResolvedValue({
+      ok: true,
+      serverName: 'p',
+      tools: [],
+      autoEnabledToolCount: 2
+    })
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: '测试并刷新' }))
+    await waitFor(() => expect(mcpRefreshTools).toHaveBeenCalled())
+    expect(await screen.findByText(/已自动启用 2 个新发现的工具/)).toBeTruthy()
   })
 
   it('asks for confirmation when closing the editor with unsaved changes', async () => {

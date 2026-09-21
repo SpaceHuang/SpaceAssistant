@@ -71,6 +71,7 @@ export class WeChatImChannel extends ImChannel {
           sessionId: entry.sessionId,
           key: tier.key,
           memoryTiers: entry.memoryTiers,
+          answererKind: 'user',
           source: 'user-confirm'
         })
       },

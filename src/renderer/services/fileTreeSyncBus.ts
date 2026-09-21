@@ -6,7 +6,6 @@ const listeners = new Set<Listener>()
 let pendingPaths = new Set<string>()
 let pendingRefreshExpanded = false
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
-let ipcSubscribed = false
 
 const DEBOUNCE_MS = 400
 
@@ -38,10 +37,9 @@ export function subscribeFileTreeSync(listener: Listener): () => void {
   return () => listeners.delete(listener)
 }
 
-export function ensureFileTreeSyncIpc(): void {
-  if (ipcSubscribed) return
-  ipcSubscribed = true
-  window.api.fileOnTreeChanged(enqueue)
+// 偏差 11/3c:文件树失效统一经 invalidationService(scope:invalidated)驱动,旧 IPC 直连通道退役。
+export function applyFileTreeInvalidation(event: FileTreeChangeEvent): void {
+  enqueue(event)
 }
 
 /** @internal test helper */
@@ -53,7 +51,6 @@ export function resetFileTreeSyncBusForTests(): void {
     clearTimeout(debounceTimer)
     debounceTimer = null
   }
-  ipcSubscribed = false
 }
 
 /** @internal test helper */

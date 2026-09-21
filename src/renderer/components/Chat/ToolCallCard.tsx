@@ -1,8 +1,9 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from 'antd'
 import { ChevronRight } from 'lucide-react'
-import type { FileConfirmMode, ShellConfig, ShellTerminalScrollback, ToolCallRecord } from '../../../shared/domainTypes'
+import type { ShellConfig, ShellTerminalScrollback, ToolCallRecord } from '../../../shared/domainTypes'
 import { projectPersistedMcpResult, type McpResultDisplay } from '../../../shared/mcpToolResultDisplay'
+import { sanitizeCapabilityParamsForDisplay } from '../../../shared/capabilityParamSanitize'
 import type { ToolConfirmHandler } from '../../../shared/toolConfirm'
 import {
   hasShellOutput,
@@ -28,6 +29,7 @@ import { ToolRowIcon } from './ToolRowIcon'
 import { WriteConfirmCard } from './WriteConfirmCard'
 import { BrowserConfirmCard } from './BrowserConfirmCard'
 import { McpConfirmCard } from './McpConfirmCard'
+import { ToolkitConfirmCard } from './ToolkitConfirmCard'
 import { ShellConfirmCard } from './ShellConfirmCard'
 import { ScriptConfirmCard } from './ScriptConfirmCard'
 import { ScriptCodePreview, ScriptTimeoutMeta } from './ScriptCodePreview'
@@ -60,7 +62,6 @@ import type { ToolCallDisplaySummary } from '../../../shared/turnDisplayProtocol
 
 type Props = {
   record: ToolCallRecord
-  confirmMode: FileConfirmMode
   focus?: boolean
   workDir?: string
   messageId?: string
@@ -122,7 +123,6 @@ function defaultExpanded(record: ToolCallRecord): boolean {
 
 export const ToolCallCard = memo(function ToolCallCard({
   record: sourceRecord,
-  confirmMode,
   focus,
   workDir,
   messageId,
@@ -346,7 +346,10 @@ export const ToolCallCard = memo(function ToolCallCard({
   const paramPreview = useMemo(() => {
     if (!showDetail) return ''
     try {
-      return JSON.stringify(record.input, null, 2)
+      // toolkit.call 详情展开与确认卡同口径：凭据类入参只出存在性布尔（v2 评审 R1）
+      const isToolkit = record.toolName === 'toolkit.call' || record.toolName === 'toolkit_call'
+      const input = isToolkit ? sanitizeCapabilityParamsForDisplay(record.input) : record.input
+      return JSON.stringify(input, null, 2)
     } catch {
       return String(record.input)
     }
@@ -427,6 +430,22 @@ export const ToolCallCard = memo(function ToolCallCard({
   const earlySearchText = earlySearchFragmentId ? activeSearchTarget?.searchableText : undefined
 
   const mcpConfirming = Boolean(mcp && record.status === 'confirming')
+  // toolkit 网关确认卡：事件名为 compat 名（toolkit_call），双口径匹配
+  const toolkitConfirming =
+    (record.toolName === 'toolkit.call' || record.toolName === 'toolkit_call') && record.status === 'confirming'
+
+  // H1：审批 Agent 裁决路径（AgentChannel 无 waiter）——渲染只读「自动审批中」卡，
+  // 不出交互按钮与信任选项；无 pending 的信任写入已在 IPC 层拒绝（纵深防御第二层）
+  if (record.status === 'confirming' && record.autoAnswerer) {
+    return (
+      <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        <div className="sa-chat-inset-code" role="status">
+          {t('confirm.autoAnswering')}
+        </div>
+        {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
+      </div>
+    )
+  }
 
   if (mcpConfirming && onConfirm && confirmationReady !== false) {
     return (
@@ -437,10 +456,19 @@ export const ToolCallCard = memo(function ToolCallCard({
     )
   }
 
+  if (toolkitConfirming && onConfirm && confirmationReady !== false) {
+    return (
+      <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        <ToolkitConfirmCard record={record} onConfirm={onConfirm} />
+        {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
+      </div>
+    )
+  }
+
   if (writeConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
-        <WriteConfirmCard record={record} confirmMode={confirmMode} onConfirm={onConfirm} />
+        <WriteConfirmCard record={record} onConfirm={onConfirm} />
         {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
     )

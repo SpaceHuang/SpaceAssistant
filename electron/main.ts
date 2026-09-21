@@ -2,12 +2,16 @@ import path from 'path'
 import { mkdirSync } from 'fs'
 import http from 'http'
 import https from 'https'
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
 import { registerAppIpcHandlers } from './appIpc'
 import { registerClaudeStreamHandlers, type ClaudeChatCreateWithToolsPayload } from './claudeStreamHandlers'
 import { mergeWikiConfig, mergeToolsConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from './browser/browserConfigDb'
 import { readShellConfigFromDb } from './shell/shellConfigDb'
+import { registerButlerIpcHandlers } from './butler/butlerIpc'
+import { createDeliveryHub } from './driver/deliveryHub'
+import { ButlerTaskScheduler } from './butler/taskScheduler'
+import { runButlerTask, type ButlerInvokerDeps } from './butler/butlerInvoker'
 import { stagehandService } from './browser/stagehandService'
 import {
   autoStartFeishuEventIfNeeded,
@@ -25,21 +29,38 @@ import {
 import { getConfigValue, getDefaultDbPath, getMessage, getSession, listPersistedTurns, listSessions, openDatabase, setConfigValue } from './database'
 import { randomUUID } from 'node:crypto'
 import { createTurnCoordinatorStorage } from './turnCoordinatorStorage'
+import { setInvalidationBroadcaster } from './database/scopeVersion'
 import { TurnRuntime } from './turnRuntime'
 import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { signalChatCancel } from './chatCancelRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
-import { beginSessionEventShutdown, enforceSessionEventRetentionDetailed, flushAllSessionEventSinks, reconcileSessionEventFilesDetailed } from './sessionEvents'
+import { beginSessionEventShutdown, flushAllSessionEventSinks, reconcileSessionEventFilesDetailed } from './sessionEvents'
+import { runSessionEventRetentionMaintenance } from './storage/sessionEventRetention'
+import { pruneAgentLogs } from './storage/agentLogRetention'
+import { resolveRetentionPolicyFromDb } from './storage/retentionPolicy'
+import { cleanupUsageFactsByRetention, reconcileUsageTurnFacts } from './usageStats/usageStatsMaintenance'
+import { setUsageStatsAppVersion } from './usageStats/usageStatsRecorder'
+import { backfillUsageStats } from './usageStats/usageStatsBackfill'
+import { getDbConnection } from './database/sqliteStore'
+import { SCHEMA_META_KEYS } from './database/schema'
+import { getSchemaMeta, setSchemaMeta } from './database/sqliteStore'
 import { cleanupOrphanProcess } from './shell/orphanProcessCleanup'
 import { cleanupPersistedOrphansOnStartup } from './shell/startupOrphanCleanup'
+import { scriptParserService, runSelfCheck, setInitFailureListener, setNotReadyParseListener } from './shell/scriptParserService'
 import { cleanupLegacyWorkspaceLayoutOnStartup } from './database/legacyWorkspaceLayoutCleanup'
 import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import { SessionBackupManager } from './sessionBackupManager'
 import { setupAppMenu } from './menu'
+import { createHostTranslator } from './i18n/hostTranslate'
 import { readAppLocale } from './appIpc'
 import { getMainWindow, setMainWindow } from './windowRef'
 import { getAgentLogDir, initAgentLogger, logAgentEvent, flushAgentLogger } from './agentLogger/agentLogger'
+import { setAgentLogDailyPrune } from './agentLogger/agentLogger'
+import { setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
+import { createDesktopAgentRuntime } from './runtime/desktopAgentRuntime'
+import { CallAdmissionGate, getCallAdmissionGate, setCallAdmissionGate } from './runtime/callAdmissionGate'
+import { resetActiveAdmissionOnStartup } from './storage/callAdmissionStore'
 import { initFeishuCliLogger } from './feishu/feishuCliLogger'
 import { initWeChatCliLogger } from './wechat/weChatCliLogger'
 import { encryptSecret } from './secureApiKey'
@@ -62,13 +83,20 @@ import { FloatingNotificationManager } from './floatingNotificationManager'
 import { runStartupDecisionCacheCleanup } from './confirmation/cacheMaintenanceHooks'
 import { runExemptionMigrationOnce } from './confirmation/exemptionMigrationRunner'
 import { runMcpConfirmPolicyMigrationOnce } from './confirmation/mcpConfirmPolicyMigration'
+import { runConfirmModeRetirementMigrationOnce } from './confirmation/confirmModeRetirementMigration'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { cleanupOrphanedChatAttachments } from './chatAttachmentManager'
 import { getRendererURL, isSpaceAssistantDev } from './devEnvironment'
 import { runAllShutdownCleanupTasks, type ShutdownCleanupResult } from './shutdownCleanup'
 import { cleanupMcpArtifactsOnStartup } from './mcp/mcpArtifactCleanup'
+import { setKnownHomeDir } from '../src/shared/agentSafeText'
+import { homedir } from 'node:os'
+
+// 主目录折叠（agentSafeText）依赖已知主目录；必须在任何工具结果投影前注入。
+setKnownHomeDir(homedir())
 
 let floatingManager: FloatingNotificationManager | null = null
+let butlerScheduler: ButlerTaskScheduler | null = null
 
 const API_KEY_CONFIG_KEY = 'secrets.apiKeyEnc'
 const TOOLS_CONFIG_KEY = 'config.tools'
@@ -128,6 +156,8 @@ function getRendererIndexPath(): string {
 let workDirState = ''
 let workDirManager: WorkDirManager | null = null
 let appDb: AppDatabase | null = null
+/** 用量统计启动维护（回填/补齐/清理）：whenReady 内注册，主窗口创建完成后执行（评审 P1-3）。 */
+let usageStatsStartupMaintenance: (() => void) | null = null
 let isQuitting = false
 let quitCleanupDone = false
 const SHUTDOWN_TIMEOUT_MS = 12_000
@@ -330,6 +360,17 @@ app.whenReady().then(async () => {
     isPackaged: app.isPackaged,
     mainDirname: __dirname
   })
+  // A2(偏差 18):宿主装配单例 runtime——必须经 createDesktopAgentRuntime 注入完整组件集
+  // (空参 createAgentRuntime 全组件 no-op 桩:内置工具/取消/撤销/confirmId/MCP 限流/审计静默失效,
+  //  评审 batch3-runtime-admission-sdk-review P0-1);旧全局注册函数经兼容转发落到本实例
+  setDefaultAgentRuntime(createDesktopAgentRuntime())
+  // S3(偏差 14):跨天节流清理——新日志文件开启时读统一保留策略并删除超期日志(每日至多一次)
+  setAgentLogDailyPrune(() => {
+    void pruneAgentLogs({
+      logDir: getAgentLogDir() ?? '',
+      retentionDays: resolveRetentionPolicyFromDb(db).agentLogRetentionDays
+    }).catch(() => undefined)
+  })
   const agentLogDir = getAgentLogDir()
   logAgentEvent('info', 'agent.startup', {
     workDir: workDirState,
@@ -339,6 +380,32 @@ app.whenReady().then(async () => {
   if (!app.isPackaged && agentLogDir) {
     console.info('[AgentLogger] 开发模式日志目录:', agentLogDir)
   }
+
+  // 脚本安全解析服务（P0-T4，§2.3/§3 不变量 8）：初始化前置到启动（三语法全量加载，
+  // fire-and-forget 不阻断），失败/未就绪运行期一律 ask 兜底（fail-closed），降级可观测：
+  // 初始化失败 → treesitter.init.failed；自检失败 → treesitter.selfcheck.failed；
+  // 运行期 not_initialized → 每会话首次 treesitter.parse.not_ready。
+  setInitFailureListener(({ failedReason }) => {
+    logAgentEvent('error', 'treesitter.init.failed', { reason: failedReason })
+  })
+  setNotReadyParseListener(({ language, notReadyParseCount }) => {
+    logAgentEvent('warn', 'treesitter.parse.not_ready', { language, notReadyParseCount })
+  })
+  void scriptParserService
+    .ensureInitialized()
+    .then(() => runSelfCheck())
+    .then(() => {
+      logAgentEvent('info', 'treesitter.selfcheck.passed', {})
+    })
+    .catch((err) => {
+      // ensureInitialized 失败已由 setInitFailureListener 记录 treesitter.init.failed；
+      // 此处只补记「初始化成功但自检失败」的自检分支，避免同一失败双写。
+      if (scriptParserService.getStatus().ready) {
+        logAgentEvent('error', 'treesitter.selfcheck.failed', {
+          reason: err instanceof Error ? err.message : String(err)
+        })
+      }
+    })
 
   initFeishuCliLogger({
     getWorkDir: () => workDirManager?.getActiveWorkDir() ?? workDirState,
@@ -357,6 +424,8 @@ app.whenReady().then(async () => {
   // （清空会话级条目 = "进程消亡即失效"语义等价物 + 过期/休眠清理）。
   runExemptionMigrationOnce(db, { audit: getSecurityAuditLog() })
   runMcpConfirmPolicyMigrationOnce(db, { audit: getSecurityAuditLog() })
+  // confirmMode 退役（§5.7）：一次性删除存量 config.tools JSON 的 confirmMode 键（幂等、失败不阻塞）
+  runConfirmModeRetirementMigrationOnce(db)
   runStartupDecisionCacheCleanup(db)
 
   const backup = new DebouncedSessionBackupManager(new SessionBackupManager(workDirState))
@@ -369,6 +438,10 @@ app.whenReady().then(async () => {
   })
   void cleanupOrphanedChatAttachments(app.getPath('userData'), activeSessionIds, isSessionActive).catch((error) => {
     console.warn('[chatAttachment] orphan cleanup failed:', error instanceof Error ? error.message : String(error))
+  })
+  // 偏差 11:失效通知出口——Storage 版本递增后经主窗口广播 { scope, version }
+  setInvalidationBroadcaster((scope, version) => {
+    getMainWindow()?.webContents.send('scope:invalidated', { scope, version })
   })
   const turnRuntime = new TurnRuntime({
     storage: createTurnCoordinatorStorage(db),
@@ -413,17 +486,59 @@ app.whenReady().then(async () => {
         error: failure.error instanceof Error ? failure.error.message : String(failure.error)
       })
     }
-    const retention = await enforceSessionEventRetentionDetailed(workDirState, 100)
+    // S3(偏差 24):保留上限由 Storage 统一保留策略持有(configs 可配、显式默认),启动流程只触发
+    const { policy: retentionPolicy, summary: retention } = await runSessionEventRetentionMaintenance(db, workDirState)
     for (const failure of retention.failures) {
       console.warn('[sessionEvents] retention cleanup failed:', {
         sessionName: failure.sessionName,
         error: failure.error instanceof Error ? failure.error.message : String(failure.error)
       })
     }
+    // S3(偏差 14):Agent 日志超保留期清理挂同一保留策略(启动维护触发)
+    await pruneAgentLogs({
+      logDir: getAgentLogDir() ?? '',
+      retentionDays: retentionPolicy.agentLogRetentionDays
+    })
   } catch (error) {
     // 目录级扫描失败也不能阻断 IPC 注册和窗口创建；下一次启动继续重试。
     console.warn('[sessionEvents] startup maintenance failed:', error instanceof Error ? error.message : String(error))
   }
+
+  // 用量统计启动维护（需求 §7.3.1 / §7.4 / §7.5）：
+  // 一次性历史台账回填（机会不可逆，schema_meta 标记保证只跑一次）→ 崩溃 Turn 补齐 → 保留期清理（删除留痕）。
+  // 回填要同步扫描各 workDir 的全部台账（上限 100 个会话），大台账下会拖延启动数秒（评审 P1-3），
+  // 因此这里只定义，推迟到主窗口创建完成后执行；统计非关键路径，晚几秒完成无碍。
+  const runUsageStatsStartupMaintenance = (): void => {
+    try {
+      if (!getSchemaMeta(getDbConnection(db), SCHEMA_META_KEYS.usageStatsBackfillAt)) {
+        const backfillWorkDirs = [workDirState, ...workDirManager!.listProfiles().map((profile) => profile.path)]
+        const backfill = backfillUsageStats(db, Array.from(new Set(backfillWorkDirs.filter((dir) => dir))))
+        setSchemaMeta(getDbConnection(db), SCHEMA_META_KEYS.usageStatsBackfillAt, String(Date.now()))
+        logAgentEvent('info', 'usageStats.backfill.completed', {
+          scannedSessionDirs: backfill.scannedSessionDirs,
+          stepRowsWritten: backfill.stepRowsWritten,
+          turnRowsWritten: backfill.turnRowsWritten,
+          skippedMalformedFiles: backfill.skippedMalformedFiles
+        })
+      }
+      const patched = reconcileUsageTurnFacts(db)
+      if (patched > 0) {
+        console.log(`[usageStats] reconciled ${patched} interrupted turn(s) after crash`)
+      }
+      const usageRetention = cleanupUsageFactsByRetention(db)
+      if (usageRetention && (usageRetention.deletedStepRows > 0 || usageRetention.deletedTurnRows > 0)) {
+        console.log('[usageStats] retention cleanup:', JSON.stringify(usageRetention))
+      }
+    } catch (error) {
+      console.warn('[usageStats] startup maintenance failed:', error instanceof Error ? error.message : String(error))
+    }
+  }
+  // 版本快照必须同步注入（仅缓存字符串、无 IO）：飞书/微信 autoStart 与 butler 调度器
+  // 都在窗口创建之前启动，启动窗口期内触发的回合若拿到 undefined 会把 app_version 落成
+  // null，且版本枚举查询（WHERE app_version IS NOT NULL）会漏掉这些行（评审跟进项）。
+  setUsageStatsAppVersion(app.getVersion())
+  // 注册维护任务；实际执行时机在下方 createMainWindow 完成之后（评审 P1-3）。
+  usageStatsStartupMaintenance = runUsageStatsStartupMaintenance
 
   const getApiKey = async (): Promise<string | null> => {
     return getActiveLlmService(db).getApiKey()
@@ -492,10 +607,11 @@ app.whenReady().then(async () => {
       devRoot: path.join(__dirname, '..', '..')
     }),
     floatingNotificationManager: floatingManager,
+    notifyMainWindow: (channel, payload) => getMainWindow()?.webContents.send(channel, payload),
     turnRuntime
   })
 
-  const executeTurn = async (sender: Electron.WebContents, payload: ClaudeChatCreateWithToolsPayload) => {
+  const executeTurn = async (sender: Electron.WebContents | null, payload: ClaudeChatCreateWithToolsPayload) => {
     if (!payload.turnId || !payload.turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
     turnRuntime.bindRequest(payload.requestId, payload.turnId)
     return turnRuntime.executeWithSource(payload.turnId, payload.turnStartToken, async (turn) => {
@@ -524,8 +640,77 @@ app.whenReady().then(async () => {
       devRoot: path.join(__dirname, '..', '..')
     }),
     floatingNotificationManager: floatingManager,
+    isTrayEnabled,
     turnRuntime,
     executeTurn
+  })
+
+  // P4 管家执行链：单入口准入（进程级共享实例，并发=1 全局有效）+ IPC 面（CRUD + 手动触发）
+  // B1(偏差 23):统一调用级准入(状态归 Storage);butlerAdmission 退役。
+  // 顺序纪律(P1-1,评审):先清零 DB 活跃段、再构造门——门构造即 loadAdmissionState,
+  // 反序会把上一进程的幻影票据读进内存且永无 release,并发上限被永久蚕食
+  resetActiveAdmissionOnStartup(db, Date.now())
+  setCallAdmissionGate(new CallAdmissionGate({ db }))
+  // P6：共享投递入口（装配器持有，状态随实例走）。桌面 sink 的注册在 butlerDelivery
+  // （deliveryPorts.notifyDesktop 即桌面实现，闭包与投递同源）；此处只建 hub 容器传递，
+  // 避免同 id 驱动源被 butlerDelivery 覆盖注册后此处退化为死代码。
+  const sharedDeliveryHub = createDeliveryHub()
+  const butlerInvokerDeps: ButlerInvokerDeps = {
+    db,
+    turnRuntime,
+    getWorkDir: () => workDirState,
+    getUserDataPath: () => app.getPath('userData'),
+    getToolsConfig: () => {
+      const raw = getConfigValue(db, TOOLS_CONFIG_KEY)
+      if (!raw) return mergeToolsConfig(null)
+      try {
+        return mergeToolsConfig(JSON.parse(raw) as Parameters<typeof mergeToolsConfig>[0])
+      } catch {
+        return mergeToolsConfig(null)
+      }
+    },
+    getBrowserConfig: () => readBrowserConfigFromDb(db),
+    getShellConfig: () => readShellConfigFromDb(db),
+    workDirManager: workDirManager!,
+    resolveWorkDirForSession: (sessionId) => {
+      const resolved = resolveWorkDirForSession(
+        db,
+        sessionId,
+        () => workDirManager!.listProfiles(),
+        () => workDirManager!.getActiveProfileId(),
+        () => workDirManager!.getActiveWorkDir()
+      )
+      return resolved?.workDir ?? workDirState
+    },
+    getActiveWorkDirProfileId: () => workDirManager!.getActiveProfileId(),
+    admissionGate: getCallAdmissionGate(),
+    onSessionCreated: (session) => getMainWindow()?.webContents.send('session:created', { session }),
+    // P6（偏差 8 机制面）：驱动源层唯一投递入口——桌面 sink（系统通知）注册进共享 hub；
+    // butler 投递经 hub 路由并落送达记录。桌面终态发送通道（notifyMainWindow 路径）与
+    // 文件树/文件内容直连点不迁（驱动权路径 9/10/11 认领存量收敛）。
+    deliveryHub: sharedDeliveryHub,
+    deliveryPorts: {
+      // v1 桌面端口用系统通知（窗口状态语义由 OS 托管）；IM 端口未接线时走 butlerDelivery
+      // 的显式降级路径。浮动窗结果展示随偏差 8 整项关闭时统一。
+      notifyDesktop: (summary) => {
+        if (!Notification.isSupported()) return
+        const notification = new Notification({
+          title: createHostTranslator({ locale: readAppLocale(db) })({ key: 'notification.desktopButlerTitle' }),
+          body: summary.slice(0, 280)
+        })
+        notification.on('click', () => void showMainWindow())
+        notification.show()
+      }
+    }
+  }
+  registerButlerIpcHandlers(ipcMain, butlerInvokerDeps)
+
+  // P6 定时调度器：托盘前提（P0 决策 a）+ 启动恢复 + interval tick；before-quit 停机标 interrupted。
+  // 实际 start() 延后到 initTray() 之后（见下方 whenReady 尾部）。
+  butlerScheduler = new ButlerTaskScheduler({
+    db,
+    runTask: (taskId, request) => runButlerTask(butlerInvokerDeps, taskId, request),
+    isTrayEnabled
   })
 
   const modelName = () => getConfigValue(db, 'config.model') ?? 'claude-sonnet-4-20250514'
@@ -628,12 +813,25 @@ app.whenReady().then(async () => {
     getMainWindow,
     mainDirname: __dirname
   })
+  // 托盘初始化完成后才能启动定时调度器：start() 内的托盘前提校验读 isTrayEnabled()，
+  // 早于 initTray 会在托盘实际启用的情况下被误判为未启用（disabled-no-tray）而永不启动。
+  butlerScheduler?.start()
 
   void autoStartWeChatPollIfNeeded(db)
 
   setupWindowIconThemeListener(__dirname)
   void createMainWindow()
-  setupAppMenu(readAppLocale(db))
+    .then(() => {
+      usageStatsStartupMaintenance?.()
+      usageStatsStartupMaintenance = null
+    })
+    .catch((error) => {
+      // 窗口创建失败也要跑维护：统计链路不依赖窗口；失败仅记日志，下次启动重试。
+      console.warn('[usageStats] main window creation failed, running maintenance anyway:', error instanceof Error ? error.message : String(error))
+      usageStatsStartupMaintenance?.()
+      usageStatsStartupMaintenance = null
+    })
+  setupAppMenu(createHostTranslator({ locale: readAppLocale(db) }))
 }).catch((err) => {
   console.error('[main] whenReady failed:', err instanceof Error ? err.stack ?? err.message : err)
 })
@@ -645,6 +843,7 @@ app.on('before-quit', (event) => {
   // 必须在启动异步 cleanup 之前同步切断事件生产，否则 flush 与最后一批
   // chunk/关键事件并发，flush 返回后仍可能接受新事件并被 app.quit 丢弃。
   beginSessionEventShutdown()
+  butlerScheduler?.stop()
   destroyTray()
   floatingManager?.destroy()
   stopMemoryWatcher()

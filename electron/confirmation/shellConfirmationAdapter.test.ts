@@ -41,8 +41,12 @@ describe('ShellConfirmationAdapter', () => {
   })
 
   it('marks incomplete shell analysis instead of treating it as allow', () => {
+    // P3 评审登记（golden-review PS/Bash 段）：`echo ok > ./.env` 在 bash 语法级分叉下完整解析
+    // → complete → 不再触发 shell-analysis-incomplete 的 extraction-failed 投影（发现 E 链路）；
+    // 安全面不弱化：.env 敏感路径仍由 path-target（sensitive-file）信号覆盖，
+    // 且重定向目标经树事实路径增强进入 pathVerdict（只增不减）。
     const facts = projectPreparedShellExecution(prepared('echo ok > ./.env'), { env })
-    expect(facts.signals).toContainEqual(expect.objectContaining({ kind: 'extraction-failed', reason: expect.stringContaining('shell-analysis-incomplete') }))
+    expect(facts.signals).not.toContainEqual(expect.objectContaining({ kind: 'extraction-failed', reason: expect.stringContaining('shell-analysis-incomplete') }))
     expect(facts.signals).toContainEqual(expect.objectContaining({ kind: 'path-target', path: './.env', zone: 'sensitive-file' }))
   })
 

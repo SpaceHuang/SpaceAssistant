@@ -51,8 +51,22 @@ describe('commandSequenceExtractor', () => {
     }
   })
 
-  it('`FOO=1 cmd` 与 `cd x && cmd` 不命中同一 exact 签名（变体绕过防护）', () => {
-    const a = extractCommandSignals('FOO=1 cmd', env)
+  // ===== P1-E(b)：factsSummary 按真实连接符渲染（回归 D6，§7.1 #10）=====
+  it('摘要保留真实连接符：管道段不得被拆成 && 拼接的独立命令', () => {
+    const r = extractCommandSignals('whoami; Get-Process | Out-Null; whoami', env)
+    const text = r.summary.text
+    expect(text).toContain('; ')
+    expect(text).toContain(' | ')
+    expect(text).not.toMatch(/Out-Null && whoami/)
+    expect(text).not.toMatch(/Get-Process && Out-Null/)
+  })
+
+  it('摘要对 && 连接符保持既有渲染', () => {
+    const r = extractCommandSignals('cat a.txt && grep x /tmp', env)
+    expect(r.summary.text).toContain('cat a.txt && grep x /tmp')
+  })
+
+  it('`FOO=1 cmd` 与 `cd x && cmd` 不命中同一 exact 签名（变体绕过防护）', () => {    const a = extractCommandSignals('FOO=1 cmd', env)
     const b = extractCommandSignals('cd x && cmd', env)
     const sig = (r: ReturnType<typeof extractCommandSignals>) =>
       r.signals
@@ -98,7 +112,9 @@ describe('pathClassifier', () => {
   it('POSIX 绝对敏感路径保持 sensitive-file 分类', () => {
     expect(classifyPath('/root/.ssh/id_ed25519', env)).toBe('sensitive-file')
   })
-  it('解析 symlink 后识别 workdir 外目标', async () => {
+  // 用例模拟 darwin 环境并依赖宿主真实 fs 的 realpath：Windows 宿主上 POSIX 形式路径无法解析（junction 也不适用），由 POSIX 宿主覆盖
+  const itDarwinSymlink = process.platform === 'win32' ? it.skip : it
+  itDarwinSymlink('解析 symlink 后识别 workdir 外目标', async () => {
     const fs = await import('fs/promises')
     const os = await import('os')
     const path = await import('path')

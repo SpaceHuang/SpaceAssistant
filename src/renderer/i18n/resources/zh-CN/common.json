@@ -4,6 +4,7 @@
     "search": "搜索",
     "sessions": "会话",
     "settings": "设置",
+    "usageStats": "Token 用量统计",
     "wiki": "Wiki"
   },
   "app": {
@@ -43,6 +44,7 @@
     "help": "帮助",
     "quit": "退出",
     "settings": "设置",
+    "usageStats": "Token 用量统计",
     "view": "查看"
   },
   "save": "保存",
@@ -98,7 +100,8 @@
       "menuItem": "复制会话 ID"
     },
     "stopAria": "中止「{{name}}」的执行",
-    "unnamed": "未命名会话"
+    "unnamed": "未命名会话",
+    "butlerSection": "管家"
   },
   "time": {
     "hoursAgo": "{{count}} 小时前",
@@ -114,7 +117,8 @@
     "title": "设置",
     "tools": "工具",
     "wiki": "项目 Wiki",
-    "remoteIm": "IM 远程通用"
+    "remoteIm": "IM 远程通用",
+    "butler": "定时任务"
   },
   "titleBar": {
     "close": "关闭",

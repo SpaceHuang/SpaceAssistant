@@ -6,6 +6,9 @@ export interface FileState {
   isPartial: boolean
   /** 分段读取：content 非全文快照，edit/write 用 mtime 校验 */
   isRangeView?: boolean
+  /** 完整快照的磁盘字节大小（评审 P1-1：mtime 与 size 双重新鲜度校验——FAT32 2s 精度、
+   *  同步软件保留时间戳等场景下 mtime 相同但内容已变；缺省视为未知、保守放行重读） */
+  size?: number
 }
 
 /** 会话级：跟踪 read_file 内容，用于 edit/write 前置校验 */

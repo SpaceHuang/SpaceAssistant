@@ -1,0 +1,13 @@
+{
+  "file": "File",
+  "edit": "Edit",
+  "view": "View",
+  "help": "Help",
+  "closeWindow": "Close Window",
+  "quit": "Quit",
+  "devTools": "Developer Tools",
+  "usageStats": "Token Usage",
+  "settings": "Settings",
+  "about": "About",
+  "docs": "Documentation"
+}

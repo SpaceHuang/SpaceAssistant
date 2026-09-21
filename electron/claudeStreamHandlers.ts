@@ -1,13 +1,15 @@
 import type { IpcMain, WebContents } from 'electron'
-import { safeWebContentsSend } from './safeWebContentsSend'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
 import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidRequestId } from './claudeRequestGuards'
 import { logAgentEvent } from './agentLogger/agentLogger'
+import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import type { AgentLogFields } from './agentLogger/types'
 import { getTurnContext, getPersistedTurn, getSession, type AppDatabase } from './database'
 import { resolveLlmCredentialsForModel } from './llmServiceResolver'
 import { runToolChatSession } from './toolChatLoop'
+import { assembleInvocation } from './runtime/invocationAssembler'
 import { isAppLocale } from '../src/shared/locale'
+import { buildApprovalTaskDigest } from '../src/shared/approvalTaskDigest'
 import { MAX_IMAGE_BASE64_CHARS } from '../src/shared/chatAttachmentLimits'
 import { MAX_CHAT_API_CONTENT_BLOCKS, MAX_CHAT_API_MESSAGES } from '../src/shared/chatApiMessageLimits'
 import { trimClaudeToolChatMessages } from '../src/shared/claudeToolHistory'
@@ -23,7 +25,7 @@ import type { AssistantFactEvent, TurnExecutionConfig } from '../src/shared/assi
 import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
-import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, readSessionEvents, type SessionEventInput, type SessionEventSink } from './sessionEvents'
+import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, readSessionEvents, stripPartialJsonForPersist, type SessionEventInput, type SessionEventSink } from './sessionEvents'
 import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, excludeReplayOnlyMessages, projectReplaySurface, projectReplaySurfaceWithSources, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset, surfaceItemIdentitiesForSubset, surfaceItemIdentity } from '../src/shared/surfaceReplay'
 import { shouldCompact } from '../src/shared/contextMeter'
 import { ContextMeter } from '../src/shared/contextMeterService'
@@ -47,6 +49,8 @@ export type ClaudeStreamDeps = {
   getBrowserDetectContext: () => import('../src/shared/browserTypes').BrowserDetectContext
   floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
   emitFactEvent?: (requestId: string, event: AssistantFactEvent) => void
+  /** 绑定主窗口的出站通道：Core 出口事件（标题生成、文件树失效）经此投递渲染层。 */
+  notifyMainWindow?: (channel: string, payload: unknown) => void
   turnRuntime?: TurnRuntime
 }
 
@@ -209,7 +213,8 @@ export function normalizeAndValidateClaudeMessagesWithContentBlocks(
 }
 
 export type ClaudeTurnExecution = (
-  sender: WebContents,
+  /** 排水器等主进程内部驱动源没有 IPC sender；事实事件全走 emitFactEvent/emitSessionEvent 出口 */
+  sender: WebContents | null,
   payload: ClaudeChatCreateWithToolsPayload
 ) => Promise<unknown>
 
@@ -305,7 +310,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         if (!frozen) throw new Error('TURN_LEGACY_EXECUTION_CONFIG_UNAVAILABLE')
         const model = assertValidModel(frozen.model ?? '')
         await eventWriter?.appendCritical({ type: 'step_start', payload: { turnId, stepId: requestId } })
-        const baseUrlFromPayload = assertValidOptionalAnthropicBaseUrl(frozen.baseUrl)
+
         const llmServiceId = frozen.llmServiceId
         const creds = await resolveLlmCredentialsForModel(db, model, { serviceId: llmServiceId })
         if (creds.error) {
@@ -315,7 +320,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             `会话模型「${model}」当前不可用（${creds.error}），请重新选择模型或补齐 API 服务配置`
           )
         }
-        const baseUrl = baseUrlFromPayload ?? creds.baseUrl
+        const baseUrl = creds.baseUrl
         const getApiKey = creds.getApiKey
         const userDataDir = deps.getUserDataPath()
         let builtMessages: ClaudeChatMessageWithContentBlocks[]
@@ -386,10 +391,11 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const needsToolWorkDir = builtinCandidates.length > 0 || mayBuildMcpToolSnapshot(listProfiles(db))
         const sessionWorkDir = needsToolWorkDir ? deps.resolveWorkDirForSession(sessionId) : ''
 
-        const res = await runToolChatSession({
-          sender,
+        const { invocation: turnInvocation, ports: turnPorts } = assembleInvocation({
           requestId,
           sessionId,
+          turnId,
+          llmServiceId,
           windowId: contextWindowId,
           model,
           contextWindow: frozen.maximumContext,
@@ -400,10 +406,17 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           projectMemoryEnabled: frozen.projectMemoryEnabled,
           skillFragments: frozen.skillFragments,
           options: { maxTokens: frozen.maxTokens, enableThinking: frozen.enableThinking },
+          // §7.2：主链路显式传档位（优先于 options.enableThinking 兼容映射；旧 turn 记录无该字段时回退）。
+          // 评审 B1：能力降级时传降级前档位，装配层照旧落 reasoning_degraded 审计（冻结档位仍是 off）
+          effort: frozen.requestedThinkingEffort ?? frozen.thinkingEffort,
           toolsConfig: deps.getToolsConfig(),
           browserConfig: deps.getBrowserConfig(),
           shellConfig: deps.getShellConfig(),
           wikiConfig: deps.getWikiConfig(),
+          // §6 桌面授权证据：当前 turn 用户消息摘要进审批线索包「已声明的任务」段
+          approvalTaskDigest: buildApprovalTaskDigest(
+            authoritative.messages.find((m) => m.id === authoritative.currentUserMessageId)?.content ?? ''
+          ),
           workDir: sessionWorkDir,
           userDataDir,
           getApiKey,
@@ -414,10 +427,14 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           hasImageAttachments,
           contextMeter,
           getBrowserDetectContext: deps.getBrowserDetectContext,
-          floatingNotificationManager: deps.floatingNotificationManager
+          floatingNotificationManager: deps.floatingNotificationManager,
+          onTitleGenerated: (session) => deps.notifyMainWindow?.('session:title-generated', { session }),
+          onFileTreeChanged: (event) => notifyFileTreeChanged(null, event)
           ,emitSessionEvent: async (event: SessionEventInput) => {
             if (!eventWriter) return
-            const normalized = { ...event, payload: { ...event.payload, turnId } }
+            // R1：tool_call_delta.partialJson 原文不落台账（chunk 拼接可还原凭据）
+            const stripped = stripPartialJsonForPersist(event)
+            const normalized = { ...stripped, payload: { ...stripped.payload, turnId } }
             if (event.type === 'assistant_chunk') {
               try {
                 await eventWriter.waitForCapacity()
@@ -516,6 +533,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             deps.emitFactEvent?.(requestId, fact)
           }
         })
+        const res = await runToolChatSession(turnInvocation, turnPorts)
 
         if (!res.ok) {
           const finalized = await finalizeTurn(turnId, 'error', res.error)

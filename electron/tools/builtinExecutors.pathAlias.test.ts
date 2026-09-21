@@ -1,5 +1,6 @@
 import fs from 'fs/promises'
 import os from 'os'
+import { spawn } from 'child_process'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -140,10 +141,18 @@ describe('path field alias normalization', () => {
 
   it('grep accepts file_path', async () => {
     await fs.writeFile(path.join(tmpDir, 'a.txt'), 'needle here', 'utf8')
-    const res = await grepExecutor.execute(
-      { pattern: 'needle', file_path: '.' },
-      makeCtx(tmpDir, cache)
+    // ripgrep mock 二进制（/usr/bin/true）在 Windows 上不存在，经 ctx 测试缝注入
+    // 跨平台 node fixture 顶替 rg 进程（fixture 产出 rg 风格命中文本后正常退出）。
+    const fixture = path.join(tmpDir, 'rg-alias-fixture.cjs')
+    await fs.writeFile(
+      fixture,
+      `const a = process.argv.slice(2)\nconst file = a[a.length - 1]\nif (a[a.indexOf('--regexp') + 1] === 'needle') process.stdout.write(file + ':1:needle here\\n')\n`,
+      'utf8'
     )
+    const res = await grepExecutor.execute({ pattern: 'needle', file_path: '.' }, {
+      ...makeCtx(tmpDir, cache),
+      grepSpawnProcess: (_binary, rgArgs, options) => spawn(process.execPath, [fixture, ...rgArgs], options)
+    })
     expect(res.success).toBe(true)
   })
 

@@ -60,12 +60,30 @@ interface CacheRow {
 export class SqliteDecisionCache implements DecisionCacheView {
   constructor(private readonly db: DatabaseSync) {}
 
-  lookup(key: CacheKey): DecisionCacheEntry | null {
+  lookup(key: CacheKey, lane?: string): DecisionCacheEntry | null {
     const now = Date.now()
     const keyJson = canonicalKeyJson(key)
-    const row = this.db
-      .prepare('SELECT * FROM decision_cache WHERE key_json = ? ORDER BY created_at DESC LIMIT 1')
-      .get(keyJson) as CacheRow | undefined
+    // lane 键控（评审 B1）：同签名条目按 lane 隔离；'*' 条目（存量豁免迁移：桌面用户历史
+    // 信任的 shell 命令 / 浏览器域名）对所有有人应答的 lane 生效。
+    // 评审 P1-2：automation 无人类应答者，不继承任何存量豁免——只命中显式 lane='automation'
+    // 的条目（当前无任何写入方，即事实上的零缓存放行，全部落规则链兜底）。
+    const row = (
+      lane
+        ? lane === 'automation'
+          ? this.db
+              .prepare(
+                'SELECT * FROM decision_cache WHERE key_json = ? AND lane = ? ORDER BY created_at DESC LIMIT 1'
+              )
+              .get(keyJson, lane)
+          : this.db
+              .prepare(
+                'SELECT * FROM decision_cache WHERE key_json = ? AND (lane = ? OR lane = ?) ORDER BY created_at DESC LIMIT 1'
+              )
+              .get(keyJson, lane, '*')
+        : this.db
+            .prepare('SELECT * FROM decision_cache WHERE key_json = ? ORDER BY created_at DESC LIMIT 1')
+            .get(keyJson)
+    ) as CacheRow | undefined
     if (!row) return null
     if (row.expires_at !== null && row.expires_at <= now) return null
     if (now - row.last_hit_at > DORMANT_MS) return null
@@ -77,6 +95,10 @@ export class SqliteDecisionCache implements DecisionCacheView {
 
   record(entry: DecisionCacheEntry): void {
     const keyJson = canonicalKeyJson(entry.key)
+    // 评审观察项修复：冲突键从 keyJson 改为 (lane, keyJson)——同签名条目跨 lane 共存，
+    // 后写不再覆盖其他 lane 的记忆（查询侧 P2 已按 lane 隔离，写入侧对齐）。
+    // 存量行（id=keyJson）不受影响：lookup 不依赖 id；同 lane 重写时新行 created_at 更新，排序后胜出。
+    const rowId = `${entry.lane}\u001f${keyJson}`
     this.db
       .prepare(
         `INSERT INTO decision_cache (id, key_json, decision, lane, scope, source, created_at, last_hit_at, hit_count, expires_at)
@@ -91,7 +113,7 @@ export class SqliteDecisionCache implements DecisionCacheView {
            expires_at = excluded.expires_at`
       )
       .run({
-        id: keyJson,
+        id: rowId,
         key_json: keyJson,
         decision: entry.decision,
         lane: entry.lane,

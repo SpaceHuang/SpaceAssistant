@@ -1,0 +1,23 @@
+{
+  "id": "a25-ctypes-cdll",
+  "group": "legacy-parseable",
+  "legacyParsed": true,
+  "verdict": "deny",
+  "patterns": [
+    "A5",
+    "B4"
+  ],
+  "signals": [
+    {
+      "kind": "script-analysis",
+      "signal": "dangerous",
+      "patterns": [
+        "A5",
+        "B4"
+      ]
+    },
+    {
+      "kind": "script-uncertified"
+    }
+  ]
+}

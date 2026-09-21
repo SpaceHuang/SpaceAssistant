@@ -102,7 +102,16 @@
       "hint": "用于帮助 Agent 管理上下文窗口。不确定时可留空。",
       "fastLabel": "标注为快速模型（用于低成本简单任务）",
       "visionLabel": "标注为视觉模型（支持输入并理解图片）",
+      "supportsThinking": "支持 Extended Thinking",
       "submit": "添加模型"
+    },
+    "effort": {
+      "off": "关闭",
+      "low": "低",
+      "medium": "中",
+      "high": "高",
+      "notSupported": "该模型不支持 Thinking",
+      "unsupportedBadge": "无思考"
     },
     "list": {
       "title": "大模型列表",
@@ -120,7 +129,7 @@
     },
     "defaults": {
       "title": "大模型设置",
-      "intro": "配置三类优选默认模型；Thinking 开启后，支持该能力的模型会展示推理过程。",
+      "intro": "配置三类优选默认模型；Thinking 强度决定支持该能力的模型思考多少（调低更快更省，调高推理更完整）。",
       "defaultModel": "默认大模型",
       "preferredLanguage": "优选默认语言大模型",
       "preferredFast": "优选快速语言大模型",
@@ -136,7 +145,10 @@
       "addModel": "添加模型",
       "thinkingLabel": "默认开启 Thinking",
       "thinkingAria": "默认开启 Thinking",
-      "thinkingHint": "仅对支持 extended thinking 的模型生效"
+      "thinkingHint": "仅对支持 extended thinking 的模型生效",
+      "effortLabel": "Thinking 强度",
+      "effortAria": "选择全局 Thinking 强度",
+      "effortHint": "对会长时间思考的模型，可在此调低默认强度；也可在对话中单独调整当前会话。"
     }
   },
   "llmService": {
@@ -311,11 +323,6 @@
         "summary": "在隔离浏览器中打开网页、读取页面并执行点击等操作。",
         "disabledHint": "关闭后 Agent 无法访问网页或自动化浏览器。"
       },
-      "browserDetect": {
-        "displayName": "浏览器依赖检测",
-        "summary": "检测网络访问（browser）所需的 Stagehand、Playwright、Chromium 依赖是否就绪。",
-        "disabledHint": "关闭后 Agent 无法在对话中自动检测浏览器依赖状态。"
-      },
       "listWorkDirs": {
         "displayName": "列出工作目录",
         "summary": "列出已配置的工作目录及当前远程会话绑定状态（仅飞书/微信远程可用）。",
@@ -331,7 +338,17 @@
         "summary": "将桌面端当前视图切换到指定远程会话，并同步工作目录（仅飞书/微信远程可用）。",
         "disabledHint": "关闭后远程 Agent 无法切换桌面会话视图。"
       },
-      "fallbackDisabledHint": "关闭后 Agent 在对话中无法调用此工具。"
+      "fallbackDisabledHint": "关闭后 Agent 在对话中无法调用此工具。",
+      "toolkitFind": {
+        "displayName": "能力集合查询",
+        "summary": "按用途查询产品能力集合（环境知觉/产品功能）的调用方式",
+        "disabledHint": "该工具提供能力集合的按需发现，关闭后将无法查询能力用法"
+      },
+      "toolkitCall": {
+        "displayName": "能力集合调用",
+        "summary": "调用产品能力集合中的具体能力（act 类需确认）",
+        "disabledHint": "该工具是产品功能的执行入口，关闭后 Agent 将无法执行产品功能"
+      }
     },
     "nav": {
       "switches": {
@@ -392,6 +409,8 @@
     }
   },
   "shell": {
+    "scriptParserUnavailable": "脚本安全解析不可用",
+    "scriptParserUnavailableDetail": "脚本内容安全解析服务未就绪，所有脚本/Shell 命令判定已全部降级为人工确认。请查看日志中的 treesitter.init.failed / treesitter.selfcheck.failed 事件排查原因。",
     "boundaryTitle": "Shell 命令能力边界",
     "boundaryDescription": "Shell 在会话工作目录下启动，系统会扫描命令中的路径并在越界/敏感时显著警示；注入类高危模式会直接拒绝。Shell 无法像文件工具一样约束子进程的全部行为。请勿对不可信命令点击确认。",
     "defaultTimeoutLabel": "默认超时（秒）",
@@ -787,11 +806,12 @@
       "laneFeishu": "飞书",
       "packageStrict": "严格",
       "packageStandard": "标准",
-      "packageLoose": "全部放行",
+      "packageLoose": "宽松",
       "packageCustom": "自定义",
-      "strictHint": "严格：原本放行的规则上调为询问。",
-      "looseHint": "允许 Agent 无需审批，执行下面所有操作。请确认你了解风险，避免长期切换到全部放行状态。",
-      "customHint": "自定义：在下表中调整每条规则的动作（拒绝/允许/询问）。",
+      "strictHint": "严格：自动放行的域（脚本免确认、shell 预检快通道、只读豁免等）全部纳入确认范围，宁可多问；其余规则动作不变。",
+      "standardHint": "标准：桌面链路「询问」将升级为「自动」（先跑确定性预检，无法判定时交审批 Agent 裁决）；远程链路保持原样。",
+      "looseHint": "宽松：打开网页、MCP 工具调用等显式低风险域免确认直接执行，清单外的高危操作仍按标准确认。请确认你了解风险，避免长期保持该档位。",
+      "customHint": "自定义：在下表中调整每条规则的动作（桌面链路可选 拒绝/允许/询问/自动；远程链路 拒绝/允许/询问）。",
       "ruleColumn": "规则",
       "whenColumn": "时机",
       "actionColumn": "动作",
@@ -874,5 +894,59 @@
       "retentionHint": "超过保留天数的审计文件会自动清理（默认 180 天）。",
       "retentionSaved": "已保存"
     }
+  },
+  "butler": {
+    "create": "新建任务",
+    "edit": "编辑",
+    "delete": "删除",
+    "deleteAria": "删除任务「{{name}}」",
+    "deleteConfirm": "删除任务「{{name}}」？",
+    "deleted": "任务已删除",
+    "toggleAria": "启停任务「{{name}}」",
+    "run": "立即运行",
+    "runSuccess": "任务完成：{{summary}}",
+    "runFailed": "运行失败：{{error}}",
+    "trayHint": "需要启用托盘常驻，否则关窗即退出、后台任务会中断",
+    "empty": "暂无定时任务，点击「新建任务」开始",
+    "loadFailed": "任务列表加载失败",
+    "created": "任务已创建",
+    "updated": "任务已更新",
+    "saveFailed": "任务保存失败",
+    "schedule": {
+      "interval": "每 {{minutes}} 分钟",
+      "daily": "每天 {{time}}",
+      "once": "一次性 {{time}}"
+    },
+    "delivery": {
+      "desktop": "桌面通知",
+      "feishu": "飞书推送",
+      "wechat": "微信推送",
+      "none": "仅落盘"
+    },
+    "form": {
+      "createTitle": "新建定时任务",
+      "editTitle": "编辑定时任务",
+      "name": "任务名称",
+      "nameRequired": "请输入任务名称",
+      "prompt": "任务提示词",
+      "promptRequired": "请输入任务提示词",
+      "scheduleKind": "触发方式",
+      "interval": "固定间隔",
+      "daily": "每天",
+      "intervalMinutes": "间隔（分钟）",
+      "time": "时间",
+      "deliveryPref": "投递偏好",
+      "save": "保存",
+      "cancel": "取消",
+      "once": "一次性",
+      "onceAt": "执行时间",
+      "onceAtRequired": "请选择执行时间",
+      "onceHint": "到点执行一次，之后自动停用，不再重复执行",
+      "onceAtPast": "执行时间不能早于当前时间",
+      "saveFailedWithError": "任务保存失败：{{error}}"
+    },
+    "tabTitle": "定时任务",
+    "tabIntro": "到点自动运行管家任务；任务在后台执行，结果按投递偏好送达",
+    "lastRun": "上次运行 {{time}}"
   }
 }

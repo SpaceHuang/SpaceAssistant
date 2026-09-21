@@ -3,13 +3,12 @@ import os from 'os'
 import path from 'path'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  stripPartialJsonForPersist,
   getSessionEventSink,
   beginSessionEventShutdown,
   SessionEventWriter,
   getSessionEventWriter,
   computeSessionUsageFromEvents,
-  enforceSessionEventRetention,
-  enforceSessionEventRetentionDetailed,
   flushAllSessionEventSinks,
   parseSessionEvent,
   readSessionEvents,
@@ -404,38 +403,6 @@ describe('session events', () => {
     renameSpy.mockRestore()
   })
 
-  it('retains the newest event sessions by index timestamp', async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-retention-'))
-    for (const [id, time] of [['old', 1], ['new', 2]] as const) {
-      const writer = new SessionEventWriter(root, id, time)
-      await writer.append({ type: 'session_end_seed', payload: { seedSeq: 0 } })
-      await fs.writeFile(writer.indexPath, JSON.stringify({ seq: 1, lastAt: time, eventCount: 1, bytes: 1 }))
-    }
-    expect(await enforceSessionEventRetention(root, 1)).toBe(1)
-    expect(await fs.stat(path.join(root, 'sessions', 'new-19700101'))).toBeTruthy()
-    await expect(fs.stat(path.join(root, 'sessions', 'old-19700101'))).rejects.toThrow()
-  })
-
-  it('isolates retention deletion failure and continues the retention pass', async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-retention-failure-'))
-    for (const [id, time] of [['oldest', 1], ['middle', 2], ['newest', 3]] as const) {
-      const dir = path.join(root, 'sessions', `${id}-19700101`)
-      await fs.mkdir(dir, { recursive: true })
-      await fs.writeFile(path.join(dir, 'events.index.json'), JSON.stringify({ lastAt: time }))
-    }
-    const originalRm = fs.rm
-    const rmSpy = vi.spyOn(fs, 'rm').mockImplementation(async (target, options) => {
-      if (target === path.join(root, 'sessions', 'oldest-19700101')) throw new Error('retention delete failed')
-      return originalRm(target, options)
-    })
-
-    const result = await enforceSessionEventRetentionDetailed(root, 1)
-    expect(result.removed).toBe(1)
-    expect(result.failures).toMatchObject([{ sessionName: 'oldest-19700101', phase: 'retention-delete' }])
-    await expect(fs.stat(path.join(root, 'sessions', 'middle-19700101'))).rejects.toThrow()
-    expect(await fs.stat(path.join(root, 'sessions', 'newest-19700101'))).toBeTruthy()
-    rmSpy.mockRestore()
-  })
 
   it('repairs unfinished event files on startup and is idempotent', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-reconcile-'))
@@ -469,5 +436,23 @@ describe('session events', () => {
     expect(() => sink.appendCritical({ type: 'turn_end', payload: {} })).toThrow('session event sink is closing')
     await expect(flushAllSessionEventSinks()).resolves.toBeUndefined()
     expect((await readSessionEvents(sink.eventsPath)).map((event) => event.payload.text)).toEqual(['accepted-before-shutdown'])
+  })
+})
+
+describe('stripPartialJsonForPersist（R1：流式入参分片不落台账）', () => {
+  it('assistant_chunk 的 tool_call_delta.partialJson 剥离为空串', () => {
+    const out = stripPartialJsonForPersist({
+      type: 'assistant_chunk',
+      payload: { turnId: 't1', delta: { type: 'tool_call_delta', index: 2, partialJson: '{"accessTok' } }
+    })
+    expect(out.type).toBe('assistant_chunk')
+    expect((out.payload.delta as { partialJson: string }).partialJson).toBe('')
+  })
+
+  it('其他 delta 类型与其他事件原样透传', () => {
+    const textChunk = { type: 'assistant_chunk', payload: { delta: { type: 'text_delta', text: 'hi' } } }
+    expect(stripPartialJsonForPersist(textChunk)).toBe(textChunk)
+    const toolCall = { type: 'tool_call', payload: { args: { a: 1 } } }
+    expect(stripPartialJsonForPersist(toolCall)).toBe(toolCall)
   })
 })

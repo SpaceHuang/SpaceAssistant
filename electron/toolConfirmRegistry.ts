@@ -25,14 +25,16 @@ export function waitForToolConfirm(
   requestId: string,
   toolUseId: string,
   memoryTiers?: MemoryTier[],
-  scope?: { toolName: string; lane: string }
+  scope?: { toolName: string; lane: string },
+  timeoutMs?: number
 ): Promise<ToolConfirmOutcome> {
   const key = confirmKey(requestId, toolUseId)
   return new Promise<ToolConfirmOutcome>((resolve) => {
+    // P1-4 超时可配：调用方显式 timeoutMs 优先；缺省 CONFIRM_MS=5min（user 回答者默认不变）
     const timeoutId = setTimeout(() => {
       pending.delete(key)
       resolve('timeout')
-    }, CONFIRM_MS)
+    }, timeoutMs ?? CONFIRM_MS)
     pending.set(key, {
       resolve,
       timeoutId,
@@ -62,6 +64,11 @@ export function rejectPendingConfirmsForToolAcrossLanes(toolName: string): numbe
     (count, lane) => count + rejectPendingConfirmsForTool(lane, toolName),
     0
   )
+}
+
+/** 该 (requestId, toolUseId) 是否存在已登记的 pending 确认（H1：信任写入的前置校验）。 */
+export function isPendingConfirm(requestId: string, toolUseId: string): boolean {
+  return pending.has(confirmKey(requestId, toolUseId))
 }
 
 /**

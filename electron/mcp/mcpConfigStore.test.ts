@@ -219,7 +219,7 @@ describe('mcpConfigStore', () => {
       makeWriteInput({ id: 'id-1', name: 'A', auth: { mode: 'bearer-token', accessToken: 'token-a' } })
     ])
 
-    updateServerStatus(db, 'id-1', {
+    await updateServerStatus(db, 'id-1', {
       status: 'connected',
       discoveredProtocolVersion: '2025-06-18',
       lastError: { code: 'init_failed', message: 'boom', occurredAt: new Date().toISOString() }
@@ -231,7 +231,7 @@ describe('mcpConfigStore', () => {
     expect(profile.lastError?.code).toBe('init_failed')
     expect(await getSecret(db, 'id-1', 'access-token')).toBe('token-a')
 
-    updateServerStatus(db, 'id-1', { status: 'no-tools' })
+    await updateServerStatus(db, 'id-1', { status: 'no-tools' })
     expect(listProfiles(db)[0]!.status).toBe('no-tools')
   })
 

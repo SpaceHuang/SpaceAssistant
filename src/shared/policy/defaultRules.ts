@@ -85,23 +85,17 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   },
 
   // ===== 第 4 步段：auto-evaluator（自动审批器入口）=====
-  // 命中不产生 Decision，评估器裁决通过才返回；不裁决交还规则链后续条目（约定 2 例外）。
-  // match 收窄到现状等价域：仅桌面 + 仅 write_file/edit_file + confirmMode=auto 配置前置。
-  {
-    id: 'desktop-auto-approve',
-    when: 'invocation',
-    match: { lane: ['desktop'], toolName: ['write_file', 'edit_file'] },
-    action: 'auto-evaluator',
-    configRequires: { config: 'confirmMode', equals: 'auto' },
-    reason: '桌面 confirmMode=auto 时写/编辑文件的自动审批'
-  },
+  // 命中即「自动」动作：确定性快通道批准才返回；未裁决交审批 Agent（引擎第 4 步，answerer=agent）。
+  // P1 起 desktop 通用「自动」由档位变换承载（standard 非 locked ask→auto-evaluator，§2.1 LANE_PROFILES），
+  // 原 desktop-auto-approve 规则（confirmMode 门控）随之删除。
   // run_shell 预检放行（等价现 canSkipShellConfirm：结构化信任 argv 前缀匹配 / permissionDecision=allow）。
-  // 评估器由执行链路注入（预检结果闭包）；不裁决则交还规则链。信任命令的 exact 档同时经缓存命中
+  // 评估器由执行链路注入（预检结果闭包）。信任命令的 exact 档同时经缓存命中
   // （迁移/记N 写入的 decision_cache 条目），两路语义一致（缓存键仅在无风险提示时派生）。
+  // 评审 B2：auto-evaluator 必须带 lane 限定——automation 的 run_shell 即使命中预检信任命令也落 confirm。
   {
     id: 'shell-precheck-auto-allow',
     when: 'invocation',
-    match: { toolName: 'run_shell' },
+    match: { lane: ['desktop'], toolName: 'run_shell' },
     action: 'auto-evaluator',
     reason: 'shell 预检判定可跳过确认（信任命令或安全命令）'
   },
@@ -154,10 +148,11 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   },
   // act 确认总开关关闭 → 免确认（等价现 browserActionNeedsConfirmation: !actRequiresConfirm → false，
   // 桌面/远程同一开关；configRequires 门控不满足即不命中，可先于 ask 条目）。
+  // 评审 B2：allow 动作必须带 lane 限定——automation 无人类应答者，不消费该放行。
   {
     id: 'browser-act-allow-unconfigured',
     when: 'invocation',
-    match: { toolName: 'browser', signals: ['browser-act'] },
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'browser', signals: ['browser-act'] },
     action: 'allow',
     configRequires: { config: 'actRequiresConfirm', equals: false },
     reason: '浏览器 act 确认开关已关闭'
@@ -234,6 +229,25 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'allow',
     reason: 'lark-cli 读类子命令免确认'
   },
+  // toolkit 能力集合（docs/requirement/agent-toolkit-capability-gateway-requirement.md §6 确认矩阵）：
+  // 描述符 risk=read 的能力（env.*、action.session.status/list/read）免确认；
+  // risk=act 的能力（action.mcp.add 等）需确认。按能力定制的策略用 `toolkit-capability:${id}` token。
+  // toolkit 初期 desktop-only（lane 隔离），远程 lane 无此工具面。
+  {
+    id: 'toolkit-read-allow',
+    when: 'invocation',
+    match: { lane: ['desktop'], toolName: 'toolkit.call', signals: ['toolkit-read'] },
+    action: 'allow',
+    reason: '能力集合只读能力免确认'
+  },
+  {
+    id: 'toolkit-act-ask',
+    when: 'invocation',
+    match: { lane: ['desktop'], toolName: 'toolkit.call', signals: ['toolkit-act'] },
+    action: 'ask',
+    locked: true,
+    reason: '能力集合变更类能力需确认'
+  },
   // MCP 只读注解放行：工具带安全注解（readOnlyHint:true 且 destructiveHint≠true）时额外产
   // mcp-readonly 信号，命中本条目默认放行（替代原 per-server readonly-auto 豁免，改由策略可见、
   // 可审计、可覆盖）。必须排在 mcp-tool-ask 之前：注解安全调用同时带 mcp-tool 信号，先命中放行，
@@ -262,6 +276,37 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     match: { lane: ['wechat', 'feishu'], actionClass: 'write' },
     action: 'ask',
     reason: '远程链路写本地文件默认需要确认'
+  },
+
+  // ===== automation lane（偏差 21/22：无人值守链路的显式规则集，§P2-4）=====
+  // 无人类应答者：规则显式写出，兜底 fail-closed；automation 不继承任何 desktop 专属豁免。
+  {
+    id: 'automation-readonly-allow',
+    when: 'invocation',
+    match: {
+      lane: ['automation'],
+      toolName: [
+        'read_file',
+        'list_directory',
+        'grep',
+        'list_work_dirs',
+        'history.read',
+        'skills.read',
+        'read_feishu_attachment'
+      ]
+    },
+    action: 'allow',
+    reason: 'automation 只读工具无外部副作用，免确认'
+  },
+  // 默认兜底（catch-all）：新工具天然 fail-safe——落 confirm；automation lane 无回答者，
+  // RejectingChannel 使其实际效果为拒绝（cause=no-answerer，与用户拒绝在审计可区分）。locked：无豁免来源。
+  {
+    id: 'automation-default-confirm',
+    when: 'invocation',
+    match: { lane: ['automation'] },
+    action: 'ask',
+    locked: true,
+    reason: 'automation 无人类应答者，未显式放行的调用一律确认（实际拒绝）'
   },
 
   // ===== exposure 时机示例 =====

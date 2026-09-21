@@ -31,14 +31,19 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'edit_file',
     description:
-      '通过字符串替换对文件进行增量编辑。保留原文件换行符格式和文件特性。适用于修改现有文件的部分内容、创建新文件（old_string 为空）、删除内容（new_string 为空）。路径字段名为 path（小写），请勿使用 filePath 或 file_path。',
+      '通过字符串替换对文件进行增量编辑。保留原文件换行符格式和文件特性。适用于修改现有文件的部分内容、创建新文件（old_string 为空）、删除内容（new_string 为空）。路径字段名为 path（小写），请勿使用 filePath 或 file_path。old_string 未命中时返回结构化诊断（diagnosis，含最相似块行号、字符级差异与反斜杠计数），并在通过可用性预检后附上可直接重试的 suggestedOldString——请按诊断修正 old_string 后重试本工具，不要改用脚本写文件。',
     input_schema: {
       type: 'object',
       properties: {
         path: { type: 'string', description: '相对于工作目录的文件路径' },
         old_string: { type: 'string', description: '待替换的字符串（必须精确匹配，包括缩进）。空字符串表示创建新文件。' },
         new_string: { type: 'string', description: '替换后的新字符串（需与 old_string 不同）。空字符串表示删除内容。' },
-        replace_all: { type: 'boolean', description: '是否全局替换（替换所有匹配项），默认 false' }
+        replace_all: { type: 'boolean', description: '是否全局替换（替换所有匹配项），默认 false' },
+        tolerate_escape_layer: {
+          type: 'boolean',
+          description:
+            '可选（默认 false）。开启后，当 old_string 未命中且存在「仅反斜杠层数或字面 \\n 形态不同」的唯一变体恰好在文件中命中一次时，自动按该变体完成编辑并在结果中标注 matchedVariant/notice；多个变体命中或命中多次时不回退，仍返回诊断。'
+        }
       },
       required: ['path', 'old_string', 'new_string']
     }
@@ -98,7 +103,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'run_script',
     description:
-      '执行一段 Python 脚本代码（仅 Python）。脚本在工作目录下执行，有超时限制。执行前需用户确认。',
+      '执行一段 Python 脚本代码（仅 Python）。脚本在工作目录下执行，有超时限制。执行前需用户确认。修改文件请优先使用 edit_file——它带未读校验、外部修改检测、检查点备份与原子写保护；edit_file 匹配失败时按其返回的 diagnosis 修正 old_string 后重试，不要改用脚本直接读写文件。',
     input_schema: {
       type: 'object',
       properties: {
@@ -111,7 +116,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'run_shell',
     description:
-      '在会话工作目录下执行 shell 命令（macOS/Linux：POSIX Bash；Windows：Windows PowerShell 5.1）。用于 npm、git、构建/测试等 CLI。文本搜索请用 grep 工具，勿在此执行 grep/findstr/head/find/sed/awk；Python 片段请用 run_script，飞书请用 run_lark_cli。执行前需用户确认。不要混用另一种 Shell 方言；Windows 不回退 cmd。',
+      '在会话工作目录下执行 shell 命令（macOS/Linux：POSIX Bash；Windows：Windows PowerShell 5.1）。用于 npm、git、构建/测试等 CLI。文本搜索请用 grep 工具，勿在此执行 grep/findstr/head/find/sed/awk；Python 片段请用 run_script，飞书请用 run_lark_cli。执行前需用户确认。不要混用另一种 Shell 方言；Windows 宿主初始化失败时会自动降级到 pwsh/cmd 执行并在结果中标注 degradedFrom，失败时按诊断字段重试上报，勿改写命令或改用其他执行工具。',
     input_schema: {
       type: 'object',
       properties: {
@@ -181,20 +186,6 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
         full_page: { type: 'boolean', description: 'action=screenshot，默认 false' }
       },
       required: ['action']
-    }
-  },
-  {
-    name: 'browser_detect',
-    description:
-      '检测 browser 工具依赖（Stagehand、Playwright、Chromium、Node）是否就绪。返回 canInitialize、primaryFailure 与各组件状态。修复网络访问依赖时优先调用；用户表示安装完成后传 force=true 重新检测。',
-    input_schema: {
-      type: 'object',
-      properties: {
-        force: {
-          type: 'boolean',
-          description: '跳过缓存强制重新检测，默认 false'
-        }
-      }
     }
   },
   {
@@ -283,7 +274,10 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
 // 恢复工具由主进程 executor 注册；schema 必须同时进入 provider exposure/authorization。
 BUILTIN_TOOL_DEFINITIONS.push(
   { name: 'history.read', description: '读取被压缩的历史事实，支持按窗口、条目或关键词查询。', input_schema: { type: 'object', properties: { window_id: { type: 'string' }, entry_id: { type: 'string' }, query: { type: 'string' }, cursor: { type: 'string' }, limit: { type: 'integer' }, max_tokens: { type: 'integer' } } } },
-  { name: 'skills.read', description: '读取技能目录中指定技能的完整说明。', input_schema: { type: 'object', properties: { name: { type: 'string' }, max_chars: { type: 'integer' } }, required: ['name'] } }
+  { name: 'skills.read', description: '读取技能目录中指定技能的完整说明。', input_schema: { type: 'object', properties: { name: { type: 'string' }, max_chars: { type: 'integer' } }, required: ['name'] } },
+  // 能力集合（toolkit）网关：模型面恒定两条，能力增删不改变 schema（docs/requirement/agent-toolkit-capability-gateway-requirement.md §3.1）
+  { name: 'toolkit.find', description: '查询产品能力集合。需要了解运行环境（产品/系统/开发环境/工作目录/时间/浏览器依赖）或执行产品功能（MCP 管理、会话查询）时，先用本工具按用途描述或能力 id 查询，获取调用方式后再用 toolkit.call 执行。', input_schema: { type: 'object', properties: { query: { type: 'string', description: '自然语言用途描述，或精确能力 id' }, family: { type: 'string', enum: ['env', 'action'], description: '可选：env=环境知觉（只读），action=功能执行' } }, required: ['query'] } },
+  { name: 'toolkit.call', description: '调用能力集合中的具体能力。先用 toolkit.find 查询能力 id 与参数说明，再调用本工具；act 类能力需用户确认。', input_schema: { type: 'object', properties: { id: { type: 'string', description: '能力 id（来自 toolkit.find）' }, params: { type: 'object', description: '能力参数，格式见 toolkit.find 返回的 usage' } }, required: ['id'] } }
 )
 
 export const ALL_BUILTIN_TOOL_NAMES = BUILTIN_TOOL_DEFINITIONS.map((t) => t.name)

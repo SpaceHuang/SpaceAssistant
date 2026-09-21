@@ -11,6 +11,7 @@ import type { OAuthClientInformationMixed, OAuthTokens } from '@modelcontextprot
 import type { AppDatabase } from '../database'
 import { deleteConfigValue, getConfigValue, setConfigValue } from '../database'
 import type { McpServerProfile } from '../../src/shared/mcpTypes'
+import { APP_VERSION } from '../../src/shared/appMeta'
 import {
   getSecret,
   setSecret
@@ -28,6 +29,20 @@ import { resolveOauthAuthorizationServerOrigin } from './mcpConnectionManager'
 
 export const MCP_OAUTH_LOOPBACK_PORT = 42188
 export const MCP_OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60_000
+
+/** 后台路径（refresh-tools / testConnection）在 token 失效时的统一引导文案。 */
+export const MCP_AUTH_REQUIRED_MESSAGE = '授权已失效，请点击「连接账户」重新授权后再试'
+
+/**
+ * 后台路径禁止交互式授权时由 provider.redirectToAuthorization 抛出：
+ * SDK auth 流程收到该错误即终止，不会打开浏览器等待用户授权。
+ */
+export class McpInteractiveAuthRequiredError extends Error {
+  constructor() {
+    super(MCP_AUTH_REQUIRED_MESSAGE)
+    this.name = 'McpInteractiveAuthRequiredError'
+  }
+}
 
 export class OAuthCallbackTimeoutError extends Error {
   constructor(message: string) {
@@ -98,6 +113,14 @@ export type McpOAuthProviderOptions = {
   openBrowser?: (url: string) => Promise<void>
   onCode?: (code: string) => void
   preset?: McpOAuthClientPreset
+  /**
+   * 后台刷新/测试场景设为 false：token 失效时 SDK auth 流程走到重授权分支即抛
+   * McpInteractiveAuthRequiredError，不打开浏览器（避免「点刷新却弹授权页」的惊吓）。
+   * 缺省 true（startOAuthFlow 的显式授权流程）。
+   */
+  interactive?: boolean
+  /** interactive:false 且 SDK 请求交互授权时回调，供调用方转译为 auth-required 结构化错误。 */
+  onInteractiveAuthRequired?: () => void
 }
 
 export function createMcpOAuthClientProvider(
@@ -167,7 +190,7 @@ export function createMcpOAuthClientProvider(
       if (tokens.refresh_token) {
         await setSecret(db, profile.id, 'refresh-token', tokens.refresh_token)
       }
-      updateServerStatus(db, profile.id, {
+      await updateServerStatus(db, profile.id, {
         ...(tokens.expires_in
           ? {
               auth: {
@@ -186,12 +209,16 @@ export function createMcpOAuthClientProvider(
       if (kind === 'all') {
         deleteConfigValue(db, oauthClientInfoKey(profile.id))
       }
-      updateServerStatus(db, profile.id, {
+      await updateServerStatus(db, profile.id, {
         status: 'auth-expired',
         auth: { accessTokenExpiresAt: undefined }
       })
     },
     redirectToAuthorization: async (authorizationUrl: URL) => {
+      if (options?.interactive === false) {
+        options.onInteractiveAuthRequired?.()
+        throw new McpInteractiveAuthRequiredError()
+      }
       if (options?.authorize) {
         const code = await options.authorize(authorizationUrl)
         options.onCode?.(code)
@@ -291,7 +318,7 @@ export async function startOAuthFlow(
       })
     let transport = await buildTransport()
     const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
-    let client = new Client({ name: 'spaceassistant', version: '0.1.5' })
+    let client = new Client({ name: 'spaceassistant', version: APP_VERSION })
     try {
       await client.connect(transport)
     } catch (error) {
@@ -300,7 +327,7 @@ export async function startOAuthFlow(
         await client.close().catch(() => undefined)
         // SDK 传输不可重复 start：携带已保存 token 重建传输后连接
         transport = await buildTransport()
-        client = new Client({ name: 'spaceassistant', version: '0.1.5' })
+        client = new Client({ name: 'spaceassistant', version: APP_VERSION })
         await client.connect(transport)
       } else {
         throw error
@@ -309,7 +336,7 @@ export async function startOAuthFlow(
       await client.close().catch(() => undefined)
     }
 
-    updateServerStatus(db, serverId, {
+    await updateServerStatus(db, serverId, {
       status: 'connected',
       clearLastError: true
     })

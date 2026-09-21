@@ -39,6 +39,42 @@ describe('sanitizeForLog', () => {
     expect(result[1]).toBe('safe text')
   })
 
+  it("redacts compound credential keys（评审 v2 S1）：accessToken/headerValue/API_TOKEN 等", () => {
+    const result = sanitizeForLog({
+      accessToken: 'ghp_secret_value',
+      headerValue: 'Bearer xyz',
+      nested: { API_TOKEN: 'tok_plain', DEBUG: 'verbose' }
+    }) as Record<string, unknown>
+    expect(result.accessToken).toBe('[REDACTED]')
+    expect(result.headerValue).toBe('[REDACTED]')
+    const nested = result.nested as Record<string, unknown>
+    expect(nested.API_TOKEN).toBe('[REDACTED]')
+    // DEBUG 不含凭据词，保留
+    expect(nested.DEBUG).toBe('verbose')
+  })
+
+  it('env 键值表整体脱敏（toolkit.call 入参形态）', () => {
+    const result = sanitizeForLog({
+      env: { SECRET_TOKEN: 'tok-1', DEBUG: '1' }
+    }) as Record<string, unknown>
+    expect(result.env).toBe('[REDACTED]')
+  })
+
+  it('量化字段名含 token 词但非凭据 → 保留（v3 建议 2 / v4 建议 1 否定白名单，含驼峰）', () => {
+    const result = sanitizeForLog({
+      max_tokens: 8192,
+      total_tokens: 1024,
+      token_limit: 4096,
+      maxTokens: 8192,
+      tokenLimit: 4096
+    }) as Record<string, unknown>
+    expect(result.max_tokens).toBe(8192)
+    expect(result.total_tokens).toBe(1024)
+    expect(result.token_limit).toBe(4096)
+    expect(result.maxTokens).toBe(8192)
+    expect(result.tokenLimit).toBe(4096)
+  })
+
   it('redacts llmServiceKeys map values', () => {
     const result = sanitizeForLog({
       llmServiceKeys: {

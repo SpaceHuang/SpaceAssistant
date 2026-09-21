@@ -55,7 +55,15 @@ vi.mock('./chatCancelRegistry', () => ({
   registerChatCancel: vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
   clearChatCancel: vi.fn(),
   throwIfChatCancelled: vi.fn(),
-  ChatCancelledError: class ChatCancelledError extends Error {}
+  ChatCancelledError: class ChatCancelledError extends Error {},
+  // A2(偏差 18):runtime 工厂经本模块取类构造实例
+  ChatCancelRegistry: class ChatCancelRegistry {
+    register = vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }))
+    signalChatCancel = vi.fn()
+    clear = vi.fn()
+    throwIfCancelled = vi.fn()
+    cancelAllActiveChats = vi.fn()
+  }
 }))
 
 vi.mock('./sessionTitleSuggest', () => ({
@@ -104,6 +112,12 @@ vi.mock('./mcp/mcpConnectionManager', () => ({
 }))
 
 vi.mock('./mcp/mcpToolExecutor', () => ({
+  // A2(偏差 18):runtime 工厂经本模块取类构造实例
+  McpConcurrencyGate: class McpConcurrencyGate {
+    run = vi.fn((_serverId: string, fn: () => Promise<unknown>) => fn())
+    perServer = vi.fn()
+    globalConcurrency = 8
+  },
   createMcpToolExecutor: vi.fn(() => ({
     name: 'mcp-exec',
     execute: vi.fn(async () => mockExecutorResult)
@@ -123,7 +137,15 @@ vi.mock('./database', async (importOriginal) => {
 })
 
 import { runToolChatSession } from './toolChatLoop'
+import { assembleInvocation } from './runtime/invocationAssembler'
+
+/** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
+function runAssembledSession(materials: unknown) {
+  const { invocation, ports } = assembleInvocation(materials as never)
+  return runToolChatSession(invocation, ports)
+}
 import { createMemoryAppDb } from './database/testHelpers'
+import { writePolicyPackages } from './confirmation/policyRulesRuntime'
 
 function makeStream() {
   return {
@@ -153,11 +175,14 @@ function makeSender(): WebContents {
 }
 
 function makeDb(): AppDatabase {
-  return createMemoryAppDb('zh-CN')
+  // P1：desktop standard 的 mcp-tool 走「自动」（Agent 裁决）；确认-执行集成语义取 strict 档（user 确认）
+  const db = createMemoryAppDb('zh-CN')
+  writePolicyPackages(db, { desktop: 'strict', wechat: 'standard', feishu: 'standard', automation: 'standard' })
+  return db
 }
 
 async function runSession(overrides: Record<string, unknown> = {}) {
-  return runToolChatSession({
+  return runAssembledSession({
     sender: makeSender(),
     requestId: 'req-mcp',
     sessionId: 'sess-mcp',
@@ -167,6 +192,8 @@ async function runSession(overrides: Record<string, unknown> = {}) {
     workDir: '/tmp',
     userDataDir: '/tmp',
     getApiKey: async () => 'test-key',
+    emitFactEvent: () => undefined,
+    emitSessionEvent: async () => undefined,
     appDb: makeDb(),
     locale: 'zh-CN',
     ...overrides

@@ -1112,6 +1112,25 @@
   padding-top: 2px;
 }
 
+/* Thinking 强度四档选择器（§5.1） */
+.config-settings-page .config-models-effort-select {
+  width: 128px;
+}
+
+/* 「无思考」弱化标记（§5.3）：仅 supportsThinking === false 的模型名后显示 */
+.config-settings-page .config-models-catalog-row__no-thinking {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: var(--sa-radius-sm);
+  border: 1px solid var(--sa-border-strong);
+  color: var(--sa-text-tertiary);
+  font-size: var(--sa-config-font-sm);
+  line-height: 1.4;
+  white-space: nowrap;
+  cursor: help;
+}
+
 .config-settings-page .config-models-section__content {
   display: flex;
   flex-direction: column;
@@ -1310,6 +1329,15 @@
   flex-shrink: 0;
   font-size: var(--sa-config-font-sm);
   color: var(--sa-text-secondary);
+}
+
+.mcp-server-card__warning {
+  margin: 4px 12px 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: var(--sa-config-font-sm);
+  color: var(--sa-warning, #d46b08);
+  background: var(--sa-warning-bg, rgba(250, 173, 20, 0.12));
 }
 
 .mcp-server-form {
@@ -1844,6 +1872,43 @@
 .composer-model-picker__item:hover .config-model-badge--vision {
   border-color: color-mix(in srgb, #7c5cff 48%, transparent);
   background: color-mix(in srgb, #7c5cff 22%, var(--sa-bg-elevated));
+}
+
+/* 会话级 Thinking 强度选择器（§5.2）：复用模型 chip 视觉，列表为 5 项单列 */
+.composer-thinking-picker__list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.composer-thinking-picker__item {
+  width: 100%;
+  padding: 7px 12px;
+  border: none;
+  border-radius: var(--sa-radius-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-size: var(--sa-config-font);
+  color: var(--sa-text);
+}
+
+.composer-thinking-picker__item:hover {
+  background: var(--sa-bg-muted);
+}
+
+.composer-thinking-picker__item--active {
+  color: var(--sa-accent);
+  font-weight: 500;
+}
+
+/* 禁用态包裹层（评审 B2）：Tooltip 挂点——disabled chip 自身不派发鼠标事件，提示由外层 span 承载 */
+.composer-thinking-chip--disabled-wrapper {
+  display: inline-flex;
+  cursor: not-allowed;
 }
 
 .composer-model-picker__service {
@@ -2512,4 +2577,149 @@
   border-radius: var(--sa-radius-sm);
   color: color-mix(in srgb, var(--sa-warning) 82%, var(--sa-text));
   font-weight: 500;
+}
+
+/* ===== 定时任务 Tab（butler）：卡片行语言对齐 mcp-server-card / llm-service-card ===== */
+/* header（标题 + 触发/投递标签 + 启停）→ summary（提示词 + 最近运行 meta）→ footer 动作 */
+
+.butler-settings-tab {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-stack);
+  width: 100%;
+  min-width: 0;
+}
+
+.butler-settings-tab__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sa-config-gap-substack);
+  flex-wrap: wrap;
+}
+
+.butler-settings-tab__heading {
+  min-width: 0;
+}
+
+.butler-settings-tab__title {
+  margin: 0;
+  font-size: var(--sa-config-font-title);
+  font-weight: 600;
+  line-height: var(--sa-config-line-tight);
+  color: var(--sa-text);
+}
+
+.butler-settings-tab__intro {
+  margin: var(--sa-config-gap-tight) 0 0;
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+  color: var(--sa-text-secondary);
+}
+
+.butler-settings-empty {
+  display: flex;
+  justify-content: flex-start;
+  padding: var(--sa-config-gap-block) 0 0;
+}
+
+.butler-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-stack);
+  font-size: var(--sa-config-font);
+  line-height: var(--sa-config-line);
+}
+
+.butler-task-card {
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-md);
+  background: var(--sa-bg-elevated);
+  color: var(--sa-text);
+  transition:
+    border-color var(--sa-duration-fast) var(--sa-ease-out),
+    background var(--sa-duration-fast) var(--sa-ease-out),
+    opacity var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.butler-task-card--disabled {
+  opacity: 0.62;
+}
+
+.butler-task-card__header {
+  display: flex;
+  align-items: center;
+  gap: var(--sa-config-gap-field);
+  padding: var(--sa-config-gap-substack) var(--sa-config-gap-substack) 0;
+  min-height: var(--sa-config-control-min-height);
+}
+
+.butler-task-card__title {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.butler-task-card__tag {
+  margin-inline-end: 0;
+  flex-shrink: 0;
+}
+
+.butler-task-card__tag--delivery {
+  color: var(--sa-text-secondary);
+  background: transparent;
+  border-color: var(--sa-border);
+}
+
+.butler-task-card__header-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sa-config-gap-tight);
+  flex-shrink: 0;
+}
+
+.butler-task-card__summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sa-config-gap-field);
+  padding: 0 var(--sa-config-gap-substack);
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+  color: var(--sa-text-secondary);
+  min-width: 0;
+}
+
+.butler-task-card__summary-icon {
+  flex-shrink: 0;
+  color: var(--sa-icon);
+}
+
+.butler-task-card__summary-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.butler-task-card__summary-meta {
+  flex-shrink: 0;
+  font-size: var(--sa-config-font-meta);
+  color: var(--sa-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.butler-task-card__footer {
+  display: flex;
+  align-items: center;
+  gap: var(--sa-config-gap-field);
+  padding: var(--sa-config-gap-field) var(--sa-config-gap-substack) var(--sa-config-gap-substack);
+}
+
+.butler-task-card__footer .ant-btn-dangerous {
+  margin-left: auto;
 }

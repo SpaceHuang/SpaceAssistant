@@ -1,15 +1,55 @@
 import { app, Menu, shell } from 'electron'
 import { getMainWindow } from './windowRef'
-import { getMenuLabels } from '../src/shared/menuLabels'
+import type { LocalizedMessage, TranslateFn } from '../src/shared/localization'
+
+/**
+ * 应用菜单（偏差 13 收口）：主进程不产出文案——本文件只持有键化消息（MENU_LABEL_MESSAGES），
+ * 显示处经注入的 translate 端口解析；文案唯一真源是渲染端 i18n 资源（menu 命名空间）。
+ */
 
 function sendToRenderer(channel: string, ...args: unknown[]): void {
   const w = getMainWindow()
   if (w && !w.isDestroyed()) w.webContents.send(channel, ...args)
 }
 
-export function setupAppMenu(locale: string = 'zh-CN'): void {
-  const isMac = process.platform === 'darwin'
-  const labels = getMenuLabels(locale)
+export type MenuLabelKey =
+  | 'file'
+  | 'edit'
+  | 'view'
+  | 'help'
+  | 'closeWindow'
+  | 'quit'
+  | 'devTools'
+  | 'usageStats'
+  | 'settings'
+  | 'about'
+  | 'docs'
+
+export const MENU_LABEL_MESSAGES: Record<MenuLabelKey, LocalizedMessage> = {
+  file: { key: 'menu.file' },
+  edit: { key: 'menu.edit' },
+  view: { key: 'menu.view' },
+  help: { key: 'menu.help' },
+  closeWindow: { key: 'menu.closeWindow' },
+  quit: { key: 'menu.quit' },
+  devTools: { key: 'menu.devTools' },
+  usageStats: { key: 'menu.usageStats' },
+  settings: { key: 'menu.settings' },
+  about: { key: 'menu.about' },
+  docs: { key: 'menu.docs' }
+}
+
+export type MenuLabels = Record<MenuLabelKey, string>
+
+export interface MenuTemplateOptions {
+  isMac: boolean
+  /** mac 应用菜单标题（Electron 运行时传 app.name；纯 node 环境（测试）显式传入）。 */
+  appName?: string
+}
+
+/** 纯函数构造菜单模板：label 一律来自外部解析好的 labels（键化 → translate 端口），本模块零文案。 */
+export function buildMenuTemplate(labels: MenuLabels, options: MenuTemplateOptions): Electron.MenuItemConstructorOptions[] {
+  const { isMac } = options
 
   const fileSubmenu: Electron.MenuItemConstructorOptions[] = []
   if (isMac) {
@@ -26,7 +66,7 @@ export function setupAppMenu(locale: string = 'zh-CN'): void {
 
   if (isMac) {
     template.push({
-      label: app.name,
+      label: options.appName ?? app?.name ?? 'SpaceAssistant',
       submenu: [
         { role: 'about' },
         { type: 'separator' },
@@ -64,6 +104,11 @@ export function setupAppMenu(locale: string = 'zh-CN'): void {
       },
       { type: 'separator' },
       {
+        label: labels.usageStats,
+        click: () => sendToRenderer('app:open-usage-stats')
+      },
+      { type: 'separator' },
+      {
         label: labels.settings,
         accelerator: isMac ? 'Cmd+,' : 'Ctrl+,',
         click: () => sendToRenderer('app:open-settings')
@@ -89,10 +134,23 @@ export function setupAppMenu(locale: string = 'zh-CN'): void {
     template.push({ role: 'windowMenu' })
   }
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+  return template
 }
 
-export function rebuildAppMenu(locale: string): void {
-  setupAppMenu(locale)
+export function resolveMenuLabels(translate: TranslateFn): MenuLabels {
+  return Object.fromEntries(
+    (Object.keys(MENU_LABEL_MESSAGES) as MenuLabelKey[]).map((k) => [k, translate(MENU_LABEL_MESSAGES[k])])
+  ) as MenuLabels
 }
 
+export function setupAppMenu(translate: TranslateFn): void {
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(
+      buildMenuTemplate(resolveMenuLabels(translate), { isMac: process.platform === 'darwin', appName: app?.name })
+    )
+  )
+}
+
+export function rebuildAppMenu(translate: TranslateFn): void {
+  setupAppMenu(translate)
+}

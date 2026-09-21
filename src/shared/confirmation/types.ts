@@ -116,12 +116,16 @@ export type FactSignal =
   | { kind: 'lark-subcommand'; impact: 'read' | 'write' | 'low_write' | 'high_impact' | 'unknown' }
   /** MCP 工具调用事实：携带 serverId 与原始工具名（会话信任缓存键来源）。 */
   | { kind: 'mcp-tool'; serverId: string; toolName: string }
-  /**
-   * MCP 只读注解信号：server 单方面声明 `readOnlyHint === true && destructiveHint !== true` 时
+  /** MCP 只读注解信号：server 单方面声明 `readOnlyHint === true && destructiveHint !== true` 时
    * 额外产出（payload 同 mcp-tool）。命中 `mcp-readonly-allow` 默认放行；strict 套餐自动上调为
    * ask，自定义套餐可覆盖。该信号永不进确认，不派生会话信任缓存键。
    */
   | { kind: 'mcp-readonly'; serverId: string; toolName: string }
+  /**
+   * toolkit.call 能力调用事实：携带能力 id 与描述符风险级（toolkitCapabilityExtractor 派生）。
+   * 信号 token：`toolkit-capability`、`toolkit-capability:${id}`、`toolkit-read|toolkit-act`。
+   */
+  | { kind: 'toolkit-capability'; capabilityId: string; risk: 'read' | 'act' }
   | { kind: 'extraction-failed'; reason: string }
   // reserved: 沙箱迭代启用
   | { kind: 'sandbox-escape'; blockedReason: string }
@@ -132,6 +136,10 @@ export interface ContentFacts {
   baseRiskLevel: RiskLevel
   signals: FactSignal[]
   summary: ConfirmSummary
+  /** P5：事实来源标注（信号 kind → 来源半区：工具契约 / 宿主环境）；审计可回答「结论基于谁提供的事实」。 */
+  factSources?: Record<string, 'tool-contract' | 'host-environment'>
+  /** P5：宿主是否声明了 factsProvider——「声明为空」与「忘了声明」必须可区分（基线 §5.2 硬要求）。 */
+  factsProviderDeclared?: boolean
 }
 
 // ===== 策略层输出 =====
@@ -140,6 +148,8 @@ export type Decision =
   | {
       type: 'require-confirm'
       ruleId: string
+      /** 本次确认的回答者（§2.2 由动作派生，不再按 lane 查配置表）：user=人工确认卡；agent=审批 Agent。 */
+      answerer: 'user' | 'agent'
       riskLevel: RiskLevel
       facts: ContentFacts
       memoryTiers: MemoryTier[]
@@ -160,11 +170,135 @@ export interface ConfirmRequest {
   timeoutMs: number | null
 }
 
+// ===== 回答者（I1：回答者与 lane 正交；I3：记忆只源于人类）=====
+export type ConfirmAnswererKind = 'user' | 'agent' | 'deny'
+
+export interface ConfirmAnswererPolicy {
+  kind: ConfirmAnswererKind
+  /** kind='agent' 时使用；缺省用全局唯一的审批 Profile。 */
+  approvalProfileId?: string
+  /** 覆盖默认超时；不得为 null——无人场景必须有上界。 */
+  timeoutMs?: number
+}
+
+/** lane → 回答者配置；缺省 lane 用默认值表（desktop/wechat/feishu=user，automation 由主进程装配决定）。 */
+export type ConfirmAnswererMap = Partial<Record<ExecutionLane, ConfirmAnswererPolicy>>
+
+/** 审批裁决理由（方案 §4.5）：summary 给模型可读，evidence 仅审计侧。 */
+export interface ApprovalReason {
+  summary: string
+  evidence?: string[]
+  confidence?: 'low' | 'medium' | 'high'
+}
+
+/**
+ * 风险维度（Skill v2 双维裁决，对比分析 §4-A）：裁决模型先独立评估动作的内在风险，
+ * 与是否被授权无关（风险分类学见 security-approval Skill）。
+ */
+export type ApprovalRiskDimension = 'low' | 'medium' | 'high' | 'critical'
+
+/**
+ * 授权维度：unknown=无证据。automation 无人场景运行时上限为 low（真实人类授权信号
+ * 仅 P3 桌面档位启用）；上限由 parseApprovalVerdict 的 maxAuthorization 在代码侧强制。
+ */
+export type ApprovalAuthorizationDimension = 'unknown' | 'low' | 'medium' | 'high'
+
+/** 审批 Agent 裁决输出：只有两态，无中间态（输出不可解析/超时/不可用一律 deny）。 */
+export type ApprovalVerdict =
+  | {
+      kind: 'approve'
+      reason: ApprovalReason
+      riskLevel?: ApprovalRiskDimension
+      authorization?: ApprovalAuthorizationDimension
+    }
+  | {
+      kind: 'deny'
+      reason: ApprovalReason
+      riskLevel?: ApprovalRiskDimension
+      authorization?: ApprovalAuthorizationDimension
+    }
+
+/**
+ * 审批调用输入（方案 §12-1 采纳：facts + 结构化线索包），不给全量会话。
+ * 由执行链路从 ContentFacts 与工具输入构造。
+ */
+export interface ApprovalCluePack {
+  toolName: string
+  actionClass: ActionClass
+  riskLevel: RiskLevel
+  /** ConfirmSummary 纯文本摘要。 */
+  summary: string
+  /** 事实信号种类清单（不落原始输入全文）。 */
+  signals: string[]
+  targetPath?: string
+  command?: string
+  url?: string
+  involvedFiles?: string[]
+  /**
+   * 已声明的任务（对比分析 §4-D，可信证据）：真实用户创建任务时的输入摘要，
+   * 用于「动作是否服务于任务」的相关性判断；缺省 = 调用方无任务上下文（安全缺省）。
+   * 与不可信证据分区呈现（渲染在围栏之外，见 approvalAgent.renderCluePack）。
+   */
+  taskDigest?: string
+}
+
+/** 一次审批 Agent 调用（I2：标准唯一；I5：由 AgentChannel 深度计数兜底递归）。 */
+export interface ApprovalInvocation {
+  clue: ApprovalCluePack
+  lane: ExecutionLane
+  sessionId: string
+  requestId: string
+  invocationId: string
+  profileId: string
+  timeoutMs: number
+}
+
+/** 审批执行链结果：ok=false 时 cause 必须可区分（I4 / 审计五问）。 */
+export type ApprovalInvocationResult =
+  | { ok: true; verdict: ApprovalVerdict; model?: string; usage?: Record<string, unknown> }
+  | { ok: false; cause: 'timeout' | 'unavailable' | 'unparsable' | 'config-error'; summary?: string }
+
+/**
+ * 确认结束原因（审计五问之「到底拿没拿到裁决」）：fail-closed 各路径必须与 agent-deny 可区分。
+ * agent-approved 为 agent 放行的显式表达（与 user-approved 在「谁批的」口径可区分）。
+ */
+export type ConfirmOutcomeCause =
+  | 'user-approved'
+  | 'user-denied'
+  | 'agent-approved'
+  | 'agent-deny'
+  | 'unavailable'
+  | 'timeout'
+  | 'unparsable'
+  | 'config-error'
+  | 'recursion-blocked'
+  | 'no-answerer'
+  | 'gate-materials-missing'
+  | 'rules-violated'
+
 export type ConfirmOutcome =
-  | { kind: 'approved'; memory?: CacheKey }
-  | { kind: 'rejected'; memory?: CacheKey }
-  | { kind: 'timeout' }
-  | { kind: 'approved-with-action'; action: 'continue' | 'back-to-desktop' | 'stop' }
+  | {
+      kind: 'approved'
+      memory?: CacheKey
+      reason?: ApprovalReason
+      /** 本次批准的回答者；缺省视为 user（既有桌面 / IM 路径）。非 user 不得产生任何记忆写入（I3）。 */
+      answererKind?: ConfirmAnswererKind
+      cause: ConfirmOutcomeCause
+    }
+  | {
+      kind: 'rejected'
+      memory?: CacheKey
+      reason?: ApprovalReason
+      answererKind?: ConfirmAnswererKind
+      cause: ConfirmOutcomeCause
+    }
+  | { kind: 'timeout'; reason?: ApprovalReason; answererKind?: ConfirmAnswererKind; cause: ConfirmOutcomeCause }
+  | {
+      kind: 'approved-with-action'
+      action: 'continue' | 'back-to-desktop' | 'stop'
+      /** 用户通过三选一动作回答，归因 user-approved。 */
+      cause: ConfirmOutcomeCause
+    }
 
 export interface ConfirmationChannel {
   request(req: ConfirmRequest): Promise<ConfirmOutcome>
@@ -208,6 +342,10 @@ export interface DecisionCacheEntry {
 export interface SecurityAuditEvent {
   ts: number
   event: SecurityAuditEventKind
+  /** P3：命中规则的来源维度（builtin / package / user-override / migration），审计可回答「我设的 allow 为什么没生效」。 */
+  ruleOrigin?: 'builtin' | 'package' | 'user-override' | 'migration'
+  /** P5：事实来源标注（仅宿主声明 factsProvider 时携带）。 */
+  factSources?: Record<string, 'tool-contract' | 'host-environment'>
   lane: ExecutionLane
   origin?: OriginInfo
   sessionId: string
@@ -223,6 +361,12 @@ export interface SecurityAuditEvent {
   ruleId?: string
   reason?: string
   outcome?: 'approved' | 'rejected' | 'timeout' | 'cancelled'
+  /** require-confirm 决策的回答者（policy.decision；user=人工卡 / agent=审批 Agent）。 */
+  answerer?: 'user' | 'agent'
+  /** 裁决理由摘要（审批 Agent；脱敏由调用方保证，仅 summary 不落 evidence 原文）。 */
+  reasonSummary?: string
+  /** 裁决证据条数（审计侧量化依据规模，不落 evidence 原文）。 */
+  evidenceCount?: number
   /** 用户所选档位的规范化签名文本。 */
   memoryTier?: string
   /** 规范化签名文本（与缓存键同源，可对账），不落原始输入。 */
@@ -230,7 +374,16 @@ export interface SecurityAuditEvent {
   /** settings.* 事件的新旧值（JSON 序列化文本，写入前脱敏）。 */
   before?: string
   after?: string
-  actor: 'user' | 'system' | 'migration'
+  actor: 'user' | 'system' | 'migration' | 'agent'
+  /**
+   * 确认结束原因（仅 confirm.outcome 等有裁决的事件携带；与 outcome 联动，
+   * fail-closed 各路径与 agent-deny 可区分）。
+   */
+  cause?: ConfirmOutcomeCause
+  /** actor='agent' 时的归因细节（哪个 Profile / 模型 / 哪次审批调用）。 */
+  actorRef?: { profileId: string; model?: string; invocationId?: string }
+  /** 该事件的耗时（审批调用等有明确时长的动作，成本观测用）。 */
+  latencyMs?: number
 }
 
 export type SecurityAuditEventKind =
@@ -239,6 +392,7 @@ export type SecurityAuditEventKind =
   | 'policy.deny-exposure'
   | 'confirm.request'
   | 'confirm.outcome'
+  | 'confirm.answerer-fallback'
   | 'cache.hit'
   | 'cache.write'
   | 'cache.clear'
@@ -288,7 +442,8 @@ export interface PolicyConfigRequirement {
 
 /** 策略层只读缓存视图：写缓存是执行链路的事。 */
 export interface DecisionCacheView {
-  lookup(key: CacheKey): DecisionCacheEntry | null
+  /** lane 透传：缓存读写按真实 lane 键控（评审 B1——automation 不得命中 desktop 用户的历史信任条目）。 */
+  lookup(key: CacheKey, lane?: ExecutionLane | '*'): DecisionCacheEntry | null
 }
 
 /** 第 4 步自动审批器：批准返回 Decision，不裁决（approve:false）交还规则链。 */
@@ -300,10 +455,16 @@ export type AutoEvaluator = (
 /** decide 的求值环境：策略层保持纯函数，所有运行时输入经由依赖对象传入。 */
 export interface PolicyEngineDeps {
   cache: DecisionCacheView
-  /** 配置值（confirmMode / remoteScriptRequiresConfirm / deniedTools / remoteDenyOutbound 等）。 */
+  /** 配置值（remoteScriptRequiresConfirm / deniedTools / remoteDenyOutbound 等）。 */
   config: Record<string, unknown>
   /** 迁移完成位（参数化配置引用问询）。 */
   migrationComplete: boolean
   /** 第 4 步自动审批器（可注入，缺省不裁决）。 */
   autoEvaluator?: AutoEvaluator
+  /**
+   * 档位动作变换（§2.1 LANE_PROFILES 按当前 lane+档位绑定；缺省恒等）。
+   * 规则集变换由 resolvePolicyRules 完成，此项仅用于引擎合成规则（default-write-execute-ask）
+   * ——extraction-failed 兜底不参与变换（不变换例外）。
+   */
+  transform?: (rule: Pick<PolicyRule, 'action' | 'locked'>) => PolicyAction
 }

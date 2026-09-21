@@ -1,3 +1,4 @@
+import type { AgentReasoningEffort } from '../../shared/agent/invocation'
 import type { AppConfig, Session } from '../../shared/domainTypes'
 import {
   buildChatModelOptions,
@@ -6,6 +7,27 @@ import {
   resolvePreferredModelEntry,
   type ChatModelOption
 } from '../../shared/llmModelConfig'
+import { isThinkingEffort, normalizeThinkingEffort } from '../../shared/thinkingEffort'
+
+/** 会话级 Thinking 强度绑定（需求 §5.2）：继承语义 + composer 草稿保持，与 resolveSessionModelBinding 同构。 */
+export function resolveSessionThinkingBinding(
+  cfg: AppConfig,
+  session: Session | undefined,
+  draftEffort?: AgentReasoningEffort
+): { effort: AgentReasoningEffort; overridden: boolean; globalEffort: AgentReasoningEffort } {
+  const globalEffort = normalizeThinkingEffort(cfg.thinkingEffort, 'medium')
+  if (!session) {
+    // composer 在首个会话创建前渲染：草稿选择视为覆盖，随会话创建一并写入
+    return isThinkingEffort(draftEffort)
+      ? { effort: draftEffort, overridden: true, globalEffort }
+      : { effort: globalEffort, overridden: false, globalEffort }
+  }
+  if (isThinkingEffort(session.thinkingEffort)) {
+    return { effort: session.thinkingEffort, overridden: true, globalEffort }
+  }
+  // undefined / null / 损坏值 = 未覆盖，每次解析读全局当前值（继承而非快照，§4.2）
+  return { effort: globalEffort, overridden: false, globalEffort }
+}
 
 export function resolveSessionModelBinding(
   cfg: AppConfig,

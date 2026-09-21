@@ -33,6 +33,40 @@ export type PendingConfirmItem = {
 
 type Listener = () => void
 
+/**
+ * 不变量（评审 S-01）：confirmationSnapshot 永不脱离 confirmationReady 单独变化——
+ * snapshot 仅在 chatGetPendingConfirmation 的 .then 回调中与 confirmationReady=true 同时写入，
+ * 而投影重建的 next 恒为 confirmationReady:false 且无 snapshot，
+ * 因此本函数不比较 confirmationSnapshot，snapshot 差异必然已被 confirmationReady 捕获。
+ * 若未来出现单独写 snapshot 的路径，必须把该字段纳入比较，否则会静默丢失 notify。
+ */
+function samePendingItems(a: PendingConfirmItem[], b: PendingConfirmItem[]): boolean {
+  if (a.length !== b.length) return false
+  const index = new Map(a.map((item) => [`${item.requestId}:${item.toolUseId}`, item]))
+  for (const item of b) {
+    const prev = index.get(`${item.requestId}:${item.toolUseId}`)
+    if (!prev) return false
+    if (prev.sessionId !== item.sessionId
+      || prev.toolName !== item.toolName
+      || prev.riskLevel !== item.riskLevel
+      || prev.turnId !== item.turnId
+      || prev.turnVersion !== item.turnVersion
+      || prev.confirmationReady !== item.confirmationReady
+      || prev.autoApproveFallback !== item.autoApproveFallback
+      || prev.currentPageUrl !== item.currentPageUrl
+      || prev.sessionTrustedHint !== item.sessionTrustedHint
+      || prev.createdAt !== item.createdAt) return false
+    // 深字段沿用旧 JSON.stringify 守卫的语义，但只对单个 item 执行
+    if (JSON.stringify(prev.input ?? null) !== JSON.stringify(item.input ?? null)) return false
+    if (JSON.stringify(prev.diff ?? null) !== JSON.stringify(item.diff ?? null)) return false
+    if (JSON.stringify(prev.shellSecurityHints ?? null) !== JSON.stringify(item.shellSecurityHints ?? null)) return false
+    if (JSON.stringify(prev.dangerInfo ?? null) !== JSON.stringify(item.dangerInfo ?? null)) return false
+    if (JSON.stringify(prev.mcp ?? null) !== JSON.stringify(item.mcp ?? null)) return false
+    if (JSON.stringify(prev.memoryTiers ?? null) !== JSON.stringify(item.memoryTiers ?? null)) return false
+  }
+  return true
+}
+
 class PendingConfirmStore {
   private items: PendingConfirmItem[] = []
   private listeners = new Set<Listener>()
@@ -82,7 +116,7 @@ class PendingConfirmStore {
     }))
     const keep = this.items.filter((item) => item.requestId !== args.requestId)
     const updated = [...keep, ...next]
-    if (JSON.stringify(this.items) === JSON.stringify(updated) && !args.retryAttempt) return
+    if (!args.retryAttempt && samePendingItems(this.items, updated)) return
     this.items = updated
     this.notify()
     if (args.turnId && args.turnVersion !== undefined && typeof window.api.chatGetPendingConfirmation === 'function') {

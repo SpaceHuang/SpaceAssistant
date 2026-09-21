@@ -1,7 +1,7 @@
-import type { WebContents } from 'electron'
 import type { AppDatabase } from '../database'
 import { getMessages, getConfigValue } from '../database'
-import { runToolChatSession, type RunToolChatSessionArgs } from '../toolChatLoop'
+import { runToolChatSession } from '../toolChatLoop'
+import { assembleInvocation, type AgentInvocationMaterials } from '../runtime/invocationAssembler'
 import { buildResolveWorkDirCallback, resolveWorkDirForSession, type WorkDirManager } from '../workDirManager'
 import { SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
@@ -10,6 +10,7 @@ import { buildClaudeToolChatMessages, trimClaudeToolChatMessages } from '../../s
 import { MAX_CHAT_API_MESSAGES } from '../../src/shared/chatApiMessageLimits'
 import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
 import type { RemoteContext } from '../tools/types'
+import { getCallAdmissionGate } from '../runtime/callAdmissionGate'
 import { readAppLocale } from '../appIpc'
 import { resolveLlmCredentialsForModel } from '../llmServiceResolver'
 import { logHistoryOversizedToolResult } from '../oversizedToolResultLog'
@@ -41,13 +42,18 @@ export function extractTextFromContent(content: unknown[]): string {
 export type ImRemoteAgentResult = { summary: string; pendingConfirm: boolean; ok: boolean; outcome?: 'cancelled' | 'timed-out' }
 
 export async function runImRemoteAgent(args: {
+  /** B1(偏差 23):准入门注入(测试);缺省全局默认门。 */
+  admissionGate?: import('../runtime/callAdmissionGate').CallAdmissionGate
   db: AppDatabase
   sessionId: string
   requestId: string
+  /** 本回合真实 Turn ID（C17）：由 router 的 prepared.turnId 下传，供用量统计落库。 */
+  turnId?: string
+  /** 冻结执行配置里的 LLM 服务 ID（DIM3：同模型跨服务分开统计）。 */
+  llmServiceId?: string
   workDir: string
   workDirManager: WorkDirManager
   userDataDir: string
-  getMainWebContents: () => WebContents | null
   getApiKey: () => Promise<string | null>
   getBaseUrl: () => string
   getModel: () => string
@@ -60,7 +66,7 @@ export async function runImRemoteAgent(args: {
   buildSystemAppendix: (args: { browserRemoteHint?: FeishuBrowserRemoteHint }) => string
   progressDefaults: Required<RemoteProgressConfig>
   progressConfig: RemoteProgressConfig
-  toolChatExtras?: Pick<RunToolChatSessionArgs, 'feishuConfig' | 'wechatConfig' | 'larkCliRunner'>
+  toolChatExtras?: Pick<AgentInvocationMaterials, 'feishuConfig' | 'wechatConfig' | 'larkCliRunner'>
   onFinally?: () => void
   /** WeChat historically rethrows as `new Error(message)`. */
   rethrowAsError?: boolean
@@ -70,14 +76,35 @@ export async function runImRemoteAgent(args: {
   emitFactEvent?: (event: AssistantFactEvent) => void
 }): Promise<ImRemoteAgentResult> {
   const requestId = args.requestId
-  const sender = args.getMainWebContents()
-  const noopSender = { send: () => undefined } as unknown as WebContents
-  const effectiveSender = sender ?? noopSender
 
-  const getOutboundSessionId = () => resolveRemoteOutboundSessionId(args.remoteContext, args.sessionId)
-  const adapter = args.createProgressAdapter(getOutboundSessionId)
-  startRemoteProgressSession(args.sessionId, adapter, args.progressConfig, args.progressDefaults)
+  // B1(偏差 23):调用级准入——远端发起入口(四处之一)。票据覆盖整回合,拒绝即答复「资源忙」。
+  const admissionGate = args.admissionGate ?? getCallAdmissionGate()
+  const admission = await admissionGate.acquire({
+    lane: args.remoteContext.source,
+    priority: 'interactive',
+    role: 'top-level',
+    disposition: 'reject',
+    requestId
+  })
+  if (!admission.ok) {
+    return {
+      summary: admission.verdict === 'rejected' ? '当前调用并发已达上限，请稍后再试。' : '当前调用已被限流，请稍后再试。',
+      pendingConfirm: false,
+      ok: false
+    }
+  }
 
+  try {
+    const getOutboundSessionId = () => resolveRemoteOutboundSessionId(args.remoteContext, args.sessionId)
+    const adapter = args.createProgressAdapter(getOutboundSessionId)
+    // P2(评审):progress session 启动在票据持有窗口内——挪进 try,同步抛出也走 release
+    startRemoteProgressSession(args.sessionId, adapter, args.progressConfig, args.progressDefaults)
+    return await runAdmittedTurn()
+  } finally {
+    if (admission.ok) admission.ticket.release()
+  }
+
+  async function runAdmittedTurn(): Promise<ImRemoteAgentResult> {
   try {
     const resolved = resolveWorkDirForSession(
       args.db,
@@ -126,10 +153,13 @@ export async function runImRemoteAgent(args: {
     const baseUrl = creds.baseUrl ?? args.getBaseUrl()
     const getApiKey = creds.error ? args.getApiKey : creds.getApiKey
 
-    const res = await runToolChatSession({
-      sender: effectiveSender,
+    const { invocation, ports } = assembleInvocation({
       requestId,
       sessionId: args.sessionId,
+      turnId: args.turnId,
+      // DIM3：统计维度以实际解析出的服务为准——resolver 未指定 serviceId 时可能回落默认服务，
+      // 会话冻结配置（args.llmServiceId）仅作 resolver 失败时的兜底（评审 P1-2）。
+      llmServiceId: creds.serviceId || args.llmServiceId,
       model: routeModelName,
       contextWindow,
       baseUrl,
@@ -155,8 +185,10 @@ export async function runImRemoteAgent(args: {
       remoteContext: args.remoteContext,
       locale: readAppLocale(args.db),
       ...args.toolChatExtras
-      ,emitFactEvent: args.emitFactEvent
+      ,emitFactEvent: args.emitFactEvent ?? (() => undefined)
+      ,emitSessionEvent: async () => undefined
     })
+    const res = await runToolChatSession(invocation, ports)
 
     if (!res.ok) {
       const pending = res.error.includes('确认')
@@ -178,5 +210,6 @@ export async function runImRemoteAgent(args: {
     stopRemoteProgressSession(args.sessionId)
     clearRemoteProgressSession(args.sessionId)
     args.onFinally?.()
+  }
   }
 }

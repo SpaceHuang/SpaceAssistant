@@ -11,6 +11,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # 源文件 NUL 字节检查：只需 git 与 node，放在 npm ci 之前失败即秒级退出
+      # （背景：Node 22 node:sqlite 按 NUL 截断读出字符串，字面 NUL 曾致 CI 与本地结果不一致）
+      - name: Check source files for NUL bytes
+        run: npm run check:no-nul
+      # tree-sitter 受控 wasm/node-types 哈希校验：只需 node，与 check:no-nul 同层秒级失败
+      - name: Check tree-sitter wasm hashes
+        run: npm run check:treesitter-wasm
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
@@ -20,8 +27,28 @@ jobs:
       - run: npm run i18n:check
       - run: npm run typecheck:shared
       - run: npm run typecheck:renderer
+      # SDK 包独立 tsconfig(A3,偏差 19:包 typecheck 独立于 tsconfig.electron.json)
+      - run: npm run typecheck:agent-core
+      # SDK 包边界护栏(A3,偏差 19):禁 electron / 禁 sqlite 直依赖 / 入口闭包零 electron
+      - run: npm run check:agent-core
       - run: npm run build:electron
+      # SDK 级验收常驻回归（A4，偏差 20）：createAgentRuntime + 内存端口，不启动 Electron 跑完整回合
+      - run: npm exec vitest run electron/toolChatLoop.inMemoryPorts.test.ts packages/agent-core/test/agentCore.test.ts
       - run: npm test
+
+  golden-windows:
+    name: Script/Shell golden baselines (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run i18n:generate-types
+      # Shell/Python Golden 基线在 win32 录制：路径判定语义与宿主平台耦合（P1-8），固定 windows 运行
+      - run: npm exec vitest run electron/shell/shellGolden.test.ts electron/shell/scriptGolden.test.ts
 
   sqlite-electron-probe:
     name: SQLite Electron probe (${{ matrix.label }})

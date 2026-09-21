@@ -60,7 +60,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     thinkingEnabled: false,
     workDir: '',
     maxParallelChatSessions: 3,
-    tools: { enabled: false, confirmMode: 'diff', allowedTools: [], deniedTools: [], pythonPath: 'python', scriptTimeout: 300, fileCheckpointingEnabled: true, maxFileSnapshots: 100, grepTimeoutSec: 60 },
+    tools: { enabled: false, allowedTools: [], deniedTools: [], pythonPath: 'python', scriptTimeout: 300, fileCheckpointingEnabled: true, maxFileSnapshots: 100, grepTimeoutSec: 60 },
     skills: { enabled: false, autoRoute: false, scanIntervalSec: 300 },
     wiki: { enabled: false },
     feishu: { enabled: false },

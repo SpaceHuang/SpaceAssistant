@@ -3,14 +3,16 @@ import { App as AntdApp, Button } from 'antd'
 import { useAppDispatch, useTypedSelector } from './hooks'
 import { setSessions, upsertSession } from './store/sessionSlice'
 import { setSession, setScrollToMessageId } from './store/chatSlice'
-import { setConfig, setSettingsOpen, setAboutOpen, openSettings } from './store/configSlice'
+import { setConfig, setSettingsOpen, setAboutOpen, setUsageStatsOpen, openSettings } from './store/configSlice'
 import { ChatView } from './components/Chat/ChatView'
 import { ConfigSettingsPage } from './components/Config/ConfigModal'
 import { AboutModal } from './components/Config/AboutModal'
+import { UsageStatsDrawer } from './components/UsageStats/UsageStatsDrawer'
 import { WikiPane, type WikiPaneHandle } from './components/WikiPane'
 import { WikiPaneToolbar } from './components/WikiPane/WikiPaneToolbar'
 import { collectToWiki } from './services/wikiImportService'
 import { ensureWorkDirForSession } from './services/workDirSessionSync'
+import { startInvalidationService } from './services/invalidationService'
 import { DetailPanel, DetailPanelProvider, useDetailPanel } from './components/DetailPanel'
 import { SplitPane } from './components/ui/SplitPane'
 import { initTurnProjectionBridge } from './services/turnProjectionService'
@@ -81,6 +83,7 @@ function AppShellInner() {
   const { message } = AntdApp.useApp()
   const dispatch = useAppDispatch()
   const config = useTypedSelector((s) => s.config.config)
+  const usageStatsOpen = useTypedSelector((s) => s.config.usageStatsOpen)
   const sessions = useTypedSelector((s) => s.session.list)
   const currentSessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const [siderKey, setSiderKey] = useState<'sessions' | 'wiki' | 'search'>('sessions')
@@ -90,6 +93,9 @@ function AppShellInner() {
   const wikiEnabled = Boolean(config?.wiki?.enabled)
 
   useEffect(() => { void refreshMcpToolCatalog() }, [])
+
+  // 偏差 11:失效通知服务(通知驱动重取,真相只从 Storage 取)
+  useEffect(() => startInvalidationService(), [])
 
   useEffect(() => {
     const onOpenSettings = (event: Event) => {
@@ -178,7 +184,12 @@ function AppShellInner() {
     })
     const off1 = window.api.onOpenSettings(() => dispatch(setSettingsOpen(true)))
     const off2 = window.api.onOpenAbout(() => dispatch(setAboutOpen(true)))
+    const offUsageStats = window.api.onOpenUsageStats(() => dispatch(setUsageStatsOpen(true)))
     const offTitle = window.api.sessionOnTitleGenerated(({ session }) => {
+      dispatch(upsertSession(session))
+    })
+    // 管家定时 / 手动触发的会话创建推送：不订阅的话新会话要重启才出现在列表里
+    const offSessionCreated = window.api.sessionOnCreated(({ session }) => {
       dispatch(upsertSession(session))
     })
     const offTurnProjection = initTurnProjectionBridge()
@@ -191,7 +202,9 @@ function AppShellInner() {
     return () => {
       off1()
       off2()
+      offUsageStats()
       offTitle()
+      offSessionCreated()
       offTurnProjection()
       offTurnDisplay()
       turnDisplayReconciliation.clear()
@@ -295,6 +308,7 @@ function AppShellInner() {
 
       <ConfigSettingsPage />
       <AboutModal />
+      <UsageStatsDrawer open={usageStatsOpen} onClose={() => dispatch(setUsageStatsOpen(false))} />
       </div>
     </div>
   )

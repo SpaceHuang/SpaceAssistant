@@ -1,0 +1,93 @@
+{
+  "id": "t2-18-filter-left",
+  "dialect": "windows-powershell",
+  "platform": "linux",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "Get-ChildItem -Filter *.tmp",
+      "Remove-Item"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [],
+      "warnings": [],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": false
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": false,
+      "outsideWorkDirRisk": false,
+      "warnings": [],
+      "scannedPaths": []
+    },
+    "facts": {
+      "dialect": "windows-powershell",
+      "operations": [
+        {
+          "verb": "Get-ChildItem",
+          "args": [
+            "-Filter",
+            "*.tmp"
+          ],
+          "segmentIndex": 0
+        },
+        {
+          "verb": "Remove-Item",
+          "args": [],
+          "segmentIndex": 1
+        }
+      ],
+      "connectors": [
+        "|"
+      ],
+      "paths": [],
+      "cwdChanges": [],
+      "analysisCompleteness": "complete",
+      "unresolved": []
+    }
+  },
+  "signature": {
+    "normalized": "Get-ChildItem -Filter *.tmp | Remove-Item",
+    "trust": {
+      "executable": "",
+      "argv": [],
+      "hasMetasyntax": true,
+      "persistable": false
+    },
+    "persistableSingle": false
+  },
+  "facts": {
+    "dialect": "windows-powershell",
+    "operations": [
+      {
+        "verb": "Get-ChildItem",
+        "args": [
+          "-Filter",
+          "*.tmp"
+        ],
+        "segmentIndex": 0
+      },
+      {
+        "verb": "Remove-Item",
+        "args": [],
+        "segmentIndex": 1
+      }
+    ],
+    "connectors": [
+      "|"
+    ],
+    "paths": [],
+    "cwdChanges": [],
+    "analysisCompleteness": "complete",
+    "unresolved": []
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "complete",
+    "persistable": false,
+    "hasMetasyntax": true
+  }
+}

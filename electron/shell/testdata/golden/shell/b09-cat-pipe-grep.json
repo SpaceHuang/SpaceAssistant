@@ -1,0 +1,123 @@
+{
+  "id": "b09-cat-pipe-grep",
+  "dialect": "posix-bash",
+  "platform": "linux",
+  "analysis": {
+    "verdict": "ask",
+    "segments": [
+      "cat /etc/passwd",
+      "grep root"
+    ],
+    "pathVerdict": {
+      "decision": "ask",
+      "violations": [
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：/etc/passwd",
+          "path": "/etc/passwd",
+          "severity": "warning"
+        },
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：/etc/passwd",
+          "path": "/etc/passwd",
+          "severity": "warning"
+        }
+      ],
+      "warnings": [
+        "命令包含工作目录外的路径：/etc/passwd"
+      ],
+      "outsideWorkDirRisk": false,
+      "requiresRiskAck": true
+    },
+    "permissionDecision": "ask",
+    "shellSecurityHints": {
+      "requiresRiskAck": true,
+      "outsideWorkDirRisk": false,
+      "warnings": [
+        "命令包含工作目录外的路径：/etc/passwd"
+      ],
+      "scannedPaths": [
+        "/etc/passwd",
+        "/etc/passwd"
+      ],
+      "violationCodes": [
+        "PATH_OUTSIDE_<WORKDIR>",
+        "PATH_OUTSIDE_<WORKDIR>"
+      ]
+    },
+    "facts": {
+      "dialect": "posix-bash",
+      "operations": [
+        {
+          "verb": "cat",
+          "args": [
+            "/etc/passwd"
+          ],
+          "segmentIndex": 0
+        },
+        {
+          "verb": "grep",
+          "args": [
+            "root"
+          ],
+          "segmentIndex": 1
+        }
+      ],
+      "connectors": [
+        "|"
+      ],
+      "paths": [
+        "/etc/passwd"
+      ],
+      "cwdChanges": [],
+      "analysisCompleteness": "complete",
+      "unresolved": []
+    }
+  },
+  "signature": {
+    "normalized": "cat /etc/passwd | grep root",
+    "trust": {
+      "executable": "",
+      "argv": [],
+      "hasMetasyntax": true,
+      "persistable": false
+    },
+    "persistableSingle": false
+  },
+  "facts": {
+    "dialect": "posix-bash",
+    "operations": [
+      {
+        "verb": "cat",
+        "args": [
+          "/etc/passwd"
+        ],
+        "segmentIndex": 0
+      },
+      {
+        "verb": "grep",
+        "args": [
+          "root"
+        ],
+        "segmentIndex": 1
+      }
+    ],
+    "connectors": [
+      "|"
+    ],
+    "paths": [
+      "/etc/passwd"
+    ],
+    "cwdChanges": [],
+    "analysisCompleteness": "complete",
+    "unresolved": []
+  },
+  "precheck": {
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "complete",
+    "persistable": false,
+    "hasMetasyntax": true
+  }
+}

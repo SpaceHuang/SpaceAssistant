@@ -242,4 +242,60 @@ describe('turn projection bridge', () => {
       off()
     })
   })
+
+  describe('display 通道失败原因投递', () => {
+    function stubDisplayApi(over: Record<string, unknown> = {}) {
+      let listener: ((data: any) => void) | undefined
+      const chatGetTurnTerminal = vi.fn()
+      const chatGetMessagePage = vi.fn()
+      vi.stubGlobal('window', { api: {
+        usageSet: vi.fn().mockResolvedValue(undefined),
+        chatListActiveTurns: vi.fn().mockResolvedValue([]),
+        chatOnTurnDisplay: vi.fn((cb: any) => { listener = cb; return () => undefined }),
+        chatGetTurnTerminal,
+        chatGetMessagePage,
+        chatRetryTurnCheckpoint: vi.fn(),
+        ...over
+      } })
+      return { emit: (display: any) => listener?.({ display }), chatGetTurnTerminal, chatGetMessagePage }
+    }
+
+    // display 消息是 bounded 格式：turnDisplayToMessage 会无条件 map toolCalls
+    const failedMessage = { id: 'a-fail', sessionId: 's1', role: 'assistant', content: '', timestamp: 1, status: 'failed', schemaVersion: 1, toolCalls: [] }
+    const committed = { commitStatus: 'committed', committedVersion: 1, version: 1, requestId: 'r1', sessionId: 's1', assistantMessageId: 'a-fail' }
+
+    it('display 终态失败时把 terminal 错误详情写入失败原因（402 余额不足场景）', async () => {
+      const { emit, chatGetTurnTerminal, chatGetMessagePage } = stubDisplayApi()
+      const reason = '402 {"error":{"message":"Insufficient Balance","type":"unknown_error","param":null,"code":"invalid_request_error"}}'
+      chatGetTurnTerminal.mockResolvedValue({ turnId: 'd-fail-turn', outcome: 'failed', error: { code: 'source-failed', message: reason }, ...committed })
+      chatGetMessagePage.mockResolvedValue({ entries: [{ message: failedMessage, sequence: 1 }] })
+      const off = initTurnProjectionBridge()
+      emit({ turnId: 'd-fail-turn', requestId: 'r1', sessionId: 's1', version: 1, lifecycle: 'failed', outcome: 'failed', message: failedMessage })
+      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledWith(setTurnFailure({ messageId: 'a-fail', reason })))
+      off()
+    })
+
+    it('display 终态没有错误详情时不写入失败原因，保留通用提示', async () => {
+      const { emit, chatGetTurnTerminal, chatGetMessagePage } = stubDisplayApi()
+      chatGetTurnTerminal.mockResolvedValue({ turnId: 'd-timeout-turn', outcome: 'timed-out', ...committed })
+      chatGetMessagePage.mockResolvedValue({ entries: [{ message: failedMessage, sequence: 1 }] })
+      const off = initTurnProjectionBridge()
+      emit({ turnId: 'd-timeout-turn', requestId: 'r1', sessionId: 's1', version: 1, lifecycle: 'failed', outcome: 'timed-out', message: failedMessage })
+      await vi.waitFor(() => expect(chatGetMessagePage).toHaveBeenCalled())
+      expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'chat/setTurnFailure' }))
+      off()
+    })
+
+    it('display 成功终态不写入失败原因', async () => {
+      const { emit, chatGetTurnTerminal, chatGetMessagePage } = stubDisplayApi()
+      const completedMessage = { ...failedMessage, status: 'completed' }
+      chatGetTurnTerminal.mockResolvedValue({ turnId: 'd-ok-turn', outcome: 'completed', ...committed })
+      chatGetMessagePage.mockResolvedValue({ entries: [{ message: completedMessage, sequence: 1 }] })
+      const off = initTurnProjectionBridge()
+      emit({ turnId: 'd-ok-turn', requestId: 'r1', sessionId: 's1', version: 1, lifecycle: 'completed', outcome: 'completed', message: completedMessage })
+      await vi.waitFor(() => expect(chatGetMessagePage).toHaveBeenCalled())
+      expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'chat/setTurnFailure' }))
+      off()
+    })
+  })
 })

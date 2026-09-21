@@ -5,14 +5,13 @@ import { ToolsSettingsTab } from './ToolsSettingsTab'
 import { DEFAULT_BROWSER_CONFIG, DEFAULT_SHELL_CONFIG } from '../../../shared/domainTypes'
 import { DEFAULT_FEISHU_CONFIG } from '../../../shared/feishuTypes'
 
-function renderFileSection(confirmMode: 'diff' | 'direct' | 'auto' = 'diff') {
+function renderFileSection() {
   const setToolUi = vi.fn()
   render(
     <App>
       <ToolsSettingsTab
         section="file"
         toolUi={{
-          confirmMode,
           deniedTools: [],
           pythonPath: 'python',
           scriptTimeout: 300,

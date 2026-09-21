@@ -43,6 +43,7 @@ import { WikiTab } from './WikiTab'
 import { FeishuSettingsTab } from './FeishuSettingsTab'
 
 import { WeChatSettingsTab } from './WeChatSettingsTab'
+import { ButlerTaskSettings } from './ButlerTaskSettings'
 
 import { RemoteImCommonSettings } from './RemoteImCommonSettings'
 
@@ -63,6 +64,14 @@ import {
   normalizeSettingsTabKey
 
 } from './configModalSnapshot'
+
+import {
+
+  isThinkingEffort,
+
+  normalizeThinkingEffort
+
+} from '../../../shared/thinkingEffort'
 
 import {
 
@@ -90,7 +99,7 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { changeAppLocale, persistLocaleToBackend } from '../../i18n/localeSync'
 import { resolveWorkDirProfileForSave } from '../../services/workDirSessionSync'
 
-const SETTINGS_SECTION_KEYS = ['general', 'models', 'skills', 'wiki', 'remoteIm', 'feishu', 'wechat'] as const
+const SETTINGS_SECTION_KEYS = ['general', 'models', 'skills', 'wiki', 'remoteIm', 'feishu', 'wechat', 'butler'] as const
 
 type SettingsSectionKey = (typeof SETTINGS_SECTION_KEYS)[number]
 
@@ -106,15 +115,15 @@ function resolveLocaleForSnapshot(
   return cfg?.locale ?? 'zh-CN'
 }
 
-function resolveThinkingEnabledForSnapshot(
+function resolveThinkingEffortForSnapshot(
   watch: unknown,
   form: ReturnType<typeof Form.useForm>[0],
-  cfg: { thinkingEnabled: boolean } | null
-): boolean {
-  if (typeof watch === 'boolean') return watch
-  const fromForm = form.getFieldValue('thinkingEnabled')
-  if (typeof fromForm === 'boolean') return fromForm
-  return Boolean(cfg?.thinkingEnabled)
+  cfg: { thinkingEffort?: import('../../../shared/agent/invocation').AgentReasoningEffort } | null
+): import('../../../shared/agent/invocation').AgentReasoningEffort {
+  if (isThinkingEffort(watch)) return watch
+  const fromForm = form.getFieldValue('thinkingEffort')
+  if (isThinkingEffort(fromForm)) return fromForm
+  return normalizeThinkingEffort(cfg?.thinkingEffort, 'medium')
 }
 
 /** @deprecated 使用 ConfigSettingsPage；保留别名以兼容现有 import */
@@ -147,7 +156,7 @@ export function ConfigSettingsPage() {
 
   const localeWatch = Form.useWatch('locale', form)
 
-  const thinkingEnabledWatch = Form.useWatch('thinkingEnabled', form)
+  const thinkingEffortWatch = Form.useWatch('thinkingEffort', form)
 
   const [models, setModels] = useState<ModelEntry[]>([])
   const enabledModelIds = useMemo(() => models.filter((m) => m.enabled).map((m) => m.id), [models])
@@ -168,8 +177,6 @@ export function ConfigSettingsPage() {
   const [workDirSaveError, setWorkDirSaveError] = useState<string | null>(null)
 
   const [toolUi, setToolUi] = useState({
-
-    confirmMode: 'diff' as 'diff' | 'direct' | 'auto',
 
     deniedTools: [] as string[],
 
@@ -235,7 +242,8 @@ export function ConfigSettingsPage() {
       wiki: tCommon('settings.wiki'),
       remoteIm: tCommon('settings.remoteIm'),
       feishu: tCommon('settings.feishu'),
-      wechat: tCommon('settings.wechat')
+      wechat: tCommon('settings.wechat'),
+      butler: tCommon('settings.butler')
     }
     return SETTINGS_SECTION_KEYS.map((key) => ({ key, label: labels[key] }))
   }, [tCommon])
@@ -265,7 +273,7 @@ export function ConfigSettingsPage() {
 
         locale: cfg.locale,
 
-        thinkingEnabled: cfg.thinkingEnabled
+        thinkingEffort: cfg.thinkingEffort
 
       })
 
@@ -311,8 +319,6 @@ export function ConfigSettingsPage() {
       ]
 
       setToolUi({
-
-        confirmMode: cfg.tools.confirmMode,
 
         deniedTools,
 
@@ -423,7 +429,7 @@ export function ConfigSettingsPage() {
 
       locale: resolveLocaleForSnapshot(localeWatch, form, cfg),
 
-      thinkingEnabled: resolveThinkingEnabledForSnapshot(thinkingEnabledWatch, form, cfg),
+      thinkingEffort: resolveThinkingEffortForSnapshot(thinkingEffortWatch, form, cfg),
 
       models,
 
@@ -465,7 +471,7 @@ export function ConfigSettingsPage() {
 
     localeWatch,
 
-    thinkingEnabledWatch,
+    thinkingEffortWatch,
 
     models,
 
@@ -614,7 +620,7 @@ export function ConfigSettingsPage() {
 
         locale: v.locale,
 
-        thinkingEnabled: v.thinkingEnabled,
+        thinkingEffort: v.thinkingEffort,
 
         models,
 
@@ -627,8 +633,6 @@ export function ConfigSettingsPage() {
         tools: {
 
           enabled: true,
-
-          confirmMode: toolUi.confirmMode,
 
           deniedTools: toolUi.deniedTools,
 
@@ -1009,6 +1013,10 @@ export function ConfigSettingsPage() {
       case 'wechat':
 
         return <WeChatSettingsTab wechat={wechatUi} onChange={setWechatUi} />
+
+      case 'butler':
+
+        return <ButlerTaskSettings />
 
       default:
 

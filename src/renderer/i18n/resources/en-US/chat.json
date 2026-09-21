@@ -63,7 +63,9 @@
       "browserDetect": "Check browser dependencies",
       "invokeTool": "Invoke tool: {{toolName}}",
       "mcpUnknownServer": "Unknown MCP service",
-      "mcpUnresolved": "External MCP tool (unknown source)"
+      "mcpUnresolved": "External MCP tool (unknown source)",
+      "toolkitFind": "Query capability toolkit",
+      "toolkitCall": "Capability call · {{id}}"
     },
     "descriptions": {
       "grep": "Search file contents under the working directory",
@@ -78,12 +80,31 @@
       "invokeTool": "Invoke tool: {{toolName}}"
     }
   },
-  "mcp": { "copyResult": "Copy result", "openArtifact": "Open full result", "openFailed": "Failed to open full content", "openSettings": "Open MCP server settings", "noDescription": "No description provided by this server", "waitingConfirm": "Waiting for confirmation {{value}}", "execution": "Execution {{value}}", "total": "Total {{value}}", "expandAll": "Expand all ({{count}} lines)", "resultEmpty": "Tool returned an empty result", "resultTooLarge": "Result too large; showing summary only", "imageResult": "Image result · {{mimeType}} · {{size}} bytes", "resourceResult": "Resource: {{name}} ({{uri}})", "statusRunning": "Running", "statusSuccess": "Success", "statusFailed": "Failed", "statusRejected": "Rejected", "statusInterrupted": "Interrupted", "statusAwaitingConfirm": "Awaiting confirmation" },
+  "mcp": {
+    "copyResult": "Copy result",
+    "openArtifact": "Open full result",
+    "openFailed": "Failed to open full content",
+    "openSettings": "Open MCP server settings",
+    "noDescription": "No description provided by this server",
+    "waitingConfirm": "Waiting for confirmation {{value}}",
+    "execution": "Execution {{value}}",
+    "total": "Total {{value}}",
+    "expandAll": "Expand all ({{count}} lines)",
+    "resultEmpty": "Tool returned an empty result",
+    "resultTooLarge": "Result too large; showing summary only",
+    "imageResult": "Image result · {{mimeType}} · {{size}} bytes",
+    "resourceResult": "Resource: {{name}} ({{uri}})",
+    "statusRunning": "Running",
+    "statusSuccess": "Success",
+    "statusFailed": "Failed",
+    "statusRejected": "Rejected",
+    "statusInterrupted": "Interrupted",
+    "statusAwaitingConfirm": "Awaiting confirmation"
+  },
   "input": {
     "placeholder": "Type a message…",
     "send": "Send message",
     "abort": "Stop generation",
-    "hintIdle": "Enter to send, Shift+Enter for newline",
     "hintRunning": "Click Stop to abort",
     "hintRunningQueue": "Enter to send and queue",
     "queueSend": "Send and queue",
@@ -122,6 +143,7 @@
     "fallbackBanner": "Auto-approve failed: {{reason}}. Please confirm this write manually."
   },
   "confirm": {
+    "autoAnswering": "Being auto-adjudicated by the approval agent — no manual confirmation needed",
     "decisionAriaLabel": "Confirm: {{action}}",
     "mcp": {
       "title": "External MCP tool call",
@@ -189,7 +211,16 @@
       "expand": "Expand all ({{count}} lines)"
     },
     "previewTruncatedLine": "… (showing first 500 lines only)",
-    "previewCap": "Changes exceed 500 lines; preview truncated. Use the file tree for the full diff."
+    "previewCap": "Changes exceed 500 lines; preview truncated. Use the file tree for the full diff.",
+    "toolkit": {
+      "title": "Product capability call",
+      "capability": "Capability: {{id}}",
+      "argsLabel": "Arguments",
+      "emptyArgs": "(no arguments)",
+      "riskHint": "This capability is built into the product; mutating capabilities (e.g. adding an MCP connection) require confirmation.",
+      "allow": "Allow",
+      "deny": "Deny"
+    }
   },
   "chatView": {
     "warnings": {
@@ -216,5 +247,18 @@
     "workDirNotConfigured": "Working directory is not configured. Set it in Settings first.",
     "outputTrustSuspect": "Output encoding is suspect and the raw bytes were saved: the text may not be the real output — check the raw-bytes artifact to verify."
   },
-  "writeSuccess": {}
+  "writeSuccess": {},
+  "composer": {
+    "thinking": {
+      "label": "Thinking effort",
+      "aria": "Choose thinking effort",
+      "inheritWithGlobal": "Default ({{effort}})",
+      "defaultSuffix": "{{effort}} · Default",
+      "off": "Off",
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "notSupported": "This model does not support thinking"
+    }
+  }
 }

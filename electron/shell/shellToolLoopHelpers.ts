@@ -27,7 +27,8 @@ export async function precheckRunShellTool(args: {
   workDir: string
   userDataDir: string
   shellConfig?: ShellConfig | null
-  appDb?: AppDatabase | null
+  /** P2 端口化：trusted-command 记账写经端口注入（真相类，不允许静默停写）。 */
+  shellPrecheck?: { touchTrustedCommand: (command: string) => void } | null
 }): Promise<RunShellPrecheckResult> {
   const analysis = await analyzeShellCommand(
     args.workDir,
@@ -54,8 +55,8 @@ export async function precheckRunShellTool(args: {
   const legacyAutoAllowEligible = analysisComplete && parsedCommand.persistable && !parsedCommand.hasMetasyntax &&
     !analysis.shellSecurityHints.requiresRiskAck &&
     (legacyPolicy.permissionDecision === 'allow' || legacyPolicy.trustedCacheKeys.length > 0)
-  if (legacyAutoAllowEligible && args.appDb && matchesTrustedCommand(args.command, args.shellConfig?.trustedCommands)) {
-    touchTrustedCommand(args.appDb, args.command)
+  if (legacyAutoAllowEligible && matchesTrustedCommand(args.command, args.shellConfig?.trustedCommands)) {
+    args.shellPrecheck?.touchTrustedCommand(args.command)
   }
   const hints: ShellSecurityHints = {
     requiresRiskAck: analysis.shellSecurityHints.requiresRiskAck,

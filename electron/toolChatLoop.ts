@@ -1,21 +1,28 @@
-import type { WebContents } from 'electron'
-import { isWebContentsAlive, safeWebContentsSend } from './safeWebContentsSend'
 import Anthropic from '@anthropic-ai/sdk'
 import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/anthropicToolSanitize'
+import { sanitizeCapabilityParamsForDisplay } from '../src/shared/capabilityParamSanitize'
 import { normalizeExternalToolName } from '../src/shared/toolNameCompatibility'
 import { projectUsageAfterToolResults } from '../src/shared/contextUsageEstimate'
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import { createAnthropicClient } from './anthropicClientFactory'
-import { buildClaudeToolLoopStreamParams } from './claudeToolLoopStreamParams'
+import { buildClaudeToolLoopStreamParams, computeCacheBreakpointPositions } from './claudeToolLoopStreamParams'
+import {
+  buildThinkingWireParams,
+  consumeEffortMemoizedAudit,
+  isEffortUnsupportedByUpstream,
+  isOutputConfigRejectedError,
+  memoizeEffortUnsupported
+} from './effortFallback'
 import { normalizeStopReason, type NormalizedStopReason } from './stopReason'
 import { resolveToolLoopModelOptions } from './toolLoopModelOptions'
 import { sanitizeAnthropicToolsPayloadForStrictGateways } from './anthropicToolPayload'
 import type { WorkDirManager } from './workDirManager'
 import { FileStateCache } from './fileStateCache'
 import { getRegisteredTool, getToolExecutor } from './tools/builtinExecutors'
+import { getCallAdmissionGate } from './runtime/callAdmissionGate'
 import { executeRegisteredTool } from './tools/toolInvocationCoordinator'
 import { coordinatorConfirmHook } from './tools/coordinatorConfirmationAdapter'
-import { executePreparedShellExecution } from './tools/runShellExecutor'
+import { executePreparedShellExecutionWithHostFallback } from './tools/runShellExecutor'
 import { planRunShellExecution, RunShellPlanError } from './tools/runShellPlan'
 import type { PreparedShellExecution } from './shell/preparedShellExecution'
 import { validateToolExecutorResultForTool, type ToolExecutorResult } from './tools/types'
@@ -51,7 +58,7 @@ import { activateRecoverySkillInState } from '../src/shared/browserDependencyRec
 import { buildToolCapabilityConventionHint } from '../src/shared/skillPrompt'
 import { getSkillByName } from './skills/skillScanner'
 import { getCachedSkills } from './skills/skillCache'
-import { getSession, updateSession } from './database'
+import { recordStepUsage, recordTurnSummary, type UsageTurnOutcome } from './usageStats/usageStatsRecorder'
 import { listProfiles } from './mcp/mcpConfigStore'
 import type { BrowserDetectContext } from '../src/shared/browserTypes'
 import { type ActDangerAssessment } from './browser/browserActionPolicy'
@@ -69,15 +76,22 @@ import {
   formatDependencyRecoveryToolContent,
   resolveDependencyRecoverySkill
 } from './browser/browserDependencyRecovery'
-import type { AppDatabase } from './database'
 import type { HistoryFact } from '../src/shared/historyReader'
 import type { AssistantFactEvent } from '../src/shared/assistantFactAggregator'
 import { scheduleSessionTitleSuggestion, reachedCumulativeAssistantTurnsForTitleSuggest } from './sessionTitleSuggest'
 import type { FeishuConfig } from '../src/shared/feishuTypes'
 import type { LarkCliRunner } from './feishu/larkCliRunner'
 import type { RemoteContext } from './tools/types'
+import type {
+  AgentEventSink,
+  AgentHostPorts,
+  AgentInvocation,
+  AgentInvocationResult
+} from '../src/shared/agent/invocation'
+import { AGENT_ADDITIONAL_CONTEXT_KEYS } from '../src/shared/agent/invocation'
 import type { WeChatConfig } from '../src/shared/wechatTypes'
-import type { ExecutionLane } from '../src/shared/confirmation/types'
+import type {
+  ConfirmAnswererPolicy, ExecutionLane } from '../src/shared/confirmation/types'
 import { BROWSER_REMOTE_DISABLED_CODE } from '../src/shared/browserRemotePolicy'
 import { SHELL_REMOTE_DISABLED_ERROR } from '../src/shared/shellToolDisplay'
 import { resolveEffectiveShellOutputMode } from '../src/shared/shellOutputMode'
@@ -89,10 +103,11 @@ import { evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCa
 import { recordUserAnswerFromDecision, recordSystemManagedCacheEntry } from './confirmation/decisionCacheWriter'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { channelFor } from './confirmation/channels'
+import { AgentChannel } from './confirmation/agentChannel'
 import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
 import { getBuiltinToolMetadata } from '../src/shared/builtinToolMetadata'
-import { mapLegacyConfirmation } from './tools/coordinatorConfirmationAdapter'
-import type { ConfirmRequest } from '../src/shared/confirmation/types'
+import { mapLegacyConfirmation, type LegacyConfirmationRejectReason, type LegacyPolicyCode } from './tools/coordinatorConfirmationAdapter'
+import type { ConfirmAnswererKind, ConfirmOutcomeCause, ConfirmRequest } from '../src/shared/confirmation/types'
 import {
   formatScriptDenyUserMessage,
   getRemoteTaskController
@@ -138,6 +153,7 @@ import {
   registerChatCancel,
   throwIfChatCancelled
 } from './chatCancelRegistry'
+import { clearSessionActiveStream, registerSessionActiveStream } from './chatActiveStreams'
 import { getCachedMemoryContent } from './projectMemory'
 import { buildFinalSystemPrompt, resolveRequestLocale } from './llmSystemPrompt'
 import type { AppLocale } from '../src/shared/locale'
@@ -164,12 +180,12 @@ import {
   releaseWritePath,
   releaseAllWritePathsForSession
 } from './toolWriteConflict'
-import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
+import { ensureApiTextContent } from '../src/shared/claudeToolHistory'
 import { computeEffectiveTools, authorizeToolCall } from './effectiveTools'
 import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from './toolRevocationRegistry'
-import { buildRequestContextPayload, buildRequestHeaderPayload } from '../src/shared/requestContext'
+import { buildRequestContextPayload, buildRequestHeaderPayload, computeMessagePrefixStats, digestSurfaceItems, elideConstantHeaderFields, type CacheBreakpoints, type ConstantHeaderFingerprints } from '../src/shared/requestContext'
 import { extractToolPairIds, validateSurfaceForSend } from '../src/shared/surfacePreflight'
 import { computeContextPressure, shouldCompact } from '../src/shared/contextMeter'
 import type { ContextMeter } from '../src/shared/contextMeterService'
@@ -179,8 +195,81 @@ import { computeReplaySurfaceFingerprint, computeShadowedRanges, excludeReplayOn
 import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
 import { normalizeAnthropicEvent } from './anthropicStreamDelta'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
+import {
+  MAX_OUTPUT_RECOVERIES,
+  buildOutputRecoveryMessage,
+  buildTruncatedToolResults,
+  classifyOutputRecovery
+} from './outputRecovery'
 
 const fileCaches = new Map<string, FileStateCache>()
+
+/**
+ * P0-1 双面埋点的「上一请求」状态（agent-context-token-cost-optimization-plan §5.2）：
+ * key = contextWindowId（缓存域），跨 turn 存活——turn 首请求的 messages 前缀统计必须
+ * 对照上一 turn 末请求。只保存上一请求的 item digest 列表与断点位置（§5.2.3 要点 6）。
+ */
+interface RequestPrefixState { prevItemDigests: string[] | null; prevBreakpointPositions: string[] | null; lastHeaderFingerprints: ConstantHeaderFingerprints | null; prevCompletedToolUseIds: string[] | null }
+const requestPrefixStates = new Map<string, RequestPrefixState>()
+const REQUEST_PREFIX_STATE_MAX_KEYS = 500
+
+function getRequestPrefixState(contextWindowId: string): RequestPrefixState {
+  let state = requestPrefixStates.get(contextWindowId)
+  if (!state) {
+    if (requestPrefixStates.size >= REQUEST_PREFIX_STATE_MAX_KEYS) {
+      const oldest = requestPrefixStates.keys().next().value
+      if (oldest !== undefined) requestPrefixStates.delete(oldest)
+    }
+    state = { prevItemDigests: null, prevBreakpointPositions: null, lastHeaderFingerprints: null, prevCompletedToolUseIds: null }
+    requestPrefixStates.set(contextWindowId, state)
+  }
+  return state
+}
+
+/** 组装本次请求的双面埋点与前缀经济性字段并推进 prev 状态（必须在请求实际发出前调用一次）。 */
+function buildRequestPrefixTelemetry(args: { contextWindowId: string; plannedMessages: unknown[]; wireMessages: readonly unknown[]; hasSystem: boolean; completedToolUseIds: string[] }): { messagePrefixStats: ReturnType<typeof computeMessagePrefixStats>; cacheBreakpoints: CacheBreakpoints; incrementalCompletedToolUseIds: string[] } {
+  const state = getRequestPrefixState(args.contextWindowId)
+  const messagePrefixStats = computeMessagePrefixStats(args.plannedMessages, state.prevItemDigests)
+  const positions = computeCacheBreakpointPositions({ messages: args.wireMessages, hasSystem: args.hasSystem, cacheControl: true })
+  const prevPositions = state.prevBreakpointPositions
+  const cacheBreakpoints: CacheBreakpoints = {
+    count: positions.length,
+    positions,
+    tailIsString: positions.some((p) => p.startsWith('msg:')),
+    prevPositions,
+    moved: prevPositions !== null && JSON.stringify(prevPositions) !== JSON.stringify(positions)
+  }
+  // P1-3(c)：completedToolUseIds 随轮次单调增长（实测均值 5.6 KB/请求、最大 11.8 KB），而
+  // request_header 的 checkpoint 无程序化读取方（压缩恢复走内存对象）。改为增量编码：
+  // 仅写相对上一请求新增的 toolUseId，语义由 RequestHeaderPayload 注释声明。
+  const prevIdSet = new Set(state.prevCompletedToolUseIds ?? [])
+  const incrementalCompletedToolUseIds = args.completedToolUseIds.filter((id) => !prevIdSet.has(id))
+  state.prevItemDigests = digestSurfaceItems(args.plannedMessages)
+  state.prevBreakpointPositions = positions
+  state.prevCompletedToolUseIds = args.completedToolUseIds
+  return { messagePrefixStats, cacheBreakpoints, incrementalCompletedToolUseIds }
+}
+
+/**
+ * turn 边界历史重建（buildClaudeToolChatMessages）对无 toolCalls 的 assistant 输出纯字符串
+ * content（ensureApiTextContent：拼接、trim、空则单空格）。实时累积路径若保留 text 块数组，
+ * 次轮 round:1 的重建前缀会从上一 turn 的最终回复处分歧，造成该 turn 边界缓存整段失效
+ * （agent-context-token-cost-optimization §3.4.5 候选 A 静态比对结论）。
+ * 含 tool_use / thinking 等非 text 块时不转换——重建路径对带 toolCalls 的 assistant 同样输出块数组。
+ */
+function normalizeAssistantContentForHistoryParity(content: Anthropic.ContentBlock[]): string | Anthropic.ContentBlock[] {
+  // 先剔除空白 text 块：重建侧只保留非空白正文（buildClaudeToolChatMessages 的 content.trim() 判断），
+  // 实时侧若保留空白块，混合数组（text+tool_use）与前缀都会从该项分歧（评审观察 1）。
+  const meaningful = content.filter((block) => {
+    if (Boolean(block) && typeof block === 'object' && (block as { type?: unknown }).type === 'text') {
+      return String((block as { text?: unknown }).text ?? '').trim().length > 0
+    }
+    return true
+  })
+  const allText = meaningful.every((block) => Boolean(block) && typeof block === 'object' && (block as { type?: unknown }).type === 'text')
+  if (!allText) return meaningful
+  return ensureApiTextContent(meaningful.map((block) => ((block as { text?: unknown }).text ?? '')).join(''))
+}
 
 export function getFileStateCacheForSession(sessionId: string): FileStateCache {
   let c = fileCaches.get(sessionId)
@@ -291,7 +380,12 @@ function formatToolResultPayload(
   return serializeAgentToolResult(r, options)
 }
 
+/** 执行失败桶阈值（既有行为不变）。 */
 const MAX_CONSECUTIVE_SAME_TOOL_ERROR = 3
+/** P1-3 安全拒绝桶阈值（计划 §12-3 定值 5）：安全拒绝与执行失败分开计数，管家「换方案」能力不被压制。 */
+const MAX_CONSECUTIVE_SAFETY_REJECT = 5
+
+type ToolErrorBucket = 'exec' | 'safety'
 
 function compactToolResultContentForApi(
   content: string,
@@ -339,17 +433,18 @@ function makeToolErrorRepeatTracker() {
   let lastKey: string | null = null
   let count = 0
   return {
-    noteFailure(toolName: string, error: string, identity?: string): boolean {
-      const key = `${toolName}\0${error}\0${identity ?? ''}`
+    noteFailure(toolName: string, error: string, identity?: string, bucket: ToolErrorBucket = 'exec'): boolean {
+      // P1-3：键内并入来源分桶——安全拒绝（策略 deny / 确认拒绝）与执行失败互不累计
+      const key = `${bucket}\0${toolName}\0${error}\0${identity ?? ''}`
       if (key === lastKey) count++
       else {
         lastKey = key
         count = 1
       }
-      return count >= MAX_CONSECUTIVE_SAME_TOOL_ERROR
+      return count >= (bucket === 'safety' ? MAX_CONSECUTIVE_SAFETY_REJECT : MAX_CONSECUTIVE_SAME_TOOL_ERROR)
     },
     noteSuccess(toolName: string): void {
-      if (lastKey?.startsWith(`${toolName}\0`)) {
+      if (lastKey?.includes(`\0${toolName}\0`)) {
         lastKey = null
         count = 0
       }
@@ -396,9 +491,12 @@ async function maybeBuildConfirmDiff(
 }
 
 export type RunToolChatSessionArgs = {
-  sender: WebContents
   requestId: string
   sessionId: string
+  /** 本回合真实 Turn ID（C17）：桌面 / 远程 / butler 三个调用方各传现成值；缺省回退 sessionId 占位（桌面包装层仍会覆写台账 payload）。 */
+  turnId?: string
+  /** 冻结执行配置里的 LLM 服务 ID（DIM3：同模型跨服务分开统计）。 */
+  llmServiceId?: string
   windowId?: string
   model: string
   contextWindow?: number
@@ -413,6 +511,20 @@ export type RunToolChatSessionArgs = {
   feishuConfig?: FeishuConfig
   wechatConfig?: WeChatConfig
   larkCliRunner?: LarkCliRunner
+  /** 显式 lane（偏差 21）：由驱动源层解析后随调用传入；缺省回退 remoteContext 推导，最终 desktop。 */
+  lane?: import('../src/shared/confirmation/types').ExecutionLane
+  /**
+   * P2-4 递归守卫标记（I5）：仅审批执行链传入 'approval-agent'（代码写死，不进配置）。
+   * gate 看到 require-confirm + 该标记 → 改写为 deny(cause=recursion-blocked)。
+   */
+  internalConfirmExemption?: 'approval-agent'
+  /** 工具执行轮数上界（有界调用方使用，如审批 Agent ≤3）；缺省不限。 */
+  maxToolLoopRounds?: number
+  /**
+   * 已声明的任务（对比分析 §4-D，可信证据）：管家装配传任务 prompt 摘要，
+   * 仅用于 agent 回答者线索包的任务相关性判断；缺省 = 无任务上下文。
+   */
+  approvalTaskDigest?: string
   remoteContext?: RemoteContext
   workDir: string
   workDirManager?: WorkDirManager
@@ -420,9 +532,10 @@ export type RunToolChatSessionArgs = {
   userDataDir: string
   getApiKey: () => Promise<string | null>
   /** 用于达到累计 assistant 阈值后异步生成会话标题（不写则跳过） */
-  appDb?: AppDatabase
   locale?: AppLocale
   projectMemoryEnabled?: boolean
+  /** P4：思维强度档位（装配期解析；发起时冻结，调用内不变）。 */
+  reasoningEffort?: import('../src/shared/agent/invocation').AgentReasoningEffort
   skillFragments?: string[]
   /** 当轮 user 消息 id（tool loop 日志等） */
   currentUserMessageId?: string
@@ -431,16 +544,57 @@ export type RunToolChatSessionArgs = {
   assistantMessageId?: string
   hasImageAttachments?: boolean
   getBrowserDetectContext?: () => BrowserDetectContext
-  floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
-  /** 统一消息事实迁移端口；Core-owned 请求可配合关闭 legacy IPC 事实发送。 */
-  emitFactEvent?: (event: AssistantFactEvent) => void
-  /** Core 事件台账写入口；与 UI fact 通道分离，保存原始 NormalizedDelta。 */
-  emitSessionEvent?: (event: SessionEventInput) => void | Promise<void>
+  /** 统一消息事实迁移端口（必填）：调用方显式声明过程事实往哪里说；无观察者时传 no-op。 */
+  emitFactEvent: (event: AssistantFactEvent) => void
+  /** Core 事件台账写入口（必填）：与 UI fact 通道分离，保存原始 NormalizedDelta。 */
+  emitSessionEvent: (event: SessionEventInput) => void | Promise<void>
+  /** 文件树失效通知出口；由装配方决定投给谁，未传即 no-op。 */
+  onFileTreeChanged?: (event: import('../src/shared/fileTreeSync').FileTreeChangeEvent) => void
+  /** 会话标题落库完成后的界面通知出口；未传即 no-op（落库照常）。 */
+  onTitleGenerated?: (session: import('../src/shared/domainTypes').Session) => void
   appendCompactionTransaction?: (start: Record<string, unknown>, summary: Record<string, unknown>) => Promise<unknown>
   /** Core 以 session event ledger 提供的唯一上下文测量适配器。 */
   contextMeter?: ContextMeter
   /** 成功完成 provider 请求后，在下一轮发送前执行 turn-boundary 规划。 */
   onTurnBoundary?: (input: { requestId: string; windowId: string; system: string; tools: unknown[]; surfaceSnapshot: ReturnType<typeof buildRequestHeaderPayload>['surfaceSnapshot']; messages: ClaudeContentBlockMessage[]; budget: ReturnType<typeof buildRequestContextPayload>['budget']; contextUsage?: ReturnType<typeof buildRequestContextPayload>['contextUsage']; toolExecutionCheckpoint: ReturnType<typeof buildRequestHeaderPayload>['toolExecutionCheckpoint']; requiredSurfaceSet: string[] }) => Promise<void>
+  /** P1：events 出口对象随展开层注入（floatingNotificationManager 已收回为 events.notify，§5.5）。 */
+  events?: AgentEventSink
+  /** P2（B1）：门控端口材料（装配期解析注入；此处空对象仅类型占位，缺失会触发门控 fail-loud）。 */
+  gatePolicy?: {
+    effectiveRules: import('../src/shared/confirmation/types').PolicyRule[]
+    /** 「自动」变换的档位来源（§2.1，与 effectiveRules 同源装配注入；缺省 standard） */
+    lanePackage?: import('../src/shared/policy/policyPackages').PolicyPackage
+    decisionCache: import('./confirmation/toolCallGate').GateDecisionCache
+    shellPrecheck: { touchTrustedCommand: (command: string) => void }
+    policyOrigins?: Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }>
+  }
+  /** P2 批次 B：宿主端口材料（展开层注入，循环体经端口消费，Core 不持库）。 */
+  hostDiagnostics?: { append(serverId: string, entry: never): void }
+  hostUsage?: {
+    recordStepUsage?(input: Record<string, unknown>): void
+    recordTurnSummary?(input: Record<string, unknown>): void
+  }
+  hostStorage?: {
+    sessionMeta?: Record<string, unknown> | undefined
+    readSession?(sessionId: string): unknown
+    persist?: {
+      updateSessionMetadata?(sessionId: string, patch: Record<string, unknown>): void
+      scheduleTitleSuggestion?(input: Record<string, unknown>): void
+      recordUserAnswerFromDecision?(input: Record<string, unknown>): void
+    }
+  }
+  hostExposureRules?: readonly import('../src/shared/confirmation/types').PolicyRule[]
+  hostMcp?: {
+    snapshot: McpToolSnapshot
+    resolveExecutor?(toolName: string, manager: McpConnectionManager): import('./tools/types').ToolExecutor | undefined
+    executorDatabase?: unknown
+  }
+  hostAnswerer?: {
+    /** P3 契约路径重构遗留端口：审批内层独立数据库上下文（回答者已由 gate 决策派生，不再按 lane 查配置）。 */
+    approvalDatabase?: unknown
+  }
+  /** P7（偏差 16）：按调用裁剪（装配层从 profile.tools.trim 平移）。 */
+  toolsTrim?: { allow?: readonly string[]; deny?: readonly string[] }
 }
 
 export type ToolLoopUsage = ReturnType<typeof normalizeAnthropicMessageUsage>
@@ -457,8 +611,73 @@ export type RunToolChatSessionResult =
   | { ok: true; content: unknown[]; stopReason: string; usage?: ToolLoopUsage; finalSurfaceSnapshot?: ReturnType<typeof buildRequestHeaderPayload>['surfaceSnapshot']; finalSurfaceMessages?: ClaudeContentBlockMessage[] }
   | { ok: false; error: string; usage?: ToolLoopUsage; cancelled?: boolean }
 
+/** 本回合的用量统计计数（runToolChatSession 作用域内创建、随回合结束丢弃，不引入跨模块累加器 —— 需求 §7.3.1）。 */
+export type TurnUsageStats = {
+  stepCount: number
+  toolCallCount: number
+  toolErrorCount: number
+  toolSkippedCount: number
+}
+
+/**
+ * 以 tool_result 终态为基准的三分类计数（需求 §2.4.0 恒等式）：
+ * `tool_call_count = 执行成功 + 执行失败 + 未执行`；孤儿 tool_call（无 tool_result）不计入。
+ */
+export function noteToolResultForStats(stats: TurnUsageStats, result: ToolCallResultPersisted): void {
+  stats.toolCallCount += 1
+  if (result.notExecuted) {
+    stats.toolSkippedCount += 1
+  } else if (!result.success) {
+    stats.toolErrorCount += 1
+  }
+}
+
+/**
+ * P1-D（D4）：确认拒绝 → notExecutedReason 的显式归类表。
+ * agent-deny（安全审批机审拒绝）不再误标为 user_rejected——那会污染 token 统计、
+ * UI 文案与错误归因；errorCode（远程只读/授权撤销）优先级最高，维持既有归类；
+ * 通道机器侧 fail-closed 拒绝（超时/不可用/不可解析/递归阻断等）归入 policy_denied。
+ */
+export function notExecutedReasonForConfirmation(input: {
+  cause?: ConfirmOutcomeCause
+  errorCode?: string
+}): ToolCallResultPersisted['notExecutedReason'] {
+  if (input.errorCode === 'REMOTE_READ_ONLY') return 'remote_read_only'
+  if (input.errorCode === 'AUTHORIZATION_REVOKED') return 'authorization_revoked'
+  switch (input.cause) {
+    case 'agent-deny':
+      return 'agent_denied'
+    case 'timeout':
+      return 'confirm_timeout'
+    case 'recursion-blocked':
+    case 'unavailable':
+    case 'unparsable':
+    case 'config-error':
+    case 'no-answerer':
+    case 'gate-materials-missing':
+    case 'rules-violated':
+      return 'policy_denied'
+    default:
+      // user-denied / 未走通道的既有拒绝路径：保底 user_rejected，迁移期行为不回归
+      return 'user_rejected'
+  }
+}
+
+/**
+ * P2-F F3：无人档位下高风险操作的机审拒绝是安全设计的必然结果（§5.7），
+ * 但拒绝必须可解释、可操作——理由要包含「如何获批」的可操作指引。
+ * 只补可操作性，不改变安全策略、不预设放行结论。
+ */
+export function agentDenyHowToApproveGuidance(): string {
+  return (
+    '本次为安全审批的机审拒绝（当前执行档位下高风险且授权不足会必然拒绝，属预期安全策略）。' +
+    '若确认该操作必要且安全，可用的获批途径：让用户在交互式会话中对确认卡片手动批准；' +
+    '将命令加入信任列表（低风险简单命令可被信任放行）；' +
+    '或把操作拆分为低风险只读步骤逐步完成。'
+  )
+}
+
 function failToolLoopWithLastUsage(
-  sender: WebContents,
   requestId: string,
   sessionId: string,
   error: string,
@@ -475,35 +694,134 @@ function failToolLoopWithLastUsage(
   }
 }
 
-export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<RunToolChatSessionResult> {
+/** confirm-requested 事件的风险级：取裁决结果与 medium 的较大值（评审 S7）。 */
+export function confirmRequestedRiskLevel(gate: { decision: { type: string; riskLevel?: 'low' | 'medium' | 'high' } }): 'low' | 'medium' | 'high' {
+  const order = { low: 0, medium: 1, high: 2 } as const
+  const decided = gate.decision.type === 'require-confirm' ? gate.decision.riskLevel ?? 'medium' : 'medium'
+  return order[decided] >= order.medium ? decided : 'medium'
+}
+
+/**
+ * P1 适配层展开（基线 §6.2 → 既有内部字段名）：把 Invocation 契约 + 宿主端口展开为
+ * 循环体既有的取用形状（旧变量名逐个对应），循环体不动（计划 §4 P1）。
+ * electron 专属类型（消息块 / RemoteContext / WorkDirManager / AppDatabase / ContextMeter）
+ * 的收窄集中在此，不进循环体。
+ */
+function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): RunToolChatSessionArgs {
+  const additional = invocation.additionalContext
+  return {
+    requestId: invocation.trace.requestId,
+    sessionId: invocation.session.sessionId,
+    turnId: invocation.trace.turnId,
+    windowId: invocation.trace.windowId,
+    llmServiceId: invocation.profile.llmServiceId,
+    model: invocation.profile.model,
+    contextWindow: invocation.profile.contextWindow,
+    baseUrl: ports.credentials.networkTarget?.baseUrl as string | undefined,
+    reasoningEffort: invocation.profile.reasoning?.effort ?? 'off',
+    messages: invocation.messages.list as unknown as ClaudeContentBlockMessage[],
+    system: invocation.profile.system,
+    options: invocation.profile.options,
+    toolsConfig: invocation.profile.tools.toolsConfig,
+    browserConfig: invocation.profile.tools.browserConfig,
+    shellConfig: invocation.profile.tools.shellConfig,
+    wikiConfig: invocation.profile.tools.wikiConfig,
+    feishuConfig: invocation.profile.tools.feishuConfig,
+    wechatConfig: invocation.profile.tools.wechatConfig,
+    larkCliRunner: invocation.profile.tools.larkCliRunner as LarkCliRunner | undefined,
+    lane: invocation.profile.lane,
+    internalConfirmExemption: invocation.safety.recursionGuard,
+    maxToolLoopRounds: invocation.limits.maxToolRounds,
+    approvalTaskDigest: additional[AGENT_ADDITIONAL_CONTEXT_KEYS.approvalTaskDigest] as string | undefined,
+    remoteContext: invocation.driverContext as RemoteContext | undefined,
+    workDir: ports.workspace.workDir,
+    workDirManager: ports.workspace.workDirManager as WorkDirManager | undefined,
+    resolveWorkDir: ports.workspace.resolveWorkDir,
+    userDataDir: ports.workspace.userDataDir,
+    getApiKey: () => ports.credentials.resolveApiKey(),
+    locale: invocation.profile.locale as AppLocale | undefined,
+    projectMemoryEnabled: invocation.profile.projectMemoryEnabled,
+    skillFragments: invocation.profile.skillFragments,
+    currentUserMessageId: invocation.messages.currentUserMessageId,
+    historyFacts: additional[AGENT_ADDITIONAL_CONTEXT_KEYS.historyFacts] as readonly HistoryFact[] | undefined,
+    assistantMessageId: invocation.messages.assistantMessageId,
+    hasImageAttachments: invocation.messages.hasImageAttachments,
+    getBrowserDetectContext: ports.hostFacts?.getBrowserDetectContext,
+    emitFactEvent: (event) => invocation.events.onFact(event),
+    emitSessionEvent: (event) => invocation.events.onSessionEvent(event),
+    onFileTreeChanged: invocation.events.onFileTreeChanged,
+    onTitleGenerated: invocation.events.onTitleGenerated,
+    appendCompactionTransaction: ports.storage?.appendCompactionTransaction,
+    contextMeter: ports.contextMeter as ContextMeter | undefined,
+    onTurnBoundary: ports.turnBoundary as RunToolChatSessionArgs['onTurnBoundary'],
+    events: invocation.events,
+    gatePolicy: ports.policy as RunToolChatSessionArgs['gatePolicy'],
+    hostDiagnostics: ports.diagnostics as RunToolChatSessionArgs['hostDiagnostics'],
+    hostUsage: ports.usage,
+    hostStorage: {
+      sessionMeta: ports.storage?.loaded?.metadata as Record<string, unknown> | undefined,
+      readSession: ports.storage?.readSession as RunToolChatSessionArgs['hostStorage'] extends { readSession?: infer F } ? F : never,
+      persist: ports.storage?.persist as RunToolChatSessionArgs['hostStorage'] extends { persist?: infer P } ? P : never
+    },
+    hostExposureRules: ports.exposure?.rules,
+    hostMcp: ports.mcp as RunToolChatSessionArgs['hostMcp'],
+    hostAnswerer: ports.answerer as RunToolChatSessionArgs['hostAnswerer'],
+    toolsTrim: invocation.profile.tools.trim
+  }
+}
+
+export async function runToolChatSession(invocation: AgentInvocation, ports: AgentHostPorts): Promise<AgentInvocationResult> {
+  const args = expandInvocation(invocation, ports)
   const chatSignal = registerChatCancel(args.requestId)
-  const requestLane = args.remoteContext
-    ? args.remoteContext.source === 'feishu'
-      ? 'feishu'
-      : 'wechat'
-    : 'desktop'
+  // sessionId→活跃流反向登记：供 action.session.status/list 判定会话运行中（需求 §9.4，
+  // 与下方 finally 的 clearSessionActiveStream 成对、按 requestId 粒度删除，重入安全）
+  registerSessionActiveStream(args.sessionId, args.requestId)
+  const requestLane = args.lane
+    ?? (args.remoteContext
+      ? args.remoteContext.source === 'feishu'
+        ? 'feishu'
+        : 'wechat'
+      : 'desktop')
   registerToolRevocationRequest(args.requestId, requestLane)
   let mcpConnectionManager: McpConnectionManager | undefined
   const getMcpConnectionManager = (): McpConnectionManager => {
     if (!mcpConnectionManager) {
       mcpConnectionManager = new McpConnectionManager({
-        appendDiagnostic: (serverId, entry) => {
-          if (args.appDb) safeAppendDiagnostic(args.appDb, serverId, entry)
-        }
+        appendDiagnostic: (serverId, entry) => args.hostDiagnostics?.append(serverId, entry as never)
       })
     }
     return mcpConnectionManager
   }
+  // 用量统计收口（C16）：计数对象随本回合创建，inner 内就近累计，这里在返回前一次落库。
+  // 三条链路（桌面 / 远程 / butler）共用本函数，Turn 数与工具计数对全部渠道生效。
+  const turnUsageStats: TurnUsageStats = { stepCount: 0, toolCallCount: 0, toolErrorCount: 0, toolSkippedCount: 0 }
+  let turnOutcome: UsageTurnOutcome = 'failed'
   try {
-    return await runToolChatSessionInner({ ...args, chatSignal, getMcpConnectionManager })
+    const result = await runToolChatSessionInner({ ...args, chatSignal, getMcpConnectionManager, turnUsageStats })
+    turnOutcome = result.ok ? 'completed' : result.cancelled ? 'cancelled' : 'failed'
+    return result
   } catch (e) {
-    if (e instanceof ChatCancelledError) return { ok: false, error: e.message, cancelled: true }
+    if (e instanceof ChatCancelledError) {
+      turnOutcome = 'cancelled'
+      return { ok: false, error: e.message, cancelled: true }
+    }
+    turnOutcome = 'failed'
     throw e
   } finally {
+    // 中2（评审复验）：internal/hidden 会话（审批 Agent / automation）的用量不进统计
+    args.hostUsage?.recordTurnSummary?.({
+      turnId: args.turnId ?? args.sessionId,
+      sessionId: args.sessionId,
+      outcome: turnOutcome,
+      counts: turnUsageStats,
+      model: args.model,
+      llmServiceId: args.llmServiceId
+    })
     if (chatSignal.aborted) {
-      args.floatingNotificationManager?.onAllCancelledForRequest(args.requestId)
+      invocation.events.notify?.({ kind: 'request-all-cancelled', requestId: args.requestId })
     }
     clearChatCancel(args.requestId)
+    clearSessionActiveStream(args.sessionId, args.requestId)
     clearToolRevocationRequest(args.requestId)
     clearRequest(args.requestId)
     await mcpConnectionManager?.shutdown().catch(() => undefined)
@@ -511,10 +829,9 @@ export async function runToolChatSession(args: RunToolChatSessionArgs): Promise<
 }
 
 async function runToolChatSessionInner(
-  args: RunToolChatSessionArgs & { chatSignal: AbortSignal; getMcpConnectionManager: () => McpConnectionManager }
+  args: RunToolChatSessionArgs & { chatSignal: AbortSignal; getMcpConnectionManager: () => McpConnectionManager; turnUsageStats: TurnUsageStats }
 ): Promise<RunToolChatSessionResult> {
   const {
-    sender,
     requestId,
     sessionId,
     model,
@@ -535,15 +852,25 @@ async function runToolChatSessionInner(
     resolveWorkDir,
     userDataDir,
     getApiKey,
-    appDb,
+    hostDiagnostics,
+    hostUsage,
+    hostStorage,
+    hostExposureRules,
+    hostMcp,
+    hostAnswerer,
+    toolsTrim,
+    reasoningEffort,
     locale: payloadLocale,
     projectMemoryEnabled,
     chatSignal,
     getBrowserDetectContext,
     getMcpConnectionManager,
-    floatingNotificationManager,
-    hasImageAttachments
+    events: invocationEvents,
+    hasImageAttachments,
+    turnUsageStats
   } = args
+  // 台账事件与统计写入共用的 Turn ID：真实 turnId 优先，缺省回退 sessionId（现状占位）。
+  const eventTurnId = args.turnId ?? sessionId
   let contextWindowId = args.windowId ?? requestId
   const apiKey = await getApiKey()
   if (!apiKey) {
@@ -558,10 +885,10 @@ async function runToolChatSessionInner(
 
   const client = createAnthropicClient(apiKey, baseUrl, {
     onRetry: async ({ attempt, backoffMs, code }) => {
-      await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId, attempt, backoffMs, code } })
+      await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: eventTurnId, stepId: requestId, requestId, attempt, backoffMs, code } })
     }
   })
-  const sessionMeta = appDb ? getSession(appDb, sessionId)?.metadata : undefined
+  const sessionMeta = hostStorage?.sessionMeta
   const remoteBudgetState: RemoteTaskBudgetState | null = remoteContext
     ? createRemoteTaskBudgetState(
         requestId,
@@ -583,7 +910,24 @@ async function runToolChatSessionInner(
   const shellOutputMode = resolveEffectiveShellOutputMode(shellConfig, sessionMeta, remoteContext?.source)
   const toolLoopOptions = resolveToolLoopModelOptions(options ?? {})
   const maxTokensEffective = effectiveMaxTokensForBuiltinToolLoop(options?.maxTokens)
-  const thinking = toolLoopOptions.enableThinking ? ({ type: 'adaptive' as const }) : ({ type: 'disabled' as const })
+  // Thinking 由 effort 档位映射（§7.3）：off → disabled、其余档 adaptive + output_config.effort 同发。
+  // 上游拒绝 output_config 时的去强度降级与进程内记忆见 effortFallback（§7.4）。
+  const { thinking, outputConfig: requestedOutputConfig } = buildThinkingWireParams(reasoningEffort ?? 'off')
+  let effortOutputConfig = requestedOutputConfig
+  let effortRetryUsed = false
+  // 进程内记忆命中（OQ-6，key = llmServiceId + model）：跳过 output_config 避免每轮重试；首次跳过落一次审计
+  if (effortOutputConfig && isEffortUnsupportedByUpstream(args.llmServiceId, model)) {
+    effortOutputConfig = undefined
+    if (consumeEffortMemoizedAudit(args.llmServiceId, model)) {
+      logAgentEvent('info', 'llm.effort.unsupported_memoized', {
+        requestId,
+        sessionId,
+        model,
+        llmServiceId: args.llmServiceId,
+        requestedEffort: reasoningEffort
+      })
+    }
+  }
 
   if (maxTokensEffective !== toolLoopOptions.maxTokens) {
     logAgentEvent('info', 'llm.max_tokens_floor', {
@@ -602,8 +946,11 @@ async function runToolChatSessionInner(
   })) as Anthropic.MessageParam[]
   if (args.skillFragments?.length) {
     const fragmentMessage: Anthropic.MessageParam = { role: 'user', content: args.skillFragments.join('\n\n') }
-    const lastUserIndex = messagesForApi.map((message) => message.role).lastIndexOf('user')
-    messagesForApi.splice(lastUserIndex >= 0 ? lastUserIndex : messagesForApi.length, 0, fragmentMessage)
+    // fragment 必须固定注入在第一条 user 消息之前：它不落 DB，次轮 round:1 的重建历史不含
+    // 上一 turn 的 fragment——若随「最后一条 user」移动，重建前缀从 item 0 整段错位，造成
+    // turn 边界缓存全量失效（agent-context-token-cost-optimization §3.4.5 候选 A 静态比对结论）。
+    const firstUserIndex = messagesForApi.map((message) => message.role).indexOf('user')
+    messagesForApi.splice(firstUserIndex >= 0 ? firstUserIndex : messagesForApi.length, 0, fragmentMessage)
   }
 
   /** 口径 B：本次 invoke 传入的上下文中，已有多少条 API `assistant`（不含本轮 while 将追加的） */
@@ -612,17 +959,21 @@ async function runToolChatSessionInner(
   const stripThinking = (msgs: Anthropic.MessageParam[]): Anthropic.MessageParam[] => {
     // thinking 开启时须保留 assistant 消息中的 thinking/redacted_thinking（含 signature），
     // 否则多轮 tool loop 会触发 Anthropic 400（final assistant 须以 thinking 块开头）。
-    if (toolLoopOptions.enableThinking) return sanitizeThinkingForReplay(msgs)
+    if (reasoningEffort !== 'off') return sanitizeThinkingForReplay(msgs)
     return stripThinkingBlocksFromAssistantMessages(msgs)
   }
 
-  // 套餐/规则覆盖同样作用于 exposure 评估（§4 第 1 区）；默认 standard 时为零行为变化快路径
-  const exposureLane = remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop'
-  const exposureRules = appDb ? loadEffectivePolicyRules(appDb, exposureLane) : undefined
-  /** 请求级 MCP 工具快照：仅桌面会话注入（remoteContext 存在时为空）。 */
-  const mcpSnapshot: McpToolSnapshot = appDb
-    ? buildSnapshotFromDb(appDb, { remoteContext: Boolean(remoteContext) })
-    : { entries: new Map(), budgetDropped: [] }
+  // 偏差 21：lane 一次解析、全点消费——exposure / MCP 注入 / 确认通道 / 审计归属全部使用显式值
+  const effectiveLane = args.lane
+    ?? (remoteContext
+      ? remoteContext.source === 'feishu'
+        ? ('feishu' as const)
+        : ('wechat' as const)
+      : ('desktop' as const))
+  // 套餐/规则覆盖同样作用于 exposure 评估（§4 第 1 区）——P2 起装配期解析（ports.exposure）
+  const exposureRules = hostExposureRules as import('../src/shared/confirmation/types').PolicyRule[] | undefined
+  /** 请求级 MCP 工具快照：仅桌面 lane 注入（装配期构建，仍为首循环前）。 */
+  const mcpSnapshot: McpToolSnapshot = hostMcp?.snapshot ?? { entries: new Map(), budgetDropped: [] }
   const effectiveTools = computeEffectiveTools({
     builtinConfig: toolsConfig,
     feishuConfig,
@@ -631,9 +982,10 @@ async function runToolChatSessionInner(
     wechatConfig,
     remoteContext,
     exposureRules,
-    mcpSnapshot
+    mcpSnapshot,
+    trim: toolsTrim
   })
-  const { tools, toolNames, authorizedToolNames } = effectiveTools
+  const { tools, toolNames, authorizedToolNames, compatToInternal } = effectiveTools
   if (toolNames.includes('browser')) {
     stagehandService.resetInferenceCount(sessionId)
   }
@@ -642,6 +994,9 @@ async function runToolChatSessionInner(
   let lastRequestContext: ReturnType<typeof buildRequestContextPayload> | undefined
   let lastRequestHeader: ReturnType<typeof buildRequestHeaderPayload> | undefined
   let overflowRetries = 0
+  let outputRecoveryRetries = 0
+  let answerRecoveryText = ''
+  let needsFinalAnswerReconciliation = false
   /** 本会话单次 invoke 内标题摘要至多尝试调度一次（避免历史已达标且工具多轮时重复触发） */
   let titleSuggestScheduledThisInvoke = false
   const toolErrorRepeat = makeToolErrorRepeatTracker()
@@ -696,8 +1051,8 @@ async function runToolChatSessionInner(
 
     const outputHeader = buildRequestHeaderPayload({
       requestId: `${requestId}:recovery:${retry}`,
-      system: inputHeader.system,
-      tools: inputHeader.tools,
+      system: inputHeader.system ?? '',
+      tools: inputHeader.tools ?? [],
       messages: recoveredMessages,
       requiredSurfaceSet: inputHeader.requiredSurfaceSet,
       toolExecutionCheckpoint: { ...inputHeader.toolExecutionCheckpoint, replayForbidden: true }
@@ -720,8 +1075,8 @@ async function runToolChatSessionInner(
 
     const inputItems = surfaceItemIdentities(inputSurface).map((id) => ({ id }))
     const outputItems = surfaceItemIdentitiesForProjectionSubset(inputProjection, outputProjection).map((id) => ({ id }))
-    const inputFingerprint = computeReplaySurfaceFingerprint(inputHeader.system, inputSurface)
-    const outputFingerprint = computeReplaySurfaceFingerprint(inputHeader.system, outputSurface)
+    const inputFingerprint = computeReplaySurfaceFingerprint(inputHeader.system ?? '', inputSurface)
+    const outputFingerprint = computeReplaySurfaceFingerprint(inputHeader.system ?? '', outputSurface)
     const shadowedRanges = computeShadowedRanges(inputItems, outputItems)
     if (!shadowedRanges.length || !args.appendCompactionTransaction) return false
     const compactionId = `${contextWindowId}:preflight:${requestId}:${retry}`
@@ -740,15 +1095,12 @@ async function runToolChatSessionInner(
   while (true) {
     loopRound++
     throwIfChatCancelled(chatSignal)
-    if (!isWebContentsAlive(sender)) {
-      logAgentEvent('warn', 'llm.error', { requestId, sessionId, error: 'Window closed' })
-      return failToolLoopWithLastUsage(sender, requestId, sessionId, 'Window closed', lastValidUsage, args.emitFactEvent)
-    }
     const memoryContent = getCachedMemoryContent()
     const baseSystemWithRecovery = typeof system === 'string' && system.trim().length > 0 ? system : undefined
     const capabilityHint = buildToolCapabilityConventionHint(toolNames)
     const systemWithTools = baseSystemWithRecovery ? `${baseSystemWithRecovery}\n\n${capabilityHint}` : capabilityHint
-    const locale = resolveRequestLocale(payloadLocale, appDb)
+    // P2：locale 装配期定值（请求优先 / 库回退在装配器完成），循环内不再查库
+    const locale = payloadLocale as AppLocale
     const systemPrompt = buildFinalSystemPrompt({
       system: systemWithTools,
       memoryContent,
@@ -772,12 +1124,22 @@ async function runToolChatSessionInner(
       messages: wireMessages as Anthropic.MessageParam[],
       tools: tools as Anthropic.Tool[],
       thinking,
+      outputConfig: effortOutputConfig,
       cacheControl: true
     })
     // 计划面先冻结为不含内部 id 的协议中立表示；wire 面只接受 serializer 最终产物。
     // 两者必须独立计算，才能捕获 serializer 在发送前改变消息/工具的漂移。
     const plannedMessages = wireMessages
-    const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools: tools as unknown as unknown[], messages: plannedMessages, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesStripped as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: false } })
+    const prefixTelemetry = buildRequestPrefixTelemetry({
+      contextWindowId,
+      plannedMessages: plannedMessages as unknown[],
+      // 断点位置推导必须用注入前的计划面：serializer 产物里末条字符串已被替换为
+      // cache_control 数组，「末条是否字符串」的判定会永远为 false。
+      wireMessages: plannedMessages,
+      hasSystem: typeof systemPrompt === 'string' && systemPrompt.trim().length > 0,
+      completedToolUseIds: extractToolPairIds(messagesStripped as unknown as Array<{ content?: unknown }>).toolUses
+    })
+    const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools: tools as unknown as unknown[], messages: plannedMessages, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds: prefixTelemetry.incrementalCompletedToolUseIds, replayForbidden: false }, messagePrefixStats: prefixTelemetry.messagePrefixStats, cacheBreakpoints: prefixTelemetry.cacheBreakpoints })
     const wireHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools: tools as unknown as unknown[], messages: toolLoopStreamParams.messages as unknown[], requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
     const requestContext = buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, windowId: contextWindowId, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } })
     lastRequestHeader = requestHeader
@@ -800,13 +1162,20 @@ async function runToolChatSessionInner(
         overflowRetries += 1
         const recovered = await recoverBeforeSend(requestHeader, messagesStripped, overflowRetries, requestContext.budget.totalInputBudget)
         if (recovered) {
-          await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'preflight_context_overflow' } })
+          await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: eventTurnId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'preflight_context_overflow' } })
           continue
         }
       }
       return { ok: false, error: `Context preflight failed: ${preflight.reason}` }
     }
-    await args.emitSessionEvent?.({ type: 'request_header', payload: { route: 'anthropic.messages.stream', ...requestHeader } })
+    // P1-3(b)：事件流落盘的 request_header 对恒定前缀去重——首见写全量，指纹未变省略
+    // system/tools（实测恒定 ≈93 KB/请求 × 146 请求 ≈ 13.65 MB/会话）。lastRequestHeader
+    // 保持完整版供内部派生使用；指纹未变的读取方按 surfaceSnapshot 指纹回填（当前唯一程序化
+    // 读取方 computeContextPressureFromEvents 只读 requestId + surfaceSnapshot，无需回填）。
+    const prefixState = getRequestPrefixState(contextWindowId)
+    const { elided: emittedHeader, fingerprints: emittedFingerprints } = elideConstantHeaderFields(requestHeader, prefixState.lastHeaderFingerprints)
+    prefixState.lastHeaderFingerprints = emittedFingerprints
+    await args.emitSessionEvent?.({ type: 'request_header', payload: { route: 'anthropic.messages.stream', ...emittedHeader } })
     await args.emitSessionEvent?.({ type: 'request_context', payload: requestContext })
 
     logAgentEvent('info', 'llm.request', {
@@ -820,7 +1189,9 @@ async function runToolChatSessionInner(
       messages: messagesStripped,
       toolNames,
       maxTokens: maxTokensEffective,
-      enableThinking: toolLoopOptions.enableThinking
+      effort: reasoningEffort,
+      // 评审 N2：降级 / 记忆跳过后 wire 已无 output_config，标注实际生效状态便于排障
+      ...(requestedOutputConfig !== undefined && effortOutputConfig === undefined ? { effortSuppressed: true } : {})
     })
     beginLlm(sessionId, requestId)
 
@@ -844,7 +1215,7 @@ async function runToolChatSessionInner(
       if (normalizedDelta) {
         await args.emitSessionEvent?.({
           type: 'assistant_chunk',
-          payload: { turnId: sessionId, stepId: requestId, messageId: args.assistantMessageId, delta: normalizedDelta }
+          payload: { turnId: eventTurnId, stepId: requestId, messageId: args.assistantMessageId, delta: normalizedDelta }
         })
       }
       if (normalizedDelta?.type === 'tool_call_delta') {
@@ -920,9 +1291,20 @@ async function runToolChatSessionInner(
               name: compatName,
               input: parseToolInput(pending.input, pending.partialJson)
             }
+            // H3：toolkit 网关入参含凭据——JSONL 事件台账落盘前与展示/落库同口径净化
+            const rawToolCallInput = normalizeToolUseInputRecord(toolUseBlock.input)
+            const isToolkitCall = compatName === 'toolkit_call' || compatName === 'toolkit.call'
             await args.emitSessionEvent?.({
               type: 'tool_call',
-              payload: { turnId: sessionId, stepId: requestId, toolUseId: pending.id, name: compatName, args: normalizeToolUseInputRecord(toolUseBlock.input) }
+              payload: {
+                turnId: eventTurnId,
+                stepId: requestId,
+                toolUseId: pending.id,
+                name: compatName,
+                args: isToolkitCall
+                  ? (sanitizeCapabilityParamsForDisplay(rawToolCallInput) as Record<string, unknown>)
+                  : rawToolCallInput
+              }
             })
             const mcpEntry = mcpSnapshot.entries.get(compatName)
             args.emitFactEvent?.({
@@ -943,7 +1325,6 @@ async function runToolChatSessionInner(
           }
         }
       }
-      safeWebContentsSend(sender,'claude-chat-tools-activity', { requestId, at: Date.now() })
     }
 
       const res = (await stream.finalMessage()) as { content?: unknown[]; stop_reason?: string }
@@ -958,8 +1339,19 @@ async function runToolChatSessionInner(
           type: 'request_usage',
           payload: { schemaVersion: 1, requestId: attemptRequestId, usage: finalUsage, source: 'api' }
         })
-        const finalSurfaceMessages = [...messagesForApi, { role: 'assistant' as const, content: content as Anthropic.ContentBlock[] }]
-        const finalHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: requestHeader.system, tools: requestHeader.tools, messages: finalSurfaceMessages, requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
+        // Token 用量统计：每次 LLM 调用即时落一行 usage_step_facts（异步容错，不阻断对话）。
+        hostUsage?.recordStepUsage?.({
+          sessionId,
+          turnId: eventTurnId,
+          stepId: attemptRequestId,
+          usage: finalUsage,
+          baseUrl,
+          model,
+          llmServiceId: args.llmServiceId
+        })
+        turnUsageStats.stepCount += 1
+        const finalSurfaceMessages = [...messagesForApi, { role: 'assistant' as const, content: normalizeAssistantContentForHistoryParity(content as Anthropic.ContentBlock[]) }]
+        const finalHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: requestHeader.system ?? '', tools: requestHeader.tools ?? [], messages: finalSurfaceMessages, requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
         const finalProjection = computeContextPressure({
           currentSurface: finalHeader.surfaceSnapshot,
           anchor: { requestId: attemptRequestId, surfaceTokens: requestHeader.surfaceSnapshot.surfaceTokens, surfaceFingerprint: requestHeader.surfaceSnapshot.fingerprint, systemFingerprint: requestHeader.surfaceSnapshot.systemFingerprint, toolsFingerprint: requestHeader.surfaceSnapshot.toolsFingerprint, provider: 'anthropic', model, estimatorVersion: requestContext.budget.estimatorVersion, serializationVersion: requestContext.budget.serializationVersion, realUsage: finalUsage, contextWindow: requestContext.contextWindow.tokens },
@@ -989,6 +1381,25 @@ async function runToolChatSessionInner(
       })
     } catch (e) {
       if (e instanceof ChatCancelledError) throw e
+      // §7.4：上游拒绝 output_config（明确未知字段类 400）→ 去强度（保留 adaptive）自动重试一次，
+      // 落 llm.effort.unsupported 审计 + 进程内记忆（粒度 llmServiceId+model）；其余错误按既有路径上抛
+      if (effortOutputConfig && !effortRetryUsed && isOutputConfigRejectedError(e)) {
+        effortRetryUsed = true
+        memoizeEffortUnsupported(args.llmServiceId, model)
+        effortOutputConfig = undefined
+        logAgentEvent('warn', 'llm.effort.unsupported', {
+          requestId,
+          sessionId,
+          loopRound,
+          model,
+          llmServiceId: args.llmServiceId,
+          requestedEffort: reasoningEffort,
+          fallback: 'adaptive',
+          error: e instanceof Error ? e.message : String(e)
+        })
+        await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: eventTurnId, stepId: requestId, requestId, attempt: 1, backoffMs: 0, code: 'effort_unsupported' } })
+        continue
+      }
       const error = e instanceof Error ? e.message : String(e)
       const recovery = decideOverflowRecovery({ error: e, retries: overflowRetries, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true })
       if (recovery.action === 'reset_and_retry_provider') {
@@ -997,9 +1408,9 @@ async function runToolChatSessionInner(
           ? await recoverBeforeSend(lastRequestHeader, messagesForApi, overflowRetries, lastRequestContext.budget.totalInputBudget)
           : false
         if (!recovered) {
-          return failToolLoopWithLastUsage(sender, requestId, sessionId, error, lastValidUsage, args.emitFactEvent)
+          return failToolLoopWithLastUsage( requestId, sessionId, error, lastValidUsage, args.emitFactEvent)
         }
-        await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: sessionId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'provider_context_overflow' } })
+        await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: eventTurnId, stepId: requestId, requestId, attempt: overflowRetries, backoffMs: 0, code: 'provider_context_overflow' } })
         continue
       }
       logAgentEvent('error', 'llm.error', {
@@ -1010,7 +1421,7 @@ async function runToolChatSessionInner(
         error,
         stack: e instanceof Error ? e.stack : undefined
       })
-      return failToolLoopWithLastUsage(sender, requestId, sessionId, error, lastValidUsage, args.emitFactEvent)
+      return failToolLoopWithLastUsage( requestId, sessionId, error, lastValidUsage, args.emitFactEvent)
     } finally {
       endLlm(sessionId, requestId)
     }
@@ -1019,17 +1430,124 @@ async function runToolChatSessionInner(
       Boolean(b && typeof b === 'object' && (b as { type?: string }).type === 'tool_use')
     ) as Array<{ type: 'tool_use'; id: string; name: string; input: unknown }>
 
-    messagesForApi = [...messagesForApi, { role: 'assistant', content: content as Anthropic.ContentBlock[] }]
+    // 必须先使用与下一轮相同的 replay 清理，再判断是否追加 assistant。
+    // 否则无签名 thinking-only 截断会在下一轮变成空 assistant 消息。
+    const replayableAssistantContent = stripThinking([
+      { role: 'assistant', content: content as Anthropic.ContentBlock[] }
+    ])[0]?.content
+    const safeAssistantContent = Array.isArray(replayableAssistantContent)
+      ? replayableAssistantContent.filter((block) => {
+        if (!block || typeof block !== 'object' || (block as { type?: unknown }).type !== 'tool_use') return true
+        const id = (block as { id?: unknown }).id
+        return typeof id === 'string' && id.trim().length > 0
+      })
+      : replayableAssistantContent
+    if (Array.isArray(safeAssistantContent) && safeAssistantContent.length > 0) {
+      messagesForApi = [...messagesForApi, { role: 'assistant', content: normalizeAssistantContentForHistoryParity(safeAssistantContent as Anthropic.ContentBlock[]) }]
+    }
+
+    const outputRecoveryKind = classifyOutputRecovery({ stopReason, content })
+    if (toolUses.length > 0 && needsFinalAnswerReconciliation && outputRecoveryKind !== 'output_truncated_with_tools') {
+      answerRecoveryText += content
+        .filter((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'text')
+        .map((block) => ((block as { text?: unknown }).text ?? ''))
+        .filter((value): value is string => typeof value === 'string')
+        .join('')
+      needsFinalAnswerReconciliation = true
+    }
+    if (outputRecoveryKind === 'output_truncated_with_tools') {
+      // 工具轮也可能已经向用户展示正文，必须保留在最终恢复正文链中。
+      const truncatedToolText = content
+        .filter((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'text')
+        .map((block) => ((block as { text?: unknown }).text ?? ''))
+        .filter((value): value is string => typeof value === 'string')
+        .join('')
+      answerRecoveryText += truncatedToolText
+      needsFinalAnswerReconciliation = true
+      const failedResults = buildTruncatedToolResults(toolUses.filter((tool) => typeof tool.id === 'string' && tool.id.trim().length > 0))
+      if (failedResults.length > 0) {
+        messagesForApi = [...messagesForApi, { role: 'user', content: failedResults }]
+        for (const failedResult of failedResults) {
+          const result: ToolCallResultPersisted = {
+            success: false,
+            error: 'model_output_token_limit',
+            userMessage: failedResult.content,
+            // §7.6 #15：输出截断整体放弃，未进入执行流程 → 未执行
+            notExecuted: true,
+            notExecutedReason: 'model_output_truncated'
+          }
+          await args.emitSessionEvent?.({ type: 'tool_result', payload: { turnId: eventTurnId, stepId: requestId, toolUseId: failedResult.tool_use_id, result } })
+          // 第 15 处 tool_result 发出点（绕过 recordToolResult）：同样计入三分类统计（需求 §2.4.0）。
+          noteToolResultForStats(turnUsageStats, result)
+          args.emitFactEvent?.({ type: 'tool-result', id: failedResult.tool_use_id, result })
+        }
+      }
+      if (outputRecoveryRetries >= MAX_OUTPUT_RECOVERIES) {
+        return failToolLoopWithLastUsage( requestId, sessionId, 'model_output_token_limit_exhausted', lastValidUsage, args.emitFactEvent)
+      }
+      outputRecoveryRetries += 1
+      const recoveryMessage = buildOutputRecoveryMessage({ attempt: outputRecoveryRetries, causeRequestId: attemptRequestId, hadVisibleText: truncatedToolText.length > 0, hadToolUse: true })
+      messagesForApi = [...messagesForApi, { role: 'user', content: recoveryMessage.content }]
+      await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: eventTurnId, stepId: requestId, requestId: attemptRequestId, attempt: outputRecoveryRetries, backoffMs: 0, code: 'model_output_token_limit' } })
+      logAgentEvent('warn', 'llm.output_recovery', { requestId, sessionId, causeRequestId: attemptRequestId, attempt: outputRecoveryRetries, toolCount: toolUses.length, failedToolResultCount: failedResults.length, usage })
+      continue
+    }
+    if (outputRecoveryKind === 'output_truncated_without_tools') {
+      const text = content
+        .filter((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'text')
+        .map((block) => ((block as { text?: unknown }).text ?? ''))
+        .filter((value): value is string => typeof value === 'string')
+        .join('')
+      answerRecoveryText += text
+      if (text.length > 0) needsFinalAnswerReconciliation = true
+      if (outputRecoveryRetries >= MAX_OUTPUT_RECOVERIES) {
+        return failToolLoopWithLastUsage(
+          requestId,
+          sessionId,
+          'model_output_token_limit_exhausted',
+          lastValidUsage,
+          args.emitFactEvent
+        )
+      }
+      outputRecoveryRetries += 1
+      const recoveryMessage = buildOutputRecoveryMessage({
+        attempt: outputRecoveryRetries,
+        causeRequestId: attemptRequestId,
+        hadVisibleText: text.length > 0
+      })
+      messagesForApi = [...messagesForApi, { role: 'user', content: recoveryMessage.content }]
+      await args.emitSessionEvent?.({
+        type: 'request_retry',
+        payload: {
+          turnId: eventTurnId,
+          stepId: requestId,
+          requestId: attemptRequestId,
+          attempt: outputRecoveryRetries,
+          backoffMs: 0,
+          code: 'model_output_token_limit'
+        }
+      })
+      logAgentEvent('warn', 'llm.output_recovery', {
+        requestId,
+        sessionId,
+        causeRequestId: attemptRequestId,
+        attempt: outputRecoveryRetries,
+        maxRecoveries: MAX_OUTPUT_RECOVERIES,
+        stopReason,
+        hadVisibleText: text.length > 0,
+        usage
+      })
+      continue
+    }
 
     if (
-      appDb &&
+      hostStorage?.persist?.scheduleTitleSuggestion &&
       !titleSuggestScheduledThisInvoke &&
       reachedCumulativeAssistantTurnsForTitleSuggest(historicalAssistantApiMessageCount, loopRound)
     ) {
       titleSuggestScheduledThisInvoke = true
-      scheduleSessionTitleSuggestion({
-        db: appDb,
-        sender,
+      hostStorage.persist.scheduleTitleSuggestion({
+        onTitleGenerated: (session: import('../src/shared/domainTypes').Session) => args.onTitleGenerated?.(session),
         sessionId,
         model,
         baseUrl,
@@ -1040,19 +1558,43 @@ async function runToolChatSessionInner(
 
     if (toolUses.length === 0) {
       const returnUsage = pickToolLoopReturnUsage(usage, lastValidUsage)
+      const explicitText = content.filter((block) => block.type === 'text').map((block) => block.type === 'text' ? block.text : '').join('')
+      const compatibleThinkingText = !explicitText && (stopReason === undefined || stopReason === 'end_turn')
+        ? content.filter((block) => block.type === 'thinking').map((block) => block.type === 'thinking' ? block.thinking : '').join('')
+        : ''
+      const finalRoundText = explicitText || compatibleThinkingText
+      const finalText = answerRecoveryText ? answerRecoveryText + finalRoundText : finalRoundText
+      const hasOutputRecovery = outputRecoveryRetries > 0
+      if (needsFinalAnswerReconciliation || hasOutputRecovery) args.emitFactEvent?.({ type: 'content-reconciled', text: finalText })
       args.emitFactEvent?.({ type: 'source-completed' })
       if (args.onTurnBoundary && lastRequestHeader && lastRequestContext) {
-        await args.onTurnBoundary({ requestId, windowId: contextWindowId, system: lastRequestHeader.system, tools: lastRequestHeader.tools, surfaceSnapshot: lastRequestHeader.surfaceSnapshot, messages: messagesForApi, budget: lastRequestContext.budget, contextUsage: lastRequestContext.contextUsage, toolExecutionCheckpoint: lastRequestHeader.toolExecutionCheckpoint, requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet })
+        // P1-3(c)：压缩 summary 的 checkpoint 是恢复语义（需要完整集合）；header 里的是增量编码。
+        // onTurnBoundary 必须传全量，不能透传 lastRequestHeader.toolExecutionCheckpoint。
+        await args.onTurnBoundary({ requestId, windowId: contextWindowId, system: lastRequestHeader.system ?? '', tools: lastRequestHeader.tools ?? [], surfaceSnapshot: lastRequestHeader.surfaceSnapshot, messages: messagesForApi, budget: lastRequestContext.budget, contextUsage: lastRequestContext.contextUsage, toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesForApi as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: lastRequestHeader.toolExecutionCheckpoint.replayForbidden }, requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet })
       }
-      return { ok: true, content, stopReason: stopReason ?? 'end_turn', ...(returnUsage && { usage: returnUsage }), ...(lastRequestHeader ? { finalSurfaceSnapshot: lastRequestHeader.surfaceSnapshot, finalSurfaceMessages: messagesForApi } : {}) }
+      const finalContent = answerRecoveryText || hasOutputRecovery
+        ? ([{ type: 'text', text: finalText }] as Anthropic.ContentBlock[])
+        : content
+      return { ok: true, content: finalContent, stopReason: stopReason ?? 'end_turn', ...(returnUsage && { usage: returnUsage }), ...(lastRequestHeader ? { finalSurfaceSnapshot: lastRequestHeader.surfaceSnapshot, finalSurfaceMessages: messagesForApi } : {}) }
     }
 
     if (toolNames.length === 0) {
       return failToolLoopWithLastUsage(
-        sender,
         requestId,
         sessionId,
         'unexpected_tool_call_with_no_tools',
+        lastValidUsage,
+        args.emitFactEvent,
+      )
+    }
+
+    // 轮数上界（审批 Agent 等有界调用方传入）：达到上界后不再执行工具，终止循环——
+    // 未获最终裁决的 fail-closed 由调用方（approvalAgent）兜底处理
+    if (args.maxToolLoopRounds != null && loopRound > args.maxToolLoopRounds) {
+      return failToolLoopWithLastUsage(
+        requestId,
+        sessionId,
+        `TOOL_LOOP_MAX_ROUNDS_EXCEEDED(${args.maxToolLoopRounds})`,
         lastValidUsage,
         args.emitFactEvent,
       )
@@ -1069,8 +1611,9 @@ async function runToolChatSessionInner(
       toolResults.push(block)
       await args.emitSessionEvent?.({
         type: 'tool_result',
-        payload: { turnId: sessionId, stepId: requestId, toolUseId: block.tool_use_id, result }
+        payload: { turnId: eventTurnId, stepId: requestId, toolUseId: block.tool_use_id, result }
       })
+      noteToolResultForStats(turnUsageStats, result)
       emitToolResultFact(block.tool_use_id, result)
     }
     const fileCache = getFileStateCacheForSession(sessionId)
@@ -1082,10 +1625,12 @@ async function runToolChatSessionInner(
       const workDir = resolveWorkDir ? resolveWorkDir() : initialWorkDir
       const toolUseId = tu.id
       const toolName = tu.name
+      // B1：API 返回的是 sanitize 后的 compat 名，回向解析为内部注册名（可能含点号）再授权与查找
+      const resolvedToolName = compatToInternal.get(toolName) ?? toolName
       const processTool = isProcessToolName(toolName)
       const inputObj = normalizeToolUseInputRecord(tu.input)
 
-      const authorization = authorizeToolCall(toolName, authorizedToolNames)
+      const authorization = authorizeToolCall(resolvedToolName, authorizedToolNames)
       if (!authorization.ok) {
         const error = toolName.startsWith('mcp_')
           ? `${authorization.error}: MCP 工具已变更或服务不可用`
@@ -1097,20 +1642,20 @@ async function runToolChatSessionInner(
           toolUseId,
           toolName
         })
-        await recordToolResult(buildToolErrorResult(toolUseId, error, { requestId, sessionId }), { success: false, error })
+        await recordToolResult(buildToolErrorResult(toolUseId, error, { requestId, sessionId }), { success: false, error, notExecuted: true, notExecutedReason: 'not_authorized' })
         continue
       }
-      if (isToolRevoked(requestId, toolName)) {
-        await recordToolResult(buildToolErrorResult(toolUseId, 'tool_authorization_revoked', { requestId, sessionId }), { success: false, error: 'tool_authorization_revoked' })
+      if (isToolRevoked(requestId, resolvedToolName)) {
+        await recordToolResult(buildToolErrorResult(toolUseId, 'tool_authorization_revoked', { requestId, sessionId }), { success: false, error: 'tool_authorization_revoked', notExecuted: true, notExecutedReason: 'authorization_revoked' })
         continue
       }
 
-      const registeredTool = getRegisteredTool(toolName)
-      const builtinExec = getToolExecutor(toolName)
+      const registeredTool = getRegisteredTool(resolvedToolName)
+      const builtinExec = getToolExecutor(resolvedToolName)
       const exec =
         builtinExec ??
-        (mcpSnapshot.entries.has(toolName)
-          ? resolveMcpExecutor(toolName, mcpSnapshot, getMcpConnectionManager(), appDb)
+        (mcpSnapshot.entries.has(resolvedToolName)
+          ? hostMcp?.resolveExecutor?.(resolvedToolName, getMcpConnectionManager())
           : undefined)
       if (!registeredTool && !exec) {
         const unknownToolError = toolName.startsWith('mcp_')
@@ -1121,7 +1666,7 @@ async function runToolChatSessionInner(
           unknownToolError,
           unknownToolError
         )
-        await recordToolResult(buildToolErrorResult(toolUseId, unknownToolError, { requestId, sessionId }), { success: false, error: unknownToolError })
+        await recordToolResult(buildToolErrorResult(toolUseId, unknownToolError, { requestId, sessionId }), { success: false, error: unknownToolError, notExecuted: true, notExecutedReason: 'unknown_tool' })
         if (toolErrorRepeat.noteFailure(toolName, unknownToolError)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${unknownToolError}`
           break
@@ -1171,14 +1716,14 @@ async function runToolChatSessionInner(
           getSecurityAuditLog().record({
             ts: Date.now(),
             event: 'budget.exhausted',
-            lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
+            lane: effectiveLane,
             origin: { kind: 'direct-owner' },
             sessionId,
             toolName,
             reason: budgetCheck.reason,
             actor: 'system'
           })
-          await recordToolResult(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }), { success: false, error: pauseMsg })
+          await recordToolResult(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }), { success: false, error: pauseMsg, notExecuted: true, notExecutedReason: 'remote_budget_exhausted' })
           abortRepeatedToolError = pauseMsg
           break
         }
@@ -1270,22 +1815,29 @@ async function runToolChatSessionInner(
 
       // ===== §5.5 直线流程：门控判定（组装上下文 → 事实提取 → decide → policy.decision 审计）=====
       const gate = await evaluateToolCallGate({
-        toolName,
+        toolName: resolvedToolName,
         toolInput: inputObj,
         sessionId,
         workDir,
         userDataDir,
+        lane: effectiveLane,
         remoteContext,
         toolsConfig,
         shellConfig,
         browserConfig,
         feishuConfig,
         wechatConfig,
-        appDb,
+        // 缺料时保持 undefined 传递：由门控入口 fail-loud（B1 禁止静默回退）
+        effectiveRules: args.gatePolicy?.effectiveRules as import('../src/shared/confirmation/types').PolicyRule[],
+        lanePackage: args.gatePolicy?.lanePackage as import('../src/shared/policy/policyPackages').PolicyPackage | undefined,
+        decisionCache: args.gatePolicy?.decisionCache as import('./confirmation/toolCallGate').GateDecisionCache,
+        shellPrecheck: args.gatePolicy?.shellPrecheck as { touchTrustedCommand: (command: string) => void },
+        ...(args.gatePolicy?.policyOrigins ? { policyOrigins: args.gatePolicy.policyOrigins } : {}),
         remoteBudgetState,
         dangerAssessment,
         currentPageUrl,
-        mcpEntry: mcpSnapshot.entries.get(toolName)
+        mcpEntry: mcpSnapshot.entries.get(resolvedToolName),
+        internalConfirmExemption: args.internalConfirmExemption
       })
 
       // run_shell 预检拒绝（validator 性质，gate 前置短路）
@@ -1304,7 +1856,7 @@ async function runToolChatSessionInner(
           gate.shellPrecheckDeny.error,
           gate.shellPrecheckDeny.error
         )
-        await recordToolResult(buildToolErrorResult(toolUseId, gate.shellPrecheckDeny.error, { requestId, sessionId }), { success: false, error: gate.shellPrecheckDeny.error })
+        await recordToolResult(buildToolErrorResult(toolUseId, gate.shellPrecheckDeny.error, { requestId, sessionId }), { success: false, error: gate.shellPrecheckDeny.error, notExecuted: true, notExecutedReason: 'policy_denied' })
         if (toolErrorRepeat.noteFailure(toolName, gate.shellPrecheckDeny.error)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${gate.shellPrecheckDeny.error}`
           break
@@ -1385,14 +1937,14 @@ async function runToolChatSessionInner(
         getSecurityAuditLog().record({
           ts: Date.now(),
           event: 'budget.exhausted',
-          lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
+          lane: effectiveLane,
           origin: { kind: 'direct-owner' },
           sessionId,
           toolName,
           reason: gate.budgetPause.reason,
           actor: 'system'
         })
-        await recordToolResult(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }), { success: false, error: pauseMsg })
+        await recordToolResult(buildToolErrorResult(toolUseId, pauseMsg, { requestId, sessionId }), { success: false, error: pauseMsg, notExecuted: true, notExecutedReason: 'budget_paused' })
         abortRepeatedToolError = pauseMsg
         break
       }
@@ -1420,9 +1972,10 @@ async function runToolChatSessionInner(
             ? `script deny patterns=${gate.rawScriptAnalysis.patterns.join(',')}`
             : denyMsg
         )
-        await recordToolResult(buildToolErrorResult(toolUseId, denyMsg, { requestId, sessionId }), { success: false, error: denyMsg })
-        if (toolErrorRepeat.noteFailure(toolName, denyMsg)) {
-          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${denyMsg}`
+        await recordToolResult(buildToolErrorResult(toolUseId, denyMsg, { requestId, sessionId }), { success: false, error: denyMsg, notExecuted: true, notExecutedReason: 'policy_denied' })
+        // P1-3：策略 deny 属安全拒绝桶（阈值 5），不与执行失败共用计数
+        if (toolErrorRepeat.noteFailure(toolName, denyMsg, undefined, 'safety')) {
+          abortRepeatedToolError = `安全拒绝已连续出现 ${MAX_CONSECUTIVE_SAFETY_REJECT} 次，已停止：${denyMsg}`
           break
         }
         continue
@@ -1443,7 +1996,15 @@ async function runToolChatSessionInner(
       }
 
       let outcome: ToolConfirmOutcome = 'approved'
-      let rejectReason: 'user' | 'remote_read_only' | 'authorization_revoked' = 'user'
+      let rejectReason: LegacyConfirmationRejectReason = 'user'
+      /** rejectReason='policy' 时的细分来源（迁移期保持既有文案与 errorCode 可对照）。 */
+      let rejectPolicyCode: LegacyPolicyCode | undefined
+      /** 本次确认的回答者（I3：非 user 不得产生任何记忆写入）；缺省 user 保持既有路径等价。 */
+      let confirmAnswererKind: ConfirmAnswererKind = 'user'
+      /** 本次确认的结束原因（审计五问之「到底拿没拿到裁决」）。 */
+      let confirmOutcomeCause: ConfirmOutcomeCause = 'user-approved'
+      /** 通道裁决附带的模型可读理由（ConfirmOutcome.reason.summary，P1-2 回传）。 */
+      let channelRejectSummary: string | undefined
       const autoApproveFallback: AutoApproveFallback | undefined = gate.autoApproveFallback
       if (autoApproveFallback) {
         logAgentEvent('info', 'file.auto_approve.fallback', {
@@ -1456,11 +2017,11 @@ async function runToolChatSessionInner(
           reasonCode: autoApproveFallback.reasonCode
         })
       }
-      // 桌面写/编辑自动批准：构建 diff/字节 meta（纯展示，判定已在 gate 完成）
-      let fileAutoApproved = false
+      // 桌面写/编辑自动批准：构建 diff/字节 meta（纯展示，判定已在 gate 完成）。
+      // H2：判定消费 gate 显式结果字段（desktop-auto-approve 规则已删，ruleId 匹配是死分支）
+      let fileAutoApproved = gate.fileAutoApproved === true
       let fileAutoApproveMeta: AutoApprovedWriteMeta | undefined
-      if (gate.decision.type === 'auto-allow' && gate.decision.ruleId === 'desktop-auto-approve') {
-        fileAutoApproved = true
+      if (fileAutoApproved) {
         const relPath = typeof inputObj.path === 'string' ? inputObj.path : ''
         const diff = await maybeBuildConfirmDiff(workDir, toolName, inputObj)
         let bytesWritten = 0
@@ -1477,8 +2038,8 @@ async function runToolChatSessionInner(
           path: relPath,
           added: stats.add,
           removed: stats.remove,
-          bytesWritten,
-          ...(diff ? { diff } : {})
+          bytesWritten
+          // P1-3(a)：不再写入 diff 全文——只写不读（渲染层零引用、重建白名单丢弃），10.83 MB/会话磁盘浪费
         }
       }
       const needsConfirm = gate.decision.type === 'require-confirm'
@@ -1487,18 +2048,15 @@ async function runToolChatSessionInner(
       const mcpEntryForConfirm = gate.mcpEntry
 
       if (needsConfirm) {
-        const confirmLane = remoteContext
-          ? remoteContext.source === 'feishu'
-            ? ('feishu' as const)
-            : ('wechat' as const)
-          : ('desktop' as const)
+        const confirmLane = effectiveLane
         const askViaIm = remoteContext
           ? shouldRequestImConfirm(resolveRemoteContextConfirmPolicy(remoteContext, wechatConfig))
           : true
         if (remoteContext && !askViaIm) {
           // 远程只读策略：不发 IM 确认，直接拒绝
           outcome = 'rejected'
-          rejectReason = 'remote_read_only'
+          rejectReason = 'policy'
+          rejectPolicyCode = 'remote_read_only'
           logAgentEvent('info', 'tool.confirm.remote_read_only_reject', {
             requestId,
             sessionId,
@@ -1518,9 +2076,10 @@ async function runToolChatSessionInner(
               progressOutput: undefined
             })
           } else {
+          // M1：diff 预览由「本次确认的回答者是否为人类」驱动（confirmMode 退役）；
+          // agent 路径没有卡片 diff；autoApproveFallback（快通道未过）时保留展示原因
           const useDiff =
-            toolsConfig.confirmMode === 'diff' ||
-            toolsConfig.confirmMode === 'auto' ||
+            (gate.decision.type !== 'require-confirm' || gate.decision.answerer === 'user') ||
             Boolean(autoApproveFallback)
           const diff = useDiff ? await maybeBuildConfirmDiff(workDir, toolName, inputObj) : undefined
           const actDanger =
@@ -1546,11 +2105,16 @@ async function runToolChatSessionInner(
           args.emitFactEvent?.({
             type: 'confirm-requested',
             id: toolUseId,
-            riskLevel: toolName === 'run_script' || toolName === 'run_lark_cli' || toolName === 'run_shell' ? 'high' : 'medium',
+            // 风险级取 max(裁决结果, medium)：修 toolkit.call 恒 medium 的同时，避免静态兜底为
+            // low 的工具（如 browser）确认卡较旧硬编码行为降档（评审 S7）
+            riskLevel: confirmRequestedRiskLevel(gate),
             ...(confirmMemoryTiers.length ? { memoryTiers: confirmMemoryTiers } : {}),
             ...(diff ? { confirmDiff: diff } : {}),
             ...(shellSecurityHints ? { shellSecurityHints } : {}),
             ...(autoApproveFallback ? { autoApproveFallback } : {}),
+            ...(gate.decision.type === 'require-confirm' && gate.decision.answerer === 'agent'
+              ? { autoAnswerer: true as const }
+              : {}),
             ...(currentPageUrl ? { currentPageUrl } : {}),
             ...(dangerInfo ? { dangerInfo } : {}),
             ...(sessionTrustedHint ? { sessionTrustedHint: true as const } : {}),
@@ -1563,26 +2127,38 @@ async function runToolChatSessionInner(
               }
             } : {})
           })
-          // 通知浮动通知管理器
-          if (floatingNotificationManager) {
-            const session = appDb ? getSession(appDb, sessionId) : undefined
-            floatingNotificationManager.onConfirmRequest({
+          // 通知浮动通知管理器（P1：经 events.notify 出口，宿主实例由装配器包装；
+          // H1：agent 裁决路径无 waiter，不发「待确认」浮动通知）
+          if (
+            invocationEvents?.notify &&
+            (gate.decision.type !== 'require-confirm' || gate.decision.answerer === 'user')
+          ) {
+            const session = hostStorage?.readSession?.(sessionId) as { name?: string } | undefined
+            invocationEvents?.notify({
+              kind: 'confirm-request',
+              requestId,
               sessionId,
               sessionName: sessionDisplayNameRaw(session?.name, sessionId),
               toolUseId,
               toolName,
-              input: inputObj,
-              requestId,
-              createdAt: Date.now()
+              input: inputObj
             })
           }
           }
           // §5.5 统一通道分发：channelFor(lane)；confirm.* 审计由通道内部以同一 requestId 落
+          // P1-4：timeoutMs 真实消费决策层给的值（现状恒 null → 通道回退 5min 默认）；P2 起回答者配置可覆盖
           const confirmReq: ConfirmRequest = {
             facts: gate.facts,
             riskLevel: gate.decision.type === 'require-confirm' ? gate.decision.riskLevel : gate.facts.baseRiskLevel,
             memoryTiers: confirmMemoryTiers,
-            timeoutMs: null
+            timeoutMs: gate.decision.type === 'require-confirm' ? gate.decision.timeoutMs : null
+          }
+          // P1 回答者接线（§2.2 动作派生，融合契约路径端口架构）：回答者由 gate 决策给出
+          //（不再按 lane 查配置表）；kind='agent' 经工厂挂 AgentChannel，invokeApproval
+          // 延迟加载审批执行链（避免循环依赖）。
+          // §6：桌面链路授权上限放宽到 high（有 taskDigest 真人证据）；automation 维持 low。
+          const answererPolicy: ConfirmAnswererPolicy = {
+            kind: gate.decision.type === 'require-confirm' ? gate.decision.answerer : 'user'
           }
           const channelOutcome = await channelFor({
             lane: confirmLane,
@@ -1591,6 +2167,40 @@ async function runToolChatSessionInner(
             sessionId,
             toolName,
             audit: getSecurityAuditLog(),
+            answererPolicy,
+            agentChannelFactory: (agentDeps) =>
+              new AgentChannel({
+                ...agentDeps,
+                // B1(偏差 23,P1-3 生产接线):第四发起入口(嵌套审批)统一准入
+                admissionGate: getCallAdmissionGate(),
+                // D 任务声明透传（可信证据）：管家链路有任务上下文，桌面链路经 claudeStreamHandlers
+                // 传当前 turn 用户消息摘要；缺省 = 无任务上下文
+                ...(args.approvalTaskDigest ? { taskDigest: args.approvalTaskDigest } : {}),
+                invokeApproval: (inv) =>
+                  import('./confirmation/approvalAgent').then((m) =>
+                    m.runApprovalAgent(
+                      {
+                        db: hostAnswerer?.approvalDatabase as never,
+                        // P3：嵌套规则上界——内层放行集合相对父调用取交集（授权不继承）
+                        policyRuleFloor: args.gatePolicy?.effectiveRules,
+                        workDir,
+                        userDataDir,
+                        getToolsConfig: () => toolsConfig,
+                        ...(shellConfig !== undefined ? { getShellConfig: () => shellConfig } : {}),
+                        ...(browserConfig ? { getBrowserConfig: () => browserConfig } : {}),
+                        getWorkDir: () => (resolveWorkDir ? resolveWorkDir() : workDir),
+                        // §6 授权上限：desktop 允许到 high；automation（及审批内层）维持 low
+                        maxAuthorization: confirmLane === 'automation' ? 'low' : 'high',
+                        // P1-1：凭证对配对传入——复用外层会话已解析的 model/baseUrl/getApiKey，
+                        // 审批请求打用户实际服务端点（中转/自定义端点下不失效）；Profile 机制落地后按 approvalProfileId 解析独立快模型
+                        model,
+                        ...(baseUrl ? { baseUrl } : {}),
+                        getApiKey
+                      },
+                      inv
+                    )
+                  )
+              }),
             ...(remoteContext?.imChannel
               ? {
                   imChannel: remoteContext.imChannel,
@@ -1627,10 +2237,19 @@ async function runToolChatSessionInner(
               : channelOutcome.kind === 'timeout'
                 ? 'timeout'
                 : 'rejected'
+          // 回答者与结束原因随 outcome 记录（I3：由 decision 派生——agent 裁决不写任何记忆）
+          if (channelOutcome.kind !== 'approved-with-action') {
+            confirmAnswererKind =
+              gate.decision.type === 'require-confirm'
+                ? gate.decision.answerer
+                : (channelOutcome.answererKind ?? 'user')
+            confirmOutcomeCause = channelOutcome.cause
+            channelRejectSummary = channelOutcome.reason?.summary
+          }
         }
         if (!remoteContext) {
           // 用户已确认/拒绝/超时，不再属于「待确认」；勿等到工具执行完毕才清除
-          floatingNotificationManager?.onToolResult(requestId, toolUseId)
+          invocationEvents?.notify?.({ kind: 'tool-result', requestId, toolUseId })
           if (toolName === 'run_shell' && shellSecurityHints) {
             const command = typeof inputObj.command === 'string' ? inputObj.command : ''
             if (outcome === 'approved' && shellSecurityHints.requiresRiskAck) {
@@ -1686,7 +2305,8 @@ async function runToolChatSessionInner(
           const recheck = recheckRemoteWriteAuthorization(remoteContext, sessionId)
           if (!recheck.ok) {
             outcome = 'rejected'
-            rejectReason = 'authorization_revoked'
+            rejectReason = 'policy'
+            rejectPolicyCode = 'authorization_revoked'
             logAgentEvent('warn', 'tool.confirm.authorization_revoked', {
               requestId,
               sessionId,
@@ -1713,7 +2333,8 @@ async function runToolChatSessionInner(
         const recheck = recheckRemoteWriteAuthorization(remoteContext, sessionId)
         if (!recheck.ok) {
           outcome = 'rejected'
-          rejectReason = 'authorization_revoked'
+          rejectReason = 'policy'
+          rejectPolicyCode = 'authorization_revoked'
           logAgentEvent('warn', 'tool.confirm.authorization_revoked', {
             requestId,
             sessionId,
@@ -1743,7 +2364,7 @@ async function runToolChatSessionInner(
       }
 
       // 收窄 legacy confirm 状态为 coordinator 合同；下方仍保留既有文案和审计分支。
-      const confirmationDecision = mapLegacyConfirmation({ outcome, needsConfirm, rejectReason })
+      const confirmationDecision = mapLegacyConfirmation({ outcome, needsConfirm, rejectReason, policyCode: rejectPolicyCode })
       if (needsConfirm) {
         args.emitFactEvent?.({
           type: 'tool-confirmed',
@@ -1764,8 +2385,8 @@ async function runToolChatSessionInner(
           timeoutError,
           timeoutError
         )
-        await recordToolResult(buildToolErrorResult(toolUseId, timeoutError, { requestId, sessionId }), { success: false, error: timeoutError })
-        floatingNotificationManager?.onToolResult(requestId, toolUseId)
+        await recordToolResult(buildToolErrorResult(toolUseId, timeoutError, { requestId, sessionId }), { success: false, error: timeoutError, notExecuted: true, notExecutedReason: 'confirm_timeout' })
+        invocationEvents?.notify?.({ kind: 'tool-result', requestId, toolUseId })
         if (toolErrorRepeat.noteFailure(toolName, timeoutError)) {
           abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${timeoutError}`
           break
@@ -1780,23 +2401,35 @@ async function runToolChatSessionInner(
         typeof inputObj.url === 'string' &&
         inputObj.url.trim()
       ) {
-        rememberBrowserSessionTrustedUrl(sessionId, inputObj.url.trim())
-        // 会话级信任双写 decision_cache（navigate 档 domain-any-action，键带 sessionId）
-        if (appDb) {
-          const navHost = extractHostname(inputObj.url.trim())
-          if (navHost) {
-            if (gate.decision.type !== 'require-confirm') {
-              throw new Error('MEMORY_WRITE_REQUIRES_CONFIRM_DECISION')
+        // I3：记忆只源于人类——非 user 回答者（如审批 Agent）的批准不产生任何记忆写入
+        if (confirmAnswererKind !== 'user') {
+          logAgentEvent('info', 'tool.confirm.non_human_answerer_skip_memory', {
+            requestId,
+            sessionId,
+            loopRound,
+            toolUseId,
+            toolName,
+            answererKind: confirmAnswererKind,
+            cause: confirmOutcomeCause
+          })
+        } else {
+          rememberBrowserSessionTrustedUrl(sessionId, inputObj.url.trim())
+          // 会话级信任双写 decision_cache（navigate 档 domain-any-action，键带 sessionId）——P2 经 persist 端口
+          if (hostStorage?.persist?.recordUserAnswerFromDecision) {
+            const navHost = extractHostname(inputObj.url.trim())
+            if (navHost) {
+              if (gate.decision.type !== 'require-confirm') {
+                throw new Error('MEMORY_WRITE_REQUIRES_CONFIRM_DECISION')
+              }
+              hostStorage.persist.recordUserAnswerFromDecision({
+                lane: effectiveLane,
+                sessionId,
+                key: { kind: 'domain', domain: navHost, level: 'domain-any-action', sessionId },
+                decision: gate.decision,
+                answererKind: confirmAnswererKind,
+                source: 'user-confirm'
+              })
             }
-            recordUserAnswerFromDecision({
-              db: appDb,
-              audit: getSecurityAuditLog(),
-              lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
-              sessionId,
-              key: { kind: 'domain', domain: navHost, level: 'domain-any-action', sessionId },
-              decision: gate.decision,
-              source: 'user-confirm'
-            })
           }
         }
       }
@@ -1808,30 +2441,42 @@ async function runToolChatSessionInner(
       ) {
         const actUrl = stagehandService.peekCurrentUrl(sessionId)
         if (actUrl) {
-          rememberBrowserSessionActTrust(sessionId, actUrl)
-          // 会话级信任双写 decision_cache（act 档 domain+action，键带 sessionId）
-          if (appDb) {
-            const actHost = extractHostname(actUrl)
-            if (actHost) {
-              if (gate.decision.type !== 'require-confirm') {
-                throw new Error('MEMORY_WRITE_REQUIRES_CONFIRM_DECISION')
+          // I3：记忆只源于人类——非 user 回答者（如审批 Agent）的批准不产生任何记忆写入
+          if (confirmAnswererKind !== 'user') {
+            logAgentEvent('info', 'tool.confirm.non_human_answerer_skip_memory', {
+              requestId,
+              sessionId,
+              loopRound,
+              toolUseId,
+              toolName,
+              answererKind: confirmAnswererKind,
+              cause: confirmOutcomeCause
+            })
+          } else {
+            rememberBrowserSessionActTrust(sessionId, actUrl)
+            // 会话级信任双写 decision_cache（act 档 domain+action，键带 sessionId）——P2 经 persist 端口
+            if (hostStorage?.persist?.recordUserAnswerFromDecision) {
+              const actHost = extractHostname(actUrl)
+              if (actHost) {
+                if (gate.decision.type !== 'require-confirm') {
+                  throw new Error('MEMORY_WRITE_REQUIRES_CONFIRM_DECISION')
+                }
+                hostStorage.persist.recordUserAnswerFromDecision({
+                  lane: effectiveLane,
+                  sessionId,
+                  key: { kind: 'domain', domain: actHost, level: 'domain+action', sessionId },
+                  decision: gate.decision,
+                  answererKind: confirmAnswererKind,
+                  source: 'user-confirm'
+                })
               }
-              recordUserAnswerFromDecision({
-                db: appDb,
-                audit: getSecurityAuditLog(),
-                lane: remoteContext ? (remoteContext.source === 'feishu' ? 'feishu' : 'wechat') : 'desktop',
-                sessionId,
-                key: { kind: 'domain', domain: actHost, level: 'domain+action', sessionId },
-                decision: gate.decision,
-                source: 'user-confirm'
-              })
             }
+            logAgentEvent('info', 'browser.act.sessionTrust.remember', {
+              sessionId,
+              host: extractHostname(actUrl),
+              timestamp: Date.now()
+            })
           }
-          logAgentEvent('info', 'browser.act.sessionTrust.remember', {
-            sessionId,
-            host: extractHostname(actUrl),
-            timestamp: Date.now()
-          })
         }
       }
       if (
@@ -1850,21 +2495,32 @@ async function runToolChatSessionInner(
       }
 
       if (!confirmationDecision.approved) {
+        // P1-2 拒绝理由回传：优先通道裁决的 reason.summary（模型可读、可据此改方案）；
+        // 无理由时按来源回退既有文案，迁移期文案逐一对照不回归。
+        // P2-F F3：agent-deny 的理由追加「如何获批」指引——拒绝必须可解释、可操作（换行分隔）。
         const rejectedError =
           confirmationDecision.errorCode === 'REMOTE_READ_ONLY'
             ? '远程只读策略禁止执行需确认的工具。请在设置中将「远程写确认策略」改为「微信/飞书确认」，或开启「大模型生成的脚本自动允许执行」。'
             : confirmationDecision.errorCode === 'AUTHORIZATION_REVOKED'
               ? '远程授权已撤销或当前请求不再持有执行租约，已拒绝执行此工具'
-              : '用户拒绝执行此工具'
+              : (channelRejectSummary ?? '用户拒绝执行此工具') +
+                (confirmOutcomeCause === 'agent-deny' ? `\n${agentDenyHowToApproveGuidance()}` : '')
+        // §7.6 #11：确认未批准覆盖三类来源（用户拒绝 / 远程只读 / 授权撤销），均未进入执行流程
+        // P1-D（D4）：按 cause 归类——agent-deny 不再误标为「用户拒绝」污染统计与归因。
+        const notExecutedReason = notExecutedReasonForConfirmation({
+          cause: confirmOutcomeCause,
+          errorCode: confirmationDecision.errorCode
+        })
         logToolLoopError(
           { requestId, sessionId, loopRound, toolUseId, toolName, input: inputObj },
           rejectedError,
           rejectedError
         )
-        await recordToolResult(buildToolErrorResult(toolUseId, rejectedError, { requestId, sessionId }), { success: false, error: rejectedError })
-        floatingNotificationManager?.onToolResult(requestId, toolUseId)
-        if (toolErrorRepeat.noteFailure(toolName, rejectedError)) {
-          abortRepeatedToolError = `同一工具错误已连续出现 ${MAX_CONSECUTIVE_SAME_TOOL_ERROR} 次，已停止：${rejectedError}`
+        await recordToolResult(buildToolErrorResult(toolUseId, rejectedError, { requestId, sessionId }), { success: false, error: rejectedError, notExecuted: true, notExecutedReason })
+        invocationEvents?.notify?.({ kind: 'tool-result', requestId, toolUseId })
+        // P1-3：确认拒绝属安全拒绝桶（阈值 5）——管家 Agent 被拒后可改方案推进，Turn 不因 3 次拒绝而中止
+        if (toolErrorRepeat.noteFailure(toolName, rejectedError, undefined, 'safety')) {
+          abortRepeatedToolError = `安全拒绝已连续出现 ${MAX_CONSECUTIVE_SAFETY_REJECT} 次，已停止：${rejectedError}`
           break
         }
         continue
@@ -1919,8 +2575,8 @@ async function runToolChatSessionInner(
       let execThrew = false
       const execStartedAt = Date.now()
       const toolUserConfirmed = needsConfirm && outcome === 'approved'
-      if (isToolRevoked(requestId, toolName)) {
-        await recordToolResult(buildToolErrorResult(toolUseId, 'tool_authorization_revoked', { requestId, sessionId }), { success: false, error: 'tool_authorization_revoked' })
+      if (isToolRevoked(requestId, resolvedToolName)) {
+        await recordToolResult(buildToolErrorResult(toolUseId, 'tool_authorization_revoked', { requestId, sessionId }), { success: false, error: 'tool_authorization_revoked', notExecuted: true, notExecutedReason: 'authorization_revoked' })
         continue
       }
       if (remoteContext) {
@@ -1963,7 +2619,7 @@ async function runToolChatSessionInner(
             shellConfig,
             policyRevision: shellPolicyRevision,
             shellOutputMode,
-            appDatabase: appDb,
+            appDatabase: hostMcp?.executorDatabase as import('./database').AppDatabase,
             workDirManager,
             wikiConfig,
             feishuConfig,
@@ -1972,10 +2628,12 @@ async function runToolChatSessionInner(
             remoteContext,
             toolUserConfirmed,
             getBrowserDetectContext,
+            requestLocale: locale,
+            lane: effectiveLane,
             historyFacts: args.historyFacts
           }
           execResult = preparedShellExecution
-            ? await executePreparedShellExecution(preparedShellExecution, executionContext, execStartedAt, {
+            ? await executePreparedShellExecutionWithHostFallback(preparedShellExecution, executionContext, execStartedAt, {
                 requestId,
                 sessionId,
                 toolUseId,
@@ -2111,10 +2769,10 @@ async function runToolChatSessionInner(
           content: payload
         }
       } else if (recoverySkill && execResult.dependencyError) {
-        if (!recoverySkillFragment && appDb) {
-          const cur = getSession(appDb, sessionId)
+        if (!recoverySkillFragment && hostStorage?.persist?.updateSessionMetadata && hostStorage.readSession) {
+          const cur = hostStorage.readSession(sessionId) as { skillsState?: Parameters<typeof activateRecoverySkillInState>[0] } | undefined
           if (cur) {
-            updateSession(appDb, sessionId, {
+            hostStorage.persist.updateSessionMetadata(sessionId, {
               skillsState: activateRecoverySkillInState(cur.skillsState, recoverySkill)
             })
             const skill = getSkillByName(userDataDir, workDir, recoverySkill)
@@ -2171,12 +2829,12 @@ async function runToolChatSessionInner(
       if (execResult.success) {
         if (toolName === 'write_file' || toolName === 'edit_file') {
           const rel = typeof inputObj.path === 'string' ? inputObj.path.trim() : ''
-          if (rel) notifyFileTreeChanged(sender, { kind: 'paths', relPaths: [rel] })
+          if (rel) args.onFileTreeChanged?.({ kind: 'paths', relPaths: [rel] })
         } else if (toolName === 'run_shell' || toolName === 'run_script') {
-          notifyFileTreeChanged(sender, { kind: 'refreshExpanded' })
+          args.onFileTreeChanged?.({ kind: 'refreshExpanded' })
         }
       }
-      floatingNotificationManager?.onToolResult(requestId, toolUseId)
+      invocationEvents?.notify?.({ kind: 'tool-result', requestId, toolUseId })
       if (abortRepeatedToolError) break
     }
 
@@ -2185,7 +2843,8 @@ async function runToolChatSessionInner(
       const projected = projectUsageAfterToolResults(lastValidUsage, toolResults)
       args.emitFactEvent?.({ type: 'usage-updated', usage: projected, projected: true })
       if (lastRequestHeader && lastRequestContext) {
-        const nextHeader = buildRequestHeaderPayload({ requestId: `${requestId}:surface:${loopRound}`, system: lastRequestHeader.system, tools: lastRequestHeader.tools, messages: [...messagesForApi], requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet, toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesForApi as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: false } })
+        // lastRequestHeader 本体永远持完整 system/tools（elide 只作用于事件流落盘副本），?? 兜底仅为类型层
+        const nextHeader = buildRequestHeaderPayload({ requestId: `${requestId}:surface:${loopRound}`, system: lastRequestHeader.system ?? '', tools: lastRequestHeader.tools ?? [], messages: [...messagesForApi], requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet, toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesForApi as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: false } })
         const nextProjectionInput = {
           currentSurface: nextHeader.surfaceSnapshot,
           budget: lastRequestContext.budget,
@@ -2208,29 +2867,8 @@ async function runToolChatSessionInner(
       }
     }
     if (abortRepeatedToolError) {
-      return failToolLoopWithLastUsage(sender, requestId, sessionId, abortRepeatedToolError, lastValidUsage, args.emitFactEvent)
+      return failToolLoopWithLastUsage( requestId, sessionId, abortRepeatedToolError, lastValidUsage, args.emitFactEvent)
     }
   }
 }
 
-/** 未命中内置 executor 时，从请求级 MCP 快照解析映射工具执行器（快照外不可解析）。 */
-function resolveMcpExecutor(
-  toolName: string,
-  snapshot: McpToolSnapshot,
-  manager: McpConnectionManager,
-  appDb: AppDatabase | undefined
-): import('./tools/types').ToolExecutor | undefined {
-  const entry = snapshot.entries.get(toolName)
-  if (!entry || !appDb) return undefined
-  const profile = listProfiles(appDb).find((p) => p.id === entry.serverId)
-  if (!profile) return undefined
-  const oauthProvider =
-    profile.auth.mode === 'oauth' ? createMcpOAuthClientProvider(appDb, profile) : undefined
-  return createMcpToolExecutor(entry, {
-    getSession: (serverId) =>
-      manager.connect(profile, async (kind) => getSecret(appDb, serverId, kind), { oauthProvider }),
-    getProfile: () => profile,
-    invalidateSession: (serverId) => manager.disconnect(serverId),
-    getRecentDiagnostics: (serverId) => getDiagnostics(appDb, serverId)
-  })
-}

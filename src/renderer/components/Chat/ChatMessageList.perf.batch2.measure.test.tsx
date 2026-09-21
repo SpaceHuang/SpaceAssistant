@@ -140,6 +140,7 @@ function MeasureHarness({
         <ChatMessageList
           messages={messages}
           actions={actions}
+          confirmationReadyBySession={{}}
           resolveToolsInteractive={() => undefined}
           showArchiveToWiki={() => false}
           canRetry={() => false}

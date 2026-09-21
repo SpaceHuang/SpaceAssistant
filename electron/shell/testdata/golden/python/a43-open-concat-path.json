@@ -1,0 +1,18 @@
+{
+  "id": "a43-open-concat-path",
+  "group": "legacy-parseable",
+  "legacyParsed": true,
+  "verdict": "deny",
+  "patterns": [
+    "A7"
+  ],
+  "signals": [
+    {
+      "kind": "script-analysis",
+      "signal": "dangerous",
+      "patterns": [
+        "A7"
+      ]
+    }
+  ]
+}

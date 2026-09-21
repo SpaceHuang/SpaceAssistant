@@ -119,7 +119,10 @@ describe('shellToolLoopHelpers', () => {
     })
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.analysis.facts?.analysisCompleteness).toBe('partial')
+    // P3 评审登记（golden-review PS 段）：win32 下 PS 语法级分叉使 `echo $(pwd)` 的 PS 子表达式
+    // 完整解析 → complete 化；eligible 仍为 false（hasMetasyntax → persistable=false 短路），
+    // 免确认资格防线不受 facts 翻转影响。
+    expect(result.analysis.facts?.analysisCompleteness).toBe('complete')
     expect(result.legacyAutoAllowEligible).toBe(false)
   })
 })
