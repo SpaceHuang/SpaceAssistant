@@ -807,7 +807,7 @@ effort 解析结果**并非所有 lane 都消费**。当前只有 **desktop lane
 
 ### 11.1 评审项闭环（B / C 项）
 
-**v1.2 评审报告**（`docs/review/thinking-effort-settings-requirement-review.md`）—— B1 / N1–N5 / C1–C4：
+**v1.2 评审报告**（`thinking-effort-settings-requirement-review.md`，本地过程产物，不入版本控制）—— B1 / N1–N5 / C1–C4：
 
 | 项 | 问题 | 处置 |
 |----|------|------|
@@ -817,7 +817,7 @@ effort 解析结果**并非所有 lane 都消费**。当前只有 **desktop lane
 | **C3** | 远程会话链路是否同样经过统一解析 | **v1.5 更正为「前提不成立」**——详见下表 |
 | **C4** | 迁移触发点「启动或 `config:get` 时」需二选一 | **已明确**：固定为启动时一次性写入，`config:get` 只做缺失推导不落库（§8.1） |
 
-**v1.4 复审报告**（`docs/review/thinking-effort-settings-requirement-review-v1.4.md`）—— B1' / N1–N3：
+**v1.4 复审报告**（`thinking-effort-settings-requirement-review-v1.4.md`，本地过程产物，不入版本控制）—— B1' / N1–N3：
 
 | 项 | 问题 | 处置 |
 |----|------|------|

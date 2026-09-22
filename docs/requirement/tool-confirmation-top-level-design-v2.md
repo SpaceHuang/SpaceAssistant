@@ -529,24 +529,24 @@ type SecurityAuditEventKind =
 5. ~~deprecated 字段清理时机~~ **已结论**：不单独排期，开发到对应模块时顺手清理代码与类型引用（`resolveRemoteConfirmPolicy` 随 P1，`wechatSendRequiresConfirm`/`remoteWechatConfirm` 随 P3）；数据库历史值不做物理删除。
 6. ~~安全审计日志如何落~~ **已结论**：独立 `SecurityAudit-{YYYYMMDD}.log` 文件（JSON Lines），与功能日志物理隔离（§3.8）；判定/确认/缓存/配置变更四类事件全覆盖，落事实摘要不落用户内容，异步缓冲写盘不阻断执行；设置中心提供只读查看入口（§4 第 5 区）。
 
-### 评审 v1 修订记录（2026-08-29，对应 `docs/review/tool-confirmation-top-level-design-review-v1.md`）
+### 评审 v1 修订记录（2026-08-29，对应 `tool-confirmation-top-level-design-review-v1.md`，本地过程产物，不入版本控制）
 
 - **B1（阻断）**：链路约束拆分为硬/软两类——有安全含义的链路约束（IM 写本地文件默认必须确认、automation 高风险拒绝、出站硬禁）并入 §3.5 第 1 步硬拒绝，先于缓存查询评估；软约束（体验类规则）留第 4 步。补充缓存条目 lane 取值规则：默认当前链路，跨链路需显式选择且仅低风险开放（§3.4）。
 - **B2（阻断）**：套餐 B（能力声明）落点从缓存条目改为任务配置中的策略输入（ExecutionContext.declaredCapabilities），由策略层专门规则消费；§3.4 补充"缓存只记用户回答，预先同意是策略输入"的边界。
 - 非阻断 1-6 全部采纳：dangerous 信号在预置套餐硬拒绝、不进确认（§3.4 封顶规则对齐）；策略层保持纯函数、写缓存归执行链路缓存管理器（§3.5/§3.6）；`scope:'once'` 移出缓存表；IM `记N` 消息必须内嵌档位描述（§3.6）；超时措辞统一为 `timeoutMs: number | null`（§3.6）；P1 验收新增变体绕过测试集（§7）。
 
-### 评审 v2 修订记录（2026-08-29，对应 `docs/review/tool-confirmation-top-level-design-review-v2.md`）
+### 评审 v2 修订记录（2026-08-29，对应 `tool-confirmation-top-level-design-review-v2.md`，本地过程产物，不入版本控制）
 
 - **B3（阻断）**：链路硬约束加入自定义套餐的不可编辑底线清单，只能看不能改；其启停走独立的链路级开关（沿用 `remoteAllowLocalWrite` 类设置语义 + 风险警示 + 二次确认），第 1 步检查永远执行、开关只改变判定结果。安全不变量精确化为"跨链路缓存条目在硬约束的当前配置下不构成绕过面"（§4）。
 - **B4（阻断）**：带状态控制流（IM 出站写预算门控）按读/写拆分——额度余量读入 ExecutionContext 供纯函数规则消费，记账归执行链路在判定通过后执行；与"读缓存/写缓存"对称，策略层保持纯函数（§3.5）。§3.2.1 基线表补 `wechat_reply/wechat_send/run_lark_cli` 的预算门控现状；P1 范围修正为 toolChatLoop 全部散布点（:917、:1022-1070、:2092-2115 等）。
 - 非阻断 1-4 全部采纳：能力声明规则定位于第 3 步（硬拒绝之后，§3.5）；"低风险"定义为事实派生风险（§3.4）；跨链路条目一律设 TTL（§3.4、§8-Q1）；拒绝方向记忆档位文案规则（§3.6）。
 
-### 评审 v3 修订记录（2026-08-29，对应 `docs/review/tool-confirmation-top-level-design-review-v3.md`）
+### 评审 v3 修订记录（2026-08-29，对应 `tool-confirmation-top-level-design-review-v3.md`，本地过程产物，不入版本控制）
 
 - **B5（阻断）**：§5.4 与 §5.5 对 MCP 事实可见性的矛盾——能力声明的作用域维度按"事实可见性"拆分（§5.2）：MCP 声明维度为 `serverId`（调用边界可核对），域名维度对 MCP 不承诺；domains/recipients 只对能产出目标信号的工具（browser、run_lark_cli、wechat_send）生效。§5.4 表格改为按 server 核对，§5.5 接口约定 2 落成正式结论。
 - 非阻断 1-5 全部采纳：预算耗尽映射为 require-confirm 变体（继续=提额续跑/停止=撤销），行为等价性写入 P1 验收（§3.5）；§5.5 表格标注前提（现状 MCP 仅桌面注入，需指令代理模块配置 exposure 规则）；desktop/automation 链路 origin 恒为 `direct-owner`（§3.1）；文档范围句补充 ingress/exposure 时机（文头）；§5.4 末尾不存在序号的引用修正。
 
-### 评审 v4 修订记录（2026-08-29，对应 `docs/review/tool-confirmation-top-level-design-review-v4.md`）
+### 评审 v4 修订记录（2026-08-29，对应 `tool-confirmation-top-level-design-review-v4.md`，本地过程产物，不入版本控制）
 
 - **B6（阻断）**：§3.7 与正文接线三处——① `allowElevation` 字段补入 §5.2 的 `declaredCapabilities` 类型（仅 execute 类有意义）；② 提权记忆档位从 verb 收紧为 **exact 封顶**（与 §3.4"危险操作只记精确实例"对齐；npm postinstall 可执行任意代码，宽档等于"记住任意代码沙箱外执行"）；③ 路径分类明确为**叠加**：PathZone 保留，沙箱位置作为独立第二维度，§3.4 封顶规则引用不受影响。
 - 非阻断 1-2 采纳：提权确认仅桌面链路开放，IM 链路收到提权请求直接拒绝并引导回桌面；明写"提权重试是一次新的完整判定（新 invocation），不是原判定续期"。

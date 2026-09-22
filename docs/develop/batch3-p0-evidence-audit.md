@@ -134,7 +134,7 @@ i18n:check、check:agent-core 全绿):
    需要 builtin registry 的 6 个测试文件显式 createBuiltinToolRegistry() 注入。
 3. approvalAgent.test P2-7 用例随 butlerAdmission 退役迁移到统一准入门。
 
-### P8 补记:评审修复(docs/review/batch3-runtime-admission-sdk-review.md,P0-1 + P1-1..5 + 部分 P2)
+### P8 补记:评审修复(`batch3-runtime-admission-sdk-review.md`,P0-1 + P1-1..5 + 部分 P2;本地过程产物,不入版本控制)
 
 评审结论「1 P0 + 5 P1」逐项处置(全部由源码复核确认属实):
 

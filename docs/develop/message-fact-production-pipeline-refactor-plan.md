@@ -2,9 +2,9 @@
 
 > 状态：实施中；Core、桌面主路径及微信/飞书远程适配已完成阶段性接入，桌面 create/reuse 与远程事实写入 fallback、旧事实事件协议已清理；最终验收仍待真实 Electron IPC/渲染性能采样及跨平台 CI 证据。
 > 初稿日期：2026-09-05；本版修订及最终代码复核日期：2026-09-07。
-> 评审输入：[开发方案评审](../review/message-fact-production-pipeline-refactor-plan-review.md)。两项阻断意见的设计处理见第 5、7.2、9、12 节；当前实现已取得局部与全量门禁证据，生产 owner 清理仍待复审。
+> 评审输入：开发方案评审（`message-fact-production-pipeline-refactor-plan-review.md`，本地过程产物，不入版本控制）。两项阻断意见的设计处理见第 5、7.2、9、12 节；当前实现已取得局部与全量门禁证据，生产 owner 清理仍待复审。
 > 需求：[生产链路前置重构需求](../requirement/message-fact-production-pipeline-refactor-requirement.md)。
-> 代码基线：工作树 `/Users/space/Documents/Develop/SpaceAssistant/.worktrees/message-fact-persistence-core-refactor`，分支 `codex/message-fact-persistence-core-refactor`，当前 HEAD `679be46`，基于本地 `main` `1f6e794`，**包含未提交改动**。
+> 代码基线：工作树 `.worktrees/message-fact-persistence-core-refactor`，分支 `codex/message-fact-persistence-core-refactor`，当前 HEAD `679be46`，基于本地 `main` `1f6e794`，**包含未提交改动**。
 > 优先级：新需求及本文的实施决策覆盖[旧 Core 方案](message-fact-persistence-core-refactor-plan.md)中的冲突部分；不在旧方案上继续叠加另一条事实写入路径。
 
 ## 1. 结论与实施边界

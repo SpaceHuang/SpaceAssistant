@@ -3,8 +3,8 @@
 > 文档日期：2026-09-09
 > 文档性质：问题分析与开发方案，不包含本次代码实现
 > 目标会话：`e0ea885f-f7a2-4c90-a2e8-ec92f274cade`
-> 原始记录：`/Users/space/Documents/Develop/sessions/e0ea885f-f7a2-4c90-a2e8-ec92f274cade-20260905/messages.json`
-> 修订依据：`docs/review/run-shell-command-failure-diagnosis-and-remediation-plan-review.md`、`docs/review/run-shell-command-failure-diagnosis-and-remediation-plan-review-v2.md`
+> 原始记录：该会话的本地消息备份 `messages.json`
+> 修订依据：本地评审报告 `run-shell-command-failure-diagnosis-and-remediation-plan-review.md`、`run-shell-command-failure-diagnosis-and-remediation-plan-review-v2.md`（本地过程产物，不入版本控制）
 
 ## 1. 结论摘要
 

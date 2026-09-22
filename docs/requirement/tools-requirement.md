@@ -40,7 +40,7 @@ SpaceAssistant 当前采用**委托式工具调用**模式：应用将用户消�
 
 ### 1.3 机会
 
-参考 Claude Code 的 Tools 机制（PRD 见 `docs/references/claude_code_tools_prd.md`），结合 SpaceAssistant 的 Electron 桌面应用架构，引入内置工具机制可以：
+参考 Claude Code 的 Tools 机制（PRD 见 `claude_code_tools_prd.md`，本地参考资料），结合 SpaceAssistant 的 Electron 桌面应用架构，引入内置工具机制可以：
 
 - 让 AI 在对话中直接操作本地文件系统、搜索代码、执行脚本
 - 通过工作目录边界约束和用户确认保障安全
@@ -1279,10 +1279,10 @@ export type SpaceAssistantApi = {
 
 | 原 ID | 需求出处 | 实现说明 |
 |-------|----------|----------|
-| ~~D-01~~ | §5.6 工具执行超时 | `read_file` / `list_directory` / `edit_file` / `write_file` 使用 [`combineUserAbortAndTimeout`](e:/Develop/SpaceAssistant/electron/tools/toolExecutionResource.ts)（默认 30s）与文档所列超时错误文案；`readFile` 支持 `{ signal }` 处已传入合成 signal。 |
+| ~~D-01~~ | §5.6 工具执行超时 | `read_file` / `list_directory` / `edit_file` / `write_file` 使用 [`combineUserAbortAndTimeout`](electron/tools/toolExecutionResource.ts)（默认 30s）与文档所列超时错误文案；`readFile` 支持 `{ signal }` 处已传入合成 signal。 |
 | ~~D-02~~ | §5.6 用户取消 | 同上合成 signal 与用户 `tool:cancel` 联动；目录列举在条目循环中 `throwIfAborted`；写盘步骤间亦检查。 |
-| ~~D-03~~ | §6.3 原子写入 + fsync | [`atomicWriteFile`](e:/Develop/SpaceAssistant/electron/tools/builtinExecutors.ts)：`writeFile` → `open`(`r+`) → `sync` → `close` → `rename`，失败 `unlink` 临时文件。 |
-| ~~D-04~~ | §11 工具入参校验 | [`assertSafeToolInput`](e:/Develop/SpaceAssistant/electron/toolInputGuards.ts) 在 [`toolChatLoop`](e:/Develop/SpaceAssistant/electron/toolChatLoop.ts) 执行器调用前校验路径/大字段/grep/run_script 边界。 |
+| ~~D-03~~ | §6.3 原子写入 + fsync | [`atomicWriteFile`](electron/tools/builtinExecutors.ts)：`writeFile` → `open`(`r+`) → `sync` → `close` → `rename`，失败 `unlink` 临时文件。 |
+| ~~D-04~~ | §11 工具入参校验 | [`assertSafeToolInput`](electron/toolInputGuards.ts) 在 [`toolChatLoop`](electron/toolChatLoop.ts) 执行器调用前校验路径/大字段/grep/run_script 边界。 |
 | ~~D-05~~ | §7.2 / §7.3 `allowedTools` | 设置「工具」Tab 增加 **「仅允许选中的工具（白名单）」**；开启时保存 `allowedTools` 为勾选列表且 `deniedTools: []`，关闭时 `allowedTools: []` 并维护 `deniedTools`。 |
 
 ### 15.2 渲染与体验（相对 §8 正文）

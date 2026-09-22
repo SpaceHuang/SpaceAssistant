@@ -41,7 +41,7 @@
 
 **残留观察（未修复，影响面小）**：① 混合 text 多块 + tool_use 的轮，重建侧合并为单 text 块而实时侧保留多块（罕见）；② thinking 开启时实时侧保留 thinking 块而重建不重建（与 effort 链路相关，超出本计划范围）。
 
-## 2.1 代码评审修复（2026-09-21，评审：docs/review/20260921-agent-context-token-cost-optimization-code-review.md）
+## 2.1 代码评审修复（2026-09-21，评审：`20260921-agent-context-token-cost-optimization-code-review.md`，本地过程产物，不入版本控制）
 
 评审结论：无 P0；2 个 P1 建议合并前处理 + 2 个主要观察。处理记录：
 

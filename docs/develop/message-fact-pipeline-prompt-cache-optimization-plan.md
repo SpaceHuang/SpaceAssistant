@@ -2,7 +2,7 @@
 
 > 状态：待实施，本文仅交付开发设计。基础方案：[消息事实生产链路统一开发方案](message-fact-production-pipeline-refactor-plan.md)（下称"基础方案"），本文**不改变**基础方案的消息所有权、事件协议、存储契约与阶段划分，只补齐基础方案未覆盖的缓存工程机制。
 > 初稿日期：2026-09-07。
-> 代码基线：工作树 `/Users/space/Documents/Develop/SpaceAssistant/.worktrees/message-fact-persistence-core-refactor`，分支 `codex/message-fact-persistence-core-refactor`，HEAD `1f6e7940`（含未提交改动），静态核对，未运行测试。
+> 代码基线：工作树 `.worktrees/message-fact-persistence-core-refactor`，分支 `codex/message-fact-persistence-core-refactor`，HEAD `1f6e7940`（含未提交改动），静态核对，未运行测试。
 
 ## 1. 结论与边界
 

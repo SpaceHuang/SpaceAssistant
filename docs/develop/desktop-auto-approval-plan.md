@@ -294,7 +294,7 @@
 
 `docs/develop/approval-agent-shortest-path-plan.md`、`docs/develop/architect/confirmation-answerer-and-auto-approval-design.md` 与本计划原先均为 git **未跟踪**状态（`git ls-files` 为空），基线引用会断链。已于提交 `20d31edf` 一并入库，M4 关闭。
 
-> 注：评审报告 `docs/review/desktop-auto-approval-plan-review.md` **不入版本控制**——`docs/review/` 目录被 `.gitignore` 忽略（项目约定：评审报告为本地过程产物）。因此 M4 的范围仅限 `docs/develop/` 下的设计/计划文档。
+> 注：评审报告（`desktop-auto-approval-plan-review.md`）**不入版本控制**——评审报告属本地过程产物，由 `.gitignore` 忽略（项目约定）。因此 M4 的范围仅限 `docs/develop/` 下的设计/计划文档。
 
 ---
 
@@ -317,7 +317,7 @@
 4. **confirmMode 迁移**：`runConfirmModeRetirementMigrationOnce`（版本门控 + 事务 + 损坏 JSON fail-safe），`'direct'` 用户行为变化 = 写确认卡始终展示 diff。
 5. **mcpConfirmPolicyMigration 适配**：automation 仅提供 standard 档，迁移不再将其置 custom（写入也会被 `normalizePolicyPackages` 收敛）。
 
-### 评审修复（代码评审 v1，`docs/review/desktop-auto-approval-code-review-v1.md`）
+### 评审修复（代码评审 v1，`desktop-auto-approval-code-review-v1.md`，本地过程产物，不入版本控制）
 
 修复提交 `2894c166`：
 

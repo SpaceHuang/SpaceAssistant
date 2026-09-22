@@ -149,7 +149,7 @@
 - 措辞澄清：Windows 上 profile 的契约取自注册表 `OEMCP`，语义是"按我们当前启动方式推断的先验"，不是对 native 工具输出的保证；最终以字节判定为准，冲突按 §3 偏差 5/6 处理。
 - 若将来要统一到“原始字节”单一口径，需按 §9.6 约束 4 独立立项（双写 → 消费方迁移 → 删旧字段），不在本需求范围内。
 
-## 11. 评审修复（2026-09-12，针对 `docs/review/shell-output-encoding-review.md`）
+## 11. 评审修复（2026-09-12，针对 `shell-output-encoding-review.md`，本地过程产物，不入版本控制）
 
 ### 11.1 MAJOR（4/4 已修，均带回归用例）
 
@@ -187,7 +187,7 @@
 - `npm run build`：通过（托盘图标 + renderer + electron 全量构建）。
 - `npm run typecheck:renderer` / `npm run typecheck:shared` / `npm run i18n:check`：通过。
 
-## 13. 评审修复（2026-09-12，针对 `docs/review/shell-output-encoding-review-v2.md`）
+## 13. 评审修复（2026-09-12，针对 `shell-output-encoding-review-v2.md`，本地过程产物，不入版本控制）
 
 ### 13.1 MAJOR：M5 无 BOM 纯 CJK UTF-16LE 被静默错解为 GBK
 

@@ -1,7 +1,7 @@
 # Agent 能力集合（toolkit）：自我知觉与功能执行的网关式工具设计
 
 - 日期：2026-09-17（v2，按评审修订）
-- 状态：需求提案 v2 —— 已按 `docs/review/agent-toolkit-capability-gateway-requirement-review.md` 修订，待复审
+- 状态：需求提案 v2 —— 已按 `agent-toolkit-capability-gateway-requirement-review.md`（本地评审报告，不入版本控制）修订，待复审
 - 关联文档：`docs/requirement/mcp-agent-driven-oauth-install-requirement.md`（下称「前案」）。**本文取代前案 §5.2.2/§5.2.3 的「mcp_manage 专用工具面」，保留 §5.2.1（mcpService 抽取，本案 §7 Phase 2 沿用）**。前案 P1（OAuth 健壮化）全部有效；P2①②（变更事件、过期推送）有效，**P2③④（授权浮动通知、端到端验收路径）依赖本期未纳入的 `action.mcp.login/refresh`，随本案 Phase 3 生效**（§1.4）。`action.mcp.add` 的行为规范沿用前案 §5.2.2（含 `env` 与 `oauthScopes` 入参，见 §4.2）。
 
 ---
@@ -295,19 +295,19 @@ toolkit.call(id, params)
   ③ 渲染端同口径：设置页「测试连接」退化分支（存在未命名草稿无法整体落盘）在草稿上自动勾选并提示；`McpServerCard` 增加「已发现 N 个工具，尚未启用」警示横幅；
   ④ OAuth 后台路径防惊吓——`mcp:refresh-tools`/`testConnection` 的 provider 以 `interactive: false` 构造：token 失效时不再静默弹浏览器授权（旧链路无人 `finishAuth`，授权成功后仍以 Unauthorized 失败），转译为 `auth-required` 结构化状态引导用户走「连接账户」。
 
-- **v2（2026-09-17）**：按 `docs/review/agent-toolkit-capability-gateway-requirement-review.md` 修订——① 新增 §3.6「工具名双向转换与分发」（阻断项 B1：逆映射 + 构建期撞名校验 + `history.read`/`skills.read` 存量缺陷前置立项）；② `action.mcp.add` 补齐 `env`/`oauthScopes` 入参（P1-1）；③ 新增 §1.4 端到端目标分期交代，前案 P2③④ 归属 Phase 3（P1-2）；④ 与前案的取代/保留关系精确化为 §5.2.2/§5.2.3（P1-4）；⑤ 确认体系机制归属修正（提取器信号 + `toolkit-capability:${id}` 信号 token，静态元数据表仅兜底；新增确认卡片与 `riskLevel` 硬编码实施项）；⑥ 引用偏差修正（§1.2 字节数、§4.2 `listSessions` 返回形态、§5 `toolCallLabel` 口径、§6 secretPresent 与重定向归属、§8 mock server 测试缝、§9 `Set<requestId>` 重入语义）。
+- **v2（2026-09-17）**：按 `agent-toolkit-capability-gateway-requirement-review.md`（本地评审报告，不入版本控制）修订——① 新增 §3.6「工具名双向转换与分发」（阻断项 B1：逆映射 + 构建期撞名校验 + `history.read`/`skills.read` 存量缺陷前置立项）；② `action.mcp.add` 补齐 `env`/`oauthScopes` 入参（P1-1）；③ 新增 §1.4 端到端目标分期交代，前案 P2③④ 归属 Phase 3（P1-2）；④ 与前案的取代/保留关系精确化为 §5.2.2/§5.2.3（P1-4）；⑤ 确认体系机制归属修正（提取器信号 + `toolkit-capability:${id}` 信号 token，静态元数据表仅兜底；新增确认卡片与 `riskLevel` 硬编码实施项）；⑥ 引用偏差修正（§1.2 字节数、§4.2 `listSessions` 返回形态、§5 `toolCallLabel` 口径、§6 secretPresent 与重定向归属、§8 mock server 测试缝、§9 `Set<requestId>` 重入语义）。
 - **v2.1（2026-09-17）**：§3.6 前置任务完成——B1 存量缺陷已按逆映射方案修复（授权白名单切换为内部名口径，分发循环统一回向解析），回归测试 `electron/effectiveTools.compatName.test.ts` 红→绿；定向与依赖关联测试通过，增量构建通过。
 - **v2.2（2026-09-18）**：Phase 1 + Phase 2 实施完成（分支 `codex/agent-toolkit-capability-gateway`，TDD 推进）。
   Phase 1（e5fc9770）：`electron/capabilities/`（descriptor/registry/match 纯函数匹配/callCapability 五类结构化错误码/凭据布尔化脱敏）；网关工具 `toolkit.find`/`toolkit.call` 定义与执行器接入（经 §3.6 逆映射分发）；`env.*` 六能力（含 §4.3 首批收编 `env.browserDetect`，`browser_detect` 退出模型面，browser 依赖失败文案与 browser-setup-guide 技能同步改造）；确认链三处必改完成——`toolkit-capability` 提取器 + `toolkit-read`/`toolkit-act`/`toolkit-capability:${id}` 信号 token + defaultRules 双规则、渲染端 `ToolkitConfirmCard`（复刻 McpConfirmCard 先例）、`confirm-requested` riskLevel 改用裁决结果；标签/i18n（zh/en）/lane 隔离（远程会话过滤）；上下文预算回归（两网关 schema < 2 KiB）。
   Phase 2（00ca73be）：`chatActiveStreams` sessionId→活跃流反向登记（按 requestId 粒度删除，重入安全，§9.4）；`action.session.status/list/read`（内存 SQLite 覆盖分页游标/运行中标志/大消息截断，复用 listSessions(user-visible)/getMessagesPage 口径）；`mcpService` 抽取（前案 §5.2.1，addMcpServer + testMcpConnection，mcpIpc 委托同一入口）；`action.mcp.add`（loopback mock server 三态结论 + 私网拒绝 + 确认拒绝路径 + 零凭据泄漏）。
   验收：定向测试全绿；全量 `npm test` 4024 通过（12 失败经基线 commit 比对为 Windows 环境既有失败：symlink 权限/路径分隔符/ripgrep macOS staging，与本案无关）；`npm run build` 全量通过。
   待真机验收（§1.4 边界）：桌面会话 `find→call` 实测、`action.mcp.add` 对真实端点（如生财有术）的结论与设置页授权引导、`npm run dev` 冒烟确认 §3.6 B1 真机端到端。Phase 3（`action.mcp.login/refresh` 等）按需另起。
-- **v2.3（2026-09-18）**：按 `docs/review/agent-toolkit-capability-gateway-code-review.md` 完成评审修复（2 阻断 + 6 严重 + 建议项子集）。
+- **v2.3（2026-09-18）**：按 `agent-toolkit-capability-gateway-code-review.md`（本地评审报告，不入版本控制）完成评审修复（2 阻断 + 6 严重 + 建议项子集）。
   阻断：B1 act 能力入参凭据不再泄入确认/审计链——新增 `src/shared/capabilityParamSanitize.ts`（extractor 摘要与 ToolkitConfirmCard 展示前凭据值布尔化，输入/输出两侧对称）；`SecurityAuditLog` 增补 JSON 形态凭据打码并收紧 `Bearer\s+\S+` 的贪婪吞噬。B2 `addMcpServer` 改追加语义——既有 profile 经 `existingProfilesAsWriteInputs` 合并回全量列表，既有服务与加密凭据保留，重名保存失败。
   严重：S1 `runProbe` 超时/信号杀死归 `code:null`（WSL 不再误报）；S2 `requestLocale`/`lane` 接入 ToolExecutionContext 并透传 CapabilityContext；S3 新增 `getMessagesPageWithSequence`，能力返回真实 sequence（删除空洞不错标）；S4 discovery 前置于落库并带 5s 超时（超时归入结论）；S5 discovery 专用 fetch 手动跟随重定向并逐跳过 endpointPolicy（SSRF 拦截，合成 403 + 拦截态结论文案）；S6 toolkit 系统提示并入 `buildToolCapabilityConventionHint` 按工具面条件注入、使用 compat 名 `toolkit_find`/`toolkit_call`；S7 `confirm-requested` riskLevel 取 max(裁决, medium)。
   建议项：call id 大小写归一、取消语义独立文案、handler 错误消息过 scrubString、结果脱敏键清单补 headerValue/env:、超时经 AbortController 通知 handler、env overrides 不污染单例、session.read notes 口径修正、testMcpConnection 标注共享类型、删除死代码、`ok:false` 以 `success:false` 回报（data 保留）、`confirmedByUser` 纵深防御、metadata 测试断言 browser_detect 已注销、save-failed/stdio-env e2e 用例、env.system 缓存共享入 notes。
   显式取舍（建议项 8）：toolkit.call 的工具入参（如 accessToken）会随 assistant 消息 tool_calls 持久化到 SQLite 与 sessions/ 明文备份——与 run_shell 命令行带 secret 同类既有行为；确认卡/审计链已布尔化，落库链暂沿用现状，后续如需落库前打码另立需求。
-- **v2.4（2026-09-18）**：按 `docs/review/agent-toolkit-capability-gateway-code-review-v2.md`（修复复核轮）完成第二轮修复（45d407e5）。
+- **v2.4（2026-09-18）**：按 `agent-toolkit-capability-gateway-code-review-v2.md`（修复复核轮，本地评审报告，不入版本控制）完成第二轮修复（45d407e5）。
   阻断：R1 确认完成后详情展开明文——`ToolCallCard` 的 paramPreview 对 toolkit.call/toolkit_call 入参走 `sanitizeCapabilityParamsForDisplay`，展示路径彻底关闭。
   严重：S1' `logSanitize` 键级脱敏扩展（精确清单 + 共享 CREDENTIAL_KEY_PATTERN + 复合键宽匹配 + env 表整体脱敏）；S2' `mcpConfigStore.appendServer`——saveProfiles 主体下沉 saveProfilesLocked，「读-合并-写」整体进写锁临界区，addMcpServer 改走 appendServer，并发交错不丢服务。
   建议项：commandTrustedAt 补齐、S5 正向真用例（同源 302→DCR）、discovery 整体 deadline 8s、paramSanitize 专属单测 + 键清单共享常量 + headerName 放行 + env 大小写、审计兜底补高熵凭据前缀值、confirmRequestedRiskLevel 回归测试、act-ask locked 前提固化测试。

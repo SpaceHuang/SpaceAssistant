@@ -1,6 +1,6 @@
 # 安全审批 Agent 最短路径落地开发计划
 
-> 状态：v2 修订（2026-09-17 评审阻断项 B1/B2 与非阻断项 N1–N8 已吸收；评审报告 `docs/review/approval-agent-shortest-path-plan-review.md`）
+> 状态：v2 修订（2026-09-17 评审阻断项 B1/B2 与非阻断项 N1–N8 已吸收；评审报告 `approval-agent-shortest-path-plan-review.md`，本地过程产物，不入版本控制）
 > 基线：工作区 HEAD（2026-09-17）
 > 上游设计：`docs/develop/architect/confirmation-answerer-and-auto-approval-design.md`（块 2 方案，本计划承接其全部硬不变量 I1–I5 与变更清单）
 > 理想态依据：`docs/develop/architect/product-architecture-design.md` §7「Safety：策略引擎与确认通道」、§7.2「多轮回答者的装配与发起」
@@ -171,7 +171,7 @@ P0、P1 行为等价可独立交付（管家链路即时受益），P2 拨动 au
 
 ## 9. 附录：P3 桌面自动审批档位的 Guardian 参考要点（2026-09-18 对比分析）
 
-来源：Codex（`F:\Develop\codex`）Guardian 自动审批审查器对比分析，完整报告见 `docs/analysis/codex-guardian-vs-security-approval-comparison.md`（本地文档，不入版本控制）。本节摘取其中**桌面档位落地时可直接参考**的设计要点，作为 P3 立项时的输入；不改变本计划已交付的行为。
+来源：对 Codex Guardian 自动审批审查器的对比分析（本地只读检出，不入版本控制）。本节摘取其中**桌面档位落地时可直接参考**的设计要点，作为 P3 立项时的输入；不改变本计划已交付的行为。
 
 **状态更新（2026-09-18）**：分析报告 §4 的建议跟进项已在 `approval-agent-shortest-path` 分支落地（提交 6db05ab0 / c96ea06b / 3f766cca）——Skill v2 双维裁决（A）+ 防误拒条款（B）+ 注入举证标准（C）+ 解析器非对称容错（approve 侧 summary/riskLevel 必填、deny 侧宽容，评审跟进偏离 §4-E 原案）与授权上限 `APPROVAL_MAX_AUTHORIZATION='low'`（E）+ 任务声明全链透传 `taskDigest`（D）。本节其余内容为 **P3 备选项（报告 §5）**，仍待桌面档位立项时吸收。
 

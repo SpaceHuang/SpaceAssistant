@@ -188,10 +188,10 @@ Agent Loop 单路径重构 → 消息事实落库归 Core → 会话记录事件
   `request_header` 尚未带 `requestId`，`request_context.contextWindow` 仍可能为空，且尚无 `contextUsage`、surface 快照、压缩事件和版本字段。
   本方案需与该计划同步扩展 schema，不另建事件写入器或第二事实源。
 - 参考实现：
-  - **deepseek-harness**（`F:\Develop\deepseek-harness`）：`PromptSection{name,order,text,complete}`、`renderPrompt`、
+  - **deepseek-harness**（源码本地只读检出）：`PromptSection{name,order,text,complete}`、`renderPrompt`、
     `orderTools`+`toolOrder`+`TOOL_ORDER_REST`、contexts 快照；`packages/llm/token-meter`（固定密度估算、system/tools/messages 分项、
     `ContextPressureProjection` 真实 usage 锚点 + 增量）；`packages/core/agent-loop/src/agent.ts`（`system=renderPrompt(assembly)`、`tools=assembly.tools`）。
-  - **codex**（`F:\Develop\codex`）：技能**渐进披露**——`ext/skills/src/catalog_prompt.rs`（`## Skills`/`### Available skills` 目录）、
+  - **codex**（源码本地只读检出）：技能**渐进披露**——`ext/skills/src/catalog_prompt.rs`（`## Skills`/`### Available skills` 目录）、
     `render.rs`（`skill_metadata_budget`，默认上下文窗口 2%、上限 10000 token）、`fragments.rs`（目录 role=developer，
     选中正文 `SkillInstructions` role=user，`<skill>` 标签）、`host_prompt.rs` + `extension.rs`（选中技能正文自动注入 user 片段）、
     `tools/read.rs`/`list.rs`（`skills.read` 按需读）；`core/src/client.rs` 用稳定 `prompt_cache_key`（会话/线程 id）保证缓存前缀稳定。
@@ -508,10 +508,10 @@ Agent Loop 单路径重构 → 消息事实落库归 Core → 会话记录事件
 ---
 
 > 参考：外部设计 `tech-design-v3.md` §6（上下文装配与渲染）、§7.4 / §7.5（流式聚合与 chunk 落盘）、§12.2（崩溃恢复）。
-> 同行实现 `F:\Develop\deepseek-harness`：`packages/core/system-prompt`（`PromptSection`/`renderPrompt`/`orderTools`/`toolOrder`/`TOOL_ORDER_REST`/contexts 快照）、
+> 同行实现 deepseek-harness（源码本地只读检出）：`packages/core/system-prompt`（`PromptSection`/`renderPrompt`/`orderTools`/`toolOrder`/`TOOL_ORDER_REST`/contexts 快照）、
 > `packages/llm/token-meter`（`estimate.ts`/`projection.ts`/`index.ts`）、`packages/core/agent-loop/src/agent.ts`（`system=renderPrompt(assembly)`、`tools=assembly.tools`）、
 > `packages/compaction/compaction-basic`（`config.ts` `thresholdRatio=0.8`/`retainRatio=0.16`、`region.ts` `selectCompactableRange`、`summarizer.ts` 结构化纪要、`index.ts` 触发与溢出恢复）。
-> `F:\Develop\codex`：`ext/skills/src/catalog_prompt.rs`（`## Skills` / `### Available skills` 目录）、`render.rs`（`skill_metadata_budget`，默认 2% 窗口、上限 10000 token）、
+> codex（源码本地只读检出）：`ext/skills/src/catalog_prompt.rs`（`## Skills` / `### Available skills` 目录）、`render.rs`（`skill_metadata_budget`，默认 2% 窗口、上限 10000 token）、
 > `fragments.rs`（目录 role=developer，选中正文 `SkillInstructions` role=user）、`host_prompt.rs`（选中正文自动注入 user 片段）、
 > `tools/read.rs`/`list.rs`（`skills.read` 按需读）、`core/src/client.rs`（稳定 `prompt_cache_key`）。
 > 其压缩机制：`core/src/compact.rs`（摘要型：保留最近真实用户消息 + 纪要 + 初始上下文）、`core/src/compact_token_budget.rs`（③ 重开：开新窗口）、

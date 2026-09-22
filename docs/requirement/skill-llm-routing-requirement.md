@@ -46,7 +46,7 @@ SpaceAssistant 已实现 Skills 机制（见 [skills-requirement.md](./skills-re
 
 当前自动匹配采用 **关键词（`triggers`）+ 描述文本相似度（`description`）** 的启发式算法（`electron/skills/skillMatcher.ts`），**并非** Claude Code 所描述的「模型阅读 Skill 描述后自行判断是否相关」。
 
-产品方向调整为：**由大模型阅读各 Skill 的 `description`，决定本次用户请求是否应加载对应 Skill 全文**。这与 Claude Code Skills PRD（`docs/references/claude_code_skills_prd.md` §4.3）一致，也更符合 Skill 作者在 `description` 中撰写「适用场景」的预期。
+产品方向调整为：**由大模型阅读各 Skill 的 `description`，决定本次用户请求是否应加载对应 Skill 全文**。这与 Claude Code Skills PRD（`claude_code_skills_prd.md` §4.3，本地参考资料）一致，也更符合 Skill 作者在 `description` 中撰写「适用场景」的预期。
 
 ### 1.2 本需求范围
 
@@ -683,7 +683,7 @@ interface SkillRouteResult {
 | 类型 | 路径 |
 |------|------|
 | 现有 Skill 需求 | `docs/requirement/skills-requirement.md` |
-| Claude Code 参考 | `docs/references/claude_code_skills_prd.md` |
+| Claude Code 参考 | `claude_code_skills_prd.md`（本地参考资料） |
 | 本地匹配（待替换） | `electron/skills/skillMatcher.ts` |
 | 聊天编排 | `src/renderer/components/Chat/ChatView.tsx` |
 | 独立 LLM 调用参考 | `electron/sessionTitleSuggest.ts` |

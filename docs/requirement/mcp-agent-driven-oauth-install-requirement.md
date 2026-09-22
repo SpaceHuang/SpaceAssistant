@@ -3,7 +3,7 @@
 - 日期：2026-09-17
 - 状态：**部分被取代（2026-09-17 评审）**——「mcp_manage 专用工具」路线（§5.2.2/§5.2.3）经评审否决，由《agent-toolkit-capability-gateway-requirement.md》的能力集合网关取代；§5.2.1 保留；P1 全部有效；P2①② 有效、③④ 随 toolkit Phase 3 生效；§0/§5.1 的 P0 端到端承诺按 toolkit Phase 2/3 分期。详见文末修订记录。
 - 来源场景：用户向 SpaceAssistant 聊天 Agent 下达「在本机完成生财有术 MCP OAuth 2.1 + PKCE 接入（连接名 `scys-mcp`，地址 `https://mcp.scys.com/shengcai-web/mcp`，仅浏览器人工确认授权）」任务，Agent 回复「当前项目不支持这类 MCP 安装方式」。
-- 只读参考：`F:\Develop\codex`（OpenAI Codex CLI 源码，本仓库分析未做任何修改）。
+- 只读参考：OpenAI Codex CLI 源码（上游仓库的本地只读检出，本仓库分析未做任何修改）。
 
 ---
 
@@ -286,5 +286,5 @@ www-authenticate: Bearer resource_metadata="https://mcp.scys.com/.well-known/oau
 
 ## 修订记录
 
-- **2026-09-17 评审结论**：§5.2 的「mcp_manage 专用内置工具」路线经评审**否决**——按场景逐个追加专用工具会持续膨胀模型上下文，改为「能力集合网关」（两个稳定工具 + 内部能力注册表）承载，见《agent-toolkit-capability-gateway-requirement.md》及评审报告 `docs/review/agent-toolkit-capability-gateway-requirement-review.md`。
+- **2026-09-17 评审结论**：§5.2 的「mcp_manage 专用内置工具」路线经评审**否决**——按场景逐个追加专用工具会持续膨胀模型上下文，改为「能力集合网关」（两个稳定工具 + 内部能力注册表）承载，见《agent-toolkit-capability-gateway-requirement.md》及评审报告（`agent-toolkit-capability-gateway-requirement-review.md`，本地过程产物，不入版本控制）。
 - 保留与生效关系：§5.2.1（mcpService 抽取）保留，由 toolkit Phase 2 沿用；§5.3 P1（OAuth 健壮化）全部有效；§5.4 P2①②（变更事件、过期推送）有效，③④（浮动通知、端到端验收路径）随 toolkit Phase 3 生效；§0/§5.1 的「用户只在浏览器确认一次授权」端到端承诺由 toolkit 分期兑现——Phase 2 降级为设置页授权，Phase 3 恢复。

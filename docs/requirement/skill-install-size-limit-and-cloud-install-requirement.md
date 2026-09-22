@@ -748,7 +748,7 @@ triggers:
 
 ### 10.3 对标调研：Codex 如何实现 Skill（含 Q3 同类问题的决策）
 
-**调研对象：** `F:\Develop\codex\codex-rs\skills`（核心 crate）与 `F:\Develop\codex\codex-rs\ext\skills`（扩展层）。
+**调研对象：** Codex 源码的 `codex-rs/skills`（核心 crate）与 `codex-rs/ext/skills`（扩展层）。
 
 #### 10.3.1 目录、安装与扫描
 

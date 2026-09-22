@@ -34,7 +34,7 @@ SpaceAssistant 是一款基于 Electron + React + TypeScript 的桌面 AI 助手
 
 ### 1.3 机会
 
-参考 Claude Code 的 Skills 机制（PRD 见 `docs/references/claude_code_skills_prd.md`），结合 SpaceAssistant 桌面应用的实际架构，引入 Skills 机制可以：
+参考 Claude Code 的 Skills 机制（PRD 见 `claude_code_skills_prd.md`，本地参考资料），结合 SpaceAssistant 桌面应用的实际架构，引入 Skills 机制可以：
 
 - 让 AI 在执行任务前自动发现并加载相关 Skill 文档，作为动态 System Prompt 片段注入上下文。
 - 支持团队共享（项目级）和个人自定义（用户级）两层 Skill 作用域。

@@ -13,7 +13,7 @@
 | 1.1 | 2026-09-05 | 新增服务级拉取结论缓存（`fetchedModelIds/fetchedAt`）与失效模型检测（§6.1-6.3）；补入 Kimi / 火山方舟实测验证记录与错误解析硬约束（§5.1、§5.5） |
 | 1.2 | 2026-09-05 | 已按本文档实现（TDD）。实现偏差说明：§6.4 中 `name` 恒取 API 返回的 id（不采用 `display_name`）——目录去重与服务勾选均以 `name` 为匹配键，用展示名会导致重复拉取产生重复模型；`displayName` 仅随拉取结果透传，暂不入库 |
 | 1.3 | 2026-09-05 | 拉取应用语义由并集改为**替换**（应用前自动清空当前勾选，§6.4、§6.2 同步修订）；空结果视为不确定，不动勾选与缓存；`config:test-connection` 支持传入草稿模型目录（拉取后未保存也能测新模型） |
-| 1.4 | 2026-09-05 | 依代码评审（docs/review/llm-service-model-fetch-code-review-v1.md）修订：§5.4 改为分页拉全（`has_more`+`after_id`，上限 10 页/1000 条），不完整结果降级为「只合并不替换、不做失效判定」（§6.4）；baseUrl 变更即作废拉取缓存（§6.1）；迁移重命名冲突跳过（§6.3）；错误分类新增 `invalid-base-url`，错误联合类型在 `src/shared/llmModelConfig.ts` 单点定义 |
+| 1.4 | 2026-09-05 | 依代码评审（`llm-service-model-fetch-code-review-v1.md`，本地过程产物，不入版本控制）修订：§5.4 改为分页拉全（`has_more`+`after_id`，上限 10 页/1000 条），不完整结果降级为「只合并不替换、不做失效判定」（§6.4）；baseUrl 变更即作废拉取缓存（§6.1）；迁移重命名冲突跳过（§6.3）；错误分类新增 `invalid-base-url`，错误联合类型在 `src/shared/llmModelConfig.ts` 单点定义 |
 
 ---
 

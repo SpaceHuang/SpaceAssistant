@@ -109,7 +109,7 @@
   - `--permission-mode default` + `-p` stream-json：Read 与 PowerShell **均被自动执行**，全程**无 `control_request` 事件**，`permission_denials:[]`。事件流：`init` -> `assistant(thinking)` -> `assistant(tool_use)` -> `user(tool_result，已执行)` -> `assistant(text)` -> `result`。
   - `--permission-mode manual`：init 仍报 `permissionMode:"default"`（旗标疑似在 `-p` 下未生效），Read 照旧自动执行。
   - 模式全集（`claude --help`）：`acceptEdits`/`auto`/`bypassPermissions`/`manual`/`dontAsk`/`plan`；**无 `--permission-prompt-tool` 旗标**。
-  - 用户 `~/.claude/settings.json` 未设权限模式（仅 env 代理：`ANTHROPIC_BASE_URL`=火山 ARK coding 代理、`ANTHROPIC_MODEL`=glm-5.2）。
+  - 用户级 Claude Code 配置未设权限模式（仅通过环境变量代理：`ANTHROPIC_BASE_URL`、`ANTHROPIC_MODEL` 指向第三方兼容网关）。
 - **结论**：`-p`（print/SDK）非交互模式下，claude-code **自行执行工具并上报结果**，stream-json 协议**无「执行前拦截」插入点**，`--permission-mode` 不产生 control_request。**confirm 策略（DD-3/§8.1）对 Claude Code 不成立**。Multica「`bypassPermissions`+自动批准 control_request」的旧路径在 v2.1.207 已不适用。
 - **待确认**：是否为 `-p` 模式固有（vs 本机 glm-5.2 代理特有）--后续在标准 Anthropic API 环境回归一次。但行为高度可能是 `-p` 模式固有。
 - **影响与回退（须重新设计授权路径，影响 DD-1/DD-3/§8.1）**：

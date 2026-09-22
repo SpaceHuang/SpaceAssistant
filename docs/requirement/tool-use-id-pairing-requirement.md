@@ -4,7 +4,7 @@
 **日期：** 2026-07-03  
 **状态：** 待评审  
 **关联文档：**
-- [tool-use-id-pairing-analysis.md](../references/tool-use-id-pairing-analysis.md)（Claude Code `ensureToolResultPairing` 机制分析，本需求的理论参考）
+- `tool-use-id-pairing-analysis.md`（Claude Code `ensureToolResultPairing` 机制分析，本地参考资料，本需求的理论参考）
 - [tools-requirement.md](./tools-requirement.md)（工具体系基础需求）
 - [shell-security-enhancement-requirement.md](./shell-security-enhancement-requirement.md)（安全防护层，与本机制共同构成防幻觉体系）
 

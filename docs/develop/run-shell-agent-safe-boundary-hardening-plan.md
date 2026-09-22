@@ -419,7 +419,7 @@ TDD 结果：新增安全边界测试先针对旧行为形成 RED，再以结构
 - `git diff --check`：通过。
 - `rg` raw logging 旁路审计：生产代码未发现绕过中央投影的 process-tool 原始 command/code/input/stdout/stderr/cwd/executable 日志持久化；仍传递原文的受控调用点均在 logger/projector 边界内。
 
-本记录对应的正式自评报告为 `docs/review/run-shell-agent-safe-boundary-hardening-code-review.md`。它记录了本次 correctness、architecture、security、performance 和 maintainability 评审结果；独立审阅者仍可基于该报告和测试命令复核。
+本记录对应的正式自评报告为 `run-shell-agent-safe-boundary-hardening-code-review.md`（本地过程产物，不入版本控制）。它记录了本次 correctness、architecture、security、performance 和 maintainability 评审结果；独立审阅者仍可基于该报告和测试命令复核。
 
 ## 7. 完成定义
 

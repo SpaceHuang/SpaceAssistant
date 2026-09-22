@@ -11,7 +11,7 @@
 - [chat-message-ui-requirement.md](./chat-message-ui-requirement.md)（工具卡片与确认 UI）
 
 **参考分析（本地，不纳入版本控制）：**
-- `docs/references/bash-tool-analysis.md` — Claude Code Bash 工具能力与安全模型拆解
+- `bash-tool-analysis.md` — Claude Code Bash 工具能力与安全模型拆解
 
 **变更记录：**
 
