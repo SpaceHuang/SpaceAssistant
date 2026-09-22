@@ -183,7 +183,7 @@ describe('file IPC handlers', () => {
     vi.mocked(getMainWindow).mockReturnValue({} as never)
     vi.mocked(dialog.showSaveDialog).mockResolvedValue({ canceled: false, filePath: '/tmp/方案.docx' } as never)
     const handler = ipc.getHandler('file:export-markdown')!
-    await expect(handler({}, { format: 'docx', markdown: '# 标题', sourcePath: '方案.md' })).resolves.toEqual({ ok: true, path: '/tmp/方案.docx' })
+    await expect(handler({}, { format: 'docx', markdown: '# 标题', sourcePath: '方案.md' })).resolves.toEqual({ ok: true, path: path.join('/tmp', '方案.docx') })
     expect(vi.mocked(dialog.showSaveDialog)).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ filters: [{ name: 'Word 文档', extensions: ['docx'] }] }))
     expect(mockFs.writeFile).toHaveBeenCalled()
     expect(mockFs.rename).toHaveBeenCalled()
@@ -218,7 +218,7 @@ describe('file IPC handlers', () => {
       destroy = destroy
     } as never)
     const handler = ipc.getHandler('file:export-markdown')!
-    await expect(handler({}, { format: 'pdf', markdown: '# 标题', sourcePath: '方案.md' })).resolves.toEqual({ ok: true, path: '/tmp/方案.pdf' })
+    await expect(handler({}, { format: 'pdf', markdown: '# 标题', sourcePath: '方案.md' })).resolves.toEqual({ ok: true, path: path.join('/tmp', '方案.pdf') })
     expect(printToPDF).toHaveBeenCalledWith({ printBackground: true, pageSize: 'A4', margins: { top: 0.4, bottom: 0.4, left: 0.5, right: 0.5 } })
     expect(mockFs.writeFile).toHaveBeenCalled()
     expect(destroy).toHaveBeenCalled()
