@@ -84,11 +84,11 @@ interface AppConfig {
 │ [添加目录]                                         │
 ├────────────────────────────────────────────────────┤
 │ ○ 默认  SpaceAssistant                            │
-│   路径：E:\Develop\SpaceAssistant                 │
+│   路径：D:\Projects\SpaceAssistant                 │
 │   [编辑] [移除]                                    │
 ├────────────────────────────────────────────────────┤
 │ ○        MyProject                                │
-│   路径：E:\Develop\MyProject                      │
+│   路径：D:\Projects\MyProject                      │
 │   [编辑] [移除]                                    │
 ├────────────────────────────────────────────────────┤
 │ …                                                  │
@@ -180,7 +180,7 @@ interface AppConfig {
 | 宽度 | 自适应内容，最小 120px，最大 200px |
 | 样式 | 与原标题样式一致，无边框，下拉图标小号 |
 
-**关键约束**：下拉选择器及其选项列表**仅显示目录名称**（`profile.name`），**禁止显示完整路径**。若 `profile.name` 为空，则自动从 `profile.path` 提取目录的 basename（如 `E:\Develop\SpaceAssistant` → `SpaceAssistant`）。
+**关键约束**：下拉选择器及其选项列表**仅显示目录名称**（`profile.name`），**禁止显示完整路径**。若 `profile.name` 为空，则自动从 `profile.path` 提取目录的 basename（如 `D:\Projects\SpaceAssistant` → `SpaceAssistant`）。
 
 #### 4.1.3 选项列表
 

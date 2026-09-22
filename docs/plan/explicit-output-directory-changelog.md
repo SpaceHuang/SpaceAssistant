@@ -49,7 +49,7 @@
 
 ## 评审修复（2026-07-18）
 
-对照 `docs/review/explicit-output-directory-tdd-implementation-review.md` 已修复 Critical #1–#4 与 Required #5–#12：
+对照 `explicit-output-directory-tdd-implementation-review.md`（本地过程产物，不入版本控制）已修复 Critical #1–#4 与 Required #5–#12：
 
 - 生产 resolve 接线：evidence 校验/消费、`existingArtifact`、`packagePrimaryPath`
 - 全 kind decision options + cancel 中断 wait + `consumeAsUserDecision`（无 waiter 不消费）

@@ -5,7 +5,7 @@
 > 版本：v2.2
 > 设计日期：2026-05-25
 > 状态：草案
-> 基于：`docs/analysis/plan_mode_vs_superpowers_analysis.md` 分析结论 + `docs/review/plan_mode_optimization_review.md` 评审意见（P0/P1 已纳入，P2 记录为未来方向）
+> 基于：`plan_mode_vs_superpowers_analysis.md`（本地分析记录）分析结论 + `plan_mode_optimization_review.md`（本地过程产物；均不入版本控制）评审意见（P0/P1 已纳入，P2 记录为未来方向）
 > 变更：v2.2 补充第 10 章「自动化测试方案与计划」
 
 ---
@@ -1159,4 +1159,4 @@ CI 要求：PR 合并前所有测试必须通过，plan 模块覆盖率不低于
 
 *文档版本：v2.2*
 *基于 v2.1 + 补充第 10 章「自动化测试方案与计划」*
-*v2.1 基于 `docs/review/plan_mode_optimization_review.md` P0/P1 评审意见优化；P2 项记录为未来方向*
+*v2.1 基于 `plan_mode_optimization_review.md`（本地过程产物，不入版本控制）P0/P1 评审意见优化；P2 项记录为未来方向*

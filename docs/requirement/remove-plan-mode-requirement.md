@@ -551,7 +551,7 @@ P1 与 P2 可并行，但 **P-1 必须先于 P0**（避免删 orchestrator 后�
 | [plan-auto-execution-requirement.md](./plan-auto-execution-requirement.md) |
 | [plan-resume-button-state-requirement.md](./plan-resume-button-state-requirement.md) |
 
-`docs/develop/plan_mode_optimization_design.md`、`docs/analysis/plan_mode_vs_superpowers_analysis.md` 同理标记废弃。
+`docs/develop/plan_mode_optimization_design.md`、`plan_mode_vs_superpowers_analysis.md`（本地分析记录，不入版本控制）同理标记废弃。
 
 ---
 

@@ -1,7 +1,7 @@
 # 0.1.7 grep 降级：内置 ripgrep 不可用调查
 
 > 调查日期：2026-09-11
-> 关联记录：`docs/analyze/grep-tool-1mib-file-limit-diagnosis.md`
+> 关联记录：`grep-tool-1mib-file-limit-diagnosis.md`（本地分析记录，不入版本控制）
 > 结论等级：运行时分支为确定事实；实际 `spawn` errno 因历史观测缺失无法唯一还原；开发态 staging 缺失为高置信推断。
 
 ## 1. 结论
@@ -36,7 +36,7 @@ SpaceAssistant.app/Contents/Resources/bin/rg
 - SHA-256 为 `0e0cb83f…e3e7102f8`，与 manifest 一致；
 - 直接运行返回 `ripgrep 14.1.1`。
 
-当前安装的 `/Applications/SpaceAssistant.app` 同为 0.1.7，拥有相同二进制、相同哈希，`rg --version` 可运行，且 `codesign --deep --strict` 验证通过。故“0.1.7 发行包漏复制/签名破坏 rg”可排除。
+本机安装的 SpaceAssistant 应用同为 0.1.7，拥有相同二进制、相同哈希，`rg --version` 可运行，且 `codesign --deep --strict` 验证通过。故“0.1.7 发行包漏复制/签名破坏 rg”可排除。
 
 ### 2.2 会话确定使用了 fallback
 

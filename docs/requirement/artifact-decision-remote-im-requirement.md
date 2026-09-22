@@ -2,7 +2,7 @@
 
 > 版本：v1.2  
 > 创建日期：2026-07-18  
-> 状态：草案（已吸收首轮评审与 `docs/review/artifact-decision-remote-im-requirement-second-review.md`）  
+> 状态：草案（已吸收首轮评审与 `artifact-decision-remote-im-requirement-second-review.md`，本地过程产物，不入版本控制）  
 > 前置依赖：  
 > - [explicit-output-directory-candidate-requirement.md](./explicit-output-directory-candidate-requirement.md)（产物归属 / 输出位置 / 覆盖等决策语义）  
 > - [feishu-integration-requirement.md](./feishu-integration-requirement.md)  

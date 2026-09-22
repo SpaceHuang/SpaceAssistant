@@ -3,7 +3,7 @@
 **版本：** 1.1
 **日期：** 2026-05-27
 **关联需求：** `docs/requirement/web-browser-tools-requirement.md`
-**评审依据：** `docs/review/web-browser-tools-review.md`
+**评审依据：** `web-browser-tools-review.md`（本地过程产物，不入版本控制）
 
 ---
 

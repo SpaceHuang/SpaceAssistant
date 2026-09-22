@@ -3,8 +3,9 @@
 ## 1. 目标、边界与已关闭项
 
 本计划以 `main` 的 `b58c126` 为基线，处理
-`docs/review/b344321-current-code-review.md` 中仍然成立的 C2–C4、H1–H9、M1–M3。
-计划吸收了 `docs/review/b344321-current-code-refactor-plan-review.md`、v2 与 v3 的有效意见，
+`b344321-current-code-review.md` 中仍然成立的 C2–C4、H1–H9、M1–M3。
+计划吸收了 `b344321-current-code-refactor-plan-review.md`、v2 与 v3 的有效意见，
+（以上均为本地过程产物，不入版本控制）
 并将所有实现选择收敛为单一路径。本轮明确采用 Node `fs` 防护而非新增原生模块：
 远程写入仍可用且必须确认；不把它宣传为能抵御拥有本机并发文件系统控制权的强沙箱。
 

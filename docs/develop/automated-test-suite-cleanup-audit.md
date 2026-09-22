@@ -1,7 +1,7 @@
 # 自动化测试模块清理审计与建议（修订版 v2）
 
 - 审计基线：`main` @ `f89c4ca`（单一提交，全部结论在该提交上复核）
-- 修订说明：v1 以 `1f6e794` 为基线，经评审（`docs/review/automated-test-suite-cleanup-audit-review.md`）判定不通过后整体修订。本版已按评审门禁：在 `f89c4ca` 干净 worktree 上重跑全量测试与 `typecheck:renderer`，删除范围收窄，所有「删除」动作前置强制门禁。
+- 修订说明：v1 以 `1f6e794` 为基线，经评审（`automated-test-suite-cleanup-audit-review.md`，本地过程产物，不入版本控制）判定不通过后整体修订。本版已按评审门禁：在 `f89c4ca` 干净 worktree 上重跑全量测试与 `typecheck:renderer`，删除范围收窄，所有「删除」动作前置强制门禁。
 - 实测数据（`f89c4ca` 干净副本，先执行 `npm run i18n:generate-types`）：
   - `vitest run`：**513 个测试文件（2 failed / 511 passed）、3227 个用例（6 failed / 3221 passed）、约 94 秒**；
   - `npm run typecheck:renderer`：**4 个类型错误，失败**；

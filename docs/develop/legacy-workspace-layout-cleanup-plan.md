@@ -7,10 +7,10 @@
 > - 现行替代：`docs/develop/explicit-output-directory-candidate-technical-design.md`  
 > - 旧需求（废弃）：`docs/requirement/file-write-directory-layout-requirement.md`  
 > - 灰度日志（需同步修订）：`docs/plan/explicit-output-directory-changelog.md`  
-> - 计划评审：`docs/review/legacy-workspace-layout-cleanup-plan-review.md`  
-> - 计划复审 v2：`docs/review/legacy-workspace-layout-cleanup-plan-review-v2.md`  
-> - 计划复审 v3：`docs/review/legacy-workspace-layout-cleanup-plan-review-v3.md`  
-> - 计划复审 v4：`docs/review/legacy-workspace-layout-cleanup-plan-review-v4.md`
+> - 计划评审：`legacy-workspace-layout-cleanup-plan-review.md`（本地过程产物，不入版本控制）  
+> - 计划复审 v2：`legacy-workspace-layout-cleanup-plan-review-v2.md`  
+> - 计划复审 v3：`legacy-workspace-layout-cleanup-plan-review-v3.md`  
+> - 计划复审 v4：`legacy-workspace-layout-cleanup-plan-review-v4.md`
 
 ---
 
@@ -29,7 +29,7 @@
 - **不**把历史 `writeDirChoice` 自动迁移为 `artifactDefaultDir`（既有设计明确禁止）。
 - 不重写 `pathSecurity` / 安全写入协议。
 - 不顺手大范围重构 `toolChatLoop` 无关分支。
-- 不清理用户工作区磁盘上已误写入的离谱路径文件（如 `Users/space/.../Docs/`）；可在发布说明中提示人工核对。
+- 不清理用户工作区磁盘上已误写入的离谱路径文件（如用户主目录被当作相对路径拼接后产生的 `<用户目录>/.../Docs/`）；可在发布说明中提示人工核对。
 - **不**给通用 `updateSession` 增加「保留 `updatedAt`」隐式例外或可选参数；数据剥离用专用 migration helper。
 - **不**在本轮退役或缩减 one-shot 迁移 helper（见 §1.4「迁移保留窗口」）。
 
@@ -380,6 +380,6 @@ try {
 2. `writeDirChoice` 确认流把**绝对路径**再经 `normalizeRelPathInput` 剥前导 `/` 后相对 `workDir` 拼接，存成双重路径；
 3. `.md → Docs` 再拼一层。
 
-最终落到 `Users/space/Documents/Develop/SpaceAssistant/docs/analyze/Docs/...`。
+最终落到「用户主目录被当作相对路径」后拼接出的 `<用户目录>/.../docs/analyze/Docs/...`。
 
 门控已改为永不回退 legacy；本计划删除残存实现与脏配置，从根上避免同类排障噪音与误用。清理脏 metadata 时必须保持会话时间线不变，避免「修配置」变成「重排最近会话」。完成标记只在全库可证明清理成功后写入；损坏行不得被跳过并闩死。用户从旧版直接安装本轮最终构建时，仍须跑完整 one-shot 迁移——开发工作包顺序不等于用户升级路径。

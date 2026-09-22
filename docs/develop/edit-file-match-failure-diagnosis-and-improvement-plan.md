@@ -9,7 +9,7 @@
 >
 > 修订记录：
 > - **v1.0**（2026-09-20）：初版。
-> - **v1.1**（2026-09-20）：依据评审 `docs/review/20260920-edit-file-match-failure-plan-review.md` 补齐 P0 规格。
+> - **v1.1**（2026-09-20）：依据评审 `20260920-edit-file-match-failure-plan-review.md`（本地过程产物，不入版本控制）补齐 P0 规格。
 >   - **B1（阻断）**：新增 §5.2.1「下发前脱敏预检」——`suggestedOldString` 必经 `sanitizeAgentText`，凡会被改写的候选一律**抑制下发**，杜绝「下发被改写建议 → 连续 3 次相同错误 → 循环中止」这一比现状更差的路径。
 >   - **B2（阻断）**：§5.1 算法改为**块窗口**并统一多行语义（单行是 `L = 1` 的特例），新增 `block-too-large` 降级；消除「单行建议 + 多行 new_string」的文件损坏隐患。
 >   - **O1**：`difflib` 改指自实现 **LCS + opcode 回溯**，并明确诊断与匹配器共用 EOL 归一视图。
@@ -28,7 +28,7 @@
 >     - **实现落点**：`electron/tools/editDiagnosis.ts`（新增：块窗口两阶段粗筛/精算 + 最小 LCS/opcode 回溯 + 差异分类 + §5.2.1 预检）；`electron/tools/builtinExecutors.ts`（`occ === 0` 分支接入诊断；新增 `applyEditWithEscapeTolerance`，`applyEditWithEolTolerance` 不变；写路径护栏次序不变）。
 >     - **与计划的偏差（1 处，代码内已注释说明）**：常量取值对调为 `MAX_LCS_INPUT_CHARS = 4096 > MAX_SUGGESTED_OLD_STRING_CHARS = 4000`——按本表建议值（4000/4096）时 too-long 抑制不可达（候选块先被精算守卫拦截，§7.1 #8 无法触发）；对调后两阈值语义完整。
 >     - **未实施（按计划建议保留）**：P1-D（`read_file` 原始字符视图——§5.4 建议观察 P0 效果后再定）；P2-F2（`run_script` 写文件观测——§5.6 允许「二选一」，已做 F1 提示层）。
->   - **v1.4**（2026-09-20）：评审修复记录（分支提交 `08355e03`，响应 `docs/review/edit-file-diagnosis-review.md` v1 四项发现）。
+>   - **v1.4**（2026-09-20）：评审修复记录（分支提交 `08355e03`，响应 `edit-file-diagnosis-review.md`（本地过程产物，不入版本控制）v1 四项发现）。
 >     - **P1（阻断）**：`editDiagnosis.ts` 精算候选改为以 LCS 占比**替换**粗筛分（原 `Math.max` 使顺序盲的直方图粗筛分成为下限），精算后按新分数**重排**再取 top1/top2；`lineSimilarity` 增加位置一致率项（仍为线性代价）。评审实证用例（old=`abcde`、文件含异位词 `edcba` 与真目标 `abcdx`）修复后 top1=`abcdx`、similarity=0.800。
 >     - **P1.5**：「候选过多放弃」改在粗筛全量上计数（`coarseAboveCount > MAX_CANDIDATES`），原短名单计数条件恒为假（死代码）。
 >     - **P2**：`similarityGap` 随重排恒非负（新增断言）。
@@ -567,4 +567,4 @@ preflight(candidateBlock):
 | B2：多行是常态 | seq 25564（`old_string` 213 字符、含换行）、seq 26056（299 字符、含换行） |
 | O1：无现成 diff 依赖 | 全仓源码无 `difflib` / `SequenceMatcher` / `opcodes` 命中；`skillMatcher`、`WriteConfirmCard` 的匹配逻辑不可复用 |
 | O4：结果长度上限 | `src/shared/toolResultLimits.ts`（`MAX_TOOL_RESULT_CONTENT_CHARS = READ_FILE_MAX_CHARS` = 2 MiB） |
-| 评审文件 | `docs/review/20260920-edit-file-match-failure-plan-review.md`（B1 / B2 / O1–O4 出处） |
+| 评审文件 | `20260920-edit-file-match-failure-plan-review.md`（本地过程产物，不入版本控制；B1 / B2 / O1–O4 出处） |

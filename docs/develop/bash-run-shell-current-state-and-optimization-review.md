@@ -897,7 +897,7 @@ npx vitest run electron/tools/runShellExecutor.test.ts electron/shell/shellExecP
 
 ### 11.2 复审修复：孤儿清理不再阻塞启动（2026-09-11）
 
-`docs/review/dbfbb89-shell-contract-fix-review.md` 指出阻断项：启动路径上无超时的 `spawnSync('powershell.exe')` 可永久阻塞主进程。已按复审结论修复：
+`dbfbb89-shell-contract-fix-review.md`（本地过程产物，不入版本控制）指出阻断项：启动路径上无超时的 `spawnSync('powershell.exe')` 可永久阻塞主进程。已按复审结论修复：
 
 - 命令行查询与终止改走异步 `runCommandWithTimeout()`（查询、终止各 5s 上限），超时按未完成收敛并显式 `SIGKILL` 子进程；`cleanupOrphanProcess` 不再使用任何无超时的 `spawnSync`，主进程事件循环不会因 powershell/wmic/taskkill 挂起而卡死。
 - `OrphanCleanupResult` 增加 `unverified`：区分"查询工具不可用/超时（不做任何终止）"与"进程已退出（`already-exited`）"，前者会在 `shell.orphan_cleanup` 审计里露出，不再伪装成进程已退出。

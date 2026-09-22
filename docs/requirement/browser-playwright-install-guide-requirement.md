@@ -285,7 +285,7 @@ export type BrowserDetectResult = {
 
 | 场景 | 平台 | 典型值 |
 |------|------|--------|
-| 开发模式 | 通用 | 项目根目录，如 `E:\Develop\SpaceAssistant` |
+| 开发模式 | 通用 | 项目根目录，如 `D:\Projects\SpaceAssistant` |
 | 打包模式 Win | Windows | `%LOCALAPPDATA%\Programs\SpaceAssistant\resources\app.asar`（实际由 `app.getAppPath()` 返回） |
 | 打包模式 Mac | macOS | `/Applications/SpaceAssistant.app/Contents/Resources/app.asar`（实际由 `app.getAppPath()` 返回） |
 
@@ -530,7 +530,7 @@ trigger: auto  # 由 toolChatLoop 在检测到 chromium_* 错误码时自动触�
 │ 1. 打开终端（PowerShell）                              │
 │ 2. 进入目录：                                          │
 │    ┌──────────────────────────────────────────────┐    │
-│    │ E:\Develop\SpaceAssistant        [📋 复制]   │    │
+│    │ D:\Projects\SpaceAssistant        [📋 复制]   │    │
 │    └──────────────────────────────────────────────┘    │
 │ 3. 执行安装命令：                                      │
 │    ┌──────────────────────────────────────────────┐    │

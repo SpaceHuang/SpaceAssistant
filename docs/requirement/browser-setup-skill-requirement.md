@@ -229,7 +229,7 @@ flowchart TB
 {
   errorCode: 'chromium_missing',        // BrowserDependencyFailureCode
   errorMessage: 'Chromium 浏览器未安装。需要执行 npx playwright install chromium 下载。',
-  recommendedCwd: 'E:\\Develop\\SpaceAssistant',
+  recommendedCwd: 'D:\\Projects\\SpaceAssistant',
   installCommand: 'npx playwright install chromium',
   detectResult: { /* BrowserDetectResult */ }
 }

@@ -2,7 +2,7 @@
 
 > 目标：整体移除产物管理（artifact management）机制。不再通过 harness 机制为「工作目录整洁」约束 Agent 生成文件的路径；**保留**安全机制中对文件路径的限制（workDir 沙箱、symlink/junction 检查、跨会话写冲突互斥、写入审批）。
 >
-> 依据：`docs/diagrams/artifact-management.architecture.json` 与三路代码调查（主进程 / 渲染进程 / 远程 IM 通道）；已按 `docs/review/remove-artifact-management-plan-review.md`（B1-B3、N1-N4）、`docs/review/remove-artifact-management-plan-review-v2.md`（B4）、`docs/review/remove-artifact-management-plan-review-v3.md`（B10-B12）与 `docs/review/remove-artifact-management-plan-review-v4.md`（B15-B16）修订，并独立复核出 B5-B9、B13-B14 同类排序问题一并调整（见文末修订记录）。
+> 依据：`docs/diagrams/artifact-management.architecture.json` 与三路代码调查（主进程 / 渲染进程 / 远程 IM 通道）；已按 `remove-artifact-management-plan-review.md`（B1-B3、N1-N4）、`remove-artifact-management-plan-review-v2.md`（B4）、`remove-artifact-management-plan-review-v3.md`（B10-B12）与 `remove-artifact-management-plan-review-v4.md`（B15-B16）（均为本地过程产物，不入版本控制）修订，并独立复核出 B5-B9、B13-B14 同类排序问题一并调整（见文末修订记录）。
 
 ## 已确认的决策
 
@@ -205,7 +205,7 @@ write_file / edit_file
 
 ## 评审修订记录
 
-### 第一轮（2026-08-29，采纳 `docs/review/remove-artifact-management-plan-review.md`）
+### 第一轮（2026-08-29，采纳 `remove-artifact-management-plan-review.md`，本地过程产物，不入版本控制）
 
 - **B1（阻断）**：`tool:redirect` 处置自相矛盾已修正。独立核实确认主进程全仓库零发射点，`onRedirect` 为全链路死代码，选择「两端一起删」：preload `toolOnRedirect`（180-187）、api.ts 类型、`chatToolSessionService` 处理器与订阅、测试用例。原「185-200」行号区间横跨两个导出，已改为逐个点名删除，防误删
 - **B2（阻断）**：增补 `legacyWorkspaceLayoutCleanup.test.ts` 对 `legacyMigration` 依赖的改造
@@ -215,7 +215,7 @@ write_file / edit_file
 - **N3**：「已接受的显示回退」记入风险一节
 - **N4**：点名 `chatToolSessionService.test.ts:122-153`（含 `artifactMeta` 断言）与 mock（22）
 
-### 第二轮（2026-08-29，采纳 `docs/review/remove-artifact-management-plan-review-v2.md` 并扩展）
+### 第二轮（2026-08-29，采纳 `remove-artifact-management-plan-review-v2.md` 并扩展）
 
 - **B4（阻断，采纳推荐方案 A 并扩展）**：schema v3 DROP 从 Phase 3 后移至 Phase 6，与 artifacts 目录删除同阶段。核实依据：`createMemoryAppDb`（`electron/database/testHelpers.ts:8-12`）走 `:memory:` 全量真实 schema，artifacts 下 repository / cleanSession / ipc / relocate / databaseMigrations 等测试直接依赖三表存在
 - **B5（独立复核新增，阻断）**：13 个 `electron/artifacts/` 源文件 import `src/shared/artifactTypes.ts`（已 grep 逐一确认），原计划 Phase 5 删类型文件、Phase 6 才删目录，期间 `npm run build:electron`（tsc 类型检查）持续失败。修正：类型文件移至 Phase 6 与目录同删
@@ -225,7 +225,7 @@ write_file / edit_file
 - **B9（独立复核新增）**：`src/shared/builtinToolDefinitions.artifact.test.ts` 从 Phase 5 移至 Phase 2（artifact 属性删除即失败）
 - v2 评审小瑕疵确认：Phase 2 的「hint 拼接相关断言（123 附近）」表述已删除（123 行实为保留功能的注释）
 
-### 第三轮（2026-08-29，采纳 `docs/review/remove-artifact-management-plan-review-v3.md` 并扩展）
+### 第三轮（2026-08-29，采纳 `remove-artifact-management-plan-review-v3.md` 并扩展）
 
 - **B10（阻断，采纳）**：Phase 1 迁出的 5 个模块在 `electron/artifacts/` 内部有 21 处相对 import（`artifactCleanSession`、`artifactDeletion`、`artifactIpc`、`relocateRecovery`、`relocateService`、`toolLoopArtifactFlow`、`writeRegistration`、`reviewRemediation` 及各自测试，已 grep 逐一核实），直接移走会让 `build:electron` 从 Phase 1 起全红。修正（Phase 1 操作 5）：原位置留 re-export 桥接文件至 Phase 6；`toolArtifactPath.ts` 本体保留其余导出并回引 `resolveWorkspaceRootReal`
 - **B11（阻断，采纳后移方案）**：`remoteDecisionOutbound.test.ts:99-121` 两个用例动态 import 并调用 `sendRemoteArtifactDecisionPrompt`。修正：Phase 2 只删 toolChatLoop 调用点，函数本体连同测试留到 Phase 4 整文件删除（避免中途红灯，也避免单独改测试用例）
@@ -235,7 +235,7 @@ write_file / edit_file
 - v3 非阻断意见采纳：Phase 4 测试清单点名 `artifactDecisionRemoteIntegration.test.ts`，防漏删（后随 B15 调整移至 Phase 6）
 - 排序原则增补第 5 条：类型契约文件与其断言的目标成员同阶段删除
 
-### 第四轮（2026-08-29，采纳 `docs/review/remove-artifact-management-plan-review-v4.md` 并扩展）
+### 第四轮（2026-08-29，采纳 `remove-artifact-management-plan-review-v4.md` 并扩展）
 
 - **B15（阻断，采纳方案 A 并补两点）**：`toolLoopArtifactFlow.ts:20`（非测试源码）import `buildArtifactDecisionOptions`，Phase 4 删 `artifactDecisionRemote.ts` 会让 `build:electron` 红到 Phase 6。修正：该文件及测试移至 Phase 6。独立复核补充：(1) `toolChatLoop.ts:175` 也 import `serializeArtifactDecisionForRemote`（1121 行使用），Phase 2 摘门禁分支时须连 import 一起删，否则修复不完整；(2) `artifactDecisionRemote*` 三个文件在 `electron/remote/` 下、不被 artifacts 目录删除扫到，已显式加入 Phase 6 删除清单；(3) 已核实 `artifactDecisionRemoteIntegration.test.ts` 只 import artifactDecisionBridge 与 artifactDecisionRemote 本体（不依赖 Phase 4 删除的 imBridge/outbound），后移到 Phase 6 安全
 - **B16（阻断，B12 漏网，采纳）**：`artifactAcceptance.integration.test.ts:28-41` 的 AC-01/AC-35 用例同样依赖 `createSession` 冻结行为（已读测试源码核实）。修正：增补进 Phase 5 的同阶段删除清单

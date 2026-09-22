@@ -1,7 +1,7 @@
 # 依赖版本迭代计划（Node / Electron / 工具链）
 
 制定日期：2026-08-31；修订日期：2026-09-03（v3）
-状态：**已实施（Phase 1–3 完成，含遗留人工验收项）**。本版吸收 `docs/review/dependency-upgrade-plan-2026-08-review-v2.md` 的三项阻断意见，并以当前仓库检索结果和 Electron/Node 官方文档复核。Phase 1/2/3 实施记录分别见附录 A/B/C。
+状态：**已实施（Phase 1–3 完成，含遗留人工验收项）**。本版吸收 `dependency-upgrade-plan-2026-08-review-v2.md`（本地过程产物，不入版本控制）的三项阻断意见，并以当前仓库检索结果和 Electron/Node 官方文档复核。Phase 1/2/3 实施记录分别见附录 A/B/C。
 
 ## 1. 目标、边界与版本原则
 
@@ -246,7 +246,7 @@ Phase 3  Electron 40 → 44、平台下线确认与工具链升级
 
 ## 附录：评审 v1 修复记录
 - 修复日期：2026-09-04
-- 对应评审：`docs/review/dependency-upgrade-implementation-code-review-v1.md`（主仓库）
+- 对应评审：`dependency-upgrade-implementation-code-review-v1.md`（主仓库；本地过程产物，不入版本控制）
 - 修复方式：阻断 1/2 与 C1/C2 均先写失败回归测试（11 个测试先红），再改实现。
 
 ### 阻断 1：busy timeout 丢失（CONFIRMED）

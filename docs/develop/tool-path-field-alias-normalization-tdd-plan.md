@@ -6,7 +6,7 @@
 >
 > 方法：严格 TDD（Red -> Green -> Refactor），先写失败测试，再改实现，最后回归。
 >
-> 修订（v3）：吸收 `docs/review/tool-path-field-alias-normalization-tdd-plan-review.md`（v2）意见 A1–A5 —— sanitize 透传约束与回归断言（A1）、执行器行号范围起点修正（A2）、read_file case 的 offset/limit 保留说明（A3）、完全缺参仍可能 abort 的范围说明（A4）、list_directory 默认值用例（A5）。
+> 修订（v3）：吸收 `tool-path-field-alias-normalization-tdd-plan-review.md`（本地过程产物，不入版本控制）（v2）意见 A1–A5 —— sanitize 透传约束与回归断言（A1）、执行器行号范围起点修正（A2）、read_file case 的 offset/limit 保留说明（A3）、完全缺参仍可能 abort 的范围说明（A4）、list_directory 默认值用例（A5）。
 
 ## 1. 背景与根因（摘要）
 

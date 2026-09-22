@@ -90,6 +90,6 @@ M1 已定的**规则**（实施时文案/帮助体现即可）：
 
 ## 7. 文档维护说明
 
-- 原 `docs/analysis/workdir-management-product-plan.md`（v1.13）、`workdir-layout-templates-product-plan.md`（v1.11）在合并 PRD 时 **正文被替换为索引 stub**，未进 git 历史。  
+- 原 `workdir-management-product-plan.md`（v1.13）、`workdir-layout-templates-product-plan.md`（v1.11）（本地分析记录，不入版本控制）在合并 PRD 时 **正文被替换为索引 stub**，未进 git 历史。  
 - **M1 必做细节**：见 [v1-workspace-management-m1-detail.md](./v1-workspace-management-m1-detail.md)（从原 V2–V5 PRD 恢复）。  
-- **讨论归档摘要**：见 [workdir-management-product-plan.md](../../analysis/workdir-management-product-plan.md)。
+- **讨论归档摘要**：见 `workdir-management-product-plan.md`（本地分析记录，不入版本控制）。

@@ -841,7 +841,7 @@ interface Session {
 
 ### 11.3 已处理消息去重
 
-与飞书集成保持一致，存储于 `{userData}/wechat-processed-messages.json`，实现参考 [feishuProcessedStore.ts](file:///e:/Develop/SpaceAssistant/electron/feishu/feishuProcessedStore.ts)：
+与飞书集成保持一致，存储于 `{userData}/wechat-processed-messages.json`，实现参考 [feishuProcessedStore.ts](electron/feishu/feishuProcessedStore.ts)：
 
 ```typescript
 interface WeChatProcessedMessageEntry {
@@ -1164,7 +1164,7 @@ wechat:audit-tail: (limit?: number) => Promise<WeChatAuditEvent[]>
 | 速率滥用 | SDK 中间件 + 配置化限流 |
 | 凭证泄露 | 存 `{userData}/wechatbot/`，敏感字段（如 `bot_token`）参考 API Key 加密方式使用 Electron `safeStorage` API 加密；不入 SQLite 明文；日志脱敏 |
 | 多实例游标冲突 | 单进程单实例 poll；启动时检测重复实例并提示 |
-| 路径注入 | `wechat_send` / `wechat_reply` 的媒体路径需经过 [pathSecurity.ts](file:///e:/Develop/SpaceAssistant/electron/pathSecurity.ts) 的安全校验，确保在 `workDir` 范围内 |
+| 路径注入 | `wechat_send` / `wechat_reply` 的媒体路径需经过 [pathSecurity.ts](electron/pathSecurity.ts) 的安全校验，确保在 `workDir` 范围内 |
 
 ### 14.2 多开实例检测
 
@@ -1357,7 +1357,7 @@ Phase 1 微信入站
 
 ### 18.1 测试策略
 
-参考飞书集成的测试模式（[feishuRemoteAgent.test.ts](file:///e:/Develop/SpaceAssistant/electron/feishu/feishuRemoteAgent.test.ts)），采用 Vitest 进行单元测试和集成测试。
+参考飞书集成的测试模式（[feishuRemoteAgent.test.ts](electron/feishu/feishuRemoteAgent.test.ts)），采用 Vitest 进行单元测试和集成测试。
 
 ### 18.2 测试文件规划
 

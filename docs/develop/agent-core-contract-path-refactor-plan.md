@@ -4,7 +4,7 @@
 > 上游（方向共识）：`architect/product-architecture-design.md`（下称「基线」，`§N` 指其小节）；`architect/agent-core-roadmap.md`（下称「roadmap」，块 1 = 本计划 P1 + P2 的完整版）。
 > 左右邻：`butler-agent-shortest-path-plan.md` §11 债务移交清单（第 1、2、7 条由本计划认领）；`approval-agent-shortest-path-plan.md` §8（「块 1 收敛后 AgentChannel 装配点平移」由本计划落实）。
 > 状态：**已实施（2026-09-19，偏差表回写见 §11）** ｜ 基线：工作区 HEAD `24f9b546` · v0.1.8（修订时工作区已前进至 `784d86b3`，本计划涉及的证据符号均未变化）｜ 摸排：2026-09-18 ｜ 预估总量：15 – 21 人日
-> 修订记录：**v2（2026-09-18）**——按评审报告 `docs/review/agent-core-contract-path-refactor-plan-review.md` 修订：**B1** 采纳方案 a（门控入参端口化前移并入 P2，P3 缩为语义收口）；**B2** 补登 shell 预检 `touchTrustedCommand` 销号项；**N1** 声明 appDb 的 P1 过渡存放例外；**N2** 修正偏差 8 证据（死引用 / `notifyMainWindow`）并重定投递面盘点口径；**N3** 分立真相类 / 观察类端口失败语义；**N4** 销号基数改为开工实测、不钉死数字。
+> 修订记录：**v2（2026-09-18）**——按评审报告 `agent-core-contract-path-refactor-plan-review.md`（本地过程产物，不入版本控制）修订：**B1** 采纳方案 a（门控入参端口化前移并入 P2，P3 缩为语义收口）；**B2** 补登 shell 预检 `touchTrustedCommand` 销号项；**N1** 声明 appDb 的 P1 过渡存放例外；**N2** 修正偏差 8 证据（死引用 / `notifyMainWindow`）并重定投递面盘点口径；**N3** 分立真相类 / 观察类端口失败语义；**N4** 销号基数改为开工实测、不钉死数字。
 > 证据约定：与基线 §10 相同 —— 行号是摸排快照，会随代码演进失效；每条证据以 `rg -n '<符号>' <文件>` 复现，行号只作辅助。**摸排期间 HEAD 已自 `c725896e` 经 `24f9b546` 前进到 `784d86b3`**，每阶段开工必须重跑证据命令。
 
 ---
@@ -437,6 +437,6 @@ P0 特征化测试基线（本阶段新增文件）：
 4. **裁决顺序澄清**（P0 特征化发现）：custom deny 覆盖 auto-evaluator 条目时，readonly 放行失效落 ask 兜底；ask 分支查询决策缓存，既有会话信任仍可放行（cache-hit）。该行为已在 `toolCallGate.ports.test.ts` 钉住。
 5. **P6 送达记录实现取舍**：按「沿用会话台账的保留语义风格」落 agentLogger JSON Lines + 内存窗口（不动 SQLite schema 主干，规避 v14+ 迁移线变更）；跨进程持久化送达台账留待驱动权路径或后续阶段评估。
 6. **存量测试失败清零（P8 后追加）**：P8 期间基线（`784d86b3`）即红的 11 条平台性失败已修复——ripgrep 系测试期望改为与实现同构的 `path.resolve`；`safeJoin` 修 base 未归一化的盘符前缀误判真 bug（`scripts/prepare-ripgrep.mjs`，Windows 上原本无法安全解压）；symlink 特权用例改 junction 或条件跳过（POSIX 宿主覆盖）；`safeAtomicWrite` 新增 `withTransientLockRetry`（Windows 杀软/索引器瞬时锁）并覆盖全部 9 处 rename/link 提交点（含 `imProcessedStore` 等裸 rename 写点，属产品健壮性修复）；vitest 两项目 `testTimeout` 5s→15s、两处性能界限断言去时长耦合。最终连续两轮 `npm test` 全绿（630 文件 / 4206 通过 / 0 失败）。
-7. **评审修复（2026-09-19，评审报告 docs/review/agent-core-contract-path-code-review-v1.md）**：P0-1 origins/policyOrigins 键名失配（装配器写入与门控消费键名不一致，as 强转掩盖，ruleOrigin 审计在生产链路为死代码）——键名统一 + 契约补声明 + 端到端回归断言；P0-2 deliveryHub deferred 按 id 重查驱动源的错投隐患——改为入队快照 driver 引用、覆盖注册清积压落 superseded、队列有界、移除 main.ts 死代码注册；P1-1 底线校验补 when + match 条件比对（防 locked 条目条件掏空）。提交 7dc0f767。
+7. **评审修复（2026-09-19，评审报告 agent-core-contract-path-code-review-v1.md，本地过程产物，不入版本控制）**：P0-1 origins/policyOrigins 键名失配（装配器写入与门控消费键名不一致，as 强转掩盖，ruleOrigin 审计在生产链路为死代码）——键名统一 + 契约补声明 + 端到端回归断言；P0-2 deliveryHub deferred 按 id 重查驱动源的错投隐患——改为入队快照 driver 引用、覆盖注册清积压落 superseded、队列有界、移除 main.ts 死代码注册；P1-1 底线校验补 when + match 条件比对（防 locked 条目条件掏空）。提交 7dc0f767。
 8. **待真机/外部系统人工验收**（§6 清单，不阻塞提交）：桌面 dev 真实会话带工具回合、关窗收敛、确认卡片真人批/拒；飞书/微信远程托管收发+审计落盘；浮动通知弹出（P1 改造点）；设置页 test-connection（P4 凭据路径改动后必测）。
 8. **worktree 依赖变化**：实施中段主仓库 `node_modules` 被外部清空，worktree 已改为独立 `npm ci`（junction 解除），后续在该 worktree 工作无需依赖主仓库。

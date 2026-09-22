@@ -1,7 +1,7 @@
 # grep 工具大文件降级检索优化方案
 
 > 文档日期：2026-09-11
-> 依据：`docs/analyze/grep-tool-1mib-file-limit-diagnosis.md`
+> 依据：`grep-tool-1mib-file-limit-diagnosis.md`（本地分析记录，不入版本控制）
 > 文档性质：现状复核与开发方案；本次不包含代码实现。
 
 ## 1. 复核结论
@@ -172,7 +172,7 @@ data: {
 
 - `src/shared/builtinToolDefinitions.ts`；
 - 相关中英文 i18n 文案；
-- `docs/analyze/grep-tool-1mib-file-limit-diagnosis.md`（追加当前实现的勘误/状态）；
+- `grep-tool-1mib-file-limit-diagnosis.md`（本地分析记录，不入版本控制；追加当前实现的勘误/状态）；
 - 打包验证相关测试和脚本（仅在现有覆盖不足时）。
 
 实现事项：

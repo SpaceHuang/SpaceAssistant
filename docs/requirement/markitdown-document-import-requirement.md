@@ -864,7 +864,7 @@ type MarkItDownRepairLaunchIntent = {
 | 上下文注入 | `src/renderer/components/Chat/ChatView.tsx` 或 `electron/toolChatLoop.ts` |
 | i18n | `src/renderer/i18n/resources/*/documentImport.json` |
 | 样式 | `src/renderer/theme/layout.css`（`.composer-attach-*`） |
-| 参考 | `docs/references/MarkItDown集成指南.md`、`docs/requirement/browser-setup-skill-requirement.md` |
+| 参考 | `MarkItDown集成指南.md`（本地参考资料，不入版本控制）、`docs/requirement/browser-setup-skill-requirement.md` |
 
 ---
 

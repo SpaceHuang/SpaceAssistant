@@ -467,4 +467,4 @@ Agent 在探索后可能判断：
 ---
 
 *文档版本：v2.0*
-*基于 v1.1 及评审意见（`docs/review/agent-plan-requirement-review.md`）优化*
+*基于 v1.1 及评审意见（`agent-plan-requirement-review.md`，本地过程产物，不入版本控制）优化*
