@@ -5,9 +5,9 @@
 > 日期：2026-08-09
 > 需求类型：后台 Mission 内置执行后端
 > 主要依据：
-> - [Builtin-Agent 子进程详细设计](../../Users/builtin-agent-design.md)
-> - [AgentRunHost 详细设计](../../Users/agent-run-host-design.md)
-> - [Builtin Subagent 设计结论](../../Users/builtin-subagent-design-conclusions.md)
+> - Builtin-Agent 子进程详细设计（仓库内设计稿）
+> - AgentRunHost 详细设计（仓库内设计稿）
+> - Builtin Subagent 设计结论（仓库内设计稿）
 > - [后台任务执行层设计文档 v3](./background-task-execution-layer-design-v3.md)
 > - [Background Mission Soft-Gate 简化方案](../develop/background-mission-soft-gate-simplification-plan.md)
 > - [Builtin SubAgent 详细开发方案](../develop/builtin-subagent-development-plan.md)
