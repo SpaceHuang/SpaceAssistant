@@ -19,16 +19,18 @@ describe('shellSpawnEnv', () => {
     if (process.platform !== 'win32') return
     const existingNpm = fs.mkdtempSync(path.join(os.tmpdir(), 'npm-probe-'))
     fs.mkdirSync(path.join(existingNpm, 'npm'))
+    // CI runner 与多数开发机真实存在 C:\Program Files\nodejs，不能作为「不存在的目录」样例
+    const missingProgramFiles = 'C:\\__sa_missing_pf__'
     const merged = augmentShellPathEnv({
       Path: 'C:\\Windows\\system32',
       APPDATA: existingNpm,
-      ProgramFiles: 'C:\\Program Files',
+      ProgramFiles: missingProgramFiles,
       LOCALAPPDATA: 'C:\\Users\\x\\AppData\\Local'
     })
     // 存在的候选目录（%APPDATA%\npm 需真实存在）被注入
     expect(merged).toContain(path.join(existingNpm, 'npm'))
     // 不存在的候选目录不再被注入
-    expect(merged).not.toContain('C:\\Program Files\\nodejs')
+    expect(merged).not.toContain(path.join(missingProgramFiles, 'nodejs'))
     expect(merged).toContain('C:\\Windows\\system32')
     fs.rmSync(existingNpm, { recursive: true, force: true })
   })

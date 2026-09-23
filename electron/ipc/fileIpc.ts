@@ -2,6 +2,7 @@
 import fs from 'fs/promises'
 import os from 'node:os'
 import path from 'path'
+import { createRequire } from 'node:module'
 import type { AppIpcContext } from '../appIpc'
 import type { IpcMain } from 'electron'
 import { BrowserWindow, dialog, shell } from 'electron'
@@ -13,8 +14,8 @@ import { defaultPdfSavePath, getFileMetadata, readFileForViewer } from '../fileR
 import { getMainWindow } from '../windowRef'
 import { normalizeRelPathInput, resolveSafePath } from '../pathSecurity'
 import { withTransientLockRetry } from '../safeAtomicWrite'
-import { atomicWrite, buildMarkdownDocx, markdownToPrintHtml, isSupportedMarkdownExport, markdownResourceUrls, MAX_MARKDOWN_EXPORT_IMAGE_BYTES, MAX_MARKDOWN_EXPORT_TOTAL_IMAGE_BYTES } from '../markdownExport'
-import { defaultMarkdownExportPath, normalizeMarkdownExportPath, isMarkdownExportablePath } from '../../src/shared/markdownExport'
+import { atomicWrite, buildMarkdownDocx, markdownToPrintHtml, isSupportedMarkdownExport, markdownResourceUrls, sameFileIdentity, MAX_MARKDOWN_EXPORT_IMAGES, MAX_MARKDOWN_EXPORT_IMAGE_BYTES, MAX_MARKDOWN_EXPORT_TOTAL_IMAGE_BYTES } from '../markdownExport'
+import { defaultMarkdownExportPath, normalizeMarkdownExportPath, isMarkdownExportablePath, type MarkdownExportResult } from '../../src/shared/markdownExport'
 import { resolveSafeReadPath } from '../pathSecurity'
 
 export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
@@ -110,32 +111,65 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     }
   })
 
-  ipcMain.handle('file:export-markdown', async (_e, payload: { format: unknown; markdown: unknown; sourcePath: unknown }) => {
+  ipcMain.handle('file:export-markdown', async (_e, payload: { format: unknown; markdown: unknown; sourcePath: unknown }): Promise<MarkdownExportResult> => {
     if (!isSupportedMarkdownExport(payload?.format) || typeof payload.markdown !== 'string' || typeof payload.sourcePath !== 'string') return { ok: false, error: '导出参数无效' }
-    const root = ctx.getWorkDir(); const sourcePath = payload.sourcePath as string
-    const source = resolveSafePath(root, sourcePath)
+    const root = ctx.getWorkDir()
+    let source: string
+    try { source = resolveSafePath(root, payload.sourcePath) } catch { return { ok: false, error: '导出参数无效' } }
     if (!isMarkdownExportablePath(source)) return { ok: false, error: '仅支持导出 Markdown 文件' }
     const win = getMainWindow(); if (!win) return { ok: false, error: ErrorCodes.WINDOW_NOT_READY }
     const saved = await dialog.showSaveDialog(win, { defaultPath: defaultMarkdownExportPath(source, payload.format), filters: [{ name: payload.format === 'docx' ? 'Word 文档' : 'PDF', extensions: [payload.format] }] })
     if (saved.canceled || !saved.filePath) return { ok: false, canceled: true }
     const target = normalizeMarkdownExportPath(saved.filePath, payload.format)
+    const warnings: string[] = []
     const images = new Map<string, { data: Buffer; type: 'png' | 'jpg' | 'gif' | 'bmp' }>(); const printImages = new Map<string, { data: Buffer; mime: string }>(); let total = 0
+    let imageCount = 0
     for (const resource of markdownResourceUrls(payload.markdown)) {
+      if (++imageCount > MAX_MARKDOWN_EXPORT_IMAGES) { warnings.push(`图片数量超过上限，未嵌入：${resource}`); continue }
       try {
-        const decoded = decodeURIComponent(resource); if (/^[a-z]+:/i.test(decoded)) continue
+        const decoded = decodeURIComponent(resource); if (/^[a-z]+:/i.test(decoded)) { warnings.push(`未嵌入资源：${resource}`); continue }
         const file = await resolveSafeReadPath(root, path.resolve(path.dirname(source), decoded)); const ext = path.extname(file).toLowerCase()
-        if (!['.png', '.jpg', '.jpeg', '.gif', '.bmp'].includes(ext)) continue
-        const stat = await fs.stat(file); if (stat.size > MAX_MARKDOWN_EXPORT_IMAGE_BYTES || total + stat.size > MAX_MARKDOWN_EXPORT_TOTAL_IMAGE_BYTES) continue
+        if (!['.png', '.jpg', '.jpeg', '.gif', '.bmp'].includes(ext)) { warnings.push(`未嵌入不支持的图片：${resource}`); continue }
+        const stat = await fs.stat(file); if (stat.size > MAX_MARKDOWN_EXPORT_IMAGE_BYTES || total + stat.size > MAX_MARKDOWN_EXPORT_TOTAL_IMAGE_BYTES) { warnings.push(`图片资源超过大小上限，未嵌入：${resource}`); continue }
         const data = await fs.readFile(file); total += data.length; const type = (ext === '.jpeg' ? 'jpg' : ext.slice(1)) as 'png' | 'jpg' | 'gif' | 'bmp'
         for (const key of new Set([resource, decoded, encodeURI(decoded)])) { images.set(key, { data, type }); printImages.set(key, { data, mime: type === 'jpg' ? 'image/jpeg' : `image/${type}` }) }
-      } catch { /* invalid resources are skipped */ }
+      } catch { warnings.push(`未嵌入不安全资源：${resource}`) }
     }
     try {
-      if (payload.format === 'docx') { await atomicWrite(target, await buildMarkdownDocx(payload.markdown, images)); return { ok: true, path: target } }
-      const pdfWindow = new BrowserWindow({ show: false, webPreferences: { offscreen: true } }); const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'spaceassistant-markdown-pdf-'))
-      try { const html = `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:sans-serif;line-height:1.6}img{max-width:100%}pre{white-space:pre-wrap}</style></head><body>${await markdownToPrintHtml(payload.markdown, printImages)}</body></html>`; const htmlPath = path.join(dir, 'index.html'); await fs.writeFile(htmlPath, html, { flag: 'wx' }); await pdfWindow.loadFile(htmlPath); await atomicWrite(target, await pdfWindow.webContents.printToPDF({ printBackground: true, pageSize: 'A4' })) } finally { await fs.rm(dir, { recursive: true, force: true }); pdfWindow.destroy?.() }
-      return { ok: true, path: target }
+      const sourceStat = await fs.stat(source)
+      try { const targetStat = await fs.stat(target); if (sameFileIdentity(sourceStat, targetStat)) return { ok: false, error: '不能覆盖源 Markdown 文件' } } catch { /* 目标不存在时无需身份比对 */ }
+      try {
+        await fs.stat(target)
+        const confirm = await dialog.showMessageBox(win, { type: 'warning', buttons: ['取消', '覆盖'], defaultId: 0, cancelId: 0, title: '确认覆盖', message: `目标文件已存在：${path.basename(target)}` })
+        if (confirm.response !== 1) return { ok: false, canceled: true }
+      } catch { /* 目标不存在时直接写入 */ }
+      if (payload.format === 'docx') { await atomicWrite(target, await buildMarkdownDocx(payload.markdown, images)); return { ok: true, path: target, ...(warnings.length ? { warnings } : {}) } }
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+    const pdfWindow = new BrowserWindow({ show: false, webPreferences: { offscreen: true } }); let printDir: string | undefined
+    try {
+      let katexCss = ''
+      try {
+        const nodeRequire = createRequire(__filename)
+        const katexCssPath = nodeRequire.resolve('katex/dist/katex.min.css')
+        katexCss = await replaceCssAssetsWithData(await fs.readFile(katexCssPath, 'utf8'), path.dirname(katexCssPath))
+      } catch { /* katex 样式缺失时回退为无 CSS 渲染，不阻断导出 */ }
+      const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+          ${katexCss}
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 24px; line-height: 1.6; }
+          h1,h2,h3,h4,h5,h6 { line-height: 1.25; margin: 1.2em 0 .6em; }
+          table { border-collapse: collapse; width: 100%; table-layout: fixed; margin: 1em 0; }
+          th, td { border: 1px solid #cbd5e1; padding: 6px 8px; vertical-align: top; overflow-wrap: anywhere; }
+          th { background: #f1f5f9; font-weight: 600; }
+          blockquote { border-left: 3px solid #94a3b8; margin: 1em 0; padding-left: 1em; color: #475569; }
+          pre { background: #f5f5f5; padding: 12px; border-radius: 4px; overflow-x: auto; }
+          code { font-family: 'SFMono-Regular', 'Cascadia Code', Menlo, monospace; font-size: 13px; }
+          img { max-width: 100%; }
+        </style></head><body>${await markdownToPrintHtml(payload.markdown, printImages)}</body></html>`
+      printDir = await fs.mkdtemp(path.join(os.tmpdir(), 'spaceassistant-markdown-pdf-'))
+      const htmlPath = path.join(printDir, 'index.html'); await fs.writeFile(htmlPath, html, { flag: 'wx' }); await pdfWindow.loadFile(htmlPath)
+      await atomicWrite(target, await pdfWindow.webContents.printToPDF({ printBackground: true, pageSize: 'A4', margins: { top: 0.4, bottom: 0.4, left: 0.5, right: 0.5 } }))
+      return { ok: true, path: target, ...(warnings.length ? { warnings } : {}) }
+    } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } } finally { if (printDir) await fs.rm(printDir, { recursive: true, force: true }).catch(() => undefined); pdfWindow.destroy() }
   })
 
   ipcMain.handle(
@@ -226,4 +260,32 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   ipcMain.handle('file:copy', async (_e, payload: { srcRelPath: string; destRelPath: string }): Promise<void> => {
     await copyFileInWorkDir(ctx.getWorkDir(), payload.srcRelPath, payload.destRelPath)
   })
+}
+
+/** 将 CSS 中的本地字体/资源引用内联为 data URL（PDF 离屏渲染无文件系统访问）。 */
+async function replaceCssAssetsWithData(css: string, cssDir: string): Promise<string> {
+  const assetPattern = /url\((['"]?)([^)'\"]+)\1\)/g
+  let result = css
+
+  for (const match of css.matchAll(assetPattern)) {
+    const assetPath = match[2]
+    if (/^(?:data:|https?:)/i.test(assetPath)) continue
+
+    try {
+      const asset = await fs.readFile(path.resolve(cssDir, assetPath))
+      const extension = path.extname(assetPath).toLowerCase()
+      const mimeType = extension === '.woff2'
+        ? 'font/woff2'
+        : extension === '.woff'
+          ? 'font/woff'
+          : extension === '.ttf'
+            ? 'font/ttf'
+            : 'application/octet-stream'
+      result = result.replace(match[0], `url(data:${mimeType};base64,${asset.toString('base64')})`)
+    } catch {
+      // 缺失的可选字体不应阻断导出；浏览器会回退到系统字体。
+    }
+  }
+
+  return result
 }

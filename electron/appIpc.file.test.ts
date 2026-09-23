@@ -192,7 +192,7 @@ describe('file IPC handlers', () => {
     vi.mocked(getMainWindow).mockReturnValue({} as never)
     vi.mocked(dialog.showSaveDialog).mockResolvedValue({ canceled: false, filePath: '/tmp/方案.docx' } as never)
     const handler = ipc.getHandler('file:export-markdown')!
-    await expect(handler({}, { format: 'docx', markdown: '# 标题', sourcePath: '方案.md' })).resolves.toEqual({ ok: true, path: '/tmp/方案.docx' })
+    await expect(handler({}, { format: 'docx', markdown: '# 标题', sourcePath: '方案.md' })).resolves.toEqual({ ok: true, path: path.join('/tmp', '方案.docx') })
     expect(vi.mocked(dialog.showSaveDialog)).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ filters: [{ name: 'Word 文档', extensions: ['docx'] }] }))
     expect(mockFs.writeFile).toHaveBeenCalled()
     expect(mockFs.rename).toHaveBeenCalled()
@@ -202,11 +202,24 @@ describe('file IPC handlers', () => {
     const { dialog } = await import('electron')
     vi.mocked(getMainWindow).mockReturnValue({} as never)
     vi.mocked(dialog.showSaveDialog).mockResolvedValue({ canceled: false, filePath: '/tmp/方案.txt' } as never)
-    vi.mocked(dialog.showMessageBox).mockResolvedValue({ response: 0 } as never)
+    vi.mocked(dialog.showMessageBox).mockResolvedValue({ response: 1 } as never)
     let statCalls = 0
     mockFs.stat.mockImplementation(async () => ({ dev: 1, ino: statCalls++ === 0 ? 1 : 2, isDirectory: () => false } as unknown as import('fs').Stats))
     const handler = ipc.getHandler('file:export-markdown')!
     await expect(handler({}, { format: 'pdf', markdown: '# 标题', sourcePath: '方案.md' })).resolves.toEqual({ ok: true, path: '/tmp/方案.pdf' })
+  })
+
+  it('补正扩展名后目标已存在且取消覆盖时不写入', async () => {
+    const { dialog } = await import('electron')
+    vi.mocked(getMainWindow).mockReturnValue({} as never)
+    vi.mocked(dialog.showSaveDialog).mockResolvedValue({ canceled: false, filePath: '/tmp/方案.txt' } as never)
+    vi.mocked(dialog.showMessageBox).mockResolvedValue({ response: 0 } as never)
+    let statCalls = 0
+    mockFs.stat.mockImplementation(async () => ({ dev: 1, ino: statCalls++ === 0 ? 1 : 2, isDirectory: () => false } as unknown as import('fs').Stats))
+    const handler = ipc.getHandler('file:export-markdown')!
+    await expect(handler({}, { format: 'pdf', markdown: '# 标题', sourcePath: '方案.md' })).resolves.toEqual({ ok: false, canceled: true })
+    expect(vi.mocked(dialog.showMessageBox)).toHaveBeenCalled()
+    expect(mockFs.writeFile).not.toHaveBeenCalled()
   })
 
   it('PDF 使用离屏打印、A4 参数和原子写入', async () => {
@@ -225,8 +238,8 @@ describe('file IPC handlers', () => {
       destroy = destroy
     } as never)
     const handler = ipc.getHandler('file:export-markdown')!
-    await expect(handler({}, { format: 'pdf', markdown: '# 标题', sourcePath: '方案.md' })).resolves.toEqual({ ok: true, path: '/tmp/方案.pdf' })
-    expect(printToPDF).toHaveBeenCalledWith({ printBackground: true, pageSize: 'A4' })
+    await expect(handler({}, { format: 'pdf', markdown: '# 标题', sourcePath: '方案.md' })).resolves.toEqual({ ok: true, path: path.join('/tmp', '方案.pdf') })
+    expect(printToPDF).toHaveBeenCalledWith({ printBackground: true, pageSize: 'A4', margins: { top: 0.4, bottom: 0.4, left: 0.5, right: 0.5 } })
     expect(mockFs.writeFile).toHaveBeenCalled()
     expect(destroy).toHaveBeenCalled()
   })

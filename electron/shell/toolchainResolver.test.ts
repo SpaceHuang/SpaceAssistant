@@ -39,12 +39,14 @@ describe('resolveNodeToolchainPath', () => {
   })
 
   // ===== P2-G(a)：注入的候选目录必须真实存在（回归 D8，§7.1 #12）=====
+  // 候选根目录用保证不存在的哨兵路径：CI runner 与多数开发机真实存在 C:\Program Files\nodejs，
+  // 不能作为「不存在的目录」的样例（生产默认走真实 fs.existsSync）。
   it('不存在的 nodejs 目录不进入 pathEntries（生产默认做存在性检查）', () => {
     const result = resolveNodeToolchainPath({
-      ProgramFiles: 'C:\\Program Files',
-      'ProgramFiles(x86)': 'C:\\Program Files (x86)',
-      LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local',
-      APPDATA: 'C:\\Users\\test\\AppData\\Roaming',
+      ProgramFiles: 'C:\\__sa_missing_pf__',
+      'ProgramFiles(x86)': 'C:\\__sa_missing_pf86__',
+      LOCALAPPDATA: 'C:\\__sa_missing_local__',
+      APPDATA: 'C:\\__sa_missing_appdata__',
       Path: 'C:\\Windows\\System32'
     }, 'win32')
     expect(result.pathEntries).toEqual(['C:\\Windows\\System32'])
