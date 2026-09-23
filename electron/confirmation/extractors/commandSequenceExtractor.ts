@@ -13,17 +13,14 @@ import { CONFIRMATION_LABELS } from '../../../src/shared/confirmation/labels'
  * 不会命中同一组子命令的 exact 档缓存。
  */
 
-function normalizeToken(tok: string): string {
-  return tok.replace(/^["']|["']$/g, '').trim()
-}
-
 /** 规范化 shell 命令签名（与缓存键同源）：归一化引号/空白/大小写，供对账与变体绕过防护。 */
 export function normalizeShellSignature(command: string): string {
   // §3 不变量 6：解析失败（未闭合引号）禁止折叠为空签名——空串会把全部失败输入
   // 合并为同一等价类（fail-open）。回退为剥离引号前的原始文本（只拆分、不合并）。
   const tokens = tokenizeShellArgv(command)
   if (!tokens) return command.trim()
-  return tokens.map(normalizeToken).filter(Boolean).join(' ')
+  // exact 缓存键必须保留 argv 边界：echo "a b" 与 echo a b 不得共用记忆。
+  return JSON.stringify(tokens)
 }
 
 function extractConnectors(command: string): string[] {

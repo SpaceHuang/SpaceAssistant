@@ -133,7 +133,7 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     try {
       if (payload.format === 'docx') { await atomicWrite(target, await buildMarkdownDocx(payload.markdown, images)); return { ok: true, path: target } }
       const pdfWindow = new BrowserWindow({ show: false, webPreferences: { offscreen: true } }); const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'spaceassistant-markdown-pdf-'))
-      try { const html = `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:sans-serif;line-height:1.6}img{max-width:100%}pre{white-space:pre-wrap}</style></head><body>${await markdownToPrintHtml(payload.markdown, printImages)}</body></html>`; const htmlPath = path.join(dir, 'index.html'); await fs.writeFile(htmlPath, html, { flag: 'wx' }); await pdfWindow.loadFile(htmlPath); await atomicWrite(target, await pdfWindow.webContents.printToPDF({ printBackground: true, pageSize: 'A4' })) } finally { await fs.rm(dir, { recursive: true, force: true }); pdfWindow.destroy() }
+      try { const html = `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:sans-serif;line-height:1.6}img{max-width:100%}pre{white-space:pre-wrap}</style></head><body>${await markdownToPrintHtml(payload.markdown, printImages)}</body></html>`; const htmlPath = path.join(dir, 'index.html'); await fs.writeFile(htmlPath, html, { flag: 'wx' }); await pdfWindow.loadFile(htmlPath); await atomicWrite(target, await pdfWindow.webContents.printToPDF({ printBackground: true, pageSize: 'A4' })) } finally { await fs.rm(dir, { recursive: true, force: true }); pdfWindow.destroy?.() }
       return { ok: true, path: target }
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
   })

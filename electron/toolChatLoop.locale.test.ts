@@ -95,6 +95,8 @@ vi.mock('./browser/stagehandService', () => ({
 vi.mock('./toolConfirmRegistry', () => ({
   registerToolCancel: vi.fn(),
   clearToolCancel: vi.fn(),
+  cancelAllToolConfirmsForRequest: vi.fn(),
+  prepareToolConfirm: vi.fn(),
   waitForToolConfirm: vi.fn(async () => ({ approved: true }))
 }))
 

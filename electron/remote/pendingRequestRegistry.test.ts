@@ -36,7 +36,7 @@ describe('PendingRequestRegistry', () => {
     expect(registry.cancel('missing')).toBe(false)
     expect(registry.cancel('c1', onCancel)).toBe(true)
     expect(onCancel).toHaveBeenCalledWith(expect.objectContaining({ id: 'c1', label: 'x' }))
-    await expect(p).resolves.toBe('n')
+    await expect(p).resolves.toBe('cancelled')
     expect(registry.countPending()).toBe(0)
   })
 
@@ -45,8 +45,8 @@ describe('PendingRequestRegistry', () => {
     const p1 = registry.register(makeItem({ id: '1', sessionId: 's1' }), 60_000)
     const p2 = registry.register(makeItem({ id: '2', sessionId: 's2' }), 60_000)
     registry.cancelAllPending()
-    await expect(p1).resolves.toBe('n')
-    await expect(p2).resolves.toBe('n')
+    await expect(p1).resolves.toBe('cancelled')
+    await expect(p2).resolves.toBe('cancelled')
     expect(registry.countPending()).toBe(0)
   })
 

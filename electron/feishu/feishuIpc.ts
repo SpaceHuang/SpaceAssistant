@@ -108,7 +108,7 @@ export function createFeishuBundle(deps: {
   const runner = new LarkCliRunner(() => readCfg().cliPath ?? '')
   const processedStore = new FeishuProcessedStore(userData)
   const auditLogger = new FeishuAuditLogger(userData)
-  const imChannel = new FeishuImChannel({ auditLogger, runner, db: deps.db })
+  const imChannel = new FeishuImChannel({ auditLogger, runner, db: deps.db, getGeneration: (channel) => remoteAuthorizationRegistry.getGeneration(channel) })
   remoteAuthorizationRegistry.registerPendingCancel({
     cancelByChannel: (ch) => imChannel.cancelByChannel(ch)
   })

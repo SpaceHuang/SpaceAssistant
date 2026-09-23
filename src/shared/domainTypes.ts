@@ -560,9 +560,9 @@ export interface ToolCallResultPersisted {
    *  agent_denied：安全审批 Agent 机审拒绝（P1-D，区别于 user_rejected 的真人拒绝）。 */
   notExecutedReason?:
     | 'user_rejected' | 'agent_denied' | 'confirm_timeout' | 'remote_read_only'
-    | 'authorization_revoked' | 'policy_denied' | 'budget_paused'
+    | 'authorization_revoked' | 'confirm_cancelled' | 'confirm_unavailable' | 'policy_denied' | 'budget_paused'
     | 'remote_budget_exhausted' | 'not_authorized' | 'unknown_tool'
-    | 'model_output_truncated'
+    | 'model_output_truncated' | 'tool_error_threshold'
 }
 
 /** 工具调用记录（持久化到消息中） */
@@ -571,6 +571,8 @@ export interface ToolCallRecord {
   toolName: string
   input: Record<string, unknown>
   result?: ToolCallResultPersisted
+  /** Canonical approval projection; execution status remains independent. */
+  approval?: import('../../packages/agent-core/src/approval').ApprovalRecord
   status: ToolCallStatus
   riskLevel: ToolRiskLevel
   /** 确认卡片可选的"记忆档位"（由主进程决策引擎下发，无则不展示选择器）。 */

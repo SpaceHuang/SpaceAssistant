@@ -2,6 +2,7 @@ import { createHash } from 'crypto'
 import { spawn, type ChildProcess } from 'child_process'
 import { app } from 'electron'
 import fs from 'fs/promises'
+import { realpathSync } from 'fs'
 import path from 'path'
 import type { Dirent } from 'fs'
 import { resolveSafePath, resolveSafePathReal, resolveSafeReadPath, resolveSafeWorkDirPath, resolveSafeWriteTarget } from '../pathSecurity'
@@ -190,6 +191,7 @@ function fileToolAbortResult(
 
 export const readFileExecutor: ToolExecutor = {
   name: 'read_file',
+  resourceKeys: (input, context) => workspaceResourceKeys(input, context, 'read'),
   async execute(input, ctx): Promise<ToolExecutorResult> {
     const started = Date.now()
     const rel = extractPathField(input)
@@ -409,6 +411,7 @@ export const readFileExecutor: ToolExecutor = {
 
 export const listDirectoryExecutor: ToolExecutor = {
   name: 'list_directory',
+  resourceKeys: (input, context) => workspaceResourceKeys(input, context, 'read'),
   async execute(input, ctx): Promise<ToolExecutorResult> {
     const started = Date.now()
     const rel = extractPathField(input) ?? '.'
@@ -545,6 +548,39 @@ function applyEditWithEscapeTolerance(
 
 import { toolErrMissingPath } from '../toolInputGuards'
 import { extractPathField } from '../toolPathField'
+
+/** 仅为调度冲突检测生成保守资源键；无法规范化时返回 undefined 触发串行屏障。 */
+export function workspaceResourceKeys(
+  input: Record<string, unknown>,
+  context: { workDir: string; sessionId: string },
+  _mode: 'read' | 'write'
+): readonly string[] | undefined {
+  const rel = extractPathField(input)
+  if (!rel || path.isAbsolute(rel)) return undefined
+  const normalized = path.posix.normalize(rel.replaceAll('\\', '/'))
+  if (normalized === '..' || normalized.startsWith('../') || normalized.includes('/../')) return undefined
+  // 资源身份是桌面运行时全局共享的绝对路径，不能包含 sessionId；否则跨会话
+  // 对同一文件的写入会得到不同锁键并发执行。
+  const lexical = path.resolve(context.workDir, normalized)
+  try {
+    return [`workspace:${realpathSync.native(lexical)}`]
+  } catch {
+    let ancestor = lexical
+    const suffix: string[] = []
+    while (ancestor !== path.dirname(ancestor)) {
+      suffix.unshift(path.basename(ancestor))
+      ancestor = path.dirname(ancestor)
+      try {
+        const realAncestor = realpathSync.native(ancestor)
+        return [`workspace:${path.join(realAncestor, ...suffix)}`]
+      } catch {
+        // 继续向上寻找最近存在的祖先目录。
+      }
+    }
+    // 无法判断真实身份时使用未知屏障，禁止跨会话并发绕过互斥。
+    return ['unknown:workspace-path']
+  }
+}
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 
 const ERR_FILE_NOT_READ_FOR_EDIT =
@@ -585,6 +621,7 @@ function writePathErrorMessage(e: unknown, rel: string): string {
 
 export const editFileExecutor: ToolExecutor = {
   name: 'edit_file',
+  resourceKeys: (input, context) => workspaceResourceKeys(input, context, 'write'),
   async execute(input, ctx): Promise<ToolExecutorResult> {
     const started = Date.now()
     const rel = extractPathField(input)
@@ -716,6 +753,7 @@ export const editFileExecutor: ToolExecutor = {
 
 export const writeFileExecutor: ToolExecutor = {
   name: 'write_file',
+  resourceKeys: (input, context) => workspaceResourceKeys(input, context, 'write'),
   async execute(input, ctx): Promise<ToolExecutorResult> {
     const started = Date.now()
     const rel = extractPathField(input)
@@ -1168,6 +1206,7 @@ export async function grepFallbackJs(
 
 export const grepExecutor: ToolExecutor = {
   name: 'grep',
+  resourceKeys: (input, context) => workspaceResourceKeys(input, context, 'read'),
   async execute(input, ctx): Promise<ToolExecutorResult> {
     const started = Date.now()
     const pattern = typeof input.pattern === 'string' ? input.pattern : ''

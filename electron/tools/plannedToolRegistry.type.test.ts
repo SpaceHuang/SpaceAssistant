@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 
 const direct: DirectToolSpec<string, string> = {
   name: 'direct',
+  resourceKeys: () => ['resource:direct'],
   parseInput: (raw) => String(raw),
   execute: async (input: string, _context: ToolExecutionContext) => input
 }
@@ -36,5 +37,14 @@ void requiredKeys
 describe('plannedToolRegistry type contracts', () => {
   it('loads runtime registry contract without executing a tool', () => {
     expect(registry.get('contract')?.kind).toBe('direct')
+  })
+
+  it('保留 Capability resource keys 供调度器消费', async () => {
+    const local = new TypedToolRegistry()
+    local.register({
+      ...registry.get('contract')!,
+      resourceKeys: () => ['file:/tmp/a']
+    })
+    expect(local.get('contract')?.resourceKeys?.({})).toEqual(['file:/tmp/a'])
   })
 })

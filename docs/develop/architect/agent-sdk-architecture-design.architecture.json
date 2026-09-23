@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "SpaceAssistant Agent SDK 理想态",
+    "output": "agent-sdk-architecture-design.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/SpaceHuang/SpaceAssistant.git",
+      "revision": "ce5582ba98dbf5aa608aff004c3d53a2e143df42"
+    },
+    "views": [
+      {
+        "id": "whole-system",
+        "label": "三层边界总览",
+        "focus": ["product-drivers", "product-assembly", "sdk-runtime", "sdk-core", "provider-adapters", "storage-adapter"],
+        "note": "产品入口只表达意图，Runtime 装配一次调用，SDK Core 执行，Provider 与宿主能力通过端口接入。"
+      },
+      {
+        "id": "sdk-boundary",
+        "label": "Agent SDK 边界",
+        "focus": ["sdk-runtime", "sdk-core", "safety-policy", "capability-registry", "history-port", "model-port"],
+        "note": "SDK 对外承诺一次可取消、可嵌套、可观察的调用；不依赖 Electron、SQLite 或具体厂商 SDK。"
+      },
+      {
+        "id": "replacement-axis",
+        "label": "Provider 替换轴",
+        "focus": ["sdk-core", "model-port", "provider-adapters", "host-adapters"],
+        "note": "Anthropic、OpenAI 或其他实现只需通过稳定 Provider / Backend 契约接入。"
+      },
+      {
+        "id": "migration-focus",
+        "label": "迁移焦点",
+        "focus": ["product-assembly", "sdk-runtime", "sdk-core", "history-port", "capability-registry", "host-adapters", "storage-adapter"],
+        "note": "先建立 SDK 的物理包边界，再切 History Port、执行闭包和能力注册表，最后收缩主进程与旧入口。"
+      },
+      {
+        "id": "storage-boundary",
+        "label": "Storage 边界",
+        "focus": ["sdk-core", "history-port", "storage-adapter", "product-assembly"],
+        "note": "SDK 规定消息记录与重建语义，产品宿主选择 SQLite、JSONL 或其他实现；Provider 不参与持久化。"
+      }
+    ]
+  },
+  "components": [
+    { "id": "product-drivers", "type": "external", "label": "Product Drivers", "sublabel": "Desktop · Remote · Automation", "tag": "表达意图 / 调度 / 投递", "pos": [40, 245], "size": [230, 88], "sources": [{ "path": "electron/preload.ts", "line": 5, "label": "desktop IPC" }, { "path": "electron/remote/imRemoteAgent.ts", "line": 44, "label": "remote invocation" }, { "path": "electron/butler/butlerInvoker.ts", "line": 94, "label": "automation invoke" }] },
+    { "id": "product-assembly", "type": "backend", "label": "Product Assembly", "sublabel": "Composition root · product policy", "tag": "决定谁跑、带什么、记在哪", "pos": [320, 248], "size": [220, 82], "sources": [{ "path": "electron/main.ts", "line": 256, "label": "host startup" }, { "path": "electron/runtime/invocationAssembler.ts", "line": 134, "label": "current assembly" }] },
+    { "id": "sdk-runtime", "type": "backend", "label": "Agent SDK Runtime", "sublabel": "Admission · Profile · Ports", "tag": "唯一装配点", "pos": [580, 100], "size": [210, 82], "sources": [{ "path": "electron/runtime/invocationAssembler.ts", "line": 32, "label": "target role" }, { "path": "src/shared/agent/invocation.ts", "line": 250, "label": "host ports" }] },
+    { "id": "sdk-core", "type": "backend", "label": "Agent SDK Core", "sublabel": "Invocation · context · tool loop", "tag": "无 Electron / SQLite / vendor 依赖", "pos": [580, 280], "size": [210, 88], "sources": [{ "path": "electron/toolChatLoop.ts", "line": 773, "label": "current entry" }, { "path": "docs/develop/architect/product-architecture-design.html", "line": 1325, "label": "Core storage contract" }] },
+    { "id": "safety-policy", "type": "security", "label": "Safety Boundary", "sublabel": "Policy · Gate · Answerer", "tag": "不可绕过 / fail-closed", "pos": [850, 100], "size": [190, 82], "sources": [{ "path": "electron/confirmation/toolCallGate.ts", "line": 1, "label": "tool gate" }, { "path": "src/shared/policy/policyEngine.ts", "line": 1, "label": "pure policy" }] },
+    { "id": "capability-registry", "type": "backend", "label": "Capability Registry", "sublabel": "Tools · Shell · Browser · MCP", "tag": "宿主能力经端口注入", "pos": [850, 283], "size": [190, 82], "sources": [{ "path": "electron/tools/builtinExecutors.ts", "line": 1439, "label": "current registry" }, { "path": "electron/effectiveTools.ts", "line": 12, "label": "effective tools" }] },
+    { "id": "history-port", "type": "backend", "label": "History / Storage Port", "sublabel": "Message log · turn ledger · rebuild", "tag": "SDK 语义 / 不含 SQLite", "pos": [580, 470], "size": [210, 88], "sources": [{ "path": "src/shared/agent/invocation.ts", "line": 178, "label": "loaded context" }, { "path": "src/shared/agent/invocation.ts", "line": 194, "label": "storage port" }, { "path": "electron/chatMessageBuild.ts", "line": 7, "label": "history rebuild adapter" }] },
+    { "id": "model-port", "type": "backend", "label": "Model / Backend Port", "sublabel": "Normalized stream · tool calls · usage", "tag": "稳定替换接口", "pos": [850, 470], "size": [190, 82], "sources": [{ "path": "electron/toolChatLoop.ts", "line": 1, "label": "current vendor coupling" }, { "path": "electron/anthropicClientFactory.ts", "line": 1, "label": "provider adapter target" }] },
+    { "id": "provider-adapters", "type": "cloud", "label": "Provider Adapters", "sublabel": "Anthropic · OpenAI · other backends", "tag": "可替换实现", "pos": [1100, 467], "size": [210, 88], "sources": [{ "path": "electron/anthropicClientFactory.ts", "line": 1, "label": "Anthropic" }, { "path": "packages/agent-core/src/index.ts", "line": 1, "label": "SDK facade" }] },
+    { "id": "host-adapters", "type": "backend", "label": "Host Adapters", "sublabel": "Electron · Delivery · Credentials", "tag": "产品实现端口", "pos": [1100, 100], "size": [210, 82], "sources": [{ "path": "electron/main.ts", "line": 628, "label": "product wiring" }, { "path": "electron/runtime/invocationAssembler.ts", "line": 294, "label": "port wiring" }] },
+    { "id": "storage-adapter", "type": "database", "label": "Product Storage Adapter", "sublabel": "SQLite today · JSONL / other later", "tag": "项目决策 / 可替换实现", "pos": [1100, 280], "size": [210, 88], "sources": [{ "path": "electron/database/operations.ts", "line": 383, "label": "message read" }, { "path": "electron/database/operations.ts", "line": 485, "label": "turn context" }, { "path": "electron/database/sqliteStore.ts", "line": 3, "label": "SQLite binding" }] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "PRODUCT HOST · SpaceAssistant 产品宿主", "wraps": ["product-drivers", "product-assembly", "host-adapters", "storage-adapter"], "pad": 28 },
+    { "kind": "region", "label": "AGENT SDK · 可复制的 Agent 执行库", "wraps": ["sdk-runtime", "sdk-core", "safety-policy", "capability-registry", "history-port", "model-port"], "pad": 28 },
+    { "kind": "security-group", "label": "PROVIDER / BACKEND REPLACEMENT · 可替换实现", "wraps": ["provider-adapters"], "pad": 22 }
+  ],
+  "connections": [
+    { "id": "driver-intent", "from": "product-drivers", "to": "product-assembly", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "assembly-runtime", "from": "product-assembly", "to": "sdk-runtime", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "runtime-core", "from": "sdk-runtime", "to": "sdk-core", "variant": "emphasis", "fromSide": "bottom", "toSide": "top" },
+    { "id": "runtime-safety", "from": "sdk-runtime", "to": "safety-policy", "variant": "security", "fromSide": "right", "toSide": "left" },
+    { "id": "core-tools", "from": "sdk-core", "to": "capability-registry", "fromSide": "right", "toSide": "left" },
+    { "id": "core-history", "from": "sdk-core", "to": "history-port", "variant": "emphasis", "fromSide": "bottom", "toSide": "top" },
+    { "id": "core-model", "from": "sdk-core", "to": "model-port", "fromSide": "bottom", "toSide": "left", "via": [[685, 410], [830, 410], [830, 511]] },
+    { "id": "history-adapter", "from": "history-port", "to": "storage-adapter", "variant": "dashed", "fromSide": "bottom", "toSide": "right", "via": [[685, 620], [1330, 620], [1330, 324]] },
+    { "id": "model-provider", "from": "model-port", "to": "provider-adapters", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "host-storage", "from": "host-adapters", "to": "storage-adapter", "variant": "dashed", "fromSide": "bottom", "toSide": "top" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "SDK 承诺", "items": ["一次调用可独立发起、可取消、可嵌套", "Core 不依赖 Electron、SQLite 或具体厂商 SDK", "History Port 保证消息记录可读取、可重建、可恢复"] },
+    { "dot": "emerald", "title": "产品宿主", "items": ["Driver 只负责谁发起、何时发起、结果给谁", "Storage Adapter 负责 SQLite / JSONL、迁移、索引和保留期", "桌面、远程、管家共用同一条 SDK 调用路径"] },
+    { "dot": "violet", "title": "替换轴", "items": ["Anthropic / OpenAI / 其他实现统一接入 ModelProvider", "完整第三方 Agent SDK 只有满足生命周期契约才可直接替换", "Provider 差异封装在 Adapter，不泄漏到 Core"] },
+    { "dot": "amber", "title": "偏差 D0 · 目录与包边界", "items": ["现状：packages/agent-core 只是门面，实际契约仍从 src/shared/agent 转发；Core 在 electron/toolChatLoop.ts，Storage 与 Provider 也在宿主树", "理想：packages/agent-sdk 内部自洽拥有 core / history / ports；Electron 只保留 assembly 与 adapters", "验收：SDK 包闭包零 electron / node:sqlite；第二个宿主只依赖 SDK 公共入口"] },
+    { "dot": "amber", "title": "偏差 D1 · 执行契约", "items": ["现状：Agent 入口、装配、循环、工具和存储横跨 electron / src/shared", "理想：SDK 只暴露 Invocation、History Port、Provider Port、Capability Port 等稳定契约", "验收：SDK 可脱离 Electron 构建、测试，并可被第二个宿主接入"] },
+    { "dot": "rose", "title": "偏差 D2 · Provider 替换", "items": ["现状：toolChatLoop 与 Anthropic client 仍存在直接耦合", "理想：ModelProvider 只暴露规范化流、工具调用、用量和错误", "验收：替换 Provider 不改 Core 与产品 Driver"] },
+    { "dot": "slate", "title": "偏差 D3 · Storage 边界", "items": ["现状：messages / turns / events 的读取、重建和 SQLite 查询分散在 electron", "理想：SDK 定义 Message / Turn / Event 记录语义与 History Port；宿主实现存储", "验收：内存或 JSONL 实现可重建同一份 canonical history；切换 SQLite 不改 Core"] },
+    { "dot": "orange", "title": "偏差 D4 · 能力与安全", "items": ["现状：工具注册、确认、策略、宿主副作用分散在主进程", "理想：Capability Registry 与 Safety Boundary 成为 SDK 端口", "验收：未注册能力不可执行；高风险调用统一 fail-closed"] },
+    { "dot": "rose", "title": "版本路线", "items": ["V0 盘点依赖并冻结目录边界、契约词汇和禁止依赖", "V1 建立 packages/agent-sdk 物理边界，src/shared/agent 只作迁移转发", "V2 抽出 History / Provider / Capability SPI，双跑内存与 SQLite 实现", "V3 切换全部 Driver，删除旧入口，发布可复制 SDK"] },
+    { "dot": "slate", "title": "持续验收", "items": ["每个偏差必须有 owner、版本、状态、证据和回滚点", "每个版本更新本页偏差清单，而不是只更新目录", "页面中的边界是约束：依赖方向只能向端口收敛"] }
+  ]
+}

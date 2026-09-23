@@ -3,7 +3,7 @@
  */
 
 export class Semaphore {
-  private queue: Array<() => void> = []
+  private queue: Array<{ resolve: () => void; reject: (error: unknown) => void; signal?: AbortSignal; onAbort?: () => void }> = []
   private active = 0
 
   constructor(readonly limit: number) {}
@@ -12,18 +12,32 @@ export class Semaphore {
     return this.queue.length
   }
 
-  acquire(): Promise<void> {
+  acquire(options: { signal?: AbortSignal } = {}): Promise<void> {
+    if (options.signal?.aborted) return Promise.reject(new Error('semaphore-cancelled'))
     if (this.active < this.limit) {
       this.active += 1
       return Promise.resolve()
     }
-    return new Promise((resolve) => this.queue.push(resolve))
+    return new Promise((resolve, reject) => {
+      const waiter = { resolve, reject, signal: options.signal, onAbort: undefined as (() => void) | undefined }
+      if (options.signal) {
+        waiter.onAbort = () => {
+          const index = this.queue.indexOf(waiter)
+          if (index < 0) return
+          this.queue.splice(index, 1)
+          reject(new Error('semaphore-cancelled'))
+        }
+        options.signal.addEventListener('abort', waiter.onAbort, { once: true })
+      }
+      this.queue.push(waiter)
+    })
   }
 
   release(): void {
     const next = this.queue.shift()
     if (next) {
-      next()
+      if (next.signal && next.onAbort) next.signal.removeEventListener('abort', next.onAbort)
+      next.resolve()
     } else {
       this.active = Math.max(0, this.active - 1)
     }

@@ -21,6 +21,8 @@ export interface ImPendingConfirm {
   trustEligible?: boolean
   authOwner?: string
   authorizationGeneration?: number
+  /** 同一待确认项的提交尝试代次；回滚后重试必须单调递增。 */
+  commitRevision?: number
   requestId?: string
   createdAt: number
   expiresAt: number
@@ -44,7 +46,7 @@ export interface ImChannelDeps {
   log?: (event: string, fields: Record<string, unknown>) => void
   getGeneration?: (channel: 'feishu' | 'wechat') => number
   /** 发送确认提示（注入 replyFeishuText / weChatReplyService.reply 等）。 */
-  sendPrompt: (entry: ImPendingConfirm) => void
+  sendPrompt: (entry: ImPendingConfirm) => void | Promise<void>
   /** 入站归属校验：仅绑定 owner 且 p2p/白名单命中才可确认。 */
   isAuthorizedInbound?: (
     inbound: { matchKey?: string; messageId: string },
@@ -52,10 +54,30 @@ export interface ImChannelDeps {
   ) => boolean
   /** approve_and_trust 时由链路侧写入信任；返回 false（无资格/写入失败）则不解析。 */
   onTrust?: (entry: ImPendingConfirm) => boolean
+  /** 持久提交服务：写入授权并记录 receipt 后才允许 resolve。 */
+  onCommit?: (entry: ImPendingConfirm, action: { kind: 'trust' | 'memory' | 'decision'; tier?: MemoryTier; approved: boolean }) => ImCommitResult
+  onCommitFailure?: (entry: ImPendingConfirm) => void
   /** 记N 选中档位后由链路侧写 decision_cache（执行链路侧写缓存，落 cache.write 审计）。 */
-  onMemory?: (entry: ImPendingConfirm, tier: MemoryTier) => void
+  /** 记忆写入必须先成功；返回 false 或抛错时不得结算为 approved。 */
+  onMemory?: (entry: ImPendingConfirm, tier: MemoryTier) => boolean | void
   /** trust_misclick / usage_hint 时由链路侧回复提示。 */
   onHint?: (entry: ImPendingConfirm, kind: 'trust_misclick' | 'usage_hint') => void
+}
+
+/** IM 授权提交的结算结果；rollback 可重试，unknown 必须等待对账。 */
+export type ImCommitResult = boolean | {
+  committed: boolean
+  canResubmit?: boolean
+  unknown?: boolean
+}
+
+function normalizeCommitResult(result: ImCommitResult): { committed: boolean; canResubmit: boolean; unknown: boolean } {
+  if (typeof result === 'boolean') return { committed: result, canResubmit: false, unknown: false }
+  return {
+    committed: result.committed,
+    canResubmit: result.canResubmit === true,
+    unknown: result.unknown === true
+  }
 }
 
 function toOutcome(decision: PendingDecision, memoryTiers: MemoryTier[], memory?: MemoryTier): ConfirmOutcome {
@@ -63,6 +85,8 @@ function toOutcome(decision: PendingDecision, memoryTiers: MemoryTier[], memory?
     return { kind: 'approved', ...(memory ? { memory: memory.key } : {}), cause: 'user-approved' }
   }
   if (decision === 'timeout') return { kind: 'timeout', cause: 'timeout' }
+  if (decision === 'unavailable') return { kind: 'rejected', cause: 'unavailable' }
+  if (decision === 'cancelled') return { kind: 'rejected', cause: 'cancelled' }
   return { kind: 'rejected', cause: 'user-denied' }
 }
 
@@ -89,32 +113,37 @@ export class ImChannel {
 
   cancel(id: string): boolean {
     if (!this.registry.get(id)) return false
-    this.resolve(id, 'n')
+    this.resolve(id, 'cancelled')
     return true
   }
 
   cancelAllPending(): void {
-    for (const { id } of this.registry.listPending()) this.resolve(id, 'n')
+    for (const { id } of this.registry.listPending()) this.resolve(id, 'cancelled')
   }
 
   cancelByChannel(channel: 'feishu' | 'wechat'): number {
     if (channel !== this.deps.lane) return 0
     const ids = this.registry.listPending().map((p) => p.id)
-    for (const id of ids) this.resolve(id, 'n')
+    for (const id of ids) this.resolve(id, 'cancelled')
+    return ids.length
+  }
+
+  cancelByRequestId(requestId: string): number {
+    const ids = this.registry.listPending().filter((entry) => entry.requestId === requestId).map((entry) => entry.id)
+    for (const id of ids) this.resolve(id, 'cancelled')
     return ids.length
   }
 
   resolveFromDesktop(requestId: string, approved: boolean): boolean {
-    if (!this.registry.get(requestId)) return false
+    const entry = this.registry.get(requestId)
+    if (!entry) return false
+    if (this.deps.onCommit && !normalizeCommitResult(this.deps.onCommit(entry, { kind: 'decision', approved })).committed) return false
     this.resolve(requestId, approved ? 'y' : 'n')
     return true
   }
 
   request(req: ConfirmRequest, pending: ImPendingInput): Promise<ConfirmOutcome> {
-    // 并发保护：同会话已有待确认时拒绝新请求（无人回答本次请求，非用户意志）
-    if (this.registry.hasPendingForSession(pending.sessionId)) {
-      return Promise.resolve({ kind: 'rejected', cause: 'no-answerer' })
-    }
+    // 同一会话的确认按 confirmId 独立登记；入站回答仍按 confirmId/toolUseId 归属校验。
     const id = randomUUID()
     const confirmId = allocateConfirmId()
     const now = Date.now()
@@ -149,9 +178,13 @@ export class ImChannel {
       }
     })
     try {
-      this.deps.sendPrompt(entry)
+      Promise.resolve(this.deps.sendPrompt(entry)).catch(() => {
+        if (confirmId) releaseConfirmId(confirmId)
+        this.registry.resolve(id, 'unavailable')
+      })
     } catch {
       if (confirmId) releaseConfirmId(confirmId)
+      this.registry.resolve(id, 'unavailable')
     }
     return outcomePromise.then((decision) => {
       const memory = this.pendingMemory.get(id)
@@ -184,17 +217,52 @@ export class ImChannel {
 
     if (parsed.kind === 'remember' && parsed.tier != null && match.memoryTiers[parsed.tier - 1]) {
       const tier = match.memoryTiers[parsed.tier - 1]!
+      try {
+        const result = this.deps.onCommit
+          ? normalizeCommitResult(this.deps.onCommit(match, { kind: 'memory', tier, approved: true }))
+          : { committed: this.deps.onMemory?.(match, tier) !== false, canResubmit: false, unknown: false }
+        if (!result.committed) {
+          this.deps.onCommitFailure?.(match)
+          if (!result.canResubmit && !result.unknown) this.resolve(match.id, 'unavailable')
+          return true
+        }
+      } catch {
+        this.deps.onCommitFailure?.(match)
+        this.resolve(match.id, 'unavailable')
+        return true
+      }
       this.resolve(match.id, 'y', tier)
-      this.deps.onMemory?.(match, tier)
       return true
     }
     if (parsed.kind === 'approve_and_trust') {
       if (match.trustEligible === false) return true
-      if (this.deps.onTrust && !this.deps.onTrust(match)) return true
+      const result = this.deps.onCommit
+        ? normalizeCommitResult(this.deps.onCommit(match, { kind: 'trust', approved: true }))
+        : { committed: this.deps.onTrust ? this.deps.onTrust(match) : true, canResubmit: false, unknown: false }
+      if (!result.committed) {
+        this.deps.onCommitFailure?.(match)
+        if (!result.canResubmit && !result.unknown) this.resolve(match.id, 'unavailable')
+        return true
+      }
       this.resolve(match.id, 'y')
       return true
     }
-    this.resolve(match.id, parsed.kind === 'approve' ? 'y' : 'n')
+    const approved = parsed.kind === 'approve'
+    if (this.deps.onCommit) {
+      try {
+        const result = normalizeCommitResult(this.deps.onCommit(match, { kind: 'decision', approved }))
+        if (!result.committed) {
+          this.deps.onCommitFailure?.(match)
+          if (!result.canResubmit && !result.unknown) this.resolve(match.id, 'unavailable')
+          return true
+        }
+      } catch {
+        this.deps.onCommitFailure?.(match)
+        this.resolve(match.id, 'unavailable')
+        return true
+      }
+    }
+    this.resolve(match.id, approved ? 'y' : 'n')
     return true
   }
 
@@ -225,11 +293,11 @@ export class ImChannel {
       sessionId: entry.sessionId,
       requestId: entry.requestId ?? entry.id,
       toolName: entry.toolName,
-      outcome: decision === 'y' ? 'approved' : decision === 'n' ? 'rejected' : 'timeout',
-      cause: decision === 'y' ? 'user-approved' : decision === 'n' ? 'user-denied' : 'timeout',
+      outcome: decision === 'y' ? 'approved' : decision === 'n' ? 'rejected' : decision === 'timeout' ? 'timeout' : decision === 'unavailable' ? 'unavailable' : 'cancelled',
+      cause: decision === 'y' ? 'user-approved' : decision === 'n' ? 'user-denied' : decision === 'timeout' ? 'timeout' : decision === 'unavailable' ? 'unavailable' : 'cancelled',
       ...(memory ? { memoryTier: memory.label } : {}),
       // 超时无回答动作，actor 如实为 system；批准/拒绝归因远端用户（B1）
-      actor: decision === 'timeout' ? 'system' : 'user'
+      actor: decision === 'y' || decision === 'n' ? 'user' : 'system'
     })
   }
 

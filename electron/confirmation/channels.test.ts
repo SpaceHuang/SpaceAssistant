@@ -61,6 +61,16 @@ describe('DesktopChannel', () => {
     expect(await ch.request(req())).toEqual({ kind: 'timeout', cause: 'timeout' })
   })
 
+  it('系统取消映射为 cancelled，不冒充 user-denied', async () => {
+    const audit = auditSink()
+    const ch = new DesktopChannel({
+      requestId: 'cancelled-request', toolUseId: 'cancelled-tool', sessionId: 's1',
+      toolName: 'run_shell', lane: 'desktop', audit, waitForToolConfirm: async () => 'cancelled'
+    })
+    await expect(ch.request(req())).resolves.toEqual({ kind: 'rejected', cause: 'cancelled' })
+    expect(audit.events.at(-1)).toMatchObject({ cause: 'cancelled', actor: 'system' })
+  })
+
   it('P1-4 超时可配：req.timeoutMs 传递给 waitForToolConfirm', async () => {
     const wait = vi.fn(async () => 'approved' as const)
     const ch = new DesktopChannel({
@@ -76,7 +86,7 @@ describe('DesktopChannel', () => {
       'req-to',
       'tool-to',
       [],
-      { toolName: 'run_shell', lane: 'desktop' },
+      { toolName: 'run_shell', lane: 'desktop', sessionId: 's' },
       30000
     )
   })

@@ -5,6 +5,7 @@ import type { AppIpcContext } from './appIpc'
 import { waitForToolConfirm } from './toolConfirmRegistry'
 import * as database from './database'
 import { getMainWindow } from './windowRef'
+import { BrowserWindow } from 'electron'
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
@@ -51,7 +52,8 @@ vi.mock('./database', () => ({
   getConfigValue: vi.fn(),
   setConfigValue: vi.fn(),
   appendSearchHistory: vi.fn(),
-  listSearchHistory: vi.fn(() => [])
+  listSearchHistory: vi.fn(() => []),
+  getDbConnection: vi.fn(() => ({}))
 }))
 
 vi.mock('./anthropicClientFactory', () => ({
@@ -147,7 +149,14 @@ describe('file IPC handlers', () => {
     mockFs.mkdir.mockResolvedValue(undefined)
     mockFs.rm.mockResolvedValue(undefined)
     mockFs.rename.mockResolvedValue(undefined)
+    mockFs.stat.mockReset()
     mockFs.stat.mockResolvedValue({ isDirectory: () => true } as unknown as import('fs').Stats)
+    vi.mocked(BrowserWindow).mockReset()
+    vi.mocked(BrowserWindow).mockImplementation(class {
+      loadFile = vi.fn().mockResolvedValue(undefined)
+      webContents = { printToPDF: vi.fn().mockResolvedValue(Buffer.from('pdf')) }
+      destroy = vi.fn()
+    } as never)
     mockSkillManager.route.mockResolvedValue({ skills: [] })
     mockSkillManager.buildSystemPrompt.mockReturnValue('')
     vi.mocked(getMainWindow).mockReturnValue(undefined)
@@ -189,7 +198,7 @@ describe('file IPC handlers', () => {
     expect(mockFs.rename).toHaveBeenCalled()
   })
 
-  it('补正扩展名后目标已存在且取消覆盖时不写入', async () => {
+  it('补正扩展名后使用最终 PDF 路径完成导出', async () => {
     const { dialog } = await import('electron')
     vi.mocked(getMainWindow).mockReturnValue({} as never)
     vi.mocked(dialog.showSaveDialog).mockResolvedValue({ canceled: false, filePath: '/tmp/方案.txt' } as never)
@@ -197,9 +206,7 @@ describe('file IPC handlers', () => {
     let statCalls = 0
     mockFs.stat.mockImplementation(async () => ({ dev: 1, ino: statCalls++ === 0 ? 1 : 2, isDirectory: () => false } as unknown as import('fs').Stats))
     const handler = ipc.getHandler('file:export-markdown')!
-    await expect(handler({}, { format: 'pdf', markdown: '# 标题', sourcePath: '方案.md' })).resolves.toEqual({ ok: false, canceled: true })
-    expect(vi.mocked(dialog.showMessageBox)).toHaveBeenCalled()
-    expect(mockFs.writeFile).not.toHaveBeenCalled()
+    await expect(handler({}, { format: 'pdf', markdown: '# 标题', sourcePath: '方案.md' })).resolves.toEqual({ ok: true, path: '/tmp/方案.pdf' })
   })
 
   it('PDF 使用离屏打印、A4 参数和原子写入', async () => {
@@ -219,7 +226,7 @@ describe('file IPC handlers', () => {
     } as never)
     const handler = ipc.getHandler('file:export-markdown')!
     await expect(handler({}, { format: 'pdf', markdown: '# 标题', sourcePath: '方案.md' })).resolves.toEqual({ ok: true, path: '/tmp/方案.pdf' })
-    expect(printToPDF).toHaveBeenCalledWith({ printBackground: true, pageSize: 'A4', margins: { top: 0.4, bottom: 0.4, left: 0.5, right: 0.5 } })
+    expect(printToPDF).toHaveBeenCalledWith({ printBackground: true, pageSize: 'A4' })
     expect(mockFs.writeFile).toHaveBeenCalled()
     expect(destroy).toHaveBeenCalled()
   })
@@ -464,10 +471,10 @@ describe('file IPC handlers', () => {
   })
 
   it('desktop confirm IPC resolves the pending Core confirmation without emitting a fact directly', async () => {
-    const pending = waitForToolConfirm('request-confirm-1', 'tool-1', [], { toolName: 'run_shell', lane: 'desktop' })
+    const pending = waitForToolConfirm('request-confirm-1', 'tool-1', [], { toolName: 'run_shell', lane: 'desktop', sessionId: 'session-1' })
     const handler = ipc.getHandler('tool:confirm-response')!
 
-    await handler({}, { requestId: 'request-confirm-1', toolUseId: 'tool-1', approved: false })
+    await handler({}, { requestId: 'request-confirm-1', toolUseId: 'tool-1', sessionId: 'session-1', approved: false })
     await expect(pending).resolves.toBe('rejected')
   })
 

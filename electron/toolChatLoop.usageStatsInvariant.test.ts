@@ -16,9 +16,9 @@ function mulberry32(seed: number): () => number {
 }
 
 const NOT_EXECUTED_REASONS = [
-  'user_rejected', 'agent_denied', 'confirm_timeout', 'remote_read_only', 'authorization_revoked',
+  'user_rejected', 'agent_denied', 'confirm_timeout', 'remote_read_only', 'authorization_revoked', 'confirm_cancelled', 'confirm_unavailable',
   'policy_denied', 'budget_paused', 'remote_budget_exhausted', 'not_authorized',
-  'unknown_tool', 'model_output_truncated'
+  'unknown_tool', 'model_output_truncated', 'tool_error_threshold'
 ] as const
 
 function randomResult(rand: () => number): ToolCallResultPersisted {

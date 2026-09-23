@@ -24,8 +24,15 @@ export function buildExemptionMigrationEntries(input: ExemptionMigrationInput): 
   const entries: DecisionCacheEntry[] = []
 
   for (const cmd of input.shellTrustedCommands ?? []) {
-    const sig = normalizeShellSignature(cmd)
-    if (!sig) continue
+    let sig = normalizeShellSignature(cmd)
+    try {
+      const argv = JSON.parse(cmd) as unknown
+      if (Array.isArray(argv) && argv.every((part) => typeof part === 'string')) {
+        sig = argv.length > 0 ? JSON.stringify(argv) : ''
+      }
+    } catch { /* 旧的空格签名按 shell 输入解析 */ }
+    // normalizeShellSignature 的 [] 只表示空输入，不能落成可执行授权。
+    if (!sig || sig === '[]') continue
     entries.push({
       id: `mig-shell-${sig}`,
       key: { kind: 'shell-command', verb: sig, level: 'exact' },

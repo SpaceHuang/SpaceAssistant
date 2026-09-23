@@ -56,6 +56,38 @@ export interface BuiltinRegistryLike {
   get(name: string): unknown
 }
 
+export interface ApprovalAdmissionLike {
+  acquire(request: { requestId: string; parentTaskId: string; deadlineAt?: number }): Promise<
+    | { kind: 'granted'; release(): void }
+    | { kind: 'rejected'; cause: string }
+  >
+  cancel(requestId: string): boolean
+}
+
+export interface InvocationRuntimeLike {
+  acquireLease(invocationId: string): InvocationLeaseLike
+  park(invocationId: string, lease: InvocationLeaseLike, checkpoint?: unknown): InvocationParkHandleLike | undefined
+  resumeLease(handle: InvocationParkHandleLike): InvocationLeaseLike | undefined
+}
+
+export interface ResourceLockRegistryLike {
+  acquire(keys: readonly string[], options?: { signal?: AbortSignal }): Promise<{ release(): void }>
+}
+
+export interface InvocationLeaseLike {
+  runtimeId: string
+  invocationId: string
+  generation: number
+  release(): void
+}
+
+export interface InvocationParkHandleLike {
+  runtimeId: string
+  invocationId: string
+  generation: number
+  checkpoint: unknown
+}
+
 export interface AgentRuntimeComponents {
   audit?: RuntimeAudit
   /** 桌面:审计惰性构造(agentLogger 目录未就绪时返回 null → NOOP);缺省 NOOP。 */
@@ -65,6 +97,10 @@ export interface AgentRuntimeComponents {
   toolRevocations?: ToolRevocationRegistryLike
   mcpGate?: McpConcurrencyGateLike
   builtinRegistry?: BuiltinRegistryLike
+  approvalAdmission?: ApprovalAdmissionLike
+  invocationRuntime?: InvocationRuntimeLike
+  resourceLocks?: ResourceLockRegistryLike
+  toolExecutionConcurrency?: number
 }
 
 export interface AgentRuntime {
@@ -78,6 +114,10 @@ export interface AgentRuntime {
   readonly toolRevocations: ToolRevocationRegistryLike
   readonly mcpGate: McpConcurrencyGateLike
   readonly builtinRegistry: BuiltinRegistryLike
+  readonly approvalAdmission: ApprovalAdmissionLike
+  readonly invocationRuntime: InvocationRuntimeLike
+  readonly resourceLocks: ResourceLockRegistryLike
+  readonly toolExecutionConcurrency: number
 }
 
 const EMPTY_REGISTRY: BuiltinRegistryLike = {
@@ -121,6 +161,18 @@ export function createAgentRuntime(components: AgentRuntimeComponents = {}): Age
     },
     mcpGate: components.mcpGate ?? { run: (_serverId, fn) => fn() },
     builtinRegistry: components.builtinRegistry ?? EMPTY_REGISTRY,
+    approvalAdmission: components.approvalAdmission ?? {
+      // 纯契约/宿主迁移测试的兼容适配：不创建第二份配额账本；生产桌面 runtime 必须显式注入真实池。
+      acquire: async () => ({ kind: 'granted' as const, release: () => undefined }),
+      cancel: () => false
+    },
+    invocationRuntime: components.invocationRuntime ?? {
+      acquireLease: (invocationId) => ({ runtimeId: 'noop', invocationId, generation: 0, release: () => undefined }),
+      park: () => undefined,
+      resumeLease: () => undefined
+    },
+    resourceLocks: components.resourceLocks ?? { acquire: async () => ({ release: () => undefined }) },
+    toolExecutionConcurrency: components.toolExecutionConcurrency ?? 2,
     get audit() {
       return ensureAudit()
     },

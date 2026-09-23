@@ -65,14 +65,14 @@ function turnFact(overrides: Partial<UsageTurnFactInput> = {}): UsageTurnFactInp
 
 describe('v16 用量统计表迁移', () => {
   it('当前 schema version 为 16', () => {
-    expect(DB_SCHEMA_VERSION).toBe(17)
+    expect(DB_SCHEMA_VERSION).toBe(18)
   })
 
   it('v15 库升级到 v16 后两张统计表与索引存在，且重复迁移幂等', () => {
     const conn = createV15Database()
     runMigrations(conn)
 
-    expect(conn.prepare('SELECT value FROM schema_meta WHERE key = ?').get(SCHEMA_META_KEYS.schemaVersion)).toMatchObject({ value: '17' })
+    expect(conn.prepare('SELECT value FROM schema_meta WHERE key = ?').get(SCHEMA_META_KEYS.schemaVersion)).toMatchObject({ value: '18' })
     const tables = (conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((t) => t.name)
     expect(tables).toContain('usage_step_facts')
     expect(tables).toContain('usage_turn_facts')

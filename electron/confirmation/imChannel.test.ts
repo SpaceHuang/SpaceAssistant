@@ -95,6 +95,39 @@ describe('ImChannel（飞书/微信合并通道）', () => {
     expect(seen[0]!.tier).toEqual(tiers[0])
   })
 
+  it('记忆写入失败时不得先结算 approved', async () => {
+    const tiers: MemoryTier[] = [{ key: { kind: 'shell-command', verb: 'ping baidu.com', level: 'exact' }, label: '记住' }]
+    const ch = new ImChannel({
+      lane: 'feishu',
+      timeoutMs: 30,
+      sendPrompt: () => undefined,
+      onMemory: () => false
+    })
+    const p = ch.request(req(tiers), { sessionId: 's-fail', toolName: 'run_shell', messageId: 'm1', matchKey: 'c1', memoryTiers: tiers })
+    ch.tryResolveFromInbound({ kind: 'remember', confirmId: ch.listPending()[0]!.confirmId, tier: 1 }, { matchKey: 'c1', messageId: 'm2' })
+    await expect(p).resolves.toMatchObject({ kind: 'rejected', cause: 'unavailable' })
+  })
+
+  it('可重试提交失败时保留同一 pending，第二次同一确认码可以批准', async () => {
+    let attempts = 0
+    const ch = new ImChannel({
+      lane: 'feishu',
+      timeoutMs: 1000,
+      sendPrompt: () => undefined,
+      onCommit: () => {
+        attempts += 1
+        return { committed: attempts > 1, canResubmit: attempts === 1 }
+      }
+    })
+    const p = ch.request(req(), { sessionId: 's-retry', toolName: 'run_shell', messageId: 'm1', matchKey: 'c1' })
+    const confirmId = ch.listPending()[0]!.confirmId
+    expect(ch.tryResolveFromInbound({ kind: 'approve', confirmId }, { matchKey: 'c1', messageId: 'm2' })).toBe(true)
+    expect(ch.countPending()).toBe(1)
+    expect(ch.tryResolveFromInbound({ kind: 'approve', confirmId }, { matchKey: 'c1', messageId: 'm3' })).toBe(true)
+    await expect(p).resolves.toMatchObject({ kind: 'approved', cause: 'user-approved' })
+    expect(attempts).toBe(2)
+  })
+
   it('请求结束后 pendingMemory 即清理（长跑进程不累积）', async () => {
     const tiers: MemoryTier[] = [
       { key: { kind: 'shell-command', verb: 'ping baidu.com', level: 'exact' }, label: '记住 ping' }
@@ -136,7 +169,7 @@ describe('ImChannel（飞书/微信合并通道）', () => {
     await expect(p).resolves.toEqual({ kind: 'approved', cause: 'user-approved' })
   })
 
-  it('sendPrompt 同步抛异常：请求不抛出、确认码释放、条目仍可待超时', async () => {
+  it('sendPrompt 同步抛异常：立即结束为 unavailable 并释放待确认项', async () => {
     const ch = new ImChannel({
       lane: 'wechat',
       timeoutMs: 50,
@@ -150,8 +183,8 @@ describe('ImChannel（飞书/微信合并通道）', () => {
       messageId: 'm1',
       matchKey: 'u1'
     })
-    expect(ch.countPending()).toBe(1)
-    await expect(p).resolves.toEqual({ kind: 'timeout', cause: 'timeout' })
+    expect(ch.countPending()).toBe(0)
+    await expect(p).resolves.toEqual({ kind: 'rejected', cause: 'unavailable' })
   })
 
   it('入站 rejects；resolveFromDesktop 可代答；cancelByChannel 只作用于本链路', async () => {

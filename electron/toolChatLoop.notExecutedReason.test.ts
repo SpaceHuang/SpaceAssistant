@@ -18,9 +18,11 @@ describe('notExecutedReasonForConfirmation（确认拒绝归因映射）', () =>
     expect(notExecutedReasonForConfirmation({ cause: 'user-denied' })).toBe('user_rejected')
   })
 
-  it("审批通道超时 → 'confirm_timeout'；机器侧 fail-closed 拒绝 → 'policy_denied'", () => {
+  it("审批通道终态按超时、不可用、取消分别归类", () => {
     expect(notExecutedReasonForConfirmation({ cause: 'timeout' })).toBe('confirm_timeout')
-    for (const cause of ['recursion-blocked', 'unavailable', 'unparsable', 'config-error', 'no-answerer', 'gate-materials-missing', 'rules-violated'] as const) {
+    expect(notExecutedReasonForConfirmation({ cause: 'unavailable' })).toBe('confirm_unavailable')
+    expect(notExecutedReasonForConfirmation({ cause: 'cancelled' })).toBe('confirm_cancelled')
+    for (const cause of ['unparsable', 'config-error', 'no-answerer', 'gate-materials-missing', 'rules-violated'] as const) {
       expect(notExecutedReasonForConfirmation({ cause })).toBe('policy_denied')
     }
   })

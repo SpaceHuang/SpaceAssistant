@@ -8,6 +8,7 @@ vi.mock('electron', () => ({
 }))
 
 const { mockGetConfigValue } = vi.hoisted(() => ({ mockGetConfigValue: vi.fn(() => null) }))
+const { mockRememberMcpSessionTrust } = vi.hoisted(() => ({ mockRememberMcpSessionTrust: vi.fn() }))
 
 vi.mock('./database', () => ({
   listSessions: vi.fn(() => []),
@@ -45,7 +46,9 @@ vi.mock('./browser/browserDomainTrust', () => ({
 }))
 
 vi.mock('./mcp/mcpSessionTrust', () => ({
-  rememberMcpSessionTrust: vi.fn()
+  rememberMcpSessionTrust: mockRememberMcpSessionTrust,
+  forgetMcpSessionTrust: vi.fn(),
+  isMcpSessionTrusted: vi.fn(() => false)
 }))
 
 vi.mock('./confirmation/settingsAudit', () => ({
@@ -70,7 +73,7 @@ vi.mock('./agentLogger/agentLogger', () => ({
   logAgentError: vi.fn()
 }))
 
-import { waitForToolConfirm, clearToolCancel } from './toolConfirmRegistry'
+import { waitForToolConfirm, clearToolCancel, getPendingMcpTrust, isPendingTrust } from './toolConfirmRegistry'
 
 const mockIpcMain = () => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>()
@@ -153,7 +156,7 @@ describe('tool:confirm-response 信任写入与 pending 确认挂钩（H1）', (
 
   it('存在 pending 确认时：信任写入照常（用户确认路径行为不变）', async () => {
     // 模拟 DesktopChannel 已登记的 waiter（waitForToolConfirm 会注册 pending）
-    void waitForToolConfirm('req-live', 'tu-live', undefined, { toolName: 'run_shell', lane: 'desktop' })
+    void waitForToolConfirm('req-live', 'tu-live', undefined, { toolName: 'run_shell', lane: 'desktop', sessionId: 's1', trustCommands: [JSON.stringify(['git', 'status'])] })
     try {
       await invoke({
         requestId: 'req-live',
@@ -166,5 +169,66 @@ describe('tool:confirm-response 信任写入与 pending 确认挂钩（H1）', (
     } finally {
       clearToolCancel('req-live', 'tu-live')
     }
+  })
+
+  it('MCP 信任绑定当前 pending 的 server/tool，并在提交后允许本次调用', async () => {
+    void waitForToolConfirm('req-mcp', 'tu-mcp', undefined, {
+      toolName: 'mcp_server_create_issue',
+      lane: 'desktop',
+      sessionId: 's1',
+      trustMcpServerId: 'server-1',
+      trustMcpToolName: 'create_issue'
+    })
+    expect(getPendingMcpTrust('req-mcp', 'tu-mcp')).toEqual({ serverId: 'server-1', toolName: 'create_issue' })
+    expect(isPendingTrust('req-mcp', 'tu-mcp', 'mcp', 'server-1', 'create_issue')).toBe(true)
+    const result = await invoke({
+      requestId: 'req-mcp',
+      toolUseId: 'tu-mcp',
+      approved: true,
+      sessionId: 's1',
+      trustMcpServerId: 'server-1',
+      trustMcpToolName: 'create_issue'
+    })
+    expect(result).toMatchObject({ accepted: true, outcome: 'approved' })
+    expect(mockRememberMcpSessionTrust).toHaveBeenCalledWith('s1', 'server-1', 'create_issue')
+  })
+
+  it('MCP 信任省略可选 sessionId 时仍使用 pending owner session 写入', async () => {
+    void waitForToolConfirm('req-mcp-no-session', 'tu-mcp-no-session', undefined, {
+      toolName: 'mcp_server_create_issue',
+      lane: 'desktop',
+      sessionId: 'owner-session',
+      trustMcpServerId: 'server-1',
+      trustMcpToolName: 'create_issue'
+    })
+    const result = await invoke({
+      requestId: 'req-mcp-no-session',
+      toolUseId: 'tu-mcp-no-session',
+      approved: true,
+      trustMcpServerId: 'server-1',
+      trustMcpToolName: 'create_issue'
+    })
+    expect(result).toMatchObject({ accepted: true, outcome: 'approved' })
+    expect(mockRememberMcpSessionTrust).toHaveBeenCalledWith('owner-session', 'server-1', 'create_issue')
+  })
+
+  it('MCP 信任不得借用同类工具或其他 server 的 pending 身份', async () => {
+    void waitForToolConfirm('req-mcp-mismatch', 'tu-mcp-mismatch', undefined, {
+      toolName: 'mcp_server_create_issue',
+      lane: 'desktop',
+      sessionId: 's1',
+      trustMcpServerId: 'server-1',
+      trustMcpToolName: 'create_issue'
+    })
+    const result = await invoke({
+      requestId: 'req-mcp-mismatch',
+      toolUseId: 'tu-mcp-mismatch',
+      approved: true,
+      sessionId: 's1',
+      trustMcpServerId: 'server-2',
+      trustMcpToolName: 'create_issue'
+    })
+    expect(result).toMatchObject({ accepted: true, outcome: 'rejected' })
+    expect(mockRememberMcpSessionTrust).not.toHaveBeenCalled()
   })
 })

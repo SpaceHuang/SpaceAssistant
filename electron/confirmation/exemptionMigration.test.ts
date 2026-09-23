@@ -14,7 +14,7 @@ describe('buildExemptionMigrationEntries（P3 豁免迁移）', () => {
     const entries = buildExemptionMigrationEntries({ shellTrustedCommands: ['ping baidu.com'] })
     expect(entries).toHaveLength(1)
     const e = entries[0]!
-    expect(e.key).toEqual({ kind: 'shell-command', verb: 'ping baidu.com', level: 'exact' })
+    expect(e.key).toEqual({ kind: 'shell-command', verb: JSON.stringify(['ping', 'baidu.com']), level: 'exact' })
     expect(e.scope).toBe('persistent')
     expect(e.source).toBe('migration')
     expect(e.decision).toBe('allow')
@@ -55,6 +55,10 @@ describe('buildExemptionMigrationEntries（P3 豁免迁移）', () => {
     expect(entries).toHaveLength(1)
     expect(entries[0]!.scope).toBe('session')
   })
+
+  it('空的 JSON argv 不生成 shell 授权条目', () => {
+    expect(buildExemptionMigrationEntries({ shellTrustedCommands: ['[]', '   '] })).toEqual([])
+  })
 })
 
 describe('migrateExemptionsToCache（落库后可 lookup 命中）', () => {
@@ -64,7 +68,7 @@ describe('migrateExemptionsToCache（落库后可 lookup 命中）', () => {
     const cache = new SqliteDecisionCache(getDbConnection(db))
     const entries = buildExemptionMigrationEntries({ shellTrustedCommands: ['ping baidu.com'] })
     expect(migrateExemptionsToCache(entries, cache)).toBe(1)
-    const hit = cache.lookup({ kind: 'shell-command', verb: 'ping baidu.com', level: 'exact' })
+    const hit = cache.lookup({ kind: 'shell-command', verb: JSON.stringify(['ping', 'baidu.com']), level: 'exact' })
     expect(hit).not.toBeNull()
     expect(hit!.decision).toBe('allow')
     expect(hit!.scope).toBe('persistent')

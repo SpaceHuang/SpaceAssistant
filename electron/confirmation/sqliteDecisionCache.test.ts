@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { getDbConnection, openSqliteDatabase } from '../database'
 import type { AppDatabase } from '../database'
 import { SqliteDecisionCache, canonicalKeyJson } from './sqliteDecisionCache'
+import { clearAllMcpSessionTrust, rememberMcpSessionTrust } from '../mcp/mcpSessionTrust'
 import type { CacheKey, DecisionCacheEntry } from '../../src/shared/confirmation/types'
 
 const shells: AppDatabase[] = []
@@ -19,6 +20,7 @@ function open(): {
 
 afterEach(() => {
   shells.splice(0).forEach((db) => db.close())
+  clearAllMcpSessionTrust()
 })
 
 const shellKey = (verb = 'ping baidu.com'): CacheKey => ({
@@ -60,6 +62,16 @@ describe('SqliteDecisionCache', () => {
     expect(cache.lookup({ kind: 'shell-command', verb: 'rm -rf', level: 'exact' })).toBeNull()
   })
 
+  it('MCP 会话信任只命中绑定的 session/server/tool，且 automation 不继承', () => {
+    const { cache } = open()
+    const key: CacheKey = { kind: 'mcp-tool', serverId: 'server-1', toolName: 'create_issue', sessionId: 'session-1' }
+    rememberMcpSessionTrust('session-1', 'server-1', 'create_issue')
+    expect(cache.lookup(key, 'desktop')).toMatchObject({ decision: 'allow', scope: 'session' })
+    expect(cache.lookup({ ...key, sessionId: 'session-2' }, 'desktop')).toBeNull()
+    expect(cache.lookup({ ...key, toolName: 'delete_issue' }, 'desktop')).toBeNull()
+    expect(cache.lookup(key, 'automation')).toBeNull()
+  })
+
   it('过期条目（expires_at 已过）视为未命中', () => {
     const { cache } = open()
     cache.record(entry({ expiresAt: Date.now() - 1000 }))
@@ -87,6 +99,15 @@ describe('SqliteDecisionCache', () => {
     expect(cache.lookup(shellKey())).not.toBeNull()
     expect(cache.clear(shellKey())).toBe(1)
     expect(cache.lookup(shellKey())).toBeNull()
+  })
+
+  it('按 lane 清理补偿时不删除其他链路同键记忆', () => {
+    const { cache } = open()
+    cache.record(entry({ lane: 'desktop' }))
+    cache.record(entry({ lane: 'wechat', id: 'wechat-same-key' }))
+    expect(cache.clear(shellKey(), 'desktop')).toBe(1)
+    expect(cache.lookup(shellKey(), 'desktop')).toBeNull()
+    expect(cache.lookup(shellKey(), 'wechat')).not.toBeNull()
   })
 
   it('expireDormant 清理过期与休眠条目', () => {

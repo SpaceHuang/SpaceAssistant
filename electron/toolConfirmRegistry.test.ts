@@ -1,15 +1,26 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   isPendingMemoryTier,
+  isPendingConfirm,
+  prepareToolConfirm,
   submitToolConfirmResponse,
   waitForToolConfirm
 } from './toolConfirmRegistry'
+import { reserveToolConfirmResponse, cancelReservedToolConfirm, restoreReservedToolConfirm, isToolConfirmCommitAllowed } from './toolConfirmRegistry'
 import type { CacheKey } from '../src/shared/confirmation/types'
 
 const sessionTierKey: CacheKey = { kind: 'domain', domain: 'example.com', level: 'domain-any-action', sessionId: 's1' }
 const persistentTierKey: CacheKey = { kind: 'shell-command', verb: 'git status', level: 'exact' }
 
 describe('toolConfirmRegistry', () => {
+  it('prepare 在任何确认卡片发布前建立 pending，且后续 wait 复用同一 promise', async () => {
+    const prepared = prepareToolConfirm('req-prepared', 'tool-prepared', undefined, { toolName: 'write_file', lane: 'desktop' }, 1000)
+    expect(isPendingConfirm('req-prepared', 'tool-prepared')).toBe(true)
+    const waited = waitForToolConfirm('req-prepared', 'tool-prepared')
+    expect(waited).toBe(prepared)
+    expect(submitToolConfirmResponse('req-prepared', 'tool-prepared', false).accepted).toBe(true)
+    await expect(prepared).resolves.toBe('rejected')
+  })
   it('defers confirm resolve to the next event-loop turn', async () => {
     let resolvedSync = false
     const pending = waitForToolConfirm('req-defer', 'tool-1')
@@ -57,6 +68,47 @@ describe('toolConfirmRegistry', () => {
     await pending
   })
 
+  it('取消或撤销 committing 确认进入 cancelled 并阻止后续提交', async () => {
+    const pending = waitForToolConfirm('req-commit', 'tool-commit')
+    expect(reserveToolConfirmResponse('req-commit', 'tool-commit')).toBe(true)
+    expect(isToolConfirmCommitAllowed('req-commit', 'tool-commit')).toBe(true)
+    expect(cancelReservedToolConfirm('req-commit', 'tool-commit')).toBe(true)
+    await expect(pending).resolves.toBe('cancelled')
+    expect(isToolConfirmCommitAllowed('req-commit', 'tool-commit')).toBe(false)
+    expect(submitToolConfirmResponse('req-commit', 'tool-commit', true)).toEqual({ accepted: false, outcome: 'missing' })
+  })
+
+  it('事务回滚时恢复 committing waiter，允许同一确认重试', async () => {
+    const pending = waitForToolConfirm('req-retry', 'tool-retry', undefined, undefined, 1000)
+    const { getPendingConfirmRevision } = await import('./toolConfirmRegistry')
+    const firstRevision = getPendingConfirmRevision('req-retry', 'tool-retry')
+    expect(reserveToolConfirmResponse('req-retry', 'tool-retry')).toBe(true)
+    expect(restoreReservedToolConfirm('req-retry', 'tool-retry')).toBe(true)
+    expect(isPendingConfirm('req-retry', 'tool-retry')).toBe(true)
+    expect(getPendingConfirmRevision('req-retry', 'tool-retry')).toBe((firstRevision ?? 0) + 1)
+    expect(submitToolConfirmResponse('req-retry', 'tool-retry', true).accepted).toBe(true)
+    await expect(pending).resolves.toBe('approved')
+  })
+
+  it('信任校验保留 argv 边界，且不为复合命令登记范围', async () => {
+    const simple = waitForToolConfirm('req-argv', 'tool-simple', undefined, {
+      toolName: 'run_shell', lane: 'desktop', trustCommands: [JSON.stringify(['echo', 'a b'])]
+    })
+    const { isPendingTrust } = await import('./toolConfirmRegistry')
+    expect(isPendingTrust('req-argv', 'tool-simple', 'command', 'echo "a b"')).toBe(true)
+    expect(isPendingTrust('req-argv', 'tool-simple', 'command', 'echo a b')).toBe(false)
+    submitToolConfirmResponse('req-argv', 'tool-simple', false)
+    await simple
+  })
+
+  it('returns an explicit ACK for accepted and expired submissions', async () => {
+    expect(submitToolConfirmResponse('req-missing', 'tool-missing', true)).toEqual({ accepted: false, outcome: 'missing' })
+    const pending = waitForToolConfirm('req-ack', 'tool-ack')
+    expect(submitToolConfirmResponse('req-ack', 'tool-ack', true)).toEqual({ accepted: true, outcome: 'approved' })
+    expect(submitToolConfirmResponse('req-ack', 'tool-ack', true)).toEqual({ accepted: false, outcome: 'missing' })
+    await pending
+  })
+
   it('rejects all tiers when the pending confirm was registered without memory tiers', async () => {
     const pending = waitForToolConfirm('req-notiers', 'tool-4')
     expect(isPendingMemoryTier('req-notiers', 'tool-4', persistentTierKey)).toBe(false)
@@ -70,10 +122,10 @@ describe('toolConfirmRegistry', () => {
     const desktopRead = waitForToolConfirm('req-c', 'u-c', undefined, { lane: 'desktop', toolName: 'read_file' })
     const { rejectPendingConfirmsForTool, cancelAllPendingToolConfirms } = await import('./toolConfirmRegistry')
     expect(rejectPendingConfirmsForTool('desktop', 'write_file')).toBe(1)
-    await expect(desktopWrite).resolves.toBe('rejected')
+    await expect(desktopWrite).resolves.toBe('cancelled')
     cancelAllPendingToolConfirms()
-    await expect(remoteWrite).resolves.toBe('rejected')
-    await expect(desktopRead).resolves.toBe('rejected')
+    await expect(remoteWrite).resolves.toBe('cancelled')
+    await expect(desktopRead).resolves.toBe('cancelled')
   })
 
   it('P1-4 超时可配：timeoutMs 参数真实消费（自定义短超时到期 resolve timeout）', async () => {

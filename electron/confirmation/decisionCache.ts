@@ -43,7 +43,7 @@ export class LegacyExemptionAdapter implements DecisionCacheView {
         if (key.level !== 'exact') return null
         const sig = key.verb
         if (!sig) return null
-        const matched = this.deps.shellTrustedCommands?.some((c) => normalizeShellSignature(c) === sig)
+        const matched = this.deps.shellTrustedCommands?.some((c) => normalizeShellSignature(c) === sig || normalizeShellSignature(c) === JSON.stringify(sig.split(' ')))
         return matched ? this.entry(key, 'allow', 'persistent') : null
       }
       case 'domain': {

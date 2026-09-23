@@ -9,13 +9,12 @@ const subject = {
 }
 
 describe('recordUserAnswerToCacheWithPermit', () => {
-  it('requires and consumes the confirmation permit before writing', () => {
+  it('writer failure restores the confirmation permit for a safe retry', () => {
     const registry = new ConfirmationAuthorizationRegistry()
     const permit = registry.issue(subject)
     const writer = vi.fn()
     expect(() => recordUserAnswerToCacheWithPermit({} as never, registry, permit, subject)).toThrow()
-    // The permit is consumed before the downstream writer can be retried with a different key.
-    expect(() => registry.consume(permit, subject)).toThrow('MEMORY_WRITE_PERMIT_INVALID')
+    expect(() => registry.consume(permit, subject)).not.toThrow()
     expect(writer).not.toHaveBeenCalled()
   })
 })

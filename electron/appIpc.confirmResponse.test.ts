@@ -40,7 +40,8 @@ vi.mock('./database', () => ({
   listSearchHistory: vi.fn(() => []),
   setSessionUsage: vi.fn(),
   getSessionUsage: vi.fn(),
-  deleteSessionUsage: vi.fn()
+  deleteSessionUsage: vi.fn(),
+  getDbConnection: vi.fn(() => ({}))
 }))
 
 vi.mock('./anthropicClientFactory', () => ({
@@ -65,6 +66,7 @@ vi.mock('./confirmation/decisionCacheWriter', async (importOriginal) => {
 })
 
 vi.mock('./shell/shellCommandTrust', () => ({
+  listTrustedCommands: vi.fn(() => []),
   addTrustedCommand: vi.fn(() => ({
     id: 't1',
     schemaVersion: 2,
@@ -147,7 +149,7 @@ describe('tool:confirm-response memoryTier 校验（B1/B2）', () => {
     const pending = waitForToolConfirm('req-a', 'tool-a', [
       { key: sessionTierKey, label: '本会话' },
       { key: persistentTierKey, label: '永久' }
-    ])
+    ], { toolName: 'browser', lane: 'desktop', sessionId: 's1' })
     await invoke({
       requestId: 'req-a',
       toolUseId: 'tool-a',
@@ -163,7 +165,7 @@ describe('tool:confirm-response memoryTier 校验（B1/B2）', () => {
   })
 
   it('接受档位内的持久键并派生 persistent scope', async () => {
-    const pending = waitForToolConfirm('req-b', 'tool-b', [{ key: persistentTierKey, label: '永久' }])
+    const pending = waitForToolConfirm('req-b', 'tool-b', [{ key: persistentTierKey, label: '永久' }], { toolName: 'browser', lane: 'desktop', sessionId: 's1' })
     await invoke({
       requestId: 'req-b',
       toolUseId: 'tool-b',
@@ -178,7 +180,7 @@ describe('tool:confirm-response memoryTier 校验（B1/B2）', () => {
   })
 
   it('拒绝不在 pending decision 档位内的任意键（IPC 权限提升面）', async () => {
-    const pending = waitForToolConfirm('req-c', 'tool-c', [{ key: sessionTierKey, label: '本会话' }])
+    const pending = waitForToolConfirm('req-c', 'tool-c', [{ key: sessionTierKey, label: '本会话' }], { toolName: 'browser', lane: 'desktop', sessionId: 's1' })
     await invoke({
       requestId: 'req-c',
       toolUseId: 'tool-c',
@@ -202,11 +204,12 @@ describe('tool:confirm-response memoryTier 校验（B1/B2）', () => {
   })
 
   it('approved=false 时不写缓存（既有行为保持）', async () => {
-    const pending = waitForToolConfirm('req-d', 'tool-d', [{ key: persistentTierKey, label: '永久' }])
+    const pending = waitForToolConfirm('req-d', 'tool-d', [{ key: persistentTierKey, label: '永久' }], { toolName: 'browser', lane: 'desktop', sessionId: 's1' })
     await invoke({
       requestId: 'req-d',
       toolUseId: 'tool-d',
       approved: false,
+      sessionId: 's1',
       memoryTier: persistentTierKey
     })
     expect(mockRecordUserAnswerToCache).not.toHaveBeenCalled()
@@ -214,7 +217,7 @@ describe('tool:confirm-response memoryTier 校验（B1/B2）', () => {
   })
 
   it('信任此命令双写 decision_cache（B6：信任在确认记忆页可见可撤销）', async () => {
-    const pending = waitForToolConfirm('req-e', 'tool-e')
+    const pending = waitForToolConfirm('req-e', 'tool-e', undefined, { toolName: 'run_shell', lane: 'desktop', sessionId: 's1', trustCommands: [JSON.stringify(['git', 'status'])] })
     await invoke({
       requestId: 'req-e',
       toolUseId: 'tool-e',
@@ -224,8 +227,15 @@ describe('tool:confirm-response memoryTier 校验（B1/B2）', () => {
     })
     expect(mockRecordUserAnswerToCache).toHaveBeenCalledTimes(1)
     const args = mockRecordUserAnswerToCache.mock.calls[0]![0] as { key: CacheKey; scope: string }
-    expect(args.key).toEqual({ kind: 'shell-command', verb: 'git status', level: 'exact' })
+    expect(args.key).toEqual({ kind: 'shell-command', verb: JSON.stringify(['git', 'status']), level: 'exact' })
     expect(args.scope).toBe('persistent')
+    await pending
+  })
+
+  it('主进程 waiter 的 session 绑定拒绝跨会话 payload，正确 session 仍可结算', async () => {
+    const pending = waitForToolConfirm('req-owner', 'tool-owner', undefined, { toolName: 'run_shell', lane: 'desktop', sessionId: 'trusted-session' })
+    await expect(invoke({ requestId: 'req-owner', toolUseId: 'tool-owner', approved: true, sessionId: 'forged-session' })).resolves.toMatchObject({ accepted: false, outcome: 'missing' })
+    await expect(invoke({ requestId: 'req-owner', toolUseId: 'tool-owner', approved: false, sessionId: 'trusted-session' })).resolves.toMatchObject({ accepted: true, outcome: 'rejected' })
     await pending
   })
 })

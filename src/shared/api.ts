@@ -50,6 +50,10 @@ export type ToolConfirmResponsePayload = {
   memoryTierOptionId?: number
 }
 
+export type ToolConfirmResponseResult =
+  | { accepted: true; outcome: 'approved' | 'rejected' }
+  | { accepted: false; outcome: 'missing' }
+
 /** P0-T4：脚本安全解析服务状态（主进程 ScriptParserService.getStatus() 的 IPC 投影）。 */
 export type ScriptParserStatusPayload = {
   ready: boolean
@@ -433,7 +437,7 @@ export type SpaceAssistantApi = {
   /** 管家定时 / 手动触发的会话创建推送：渲染端即时 upsert 进会话列表，无需重启。 */
   sessionOnCreated: (cb: (data: { session: Session }) => void) => () => void
 
-  toolConfirmResponse: (payload: ToolConfirmResponsePayload) => Promise<void>
+  toolConfirmResponse: (payload: ToolConfirmResponsePayload) => Promise<ToolConfirmResponseResult>
   toolCancel: (payload: { requestId: string; toolUseId: string }) => Promise<void>
   shellOpenTerminal: (payload: { cwd: string }) => Promise<{ ok: true } | { ok: false; error: string }>
   shellManageTrustedCommands: (

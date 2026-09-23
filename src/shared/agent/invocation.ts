@@ -125,6 +125,7 @@ export type AgentNotifyEvent =
 export interface AgentInvocationLimits {
   /** 工具执行轮数上界（现 maxToolLoopRounds）；缺省不限。 */
   maxToolRounds?: number
+  deadlineAt?: number
 }
 
 /** Safety 协议字段：递归守卫标记（取值代码写死，不可配置——不可变集语义）。 */
@@ -247,8 +248,37 @@ export interface AgentPolicyPorts {
   policyOrigins?: Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }>
 }
 
+export type ApplicationAdmissionResumeResult =
+  | { ok: true }
+  | { ok: false; retryable: boolean; cause?: string }
+
 /** 宿主端口集合（P1 立骨架，P2 起承接 storage / usage / tools 等实现）。 */
 export interface AgentHostPorts {
+  /** 同一父调用的实际工具执行并发上限，由 Assembly 注入。 */
+  toolExecutionConcurrency?: number
+  resourceLocks?: {
+    acquire(keys: readonly string[], options?: { signal?: AbortSignal }): Promise<{ release(): void }>
+  }
+  /** 宿主应用运行槽适配器；恢复不应重新消耗顶层启动额度。 */
+  applicationAdmission?: {
+    park(checkpoint?: unknown): unknown
+    discard?(handle: unknown): void
+    resume(handle: unknown, options?: { signal?: AbortSignal; deadlineAt?: number }): ApplicationAdmissionResumeResult | Promise<ApplicationAdmissionResumeResult>
+  }
+  /** 调用级运行租约；工具循环不得自行接触全局准入账本。 */
+  invocationRuntime?: {
+    acquireLease(invocationId: string): { runtimeId: string; invocationId: string; generation: number; release(): void }
+    park(invocationId: string, lease: { runtimeId: string; invocationId: string; generation: number; release(): void }, checkpoint?: unknown): { runtimeId: string; invocationId: string; generation: number; checkpoint: unknown } | undefined
+    resumeLease(handle: { runtimeId: string; invocationId: string; generation: number; checkpoint: unknown }): { runtimeId: string; invocationId: string; generation: number; release(): void } | undefined
+  }
+  /** 运行时持有的审批尝试准入池。 */
+  approvalAdmission?: {
+    acquire(request: { requestId: string; parentTaskId: string; deadlineAt?: number }): Promise<
+      | { kind: 'granted'; release(): void }
+      | { kind: 'rejected'; cause: string }
+    >
+    cancel(requestId: string): boolean
+  }
   /** P2（B1）：门控与暴露面规则的装配期材料。 */
   policy?: AgentPolicyPorts
   /** P2：loadContext / persist（真相类）。 */

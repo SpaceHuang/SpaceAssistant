@@ -1,4 +1,4 @@
-export type PendingDecision = 'y' | 'n' | 'timeout'
+export type PendingDecision = 'y' | 'n' | 'timeout' | 'unavailable' | 'cancelled'
 
 export type PendingAuthFields = {
   channel?: 'feishu' | 'wechat'
@@ -34,14 +34,14 @@ export class PendingRequestRegistry<
     const item = this.pending.get(id)
     if (!item) return false
     onCancel?.(item)
-    this.resolve(id, 'n')
+    this.resolve(id, 'cancelled')
     return true
   }
 
   /** Resolve every waiter with 'n' (e.g. on app quit) so long timers do not keep the process alive. */
   cancelAllPending(): void {
     for (const id of [...this.pending.keys()]) {
-      this.resolve(id, 'n')
+      this.resolve(id, 'cancelled')
     }
   }
 
@@ -53,7 +53,7 @@ export class PendingRequestRegistry<
     let n = 0
     for (const item of [...this.pending.values()]) {
       if (item.channel === channel) {
-        this.resolve(item.id, 'n')
+        this.resolve(item.id, 'cancelled')
         n++
       }
     }

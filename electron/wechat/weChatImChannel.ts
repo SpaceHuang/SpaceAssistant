@@ -12,9 +12,10 @@ import {
 } from '../remote/imConfirmReply'
 import { addTrustedCommand } from '../shell/shellCommandTrust'
 import type { AppDatabase } from '../database'
-import { ImChannel, type ImPendingConfirm } from '../confirmation/imChannel'
+import { ImChannel, type ImCommitResult, type ImPendingConfirm } from '../confirmation/imChannel'
 import { getSecurityAuditLog } from '../confirmation/audit'
 import { recordUserAnswerFromMemoryTiers } from '../confirmation/decisionCacheWriter'
+import { reserveConfirmationSubmission, commitConfirmationSubmissionWithWork, reconcileConfirmationSubmission, ConfirmationCommitRolledBackError, ConfirmationCommitUnknownError } from '../confirmation/persistentConfirmationCommit'
 import type { WeChatReplyBot } from './weChatReplyService'
 
 const DEFAULT_CONFIRM_TIMEOUT_MS = 5 * 60_000
@@ -24,6 +25,7 @@ export interface WeChatImChannelDeps {
   getWebContents?: () => WebContents | null
   getReplyBot?: () => WeChatReplyBot | undefined
   db?: AppDatabase
+  getGeneration?: (channel: 'feishu' | 'wechat') => number
 }
 
 /**
@@ -48,22 +50,23 @@ export class WeChatImChannel extends ImChannel {
           void deps.auditLogger?.append({
             type: 'confirm_request',
             confirmId: String(fields.confirmId ?? ''),
-            decision: String(fields.decision ?? '') as 'y' | 'n' | 'timeout'
+            decision: String(fields.decision ?? '') as 'y' | 'n' | 'timeout' | 'unavailable'
           })
           deps.getWebContents?.()?.send('wechat:pending-confirm', { count: channelRef.current?.countPending() ?? 0 })
         }
       },
       sendPrompt: (entry) => {
         const replyBot = deps.getReplyBot?.()
-        if (!replyBot) return
+        if (!replyBot) return Promise.reject(new Error('wechat-bot-unavailable'))
         const inbound = entry.context as IncomingMessage
-        if (!inbound) return
-        void replyBot.reply(inbound, buildWeChatConfirmPrompt(entry)).catch(() => undefined)
+        if (!inbound) return Promise.reject(new Error('wechat-inbound-context-missing'))
+        return replyBot.reply(inbound, buildWeChatConfirmPrompt(entry))
       },
       onTrust: (entry) => tryAddWeChatShellTrust(deps.db, entry),
+      ...(deps.db ? { onCommit: (entry: ImPendingConfirm, action: { kind: 'trust' | 'memory' | 'decision'; tier?: import('../../src/shared/confirmation/types').MemoryTier; approved: boolean }) => commitWeChatAction(deps.db, entry, action, deps.getGeneration) } : {}),
       // 记N：写 decision_cache（执行链路侧），落 cache.write 审计；无 db 时跳过
       onMemory: (entry, tier) => {
-        if (!deps.db) return
+        if (!deps.db) return false
         recordUserAnswerFromMemoryTiers({
           db: deps.db,
           audit: getSecurityAuditLog(),
@@ -74,12 +77,17 @@ export class WeChatImChannel extends ImChannel {
           answererKind: 'user',
           source: 'user-confirm'
         })
+        return true
       },
       onHint: (entry, kind) => {
         const replyBot = deps.getReplyBot?.()
         if (!replyBot) return
         const hint = kind === 'trust_misclick' ? IM_CONFIRM_TRUST_MISCLICK_HINT : IM_CONFIRM_USAGE_HINT
         void replyBot.reply(entry.context as IncomingMessage, hint).catch(() => undefined)
+      },
+      onCommitFailure: (entry) => {
+        const replyBot = deps.getReplyBot?.()
+        if (replyBot && entry.context) void replyBot.reply(entry.context as IncomingMessage, '确认提交失败，授权未生效，请重新发起操作。').catch(() => undefined)
       }
     })
     channelRef.current = this
@@ -101,16 +109,64 @@ export class WeChatImChannel extends ImChannel {
   }
 }
 
+export function commitWeChatAction(db: AppDatabase | undefined, entry: ImPendingConfirm, action: { kind: 'trust' | 'memory' | 'decision'; tier?: import('../../src/shared/confirmation/types').MemoryTier; approved: boolean }, getGeneration?: (channel: 'feishu' | 'wechat') => number): ImCommitResult {
+  if (!db) return false
+  // IM 授权必须绑定创建确认项时的代际；历史/损坏 pending 没有代际时一律拒绝，
+  // 不能用默认值把撤销前的旧消息重新变成可提交授权。
+  if (entry.authorizationGeneration == null || !getGeneration) return false
+  if (Date.now() >= entry.expiresAt) return false
+  if (entry.authorizationGeneration !== getGeneration('wechat')) return false
+  const revision = (entry.commitRevision ?? 0) + 1
+  const plan = { submissionId: `im:${entry.id}`, confirmId: entry.confirmId ?? entry.id, sessionId: entry.sessionId, ownerId: entry.matchKey ?? entry.sessionId, generation: entry.authorizationGeneration, revision, action: action.approved ? 'approved' as const : 'denied' as const, memory: action.kind === 'memory' ? 'written' as const : 'none' as const }
+  try {
+    // 先 reserve，再推进内存 revision；过期/撤销/校验失败不会制造 revision 空洞。
+    const reserved = reserveConfirmationSubmission(db, plan)
+    if (reserved?.kind === 'committed') {
+      entry.commitRevision = revision
+      return { committed: true }
+    }
+    if (reserved?.kind === 'unknown') {
+      entry.commitRevision = revision
+      return reconcileWeChatUnknown(db, plan.submissionId)
+    }
+    if (reserved?.kind === 'not-committed') return { committed: false, canResubmit: reserved.canResubmit }
+    entry.commitRevision = revision
+    const deferredAudits: import('../../src/shared/confirmation/types').SecurityAuditEvent[] = []
+    const receipt = commitConfirmationSubmissionWithWork(db, plan, () => {
+      if (Date.now() >= entry.expiresAt) throw new Error('confirmation-expired')
+      if (action.kind === 'decision') return
+      const ok = action.kind === 'trust'
+        ? tryAddWeChatShellTrust(db, entry)
+        : Boolean(action.tier && recordUserAnswerFromMemoryTiers({ db, audit: { record: (event) => deferredAudits.push(event) }, lane: 'wechat', sessionId: entry.sessionId, key: action.tier.key, memoryTiers: entry.memoryTiers, answererKind: 'user', source: 'user-confirm' }) === undefined)
+      if (!ok) throw new Error('confirmation-authority-write-failed')
+    }, `confirm:im:${entry.id}`, 1, () => { if (Date.now() >= entry.expiresAt) throw new Error('confirmation-expired') })
+    if (receipt.kind === 'committed') {
+      deferredAudits.forEach((event) => getSecurityAuditLog().record(event))
+      if (action.kind === 'trust') logWeChatCliEvent('info', 'wechat.trust.add', { confirmId: entry.id, commandPreview: String(entry.toolInput?.command ?? '').slice(0, 80) })
+    }
+    if (receipt.kind === 'committed') return { committed: true }
+    if (receipt.kind === 'unknown') return reconcileWeChatUnknown(db, plan.submissionId)
+    return { committed: false, canResubmit: receipt.canResubmit }
+  } catch (error) {
+    if (error instanceof ConfirmationCommitUnknownError) return reconcileWeChatUnknown(db, plan.submissionId)
+    if (error instanceof ConfirmationCommitRolledBackError) return { committed: false, canResubmit: Date.now() < entry.expiresAt }
+    return false
+  }
+}
+
+function reconcileWeChatUnknown(db: AppDatabase, submissionId: string): ImCommitResult {
+  const settled = reconcileConfirmationSubmission(db, submissionId)
+  if (settled?.outcome === 'committed') return { committed: true }
+  if (settled?.outcome === 'rolled_back') return { committed: false, canResubmit: true }
+  return { committed: false, unknown: true }
+}
+
 function tryAddWeChatShellTrust(db: AppDatabase | undefined, pending: ImPendingConfirm): boolean {
   if (pending.toolName !== 'run_shell' || !db) return false
   const command = typeof pending.toolInput?.command === 'string' ? pending.toolInput.command : ''
   if (!command.trim()) return false
   const added = addTrustedCommand(db, command, { source: 'im-wechat' })
   if (!added) return false
-  logWeChatCliEvent('info', 'wechat.trust.add', {
-    confirmId: pending.id,
-    commandPreview: command.slice(0, 80)
-  })
   return true
 }
 

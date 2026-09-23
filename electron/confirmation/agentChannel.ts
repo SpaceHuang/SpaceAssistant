@@ -11,6 +11,7 @@ import type {
 import { signalChatCancel } from '../chatCancelRegistry'
 import type { AuditSink } from './channels'
 import { renderCommandSequence } from './extractors/commandSequenceExtractor'
+import type { ApprovalAdmissionLike } from '../runtime/agentRuntime'
 
 /** 审批调用默认超时上界（方案 §12-2 取值 30s）；req.timeoutMs / policy.timeoutMs 可覆盖，必须有上界。 */
 export const DEFAULT_AGENT_APPROVAL_TIMEOUT_MS = 30_000
@@ -83,10 +84,8 @@ export function deriveClueExtras(facts: ConfirmRequest['facts']): Partial<Approv
  * - 审计 confirm.request / confirm.outcome 成对，actor='agent' + actorRef + latencyMs（审计五问）。
  */
 export class AgentChannel implements ConfirmationChannel {
-  /** 进行中调用的 chat 取消 id（cancel 时 signalChatCancel 中断内层）。 */
-  private inflightCancelId: string | null = null
-  /** 进行中调用的收敛出口（cancel 时以 fail-closed 收敛 request）。 */
-  private inflightSettle: ((r: ApprovalInvocationResult) => void) | null = null
+  /** 每次 attempt 独立持有取消/收敛出口；禁止并发 request 互相覆盖。 */
+  private readonly inflight = new Map<string, { settle: (r: ApprovalInvocationResult) => void; cancel: () => void }>()
 
   constructor(
     private readonly deps: {
@@ -101,6 +100,9 @@ export class AgentChannel implements ConfirmationChannel {
       invokeApproval: (inv: ApprovalInvocation) => Promise<ApprovalInvocationResult>
       /** B1(偏差 23):统一准入门(嵌套:审批回答者继承等待方 interactive 优先级 + 保留位)。 */
       admissionGate?: import('../runtime/callAdmissionGate').CallAdmissionGate
+      /** 新审批资源域；存在时不占用任务启动准入计数。 */
+      approvalAdmission?: ApprovalAdmissionLike
+      deadlineAt?: number
     }
   ) {}
 
@@ -108,7 +110,8 @@ export class AgentChannel implements ConfirmationChannel {
     const profileId = this.deps.policy.approvalProfileId ?? 'approval-default'
     invocationSeq += 1
     const invocationId = `approval-${Date.now()}-${invocationSeq}`
-    const innerRequestId = `${this.deps.requestId}:approval`
+    // 每次 attempt 使用唯一内层 ID，避免同一 AgentChannel 的并发/迟到取消互相串扰。
+    const innerRequestId = `${this.deps.requestId}:approval:${invocationId}`
 
     // ===== I5 兜底：确认请求来自进行中的审批内部会话（豁免失效）→ 立即 fail-closed =====
     if (activeApprovalSessions.has(this.deps.sessionId)) {
@@ -142,6 +145,14 @@ export class AgentChannel implements ConfirmationChannel {
       ...deriveClueExtras(req.facts),
       ...(this.deps.taskDigest ? { taskDigest: this.deps.taskDigest } : {})
     }
+    const parentRemainingMs = this.deps.deadlineAt === undefined ? Number.POSITIVE_INFINITY : Math.max(0, this.deps.deadlineAt - Date.now())
+    const effectiveTimeoutMs = Math.min(req.timeoutMs ?? this.deps.policy.timeoutMs ?? DEFAULT_AGENT_APPROVAL_TIMEOUT_MS, parentRemainingMs)
+    if (effectiveTimeoutMs <= 0) return {
+      kind: 'rejected',
+      answererKind: 'agent',
+      cause: 'timeout',
+      reason: { summary: '审批已超过父任务截止时间。' }
+    }
     const invocation: ApprovalInvocation = {
       clue,
       lane: this.deps.lane,
@@ -150,7 +161,8 @@ export class AgentChannel implements ConfirmationChannel {
       invocationId,
       profileId,
       // P1-4 通道打通：req.timeoutMs 优先（决策层/回答者配置下发），缺省 30s 上界
-      timeoutMs: req.timeoutMs ?? this.deps.policy.timeoutMs ?? DEFAULT_AGENT_APPROVAL_TIMEOUT_MS
+      timeoutMs: effectiveTimeoutMs,
+      ...(this.deps.deadlineAt !== undefined ? { deadlineAt: this.deps.deadlineAt } : {})
     }
 
     this.deps.audit?.record({
@@ -167,7 +179,6 @@ export class AgentChannel implements ConfirmationChannel {
     })
 
     const startedAt = Date.now()
-    this.inflightCancelId = innerRequestId
     let result: ApprovalInvocationResult
     try {
       // 有界性（I4）：invokeApproval 竞速超时上界——内层实现自身另有超时，这里是通道级兜底
@@ -176,11 +187,12 @@ export class AgentChannel implements ConfirmationChannel {
         // 嵌套准入票据(若已取得):随 finish 统一释放——settled 守卫保证恰好一次,
         // 取消路径(inflightSettle → finish)与超时路径不再依赖内层 invokeApproval 的后续 settle
         let admissionTicket: import('../runtime/callAdmissionGate').AdmissionTicket | null = null
+        let approvalRelease: (() => void) | null = null
+        const cancelApprovalQueue = () => { this.deps.approvalAdmission?.cancel(innerRequestId) }
         const timer = setTimeout(() => {
           if (settled) return
-          settled = true
           signalChatCancel(innerRequestId)
-          resolve({ ok: false, cause: 'timeout' })
+          finish({ ok: false, cause: 'timeout' })
         }, invocation.timeoutMs)
         const finish = (r: ApprovalInvocationResult) => {
           if (settled) return
@@ -188,13 +200,36 @@ export class AgentChannel implements ConfirmationChannel {
           clearTimeout(timer)
           admissionTicket?.release()
           admissionTicket = null
+          approvalRelease?.()
+          approvalRelease = null
+          cancelApprovalQueue()
           resolve(r)
         }
         // B1(偏差 23):嵌套准入——保留位防自锁(等待方持票,回答者凭 reserved 位准入);
         // lane 继承等待方(this.deps.lane,P1-3:硬编码 automation 会让所有 lane 的嵌套审批
         // 与管家任务抢 30/小时配额且保留位检错 lane);票据覆盖内层回合全程,
         // 拿不到准入位 = 「拿不到裁决」(cause=unavailable),与裁决为否(agent-deny)分立
-        if (this.deps.admissionGate) {
+        if (this.deps.approvalAdmission) {
+          this.deps.approvalAdmission.acquire({
+            requestId: innerRequestId,
+            parentTaskId: this.deps.requestId,
+            deadlineAt: startedAt + invocation.timeoutMs
+          }).then((admission) => {
+            if (admission.kind !== 'granted') {
+              finish({ ok: false, cause: 'unavailable' })
+              return
+            }
+            if (settled) {
+              admission.release()
+              return
+            }
+            approvalRelease = admission.release
+            this.deps.invokeApproval(invocation).then(
+              (r) => finish(r),
+              () => finish({ ok: false, cause: 'unavailable' })
+            )
+          }, () => finish({ ok: false, cause: 'unavailable' }))
+        } else if (this.deps.admissionGate) {
           this.deps.admissionGate
             .acquire({
               lane: this.deps.lane,
@@ -209,6 +244,11 @@ export class AgentChannel implements ConfirmationChannel {
                   finish({ ok: false, cause: 'unavailable' })
                   return
                 }
+                // 超时/取消可能已先行结算；迟到票据必须立即归还，不能启动已结束的审批。
+                if (settled) {
+                  admission.ticket.release()
+                  return
+                }
                 admissionTicket = admission.ticket
                 this.deps
                   .invokeApproval(invocation)
@@ -221,11 +261,10 @@ export class AgentChannel implements ConfirmationChannel {
             .invokeApproval(invocation)
             .then((r) => finish(r), () => finish({ ok: false, cause: 'unavailable' }))
         }
-        this.inflightSettle = (r) => finish(r)
+        this.inflight.set(innerRequestId, { settle: finish, cancel: cancelApprovalQueue })
       })
     } finally {
-      this.inflightCancelId = null
-      this.inflightSettle = null
+      this.inflight.delete(innerRequestId)
     }
     const latencyMs = Date.now() - startedAt
 
@@ -271,8 +310,11 @@ export class AgentChannel implements ConfirmationChannel {
   }
 
   cancel(_requestId: string): void {
-    // 中断内层审批调用（复用 Core 取消机制）并以 fail-closed 收敛本次确认
-    if (this.inflightCancelId) signalChatCancel(this.inflightCancelId)
-    this.inflightSettle?.({ ok: false, cause: 'unavailable', summary: '安全审批已被取消，已按拒绝处理。' })
+    // 中断该 AgentChannel 的所有活动 attempt；每个 attempt 都有自己的 requestId。
+    for (const [innerRequestId, entry] of this.inflight) {
+      signalChatCancel(innerRequestId)
+      entry.cancel()
+      entry.settle({ ok: false, cause: 'unavailable', summary: '安全审批已被取消，已按拒绝处理。' })
+    }
   }
 }

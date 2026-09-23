@@ -7,6 +7,7 @@ import {
   applyRelease,
   emptyAdmissionState,
   judgeAdmission,
+  judgeResumeAdmission,
   rollAdmissionWindow,
   type AdmissionPolicy,
   type AdmissionRequest,
@@ -20,6 +21,7 @@ import {
   saveAdmissionState
 } from '../storage/callAdmissionStore'
 import * as agentLoggerModule from '../agentLogger/agentLogger'
+import * as admissionStoreModule from '../storage/callAdmissionStore'
 
 /** mulberry32(AGENTS.md 不变量测试纪律:确定性伪随机)。 */
 function mulberry32(seed: number): () => number {
@@ -112,6 +114,21 @@ describe('judgeAdmission 判定纯函数(偏差 23 逐场景)', () => {
     expect(rolled.windowStarts).toBe(0)
     expect(rolled.windowStart).toBe(3_600_000)
     expect(state.windowStarts).toBe(9)
+  })
+})
+
+describe('CallAdmissionGate 普通队列取消', () => {
+  it('取消信号触发后移除普通 waiter，释放槽位不得启动已取消请求', async () => {
+    const gate = new CallAdmissionGate({ policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1, queueLimit: 4 } })
+    const first = await gate.acquire(req({ requestId: 'first' }))
+    expect(first.ok).toBe(true)
+    const controller = new AbortController()
+    const queued = gate.acquire(req({ requestId: 'cancelled' }), { signal: controller.signal })
+    controller.abort()
+    await expect(queued).resolves.toMatchObject({ ok: false, cause: 'cancelled' })
+    expect(gate.queuedCount).toBe(0)
+    first.ok && first.ticket.release()
+    expect(gate.snapshotState().activeInteractive).toBe(0)
   })
 })
 
@@ -246,6 +263,406 @@ describe('CallAdmissionGate 排队唤醒与审计(0b 语义)', () => {
       expect(String(call[1])).not.toContain('agent-deny')
     }
     first.ok && first.ticket.release()
+  })
+})
+
+describe('CallAdmissionGate 持久化失败收敛', () => {
+  it('释放持久化失败时恢复内存状态，重试成功后才释放票据', async () => {
+    const db = openSqliteDatabase(':memory:')
+    const gate = new CallAdmissionGate({ db, policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
+    const first = await gate.acquire(req({ requestId: 'release-persist-first' }))
+    expect(first.ok).toBe(true)
+    if (!first.ok) return db.close()
+
+    const persist = vi.spyOn(admissionStoreModule, 'saveAdmissionState').mockImplementation(() => { throw new Error('db-full') })
+    expect(first.ticket.release()).toBe(false)
+    expect(gate.snapshotState().activeInteractive).toBe(1)
+    expect(loadAdmissionState(db, Date.now()).activeInteractive).toBe(1)
+    const reloadedWhileDirty = new CallAdmissionGate({ db, policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
+    await expect(reloadedWhileDirty.acquire(req({ requestId: 'release-persist-reload-blocked', disposition: 'reject' })))
+      .resolves.toMatchObject({ ok: false, verdict: 'rejected', cause: 'concurrency-cap' })
+
+    persist.mockRestore()
+    await vi.waitFor(() => expect(loadAdmissionState(db, Date.now()).activeInteractive).toBe(0), { timeout: 1_000 })
+    expect(gate.snapshotState().activeInteractive).toBe(0)
+    const reloadedAfterCommit = new CallAdmissionGate({ db, policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
+    const admittedAfterCommit = await reloadedAfterCommit.acquire(req({ requestId: 'release-persist-reload-open', disposition: 'reject' }))
+    expect(admittedAfterCommit.ok).toBe(true)
+    if (admittedAfterCommit.ok) admittedAfterCommit.ticket.release()
+    db.close()
+  })
+
+  it('普通排队持久化失败不会留下幽灵 waiter 或 queued 计数', async () => {
+    const db = openSqliteDatabase(':memory:')
+    const firstGate = new CallAdmissionGate({ db, policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
+    const first = await firstGate.acquire(req({ requestId: 'persist-first' }))
+    expect(first.ok).toBe(true)
+    const persist = vi.spyOn(admissionStoreModule, 'saveAdmissionState').mockImplementation(() => { throw new Error('db-full') })
+    const queued = await firstGate.acquire(req({ requestId: 'persist-queued' }))
+    expect(queued).toEqual({ ok: false, verdict: 'rejected', cause: 'persistence-failed' })
+    expect(firstGate.queuedCount).toBe(0)
+    expect(firstGate.snapshotState().queued).toBe(0)
+    persist.mockRestore()
+    db.close()
+  })
+
+  it('恢复持久化首次失败会保留 parked handle，第二次成功后无悬挂句柄', async () => {
+    const db = openSqliteDatabase(':memory:')
+    const gate = new CallAdmissionGate({ db, policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
+    const first = await gate.acquire(req({ requestId: 'persist-parked' }))
+    expect(first.ok).toBe(true)
+    if (!first.ok) return db.close()
+    const parked = gate.park(first.ticket)
+    expect(parked).toBeDefined()
+    const blocker = await gate.acquire(req({ requestId: 'persist-blocker' }))
+    expect(blocker.ok).toBe(true)
+    blocker.ok && blocker.ticket.release()
+    const persist = vi.spyOn(admissionStoreModule, 'saveAdmissionState').mockImplementation(() => { throw new Error('db-full') })
+    const resumed = await gate.resume(parked!)
+    expect(resumed).toEqual({ ok: false, verdict: 'rejected', cause: 'persistence-failed', retryable: true })
+    expect(gate.queuedCount).toBe(0)
+    persist.mockRestore()
+    const resumedAgain = await gate.resume(parked!)
+    expect(resumedAgain).toMatchObject({ ok: true })
+    if (resumedAgain.ok) resumedAgain.ticket.release()
+    db.close()
+  })
+
+  it('显式 cancel 终结普通 waiter 时移除 AbortSignal listener', async () => {
+    const gate = new CallAdmissionGate({ policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
+    const first = await gate.acquire(req({ requestId: 'listener-first' }))
+    expect(first.ok).toBe(true)
+    const controller = new AbortController()
+    const remove = vi.spyOn(controller.signal, 'removeEventListener')
+    const pending = gate.acquire(req({ requestId: 'listener-queued' }), { signal: controller.signal })
+    await Promise.resolve()
+    expect(gate.cancel('listener-queued')).toBe(true)
+    await expect(pending).resolves.toMatchObject({ ok: false, cause: 'cancelled' })
+    expect(remove).toHaveBeenCalled()
+    first.ok && first.ticket.release()
+  })
+
+  it('恢复 waiter 成功唤醒时移除 AbortSignal listener', async () => {
+    const gate = new CallAdmissionGate({ policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
+    const first = await gate.acquire(req({ requestId: 'resume-listener-first' }))
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    const parked = gate.park(first.ticket)!
+    const blocker = await gate.acquire(req({ requestId: 'resume-listener-blocker' }))
+    expect(blocker.ok).toBe(true)
+    if (!blocker.ok) return
+    const controller = new AbortController()
+    const remove = vi.spyOn(controller.signal, 'removeEventListener')
+    const pending = gate.resume(parked, { signal: controller.signal })
+    blocker.ticket.release()
+    await expect(pending).resolves.toMatchObject({ ok: true })
+    expect(remove).toHaveBeenCalled()
+  })
+
+  it('恢复 waiter 超时终结时移除 AbortSignal listener', async () => {
+    vi.useFakeTimers()
+    try {
+      const gate = new CallAdmissionGate({
+        resumeTimeoutMs: 50,
+        policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 }
+      })
+      const first = await gate.acquire(req({ requestId: 'resume-timeout-listener-first' }))
+      expect(first.ok).toBe(true)
+      if (!first.ok) return
+      const parked = gate.park(first.ticket)!
+      const blocker = await gate.acquire(req({ requestId: 'resume-timeout-listener-blocker' }))
+      expect(blocker.ok).toBe(true)
+      if (!blocker.ok) return
+      const controller = new AbortController()
+      const remove = vi.spyOn(controller.signal, 'removeEventListener')
+      const pending = gate.resume(parked, { signal: controller.signal })
+      await vi.advanceTimersByTimeAsync(51)
+      await expect(pending).resolves.toMatchObject({ ok: false, cause: 'resume-timeout' })
+      expect(remove).toHaveBeenCalled()
+      blocker.ticket.release()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('普通 waiter 取消时持久化失败也必须结算，不得永久挂起', async () => {
+    const gate = new CallAdmissionGate({ policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
+    const first = await gate.acquire(req({ requestId: 'cancel-persist-first' }))
+    expect(first.ok).toBe(true)
+    const pending = gate.acquire(req({ requestId: 'cancel-persist-queued' }))
+    await Promise.resolve()
+    const persist = vi.spyOn(admissionStoreModule, 'saveAdmissionState').mockImplementation(() => { throw new Error('db-full') })
+
+    const controller = new AbortController()
+    const queued = gate.acquire(req({ requestId: 'cancel-persist-abort' }), { signal: controller.signal })
+    controller.abort()
+
+    await expect(queued).resolves.toEqual({ ok: false, verdict: 'rejected', cause: 'cancelled' })
+    gate.cancel('cancel-persist-queued')
+    await expect(pending).resolves.toEqual({ ok: false, verdict: 'rejected', cause: 'cancelled' })
+    persist.mockRestore()
+    if (first.ok) first.ticket.release()
+  })
+
+  it('恢复 waiter 取消或超时时持久化失败也必须结算', async () => {
+    const gate = new CallAdmissionGate({
+      policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 },
+      resumeTimeoutMs: 10
+    })
+    const first = await gate.acquire(req({ requestId: 'resume-persist-first' }))
+    expect(first.ok).toBe(true)
+    const parked = first.ok ? gate.park(first.ticket) : undefined
+    expect(parked).toBeDefined()
+    const blocker = await gate.acquire(req({ requestId: 'resume-persist-blocker' }))
+    expect(blocker.ok).toBe(true)
+    const persist = vi.spyOn(admissionStoreModule, 'saveAdmissionState').mockImplementation(() => { throw new Error('db-full') })
+
+    const controller = new AbortController()
+    const cancelled = gate.resume(parked!, { signal: controller.signal })
+    await Promise.resolve()
+    controller.abort()
+    await expect(cancelled).resolves.toEqual({ ok: false, verdict: 'rejected', cause: 'cancelled', retryable: false })
+
+    persist.mockRestore()
+    if (blocker.ok) blocker.ticket.release()
+    const second = await gate.acquire(req({ requestId: 'resume-persist-second' }))
+    const secondParked = second.ok ? gate.park(second.ticket) : undefined
+    expect(secondParked).toBeDefined()
+    const secondBlocker = await gate.acquire(req({ requestId: 'resume-persist-second-blocker' }))
+    expect(secondBlocker.ok).toBe(true)
+    const timeoutPersist = vi.spyOn(admissionStoreModule, 'saveAdmissionState').mockImplementation(() => { throw new Error('db-full') })
+    const timedOut = gate.resume(secondParked!)
+    await expect(timedOut).resolves.toEqual({ ok: false, verdict: 'rejected', cause: 'resume-timeout', retryable: false })
+    timeoutPersist.mockRestore()
+    if (secondBlocker.ok) secondBlocker.ticket.release()
+  })
+
+  it('唤醒阶段持久化失败不抛出且不留下幽灵 waiter', async () => {
+    const db = openSqliteDatabase(':memory:')
+    const gate = new CallAdmissionGate({ db, policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
+    const first = await gate.acquire(req({ requestId: 'wake-persist-first' }))
+    expect(first.ok).toBe(true)
+    const queued = gate.acquire(req({ requestId: 'wake-persist-queued' }))
+    await Promise.resolve()
+    let persistCalls = 0
+    const persist = vi.spyOn(admissionStoreModule, 'saveAdmissionState').mockImplementation(() => {
+      persistCalls += 1
+      if (persistCalls >= 2) throw new Error('db-full')
+    })
+    expect(() => { if (first.ok) expect(first.ticket.release()).toBe(true) }).not.toThrow()
+    await expect(queued).resolves.toEqual({ ok: false, verdict: 'rejected', cause: 'persistence-failed' })
+    expect(gate.queuedCount).toBe(0)
+    persist.mockRestore()
+    db.close()
+  })
+})
+
+describe('CallAdmissionGate park/resume（D2）', () => {
+  it('恢复任务与普通任务共享有界队列容量并保持 queued 计数一致', async () => {
+    const policy = { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 2, queueLimit: 1 }
+    const gate = new CallAdmissionGate({ policy })
+    const a = await gate.acquire(req({ requestId: 'park-a' }))
+    const b = await gate.acquire(req({ requestId: 'park-b' }))
+    expect(a.ok && b.ok).toBe(true)
+    if (!a.ok || !b.ok) return
+    const parkedA = gate.park(a.ticket)!
+    const parkedB = gate.park(b.ticket)!
+    const blockerA = await gate.acquire(req({ requestId: 'blocker-a' }))
+    const blockerB = await gate.acquire(req({ requestId: 'blocker-b' }))
+    expect(blockerA.ok && blockerB.ok).toBe(true)
+    const firstResume = gate.resume(parkedA)
+    await Promise.resolve()
+    expect(gate.snapshotState().queued).toBe(1)
+    await expect(gate.resume(parkedB)).resolves.toEqual({ ok: false, verdict: 'rejected', cause: 'queue-full', retryable: false })
+    expect(gate.queuedCount).toBe(1)
+    if (blockerA.ok) blockerA.ticket.release()
+    const restored = await firstResume
+    expect(restored.ok).toBe(true)
+    if (blockerB.ok) blockerB.ticket.release()
+    if (restored.ok) restored.ticket.release()
+  })
+
+  it('让出运行槽后恢复不增加 hourly start 计数', async () => {
+    const gate = new CallAdmissionGate({ policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
+    const admitted = await gate.acquire(req({ requestId: 'parked' }))
+    expect(admitted.ok).toBe(true)
+    if (!admitted.ok) return
+    const parked = gate.park(admitted.ticket)
+    expect(parked).toBeDefined()
+    expect(gate.snapshotState().activeInteractive).toBe(0)
+    const resumed = await gate.resume(parked!)
+    expect(resumed.ok).toBe(true)
+    expect(gate.snapshotState().windowStarts).toBe(1)
+    if (resumed.ok) resumed.ticket.release()
+  })
+
+  it('hourly quota exhausted but slot free: accepted task can resume without incrementing starts', async () => {
+    const policy = { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalHourlyStarts: 1, laneHourlyStarts: { ...DEFAULT_ADMISSION_POLICY.laneHourlyStarts, desktop: 1 } }
+    const initial = { ...emptyAdmissionState(0), windowStarts: 1, laneWindowStarts: { ...emptyAdmissionState(0).laneWindowStarts, desktop: 1 } }
+    const request = req({ requestId: 'already-accepted', lane: 'desktop', disposition: 'reject' })
+    expect(judgeAdmission(request, initial, policy, 0).verdict).toBe('reject')
+    expect(judgeResumeAdmission(request, initial, policy)).toEqual({ verdict: 'admit' })
+    const gate = new CallAdmissionGate({ policy, initialState: { ...initial, windowStarts: 0, laneWindowStarts: { ...initial.laneWindowStarts, desktop: 0 } } })
+    const admitted = await gate.acquire(request)
+    expect(admitted.ok).toBe(true)
+    if (!admitted.ok) return
+    const parked = gate.park(admitted.ticket)
+    expect(parked).toBeDefined()
+    const liveState = gate.snapshotState()
+    liveState.windowStarts = 1
+    liveState.laneWindowStarts.desktop = 1
+    const resumed = await gate.resume(parked!)
+    expect(resumed.ok).toBe(true)
+    expect(gate.snapshotState().windowStarts).toBe(1)
+  })
+
+  it('parked task waits behind a newly admitted task, then resumes before new waiters', async () => {
+    const gate = new CallAdmissionGate({ policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
+    const first = await gate.acquire(req({ requestId: 'parked-first' }))
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    const parked = gate.park(first.ticket)
+    expect(parked).toBeDefined()
+    const secondPending = gate.acquire(req({ requestId: 'new-second', disposition: 'queue' }))
+    const second = await secondPending
+    expect(second.ok).toBe(true)
+    if (!second.ok) return
+    const resumedPending = gate.resume(parked!)
+    let resumed = false
+    void resumedPending.then(() => { resumed = true })
+    await Promise.resolve()
+    expect(resumed).toBe(false)
+    second.ticket.release()
+    const restored = await resumedPending
+    expect(restored.ok).toBe(true)
+    expect(gate.snapshotState().windowStarts).toBe(2)
+    if (restored.ok) restored.ticket.release()
+  })
+})
+
+describe('v5 恢复生命周期', () => {
+  it('恢复等待超过 deadline 会失效 parked handle 且不永久挂起', async () => {
+    const gate = new CallAdmissionGate({
+      resumeTimeoutMs: 5,
+      policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 }
+    })
+    const first = await gate.acquire(req({ requestId: 'timeout-source' }))
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    const parked = gate.park(first.ticket)!
+    const blocker = await gate.acquire(req({ requestId: 'timeout-blocker' }))
+    expect(blocker.ok).toBe(true)
+    if (!blocker.ok) return
+    await expect(gate.resume(parked)).resolves.toEqual({ ok: false, verdict: 'rejected', cause: 'resume-timeout', retryable: false })
+    expect(gate.queuedCount).toBe(0)
+    blocker.ticket.release()
+    await expect(gate.resume(parked)).resolves.toMatchObject({ ok: false, cause: 'stale-park-handle' })
+  })
+
+  it('恢复前取消信号已触发时立即收敛且不残留句柄', async () => {
+    const gate = new CallAdmissionGate({ policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
+    const admitted = await gate.acquire(req({ requestId: 'accepted' }))
+    expect(admitted.ok).toBe(true)
+    if (!admitted.ok) return
+    const parked = gate.park(admitted.ticket)!
+    const controller = new AbortController()
+    controller.abort()
+    await expect(gate.resume(parked, { signal: controller.signal })).resolves.toEqual({ ok: false, verdict: 'rejected', cause: 'cancelled', retryable: false })
+    await expect(gate.resume(parked)).resolves.toEqual({ ok: false, verdict: 'rejected', cause: 'stale-park-handle', retryable: false })
+  })
+  it('取消恢复等待会移除等待项并使句柄失效', async () => {
+    const gate = new CallAdmissionGate({ policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
+    const first = await gate.acquire(req({ requestId: 'running' }))
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    const parked = gate.park(first.ticket)!
+    const blocker = await gate.acquire(req({ requestId: 'blocker' }))
+    expect(blocker.ok).toBe(true)
+    if (!blocker.ok) return
+    const controller = new AbortController()
+    const pending = gate.resume(parked, { signal: controller.signal })
+    controller.abort()
+    await expect(pending).resolves.toEqual({ ok: false, verdict: 'rejected', cause: 'cancelled', retryable: false })
+    expect(gate.queuedCount).toBe(0)
+    blocker.ticket.release()
+    await expect(gate.resume(parked)).resolves.toEqual({ ok: false, verdict: 'rejected', cause: 'stale-park-handle', retryable: false })
+  })
+
+  it('恢复队首 lane 受阻时仍唤醒其他 lane 的可用恢复任务', async () => {
+    const policy = { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 2, laneMaxConcurrent: { ...DEFAULT_ADMISSION_POLICY.laneMaxConcurrent, desktop: 1, automation: 1 } }
+    const gate = new CallAdmissionGate({ policy })
+    const a = await gate.acquire(req({ requestId: 'a', lane: 'desktop' }))
+    const b = await gate.acquire(req({ requestId: 'b', lane: 'automation' }))
+    expect(a.ok && b.ok).toBe(true)
+    if (!a.ok || !b.ok) return
+    const parkedA = gate.park(a.ticket)!
+    const parkedB = gate.park(b.ticket)!
+    const a2 = await gate.acquire(req({ requestId: 'a2', lane: 'desktop' }))
+    expect(a2.ok).toBe(true)
+    if (!a2.ok) return
+    const resumeA = gate.resume(parkedA)
+    const resumeB = gate.resume(parkedB)
+    b.ticket.release()
+    await expect(resumeB).resolves.toMatchObject({ ok: true })
+    expect(gate.queuedCount).toBe(1)
+    a2.ticket.release()
+    await expect(resumeA).resolves.toMatchObject({ ok: true })
+  })
+
+  it('恢复 lane 受阻时，其他 lane 的普通排队任务仍可使用空闲容量', async () => {
+    const policy = { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 2, laneMaxConcurrent: { ...DEFAULT_ADMISSION_POLICY.laneMaxConcurrent, desktop: 1, automation: 1 } }
+    const gate = new CallAdmissionGate({ policy })
+    const a = await gate.acquire(req({ requestId: 'a', lane: 'desktop' }))
+    const b = await gate.acquire(req({ requestId: 'b', lane: 'automation' }))
+    expect(a.ok && b.ok).toBe(true)
+    if (!a.ok || !b.ok) return
+    const parkedA = gate.park(a.ticket)!
+    const a2 = await gate.acquire(req({ requestId: 'a2', lane: 'desktop' }))
+    expect(a2.ok).toBe(true)
+    if (!a2.ok) return
+    const resumeA = gate.resume(parkedA)
+    const b2Pending = gate.acquire(req({ requestId: 'b2', lane: 'automation', disposition: 'queue' }))
+    b.ticket.release()
+    const b2 = await b2Pending
+    expect(b2.ok).toBe(true)
+    if (b2.ok) b2.ticket.release()
+    a2.ticket.release()
+    await expect(resumeA).resolves.toMatchObject({ ok: true })
+  })
+
+  it('普通队列队首 lane 受阻时扫描后续 lane', async () => {
+    const policy = { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 2, laneMaxConcurrent: { ...DEFAULT_ADMISSION_POLICY.laneMaxConcurrent, desktop: 1, automation: 1 } }
+    const gate = new CallAdmissionGate({ policy })
+    const a = await gate.acquire(req({ requestId: 'a', lane: 'desktop' }))
+    const b = await gate.acquire(req({ requestId: 'b', lane: 'automation' }))
+    if (!a.ok || !b.ok) return
+    const a2 = gate.acquire(req({ requestId: 'a2', lane: 'desktop', disposition: 'queue' }))
+    const b2 = gate.acquire(req({ requestId: 'b2', lane: 'automation', disposition: 'queue' }))
+    b.ticket.release()
+    const admittedB = await b2
+    expect(admittedB.ok).toBe(true)
+    a.ticket.release()
+    if ((await a2).ok && admittedB.ok) admittedB.ticket.release()
+  })
+
+  it('小时配额窗口到期会唤醒排队请求', async () => {
+    vi.useFakeTimers()
+    try {
+    let now = 0
+    const policy = { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1, globalHourlyStarts: 1 }
+    const gate = new CallAdmissionGate({ policy, now: () => now })
+    const first = await gate.acquire(req({ requestId: 'first' }))
+    if (!first.ok) return
+    const pending = gate.acquire(req({ requestId: 'later', disposition: 'queue' }))
+    first.ticket.release()
+    now = 3_600_001
+    await vi.advanceTimersByTimeAsync(3_600_001)
+    const later = await pending
+    expect(later.ok).toBe(true)
+    if (later.ok) later.ticket.release()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

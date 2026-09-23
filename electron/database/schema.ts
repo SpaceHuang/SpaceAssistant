@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 17
+export const DB_SCHEMA_VERSION = 18
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (
@@ -70,6 +70,50 @@ CREATE INDEX IF NOT EXISTS idx_messages_content ON messages(content);
 CREATE INDEX IF NOT EXISTS idx_sessions_work_dir_profile ON sessions(work_dir_profile_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS confirmation_submissions (
+  submission_id TEXT PRIMARY KEY NOT NULL,
+  confirm_id TEXT NOT NULL,
+  session_id TEXT NOT NULL DEFAULT '',
+  owner_id TEXT NOT NULL,
+  expected_revision INTEGER NOT NULL,
+  generation INTEGER NOT NULL DEFAULT 1,
+  revision INTEGER NOT NULL DEFAULT 1,
+  action TEXT NOT NULL,
+  memory TEXT NOT NULL,
+  status TEXT NOT NULL,
+  event_id TEXT,
+  history_version INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS confirmation_commit_audits (
+  submission_id TEXT PRIMARY KEY NOT NULL REFERENCES confirmation_submissions(submission_id) ON DELETE CASCADE,
+  confirm_id TEXT NOT NULL,
+  session_id TEXT NOT NULL DEFAULT '',
+  owner_id TEXT NOT NULL,
+  generation INTEGER NOT NULL DEFAULT 1,
+  revision INTEGER NOT NULL DEFAULT 1,
+  action TEXT NOT NULL,
+  memory TEXT NOT NULL,
+  committed_at INTEGER NOT NULL
+);
+
+`
+
+/** v17 → v18：确认提交 receipt 绑定可信 session / generation / revision。 */
+export const MIGRATION_V18_CONFIRMATION_COMMIT_IDENTITY_SQL = `
+ALTER TABLE confirmation_submissions ADD COLUMN session_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE confirmation_submissions ADD COLUMN generation INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE confirmation_submissions ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE confirmation_commit_audits ADD COLUMN session_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE confirmation_commit_audits ADD COLUMN generation INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE confirmation_commit_audits ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
+UPDATE confirmation_submissions SET session_id = owner_id WHERE session_id = '';
+UPDATE confirmation_submissions SET revision = expected_revision WHERE revision = 1 AND expected_revision <> 1;
+UPDATE confirmation_commit_audits SET session_id = (SELECT session_id FROM confirmation_submissions WHERE confirmation_submissions.submission_id = confirmation_commit_audits.submission_id) WHERE session_id = '';
+UPDATE confirmation_commit_audits SET generation = (SELECT generation FROM confirmation_submissions WHERE confirmation_submissions.submission_id = confirmation_commit_audits.submission_id);
+UPDATE confirmation_commit_audits SET revision = (SELECT revision FROM confirmation_submissions WHERE confirmation_submissions.submission_id = confirmation_commit_audits.submission_id);
 `
 
 /**

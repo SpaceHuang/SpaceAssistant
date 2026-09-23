@@ -45,6 +45,8 @@ vi.mock('./sessionTitleSuggest', () => ({
 vi.mock('./toolConfirmRegistry', () => ({
   registerToolCancel: vi.fn(() => ({ aborted: false, addEventListener: vi.fn() })),
   clearToolCancel: vi.fn(),
+  cancelAllToolConfirmsForRequest: vi.fn(),
+  prepareToolConfirm: vi.fn(),
   waitForToolConfirm: vi.fn(async () => 'approved' as const)
 }))
 

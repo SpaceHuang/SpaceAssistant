@@ -5,6 +5,15 @@ const context = { requestId: 'r1', toolUseId: 'u1' }
 const execution = { ...context, signal: new AbortController().signal }
 
 describe('plannedToolRegistry', () => {
+  it('actionClass 从 direct/planned/legacy 定义传播到 RegisteredTool', () => {
+    const direct = defineDirectTool({ name: 'write-direct', actionClass: 'write', parseInput: (raw) => raw, execute: async () => 'ok' })
+    const planned = definePlannedTool({ name: 'execute-planned', actionClass: 'execute', parseInput: (raw) => raw, plan: async () => ({}), execute: async () => 'ok' })
+    const registry = new TypedToolRegistry()
+    registry.registerLegacyExecutor({ name: 'outbound-legacy', actionClass: 'outbound', execute: async () => ({ success: true }) })
+    expect(direct.actionClass).toBe('write')
+    expect(planned.actionClass).toBe('execute')
+    expect(registry.get('outbound-legacy')?.actionClass).toBe('outbound')
+  })
   it('TypedToolRegistry 只注册判别式 RegisteredTool 并拒绝重复名称', () => {
     const registry = new TypedToolRegistry()
     const direct = defineDirectTool({ name: 'direct-registry', parseInput: (raw) => raw, execute: async () => 'ok' })

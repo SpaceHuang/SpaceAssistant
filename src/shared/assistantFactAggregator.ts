@@ -57,6 +57,11 @@ type AssistantFactEventPayload =
       /** H1：agent 裁决路径（AgentChannel）——渲染端据此出只读「自动审批中」卡，无交互按钮 */
       autoAnswerer?: true
     }
+  | {
+      type: 'approval-updated'
+      id: string
+      approval: import('../../packages/agent-core/src/approval').ApprovalRecord
+    }
   | { type: 'tool-confirmed'; id: string; approved: boolean; reason?: string }
   | { type: 'tool-result'; id: string; result: NonNullable<ToolCallRecord['result']> }
   | { type: 'usage-updated'; usage: unknown; projected?: boolean }
@@ -138,7 +143,21 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
           ...(event.mcp ? { mcp: event.mcp } : {}),
           ...(event.autoAnswerer ? { autoAnswerer: true as const } : {})
         }
-      : tool)
+          : tool)
+  } else if (event.type === 'approval-updated') {
+    const notExecutedReason = approvalNotExecutedReason(event.approval.status, event.approval.cause)
+    next.toolCalls = next.toolCalls?.map((tool) => tool.id !== event.id ? tool : {
+      ...tool,
+      approval: event.approval,
+      ...(event.approval.status === 'approved' ? { status: 'executing', confirmedAt: deps.now } : {}),
+      ...(event.approval.status === 'denied' || event.approval.status === 'unavailable' || event.approval.status === 'timed-out' || event.approval.status === 'cancelled'
+        ? {
+            status: 'rejected', completedAt: deps.now,
+            result: { success: false, notExecuted: true, notExecutedReason },
+            ...(event.approval.reason?.summary ? { rejectionReason: event.approval.reason.summary } : {})
+          }
+        : {})
+    })
   } else if (event.type === 'tool-confirmed') {
     next.toolCalls = next.toolCalls?.map((tool) => tool.id === event.id && tool.status === 'confirming'
       ? event.approved
@@ -154,6 +173,20 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
     next.status = event.type === 'source-completed' ? 'completed' : 'failed'
   }
   return next
+}
+
+function approvalNotExecutedReason(
+  status: import('../../packages/agent-core/src/approval').ApprovalStatus,
+  cause?: import('../../packages/agent-core/src/approval').ApprovalCause
+): NonNullable<ToolCallRecord['result']>['notExecutedReason'] {
+  if (cause === 'agent-deny') return 'agent_denied'
+  if (cause === 'policy-denied') return 'policy_denied'
+  if (cause === 'authorization-revoked') return 'authorization_revoked'
+  if (status === 'unavailable' || cause === 'provider-unavailable') return 'confirm_unavailable'
+  if (status === 'cancelled') return 'confirm_cancelled'
+  if (status === 'timed-out' || cause === 'evaluation-timeout') return 'confirm_timeout'
+  if (cause === 'cancelled' || cause === 'interrupted') return 'confirm_cancelled'
+  return 'not_authorized'
 }
 
 function terminalTool(status: ToolCallRecord['status']) { return status === 'completed' || status === 'failed' || status === 'rejected' }

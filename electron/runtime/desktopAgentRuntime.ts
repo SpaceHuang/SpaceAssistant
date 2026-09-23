@@ -5,6 +5,9 @@ import { ToolRevocationRegistry } from '../toolRevocationRegistry'
 import { ConfirmIdSpace } from '../remote/confirmId'
 import { McpConcurrencyGate } from '../mcp/mcpToolExecutor'
 import { createBuiltinToolRegistry } from '../tools/builtinExecutors'
+import { ApprovalAdmission } from '../../packages/agent-core/src/approval'
+import { InvocationRuntime } from '../../packages/agent-core/src/scheduler'
+import { ResourceLockRegistry } from '../../packages/agent-core/src/resourceLock'
 
 /**
  * 桌面宿主 runtime 组装(P0 修复,评审 batch3-runtime-admission-sdk-review):
@@ -24,6 +27,10 @@ export function createDesktopAgentRuntime(): ReturnType<typeof createAgentRuntim
     chatCancels: new ChatCancelRegistry(),
     toolRevocations: new ToolRevocationRegistry(),
     mcpGate: new McpConcurrencyGate(),
-    builtinRegistry: createBuiltinToolRegistry()
+    builtinRegistry: createBuiltinToolRegistry(),
+    approvalAdmission: new ApprovalAdmission({ concurrency: 4, queueLimit: 32, maxInFlightPerParent: 2 }),
+    invocationRuntime: new InvocationRuntime('desktop-agent-runtime', { maxParkedTurns: 32 }),
+    resourceLocks: new ResourceLockRegistry(),
+    toolExecutionConcurrency: 2
   })
 }

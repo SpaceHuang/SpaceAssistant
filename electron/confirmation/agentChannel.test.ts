@@ -12,6 +12,7 @@ import type {
   ConfirmRequest,
   SecurityAuditEvent
 } from '../../src/shared/confirmation/types'
+import { ApprovalAdmission } from '../../packages/agent-core/src/approval'
 
 function req(overrides: Partial<ConfirmRequest> = {}): ConfirmRequest {
   return {
@@ -82,6 +83,14 @@ describe('AgentChannel（P2-3）', () => {
     })
     const outcome = await ch.request(req({ timeoutMs: 30 }))
     expect(outcome).toMatchObject({ kind: 'rejected', answererKind: 'agent', cause: 'timeout' })
+  })
+
+  it('审批槽已获准但内层挂起时，超时仍释放审批槽', async () => {
+    const pool = new ApprovalAdmission({ concurrency: 1, queueLimit: 1 })
+    const { ch } = channel({ approvalAdmission: pool, invokeApproval: () => new Promise<ApprovalInvocationResult>(() => undefined) })
+    await ch.request(req({ timeoutMs: 10 }))
+    expect(pool.snapshot()).toEqual({ active: 0, queued: 0 })
+    await expect(pool.acquire({ requestId: 'next', parentTaskId: 'parent' })).resolves.toMatchObject({ kind: 'granted' })
   })
 
   it('invokeApproval 失败（unavailable/unparsable/config-error）→ rejected 且 cause 逐一透传', async () => {
@@ -200,6 +209,38 @@ describe('AgentChannel（P2-3）', () => {
     await expect(pb).resolves.toMatchObject({ kind: 'approved' })
     release1?.()
     await expect(pa).resolves.toMatchObject({ kind: 'approved' })
+  })
+
+  it('独立审批池满载时排队，不消耗旧任务准入票据', async () => {
+    const pool = new ApprovalAdmission({ concurrency: 1, queueLimit: 1 })
+    let releaseFirst: (() => void) | undefined
+    const pending = new Promise<ApprovalInvocationResult>((resolve) => { releaseFirst = () => resolve({ ok: true, verdict: APPROVE }) })
+    const first = channel({ approvalAdmission: pool, invokeApproval: () => pending }).ch
+    const secondInvoke = vi.fn(async () => ({ ok: true as const, verdict: APPROVE }))
+    const second = channel({ approvalAdmission: pool, invokeApproval: secondInvoke }).ch
+    const firstResult = first.request(req({ timeoutMs: 5_000 }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const secondResult = second.request(req({ timeoutMs: 5_000 }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(secondInvoke).not.toHaveBeenCalled()
+    releaseFirst?.()
+    await expect(firstResult).resolves.toMatchObject({ kind: 'approved' })
+    await expect(secondResult).resolves.toMatchObject({ kind: 'approved' })
+  })
+
+  it('取消排队中的审批会移除 waiter，之后释放槽位也不会启动模型', async () => {
+    const pool = new ApprovalAdmission({ concurrency: 1, queueLimit: 1 })
+    const held = await pool.acquire({ requestId: 'held', parentTaskId: 'p-held' })
+    const invoke = vi.fn(async () => ({ ok: true as const, verdict: APPROVE }))
+    const { ch } = channel({ approvalAdmission: pool, invokeApproval: invoke })
+    const pending = ch.request(req({ timeoutMs: 5_000 }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    ch.cancel('outer')
+    await expect(pending).resolves.toMatchObject({ kind: 'rejected' })
+    expect(pool.snapshot().queued).toBe(0)
+    if (held.kind === 'granted') held.release()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   it('cancel 中断内层调用（signalChatCancel）', async () => {

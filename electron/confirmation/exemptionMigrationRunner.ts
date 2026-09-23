@@ -16,7 +16,7 @@ import type { AuditSink } from './audit'
  */
 
 /** 确认框架豁免迁移版本号。v2：actTrustedDomains 拆分为 domain+action 档（修正 v1 合并档位的语义漂移）。 */
-export const CONFIRMATION_EXEMPTION_MIGRATION_VERSION = 2
+export const CONFIRMATION_EXEMPTION_MIGRATION_VERSION = 3
 export const EXEMPTION_MIGRATION_VERSION_KEY = 'config.confirmation.exemptionMigrationVersion'
 
 export interface ExemptionMigrationRunDeps {
@@ -49,7 +49,7 @@ export function runExemptionMigrationOnce(
         // 只迁移现行生效的结构化（schemaVersion 2）信任条目：executable + fixedArgvPrefix 还原命令签名；
         // 过期/legacy 待审条目本就不能跳过确认，不迁移（避免静默放宽）。
         .filter((t) => t.schemaVersion === 2 && Boolean(t.executable) && !t.expired && !t.legacyStatus)
-        .map((t) => [t.executable!, ...(t.fixedArgvPrefix ?? [])].join(' ')))
+        .map((t) => JSON.stringify([t.executable!, ...(t.fixedArgvPrefix ?? [])])))
   const readBrowser =
     deps.readBrowserTrustedDomains ??
     (() => {
@@ -65,6 +65,9 @@ export function runExemptionMigrationOnce(
       actTrustedDomains: browser.actTrustedDomains
     })
     const cache = new SqliteDecisionCache(getDbConnection(db))
+    // v2 → v3：旧缓存键以空格拼接，无法恢复引号/argv 边界。
+    // 不得把其决定复制到任意 tokenize 结果；只有上面的结构化 shell 信任条目
+    // （executable + fixedArgvPrefix）才允许生成新的 JSON argv 键。
     // v1 → v2 修正：v1 把 actTrustedDomains 并入 domain-any-action 档（navigate 档），
     // 会让 act 被 navigate 信任放行（语义漂移）；这里清除仅属于 act 清单的错档条目。
     if (current === 1) {
