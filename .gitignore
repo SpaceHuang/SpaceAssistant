@@ -50,6 +50,9 @@ docs/references/
 docs/review/
 docs/project/
 
+# 已废弃的后台 Mission 执行层设计文档（本地保留备查，不纳入版本控制）
+docs/废弃/后台Mission执行层/
+
 # Impeccable 代码审查工具输出
 .impeccable/
 

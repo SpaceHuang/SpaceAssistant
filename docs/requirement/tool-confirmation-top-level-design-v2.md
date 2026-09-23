@@ -453,7 +453,7 @@ type SecurityAuditEventKind =
 2. 从该约束类型的套餐中选默认集合；如需新交互（审批队列），实现对应 ConfirmationChannel（如 `AutomationChannel`）。
 3. 无需新增策略代码；套餐即策略规则组合，缓存、审计、设置中心全部复用。
 
-定时触发器本身（cron 调度）不在本文档范围，见 `background-task-execution-layer-design.md` 的后续演进。
+定时触发器本身（cron 调度）不在本文档范围，原见于后台 Mission 执行层设计（该方案已废弃，见 [`../废弃/后台Mission执行层/requirement/background-task-execution-layer-design.md`](../废弃/后台Mission执行层/requirement/background-task-execution-layer-design.md) 的后续演进）。
 
 ### 5.4 场景推演：每日简报定时任务
 
