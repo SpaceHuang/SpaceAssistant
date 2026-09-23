@@ -4,7 +4,9 @@ import type { Message } from '../../../shared/domainTypes'
 import { changeAppLocale } from '../../i18n/localeSync'
 import { ChatMessageList } from './ChatMessageList'
 import type { PendingConfirmItem } from '../../services/pendingConfirmStore'
-import { completedAssistantMessage } from './testUtils/chatMessageFixtures'
+import { completedAssistantMessage, streamingAssistantMessage } from './testUtils/chatMessageFixtures'
+import { toTurnDisplay } from '../../../shared/turnDisplayProtocol'
+import { useTurnDisplay } from '../../hooks/useTurnDisplay'
 
 /**
  * J-03（docs/develop/chat-message-list-streaming-jitter-fix-plan.md）：
@@ -26,6 +28,12 @@ vi.mock('./ChatBubble', () => ({
     return <div data-testid="bubble-mock" data-message-id={props.message.id} />
   }
 }))
+
+vi.mock('../../hooks/useTurnDisplay', () => ({
+  useTurnDisplay: vi.fn()
+}))
+
+const mockedUseTurnDisplay = vi.mocked(useTurnDisplay)
 
 function makeItem(overrides: Partial<PendingConfirmItem>): PendingConfirmItem {
   return {
@@ -68,6 +76,8 @@ describe('ChatMessageList confirmationReadyByToolId stability', () => {
   beforeEach(async () => {
     await changeAppLocale('zh-CN')
     bubblePropsLog.length = 0
+    mockedUseTurnDisplay.mockReset()
+    mockedUseTurnDisplay.mockReturnValue(undefined)
   })
 
   it('同一 pendingConfirmItems 引用下重渲染，行内收到的 confirmationReadyByToolId 引用不变', () => {
@@ -160,5 +170,44 @@ describe('ChatMessageList confirmationReadyByToolId stability', () => {
     expect('tool-1' in (received ?? {})).toBe(true)
     expect(received?.['tool-1']).toBeUndefined()
     expect(received?.['tool-1']).not.toBe(false)
+  })
+
+  it('bounded display 更新已有工具记录时保留审批 Agent 标记', () => {
+    const message = streamingAssistantMessage({
+      id: 'm-agent',
+      toolCalls: [{
+        id: 'tool-agent',
+        toolName: 'run_shell',
+        input: { command: 'make deploy' },
+        status: 'calling',
+        riskLevel: 'high'
+      }]
+    })
+    mockedUseTurnDisplay.mockReturnValue(toTurnDisplay({
+      turnId: 'turn-agent',
+      requestId: 'request-agent',
+      version: 2,
+      lifecycle: 'awaiting-confirmation',
+      message: {
+        ...message,
+        toolCalls: [{ ...message.toolCalls![0]!, status: 'confirming', autoAnswerer: true }]
+      }
+    }))
+
+    render(
+      <ChatMessageList
+        messages={[message]}
+        turnId="turn-agent"
+        confirmationReadyBySession={{}}
+        pendingConfirmItems={[]}
+        actions={undefined}
+        resolveToolsInteractive={() => undefined}
+        showArchiveToWiki={() => false}
+        canRetry={() => false}
+        canCancelQueued={() => false}
+      />
+    )
+
+    expect(lastBubbleProps().message.toolCalls?.[0]).toMatchObject({ status: 'confirming', autoAnswerer: true })
   })
 })

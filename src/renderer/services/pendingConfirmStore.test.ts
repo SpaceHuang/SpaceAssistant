@@ -80,6 +80,32 @@ describe('pendingConfirmStore', () => {
     expect(pendingConfirmStore.getItems()[0]?.sessionId).toBe('sess-direct')
   })
 
+  it('不把审批 Agent 的 confirming 项暴露为人工待确认', () => {
+    pendingConfirmStore.syncFromProjection({
+      sessionId: 'sess-agent',
+      requestId: 'req-agent',
+      message: {
+        id: 'assistant-agent',
+        sessionId: 'sess-agent',
+        role: 'assistant',
+        content: '',
+        timestamp: 1,
+        status: 'streaming',
+        schemaVersion: 1,
+        toolCalls: [{
+          id: 'tool-agent',
+          toolName: 'run_shell',
+          input: { command: 'make deploy' },
+          status: 'confirming',
+          riskLevel: 'high',
+          autoAnswerer: true
+        }]
+      }
+    })
+
+    expect(pendingConfirmStore.getItems()).toEqual([])
+  })
+
   it('respond sends ipc and removes item', () => {
     registerRunRequest('sess-a', 'req-1')
     seedConfirm({

@@ -103,6 +103,22 @@ describe('resolveMessageToolsInteractive', () => {
     expect(messageHasConfirmingTool({ ...confirmingMessage, toolCalls: [] })).toBe(false)
   })
 
+  it('审批 Agent 的 confirming 项不提供人工交互标量', () => {
+    const agentMessage: Message = {
+      ...confirmingMessage,
+      toolCalls: [{ ...confirmingMessage.toolCalls[0]!, autoAnswerer: true }]
+    }
+
+    expect(messageHasConfirmingTool(agentMessage)).toBe(false)
+    expect(resolveMessageToolsInteractive({
+      message: agentMessage,
+      sessionId: 'sess-1',
+      pendingItems: [],
+      streamingAssistantId: 'msg-1',
+      streamingRequestId: 'req-live'
+    })).toBeUndefined()
+  })
+
   it('prefers pending store over streaming request id for active assistant', () => {
     expect(
       resolveRequestIdForConfirmingMessage({

@@ -76,7 +76,13 @@ export function ChatMessageList({
               let input: Record<string, unknown> = tool.input
               try { if (summary?.inputPreview) { const parsed = JSON.parse(summary.inputPreview); if (parsed && typeof parsed === 'object') input = parsed as Record<string, unknown> } } catch { /* 保留 canonical input */ }
               const live = display.message.toolCalls.find((candidate) => candidate.id === tool.id)
-              return { ...tool, input, status: live?.status ?? tool.status, ...(live?.display.progressPreview ? { progressOutput: live.display.progressPreview } : {}) }
+              return {
+                ...tool,
+                input,
+                status: live?.status ?? tool.status,
+                ...(live?.display.autoAnswerer ? { autoAnswerer: true as const } : {}),
+                ...(live?.display.progressPreview ? { progressOutput: live.display.progressPreview } : {})
+              }
             }) }
           : m
         const toolsInteractive = resolveToolsInteractive(boundedMessage)

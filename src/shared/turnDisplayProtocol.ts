@@ -17,6 +17,8 @@ export type ToolCallDisplaySummary = {
   resultPreviewTruncated: boolean
   hasDetails: boolean
   confirmRisk: ToolRiskLevel
+  /** 审批 Agent 裁决中的工具不属于人工待确认。 */
+  autoAnswerer?: true
 }
 
 export type ActivityDisplayItem =
@@ -107,7 +109,8 @@ function toolDisplay(tool: ToolCallRecord, identity: string): ToolCallDisplaySum
     ...(progress.value !== undefined ? { progressPreview: progress.value } : {}), progressPreviewTruncated: progress.truncated,
     ...(result.value !== undefined ? { resultPreview: result.value } : {}), resultPreviewTruncated: result.truncated,
     hasDetails: tool.input !== undefined || tool.result !== undefined || Boolean(tool.progressOutput),
-    confirmRisk: tool.riskLevel
+    confirmRisk: tool.riskLevel,
+    ...(tool.autoAnswerer ? { autoAnswerer: true as const } : {})
   }
   if (tool.status === 'completed') {
     summaryCache.delete(cacheKey)
@@ -162,7 +165,7 @@ export function turnDisplayToMessage(display: TurnDisplay): Message {
     id: display.message.id, sessionId: display.sessionId, role: 'assistant', content: display.message.content,
     timestamp: Date.now(), status: display.lifecycle === 'completed' ? 'completed' : display.lifecycle === 'failed' ? 'failed' : 'streaming', schemaVersion: 1,
     ...(display.message.thinking ? { thinking: display.message.thinking } : {}), ...(display.message.skillHints ? { skillHints: display.message.skillHints } : {}),
-    toolCalls: display.message.toolCalls.map((tool) => ({ id: tool.id, toolName: tool.toolName, input: {}, status: tool.status, riskLevel: tool.display.confirmRisk, ...(tool.startedAt !== undefined ? { startedAt: tool.startedAt } : {}), ...(tool.completedAt !== undefined ? { completedAt: tool.completedAt } : {}), ...(tool.duration !== undefined ? { duration: tool.duration } : {}) }))
+    toolCalls: display.message.toolCalls.map((tool) => ({ id: tool.id, toolName: tool.toolName, input: {}, status: tool.status, riskLevel: tool.display.confirmRisk, ...(tool.display.autoAnswerer ? { autoAnswerer: true as const } : {}), ...(tool.startedAt !== undefined ? { startedAt: tool.startedAt } : {}), ...(tool.completedAt !== undefined ? { completedAt: tool.completedAt } : {}), ...(tool.duration !== undefined ? { duration: tool.duration } : {}) }))
   }
 }
 

@@ -61,7 +61,7 @@ export function restorePendingConfirmToolCalls(messages: Message[], pendingItems
 }
 
 export function messageHasConfirmingTool(message: Message | undefined): boolean {
-  return Boolean(message?.toolCalls?.some((tc) => tc.status === 'confirming'))
+  return Boolean(message?.toolCalls?.some((tc) => tc.status === 'confirming' && !tc.autoAnswerer))
 }
 
 export function messageHasExecutingTool(message: Message | undefined): boolean {
@@ -82,7 +82,7 @@ export function resolveRequestIdForConfirmingMessage(args: {
   if (!messageHasConfirmingTool(message) && !message.toolCalls?.some((tc) => pendingToolUseIds.has(tc.id))) return null
 
   for (const tc of message.toolCalls ?? []) {
-    if (tc.status !== 'confirming' && !pendingToolUseIds.has(tc.id)) continue
+    if ((tc.status !== 'confirming' || tc.autoAnswerer) && !pendingToolUseIds.has(tc.id)) continue
     const pending = pendingItems.find((item) => item.sessionId === sessionId && item.toolUseId === tc.id)
     if (pending?.requestId) return pending.requestId
   }

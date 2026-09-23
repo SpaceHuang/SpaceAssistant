@@ -93,4 +93,15 @@ describe('turn display protocol', () => {
     expect(message.content).toBe(baseMessage.content)
     expect(message.toolCalls?.[0]?.result).toBeUndefined()
   })
+
+  it('保留审批 Agent 标记，避免 bounded display 把自动裁决恢复成人工确认', () => {
+    const messageWithAgentApproval = {
+      ...baseMessage,
+      toolCalls: [{ ...baseMessage.toolCalls[0]!, status: 'confirming' as const, autoAnswerer: true as const }]
+    }
+    const display = toTurnDisplay({ turnId: 't-agent', requestId: 'r-agent', version: 2, lifecycle: 'awaiting-confirmation', message: messageWithAgentApproval })
+
+    expect(display.message.toolCalls[0]?.display.autoAnswerer).toBe(true)
+    expect(turnDisplayToMessage(display).toolCalls?.[0]?.autoAnswerer).toBe(true)
+  })
 })
