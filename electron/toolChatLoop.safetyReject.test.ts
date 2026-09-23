@@ -41,6 +41,8 @@ vi.mock('./sessionTitleSuggest', () => ({
 vi.mock('./toolConfirmRegistry', () => ({
   registerToolCancel: vi.fn(() => ({ aborted: false, addEventListener: vi.fn() })),
   clearToolCancel: vi.fn(),
+  cancelAllToolConfirmsForRequest: vi.fn(),
+  prepareToolConfirm: vi.fn(),
   waitForToolConfirm: vi.fn(async () => 'approved' as const)
 }))
 
@@ -215,5 +217,30 @@ describe('P1 安全拒绝理由回传与计数口径分离', () => {
     await runAssembledSession(baseArgs(db))
     // 3 次执行失败后 break：第 4 轮请求不发生
     expect(capturedStreamParams.length).toBe(3)
+  })
+
+  it('同一模型回合达到错误阈值后，不执行后续工具节点', async () => {
+    mockChannelOutcome.mockImplementation(() => ({ kind: 'approved', cause: 'user-approved' }) satisfies ConfirmOutcome)
+    const executions: string[] = []
+    const { getToolExecutor } = await import('./tools/builtinExecutors')
+    vi.mocked(getToolExecutor).mockImplementation((name: string) => name === 'write_file'
+      ? { name, execute: async (input: { path?: string }) => {
+          executions.push(input.path ?? '')
+          return { success: false, error: 'EACCES: permission denied', userMessage: 'EACCES: permission denied' }
+        } }
+      : undefined)
+    streamRound = 0
+    mockCreateAnthropicClient.mockReturnValue({
+      messages: {
+        stream: vi.fn(() => {
+          const content = streamRound++ === 0
+            ? Array.from({ length: 4 }, (_, index) => ({ type: 'tool_use', id: `toolu-stop-${index}`, name: 'write_file', input: { path: `out-${index}.txt`, content: 'x' } }))
+            : [{ type: 'text', text: 'stopped' }]
+          return { async *[Symbol.asyncIterator]() {}, finalMessage: vi.fn(async () => ({ content, stop_reason: streamRound === 1 ? 'tool_use' : 'end_turn' })) }
+        })
+      }
+    })
+    await runAssembledSession(baseArgs(makeDb()))
+    expect(executions).toHaveLength(3)
   })
 })

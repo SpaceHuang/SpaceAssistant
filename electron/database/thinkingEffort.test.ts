@@ -79,7 +79,7 @@ function sessionColumns(db: AppDatabase): string[] {
 
 describe('V17 schema migration (sessions.thinking_effort)', () => {
   it('declares the new schema version 17', () => {
-    expect(DB_SCHEMA_VERSION).toBe(17)
+    expect(DB_SCHEMA_VERSION).toBe(18)
   })
 
   it('adds a nullable thinking_effort column when upgrading a v16 database', () => {
@@ -88,7 +88,7 @@ describe('V17 schema migration (sessions.thinking_effort)', () => {
     const db = openSqliteDatabase(dbPath)
     expect(sessionColumns(db)).toContain('thinking_effort')
     const meta = getDbConnection(db).prepare('SELECT value FROM schema_meta WHERE key = ?').get(SCHEMA_META_KEYS.schemaVersion) as { value: string }
-    expect(meta.value).toBe('17')
+    expect(meta.value).toBe('18')
     db.close()
   })
 

@@ -30,7 +30,7 @@ export function revokeLegacyTrustForCacheKey(db: AppDatabase, key: CacheKey): Le
   if (key.kind === 'shell-command' && key.level === 'exact') {
     const targets = listTrustedCommands(db)
       .filter((t) => t.schemaVersion === 2 && Boolean(t.executable))
-      .filter((t) => [t.executable!, ...(t.fixedArgvPrefix ?? [])].join(' ') === key.verb)
+      .filter((t) => JSON.stringify([t.executable!, ...(t.fixedArgvPrefix ?? [])]) === key.verb || [t.executable!, ...(t.fixedArgvPrefix ?? [])].join(' ') === key.verb)
       .map((t) => t.id)
     if (targets.length === 0) return { ...NONE }
     removeTrustedCommands(db, targets)

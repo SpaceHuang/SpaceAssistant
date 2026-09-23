@@ -27,7 +27,7 @@ describe('chatCancelRegistry', () => {
   it('rejects pending tool confirms for the same request', async () => {
     const p = waitForToolConfirm('req-2', 'tool-1')
     signalChatCancel('req-2')
-    await expect(p).resolves.toBe('rejected')
+    await expect(p).resolves.toBe('cancelled')
     clearChatCancel('req-2')
   })
 
@@ -51,9 +51,9 @@ describe('chatCancelRegistry', () => {
     const p1 = waitForToolConfirm('req-a', 'tool-1')
     const p2 = waitForToolConfirm('req-b', 'tool-1')
     cancelAllToolConfirmsForRequest('req-a')
-    await expect(p1).resolves.toBe('rejected')
+    await expect(p1).resolves.toBe('cancelled')
     signalChatCancel('req-b')
-    await expect(p2).resolves.toBe('rejected')
+    await expect(p2).resolves.toBe('cancelled')
     clearChatCancel('req-a')
     clearChatCancel('req-b')
   })

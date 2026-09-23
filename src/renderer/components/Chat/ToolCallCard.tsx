@@ -59,6 +59,7 @@ import { formatToolDuration } from '../../../shared/toolDurationFormat'
 import { getToolDurationPhases } from '../../../shared/toolDurationPhases'
 import type { ChatSearchActiveTarget } from '../../services/chatSearchActiveTarget'
 import type { ToolCallDisplaySummary } from '../../../shared/turnDisplayProtocol'
+import { projectApprovalPresentation } from '../../../shared/approvalPresentation'
 
 type Props = {
   record: ToolCallRecord
@@ -145,6 +146,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   const record = loadedDetail && loadedForSource === sourceRecord
     ? { ...loadedDetail, ...sourceRecord, input: Object.keys(sourceRecord.input).length ? sourceRecord.input : loadedDetail.input, result: sourceRecord.result ?? loadedDetail.result }
     : sourceRecord
+  const approvalPresentation = record.approval ? projectApprovalPresentation(record.approval) : undefined
   const mcp = isMcpRecord(record)
   const currentLoadedDetail = loadedDetail && loadedForSource === sourceRecord ? loadedDetail : undefined
   const cardRef = useRef<HTMLDivElement>(null)
@@ -543,6 +545,7 @@ export const ToolCallCard = memo(function ToolCallCard({
       ]
         .filter(Boolean)
         .join(' ')}
+      data-approval-status={approvalPresentation?.presentation}
     >
       <div
         className="tool-row__main"
@@ -571,6 +574,13 @@ export const ToolCallCard = memo(function ToolCallCard({
             {t(getMcpStatusTranslationKey(record.status, record.interrupted))}
           </span>
         ) : null}
+        {approvalPresentation ? (
+          <span className={`tool-row__status tool-row__status--approval-${approvalPresentation.presentation}`}>
+            {approvalPresentation.presentation === 'denied' ? t('tool.rejected') :
+              approvalPresentation.presentation === 'incomplete' ? t('tool.failed') :
+                approvalPresentation.presentation === 'approved' ? t('tool.completed') : t('tool.pending')}
+          </span>
+        ) : null}
         {mcp && record.duration !== undefined && record.status !== 'rejected' ? (
           <span className="tool-row__duration" data-testid="tool-duration">{formatToolDuration(record.duration)}</span>
         ) : null}
@@ -591,6 +601,7 @@ export const ToolCallCard = memo(function ToolCallCard({
           aria-hidden={!showDetail}
         >
           <div className="tool-row-detail__inner">
+          {approvalPresentation?.reason ? <div className="tool-row-detail__message">{approvalPresentation.reason}</div> : null}
           {mcp && showDetail && durationPhases.totalMs !== undefined ? (
             <div className="tool-row-detail__message tool-row__duration-phases">
               {durationPhases.waitingMs !== undefined ? `${t('mcp.waitingConfirm', { value: formatToolDuration(durationPhases.waitingMs) })} · ` : ''}

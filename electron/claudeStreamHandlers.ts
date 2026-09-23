@@ -34,6 +34,7 @@ import { buildRequestHeaderPayload } from '../src/shared/requestContext'
 import { estimateTokensFromUtf8Text } from '../src/shared/contextUsageEstimate'
 import { planTurnBoundarySurfaceCompaction } from '../src/shared/turnBoundaryCompaction'
 import { extractToolPairIds, validateSurfaceForSend } from '../src/shared/surfacePreflight'
+import { getCallAdmissionGate } from './runtime/callAdmissionGate'
 
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
@@ -52,6 +53,11 @@ export type ClaudeStreamDeps = {
   /** 绑定主窗口的出站通道：Core 出口事件（标题生成、文件树失效）经此投递渲染层。 */
   notifyMainWindow?: (channel: string, payload: unknown) => void
   turnRuntime?: TurnRuntime
+}
+
+const admissionCancelControllers = new Map<string, AbortController>()
+export function cancelClaudeAdmission(turnId: string): void {
+  admissionCancelControllers.get(turnId)?.abort()
 }
 
 type ClaudeMessageRole = 'user' | 'assistant'
@@ -252,6 +258,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
       let eventWriter: SessionEventSink | undefined
       let eventTurnId = ''
       let finalizePromise: Promise<FinalizeResult> | undefined
+      let activeAdmissionTicket: import('./runtime/callAdmissionGate').AdmissionTicket | undefined
+      let applicationAdmission: import('../src/shared/agent/invocation').AgentHostPorts['applicationAdmission']
       // 台账写入失败必须可见，但不能把整轮对话打成 llm.error（瞬时 IO 错误会丢弃已流式输出的内容）。
       // 这里只累计，由 finalizeTurn 统一上报为 eventPersistenceFailed。
       const eventAppendFailures: EventPersistenceFailure[] = []
@@ -287,6 +295,35 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
       }
       try {
         requestId = assertValidRequestId(payload.requestId)
+        const admissionGate = getCallAdmissionGate()
+        const turnCancelController = new AbortController()
+        if (typeof payload.turnId === 'string' && payload.turnId) admissionCancelControllers.set(payload.turnId, turnCancelController)
+        const admission = await admissionGate.acquire({
+          lane: 'desktop',
+          priority: 'interactive',
+          role: 'top-level',
+          disposition: 'queue',
+          requestId
+        }, { signal: turnCancelController.signal })
+        if (typeof payload.turnId === 'string' && payload.turnId) admissionCancelControllers.delete(payload.turnId)
+        if (!admission.ok) throw new Error(`当前调用暂不可运行：${admission.verdict === 'rejected' ? admission.cause : admission.verdict}`)
+        activeAdmissionTicket = admission.ticket
+        applicationAdmission = {
+          park: (checkpoint?: unknown) => {
+            if (!activeAdmissionTicket) return undefined
+            const parked = admissionGate.park(activeAdmissionTicket)
+            if (parked) activeAdmissionTicket = undefined
+            return parked ? { ...parked, checkpoint } : undefined
+          },
+          discard: (handle: unknown) => { if (handle) admissionGate.discard(handle as never) },
+          resume: async (handle: unknown, options?: { signal?: AbortSignal; deadlineAt?: number }) => {
+            if (!handle || activeAdmissionTicket) return { ok: false as const, retryable: false, cause: 'invalid-park-handle' }
+            const resumed = await admissionGate.resume(handle as never, options)
+            if (!resumed.ok) return { ok: false as const, retryable: resumed.retryable, cause: resumed.cause }
+            activeAdmissionTicket = resumed.ticket
+            return { ok: true as const }
+          }
+        }
         const turnId = typeof payload.turnId === 'string' ? payload.turnId.trim() : ''
         const turnStartToken = typeof payload.turnStartToken === 'string' ? payload.turnStartToken : ''
         if (deps.turnRuntime && turnId && turnStartToken) {
@@ -532,6 +569,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             }
             deps.emitFactEvent?.(requestId, fact)
           }
+          ,applicationAdmission
         })
         const res = await runToolChatSession(turnInvocation, turnPorts)
 
@@ -585,6 +623,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             ? { eventPersistenceFailed: true, eventPersistenceErrors: finalized.eventPersistenceErrors }
             : {})
         }
+      } finally {
+        activeAdmissionTicket?.release()
       }
   }
 

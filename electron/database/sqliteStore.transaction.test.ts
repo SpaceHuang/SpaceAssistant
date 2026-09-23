@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
-import { changesToNumber, runInTransaction } from './transaction'
+import { changesToNumber, runInTransaction, runInTransactionAsync, TransactionCommitUnknownError } from './transaction'
 
 function createConn(): DatabaseSync {
   const conn = new DatabaseSync(':memory:')
@@ -13,6 +13,18 @@ function countItems(conn: DatabaseSync): number {
 }
 
 describe('runInTransaction（连接级事务入口）', () => {
+  it('COMMIT 失败进入 unknown，不再尝试把结果伪装成已回滚', () => {
+    const commands: string[] = []
+    const conn = {
+      exec(sql: string) {
+        commands.push(sql)
+        if (sql === 'COMMIT') throw new Error('commit transport lost')
+      }
+    } as unknown as DatabaseSync
+    expect(() => runInTransaction(conn, () => 'ok')).toThrow(TransactionCommitUnknownError)
+    expect(commands).toEqual(['BEGIN', 'COMMIT', 'ROLLBACK'])
+  })
+
   it('提交：回调正常返回时写入全部落盘', () => {
     const conn = createConn()
     const result = runInTransaction(conn, () => {
@@ -119,6 +131,39 @@ describe('runInTransaction（连接级事务入口）', () => {
     })
     expect(seen).toEqual(['second'])
     expect(countItems(conn)).toBe(1)
+    conn.close()
+  })
+
+  it('异步事务：await 后提交，失败回滚整个写入批次', async () => {
+    const conn = createConn()
+    await runInTransactionAsync(conn, async () => {
+      conn.prepare('INSERT INTO items (value) VALUES (?)').run('before-await')
+      await Promise.resolve()
+      conn.prepare('INSERT INTO items (value) VALUES (?)').run('after-await')
+    })
+    expect(countItems(conn)).toBe(2)
+    await expect(runInTransactionAsync(conn, async () => {
+      conn.prepare('INSERT INTO items (value) VALUES (?)').run('must-rollback')
+      await Promise.resolve()
+      throw new Error('async failed')
+    })).rejects.toThrow('async failed')
+    expect(countItems(conn)).toBe(2)
+    conn.close()
+  })
+
+  it('异步事务嵌套同步 savepoint：内层失败不会污染外层', async () => {
+    const conn = createConn()
+    await runInTransactionAsync(conn, async () => {
+      conn.prepare('INSERT INTO items (value) VALUES (?)').run('outer')
+      expect(() => runInTransaction(conn, () => {
+        conn.prepare('INSERT INTO items (value) VALUES (?)').run('inner')
+        throw new Error('inner failed')
+      })).toThrow('inner failed')
+      await Promise.resolve()
+      conn.prepare('INSERT INTO items (value) VALUES (?)').run('outer-after')
+    })
+    expect((conn.prepare('SELECT value FROM items ORDER BY id').all() as Array<{ value: string }>).map((row) => row.value))
+      .toEqual(['outer', 'outer-after'])
     conn.close()
   })
 })

@@ -92,9 +92,9 @@ describe('metasyntax 闸门防线（P3-T4，§3 不变量 6）', () => {
 
     it('签名 fallback：解析失败形态的签名输出与旧实现逐字节一致（未被改动直证——零实现改动）', () => {
       // normalizeShellSignature 在 P2/P3 期间零改动（git diff 直证），引号/空白归一化行为不变
-      expect(normalizeShellSignature('echo "a b"')).toBe('echo a b')
-      expect(normalizeShellSignature("echo   'x y'")).toBe('echo x y')
-      expect(normalizeShellSignature('Git STATUS')).toBe('Git STATUS')
+      expect(normalizeShellSignature('echo "a b"')).toBe(JSON.stringify(['echo', 'a b']))
+      expect(normalizeShellSignature("echo   'x y'")).toBe(JSON.stringify(['echo', 'x y']))
+      expect(normalizeShellSignature('Git STATUS')).toBe(JSON.stringify(['Git', 'STATUS']))
       // 畸形输入不折叠为常量/空签名（§3 不变量 6：禁止等价类合并）
       expect(normalizeShellSignature('echo "unclosed')).not.toBe('')
     })

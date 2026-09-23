@@ -17,6 +17,14 @@ export function rememberMcpSessionTrust(
   trusted.add(trustKey(sessionId, serverId, originalToolName))
 }
 
+export function forgetMcpSessionTrust(
+  sessionId: string,
+  serverId: string,
+  originalToolName: string
+): boolean {
+  return trusted.delete(trustKey(sessionId, serverId, originalToolName))
+}
+
 export function isMcpSessionTrusted(
   sessionId: string,
   serverId: string,

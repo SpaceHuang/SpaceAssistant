@@ -46,8 +46,8 @@ describe('commandSequenceExtractor', () => {
     const seq = r.signals.find((s) => s.kind === 'command-sequence')!
     if (seq.kind === 'command-sequence') {
       expect(seq.commands.map((c) => c.verb)).toEqual(['cat', 'grep'])
-      expect(seq.commands[0]!.signature).toBe('cat a.txt')
-      expect(seq.commands[1]!.signature).toBe('grep x /tmp')
+      expect(seq.commands[0]!.signature).toBe(JSON.stringify(['cat', 'a.txt']))
+      expect(seq.commands[1]!.signature).toBe(JSON.stringify(['grep', 'x', '/tmp']))
     }
   })
 
@@ -63,7 +63,7 @@ describe('commandSequenceExtractor', () => {
 
   it('摘要对 && 连接符保持既有渲染', () => {
     const r = extractCommandSignals('cat a.txt && grep x /tmp', env)
-    expect(r.summary.text).toContain('cat a.txt && grep x /tmp')
+    expect(r.summary.text).toContain(`${JSON.stringify(['cat', 'a.txt'])} && ${JSON.stringify(['grep', 'x', '/tmp'])}`)
   })
 
   it('`FOO=1 cmd` 与 `cd x && cmd` 不命中同一 exact 签名（变体绕过防护）', () => {    const a = extractCommandSignals('FOO=1 cmd', env)

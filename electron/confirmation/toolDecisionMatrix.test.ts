@@ -84,7 +84,7 @@ describe('判定矩阵：run_shell', () => {
     expect(d.type).toBe('require-confirm')
   })
   it('桌面命中信任缓存（exact 档）→ 放行', () => {
-    const cache = mapCache([allowEntry({ kind: 'shell-command', verb: 'ls -la', level: 'exact' })])
+    const cache = mapCache([allowEntry({ kind: 'shell-command', verb: JSON.stringify(['ls', '-la']), level: 'exact' })])
     const d = decideToolCall('run_shell', input, 'desktop', deps({}, cache))
     expect(d.type).toBe('auto-allow')
     expect(d.ruleId).toBe('cache-hit')
@@ -103,7 +103,7 @@ describe('判定矩阵：run_shell', () => {
     expect(d.type).toBe('require-confirm')
   })
   it('deniedTools 硬拒先于缓存命中（安全不变量）', () => {
-    const cache = mapCache([allowEntry({ kind: 'shell-command', verb: 'ls -la', level: 'exact' })])
+    const cache = mapCache([allowEntry({ kind: 'shell-command', verb: JSON.stringify(['ls', '-la']), level: 'exact' })])
     const d = decideToolCall('run_shell', input, 'desktop', deps({ deniedTools: ['run_shell'] }, cache))
     expect(d.type).toBe('deny')
     expect(d.ruleId).toBe('denied-tools')
@@ -126,7 +126,7 @@ describe('判定矩阵：run_shell', () => {
       const keys = deriveCacheKeys(facts, 's1')
       // 复合/带元语法命令不派生可持久化键；空白变体规范化后命中是允许的同命令等价
       if (command === 'ls   -la') {
-        expect(keys.some((k) => k.kind === 'shell-command' && k.verb === 'ls -la')).toBe(true)
+        expect(keys.some((k) => k.kind === 'shell-command' && k.verb === JSON.stringify(['ls', '-la']))).toBe(true)
       } else {
         expect(keys.length).toBe(0)
       }

@@ -305,6 +305,7 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
       messages: pairedMessages,
       system,
       options: { maxTokens: 2048 },
+      ...(inv.deadlineAt !== undefined ? { deadlineAt: inv.deadlineAt } : {}),
       toolsConfig,
       browserConfig: deps.getBrowserConfig?.(),
       shellConfig: deps.getShellConfig?.() ?? null,

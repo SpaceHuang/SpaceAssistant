@@ -28,6 +28,7 @@ import { createMcpOAuthClientProvider } from '../mcp/mcpOauthService'
 import { createMcpToolExecutor } from '../mcp/mcpToolExecutor'
 import { getSecurityAuditLog } from '../confirmation/audit'
 import type { McpConnectionManager } from '../mcp/mcpConnectionManager'
+import { getDefaultAgentRuntime } from './agentRuntimeDefaults'
 
 /**
  * Runtime 唯一装配点（roadmap「Runtime 是唯一装配点」在主进程的落位）。
@@ -40,6 +41,7 @@ import type { McpConnectionManager } from '../mcp/mcpConnectionManager'
 /** 调用方装配材料：字段与原 RunToolChatSessionArgs 同构（floatingNotificationManager 由装配器消化为 events.notify）。 */
 export interface AgentInvocationMaterials {
   requestId: string
+  deadlineAt?: number
   sessionId: string
   turnId?: string
   llmServiceId?: string
@@ -93,6 +95,11 @@ export interface AgentInvocationMaterials {
   appendCompactionTransaction?: (start: Record<string, unknown>, summary: Record<string, unknown>) => Promise<unknown>
   contextMeter?: import('../toolChatLoop').RunToolChatSessionArgs['contextMeter']
   onTurnBoundary?: import('../toolChatLoop').RunToolChatSessionArgs['onTurnBoundary']
+  approvalAdmission?: import('./agentRuntime').ApprovalAdmissionLike
+  invocationRuntime?: import('./agentRuntime').InvocationRuntimeLike
+  applicationAdmission?: AgentHostPorts['applicationAdmission']
+  resourceLocks?: import('./agentRuntime').ResourceLockRegistryLike
+  toolExecutionConcurrency?: number
 }
 
 /** 把宿主 FloatingNotificationManager 包装为 events.notify 出口实现（§5.5 收口）。 */
@@ -231,7 +238,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     },
     events: buildEventSink(materials),
     limits: {
-      ...(materials.maxToolLoopRounds !== undefined ? { maxToolRounds: materials.maxToolLoopRounds } : {})
+      ...(materials.maxToolLoopRounds !== undefined ? { maxToolRounds: materials.maxToolLoopRounds } : {}),
+      deadlineAt: materials.deadlineAt ?? (Date.now() + 10 * 60_000)
     },
     safety: {
       ...(materials.internalConfirmExemption !== undefined ? { recursionGuard: materials.internalConfirmExemption } : {})
@@ -375,6 +383,19 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   }
 
   const ports: AgentHostPorts = {
+    toolExecutionConcurrency: materials.toolExecutionConcurrency ?? (() => {
+      try { return getDefaultAgentRuntime().toolExecutionConcurrency } catch { return 2 }
+    })(),
+    resourceLocks: materials.resourceLocks ?? (() => {
+      try { return getDefaultAgentRuntime().resourceLocks } catch { return undefined }
+    })(),
+    ...(materials.applicationAdmission ? { applicationAdmission: materials.applicationAdmission } : {}),
+    invocationRuntime: materials.invocationRuntime ?? (() => {
+      try { return getDefaultAgentRuntime().invocationRuntime } catch { return undefined }
+    })(),
+    approvalAdmission: materials.approvalAdmission ?? (() => {
+      try { return getDefaultAgentRuntime().approvalAdmission } catch { return undefined }
+    })(),
     policy,
     storage,
     exposure,

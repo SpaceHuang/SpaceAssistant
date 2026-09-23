@@ -161,6 +161,45 @@ describe('AssistantFactAggregator', () => {
     expect(result.toolCalls?.[0]).toMatchObject({ status: 'rejected', rejectionReason: 'user-rejected' })
   })
 
+  it('approval-updated 原子写入审批理由与未执行结果，晚到 tool-result 不会覆盖', () => {
+    const result = apply([
+      { type: 'tool-use', id: 't-approval', toolName: 'write_file', input: {} },
+      {
+        type: 'approval-updated', id: 't-approval', approval: {
+          schemaVersion: 1, approvalId: 'a1', attemptId: 'attempt-1', toolUseId: 't-approval',
+          answerer: 'agent', status: 'denied', cause: 'agent-deny', reason: { summary: '范围过大' },
+          requestedAt: 1, settledAt: 10, revision: 2
+        }
+      },
+      { type: 'tool-result', id: 't-approval', result: { success: true } }
+    ])
+    expect(result.toolCalls?.[0]).toMatchObject({
+      status: 'rejected', rejectionReason: '范围过大', approval: { status: 'denied' },
+      result: { success: false, notExecuted: true, notExecutedReason: 'agent_denied' }
+    })
+  })
+
+  it('审批取消、撤销、超时、不可用在工具结果投影中保持不同终态', () => {
+    const cases = [
+      ['cancelled', 'cancelled', 'confirm_cancelled'],
+      ['unavailable', 'provider-unavailable', 'confirm_unavailable'],
+      ['timed-out', 'evaluation-timeout', 'confirm_timeout'],
+      ['denied', 'authorization-revoked', 'authorization_revoked']
+    ] as const
+    for (const [status, cause, reason] of cases) {
+      const result = apply([
+        { type: 'tool-use', id: `t-${status}`, toolName: 'run_shell', input: {} },
+        {
+          type: 'approval-updated', id: `t-${status}`, approval: {
+            schemaVersion: 1, approvalId: `a-${status}`, attemptId: `attempt-${status}`, toolUseId: `t-${status}`,
+            answerer: 'policy', status, cause, requestedAt: 1, settledAt: 2, revision: 1
+          }
+        }
+      ])
+      expect(result.toolCalls?.[0]?.result?.notExecutedReason).toBe(reason)
+    }
+  })
+
   it('确认请求保留展示所需元数据，但不包含执行凭据', () => {
     const result = apply([
       { type: 'tool-use', id: 't-meta', toolName: 'run_shell', input: { command: 'pwd' } },

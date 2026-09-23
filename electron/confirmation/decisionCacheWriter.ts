@@ -123,6 +123,20 @@ export function recordSystemManagedCacheEntry(args: RecordUserAnswerArgs): void 
   })
 }
 
+export function clearSystemManagedCacheEntry(args: Pick<RecordUserAnswerArgs, 'db' | 'key'> & { lane?: string }): void {
+  new SqliteDecisionCache(getDbConnection(args.db)).clear(args.key, args.lane)
+}
+
+export function readSystemManagedCacheEntry(args: Pick<RecordUserAnswerArgs, 'db' | 'key'> & { lane: string }): DecisionCacheEntry | null {
+  return new SqliteDecisionCache(getDbConnection(args.db)).read(args.key, args.lane)
+}
+
+export function restoreSystemManagedCacheEntry(args: Pick<RecordUserAnswerArgs, 'db' | 'key'> & { lane: string; entry: DecisionCacheEntry | null }): void {
+  const cache = new SqliteDecisionCache(getDbConnection(args.db))
+  if (args.entry) cache.record(args.entry)
+  else cache.clear(args.key, args.lane)
+}
+
 /**
  * 仅供用户确认回调使用的受保护写入口。
  * 普通工具代码不应直接获得 permit；消费成功后才允许复用现有 audited writer。
@@ -133,6 +147,12 @@ export function recordUserAnswerToCacheWithPermit(
   permit: MemoryWritePermit,
   subject: MemoryWritePermitSubject
 ): void {
-  authorization.consume(permit, subject)
-  recordSystemManagedCacheEntry(args)
+  const consumed = authorization.consumeForWrite(permit, subject)
+  try {
+    recordSystemManagedCacheEntry(args)
+    authorization.finalizeRecovery(consumed.recovery)
+  } catch (error) {
+    authorization.restore(permit, subject, consumed.recovery)
+    throw error
+  }
 }

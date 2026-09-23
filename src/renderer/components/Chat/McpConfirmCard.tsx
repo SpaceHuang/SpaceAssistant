@@ -1,6 +1,6 @@
-import { useState } from 'react'
 import type { ToolCallRecord } from '../../../shared/domainTypes'
 import type { ToolConfirmHandler } from '../../../shared/toolConfirm'
+import { useState } from 'react'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { ConfirmCardCollapsible } from './ConfirmCardCollapsible'
 import { ConfirmCardDecision } from './ConfirmCardDecision'
@@ -13,7 +13,7 @@ type Props = {
 
 export function McpConfirmCard({ record, onConfirm, sessionId }: Props) {
   const { t } = useTypedTranslation('chat')
-  const [trustSession, setTrustSession] = useState(false)
+  const [trustChecked, setTrustChecked] = useState(false)
   const mcp = record.mcp
   if (!mcp) return null
 
@@ -25,15 +25,15 @@ export function McpConfirmCard({ record, onConfirm, sessionId }: Props) {
       onConfirm(false)
       return
     }
-    if (trustSession) {
+    if (trustChecked && sessionId) {
       onConfirm(true, {
         sessionId,
         trustMcpServerId: mcp.serverId,
         trustMcpToolName: mcp.originalToolName
       })
-    } else {
-      onConfirm(true)
+      return
     }
+    onConfirm(true)
   }
 
   return (
@@ -65,19 +65,14 @@ export function McpConfirmCard({ record, onConfirm, sessionId }: Props) {
               </pre>
             )}
           </ConfirmCardCollapsible>
-          <label className="write-confirm-card__trust-option">
-            <span className="write-confirm-card__trust-control">
-              <input
-                type="checkbox"
-                checked={trustSession}
-                onChange={(e) => setTrustSession(e.target.checked)}
-              />
-            </span>
-            <span className="write-confirm-card__trust-label">
-              {t('confirm.mcp.trustSession')}
-              <small className="write-confirm-card__subject-note">{t('confirm.mcp.trustHint')}</small>
-            </span>
-          </label>
+          {sessionId ? (
+            <label className="write-confirm-card__trust-option">
+              <span className="write-confirm-card__trust-control">
+                <input type="checkbox" checked={trustChecked} onChange={(event) => setTrustChecked(event.target.checked)} />
+              </span>
+              <span className="write-confirm-card__trust-label">{t('confirm.mcp.trustSession')}</span>
+            </label>
+          ) : null}
         </div>
       </ConfirmCardDecision>
     </div>

@@ -13,7 +13,7 @@ import type {
 import { waitForToolConfirm } from '../toolConfirmRegistry'
 import { ImChannel, type ImPendingInput } from './imChannel'
 
-export type ToolConfirmOutcome = 'approved' | 'rejected' | 'timeout'
+export type ToolConfirmOutcome = 'approved' | 'rejected' | 'timeout' | 'cancelled' | 'unavailable'
 
 /** 最小审计出口：由 SecurityAuditLog 实现，或测试中注入假实现。 */
 export interface AuditSink {
@@ -23,6 +23,8 @@ export interface AuditSink {
 function mapToolOutcome(outcome: ToolConfirmOutcome): ConfirmOutcome {
   if (outcome === 'approved') return { kind: 'approved', cause: 'user-approved' }
   if (outcome === 'timeout') return { kind: 'timeout', cause: 'timeout' }
+  if (outcome === 'cancelled') return { kind: 'rejected', cause: 'cancelled' }
+  if (outcome === 'unavailable') return { kind: 'rejected', cause: 'unavailable' }
   return { kind: 'rejected', cause: 'user-denied' }
 }
 
@@ -68,7 +70,7 @@ export class DesktopChannel implements ConfirmationChannel {
         requestId: string,
         toolUseId: string,
         memoryTiers?: ConfirmRequest['memoryTiers'],
-        scope?: { toolName: string; lane: string },
+        scope?: { toolName: string; lane: string; sessionId?: string; generation?: number; revision?: number; trustMcpServerId?: string; trustMcpToolName?: string },
         timeoutMs?: number
       ) => Promise<ToolConfirmOutcome>
     }
@@ -84,6 +86,15 @@ export class DesktopChannel implements ConfirmationChannel {
       signals: req.facts.signals.map((s) => s.kind)
     })
     const wait = this.deps.waitForToolConfirm ?? waitForToolConfirm
+    const trustScope = wait === waitForToolConfirm ? {
+      ...(req.facts.signals.some((s) => s.kind === 'command-sequence' && s.persistable && s.commands.length === 1) ? { trustCommands: req.facts.signals.flatMap((s) => s.kind === 'command-sequence' && s.persistable && s.commands.length === 1 ? [JSON.stringify([s.commands[0]!.verb, ...s.commands[0]!.args])] : []) } : {}),
+      ...(req.facts.signals.some((s) => s.kind === 'outbound-target') ? { trustDomains: req.facts.signals.flatMap((s) => s.kind === 'outbound-target' && s.channel === 'browser' ? (s.recipient ? [s.recipient] : s.domains ?? []) : []) } : {}),
+      ...(req.facts.signals.some((s) => s.kind === 'browser-action') ? { trustActDomains: req.facts.signals.flatMap((s) => s.kind === 'browser-action' && s.host ? [s.host] : []) } : {})
+      ,...(req.facts.signals.some((s) => s.kind === 'mcp-tool') ? {
+        trustMcpServerId: req.facts.signals.find((s) => s.kind === 'mcp-tool')?.serverId,
+        trustMcpToolName: req.facts.signals.find((s) => s.kind === 'mcp-tool')?.toolName
+      } : {})
+    } : {}
     // 把决策层给出的记忆档位登记到 registry，供 tool:confirm-response 校验渲染端回传档位（B1）
     // P1-4：ConfirmRequest.timeoutMs 真实消费；null/缺省回退 registry 的 CONFIRM_MS（5min，user 默认不变）
     const outcome = await wait(
@@ -92,7 +103,9 @@ export class DesktopChannel implements ConfirmationChannel {
       req.memoryTiers,
       {
         toolName: this.deps.toolName,
-        lane: this.deps.lane
+        lane: this.deps.lane,
+        sessionId: this.deps.sessionId,
+        ...trustScope
       },
       req.timeoutMs ?? undefined
     )
@@ -104,7 +117,7 @@ export class DesktopChannel implements ConfirmationChannel {
       outcome: outcome,
       cause: mapped.cause,
       // 超时无回答动作，actor 如实为 system；批准/拒绝归因桌面用户（B1）
-      actor: outcome === 'timeout' ? 'system' : 'user'
+      actor: outcome === 'approved' || outcome === 'rejected' ? 'user' : 'system'
     })
     return mapped
   }
@@ -250,7 +263,7 @@ export class ImRequestChannel implements ConfirmationChannel {
   }
 
   cancel(requestId: string): void {
-    this.deps.imChannel.cancel(requestId)
+    this.deps.imChannel.cancelByRequestId(requestId)
   }
 }
 

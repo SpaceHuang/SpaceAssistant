@@ -33,7 +33,7 @@ describe('runExemptionMigrationOnce（§6 启动一次性豁免迁移）', () =>
     expect(r.written).toBe(3)
 
     const cache = new SqliteDecisionCache(getDbConnection(db))
-    expect(cache.lookup({ kind: 'shell-command', verb: 'ping baidu.com', level: 'exact' })).not.toBeNull()
+    expect(cache.lookup({ kind: 'shell-command', verb: JSON.stringify(['ping', 'baidu.com']), level: 'exact' })).not.toBeNull()
     expect(cache.lookup({ kind: 'domain', domain: 'example.com', level: 'domain-any-action' })).not.toBeNull()
     expect(cache.lookup({ kind: 'domain', domain: 'feishu.cn', level: 'domain+action' })).not.toBeNull()
 
@@ -88,7 +88,7 @@ describe('runExemptionMigrationOnce（§6 启动一次性豁免迁移）', () =>
 
     // 第三次模拟"中断后版本丢失"：手动清版本再跑，缓存条目仍唯一（按规范化键 upsert）
     const cache = new SqliteDecisionCache(getDbConnection(db))
-    const before = cache.lookup({ kind: 'shell-command', verb: 'ping baidu.com', level: 'exact' })
+    const before = cache.lookup({ kind: 'shell-command', verb: JSON.stringify(['ping', 'baidu.com']), level: 'exact' })
     expect(before).not.toBeNull()
   })
 
@@ -121,6 +121,34 @@ describe('runExemptionMigrationOnce（§6 启动一次性豁免迁移）', () =>
     expect(cache.lookup({ kind: 'domain', domain: 'feishu.cn', level: 'domain+action' })).not.toBeNull()
     expect(cache.lookup({ kind: 'domain', domain: 'example.com', level: 'domain-any-action' })).not.toBeNull()
     expect(cache.lookup({ kind: 'domain', domain: 'example.com', level: 'domain+action' })).not.toBeNull()
+  })
+
+  it('v2 → v3 不把旧空格键推导为新的 argv 授权', () => {
+    const db = openSqliteDatabase(':memory:')
+    dbs.push(db)
+    const cache = new SqliteDecisionCache(getDbConnection(db))
+    cache.record({
+      id: 'legacy-shell',
+      key: { kind: 'shell-command', verb: 'touch a b', level: 'exact' },
+      decision: 'allow',
+      lane: '*',
+      scope: 'persistent',
+      createdAt: Date.now(),
+      lastHitAt: Date.now(),
+      hitCount: 0,
+      source: 'user-confirm'
+    })
+    setConfigValue(db, EXEMPTION_MIGRATION_VERSION_KEY, '2')
+
+    expect(runExemptionMigrationOnce(db, {
+      readShellTrustedCommands: () => [],
+      readBrowserTrustedDomains: () => ({ trustedDomains: [], actTrustedDomains: [] })
+    }).status).toBe('done')
+    expect(cache.lookup({
+      kind: 'shell-command',
+      verb: JSON.stringify(['touch', 'a', 'b']),
+      level: 'exact'
+    })).toBeNull()
   })
 })
 

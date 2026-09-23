@@ -93,7 +93,8 @@ export function createWeChatBundle(deps: {
     auditLogger,
     getWebContents: getWc,
     getReplyBot: () => botService.getBot() ?? undefined,
-    db: deps.db
+    db: deps.db,
+    getGeneration: (channel) => remoteAuthorizationRegistry.getGeneration(channel)
   })
   remoteAuthorizationRegistry.registerPendingCancel({
     cancelByChannel: (ch) => imChannel.cancelByChannel(ch)

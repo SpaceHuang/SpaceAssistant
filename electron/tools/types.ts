@@ -179,5 +179,8 @@ export function validateToolExecutorResultForTool(toolName: string, result: unkn
 
 export interface ToolExecutor {
   name: string
+  actionClass?: 'read' | 'write' | 'execute' | 'outbound'
+  /** 可信资源声明；缺省表示未知副作用，调度器按串行屏障处理。 */
+  resourceKeys?: (input: Record<string, unknown>, context: { workDir: string; sessionId: string }) => readonly string[] | undefined
   execute(input: Record<string, unknown>, ctx: ToolExecutionContext): Promise<ToolExecutorResult>
 }

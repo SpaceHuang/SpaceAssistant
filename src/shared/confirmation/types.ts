@@ -251,6 +251,7 @@ export interface ApprovalInvocation {
   invocationId: string
   profileId: string
   timeoutMs: number
+  deadlineAt?: number
 }
 
 /** 审批执行链结果：ok=false 时 cause 必须可区分（I4 / 审计五问）。 */
@@ -268,6 +269,7 @@ export type ConfirmOutcomeCause =
   | 'agent-approved'
   | 'agent-deny'
   | 'unavailable'
+  | 'cancelled'
   | 'timeout'
   | 'unparsable'
   | 'config-error'
@@ -360,7 +362,7 @@ export interface SecurityAuditEvent {
   decision?: 'auto-allow' | 'require-confirm' | 'deny'
   ruleId?: string
   reason?: string
-  outcome?: 'approved' | 'rejected' | 'timeout' | 'cancelled'
+  outcome?: 'approved' | 'rejected' | 'timeout' | 'cancelled' | 'unavailable'
   /** require-confirm 决策的回答者（policy.decision；user=人工卡 / agent=审批 Agent）。 */
   answerer?: 'user' | 'agent'
   /** 裁决理由摘要（审批 Agent；脱敏由调用方保证，仅 summary 不落 evidence 原文）。 */

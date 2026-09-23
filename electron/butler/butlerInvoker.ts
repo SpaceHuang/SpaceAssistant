@@ -124,6 +124,23 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
     return { ok: false, runId, error: `准入拒绝：${reason}`, admissionDenied: reason as 'hourly-limit' | 'queue-full' }
   }
   const ticket = admission.ticket
+  let activeTicket: import('../runtime/callAdmissionGate').AdmissionTicket | undefined = ticket
+  const applicationAdmission = {
+    park: (checkpoint?: unknown) => {
+      if (!activeTicket) return undefined
+      const parked = admissionGate.park(activeTicket)
+      if (parked) activeTicket = undefined
+      return parked ? { ...parked, checkpoint } : undefined
+    },
+    discard: (handle: unknown) => { if (handle) admissionGate.discard(handle as never) },
+      resume: async (handle: unknown, options?: { signal?: AbortSignal; deadlineAt?: number }) => {
+      if (!handle || activeTicket) return { ok: false as const, retryable: false, cause: 'invalid-park-handle' }
+      const resumed = await admissionGate.resume(handle as never, options)
+      if (!resumed.ok) return { ok: false as const, retryable: resumed.retryable, cause: resumed.cause }
+      activeTicket = resumed.ticket
+      return { ok: true as const }
+    }
+  }
 
   try {
     updateAutomationTaskRun(db, runId, { status: 'running' })
@@ -167,6 +184,7 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
           llmServiceId: executionConfig?.llmServiceId,
           taskPrompt: task.prompt,
           assistantMessageId: prepared.assistantMessage.id
+          ,applicationAdmission
         })
     })
 
@@ -209,13 +227,13 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
     }
     return { ok: false, runId, error: message }
   } finally {
-    ticket.release()
+    activeTicket?.release()
   }
 }
 
 async function runButlerModelTurn(
   deps: ButlerInvokerDeps,
-  args: { sessionId: string; requestId: string; turnId?: string; llmServiceId?: string; taskPrompt: string; assistantMessageId?: string }
+  args: { sessionId: string; requestId: string; turnId?: string; llmServiceId?: string; taskPrompt: string; assistantMessageId?: string; applicationAdmission?: import('../../src/shared/agent/invocation').AgentHostPorts['applicationAdmission'] }
 ): Promise<ButlerTurnResult> {
   const db = deps.db
   const session = getSession(db, args.sessionId)
@@ -289,6 +307,7 @@ async function runButlerModelTurn(
     appDb: db,
     locale: readAppLocale(db),
     assistantMessageId: args.assistantMessageId,
+    applicationAdmission: args.applicationAdmission,
     emitFactEvent: butlerEvents.emitFactEvent,
     emitSessionEvent: butlerEvents.emitSessionEvent,
     onFileTreeChanged: butlerEvents.onFileTreeChanged

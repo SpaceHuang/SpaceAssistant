@@ -54,6 +54,8 @@ let confirmOutcome: 'approved' | 'rejected' | 'timeout' = 'approved'
 vi.mock('./toolConfirmRegistry', () => ({
   registerToolCancel: vi.fn(),
   clearToolCancel: vi.fn(),
+  cancelAllToolConfirmsForRequest: vi.fn(),
+  prepareToolConfirm: vi.fn(),
   waitForToolConfirm: vi.fn(async () => confirmOutcome)
 }))
 

@@ -27,6 +27,13 @@ export {
   type ToolRevocationRegistryLike
 } from './runtime/components'
 export { Semaphore, withSemaphore, McpConcurrencyGate } from './runtime/semaphore'
+export * from './approval'
+export * from './capacity'
+export * from './scheduler'
+export * from './resourceLock'
+export * from './confirmationCommit'
+export * from './history'
+export * from './provider'
 
 // 契约层(宿主树门面转发;闭包由 CI 护栏断言零 electron、零内嵌 sqlite 依赖)
 export * from '../../../src/shared/agent/invocation'

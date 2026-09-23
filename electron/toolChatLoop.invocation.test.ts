@@ -71,6 +71,8 @@ vi.mock('./browser/stagehandService', () => ({
 vi.mock('./toolConfirmRegistry', () => ({
   registerToolCancel: vi.fn(),
   clearToolCancel: vi.fn(),
+  cancelAllToolConfirmsForRequest: vi.fn(),
+  prepareToolConfirm: vi.fn(async () => mockConfirmOutcome()),
   waitForToolConfirm: vi.fn(async () => mockConfirmOutcome())
 }))
 
@@ -261,6 +263,66 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
     expect(confirmReq).toMatchObject({ sessionId: 'sess-invocation-1', toolUseId: 'tu-inv2', toolName: 'write_file', requestId: 'req-invocation-1' })
     // 工具终态同样经 notify 出口（tool-result）
     expect(notifications.some((n) => n.kind === 'tool-result' && n.toolUseId === 'tu-inv2')).toBe(true)
+  })
+
+  it('审批结束后应用准入恢复失败时 fail-closed，不执行工具', async () => {
+    let executions = 0
+    const { getToolExecutor } = await import('./tools/builtinExecutors')
+    vi.mocked(getToolExecutor).mockImplementation((name: string) => name === 'write_file'
+      ? { name, execute: async () => { executions += 1; return { success: true, data: 'must-not-run' } } }
+      : undefined)
+    mockConfirmOutcome.mockResolvedValue('approved')
+    mockCreateAnthropicClient.mockReturnValue(
+      makeStreamRounds([
+        { content: [{ type: 'tool_use', id: 'tu-resume-fail', name: 'write_file', input: { path: 'x.txt', content: 'v' } }], stop_reason: 'tool_use' },
+        { content: [{ type: 'text', text: 'stopped' }], stop_reason: 'end_turn' }
+      ])
+    )
+    const res = await run(baseMaterials({
+      policyLanePackage: 'strict',
+      applicationAdmission: { park: () => 'application-park', resume: () => ({ ok: false, retryable: false, cause: 'terminal' }) }
+    }))
+    expect(executions).toBe(0)
+    expect(res).toMatchObject({ ok: false })
+  })
+
+  it('应用准入持久化首次失败、重试成功时保留并复用 parked handle', async () => {
+    let executions = 0
+    let resumeCalls = 0
+    const discard = vi.fn()
+    const { getToolExecutor } = await import('./tools/builtinExecutors')
+    vi.mocked(getToolExecutor).mockImplementation((name: string) => name === 'write_file'
+      ? { name, execute: async () => { executions += 1; return { success: true, data: 'written' } } }
+      : undefined)
+    mockConfirmOutcome.mockResolvedValue('approved')
+    mockCreateAnthropicClient.mockReturnValue(
+      makeStreamRounds([
+        { content: [{ type: 'tool_use', id: 'tu-resume-retry', name: 'write_file', input: { path: 'x.txt', content: 'v' } }], stop_reason: 'tool_use' },
+        { content: [{ type: 'text', text: 'written' }], stop_reason: 'end_turn' }
+      ])
+    )
+    const res = await run(baseMaterials({
+      policyLanePackage: 'strict',
+      invocationRuntime: {
+        acquireLease: () => ({ runtimeId: 'test-runtime', invocationId: 'req-invocation-1', generation: 1, release: vi.fn() }),
+        park: (_invocationId, lease, checkpoint) => ({ ...lease, checkpoint }),
+        resumeLease: (handle) => ({ ...handle, release: vi.fn() })
+      },
+      applicationAdmission: {
+        park: () => 'application-park',
+        discard,
+        resume: () => {
+          resumeCalls += 1
+          return resumeCalls === 1
+            ? { ok: false, retryable: true, cause: 'persistence-failed' }
+            : { ok: true }
+        }
+      }
+    }))
+    expect(res).toMatchObject({ ok: true })
+    expect(executions).toBe(1)
+    expect(resumeCalls).toBe(2)
+    expect(discard).not.toHaveBeenCalled()
   })
 })
 

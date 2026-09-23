@@ -14,6 +14,7 @@ import { TurnExecutePayload } from '../../src/shared/api'
 import { TurnIntent } from '../../src/shared/assistantFactAggregator'
 import { TurnRuntime as TurnRuntimeImpl } from '../turnRuntime'
 import { TurnStarted } from '../../src/shared/turnCoordinator'
+import { getDbConnection } from '../database'
 import { WikiStatus } from '../../src/shared/domainTypes'
 import { app, shell } from 'electron'
 import { appendMessage, createSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getApiContextBaseline, getChatMessagePage, getContextHistorySummaryBaseline, getSearchCorpusPage, getConfigValue, getMessageSequence, getMessage, getMessages, getRecentTurnRoutingMessages, hasVisionInTurnRoutingContext, getNextQueuedMessage, getSession, getTurnByRequestId, getPersistedTurn, setPersistedTurnExecutionConfig, failConfiguringTurn, listPersistedTurns, listTurnErrorsByAssistantMessageIds, resolveRetryContext, setConfigValue, updateMessageContent, updateSession } from '../database'
@@ -42,16 +43,38 @@ import { notifyFileTreeChanged } from '../fileTreeSyncNotify'
 import { randomUUID } from 'node:crypto'
 import { readActiveLlmServiceId, readLlmServices, resolveFastPreferredModelName, resolveLanguagePreferredModelName, resolveLlmCredentialsForModel } from '../llmServiceResolver'
 import { readBrowserConfigFromDb, persistBrowserConfig } from '../browser/browserConfigDb'
-import { recordUserAnswerFromMemoryTiers } from '../confirmation/decisionCacheWriter'
+import { recordUserAnswerFromMemoryTiers, clearSystemManagedCacheEntry, readSystemManagedCacheEntry, restoreSystemManagedCacheEntry } from '../confirmation/decisionCacheWriter'
+import { canonicalKeyJson } from '../confirmation/sqliteDecisionCache'
+import { revokeLegacyTrustForCacheKey } from '../confirmation/legacyTrustRevocation'
 import { resolveSafePath } from '../pathSecurity'
 import { resolveTrustedTurnExecutionConfig } from '../turnExecutionConfig'
 import { scanSkillsWithSkipped } from '../skills/skillScanner'
 import { spawn } from 'child_process'
-import { submitToolConfirmResponse, signalToolCancel, isPendingMemoryTier, getPendingMemoryTiers, isPendingConfirm } from '../toolConfirmRegistry'
+import { submitToolConfirmResponse, reserveToolConfirmResponse, restoreReservedToolConfirm, isToolConfirmCommitAllowed, signalToolCancel, isPendingMemoryTier, getPendingMemoryTiers, isPendingConfirm, getPendingConfirmToolName, getPendingConfirmSessionId, getPendingConfirmGeneration, getPendingConfirmRevision, getPendingMcpTrust, isPendingTrust } from '../toolConfirmRegistry'
 import { toConfirmationSnapshot, turnToDisplay } from '../../src/shared/turnDisplayProtocol'
+import { getCallAdmissionGate } from '../runtime/callAdmissionGate'
+import { cancelClaudeAdmission } from '../claudeStreamHandlers'
+import { reserveConfirmationSubmission, commitConfirmationSubmissionWithWork, markConfirmationSubmissionReconciling, reconcileConfirmationSubmission, reconcileConfirmationSubmissions, ConfirmationCommitRolledBackError, ConfirmationCommitUnknownError } from '../confirmation/persistentConfirmationCommit'
+import { forgetMcpSessionTrust, isMcpSessionTrusted, rememberMcpSessionTrust } from '../mcp/mcpSessionTrust'
+
+/** 将持久 receipt 对账结果回接到仍在主进程等待的桌面确认项。 */
+function settleReconciledDesktopConfirm(result: { submissionId: string; outcome: 'committed' | 'rolled_back' }): void {
+  // IM receipt 不使用 desktop toolConfirmRegistry；其 pending 由各自 ImChannel 管理。
+  if (result.submissionId.startsWith('im:')) return
+  const separator = result.submissionId.lastIndexOf(':')
+  if (separator <= 0 || separator === result.submissionId.length - 1) return
+  const requestId = result.submissionId.slice(0, separator)
+  const toolUseId = result.submissionId.slice(separator + 1)
+  if (result.outcome === 'committed') submitToolConfirmResponse(requestId, toolUseId, true)
+  else restoreReservedToolConfirm(requestId, toolUseId)
+}
 
 export function registerAgentIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
 const recordTrustToCache = makeRecordTrustToCache(ctx)
+
+  // 启动恢复器：进程崩溃/重启后仍能收敛上次 COMMIT 未知的 receipt，
+  // 且不会把已确认的 waiter 永久留在 committing。
+  try { reconcileConfirmationSubmissions(ctx.db, settleReconciledDesktopConfirm) } catch { /* 下次启动继续对账 */ }
 
   const turnRuntime = ctx.turnRuntime ?? new TurnRuntimeImpl({ storage: createTurnCoordinatorStorage(ctx.db), deps: { now: Date.now, id: randomUUID } })
 
@@ -100,114 +123,242 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         memoryTier?: import('../../src/shared/confirmation/types').CacheKey
         memoryTierOptionId?: number
       }
-    ): Promise<void> => {
+    ): Promise<import('../toolConfirmRegistry').ToolConfirmSubmitResult> => {
       // H1：信任写入必须与 pending 确认挂钩——agent 裁决路径（AgentChannel）不登记 waiter，
       // 其残留确认卡片上的「信任并允许」点击在此被拒绝，不得形成与裁决结果相悖的持久授权。
       const pendingConfirm = isPendingConfirm(payload.requestId, payload.toolUseId)
-      if (payload.approved && !pendingConfirm && (payload.trustCommand || payload.trustDomain || payload.trustActDomain || payload.trustMcpServerId)) {
+      if (!pendingConfirm) {
         logAgentEvent('warn', 'tool.confirm.trust_rejected_no_pending', {
           requestId: payload.requestId,
           toolUseId: payload.toolUseId,
           sessionId: payload.sessionId,
           timestamp: Date.now()
         })
+        return submitToolConfirmResponse(payload.requestId, payload.toolUseId, payload.approved)
+      }
+      const trustedSessionId = getPendingConfirmSessionId(payload.requestId, payload.toolUseId)
+      if (!trustedSessionId || (payload.sessionId && trustedSessionId !== payload.sessionId)) {
+        return { accepted: false, outcome: 'missing' }
+      }
+      const ownerSessionId = trustedSessionId
+      const ownerGeneration = getPendingConfirmGeneration(payload.requestId, payload.toolUseId)
+      const ownerRevision = getPendingConfirmRevision(payload.requestId, payload.toolUseId)
+      if (!ownerGeneration || !ownerRevision) return { accepted: false, outcome: 'missing' }
+      // 先一次性消费 pending，再进行任何异步导入/持久化；避免确认超时或被并发响应消费后仍落信任。
+      const pendingMemoryTiers = getPendingMemoryTiers(payload.requestId, payload.toolUseId)
+      const pendingToolName = getPendingConfirmToolName(payload.requestId, payload.toolUseId)
+      const commandTrustAllowed = !payload.trustCommand?.trim() || !pendingToolName || (pendingToolName === 'run_shell' && isPendingTrust(payload.requestId, payload.toolUseId, 'command', payload.trustCommand.trim()))
+      const domainTrustAllowed = !payload.trustDomain?.trim() || !pendingToolName || (pendingToolName === 'browser' && isPendingTrust(payload.requestId, payload.toolUseId, 'domain', payload.trustDomain.trim()))
+      const actDomainTrustAllowed = !payload.trustActDomain?.trim() || !pendingToolName || (pendingToolName === 'browser' && isPendingTrust(payload.requestId, payload.toolUseId, 'act-domain', payload.trustActDomain.trim()))
+      // 组合响应必须先完成整体验证，再允许任何一项信任/记忆写入。
+      // 否则先写入的 trustCommand 会在后续非法 trustDomain/MCP 字段拒绝时泄漏。
+      const mcpTrustRequested = Boolean(payload.trustMcpServerId && payload.trustMcpToolName)
+      const pendingMcpTrust = getPendingMcpTrust(payload.requestId, payload.toolUseId)
+      const mcpTrustAllowed = !mcpTrustRequested || Boolean(
+        pendingMcpTrust &&
+        isPendingTrust(payload.requestId, payload.toolUseId, 'mcp', payload.trustMcpServerId!, payload.trustMcpToolName!)
+      )
+      const memoryTierRequested = payload.approved && (payload.memoryTierOptionId !== undefined || payload.memoryTier !== undefined)
+      const memoryTierAllowed = !memoryTierRequested || Boolean(
+        (payload.memoryTierOptionId !== undefined
+          ? pendingMemoryTiers?.[payload.memoryTierOptionId - 1]?.key
+          : payload.memoryTier) &&
+        pendingMemoryTiers?.some((tier) => JSON.stringify(tier.key) === JSON.stringify(
+          payload.memoryTierOptionId !== undefined
+            ? pendingMemoryTiers?.[payload.memoryTierOptionId - 1]?.key
+            : payload.memoryTier
+        ))
+      )
+      if (payload.approved && (!commandTrustAllowed || !domainTrustAllowed || !actDomainTrustAllowed || !mcpTrustAllowed || !memoryTierAllowed)) {
+        return submitToolConfirmResponse(payload.requestId, payload.toolUseId, false)
+      }
+      if (!reserveToolConfirmResponse(payload.requestId, payload.toolUseId)) {
+        return { accepted: false, outcome: 'missing' }
+      }
+      const writtenTrustKeys: import('../../src/shared/confirmation/types').CacheKey[] = []
+      const writtenCacheKeys: import('../../src/shared/confirmation/types').CacheKey[] = []
+      const cacheSnapshots = new Map<string, import('../../src/shared/confirmation/types').DecisionCacheEntry | null>()
+      const deferredTrustAudits: import('../../src/shared/confirmation/types').SecurityAuditEvent[] = []
+      const transactionTrustAudit = { record: (event: import('../../src/shared/confirmation/types').SecurityAuditEvent) => deferredTrustAudits.push(event) }
+      const flushTrustAudits = () => {
+        for (const event of deferredTrustAudits.splice(0)) getSecurityAuditLog().record(event)
+      }
+      const submissionId = `${payload.requestId}:${payload.toolUseId}`
+      const submissionPlan = {
+        submissionId,
+        confirmId: payload.toolUseId,
+        sessionId: ownerSessionId,
+        ownerId: ownerSessionId,
+        generation: ownerGeneration,
+        revision: ownerRevision,
+        action: payload.approved ? 'approved' as const : 'denied' as const,
+        memory: payload.memoryTier || payload.memoryTierOptionId !== undefined ? 'written' as const : 'none' as const
+      }
+      // sessionId 是响应中的可选回显字段；ownerSessionId 已从 pending waiter 校验取得，
+      // 不能因为 UI 省略该字段而静默跳过本次 MCP 会话信任写入。
+      const mcpTrustKey = mcpTrustRequested && pendingMcpTrust
+        ? { sessionId: ownerSessionId, serverId: pendingMcpTrust.serverId, toolName: pendingMcpTrust.toolName }
+        : undefined
+      let existingSubmission: ReturnType<typeof reserveConfirmationSubmission>
+      try {
+        existingSubmission = reserveConfirmationSubmission(ctx.db, submissionPlan)
+      } catch (error) {
+        if (error instanceof ConfirmationCommitUnknownError) {
+          try { markConfirmationSubmissionReconciling(ctx.db, submissionId, submissionPlan) } catch { /* 保留 committing，等待下次对账 */ }
+          try {
+            const result = reconcileConfirmationSubmission(ctx.db, submissionId)
+            if (result?.outcome === 'committed') submitToolConfirmResponse(payload.requestId, payload.toolUseId, payload.approved)
+            else if (result?.outcome === 'rolled_back') restoreReservedToolConfirm(payload.requestId, payload.toolUseId)
+          } catch { /* 下次启动继续对账 */ }
+        } else restoreReservedToolConfirm(payload.requestId, payload.toolUseId)
+        throw error
+      }
+      if (existingSubmission?.kind === 'committed') {
+        // 相同 submissionId 若已 committed，协议字段已在 reserve 阶段校验一致；
+        // 仍须结算当前 waiter，且回放原请求的 action（而非无条件 approved）。
+        const replayApproved = payload.approved
+        submitToolConfirmResponse(payload.requestId, payload.toolUseId, replayApproved)
+        return { accepted: true, outcome: replayApproved ? 'approved' : 'rejected' }
+      }
+      if (existingSubmission?.kind === 'not-committed') {
+        restoreReservedToolConfirm(payload.requestId, payload.toolUseId)
+        return { accepted: false, outcome: 'missing' }
+      }
+      const snapshotCache = (key: import('../../src/shared/confirmation/types').CacheKey) => {
+        const id = canonicalKeyJson(key)
+        if (!cacheSnapshots.has(id)) {
+          try { cacheSnapshots.set(id, readSystemManagedCacheEntry({ db: ctx.db, key, lane: 'desktop' })) } catch { cacheSnapshots.set(id, null) }
+        }
+      }
+      try {
+      // 所有动态模块在事务前完成加载；事务内不得跨 await 持有连接，避免卷入其他会话写入。
+      const shellTrustModule = payload.approved && payload.trustCommand?.trim()
+        ? await import('../shell/shellCommandTrust')
+        : undefined
+      const browserTrustModule = payload.approved && (payload.trustDomain?.trim() || payload.trustActDomain?.trim())
+        ? await import('../browser/browserDomainTrust')
+        : undefined
+      const transactionResult = commitConfirmationSubmissionWithWork(ctx.db, submissionPlan, () => {
+      // 先解析并提交记忆档位；后续信任写入失败时它也会走同一补偿快照。
+      if (payload.approved && payload.memoryTierOptionId !== undefined) {
+        const tier = pendingMemoryTiers?.[payload.memoryTierOptionId - 1]
+        if (tier) payload.memoryTier = tier.key
+      }
+      if (payload.approved && payload.memoryTier && pendingMemoryTiers.some((tier) => JSON.stringify(tier.key) === JSON.stringify(payload.memoryTier))) {
+        if (!isToolConfirmCommitAllowed(payload.requestId, payload.toolUseId)) throw new Error('confirmation-missing')
+        snapshotCache(payload.memoryTier)
+        recordUserAnswerFromMemoryTiers({
+          db: ctx.db,
+          audit: transactionTrustAudit,
+          lane: 'desktop',
+          sessionId: ownerSessionId,
+          key: payload.memoryTier,
+          memoryTiers: pendingMemoryTiers,
+          answererKind: 'user',
+          source: 'user-confirm'
+        })
+        writtenCacheKeys.push(payload.memoryTier)
+      }
+      const trustAllowed = (kind: 'command' | 'domain' | 'act-domain' | 'mcp') => {
+        if (kind === 'command') return true
+        if (kind === 'domain' || kind === 'act-domain') return true
+        return true
       }
       if (payload.approved && pendingConfirm && payload.trustCommand?.trim()) {
-        const { addTrustedCommand } = await import('../shell/shellCommandTrust')
-        const added = addTrustedCommand(ctx.db, payload.trustCommand.trim(), { source: 'desktop' })
-        if (added) {
-          logAgentEvent('info', 'shell.trust.command', {
-            executable: added.executable,
-            fixedArgvPrefix: added.fixedArgvPrefix,
-            timestamp: Date.now()
-          })
-          // B6：双写 decision_cache（与迁移键同构），让该信任在「确认记忆」页可见、可单条撤销
-          if (added.executable) {
-            recordTrustToCache(
-              {
-                kind: 'shell-command',
-                verb: [added.executable, ...(added.fixedArgvPrefix ?? [])].join(' '),
-                level: 'exact'
-              },
-              payload.sessionId
-            )
-          }
+        if (!isToolConfirmCommitAllowed(payload.requestId, payload.toolUseId)) throw new Error('confirmation-missing')
+        if (!commandTrustAllowed) throw new Error('confirmation-missing')
+        const { addTrustedCommand, listTrustedCommands } = shellTrustModule!
+        if (!isToolConfirmCommitAllowed(payload.requestId, payload.toolUseId)) throw new Error('confirmation-missing')
+        const beforeTrustedIds = new Set((typeof listTrustedCommands === 'function' ? listTrustedCommands(ctx.db) : []).map((entry) => entry.id))
+        let added: ReturnType<typeof addTrustedCommand> = null
+        added = addTrustedCommand(ctx.db, payload.trustCommand!.trim(), { source: 'desktop' })
+        if (added?.executable) {
+          const shellVerb = JSON.stringify([added.executable, ...(added.fixedArgvPrefix ?? [])])
+          snapshotCache({ kind: 'shell-command', verb: shellVerb, level: 'exact' })
+          recordTrustToCache(
+            { kind: 'shell-command', verb: shellVerb, level: 'exact' },
+            ownerSessionId,
+            'persistent',
+            transactionTrustAudit
+          )
+          writtenCacheKeys.push({ kind: 'shell-command', verb: shellVerb, level: 'exact' })
+          if (!beforeTrustedIds.has(added.id)) writtenTrustKeys.push({ kind: 'shell-command', verb: shellVerb, level: 'exact' })
         }
       }
       if (payload.approved && pendingConfirm && payload.trustDomain?.trim()) {
-        const { addTrustedDomain } = await import('../browser/browserDomainTrust')
+        if (!isToolConfirmCommitAllowed(payload.requestId, payload.toolUseId)) throw new Error('confirmation-missing')
+        if (!domainTrustAllowed) throw new Error('confirmation-missing')
+        const { addTrustedDomain } = browserTrustModule!
+        if (!isToolConfirmCommitAllowed(payload.requestId, payload.toolUseId)) throw new Error('confirmation-missing')
         const browser = readBrowserConfigFromDb(ctx.db)
-        const next = addTrustedDomain(browser, payload.trustDomain.trim())
+        const existed = browser.trustedDomains.some((domain) => domain.toLowerCase() === payload.trustDomain!.trim().toLowerCase())
+        const next = addTrustedDomain(browser, payload.trustDomain!.trim())
         persistBrowserConfig(ctx.db, next)
-        logAgentEvent('info', 'browser.trust.domain', {
-          domain: payload.trustDomain.trim(),
-          timestamp: Date.now()
-        })
+        snapshotCache({ kind: 'domain', domain: payload.trustDomain!.trim(), level: 'domain-any-action' })
+        recordTrustToCache({ kind: 'domain', domain: payload.trustDomain!.trim(), level: 'domain-any-action' }, ownerSessionId, 'persistent', transactionTrustAudit)
+        writtenCacheKeys.push({ kind: 'domain', domain: payload.trustDomain!.trim(), level: 'domain-any-action' })
+        if (!existed) writtenTrustKeys.push({ kind: 'domain', domain: payload.trustDomain!.trim(), level: 'domain-any-action' })
         // 双写 navigate 档（domain-any-action）缓存键，供执行链路缓存命中
-        recordTrustToCache({ kind: 'domain', domain: payload.trustDomain.trim(), level: 'domain-any-action' }, payload.sessionId)
       }
       if (payload.approved && pendingConfirm && payload.trustActDomain?.trim()) {
-        const { addTrustedActDomain } = await import('../browser/browserDomainTrust')
+        if (!isToolConfirmCommitAllowed(payload.requestId, payload.toolUseId)) throw new Error('confirmation-missing')
+        if (!actDomainTrustAllowed) throw new Error('confirmation-missing')
+        const { addTrustedActDomain } = browserTrustModule!
+        if (!isToolConfirmCommitAllowed(payload.requestId, payload.toolUseId)) throw new Error('confirmation-missing')
         const browser = readBrowserConfigFromDb(ctx.db)
-        const next = addTrustedActDomain(browser, payload.trustActDomain.trim())
+        const existed = browser.actTrustedDomains.some((domain) => domain.toLowerCase() === payload.trustActDomain!.trim().toLowerCase())
+        const next = addTrustedActDomain(browser, payload.trustActDomain!.trim())
         persistBrowserConfig(ctx.db, next)
-        logAgentEvent('info', 'browser.trust.actDomain', {
-          domain: payload.trustActDomain.trim(),
-          timestamp: Date.now()
-        })
+        snapshotCache({ kind: 'domain', domain: payload.trustActDomain!.trim(), level: 'domain+action' })
+        recordTrustToCache({ kind: 'domain', domain: payload.trustActDomain!.trim(), level: 'domain+action' }, ownerSessionId, 'persistent', transactionTrustAudit)
+        writtenCacheKeys.push({ kind: 'domain', domain: payload.trustActDomain!.trim(), level: 'domain+action' })
+        if (!existed) writtenTrustKeys.push({ kind: 'domain', domain: payload.trustActDomain!.trim(), level: 'domain+action' })
         // 双写 act 档（domain+action）缓存键，与 navigate 档隔离
-        recordTrustToCache({ kind: 'domain', domain: payload.trustActDomain.trim(), level: 'domain+action' }, payload.sessionId)
       }
-      if (payload.approved && pendingConfirm && payload.sessionId && payload.trustMcpServerId && payload.trustMcpToolName) {
-        const { rememberMcpSessionTrust } = await import('../mcp/mcpSessionTrust')
-        rememberMcpSessionTrust(payload.sessionId, payload.trustMcpServerId, payload.trustMcpToolName)
-        logAgentEvent('info', 'mcp.trust.session', {
-          sessionId: payload.sessionId,
-          serverId: payload.trustMcpServerId,
-          tool: payload.trustMcpToolName,
+      if (!isToolConfirmCommitAllowed(payload.requestId, payload.toolUseId)) throw new Error('confirmation-missing')
+      return undefined
+      }, `confirm:${submissionId}`, 1, () => {
+        if (!isToolConfirmCommitAllowed(payload.requestId, payload.toolUseId)) throw new Error('confirmation-missing')
+      })
+      if (transactionResult.kind !== 'committed') throw new Error('confirmation-commit-failed')
+      flushTrustAudits()
+      const mcpTrustAlreadyPresent = mcpTrustKey
+        ? isMcpSessionTrusted(mcpTrustKey.sessionId, mcpTrustKey.serverId, mcpTrustKey.toolName)
+        : false
+      if (payload.approved && mcpTrustKey && !mcpTrustAlreadyPresent) rememberMcpSessionTrust(mcpTrustKey.sessionId, mcpTrustKey.serverId, mcpTrustKey.toolName)
+      const response = submitToolConfirmResponse(payload.requestId, payload.toolUseId, payload.approved)
+      if (mcpTrustKey && !mcpTrustAlreadyPresent && !response.accepted) forgetMcpSessionTrust(mcpTrustKey.sessionId, mcpTrustKey.serverId, mcpTrustKey.toolName)
+      return response
+      } catch (error) {
+        const rolledBackBeforeCommit = error instanceof ConfirmationCommitRolledBackError
+        if (!rolledBackBeforeCommit) {
+          try { markConfirmationSubmissionReconciling(ctx.db, submissionId, submissionPlan) } catch { /* receipt remains unknown and fail-closed */ }
+          try {
+            const result = reconcileConfirmationSubmission(ctx.db, submissionId)
+            if (result?.outcome === 'committed') submitToolConfirmResponse(payload.requestId, payload.toolUseId, payload.approved)
+            else if (result?.outcome === 'rolled_back') restoreReservedToolConfirm(payload.requestId, payload.toolUseId)
+          } catch { /* 数据库仍不可用时由启动恢复器继续处理 */ }
+        }
+        if (rolledBackBeforeCommit) restoreReservedToolConfirm(payload.requestId, payload.toolUseId)
+        const connection = typeof getDbConnection === 'function' ? getDbConnection(ctx.db) as unknown as { exec?: unknown } : undefined
+        // 真实 SQLite 已由 commitConfirmationSubmissionWithWork 回滚；不得再用补偿删除可能早已存在的授权。
+        // 只有无数据库的兼容适配器才使用旧的尽力补偿路径。
+        if (typeof connection?.exec !== 'function') {
+          for (const key of writtenTrustKeys) {
+            try { revokeLegacyTrustForCacheKey(ctx.db, key) } catch { /* fail closed */ }
+          }
+          for (const key of writtenCacheKeys) {
+            try { const id = canonicalKeyJson(key); restoreSystemManagedCacheEntry({ db: ctx.db, key, lane: 'desktop', entry: cacheSnapshots.get(id) ?? null }) } catch { /* fail closed */ }
+          }
+        }
+        logAgentEvent('error', 'tool.confirm.trust_rejected_no_pending', {
+          requestId: payload.requestId,
+          toolUseId: payload.toolUseId,
+          error: error instanceof Error ? error.message : String(error),
           timestamp: Date.now()
         })
-        // 会话级 MCP 信任双写 decision_cache（键带 sessionId，等价 mcpSessionTrust 内存语义）
-        recordTrustToCache(
-          {
-            kind: 'mcp-tool',
-            serverId: payload.trustMcpServerId,
-            toolName: payload.trustMcpToolName,
-            sessionId: payload.sessionId
-          },
-          payload.sessionId,
-          'session'
-        )
+        return { accepted: false, outcome: 'missing' }
       }
-      if (payload.approved && payload.memoryTierOptionId !== undefined) {
-        const tier = getPendingMemoryTiers(payload.requestId, payload.toolUseId)?.[payload.memoryTierOptionId - 1]
-        if (tier) payload.memoryTier = tier.key
-      }
-      if (payload.approved && payload.memoryTier) {
-        // 记忆档位：用户选中的“记住”写入 decision_cache（执行链路侧写缓存），落 cache.write 审计。
-        // B1：仅接受本次待确认请求决策层给出的档位（防渲染端伪造任意持久放行键）；
-        // B2：scope 按键派生（带 sessionId 的会话级键不得错标为 persistent）。
-        if (isPendingMemoryTier(payload.requestId, payload.toolUseId, payload.memoryTier)) {
-          recordUserAnswerFromMemoryTiers({
-            db: ctx.db,
-            audit: getSecurityAuditLog(),
-            lane: 'desktop',
-            sessionId: payload.sessionId ?? 'desktop',
-            key: payload.memoryTier,
-            memoryTiers: getPendingMemoryTiers(payload.requestId, payload.toolUseId),
-            answererKind: 'user',
-            source: 'user-confirm'
-          })
-        } else {
-          logAgentEvent('warn', 'tool.confirm.memory_tier_rejected', {
-            requestId: payload.requestId,
-            toolUseId: payload.toolUseId,
-            sessionId: payload.sessionId,
-            timestamp: Date.now()
-          })
-        }
-      }
-      submitToolConfirmResponse(payload.requestId, payload.toolUseId, payload.approved)
     }
   )
 
@@ -548,6 +699,9 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
 
   ipcMain.handle('chat:cancel-turn', (_e, turnId: string) => {
     const controller = configuringAbortControllers.get(turnId)
+    cancelClaudeAdmission(turnId)
+    const turn = typeof turnRuntime.getTurn === 'function' ? turnRuntime.getTurn(turnId) : undefined
+    if (turn?.requestId) getCallAdmissionGate().cancel(turn.requestId)
     const cancelled = turnRuntime.cancel(turnId)
     if (cancelled && controller) {
       controller.abort()

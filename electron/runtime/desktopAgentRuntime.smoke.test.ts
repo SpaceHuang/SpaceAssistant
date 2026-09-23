@@ -44,6 +44,14 @@ describe('createDesktopAgentRuntime(生产装配 smoke)', () => {
     expect(signal.aborted).toBe(true)
   })
 
+  it('审批准入池由桌面 runtime 持有且执行真实并发上限', async () => {
+    const rt = createDesktopAgentRuntime()
+    const first = await rt.approvalAdmission.acquire({ requestId: 'smoke-a', parentTaskId: 'smoke-parent' })
+    expect(first.kind).toBe('granted')
+    expect(rt.approvalAdmission).not.toBe((createDesktopAgentRuntime() as typeof rt).approvalAdmission)
+    if (first.kind === 'granted') first.release()
+  })
+
   it('toolRevocations 撤回事实生效(非恒 false 桩)', () => {
     const rt = createDesktopAgentRuntime()
     rt.toolRevocations.registerToolRevocationRequest('rev-req', 'desktop')

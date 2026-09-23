@@ -99,6 +99,8 @@ vi.mock('./tools/writeFileAutoApproval', async (importOriginal) => ({
 vi.mock('./toolConfirmRegistry', () => ({
   registerToolCancel: vi.fn(),
   clearToolCancel: vi.fn(),
+  cancelAllToolConfirmsForRequest: vi.fn(),
+  prepareToolConfirm: vi.fn(),
   waitForToolConfirm: vi.fn(async () => 'approved' as const)
 }))
 

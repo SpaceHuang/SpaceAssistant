@@ -28,6 +28,7 @@ import { recordSettingsChange } from '../confirmation/settingsAudit'
 import { recordSystemManagedCacheEntry } from '../confirmation/decisionCacheWriter'
 import { type Dirent } from 'fs'
 import { type MessagePageReader } from '../sessionBackupManager'
+import type { AuditSink } from '../confirmation/channels'
 
 export async function searchFilesUnder(
   absRoot: string,
@@ -244,11 +245,12 @@ export function makeRecordTrustToCache(ctx: AppIpcContext) {
   return (
     key: import('../../src/shared/confirmation/types').CacheKey,
     sessionId?: string,
-    scope: 'session' | 'persistent' = 'persistent'
+    scope: 'session' | 'persistent' = 'persistent',
+    audit: AuditSink = getSecurityAuditLog()
   ): void => {
     recordSystemManagedCacheEntry({
       db: ctx.db,
-      audit: getSecurityAuditLog(),
+      audit,
       lane: 'desktop',
       sessionId: sessionId ?? 'desktop',
       key,

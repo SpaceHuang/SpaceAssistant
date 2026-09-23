@@ -38,4 +38,39 @@ describe('ConfirmationAuthorizationRegistry', () => {
       expect(() => registry.consume(permit, subject)).toThrow('MEMORY_WRITE_PERMIT_INVALID')
     }
   })
+
+  it('restores a consumed permit only with the one-time recovery token', () => {
+    const registry = new ConfirmationAuthorizationRegistry()
+    const permit = registry.issue(subject)
+    const consumed = registry.consumeForWrite(permit, subject)
+    expect(registry.size()).toBe(0)
+    expect(() => registry.restore(permit, subject)).toThrow('MEMORY_WRITE_PERMIT_RECOVERY_REQUIRED')
+    registry.restore(permit, subject, consumed.recovery)
+    expect(registry.size()).toBe(1)
+    expect(registry.consume(permit, subject)).toEqual(subject)
+    expect(() => registry.restore(permit, subject, consumed.recovery)).toThrow('MEMORY_WRITE_PERMIT_RECOVERY_INVALID')
+  })
+
+  it('cannot restore a revoked or forged permit', () => {
+    const registry = new ConfirmationAuthorizationRegistry()
+    const permit = registry.issue(subject)
+    registry.invalidate(permit.permitId, 'cancelled')
+    expect(() => registry.restore(permit, subject, { permitId: permit.permitId, nonce: 'forged' })).toThrow('MEMORY_WRITE_PERMIT_RECOVERY_INVALID')
+  })
+
+  it('cannot restore a recovery after the consumed permit is invalidated', () => {
+    const registry = new ConfirmationAuthorizationRegistry()
+    const permit = registry.issue(subject)
+    const consumed = registry.consumeForWrite(permit, subject)
+    registry.invalidate(permit.permitId, 'cancelled')
+    expect(() => registry.restore(permit, subject, consumed.recovery)).toThrow('MEMORY_WRITE_PERMIT_RECOVERY_INVALID')
+  })
+
+  it('finalizes the recovery window after a successful write', () => {
+    const registry = new ConfirmationAuthorizationRegistry()
+    const permit = registry.issue(subject)
+    const consumed = registry.consumeForWrite(permit, subject)
+    registry.finalizeRecovery(consumed.recovery)
+    expect(() => registry.restore(permit, subject, consumed.recovery)).toThrow('MEMORY_WRITE_PERMIT_RECOVERY_INVALID')
+  })
 })

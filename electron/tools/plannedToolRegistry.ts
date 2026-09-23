@@ -1,6 +1,7 @@
 import { createHash } from 'crypto'
 import type { ToolExecutionContext as RuntimeToolExecutionContext } from './types'
 import type { ToolExecutor } from './types'
+import { BUILTIN_TOOL_METADATA } from '../../src/shared/builtinToolMetadata'
 
 const preparedInvocationBrand = Symbol('PreparedInvocation')
 
@@ -67,6 +68,8 @@ export interface PlanningHandle {
 export interface RegisteredTool {
   readonly name: string
   readonly kind: 'direct' | 'planned'
+  readonly actionClass?: 'read' | 'write' | 'execute' | 'outbound'
+  readonly resourceKeys?: (raw: unknown, context?: { workDir: string; sessionId: string }) => readonly string[] | undefined
   begin(raw: unknown, context: InvocationContext): Promise<InvocationHandle>
   /** 可观察的异步 planning 状态；`begin()` 保持向后兼容并复用同一 promise。 */
   beginPlanning(raw: unknown, context: InvocationContext): PlanningHandle
@@ -74,12 +77,16 @@ export interface RegisteredTool {
 
 export interface DirectToolSpec<I, O> {
   name: string
+  actionClass?: RegisteredTool['actionClass']
+  resourceKeys?: (input: I, context?: { workDir: string; sessionId: string }) => readonly string[] | undefined
   parseInput(raw: unknown): I
   execute(input: I, context: ToolExecutionContext): Promise<O>
 }
 
 export interface PlannedToolSpec<I, P, O> {
   name: string
+  actionClass?: RegisteredTool['actionClass']
+  resourceKeys?: (input: I, context?: { workDir: string; sessionId: string }) => readonly string[] | undefined
   parseInput(raw: unknown): I
   plan(input: I, context: ToolPlanningContext): Promise<P>
   execute(plan: P, context: ToolExecutionContext): Promise<O>
@@ -116,11 +123,14 @@ export class TypedToolRegistry {
     // 占用的工具提供 typed direct 视图。direct 视图不复制输入或运行时状态，
     // 只在 coordinator execute 阶段把已注入的 runtimeContext 交给旧实现。
     if (!this.tools.has(executor.name)) {
+      const actionClass = executor.actionClass ?? BUILTIN_TOOL_METADATA[executor.name]?.actionClass
       this.tools.set(executor.name, defineDirectTool({
         name: executor.name,
+        ...(actionClass ? { actionClass } : {}),
         parseInput: (raw) => raw as Record<string, unknown>,
+        ...(executor.resourceKeys ? { resourceKeys: (input, context) => context ? executor.resourceKeys!(input as Record<string, unknown>, context) : undefined } : {}),
         execute: async (input, context) => executor.execute(
-          input,
+          input as Record<string, unknown>,
           context.runtimeContext ?? context as unknown as Parameters<ToolExecutor['execute']>[1]
         )
       }))
@@ -276,6 +286,8 @@ export function defineDirectTool<I, O>(spec: DirectToolSpec<I, O>): RegisteredTo
   return {
     name: spec.name,
     kind: 'direct',
+    ...(spec.actionClass ? { actionClass: spec.actionClass } : {}),
+    ...(spec.resourceKeys ? { resourceKeys: (raw, context) => spec.resourceKeys!(spec.parseInput(raw), context) } : {}),
     begin,
     beginPlanning: (raw, context) => makePlanningHandle(() => begin(raw, context))
   }
@@ -304,6 +316,8 @@ export function definePlannedTool<I, P, O>(spec: PlannedToolSpec<I, P, O>): Regi
   return {
     name: spec.name,
     kind: 'planned',
+    ...(spec.actionClass ? { actionClass: spec.actionClass } : {}),
+    ...(spec.resourceKeys ? { resourceKeys: (raw, context) => spec.resourceKeys!(spec.parseInput(raw), context) } : {}),
     begin,
     beginPlanning: (raw, context) => makePlanningHandle(() => begin(raw, context))
   }

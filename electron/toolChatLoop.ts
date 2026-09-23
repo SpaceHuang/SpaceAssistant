@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/anthropicToolSanitize'
 import { sanitizeCapabilityParamsForDisplay } from '../src/shared/capabilityParamSanitize'
 import { normalizeExternalToolName } from '../src/shared/toolNameCompatibility'
+import { BUILTIN_TOOL_METADATA } from '../src/shared/builtinToolMetadata'
 import { projectUsageAfterToolResults } from '../src/shared/contextUsageEstimate'
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import { createAnthropicClient } from './anthropicClientFactory'
@@ -20,6 +21,9 @@ import type { WorkDirManager } from './workDirManager'
 import { FileStateCache } from './fileStateCache'
 import { getRegisteredTool, getToolExecutor } from './tools/builtinExecutors'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
+import { canParkInvocation, ToolScheduler } from '../packages/agent-core/src/scheduler'
+import { CapacityLedger, type CapacityReservation } from '../packages/agent-core/src/capacity'
+import { Semaphore } from '../packages/agent-core/src/runtime/semaphore'
 import { executeRegisteredTool } from './tools/toolInvocationCoordinator'
 import { coordinatorConfirmHook } from './tools/coordinatorConfirmationAdapter'
 import { executePreparedShellExecutionWithHostFallback } from './tools/runShellExecutor'
@@ -103,6 +107,7 @@ import { evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCa
 import { recordUserAnswerFromDecision, recordSystemManagedCacheEntry } from './confirmation/decisionCacheWriter'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { channelFor } from './confirmation/channels'
+import type { ConfirmationChannel } from '../src/shared/confirmation/types'
 import { AgentChannel } from './confirmation/agentChannel'
 import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
 import { getBuiltinToolMetadata } from '../src/shared/builtinToolMetadata'
@@ -163,6 +168,7 @@ import {
   registerToolCancel,
   type ToolConfirmOutcome
 } from './toolConfirmRegistry'
+import * as toolConfirmRegistry from './toolConfirmRegistry'
 import fs from 'fs/promises'
 import path from 'path'
 import { resolveSafePathReal } from './pathSecurity'
@@ -492,6 +498,14 @@ async function maybeBuildConfirmDiff(
 
 export type RunToolChatSessionArgs = {
   requestId: string
+  /** 顶层父任务的绝对截止时间；缺省仅兼容旧入口，使用统一 10 分钟上限。 */
+  deadlineAt?: number
+  toolExecutionConcurrency?: number
+  resourceLocks?: AgentHostPorts['resourceLocks']
+  applicationAdmission?: AgentHostPorts['applicationAdmission']
+  invocationRuntime?: import('./runtime/agentRuntime').InvocationRuntimeLike
+  invocationLeaseState?: { current?: import('./runtime/agentRuntime').InvocationLeaseLike }
+  approvalAdmission?: import('./runtime/agentRuntime').ApprovalAdmissionLike
   sessionId: string
   /** 本回合真实 Turn ID（C17）：桌面 / 远程 / butler 三个调用方各传现成值；缺省回退 sessionId 占位（桌面包装层仍会覆写台账 payload）。 */
   turnId?: string
@@ -636,7 +650,7 @@ export function noteToolResultForStats(stats: TurnUsageStats, result: ToolCallRe
  * P1-D（D4）：确认拒绝 → notExecutedReason 的显式归类表。
  * agent-deny（安全审批机审拒绝）不再误标为 user_rejected——那会污染 token 统计、
  * UI 文案与错误归因；errorCode（远程只读/授权撤销）优先级最高，维持既有归类；
- * 通道机器侧 fail-closed 拒绝（超时/不可用/不可解析/递归阻断等）归入 policy_denied。
+ * 通道终态按取消、撤销、超时、不可用分别归类；策略规则拒绝才归入 policy_denied。
  */
 export function notExecutedReasonForConfirmation(input: {
   cause?: ConfirmOutcomeCause
@@ -649,8 +663,11 @@ export function notExecutedReasonForConfirmation(input: {
       return 'agent_denied'
     case 'timeout':
       return 'confirm_timeout'
-    case 'recursion-blocked':
     case 'unavailable':
+      return 'confirm_unavailable'
+    case 'cancelled':
+      return 'confirm_cancelled'
+    case 'recursion-blocked':
     case 'unparsable':
     case 'config-error':
     case 'no-answerer':
@@ -711,6 +728,12 @@ function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): R
   const additional = invocation.additionalContext
   return {
     requestId: invocation.trace.requestId,
+    deadlineAt: invocation.limits.deadlineAt,
+    toolExecutionConcurrency: ports.toolExecutionConcurrency,
+    resourceLocks: ports.resourceLocks,
+    applicationAdmission: ports.applicationAdmission,
+    invocationRuntime: ports.invocationRuntime,
+    approvalAdmission: ports.approvalAdmission,
     sessionId: invocation.session.sessionId,
     turnId: invocation.trace.turnId,
     windowId: invocation.trace.windowId,
@@ -772,6 +795,9 @@ function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): R
 
 export async function runToolChatSession(invocation: AgentInvocation, ports: AgentHostPorts): Promise<AgentInvocationResult> {
   const args = expandInvocation(invocation, ports)
+  const invocationLeaseState = ports.invocationRuntime
+    ? { current: ports.invocationRuntime.acquireLease(args.requestId) }
+    : undefined
   const chatSignal = registerChatCancel(args.requestId)
   // sessionId→活跃流反向登记：供 action.session.status/list 判定会话运行中（需求 §9.4，
   // 与下方 finally 的 clearSessionActiveStream 成对、按 requestId 粒度删除，重入安全）
@@ -797,7 +823,7 @@ export async function runToolChatSession(invocation: AgentInvocation, ports: Age
   const turnUsageStats: TurnUsageStats = { stepCount: 0, toolCallCount: 0, toolErrorCount: 0, toolSkippedCount: 0 }
   let turnOutcome: UsageTurnOutcome = 'failed'
   try {
-    const result = await runToolChatSessionInner({ ...args, chatSignal, getMcpConnectionManager, turnUsageStats })
+    const result = await runToolChatSessionInner({ ...args, invocationLeaseState, chatSignal, getMcpConnectionManager, turnUsageStats })
     turnOutcome = result.ok ? 'completed' : result.cancelled ? 'cancelled' : 'failed'
     return result
   } catch (e) {
@@ -808,6 +834,7 @@ export async function runToolChatSession(invocation: AgentInvocation, ports: Age
     turnOutcome = 'failed'
     throw e
   } finally {
+    invocationLeaseState?.current?.release()
     // 中2（评审复验）：internal/hidden 会话（审批 Agent / automation）的用量不进统计
     args.hostUsage?.recordTurnSummary?.({
       turnId: args.turnId ?? args.sessionId,
@@ -833,6 +860,7 @@ async function runToolChatSessionInner(
 ): Promise<RunToolChatSessionResult> {
   const {
     requestId,
+    toolExecutionConcurrency,
     sessionId,
     model,
     baseUrl,
@@ -863,6 +891,10 @@ async function runToolChatSessionInner(
     locale: payloadLocale,
     projectMemoryEnabled,
     chatSignal,
+    applicationAdmission,
+    resourceLocks,
+    invocationRuntime,
+    invocationLeaseState,
     getBrowserDetectContext,
     getMcpConnectionManager,
     events: invocationEvents,
@@ -1619,8 +1651,114 @@ async function runToolChatSessionInner(
     const fileCache = getFileStateCacheForSession(sessionId)
     let abortRepeatedToolError: string | null = null
     let toolResultCompacted = false
+    let activeToolNodes = 0
+    let waitingApprovalNodes = 0
+    const waitingApprovalToolIds = new Set<string>()
+    let sharedApprovalPark: import('./runtime/agentRuntime').InvocationParkHandleLike | undefined
+    let sharedApplicationPark: unknown
+    let sharedApprovalRecoveryFailed = false
+    let sharedApprovalRecoveryPromise: Promise<boolean> | undefined
+    const parentDeadlineAt = args.deadlineAt ?? (Date.now() + 10 * 60_000)
+    const applicationResumeRetryDelaysMs = [50, 250] as const
+    const maxApplicationResumeAttempts = applicationResumeRetryDelaysMs.length + 1
+    const discardSharedApplicationPark = (): void => {
+      if (sharedApplicationPark !== undefined) applicationAdmission?.discard?.(sharedApplicationPark)
+      sharedApplicationPark = undefined
+    }
+    const recoverSharedApprovalLease = (deadlineAt?: number): Promise<boolean> => {
+      if (sharedApprovalRecoveryPromise) return sharedApprovalRecoveryPromise
+      sharedApprovalRecoveryPromise = (async () => {
+        let ok = true
+        if (sharedApprovalPark && invocationRuntime && invocationLeaseState) {
+          const resumedLease = invocationRuntime.resumeLease(sharedApprovalPark)
+          if (resumedLease) invocationLeaseState.current = resumedLease
+          else ok = false
+          sharedApprovalPark = undefined
+        }
+        if (sharedApplicationPark !== undefined) {
+          let recovered = false
+          for (let attempt = 0; attempt < maxApplicationResumeAttempts; attempt += 1) {
+            const rawResult = await applicationAdmission?.resume(sharedApplicationPark, {
+              signal: chatSignal,
+              deadlineAt
+            })
+            // 兼容尚未升级的内存端口；生产适配器返回带 retryable 的结果。
+            const result = typeof rawResult === 'boolean'
+              ? { ok: rawResult, retryable: false }
+              : rawResult
+            if (result?.ok) {
+              recovered = true
+              sharedApplicationPark = undefined
+              break
+            }
+            if (!result?.retryable || attempt === maxApplicationResumeAttempts - 1) {
+              // 终态失败或有界重试耗尽：显式消费 gate 中的 parked handle。
+              discardSharedApplicationPark()
+              break
+            }
+            const retryDeadline = deadlineAt ?? parentDeadlineAt
+            const remaining = retryDeadline - Date.now()
+            if (chatSignal.aborted || remaining <= 0) {
+              discardSharedApplicationPark()
+              break
+            }
+            const delayMs = Math.min(applicationResumeRetryDelaysMs[attempt] ?? applicationResumeRetryDelaysMs.at(-1)!, remaining)
+            await new Promise<void>((resolve) => {
+              const timer = setTimeout(resolve, delayMs)
+              ;(timer as unknown as { unref?: () => void }).unref?.()
+            })
+          }
+          if (!recovered) ok = false
+        }
+        return ok
+      })().finally(() => { sharedApprovalRecoveryPromise = undefined })
+      return sharedApprovalRecoveryPromise
+    }
+    // 审批等待不占执行槽；审批恢复后必须重新经过这个真实执行阶段信号量。
+    const toolExecutionSemaphore = new Semaphore(toolExecutionConcurrency ?? 2)
+    // 每个父任务最多同时持有两个真正进入确认通道的审批项；等待 permit 的节点尚未登记 pending。
+    const approvalSemaphore = new Semaphore(2)
+    const approvalAbortController = new AbortController()
+    chatSignal.addEventListener('abort', () => failApprovalGroup(), { once: true })
+    const activeApprovalChannels = new Set<ConfirmationChannel>()
+    const failApprovalGroup = (): void => {
+      sharedApprovalRecoveryFailed = true
+      toolConfirmRegistry.cancelAllToolConfirmsForRequest?.(requestId)
+      remoteContext?.imChannel?.cancelByRequestId?.(requestId)
+      approvalAbortController.abort()
+      for (const channel of activeApprovalChannels) channel.cancel(requestId)
+    }
+    const hasRunnableUnstartedTool = (): boolean => {
+      const unstarted = toolUses.filter((tu) => !toolResults.some((result) => result.tool_use_id === tu.id) && !waitingApprovalToolIds.has(tu.id))
+      return unstarted.some((tu) => {
+        const candidate = plannedNodesById.get(tu.id)?.approvalCandidate
+        return !candidate || approvalReservations.size < 2
+      })
+    }
+    const reparkIfOnlyApprovalsRemain = (): void => {
+      if (hasRunnableUnstartedTool() || activeToolNodes > 0 || waitingApprovalNodes <= 0) return
+      if (!sharedApprovalPark && invocationRuntime && invocationLeaseState?.current) {
+        sharedApprovalPark = invocationRuntime.park(requestId, invocationLeaseState.current, { reason: 'approval-wait-repark' })
+        if (!sharedApprovalPark) failApprovalGroup()
+      }
+      if (applicationAdmission !== undefined && sharedApplicationPark === undefined && (!invocationRuntime || sharedApprovalPark)) {
+        sharedApplicationPark = applicationAdmission.park({ reason: 'approval-wait-repark', requestId })
+        if (sharedApplicationPark === undefined) failApprovalGroup()
+      }
+    }
 
-    for (const tu of toolUses) {
+    const processToolUse = async (tu: typeof toolUses[number]): Promise<void> => {
+      if (abortRepeatedToolError) {
+        const error = `工具未执行：${abortRepeatedToolError}`
+        await recordToolResult(
+          buildToolErrorResult(tu.id, error, { requestId, sessionId }),
+          { success: false, error, notExecuted: true, notExecutedReason: 'tool_error_threshold' }
+        )
+        return
+      }
+      activeToolNodes += 1
+      try {
+      do {
       throwIfChatCancelled(chatSignal)
       const workDir = resolveWorkDir ? resolveWorkDir() : initialWorkDir
       const toolUseId = tu.id
@@ -2049,6 +2187,59 @@ async function runToolChatSessionInner(
 
       if (needsConfirm) {
         const confirmLane = effectiveLane
+        waitingApprovalNodes += 1
+        waitingApprovalToolIds.add(toolUseId)
+        notifySchedulerProgress()
+        // 先取得父任务审批容量，再发布卡片/通知；超额节点保持在调度计划中，
+        // 不得出现“用户可点击但主进程尚无 pending waiter”的悬空确认。
+        const hasUnstartedBeforePermit = toolResults.length + activeToolNodes < toolUses.length
+        const canParkBeforePermit = !hasUnstartedBeforePermit && canParkInvocation(activeToolNodes, waitingApprovalNodes)
+        if (sharedApprovalRecoveryFailed || chatSignal.aborted) {
+          failApprovalGroup()
+          waitingApprovalNodes = Math.max(0, waitingApprovalNodes - 1)
+          waitingApprovalToolIds.delete(toolUseId)
+          await recordToolResult(buildToolErrorResult(toolUseId, '审批已取消，工具未执行。', { requestId, sessionId }), { success: false, error: '审批已取消，工具未执行。', notExecuted: true, notExecutedReason: 'confirm_cancelled' })
+          return
+        }
+        const approvalAcquire = approvalSemaphore.acquire({ signal: approvalAbortController.signal })
+        const approvalWasQueued = approvalSemaphore.pending > 0
+        if (approvalWasQueued && canParkBeforePermit && !sharedApprovalPark && invocationRuntime && invocationLeaseState?.current) {
+          sharedApprovalPark = invocationRuntime.park(requestId, invocationLeaseState.current, { reason: 'approval-wait-capacity' })
+          if (!sharedApprovalPark) failApprovalGroup()
+        }
+        if (approvalWasQueued && canParkBeforePermit && applicationAdmission !== undefined && sharedApplicationPark === undefined && (!invocationRuntime || sharedApprovalPark)) {
+          sharedApplicationPark = applicationAdmission.park({ reason: 'approval-wait-capacity', requestId })
+          if (sharedApplicationPark === undefined) failApprovalGroup()
+        }
+        try {
+          await approvalAcquire
+        } catch {
+          waitingApprovalNodes = Math.max(0, waitingApprovalNodes - 1)
+          waitingApprovalToolIds.delete(toolUseId)
+          await recordToolResult(buildToolErrorResult(toolUseId, '审批已取消，工具未执行。', { requestId, sessionId }), { success: false, error: '审批已取消，工具未执行。', notExecuted: true, notExecutedReason: 'confirm_cancelled' })
+          return
+        }
+        let approvalPermitHeld = true
+        const preparedTrustScope = {
+          toolName,
+          lane: confirmLane,
+          ...(gate.facts.signals.some((s) => s.kind === 'command-sequence' && s.persistable && s.commands.length === 1)
+            ? { trustCommands: gate.facts.signals.flatMap((s) => s.kind === 'command-sequence' && s.persistable && s.commands.length === 1 ? [JSON.stringify([s.commands[0]!.verb, ...s.commands[0]!.args])] : []) }
+            : {}),
+          ...(gate.facts.signals.some((s) => s.kind === 'outbound-target')
+            ? { trustDomains: gate.facts.signals.flatMap((s) => s.kind === 'outbound-target' && s.channel === 'browser' ? (s.recipient ? [s.recipient] : s.domains ?? []) : []) }
+            : {}),
+          ...(gate.facts.signals.some((s) => s.kind === 'browser-action')
+            ? { trustActDomains: gate.facts.signals.flatMap((s) => s.kind === 'browser-action' && s.host ? [s.host] : []) }
+            : {}),
+          ...(gate.mcpEntry
+            ? { trustMcpServerId: gate.mcpEntry.serverId, trustMcpToolName: gate.mcpEntry.originalName }
+            : {})
+        }
+        // waiter 必须先于任何 confirm-requested 事实/通知登记，避免用户点击到悬空卡片。
+        if (!remoteContext && (gate.decision.type !== 'require-confirm' || gate.decision.answerer === 'user')) {
+          void toolConfirmRegistry.prepareToolConfirm?.(requestId, toolUseId, confirmMemoryTiers, { ...preparedTrustScope, sessionId }, gate.decision.type === 'require-confirm' ? gate.decision.timeoutMs ?? undefined : undefined)
+        }
         const askViaIm = remoteContext
           ? shouldRequestImConfirm(resolveRemoteContextConfirmPolicy(remoteContext, wechatConfig))
           : true
@@ -2160,7 +2351,53 @@ async function runToolChatSessionInner(
           const answererPolicy: ConfirmAnswererPolicy = {
             kind: gate.decision.type === 'require-confirm' ? gate.decision.answerer : 'user'
           }
-          const channelOutcome = await channelFor({
+          // 只有当前调用内没有其它活跃节点时才让出父运行槽；独立节点仍可推进。
+          // 让出一个微任务，确保同一批 scheduler 节点已经完成入场计数。
+          await Promise.resolve()
+          const hasUnstartedTools = hasRunnableUnstartedTool()
+          // 所有活跃节点都在审批等待且没有后继时，父调用只让出一次共享槽位。
+          // 实际 park handle 只会由最后进入等待的节点持有，避免多个节点竞争恢复凭证。
+          const canPark = !hasUnstartedTools && canParkInvocation(activeToolNodes, waitingApprovalNodes)
+          if (canPark && !sharedApprovalPark && invocationRuntime && invocationLeaseState?.current) {
+            const parked = invocationRuntime.park(requestId, invocationLeaseState.current, { reason: 'approval-wait', toolUseId })
+            if (parked) sharedApprovalPark = parked
+          }
+          const invocationParkRequired = Boolean(invocationRuntime && invocationLeaseState?.current)
+          if (canPark && invocationParkRequired && !sharedApprovalPark && applicationAdmission !== undefined) sharedApprovalRecoveryFailed = true
+          if (!hasUnstartedTools && sharedApplicationPark === undefined && applicationAdmission !== undefined && (!invocationParkRequired || Boolean(sharedApprovalPark))) {
+            sharedApplicationPark = applicationAdmission?.park({ reason: 'approval-wait', requestId, toolUseId })
+            if (applicationAdmission !== undefined && sharedApplicationPark === undefined) sharedApprovalRecoveryFailed = true
+          }
+          if (canPark && applicationAdmission !== undefined && sharedApplicationPark === undefined) {
+            sharedApprovalRecoveryFailed = true
+          }
+          if (sharedApprovalRecoveryFailed) {
+            // park/恢复失败时必须收敛整个父任务的审批集合，不能只结束当前节点，
+            // 否则兄弟 waiter 会继续占槽并把本轮永久挂起。
+            failApprovalGroup()
+            if (approvalPermitHeld) { approvalSemaphore.release(); approvalPermitHeld = false }
+            waitingApprovalNodes = Math.max(0, waitingApprovalNodes - 1)
+            waitingApprovalToolIds.delete(toolUseId)
+            notifySchedulerProgress()
+            const unavailable = '审批无法取得运行租约，工具未执行。'
+            abortRepeatedToolError = unavailable
+            await recordToolResult(buildToolErrorResult(toolUseId, unavailable, { requestId, sessionId }), {
+              success: false,
+              error: unavailable,
+              notExecuted: true,
+              notExecutedReason: 'confirm_unavailable'
+            })
+            return
+          }
+          if (chatSignal.aborted) {
+            failApprovalGroup()
+            if (approvalPermitHeld) { approvalSemaphore.release(); approvalPermitHeld = false }
+            waitingApprovalNodes = Math.max(0, waitingApprovalNodes - 1)
+            waitingApprovalToolIds.delete(toolUseId)
+            await recordToolResult(buildToolErrorResult(toolUseId, '审批已取消，工具未执行。', { requestId, sessionId }), { success: false, error: '审批已取消，工具未执行。', notExecuted: true, notExecutedReason: 'confirm_cancelled' })
+            return
+          }
+          const approvalChannel = channelFor({
             lane: confirmLane,
             requestId,
             toolUseId,
@@ -2173,6 +2410,8 @@ async function runToolChatSessionInner(
                 ...agentDeps,
                 // B1(偏差 23,P1-3 生产接线):第四发起入口(嵌套审批)统一准入
                 admissionGate: getCallAdmissionGate(),
+                approvalAdmission: args.approvalAdmission,
+                deadlineAt: parentDeadlineAt,
                 // D 任务声明透传（可信证据）：管家链路有任务上下文，桌面链路经 claudeStreamHandlers
                 // 传当前 turn 用户消息摘要；缺省 = 无任务上下文
                 ...(args.approvalTaskDigest ? { taskDigest: args.approvalTaskDigest } : {}),
@@ -2230,13 +2469,28 @@ async function runToolChatSessionInner(
                   })
                 }
               : {})
-          }).request(confirmReq)
+          })
+          activeApprovalChannels.add(approvalChannel)
+          const channelOutcome = await approvalChannel.request(confirmReq).finally(async () => {
+            activeApprovalChannels.delete(approvalChannel)
+            if (approvalPermitHeld) { approvalSemaphore.release(); approvalPermitHeld = false }
+            waitingApprovalNodes = Math.max(0, waitingApprovalNodes - 1)
+            waitingApprovalToolIds.delete(toolUseId)
+            notifySchedulerProgress()
+            if (!await recoverSharedApprovalLease(parentDeadlineAt)) failApprovalGroup()
+          })
           outcome =
             channelOutcome.kind === 'approved'
               ? 'approved'
               : channelOutcome.kind === 'timeout'
                 ? 'timeout'
-                : 'rejected'
+              : 'rejected'
+          if (sharedApprovalRecoveryFailed) {
+            outcome = 'rejected'
+            confirmOutcomeCause = 'unavailable'
+            channelRejectSummary = '审批已完成，但运行租约恢复失败，操作未执行。'
+            abortRepeatedToolError = channelRejectSummary
+          }
           // 回答者与结束原因随 outcome 记录（I3：由 decision 派生——agent 裁决不写任何记忆）
           if (channelOutcome.kind !== 'approved-with-action') {
             confirmAnswererKind =
@@ -2319,6 +2573,10 @@ async function runToolChatSessionInner(
             })
           }
         }
+      }
+
+      if (sharedApprovalRecoveryFailed) {
+        throw new Error(channelRejectSummary ?? 'approval recovery failed')
       }
 
       // B3：remote-write 记忆缓存命中（记N 会话信任）同样过 owner/租约/代际复核——
@@ -2579,6 +2837,51 @@ async function runToolChatSessionInner(
         await recordToolResult(buildToolErrorResult(toolUseId, 'tool_authorization_revoked', { requestId, sessionId }), { success: false, error: 'tool_authorization_revoked', notExecuted: true, notExecutedReason: 'authorization_revoked' })
         continue
       }
+      const declaredResourceKeys = registeredTool?.resourceKeys?.(inputObj, { workDir, sessionId })
+        ?? builtinExec?.resourceKeys?.(inputObj, { workDir, sessionId })
+      const executionSignals = [chatSignal, signal].filter((candidate): candidate is AbortSignal =>
+        typeof AbortSignal !== 'undefined' && candidate instanceof AbortSignal
+      )
+      const executionSignal = executionSignals.length > 1 && typeof AbortSignal.any === 'function'
+        ? AbortSignal.any(executionSignals)
+        : executionSignals[0]
+      try {
+        await toolExecutionSemaphore.acquire(executionSignal ? { signal: executionSignal } : {})
+      } catch (error) {
+        // 信号量排队阶段也必须回收取消登记与写路径租约；此前该阶段在执行 finally 之外。
+        clearToolCancel(requestId, toolUseId)
+        if (relPath && (toolName === 'write_file' || toolName === 'edit_file')) releaseWritePath(sessionId, relPath)
+        if (typeof AbortSignal !== 'undefined' && signal instanceof AbortSignal && signal.aborted && !(typeof chatSignal !== 'undefined' && chatSignal instanceof AbortSignal && chatSignal.aborted)) {
+          const cancelled = '工具已取消，未执行。'
+          await recordToolResult(buildToolErrorResult(toolUseId, cancelled, { requestId, sessionId }), { success: false, error: cancelled, notExecuted: true, notExecutedReason: 'confirm_cancelled' })
+          return
+        }
+        throw error
+      }
+      let resourceLease: { release(): void } | undefined
+      try {
+        resourceLease = resourceLocks
+          ? await resourceLocks.acquire(declaredResourceKeys ?? [`unknown:${sessionId}`], {
+              ...(executionSignal ? { signal: executionSignal } : {})
+            })
+          : undefined
+        throwIfChatCancelled(chatSignal)
+        if (typeof AbortSignal !== 'undefined' && signal instanceof AbortSignal && signal.aborted) {
+          throw new Error('tool-cancelled')
+        }
+        if (isToolRevoked(requestId, resolvedToolName)) throw new Error('tool_authorization_revoked')
+      } catch (error) {
+        resourceLease?.release()
+        toolExecutionSemaphore.release()
+        clearToolCancel(requestId, toolUseId)
+        if (relPath && (toolName === 'write_file' || toolName === 'edit_file')) releaseWritePath(sessionId, relPath)
+        if (typeof AbortSignal !== 'undefined' && signal instanceof AbortSignal && signal.aborted && !(typeof chatSignal !== 'undefined' && chatSignal instanceof AbortSignal && chatSignal.aborted)) {
+          const cancelled = '工具已取消，未执行。'
+          await recordToolResult(buildToolErrorResult(toolUseId, cancelled, { requestId, sessionId }), { success: false, error: cancelled, notExecuted: true, notExecutedReason: 'confirm_cancelled' })
+          return
+        }
+        throw error
+      }
       if (remoteContext) {
         onRemoteToolStateChange(buildRemoteProgressHookContext(sessionId, locale), {
           toolName,
@@ -2677,6 +2980,8 @@ async function runToolChatSessionInner(
           )
         }
       } finally {
+        toolExecutionSemaphore.release()
+        resourceLease?.release()
         clearToolCancel(requestId, toolUseId)
         if (!trackSwitchToolInFlight) {
           endTool(sessionId, requestId, toolName)
@@ -2836,7 +3141,104 @@ async function runToolChatSessionInner(
       }
       invocationEvents?.notify?.({ kind: 'tool-result', requestId, toolUseId })
       if (abortRepeatedToolError) break
+      } while (false)
+      } finally {
+        activeToolNodes = Math.max(0, activeToolNodes - 1)
+        reparkIfOnlyApprovalsRemain()
+      }
     }
+    const capacityLedger = new CapacityLedger({
+      applicationSlots: toolExecutionConcurrency ?? 2,
+      approvalCandidateSlots: 2,
+      queueLimit: Math.max(toolUses.length, 1),
+      maxApprovalsPerParent: 2
+    })
+    const approvalReservations = new Map<string, CapacityReservation>()
+    const schedulerProgressListeners = new Set<() => void>()
+    const notifySchedulerProgress = () => { for (const listener of schedulerProgressListeners) listener() }
+    const plannedNodesById = new Map<string, { approvalCandidate: boolean }>()
+    const scheduler = new ToolScheduler({
+      maxConcurrent: toolExecutionConcurrency ?? 2,
+      isWaiting: (id) => waitingApprovalToolIds.has(id),
+      // 审批候选在进入 processToolUse 前就占用“审批计划位”。这样超过 2 个候选
+      // 不会先启动再堆进本地 semaphore，而是留在 scheduler 的 remaining 集合中。
+      tryReserveStart: (id) => {
+        const node = plannedNodesById.get(id)
+        if (!node?.approvalCandidate) return true
+        const reservation = capacityLedger.reserveApprovalCandidate(requestId)
+        if (!reservation) return false
+        approvalReservations.set(id, reservation)
+        return true
+      },
+      releaseStart: (id) => {
+        if (plannedNodesById.get(id)?.approvalCandidate) {
+          approvalReservations.get(id)?.release()
+          approvalReservations.delete(id)
+        }
+        notifySchedulerProgress()
+      },
+      subscribeProgress: (notify) => {
+        schedulerProgressListeners.add(notify)
+        return () => schedulerProgressListeners.delete(notify)
+      }
+    })
+    const plannedNodes = toolUses.map((tu, index) => {
+      const input = normalizeToolUseInputRecord(tu.input)
+      const resolvedNodeName = String(normalizeExternalToolName(tu.name))
+      const registered = getRegisteredTool(resolvedNodeName)
+      const legacy = getToolExecutor(resolvedNodeName)
+      const resourceKeys = registered?.resourceKeys?.(input, { workDir: initialWorkDir, sessionId })
+        ?? legacy?.resourceKeys?.(input, { workDir: initialWorkDir, sessionId })
+      const conflicts = (a: string, b: string) => {
+        if (a === b || a.startsWith('unknown:') || b.startsWith('unknown:')) return true
+        if (!a.startsWith('workspace:') || !b.startsWith('workspace:')) return false
+        const normalize = (key: string) => key.slice('workspace:'.length).replace(/\/+$/, '')
+        const [left, right] = [normalize(a), normalize(b)]
+        return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`)
+      }
+      const dependsOn = resourceKeys
+        ? toolUses.slice(0, index).filter((prior) => {
+            const priorInput = normalizeToolUseInputRecord(prior.input)
+            const priorName = String(normalizeExternalToolName(prior.name))
+            const priorTool = getRegisteredTool(priorName)
+            const priorLegacy = getToolExecutor(priorName)
+            const priorKeys = priorTool?.resourceKeys?.(priorInput, { workDir: initialWorkDir, sessionId })
+              ?? priorLegacy?.resourceKeys?.(priorInput, { workDir: initialWorkDir, sessionId })
+              ?? [`unknown:${sessionId}`]
+            return priorKeys.some((priorKey) => resourceKeys.some((key) => conflicts(key, priorKey)))
+          }).map((prior) => prior.id)
+        : undefined
+      const registeredActionClass = (registered as unknown as { actionClass?: string } | undefined)?.actionClass
+      const metadataActionClass = BUILTIN_TOOL_METADATA[resolvedNodeName]?.actionClass
+      const actionClass = registeredActionClass ?? metadataActionClass
+      const approvalCandidate = actionClass
+        ? ['write', 'execute', 'outbound'].includes(actionClass)
+        : ['write_file', 'edit_file', 'run_shell', 'run_script', 'browser', 'browser_action'].includes(resolvedNodeName)
+      plannedNodesById.set(tu.id, { approvalCandidate })
+      return {
+        id: tu.id,
+        ...(resourceKeys ? { resourceKeys } : {}),
+        ...(dependsOn?.length ? { dependsOn } : {}),
+        run: async () => {
+          await processToolUse(tu)
+          return toolResults.find((result) => result.tool_use_id === tu.id)?.is_error !== true
+        },
+        isSuccess: (success: boolean) => success,
+        onDependencyFailure: async (dependencies: readonly string[]) => {
+          const error = `工具未执行：前置工具失败（${dependencies.join(', ')}）`
+          await recordToolResult(buildToolErrorResult(tu.id, error, { requestId, sessionId }), {
+            success: false,
+            error,
+            notExecuted: true,
+            notExecutedReason: 'policy_denied'
+          })
+          return false
+        }
+      }
+    })
+    await scheduler.runOrdered(plannedNodes)
+    const toolOrder = new Map(toolUses.map((tool, index) => [tool.id, index]))
+    toolResults.sort((a, b) => (toolOrder.get(a.tool_use_id) ?? 0) - (toolOrder.get(b.tool_use_id) ?? 0))
 
     messagesForApi = [...messagesForApi, { role: 'user', content: toolResults }]
     if (lastValidUsage && toolResults.length > 0) {
@@ -2871,4 +3273,3 @@ async function runToolChatSessionInner(
     }
   }
 }
-

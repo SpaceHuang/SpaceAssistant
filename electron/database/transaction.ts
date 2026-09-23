@@ -18,6 +18,16 @@ type TransactionState = {
   seq: number
 }
 
+/** COMMIT 本身失败时，不能假设事务已回滚或已提交；调用方必须进入对账。 */
+export class TransactionCommitUnknownError extends Error {
+  readonly cause: unknown
+  constructor(cause: unknown) {
+    super('transaction commit outcome is unknown')
+    this.name = 'TransactionCommitUnknownError'
+    this.cause = cause
+  }
+}
+
 /** 事务状态按连接隔离；连接关闭后 WeakMap 条目随连接回收，不保留状态。 */
 const txStates = new WeakMap<DatabaseSync, TransactionState>()
 
@@ -39,13 +49,12 @@ export function runInTransaction<T>(conn: DatabaseSync, fn: () => T): T {
   if (state.depth === 0) {
     conn.exec('BEGIN')
     state.depth = 1
+    let result: T
     try {
-      const result = fn()
+      result = fn()
       if (isThenable(result)) {
         throw new Error('runInTransaction does not accept async/Promise callbacks; use a synchronous callback')
       }
-      conn.exec('COMMIT')
-      return result
     } catch (err) {
       // SQLite 可能已因错误自动回滚（如 RAISE(ROLLBACK) / SQLITE_FULL），
       // 此时 ROLLBACK 自身会抛 "cannot rollback"；守卫并始终重抛原始错误。
@@ -58,6 +67,14 @@ export function runInTransaction<T>(conn: DatabaseSync, fn: () => T): T {
     } finally {
       state.depth = 0
     }
+    try {
+      conn.exec('COMMIT')
+    } catch (error) {
+      // 清理仍打开的连接事务，但保留 unknown 语义：COMMIT 可能已经到达存储层。
+      try { conn.exec('ROLLBACK') } catch { /* COMMIT 可能已经生效 */ }
+      throw new TransactionCommitUnknownError(error)
+    }
+    return result
   }
 
   const savepoint = `sa_tx_sp_${++state.seq}`
@@ -83,6 +100,52 @@ export function runInTransaction<T>(conn: DatabaseSync, fn: () => T): T {
     } catch {
       /* ignore */
     }
+    throw err
+  } finally {
+    state.depth--
+  }
+}
+
+/**
+ * 异步事务入口。事务内允许做不会触碰数据库的异步准备工作（例如动态导入），
+ * 但所有数据库写入仍必须在同一个连接事务提交前完成。
+ */
+export async function runInTransactionAsync<T>(conn: DatabaseSync, fn: () => Promise<T>): Promise<T> {
+  let state = txStates.get(conn)
+  if (!state) {
+    state = { depth: 0, seq: 0 }
+    txStates.set(conn, state)
+  }
+  if (state.depth === 0) {
+    conn.exec('BEGIN')
+    state.depth = 1
+    let result: T
+    try {
+      result = await fn()
+    } catch (err) {
+      try { conn.exec('ROLLBACK') } catch { /* preserve original error */ }
+      throw err
+    } finally {
+      state.depth = 0
+    }
+    try {
+      conn.exec('COMMIT')
+    } catch (error) {
+      try { conn.exec('ROLLBACK') } catch { /* COMMIT 可能已经生效 */ }
+      throw new TransactionCommitUnknownError(error)
+    }
+    return result
+  }
+  const savepoint = `sa_tx_async_sp_${++state.seq}`
+  conn.exec(`SAVEPOINT ${savepoint}`)
+  state.depth++
+  try {
+    const result = await fn()
+    conn.exec(`RELEASE SAVEPOINT ${savepoint}`)
+    return result
+  } catch (err) {
+    try { conn.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`) } catch { /* preserve original error */ }
+    try { conn.exec(`RELEASE SAVEPOINT ${savepoint}`) } catch { /* preserve original error */ }
     throw err
   } finally {
     state.depth--

@@ -135,6 +135,28 @@ export function judgeAdmission(
   return { verdict: 'admit' }
 }
 
+/** 恢复已受理身份只复核当前运行容量；绝不复核或消耗 hourly start 配额。 */
+export function judgeResumeAdmission(
+  req: AdmissionRequest,
+  state: AdmissionState,
+  policy: AdmissionPolicy
+): AdmissionVerdict {
+  const activeTotal = state.activeInteractive + state.activeBackground
+  const isApproval = req.role === 'approval-answerer'
+  const interactiveCeiling = policy.globalMaxConcurrent + (isApproval && req.priority === 'interactive' ? policy.approvalReservedSlots : 0)
+  if (req.priority === 'interactive') {
+    if (activeTotal >= interactiveCeiling) return shortage(req, 'concurrency-cap')
+  } else {
+    if (activeTotal >= policy.globalMaxConcurrent || state.activeBackground >= Math.min(policy.backgroundMaxConcurrent, policy.globalMaxConcurrent)) {
+      return shortage(req, 'concurrency-cap')
+    }
+  }
+  if (state.laneActive[req.lane] >= policy.laneMaxConcurrent[req.lane] + (isApproval ? policy.approvalReservedSlots : 0)) {
+    return shortage(req, 'lane-concurrency-cap')
+  }
+  return { verdict: 'admit' }
+}
+
 /** 资源不足 → 按调用方声明处置映射;queue 受队列上限兜底(不静默丢弃)。 */
 function shortage(req: AdmissionRequest, cause: AdmissionRejectionCause): AdmissionVerdict {
   switch (req.disposition) {
@@ -158,6 +180,16 @@ export function applyAdmit(state: AdmissionState, req: AdmissionRequest): Admiss
     laneActive: { ...state.laneActive, [req.lane]: state.laneActive[req.lane] + 1 },
     windowStarts: state.windowStarts + 1,
     laneWindowStarts: { ...state.laneWindowStarts, [req.lane]: state.laneWindowStarts[req.lane] + 1 }
+  }
+}
+
+/** 恢复已受理任务的运行槽；不重复计入小时启动次数。 */
+export function applyResume(state: AdmissionState, req: AdmissionRequest): AdmissionState {
+  return {
+    ...state,
+    activeInteractive: state.activeInteractive + (req.priority === 'interactive' ? 1 : 0),
+    activeBackground: state.activeBackground + (req.priority === 'background' ? 1 : 0),
+    laneActive: { ...state.laneActive, [req.lane]: state.laneActive[req.lane] + 1 }
   }
 }
 

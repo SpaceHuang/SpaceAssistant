@@ -5,6 +5,7 @@ import type {
   DecisionCacheEntry,
   DecisionCacheView
 } from '../../src/shared/confirmation/types'
+import { isMcpSessionTrusted } from '../mcp/mcpSessionTrust'
 
 /** 休眠阈值：超过 180 天未命中即视为失效（§5.3 / §8-Q1）。 */
 export const DORMANT_MS = 180 * 24 * 3600 * 1000
@@ -60,9 +61,30 @@ interface CacheRow {
 export class SqliteDecisionCache implements DecisionCacheView {
   constructor(private readonly db: DatabaseSync) {}
 
+  read(key: CacheKey, lane: string): DecisionCacheEntry | null {
+    const row = this.db.prepare('SELECT * FROM decision_cache WHERE key_json = ? AND lane = ? LIMIT 1').get(canonicalKeyJson(key), lane) as CacheRow | undefined
+    return row ? this.rowToEntry(row) : null
+  }
+
   lookup(key: CacheKey, lane?: string): DecisionCacheEntry | null {
     const now = Date.now()
+    if (key.kind === 'mcp-tool' && lane !== 'automation' && key.sessionId && isMcpSessionTrusted(key.sessionId, key.serverId, key.toolName)) {
+      return {
+        id: `mcp-session-${key.sessionId}-${key.serverId}-${key.toolName}`,
+        key,
+        decision: 'allow',
+        lane: (lane ?? '*') as DecisionCacheEntry['lane'],
+        scope: 'session',
+        createdAt: now,
+        lastHitAt: now,
+        hitCount: 1,
+        source: 'user-confirm'
+      }
+    }
     const keyJson = canonicalKeyJson(key)
+    const legacyKeyJson = key.kind === 'shell-command' && key.level === 'exact'
+      ? (() => { try { const argv = JSON.parse(key.verb) as unknown; return Array.isArray(argv) ? undefined : canonicalKeyJson({ ...key, verb: JSON.stringify(key.verb.split(' ')) }) } catch { return canonicalKeyJson({ ...key, verb: JSON.stringify(key.verb.split(' ')) }) } })()
+      : undefined
     // lane 键控（评审 B1）：同签名条目按 lane 隔离；'*' 条目（存量豁免迁移：桌面用户历史
     // 信任的 shell 命令 / 浏览器域名）对所有有人应答的 lane 生效。
     // 评审 P1-2：automation 无人类应答者，不继承任何存量豁免——只命中显式 lane='automation'
@@ -74,15 +96,15 @@ export class SqliteDecisionCache implements DecisionCacheView {
               .prepare(
                 'SELECT * FROM decision_cache WHERE key_json = ? AND lane = ? ORDER BY created_at DESC LIMIT 1'
               )
-              .get(keyJson, lane)
+              .get(keyJson, lane) ?? (legacyKeyJson ? this.db.prepare('SELECT * FROM decision_cache WHERE key_json = ? AND lane = ? ORDER BY created_at DESC LIMIT 1').get(legacyKeyJson, lane) : undefined)
           : this.db
               .prepare(
                 'SELECT * FROM decision_cache WHERE key_json = ? AND (lane = ? OR lane = ?) ORDER BY created_at DESC LIMIT 1'
               )
-              .get(keyJson, lane, '*')
+              .get(keyJson, lane, '*') ?? (legacyKeyJson ? this.db.prepare('SELECT * FROM decision_cache WHERE key_json = ? AND (lane = ? OR lane = ?) ORDER BY created_at DESC LIMIT 1').get(legacyKeyJson, lane, '*') : undefined)
         : this.db
             .prepare('SELECT * FROM decision_cache WHERE key_json = ? ORDER BY created_at DESC LIMIT 1')
-            .get(keyJson)
+            .get(keyJson) ?? (legacyKeyJson ? this.db.prepare('SELECT * FROM decision_cache WHERE key_json = ? ORDER BY created_at DESC LIMIT 1').get(legacyKeyJson) : undefined)
     ) as CacheRow | undefined
     if (!row) return null
     if (row.expires_at !== null && row.expires_at <= now) return null
@@ -144,7 +166,8 @@ export class SqliteDecisionCache implements DecisionCacheView {
   }
 
   /** 清除指定规范化键（确认记忆管理：清除即下次再问）。 */
-  clear(key: CacheKey): number {
+  clear(key: CacheKey, lane?: string): number {
+    if (lane) return changesToNumber(this.db.prepare('DELETE FROM decision_cache WHERE key_json = ? AND lane = ?').run(canonicalKeyJson(key), lane).changes)
     return changesToNumber(this.db.prepare('DELETE FROM decision_cache WHERE key_json = ?').run(canonicalKeyJson(key)).changes)
   }
 

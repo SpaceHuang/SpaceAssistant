@@ -47,7 +47,7 @@ describe('RemoteAuthorizationRegistry', () => {
 
     const gen = registry.invalidate('feishu', 'owner_cleared')
     expect(gen).toBe(1)
-    await expect(wait).resolves.toBe('n')
+    await expect(wait).resolves.toBe('cancelled')
     expect(pending.countPending()).toBe(0)
     expect(audits[0]).toMatchObject({
       type: 'authorization_revoked',
@@ -100,6 +100,6 @@ describe('RemoteAuthorizationRegistry', () => {
     registry.invalidate('wechat', 'remote_disabled')
     // After invalidate the waiter is already resolved as n; resolve(y) is a no-op
     expect(pending.resolve('old', 'y')).toBe(false)
-    return expect(wait).resolves.toBe('n')
+    return expect(wait).resolves.toBe('cancelled')
   })
 })
