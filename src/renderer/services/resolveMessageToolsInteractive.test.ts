@@ -119,6 +119,21 @@ describe('resolveMessageToolsInteractive', () => {
     })).toBeUndefined()
   })
 
+  it('旧 pending 条目与 autoAnswerer 工具同 id 时仍不恢复人工 requestId', () => {
+    const agentMessage: Message = {
+      ...confirmingMessage,
+      toolCalls: [{ ...confirmingMessage.toolCalls[0]!, autoAnswerer: true }]
+    }
+
+    expect(resolveMessageToolsInteractive({
+      message: agentMessage,
+      sessionId: 'sess-1',
+      pendingItems: [pendingItem],
+      streamingAssistantId: 'msg-1',
+      streamingRequestId: 'req-live'
+    })).toBeUndefined()
+  })
+
   it('prefers pending store over streaming request id for active assistant', () => {
     expect(
       resolveRequestIdForConfirmingMessage({

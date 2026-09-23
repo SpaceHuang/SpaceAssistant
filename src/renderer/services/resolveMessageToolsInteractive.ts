@@ -68,6 +68,21 @@ export function messageHasExecutingTool(message: Message | undefined): boolean {
   return Boolean(message?.toolCalls?.some((tc) => tc.status === 'executing'))
 }
 
+function actionablePendingToolUseIds(
+  sessionId: string,
+  message: Message,
+  pendingItems: PendingConfirmItem[]
+): Set<string> {
+  const toolIds = new Set(
+    message.toolCalls?.filter((tool) => !tool.autoAnswerer).map((tool) => tool.id) ?? []
+  )
+  return new Set(
+    pendingItems
+      .filter((item) => item.sessionId === sessionId && toolIds.has(item.toolUseId))
+      .map((item) => item.toolUseId)
+  )
+}
+
 export function resolveRequestIdForConfirmingMessage(args: {
   sessionId: string
   message: Message
@@ -76,13 +91,11 @@ export function resolveRequestIdForConfirmingMessage(args: {
   streamingRequestId?: string | null
 }): string | null {
   const { sessionId, message, pendingItems, streamingAssistantId, streamingRequestId } = args
-  const pendingToolUseIds = new Set(
-    pendingItems.filter((item) => item.sessionId === sessionId).map((item) => item.toolUseId)
-  )
+  const pendingToolUseIds = actionablePendingToolUseIds(sessionId, message, pendingItems)
   if (!messageHasConfirmingTool(message) && !message.toolCalls?.some((tc) => pendingToolUseIds.has(tc.id))) return null
 
   for (const tc of message.toolCalls ?? []) {
-    if ((tc.status !== 'confirming' || tc.autoAnswerer) && !pendingToolUseIds.has(tc.id)) continue
+    if (tc.autoAnswerer || (tc.status !== 'confirming' && !pendingToolUseIds.has(tc.id))) continue
     const pending = pendingItems.find((item) => item.sessionId === sessionId && item.toolUseId === tc.id)
     if (pending?.requestId) return pending.requestId
   }
@@ -120,9 +133,7 @@ export function resolveMessageToolsInteractive(args: {
 
   if (!sessionId) return undefined
 
-  const pendingToolUseIds = new Set(
-    pendingItems.filter((item) => item.sessionId === sessionId).map((item) => item.toolUseId)
-  )
+  const pendingToolUseIds = actionablePendingToolUseIds(sessionId, message, pendingItems)
   const hasPendingTool = message.toolCalls?.some((tc) => pendingToolUseIds.has(tc.id)) ?? false
 
   if (messageHasConfirmingTool(message) || hasPendingTool) {
