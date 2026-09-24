@@ -106,7 +106,7 @@ import type { SessionEventInput } from './sessionEvents'
 import { evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCallGate'
 import { recordUserAnswerFromDecision, recordSystemManagedCacheEntry } from './confirmation/decisionCacheWriter'
 import { getSecurityAuditLog } from './confirmation/audit'
-import { channelFor } from './confirmation/channels'
+import { channelFor, type ResolveConfirmChannelArgs } from './confirmation/channels'
 import { shouldFallbackToUser } from './confirmation/fallbackToUser'
 import { approvalFallbackReasonFor } from './confirmation/fallbackReason'
 import type { ConfirmationChannel } from '../src/shared/confirmation/types'
@@ -2401,7 +2401,7 @@ async function runToolChatSessionInner(
             await recordToolResult(buildToolErrorResult(toolUseId, '审批已取消，工具未执行。', { requestId, sessionId }), { success: false, error: '审批已取消，工具未执行。', notExecuted: true, notExecutedReason: 'confirm_cancelled' })
             return
           }
-          const channelArgs = {
+          const channelArgs: ResolveConfirmChannelArgs = {
             lane: confirmLane,
             requestId,
             toolUseId,
@@ -2488,7 +2488,7 @@ async function runToolChatSessionInner(
             if (shouldFallbackToUser({ lane: confirmLane, channelOutcome, chatAborted: chatSignal.aborted, sharedApprovalRecoveryFailed })) {
               const fallbackCause = channelOutcome.cause
               // §8.3：运行期转人工事件（与解析期配置告警 confirm.answerer-fallback 方向相反，不复用）
-              channelArgs.audit.record({
+              getSecurityAuditLog().record({
                 ts: Date.now(),
                 event: 'confirm.answerer-fallback-to-user',
                 lane: confirmLane,

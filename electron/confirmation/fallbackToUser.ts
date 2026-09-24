@@ -34,10 +34,12 @@ export interface FallbackDecisionInput {
 
 export function shouldFallbackToUser(input: FallbackDecisionInput): boolean {
   if (input.lane !== 'desktop') return false
+  const outcome = input.channelOutcome
+  if (outcome.kind === 'approved-with-action') return false
   // ② 普通 ask 的 DesktopChannel outcome（经 mapToolOutcome）与 DenyChannel outcome 均不携带
   //    answererKind，只有 AgentChannel 恒携带 'agent'——普通 ask 卡超时不得再弹一张卡。
-  if (input.channelOutcome.answererKind !== 'agent') return false
-  if (!isFallbackEligibleCause(input.channelOutcome.cause)) return false
+  if (outcome.answererKind !== 'agent') return false
+  if (!isFallbackEligibleCause(outcome.cause)) return false
   if (input.chatAborted) return false
   if (input.sharedApprovalRecoveryFailed) return false
   return true
