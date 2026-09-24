@@ -140,7 +140,7 @@
     "fileAutoApprovedViewDiff": "View diff"
   },
   "fileAutoApprove": {
-    "fallbackBanner": "Auto-approve failed: {{reason}}. Please confirm this write manually."
+    "fallbackBanner": "Automatic handling did not complete: {{reason}}. Please confirm this action manually."
   },
   "confirm": {
     "autoAnswering": "Being auto-adjudicated by the approval agent — no manual confirmation needed",

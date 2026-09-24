@@ -29,7 +29,7 @@ describe('WriteConfirmCard', () => {
         onConfirm={vi.fn()}
       />
     )
-    expect(screen.getByText(/自动放行未通过/)).toBeDefined()
+    expect(screen.getByText(/自动处理未完成/)).toBeDefined()
     expect(screen.getByText(/目标路径命中敏感目录/)).toBeDefined()
   })
 

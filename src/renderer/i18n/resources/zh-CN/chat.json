@@ -140,7 +140,7 @@
     "fileAutoApprovedViewDiff": "查看 diff"
   },
   "fileAutoApprove": {
-    "fallbackBanner": "自动放行未通过：{{reason}}。本次写入需要您手动确认。"
+    "fallbackBanner": "自动处理未完成：{{reason}}。本次操作需要您手动确认。"
   },
   "confirm": {
     "autoAnswering": "正在由审批 Agent 自动裁决，无需手动确认",
