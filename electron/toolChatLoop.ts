@@ -3184,7 +3184,7 @@ async function runToolChatSessionInner(
     })
     const plannedNodes = toolUses.map((tu, index) => {
       const input = normalizeToolUseInputRecord(tu.input)
-      const resolvedNodeName = String(normalizeExternalToolName(tu.name))
+      const resolvedNodeName = normalizeExternalToolName(tu.name).canonicalName
       const registered = getRegisteredTool(resolvedNodeName)
       const legacy = getToolExecutor(resolvedNodeName)
       const resourceKeys = registered?.resourceKeys?.(input, { workDir: initialWorkDir, sessionId })
@@ -3199,7 +3199,7 @@ async function runToolChatSessionInner(
       const dependsOn = resourceKeys
         ? toolUses.slice(0, index).filter((prior) => {
             const priorInput = normalizeToolUseInputRecord(prior.input)
-            const priorName = String(normalizeExternalToolName(prior.name))
+            const priorName = normalizeExternalToolName(prior.name).canonicalName
             const priorTool = getRegisteredTool(priorName)
             const priorLegacy = getToolExecutor(priorName)
             const priorKeys = priorTool?.resourceKeys?.(priorInput, { workDir: initialWorkDir, sessionId })
