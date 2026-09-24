@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
+import path from 'path'
 import { workspaceResourceKeys } from './builtinExecutors'
 
 describe('builtin tool capability resource keys', () => {
   const context = { workDir: '/workspace/project', sessionId: 'session-1' }
 
   it('normalizes a safe relative path into a global workspace resource key', () => {
+    // 资源身份是平台原生绝对路径（path.resolve / realpath 兜底），Windows 上含盘符与反斜杠，
+    // 期望值必须由同一 path 语义推导，不能写死 posix 字面量
     expect(workspaceResourceKeys({ path: 'src/../src/app.ts' }, context, 'read')).toEqual([
-      'workspace:/workspace/project/src/app.ts'
+      `workspace:${path.resolve(context.workDir, 'src/app.ts')}`
     ])
   })
 

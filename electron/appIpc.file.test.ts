@@ -206,7 +206,8 @@ describe('file IPC handlers', () => {
     let statCalls = 0
     mockFs.stat.mockImplementation(async () => ({ dev: 1, ino: statCalls++ === 0 ? 1 : 2, isDirectory: () => false } as unknown as import('fs').Stats))
     const handler = ipc.getHandler('file:export-markdown')!
-    await expect(handler({}, { format: 'pdf', markdown: '# 标题', sourcePath: '方案.md' })).resolves.toEqual({ ok: true, path: '/tmp/方案.pdf' })
+    // normalizeMarkdownExportPath 经 path.parse/join 产出平台原生分隔符，断言不能用 posix 字面量
+    await expect(handler({}, { format: 'pdf', markdown: '# 标题', sourcePath: '方案.md' })).resolves.toEqual({ ok: true, path: path.join('/tmp', '方案.pdf') })
   })
 
   it('补正扩展名后目标已存在且取消覆盖时不写入', async () => {
