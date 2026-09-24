@@ -9,7 +9,8 @@ export const SHELL_CASE_IDS = {
   spawnError: 'SHELL-LIFECYCLE-003',
   promiseConvergence: 'SHELL-LIFECYCLE-004',
   planInvalid: 'SHELL-PLAN-001',
-  executableUnavailable: 'SHELL-CAPABILITY-002'
+  executableUnavailable: 'SHELL-CAPABILITY-002',
+  tuiUndetectable: 'SHELL-CAPABILITY-003'
 } as const
 
 export type ShellCaseId = (typeof SHELL_CASE_IDS)[keyof typeof SHELL_CASE_IDS]

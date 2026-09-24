@@ -117,7 +117,7 @@ describe('ShellConfirmCard', () => {
     expect(onConfirm).toHaveBeenCalledWith(true, { trustCommand: 'npm install' })
   })
 
-  it('shows TUI fallback hint for vim', () => {
+  it('does not show a TUI fallback before execution has a structured result', () => {
     render(
       <ShellConfirmCard
         record={record({ input: { command: 'vim src/main.ts' } })}
@@ -125,7 +125,6 @@ describe('ShellConfirmCard', () => {
         onConfirm={vi.fn()}
       />
     )
-    expect(document.querySelector('.shell-tui-fallback')).not.toBeNull()
-    expect(document.body.textContent).toMatch(/交互式终端/)
+    expect(document.querySelector('.shell-tui-fallback')).toBeNull()
   })
 })

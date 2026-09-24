@@ -6,9 +6,12 @@ export const SHELL_REMOTE_DISABLED_ERROR =
 export const SHELL_FEISHU_REMOTE_DISABLED_ERROR = SHELL_REMOTE_DISABLED_ERROR
 
 import type { ShellTerminalScrollback } from './domainTypes'
+import { SHELL_TUI_UNDETECTABLE_REASONS, type ShellTuiUndetectableReason, type ShellTuiRule } from './shellTuiContract'
 
 /** run_shell 工具执行结果（result.data 结构） */
 export interface ShellResultData {
+  tuiMatch?: { program?: string; rule?: ShellTuiRule; via?: string[] }
+  tuiUndetectable?: { program?: string; reason?: ShellTuiUndetectableReason }
   stdout?: string
   stderr?: string
   exitCode?: number | null
@@ -48,6 +51,17 @@ export interface ShellResultData {
   terminalScrollback?: ShellTerminalScrollback
 }
 
+export type ShellTuiNotice = { kind: 'match' | 'undetectable'; program?: string; reason?: ShellTuiUndetectableReason }
+export function resolveShellTuiNotice(data: unknown): ShellTuiNotice | undefined {
+  if (!data || typeof data !== 'object') return undefined
+  const d = data as Record<string, unknown>
+  const match = d.tuiMatch && typeof d.tuiMatch === 'object' ? d.tuiMatch as Record<string, unknown> : undefined
+  if (match && typeof match.program === 'string') return { kind: 'match', program: match.program }
+  const und = d.tuiUndetectable && typeof d.tuiUndetectable === 'object' ? d.tuiUndetectable as Record<string, unknown> : undefined
+  if (und && typeof und.reason === 'string' && (SHELL_TUI_UNDETECTABLE_REASONS as readonly string[]).includes(und.reason)) return { kind: 'undetectable', program: typeof und.program === 'string' ? und.program : undefined, reason: und.reason as ShellTuiUndetectableReason }
+  return undefined
+}
+
 /** §10.4：文本不可信时必须显式告知（远程 IM 由模型转述该 hints 文案）。 */
 export const SHELL_OUTPUT_TRUST_SUSPECT_NOTICE = '输出编码可疑，原始字节已保存：文本可能不是真实输出，如需核对请查看原始字节 artifact。'
 
@@ -59,6 +73,8 @@ export function parseShellResultData(data: unknown): ShellResultData | undefined
   if (!data || typeof data !== 'object') return undefined
   const d = data as ShellResultData
   return {
+    tuiMatch: d.tuiMatch && typeof d.tuiMatch === 'object' ? d.tuiMatch as ShellResultData['tuiMatch'] : undefined,
+    tuiUndetectable: d.tuiUndetectable && typeof d.tuiUndetectable === 'object' ? d.tuiUndetectable as ShellResultData['tuiUndetectable'] : undefined,
     stdout: typeof d.stdout === 'string' ? d.stdout : undefined,
     stderr: typeof d.stderr === 'string' ? d.stderr : undefined,
     exitCode: typeof d.exitCode === 'number' || d.exitCode === null ? d.exitCode : undefined,

@@ -38,3 +38,11 @@ describe('toolkit 网关工具（docs/requirement/agent-toolkit-capability-gatew
     expect(Buffer.byteLength(serialized, 'utf8')).toBeLessThan(2048)
   })
 })
+
+describe('run_shell 能力拒绝话术边界', () => {
+  it('明确区分能力拒绝与安全策略，不诱导绕过', () => {
+    const def = BUILTIN_TOOL_DEFINITIONS.find((d) => d.name === 'run_shell')!
+    expect(def.description).toContain('能力拒绝不等于安全策略拒绝')
+    expect(def.description).toContain('不得通过换途径或绕过通道征求许可')
+  })
+})

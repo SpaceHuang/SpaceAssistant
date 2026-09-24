@@ -228,6 +228,22 @@ describe('runShellExecutor', () => {
     expect(logShellAgentEvent).not.toHaveBeenCalledWith('info', 'shell.exec.spawned', expect.anything())
   })
 
+  it('fd0 非交互契约：read 立即 EOF，cat 无输入退出', async () => {
+    if (isWindows) return
+    const readResult = await runShellExecutor.execute({ command: "read line; echo got:$line" }, baseCtx(workDir, userDataDir))
+    expect(readResult.data?.terminationReason).toBe('process_exit')
+    const catResult = await runShellExecutor.execute({ command: 'cat' }, baseCtx(workDir, userDataDir))
+    expect(catResult.success).toBe(true)
+    expect(catResult.data?.terminationReason).toBe('process_exit')
+  }, SPAWN_TEST_TIMEOUT_MS)
+
+  it('sleep 超时仍沿用既有 timed_out 语义', async () => {
+    if (isWindows) return
+    const result = await runShellExecutor.execute({ command: 'sleep 2', timeout: 1 }, baseCtx(workDir, userDataDir))
+    expect(result.data?.status).toBe('timed_out')
+    expect(result.data?.terminationReason).toBe('timeout')
+  }, SPAWN_TEST_TIMEOUT_MS)
+
   it('正常结束时成对移除 AbortSignal 监听器', async () => {
     const controller = new AbortController()
     const addEventListener = vi.spyOn(controller.signal, 'addEventListener')
@@ -417,6 +433,33 @@ describe('runShellExecutor', () => {
     expect(result).toMatchObject({ success: false, error: 'PLAN_STALE' })
     expect(logShellAgentEvent).not.toHaveBeenCalledWith('info', 'shell.exec.spawned', expect.anything())
   })
+
+  it('计划阶段 TUI 命中返回可解释的环境诊断与结构化命中', async () => {
+    const result = await runShellExecutor.execute({ command: 'less README.md' }, baseCtx(workDir, userDataDir))
+    expect(result).toMatchObject({
+      success: false,
+      error: 'SHELL_INTERACTIVE_TTY_REQUIRED',
+      data: {
+        caseId: 'SHELL-CAPABILITY-001',
+        tuiMatch: { program: 'less' },
+        hints: expect.arrayContaining([expect.stringContaining('less')])
+      },
+      diagnostic: { category: 'environment', retryable: false }
+    })
+  }, SPAWN_TEST_TIMEOUT_MS)
+
+  it('计划阶段 TUI 不可检测返回独立 caseId 与不可检测原因', async () => {
+    const result = await runShellExecutor.execute({ command: "bash -c '$CMD less'" }, baseCtx(workDir, userDataDir))
+    expect(result).toMatchObject({
+      success: false,
+      error: 'SHELL_TUI_UNDETECTABLE',
+      data: {
+        caseId: 'SHELL-CAPABILITY-003',
+        tuiUndetectable: { reason: 'unsupported-wrapper' },
+      },
+      diagnostic: { category: 'environment', retryable: false }
+    })
+  }, SPAWN_TEST_TIMEOUT_MS)
 
   it('persists large output when truncated', async () => {
     const ctx = {
@@ -687,6 +730,14 @@ describe('runShellExecutor', () => {
         typeof payload === 'object' && payload && ('rawDelta' in payload || 'raw' in payload)
       )
     ).toBe(true)
+  }, SPAWN_TEST_TIMEOUT_MS)
+
+  it('执行层以 prepared 输出模式为准，不读取实时 ctx', async () => {
+    const plannedCtx = { ...baseCtx(workDir, userDataDir), shellOutputMode: 'terminal' as const, shellConfig: { ...baseCtx(workDir, userDataDir).shellConfig, outputMode: 'terminal' as const } }
+    const prepared = await planRunShellExecution({ command: 'echo frozen-raw' }, plannedCtx)
+    const currentCtx = { ...baseCtx(workDir, userDataDir), shellOutputMode: 'plain' as const, shellConfig: { ...baseCtx(workDir, userDataDir).shellConfig, outputMode: 'plain' as const } }
+    await executePreparedShellExecution(prepared, currentCtx, Date.now(), { requestId: currentCtx.requestId, sessionId: currentCtx.sessionId, toolUseId: currentCtx.toolUseId })
+    expect(vi.mocked(currentCtx.sendProgress).mock.calls.some(([, payload]) => typeof payload === 'object' && payload && 'rawDelta' in payload)).toBe(true)
   }, SPAWN_TEST_TIMEOUT_MS)
 
   it('sends decodable multi-chunk raw tail in terminal mode', async () => {

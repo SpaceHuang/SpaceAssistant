@@ -33,6 +33,7 @@ import {
   setPersistedTurnExecutionConfig,
   updatePersistedTurnState,
   listTurnErrorsByAssistantMessageIds
+  ,finalizeResidueMessageKeepingOutcome
 } from './operations'
 import { getDbConnection, type AppDatabase } from './sqliteStore'
 import { setConfigValue } from './operations'
@@ -332,6 +333,15 @@ describe('listStreamingAssistantMessages', () => {
 })
 
 describe('persisted turns', () => {
+  it('补偿残留消息时降级活动工具调用但不改 turns outcome', () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'residue-compensation' })
+    appendMessage(db, { id: 'residue-a', sessionId: session.id, role: 'assistant', content: 'partial', timestamp: 1, status: 'streaming', toolCalls: [{ id: 'tool-1', toolName: 'run_shell', input: {}, status: 'executing', riskLevel: 'low' }] })
+    createPersistedTurn(db, { turnId: 'residue-turn', requestId: 'residue-r', sessionId: session.id, assistantMessageId: 'residue-a', state: 'terminal', version: 2, outcome: 'cancelled' })
+    expect(finalizeResidueMessageKeepingOutcome(db, 'residue-a', 'cancelled')).toBe(true)
+    expect(getMessage(db, 'residue-a')).toMatchObject({ status: 'cancelled', toolCalls: [{ status: 'failed', interrupted: true }] })
+    expect(getPersistedTurn(db, 'residue-turn')).toMatchObject({ outcome: 'cancelled', state: 'terminal' })
+  })
   it('can read turns by id and list by lifecycle state', () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'turns' })

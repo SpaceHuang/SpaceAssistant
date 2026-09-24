@@ -441,6 +441,44 @@ describe('TurnCoordinator', () => {
     expect(db.checkpoint).toHaveBeenCalledWith('id', 0, expect.objectContaining({ status: 'failed' }))
   })
 
+  it('取消已收敛后 source reject 不覆盖 cancelled 终态', async () => {
+    vi.useFakeTimers()
+    const db = storage()
+    let rejectSource!: (error: Error) => void
+    const coordinator = new TurnCoordinator(db, { now: () => 1, id: () => 'id', finishingWindowMs: 1 }, undefined, vi.fn())
+    const started = coordinator.prepare({ mode: 'create-user', requestId: 'r-cancel-reject', sessionId: 's1', input: { text: 'hi' }, config: {} })
+    const pending = coordinator.execute(started.turnId, started.startToken, () => new Promise<never>((_, reject) => { rejectSource = reject }))
+    coordinator.cancel(started.turnId)
+    vi.advanceTimersByTime(2)
+    const error = new Error('late reject')
+    rejectSource(error)
+    await expect(pending).rejects.toBe(error)
+    expect(db.updateTurnState).toHaveBeenLastCalledWith('id', 'terminal', expect.objectContaining({ outcome: 'cancelled' }))
+    expect(db.checkpoint).toHaveBeenLastCalledWith('id', 1, expect.objectContaining({ status: 'cancelled' }))
+    vi.useRealTimers()
+  })
+
+  it('recover 补偿 cancelled 残留时同步内存终态并移出 active', () => {
+    const db = storage()
+    db.listRecoverableResidues = vi.fn(() => [{ message: assistant, turnId: 'residue-turn', turnOutcome: 'cancelled' }])
+    db.updateIfStreaming = vi.fn().mockReturnValue({ message: { ...assistant, status: 'cancelled' }, sequence: 1 })
+    const coordinator = new TurnCoordinator(db, { now: () => 1, id: () => 'id' })
+    coordinator.restoreTurn({ turnId: 'residue-turn', requestId: 'residue-r', sessionId: 's1', assistantMessageId: 'a1', state: 'terminal', outcome: 'cancelled', version: 1 }, assistant)
+    expect(coordinator.recover()).toBe(1)
+    expect(coordinator.listActive()).toEqual([])
+    expect(coordinator.cancel('residue-turn')).toBe(false)
+    expect(db.recoverTurn).not.toHaveBeenCalled()
+  })
+
+  it('旧 storage 未提供 recoverable residues 时回退 listStreaming', () => {
+    const db = storage()
+    db.listStreaming = vi.fn(() => [{ ...assistant, id: 'legacy-residue' }])
+    db.updateIfStreaming = vi.fn().mockReturnValue({ message: { ...assistant, id: 'legacy-residue', status: 'failed' }, sequence: 1 })
+    const coordinator = new TurnCoordinator(db, { now: () => 1, id: () => 'id' })
+    expect(coordinator.recover()).toBe(1)
+    expect(db.updateIfStreaming).toHaveBeenCalledWith('legacy-residue', expect.objectContaining({ status: 'failed' }))
+  })
+
   it('source 抛错时 finalize 使用最新 reducer snapshot，不覆盖已消费的正文', async () => {
     const db = storage()
     const coordinator = new TurnCoordinator(db, { now: () => 1, id: () => 'id' })
@@ -493,7 +531,7 @@ describe('TurnCoordinator', () => {
     expect(db.update).not.toHaveBeenCalled()
     vi.advanceTimersByTime(5_000)
     vi.useRealTimers()
-    expect(db.checkpoint).toHaveBeenCalledWith('id', 1, expect.objectContaining({ status: 'failed' }))
+    expect(db.checkpoint).toHaveBeenCalledWith('id', 1, expect.objectContaining({ status: 'cancelled' }))
     expect(coordinator.cancel(started.turnId)).toBe(false)
   })
 
@@ -507,7 +545,7 @@ describe('TurnCoordinator', () => {
     expect(coordinator.cancel(started.turnId)).toBe(true)
     vi.advanceTimersByTime(5_000)
     expect(checkpoint).toHaveBeenCalledTimes(1)
-    expect(checkpoint).toHaveBeenCalledWith(started.turnId, 2, expect.objectContaining({ content: 'before cancel', status: 'failed' }))
+    expect(checkpoint).toHaveBeenCalledWith(started.turnId, 2, expect.objectContaining({ content: 'before cancel', status: 'cancelled' }))
     vi.advanceTimersByTime(2_000)
     expect(checkpoint).toHaveBeenCalledTimes(1)
     vi.useRealTimers()

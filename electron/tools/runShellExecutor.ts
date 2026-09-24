@@ -15,7 +15,7 @@ import { sanitizeToolOutput, toToolUserError } from './toolUserErrors'
 import { SHELL_OUTPUT_TRUST_SUSPECT_NOTICE } from '../../src/shared/shellToolDisplay'
 import { normalizeTerminalOutput } from '../../src/shared/terminalOutputSanitize'
 import { PROGRESS_RAW_MAX_BYTES } from '../../src/shared/terminalScrollback'
-import { shellTuiFallbackHintLines } from '../../src/shared/shellInteractiveTui'
+import { shellTuiHintLines, shellTuiUndetectableHintLines } from '../../src/shared/shellInteractiveTui'
 import { RawByteBuffer, type RawByteSnapshot } from '../shell/boundedOutput'
 import { OutputArtifactWriter } from '../shell/outputArtifactWriter'
 import { createOutputPipelineSnapshot } from '../shell/outputPipeline'
@@ -107,7 +107,8 @@ export const runShellExecutor: ToolExecutor = {
       return {
         success: false,
         error: code,
-        data: { code, reason: message, processResult: null, ...planError?.details, ...(retry ? { retryCount: retry.count, retryExhausted: retry.tripped } : {}), caseId: code === 'SHELL_EXECUTABLE_UNAVAILABLE' ? SHELL_CASE_IDS.executableUnavailable : code === 'SHELL_INTERACTIVE_TTY_REQUIRED' ? SHELL_CASE_IDS.tuiRequiresTerminal : code === 'SHELL_DIALECT_MISMATCH' ? SHELL_CASE_IDS.dialectMismatch : SHELL_CASE_IDS.planInvalid, ...(code === 'SHELL_INTERACTIVE_TTY_REQUIRED' ? { hints: shellTuiFallbackHintLines() } : {}) },
+        data: { code, reason: message, processResult: null, ...planError?.details, ...(retry ? { retryCount: retry.count, retryExhausted: retry.tripped } : {}), caseId: code === 'SHELL_EXECUTABLE_UNAVAILABLE' ? SHELL_CASE_IDS.executableUnavailable : code === 'SHELL_INTERACTIVE_TTY_REQUIRED' ? SHELL_CASE_IDS.tuiRequiresTerminal : code === 'SHELL_TUI_UNDETECTABLE' ? SHELL_CASE_IDS.tuiUndetectable : code === 'SHELL_DIALECT_MISMATCH' ? SHELL_CASE_IDS.dialectMismatch : SHELL_CASE_IDS.planInvalid, ...(code === 'SHELL_INTERACTIVE_TTY_REQUIRED' && planError?.details?.tuiMatch ? { hints: shellTuiHintLines(planError.details.tuiMatch as Parameters<typeof shellTuiHintLines>[0]) } : {}), ...(code === 'SHELL_TUI_UNDETECTABLE' && planError?.details?.tuiUndetectable ? { hints: shellTuiUndetectableHintLines(planError.details.tuiUndetectable as { reason: string; programs: string[] }) } : {}) },
+        ...(code === 'SHELL_INTERACTIVE_TTY_REQUIRED' || code === 'SHELL_TUI_UNDETECTABLE' ? { diagnostic: { caseId: code === 'SHELL_TUI_UNDETECTABLE' ? SHELL_CASE_IDS.tuiUndetectable : SHELL_CASE_IDS.tuiRequiresTerminal, category: 'environment', retryable: false } } : {}),
         duration: Date.now() - started
       }
     }
@@ -214,7 +215,7 @@ export async function executePreparedShellExecution(
   let terminalHandled = false
   let terminateForOutputLimit = (): void => undefined
   let terminationResult: Awaited<ReturnType<ProcessSupervisor['terminate']>> | undefined
-  const terminalMode = ctx.shellOutputMode === 'terminal'
+  const terminalMode = prepared.shellOutputMode === 'terminal'
   let progressSeq = 0
   let progressEventCount = 0
   let rawTailBuf: Buffer = Buffer.alloc(0)
@@ -322,6 +323,7 @@ export async function executePreparedShellExecution(
     proc = spawn(spec.executable, spec.args, {
       cwd: prepared.cwd,
       env,
+      stdio: [...prepared.spawnStdio],
       windowsHide: true,
       shell: false,
       detached: process.platform === 'darwin'

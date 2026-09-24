@@ -89,7 +89,7 @@ const readCapability: CapabilityDescriptor = {
     })
     .passthrough(),
   paramsDoc: '{ "sessionId": "会话 ID", "cursor": number, "limit": number }（cursor 为起始 sequence，默认 0；limit 默认 20，上限 50）',
-  returnsDoc: '{ messages: [{ sequence, role, timestamp, content, truncated?, originalChars? }], nextSequence, hasMore }',
+  returnsDoc: '{ messages: [{ sequence, role, timestamp, status, content, truncated?, originalChars? }], nextSequence, hasMore }',
   risk: 'read',
   notes: ['调用记录经策略决策审计（policy.decision）留存'],
   handler: async (rawParams, ctx) => {
@@ -112,6 +112,7 @@ const readCapability: CapabilityDescriptor = {
             sequence,
             role: m.role,
             timestamp: m.timestamp,
+            status: m.status,
             content: `${m.content.slice(0, MESSAGE_MAX_CHARS)}…`,
             truncated: true,
             originalChars: m.content.length
@@ -121,6 +122,7 @@ const readCapability: CapabilityDescriptor = {
           sequence,
           role: m.role,
           timestamp: m.timestamp,
+          status: m.status,
           content: m.content
         }
       }),

@@ -1,17 +1,17 @@
 import { useCallback } from 'react'
 import { Button } from 'antd'
 import { AlertTriangle } from 'lucide-react'
-import { isInteractiveShellTuiCommand } from '../../../shared/shellInteractiveTui'
+import { resolveShellTuiNotice } from '../../../shared/shellToolDisplay'
 import { message as antMessage } from 'antd'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
-  command: string
   workDir?: string
+  resultData?: unknown
 }
 
-export function ShellTuiFallbackHint({ command, workDir }: Props) {
+export function ShellTuiFallbackHint({ workDir, resultData }: Props) {
   const { t } = useTypedTranslation('chat')
 
   const handleOpenShellTerminal = useCallback(
@@ -33,9 +33,12 @@ export function ShellTuiFallbackHint({ command, workDir }: Props) {
     [workDir, t]
   )
 
-  if (!isInteractiveShellTuiCommand(command)) return null
+  const notice = resolveShellTuiNotice(resultData)
+  if (!notice) return null
 
-  const hintLines = [t('shell.tuiLine1'), t('shell.tuiLine2')]
+  const hintLines = notice.kind === 'undetectable'
+    ? [t('shell.tuiLine1', { program: notice.program ?? '交互式程序' }), t('shell.tuiUndetectableLine')]
+    : [t('shell.tuiLine1', { program: notice.program ?? '交互式程序' }), t('shell.tuiLine2')]
 
   return (
     <div className="shell-tui-fallback" role="alert">

@@ -2,6 +2,8 @@ import { createHash } from 'crypto'
 import fs from 'fs/promises'
 import type { ShellDialect } from './shellProfiles'
 import type { OutputEncodingContract } from '../../src/shared/outputEncoding'
+import type { ShellOutputMode } from '../../src/shared/shellOutputMode'
+export type SpawnStdio = readonly ['ignore', 'pipe', 'pipe']
 
 export interface PreparedShellExecution {
   readonly command: string
@@ -27,6 +29,8 @@ export interface PreparedShellExecution {
   readonly dependencySnapshot: Readonly<Record<string, string>>
   readonly pathSnapshot: Readonly<Record<string, string>>
   readonly planDigest: string
+  readonly shellOutputMode: ShellOutputMode
+  readonly spawnStdio: SpawnStdio
 }
 
 export interface PreparedShellInput {
@@ -42,6 +46,8 @@ export interface PreparedShellInput {
   policyRevision: string
   dependencySnapshot?: Record<string, string>
   pathSnapshot?: Record<string, string>
+  shellOutputMode: ShellOutputMode
+  spawnStdio: SpawnStdio
 }
 
 export class PreparedShellStaleError extends Error {
@@ -73,6 +79,8 @@ function freeze<T>(value: T): T {
 
 export function prepareShellExecution(input: PreparedShellInput): PreparedShellExecution {
   const snapshot = structuredClone(input)
+  snapshot.shellOutputMode ??= 'plain'
+  snapshot.spawnStdio ??= ['ignore', 'pipe', 'pipe']
   snapshot.pathSnapshot ??= {}
   snapshot.dependencySnapshot ??= {}
   const environmentFingerprint = digest(snapshot.environment)
@@ -90,7 +98,7 @@ export function prepareShellExecution(input: PreparedShellInput): PreparedShellE
 
 export function validatePreparedShellExecution(
   prepared: PreparedShellExecution,
-  current: Pick<PreparedShellInput, 'profile' | 'spawnSpec' | 'cwd' | 'timeoutMs' | 'environment' | 'configRevision' | 'policyRevision' | 'dependencySnapshot' | 'pathSnapshot'>
+  current: Pick<PreparedShellInput, 'profile' | 'spawnSpec' | 'cwd' | 'timeoutMs' | 'environment' | 'configRevision' | 'policyRevision' | 'dependencySnapshot' | 'pathSnapshot' | 'shellOutputMode' | 'spawnStdio'>
 ): { stale: boolean; reasons: string[] } {
   const reasons: string[] = []
   if (stable(prepared.profile) !== stable(current.profile)) reasons.push('profile')
@@ -102,6 +110,8 @@ export function validatePreparedShellExecution(
   if (prepared.policyRevision !== current.policyRevision) reasons.push('policyRevision')
   if (stable(prepared.dependencySnapshot) !== stable(current.dependencySnapshot ?? {})) reasons.push('dependencySnapshot')
   if (stable(prepared.pathSnapshot) !== stable(current.pathSnapshot ?? {})) reasons.push('pathSnapshot')
+  if (prepared.shellOutputMode !== (current.shellOutputMode ?? 'plain')) reasons.push('shellOutputMode')
+  if (stable(prepared.spawnStdio) !== stable(current.spawnStdio ?? ['ignore', 'pipe', 'pipe'])) reasons.push('spawnStdio')
   return { stale: reasons.length > 0, reasons }
 }
 

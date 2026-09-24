@@ -4,7 +4,6 @@ import type { ToolCallRecord } from '../../../shared/domainTypes'
 import type { ToolConfirmHandler } from '../../../shared/toolConfirm'
 import { ConfirmCardDecision } from './ConfirmCardDecision'
 import { MemoryTierSelect } from './MemoryTierSelect'
-import { ShellTuiFallbackHint } from './ShellTuiFallbackHint'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
@@ -109,7 +108,6 @@ export function ShellConfirmCard({ record, workDir, onConfirm }: Props) {
               </div>
             </div>
           ) : null}
-          <ShellTuiFallbackHint command={command} workDir={workDir} />
           <pre className="write-confirm-card__subject-value write-confirm-card__subject-value--code shell-confirm-card__command">
             {commandLines.map((line, i) => (
               <code key={`cmd-${i}`} className="shell-confirm-card__command-line">

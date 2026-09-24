@@ -12,7 +12,7 @@ import {
   parseShellResultData
 } from '../../../shared/shellToolDisplay'
 import { resolveEffectiveShellOutputMode } from '../../../shared/shellOutputMode'
-import { isInteractiveShellTuiCommand } from '../../../shared/shellInteractiveTui'
+import { resolveShellTuiNotice } from '../../../shared/shellToolDisplay'
 import { patchShellTerminalScrollback } from '../../services/shellScrollbackPatch'
 import { toolCallDetailsLoader } from '../../services/toolCallDetailsLoader'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
@@ -160,7 +160,8 @@ export const ToolCallCard = memo(function ToolCallCard({
     record.toolName === 'run_script' && typeof record.input.code === 'string' ? record.input.code : ''
   const scriptTimeout =
     record.toolName === 'run_script' && typeof record.input.timeout === 'number' ? record.input.timeout : undefined
-  const isInteractiveTui = shellCommand ? isInteractiveShellTuiCommand(shellCommand) : false
+  const tuiNotice = resolveShellTuiNotice(record.result?.data)
+  const isInteractiveTui = tuiNotice !== undefined
   const hasPlainProgress = Boolean(record.progressOutput?.trim())
   const hasRawProgress = Boolean(record.progressOutputRaw?.trim())
   const useTerminalUi =
@@ -629,7 +630,7 @@ export const ToolCallCard = memo(function ToolCallCard({
             <span className="tool-row-detail__message">{t('tool.pending')}</span>
           ) : null}
 
-          {shellCommand ? <ShellTuiFallbackHint command={shellCommand} workDir={workDir} /> : null}
+          {record.toolName === 'run_shell' ? <ShellTuiFallbackHint workDir={workDir} resultData={record.result?.data} /> : null}
 
           {record.status === 'executing' &&
           onCancel &&

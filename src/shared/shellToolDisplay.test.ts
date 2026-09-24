@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   SHELL_OUTPUT_TRUST_SUSPECT_NOTICE,
   needsOutputTrustNotice,
-  parseShellResultData
+  parseShellResultData,
+  resolveShellTuiNotice
 } from './shellToolDisplay'
 
 describe('parseShellResultData', () => {
@@ -69,5 +70,14 @@ describe('needsOutputTrustNotice（§10.4）', () => {
   it('提示文案点明「原始字节已保存」', () => {
     expect(SHELL_OUTPUT_TRUST_SUSPECT_NOTICE).toContain('输出编码可疑')
     expect(SHELL_OUTPUT_TRUST_SUSPECT_NOTICE).toContain('原始字节')
+  })
+})
+
+describe('resolveShellTuiNotice', () => {
+  it('只从结构化工具结果识别 TUI 命中与不可检测', () => {
+    expect(resolveShellTuiNotice({ tuiMatch: { program: 'less' } })).toEqual({ kind: 'match', program: 'less' })
+    expect(resolveShellTuiNotice({ tuiUndetectable: { program: 'less', reason: 'parse-incomplete' } })).toEqual({ kind: 'undetectable', program: 'less', reason: 'parse-incomplete' })
+    expect(resolveShellTuiNotice({ tuiUndetectable: { reason: 'unknown' } })).toBeUndefined()
+    expect(resolveShellTuiNotice({ error: 'SHELL_INTERACTIVE_TTY_REQUIRED' })).toBeUndefined()
   })
 })
