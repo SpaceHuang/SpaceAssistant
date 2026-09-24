@@ -369,3 +369,74 @@ describe('P2 端到端：failApprovalGroup 成因分立（取消语义对齐，�
     expect(outcomeEv!.cause).toBe('cancelled')
   })
 })
+
+// ===== 审批组死亡时「走完通道」的当前节点结算 =====
+// 近死代码清理（confirmOutcomeCause / channelRejectSummary 强制覆盖随即被通道 outcome
+// 字段再覆盖）与裸 throw 语义链梳理：组已死（取消 / 租约恢复失败）后，走完通道的当前
+// 节点必须先按通道结算的成因落库（notExecutedReason 闭环，与守卫分支口径一致），再经
+// abortRepeatedToolError 以回合级失败收敛——不得经裸 throw 跳过 per-tool 落库，
+// 也不得以通道 summary 掩盖中止成因。
+
+describe('P2 端到端：审批组死亡时走完通道的节点先落库再收敛', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    capturedAuditEvents.length = 0
+    chatCancelState.signal = null
+    mockRunApprovalAgent.mockImplementation(
+      () => new Promise<ApprovalInvocationResult>(() => undefined)
+    )
+  })
+
+  function collectToolResults() {
+    const collected: Array<{ toolUseId: string; notExecutedReason?: string }> = []
+    return {
+      collected,
+      emitSessionEvent: (e: { type: string; payload?: { result?: { notExecutedReason?: string }; toolUseId?: string } }) => {
+        if (e?.type === 'tool_result' && e.payload?.result) {
+          collected.push({ toolUseId: e.payload.toolUseId ?? '', notExecutedReason: e.payload.result.notExecutedReason })
+        }
+      }
+    }
+  }
+
+  it('恢复失败路径：走完通道的节点同样落库 confirm_unavailable，会话经 abort 路径以 ok:false 收敛', async () => {
+    installStreamClient({ firstRoundToolUses: 2 })
+    const db = makeDb()
+    const { collected, emitSessionEvent } = collectToolResults()
+    // 串行执行：A 先入通道挂起，B 启动后 park 失败 → failApprovalGroup('unavailable')。
+    // B 走守卫分支落库；A 走完通道后必须同样落库（不再经裸 throw 跳过）。
+    const res = await runAssembledSession({
+      ...baseArgs(db),
+      toolExecutionConcurrency: 1,
+      applicationAdmission: {
+        park: () => undefined,
+        resume: () => ({ ok: false as const, reason: 'test-stub' })
+      },
+      emitSessionEvent
+    })
+    // 两个节点的结果全部落库且成因一致（环境不可用），无一缺席、无误标为 cancelled
+    expect(collected).toHaveLength(2)
+    expect(collected.map((r) => r.notExecutedReason)).toEqual(['confirm_unavailable', 'confirm_unavailable'])
+    // 回合经 abortRepeatedToolError 收敛（不再 reject），中止理由携带真实成因
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.error).toContain('运行租约恢复失败')
+  })
+
+  it('取消路径：走完通道的节点落库 confirm_cancelled，会话以 ok:false 携取消成因收敛', async () => {
+    installStreamClient()
+    const db = makeDb()
+    const { collected, emitSessionEvent } = collectToolResults()
+    const session = runAssembledSession({ ...baseArgs(db), emitSessionEvent })
+    await vi.waitFor(() => {
+      expect(mockRunApprovalAgent.mock.calls.length).toBe(1)
+    })
+    abortParentTask()
+    const res = await session
+    // 取消成因落库闭环：notExecutedReason=confirm_cancelled（原 throw 路径完全跳过落库）
+    expect(collected).toHaveLength(1)
+    expect(collected[0]!.notExecutedReason).toBe('confirm_cancelled')
+    // 回合收敛理由随真实成因（取消），不再以通道 summary 或恢复失败文案掩盖
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.error).toContain('审批已取消')
+  })
+})

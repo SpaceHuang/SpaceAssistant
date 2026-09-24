@@ -2491,12 +2491,7 @@ async function runToolChatSessionInner(
               : channelOutcome.kind === 'timeout'
                 ? 'timeout'
               : 'rejected'
-          if (sharedApprovalRecoveryFailed) {
-            outcome = 'rejected'
-            confirmOutcomeCause = 'unavailable'
-            channelRejectSummary = '审批已完成，但运行租约恢复失败，操作未执行。'
-            abortRepeatedToolError = channelRejectSummary
-          }
+          if (sharedApprovalRecoveryFailed) outcome = 'rejected'
           // 回答者与结束原因随 outcome 记录（I3：由 decision 派生——agent 裁决不写任何记忆）
           if (channelOutcome.kind !== 'approved-with-action') {
             confirmAnswererKind =
@@ -2505,6 +2500,14 @@ async function runToolChatSessionInner(
                 : (channelOutcome.answererKind ?? 'user')
             confirmOutcomeCause = channelOutcome.cause
             channelRejectSummary = channelOutcome.reason?.summary
+          }
+          if (sharedApprovalRecoveryFailed) {
+            // 审批组已死：此处唯一生效的结算是回合中止理由（confirmOutcomeCause /
+            // channelRejectSummary 已随通道 outcome 统一结算，不再强制覆盖——覆盖是死代码）；
+            // 理由按成因分立（§5.2，与守卫分支口径一致）。
+            abortRepeatedToolError = confirmOutcomeCause === 'cancelled'
+              ? '审批已取消，工具未执行。'
+              : '审批已完成，但运行租约恢复失败，操作未执行。'
           }
         }
         if (!remoteContext) {
@@ -2582,7 +2585,16 @@ async function runToolChatSessionInner(
       }
 
       if (sharedApprovalRecoveryFailed) {
-        throw new Error(channelRejectSummary ?? 'approval recovery failed')
+        // 审批组已死（取消 / 租约恢复失败）：先按通道结算的成因落库当前节点（notExecutedReason
+        // 闭环，与守卫分支口径一致），再经 abortRepeatedToolError 以回合级失败收敛——
+        // 裸 throw 会跳过 per-tool 落库，并以通道 summary 掩盖中止成因。
+        const settleCancelled = confirmOutcomeCause === 'cancelled'
+        const settleMessage = settleCancelled ? '审批已取消，工具未执行。' : '审批无法取得运行租约，工具未执行。'
+        await recordToolResult(
+          buildToolErrorResult(toolUseId, settleMessage, { requestId, sessionId }),
+          { success: false, error: settleMessage, notExecuted: true, notExecutedReason: settleCancelled ? 'confirm_cancelled' : 'confirm_unavailable' }
+        )
+        break
       }
 
       // B3：remote-write 记忆缓存命中（记N 会话信任）同样过 owner/租约/代际复核——
