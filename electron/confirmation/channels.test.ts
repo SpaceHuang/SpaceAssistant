@@ -322,3 +322,56 @@ describe('P1-1 resolveConfirmChannel 二维解析（回答者种类 × 传输通
     expect(ch).toBe(stub)
   })
 })
+
+describe('DesktopChannel suppressRequestAudit（§5.4 选项 1：回退侧降噪）', () => {
+  it('suppressRequestAudit=true：只落 confirm.outcome、不落 confirm.request（回退不是新请求）', async () => {
+    const audit = auditSink()
+    const ch = new DesktopChannel({
+      requestId: 'req-fb',
+      toolUseId: 'tool-fb',
+      sessionId: 's1',
+      toolName: 'run_shell',
+      lane: 'desktop',
+      audit,
+      suppressRequestAudit: true,
+      waitForToolConfirm: async () => 'approved'
+    })
+    const outcome = await ch.request(req())
+    expect(outcome).toEqual({ kind: 'approved', cause: 'user-approved' })
+    expect(audit.events.map((e) => e.event)).toEqual(['confirm.outcome'])
+    expect(audit.events[0]).toMatchObject({ requestId: 'req-fb', actor: 'user', cause: 'user-approved' })
+  })
+
+  it('suppressRequestAudit 缺省：照落 confirm.request（普通 ask 审计基线不受降噪波及，评审 v3 非阻断 2）', async () => {
+    const audit = auditSink()
+    const ch = new DesktopChannel({
+      requestId: 'req-base',
+      toolUseId: 'tool-base',
+      sessionId: 's1',
+      toolName: 'run_shell',
+      lane: 'desktop',
+      audit,
+      waitForToolConfirm: async () => 'approved'
+    })
+    await ch.request(req())
+    expect(audit.events.map((e) => e.event)).toEqual(['confirm.request', 'confirm.outcome'])
+  })
+
+  it('suppressRequestAudit=true 且用户拒绝：outcome 仍照常落（只降噪 request，不丢裁决）', async () => {
+    const audit = auditSink()
+    const ch = new DesktopChannel({
+      requestId: 'req-fb-deny',
+      toolUseId: 'tool-fb-deny',
+      sessionId: 's1',
+      toolName: 'write_file',
+      lane: 'desktop',
+      audit,
+      suppressRequestAudit: true,
+      waitForToolConfirm: async () => 'rejected'
+    })
+    const outcome = await ch.request(req())
+    expect(outcome).toEqual({ kind: 'rejected', cause: 'user-denied' })
+    expect(audit.events.map((e) => e.event)).toEqual(['confirm.outcome'])
+    expect(audit.events[0]).toMatchObject({ actor: 'user', cause: 'user-denied' })
+  })
+})

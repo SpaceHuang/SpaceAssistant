@@ -39,6 +39,8 @@ const AUDIT_EVENT_KINDS = [
   'policy.deny-exposure',
   'confirm.request',
   'confirm.outcome',
+  'confirm.answerer-fallback',
+  'confirm.answerer-fallback-to-user',
   'cache.hit',
   'cache.write',
   'cache.clear',

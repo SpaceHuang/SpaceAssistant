@@ -782,3 +782,79 @@ it('completed 展开态的 paramPreview 凭据不落 DOM（v2 评审 R1 主路�
     expect(container.textContent).not.toContain('ghp_leakcheck123')
   })
 })
+
+describe('ToolCallCard 回退原因 banner（§8.5：确认态统一层级）', () => {
+  it('write_file 确认卡显示回退原因 banner', () => {
+    render(
+      <ToolCallCard
+        record={writeRecord('confirming', {
+          autoApproveFallback: { reason: '等待超时', reasonCode: 'approval_timeout' },
+          confirmDiff: { oldContent: '', newContent: 'hello', oldPath: 'notes.txt' }
+        })}
+        onConfirm={vi.fn()}
+      />
+    )
+    expect(screen.getByText(/自动处理未完成/)).toBeDefined()
+    expect(screen.getByText(/等待超时/)).toBeDefined()
+  })
+
+  it('run_shell 确认卡显示回退原因 banner（非文件类不再丢失原因）', () => {
+    render(
+      <ToolCallCard
+        record={{
+          id: 'tool-shell-fb', toolName: 'run_shell', input: { command: 'curl example.com' },
+          status: 'confirming', riskLevel: 'high',
+          autoApproveFallback: { reason: '服务暂不可用', reasonCode: 'approval_unavailable' }
+        }}
+        onConfirm={vi.fn()}
+      />
+    )
+    expect(screen.getByText(/自动处理未完成/)).toBeDefined()
+    expect(screen.getByText(/服务暂不可用/)).toBeDefined()
+  })
+
+  it('MCP 确认卡显示回退原因 banner', () => {
+    render(
+      <ToolCallCard
+        record={{
+          id: 'tool-mcp-fb', toolName: 'mcp_demo', input: {},
+          status: 'confirming', riskLevel: 'medium',
+          mcp: { serverId: 's1', serverName: 'demo', originalToolName: 'demo_tool' },
+          autoApproveFallback: { reason: '等待超时', reasonCode: 'approval_timeout' }
+        } as ToolCallRecord}
+        onConfirm={vi.fn()}
+        sessionId="s"
+      />
+    )
+    expect(screen.getByText(/自动处理未完成/)).toBeDefined()
+  })
+})
+
+describe('ToolCallCard 回退后卡片可交互（§5.8）', () => {
+  it('autoAnswerer 显式 false：恢复交互按钮而非只读「自动审批中」块', () => {
+    render(
+      <ToolCallCard
+        record={writeRecord('confirming', {
+          autoAnswerer: false,
+          autoApproveFallback: { reason: '服务暂不可用', reasonCode: 'approval_unavailable' },
+          confirmDiff: { oldContent: '', newContent: 'hello', oldPath: 'notes.txt' }
+        })}
+        onConfirm={vi.fn()}
+      />
+    )
+    expect(screen.queryByText(/正在由审批 Agent 自动裁决/)).toBeNull()
+    expect(screen.getByRole('button', { name: '允许写入' })).toBeDefined()
+    expect(screen.getByRole('button', { name: '拒绝写入' })).toBeDefined()
+  })
+
+  it('autoAnswerer true：仍为只读「自动审批中」块（既有 H1 行为锚点）', () => {
+    render(
+      <ToolCallCard
+        record={writeRecord('confirming', { autoAnswerer: true })}
+        onConfirm={vi.fn()}
+      />
+    )
+    expect(screen.getByText(/正在由审批 Agent 自动裁决/)).toBeDefined()
+    expect(screen.queryByRole('button', { name: '允许写入' })).toBeNull()
+  })
+})

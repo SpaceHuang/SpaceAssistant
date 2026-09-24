@@ -437,6 +437,14 @@ export const ToolCallCard = memo(function ToolCallCard({
   const toolkitConfirming =
     (record.toolName === 'toolkit.call' || record.toolName === 'toolkit_call') && record.status === 'confirming'
 
+  // §8.5：回退原因 banner 提升到确认态统一层级——autoApproveFallback 是通用字段，
+  // 七类确认卡片均显示（此前只有文件类卡片渲染它，回退对非文件类工具会丢失「为什么要我确认」）
+  const fallbackBannerNode = record.autoApproveFallback ? (
+    <div className="write-confirm-card__fallback-banner" role="status">
+      {t('fileAutoApprove.fallbackBanner', { reason: record.autoApproveFallback.reason })}
+    </div>
+  ) : null
+
   // H1：审批 Agent 裁决路径（AgentChannel 无 waiter）——渲染只读「自动审批中」卡，
   // 不出交互按钮与信任选项；无 pending 的信任写入已在 IPC 层拒绝（纵深防御第二层）
   if (record.status === 'confirming' && record.autoAnswerer) {
@@ -453,6 +461,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   if (mcpConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        {fallbackBannerNode}
         <McpConfirmCard record={record} onConfirm={onConfirm} sessionId={sessionId} />
         {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
@@ -462,6 +471,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   if (toolkitConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        {fallbackBannerNode}
         <ToolkitConfirmCard record={record} onConfirm={onConfirm} />
         {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
@@ -471,6 +481,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   if (writeConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        {fallbackBannerNode}
         <WriteConfirmCard record={record} onConfirm={onConfirm} />
         {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
@@ -480,6 +491,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   if (browserConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        {fallbackBannerNode}
         <BrowserConfirmCard record={record} onConfirm={onConfirm} />
         {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
@@ -489,6 +501,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   if (shellConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        {fallbackBannerNode}
         <ShellConfirmCard record={record} workDir={workDir} onConfirm={onConfirm} />
         {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
@@ -498,6 +511,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   if (scriptConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        {fallbackBannerNode}
         <ScriptConfirmCard record={record} onConfirm={onConfirm} />
         {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
@@ -507,6 +521,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   if (larkCliConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        {fallbackBannerNode}
         <LarkCliConfirmCard record={record} onConfirm={onConfirm} />
         {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>

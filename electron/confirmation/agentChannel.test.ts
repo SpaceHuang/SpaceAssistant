@@ -336,3 +336,30 @@ describe('AgentChannel 任务声明透传（D：可信证据）', () => {
     expect(inv.clue.taskDigest).toBeUndefined()
   })
 })
+
+describe('AgentChannel 提前返回路径补审计（§5.4 附带缺口：effectiveTimeoutMs <= 0）', () => {
+  it('父任务已过截止：confirm.request 与 confirm.outcome（cause=timeout）均落审计，返回值 fail-closed 不变', async () => {
+    const sink = audit()
+    const { ch } = channel({ audit: sink, deadlineAt: Date.now() - 1000 })
+    const outcome = await ch.request(req())
+    expect(outcome).toMatchObject({ kind: 'rejected', answererKind: 'agent', cause: 'timeout' })
+    const kinds = sink.events.map((e) => e.event)
+    expect(kinds).toContain('confirm.request')
+    const outcomeEv = sink.events.find((e) => e.event === 'confirm.outcome')
+    expect(outcomeEv).toMatchObject({ cause: 'timeout', actor: 'agent', requestId: 'req-agent-1' })
+  })
+
+  it('递归守卫路径不落 confirm.request（保持既有分母口径，缺口记录于 §6.2）', async () => {
+    const sink = audit()
+    const { markApprovalSessionActive, unmarkApprovalSessionActive } = await import('./agentChannel')
+    markApprovalSessionActive('s-agent')
+    try {
+      const { ch } = channel({ audit: sink })
+      const outcome = await ch.request(req())
+      expect(outcome).toMatchObject({ kind: 'rejected', cause: 'recursion-blocked' })
+      expect(sink.events.map((e) => e.event)).toEqual(['confirm.outcome'])
+    } finally {
+      unmarkApprovalSessionActive('s-agent')
+    }
+  })
+})

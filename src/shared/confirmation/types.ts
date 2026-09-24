@@ -401,6 +401,8 @@ export type SecurityAuditEventKind =
   | 'confirm.request'
   | 'confirm.outcome'
   | 'confirm.answerer-fallback'
+  // 运行期审批失败转人工（fail-open-to-user）；与解析期配置告警 confirm.answerer-fallback 方向相反（§8.3）
+  | 'confirm.answerer-fallback-to-user'
   | 'cache.hit'
   | 'cache.write'
   | 'cache.clear'

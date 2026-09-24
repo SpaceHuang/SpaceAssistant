@@ -583,8 +583,11 @@ export interface ToolCallRecord {
   shellSecurityHints?: ShellSecurityHints
   /** 文件 auto 模式回落 diff 时的原因 */
   autoApproveFallback?: AutoApproveFallback
-  /** H1：本次确认由审批 Agent 裁决（无 waiter）——渲染端出只读「自动审批中」卡，不渲染交互按钮 */
-  autoAnswerer?: true
+  /**
+   * H1：本次确认由审批 Agent 裁决（无 waiter）——渲染端出只读「自动审批中」卡，不渲染交互按钮。
+   * §5.8：放宽为 boolean；回退分支发显式 false 清除只读态（恢复人工确认卡可交互）。
+   */
+  autoAnswerer?: boolean
   confirmedAt?: number
   startedAt?: number
   completedAt?: number

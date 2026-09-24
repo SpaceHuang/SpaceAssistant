@@ -62,7 +62,7 @@ export function WriteConfirmCard({ record, onConfirm }: Props) {
       ? t('confirm.write.editAction', { fileName })
       : t('confirm.write.writeAction', { fileName })
 
-  const fallback = record.autoApproveFallback
+  // §8.5：fallback banner 已提升到 ToolCallCard 确认态统一层级（七类卡片一致），此处不再局部渲染
   const memoryTierOptions = (record.memoryTiers ?? []).map((mt, i) => ({ label: mt.label, tier: i + 1 }))
   const handleConfirm: ToolConfirmHandler = (approved, options) => {
     const sel = memoryTier
@@ -71,11 +71,6 @@ export function WriteConfirmCard({ record, onConfirm }: Props) {
 
   return (
     <div className="write-confirm-card">
-      {fallback ? (
-        <div className="write-confirm-card__fallback-banner" role="status">
-          {t('fileAutoApprove.fallbackBanner', { reason: fallback.reason })}
-        </div>
-      ) : null}
       <ConfirmCardDecision
         actionSummary={actionSummary}
         allowLabel={t('confirm.write.allow')}

@@ -17,8 +17,8 @@ export type ToolCallDisplaySummary = {
   resultPreviewTruncated: boolean
   hasDetails: boolean
   confirmRisk: ToolRiskLevel
-  /** 审批 Agent 裁决中的工具不属于人工待确认。 */
-  autoAnswerer?: true
+  /** 审批 Agent 裁决中的工具不属于人工待确认（§5.8：boolean 以支持回退显式清除）。 */
+  autoAnswerer?: boolean
 }
 
 export type ActivityDisplayItem =
@@ -110,7 +110,8 @@ function toolDisplay(tool: ToolCallRecord, identity: string): ToolCallDisplaySum
     ...(result.value !== undefined ? { resultPreview: result.value } : {}), resultPreviewTruncated: result.truncated,
     hasDetails: tool.input !== undefined || tool.result !== undefined || Boolean(tool.progressOutput),
     confirmRisk: tool.riskLevel,
-    ...(tool.autoAnswerer ? { autoAnswerer: true as const } : {})
+    // §5.8 显式赋值（可真可假）：条件写入无法把回退清除后的 false 传播到投影层
+    ...(tool.autoAnswerer !== undefined ? { autoAnswerer: tool.autoAnswerer } : {})
   }
   if (tool.status === 'completed') {
     summaryCache.delete(cacheKey)
@@ -165,7 +166,7 @@ export function turnDisplayToMessage(display: TurnDisplay): Message {
     id: display.message.id, sessionId: display.sessionId, role: 'assistant', content: display.message.content,
     timestamp: Date.now(), status: display.lifecycle === 'completed' ? 'completed' : display.lifecycle === 'failed' ? 'failed' : 'streaming', schemaVersion: 1,
     ...(display.message.thinking ? { thinking: display.message.thinking } : {}), ...(display.message.skillHints ? { skillHints: display.message.skillHints } : {}),
-    toolCalls: display.message.toolCalls.map((tool) => ({ id: tool.id, toolName: tool.toolName, input: {}, status: tool.status, riskLevel: tool.display.confirmRisk, ...(tool.display.autoAnswerer ? { autoAnswerer: true as const } : {}), ...(tool.startedAt !== undefined ? { startedAt: tool.startedAt } : {}), ...(tool.completedAt !== undefined ? { completedAt: tool.completedAt } : {}), ...(tool.duration !== undefined ? { duration: tool.duration } : {}) }))
+    toolCalls: display.message.toolCalls.map((tool) => ({ id: tool.id, toolName: tool.toolName, input: {}, status: tool.status, riskLevel: tool.display.confirmRisk, ...(tool.display.autoAnswerer !== undefined ? { autoAnswerer: tool.display.autoAnswerer } : {}), ...(tool.startedAt !== undefined ? { startedAt: tool.startedAt } : {}), ...(tool.completedAt !== undefined ? { completedAt: tool.completedAt } : {}), ...(tool.duration !== undefined ? { duration: tool.duration } : {}) }))
   }
 }
 

@@ -66,6 +66,12 @@ export class DesktopChannel implements ConfirmationChannel {
       actionClass?: ActionClass
       riskLevel?: RiskLevel
       audit?: AuditSink
+      /**
+       * §5.4 选项 1（按实例注入，不得全局/按 lane 关闭）：回退构造的 DesktopChannel 只落
+       * outcome、不落 confirm.request——回退不是一次新的审批请求，抑制后回退率分母
+       * （confirm.request 计数）保持每请求一条。普通 ask 路径不得传此开关。
+       */
+      suppressRequestAudit?: boolean
       waitForToolConfirm?: (
         requestId: string,
         toolUseId: string,
@@ -89,13 +95,15 @@ export class DesktopChannel implements ConfirmationChannel {
 
   async request(req: ConfirmRequest): Promise<ConfirmOutcome> {
     const base = eventBase({ ...this.deps, lane: 'desktop' })
-    this.deps.audit?.record({
-      ...base,
-      event: 'confirm.request',
-      ts: Date.now(),
-      factsSummary: req.facts.summary.text,
-      signals: req.facts.signals.map((s) => s.kind)
-    })
+    if (!this.deps.suppressRequestAudit) {
+      this.deps.audit?.record({
+        ...base,
+        event: 'confirm.request',
+        ts: Date.now(),
+        factsSummary: req.facts.summary.text,
+        signals: req.facts.signals.map((s) => s.kind)
+      })
+    }
     const wait = this.deps.waitForToolConfirm ?? waitForToolConfirm
     const trustScope = wait === waitForToolConfirm ? {
       ...(req.facts.signals.some((s) => s.kind === 'command-sequence' && s.persistable && s.commands.length === 1) ? { trustCommands: req.facts.signals.flatMap((s) => s.kind === 'command-sequence' && s.persistable && s.commands.length === 1 ? [JSON.stringify([s.commands[0]!.verb, ...s.commands[0]!.args])] : []) } : {}),
@@ -169,6 +177,8 @@ export interface ResolveConfirmChannelArgs {
   }) => ConfirmationChannel
   /** deny 回答者在 IM 传输下的用户可见回执出口（桌面静默拒绝不传）。 */
   notifyDenied?: (req: ConfirmRequest) => void
+  /** 桌面回退专用：抑制 confirm.request 审计（仅回退构造的实例传，见 DesktopChannel.deps 注释）。 */
+  suppressRequestAudit?: boolean
 }
 
 /**
@@ -225,6 +235,7 @@ export function resolveConfirmChannel(args: ResolveConfirmChannelArgs): Confirma
       sessionId: args.sessionId,
       toolName: args.toolName,
       lane: 'desktop',
+      ...(args.suppressRequestAudit ? { suppressRequestAudit: args.suppressRequestAudit } : {}),
       ...(args.audit ? { audit: args.audit } : {})
     })
   }

@@ -158,26 +158,8 @@ export class AgentChannel implements ConfirmationChannel {
       ...deriveClueExtras(req.facts),
       ...(this.deps.taskDigest ? { taskDigest: this.deps.taskDigest } : {})
     }
-    const parentRemainingMs = this.deps.deadlineAt === undefined ? Number.POSITIVE_INFINITY : Math.max(0, this.deps.deadlineAt - Date.now())
-    const effectiveTimeoutMs = Math.min(req.timeoutMs ?? this.deps.policy.timeoutMs ?? DEFAULT_AGENT_APPROVAL_TIMEOUT_MS, parentRemainingMs)
-    if (effectiveTimeoutMs <= 0) return {
-      kind: 'rejected',
-      answererKind: 'agent',
-      cause: 'timeout',
-      reason: { summary: '审批已超过父任务截止时间。' }
-    }
-    const invocation: ApprovalInvocation = {
-      clue,
-      lane: this.deps.lane,
-      sessionId: this.deps.sessionId,
-      requestId: innerRequestId,
-      invocationId,
-      profileId,
-      // P1-4 通道打通：req.timeoutMs 优先（决策层/回答者配置下发），缺省 30s 上界
-      timeoutMs: effectiveTimeoutMs,
-      ...(this.deps.deadlineAt !== undefined ? { deadlineAt: this.deps.deadlineAt } : {})
-    }
-
+    // confirm.request 先于 effectiveTimeoutMs 提前返回记录（§5.4 附带缺口补审计）：
+    // 该路径属 §4 可回退格，必须留下 agent 侧痕迹，否则回退率分母系统性漏计这类超时。
     this.deps.audit?.record({
       ts: Date.now(),
       event: 'confirm.request',
@@ -190,6 +172,42 @@ export class AgentChannel implements ConfirmationChannel {
       actor: 'agent',
       actorRef: { profileId, invocationId }
     })
+    const parentRemainingMs = this.deps.deadlineAt === undefined ? Number.POSITIVE_INFINITY : Math.max(0, this.deps.deadlineAt - Date.now())
+    const effectiveTimeoutMs = Math.min(req.timeoutMs ?? this.deps.policy.timeoutMs ?? DEFAULT_AGENT_APPROVAL_TIMEOUT_MS, parentRemainingMs)
+    if (effectiveTimeoutMs <= 0) {
+      const startedAt = Date.now()
+      this.deps.audit?.record({
+        ts: Date.now(),
+        event: 'confirm.outcome',
+        lane: this.deps.lane,
+        sessionId: this.deps.sessionId,
+        requestId: this.deps.requestId,
+        toolName: this.deps.toolName,
+        outcome: 'rejected',
+        cause: 'timeout',
+        reasonSummary: '审批已超过父任务截止时间。',
+        actor: 'agent',
+        actorRef: { profileId, invocationId },
+        latencyMs: Date.now() - startedAt
+      })
+      return {
+        kind: 'rejected',
+        answererKind: 'agent',
+        cause: 'timeout',
+        reason: { summary: '审批已超过父任务截止时间。' }
+      }
+    }
+    const invocation: ApprovalInvocation = {
+      clue,
+      lane: this.deps.lane,
+      sessionId: this.deps.sessionId,
+      requestId: innerRequestId,
+      invocationId,
+      profileId,
+      // P1-4 通道打通：req.timeoutMs 优先（决策层/回答者配置下发），缺省 30s 上界
+      timeoutMs: effectiveTimeoutMs,
+      ...(this.deps.deadlineAt !== undefined ? { deadlineAt: this.deps.deadlineAt } : {})
+    }
 
     const startedAt = Date.now()
     // 结算类型放宽：外部取消（AgentChannel.cancel）以 cancelled 形态收敛——该取值只在通道层产生，
