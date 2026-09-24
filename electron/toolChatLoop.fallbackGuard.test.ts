@@ -387,6 +387,9 @@ describe('回退分支的联动动作（§5.1 / §5.6 / §5.10）', () => {
     // 触发 chatSignal abort listener → failApprovalGroup → 遍历取消（含回退通道）
     for (const listener of cancelState.abortListeners) listener()
     await vi.waitFor(() => expect(channels[1]!.cancel).toHaveBeenCalled())
+    // 请求级取消入口被调用（回退 waiter 已由 prepareToolConfirm 登记，扫描可达——联动用例已断言补登记）
+    const { cancelAllToolConfirmsForRequest } = await import('./toolConfirmRegistry')
+    expect(vi.mocked(cancelAllToolConfirmsForRequest)).toHaveBeenCalled()
     // failApprovalGroup 置位后既有语义为回合错误收敛（'审批已完成，但运行租约恢复失败'）——本用例锚点仅关注取消遍历覆盖
     await runPromise.catch(() => undefined)
   })

@@ -7,7 +7,7 @@
  * §5.10 展示补齐（浮动通知补发 + confirmDiff 补算 + §5.8 autoAnswerer 清除）。
  */
 import { describe, expect, it, vi, beforeEach, afterAll } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { AppDatabase } from './database'
@@ -18,7 +18,7 @@ import type { ToolCallGateResult } from './confirmation/toolCallGate'
 
 const capturedAuditEvents: SecurityAuditEvent[] = []
 const capturedFactEvents: AssistantFactEvent[] = []
-const gateState = vi.hoisted(() => ({ answerer: 'agent' as 'user' | 'agent', timeoutMs: null as number | null, navigate: false }))
+const gateState = vi.hoisted(() => ({ answerer: 'agent' as 'user' | 'agent', timeoutMs: null as number | null, navigate: false, editFile: false }))
 const registryState = vi.hoisted(() => ({ prepareCalls: 0 as number }))
 const approvalState = vi.hoisted(() => ({ impl: undefined as unknown as (inv: unknown) => Promise<unknown> }))
 
@@ -62,6 +62,7 @@ vi.mock('./tools/builtinExecutors', async (importOriginal) => {
     getRegisteredTool: vi.fn(() => undefined),
     getToolExecutor: vi.fn((name: string) => {
       if (name === 'write_file') return { name, execute: async () => ({ success: true, data: 'written' }) }
+      if (name === 'edit_file') return { name, execute: async () => ({ success: true, data: 'edited' }) }
       if (name === 'browser') return { name, execute: async () => ({ success: true, data: 'navigated' }) }
       return undefined
     })
@@ -99,6 +100,13 @@ const NAVIGATE_FACTS: ContentFacts = {
   signals: [{ kind: 'network-egress', domains: ['example.com'] }],
   summary: { text: 'browser navigate https://example.com' }
 }
+const EDIT_FACTS: ContentFacts = {
+  toolName: 'edit_file',
+  actionClass: 'write',
+  baseRiskLevel: 'medium',
+  signals: [{ kind: 'path-target', path: 'a.txt', zone: 'workdir-normal' }],
+  summary: { text: 'edit_file a.txt' }
+}
 const NAVIGATE_KEY = {
   kind: 'domain' as const,
   domain: 'example.com',
@@ -129,7 +137,17 @@ vi.mock('./confirmation/toolCallGate', async (importOriginal) => {
   return {
     ...actual,
     evaluateToolCallGate: vi.fn(async (): Promise<ToolCallGateResult> => (
-      gateState.navigate
+      gateState.editFile
+        ? {
+            decision: {
+              ...FALLBACK_DECISION,
+              answerer: gateState.answerer,
+              timeoutMs: gateState.timeoutMs,
+              facts: EDIT_FACTS
+            },
+            facts: EDIT_FACTS
+          }
+        : gateState.navigate
         ? {
             decision: { ...NAVIGATE_DECISION, answerer: gateState.answerer, timeoutMs: gateState.timeoutMs },
             facts: NAVIGATE_FACTS
@@ -190,7 +208,9 @@ function installStreamClient() {
                 content: [
                   gateState.navigate
                     ? { type: 'tool_use', id: 'toolu-fb-1', name: 'browser', input: { action: 'navigate', mode: 'open', url: 'https://example.com' } }
-                    : { type: 'tool_use', id: 'toolu-fb-1', name: 'write_file', input: { path: 'out.txt', content: 'fallback content' } }
+                    : gateState.editFile
+                      ? { type: 'tool_use', id: 'toolu-fb-1', name: 'edit_file', input: { path: 'a.txt', old_string: 'x', new_string: 'y' } }
+                      : { type: 'tool_use', id: 'toolu-fb-1', name: 'write_file', input: { path: 'out.txt', content: 'fallback content' } }
                 ],
                 stop_reason: 'tool_use'
               }
@@ -235,6 +255,7 @@ beforeEach(() => {
   gateState.answerer = 'agent'
   gateState.timeoutMs = null
   gateState.navigate = false
+  gateState.editFile = false
   waitOutcome = 'approved'
   approvalState.impl = async () => ({ ok: false, cause: 'unavailable' })
 })
@@ -338,6 +359,24 @@ describe('桌面审批失败回退人工确认卡（端到端，真实通道链�
     expect(events[3]).toMatchObject({ actor: 'user', cause: 'user-approved' })
     expect(new SqliteDecisionCache(getDbConnection(db)).lookup(domainKey)).not.toBeNull()
     expect(capturedAuditEvents.filter((e) => e.event === 'cache.write')).toHaveLength(1)
+  })
+
+  it('edit_file 回退卡补算 confirmDiff（§5.10b：写/编辑各一例）', async () => {
+    gateState.editFile = true
+    installStreamClient()
+    const db = makeDb()
+    const workDir = makeWorkDir()
+    writeFileSync(path.join(workDir, 'a.txt'), 'x', 'utf-8')
+    const res = await runAssembled(baseArgs(db, workDir))
+    expect(res.ok).toBe(true)
+
+    const confirmRequested = capturedFactEvents.filter((e) => e.type === 'confirm-requested')
+    expect(confirmRequested).toHaveLength(2)
+    const first = confirmRequested[0] as Extract<AssistantFactEvent, { type: 'confirm-requested' }>
+    const fallbackEvent = confirmRequested[1] as Extract<AssistantFactEvent, { type: 'confirm-requested' }>
+    expect(first.confirmDiff).toBeUndefined()
+    expect(fallbackEvent.confirmDiff).toMatchObject({ oldPath: 'a.txt', oldContent: 'x', newContent: 'y' })
+    expect(fallbackEvent.autoAnswerer).toBe(false)
   })
 
   it('失败原因短文案来自 i18n 真源（zh-CN / en-US 双份，§5.3）', async () => {
