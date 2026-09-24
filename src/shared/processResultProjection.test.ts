@@ -6,6 +6,7 @@ import {
   projectTelemetryToolResult,
   type ProcessProjectionOptions
 } from './processResultProjection'
+import { SHELL_TUI_UNDETECTABLE_REASONS } from './shellTuiContract'
 
 const options: ProcessProjectionOptions = {
   workspaceRoot: '/Users/alice/project'
@@ -461,6 +462,16 @@ describe('process result projections', () => {
     expect(projected.data.shellProfileId).toBeUndefined()
     expect(projected.data.detectedSyntax).toBeUndefined()
     expect(projected.data.reason).toBeUndefined()
+  })
+
+  it('TUI 不可检测原因六值全部保留，telemetry 丢弃展示字段', () => {
+    for (const reason of SHELL_TUI_UNDETECTABLE_REASONS) {
+      const result = projectAgentToolResultForSink({ success: false, error: 'SHELL_TUI_UNDETECTABLE', data: { status: 'failed', tuiUndetectable: { program: 'less', reason } } }, { ...options, processTool: true }) as { data: Record<string, unknown> }
+      expect(result.data.tuiUndetectable).toEqual({ program: 'less', reason })
+      const telemetry = projectTelemetryToolResult({ success: false, error: 'SHELL_TUI_UNDETECTABLE', diagnostic: { caseId: 'SHELL-CAPABILITY-003', category: 'environment', retryable: false }, data: { status: 'failed', tuiUndetectable: { program: 'less', reason } } }, { ...options, processTool: true }) as { data: Record<string, unknown>; diagnostic: Record<string, unknown> }
+      expect(telemetry.data.tuiUndetectable).toBeUndefined()
+      expect(telemetry.diagnostic).toEqual({ caseId: 'SHELL-CAPABILITY-003', retryable: false })
+    }
   })
 
 })

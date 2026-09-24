@@ -241,8 +241,9 @@
   },
   "shell": {
     "tuiTitle": "此命令需要交互式终端",
-    "tuiLine1": "SpaceAssistant 内的 run_shell 为只读输出，无法承载 less、vim、top、交互式 npm init 等全屏或需输入的程序。",
-    "tuiLine2": "请在外部系统终端中于工作目录下自行执行该命令；可使用下方按钮打开终端。",
+    "tuiLine1": "SpaceAssistant 内的 run_shell 为非交互执行，无法承载 {{program}} 等全屏或需键盘输入的程序。",
+    "tuiLine2": "这属于执行环境/能力限制，不是安全策略拒绝；不要改用其他工具或换写法重复尝试同一程序。请改写为非交互命令，或把命令和用途告知用户，由用户在系统终端运行。",
+    "tuiUndetectableLine": "这是执行环境/能力限制，不是安全策略拒绝；不要换途径重试。请把命令拆分为单条简单命令后重试，或告知用户在系统终端运行。",
     "openTerminal": "在工作目录打开终端",
     "workDirNotConfigured": "未配置工作目录，请先在设置中指定工作目录",
     "outputTrustSuspect": "输出编码可疑，原始字节已保存：文本可能不是真实输出，如需核对请查看原始字节 artifact。"

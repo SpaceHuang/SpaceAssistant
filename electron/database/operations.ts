@@ -751,6 +751,22 @@ export function listStreamingAssistantMessages(db: AppDatabase): Message[] {
   return rows.map(rowToStoredMessage)
 }
 
+export function listRecoverableResidues(db: AppDatabase): Array<{ message: Message; turnId?: string; turnOutcome?: string }> {
+  const conn = getDbConnection(db)
+  const rows = conn.prepare("SELECT m.*, t.turn_id AS residue_turn_id, t.outcome AS residue_outcome FROM messages m LEFT JOIN turns t ON t.assistant_message_id = m.id WHERE m.role = 'assistant' AND m.status = 'streaming' ORDER BY m.timestamp ASC").all() as Array<MessageRow & { residue_turn_id?: string; residue_outcome?: string }>
+  return rows.map((row) => ({ message: rowToStoredMessage(row), ...(row.residue_turn_id ? { turnId: row.residue_turn_id } : {}), ...(row.residue_outcome ? { turnOutcome: row.residue_outcome } : {}) }))
+}
+
+/** 收敛残留消息状态，但保留 turns.outcome；用于 checkpoint 已记录终态的恢复补偿。 */
+export function finalizeResidueMessageKeepingOutcome(db: AppDatabase, messageId: string, targetStatus: 'cancelled' | 'failed'): boolean {
+  const message = getMessage(db, messageId)
+  if (!message || message.role !== 'assistant' || message.status !== 'streaming') return false
+  const toolCalls = message.toolCalls?.map((tool) => tool.status === 'completed' || tool.status === 'failed' || tool.status === 'rejected'
+    ? tool
+    : { ...tool, status: 'failed' as const, interrupted: true, completedAt: tool.completedAt ?? Date.now(), result: tool.result ?? { success: false, error: '工具调用因应用退出中断' } })
+  return updateMessageContent(db, messageId, { status: targetStatus, ...(toolCalls ? { toolCalls } : {}) }) !== null
+}
+
 export interface MessagesPage {
   messages: Message[]
   /** 下一页应从此 sequence（含）开始读取；页为空时回填传入的 fromSequence，供调用方判定翻页结束 */

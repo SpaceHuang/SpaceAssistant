@@ -2,6 +2,7 @@ import type { Message } from './domainTypes'
 import { reduceAssistantFact, type AssistantFactEvent, type TurnExecutionConfig, type TurnIntent, type TurnTerminal, type TurnOutcome } from './assistantFactAggregator'
 import { canonicalQueueInput } from './queueInputFingerprint'
 import { CheckpointQueue } from './checkpointQueue'
+import { isTerminalMessageStatus } from './messageStatus'
 
 export type PersistedMessage = { message: Message; sequence: number }
 export type TurnStorage = {
@@ -20,6 +21,8 @@ export type TurnStorage = {
   updateIfStreaming: (messageId: string, patch: Partial<Message>) => PersistedMessage | null
   checkpoint: (turnId: string, version: number, message: Message) => boolean
   listStreaming?: () => Message[]
+  listRecoverableResidues?: () => Array<{ message: Message; turnId?: string; turnOutcome?: string }>
+  finalizeResidueMessage?: (messageId: string, targetStatus: 'cancelled' | 'failed') => boolean
   listUnfinishedTurns: () => Array<{ turnId: string; assistantMessageId: string }>
   recoverTurn: (turnId: string, assistantMessageId: string) => boolean
   saveTurn: (turn: { turnId: string; requestId: string; sessionId: string; assistantMessageId: string; state: string; userMessageId?: string; contextBoundarySequence?: number; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig }) => void
@@ -199,8 +202,8 @@ export class TurnCoordinator {
       }
       if (!terminal) return terminal
       const latest = this.turns.get(turnId) ?? current
-      const alreadyTerminal = latest.assistantMessage.status === 'completed' || latest.assistantMessage.status === 'failed'
-      const status = terminal.outcome === 'completed' ? 'completed' : 'failed'
+      const alreadyTerminal = isTerminalMessageStatus(latest.assistantMessage.status)
+      const status = terminal.outcome === 'completed' ? 'completed' : terminal.outcome === 'cancelled' ? 'cancelled' : 'failed'
       // source 只能报告 outcome/usage/error；权威 Message 必须来自 consume/reducer。
       const message = latest.assistantMessage
       const finalMessage: Message = alreadyTerminal
@@ -223,12 +226,14 @@ export class TurnCoordinator {
         return { outcome: pendingFinish.outcome, error: { code: 'source-cleanup-failed', message: error instanceof Error ? error.message : String(error) } } as ModelResult
       }
       const latest = this.turns.get(turnId) ?? current
-      const message = { ...latest.assistantMessage, status: 'failed' as const }
+      const preserveCancelled = isTerminalMessageStatus(latest.assistantMessage.status) && latest.assistantMessage.status === 'cancelled'
+      const message = { ...latest.assistantMessage, status: preserveCancelled ? 'cancelled' as const : 'failed' as const }
       const finalized = { ...latest, assistantMessage: message }
       this.turns.set(turnId, finalized)
       this.flushCheckpoint(turnId, finalized)
-      this.terminals.set(turnId, { turnId, requestId: latest.requestId, sessionId: latest.sessionId, assistantMessageId: message.id, version: latest.version, outcome: 'failed', message, error: { code: 'source-failed', message: error instanceof Error ? error.message : String(error) } })
-      this.storage.updateTurnState(turnId, 'terminal', { version: latest.version, outcome: 'failed', error: { code: 'source-failed', message: error instanceof Error ? error.message : String(error) } })
+      const errorOutcome = preserveCancelled ? 'cancelled' : 'failed'
+      this.terminals.set(turnId, { turnId, requestId: latest.requestId, sessionId: latest.sessionId, assistantMessageId: message.id, version: latest.version, outcome: errorOutcome, message, error: { code: 'source-failed', message: error instanceof Error ? error.message : String(error) } })
+      this.storage.updateTurnState(turnId, 'terminal', { version: latest.version, outcome: errorOutcome, error: { code: 'source-failed', message: error instanceof Error ? error.message : String(error) } })
       throw error
     })
     this.executions.set(turnId, promise)
@@ -239,7 +244,7 @@ export class TurnCoordinator {
     const metricStart = typeof performance !== 'undefined' ? performance.now() : 0
     const turn = this.turns.get(turnId)
     if (!turn) throw new Error('unknown turn')
-    if (turn.assistantMessage.status === 'completed' || turn.assistantMessage.status === 'failed') return turn
+    if (isTerminalMessageStatus(turn.assistantMessage.status)) return turn
     if (this.finishing.has(turnId) && !this.isFinishingEventAllowed(event.type)) return turn
     if (event.eventSeq != null) {
       const last = turn.lastEventSeq ?? 0
@@ -318,7 +323,7 @@ export class TurnCoordinator {
       return
     }
     const current = this.turns.get(turnId)
-    if (current && (current.assistantMessage.status === 'completed' || current.assistantMessage.status === 'failed')) {
+    if (current && (isTerminalMessageStatus(current.assistantMessage.status))) {
       const retries = this.checkpointRetries.get(turnId) ?? 0
       if (retries >= 3) this.checkpointFailed.add(turnId)
       else { this.checkpointRetries.set(turnId, retries + 1); this.checkpointTimers.set(turnId, setTimeout(() => { this.checkpointTimers.delete(turnId); this.persistCheckpoint(turnId, current) }, 100)) }
@@ -336,7 +341,7 @@ export class TurnCoordinator {
 
   cancel(turnId: string): boolean {
     const turn = this.turns.get(turnId)
-    if (!turn || turn.assistantMessage.status === 'completed' || turn.assistantMessage.status === 'failed') return false
+    if (!turn || isTerminalMessageStatus(turn.assistantMessage.status)) return false
     if (this.finishing.has(turnId)) return false
     this.cancelHook(turnId)
     if (this.executions.has(turnId)) {
@@ -349,7 +354,7 @@ export class TurnCoordinator {
 
   timeout(turnId: string): boolean {
     const turn = this.turns.get(turnId)
-    if (!turn || turn.assistantMessage.status === 'completed' || turn.assistantMessage.status === 'failed') return false
+    if (!turn || isTerminalMessageStatus(turn.assistantMessage.status)) return false
     if (this.finishing.has(turnId)) return false
     this.cancelHook(turnId)
     if (this.executions.has(turnId)) this.beginFinishing(turnId, 'timed-out')
@@ -371,7 +376,7 @@ export class TurnCoordinator {
     if (pending) clearTimeout(pending.timer)
     this.finishing.delete(turnId)
     const current = this.turns.get(turnId)
-    if (!current || current.assistantMessage.status === 'completed' || current.assistantMessage.status === 'failed') return
+    if (!current || isTerminalMessageStatus(current.assistantMessage.status)) return
     const finalized = this.consume(turnId, { type: outcome === 'cancelled' ? 'source-cancelled' : 'source-timeout' })
     this.storage.updateTurnState(turnId, 'terminal', { version: finalized.version, outcome, ...(error ? { error } : {}) })
     this.terminals.set(turnId, { ...this.makeTerminal(finalized, outcome), ...(error ? { error } : {}) })
@@ -394,18 +399,30 @@ export class TurnCoordinator {
         recovered++
       }
     }
-    if (unfinished.length > 0) return recovered
-
-    const residues = this.storage.listStreaming?.() ?? []
-    recovered = 0
+    const residues: Array<{ message: Message; turnId?: string; turnOutcome?: string }> = this.storage.listRecoverableResidues?.() ?? (this.storage.listStreaming?.() ?? []).map((message) => ({ message }))
     for (const message of residues) {
-      if (message.role !== 'assistant' || message.status !== 'streaming') continue
-      if (this.recovered.has(message.id)) continue
-      const owned = [...this.turns.values()].find((turn) => turn.assistantMessage.id === message.id)
-      const result = owned?.turnId
-        ? (this.storage.recoverTurn(owned.turnId, message.id) ? { message: { ...message, status: 'failed' as const }, sequence: 0 } : null)
-        : this.storage.updateIfStreaming(message.id, { ...message, status: 'failed' })
-      if (result) { this.recovered.add(message.id); recovered++ }
+      const residue = message
+      const m = residue.message
+      if (m.role !== 'assistant' || m.status !== 'streaming') continue
+      if (this.recovered.has(m.id)) continue
+      const owned = [...this.turns.values()].find((turn) => turn.assistantMessage.id === m.id)
+      const cancelled = residue.turnOutcome === 'cancelled' || owned?.persistedOutcome === 'cancelled'
+      const result = cancelled
+        ? (this.storage.finalizeResidueMessage?.(m.id, 'cancelled') ?? this.storage.updateIfStreaming(m.id, { ...m, status: 'cancelled' }))
+        : residue.turnId
+        ? (this.storage.recoverTurn(residue.turnId, m.id) ? { message: { ...m, status: 'failed' as const }, sequence: 0 } : null)
+        : owned?.turnId
+        ? (this.storage.recoverTurn(owned.turnId, m.id) ? { message: { ...m, status: 'failed' as const }, sequence: 0 } : null)
+        : this.storage.updateIfStreaming(m.id, { ...m, status: 'failed' })
+      if (result) {
+        this.recovered.add(m.id)
+        if (cancelled && owned) {
+          const converged = { ...owned, assistantMessage: { ...owned.assistantMessage, status: 'cancelled' as const }, persistedOutcome: 'cancelled' as const }
+          this.turns.set(owned.turnId, converged)
+          this.terminals.set(owned.turnId, this.makeTerminal(converged, 'cancelled'))
+        }
+        recovered++
+      }
     }
     return recovered
   }
@@ -454,9 +471,9 @@ export class TurnCoordinator {
   }
   getTurn(turnId: string): TurnStarted | undefined { return this.turns.get(turnId) }
   listActive(sessionId?: string): TurnStarted[] {
-    return [...this.turns.values()].filter((turn) => (!sessionId || turn.sessionId === sessionId) && turn.assistantMessage.status !== 'completed' && turn.assistantMessage.status !== 'failed')
+    return [...this.turns.values()].filter((turn) => (!sessionId || turn.sessionId === sessionId) && !isTerminalMessageStatus(turn.assistantMessage.status))
   }
   private makeTerminal(turn: TurnStarted, outcome: TurnTerminal['outcome']): TurnTerminal {
-    return { turnId: turn.turnId, requestId: turn.requestId, sessionId: turn.sessionId, assistantMessageId: turn.assistantMessage.id, version: turn.version, outcome, message: { ...turn.assistantMessage, status: 'failed' } }
+    return { turnId: turn.turnId, requestId: turn.requestId, sessionId: turn.sessionId, assistantMessageId: turn.assistantMessage.id, version: turn.version, outcome, message: { ...turn.assistantMessage, status: outcome === 'cancelled' ? 'cancelled' : 'failed' } }
   }
 }

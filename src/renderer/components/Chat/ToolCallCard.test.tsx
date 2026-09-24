@@ -468,14 +468,39 @@ describe('ToolCallCard run_shell output display', () => {
   it('shows external terminal hint for interactive TUI commands', () => {
     render(
       <ToolCallCard
-        record={shellRecord('executing', { input: { command: 'less README.md' } })}
+        record={shellRecord('failed', { input: { command: 'less README.md' }, result: { success: false, error: 'SHELL_INTERACTIVE_TTY_REQUIRED', data: { caseId: 'SHELL-CAPABILITY-001', tuiMatch: { program: 'less', rule: 'direct-program' } } } })}
         workDir="E:\\work"
         {...terminalShellCardProps}
       />
     )
     expect(document.querySelector('.shell-tui-fallback')).not.toBeNull()
     expect(document.querySelector('.shell-tui-fallback')?.textContent).toMatch(/交互式终端/)
+    expect(document.querySelector('.shell-tui-fallback')?.textContent).toContain('less')
+    expect(screen.getByRole('button', { name: '在工作目录打开终端' })).toBeDefined()
     expect(document.querySelector('.shell-terminal-host')).toBeNull()
+  })
+
+  it('renders structured undetectable notice and split-command advice', () => {
+    render(
+      <ToolCallCard
+        record={shellRecord('failed', { result: { success: false, error: 'SHELL_TUI_UNDETECTABLE', data: { tuiUndetectable: { reason: 'nested-command-unresolvable', program: 'less' } } } })}
+        workDir="/tmp/work"
+        {...terminalShellCardProps}
+      />
+    )
+    expect(document.querySelector('.shell-tui-fallback')?.textContent).toContain('拆分')
+    expect(screen.getByRole('button', { name: '在工作目录打开终端' })).toBeDefined()
+    expect(document.querySelector('.shell-terminal-host')).toBeNull()
+  })
+
+  it('executing 阶段即使命令含 TUI 名称也不显示 fallback 卡', () => {
+    render(
+      <ToolCallCard
+        record={shellRecord('executing', { input: { command: 'less README.md' } })}
+        {...terminalShellCardProps}
+      />
+    )
+    expect(document.querySelector('.shell-tui-fallback')).toBeNull()
   })
 
   it('still shows ShellConfirmCard while confirming', () => {

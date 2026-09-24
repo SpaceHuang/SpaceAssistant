@@ -73,7 +73,9 @@ function buildDegradedPrepared(prepared: PreparedShellExecution, profile: ShellP
         profileId: profile.id,
         executable: profile.executable
       },
-      pathSnapshot
+      pathSnapshot,
+      shellOutputMode: prepared.shellOutputMode,
+      spawnStdio: prepared.spawnStdio
     })
   )
 }

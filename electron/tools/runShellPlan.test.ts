@@ -60,4 +60,38 @@ describe('planRunShellExecution', () => {
       policyRevision: 'policy-v2'
     })).rejects.toMatchObject({ code: 'PLAN_STALE' })
   })
+
+  it('确认等待期间 outputMode 改变仍按冻结快照重验证', async () => {
+    const prepared = await planRunShellExecution({ command: 'echo frozen-mode' }, {
+      ...ctx,
+      shellConfig: { ...ctx.shellConfig, outputMode: 'terminal' }
+    })
+    await expect(revalidatePreparedShellExecution(prepared, {
+      shellConfig: { ...ctx.shellConfig, outputMode: 'plain' }
+    })).resolves.toBeUndefined()
+    expect(prepared.shellOutputMode).toBe('terminal')
+    expect(prepared.spawnStdio).toEqual(['ignore', 'pipe', 'pipe'])
+  })
+
+  it.each([
+    ['less README.md', 'less'],
+    ['env sudo vim file.txt', 'vim'],
+    ['command htop', 'htop']
+  ])('命令位 TUI %s 返回结构化命中 %s', async (command, program) => {
+    await expect(planRunShellExecution({ command }, ctx)).rejects.toMatchObject({
+      code: 'SHELL_INTERACTIVE_TTY_REQUIRED',
+      details: { tuiMatch: { program } }
+    })
+  })
+
+  it('二次解释无法静态解析时返回不可检测原因', async () => {
+    await expect(planRunShellExecution({ command: "bash -c '$CMD less'" }, ctx)).rejects.toMatchObject({
+      code: 'SHELL_TUI_UNDETECTABLE',
+      details: { tuiUndetectable: { reason: 'unsupported-wrapper' } }
+    })
+  })
+
+  it('普通文件名与管道重定向不会误判为 TUI', async () => {
+    await expect(planRunShellExecution({ command: 'cat htop-report.md | grep less > out.txt' }, ctx)).resolves.toMatchObject({ command: 'cat htop-report.md | grep less > out.txt' })
+  })
 })

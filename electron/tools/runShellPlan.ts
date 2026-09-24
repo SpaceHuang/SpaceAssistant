@@ -11,16 +11,27 @@ import { profileForPlatform, buildShellArgs } from '../shell/shellProfiles'
 import { resolveShellEnvironment } from '../shell/environmentResolver'
 import { validateShellExecutionConfig } from '../shell/shellExecutionConfigValidation'
 import { detectShellDialectMismatch } from '../shell/shellDialectMismatch'
-import { isInteractiveShellTuiCommand } from '../../src/shared/shellInteractiveTui'
+import { analyzeShellTuiCommand } from '../../src/shared/shellInteractiveTui'
 import { migrateLegacyShellConfig } from '../shell/legacyShellConfigMigration'
 import { AUTO_CONTRACT } from '../processOutput/contracts'
+import { resolveEffectiveShellOutputMode, type ShellOutputMode } from '../../src/shared/shellOutputMode'
+import type { SpawnStdio } from '../shell/preparedShellExecution'
 
 const DEFAULT_IO_MAX = 100 * 1024
+function applyShellOutputEnvironment(env: Record<string, string | undefined>, mode: ShellOutputMode): void {
+  env.PAGER = 'cat'
+  env.GIT_PAGER = 'cat'
+  if (mode === 'plain') {
+    env.NO_COLOR = '1'
+    env.TERM = 'dumb'
+  }
+}
 
 export type RunShellPlanErrorCode =
   | 'SHELL_PLAN_INVALID'
   | 'SHELL_EXECUTABLE_UNAVAILABLE'
   | 'SHELL_INTERACTIVE_TTY_REQUIRED'
+  | 'SHELL_TUI_UNDETECTABLE'
   | 'SHELL_DIALECT_MISMATCH'
 
 export class RunShellPlanError extends Error {
@@ -80,7 +91,7 @@ async function assertExecutableAvailable(executable: string): Promise<void> {
 /** 唯一的 Shell 计划入口：只生成执行事实，不执行进程，也不包含授权结论。 */
 export async function planRunShellExecution(
   input: Record<string, unknown>,
-  ctx: Pick<ToolExecutionContext, 'workDir' | 'userDataDir' | 'shellConfig' | 'policyRevision'>
+  ctx: Pick<ToolExecutionContext, 'workDir' | 'userDataDir' | 'shellConfig' | 'policyRevision' | 'shellOutputMode'>
 ): Promise<PreparedShellExecution> {
   let shellConfig = ctx.shellConfig
   if (process.platform === 'win32' && shellConfig) {
@@ -99,9 +110,9 @@ export async function planRunShellExecution(
   const spec = resolveSpec(shellConfig)
   await assertExecutableAvailable(spec.executable)
   const profile = profileForPlatform(process.platform)
-  if (isInteractiveShellTuiCommand(command)) {
-    throw new RunShellPlanError('SHELL_INTERACTIVE_TTY_REQUIRED', 'SHELL_INTERACTIVE_TTY_REQUIRED')
-  }
+  const tuiVerdict = analyzeShellTuiCommand(command)
+  if (tuiVerdict.kind === 'match') throw new RunShellPlanError('SHELL_INTERACTIVE_TTY_REQUIRED', 'SHELL_INTERACTIVE_TTY_REQUIRED', { tuiMatch: { program: tuiVerdict.program, rule: tuiVerdict.rule } })
+  if (tuiVerdict.kind === 'undetectable') throw new RunShellPlanError('SHELL_TUI_UNDETECTABLE', 'SHELL_TUI_UNDETECTABLE', { tuiUndetectable: { reason: tuiVerdict.reason } })
   const mismatch = detectShellDialectMismatch(command, profile)
   if (mismatch) throw new RunShellPlanError('SHELL_DIALECT_MISMATCH', 'SHELL_DIALECT_MISMATCH', { ...mismatch })
   let execPlan: ReturnType<typeof planShellExec>
@@ -114,6 +125,8 @@ export async function planRunShellExecution(
     'DEBUG', 'PLAYWRIGHT_FORCE_TTY', 'APPDATA', 'ProgramFiles', 'ProgramFiles(x86)', 'LOCALAPPDATA'
   ])
   const env = buildShellEnv(resolved.env)
+  const shellOutputMode = ctx.shellOutputMode ?? resolveEffectiveShellOutputMode(shellConfig)
+  applyShellOutputEnvironment(env, shellOutputMode)
   applyPlaywrightInstallShellEnv(env, command)
   const pathSnapshot = await captureShellPathSnapshot([spec.executable, execPlan.cwd])
   // 契约必须进入 plan（§7.1）：内置 profile 用我们请求的编码；
@@ -137,7 +150,9 @@ export async function planRunShellExecution(
     configRevision: shellConfigRevision(shellConfig),
     policyRevision: ctx.policyRevision ?? 'runtime',
     dependencySnapshot: { platform: process.platform, profileId: profile.id, executable: spec.executable, environmentFingerprint: resolved.fingerprint },
-    pathSnapshot
+    pathSnapshot,
+    shellOutputMode,
+    spawnStdio: ['ignore', 'pipe', 'pipe'] as SpawnStdio
   })
 }
 
@@ -153,6 +168,7 @@ export async function revalidatePreparedShellExecution(
     'DEBUG', 'PLAYWRIGHT_FORCE_TTY', 'APPDATA', 'ProgramFiles', 'ProgramFiles(x86)', 'LOCALAPPDATA'
   ])
   const env = buildShellEnv(resolved.env)
+  applyShellOutputEnvironment(env, prepared.shellOutputMode)
   applyPlaywrightInstallShellEnv(env, prepared.command)
   const pathSnapshot = await captureShellPathSnapshot([prepared.spawnSpec.executable, prepared.cwd])
   assertPreparedShellExecutionCurrent(prepared, {
@@ -164,6 +180,8 @@ export async function revalidatePreparedShellExecution(
     configRevision: shellConfigRevision(current.shellConfig),
     policyRevision: current.policyRevision ?? prepared.policyRevision,
     dependencySnapshot: prepared.dependencySnapshot,
-    pathSnapshot
+    pathSnapshot,
+    shellOutputMode: prepared.shellOutputMode,
+    spawnStdio: prepared.spawnStdio
   })
 }

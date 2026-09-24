@@ -78,7 +78,7 @@ export type AssistantFactEvent = AssistantFactEventPayload & { eventSeq?: number
 
 export type AssistantFactReducerDeps = { now: number; createId: () => string }
 
-const terminal = (status: Message['status']) => status === 'completed' || status === 'failed'
+const terminal = (status: Message['status']) => status === 'completed' || status === 'failed' || status === 'cancelled'
 
 export function reduceAssistantFact(state: Message, event: AssistantFactEvent, deps: AssistantFactReducerDeps): Message {
   if (terminal(state.status)) return state
@@ -170,7 +170,7 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
     // usage 属于会话级投影数据，不改变 assistant message 本身。
   } else {
     closeSegments(next, deps.now)
-    next.status = event.type === 'source-completed' ? 'completed' : 'failed'
+    next.status = event.type === 'source-completed' ? 'completed' : event.type === 'source-cancelled' ? 'cancelled' : 'failed'
   }
   return next
 }

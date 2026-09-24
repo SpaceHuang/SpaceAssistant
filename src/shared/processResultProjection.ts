@@ -81,6 +81,7 @@ const PROCESS_KEYS = new Set([
   'degradedFrom', 'incompatible', 'hostInitExitCode',
   // §10.3：方言错配等计划错误的结构化 data（signals/hints 必须到达模型）
   'signals', 'hints', 'detectedSyntax', 'expectedDialect', 'shellProfileId', 'reason'
+  , 'tuiMatch', 'tuiUndetectable'
 ])
 const DIAGNOSTIC_KEYS = new Set(['caseId', 'retryable', 'category', 'code', 'phase', 'attempt'])
 
@@ -454,6 +455,14 @@ function projectProcessDataForSink(
         const text = sanitizeAdviceText(entry)
         if (text) out[key] = text
       }
+      continue
+    }
+    if (key === 'tuiMatch' || key === 'tuiUndetectable') {
+      if (sink === 'telemetry' || !entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+      const value = entry as Record<string, unknown>
+      const program = typeof value.program === 'string' && /^[A-Za-z0-9_.-]{1,32}$/.test(value.program) ? value.program : undefined
+      const reason = key === 'tuiUndetectable' && typeof value.reason === 'string' && /^[a-z-]{1,48}$/.test(value.reason) ? value.reason : undefined
+      if (program || reason) out[key] = { ...(program ? { program } : {}), ...(reason ? { reason } : {}) }
       continue
     }
     if (key === 'outputDiag') {

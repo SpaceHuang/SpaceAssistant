@@ -65,6 +65,8 @@ export {
   listSearchHistory,
   listSessions,
   listStreamingAssistantMessages,
+  listRecoverableResidues,
+  finalizeResidueMessageKeepingOutcome,
   listSessionsMissingWorkDirProfile,
   resolveRetryContext,
   searchMessages,

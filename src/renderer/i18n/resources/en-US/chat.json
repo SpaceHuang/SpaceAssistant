@@ -241,8 +241,9 @@
   },
   "shell": {
     "tuiTitle": "This command needs an interactive terminal",
-    "tuiLine1": "run_shell in SpaceAssistant is read-only and cannot run full-screen or interactive programs such as less, vim, top, or interactive npm init.",
-    "tuiLine2": "Run this command in an external terminal at the working directory; use the button below to open one.",
+    "tuiLine1": "run_shell in SpaceAssistant is non-interactive and cannot run full-screen or keyboard-driven programs such as {{program}}.",
+    "tuiLine2": "This is an execution environment/capability limitation, not a security policy denial. Do not retry the same program through another tool or rewritten command. Use a non-interactive command, or tell the user what to run in their system terminal.",
+    "tuiUndetectableLine": "This is an execution environment/capability limitation, not a security policy denial. Do not retry through another route. Split the command into simple single commands and retry, or tell the user to run it in the system terminal.",
     "openTerminal": "Open terminal at working directory",
     "workDirNotConfigured": "Working directory is not configured. Set it in Settings first.",
     "outputTrustSuspect": "Output encoding is suspect and the raw bytes were saved: the text may not be the real output — check the raw-bytes artifact to verify."

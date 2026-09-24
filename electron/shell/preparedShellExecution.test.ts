@@ -76,6 +76,15 @@ describe('PreparedShellExecution', () => {
     expect(result).toEqual({ stale: true, reasons: ['dependencySnapshot'] })
   })
 
+  it('输出模式和 stdin 契约参与 stale 校验', () => {
+    const input = { ...makeInput(), shellOutputMode: 'terminal' as const, spawnStdio: ['ignore', 'pipe', 'pipe'] as const }
+    const prepared = prepareShellExecution(input)
+    const mode = validatePreparedShellExecution(prepared, { ...input, shellOutputMode: 'plain' as const })
+    expect(mode.reasons).toContain('shellOutputMode')
+    const stdio = validatePreparedShellExecution(prepared, { ...input, spawnStdio: ['ignore', 'pipe', 'ignore'] as unknown as ['ignore', 'pipe', 'pipe'] })
+    expect(stdio.reasons).toContain('spawnStdio')
+  })
+
   it('captures realpath and falls back for missing paths', async () => {
     // 用真实存在的临时目录代替硬编码 /tmp：Windows 上 /tmp 会解析到当前盘根目录，语义不确定。
     const existing = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-path-snapshot-'))

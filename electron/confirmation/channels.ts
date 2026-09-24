@@ -70,7 +70,18 @@ export class DesktopChannel implements ConfirmationChannel {
         requestId: string,
         toolUseId: string,
         memoryTiers?: ConfirmRequest['memoryTiers'],
-        scope?: { toolName: string; lane: string; sessionId?: string; generation?: number; revision?: number; trustMcpServerId?: string; trustMcpToolName?: string },
+        scope?: {
+          toolName: string
+          lane: string
+          sessionId?: string
+          generation?: number
+          revision?: number
+          trustCommands?: string[]
+          trustDomains?: string[]
+          trustActDomains?: string[]
+          trustMcpServerId?: string
+          trustMcpToolName?: string
+        },
         timeoutMs?: number
       ) => Promise<ToolConfirmOutcome>
     }

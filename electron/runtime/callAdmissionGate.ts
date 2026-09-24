@@ -237,7 +237,6 @@ export class CallAdmissionGate {
     }
     return cancelled
   }
-
   private wakeNext(): void {
     // 普通请求与恢复请求必须共享一个按到达序排序的候选视图。
     // 逐个跳过当前 lane 不可准入的候选，不能先批量扫描普通队列再扫描恢复队列，
