@@ -175,7 +175,9 @@ export interface ResolveConfirmChannelArgs {
  * P1-1 二维解析模型（评审 B2）：
  *  - 维度一「回答者种类」（user / agent / deny）由回答者配置解析，替代按 lane 硬编码；
  *  - 维度二「传输通道」（desktop 窗口卡 / IM 出站）由 lane 与注入的 imChannel 派生。
- * fail-closed（I4）：配置损坏、kind='agent' 无工厂 → DenyChannel + 告警审计，绝不回退为 user。
+ * fail-closed（I4）：配置损坏、kind='agent' 无工厂 → DenyChannel + 告警审计，不隐式转为 user 通道。
+ * I4 的场景限定（本次修订）：**无人值守上下文**绝不回退为 user；有人值守链路（桌面 / IM）
+ * 的失败去向由该链路策略决定，不在 I4 约束内（见 desktop-fail-open-to-user-plan.md）。
  */
 export function resolveConfirmChannel(args: ResolveConfirmChannelArgs): ConfirmationChannel {
   // P3 收缩（§5.3）：回答者由 gate 决策派生（decision.answerer），缺省 user 仅防御未接线的旧调用方；
@@ -183,7 +185,7 @@ export function resolveConfirmChannel(args: ResolveConfirmChannelArgs): Confirma
   const answerer = args.answererPolicy ?? { kind: 'user' as const }
   const isLaneWithImTransport = args.lane === 'wechat' || args.lane === 'feishu'
 
-  // 配置损坏：kind 非法 → deny + 告警（绝不回退 user）
+  // 配置损坏：kind 非法 → deny + 告警（无人值守上下文不回退 user；有人值守链路的失败去向由链路策略决定）
   if (answerer.kind !== 'user' && answerer.kind !== 'agent' && answerer.kind !== 'deny') {
     return denyFallback(args, 'config-error', `未知回答者配置 kind=${String((answerer as { kind?: unknown }).kind)}`)
   }

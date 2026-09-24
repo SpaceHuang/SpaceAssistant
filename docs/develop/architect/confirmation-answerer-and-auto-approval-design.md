@@ -72,7 +72,7 @@
 - **I1 回答者与 lane 正交**：lane 只表达来源身份（审计 / 套餐 / 限权）；「未命中规则与缓存时谁来回答」由回答者配置决定。
 - **I2 标准唯一**：审批 Agent 的裁决标准只有一份（一个 Skill、一份 Prompt），桌面自动审批档与管家共用；场景差异不得改变裁决标准。
 - **I3 记忆只源于人类**：`decision_cache` 只能由人类确认或用户显式设置 / 迁移写入；审批 Agent 的裁决**永不**产生缓存条目；`DecisionCacheEntry['source']` 不新增 `'agent'`。
-- **I4 未命中即 fail-closed**：回答者不可用、超时、输出不可解析时一律拒绝，且**不得回退为「询问用户」**（无人场景下会挂死）。
+- **I4 未命中即 fail-closed**：回答者不可用、超时、输出不可解析时一律拒绝，**放行方向不可放宽**；且**无人值守上下文中不得回退为「询问用户」**——那里无人可问，回退等于挂死 5 分钟再超时。**有人值守上下文（桌面 / IM）的失败去向由该链路策略决定，不在本不变量约束内**（详见 `docs/develop/desktop-fail-open-to-user-plan.md`）。
 - **I5 递归终止条件不可配置**：审批调用不再进入确认流程 —— 这条豁免是**递归终止条件**，不是授权，因此**不得进入用户可配置的规则集**：既不可放宽，也不可收紧。它**不属于 `locked` 底线集**（`locked` 只拦放宽，拦不住收紧），属于**不可变集**（基线 §7.1 第三条判据、§7.2 递归边界）。若因实现或配置缺陷仍触发了内层确认、或递归深度上界被触达，结论一律 **fail-closed**，并落 `confirm.outcome` + `cause=recursion-blocked`（与 `cause=agent-deny` 必须可区分）。
 
 ## 4. 设计
@@ -127,7 +127,7 @@ export type ConfirmAnswererMap = Partial<Record<ExecutionLane, ConfirmAnswererPo
 
 - 配置缺失 → 用上表默认值。
 - 配置损坏、lane 未知、`kind='agent'` 但 Profile 不存在 → **`deny`**（I4），并落审计告警。
-- 🔴 **绝不回退为 `user`**：无人场景下「回退去问用户」等于挂死 5 分钟再超时。
+- 🔴 **无人值守上下文中绝不回退为 `user`**：那里「回退去问用户」等于挂死 5 分钟再超时。**有人值守链路（桌面 / IM）不适用本禁令**——其「失败 → 挂人工确认卡」属正常形态，按各自链路策略决定（见 `docs/develop/desktop-fail-open-to-user-plan.md`）。
 
 ### 4.3 `AgentChannel`
 

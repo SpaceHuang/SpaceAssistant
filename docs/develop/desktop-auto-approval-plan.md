@@ -99,9 +99,9 @@
 3. **`confirm-every-time` 不变换**：始终人工逐次确认。
 4. **本轮仅桌面**；wechat/feishu **零行为变化**（standard 恒等 + custom 3 态），为头号硬回归。
 5. **顺手补桌面授权证据**（§6）。
-6. **fail-open-to-user（审批失败降级回人工确认卡）本轮不做**：桌面有人在场，先按 fail-closed。
+6. **fail-open-to-user（审批失败降级回人工确认卡）本轮不做，已单独立项为下一步**（`docs/develop/desktop-fail-open-to-user-plan.md`）：本轮先按 fail-closed。注意本轮 standard 档已把非 locked `ask` 变换为 `auto`，即**原本会产生人工确认卡的动作不再产生卡片**；审批 Agent 失败时因此无卡片可退——该缺口须由下一步补齐，不能长期停留在此状态。
 7. **`locked` 不参与档位变换**（B1 修订，§2.1）。
-8. **`extraction-failed` 不变换**（M3 修订，§2.1）：事实提取失败 = 输入畸形/对抗性，「信息不足 → 问人」比「交 LLM」更安全，符合 I4 的 fail-closed 精神（desktop/IM 落人工；automation 经 lane 规则落 agent）。
+8. **`extraction-failed` 不变换**（M3 修订，§2.1）：事实提取失败 = 输入畸形/对抗性，「信息不足 → 问人」比「交 LLM」更安全（desktop/IM 落人工；automation 经 lane 规则落 agent）。**此处「问人」是有人值守链路的正常形态，与 I4 无关**——I4 的「不得回退为询问用户」已限定于无人值守上下文（见 §11 与 `desktop-fail-open-to-user-plan.md`）。
 
 > 决策 7、8 使 standard 的精确表述为：**除 `deny` / `confirm-every-time` / `locked` / `extraction-failed` 外，非 locked `ask → auto`。**
 

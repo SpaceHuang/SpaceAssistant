@@ -1,10 +1,10 @@
 # 审批链路体验改进详细方案
 
-- 日期：2026-09-21；修订：2026-09-22（v0.5）
+- 日期：2026-09-21；修订：2026-09-22（v0.5；§1「服务故障不自动转人工」已限定为无人值守链路，与 I4 场景限定一致）
 - 状态：已针对评审阻断项修订，待复评；本文不代表功能已实现
 - 评审依据：[方案评审记录](../review/security-approval-experience-improvement-plan-review.md)
 - 需求依据：[安全审批 Agent：并发、配额与可观测性问题清单](../requirement/security-approval-concurrency-limits-and-observability-requirement.md)
-- 关联设计：[确认回答者与自动审批](./architect/confirmation-answerer-and-auto-approval-design.md)、[审批 Agent 最短路径](./approval-agent-shortest-path-plan.md)、[桌面自动审批档位](./desktop-auto-approval-plan.md)
+- 关联设计：[确认回答者与自动审批](./architect/confirmation-answerer-and-auto-approval-design.md)、[审批 Agent 最短路径](./approval-agent-shortest-path-plan.md)、[桌面自动审批档位](./desktop-auto-approval-plan.md)、[桌面 fail-open-to-user](./desktop-fail-open-to-user-plan.md)
 - 架构约束：[Agent SDK 理想态](./architect/agent-sdk-architecture-design.html)；本方案阶段 D1/D2 指工具并发/等待让位，与架构图的偏差编号 D1/D2 不同。
 - 核对范围：当前工作区审批通道、准入门、主工具循环、事实聚合器、确认 IPC 与工具卡片。未进行线上采样或性能实测。
 
@@ -23,7 +23,7 @@
 
 **本轮完成条件：**不能仅以配额分账或审批排队上线结项。必须验证一个工具等待审批时，同会话独立工具仍可推进；一个会话全部等待审批时，其他会话仍能取得应用运行槽。
 
-本方案保留：审批 Agent 只读、裁决不写授权记忆、无批准不执行、递归守卫、locked 规则、执行前权限复核。服务故障不自动转人工，不增加审批 Agent 的第三种裁决。
+本方案保留：审批 Agent 只读、裁决不写授权记忆、无批准不执行、递归守卫、locked 规则、执行前权限复核。**无人值守（automation）链路**的服务故障不自动转人工，不增加审批 Agent 的第三种裁决；有人值守链路（桌面 / IM）的失败去向按各自链路策略决定——桌面的「审批失败回退人工确认卡」不在本句范围，由 [桌面 fail-open-to-user 计划](./desktop-fail-open-to-user-plan.md) 承接（与 I4 的场景限定一致）。
 
 ### 1.1 架构归属是实施约束
 
