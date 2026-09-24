@@ -1,13 +1,15 @@
 # 桌面链路 fail-open-to-user 开发计划（审批失败回退人工确认卡）
 
-- 日期：2026-09-22
-- 状态：**待评审，本文不代表功能已实现**
+- 日期：2026-09-22；修订：2026-09-23（吸收评审 v3）；实现：2026-09-24（见文末「实现记录」）
+- 状态：**已实现（§10 第 3–6 步全部落地，测试与静态检查全绿）**
 - 定位：**下一步计划**（前置依赖：I4 场景限定修订，已随本文同批完成）
-- 定稿状态：§4 与 §8.1–§8.5 **均已定稿**，无待决项
+- 定稿状态：**§4（含新增 §4.4 四维判定）**、§5.1（含第 4 条簿记重建）、§5.10、§8.1–§8.5 **均已定稿**，无待决项
 - 上游：`docs/develop/architect/confirmation-answerer-and-auto-approval-design.md`（I1–I5，其中 I4 已修订为场景限定）
 - 前置（均已落定）：`docs/develop/desktop-auto-approval-plan.md` 决策 6 由本计划承接；I4 的「不得回退为询问用户」已限定为无人值守上下文；`security-approval-experience-improvement-plan.md` §1「服务故障不自动转人工」已同步限定（见 §8-1）
 - 关联：`docs/develop/security-approval-experience-improvement-plan.md`（其 §1 口径与本计划的关系见 §8-1）
 - 修订：2026-09-22 吸收评审 v1（`docs/review/desktop-fail-open-to-user-plan-review-v1.md`）——**B1**（回退场景的审计事件序列与统计口径，见 §5.4）、**B2**（`confirmAnswererKind` 派生需联动修改，见 §5.1 第 3 条与 §5.5）、**B3**（回退原因文案需新增 i18n，不能复用 `summaryFor`，见 §5.3）；另吸收 6 项非阻断意见（§5.9 描述收窄、§8.5 提交切分、§5.1 插入点时序、§6.3 IM lane 锚点用例、§5.4「agent 裁决率」按 `cause` 过滤有效裁决、§5.3 `reason` 对齐既有短原因短语形态）
+- 修订：2026-09-23 吸收评审 v2（`docs/review/desktop-fail-open-to-user-plan-review-v2.md`）——**B1**（回退实际落四条事件：`DesktopChannel` 入口的 `confirm.request` 需抑制，回退率分母口径重述，见 §5.4）、**B2**（回退等待期的调度/资源簿记断裂，「唯一改动位置」断言不成立，见 §5.1 第 4 条）、**B3**（回退卡与普通 `ask` 形态不一致：浮动通知不补发、写/编辑卡缺 `confirmDiff`，见 §5.10）；另吸收 4 项非阻断意见（§5.2 改为已成立机制、§5.6 不复用 `timeoutMs`、§5.4 附带 `recursion-blocked` 缺口、§10 删除已过时的第 0 步）
+- 修订：2026-09-23 吸收评审 v3（`docs/review/desktop-fail-open-to-user-plan-review-v3.md`）——在「回退触发条件」上新增**独立一节 §4.4（四维判定）**：**B1**（缺 `answererKind === 'agent'` 维度 → 普通 `ask` 卡超时被误回退）、**B2**（缺中止守卫 → 用户取消后弹卡 + 孤儿 waiter）；另吸收 3 项非阻断意见（§5.1 注 1 `fallbackChannel` 作用域、§5.4 降噪开关按实例限定、§6.2 第 7 条取消来源混入口径限制）
 - 范围：**仅桌面链路**（`desktop` lane）。wechat / feishu 与 automation **零行为变化**。
 
 ---
@@ -76,7 +78,9 @@
 
 ---
 
-## 4. 失败去向矩阵（**已定稿**）
+## 4. 失败去向矩阵与回退触发条件（**已定稿**）
+
+> §4.1–§4.3 说明**各失败类别该往哪去**；**§4.4 给出回退在实现层的唯一判定式（四维）**。两者必须一起读：矩阵描述去向，四维判定决定「是否进入回退路径」。
 
 判定表放在通道层（数据化），不放提示词、不进规则集（与 I5 的教训一致：进规则集会被套餐档位改坏）。
 
@@ -122,21 +126,52 @@
 
 **`agent-deny` 永不回退。** 审批 Agent 给出了有效裁决（拒绝）时，不得挂人工卡。否则「被 agent 拒绝」会变成「再问一次用户」，用户有可能在被拒后批准——这实质上是绕过裁决，且会诱导「反复重试直到有人批」。若将来确实需要「用户看到风险后明确复批」的能力，那应作为**授权证据变化后的重裁**设计（线索包携带前次结论 + 本次授权证据），而**不是**本计划的回退路径。
 
+### 4.4 回退触发条件（**四维判定，独立成节**）
+
+**为什么单列一节**：§4 的失败去向矩阵只回答了「失败类别该怎么去」，但没有回答「**哪些失败算回退范围内的失败**」。而插入点位于**所有 desktop 确认的共用路径**上，判定一旦不完整，就会误伤普通 `ask` 路径。两轮评审的教训模式相同——v1 修 outcome 漏了 request、v2 修簿记与展示但触发条件未推演。因此把它显式写全，作为实现时的唯一判定依据。
+
+**完整判定式**：
+
+```
+可回退 = lane === 'desktop'                                  // ① 链路：回退仅装配在桌面
+  && channelOutcome.answererKind === 'agent'                 // ② 来源：主回答者确为 agent（评审 v3 B1）
+  && (cause === 'unavailable' || cause === 'timeout')        // ③ 类别：§4 矩阵可回退格
+  && !chatSignal.aborted                                     // ④ 中止守卫之一（评审 v3 B2）
+  && !sharedApprovalRecoveryFailed                           // ④ 中止守卫之二
+```
+
+**逐维说明**：
+
+| 维度 | 取值 | 为什么必需 |
+| --- | --- | --- |
+| ① `lane` | `desktop` | 回退**仅**装配在桌面链路；automation / wechat / feishu 零变化（§6.1） |
+| ② `answererKind` | `'agent'` | **v3 B1**：普通 `ask` 的 `DesktopChannel` outcome 经 `mapToolOutcome` 映射后，`cause` 同样会落在可回退两格——用户 5 分钟未响应卡片得到 `'timeout'`，预留确认项被置不可用得到 `'unavailable'`。若不加此维，**普通 `ask` 卡超时会立刻再弹一张同样的卡**（总等待从 5min 变 10min），既改变普通 `ask` 行为，又违反 §5.6。判别天然可做：`AgentChannel` 的全部五个 outcome 点**恒携带** `answererKind: 'agent'`；`DesktopChannel`（经 `mapToolOutcome`）与 `DenyChannel` 的 outcome**不携带**该字段 |
+| ③ `cause` 白名单 | `unavailable` / `timeout` | §4 矩阵的可回退两格；其余（`unparsable` / `config-error` / `recursion-blocked`）保持 deny，`agent-deny` 永不回退（§4.3） |
+| ④ 中止守卫 | `!chatSignal.aborted && !sharedApprovalRecoveryFailed` | **v3 B2**：见下 |
+
+**第 ④ 维详解（评审 v3 B2）**：用户点「停止」时，`failApprovalGroup()` 会调用 `AgentChannel.cancel()`，把活动 attempt 以 **`{ ok: false, cause: 'unavailable' }`** settle——即**恰好命中第 ③ 维**。若不设守卫，用户刚按停止就会弹出一张人工确认卡，且该回退 waiter 会成为**孤儿**：`failApprovalGroup` 里的 `cancelAllToolConfirmsForRequest(requestId)` 执行**先于**回退 waiter 的补登记（§5.1 第 1 条），清扫扫不到它，只能等 5 分钟超时回收。
+
+`failApprovalGroup` 的**首句**即 `sharedApprovalRecoveryFailed = true`，因此该条件**一个就覆盖全部中止来源**（用户取消 / 审批组失败 / 租约恢复失败），无需另查 `approvalAbortController`。
+
+**注意**：既有代码在主通道调用**之前**有中止检查（`if (chatSignal.aborted)`，`toolChatLoop.ts:2392`），但回退判定位于主通道 request **之后**，该检查覆盖不到——这正是第 ④ 维必须显式写出的原因。
+
+**§4 矩阵的适用域**：§4 矩阵（含 §4.1 / §4.2 的取值理由）描述的是「**审批 Agent 失败后**该往哪去」，**不是**「任何 cause 落在这些取值上就回退」。本节的四维判定是该矩阵在实现层的**唯一入口**；两者不一致时以本节为准。
+
 ---
 
 ## 5. 关键设计点
 
 ### 5.1 组合位置与插入点
 
-**插入点**：`electron/toolChatLoop.ts` 的 `const channelOutcome = await approvalChannel.request(confirmReq)` 之后、`outcome` 判定之前。这是本计划唯一需要改动的流程位置。
+**插入点**：`electron/toolChatLoop.ts` 的 `const channelOutcome = await approvalChannel.request(confirmReq)` 之后、`outcome` 判定之前。**这是流程逻辑的插入位置**——但注意下文第 4 条：该调用当前的链式 `.finally()` 结构本身也需要调整，因此**不是「唯一需要改动的位置」**。
 
-> 时序提示（评审非阻断 3）：该调用形如 `await approvalChannel.request(confirmReq).finally(...)`，`finally` 中会释放审批信号量、回退等待计数并尝试恢复共享租约。因此**拿到 `channelOutcome` 时，finally 的清理已经发生**。回退路径若需要占用同类资源（例如重新发卡片期间的租约/信号量语义），须显式确认无复用冲突，不要默认资源仍被持有。
+> **时序（重要，非「提示」）**：该调用形如 `await approvalChannel.request(confirmReq).finally(...)`，`finally`（`electron/toolChatLoop.ts:2475-2480`）中会执行四项清理：释放 `approvalSemaphore` 许可、`waitingApprovalNodes -= 1`、`waitingApprovalToolIds.delete(toolUseId)`、`recoverSharedApprovalLease(parentDeadlineAt)`（恢复 park 掉的调用租约与应用准入槽）。因此**拿到 `channelOutcome` 时，这四项清理已经发生**。若按计划直接在 finally 之后 `await` 回退通道，会得到一个资源语义**劣于普通 `ask`** 的回退路径——具体后果与处置见下文第 4 条联动动作。
 
 **不让 `AgentChannel` 内嵌 fallback**：它是桌面与 automation 共用的通用通道，不该知道桌面卡片的存在；且「能否回退」与 lane 相关，属调用方知识。
 
 **抽取形态**：回退时**以同一 `resolveConfirmChannel` 再解析一次，但把回答者固定为 `user`**，复用既有桌面分支。好处是不必新增 `FallbackChannel` 类型，也不必让组合器持有两套卡片状态。（原草案的包装方案会把「传输通道解析」逻辑复制一份，且未涵盖下面三处联动点。）
 
-**三处必须同时做的联动动作**：
+**四处必须同时做的联动动作**：
 
 1. **先补登记 waiter**。`prepareToolConfirm` 当前只在 `answerer === 'user'` 时调用：
 
@@ -182,11 +217,70 @@
 
    安全性说明：`DesktopChannel` 与 `DenyChannel` 的 outcome 均**不携带** `answererKind`，因此这两条路径会回落到既有派生，行为不变；`AgentChannel` 始终携带 `'agent'`，行为亦不变。**只有回退路径**（组合层把最终 outcome 的 `answererKind` 设为 `'user'`）会走到新分支——这正是要修正的那一格。I3 的三道闸本身设计正确，问题只在调用侧的取值来源。
 
-**`cancel()` 需同时转发**：主通道与回退通道都要收到取消，否则回退后的卡片会遗留无人取消的 waiter。
+4. **回退等待期的簿记重建**（评审 v2 B2，**阻塞项**）。这一处与前三处不同：前三处是「补上回退所需的东西」，这一处是「**不要过早清理正常 ask 会持有的东西**」。
 
-### 5.2 可回退判定必须与「配置损坏」分道
+   **为什么必须处理**：插入点的 `finally` 在拿到 `channelOutcome` 之前已做四项清理（见上文时序说明）。桌面的停车机制是**真实接线**的——`desktopAgentRuntime.ts` 创建 `InvocationRuntime('desktop-agent-runtime', { maxParkedTurns: 32 })`，`claudeStreamHandlers.ts` 注入 `applicationAdmission`（`park` / `resume` / `discard`）——正常 `user` 确认路径在卡片等待期间会把租约与准入槽 **park 让出**（`toolChatLoop.ts:2361-2369`）。回退路径若在 finally 之后直接等待，会产生四项后果：
 
-`denyFallback` 当前把「配置损坏」与「agent 工厂未接线」归一为 `config-error`，两者在桌面都应仍 deny；但**回退判定必须能区分「agent 运行时失败」与「agent 根本没接上」**。否则会出现：工厂未接线 → 每次都静默回退人工，「自动」档静默失效且无人察觉。
+   | # | 后果 | 依据 |
+   | --- | --- | --- |
+   | 1 | 回退卡等待期间（最长 `CONFIRM_MS` = 5min）**持有刚恢复的租约与应用准入槽**——与正常 `ask`「等待即让出」语义相反，会阻塞其他会话/任务最长 5 分钟 | `finally` 已执行 `recoverSharedApprovalLease` |
+   | 2 | 调度簿记把回退中的工具**误当「未启动可运行」**：该工具无 `toolResult` 且已被移出 `waitingApprovalToolIds`，`hasRunnableUnstartedTool()` 会把它计入 → 兄弟节点 `canPark` 变 false、`reparkIfOnlyApprovalsRemain()` 因 `waitingApprovalNodes` 已减而不再触发 → 整个父任务在回退等待期间**无法再次让出租约** | `toolChatLoop.ts:1731-1748` |
+   | 3 | 回退等待**不再受 `approvalSemaphore`（上限 2）约束**——许可已在 finally 释放，同一父任务可同时存在 3 张以上面向人的确认卡，突破既有设计不变量 | `approvalSemaphore` 上限见 `:1720` |
+   | 4 | `activeApprovalChannels.delete(approvalChannel)` 已执行——回退通道若不重新登记，`failApprovalGroup()` 的取消遍历**覆盖不到它** | `:1724-1730` |
+
+   其中第 1、2、3 条是**行为回归**（不是可选确认项）：按现文稿直接实现，回退路径的资源语义会劣于它要模仿的普通 `ask`。
+
+   **处置（二选一，推荐 a）**：
+
+   | 方案 | 做法 | 评价 |
+   | --- | --- | --- |
+   | **a（推荐）** | **调整 `finally` 覆盖范围**：把 `channelOutcome` 的判定与回退等待纳入**同一个** `try/finally`——即去掉链式的 `.finally()`，改为 `try { 主通道 request → 判定可回退 → 回退通道 request } finally { 四项清理 }`，并在 `try` 内把回退通道也加入 `activeApprovalChannels` | 回退等待期间许可未释放、`waitingApprovalToolIds` 仍在、租约仍 park——**语义与正常 `ask` 完全一致**，不需复制任何簿记逻辑 |
+   | b | 回退分支内显式重做四项簿记（重新 acquire 许可、重新加入 `waitingApprovalToolIds`、重新 park、重新登记 `activeApprovalChannels`） | 需在两条路径间保持语义同步，易在后续演进中漂移；不推荐 |
+
+   **方案 a 的形态**（示意，实现时以实际变量为准）：
+
+   ```
+   let fallbackChannel: ConfirmationChannel | undefined   // ← 声明在 try 外（见下方注 1）
+   try {
+     channelOutcome = await approvalChannel.request(confirmReq)
+     if (可回退(channelOutcome)) {          // ← §4.4 四维判定，不是「cause 落在两格」
+       // 此时许可仍持有、waiting 标记仍在、租约仍 park —— 无需重建
+       fallbackChannel = resolveConfirmChannel({ ...同参, answererPolicy: { kind: 'user' } })
+       activeApprovalChannels.add(fallbackChannel)
+       补发浮动通知 + 补算 confirmDiff（§5.10）
+       channelOutcome = await fallbackChannel.request(fallbackReq)   // timeoutMs 置 null（§5.6）
+     }
+   } finally {
+     if (fallbackChannel) activeApprovalChannels.delete(fallbackChannel)   // 见下方注 1
+     activeApprovalChannels.delete(approvalChannel)
+     if (approvalPermitHeld) { approvalSemaphore.release(); approvalPermitHeld = false }
+     waitingApprovalNodes = Math.max(0, waitingApprovalNodes - 1)
+     waitingApprovalToolIds.delete(toolUseId)
+     notifySchedulerProgress()
+     if (!await recoverSharedApprovalLease(parentDeadlineAt)) failApprovalGroup()
+   }
+   ```
+
+   > 由此，**§5.1 不再是「本计划唯一需要改动的流程位置」**——插入点的 `finally` 结构本身必须调整。这是本计划内改动最实质的一处。
+
+   > **注 1（评审 v3 非阻断 1）**：`fallbackChannel` 必须**声明在 `try` 之外**，否则 `finally` 访问不到它，回退通道会**漏删并残留在 `activeApprovalChannels`**——那是一个跨请求泄漏的取消遍历集合（后续 `failApprovalGroup` 会反复对已废弃通道调用 `cancel`）。琐碎但易错，实现时按草图声明位置来。
+
+**`cancel()` 与簿记的关系**（评审 v2 非阻断 1，修正机制归因）：`DesktopChannel.cancel` 实为 **no-op**（`channels.ts` 注释即写明「桌面通道沿用 registry 的取消机制，无需额外处理」）；桌面取消实际依赖 `failApprovalGroup()` 里的 `cancelAllToolConfirmsForRequest(requestId)`（请求级扫描 registry）。因此本处真正要保证的不是「转调 `cancel()`」，而是**回退 waiter 已登记进 registry，请求级取消能扫到它**——这与第 4 条的簿记重建是同一处改动，且由第 1 条（补登记 waiter）保证。
+
+### 5.2 可回退判定与「配置损坏」的分道（**已成立的机制 + 锚定测试**）
+
+> **适用范围**：本节讨论的是「配置类失败**会不会**被误当作回退格」；判定本身以 **§4.4 的四维判定**为准——尤其第 ② 维（`answererKind === 'agent'`）已把普通 `ask` 的 `timeout` / `unavailable` 排除在外。
+
+原稿把这里写成风险（「必须能区分」）。评审 v2 核实后**该诉求在现有结构下已自然成立**，无需额外设计：
+
+| 失败类型 | 走哪条通道 | `cause` | 是否命中回退格 |
+| --- | --- | --- | --- |
+| 配置损坏 / `kind='agent'` 但工厂未接线 | `denyFallback()` → `DenyChannel` | `config-error` | **否**（§4 矩阵中保持 deny） |
+| agent 运行期失败 | `AgentChannel` | `unavailable` / `timeout` | 是 |
+
+回退**按 §4.4 的四维判定触发**，其中第 ③ 维只认 `unavailable` / `timeout`；而配置类失败的 `cause` 是 `config-error`，因此天然不会误伤配置路径。原稿担心的「工厂未接线 → 每次都静默回退人工」不会发生。
+
+**但仍需一条锚定测试**：断言「`config-error` 不触发回退、仍留 DenyChannel 拒绝并保持既有告警」，防止将来回退判定条件被放宽（例如改成「任何 `ok:false` 都回退」）时静默回归。见 §6.3。
 
 ### 5.3 卡片必须携带原因
 
@@ -212,11 +306,13 @@
 
 对齐依据：既有同类字段的 `reason` 即为此形态——`writeFileAutoApproval` 的产出为 `目标路径命中敏感目录` / `写入体量超过自动放行阈值（512 KB > 256 KB）` / `单次替换文本过大（1234 > 1024 字符）`，均为可嵌入模板的短语；新增文案应保持同一形态。
 
-**`reasonCode` 命名（待定稿的小项）**：既有取值为 `sensitive_path` / `oversize` / `edit_too_large`（属「文件自动放行」域）。新增 `unavailable` / `timeout` 虽不与之冲突，但语义偏泛、未标明来源域；建议改用带域前缀的取值（如 `approval_unavailable` / `approval_timeout`），避免与将来其他来源的同类失败混淆。**注意**：前端只消费 `reason` 不消费 `reasonCode`，故该取值可自由选择、不影响渲染。
+**`reasonCode` 命名（已定稿）**：既有取值为 `sensitive_path` / `oversize` / `edit_too_large`（属「文件自动放行」域）。新增两格取带域前缀的 **`approval_unavailable` / `approval_timeout`**（按本节建议采用，避免与将来其他来源的同类失败混淆）。**注意**：前端只消费 `reason` 不消费 `reasonCode`，故该取值可自由选择、不影响渲染。
 
 **注意与 §8.5 的范围区分**：§8.5 已完成的是 banner **模板句**的通用化（「自动处理未完成：{{reason}}。本次操作需要您手动确认。」），解决的是「模板是否适配非写入类工具」；本节解决的是 **`{{reason}}` 插值本身的来源**——两者是不同层次，前者完成不等于后者就绪。可选的一种整洁做法：定义一张共享的「环境失败原因」表，同时供 `summaryFor`（保留其 fail-closed 后缀）与卡片 `reason`（用中性措辞）取用——若如此，`summaryFor` 的「已按拒绝处理」后缀需拆分出去。
 
 **脱敏要求**：原因文案不得暴露内部状态细节（准入队列状态、模型名、配额余量等）。
+
+> **实现注记（2026-09-24）**：文案落在 `notification.json`（zh-CN / en-US，key `approvalFallbackReasonUnavailable` / `approvalFallbackReasonTimeout`），主进程经 `electron/confirmation/fallbackReason.ts` 以宿主 translate 端口实现（偏差 13）解析 i18n 真源。选 `notification` 命名空间的原因：`hostTranslate` 只支持**扁平**资源表，`chat.json` 为嵌套结构不可用；`notification.json` 本就是「主进程直读」命名空间。
 
 **覆盖面**：banner 提升到确认态统一层级，七类确认卡片均显示（§8.5）。
 
@@ -233,47 +329,66 @@
 
 建议：实到 outcome 由 `DesktopChannel` 正常落（`actor='user'`、`cause='user-approved' | 'user-denied'`），**另落一条回退事件**携带原 `cause`。既有 `confirm.answerer-fallback` 的语义是「配置异常时降级为拒绝」，与本计划**方向相反、处置动作也相反**，因此不复用——已定稿新增事件名 `confirm.answerer-fallback-to-user`（理由、形态与实现待办见 §8.3）。
 
-#### 回退场景的完整事件序列（评审 B1，**阻塞项**）
+#### 回退场景的完整事件序列（评审 v1 B1 + v2 B1，**阻塞项**）
 
-原稿只设计了「回退事件 + 用户 outcome」两条，**漏了既有的一条**：`AgentChannel` 对**所有** outcome（含 `ok:false` 的失败）都已统一落 `confirm.outcome`（`actor='agent'` + `actorRef` + `latencyMs`）。
+原稿（v1 修订前）只设计了「回退事件 + 用户 outcome」两条；v1 补齐了 agent 侧 outcome 后声称三条。**v2 复核发现实际会落四条**——除 agent 侧的 `confirm.request` 外，`DesktopChannel.request` 在**入口**也会落一条 `confirm.request`（`channels.ts:92-98`），而 §5.1 定稿的回退形态正是「再构造一个完整 `DesktopChannel` 并调用 `request()`」。
 
-因此一次回退实际会落**三条**事件（同一 `requestId` 关联）：
+一次回退对同一 `requestId` 会落：
 
-| # | 事件 | `actor` | `cause` | 状态 |
+| # | 事件 | `actor` | `cause` | 来源与状态 |
 | --- | --- | --- | --- | --- |
-| 1 | `confirm.outcome` | `agent` | `unavailable` / `timeout` | **既有，原稿未提** |
-| 2 | `confirm.answerer-fallback-to-user` | `system` | `unavailable` / `timeout`（原 `cause`） | §8.3 新增 |
-| 3 | `confirm.outcome` | `user` | `user-approved` / `user-denied` | `DesktopChannel` 正常落 |
+| 1 | `confirm.request` | `agent` | — | `agentChannel.ts`（既有） |
+| 2 | `confirm.outcome` | `agent` | `unavailable` / `timeout` | `agentChannel.ts`（既有，v1 补记） |
+| 3 | `confirm.answerer-fallback-to-user` | `system` | 原 `cause` | §8.3 新增 |
+| 4 | `confirm.outcome` | `user` | `user-approved` / `user-denied` | `DesktopChannel`（既有） |
 
-**处置（已定稿）：保留双 outcome，并显式定义统计口径。** 不抑制第 1 条，理由：
+**处置（已定稿）**：
 
-- **两条 outcome 各自都真实**，不构成错误归因——第 1 条表达「agent 侧没有拿到裁决」，第 3 条表达「用户侧拿到了裁决」；这正是 §5.4 要表达的「有没有拿到裁决」维度；
-- 抑制第 1 条需要 `AgentChannel` 知道「本次可能被回退」（桌面语义），破坏「通用通道不知桌面卡片」的分层（§5.1）；且 automation 无回退，不能无条件抑制；
-- 真正的问题不是事件多了，而是**下游聚合口径**——这是需要写清的，而非需要删事件的。
+- **保留双 `outcome`**（第 2、4 条）——两条各自都真实：第 2 条表达「agent 侧没有拿到裁决」，第 4 条表达「用户侧拿到了裁决」。抑制第 2 条需让 `AgentChannel` 知道「本次可能被回退」（桌面语义），破坏 §5.1 的通道分层，且 automation 无回退不能无条件抑制。真正的问题是**下游聚合口径**，而非事件条数。
+- **抑制回退侧的第二条 `confirm.request`**（评审 v2 B1 三选一中的**选项 1**）——理由见下。
 
-**统计口径（下游必须遵守，写入 §6.2）**：
+##### 为什么抑制回退侧的 `confirm.request`（而不是改口径去重）
+
+回退**不是一次新的审批请求**，而是同一请求在回答者不可用后的继续。因此：
+
+1. **语义上不落第二条更正确**：`confirm.request` 的语义是「一次审批请求被发出」，回退不属于新的请求；
+2. **分母口径得以保持**：「回退率分母 = `confirm.request` 计数」的前提是「每请求一条 request 事件」。若回退也落一条，则每次回退使分母 +2、分子 +1，回退率被系统性算低（极端情形：全部请求都回退时算出 50% 而非 100%）——这正是 v1 B1 的同类问题在 request 事件上的重现；
+3. **避免把复杂度推给每个消费者**：若改为「离线按 `requestId` 去重」（选项 2），则每个统计方都必须记得去重，易漏。
+
+**实现形态**：给回退用的 `DesktopChannel` 注入降噪审计（或加构造开关，如 `suppressRequestAudit`），使其**只落 outcome、不落 request**。第 3 条 fallback 事件已表达「此处转为人工」，再落一条 request 属冗余。
+
+> **作用域限定（评审 v3 非阻断 2）**：该降噪**只作用于回退构造的那一个 `DesktopChannel` 实例**——普通 `ask` 路径的 `confirm.request`（`channels.ts:92-98`）是既有审计基线，**不得被同一改动波及**。因此不能用「全局开关」或「按 lane 关闭」的写法，只能按实例注入（构造参数）。配套回归断言：**普通 `ask` 仍照落 `confirm.request`**（见 §6.3）——否则基线审计会静默消失，且回退率分母在普通路径上失真。
+
+> 备选（选项 2，不推荐但可行）：保留双 `request`，口径改为「按 `requestId` 去重后计数」。仅在实现评估认为「给 DesktopChannel 加开关」的侵入性不可接受时采用；此时 §8.3 的事件序列表述须相应改为五条。
+
+##### 统计口径（下游必须遵守，写入 §6.2）
 
 | 指标 | 分子 / 分母 |
 | --- | --- |
 | **agent 裁决率 / 拒绝率** | 仅取 `actor='agent'` **且 `cause ∈ {agent-approved, agent-deny}`** 的 `confirm.outcome`——**必须按 `cause` 过滤出有效裁决**，否则 `unavailable` / `timeout` / `unparsable` / `config-error` / `recursion-blocked` 等「没拿到裁决」的失败会被计入「agent 拒绝了」，把失败率混进拒绝率 |
 | 用户批准率 / 拒绝率 | 仅取 `actor='user'` 的 `confirm.outcome`（`cause ∈ {user-approved, user-denied}`） |
-| **回退率** | 分子 = `confirm.answerer-fallback-to-user` 计数；**分母 = `confirm.request` 计数**（**不**用 outcome 计数，避免同一请求被双计） |
+| **回退率** | 分子 = `confirm.answerer-fallback-to-user` 计数；**分母 = `confirm.request` 计数**（回退侧已按上文抑制，故分母仍为**每请求一条**） |
 
 **规则**：
 
 - 同一 `requestId` 出现两条 `confirm.outcome` 在回退场景下**属正常**；任何跨 `actor` 合并 `confirm.outcome` 的聚合都是错的；
-- `actor='agent'` 的 outcome **不等于**「agent 做了裁决」——它只是「agent 侧给出了结果」，其中多数失败属于「没拿到裁决」（§4 的六个 `cause` 中只有两个是有效裁决）。这一点是本项目最容易被统计写错的地方。
+- `actor='agent'` 的 outcome **不等于**「agent 做了裁决」——它只是「agent 侧给出了结果」，其中多数失败属于「没拿到裁决」（§4 的六个 `cause` 中只有两个是有效裁决）。这一点是本项目最容易被统计写错的地方；
+- **本口径依赖「回退侧不落第二条 request」**：若实现改为选项 2，回退率分母须相应改为「按 `requestId` 去重」。
 
-#### 附带缺口：`effectiveTimeoutMs <= 0` 路径不落任何审计
+#### 附带缺口：两条提前返回路径不落 `confirm.request`（评审 v2 附带）
 
-`AgentChannel` 中「审批已超过父任务截止时间」的提前返回（`cause='timeout'`）在 `confirm.request` 记录**之前**就 return 了，因此该路径**既不落 `confirm.request`、也不落 `confirm.outcome`**。
+`AgentChannel` 有两条路径在 `confirm.request` 记录（`agentChannel.ts:168`）**之前**就 return，因此**既不落 `confirm.request`、也不落 `confirm.outcome`**：
 
-该路径属于 §4 矩阵中的**可回退格**（`timeout`），回退后只会落 `confirm.answerer-fallback-to-user`（第 2 条）与用户 outcome（第 3 条），**缺 agent 侧痕迹**。后果：
+| 路径 | `cause` | 是否可回退格 |
+| --- | --- | --- |
+| `effectiveTimeoutMs <= 0`（父任务已过截止） | `timeout` | **是**（§4 矩阵可回退） |
+| `recursion-blocked`（审批会话内再入确认） | `recursion-blocked` | 否（保持 deny） |
 
-- 按 `cause` 分列的回退率会**系统性漏计**这一类超时（分母 `confirm.request` 未计入，分子计入，比率偏高）；
-- 审计上无法区分「因父任务截止而提前失败」与「正常参与审批后超时」。
+对**可回退**的 `effectiveTimeoutMs <= 0`：回退后只会落第 3、4 条，**缺 agent 侧痕迹**，按 `cause` 分列的回退率会**系统性漏计**这一类超时（分母未计入、分子计入，比率偏高）。
 
-**处置（已定稿：补审计）**：把 `confirm.request` / `confirm.outcome` 的记录**移到该提前返回之前**（该路径属可回退格，应留下 agent 侧痕迹）。改动约数行，不改变返回值与 fail-closed 语义。若实现时评估认为不宜调整该顺序，则**至少**须在 §6.2 记录该口径缺口，不得静默。
+**处置（已定稿：补审计）**：把 `confirm.request` / `confirm.outcome` 的记录**移到该提前返回之前**（该路径属可回退格，应留下 agent 侧痕迹）。改动约数行，不改变返回值与 fail-closed 语义。
+
+对 `recursion-blocked`：不计入回退分子（它保持 deny），但其分母缺口同样存在——**任何以 `confirm.request` 为分母的指标都含此类漏计**，须在 §6.2 一并记录。若实现时评估认为不宜调整顺序，则**至少**须在 §6.2 显式记录这两处缺口，不得静默。
 
 ### 5.5 回退后的人工确认可写缓存（I3 的正当使用）
 
@@ -288,6 +403,10 @@
 「有人在」不等于可以无限等。回退后的卡片等待沿用既有确认上界（`CONFIRM_MS`），超时后按既有桌面行为处理。**不得**因为走了回退路径就放宽等待上界。
 
 对 `timeout` 格尤其重要：用户总等待时间 = 审批上界（30s）+ 卡片上界，比原本的 `ask` 更长。这不能通过放宽任一上界来「补偿」，只能通过文案让成本可见（见 §4.1 / §5.3）。
+
+**回退请求不得复用 `confirmReq.timeoutMs`**（评审 v2 非阻断 2）：该字段当前由 `gate.decision.timeoutMs` 给出、现状恒 `null` 故无实际影响；但 P2 起它可能面向 **agent 回答者**（如 30s 审批上界）。若回退请求原样透传，回退卡会继承 agent 的超时——**实测等待被压缩到 30 秒**，既违背本节「沿用 `CONFIRM_MS`」的承诺，也会让用户来不及响应。因此：**回退通道请求的 `timeoutMs` 置 `null`（或显式取 `CONFIRM_MS`），不复用审批上界。**
+
+**父任务已超期时的回退取舍**（评审 v2 非阻断 3）：`effectiveTimeoutMs <= 0` 路径触发时父任务 `deadlineAt` 已过，回退卡会让该 turn 在其自身截止时间之后再存活最长 5 分钟。**取舍：仍回退**（理由是「有人在」这一立项前提不因父任务截止而改变，且拒绝掉一次本可由人批准的操作代价更高），但须**记录为有意决策**并计入 §6.2 的观测。
 
 ### 5.7 不引入第三种裁决
 
@@ -329,6 +448,41 @@ desktop 走 agent 裁决时，卡片会被渲染成**只读态**：`ToolCallCard
 
 **对本计划的约束**：一旦该事件在迁移中接线，**回退分支必须发生在其之前**——否则工具先变终态，卡片不再进入确认分支（`status !== 'confirming'`），回退失效，且与 §5.1 第 2 条前置动作冲突。这是本计划与 SDK 迁移之间的一条**顺序依赖**，需在迁移计划中记录。
 
+### 5.10 回退卡的展示补齐（评审 v2 B3，**阻塞项**）
+
+交付判据 3 要求「回退产生的人工确认与普通 `ask` 在用户可见形态上一致」。但 agent 路径**刻意省略了两项普通 `ask` 会有的展示**，回退后若不补上，用户得到的是一张「形态残缺」的卡片——**且这两项都不是装饰，而是决策依据与注意力信号**。
+
+#### (a) 浮动确认通知必须补发
+
+`confirm-request` 浮动通知以 `gate.decision.answerer === 'user'` 为条件（`toolChatLoop.ts:2323-2326`），注释写明「H1：agent 裁决路径无 waiter，不发待确认浮动通知」。**该判定发生在通道调用之前，而回退决策发生在其之后**——§5.1 的四条联动动作均不含补发通知。
+
+后果：回退卡出现在聊天区，但**用户收不到任何注意力信号**。若用户不在看聊天窗口，卡片会静默等到 `CONFIRM_MS`（5 分钟）超时后被拒——**比 fail-closed 的直接拒绝更差**：用户多等了 5 分钟，且始终不知情。这直接与立项前提（「桌面上有人在场」）矛盾：不补发通知等于默认「人正盯着聊天区」。
+
+**要求**：回退分支补发一次 `confirm-request` 浮动通知，复用既有载荷构造（`toolChatLoop.ts:2327-2336`：`sessionName` / `toolUseId` / `toolName` / `input`）。
+
+#### (b) 写 / 编辑文件必须补算 `confirmDiff`
+
+`useDiff` 条件为「回答者是 `user` **或** 有 `autoApproveFallback`」（`toolChatLoop.ts:2272-2274`）。agent 路径为 false，因此首次 `confirm-requested` 事件**不含 `confirmDiff`**。
+
+§5.8 的清除事件只解决 `autoAnswerer` 只读态——`assistantFactAggregator` 的 `confirm-requested` 分支是**条件展开合并**，既不清除事件里没有的字段，也**不会补上首次没发的 `confirmDiff`**。
+
+后果：`write_file` / `edit_file` 是最高频的两类确认，回退卡会丢失普通 `ask` 卡片**最核心的决策依据**（diff 预览），用户只能盲批。
+
+**要求**：回退分支对写 / 编辑工具补算 `confirmDiff`（`maybeBuildConfirmDiff` 在该作用域可用）并随清除事件一起下发。
+
+#### 与 §5.8 的关系
+
+两者是并列的两类「形态补齐」，不可互相替代：
+
+| 节 | 解决什么 | 不做的后果 |
+| --- | --- | --- |
+| §5.8 | 卡片**能否交互**（清 `autoAnswerer` 只读态） | 用户无按钮可点，回退不成立 |
+| §5.10 | 卡片**是否具备普通 ask 的形态**（通知 + diff） | 用户不知情、或盲批 |
+
+#### 测试
+
+见 §6.3：回退后浮动通知发出一次、回退卡携带 `confirmDiff`（写 / 编辑各一例）。
+
 ---
 
 ## 6. 交付物
@@ -342,19 +496,32 @@ desktop 走 agent 裁决时，卡片会被渲染成**只读态**：`ToolCallCard
 ### 6.2 可观测性（与功能同等重要）
 
 1. **回退事件**：每次回退落一条审计，事件名 `confirm.answerer-fallback-to-user`（§8.3），携带原 `cause`（`unavailable` / `timeout`）、lane、工具名、requestId。
-2. **回退率**：分子 = `confirm.answerer-fallback-to-user` 计数；**分母 = `confirm.request` 计数**——**不得用 `confirm.outcome` 计数作分母**，因为回退场景同一请求会落两条 `confirm.outcome`（§5.4），会把比率算低。实现路径是按事件类型分别取事件列表做**离线统计**；按 `cause` 分列的计数需离线处理（现有查询不含 `cause` 过滤维度，见 §8.4），`cause` 值本身可在事件对象中逐条读到。
+2. **回退率**：分子 = `confirm.answerer-fallback-to-user` 计数；**分母 = `confirm.request` 计数**（回退侧已按 §5.4 抑制第二条 request，故分母仍为**每请求一条**）。**不得用 `confirm.outcome` 计数作分母**，因为回退场景同一请求会落两条 `confirm.outcome`（§5.4）。若实现改为「保留双 request」（§5.4 选项 2），分母须改为**按 `requestId` 去重**。实现路径是按事件类型分别取事件列表做**离线统计**；按 `cause` 分列的计数需离线处理（现有查询不含 `cause` 过滤维度，见 §8.4），`cause` 值本身可在事件对象中逐条读到。
 3. **`unparsable` 率**：单独统计。它**不**产生回退，但它是「提示词输出合同与解析器是否需要修」的指标（见 §4.2）；缺失这项会让该缺陷长期不可见。
 4. **统计口径引用**：任何聚合 `confirm.outcome` 的方（含本计划的回退率、以及既有的裁决率类指标）**必须遵守 §5.4 的口径**——按 `actor` 分列；`actor='agent'` 侧再按 `cause` 过滤出有效裁决（`agent-approved` / `agent-deny`），否则失败会被计入裁决。
-5. **导出方式**：按事件类型过滤查询（`securityAuditReader` / 设置页第 5 区），再做离线统计；**按 `cause` 分列需离线处理**（查询维度不含 `cause`，见 §8.4）。**本轮不设阈值、不加告警**（§8.4）——回退率是「审批 Agent 是否健康」的直接指标，但阈值须待实测数据后确定。
+5. **口径缺口（须记录）**：`AgentChannel` 的两条提前返回路径（`effectiveTimeoutMs <= 0`、`recursion-blocked`）**不落 `confirm.request`**，而 `confirm.request` 是本计划多处分母的来源。§5.4 定为**补审计**（把记录移到提前返回之前）；若实现评估认为不宜调整顺序，须在此显式记录缺口——不得静默。
+   **实现处置（2026-09-24）**：`effectiveTimeoutMs <= 0` 路径已补审计（`confirm.request` 记录移到该提前返回之前，并补落 `confirm.outcome`（`cause='timeout'`），锚点测试覆盖）；`recursion-blocked` 路径**保持不落 `confirm.request`**（仅落既有 `confirm.outcome`）——该路径是「审批会话内再入确认」的 bug 守卫，正常运维下不应出现，计入分母会让缺陷信号稀释回退率与裁决率口径；缺口在此显式记录，锚点测试断言其只落 outcome。
+6. **导出方式**：按事件类型过滤查询（`securityAuditReader` / 设置页第 5 区），再做离线统计；**按 `cause` 分列需离线处理**（查询维度不含 `cause`，见 §8.4）。**本轮不设阈值、不加告警**（§8.4）——回退率是「审批 Agent 是否健康」的直接指标，但阈值须待实测数据后确定。
+7. **口径限制：取消来源混入环境失败率**（评审 v3 非阻断 3）。`AgentChannel.cancel()` 以 `cause='unavailable'` settle（取消路径），该 outcome **会照常落审计**（既有行为，本计划不改）。经 §4.4 第 ④ 维守卫后它**不产生回退**，但在离线统计「环境失败率 / `cause='unavailable'` 占比」时，其中**混有取消来源**，而当前审计事件不含「是否由取消触发」字段。
+   - **本轮处置**：记录该限制，**不加字段**。
+   - 若将来需要精确区分，可在取消 settle 时区分 cause（与 `security-approval-skill-v2.1-improvement-plan.md` 项 4「取消语义与拿不到裁决口径分离」是同一族问题），届时该指标可精确化。
 
 > 可观测性的底线与本轮范围：**「能查到」是本计划的交付要求，「自动报警」不是**。代价是无人查看时退化不会被发现，运营前提见 §8.4。
 
 ### 6.3 测试
 
 - 逐格单测：§4 矩阵每一行的 `cause` → 期望去向（转人工 / 仍 deny）；
-- **审计单测（三条事件序列，评审 B1）**：回退时同一 `requestId` 依次落 ①`confirm.outcome`（`actor='agent'`、原 `cause`）②`confirm.answerer-fallback-to-user`（原 `cause`）③`confirm.outcome`（`actor='user'`）；断言三条的 `actor` / `cause` 组合正确（防止把 ① 漏掉或把 ①③ 写成同一条）；
+- **触发条件单测（评审 v3 B1，四维判定的第 ② 维）**：**普通 `ask` 卡**（`answerer='user'`、主通道为 `DesktopChannel`）在 `cause='timeout'` 与 `cause='unavailable'` 两种情形下**均不触发回退**（不弹第二张卡）；含一条端到端形态的用例：用户 5 分钟未响应卡片 → 按既有路径拒绝，**总等待仍为 5 分钟**，不出现第二张卡；
+- **触发条件单测（评审 v3 B2，四维判定的第 ④ 维）**：审批进行中用户取消 → `AgentChannel.cancel()` 以 `cause='unavailable'` settle，但**不触发回退**、**不弹卡**、**不登记回退 waiter**（无孤儿 waiter）；按既有取消路径落 `confirm_cancelled` 归类；
+- **审计单测（四条事件序列，评审 v1/v2 B1）**：回退时同一 `requestId` 依次落 ①`confirm.request`（`actor='agent'`，既有）②`confirm.outcome`（`actor='agent'`、原 `cause`）③`confirm.answerer-fallback-to-user`（原 `cause`）④`confirm.outcome`（`actor='user'`）；并**断言回退侧不产生第二条 `confirm.request`**（§5.4 选项 1）；
 - 审计单测：配置损坏路径仍落既有 `confirm.answerer-fallback` 且**不**落新事件；
+- **审计基线回归（评审 v3 非阻断 2）**：**普通 `ask` 路径仍照落 `confirm.request`**（降噪只作用于回退构造的实例，未波及基线）；
 - 审计单测：`effectiveTimeoutMs <= 0` 的提前返回路径补审计后，`confirm.request` 与 `confirm.outcome`（`cause='timeout'`）均存在（§5.4 附带缺口）；
+- **簿记单测（评审 v2 B2）**：回退等待期间 `waitingApprovalToolIds` **仍含**该工具、`approvalSemaphore` 许可**未释放**（回退卡占位，同父任务并发面向人的卡片数不超过上限）、租约仍处于 park（未提前恢复）；
+- **取消单测（评审 v2 B2 / 非阻断 1）**：请求级取消（`cancelAllToolConfirmsForRequest`）能扫到回退 waiter，不遗留活动 attempt；`activeApprovalChannels` 含回退通道（`failApprovalGroup` 取消遍历可覆盖）；
+- **展示补齐单测（评审 v2 B3）**：回退后①浮动 `confirm-request` 通知发出一次；②回退卡携带 `confirmDiff`（`write_file` / `edit_file` 各一例）；
+- **超时单测（评审 v2 非阻断 2）**：回退请求的 `timeoutMs` 为 `null`（或显式 `CONFIRM_MS`），**不继承** `gate.decision.timeoutMs`；
+- 分道锚定单测（§5.2）：`config-error` 不触发回退、仍由 `DenyChannel` 拒绝并保持既有告警；
 - 负向单测：`agent-deny` 不触发回退；
 - 端到端（mock provider）：desktop 审批不可用 / 超时 → 卡片出现 → 批准 / 拒绝双路径；
 - 渲染单测：回退后卡片可交互（`autoAnswerer` 已清除、按钮存在；见 §5.8）；
@@ -382,7 +549,7 @@ desktop 走 agent 裁决时，卡片会被渲染成**只读态**：`ToolCallCard
 
 ## 8. 待决问题
 
-（§8.1–§8.5 均已落定，无遗留待决项。）
+（§8.1–§8.5 均已落定，无遗留待决项。历史评审的阻断项均已定稿处置：v1 见 §5.3 / §5.4 / §5.1 第 3 条，v2 见 §5.4 / §5.1 第 4 条 / §5.10，v3 见 **§4.4**。）
 
 ### 8.1 与体验改进计划 §1 的口径措辞冲突（**已落定**）
 
@@ -439,7 +606,7 @@ desktop 走 agent 裁决时，卡片会被渲染成**只读态**：`ToolCallCard
 | `actor` | `'system'`（host 因运行期失败改变去向，非回答者动作） |
 | 其余 | `ts` / `lane` / `sessionId` / `requestId` / `toolName` |
 
-与实到 outcome 的关系（§5.4）：回退场景同一 `requestId` 会出现**三条**事件——① `confirm.outcome`（agent 失败，`actor='agent'`，既有）、②本事件（`actor='system'`）、③ `confirm.outcome`（`DesktopChannel` 落，`actor='user'`、`cause='user-approved' | 'user-denied'`）。三条以同一 `requestId` 关联；**双 outcome 属有意保留**，下游聚合口径见 §5.4。
+与实到 outcome 的关系（§5.4）：回退场景同一 `requestId` 会出现**四条**事件——① `confirm.request`（`actor='agent'`，既有）② `confirm.outcome`（agent 失败，`actor='agent'`，既有）③本事件（`actor='system'`）④ `confirm.outcome`（`DesktopChannel` 落，`actor='user'`、`cause='user-approved' | 'user-denied'`）。四条以同一 `requestId` 关联；**双 outcome 属有意保留**，且**回退侧不再落第二条 `confirm.request`**（§5.4 选项 1，`DesktopChannel` 需注入降噪审计），下游聚合口径见 §5.4。
 
 #### 实现侧待办
 
@@ -499,7 +666,7 @@ desktop 走 agent 裁决时，卡片会被渲染成**只读态**：`ToolCallCard
 
 > i18n key `fileAutoApprove.fallbackBanner` **未重命名**（避免改动 i18n 类型映射）；该 key 名此后带 file 作用域色彩，属可接受的遗留。同时更新了 `WriteConfirmCard.test.tsx` 中匹配该文案的断言。
 >
-> **提交切分（评审非阻断 2）**：这笔措辞改动（`zh-CN/chat.json`、`en-US/chat.json`、`WriteConfirmCard.test.tsx`）属「口径先行」，**目前仍在工作区未提交**，与本计划文档混在一起。建议**先单独提交这笔改动**，避免与后续回退实现混在同一变更里难以回退。
+> **提交状态（评审 v2 非阻断 4 更新）**：这笔措辞改动（`zh-CN/chat.json`、`en-US/chat.json`、`WriteConfirmCard.test.tsx`）**已单独提交入库**（`fix(chat): 确认卡回退提示改为通用措辞，适配非写入类工具`），不再滞留工作区。原稿的「先单独提交」提示已履行，实施顺序中相应步骤已删除。
 >
 > **本项范围限定**：此处完成的只是 banner **模板句**的通用化；`{{reason}}` 插值本身的来源（需新增 i18n 原因文案）**尚未就绪**，见 §5.3。两者不是一回事。
 
@@ -554,9 +721,17 @@ if (xxxConfirming && onConfirm && confirmationReady !== false) {
 | 卡片原因文案泄露内部状态 | 低 | §5.3 脱敏要求；新增 i18n 原因文案须按该要求编写（不得含准入队列状态、模型名、配额余量） |
 | 回退引入双份通道状态 | 中（组合器的 `cancel` 易漏） | §5.1 要求 `cancel` 同时转发；配取消链路测试 |
 | 回退路径意外影响 automation | 低（按 lane 装配） | automation 零变化列为硬回归 |
+| **触发条件缺「主回答者」维度 → 普通 `ask` 卡超时被误回退** | **中高**（评审 v3 B1；按字面实现必然发生，且改变普通 `ask` 行为、总等待翻倍） | §4.4 第 ② 维 `answererKind === 'agent'`（天然可判别）；§6.3 两条普通 `ask` 不回退用例 |
+| **触发条件缺中止守卫 → 用户取消后弹卡 + 孤儿 waiter** | **中高**（评审 v3 B2；取消 settle 的 cause 恰在可回退格内） | §4.4 第 ④ 维 `!chatSignal.aborted && !sharedApprovalRecoveryFailed`；§6.3 取消不回退用例 |
+| 降噪开关作用域过宽，抹掉普通 `ask` 的 `confirm.request` 基线 | 中（评审 v3 非阻断 2） | §5.4 按实例注入、不得全局/按 lane 关闭；§6.3 基线回归断言 |
+| `fallbackChannel` 作用域不当导致漏删、残留于 `activeApprovalChannels` | 低（评审 v3 非阻断 1；琐碎但易错） | §5.1 第 4 条注 1：声明提升到 `try` 外；取消单测覆盖 |
 | 卡片残留只读态导致回退不可用 | 中（条件写入不清除旧值，易漏） | §5.8 四项要求 + 渲染单测（按钮存在） |
 | banner 提升层级时遗漏某个确认分支 | 中（七个分支平级，新增分支易漏） | §8.5 实现方案逐分支列出；测试覆盖多种工具类型的回退展示 |
-| 回退场景的双 `confirm.outcome` 被下游误聚合 | 中（评审 B1；现有聚合若只看 `outcome` 会双重归因） | §5.4 已写死统计口径（按 `actor` 分开、回退率分母用 `confirm.request`）；§6.3 三条事件序列断言锚定 |
+| 回退场景的双 `confirm.outcome` 被下游误聚合 | 中（评审 B1；现有聚合若只看 `outcome` 会双重归因） | §5.4 已写死统计口径（按 `actor` 分开、回退率分母用 `confirm.request`）；§6.3 四条事件序列断言锚定 |
+| 回退侧多落一条 `confirm.request` 使回退率被系统性算低 | 中（评审 v2 B1；已识别并定稿抑制方案） | §5.4 选项 1：回退用 `DesktopChannel` 注入降噪审计、不落 request；§6.3 断言不产生第二条 request |
+| 回退等待期资源/调度簿记断裂（持有租约、调度误判、突破审批并发上限） | **中高**（评审 v2 B2；三条均为行为回归，且改动落在插入点结构本身） | §5.1 第 4 条：调整 `finally` 覆盖范围（方案 a），使回退与正常 `ask` 语义一致；§6.3 补簿记与取消单测 |
+| 回退卡缺浮动通知 / diff 预览，用户不知情或盲批 | 中（评审 v2 B3；直接违反交付判据 3） | §5.10：回退分支补发通知 + 补算 `confirmDiff`；§6.3 两项断言 |
+| 回退请求继承 agent 的超时上界，等待被压缩到 30s | 低（现状 `timeoutMs` 恒 null 无影响，P2 后显现） | §5.6：回退请求 `timeoutMs` 置 null / 取 `CONFIRM_MS`；§6.3 单测 |
 | `confirmAnswererKind` 派生未修正，导致回退后缓存写入被跳过/抛错 | 中（评审 B2；已识别且有明确修法，非未知风险） | §5.1 第 3 条列为必做联动点；§6.3 缓存用例加一致性断言 |
 | 回退原因文案形态不对（与模板语义重复）或缺失 | 中（评审 B3 及其跟进；复用 `summaryFor` 会得到「已按拒绝处理，请确认」的矛盾文案；写成完整句则会与模板重复） | §5.3 明确：新增**短原因短语**、对齐既有 `writeFileAutoApproval` 的 `reason` 形态、撤销「同源」表述 |
 | `effectiveTimeoutMs <= 0` 路径漏计 | 低（评审 B1 附带；仅影响该类超时的比率精度） | §5.4 定为补审计；若实现评估不宜调整顺序，须在 §6.2 显式记录缺口 |
@@ -565,26 +740,47 @@ if (xxxConfirming && onConfirm && confirmationReady !== false) {
 
 ## 10. 建议的实施顺序
 
-0. **先提交工作区中已完成的「口径先行」改动**（`zh-CN/chat.json`、`en-US/chat.json`、`WriteConfirmCard.test.tsx`；评审非阻断 2）——与本文档混在同一工作区，单独提交后再开始实现。
 1. ~~先落 §8.1 的文档口径~~（**已完成**：体验改进计划 §1 与 I4 表述均已限定）。
-2. ~~定稿 §4 矩阵、§8.3 事件承载方式、§8.4 观测范围、§8.5 提示承载与措辞~~（**均已完成**）；~~吸收评审 v1 的 B1–B3~~（**已完成**，见头部修订行）。
-3. **实现通道组合层与联动动作**（§5.1：插入点 + ①补登记 waiter + ②保持 `confirming` + ③**回传实际回答者**）+ §5.2 分道，可先只接 `unavailable` 一格跑通端到端。
-4. **接入 `timeout` 格** + 审计（三条事件序列 + `effectiveTimeoutMs <= 0` 补审计）与回退率导出（§5.4 / §6.2；不设阈值与告警，§8.4）。
-5. **新增回退原因 i18n 文案**（§5.3：zh-CN / en-US 双份，`unavailable` / `timeout` 两条）+ **卡片原因展示 + 覆盖全部确认卡片**（§8.5）+ **逐处清除 `autoAnswerer` 使其可交互**（§5.8 五处写入点 + 类型放宽）+ 投影层核对。
-6. **测试与硬回归**（§6.3，含 IM lane 锚点用例与缓存一致性断言）。
+2. ~~定稿 §4 矩阵、§8.3 事件承载方式、§8.4 观测范围、§8.5 提示承载与措辞~~（**均已完成**）；~~吸收评审 v1 的 B1–B3~~、~~吸收评审 v2 的 B1–B3 与 4 项非阻断~~（**均已完成**，见头部修订行）。~~原第 0 步「先提交口径先行改动」~~（**已履行**：该笔 i18n / 测试改动已单独提交入库）。
+3. ~~**实现 §4.4 四维判定**（判定函数先行，含第 ② / ④ 维）+ **调整插入点结构**（§5.1 第 4 条，方案 a：`finally` 覆盖主通道判定与回退等待）+ **实现通道组合层与联动动作**（§5.1 第 1–3 条 + §5.2 分道）~~（**已完成**：`electron/confirmation/fallbackToUser.ts` + `toolChatLoop.ts` try/finally 重构，`unavailable` / `timeout` 两格同批接入）。
+4. ~~**接入 `timeout` 格** + 审计（四条事件序列 + 抑制回退侧 request + 两条提前返回路径补审计）与回退率导出~~（**已完成**；`effectiveTimeoutMs <= 0` 补审计、`recursion-blocked` 缺口显式记录于 §6.2 第 5 条，见该条实现处置）。
+5. ~~**展示补齐**：新增回退原因 i18n 文案（§5.3）+ 卡片原因展示覆盖全部确认卡片（§8.5）+ 逐处清除 `autoAnswerer`（§5.8）+ **补发浮动通知 + 补算 `confirmDiff`**（§5.10）+ 投影层核对~~（**已完成**；banner 提升为 `ToolCallCard` 七分支共享节点，`WriteConfirmCard` 局部渲染移除）。
+6. ~~**测试与硬回归**（§6.3）~~（**已完成**：判定矩阵 / 循环层端到端与守卫 / 通道降噪与补审计 / 聚合器清除 / 渲染 banner 与可交互 / automation+IM lane 锚点 / navigate 缓存写入，定向 174 用例全绿；真机端到端待人工验收）。
 
-第 3 步可独立交付（`unavailable` 一格即已修掉最主要的缺口），后续步骤增量叠加。第 3 步中的 ③ 必须与组合层同批完成——否则回退本身可用但 `decision_cache` 写入不成立（§5.5 前置条件）。
+第 3 步可独立交付（`unavailable` 一格即已修掉最主要的缺口），后续步骤增量叠加。但第 3 步的两部分**必须同批完成**：只做组合层而不调 `finally`，得到的回退路径资源语义劣于普通 `ask`（§5.1 第 4 条）；只做组合层而不做第 3 条（回传实际回答者），`decision_cache` 写入不成立（§5.5 前置条件）。
 
 ---
 
 ## 11. 交付判据
 
-1. desktop lane 的审批失败按 §4 矩阵逐格生效：`unavailable` / `timeout` 转人工，`unparsable` / `config-error` / `recursion-blocked` 仍 deny，`agent-deny` 永不回退；
+1. desktop lane 的审批失败按 §4 矩阵逐格生效：`unavailable` / `timeout` 转人工，`unparsable` / `config-error` / `recursion-blocked` 仍 deny，`agent-deny` 永不回退；**且回退严格按 §4.4 四维判定触发**——普通 `ask` 卡的 `timeout` / `unavailable` **不**触发回退、取消上下文**不**触发回退；
 2. automation / wechat / feishu **零行为变化**（硬回归全绿；含 IM lane 不装配回退的锚点用例）；
-3. 回退产生的人工确认与普通 `ask` 在用户可见形态上一致，**且可写 `decision_cache`**——后者以 §5.1 第 3 条（回传实际回答者）已完成为前提（§5.5）；
+3. 回退产生的人工确认与普通 `ask` 在**用户可见形态**上一致——该「一致」须枚举到四项：① 卡片可交互（§5.8）；② 有浮动确认通知（§5.10a）；③ 写 / 编辑卡携带 `confirmDiff`（§5.10b）；④ 卡片显示原因（§5.3 / §8.5）。**且可写 `decision_cache`**——后者以 §5.1 第 3 条（回传实际回答者）已完成为前提（§5.5）；
 4. 回退后卡片**可交互**（`autoAnswerer` 已清除，按钮存在；§5.8）；
 5. 回退后**全部七类确认卡片**均显示原因说明，且原因文案为**新增短原因短语**（zh-CN / en-US 双份，形态对齐既有 `reason`、不带模板已承载语义），不复用 `summaryFor`（§5.3 / §8.5）；
-6. 审计可区分「agent 裁决」与「agent 失败后转人工」：回退场景下三条事件（双 outcome + fallback 事件）的 `actor` / `cause` 组合正确，原 `cause` 可查；下游统计口径按 §5.4 定义——**agent 裁决率须按 `cause` 过滤有效裁决**（`agent-approved` / `agent-deny`），回退率分母用 `confirm.request`；
-7. 回退率与 `unparsable` 率**可从审计导出**（按事件类型取列表 + 离线统计）；本轮不要求自动告警（§8.4）；
-8. I3 锚点用例不回归（agent 裁决仍不写缓存）；
-9. 文档口径已落定：§8.1–§8.5 与评审 v1 的 B1–B3（**均已完成**）。
+6. 审计可区分「agent 裁决」与「agent 失败后转人工」：回退场景下**四条事件**（双 `confirm.request` 之外的 agent 侧 request + 双 `outcome` + fallback 事件）的 `actor` / `cause` 组合正确，**回退侧不产生第二条 `confirm.request`**，原 `cause` 可查；下游统计口径按 §5.4 定义——**agent 裁决率须按 `cause` 过滤有效裁决**（`agent-approved` / `agent-deny`），回退率分母用 `confirm.request`；
+7. **回退等待期的资源与调度语义与普通 `ask` 一致**：`waitingApprovalToolIds` 仍含该工具、许可未提前释放、租约仍 park、回退通道已登记进 `activeApprovalChannels`（§5.1 第 4 条）；
+8. 回退率与 `unparsable` 率**可从审计导出**（按事件类型取列表 + 离线统计）；本轮不要求自动告警（§8.4）；
+9. I3 锚点用例不回归（agent 裁决仍不写缓存）；
+10. 文档口径已落定：§8.1–§8.5 与评审 v1 的 B1–B3、v2 的 B1–B3（**均已完成**）。
+
+---
+
+## 12. 实现记录（2026-09-24）
+
+| 项 | 落点 |
+| --- | --- |
+| §4.4 四维判定 | `electron/confirmation/fallbackToUser.ts`（`shouldFallbackToUser` + `FALLBACK_ELIGIBLE_CAUSES`，数据化判定表） |
+| §5.1 插入点重构（方案 a） | `electron/toolChatLoop.ts`：`channelArgs` 提取 + 主通道判定与回退等待纳入同一 `try/finally`；`fallbackChannel` 声明在 `try` 外（注 1） |
+| §5.1 第 1 条 waiter 补登记 | 回退分支 `prepareToolConfirm`（先于第二条 confirm-requested 事件） |
+| §5.1 第 3 条回答者回传 | 组合层把回退 outcome 置 `answererKind:'user'`；派生改为 `channelOutcome.answererKind ?? gate 派生` |
+| §5.2 分道 | `config-error` 走 `DenyChannel`（cause 不在白名单，天然不分道错误）；锚点测试在判定矩阵用例中 |
+| §5.3 原因文案 | `notification.json` 双语 `approvalFallbackReason*`；`electron/confirmation/fallbackReason.ts` 经 hostTranslate 解析；`reasonCode` 定稿 `approval_unavailable` / `approval_timeout` |
+| §5.4 审计 | 事件 `confirm.answerer-fallback-to-user`（`SecurityAuditEventKind` 新增）；回退侧 `DesktopChannel` 构造开关 `suppressRequestAudit`（按实例注入，经 `ResolveConfirmChannelArgs` 透传）；`effectiveTimeoutMs <= 0` 补审计 |
+| §5.8 清除 autoAnswerer | 类型放宽 `?: boolean`（`ToolCallRecord` / `ToolCallDisplaySummary` / 事件载荷）；显式赋值五处：toolChatLoop 生产、`assistantFactAggregator`、`turnDisplayProtocol`（summary 与 `turnDisplayToMessage`）、`ChatMessageList` 合并 |
+| §5.10 展示补齐 | 回退分支补发 `confirm-request` 浮动通知 + `maybeBuildConfirmDiff` 补算（随清除事件下发） |
+| §8.5 banner 统一层级 | `ToolCallCard` 七分支共享 `fallbackBannerNode`（mcp / toolkit / write / browser / shell / script / lark-cli）；`WriteConfirmCard` 局部渲染移除 |
+| 测试 | `fallbackToUser.test.ts`（矩阵 17）、`channels.test.ts` / `agentChannel.test.ts`（降噪 + 补审计 5）、`toolChatLoop.fallbackToUser.test.ts`（端到端 5）、`toolChatLoop.fallbackGuard.test.ts`（循环层矩阵 / 守卫 / IM 锚点 / 取消 13）、`assistantFactAggregator.test.ts`（清除 2）、`ToolCallCard.test.tsx`（banner ×3 + 可交互 ×2） |
+| 验证 | 定向测试 174 用例全绿；既有相关套件（approvalAgent / automationLane / memoryGuard / fileAutoApprove / recursionGuard / confirmCardPayload / pendingConfirmStore / resolveMessageToolsInteractive）50 用例无回归；`i18n:check`、`typecheck:renderer`、`typecheck:shared`、`build:electron:incremental` 全部通过 |
+
+**待人工验收（无法单测覆盖）**：真机桌面端到端（配置审批 Agent 后断开服务 / 观察超时 → 卡片出现 → 批准 / 拒绝双路径）、七类工具的 banner 视觉呈现、浮动通知真机弹出。

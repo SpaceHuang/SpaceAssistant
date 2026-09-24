@@ -20,7 +20,7 @@ describe('WriteConfirmCard', () => {
     expect(screen.getByText('hello')).toBeDefined()
   })
 
-  it('shows auto approve fallback banner', () => {
+  it('不局部渲染 fallback banner（§8.5：已提升到 ToolCallCard 确认态统一层级）', () => {
     render(
       <WriteConfirmCard
         record={record({
@@ -29,8 +29,7 @@ describe('WriteConfirmCard', () => {
         onConfirm={vi.fn()}
       />
     )
-    expect(screen.getByText(/自动处理未完成/)).toBeDefined()
-    expect(screen.getByText(/目标路径命中敏感目录/)).toBeDefined()
+    expect(document.querySelector('.write-confirm-card__fallback-banner')).toBeNull()
   })
 
   it('shows expand control when diff exceeds collapsed line budget', () => {
