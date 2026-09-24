@@ -101,7 +101,8 @@ describe('securityApprovalSkill（I2：裁决标准唯一）', () => {
     // 授权限制与「第二步 authorization」同口径：可信 ≠ 可授权
     expect(skill.content).toMatch(/「已声明的任务」虽属可信内容[\s\S]*?不构成对 high \/ critical\s*动作的授权/)
     // 锚点悬空防护：无任务小节（无任务上下文调用方）时显式声明「无可信内容」，防注入语义不缺位
-    expect(skill.content).toMatch(/不存在」?「已声明的任务」[\s\S]*?没有任何可信内容/)
+    // （[\s\S]{0,4} 容忍「不存在」与「已声明的任务」之间的 ** Markdown 加粗标记）
+    expect(skill.content).toMatch(/不存在[\s\S]{0,4}「已声明的任务」[\s\S]*?没有任何可信内容/)
     // 既有锚点保留：围栏不是安全边界、注入举证标准不变
     expect(skill.content).toMatch(/围栏边界本身不是安全边界/)
     expect(skill.content).toMatch(/同时满足/)
