@@ -1721,12 +1721,14 @@ async function runToolChatSessionInner(
     const approvalAbortController = new AbortController()
     chatSignal.addEventListener('abort', () => failApprovalGroup(), { once: true })
     const activeApprovalChannels = new Set<ConfirmationChannel>()
-    const failApprovalGroup = (): void => {
+    // cause（§5.2 方案 A）：向通道标注批量取消的真实成因——父任务取消 = 外部中断（cancelled，缺省）；
+    // park / 租约恢复失败 = 环境不可用（unavailable），兄弟节点不被误归因为「已取消」。
+    const failApprovalGroup = (cause: 'cancelled' | 'unavailable' = 'cancelled'): void => {
       sharedApprovalRecoveryFailed = true
       toolConfirmRegistry.cancelAllToolConfirmsForRequest?.(requestId)
       remoteContext?.imChannel?.cancelByRequestId?.(requestId)
       approvalAbortController.abort()
-      for (const channel of activeApprovalChannels) channel.cancel(requestId)
+      for (const channel of activeApprovalChannels) channel.cancel(requestId, cause)
     }
     const hasRunnableUnstartedTool = (): boolean => {
       const unstarted = toolUses.filter((tu) => !toolResults.some((result) => result.tool_use_id === tu.id) && !waitingApprovalToolIds.has(tu.id))
@@ -1739,11 +1741,11 @@ async function runToolChatSessionInner(
       if (hasRunnableUnstartedTool() || activeToolNodes > 0 || waitingApprovalNodes <= 0) return
       if (!sharedApprovalPark && invocationRuntime && invocationLeaseState?.current) {
         sharedApprovalPark = invocationRuntime.park(requestId, invocationLeaseState.current, { reason: 'approval-wait-repark' })
-        if (!sharedApprovalPark) failApprovalGroup()
+        if (!sharedApprovalPark) failApprovalGroup('unavailable')
       }
       if (applicationAdmission !== undefined && sharedApplicationPark === undefined && (!invocationRuntime || sharedApprovalPark)) {
         sharedApplicationPark = applicationAdmission.park({ reason: 'approval-wait-repark', requestId })
-        if (sharedApplicationPark === undefined) failApprovalGroup()
+        if (sharedApplicationPark === undefined) failApprovalGroup('unavailable')
       }
     }
 
@@ -2195,7 +2197,8 @@ async function runToolChatSessionInner(
         const hasUnstartedBeforePermit = toolResults.length + activeToolNodes < toolUses.length
         const canParkBeforePermit = !hasUnstartedBeforePermit && canParkInvocation(activeToolNodes, waitingApprovalNodes)
         if (sharedApprovalRecoveryFailed || chatSignal.aborted) {
-          failApprovalGroup()
+          // 守卫触发成因二选一：父任务取消 = 外部中断；恢复失败 = 环境不可用
+          failApprovalGroup(chatSignal.aborted ? 'cancelled' : 'unavailable')
           waitingApprovalNodes = Math.max(0, waitingApprovalNodes - 1)
           waitingApprovalToolIds.delete(toolUseId)
           await recordToolResult(buildToolErrorResult(toolUseId, '审批已取消，工具未执行。', { requestId, sessionId }), { success: false, error: '审批已取消，工具未执行。', notExecuted: true, notExecutedReason: 'confirm_cancelled' })
@@ -2205,11 +2208,11 @@ async function runToolChatSessionInner(
         const approvalWasQueued = approvalSemaphore.pending > 0
         if (approvalWasQueued && canParkBeforePermit && !sharedApprovalPark && invocationRuntime && invocationLeaseState?.current) {
           sharedApprovalPark = invocationRuntime.park(requestId, invocationLeaseState.current, { reason: 'approval-wait-capacity' })
-          if (!sharedApprovalPark) failApprovalGroup()
+          if (!sharedApprovalPark) failApprovalGroup('unavailable')
         }
         if (approvalWasQueued && canParkBeforePermit && applicationAdmission !== undefined && sharedApplicationPark === undefined && (!invocationRuntime || sharedApprovalPark)) {
           sharedApplicationPark = applicationAdmission.park({ reason: 'approval-wait-capacity', requestId })
-          if (sharedApplicationPark === undefined) failApprovalGroup()
+          if (sharedApplicationPark === undefined) failApprovalGroup('unavailable')
         }
         try {
           await approvalAcquire
@@ -2373,8 +2376,8 @@ async function runToolChatSessionInner(
           }
           if (sharedApprovalRecoveryFailed) {
             // park/恢复失败时必须收敛整个父任务的审批集合，不能只结束当前节点，
-            // 否则兄弟 waiter 会继续占槽并把本轮永久挂起。
-            failApprovalGroup()
+            // 否则兄弟 waiter 会继续占槽并把本轮永久挂起；成因 = 环境不可用。
+            failApprovalGroup('unavailable')
             if (approvalPermitHeld) { approvalSemaphore.release(); approvalPermitHeld = false }
             waitingApprovalNodes = Math.max(0, waitingApprovalNodes - 1)
             waitingApprovalToolIds.delete(toolUseId)
@@ -2477,7 +2480,7 @@ async function runToolChatSessionInner(
             waitingApprovalNodes = Math.max(0, waitingApprovalNodes - 1)
             waitingApprovalToolIds.delete(toolUseId)
             notifySchedulerProgress()
-            if (!await recoverSharedApprovalLease(parentDeadlineAt)) failApprovalGroup()
+            if (!await recoverSharedApprovalLease(parentDeadlineAt)) failApprovalGroup('unavailable')
           })
           outcome =
             channelOutcome.kind === 'approved'

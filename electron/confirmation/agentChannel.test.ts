@@ -236,7 +236,8 @@ describe('AgentChannel（P2-3）', () => {
     const pending = ch.request(req({ timeoutMs: 5_000 }))
     await new Promise((resolve) => setTimeout(resolve, 0))
     ch.cancel('outer')
-    await expect(pending).resolves.toMatchObject({ kind: 'rejected' })
+    // 取消语义独立成类（§5.2）：外部主动取消 cause=cancelled，不再混入 unavailable
+    await expect(pending).resolves.toMatchObject({ kind: 'rejected', cause: 'cancelled' })
     expect(pool.snapshot().queued).toBe(0)
     if (held.kind === 'granted') held.release()
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -256,9 +257,67 @@ describe('AgentChannel（P2-3）', () => {
     const pending = ch.request(req({ timeoutMs: 60_000 }))
     const inv = invokeApproval.mock.calls[0]![0] as ApprovalInvocation
     ch.cancel('whatever')
-    // cancel 后审批内层请求被信号取消，request 以 fail-closed 收敛
-    await expect(pending).resolves.toMatchObject({ kind: 'rejected' })
+    // cancel 后审批内层请求被信号取消，request 以 fail-closed 收敛；cause=cancelled（外部中断）
+    await expect(pending).resolves.toMatchObject({ kind: 'rejected', cause: 'cancelled' })
     void inv
+  })
+
+  it('cancel 结算文案说明「操作未执行」，不产生「用户主动取消」之外的误导', async () => {
+    const { ch } = channel({
+      invokeApproval: () => new Promise<ApprovalInvocationResult>(() => undefined)
+    })
+    const pending = ch.request(req({ timeoutMs: 60_000 }))
+    ch.cancel('outer')
+    const outcome = await pending
+    expect(outcome.kind === 'rejected' && outcome.reason?.summary).toContain('未执行')
+  })
+
+  it('cancel 后审计 confirm.outcome 归因：cause=cancelled + actor=agent（外部中断可按 cause 还原）', async () => {
+    const a = audit()
+    const { ch } = channel({
+      audit: a,
+      invokeApproval: () => new Promise<ApprovalInvocationResult>(() => undefined)
+    })
+    const pending = ch.request(req({ timeoutMs: 60_000 }))
+    ch.cancel('outer')
+    await pending
+    const outcomeEv = a.events.find((e) => e.event === 'confirm.outcome')
+    expect(outcomeEv).toBeTruthy()
+    expect(outcomeEv!.cause).toBe('cancelled')
+    expect(outcomeEv!.actor).toBe('agent')
+  })
+
+  it('通道三条结算路径互不串扰：超时=timeout / 准入不可得=unavailable / 外部取消=cancelled', async () => {
+    // 超时路径
+    const t = channel({ invokeApproval: () => new Promise<ApprovalInvocationResult>(() => undefined) })
+    await expect(t.ch.request(req({ timeoutMs: 20 }))).resolves.toMatchObject({
+      kind: 'rejected',
+      cause: 'timeout'
+    })
+    // 准入不可得路径：审批池槽位占满且队列上限 0 → acquire 拒绝 → unavailable
+    const pool = new ApprovalAdmission({ concurrency: 1, queueLimit: 0 })
+    const held = await pool.acquire({ requestId: 'held', parentTaskId: 'p-held' })
+    const a = channel({ approvalAdmission: pool })
+    await expect(a.ch.request(req({ timeoutMs: 5_000 }))).resolves.toMatchObject({
+      kind: 'rejected',
+      cause: 'unavailable'
+    })
+    if (held.kind === 'granted') held.release()
+    // 外部取消路径
+    const c = channel({ invokeApproval: () => new Promise<ApprovalInvocationResult>(() => undefined) })
+    const pending = c.ch.request(req({ timeoutMs: 60_000 }))
+    c.ch.cancel('outer')
+    await expect(pending).resolves.toMatchObject({ kind: 'rejected', cause: 'cancelled' })
+  })
+
+  it('cancel(id, "unavailable")（park/恢复失败路径的成因提示）→ 兄弟 attempt 以 unavailable 结算', async () => {
+    const { ch } = channel({
+      invokeApproval: () => new Promise<ApprovalInvocationResult>(() => undefined)
+    })
+    const pending = ch.request(req({ timeoutMs: 60_000 }))
+    ch.cancel('outer', 'unavailable')
+    // 恢复失败属「环境不可用」而非「外部取消」：保持 unavailable，notExecutedReason 不翻转
+    await expect(pending).resolves.toMatchObject({ kind: 'rejected', cause: 'unavailable' })
   })
 })
 

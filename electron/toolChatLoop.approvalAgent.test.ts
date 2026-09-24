@@ -10,6 +10,11 @@ import type { AppDatabase } from './database'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 import type { ApprovalInvocationResult, SecurityAuditEvent } from '../src/shared/confirmation/types'
 
+// 可控的父任务取消信号（failApprovalGroup 的 abort 触发路径验证用）
+const chatCancelState = vi.hoisted(() => ({
+  signal: null as { aborted: boolean; listeners: Array<() => void> } | null
+}))
+
 const mockRunApprovalAgent = vi.fn(async (): Promise<ApprovalInvocationResult> => ({
   ok: true,
   verdict: { kind: 'approve', reason: { summary: '常规写入，风险可控' } }
@@ -23,8 +28,21 @@ vi.mock('./agentLogger/agentLogger', () => ({
 }))
 
 vi.mock('./chatCancelRegistry', () => ({
-  registerChatCancel: vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+  registerChatCancel: vi.fn(() => {
+    const signal = { aborted: false, listeners: [] as Array<() => void> }
+    chatCancelState.signal = signal
+    return {
+      get aborted() {
+        return signal.aborted
+      },
+      addEventListener: (_type: string, fn: () => void) => {
+        signal.listeners.push(fn)
+      },
+      removeEventListener: () => undefined
+    }
+  }),
   clearChatCancel: vi.fn(),
+  signalChatCancel: vi.fn(),
   throwIfChatCancelled: vi.fn(),
   ChatCancelledError: class ChatCancelledError extends Error {},
   // A2(偏差 18):runtime 工厂经本模块取类构造实例
@@ -36,6 +54,13 @@ vi.mock('./chatCancelRegistry', () => ({
     cancelAllActiveChats = vi.fn()
   }
 }))
+
+function abortParentTask(): void {
+  const signal = chatCancelState.signal
+  if (!signal) throw new Error('chatCancel signal 尚未创建（runToolChatSession 未启动）')
+  signal.aborted = true
+  for (const fn of signal.listeners) fn()
+}
 
 vi.mock('./sessionTitleSuggest', () => ({
   scheduleSessionTitleSuggestion: vi.fn(),
@@ -56,7 +81,14 @@ vi.mock('./tools/builtinExecutors', async (importOriginal) => {
     ...actual,
     getRegisteredTool: vi.fn(() => undefined),
     getToolExecutor: vi.fn((name: string) =>
-      name === 'write_file' ? { name, execute: async () => ({ success: true, data: 'written' }) } : undefined
+      name === 'write_file'
+        ? {
+            name,
+            execute: async () => ({ success: true, data: 'written' }),
+            // 声明资源键：不同路径可并发——兄弟审批节点并存的前提（无资源键的工具是串行屏障）
+            resourceKeys: (input: { path?: string }) => [`workspace:${input?.path ?? ''}`]
+          }
+        : undefined
     )
   }
 })
@@ -99,7 +131,8 @@ function makeDb(): AppDatabase {
 let streamRound = 0
 /** round0 发起写操作；其后模型每轮继续发起（deny 路径验证不中止），CONVERGE_ROUND 轮收敛为文本。 */
 const CONVERGE_ROUND = 3
-function installStreamClient() {
+function installStreamClient(opts: { firstRoundToolUses?: number } = {}) {
+  const firstRoundToolUses = opts.firstRoundToolUses ?? 1
   streamRound = 0
   capturedStreamParams.length = 0
   mockCreateAnthropicClient.mockReturnValue({
@@ -109,19 +142,21 @@ function installStreamClient() {
         const round =
           streamRound < CONVERGE_ROUND
             ? {
-                content: [
-                  {
-                    type: 'tool_use',
-                    id: `toolu-e2e-${streamRound}`,
+                content: Array.from({ length: streamRound === 0 ? firstRoundToolUses : 1 }, (_, i) => {
+                  // 首轮单工具保持既有 id/path（既有断言锚定 out.txt）；多工具变体加索引区分兄弟节点
+                  const idSuffix = streamRound === 0 && firstRoundToolUses === 1 ? `${streamRound}` : `${streamRound}-${i}`
+                  return {
+                    type: 'tool_use' as const,
+                    id: `toolu-e2e-${idSuffix}`,
                     name: 'write_file',
-                    input: { path: 'out.txt', content: 'x' }
+                    input: { path: idSuffix === '0' ? 'out.txt' : `out-${idSuffix}.txt`, content: 'x' }
                   }
-                ],
-                stop_reason: 'tool_use'
+                }),
+                stop_reason: 'tool_use' as const
               }
             : {
                 content: [{ type: 'text', text: '任务完成（含被拒说明）' }],
-                stop_reason: 'end_turn'
+                stop_reason: 'end_turn' as const
               }
         streamRound += 1
         return {
@@ -253,5 +288,78 @@ describe('P2 端到端：任务声明透传（D）', () => {
     expect(res.ok).toBe(true)
     const inv = mockRunApprovalAgent.mock.calls[0]![1] as { clue: { taskDigest?: string } }
     expect(inv.clue.taskDigest).toBeUndefined()
+  })
+})
+
+// ===== §5.2 方案 A：failApprovalGroup 成因分立 =====
+// park/恢复失败属「环境不可用」（unavailable），父任务取消属「外部中断」（cancelled）；
+// 兄弟审批节点经通道取消的结算必须跟随真实成因，不得统一翻转成「已取消」。
+
+describe('P2 端到端：failApprovalGroup 成因分立（取消语义对齐，方案 A）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    capturedAuditEvents.length = 0
+    chatCancelState.signal = null
+    mockRunApprovalAgent.mockImplementation(
+      () => new Promise<ApprovalInvocationResult>(() => undefined)
+    )
+  })
+
+  function collectToolResults() {
+    const collected: Array<{ toolUseId: string; notExecutedReason?: string }> = []
+    return {
+      collected,
+      emitSessionEvent: (e: { type: string; payload?: { result?: { notExecutedReason?: string }; toolUseId?: string } }) => {
+        if (e?.type === 'tool_result' && e.payload?.result) {
+          collected.push({ toolUseId: e.payload.toolUseId ?? '', notExecutedReason: e.payload.result.notExecutedReason })
+        }
+      }
+    }
+  }
+
+  it('park/恢复失败路径：failApprovalGroup 以 unavailable 收敛挂起中的兄弟审批节点（notExecutedReason 不翻转为 confirm_cancelled）', async () => {
+    installStreamClient({ firstRoundToolUses: 2 })
+    const db = makeDb()
+    const { emitSessionEvent } = collectToolResults()
+    // 回合以失败收敛（:2579 throw 既有语义，回合级失败可接受）；await 完成即证明无挂起。
+    // 串行执行（concurrency=1）：A 先入通道挂起（此刻 B 未启动 → canPark=false），B 启动后
+    // 判定 canPark=true → park 失败 → failApprovalGroup 取消挂起中的兄弟通道 A。
+    await runAssembledSession({
+      ...baseArgs(db),
+      toolExecutionConcurrency: 1,
+      // park 必失败 → sharedApprovalRecoveryFailed → failApprovalGroup('unavailable')
+      applicationAdmission: {
+        park: () => undefined,
+        resume: () => ({ ok: false as const, reason: 'test-stub' })
+      },
+      emitSessionEvent
+    }).catch(() => undefined)
+    // 兄弟节点确实挂起在通道中被批量取消（confirm.outcome 来自通道 cancel 结算）：
+    // 恢复失败属「环境不可用」——通道 outcome 必须保持 cause=unavailable，
+    // 不得因 cancel 统一翻转成 cancelled（notExecutedReason 相应不翻转为 confirm_cancelled）
+    const outcomeEv = capturedAuditEvents.find((e) => e.event === 'confirm.outcome')
+    expect(outcomeEv).toBeTruthy()
+    expect(outcomeEv!.cause).toBe('unavailable')
+  })
+
+  it('父任务取消（chatSignal abort）路径：挂起中的审批节点按 cancelled 收敛（审计 cause=cancelled）', async () => {
+    installStreamClient()
+    const db = makeDb()
+    const { emitSessionEvent } = collectToolResults()
+    const session = runAssembledSession({
+      ...baseArgs(db),
+      emitSessionEvent
+    })
+    // 等审批节点真正挂进通道（invokeApproval 已被调用 = inflight 已注册），再模拟父任务取消
+    await vi.waitFor(() => {
+      expect(mockRunApprovalAgent.mock.calls.length).toBe(1)
+    })
+    abortParentTask()
+    // 取消后回合以失败收敛（:2579 throw 既有语义）；await 完成即证明无挂起
+    await session.catch(() => undefined)
+    // 父任务取消属「外部中断」：failApprovalGroup 缺省 cause=cancelled → 通道 outcome cause=cancelled
+    const outcomeEv = capturedAuditEvents.find((e) => e.event === 'confirm.outcome')
+    expect(outcomeEv).toBeTruthy()
+    expect(outcomeEv!.cause).toBe('cancelled')
   })
 })
