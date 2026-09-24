@@ -320,7 +320,7 @@ describe('P2 端到端：failApprovalGroup 成因分立（取消语义对齐，�
   it('park/恢复失败路径：failApprovalGroup 以 unavailable 收敛挂起中的兄弟审批节点（notExecutedReason 不翻转为 confirm_cancelled）', async () => {
     installStreamClient({ firstRoundToolUses: 2 })
     const db = makeDb()
-    const { emitSessionEvent } = collectToolResults()
+    const { collected, emitSessionEvent } = collectToolResults()
     // 回合以失败收敛（:2579 throw 既有语义，回合级失败可接受）；await 完成即证明无挂起。
     // 串行执行（concurrency=1）：A 先入通道挂起（此刻 B 未启动 → canPark=false），B 启动后
     // 判定 canPark=true → park 失败 → failApprovalGroup 取消挂起中的兄弟通道 A。
@@ -340,6 +340,12 @@ describe('P2 端到端：failApprovalGroup 成因分立（取消语义对齐，�
     const outcomeEv = capturedAuditEvents.find((e) => e.event === 'confirm.outcome')
     expect(outcomeEv).toBeTruthy()
     expect(outcomeEv!.cause).toBe('unavailable')
+    // notExecutedReason 同样归因闭环：落库的工具结果全部是 confirm_unavailable，
+    // 无一被误标为 confirm_cancelled（触发者走恢复失败分支、兄弟走通道 unavailable 结算）
+    expect(collected.length).toBeGreaterThan(0)
+    const reasons = collected.map((r) => r.notExecutedReason)
+    expect(reasons).not.toContain('confirm_cancelled')
+    expect(reasons).toContain('confirm_unavailable')
   })
 
   it('父任务取消（chatSignal abort）路径：挂起中的审批节点按 cancelled 收敛（审计 cause=cancelled）', async () => {

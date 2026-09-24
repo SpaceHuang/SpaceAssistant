@@ -2197,11 +2197,14 @@ async function runToolChatSessionInner(
         const hasUnstartedBeforePermit = toolResults.length + activeToolNodes < toolUses.length
         const canParkBeforePermit = !hasUnstartedBeforePermit && canParkInvocation(activeToolNodes, waitingApprovalNodes)
         if (sharedApprovalRecoveryFailed || chatSignal.aborted) {
-          // 守卫触发成因二选一：父任务取消 = 外部中断；恢复失败 = 环境不可用
-          failApprovalGroup(chatSignal.aborted ? 'cancelled' : 'unavailable')
+          // 守卫触发成因二选一：父任务取消 = 外部中断；恢复失败 = 环境不可用。
+          // notExecutedReason 同步区分（与 :2391 恢复失败分支口径一致），归因在当前节点同样闭环。
+          const guardAborted = chatSignal.aborted
+          const guardMessage = guardAborted ? '审批已取消，工具未执行。' : '审批无法取得运行租约，工具未执行。'
+          failApprovalGroup(guardAborted ? 'cancelled' : 'unavailable')
           waitingApprovalNodes = Math.max(0, waitingApprovalNodes - 1)
           waitingApprovalToolIds.delete(toolUseId)
-          await recordToolResult(buildToolErrorResult(toolUseId, '审批已取消，工具未执行。', { requestId, sessionId }), { success: false, error: '审批已取消，工具未执行。', notExecuted: true, notExecutedReason: 'confirm_cancelled' })
+          await recordToolResult(buildToolErrorResult(toolUseId, guardMessage, { requestId, sessionId }), { success: false, error: guardMessage, notExecuted: true, notExecutedReason: guardAborted ? 'confirm_cancelled' : 'confirm_unavailable' })
           return
         }
         const approvalAcquire = approvalSemaphore.acquire({ signal: approvalAbortController.signal })
