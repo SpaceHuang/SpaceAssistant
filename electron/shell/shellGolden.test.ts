@@ -50,107 +50,16 @@ type ShellGoldenBaseline = {
   precheckTrusted?: Record<string, unknown>
 }
 
-// P2-T5 登记表：经评审登记为「接受」的漂移 id → 处置结论（逐条证据见评审文档 Bash 段）。
+// 登记表生命周期（类别化豁免，P1-7 评审修复）：实现漂移先经评审登记于此
+// （逐条证据见评审文档 Bash/PS 段），基线重录 commit 将已登记漂移吸收进基线后
+// 随即清空登记表——残留条目会豁免未来同类别漂移，削弱比对告警。
+// 2026-09 基线重录（commit 14687900，normalizeShellSignature argv 数组格式）
+// 已吸收 P2/P3-T5/T6 全部 93 条登记（含 b40-b42 trusted eligible 翻转，
+// 成对断言见 bashPathFork.test.ts），登记表清零。
 // 约束：verdict 弱化（allow/ask 降级）、eligible false→true 的静默升级绝不入白名单；
-// b40-b42 的 trusted eligible 翻转在 bashPathFork.test.ts 成对断言并登记论证。
-// P2/P3-T5/T6 评审登记表（类别化，P1-7 评审修复）：白名单只豁免「登记过的具体类别」；
 // 三类硬禁令不可豁免（见比对逻辑）：verdict 弱化、signature 非拆分变化、eligible false→true。
 // verdictStricter：判定变严；factsPrecision：facts/analysis 形态精确化；signatureSplit：显式登记的签名等价类拆分。
-const SHELL_ACCEPTED_DRIFT: Record<string, { verdictStricter?: string; factsPrecision?: string; signatureSplit?: string }> = {
-  'b04-curl-pipe-bash': { factsPrecision: '同 b06（URL 参数已排除路径增强误报）' },
-  'b05-wget-pipe-sh': { factsPrecision: '同 b06（URL 参数已排除路径增强误报）' },
-  'b07-dd-devsda': { factsPrecision: '树事实路径增强捕获 dd 的 /dev/zero→/dev/sda 写入违规（旧实现漏检，violations 新增=变严；verdict 保持 deny 不变）' },
-  'b09-cat-pipe-grep': { factsPrecision: '同 b06；树事实增强额外捕获 /etc/passwd 读取违规（posix /etc 敏感前缀，violations 新增=变严）' },
-  'b45-pipe-to-python': { factsPrecision: '同 b06（URL 参数已排除路径增强误报）' },
-  'b06-base64-decode-exec': { factsPrecision: '旧 partial 源于引号内元字符误报启发式；语法树完整解析后 complete 化；路径安全面由树事实增强只增不减覆盖' },
-  'b12-semi-list': { factsPrecision: '同 b06' },
-  'b13-dquote': { factsPrecision: '同 b06' },
-  'b14-squote': { factsPrecision: '同 b06' },
-  'b15-mixed-quote': { factsPrecision: '同 b06' },
-  'b16-escaped-quote': { factsPrecision: '同 b06' },
-  'b18-assign-prefix': { factsPrecision: '同 b06' },
-  'b19-assign-echo-var': { factsPrecision: '同 b06' },
-  'b21-cd-dotdot': { factsPrecision: '同 b06' },
-  'b22-redirect-abs': { factsPrecision: '同 b06' },
-  'b23-redirect-append-rel': { factsPrecision: '同 b06' },
-  'b24-redirect-input': { factsPrecision: '同 b06' },
-  'b25-redirect-stderr': { factsPrecision: '同 b06' },
-  'b26-cmd-subst': { factsPrecision: '同 b06' },
-  'b27-backtick-subst': { factsPrecision: '同 b06' },
-  'b28-process-subst': { factsPrecision: '同 b06' },
-  'b29-var-home': { factsPrecision: '同 b06' },
-  'b30-var-brace': { factsPrecision: '同 b06' },
-  'b31-export-path': { factsPrecision: '同 b06' },
-  'b32-escape-space': { factsPrecision: '同 b06' },
-  'b33-printf-escapes': { factsPrecision: '同 b06' },
-  'b34-unicode-quote': { factsPrecision: '同 b06' },
-  'b35-crlf': { factsPrecision: '同 b06' },
-  'b40-bare-paren-echo': { factsPrecision: '发现 H 锚点：complete 化；trusted eligible 翻转已在 bashPathFork 成对断言并登记论证' },
-  'b41-bare-paren-grep': { factsPrecision: '发现 H 锚点：complete 化' },
-  'b42-bare-paren-text': { factsPrecision: '发现 H 锚点：complete 化' },
-  'b43-redirect-sensitive': { factsPrecision: '同 b06（敏感路径由 path-target 与路径增强双覆盖）' },
-  'b44-cat-shadow': { factsPrecision: '同 b06' },
-  'b46-eval-var': { factsPrecision: '同 b06' },
-  'b47-glob-star': { factsPrecision: '同 b06' },
-  'b36-unclosed-quote': { verdictStricter: '畸形命令 tree parse_error → deny 兜底（fail-closed 变严）', factsPrecision: 'complete 化与 unresolved 形态变化', signatureSplit: '签名空折叠缺陷修复（P3-T4）：未闭合引号不再折叠为空签名——旧实现全部失败输入塌缩为同一空串等价类，修复为拆分（方向安全）' },
-  'b37-trailing-pipe': { verdictStricter: '畸形命令 tree parse_error → deny 兜底（fail-closed 变严）', factsPrecision: 'complete 化与 unresolved 形态变化' },
-  'b38-leading-and': { verdictStricter: '畸形命令 tree parse_error → deny 兜底（fail-closed 变严）', factsPrecision: 'complete 化与 unresolved 形态变化' },
-  'b39-truncated-subst': { verdictStricter: '畸形命令 tree parse_error → deny 兜底（fail-closed 变严）', factsPrecision: 'complete 化与 unresolved 形态变化' },
-  't2-03-backtick-lead': { verdictStricter: '上游已知缺陷形态 ERROR → deny 兜底（fail-closed 变严）', factsPrecision: 'PS 语法级 facts 形态变化' },
-  'p01-get-childitem': { factsPrecision: 'PS 语法级树事实分叉：operations/paths/connectors 按语法结构精确化（P3-T6 登记）' },
-  'p02-pipeline-foreach': { factsPrecision: '同 p01' },
-  'p03-invoke-expression': { factsPrecision: '同 p01' },
-  'p04-iex-cradle': { verdictStricter: 'P0-2 修复后 ps-iex-cradle 模式真实生效：ask → deny（变严）', factsPrecision: '同 p01' },
-  'p05-encoded-command': { factsPrecision: '同 p01' },
-  'p06-remove-item-recurse': { verdictStricter: 'P0-2 修复后 ps-destructive 模式真实生效：ask → deny（变严）', factsPrecision: '同 p01' },
-  'p07-here-string-outfile': { factsPrecision: '同 p01' },
-  'p08-subexpression': { factsPrecision: '同 p01' },
-  'p09-backtick-continuation': { factsPrecision: '同 p01' },
-  'p10-set-content': { factsPrecision: '同 p01' },
-  'p11-sort-pipeline': { factsPrecision: '同 p01' },
-  'p12-format-volume': { verdictStricter: 'P0-2 修复后 ps-destructive 模式真实生效：ask → deny（变严）', factsPrecision: '同 p01' },
-  't1-01-get-date': { factsPrecision: '同 p01' },
-  't1-02-param-value': { factsPrecision: '同 p01' },
-  't1-03-flag-equals': { factsPrecision: '同 p01' },
-  't1-04-dquote-unicode': { factsPrecision: '同 p01' },
-  't1-05-squote': { factsPrecision: '同 p01' },
-  't1-06-var-member': { factsPrecision: '同 p01' },
-  't1-07-and-list': { factsPrecision: '同 p01' },
-  't1-08-or-list': { factsPrecision: '同 p01' },
-  't1-09-redirect': { factsPrecision: '同 p01' },
-  't1-10-foreach-pipe': { factsPrecision: '同 p01' },
-  't1-11-splatting': { factsPrecision: '同 p01' },
-  't1-12-variable-assign': { factsPrecision: '同 p01' },
-  't1-13-if-statement': { factsPrecision: '同 p01' },
-  't1-14-member-call': { factsPrecision: '同 p01' },
-  't1-15-where-object': { factsPrecision: '同 p01' },
-  't1-16-param-colon': { factsPrecision: '同 p01' },
-  't1-17-double-quoted-var': { factsPrecision: '同 p01' },
-  't1-18-single-dash-flag': { factsPrecision: '同 p01' },
-  't1-19-negative-number-param': { factsPrecision: '同 p01' },
-  't1-20-semicolon-list': { factsPrecision: '同 p01' },
-  't1-21-cmdlet-format': { factsPrecision: '同 p01' },
-  't1-22-string-concat-arg': { factsPrecision: '同 p01' },
-  't2-01-class-def': { factsPrecision: '同 p01' },
-  't2-02-nested-index': { factsPrecision: '同 p01' },
-  't2-04-nested-scriptblock': { factsPrecision: '同 p01' },
-  't2-05-type-literal': { factsPrecision: '同 p01' },
-  't2-06-cast-generic': { factsPrecision: '同 p01' },
-  't2-07-range-operator': { factsPrecision: '同 p01' },
-  't2-08-multiline-pipe': { factsPrecision: '同 p01' },
-  't2-09-dollar-dollar': { factsPrecision: '同 p01' },
-  't2-10-double-quoted-here': { factsPrecision: '同 p01' },
-  't2-11-switch-statement': { factsPrecision: '同 p01' },
-  't2-12-add-range-step': { factsPrecision: '同 p01' },
-  't2-13-enum-member-access': { factsPrecision: '同 p01' },
-  't2-14-nested-hashtable': { factsPrecision: '同 p01' },
-  't2-15-sub-expression-in-string': { factsPrecision: '同 p01' },
-  't2-16-array-subexpression': { factsPrecision: '同 p01' },
-  't2-17-param-block': { factsPrecision: '同 p01' },
-  't2-18-filter-left': { factsPrecision: '同 p01' },
-  't2-19-method-chaining': { factsPrecision: '同 p01' },
-  't2-20-using-namespace': { factsPrecision: '同 p01' }
-}
+const SHELL_ACCEPTED_DRIFT: Record<string, { verdictStricter?: string; factsPrecision?: string; signatureSplit?: string }> = {}
 
 function loadSamples(): Array<{ id: string; dialect: string; code: string }> {
   const manifest = JSON.parse(fs.readFileSync(path.join(GOLDEN_DIR, 'manifest.json'), 'utf8'))
