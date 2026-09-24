@@ -1657,6 +1657,12 @@ async function runToolChatSessionInner(
     let sharedApprovalPark: import('./runtime/agentRuntime').InvocationParkHandleLike | undefined
     let sharedApplicationPark: unknown
     let sharedApprovalRecoveryFailed = false
+    // 组死权威成因（failApprovalGroup 首写捕获）：用户回答者通道（桌面确认卡 / IM）的结算
+    // 不承载 causeHint（registry 一律结算 cancelled），组死归因必须取源头入参而非通道 outcome。
+    // 首写标志独立于 sharedApprovalRecoveryFailed——park 失败路径先直接置位 recoveryFailed、
+    // 随后才调 failApprovalGroup('unavailable')，不能因标志已置位而丢失首次成因。
+    let sharedApprovalFailureCause: 'cancelled' | 'unavailable' = 'cancelled'
+    let sharedApprovalFailureCauseSet = false
     let sharedApprovalRecoveryPromise: Promise<boolean> | undefined
     const parentDeadlineAt = args.deadlineAt ?? (Date.now() + 10 * 60_000)
     const applicationResumeRetryDelaysMs = [50, 250] as const
@@ -1724,6 +1730,11 @@ async function runToolChatSessionInner(
     // cause（§5.2 方案 A）：向通道标注批量取消的真实成因——父任务取消 = 外部中断（cancelled，缺省）；
     // park / 租约恢复失败 = 环境不可用（unavailable），兄弟节点不被误归因为「已取消」。
     const failApprovalGroup = (cause: 'cancelled' | 'unavailable' = 'cancelled'): void => {
+      // 首写捕获：后续对已死组的重复收敛（守卫分支 / 恢复失败）不改写首次成因
+      if (!sharedApprovalFailureCauseSet) {
+        sharedApprovalFailureCause = cause
+        sharedApprovalFailureCauseSet = true
+      }
       sharedApprovalRecoveryFailed = true
       toolConfirmRegistry.cancelAllToolConfirmsForRequest?.(requestId)
       remoteContext?.imChannel?.cancelByRequestId?.(requestId)
@@ -2502,12 +2513,22 @@ async function runToolChatSessionInner(
             channelRejectSummary = channelOutcome.reason?.summary
           }
           if (sharedApprovalRecoveryFailed) {
-            // 审批组已死：此处唯一生效的结算是回合中止理由（confirmOutcomeCause /
-            // channelRejectSummary 已随通道 outcome 统一结算，不再强制覆盖——覆盖是死代码）；
-            // 理由按成因分立（§5.2，与守卫分支口径一致）。
-            abortRepeatedToolError = confirmOutcomeCause === 'cancelled'
+            // 审批组已死（取消 / 租约恢复失败）——两步结算，缺一不可：
+            // 1) 回合中止理由按组死权威成因分立（confirmOutcomeCause / channelRejectSummary 已随
+            //    通道 outcome 统一结算，此处不再覆盖——覆盖是死代码）；
+            // 2) 先落库当前节点（notExecutedReason 闭环，与守卫分支口径一致）。落库必须在下方
+            //    throwIfChatCancelled 之前——桌面父任务取消经 ChatCancelledError 收敛时不得跳过落库。
+            //    成因取 failApprovalGroup 首写入参而非 channelOutcome.cause：用户回答者通道
+            //    （桌面确认卡 / IM）的结算退化为 cancelled，不承载组死成因。
+            const groupCancelled = sharedApprovalFailureCause === 'cancelled'
+            abortRepeatedToolError = groupCancelled
               ? '审批已取消，工具未执行。'
               : '审批已完成，但运行租约恢复失败，操作未执行。'
+            const settleMessage = groupCancelled ? '审批已取消，工具未执行。' : '审批无法取得运行租约，工具未执行。'
+            await recordToolResult(
+              buildToolErrorResult(toolUseId, settleMessage, { requestId, sessionId }),
+              { success: false, error: settleMessage, notExecuted: true, notExecutedReason: groupCancelled ? 'confirm_cancelled' : 'confirm_unavailable' }
+            )
           }
         }
         if (!remoteContext) {
@@ -2585,15 +2606,9 @@ async function runToolChatSessionInner(
       }
 
       if (sharedApprovalRecoveryFailed) {
-        // 审批组已死（取消 / 租约恢复失败）：先按通道结算的成因落库当前节点（notExecutedReason
-        // 闭环，与守卫分支口径一致），再经 abortRepeatedToolError 以回合级失败收敛——
-        // 裸 throw 会跳过 per-tool 落库，并以通道 summary 掩盖中止成因。
-        const settleCancelled = confirmOutcomeCause === 'cancelled'
-        const settleMessage = settleCancelled ? '审批已取消，工具未执行。' : '审批无法取得运行租约，工具未执行。'
-        await recordToolResult(
-          buildToolErrorResult(toolUseId, settleMessage, { requestId, sessionId }),
-          { success: false, error: settleMessage, notExecuted: true, notExecutedReason: settleCancelled ? 'confirm_cancelled' : 'confirm_unavailable' }
-        )
+        // 桌面父任务取消已在上方 throwIfChatCancelled 以 ChatCancelledError 收敛（落库已在其前
+        // 完成）；其余组死场景（桌面恢复失败 / 远程链路）经 abortRepeatedToolError →
+        // failToolLoopWithLastUsage 以回合级失败收敛——不在此后继续执行已死亡审批组下的工具。
         break
       }
 
