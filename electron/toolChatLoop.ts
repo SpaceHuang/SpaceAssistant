@@ -107,12 +107,14 @@ import { evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCa
 import { recordUserAnswerFromDecision, recordSystemManagedCacheEntry } from './confirmation/decisionCacheWriter'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { channelFor } from './confirmation/channels'
+import { shouldFallbackToUser } from './confirmation/fallbackToUser'
+import { approvalFallbackReasonFor } from './confirmation/fallbackReason'
 import type { ConfirmationChannel } from '../src/shared/confirmation/types'
 import { AgentChannel } from './confirmation/agentChannel'
 import { loadEffectivePolicyRules } from './confirmation/policyRulesRuntime'
 import { getBuiltinToolMetadata } from '../src/shared/builtinToolMetadata'
 import { mapLegacyConfirmation, type LegacyConfirmationRejectReason, type LegacyPolicyCode } from './tools/coordinatorConfirmationAdapter'
-import type { ConfirmAnswererKind, ConfirmOutcomeCause, ConfirmRequest } from '../src/shared/confirmation/types'
+import type { ConfirmAnswererKind, ConfirmOutcome, ConfirmOutcomeCause, ConfirmRequest } from '../src/shared/confirmation/types'
 import {
   formatScriptDenyUserMessage,
   getRemoteTaskController
@@ -2258,21 +2260,8 @@ async function runToolChatSessionInner(
             confirmPolicy: remoteContext.confirmPolicy
           })
         } else {
-          // 确认前展示（链路差异，纯展示不归通道）：远程进度 hook / 桌面卡片 + 浮动通知
-          if (remoteContext) {
-            onRemoteToolStateChange(buildRemoteProgressHookContext(sessionId, locale), {
-              toolName,
-              input: inputObj,
-              status: 'confirming',
-              progressOutput: undefined
-            })
-          } else {
-          // M1：diff 预览由「本次确认的回答者是否为人类」驱动（confirmMode 退役）；
-          // agent 路径没有卡片 diff；autoApproveFallback（快通道未过）时保留展示原因
-          const useDiff =
-            (gate.decision.type !== 'require-confirm' || gate.decision.answerer === 'user') ||
-            Boolean(autoApproveFallback)
-          const diff = useDiff ? await maybeBuildConfirmDiff(workDir, toolName, inputObj) : undefined
+          // 浏览器 act 风险评估展示字段：声明在外层 else（§5.10b 回退分支的第二条 confirm-requested
+          // 需要复用同一批展示字段，内层作用域不可见）
           const actDanger =
             toolName === 'browser' && inputObj.action === 'act' && dangerAssessment?.dangerous
               ? dangerAssessment
@@ -2293,6 +2282,21 @@ async function runToolChatSessionInner(
                 ...(actDanger.fillPreview?.length ? { fillPreview: actDanger.fillPreview } : {})
               }
             : undefined
+          // 确认前展示（链路差异，纯展示不归通道）：远程进度 hook / 桌面卡片 + 浮动通知
+          if (remoteContext) {
+            onRemoteToolStateChange(buildRemoteProgressHookContext(sessionId, locale), {
+              toolName,
+              input: inputObj,
+              status: 'confirming',
+              progressOutput: undefined
+            })
+          } else {
+          // M1：diff 预览由「本次确认的回答者是否为人类」驱动（confirmMode 退役）；
+          // agent 路径没有卡片 diff；autoApproveFallback（快通道未过）时保留展示原因
+          const useDiff =
+            (gate.decision.type !== 'require-confirm' || gate.decision.answerer === 'user') ||
+            Boolean(autoApproveFallback)
+          const diff = useDiff ? await maybeBuildConfirmDiff(workDir, toolName, inputObj) : undefined
           args.emitFactEvent?.({
             type: 'confirm-requested',
             id: toolUseId,
@@ -2397,7 +2401,7 @@ async function runToolChatSessionInner(
             await recordToolResult(buildToolErrorResult(toolUseId, '审批已取消，工具未执行。', { requestId, sessionId }), { success: false, error: '审批已取消，工具未执行。', notExecuted: true, notExecutedReason: 'confirm_cancelled' })
             return
           }
-          const approvalChannel = channelFor({
+          const channelArgs = {
             lane: confirmLane,
             requestId,
             toolUseId,
@@ -2469,16 +2473,100 @@ async function runToolChatSessionInner(
                   })
                 }
               : {})
-          })
+          }
+          const approvalChannel = channelFor(channelArgs)
           activeApprovalChannels.add(approvalChannel)
-          const channelOutcome = await approvalChannel.request(confirmReq).finally(async () => {
+          // §5.1 第 4 条（方案 a）：主通道判定与回退等待纳入同一 try/finally——回退等待期间
+          // 许可未释放、waiting 标记仍在、租约仍 park，资源/调度语义与正常 ask 完全一致。
+          let channelOutcome: ConfirmOutcome
+          // 声明在 try 之外（评审 v3 非阻断 1）：否则 finally 访问不到，回退通道会漏删并残留
+          // 于 activeApprovalChannels（跨请求泄漏的取消遍历集合）。
+          let fallbackChannel: ConfirmationChannel | undefined
+          try {
+            channelOutcome = await approvalChannel.request(confirmReq)
+            // §4.4 四维判定（唯一入口）：desktop + agent 回答者 + unavailable/timeout + 双中止守卫
+            if (shouldFallbackToUser({ lane: confirmLane, channelOutcome, chatAborted: chatSignal.aborted, sharedApprovalRecoveryFailed })) {
+              const fallbackCause = channelOutcome.cause
+              // §8.3：运行期转人工事件（与解析期配置告警 confirm.answerer-fallback 方向相反，不复用）
+              channelArgs.audit.record({
+                ts: Date.now(),
+                event: 'confirm.answerer-fallback-to-user',
+                lane: confirmLane,
+                sessionId,
+                requestId,
+                toolName,
+                cause: fallbackCause,
+                actor: 'system'
+              })
+              // §5.1 第 1 条：agent 路径此前未登记 waiter，回退前必须补登记——
+              // waiter 先于 confirm-requested 事件，请求级取消（cancelAllToolConfirmsForRequest）才能扫到
+              void toolConfirmRegistry.prepareToolConfirm?.(requestId, toolUseId, confirmMemoryTiers, { ...preparedTrustScope, sessionId }, undefined)
+              // §5.10b：写 / 编辑工具补算 confirmDiff（agent 路径首次事件刻意省略）
+              const fallbackDiff = await maybeBuildConfirmDiff(workDir, toolName, inputObj)
+              const fallbackReason = approvalFallbackReasonFor(fallbackCause === 'timeout' ? 'timeout' : 'unavailable', locale)
+              // §5.8 / §5.3：第二条 confirm-requested——显式清除 autoAnswerer（恢复可交互）、
+              // 携带短原因（banner 说明「自动处理未完成」）、补 diff；工具保持 confirming 不置终态（§5.1 第 2 条）
+              args.emitFactEvent?.({
+                type: 'confirm-requested',
+                id: toolUseId,
+                riskLevel: confirmRequestedRiskLevel(gate),
+                ...(confirmMemoryTiers.length ? { memoryTiers: confirmMemoryTiers } : {}),
+                ...(fallbackDiff ? { confirmDiff: fallbackDiff } : {}),
+                ...(shellSecurityHints ? { shellSecurityHints } : {}),
+                autoApproveFallback: {
+                  reasonCode: fallbackCause === 'timeout' ? 'approval_timeout' : 'approval_unavailable',
+                  reason: fallbackReason
+                },
+                autoAnswerer: false,
+                ...(currentPageUrl ? { currentPageUrl } : {}),
+                ...(dangerInfo ? { dangerInfo } : {}),
+                ...(sessionTrustedHint ? { sessionTrustedHint: true as const } : {}),
+                ...(mcpEntryForConfirm ? {
+                  mcp: {
+                    serverId: mcpEntryForConfirm.serverId,
+                    serverName: mcpEntryForConfirm.serverName,
+                    originalToolName: mcpEntryForConfirm.originalName,
+                    ...(mcpEntryForConfirm.description ? { description: mcpEntryForConfirm.description } : {})
+                  }
+                } : {})
+              })
+              // §5.10a：回退分支补发浮动确认通知（agent 裁决路径初始判定在通道调用之前，覆盖不到回退）
+              if (invocationEvents?.notify) {
+                const session = hostStorage?.readSession?.(sessionId) as { name?: string } | undefined
+                invocationEvents.notify({
+                  kind: 'confirm-request',
+                  requestId,
+                  sessionId,
+                  sessionName: sessionDisplayNameRaw(session?.name, sessionId),
+                  toolUseId,
+                  toolName,
+                  input: inputObj
+                })
+              }
+              // §5.1 抽取形态：同一 resolveConfirmChannel 再解析一次、回答者固定 user；
+              // suppressRequestAudit 仅作用于本实例（§5.4 选项 1：回退不是新请求，分母保持每请求一条）
+              fallbackChannel = channelFor({ ...channelArgs, answererPolicy: { kind: 'user' }, suppressRequestAudit: true })
+              activeApprovalChannels.add(fallbackChannel)
+              const userOutcome = await fallbackChannel.request({
+                ...confirmReq,
+                // §5.6：回退沿用既有确认上界（timeoutMs 置 null → registry CONFIRM_MS），
+                // 不复用审批上界（现状 null 无影响；P2 起 gate.timeoutMs 可能面向 agent）
+                timeoutMs: null
+              })
+              if (userOutcome.kind !== 'approved-with-action') {
+                // §5.1 第 3 条：组合层把最终 outcome 的实际回答者回传为 user（§5.5 缓存写入的前提）
+                channelOutcome = { ...userOutcome, answererKind: 'user' }
+              }
+            }
+          } finally {
+            if (fallbackChannel) activeApprovalChannels.delete(fallbackChannel)
             activeApprovalChannels.delete(approvalChannel)
             if (approvalPermitHeld) { approvalSemaphore.release(); approvalPermitHeld = false }
             waitingApprovalNodes = Math.max(0, waitingApprovalNodes - 1)
             waitingApprovalToolIds.delete(toolUseId)
             notifySchedulerProgress()
             if (!await recoverSharedApprovalLease(parentDeadlineAt)) failApprovalGroup()
-          })
+          }
           outcome =
             channelOutcome.kind === 'approved'
               ? 'approved'
@@ -2491,12 +2579,14 @@ async function runToolChatSessionInner(
             channelRejectSummary = '审批已完成，但运行租约恢复失败，操作未执行。'
             abortRepeatedToolError = channelRejectSummary
           }
-          // 回答者与结束原因随 outcome 记录（I3：由 decision 派生——agent 裁决不写任何记忆）
+          // 回答者与结束原因随 outcome 记录（I3：agent 裁决不写任何记忆）。
+          // §5.1 第 3 条（评审 B2 阻塞项）：派生以通道返回的实际回答者为先，gate 派生只作回落——
+          // 回退场景 gate 仍为 agent，但实际由人在卡片完成确认；DesktopChannel/DenyChannel 不携带
+          // answererKind，既有路径行为不变。
           if (channelOutcome.kind !== 'approved-with-action') {
             confirmAnswererKind =
-              gate.decision.type === 'require-confirm'
-                ? gate.decision.answerer
-                : (channelOutcome.answererKind ?? 'user')
+              channelOutcome.answererKind
+              ?? (gate.decision.type === 'require-confirm' ? gate.decision.answerer : 'user')
             confirmOutcomeCause = channelOutcome.cause
             channelRejectSummary = channelOutcome.reason?.summary
           }

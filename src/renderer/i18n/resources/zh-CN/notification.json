@@ -11,5 +11,7 @@
     "closeButton": "关闭通知",
     "backToMainButton": "回到主界面"
   },
+  "approvalFallbackReasonUnavailable": "服务暂不可用",
+  "approvalFallbackReasonTimeout": "等待超时",
   "desktopButlerTitle": "SpaceAssistant 管家"
 }

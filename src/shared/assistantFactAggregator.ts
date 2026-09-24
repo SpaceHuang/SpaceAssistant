@@ -54,8 +54,11 @@ type AssistantFactEventPayload =
       dangerInfo?: ToolCallRecord['dangerInfo']
       sessionTrustedHint?: true
       mcp?: ToolCallRecord['mcp']
-      /** H1：agent 裁决路径（AgentChannel）——渲染端据此出只读「自动审批中」卡，无交互按钮 */
-      autoAnswerer?: true
+      /**
+       * H1：agent 裁决路径（AgentChannel）——渲染端据此出只读「自动审批中」卡，无交互按钮。
+       * §5.8：放宽为 boolean 以支持回退分支显式清除（条件写入清不掉旧值）。
+       */
+      autoAnswerer?: boolean
     }
   | {
       type: 'approval-updated'
@@ -141,7 +144,7 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
           ...(event.dangerInfo ? { dangerInfo: event.dangerInfo } : {}),
           ...(event.sessionTrustedHint ? { sessionTrustedHint: true as const } : {}),
           ...(event.mcp ? { mcp: event.mcp } : {}),
-          ...(event.autoAnswerer ? { autoAnswerer: true as const } : {})
+          ...(event.autoAnswerer !== undefined ? { autoAnswerer: event.autoAnswerer } : {})
         }
           : tool)
   } else if (event.type === 'approval-updated') {

@@ -244,3 +244,33 @@ describe('AssistantFactAggregator：agent 裁决路径标记（H1）', () => {
     expect(result.toolCalls?.[0]?.autoAnswerer).toBeUndefined()
   })
 })
+
+describe('AssistantFactAggregator：回退显式清除 autoAnswerer（§5.8）', () => {
+  it('第二条 confirm-requested 携带 autoAnswerer=false 时显式清除（条件写入清不掉旧值）', () => {
+    const result = apply([
+      { type: 'tool-use', id: 't-fb', toolName: 'write_file', input: { path: 'a.txt' } },
+      { type: 'confirm-requested', id: 't-fb', riskLevel: 'high', autoAnswerer: true },
+      {
+        type: 'confirm-requested',
+        id: 't-fb',
+        riskLevel: 'high',
+        autoAnswerer: false,
+        confirmDiff: { oldContent: '', newContent: 'x', oldPath: 'a.txt' },
+        autoApproveFallback: { reasonCode: 'approval_unavailable', reason: '服务暂不可用' }
+      }
+    ])
+    const tool = result.toolCalls?.[0]
+    expect(tool).toMatchObject({ status: 'confirming', autoAnswerer: false })
+    expect(tool?.confirmDiff).toMatchObject({ oldPath: 'a.txt' })
+    expect(tool?.autoApproveFallback).toMatchObject({ reasonCode: 'approval_unavailable' })
+  })
+
+  it('第二条 confirm-requested 未带 autoAnswerer 字段时不改写既有值', () => {
+    const result = apply([
+      { type: 'tool-use', id: 't-keep', toolName: 'run_shell', input: { command: 'ls' } },
+      { type: 'confirm-requested', id: 't-keep', riskLevel: 'high', autoAnswerer: true },
+      { type: 'confirm-requested', id: 't-keep', riskLevel: 'high' }
+    ])
+    expect(result.toolCalls?.[0]?.autoAnswerer).toBe(true)
+  })
+})

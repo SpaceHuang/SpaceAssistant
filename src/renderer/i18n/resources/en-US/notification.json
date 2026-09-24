@@ -11,5 +11,7 @@
     "closeButton": "Close notification",
     "backToMainButton": "Back to main window"
   },
+  "approvalFallbackReasonUnavailable": "Service unavailable",
+  "approvalFallbackReasonTimeout": "Timed out",
   "desktopButlerTitle": "SpaceAssistant Butler"
 }
