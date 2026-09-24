@@ -301,6 +301,26 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
     expect(res).toMatchObject({ ok: true })
     outer.ok && outer.ticket.release()
   })
+
+  it('侦查轮数上界缺省 = APPROVAL_MAX_ROUNDS=3（Profile 硬上界不因覆盖口存在而漂移）', async () => {
+    mockRunToolChatSession.mockResolvedValue({
+      ok: true,
+      content: [{ type: 'text', text: '{"kind":"deny","reason":{"summary":"x"}}' }]
+    })
+    await runApprovalAgent(deps, invocation())
+    const inv = mockRunToolChatSession.mock.calls[0]![0] as Record<string, any>
+    expect(inv.limits.maxToolRounds).toBe(3)
+  })
+
+  it('deps.maxRounds=5 → 内层轮数上界为 5（装配方按档位显式放宽，缺省行为不变）', async () => {
+    mockRunToolChatSession.mockResolvedValue({
+      ok: true,
+      content: [{ type: 'text', text: '{"kind":"deny","reason":{"summary":"x"}}' }]
+    })
+    await runApprovalAgent({ ...deps, maxRounds: 5 }, invocation())
+    const inv = mockRunToolChatSession.mock.calls[0]![0] as Record<string, any>
+    expect(inv.limits.maxToolRounds).toBe(5)
+  })
 })
 
 describe('parseApprovalVerdict（Skill v2：双维裁决 + 非对称容错，对比分析 §4-A/§4-E + 评审跟进）', () => {

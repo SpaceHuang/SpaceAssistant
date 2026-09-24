@@ -68,6 +68,13 @@ export interface ApprovalAgentDeps {
    * 证据（taskDigest）后允许到 'high'，缓解高风险动作误拒。代码侧截断仍由 parseApprovalVerdict 强制。
    */
   maxAuthorization?: ApprovalAuthorizationDimension
+  /**
+   * 侦查轮数上界（缺省 APPROVAL_MAX_ROUNDS）。
+   * 装配方（如桌面档位）可显式放宽；须传正整数，非法值（0/负数）不做校正、
+   * 会直接成为内层循环上界，由装配方保证。仍受执行链「超过即终止」语义约束，
+   * 未获裁决一律 fail-closed。不提供放宽的缺省行为——避免无人场景因配置漂移获得更多侦查预算。
+   */
+  maxRounds?: number
   getApiKey: () => Promise<string | null>
 }
 
@@ -297,7 +304,7 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
       sessionId,
       lane: 'automation',
       internalConfirmExemption: 'approval-agent',
-      maxToolLoopRounds: APPROVAL_MAX_ROUNDS,
+      maxToolLoopRounds: deps.maxRounds ?? APPROVAL_MAX_ROUNDS,
       model: deps.model ?? DEFAULT_APPROVAL_MODEL,
       // P1-1：凭证对（baseUrl + getApiKey）由装配方按同一模型解析后配对传入，
       // 审批请求与用户实际服务端点一致；undefined 才回退官方直连

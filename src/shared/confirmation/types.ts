@@ -304,7 +304,13 @@ export type ConfirmOutcome =
 
 export interface ConfirmationChannel {
   request(req: ConfirmRequest): Promise<ConfirmOutcome>
-  cancel(requestId: string): void
+  /**
+   * 取消该通道的活动 attempt。
+   * causeHint：取消成因提示（缺省 'cancelled'）——外部主动中断为 'cancelled'；
+   * park/恢复失败等「环境不可用」路径的批量收敛由调用方传 'unavailable'，
+   * 使审计与 notExecutedReason 可区分「外部取消」与「拿不到裁决」。
+   */
+  cancel(requestId: string, causeHint?: 'cancelled' | 'unavailable'): void
 }
 
 // ===== 决策缓存 =====

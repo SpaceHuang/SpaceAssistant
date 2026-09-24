@@ -37,7 +37,12 @@ export function unmarkApprovalSessionActive(sessionId: string): void {
 
 let invocationSeq = 0
 
-function summaryFor(cause: 'timeout' | 'unavailable' | 'unparsable' | 'config-error'): string {
+/**
+ * 「拿不到裁决」四条语义严格分立（§5.2）：agent-deny=模型判定拒绝 / timeout=超出时间上界 /
+ * cancelled=外部主动中断 / unavailable=拿不到准入位或模型与会话失败。
+ * 取消不再混入 unavailable——审计可按 cause 还原真实成因。
+ */
+function summaryFor(cause: 'timeout' | 'unavailable' | 'unparsable' | 'config-error' | 'cancelled'): string {
   switch (cause) {
     case 'timeout':
       return '安全审批超时，已按拒绝处理。可改用只读方式完成，或缩小操作范围后重试。'
@@ -45,6 +50,8 @@ function summaryFor(cause: 'timeout' | 'unavailable' | 'unparsable' | 'config-er
       return '安全审批输出无法解析，已按拒绝处理。'
     case 'config-error':
       return '安全审批配置不可用，已按拒绝处理。'
+    case 'cancelled':
+      return '安全审批已被取消，本次操作未执行。'
     default:
       return '安全审批服务暂不可用，已按拒绝处理。请改用只读方式或稍后重试。'
   }
@@ -85,7 +92,13 @@ export function deriveClueExtras(facts: ConfirmRequest['facts']): Partial<Approv
  */
 export class AgentChannel implements ConfirmationChannel {
   /** 每次 attempt 独立持有取消/收敛出口；禁止并发 request 互相覆盖。 */
-  private readonly inflight = new Map<string, { settle: (r: ApprovalInvocationResult) => void; cancel: () => void }>()
+  private readonly inflight = new Map<
+    string,
+    {
+      settle: (r: ApprovalInvocationResult | { ok: false; cause: 'cancelled'; summary?: string }) => void
+      cancel: () => void
+    }
+  >()
 
   constructor(
     private readonly deps: {
@@ -179,10 +192,12 @@ export class AgentChannel implements ConfirmationChannel {
     })
 
     const startedAt = Date.now()
-    let result: ApprovalInvocationResult
+    // 结算类型放宽：外部取消（AgentChannel.cancel）以 cancelled 形态收敛——该取值只在通道层产生，
+    // 不进入 ApprovalInvocationResult（审批执行链的结果契约，内层不存在「外部取消」的定义者）
+    let result: ApprovalInvocationResult | { ok: false; cause: 'cancelled'; summary?: string }
     try {
       // 有界性（I4）：invokeApproval 竞速超时上界——内层实现自身另有超时，这里是通道级兜底
-      result = await new Promise<ApprovalInvocationResult>((resolve) => {
+      result = await new Promise<ApprovalInvocationResult | { ok: false; cause: 'cancelled'; summary?: string }>((resolve) => {
         let settled = false
         // 嵌套准入票据(若已取得):随 finish 统一释放——settled 守卫保证恰好一次,
         // 取消路径(inflightSettle → finish)与超时路径不再依赖内层 invokeApproval 的后续 settle
@@ -194,7 +209,7 @@ export class AgentChannel implements ConfirmationChannel {
           signalChatCancel(innerRequestId)
           finish({ ok: false, cause: 'timeout' })
         }, invocation.timeoutMs)
-        const finish = (r: ApprovalInvocationResult) => {
+        const finish = (r: ApprovalInvocationResult | { ok: false; cause: 'cancelled'; summary?: string }) => {
           if (settled) return
           settled = true
           clearTimeout(timer)
@@ -309,12 +324,20 @@ export class AgentChannel implements ConfirmationChannel {
     return outcome
   }
 
-  cancel(_requestId: string): void {
+  cancel(requestId: string, causeHint: 'cancelled' | 'unavailable' = 'cancelled'): void {
     // 中断该 AgentChannel 的所有活动 attempt；每个 attempt 都有自己的 requestId。
+    // causeHint（§5.2 方案 A）：调用方标注取消成因——park/恢复失败等「环境不可用」路径
+    // 由 toolChatLoop 传 'unavailable'，兄弟节点不被误归因为「已取消」；
+    // 外部主动取消（缺省）以 'cancelled' 结算。两者仍是 fail-closed（工具不执行），只修原因归属。
+    void requestId
+    const settlement: ApprovalInvocationResult | { ok: false; cause: 'cancelled'; summary?: string } =
+      causeHint === 'unavailable'
+        ? { ok: false, cause: 'unavailable', summary: '安全审批无法取得运行资源，本次操作未执行。' }
+        : { ok: false, cause: 'cancelled', summary: '安全审批已被取消，本次操作未执行。' }
     for (const [innerRequestId, entry] of this.inflight) {
       signalChatCancel(innerRequestId)
       entry.cancel()
-      entry.settle({ ok: false, cause: 'unavailable', summary: '安全审批已被取消，已按拒绝处理。' })
+      entry.settle(settlement)
     }
   }
 }
