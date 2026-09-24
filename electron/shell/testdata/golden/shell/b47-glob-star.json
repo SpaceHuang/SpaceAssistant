@@ -11,18 +11,42 @@
     ],
     "pathVerdict": {
       "decision": "ask",
-      "violations": [],
-      "warnings": [],
+      "violations": [
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：./*",
+          "path": "./*",
+          "severity": "warning"
+        },
+        {
+          "code": "SYMLINK_OUTSIDE",
+          "message": "符号链接解析后指向工作目录外：./*",
+          "path": "./*",
+          "severity": "warning"
+        }
+      ],
+      "warnings": [
+        "命令包含工作目录外的路径：./*",
+        "符号链接解析后指向工作目录外：./*"
+      ],
       "outsideWorkDirRisk": false,
-      "requiresRiskAck": false
+      "requiresRiskAck": true
     },
     "permissionDecision": "ask",
     "shellSecurityHints": {
       "requiresRiskAck": true,
       "outsideWorkDirRisk": false,
-      "warnings": [],
-      "scannedPaths": [],
+      "warnings": [
+        "命令包含工作目录外的路径：./*",
+        "符号链接解析后指向工作目录外：./*"
+      ],
+      "scannedPaths": [
+        "./*",
+        "./*"
+      ],
       "violationCodes": [
+        "PATH_OUTSIDE_<WORKDIR>",
+        "SYMLINK_OUTSIDE",
         "dangerous_rm"
       ],
       "validatorId": "dangerous_rm",
@@ -51,7 +75,7 @@
     }
   },
   "signature": {
-    "normalized": "rm -rf ./*",
+    "normalized": "[\"rm\",\"-rf\",\"./*\"]",
     "trust": {
       "executable": "",
       "argv": [],

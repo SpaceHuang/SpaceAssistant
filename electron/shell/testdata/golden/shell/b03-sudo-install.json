@@ -43,7 +43,7 @@
     }
   },
   "signature": {
-    "normalized": "sudo apt install htop",
+    "normalized": "[\"sudo\",\"apt\",\"install\",\"htop\"]",
     "trust": {
       "executable": "sudo",
       "argv": [

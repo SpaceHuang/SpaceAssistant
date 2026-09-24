@@ -23,22 +23,18 @@
     },
     "facts": {
       "dialect": "windows-powershell",
-      "operations": [
-        {
-          "verb": "[DayOfWeek]::Monday",
-          "args": [],
-          "segmentIndex": 0
-        }
-      ],
+      "operations": [],
       "connectors": [],
       "paths": [],
       "cwdChanges": [],
-      "analysisCompleteness": "complete",
-      "unresolved": []
+      "analysisCompleteness": "partial",
+      "unresolved": [
+        "logical_expression:[DayOfWeek]::Monday"
+      ]
     }
   },
   "signature": {
-    "normalized": "[DayOfWeek]::Monday",
+    "normalized": "[\"[DayOfWeek]::Monday\"]",
     "trust": {
       "executable": "[DayOfWeek]::Monday",
       "argv": [],
@@ -49,23 +45,19 @@
   },
   "facts": {
     "dialect": "windows-powershell",
-    "operations": [
-      {
-        "verb": "[DayOfWeek]::Monday",
-        "args": [],
-        "segmentIndex": 0
-      }
-    ],
+    "operations": [],
     "connectors": [],
     "paths": [],
     "cwdChanges": [],
-    "analysisCompleteness": "complete",
-    "unresolved": []
+    "analysisCompleteness": "partial",
+    "unresolved": [
+      "logical_expression:[DayOfWeek]::Monday"
+    ]
   },
   "precheck": {
     "ok": true,
     "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "complete",
+    "analysisCompleteness": "partial",
     "persistable": true,
     "hasMetasyntax": false
   }

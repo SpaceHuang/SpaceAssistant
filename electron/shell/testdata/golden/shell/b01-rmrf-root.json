@@ -65,7 +65,7 @@
     }
   },
   "signature": {
-    "normalized": "rm -rf /",
+    "normalized": "[\"rm\",\"-rf\",\"/\"]",
     "trust": {
       "executable": "rm",
       "argv": [

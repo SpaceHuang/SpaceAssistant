@@ -25,11 +25,8 @@
       "dialect": "windows-powershell",
       "operations": [
         {
-          "verb": "$v",
-          "args": [
-            "=",
-            "@(Get-ChildItem).Count"
-          ],
+          "verb": "Get-ChildItem",
+          "args": [],
           "segmentIndex": 0
         }
       ],
@@ -38,12 +35,12 @@
       "cwdChanges": [],
       "analysisCompleteness": "partial",
       "unresolved": [
-        "segment:0:shell-control-flow"
+        "assignment_expression:$v = @(Get-ChildItem).Count"
       ]
     }
   },
   "signature": {
-    "normalized": "$v = @(Get-ChildItem).Count",
+    "normalized": "[\"$v\",\"=\",\"@(Get-ChildItem).Count\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -56,11 +53,8 @@
     "dialect": "windows-powershell",
     "operations": [
       {
-        "verb": "$v",
-        "args": [
-          "=",
-          "@(Get-ChildItem).Count"
-        ],
+        "verb": "Get-ChildItem",
+        "args": [],
         "segmentIndex": 0
       }
     ],
@@ -69,7 +63,7 @@
     "cwdChanges": [],
     "analysisCompleteness": "partial",
     "unresolved": [
-      "segment:0:shell-control-flow"
+      "assignment_expression:$v = @(Get-ChildItem).Count"
     ]
   },
   "precheck": {

@@ -5,7 +5,7 @@
   "analysis": {
     "verdict": "ask",
     "segments": [
-      "echo crlf\r\nnext line"
+      "echo crlf\nnext line"
     ],
     "pathVerdict": {
       "decision": "ask",
@@ -49,7 +49,7 @@
     }
   },
   "signature": {
-    "normalized": "echo crlf next line",
+    "normalized": "[\"echo\",\"crlf\",\"next\",\"line\"]",
     "trust": {
       "executable": "",
       "argv": [],

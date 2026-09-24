@@ -9,17 +9,63 @@
     ],
     "pathVerdict": {
       "decision": "ask",
-      "violations": [],
-      "warnings": [],
+      "violations": [
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：with \\\"escape\\ inside\"",
+          "path": "with \\\"escape\\ inside\"",
+          "severity": "warning"
+        },
+        {
+          "code": "SYMLINK_OUTSIDE",
+          "message": "符号链接解析后指向工作目录外：with \\\"escape\\ inside\"",
+          "path": "with \\\"escape\\ inside\"",
+          "severity": "warning"
+        },
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：\"with \\\"escape\\\" inside\"",
+          "path": "\"with \\\"escape\\\" inside\"",
+          "severity": "warning"
+        },
+        {
+          "code": "SYMLINK_OUTSIDE",
+          "message": "符号链接解析后指向工作目录外：\"with \\\"escape\\\" inside\"",
+          "path": "\"with \\\"escape\\\" inside\"",
+          "severity": "warning"
+        }
+      ],
+      "warnings": [
+        "命令包含工作目录外的路径：with \\\"escape\\ inside\"",
+        "符号链接解析后指向工作目录外：with \\\"escape\\ inside\"",
+        "命令包含工作目录外的路径：\"with \\\"escape\\\" inside\"",
+        "符号链接解析后指向工作目录外：\"with \\\"escape\\\" inside\""
+      ],
       "outsideWorkDirRisk": false,
-      "requiresRiskAck": false
+      "requiresRiskAck": true
     },
     "permissionDecision": "ask",
     "shellSecurityHints": {
-      "requiresRiskAck": false,
+      "requiresRiskAck": true,
       "outsideWorkDirRisk": false,
-      "warnings": [],
-      "scannedPaths": []
+      "warnings": [
+        "命令包含工作目录外的路径：with \\\"escape\\ inside\"",
+        "符号链接解析后指向工作目录外：with \\\"escape\\ inside\"",
+        "命令包含工作目录外的路径：\"with \\\"escape\\\" inside\"",
+        "符号链接解析后指向工作目录外：\"with \\\"escape\\\" inside\""
+      ],
+      "scannedPaths": [
+        "with \\\"escape\\ inside\"",
+        "with \\\"escape\\ inside\"",
+        "\"with \\\"escape\\\" inside\"",
+        "\"with \\\"escape\\\" inside\""
+      ],
+      "violationCodes": [
+        "PATH_OUTSIDE_<WORKDIR>",
+        "SYMLINK_OUTSIDE",
+        "PATH_OUTSIDE_<WORKDIR>",
+        "SYMLINK_OUTSIDE"
+      ]
     },
     "facts": {
       "dialect": "posix-bash",
@@ -40,7 +86,7 @@
     }
   },
   "signature": {
-    "normalized": "echo with \"escape\" inside",
+    "normalized": "[\"echo\",\"with \\\"escape\\\" inside\"]",
     "trust": {
       "executable": "echo",
       "argv": [

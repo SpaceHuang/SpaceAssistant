@@ -60,7 +60,7 @@
     }
   },
   "signature": {
-    "normalized": "robocopy a b /MIR",
+    "normalized": "[\"robocopy\",\"a\",\"b\",\"/MIR\"]",
     "trust": {
       "executable": "robocopy",
       "argv": [

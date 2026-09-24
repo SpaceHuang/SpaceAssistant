@@ -23,22 +23,18 @@
     },
     "facts": {
       "dialect": "windows-powershell",
-      "operations": [
-        {
-          "verb": "$matrix[0][1]",
-          "args": [],
-          "segmentIndex": 0
-        }
-      ],
+      "operations": [],
       "connectors": [],
       "paths": [],
       "cwdChanges": [],
-      "analysisCompleteness": "complete",
-      "unresolved": []
+      "analysisCompleteness": "partial",
+      "unresolved": [
+        "logical_expression:$matrix[0][1]"
+      ]
     }
   },
   "signature": {
-    "normalized": "$matrix[0][1]",
+    "normalized": "[\"$matrix[0][1]\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -49,23 +45,19 @@
   },
   "facts": {
     "dialect": "windows-powershell",
-    "operations": [
-      {
-        "verb": "$matrix[0][1]",
-        "args": [],
-        "segmentIndex": 0
-      }
-    ],
+    "operations": [],
     "connectors": [],
     "paths": [],
     "cwdChanges": [],
-    "analysisCompleteness": "complete",
-    "unresolved": []
+    "analysisCompleteness": "partial",
+    "unresolved": [
+      "logical_expression:$matrix[0][1]"
+    ]
   },
   "precheck": {
     "ok": true,
     "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "complete",
+    "analysisCompleteness": "partial",
     "persistable": false,
     "hasMetasyntax": true
   }

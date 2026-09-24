@@ -26,18 +26,11 @@
       "dialect": "windows-powershell",
       "operations": [
         {
-          "verb": "$items",
-          "args": [],
-          "segmentIndex": 0
-        },
-        {
           "verb": "ForEach-Object",
           "args": [
-            "{",
-            "$_.Name",
-            "}"
+            "{ $_.Name }"
           ],
-          "segmentIndex": 1
+          "segmentIndex": 0
         }
       ],
       "connectors": [
@@ -45,12 +38,14 @@
       ],
       "paths": [],
       "cwdChanges": [],
-      "analysisCompleteness": "complete",
-      "unresolved": []
+      "analysisCompleteness": "partial",
+      "unresolved": [
+        "logical_expression:$items"
+      ]
     }
   },
   "signature": {
-    "normalized": "$items | ForEach-Object { $_.Name }",
+    "normalized": "[\"$items\",\"|\",\"ForEach-Object\",\"{\",\"$_.Name\",\"}\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -63,18 +58,11 @@
     "dialect": "windows-powershell",
     "operations": [
       {
-        "verb": "$items",
-        "args": [],
-        "segmentIndex": 0
-      },
-      {
         "verb": "ForEach-Object",
         "args": [
-          "{",
-          "$_.Name",
-          "}"
+          "{ $_.Name }"
         ],
-        "segmentIndex": 1
+        "segmentIndex": 0
       }
     ],
     "connectors": [
@@ -82,13 +70,15 @@
     ],
     "paths": [],
     "cwdChanges": [],
-    "analysisCompleteness": "complete",
-    "unresolved": []
+    "analysisCompleteness": "partial",
+    "unresolved": [
+      "logical_expression:$items"
+    ]
   },
   "precheck": {
     "ok": true,
     "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "complete",
+    "analysisCompleteness": "partial",
     "persistable": false,
     "hasMetasyntax": true
   }

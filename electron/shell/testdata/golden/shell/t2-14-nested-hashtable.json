@@ -23,33 +23,18 @@
     },
     "facts": {
       "dialect": "windows-powershell",
-      "operations": [
-        {
-          "verb": "$h",
-          "args": [
-            "=",
-            "@{",
-            "a",
-            "=",
-            "@{",
-            "b",
-            "=",
-            "1",
-            "}",
-            "}"
-          ],
-          "segmentIndex": 0
-        }
-      ],
+      "operations": [],
       "connectors": [],
       "paths": [],
       "cwdChanges": [],
-      "analysisCompleteness": "complete",
-      "unresolved": []
+      "analysisCompleteness": "partial",
+      "unresolved": [
+        "assignment_expression:$h = @{ a = @{ b = 1 } }"
+      ]
     }
   },
   "signature": {
-    "normalized": "$h = @{ a = @{ b = 1 } }",
+    "normalized": "[\"$h\",\"=\",\"@{\",\"a\",\"=\",\"@{\",\"b\",\"=\",\"1\",\"}\",\"}\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -60,34 +45,19 @@
   },
   "facts": {
     "dialect": "windows-powershell",
-    "operations": [
-      {
-        "verb": "$h",
-        "args": [
-          "=",
-          "@{",
-          "a",
-          "=",
-          "@{",
-          "b",
-          "=",
-          "1",
-          "}",
-          "}"
-        ],
-        "segmentIndex": 0
-      }
-    ],
+    "operations": [],
     "connectors": [],
     "paths": [],
     "cwdChanges": [],
-    "analysisCompleteness": "complete",
-    "unresolved": []
+    "analysisCompleteness": "partial",
+    "unresolved": [
+      "assignment_expression:$h = @{ a = @{ b = 1 } }"
+    ]
   },
   "precheck": {
     "ok": true,
     "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "complete",
+    "analysisCompleteness": "partial",
     "persistable": false,
     "hasMetasyntax": true
   }

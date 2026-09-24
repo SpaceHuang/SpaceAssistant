@@ -31,11 +31,6 @@
             "System.IO"
           ],
           "segmentIndex": 0
-        },
-        {
-          "verb": "[File]::Exists(a)",
-          "args": [],
-          "segmentIndex": 1
         }
       ],
       "connectors": [
@@ -45,12 +40,12 @@
       "cwdChanges": [],
       "analysisCompleteness": "partial",
       "unresolved": [
-        "segment:1:shell-control-flow"
+        "logical_expression:[File]::Exists(\"a\")"
       ]
     }
   },
   "signature": {
-    "normalized": "using namespace System.IO [File]::Exists(a)",
+    "normalized": "[\"using\",\"namespace\",\"System.IO\",\"[File]::Exists(a)\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -69,11 +64,6 @@
           "System.IO"
         ],
         "segmentIndex": 0
-      },
-      {
-        "verb": "[File]::Exists(a)",
-        "args": [],
-        "segmentIndex": 1
       }
     ],
     "connectors": [
@@ -83,7 +73,7 @@
     "cwdChanges": [],
     "analysisCompleteness": "partial",
     "unresolved": [
-      "segment:1:shell-control-flow"
+      "logical_expression:[File]::Exists(\"a\")"
     ]
   },
   "precheck": {

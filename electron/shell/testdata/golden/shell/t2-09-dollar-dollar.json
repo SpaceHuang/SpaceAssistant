@@ -40,7 +40,7 @@
     }
   },
   "signature": {
-    "normalized": "Write-Output $$",
+    "normalized": "[\"Write-Output\",\"$$\"]",
     "trust": {
       "executable": "Write-Output",
       "argv": [

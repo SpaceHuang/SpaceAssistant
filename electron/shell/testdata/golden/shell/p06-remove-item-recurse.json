@@ -3,7 +3,10 @@
   "dialect": "windows-powershell",
   "platform": "linux",
   "analysis": {
-    "verdict": "ask",
+    "verdict": "deny",
+    "denyReason": "Remove-Item 递归删除根/家目录目标（c:\\temp），已拒绝",
+    "validatorId": "ps-destructive",
+    "denyType": "strong",
     "segments": [
       "Remove-Item -Recurse -Force C:\\temp"
     ],
@@ -34,8 +37,12 @@
         "C:\\temp"
       ],
       "violationCodes": [
-        "PATH_OUTSIDE_<WORKDIR>"
-      ]
+        "PATH_OUTSIDE_<WORKDIR>",
+        "ps-destructive"
+      ],
+      "validatorId": "ps-destructive",
+      "denyType": "strong",
+      "securityWarning": "Remove-Item 递归删除根/家目录目标（c:\\temp），已拒绝"
     },
     "facts": {
       "dialect": "windows-powershell",
@@ -60,7 +67,7 @@
     }
   },
   "signature": {
-    "normalized": "Remove-Item -Recurse -Force C:\\temp",
+    "normalized": "[\"Remove-Item\",\"-Recurse\",\"-Force\",\"C:\\\\temp\"]",
     "trust": {
       "executable": "Remove-Item",
       "argv": [
@@ -95,10 +102,7 @@
     "unresolved": []
   },
   "precheck": {
-    "ok": true,
-    "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "complete",
-    "persistable": true,
-    "hasMetasyntax": false
+    "ok": false,
+    "auditReason": "Remove-Item 递归删除根/家目录目标（c:\\temp），已拒绝"
   }
 }

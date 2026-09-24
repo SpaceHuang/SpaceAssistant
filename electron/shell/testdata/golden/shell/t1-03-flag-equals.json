@@ -41,7 +41,7 @@
     }
   },
   "signature": {
-    "normalized": "git -flag value",
+    "normalized": "[\"git\",\"-flag\",\"value\"]",
     "trust": {
       "executable": "git",
       "argv": [

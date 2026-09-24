@@ -78,7 +78,7 @@
     }
   },
   "signature": {
-    "normalized": "cd /tmp && ls",
+    "normalized": "[\"cd\",\"/tmp\",\"&&\",\"ls\"]",
     "trust": {
       "executable": "",
       "argv": [],

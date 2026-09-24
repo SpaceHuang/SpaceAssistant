@@ -41,7 +41,7 @@
     }
   },
   "signature": {
-    "normalized": "diff <(sort a.txt) <(sort b.txt)",
+    "normalized": "[\"diff\",\"<(sort\",\"a.txt)\",\"<(sort\",\"b.txt)\"]",
     "trust": {
       "executable": "",
       "argv": [],

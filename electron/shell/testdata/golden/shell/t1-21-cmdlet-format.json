@@ -48,7 +48,7 @@
     }
   },
   "signature": {
-    "normalized": "Get-Service | Format-Table -AutoSize",
+    "normalized": "[\"Get-Service\",\"|\",\"Format-Table\",\"-AutoSize\"]",
     "trust": {
       "executable": "",
       "argv": [],

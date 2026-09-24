@@ -3,7 +3,10 @@
   "dialect": "windows-powershell",
   "platform": "linux",
   "analysis": {
-    "verdict": "ask",
+    "verdict": "deny",
+    "denyReason": "破坏性卷/磁盘操作（Format-Volume），已拒绝",
+    "validatorId": "ps-destructive",
+    "denyType": "strong",
     "segments": [
       "Format-Volume -DriveLetter D"
     ],
@@ -19,7 +22,13 @@
       "requiresRiskAck": false,
       "outsideWorkDirRisk": false,
       "warnings": [],
-      "scannedPaths": []
+      "scannedPaths": [],
+      "violationCodes": [
+        "ps-destructive"
+      ],
+      "validatorId": "ps-destructive",
+      "denyType": "strong",
+      "securityWarning": "破坏性卷/磁盘操作（Format-Volume），已拒绝"
     },
     "facts": {
       "dialect": "windows-powershell",
@@ -41,7 +50,7 @@
     }
   },
   "signature": {
-    "normalized": "Format-Volume -DriveLetter D",
+    "normalized": "[\"Format-Volume\",\"-DriveLetter\",\"D\"]",
     "trust": {
       "executable": "Format-Volume",
       "argv": [
@@ -72,10 +81,7 @@
     "unresolved": []
   },
   "precheck": {
-    "ok": true,
-    "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "complete",
-    "persistable": true,
-    "hasMetasyntax": false
+    "ok": false,
+    "auditReason": "破坏性卷/磁盘操作（Format-Volume），已拒绝"
   }
 }

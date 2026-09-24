@@ -23,25 +23,18 @@
     },
     "facts": {
       "dialect": "windows-powershell",
-      "operations": [
-        {
-          "verb": "[list[int]]$xs",
-          "args": [
-            "=",
-            "1"
-          ],
-          "segmentIndex": 0
-        }
-      ],
+      "operations": [],
       "connectors": [],
       "paths": [],
       "cwdChanges": [],
-      "analysisCompleteness": "complete",
-      "unresolved": []
+      "analysisCompleteness": "partial",
+      "unresolved": [
+        "assignment_expression:[list[int]]$xs = 1"
+      ]
     }
   },
   "signature": {
-    "normalized": "[list[int]]$xs = 1",
+    "normalized": "[\"[list[int]]$xs\",\"=\",\"1\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -52,26 +45,19 @@
   },
   "facts": {
     "dialect": "windows-powershell",
-    "operations": [
-      {
-        "verb": "[list[int]]$xs",
-        "args": [
-          "=",
-          "1"
-        ],
-        "segmentIndex": 0
-      }
-    ],
+    "operations": [],
     "connectors": [],
     "paths": [],
     "cwdChanges": [],
-    "analysisCompleteness": "complete",
-    "unresolved": []
+    "analysisCompleteness": "partial",
+    "unresolved": [
+      "assignment_expression:[list[int]]$xs = 1"
+    ]
   },
   "precheck": {
     "ok": true,
     "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "complete",
+    "analysisCompleteness": "partial",
     "persistable": false,
     "hasMetasyntax": true
   }

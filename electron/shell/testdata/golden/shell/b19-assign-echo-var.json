@@ -40,7 +40,7 @@
     }
   },
   "signature": {
-    "normalized": "VAR=value echo $VAR",
+    "normalized": "[\"VAR=value\",\"echo\",\"$VAR\"]",
     "trust": {
       "executable": "",
       "argv": [],

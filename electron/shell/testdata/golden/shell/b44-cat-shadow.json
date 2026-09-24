@@ -17,14 +17,27 @@
           "severity": "warning"
         },
         {
+          "code": "SENSITIVE_PATH",
+          "message": "命令涉及敏感路径：/etc/shadow（如密钥、凭据目录）",
+          "path": "/etc/shadow",
+          "severity": "warning"
+        },
+        {
           "code": "PATH_OUTSIDE_<WORKDIR>",
           "message": "命令包含工作目录外的路径：/etc/shadow",
+          "path": "/etc/shadow",
+          "severity": "warning"
+        },
+        {
+          "code": "SENSITIVE_PATH",
+          "message": "命令涉及敏感路径：/etc/shadow（如密钥、凭据目录）",
           "path": "/etc/shadow",
           "severity": "warning"
         }
       ],
       "warnings": [
-        "命令包含工作目录外的路径：/etc/shadow"
+        "命令包含工作目录外的路径：/etc/shadow",
+        "命令涉及敏感路径：/etc/shadow（如密钥、凭据目录）"
       ],
       "outsideWorkDirRisk": false,
       "requiresRiskAck": true
@@ -34,15 +47,20 @@
       "requiresRiskAck": true,
       "outsideWorkDirRisk": false,
       "warnings": [
-        "命令包含工作目录外的路径：/etc/shadow"
+        "命令包含工作目录外的路径：/etc/shadow",
+        "命令涉及敏感路径：/etc/shadow（如密钥、凭据目录）"
       ],
       "scannedPaths": [
+        "/etc/shadow",
+        "/etc/shadow",
         "/etc/shadow",
         "/etc/shadow"
       ],
       "violationCodes": [
         "PATH_OUTSIDE_<WORKDIR>",
-        "PATH_OUTSIDE_<WORKDIR>"
+        "SENSITIVE_PATH",
+        "PATH_OUTSIDE_<WORKDIR>",
+        "SENSITIVE_PATH"
       ]
     },
     "facts": {
@@ -66,7 +84,7 @@
     }
   },
   "signature": {
-    "normalized": "cat /etc/shadow",
+    "normalized": "[\"cat\",\"/etc/shadow\"]",
     "trust": {
       "executable": "cat",
       "argv": [

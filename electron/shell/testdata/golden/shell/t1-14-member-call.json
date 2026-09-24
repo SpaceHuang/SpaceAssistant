@@ -23,24 +23,18 @@
     },
     "facts": {
       "dialect": "windows-powershell",
-      "operations": [
-        {
-          "verb": "$list.Add(item)",
-          "args": [],
-          "segmentIndex": 0
-        }
-      ],
+      "operations": [],
       "connectors": [],
       "paths": [],
       "cwdChanges": [],
       "analysisCompleteness": "partial",
       "unresolved": [
-        "segment:0:shell-control-flow"
+        "logical_expression:$list.Add(\"item\")"
       ]
     }
   },
   "signature": {
-    "normalized": "$list.Add(item)",
+    "normalized": "[\"$list.Add(item)\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -51,19 +45,13 @@
   },
   "facts": {
     "dialect": "windows-powershell",
-    "operations": [
-      {
-        "verb": "$list.Add(item)",
-        "args": [],
-        "segmentIndex": 0
-      }
-    ],
+    "operations": [],
     "connectors": [],
     "paths": [],
     "cwdChanges": [],
     "analysisCompleteness": "partial",
     "unresolved": [
-      "segment:0:shell-control-flow"
+      "logical_expression:$list.Add(\"item\")"
     ]
   },
   "precheck": {

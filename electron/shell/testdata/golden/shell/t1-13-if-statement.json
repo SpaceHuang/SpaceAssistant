@@ -25,15 +25,9 @@
       "dialect": "windows-powershell",
       "operations": [
         {
-          "verb": "if",
+          "verb": "Write-Output",
           "args": [
-            "($x",
-            "-gt",
-            "1)",
-            "{",
-            "Write-Output",
-            "big",
-            "}"
+            "big"
           ],
           "segmentIndex": 0
         }
@@ -43,12 +37,12 @@
       "cwdChanges": [],
       "analysisCompleteness": "partial",
       "unresolved": [
-        "segment:0:shell-control-flow"
+        "if_statement:if ($x -gt 1) { Write-Output big }"
       ]
     }
   },
   "signature": {
-    "normalized": "if ($x -gt 1) { Write-Output big }",
+    "normalized": "[\"if\",\"($x\",\"-gt\",\"1)\",\"{\",\"Write-Output\",\"big\",\"}\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -61,15 +55,9 @@
     "dialect": "windows-powershell",
     "operations": [
       {
-        "verb": "if",
+        "verb": "Write-Output",
         "args": [
-          "($x",
-          "-gt",
-          "1)",
-          "{",
-          "Write-Output",
-          "big",
-          "}"
+          "big"
         ],
         "segmentIndex": 0
       }
@@ -79,7 +67,7 @@
     "cwdChanges": [],
     "analysisCompleteness": "partial",
     "unresolved": [
-      "segment:0:shell-control-flow"
+      "if_statement:if ($x -gt 1) { Write-Output big }"
     ]
   },
   "precheck": {

@@ -26,16 +26,11 @@
       "dialect": "windows-powershell",
       "operations": [
         {
-          "verb": "@;here;@",
-          "args": [],
-          "segmentIndex": 0
-        },
-        {
           "verb": "Out-File",
           "args": [
             "out.txt"
           ],
-          "segmentIndex": 1
+          "segmentIndex": 0
         }
       ],
       "connectors": [
@@ -43,12 +38,14 @@
       ],
       "paths": [],
       "cwdChanges": [],
-      "analysisCompleteness": "complete",
-      "unresolved": []
+      "analysisCompleteness": "partial",
+      "unresolved": [
+        "logical_expression:@'\nhere\n'@"
+      ]
     }
   },
   "signature": {
-    "normalized": "@\nhere\n@ | Out-File out.txt",
+    "normalized": "[\"@\\nhere\\n@\",\"|\",\"Out-File\",\"out.txt\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -61,16 +58,11 @@
     "dialect": "windows-powershell",
     "operations": [
       {
-        "verb": "@;here;@",
-        "args": [],
-        "segmentIndex": 0
-      },
-      {
         "verb": "Out-File",
         "args": [
           "out.txt"
         ],
-        "segmentIndex": 1
+        "segmentIndex": 0
       }
     ],
     "connectors": [
@@ -78,13 +70,15 @@
     ],
     "paths": [],
     "cwdChanges": [],
-    "analysisCompleteness": "complete",
-    "unresolved": []
+    "analysisCompleteness": "partial",
+    "unresolved": [
+      "logical_expression:@'\nhere\n'@"
+    ]
   },
   "precheck": {
     "ok": true,
     "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "complete",
+    "analysisCompleteness": "partial",
     "persistable": false,
     "hasMetasyntax": true
   }

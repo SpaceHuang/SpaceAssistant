@@ -37,12 +37,12 @@
       "cwdChanges": [],
       "analysisCompleteness": "partial",
       "unresolved": [
-        "segment:0:shell-control-flow"
+        "logical_expression:$env.PATH"
       ]
     }
   },
   "signature": {
-    "normalized": "Write-Output $($env.PATH)",
+    "normalized": "[\"Write-Output\",\"$($env.PATH)\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -67,7 +67,7 @@
     "cwdChanges": [],
     "analysisCompleteness": "partial",
     "unresolved": [
-      "segment:0:shell-control-flow"
+      "logical_expression:$env.PATH"
     ]
   },
   "precheck": {

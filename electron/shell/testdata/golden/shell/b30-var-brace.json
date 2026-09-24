@@ -40,7 +40,7 @@
     }
   },
   "signature": {
-    "normalized": "echo ${USER}-suffix",
+    "normalized": "[\"echo\",\"${USER}-suffix\"]",
     "trust": {
       "executable": "",
       "argv": [],

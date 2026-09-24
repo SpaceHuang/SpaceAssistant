@@ -46,9 +46,7 @@
       ],
       "connectors": [
         "|",
-        ";",
-        "|",
-        ";"
+        "|"
       ],
       "paths": [],
       "cwdChanges": [],
@@ -57,7 +55,7 @@
     }
   },
   "signature": {
-    "normalized": "Get-ChildItem | Where-Object Name | Measure-Object",
+    "normalized": "[\"Get-ChildItem\",\"|\",\"Where-Object\",\"Name\",\"|\",\"Measure-Object\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -89,9 +87,7 @@
     ],
     "connectors": [
       "|",
-      ";",
-      "|",
-      ";"
+      "|"
     ],
     "paths": [],
     "cwdChanges": [],

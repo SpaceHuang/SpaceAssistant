@@ -9,17 +9,63 @@
     ],
     "pathVerdict": {
       "decision": "ask",
-      "violations": [],
-      "warnings": [],
+      "violations": [
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：tab\\tnewline\\n\"",
+          "path": "tab\\tnewline\\n\"",
+          "severity": "warning"
+        },
+        {
+          "code": "SYMLINK_OUTSIDE",
+          "message": "符号链接解析后指向工作目录外：tab\\tnewline\\n\"",
+          "path": "tab\\tnewline\\n\"",
+          "severity": "warning"
+        },
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：\"tab\\tnewline\\n\"",
+          "path": "\"tab\\tnewline\\n\"",
+          "severity": "warning"
+        },
+        {
+          "code": "SYMLINK_OUTSIDE",
+          "message": "符号链接解析后指向工作目录外：\"tab\\tnewline\\n\"",
+          "path": "\"tab\\tnewline\\n\"",
+          "severity": "warning"
+        }
+      ],
+      "warnings": [
+        "命令包含工作目录外的路径：tab\\tnewline\\n\"",
+        "符号链接解析后指向工作目录外：tab\\tnewline\\n\"",
+        "命令包含工作目录外的路径：\"tab\\tnewline\\n\"",
+        "符号链接解析后指向工作目录外：\"tab\\tnewline\\n\""
+      ],
       "outsideWorkDirRisk": false,
-      "requiresRiskAck": false
+      "requiresRiskAck": true
     },
     "permissionDecision": "ask",
     "shellSecurityHints": {
-      "requiresRiskAck": false,
+      "requiresRiskAck": true,
       "outsideWorkDirRisk": false,
-      "warnings": [],
-      "scannedPaths": []
+      "warnings": [
+        "命令包含工作目录外的路径：tab\\tnewline\\n\"",
+        "符号链接解析后指向工作目录外：tab\\tnewline\\n\"",
+        "命令包含工作目录外的路径：\"tab\\tnewline\\n\"",
+        "符号链接解析后指向工作目录外：\"tab\\tnewline\\n\""
+      ],
+      "scannedPaths": [
+        "tab\\tnewline\\n\"",
+        "tab\\tnewline\\n\"",
+        "\"tab\\tnewline\\n\"",
+        "\"tab\\tnewline\\n\""
+      ],
+      "violationCodes": [
+        "PATH_OUTSIDE_<WORKDIR>",
+        "SYMLINK_OUTSIDE",
+        "PATH_OUTSIDE_<WORKDIR>",
+        "SYMLINK_OUTSIDE"
+      ]
     },
     "facts": {
       "dialect": "posix-bash",
@@ -40,7 +86,7 @@
     }
   },
   "signature": {
-    "normalized": "printf tabtnewlinen",
+    "normalized": "[\"printf\",\"tabtnewlinen\"]",
     "trust": {
       "executable": "printf",
       "argv": [

@@ -59,7 +59,7 @@
     }
   },
   "signature": {
-    "normalized": "Get-Process | Sort-Object CPU -Descending | Select-Object -First 5",
+    "normalized": "[\"Get-Process\",\"|\",\"Sort-Object\",\"CPU\",\"-Descending\",\"|\",\"Select-Object\",\"-First\",\"5\"]",
     "trust": {
       "executable": "",
       "argv": [],

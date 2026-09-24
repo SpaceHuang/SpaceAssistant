@@ -40,7 +40,7 @@
     }
   },
   "signature": {
-    "normalized": "FOO=1 cmd --flag",
+    "normalized": "[\"FOO=1\",\"cmd\",\"--flag\"]",
     "trust": {
       "executable": "",
       "argv": [],

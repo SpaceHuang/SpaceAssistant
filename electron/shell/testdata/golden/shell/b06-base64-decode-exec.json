@@ -65,7 +65,7 @@
     }
   },
   "signature": {
-    "normalized": "echo aGVsbG8= | base64 -d | sh",
+    "normalized": "[\"echo\",\"aGVsbG8=\",\"|\",\"base64\",\"-d\",\"|\",\"sh\"]",
     "trust": {
       "executable": "",
       "argv": [],

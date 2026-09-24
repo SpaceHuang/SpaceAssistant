@@ -42,7 +42,7 @@
     }
   },
   "signature": {
-    "normalized": "Get-Content -Tail 5 app.log",
+    "normalized": "[\"Get-Content\",\"-Tail\",\"5\",\"app.log\"]",
     "trust": {
       "executable": "Get-Content",
       "argv": [

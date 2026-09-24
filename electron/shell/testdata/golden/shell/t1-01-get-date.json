@@ -38,7 +38,7 @@
     }
   },
   "signature": {
-    "normalized": "Get-Date",
+    "normalized": "[\"Get-Date\"]",
     "trust": {
       "executable": "Get-Date",
       "argv": [],

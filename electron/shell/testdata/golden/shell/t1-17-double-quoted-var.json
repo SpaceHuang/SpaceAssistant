@@ -27,7 +27,7 @@
         {
           "verb": "Write-Output",
           "args": [
-            "user is $env:USERNAME"
+            "\"user is $env:USERNAME\""
           ],
           "segmentIndex": 0
         }
@@ -40,7 +40,7 @@
     }
   },
   "signature": {
-    "normalized": "Write-Output user is $env:USERNAME",
+    "normalized": "[\"Write-Output\",\"user is $env:USERNAME\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -55,7 +55,7 @@
       {
         "verb": "Write-Output",
         "args": [
-          "user is $env:USERNAME"
+          "\"user is $env:USERNAME\""
         ],
         "segmentIndex": 0
       }

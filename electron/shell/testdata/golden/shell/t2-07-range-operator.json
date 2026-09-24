@@ -46,7 +46,7 @@
     }
   },
   "signature": {
-    "normalized": "1..10 | Measure-Object",
+    "normalized": "[\"1..10\",\"|\",\"Measure-Object\"]",
     "trust": {
       "executable": "",
       "argv": [],

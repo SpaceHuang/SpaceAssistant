@@ -58,7 +58,7 @@
     }
   },
   "signature": {
-    "normalized": "echo x > /tmp/out.txt",
+    "normalized": "[\"echo\",\"x\",\">\",\"/tmp/out.txt\"]",
     "trust": {
       "executable": "",
       "argv": [],

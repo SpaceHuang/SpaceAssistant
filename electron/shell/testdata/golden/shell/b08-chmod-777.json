@@ -60,7 +60,7 @@
     }
   },
   "signature": {
-    "normalized": "chmod -R 777 /opt",
+    "normalized": "[\"chmod\",\"-R\",\"777\",\"/opt\"]",
     "trust": {
       "executable": "chmod",
       "argv": [

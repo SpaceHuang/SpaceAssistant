@@ -23,24 +23,18 @@
     },
     "facts": {
       "dialect": "windows-powershell",
-      "operations": [
-        {
-          "verb": "[System.IO.File]::ReadAllText(a.txt)",
-          "args": [],
-          "segmentIndex": 0
-        }
-      ],
+      "operations": [],
       "connectors": [],
       "paths": [],
       "cwdChanges": [],
       "analysisCompleteness": "partial",
       "unresolved": [
-        "segment:0:shell-control-flow"
+        "logical_expression:[System.IO.File]::ReadAllText(\"a.txt\")"
       ]
     }
   },
   "signature": {
-    "normalized": "[System.IO.File]::ReadAllText(a.txt)",
+    "normalized": "[\"[System.IO.File]::ReadAllText(a.txt)\"]",
     "trust": {
       "executable": "[System.IO.File]::ReadAllText(a.txt)",
       "argv": [],
@@ -51,19 +45,13 @@
   },
   "facts": {
     "dialect": "windows-powershell",
-    "operations": [
-      {
-        "verb": "[System.IO.File]::ReadAllText(a.txt)",
-        "args": [],
-        "segmentIndex": 0
-      }
-    ],
+    "operations": [],
     "connectors": [],
     "paths": [],
     "cwdChanges": [],
     "analysisCompleteness": "partial",
     "unresolved": [
-      "segment:0:shell-control-flow"
+      "logical_expression:[System.IO.File]::ReadAllText(\"a.txt\")"
     ]
   },
   "precheck": {

@@ -27,14 +27,15 @@
         {
           "verb": "Get-Content",
           "args": [
-            "-Path:./a.txt"
+            "-Path",
+            "./a.txt"
           ],
           "segmentIndex": 0
         }
       ],
       "connectors": [],
       "paths": [
-        "-Path:./a.txt"
+        "./a.txt"
       ],
       "cwdChanges": [],
       "analysisCompleteness": "complete",
@@ -42,7 +43,7 @@
     }
   },
   "signature": {
-    "normalized": "Get-Content -Path:./a.txt",
+    "normalized": "[\"Get-Content\",\"-Path:./a.txt\"]",
     "trust": {
       "executable": "Get-Content",
       "argv": [
@@ -59,14 +60,15 @@
       {
         "verb": "Get-Content",
         "args": [
-          "-Path:./a.txt"
+          "-Path",
+          "./a.txt"
         ],
         "segmentIndex": 0
       }
     ],
     "connectors": [],
     "paths": [
-      "-Path:./a.txt"
+      "./a.txt"
     ],
     "cwdChanges": [],
     "analysisCompleteness": "complete",

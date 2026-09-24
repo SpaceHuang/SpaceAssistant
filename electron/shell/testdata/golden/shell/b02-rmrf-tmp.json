@@ -65,7 +65,7 @@
     }
   },
   "signature": {
-    "normalized": "rm -rf /tmp/data",
+    "normalized": "[\"rm\",\"-rf\",\"/tmp/data\"]",
     "trust": {
       "executable": "rm",
       "argv": [

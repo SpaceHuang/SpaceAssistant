@@ -41,7 +41,7 @@
     }
   },
   "signature": {
-    "normalized": "echo spaced out",
+    "normalized": "[\"echo\",\"spaced\",\"out\"]",
     "trust": {
       "executable": "echo",
       "argv": [

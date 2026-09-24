@@ -26,36 +26,29 @@
       "dialect": "windows-powershell",
       "operations": [
         {
-          "verb": "$weeks",
-          "args": [
-            "=",
-            "0..3"
-          ],
+          "verb": "0..3",
+          "args": [],
           "segmentIndex": 0
         },
         {
           "verb": "ForEach-Object",
           "args": [
-            "{",
-            "$_",
-            "*",
-            "7",
-            "}"
+            "{ $_ * 7 }"
           ],
           "segmentIndex": 1
         }
       ],
-      "connectors": [
-        "|"
-      ],
+      "connectors": [],
       "paths": [],
       "cwdChanges": [],
-      "analysisCompleteness": "complete",
-      "unresolved": []
+      "analysisCompleteness": "partial",
+      "unresolved": [
+        "assignment_expression:$weeks = 0..3 | ForEach-Object { $_ * 7 "
+      ]
     }
   },
   "signature": {
-    "normalized": "$weeks = 0..3 | ForEach-Object { $_ * 7 }",
+    "normalized": "[\"$weeks\",\"=\",\"0..3\",\"|\",\"ForEach-Object\",\"{\",\"$_\",\"*\",\"7\",\"}\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -68,37 +61,30 @@
     "dialect": "windows-powershell",
     "operations": [
       {
-        "verb": "$weeks",
-        "args": [
-          "=",
-          "0..3"
-        ],
+        "verb": "0..3",
+        "args": [],
         "segmentIndex": 0
       },
       {
         "verb": "ForEach-Object",
         "args": [
-          "{",
-          "$_",
-          "*",
-          "7",
-          "}"
+          "{ $_ * 7 }"
         ],
         "segmentIndex": 1
       }
     ],
-    "connectors": [
-      "|"
-    ],
+    "connectors": [],
     "paths": [],
     "cwdChanges": [],
-    "analysisCompleteness": "complete",
-    "unresolved": []
+    "analysisCompleteness": "partial",
+    "unresolved": [
+      "assignment_expression:$weeks = 0..3 | ForEach-Object { $_ * 7 "
+    ]
   },
   "precheck": {
     "ok": true,
     "legacyAutoAllowEligible": false,
-    "analysisCompleteness": "complete",
+    "analysisCompleteness": "partial",
     "persistable": false,
     "hasMetasyntax": true
   }

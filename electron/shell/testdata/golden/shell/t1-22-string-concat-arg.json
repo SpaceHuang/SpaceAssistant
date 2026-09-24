@@ -27,9 +27,9 @@
         {
           "verb": "Write-Host",
           "args": [
-            "a",
-            "b",
-            "c"
+            "\"a\"",
+            "\"b\"",
+            "\"c\""
           ],
           "segmentIndex": 0
         }
@@ -42,7 +42,7 @@
     }
   },
   "signature": {
-    "normalized": "Write-Host a b c",
+    "normalized": "[\"Write-Host\",\"a\",\"b\",\"c\"]",
     "trust": {
       "executable": "Write-Host",
       "argv": [
@@ -61,9 +61,9 @@
       {
         "verb": "Write-Host",
         "args": [
-          "a",
-          "b",
-          "c"
+          "\"a\"",
+          "\"b\"",
+          "\"c\""
         ],
         "segmentIndex": 0
       }

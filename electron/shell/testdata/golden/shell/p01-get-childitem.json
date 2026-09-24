@@ -41,7 +41,7 @@
     }
   },
   "signature": {
-    "normalized": "Get-ChildItem -Path .",
+    "normalized": "[\"Get-ChildItem\",\"-Path\",\".\"]",
     "trust": {
       "executable": "Get-ChildItem",
       "argv": [

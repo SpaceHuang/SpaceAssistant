@@ -33,11 +33,7 @@
         {
           "verb": "Where-Object",
           "args": [
-            "{",
-            "$_.CPU",
-            "-gt",
-            "10",
-            "}"
+            "{ $_.CPU -gt 10 }"
           ],
           "segmentIndex": 1
         }
@@ -52,7 +48,7 @@
     }
   },
   "signature": {
-    "normalized": "Get-Process | Where-Object { $_.CPU -gt 10 }",
+    "normalized": "[\"Get-Process\",\"|\",\"Where-Object\",\"{\",\"$_.CPU\",\"-gt\",\"10\",\"}\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -72,11 +68,7 @@
       {
         "verb": "Where-Object",
         "args": [
-          "{",
-          "$_.CPU",
-          "-gt",
-          "10",
-          "}"
+          "{ $_.CPU -gt 10 }"
         ],
         "segmentIndex": 1
       }

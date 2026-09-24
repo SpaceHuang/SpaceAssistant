@@ -41,7 +41,7 @@
     }
   },
   "signature": {
-    "normalized": "ls |",
+    "normalized": "[\"ls\",\"|\"]",
     "trust": {
       "executable": "",
       "argv": [],

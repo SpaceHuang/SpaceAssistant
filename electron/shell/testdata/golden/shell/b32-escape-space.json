@@ -9,17 +9,63 @@
     ],
     "pathVerdict": {
       "decision": "ask",
-      "violations": [],
-      "warnings": [],
+      "violations": [
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：a\\",
+          "path": "a\\",
+          "severity": "warning"
+        },
+        {
+          "code": "SYMLINK_OUTSIDE",
+          "message": "符号链接解析后指向工作目录外：a\\",
+          "path": "a\\",
+          "severity": "warning"
+        },
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：a\\ b",
+          "path": "a\\ b",
+          "severity": "warning"
+        },
+        {
+          "code": "SYMLINK_OUTSIDE",
+          "message": "符号链接解析后指向工作目录外：a\\ b",
+          "path": "a\\ b",
+          "severity": "warning"
+        }
+      ],
+      "warnings": [
+        "命令包含工作目录外的路径：a\\",
+        "符号链接解析后指向工作目录外：a\\",
+        "命令包含工作目录外的路径：a\\ b",
+        "符号链接解析后指向工作目录外：a\\ b"
+      ],
       "outsideWorkDirRisk": false,
-      "requiresRiskAck": false
+      "requiresRiskAck": true
     },
     "permissionDecision": "ask",
     "shellSecurityHints": {
-      "requiresRiskAck": false,
+      "requiresRiskAck": true,
       "outsideWorkDirRisk": false,
-      "warnings": [],
-      "scannedPaths": []
+      "warnings": [
+        "命令包含工作目录外的路径：a\\",
+        "符号链接解析后指向工作目录外：a\\",
+        "命令包含工作目录外的路径：a\\ b",
+        "符号链接解析后指向工作目录外：a\\ b"
+      ],
+      "scannedPaths": [
+        "a\\",
+        "a\\",
+        "a\\ b",
+        "a\\ b"
+      ],
+      "violationCodes": [
+        "PATH_OUTSIDE_<WORKDIR>",
+        "SYMLINK_OUTSIDE",
+        "PATH_OUTSIDE_<WORKDIR>",
+        "SYMLINK_OUTSIDE"
+      ]
     },
     "facts": {
       "dialect": "posix-bash",
@@ -40,7 +86,7 @@
     }
   },
   "signature": {
-    "normalized": "echo a\\ b",
+    "normalized": "[\"echo\",\"a\\\\\",\"b\"]",
     "trust": {
       "executable": "echo",
       "argv": [

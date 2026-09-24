@@ -43,7 +43,7 @@
     }
   },
   "signature": {
-    "normalized": "Get-ChildItem -Path . -Filter *.log",
+    "normalized": "[\"Get-ChildItem\",\"-Path\",\".\",\"-Filter\",\"*.log\"]",
     "trust": {
       "executable": "",
       "argv": [],

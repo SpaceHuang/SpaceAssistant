@@ -49,7 +49,7 @@
     }
   },
   "signature": {
-    "normalized": "Get-ChildItem -Filter *.tmp | Remove-Item",
+    "normalized": "[\"Get-ChildItem\",\"-Filter\",\"*.tmp\",\"|\",\"Remove-Item\"]",
     "trust": {
       "executable": "",
       "argv": [],

@@ -27,7 +27,7 @@
         {
           "verb": "Write-Output",
           "args": [
-            "count: $($items.Count)"
+            "\"count: $($items.Count)\""
           ],
           "segmentIndex": 0
         }
@@ -37,12 +37,12 @@
       "cwdChanges": [],
       "analysisCompleteness": "partial",
       "unresolved": [
-        "segment:0:shell-control-flow"
+        "logical_expression:$items.Count"
       ]
     }
   },
   "signature": {
-    "normalized": "Write-Output count: $($items.Count)",
+    "normalized": "[\"Write-Output\",\"count: $($items.Count)\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -57,7 +57,7 @@
       {
         "verb": "Write-Output",
         "args": [
-          "count: $($items.Count)"
+          "\"count: $($items.Count)\""
         ],
         "segmentIndex": 0
       }
@@ -67,7 +67,7 @@
     "cwdChanges": [],
     "analysisCompleteness": "partial",
     "unresolved": [
-      "segment:0:shell-control-flow"
+      "logical_expression:$items.Count"
     ]
   },
   "precheck": {

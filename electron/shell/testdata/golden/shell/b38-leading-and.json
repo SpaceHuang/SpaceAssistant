@@ -41,7 +41,7 @@
     }
   },
   "signature": {
-    "normalized": "&& echo start",
+    "normalized": "[\"&&\",\"echo\",\"start\"]",
     "trust": {
       "executable": "",
       "argv": [],

@@ -40,7 +40,7 @@
     }
   },
   "signature": {
-    "normalized": "Write-Output $env.PATH",
+    "normalized": "[\"Write-Output\",\"$env.PATH\"]",
     "trust": {
       "executable": "",
       "argv": [],

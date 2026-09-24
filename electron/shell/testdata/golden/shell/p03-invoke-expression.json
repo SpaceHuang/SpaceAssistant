@@ -27,7 +27,7 @@
         {
           "verb": "Invoke-Expression",
           "args": [
-            "Get-Date"
+            "\"Get-Date\""
           ],
           "segmentIndex": 0
         }
@@ -40,7 +40,7 @@
     }
   },
   "signature": {
-    "normalized": "Invoke-Expression Get-Date",
+    "normalized": "[\"Invoke-Expression\",\"Get-Date\"]",
     "trust": {
       "executable": "Invoke-Expression",
       "argv": [
@@ -57,7 +57,7 @@
       {
         "verb": "Invoke-Expression",
         "args": [
-          "Get-Date"
+          "\"Get-Date\""
         ],
         "segmentIndex": 0
       }

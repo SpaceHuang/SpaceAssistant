@@ -23,24 +23,19 @@
     },
     "facts": {
       "dialect": "windows-powershell",
-      "operations": [
-        {
-          "verb": "@;interp $($x);@",
-          "args": [],
-          "segmentIndex": 0
-        }
-      ],
+      "operations": [],
       "connectors": [],
       "paths": [],
       "cwdChanges": [],
       "analysisCompleteness": "partial",
       "unresolved": [
-        "segment:0:shell-control-flow"
+        "logical_expression:@\"\ninterp $($x)\n\"@",
+        "logical_expression:$x"
       ]
     }
   },
   "signature": {
-    "normalized": "@\ninterp $($x)\n@",
+    "normalized": "[\"@\\ninterp $($x)\\n@\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -51,19 +46,14 @@
   },
   "facts": {
     "dialect": "windows-powershell",
-    "operations": [
-      {
-        "verb": "@;interp $($x);@",
-        "args": [],
-        "segmentIndex": 0
-      }
-    ],
+    "operations": [],
     "connectors": [],
     "paths": [],
     "cwdChanges": [],
     "analysisCompleteness": "partial",
     "unresolved": [
-      "segment:0:shell-control-flow"
+      "logical_expression:@\"\ninterp $($x)\n\"@",
+      "logical_expression:$x"
     ]
   },
   "precheck": {

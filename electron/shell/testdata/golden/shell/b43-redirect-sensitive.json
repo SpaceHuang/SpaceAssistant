@@ -11,18 +11,42 @@
     ],
     "pathVerdict": {
       "decision": "ask",
-      "violations": [],
-      "warnings": [],
+      "violations": [
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：~/.ssh/authorized_keys",
+          "path": "~/.ssh/authorized_keys",
+          "severity": "warning"
+        },
+        {
+          "code": "SYMLINK_OUTSIDE",
+          "message": "符号链接解析后指向工作目录外：~/.ssh/authorized_keys",
+          "path": "~/.ssh/authorized_keys",
+          "severity": "warning"
+        }
+      ],
+      "warnings": [
+        "命令包含工作目录外的路径：~/.ssh/authorized_keys",
+        "符号链接解析后指向工作目录外：~/.ssh/authorized_keys"
+      ],
       "outsideWorkDirRisk": false,
-      "requiresRiskAck": false
+      "requiresRiskAck": true
     },
     "permissionDecision": "ask",
     "shellSecurityHints": {
       "requiresRiskAck": true,
       "outsideWorkDirRisk": false,
-      "warnings": [],
-      "scannedPaths": [],
+      "warnings": [
+        "命令包含工作目录外的路径：~/.ssh/authorized_keys",
+        "符号链接解析后指向工作目录外：~/.ssh/authorized_keys"
+      ],
+      "scannedPaths": [
+        "~/.ssh/authorized_keys",
+        "~/.ssh/authorized_keys"
+      ],
       "violationCodes": [
+        "PATH_OUTSIDE_<WORKDIR>",
+        "SYMLINK_OUTSIDE",
         "redirect-sensitive-target"
       ],
       "validatorId": "redirect-sensitive-target",
@@ -50,7 +74,7 @@
     }
   },
   "signature": {
-    "normalized": "echo secret > ~/.ssh/authorized_keys",
+    "normalized": "[\"echo\",\"secret\",\">\",\"~/.ssh/authorized_keys\"]",
     "trust": {
       "executable": "",
       "argv": [],

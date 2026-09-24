@@ -37,6 +37,7 @@
         }
       ],
       "connectors": [
+        ";",
         ";"
       ],
       "paths": [],
@@ -46,7 +47,7 @@
     }
   },
   "signature": {
-    "normalized": "Get-Date; Get-Location",
+    "normalized": "[\"Get-Date;\",\"Get-Location\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -70,6 +71,7 @@
       }
     ],
     "connectors": [
+      ";",
       ";"
     ],
     "paths": [],

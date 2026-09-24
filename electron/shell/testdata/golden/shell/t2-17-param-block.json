@@ -25,31 +25,24 @@
       "dialect": "windows-powershell",
       "operations": [
         {
-          "verb": "param([string]$Name)",
-          "args": [],
-          "segmentIndex": 0
-        },
-        {
           "verb": "Write-Output",
           "args": [
             "$Name"
           ],
-          "segmentIndex": 1
+          "segmentIndex": 0
         }
       ],
-      "connectors": [
-        ";"
-      ],
+      "connectors": [],
       "paths": [],
       "cwdChanges": [],
       "analysisCompleteness": "partial",
       "unresolved": [
-        "segment:0:shell-control-flow"
+        "param_block:param([string]$Name)"
       ]
     }
   },
   "signature": {
-    "normalized": "param([string]$Name) Write-Output $Name",
+    "normalized": "[\"param([string]$Name)\",\"Write-Output\",\"$Name\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -62,26 +55,19 @@
     "dialect": "windows-powershell",
     "operations": [
       {
-        "verb": "param([string]$Name)",
-        "args": [],
-        "segmentIndex": 0
-      },
-      {
         "verb": "Write-Output",
         "args": [
           "$Name"
         ],
-        "segmentIndex": 1
+        "segmentIndex": 0
       }
     ],
-    "connectors": [
-      ";"
-    ],
+    "connectors": [],
     "paths": [],
     "cwdChanges": [],
     "analysisCompleteness": "partial",
     "unresolved": [
-      "segment:0:shell-control-flow"
+      "param_block:param([string]$Name)"
     ]
   },
   "precheck": {

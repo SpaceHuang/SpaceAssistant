@@ -27,19 +27,12 @@
         {
           "verb": "Get-ChildItem",
           "args": [
-            "`"
+            "-Recurse"
           ],
           "segmentIndex": 0
-        },
-        {
-          "verb": "-Recurse",
-          "args": [],
-          "segmentIndex": 1
         }
       ],
-      "connectors": [
-        ";"
-      ],
+      "connectors": [],
       "paths": [],
       "cwdChanges": [],
       "analysisCompleteness": "complete",
@@ -47,7 +40,7 @@
     }
   },
   "signature": {
-    "normalized": "Get-ChildItem ` -Recurse",
+    "normalized": "[\"Get-ChildItem\",\"`\",\"-Recurse\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -62,19 +55,12 @@
       {
         "verb": "Get-ChildItem",
         "args": [
-          "`"
+          "-Recurse"
         ],
         "segmentIndex": 0
-      },
-      {
-        "verb": "-Recurse",
-        "args": [],
-        "segmentIndex": 1
       }
     ],
-    "connectors": [
-      ";"
-    ],
+    "connectors": [],
     "paths": [],
     "cwdChanges": [],
     "analysisCompleteness": "complete",

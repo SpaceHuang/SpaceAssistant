@@ -41,7 +41,7 @@
     }
   },
   "signature": {
-    "normalized": "grep foo(bar) x.txt",
+    "normalized": "[\"grep\",\"foo(bar)\",\"x.txt\"]",
     "trust": {
       "executable": "grep",
       "argv": [

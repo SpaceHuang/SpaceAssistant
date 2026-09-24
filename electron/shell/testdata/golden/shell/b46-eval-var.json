@@ -40,7 +40,7 @@
     }
   },
   "signature": {
-    "normalized": "eval $CMD",
+    "normalized": "[\"eval\",\"$CMD\"]",
     "trust": {
       "executable": "",
       "argv": [],

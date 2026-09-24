@@ -40,7 +40,7 @@
     }
   },
   "signature": {
-    "normalized": "Get-ChildItem @splatParams",
+    "normalized": "[\"Get-ChildItem\",\"@splatParams\"]",
     "trust": {
       "executable": "Get-ChildItem",
       "argv": [

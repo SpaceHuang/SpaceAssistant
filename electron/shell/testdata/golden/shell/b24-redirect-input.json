@@ -38,7 +38,7 @@
     }
   },
   "signature": {
-    "normalized": "cat < input.txt",
+    "normalized": "[\"cat\",\"<\",\"input.txt\"]",
     "trust": {
       "executable": "",
       "argv": [],

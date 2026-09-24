@@ -27,7 +27,7 @@
         {
           "verb": "Write-Output",
           "args": [
-            "unicode “text” inside"
+            "\"unicode “text” inside\""
           ],
           "segmentIndex": 0
         }
@@ -40,7 +40,7 @@
     }
   },
   "signature": {
-    "normalized": "Write-Output unicode “text” inside",
+    "normalized": "[\"Write-Output\",\"unicode “text” inside\"]",
     "trust": {
       "executable": "Write-Output",
       "argv": [
@@ -57,7 +57,7 @@
       {
         "verb": "Write-Output",
         "args": [
-          "unicode “text” inside"
+          "\"unicode “text” inside\""
         ],
         "segmentIndex": 0
       }

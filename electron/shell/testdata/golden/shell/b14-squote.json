@@ -40,7 +40,7 @@
     }
   },
   "signature": {
-    "normalized": "echo single quoted",
+    "normalized": "[\"echo\",\"single quoted\"]",
     "trust": {
       "executable": "echo",
       "argv": [

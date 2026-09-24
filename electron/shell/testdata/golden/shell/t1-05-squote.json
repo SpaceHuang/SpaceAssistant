@@ -27,7 +27,7 @@
         {
           "verb": "Write-Output",
           "args": [
-            "single"
+            "'single'"
           ],
           "segmentIndex": 0
         }
@@ -40,7 +40,7 @@
     }
   },
   "signature": {
-    "normalized": "Write-Output single",
+    "normalized": "[\"Write-Output\",\"single\"]",
     "trust": {
       "executable": "Write-Output",
       "argv": [
@@ -57,7 +57,7 @@
       {
         "verb": "Write-Output",
         "args": [
-          "single"
+          "'single'"
         ],
         "segmentIndex": 0
       }

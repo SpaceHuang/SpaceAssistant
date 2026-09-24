@@ -23,32 +23,18 @@
     },
     "facts": {
       "dialect": "windows-powershell",
-      "operations": [
-        {
-          "verb": "switch",
-          "args": [
-            "($x)",
-            "{",
-            "1",
-            "{",
-            "one",
-            "}",
-            "}"
-          ],
-          "segmentIndex": 0
-        }
-      ],
+      "operations": [],
       "connectors": [],
       "paths": [],
       "cwdChanges": [],
       "analysisCompleteness": "partial",
       "unresolved": [
-        "segment:0:shell-control-flow"
+        "switch_statement:switch ($x) { 1 { \"one\" } }"
       ]
     }
   },
   "signature": {
-    "normalized": "switch ($x) { 1 { one } }",
+    "normalized": "[\"switch\",\"($x)\",\"{\",\"1\",\"{\",\"one\",\"}\",\"}\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -59,27 +45,13 @@
   },
   "facts": {
     "dialect": "windows-powershell",
-    "operations": [
-      {
-        "verb": "switch",
-        "args": [
-          "($x)",
-          "{",
-          "1",
-          "{",
-          "one",
-          "}",
-          "}"
-        ],
-        "segmentIndex": 0
-      }
-    ],
+    "operations": [],
     "connectors": [],
     "paths": [],
     "cwdChanges": [],
     "analysisCompleteness": "partial",
     "unresolved": [
-      "segment:0:shell-control-flow"
+      "switch_statement:switch ($x) { 1 { \"one\" } }"
     ]
   },
   "precheck": {

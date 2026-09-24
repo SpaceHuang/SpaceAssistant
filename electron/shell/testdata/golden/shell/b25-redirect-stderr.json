@@ -12,12 +12,26 @@
       "violations": [
         {
           "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：2>/dev/null",
+          "path": "2>/dev/null",
+          "severity": "warning"
+        },
+        {
+          "code": "SYMLINK_OUTSIDE",
+          "message": "符号链接解析后指向工作目录外：2>/dev/null",
+          "path": "2>/dev/null",
+          "severity": "warning"
+        },
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
           "message": "命令包含工作目录外的路径：/dev/null",
           "path": "/dev/null",
           "severity": "warning"
         }
       ],
       "warnings": [
+        "命令包含工作目录外的路径：2>/dev/null",
+        "符号链接解析后指向工作目录外：2>/dev/null",
         "命令包含工作目录外的路径：/dev/null"
       ],
       "outsideWorkDirRisk": false,
@@ -28,12 +42,18 @@
       "requiresRiskAck": true,
       "outsideWorkDirRisk": false,
       "warnings": [
+        "命令包含工作目录外的路径：2>/dev/null",
+        "符号链接解析后指向工作目录外：2>/dev/null",
         "命令包含工作目录外的路径：/dev/null"
       ],
       "scannedPaths": [
+        "2>/dev/null",
+        "2>/dev/null",
         "/dev/null"
       ],
       "violationCodes": [
+        "PATH_OUTSIDE_<WORKDIR>",
+        "SYMLINK_OUTSIDE",
         "PATH_OUTSIDE_<WORKDIR>"
       ]
     },
@@ -58,7 +78,7 @@
     }
   },
   "signature": {
-    "normalized": "make build 2>/dev/null",
+    "normalized": "[\"make\",\"build\",\"2>/dev/null\"]",
     "trust": {
       "executable": "",
       "argv": [],

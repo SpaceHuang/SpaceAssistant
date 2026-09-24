@@ -12,18 +12,82 @@
     ],
     "pathVerdict": {
       "decision": "ask",
-      "violations": [],
-      "warnings": [],
+      "violations": [
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：if=/dev/zero",
+          "path": "if=/dev/zero",
+          "severity": "warning"
+        },
+        {
+          "code": "SYMLINK_OUTSIDE",
+          "message": "符号链接解析后指向工作目录外：if=/dev/zero",
+          "path": "if=/dev/zero",
+          "severity": "warning"
+        },
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：of=/dev/sda",
+          "path": "of=/dev/sda",
+          "severity": "warning"
+        },
+        {
+          "code": "SYMLINK_OUTSIDE",
+          "message": "符号链接解析后指向工作目录外：of=/dev/sda",
+          "path": "of=/dev/sda",
+          "severity": "warning"
+        },
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：/dev/zero",
+          "path": "/dev/zero",
+          "severity": "warning"
+        },
+        {
+          "code": "PATH_OUTSIDE_<WORKDIR>",
+          "message": "命令包含工作目录外的路径：/dev/sda",
+          "path": "/dev/sda",
+          "severity": "warning"
+        }
+      ],
+      "warnings": [
+        "命令包含工作目录外的路径：if=/dev/zero",
+        "符号链接解析后指向工作目录外：if=/dev/zero",
+        "命令包含工作目录外的路径：of=/dev/sda",
+        "符号链接解析后指向工作目录外：of=/dev/sda",
+        "命令包含工作目录外的路径：/dev/zero",
+        "命令包含工作目录外的路径：/dev/sda"
+      ],
       "outsideWorkDirRisk": false,
-      "requiresRiskAck": false
+      "requiresRiskAck": true
     },
     "permissionDecision": "ask",
     "shellSecurityHints": {
-      "requiresRiskAck": false,
+      "requiresRiskAck": true,
       "outsideWorkDirRisk": false,
-      "warnings": [],
-      "scannedPaths": [],
+      "warnings": [
+        "命令包含工作目录外的路径：if=/dev/zero",
+        "符号链接解析后指向工作目录外：if=/dev/zero",
+        "命令包含工作目录外的路径：of=/dev/sda",
+        "符号链接解析后指向工作目录外：of=/dev/sda",
+        "命令包含工作目录外的路径：/dev/zero",
+        "命令包含工作目录外的路径：/dev/sda"
+      ],
+      "scannedPaths": [
+        "if=/dev/zero",
+        "if=/dev/zero",
+        "of=/dev/sda",
+        "of=/dev/sda",
+        "/dev/zero",
+        "/dev/sda"
+      ],
       "violationCodes": [
+        "PATH_OUTSIDE_<WORKDIR>",
+        "SYMLINK_OUTSIDE",
+        "PATH_OUTSIDE_<WORKDIR>",
+        "SYMLINK_OUTSIDE",
+        "PATH_OUTSIDE_<WORKDIR>",
+        "PATH_OUTSIDE_<WORKDIR>",
         "disk_wipe"
       ],
       "validatorId": "disk_wipe",
@@ -52,7 +116,7 @@
     }
   },
   "signature": {
-    "normalized": "dd if=/dev/zero of=/dev/sda",
+    "normalized": "[\"dd\",\"if=/dev/zero\",\"of=/dev/sda\"]",
     "trust": {
       "executable": "dd",
       "argv": [

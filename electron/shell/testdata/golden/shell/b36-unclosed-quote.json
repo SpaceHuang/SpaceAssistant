@@ -41,7 +41,7 @@
     }
   },
   "signature": {
-    "normalized": "",
+    "normalized": "echo \"unclosed",
     "trust": {
       "executable": "",
       "argv": [],

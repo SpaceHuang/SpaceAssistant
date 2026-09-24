@@ -78,7 +78,7 @@
     }
   },
   "signature": {
-    "normalized": "cd .. && git status",
+    "normalized": "[\"cd\",\"..\",\"&&\",\"git\",\"status\"]",
     "trust": {
       "executable": "",
       "argv": [],

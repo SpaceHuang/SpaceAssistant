@@ -40,7 +40,7 @@
     }
   },
   "signature": {
-    "normalized": "echo a(b)",
+    "normalized": "[\"echo\",\"a(b)\"]",
     "trust": {
       "executable": "echo",
       "argv": [

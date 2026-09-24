@@ -48,7 +48,7 @@
     }
   },
   "signature": {
-    "normalized": "Get-Date || Write-Output fallback",
+    "normalized": "[\"Get-Date\",\"||\",\"Write-Output\",\"fallback\"]",
     "trust": {
       "executable": "",
       "argv": [],

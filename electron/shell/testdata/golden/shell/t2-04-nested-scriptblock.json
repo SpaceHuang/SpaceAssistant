@@ -26,39 +26,30 @@
       "dialect": "windows-powershell",
       "operations": [
         {
-          "verb": "&",
+          "verb": "ForEach-Object",
           "args": [
-            "{",
-            "param($f)",
-            "$f"
+            "{ & $_ }"
           ],
           "segmentIndex": 0
         },
         {
-          "verb": "ForEach-Object",
-          "args": [
-            "{",
-            "&",
-            "$_",
-            "}",
-            "}"
-          ],
+          "verb": "{ param($f) $f | ForEach-Object { & $_ } }",
+          "args": [],
           "segmentIndex": 1
         }
       ],
-      "connectors": [
-        "|"
-      ],
+      "connectors": [],
       "paths": [],
       "cwdChanges": [],
       "analysisCompleteness": "partial",
       "unresolved": [
-        "segment:0:shell-control-flow"
+        "param_block:param($f)",
+        "script_block:$f | ForEach-Object { & $_ }"
       ]
     }
   },
   "signature": {
-    "normalized": "& { param($f) $f | ForEach-Object { & $_ } }",
+    "normalized": "[\"&\",\"{\",\"param($f)\",\"$f\",\"|\",\"ForEach-Object\",\"{\",\"&\",\"$_\",\"}\",\"}\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -71,34 +62,25 @@
     "dialect": "windows-powershell",
     "operations": [
       {
-        "verb": "&",
+        "verb": "ForEach-Object",
         "args": [
-          "{",
-          "param($f)",
-          "$f"
+          "{ & $_ }"
         ],
         "segmentIndex": 0
       },
       {
-        "verb": "ForEach-Object",
-        "args": [
-          "{",
-          "&",
-          "$_",
-          "}",
-          "}"
-        ],
+        "verb": "{ param($f) $f | ForEach-Object { & $_ } }",
+        "args": [],
         "segmentIndex": 1
       }
     ],
-    "connectors": [
-      "|"
-    ],
+    "connectors": [],
     "paths": [],
     "cwdChanges": [],
     "analysisCompleteness": "partial",
     "unresolved": [
-      "segment:0:shell-control-flow"
+      "param_block:param($f)",
+      "script_block:$f | ForEach-Object { & $_ }"
     ]
   },
   "precheck": {

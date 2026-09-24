@@ -24,35 +24,22 @@
     },
     "facts": {
       "dialect": "windows-powershell",
-      "operations": [
-        {
-          "verb": "$sb",
-          "args": [
-            "=",
-            "[System.Text.StringBuilder]::new()"
-          ],
-          "segmentIndex": 0
-        },
-        {
-          "verb": "$sb.Append(x)",
-          "args": [],
-          "segmentIndex": 1
-        }
-      ],
+      "operations": [],
       "connectors": [
+        ";",
         ";"
       ],
       "paths": [],
       "cwdChanges": [],
       "analysisCompleteness": "partial",
       "unresolved": [
-        "segment:0:shell-control-flow",
-        "segment:1:shell-control-flow"
+        "assignment_expression:$sb = [System.Text.StringBuilder]::new()",
+        "logical_expression:$sb.Append(\"x\")"
       ]
     }
   },
   "signature": {
-    "normalized": "$sb = [System.Text.StringBuilder]::new(); $sb.Append(x)",
+    "normalized": "[\"$sb\",\"=\",\"[System.Text.StringBuilder]::new();\",\"$sb.Append(x)\"]",
     "trust": {
       "executable": "",
       "argv": [],
@@ -63,30 +50,17 @@
   },
   "facts": {
     "dialect": "windows-powershell",
-    "operations": [
-      {
-        "verb": "$sb",
-        "args": [
-          "=",
-          "[System.Text.StringBuilder]::new()"
-        ],
-        "segmentIndex": 0
-      },
-      {
-        "verb": "$sb.Append(x)",
-        "args": [],
-        "segmentIndex": 1
-      }
-    ],
+    "operations": [],
     "connectors": [
+      ";",
       ";"
     ],
     "paths": [],
     "cwdChanges": [],
     "analysisCompleteness": "partial",
     "unresolved": [
-      "segment:0:shell-control-flow",
-      "segment:1:shell-control-flow"
+      "assignment_expression:$sb = [System.Text.StringBuilder]::new()",
+      "logical_expression:$sb.Append(\"x\")"
     ]
   },
   "precheck": {

@@ -45,7 +45,7 @@
     }
   },
   "signature": {
-    "normalized": "echo `pwd`",
+    "normalized": "[\"echo\",\"`pwd`\"]",
     "trust": {
       "executable": "",
       "argv": [],

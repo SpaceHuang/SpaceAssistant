@@ -30,7 +30,7 @@
             "-Path",
             "./out.txt",
             "-Value",
-            "data"
+            "\"data\""
           ],
           "segmentIndex": 0
         }
@@ -45,7 +45,7 @@
     }
   },
   "signature": {
-    "normalized": "Set-Content -Path ./out.txt -Value data",
+    "normalized": "[\"Set-Content\",\"-Path\",\"./out.txt\",\"-Value\",\"data\"]",
     "trust": {
       "executable": "Set-Content",
       "argv": [
@@ -68,7 +68,7 @@
           "-Path",
           "./out.txt",
           "-Value",
-          "data"
+          "\"data\""
         ],
         "segmentIndex": 0
       }
