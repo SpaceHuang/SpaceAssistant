@@ -163,6 +163,10 @@ export interface AgentInvocation {
 /** 宿主端口：workspace（工作区锚点）。 */
 export interface AgentWorkspacePorts {
   workDir: string
+  /** R1：装配期解析的快照（单一事实源）；workDir 字段是它的 rootPath 投影（过渡保留）。 */
+  snapshot(): import('./workspace').WorkspaceSnapshot
+  /** R1：调用边界刷新；绑定未变返回原快照对象（revision 不变）。 */
+  refresh(): import('./workspace').WorkspaceSnapshot
   /** electron 侧为 WorkDirManager。 */
   workDirManager?: unknown
   resolveWorkDir?(): string

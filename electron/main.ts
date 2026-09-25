@@ -568,6 +568,7 @@ app.whenReady().then(async () => {
   const executeClaudeRequest = registerClaudeStreamHandlers(ipcMain, {
     getApiKey,
     getWorkDir: () => workDirState,
+    getWorkDirManager: () => workDirManager ?? undefined,
     resolveWorkDirForSession: (sessionId) => {
       const resolved = resolveWorkDirForSession(
         db,

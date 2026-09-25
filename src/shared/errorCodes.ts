@@ -64,7 +64,45 @@ export const ErrorCodes = {
   ,SKILL_MD_UNREADABLE: 'SKILL_MD_UNREADABLE'
   ,SKILL_NO_INSTALLABLE_CANDIDATE: 'SKILL_NO_INSTALLABLE_CANDIDATE'
   ,SKILL_INSTALL_CANCELLED: 'SKILL_INSTALL_CANCELLED'
+  // ===== R4：工具结果信封五类细分失败码（闭合枚举，见 packages/agent-core/src/toolResultContract.ts） =====
+  ,TOOL_EXEC_FAILED: 'TOOL_EXEC_FAILED'
+  ,TOOL_EXECUTOR_ERROR: 'TOOL_EXECUTOR_ERROR'
+  ,POLICY_NOT_EXECUTED: 'POLICY_NOT_EXECUTED'
+  ,TOOL_USER_CANCELLED: 'TOOL_USER_CANCELLED'
+  ,TOOL_INVALID_INPUT: 'TOOL_INVALID_INPUT'
+  // ===== R8：目录列表错误分类 =====
+  ,DIRECTORY_ACCESS_DENIED: 'DIRECTORY_ACCESS_DENIED'
+  ,DIRECTORY_READ_TIMEOUT: 'DIRECTORY_READ_TIMEOUT'
 } as const
+
+// R4（O6 定案）：旧 SHELL_* 失败码 → 新码映射，长期保留、不设删除期限。
+// 仅作用于历史消息回显与归一；run_shell 新产出直接携带新码。
+export const LEGACY_TOOL_ERROR_CODE_MAP: Readonly<Record<string, string>> = {
+  SHELL_PROCESS_EXIT: 'TOOL_EXEC_FAILED',
+  SHELL_SPAWN_ERROR: 'TOOL_EXECUTOR_ERROR',
+  SHELL_TIMEOUT: 'TOOL_EXEC_FAILED', // terminationReason='timeout' 区分
+  SHELL_CANCELLED: 'TOOL_USER_CANCELLED',
+  SHELL_ARTIFACT_PATH_INVALID: 'TOOL_EXECUTOR_ERROR'
+} as const
+
+/**
+ * 结果信封错误码闭合集合（I5 校验依据）：五类新码 + 既有 ErrorCodes + 旧码 + 过渡码。
+ * 未知码不算违规的场景由调用方另行注入。
+ */
+export const TOOL_ENVELOPE_KNOWN_ERROR_CODES: ReadonlySet<string> = new Set<string>([
+  ...Object.values(ErrorCodes),
+  ...Object.keys(LEGACY_TOOL_ERROR_CODE_MAP),
+  'OUTPUT_LIMIT_REACHED',
+  'PLAN_STALE',
+  'SHELL_PLAN_INVALID',
+  'SHELL_DIALECT_MISMATCH',
+  'SHELL_EXECUTABLE_UNAVAILABLE',
+  'SHELL_INTERACTIVE_TTY_REQUIRED',
+  'SHELL_TUI_UNDETECTABLE',
+  'SHELL_RESULT_CONTRACT_VIOLATION',
+  'TOOL_RESULT_CONTRACT_VIOLATION',
+  'TOOL_EXECUTION_FAILED'
+])
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes]
 

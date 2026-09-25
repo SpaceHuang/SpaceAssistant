@@ -232,7 +232,7 @@ export async function executePreparedShellExecution(
   if (!artifactPath.startsWith(`${artifactRoot}${path.sep}`)) {
     return {
       success: false,
-      error: 'SHELL_ARTIFACT_PATH_INVALID',
+      error: 'TOOL_EXECUTOR_ERROR',
       data: { code: 'SHELL_ARTIFACT_PATH_INVALID' },
       duration: Date.now() - started
     }
@@ -400,7 +400,7 @@ export async function executePreparedShellExecution(
         await artifactWriter.close().catch(() => undefined)
         settle('transport_error', {
           success: false,
-          error: 'SHELL_SPAWN_ERROR',
+          error: 'TOOL_EXECUTOR_ERROR',
           userMessage: toToolUserError(err, { toolName: 'run_shell' }),
           data: {
             code: 'SHELL_SPAWN_ERROR',
@@ -638,7 +638,7 @@ export async function executePreparedShellExecution(
         if (ctx.signal.aborted) {
           settle('user_cancel', {
             success: false,
-            error: 'SHELL_CANCELLED',
+            error: 'TOOL_USER_CANCELLED',
             userMessage: '用户取消执行',
             data,
             duration: Date.now() - started
@@ -648,7 +648,7 @@ export async function executePreparedShellExecution(
         if (timedOut) {
           settle('timeout', {
             success: false,
-            error: 'SHELL_TIMEOUT',
+            error: 'TOOL_EXEC_FAILED',
             userMessage: `命令执行超时（${timeoutSec} 秒）`,
             data,
             duration: Date.now() - started
@@ -668,7 +668,7 @@ export async function executePreparedShellExecution(
           const reason = exitCodeHint ? `命令执行失败（${exitCodeHint}）` : `命令执行失败（退出码: ${code ?? 'signal'}）`
           settle('process_exit', {
             success: false,
-            error: 'SHELL_PROCESS_EXIT',
+            error: 'TOOL_EXEC_FAILED',
             userMessage: toToolUserError(new Error(reason), { toolName: 'run_shell' }),
             data,
             duration: Date.now() - started

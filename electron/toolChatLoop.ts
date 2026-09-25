@@ -29,7 +29,7 @@ import { coordinatorConfirmHook } from './tools/coordinatorConfirmationAdapter'
 import { executePreparedShellExecutionWithHostFallback } from './tools/runShellExecutor'
 import { planRunShellExecution, RunShellPlanError } from './tools/runShellPlan'
 import type { PreparedShellExecution } from './shell/preparedShellExecution'
-import { validateToolExecutorResultForTool, type ToolExecutorResult } from './tools/types'
+import { validateToolExecutorResultForTool, validateToolExecutorResultWithViolations, type ToolExecutorResult } from './tools/types'
 import { projectAgentToolResult, serializeAgentToolResult } from '../src/shared/agentToolResult'
 import { projectProcessResultForAgentLog } from '../src/shared/agentSafeProjection'
 import { isProcessToolName } from '../src/shared/processResultProjection'
@@ -106,6 +106,7 @@ import type { SessionEventInput } from './sessionEvents'
 import { evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCallGate'
 import { recordUserAnswerFromDecision, recordSystemManagedCacheEntry } from './confirmation/decisionCacheWriter'
 import { getSecurityAuditLog } from './confirmation/audit'
+import { workspacePathKey as workspacePathKeyOf } from '../src/shared/agent/workspace'
 import { channelFor, type ResolveConfirmChannelArgs } from './confirmation/channels'
 import { shouldFallbackToUser } from './confirmation/fallbackToUser'
 import { approvalFallbackReasonFor } from './confirmation/fallbackReason'
@@ -545,6 +546,8 @@ export type RunToolChatSessionArgs = {
   workDir: string
   workDirManager?: WorkDirManager
   resolveWorkDir?: () => string
+  /** R1：调用边界刷新工作目录快照（绑定未变返回原对象）；注入后优先于 resolveWorkDir/initialWorkDir */
+  workspaceRefresh?: () => import('../src/shared/agent/workspace').WorkspaceSnapshot
   userDataDir: string
   getApiKey: () => Promise<string | null>
   /** 用于达到累计 assistant 阈值后异步生成会话标题（不写则跳过） */
@@ -762,6 +765,7 @@ function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): R
     workDir: ports.workspace.workDir,
     workDirManager: ports.workspace.workDirManager as WorkDirManager | undefined,
     resolveWorkDir: ports.workspace.resolveWorkDir,
+    workspaceRefresh: ports.workspace.refresh,
     userDataDir: ports.workspace.userDataDir,
     getApiKey: () => ports.credentials.resolveApiKey(),
     locale: invocation.profile.locale as AppLocale | undefined,
@@ -880,6 +884,7 @@ async function runToolChatSessionInner(
     workDir: initialWorkDir,
     workDirManager,
     resolveWorkDir,
+    workspaceRefresh,
     userDataDir,
     getApiKey,
     hostDiagnostics,
@@ -1141,7 +1146,7 @@ async function runToolChatSessionInner(
       memoryEnabled: projectMemoryEnabled ?? true,
       locale,
       hasImageAttachments: hasImageAttachments ?? false,
-      skillCatalog: getCachedSkills(userDataDir, resolveWorkDir?.() ?? initialWorkDir),
+      skillCatalog: getCachedSkills(userDataDir, workspaceRefresh ? workspaceRefresh().rootPath : (resolveWorkDir?.() ?? initialWorkDir)),
       contextWindow: args.contextWindow
     })
     // requestId 按一次 provider 请求尝试定义；同一轮的 header/context/usage 必须共享它。
@@ -1775,7 +1780,33 @@ async function runToolChatSessionInner(
       try {
       do {
       throwIfChatCancelled(chatSignal)
-      const workDir = resolveWorkDir ? resolveWorkDir() : initialWorkDir
+      // R1：调用边界 refresh()——绑定变更只有下一次工具调用可见（调用内冻结、调用间跟随）
+      const workspaceSnapshot = workspaceRefresh ? workspaceRefresh() : undefined
+      const workDir = workspaceSnapshot?.rootPath ?? (resolveWorkDir ? resolveWorkDir() : initialWorkDir)
+      // R1 §4.1.5 基准分歧护栏：快照与旧解析路径并存且结论不同 = 出现多副本。
+      // 任何模式以快照为准并落审计；开发态 fail-loud（不得进入生产路径）。
+      if (workspaceSnapshot && resolveWorkDir) {
+        const legacyWorkDir = resolveWorkDir()
+        if (legacyWorkDir && legacyWorkDir !== workDir && workspacePathKeyOf(legacyWorkDir) !== workspaceSnapshot.key) {
+          getSecurityAuditLog().record({
+            ts: Date.now(),
+            lane: effectiveLane,
+            actor: 'system',
+            event: 'workspace.basis-mismatch',
+            sessionId,
+            reason: JSON.stringify({
+              revision: workspaceSnapshot.revision,
+              snapshotRoot: workspaceSnapshot.rootPath,
+              legacyWorkDir
+            })
+          })
+          if (process.env.NODE_ENV !== 'production') {
+            throw new Error(
+              `workspace basis mismatch: snapshot=${workspaceSnapshot.rootPath} legacy=${legacyWorkDir}`
+            )
+          }
+        }
+      }
       const toolUseId = tu.id
       const toolName = tu.name
       // B1：API 返回的是 sanitize 后的 compat 名，回向解析为内部注册名（可能含点号）再授权与查找
@@ -3047,6 +3078,7 @@ async function runToolChatSessionInner(
             shellOutputMode,
             appDatabase: hostMcp?.executorDatabase as import('./database').AppDatabase,
             workDirManager,
+            workspaceSnapshot,
             wikiConfig,
             feishuConfig,
             wechatConfig,
@@ -3114,7 +3146,23 @@ async function runToolChatSessionInner(
         }
       }
 
-      execResult = validateToolExecutorResultForTool(toolName, execResult)
+      {
+        // R4：事实优先归一 + 契约违规告警（不允许静默改写）
+        const validated = validateToolExecutorResultWithViolations(execResult)
+        execResult = validated.result
+        if (isProcessToolName(toolName) && validated.violations.length > 0) {
+          logAgentEvent('warn', 'tool.result.contract-violation', {
+            requestId,
+            sessionId,
+            toolUseId,
+            toolName,
+            loopRound,
+            invariants: validated.violations.map((v) => v.invariant).join(','),
+            violationCount: validated.violations.length,
+            errorCode: validated.result.error ?? ''
+          })
+        }
+      }
 
       const durationMs = Date.now() - execStartedAt
       if (execResult.success && fileAutoApproved && (toolName === 'write_file' || toolName === 'edit_file')) {
@@ -3310,6 +3358,8 @@ async function runToolChatSessionInner(
       const resolvedNodeName = normalizeExternalToolName(tu.name).canonicalName
       const registered = getRegisteredTool(resolvedNodeName)
       const legacy = getToolExecutor(resolvedNodeName)
+      // 规划期资源键（调度并发冲突分析）：同一批调用内部相对关系，非安全判定；
+      // 统一用回合起点基准保证批内一致（R1 §4.1.4「规划期可接受」分类）。
       const resourceKeys = registered?.resourceKeys?.(input, { workDir: initialWorkDir, sessionId })
         ?? legacy?.resourceKeys?.(input, { workDir: initialWorkDir, sessionId })
       const conflicts = (a: string, b: string) => {

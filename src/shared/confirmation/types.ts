@@ -410,6 +410,10 @@ export type SecurityAuditEventKind =
   | 'cache.generation-reset'
   | 'settings.policy-change'
   | 'settings.tool-toggle'
+  // R1：会话工作目录绑定在调用边界发生变更（refresh 检出 key 变化，revision+1）
+  | 'workspace.rebound'
+  // R1：同一 revision 内消费点基准分歧（以快照为准，不抛错）
+  | 'workspace.basis-mismatch'
   | 'budget.exhausted'
   | `migration.${string}`
 

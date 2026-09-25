@@ -90,6 +90,8 @@ export interface ToolExecutionContext {
   policyRevision?: string
   appDatabase?: AppDatabase
   workDirManager?: WorkDirManager
+  /** R1：本次工具调用边界解析的工作目录快照（env.workspace 等能力消费单一事实源） */
+  workspaceSnapshot?: import('../../src/shared/agent/workspace').WorkspaceSnapshot
   larkCliRunner?: LarkCliRunner
   remoteContext?: RemoteContext
   /** 用户已在确认卡片（或飞书确认）中明确批准执行本次工具调用 */
@@ -103,6 +105,8 @@ export interface ToolExecutionContext {
 
 import type { BrowserDependencyToolError } from '../../src/shared/browserTypes'
 import { isProcessToolName } from '../../src/shared/processResultProjection'
+import { normalizeToolResultEnvelope } from '../../packages/agent-core/src/toolResultContract'
+import { TOOL_ENVELOPE_KNOWN_ERROR_CODES } from '../../src/shared/errorCodes'
 
 export interface ToolExecutorResult {
   success: boolean
@@ -119,38 +123,43 @@ export interface ToolExecutorResult {
   displayData?: import('../../src/shared/mcpToolResultDisplay').McpResultDisplay
 }
 
+/**
+ * R4：结果信封校验从「矛盾即判失败」改为「事实优先归一 + 告警」。
+ * 归一依据（exitCode/terminationReason/aborted）一律取自同一信封的 data（评审 P2-4）；
+ * violations 非空由调用方（toolChatLoop）落 `tool.result.contract-violation` 日志——不允许静默。
+ */
+export interface ToolExecutorValidation {
+  result: ToolExecutorResult
+  violations: Array<{ invariant: string; detail: string }>
+}
+
+export function validateToolExecutorResultWithViolations(result: unknown): ToolExecutorValidation {
+  const { envelope, violations } = normalizeToolResultEnvelope(result, {
+    knownErrorCodes: TOOL_ENVELOPE_KNOWN_ERROR_CODES
+  })
+  if (violations.some((v) => v.invariant === 'I0')) {
+    // 结构损坏：保持既有稳定诊断形态（渲染端依赖 userMessage/status 兜底）
+    return {
+      result: {
+        success: false,
+        error: 'SHELL_RESULT_CONTRACT_VIOLATION',
+        userMessage: '执行器返回结果异常，请稍后重试',
+        data: { processResult: null, status: 'result_invalid' },
+        diagnostic: { caseId: 'SHELL_RESULT_CONTRACT_VIOLATION', retryable: false, category: 'executor' }
+      },
+      violations
+    }
+  }
+  let out = envelope as ToolExecutorResult
+  if (!out.success && !out.error) {
+    out = { ...out, error: 'TOOL_EXEC_FAILED' }
+    violations.push({ invariant: 'I5', detail: '失败信封缺少 error 字段，已补 TOOL_EXEC_FAILED' })
+  }
+  return { result: out, violations }
+}
+
 export function validateToolExecutorResult(result: unknown): ToolExecutorResult {
-  if (!result || typeof result !== 'object' || typeof (result as { success?: unknown }).success !== 'boolean') {
-    return {
-      success: false,
-      error: 'SHELL_RESULT_CONTRACT_VIOLATION',
-      userMessage: '执行器返回结果异常，请稍后重试',
-      data: { processResult: null, status: 'result_invalid' },
-      diagnostic: { caseId: 'SHELL_RESULT_CONTRACT_VIOLATION', retryable: false, category: 'executor' }
-    }
-  }
-  const normalized = result as ToolExecutorResult
-  const status = normalized.data && typeof normalized.data === 'object'
-    ? (normalized.data as { status?: unknown }).status
-    : undefined
-  if ((normalized.success && status === 'failed') || (!normalized.success && status === 'succeeded')) {
-    return {
-      ...normalized,
-      success: false,
-      error: 'SHELL_RESULT_CONTRACT_VIOLATION',
-      data: { ...(normalized.data as Record<string, unknown>), status: 'result_invalid' },
-      diagnostic: { caseId: 'SHELL_RESULT_CONTRACT_VIOLATION', retryable: false, category: 'executor' }
-    }
-  }
-  if (!normalized.success && !normalized.error) {
-    return {
-      ...normalized,
-      success: false,
-      error: 'SHELL_RESULT_CONTRACT_VIOLATION',
-      data: normalized.data ?? { processResult: null, status: 'result_invalid' }
-    }
-  }
-  return normalized
+  return validateToolExecutorResultWithViolations(result).result
 }
 
 function validateGenericToolExecutorResult(result: unknown): ToolExecutorResult {

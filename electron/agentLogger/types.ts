@@ -31,6 +31,7 @@ export type AgentLogEventName =
   | 'confirm.answerer.config_fallback'
   | 'tool.error'
   | 'tool.result'
+  | 'tool.result.contract-violation'
   | 'tool.progress'
   | 'skills.load'
   | 'skills.scan.skipped'

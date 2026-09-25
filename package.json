@@ -53,7 +53,9 @@
     "pack": "npm run prepare:rg && npm run build && electron-builder",
     "pack:win": "npm run prepare:rg -- --target=win32-x64 && npm run build && electron-builder --win",
     "pack:mac": "npm run prepare:rg -- --target=darwin-x64 --target=darwin-arm64 && npm run build && electron-builder --mac",
-    "pack:linux": "npm run build && electron-builder --linux"
+    "pack:linux": "npm run build && electron-builder --linux",
+    "check:tool-result-invariants": "node scripts/scan-tool-result-invariants.mjs",
+    "test:tool-reliability": "npm run test:electron && npm run check:tool-result-invariants"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.79.0",
