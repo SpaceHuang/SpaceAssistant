@@ -12,7 +12,21 @@ import type { ApprovalInvocationResult, SecurityAuditEvent } from '../src/shared
 
 // 可控的父任务取消信号（failApprovalGroup 的 abort 触发路径验证用）
 const chatCancelState = vi.hoisted(() => ({
-  signal: null as { aborted: boolean; listeners: Array<() => void> } | null
+  signal: null as { aborted: boolean; listeners: Array<() => void> } | null,
+  // 忠实语义的取消错误：throwIfChatCancelled mock 与生产同样抛此类型，
+  // 桌面取消收敛断言用 instanceof 校验（no-op mock 曾掩盖真实收敛顺序）
+  ChatCancelledError: class ChatCancelledError extends Error {
+    constructor() {
+      super('会话已取消')
+      this.name = 'ChatCancelledError'
+    }
+  }
+}))
+
+// 桌面确认卡的可控挂起（waitForToolConfirm 默认立即 approved；pending 模式挂起待取消结算）
+const desktopConfirmControl = vi.hoisted(() => ({
+  pendingMode: false,
+  resolvers: [] as Array<(outcome: string) => void>
 }))
 
 const mockRunApprovalAgent = vi.fn(async (): Promise<ApprovalInvocationResult> => ({
@@ -43,8 +57,11 @@ vi.mock('./chatCancelRegistry', () => ({
   }),
   clearChatCancel: vi.fn(),
   signalChatCancel: vi.fn(),
-  throwIfChatCancelled: vi.fn(),
-  ChatCancelledError: class ChatCancelledError extends Error {},
+  // 忠实语义（P1-1 复盘）：生产实现在 signal.aborted 时抛 ChatCancelledError
+  throwIfChatCancelled: vi.fn((signal?: { aborted?: boolean }) => {
+    if (signal?.aborted) throw new chatCancelState.ChatCancelledError()
+  }),
+  ChatCancelledError: chatCancelState.ChatCancelledError,
   // A2(偏差 18):runtime 工厂经本模块取类构造实例
   ChatCancelRegistry: class ChatCancelRegistry {
     register = vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }))
@@ -70,9 +87,19 @@ vi.mock('./sessionTitleSuggest', () => ({
 vi.mock('./toolConfirmRegistry', () => ({
   registerToolCancel: vi.fn(() => ({ aborted: false, addEventListener: vi.fn() })),
   clearToolCancel: vi.fn(),
-  cancelAllToolConfirmsForRequest: vi.fn(),
+  // 忠实语义（P1-2 复盘）：组死批量取消时把挂起的桌面确认结算为 'cancelled'
+  //（与真实 registry 一致——桌面通道不承载 failApprovalGroup 的 causeHint）
+  cancelAllToolConfirmsForRequest: vi.fn(() => {
+    for (const resolve of desktopConfirmControl.resolvers) resolve('cancelled')
+    desktopConfirmControl.resolvers.length = 0
+  }),
   prepareToolConfirm: vi.fn(),
-  waitForToolConfirm: vi.fn(async () => 'approved' as const)
+  waitForToolConfirm: vi.fn((_requestId: string, _toolUseId: string) => {
+    if (!desktopConfirmControl.pendingMode) return Promise.resolve('approved' as const)
+    return new Promise<string>((resolve) => {
+      desktopConfirmControl.resolvers.push(resolve)
+    })
+  })
 }))
 
 vi.mock('./tools/builtinExecutors', async (importOriginal) => {
@@ -116,6 +143,7 @@ vi.mock('./anthropicClientFactory', () => ({
 
 import { runToolChatSession } from './toolChatLoop'
 import { assembleInvocation } from './runtime/invocationAssembler'
+import { writePolicyPackages } from './confirmation/policyRulesRuntime'
 
 /** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
 function runAssembledSession(materials: unknown) {
@@ -131,8 +159,11 @@ function makeDb(): AppDatabase {
 let streamRound = 0
 /** round0 发起写操作；其后模型每轮继续发起（deny 路径验证不中止），CONVERGE_ROUND 轮收敛为文本。 */
 const CONVERGE_ROUND = 3
-function installStreamClient(opts: { firstRoundToolUses?: number } = {}) {
+function installStreamClient(opts: { firstRoundToolUses?: number; bigWrite?: number } = {}) {
   const firstRoundToolUses = opts.firstRoundToolUses ?? 1
+  // 超过 autoApproveMaxBytes（256KB）的写入：desktop 恒走确定性自动审批快通道，
+  // 超限才会 fallback 进 require-confirm（桌面确认卡链路用例的前置）
+  const writeContent = opts.bigWrite ? 'x'.repeat(opts.bigWrite) : 'x'
   streamRound = 0
   capturedStreamParams.length = 0
   mockCreateAnthropicClient.mockReturnValue({
@@ -149,7 +180,7 @@ function installStreamClient(opts: { firstRoundToolUses?: number } = {}) {
                     type: 'tool_use' as const,
                     id: `toolu-e2e-${idSuffix}`,
                     name: 'write_file',
-                    input: { path: idSuffix === '0' ? 'out.txt' : `out-${idSuffix}.txt`, content: 'x' }
+                    input: { path: idSuffix === '0' ? 'out.txt' : `out-${idSuffix}.txt`, content: writeContent }
                   }
                 }),
                 stop_reason: 'tool_use' as const
@@ -367,5 +398,114 @@ describe('P2 端到端：failApprovalGroup 成因分立（取消语义对齐，�
     const outcomeEv = capturedAuditEvents.find((e) => e.event === 'confirm.outcome')
     expect(outcomeEv).toBeTruthy()
     expect(outcomeEv!.cause).toBe('cancelled')
+  })
+})
+
+// ===== 审批组死亡时「走完通道」的当前节点结算 =====
+// 近死代码清理（confirmOutcomeCause / channelRejectSummary 强制覆盖随即被通道 outcome
+// 字段再覆盖）与裸 throw 语义链梳理：组已死（取消 / 租约恢复失败）后，走完通道的当前
+// 节点必须先按组死权威成因落库（notExecutedReason 闭环，与守卫分支口径一致），再按链路
+// 收敛——桌面取消经 throwIfChatCancelled 以 ChatCancelledError 收敛（落库在前），
+// 其余场景经 abortRepeatedToolError 以回合级失败收敛。不得经裸 throw 跳过 per-tool 落库。
+// 成因来源：failApprovalGroup 首写入参（组死权威成因），而非 channelOutcome.cause——
+// 用户回答者通道（桌面确认卡 / IM）的结算退化为 cancelled，不承载组死成因。
+
+describe('P2 端到端：审批组死亡时走完通道的节点先落库再收敛', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    capturedAuditEvents.length = 0
+    chatCancelState.signal = null
+    desktopConfirmControl.pendingMode = false
+    desktopConfirmControl.resolvers.length = 0
+    mockRunApprovalAgent.mockImplementation(
+      () => new Promise<ApprovalInvocationResult>(() => undefined)
+    )
+  })
+
+  function collectToolResults() {
+    const collected: Array<{ toolUseId: string; notExecutedReason?: string }> = []
+    return {
+      collected,
+      emitSessionEvent: (e: { type: string; payload?: { result?: { notExecutedReason?: string }; toolUseId?: string } }) => {
+        if (e?.type === 'tool_result' && e.payload?.result) {
+          collected.push({ toolUseId: e.payload.toolUseId ?? '', notExecutedReason: e.payload.result.notExecutedReason })
+        }
+      }
+    }
+  }
+
+  it('恢复失败路径：走完通道的节点同样落库 confirm_unavailable，会话经 abort 路径以 ok:false 收敛', async () => {
+    installStreamClient({ firstRoundToolUses: 2 })
+    const db = makeDb()
+    const { collected, emitSessionEvent } = collectToolResults()
+    // 串行执行：A 先入通道挂起，B 启动后 park 失败 → failApprovalGroup('unavailable')。
+    // B 走守卫分支落库；A 走完通道后必须同样落库（不再经裸 throw 跳过）。
+    const res = await runAssembledSession({
+      ...baseArgs(db),
+      toolExecutionConcurrency: 1,
+      applicationAdmission: {
+        park: () => undefined,
+        resume: () => ({ ok: false as const, reason: 'test-stub' })
+      },
+      emitSessionEvent
+    })
+    // 两个节点的结果全部落库且成因一致（环境不可用），无一缺席、无误标为 cancelled
+    expect(collected).toHaveLength(2)
+    expect(collected.map((r) => r.notExecutedReason)).toEqual(['confirm_unavailable', 'confirm_unavailable'])
+    // 回合经 abortRepeatedToolError 收敛（不再 reject），中止理由携带真实成因
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.error).toContain('运行租约恢复失败')
+  })
+
+  it('桌面确认卡 + 兄弟节点恢复失败：组死归因不因通道退化翻转（confirm_unavailable），回合错误不误报取消', async () => {
+    installStreamClient({ firstRoundToolUses: 2 })
+    desktopConfirmControl.pendingMode = true
+    const db = makeDb()
+    // custom 档不做 standard 的 ask→auto-evaluator 变换：desktop write_file 保持 ask
+    //（answerer=user）→ 真实桌面确认卡链路（否则小文件被确定性自动审批短路）
+    writePolicyPackages(db, { desktop: 'custom' })
+    const { collected, emitSessionEvent } = collectToolResults()
+    // 串行执行：A 先入桌面卡挂起，B 启动后 park 失败 → failApprovalGroup('unavailable')。
+    // 存在两个合法变体（A 挂卡与 B 触发的竞争窗口）：
+    //  - A 已挂卡：B 组死 → 桌面通道经 registry 结算退化为 cancelled（不承载组死成因），
+    //    A 走完通道结算 → 归因必须取组死权威成因 unavailable（P1-2 回归特征：误报 confirm_cancelled）；
+    //  - B 抢在 A 挂卡前完成收敛：A 走守卫分支落库（口径同为 unavailable）。
+    // 两个变体的共同不变量：落库无 confirm_cancelled、回合错误不误报「已取消」。
+    const res = await runAssembledSession({
+      ...baseArgs(db),
+      lane: 'desktop',
+      toolExecutionConcurrency: 1,
+      applicationAdmission: {
+        park: () => undefined,
+        resume: () => ({ ok: false as const, reason: 'test-stub' })
+      },
+      emitSessionEvent
+    })
+    expect(collected).toHaveLength(2)
+    const reasons = collected.map((r) => r.notExecutedReason)
+    expect(reasons).not.toContain('confirm_cancelled')
+    expect(reasons).toContain('confirm_unavailable')
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.error).not.toContain('审批已取消')
+  })
+
+  it('取消路径（桌面链路，真实取消语义）：走完通道的节点先落库 confirm_cancelled，再以 ChatCancelledError 收敛', async () => {
+    installStreamClient()
+    const db = makeDb()
+    const { collected, emitSessionEvent } = collectToolResults()
+    const session = runAssembledSession({ ...baseArgs(db), emitSessionEvent })
+    await vi.waitFor(() => {
+      expect(mockRunApprovalAgent.mock.calls.length).toBe(1)
+    })
+    abortParentTask()
+    // 桌面链路（无 remoteContext）父任务取消：生产既有语义是外层把 ChatCancelledError
+    // 转为 { ok:false, cancelled:true } 收敛（不回归、不 reject）
+    const res = await session
+    expect(res.ok).toBe(false)
+    expect((res as { cancelled?: boolean }).cancelled).toBe(true)
+    if (!res.ok) expect(res.error).toContain('会话已取消')
+    // 收敛前必须完成 per-tool 落库——落库不得被取消收敛跳过（throwIfChatCancelled 在落库之后）
+    expect(collected).toHaveLength(1)
+    expect(collected[0]!.notExecutedReason).toBe('confirm_cancelled')
   })
 })
