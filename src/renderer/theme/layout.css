@@ -1848,18 +1848,15 @@
   transform: rotate(90deg);
 }
 
-/* 展开态：与确认卡共用 card 轮廓 token */
+/* 普通工具记录保持行式结构，展开内容由浅底区分。 */
 .tool-row--expanded {
-  border: 1px solid var(--sa-chat-card-border);
-  border-radius: var(--sa-radius-md);
-  background: var(--sa-chat-inset-bg);
-  box-shadow: var(--sa-chat-card-shadow);
-  overflow: hidden;
+  border: none;
+  background: transparent;
 }
 
 .tool-row--expanded .tool-row__main {
-  padding: 6px 10px;
-  border-radius: 0;
+  padding: 4px 6px;
+  border-radius: var(--sa-radius-sm);
   background: transparent;
 }
 
@@ -1906,8 +1903,10 @@
 
 .tool-row--expanded .tool-row-detail__inner {
   gap: 6px;
+  margin-top: 4px;
   padding: 8px 10px 10px;
-  border-top: 1px solid var(--sa-chat-inset-border);
+  border-radius: var(--sa-radius-sm);
+  background: var(--sa-chat-inset-bg);
 }
 
 .tool-row-detail__message {
@@ -1922,7 +1921,7 @@
   word-break: break-word;
 }
 
-/* 展开区内嵌块：代码/输出用 inset；纯文案错误不再套第二层框 */
+/* 详情浅底已承担容器层级，内部代码和输出不再叠加边框。 */
 .tool-row--expanded .tool-row-detail__inner > .sa-command-inset,
 .tool-row--expanded .tool-row-detail__inner > .sa-chat-inset-code,
 .tool-row--expanded .tool-row-detail__inner > .sa-chat-code-block,
@@ -1935,10 +1934,16 @@
   max-width: 100%;
   align-self: stretch;
   box-sizing: border-box;
-  background: var(--sa-chat-inset-bg);
-  border: 1px solid var(--sa-chat-inset-border);
-  border-radius: var(--sa-radius-sm);
+  background: transparent;
+  border: none;
+  border-radius: 0;
   color: var(--sa-command-inset-text);
+}
+
+.tool-row--expanded .tool-row-detail__inner > .sa-command-inset,
+.tool-row--expanded .tool-row-detail__inner > .sa-chat-inset-code,
+.tool-row--expanded .tool-row-detail__inner > .sa-chat-code-block {
+  padding: 0;
 }
 
 .tool-row--expanded .tool-row-detail__inner > .tool-row-detail__message {
@@ -3464,19 +3469,16 @@
   }
 }
 
-/* ── Write success card（与 write-confirm-card 共用 chat 卡片壳层 token） ── */
+/* ── Write success row ── */
 .write-success-card {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 40px;
-  margin: 6px 0;
-  padding: 8px 12px;
-  border: 1px solid var(--sa-chat-card-border);
-  border-radius: var(--sa-radius-md);
-  background: var(--sa-chat-inset-bg);
-  box-shadow: var(--sa-chat-card-shadow);
+  min-height: 32px;
+  margin: 2px 0;
+  padding: 4px 6px;
+  background: transparent;
 }
 
 .write-success-card__icon-wrap {
@@ -3503,10 +3505,6 @@
 
 .write-success-card__badge {
   flex-shrink: 0;
-  padding: 2px 6px;
-  border-radius: var(--sa-radius-sm);
-  background: var(--sa-chat-inset-bg);
-  border: 1px solid var(--sa-chat-card-border);
   font-size: 11px;
   color: var(--sa-text-secondary);
 }
