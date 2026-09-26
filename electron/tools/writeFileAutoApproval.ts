@@ -1,9 +1,10 @@
-import { resolveSafePathReal } from '../pathSecurity'
 import { isSensitivePath } from '../shell/shellSensitivePaths'
 import type { ShellConfig, ToolsConfig } from '../../src/shared/domainTypes'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
+import type { WritePathFact } from '../confirmation/extractors/writePathFacts'
+import type { PathZone } from '../../src/shared/confirmation/types'
 
-export type AutoApprovalRejectReason = 'sensitive_path' | 'oversize' | 'edit_too_large'
+export type AutoApprovalRejectReason = 'invalid_path' | 'sensitive_path' | 'outside_workdir' | 'unsafe_target' | 'oversize' | 'edit_too_large'
 
 export type WriteFileAutoApprovalInput = {
   absPath: string
@@ -15,6 +16,7 @@ export type WriteFileAutoApprovalInput = {
   editCharSpan?: number
   autoApproveMaxBytes: number
   autoApproveMaxEditChars: number
+  targetZone?: PathZone
 }
 
 export type WriteFileAutoApprovalResult =
@@ -23,13 +25,22 @@ export type WriteFileAutoApprovalResult =
 
 export function evaluateWriteFileAutoApproval(input: WriteFileAutoApprovalInput): WriteFileAutoApprovalResult {
   if (
-    isSensitivePath(input.absPath, input.userDataDir, input.customSensitivePrefixes) ||
-    isSensitivePath(input.relPath, input.userDataDir, input.customSensitivePrefixes)
+    (input.targetZone === undefined
+      ? isSensitivePath(input.absPath, input.userDataDir, input.customSensitivePrefixes) || isSensitivePath(input.relPath, input.userDataDir, input.customSensitivePrefixes)
+      : input.targetZone === 'sensitive-file')
   ) {
     return {
       approve: false,
       reason: '目标路径命中敏感目录',
       reasonCode: 'sensitive_path'
+    }
+  }
+
+  if (input.targetZone !== undefined && input.targetZone !== 'workdir-normal') {
+    return {
+      approve: false,
+      reason: '写入目标位于工作目录之外',
+      reasonCode: 'outside_workdir'
     }
   }
 
@@ -65,17 +76,18 @@ export async function evaluateFileToolAutoApproval(args: {
   shellConfig?: ShellConfig | null
   toolName: 'write_file' | 'edit_file'
   input: Record<string, unknown>
+  writePathFact?: WritePathFact
 }): Promise<WriteFileAutoApprovalResult> {
   const rel = typeof args.input.path === 'string' ? args.input.path : ''
   if (!rel) {
-    return { approve: false, reason: '缺少文件路径', reasonCode: 'sensitive_path' }
+    return { approve: false, reason: '缺少有效的文件路径', reasonCode: 'invalid_path' }
   }
-  let abs: string
-  try {
-    abs = await resolveSafePathReal(args.workDir, rel)
-  } catch {
-    return { approve: false, reason: '路径超出工作目录范围', reasonCode: 'sensitive_path' }
-  }
+  const fact = args.writePathFact
+  if (!fact || fact.rawPath !== rel) return { approve: false, reason: '缺少与当前输入绑定的写入目标事实', reasonCode: 'unsafe_target' }
+  if (fact.zone === 'sensitive-file') return { approve: false, reason: '目标路径命中敏感目录', reasonCode: 'sensitive_path' }
+  if (fact.zone !== 'workdir-normal') return { approve: false, reason: '写入目标位于工作目录之外', reasonCode: 'outside_workdir' }
+  if (fact.targetKind !== 'file' && fact.targetKind !== 'missing') return { approve: false, reason: '写入目标不是普通文件或新文件路径', reasonCode: 'unsafe_target' }
+  const abs = fact.normalizedPath
   const maxBytes = args.toolsConfig.autoApproveMaxBytes ?? DEFAULT_TOOLS_CONFIG.autoApproveMaxBytes!
   const maxEdit = args.toolsConfig.autoApproveMaxEditChars ?? DEFAULT_TOOLS_CONFIG.autoApproveMaxEditChars!
   let contentBytes: number | undefined
@@ -97,6 +109,7 @@ export async function evaluateFileToolAutoApproval(args: {
     contentBytes,
     editCharSpan,
     autoApproveMaxBytes: maxBytes,
-    autoApproveMaxEditChars: maxEdit
+    autoApproveMaxEditChars: maxEdit,
+    targetZone: fact.zone
   })
 }

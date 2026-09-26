@@ -8,6 +8,7 @@ import type { ToolsConfig } from '../../src/shared/domainTypes'
 import type { FeishuAuditLogger } from './feishuAuditLogger'
 import { FeishuImChannel } from './feishuImChannel'
 import { shouldAcceptInbound } from './feishuInboundParser'
+import { registerInboundFeishuAttachments } from './feishuAttachmentRegistry'
 import type { LarkCliRunner } from './larkCliRunner'
 import { replyFeishuText } from './feishuReply'
 import { sendFeishuRemoteOutbound } from './feishuRemoteOutbound'
@@ -674,6 +675,7 @@ export class RemoteCommandRouter {
           messageId: msg.messageId,
           confirmPolicy: config.remoteConfirmPolicy,
           feishuConfig: config,
+          feishuAttachments: registerInboundFeishuAttachments(msg),
           imChannel: this.deps.imChannel,
           confirmTimeoutMessage: FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE,
           larkCliRunner: this.deps.runner,

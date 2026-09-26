@@ -403,6 +403,10 @@
     "script": {
       "pythonPathLabel": "Python 路径",
       "pythonPathPlaceholder": "python 或绝对路径",
+      "javascriptPathLabel": "JavaScript Node 路径",
+      "typescriptPathLabel": "TypeScript Node 路径",
+      "powershellPathLabel": "PowerShell 路径",
+      "interpreterPathPlaceholder": "命令名或绝对路径",
       "test": "测试",
       "timeoutLabel": "脚本默认超时（秒）",
       "grepTimeoutLabel": "grep 超时（秒）"

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { evaluateWriteFileAutoApproval } from './writeFileAutoApproval'
+import type { WritePathFact } from '../confirmation/extractors/writePathFacts'
 
 const base = {
   absPath: '/work/notes.txt',
@@ -35,5 +36,14 @@ describe('evaluateWriteFileAutoApproval', () => {
     const result = evaluateWriteFileAutoApproval({ ...base, editCharSpan: 600 })
     expect(result.approve).toBe(false)
     if (!result.approve) expect(result.reasonCode).toBe('edit_too_large')
+  })
+
+  it('uses the gate write fact and blocks an outside target', () => {
+    const fact: WritePathFact = {
+      rawPath: '/outside/new.txt', normalizedPath: '/outside/new.txt', zone: 'outside-workdir', targetKind: 'missing',
+      parentReal: '/outside', parentIdentity: { dev: 1, ino: 2, mode: 0o40755, size: 0, mtimeMs: 1, nlink: 1 }
+    }
+    expect(evaluateWriteFileAutoApproval({ ...base, absPath: fact.normalizedPath, relPath: fact.rawPath, targetZone: fact.zone, contentBytes: 1 }))
+      .toMatchObject({ approve: false, reasonCode: 'outside_workdir' })
   })
 })

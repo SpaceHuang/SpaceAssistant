@@ -15,6 +15,7 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 export type ToolsSettingsUi = {
   deniedTools: string[]
   pythonPath: string
+  scriptInterpreterPaths?: Partial<Record<'javascript' | 'typescript' | 'powershell', string>>
   scriptTimeout: number
   fileCheckpointingEnabled: boolean
   maxFileSnapshots: number
@@ -167,6 +168,18 @@ export function ToolsSettingsTab({
                 </Button>
               </Space.Compact>
             </Form.Item>
+            {(['javascript', 'typescript', 'powershell'] as const).map((language) => (
+              <Form.Item key={language} label={t(`tools.script.${language === 'javascript' ? 'javascriptPathLabel' : language === 'typescript' ? 'typescriptPathLabel' : 'powershellPathLabel'}`)}>
+                <Input
+                  value={toolUi.scriptInterpreterPaths?.[language] ?? ''}
+                  placeholder={t('tools.script.interpreterPathPlaceholder')}
+                  onChange={(e) => setToolUi((s) => ({
+                    ...s,
+                    scriptInterpreterPaths: { ...s.scriptInterpreterPaths, [language]: e.target.value }
+                  }))}
+                />
+              </Form.Item>
+            ))}
             {pyTest ? <ConfigResultAlert ok={pyTest.ok} message={pyTest.text} /> : null}
             <Form.Item label={t('tools.script.timeoutLabel')}>
               <InputNumber

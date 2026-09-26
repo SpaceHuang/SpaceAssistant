@@ -36,15 +36,15 @@ export type RangeReadResult = {
   truncated: boolean
 }
 
-async function readBinaryProbe(absPath: string, signal?: AbortSignal): Promise<boolean> {
-  const fh = await fs.open(absPath, 'r')
+async function readBinaryProbe(absPath: string, signal?: AbortSignal, existingHandle?: FileHandle): Promise<boolean> {
+  const fh = existingHandle ?? await fs.open(absPath, 'r')
   try {
     const buf = Buffer.alloc(Math.min(8000, READ_FILE_TAIL_CHUNK_BYTES))
     const { bytesRead } = await fh.read(buf, 0, buf.length, 0)
     if (signal?.aborted) throw new Error('aborted')
     return isBinaryBuffer(buf.subarray(0, bytesRead))
   } finally {
-    await fh.close()
+    if (!existingHandle) await fh.close()
   }
 }
 
@@ -55,7 +55,7 @@ async function readBinaryProbe(absPath: string, signal?: AbortSignal): Promise<b
 export async function readFileTailFromDisk(
   absPath: string,
   tail: number,
-  opts?: { signal?: AbortSignal; chunkBytes?: number; fileSize?: number }
+  opts?: { signal?: AbortSignal; chunkBytes?: number; fileSize?: number; fileHandle?: FileHandle }
 ): Promise<TailReadResult> {
   const n = Math.max(1, Math.floor(tail))
   const chunkBytes = opts?.chunkBytes ?? READ_FILE_TAIL_CHUNK_BYTES
@@ -65,7 +65,7 @@ export async function readFileTailFromDisk(
   }
 
   if (stSize <= READ_FILE_SMALL_FILE_BYTES) {
-    const buf = await fs.readFile(absPath, { signal: opts?.signal })
+    const buf = opts?.fileHandle ? await opts.fileHandle.readFile() : await fs.readFile(absPath, { signal: opts?.signal })
     if (isBinaryBuffer(buf)) throw new Error('BINARY')
     const sliced = sliceFileTailLines(buf.toString('utf8'), n)
     return {
@@ -76,13 +76,13 @@ export async function readFileTailFromDisk(
     }
   }
 
-  if (await readBinaryProbe(absPath, opts?.signal)) throw new Error('BINARY')
+  if (await readBinaryProbe(absPath, opts?.signal, opts?.fileHandle)) throw new Error('BINARY')
 
-  const fh = await fs.open(absPath, 'r')
+  const fh = opts?.fileHandle ?? await fs.open(absPath, 'r')
   try {
     return await readTailChunks(fh, stSize, n, chunkBytes, opts?.signal)
   } finally {
-    await fh.close()
+    if (!opts?.fileHandle) await fh.close()
   }
 }
 
@@ -146,7 +146,7 @@ export async function readFileRangeFromDisk(
   absPath: string,
   offset: number,
   limit: number | undefined,
-  opts?: { signal?: AbortSignal; fileSize?: number }
+  opts?: { signal?: AbortSignal; fileSize?: number; fileHandle?: FileHandle }
 ): Promise<RangeReadResult> {
   const startLine = Math.max(1, Math.floor(offset))
   const stSize = opts?.fileSize ?? (await fs.stat(absPath)).size
@@ -154,7 +154,7 @@ export async function readFileRangeFromDisk(
   const effectiveLimit = limit !== undefined ? Math.max(1, Math.floor(limit)) : READ_FILE_MAX_LINE_LIMIT
 
   if (stSize <= READ_FILE_SMALL_FILE_BYTES) {
-    const buf = await fs.readFile(absPath, { signal: opts?.signal })
+    const buf = opts?.fileHandle ? await opts.fileHandle.readFile() : await fs.readFile(absPath, { signal: opts?.signal })
     if (isBinaryBuffer(buf)) throw new Error('BINARY')
     const sliced = sliceFileLines(buf.toString('utf8'), { offset: startLine, limit: effectiveLimit })
     return {
@@ -167,13 +167,13 @@ export async function readFileRangeFromDisk(
     }
   }
 
-  if (await readBinaryProbe(absPath, opts?.signal)) throw new Error('BINARY')
+  if (await readBinaryProbe(absPath, opts?.signal, opts?.fileHandle)) throw new Error('BINARY')
 
-  const fh = await fs.open(absPath, 'r')
+  const fh = opts?.fileHandle ?? await fs.open(absPath, 'r')
   try {
     return await streamLineRange(fh, stSize, startLine, effectiveLimit, opts?.signal)
   } finally {
-    await fh.close()
+    if (!opts?.fileHandle) await fh.close()
   }
 }
 

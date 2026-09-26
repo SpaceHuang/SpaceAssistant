@@ -141,6 +141,27 @@ describe('workDirExecutors', () => {
     expect(result.error).toBe(REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE)
   })
 
+  it('执行时发现目标 profile 已变为敏感时返回可审计的机制诊断', async () => {
+    const dirA = tempDir()
+    const dirB = tempDir()
+    dirs.push(dirA, dirB)
+    const dbPath = path.join(tempDir(), 'db.db')
+    dirs.push(path.dirname(dbPath))
+    const db = openDatabase(dbPath)
+    openDbs.push(db)
+    const manager = createWorkDirManager({ db, getWorkDir: () => dirA, setWorkDir: () => undefined })
+    manager.addProfile({ name: 'Secret', path: dirB, sensitive: true })
+    const session = createSession(db, { name: 'S1' })
+    tryClaimRemoteSession(session.id, 'req-1', 3)
+    const result = await switchWorkDirExecutor.execute({ name: 'Secret' }, makeRemoteCtx(db, manager, session.id))
+    releaseRemoteSession(session.id, 'req-1')
+
+    expect(result).toMatchObject({
+      success: false,
+      diagnostic: { caseId: 'workdir-profile-sensitive-at-execution', category: 'environment', retryable: true }
+    })
+  })
+
   it('switch_work_dir returns ambiguous matches', async () => {
     const dirA = tempDir()
     const dirB = tempDir()

@@ -39,13 +39,13 @@ export const BUILTIN_TOOL_METADATA: Record<string, ToolActionDescriptor> = {
     toolName: 'run_shell',
     actionClass: 'execute',
     riskLevel: 'high',
-    extractors: ['command-sequence', 'path-classifier', 'network-egress']
+    extractors: ['command-sequence']
   },
   run_script: {
     toolName: 'run_script',
     actionClass: 'execute',
     riskLevel: 'high',
-    extractors: ['script-analysis', 'path-classifier']
+    extractors: ['script-analysis']
   },
   run_lark_cli: {
     toolName: 'run_lark_cli',

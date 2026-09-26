@@ -13,6 +13,7 @@ import {
 } from '../../src/shared/toolResultLimits'
 import type { ToolExecutionContext, ToolExecutorResult } from './types'
 import { editFileExecutor, readFileExecutor } from './builtinExecutors'
+import { attachTestReadPermit } from './readPermitTestUtils'
 import { buildEscapeLayerVariants, diagnoseMissingOldString, lcsOpcodes, type EditMissingDiagnosis } from './editDiagnosis'
 
 /**
@@ -34,6 +35,11 @@ function makeCtx(workDir: string, cache: FileStateCache): ToolExecutionContext {
   }
 }
 
+async function executePermittedRead(input: Record<string, unknown>, ctx: ToolExecutionContext) {
+  await attachTestReadPermit('read_file', input, ctx)
+  return readFileExecutor.execute(input, ctx)
+}
+
 // 真实案例复现（§2.3）：文件第 58 行该处为 2 个连续反斜杠，模型提交 1 个。
 // JS 字面量 \\\\ = 文件中 2 个反斜杠；\\ = 1 个反斜杠。
 const REAL_LINE_FILE = "wiki: `rg -n '(:\\\\s*\\\\(|=>)' src/shared/agent/invocation.ts` 说明"
@@ -51,7 +57,7 @@ async function readThenEdit(
   input: { old_string: string; new_string: string; replace_all?: boolean; tolerate_escape_layer?: boolean }
 ): Promise<ToolExecutorResult> {
   const ctx = makeCtx(tmpDir, cache)
-  const read = await readFileExecutor.execute({ path: rel }, ctx)
+  const read = await executePermittedRead({ path: rel }, ctx)
   if (!read.success) throw new Error('read_file failed in fixture setup')
   return editFileExecutor.execute({ path: rel, ...input }, ctx)
 }
@@ -332,7 +338,7 @@ describe('edit_file 匹配失败诊断（§7.1 场景）', () => {
     const abs = path.join(tmpDir, rel)
     await fs.writeFile(abs, 'v1 content', 'utf8')
     const ctx = makeCtx(tmpDir, cache)
-    expect((await readFileExecutor.execute({ path: rel }, ctx)).success).toBe(true)
+    expect((await executePermittedRead({ path: rel }, ctx)).success).toBe(true)
     await fs.writeFile(abs, 'v2 changed by external program', 'utf8')
     const res = await editFileExecutor.execute({ path: rel, old_string: 'v1 content', new_string: 'x' }, ctx)
     expect(res.success).toBe(false)

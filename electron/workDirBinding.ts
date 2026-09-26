@@ -69,6 +69,17 @@ export function matchWorkDirProfile(input: MatchWorkDirInput, profiles: WorkDirP
   }
 }
 
+/** gate 使用的 profile 敏感性事实；选择不明确时，只要候选中含敏感项便 fail closed。 */
+export function classifyWorkDirProfileTarget(
+  input: MatchWorkDirInput,
+  profiles: WorkDirProfile[] | undefined
+): 'normal' | 'sensitive' | 'unknown' {
+  if (!profiles) return 'unknown'
+  const result = matchWorkDirProfile(input, profiles)
+  if (result.error || result.matches.length === 0) return 'unknown'
+  return result.matches.some((profile) => profile.sensitive === true) ? 'sensitive' : 'normal'
+}
+
 export async function writeWorkDirSwitchAudit(
   remoteContext: RemoteContext,
   profileId: string,

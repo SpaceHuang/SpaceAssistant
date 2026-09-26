@@ -7,7 +7,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'read_file',
     description:
-      '读取指定文件内容（仅适用于文件，不可用于目录；查看目录请用 list_directory）。路径相对于工作目录，不可超出工作目录范围。大文件须使用 offset+limit 分段读取，或使用 tail 读取末尾若干行（正序返回）；未提供 offset/limit/tail 且文件超过单次字符上限时，不返回正文前缀，仅返回体积等元数据与分段读取提示。tail 与 offset/limit 互斥。省略 limit 时单次最多返回 2000 行（且受单次字符上限约束）。路径字段名为 path（小写），请勿使用 filePath 或 file_path。',
+      '读取指定文件内容（仅适用于文件，不可用于目录；查看目录请用 list_directory）。读取范围由当前会话安全策略决定：普通桌面只读可按策略访问工作目录外路径，敏感或系统位置需真人确认；远程会话只允许工作目录内普通路径。大文件须使用 offset+limit 分段读取，或使用 tail 读取末尾若干行（正序返回）；未提供 offset/limit/tail 且文件超过单次字符上限时，不返回正文前缀，仅返回体积等元数据与分段读取提示。tail 与 offset/limit 互斥。省略 limit 时单次最多返回 2000 行（且受单次字符上限约束）。路径字段名为 path（小写），请勿使用 filePath 或 file_path。',
     input_schema: {
       type: 'object',
       properties: {
@@ -63,7 +63,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   },
   {
     name: 'list_directory',
-    description: '列出指定目录下的文件和子目录。路径相对于工作目录，不可超出工作目录范围。路径字段名为 path（小写），请勿使用 filePath 或 file_path。',
+    description: '列出指定目录下的文件和子目录。读取范围由当前会话安全策略决定：普通桌面只读可按策略访问工作目录外路径，敏感或系统位置需真人确认；远程会话只允许工作目录内普通路径。路径字段名为 path（小写），请勿使用 filePath 或 file_path。',
     input_schema: {
       type: 'object',
       properties: {
@@ -74,14 +74,14 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'grep',
     description:
-      '在当前工作目录范围内递归搜索文件内容。pattern 使用 ripgrep 默认正则语法。使用 output_mode 选择返回匹配文件、匹配内容或每文件匹配行数，使用 head_limit 限制结果数量。搜索文件内容时使用本工具，无需调用 shell。',
+      '按当前会话安全策略搜索一个明确指定的文件：普通桌面只读可按策略搜索工作目录外路径中的单个文件，敏感或系统位置需真人确认；远程会话只允许工作目录内普通路径中的普通文件。不支持目录递归、通配路径或多路径输入。pattern 使用 ripgrep 默认正则语法。使用 output_mode 选择返回匹配文件、匹配内容或每文件匹配行数，使用 head_limit 限制结果数量。搜索文件内容时使用本工具，无需调用 shell。',
     input_schema: {
       type: 'object',
       properties: {
         pattern: { type: 'string', description: '使用 ripgrep 默认正则语法的搜索模式；默认不支持 lookaround 和反向引用' },
         path: {
           type: 'string',
-          description: '工作目录内要搜索的文件或目录；支持相对路径和工作目录内的绝对路径，默认搜索整个工作目录'
+          description: '必填的单个文件路径；支持相对路径和绝对路径，目录、通配路径和多路径不受支持'
         },
         glob: { type: 'string', description: "使用 .gitignore 风格 glob，支持 !pattern 排除和 {ts,tsx} alternatives；显式单文件 path 不受过滤" },
         output_mode: {
@@ -97,17 +97,18 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
         head_limit: { type: 'integer', minimum: 0, maximum: 1000000, description: '最多返回的非空输出行数，默认 100；0 不限制行数但仍受 400 KiB 总上限约束' }
       },
       additionalProperties: false,
-      required: ['pattern']
+      required: ['pattern', 'path']
     }
   },
   {
     name: 'run_script',
     description:
-      '执行一段 Python 脚本代码（仅 Python）。脚本在工作目录下执行，有超时限制。执行前需用户确认。修改文件请优先使用 edit_file——它带未读校验、外部修改检测、检查点备份与原子写保护；edit_file 匹配失败时按其返回的 diagnosis 修正 old_string 后重试，不要改用脚本直接读写文件。',
+      '执行 Python、JavaScript、TypeScript 或 PowerShell 脚本。language 可省略（默认 Python）；脚本在工作目录下执行，有超时限制。非 Python 语言尚未接入完整内容安全分析，每次都需要真人确认；无人值守调用会拒绝。修改文件请优先使用 edit_file——它带未读校验、外部修改检测、检查点备份与原子写保护；edit_file 匹配失败时按其返回的 diagnosis 修正 old_string 后重试，不要改用脚本直接读写文件。',
     input_schema: {
       type: 'object',
       properties: {
         code: { type: 'string', description: '要执行的脚本代码' },
+        language: { type: 'string', enum: ['python', 'javascript', 'typescript', 'powershell'], description: '脚本语言，省略时默认为 Python' },
         timeout: { type: 'number', description: '超时时间（秒），默认 300' }
       },
       required: ['code']
@@ -147,13 +148,13 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   },
   {
     name: 'read_feishu_attachment',
-    description: '读取 userData/feishu-media 目录下的飞书消息附件（只读，防路径遍历）。',
+    description: '读取当前飞书消息实际附带的附件。只能使用本次请求提供的 attachmentId，不接受文件路径。',
     input_schema: {
       type: 'object',
       properties: {
-        relativePath: { type: 'string', description: '相对于 feishu-media 根目录的路径' }
+        attachmentId: { type: 'string', description: '本次飞书消息提供的附件编号' }
       },
-      required: ['relativePath']
+      required: ['attachmentId']
     }
   },
   {

@@ -46,6 +46,27 @@ export function filterBuiltinToolsForApi(
   if (!feishu?.enabled) {
     list = list.filter((t) => t.name !== 'run_lark_cli' && t.name !== 'read_feishu_attachment')
   }
+  const feishuAttachments = remoteContext?.source === 'feishu' ? remoteContext.feishuAttachments ?? [] : []
+  if (feishuAttachments.length === 0) {
+    list = list.filter((t) => t.name !== 'read_feishu_attachment')
+  } else {
+    const attachmentIds = feishuAttachments.map((attachment) => attachment.id)
+    const attachmentNames = feishuAttachments.map((attachment) => `${attachment.id}: ${attachment.fileName ?? '飞书附件'}`).join('；')
+    list = list.map((tool) => {
+      if (tool.name !== 'read_feishu_attachment') return tool
+      const schema = tool.input_schema as { type: 'object'; properties: Record<string, unknown>; required?: string[] }
+      return {
+        ...tool,
+        input_schema: {
+          ...schema,
+          properties: {
+            ...schema.properties,
+            attachmentId: { type: 'string', enum: attachmentIds, description: `本次消息附件：${attachmentNames}` }
+          }
+        }
+      } as typeof tool
+    })
+  }
   if (feishu?.integrationMode === 'mcp') {
     list = list.filter((t) => t.name !== 'run_lark_cli')
   }

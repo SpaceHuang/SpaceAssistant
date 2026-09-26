@@ -403,6 +403,10 @@
     "script": {
       "pythonPathLabel": "Python path",
       "pythonPathPlaceholder": "python or absolute path",
+      "javascriptPathLabel": "JavaScript Node path",
+      "typescriptPathLabel": "TypeScript Node path",
+      "powershellPathLabel": "PowerShell path",
+      "interpreterPathPlaceholder": "Command name or absolute path",
       "test": "Test",
       "timeoutLabel": "Default script timeout (seconds)",
       "grepTimeoutLabel": "grep timeout (seconds)"

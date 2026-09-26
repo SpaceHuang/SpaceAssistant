@@ -20,6 +20,7 @@ export interface ToolsConfig {
   allowedTools: string[]
   deniedTools: string[]
   pythonPath: string
+  scriptInterpreterPaths?: Partial<Record<'javascript' | 'typescript' | 'powershell', string>>
   scriptTimeout: number
   fileCheckpointingEnabled: boolean
   maxFileSnapshots: number
@@ -33,6 +34,7 @@ export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
   allowedTools: [],
   deniedTools: [],
   pythonPath: 'python',
+  scriptInterpreterPaths: { javascript: 'node', typescript: 'node', powershell: '' },
   scriptTimeout: 300,
   fileCheckpointingEnabled: true,
   maxFileSnapshots: 100,
@@ -547,6 +549,8 @@ export interface AutoApprovedWriteMeta {
 
 export interface ToolCallResultPersisted {
   success: boolean
+  /** Gate 决策规则 ID，用于串联 policy.decision 与执行结果审计。 */
+  decisionRuleId?: string
   data?: unknown
   error?: string
   userMessage?: string

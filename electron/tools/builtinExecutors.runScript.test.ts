@@ -50,6 +50,25 @@ function ctx() {
   } as never
 }
 
+describe('run_script language dispatch', () => {
+  it('executes JavaScript and TypeScript with Node after gate-level language selection', async () => {
+    const executor = getToolExecutor('run_script')!
+    const context = () => ({
+      ...ctx(),
+      toolsConfig: {
+        enabled: true, allowedTools: [], deniedTools: [], scriptTimeout: 5, pythonPath: 'python',
+        scriptInterpreterPaths: { javascript: process.execPath, typescript: process.execPath }
+      }
+    }) as never
+    const js = await executor.execute({ language: 'javascript', code: "console.log('javascript-output')" }, context())
+    const ts = await executor.execute({ language: 'typescript', code: "const answer: string = 'typescript-output'; console.log(answer)" }, context())
+    expect(js).toMatchObject({ success: true, data: { status: 'succeeded' } })
+    expect((js.data as { stdout?: string }).stdout).toContain('javascript-output')
+    expect(ts).toMatchObject({ success: true, data: { status: 'succeeded' } })
+    expect((ts.data as { stdout?: string }).stdout).toContain('typescript-output')
+  }, 20_000)
+})
+
 describe.skipIf(!pythonInterpreter)('run_script result contract', () => {
   it('失败时保留结构化 stderr 与稳定错误码', async () => {
     const executor = getToolExecutor('run_script')!

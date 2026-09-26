@@ -100,6 +100,7 @@ export function buildConfigModalSnapshot(input: ConfigModalSnapshotInput): strin
     toolUi: {
       deniedTools: [...input.toolUi.deniedTools].sort(),
       pythonPath: input.toolUi.pythonPath,
+      scriptInterpreterPaths: input.toolUi.scriptInterpreterPaths ?? {},
       scriptTimeout: input.toolUi.scriptTimeout,
       fileCheckpointingEnabled: input.toolUi.fileCheckpointingEnabled,
       maxFileSnapshots: input.toolUi.maxFileSnapshots,
@@ -137,6 +138,7 @@ export function buildConfigModalSnapshotFromConfig(
     toolUi: {
       deniedTools,
       pythonPath: cfg.tools.pythonPath,
+      scriptInterpreterPaths: cfg.tools.scriptInterpreterPaths ?? {},
       scriptTimeout: cfg.tools.scriptTimeout,
       fileCheckpointingEnabled: cfg.tools.fileCheckpointingEnabled,
       maxFileSnapshots: cfg.tools.maxFileSnapshots,

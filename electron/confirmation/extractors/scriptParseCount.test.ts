@@ -3,6 +3,7 @@ import { describe, expect, it, vi, afterEach } from 'vitest'
 import { scriptParserService } from '../../shell/scriptParserService'
 import { parsePythonModule, analyzeScriptContent } from '../../shell/scriptContentSecurity'
 import { extractScriptSignals } from './scriptAnalysisExtractor'
+import { extractScriptPathFacts } from './scriptPathFacts'
 import { runExtractors } from './runExtractors'
 import type { IrModule } from '../../shell/scriptIr/types'
 import type { EnvFacts, ToolActionDescriptor } from '../../../src/shared/confirmation/types'
@@ -51,6 +52,7 @@ describe('P1-T3 解析次数 spy 断言（发现 B：热路径重复解析消除
     const before = spy.mock.calls.length
     extractScriptSignals(OK_CODE, ENV, ir)
     analyzeScriptContent(OK_CODE, { remote: false }, ir)
+    extractScriptPathFacts(OK_CODE, 'python', ir)
     expect(spy.mock.calls.length).toBe(before)
   })
 

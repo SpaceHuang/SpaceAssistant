@@ -2,6 +2,7 @@ import { getAgentLogDir } from '../agentLogger/agentLogger'
 import { SecurityAuditLog } from './securityAuditLog'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
+import { auditFactId } from './auditFactId'
 
 export interface AuditSink {
   record(event: SecurityAuditEvent): void
@@ -56,4 +57,27 @@ export function getSecurityAuditRetentionDays(fallback = 180): number {
 /** 审计日志目录(供只读查询);agentLogger 未初始化时返回 null。 */
 export function getSecurityAuditLogDir(): string | null {
   return resolveSecurityAuditLogDir()
+}
+
+
+export function recordPolicyExecutionVeto(input: {
+  audit?: AuditSink
+  lane: import('../../src/shared/confirmation/types').ExecutionLane
+  sessionId: string
+  requestId?: string
+  toolUseId?: string
+  toolName: string
+  decisionRuleId?: string
+  factId?: string
+  pathZone?: import('../../src/shared/confirmation/types').PathZone
+  failureClass: 'input' | 'mechanism' | 'environment' | 'integration-violation'
+  caseId: string
+}): void {
+  ;(input.audit ?? getSecurityAuditLog()).record({
+    ts: Date.now(), event: 'policy.execution-veto', lane: input.lane, sessionId: input.sessionId,
+    requestId: input.requestId, toolUseId: input.toolUseId, toolName: input.toolName,
+    decisionRuleId: input.decisionRuleId, pathZone: input.pathZone,
+    ...(input.factId ? { factId: auditFactId(input.factId) } : {}),
+    failureClass: input.failureClass, caseId: input.caseId, reason: input.caseId, actor: 'system'
+  })
 }

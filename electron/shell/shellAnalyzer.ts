@@ -16,6 +16,7 @@ export interface ShellFactAnalysis {
   readonly operations: readonly ShellOperation[]
   readonly connectors: readonly string[]
   readonly paths: readonly string[]
+  readonly redirects: readonly string[]
   readonly cwdChanges: readonly string[]
   readonly analysisCompleteness: ShellAnalysisCompleteness
   readonly unresolved: readonly string[]
@@ -47,7 +48,7 @@ export function analyzeShellFacts(
     segments = parseShellSegments(analysisCommand)
   } catch (error) {
     return {
-      dialect, operations: [], connectors: [], paths: [], cwdChanges: [],
+      dialect, operations: [], connectors: [], paths: [], redirects: [], cwdChanges: [],
       analysisCompleteness: 'partial',
       unresolved: [error instanceof Error ? error.message : String(error)]
     }
@@ -55,6 +56,7 @@ export function analyzeShellFacts(
 
   const operations: ShellOperation[] = []
   const paths: string[] = []
+  const redirects: string[] = []
   const cwdChanges: string[] = []
   for (const [segmentIndex, segment] of segments.entries()) {
     const tokens = tokenizeSimpleCommand(segment)
@@ -76,7 +78,7 @@ export function analyzeShellFacts(
 
   const connectors = extractConnectors(analysisCommand)
   return {
-    dialect, operations, connectors, paths, cwdChanges,
+    dialect, operations, connectors, paths, redirects, cwdChanges,
     analysisCompleteness: unresolved.length ? 'partial' : 'complete',
     unresolved
   }
@@ -86,13 +88,14 @@ export function analyzeShellFacts(
 function treeFactsToAnalysis(dialect: ShellDialect, f: BashCommandFacts | PsCommandFacts): ShellFactAnalysis {
   if (!f.ok) {
     return {
-      dialect, operations: [], connectors: [], paths: [], cwdChanges: [],
+      dialect, operations: [], connectors: [], paths: [], redirects: [], cwdChanges: [],
       analysisCompleteness: 'partial',
       unresolved: ['parse:tree-error']
     }
   }
   const operations: ShellOperation[] = []
   const paths: string[] = []
+  const redirects: string[] = []
   const cwdChanges: string[] = []
   const stripQuotes = (t: string) => t.replace(/^["']+|["']+$/g, '')
   const cwdVerbs = dialect === 'windows-powershell' ? ['cd', 'set-location', 'sl'] : ['cd']
@@ -105,7 +108,7 @@ function treeFactsToAnalysis(dialect: ShellDialect, f: BashCommandFacts | PsComm
     }
     for (const r of cmd.redirects) {
       const target = stripQuotes(r.target)
-      if (target && /[\/]|^[A-Za-z]:/.test(target)) paths.push(target)
+      if (target) redirects.push(target)
     }
     if (cwdVerbs.includes(cmd.name.toLowerCase()) && cmd.args[0]) cwdChanges.push(stripQuotes(cmd.args[0]))
   }
@@ -114,6 +117,7 @@ function treeFactsToAnalysis(dialect: ShellDialect, f: BashCommandFacts | PsComm
     operations,
     connectors: f.connectorFlow,
     paths,
+    redirects,
     cwdChanges,
     analysisCompleteness: f.unresolved.length === 0 ? 'complete' : 'partial',
     unresolved: f.unresolved

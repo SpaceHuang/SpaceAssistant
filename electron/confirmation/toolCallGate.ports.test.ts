@@ -176,7 +176,7 @@ describe('evaluateToolCallGate 端口语义等价（与 appDb 路径同判）', 
     expect(persisted?.lastUsedAt ?? 0).toBeGreaterThan(0)
   })
 
-  it('裁决顺序特征化保留：deny 覆盖落 ask 后，既有 allow 缓存仍可放行', async () => {
+  it('custom deny 覆盖优先于确认和既有 allow 缓存', async () => {
     const db = openDb()
     const { PolicyRuleStore } = await import('./policyRuleStore')
     const { writePolicyPackages } = await import('./policyRulesRuntime')
@@ -189,7 +189,7 @@ describe('evaluateToolCallGate 端口语义等价（与 appDb 路径同判）', 
       audit: noCacheMaterials.audit, effectiveRules: noCacheMaterials.effectiveRules,
       decisionCache: noCacheMaterials.decisionCache, shellPrecheck: noCacheMaterials.shellPrecheck
     }))
-    expect(noCache.decision.type).toBe('require-confirm')
+    expect(noCache.decision).toMatchObject({ type: 'deny', ruleId: 'mcp-readonly-allow' })
 
     const key = { kind: 'mcp-tool' as const, serverId: 'srv1', toolName: 'list_issues', sessionId: 's1' }
     const now = Date.now()
@@ -203,7 +203,6 @@ describe('evaluateToolCallGate 端口语义等价（与 appDb 路径同判）', 
       audit: withCacheMaterials.audit, effectiveRules: withCacheMaterials.effectiveRules,
       decisionCache: withCacheMaterials.decisionCache, shellPrecheck: withCacheMaterials.shellPrecheck
     }))
-    expect(withCache.decision.type).toBe('auto-allow')
-    if (withCache.decision.type === 'auto-allow') expect(withCache.decision.ruleId).toBe('cache-hit')
+    expect(withCache.decision).toMatchObject({ type: 'deny', ruleId: 'mcp-readonly-allow' })
   })
 })

@@ -1,4 +1,5 @@
 import { type IpcMain } from 'electron'
+import path from 'path'
 import { runNpmCommand, runNpxCommand } from './npmCommandRunner'
 import { runFeishuCliWithBrowserFlow } from './feishuCliFlow'
 import type { AppDatabase } from '../database'
@@ -11,6 +12,7 @@ import { FeishuProcessedStore } from './feishuProcessedStore'
 import { FeishuImChannel } from './feishuImChannel'
 import { FeishuAuditLogger } from './feishuAuditLogger'
 import { FeishuEventService } from './feishuEventService'
+import { prepareInboundFeishuAttachments } from './feishuInboundAttachmentDownload'
 import { RemoteCommandRouter, type RemoteCommandRouterDeps } from './remoteCommandRouter'
 import type { WorkDirManager } from '../workDirManager'
 import { getMainWindow } from '../windowRef'
@@ -22,7 +24,7 @@ import { cancelAllActiveChats } from '../chatCancelRegistry'
 import { getRemoteTaskController } from '../remote/remoteTaskController'
 import { remoteAuthorizationRegistry } from '../remote/remoteAuthorizationRegistry'
 import { flushFeishuCliLogger, logFeishuCliEvent } from './feishuCliLogger'
-import { authUrlHostOnly, previewText } from './feishuCliLogFields'
+import { authUrlHostOnly, FEISHU_CLI_LINE_PREVIEW_MAX, previewText } from './feishuCliLogFields'
 import { parseLarkCliError } from './larkCliErrors'
 import type { TurnRuntime } from '../turnRuntime'
 import {
@@ -176,7 +178,27 @@ export function createFeishuBundle(deps: {
   }
 
   const router = new RemoteCommandRouter(routerDeps)
-  const eventService = new FeishuEventService(runner, (msg) => void router.handleInbound(msg), () => {})
+  const eventService = new FeishuEventService(runner, (msg) => {
+    void (async () => {
+      let prepared = msg
+      try {
+        prepared = await prepareInboundFeishuAttachments(
+          runner, msg, path.join(userData, 'feishu-media'), readCfg(), Boolean(ownerBind.isBindingActive())
+        )
+      } catch (error) {
+        logFeishuCliEvent('warn', 'feishu.event.attachment_download_failed', {
+          messageId: msg.messageId,
+          errorPreview: previewText(error instanceof Error ? error.message : String(error), FEISHU_CLI_LINE_PREVIEW_MAX)
+        })
+      }
+      await router.handleInbound(prepared)
+    })().catch((error) => {
+      logFeishuCliEvent('error', 'feishu.event.inbound_dispatch_failed', {
+        messageId: msg.messageId,
+        errorPreview: previewText(error instanceof Error ? error.message : String(error), FEISHU_CLI_LINE_PREVIEW_MAX)
+      })
+    })
+  }, () => {})
 
   const cfg = readCfg()
   bundle = { runner, processedStore, imChannel, auditLogger, eventService, router, ownerBind }

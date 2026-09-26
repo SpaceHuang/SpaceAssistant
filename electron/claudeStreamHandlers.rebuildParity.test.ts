@@ -67,6 +67,7 @@ vi.mock('./browser/stagehandService', () => ({
 vi.mock('./toolConfirmRegistry', () => ({
   registerToolCancel: vi.fn(() => new AbortController().signal),
   clearToolCancel: vi.fn(),
+  cancelAllToolConfirmsForRequest: vi.fn(),
   waitForToolConfirm: vi.fn(async () => mockConfirmOutcome())
 }))
 
@@ -232,7 +233,7 @@ describe('Phase 0 静态比对：turn 边界重建 vs 实时累积（§3.4.5）'
   }) {
     const sourceMessages = [...args.history, args.userMessage]
     const built = await buildToolChatMessagesFromSource({
-      userDataDir: tmpDir,
+      userDataDir: path.join(tmpDir, '.userdata'),
       workDir: tmpDir,
       sourceMessages,
       currentUserMessageId: args.userMessage.id,
@@ -252,7 +253,7 @@ describe('Phase 0 静态比对：turn 边界重建 vs 实时累积（§3.4.5）'
       messages: round1Messages,
       toolsConfig: DEFAULT_TOOLS_CONFIG,
       workDir: tmpDir,
-      userDataDir: tmpDir,
+      userDataDir: path.join(tmpDir, '.userdata'),
       getApiKey: async () => 'test-key',
       appDb: createMemoryAppDb('zh-CN'),
       ...(args.skillFragments?.length ? { skillFragments: args.skillFragments } : {}),

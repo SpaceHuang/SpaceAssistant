@@ -157,7 +157,7 @@ describe('edit_file 失败诊断链路（§7.2 集成）', () => {
       messages: [{ role: 'user', content: 'edit the doc' }],
       toolsConfig: DEFAULT_TOOLS_CONFIG,
       workDir: tmpDir,
-      userDataDir: tmpDir,
+      userDataDir: path.join(tmpDir, '.userdata'),
       getApiKey: async () => 'test-key',
       appDb: createMemoryAppDb('zh-CN'),
       emitFactEvent: (event: Record<string, unknown>) => capturedFacts.push(event),

@@ -13,9 +13,19 @@ describe('file-tool descriptions hint the path field name', () => {
     })
   }
 
+  it('读取工具描述反映桌面策略范围与远程工作目录边界', () => {
+    for (const name of ['read_file', 'grep', 'list_directory']) {
+      const description = BUILTIN_TOOL_DEFINITIONS.find((definition) => definition.name === name)!.description
+      expect(description).toMatch(/普通桌面只读可按策略(?:访问|搜索)工作目录外路径/)
+      expect(description).toContain('远程会话只允许工作目录内普通路径')
+    }
+  })
+
   it('grep 使用新的单一 rg 工具契约，不包含部署实现信息', () => {
     const def = BUILTIN_TOOL_DEFINITIONS.find((d) => d.name === 'grep')!
     expect(def.description).toContain('ripgrep 默认正则语法')
+    expect(def.description).toContain('不支持目录递归')
+    expect(def.input_schema.required).toContain('path')
     expect(def.description).not.toMatch(/跨平台|内置实现|系统 grep|findstr|打包路径/)
   })
 })

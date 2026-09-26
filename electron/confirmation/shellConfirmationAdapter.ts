@@ -50,7 +50,7 @@ export function projectPreparedShellExecution(
   const analysis =
     isShellFactAnalysis(prepared.facts) ? prepared.facts : analyzeShellFacts(prepared.command, prepared.profile.dialect)
   const signals: FactSignal[] = [commandSignal(analysis, `${prepared.profile.id}:${prepared.profile.dialect}`)]
-  for (const rawPath of analysis.paths) signals.push(buildPathSignal(rawPath, options.env))
+  for (const rawPath of [...analysis.paths, ...analysis.redirects]) signals.push(buildPathSignal(rawPath, options.env))
   if (analysis.analysisCompleteness === 'partial') {
     signals.push({ kind: 'extraction-failed', reason: `shell-analysis-incomplete:${analysis.unresolved.join('|') || 'unknown'}` })
   }
@@ -75,6 +75,6 @@ function isShellFactAnalysis(value: unknown): value is ShellFactAnalysis {
   if (!value || typeof value !== 'object') return false
   const candidate = value as Partial<ShellFactAnalysis>
   return Array.isArray(candidate.operations) && Array.isArray(candidate.connectors) &&
-    Array.isArray(candidate.paths) && Array.isArray(candidate.cwdChanges) &&
+    Array.isArray(candidate.paths) && Array.isArray(candidate.redirects) && Array.isArray(candidate.cwdChanges) &&
     (candidate.analysisCompleteness === 'complete' || candidate.analysisCompleteness === 'partial')
 }

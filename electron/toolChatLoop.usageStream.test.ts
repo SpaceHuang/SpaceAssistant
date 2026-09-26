@@ -128,7 +128,7 @@ describe('runToolChatSession message_start usage', () => {
       messages: [{ role: 'user', content: 'hello' }],
       toolsConfig: DEFAULT_TOOLS_CONFIG,
       workDir: '/tmp',
-      userDataDir: '/tmp',
+      userDataDir: '/tmp/spaceassistant-userdata',
       getApiKey: async () => 'test-key',
       emitFactEvent: (event: Record<string, unknown>) => capturedFacts.push(event),
       emitSessionEvent: async () => undefined,
@@ -478,7 +478,7 @@ describe('runToolChatSession message_start usage', () => {
     const res = await runAssembledSession({
       sender: makeSender(), requestId: 'req-mid-reset', sessionId: 'sess-mid-reset',
       model: 'claude-sonnet-4-20250514', contextWindow: 40_000, messages: [old, current], currentUserMessageId: current.id,
-      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', emitFactEvent: () => undefined, emitSessionEvent: async () => undefined, appDb: makeDb(), appendCompactionTransaction
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp/spaceassistant-userdata', getApiKey: async () => 'test-key', emitFactEvent: () => undefined, emitSessionEvent: async () => undefined, appDb: makeDb(), appendCompactionTransaction
     })
     expect(res.ok).toBe(true)
     expect(appendCompactionTransaction).toHaveBeenCalledTimes(1)
@@ -504,7 +504,7 @@ describe('runToolChatSession message_start usage', () => {
       sender: makeSender(), requestId: 'req-final-surface', sessionId: 'sess-final-surface',
       model: 'claude-sonnet-4-20250514', contextWindow: 100_000,
       messages: [{ id: 'current-user', role: 'user', content: 'hello' }], currentUserMessageId: 'current-user',
-      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
+      toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp/spaceassistant-userdata',
       getApiKey: async () => 'test-key', emitFactEvent: () => undefined, emitSessionEvent: async () => undefined, appDb: makeDb(), onTurnBoundary: boundary
     })
     expect(res.ok).toBe(true)

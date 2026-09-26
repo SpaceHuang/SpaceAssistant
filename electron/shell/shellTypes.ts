@@ -59,6 +59,7 @@ export interface ShellAnalysisResult {
     operations: readonly { verb: string; args: readonly string[]; segmentIndex: number }[]
     connectors: readonly string[]
     paths: readonly string[]
+    redirects: readonly string[]
     cwdChanges: readonly string[]
     analysisCompleteness: 'complete' | 'partial'
     unresolved: readonly string[]

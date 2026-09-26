@@ -1,6 +1,7 @@
 import type { CacheKey, MemoryTier } from '../src/shared/confirmation/types'
 import { canonicalKeyJson } from './confirmation/sqliteDecisionCache'
 import { tokenizeShellArgv } from './shell/shellCommandParser'
+import { DEFAULT_USER_CONFIRMATION_TIMEOUT_MS } from './confirmation/confirmationTimeout'
 
 export type ToolConfirmOutcome = 'approved' | 'rejected' | 'timeout' | 'cancelled' | 'unavailable'
 
@@ -25,7 +26,7 @@ type Waiter = {
   deadlineAt: number
 }
 
-const CONFIRM_MS = 5 * 60 * 1000
+export const CONFIRM_MS = DEFAULT_USER_CONFIRMATION_TIMEOUT_MS
 
 const pending = new Map<string, Waiter>()
 let nextConfirmationGeneration = 0

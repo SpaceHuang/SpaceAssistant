@@ -121,7 +121,7 @@ function inMemoryMaterials(overrides: Record<string, unknown> = {}) {
     messages: [{ role: 'user', content: 'hello' }],
     toolsConfig: DEFAULT_TOOLS_CONFIG,
     workDir: '/tmp',
-    userDataDir: '/tmp',
+    userDataDir: '/tmp/spaceassistant-test-userdata',
     getApiKey: async () => 'test-key',
     emitFactEvent: (event: Record<string, unknown>) => capturedFacts.push(event),
     emitSessionEvent: async (event: Record<string, unknown>) => {
