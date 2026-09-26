@@ -468,13 +468,18 @@ Error: <错误信息>
 ```json
 {
   "name": "run_script",
-  "description": "执行一段 Python 脚本代码（仅 Python）。脚本在工作目录下执行，有超时限制。执行前需用户确认。修改文件请优先使用 edit_file——它带未读校验、外部修改检测、检查点备份与原子写保护；edit_file 匹配失败时按其返回的 diagnosis 修正 old_string 后重试，不要改用脚本直接读写文件。",
+  "description": "执行 Python、JavaScript、TypeScript 或 PowerShell 脚本。language 可省略（默认 Python）；脚本在工作目录下执行，有超时限制。非 Python 语言尚未接入完整内容安全分析，每次都需要真人确认；无人值守调用会拒绝。修改文件请优先使用 edit_file——它带未读校验、外部修改检测、检查点备份与原子写保护；edit_file 匹配失败时按其返回的 diagnosis 修正 old_string 后重试，不要改用脚本直接读写文件。",
   "input_schema": {
     "type": "object",
     "properties": {
       "code": {
         "type": "string",
         "description": "要执行的脚本代码"
+      },
+      "language": {
+        "type": "string",
+        "enum": ["python", "javascript", "typescript", "powershell"],
+        "description": "脚本语言，省略时默认为 Python"
       },
       "timeout": {
         "type": "number",
@@ -1263,7 +1268,7 @@ export type SpaceAssistantApi = {
 |---|------|--------|------|
 | OQ-1 | 工具定义占用 Token 较多（5 个工具约 500-800 Token），是否需要支持按需注入？ | 中 | 可考虑根据用户消息内容选择性注入相关工具 |
 | OQ-2 | grep 工具的性能在大仓库中可能较慢，是否需要引入缓存或索引？ | 低 | MVP 阶段使用简单递归搜索，后续优化 |
-| OQ-3 | run_script 支持新语言时的扩展方式？ | 低 | 首版仅支持 Python（无 language 参数，硬编码），后续扩展时引入 language 参数 + `interpreterPaths` 配置 + 执行器注册表 |
+| OQ-3 | run_script 支持新语言时的扩展方式？ | 低 | 已解决：增加 `language` 参数及 JavaScript/TypeScript/PowerShell 执行器；解释器通过 `ToolsConfig.scriptInterpreterPaths` 配置，Python 继续使用 `pythonPath` |
 | OQ-4 | edit_file/write_file 的 diff 展示在大文件时性能如何？ | 中 | 可考虑对超过 1000 行的文件仅展示变更区域摘要 |
 | OQ-5 | 工具调用循环的最大迭代次数限制？ | 高 | ~~需设置上限（如 10 次）~~ **已解决**：新增 `maxToolIterations` 配置项，默认值 10，见 5.3 节 |
 
