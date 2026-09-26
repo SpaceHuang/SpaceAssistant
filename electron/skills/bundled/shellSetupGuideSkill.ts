@@ -16,7 +16,7 @@ author: "SpaceAssistant"
 ## 工具分工
 
 - \`run_shell\`：npm、git、构建/测试等 CLI 命令（需用户确认）
-- \`run_script\`：Python 代码片段
+- \`run_script\`：Python、JavaScript、TypeScript 或 PowerShell 代码片段（默认 Python）
 - \`run_lark_cli\`：飞书操作
 
 ## 依赖安装建议

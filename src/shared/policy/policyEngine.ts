@@ -33,6 +33,43 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         // 使规则能用 `signals:['clean']` / `['dangerous']` 匹配。
         tokens.add(signal.signal)
         break
+      case 'path-target':
+        tokens.add(signal.kind)
+        tokens.add(`path-target:${signal.zone}`)
+        break
+      case 'write-target-scope':
+        tokens.add(signal.kind)
+        tokens.add(`write-target-scope:${signal.scope}`)
+        break
+      case 'command-effect':
+        tokens.add(signal.kind)
+        tokens.add(`command-effect:${signal.effect}`)
+        break
+      case 'path-outside-heuristic':
+        tokens.add(signal.kind)
+        break
+      case 'feishu-media-target':
+        tokens.add(signal.kind)
+        tokens.add(`feishu-media-target:${signal.boundary}`)
+        break
+      case 'wechat-media-target':
+        tokens.add(signal.kind)
+        tokens.add(`wechat-media-target:${signal.boundary}`)
+        break
+      case 'workdir-profile-target':
+        tokens.add(signal.kind)
+        tokens.add(`workdir-profile-target:${signal.status}`)
+        break
+      case 'script-path-extraction':
+        tokens.add(signal.kind)
+        tokens.add(`script-path-extraction:${signal.completeness}`)
+        if (signal.dynamicAccess) tokens.add('script-dynamic-access')
+        break
+      case 'script-language-analysis':
+        tokens.add(signal.kind)
+        tokens.add(`script-language-analysis:${signal.status}`)
+        tokens.add(`script-language:${signal.language}`)
+        break
       case 'lark-subcommand':
         tokens.add(signal.kind)
         tokens.add(`lark-${signal.impact}`)
@@ -332,8 +369,9 @@ export function deriveInvocationPolicyConstraints(
 /**
  * 工具调用时机（invocation）判定：纯函数，无副作用。
  *
- * 步骤（约定 4）：硬拒绝 → 缓存 → 能力声明 → 自动审批器 → 链路软约束 → 默认表。
- * 缓存查询永远排在硬拒绝之后；auto-evaluator 命中不产生 Decision，评估器不裁决则交还规则链。
+ * 步骤（约定 4）：拒绝规则 → 缓存 → 能力声明 → 自动审批器 → 链路软约束 → 默认表。
+ * 所有命中的 deny 规则都先于缓存，缓存信任不能覆盖用户或系统策略的明确拒绝。
+ * auto-evaluator 命中不产生 Decision，评估器不裁决则交还规则链。
  */
 export function decide(
   facts: ContentFacts,
@@ -344,7 +382,7 @@ export function decide(
   const invocationRules = rules.filter((r) => r.when === 'invocation')
   const constraints = deriveInvocationPolicyConstraints(facts, context, rules, deps)
 
-  // 第 1 步：硬拒绝（先于任何缓存查询，安全不变量）
+  // 第 1 步：拒绝规则（先于任何缓存查询，缓存信任不能覆盖明确拒绝）
   if (hasDangerousSignal(facts)) return deny('dangerous-signal', '事实含危险信号，硬拒绝')
   const deniedTools = deps.config.deniedTools
   if (Array.isArray(deniedTools) && deniedTools.includes(facts.toolName)) {
@@ -354,6 +392,11 @@ export function decide(
     (r) => r.locked && r.action === 'deny' && ruleMatchesInvocation(r, facts, context, deps)
   )
   if (laneHardDeny) return deny(laneHardDeny.id, laneHardDeny.reason)
+
+  const policyDeny = invocationRules.find(
+    (r) => r.action === 'deny' && ruleMatchesInvocation(r, facts, context, deps)
+  )
+  if (policyDeny) return deny(policyDeny.id, policyDeny.reason)
 
   // 系统 locked confirm-every-time 规则位于缓存之前：即使存在旧 allow cache，也必须逐次确认。
   const confirmEveryTime = invocationRules.find(
@@ -395,10 +438,10 @@ export function decide(
 
   // 第 5 步：链路软约束（只影响体验，纯决策层无操作）
 
-  // 第 6 步：默认表（ask / allow，首条命中即返回）。生效动作按档位产出时变换
+  // 第 6 步：默认表（deny / ask / allow，首条命中即返回）。生效动作按档位产出时变换
   // （deps.transform = effectiveActionFor 同源）：standard 桌面的 ask → auto-evaluator
   // 走快通道/审批 Agent，且不改变规则间优先级（mcp-readonly-allow 等先命中条目不受影响）。
-  const defaultRules = invocationRules.filter((r) => r.action === 'ask' || r.action === 'allow')
+  const defaultRules = invocationRules.filter((r) => r.action === 'deny' || r.action === 'ask' || r.action === 'allow')
   for (const rule of defaultRules) {
     if (!ruleMatchesInvocation(rule, facts, context, deps)) continue
     const effective = deps.transform ? deps.transform(rule) : rule.action

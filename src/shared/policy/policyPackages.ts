@@ -126,6 +126,8 @@ function scopeVariant(
 const DESKTOP_SCOPE_PACKAGES: LaneProfile['scopePackages'] = {
   strict: [
     scopeVariant('desktop', 'strict', 'shell-precheck-auto-allow', 'ask', 'strict 范围档：shell 预检快通道纳入确认范围'),
+    scopeVariant('desktop', 'strict', 'read-target-workdir-allow', 'ask', 'strict 范围档：工作目录读取纳入确认范围'),
+    scopeVariant('desktop', 'strict', 'path-outside-readonly-allow', 'ask', 'strict 范围档：目录外读取纳入确认范围'),
     scopeVariant('desktop', 'strict', 'script-clean-allow-desktop', 'ask', 'strict 范围档：clean 脚本免确认纳入确认范围'),
     scopeVariant('desktop', 'strict', 'browser-act-allow-unconfigured', 'ask', 'strict 范围档：浏览器 act 免确认开关域纳入确认范围'),
     scopeVariant('desktop', 'strict', 'lark-read-allow', 'ask', 'strict 范围档：lark 读类免确认纳入确认范围'),

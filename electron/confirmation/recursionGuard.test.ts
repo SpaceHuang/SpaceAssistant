@@ -76,7 +76,7 @@ function auditSink(): { record: (e: SecurityAuditEvent) => void; events: Securit
 describe('递归守卫（I5：internalConfirmExemption）', () => {
   it('负向：审批会话内 require-confirm → 改写 deny（ruleId=recursion-guard）+ 审计 cause=recursion-blocked', async () => {
     const audit = auditSink()
-    const r = await evaluateToolCallGate(base({ appDb: openDb(), audit, internalConfirmExemption: 'approval-agent' }))
+    const r = await evaluateToolCallGate(base({ toolName: 'unregistered_tool', toolInput: {}, appDb: openDb(), audit, internalConfirmExemption: 'approval-agent' }))
     expect(r.decision.type).toBe('deny')
     if (r.decision.type === 'deny') {
       expect(r.decision.ruleId).toBe('recursion-guard')
@@ -102,13 +102,13 @@ describe('递归守卫（I5：internalConfirmExemption）', () => {
   })
 
   it('对照：无豁免标记的 automation 写操作仍是 require-confirm（守卫只认标记）', async () => {
-    const r = await evaluateToolCallGate(base({ appDb: openDb() }))
+    const r = await evaluateToolCallGate(base({ toolName: 'unregistered_tool', toolInput: {}, appDb: openDb() }))
     expect(r.decision.type).toBe('require-confirm')
   })
 
   it('deny cause 与 agent-deny 可区分：审计 reason/ruleId 携带 recursion 标识', async () => {
     const audit = auditSink()
-    await evaluateToolCallGate(base({ appDb: openDb(), audit, internalConfirmExemption: 'approval-agent' }))
+    await evaluateToolCallGate(base({ toolName: 'unregistered_tool', toolInput: {}, appDb: openDb(), audit, internalConfirmExemption: 'approval-agent' }))
     const ev = audit.events.find((e) => e.event === 'policy.decision')
     expect(ev?.ruleId).toBe('recursion-guard')
     expect(ev?.reason).not.toContain('agent')

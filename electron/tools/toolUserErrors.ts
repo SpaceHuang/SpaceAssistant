@@ -8,6 +8,7 @@ import { sanitizeAgentText, type SanitizedAgentText } from '../../src/shared/age
 
 export type ToolUserErrorOptions = {
   toolName?: string
+  scriptLanguage?: string
   /** browser 专用：init / navigate / extract 等 */
   browserKind?: BrowserUserErrorKind
 }
@@ -41,7 +42,7 @@ function defaultForTool(toolName?: string): string {
   return '工具执行失败，请稍后重试'
 }
 
-function mapGenericToolError(msg: string, toolName?: string): string | null {
+function mapGenericToolError(msg: string, toolName?: string, scriptLanguage?: string): string | null {
   const lower = msg.toLowerCase()
 
   if (/enoent|no such file|not found/i.test(lower)) {
@@ -62,7 +63,9 @@ function mapGenericToolError(msg: string, toolName?: string): string | null {
     return '无效的正则表达式'
   }
   if (/spawn .*enoent|command not found/i.test(lower) && toolName === 'run_script') {
-    return '无法启动 Python，请在设置中检查 pythonPath'
+    return scriptLanguage === 'python'
+      ? '无法启动 Python，请在设置中检查 pythonPath'
+      : `无法启动 ${scriptLanguage ?? '脚本'} 解释器，请检查工具设置中的解释器路径`
   }
   if (/executable doesn't exist|browserType\.launch/i.test(lower) && toolName === 'browser') {
     return '未检测到 Playwright Chromium，请运行：npx playwright install chromium'
@@ -82,7 +85,7 @@ export function toToolUserError(err: unknown, options?: ToolUserErrorOptions): s
   const raw = rawMessage(err).trim()
   if (!raw) return defaultForTool(toolName)
 
-  const mapped = mapGenericToolError(raw, toolName)
+  const mapped = mapGenericToolError(raw, toolName, options?.scriptLanguage)
   if (mapped) return mapped
 
   if (!containsInternalDetails(raw) && raw.length <= 400 && isIntentionalUserHint(raw)) {

@@ -35,6 +35,7 @@ export const wechatReplyExecutor: ToolExecutor = {
         success: r.success,
         data: r.success ? { chunksSent: r.chunksSent } : undefined,
         error: r.error,
+        diagnostic: r.diagnostic,
         duration: Date.now() - started
       }
     } catch (e) {
@@ -86,6 +87,7 @@ export const wechatSendExecutor: ToolExecutor = {
         success: r.success,
         data: r.success ? { chunksSent: r.chunksSent } : undefined,
         error: r.error,
+        diagnostic: r.diagnostic,
         duration: Date.now() - started
       }
     } catch (e) {

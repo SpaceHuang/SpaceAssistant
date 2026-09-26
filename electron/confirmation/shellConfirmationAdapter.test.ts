@@ -53,7 +53,7 @@ describe('ShellConfirmationAdapter', () => {
   it('consumes the prepared facts snapshot when it is complete', () => {
     const snapshot = {
       dialect: 'posix-bash', operations: [{ verb: 'printf', args: ['ok'], segmentIndex: 0 }], connectors: [],
-      paths: [], cwdChanges: [], analysisCompleteness: 'complete', unresolved: []
+      paths: [], redirects: [], cwdChanges: [], analysisCompleteness: 'complete', unresolved: []
     } as const
     const facts = projectPreparedShellExecution(prepared('this input is ignored', snapshot), { env })
     expect(facts.summary.text).toContain('printf ok')

@@ -7,6 +7,7 @@ import { createWorkDirManager } from './workDirManager'
 import {
   SENSITIVE_WORKDIR_ERROR,
   bindSessionWorkDir,
+  classifyWorkDirProfileTarget,
   matchWorkDirProfile,
   normalizeWorkDirHint
 } from './workDirBinding'
@@ -93,6 +94,25 @@ describe('workDirBinding', () => {
       const result = matchWorkDirProfile({}, profiles)
       expect(result.error).toBeTruthy()
       expect(result.matches).toHaveLength(0)
+    })
+  })
+
+  describe('classifyWorkDirProfileTarget', () => {
+    const profiles = [
+      { id: 'normal', name: 'Normal Project', path: '/normal' },
+      { id: 'secret', name: 'Secret Project', path: '/secret', sensitive: true }
+    ]
+
+    it('为唯一 profile 产出敏感状态，未能读取 profile 清单时 fail closed', () => {
+      expect(classifyWorkDirProfileTarget({ profile_id: 'secret' }, profiles)).toBe('sensitive')
+      expect(classifyWorkDirProfileTarget({ name: 'normal project' }, profiles)).toBe('normal')
+      expect(classifyWorkDirProfileTarget({ profile_id: 'secret' }, undefined)).toBe('unknown')
+      expect(classifyWorkDirProfileTarget({ profile_id: 'missing' }, profiles)).toBe('unknown')
+    })
+
+    it('模糊匹配若覆盖敏感 profile 则归为 sensitive', () => {
+      const mixed = [...profiles, { id: 'secret-2', name: 'Secret Archive', path: '/secret2', sensitive: true }]
+      expect(classifyWorkDirProfileTarget({ name: 'Secret' }, mixed)).toBe('sensitive')
     })
   })
 

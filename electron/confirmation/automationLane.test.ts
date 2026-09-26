@@ -8,6 +8,8 @@ import { channelFor } from './channels'
 import { SqliteDecisionCache, canonicalKeyJson } from './sqliteDecisionCache'
 import { DEFAULT_TOOLS_CONFIG, type ToolsConfig } from '../../src/shared/domainTypes'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
+import os from 'os'
+import { probeWritePathFact } from './extractors/writePathFacts'
 
 const shells: AppDatabase[] = []
 function openDb(): AppDatabase {
@@ -77,7 +79,7 @@ function auditSink(): { record: (e: SecurityAuditEvent) => void; events: Securit
 }
 
 describe('automation lane 门控运行时行为（评审 B1 核心验收）', () => {
-  it('write_file：require-confirm（automation-default-confirm），全程未命中 desktop 规则', async () => {
+  it('write_file：automation lane 在 locked 规则终局拒绝', async () => {
     const audit = auditSink()
     const r = await evaluateToolCallGate(
       base({
@@ -88,13 +90,13 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
         audit
       })
     )
-    expect(r.decision.type).toBe('require-confirm')
-    expect(r.decision.ruleId).toBe('automation-default-confirm')
+    expect(r.decision.type).toBe('deny')
+    expect(r.decision.ruleId).toBe('automation-write-deny')
     const ev = audit.events.find((e) => e.event === 'policy.decision')
     expect(ev?.lane).toBe('automation')
   })
 
-  it('automation 的 write_file 不消费桌面快通道（lane 隔离），恒落 locked 确认', async () => {
+  it('automation 的 write_file 不消费桌面快通道（lane 隔离），恒落 locked deny', async () => {
     const r = await evaluateToolCallGate(
       base({
         lane: 'automation',
@@ -104,8 +106,8 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
         appDb: openDb()
       })
     )
-    expect(r.decision.type).toBe('require-confirm')
-    expect(r.decision.ruleId).toBe('automation-default-confirm')
+    expect(r.decision.type).toBe('deny')
+    expect(r.decision.ruleId).toBe('automation-write-deny')
   })
 
   it('只读工具命中 automation-readonly-allow 放行', async () => {
@@ -116,7 +118,7 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
     expect(r.decision.ruleId).toBe('automation-readonly-allow')
   })
 
-  it('run_shell 预检信任命令（legacyAutoAllowEligible=true）也不跳过确认（shell-precheck-auto-allow 不作用于 automation）', async () => {
+  it('run_shell 在 automation lane 由 locked 规则终局拒绝', async () => {
     const r = await evaluateToolCallGate(
       base({
         lane: 'automation',
@@ -132,13 +134,14 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
         appDb: openDb()
       })
     )
-    expect(r.decision.type).toBe('require-confirm')
+    expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'automation-shell-deny' })
   })
 
   it('decision cache 隔离：desktop lane 预写的信任条目，automation 同签名不命中', async () => {
     const db = openDb()
     const cache = new SqliteDecisionCache(getDbConnection(db))
-    const key = { kind: 'path' as const, path: 'a.txt', level: 'file' as const }
+    const fact = await probeWritePathFact({ rawPath: 'a.txt', workDir: '/tmp/wd', userDataDir: '/tmp/ud', homeDir: os.homedir(), customSensitivePrefixes: [] })
+    const key = { kind: 'path' as const, path: fact.normalizedPath, level: 'file' as const }
     cache.record({
       id: 'seed-1',
       key,
@@ -160,7 +163,8 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
     const automationMiss = await evaluateToolCallGate(
       base({ lane: 'automation', toolName: 'write_file', toolInput: { path: 'a.txt', content: 'x' }, appDb: db })
     )
-    expect(automationMiss.decision.type).toBe('require-confirm')
+    expect(automationMiss.decision.type).toBe('deny')
+    expect(automationMiss.decision.ruleId).toBe('automation-write-deny')
     expect(canonicalKeyJson(key)).toBeTruthy()
   })
 

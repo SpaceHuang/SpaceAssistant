@@ -26,6 +26,47 @@ describe('feishuInboundParser', () => {
     expect(msg?.messageId).toBe('m1')
   })
 
+  it('retains previously supported compact field aliases', () => {
+    const msg = parseCompactInboundEvent({
+      messageId: 'm-legacy', chatId: 'c-legacy', chatType: 'p2p', sender_open_id: 'ou_legacy',
+      msg_type: 'image', content: 'please read'
+    })
+    expect(msg).toMatchObject({
+      messageId: 'm-legacy', chatId: 'c-legacy', senderOpenId: 'ou_legacy', msgType: 'image'
+    })
+  })
+
+  it('keeps only structured inbound attachments with a local path', () => {
+    const msg = parseCompactInboundEvent({
+      message_id: 'm2', chat_id: 'c1', sender_open_id: 'u1', content: 'please read', msg_type: 'image',
+      attachments: [
+        { type: 'image', local_path: '/user/feishu-media/cache/m2/pic.png', file_name: 'pic.png', mime_type: 'image/png' },
+        { type: 'image', image_key: 'remote-only-key' },
+        { type: 'file', local_path: '../outside.txt' }
+      ]
+    })
+    expect(msg?.attachments).toEqual([
+      { kind: 'image', localPath: '/user/feishu-media/cache/m2/pic.png', fileName: 'pic.png', mimeType: 'image/png' },
+      { kind: 'file', localPath: '../outside.txt' }
+    ])
+  })
+
+  it('extracts command text from a post containing an attachment block', () => {
+    const msg = parseCompactInboundEvent({
+      message_id: 'm-post', chat_id: 'c1', chat_type: 'p2p', sender_open_id: 'ou_owner', msg_type: 'post',
+      content: JSON.stringify({
+        title: '',
+        content: [[
+          { tag: 'text', text: '/sa 请读取附件内容' },
+          { tag: 'file', file_key: 'file_123', file_name: 'notes.txt' }
+        ]]
+      })
+    })
+    expect(msg?.content).toBe('/sa 请读取附件内容')
+    expect(msg?.msgType).toBe('post')
+    expect(msg && shouldAcceptInbound(msg, { ...DEFAULT_FEISHU_CONFIG, remoteSenderAllowlist: ['ou_owner'] }).accept).toBe(true)
+  })
+
   it('accepts p2p from bound owner', () => {
     const r = shouldAcceptInbound(p2p(), {
       ...DEFAULT_FEISHU_CONFIG,

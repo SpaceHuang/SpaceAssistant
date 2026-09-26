@@ -61,6 +61,11 @@ describe('buildConfigModalSnapshot', () => {
     const a = buildConfigModalSnapshot(base)
     const b = buildConfigModalSnapshot({ ...base, toolUi: { ...base.toolUi, deniedTools: ['browser'] } })
     expect(configModalSnapshotsEqual(a, b)).toBe(true)
+    const changedInterpreter = buildConfigModalSnapshot({
+      ...base,
+      toolUi: { ...base.toolUi, scriptInterpreterPaths: { javascript: '/custom/node' } }
+    })
+    expect(configModalSnapshotsEqual(a, changedInterpreter)).toBe(false)
   })
 
   it('detects workDirProfiles changes', () => {

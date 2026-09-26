@@ -3,7 +3,7 @@ import path from 'path'
 import type { IncomingMessage } from '@wechatbot/wechatbot'
 import type { AppDatabase } from '../database'
 import { listSessions } from '../database'
-import { resolveSafePath } from '../pathSecurity'
+import { resolveSafeWorkDirPath } from '../pathSecurity'
 import type { WeChatBotService } from '../wechat/weChatBotService'
 import type { WeChatConfig } from '../../src/shared/wechatTypes'
 import { formatWeChatSummary } from '../wechat/weChatReplyService'
@@ -17,11 +17,16 @@ async function readMedia(
   workDir: string,
   imagePath?: string,
   filePath?: string
-): Promise<{ buffer?: Buffer; fileName?: string; error?: string }> {
+): Promise<{
+  buffer?: Buffer
+  fileName?: string
+  error?: string
+  diagnostic?: { caseId: string; retryable: boolean; category: 'mechanism' }
+}> {
   const rel = imagePath ?? filePath
   if (!rel) return {}
   try {
-    const abs = resolveSafePath(workDir, rel)
+    const abs = await resolveSafeWorkDirPath(workDir, rel)
     const stat = await fs.stat(abs)
     const ext = path.extname(abs).toLowerCase()
     const isImage = imagePath != null || IMAGE_EXT.has(ext)
@@ -34,7 +39,10 @@ async function readMedia(
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     if (msg.includes('工作目录') || msg.includes('workDir')) {
-      return { error: '文件路径不在工作目录范围内' }
+      return {
+        error: '文件路径不在工作目录范围内',
+        diagnostic: { caseId: 'wechat-media-target-outside-workdir', retryable: false, category: 'mechanism' }
+      }
     }
     return { error: '文件不存在，请检查路径' }
   }
@@ -47,7 +55,7 @@ export async function executeWeChatSend(
     botService: WeChatBotService
     getWeChatConfig: () => WeChatConfig
   }
-): Promise<{ success: boolean; chunksSent?: number; error?: string }> {
+): Promise<{ success: boolean; chunksSent?: number; error?: string; diagnostic?: { caseId: string; retryable: boolean; category: 'mechanism' } }> {
   const cfg = ctx.getWeChatConfig()
   if (!cfg.enabled || !cfg.loggedIn) {
     return { success: false, error: '微信未绑定，请先在设置页完成绑定' }
@@ -56,7 +64,7 @@ export async function executeWeChatSend(
   if (!bot) return { success: false, error: '微信 Bot 未就绪' }
 
   const media = await readMedia(ctx.workDir, input.imagePath, input.filePath)
-  if (media.error) return { success: false, error: media.error }
+  if (media.error) return { success: false, error: media.error, ...(media.diagnostic ? { diagnostic: media.diagnostic } : {}) }
 
   try {
     const text = formatWeChatSummary(input.text)
@@ -85,7 +93,7 @@ export async function executeWeChatReply(
     db: AppDatabase
     sessionId?: string
   }
-): Promise<{ success: boolean; chunksSent?: number; error?: string }> {
+): Promise<{ success: boolean; chunksSent?: number; error?: string; diagnostic?: { caseId: string; retryable: boolean; category: 'mechanism' } }> {
   const bot = ctx.botService.getRawBot()
   if (!bot) return { success: false, error: '微信 Bot 未就绪' }
 
@@ -105,7 +113,7 @@ export async function executeWeChatReply(
   }
 
   const media = await readMedia(ctx.workDir, input.imagePath, input.filePath)
-  if (media.error) return { success: false, error: media.error }
+  if (media.error) return { success: false, error: media.error, ...(media.diagnostic ? { diagnostic: media.diagnostic } : {}) }
 
   try {
     const text = formatWeChatSummary(input.text)

@@ -20,8 +20,17 @@ if (a.includes('--fixture-sleep')) setTimeout(() => {}, 30000)
 const pattern = a[a.indexOf('--regexp') + 1]
 if (pattern === '[') process.exit(2)
 const file = a[a.length - 1]
-if (pattern === 'Needle') process.stdout.write(file + ':1:Needle\\n')
 if (pattern === 'BigTruncated') { process.stdout.write('x'.repeat(500 * 1024)); process.stderr.write(Buffer.from([0xe4])); process.exitCode = 2 }
+const fs = require('fs')
+const content = file === '-' ? fs.readFileSync(0, 'utf8') : fs.statSync(file).isDirectory() ? 'Needle\\nother\\n' : fs.readFileSync(file, 'utf8')
+if (pattern === 'Needle' && content.includes('Needle')) {
+  if (file === '-' && a.includes('-l')) process.stdout.write('<stdin>\\n')
+  else if (file === '-' && a.includes('--count')) process.stdout.write('<stdin>:1\\n')
+  else if (file === '-' && a.includes('-C')) process.stdout.write('<stdin>-1-before\\n<stdin>:2:Needle <stdin>:1\\n<stdin>-3-after\\n')
+  else if (file === '-' && a.includes('--with-filename')) process.stdout.write('<stdin>:1:Needle <stdin>:1\\n')
+  else if (file === '-') process.stdout.write('1:Needle\\n')
+  else process.stdout.write(file + ':1:Needle\\n')
+}
 `, 'utf8')
   return fixture
 }
@@ -40,6 +49,47 @@ describe('bundled ripgrep process contract', () => {
     await expect(run('missing')).resolves.toEqual({ kind: 'no_match', output: 'No matches found' })
     await expect(run('[')).resolves.toMatchObject({ kind: 'failed', exitCode: 2 })
     await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('固定句柄 grep 在路径被替换后仍只搜索已批准文件', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-rg-stable-fd-'))
+    const file = path.join(root, 'approved.txt')
+    await fs.writeFile(file, 'Needle approved\n', 'utf8')
+    const fileHandle = await fs.open(file, 'r')
+    try {
+      await fs.rename(file, `${file}.moved`)
+      await fs.writeFile(file, 'attacker replacement\n', 'utf8')
+      const binary = await createFixture(root)
+      const result = await grepWithRg(binary, root, file, 'Needle', args(), 5000, new AbortController().signal, () => undefined, fixtureSpawn(binary), { fileHandle, platform: process.platform })
+      expect(result).toMatchObject({ kind: 'success' })
+    } finally {
+      await fileHandle.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('Windows 固定句柄 grep 通过 stdin 搜索已打开目标，不重新按路径读取', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-rg-stable-stdin-'))
+    const file = path.join(root, 'approved.txt')
+    await fs.writeFile(file, 'Needle approved\n', 'utf8')
+    try {
+      await fs.rename(file, `${file}.moved`)
+      await fs.writeFile(file, 'attacker replacement\n', 'utf8')
+      const binary = await createFixture(root)
+      const run = async (outputMode: GrepExecArgs['outputMode'], context?: number) => {
+        const fileHandle = await fs.open(`${file}.moved`, 'r')
+        try {
+          return await grepWithRg(binary, root, file, 'Needle', args({ outputMode, context }), 5000, new AbortController().signal, () => undefined, fixtureSpawn(binary), { fileHandle, platform: 'win32' })
+        } finally {
+          await fileHandle.close()
+        }
+      }
+      await expect(run('files_with_matches')).resolves.toEqual({ kind: 'success', output: file })
+      await expect(run('count')).resolves.toEqual({ kind: 'success', output: `${file}:1` })
+      await expect(run('content')).resolves.toEqual({ kind: 'success', output: `${file}:1:Needle <stdin>:1` })
+      await expect(run('content', 1))
+        .resolves.toEqual({ kind: 'success', output: `${file}-1-before\n${file}:2:Needle <stdin>:1\n${file}-3-after` })
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 
   it('超时和取消返回结构化状态', async () => {

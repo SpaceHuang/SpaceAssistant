@@ -141,7 +141,7 @@ describe('desktop standard write_file 自动批准（H2 审计回归）', () => 
       messages: [{ role: 'user', content: 'write it' }],
       toolsConfig: { ...DEFAULT_TOOLS_CONFIG },
       workDir,
-      userDataDir: workDir,
+      userDataDir: path.join(workDir, '.userdata'),
       getApiKey: async () => 'test-key',
       appDb: db,
       emitFactEvent: () => undefined,
@@ -159,9 +159,10 @@ describe('desktop standard write_file 自动批准（H2 审计回归）', () => 
     expect(audit, 'file.auto_approve 审计事件必须产生').toBeTruthy()
 
     const toolResult = capturedSessionEvents.find((e) => e.type === 'tool_result') as
-      | { payload: { result: { autoApprovedWrite?: { path: string; bytesWritten: number } } } }
+      | { payload: { result: { decisionRuleId?: string; autoApprovedWrite?: { path: string; bytesWritten: number } } } }
       | undefined
     expect(toolResult?.payload.result.autoApprovedWrite).toMatchObject({ path: 'a.txt' })
+    expect(toolResult?.payload.result.decisionRuleId).toBeTruthy()
   })
 
   it('P1-3(a)：事件流事实载荷不再携带 autoApprovedWrite.diff 全文（渲染层零引用的死字段）', async () => {

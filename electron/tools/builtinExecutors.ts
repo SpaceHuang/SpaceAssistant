@@ -3,16 +3,20 @@ import { spawn, type ChildProcess } from 'child_process'
 import { app } from 'electron'
 import fs from 'fs/promises'
 import { realpathSync } from 'fs'
+import type { FileHandle } from 'fs/promises'
 import path from 'path'
 import type { Dirent } from 'fs'
-import { resolveSafePath, resolveSafePathReal, resolveSafeReadPath, resolveSafeWorkDirPath, resolveSafeWriteTarget } from '../pathSecurity'
+import { resolveSafePath, resolveSafePathReal, resolveSafeWorkDirPath, resolveSafeWriteTarget } from '../pathSecurity'
 import {
   captureFileIdentity,
   identityFromStat,
   safeAtomicWrite,
   type FileIdentity
 } from '../safeAtomicWrite'
-import { isUnderWikiRaw } from '../wiki/wikiPaths'
+import { resolveReadPermitTarget } from '../confirmation/readPermitExecutor'
+import { validateWriteExecutionPermit } from '../confirmation/writeExecutionPermit'
+import { resolvePermittedWriteTarget } from '../confirmation/writePermitExecutor'
+import { classifyWriteTargetScope } from '../confirmation/extractors/writePathFacts'
 import type { ToolExecutor, ToolExecutionContext, ToolExecutorResult } from './types'
 import { sanitizeToolOutput, sanitizeToolOutputText, toToolUserError } from './toolUserErrors'
 import {
@@ -194,6 +198,7 @@ export const readFileExecutor: ToolExecutor = {
   resourceKeys: (input, context) => workspaceResourceKeys(input, context, 'read'),
   async execute(input, ctx): Promise<ToolExecutorResult> {
     const started = Date.now()
+    let permitFileHandle: Awaited<ReturnType<typeof fs.open>> | undefined
     const rel = extractPathField(input)
     if (rel === undefined) {
       return { success: false, error: toolErrMissingPath('read_file'), duration: Date.now() - started }
@@ -201,18 +206,16 @@ export const readFileExecutor: ToolExecutor = {
     ctx.sendProgress('reading', '正在读取文件...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
     try {
-      let abs: string
-      try {
-        abs = await resolveSafeReadPath(ctx.workDir, rel, [path.join(ctx.userDataDir, 'skills')])
-      } catch (e) {
-        return { success: false, error: `路径超出工作目录范围: ${rel}`, duration: Date.now() - started }
-      }
-      if (!(await pathExists(abs))) {
+      const permitted = await resolveReadPermitTarget('read_file', input, ctx)
+      if (!permitted.ok) return { success: false, error: permitted.caseId === 'read-permit-missing' ? '读取许可缺失，未执行读取' : '读取许可校验失败', diagnostic: { caseId: permitted.caseId, retryable: false, category: permitted.failureClass, ...(permitted.factId ? { factId: permitted.factId } : {}) }, duration: Date.now() - started }
+      const abs = permitted.path
+      permitFileHandle = permitted.fileHandle
+      if (!permitFileHandle && !(await pathExists(abs))) {
         return { success: true, data: { path: rel, content: '', encoding: 'utf8', note: '文件不存在' }, duration: Date.now() - started }
       }
       let st: Awaited<ReturnType<typeof fs.stat>>
       try {
-        st = await fs.stat(abs)
+        st = permitFileHandle ? await permitFileHandle.stat() : await fs.stat(abs)
       } catch (e) {
         const ab = fileToolAbortResult(op, '读取超时，请检查文件路径或网络连接', started)
         if (ab) return ab
@@ -286,7 +289,7 @@ export const readFileExecutor: ToolExecutor = {
         if (hasTail) {
           const tail =
             typeof tailRaw === 'number' && Number.isFinite(tailRaw) ? Math.floor(tailRaw) : 1
-          const tailed = await readFileTailFromDisk(abs, tail, { signal: op, fileSize: st.size })
+          const tailed = await readFileTailFromDisk(abs, tail, { signal: op, fileSize: st.size, ...(permitFileHandle ? { fileHandle: permitFileHandle } : {}) })
           const limited = applyReadCharLimit(tailed.content, {
             isTail: true,
             hasMoreBefore: tailed.hasMoreBefore
@@ -328,7 +331,8 @@ export const readFileExecutor: ToolExecutor = {
               : undefined
           const ranged = await readFileRangeFromDisk(abs, offset, limit, {
             signal: op,
-            fileSize: st.size
+            fileSize: st.size,
+            ...(permitFileHandle ? { fileHandle: permitFileHandle } : {})
           })
           const limited = applyReadCharLimit(ranged.content, { isTail: false })
           const truncated = limited.truncated || ranged.truncated
@@ -358,7 +362,7 @@ export const readFileExecutor: ToolExecutor = {
         }
 
         // Full：小文件全文（边界附近可能仍超字符上限 → Meta）
-        const buf = await fs.readFile(abs, { signal: op })
+        const buf = permitFileHandle ? await permitFileHandle.readFile() : await fs.readFile(abs, { signal: op })
         if (isBinaryBuffer(buf)) {
           return { success: false, error: '文件为二进制格式，无法读取', duration: Date.now() - started }
         }
@@ -404,6 +408,7 @@ export const readFileExecutor: ToolExecutor = {
         throw e
       }
     } finally {
+      await permitFileHandle?.close().catch(() => undefined)
       dispose()
     }
   }
@@ -414,62 +419,46 @@ export const listDirectoryExecutor: ToolExecutor = {
   resourceKeys: (input, context) => workspaceResourceKeys(input, context, 'read'),
   async execute(input, ctx): Promise<ToolExecutorResult> {
     const started = Date.now()
-    const rel = extractPathField(input) ?? '.'
     ctx.sendProgress('listing', '正在读取目录...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
     try {
-      let target: string
-      try {
-        target = rel === '' || rel === '.' ? path.resolve(ctx.workDir) : await resolveSafeReadPath(ctx.workDir, rel, [path.join(ctx.userDataDir, 'skills')])
-      } catch (e) {
-        return { success: false, error: `路径超出工作目录范围: ${rel}`, duration: Date.now() - started }
-      }
-      let st: Awaited<ReturnType<typeof fs.stat>>
-      try {
-        st = await fs.stat(target)
-      } catch (e) {
-        const ab = fileToolAbortResult(op, '目录读取超时', started)
-        if (ab) return ab
-        return { success: false, error: `不是目录或无法访问: ${rel}`, duration: Date.now() - started }
-      }
-      if (!st.isDirectory()) {
-        return { success: false, error: `不是目录或无法访问: ${rel}`, duration: Date.now() - started }
-      }
-      let entries: Dirent[]
-      try {
-        entries = await fs.readdir(target, { withFileTypes: true })
-      } catch (e) {
-        const ab = fileToolAbortResult(op, '目录读取超时', started)
-        if (ab) return ab
-        throw e
-      }
+      const permitted = await resolveReadPermitTarget('list_directory', input, ctx)
+      if (!permitted.ok) return { success: false, error: '目录读取许可校验失败', diagnostic: { caseId: permitted.caseId, retryable: false, category: permitted.failureClass, ...(permitted.factId ? { factId: permitted.factId } : {}) }, duration: Date.now() - started }
+      const target = permitted.path
       const root = path.resolve(ctx.workDir)
       const rows: Array<{ name: string; path: string; isDirectory: boolean; size?: number; mtimeMs?: number }> = []
-      let i = 0
-      for (const ent of entries) {
-        if (++i % 25 === 0) throwIfAborted(op)
-        const p = path.join(target, ent.name)
-        let size: number | undefined
-        let mtimeMs: number | undefined
-        try {
-          const s = await fs.stat(p)
-          mtimeMs = s.mtimeMs
-          if (ent.isFile()) size = s.size
-        } catch (e) {
-          const ab = fileToolAbortResult(op, '目录读取超时', started)
-          if (ab) return ab
-          /* skip entry */
+      const maxEntries = 500
+      let truncated = false
+      const dir = await fs.opendir(target)
+      try {
+        for await (const ent of dir) {
+          if (rows.length >= maxEntries) { truncated = true; break }
+          if (rows.length % 25 === 0) throwIfAborted(op)
+          const p = path.join(target, ent.name)
+          let size: number | undefined
+          let mtimeMs: number | undefined
+          try {
+            const s = await fs.lstat(p)
+            mtimeMs = s.mtimeMs
+            if (s.isFile()) size = s.size
+          } catch (e) {
+            const ab = fileToolAbortResult(op, '目录读取超时', started)
+            if (ab) return ab
+            /* skip entry */
+          }
+          rows.push({
+            name: ent.name,
+            path: path.relative(root, p) || '.',
+            isDirectory: ent.isDirectory(),
+            size,
+            mtimeMs
+          })
         }
-        rows.push({
-          name: ent.name,
-          path: path.relative(root, p) || '.',
-          isDirectory: ent.isDirectory(),
-          size,
-          mtimeMs
-        })
+      } finally {
+        await dir.close().catch(() => undefined)
       }
       rows.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name))
-      return { success: true, data: { entries: rows }, duration: Date.now() - started }
+      return { success: true, data: { entries: rows, ...(truncated ? { truncated: true, limit: maxEntries } : {}) }, duration: Date.now() - started }
     } finally {
       dispose()
     }
@@ -582,22 +571,12 @@ export function workspaceResourceKeys(
   }
 }
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
+import { normalizeRunScriptLanguage, resolveNonPythonScriptLaunch } from './scriptRunner'
 
 const ERR_FILE_NOT_READ_FOR_EDIT =
   '文件尚未在本会话中通过 read_file 读取，请先读取后再编辑'
 const ERR_FILE_NOT_READ_FOR_WRITE =
   '文件尚未在本会话中通过 read_file 读取，请先读取后再写入'
-const ERR_WIKI_RAW_READONLY = 'raw/ 为只读源，不可通过工具修改 (WIKI_RAW_READONLY)'
-
-function wikiRawWriteBlocked(ctx: ToolExecutionContext, rel: string): ToolExecutorResult | null {
-  if (!ctx.wikiConfig?.enabled) return null
-  const normalized = rel.replace(/\\/g, '/')
-  if (isUnderWikiRaw(ctx.workDir, ctx.wikiConfig, normalized)) {
-    return { success: false, error: ERR_WIKI_RAW_READONLY }
-  }
-  return null
-}
-
 async function recordFileStateAfterWrite(
   cache: ToolExecutionContext['fileStateCache'],
   abs: string,
@@ -615,8 +594,50 @@ async function recordFileStateAfterWrite(
 
 function writePathErrorMessage(e: unknown, rel: string): string {
   const msg = e instanceof Error ? e.message : String(e)
+  if (msg === 'remote-write-target-outside-workdir') return `远程会话只能写入当前工作目录内的文件: ${rel}`
   if (msg.includes('路径超出') || msg.includes('工作目录')) return `路径超出工作目录范围: ${rel}`
   return msg
+}
+
+async function assertRemoteWriteTargetInsideWorkDir(workDir: string, targetPath: string): Promise<void> {
+  try {
+    if (await classifyWriteTargetScope(targetPath, workDir) !== 'inside-workdir') {
+      throw new Error('remote-write-target-outside-workdir')
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message === 'remote-write-target-outside-workdir') throw error
+    throw new Error('remote-write-workdir-unavailable')
+  }
+}
+
+async function resolveWriteTargetFromPermit(input: Record<string, unknown>, ctx: ToolExecutionContext, toolName: 'write_file' | 'edit_file') {
+  const permit = ctx.writeExecutionPermit
+  const rawPath = extractPathField(input)
+  if (rawPath === undefined) throw new Error('write-path-missing')
+  if (!permit && ctx.lane !== 'desktop') return resolveSafeWriteTarget(ctx.workDir, rawPath)
+  if (!permit) throw new Error('write-permit-missing')
+  const valid = validateWriteExecutionPermit(permit, { requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName, input })
+  if (!valid.ok) throw new Error(valid.caseId)
+  if (ctx.lane === 'feishu' || ctx.lane === 'wechat' || ctx.remoteContext !== undefined) {
+    await assertRemoteWriteTargetInsideWorkDir(ctx.workDir, permit.target.normalizedPath)
+  }
+  return resolvePermittedWriteTarget(permit.target)
+}
+
+function writePermitFailure(e: unknown): Pick<ToolExecutorResult, 'success' | 'error' | 'diagnostic'> {
+  const caseId = e instanceof Error ? e.message : 'write-permit-validation-failed'
+  const environmentFailure = caseId === 'remote-write-workdir-unavailable' || (caseId !== 'remote-write-target-outside-workdir' && (caseId.includes('identity') || caseId.includes('target-') || caseId.includes('symlink') || caseId.includes('parent-')))
+  return {
+    success: false,
+    error: environmentFailure ? '写入目标在检查后发生变化或不符合普通文件要求。' : '写入许可校验失败，未执行写入。',
+    diagnostic: { caseId, retryable: environmentFailure, category: environmentFailure ? 'environment' : 'policy' }
+  }
+}
+
+function capturedIdentityMatchesPermit(ctx: ToolExecutionContext, identity: FileIdentity | null): boolean {
+  const permitted = ctx.writeExecutionPermit?.target.identity
+  if (!permitted) return ctx.writeExecutionPermit?.target.targetKind === 'missing' && identity === null
+  return identity !== null && identity.dev === permitted.dev && identity.ino === permitted.ino && identity.size === permitted.size && identity.mtimeMs === permitted.mtimeMs
 }
 
 export const editFileExecutor: ToolExecutor = {
@@ -631,16 +652,15 @@ export const editFileExecutor: ToolExecutor = {
     const oldS = typeof input.old_string === 'string' ? input.old_string : ''
     const newS = typeof input.new_string === 'string' ? input.new_string : ''
     const replaceAll = Boolean(input.replace_all)
-    const rawBlock = wikiRawWriteBlocked(ctx, rel)
-    if (rawBlock) return { ...rawBlock, duration: Date.now() - started }
     ctx.sendProgress('editing', '正在编辑文件...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
     try {
       let writeTarget: Awaited<ReturnType<typeof resolveSafeWriteTarget>>
       try {
-        writeTarget = await resolveSafeWriteTarget(ctx.workDir, rel)
+        writeTarget = await resolveWriteTargetFromPermit(input, ctx, 'edit_file')
       } catch (e) {
-        return { success: false, error: writePathErrorMessage(e, rel), duration: Date.now() - started }
+        if (ctx.lane === 'desktop') return { ...writePermitFailure(e), duration: Date.now() - started }
+        return { ...writePermitFailure(e), error: writePathErrorMessage(e, rel), duration: Date.now() - started }
       }
       const abs = writeTarget.targetPath
       if (oldS === newS) {
@@ -662,6 +682,9 @@ export const editFileExecutor: ToolExecutor = {
         try {
           cur = await fs.readFile(abs, { encoding: 'utf8', signal: op })
           expectedIdentity = await captureFileIdentity(abs)
+          if (ctx.lane === 'desktop' && !capturedIdentityMatchesPermit(ctx, expectedIdentity)) {
+            return { ...writePermitFailure(new Error('write-target-identity-mismatch')), duration: Date.now() - started }
+          }
         } catch (e) {
           const ab = fileToolAbortResult(op, '编辑超时', started)
           if (ab) return ab
@@ -701,6 +724,7 @@ export const editFileExecutor: ToolExecutor = {
             parentReal: writeTarget.parentReal,
             body: next,
             expectedIdentity,
+            ...(ctx.writeExecutionPermit ? { expectedParentIdentity: ctx.writeExecutionPermit.target.parentIdentity } : {}),
             signal: op
           })
         } catch (e) {
@@ -761,16 +785,15 @@ export const writeFileExecutor: ToolExecutor = {
       return { success: false, error: toolErrMissingPath('write_file'), duration: Date.now() - started }
     }
     const content = typeof input.content === 'string' ? input.content : ''
-    const rawBlock = wikiRawWriteBlocked(ctx, rel)
-    if (rawBlock) return { ...rawBlock, duration: Date.now() - started }
     ctx.sendProgress('writing', '正在写入文件...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
     try {
       let writeTarget: Awaited<ReturnType<typeof resolveSafeWriteTarget>>
       try {
-        writeTarget = await resolveSafeWriteTarget(ctx.workDir, rel)
+        writeTarget = await resolveWriteTargetFromPermit(input, ctx, 'write_file')
       } catch (e) {
-        return { success: false, error: writePathErrorMessage(e, rel), duration: Date.now() - started }
+        if (ctx.lane === 'desktop') return { ...writePermitFailure(e), duration: Date.now() - started }
+        return { ...writePermitFailure(e), error: writePathErrorMessage(e, rel), duration: Date.now() - started }
       }
       const abs = writeTarget.targetPath
       const existed = writeTarget.existed
@@ -788,6 +811,9 @@ export const writeFileExecutor: ToolExecutor = {
         try {
           cur = await fs.readFile(abs, { encoding: 'utf8', signal: op })
           expectedIdentity = await captureFileIdentity(abs)
+          if (ctx.lane === 'desktop' && !capturedIdentityMatchesPermit(ctx, expectedIdentity)) {
+            return { ...writePermitFailure(new Error('write-target-identity-mismatch')), duration: Date.now() - started }
+          }
         } catch (e) {
           const ab = fileToolAbortResult(op, '写入超时', started)
           if (ab) return ab
@@ -824,6 +850,7 @@ export const writeFileExecutor: ToolExecutor = {
           parentReal: writeTarget.parentReal,
           body,
           expectedIdentity,
+          ...(ctx.writeExecutionPermit ? { expectedParentIdentity: ctx.writeExecutionPermit.target.parentIdentity } : {}),
           signal: op
         })
       } catch (e) {
@@ -880,6 +907,23 @@ export function createGrepRipgrepUnavailableDiagnostic(
   return `source=${resolved.source};platform=${resolved.platform};arch=${resolved.arch};status=unavailable;reason=${reason}`
 }
 
+function mapOpenedFileGrepOutput(output: string, filePath: string, outputMode: GrepExecArgs['outputMode']): string {
+  const stdinNames = ['<stdin>', '/dev/fd/3', '-']
+  return output.split('\n').map((line) => {
+    for (const stdinName of stdinNames) {
+      if (outputMode === 'files_with_matches' && line === stdinName) return filePath
+      if (outputMode === 'count') {
+        const count = line.startsWith(`${stdinName}:`) ? line.slice(stdinName.length + 1) : ''
+        if (/^\d+$/.test(count)) return `${filePath}:${count}`
+      }
+      if (outputMode === 'content' && (line.startsWith(`${stdinName}:`) || line.startsWith(`${stdinName}-`))) {
+        return `${filePath}${line.slice(stdinName.length)}`
+      }
+    }
+    return line
+  }).join('\n')
+}
+
 export function grepRipgrepUnavailableUserMessage(
   resolved: Pick<ReturnType<typeof resolveRipgrepBinary>, 'source' | 'platform' | 'arch'>,
   reason: RipgrepUnavailableReason
@@ -899,9 +943,13 @@ export async function grepWithRg(
   timeoutMs: number,
   signal: AbortSignal,
   onProgress: (msg: string) => void,
-  spawnProcess: (binary: string, args: string[], options: Parameters<typeof spawn>[2]) => ChildProcess = spawn
+  spawnProcess: (binary: string, args: string[], options: Parameters<typeof spawn>[2]) => ChildProcess = spawn,
+  openedFile?: { fileHandle: FileHandle; platform?: NodeJS.Platform }
 ): Promise<RipgrepRunResult> {
   if (signal.aborted) return { kind: 'cancelled', partialOutput: '' }
+  const openedFileFd = openedFile?.fileHandle.fd
+  const stableFilePlatform = openedFile?.platform ?? process.platform
+  const stableFileOnWindows = openedFileFd !== undefined && stableFilePlatform === 'win32'
   const rgArgs = ['--no-config', '--color', 'never', '--regexp', pattern]
   if (args.ignoreCase) rgArgs.push('-i')
   if (args.glob) {
@@ -910,6 +958,7 @@ export async function grepWithRg(
   if (args.outputMode === 'files_with_matches') rgArgs.push('-l')
   else if (args.outputMode === 'count') rgArgs.push('--count', '--with-filename')
   else {
+    if (stableFileOnWindows) rgArgs.push('--with-filename')
     if (args.showLineNumber !== false) rgArgs.push('-n')
     else rgArgs.push('--no-line-number')
     if (args.context != null && args.context > 0) rgArgs.push('-C', String(args.context))
@@ -917,10 +966,16 @@ export async function grepWithRg(
   }
   rgArgs.push('--max-columns', '500')
   for (const d of GREP_SKIP_DIRS) rgArgs.push('--glob', `!**/${d}/**`)
-  rgArgs.push(searchPath)
+  // 有读取许可时只从已打开目标读取：类 Unix 继承 fd，Windows 通过 stdin 流传递句柄内容。
+  rgArgs.push(stableFileOnWindows ? '-' : openedFileFd !== undefined ? '/dev/fd/3' : searchPath)
   return await new Promise((resolve) => {
-    const proc = spawnProcess(binaryPath, rgArgs, { cwd: workDir, windowsHide: true })
+    const proc = spawnProcess(binaryPath, rgArgs, {
+      cwd: workDir,
+      windowsHide: true,
+      ...(stableFileOnWindows ? { stdio: ['pipe', 'pipe', 'pipe'] } : openedFileFd !== undefined ? { stdio: ['ignore', 'pipe', 'pipe', openedFileFd] } : {})
+    })
     let settled = false
+    let stableInputStream: ReturnType<FileHandle['createReadStream']> | undefined
     let out = ''
     let stderr = ''
     let killed = false
@@ -965,6 +1020,7 @@ export async function grepWithRg(
       settled = true
       clearTimeout(t)
       signal.removeEventListener('abort', onAbort)
+      stableInputStream?.destroy()
       resolve(result)
     }
     proc.on('error', (err) => {
@@ -982,6 +1038,7 @@ export async function grepWithRg(
       else if (code !== 0 && code !== 1) finish({ kind: 'failed', exitCode: code, message: sanitizeToolOutputText(stderr.trim().slice(0, 4000) || 'ripgrep 返回非成功状态', 'grep') })
       else {
         let result = out.trimEnd()
+        if (openedFile) result = mapOpenedFileGrepOutput(result, searchPath, args.outputMode)
         if (args.headLimit > 0) {
           const lines = result.split('\n')
           if (lines.length > args.headLimit) {
@@ -992,6 +1049,16 @@ export async function grepWithRg(
         finish(result ? { kind: 'success', output: result } : { kind: 'no_match', output: 'No matches found' })
       }
     })
+    if (stableFileOnWindows && openedFile) {
+      stableInputStream = openedFile.fileHandle.createReadStream({ autoClose: false, start: 0 })
+      stableInputStream.on('error', (error) => {
+        if (!settled) finish({ kind: 'failed', exitCode: null, message: sanitizeToolOutputText(error.message, 'grep') })
+      })
+      proc.stdin?.on('error', (error: NodeJS.ErrnoException) => {
+        if (!settled && error.code !== 'EPIPE') finish({ kind: 'failed', exitCode: null, message: sanitizeToolOutputText(error.message, 'grep') })
+      })
+      stableInputStream.pipe(proc.stdin!)
+    }
   })
 }
 
@@ -1223,60 +1290,71 @@ export const grepExecutor: ToolExecutor = {
     const headLimit = typeof input.head_limit === 'number' ? input.head_limit : 100
     ctx.sendProgress('grep', '搜索中...')
     let absSearch: string
+    let permitFileHandle: Awaited<ReturnType<typeof fs.open>> | undefined
     try {
-      if (relPath && path.isAbsolute(relPath)) {
-        absSearch = await resolveSafeReadPath(ctx.workDir, relPath, [path.join(ctx.userDataDir, 'skills')])
-      } else {
-        absSearch = relPath ? await resolveSafeReadPath(ctx.workDir, relPath, [path.join(ctx.userDataDir, 'skills')]) : path.resolve(ctx.workDir)
+      const permitted = await resolveReadPermitTarget('grep', input, ctx)
+      if (!permitted.ok) return { success: false, error: permitted.caseId === 'read-permit-missing' ? '读取许可缺失，未执行搜索' : '读取许可校验失败', diagnostic: { caseId: permitted.caseId, retryable: false, category: permitted.failureClass, ...(permitted.factId ? { factId: permitted.factId } : {}) }, duration: Date.now() - started }
+      absSearch = permitted.path
+      permitFileHandle = permitted.fileHandle
+    } catch { return { success: false, error: '读取许可校验失败', diagnostic: { caseId: 'read-permit-validation-error', retryable: false, category: 'integration-violation' }, duration: Date.now() - started } }
+    try {
+      const timeoutMs = (ctx.toolsConfig.grepTimeoutSec ?? 60) * 1000
+      const gargs: GrepExecArgs = { glob, outputMode, ignoreCase, showLineNumber, context, multiline, headLimit }
+      const resolved = resolveRipgrepBinary({
+        packaged: app?.isPackaged ?? false,
+        resourcesPath: process.resourcesPath,
+        // Electron 开发态的 app path 是 worktree 根目录；不要依赖测试/打包转换后的 __dirname 形态。
+        developmentRoot: app?.isPackaged ? undefined : app?.getAppPath?.() ?? path.resolve(__dirname, '../../..'),
+        platform: process.platform,
+        arch: process.arch
+      })
+      void ctx.recordDiagnostic?.({
+        code: 'grep-ripgrep',
+        message: createGrepRipgrepDiagnostic(resolved)
+      })
+      if (!resolved.path) {
+        void ctx.recordDiagnostic?.({
+          code: 'grep-ripgrep-unavailable',
+          message: createGrepRipgrepUnavailableDiagnostic(resolved, resolved.reason ?? 'unsupported')
+        })
+        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, resolved.reason ?? 'unsupported'), duration: Date.now() - started }
       }
-    } catch {
-      return { success: false, error: '路径超出工作目录范围', duration: Date.now() - started }
+      const availability = await inspectRipgrepBinary(resolved)
+      if (!availability.available) {
+        void ctx.recordDiagnostic?.({
+          code: 'grep-ripgrep-unavailable',
+          message: createGrepRipgrepUnavailableDiagnostic(resolved, availability.reason)
+        })
+        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, availability.reason), duration: Date.now() - started }
+      }
+      const text = await grepWithRg(
+        resolved.path,
+        ctx.workDir,
+        absSearch,
+        pattern,
+        gargs,
+        timeoutMs,
+        ctx.signal,
+        (message) => ctx.sendProgress('grep', message),
+        ctx.grepSpawnProcess,
+        permitFileHandle ? { fileHandle: permitFileHandle, platform: process.platform } : undefined
+      )
+      if (text.kind === 'success' || text.kind === 'no_match') {
+        return { success: true, data: { output: text.output }, duration: Date.now() - started }
+      }
+      if (text.kind === 'unavailable') {
+        void ctx.recordDiagnostic?.({
+          code: 'grep-ripgrep-unavailable',
+          message: createGrepRipgrepUnavailableDiagnostic(resolved, text.reason)
+        })
+        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, text.reason), duration: Date.now() - started }
+      }
+      if (text.kind === 'cancelled') return { success: false, error: `${text.partialOutput}\n[已取消]`, duration: Date.now() - started }
+      if (text.kind === 'timeout') return { success: false, error: `${text.partialOutput}\n[搜索超时，仅展示部分结果]`, duration: Date.now() - started }
+      return { success: false, error: text.message, duration: Date.now() - started }
+    } finally {
+      await permitFileHandle?.close().catch(() => undefined)
     }
-    const timeoutMs = (ctx.toolsConfig.grepTimeoutSec ?? 60) * 1000
-    const gargs: GrepExecArgs = { glob, outputMode, ignoreCase, showLineNumber, context, multiline, headLimit }
-    const resolved = resolveRipgrepBinary({
-      packaged: app?.isPackaged ?? false,
-      resourcesPath: process.resourcesPath,
-      // Electron 开发态的 app path 是 worktree 根目录；不要依赖测试/打包转换后的 __dirname 形态。
-      developmentRoot: app?.isPackaged ? undefined : app?.getAppPath?.() ?? path.resolve(__dirname, '../../..'),
-      platform: process.platform,
-      arch: process.arch
-    })
-    void ctx.recordDiagnostic?.({
-      code: 'grep-ripgrep',
-      message: createGrepRipgrepDiagnostic(resolved)
-    })
-    if (!resolved.path) {
-      void ctx.recordDiagnostic?.({
-        code: 'grep-ripgrep-unavailable',
-        message: createGrepRipgrepUnavailableDiagnostic(resolved, resolved.reason ?? 'unsupported')
-      })
-      return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, resolved.reason ?? 'unsupported'), duration: Date.now() - started }
-    }
-    const availability = await inspectRipgrepBinary(resolved)
-    if (!availability.available) {
-      void ctx.recordDiagnostic?.({
-        code: 'grep-ripgrep-unavailable',
-        message: createGrepRipgrepUnavailableDiagnostic(resolved, availability.reason)
-      })
-      return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, availability.reason), duration: Date.now() - started }
-    }
-    const text = await grepWithRg(resolved.path, ctx.workDir, absSearch, pattern, gargs, timeoutMs, ctx.signal, (m) =>
-      ctx.sendProgress('grep', m)
-    , ctx.grepSpawnProcess)
-    if (text.kind === 'success' || text.kind === 'no_match') {
-      return { success: true, data: { output: text.output }, duration: Date.now() - started }
-    }
-    if (text.kind === 'unavailable') {
-      void ctx.recordDiagnostic?.({
-        code: 'grep-ripgrep-unavailable',
-        message: createGrepRipgrepUnavailableDiagnostic(resolved, text.reason)
-      })
-      return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, text.reason), duration: Date.now() - started }
-    }
-    if (text.kind === 'cancelled') return { success: false, error: `${text.partialOutput}\n[已取消]`, duration: Date.now() - started }
-    if (text.kind === 'timeout') return { success: false, error: `${text.partialOutput}\n[搜索超时，仅展示部分结果]`, duration: Date.now() - started }
-    return { success: false, error: text.message, duration: Date.now() - started }
   }
 }
 
@@ -1331,13 +1409,35 @@ export const runScriptExecutor: ToolExecutor = {
   async execute(input, ctx): Promise<ToolExecutorResult> {
     const started = Date.now()
     const code = typeof input.code === 'string' ? input.code : ''
+    let language: ReturnType<typeof normalizeRunScriptLanguage>
+    try {
+      language = normalizeRunScriptLanguage(input.language)
+    } catch {
+      return { success: false, error: 'UNSUPPORTED_SCRIPT_LANGUAGE', diagnostic: { caseId: 'unsupported-script-language', category: 'executor', retryable: false }, duration: Date.now() - started }
+    }
     const timeoutSec = typeof input.timeout === 'number' ? input.timeout : ctx.toolsConfig.scriptTimeout
-    const interpreter = await resolvePythonInterpreter(ctx.toolsConfig.pythonPath)
-    const py = interpreter.command
-    ctx.sendProgress(
-      'script',
-      interpreter.fallbackFrom ? `未找到 ${interpreter.fallbackFrom}，改用 ${py} 启动 Python...` : '启动 Python...'
-    )
+    let command: string
+    let commandArgs: string[]
+    let interpreterName: string
+    let fallbackFrom: string | undefined
+    try {
+      if (language === 'python') {
+        const interpreter = await resolvePythonInterpreter(ctx.toolsConfig.pythonPath)
+        command = interpreter.command
+        commandArgs = ['-c', code]
+        interpreterName = 'python'
+        fallbackFrom = interpreter.fallbackFrom
+      } else {
+        const launch = resolveNonPythonScriptLaunch(language, code, ctx.toolsConfig.scriptInterpreterPaths)
+        command = launch.command
+        commandArgs = launch.args
+        interpreterName = launch.interpreterName
+      }
+    } catch (error) {
+      const caseId = error instanceof Error ? error.message : 'script-launch-preparation-failed'
+      return { success: false, error: caseId, diagnostic: { caseId: caseId.toLowerCase().replace(/_/g, '-'), category: 'executor', retryable: false }, duration: Date.now() - started }
+    }
+    ctx.sendProgress('script', fallbackFrom ? `未找到 ${fallbackFrom}，改用 ${command} 启动 Python...` : `启动 ${interpreterName}...`)
     const env = buildPythonScriptEnv()
     // §7.5 / §12-#6：宿主侧已用 PYTHONUTF8=1 与 PYTHONIOENCODING=utf-8 钉死契约，这里显式登记同一契约。
     const stdoutDecoder = createChildStreamDecoder({ contract: UTF8_CONTRACT })
@@ -1352,8 +1452,9 @@ export const runScriptExecutor: ToolExecutor = {
       requestId: ctx.requestId,
       sessionId: ctx.sessionId,
       toolUseId: ctx.toolUseId,
+      language,
       code,
-      interpreter: path.basename(interpreter.command),
+      interpreter: path.basename(command),
       timeoutSec,
       envKeyCount: 0,
       envKeysSha256: '',
@@ -1365,7 +1466,7 @@ export const runScriptExecutor: ToolExecutor = {
     scriptBaseLog.envEntriesSha256 = envSnapshot.entriesSha256
     logAgentEvent('info', 'script.exec.start', scriptBaseLog)
     return await new Promise((resolve) => {
-      const proc = spawn(py, ['-c', code], {
+      const proc = spawn(command, commandArgs, {
         cwd: ctx.workDir,
         env,
         windowsHide: true,
@@ -1407,8 +1508,8 @@ export const runScriptExecutor: ToolExecutor = {
         resolve({
           success: false,
           error: 'SCRIPT_SPAWN_ERROR',
-          userMessage: toToolUserError(err, { toolName: 'run_script' }),
-          data: { processResult: null, status: 'spawn_failed', executable: py, cwd: '<workdir>' },
+          userMessage: toToolUserError(err, { toolName: 'run_script', scriptLanguage: language }),
+          data: { processResult: null, status: 'spawn_failed', executable: command, cwd: '<workdir>' },
           duration: Date.now() - started
         })
       })
@@ -1459,7 +1560,7 @@ export const runScriptExecutor: ToolExecutor = {
           resolve({
             success: false,
             error: 'SCRIPT_PROCESS_EXIT',
-            userMessage: toToolUserError(new Error(failMsg), { toolName: 'run_script' }),
+            userMessage: toToolUserError(new Error(failMsg), { toolName: 'run_script', scriptLanguage: language }),
             data,
             duration: Date.now() - started
           })

@@ -161,7 +161,7 @@ describe('toolChatLoop oversized tool_result gate 3', () => {
       messages: [{ role: 'user', content: 'read big' }],
       toolsConfig: DEFAULT_TOOLS_CONFIG,
       workDir: '/tmp',
-      userDataDir: '/tmp',
+      userDataDir: '/tmp/spaceassistant-test-userdata',
       getApiKey: async () => 'test-key',
       emitFactEvent: () => undefined,
       emitSessionEvent: async () => undefined,

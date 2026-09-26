@@ -29,8 +29,9 @@ export async function precheckRunShellTool(args: {
   shellConfig?: ShellConfig | null
   /** P2 端口化：trusted-command 记账写经端口注入（真相类，不允许静默停写）。 */
   shellPrecheck?: { touchTrustedCommand: (command: string) => void } | null
+  analysis?: ShellAnalysisResult
 }): Promise<RunShellPrecheckResult> {
-  const analysis = await analyzeShellCommand(
+  const analysis = args.analysis ?? await analyzeShellCommand(
     args.workDir,
     args.command,
     process.platform,

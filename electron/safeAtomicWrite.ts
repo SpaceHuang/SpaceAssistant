@@ -125,6 +125,8 @@ export type SafeAtomicWriteOptions = {
   body: string | Buffer
   /** 覆盖已有文件时，读取时捕获的 identity；新文件为 null */
   expectedIdentity: FileIdentity | null
+  /** Permit 写入时绑定的最近已存在目录 identity。 */
+  expectedParentIdentity?: { dev: number; ino: number; mode: number }
   signal?: AbortSignal
 }
 
@@ -161,8 +163,17 @@ function throwIfAborted(signal?: AbortSignal): void {
  * - 任一步失败关闭句柄并删除临时文件
  */
 export async function safeAtomicWrite(opts: SafeAtomicWriteOptions): Promise<FileIdentity> {
-  const { targetPath, parentReal, body, expectedIdentity, signal } = opts
+  const { targetPath, parentReal, body, expectedIdentity, expectedParentIdentity, signal } = opts
   throwIfAborted(signal)
+
+  const verifyParentIdentity = async () => {
+    if (!expectedParentIdentity) return
+    const parentLstat = await fs.lstat(parentReal)
+    const parentStat = await fs.stat(parentReal)
+    if (parentLstat.isSymbolicLink() || !parentStat.isDirectory() || parentStat.dev !== expectedParentIdentity.dev || parentStat.ino !== expectedParentIdentity.ino || parentStat.mode !== expectedParentIdentity.mode || await fs.realpath(parentReal) !== parentReal) {
+      throw new Error('写入父目录 identity 已变化，拒绝提交')
+    }
+  }
 
   await cleanupSafeWriteTemps(parentDirForTarget(targetPath, parentReal))
 
@@ -181,6 +192,8 @@ export async function safeAtomicWrite(opts: SafeAtomicWriteOptions): Promise<Fil
     await assertNoSymlinkAlong(parentReal, targetParent)
   }
 
+  await verifyParentIdentity()
+
   throwIfAborted(signal)
   const tmpName = `${SAFE_WRITE_TEMP_PREFIX}${randomBytes(12).toString('hex')}`
   const tmpPath = path.join(path.dirname(targetPath), tmpName)
@@ -191,6 +204,7 @@ export async function safeAtomicWrite(opts: SafeAtomicWriteOptions): Promise<Fil
     const buf = typeof body === 'string' ? Buffer.from(body, 'utf8') : body
     await writeAllBytes(tmpFh, buf, 0)
     throwIfAborted(signal)
+    await verifyParentIdentity()
     await tmpFh.sync()
     const tmpStat = await tmpFh.stat()
     assertRegularFileSingleLink(tmpStat, '临时文件')
@@ -202,6 +216,7 @@ export async function safeAtomicWrite(opts: SafeAtomicWriteOptions): Promise<Fil
 
     if (expectedIdentity === null) {
       // 新文件：link 提交，目标已存在则失败（不替换）
+      await verifyParentIdentity()
       try {
         await withTransientLockRetry(() => fs.link(tmpPath, targetPath), signal)
       } catch (e: unknown) {
@@ -246,6 +261,7 @@ export async function safeAtomicWrite(opts: SafeAtomicWriteOptions): Promise<Fil
     }
 
     throwIfAborted(signal)
+    await verifyParentIdentity()
     await withTransientLockRetry(() => fs.rename(tmpPath, targetPath), signal)
 
     const finalFh = await fs.open(targetPath, openFlagsReadNoFollow())

@@ -58,6 +58,21 @@ function deps(overrides: Partial<PolicyEngineDeps> = {}): PolicyEngineDeps {
 }
 
 describe('decide：脚本规则族（规范条目顺序）', () => {
+  it('敏感读取必须真人确认，且不受缓存影响', () => {
+    const d = decide(mkFacts('read_file', 'read', [{ kind: 'path-target', path: '/x/.env', zone: 'sensitive-file' }]), mkContext('desktop'), DEFAULT_POLICY_RULES, deps({ cache: cacheWith('allow') }))
+    expect(d).toMatchObject({ type: 'require-confirm', ruleId: 'path-sensitive-read-confirm', answerer: 'user' })
+  })
+
+  it('系统目录读取必须真人确认', () => {
+    const d = decide(mkFacts('read_file', 'read', [{ kind: 'path-target', path: '/etc/hosts', zone: 'system-dir' }]), mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
+    expect(d).toMatchObject({ type: 'require-confirm', ruleId: 'path-system-dir-ask', answerer: 'user' })
+  })
+
+  it('工作目录外的普通读取自动放行', () => {
+    const d = decide(mkFacts('read_file', 'read', [{ kind: 'path-target', path: '/tmp/a', zone: 'outside-workdir' }]), mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
+    expect(d).toMatchObject({ type: 'auto-allow', ruleId: 'path-outside-readonly-allow' })
+  })
+
   it('桌面 run_script clean 免确认（script-clean-allow-desktop）', () => {
     const d = decide(
       mkFacts('run_script', 'execute', [{ kind: 'script-analysis', signal: 'clean', patterns: [] }], 'high'),
@@ -542,6 +557,15 @@ describe('mcp-readonly-allow：只读注解放行不收编远程链路（B5）',
 })
 
 describe('confirm-every-time', () => {
+  it('命中的普通 deny 规则优先于既有 allow 缓存', () => {
+    const rule = {
+      id: 'user-deny', when: 'invocation' as const, match: { toolName: 'mcp__srv__query' },
+      action: 'deny' as const, reason: '用户拒绝'
+    }
+    const d = decide(mkFacts('mcp__srv__query', 'read', [{ kind: 'mcp-tool', serverId: 'srv', toolName: 'query' }]), mkContext('desktop'), [rule], deps({ cache: cacheWith('allow') }))
+    expect(d).toMatchObject({ type: 'deny', ruleId: 'user-deny' })
+  })
+
   it('locked rule wins over an existing allow cache', () => {
     const rule = {
       id: 'shell-confirm-every-time',

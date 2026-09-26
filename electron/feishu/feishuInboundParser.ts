@@ -21,8 +21,12 @@ function parseTextContent(rawContent: unknown): string {
     const trimmed = rawContent.trim()
     if (trimmed.startsWith('{')) {
       try {
-        const parsed = JSON.parse(trimmed) as { text?: string }
-        if (typeof parsed.text === 'string') return parsed.text
+        const parsed = JSON.parse(trimmed) as unknown
+        if (parsed && typeof parsed === 'object' && typeof (parsed as { text?: unknown }).text === 'string') {
+          const text = (parsed as { text: string }).text
+          return text || extractPostText(parsed) || text
+        }
+        return extractPostText(parsed)
       } catch {
         /* keep raw */
       }
@@ -32,32 +36,79 @@ function parseTextContent(rawContent: unknown): string {
   if (rawContent && typeof rawContent === 'object') {
     const t = (rawContent as { text?: string }).text
     if (typeof t === 'string') return t
+    return extractPostText(rawContent)
   }
   return ''
+}
+
+function extractPostText(value: unknown): string {
+  const chunks: string[] = []
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item)
+      return
+    }
+    if (!node || typeof node !== 'object') return
+    const record = node as Record<string, unknown>
+    if ((record.tag === 'text' || record.tag === 'md') && typeof record.text === 'string') {
+      chunks.push(record.text)
+      return
+    }
+    for (const [key, child] of Object.entries(record)) {
+      if (key === 'content' || key === 'title') visit(child)
+    }
+  }
+  visit(value)
+  return chunks.join('')
+}
+
+function parseInboundAttachments(value: unknown): FeishuInboundMessage['attachments'] {
+  if (!Array.isArray(value)) return undefined
+  const attachments = value.flatMap((item) => {
+    if (!item || typeof item !== 'object') return []
+    const raw = item as Record<string, unknown>
+    const localPath = typeof raw.localPath === 'string' ? raw.localPath : typeof raw.local_path === 'string' ? raw.local_path : ''
+    const kind: 'file' | 'image' | undefined = raw.kind === 'file' || raw.type === 'file' ? 'file' : raw.kind === 'image' || raw.type === 'image' ? 'image' : undefined
+    if (!localPath || !kind) return []
+    return [{
+      kind,
+      localPath,
+      ...(typeof raw.fileName === 'string' ? { fileName: raw.fileName } : typeof raw.file_name === 'string' ? { fileName: raw.file_name } : {}),
+      ...(typeof raw.mimeType === 'string' ? { mimeType: raw.mimeType } : typeof raw.mime_type === 'string' ? { mimeType: raw.mime_type } : {})
+    }]
+  })
+  return attachments.length ? attachments : undefined
 }
 
 export function parseCompactInboundEvent(raw: unknown): FeishuInboundMessage | null {
   if (!raw || typeof raw !== 'object') return null
   const r = raw as Record<string, unknown>
-  const messageId = String(r.message_id ?? r.messageId ?? '')
+  const messageId = String(r.message_id ?? r.messageId ?? r.id ?? '')
   const chatId = String(r.chat_id ?? r.chatId ?? '')
   if (!messageId || !chatId) return null
 
   const rawContent = r.content
   const content = parseTextContent(rawContent)
-  const msgType = typeof r.msg_type === 'string' ? r.msg_type : typeof r.msgType === 'string' ? r.msgType : 'text'
+  const msgType = typeof r.message_type === 'string'
+    ? r.message_type
+    : typeof r.msg_type === 'string'
+      ? r.msg_type
+      : typeof r.msgType === 'string'
+        ? r.msgType
+        : 'text'
 
   return {
     messageId,
     chatId,
     chatType: String(r.chat_type ?? r.chatType ?? 'p2p'),
-    senderOpenId: String(r.sender_open_id ?? r.senderOpenId ?? ''),
+    senderOpenId: String(r.sender_id ?? r.sender_open_id ?? r.senderOpenId ?? ''),
     senderName: typeof r.sender_name === 'string' ? r.sender_name : undefined,
     content,
     rawContent: typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent ?? ''),
     createTime: String(r.create_time ?? r.createTime ?? Date.now()),
     mentionsBot: extractMentionsBot(r),
-    msgType
+    msgType,
+    attachments: parseInboundAttachments(r.attachments)
   }
 }
 

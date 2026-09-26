@@ -50,6 +50,32 @@ describe('executeWeChatSend', () => {
     expect(result.error).toMatch(/工作目录|不存在/)
   })
 
+  it('拒绝工作目录内指向外部的附件 symlink，并返回机制诊断', async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wechat-media-outside-'))
+    const outsideFile = path.join(outsideDir, 'private.txt')
+    const linkedFile = path.join(workDir, 'shared.txt')
+    await fs.writeFile(outsideFile, 'private content')
+    await fs.symlink(outsideFile, linkedFile)
+    try {
+      const result = await executeWeChatSend(
+        { userId: 'u1', text: 'share', filePath: 'shared.txt' },
+        {
+          workDir,
+          botService: { getRawBot: () => mockBot } as never,
+          getWeChatConfig: () => ({ ...DEFAULT_WECHAT_CONFIG, enabled: true, loggedIn: true })
+        }
+      )
+
+      expect(result).toMatchObject({
+        success: false,
+        diagnostic: { caseId: 'wechat-media-target-outside-workdir', category: 'mechanism' }
+      })
+      expect(mockBot.send).not.toHaveBeenCalled()
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true })
+    }
+  })
+
   it('sends text when configured', async () => {
     const result = await executeWeChatSend(
       { userId: 'u1', text: 'hello' },

@@ -18,6 +18,7 @@ import { normalizeStopReason, type NormalizedStopReason } from './stopReason'
 import { resolveToolLoopModelOptions } from './toolLoopModelOptions'
 import { sanitizeAnthropicToolsPayloadForStrictGateways } from './anthropicToolPayload'
 import type { WorkDirManager } from './workDirManager'
+import { classifyWorkDirProfileTarget } from './workDirBinding'
 import { FileStateCache } from './fileStateCache'
 import { getRegisteredTool, getToolExecutor } from './tools/builtinExecutors'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
@@ -104,6 +105,10 @@ import { getBuiltinSensitivePrefixes } from './shell/shellSensitivePaths'
 import { canShowShellTrustOption } from './shell/shellCommandTrust'
 import type { SessionEventInput } from './sessionEvents'
 import { evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCallGate'
+import { validateReadExecutionBoundary } from './confirmation/readExecutionBoundary'
+import { buildWriteExecutionPermit } from './confirmation/writeExecutionPermit'
+import { finalizeReadConfirmation, settleReadConfirmation } from './confirmation/readConfirmationFlow'
+import { recordPolicyExecutionVeto } from './confirmation/audit'
 import { recordUserAnswerFromDecision, recordSystemManagedCacheEntry } from './confirmation/decisionCacheWriter'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { channelFor } from './confirmation/channels'
@@ -1633,6 +1638,7 @@ async function runToolChatSessionInner(
     }
 
     const toolResults: Anthropic.ToolResultBlockParam[] = []
+    const decisionRuleIdsByToolUse = new Map<string, string>()
     const emitToolResultFact = (toolUseId: string, result: ToolCallResultPersisted) => {
       args.emitFactEvent?.({ type: 'tool-result', id: toolUseId, result })
     }
@@ -1640,6 +1646,11 @@ async function runToolChatSessionInner(
       block: Anthropic.ToolResultBlockParam,
       result: ToolCallResultPersisted
     ): Promise<void> => {
+      const decisionRuleId = decisionRuleIdsByToolUse.get(block.tool_use_id)
+      if (decisionRuleId) {
+        decisionRuleIdsByToolUse.delete(block.tool_use_id)
+        result = { ...result, decisionRuleId }
+      }
       toolResults.push(block)
       await args.emitSessionEvent?.({
         type: 'tool_result',
@@ -1955,6 +1966,8 @@ async function runToolChatSessionInner(
       const gate = await evaluateToolCallGate({
         toolName: resolvedToolName,
         toolInput: inputObj,
+        requestId,
+        toolUseId,
         sessionId,
         workDir,
         userDataDir,
@@ -1965,6 +1978,7 @@ async function runToolChatSessionInner(
         browserConfig,
         feishuConfig,
         wechatConfig,
+        wikiConfig,
         // 缺料时保持 undefined 传递：由门控入口 fail-loud（B1 禁止静默回退）
         effectiveRules: args.gatePolicy?.effectiveRules as import('../src/shared/confirmation/types').PolicyRule[],
         lanePackage: args.gatePolicy?.lanePackage as import('../src/shared/policy/policyPackages').PolicyPackage | undefined,
@@ -1974,9 +1988,19 @@ async function runToolChatSessionInner(
         remoteBudgetState,
         dangerAssessment,
         currentPageUrl,
+        ...(resolvedToolName === 'switch_work_dir' ? { factsProvider: ({ toolInput: factInput }: { toolName: string; toolInput: Record<string, unknown> }) => {
+          const profiles = workDirManager?.listProfiles()
+          const status = classifyWorkDirProfileTarget({
+            profile_id: typeof factInput.profile_id === 'string' ? factInput.profile_id : undefined,
+            name: typeof factInput.name === 'string' ? factInput.name : undefined,
+            alias: typeof factInput.alias === 'string' ? factInput.alias : undefined
+          }, profiles)
+          return [{ kind: 'workdir-profile-target', status: status ?? 'unknown' }]
+        } } : {}),
         mcpEntry: mcpSnapshot.entries.get(resolvedToolName),
         internalConfirmExemption: args.internalConfirmExemption
       })
+      decisionRuleIdsByToolUse.set(toolUseId, gate.decision.ruleId)
 
       // run_shell 预检拒绝（validator 性质，gate 前置短路）
       if (gate.shellPrecheckDeny) {
@@ -2195,6 +2219,7 @@ async function runToolChatSessionInner(
         const hasUnstartedBeforePermit = toolResults.length + activeToolNodes < toolUses.length
         const canParkBeforePermit = !hasUnstartedBeforePermit && canParkInvocation(activeToolNodes, waitingApprovalNodes)
         if (sharedApprovalRecoveryFailed || chatSignal.aborted) {
+          settleReadConfirmation({ toolName, requestId, toolUseId, outcome: 'cancelled' })
           failApprovalGroup()
           waitingApprovalNodes = Math.max(0, waitingApprovalNodes - 1)
           waitingApprovalToolIds.delete(toolUseId)
@@ -2214,6 +2239,7 @@ async function runToolChatSessionInner(
         try {
           await approvalAcquire
         } catch {
+          settleReadConfirmation({ toolName, requestId, toolUseId, outcome: 'cancelled' })
           waitingApprovalNodes = Math.max(0, waitingApprovalNodes - 1)
           waitingApprovalToolIds.delete(toolUseId)
           await recordToolResult(buildToolErrorResult(toolUseId, '审批已取消，工具未执行。', { requestId, sessionId }), { success: false, error: '审批已取消，工具未执行。', notExecuted: true, notExecutedReason: 'confirm_cancelled' })
@@ -2380,6 +2406,7 @@ async function runToolChatSessionInner(
             waitingApprovalToolIds.delete(toolUseId)
             notifySchedulerProgress()
             const unavailable = '审批无法取得运行租约，工具未执行。'
+            settleReadConfirmation({ toolName, requestId, toolUseId, outcome: 'unavailable' })
             abortRepeatedToolError = unavailable
             await recordToolResult(buildToolErrorResult(toolUseId, unavailable, { requestId, sessionId }), {
               success: false,
@@ -2390,6 +2417,7 @@ async function runToolChatSessionInner(
             return
           }
           if (chatSignal.aborted) {
+            settleReadConfirmation({ toolName, requestId, toolUseId, outcome: 'cancelled' })
             failApprovalGroup()
             if (approvalPermitHeld) { approvalSemaphore.release(); approvalPermitHeld = false }
             waitingApprovalNodes = Math.max(0, waitingApprovalNodes - 1)
@@ -2471,7 +2499,10 @@ async function runToolChatSessionInner(
               : {})
           })
           activeApprovalChannels.add(approvalChannel)
-          const channelOutcome = await approvalChannel.request(confirmReq).finally(async () => {
+          const channelOutcome = await approvalChannel.request(confirmReq).catch((error) => {
+            settleReadConfirmation({ toolName, requestId, toolUseId, outcome: 'channel-error' })
+            throw error
+          }).finally(async () => {
             activeApprovalChannels.delete(approvalChannel)
             if (approvalPermitHeld) { approvalSemaphore.release(); approvalPermitHeld = false }
             waitingApprovalNodes = Math.max(0, waitingApprovalNodes - 1)
@@ -2552,7 +2583,12 @@ async function runToolChatSessionInner(
             toolName,
             outcome
           })
-          throwIfChatCancelled(chatSignal)
+          try {
+            throwIfChatCancelled(chatSignal)
+          } catch (error) {
+            settleReadConfirmation({ toolName, requestId, toolUseId, outcome: 'cancelled' })
+            throw error
+          }
         } else if (outcome === 'approved') {
           // 同步授权段（硬不变量）：IM 回答回来后与执行同一同步段完成租约/代际复核 + grant issue/reserve，
           // 期间无任何 await（防 TOCTOU，等价原 :1470 注释语义）
@@ -2574,6 +2610,8 @@ async function runToolChatSessionInner(
           }
         }
       }
+
+      if (outcome !== 'approved') settleReadConfirmation({ toolName, requestId, toolUseId, outcome })
 
       if (sharedApprovalRecoveryFailed) {
         throw new Error(channelRejectSummary ?? 'approval recovery failed')
@@ -2833,6 +2871,27 @@ async function runToolChatSessionInner(
       let execThrew = false
       const execStartedAt = Date.now()
       const toolUserConfirmed = needsConfirm && outcome === 'approved'
+      if (toolUserConfirmed) {
+        gate.readExecutionPermit = finalizeReadConfirmation({
+          toolName, toolInput: inputObj, requestId, toolUseId, outcome,
+          answerer: gate.decision.type === 'require-confirm' ? gate.decision.answerer : '',
+          readPathFact: gate.readPathFact,
+          feishuMediaFact: gate.feishuMediaFact,
+          approvedTargets: gate.readTargetMapping
+        })
+        gate.approvedFactIds = gate.readExecutionPermit?.targets.map(({ factId, decisionRuleId }) => ({ factId, decisionRuleId })) ?? []
+      }
+      if ((toolName === 'write_file' || toolName === 'edit_file') && gate.writePathFact && (gate.decision.type === 'auto-allow' || toolUserConfirmed)) {
+        gate.writeExecutionPermit = buildWriteExecutionPermit({
+          requestId,
+          toolUseId,
+          toolName,
+          input: inputObj,
+          target: gate.writePathFact,
+          decisionRuleId: gate.decision.ruleId,
+          approval: gate.fileAutoApproved ? 'auto-allow' : 'confirmed'
+        })
+      }
       if (isToolRevoked(requestId, resolvedToolName)) {
         await recordToolResult(buildToolErrorResult(toolUseId, 'tool_authorization_revoked', { requestId, sessionId }), { success: false, error: 'tool_authorization_revoked', notExecuted: true, notExecutedReason: 'authorization_revoked' })
         continue
@@ -2905,6 +2964,7 @@ async function runToolChatSessionInner(
             requestId,
             toolUseId,
             sessionId,
+            audit: getSecurityAuditLog(),
             sendProgress,
             recordDiagnostic: (entry: { code: string; message: string }) => {
               logAgentEvent('info', 'tool.result', {
@@ -2933,9 +2993,34 @@ async function runToolChatSessionInner(
             getBrowserDetectContext,
             requestLocale: locale,
             lane: effectiveLane,
+            readExecutionPermit: gate.readExecutionPermit,
+            writeExecutionPermit: gate.writeExecutionPermit,
             historyFacts: args.historyFacts
           }
-          execResult = preparedShellExecution
+          const readBoundary = validateReadExecutionBoundary({
+            toolName,
+            input: inputObj,
+            requestId,
+            toolUseId,
+            permit: gate.readExecutionPermit,
+            targetKind: gate.readPathFact?.targetKind,
+            expectedFacts: gate.readExecutionPermit?.targets
+          })
+          if (!readBoundary.ok) {
+            const failureClass = readBoundary.caseId === 'input-digest-mismatch' ? 'input' : readBoundary.caseId.includes('identity') || readBoundary.caseId.includes('target') ? 'mechanism' : 'integration-violation'
+            recordPolicyExecutionVeto({ lane: effectiveLane, sessionId, requestId, toolUseId, toolName, decisionRuleId: gate.readExecutionPermit?.decisionRuleId ?? gate.decision.ruleId, pathZone: gate.readPathFact?.zone, factId: gate.readExecutionPermit?.targets[0]?.factId ?? (gate.readPathFact?.normalizedPath ? `fact-${gate.readPathFact.normalizedPath}` : undefined), failureClass, caseId: readBoundary.caseId })
+            execResult = {
+              success: false,
+              error: '读取许可校验失败，未执行读取。',
+              diagnostic: {
+                caseId: readBoundary.caseId,
+                retryable: false,
+                category: failureClass,
+                ...(gate.readExecutionPermit?.targets[0]?.factId ? { factId: gate.readExecutionPermit.targets[0].factId } : {})
+              }
+            }
+          } else {
+            execResult = preparedShellExecution
             ? await executePreparedShellExecutionWithHostFallback(preparedShellExecution, executionContext, execStartedAt, {
                 requestId,
                 sessionId,
@@ -2958,8 +3043,27 @@ async function runToolChatSessionInner(
                   confirm: coordinatorConfirmHook({ outcome, needsConfirm, rejectReason })
                 }) as ToolExecutorResult
             : await exec!.execute(inputObj, executionContext)
+          }
           if (toolName === 'browser' && browserConfig) {
             stagehandService.scheduleIdleClose(sessionId, browserConfig.idleTimeoutSec)
+          }
+          if ((toolName === 'write_file' || toolName === 'edit_file') && gate.writePathFact && execResult && !execResult.success && execResult.diagnostic && (execResult.diagnostic.category === 'policy' || execResult.diagnostic.category === 'environment')) {
+            const caseId = execResult.diagnostic.caseId
+            const failureClass = execResult.diagnostic.category === 'environment' ? 'mechanism' : caseId.includes('input') ? 'input' : 'integration-violation'
+            recordPolicyExecutionVeto({ lane: effectiveLane, sessionId, requestId, toolUseId, toolName, decisionRuleId: gate.writeExecutionPermit?.decisionRuleId ?? gate.decision.ruleId, pathZone: gate.writePathFact.zone, factId: `fact-${gate.writePathFact.normalizedPath}`, failureClass, caseId })
+          }
+          if (toolName === 'switch_work_dir' && execResult && !execResult.success && execResult.diagnostic?.caseId === 'workdir-profile-sensitive-at-execution') {
+            recordPolicyExecutionVeto({ lane: effectiveLane, sessionId, requestId, toolUseId, toolName, decisionRuleId: gate.decision.ruleId, failureClass: 'environment', caseId: execResult.diagnostic.caseId })
+          }
+          if ((toolName === 'wechat_send' || toolName === 'wechat_reply') && execResult && !execResult.success && execResult.diagnostic?.category === 'mechanism' && gate.wechatMediaPathFact) {
+            recordPolicyExecutionVeto({
+              lane: effectiveLane, sessionId, requestId, toolUseId, toolName,
+              decisionRuleId: gate.decision.ruleId,
+              pathZone: gate.wechatMediaPathFact.zone,
+              factId: `fact-${gate.wechatMediaPathFact.normalizedPath}`,
+              failureClass: 'mechanism',
+              caseId: execResult.diagnostic.caseId
+            })
           }
         } catch (e) {
           execThrew = true

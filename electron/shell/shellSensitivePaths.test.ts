@@ -1,7 +1,7 @@
 import os from 'os'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { getBuiltinSensitivePrefixes, isSensitivePath } from './shellSensitivePaths'
+import { getBuiltinSensitivePrefixes, getEffectiveSensitivePrefixes, isSensitivePath, matchSensitive } from './shellSensitivePaths'
 
 describe('shellSensitivePaths', () => {
   it('includes ssh and userData prefixes', () => {
@@ -20,5 +20,17 @@ describe('shellSensitivePaths', () => {
   it('detects .env files', () => {
     const envFile = path.join(os.tmpdir(), 'project', '.env')
     expect(isSensitivePath(envFile)).toBe(true)
+  })
+
+  it('策略有效清单同时包含内置和自定义前缀，并按注入 home/platform 归一化', () => {
+    const prefixes = getEffectiveSensitivePrefixes('C:\\Users\\Agent\\AppData\\Roaming\\SpaceAssistant', ['%USERPROFILE%\\CorpSecrets'], 'win32', 'C:\\Users\\Agent')
+    expect(prefixes).toContain('c:\\users\\agent\\corpsecrets')
+    expect(prefixes).toContain('c:\\windows')
+    expect(prefixes).toContain('c:\\users\\agent\\appdata\\roaming\\spaceassistant')
+    expect(matchSensitive({ resolvedPath: 'C:\\Users\\Agent\\CorpSecrets\\key.txt', homeDir: 'C:\\Users\\Agent', platform: 'win32', customPrefixes: ['%USERPROFILE%\\CorpSecrets'] })).toMatchObject({ sensitive: true, matchedBy: 'custom' })
+  })
+
+  it('Posix ~ 展开只使用显式注入的 home', () => {
+    expect(matchSensitive({ resolvedPath: '/custom-home/.ssh/id_ed25519', homeDir: '/custom-home', platform: 'posix', builtinPrefixes: [], customPrefixes: ['~/.ssh'] })).toMatchObject({ sensitive: true, matchedBy: 'custom' })
   })
 })

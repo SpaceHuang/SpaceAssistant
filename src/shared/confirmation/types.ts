@@ -100,6 +100,16 @@ export interface ConfirmSummary {
 export type FactSignal =
   | { kind: 'command-sequence'; commands: CommandFact[]; persistable?: boolean }
   | { kind: 'path-target'; path: string; zone: PathZone }
+  | { kind: 'command-effect'; effect: 'read-only' | 'mutating' | 'unknown' }
+  | { kind: 'path-outside-heuristic'; reason: string }
+  | { kind: 'script-path-extraction'; completeness: 'complete' | 'unknown'; dynamicAccess: boolean }
+  | { kind: 'script-language-analysis'; language: 'javascript' | 'typescript' | 'powershell' | 'unknown'; status: 'unverified' }
+  | { kind: 'wiki-raw-target' }
+  | { kind: 'feishu-media-target'; boundary: 'inside' | 'outside' | 'unknown' }
+  | { kind: 'wechat-media-target'; boundary: 'inside-workdir' | 'outside-workdir' | 'unknown'; zone?: PathZone; targetKind: 'file' | 'directory' | 'missing' | 'symlink' | 'special' | 'unknown' }
+  | { kind: 'workdir-profile-target'; status: 'normal' | 'sensitive' | 'unknown' }
+  | { kind: 'write-target-unsupported' }
+  | { kind: 'write-target-scope'; scope: 'inside-workdir' | 'outside-workdir' | 'unknown' }
   | { kind: 'network-egress'; domains: string[] }
   | { kind: 'outbound-target'; channel: string; recipient?: string; domains?: string[] }
   | { kind: 'script-analysis'; signal: 'clean' | 'suspicious' | 'dangerous'; patterns: string[] }
@@ -353,13 +363,24 @@ export interface SecurityAuditEvent {
   sessionId: string
   /** 请求短号（复用 allocateConfirmId），用于关联 confirm.request/outcome。 */
   requestId?: string
+  toolUseId?: string
+  decisionRuleId?: string
+  /** 脱敏后的事实关联 id；路径事实不得把原始路径直接写入该字段。 */
+  factId?: string
+  pathZone?: PathZone
+  failureClass?: 'input' | 'mechanism' | 'environment' | 'integration-violation'
+  caseId?: string
   toolName?: string
   actionClass?: ActionClass
   riskLevel?: RiskLevel
   /** ConfirmSummary 纯文本摘要（事实，非原始输入全文）。 */
   factsSummary?: string
   signals?: string[]
+  /** 路径分区事实，仅记录 zone，不记录路径原文。 */
+  pathZones?: PathZone[]
   decision?: 'auto-allow' | 'require-confirm' | 'deny'
+  autoApproveOutcome?: 'approved' | 'fallback'
+  autoApproveReasonCode?: string
   ruleId?: string
   reason?: string
   outcome?: 'approved' | 'rejected' | 'timeout' | 'cancelled' | 'unavailable'
@@ -390,6 +411,8 @@ export interface SecurityAuditEvent {
 
 export type SecurityAuditEventKind =
   | 'policy.decision'
+  | 'policy.execution-veto'
+  | 'file.auto-approve'
   | 'policy.deny-ingress'
   | 'policy.deny-exposure'
   | 'confirm.request'

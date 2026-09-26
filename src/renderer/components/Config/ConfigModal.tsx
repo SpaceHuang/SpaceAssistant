@@ -49,7 +49,7 @@ import { RemoteImCommonSettings } from './RemoteImCommonSettings'
 
 import type { RemoteImCommonConfig } from '../../../shared/imTypes'
 
-import { ToolsSettingsTab } from './ToolsSettingsTab'
+import { ToolsSettingsTab, type ToolsSettingsUi } from './ToolsSettingsTab'
 
 import { ModelsSettingsTab, getDefaultPreferredModelIds } from './ModelsSettingsTab'
 
@@ -176,11 +176,13 @@ export function ConfigSettingsPage() {
 
   const [workDirSaveError, setWorkDirSaveError] = useState<string | null>(null)
 
-  const [toolUi, setToolUi] = useState({
+  const [toolUi, setToolUi] = useState<ToolsSettingsUi>({
 
     deniedTools: [] as string[],
 
     pythonPath: 'python',
+
+    scriptInterpreterPaths: { javascript: 'node', typescript: 'node', powershell: '' },
 
     scriptTimeout: 300,
 
@@ -323,6 +325,8 @@ export function ConfigSettingsPage() {
         deniedTools,
 
         pythonPath: cfg.tools.pythonPath,
+
+        scriptInterpreterPaths: cfg.tools.scriptInterpreterPaths ?? { javascript: 'node', typescript: 'node', powershell: '' },
 
         scriptTimeout: cfg.tools.scriptTimeout,
 
@@ -639,6 +643,8 @@ export function ConfigSettingsPage() {
           allowedTools: [],
 
           pythonPath: toolUi.pythonPath,
+
+          scriptInterpreterPaths: toolUi.scriptInterpreterPaths ?? { javascript: 'node', typescript: 'node', powershell: '' },
 
           scriptTimeout: toolUi.scriptTimeout,
 
@@ -1223,5 +1229,3 @@ export function ConfigSettingsPage() {
   )
 
 }
-
-

@@ -10,6 +10,7 @@ import type { LarkCliRunner } from '../feishu/larkCliRunner'
 import type { ImChannel } from '../confirmation/imChannel'
 import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
 import type { HistoryFact } from '../../src/shared/historyReader'
+import type { RegisteredFeishuAttachment } from '../feishu/feishuAttachmentRegistry'
 import type { ChildProcess, spawn as nodeSpawn } from 'child_process'
 
 export interface RemoteContext {
@@ -28,6 +29,8 @@ export interface RemoteContext {
   contextToken?: string
   inboundRaw?: IncomingMessage
   feishuConfig?: FeishuConfig
+  /** 当前 Feishu 入站消息实际附带的附件，只在本请求内授权。 */
+  feishuAttachments?: readonly RegisteredFeishuAttachment[]
   wechatConfig?: WeChatConfig
   larkCliRunner?: LarkCliRunner
   /** 合并后的 IM 确认通道单例（lane 由实例决定）；主循环经 channelFor 直接调用。 */
@@ -65,6 +68,8 @@ export interface ToolExecutionContext {
   userDataDir: string
   requestId: string
   toolUseId: string
+  /** Security audit sink shared with the gate for execution-veto correlation. */
+  audit?: { record(event: import('../../src/shared/confirmation/types').SecurityAuditEvent): void }
   sessionId: string
   assistantMessageId?: string
   sendProgress: (status: string, payload?: string | ToolProgressPayload) => void
@@ -99,6 +104,8 @@ export interface ToolExecutionContext {
   requestLocale?: string
   /** 本次请求的执行 lane；toolkit 能力的 lane 校验用（评审 S2） */
   lane?: string
+  readExecutionPermit?: import('../confirmation/readExecutionPermit').ReadExecutionPermit
+  writeExecutionPermit?: import('../confirmation/writeExecutionPermit').WriteExecutionPermit
 }
 
 import type { BrowserDependencyToolError } from '../../src/shared/browserTypes'
@@ -112,7 +119,8 @@ export interface ToolExecutorResult {
   diagnostic?: {
     caseId: string
     retryable: boolean
-    category: 'command' | 'environment' | 'executor' | 'transport' | 'policy'
+    category: 'command' | 'environment' | 'executor' | 'transport' | 'policy' | 'input' | 'mechanism' | 'integration-violation'
+    factId?: string
   }
   duration?: number
   dependencyError?: BrowserDependencyToolError

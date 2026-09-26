@@ -17,6 +17,71 @@ import { SHELL_REMOTE_DISABLED_ERROR } from '../shellToolDisplay'
 export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   // ===== 第 1 步段：locked && deny（硬拒绝，先于任何缓存查询）=====
   {
+    id: 'wiki-raw-write-deny',
+    when: 'invocation',
+    match: { toolName: ['write_file', 'edit_file'], signals: ['wiki-raw-target'] },
+    action: 'deny', locked: true, reason: 'raw/ 为只读源，不可通过工具修改 (WIKI_RAW_READONLY)'
+  },
+  {
+    id: 'remote-outside-write-deny',
+    when: 'invocation',
+    match: { lane: ['wechat', 'feishu'], toolName: ['write_file', 'edit_file'], signals: ['write-target-scope:outside-workdir'] },
+    action: 'deny', locked: true, reason: '远程会话只能写入当前工作目录内的文件'
+  },
+  {
+    id: 'remote-write-scope-unknown-deny',
+    when: 'invocation',
+    match: { lane: ['wechat', 'feishu'], toolName: ['write_file', 'edit_file'], signals: ['write-target-scope:unknown'] },
+    action: 'deny', locked: true, reason: '远程会话只能写入当前工作目录内的文件'
+  },
+  {
+    id: 'remote-outside-read-deny',
+    when: 'invocation',
+    match: { lane: ['wechat', 'feishu', 'automation'], toolName: ['read_file', 'grep', 'list_directory'], actionClass: 'read', signals: ['path-target:outside-workdir'] },
+    action: 'deny', locked: true, reason: '非桌面会话只能读取当前工作目录内的普通路径'
+  },
+  {
+    id: 'remote-wechat-media-outside-deny',
+    when: 'invocation',
+    match: { lane: ['wechat'], toolName: ['wechat_send', 'wechat_reply'], signals: ['wechat-media-target:outside-workdir'] },
+    action: 'deny', locked: true, reason: '微信附件只能来自当前工作目录内的文件'
+  },
+  {
+    id: 'remote-wechat-media-unknown-deny',
+    when: 'invocation',
+    match: { lane: ['wechat'], toolName: ['wechat_send', 'wechat_reply'], signals: ['wechat-media-target:unknown'] },
+    action: 'deny', locked: true, reason: '无法确认微信附件位于当前工作目录内，已阻止发送'
+  },
+  {
+    id: 'write-target-unsupported-deny',
+    when: 'invocation', match: { toolName: ['write_file', 'edit_file'], signals: ['write-target-unsupported'] },
+    action: 'deny', locked: true, reason: '写入目标不是普通文件或新文件路径'
+  },
+  {
+    id: 'feishu-media-boundary-deny',
+    when: 'invocation',
+    match: { lane: ['feishu', 'automation'], toolName: 'read_feishu_attachment', signals: ['feishu-media-target:outside'] },
+    action: 'deny', locked: true, reason: '附件目标必须位于飞书媒体目录内'
+  },
+  {
+    id: 'feishu-media-boundary-unknown-deny',
+    when: 'invocation',
+    match: { lane: ['feishu', 'automation'], toolName: 'read_feishu_attachment', signals: ['feishu-media-target:unknown'] },
+    action: 'deny', locked: true, reason: '无法确认附件目标边界，已阻止读取'
+  },
+  {
+    id: 'remote-sensitive-workdir-switch-deny',
+    when: 'invocation',
+    match: { lane: ['wechat', 'feishu'], toolName: 'switch_work_dir', signals: ['workdir-profile-target:sensitive'] },
+    action: 'deny', locked: true, reason: '远程会话不得切换到敏感工作目录'
+  },
+  {
+    id: 'remote-unknown-workdir-switch-deny',
+    when: 'invocation',
+    match: { lane: ['wechat', 'feishu'], toolName: 'switch_work_dir', signals: ['workdir-profile-target:unknown'] },
+    action: 'deny', locked: true, reason: '无法确认目标工作目录是否敏感，已阻止切换'
+  },
+  {
     id: 'script-network-deny-remote',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: ['script-network'] },
@@ -83,6 +148,76 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     requiresContext: { outboundWriteBudgetExhausted: true },
     reason: 'remote_task_budget'
   },
+  {
+    id: 'shell-sensitive-path-confirm',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_shell', signals: ['path-target:sensitive-file'] },
+    action: 'confirm-every-time', locked: true,
+    reason: '命令涉及敏感位置，需真人确认'
+  },
+  {
+    id: 'shell-system-dir-confirm',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_shell', signals: ['path-target:system-dir'] },
+    action: 'confirm-every-time', locked: true,
+    reason: '命令涉及系统目录，需真人确认'
+  },
+  {
+    id: 'automation-script-path-unknown-deny',
+    when: 'invocation',
+    match: { lane: ['automation'], toolName: 'run_script', signals: ['script-path-extraction:unknown'] },
+    action: 'deny', locked: true, reason: '无人值守调用无法确认脚本访问路径'
+  },
+  {
+    id: 'automation-unverified-script-language-deny',
+    when: 'invocation',
+    match: { lane: ['automation'], toolName: 'run_script', signals: ['script-language-analysis:unverified'] },
+    action: 'deny', locked: true, reason: '无人值守调用不得执行未经完整内容分析的脚本语言'
+  },
+  {
+    id: 'automation-sensitive-path-deny',
+    when: 'invocation', match: { lane: ['automation'], signals: ['path-target:sensitive-file'] },
+    action: 'deny', locked: true, reason: '无人值守调用不得访问敏感位置'
+  },
+  {
+    id: 'automation-system-dir-deny',
+    when: 'invocation', match: { lane: ['automation'], signals: ['path-target:system-dir'] },
+    action: 'deny', locked: true, reason: '无人值守调用不得访问系统目录'
+  },
+  {
+    id: 'automation-write-deny',
+    when: 'invocation', match: { lane: ['automation'], toolName: ['write_file', 'edit_file'] },
+    action: 'deny', locked: true, reason: '无人值守调用不得写入本地文件'
+  },
+  {
+    id: 'automation-shell-deny',
+    when: 'invocation', match: { lane: ['automation'], toolName: 'run_shell' },
+    action: 'deny', locked: true, reason: '无人值守调用不得执行 Shell 命令'
+  },
+  {
+    id: 'script-sensitive-path-confirm',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['path-target:sensitive-file'] },
+    action: 'confirm-every-time', locked: true, reason: '脚本涉及敏感位置，需真人确认'
+  },
+  {
+    id: 'script-system-dir-confirm',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['path-target:system-dir'] },
+    action: 'confirm-every-time', locked: true, reason: '脚本涉及系统目录，需真人确认'
+  },
+  {
+    id: 'script-path-unknown-confirm',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:unknown'] },
+    action: 'confirm-every-time', locked: true, reason: '脚本路径提取不完整，需真人确认'
+  },
+  {
+    id: 'script-unverified-language-confirm',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-language-analysis:unverified'] },
+    action: 'confirm-every-time', locked: true, reason: '该脚本语言尚未接入完整内容安全分析，需真人确认'
+  },
 
   // ===== 第 4 步段：auto-evaluator（自动审批器入口）=====
   // 命中即「自动」动作：确定性快通道批准才返回；未裁决交审批 Agent（引擎第 4 步，answerer=agent）。
@@ -101,6 +236,37 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   },
 
   // ===== 第 6 步段：默认表（ask / allow）=====
+  {
+    id: 'path-sensitive-read-confirm',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], actionClass: 'read', signals: ['path-target:sensitive-file'] },
+    action: 'confirm-every-time',
+    locked: true,
+    reason: '读取敏感位置需真人确认'
+  },
+  {
+    id: 'path-system-dir-ask',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], actionClass: 'read', signals: ['path-target:system-dir'] },
+    action: 'confirm-every-time',
+    locked: true,
+    reason: '读取系统目录需真人确认'
+  },
+  // 桌面显式文件读取的普通目标由生效规则统一裁决；不得在 gate 中绕过套餐/custom 规则直接 allow。
+  {
+    id: 'read-target-workdir-allow',
+    when: 'invocation',
+    match: { lane: ['desktop'], toolName: ['read_file', 'grep', 'list_directory'], actionClass: 'read', signals: ['path-target:workdir-normal'] },
+    action: 'allow',
+    reason: '工作目录内普通只读访问免确认'
+  },
+  {
+    id: 'path-outside-readonly-allow',
+    when: 'invocation',
+    match: { lane: ['desktop'], actionClass: 'read', signals: ['path-target:outside-workdir'] },
+    action: 'allow',
+    reason: '工作目录外的只读访问免确认'
+  },
   // 脚本网络命中（脚本专属信号 + toolName 双重限定，避免卷进 browser / run_shell 的通用 network-egress）
   {
     id: 'script-network-ask-desktop',

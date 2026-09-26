@@ -99,7 +99,11 @@ export const switchWorkDirExecutor: ToolExecutor = {
 
     const targetProfile = matchResult.matches[0]!
     if (targetProfile.sensitive === true) {
-      return { success: false, error: SENSITIVE_WORKDIR_ERROR }
+      return {
+        success: false,
+        error: SENSITIVE_WORKDIR_ERROR,
+        diagnostic: { caseId: 'workdir-profile-sensitive-at-execution', category: 'environment', retryable: true }
+      }
     }
 
     const bindResult = await bindSessionWorkDir(appDatabase, workDirManager, {

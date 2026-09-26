@@ -1,13 +1,14 @@
 import os from 'os'
 import path from 'path'
 
-function expandHome(p: string): string {
+function expandHome(p: string, home: string, platform: ShellPathPlatform): string {
+  const pp = platform === 'win32' ? path.win32 : path.posix
   if (p.startsWith('~/') || p === '~') {
-    return path.join(os.homedir(), p.slice(1))
+    return pp.join(home, p.slice(1))
   }
-  if (process.platform === 'win32' && p.startsWith('%USERPROFILE%')) {
+  if (platform === 'win32' && p.startsWith('%USERPROFILE%')) {
     const rest = p.slice('%USERPROFILE%'.length).replace(/^[/\\]/, '')
-    return path.join(os.homedir(), rest)
+    return path.win32.join(home, rest)
   }
   return p
 }
@@ -21,10 +22,11 @@ export type ShellPathPlatform = 'win32' | 'posix' | 'darwin'
  */
 export function getBuiltinSensitivePrefixes(
   userDataDir?: string,
-  platform: ShellPathPlatform = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'posix'
+  platform: ShellPathPlatform = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'posix',
+  homeDir = os.homedir()
 ): string[] {
   const pp = platform === 'win32' ? path.win32 : path.posix
-  const home = os.homedir()
+  const home = homeDir
   const prefixes: string[] = [
     pp.join(home, '.ssh'),
     pp.join(home, '.gnupg'),
@@ -40,7 +42,46 @@ export function getBuiltinSensitivePrefixes(
     prefixes.push('/System')
   }
   if (userDataDir) prefixes.push(userDataDir)
-  return prefixes.map((p) => pp.normalize(expandHome(p)).toLowerCase())
+  return prefixes.map((p) => pp.normalize(expandHome(p, home, platform)).toLowerCase())
+}
+
+/** 策略环境唯一读取的有效敏感前缀集合：内置与用户自定义使用相同平台归一化。 */
+export function getEffectiveSensitivePrefixes(
+  userDataDir?: string,
+  customPrefixes: readonly string[] = [],
+  platform: ShellPathPlatform = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'posix',
+  homeDir = os.homedir()
+): string[] {
+  const pp = platform === 'win32' ? path.win32 : path.posix
+  return [...new Set([
+    ...getBuiltinSensitivePrefixes(userDataDir, platform, homeDir),
+    ...customPrefixes.map((prefix) => pp.normalize(expandHome(prefix, homeDir, platform)).toLowerCase())
+  ])]
+}
+
+export function matchSensitive(input: {
+  resolvedPath: string
+  userDataDir?: string
+  homeDir?: string
+  platform?: ShellPathPlatform
+  builtinPrefixes?: readonly string[]
+  customPrefixes?: readonly string[]
+}): { sensitive: boolean; matchedBy?: 'builtin' | 'custom' | 'env-name' | 'secrets-directory' } {
+  const platform = input.platform ?? (process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'posix')
+  const pp = platform === 'win32' ? path.win32 : path.posix
+  const home = input.homeDir ?? os.homedir()
+  const normalized = pp.normalize(input.resolvedPath).toLowerCase()
+  const builtin = input.builtinPrefixes ?? getBuiltinSensitivePrefixes(input.userDataDir, platform, home)
+  const custom = input.customPrefixes ?? []
+  const matches = (prefix: string) => {
+    const normalizedPrefix = pp.normalize(expandHome(prefix, home, platform)).toLowerCase()
+    return normalized === normalizedPrefix || normalized.startsWith(normalizedPrefix + pp.sep)
+  }
+  if (builtin.some(matches)) return { sensitive: true, matchedBy: 'builtin' }
+  if (custom.some(matches)) return { sensitive: true, matchedBy: 'custom' }
+  if (normalized.endsWith('.env') || normalized.includes(`${pp.sep}.env.`)) return { sensitive: true, matchedBy: 'env-name' }
+  if (normalized.includes(`${pp.sep}secrets${pp.sep}`)) return { sensitive: true, matchedBy: 'secrets-directory' }
+  return { sensitive: false }
 }
 
 export function isSensitivePath(
@@ -49,16 +90,5 @@ export function isSensitivePath(
   customPrefixes?: string[],
   platform: ShellPathPlatform = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'posix'
 ): boolean {
-  const pp = platform === 'win32' ? path.win32 : path.posix
-  const norm = pp.normalize(resolvedPath).toLowerCase()
-  const all = [
-    ...getBuiltinSensitivePrefixes(userDataDir, platform),
-    ...(customPrefixes ?? []).map((p) => pp.normalize(expandHome(p)).toLowerCase())
-  ]
-  for (const prefix of all) {
-    if (norm === prefix || norm.startsWith(prefix + pp.sep)) return true
-    if (norm.endsWith('.env') || norm.includes(`${pp.sep}.env.`)) return true
-    if (norm.includes(`${pp.sep}secrets${pp.sep}`)) return true
-  }
-  return false
+  return matchSensitive({ resolvedPath, userDataDir, customPrefixes, platform }).sensitive
 }
