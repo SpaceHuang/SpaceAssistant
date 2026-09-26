@@ -177,14 +177,20 @@ describe('path field alias normalization', () => {
     }
   })
 
-  it('目录枚举仅返回前 500 项并标记截断', async () => {
+  it('目录枚举完整返回超过 500 项的条目', async () => {
     const input = { path: '.' }
     const ctx = makeCtx(tmpDir, cache)
     await Promise.all(Array.from({ length: 501 }, (_, index) => fs.writeFile(path.join(tmpDir, `entry-${String(index).padStart(3, '0')}`), '')))
+    await fs.writeFile(path.join(tmpDir, 'zz-target-after-limit'), '')
+    await fs.mkdir(path.join(tmpDir, 'directory-entry'))
     await permitDirectory(ctx, input, tmpDir)
     const result = await listDirectoryExecutor.execute(input, ctx)
-    expect(result).toMatchObject({ success: true, data: { entries: expect.any(Array), truncated: true, limit: 500 } })
-    expect((result.data as { entries: unknown[] }).entries).toHaveLength(500)
+    expect(result).toMatchObject({ success: true, data: { entries: expect.any(Array) } })
+    const entries = (result.data as { entries: Array<{ name: string; isDirectory: boolean }> }).entries
+    expect(entries).toHaveLength(503)
+    expect(entries.map((entry) => entry.name)).toContain('zz-target-after-limit')
+    expect(entries[0]?.isDirectory).toBe(true)
+    expect(result.data).not.toHaveProperty('truncated')
   })
 
   it('grep accepts file_path', async () => {

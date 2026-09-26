@@ -2,7 +2,7 @@
 
 **日期：** 2026-09-25
 
-**状态：** 阶段 A～D 已实施并通过用户评审；Windows/Linux 平台 CI 尚待运行。追踪证据见[实现矩阵](./session-d961cc51-boundary-policy-layering-implementation-matrix.md)。
+**状态：** 基于当前功能分支工作树静态核对；待按下述阶段继续实施与评审
 
 **实现分支：** `codex/boundary-policy-layering-tdd`（检查时 HEAD `ce95376f`，工作树含未提交变更）
 
@@ -225,4 +225,3 @@ type DirectoryReadFact = {
 | 0.1 | 2026-09-25 | 基于 `codex/boundary-policy-layering-tdd` 当前工作树及恢复后的 v0.7 需求，归并 D-1～D-11 的剩余缺口；将 `list_directory`、无 permit 兼容支路及 D-11 横向验收列为后续阶段；按会话中已确认的产品取向，将持久路径授权记忆与重试惩罚记录为不实施事项；给出分阶段技术方案和阶段评审门槛。 |
 | 0.2 | 2026-09-25 | 根据评审补入 P0：桌面 `read_file` / `grep` 经 `decideDesktopReadV1` 固定 allow、绕过 strict/custom 生效规则。调整阶段 A/B 与完成标准：三种读取工具共用 effective rules；standard 保留默认读取动作，strict/custom 的 ask/deny 必须在 permit 生成前生效；敏感/系统 locked 真人确认保持不可放宽；确认型读取也须有正确 answerer 的一次性许可闭环。 |
 | 0.3 | 2026-09-25 | 实施阶段 A 时复用既有 `path-outside-readonly-allow` 承载桌面目录外读取决策，避免重复、更早命中的新规则遮蔽用户已有 custom 覆盖；workdir-normal 使用新增读取 allow 规则。 |
-| 0.4 | 2026-09-26 | 阶段 A～D 已完成并通过用户代码评审；实现矩阵补入 D-11 微信附件路径通道。全量测试、类型检查、i18n 和 diff 检查通过。Windows/Linux 未在本机运行，继续标为待对应 CI 验证。 |

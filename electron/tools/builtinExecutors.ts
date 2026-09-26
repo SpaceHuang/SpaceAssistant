@@ -427,12 +427,9 @@ export const listDirectoryExecutor: ToolExecutor = {
       const target = permitted.path
       const root = path.resolve(ctx.workDir)
       const rows: Array<{ name: string; path: string; isDirectory: boolean; size?: number; mtimeMs?: number }> = []
-      const maxEntries = 500
-      let truncated = false
       const dir = await fs.opendir(target)
       try {
         for await (const ent of dir) {
-          if (rows.length >= maxEntries) { truncated = true; break }
           if (rows.length % 25 === 0) throwIfAborted(op)
           const p = path.join(target, ent.name)
           let size: number | undefined
@@ -458,7 +455,7 @@ export const listDirectoryExecutor: ToolExecutor = {
         await dir.close().catch(() => undefined)
       }
       rows.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name))
-      return { success: true, data: { entries: rows, ...(truncated ? { truncated: true, limit: maxEntries } : {}) }, duration: Date.now() - started }
+      return { success: true, data: { entries: rows }, duration: Date.now() - started }
     } finally {
       dispose()
     }
