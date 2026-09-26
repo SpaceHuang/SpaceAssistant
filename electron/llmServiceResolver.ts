@@ -3,7 +3,7 @@ import type { LlmServiceProfile, ModelEntry } from '../src/shared/domainTypes'
 import {
   getAvailableModels,
   getDefaultPreferredModelIds,
-  getEnabledModelIds,
+  getModelIds,
   migrateModelEntries,
   resolvePreferredModelEntry,
   resolveServiceForModel
@@ -196,11 +196,11 @@ export function migrateMultiServiceModelConfig(db: AppDatabase, models: ModelEnt
   nextModels = nextModels.map((m) => ({ ...m, isDefault: false }))
 
   let services = readLlmServices(db)
-  const enabledIds = getEnabledModelIds(nextModels)
+  const modelIds = getModelIds(nextModels)
 
   services = services.map((s) => ({
     ...s,
-    supportedModelIds: s.supportedModelIds?.length ? s.supportedModelIds : [...enabledIds]
+    supportedModelIds: s.supportedModelIds ?? [...modelIds]
   }))
 
   let activeIds = readActiveLlmServiceIds(db)
@@ -504,7 +504,7 @@ export function resolveLanguagePreferredModelName(db: AppDatabase, models: Model
   const available = getAvailableModels(models, services, activeIds)
   const configuredId = getConfigValue(db, LLM_SERVICE_CONFIG_KEYS.preferredLanguageModelId) ?? ''
   const entry = resolvePreferredModelEntry('language', models, available, configuredId)
-  return entry?.name ?? models.find((m) => m.id === configuredId)?.name ?? 'deepseek-v4-pro'
+  return entry?.name ?? models.find((m) => m.id === configuredId)?.name ?? ''
 }
 
 export function resolveFastPreferredModelName(db: AppDatabase, models: ModelEntry[]): string | null {
@@ -541,7 +541,7 @@ export function resolveTestConnectionModel(
   const supported = new Set(options?.supportedModelIds ?? service.supportedModelIds ?? [])
   if (supported.size === 0) return undefined
 
-  const candidates = models.filter((m) => m.enabled && supported.has(m.id))
+  const candidates = models.filter((m) => supported.has(m.id))
   if (candidates.length === 0) return undefined
 
   const preferredId = getConfigValue(db, LLM_SERVICE_CONFIG_KEYS.preferredLanguageModelId)

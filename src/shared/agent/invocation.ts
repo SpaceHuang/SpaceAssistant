@@ -57,6 +57,7 @@ export interface AgentInvocationProfile {
   /** 冻结执行配置里的 LLM 服务 ID（DIM3：同模型跨服务分开统计）。 */
   llmServiceId?: string
   contextWindow?: number
+  contextWindowTrusted?: boolean
   system?: string
   options?: { maxTokens?: number; enableThinking?: boolean }
   locale?: string

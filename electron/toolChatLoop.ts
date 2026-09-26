@@ -3,17 +3,20 @@ import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/anthropicTool
 import { sanitizeCapabilityParamsForDisplay } from '../src/shared/capabilityParamSanitize'
 import { normalizeExternalToolName } from '../src/shared/toolNameCompatibility'
 import { BUILTIN_TOOL_METADATA } from '../src/shared/builtinToolMetadata'
-import { projectUsageAfterToolResults } from '../src/shared/contextUsageEstimate'
+import { computeTotalRequestInputTokens, projectUsageAfterToolResults } from '../src/shared/contextUsageEstimate'
+import { detectSilentContextOverflow } from '../src/shared/overflowRecovery'
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import { createAnthropicClient } from './anthropicClientFactory'
 import { buildClaudeToolLoopStreamParams, computeCacheBreakpointPositions } from './claudeToolLoopStreamParams'
 import {
   buildThinkingWireParams,
+  consumeBaselineEffortAudit,
   consumeEffortMemoizedAudit,
   isEffortUnsupportedByUpstream,
   isOutputConfigRejectedError,
   memoizeEffortUnsupported
 } from './effortFallback'
+import { resolveThinkingAvailability } from '../src/shared/thinkingAvailability'
 import { normalizeStopReason, type NormalizedStopReason } from './stopReason'
 import { resolveToolLoopModelOptions } from './toolLoopModelOptions'
 import { sanitizeAnthropicToolsPayloadForStrictGateways } from './anthropicToolPayload'
@@ -147,6 +150,7 @@ import {
   onRemoteToolProgress,
   onRemoteToolStateChange
 } from './remote/remoteProgressHooks'
+import { getCurrentRemoteProgressSnapshot, getLastPublishableSnapshot, restoreRemoteProgressSnapshots } from './remote/remoteProgressStore'
 import {
   REMOTE_CONFIRM_TIMEOUT_MESSAGES,
   resolveRemoteContextConfirmPolicy
@@ -521,6 +525,7 @@ export type RunToolChatSessionArgs = {
   windowId?: string
   model: string
   contextWindow?: number
+  contextWindowTrusted?: boolean
   baseUrl?: string
   messages: ClaudeContentBlockMessage[]
   system?: string
@@ -747,6 +752,7 @@ function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): R
     llmServiceId: invocation.profile.llmServiceId,
     model: invocation.profile.model,
     contextWindow: invocation.profile.contextWindow,
+    contextWindowTrusted: invocation.profile.contextWindowTrusted,
     baseUrl: ports.credentials.networkTarget?.baseUrl as string | undefined,
     reasoningEffort: invocation.profile.reasoning?.effort ?? 'off',
     messages: invocation.messages.list as unknown as ClaudeContentBlockMessage[],
@@ -954,8 +960,12 @@ async function runToolChatSessionInner(
   const { thinking, outputConfig: requestedOutputConfig } = buildThinkingWireParams(reasoningEffort ?? 'off')
   let effortOutputConfig = requestedOutputConfig
   let effortRetryUsed = false
-  // 进程内记忆命中（OQ-6，key = llmServiceId + model）：跳过 output_config 避免每轮重试；首次跳过落一次审计
-  if (effortOutputConfig && isEffortUnsupportedByUpstream(args.llmServiceId, model)) {
+  const thinkingAvailability = resolveThinkingAvailability(model, {
+    effortUnsupportedByMemo: isEffortUnsupportedByUpstream(args.llmServiceId, model)
+  })
+  const baselineBlocksEffort = Boolean(effortOutputConfig && thinkingAvailability.source === 'baseline' && thinkingAvailability.unsupported.includes(reasoningEffort ?? 'off'))
+  // 进程记忆仍优先；基线只有显式 null 时才跳过可选 output_config，键缺失保持原行为。
+  if (effortOutputConfig && thinkingAvailability.source === 'memo') {
     effortOutputConfig = undefined
     if (consumeEffortMemoizedAudit(args.llmServiceId, model)) {
       logAgentEvent('info', 'llm.effort.unsupported_memoized', {
@@ -963,7 +973,22 @@ async function runToolChatSessionInner(
         sessionId,
         model,
         llmServiceId: args.llmServiceId,
-        requestedEffort: reasoningEffort
+        requestedEffort: reasoningEffort,
+        reason: 'memo',
+        fallback: 'adaptive'
+      })
+    }
+  } else if (baselineBlocksEffort) {
+    effortOutputConfig = undefined
+    if (consumeBaselineEffortAudit(args.llmServiceId, model)) {
+      logAgentEvent('info', 'llm.effort.unsupported', {
+        requestId,
+        sessionId,
+        model,
+        llmServiceId: args.llmServiceId,
+        requestedEffort: reasoningEffort,
+        reason: 'baseline_unsupported',
+        fallback: 'adaptive'
       })
     }
   }
@@ -1033,9 +1058,10 @@ async function runToolChatSessionInner(
   let lastRequestContext: ReturnType<typeof buildRequestContextPayload> | undefined
   let lastRequestHeader: ReturnType<typeof buildRequestHeaderPayload> | undefined
   let overflowRetries = 0
+  let silentOverflowAuditEmitted = false
+  let acceptedResponseText = ''
+  let acceptedThinkingText = ''
   let outputRecoveryRetries = 0
-  let answerRecoveryText = ''
-  let needsFinalAnswerReconciliation = false
   /** 本会话单次 invoke 内标题摘要至多尝试调度一次（避免历史已达标且工具多轮时重复触发） */
   let titleSuggestScheduledThisInvoke = false
   const toolErrorRepeat = makeToolErrorRepeatTracker()
@@ -1237,6 +1263,33 @@ async function runToolChatSessionInner(
     let content: Anthropic.ContentBlock[]
     let stopReason: NormalizedStopReason | undefined
     let usage: ToolLoopUsage | undefined
+    let attemptUsageRecorded = false
+    const stagedSessionEvents: SessionEventInput[] = []
+    const stagedFactEvents: AssistantFactEvent[] = []
+    let stagedRemoteThinkingActive = false
+    let remoteTextPreviewPublished = false
+    const remoteProgressBeforeAttempt = remoteContext ? {
+      current: getCurrentRemoteProgressSnapshot(sessionId),
+      lastPublishable: getLastPublishableSnapshot(sessionId)
+    } : undefined
+    const remoteHookContext = remoteContext ? buildRemoteProgressHookContext(sessionId, locale) : undefined
+    const stagedToolRequestLogs: Array<Record<string, unknown>> = []
+    // UI deltas are provisional until final usage confirms the attempt. They can stream live
+    // for desktop lanes, but are reconciled back to the last accepted prefix on overflow.
+    // Durable session events and remote deliveries stay staged because neither can retract.
+    let canPublishStreamDeltas = args.contextWindowTrusted === false || args.contextWindow === undefined
+    let canPublishToUser = canPublishStreamDeltas && !remoteContext && effectiveLane === 'desktop'
+    let toolBoundarySeen = false
+    let streamedFactsPublished = false
+    const retractAttemptPreview = () => {
+      if (streamedFactsPublished) {
+        args.emitFactEvent?.({ type: 'preview-rollback' })
+        streamedFactsPublished = false
+      }
+      if (remoteContext && remoteProgressBeforeAttempt) {
+        restoreRemoteProgressSnapshots(sessionId, remoteProgressBeforeAttempt)
+      }
+    }
 
     try {
       const stream = client.messages.stream({
@@ -1252,21 +1305,32 @@ async function runToolChatSessionInner(
       throwIfChatCancelled(chatSignal)
       const normalizedDelta = normalizeAnthropicEvent(evt, contentBlockTypes)
       if (normalizedDelta) {
-        await args.emitSessionEvent?.({
+        const sessionEvent: SessionEventInput = {
           type: 'assistant_chunk',
           payload: { turnId: eventTurnId, stepId: requestId, messageId: args.assistantMessageId, delta: normalizedDelta }
-        })
+        }
+        stagedSessionEvents.push(sessionEvent)
       }
       if (normalizedDelta?.type === 'tool_call_delta') {
         const pending = pendingToolUseByIndex.get(normalizedDelta.index)
         if (pending) pending.partialJson += normalizedDelta.partialJson
       }
       if (normalizedDelta?.type === 'reasoning_delta' && normalizedDelta.text.length > 0) {
-        args.emitFactEvent?.({ type: 'thinking-delta', text: normalizedDelta.text })
-        if (remoteContext) onRemoteThinkingActive(buildRemoteProgressHookContext(sessionId, locale))
+        const fact: AssistantFactEvent = { type: 'thinking-delta', text: normalizedDelta.text }
+        if (canPublishToUser) {
+          args.emitFactEvent?.(fact)
+          streamedFactsPublished = true
+        }
+        else stagedFactEvents.push(fact)
+        if (remoteContext) stagedRemoteThinkingActive = true
       }
       if (normalizedDelta?.type === 'text_delta' && normalizedDelta.text.length > 0) {
-        args.emitFactEvent?.({ type: 'content-delta', text: normalizedDelta.text })
+        const fact: AssistantFactEvent = { type: 'content-delta', text: normalizedDelta.text }
+        if (canPublishToUser) {
+          args.emitFactEvent?.(fact)
+          streamedFactsPublished = true
+        }
+        else stagedFactEvents.push(fact)
         const prev = pendingTextByIndex.get(normalizedDelta.index) ?? ''
         pendingTextByIndex.set(normalizedDelta.index, prev + normalizedDelta.text)
       }
@@ -1276,6 +1340,9 @@ async function runToolChatSessionInner(
         if (index >= 0 && typeof blockType === 'string') {
           contentBlockTypes.set(index, blockType)
           if (blockType === 'tool_use') {
+            // Post-tool facts stay staged until final acceptance, then commit after this tool in source order.
+            toolBoundarySeen = true
+            canPublishToUser = false
             const block = (evt as { content_block?: { id?: string; name?: string; input?: unknown } }).content_block ?? {}
             pendingToolUseByIndex.set(index, {
               id: typeof block.id === 'string' ? block.id : '',
@@ -1296,6 +1363,16 @@ async function runToolChatSessionInner(
             usage = { ...partial, output_tokens: usage?.output_tokens }
             lastValidUsage = usage
             args.emitFactEvent?.({ type: 'usage-updated', usage })
+            if (args.contextWindowTrusted !== false && Number.isFinite(args.contextWindow) && args.contextWindow! > 0) {
+              canPublishStreamDeltas = computeTotalRequestInputTokens(partial) <= args.contextWindow!
+            }
+            canPublishToUser = canPublishStreamDeltas && !remoteContext && effectiveLane === 'desktop' && !toolBoundarySeen
+            if (canPublishStreamDeltas) {
+              // message_start is quarantined only from the live UI until its usage is checked.
+              // Persisted normalized events remain queued for terminal commit in original order.
+              for (const event of stagedFactEvents) args.emitFactEvent?.(event)
+              stagedFactEvents.length = 0
+            }
           }
         }
       }
@@ -1315,7 +1392,12 @@ async function runToolChatSessionInner(
           if (text.length > 0) {
             contentBlocks.push({ type: 'text', text })
             if (remoteContext) {
-              onRemoteTextSegmentClosed(buildRemoteProgressHookContext(sessionId, locale), text)
+              // Publish activity metadata at each closed segment; answer text remains
+              // withheld until terminal acceptance because sent IM replies cannot retract.
+              if (remoteHookContext) {
+                onRemoteTextSegmentClosed(remoteHookContext, text)
+                remoteTextPreviewPublished = true
+              }
             }
           }
         } else if (index >= 0 && blockType === 'tool_use') {
@@ -1333,7 +1415,7 @@ async function runToolChatSessionInner(
             // H3：toolkit 网关入参含凭据——JSONL 事件台账落盘前与展示/落库同口径净化
             const rawToolCallInput = normalizeToolUseInputRecord(toolUseBlock.input)
             const isToolkitCall = compatName === 'toolkit_call' || compatName === 'toolkit.call'
-            await args.emitSessionEvent?.({
+            stagedSessionEvents.push({
               type: 'tool_call',
               payload: {
                 turnId: eventTurnId,
@@ -1346,13 +1428,13 @@ async function runToolChatSessionInner(
               }
             })
             const mcpEntry = mcpSnapshot.entries.get(compatName)
-            args.emitFactEvent?.({
+            stagedFactEvents.push({
               type: 'tool-use', id: pending.id, toolName: compatName,
               input: normalizeToolUseInputRecord(toolUseBlock.input),
               ...(mcpEntry ? { mcp: { serverId: mcpEntry.serverId, serverName: mcpEntry.serverName, originalToolName: mcpEntry.originalName, description: mcpEntry.description } } : {})
             })
             contentBlocks.push(toolUseBlock)
-            logAgentEvent('info', 'tool.request', {
+            stagedToolRequestLogs.push({
               requestId,
               sessionId,
               loopRound,
@@ -1373,27 +1455,94 @@ async function runToolChatSessionInner(
       stopReason = normalizeStopReason(typeof res?.stop_reason === 'string' ? res.stop_reason : undefined)
       const finalUsage = normalizeAnthropicMessageUsage(res, baseUrl)
       usage = finalUsage ?? usage
-      if (finalUsage) {
+      const attemptUsage = usage
+      const silentOverflow = detectSilentContextOverflow({
+        stopReason,
+        usage: attemptUsage,
+        contextWindow: args.contextWindow,
+        contextWindowTrusted: args.contextWindowTrusted,
+        hasOutputContent: content.length > 0
+      })
+      if (attemptUsage) {
+        attemptUsageRecorded = true
         await args.emitSessionEvent?.({
           type: 'request_usage',
-          payload: { schemaVersion: 1, requestId: attemptRequestId, usage: finalUsage, source: 'api' }
+          payload: {
+            schemaVersion: 1,
+            requestId: attemptRequestId,
+            turnId: eventTurnId,
+            usage: attemptUsage,
+            source: 'api',
+            ...(silentOverflow.overflow ? { resultDisposition: 'discarded_overflow' } : {})
+          }
         })
-        // Token 用量统计：每次 LLM 调用即时落一行 usage_step_facts（异步容错，不阻断对话）。
+        // Every completed provider call with usage contributes independently to Turn/Step totals.
         hostUsage?.recordStepUsage?.({
           sessionId,
           turnId: eventTurnId,
           stepId: attemptRequestId,
-          usage: finalUsage,
+          usage: attemptUsage,
           baseUrl,
           model,
           llmServiceId: args.llmServiceId
         })
         turnUsageStats.stepCount += 1
+        lastValidUsage = attemptUsage
+        // Usage is an actual-call fact, so it survives even when this answer is discarded.
+        args.emitFactEvent?.({ type: 'usage-updated', usage: attemptUsage })
+      }
+
+      if (silentOverflow.overflow) {
+        retractAttemptPreview()
+        if (!silentOverflowAuditEmitted) {
+          silentOverflowAuditEmitted = true
+          logAgentEvent('warn', 'llm.silent_overflow', {
+            requestId: attemptRequestId,
+            sessionId,
+            model,
+            llmServiceId: args.llmServiceId,
+            kind: silentOverflow.kind,
+            inputTokens: silentOverflow.inputTokens,
+            contextWindow: silentOverflow.contextWindow,
+            stopReason
+          })
+        }
+        const recovery = decideOverflowRecovery({ error: { type: 'context_length_exceeded' }, retries: overflowRetries, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true })
+        if (recovery.action !== 'reset_and_retry_provider') {
+          return failToolLoopWithLastUsage(requestId, sessionId, `silent_context_overflow:${silentOverflow.kind}`, lastValidUsage, args.emitFactEvent)
+        }
+        overflowRetries = recovery.nextRetry
+        const recovered = await recoverBeforeSend(
+          lastRequestHeader ?? requestHeader,
+          messagesForApi,
+          overflowRetries,
+          lastRequestContext?.budget.totalInputBudget ?? requestContext.budget.totalInputBudget
+        )
+        if (!recovered) return failToolLoopWithLastUsage(requestId, sessionId, `silent_context_overflow:${silentOverflow.kind}`, lastValidUsage, args.emitFactEvent)
+        await args.emitSessionEvent?.({ type: 'request_retry', payload: { turnId: eventTurnId, stepId: requestId, requestId: attemptRequestId, attempt: overflowRetries, backoffMs: 0, code: 'provider_context_overflow' } })
+        continue
+      }
+
+      // Commit response side effects only after the provider call is known not to be a silent overflow.
+      for (const block of content) {
+        if (block.type === 'text') acceptedResponseText += block.text
+        else if (block.type === 'thinking') acceptedThinkingText += block.thinking
+      }
+      for (const event of stagedSessionEvents) await args.emitSessionEvent?.(event)
+      for (const event of stagedFactEvents) args.emitFactEvent?.(event)
+      args.emitFactEvent?.({ type: 'preview-commit' })
+      streamedFactsPublished = false
+      if (remoteContext) {
+        if (stagedRemoteThinkingActive && remoteHookContext && !remoteTextPreviewPublished) onRemoteThinkingActive(remoteHookContext)
+      }
+      for (const toolLog of stagedToolRequestLogs) logAgentEvent('info', 'tool.request', toolLog)
+
+      if (attemptUsage) {
         const finalSurfaceMessages = [...messagesForApi, { role: 'assistant' as const, content: normalizeAssistantContentForHistoryParity(content as Anthropic.ContentBlock[]) }]
         const finalHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: requestHeader.system ?? '', tools: requestHeader.tools ?? [], messages: finalSurfaceMessages, requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
         const finalProjection = computeContextPressure({
           currentSurface: finalHeader.surfaceSnapshot,
-          anchor: { requestId: attemptRequestId, surfaceTokens: requestHeader.surfaceSnapshot.surfaceTokens, surfaceFingerprint: requestHeader.surfaceSnapshot.fingerprint, systemFingerprint: requestHeader.surfaceSnapshot.systemFingerprint, toolsFingerprint: requestHeader.surfaceSnapshot.toolsFingerprint, provider: 'anthropic', model, estimatorVersion: requestContext.budget.estimatorVersion, serializationVersion: requestContext.budget.serializationVersion, realUsage: finalUsage, contextWindow: requestContext.contextWindow.tokens },
+          anchor: { requestId: attemptRequestId, surfaceTokens: requestHeader.surfaceSnapshot.surfaceTokens, surfaceFingerprint: requestHeader.surfaceSnapshot.fingerprint, systemFingerprint: requestHeader.surfaceSnapshot.systemFingerprint, toolsFingerprint: requestHeader.surfaceSnapshot.toolsFingerprint, provider: 'anthropic', model, estimatorVersion: requestContext.budget.estimatorVersion, serializationVersion: requestContext.budget.serializationVersion, realUsage: attemptUsage, contextWindow: requestContext.contextWindow.tokens },
           budget: requestContext.budget,
           decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' },
           contextWindow: requestContext.contextWindow,
@@ -1405,10 +1554,6 @@ async function runToolChatSessionInner(
         args.emitFactEvent?.({ type: 'context-projection-updated', projection: finalProjection })
         await args.emitSessionEvent?.({ type: 'request_context', payload: buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: finalHeader.surfaceSnapshot, contextUsage: finalProjection, planningStatus: finalProjection.surfaceTokens <= requestContext.budget.totalInputBudget ? 'fits_without_headroom' : 'exhausted', windowId: contextWindowId, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } }) })
       }
-      if (usage) {
-        lastValidUsage = usage
-        args.emitFactEvent?.({ type: 'usage-updated', usage })
-      }
 
       logAgentEvent('info', 'llm.response', {
         requestId,
@@ -1419,6 +1564,27 @@ async function runToolChatSessionInner(
         usage
       })
     } catch (e) {
+      // A provider attempt may have streamed provisional UI facts before failing. Every
+      // retry and terminal failure must restore the last accepted prefix first.
+      retractAttemptPreview()
+      if (usage && !attemptUsageRecorded) {
+        attemptUsageRecorded = true
+        await args.emitSessionEvent?.({
+          type: 'request_usage',
+          payload: { schemaVersion: 1, requestId: attemptRequestId, turnId: eventTurnId, usage, source: 'api' }
+        })
+        hostUsage?.recordStepUsage?.({
+          sessionId,
+          turnId: eventTurnId,
+          stepId: attemptRequestId,
+          usage,
+          baseUrl,
+          model,
+          llmServiceId: args.llmServiceId
+        })
+        turnUsageStats.stepCount += 1
+        lastValidUsage = usage
+      }
       if (e instanceof ChatCancelledError) throw e
       // §7.4：上游拒绝 output_config（明确未知字段类 400）→ 去强度（保留 adaptive）自动重试一次，
       // 落 llm.effort.unsupported 审计 + 进程内记忆（粒度 llmServiceId+model）；其余错误按既有路径上抛
@@ -1486,14 +1652,6 @@ async function runToolChatSessionInner(
     }
 
     const outputRecoveryKind = classifyOutputRecovery({ stopReason, content })
-    if (toolUses.length > 0 && needsFinalAnswerReconciliation && outputRecoveryKind !== 'output_truncated_with_tools') {
-      answerRecoveryText += content
-        .filter((block) => block && typeof block === 'object' && (block as { type?: unknown }).type === 'text')
-        .map((block) => ((block as { text?: unknown }).text ?? ''))
-        .filter((value): value is string => typeof value === 'string')
-        .join('')
-      needsFinalAnswerReconciliation = true
-    }
     if (outputRecoveryKind === 'output_truncated_with_tools') {
       // 工具轮也可能已经向用户展示正文，必须保留在最终恢复正文链中。
       const truncatedToolText = content
@@ -1501,8 +1659,6 @@ async function runToolChatSessionInner(
         .map((block) => ((block as { text?: unknown }).text ?? ''))
         .filter((value): value is string => typeof value === 'string')
         .join('')
-      answerRecoveryText += truncatedToolText
-      needsFinalAnswerReconciliation = true
       const failedResults = buildTruncatedToolResults(toolUses.filter((tool) => typeof tool.id === 'string' && tool.id.trim().length > 0))
       if (failedResults.length > 0) {
         messagesForApi = [...messagesForApi, { role: 'user', content: failedResults }]
@@ -1537,8 +1693,6 @@ async function runToolChatSessionInner(
         .map((block) => ((block as { text?: unknown }).text ?? ''))
         .filter((value): value is string => typeof value === 'string')
         .join('')
-      answerRecoveryText += text
-      if (text.length > 0) needsFinalAnswerReconciliation = true
       if (outputRecoveryRetries >= MAX_OUTPUT_RECOVERIES) {
         return failToolLoopWithLastUsage(
           requestId,
@@ -1601,17 +1755,18 @@ async function runToolChatSessionInner(
       const compatibleThinkingText = !explicitText && (stopReason === undefined || stopReason === 'end_turn')
         ? content.filter((block) => block.type === 'thinking').map((block) => block.type === 'thinking' ? block.thinking : '').join('')
         : ''
-      const finalRoundText = explicitText || compatibleThinkingText
-      const finalText = answerRecoveryText ? answerRecoveryText + finalRoundText : finalRoundText
+      // Each completed, non-overflow provider response has already contributed its text
+      // to acceptedResponseText, including tool rounds and truncated output attempts.
+      const finalText = acceptedResponseText + compatibleThinkingText
       const hasOutputRecovery = outputRecoveryRetries > 0
-      if (needsFinalAnswerReconciliation || hasOutputRecovery) args.emitFactEvent?.({ type: 'content-reconciled', text: finalText })
+      if (hasOutputRecovery) args.emitFactEvent?.({ type: 'content-reconciled', text: finalText })
       args.emitFactEvent?.({ type: 'source-completed' })
       if (args.onTurnBoundary && lastRequestHeader && lastRequestContext) {
         // P1-3(c)：压缩 summary 的 checkpoint 是恢复语义（需要完整集合）；header 里的是增量编码。
         // onTurnBoundary 必须传全量，不能透传 lastRequestHeader.toolExecutionCheckpoint。
         await args.onTurnBoundary({ requestId, windowId: contextWindowId, system: lastRequestHeader.system ?? '', tools: lastRequestHeader.tools ?? [], surfaceSnapshot: lastRequestHeader.surfaceSnapshot, messages: messagesForApi, budget: lastRequestContext.budget, contextUsage: lastRequestContext.contextUsage, toolExecutionCheckpoint: { completedToolUseIds: extractToolPairIds(messagesForApi as unknown as Array<{ content?: unknown }>).toolUses, replayForbidden: lastRequestHeader.toolExecutionCheckpoint.replayForbidden }, requiredSurfaceSet: lastRequestHeader.requiredSurfaceSet })
       }
-      const finalContent = answerRecoveryText || hasOutputRecovery
+      const finalContent = hasOutputRecovery
         ? ([{ type: 'text', text: finalText }] as Anthropic.ContentBlock[])
         : content
       return { ok: true, content: finalContent, stopReason: stopReason ?? 'end_turn', ...(returnUsage && { usage: returnUsage }), ...(lastRequestHeader ? { finalSurfaceSnapshot: lastRequestHeader.surfaceSnapshot, finalSurfaceMessages: messagesForApi } : {}) }

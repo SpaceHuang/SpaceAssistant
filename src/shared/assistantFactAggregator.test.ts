@@ -23,6 +23,56 @@ describe('AssistantFactAggregator', () => {
     expect(result.content).toBe('A + B')
     expect(result.contentSegments?.map((segment) => segment.content).join('')).toBe('A + B')
   })
+  it('废弃溢出 attempt 时回滚正文和 thinking 到已接受前缀', () => {
+    const result = apply([
+      { type: 'content-delta', text: 'discarded' },
+      { type: 'thinking-delta', text: 'discarded reasoning' },
+      { type: 'content-reconciled', text: 'accepted prefix' },
+      { type: 'thinking-reconciled', text: 'accepted reasoning' },
+      { type: 'content-delta', text: ' tail' }
+    ])
+    expect(result.content).toBe('accepted prefix tail')
+    expect(result.thinking?.content).toBe('accepted reasoning')
+  })
+  it('回撤 attempt 暂显内容时保留已接受正文、Thinking 与工具的原始时间顺序', () => {
+    let state = base
+    const reduceAt = (event: AssistantFactEvent, now: number) => { state = reduceAssistantFact(state, event, { now, createId: () => 'hint-1' }) }
+    reduceAt({ type: 'thinking-delta', text: '先判断' }, 1)
+    reduceAt({ type: 'content-delta', text: '先检查文件' }, 2)
+    reduceAt({ type: 'preview-commit' }, 3)
+    reduceAt({ type: 'tool-use', id: 't1', toolName: 'read', input: {} }, 5)
+    reduceAt({ type: 'tool-result', id: 't1', result: { success: true, data: 'ok' } }, 9)
+    const acceptedTimeline = buildAssistantActivityTimeline(state)
+    const acceptedContentSegments = state.contentSegments
+    const acceptedThinkingSegments = state.thinking?.segments
+
+    reduceAt({ type: 'content-delta', text: '临时回答' }, 11)
+    reduceAt({ type: 'thinking-delta', text: '临时推理' }, 12)
+    reduceAt({ type: 'preview-rollback' }, 20)
+
+    expect(state.content).toBe('先检查文件')
+    expect(state.contentSegments).toEqual(acceptedContentSegments)
+    expect(state.thinking?.segments).toEqual(acceptedThinkingSegments)
+    expect(buildAssistantActivityTimeline(state)).toEqual(acceptedTimeline)
+    expect(buildAssistantActivityTimeline(state).map((item) => item.kind)).toEqual(['thinking', 'text', 'tool'])
+  })
+  it('最终正文对账与已接受流内容一致时保留工具前正文的分段时间', () => {
+    const events: AssistantFactEvent[] = [
+      { type: 'content-delta', text: '工具前说明A' },
+      { type: 'preview-commit' },
+      { type: 'tool-use', id: 't1', toolName: 'read', input: {} },
+      { type: 'tool-result', id: 't1', result: { success: true, data: 'ok' } },
+      { type: 'content-delta', text: '恢复正文B' }
+    ]
+    const beforeReconcile = events.reduce((state, event, index) => reduceAssistantFact(state, event, { now: index + 1, createId: () => 'hint-1' }), base)
+    const originalTimeline = buildAssistantActivityTimeline(beforeReconcile)
+    const reconciled = reduceAssistantFact(beforeReconcile, { type: 'content-reconciled', text: '工具前说明A恢复正文B' }, { now: 99, createId: () => 'hint-1' })
+
+    expect(reconciled.content).toBe('工具前说明A恢复正文B')
+    expect(reconciled.contentSegments).toEqual(beforeReconcile.contentSegments)
+    expect(buildAssistantActivityTimeline(reconciled)).toEqual(originalTimeline)
+    expect(buildAssistantActivityTimeline(reconciled).map((item) => item.kind)).toEqual(['text', 'tool', 'text'])
+  })
   it('压缩提交标记不会阻断后续 assistant 正文写入', () => {
     const result = apply([
       { type: 'content-delta', text: 'before' },

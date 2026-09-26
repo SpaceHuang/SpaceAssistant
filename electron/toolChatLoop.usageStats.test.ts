@@ -186,6 +186,34 @@ describe('runToolChatSession 用量统计收口（usage_step_facts / usage_turn_
     db.close()
   })
 
+  it('静默溢出丢弃回答但将溢出 attempt 与重试 attempt 都计入 Step 和 token', async () => {
+    streamWithRounds([
+      { content: [{ type: 'text', text: 'discarded answer' }], stop_reason: 'end_turn', usage: { input_tokens: 150_000, output_tokens: 12 } },
+      { content: [{ type: 'text', text: 'accepted answer' }], stop_reason: 'end_turn', usage: { input_tokens: 20_000, output_tokens: 8 } }
+    ])
+    const facts: Array<Record<string, unknown>> = []
+    const sessionEvents: Array<{ type: string; payload?: Record<string, unknown> }> = []
+    const result = await runSession({
+      turnId: 'turn-overflow-retry',
+      contextWindow: 100_000,
+      contextWindowTrusted: true,
+      currentUserMessageId: 'current',
+      messages: [{ id: 'old', role: 'user', content: 'old context' }, { id: 'current', role: 'user', content: 'hello' }],
+      appendCompactionTransaction: async () => undefined,
+      emitFactEvent: (event: Record<string, unknown>) => facts.push(event),
+      emitSessionEvent: async (event: { type: string; payload?: Record<string, unknown> }) => { sessionEvents.push(event) }
+    })
+    expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: 'accepted answer' }] })
+    expect(facts.some((event) => event.type === 'content-delta' && event.text === 'discarded answer')).toBe(false)
+    expect(sessionEvents.filter((event) => event.type === 'request_usage')).toHaveLength(2)
+    expect(sessionEvents.find((event) => event.type === 'request_usage')?.payload).toMatchObject({ resultDisposition: 'discarded_overflow' })
+    expect(getUsageTurnFact(db, 'turn-overflow-retry')).toMatchObject({ stepCount: 2, outcome: 'completed' })
+    const steps = getUsageStepFactsForTurn(db, 'sess-stats-1', 'turn-overflow-retry')
+    expect(steps).toHaveLength(2)
+    expect(steps.reduce((sum, step) => sum + step.inputTokens + step.outputTokens, 0)).toBe(170_020)
+    db.close()
+  })
+
   it('工具执行失败计入 tool_error_count（不计入 skipped）', async () => {
     streamWithRounds([
       { content: [{ type: 'tool_use', id: 'tu-err', name: 'read_file', input: { path: 'a' } }], stop_reason: 'tool_use', usage: { input_tokens: 100, output_tokens: 10 } },

@@ -9,14 +9,14 @@ import {
   updateServiceDraft,
   type LlmServiceTabState
 } from './llmServiceDrafts'
-import { getEnabledModelIds } from '../../../shared/llmModelConfig'
+import { getModelIds } from '../../../shared/llmModelConfig'
 
-export function useLlmServiceDrafts(open: boolean, cfg: AppConfig | null, enabledModelIds: string[] = []) {
+export function useLlmServiceDrafts(open: boolean, cfg: AppConfig | null, allModelIds: string[] = []) {
   const [state, setState] = useState<LlmServiceTabState>({ drafts: {}, activeIds: [], order: [] })
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({})
-  // enabledModelIds 仅在初始化时取最新值；其后续变化（如拉取合并新模型）不得触发草稿重建
-  const enabledModelIdsRef = useRef(enabledModelIds)
-  enabledModelIdsRef.current = enabledModelIds
+  // 模型 ID 仅在初始化时取最新值；其后续变化（如拉取合并新模型）不得触发草稿重建。
+  const modelIdsRef = useRef(allModelIds)
+  modelIdsRef.current = allModelIds
 
   useEffect(() => {
     if (open && cfg) {
@@ -25,8 +25,8 @@ export function useLlmServiceDrafts(open: boolean, cfg: AppConfig | null, enable
         : cfg.activeLlmServiceId
           ? [cfg.activeLlmServiceId]
           : []
-      const currentEnabled = enabledModelIdsRef.current
-      const modelIds = currentEnabled.length ? currentEnabled : getEnabledModelIds(cfg.models ?? [])
+      const currentIds = modelIdsRef.current
+      const modelIds = currentIds.length ? currentIds : getModelIds(cfg.models ?? [])
       setState(initLlmServiceTabState(cfg.llmServices ?? [], ids, modelIds))
     }
   }, [open, cfg])
@@ -97,7 +97,7 @@ export function useLlmServiceDrafts(open: boolean, cfg: AppConfig | null, enable
         : config.activeLlmServiceId
           ? [config.activeLlmServiceId]
           : []
-      setState(initLlmServiceTabState(config.llmServices ?? [], ids, getEnabledModelIds(config.models ?? [])))
+      setState(initLlmServiceTabState(config.llmServices ?? [], ids, getModelIds(config.models ?? [])))
     },
     []
   )

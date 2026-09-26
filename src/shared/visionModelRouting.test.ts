@@ -37,7 +37,7 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   const models: ModelEntry[] = [
     makeModel({ id: '1', name: 'deepseek-v4-pro' }),
     makeModel({ id: '2', name: 'deepseek-flash', isFast: true }),
-    makeModel({ id: '3', name: 'kimi-k2.6', isVision: true }),
+    makeModel({ id: '3', name: 'kimi-k2.7-code', isVision: true }),
     makeModel({ id: '4', name: 'claude-haiku-4-5', isFast: true, isVision: true })
   ]
   const services: LlmServiceProfile[] = [
@@ -93,19 +93,20 @@ describe('resolveVisionModelBinding', () => {
     expect(binding!.model.id).toBe('4')
   })
 
-  it('falls back when preferred vision model is disabled', () => {
+  it('falls back when preferred vision model is not supported by the active service', () => {
     const cfg = makeConfig({
       preferredVisionModelId: '4',
+      llmServices: [makeService({ id: 's2', name: 'Volcano', supportedModelIds: ['1', '3'] })],
       models: [
         makeModel({ id: '1', name: 'deepseek-v4-pro' }),
-        makeModel({ id: '3', name: 'kimi-k2.6', isVision: true }),
-        makeModel({ id: '4', name: 'claude-haiku-4-5', isFast: true, isVision: true, enabled: false })
+        makeModel({ id: '3', name: 'kimi-k2.7-code', isVision: true }),
+        makeModel({ id: '4', name: 'claude-haiku-4-5', isFast: true, isVision: true })
       ]
     })
     const options = buildChatModelOptions(cfg.models, cfg.llmServices, cfg.activeLlmServiceIds ?? [])
     const binding = resolveVisionModelBinding(cfg, options)
     expect(binding).not.toBeNull()
-    expect(binding!.modelName).toBe('kimi-k2.6')
+    expect(binding!.modelName).toBe('kimi-k2.7-code')
     expect(binding!.model.id).toBe('3')
   })
 
@@ -120,7 +121,7 @@ describe('resolveVisionModelBinding', () => {
     const options = buildChatModelOptions(cfg.models, cfg.llmServices, cfg.activeLlmServiceIds ?? [])
     const binding = resolveVisionModelBinding(cfg, options)
     expect(binding).not.toBeNull()
-    expect(binding!.modelName).toBe('kimi-k2.6')
+    expect(binding!.modelName).toBe('kimi-k2.7-code')
     expect(binding!.llmServiceId).toBe('s1')
   })
 
@@ -133,7 +134,7 @@ describe('resolveVisionModelBinding', () => {
       ]
     })
     const options = buildChatModelOptions(cfg.models, cfg.llmServices, cfg.activeLlmServiceIds ?? [])
-    const matched = findVisionModelOption(options, 'kimi-k2.6', cfg.activeLlmServiceIds ?? [])
+    const matched = findVisionModelOption(options, 'kimi-k2.7-code', cfg.activeLlmServiceIds ?? [])
     expect(matched?.serviceId).toBe('s1')
   })
 })
@@ -141,13 +142,13 @@ describe('resolveVisionModelBinding', () => {
 describe('resolveVisionRouteForImageSend', () => {
   it('allows send when session already uses an available vision model', () => {
     const cfg = makeConfig()
-    const route = resolveVisionRouteForImageSend(cfg, 'kimi-k2.6', 's2')
+    const route = resolveVisionRouteForImageSend(cfg, 'kimi-k2.7-code', 's2')
     expect(route).toEqual({
       ok: true,
       switched: false,
-      modelName: 'kimi-k2.6',
+      modelName: 'kimi-k2.7-code',
       llmServiceId: 's2',
-      displayName: 'Volcano-kimi-k2.6'
+      displayName: 'Volcano-kimi-k2.7-code'
     })
   })
 

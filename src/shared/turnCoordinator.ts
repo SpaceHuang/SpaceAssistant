@@ -1,5 +1,5 @@
 import type { Message } from './domainTypes'
-import { reduceAssistantFact, type AssistantFactEvent, type TurnExecutionConfig, type TurnIntent, type TurnTerminal, type TurnOutcome } from './assistantFactAggregator'
+import { acceptedAssistantCheckpoint, reduceAssistantFact, type AssistantFactEvent, type TurnExecutionConfig, type TurnIntent, type TurnTerminal, type TurnOutcome } from './assistantFactAggregator'
 import { canonicalQueueInput } from './queueInputFingerprint'
 import { CheckpointQueue } from './checkpointQueue'
 import { isTerminalMessageStatus } from './messageStatus'
@@ -45,6 +45,7 @@ export function normalizeTurnExecutionConfig(config: TurnExecutionConfig): TurnE
     ...(config.lane ? { lane: config.lane } : {}),
     ...(config.model?.trim() ? { model: config.model.trim() } : {}),
     ...(Number.isFinite(config.maximumContext) && config.maximumContext! > 0 ? { maximumContext: config.maximumContext } : {}),
+    ...(config.maximumContextTrusted !== undefined ? { maximumContextTrusted: config.maximumContextTrusted } : {}),
     ...(config.llmServiceId?.trim() ? { llmServiceId: config.llmServiceId.trim() } : {}),
     ...(config.system?.trim() ? { system: config.system.trim() } : {}),
     ...(config.skillFragments?.length ? { skillFragments: config.skillFragments.filter((fragment) => typeof fragment === 'string' && fragment.trim()).map((fragment) => fragment.trim()) } : {}),
@@ -208,7 +209,7 @@ export class TurnCoordinator {
       const message = latest.assistantMessage
       const finalMessage: Message = alreadyTerminal
         ? latest.assistantMessage
-        : { ...message, id: latest.assistantMessage.id, status: status as Message['status'] }
+        : { ...acceptedAssistantCheckpoint(message), id: latest.assistantMessage.id, status: status as Message['status'] }
       if (!alreadyTerminal) {
         const finalizedTurn = { ...latest, assistantMessage: finalMessage }
         this.turns.set(turnId, finalizedTurn)
@@ -227,7 +228,7 @@ export class TurnCoordinator {
       }
       const latest = this.turns.get(turnId) ?? current
       const preserveCancelled = isTerminalMessageStatus(latest.assistantMessage.status) && latest.assistantMessage.status === 'cancelled'
-      const message = { ...latest.assistantMessage, status: preserveCancelled ? 'cancelled' as const : 'failed' as const }
+      const message = { ...acceptedAssistantCheckpoint(latest.assistantMessage), status: preserveCancelled ? 'cancelled' as const : 'failed' as const }
       const finalized = { ...latest, assistantMessage: message }
       this.turns.set(turnId, finalized)
       this.flushCheckpoint(turnId, finalized)
@@ -266,6 +267,8 @@ export class TurnCoordinator {
 
   private isImmediateCheckpointEvent(type: AssistantFactEvent['type']): boolean {
     return type === 'confirm-requested'
+      || type === 'content-reconciled'
+      || type === 'thinking-reconciled'
       || type === 'tool-confirmed'
       || type === 'tool-result'
       || type === 'source-completed'
@@ -296,7 +299,7 @@ export class TurnCoordinator {
     const metricStart = typeof performance !== 'undefined' ? performance.now() : 0
     let result: boolean | void | Promise<boolean | void>
     try {
-      result = this.checkpointQueue.enqueue(turnId, () => this.checkpoint(turnId, turn.version, turn.assistantMessage))
+      result = this.checkpointQueue.enqueue(turnId, () => this.checkpoint(turnId, turn.version, acceptedAssistantCheckpoint(turn.assistantMessage)))
     } catch {
       result = false
     }
@@ -363,7 +366,7 @@ export class TurnCoordinator {
   }
 
   private isFinishingEventAllowed(type: AssistantFactEvent['type']): boolean {
-    return type === 'content-delta' || type === 'thinking-delta' || type === 'tool-progress' || type === 'tool-result'
+    return type === 'content-delta' || type === 'thinking-delta' || type === 'content-reconciled' || type === 'thinking-reconciled' || type === 'preview-rollback' || type === 'tool-progress' || type === 'tool-result'
   }
 
   private beginFinishing(turnId: string, outcome: 'cancelled' | 'timed-out'): void {
@@ -391,7 +394,7 @@ export class TurnCoordinator {
         this.recovered.add(turn.assistantMessageId)
         const inMemory = this.turns.get(turn.turnId)
         if (inMemory) {
-          const failedMessage = { ...inMemory.assistantMessage, status: 'failed' as const }
+          const failedMessage = { ...acceptedAssistantCheckpoint(inMemory.assistantMessage), status: 'failed' as const }
           const recoveredTurn = { ...inMemory, assistantMessage: failedMessage, persistedOutcome: 'recovered' as const }
           this.turns.set(turn.turnId, recoveredTurn)
           this.terminals.set(turn.turnId, { turnId: turn.turnId, requestId: inMemory.requestId, sessionId: inMemory.sessionId, assistantMessageId: failedMessage.id, version: inMemory.version, outcome: 'recovered', message: failedMessage })

@@ -7,7 +7,7 @@ import type { IpcMain } from 'electron'
 import { AppConfig, LlmServiceProfile, ModelEntry, SkillsConfig, ToolsConfig } from '../../src/shared/domainTypes'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../src/shared/builtinToolDefinitions'
 import { CONFIG_KEYS, readAppLocale, stripPlanConfigFromDbIfNeeded, readSkillsConfig, readWikiConfig } from './ipcShared'
-import { DEFAULT_MODELS, mergeSkillsConfig, mergeToolsConfig, stripPlanFieldsFromAppConfig } from '../../src/shared/domainTypes'
+import { mergeSkillsConfig, mergeToolsConfig, stripPlanFieldsFromAppConfig } from '../../src/shared/domainTypes'
 import { ErrorCodes } from '../../src/shared/errorCodes'
 import { FetchServiceModelsResult } from '../../src/shared/llmModelConfig'
 import { LlmServiceValidationError, migrateLegacyLlmServicesIfNeeded, migrateMultiServiceModelConfig, persistLlmServices, readActiveLlmServiceId, readActiveLlmServiceIds, readLlmServices, resolveTestConnectionCredentials, resolveTestConnectionModel } from '../llmServiceResolver'
@@ -16,7 +16,7 @@ import { clampMaxParallelChatSessions } from '../../src/shared/chatParallelConfi
 import { createAnthropicClient } from '../anthropicClientFactory'
 import { fetchServiceModels } from '../llmModelListFetcher'
 import { getConfigValue, setConfigValue } from '../database'
-import { getEnabledModelIds, pruneDisabledModelsFromServices } from '../../src/shared/llmModelConfig'
+import { getModelIds, pruneMissingModelsFromServices } from '../../src/shared/llmModelConfig'
 import { isAppLocale } from '../../src/shared/locale'
 import { isToolEnabledByConfig } from '../toolsConfigRuntime'
 import { logAgentEvent } from '../agentLogger/agentLogger'
@@ -47,12 +47,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       } catch {
         models = []
       }
-    } else {
-      models = DEFAULT_MODELS.map((m, i) => ({
-        id: String(i + 1),
-        ...m
-      }))
-    }
+    } else models = []
 
     const migrated = migrateMultiServiceModelConfig(ctx.db, models)
     models = migrated.models
@@ -62,7 +57,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
     const activeService = llmServices.find((s) => s.id === activeLlmServiceId) ?? llmServices[0]
 
     const languageEntry = models.find((m) => m.id === migrated.preferredLanguageModelId)
-    const defaultModelName = languageEntry?.name ?? getConfigValue(ctx.db, CONFIG_KEYS.defaultModel) ?? 'deepseek-v4-pro'
+    const defaultModelName = languageEntry?.name ?? getConfigValue(ctx.db, CONFIG_KEYS.defaultModel) ?? ''
     const modelName = languageEntry?.name ?? getConfigValue(ctx.db, CONFIG_KEYS.model) ?? defaultModelName
     let tools: ToolsConfig = mergeToolsConfig(null)
     const toolsRaw = getConfigValue(ctx.db, CONFIG_KEYS.tools)
@@ -212,12 +207,12 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
         /* handled above via persist or legacy */
       }
       if (payload.models !== undefined) {
-        const normalized = payload.models.map((m) => ({ ...m, isDefault: false }))
+        const normalized = payload.models.map((m) => ({ ...m, isDefault: false, enabled: true }))
         setConfigValue(ctx.db, CONFIG_KEYS.models, JSON.stringify(normalized))
 
-        const enabledIds = new Set(getEnabledModelIds(normalized))
+        const modelIds = new Set(getModelIds(normalized))
         let services = readLlmServices(ctx.db)
-        services = pruneDisabledModelsFromServices(services, enabledIds)
+        services = pruneMissingModelsFromServices(services, modelIds)
         const activeIds = readActiveLlmServiceIds(ctx.db)
         for (const id of activeIds) {
           const svc = services.find((s) => s.id === id)

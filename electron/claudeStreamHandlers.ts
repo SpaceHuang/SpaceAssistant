@@ -436,6 +436,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           windowId: contextWindowId,
           model,
           contextWindow: frozen.maximumContext,
+          contextWindowTrusted: frozen.maximumContextTrusted,
           baseUrl,
           messages,
           system: frozen.system,

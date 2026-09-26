@@ -51,12 +51,14 @@ export function createRemoteProgressT(locale: AppConfig['locale'] = 'zh-CN'): (
   const zh: Record<string, string> = {
     'streaming.thinking': '思考中',
     'streaming.inProgress': '生成中',
+    'streaming.segmentReady': '已生成一段回复，继续处理中',
     'streaming.preparing': '准备中…',
     'streaming.awaitingConfirm': '等待确认：{{action}}'
   }
   const en: Record<string, string> = {
     'streaming.thinking': 'Thinking',
     'streaming.inProgress': 'Generating',
+    'streaming.segmentReady': 'Reply segment ready; continuing',
     'streaming.preparing': 'Preparing…',
     'streaming.awaitingConfirm': 'Awaiting confirmation: {{action}}'
   }

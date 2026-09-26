@@ -139,6 +139,7 @@ export function LlmServiceTab({ draftsApi, enabledModels, models, onModelsChange
               onToggleExpand={() => toggleExpanded(id)}
               onDelete={() => handleDelete(id)}
               onPatch={(patch) => patchDraft(id, patch)}
+              onAddModel={(model) => onModelsChange([...modelsRef.current, model])}
               onFetchModels={() => void handleFetchModels(id)}
               fetchingModels={fetchingServiceId === id}
             />

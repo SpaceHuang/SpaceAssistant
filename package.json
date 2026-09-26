@@ -37,6 +37,8 @@
     "check:no-nul": "node scripts/check-no-nul.mjs",
     "check:treesitter-wasm": "node scripts/check-treesitter-wasm.mjs",
     "check:agent-core": "node scripts/check-agent-core-boundary.mjs",
+    "model:baseline": "node --import tsx scripts/generate-model-baseline.mjs",
+    "check:model-baseline": "node --import tsx scripts/generate-model-baseline.mjs --check",
     "probe:sqlite": "electron scripts/probe-node-sqlite.mjs",
     "probe:chat-ipc-transport": "electron scripts/probe-chat-ipc-transport.cjs",
     "probe:chat-business-ipc": "electron scripts/probe-chat-business-ipc.cjs",
@@ -97,6 +99,7 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "0.87.1",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/react": "^16.3.0",
     "@types/node": "^24.13.3",
@@ -111,6 +114,7 @@
     "electron-builder": "^25.1.8",
     "jsdom": "^25.0.1",
     "png-to-ico": "^2.1.8",
+    "@earendil-works/pi-ai": "0.87.1",
     "rimraf": "^6.0.1",
     "sharp": "^0.33.5",
     "tsx": "^4.22.4",

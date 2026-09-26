@@ -147,6 +147,7 @@ export function backfillUsageStats(db: AppDatabase, workDirs: string[]): UsageBa
         const payload = event.payload
 
         if (event.type === 'request_usage') {
+          // resultDisposition 描述回答是否提交，不改变该次实际调用的 token/step 事实，回填不得据此过滤。
           const turnId = typeof payload.turnId === 'string' ? payload.turnId : ''
           const stepId = typeof payload.requestId === 'string' ? payload.requestId : ''
           const usage = isRecord(payload.usage) ? payload.usage : undefined

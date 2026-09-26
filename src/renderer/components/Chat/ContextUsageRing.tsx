@@ -9,7 +9,8 @@ import {
   estimateTokensFromImageAttachments,
   resolveEffectiveMaximumContext
 } from '../../../shared/contextUsageEstimate'
-import { resolveEffectiveOutputMaxTokens } from '../../../shared/llm/outputMaxTokens'
+import { effectiveMaxTokensForBuiltinToolLoop } from '../../../shared/llm/toolLoopMaxTokens'
+import { resolveSessionModelBinding } from '../../services/sessionModelBinding'
 
 const RING_SIZE = 28
 const CENTER = RING_SIZE / 2
@@ -62,6 +63,8 @@ export function ContextUsageRing({
   const lastUsage = useTypedSelector((s) => s.chat.lastUsage)
   const contextProjection = useTypedSelector((s) => s.chat.contextProjection)
   const config = useTypedSelector((s) => s.config.config)
+  const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
+  const currentSession = useTypedSelector((s) => s.session.list.find((session) => session.id === sessionId))
 
   const pendingImageTokens = useMemo(() => {
     if (!pendingImageAttachments?.length) return 0
@@ -70,18 +73,20 @@ export function ContextUsageRing({
 
   const currentModel = useMemo(() => {
     if (!config) return undefined
-    return config.models.find((m) => m.name === config.model)
-  }, [config])
+    const binding = resolveSessionModelBinding(config, currentSession)
+    return config.models.find((model) => model.name === binding.modelName)
+  }, [config, currentSession])
 
   const maximumContext = useMemo(() => {
     if (contextProjection) return contextProjection.contextWindow.tokens
     if (!config || !currentModel) return undefined
-    return resolveEffectiveMaximumContext(config.model, currentModel.maximumContext)
-  }, [config, currentModel])
+    const modelName = resolveSessionModelBinding(config, currentSession).modelName
+    return resolveEffectiveMaximumContext(modelName, currentModel.maximumContext)
+  }, [config, currentModel, currentSession])
 
   const effectiveOutputMax =
     config != null
-      ? resolveEffectiveOutputMaxTokens(config.model, config.models)
+      ? effectiveMaxTokensForBuiltinToolLoop(currentSession?.maxTokens ?? 4096)
       : contextProjection ? 0 : undefined
 
   const hasData =

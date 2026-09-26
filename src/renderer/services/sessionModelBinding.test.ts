@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import type { AppConfig } from '../../shared/domainTypes'
-import { DEFAULT_MODELS } from '../../shared/domainTypes'
+import { normalizeModelEntry } from '../../shared/llmModelConfig'
 import { resolveSessionModelBinding, resolveSessionThinkingBinding, listChatModelOptions } from './sessionModelBinding'
 
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
-  const models = DEFAULT_MODELS.map((m, i) => ({ id: String(i + 1), ...m }))
+  const models = [
+    normalizeModelEntry({ id: '1', name: 'deepseek-v4-pro' }),
+    normalizeModelEntry({ id: '2', name: 'deepseek-flash', isFast: true }),
+    normalizeModelEntry({ id: '3', name: 'kimi-k2.7-code' }),
+    normalizeModelEntry({ id: '4', name: 'glm-5.3' })
+  ]
   const proId = models.find((m) => m.name === 'deepseek-v4-pro')!.id
   return {
     locale: 'zh-CN',
@@ -80,7 +85,7 @@ describe('sessionModelBinding', () => {
   })
 
   it('lists service-prefixed display names for all options', () => {
-    const proId = String(DEFAULT_MODELS.findIndex((m) => m.name === 'deepseek-v4-pro') + 1)
+    const proId = makeConfig().models!.find((m) => m.name === 'deepseek-v4-pro')!.id
     const cfg = makeConfig({
       llmServices: [
         { id: 's1', name: 'Deep', baseUrl: '', apiKeyPresent: true, supportedModelIds: [proId] },

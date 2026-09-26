@@ -18,6 +18,7 @@ export type AgentLogEventName =
   | 'llm.effort.unsupported_memoized'
   | 'llm.response'
   | 'llm.output_recovery'
+  | 'llm.silent_overflow'
   | 'llm.error'
   | 'session.event.finalize_failed'
   | 'session.event.chunk_dropped'

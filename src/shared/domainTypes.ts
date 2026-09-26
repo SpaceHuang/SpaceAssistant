@@ -747,6 +747,8 @@ export interface ModelEntry {
   id: string
   name: string
   maximumContext: number
+  /** 窗口值的可信来源；fallback 仅为缺少模型元数据时使用的通用兜底。 */
+  maximumContextSource?: 'baseline' | 'legacy' | 'user' | 'fallback'
   maxTokens: number
   /** @deprecated 迁移后恒为 false，使用 preferredLanguageModelId */
   isDefault: boolean
@@ -874,16 +876,3 @@ export interface FileInfo {
   isDirectory: boolean
   size?: number
 }
-
-export const DEFAULT_MODELS: Omit<ModelEntry, 'id'>[] = [
-  { name: 'kimi-k2.7-code', maximumContext: 262144, maxTokens: 98304, isDefault: false, isFast: false, isVision: true, enabled: true },
-  { name: 'glm-5.3', maximumContext: 1000000, maxTokens: 128000, isDefault: false, isFast: false, isVision: false, enabled: true },
-  { name: 'glm-5.3-flash', maximumContext: 1000000, maxTokens: 128000, isDefault: false, isFast: true, isVision: true, enabled: true },
-  { name: 'minimax-m2.7', maximumContext: 204800, maxTokens: 204800, isDefault: false, isFast: false, isVision: true, enabled: true },
-  { name: 'deepseek-v4-pro', maximumContext: 1_048_565, maxTokens: 384000, isDefault: false, isFast: false, isVision: false, enabled: true },
-  { name: 'deepseek-flash', maximumContext: 1_048_565, maxTokens: 384000, isDefault: false, isFast: true, isVision: false, enabled: true },
-  { name: 'claude-sonnet-4-6', maximumContext: 1000000, maxTokens: 64000, isDefault: false, isFast: false, isVision: true, enabled: true },
-  { name: 'claude-opus-4-7', maximumContext: 1000000, maxTokens: 128000, isDefault: false, isFast: false, isVision: true, enabled: true },
-  { name: 'claude-haiku-4-5', maximumContext: 200000, maxTokens: 64000, isDefault: false, isFast: true, isVision: true, enabled: true },
-  { name: 'gpt-5.5', maximumContext: 1000000, maxTokens: 128000, isDefault: false, isFast: false, isVision: true, enabled: true },
-]

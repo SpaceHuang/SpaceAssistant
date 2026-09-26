@@ -64,15 +64,11 @@ export function onRemoteToolProgress(
 export function onRemoteTextSegmentClosed(ctx: RemoteProgressHookContext, text: string): void {
   const trimmed = text.trim()
   if (!trimmed) return
-  const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
-  const first = lines[0] ?? ''
-  const label = first.length > 72 ? `${first.slice(0, 71)}…` : first
-  const secondLine = lines.slice(1).find((l) => l.trim())
-  const detail = secondLine ? firstProgressLine(secondLine) : undefined
   updateRemoteProgressSnapshot(ctx.sessionId, {
     kind: 'text',
-    label,
-    detail,
+    // Progress heartbeats are not retractable once sent. Report a useful activity
+    // state here, while withholding generated answer text until terminal acceptance.
+    label: ctx.t('streaming.segmentReady'),
     publishable: true
   })
 }

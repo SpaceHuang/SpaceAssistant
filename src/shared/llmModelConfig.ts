@@ -1,25 +1,26 @@
 import type { LlmServiceProfile, ModelEntry } from './domainTypes'
 import { DEFAULT_MODEL_MAX_CONTEXT, DEFAULT_MODEL_MAX_TOKENS } from './domainTypes'
+import { getEffectiveModelBaseline, isPiAiVisionModel, LEGACY_MODEL_PARAMS, UNRESOLVED_MODEL_VISION_OVERRIDES } from './modelBaseline'
 
-/** 内置模型快速/视觉标签默认值（§6.4） */
-export const BUILTIN_MODEL_TAG_DEFAULTS: Record<string, { isFast: boolean; isVision: boolean }> = {
-  'kimi-k2.7-code': { isFast: false, isVision: true },
-  'glm-5.3': { isFast: false, isVision: false },
-  'glm-5.3-flash': { isFast: true, isVision: true },
-  'minimax-m2.7': { isFast: false, isVision: true },
-  'deepseek-v4-pro': { isFast: false, isVision: false },
-  'deepseek-flash': { isFast: true, isVision: false },
-  'claude-sonnet-4-6': { isFast: false, isVision: true },
-  'claude-opus-4-7': { isFast: false, isVision: true },
-  'claude-haiku-4-5': { isFast: true, isVision: true },
-  'gpt-5.5': { isFast: false, isVision: true }
+export const BUILTIN_MODEL_VISION_OVERRIDES: Record<string, boolean> = {}
+
+export type ModelParamMigration = {
+  model: string
+  field: 'maximumContext' | 'maxTokens' | 'isVision'
+  from: number | boolean
+  to: number | boolean
 }
 
-export const PREFERRED_BUILTIN_MODEL_NAMES = {
-  language: 'deepseek-v4-pro',
-  fast: 'deepseek-flash',
-  vision: 'kimi-k2.7-code'
-} as const
+/** 已发布旧默认值快照；不得根据当前基线自动重算。 */
+export const MODEL_PARAM_MIGRATIONS: readonly ModelParamMigration[] = [
+  { model: 'glm-5.3', field: 'maxTokens', from: 128_000, to: 131_072 },
+  { model: 'glm-5.3-flash', field: 'maxTokens', from: 128_000, to: 131_072 },
+  { model: 'minimax-m2.7', field: 'maxTokens', from: 204_800, to: 131_072 },
+  { model: 'deepseek-v4-pro', field: 'maximumContext', from: 1_048_565, to: 1_000_000 },
+  { model: 'deepseek-flash', field: 'maximumContext', from: 1_048_565, to: 1_000_000 },
+  { model: 'claude-sonnet-4-6', field: 'maxTokens', from: 64_000, to: 128_000 },
+  { model: 'gpt-5.5', field: 'maximumContext', from: 1_000_000, to: 272_000 }
+]
 
 /** 内置模型名升级映射：迁移旧名到新名（保留原 id 与作者配置） */
 export const BUILTIN_MODEL_NAME_MIGRATIONS: Record<string, string> = {
@@ -41,17 +42,70 @@ export function sortModelsFastFirst(models: ModelEntry[]): ModelEntry[] {
 }
 
 export function normalizeModelEntry(entry: Partial<ModelEntry> & Pick<ModelEntry, 'id' | 'name'>): ModelEntry {
-  const tags = BUILTIN_MODEL_TAG_DEFAULTS[entry.name]
+  const baseline = getEffectiveModelBaseline(entry.name)
+  const legacy = LEGACY_MODEL_PARAMS[entry.name]
+  const params = baseline ?? legacy
+  const legacyUnknownDefault = !baseline && !legacy && entry.maximumContext === DEFAULT_MODEL_MAX_CONTEXT
+  const maximumContextSource = entry.maximumContextSource
+    ?? (legacyUnknownDefault ? 'fallback' : entry.maximumContext !== undefined ? 'user' : baseline ? 'baseline' : legacy ? 'legacy' : 'fallback')
   return {
     id: entry.id,
     name: entry.name,
-    maximumContext: entry.maximumContext ?? DEFAULT_MODEL_MAX_CONTEXT,
-    maxTokens: entry.maxTokens ?? DEFAULT_MODEL_MAX_TOKENS,
+    maximumContext: entry.maximumContext ?? params?.maximumContext ?? DEFAULT_MODEL_MAX_CONTEXT,
+    maximumContextSource,
+    maxTokens: entry.maxTokens ?? params?.maxTokens ?? DEFAULT_MODEL_MAX_TOKENS,
     isDefault: false,
-    isFast: entry.isFast ?? tags?.isFast ?? false,
-    isVision: entry.isVision ?? tags?.isVision ?? false,
-    enabled: entry.enabled ?? true
+    isFast: entry.isFast ?? false,
+    isVision: entry.isVision ?? UNRESOLVED_MODEL_VISION_OVERRIDES[entry.name] ?? BUILTIN_MODEL_VISION_OVERRIDES[entry.name] ?? params?.isVision ?? false,
+    // 模型目录不再提供启停状态；兼容迁移旧配置中的 enabled=false。
+    enabled: true,
+    ...(entry.supportsThinking !== undefined ? { supportsThinking: entry.supportsThinking } : {})
   }
+}
+
+function migrateKnownOldDefaults(entry: ModelEntry, sourceWasExplicit = entry.maximumContextSource !== undefined): ModelEntry {
+  let next = entry
+  for (const migration of MODEL_PARAM_MIGRATIONS) {
+    if (migration.model !== entry.name || next[migration.field] !== migration.from) continue
+    // Explicitly sourced window values always belong to the user, even when equal to a historical default.
+    if (migration.field === 'maximumContext' && sourceWasExplicit && next.maximumContextSource === 'user') continue
+    next = {
+      ...next,
+      [migration.field]: migration.to,
+      ...(migration.field === 'maximumContext' ? { maximumContextSource: 'baseline' as const } : {})
+    }
+  }
+  return next
+}
+
+export function resolveModelContextWindow(modelName: string, models: readonly Partial<ModelEntry>[]): { contextWindow: number | undefined; trusted: boolean } {
+  const entry = models.find((model) => model.name === modelName)
+  if (!entry) return { contextWindow: undefined, trusted: false }
+  const sourceWasExplicit = entry.maximumContextSource !== undefined
+  const normalized = migrateKnownOldDefaults(normalizeModelEntry({
+    ...entry,
+    id: entry.id ?? `resolved:${modelName}`
+  } as Partial<ModelEntry> & Pick<ModelEntry, 'id' | 'name'>), sourceWasExplicit)
+  return {
+    contextWindow: normalized.maximumContext,
+    trusted: normalized.maximumContextSource !== 'fallback'
+  }
+}
+
+export function buildCustomModelEntry(input: {
+  id: string
+  name: string
+  maximumContext?: number
+  maxTokens?: number
+  isFast: boolean
+  isVision: boolean
+  enabled?: boolean
+  supportsThinking?: boolean
+}): ModelEntry {
+  return normalizeModelEntry({
+    ...input,
+    ...(input.maximumContext !== undefined ? { maximumContextSource: 'user' as const } : {})
+  })
 }
 
 export function migrateModelEntries(models: ModelEntry[]): ModelEntry[] {
@@ -60,7 +114,8 @@ export function migrateModelEntries(models: ModelEntry[]): ModelEntry[] {
     const target = BUILTIN_MODEL_NAME_MIGRATIONS[m.name]
     // 目标名已被其它条目占用时跳过重命名，避免产生同名重复条目（不可删、按名查找失效）
     const renamed = target && !existingNames.has(target) ? target : m.name
-    return normalizeModelEntry({ ...m, name: renamed })
+    const sourceWasExplicit = m.maximumContextSource !== undefined
+    return migrateKnownOldDefaults(normalizeModelEntry({ ...m, name: renamed }), sourceWasExplicit)
   })
 }
 
@@ -82,8 +137,8 @@ export function migrateBuiltinModelName(
   }
 }
 
-export function getEnabledModelIds(models: ModelEntry[]): string[] {
-  return models.filter((m) => m.enabled).map((m) => m.id)
+export function getModelIds(models: ModelEntry[]): string[] {
+  return models.map((m) => m.id)
 }
 
 export function getAvailableModels(
@@ -97,19 +152,19 @@ export function getAvailableModels(
     if (!activeSet.has(s.id)) continue
     for (const id of s.supportedModelIds ?? []) supportedIds.add(id)
   }
-  return sortModelsFastFirst(models).filter((m) => m.enabled && supportedIds.has(m.id))
+  return sortModelsFastFirst(models).filter((m) => supportedIds.has(m.id))
 }
 
 function tagFilter(kind: PreferredModelKind): (m: ModelEntry) => boolean {
-  if (kind === 'fast') return (m) => m.isFast
-  if (kind === 'vision') return (m) => m.isVision
+  // “优选快速”是用户选择的路由偏好；isFast 仅作为目录展示标签，不限制候选项。
+  if (kind === 'fast') return () => true
+  if (kind === 'vision') return (m) => isPiAiVisionModel(m.name)
   return () => true
 }
 
-function preferredBuiltinName(kind: PreferredModelKind): string {
-  if (kind === 'fast') return PREFERRED_BUILTIN_MODEL_NAMES.fast
-  if (kind === 'vision') return PREFERRED_BUILTIN_MODEL_NAMES.vision
-  return PREFERRED_BUILTIN_MODEL_NAMES.language
+export function filterPreferredModelCandidates(kind: PreferredModelKind, available: ModelEntry[]): ModelEntry[] {
+  const filter = tagFilter(kind)
+  return available.filter(filter)
 }
 
 /** §7.3 运行时回退链 */
@@ -118,18 +173,16 @@ export function resolvePreferredModelId(
   available: ModelEntry[],
   configuredId: string
 ): string | null {
-  const filter = tagFilter(kind)
-  const filtered = available.filter(filter)
+  const filtered = filterPreferredModelCandidates(kind, available)
 
   if (configuredId) {
     const configured = filtered.find((m) => m.id === configuredId)
     if (configured) return configured.id
   }
 
-  const builtin = filtered.find((m) => m.name === preferredBuiltinName(kind))
-  if (builtin) return builtin.id
-
-  const first = filtered[0]
+  const first = kind === 'language'
+    ? filtered.find((m) => !m.isFast) ?? filtered[0]
+    : filtered[0]
   if (first) return first.id
 
   if (kind === 'language') return available[0]?.id ?? null
@@ -152,11 +205,13 @@ export function getDefaultPreferredModelIds(models: ModelEntry[]): {
   preferredFastLanguageModelId: string
   preferredVisionModelId: string
 } {
-  const findId = (name: string) => models.find((m) => m.name === name)?.id ?? ''
+  const fastFirst = sortModelsFastFirst(models)
+  const vision = models.find((m) => isPiAiVisionModel(m.name))
+  const language = models.find((m) => !m.isFast) ?? models[0]
   return {
-    preferredLanguageModelId: findId(PREFERRED_BUILTIN_MODEL_NAMES.language) || models[0]?.id || '',
-    preferredFastLanguageModelId: findId(PREFERRED_BUILTIN_MODEL_NAMES.fast),
-    preferredVisionModelId: findId(PREFERRED_BUILTIN_MODEL_NAMES.vision)
+    preferredLanguageModelId: language?.id ?? '',
+    preferredFastLanguageModelId: fastFirst[0]?.id ?? '',
+    preferredVisionModelId: vision?.id ?? ''
   }
 }
 
@@ -168,8 +223,7 @@ export function isPreferredModelAvailable(
   if (!modelId) return false
   const m = available.find((x) => x.id === modelId)
   if (!m) return false
-  const filter = tagFilter(kind)
-  return filter(m)
+  return tagFilter(kind)(m)
 }
 
 export type ChatModelOption = {
@@ -222,13 +276,13 @@ export function findChatModelOption(
   return matches.length === 1 ? matches[0] : undefined
 }
 
-export function pruneDisabledModelsFromServices(
+export function pruneMissingModelsFromServices(
   services: LlmServiceProfile[],
-  enabledModelIds: Set<string>
+  modelIds: Set<string>
 ): LlmServiceProfile[] {
   return services.map((s) => ({
     ...s,
-    supportedModelIds: (s.supportedModelIds ?? []).filter((id) => enabledModelIds.has(id))
+    supportedModelIds: (s.supportedModelIds ?? []).filter((id) => modelIds.has(id))
   }))
 }
 

@@ -67,7 +67,7 @@ describe('backfillUsageStats 历史台账回填', () => {
     const sessionId = seedSessionLedger(workDir, [
       jsonlLine({ seq: 1, time: T_FIRST, type: 'turn_start', payload: { turnId: 'turn-hist-1' } }),
       jsonlLine({ seq: 2, time: T_FIRST, type: 'request_usage', payload: { schemaVersion: 1, requestId: 'req-h1:round:1', turnId: 'turn-hist-1', usage: { input_tokens: 14365, output_tokens: 124 }, source: 'api' } }),
-      jsonlLine({ seq: 3, time: T_THIRD, type: 'request_usage', payload: { schemaVersion: 1, requestId: 'req-h1:round:3', turnId: 'turn-hist-1', usage: { input_tokens: 4364, cache_read_input_tokens: 46464, output_tokens: 760, cacheSemantics: 'additive' }, source: 'api' } }),
+      jsonlLine({ seq: 3, time: T_THIRD, type: 'request_usage', payload: { schemaVersion: 1, requestId: 'req-h1:round:3', turnId: 'turn-hist-1', usage: { input_tokens: 4364, cache_read_input_tokens: 46464, output_tokens: 760, cacheSemantics: 'additive' }, source: 'api', resultDisposition: 'discarded_overflow' } }),
       jsonlLine({ seq: 4, time: T_THIRD, type: 'tool_call', payload: { turnId: 'turn-hist-1', stepId: 'req-h1', toolUseId: 'tu-1', name: 'read_file', args: {} } }),
       jsonlLine({ seq: 5, time: T_THIRD, type: 'tool_call', payload: { turnId: 'turn-hist-1', stepId: 'req-h1', toolUseId: 'tu-2', name: 'run_shell', args: {} } }),
       jsonlLine({ seq: 6, time: T_THIRD, type: 'tool_call', payload: { turnId: 'turn-hist-1', stepId: 'req-h1', toolUseId: 'tu-3', name: 'write_file', args: {} } }),

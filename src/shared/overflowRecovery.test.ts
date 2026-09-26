@@ -1,7 +1,34 @@
 import { describe, expect, it } from 'vitest'
-import { decideOverflowRecovery, isProviderContextOverflow, selectRecoveryMessages } from './overflowRecovery'
+import { decideOverflowRecovery, detectSilentContextOverflow, isProviderContextOverflow, selectRecoveryMessages } from './overflowRecovery'
 
 describe('provider overflow recovery', () => {
+  it('detects silent overflow using shared cache semantics', () => {
+    expect(detectSilentContextOverflow({ stopReason: 'end_turn', contextWindow: 150_000, contextWindowTrusted: true, usage: { input_tokens: 100_000, cache_read_input_tokens: 80_000, cacheSemantics: 'subset' } }))
+      .toEqual({ overflow: false })
+    expect(detectSilentContextOverflow({ stopReason: 'end_turn', contextWindow: 150_000, contextWindowTrusted: true, usage: { input_tokens: 100_000, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 20_000, cacheSemantics: 'additive' } }))
+      .toEqual({ overflow: true, kind: 'usage-exceeds-window', inputTokens: 160_000, contextWindow: 150_000 })
+  })
+
+  it('detects full-window zero-output truncation and rejects untrusted inputs', () => {
+    expect(detectSilentContextOverflow({ stopReason: 'max_tokens', contextWindow: 100_000, contextWindowTrusted: true, usage: { input_tokens: 99_000, output_tokens: 0, cacheSemantics: 'subset' } }))
+      .toEqual({ overflow: true, kind: 'truncated-input', inputTokens: 99_000, contextWindow: 100_000 })
+    expect(detectSilentContextOverflow({ stopReason: 'max_tokens', contextWindow: 100_000, contextWindowTrusted: true, usage: { input_tokens: 99_000, output_tokens: 1 } })).toEqual({ overflow: false })
+    expect(detectSilentContextOverflow({ stopReason: 'max_tokens', contextWindow: 100_000, contextWindowTrusted: true, usage: { input_tokens: 99_000 } })).toEqual({ overflow: false })
+    expect(detectSilentContextOverflow({ stopReason: 'max_tokens', contextWindow: 100_000, contextWindowTrusted: true, usage: { input_tokens: 99_000, output_tokens: 0 }, hasOutputContent: true })).toEqual({ overflow: false })
+    expect(detectSilentContextOverflow({ stopReason: 'end_turn', contextWindow: 200_000, contextWindowTrusted: true, usage: { input_tokens: 300_001 } }))
+      .toEqual({ overflow: true, kind: 'usage-exceeds-window', inputTokens: 300_001, contextWindow: 200_000 })
+    expect(detectSilentContextOverflow({ stopReason: 'max_tokens', contextWindow: 100_000, contextWindowTrusted: true, usage: { input_tokens: 50_000, cache_read_input_tokens: 25_000, cache_creation_input_tokens: 24_500, cacheSemantics: 'additive', output_tokens: 0 } }))
+      .toEqual({ overflow: true, kind: 'truncated-input', inputTokens: 99_500, contextWindow: 100_000 })
+    for (const contextWindow of [undefined, 0, -1]) {
+      expect(detectSilentContextOverflow({ stopReason: 'end_turn', contextWindow, contextWindowTrusted: true, usage: { input_tokens: 300_000 } })).toEqual({ overflow: false })
+    }
+    expect(detectSilentContextOverflow({ stopReason: 'end_turn', contextWindow: 200_000, contextWindowTrusted: false, usage: { input_tokens: 300_000 } })).toEqual({ overflow: false })
+    expect(detectSilentContextOverflow({ stopReason: 'max_tokens', contextWindow: 200_000, contextWindowTrusted: true, usage: { input_tokens: 198_000, output_tokens: 0 } }))
+      .toEqual({ overflow: true, kind: 'truncated-input', inputTokens: 198_000, contextWindow: 200_000 })
+    expect(detectSilentContextOverflow({ stopReason: 'max_tokens', contextWindow: 200_000, contextWindowTrusted: false, usage: { input_tokens: 198_000, output_tokens: 0 } })).toEqual({ overflow: false })
+    expect(detectSilentContextOverflow({ stopReason: 'tool_use', contextWindow: 100_000, contextWindowTrusted: true, usage: { input_tokens: 200_000 } })).toEqual({ overflow: false })
+    expect(detectSilentContextOverflow({ stopReason: 'end_turn', contextWindow: 1, usage: { input_tokens: 100 } })).toEqual({ overflow: false })
+  })
   it('retries only the provider after a safe boundary', () => {
     expect(decideOverflowRecovery({ error: new Error('prompt token limit exceeded'), retries: 0, maxRetries: 1, inFlightToolCount: 0, safeBoundary: true })).toEqual({ action: 'reset_and_retry_provider', nextRetry: 1 })
   })

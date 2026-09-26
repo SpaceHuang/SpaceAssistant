@@ -45,6 +45,7 @@ export function memoizeEffortUnsupported(llmServiceId: string | undefined, model
 }
 
 const memoizedSkipAudited = new Set<string>()
+const baselineSkipAudited = new Set<string>()
 
 /** 首次因记忆跳过 output_config 时返回 true（供调用方落一次 llm.effort.unsupported_memoized 审计），之后同 key 返回 false。 */
 export function consumeEffortMemoizedAudit(llmServiceId: string | undefined, model: string): boolean {
@@ -54,8 +55,17 @@ export function consumeEffortMemoizedAudit(llmServiceId: string | undefined, mod
   return true
 }
 
+/** 基线明确不支持档位时每个服务/模型首次落审计。 */
+export function consumeBaselineEffortAudit(llmServiceId: string | undefined, model: string): boolean {
+  const key = effortMemoKey(llmServiceId, model)
+  if (baselineSkipAudited.has(key)) return false
+  baselineSkipAudited.add(key)
+  return true
+}
+
 /** 仅测试使用：等价「进程重启清空」。 */
 export function resetEffortMemoForTests(): void {
   unsupportedMemo.clear()
   memoizedSkipAudited.clear()
+  baselineSkipAudited.clear()
 }

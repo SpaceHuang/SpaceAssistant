@@ -4,7 +4,7 @@ import { normalizeTurnExecutionConfig } from '../src/shared/turnCoordinator'
 import type { ModelEntry } from '../src/shared/domainTypes'
 import type { AgentReasoningEffort } from '../src/shared/agent/invocation'
 import { resolveGlobalThinkingEffort } from '../src/shared/thinkingEffort'
-import { getAvailableModels, migrateBuiltinModelName, resolvePreferredModelEntry } from '../src/shared/llmModelConfig'
+import { getAvailableModels, migrateBuiltinModelName, resolveModelContextWindow, resolvePreferredModelEntry } from '../src/shared/llmModelConfig'
 import { resolveVisionRouteForImageSend } from '../src/shared/visionModelRouting'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { getConfigValue, getSession, updateSession, type AppDatabase } from './database'
@@ -119,6 +119,7 @@ export async function resolveTrustedTurnExecutionConfig(
   }
 
   const modelEntry = models.find((entry) => entry.name === model)
+  const modelWindow = resolveModelContextWindow(model, models)
   const locale = getConfigValue(db, 'config.locale')
   // Thinking 强度（§7.1）：迁移期双读（新键缺失由旧布尔推导，读兜底不落库）+ 会话覆盖 + 能力降级；
   // enableThinking 由最终档位派生（过渡期兼容字段，保留一个发布周期）。
@@ -143,7 +144,8 @@ export async function resolveTrustedTurnExecutionConfig(
   return normalizeTurnExecutionConfig({
     lane,
     model,
-    ...(modelEntry?.maximumContext ? { maximumContext: modelEntry.maximumContext } : {}),
+    ...(modelWindow.contextWindow !== undefined ? { maximumContext: modelWindow.contextWindow } : {}),
+    maximumContextTrusted: modelWindow.trusted,
     llmServiceId: credentials.serviceId || llmServiceId,
     maxTokens: session.maxTokens,
     thinkingEffort,

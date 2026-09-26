@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   buildThinkingWireParams,
+  consumeBaselineEffortAudit,
   consumeEffortMemoizedAudit,
   effortMemoKey,
   isEffortUnsupportedByUpstream,
@@ -89,5 +90,11 @@ describe('进程内降级记忆（OQ-6：粒度 = llmServiceId + model）', () =
     expect(consumeEffortMemoizedAudit('svc-a', 'model-1')).toBe(false)
     // 未命中记忆的 key 不应产出审计
     expect(consumeEffortMemoizedAudit('svc-a', 'model-2')).toBe(false)
+  })
+
+  it('baseline skip audit fires once per service+model', () => {
+    expect(consumeBaselineEffortAudit('svc-a', 'model-1')).toBe(true)
+    expect(consumeBaselineEffortAudit('svc-a', 'model-1')).toBe(false)
+    expect(consumeBaselineEffortAudit('svc-b', 'model-1')).toBe(true)
   })
 })

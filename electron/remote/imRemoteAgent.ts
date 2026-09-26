@@ -6,6 +6,7 @@ import { buildResolveWorkDirCallback, resolveWorkDirForSession, type WorkDirMana
 import { SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../../src/shared/domainTypes'
 import type { ModelEntry } from '../../src/shared/domainTypes'
+import { resolveModelContextWindow } from '../../src/shared/llmModelConfig'
 import { buildClaudeToolChatMessages, trimClaudeToolChatMessages } from '../../src/shared/claudeToolHistory'
 import { MAX_CHAT_API_MESSAGES } from '../../src/shared/chatApiMessageLimits'
 import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
@@ -163,9 +164,12 @@ export async function runImRemoteAgent(args: {
 
     const routeModelName = args.getModel()
     let contextWindow: number | undefined
+    let contextWindowTrusted = false
     try {
       const models = JSON.parse(getConfigValue(args.db, 'config.models') ?? '[]') as ModelEntry[]
-      contextWindow = models.find((entry) => entry.name === routeModelName)?.maximumContext
+      const modelWindow = resolveModelContextWindow(routeModelName, models)
+      contextWindow = modelWindow.contextWindow
+      contextWindowTrusted = modelWindow.trusted
     } catch { /* use adapter fallback */ }
     const creds = await resolveLlmCredentialsForModel(args.db, routeModelName, {})
     const baseUrl = creds.baseUrl ?? args.getBaseUrl()
@@ -180,6 +184,7 @@ export async function runImRemoteAgent(args: {
       llmServiceId: creds.serviceId || args.llmServiceId,
       model: routeModelName,
       contextWindow,
+      contextWindowTrusted,
       baseUrl,
       messages,
       system: appendix,

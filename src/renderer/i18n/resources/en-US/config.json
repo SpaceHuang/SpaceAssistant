@@ -85,7 +85,7 @@
     "connectionFailed": "Failed"
   },
   "models": {
-    "noModelsAvailable": "No models available. Add or enable a model first.",
+    "noModelsAvailable": "No models available. Add one manually or fetch it from an API service.",
     "nameExists": "Model name already exists",
     "fastBadge": "Fast",
     "visionBadge": "Vision",
@@ -113,23 +113,13 @@
       "notSupported": "This model does not support thinking",
       "unsupportedBadge": "No thinking"
     },
-    "list": {
-      "title": "Model catalog",
-      "toggleEnable": "Enable {{name}}",
-      "colModel": "Model",
-      "colCaps": "Capabilities",
-      "colFast": "Fast",
-      "colVision": "Vision",
-      "colContext": "Context",
-      "colOutput": "Output"
-    },
     "apiServices": {
       "title": "API services",
       "intro": "Each service has its own API key and base URL. You may enable multiple services at once; only models supported by enabled services become available."
     },
     "defaults": {
       "title": "Model settings",
-      "intro": "Configure three preferred default models. Thinking effort controls how much supported models reason (lower is faster and cheaper, higher reasons more thoroughly).",
+      "intro": "Choose default models for language, fast tasks, and vision. Thinking effort controls how much supported models reason.",
       "defaultModel": "Default model",
       "preferredLanguage": "Preferred language model",
       "preferredFast": "Preferred fast language model",
@@ -140,9 +130,6 @@
       "preferredLanguageShort": "Default",
       "preferredFastShort": "Fast",
       "preferredVisionShort": "Vision",
-      "resetDefault": "Reset defaults",
-      "resetDefaultAria": "Reset default model list",
-      "addModel": "Add model",
       "thinkingLabel": "Enable Thinking by default",
       "thinkingAria": "Enable Thinking by default",
       "thinkingHint": "Only applies to models that support extended thinking",
@@ -178,6 +165,7 @@
     "keyNotConfigured": "No key configured",
     "officialDefault": "Official default",
     "supportedModelsLabel": "Supported models",
+    "addManualModel": "Add model manually",
     "supportedModelsPlaceholder": "Select models this service supports",
     "supportedModelsCount": "{{count}} models supported",
     "selectAllModels": "Select all",

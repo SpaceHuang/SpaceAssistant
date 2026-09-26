@@ -146,4 +146,29 @@ describe('ConfigSettingsPage 优选默认模型', () => {
       preferredFastLanguageModelId: '5'
     })
   })
+
+  it('移除独立模型清单，并在服务支持模型处手工添加且自动关联', async () => {
+    renderPage()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+
+    expect(screen.queryByText('大模型列表')).toBeNull()
+    const addModelButton = screen.getByRole('button', { name: '手工添加模型' })
+    const fetchModelsButton = screen.getByRole('button', { name: '从服务拉取' })
+    expect(addModelButton.compareDocumentPosition(fetchModelsButton) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    fireEvent.click(addModelButton)
+    fireEvent.change(await screen.findByPlaceholderText('按服务商提供的模型 ID 填写'), { target: { value: 'manual-model-x' } })
+    fireEvent.click(screen.getByRole('button', { name: '添加模型' }))
+
+    const saveBtn = screen.getByRole('button', { name: '保存并返回' })
+    await waitFor(() => expect(saveBtn.disabled).toBe(false))
+    fireEvent.click(saveBtn)
+    await waitFor(() => expect(configSet).toHaveBeenCalled())
+    const calls = configSet.mock.calls as unknown as Array<[Record<string, unknown>]>
+    const payload = calls[calls.length - 1]![0]!
+    const added = (payload.models as ModelEntry[]).find((model) => model.name === 'manual-model-x')
+    expect(added).toBeTruthy()
+    expect((payload.llmServices as Array<{ supportedModelIds: string[] }>)[0]!.supportedModelIds).toContain(added!.id)
+  })
 })

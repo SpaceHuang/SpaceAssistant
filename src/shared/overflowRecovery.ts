@@ -1,3 +1,33 @@
+import { computeTotalRequestInputTokens } from './contextUsageEstimate'
+import type { SessionUsage } from './sessionUsage'
+
+export type SilentOverflowKind = 'usage-exceeds-window' | 'truncated-input'
+export type SilentOverflowResult =
+  | { overflow: false }
+  | { overflow: true; kind: SilentOverflowKind; inputTokens: number; contextWindow: number }
+
+export function detectSilentContextOverflow(input: {
+  stopReason: 'max_tokens' | 'end_turn' | 'tool_use' | 'other' | undefined
+  usage: SessionUsage | undefined
+  contextWindow: number | undefined
+  contextWindowTrusted?: boolean
+  hasOutputContent?: boolean
+}): SilentOverflowResult {
+  const { stopReason, usage, contextWindow, contextWindowTrusted = false, hasOutputContent = false } = input
+  if (!usage || !Number.isFinite(usage.input_tokens) || usage.input_tokens < 0) return { overflow: false }
+  if (!contextWindowTrusted || !Number.isFinite(contextWindow) || !contextWindow || contextWindow <= 0) return { overflow: false }
+  if (!stopReason) return { overflow: false }
+  const inputTokens = computeTotalRequestInputTokens(usage)
+  if (!Number.isFinite(inputTokens)) return { overflow: false }
+  if (stopReason === 'end_turn' && inputTokens > contextWindow) {
+    return { overflow: true, kind: 'usage-exceeds-window', inputTokens, contextWindow }
+  }
+  if (stopReason === 'max_tokens' && usage.output_tokens === 0 && !hasOutputContent && inputTokens >= contextWindow * 0.99) {
+    return { overflow: true, kind: 'truncated-input', inputTokens, contextWindow }
+  }
+  return { overflow: false }
+}
+
 export type OverflowRecoveryInput = {
   error: unknown
   retries: number

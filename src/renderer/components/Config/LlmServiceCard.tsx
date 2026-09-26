@@ -3,6 +3,7 @@ import { App, Button, Checkbox, Input, Select, Space, Tooltip } from 'antd'
 import type { ModelEntry } from '../../../shared/domainTypes'
 import { diffFetchedModels } from '../../../shared/llmModelConfig'
 import { ConfigModelOptionContent } from './ConfigModelOption'
+import { ManualModelPopover } from './ManualModelPopover'
 import type { LlmServiceDraft } from './llmServiceDrafts'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import './llmServiceCard.css'
@@ -47,6 +48,7 @@ type Props = {
   onToggleExpand: () => void
   onDelete: () => void
   onPatch: (patch: Partial<Pick<LlmServiceDraft, 'name' | 'baseUrl' | 'apiKeyDraft' | 'supportedModelIds' | 'fetchedModelIds' | 'fetchedAt'>>) => void
+  onAddModel: (model: ModelEntry) => void
   /** 从服务拉取模型列表；未提供时隐藏入口 */
   onFetchModels?: () => void
   fetchingModels?: boolean
@@ -63,6 +65,7 @@ export function LlmServiceCard({
   onToggleExpand,
   onDelete,
   onPatch,
+  onAddModel,
   onFetchModels,
   fetchingModels = false
 }: Props) {
@@ -160,6 +163,13 @@ export function LlmServiceCard({
             <div className="llm-service-supported-models__header">
               <span className="llm-service-field-label">{t('llmService.supportedModelsLabel')}</span>
               <Space size={4}>
+                <ManualModelPopover
+                  models={enabledModels}
+                  onAdd={(model) => {
+                    onAddModel(model)
+                    onPatch({ supportedModelIds: [...new Set([...draft.supportedModelIds, model.id])] })
+                  }}
+                />
                 {onFetchModels ? (
                   <Tooltip title={hasKey ? undefined : t('llmService.fetchModels.needKey')}>
                     {/* disabled 按钮不触发指针事件，需包一层 span 才能展示提示 */}
