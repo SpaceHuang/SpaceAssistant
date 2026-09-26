@@ -39,6 +39,16 @@ export function getCurrentRemoteProgressSnapshot(sessionId: string): RemoteProgr
   return sessions.get(sessionId)?.current
 }
 
+/** Restore the last accepted activity after discarding a provisional streaming attempt. */
+export function restoreRemoteProgressSnapshots(
+  sessionId: string,
+  snapshots: { current?: RemoteProgressSnapshot; lastPublishable?: RemoteProgressSnapshot }
+): void {
+  const state = ensureRemoteProgressSession(sessionId)
+  state.current = snapshots.current
+  state.lastPublishable = snapshots.lastPublishable
+}
+
 export function markRemoteProgressReplySent(sessionId: string, text: string): void {
   const state = ensureRemoteProgressSession(sessionId)
   state.lastSentText = text

@@ -4,6 +4,7 @@ import { runToolChatSession } from '../toolChatLoop'
 import { assembleInvocation } from '../runtime/invocationAssembler'
 import { buildResolveWorkDirCallback } from '../workDirManager'
 import type { BrowserConfig, ShellConfig, ToolsConfig, ModelEntry } from '../../src/shared/domainTypes'
+import { resolveModelContextWindow } from '../../src/shared/llmModelConfig'
 import { buildClaudeToolChatMessages, trimClaudeToolChatMessages } from '../../src/shared/claudeToolHistory'
 import { MAX_CHAT_API_MESSAGES } from '../../src/shared/chatApiMessageLimits'
 import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
@@ -257,9 +258,12 @@ async function runButlerModelTurn(
   const { messages } = ensureToolResultPairing(trimmed)
 
   let contextWindow: number | undefined
+  let contextWindowTrusted = false
   try {
     const models = JSON.parse(getConfigValue(db, 'config.models') ?? '[]') as ModelEntry[]
-    contextWindow = models.find((entry) => entry.name === session.model)?.maximumContext
+    const modelWindow = resolveModelContextWindow(session.model, models)
+    contextWindow = modelWindow.contextWindow
+    contextWindowTrusted = modelWindow.trusted
   } catch { /* 无模型表时回退 undefined */ }
 
   const creds = await resolveLlmCredentialsForModel(db, session.model, {})
@@ -290,6 +294,7 @@ async function runButlerModelTurn(
     approvalTaskDigest: buildApprovalTaskDigest(args.taskPrompt),
     model: session.model,
     contextWindow,
+    contextWindowTrusted,
     baseUrl: creds.baseUrl,
     messages,
     system,

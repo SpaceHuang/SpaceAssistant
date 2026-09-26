@@ -8,6 +8,7 @@ export type TurnExecutionConfig = {
   lane?: 'desktop' | 'feishu' | 'wechat' | 'automation'
   model?: string
   maximumContext?: number
+  maximumContextTrusted?: boolean
   llmServiceId?: string
   system?: string
   skillFragments?: string[]
@@ -37,8 +38,11 @@ export type TurnTerminal = {
 
 type AssistantFactEventPayload =
   | { type: 'content-delta'; text: string }
+  | { type: 'preview-rollback' }
+  | { type: 'preview-commit' }
   | { type: 'content-reconciled'; text: string }
   | { type: 'thinking-delta'; text: string }
+  | { type: 'thinking-reconciled'; text: string }
   | { type: 'tool-use'; id: string; toolName: string; input: Record<string, unknown>; riskLevel?: ToolCallRecord['riskLevel']; mcp?: ToolCallRecord['mcp'] }
   | { type: 'tool-progress'; id: string; seq: number; text: string; rawDelta?: string; rawEncoding?: string; processPid?: number; processGroupId?: number; processOwnerToken?: string }
   | {
@@ -83,10 +87,47 @@ export type AssistantFactReducerDeps = { now: number; createId: () => string }
 
 const terminal = (status: Message['status']) => status === 'completed' || status === 'failed' || status === 'cancelled'
 
+/** 持久化活动 turn 时剥离尚未接受的流式预览，只写最后一个已提交前缀。 */
+export function acceptedAssistantCheckpoint(message: Message): Message {
+  const snapshot = (message as Message & { _provisionalSnapshot?: { content: string; contentSegments?: Message['contentSegments']; thinking?: Message['thinking'] } })._provisionalSnapshot
+  if (!snapshot) return message
+  const { _provisionalSnapshot: _discarded, ...accepted } = message as Message & { _provisionalSnapshot?: unknown }
+  void _discarded
+  return {
+    ...accepted,
+    content: snapshot.content,
+    contentSegments: snapshot.contentSegments?.map((segment) => ({ ...segment })),
+    thinking: snapshot.thinking ? { ...snapshot.thinking, segments: snapshot.thinking.segments?.map((segment) => ({ ...segment })) } : undefined
+  }
+}
+
+function restoreProvisionalSnapshot(message: Message): Message {
+  const snapshot = (message as Message & { _provisionalSnapshot?: { content: string; contentSegments?: Message['contentSegments']; thinking?: Message['thinking'] } })._provisionalSnapshot
+  if (!snapshot) return message
+  return {
+    ...message,
+    content: snapshot.content,
+    contentSegments: snapshot.contentSegments?.map((segment) => ({ ...segment })),
+    thinking: snapshot.thinking ? { ...snapshot.thinking, segments: snapshot.thinking.segments?.map((segment) => ({ ...segment })) } : undefined
+  }
+}
+
 export function reduceAssistantFact(state: Message, event: AssistantFactEvent, deps: AssistantFactReducerDeps): Message {
   if (terminal(state.status)) return state
   const next = { ...state }
-  if (event.type === 'content-delta') {
+  if (event.type === 'preview-rollback') {
+    Object.assign(next, restoreProvisionalSnapshot(state))
+    delete (next as Message & { _provisionalSnapshot?: unknown })._provisionalSnapshot
+  } else if (event.type === 'preview-commit') {
+    delete (next as Message & { _provisionalSnapshot?: unknown })._provisionalSnapshot
+  } else if (event.type === 'content-delta') {
+    if (!(next as Message & { _provisionalSnapshot?: unknown })._provisionalSnapshot) {
+      (next as Message & { _provisionalSnapshot?: unknown })._provisionalSnapshot = {
+        content: state.content,
+        contentSegments: state.contentSegments?.map((segment) => ({ ...segment })),
+        thinking: state.thinking ? { ...state.thinking, segments: state.thinking.segments?.map((segment) => ({ ...segment })) } : undefined
+      }
+    }
     next.content += event.text
     const segments = [...(next.contentSegments ?? [])]
     const last = segments.at(-1)
@@ -95,8 +136,43 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
     next.contentSegments = segments
   } else if (event.type === 'content-reconciled') {
     next.content = event.text
-    next.contentSegments = event.text.length > 0 ? [{ content: event.text, startTime: deps.now, endTime: deps.now }] : []
+    const commonPrefixLength = (() => {
+      const limit = Math.min(state.content.length, event.text.length)
+      let index = 0
+      while (index < limit && state.content[index] === event.text[index]) index += 1
+      return index
+    })()
+    if (commonPrefixLength === event.text.length && event.text === state.content) {
+      // Final provider reconciliation agrees with the streamed ledger; retain the original
+      // segment timestamps so earlier text stays before tool activity in replay.
+    } else if (commonPrefixLength > 0 && state.contentSegments?.length) {
+      let remaining = commonPrefixLength
+      const segments: NonNullable<Message['contentSegments']> = []
+      for (const segment of state.contentSegments) {
+        if (remaining <= 0) break
+        const content = segment.content.slice(0, remaining)
+        if (content) segments.push({ ...segment, content })
+        remaining -= content.length
+      }
+      if (remaining === 0) {
+        const suffix = event.text.slice(commonPrefixLength)
+        if (suffix) segments.push({ content: suffix, startTime: deps.now, endTime: deps.now })
+        next.contentSegments = segments
+      } else {
+        next.contentSegments = event.text.length > 0 ? [{ content: event.text, startTime: deps.now, endTime: deps.now }] : []
+      }
+    } else {
+      next.contentSegments = event.text.length > 0 ? [{ content: event.text, startTime: deps.now, endTime: deps.now }] : []
+    }
+    delete (next as Message & { _provisionalSnapshot?: unknown })._provisionalSnapshot
   } else if (event.type === 'thinking-delta') {
+    if (!(next as Message & { _provisionalSnapshot?: unknown })._provisionalSnapshot) {
+      (next as Message & { _provisionalSnapshot?: unknown })._provisionalSnapshot = {
+        content: state.content,
+        contentSegments: state.contentSegments?.map((segment) => ({ ...segment })),
+        thinking: state.thinking ? { ...state.thinking, segments: state.thinking.segments?.map((segment) => ({ ...segment })) } : undefined
+      }
+    }
     if (next.contentSegments) next.contentSegments = next.contentSegments.map((segment) => ({ ...segment, endTime: segment.endTime ?? deps.now }))
     const thinking = next.thinking ?? { content: '', isVisible: true, startTime: deps.now, segments: [] }
     const thinkingSegments = [...(thinking.segments ?? [])]
@@ -104,6 +180,10 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
     if (lastThinkingSegment && !lastThinkingSegment.endTime) thinkingSegments[thinkingSegments.length - 1] = { ...lastThinkingSegment, content: lastThinkingSegment.content + event.text }
     else thinkingSegments.push({ content: event.text, startTime: deps.now })
     next.thinking = { ...thinking, content: thinking.content + event.text, segments: thinkingSegments }
+  } else if (event.type === 'thinking-reconciled') {
+    next.thinking = event.text.length > 0
+      ? { content: event.text, isVisible: true, startTime: deps.now, segments: [{ content: event.text, startTime: deps.now, endTime: deps.now }] }
+      : undefined
   } else if (event.type === 'tool-use') {
     if (!(next.toolCalls ?? []).some((tool) => tool.id === event.id)) {
       // 首次工具调用是活动时间线的边界：关闭调用前开放的正文/Thinking segment，
@@ -172,7 +252,11 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
   } else if (event.type === 'usage-updated' || event.type === 'context-projection-updated' || event.type === 'compaction-committed') {
     // usage 属于会话级投影数据，不改变 assistant message 本身。
   } else {
+    if (event.type === 'source-cancelled' || event.type === 'source-timeout' || event.type === 'source-failed') {
+      Object.assign(next, restoreProvisionalSnapshot(state))
+    }
     closeSegments(next, deps.now)
+    delete (next as Message & { _provisionalSnapshot?: unknown })._provisionalSnapshot
     next.status = event.type === 'source-completed' ? 'completed' : event.type === 'source-cancelled' ? 'cancelled' : 'failed'
   }
   return next

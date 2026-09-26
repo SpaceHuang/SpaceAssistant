@@ -387,6 +387,35 @@ describe('thinking effort 档位与上游降级（§7.3 / §7.4）', () => {
     expect(requestLog?.[2]).toMatchObject({ effort: 'low' })
   })
 
+  it('基线明确不支持 low 时首轮跳过 output_config，high 仍按基线发送', async () => {
+    const lowClient = {
+      messages: {
+        stream: vi.fn(() => ({
+          async *[Symbol.asyncIterator]() {},
+          finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'low' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+        }))
+      }
+    }
+    mockCreateAnthropicClient.mockReturnValue(lowClient)
+    await run(baseMaterials({ effort: 'low', model: 'deepseek-v4-pro' }))
+    expect(lowClient.messages.stream).toHaveBeenCalledTimes(1)
+    expect((lowClient.messages.stream.mock.calls[0][0] as Record<string, unknown>).output_config).toBeUndefined()
+    expect(vi.mocked(logAgentEvent).mock.calls.filter((call) => call[1] === 'llm.effort.unsupported')).toHaveLength(1)
+    expect(vi.mocked(logAgentEvent).mock.calls.find((call) => call[1] === 'llm.effort.unsupported')?.[2]).toMatchObject({ reason: 'baseline_unsupported', fallback: 'adaptive' })
+
+    const highClient = {
+      messages: {
+        stream: vi.fn(() => ({
+          async *[Symbol.asyncIterator]() {},
+          finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'high' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+        }))
+      }
+    }
+    mockCreateAnthropicClient.mockReturnValue(highClient)
+    await run(baseMaterials({ effort: 'high', model: 'deepseek-v4-pro' }))
+    expect((highClient.messages.stream.mock.calls[0][0] as Record<string, unknown>).output_config).toEqual({ effort: 'high' })
+  })
+
   it('上游 400 拒绝 output_config → 自动去强度重试一次成功 + 落 llm.effort.unsupported 审计', async () => {
     const client = makeEffortRejectionClient([
       { content: [{ type: 'text', text: 'recovered' }], stop_reason: 'end_turn' }

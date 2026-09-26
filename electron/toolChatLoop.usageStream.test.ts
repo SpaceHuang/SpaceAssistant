@@ -2,12 +2,18 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
 import type { AppDatabase } from './database'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
+import { getCurrentRemoteProgressSnapshot, clearRemoteProgressSession } from './remote/remoteProgressStore'
 import type { AssistantFactEvent } from '../src/shared/assistantFactAggregator'
+import { reduceAssistantFact } from '../src/shared/assistantFactAggregator'
+import { buildAssistantActivityTimeline } from '../src/shared/assistantActivityTimeline'
+import type { Message } from '../src/shared/domainTypes'
+import type { RemoteContext } from './tools/types'
 
 const mockGetCachedMemoryContent = vi.fn(() => null)
 const mockCreateAnthropicClient = vi.fn()
 let streamRound = 0
 let capturedFacts: Array<Record<string, unknown>> = []
+let capturedSessionEvents: Array<{ type: string; payload?: Record<string, unknown> }> = []
 
 vi.mock('./agentLogger/agentLogger', () => ({
   logAgentEvent: vi.fn(),
@@ -116,26 +122,342 @@ describe('runToolChatSession message_start usage', () => {
     vi.clearAllMocks()
     streamRound = 0
     capturedFacts = []
+    capturedSessionEvents = []
     mockGetCachedMemoryContent.mockReturnValue(null)
   })
 
-  async function runSession(sender = makeSender(), options: { enableThinking?: boolean } = {}) {
+  async function runSession(sender = makeSender(), options: {
+    enableThinking?: boolean
+    contextWindow?: number
+    contextWindowTrusted?: boolean
+    model?: string
+    reasoningEffort?: 'off' | 'low' | 'medium' | 'high'
+    messages?: Array<Record<string, unknown>>
+    currentUserMessageId?: string
+    remoteContext?: RemoteContext
+    appendCompactionTransaction?: (...args: unknown[]) => Promise<void>
+  } = {}) {
     return runAssembledSession({
       sender,
       requestId: 'req-usage-1',
       sessionId: 'sess-usage-1',
-      model: 'claude-sonnet-4-20250514',
-      messages: [{ role: 'user', content: 'hello' }],
+      model: options.model ?? 'claude-sonnet-4-20250514',
+      contextWindow: options.contextWindow,
+      contextWindowTrusted: options.contextWindowTrusted ?? options.contextWindow !== undefined,
+      messages: options.messages ?? [{ role: 'user', content: 'hello' }],
+      currentUserMessageId: options.currentUserMessageId,
+      remoteContext: options.remoteContext,
+      appendCompactionTransaction: options.appendCompactionTransaction,
+      reasoningEffort: options.reasoningEffort,
       toolsConfig: DEFAULT_TOOLS_CONFIG,
       workDir: '/tmp',
       userDataDir: '/tmp',
       getApiKey: async () => 'test-key',
       emitFactEvent: (event: Record<string, unknown>) => capturedFacts.push(event),
-      emitSessionEvent: async () => undefined,
+      emitSessionEvent: async (event: { type: string; payload?: Record<string, unknown> }) => { capturedSessionEvents.push(event) },
       appDb: makeDb(),
-      options
+      options: { enableThinking: options.enableThinking }
     })
   }
+
+  it('silently overflowing streamed answer is discarded while both attempts usage facts remain', async () => {
+    const stream = vi.fn(() => {
+      const round = streamRound++
+      return {
+        async *[Symbol.asyncIterator]() {
+          if (round === 0) {
+            yield { type: 'message_start', message: { usage: { input_tokens: 150_000 } } }
+            yield { type: 'content_block_start', index: 0, content_block: { type: 'text' } }
+            yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'discard me' } }
+            yield { type: 'content_block_stop', index: 0 }
+          }
+        },
+        finalMessage: vi.fn(async () => round === 0
+          ? { content: [{ type: 'text', text: 'discard me' }], stop_reason: 'end_turn', usage: { input_tokens: 150_000, output_tokens: 3 } }
+          : { content: [{ type: 'text', text: 'keep me' }], stop_reason: 'end_turn', usage: { input_tokens: 20_000, output_tokens: 2 } })
+      }
+    })
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
+    const result = await runSession(makeSender(), {
+      contextWindow: 100_000,
+      model: 'deepseek-v4-pro',
+      currentUserMessageId: 'current',
+      messages: [{ id: 'old', role: 'user', content: 'old context' }, { id: 'current', role: 'user', content: 'hello' }],
+      appendCompactionTransaction: async () => undefined
+    })
+    expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: 'keep me' }] })
+    expect(capturedSessionEvents.filter((event) => event.type === 'assistant_chunk')).toHaveLength(0)
+    expect(capturedFacts.some((event) => event.type === 'content-delta' && event.text === 'discard me')).toBe(false)
+    expect(capturedSessionEvents.filter((event) => event.type === 'request_usage')).toHaveLength(2)
+    expect(capturedSessionEvents.find((event) => event.type === 'request_usage')?.payload).toMatchObject({ resultDisposition: 'discarded_overflow' })
+  })
+
+  it('publishes ordinary text deltas before the provider stream finishes', async () => {
+    let releaseStream!: () => void
+    let markDeltaSeen!: () => void
+    const streamBlocked = new Promise<void>((resolve) => { releaseStream = resolve })
+    const deltaSeen = new Promise<void>((resolve) => { markDeltaSeen = resolve })
+    mockCreateAnthropicClient.mockReturnValue({
+      messages: {
+        stream: vi.fn(() => ({
+          async *[Symbol.asyncIterator]() {
+            yield { type: 'message_start', message: { usage: { input_tokens: 10_000 } } }
+            yield { type: 'content_block_start', index: 0, content_block: { type: 'text' } }
+            yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'live chunk' } }
+            markDeltaSeen()
+            await streamBlocked
+            yield { type: 'content_block_stop', index: 0 }
+            yield { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', name: 'read_file' } }
+            yield { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"path":"/tmp/ignored"}' } }
+            yield { type: 'content_block_stop', index: 1 }
+            yield { type: 'message_delta', message_delta: { stop_reason: 'end_turn' } }
+            yield { type: 'message_stop' }
+          },
+          finalMessage: vi.fn(async () => ({
+            content: [{ type: 'text', text: 'live chunk' }],
+            stop_reason: 'end_turn',
+            usage: { input_tokens: 10_000, output_tokens: 2 }
+          }))
+        }))
+      }
+    })
+
+    const run = runSession(makeSender(), { contextWindow: 200_000 })
+    await deltaSeen
+    expect(capturedFacts).toContainEqual({ type: 'content-delta', text: 'live chunk' })
+    expect(capturedSessionEvents.some((event) => event.type === 'assistant_chunk')).toBe(false)
+    releaseStream()
+    await expect(run).resolves.toMatchObject({ ok: true })
+    expect(capturedSessionEvents
+      .filter((event) => event.type === 'assistant_chunk')
+      .map((event) => ((event.payload?.delta as { type?: string } | undefined)?.type)))
+      .toEqual(['usage', 'block_start', 'text_delta', 'block_end', 'block_start', 'tool_call_delta', 'block_end', 'finish', 'finish'])
+  })
+
+  it('retracts live text when final usage changes the attempt into a silent overflow', async () => {
+    const stream = vi.fn(() => {
+      const round = streamRound++
+      return {
+        async *[Symbol.asyncIterator]() {
+          if (round === 0) {
+            yield { type: 'message_start', message: { usage: { input_tokens: 90_000 } } }
+            yield { type: 'content_block_start', index: 0, content_block: { type: 'text' } }
+            yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'discard me' } }
+            yield { type: 'content_block_stop', index: 0 }
+          }
+        },
+        finalMessage: vi.fn(async () => round === 0
+          ? { content: [{ type: 'text', text: 'discard me' }], stop_reason: 'end_turn', usage: { input_tokens: 150_000, output_tokens: 2 } }
+          : { content: [{ type: 'text', text: 'accepted answer' }], stop_reason: 'end_turn', usage: { input_tokens: 20_000, output_tokens: 2 } })
+      }
+    })
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
+    const result = await runSession(makeSender(), {
+      contextWindow: 100_000,
+      model: 'deepseek-v4-pro',
+      currentUserMessageId: 'current',
+      messages: [{ id: 'old', role: 'user', content: 'old context' }, { id: 'current', role: 'user', content: 'hello' }],
+      appendCompactionTransaction: async () => undefined
+    })
+    expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: 'accepted answer' }] })
+    expect(capturedFacts).toContainEqual({ type: 'content-delta', text: 'discard me' })
+    expect(capturedFacts).toContainEqual({ type: 'preview-rollback' })
+    expect(capturedSessionEvents
+      .filter((event) => event.type === 'assistant_chunk')
+      .some((event) => JSON.stringify(event.payload).includes('discard me'))).toBe(false)
+  })
+
+  it('does not discard a completed answer when an untrusted legacy fallback window is exceeded', async () => {
+    mockCreateAnthropicClient.mockReturnValue({
+      messages: {
+        stream: vi.fn(() => ({
+          async *[Symbol.asyncIterator]() {},
+          finalMessage: vi.fn(async () => ({
+            content: [{ type: 'text', text: '成功回答' }],
+            stop_reason: 'end_turn',
+            usage: { input_tokens: 300_001, output_tokens: 8 }
+          }))
+        }))
+      }
+    })
+    const result = await runSession(makeSender(), {
+      contextWindow: 200_000,
+      contextWindowTrusted: false,
+      model: 'vendor-large-model'
+    })
+    expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: '成功回答' }] })
+    expect(capturedFacts).not.toContainEqual({ type: 'preview-rollback' })
+  })
+
+  it('keeps max_tokens with missing output usage on the output-recovery path', async () => {
+    const requests: Array<{ messages?: Array<{ role: string; content: unknown }> }> = []
+    mockCreateAnthropicClient.mockReturnValue({
+      messages: {
+        stream: vi.fn((params: { messages?: Array<{ role: string; content: unknown }> }) => {
+          requests.push(params)
+          const round = streamRound++
+          return {
+            async *[Symbol.asyncIterator]() {},
+            finalMessage: vi.fn(async () => round === 0
+              ? { content: [{ type: 'text', text: 'partial but valid' }], stop_reason: 'max_tokens', usage: { input_tokens: 99_500 } }
+              : { content: [{ type: 'text', text: 'complete' }], stop_reason: 'end_turn', usage: { input_tokens: 12_000, output_tokens: 4 } })
+          }
+        })
+      }
+    })
+    const result = await runSession(makeSender(), { contextWindow: 100_000, contextWindowTrusted: true })
+    expect(result).toMatchObject({ ok: true })
+    expect(requests).toHaveLength(2)
+    expect(capturedSessionEvents.filter((event) => event.type === 'request_retry').map((event) => event.payload?.code))
+      .toEqual(['model_output_token_limit'])
+  })
+
+  it('does not publish or execute tool calls from an overflowing attempt', async () => {
+    const stream = vi.fn(() => {
+      const round = streamRound++
+      return {
+        async *[Symbol.asyncIterator]() {
+          if (round === 0) {
+            yield { type: 'message_start', message: { usage: { input_tokens: 150_000 } } }
+            yield { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'overflow-tool', name: 'read_file', input: { path: '/tmp/ignored' } } }
+            yield { type: 'content_block_stop', index: 0 }
+          }
+        },
+        finalMessage: vi.fn(async () => round === 0
+          ? { content: [], stop_reason: 'end_turn', usage: { input_tokens: 150_000, output_tokens: 0 } }
+          : { content: [{ type: 'text', text: 'accepted' }], stop_reason: 'end_turn', usage: { input_tokens: 20_000, output_tokens: 2 } })
+      }
+    })
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
+    const result = await runSession(makeSender(), {
+      contextWindow: 100_000,
+      model: 'deepseek-v4-pro',
+      currentUserMessageId: 'current',
+      messages: [{ id: 'old', role: 'user', content: 'old context' }, { id: 'current', role: 'user', content: 'hello' }],
+      appendCompactionTransaction: async () => undefined
+    })
+    expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: 'accepted' }] })
+    expect(capturedSessionEvents.filter((event) => event.type === 'tool_call')).toHaveLength(0)
+    expect(capturedFacts.filter((event) => event.type === 'tool-use')).toHaveLength(0)
+  })
+
+  it('records available per-call usage when a later stream error makes the attempt fail', async () => {
+    mockCreateAnthropicClient.mockReturnValue({
+      messages: {
+        stream: vi.fn(() => ({
+          async *[Symbol.asyncIterator]() {
+            yield { type: 'message_start', message: { usage: { input_tokens: 1234 } } }
+            throw new Error('stream interrupted after usage')
+          },
+          finalMessage: vi.fn(async () => { throw new Error('stream interrupted after usage') })
+        }))
+      }
+    })
+    const result = await runSession()
+    expect(result.ok).toBe(false)
+    expect(capturedSessionEvents.filter((event) => event.type === 'request_usage')).toHaveLength(1)
+    expect(capturedSessionEvents.find((event) => event.type === 'request_usage')?.payload).toMatchObject({
+      requestId: 'req-usage-1:round:1',
+      usage: { input_tokens: 1234 }
+    })
+  })
+
+  it('updates the remote activity snapshot when a text block closes before finalMessage resolves', async () => {
+    let releaseFinal!: () => void
+    const waitingForFinal = new Promise<void>((resolve) => { releaseFinal = resolve })
+    clearRemoteProgressSession('sess-usage-1')
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({
+      async *[Symbol.asyncIterator]() {
+        yield { type: 'message_start', message: { usage: { input_tokens: 10 } } }
+        yield { type: 'content_block_start', index: 0, content_block: { type: 'text' } }
+        yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '第一段已完成' } }
+        yield { type: 'content_block_stop', index: 0 }
+        await waitingForFinal
+      },
+      finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: '第一段已完成' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 4 } }))
+    })) } })
+    const resultPromise = runSession(makeSender(), {
+      remoteContext: { source: 'feishu', messageId: 'm1', confirmPolicy: 'read-only' },
+      model: 'claude-sonnet-4-20250514'
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(getCurrentRemoteProgressSnapshot('sess-usage-1')).toMatchObject({ kind: 'text', label: '已生成一段回复，继续处理中', publishable: true })
+    expect(getCurrentRemoteProgressSnapshot('sess-usage-1')?.label).not.toContain('第一段已完成')
+    releaseFinal()
+    await expect(resultPromise).resolves.toMatchObject({ ok: true })
+  })
+
+  it('同一响应中工具调用后的正文与思考在工具事实之后按源顺序提交', async () => {
+    const stream = vi.fn(() => {
+      const round = streamRound++
+      return {
+        async *[Symbol.asyncIterator]() {
+          if (round === 0) {
+            yield { type: 'content_block_start', index: 0, content_block: { type: 'text' } }
+            yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '工具前A' } }
+            yield { type: 'content_block_stop', index: 0 }
+            yield { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'interleaved-tool', name: 'read_file', input: { path: 'a.txt' } } }
+            yield { type: 'content_block_stop', index: 1 }
+            yield { type: 'content_block_start', index: 2, content_block: { type: 'thinking' } }
+            yield { type: 'content_block_delta', index: 2, delta: { type: 'thinking_delta', thinking: '工具后思考' } }
+            yield { type: 'content_block_stop', index: 2 }
+            yield { type: 'content_block_start', index: 3, content_block: { type: 'text' } }
+            yield { type: 'content_block_delta', index: 3, delta: { type: 'text_delta', text: '工具后B' } }
+            yield { type: 'content_block_stop', index: 3 }
+          } else {
+            yield { type: 'content_block_start', index: 0, content_block: { type: 'text' } }
+            yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '最终C' } }
+            yield { type: 'content_block_stop', index: 0 }
+          }
+        },
+        finalMessage: vi.fn(async () => round === 0
+          ? { content: [{ type: 'text', text: '工具前A' }, { type: 'tool_use', id: 'interleaved-tool', name: 'read_file', input: { path: 'a.txt' } }, { type: 'thinking', thinking: '工具后思考' }, { type: 'text', text: '工具后B' }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 6 } }
+          : { content: [{ type: 'text', text: '最终C' }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 2 } })
+      }
+    })
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
+
+    await runSession(makeSender(), { enableThinking: true })
+
+    const timelineMessage: Message = { id: 'assistant', sessionId: 'sess-usage-1', role: 'assistant', content: '', timestamp: 0, status: 'streaming', schemaVersion: 1 }
+    const replayed = capturedFacts.reduce((state, fact, index) => reduceAssistantFact(state, fact as AssistantFactEvent, { now: index + 1, createId: () => 'hint' }), timelineMessage)
+    expect(buildAssistantActivityTimeline(replayed).map((item) => item.kind)).toEqual(['text', 'tool', 'thinking', 'text'])
+    const textPositions = capturedFacts.flatMap((fact, index) => fact.type === 'content-delta' ? [index] : [])
+    const toolPosition = capturedFacts.findIndex((fact) => fact.type === 'tool-use')
+    expect(textPositions[0]).toBeLessThan(toolPosition)
+    expect(textPositions[1]).toBeGreaterThan(toolPosition)
+  })
+
+  it('retracts provisional text and thinking when a context error retries the stream', async () => {
+    const stream = vi.fn(() => {
+      const round = streamRound++
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'message_start', message: { usage: { input_tokens: 10 } } }
+          yield { type: 'content_block_start', index: 0, content_block: { type: 'text' } }
+          yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: round === 0 ? 'discarded' : 'accepted' } }
+          if (round === 0) throw Object.assign(new Error('maximum context length exceeded'), { type: 'context_length_exceeded' })
+        },
+        finalMessage: vi.fn(async () => ({
+          content: [{ type: 'text', text: 'accepted' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 1 }
+        }))
+      }
+    })
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
+    const result = await runSession(makeSender(), {
+      contextWindow: 100_000,
+      contextWindowTrusted: true,
+      messages: [{ id: 'old', role: 'user', content: 'old context' }, { id: 'current', role: 'user', content: 'hello' }],
+      currentUserMessageId: 'current',
+      appendCompactionTransaction: async () => undefined
+    })
+    expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: 'accepted' }] })
+    expect(capturedFacts).toContainEqual({ type: 'preview-rollback' })
+    expect(capturedFacts.filter((event) => event.type === 'content-delta').map((event) => event.text)).toEqual(['discarded', 'accepted'])
+    expect(capturedSessionEvents.filter((event) => event.type === 'assistant_chunk')).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ payload: expect.objectContaining({ delta: expect.objectContaining({ text: 'discarded' }) }) })
+    ]))
+  })
 
   it('在无工具 max_tokens 后继续请求，并以完整正文对账', async () => {
     const requests: Array<{ messages?: Array<{ role: string; content: unknown }> }> = []
@@ -233,6 +555,40 @@ describe('runToolChatSession message_start usage', () => {
     const result = await runSession()
     expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: 'ABC' }] })
     expect(capturedFacts).toContainEqual({ type: 'content-reconciled', text: 'ABC' })
+  })
+
+  it('正常工具轮正文在后续截断恢复后仍保留，并保持在工具卡之前', async () => {
+    const stream = vi.fn(() => {
+      const round = streamRound++
+      return {
+        async *[Symbol.asyncIterator]() {
+          const text = round === 0 ? '工具前说明A' : round === 1 ? '截断正文B' : '恢复正文C'
+          const index = round === 0 ? 0 : 0
+          yield { type: 'content_block_start', index, content_block: { type: 'text' } }
+          yield { type: 'content_block_delta', index, delta: { type: 'text_delta', text } }
+          yield { type: 'content_block_stop', index }
+          if (round === 0) {
+            yield { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'accepted-tool', name: 'read_file', input: { path: 'a.txt' } } }
+            yield { type: 'content_block_stop', index: 1 }
+          }
+        },
+        finalMessage: vi.fn(async () => round === 0
+          ? { content: [{ type: 'text', text: '工具前说明A' }, { type: 'tool_use', id: 'accepted-tool', name: 'read_file', input: { path: 'a.txt' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 2 } }
+          : round === 1
+            ? { content: [{ type: 'text', text: '截断正文B' }], stop_reason: 'max_tokens', usage: { input_tokens: 20, output_tokens: 3 } }
+            : { content: [{ type: 'text', text: '恢复正文C' }], stop_reason: 'end_turn', usage: { input_tokens: 30, output_tokens: 4 } })
+      }
+    })
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream } })
+
+    const result = await runSession()
+
+    expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: '工具前说明A截断正文B恢复正文C' }] })
+    expect(capturedFacts).toContainEqual({ type: 'content-reconciled', text: '工具前说明A截断正文B恢复正文C' })
+    const message: Message = { id: 'assistant', sessionId: 'sess-usage-1', role: 'assistant', content: '', timestamp: 0, status: 'streaming', schemaVersion: 1 }
+    const replayed = capturedFacts.reduce((state, fact, index) => reduceAssistantFact(state, fact as AssistantFactEvent, { now: index + 1, createId: () => 'hint' }), message)
+    expect(replayed.content).toBe('工具前说明A截断正文B恢复正文C')
+    expect(buildAssistantActivityTimeline(replayed).map((item) => item.kind)).toEqual(['text', 'tool', 'text'])
   })
 
   it('无正文的工具截断后仍保留后续普通工具轮正文', async () => {

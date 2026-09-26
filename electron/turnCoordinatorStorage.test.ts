@@ -203,10 +203,11 @@ describe('createTurnCoordinatorStorage', () => {
     const turn = coordinator.prepare({ mode: 'create-user', requestId: 'perf-request', sessionId: session.id, input: { text: 'long' }, config: {} })
     const mergeStartedAt = performance.now()
     for (let i = 1; i <= 10_000; i++) coordinator.consume(turn.turnId, { type: 'content-delta', text: 'x'.repeat(32), eventSeq: i })
+    coordinator.consume(turn.turnId, { type: 'preview-commit' })
     const mergeMs = performance.now() - mergeStartedAt
     vi.advanceTimersByTime(2_000)
     expect(storage.getMessage('perf-assistant')?.content).toHaveLength(320_000)
-    expect(storage.findByRequestId(session.id, 'perf-request')?.version).toBe(10_000)
+    expect(storage.findByRequestId(session.id, 'perf-request')?.version).toBe(10_001)
     console.log('[sqlite-turn-checkpoint-perf]', JSON.stringify({ rawDeltaCount: 10_000, mergeMs, checkpointWindowMs: 2_000, checkpointCount: 1 }))
     vi.useRealTimers()
   })

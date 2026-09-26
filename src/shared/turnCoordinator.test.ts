@@ -303,10 +303,28 @@ describe('TurnCoordinator', () => {
     const coordinator = new TurnCoordinator(db, { now: () => 1, id: () => 'id' })
     const started = coordinator.prepare({ mode: 'create-user', requestId: 'r6', sessionId: 's1', input: { text: 'hi' }, config: {} })
     coordinator.consume(started.turnId, { type: 'content-delta', text: 'x' })
+    coordinator.consume(started.turnId, { type: 'preview-commit' })
     vi.advanceTimersByTime(2_000)
     vi.useRealTimers()
-    expect(db.checkpoint).toHaveBeenCalledWith('id', 1, expect.objectContaining({ content: 'x' }))
+    expect(db.checkpoint).toHaveBeenCalledWith('id', 2, expect.objectContaining({ content: 'x' }))
     expect(db.update).not.toHaveBeenCalled()
+  })
+
+  it('周期检查点只持久化 provisional attempt 之前的已接受消息快照', () => {
+    vi.useFakeTimers()
+    const checkpoint = vi.fn()
+    const coordinator = new TurnCoordinator(storage(), { now: () => 1, id: () => 'id' }, checkpoint)
+    const started = coordinator.prepare({ mode: 'create-user', requestId: 'r-preview-checkpoint', sessionId: 's1', input: { text: 'hi' }, config: {} })
+    coordinator.consume(started.turnId, { type: 'content-delta', text: '已接受A' })
+    coordinator.consume(started.turnId, { type: 'preview-commit' })
+    coordinator.consume(started.turnId, { type: 'content-delta', text: '未接受B' })
+    vi.advanceTimersByTime(2_000)
+    vi.useRealTimers()
+
+    expect(checkpoint).toHaveBeenCalledTimes(1)
+    expect(checkpoint).toHaveBeenCalledWith(started.turnId, 3, expect.objectContaining({ content: '已接受A', contentSegments: [{ content: '已接受A', startTime: 1 }] }))
+    expect(JSON.stringify(checkpoint.mock.calls[0]?.[2])).not.toContain('未接受B')
+    expect(JSON.stringify(checkpoint.mock.calls[0]?.[2])).not.toContain('_provisionalSnapshot')
   })
 
   it('checkpoint 写入失败后保留最新 snapshot 并重试，成功后不重复写入', () => {
@@ -316,12 +334,13 @@ describe('TurnCoordinator', () => {
     const coordinator = new TurnCoordinator(db, { now: () => 1, id: () => 'id' }, checkpoint)
     const started = coordinator.prepare({ mode: 'create-user', requestId: 'r-checkpoint-retry', sessionId: 's1', input: { text: 'hi' }, config: {} })
     coordinator.consume(started.turnId, { type: 'content-delta', text: 'latest' })
+    coordinator.consume(started.turnId, { type: 'preview-commit' })
     vi.advanceTimersByTime(2_000)
     expect(checkpoint).toHaveBeenCalledTimes(1)
-    expect(checkpoint).toHaveBeenLastCalledWith(started.turnId, 1, expect.objectContaining({ content: 'latest' }))
+    expect(checkpoint).toHaveBeenLastCalledWith(started.turnId, 2, expect.objectContaining({ content: 'latest' }))
     vi.advanceTimersByTime(100)
     expect(checkpoint).toHaveBeenCalledTimes(2)
-    expect(checkpoint).toHaveBeenLastCalledWith(started.turnId, 1, expect.objectContaining({ content: 'latest' }))
+    expect(checkpoint).toHaveBeenLastCalledWith(started.turnId, 2, expect.objectContaining({ content: 'latest' }))
     vi.advanceTimersByTime(2_000)
     expect(checkpoint).toHaveBeenCalledTimes(2)
     vi.useRealTimers()
@@ -485,9 +504,10 @@ describe('TurnCoordinator', () => {
     const started = coordinator.prepare({ mode: 'create-user', requestId: 'r7-latest', sessionId: 's1', input: { text: 'hi' }, config: {} })
     await expect(coordinator.execute(started.turnId, started.startToken, async () => {
       coordinator.consume(started.turnId, { type: 'content-delta', text: '已经到达的正文' })
+      coordinator.consume(started.turnId, { type: 'preview-commit' })
       throw new Error('provider failed')
     })).rejects.toThrow('provider failed')
-    expect(db.checkpoint).toHaveBeenLastCalledWith('id', 1, expect.objectContaining({ content: '已经到达的正文', status: 'failed' }))
+    expect(db.checkpoint).toHaveBeenLastCalledWith('id', 2, expect.objectContaining({ content: '已经到达的正文', status: 'failed' }))
   })
 
   it('source 返回的旧式 Message 不得覆盖 reducer 已产生的事实', async () => {
@@ -510,9 +530,10 @@ describe('TurnCoordinator', () => {
     const coordinator = new TurnCoordinator(db, { now: () => 1, id: () => 'id' }, checkpoint)
     const started = coordinator.prepare({ mode: 'create-user', requestId: 'r-direct-terminal', sessionId: 's1', input: { text: 'hi' }, config: {} })
     coordinator.consume(started.turnId, { type: 'content-delta', text: 'latest' })
+    coordinator.consume(started.turnId, { type: 'preview-commit' })
     await coordinator.execute(started.turnId, started.startToken, async () => ({ outcome: 'completed' as const }))
     expect(checkpoint).toHaveBeenCalledTimes(1)
-    expect(checkpoint).toHaveBeenCalledWith(started.turnId, 1, expect.objectContaining({ content: 'latest', status: 'completed' }))
+    expect(checkpoint).toHaveBeenCalledWith(started.turnId, 2, expect.objectContaining({ content: 'latest', status: 'completed' }))
     vi.advanceTimersByTime(2_000)
     expect(checkpoint).toHaveBeenCalledTimes(1)
     vi.useRealTimers()
@@ -542,10 +563,11 @@ describe('TurnCoordinator', () => {
     const coordinator = new TurnCoordinator(db, { now: () => 1, id: () => 'id', finishingWindowMs: 5_000 }, checkpoint, vi.fn())
     const started = coordinator.prepare({ mode: 'create-user', requestId: 'r-cancel-checkpoint', sessionId: 's1', input: { text: 'hi' }, config: {} })
     coordinator.consume(started.turnId, { type: 'content-delta', text: 'before cancel' })
+    coordinator.consume(started.turnId, { type: 'preview-commit' })
     expect(coordinator.cancel(started.turnId)).toBe(true)
     vi.advanceTimersByTime(5_000)
     expect(checkpoint).toHaveBeenCalledTimes(1)
-    expect(checkpoint).toHaveBeenCalledWith(started.turnId, 2, expect.objectContaining({ content: 'before cancel', status: 'cancelled' }))
+    expect(checkpoint).toHaveBeenCalledWith(started.turnId, 3, expect.objectContaining({ content: 'before cancel', status: 'cancelled' }))
     vi.advanceTimersByTime(2_000)
     expect(checkpoint).toHaveBeenCalledTimes(1)
     vi.useRealTimers()
@@ -574,6 +596,22 @@ describe('TurnCoordinator', () => {
     resolveSource({ outcome: 'completed' })
     await Promise.resolve()
     expect(coordinator.getTerminal(started.turnId)).toMatchObject({ outcome: 'cancelled' })
+  })
+
+  it('finishing 状态接受在途 provisional rollback 并在取消终态落盘前撤回正文', async () => {
+    const db = storage()
+    const coordinator = new TurnCoordinator(db, { now: () => 1, id: () => 'id' }, undefined, vi.fn())
+    const started = coordinator.prepare({ mode: 'create-user', requestId: 'r-cancel-preview', sessionId: 's1', input: { text: 'hi' }, config: {} })
+    let resolveSource!: (value: { outcome: 'cancelled' }) => void
+    const execution = coordinator.execute(started.turnId, started.startToken, () => new Promise((resolve) => { resolveSource = resolve }))
+    coordinator.consume(started.turnId, { type: 'content-delta', text: '暂显内容' })
+    expect(coordinator.cancel(started.turnId)).toBe(true)
+    coordinator.consume(started.turnId, { type: 'preview-rollback' })
+    resolveSource({ outcome: 'cancelled' })
+    await execution
+
+    expect(coordinator.getTerminal(started.turnId)).toMatchObject({ outcome: 'cancelled', message: { content: '' } })
+    expect(db.checkpoint).toHaveBeenLastCalledWith('id', 3, expect.objectContaining({ content: '', status: 'cancelled' }))
   })
 
   it('finishing 窗口只接受在途工具结果，屏蔽新的 tool-use 和 source completed', () => {
