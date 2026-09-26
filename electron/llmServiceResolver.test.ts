@@ -18,7 +18,7 @@ import {
   validateLlmServices
 } from './llmServiceResolver'
 import type { ModelEntry } from '../src/shared/domainTypes'
-import { DEFAULT_MODELS } from '../src/shared/domainTypes'
+import { normalizeModelEntry } from '../src/shared/llmModelConfig'
 
 vi.mock('./secureApiKey', () => ({
   isSecretStorageAvailable: () => true,
@@ -27,7 +27,13 @@ vi.mock('./secureApiKey', () => ({
 }))
 
 function makeModels(): ModelEntry[] {
-  return DEFAULT_MODELS.map((m, i) => ({ id: String(i + 1), ...m }))
+  return [
+    normalizeModelEntry({ id: '1', name: 'deepseek-v4-pro' }),
+    normalizeModelEntry({ id: '2', name: 'deepseek-flash', isFast: true }),
+    normalizeModelEntry({ id: '3', name: 'kimi-k2.7-code' }),
+    normalizeModelEntry({ id: '4', name: 'minimax-m2.7' }),
+    normalizeModelEntry({ id: '5', name: 'glm-5.3' })
+  ]
 }
 
 describe('llmServiceResolver', () => {

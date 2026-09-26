@@ -3,11 +3,13 @@ import type { ComponentProps } from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { Provider } from 'react-redux'
 import { configureStore } from '@reduxjs/toolkit'
-import chatReducer, { restoreLastUsage, setContextProjection } from '../../store/chatSlice'
+import chatReducer, { restoreLastUsage, setContextProjection, setSession } from '../../store/chatSlice'
 import type { ContextPressureProjection } from '../../../shared/contextMeter'
 import { changeAppLocale } from '../../i18n/localeSync'
 import type { SessionUsage } from '../../../shared/sessionUsage'
 import configReducer, { setConfig } from '../../store/configSlice'
+import sessionReducer, { setSessions } from '../../store/sessionSlice'
+import { resolveSessionModelBinding } from '../../services/sessionModelBinding'
 import { buildContextRingSegments, ContextUsageRing } from './ContextUsageRing'
 import type { AppConfig, Message } from '../../../shared/domainTypes'
 import {
@@ -50,12 +52,16 @@ function renderRing(
   lastUsage?: SessionUsage | null,
   configOverrides?: Partial<AppConfig>,
   ringProps?: ComponentProps<typeof ContextUsageRing>,
-  projection?: ContextPressureProjection
+  projection?: ContextPressureProjection,
+  sessionMaxTokens = 64_000,
+  sessionModel = 'claude-sonnet-4-6'
 ) {
   const store = configureStore({
-    reducer: { chat: chatReducer, config: configReducer }
+    reducer: { chat: chatReducer, config: configReducer, session: sessionReducer }
   })
   store.dispatch(setConfig(makeConfig(configOverrides)))
+  store.dispatch(setSession('s1'))
+  store.dispatch(setSessions([{ id: 's1', name: 'test', preview: '', model: sessionModel, temperature: 0.7, maxTokens: sessionMaxTokens, createdAt: 1, updatedAt: 1, messageCount: 0, skillsState: {}, metadata: {}, schemaVersion: 1 }]))
   if (lastUsage !== undefined) {
     store.dispatch(restoreLastUsage(lastUsage))
   }
@@ -140,7 +146,7 @@ describe('ContextUsageRing', () => {
     fireEvent.mouseEnter(svg)
     await waitFor(() => {
       expect(screen.getByText('暂无上下文用量数据')).toBeDefined()
-    })
+    }, undefined, undefined, undefined, 64_000, 'claude-haiku-4-5')
   })
 
   it('shows tooltip with estimated occupancy and breakdown on hover', async () => {
@@ -163,7 +169,7 @@ describe('ContextUsageRing', () => {
     expect(screen.queryByText(/缓存写入/)).toBeNull()
   })
 
-  it('uses model maxTokens for output reserve', async () => {
+  it('uses current session effective request maxTokens for output reserve', async () => {
     renderRing({ input_tokens: 10000, output_tokens: 0 })
     const svg = document.querySelector('svg')!
     fireEvent.mouseEnter(svg)
@@ -171,6 +177,47 @@ describe('ContextUsageRing', () => {
       const text = screen.getByRole('tooltip').textContent ?? ''
       expect(text).toContain('输出预留')
       expect(text).toContain('64,000')
+    })
+  })
+
+  it('Kimi context ring reserves the default session request budget instead of its full model capability', async () => {
+    renderRing({ input_tokens: 2_000, output_tokens: 0 }, {
+      model: 'kimi-k2.7-code',
+      models: [{ id: 'kimi', name: 'kimi-k2.7-code', maximumContext: 262_144, maxTokens: 262_144, isDefault: false, isFast: false, isVision: true, enabled: true }]
+    }, undefined, undefined, 4_096)
+    const svg = document.querySelector('svg')!
+    fireEvent.mouseEnter(svg)
+    await waitFor(() => {
+      const text = screen.getByRole('tooltip').textContent ?? ''
+      expect(text).toContain('输出预留')
+      expect(text).toContain('16,384')
+      const reserved = Array.from(document.querySelectorAll('circle')).find((circle) => circle.getAttribute('stroke') === 'var(--sa-context-ring-reserved)')
+      expect(Number(reserved?.getAttribute('stroke-dasharray')?.split(' ')[0])).toBeCloseTo(2 * Math.PI * 10 * (16_384 / 262_144))
+    })
+  })
+
+  it('uses the active session model window when it differs from the global default', async () => {
+    const config = makeConfig({
+      model: 'deepseek-v4-pro',
+      activeLlmServiceId: 'svc',
+      activeLlmServiceIds: ['svc'],
+      llmServices: [{ id: 'svc', name: 'Test', baseUrl: '', apiKeyPresent: true, supportedModelIds: ['deepseek', 'haiku'] }],
+      models: [
+        { id: 'deepseek', name: 'deepseek-v4-pro', maximumContext: 1_000_000, maxTokens: 32_000, isDefault: true, isFast: false, isVision: false, enabled: true },
+        { id: 'haiku', name: 'claude-haiku-4-5', maximumContext: 200_000, maxTokens: 32_000, isDefault: false, isFast: false, isVision: false, enabled: true }
+      ]
+    })
+    expect(resolveSessionModelBinding(config, { id: 's1', model: 'claude-haiku-4-5' } as never).modelName).toBe('claude-haiku-4-5')
+    const rendered = renderRing({ input_tokens: 150_000, output_tokens: 0 }, config, undefined, undefined, 64_000, 'claude-haiku-4-5')
+    expect(rendered.store.getState().chat.currentSessionId).toBe('s1')
+    expect(rendered.store.getState().session.list[0]?.model).toBe('claude-haiku-4-5')
+    expect(resolveSessionModelBinding(rendered.store.getState().config.config!, rendered.store.getState().session.list[0]).modelName).toBe('claude-haiku-4-5')
+    const svg = document.querySelector('svg')!
+    fireEvent.mouseEnter(svg)
+    await waitFor(() => {
+      const text = screen.getByRole('tooltip').textContent ?? ''
+      expect(text).toContain('200,000')
+      expect(text).toContain('75.0%')
     })
   })
 

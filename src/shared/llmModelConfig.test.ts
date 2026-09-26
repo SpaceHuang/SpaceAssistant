@@ -4,13 +4,16 @@ import {
   buildChatModelOptions,
   diffFetchedModels,
   getAvailableModels,
+  getModelIds,
   mergeFetchedModels,
   migrateModelEntries,
   migrateBuiltinModelName,
-  pruneDisabledModelsFromServices,
+  pruneMissingModelsFromServices,
   resolvePreferredModelId,
   resolveServiceForModel,
-  sortModelsFastFirst
+  sortModelsFastFirst,
+  resolveModelContextWindow,
+  buildCustomModelEntry
 } from './llmModelConfig'
 
 function makeModel(overrides: Partial<ModelEntry> & Pick<ModelEntry, 'id' | 'name'>): ModelEntry {
@@ -58,10 +61,11 @@ describe('llmModelConfig', () => {
     ])
   })
 
-  it('getAvailableModels excludes disabled models', () => {
+  it('getAvailableModels keeps legacy disabled entries available', () => {
     const disabled = models.map((m) => (m.id === '3' ? { ...m, enabled: false } : m))
     const available = getAvailableModels(disabled, services, ['s1', 's2'])
-    expect(available.some((m) => m.name === 'kimi-k2.7-code')).toBe(false)
+    expect(available.some((m) => m.name === 'kimi-k2.7-code')).toBe(true)
+    expect(getModelIds(disabled)).toEqual(['1', '2', '3', '4'])
   })
 
   it('sortModelsFastFirst keeps order within groups', () => {
@@ -70,12 +74,127 @@ describe('llmModelConfig', () => {
     expect(sorted[1]!.isFast).toBe(true)
   })
 
-  it('migrateModelEntries fills isVision from builtin table', () => {
+  it('migrateModelEntries derives vision support from pi-ai metadata', () => {
     const migrated = migrateModelEntries([
       makeModel({ id: 'x', name: 'kimi-k2.7-code', isVision: undefined as unknown as boolean })
     ])
     expect(migrated[0]!.isVision).toBe(true)
     expect(migrated[0]!.isDefault).toBe(false)
+  })
+
+  it('migrateModelEntries upgrades legacy disabled models to enabled', () => {
+    expect(migrateModelEntries([makeModel({ id: 'old-off', name: 'custom', enabled: false })])[0]?.enabled).toBe(true)
+  })
+
+  it('does not assign product fast tags by model name and preserves saved values', () => {
+    const [unlabeled] = migrateModelEntries([makeModel({ id: 'new-haiku', name: 'claude-haiku-4-5' })])
+    const [savedFast] = migrateModelEntries([makeModel({ id: 'saved-flash', name: 'deepseek-flash', isFast: true })])
+    expect(unlabeled?.isFast).toBe(false)
+    expect(savedFast?.isFast).toBe(true)
+  })
+
+  it('uses model baseline for missing parameters while preserving explicit values', () => {
+    const normalized = migrateModelEntries([
+      makeModel({ id: 'base', name: 'deepseek-v4-pro', maximumContext: undefined as unknown as number, maxTokens: undefined as unknown as number }),
+      makeModel({ id: 'custom', name: 'deepseek-v4-pro', maximumContext: 500_000, maxTokens: 12_000 })
+    ])
+    expect(normalized[0]).toMatchObject({ maximumContext: 1_000_000, maxTokens: 384_000, isVision: false })
+    expect(normalized[1]).toMatchObject({ maximumContext: 500_000, maxTokens: 12_000 })
+  })
+
+  it('tracks whether a 200k window is real configuration or a generic fallback', () => {
+    const entries = migrateModelEntries([
+      makeModel({ id: 'real-200k', name: 'claude-haiku-4-5', maximumContext: 200_000 }),
+      makeModel({ id: 'fallback-200k', name: 'unlisted-model', maximumContext: undefined as unknown as number })
+    ])
+    expect(entries[0]).toMatchObject({ maximumContext: 200_000, maximumContextSource: 'user' })
+    expect(entries[1]).toMatchObject({ maximumContext: 200_000, maximumContextSource: 'fallback' })
+  })
+
+  it('does not trust a legacy unknown-model 200k value that came from automatic fetch defaults', () => {
+    const legacyFetched = makeModel({ id: 'legacy-fetch', name: 'vendor-large-model', maximumContext: 200_000 })
+    const [migrated] = migrateModelEntries([legacyFetched])
+    expect(migrated).toMatchObject({ maximumContext: 200_000, maximumContextSource: 'fallback' })
+    expect(resolveModelContextWindow('vendor-large-model', [legacyFetched])).toEqual({ contextWindow: 200_000, trusted: false })
+  })
+
+  it('resolves a source-aware context window for desktop, remote, and automation callers', () => {
+    expect(resolveModelContextWindow('custom', [makeModel({ id: 'custom', name: 'custom', maximumContextSource: 'fallback' })]))
+      .toEqual({ contextWindow: 200_000, trusted: false })
+    expect(resolveModelContextWindow('claude-haiku-4-5', [makeModel({ id: 'haiku', name: 'claude-haiku-4-5' })]))
+      .toEqual({ contextWindow: 200_000, trusted: true })
+  })
+
+  it('derives omitted custom-model capacities and only trusts a window the user entered', () => {
+    expect(buildCustomModelEntry({ id: 'known', name: 'gpt-5.5', isFast: false, isVision: true }))
+      .toMatchObject({ maximumContext: 272_000, maximumContextSource: 'baseline', maxTokens: 128_000 })
+    expect(buildCustomModelEntry({ id: 'unknown', name: 'custom-model', isFast: false, isVision: false }))
+      .toMatchObject({ maximumContext: 200_000, maximumContextSource: 'fallback' })
+    expect(buildCustomModelEntry({ id: 'explicit', name: 'custom-model', maximumContext: 200_000, isFast: false, isVision: false }))
+      .toMatchObject({ maximumContext: 200_000, maximumContextSource: 'user' })
+  })
+
+  it('migrates every reviewed changed default and preserves minimax vision eligibility', () => {
+    const migrated = migrateModelEntries([
+      makeModel({ id: 'gpt-old', name: 'gpt-5.5', maximumContext: 1_000_000, maxTokens: 128_000, isVision: true }),
+      makeModel({ id: 'kimi-old', name: 'kimi-k2.7-code', maximumContext: 262_144, maxTokens: 98_304, isVision: true }),
+      makeModel({ id: 'glm-old', name: 'glm-5.3', maximumContext: 1_000_000, maxTokens: 128_000, isVision: false }),
+      makeModel({ id: 'glm-flash-old', name: 'glm-5.3-flash', maximumContext: 1_000_000, maxTokens: 128_000, isVision: true }),
+      makeModel({ id: 'minimax-old', name: 'minimax-m2.7', maximumContext: 204_800, maxTokens: 204_800, isVision: true })
+    ])
+    expect(migrated.map(({ maximumContext, maxTokens, isVision }) => ({ maximumContext, maxTokens, isVision }))).toEqual([
+      { maximumContext: 272_000, maxTokens: 128_000, isVision: true },
+      { maximumContext: 262_144, maxTokens: 98_304, isVision: true },
+      { maximumContext: 1_000_000, maxTokens: 131_072, isVision: false },
+      { maximumContext: 1_000_000, maxTokens: 131_072, isVision: true },
+      { maximumContext: 204_800, maxTokens: 131_072, isVision: true }
+    ])
+    expect(resolveModelContextWindow('gpt-5.5', [migrated[0]!])).toMatchObject({ contextWindow: 272_000, trusted: true })
+  })
+
+  it('migrates only fields equal to known previous defaults, independently', () => {
+    const migrated = migrateModelEntries([
+      makeModel({ id: 'old', name: 'deepseek-v4-pro', maximumContext: 1_048_565, maxTokens: 300_000 }),
+      makeModel({ id: 'edited', name: 'deepseek-v4-pro', maximumContext: 500_000, maxTokens: 300_000 }),
+      makeModel({ id: 'sonnet-old', name: 'claude-sonnet-4-6', maximumContext: 750_000, maxTokens: 64_000 }),
+      makeModel({ id: 'unknown-old', name: 'claude-sonnet-4-6', maximumContext: 100_000, maxTokens: 32_000 })
+    ])
+    expect(migrated[0]).toMatchObject({ maximumContext: 1_000_000, maxTokens: 300_000 })
+    expect(migrated[1]).toMatchObject({ maximumContext: 500_000, maxTokens: 300_000 })
+    expect(migrated[2]).toMatchObject({ maximumContext: 750_000, maxTokens: 128_000 })
+    expect(migrated[3]).toMatchObject({ maxTokens: 32_000 })
+  })
+
+  it('preserves explicitly user-sourced historical window values across migration and runtime resolution', () => {
+    const explicit = makeModel({ id: 'custom-gpt', name: 'gpt-5.5', maximumContext: 1_000_000, maximumContextSource: 'user' })
+    expect(migrateModelEntries([explicit])[0]).toMatchObject({ maximumContext: 1_000_000, maximumContextSource: 'user' })
+    expect(resolveModelContextWindow('gpt-5.5', [explicit])).toEqual({ contextWindow: 1_000_000, trusted: true })
+
+    const legacy = makeModel({ id: 'legacy-gpt', name: 'gpt-5.5', maximumContext: 1_000_000, maximumContextSource: undefined })
+    expect(migrateModelEntries([legacy])[0]).toMatchObject({ maximumContext: 272_000, maximumContextSource: 'baseline' })
+    expect(resolveModelContextWindow('gpt-5.5', [legacy])).toEqual({ contextWindow: 272_000, trusted: true })
+  })
+
+  it('preserves supportsThinking false when creating and migrating model entries', () => {
+    expect(buildCustomModelEntry({ id: 'no-thinking-new', name: 'custom-model', isFast: false, isVision: false, supportsThinking: false }))
+      .toMatchObject({ supportsThinking: false })
+    expect(migrateModelEntries([makeModel({ id: 'no-thinking-old', name: 'gpt-5.5', supportsThinking: false })])[0])
+      .toMatchObject({ supportsThinking: false })
+  })
+
+  it('keeps an empty model catalog empty and derives preferences only from available entries', async () => {
+    expect(getModelIds([])).toEqual([])
+    const { getDefaultPreferredModelIds } = await import('./llmModelConfig')
+    expect(getDefaultPreferredModelIds([])).toEqual({
+      preferredLanguageModelId: '',
+      preferredFastLanguageModelId: '',
+      preferredVisionModelId: ''
+    })
+    expect(getDefaultPreferredModelIds(models)).toEqual({
+      preferredLanguageModelId: '1',
+      preferredFastLanguageModelId: '2',
+      preferredVisionModelId: '2'
+    })
   })
 
   it('migrateModelEntries skips rename when the target name is already taken', () => {
@@ -117,7 +236,22 @@ describe('llmModelConfig', () => {
     const available = getAvailableModels(models, services, ['s1'])
     expect(resolvePreferredModelId('language', available, 'missing')).toBe('1')
     expect(resolvePreferredModelId('fast', available, 'missing')).toBe('2')
-    expect(resolvePreferredModelId('vision', available, 'missing')).toBeNull()
+    expect(resolvePreferredModelId('vision', available, 'missing')).toBe('2')
+  })
+
+  it('快速模型优选允许选择任意可用语言模型，不要求目录 isFast 标签', () => {
+    const available = [makeModel({ id: 'ordinary', name: 'deepseek-v4-pro', isFast: false })]
+    expect(resolvePreferredModelId('fast', available, 'ordinary')).toBe('ordinary')
+    expect(resolvePreferredModelId('fast', available, 'missing')).toBe('ordinary')
+  })
+
+  it('vision eligibility follows pi-ai input=image metadata instead of the editable catalog flag', () => {
+    const available = [
+      makeModel({ id: 'pi-vision', name: 'kimi-k2.7-code', isVision: false }),
+      makeModel({ id: 'local-only-vision', name: 'minimax-m2.7', isVision: true })
+    ]
+
+    expect(resolvePreferredModelId('vision', available, 'local-only-vision')).toBe('pi-vision')
   })
 
   it('buildChatModelOptions always uses service prefix in displayName', () => {
@@ -130,8 +264,8 @@ describe('llmModelConfig', () => {
     expect(flash?.displayName).toBe('Deep-deepseek-flash')
   })
 
-  it('pruneDisabledModelsFromServices removes disabled ids', () => {
-    const pruned = pruneDisabledModelsFromServices(services, new Set(['1']))
+  it('pruneMissingModelsFromServices removes ids absent from the model catalog', () => {
+    const pruned = pruneMissingModelsFromServices(services, new Set(['1']))
     expect(pruned[0]!.supportedModelIds).toEqual(['1'])
     expect(pruned[1]!.supportedModelIds).toEqual(['1'])
   })
@@ -153,7 +287,7 @@ describe('mergeFetchedModels', () => {
     return () => `new-${++n}`
   })()
 
-  it('creates entries for unknown ids with defaults and builtin tags', () => {
+  it('creates entries for unknown ids with capability defaults', () => {
     const result = mergeFetchedModels(
       [],
       [{ id: 'claude-haiku-4-5' }, { id: 'vendor-x-model' }],
@@ -164,7 +298,7 @@ describe('mergeFetchedModels', () => {
     const haiku = result.models[0]!
     expect(haiku.name).toBe('claude-haiku-4-5')
     expect(haiku.id).toBe('new-1')
-    expect(haiku.isFast).toBe(true)
+    expect(haiku.isFast).toBe(false)
     expect(haiku.isVision).toBe(true)
     expect(haiku.enabled).toBe(true)
     const custom = result.models[1]!

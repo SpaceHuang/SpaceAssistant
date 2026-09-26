@@ -173,7 +173,7 @@ describe('resolveTrustedTurnExecutionConfig 产出档位', () => {
     const db = createMemoryAppDb()
     seedLlmConfig(db, [
       makeModel({ id: 'text', name: 'deepseek-chat' }),
-      makeModel({ id: 'vision', name: 'deepseek-vl', isVision: true, supportsThinking: false })
+      makeModel({ id: 'vision', name: 'kimi-k2.7-code', isVision: true, supportsThinking: false })
     ])
     setConfigValue(db, 'config.preferredVisionModelId', 'vision')
     const session = createSession(db, { name: 's', model: 'deepseek-chat' })
@@ -185,6 +185,6 @@ describe('resolveTrustedTurnExecutionConfig 产出档位', () => {
       'desktop',
       { projectMemoryEnabled: true },
       { requiresVision: true }
-    )).resolves.toMatchObject({ model: 'deepseek-vl', thinkingEffort: 'off' })
+    )).resolves.toMatchObject({ model: 'kimi-k2.7-code', thinkingEffort: 'off' })
   })
 })

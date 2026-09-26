@@ -48,6 +48,7 @@ export interface AgentInvocationMaterials {
   windowId?: string
   model: string
   contextWindow?: number
+  contextWindowTrusted?: boolean
   baseUrl?: string
   messages: readonly unknown[]
   system?: string
@@ -218,6 +219,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       model: materials.model,
       ...(materials.llmServiceId !== undefined ? { llmServiceId: materials.llmServiceId } : {}),
       ...(materials.contextWindow !== undefined ? { contextWindow: materials.contextWindow } : {}),
+      ...(materials.contextWindowTrusted !== undefined ? { contextWindowTrusted: materials.contextWindowTrusted } : {}),
       ...(materials.system !== undefined ? { system: materials.system } : {}),
       ...(materials.options !== undefined ? { options: materials.options } : {}),
       ...(resolvedLocale !== undefined ? { locale: resolvedLocale } : {}),

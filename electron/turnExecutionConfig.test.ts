@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from './database/testHelpers'
 import { createSession, getSession, setConfigValue, type AppDatabase } from './database'
-import { resolveTrustedTurnExecutionConfig } from './turnExecutionConfig'
+import { resolveTrustedTurnExecutionConfig, resolveThinkingEffort } from './turnExecutionConfig'
 import type { ModelEntry } from '../src/shared/domainTypes'
 
 vi.mock('./agentLogger/agentLogger', () => ({ logAgentEvent: vi.fn() }))
@@ -67,7 +67,7 @@ describe('resolveTrustedTurnExecutionConfig', () => {
     const db = createMemoryAppDb()
     seedLlmConfig(db, [
       makeModel({ id: 'text', name: 'deepseek-chat' }),
-      makeModel({ id: 'vision', name: 'deepseek-vl', isVision: true })
+      makeModel({ id: 'vision', name: 'kimi-k2.7-code', isVision: true })
     ], { preferredLanguageModelId: 'text' })
     const session = createSession(db, { name: 'vision', model: 'deepseek-chat', maxTokens: 8192 })
     setConfigValue(db, 'config.preferredVisionModelId', 'vision')
@@ -79,9 +79,9 @@ describe('resolveTrustedTurnExecutionConfig', () => {
       { projectMemoryEnabled: true },
       { requiresVision: true }
     )).resolves.toMatchObject({
-      model: 'deepseek-vl',
+      model: 'kimi-k2.7-code',
       llmServiceId: SERVICE_ID,
-      effectiveModelForUsage: 'deepseek-vl'
+      effectiveModelForUsage: 'kimi-k2.7-code'
     })
   })
 
@@ -95,6 +95,14 @@ describe('resolveTrustedTurnExecutionConfig', () => {
       llmServiceId: SERVICE_ID
     })
     expect(getSession(db, session.id)?.model).toBe('deepseek-flash')
+  })
+
+  it('装配时保留显式 supportsThinking false 并将请求档位降为 off', async () => {
+    const db = createMemoryAppDb()
+    seedLlmConfig(db, [makeModel({ id: 'gpt', name: 'gpt-5.5', supportsThinking: false })], { preferredLanguageModelId: 'gpt' })
+    const session = createSession(db, { name: 'no-thinking', model: 'gpt-5.5' })
+    await expect(resolveTrustedTurnExecutionConfig(db, session.id, 'desktop')).resolves.toMatchObject({ thinkingEffort: 'off' })
+    expect(resolveThinkingEffort('high', null, makeModel({ id: 'custom', name: 'custom', supportsThinking: false }))).toBe('off')
   })
 
   it('模型已下架时重绑当前优选模型并回写 session，而不是让该会话永久失败', async () => {
@@ -125,7 +133,7 @@ describe('resolveTrustedTurnExecutionConfig', () => {
     const db = createMemoryAppDb()
     seedLlmConfig(db, [
       makeModel({ id: 'text', name: 'deepseek-chat' }),
-      makeModel({ id: 'vision', name: 'deepseek-vl', isVision: true })
+      makeModel({ id: 'vision', name: 'kimi-k2.7-code', isVision: true })
     ], { preferredLanguageModelId: 'text' })
     // 视觉模型只由「没有 Key」的服务提供：视觉路由存在（options 不校验 Key），但凭据解析必失败。
     setConfigValue(db, 'config.llmServices', JSON.stringify([
@@ -148,13 +156,13 @@ describe('resolveTrustedTurnExecutionConfig', () => {
     ]))
     setConfigValue(db, 'config.activeLlmServiceIds', JSON.stringify([SERVICE_ID, 'svc-vision-no-key']))
     setConfigValue(db, 'config.preferredVisionModelId', 'vision')
-    const session = createSession(db, { name: 'vision-no-key', model: 'deepseek-vl' })
+    const session = createSession(db, { name: 'vision-no-key', model: 'kimi-k2.7-code' })
 
     await expect(resolveTrustedTurnExecutionConfig(db, session.id, 'desktop', {}, { requiresVision: true }))
-      .rejects.toThrow('视觉模型「deepseek-vl」当前不可用')
+      .rejects.toThrow('视觉模型「kimi-k2.7-code」当前不可用')
     // 会话模型本身没问题，不能被一次视觉配置事故改写成 language 优选文本模型
     const stored = getSession(db, session.id)
-    expect(stored?.model).toBe('deepseek-vl')
+    expect(stored?.model).toBe('kimi-k2.7-code')
     expect(stored?.llmServiceId).toBeUndefined()
   })
 
@@ -162,7 +170,7 @@ describe('resolveTrustedTurnExecutionConfig', () => {
     const db = createMemoryAppDb()
     seedLlmConfig(db, [
       makeModel({ id: 'text', name: 'deepseek-chat' }),
-      makeModel({ id: 'vision', name: 'deepseek-vl', isVision: true })
+      makeModel({ id: 'vision', name: 'kimi-k2.7-code', isVision: true })
     ], { preferredLanguageModelId: 'text' })
     setConfigValue(db, 'config.llmServices', JSON.stringify([
       {
@@ -188,7 +196,7 @@ describe('resolveTrustedTurnExecutionConfig', () => {
     const session = createSession(db, { name: 'text-with-image', model: 'deepseek-chat' })
 
     await expect(resolveTrustedTurnExecutionConfig(db, session.id, 'desktop', {}, { requiresVision: true }))
-      .rejects.toThrow('视觉模型「deepseek-vl」当前不可用')
+      .rejects.toThrow('视觉模型「kimi-k2.7-code」当前不可用')
     const stored = getSession(db, session.id)
     expect(stored?.model).toBe('deepseek-chat')
     expect(stored?.llmServiceId).toBeUndefined()

@@ -22,7 +22,7 @@ import { DEFAULT_FEISHU_CONFIG, type FeishuConfig, type WorkDirProfile } from '.
 
 import { DEFAULT_WECHAT_CONFIG, type WeChatConfig } from '../../../shared/wechatTypes'
 
-import { DEFAULT_MODELS } from '../../../shared/domainTypes'
+import { getModelIds } from '../../../shared/llmModelConfig'
 
 import {
 
@@ -51,7 +51,7 @@ import type { RemoteImCommonConfig } from '../../../shared/imTypes'
 
 import { ToolsSettingsTab } from './ToolsSettingsTab'
 
-import { ModelsSettingsTab, getDefaultPreferredModelIds } from './ModelsSettingsTab'
+import { ModelsSettingsTab } from './ModelsSettingsTab'
 
 import {
 
@@ -159,8 +159,8 @@ export function ConfigSettingsPage() {
   const thinkingEffortWatch = Form.useWatch('thinkingEffort', form)
 
   const [models, setModels] = useState<ModelEntry[]>([])
-  const enabledModelIds = useMemo(() => models.filter((m) => m.enabled).map((m) => m.id), [models])
-  const llmDrafts = useLlmServiceDrafts(open, cfg, enabledModelIds)
+  const modelIds = useMemo(() => getModelIds(models), [models])
+  const llmDrafts = useLlmServiceDrafts(open, cfg, modelIds)
 
   const [preferredLanguageModelId, setPreferredLanguageModelId] = useState('')
   const [preferredFastLanguageModelId, setPreferredFastLanguageModelId] = useState('')
@@ -279,7 +279,7 @@ export function ConfigSettingsPage() {
 
       setWorkDirProfiles(cfg.workDirProfiles ?? [])
 
-      setModels(cfg.models.length > 0 ? cfg.models : DEFAULT_MODELS.map((m, i) => ({ id: String(i + 1), ...m })))
+      setModels(cfg.models ?? [])
       setPreferredLanguageModelId(cfg.preferredLanguageModelId ?? '')
       setPreferredFastLanguageModelId(cfg.preferredFastLanguageModelId ?? '')
       setPreferredVisionModelId(cfg.preferredVisionModelId ?? '')
@@ -359,7 +359,7 @@ export function ConfigSettingsPage() {
         : cfg.activeLlmServiceId
           ? [cfg.activeLlmServiceId]
           : []
-      const llmState = initLlmServiceTabState(cfg.llmServices ?? [], activeIds, enabledModelIds)
+      const llmState = initLlmServiceTabState(cfg.llmServices ?? [], activeIds, modelIds)
 
       const timer = window.setTimeout(() => {
 
@@ -551,17 +551,6 @@ export function ConfigSettingsPage() {
     }
   }
 
-  const resetModels = () => {
-    const next = DEFAULT_MODELS.map((m, i) => ({ id: String(i + 1), ...m }))
-    setModels(next)
-    const preferred = getDefaultPreferredModelIds(next)
-    setPreferredLanguageModelId(preferred.preferredLanguageModelId)
-    setPreferredFastLanguageModelId(preferred.preferredFastLanguageModelId)
-    setPreferredVisionModelId(preferred.preferredVisionModelId)
-  }
-
-
-
   const persistSettings = async (closeAfterSave: boolean) => {
 
     const v = await form.validateFields()
@@ -585,16 +574,6 @@ export function ConfigSettingsPage() {
     setWorkDirSaveError(null)
 
     const activeProfile = resolveWorkDirProfileForSave(workDirProfiles, cfg?.activeWorkDirProfileId)
-
-    const enabledModels = models.filter((m) => m.enabled)
-
-    if (enabledModels.length === 0) {
-
-      message.warning(tConfig('messages.enableAtLeastOneModel'))
-
-      return false
-
-    }
 
     const llmErr = validateLlmServiceDrafts(llmDrafts.state)
 
@@ -693,7 +672,7 @@ export function ConfigSettingsPage() {
           : next.activeLlmServiceId
             ? [next.activeLlmServiceId]
             : [],
-        next.models.filter((m) => m.enabled).map((m) => m.id)
+        getModelIds(next.models)
       ),
 
       toolUi.deniedTools,
@@ -910,7 +889,6 @@ export function ConfigSettingsPage() {
             draftsApi={llmDrafts}
             models={models}
             onModelsChange={setModels}
-            onResetModels={resetModels}
             preferredLanguageModelId={preferredLanguageModelId}
             preferredFastLanguageModelId={preferredFastLanguageModelId}
             preferredVisionModelId={preferredVisionModelId}
@@ -1223,5 +1201,3 @@ export function ConfigSettingsPage() {
   )
 
 }
-
-
