@@ -14,6 +14,7 @@ import { analyzeShellFacts } from './shellAnalyzer'
 import { normalizeShellSignature } from '../confirmation/extractors/commandSequenceExtractor'
 import { parseShellCommandForTrust, commandHasShellMetasyntax } from './shellCommandParser'
 import { precheckRunShellTool } from './shellToolLoopHelpers'
+import { scriptParserService } from './scriptParserService'
 import type { ShellConfig, TrustedShellCommand } from '../../src/shared/domainTypes'
 
 const GOLDEN_DIR = path.resolve(__dirname, 'testdata/golden/shell')
@@ -156,6 +157,12 @@ function normalizePaths(value: unknown): unknown {
 const describeWin = process.platform === 'win32' ? describe : describe.skip
 
 describeWin('shellGolden（Shell 判定/签名/facts/免确认资格基线，P2-T0/P2-T5）', () => {
+  // Other files in this single-worker project may reset the shared parser service;
+  // initialize explicitly so this suite does not depend on execution order.
+  beforeAll(async () => {
+    await scriptParserService.ensureInitialized()
+  }, 30_000)
+
   const samples = loadSamples()
 
   it('样本集规模：bash ≥ 40（含裸括号 ≥3）+ PS ≥ 10', () => {
