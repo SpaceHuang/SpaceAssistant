@@ -88,6 +88,7 @@
       "paths": [
         "/etc/passwd"
       ],
+      "redirects": [],
       "cwdChanges": [],
       "analysisCompleteness": "complete",
       "unresolved": []
@@ -127,6 +128,7 @@
     "paths": [
       "/etc/passwd"
     ],
+    "redirects": [],
     "cwdChanges": [],
     "analysisCompleteness": "complete",
     "unresolved": []

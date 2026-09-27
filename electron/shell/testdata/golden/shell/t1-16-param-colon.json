@@ -37,6 +37,7 @@
       "paths": [
         "./a.txt"
       ],
+      "redirects": [],
       "cwdChanges": [],
       "analysisCompleteness": "complete",
       "unresolved": []
@@ -70,6 +71,7 @@
     "paths": [
       "./a.txt"
     ],
+    "redirects": [],
     "cwdChanges": [],
     "analysisCompleteness": "complete",
     "unresolved": []

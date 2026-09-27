@@ -69,7 +69,8 @@
         }
       ],
       "connectors": [],
-      "paths": [
+      "paths": [],
+      "redirects": [
         "/dev/null"
       ],
       "cwdChanges": [],
@@ -99,7 +100,8 @@
       }
     ],
     "connectors": [],
-    "paths": [
+    "paths": [],
+    "redirects": [
       "/dev/null"
     ],
     "cwdChanges": [],

@@ -53,6 +53,7 @@
       "paths": [
         "('http://x/p')"
       ],
+      "redirects": [],
       "cwdChanges": [],
       "analysisCompleteness": "partial",
       "unresolved": [
@@ -97,6 +98,7 @@
     "paths": [
       "('http://x/p')"
     ],
+    "redirects": [],
     "cwdChanges": [],
     "analysisCompleteness": "partial",
     "unresolved": [

@@ -52,6 +52,7 @@
       "operations": [],
       "connectors": [],
       "paths": [],
+      "redirects": [],
       "cwdChanges": [],
       "analysisCompleteness": "partial",
       "unresolved": [
@@ -74,6 +75,7 @@
     "operations": [],
     "connectors": [],
     "paths": [],
+    "redirects": [],
     "cwdChanges": [],
     "analysisCompleteness": "partial",
     "unresolved": [

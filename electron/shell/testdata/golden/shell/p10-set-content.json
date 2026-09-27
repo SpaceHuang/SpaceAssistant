@@ -39,6 +39,7 @@
       "paths": [
         "./out.txt"
       ],
+      "redirects": [],
       "cwdChanges": [],
       "analysisCompleteness": "complete",
       "unresolved": []
@@ -77,6 +78,7 @@
     "paths": [
       "./out.txt"
     ],
+    "redirects": [],
     "cwdChanges": [],
     "analysisCompleteness": "complete",
     "unresolved": []

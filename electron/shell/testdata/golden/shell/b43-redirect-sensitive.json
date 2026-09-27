@@ -65,7 +65,8 @@
         }
       ],
       "connectors": [],
-      "paths": [
+      "paths": [],
+      "redirects": [
         "~/.ssh/authorized_keys"
       ],
       "cwdChanges": [],
@@ -95,7 +96,8 @@
       }
     ],
     "connectors": [],
-    "paths": [
+    "paths": [],
+    "redirects": [
       "~/.ssh/authorized_keys"
     ],
     "cwdChanges": [],

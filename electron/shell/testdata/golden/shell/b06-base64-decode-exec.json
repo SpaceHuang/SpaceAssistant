@@ -59,6 +59,7 @@
         "|"
       ],
       "paths": [],
+      "redirects": [],
       "cwdChanges": [],
       "analysisCompleteness": "complete",
       "unresolved": []
@@ -102,6 +103,7 @@
       "|"
     ],
     "paths": [],
+    "redirects": [],
     "cwdChanges": [],
     "analysisCompleteness": "complete",
     "unresolved": []

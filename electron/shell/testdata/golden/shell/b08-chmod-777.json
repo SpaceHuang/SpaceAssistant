@@ -54,6 +54,7 @@
       "paths": [
         "/opt"
       ],
+      "redirects": [],
       "cwdChanges": [],
       "analysisCompleteness": "complete",
       "unresolved": []
@@ -90,6 +91,7 @@
     "paths": [
       "/opt"
     ],
+    "redirects": [],
     "cwdChanges": [],
     "analysisCompleteness": "complete",
     "unresolved": []

@@ -55,6 +55,7 @@
       "paths": [
         "/bin/sh"
       ],
+      "redirects": [],
       "cwdChanges": [],
       "analysisCompleteness": "complete",
       "unresolved": []
@@ -93,6 +94,7 @@
     "paths": [
       "/bin/sh"
     ],
+    "redirects": [],
     "cwdChanges": [],
     "analysisCompleteness": "complete",
     "unresolved": []

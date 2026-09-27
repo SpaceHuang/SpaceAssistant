@@ -110,6 +110,7 @@
         "if=/dev/zero",
         "of=/dev/sda"
       ],
+      "redirects": [],
       "cwdChanges": [],
       "analysisCompleteness": "complete",
       "unresolved": []
@@ -145,6 +146,7 @@
       "if=/dev/zero",
       "of=/dev/sda"
     ],
+    "redirects": [],
     "cwdChanges": [],
     "analysisCompleteness": "complete",
     "unresolved": []

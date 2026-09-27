@@ -34,6 +34,7 @@
       ],
       "connectors": [],
       "paths": [],
+      "redirects": [],
       "cwdChanges": [],
       "analysisCompleteness": "partial",
       "unresolved": [
@@ -64,6 +65,7 @@
     ],
     "connectors": [],
     "paths": [],
+    "redirects": [],
     "cwdChanges": [],
     "analysisCompleteness": "partial",
     "unresolved": [

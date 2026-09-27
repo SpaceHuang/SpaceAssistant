@@ -78,6 +78,7 @@
       "paths": [
         "/etc/shadow"
       ],
+      "redirects": [],
       "cwdChanges": [],
       "analysisCompleteness": "complete",
       "unresolved": []
@@ -110,6 +111,7 @@
     "paths": [
       "/etc/shadow"
     ],
+    "redirects": [],
     "cwdChanges": [],
     "analysisCompleteness": "complete",
     "unresolved": []

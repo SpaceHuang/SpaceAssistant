@@ -39,6 +39,7 @@
       ],
       "connectors": [],
       "paths": [],
+      "redirects": [],
       "cwdChanges": [],
       "analysisCompleteness": "complete",
       "unresolved": []
@@ -72,6 +73,7 @@
     ],
     "connectors": [],
     "paths": [],
+    "redirects": [],
     "cwdChanges": [],
     "analysisCompleteness": "complete",
     "unresolved": []

@@ -32,6 +32,9 @@
       ],
       "connectors": [],
       "paths": [],
+      "redirects": [
+        "input.txt"
+      ],
       "cwdChanges": [],
       "analysisCompleteness": "complete",
       "unresolved": []
@@ -58,6 +61,9 @@
     ],
     "connectors": [],
     "paths": [],
+    "redirects": [
+      "input.txt"
+    ],
     "cwdChanges": [],
     "analysisCompleteness": "complete",
     "unresolved": []

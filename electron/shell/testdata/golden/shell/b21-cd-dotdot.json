@@ -70,6 +70,7 @@
         "&&"
       ],
       "paths": [],
+      "redirects": [],
       "cwdChanges": [
         ".."
       ],
@@ -109,6 +110,7 @@
       "&&"
     ],
     "paths": [],
+    "redirects": [],
     "cwdChanges": [
       ".."
     ],

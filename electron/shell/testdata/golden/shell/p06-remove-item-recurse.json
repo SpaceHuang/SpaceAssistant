@@ -61,6 +61,7 @@
       "paths": [
         "C:\\temp"
       ],
+      "redirects": [],
       "cwdChanges": [],
       "analysisCompleteness": "complete",
       "unresolved": []
@@ -97,6 +98,7 @@
     "paths": [
       "C:\\temp"
     ],
+    "redirects": [],
     "cwdChanges": [],
     "analysisCompleteness": "complete",
     "unresolved": []

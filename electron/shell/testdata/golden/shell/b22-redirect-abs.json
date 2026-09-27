@@ -49,7 +49,8 @@
         }
       ],
       "connectors": [],
-      "paths": [
+      "paths": [],
+      "redirects": [
         "/tmp/out.txt"
       ],
       "cwdChanges": [],
@@ -79,7 +80,8 @@
       }
     ],
     "connectors": [],
-    "paths": [
+    "paths": [],
+    "redirects": [
       "/tmp/out.txt"
     ],
     "cwdChanges": [],
