@@ -1,6 +1,6 @@
 // P2-b（v3 复验建议）：darwin/posix/win32 平台分支单测。
 // 覆盖 getBuiltinSensitivePrefixes 三分支与 isSensitivePath 的平台语义
-// （win32：Roaming + C:\Windows；darwin：~/Library；posix：/etc + /System）。
+// （win32：Roaming + C:\Windows；darwin：~/Library；posix：用户敏感目录）。
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -25,11 +25,11 @@ describe('shellSensitivePaths 平台分支（P2-b）', () => {
     expect(isSensitivePath('/etc/passwd', undefined, [], 'darwin')).toBe(false)
   })
 
-  it('posix：含 /etc 与 /System，/etc 下路径命中', () => {
+  it('posix：系统目录由 system-dir 策略保护，用户敏感目录仍命中', () => {
     const prefixes = getBuiltinSensitivePrefixes(undefined, 'posix')
-    expect(prefixes).toContain('/etc')
-    expect(prefixes).toContain('/system')
-    expect(isSensitivePath('/etc/passwd', undefined, [], 'posix')).toBe(true)
+    expect(prefixes).not.toContain('/etc')
+    expect(isSensitivePath('/etc/passwd', undefined, [], 'posix')).toBe(false)
+    expect(isSensitivePath(path.posix.join(HOME, '.ssh', 'id_ed25519'), undefined, [], 'posix')).toBe(true)
     expect(isSensitivePath(path.posix.join(HOME, 'Library', 'x'), undefined, [], 'posix')).toBe(false)
   })
 
@@ -40,7 +40,7 @@ describe('shellSensitivePaths 平台分支（P2-b）', () => {
     } else if (process.platform === 'win32') {
       expect(prefixes).toContain(path.win32.join('C:', 'Windows').toLowerCase())
     } else {
-      expect(prefixes).toContain('/etc')
+      expect(prefixes).not.toContain('/etc')
     }
     // P1-b 回归锁：darwin 显式请求时必须含 ~/Library（防止再被 posix 归并弱化）
     if (process.platform === 'darwin') {

@@ -1,7 +1,7 @@
 import fs from 'fs/promises'
 import path from 'path'
 import { resolveSafePath, resolveSafePathReal } from '../pathSecurity'
-import { isSensitivePath, type ShellPathPlatform } from './shellSensitivePaths'
+import { isProtectedShellPath, type ShellPathPlatform } from './shellSensitivePaths'
 import type { ShellPathLiteral, ShellPathVerdict } from './shellTypes'
 
 const READ_CMDS = new Set(['cat', 'type', 'more', 'head', 'tail', 'less', 'dir', 'copy', 'xcopy'])
@@ -121,7 +121,7 @@ export async function verifyPathsInWorkDir(
   // 缺省宿主平台，生产行为不变。
   const pp = platform === 'win32' ? path.win32 : path.posix
   const isSensitivePlatform = (resolved: string) =>
-    isSensitivePath(resolved, userDataDir, customSensitivePrefixes, platform)
+    isProtectedShellPath(resolved, userDataDir, customSensitivePrefixes, platform)
   const violations: ShellPathVerdict['violations'] = []
   const warnings: string[] = []
   const violationCodes: string[] = []

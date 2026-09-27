@@ -1,7 +1,8 @@
 import os from 'os'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { getBuiltinSensitivePrefixes, getEffectiveSensitivePrefixes, isSensitivePath, matchSensitive } from './shellSensitivePaths'
+import { getBuiltinSensitivePrefixes, getEffectiveSensitivePrefixes, isProtectedShellPath, isSensitivePath, matchSensitive } from './shellSensitivePaths'
+import { classifyPath } from '../confirmation/extractors/pathClassifier'
 
 describe('shellSensitivePaths', () => {
   it('includes ssh and userData prefixes', () => {
@@ -28,6 +29,17 @@ describe('shellSensitivePaths', () => {
     expect(prefixes).toContain('c:\\windows')
     expect(prefixes).toContain('c:\\users\\agent\\appdata\\roaming\\spaceassistant')
     expect(matchSensitive({ resolvedPath: 'C:\\Users\\Agent\\CorpSecrets\\key.txt', homeDir: 'C:\\Users\\Agent', platform: 'win32', customPrefixes: ['%USERPROFILE%\\CorpSecrets'] })).toMatchObject({ sensitive: true, matchedBy: 'custom' })
+  })
+
+  it('POSIX 系统目录不进入敏感文件前缀，保留 system-dir 分类', () => {
+    const prefixes = getBuiltinSensitivePrefixes(undefined, 'posix', '/home/agent')
+    expect(prefixes).not.toContain('/etc')
+    expect(prefixes).toContain('/home/agent/.ssh')
+    const env = { os: 'linux', workDir: '/workspace', sensitivePaths: prefixes }
+    expect(classifyPath('/etc/passwd', env)).toBe('system-dir')
+    expect(classifyPath('/home/agent/.ssh/id_ed25519', env)).toBe('sensitive-file')
+    expect(isProtectedShellPath('/etc/passwd', undefined, [], 'posix')).toBe(true)
+    expect(isProtectedShellPath('/home/agent/.ssh/id_ed25519', undefined, [], 'posix', '/home/agent')).toBe(true)
   })
 
   it('Posix ~ 展开只使用显式注入的 home', () => {

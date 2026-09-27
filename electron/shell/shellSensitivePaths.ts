@@ -38,8 +38,8 @@ export function getBuiltinSensitivePrefixes(
   } else if (platform === 'darwin') {
     prefixes.push(pp.join(home, 'Library'))
   } else {
-    prefixes.push('/etc')
-    prefixes.push('/System')
+    // /etc belongs to the system-dir zone in pathClassifier. Keeping it here
+    // would shadow that zone as sensitive-file and select the wrong policy rule.
   }
   if (userDataDir) prefixes.push(userDataDir)
   return prefixes.map((p) => pp.normalize(expandHome(p, home, platform)).toLowerCase())
@@ -91,4 +91,19 @@ export function isSensitivePath(
   platform: ShellPathPlatform = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'posix'
 ): boolean {
   return matchSensitive({ resolvedPath, userDataDir, customPrefixes, platform }).sensitive
+}
+
+/** POSIX system roots are protected by the system-dir policy zone. */
+export function isProtectedShellPath(
+  resolvedPath: string,
+  userDataDir?: string,
+  customSensitivePrefixes?: string[],
+  platform: ShellPathPlatform = process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'posix',
+  homeDir = os.homedir()
+): boolean {
+  const pp = platform === 'win32' ? path.win32 : path.posix
+  const normalized = pp.normalize(resolvedPath).replace(/\\/g, '/').toLowerCase()
+  const systemRoots = platform === 'posix' ? ['/etc', '/usr', '/bin', '/sbin', '/lib', '/var', '/system', '/library'] : []
+  const isSystemPath = systemRoots.some((root) => normalized === root || normalized.startsWith(root + '/'))
+  return isSystemPath || matchSensitive({ resolvedPath, userDataDir, customPrefixes: customSensitivePrefixes, platform, homeDir }).sensitive
 }
