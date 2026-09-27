@@ -15,10 +15,17 @@
           "message": "命令包含工作目录外的路径：/bin/sh",
           "path": "/bin/sh",
           "severity": "warning"
+        },
+        {
+          "code": "SENSITIVE_PATH",
+          "message": "命令涉及敏感路径：/bin/sh（如密钥、凭据目录）",
+          "path": "/bin/sh",
+          "severity": "warning"
         }
       ],
       "warnings": [
-        "命令包含工作目录外的路径：/bin/sh"
+        "命令包含工作目录外的路径：/bin/sh",
+        "命令涉及敏感路径：/bin/sh（如密钥、凭据目录）"
       ],
       "outsideWorkDirRisk": false,
       "requiresRiskAck": true
@@ -28,13 +35,16 @@
       "requiresRiskAck": true,
       "outsideWorkDirRisk": false,
       "warnings": [
-        "命令包含工作目录外的路径：/bin/sh"
+        "命令包含工作目录外的路径：/bin/sh",
+        "命令涉及敏感路径：/bin/sh（如密钥、凭据目录）"
       ],
       "scannedPaths": [
+        "/bin/sh",
         "/bin/sh"
       ],
       "violationCodes": [
-        "PATH_OUTSIDE_<WORKDIR>"
+        "PATH_OUTSIDE_<WORKDIR>",
+        "SENSITIVE_PATH"
       ]
     },
     "facts": {
