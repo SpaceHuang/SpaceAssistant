@@ -1092,12 +1092,20 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('桌面 read_file 在生产 gate 中产出路径事实信号', async () => {
-    const r = await evaluateToolCallGate(base({ requestId: 'req-1', toolUseId: 'tool-1', toolInput: { path: 'a.txt' } }))
-    expect(r.facts.signals).toContainEqual({
-      kind: 'path-target',
-      path: '/private/tmp/wd/a.txt',
-      zone: 'workdir-normal'
-    })
+    const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-gate-facts-')))
+    try {
+      const r = await evaluateToolCallGate(base({
+        requestId: 'req-1', toolUseId: 'tool-1', workDir,
+        toolInput: { path: 'a.txt' }
+      }))
+      expect(r.facts.signals).toContainEqual({
+        kind: 'path-target',
+        path: path.join(workDir, 'a.txt'),
+        zone: 'workdir-normal'
+      })
+    } finally {
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
   })
 
   it('显式空路径也经过 facts 探测并 fail closed', async () => {
@@ -1249,20 +1257,26 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('desktop read V1 拒绝目录 grep、通配路径和缺失路径', async () => {
-    const directory = await evaluateToolCallGate(base({ toolName: 'grep', toolInput: { path: '.', pattern: 'x' } }))
-    const wildcard = await evaluateToolCallGate(base({ toolName: 'grep', toolInput: { path: '**/*.ts', pattern: 'x' } }))
-    const multiplePaths = await evaluateToolCallGate(base({ toolName: 'grep', toolInput: { path: 'src/a.ts', paths: ['src/a.ts', 'src/b.ts'], pattern: 'x' } }))
-    const missing = await evaluateToolCallGate(base({ toolInput: {} }))
-    expect(directory.decision).toMatchObject({ type: 'deny', ruleId: 'read-v1-target-unsupported' })
-    expect(wildcard.decision).toMatchObject({ type: 'deny', ruleId: 'read-v1-target-unsupported' })
-    expect(wildcard.readPathFact?.targetKind).toBe('unknown')
-    expect(multiplePaths.decision).toMatchObject({ type: 'deny', ruleId: 'read-v1-target-unsupported' })
-    expect(multiplePaths.readPathFact?.targetKind).toBe('unknown')
-    expect(missing.decision).toMatchObject({ type: 'deny', ruleId: 'read-v1-facts-missing' })
-    expect(directory.readExecutionPermit).toBeUndefined()
-    expect(wildcard.readExecutionPermit).toBeUndefined()
-    expect(multiplePaths.readExecutionPermit).toBeUndefined()
-    expect(missing.readExecutionPermit).toBeUndefined()
+    const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-gate-v1-targets-')))
+    try {
+      const common = { workDir, userDataDir: path.join(workDir, '.userdata') }
+      const directory = await evaluateToolCallGate(base({ ...common, toolName: 'grep', toolInput: { path: '.', pattern: 'x' } }))
+      const wildcard = await evaluateToolCallGate(base({ ...common, toolName: 'grep', toolInput: { path: '**/*.ts', pattern: 'x' } }))
+      const multiplePaths = await evaluateToolCallGate(base({ ...common, toolName: 'grep', toolInput: { path: 'src/a.ts', paths: ['src/a.ts', 'src/b.ts'], pattern: 'x' } }))
+      const missing = await evaluateToolCallGate(base({ ...common, toolInput: {} }))
+      expect(directory.decision).toMatchObject({ type: 'deny', ruleId: 'read-v1-target-unsupported' })
+      expect(wildcard.decision).toMatchObject({ type: 'deny', ruleId: 'read-v1-target-unsupported' })
+      expect(wildcard.readPathFact?.targetKind).toBe('unknown')
+      expect(multiplePaths.decision).toMatchObject({ type: 'deny', ruleId: 'read-v1-target-unsupported' })
+      expect(multiplePaths.readPathFact?.targetKind).toBe('unknown')
+      expect(missing.decision).toMatchObject({ type: 'deny', ruleId: 'read-v1-facts-missing' })
+      expect(directory.readExecutionPermit).toBeUndefined()
+      expect(wildcard.readExecutionPermit).toBeUndefined()
+      expect(multiplePaths.readExecutionPermit).toBeUndefined()
+      expect(missing.readExecutionPermit).toBeUndefined()
+    } finally {
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
   })
 
   it.each([
@@ -1448,15 +1462,22 @@ describe('evaluateToolCallGate', () => {
   })
 
   it('远程 write_file 默认（无会话写信任）→ require-confirm(im-write-ask)', async () => {
-    const r = await evaluateToolCallGate(
-      base({
-        toolName: 'write_file',
-        toolInput: { path: 'a.txt', content: 'x' },
-        remoteContext: remoteContext({ requestId: 'req1', userId: 'owner1' })
-      })
-    )
-    expect(r.decision.type).toBe('require-confirm')
-    if (r.decision.type === 'require-confirm') expect(r.decision.ruleId).toBe('im-write-ask')
+    const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'remote-write-gate-')))
+    try {
+      const r = await evaluateToolCallGate(
+        base({
+          workDir,
+          userDataDir: path.join(workDir, '.userdata'),
+          toolName: 'write_file',
+          toolInput: { path: 'a.txt', content: 'x' },
+          remoteContext: remoteContext({ requestId: 'req1', userId: 'owner1' })
+        })
+      )
+      expect(r.decision.type).toBe('require-confirm')
+      if (r.decision.type === 'require-confirm') expect(r.decision.ruleId).toBe('im-write-ask')
+    } finally {
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
   })
 
   it.each(['feishu', 'wechat'] as const)('%s 越界 write_file/edit_file 在 gate 策略层终局拒绝', async (lane) => {
