@@ -768,10 +768,13 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
 
   ipcMain.handle('chat:get-pending-confirmation', (_e, payload: { sessionId: string; turnId: string; requestId: string; turnVersion: number; toolCallId: string }) => {
     const turn = turnRuntime.getTurn(payload.turnId)
-    if (!turn || turn.sessionId !== payload.sessionId || turn.requestId !== payload.requestId || turn.version !== payload.turnVersion) return { status: 'stale' as const }
+    // 版本对齐在响应侧：始终返回「当前最新版本」的快照，由渲染端按响应版本裁决新鲜度。
+    // 请求侧严格校验 payload.turnVersion 会让快照往返期间任何投影推进都产生 stale，
+    // 渲染端若不重拉即永久卡在未就绪（评审 P0-1）；payload.turnVersion 仅作兼容入参保留。
+    if (!turn || turn.sessionId !== payload.sessionId || turn.requestId !== payload.requestId) return { status: 'stale' as const }
     const tool = turn.assistantMessage.toolCalls?.find((candidate) => candidate.id === payload.toolCallId && candidate.status === 'confirming')
     if (!tool) return { status: 'not-awaiting' as const }
-    return toConfirmationSnapshot({ sessionId: payload.sessionId, turnId: payload.turnId, requestId: payload.requestId, turnVersion: payload.turnVersion, tool })
+    return toConfirmationSnapshot({ sessionId: payload.sessionId, turnId: payload.turnId, requestId: payload.requestId, turnVersion: turn.version, tool })
   })
 
   ipcMain.handle(

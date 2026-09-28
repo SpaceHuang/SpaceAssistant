@@ -33,6 +33,8 @@ export type PendingConfirmItem = {
 
 type Listener = () => void
 
+type ProjectionSyncArgs = Parameters<PendingConfirmStore['syncFromProjection']>[0]
+
 type ConfirmPayloadFields = Omit<PendingConfirmItem, 'createdAt' | 'confirmationReady' | 'confirmationSnapshot'>
 
 /**
@@ -132,7 +134,9 @@ class PendingConfirmStore {
       if (!existing) {
         return { ...base, createdAt: Date.now(), ...(args.turnId && args.turnVersion !== undefined ? { confirmationReady: false as const } : {}) }
       }
-      const payloadStable = sameItemPayload(existing, { ...base, sessionId: args.sessionId, requestId: args.requestId })
+      // turnId 变化视为 payload 不稳定：旧 turn 的快照过不了 respond 的 turnId 归属校验，
+      // 保留就绪态只会得到「就绪但永远批不了」的卡片（评审 P2-4）
+      const payloadStable = existing.turnId === args.turnId && sameItemPayload(existing, { ...base, sessionId: args.sessionId, requestId: args.requestId })
       return {
         ...base,
         createdAt: existing.createdAt,
@@ -144,54 +148,80 @@ class PendingConfirmStore {
       }
     })
     const updated = [...keep, ...next]
-    if (!args.retryAttempt && samePendingItems(this.items, updated)) {
-      this.items = updated
-      return
-    }
+    // 幂等静默更新只跳过 notify，不得短路快照拉取循环——stale/失败后的恢复
+    // 依赖「任何后续投影都会以最新版本补拉」这条活性来源（评审 P0-1）
+    const unchanged = !args.retryAttempt && samePendingItems(this.items, updated)
     this.items = updated
-    this.notify()
-    if (args.turnId && args.turnVersion !== undefined && typeof window.api.chatGetPendingConfirmation === 'function') {
-      for (const item of next) {
-        if (item.confirmationReady === true) continue
-        const flightKey = `${args.requestId}:${item.toolUseId}`
-        if (this.inFlightSnapshots.has(flightKey)) continue
-        this.inFlightSnapshots.add(flightKey)
-        void window.api.chatGetPendingConfirmation({ sessionId: args.sessionId, turnId: args.turnId, requestId: args.requestId, turnVersion: args.turnVersion, toolCallId: item.toolUseId }).then((result) => {
-          this.inFlightSnapshots.delete(flightKey)
-          if ('status' in result) return
+    if (!unchanged) this.notify()
+    this.requestPendingSnapshots(args, next)
+  }
+
+  private requestPendingSnapshots(args: ProjectionSyncArgs, items: PendingConfirmItem[]): void {
+    if (!args.turnId || args.turnVersion === undefined || typeof window.api.chatGetPendingConfirmation !== 'function') return
+    for (const item of items) {
+      if (item.confirmationReady === true) continue
+      // 在飞去重按版本隔离：payload/版本推进后的新拉取不被旧在飞请求拦截（评审 P0-2）
+      const flightKey = `${args.requestId}:${item.toolUseId}:${args.turnVersion}`
+      if (this.inFlightSnapshots.has(flightKey)) continue
+      this.inFlightSnapshots.add(flightKey)
+      void window.api.chatGetPendingConfirmation({ sessionId: args.sessionId, turnId: args.turnId, requestId: args.requestId, turnVersion: args.turnVersion, toolCallId: item.toolUseId }).then((result) => {
+        this.inFlightSnapshots.delete(flightKey)
+        if ('status' in result) {
+          if (result.status === 'stale') this.scheduleSnapshotRetry(args, item, args.retryAttempt ?? 0)
+          return
+        }
+        const current = this.items.find((candidate) => candidate.sessionId === args.sessionId && candidate.requestId === args.requestId && candidate.toolUseId === item.toolUseId)
+        if (!current) return
+        // 版本裁决（响应侧对齐）：落后于 item 已知投影版本的快照不可信——
+        // 拉取在飞期间 payload/版本可能已推进，应用即「所见非所批」（评审 P0-2）
+        if (current.turnVersion !== undefined && result.turnVersion !== undefined && result.turnVersion < current.turnVersion) {
+          this.scheduleSnapshotRetry(args, item, args.retryAttempt ?? 0)
+          return
+        }
+        // 响应幂等守卫：就绪态已确立的重复响应（多投影竞态重发）不再翻转与 notify
+        if (current.confirmationReady === true) return
+        current.confirmationReady = true
+        current.confirmationSnapshot = result
+        if (result.confirmation.input && typeof result.confirmation.input === 'object') current.input = result.confirmation.input
+        if (result.confirmation.diff) {
+          try {
+            const diff = JSON.parse(result.confirmation.diff) as ToolCallRecord['confirmDiff']
+            if (diff && typeof diff === 'object') current.diff = diff
+          } catch { /* malformed detail remains non-authoritative and cannot enable approval */ }
+        }
+        current.riskLevel = result.confirmation.riskLevel
+        if (!current.memoryTiers?.length && result.confirmation.memoryTiers.length) current.memoryTiers = result.confirmation.memoryTiers.map((tier) => ({ label: tier.label, key: { kind: 'path', path: '', level: 'zone' } }))
+        if (result.confirmation.shellSecurityHints) current.shellSecurityHints = result.confirmation.shellSecurityHints
+        if (result.confirmation.autoApproveFallback) current.autoApproveFallback = result.confirmation.autoApproveFallback
+        if (result.confirmation.browser.currentPageUrl) current.currentPageUrl = result.confirmation.browser.currentPageUrl
+        if (result.confirmation.browser.dangerInfo) current.dangerInfo = result.confirmation.browser.dangerInfo
+        if (result.confirmation.browser.sessionTrustedHint) current.sessionTrustedHint = true
+        if (result.confirmation.mcp) current.mcp = { ...result.confirmation.mcp, description: result.confirmation.mcp.description ?? '', maskedArgs: {} }
+        this.notify()
+      }).catch(() => {
+        this.inFlightSnapshots.delete(flightKey)
+        if ((args.retryAttempt ?? 0) >= 3) return
+        setTimeout(() => {
           const current = this.items.find((candidate) => candidate.sessionId === args.sessionId && candidate.requestId === args.requestId && candidate.toolUseId === item.toolUseId)
-          if (!current) return
-          // 响应幂等守卫：就绪态已确立的重复响应（多投影竞态重发）不再翻转与 notify
-          if (current.confirmationReady === true) return
-          current.confirmationReady = true
-          current.confirmationSnapshot = result
-          if (result.confirmation.input && typeof result.confirmation.input === 'object') current.input = result.confirmation.input
-          if (result.confirmation.diff) {
-            try {
-              const diff = JSON.parse(result.confirmation.diff) as ToolCallRecord['confirmDiff']
-              if (diff && typeof diff === 'object') current.diff = diff
-            } catch { /* malformed detail remains non-authoritative and cannot enable approval */ }
-          }
-          current.riskLevel = result.confirmation.riskLevel
-          if (!current.memoryTiers?.length && result.confirmation.memoryTiers.length) current.memoryTiers = result.confirmation.memoryTiers.map((tier) => ({ label: tier.label, key: { kind: 'path', path: '', level: 'zone' } }))
-          if (result.confirmation.shellSecurityHints) current.shellSecurityHints = result.confirmation.shellSecurityHints
-          if (result.confirmation.autoApproveFallback) current.autoApproveFallback = result.confirmation.autoApproveFallback
-          if (result.confirmation.browser.currentPageUrl) current.currentPageUrl = result.confirmation.browser.currentPageUrl
-          if (result.confirmation.browser.dangerInfo) current.dangerInfo = result.confirmation.browser.dangerInfo
-          if (result.confirmation.browser.sessionTrustedHint) current.sessionTrustedHint = true
-          if (result.confirmation.mcp) current.mcp = { ...result.confirmation.mcp, description: result.confirmation.mcp.description ?? '', maskedArgs: {} }
-          this.notify()
-        }).catch(() => {
-          this.inFlightSnapshots.delete(flightKey)
-          if ((args.retryAttempt ?? 0) >= 3) return
-          setTimeout(() => {
-            const current = this.items.find((candidate) => candidate.sessionId === args.sessionId && candidate.turnId === args.turnId && candidate.requestId === args.requestId && candidate.turnVersion === args.turnVersion && candidate.toolUseId === item.toolUseId)
-            if (current?.confirmationReady !== false) return
-            this.syncFromProjection({ ...args, retryAttempt: (args.retryAttempt ?? 0) + 1 })
-          }, 500 * 2 ** (args.retryAttempt ?? 0))
-        })
-      }
+          if (current?.confirmationReady !== false) return
+          // 重试基于 latestProjections 最新投影而非捕获的旧 args：旧版本会让 item 版本回退、
+          // 污染 latestProjections，使后续重拉必得 stale（评审 P1-3）
+          const latest = current.turnId ? this.latestProjections.get(current.turnId) : undefined
+          this.syncFromProjection({ ...(latest ?? args), retryAttempt: (args.retryAttempt ?? 0) + 1 })
+        }, 500 * 2 ** (args.retryAttempt ?? 0))
+      })
     }
+  }
+
+  /** stale/过期快照的有限退避补拉；投影驱动的拉取循环（含幂等早退分支）是无限兜底，放弃重试不产生永久卡死。 */
+  private scheduleSnapshotRetry(args: ProjectionSyncArgs, item: { toolUseId: string }, attempt: number): void {
+    if (attempt >= 3) return
+    setTimeout(() => {
+      const current = this.items.find((candidate) => candidate.requestId === args.requestId && candidate.toolUseId === item.toolUseId)
+      if (!current || current.confirmationReady === true) return
+      const latest = current.turnId ? this.latestProjections.get(current.turnId) : undefined
+      this.syncFromProjection({ ...(latest ?? args), retryAttempt: attempt + 1 })
+    }, 100 * 2 ** attempt)
   }
 
   retryUnready(): void {
@@ -217,9 +247,10 @@ class PendingConfirmStore {
 
   respond(requestId: string, toolUseId: string, approved: boolean, options?: ToolConfirmOptions): void {
     const current = this.items.find((item) => item.requestId === requestId && item.toolUseId === toolUseId)
-    // 快照版本 ≤ item 已知版本 = 快照未过期（投影版本推进被静默跟踪，不使既有快照失效）；
-    // 仅当快照来自「未来」（超前于已知投影）才视为错卡拒绝。
-    if (approved && current?.confirmationReady !== undefined && (!current.confirmationReady || !current.confirmationSnapshot || current.confirmationSnapshot.sessionId !== current.sessionId || current.confirmationSnapshot.requestId !== current.requestId || current.confirmationSnapshot.toolCallId !== current.toolUseId || (current.turnId !== undefined && current.confirmationSnapshot.turnId !== current.turnId) || (current.turnVersion !== undefined && current.confirmationSnapshot.turnVersion !== undefined && current.confirmationSnapshot.turnVersion > current.turnVersion))) return
+    // 快照新鲜度由 requestPendingSnapshots 的响应版本裁决保证（应用时 ≥ 已知投影版本，
+    // 且 payload 未变的投影推进不使快照失效），此处只做归属校验防错卡；
+    // 不比较 turnVersion：渲染端已知版本可能短暂落后于在途投影，比较会造成「就绪但批不了」。
+    if (approved && current?.confirmationReady !== undefined && (!current.confirmationReady || !current.confirmationSnapshot || current.confirmationSnapshot.sessionId !== current.sessionId || current.confirmationSnapshot.requestId !== current.requestId || current.confirmationSnapshot.toolCallId !== current.toolUseId || (current.turnId !== undefined && current.confirmationSnapshot.turnId !== current.turnId))) return
     void window.api.toolConfirmResponse({
       requestId,
       toolUseId,

@@ -258,10 +258,10 @@ describe('pendingConfirmStore', () => {
   // 注意：上方 J-04 幂等测试两次 sync 同步连发、同毫秒执行，侥幸掩盖了 Date.now() 漂移
   // （真机投影间隔 >1ms，守卫必然失效）。以下测试用 fake timers 显式跨毫秒，防止再次假绿。
 
-  const flickerArgs = (overrides?: { turnVersion?: number; input?: unknown }): Parameters<typeof pendingConfirmStore.syncFromProjection>[0] => ({
+  const flickerArgs = (overrides?: { turnVersion?: number; input?: unknown; turnId?: string }): Parameters<typeof pendingConfirmStore.syncFromProjection>[0] => ({
     sessionId: 's-flicker',
     requestId: 'r-flicker',
-    turnId: 't-flicker',
+    turnId: overrides?.turnId ?? 't-flicker',
     turnVersion: overrides?.turnVersion ?? 1,
     message: {
       id: 'a-flicker',
@@ -281,11 +281,11 @@ describe('pendingConfirmStore', () => {
     }
   })
 
-  const flickerConfirmation = () => ({
+  const flickerConfirmation = (turnVersion = 1) => ({
     sessionId: 's-flicker',
     turnId: 't-flicker',
     requestId: 'r-flicker',
-    turnVersion: 1,
+    turnVersion,
     toolCallId: 'tool-flicker',
     confirmation: { complete: true, riskLevel: 'medium', memoryTiers: [], browser: {} }
   })
@@ -380,7 +380,8 @@ describe('pendingConfirmStore', () => {
   })
 
   it('不变量：随机 sync/快照/移除序列下就绪态单调、键唯一、同 payload 幂等', async () => {
-    const getConfirmation = vi.fn().mockResolvedValue(flickerConfirmation())
+    // 快照版本恒超前（99 > 序列最长 60 步）：模拟响应侧对齐——主进程总返回当前最新快照
+    const getConfirmation = vi.fn().mockResolvedValue(flickerConfirmation(99))
     vi.stubGlobal('window', { api: { chatGetPendingConfirmation: getConfirmation, toolConfirmResponse: vi.fn() } })
     vi.useFakeTimers()
     try {
@@ -472,6 +473,138 @@ describe('pendingConfirmStore', () => {
       expect(calls).toBe(1)
     } finally {
       unsubscribe()
+    }
+  })
+
+  // ---- 评审竞态修复（docs/review/pending-confirm-sync-jitter-review.md P0-1/P0-2/P1-3/P2-4/P2-5）：
+  // 版本对齐移到响应侧（主进程返回当前最新快照+版本），渲染端按响应版本裁决；
+  // 幂等早退不得短路快照拉取循环；在飞去重按 (requestId, toolUseId, turnVersion) 隔离。
+
+  const stubManualConfirmation = (): { getConfirmation: ReturnType<typeof vi.fn>; resolvers: Array<(value: unknown) => void> } => {
+    const resolvers: Array<(value: unknown) => void> = []
+    const getConfirmation = vi.fn().mockImplementation(() => new Promise((resolve) => { resolvers.push(resolve) }))
+    vi.stubGlobal('window', { api: { chatGetPendingConfirmation: getConfirmation, toolConfirmResponse: vi.fn() } })
+    return { getConfirmation, resolvers }
+  }
+
+  it('快照返回 stale 后，后续投影仍以最新版本重新拉取并最终就绪（修 P0-1 活性）', async () => {
+    const { getConfirmation, resolvers } = stubManualConfirmation()
+    pendingConfirmStore.syncFromProjection(flickerArgs({ turnVersion: 1 }))
+    expect(getConfirmation).toHaveBeenCalledTimes(1)
+    resolvers[0]({ status: 'stale' })
+    await flushMicrotasks()
+    expect(pendingConfirmStore.getItems()[0]?.confirmationReady).toBe(false)
+    // payload 不变的版本推进投影：幂等静默更新，但拉取循环必须仍执行
+    pendingConfirmStore.syncFromProjection(flickerArgs({ turnVersion: 2 }))
+    expect(getConfirmation).toHaveBeenCalledTimes(2)
+    expect(getConfirmation.mock.calls[1]?.[0]).toMatchObject({ turnVersion: 2 })
+    resolvers[1](flickerConfirmation(2))
+    await flushMicrotasks()
+    expect(pendingConfirmStore.getItems()[0]?.confirmationReady).toBe(true)
+  })
+
+  it('快照在飞期间 payload 变化：旧响应被版本裁决丢弃，新版本立即重拉（修 P0-2）', async () => {
+    const { getConfirmation, resolvers } = stubManualConfirmation()
+    pendingConfirmStore.syncFromProjection(flickerArgs({ turnVersion: 1 }))
+    // payload 变化投影：ready 重置，且新版本拉取不被旧在飞请求拦截
+    pendingConfirmStore.syncFromProjection(flickerArgs({ turnVersion: 2, input: { path: 'b.ts' } }))
+    expect(getConfirmation).toHaveBeenCalledTimes(2)
+    expect(getConfirmation.mock.calls[1]?.[0]).toMatchObject({ turnVersion: 2 })
+    // 旧响应（v1 快照）先落地：落后于 item 已知版本 → 不得应用
+    resolvers[0](flickerConfirmation(1))
+    await flushMicrotasks()
+    expect(pendingConfirmStore.getItems()[0]?.confirmationReady).toBe(false)
+    // 新响应（v2 快照）落地 → 应用
+    resolvers[1](flickerConfirmation(2))
+    await flushMicrotasks()
+    expect(pendingConfirmStore.getItems()[0]?.confirmationReady).toBe(true)
+    expect(pendingConfirmStore.getItems()[0]?.turnVersion).toBe(2)
+  })
+
+  it('快照 reject 后重试基于最新投影版本发起，而非捕获的旧版本（修 P1-3）', async () => {
+    vi.useFakeTimers()
+    try {
+      const getConfirmation = vi.fn()
+        .mockRejectedValueOnce(new Error('ipc down'))
+        .mockRejectedValueOnce(new Error('ipc down'))
+        .mockResolvedValue(flickerConfirmation(2))
+      vi.stubGlobal('window', { api: { chatGetPendingConfirmation: getConfirmation, toolConfirmResponse: vi.fn() } })
+      pendingConfirmStore.syncFromProjection(flickerArgs({ turnVersion: 1 }))
+      await flushMicrotasks()
+      // 退避窗口内版本推进（payload 不变，静默）——此后任何重试都不得回退到 v1
+      pendingConfirmStore.syncFromProjection(flickerArgs({ turnVersion: 2 }))
+      expect(getConfirmation).toHaveBeenCalledTimes(2)
+      await flushMicrotasks()
+      await vi.advanceTimersByTimeAsync(500)
+      await flushMicrotasks()
+      const retriedCalls = getConfirmation.mock.calls.slice(2)
+      expect(retriedCalls.length).toBeGreaterThanOrEqual(1)
+      for (const call of retriedCalls) {
+        expect(call[0].turnVersion).toBe(2)
+      }
+      await vi.advanceTimersByTimeAsync(0)
+      await flushMicrotasks()
+      expect(pendingConfirmStore.getItems()[0]?.confirmationReady).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('turnId 变化而 payload 不变：不保留旧快照，按新 turn 重置并重拉（修 P2-4）', async () => {
+    const getConfirmation = vi.fn().mockResolvedValue(flickerConfirmation(1))
+    vi.stubGlobal('window', { api: { chatGetPendingConfirmation: getConfirmation, toolConfirmResponse: vi.fn() } })
+    pendingConfirmStore.syncFromProjection({ ...flickerArgs({ turnVersion: 1 }), turnId: 't-old' })
+    await flushMicrotasks()
+    expect(pendingConfirmStore.getItems()[0]?.confirmationReady).toBe(true)
+    pendingConfirmStore.syncFromProjection({ ...flickerArgs({ turnVersion: 1 }), turnId: 't-new' })
+    expect(pendingConfirmStore.getItems()[0]?.confirmationReady).toBe(false)
+    expect(getConfirmation).toHaveBeenCalledTimes(2)
+    await flushMicrotasks()
+    expect(pendingConfirmStore.getItems()[0]?.confirmationReady).toBe(true)
+  })
+
+  it('活性不变量：随机失败（stale/reject）× 竞态注入后，持续投影推进最终使全部存活项就绪（修 P2-5）', async () => {
+    vi.useFakeTimers()
+    try {
+      let seed = 0x5eed1234
+      const rand = (): number => {
+        seed = (seed + 0x6d2b79f5) | 0
+        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+      }
+      // 阶段 1：拉取结果恒失败（stale/reject 随机）——验证失败洪流下结构不坏、终局可收敛
+      const getConfirmation = vi.fn().mockImplementation(() => {
+        const roll = rand()
+        if (roll < 0.5) return Promise.reject(new Error('flaky ipc'))
+        return Promise.resolve({ status: 'stale' as const })
+      })
+      vi.stubGlobal('window', { api: { chatGetPendingConfirmation: getConfirmation, toolConfirmResponse: vi.fn() } })
+      const payloadPool = [{ path: 'a.ts' }, { path: 'b.ts' }]
+      let payloadIdx = 0
+      let version = 0
+      for (let step = 0; step < 40; step++) {
+        if (rand() < 0.3) payloadIdx = Math.floor(rand() * payloadPool.length)
+        pendingConfirmStore.syncFromProjection(flickerArgs({ turnVersion: ++version, input: payloadPool[payloadIdx] }))
+        await vi.advanceTimersByTimeAsync(120)
+        await flushMicrotasks()
+      }
+      // 活性终局：失败源移除后，有限步「payload 不变的版本推进投影」必须使全部存活项就绪
+      vi.stubGlobal('window', { api: { chatGetPendingConfirmation: vi.fn().mockImplementation(() => Promise.resolve(flickerConfirmation(++version))), toolConfirmResponse: vi.fn() } })
+      for (let step = 0; step < 15; step++) {
+        pendingConfirmStore.syncFromProjection(flickerArgs({ turnVersion: ++version, input: payloadPool[payloadIdx] }))
+        await vi.advanceTimersByTimeAsync(300)
+        await flushMicrotasks()
+        const items = pendingConfirmStore.getItems()
+        if (items.length > 0 && items.every((item) => item.confirmationReady === true)) break
+      }
+      const finalItems = pendingConfirmStore.getItems()
+      expect(finalItems.length).toBeGreaterThan(0)
+      for (const item of finalItems) {
+        expect(item.confirmationReady).toBe(true)
+      }
+    } finally {
+      vi.useRealTimers()
     }
   })
 })
