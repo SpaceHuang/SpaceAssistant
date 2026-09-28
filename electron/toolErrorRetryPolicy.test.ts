@@ -16,6 +16,7 @@ describe('shouldStopToolRetry', () => {
 
   it('基础设施错误独立于命令级 process_exit', () => {
     expect(isInfrastructureError('SHELL_SPAWN_ERROR')).toBe(true)
+    expect(isInfrastructureError('TOOL_EXECUTOR_ERROR')).toBe(true)
     expect(isInfrastructureError('SHELL_PROCESS_EXIT')).toBe(false)
   })
 

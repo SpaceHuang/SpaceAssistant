@@ -29,7 +29,7 @@ import { getBundledSecurityApprovalSkill } from '../skills/bundled/securityAppro
  * createSession({ ownership:'internal', visibility:'hidden' }) → runToolChatSession({ lane:'automation' })
  * + 递归豁免标记（I5）+ 有界 Profile（侦查轮数 ≤3、超时默认 30s）+ 封闭只读工具集（只能收窄）。
  * 输入形态：facts + 结构化线索包（方案 §12-1），不给全量会话。
- * 输出：ApprovalVerdict 两态；超时 / 失败 / 不可解析一律 fail-closed deny（I4）。
+ * 输出：ApprovalVerdict 三态（approve / deny / undetermined，R5）；超时 / 失败 / 不可解析一律 fail-closed deny（I4）。
  */
 
 /** 侦查轮数上界（Profile 硬上界）。 */
@@ -90,6 +90,9 @@ function neutralizeFence(value: string): string {
  * D 任务声明（taskDigest，可信证据）单独小节渲染在围栏之外——来自用户创建任务时的输入，
  * 用于任务相关性判断；它不构成对高危动作的授权（Skill v2 授权条款约束）。
  */
+/** 测试缝：护栏断言提示词与 Skill 三态合同一致（R5，防「两态」表述回潮）。 */
+export const renderCluePackForTest = (clue: ApprovalCluePack): string => renderCluePack(clue)
+
 function renderCluePack(clue: ApprovalCluePack): string {
   const evidence: string[] = [`[摘要] ${neutralizeFence(clue.summary)}`]
   evidence.push(`[信号] ${neutralizeFence(clue.signals.length ? clue.signals.join(', ') : '（无）')}`)
@@ -99,6 +102,9 @@ function renderCluePack(clue: ApprovalCluePack): string {
   if (clue.involvedFiles?.length) {
     evidence.push(`[涉及文件] ${neutralizeFence(clue.involvedFiles.join(', '))}`)
   }
+  // E2（评审 2026-09-28）：argsDigest 是 MCP 入参的脱敏归一摘要（不可信素材，留在围栏内）——
+  // 它进 CluePack 却不渲染 = R3「审批可见入参」对裁决模型不可达。依赖 E1 的递归脱敏先落地。
+  if (clue.argsDigest) evidence.push(`[入参摘要（脱敏后）] ${neutralizeFence(clue.argsDigest)}`)
   const lines = [
     '## 待裁决调用',
     `- 工具：${clue.toolName}`,
@@ -120,7 +126,8 @@ function renderCluePack(clue: ApprovalCluePack): string {
         ]
       : []),
     '',
-    '请依据裁决标准独立给出两态 JSON 结论。'
+    '请依据裁决标准独立给出三态 JSON 结论（approve / deny / undetermined）；',
+    '事实链不完整、无法判定安全性时必须输出 undetermined 并写明缺什么证据——不得在证据不足时猜测 approve。'
   ]
   return lines.join('\n')
 }
@@ -189,7 +196,7 @@ function isAuthorizationDimension(value: unknown): value is ApprovalAuthorizatio
 }
 
 /**
- * 从模型输出中解析两态裁决 JSON（无中间态：解析不出即为 unparsable → deny 由调用方兜底）。
+ * 从模型输出中解析三态裁决 JSON（undetermined 为有效裁决「判不了」；解析不出即为 unparsable → deny 由调用方兜底）。
  * P1-2：取**最后一个**合法裁决——输出协议允许少量前置说明，若模型被证据内容诱导先吐出
  * 一个 approve 示例 JSON，取首会命中诱导；取尾使诱导示例只有出现在最终结论位才生效，
  * 与「裁决 JSON 是回复的收束产物」协议一致。
@@ -218,7 +225,7 @@ export function parseApprovalVerdict(
         authorization?: unknown
         reason?: { summary?: unknown }
       }
-      if (parsed.kind !== 'approve' && parsed.kind !== 'deny') continue
+      if (parsed.kind !== 'approve' && parsed.kind !== 'deny' && parsed.kind !== 'undetermined') continue
       const declaredKind = parsed.kind
       const explicitSummary =
         typeof parsed.reason?.summary === 'string' && parsed.reason.summary ? parsed.reason.summary : undefined
@@ -229,6 +236,18 @@ export function parseApprovalVerdict(
         isAuthorizationDimension(parsed.authorization) ? parsed.authorization : 'unknown',
         opts?.maxAuthorization ?? 'high'
       )
+      // R5：undetermined 是「有效裁决：判不了」——取原样（reason.summary 必须写明缺什么证据），
+      // 不参与阈值矩阵、不派生 risk/authorization；取「最后一个合法裁决」的既有策略不变。
+      if (declaredKind === 'undetermined') {
+        last = {
+          kind: 'undetermined',
+          reason: {
+            summary: explicitSummary ?? DEFAULT_DENY_SUMMARY,
+            ...(explicitSummary ? {} : { evidence: ['undetermined without summary'] })
+          }
+        }
+        continue
+      }
       const matrixSaysDeny = declaredKind === 'approve' && deriveApprovalOutcome(risk, auth) === 'deny'
       const kind = matrixSaysDeny ? 'deny' : declaredKind
       last = {

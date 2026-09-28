@@ -1,6 +1,6 @@
 import type { ShellDialect } from './shellProfiles'
 
-export type ShellSecurityVerdict = 'allow' | 'deny' | 'ask'
+export type ShellSecurityVerdict = 'allow' | 'deny' | 'ask' | 'unsupported'
 
 export type ShellSecurityDenyType = 'strong' | 'weak'
 
@@ -40,6 +40,10 @@ export interface ShellAnalysisResult {
   denyReason?: string
   validatorId?: string
   denyType?: ShellSecurityDenyType
+  /** R5：verdict='unsupported' 时列出解析器不支持的结构（如 conditional-block / pipe-to-format） */
+  unsupportedStructures?: string[]
+  /** R5：unsupported 子原因（structure=结构不受支持；too-many-segments=段数超限） */
+  unsupportedReason?: 'structure' | 'too-many-segments'
   pathVerdict: ShellPathVerdict
   segments: string[]
   shellSecurityHints: {

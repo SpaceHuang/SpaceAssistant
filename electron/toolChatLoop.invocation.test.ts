@@ -175,7 +175,9 @@ describe('assembleInvocation 键位平移（P1 契约形状）', () => {
     expect(invocation.additionalContext['facts.history']).toEqual([{ id: 'f1', sessionId: 'sess-invocation-1', role: 'user', text: 't', tokens: 1 }])
     expect(invocation.driverContext).toMatchObject({ source: 'feishu', messageId: 'm1' })
     // 端口落位：workspace / credentials 接口方法 / legacy 过渡（N1 声明的 P2 前豁免）
-    expect(ports.workspace.workDir).toBe('/tmp')
+    // R1：workDir 是装配期快照 rootPath 的投影（规范化后可能与材料字面值不同）
+    expect(ports.workspace.workDir).toBe(ports.workspace.snapshot().rootPath)
+    expect(ports.workspace.snapshot().revision).toBe(0)
     expect(ports.workspace.userDataDir).toBe('/tmp')
     expect(typeof ports.credentials.resolveApiKey).toBe('function')
     expect(ports.legacy?.appDb).toBe(materials.appDb)

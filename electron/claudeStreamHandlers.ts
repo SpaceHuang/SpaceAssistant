@@ -40,6 +40,8 @@ export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
   getWorkDir: () => string
   resolveWorkDirForSession: (sessionId: string) => string
+  /** R1：桌面链路注入 manager，使装配期快照与调用边界 refresh() 可解析会话绑定（不再只传回合起点字符串） */
+  getWorkDirManager?: () => import('./workDirManager').WorkDirManager | undefined
   getUserDataPath: () => string
   getToolsConfig: () => ToolsConfig
   getBrowserConfig: () => BrowserConfig
@@ -456,6 +458,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             authoritative.messages.find((m) => m.id === authoritative.currentUserMessageId)?.content ?? ''
           ),
           workDir: sessionWorkDir,
+          ...(deps.getWorkDirManager ? { workDirManager: deps.getWorkDirManager() } : {}),
           userDataDir,
           getApiKey,
           appDb: deps.getAppDatabase(),

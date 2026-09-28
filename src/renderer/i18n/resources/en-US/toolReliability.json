@@ -1,0 +1,27 @@
+{
+  "deny": {
+    "forbidden": {
+      "rule": "This operation is unconditionally forbidden by security rule ({{ruleId}}); no parameter change can make it executable. To allow it, contact the user to adjust policy."
+    },
+    "insufficientInfo": {
+      "rule": "The security policy needs more information to decide ({{ruleId}}). Provide the required arguments or clarify the purpose and retry."
+    },
+    "outOfBounds": {
+      "workdir": "Target {{targetResolved}} is outside this session's working-directory basis {{basisWorkDir}} (rule {{ruleId}}). Use a path inside the working directory, or ask the user for authorization via a trusted route."
+    }
+  },
+  "shell": {
+    "unsupportedStructure": "The command uses structures unsupported by the current security parser ({{structures}}) and cannot be analyzed: {{shell}}",
+    "deniedByRule": "The command hit a danger rule ({{ruleId}}) and cannot be executed"
+  },
+  "confirm": {
+    "payloadIncomplete": "Approval payload is incomplete: {{toolName}} is missing field(s) {{missingFields}}. This is a payload construction problem, not a missing invocation argument."
+  },
+  "grep": {
+    "paramConflict": "Parameter {{conflictField}} only takes effect with {{allowedCombos}}; current output_mode is {{currentMode}}. {{suggestedWrite}}",
+    "scopeNotice": "Searched: {{root}}; skipped {{skippedCount}} default-ignored directories ({{skippedNames}}) which may contain matches"
+  },
+  "notExecuted": {
+    "agentUndetermined": "The approval agent could not determine the safety of this call; it was blocked conservatively"
+  }
+}

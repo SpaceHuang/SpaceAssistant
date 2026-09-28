@@ -23,6 +23,28 @@ import { persistShellConfig, readShellConfigFromDb } from './shellConfigDb'
 import type { ShellAnalysisResult } from './shellTypes'
 import type { TrustedShellCommand } from '../../src/shared/domainTypes'
 
+// R5（T-R5-5）：unsupported 结论的 analysis——requiresRiskAck=true 但信任闸门必须显式排除，不得只依赖 hints
+function unsupportedAnalysis(): ShellAnalysisResult {
+  return {
+    verdict: 'unsupported',
+    unsupportedReason: 'structure',
+    unsupportedStructures: ['conditional-block'],
+    segments: [],
+    pathVerdict: {
+      decision: 'ask',
+      violations: [{ code: 'PARSE_ERROR', message: '解析失败', severity: 'warning' }],
+      warnings: ['解析失败'],
+      outsideWorkDirRisk: true,
+      requiresRiskAck: true
+    },
+    shellSecurityHints: {
+      requiresRiskAck: true,
+      outsideWorkDirRisk: true,
+      warnings: ['解析失败']
+    }
+  }
+}
+
 function askAnalysis(overrides: Partial<ShellAnalysisResult['shellSecurityHints']> = {}): ShellAnalysisResult {
   return {
     verdict: 'ask',
@@ -297,5 +319,25 @@ describe('shellCommandTrust', () => {
     const ids = new Set(results.filter(Boolean).map((r) => r!.id))
     expect(ids.size).toBe(1)
     expect(readShellConfigFromDb(db).trustedCommands?.length).toBe(1)
+  })
+})
+
+describe('R5（T-R5-5）：unsupported 命令在信任选项中不可见、不可持久化', () => {
+  it('canShowShellTrustOption(unsupported) === false（显式排除，不依赖 requiresRiskAck 双保险）', () => {
+    expect(canShowShellTrustOption(unsupportedAnalysis(), 'if true; then echo hi; fi')).toBe(false)
+  })
+
+  it('shouldSkipShellConfirmForTrust(unsupported) === false（不可静默跳过确认）', () => {
+    expect(shouldSkipShellConfirmForTrust('if true; then echo hi; fi', unsupportedAnalysis())).toBe(false)
+  })
+
+  it('即使命令已被加入信任列表，unsupported 结论也不跳过确认', () => {
+    const ownDb = openDatabase(':memory:')
+    try {
+      addTrustedCommand(ownDb, { command: 'echo ok', source: 'desktop' })
+      expect(shouldSkipShellConfirmForTrust('echo ok', unsupportedAnalysis(), readShellConfigFromDb(ownDb))).toBe(false)
+    } finally {
+      ownDb.close()
+    }
   })
 })

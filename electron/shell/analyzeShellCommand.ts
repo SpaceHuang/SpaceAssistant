@@ -53,9 +53,12 @@ async function analyzeShellCommandWithPolicy(
   const pathPlatform: ShellPathPlatform = platform === 'win32' ? 'win32' : platform === 'darwin' ? 'darwin' : 'posix'
   // P3-T5：PS 树事实解析失败 → 与 bash 同语义的失败兜底（fail-closed）
   if (psFacts && !psFacts.ok) {
+    // R5：解析失败从「拒绝」改为可区分结论 unsupported（事实链缺失 ≠ 危险）；
+    // 子原因 structure；requiresRiskAck 保留（既表达「需确认」，也顺带关闭信任选项闸门）
     const msg = '命令语法解析失败，无法进行安全分析'
     return {
-      verdict: 'deny',
+      verdict: 'unsupported',
+      unsupportedReason: 'structure',
       denyReason: msg,
       segments: [],
       pathVerdict: emptyPathVerdict(msg),
@@ -68,9 +71,11 @@ async function analyzeShellCommandWithPolicy(
   }
   // P2-T2：树事实解析失败 → 与既有分段失败分支同形的失败结果（fail-closed，只增不减的更严侧）
   if (bashFacts && !bashFacts.ok) {
+    // R5：同上——unsupported，不判危险
     const msg = '命令语法解析失败，无法进行安全分析'
     return {
-      verdict: 'deny',
+      verdict: 'unsupported',
+      unsupportedReason: 'structure',
       denyReason: msg,
       segments: [],
       pathVerdict: emptyPathVerdict(msg),
@@ -86,9 +91,11 @@ async function analyzeShellCommandWithPolicy(
   try {
     segments = parseShellSegments(command)
   } catch (e) {
+    // R5：段数超限并入 unsupported（子原因 too-many-segments），不新增第二个枚举值
     const msg = e instanceof Error ? e.message : String(e)
     return {
-      verdict: 'deny',
+      verdict: 'unsupported',
+      unsupportedReason: 'too-many-segments',
       denyReason: msg,
       segments: [],
       pathVerdict: emptyPathVerdict(msg),
@@ -315,7 +322,8 @@ export function canSkipShellConfirm(
   command?: string,
   shellConfig?: ShellConfig | null
 ): boolean {
-  if (analysis.verdict === 'deny') return false
+  // R5：显式排除 unsupported——无法分析的命令不得因「非 deny」被当作可自动执行
+  if (analysis.verdict !== 'allow' && analysis.verdict !== 'ask') return false
   if (command && shouldSkipShellConfirmForTrust(command, analysis, shellConfig)) return true
   if (analysis.shellSecurityHints.requiresRiskAck) return false
   if (analysis.permissionDecision === 'allow') return true

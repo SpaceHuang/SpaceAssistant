@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "产物决策双通道时序",
+    "subtitle": "桌面卡片与飞书/微信私聊共用原子提交，先到先得",
+    "quality_profile": "showcase",
+    "animation": "trace",
+    "output": "docs/diagrams/artifact-decision-channels.sequence.html",
+    "viewBox": [1900, 820],
+    "views": [
+      {
+        "id": "outbound",
+        "label": "决策出站",
+        "focus": ["loop", "resolver", "bridge", "desktop", "im"],
+        "note": "decision_required 后注册 pending 并向双通道推送。"
+      },
+      {
+        "id": "race",
+        "label": "双通道竞答",
+        "focus": ["desktop", "bridge", "im"],
+        "note": "同一原子提交入口，先到者胜，后到者得 stale。"
+      },
+      {
+        "id": "resume",
+        "label": "恢复与登记",
+        "focus": ["loop", "resolver", "store", "desktop"],
+        "note": "waiter 恢复后重解析、写入并登记。"
+      }
+    ]
+  },
+  "participants": [
+    { "id": "loop", "type": "backend", "label": "工具循环", "sublabel": "toolChatLoop" },
+    { "id": "resolver", "type": "backend", "label": "路径解析器", "sublabel": "artifactResolver" },
+    { "id": "bridge", "type": "backend", "label": "决策桥", "sublabel": "decision bridge" },
+    { "id": "desktop", "type": "frontend", "label": "桌面 UI", "sublabel": "决策卡片" },
+    { "id": "im", "type": "external", "label": "飞书 / 微信", "sublabel": "私聊" },
+    { "id": "store", "type": "database", "label": "产物登记", "sublabel": "session_artifacts" }
+  ],
+  "segments": [
+    { "from": 150, "to": 360, "label": "决策出站" },
+    { "from": 400, "to": 560, "label": "双通道作答（先到先得）" },
+    { "from": 590, "to": 750, "label": "恢复 · 写入 · 登记" }
+  ],
+  "messages": [
+    { "id": "prepare", "from": "loop", "to": "resolver", "y": 190, "label": "prepareArtifactToolWrite（写入意图）", "variant": "emphasis" },
+    { "id": "required", "from": "resolver", "to": "loop", "y": 235, "label": "decision_required（output-location 等）", "variant": "return" },
+    { "id": "register", "from": "loop", "to": "bridge", "y": 280, "label": "注册 request + waiter + owner", "variant": "emphasis" },
+    { "id": "push-desktop", "from": "bridge", "to": "desktop", "y": 325, "label": "artifact:decision-request（IPC）", "variant": "default" },
+    { "id": "push-im", "from": "loop", "to": "im", "y": 365, "label": "决策文本出站（UUID + 编号选项）", "variant": "dashed" },
+    { "id": "im-reply", "from": "im", "to": "bridge", "y": 455, "label": "私聊回复「decisionId 编号/带值」", "variant": "default" },
+    { "id": "desktop-reply", "from": "desktop", "to": "bridge", "y": 495, "label": "artifact:decision-response（IPC）", "variant": "default", "note": "同一原子入口：仅首个 resolved，其余 stale / binding_mismatch" },
+    { "id": "wakeup", "from": "bridge", "to": "loop", "y": 527, "label": "waiter 恢复（choice + 溯源）", "variant": "emphasis" },
+    { "id": "reresolve", "from": "loop", "to": "resolver", "y": 565, "label": "resolveArtifactOutputAfterDecision", "variant": "emphasis" },
+    { "id": "ready", "from": "resolver", "to": "loop", "y": 604, "label": "ready（最终路径 + 安全复检通过）", "variant": "return" },
+    { "id": "write-file", "from": "loop", "to": "store", "y": 644, "label": "写入成功后登记（canonicalPath + 溯源）", "variant": "default" },
+    { "id": "notify", "from": "loop", "to": "desktop", "y": 682, "label": "artifact:changed + 完成摘要", "variant": "dashed" }
+  ],
+  "activations": [
+    { "participant": "loop", "from": 185, "to": 690, "type": "backend" },
+    { "participant": "resolver", "from": 185, "to": 240, "type": "backend" },
+    { "participant": "resolver", "from": 558, "to": 612, "type": "backend" },
+    { "participant": "bridge", "from": 275, "to": 532, "type": "backend" },
+    { "participant": "desktop", "from": 320, "to": 500, "type": "frontend" },
+    { "participant": "im", "from": 360, "to": 460, "type": "external" },
+    { "participant": "store", "from": 639, "to": 652, "type": "database" }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "原子提交",
+      "items": [
+        "桌面 IPC 与 IM 入站共用 submitArtifactDecisionResponse",
+        "提交临界区完全同步，先到先得，无双消费",
+        "败者返回 stale；绑定不匹配返回 binding_mismatch"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "IM 侧约束",
+      "items": [
+        "入站必须先过私聊 + 绑定 guard（source/authOwner/privateChatTarget）",
+        "UUID 前缀抽取先于候选数判断，零候选也由决策处理器消费",
+        "IM 出站失败立即取消本轮，桌面卡同时失效（失败关闭）",
+        "回复参与平台 processed-store 去重，不创建新 Agent 请求"
+      ]
+    },
+    {
+      "dot": "orange",
+      "title": "生命周期",
+      "items": [
+        "waiter TTL 5 分钟；超时 / abort / 出站失败统一 settle",
+        "owner 级 tombstone TTL 10 分钟，迟到回复得 stale",
+        "重注册同一 waiter 键会 replaced 旧决策"
+      ]
+    }
+  ]
+}

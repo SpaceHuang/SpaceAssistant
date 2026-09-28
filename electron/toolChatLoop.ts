@@ -33,7 +33,7 @@ import { coordinatorConfirmHook } from './tools/coordinatorConfirmationAdapter'
 import { executePreparedShellExecutionWithHostFallback } from './tools/runShellExecutor'
 import { planRunShellExecution, RunShellPlanError } from './tools/runShellPlan'
 import type { PreparedShellExecution } from './shell/preparedShellExecution'
-import { validateToolExecutorResultForTool, type ToolExecutorResult } from './tools/types'
+import { validateToolExecutorResultForTool, validateToolExecutorResultWithViolations, type ToolExecutorResult } from './tools/types'
 import { projectAgentToolResult, serializeAgentToolResult } from '../src/shared/agentToolResult'
 import { projectProcessResultForAgentLog } from '../src/shared/agentSafeProjection'
 import { isProcessToolName } from '../src/shared/processResultProjection'
@@ -114,8 +114,32 @@ import { finalizeReadConfirmation, settleReadConfirmation } from './confirmation
 import { recordPolicyExecutionVeto } from './confirmation/audit'
 import { recordUserAnswerFromDecision, recordSystemManagedCacheEntry } from './confirmation/decisionCacheWriter'
 import { getSecurityAuditLog } from './confirmation/audit'
+import { workspacePathKey as workspacePathKeyOf } from '../src/shared/agent/workspace'
+
+// C2（评审 2026-09-28）：basis-mismatch 护栏的辅助。
+// - realpathBestEffort：legacy 侧（profile.path 字面拼写）与快照侧（realpath 归一）同口径后
+//   再比 key，junction / subst / 8.3 短名等合法形态不误报。
+// - isPackagedApp：fail-loud 只允许开发态。打包产物继承用户环境，NODE_ENV 不被设置，
+//   `NODE_ENV !== 'production'` 恒真——判据必须用 app.isPackaged（测试环境无 electron 时按开发态）。
+function realpathBestEffort(p: string): string {
+  try {
+    return realpathSyncNode(p)
+  } catch {
+    return p
+  }
+}
+
+function isPackagedApp(): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { app } = require('electron') as typeof import('electron')
+    return Boolean(app?.isPackaged)
+  } catch {
+    return false
+  }
+}
 import { channelFor, type ResolveConfirmChannelArgs } from './confirmation/channels'
-import { shouldFallbackToUser } from './confirmation/fallbackToUser'
+import { shouldFallbackToUser, isFallbackEligibleCause } from './confirmation/fallbackToUser'
 import { approvalFallbackReasonFor } from './confirmation/fallbackReason'
 import type { ConfirmationChannel } from '../src/shared/confirmation/types'
 import { AgentChannel } from './confirmation/agentChannel'
@@ -181,6 +205,7 @@ import {
 } from './toolConfirmRegistry'
 import * as toolConfirmRegistry from './toolConfirmRegistry'
 import fs from 'fs/promises'
+import { realpathSync as realpathSyncNode } from 'fs'
 import path from 'path'
 import { resolveSafePathReal } from './pathSecurity'
 import { assertSafeToolInput } from './toolInputGuards'
@@ -555,6 +580,8 @@ export type RunToolChatSessionArgs = {
   workDir: string
   workDirManager?: WorkDirManager
   resolveWorkDir?: () => string
+  /** R1：调用边界刷新工作目录快照（绑定未变返回原对象）；注入后优先于 resolveWorkDir/initialWorkDir */
+  workspaceRefresh?: () => import('../src/shared/agent/workspace').WorkspaceSnapshot
   userDataDir: string
   getApiKey: () => Promise<string | null>
   /** 用于达到累计 assistant 阈值后异步生成会话标题（不写则跳过） */
@@ -673,6 +700,9 @@ export function notExecutedReasonForConfirmation(input: {
   switch (input.cause) {
     case 'agent-deny':
       return 'agent_denied'
+    // R5（评审 N2）：审批「判不了」是有效裁决，不得落 user_rejected（污染判定不了率统计）
+    case 'agent-undetermined':
+      return 'agent_undetermined'
     case 'timeout':
       return 'confirm_timeout'
     case 'unavailable':
@@ -773,6 +803,7 @@ function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): R
     workDir: ports.workspace.workDir,
     workDirManager: ports.workspace.workDirManager as WorkDirManager | undefined,
     resolveWorkDir: ports.workspace.resolveWorkDir,
+    workspaceRefresh: ports.workspace.refresh,
     userDataDir: ports.workspace.userDataDir,
     getApiKey: () => ports.credentials.resolveApiKey(),
     locale: invocation.profile.locale as AppLocale | undefined,
@@ -891,6 +922,7 @@ async function runToolChatSessionInner(
     workDir: initialWorkDir,
     workDirManager,
     resolveWorkDir,
+    workspaceRefresh,
     userDataDir,
     getApiKey,
     hostDiagnostics,
@@ -1172,7 +1204,7 @@ async function runToolChatSessionInner(
       memoryEnabled: projectMemoryEnabled ?? true,
       locale,
       hasImageAttachments: hasImageAttachments ?? false,
-      skillCatalog: getCachedSkills(userDataDir, resolveWorkDir?.() ?? initialWorkDir),
+      skillCatalog: getCachedSkills(userDataDir, workspaceRefresh ? workspaceRefresh().rootPath : (resolveWorkDir?.() ?? initialWorkDir)),
       contextWindow: args.contextWindow
     })
     // requestId 按一次 provider 请求尝试定义；同一轮的 header/context/usage 必须共享它。
@@ -1941,7 +1973,39 @@ async function runToolChatSessionInner(
       try {
       do {
       throwIfChatCancelled(chatSignal)
-      const workDir = resolveWorkDir ? resolveWorkDir() : initialWorkDir
+      // R1：调用边界 refresh()——绑定变更只有下一次工具调用可见（调用内冻结、调用间跟随）
+      const workspaceSnapshot = workspaceRefresh ? workspaceRefresh() : undefined
+      const workDir = workspaceSnapshot?.rootPath ?? (resolveWorkDir ? resolveWorkDir() : initialWorkDir)
+      // R1 §4.1.5 基准分歧护栏：快照与旧解析路径并存且结论不同 = 出现多副本。
+      // C2（评审 2026-09-28）：① 两侧比较前都做 realpath 归一（legacy 返回的是 profile.path
+      // 字面拼写，junction/subst/8.3 等合法形态与快照 realpath 天然字面不等，不得误报）；
+      // ② fail-loud 判据用 app.isPackaged（NODE_ENV 在打包产物中不被设置，恒真会炸生产）。
+      if (workspaceSnapshot && resolveWorkDir) {
+        const legacyWorkDir = resolveWorkDir()
+        if (legacyWorkDir) {
+          const legacyReal = realpathBestEffort(legacyWorkDir)
+          const legacyKey = workspacePathKeyOf(legacyReal)
+          if (legacyKey !== workspaceSnapshot.key) {
+            getSecurityAuditLog().record({
+              ts: Date.now(),
+              lane: effectiveLane,
+              actor: 'system',
+              event: 'workspace.basis-mismatch',
+              sessionId,
+              reason: JSON.stringify({
+                revision: workspaceSnapshot.revision,
+                snapshotRoot: workspaceSnapshot.rootPath,
+                legacyWorkDir
+              })
+            })
+            if (!isPackagedApp()) {
+              throw new Error(
+                `workspace basis mismatch: snapshot=${workspaceSnapshot.rootPath} legacy=${legacyWorkDir}`
+              )
+            }
+          }
+        }
+      }
       const toolUseId = tu.id
       const toolName = tu.name
       // B1：API 返回的是 sanitize 后的 compat 名，回向解析为内部注册名（可能含点号）再授权与查找
@@ -2703,7 +2767,12 @@ async function runToolChatSessionInner(
               void toolConfirmRegistry.prepareToolConfirm?.(requestId, toolUseId, confirmMemoryTiers, { ...preparedTrustScope, sessionId }, undefined)
               // §5.10b：写 / 编辑工具补算 confirmDiff（agent 路径首次事件刻意省略）
               const fallbackDiff = await maybeBuildConfirmDiff(workDir, toolName, inputObj)
-              const fallbackReason = approvalFallbackReasonFor(fallbackCause === 'timeout' ? 'timeout' : 'unavailable', locale)
+              // N3（评审 v2）：undetermined 是 R5 的正常预期产出（第三态唯一用户可见出口）——
+              // 坍缩为「审批服务不可用」会误导用户等待重试而非人工裁决。透传真实 cause。
+              const fallbackReason = approvalFallbackReasonFor(
+                isFallbackEligibleCause(fallbackCause) ? fallbackCause : 'unavailable',
+                locale
+              )
               // §5.8 / §5.3：第二条 confirm-requested——显式清除 autoAnswerer（恢复可交互）、
               // 携带短原因（banner 说明「自动处理未完成」）、补 diff；工具保持 confirming 不置终态（§5.1 第 2 条）
               args.emitFactEvent?.({
@@ -2714,7 +2783,12 @@ async function runToolChatSessionInner(
                 ...(fallbackDiff ? { confirmDiff: fallbackDiff } : {}),
                 ...(shellSecurityHints ? { shellSecurityHints } : {}),
                 autoApproveFallback: {
-                  reasonCode: fallbackCause === 'timeout' ? 'approval_timeout' : 'approval_unavailable',
+                  reasonCode:
+                    fallbackCause === 'timeout'
+                      ? 'approval_timeout'
+                      : fallbackCause === 'agent-undetermined'
+                        ? 'approval_undetermined'
+                        : 'approval_unavailable',
                   reason: fallbackReason
                 },
                 autoAnswerer: false,
@@ -3262,6 +3336,7 @@ async function runToolChatSessionInner(
             shellOutputMode,
             appDatabase: hostMcp?.executorDatabase as import('./database').AppDatabase,
             workDirManager,
+            workspaceSnapshot,
             wikiConfig,
             feishuConfig,
             wechatConfig,
@@ -3373,7 +3448,25 @@ async function runToolChatSessionInner(
         }
       }
 
-      execResult = validateToolExecutorResultForTool(toolName, execResult)
+      {
+        // R4：事实优先归一 + 契约违规告警（不允许静默改写）
+        const validated = validateToolExecutorResultWithViolations(execResult)
+        execResult = validated.result
+        // F3（评审 2026-09-28）：落日志收窄到 I0–I4。I5 是「未知码」——存量执行器的
+        // error 大量是中文句子/业务码，全记 contract-violation 会摧毁告警信噪比。
+        if (isProcessToolName(toolName) && validated.violations.some((v) => v.invariant !== 'I5')) {
+          logAgentEvent('warn', 'tool.result.contract-violation', {
+            requestId,
+            sessionId,
+            toolUseId,
+            toolName,
+            loopRound,
+            invariants: validated.violations.map((v) => v.invariant).join(','),
+            violationCount: validated.violations.length,
+            errorCode: validated.result.error ?? ''
+          })
+        }
+      }
 
       const durationMs = Date.now() - execStartedAt
       if (execResult.success && fileAutoApproved && (toolName === 'write_file' || toolName === 'edit_file')) {
@@ -3569,6 +3662,8 @@ async function runToolChatSessionInner(
       const resolvedNodeName = normalizeExternalToolName(tu.name).canonicalName
       const registered = getRegisteredTool(resolvedNodeName)
       const legacy = getToolExecutor(resolvedNodeName)
+      // 规划期资源键（调度并发冲突分析）：同一批调用内部相对关系，非安全判定；
+      // 统一用回合起点基准保证批内一致（R1 §4.1.4「规划期可接受」分类）。
       const resourceKeys = registered?.resourceKeys?.(input, { workDir: initialWorkDir, sessionId })
         ?? legacy?.resourceKeys?.(input, { workDir: initialWorkDir, sessionId })
       const conflicts = (a: string, b: string) => {

@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "工作产物管理系统架构",
+    "subtitle": "SpaceAssistant · Electron 主进程基础设施与桌面 / IM 双决策通道",
+    "quality_profile": "showcase",
+    "animation": "none",
+    "output": "docs/diagrams/artifact-management.architecture.html",
+    "viewBox": [1560, 700],
+    "repository": {
+      "url": "https://github.com/SpaceHuang/SpaceAssistant.git",
+      "revision": "d785daf97ce28c5a8cdb6345105fd77dd6fea28e"
+    },
+    "views": [
+      {
+        "id": "desktop-write-path",
+        "label": "桌面写入链路",
+        "focus": ["renderer_ui", "preload", "tool_loop", "resolver", "path_lease", "workdir"],
+        "note": "从渲染进程到文件写入的主链路：意图解析 → 租约 → 写入。"
+      },
+      {
+        "id": "decision-loop",
+        "label": "决策闭环",
+        "focus": ["tool_loop", "decision_bridge", "renderer_ui", "remote_codec", "im_bridge", "im_platform"],
+        "note": "decision_required 后桌面卡片与 IM 私聊双通道作答，原子提交先到先得。"
+      },
+      {
+        "id": "state-ownership",
+        "label": "登记与状态",
+        "focus": ["resolver", "repository", "sqlite", "workdir"],
+        "note": "写入成功后才登记 session_artifacts，SQLite 是唯一登记事实来源。"
+      }
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "components": [
+    { "id": "remote_codec", "type": "backend", "label": "IM 编解码", "sublabel": "UUID 前缀 + 编号选项协议", "pos": [580, 60], "size": [200, 70], "sources": [{ "path": "electron/remote/artifactDecisionRemote.ts" }] },
+    { "id": "im_bridge", "type": "backend", "label": "IM 入站桥", "sublabel": "owner 索引 · 授权校验", "pos": [830, 60], "size": [170, 70], "sources": [{ "path": "electron/remote/artifactDecisionImBridge.ts" }] },
+    { "id": "im_platform", "type": "external", "label": "飞书 / 微信私聊", "sublabel": "绑定 guard · 防重 · 审计", "pos": [1080, 60], "size": [180, 70] },
+    { "id": "renderer_ui", "type": "frontend", "label": "渲染进程产物 UI", "sublabel": "决策卡片 · 产物面板 · 迁移", "pos": [60, 200], "size": [180, 70], "tag": "React 18", "sources": [{ "path": "src/renderer/components/Chat/ArtifactDecisionCard.tsx" }, { "path": "src/renderer/components/DetailPanel/SessionArtifactsPanel.tsx" }] },
+    { "id": "preload", "type": "messagebus", "label": "预加载 IPC 桥", "sublabel": "artifact:* 通道转发", "pos": [60, 330], "size": [180, 70], "sources": [{ "path": "electron/preload.ts", "line": 17, "end_line": 36 }] },
+    { "id": "tool_loop", "type": "backend", "label": "工具循环", "sublabel": "write_file / edit_file 产物门禁", "pos": [310, 330], "size": [200, 70], "tag": "toolChatLoop", "sources": [{ "path": "electron/toolChatLoop.ts", "line": 1031, "end_line": 1085 }] },
+    { "id": "resolver", "type": "backend", "label": "路径解析器", "sublabel": "容器 / 角色 / 溯源解析", "pos": [580, 330], "size": [170, 70], "sources": [{ "path": "electron/artifacts/artifactResolver.ts" }, { "path": "electron/artifacts/toolArtifactPath.ts" }] },
+    { "id": "decision_bridge", "type": "backend", "label": "决策桥", "sublabel": "pending · waiter · 原子提交", "pos": [830, 330], "size": [180, 70], "tag": "5min TTL", "sources": [{ "path": "electron/artifacts/artifactDecisionBridge.ts" }] },
+    { "id": "workdir", "type": "database", "label": "工作目录三容器", "sublabel": "project · package · .spaceassistant/runs", "pos": [310, 470], "size": [200, 70], "tag": "workDir 内" },
+    { "id": "path_lease", "type": "security", "label": "路径租约", "sublabel": "跨会话写入互斥", "pos": [60, 470], "size": [190, 70], "tag": "安全边界", "sources": [{ "path": "electron/artifacts/toolPathLease.ts" }] },
+    { "id": "repository", "type": "database", "label": "产物登记", "sublabel": "ArtifactRepository · 变更光标", "pos": [580, 470], "size": [180, 70], "sources": [{ "path": "electron/artifacts/artifactRepository.ts" }, { "path": "electron/artifacts/writeRegistration.ts" }] },
+    { "id": "sqlite", "type": "database", "label": "SQLite", "sublabel": "session_artifacts 表 · WAL", "pos": [580, 590], "size": [180, 60] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "SpaceAssistant 桌面应用", "wraps": ["renderer_ui", "preload", "tool_loop", "workdir", "resolver", "decision_bridge", "path_lease", "repository", "sqlite"] },
+    { "kind": "security-group", "label": "产物基础设施 electron/artifacts/", "wraps": ["resolver", "decision_bridge", "path_lease", "repository"] },
+    { "kind": "region", "label": "远程决策通道", "wraps": ["remote_codec", "im_bridge", "im_platform"] }
+  ],
+  "connections": [
+    { "from": "renderer_ui", "to": "preload", "label": "artifact:* IPC", "variant": "default", "labelAt": [150, 284] },
+    { "from": "preload", "to": "tool_loop", "label": "请求 / 决策事件", "variant": "emphasis", "fromSide": "right", "toSide": "left", "labelAt": [275, 317] },
+    { "from": "tool_loop", "to": "workdir", "label": "文件写入", "variant": "emphasis", "labelAt": [410, 414] },
+    { "from": "tool_loop", "to": "resolver", "label": "写入意图", "variant": "default" },
+    { "from": "tool_loop", "to": "path_lease", "label": "写入租约", "variant": "security" },
+    { "from": "resolver", "to": "decision_bridge", "label": "decision_required", "variant": "emphasis", "fromSide": "right", "toSide": "left", "labelAt": [790, 414] },
+    { "from": "decision_bridge", "to": "resolver", "label": "作答恢复", "variant": "emphasis", "fromSide": "left", "toSide": "right", "labelAt": [790, 434] },
+    { "from": "resolver", "to": "repository", "label": "占用查询", "variant": "dashed", "fromSide": "bottom", "toSide": "top" },
+    { "from": "repository", "to": "sqlite", "label": "session_artifacts CRUD", "variant": "default", "labelAt": [670, 564] },
+    { "from": "decision_bridge", "to": "remote_codec", "label": "决策出站", "variant": "dashed", "labelAt": [790, 245] },
+    { "from": "remote_codec", "to": "im_bridge", "label": "UUID + 编号", "variant": "default", "labelAt": [765, 144] },
+    { "from": "im_bridge", "to": "im_platform", "label": "私聊出站 / 入站", "variant": "default", "labelAt": [1040, 144] },
+    { "from": "im_bridge", "to": "decision_bridge", "label": "原子提交（先到先得）", "variant": "security", "fromSide": "bottom", "toSide": "top", "labelAt": [915, 210] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "三类容器与四种角色",
+      "items": [
+        "project 项目变更集：源码 / 测试 / 配置写入项目结构",
+        "package 工作包：primary 主成果 + supporting 材料 + reference 资料",
+        "scratch 会话草稿区：.spaceassistant/runs/<sessionId>/，可整体清理"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "六类用户决策",
+      "items": [
+        "output-location · path-type · ownership",
+        "overwrite（覆盖/改名/改目录/取消）",
+        "reference-retention · git-ignore",
+        "桌面 IPC 与 IM 私聊共用同一原子提交入口"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "安全约束",
+      "items": [
+        "用户显式路径按字面生效，证据一次性消费",
+        "全部路径限制在 workDir 内（symlink / junction 检查）",
+        "路径租约保证跨会话互斥；决策绑定四元组 + 5 分钟 TTL",
+        "feature flag artifactManagementEnabled 灰度控制"
+      ]
+    }
+  ]
+}

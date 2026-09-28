@@ -203,7 +203,7 @@ describe('runShellExecutor', () => {
       `${writeStderr('Traceback: /tmp/x.py:3')}; [Console]::Error.Write([char]10); ${writeStderr('ValueError: bad')}; exit 1`
     )
     const result = await runShellExecutor.execute({ command: cmd }, baseCtx(workDir, userDataDir))
-    expect(result).toMatchObject({ success: false, error: 'SHELL_PROCESS_EXIT', data: { exitCode: 1, status: 'failed' } })
+    expect(result).toMatchObject({ success: false, error: 'TOOL_EXEC_FAILED', data: { exitCode: 1, status: 'failed' } })
     expect(String(result.data?.stderr)).toContain('ValueError: bad')
     expect(String(result.data?.stderr)).toContain('Traceback: /tmp/x.py:3')
   }, SPAWN_TEST_TIMEOUT_MS)
@@ -211,7 +211,7 @@ describe('runShellExecutor', () => {
   it('外部 signal 终止不降级为普通 exit code 失败', async () => {
     if (isWindows) return
     const result = await runShellExecutor.execute({ command: 'kill -TERM $$' }, baseCtx(workDir, userDataDir))
-    expect(result).toMatchObject({ success: false, error: 'SHELL_PROCESS_EXIT', data: { status: 'signalled', exitCode: null, terminationReason: 'external_signal', signal: 'SIGTERM' } })
+    expect(result).toMatchObject({ success: false, error: 'TOOL_EXEC_FAILED', data: { status: 'signalled', exitCode: null, terminationReason: 'external_signal', signal: 'SIGTERM' } })
   }, SPAWN_TEST_TIMEOUT_MS)
 
   it('executable 不可用时返回稳定错误码与无进程结果', async () => {
@@ -326,7 +326,7 @@ describe('runShellExecutor', () => {
       ctx
     )
     expect(result.success).toBe(false)
-    expect(result.error).toBe('SHELL_TIMEOUT')
+    expect(result.error).toBe('TOOL_EXEC_FAILED')
     expect(result.userMessage).toMatch(/命令执行超时（1 秒）/)
     expect(result.data?.interrupted).toBe(true)
     expect(result.data?.terminationSignal).toBe(isWindows ? 'taskkill' : 'SIGTERM')
@@ -343,7 +343,7 @@ describe('runShellExecutor', () => {
       command: `sleep 30 & echo $! > '${pidFile}'; wait`,
       timeout: 1
     }, baseCtx(workDir, userDataDir))
-    expect(result.error).toBe('SHELL_TIMEOUT')
+    expect(result.error).toBe('TOOL_EXEC_FAILED')
     expect(result.userMessage).toMatch(/命令执行超时/)
     const childPid = Number((await fs.readFile(pidFile, 'utf8')).trim())
     expect(childPid).toBeGreaterThan(0)
@@ -364,7 +364,7 @@ describe('runShellExecutor', () => {
     controller.abort()
     const result = await pending
     expect(result.success).toBe(false)
-    expect(result.error).toBe('SHELL_CANCELLED')
+    expect(result.error).toBe('TOOL_USER_CANCELLED')
     expect(result.userMessage).toBe('用户取消执行')
     expect(addEventListener).toHaveBeenCalledTimes(1)
     expect(removeEventListener).toHaveBeenCalledTimes(1)

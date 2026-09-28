@@ -84,9 +84,10 @@ describe('P3-T5：dialect 路由三态断言（bash 路径 / PS 路径 / 解析�
     expect(r.facts?.operations.map((o) => o.verb)).toContain('Get-ChildItem')
   })
 
-  it('解析失败兜底：畸形 PS 命令 → deny（fail-closed，与 Bash 同语义）', async () => {
+  it('解析失败兜底：畸形 PS 命令 → unsupported（R5：解析失败降级为可区分结论，与 Bash 同语义）', async () => {
     const r = await analyzeShellCommand(WORK_DIR, 'Write-Output "unclosed', 'win32', null, USER_DATA)
-    expect(r.verdict).toBe('deny')
+    expect(r.verdict).toBe('unsupported')
+    expect(r.unsupportedReason).toBe('structure')
     expect(r.denyReason).toBeTruthy()
   })
 })

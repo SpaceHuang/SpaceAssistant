@@ -84,6 +84,7 @@ import { runStartupDecisionCacheCleanup } from './confirmation/cacheMaintenanceH
 import { runExemptionMigrationOnce } from './confirmation/exemptionMigrationRunner'
 import { runMcpConfirmPolicyMigrationOnce } from './confirmation/mcpConfirmPolicyMigration'
 import { runConfirmModeRetirementMigrationOnce } from './confirmation/confirmModeRetirementMigration'
+import { runShellDefaultEnableMigrationOnce } from './shellEnableDefaultMigration'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { cleanupOrphanedChatAttachments } from './chatAttachmentManager'
 import { getRendererURL, isSpaceAssistantDev } from './devEnvironment'
@@ -426,6 +427,9 @@ app.whenReady().then(async () => {
   runMcpConfirmPolicyMigrationOnce(db, { audit: getSecurityAuditLog() })
   // confirmMode 退役（§5.7）：一次性删除存量 config.tools JSON 的 confirmMode 键（幂等、失败不阻塞）
   runConfirmModeRetirementMigrationOnce(db)
+  // 存量「Shell 命令默认关闭」固化迁移：旧版本（bd5b5a01 前）保存过设置的用户，deniedTools 被
+  // 旧默认固化为 ['run_shell']，覆盖新默认（开启）。识别旧默认指纹一次性打开（幂等、失败不阻塞）。
+  runShellDefaultEnableMigrationOnce(db)
   runStartupDecisionCacheCleanup(db)
 
   const backup = new DebouncedSessionBackupManager(new SessionBackupManager(workDirState))
@@ -568,6 +572,7 @@ app.whenReady().then(async () => {
   const executeClaudeRequest = registerClaudeStreamHandlers(ipcMain, {
     getApiKey,
     getWorkDir: () => workDirState,
+    getWorkDirManager: () => workDirManager ?? undefined,
     resolveWorkDirForSession: (sessionId) => {
       const resolved = resolveWorkDirForSession(
         db,

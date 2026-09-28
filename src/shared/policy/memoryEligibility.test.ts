@@ -65,3 +65,25 @@ describe('MemoryEligibility 回答者维度（I3：记忆只源于人类）', ()
     expect(deriveMemoryEligibility(facts(persistable), 'desktop', 'user').eligibility).toBe('persistent')
   })
 })
+
+describe('B1：unsupported 信号阻断持久记忆资格（决策缓存旁路修复）', () => {
+  it('shell-unsupported-structure 信号 → eligibility=none（确认一次不得写 90 天 allow 缓存）', () => {
+    const r = deriveMemoryEligibility(
+      facts([{ kind: 'shell-unsupported-structure', structures: ['conditional-block'], reason: 'structure' }]),
+      'desktop'
+    )
+    expect(r.eligibility).toBe('none')
+    expect(r.reasons).toContain('shell-analysis-incomplete')
+  })
+
+  it('unsupported + persistable=true 的组合同样阻断（树解析失败但简单解析器 persistable 的真实形态）', () => {
+    const r = deriveMemoryEligibility(
+      facts([
+        { kind: 'command-sequence', commands: [], persistable: true },
+        { kind: 'shell-unsupported-structure', structures: [], reason: 'structure' }
+      ]),
+      'desktop'
+    )
+    expect(r.eligibility).toBe('none')
+  })
+})

@@ -57,5 +57,7 @@
   "TURN_VISION_MODEL_NOT_CONFIGURED": "没有可用的视觉模型，请在设置中启用视觉模型",
   "TURN_REQUEST_FINGERPRINT_MISMATCH": "发送请求与进行中的回合不一致，请稍后重试",
   "TURN_REUSE_SESSION_MISMATCH": "原始消息与会话不匹配，无法重试",
-  "TURN_REUSE_TARGET_NOT_USER": "原始消息已不可重试"
+  "TURN_REUSE_TARGET_NOT_USER": "原始消息已不可重试",
+  "DIRECTORY_ACCESS_DENIED": "没有访问该目录的权限",
+  "DIRECTORY_READ_TIMEOUT": "目录读取超时或被取消，可重试"
 }

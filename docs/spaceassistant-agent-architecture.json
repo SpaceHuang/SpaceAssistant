@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "SpaceAssistant Agent 架构",
+    "output": "spaceassistant-agent-architecture.html",
+    "quality_profile": "showcase",
+    "viewBox": [1300, 720],
+    "views": [
+      {
+        "id": "agent-main-path",
+        "label": "Agent 主链路",
+        "focus": ["renderer", "ipcEntry", "agentLoop", "llm"],
+        "note": "渲染进程发起工具调用聊天，主进程执行多轮 Agent 循环并与 Anthropic API 流式交互。"
+      },
+      {
+        "id": "tool-execution",
+        "label": "工具执行",
+        "focus": ["agentLoop", "confirm", "toolRegistry", "fileTools", "shellTool", "integrationTools"],
+        "note": "模型返回的 tool_use 经确认闸门后，由执行器注册表分派到文件、Shell 与集成工具。"
+      },
+      {
+        "id": "safety-and-context",
+        "label": "安全与上下文",
+        "focus": ["context", "agentLoop", "ipcEntry", "renderer"],
+        "note": "Skills 与项目记忆注入系统提示词，流式事件与确认交互回传渲染进程。"
+      }
+    ]
+  },
+  "components": [
+    { "id": "renderer", "type": "frontend", "label": "渲染进程 UI", "sublabel": "React 18 + Ant Design", "tag": "window.api", "pos": [40, 300], "size": [160, 64] },
+    { "id": "ipcEntry", "type": "backend", "label": "主进程 IPC 入口", "sublabel": "claudeStreamHandlers", "tag": "claude-chat-create-with-tools", "pos": [250, 300], "size": [180, 64] },
+    { "id": "agentLoop", "type": "backend", "label": "Agent 工具循环", "sublabel": "toolChatLoop.ts", "tag": "Agent 核心", "pos": [510, 300], "size": [180, 88] },
+    { "id": "llm", "type": "external", "label": "Anthropic API", "sublabel": "Messages Stream", "tag": "流式 + 思考", "pos": [880, 300], "size": [150, 64] },
+    { "id": "context", "type": "backend", "label": "上下文注入", "sublabel": "Skills / 项目记忆", "tag": "系统提示词", "pos": [510, 80], "size": [180, 64] },
+    { "id": "confirm", "type": "security", "label": "工具确认闸门", "sublabel": "toolConfirmRegistry", "tag": "等待用户", "pos": [510, 470], "size": [180, 64] },
+    { "id": "toolRegistry", "type": "backend", "label": "工具执行器注册表", "sublabel": "builtinExecutors.ts", "tag": "getToolExecutor", "pos": [740, 470], "size": [180, 64] },
+    { "id": "fileTools", "type": "backend", "label": "文件工具", "sublabel": "read / edit / write / grep", "pos": [1060, 330], "size": [150, 64] },
+    { "id": "shellTool", "type": "backend", "label": "Shell 工具", "sublabel": "run_shell / run_script", "tag": "安全预检", "pos": [1060, 470], "size": [150, 64] },
+    { "id": "integrationTools", "type": "backend", "label": "集成工具", "sublabel": "browser / run_lark_cli / wechat", "tag": "Stagehand / CLI / API", "pos": [1060, 610], "size": [180, 64] },
+    { "id": "db", "type": "database", "label": "SQLite", "sublabel": "会话 / 消息 / 配置", "tag": "WAL", "pos": [250, 470], "size": [180, 64] }
+  ],
+  "connections": [
+    { "id": "ui-to-ipc", "from": "renderer", "to": "ipcEntry", "label": "工具调用聊天", "variant": "emphasis", "fromSide": "right", "toSide": "left", "labelDy": 56 },
+    { "id": "ipc-to-loop", "from": "ipcEntry", "to": "agentLoop", "label": "执行循环", "variant": "emphasis", "fromSide": "right", "toSide": "left", "labelDy": 48 },
+    { "id": "loop-to-llm", "from": "agentLoop", "to": "llm", "label": "messages.stream", "variant": "emphasis", "fromSide": "right", "toSide": "left", "labelDy": 60 },
+    { "id": "context-to-loop", "from": "context", "to": "agentLoop", "label": "系统提示词", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
+    { "id": "ipc-to-db", "from": "ipcEntry", "to": "db", "label": "持久化", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
+    { "id": "loop-to-confirm", "from": "agentLoop", "to": "confirm", "label": "需确认工具", "variant": "security", "fromSide": "bottom", "toSide": "top", "labelDy": 24 },
+    { "id": "confirm-to-registry", "from": "confirm", "to": "toolRegistry", "label": "已批准", "fromSide": "right", "toSide": "left" },
+    { "id": "registry-to-file", "from": "toolRegistry", "to": "fileTools", "label": "文件读写", "fromSide": "top", "toSide": "left" },
+    { "id": "registry-to-shell", "from": "toolRegistry", "to": "shellTool", "label": "Shell", "fromSide": "right", "toSide": "left" },
+    { "id": "registry-to-integration", "from": "toolRegistry", "to": "integrationTools", "label": "集成工具", "fromSide": "bottom", "toSide": "left" },
+    { "id": "loop-to-ui", "from": "ipcEntry", "to": "renderer", "label": "流式 / 进度 / 确认", "variant": "dashed", "fromSide": "top", "toSide": "top", "via": [[340, 250], [120, 250]] }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Agent 工具循环", "items": ["多轮调用 Anthropic Messages Stream", "工具结果回填后继续推理，直到 end_turn"] },
+    { "dot": "emerald", "title": "工具执行", "items": ["文件、Shell、集成工具分派到注册表", "Stagehand 驱动浏览器，Lark CLI 驱动飞书"] },
+    { "dot": "rose", "title": "安全闸门", "items": ["高危工具需用户确认后执行", "Shell 与脚本经内容安全检查"] }
+  ]
+}

@@ -35,6 +35,12 @@ export function deriveMemoryEligibility(
     reasons.push('analysis-incomplete')
     return { eligibility: 'none', reasons }
   }
+  // B1（评审 2026-09-28）：树解析失败（unsupported）的命令事实链不完整——确认一次后
+  // 不得写持久 allow 缓存，否则「partial 永不自动放行」被缓存路径整体绕过。
+  if (facts.signals.some((signal) => signal.kind === 'shell-unsupported-structure')) {
+    reasons.push('shell-analysis-incomplete')
+    return { eligibility: 'none', reasons }
+  }
   if (facts.signals.some((signal) => signal.kind === 'command-sequence' && signal.persistable !== true)) {
     reasons.push('non-persistable-command')
     return { eligibility: 'none', reasons }

@@ -20,71 +20,83 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'wiki-raw-write-deny',
     when: 'invocation',
     match: { toolName: ['write_file', 'edit_file'], signals: ['wiki-raw-target'] },
+    denyClass: 'forbidden',
     action: 'deny', locked: true, reason: 'raw/ 为只读源，不可通过工具修改 (WIKI_RAW_READONLY)'
   },
   {
     id: 'remote-outside-write-deny',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], toolName: ['write_file', 'edit_file'], signals: ['write-target-scope:outside-workdir'] },
+    denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '远程会话只能写入当前工作目录内的文件'
   },
   {
     id: 'remote-write-scope-unknown-deny',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], toolName: ['write_file', 'edit_file'], signals: ['write-target-scope:unknown'] },
+    denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '远程会话只能写入当前工作目录内的文件'
   },
   {
     id: 'remote-outside-read-deny',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu', 'automation'], toolName: ['read_file', 'grep', 'list_directory'], actionClass: 'read', signals: ['path-target:outside-workdir'] },
+    denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '非桌面会话只能读取当前工作目录内的普通路径'
   },
   {
     id: 'remote-wechat-media-outside-deny',
     when: 'invocation',
     match: { lane: ['wechat'], toolName: ['wechat_send', 'wechat_reply'], signals: ['wechat-media-target:outside-workdir'] },
+    denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '微信附件只能来自当前工作目录内的文件'
   },
   {
     id: 'remote-wechat-media-unknown-deny',
     when: 'invocation',
     match: { lane: ['wechat'], toolName: ['wechat_send', 'wechat_reply'], signals: ['wechat-media-target:unknown'] },
+    denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '无法确认微信附件位于当前工作目录内，已阻止发送'
   },
   {
     id: 'write-target-unsupported-deny',
     when: 'invocation', match: { toolName: ['write_file', 'edit_file'], signals: ['write-target-unsupported'] },
+    denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '写入目标不是普通文件或新文件路径'
   },
   {
     id: 'feishu-media-boundary-deny',
     when: 'invocation',
     match: { lane: ['feishu', 'automation'], toolName: 'read_feishu_attachment', signals: ['feishu-media-target:outside'] },
+    denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '附件目标必须位于飞书媒体目录内'
   },
   {
     id: 'feishu-media-boundary-unknown-deny',
     when: 'invocation',
     match: { lane: ['feishu', 'automation'], toolName: 'read_feishu_attachment', signals: ['feishu-media-target:unknown'] },
+    denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '无法确认附件目标边界，已阻止读取'
   },
   {
     id: 'remote-sensitive-workdir-switch-deny',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], toolName: 'switch_work_dir', signals: ['workdir-profile-target:sensitive'] },
+    denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '远程会话不得切换到敏感工作目录'
   },
   {
     id: 'remote-unknown-workdir-switch-deny',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], toolName: 'switch_work_dir', signals: ['workdir-profile-target:unknown'] },
+    denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '无法确认目标工作目录是否敏感，已阻止切换'
   },
   {
     id: 'script-network-deny-remote',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: ['script-network'] },
+    denyClass: 'forbidden',
     action: 'deny',
     locked: true,
     reason: '远程链路禁止执行含网络访问的脚本'
@@ -95,6 +107,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'remote-deny-lark-write-outbound',
     when: 'invocation',
     match: { lane: ['feishu'], toolName: 'run_lark_cli', signals: ['lark-write'] },
+    denyClass: 'forbidden',
     action: 'deny',
     locked: true,
     configRequires: { config: 'remoteDenyOutbound', equals: true },
@@ -104,6 +117,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'remote-deny-wechat-outbound',
     when: 'invocation',
     match: { lane: ['wechat'], toolName: ['wechat_send', 'wechat_reply'] },
+    denyClass: 'forbidden',
     action: 'deny',
     locked: true,
     configRequires: { config: 'remoteDenyOutbound', equals: true },
@@ -115,6 +129,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'remote-browser-disabled',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], toolName: 'browser' },
+    denyClass: 'forbidden',
     action: 'deny',
     locked: true,
     configRequires: { config: 'allowRemoteSessions', equals: false },
@@ -124,6 +139,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'remote-shell-disabled',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], toolName: 'run_shell' },
+    denyClass: 'forbidden',
     action: 'deny',
     locked: true,
     reason: SHELL_REMOTE_DISABLED_ERROR
@@ -134,6 +150,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'remote-outbound-budget-pause-wechat',
     when: 'invocation',
     match: { lane: ['wechat'], toolName: ['wechat_send', 'wechat_reply'] },
+    denyClass: 'insufficient-info',
     action: 'deny',
     locked: true,
     requiresContext: { outboundWriteBudgetExhausted: true },
@@ -143,6 +160,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'remote-outbound-budget-pause-lark',
     when: 'invocation',
     match: { lane: ['feishu'], toolName: 'run_lark_cli', signals: ['lark-write'] },
+    denyClass: 'insufficient-info',
     action: 'deny',
     locked: true,
     requiresContext: { outboundWriteBudgetExhausted: true },
@@ -166,32 +184,38 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'automation-script-path-unknown-deny',
     when: 'invocation',
     match: { lane: ['automation'], toolName: 'run_script', signals: ['script-path-extraction:unknown'] },
+    denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '无人值守调用无法确认脚本访问路径'
   },
   {
     id: 'automation-unverified-script-language-deny',
     when: 'invocation',
     match: { lane: ['automation'], toolName: 'run_script', signals: ['script-language-analysis:unverified'] },
+    denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '无人值守调用不得执行未经完整内容分析的脚本语言'
   },
   {
     id: 'automation-sensitive-path-deny',
     when: 'invocation', match: { lane: ['automation'], signals: ['path-target:sensitive-file'] },
+    denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '无人值守调用不得访问敏感位置'
   },
   {
     id: 'automation-system-dir-deny',
     when: 'invocation', match: { lane: ['automation'], signals: ['path-target:system-dir'] },
+    denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '无人值守调用不得访问系统目录'
   },
   {
     id: 'automation-write-deny',
     when: 'invocation', match: { lane: ['automation'], toolName: ['write_file', 'edit_file'] },
+    denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '无人值守调用不得写入本地文件'
   },
   {
     id: 'automation-shell-deny',
     when: 'invocation', match: { lane: ['automation'], toolName: 'run_shell' },
+    denyClass: 'forbidden',
     action: 'deny', locked: true, reason: '无人值守调用不得执行 Shell 命令'
   },
   {
@@ -272,6 +296,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'script-network-ask-desktop',
     when: 'invocation',
     match: { lane: ['desktop'], toolName: 'run_script', signals: ['script-network'] },
+    denyClass: 'insufficient-info',
     action: 'ask',
     reason: '桌面执行含网络访问的脚本需确认'
   },
@@ -280,6 +305,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'script-uncertified-ask-remote',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: ['script-uncertified'] },
+    denyClass: 'insufficient-info',
     action: 'ask',
     locked: true,
     reason: '未通过远程安全认证的脚本需确认'
@@ -289,6 +315,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'script-clean-certified-remote',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], toolName: 'run_script', signals: ['clean'] },
+    denyClass: 'insufficient-info',
     action: 'ask',
     askUnless: { config: 'remoteScriptRequiresConfirm', equals: false, andMigrationComplete: true },
     reason: '远程 clean 已认证脚本按 remoteScriptRequiresConfirm 配置决定是否确认（默认确认）'
@@ -309,6 +336,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'browser-act-danger-ask',
     when: 'invocation',
     match: { toolName: 'browser', signals: ['browser-act-dangerous'] },
+    denyClass: 'insufficient-info',
     action: 'ask',
     reason: '浏览器高危操作需确认'
   },
@@ -329,6 +357,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'browser-act-ask-remote',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], toolName: 'browser', signals: ['browser-act'] },
+    denyClass: 'insufficient-info',
     action: 'ask',
     askUnless: { config: 'remoteActSkipConfirm', equals: true },
     reason: '远程浏览器 act 默认需确认'
@@ -337,6 +366,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'browser-act-ask-desktop',
     when: 'invocation',
     match: { lane: ['desktop'], toolName: 'browser', signals: ['browser-act'] },
+    denyClass: 'insufficient-info',
     action: 'ask',
     reason: '浏览器 act 需确认'
   },
@@ -346,6 +376,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'browser-navigate-ask-remote',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], toolName: 'browser', signals: ['browser-navigate-open'] },
+    denyClass: 'insufficient-info',
     action: 'ask',
     configRequires: [
       { config: 'navigateRequiresConfirm', equals: true },
@@ -357,6 +388,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'browser-navigate-ask-desktop',
     when: 'invocation',
     match: { lane: ['desktop'], toolName: 'browser', signals: ['browser-navigate-open'] },
+    denyClass: 'insufficient-info',
     action: 'ask',
     askUnless: { config: 'navigateRequiresConfirm', equals: false },
     reason: '浏览器打开网页需确认'
@@ -368,6 +400,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'lark-high-impact-ask',
     when: 'invocation',
     match: { lane: ['desktop', 'feishu'], toolName: 'run_lark_cli', signals: ['lark-high_impact'] },
+    denyClass: 'insufficient-info',
     action: 'ask',
     locked: true,
     reason: 'lark-cli 高影响子命令需确认'
@@ -376,6 +409,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'lark-unknown-ask',
     when: 'invocation',
     match: { lane: ['desktop', 'feishu'], toolName: 'run_lark_cli', signals: ['lark-unknown'] },
+    denyClass: 'insufficient-info',
     action: 'ask',
     locked: true,
     reason: 'lark-cli 子命令无法分类，信息不足需确认'
@@ -384,6 +418,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'lark-write-ask',
     when: 'invocation',
     match: { lane: ['desktop', 'feishu'], toolName: 'run_lark_cli', signals: ['lark-write'] },
+    denyClass: 'insufficient-info',
     action: 'ask',
     askUnless: { config: 'larkCliWriteRequiresConfirm', equals: false },
     reason: 'lark-cli 写类子命令需确认'
@@ -410,6 +445,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'toolkit-act-ask',
     when: 'invocation',
     match: { lane: ['desktop'], toolName: 'toolkit.call', signals: ['toolkit-act'] },
+    denyClass: 'insufficient-info',
     action: 'ask',
     locked: true,
     reason: '能力集合变更类能力需确认'
@@ -433,6 +469,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'mcp-tool-ask',
     when: 'invocation',
     match: { signals: ['mcp-tool'] },
+    denyClass: 'insufficient-info',
     action: 'ask',
     reason: 'MCP 工具调用需确认'
   },
@@ -440,6 +477,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'im-write-ask',
     when: 'invocation',
     match: { lane: ['wechat', 'feishu'], actionClass: 'write' },
+    denyClass: 'insufficient-info',
     action: 'ask',
     reason: '远程链路写本地文件默认需要确认'
   },
@@ -464,12 +502,27 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'allow',
     reason: 'automation 只读工具无外部副作用，免确认'
   },
-  // 默认兜底（catch-all）：新工具天然 fail-safe——落 confirm；automation lane 无回答者，
-  // RejectingChannel 使其实际效果为拒绝（cause=no-answerer，与用户拒绝在审计可区分）。locked：无豁免来源。
+  // R5（O9 · 用户决策 2026-09-25）：无人值守链路不接受审批 Agent 放行解析器无法分析的命令。
+  // 事实链断裂（unsupported）+ 无人值守 → fail-closed。必须排在 automation-default-confirm 之前
+  // （引擎按规则数组顺序匹配，catch-all 会拦截并把回答者派生为审批 Agent、approve 即放行）。
+  {
+    id: 'automation-unsupported-deny',
+    when: 'invocation',
+    match: { lane: ['automation'], signals: ['shell-unsupported-structure'] },
+    action: 'deny',
+    locked: true,
+    denyClass: 'forbidden',
+    reason: '该命令使用了当前解析器不支持的结构，且当前为无人值守链路：无法分析即不可执行'
+  },
+  // 默认兜底（catch-all）：新工具天然 fail-safe——落 confirm；automation 无人类应答者，
+  // 回答者派生为审批 Agent（askAnswererFor('automation')==='agent'，approve 可放行）。locked：无豁免来源。
+  // 【注释修正（B16）】旧注释「RejectingChannel 使其实际效果为拒绝」为回答者派生前（P3 收缩前）的
+  // 过时表述，是评审 N1 误判的误导源——现状 catch-all 会真实咨询审批 Agent，并非天然拒绝。
   {
     id: 'automation-default-confirm',
     when: 'invocation',
     match: { lane: ['automation'] },
+    denyClass: 'insufficient-info',
     action: 'ask',
     locked: true,
     reason: 'automation 无人类应答者，未显式放行的调用一律确认（实际拒绝）'
@@ -480,6 +533,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'im-no-wechat-send',
     when: 'exposure',
     match: { lane: ['wechat', 'feishu'], toolName: 'wechat_send' },
+    denyClass: 'forbidden',
     action: 'deny',
     locked: true,
     reason: '远程会话不允许主动发微信'
@@ -490,6 +544,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'ingress-direct-other-deny',
     when: 'ingress',
     match: { lane: ['wechat', 'feishu'], origin: 'direct-other' },
+    denyClass: 'forbidden',
     action: 'deny',
     reason: '发送者不在白名单，拒绝响应'
   },
@@ -497,6 +552,7 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     id: 'ingress-feishu-group-deny',
     when: 'ingress',
     match: { lane: ['feishu'], origin: 'group' },
+    denyClass: 'forbidden',
     action: 'deny',
     reason: '飞书群聊消息默认不响应'
   }

@@ -14,8 +14,11 @@
  */
 import type { ConfirmOutcome, ConfirmOutcomeCause, ExecutionLane } from '../../src/shared/confirmation/types'
 
-/** §4 矩阵可回退两格：环境 / 运行时失败（unavailable=拿不到准入位或调用失败；timeout=超出审批上界）。 */
-export const FALLBACK_ELIGIBLE_CAUSES = ['unavailable', 'timeout'] as const
+/**
+ * §4 矩阵可回退格（R5 加第三格）：unavailable / timeout = 环境 / 运行时失败；
+ * agent-undetermined = 审批 Agent 的有效裁决「判不了」（机器结论可回退，agent-deny 永不回退）。
+ */
+export const FALLBACK_ELIGIBLE_CAUSES = ['unavailable', 'timeout', 'agent-undetermined'] as const
 
 export type FallbackEligibleCause = (typeof FALLBACK_ELIGIBLE_CAUSES)[number]
 

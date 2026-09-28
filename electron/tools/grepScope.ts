@@ -1,0 +1,148 @@
+/**
+ * R6：文本搜索的范围透明——默认忽略、隐藏条目、敏感路径三类语义的唯一规划出口。
+ *
+ * 总原则（§4.6.1）：**默认忽略 ≠ 访问控制**。默认忽略是工具默认值，可被调用方显式意图解除
+ * （显式路径点名，或 include_ignored: true）；敏感点文件（.env / .env.* / secrets/）在遍历中
+ * 始终排除（include_ignored 也不解除），**显式点名该文件才搜索**且必须明示。
+ * rg 与 walk 两条引擎路径共用本模块产出的规划（敏感排除模式由同一份规则生成，不得各写一份）。
+ */
+import fs from 'fs'
+import path from 'path'
+
+import { isSensitivePath } from '../shell/shellSensitivePaths'
+import type { GrepExecArgs } from './builtinExecutors'
+
+/**
+ * 默认忽略目录（只是默认值，不是访问控制；成员与旧 GREP_SKIP_DIRS 一致，不增不减）。
+ * 默认不搜索以免噪音与耗时；显式指向其内部路径，或传 include_ignored: true，即可搜索。
+ */
+export const GREP_DEFAULT_IGNORES: readonly string[] = [
+  'node_modules',
+  '.git',
+  '.svn',
+  '__pycache__',
+  'dist',
+  'dist-electron',
+  '.cursor'
+] as const
+
+/**
+ * 敏感排除的 rg glob 模式（由 isSensitivePath 的同一份规则生成——两引擎共用）。
+ * 显式点名敏感文件时整组不追加（尊重明确意图），由调用方明示「命中敏感路径」。
+ */
+export function grepSensitiveExcludes(): string[] {
+  return ['!**/.env', '!**/.env.*', '!**/.env/**', '!**/secrets/**', '!**/secrets']
+}
+
+export interface GrepScope {
+  /** 实际搜索根（相对 workDir） */
+  root: string
+  engine: 'ripgrep' | 'walk'
+  /** 被跳过、且未命中调用方搜索范围的目录（纯范围事实，不含安全语义；sensitive 为跳过原因标注） */
+  skipped: Array<{ name: string; explicit: boolean; sensitive?: boolean }>
+  skippedCount: number
+  /** head_limit / 超时截断 */
+  truncated: boolean
+  limitReason?: 'head_limit' | 'timeout' | 'output_limit'
+}
+
+export interface GrepInvocationPlan {
+  /** 传给 rg 的 --hidden（显式点名隐藏成员内部或 include_ignored 时为 true） */
+  hidden: boolean
+  /** 默认忽略名单 glob（未解除的成员） */
+  ignoreGlobs: string[]
+  /** 敏感排除 glob（显式点名敏感文件时为空） */
+  sensitiveExcludes: string[]
+  /** 显式点名敏感路径（返回体必须明示「命中敏感路径」） */
+  explicitSensitiveHit: boolean
+  /** D1：ignoreGlobs/sensitiveExcludes 必须经 rg `--iglob`（大小写无关）消费，与 isSensitivePath 小写化口径同源 */
+  caseInsensitiveGlobs: boolean
+  /** 范围事实骨架（skipped 在执行前统计） */
+  scope: GrepScope
+}
+
+function toPosix(p: string): string {
+  return p.replace(/\\/g, '/')
+}
+
+// D2（评审 2026-09-28）：显式点名判定改为「searchRel 任一路径段命中成员名」——
+// 旧实现只比首段，嵌套点名（sub/node_modules/pkg）会被 rg 的任意深度 glob
+// （感叹号 + 两个星号 + /node_modules/ + 两个星号）静默搜空。大小写比较与文件系统一致（win32 不敏感）。
+function isInsideMember(searchRel: string, name: string): boolean {
+  const rel = toPosix(searchRel)
+  if (!rel || rel === '.') return false
+  const segments = rel.split('/')
+  return segments.some((seg) => seg.toLowerCase() === name.toLowerCase())
+}
+
+/** searchRel 任一段是隐藏段（. 开头）→ rg 默认隐藏过滤会跳过目标子树 */
+function hasHiddenSegment(searchRel: string): boolean {
+  const rel = toPosix(searchRel)
+  if (!rel || rel === '.') return false
+  return rel.split('/').some((seg) => seg.startsWith('.'))
+}
+
+/**
+ * 一次 grep 调用的范围规划（rg / walk 共用）。
+ * 不做安全判定——这里只产「哪些目录会被跳过、隐藏过滤开不开、敏感 glob 加不加」的范围事实。
+ */
+export function planGrepInvocation(opts: {
+  workDir: string
+  searchPath: string
+  args: Pick<GrepExecArgs, 'includeIgnored'> & { glob?: string }
+  engine?: 'ripgrep' | 'walk'
+}): GrepInvocationPlan {
+  const { workDir, searchPath, args } = opts
+  const searchRel = toPosix(path.relative(workDir, searchPath))
+  const searchRelInsideWorkDir = Boolean(searchRel) && searchRel !== '.' && !searchRel.startsWith('..')
+
+  // 1) 默认忽略成员：实际存在、且未命中调用方搜索范围（任一段点名即解除）→ 计入 skipped
+  const skipped: GrepScope['skipped'] = []
+  const ignoreGlobs: string[] = []
+  for (const name of GREP_DEFAULT_IGNORES) {
+    const isExplicitTarget = searchRelInsideWorkDir && isInsideMember(searchRel, name)
+    if (isExplicitTarget) continue
+    const exists = fs.existsSync(path.join(workDir, name))
+    if (exists) skipped.push({ name, explicit: false })
+    // include_ignored 一并解除；显式点名只解除被点名成员
+    if (!args.includeIgnored && !isExplicitTarget) {
+      ignoreGlobs.push(`!**/${name}/**`)
+    }
+  }
+
+  // 2) 隐藏过滤：搜索目标子树内含任一隐藏段（含普通隐藏目录）或 include_ignored → --hidden
+  const hidden = args.includeIgnored || (searchRelInsideWorkDir && hasHiddenSegment(searchRel))
+
+  // 3) 敏感路径：遍历中始终排除（include_ignored 不解除）；显式点名该文件/目录内部才搜索
+  const explicitSensitiveHit = searchRelInsideWorkDir && isSensitivePath(searchPath)
+  const sensitiveExcludes = explicitSensitiveHit ? [] : grepSensitiveExcludes()
+
+  return {
+    hidden,
+    ignoreGlobs,
+    sensitiveExcludes,
+    explicitSensitiveHit,
+    // D1（评审 2026-09-28）：rg 侧 glob 用 --iglob（大小写无关）消费——isSensitivePath
+    // 是小写化判定，大小写敏感的 `--glob` 会让 Secrets/、.ENV 变体绕过排除并进入结果。
+    caseInsensitiveGlobs: true,
+    scope: {
+      root: !searchRel || searchRel === '.' ? '.' : toPosix(searchRel),
+      engine: opts.engine ?? 'ripgrep',
+      skipped,
+      skippedCount: skipped.length,
+      truncated: false
+    }
+  }
+}
+
+/** no_match 输出（R6 核心承诺：不得裸「No matches found」——必须说明实际搜索范围与跳过情况） */
+export function formatGrepNoMatchOutput(scope: GrepScope): string {
+  const base = `No matches found (searched: ${scope.root}`
+  if (scope.skippedCount === 0) {
+    return `${base})`
+  }
+  const names = scope.skipped
+    .map((s) => (s.sensitive ? `${s.name} (sensitive, not searched)` : s.name))
+    .join(', ')
+  return `${base}; skipped ${scope.skippedCount} directories: ${names}; skipped directories may contain matches)`
+}
