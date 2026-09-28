@@ -71,6 +71,8 @@ export type TurnProjectionMetric = {
 
 /** 应用级 turn snapshot 投影：只接受单调版本，事实仍由主进程持有。 */
 export function initTurnProjectionBridge(onMetric?: (metric: TurnProjectionMetric) => void): () => void {
+  // 评审 2.4：终态接管（terminal 回查 + 消息页接管）的重试上界——耗尽按 TURN_CHECKPOINT_FAILED 落终态。
+  const TURN_CHECKPOINT_MAX_RETRIES = 10
   const versions = new Map<string, number>()
   const terminalRetries = new Map<string, number>()
   const pending = new Map<string, TurnProjectionPayload>()
@@ -128,6 +130,13 @@ export function initTurnProjectionBridge(onMetric?: (metric: TurnProjectionMetri
     if (display.lifecycle === 'completed' || display.lifecycle === 'failed') {
       // 终态 display 只是候选；先读取 canonical message，成功接管后才释放 running/queued 状态。
       if (typeof window.api.chatGetTurnTerminal !== 'function') return
+      const settleAsCheckpointFailed = (): void => {
+        // 评审 2.4：checkpoint 持续不就绪（重试耗尽）时按失败落终态并移除 display——
+        // 否则无限退避重试会让会话永久卡在 running（中止按钮失效）。
+        terminalRetries.delete(display.turnId)
+        store.dispatch(setChatStatus({ status: 'error', error: 'TURN_CHECKPOINT_FAILED', requestId: null, sessionId: display.sessionId, turnId: display.turnId }))
+        import('./turnDisplayStore').then(({ turnDisplayStore }) => turnDisplayStore.remove(display.turnId))
+      }
       void window.api.chatGetTurnTerminal(display.turnId).then((terminal) => {
         if (!terminal || terminal.version < display.version || terminal.committedVersion === undefined || terminal.committedVersion < display.version) {
           if (terminal?.commitStatus === 'failed') {
@@ -136,6 +145,10 @@ export function initTurnProjectionBridge(onMetric?: (metric: TurnProjectionMetri
             return undefined
           }
           const attempt = terminalRetries.get(display.turnId) ?? 0
+          if (attempt >= TURN_CHECKPOINT_MAX_RETRIES) {
+            settleAsCheckpointFailed()
+            return undefined
+          }
           terminalRetries.set(display.turnId, attempt + 1)
           void window.api.chatRetryTurnCheckpoint?.(display.turnId)
           window.setTimeout(() => { if (!disposed) applyDisplay({ display, retry: true }) }, Math.min(30_000, 100 * 2 ** Math.min(attempt, 8)))
@@ -150,6 +163,10 @@ export function initTurnProjectionBridge(onMetric?: (metric: TurnProjectionMetri
         if (!result?.page) return
         const message = result.page.entries.find((entry) => entry.message.id === display.message.id)?.message
         if (!message) {
+          // 评审 2.4：terminal 已 committed 但 60 条消息窗口内找不到该 assistant 消息（提交后
+          // 拉页前同会话又写入大量消息）——移除 display 的同时必须落终态，否则会话永久卡 running。
+          terminalRetries.delete(display.turnId)
+          store.dispatch(setChatStatus({ status: display.outcome === 'failed' || display.outcome === 'timed-out' ? 'error' : 'completed', requestId: null, sessionId: display.sessionId, turnId: display.turnId }))
           import('./turnDisplayStore').then(({ turnDisplayStore }) => turnDisplayStore.remove(display.turnId))
           return
         }
@@ -160,6 +177,10 @@ export function initTurnProjectionBridge(onMetric?: (metric: TurnProjectionMetri
         import('./turnDisplayStore').then(({ turnDisplayStore }) => turnDisplayStore.remove(display.turnId))
       }).catch(() => {
         const attempt = terminalRetries.get(display.turnId) ?? 0
+        if (attempt >= TURN_CHECKPOINT_MAX_RETRIES) {
+          settleAsCheckpointFailed()
+          return
+        }
         terminalRetries.set(display.turnId, attempt + 1)
           window.setTimeout(() => { if (!disposed) applyDisplay({ display, retry: true }) }, Math.min(30_000, 250 * 2 ** Math.min(attempt, 8)))
       })

@@ -427,6 +427,15 @@ const MAX_CONSECUTIVE_SAME_TOOL_ERROR = 3
 /** P1-3 安全拒绝桶阈值（计划 §12-3 定值 5）：安全拒绝与执行失败分开计数，管家「换方案」能力不被压制。 */
 const MAX_CONSECUTIVE_SAFETY_REJECT = 5
 
+/**
+ * 桌面 lane 的工具循环轮数上界（评审 2.1）：既有 toolErrorRepeat 熔断只统计失败/安全拒绝，
+ * 「模型持续产出成功工具调用」的路径没有任何计数——桌面装配（claudeStreamHandlers）不传
+ * maxToolLoopRounds 时循环无上界，异常死循环只能靠用户手动取消收敛。
+ * 取值需远超合法长任务轮数（多文件批处理可达数十轮），仅作失控熔断，不构成正常预算；
+ * 超限收尾走 TOOL_LOOP_MAX_ROUNDS_EXCEEDED（toolChatLoop.maxRounds.test.ts 已特征化）。
+ */
+export const DESKTOP_TOOL_LOOP_MAX_ROUNDS = 50
+
 type ToolErrorBucket = 'exec' | 'safety'
 
 function compactToolResultContentForApi(

@@ -6,7 +6,7 @@ import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import type { AgentLogFields } from './agentLogger/types'
 import { getTurnContext, getPersistedTurn, getSession, type AppDatabase } from './database'
 import { resolveLlmCredentialsForModel } from './llmServiceResolver'
-import { runToolChatSession } from './toolChatLoop'
+import { runToolChatSession, DESKTOP_TOOL_LOOP_MAX_ROUNDS } from './toolChatLoop'
 import { assembleInvocation } from './runtime/invocationAssembler'
 import { isAppLocale } from '../src/shared/locale'
 import { buildApprovalTaskDigest } from '../src/shared/approvalTaskDigest'
@@ -453,6 +453,9 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           browserConfig: deps.getBrowserConfig(),
           shellConfig: deps.getShellConfig(),
           wikiConfig: deps.getWikiConfig(),
+          // 评审 2.1：桌面 lane 必须有工具循环轮数上界——「模型持续产出成功工具调用」的路径
+          // 无任何既有熔断，不传值时 while(true) 无上界、token 无界消耗。
+          maxToolLoopRounds: DESKTOP_TOOL_LOOP_MAX_ROUNDS,
           // §6 桌面授权证据：当前 turn 用户消息摘要进审批线索包「已声明的任务」段
           approvalTaskDigest: buildApprovalTaskDigest(
             authoritative.messages.find((m) => m.id === authoritative.currentUserMessageId)?.content ?? ''

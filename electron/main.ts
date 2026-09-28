@@ -26,7 +26,7 @@ import {
   registerWeChatIpcHandlers,
   shutdownWeChatServices
 } from './wechat/weChatIpc'
-import { getConfigValue, getDefaultDbPath, getMessage, getSession, listPersistedTurns, listSessions, openDatabase, setConfigValue } from './database'
+import { getConfigValue, getDefaultDbPath, getMessage, getMessagesPage, getSession, listPersistedTurns, listSessions, openDatabase, setConfigValue } from './database'
 import { randomUUID } from 'node:crypto'
 import { createTurnCoordinatorStorage } from './turnCoordinatorStorage'
 import { setInvalidationBroadcaster } from './database/scopeVersion'
@@ -51,6 +51,7 @@ import { scriptParserService, runSelfCheck, setInitFailureListener, setNotReadyP
 import { cleanupLegacyWorkspaceLayoutOnStartup } from './database/legacyWorkspaceLayoutCleanup'
 import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import { SessionBackupManager } from './sessionBackupManager'
+import { installProcessSafetyNet } from './processSafetyNet'
 import { setupAppMenu } from './menu'
 import { createHostTranslator } from './i18n/hostTranslate'
 import { readAppLocale } from './appIpc'
@@ -157,6 +158,14 @@ function getRendererIndexPath(): string {
 let workDirState = ''
 let workDirManager: WorkDirManager | null = null
 let appDb: AppDatabase | null = null
+/** 模块级持有防抖备份管理器：退出流程 flush 挂起备份用（评审 2.2）。 */
+let sessionBackupManager: DebouncedSessionBackupManager | null = null
+
+// 进程级 unhandledRejection 安全网（评审 1.1/1.2 防御纵深）：逐点 .catch 是正解，
+// 本网兜住漏网点——只丢一条日志，不崩整个主进程。必须在任何业务代码执行前安装。
+installProcessSafetyNet((event, detail) => {
+  console.error(`[main] ${event}:`, detail.error)
+})
 /** 用量统计启动维护（回填/补齐/清理）：whenReady 内注册，主窗口创建完成后执行（评审 P1-3）。 */
 let usageStatsStartupMaintenance: (() => void) | null = null
 let isQuitting = false
@@ -169,6 +178,22 @@ export async function runShutdownCleanup(pendingTasks?: Set<string>): Promise<Sh
   beginSessionEventShutdown()
   const tasks: Array<[string, () => Promise<unknown>]> = [
     ['session-event-flush', flushAllSessionEventSinks],
+    ['session-backup-flush', async () => {
+      // 评审 2.2：退出前把 3s 防抖窗口内挂起的备份 flush 掉——否则 cleanup 期间定时器触发时
+      // DB 已关闭，loadBackupPayload 抛错汇入备份失败链；flush 自身失败只记日志不阻塞退出。
+      const mgr = sessionBackupManager
+      const db = appDb
+      if (!mgr || !db) return
+      const ids = mgr.getPendingSessionIds()
+      if (!ids.length) return
+      await mgr.flushAll(ids, async (id) => {
+        const session = getSession(db, id)
+        if (!session) return null
+        return { session, readPage: (afterSequence: number, pageSize: number) => getMessagesPage(db, id, afterSequence, pageSize) }
+      }).catch((error) => {
+        console.warn('[sessionBackup] flush on quit failed:', error instanceof Error ? error.message : String(error))
+      })
+    }],
     ['stagehand-close', () => stagehandService.closeAll()],
     ['feishu-shutdown', shutdownFeishuServices],
     ['wechat-shutdown', shutdownWeChatServices]
@@ -432,7 +457,12 @@ app.whenReady().then(async () => {
   runShellDefaultEnableMigrationOnce(db)
   runStartupDecisionCacheCleanup(db)
 
-  const backup = new DebouncedSessionBackupManager(new SessionBackupManager(workDirState))
+  const backup = new DebouncedSessionBackupManager(new SessionBackupManager(workDirState), (error, sessionId) => {
+    // 评审 1.2：防抖备份链失败只记日志——备份是辅助导出渠道，Windows 杀软/OneDrive 锁文件等
+    // 写盘失败不允许以 unhandledRejection 崩溃主进程。
+    console.warn(`[sessionBackup] scheduled backup failed for ${sessionId}:`, error instanceof Error ? error.message : String(error))
+  })
+  sessionBackupManager = backup
   const activeSessionIds = new Set(listSessions(db).map((session) => session.id))
   // 删除任务可能在切换 profile 前启动；启动恢复必须覆盖所有仍配置的根目录。
   const cleanupRoots = Array.from(new Set(workDirManager.listProfiles().map((profile) => profile.path)))

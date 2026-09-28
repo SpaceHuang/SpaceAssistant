@@ -27,7 +27,11 @@ export class DebouncedSessionBackupManager {
     return current
   }
 
-  constructor(private readonly inner: SessionBackupManager) {}
+  constructor(
+    private readonly inner: SessionBackupManager,
+    /** 防抖链路的后台失败出口（评审 1.2）：备份是辅助导出渠道，写盘失败（Windows 杀软/OneDrive 锁文件、EPERM/ENOSPC）只记日志，不允许 rejection 逃逸崩溃主进程。 */
+    private readonly onBackgroundError?: (error: unknown, sessionId: string) => void
+  ) {}
 
   async backupImmediate(session: Session, readPage: MessagePageReader): Promise<void> {
     await this.enqueue(session.id, () => this.inner.backupSession(session, readPage))
@@ -69,9 +73,13 @@ export class DebouncedSessionBackupManager {
       this.timers.delete(sessionId)
       if (!this.pending.has(sessionId)) return
       this.pending.delete(sessionId)
+      // 链尾必须吞掉 rejection（评审 1.2）：防抖定时器触发的备份无调用方 await，
+      // loadSessionAndMessages 或 backupSession 失败若不 .catch 会以 unhandledRejection 崩溃主进程。
       void loadSessionAndMessages().then((data) => {
         if (!data) return
         return this.enqueue(sessionId, () => this.inner.backupSession(data.session, data.readPage))
+      }).catch((error) => {
+        this.onBackgroundError?.(error, sessionId)
       })
     }, SESSION_BACKUP_DEBOUNCE_MS)
     this.timers.set(sessionId, timer)
@@ -105,6 +113,11 @@ export class DebouncedSessionBackupManager {
     if (timer) clearTimeout(timer)
     this.timers.delete(sessionId)
     this.pending.delete(sessionId)
+  }
+
+  /** 当前仍挂起（定时器未触发）的会话：退出流程 flush 用（评审 2.2），避免关停窗口内定时器在 DB 关闭后触发。 */
+  getPendingSessionIds(): string[] {
+    return [...this.pending]
   }
 
   async deleteBackup(session: Session): Promise<void> {

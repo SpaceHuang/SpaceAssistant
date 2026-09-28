@@ -6,7 +6,7 @@ vi.mock('./pendingConfirmStore', () => ({ pendingConfirmStore: { syncFromProject
 vi.mock('../store', () => ({ store: { getState: vi.fn(() => ({ chat: { currentSessionId: 's1' } })), dispatch } }))
 
 import { initTurnProjectionBridge } from './turnProjectionService'
-import { setTurnFailure } from '../store/chatSlice'
+import { setChatStatus, setTurnFailure } from '../store/chatSlice'
 
 describe('turn projection bridge', () => {
   beforeEach(() => {
@@ -248,16 +248,20 @@ describe('turn projection bridge', () => {
       let listener: ((data: any) => void) | undefined
       const chatGetTurnTerminal = vi.fn()
       const chatGetMessagePage = vi.fn()
-      vi.stubGlobal('window', { api: {
+      const chatRetryTurnCheckpoint = vi.fn()
+      vi.stubGlobal('window', {
+        // 终态接管的重试路径用 window.setTimeout 排程；引用全局以兼容 fake timers。
+        setTimeout: (cb: (...args: unknown[]) => void, ms: number) => setTimeout(cb, ms),
+        api: {
         usageSet: vi.fn().mockResolvedValue(undefined),
         chatListActiveTurns: vi.fn().mockResolvedValue([]),
         chatOnTurnDisplay: vi.fn((cb: any) => { listener = cb; return () => undefined }),
         chatGetTurnTerminal,
         chatGetMessagePage,
-        chatRetryTurnCheckpoint: vi.fn(),
+        chatRetryTurnCheckpoint,
         ...over
       } })
-      return { emit: (display: any) => listener?.({ display }), chatGetTurnTerminal, chatGetMessagePage }
+      return { emit: (display: any) => listener?.({ display }), chatGetTurnTerminal, chatGetMessagePage, chatRetryTurnCheckpoint }
     }
 
     // display 消息是 bounded 格式：turnDisplayToMessage 会无条件 map toolCalls
@@ -296,6 +300,38 @@ describe('turn projection bridge', () => {
       await vi.waitFor(() => expect(chatGetMessagePage).toHaveBeenCalled())
       expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'chat/setTurnFailure' }))
       off()
+    })
+
+    // 评审 2.4：terminal committed 但 60 条消息窗口内找不到该 assistant 消息——移除 display 的
+    // 同时必须落终态，否则会话永久卡在 running（中止按钮失效），直到同会话下一 turn 才自愈。
+    it('display 终态 committed 但消息页找不到目标消息时仍落终态，不卡 running', async () => {
+      const { emit, chatGetTurnTerminal, chatGetMessagePage } = stubDisplayApi()
+      chatGetTurnTerminal.mockResolvedValue({ turnId: 'd-miss-turn', outcome: 'completed', ...committed })
+      chatGetMessagePage.mockResolvedValue({ entries: [{ message: { ...failedMessage, id: 'a-other', status: 'completed' }, sequence: 1 }] })
+      const off = initTurnProjectionBridge()
+      emit({ turnId: 'd-miss-turn', requestId: 'r1', sessionId: 's1', version: 1, lifecycle: 'completed', outcome: 'completed', message: failedMessage })
+      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledWith(setChatStatus({ status: 'completed', requestId: null, sessionId: 's1', turnId: 'd-miss-turn' })))
+      off()
+    })
+
+    // 评审 2.4：主进程 checkpoint 既不 commit 也不置 failed 时，重试耗尽按 TURN_CHECKPOINT_FAILED
+    // 落终态——不允许无限退避重试。
+    it('checkpoint 持续不就绪时重试耗尽按 TURN_CHECKPOINT_FAILED 落终态', async () => {
+      vi.useFakeTimers()
+      try {
+        const { emit, chatGetTurnTerminal, chatRetryTurnCheckpoint } = stubDisplayApi()
+        // terminal 持续「version 落后」（既不 commit 也不 failed）——重试永不收敛的前提。
+        chatGetTurnTerminal.mockResolvedValue({ turnId: 'd-stuck-turn', outcome: 'completed', version: 0 })
+        const off = initTurnProjectionBridge()
+        emit({ turnId: 'd-stuck-turn', requestId: 'r1', sessionId: 's1', version: 1, lifecycle: 'completed', outcome: 'completed', message: failedMessage })
+        // 退避序列 100ms*2^n（封顶 30s），10 次累计约 87s；一次快进覆盖全部重试后应落失败终态。
+        await vi.advanceTimersByTimeAsync(120_000)
+        expect(chatRetryTurnCheckpoint).toHaveBeenCalledTimes(10)
+        expect(dispatch).toHaveBeenCalledWith(setChatStatus({ status: 'error', error: 'TURN_CHECKPOINT_FAILED', requestId: null, sessionId: 's1', turnId: 'd-stuck-turn' }))
+        off()
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 })
