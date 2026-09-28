@@ -326,4 +326,40 @@ describe('ChatBubble activity batch', () => {
     fireEvent.click(screen.getByRole('button', { name: '取消排队' }))
     expect(actions.cancelQueued).toHaveBeenCalledWith('u1')
   })
+
+  // ---- 活动批次稳定性（tool-row 整块闪动修复）：工具进入终态不得触发
+  // 时间线重排，否则活动批次拆分/成员换位，批次内卡片整块跳动。
+  it('工具进入终态后批次内工具卡顺序保持发起序不变', () => {
+    const now = Date.now()
+    const tools = (statuses: Array<'executing' | 'failed'>): Message['toolCalls'] =>
+      statuses.map((status, i) => ({
+        id: `t${i + 1}`,
+        toolName: 'grep',
+        input: {},
+        status,
+        riskLevel: 'low' as const,
+        ...(status === 'failed' ? { completedAt: now + 50_000 + i * 1000 } : {})
+      }))
+    const { container, rerender } = render(
+      <ChatBubble
+        message={assistantMessage({ content: '', contentSegments: [], toolCalls: tools(['executing', 'executing', 'executing']) })}
+      />
+    )
+    const ids = () => [...container.querySelectorAll('.tool-row__label')].map((n) => n.getAttribute('data-search-fragment-id'))
+    expect(ids()).toEqual([
+      expect.stringContaining('t1'),
+      expect.stringContaining('t2'),
+      expect.stringContaining('t3')
+    ])
+    rerender(
+      <ChatBubble
+        message={assistantMessage({ content: '', contentSegments: [], toolCalls: tools(['failed', 'failed', 'failed']) })}
+      />
+    )
+    expect(ids()).toEqual([
+      expect.stringContaining('t1'),
+      expect.stringContaining('t2'),
+      expect.stringContaining('t3')
+    ])
+  })
 })

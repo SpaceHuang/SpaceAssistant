@@ -89,4 +89,38 @@ describe('buildAssistantActivityTimeline', () => {
       { kind: 'text', segmentIndex: 0 }
     ])
   })
+
+  // ---- 活动时间线稳定性（tool-row 整块闪动修复）：
+  // 主进程工具记录不携带 startedAt；旧实现执行中工具用索引伪时间戳排序、
+  // 进入终态时 completedAt（真实时间）介入 → timeline 全局重排 → 活动批次
+  // 拆分/重组/成员换位 → ActivityBatch 整块重建闪动。工具排序必须只依赖
+  // 发起序（message.timestamp + i），终态字段不得改变顺序。
+  it('工具进入终态（completedAt 出现）不改变 timeline 顺序', () => {
+    const timestamp = 1000
+    const base = {
+      content: '',
+      timestamp,
+      contentSegments: [{ content: '', startTime: timestamp, endTime: timestamp + 100 }]
+    }
+    const running = buildAssistantActivityTimeline({
+      ...base,
+      toolCalls: [
+        { ...baseTool('t1'), status: 'completed', completedAt: 5000 },
+        { ...baseTool('t2'), status: 'executing' }
+      ]
+    })
+    const after = buildAssistantActivityTimeline({
+      ...base,
+      toolCalls: [
+        { ...baseTool('t1'), status: 'completed', completedAt: 5000 },
+        { ...baseTool('t2'), status: 'completed', completedAt: 6000 }
+      ]
+    })
+    expect(running).toEqual([
+      { kind: 'text', segmentIndex: 0 },
+      { kind: 'tool', toolId: 't1' },
+      { kind: 'tool', toolId: 't2' }
+    ])
+    expect(after).toEqual(running)
+  })
 })

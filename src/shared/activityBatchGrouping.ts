@@ -87,7 +87,9 @@ export function buildActivityItemTimestampResolver(message: {
     }
     const tc = toolById.get(item.toolId)
     const idx = toolIndexById.get(item.toolId) ?? 0
-    return tc?.startedAt ?? tc?.completedAt ?? idx * 1000 + 999
+    // 发起序 fallback（同 buildAssistantActivityTimeline）：completedAt 不得参与，
+    // 否则工具进入终态瞬间批次成员换位（整块闪动）
+    return tc?.startedAt ?? message.timestamp + idx + 1
   }
 }
 
