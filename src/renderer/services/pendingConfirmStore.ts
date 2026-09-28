@@ -33,12 +33,36 @@ export type PendingConfirmItem = {
 
 type Listener = () => void
 
+type ConfirmPayloadFields = Omit<PendingConfirmItem, 'createdAt' | 'confirmationReady' | 'confirmationSnapshot'>
+
+/**
+ * 确认语义载荷比较：仅比较展示与裁决相关字段，不含 createdAt / turnVersion /
+ * confirmationReady / confirmationSnapshot（前三者由 syncFromProjection 冻结或静默跟踪，
+ * snapshot 与 confirmationReady 同步写入，不参与 payload 判定）。
+ */
+function sameItemPayload(a: ConfirmPayloadFields, b: ConfirmPayloadFields): boolean {
+  return a.sessionId === b.sessionId
+    && a.toolName === b.toolName
+    && a.riskLevel === b.riskLevel
+    && a.autoApproveFallback === b.autoApproveFallback
+    && a.currentPageUrl === b.currentPageUrl
+    && a.sessionTrustedHint === b.sessionTrustedHint
+    && JSON.stringify(a.input ?? null) === JSON.stringify(b.input ?? null)
+    && JSON.stringify(a.diff ?? null) === JSON.stringify(b.diff ?? null)
+    && JSON.stringify(a.shellSecurityHints ?? null) === JSON.stringify(b.shellSecurityHints ?? null)
+    && JSON.stringify(a.dangerInfo ?? null) === JSON.stringify(b.dangerInfo ?? null)
+    && JSON.stringify(a.mcp ?? null) === JSON.stringify(b.mcp ?? null)
+    && JSON.stringify(a.memoryTiers ?? null) === JSON.stringify(b.memoryTiers ?? null)
+}
+
 /**
  * 不变量（评审 S-01）：confirmationSnapshot 永不脱离 confirmationReady 单独变化——
  * snapshot 仅在 chatGetPendingConfirmation 的 .then 回调中与 confirmationReady=true 同时写入，
- * 而投影重建的 next 恒为 confirmationReady:false 且无 snapshot，
+ * 而投影重建仅在 payload 变化时重置 confirmationReady（此时 snapshot 一并丢弃），
  * 因此本函数不比较 confirmationSnapshot，snapshot 差异必然已被 confirmationReady 捕获。
  * 若未来出现单独写 snapshot 的路径，必须把该字段纳入比较，否则会静默丢失 notify。
+ * turnVersion 不参与比较：投影版本推进由 syncFromProjection 静默跟踪（更新 items 但不 notify），
+ * 否则等待确认期间每次投影推送都会触发一次全界面重渲染（确认卡闪动的放大器）。
  */
 function samePendingItems(a: PendingConfirmItem[], b: PendingConfirmItem[]): boolean {
   if (a.length !== b.length) return false
@@ -46,23 +70,9 @@ function samePendingItems(a: PendingConfirmItem[], b: PendingConfirmItem[]): boo
   for (const item of b) {
     const prev = index.get(`${item.requestId}:${item.toolUseId}`)
     if (!prev) return false
-    if (prev.sessionId !== item.sessionId
-      || prev.toolName !== item.toolName
-      || prev.riskLevel !== item.riskLevel
-      || prev.turnId !== item.turnId
-      || prev.turnVersion !== item.turnVersion
-      || prev.confirmationReady !== item.confirmationReady
-      || prev.autoApproveFallback !== item.autoApproveFallback
-      || prev.currentPageUrl !== item.currentPageUrl
-      || prev.sessionTrustedHint !== item.sessionTrustedHint
-      || prev.createdAt !== item.createdAt) return false
-    // 深字段沿用旧 JSON.stringify 守卫的语义，但只对单个 item 执行
-    if (JSON.stringify(prev.input ?? null) !== JSON.stringify(item.input ?? null)) return false
-    if (JSON.stringify(prev.diff ?? null) !== JSON.stringify(item.diff ?? null)) return false
-    if (JSON.stringify(prev.shellSecurityHints ?? null) !== JSON.stringify(item.shellSecurityHints ?? null)) return false
-    if (JSON.stringify(prev.dangerInfo ?? null) !== JSON.stringify(item.dangerInfo ?? null)) return false
-    if (JSON.stringify(prev.mcp ?? null) !== JSON.stringify(item.mcp ?? null)) return false
-    if (JSON.stringify(prev.memoryTiers ?? null) !== JSON.stringify(item.memoryTiers ?? null)) return false
+    if (prev.turnId !== item.turnId
+      || prev.confirmationReady !== item.confirmationReady) return false
+    if (!sameItemPayload(prev, item)) return false
   }
   return true
 }
@@ -71,6 +81,7 @@ class PendingConfirmStore {
   private items: PendingConfirmItem[] = []
   private listeners = new Set<Listener>()
   private readonly latestProjections = new Map<string, Parameters<PendingConfirmStore['syncFromProjection']>[0]>()
+  private readonly inFlightSnapshots = new Set<string>()
   private initialized = false
 
   init(): void {
@@ -83,6 +94,7 @@ class PendingConfirmStore {
     this.items = []
     this.listeners.clear()
     this.latestProjections.clear()
+    this.inFlightSnapshots.clear()
   }
 
   getItems(): PendingConfirmItem[] {
@@ -94,37 +106,63 @@ class PendingConfirmStore {
     const confirming = (args.message.toolCalls ?? []).filter((tool) => tool.status === 'confirming' && !tool.autoAnswerer)
     if (args.turnId && confirming.length === 0) this.latestProjections.delete(args.turnId)
     else if (args.turnId) this.latestProjections.set(args.turnId, args)
-    const next = confirming.map((tool) => ({
-      sessionId: args.sessionId,
-      requestId: args.requestId,
-      toolUseId: tool.id,
-      toolName: tool.toolName,
-      input: tool.input,
-      ...(tool.memoryTiers ? { memoryTiers: tool.memoryTiers } : {}),
-      riskLevel: tool.riskLevel,
-      ...(tool.confirmDiff ? { diff: tool.confirmDiff } : {}),
-      ...(tool.shellSecurityHints ? { shellSecurityHints: tool.shellSecurityHints } : {}),
-      ...(tool.autoApproveFallback ? { autoApproveFallback: tool.autoApproveFallback } : {}),
-      ...(tool.currentPageUrl ? { currentPageUrl: tool.currentPageUrl } : {}),
-      ...(tool.dangerInfo ? { dangerInfo: tool.dangerInfo } : {}),
-      ...(tool.sessionTrustedHint ? { sessionTrustedHint: true as const } : {}),
-      ...(tool.mcp ? { mcp: { ...tool.mcp, description: tool.mcp.description ?? '', maskedArgs: {} } } : {}),
-      createdAt: tool.startedAt ?? Date.now()
-      ,...(args.turnId ? { turnId: args.turnId } : {})
-      ,...(args.turnVersion !== undefined ? { turnVersion: args.turnVersion } : {})
-      ,...(args.turnId && args.turnVersion !== undefined ? { confirmationReady: false } : {})
-    }))
     const keep = this.items.filter((item) => item.requestId !== args.requestId)
+    const next = confirming.map((tool) => {
+      const base = {
+        sessionId: args.sessionId,
+        requestId: args.requestId,
+        toolUseId: tool.id,
+        toolName: tool.toolName,
+        input: tool.input,
+        ...(tool.memoryTiers ? { memoryTiers: tool.memoryTiers } : {}),
+        riskLevel: tool.riskLevel,
+        ...(tool.confirmDiff ? { diff: tool.confirmDiff } : {}),
+        ...(tool.shellSecurityHints ? { shellSecurityHints: tool.shellSecurityHints } : {}),
+        ...(tool.autoApproveFallback ? { autoApproveFallback: tool.autoApproveFallback } : {}),
+        ...(tool.currentPageUrl ? { currentPageUrl: tool.currentPageUrl } : {}),
+        ...(tool.dangerInfo ? { dangerInfo: tool.dangerInfo } : {}),
+        ...(tool.sessionTrustedHint ? { sessionTrustedHint: true as const } : {}),
+        ...(tool.mcp ? { mcp: { ...tool.mcp, description: tool.mcp.description ?? '', maskedArgs: {} } } : {}),
+        turnId: args.turnId,
+        turnVersion: args.turnVersion
+      }
+      // 同一工具的重复投影：冻结 createdAt（主进程投影不携带 startedAt，Date.now() 兜底会让
+      // 幂等守卫恒失效）；payload 未变则保持既有就绪态与快照（不回退、不重拉），变了才重置重拉。
+      const existing = this.items.find((item) => item.requestId === args.requestId && item.toolUseId === tool.id)
+      if (!existing) {
+        return { ...base, createdAt: Date.now(), ...(args.turnId && args.turnVersion !== undefined ? { confirmationReady: false as const } : {}) }
+      }
+      const payloadStable = sameItemPayload(existing, { ...base, sessionId: args.sessionId, requestId: args.requestId })
+      return {
+        ...base,
+        createdAt: existing.createdAt,
+        ...(args.turnId && args.turnVersion !== undefined
+          ? (payloadStable && existing.confirmationReady !== undefined
+            ? { confirmationReady: existing.confirmationReady, ...(existing.confirmationSnapshot ? { confirmationSnapshot: existing.confirmationSnapshot } : {}) }
+            : { confirmationReady: false as const })
+          : {})
+      }
+    })
     const updated = [...keep, ...next]
-    if (!args.retryAttempt && samePendingItems(this.items, updated)) return
+    if (!args.retryAttempt && samePendingItems(this.items, updated)) {
+      this.items = updated
+      return
+    }
     this.items = updated
     this.notify()
     if (args.turnId && args.turnVersion !== undefined && typeof window.api.chatGetPendingConfirmation === 'function') {
       for (const item of next) {
+        if (item.confirmationReady === true) continue
+        const flightKey = `${args.requestId}:${item.toolUseId}`
+        if (this.inFlightSnapshots.has(flightKey)) continue
+        this.inFlightSnapshots.add(flightKey)
         void window.api.chatGetPendingConfirmation({ sessionId: args.sessionId, turnId: args.turnId, requestId: args.requestId, turnVersion: args.turnVersion, toolCallId: item.toolUseId }).then((result) => {
+          this.inFlightSnapshots.delete(flightKey)
           if ('status' in result) return
-          const current = this.items.find((candidate) => candidate.sessionId === args.sessionId && candidate.turnId === args.turnId && candidate.requestId === args.requestId && candidate.turnVersion === args.turnVersion && candidate.toolUseId === item.toolUseId)
+          const current = this.items.find((candidate) => candidate.sessionId === args.sessionId && candidate.requestId === args.requestId && candidate.toolUseId === item.toolUseId)
           if (!current) return
+          // 响应幂等守卫：就绪态已确立的重复响应（多投影竞态重发）不再翻转与 notify
+          if (current.confirmationReady === true) return
           current.confirmationReady = true
           current.confirmationSnapshot = result
           if (result.confirmation.input && typeof result.confirmation.input === 'object') current.input = result.confirmation.input
@@ -144,6 +182,7 @@ class PendingConfirmStore {
           if (result.confirmation.mcp) current.mcp = { ...result.confirmation.mcp, description: result.confirmation.mcp.description ?? '', maskedArgs: {} }
           this.notify()
         }).catch(() => {
+          this.inFlightSnapshots.delete(flightKey)
           if ((args.retryAttempt ?? 0) >= 3) return
           setTimeout(() => {
             const current = this.items.find((candidate) => candidate.sessionId === args.sessionId && candidate.turnId === args.turnId && candidate.requestId === args.requestId && candidate.turnVersion === args.turnVersion && candidate.toolUseId === item.toolUseId)
@@ -178,7 +217,9 @@ class PendingConfirmStore {
 
   respond(requestId: string, toolUseId: string, approved: boolean, options?: ToolConfirmOptions): void {
     const current = this.items.find((item) => item.requestId === requestId && item.toolUseId === toolUseId)
-    if (approved && current?.confirmationReady !== undefined && (!current.confirmationReady || !current.confirmationSnapshot || current.confirmationSnapshot.sessionId !== current.sessionId || current.confirmationSnapshot.requestId !== current.requestId || current.confirmationSnapshot.toolCallId !== current.toolUseId || (current.turnId !== undefined && current.confirmationSnapshot.turnId !== current.turnId) || (current.turnVersion !== undefined && current.confirmationSnapshot.turnVersion !== current.turnVersion))) return
+    // 快照版本 ≤ item 已知版本 = 快照未过期（投影版本推进被静默跟踪，不使既有快照失效）；
+    // 仅当快照来自「未来」（超前于已知投影）才视为错卡拒绝。
+    if (approved && current?.confirmationReady !== undefined && (!current.confirmationReady || !current.confirmationSnapshot || current.confirmationSnapshot.sessionId !== current.sessionId || current.confirmationSnapshot.requestId !== current.requestId || current.confirmationSnapshot.toolCallId !== current.toolUseId || (current.turnId !== undefined && current.confirmationSnapshot.turnId !== current.turnId) || (current.turnVersion !== undefined && current.confirmationSnapshot.turnVersion !== undefined && current.confirmationSnapshot.turnVersion > current.turnVersion))) return
     void window.api.toolConfirmResponse({
       requestId,
       toolUseId,
@@ -231,6 +272,7 @@ class PendingConfirmStore {
   reset(): void {
     this.items = []
     this.latestProjections.clear()
+    this.inFlightSnapshots.clear()
     this.notify()
   }
 
