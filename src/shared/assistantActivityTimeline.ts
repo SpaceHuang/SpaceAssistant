@@ -79,7 +79,10 @@ export function buildAssistantActivityTimeline(message: {
     items.push({
       kind: 'tool',
       toolId: tc.id,
-      sortAt: tc.startedAt ?? tc.completedAt ?? i * 1000 + 999,
+      // 排序时间戳必须是「发起序」：主进程工具记录不携带 startedAt，completedAt（真实
+      // 时间）只在终态出现——若参与排序，工具进入终态瞬间会从 fallback 跳到真实值，
+      // 时间线全局重排 → 活动批次拆分/成员换位 → 批次整块重建闪动。
+      sortAt: tc.startedAt ?? message.timestamp + i + 1,
       order: i * 4 + KIND_ORDER.tool
     })
   })

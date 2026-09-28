@@ -71,6 +71,13 @@ type Props = {
   failureReason?: string
 }
 
+/** 活动条目身份 key：基于内容而非位置索引——时间线 segment 顺序漂移时
+ * 批次/条目 DOM 得以复用，避免整批 remount 闪动 */
+function activityItemKey(item: AssistantActivityItem): string {
+  if (item.kind === 'tool') return `tool:${item.toolId}`
+  if (item.kind === 'skill') return `skill:${item.hintId}`
+  return `${item.kind}:${item.segmentIndex}`
+}
 
 function buildBatchSummary(
   items: AssistantActivityItem[],
@@ -348,8 +355,7 @@ export const ChatBubble = memo(function ChatBubble({
     )
   }
 
-  const renderActivityItem = (item: AssistantActivityItem, key: string): ReactNode => {
-    if (item.kind === 'thinking') {
+  const renderActivityItem = (item: AssistantActivityItem, key: string): ReactNode => {    if (item.kind === 'thinking') {
       const seg = thinkingSegments[item.segmentIndex]
       if (!seg) return null
       return (
@@ -431,7 +437,7 @@ export const ChatBubble = memo(function ChatBubble({
 
   const renderActivitySegment = (segment: ActivityTrackSegment, segmentIndex: number) => {
     if (segment.kind === 'standalone') {
-      return renderActivityItem(segment.item, `${message.id}-act-${segmentIndex}`)
+      return renderActivityItem(segment.item, `${message.id}-act-${activityItemKey(segment.item)}`)
     }
 
     const isLastBatch = segmentIndex === lastBatchSegmentIndex
@@ -453,14 +459,14 @@ export const ChatBubble = memo(function ChatBubble({
 
     return (
       <ActivityBatch
-        key={`${message.id}-batch-${segmentIndex}`}
+        key={`${message.id}-batch-${segment.items.map(activityItemKey).join('|')}`}
         items={segment.items}
         isActive={isActive}
         keepExpanded={keepExpanded}
         searchReveal={searchReveal}
         summary={buildBatchSummary(segment.items, { toolById, thinkingSegments, t })}
         renderItem={(item, itemIndex) =>
-          renderActivityItem(item, `${message.id}-batch-${segmentIndex}-${itemIndex}`)
+          renderActivityItem(item, `${message.id}-batch-${activityItemKey(item)}`)
         }
       />
     )
