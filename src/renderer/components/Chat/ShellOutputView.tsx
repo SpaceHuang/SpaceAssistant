@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { formatShellStderrDisplay, normalizeTerminalOutput } from '../../../shared/terminalOutputSanitize'
 import { REDACTED_ARTIFACT_ID } from '../../../shared/processResultProjection'
 import { needsOutputTrustNotice } from '../../../shared/shellToolDisplay'
@@ -19,6 +19,11 @@ type Props = {
   outputTrust?: 'ok' | 'suspect'
 }
 
+// live 输出提交节奏：主进程 tool-progress 每次输出都推 progressPreview 尾部快照（4KB 滑动窗口，
+// 窗口前移使整块文本全变），不节流时 <pre> 每帧整块重绘 + scrollTop 强制贴底，视觉上
+// 详情区「内容快速刷新」。尾随节流保证最后一次变化必被提交，内容稳定后停表零开销。
+const LIVE_COMMIT_INTERVAL_MS = 120
+
 export function ShellOutputView({
   content,
   isLive,
@@ -32,19 +37,49 @@ export function ShellOutputView({
 }: Props) {
   const { t } = useTypedTranslation('chat')
   const preRef = useRef<HTMLPreElement>(null)
+  const [liveText, setLiveText] = useState(() => normalizeTerminalOutput(content ?? ''))
+  const liveTextRef = useRef(liveText)
+  const lastCommitAtRef = useRef<number>(Date.now())
+  const commitTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (!isLive) return
+    const next = normalizeTerminalOutput(content ?? '')
+    if (next === liveTextRef.current) return
+    liveTextRef.current = next
+    const elapsed = Date.now() - lastCommitAtRef.current
+    if (elapsed >= LIVE_COMMIT_INTERVAL_MS) {
+      if (commitTimerRef.current !== null) {
+        window.clearTimeout(commitTimerRef.current)
+        commitTimerRef.current = null
+      }
+      lastCommitAtRef.current = Date.now()
+      setLiveText(next)
+      return
+    }
+    if (commitTimerRef.current !== null) return
+    commitTimerRef.current = window.setTimeout(() => {
+      commitTimerRef.current = null
+      lastCommitAtRef.current = Date.now()
+      setLiveText(liveTextRef.current)
+    }, LIVE_COMMIT_INTERVAL_MS - elapsed)
+  }, [content, isLive])
+
+  useEffect(() => () => {
+    if (commitTimerRef.current !== null) window.clearTimeout(commitTimerRef.current)
+  }, [])
 
   useEffect(() => {
     if (isLive && preRef.current) {
       preRef.current.scrollTop = preRef.current.scrollHeight
     }
-  }, [content, isLive])
+  }, [liveText, isLive])
 
   if (isLive) {
-    const text = normalizeTerminalOutput(content ?? '')
-    if (!text.trim()) return null
+    if (!liveText.trim()) return null
     return (
       <pre ref={preRef} className="shell-output shell-output--live sa-command-inset">
-        {text}
+        {liveText}
       </pre>
     )
   }
