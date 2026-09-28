@@ -43,7 +43,8 @@
     "commandSummary": "命令：{{command}}",
     "endpointSummary": "端点：{{endpoint}}",
     "untestedHint": "未命名服务",
-    "noToolsEnabledWarning": "已发现 {{total}} 个工具，尚未启用任何一个，会话中将不可用。请在工具列表中勾选后保存"
+    "noToolsEnabledWarning": "已发现 {{total}} 个工具，尚未启用任何一个，会话中将不可用。请在工具列表中勾选后保存",
+    "privateNetworkBlocked": "连接被拒：Endpoint 解析到内网/保留地址。若该服务确实部署在内网，请在编辑表单中开启「允许连接内网」后重试（需 https）。"
   },
   "form": {
     "basicTitle": "基础信息",
@@ -87,7 +88,11 @@
     "skippedHint": "{{count}} 个工具因校验未通过未展示",
     "diagnosticsTitle": "最近错误",
     "diagnosticsEmpty": "暂无错误记录",
-    "clearDiagnostics": "清除记录"
+    "clearDiagnostics": "清除记录",
+    "allowPrivateNetworkLabel": "允许连接内网地址",
+    "allowPrivateNetworkHelpTitle": "为什么默认关闭？",
+    "allowPrivateNetworkHelpBody": "MCP 连接由本应用主进程发起。默认只允许公网地址与本机回环（localhost），以防止恶意或被篡改的 Endpoint 借应用之手访问内网服务（云元数据、管理面板、数据库等）。开启后，该服务的域名允许解析并连接到私网地址；每次连接仍会重新解析域名并复核，配置变更后需重新评估。仅建议为确实部署在内网的可信服务开启。开启后，OAuth 授权服务器自动发现同样允许访问内网地址。",
+    "allowPrivateNetworkHttpsNote": "该服务必须提供 https；明文 http 仍仅允许用于本机回环地址，以免访问凭据在内网链路上明文传输。"
   },
   "messages": {
     "saved": "MCP 服务已保存",

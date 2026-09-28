@@ -8,24 +8,28 @@ import {
   validateMcpEndpoint,
   validateMcpHeaderName
 } from './endpointPolicy'
+import type { EndpointPolicyOptions } from './endpointPolicy'
 
 export { McpEndpointValidationError } from './endpointPolicy'
 
 /**
  * Legacy SSE 传输安全封装：
- * - endpoint 校验与 DNS 解析校验复用 MCP HTTP 规则。
+ * - endpoint 校验与 DNS 解析校验复用 MCP HTTP 规则（per-profile allowPrivateNetwork 显式例外）。
  * - SSE GET 与 message POST 全部走 policy fetch，禁止跨 origin 与重定向。
  * - 不使用 OAuth provider；Bearer / 自定义头显式注入 GET 与 POST 两条路径。
  */
 export type McpSseTransportOptions = {
   endpoint: string
   authHeaders?: Record<string, string>
+  /** per-profile 显式例外：允许解析/连接私网地址（默认拒绝）。 */
+  allowPrivateNetwork?: boolean
   onDiagnostic?: (line: string) => void
 }
 
 async function assertResolvedIpsAllowed(
   hostname: string,
-  onDiagnostic?: (line: string) => void
+  onDiagnostic: ((line: string) => void) | undefined,
+  policyOptions?: EndpointPolicyOptions
 ): Promise<void> {
   if (isLoopbackHost(hostname)) return
   let addresses: Array<{ address: string }>
@@ -33,13 +37,17 @@ async function assertResolvedIpsAllowed(
     addresses = await dns.lookup(hostname, { all: true })
   } catch (error) {
     throw new McpEndpointValidationError(
-      `Endpoint 域名解析失败：${error instanceof Error ? error.message : String(error)}`
+      `Endpoint 域名解析失败：${error instanceof Error ? error.message : String(error)}`,
+      'dns-resolve-failed'
     )
   }
   for (const { address } of addresses) {
-    if (!assertEndpointIpAllowed(address)) {
+    if (!assertEndpointIpAllowed(address, policyOptions?.allowPrivateNetwork === true)) {
       onDiagnostic?.(`Endpoint 解析到受限地址（${address}），已拒绝`)
-      throw new McpEndpointValidationError('Endpoint 解析到私网/保留地址，已拒绝')
+      throw new McpEndpointValidationError(
+        'Endpoint 解析到私网/保留地址，已拒绝。若该服务确实部署在内网，可在其 MCP 服务配置中开启「允许连接内网」后重试（需 https）',
+        'resolved-private-address'
+      )
     }
   }
 }
@@ -67,12 +75,13 @@ function makePolicyFetch(
 }
 
 export async function createSseTransport(options: McpSseTransportOptions): Promise<SSEClientTransport> {
-  const validation = validateMcpEndpoint(options.endpoint)
+  const policyOptions: EndpointPolicyOptions = { allowPrivateNetwork: options.allowPrivateNetwork === true }
+  const validation = validateMcpEndpoint(options.endpoint, policyOptions)
   if (!validation.ok) {
-    throw new McpEndpointValidationError(validation.message)
+    throw new McpEndpointValidationError(validation.message, validation.code)
   }
   const url = new URL(validation.normalized)
-  await assertResolvedIpsAllowed(url.hostname, options.onDiagnostic)
+  await assertResolvedIpsAllowed(url.hostname, options.onDiagnostic, policyOptions)
 
   const authHeaders = options.authHeaders ?? {}
   for (const name of Object.keys(authHeaders)) {

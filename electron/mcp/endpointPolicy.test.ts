@@ -94,4 +94,20 @@ describe('IP policy helpers', () => {
     expect(assertEndpointIpAllowed('192.168.0.1')).toBe(false)
     expect(assertEndpointIpAllowed('169.254.169.254')).toBe(false)
   })
+
+  it('allowPrivateNetwork exempts private-address checks but not http-non-loopback', () => {
+    // URL 层：显式放行私网 endpoint
+    expect(validateMcpEndpoint('https://10.154.200.32/mcp', { allowPrivateNetwork: true }).ok).toBe(true)
+    expect(validateMcpEndpoint('https://192.168.1.10/mcp', { allowPrivateNetwork: true }).ok).toBe(true)
+    // 默认仍拒绝
+    expect(validateMcpEndpoint('https://10.154.200.32/mcp').ok).toBe(false)
+    // http 仅 loopback 不受开关影响（凭据明文风险独立于私网例外）
+    const httpResult = validateMcpEndpoint('http://10.0.0.5/mcp', { allowPrivateNetwork: true })
+    expect(httpResult.ok).toBe(false)
+    if (!httpResult.ok) expect(httpResult.code).toBe('http-non-loopback')
+    // DNS 层：开关仅豁免私网/保留判定
+    expect(assertEndpointIpAllowed('10.154.200.32', true)).toBe(true)
+    expect(assertEndpointIpAllowed('10.154.200.32')).toBe(false)
+    expect(assertEndpointIpAllowed('127.0.0.1', true)).toBe(true)
+  })
 })

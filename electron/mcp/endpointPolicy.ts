@@ -2,6 +2,8 @@
  * MCP Streamable HTTP endpoint 校验（纯逻辑，可测）：
  * - URL 规范化与校验：禁 userinfo/query/fragment；https 或 http 仅 loopback。
  * - 网络边界：仅公网地址与 loopback；拒绝私网、链路本地、组播与其他保留地址。
+ *   例外：per-profile 显式 allowPrivateNetwork（默认关闭）仅豁免私网判定，
+ *   http 仅 loopback 与解析失败 fail-closed 不受影响。
  * - 受控请求头黑名单。
  */
 
@@ -10,9 +12,12 @@ export type EndpointValidationResult =
   | { ok: false; code: string; message: string }
 
 export class McpEndpointValidationError extends Error {
-  constructor(message: string) {
+  /** 结构化错误码（如 resolved-private-address），UI 可据此渲染引导。 */
+  readonly code?: string
+  constructor(message: string, code?: string) {
     super(message)
     this.name = 'McpEndpointValidationError'
+    this.code = code
   }
 }
 
@@ -85,14 +90,20 @@ export function isPrivateOrReservedIp(host: string): boolean {
   return false
 }
 
-/** 供 DNS 解析后的实际 IP 校验（连接前后）。 */
-export function assertEndpointIpAllowed(ip: string): boolean {
+/** 供 DNS 解析后的实际 IP 校验（连接前后）。allowPrivate 为 per-profile 显式例外，仅豁免私网/保留判定。 */
+export function assertEndpointIpAllowed(ip: string, allowPrivate = false): boolean {
+  if (allowPrivate) return true
   return !isPrivateOrReservedIp(ip) || isLoopbackHost(ip)
+}
+
+export type EndpointPolicyOptions = {
+  /** per-profile 显式例外：允许 endpoint 解析/连接到私网地址。仅豁免私网判定，http 仍仅 loopback。 */
+  allowPrivateNetwork?: boolean
 }
 
 export function validateMcpEndpoint(
   endpoint: string,
-  _options?: { allowHttpLoopback?: boolean }
+  options?: EndpointPolicyOptions
 ): EndpointValidationResult {
   let url: URL
   try {
@@ -117,8 +128,13 @@ export function validateMcpEndpoint(
   if (url.protocol === 'http:' && !isLoopbackHost(host)) {
     return { ok: false, code: 'http-non-loopback', message: 'http:// 仅允许 loopback（localhost / 127.0.0.1 / ::1）' }
   }
-  if (isPrivateOrReservedIp(host)) {
-    return { ok: false, code: 'private-address', message: '拒绝私网、链路本地、组播及其他保留地址' }
+  if (!options?.allowPrivateNetwork && isPrivateOrReservedIp(host)) {
+    return {
+      ok: false,
+      code: 'private-address',
+      message:
+        '拒绝私网、链路本地、组播及其他保留地址。若该服务确实部署在内网，可在其 MCP 服务配置中开启「允许连接内网」后重试（需 https）'
+    }
   }
 
   url.hostname = url.hostname.toLowerCase()

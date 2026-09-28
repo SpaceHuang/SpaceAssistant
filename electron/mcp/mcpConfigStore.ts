@@ -136,7 +136,9 @@ function existingProfilesAsWriteInputs(profiles: McpServerProfile[]): McpServerW
           }
         }
       : {}),
-    ...(p.http ? { http: { endpoint: p.http.endpoint } } : {}),
+    ...(p.http
+      ? { http: { endpoint: p.http.endpoint, ...(p.http.allowPrivateNetwork === true ? { allowPrivateNetwork: true as const } : {}) } }
+      : {}),
     enabledToolNames: p.enabledToolNames,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt
@@ -211,7 +213,9 @@ function saveProfilesLocked(
             }
           }
         : {}),
-      ...(input.http ? { http: { endpoint: input.http.endpoint } } : {}),
+      ...(input.http
+        ? { http: { endpoint: input.http.endpoint, ...(input.http.allowPrivateNetwork === true ? { allowPrivateNetwork: true as const } : {}) } }
+        : {}),
       enabledToolNames: input.enabledToolNames,
       ...(prev?.discoveredAt ? { discoveredAt: prev.discoveredAt } : {}),
       ...(prev?.discoveredProtocolVersion ? { discoveredProtocolVersion: prev.discoveredProtocolVersion } : {}),

@@ -18,6 +18,8 @@ import { revokeToolForAllLanes } from '../toolRevocationRegistry'
 import { clearSecret, getSecret } from './mcpSecretStore'
 import { clearDiagnostics, getDiagnostics, safeAppendDiagnostic } from './mcpDiagnostics'
 import { McpConnectionManager } from './mcpConnectionManager'
+// 从策略原点导入：mcpConnectionManager 在测试中常被整体 mock，运行时类引用必须绕开
+import { McpEndpointValidationError } from './endpointPolicy'
 import { discoverToolsFromSession, getCachedTools } from './mcpToolRegistry'
 import {
   createMcpOAuthClientProvider,
@@ -32,7 +34,8 @@ import { testMcpConnection } from './mcpService'
  * 所有来自渲染进程的 serverId、工具名、endpoint、命令、header 和 Secret 都在主进程再次校验。
  */
 
-function writeInputToProfile(input: McpServerWriteInput): McpServerProfile {
+/** 导出供单测覆盖转换点（评审 B1：字段剥离类缺陷需转换层测试）。 */
+export function writeInputToProfile(input: McpServerWriteInput): McpServerProfile {
   const now = new Date().toISOString()
   return {
     id: input.id,
@@ -60,7 +63,9 @@ function writeInputToProfile(input: McpServerWriteInput): McpServerProfile {
           }
         }
       : {}),
-    ...(input.http ? { http: { endpoint: input.http.endpoint } } : {}),
+    ...(input.http
+      ? { http: { endpoint: input.http.endpoint, ...(input.http.allowPrivateNetwork === true ? { allowPrivateNetwork: true as const } : {}) } }
+      : {}),
     enabledToolNames: input.enabledToolNames,
     status: 'untested',
     createdAt: input.createdAt ?? now,
@@ -223,6 +228,9 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       safeAppendDiagnostic(ctx.db, serverId, { code: 'refresh-failed', message })
+      // endpoint 策略拒绝透传精确码（如 resolved-private-address），设置页据此渲染内网开关引导
+      const endpointCode = error instanceof McpEndpointValidationError ? error.code : undefined
+      const failCode = endpointCode ?? 'refresh-failed'
       if (interactiveAuthRequired) {
         await updateServerStatus(ctx.db, serverId, {
           status: 'auth-required',
@@ -232,9 +240,9 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       }
       await updateServerStatus(ctx.db, serverId, {
         status: 'failed',
-        lastError: { code: 'refresh-failed', message, occurredAt: new Date().toISOString() }
+        lastError: { code: failCode, message, occurredAt: new Date().toISOString() }
       })
-      return { ok: false, code: 'refresh-failed', message }
+      return { ok: false, code: failCode, message }
     } finally {
       await manager.shutdown().catch(() => undefined)
     }
