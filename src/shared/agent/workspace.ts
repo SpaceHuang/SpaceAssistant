@@ -34,12 +34,23 @@ export function workspacePathKey(p: string, platform: NodeJS.Platform = process.
   return normalized
 }
 
-/** 规范化工作目录根：resolve → 去尾分隔符 */
+/** 规范化工作目录根：resolve → 去尾分隔符（盘符根形态在 resolve 前拦截，防 cwd 漂移） */
 export function normalizeWorkspaceRoot(p: string): string {
+  // C1：'E:' / 'E:\' / 'E:/' 这类盘符根不能交给 path.resolve——'E:' 会解析为
+  // 「该盘的进程当前目录」而漂移。直接规范为 'E:\'。
+  const driveRoot = /^[A-Za-z]:[\\/]*$/.exec(p.trim())
+  if (driveRoot) {
+    return p.trim().slice(0, 2).toUpperCase() + '\\'
+  }
   return stripTrailingSep(path.resolve(p))
 }
 
 function stripTrailingSep(resolved: string): string {
+  // C1（评审 2026-09-28）：Windows 盘符根（E:\ 或 E:/）的尾分隔符是形态的一部分——
+  // 剥成 'E:' 后作为 path.resolve 基座会漂移到「该盘的进程当前目录」。盘符根原样规范为带尾分隔符形态。
+  if (/^[A-Za-z]:[\\/]?$/.test(resolved)) {
+    return resolved.slice(0, 2) + '\\'
+  }
   if (resolved.length > 1 && (resolved.endsWith('/') || resolved.endsWith('\\'))) {
     return resolved.replace(/[\\/]+$/, '') || resolved
   }

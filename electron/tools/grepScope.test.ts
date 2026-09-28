@@ -140,3 +140,59 @@ describe('formatGrepNoMatchOutput（R6：no_match 必带范围）', () => {
     expect(out).toContain('sensitive')
   })
 })
+
+describe('D1/D2（评审 2026-09-28）：大小写变体与嵌套点名', () => {
+  const dirs2: string[] = []
+  afterEach(() => {
+    for (const d of dirs2.splice(0)) fs.rmSync(d, { recursive: true, force: true })
+  })
+
+  it('D2：嵌套成员点名（sub/node_modules/pkg）解除 node_modules 排除，skipped 不含它', () => {
+    const root = tempDir()
+    dirs2.push(root)
+    fs.mkdirSync(path.join(root, 'sub', 'node_modules', 'pkg'), { recursive: true })
+    const plan = planGrepInvocation({
+      workDir: root,
+      searchPath: path.join(root, 'sub', 'node_modules', 'pkg'),
+      args: { includeIgnored: false, outputMode: 'files_with_matches', ignoreCase: false, showLineNumber: true, multiline: false, headLimit: 100 }
+    })
+    expect(plan.ignoreGlobs.filter((g) => g.includes('node_modules'))).toEqual([])
+    expect(plan.scope.skipped.some((s) => s.name === 'node_modules')).toBe(false)
+  })
+
+  it('D2：嵌套隐藏段点名（src/.vite/cache）→ hidden=true', () => {
+    const root = tempDir()
+    dirs2.push(root)
+    fs.mkdirSync(path.join(root, 'src', '.vite', 'cache'), { recursive: true })
+    const plan = planGrepInvocation({
+      workDir: root,
+      searchPath: path.join(root, 'src', '.vite', 'cache'),
+      args: { includeIgnored: false, outputMode: 'files_with_matches', ignoreCase: false, showLineNumber: true, multiline: false, headLimit: 100 }
+    })
+    expect(plan.hidden).toBe(true)
+  })
+
+  it('D2：未点名成员仍计入 skipped（sub 外层目录存在时 node_modules 仍跳过）', () => {
+    const root = tempDir()
+    dirs2.push(root)
+    fs.mkdirSync(path.join(root, 'sub', 'src'), { recursive: true })
+    fs.mkdirSync(path.join(root, 'node_modules'), { recursive: true })
+    const plan = planGrepInvocation({
+      workDir: root,
+      searchPath: path.join(root, 'sub'),
+      args: { includeIgnored: false, outputMode: 'files_with_matches', ignoreCase: false, showLineNumber: true, multiline: false, headLimit: 100 }
+    })
+    expect(plan.scope.skipped.some((s) => s.name === 'node_modules')).toBe(true)
+  })
+
+  it('D1：planGrepInvocation 产出的大小写无关标记为真（iglob）', () => {
+    const root = tempDir()
+    dirs2.push(root)
+    const plan = planGrepInvocation({
+      workDir: root,
+      searchPath: path.resolve(root),
+      args: { includeIgnored: false, outputMode: 'files_with_matches', ignoreCase: false, showLineNumber: true, multiline: false, headLimit: 100 }
+    })
+    expect(plan.caseInsensitiveGlobs).toBe(true)
+  })
+})

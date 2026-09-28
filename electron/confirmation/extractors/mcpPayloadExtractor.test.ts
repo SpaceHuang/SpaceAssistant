@@ -81,3 +81,35 @@ describe('extractMcpInvocationSignal（R3 事实信号）', () => {
     expect(sig.targetUrl).toBeUndefined()
   })
 })
+
+describe('E1（评审 2026-09-28）：嵌套对象/数组中的 secret 递归脱敏', () => {
+  it('headers.Authorization 深层键脱敏', () => {
+    const r = summarizeMcpArgs({ headers: { Authorization: 'sk-ant-supersecret', 'Content-Type': 'application/json' } })
+    const digest = JSON.parse(r.argsDigest) as { headers: Record<string, string> }
+    expect(digest.headers.Authorization).toBe('[REDACTED]')
+    expect(digest.headers['Content-Type']).toBe('application/json')
+    expect(r.argsDigest).not.toContain('sk-ant-supersecret')
+  })
+
+  it('auth.token / config.api_key 任意深度键脱敏', () => {
+    const r = summarizeMcpArgs({ auth: { token: 'ghp_supersecret' }, config: { api_key: 'AKIA-supersecret' } })
+    expect(r.argsDigest).not.toContain('ghp_supersecret')
+    expect(r.argsDigest).not.toContain('AKIA-supersecret')
+    expect(r.argsDigest).toContain('[REDACTED]')
+  })
+
+  it('apiKeys 数组：键名命中 secret 正则时整个值替换（不逐项泄露）', () => {
+    const r = summarizeMcpArgs({ apiKeys: ['sk-1-supersecret', 'sk-2-supersecret'] })
+    expect(r.argsDigest).not.toContain('sk-1-supersecret')
+    expect(r.argsDigest).not.toContain('sk-2-supersecret')
+    expect(r.argsDigest).toContain('[REDACTED]')
+  })
+
+  it('普通嵌套数据不受影响', () => {
+    const r = summarizeMcpArgs({ user: { name: 'alice', tags: ['a', 'b'] }, page: 2 })
+    const digest = JSON.parse(r.argsDigest) as { user: { name: string; tags: string[] }; page: number }
+    expect(digest.user.name).toBe('alice')
+    expect(digest.user.tags).toEqual(['a', 'b'])
+    expect(digest.page).toBe(2)
+  })
+})

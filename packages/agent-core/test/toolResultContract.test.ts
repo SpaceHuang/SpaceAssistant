@@ -6,6 +6,7 @@ import {
   isToolErrorCode,
   normalizeToolResultEnvelope,
 } from '../src/toolResultContract'
+import { TOOL_ENVELOPE_KNOWN_ERROR_CODES } from '../../../src/shared/errorCodes'
 
 describe('ToolErrorCode 闭合枚举', () => {
   it('五类失败码齐备且可判', () => {
@@ -153,6 +154,13 @@ describe('normalizeToolResultEnvelope', () => {
     const { envelope, violations } = normalizeToolResultEnvelope(raw)
     expect(envelope.error).toBe('TOTALLY_UNKNOWN_CODE')
     expect(violations.some((v) => v.invariant === 'I5')).toBe(true)
+  })
+
+  it('F3（评审 2026-09-28）：SCRIPT_*/LARK_* 业务失败码在已知集合内，不再记契约违规', () => {
+    for (const code of ['SCRIPT_TIMEOUT', 'SCRIPT_CANCELLED', 'SCRIPT_SPAWN_ERROR', 'LARK_RUNNER_UNAVAILABLE']) {
+      const r = normalizeToolResultEnvelope({ success: false, error: code, data: undefined }, { knownErrorCodes: TOOL_ENVELOPE_KNOWN_ERROR_CODES })
+      expect(r.violations, code).toEqual([])
+    }
   })
 
   it('knownErrorCodes 注入：调用方扩展合法码集后不再告警', () => {

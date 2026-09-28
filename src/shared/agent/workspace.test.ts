@@ -47,6 +47,22 @@ describe('normalizeWorkspaceRoot', () => {
   it('空串不抛错且可得到绝对路径', () => {
     expect(path.isAbsolute(normalizeWorkspaceRoot(''))).toBe(true)
   })
+
+  it.runIf(process.platform === 'win32')('C1：Windows 盘符根保留尾分隔符（E:\\ 不退化为 E:）', () => {
+    expect(normalizeWorkspaceRoot('E:\\')).toBe('E:\\')
+    expect(normalizeWorkspaceRoot('E:/')).toBe('E:\\')
+    expect(normalizeWorkspaceRoot('E:')).toBe('E:\\')
+    // 归一结果必须是「可作 resolve 基座」形态：resolve(root, 'x') 落在盘根，不漂移到 cwd
+    expect(path.win32.resolve(normalizeWorkspaceRoot('E:\\'), 'x')).toBe('E:\\x')
+  })
+
+  it('C1（跨平台）：盘符根 key 不依赖进程 cwd', () => {
+    if (process.platform === 'win32') {
+      expect(workspacePathKey('E:\\', 'win32')).toBe('e:/')
+    } else {
+      expect(workspacePathKey('/', 'linux')).toBe('/')
+    }
+  })
 })
 
 describe('workspacePathKey', () => {

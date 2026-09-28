@@ -23,7 +23,25 @@ export interface McpArgsSummary {
 }
 
 function redactValue(key: string, value: unknown): unknown {
-  if (typeof value === 'string' && SECRET_KEY_RE.test(key)) return '[REDACTED]'
+  if (SECRET_KEY_RE.test(key)) return '[REDACTED]'
+  return redactDeep(value)
+}
+
+/**
+ * E1（评审 2026-09-28）：递归脱敏——嵌套对象/数组（headers.Authorization、auth.token、
+ * apiKeys[] 等）与顶层键同规则：键名命中 secret 正则即整值替换；未命中的普通结构逐层下探。
+ * 循环引用防护：深度限界（MCP 入参超 8 层视为异常形态，剩余部分整体替换为占位）。
+ */
+function redactDeep(value: unknown, depth = 0): unknown {
+  if (depth > 8) return '[TRUNCATED]'
+  if (Array.isArray(value)) return value.map((v) => redactDeep(v, depth + 1))
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = redactValue(k, v)
+    }
+    return out
+  }
   return value
 }
 

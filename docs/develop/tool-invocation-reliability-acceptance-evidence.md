@@ -40,12 +40,43 @@
 
 | 门禁 | 状态 |
 | --- | --- |
-| `npm run test:electron` | 全量通过（最终验收运行记录见 git 提交） |
-| `npm run test:renderer` | 通过 |
+| `npm run test:electron` | 434 文件 / 3607 passed / 0 failed（2026-09-28 评审修复后重跑，见 §4.2） |
+| `npm run test:renderer` | 294 文件 / 1937 passed / 0 failed（同上） |
 | `npm run check:tool-result-invariants` | 矛盾数 0（exit 0） |
 | `npm run i18n:check` | 通过（zh-CN / en-US 对齐） |
 | `npm run typecheck:renderer` / `typecheck:shared` | 通过 |
 | 护栏断言（`electron/toolReliabilityGuards.test.ts` 10 条） | 通过：active 旁路 / refresh 优先 / 失败态单一推导 / 归一单一出口 / 新失败码 / unsupported 信任排除 / O9 规则序 / 回退白名单 / grep 单一出口 / 目录四分类 |
+
+## 4.1 评审修复批次（2026-09-28，13 项 P1 全量处置）
+
+对照 `docs/review/2026-09-28-tool-invocation-reliability-code-review.md` 的修复记录：
+
+| # | 修复 | 落点 |
+| --- | --- | --- |
+| A1 | Skill 版本断言 2.1.0→2.2.0 + 三态合同断言 | `securityApprovalSkill.test.ts` |
+| B1 | `shell-unsupported-structure` 阻断持久记忆资格（memoryEligibility 排除清单 + gate 端到端「缓存 allow 不命中」断言，persistable=true 形态） | `memoryEligibility.ts`、`toolReliabilityR5.test.ts` |
+| B2 | 段数超限保留 precheck 结构化短路（extractor 不再被 >50 段命令炸穿整轮循环）；structure 类 unsupported 语义不变 | `shellToolLoopHelpers.ts` |
+| B3 | 审批收束指令改三态 + JSDoc 同步 + 「提示词与 Skill 三态合同一致性」护栏 | `approvalAgent.ts`、`approvalAgent.test.ts` |
+| C1 | Windows 盘符根（E:\）归一保留尾分隔符（resolve 前拦截，沙箱基座不漂移到进程 cwd） | `src/shared/agent/workspace.ts` |
+| C2 | basis-mismatch 护栏：fail-loud 判据改 `app.isPackaged`（NODE_ENV 打包态恒真）+ legacy 侧 realpath 归一后再比 key（junction/subst/8.3 不误报）+ junction 行为测试 | `toolChatLoop.ts`、`workDirSnapshot.junction.test.ts` |
+| D1 | rg 排除 glob 改 `--iglob` 大小写无关消费（Secrets/.ENV 变体不绕过；与 isSensitivePath 小写化口径同源） | `grepScope.ts`、`builtinExecutors.ts` |
+| D2 | 显式点名判定改「任一路径段命中」（嵌套成员 sub/node_modules/pkg 解除；嵌套隐藏段 → --hidden） | `grepScope.ts` |
+| E1 | MCP 入参摘要递归脱敏（headers.Authorization / auth.token / apiKeys[] 等任意深度） | `mcpPayloadExtractor.ts` |
+| E2 | `renderCluePack` 渲染 `argsDigest`（不可信围栏内）——R3 审批可见入参对裁决模型可达（依赖 E1 先落地） | `approvalAgent.ts`、`agentChannel.test.ts` |
+| F1 | readdir 阶段五类分类闭合（stat 后目录消失的竞态不再 throw 逃逸） | `builtinExecutors.ts` |
+| F2 | entries 循环阶段 abort/超时统一结构化 `READ_TIMEOUT`（消除 throwIfAborted 逃逸与中文句子 error 两种旧形态） | `builtinExecutors.ts` |
+| F3 | contract-violation 告警收窄到 I0–I4（I5 未知码不落日志）+ SCRIPT_*/LARK_* 业务码纳入闭合集合 | `toolChatLoop.ts`、`errorCodes.ts` |
+
+护栏测试扩至 16 条（新增 C2 判据 / B1 记忆阻断 / B3 三态表述 / F3 收窄与闭合 / D1D2 / E1E2）。
+
+## 4.2 门禁真实运行记录（2026-09-28，评审修复后）
+
+- `npm run test:electron`：**434 文件 / 3607 passed / 5 skipped / 0 failed**（exit 0，458s）
+- `npm run test:renderer`：**294 文件 / 1937 passed / 0 failed**（exit 0）
+- `npm run check:tool-result-invariants`：`files=0 violations=0`，退出码 0
+- `npm run i18n:check`：passed（zh-CN / en-US 对齐，1623 处既有硬编码为存量基线）
+- `npm run typecheck:renderer` / `typecheck:shared`：通过
+- `npx tsc -p tsconfig.electron.json --noEmit`：通过
 
 ## 5. 遗留与后续
 

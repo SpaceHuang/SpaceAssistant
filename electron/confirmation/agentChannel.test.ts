@@ -77,6 +77,25 @@ describe('AgentChannel（P2-3）', () => {
     expect(outcome.kind === 'rejected' && outcome.reason?.summary).toBe('目标在敏感目录外，拒绝写入')
   })
 
+  it('E2：MCP 调用的 argsDigest 进入审批渲染（renderCluePack 围栏内可被裁决模型读到）', async () => {
+    const { renderCluePackForTest } = await import('./approvalAgent')
+    const rendered = (renderCluePackForTest as unknown as (c: unknown) => string)({
+      toolName: 'mcp_x_post',
+      actionClass: 'write',
+      riskLevel: 'medium',
+      summary: 'MCP x/post',
+      signals: ['mcp-tool', 'mcp-invocation'],
+      url: 'https://example.com',
+      argsDigest: '{"url":"https://example.com","headers":{"Authorization":"[REDACTED]"}}'
+    })
+    expect(rendered).toContain('[入参摘要（脱敏后）]')
+    expect(rendered).toContain('[REDACTED]')
+    // 渲染在不可信围栏内
+    const fenceIdx = rendered.indexOf('```')
+    const digestIdx = rendered.indexOf('[入参摘要')
+    expect(digestIdx).toBeGreaterThan(fenceIdx)
+  })
+
   it('R5：undetermined 裁决 → rejected + cause=agent-undetermined（三分支映射，不得静默退化 agent-deny）', async () => {
     const ch2 = new AgentChannel({
       lane: 'desktop',

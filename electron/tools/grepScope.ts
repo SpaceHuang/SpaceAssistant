@@ -55,6 +55,8 @@ export interface GrepInvocationPlan {
   sensitiveExcludes: string[]
   /** 显式点名敏感路径（返回体必须明示「命中敏感路径」） */
   explicitSensitiveHit: boolean
+  /** D1：ignoreGlobs/sensitiveExcludes 必须经 rg `--iglob`（大小写无关）消费，与 isSensitivePath 小写化口径同源 */
+  caseInsensitiveGlobs: boolean
   /** 范围事实骨架（skipped 在执行前统计） */
   scope: GrepScope
 }
@@ -63,11 +65,21 @@ function toPosix(p: string): string {
   return p.replace(/\\/g, '/')
 }
 
-/** 判断 searchPath 是否显式落在 name 成员内部（或就是该成员自身） */
+// D2（评审 2026-09-28）：显式点名判定改为「searchRel 任一路径段命中成员名」——
+// 旧实现只比首段，嵌套点名（sub/node_modules/pkg）会被 rg 的任意深度 glob
+// （感叹号 + 两个星号 + /node_modules/ + 两个星号）静默搜空。大小写比较与文件系统一致（win32 不敏感）。
 function isInsideMember(searchRel: string, name: string): boolean {
   const rel = toPosix(searchRel)
   if (!rel || rel === '.') return false
-  return rel === name || rel.startsWith(`${name}/`)
+  const segments = rel.split('/')
+  return segments.some((seg) => seg.toLowerCase() === name.toLowerCase())
+}
+
+/** searchRel 任一段是隐藏段（. 开头）→ rg 默认隐藏过滤会跳过目标子树 */
+function hasHiddenSegment(searchRel: string): boolean {
+  const rel = toPosix(searchRel)
+  if (!rel || rel === '.') return false
+  return rel.split('/').some((seg) => seg.startsWith('.'))
 }
 
 /**
@@ -82,13 +94,13 @@ export function planGrepInvocation(opts: {
 }): GrepInvocationPlan {
   const { workDir, searchPath, args } = opts
   const searchRel = toPosix(path.relative(workDir, searchPath))
-  const explicitSegment = !searchRel || searchRel === '.' || searchRel.startsWith('..') ? '' : searchRel.split('/')[0]!
+  const searchRelInsideWorkDir = Boolean(searchRel) && searchRel !== '.' && !searchRel.startsWith('..')
 
-  // 1) 默认忽略成员：实际存在、且未命中调用方搜索范围 → 计入 skipped
+  // 1) 默认忽略成员：实际存在、且未命中调用方搜索范围（任一段点名即解除）→ 计入 skipped
   const skipped: GrepScope['skipped'] = []
   const ignoreGlobs: string[] = []
   for (const name of GREP_DEFAULT_IGNORES) {
-    const isExplicitTarget = explicitSegment !== '' && isInsideMember(searchRel, name)
+    const isExplicitTarget = searchRelInsideWorkDir && isInsideMember(searchRel, name)
     if (isExplicitTarget) continue
     const exists = fs.existsSync(path.join(workDir, name))
     if (exists) skipped.push({ name, explicit: false })
@@ -98,14 +110,11 @@ export function planGrepInvocation(opts: {
     }
   }
 
-  // 2) 隐藏过滤：显式点名隐藏成员内部（含普通隐藏目录）或 include_ignored → --hidden
-  const explicitHidden = explicitSegment.startsWith('.')
-  const hidden = args.includeIgnored || explicitHidden
+  // 2) 隐藏过滤：搜索目标子树内含任一隐藏段（含普通隐藏目录）或 include_ignored → --hidden
+  const hidden = args.includeIgnored || (searchRelInsideWorkDir && hasHiddenSegment(searchRel))
 
   // 3) 敏感路径：遍历中始终排除（include_ignored 不解除）；显式点名该文件/目录内部才搜索
-  const explicitSensitiveHit =
-    explicitSegment !== '' &&
-    (isSensitivePath(searchPath) || isSensitivePath(path.join(workDir, explicitSegment)))
+  const explicitSensitiveHit = searchRelInsideWorkDir && isSensitivePath(searchPath)
   const sensitiveExcludes = explicitSensitiveHit ? [] : grepSensitiveExcludes()
 
   return {
@@ -113,6 +122,9 @@ export function planGrepInvocation(opts: {
     ignoreGlobs,
     sensitiveExcludes,
     explicitSensitiveHit,
+    // D1（评审 2026-09-28）：rg 侧 glob 用 --iglob（大小写无关）消费——isSensitivePath
+    // 是小写化判定，大小写敏感的 `--glob` 会让 Secrets/、.ENV 变体绕过排除并进入结果。
+    caseInsensitiveGlobs: true,
     scope: {
       root: !searchRel || searchRel === '.' ? '.' : toPosix(searchRel),
       engine: opts.engine ?? 'ripgrep',

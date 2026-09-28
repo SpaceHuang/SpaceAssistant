@@ -504,23 +504,41 @@ export const listDirectoryExecutor: ToolExecutor = {
       try {
         entries = await fs.readdir(target, { withFileTypes: true })
       } catch (e) {
+        // F1/F2（评审 2026-09-28）：readdir 阶段与 stat 阶段同一出口——五类逐一成型，
+        // 不再 throw 逃逸（目录在 stat 后消失的竞态、权限收紧等都落结构化结果）。
         const ab = fileToolAbortResult(op, '目录读取超时', started)
         if (ab) return dirTimeoutResult()
-        if (classifyDirectoryError(e) === 'ACCESS_DENIED') {
+        const cls = classifyDirectoryError(e)
+        if (cls === 'PATH_NOT_FOUND') {
           return {
             success: false,
-            error: 'DIRECTORY_ACCESS_DENIED',
-            data: { errorClass: 'ACCESS_DENIED' as const, path: rel, suggestions: ['provide-path'] },
+            error: 'FILE_NOT_FOUND',
+            data: { errorClass: cls, path: rel, suggestions: ['list-parent'] },
             duration: Date.now() - started
           }
         }
-        throw e
+        if (cls === 'NOT_A_DIRECTORY') {
+          return {
+            success: false,
+            error: 'TARGET_NOT_DIRECTORY',
+            data: { errorClass: cls, path: rel, suggestions: ['use-read-file'] },
+            duration: Date.now() - started
+          }
+        }
+        if (cls === 'ABORTED') return dirTimeoutResult()
+        return {
+          success: false,
+          error: 'DIRECTORY_ACCESS_DENIED',
+          data: { errorClass: 'ACCESS_DENIED', path: rel, suggestions: ['provide-path'] },
+          duration: Date.now() - started
+        }
       }
       const root = path.resolve(ctx.workDir)
       const rows: Array<{ name: string; path: string; isDirectory: boolean; size?: number; mtimeMs?: number }> = []
       let i = 0
       for (const ent of entries) {
-        if (++i % 25 === 0) throwIfAborted(op)
+        // F2：循环阶段 abort/超时统一结构化 READ_TIMEOUT（不再 throwIfAborted 逃逸 / 中文句子 error）
+        if (++i % 25 === 0 && op.aborted) return dirTimeoutResult()
         const p = path.join(target, ent.name)
         let size: number | undefined
         let mtimeMs: number | undefined
@@ -529,8 +547,7 @@ export const listDirectoryExecutor: ToolExecutor = {
           mtimeMs = s.mtimeMs
           if (ent.isFile()) size = s.size
         } catch (e) {
-          const ab = fileToolAbortResult(op, '目录读取超时', started)
-          if (ab) return ab
+          if (op.aborted) return dirTimeoutResult()
           /* skip entry */
         }
         rows.push({
@@ -1083,8 +1100,15 @@ export async function grepWithRg(
   }
   rgArgs.push('--max-columns', '500')
   if (plan.hidden) rgArgs.push('--hidden')
-  for (const g of plan.ignoreGlobs) rgArgs.push('--glob', g)
-  for (const g of plan.sensitiveExcludes) rgArgs.push('--glob', g)
+  // D1（评审 2026-09-28）：glob 大小写无关（--iglob）——isSensitivePath 是小写化判定，
+  // 大小写敏感的 --glob 会让 Secrets/、.ENV、NodeModules 等变体绕过排除。
+  if (plan.caseInsensitiveGlobs) {
+    for (const g of plan.ignoreGlobs) rgArgs.push('--iglob', g)
+    for (const g of plan.sensitiveExcludes) rgArgs.push('--iglob', g)
+  } else {
+    for (const g of plan.ignoreGlobs) rgArgs.push('--glob', g)
+    for (const g of plan.sensitiveExcludes) rgArgs.push('--glob', g)
+  }
   rgArgs.push(searchPath)
   return await new Promise((resolve) => {
     const proc = spawnProcess(binaryPath, rgArgs, { cwd: workDir, windowsHide: true })

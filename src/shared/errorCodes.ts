@@ -101,7 +101,16 @@ export const TOOL_ENVELOPE_KNOWN_ERROR_CODES: ReadonlySet<string> = new Set<stri
   'SHELL_TUI_UNDETECTABLE',
   'SHELL_RESULT_CONTRACT_VIOLATION',
   'TOOL_RESULT_CONTRACT_VIOLATION',
-  'TOOL_EXECUTION_FAILED'
+  'TOOL_EXECUTION_FAILED',
+  // F3（评审 2026-09-28）：run_script / run_lark_cli 的正常业务失败码——不纳入会被
+  // I5 系统性记为「契约违规」，摧毁 contract-violation 告警的信噪比。
+  'SCRIPT_TIMEOUT',
+  'SCRIPT_CANCELLED',
+  'SCRIPT_SPAWN_ERROR',
+  'LARK_TIMEOUT',
+  'LARK_PROCESS_EXIT',
+  'LARK_INPUT_INVALID',
+  'LARK_RUNNER_UNAVAILABLE'
 ])
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes]

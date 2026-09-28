@@ -107,6 +107,29 @@ import { evaluateToolCallGate, isOutboundWriteTool } from './confirmation/toolCa
 import { recordUserAnswerFromDecision, recordSystemManagedCacheEntry } from './confirmation/decisionCacheWriter'
 import { getSecurityAuditLog } from './confirmation/audit'
 import { workspacePathKey as workspacePathKeyOf } from '../src/shared/agent/workspace'
+
+// C2（评审 2026-09-28）：basis-mismatch 护栏的辅助。
+// - realpathBestEffort：legacy 侧（profile.path 字面拼写）与快照侧（realpath 归一）同口径后
+//   再比 key，junction / subst / 8.3 短名等合法形态不误报。
+// - isPackagedApp：fail-loud 只允许开发态。打包产物继承用户环境，NODE_ENV 不被设置，
+//   `NODE_ENV !== 'production'` 恒真——判据必须用 app.isPackaged（测试环境无 electron 时按开发态）。
+function realpathBestEffort(p: string): string {
+  try {
+    return realpathSyncNode(p)
+  } catch {
+    return p
+  }
+}
+
+function isPackagedApp(): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { app } = require('electron') as typeof import('electron')
+    return Boolean(app?.isPackaged)
+  } catch {
+    return false
+  }
+}
 import { channelFor, type ResolveConfirmChannelArgs } from './confirmation/channels'
 import { shouldFallbackToUser } from './confirmation/fallbackToUser'
 import { approvalFallbackReasonFor } from './confirmation/fallbackReason'
@@ -173,6 +196,7 @@ import {
 } from './toolConfirmRegistry'
 import * as toolConfirmRegistry from './toolConfirmRegistry'
 import fs from 'fs/promises'
+import { realpathSync as realpathSyncNode } from 'fs'
 import path from 'path'
 import { resolveSafePathReal } from './pathSecurity'
 import { assertSafeToolInput } from './toolInputGuards'
@@ -1787,26 +1811,32 @@ async function runToolChatSessionInner(
       const workspaceSnapshot = workspaceRefresh ? workspaceRefresh() : undefined
       const workDir = workspaceSnapshot?.rootPath ?? (resolveWorkDir ? resolveWorkDir() : initialWorkDir)
       // R1 §4.1.5 基准分歧护栏：快照与旧解析路径并存且结论不同 = 出现多副本。
-      // 任何模式以快照为准并落审计；开发态 fail-loud（不得进入生产路径）。
+      // C2（评审 2026-09-28）：① 两侧比较前都做 realpath 归一（legacy 返回的是 profile.path
+      // 字面拼写，junction/subst/8.3 等合法形态与快照 realpath 天然字面不等，不得误报）；
+      // ② fail-loud 判据用 app.isPackaged（NODE_ENV 在打包产物中不被设置，恒真会炸生产）。
       if (workspaceSnapshot && resolveWorkDir) {
         const legacyWorkDir = resolveWorkDir()
-        if (legacyWorkDir && legacyWorkDir !== workDir && workspacePathKeyOf(legacyWorkDir) !== workspaceSnapshot.key) {
-          getSecurityAuditLog().record({
-            ts: Date.now(),
-            lane: effectiveLane,
-            actor: 'system',
-            event: 'workspace.basis-mismatch',
-            sessionId,
-            reason: JSON.stringify({
-              revision: workspaceSnapshot.revision,
-              snapshotRoot: workspaceSnapshot.rootPath,
-              legacyWorkDir
+        if (legacyWorkDir) {
+          const legacyReal = realpathBestEffort(legacyWorkDir)
+          const legacyKey = workspacePathKeyOf(legacyReal)
+          if (legacyKey !== workspaceSnapshot.key) {
+            getSecurityAuditLog().record({
+              ts: Date.now(),
+              lane: effectiveLane,
+              actor: 'system',
+              event: 'workspace.basis-mismatch',
+              sessionId,
+              reason: JSON.stringify({
+                revision: workspaceSnapshot.revision,
+                snapshotRoot: workspaceSnapshot.rootPath,
+                legacyWorkDir
+              })
             })
-          })
-          if (process.env.NODE_ENV !== 'production') {
-            throw new Error(
-              `workspace basis mismatch: snapshot=${workspaceSnapshot.rootPath} legacy=${legacyWorkDir}`
-            )
+            if (!isPackagedApp()) {
+              throw new Error(
+                `workspace basis mismatch: snapshot=${workspaceSnapshot.rootPath} legacy=${legacyWorkDir}`
+              )
+            }
           }
         }
       }
@@ -3153,7 +3183,9 @@ async function runToolChatSessionInner(
         // R4：事实优先归一 + 契约违规告警（不允许静默改写）
         const validated = validateToolExecutorResultWithViolations(execResult)
         execResult = validated.result
-        if (isProcessToolName(toolName) && validated.violations.length > 0) {
+        // F3（评审 2026-09-28）：落日志收窄到 I0–I4。I5 是「未知码」——存量执行器的
+        // error 大量是中文句子/业务码，全记 contract-violation 会摧毁告警信噪比。
+        if (isProcessToolName(toolName) && validated.violations.some((v) => v.invariant !== 'I5')) {
           logAgentEvent('warn', 'tool.result.contract-violation', {
             requestId,
             sessionId,

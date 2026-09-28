@@ -23,7 +23,10 @@ describe('securityApprovalSkill（I2：裁决标准唯一）', () => {
 
   it('Skill v2 双维裁决：先评风险与授权、按阈值矩阵推导结论（对比分析 §4-A）', () => {
     const skill = getBundledSecurityApprovalSkill()
-    expect(skill.meta.version).toBe('2.1.0')
+    // R5 起 Skill 合同为三态（v2.2.0）：approve / deny / undetermined
+    expect(skill.meta.version).toBe('2.2.0')
+    expect(skill.content).toContain('"kind":"undetermined"')
+    expect(skill.content).toContain('undetermined 的使用约束')
     expect(skill.content).toMatch(/riskLevel/)
     expect(skill.content).toMatch(/authorization/)
     // 推导顺序要求：先评风险，再评授权，最后推导结论

@@ -35,6 +35,9 @@ describe('R6：rg 参数拼装（范围语义）', () => {
       await grepWithRg('rg', root, path.resolve(root), 'Needle', baseArgs(), 5000, new AbortController().signal, () => {}, capturingSpawn(captured))
       const rgArgs = captured[0]!
       expect(rgArgs).not.toContain('--hidden')
+      // D1：glob 大小写无关消费（--iglob），Secrets/.ENV 变体不绕过排除
+      expect(rgArgs).toContain('--iglob')
+      expect(rgArgs).not.toContain('--glob')
       expect(rgArgs.filter((a) => a === '!**/node_modules/**').length).toBe(1)
       expect(rgArgs).toContain('!**/.env')
       expect(rgArgs).toContain('!**/secrets/**')

@@ -148,6 +148,31 @@ describe('R5：解析失败降级为确认（shell 侧）', () => {
     expect(decision).toMatchObject({ ruleId: 'automation-unsupported-deny' })
   })
 
+  it('B1 端到端：desktop + unsupported（persistable=true 形态）→ memoryTiers 无持久档，缓存不得命中放行', async () => {
+    const audit = auditSink()
+    const analysis = unsupportedAnalysis()
+    // 树解析失败但简单解析器 persistable=true 的真实形态（评审实测：Get-ChildItem ../ 等）
+    ;(analysis as { unsupportedStructures?: string[] }).unsupportedStructures = []
+    const r = await evaluateToolCallGate(base({
+      audit,
+      lane: 'desktop',
+      runShellPrecheck: unsupportedPrecheck(analysis),
+      // 缓存中存在同命令的 90 天 allow 条目（用户此前确认过并勾选记住）
+      decisionCache: {
+        lookup: () => ({ decision: 'auto-allow', ruleId: 'cache-hit', reason: 'user-approved', expiresAt: Date.now() + 86_400_000 }),
+        record: () => undefined,
+        clear: () => 0,
+        clearAllSession: () => 0,
+        expireDormant: () => 0
+      }
+    }))
+    // 修复前：缓存命中直接 auto-allow（「partial 永不自动放行」被绕过）
+    expect(r.decision.type).toBe('require-confirm')
+    if (r.decision.type === 'require-confirm') {
+      expect(r.decision.memoryTiers.some((t) => t === 'persistent')).toBe(false)
+    }
+  })
+
   it('T-R5-2 gate 端到端：automation + unsupported → deny（规则在 catch-all 之前命中，不派生审批回答者）', async () => {
     const audit = auditSink()
     const r = await evaluateToolCallGate(base({
@@ -201,5 +226,35 @@ describe('R5：审批侧「判定不了」态', () => {
         sharedApprovalRecoveryFailed: false
       })
     ).toBe(false)
+  })
+})
+
+describe('B2：段数超限（too-many-segments）保留 precheck 结构化短路', () => {
+  it('unsupported + too-many-segments → precheck ok:false（gate 不进 extractor，循环不中断）', async () => {
+    const { precheckRunShellTool } = await import('./shell/shellToolLoopHelpers')
+    const analysis = unsupportedAnalysis('too-many-segments')
+    ;(analysis as { unsupportedStructures?: string[] }).unsupportedStructures = []
+    const precheck = await precheckRunShellTool({
+      command: Array.from({ length: 52 }, (_, i) => `echo ${i}`).join(' && '),
+      workDir: 'C:\\wd',
+      userDataDir: 'C:\\ud',
+      shellConfig: null,
+      shellPrecheck: { touchTrustedCommand: () => undefined }
+    })
+    // 修复前：unsupported 不短路 → gate 走 runExtractors 裸调 parseShellSegments 抛错炸整轮循环
+    // 修复后：too-many-segments 保留结构化短路（方向 fail-closed，但错误形态可读、不丢同批工具）
+    expect(precheck.ok).toBe(false)
+    if (!precheck.ok) {
+      expect(precheck.auditReason).toContain('段数')
+    }
+  })
+
+  it('structure 类 unsupported（非段数超限）仍不短路——走 gate 进引擎（方案 B 语义保持）', async () => {
+    const r = await evaluateToolCallGate(base({
+      lane: 'desktop',
+      runShellPrecheck: unsupportedPrecheck(unsupportedAnalysis('structure'))
+    }))
+    expect(r.shellPrecheckDeny).toBeUndefined()
+    expect(r.facts.signals.some((s) => s.kind === 'shell-unsupported-structure')).toBe(true)
   })
 })

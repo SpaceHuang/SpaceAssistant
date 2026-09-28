@@ -84,6 +84,47 @@ describe('工具调用可靠性护栏（grep 断言）', () => {
     expect(exec).toContain('normalizeGrepArgs(input)')
   })
 
+  it('护栏 11（C2）：basis-mismatch 护栏判据不得用 NODE_ENV（打包态恒真），且两侧比较前 realpath 归一', () => {
+    const source = read('electron/toolChatLoop.ts')
+    expect(source).not.toContain("process.env.NODE_ENV !== 'production'")
+    expect(source).toContain('isPackagedApp()')
+    expect(source).toContain('realpathBestEffort(legacyWorkDir)')
+  })
+
+  it('护栏 12（B1）：unsupported 信号阻断持久记忆资格', () => {
+    const mem = read('src/shared/policy/memoryEligibility.ts')
+    expect(mem).toContain("signal.kind === 'shell-unsupported-structure'")
+  })
+
+  it('护栏 13（B3）：审批收束指令为三态（两态表述不得回潮）', () => {
+    const agent = read('electron/confirmation/approvalAgent.ts')
+    expect(agent).not.toContain('给出两态 JSON 结论')
+    expect(agent).toContain('三态 JSON 结论')
+  })
+
+  it('护栏 14（F3）：contract-violation 告警只对 I0–I4（I5 不落日志）+ SCRIPT_*/LARK_* 码已闭合', () => {
+    const loop = read('electron/toolChatLoop.ts')
+    expect(loop).toContain("violations.some((v) => v.invariant !== 'I5')")
+    const codes = read('src/shared/errorCodes.ts')
+    expect(codes).toContain("'SCRIPT_TIMEOUT'")
+    expect(codes).toContain("'LARK_RUNNER_UNAVAILABLE'")
+  })
+
+  it('护栏 15（D1/D2）：rg glob 大小写无关消费 + 显式点名段级判定', () => {
+    const scope = read('electron/tools/grepScope.ts')
+    expect(scope).toContain('caseInsensitiveGlobs: true')
+    expect(scope).toContain('seg.toLowerCase()')
+    const exec = read('electron/tools/builtinExecutors.ts')
+    expect(exec).toContain("--iglob")
+  })
+
+  it('护栏 16（E1/E2）：MCP 入参摘要递归脱敏 + 审批渲染消费', () => {
+    const ext = read('electron/confirmation/extractors/mcpPayloadExtractor.ts')
+    expect(ext).toContain('redactDeep')
+    const agent = read('electron/confirmation/approvalAgent.ts')
+    expect(agent).toContain('[入参摘要（脱敏后）]')
+  })
+
   it('护栏 10（R8）：目录错误四分类可分（stat 失败不再共用「不是目录或无法访问」）', () => {
     const exec = read('electron/tools/builtinExecutors.ts')
     expect(exec).toContain('classifyDirectoryError')
