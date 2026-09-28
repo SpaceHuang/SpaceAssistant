@@ -99,8 +99,34 @@
 - `npm run check:tool-result-invariants`：`files=4 violations=0` exit 0（扫描真实 `logs/`，含 Agent/FeishuCli/WeChatCli/SecurityAudit 四份日志）
 - `npm run i18n:check`：passed；`typecheck:shared` / `tsc -p tsconfig.electron.json`：通过
 
+## 4.5 合并后 28 失败修复（2026-09-29，merge-main-28 批次 1–4）
+
+merge `43b474ab`（可靠性分支合入 main）后 win32 全量出现 28 个失败，根因全部来自 main 侧 boundary policy 系列（fa30f3d6 起）在 Windows 上从未跑过全量，与分支合并内容无关。分析与修复计划（经三轮评审收敛至 v4）：`docs/review/2026-09-29-merge-main-28-failures-analysis-and-fix-plan.md`。
+
+| 批次 | 修复 | 提交 |
+| --- | --- | --- |
+| 1（生产缺陷） | `readPathFacts.ts`/`writePathFacts.ts` 路径解析**三态语法分派**（win32 绝对→win32 API、POSIX 绝对→posix API、相对路径→按 workDir 语法），消除 `path.resolve` 在 win32 上把 `/etc/hosts` 漂移为 `E:\etc\hosts` 的 system-dir 漏判；write 侧 1.4a 双守卫（POSIX 语法根 `realpath('/')` 返回盘符根的根逃逸 + 跨语法形态返回不采信）、read 侧 1.4b 对称形态守卫；env canonicalize 保持 truthful（realpath 真实答案）；回归锚①–⑥ + pathClassifier 1.6 回归锚 | `d7ceffef` |
+| 2（测试基建） | `src/test/symlinkCapability.ts` 能力探测（win32 非特权进程无 SeCreateSymbolicLinkPrivilege）；13 个真实 symlink 用例改 `it.skipIf(!canCreateSymlinks())`（Linux CI/特权 win32 真跑）；新增 4 个 mock 通路回归锚（spyOn `fs.lstat`/`fs.realpath` 返回 symlink 形态，win32 无条件执行）：probeReadPathFact、classifyFeishuMediaTarget、executeWeChatSend、gate V2 写目标 | `229cd181` |
+| 3（测试修正） | 3.1 EACCES 用例经批次 1 自然转绿（mock 字面量恢复命中，无需改动）；3.2 `readReadIntegration` 断言改 `path.join` 跨平台等价 | `229cd181` |
+| 4（门禁固化） | win32 全量 0 failed（见 §4.6）；「win32 全量」固化为合入门禁 | 本节 |
+
+**实施中的归组修正（如实记录）**：原 17 个组 1 失败中的 3 个（read_file/grep/list_directory「系统目录目标不可被 custom 放宽」）实际机制并非 POSIX 漂移——其 fixture 用真实 `%SystemRoot%\System32\...` 路径，win32 上命中内置敏感前缀（`shellSensitivePaths` 显式收录 `C:\Windows`）归 `sensitive-file`，而 Linux 上 POSIX 内置敏感分支为空归 `system-dir`。两条 read 规则同为 `locked confirm-every-time`，语义等价，测试改为分平台等价断言（提交 `d7ceffef`）。
+
+**N4 策略决策（安全侧显式化）**：win32 上 POSIX 语法绝对路径（如 `/etc/hosts`）按**语法意图**归 `system-dir`，而非其 win32 真实指向（当前盘符 `E:\etc\hosts`）。这是 fail-safe 方向的选择：对真实存在于 `E:\etc\` 下的文件，保护从 outside-workdir（custom 可放行）升格为 system-dir（locked 真人确认）——行为变更方向是收紧；`E:\etc` 非 Windows 约定系统目录，误保护代价低。
+
+**跨语法 realpath 采信收敛（1.4a/1.4b）**：win32 上 `fs.realpath('/')` 成功返回盘符根（探针实测 `E:\`），POSIX 语法路径的父目录回退若采信跨语法答案会产出 `E:\/etc/hosts` 混合形态并漏判 system-dir——write/read 两侧守卫均静默退出、保持 lexical POSIX 形态（不抛错）；env 路径链路不守卫（取真实 realpath 答案，truthful），其输出形态由「拼接跟随 real 形态」保证无混合分隔符。
+
+**N5 已知边界（pre-existing，如实告知）**：`classifyReadPathZone` 对 POSIX 语法路径 `platform='posix'`，而 win32 上的 userDataDir/homeDir 为 win32 形态——内置/用户目录敏感前缀对 POSIX 语法路径不命中；且 `/home/...`、`/Users/...`、`/root/...` 不命中 system-dir 根正则（探针实测）→ 该类路径在 win32 上无 zone 级保护，拦截依赖 gate/permit 层其它机制或用户显式配置 POSIX 形态 `customSensitivePrefixes`。此为 pre-existing 行为（漂移时代同样不命中），非本次回归。
+
+## 4.6 门禁真实运行记录（2026-09-29，28 失败修复后，win32 全量）
+
+- `npm test`（electron + renderer 双项目全量，win32 本机）：**755 文件 / 5877 passed / 21 skipped / 0 failed**（exit 0，2513.56s）
+- 21 skipped = 13 个 symlink 能力探测 skip（win32 本机无特权；安全语义由 4 个 mock 通路锚在 win32 覆盖）+ 8 个既有平台条件 skip
+- **门禁固化**：boundary policy 系列的合入门禁自本次起必须包含 win32 全量实跑；`0bc23ea9` 式的 fixture 修改后续必须附 win32 实跑记录
+
 ## 5. 遗留与后续
 
 - T-R5-6 的端到端（真实 Electron 会话内「判不了 → 弹卡 → 人工确认」）与「补信息重试即通过」的会话级证据需真机验证一次（本分支无法在单测环境内发起真实 LLM 会话）；机制层（fallback 判定、cause 映射、i18n 键）已由单测锚定。
 - `check:tool-result-invariants` 当前扫描 `logs/` 为空（开发态尚无历史事件流）；打包态 `{workDir}/.agent/logs/**` 由脚本参数支持，接入 CI 时按环境传参。
 - P-1（敏感路径跨工具一致）、P-2（automation 下 extraction-failed）按设计文档 §9.1 保持独立待立项，未在本分支改动。
+- `pathClassifier` 与 `probeReadPathFact`/`probeWritePathFact` 是两套并存的路径归类实现（前者不在 28 失败链路且行为正确，已补回归锚钉住）；统一为单一归类出口另行立项，需附失败复现。
