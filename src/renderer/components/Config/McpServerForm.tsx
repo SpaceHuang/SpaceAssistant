@@ -1,5 +1,5 @@
-import { Button, Collapse, Input, InputNumber, Select, Space, Switch, Tabs, Typography } from 'antd'
-import { Plus, X } from 'lucide-react'
+import { Button, Collapse, Input, InputNumber, Popover, Select, Space, Switch, Tabs, Typography } from 'antd'
+import { HelpCircle, Plus, X } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { McpServerProfile, McpToolDescriptor } from '../../../shared/mcpTypes'
 import type { McpServerDraft } from './mcpDrafts'
@@ -103,6 +103,37 @@ export function McpServerForm({
     })
   }
 
+  const renderAllowPrivateNetworkField = () =>
+    draft.http ? (
+      <McpField
+        label={t('form.allowPrivateNetworkLabel')}
+        labelAction={
+          <Popover
+            title={t('form.allowPrivateNetworkHelpTitle')}
+            content={
+              <div className="mcp-server-help-popover">
+                <p>{t('form.allowPrivateNetworkHelpBody')}</p>
+                <p>{t('form.allowPrivateNetworkHttpsNote')}</p>
+              </div>
+            }
+          >
+            <Button
+              type="text"
+              size="small"
+              icon={<HelpCircle size={14} />}
+              aria-label={t('form.allowPrivateNetworkHelpTitle')}
+            />
+          </Popover>
+        }
+      >
+        <Switch
+          size="small"
+          checked={draft.http.allowPrivateNetwork === true}
+          onChange={(checked) => onPatch({ http: { ...draft.http!, allowPrivateNetwork: checked } })}
+        />
+      </McpField>
+    ) : null
+
   const argsEmpty = Boolean(draft.stdio && draft.stdio.args.length === 0)
   const envEmpty = Boolean(draft.stdio && draft.stdio.env.length === 0)
 
@@ -173,7 +204,7 @@ export function McpServerForm({
                   : { stdio: { command: '', args: [], env: [] } }
                 : draft.http
                   ? {}
-                  : { http: { endpoint: '' } }),
+                  : { http: { endpoint: '', allowPrivateNetwork: false } }),
               ...(key === 'sse' && draft.auth.mode === 'oauth'
                 ? { auth: { ...draft.auth, mode: 'none' as const } }
                 : {})
@@ -283,9 +314,10 @@ export function McpServerForm({
                     <Input
                       value={draft.http.endpoint}
                       placeholder="https://…"
-                      onChange={(e) => onPatch({ http: { endpoint: e.target.value } })}
+                      onChange={(e) => onPatch({ http: { ...draft.http!, endpoint: e.target.value } })}
                     />
                   </McpField>
+                  {renderAllowPrivateNetworkField()}
                   <McpField label={t('form.authModeLabel')}>
                     <Select
                       value={draft.auth.mode}
@@ -351,9 +383,10 @@ export function McpServerForm({
                     <Input
                       value={draft.http.endpoint}
                       placeholder="https://…"
-                      onChange={(e) => onPatch({ http: { endpoint: e.target.value } })}
+                      onChange={(e) => onPatch({ http: { ...draft.http!, endpoint: e.target.value } })}
                     />
                   </McpField>
+                  {renderAllowPrivateNetworkField()}
                   <McpField label={t('form.authModeLabel')}>
                     <Select
                       value={draft.auth.mode}

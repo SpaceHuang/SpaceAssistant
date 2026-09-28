@@ -81,6 +81,30 @@ describe('mcpDrafts', () => {
     expect(input.stdio).toBeUndefined()
   })
 
+  it('round-trips allowPrivateNetwork: init normalizes, write omits when off, dirty tracks toggle', () => {
+    const profile = makeProfile({
+      transport: 'streamable-http',
+      stdio: undefined,
+      http: { endpoint: 'https://intranet.example.com/mcp', allowPrivateNetwork: true }
+    })
+    const draft = initMcpServerDraft(profile)
+    expect(draft.http?.allowPrivateNetwork).toBe(true)
+    expect(draftToWriteInput(draft).http?.allowPrivateNetwork).toBe(true)
+    expect(isMcpDraftDirty(profile, draft)).toBe(false)
+
+    // 关闭状态：写入时省略字段（默认关闭语义），脏检测保持一致
+    const offDraft = { ...draft, http: { endpoint: 'https://intranet.example.com/mcp', allowPrivateNetwork: false } }
+    expect(draftToWriteInput(offDraft).http?.allowPrivateNetwork).toBeUndefined()
+    expect(isMcpDraftDirty(profile, offDraft)).toBe(true)
+
+    // 从未设置该字段的旧 profile 初始化：视为关闭，不产生脏标记
+    const legacy = initMcpServerDraft(
+      makeProfile({ transport: 'streamable-http', stdio: undefined, http: { endpoint: 'https://example.com/mcp' } })
+    )
+    expect(legacy.http?.allowPrivateNetwork).toBe(false)
+    expect(isMcpDraftDirty(makeProfile({ transport: 'streamable-http', stdio: undefined, http: { endpoint: 'https://example.com/mcp' } }), legacy)).toBe(false)
+  })
+
   it('marks a draft dirty when secrets are entered or fields change', () => {
     const profile = makeProfile()
     const draft = initMcpServerDraft(profile)

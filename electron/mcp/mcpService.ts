@@ -10,6 +10,7 @@ import {
   type McpTestConnectionResult
 } from '../../src/shared/mcpTypes'
 import { validateMcpEndpoint } from './endpointPolicy'
+import { createSafeDiscoveryFetch, DISCOVERY_TIMEOUT_MS } from './discoveryPolicyFetch'
 import { appendServer } from './mcpConfigStore'
 import { getSecret } from './mcpSecretStore'
 import { McpConnectionManager, testConnection } from './mcpConnectionManager'
@@ -37,6 +38,8 @@ export interface McpAddServerParams {
   endpoint?: string
   /** stdio 必填 */
   command?: string
+  // 有意不提供 allowPrivateNetwork：内网信任只能由用户在设置页按服务显式授予，
+  // Agent 的 action.mcp.add（strict schema）不得携带或推导该授权。
   args?: string[]
   /** stdio 环境变量表（值将加密存储，结果中只出存在性旗标） */
   env?: Record<string, string>
@@ -73,7 +76,8 @@ export interface McpAddServerOptions {
 const SETTING_PAGE_GUIDE =
     '本期不支持会话内授权：请在设置页 → MCP 服务中对该服务点击「连接/授权」完成 OAuth 登录后再使用'
 
-function buildWriteInput(params: McpAddServerParams, endpoint: string | undefined): McpServerWriteInput {
+/** 导出供单测覆盖转换点（评审 B1：字段剥离类缺陷需转换层测试）。 */
+export function buildWriteInput(params: McpAddServerParams, endpoint: string | undefined): McpServerWriteInput {
   const authMode: McpAddAuthMode = params.authMode ?? (params.transport === 'http' ? 'oauth' : 'none')
   const input: McpServerWriteInput = {
     id: randomUUID(),
@@ -109,51 +113,8 @@ function buildWriteInput(params: McpAddServerParams, endpoint: string | undefine
   return McpServerWriteInputSchema.parse(input)
 }
 
-/** discovery 每跳超时与重定向跟随上限（评审 S4/S5） */
-const DISCOVERY_TIMEOUT_MS = 5_000
 /** discovery 整体 deadline（评审 v2 建议 3）：每跳 5s × 多跳串行可能突破 capability 10s 上限 */
 const DISCOVERY_TOTAL_TIMEOUT_MS = 8_000
-const DISCOVERY_MAX_REDIRECTS = 3
-
-/**
- * discovery 专用 fetch（评审 S5）：SDK 默认 fetch 自动跟随重定向，会绕过 endpoint
- * 安全策略（公网 302 → 内网探测）。这里手动跟随每一跳并对目标重新过 endpointPolicy；
- * 被拦截的跳转返回合成 403（SDK 会吞掉 fetchFn 抛错，用状态码表达失败）并记录拦截态，
- * 供结论文案区分「不支持 OAuth」与「发现被安全策略拦截」。超时经 AbortSignal 强制收敛（评审 S4）。
- */
-function createSafeDiscoveryFetch(
-  timeoutMs = DISCOVERY_TIMEOUT_MS,
-  onBlocked?: (target: URL) => void
-): (url: string | URL, init?: RequestInit) => Promise<Response> {
-  const assertTargetAllowed = (target: URL): boolean => {
-    const validation = validateMcpEndpoint(target.toString())
-    if (!validation.ok) {
-      onBlocked?.(target)
-      return false
-    }
-    return true
-  }
-  return async (url, init) => {
-    let current = new URL(url.toString())
-    if (!assertTargetAllowed(current)) {
-      return new Response(null, { status: 403, statusText: 'endpoint policy blocked' })
-    }
-    for (let hop = 0; ; hop++) {
-      const response = await fetch(current, { ...init, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) })
-      if (response.status < 300 || response.status >= 400) return response
-      const location = response.headers.get('location')
-      if (!location) return response
-      if (hop >= DISCOVERY_MAX_REDIRECTS) {
-        onBlocked?.(current)
-        return new Response(null, { status: 508, statusText: 'redirect loop limit' })
-      }
-      current = new URL(location, current)
-      if (!assertTargetAllowed(current)) {
-        return new Response(null, { status: 403, statusText: 'endpoint policy blocked' })
-      }
-    }
-  }
-}
 
 async function discoverConclusion(
   params: McpAddServerParams,
@@ -335,7 +296,8 @@ export async function testMcpConnection(db: AppDatabase, input: McpServerWriteIn
   } as McpTestConnectionResult
 }
 
-function writeProfileFromInput(input: McpServerWriteInput) {
+/** 导出供单测覆盖转换点（评审 B1：字段剥离类缺陷需转换层测试）。 */
+export function writeProfileFromInput(input: McpServerWriteInput) {
   const now = new Date().toISOString()
   return {
     id: input.id,
@@ -363,7 +325,9 @@ function writeProfileFromInput(input: McpServerWriteInput) {
           }
         }
       : {}),
-    ...(input.http ? { http: { endpoint: input.http.endpoint } } : {}),
+    ...(input.http
+      ? { http: { endpoint: input.http.endpoint, ...(input.http.allowPrivateNetwork === true ? { allowPrivateNetwork: true as const } : {}) } }
+      : {}),
     enabledToolNames: input.enabledToolNames,
     status: 'untested' as const,
     createdAt: input.createdAt ?? now,

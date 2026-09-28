@@ -100,6 +100,28 @@ describe('streamableHttpTransport', () => {
     ).rejects.toThrow(McpEndpointValidationError)
   })
 
+  it('private-address rejection carries the resolved-private-address code', async () => {
+    try {
+      await createStreamableHttpTransport({ endpoint: 'https://10.154.200.32/mcp' })
+      expect.unreachable()
+    } catch (error) {
+      expect(error).toBeInstanceOf(McpEndpointValidationError)
+      expect((error as McpEndpointValidationError).code).toBe('private-address')
+    }
+  })
+
+  it('allowPrivateNetwork permits private endpoints and still rejects http non-loopback', async () => {
+    const transport = await createStreamableHttpTransport({
+      endpoint: 'https://10.154.200.32/mcp',
+      allowPrivateNetwork: true
+    })
+    expect(transport).toBeDefined()
+    await transport.close().catch(() => undefined)
+    await expect(
+      createStreamableHttpTransport({ endpoint: 'http://10.0.0.5/mcp', allowPrivateNetwork: true })
+    ).rejects.toThrow(/http/)
+  })
+
   it('rejects controlled headers', async () => {
     await expect(
       createStreamableHttpTransport({ endpoint: 'https://example.com/mcp', authHeaders: { Host: 'evil' } })

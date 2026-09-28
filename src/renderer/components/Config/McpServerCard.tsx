@@ -100,6 +100,12 @@ export function McpServerCard({
         </span>
       </div>
 
+      {profile?.lastError?.code === 'resolved-private-address' || profile?.lastError?.code === 'private-address' ? (
+        <div className="mcp-server-card__warning" role="alert">
+          {t('card.privateNetworkBlocked')}
+        </div>
+      ) : null}
+
       {draft.enabled && tools.length > 0 && enabledCount === 0 ? (
         <div className="mcp-server-card__warning" role="alert">
           {t('card.noToolsEnabledWarning', { total: tools.length })}

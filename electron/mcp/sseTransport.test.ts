@@ -146,4 +146,33 @@ describe('createSseTransport', () => {
       })
     ).rejects.toThrow(/受控请求头/)
   })
+
+  it('allowPrivateNetwork permits private endpoints; rejection carries code and guidance', async () => {
+    const transport = await createSseTransport({
+      endpoint: 'https://10.154.200.32/sse',
+      allowPrivateNetwork: true
+    })
+    expect(transport).toBeDefined()
+    transport.close()
+
+    // DNS 层路径：公网域名解析到私网 IP（rebinding 形态）——诊断行 + 带引导的错误
+    const diagnostics: string[] = []
+    const lookupSpy = vi.spyOn(dns, 'lookup').mockResolvedValue([
+      { address: '172.16.0.1', family: 4 }
+    ] as never)
+    try {
+      await createSseTransport({
+        endpoint: 'https://intranet-gw.example.com/sse',
+        onDiagnostic: (line) => diagnostics.push(line)
+      })
+      expect.unreachable()
+    } catch (error) {
+      expect(error).toBeInstanceOf(McpEndpointValidationError)
+      expect((error as McpEndpointValidationError).code).toBe('resolved-private-address')
+      expect((error as Error).message).toContain('允许连接内网')
+    } finally {
+      lookupSpy.mockRestore()
+    }
+    expect(diagnostics.some((line) => line.includes('172.16.0.1'))).toBe(true)
+  })
 })

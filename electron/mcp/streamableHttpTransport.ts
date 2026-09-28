@@ -8,13 +8,14 @@ import {
   validateMcpEndpoint,
   validateMcpHeaderName
 } from './endpointPolicy'
+import type { EndpointPolicyOptions } from './endpointPolicy'
 
 export { McpEndpointValidationError } from './endpointPolicy'
 
 /**
  * Streamable HTTP 传输安全封装：
- * - endpoint 校验（URL 边界 + 私网/保留地址拒绝）。
- * - DNS 解析后校验目标 IP（防 DNS rebinding）。
+ * - endpoint 校验（URL 边界 + 私网/保留地址拒绝；per-profile allowPrivateNetwork 显式例外）。
+ * - DNS 解析后校验目标 IP（防 DNS rebinding；解析失败一律 fail-closed，开关不豁免）。
  * - 认证头注入（Bearer / 自定义头，token 不进日志）。
  * - 禁止跟随跨 origin 重定向（3xx 视为连接失败）。
  * - Mcp-Session-Id 由 SDK 传输管理。
@@ -26,12 +27,15 @@ export type McpHttpTransportOptions = {
   authProvider?: OAuthClientProvider
   /** OAuth 授权服务器 origin 白名单（如 GitHub 的 github.com）；仅放行这些跨源端点。 */
   allowedExtraOrigins?: string[]
+  /** per-profile 显式例外：允许解析/连接私网地址（默认拒绝）。 */
+  allowPrivateNetwork?: boolean
   onDiagnostic?: (line: string) => void
 }
 
 async function assertResolvedIpsAllowed(
   hostname: string,
-  onDiagnostic?: (line: string) => void
+  onDiagnostic: ((line: string) => void) | undefined,
+  policyOptions?: EndpointPolicyOptions
 ): Promise<void> {
   if (isLoopbackHost(hostname)) return
   let addresses: Array<{ address: string }>
@@ -39,13 +43,17 @@ async function assertResolvedIpsAllowed(
     addresses = await dns.lookup(hostname, { all: true })
   } catch (error) {
     throw new McpEndpointValidationError(
-      `Endpoint 域名解析失败：${error instanceof Error ? error.message : String(error)}`
+      `Endpoint 域名解析失败：${error instanceof Error ? error.message : String(error)}`,
+      'dns-resolve-failed'
     )
   }
   for (const { address } of addresses) {
-    if (!assertEndpointIpAllowed(address)) {
+    if (!assertEndpointIpAllowed(address, policyOptions?.allowPrivateNetwork === true)) {
       onDiagnostic?.(`Endpoint 解析到受限地址（${address}），已拒绝`)
-      throw new McpEndpointValidationError('Endpoint 解析到私网/保留地址，已拒绝')
+      throw new McpEndpointValidationError(
+        'Endpoint 解析到私网/保留地址，已拒绝。若该服务确实部署在内网，可在其 MCP 服务配置中开启「允许连接内网」后重试（需 https）',
+        'resolved-private-address'
+      )
     }
   }
 }
@@ -76,9 +84,11 @@ function makePolicyFetch(
 export async function createStreamableHttpTransport(
   options: McpHttpTransportOptions
 ): Promise<StreamableHTTPClientTransport> {
-  const validation = validateMcpEndpoint(options.endpoint)
+  const validation = validateMcpEndpoint(options.endpoint, {
+    allowPrivateNetwork: options.allowPrivateNetwork === true
+  })
   if (!validation.ok) {
-    throw new McpEndpointValidationError(validation.message)
+    throw new McpEndpointValidationError(validation.message, validation.code)
   }
   const url = new URL(validation.normalized)
   const authHeaders = options.authHeaders ?? {}
@@ -87,7 +97,9 @@ export async function createStreamableHttpTransport(
       throw new McpEndpointValidationError(`受控请求头不允许: ${name}`)
     }
   }
-  await assertResolvedIpsAllowed(url.hostname, options.onDiagnostic)
+  await assertResolvedIpsAllowed(url.hostname, options.onDiagnostic, {
+    allowPrivateNetwork: options.allowPrivateNetwork === true
+  })
   const allowedExtraOrigins = new Set<string>()
   for (const origin of options.allowedExtraOrigins ?? []) {
     try {

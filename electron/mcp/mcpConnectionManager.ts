@@ -9,6 +9,8 @@ import { MCP_CONNECT_TIMEOUT_MS, type McpServerProfile } from '../../src/shared/
 import { createStdioTransport, StdioCommandValidationError } from './stdioTransport'
 import { createStreamableHttpTransport, McpEndpointValidationError } from './streamableHttpTransport'
 import { createSseTransport } from './sseTransport'
+import { createSafeDiscoveryFetch } from './discoveryPolicyFetch'
+import type { EndpointPolicyOptions } from './endpointPolicy'
 
 /**
  * MCP 连接管理器：连接池、initialize 超时、capabilities 兼容性诊断、空闲回收、
@@ -143,10 +145,12 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 
 /** 按 401 WWW-Authenticate 的 resource_metadata 挑战路径解析授权服务器 origin。 */
 async function resolveOauthAuthorizationServerOriginViaChallenge(
-  endpoint: string
+  endpoint: string,
+  policyOptions?: EndpointPolicyOptions
 ): Promise<string | undefined> {
   try {
-    const probe = await fetch(new URL(endpoint), {
+    const policyFetch = createSafeDiscoveryFetch(undefined, undefined, policyOptions)
+    const probe = await policyFetch(new URL(endpoint), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -161,13 +165,13 @@ async function resolveOauthAuthorizationServerOriginViaChallenge(
           capabilities: {},
           clientInfo: { name: 'spaceassistant', version: '0.1.5' }
         }
-      }),
-      redirect: 'manual'
+      })
     })
+    if (probe.status === 403) return undefined
     const authenticate = probe.headers.get('www-authenticate') ?? ''
     const match = /resource_metadata="([^"]+)"/.exec(authenticate)
     if (!match?.[1]) return undefined
-    const metadataResponse = await fetch(match[1])
+    const metadataResponse = await policyFetch(match[1])
     if (!metadataResponse.ok) return undefined
     const metadata = (await metadataResponse.json()) as { authorization_servers?: string[] }
     const authServer = metadata.authorization_servers?.[0]
@@ -182,11 +186,14 @@ async function resolveOauthAuthorizationServerOriginViaChallenge(
  * 供跨源 OAuth 发现/token 交换放行；发现失败返回 undefined，不阻塞主流程。
  */
 export async function resolveOauthAuthorizationServerOrigin(
-  endpoint: string
+  endpoint: string,
+  policyOptions?: EndpointPolicyOptions
 ): Promise<string | undefined> {
   try {
     const info = await withTimeout(
-      discoverOAuthServerInfo(new URL(endpoint)),
+      discoverOAuthServerInfo(new URL(endpoint), {
+        fetchFn: createSafeDiscoveryFetch(undefined, undefined, policyOptions)
+      }),
       5000,
       'OAuth 授权服务器发现超时'
     )
@@ -199,7 +206,7 @@ export async function resolveOauthAuthorizationServerOrigin(
     // 标准发现不可用（如仅支持挑战式发现）时，回退到 WWW-Authenticate 挑战解析
   }
   return withTimeout(
-    resolveOauthAuthorizationServerOriginViaChallenge(endpoint),
+    resolveOauthAuthorizationServerOriginViaChallenge(endpoint, policyOptions),
     5000,
     'OAuth 授权服务器发现超时'
   ).catch(() => undefined)
@@ -306,7 +313,9 @@ export class McpConnectionManager {
           throw new Error('OAuth 服务缺少 OAuth provider（请先完成授权后重试）')
         }
         authProvider = oauthProvider
-        const oauthOrigin = await resolveOauthAuthorizationServerOrigin(profile.http.endpoint)
+        const oauthOrigin = await resolveOauthAuthorizationServerOrigin(profile.http.endpoint, {
+          allowPrivateNetwork: profile.http.allowPrivateNetwork === true
+        })
         if (oauthOrigin) allowedExtraOrigins = [oauthOrigin]
       } else {
         authHeaders = await this.buildAuthHeaders(profile, secretProvider)
@@ -316,6 +325,7 @@ export class McpConnectionManager {
         authHeaders,
         ...(authProvider ? { authProvider } : {}),
         ...(allowedExtraOrigins?.length ? { allowedExtraOrigins } : {}),
+        allowPrivateNetwork: profile.http.allowPrivateNetwork === true,
         onDiagnostic: (line) => {
           lastTransportLine = line
           this.reportDiagnostic(profile.id, { code: 'http-diagnostic', message: line })
@@ -330,6 +340,7 @@ export class McpConnectionManager {
       rawTransport = await createSseTransport({
         endpoint: profile.http.endpoint,
         authHeaders,
+        allowPrivateNetwork: profile.http.allowPrivateNetwork === true,
         onDiagnostic: (line) => {
           lastTransportLine = line
           this.reportDiagnostic(profile.id, { code: 'sse-diagnostic', message: line })
@@ -498,7 +509,7 @@ export async function testConnection(
       return { ok: false, code: 'invalid-command', message: error.message }
     }
     if (error instanceof McpEndpointValidationError) {
-      return { ok: false, code: 'invalid-endpoint', message: error.message }
+      return { ok: false, code: error.code ?? 'invalid-endpoint', message: error.message }
     }
     if (error instanceof McpConnectionTimeoutError) {
       return { ok: false, code: 'timeout', message: error.message }

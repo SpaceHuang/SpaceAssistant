@@ -161,6 +161,24 @@ describe('mcpTypes write input schema', () => {
     expect(parsed.http?.endpoint).toBe('https://example.com/sse')
   })
 
+  it('accepts allowPrivateNetwork on http write input (strict-safe)', () => {
+    const parsed = McpServerWriteInputSchema.parse({
+      ...baseWriteInput,
+      transport: 'streamable-http',
+      stdio: undefined,
+      http: { endpoint: 'https://intranet.example.com/mcp', allowPrivateNetwork: true }
+    })
+    expect(parsed.http?.allowPrivateNetwork).toBe(true)
+    // 字段可省略（默认关闭）
+    const omitted = McpServerWriteInputSchema.parse({
+      ...baseWriteInput,
+      transport: 'streamable-http',
+      stdio: undefined,
+      http: { endpoint: 'https://example.com/mcp' }
+    })
+    expect(omitted.http?.allowPrivateNetwork).toBeUndefined()
+  })
+
   it('requires endpoint when a legacy SSE write input omits http', () => {
     expect(() =>
       McpServerWriteInputSchema.parse({

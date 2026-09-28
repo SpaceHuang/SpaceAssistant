@@ -20,6 +20,7 @@ import { listProfiles, updateServerStatus } from './mcpConfigStore'
 import { matchOauthClientPreset, type McpOAuthClientPreset } from './oauthClientPresets'
 import { createStreamableHttpTransport } from './streamableHttpTransport'
 import { resolveOauthAuthorizationServerOrigin } from './mcpConnectionManager'
+import { createSafeDiscoveryFetch } from './discoveryPolicyFetch'
 
 /**
  * MCP OAuth 2.1 服务：metadata 发现、PKCE（SDK）、state、固定 loopback 回调、
@@ -256,6 +257,7 @@ export async function startOAuthFlow(
   if (!profile) return { ok: false, code: 'not-found', message: '服务不存在' }
   if (!profile.http) return { ok: false, code: 'no-endpoint', message: '服务缺少 endpoint' }
   const endpoint = profile.http.endpoint
+  const allowPrivateNetwork = profile.http.allowPrivateNetwork === true
   if (activeFlows.has(serverId)) {
     return { ok: false, code: 'flow-active', message: '该服务正在授权中，请等待完成' }
   }
@@ -266,7 +268,9 @@ export async function startOAuthFlow(
     const serverUrl = new URL(endpoint)
     let serverInfo: Awaited<ReturnType<typeof discoverOAuthServerInfo>> | undefined
     try {
-      serverInfo = await discoverOAuthServerInfo(serverUrl, { fetchFn: options?.fetchFn })
+      serverInfo = await discoverOAuthServerInfo(serverUrl, {
+        fetchFn: options?.fetchFn ?? createSafeDiscoveryFetch(undefined, undefined, { allowPrivateNetwork })
+      })
       const issuer = serverInfo.authorizationServerMetadata?.issuer
       if (issuer) {
         preset = matchOauthClientPreset(serverUrl.origin, issuer)
@@ -306,13 +310,14 @@ export async function startOAuthFlow(
     const oauthExtraOrigins =
       serverInfo?.resourceMetadata?.authorization_servers?.length && serverInfo.authorizationServerUrl
         ? [new URL(serverInfo.authorizationServerUrl).origin]
-        : await resolveOauthAuthorizationServerOrigin(endpoint).then((origin) =>
+        : await resolveOauthAuthorizationServerOrigin(endpoint, { allowPrivateNetwork }).then((origin) =>
             origin ? [origin] : undefined
           )
     const buildTransport = () =>
       createStreamableHttpTransport({
         endpoint,
         authProvider: provider,
+        allowPrivateNetwork,
         ...(oauthExtraOrigins?.length ? { allowedExtraOrigins: oauthExtraOrigins } : {}),
         onDiagnostic: () => undefined
       })
