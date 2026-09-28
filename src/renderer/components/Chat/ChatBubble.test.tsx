@@ -362,4 +362,48 @@ describe('ChatBubble activity batch', () => {
       expect.stringContaining('t3')
     ])
   })
+
+  // ---- DOM 防抖门禁：流式期间每次投影 flush 都以新引用重建消息对象（内容相同），
+  // 终态工具卡（失败/完成）的 DOM 必须零变更——任何 text/attribute/childList 变更
+  // 都会在 60fps 推送下表现为「卡片在抖」。
+  it('流式期间每帧投影重建下,终态工具卡 DOM 零变更', async () => {
+    const now = Date.now()
+    const fixedTimestamp = now - 60_000
+    const tools = (over: { t2Status: 'executing' | 'failed' }): Message['toolCalls'] => [
+      {
+        id: 't1',
+        toolName: 'grep',
+        input: {},
+        status: 'failed',
+        riskLevel: 'low',
+        completedAt: now - 1000,
+        result: { success: false, error: 'read-v1-target-unsupported', userMessage: 'V1 文件读取仅支持单个普通文件目标' }
+      },
+      {
+        id: 't2',
+        toolName: 'read_file',
+        input: { path: 'a.txt' },
+        status: over.t2Status,
+        riskLevel: 'low'
+      }
+    ]
+    const mkMessage = (t2Status: 'executing' | 'failed'): Message =>
+      assistantMessage({ timestamp: fixedTimestamp, content: '', contentSegments: [{ content: '', startTime: fixedTimestamp }], toolCalls: tools({ t2Status }) })
+    const { container, rerender } = render(<ChatBubble message={mkMessage('executing')} />)
+    const mutations: MutationRecord[] = []
+    const observer = new MutationObserver((records) => mutations.push(...records))
+    observer.observe(container, { subtree: true, childList: true, characterData: true, attributes: true })
+    for (let frame = 0; frame < 10; frame++) {
+      rerender(<ChatBubble message={mkMessage('executing')} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+    observer.disconnect()
+    const summary = mutations.slice(0, 6).map((m) => ({
+      type: m.type,
+      target: (m.target as Element)?.className ?? String(m.target),
+      name: m.attributeName ?? undefined
+    }))
+    expect(summary).toEqual([])
+  })
 })

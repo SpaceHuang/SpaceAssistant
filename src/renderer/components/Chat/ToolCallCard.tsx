@@ -79,6 +79,78 @@ type Props = {
   activeSearchTarget?: ChatSearchActiveTarget | null
 }
 
+// 流式期间每次投影 flush 都以新引用重建 record/input/result（内容通常不变），
+// 默认浅比较恒失效 → 终态工具卡每帧空转重渲染。按展示影响字段做内容相等比较，
+// 内容相同的重建在 memo 边界被拦截；字段集必须覆盖 ToolCallRecord 的全部展示输入，
+// 新增展示字段时同步维护（漏字段 = 卡片静默不更新）。
+const inputFingerprints = new WeakMap<object, string>()
+function inputFingerprint(input: Record<string, unknown>): string {
+  let fp = inputFingerprints.get(input)
+  if (fp === undefined) {
+    try {
+      fp = JSON.stringify(input) ?? 'null'
+    } catch {
+      fp = String(input)
+    }
+    inputFingerprints.set(input, fp)
+  }
+  return fp
+}
+
+function sameToolRecord(a: ToolCallRecord, b: ToolCallRecord): boolean {
+  if (a === b) return true
+  return a.id === b.id
+    && a.toolName === b.toolName
+    && a.status === b.status
+    && a.riskLevel === b.riskLevel
+    && a.autoAnswerer === b.autoAnswerer
+    && a.confirmedAt === b.confirmedAt
+    && a.startedAt === b.startedAt
+    && a.completedAt === b.completedAt
+    && a.duration === b.duration
+    && a.progressOutput === b.progressOutput
+    && a.progressOutputRaw === b.progressOutputRaw
+    && a.progressOutputRawLabel === b.progressOutputRawLabel
+    && a.progressSeq === b.progressSeq
+    && a.processPid === b.processPid
+    && a.processGroupId === b.processGroupId
+    && a.processOwnerToken === b.processOwnerToken
+    && a.currentPageUrl === b.currentPageUrl
+    && a.sessionTrustedHint === b.sessionTrustedHint
+    && a.corrupted === b.corrupted
+    && a.interrupted === b.interrupted
+    && inputFingerprint(a.input) === inputFingerprint(b.input)
+    && (a.result === b.result || JSON.stringify(a.result ?? null) === JSON.stringify(b.result ?? null))
+    && a.approval === b.approval
+    && a.memoryTiers === b.memoryTiers
+    && a.confirmDiff === b.confirmDiff
+    && a.shellSecurityHints === b.shellSecurityHints
+    && a.autoApproveFallback === b.autoApproveFallback
+    && a.dangerInfo === b.dangerInfo
+    && a.mcp === b.mcp
+}
+
+export function areToolCallCardPropsEqual(prev: Props, next: Props): boolean {
+  if (!sameToolRecord(prev.record, next.record)) return false
+  return prev.focus === next.focus
+    && prev.workDir === next.workDir
+    && prev.messageId === next.messageId
+    && prev.turnId === next.turnId
+    && prev.sessionId === next.sessionId
+    && prev.shellConfig === next.shellConfig
+    && prev.sessionMetadata === next.sessionMetadata
+    && prev.confirmationReady === next.confirmationReady
+    && prev.onConfirm === next.onConfirm
+    && prev.onCancel === next.onCancel
+    && prev.onOpenFile === next.onOpenFile
+    && prev.activeSearchTarget === next.activeSearchTarget
+    && ((prev.displaySummary === next.displaySummary) || (
+      prev.displaySummary !== undefined && next.displaySummary !== undefined
+      && prev.displaySummary.hasDetails === next.displaySummary.hasDetails
+      && prev.displaySummary.resultPreviewTruncated === next.displaySummary.resultPreviewTruncated
+    ))
+}
+
 export function getMcpStatusTranslationKey(status: ToolCallRecord['status'], interrupted = false):
   | 'mcp.statusRunning'
   | 'mcp.statusSuccess'
@@ -150,6 +222,10 @@ export const ToolCallCard = memo(function ToolCallCard({
   const mcp = isMcpRecord(record)
   const currentLoadedDetail = loadedDetail && loadedForSource === sourceRecord ? loadedDetail : undefined
   const cardRef = useRef<HTMLDivElement>(null)
+  // toolCalls 仅被终端 scrollback 回写回调使用、不参与渲染输出；memo 比较器忽略其引用,
+  // 用 ref 保证回调拿到的是最新数组（每帧投影都会重建该数组）
+  const toolCallsRef = useRef(toolCalls)
+  toolCallsRef.current = toolCalls
   const [executingHint, setExecutingHint] = useState(false)
   const [terminalFallbackPlain, setTerminalFallbackPlain] = useState(false)
   const scrollbackPatchedRef = useRef(false)
@@ -261,11 +337,11 @@ export const ToolCallCard = memo(function ToolCallCard({
         sessionId,
         messageId,
         toolUseId: record.id,
-        toolCalls,
+        toolCalls: toolCallsRef.current,
         scrollback
       })
     },
-    [messageId, sessionId, record.id, record.status, toolCalls]
+    [messageId, sessionId, record.id, record.status]
   )
 
   useEffect(() => {
@@ -759,4 +835,4 @@ export const ToolCallCard = memo(function ToolCallCard({
       ) : null}
     </div>
   )
-})
+}, areToolCallCardPropsEqual)
