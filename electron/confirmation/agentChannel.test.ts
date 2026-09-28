@@ -77,6 +77,23 @@ describe('AgentChannel（P2-3）', () => {
     expect(outcome.kind === 'rejected' && outcome.reason?.summary).toBe('目标在敏感目录外，拒绝写入')
   })
 
+  it('R5：undetermined 裁决 → rejected + cause=agent-undetermined（三分支映射，不得静默退化 agent-deny）', async () => {
+    const ch2 = new AgentChannel({
+      lane: 'desktop',
+      requestId: 'r-und',
+      sessionId: 's',
+      toolName: 'run_shell',
+      policy: { kind: 'agent' },
+      invokeApproval: async () => ({
+        ok: true,
+        verdict: { kind: 'undetermined', reason: { summary: '缺少命令目标路径，无法评估影响面' } }
+      })
+    })
+    const outcome = await ch2.request(req())
+    expect(outcome).toMatchObject({ kind: 'rejected', answererKind: 'agent', cause: 'agent-undetermined' })
+    expect(outcome.kind === 'rejected' && outcome.reason?.summary).toBe('缺少命令目标路径，无法评估影响面')
+  })
+
   it('invokeApproval 超时 → rejected + cause=timeout（非挂 5 分钟）', async () => {
     const { ch } = channel({
       invokeApproval: () => new Promise<ApprovalInvocationResult>(() => undefined)

@@ -90,7 +90,8 @@ export function canShowShellTrustOption(
   analysis: ShellAnalysisResult,
   command?: string
 ): boolean {
-  if (analysis.verdict === 'deny') return false
+  // R5：显式排除 unsupported（评审 B1 连带项——漏排会让无法分析的命令可加入信任列表）
+  if (analysis.verdict !== 'allow' && analysis.verdict !== 'ask') return false
   const hints = analysis.shellSecurityHints
   if (hints.requiresRiskAck) return false
   if (hints.securityWarning) return false
@@ -108,7 +109,8 @@ export function shouldSkipShellConfirmForTrust(
   analysis: ShellAnalysisResult,
   shellConfig?: ShellConfig | null
 ): boolean {
-  if (analysis.verdict === 'deny') return false
+  // R5：显式排除 unsupported——不可静默跳过确认
+  if (analysis.verdict !== 'allow' && analysis.verdict !== 'ask') return false
   if (commandHasShellMetasyntax(command)) return false
   if (!matchesTrustedCommand(command, shellConfig?.trustedCommands)) return false
   return canShowShellTrustOption(analysis, command)

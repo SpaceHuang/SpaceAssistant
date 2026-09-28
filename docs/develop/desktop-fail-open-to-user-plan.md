@@ -99,8 +99,9 @@
 | `config-error` | 配置损坏 / 通道未接线 | **保持 deny** | 契约问题：同属产品缺陷，且已有独立告警路径 |
 | `recursion-blocked` | 递归守卫触发 | **保持 deny** | 结构性问题：与「人在不在场」无关 |
 | `agent-deny` | 拿到了裁决，结论为拒绝 | 不适用 | 有效裁决，绝不回退；否则等于「被拒就再问人」，形成绕过（见 §4.3） |
+| `agent-undetermined`（R5 新增） | 审批 Agent 的**有效裁决「判不了」**：事实链确实不完整（命令 / 目标 / 影响面无法确定），且 reason 已写明缺什么证据 | **转人工** | 与 `agent-deny` 相反的另一类有效裁决：**信息不足 ≠ 明确拒绝**。环境格回退的是「没拿到裁决」，本格回退的是「判不了」——回退的是机器的能力边界，不是机器的结论。automation 不经过此格（由 lane 限定 deny 规则前拦，tool-invocation-reliability-improvement-technical-design.md §4.5.3 O9） |
 
-**结论**：桌面回退范围为 **`unavailable` + `timeout`** 两格。
+**结论**：桌面回退范围为 **`unavailable` + `timeout` + `agent-undetermined`（R5 新增）** 三格。
 
 ### 4.1 `timeout` → 转人工（已定）
 
@@ -135,7 +136,7 @@
 ```
 可回退 = lane === 'desktop'                                  // ① 链路：回退仅装配在桌面
   && channelOutcome.answererKind === 'agent'                 // ② 来源：主回答者确为 agent（评审 v3 B1）
-  && (cause === 'unavailable' || cause === 'timeout')        // ③ 类别：§4 矩阵可回退格
+  && (cause === 'unavailable' || cause === 'timeout' || cause === 'agent-undetermined')  // ③ 类别：§4 矩阵可回退格（R5 起三格）
   && !chatSignal.aborted                                     // ④ 中止守卫之一（评审 v3 B2）
   && !sharedApprovalRecoveryFailed                           // ④ 中止守卫之二
 ```
@@ -146,7 +147,7 @@
 | --- | --- | --- |
 | ① `lane` | `desktop` | 回退**仅**装配在桌面链路；automation / wechat / feishu 零变化（§6.1） |
 | ② `answererKind` | `'agent'` | **v3 B1**：普通 `ask` 的 `DesktopChannel` outcome 经 `mapToolOutcome` 映射后，`cause` 同样会落在可回退两格——用户 5 分钟未响应卡片得到 `'timeout'`，预留确认项被置不可用得到 `'unavailable'`。若不加此维，**普通 `ask` 卡超时会立刻再弹一张同样的卡**（总等待从 5min 变 10min），既改变普通 `ask` 行为，又违反 §5.6。判别天然可做：`AgentChannel` 的全部五个 outcome 点**恒携带** `answererKind: 'agent'`；`DesktopChannel`（经 `mapToolOutcome`）与 `DenyChannel` 的 outcome**不携带**该字段 |
-| ③ `cause` 白名单 | `unavailable` / `timeout` | §4 矩阵的可回退两格；其余（`unparsable` / `config-error` / `recursion-blocked`）保持 deny，`agent-deny` 永不回退（§4.3） |
+| ③ `cause` 白名单 | `unavailable` / `timeout` / `agent-undetermined` | §4 矩阵的可回退格（R5 起三格）；其余（`unparsable` / `config-error` / `recursion-blocked`）保持 deny，`agent-deny` 永不回退（§4.3） |
 | ④ 中止守卫 | `!chatSignal.aborted && !sharedApprovalRecoveryFailed` | **v3 B2**：见下 |
 
 **第 ④ 维详解（评审 v3 B2）**：用户点「停止」时，`failApprovalGroup()` 会调用 `AgentChannel.cancel()`，把活动 attempt 以 **`{ ok: false, cause: 'unavailable' }`** settle——即**恰好命中第 ③ 维**。若不设守卫，用户刚按停止就会弹出一张人工确认卡，且该回退 waiter 会成为**孤儿**：`failApprovalGroup` 里的 `cancelAllToolConfirmsForRequest(requestId)` 执行**先于**回退 waiter 的补登记（§5.1 第 1 条），清扫扫不到它，只能等 5 分钟超时回收。
@@ -523,6 +524,7 @@ desktop 走 agent 裁决时，卡片会被渲染成**只读态**：`ToolCallCard
 - **超时单测（评审 v2 非阻断 2）**：回退请求的 `timeoutMs` 为 `null`（或显式 `CONFIRM_MS`），**不继承** `gate.decision.timeoutMs`；
 - 分道锚定单测（§5.2）：`config-error` 不触发回退、仍由 `DenyChannel` 拒绝并保持既有告警；
 - 负向单测：`agent-deny` 不触发回退；
+- **回退单测（R5 新增）**：`cause='agent-undetermined'`（审批置「判不了」）→ 桌面触发回退 → `confirm.answerer-fallback-to-user` → 人工确认卡（卡片原因显示「结构不受支持」类事实）；`agent-deny` 仍不回退（锚定不因新格放宽）；`notExecutedReason` 落 `'agent_undetermined'`（不落 `user_rejected`）；`undetermined` 本身不写缓存（机器结论），仅回退后的人工批准可写；
 - 端到端（mock provider）：desktop 审批不可用 / 超时 → 卡片出现 → 批准 / 拒绝双路径；
 - 渲染单测：回退后卡片可交互（`autoAnswerer` 已清除、按钮存在；见 §5.8）；
 - 渲染单测：banner 覆盖**多种工具类型**（文件类 / shell / MCP 各一），断言原因文案出现（见 §8.5）；
@@ -558,6 +560,8 @@ desktop 走 agent 裁决时，卡片会被渲染成**只读态**：`ToolCallCard
 **处置（已完成）**：该句已限定为「**无人值守（automation）链路**的服务故障不自动转人工」，并明确有人值守链路（桌面 / IM）的失败去向按各自链路策略决定、指向本计划（该文档 §1 与头部关联设计均已更新）。限定的理由：该句的论证前提与 I4 原表述相同——无人场景下转人工等于挂死；限定后与 I4 的场景限定口径一致，且不推翻该计划的其他内容。
 
 其中「**不增加审批 Agent 的第三种裁决**」与本计划完全一致（回退后仍是两态人工确认卡），保留不变。
+
+> **R5 修订（2026-09-25，tool-invocation-reliability-improvement-technical-design.md §4.5.3）**：审批 Agent 的裁决输出由两态扩展为三态（新增 `undetermined`「判不了」）。上一段的「不增加第三种裁决」指**回退后的确认卡仍是两态人工确认**——该语义不变；本次新增的是**机器侧的有效裁决格**：`agent-undetermined` 进入 §4 矩阵可回退格（第三格），而 `agent-deny` 永不回退的边界（§4.3）一个字不动。两者的分界：`unavailable` / `timeout` 是「没拿到裁决」，`agent-undetermined` 是「拿到裁决：判不了」，`agent-deny` 是「拿到裁决：拒绝」。
 
 ### 8.2 §4 矩阵的 `timeout` / `unparsable` 两格（**已定稿**）
 

@@ -74,11 +74,19 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'grep',
     description:
-      '在当前工作目录范围内递归搜索文件内容。pattern 使用 ripgrep 默认正则语法。使用 output_mode 选择返回匹配文件、匹配内容或每文件匹配行数，使用 head_limit 限制结果数量。搜索文件内容时使用本工具，无需调用 shell。',
+      '在当前工作目录范围内递归搜索文件内容。pattern 使用 ripgrep 默认正则语法。使用 output_mode 选择返回匹配文件、匹配内容或每文件匹配行数，使用 head_limit 限制结果数量。搜索文件内容时使用本工具，无需调用 shell。' +
+      '默认不搜索以下目录（依赖安装 / 构建产物 / 缓存 / 版本库内部对象）：node_modules、.git、.svn、__pycache__、dist、dist-electron、.cursor；显式指定其内部路径即可搜索（隐藏目录会自动解除隐藏过滤），或传 include_ignored: true 一并解除。' +
+      '敏感文件 / 目录（.env、.env.*、secrets/）在遍历中始终排除，include_ignored: true 也不解除；如需搜索请直接指定该文件路径，该方式会执行并在结果中标注「命中敏感路径」。' +
+      '「无匹配」结果会附带实际搜索范围与跳过目录（searchScope），跳过目录中可能存在匹配内容。查版本库历史内容建议改用 run_shell 的 git log -S / git grep / git show（效率提示，非安全限制）。',
     input_schema: {
       type: 'object',
       properties: {
         pattern: { type: 'string', description: '使用 ripgrep 默认正则语法的搜索模式；默认不支持 lookaround 和反向引用' },
+        include_ignored: {
+          type: 'boolean',
+          description:
+            '对齐 ripgrep 的 -uu：同时解除默认忽略规则与隐藏条目过滤（含 .git 等点目录），默认 false。注意：敏感文件（如 .env）仍不会被搜索，如需搜索请直接指定该文件路径'
+        },
         path: {
           type: 'string',
           description: '工作目录内要搜索的文件或目录；支持相对路径和工作目录内的绝对路径，默认搜索整个工作目录'

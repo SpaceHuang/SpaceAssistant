@@ -218,7 +218,7 @@ export function parseApprovalVerdict(
         authorization?: unknown
         reason?: { summary?: unknown }
       }
-      if (parsed.kind !== 'approve' && parsed.kind !== 'deny') continue
+      if (parsed.kind !== 'approve' && parsed.kind !== 'deny' && parsed.kind !== 'undetermined') continue
       const declaredKind = parsed.kind
       const explicitSummary =
         typeof parsed.reason?.summary === 'string' && parsed.reason.summary ? parsed.reason.summary : undefined
@@ -229,6 +229,18 @@ export function parseApprovalVerdict(
         isAuthorizationDimension(parsed.authorization) ? parsed.authorization : 'unknown',
         opts?.maxAuthorization ?? 'high'
       )
+      // R5：undetermined 是「有效裁决：判不了」——取原样（reason.summary 必须写明缺什么证据），
+      // 不参与阈值矩阵、不派生 risk/authorization；取「最后一个合法裁决」的既有策略不变。
+      if (declaredKind === 'undetermined') {
+        last = {
+          kind: 'undetermined',
+          reason: {
+            summary: explicitSummary ?? DEFAULT_DENY_SUMMARY,
+            ...(explicitSummary ? {} : { evidence: ['undetermined without summary'] })
+          }
+        }
+        continue
+      }
       const matrixSaysDeny = declaredKind === 'approve' && deriveApprovalOutcome(risk, auth) === 'deny'
       const kind = matrixSaysDeny ? 'deny' : declaredKind
       last = {

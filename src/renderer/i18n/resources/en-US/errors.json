@@ -57,5 +57,7 @@
   "TURN_VISION_MODEL_NOT_CONFIGURED": "No vision model available. Enable one in Settings.",
   "TURN_REQUEST_FINGERPRINT_MISMATCH": "This request conflicts with the turn in progress. Try again shortly.",
   "TURN_REUSE_SESSION_MISMATCH": "The original message does not belong to this session and cannot be retried.",
-  "TURN_REUSE_TARGET_NOT_USER": "The original message can no longer be retried."
+  "TURN_REUSE_TARGET_NOT_USER": "The original message can no longer be retried.",
+  "DIRECTORY_ACCESS_DENIED": "No permission to access this directory",
+  "DIRECTORY_READ_TIMEOUT": "Directory read timed out or was cancelled; retryable"
 }

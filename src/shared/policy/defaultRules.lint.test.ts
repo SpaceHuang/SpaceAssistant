@@ -16,6 +16,35 @@ describe('defaultRules lane lint（偏差 22 防漂移）', () => {
   })
 })
 
+describe('defaultRules denyClass 全量标注（R2 · O4 定案）', () => {
+  it('会产 ask/deny 的规则必须声明 denyClass；allow/auto-evaluator 类不标', () => {
+    const producing = DEFAULT_POLICY_RULES.filter((r) => r.action === 'ask' || r.action === 'deny')
+    const missing = producing.filter((r) => !r.denyClass).map((r) => r.id)
+    expect(missing).toEqual([])
+    const mislabeled = DEFAULT_POLICY_RULES.filter(
+      (r) => (r.action === 'allow' || r.action === 'auto-evaluator') && r.denyClass !== undefined
+    ).map((r) => r.id)
+    expect(mislabeled).toEqual([])
+  })
+
+  it('denyClass 取值闭合于三类', () => {
+    for (const r of DEFAULT_POLICY_RULES) {
+      if (r.denyClass !== undefined) {
+        expect(['forbidden', 'insufficient-info', 'out-of-bounds']).toContain(r.denyClass)
+      }
+    }
+  })
+
+  it('deny 规则中「产品禁令」类标 forbidden；预算暂停类标 insufficient-info', () => {
+    for (const id of ['script-network-deny-remote', 'remote-shell-disabled', 'im-no-wechat-send', 'ingress-direct-other-deny']) {
+      expect(DEFAULT_POLICY_RULES.find((r) => r.id === id)?.denyClass).toBe('forbidden')
+    }
+    for (const id of ['remote-outbound-budget-pause-wechat', 'remote-outbound-budget-pause-lark']) {
+      expect(DEFAULT_POLICY_RULES.find((r) => r.id === id)?.denyClass).toBe('insufficient-info')
+    }
+  })
+})
+
 describe('automation lane 显式规则集（偏差 21/22：反向证据翻转）', () => {
   it('存在以 automation 为 lane 的只读 allow 规则（read_file/list_directory/grep/list_work_dirs/history.read/skills.read/read_feishu_attachment）', () => {
     const rule = DEFAULT_POLICY_RULES.find((r) => r.id === 'automation-readonly-allow')

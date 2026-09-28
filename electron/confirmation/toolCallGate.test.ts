@@ -91,6 +91,167 @@ function auditSink(): { record: (e: SecurityAuditEvent) => void; events: Securit
   return { record: (e) => events.push(e), events }
 }
 
+describe('evaluateToolCallGate 诊断契约（R2）', () => {
+  it('deny 决策携带结构化诊断：ruleId/denyClass/basis/messageKey/cause 齐全，审计同步 denyClass', async () => {
+    const audit = auditSink()
+    const r = await evaluateToolCallGate(base({
+      audit,
+      toolName: 'run_shell',
+      toolInput: { command: 'dir' },
+      remoteContext: remoteContext(),
+      workDir: 'C:\wd\sess'
+    }))
+    // wechat lane + run_shell → remote-shell-disabled（locked deny）
+    expect(r.decision.type).toBe('deny')
+    const d = r.diagnostics!
+    expect(d.ruleId).toBe('remote-shell-disabled')
+    expect(d.denyClass).toBe('forbidden')
+    expect(d.basis.kind).toBe('workdir')
+    expect(d.basis.workDir).toBe('C:\wd\sess')
+    expect(d.messageKey).toBe('deny.forbidden.rule')
+    expect(d.messageParams.ruleId).toBe('remote-shell-disabled')
+    expect(d.cause).toBe('rules-violated')
+    expect(d.suggestions.length).toBeGreaterThan(0)
+    const ev = audit.events.find((e) => e.event === 'policy.decision')
+    expect(ev?.denyClass).toBe('forbidden')
+    expect(ev?.basis?.revision).toBe(0)
+  })
+
+  it('ask 决策（require-confirm）也携带 insufficient-info 诊断（告诉模型缺什么）', async () => {
+    const audit = auditSink()
+    const r = await evaluateToolCallGate(base({
+      audit,
+      toolName: 'write_file',
+      toolInput: { path: 'a.txt', content: 'x' },
+      remoteContext: remoteContext()
+    }))
+    expect(r.decision.type).toBe('require-confirm')
+    expect(r.diagnostics!.denyClass).toBe('insufficient-info')
+    expect(r.diagnostics!.messageKey).toBe('deny.insufficientInfo.rule')
+  })
+
+  it('workspace 快照传入时 basis 携带 revision/profileId/source（与审批审计可比对）', async () => {
+    const audit = auditSink()
+    const r = await evaluateToolCallGate(base({
+      audit,
+      toolName: 'run_shell',
+      toolInput: { command: 'dir' },
+      remoteContext: remoteContext(),
+      workspace: {
+        profileId: 'p-bound',
+        rootPath: 'C:\bound',
+        key: 'c:/bound',
+        source: 'session-binding',
+        sensitive: false,
+        revision: 7
+      }
+    }))
+    expect(r.decision.type).toBe('deny')
+    expect(r.diagnostics!.basis).toEqual({
+      kind: 'workdir',
+      workDir: 'C:\bound',
+      profileId: 'p-bound',
+      revision: 7,
+      source: 'session-binding'
+    })
+    const ev = audit.events.find((e) => e.event === 'policy.decision')
+    expect(ev?.basis?.revision).toBe(7)
+  })
+
+  it('auto-allow 决策不携带诊断', async () => {
+    const r = await evaluateToolCallGate(base({ toolName: 'read_file', toolInput: { path: 'a.txt' } }))
+    expect(r.decision.type).toBe('auto-allow')
+    expect(r.diagnostics).toBeUndefined()
+  })
+})
+
+describe('evaluateToolCallGate MCP 载荷（R3）', () => {
+  function mcpEntry(overrides: Record<string, unknown> = {}) {
+    return {
+      serverId: 'srv1',
+      serverName: 'Example',
+      originalName: 'fetch_url',
+      mappedName: 'mcp_example_fetch_url',
+      description: 'fetch a url',
+      inputSchema: {
+        type: 'object',
+        properties: { url: { type: 'string' }, max_length: { type: 'number' } },
+        required: ['url']
+      },
+      ...overrides
+    } as NonNullable<ToolCallGateArgs['mcpEntry']>
+  }
+
+  it('T-R3-1：只读抓取（带 url）——载荷含 mcp-invocation.targetUrl 与 argsDigest，不被 payload-incomplete 拒', async () => {
+    const audit = auditSink()
+    const r = await evaluateToolCallGate(base({
+      audit,
+      toolName: 'mcp_example_fetch_url',
+      toolInput: { url: 'https://example.com/data', max_length: 200 },
+      mcpEntry: mcpEntry({
+        annotations: { readOnlyHint: true, destructiveHint: false }
+      })
+    }))
+    const sig = r.facts.signals.find((x) => x.kind === 'mcp-invocation')
+    expect(sig).toBeTruthy()
+    if (sig?.kind === 'mcp-invocation') {
+      expect(sig.targetUrl).toBe('https://example.com/data')
+      expect(sig.classificationBasis).toBe('annotations-readonly')
+      expect(sig.argsDigest).toContain('url')
+      expect(sig.argsTruncated).toBe(false)
+    }
+    expect(r.facts.signals.some((x) => x.kind === 'payload-incomplete')).toBe(false)
+    expect(audit.events.some((e) => e.event === 'confirm.payload-incomplete')).toBe(false)
+  })
+
+  it('T-R3-2：载荷构造缺字段（缺 url）→ payload-incomplete 信号 + 审计，且 reason 不出现「调用参数缺失」', async () => {
+    const audit = auditSink()
+    const r = await evaluateToolCallGate(base({
+      audit,
+      toolName: 'mcp_example_fetch_url',
+      toolInput: { max_length: 200 },
+      mcpEntry: mcpEntry()
+    }))
+    const sig = r.facts.signals.find((x) => x.kind === 'payload-incomplete')
+    expect(sig).toBeTruthy()
+    if (sig?.kind === 'payload-incomplete') {
+      expect(sig.missing).toEqual(['url'])
+    }
+    const ev = audit.events.find((e) => e.event === 'confirm.payload-incomplete')
+    expect(ev).toBeTruthy()
+    expect(ev?.reason).not.toContain('参数缺失')
+    expect(ev?.reason).not.toContain('missing invocation args')
+    expect(ev?.reason).toContain('construction')
+  })
+
+  it('T-R3-3：注解安全 → actionClass=read + annotations-readonly（ask/deny 结论不变：desktop 落 mcp-readonly-allow）', async () => {
+    const r = await evaluateToolCallGate(base({
+      toolName: 'mcp_example_fetch_url',
+      toolInput: { url: 'https://example.com' },
+      mcpEntry: mcpEntry({ annotations: { readOnlyHint: true, destructiveHint: false } })
+    }))
+    expect(r.decision.type).toBe('auto-allow')
+    const sig = r.facts.signals.find((x) => x.kind === 'mcp-invocation')
+    if (sig?.kind === 'mcp-invocation') {
+      expect(sig.actionClass).toBe('read')
+      expect(sig.classificationBasis).toBe('annotations-readonly')
+    }
+  })
+
+  it('secret 类入参（token）摘要只留键名不留值', async () => {
+    const r = await evaluateToolCallGate(base({
+      toolName: 'mcp_example_post',
+      toolInput: { url: 'https://example.com', token: 'ghp_supersecret' },
+      mcpEntry: mcpEntry({ originalName: 'post' })
+    }))
+    const sig = r.facts.signals.find((x) => x.kind === 'mcp-invocation')
+    if (sig?.kind === 'mcp-invocation') {
+      expect(sig.argsDigest).toContain('[REDACTED]')
+      expect(sig.argsDigest).not.toContain('ghp_supersecret')
+    }
+  })
+})
+
 describe('evaluateToolCallGate', () => {
   it('桌面 read_file：默认表 read → auto-allow，落 policy.decision 审计', async () => {
     const audit = auditSink()
@@ -354,9 +515,9 @@ describe('evaluateToolCallGate', () => {
       expect(r2.decision.ruleId).toBe('mcp-tool-ask')
       expect(r2.decision.facts.actionClass).toBe('write')
       // 总是产 mcp-tool 信号；不安全注解不产 mcp-readonly
-      expect(r2.decision.facts.signals).toEqual([
-        { kind: 'mcp-tool', serverId: 'srv1', toolName: 'list_issues' }
-      ])
+      // R3：mcp-invocation 信号与 mcp-tool 并存（补入参摘要与分类依据，不改 ask 结论）
+      expect(r2.decision.facts.signals[0]).toEqual({ kind: 'mcp-tool', serverId: 'srv1', toolName: 'list_issues' })
+      expect(r2.decision.facts.signals.map((x) => x.kind)).toContain('mcp-invocation')
     }
   })
 

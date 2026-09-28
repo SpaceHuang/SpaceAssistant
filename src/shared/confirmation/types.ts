@@ -127,6 +127,41 @@ export type FactSignal =
    */
   | { kind: 'toolkit-capability'; capabilityId: string; risk: 'read' | 'act' }
   | { kind: 'extraction-failed'; reason: string }
+  /**
+   * R3：MCP 调用事实信号——补入参摘要与分类依据（与 mcp-tool 并存产出，规则匹配兼容）。
+   * classificationBasis 标注「读写分类依据」（annotations-readonly / schema-heuristic / default-write），
+   * 只影响摘要与审计可追溯，不改变 ask/deny 结果（需求 §4「整体松紧不变」）。
+   */
+  | {
+      kind: 'mcp-invocation'
+      serverId: string
+      /** 原始工具名（信任键用） */
+      toolName: string
+      /** 与 facts.actionClass 同值，便于规则按信号匹配 */
+      actionClass: ActionClass
+      /** 目标：url 优先，其次 path（与 url/path 语义一致，不做字符串拼接） */
+      targetUrl?: string
+      targetPath?: string
+      /** 可判定时（http 类 MCP 工具） */
+      method?: string
+      /** 参数摘要：键名清单 + 归一摘要（超长截断并标注） */
+      argNames: string[]
+      argsDigest: string
+      argsTruncated: boolean
+      /** 分类依据，审计可追溯（4.3.2） */
+      classificationBasis: 'annotations-readonly' | 'schema-heuristic' | 'default-write'
+    }
+  /**
+   * R5：shell 命令结构不受当前解析器支持（解析失败降级为确认的事实信号）。
+   * 对 desktop 不派发专用规则——引擎按 default-write-execute-ask 走（进审批，判不了回退人工）；
+   * 对 automation 由 lane 限定 locked deny 规则收敛为拒绝（O9 用户决策）。
+   */
+  | { kind: 'shell-unsupported-structure'; structures: string[]; reason: 'structure' | 'too-many-segments' }
+  /**
+   * R3：审批载荷构造不完整信号——表述纪律：只能报「载荷构造不完整（缺字段 X）」，
+   * 禁止表述为「调用参数缺失」（需求 §R3 第 4 点根因）。
+   */
+  | { kind: 'payload-incomplete'; toolName: string; missing: string[] }
   // reserved: 沙箱迭代启用
   | { kind: 'sandbox-escape'; blockedReason: string }
 
@@ -203,7 +238,12 @@ export type ApprovalRiskDimension = 'low' | 'medium' | 'high' | 'critical'
  */
 export type ApprovalAuthorizationDimension = 'unknown' | 'low' | 'medium' | 'high'
 
-/** 审批 Agent 裁决输出：只有两态，无中间态（输出不可解析/超时/不可用一律 deny）。 */
+/**
+ * 审批 Agent 裁决输出（R5 起）：approve / deny / undetermined 三态。
+ * undetermined 是「有效裁决：判不了」（事实链不完整，缺什么证据须写入 reason.summary），
+ * 与「没拿到裁决」（unavailable/timeout/unparsable → 一律 deny 的 fail-closed）性质不同：
+ * undetermined 可回退人工确认，agent-deny 永不回退（desktop-fail-open-to-user-plan.md §4）。
+ */
 export type ApprovalVerdict =
   | {
       kind: 'approve'
@@ -216,6 +256,11 @@ export type ApprovalVerdict =
       reason: ApprovalReason
       riskLevel?: ApprovalRiskDimension
       authorization?: ApprovalAuthorizationDimension
+    }
+  | {
+      kind: 'undetermined'
+      /** 必须写明缺什么证据 / 为什么判不了（防滥用约束 1：不得用于「风险高但我不确定」） */
+      reason: ApprovalReason
     }
 
 /**
@@ -234,6 +279,8 @@ export interface ApprovalCluePack {
   command?: string
   url?: string
   involvedFiles?: string[]
+  /** R3：MCP 入参归一摘要（脱敏后；mcp-invocation 信号派生）。 */
+  argsDigest?: string
   /**
    * 已声明的任务（对比分析 §4-D，可信证据）：真实用户创建任务时的输入摘要，
    * 用于「动作是否服务于任务」的相关性判断；缺省 = 调用方无任务上下文（安全缺省）。
@@ -268,6 +315,8 @@ export type ConfirmOutcomeCause =
   | 'user-denied'
   | 'agent-approved'
   | 'agent-deny'
+  /** R5：审批 Agent 的有效裁决「判不了」（非失败）；desktop 可回退人工，automation 由 lane 规则前拦 */
+  | 'agent-undetermined'
   | 'unavailable'
   | 'cancelled'
   | 'timeout'
@@ -368,6 +417,16 @@ export interface SecurityAuditEvent {
   decision?: 'auto-allow' | 'require-confirm' | 'deny'
   ruleId?: string
   reason?: string
+  /** R2：拒绝分类（诊断契约同源；审计可回答「这次拒绝属于哪一类」）。 */
+  denyClass?: import('./diagnostics').DenyClass
+  /** R2：判定基准（工作目录快照投影；与 env.workspace.revision 可比对）。 */
+  basis?: {
+    kind: 'workdir'
+    workDir: string
+    profileId: string
+    revision: number
+    source: 'session-binding' | 'active-fallback'
+  }
   outcome?: 'approved' | 'rejected' | 'timeout' | 'cancelled' | 'unavailable'
   /** require-confirm 决策的回答者（policy.decision；user=人工卡 / agent=审批 Agent）。 */
   answerer?: 'user' | 'agent'
@@ -414,6 +473,8 @@ export type SecurityAuditEventKind =
   | 'workspace.rebound'
   // R1：同一 revision 内消费点基准分歧（以快照为准，不抛错）
   | 'workspace.basis-mismatch'
+  // R3：审批载荷构造不完整（缺字段清单；表述为「载荷构造」问题，不表述为「参数缺失」）
+  | 'confirm.payload-incomplete'
   | 'budget.exhausted'
   | `migration.${string}`
 
@@ -439,6 +500,8 @@ export interface PolicyRule {
   action: PolicyAction
   /** 系统保护条目：UI 只读、自定义套餐不可调松。 */
   locked?: boolean
+  /** R2：拒绝分类声明（O4 全量标注；会产 ask/deny/confirm-every-time 的规则必须标，放行类不标）。 */
+  denyClass?: import('./diagnostics').DenyClass
   reason: string
   /** 条件放行：门控不满足即不命中（参数化配置引用，非策略层读运行时状态）。 */
   askUnless?: { config: string; equals: unknown; andMigrationComplete?: boolean }

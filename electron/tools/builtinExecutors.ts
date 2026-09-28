@@ -33,6 +33,8 @@ import {
   resolveRipgrepBinary,
   type RipgrepUnavailableReason
 } from './ripgrepBinary'
+import { planGrepInvocation, formatGrepNoMatchOutput, type GrepScope } from './grepScope'
+import { isSensitivePath } from '../shell/shellSensitivePaths'
 import { runLarkCliExecutor } from './runLarkCliExecutor'
 import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
 import { wechatReplyExecutor, wechatSendExecutor } from './wechatExecutors'
@@ -409,6 +411,26 @@ export const readFileExecutor: ToolExecutor = {
   }
 }
 
+/**
+ * R8：目录错误四分类（机器可读 data.errorClass；文案由渲染端 errorTranslator 取 i18n）。
+ * 未知错误一律归 ACCESS_DENIED——最保守且可解释的一类，不新增第五种文案（D.4）。
+ */
+export type DirectoryErrorClass =
+  | 'PATH_OUTSIDE_WORKDIR'
+  | 'PATH_NOT_FOUND'
+  | 'NOT_A_DIRECTORY'
+  | 'ACCESS_DENIED'
+  | 'READ_TIMEOUT'
+
+export function classifyDirectoryError(e: unknown): DirectoryErrorClass | 'ABORTED' {
+  if (e && typeof e === 'object' && (e as { name?: unknown }).name === 'AbortError') return 'ABORTED'
+  const code = (e as NodeJS.ErrnoException | undefined)?.code
+  if (code === 'ENOENT') return 'PATH_NOT_FOUND'
+  if (code === 'EACCES' || code === 'EPERM') return 'ACCESS_DENIED'
+  if (code === 'ENOTDIR') return 'NOT_A_DIRECTORY'
+  return 'ACCESS_DENIED'
+}
+
 export const listDirectoryExecutor: ToolExecutor = {
   name: 'list_directory',
   resourceKeys: (input, context) => workspaceResourceKeys(input, context, 'read'),
@@ -418,29 +440,80 @@ export const listDirectoryExecutor: ToolExecutor = {
     ctx.sendProgress('listing', '正在读取目录...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
     try {
+      // R8：目录读取超时的结构化返回（retryable；与其他错误类目文案可分）
+      const dirTimeoutResult = (): ToolExecutorResult => ({
+        success: false,
+        error: 'DIRECTORY_READ_TIMEOUT',
+        data: { errorClass: 'READ_TIMEOUT' as const, path: rel, retryable: true },
+        duration: Date.now() - started
+      })
+      // R8：取消/超时在前置检查即生效（空目录等短路径也保证 READ_TIMEOUT 分类）
+      if (op.aborted) return dirTimeoutResult()
       let target: string
       try {
         target = rel === '' || rel === '.' ? path.resolve(ctx.workDir) : await resolveSafeReadPath(ctx.workDir, rel, [path.join(ctx.userDataDir, 'skills')])
       } catch (e) {
-        return { success: false, error: `路径超出工作目录范围: ${rel}`, duration: Date.now() - started }
+        const ab = fileToolAbortResult(op, '目录读取超时', started)
+        if (ab) return dirTimeoutResult()
+        return {
+          success: false,
+          error: 'FILE_PATH_TRAVERSAL',
+          data: { errorClass: 'PATH_OUTSIDE_WORKDIR' as const, path: rel, suggestions: ['provide-path'] },
+          duration: Date.now() - started
+        }
       }
       let st: Awaited<ReturnType<typeof fs.stat>>
       try {
         st = await fs.stat(target)
       } catch (e) {
         const ab = fileToolAbortResult(op, '目录读取超时', started)
-        if (ab) return ab
-        return { success: false, error: `不是目录或无法访问: ${rel}`, duration: Date.now() - started }
+        if (ab) return dirTimeoutResult()
+        const cls = classifyDirectoryError(e)
+        if (cls === 'PATH_NOT_FOUND') {
+          return {
+            success: false,
+            error: 'FILE_NOT_FOUND',
+            data: { errorClass: cls, path: rel, suggestions: ['list-parent'] },
+            duration: Date.now() - started
+          }
+        }
+        if (cls === 'NOT_A_DIRECTORY') {
+          return {
+            success: false,
+            error: 'TARGET_NOT_DIRECTORY',
+            data: { errorClass: cls, path: rel, suggestions: ['use-read-file'] },
+            duration: Date.now() - started
+          }
+        }
+        return {
+          success: false,
+          error: 'DIRECTORY_ACCESS_DENIED',
+          data: { errorClass: 'ACCESS_DENIED', path: rel, suggestions: ['provide-path'] },
+          duration: Date.now() - started
+        }
       }
       if (!st.isDirectory()) {
-        return { success: false, error: `不是目录或无法访问: ${rel}`, duration: Date.now() - started }
+        return {
+          success: false,
+          error: 'TARGET_NOT_DIRECTORY',
+          data: { errorClass: 'NOT_A_DIRECTORY' as const, path: rel, suggestions: ['use-read-file'] },
+          duration: Date.now() - started
+        }
       }
       let entries: Dirent[]
       try {
         entries = await fs.readdir(target, { withFileTypes: true })
       } catch (e) {
         const ab = fileToolAbortResult(op, '目录读取超时', started)
-        if (ab) return ab
+        if (ab) return dirTimeoutResult()
+        if (classifyDirectoryError(e) === 'ACCESS_DENIED') {
+          return {
+            success: false,
+            error: 'DIRECTORY_ACCESS_DENIED',
+            data: { errorClass: 'ACCESS_DENIED' as const, path: rel, suggestions: ['provide-path'] },
+            duration: Date.now() - started
+          }
+        }
         throw e
       }
       const root = path.resolve(ctx.workDir)
@@ -847,6 +920,8 @@ export type GrepExecArgs = {
   context?: number
   multiline: boolean
   headLimit: number
+  /** R6：对齐 ripgrep -uu（--no-ignore --hidden）；敏感路径不由此开关解除 */
+  includeIgnored: boolean
 }
 
 export type RipgrepRunResult =
@@ -858,15 +933,104 @@ export type RipgrepRunResult =
   | { kind: 'cancelled'; partialOutput: string }
   | { kind: 'failed'; exitCode: number | null; message: string }
 
-export function validateGrepInput(input: Record<string, unknown>): string | null {
-  const outputMode = typeof input.output_mode === 'string' ? input.output_mode : 'files_with_matches'
-  if (!['files_with_matches', 'content', 'count'].includes(outputMode)) return 'output_mode 参数无效'
-  const context = typeof input.context === 'number' ? input.context : undefined
+/**
+ * R7：grep 参数归一的唯一入口（校验层与执行层共用，判定按「生效值」而非「字段是否出现」）。
+ * - 等价默认值（context=0 / multiline=false / show_line_number 任意值于非 content 模式）不报错；
+ * - 有实际效果的冲突（非 content + context>0 / multiline=true）报 param-conflict 并给可执行建议。
+ */
+export type GrepNormalizeResult =
+  | { ok: true; args: GrepExecArgs; effectful: string[] }
+  | {
+      ok: false
+      error: { code: 'param-conflict'; field: string; mode: string; allowed: string; suggestedWrite: string }
+    }
+
+const GREP_MODES = ['files_with_matches', 'content', 'count'] as const
+
+export function normalizeGrepArgs(input: Record<string, unknown>): GrepNormalizeResult {
+  const outputMode = (typeof input.output_mode === 'string' ? input.output_mode : 'files_with_matches') as
+    | (typeof GREP_MODES)[number]
+    | string
+  if (!GREP_MODES.includes(outputMode as (typeof GREP_MODES)[number])) {
+    return {
+      ok: false,
+      error: {
+        code: 'param-conflict',
+        field: 'output_mode',
+        mode: String(outputMode),
+        allowed: 'files_with_matches | content | count',
+        suggestedWrite: '去掉 output_mode 或改用 files_with_matches / content / count 之一'
+      }
+    }
+  }
+  const contextRaw = typeof input.context === 'number' ? input.context : undefined
+  if (contextRaw !== undefined && (!Number.isInteger(contextRaw) || contextRaw < 0 || contextRaw > 1000)) {
+    return {
+      ok: false,
+      error: {
+        code: 'param-conflict',
+        field: 'context',
+        mode: outputMode,
+        allowed: '0～1000 的整数',
+        suggestedWrite: '去掉 context 或改为 0～1000 的整数'
+      }
+    }
+  }
   const headLimit = typeof input.head_limit === 'number' ? input.head_limit : 100
-  if (context !== undefined && (!Number.isInteger(context) || context < 0 || context > 1000)) return 'context 必须是 0～1000 的整数'
-  if (!Number.isInteger(headLimit) || headLimit < 0 || headLimit > 1_000_000) return 'head_limit 必须是 0～1000000 的整数'
-  if (outputMode !== 'content' && (Object.prototype.hasOwnProperty.call(input, 'context') || Object.prototype.hasOwnProperty.call(input, 'multiline') || Object.prototype.hasOwnProperty.call(input, 'show_line_number'))) return 'context、multiline、show_line_number 仅适用于 content 模式'
-  return null
+  if (!Number.isInteger(headLimit) || headLimit < 0 || headLimit > 1_000_000) {
+    return {
+      ok: false,
+      error: {
+        code: 'param-conflict',
+        field: 'head_limit',
+        mode: outputMode,
+        allowed: '0～1000000 的整数',
+        suggestedWrite: '去掉 head_limit 或改为 0～1000000 的整数'
+      }
+    }
+  }
+
+  // 判定依据：生效值（>0 / true），不是「字段是否出现」。show_line_number 不计入冲突
+  // （评审 P2-1：它只在 content 模式有效果，而 content 正是它适用的模式）。
+  const effectful: string[] = []
+  if (contextRaw !== undefined && contextRaw > 0) effectful.push(`context=${contextRaw}`)
+  if (input.multiline === true) effectful.push('multiline=true')
+  if (outputMode !== 'content' && effectful.length > 0) {
+    return {
+      ok: false,
+      error: {
+        code: 'param-conflict',
+        field: effectful[0]!,
+        mode: outputMode,
+        allowed: '仅 output_mode=content 下生效',
+        suggestedWrite: `改用 output_mode=content，或去掉 ${effectful.join(' / ')}`
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    effectful,
+    args: {
+      glob: typeof input.glob === 'string' ? input.glob : undefined,
+      outputMode,
+      ignoreCase: Boolean(input.ignore_case),
+      // 生效值只在 content 模式有意义；非 content 模式一律归一为「无效果」
+      showLineNumber: outputMode === 'content' && input.show_line_number !== false,
+      context: outputMode === 'content' ? contextRaw : undefined,
+      multiline: outputMode === 'content' && Boolean(input.multiline),
+      headLimit,
+      includeIgnored: Boolean(input.include_ignored)
+    }
+  }
+}
+
+/** R7 兼容导出：薄壳——判定规则只有 normalizeGrepArgs 一份。 */
+export function validateGrepInput(input: Record<string, unknown>): string | null {
+  const r = normalizeGrepArgs(input)
+  if (r.ok) return null
+  const { field, mode, allowed, suggestedWrite } = r.error
+  return `grep.paramConflict(${field};${mode};${allowed};${suggestedWrite})`
 }
 
 export function createGrepRipgrepDiagnostic(resolved: Pick<ReturnType<typeof resolveRipgrepBinary>, 'source' | 'platform' | 'arch' | 'path'>): string {
@@ -902,6 +1066,8 @@ export async function grepWithRg(
   spawnProcess: (binary: string, args: string[], options: Parameters<typeof spawn>[2]) => ChildProcess = spawn
 ): Promise<RipgrepRunResult> {
   if (signal.aborted) return { kind: 'cancelled', partialOutput: '' }
+  // R6：范围规划由 planGrepInvocation 统一产出（显式路径解除 / --hidden / 敏感排除同源）
+  const plan = planGrepInvocation({ workDir, searchPath, args })
   const rgArgs = ['--no-config', '--color', 'never', '--regexp', pattern]
   if (args.ignoreCase) rgArgs.push('-i')
   if (args.glob) {
@@ -916,7 +1082,9 @@ export async function grepWithRg(
     if (args.multiline) rgArgs.push('-U', '--multiline-dotall')
   }
   rgArgs.push('--max-columns', '500')
-  for (const d of GREP_SKIP_DIRS) rgArgs.push('--glob', `!**/${d}/**`)
+  if (plan.hidden) rgArgs.push('--hidden')
+  for (const g of plan.ignoreGlobs) rgArgs.push('--glob', g)
+  for (const g of plan.sensitiveExcludes) rgArgs.push('--glob', g)
   rgArgs.push(searchPath)
   return await new Promise((resolve) => {
     const proc = spawnProcess(binaryPath, rgArgs, { cwd: workDir, windowsHide: true })
@@ -1165,6 +1333,8 @@ export async function grepFallbackJs(
     (args.outputMode === 'content' && totalMatches >= headLimit) ||
     (args.outputMode === 'files_with_matches' && filesWithMatches.length >= headLimit)
 
+  // R6（C4）：walk 与 rg 同语义——默认跳名单成员 + 隐藏条目 + 敏感路径（修掉「walk 能搜到 .env、
+  // rg 不能」的既有两引擎不一致；这是收紧，非放宽）。includeIgnored 解除名单与隐藏（不解除敏感）。
   async function walk(dir: string): Promise<void> {
     let entries: Dirent[]
     try {
@@ -1174,8 +1344,11 @@ export async function grepFallbackJs(
     }
     for (const ent of entries) {
       if (signal.aborted || limitReached()) return
-      if (GREP_SKIP_DIRS.has(ent.name)) continue
       const full = path.join(dir, ent.name)
+      const isHiddenEntry = ent.name.startsWith('.')
+      if (!args.includeIgnored && (GREP_SKIP_DIRS.has(ent.name) || isHiddenEntry)) continue
+      // 敏感路径逐条目判定（includeIgnored 不解除；显式点名由调用方处理，walk 不经此路径）
+      if (isSensitivePath(full)) continue
       if (ent.isDirectory()) await walk(full)
       else if (ent.isFile()) await scanFile(full, true)
     }
@@ -1212,15 +1385,17 @@ export const grepExecutor: ToolExecutor = {
     const pattern = typeof input.pattern === 'string' ? input.pattern : ''
     if (!pattern) return { success: false, error: '缺少 pattern', duration: Date.now() - started }
     const relPath = extractPathField(input) ?? ''
-    const glob = typeof input.glob === 'string' ? input.glob : undefined
-    const outputMode = typeof input.output_mode === 'string' ? input.output_mode : 'files_with_matches'
-    const inputError = validateGrepInput(input)
-    if (inputError) return { success: false, error: inputError, duration: Date.now() - started }
-    const ignoreCase = Boolean(input.ignore_case)
-    const showLineNumber = input.show_line_number !== false
-    const context = typeof input.context === 'number' ? input.context : undefined
-    const multiline = Boolean(input.multiline)
-    const headLimit = typeof input.head_limit === 'number' ? input.head_limit : 100
+    // R7：校验与执行同源——只经 normalizeGrepArgs 单一入口，执行器不再各自读 input.*
+    const normalized = normalizeGrepArgs(input)
+    if (!normalized.ok) {
+      const { field, mode, allowed, suggestedWrite } = normalized.error
+      return {
+        success: false,
+        error: `grep.paramConflict(${field};${mode};${allowed};${suggestedWrite})`,
+        duration: Date.now() - started
+      }
+    }
+    const gargs: GrepExecArgs = normalized.args
     ctx.sendProgress('grep', '搜索中...')
     let absSearch: string
     try {
@@ -1233,7 +1408,7 @@ export const grepExecutor: ToolExecutor = {
       return { success: false, error: '路径超出工作目录范围', duration: Date.now() - started }
     }
     const timeoutMs = (ctx.toolsConfig.grepTimeoutSec ?? 60) * 1000
-    const gargs: GrepExecArgs = { glob, outputMode, ignoreCase, showLineNumber, context, multiline, headLimit }
+    const plan = planGrepInvocation({ workDir: ctx.workDir, searchPath: absSearch, args: gargs })
     const resolved = resolveRipgrepBinary({
       packaged: app?.isPackaged ?? false,
       resourcesPath: process.resourcesPath,
@@ -1265,7 +1440,36 @@ export const grepExecutor: ToolExecutor = {
       ctx.sendProgress('grep', m)
     , ctx.grepSpawnProcess)
     if (text.kind === 'success' || text.kind === 'no_match') {
-      return { success: true, data: { output: text.output }, duration: Date.now() - started }
+      // R6：范围事实（skipped 由 planGrepInvocation 在执行前统计）
+      const truncatedByHead = text.output.includes('已按 head_limit=')
+      const scope: GrepScope = {
+        ...plan.scope,
+        engine: 'ripgrep',
+        truncated: truncatedByHead,
+        ...(truncatedByHead ? { limitReason: 'head_limit' as const } : {})
+      }
+      if (text.kind === 'no_match') {
+        // R6 核心承诺：no_match 必带范围（skipped>0 时禁止裸 No matches found）
+        return {
+          success: true,
+          data: {
+            output: formatGrepNoMatchOutput(scope),
+            status: scope.skippedCount > 0 ? 'no_match_with_skips' : 'no_match',
+            searchScope: scope,
+            ...(plan.explicitSensitiveHit ? { sensitivePathHit: true } : {})
+          },
+          duration: Date.now() - started
+        }
+      }
+      return {
+        success: true,
+        data: {
+          output: text.output,
+          searchScope: scope,
+          ...(plan.explicitSensitiveHit ? { sensitivePathHit: true } : {})
+        },
+        duration: Date.now() - started
+      }
     }
     if (text.kind === 'unavailable') {
       void ctx.recordDiagnostic?.({

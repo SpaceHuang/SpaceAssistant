@@ -3,7 +3,8 @@
   "dialect": "posix-bash",
   "platform": "linux",
   "analysis": {
-    "verdict": "deny",
+    "verdict": "unsupported",
+    "unsupportedReason": "structure",
     "denyReason": "命令语法解析失败，无法进行安全分析",
     "segments": [],
     "pathVerdict": {
@@ -62,7 +63,10 @@
     ]
   },
   "precheck": {
-    "ok": false,
-    "auditReason": "命令语法解析失败，无法进行安全分析"
+    "ok": true,
+    "legacyAutoAllowEligible": false,
+    "analysisCompleteness": "partial",
+    "persistable": false,
+    "hasMetasyntax": false
   }
 }

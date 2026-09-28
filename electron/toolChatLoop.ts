@@ -666,6 +666,9 @@ export function notExecutedReasonForConfirmation(input: {
   switch (input.cause) {
     case 'agent-deny':
       return 'agent_denied'
+    // R5（评审 N2）：审批「判不了」是有效裁决，不得落 user_rejected（污染判定不了率统计）
+    case 'agent-undetermined':
+      return 'agent_undetermined'
     case 'timeout':
       return 'confirm_timeout'
     case 'unavailable':

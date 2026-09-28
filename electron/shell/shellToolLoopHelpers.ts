@@ -38,6 +38,8 @@ export async function precheckRunShellTool(args: {
     args.userDataDir
   )
 
+  // R5：仅 deny 预检短路；unsupported 不再产出 shellPrecheckDeny——
+  // 该事实随 analysis 下传，由 gate 提取为 shell-unsupported-structure 信号走引擎（§4.5.1 零特例）
   if (analysis.verdict === 'deny') {
     return {
       ok: false,

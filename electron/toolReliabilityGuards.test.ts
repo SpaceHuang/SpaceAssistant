@@ -49,4 +49,45 @@ describe('工具调用可靠性护栏（grep 断言）', () => {
     expect(source).not.toContain("error: 'SHELL_SPAWN_ERROR'")
     expect(source).not.toContain("error: 'SHELL_ARTIFACT_PATH_INVALID'")
   })
+
+  it('护栏 6（R5）：unsupported 命令不得进入信任选项（消费点显式排除，不只依赖 requiresRiskAck）', () => {
+    const trust = read('electron/shell/shellCommandTrust.ts')
+    expect(trust).not.toMatch(/verdict === 'deny'\) return false/)
+    expect(trust.match(/verdict !== 'allow' && .*verdict !== 'ask'/g)?.length).toBeGreaterThanOrEqual(2)
+    const loop = read('electron/shell/shellToolLoopHelpers.ts')
+    // 预检只对 deny 短路（unsupported 下传事实，不产出 shellPrecheckDeny）
+    expect(loop).toContain("analysis.verdict === 'deny'")
+  })
+
+  it('护栏 7（R5 · O9）：automation unsupported 收敛规则存在且排在 catch-all 之前', () => {
+    const rules = read('src/shared/policy/defaultRules.ts')
+    const unsupportedIdx = rules.indexOf("id: 'automation-unsupported-deny'")
+    const catchAllIdx = rules.indexOf("id: 'automation-default-confirm'")
+    expect(unsupportedIdx).toBeGreaterThan(-1)
+    expect(catchAllIdx).toBeGreaterThan(-1)
+    expect(unsupportedIdx).toBeLessThan(catchAllIdx)
+  })
+
+  it('护栏 8（R5）：审批「判不了」可回退、拒绝永不回退', () => {
+    const fb = read('electron/confirmation/fallbackToUser.ts')
+    expect(fb).toContain("'agent-undetermined'")
+    const ch = read('electron/confirmation/agentChannel.ts')
+    expect(ch).toContain("cause: 'agent-undetermined'")
+  })
+
+  it('护栏 9（R6/R7）：grep 参数归一与范围规划单一出口', () => {
+    const exec = read('electron/tools/builtinExecutors.ts')
+    // rg glob 追加只经 planGrepInvocation（不得回归到无条件名单 glob）
+    expect(exec).not.toMatch(/for \(const d of GREP_SKIP_DIRS\) rgArgs\.push/)
+    expect(exec).toContain('planGrepInvocation')
+    // 校验层薄壳与执行层同源
+    expect(exec).toContain('normalizeGrepArgs(input)')
+  })
+
+  it('护栏 10（R8）：目录错误四分类可分（stat 失败不再共用「不是目录或无法访问」）', () => {
+    const exec = read('electron/tools/builtinExecutors.ts')
+    expect(exec).toContain('classifyDirectoryError')
+    expect(exec).toContain("'DIRECTORY_READ_TIMEOUT'")
+    expect(exec).toContain("'DIRECTORY_ACCESS_DENIED'")
+  })
 })

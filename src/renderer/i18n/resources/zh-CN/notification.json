@@ -13,5 +13,6 @@
   },
   "approvalFallbackReasonUnavailable": "服务暂不可用",
   "approvalFallbackReasonTimeout": "等待超时",
-  "desktopButlerTitle": "SpaceAssistant 管家"
+  "desktopButlerTitle": "SpaceAssistant 管家",
+  "approvalFallbackReasonUndetermined": "审批无法判定，需人工确认"
 }
