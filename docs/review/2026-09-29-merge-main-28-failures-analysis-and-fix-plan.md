@@ -1,8 +1,9 @@
-# 合并后 28 个测试失败：根因分析与修复计划（v2）
+# 合并后 28 个测试失败：根因分析与修复计划（v4）
 
 - 分析对象：merge `43b474ab`（feat/tool-invocation-reliability 合入 main）后 `npm run test:electron` 的 28 个失败
 - 分析日期：2026-09-29
-- 版本：**v3（吸收第二轮计划评审 `2026-09-29-merge-main-28-failures-plan-review-v2.md` 的 B3/B4 阻断处置与 N5 修正；v2 已吸收第一轮 B1/B2 与 N1–N5）**
+- 版本：**v4（吸收第三轮计划评审 `2026-09-29-merge-main-28-failures-plan-review-v3.md` 的 B3-残余 处置：1.4a 规格重写；v3 已吸收第二轮 B3/B4 与 N5；v2 已吸收第一轮 B1/B2 与 N1–N5）**
+- v4 修订：1.4a 重写（B3-残余）——守卫从 `canonicalizeThroughExistingParent`（env 路径）移到 `probeWritePathFact` 目标父目录回退；「终止并抛错」改为「静默退出、normalizedPath 保持 lexical 形态」并写明 parentReal/parentIdentity 兜底；env 路径明确豁免守卫（truthful）；新增 1.4b（read 侧对称形态守卫）；1.5 补锚⑥；已知边界补「跨语法 realpath 采信」收敛说明
 - v3 修订：批次 1 新增 1.4a（writePathFacts 父目录回退根守卫，B3）；1.3 重写为「env 路径按自身语法选 API」（B4）；已知边界 N5 段如实改写（原「一律落 system-dir 不漏」论证不成立，探针证伪）
 - 分析方式：逐用例失败输出比对 + 根因下钻到具体代码行 + Node 探针实测（win32 / Node 24）+ 评审双重复核
 - 结论不变的部分：28 个失败全部来自 main 侧 boundary policy layering 系列（fa30f3d6 起）在 Windows 上从未跑过全量，与可靠性分支（R1–R8）的合并内容无关。四组根因分组经评审实测确认属实。
@@ -89,7 +90,7 @@ win32 运行时上，模型输入 POSIX 形态绝对路径（MSYS/Git Bash 环�
 
 ---
 
-## 5. 修复计划（v2）
+## 5. 修复计划（v4）
 
 ### 批次 1（P0·生产缺陷）：路径解析三态语法驱动
 
@@ -107,10 +108,11 @@ win32 运行时上，模型输入 POSIX 形态绝对路径（MSYS/Git Bash 环�
 | --- | --- | --- | --- |
 | 1.1 | `normalize()`：引入三态。②→ `path.posix.resolve(value)`（原为平台 `path.resolve`）；① 保持 `path.win32.normalize`；realpath 兜底（:97）的 fallback 同步三态（POSIX 语法失败回退 `path.posix.resolve` 形态） | `readPathFacts.ts` | |
 | 1.2 | lexical 解析（:112）与 **pathApi 选择（:111，N3）**：`pathApi = ① ? path.win32 : ② ? path.posix : 按 workDir 语法`；lexical = ① normalize / ② `path.posix.resolve(rawPath)` / ③ 按 workDir 语法的 `resolve(workDir, rawPath)`。dirname/join/relative/父目录回退全部用同 pathApi（否则产出混合分隔符） | `readPathFacts.ts` | N3：语法驱动贯通到 pathApi，不只 resolve |
-| 1.3 | `writePathFacts.ts`：与 1.1/1.2 同构——`pathApi`（:99）三态、`lexicalPath`（:106）三态。**v3（B4 修正）：env 路径（workDir/userDataDir/homeDir/customPrefixes）的 canonicalize 按「每个路径自身语法」选 API**（win32 形态 → win32 API；POSIX 形态 → posix API），**与 rawPath 的分支无关**——现状传进程 `path`（win32 上 = win32 API）对 win32 形态 env 路径本就正确；v2 曾指示 POSIX rawPath 分支整体传 `path.posix`，会把 win32 形态 workDir 打成 cwd 拼接乱码并抛 WritePathProbeError（探针实测 `path.posix.resolve('E:	mp\wd')` → `'/Develop/SpaceAssistant/E:	mp\wd'`），重演 B1 | `writePathFacts.ts` | |
-| 1.4a | **新增（B3）：`canonicalizeThroughExistingParent` 父目录回退根守卫**。探针实测 v2 实施后的执行轨迹：`/etc/x` realpath ENOENT → `/etc` ENOENT → **`/` realpath 在 win32 成功返回 `'E:'`** → `path.posix.join('E:', ...)` 产出混合形态 `'E:\/etc/x'` → 命中 isWindowsAbsolute → 归一 `e:/etc/x` 后 system-dir 两方向正则都不命中 → 仍归 outside-workdir，write 探测链路的约 8/17 用例仍红。修法（双保险）：① realpath 成功后校验返回形态与 pathApi 语义一致（POSIX 分支要求 `real.startsWith('/')`），不符视为「真实文件系统不可达」，按原 error 继续 fail-closed 流程；② 回退循环加语法根守卫（POSIX API 下 `candidate === '/'` 即终止并抛原 error，防止 `/` 的 win32 realpath 提前返回）。目标行为 = 1.4 的声明：POSIX 语法路径在 win32 上探测不可达 → `targetKind='missing'` + zone 由纯函数判定 | `writePathFacts.ts` | **write 探测链路 8 个用例（run_shell×2、run_script×4、远程写入×1、writePathFacts×1）恢复的前置** |
-| 1.4 | 行为边界显式化（写入实现注释与验收文档）：win32 进程上 POSIX 语法路径的真实 fs 探测不可达（`/etc/hosts` 实际探的是当前盘符子树）→ `targetKind='missing'` + zone 由纯函数判 `system-dir`——语义正确（该路径在 win32 文件系统确实不存在），fail-closed。**注意：该声明成立的前提是 1.4a 的根守卫**（无守卫时 `/` 的 win32 realpath 会把循环提前带回混合形态） | 两文件 | |
-| 1.5 | **新增跨平台归类单测（回归锚）**：① `E:\work` + `src/x.ts` → `workdir-normal` 且 normalizedPath === `E:\work\src\x.ts`（**B1 回归锚，最高优先**）；② `/tmp/work` + `src/x.ts` → `workdir-normal` 且 `/tmp/work/src/x.ts`；③ POSIX 绝对 + win32 workDir（`/etc/hosts`）→ `system-dir`（**不得被「语法不一致判 outside」快速路径降级**）；④ win32 绝对路径原行为；⑤ pathApi 贯通断言（POSIX 路径的 dirname/join 产 POSIX 形态、无混合分隔符） | 三个 extractors 的 test 文件 | 评审 B1：原清单全是绝对路径，恰好漏掉③类回归锚；v2 补齐①② |
+| 1.3 | `writePathFacts.ts`：与 1.1/1.2 同构——`pathApi`（:99）三态、`lexicalPath`（:106）三态。**v3（B4 修正）：env 路径（workDir/userDataDir/homeDir/customPrefixes）的 canonicalize 按「每个路径自身语法」选 API**（win32 形态 → win32 API；POSIX 形态 → posix API），**与 rawPath 的分支无关**——现状传进程 `path`（win32 上 = win32 API）对 win32 形态 env 路径本就正确；v2 曾指示 POSIX rawPath 分支整体传 `path.posix`，会把 win32 形态 workDir 打成 cwd 拼接乱码并抛 WritePathProbeError（探针实测 `path.posix.resolve('E:\\tmp\\wd')` → `'/Develop/SpaceAssistant/E:\\tmp\\wd'`），重演 B1。**v4 补充（N3 延伸，实施注意）**：canonicalize 的拼接（realpath 成功后的 relative/join）API 跟随 **real 的实际形态**（`isWindowsAbsolute(real)` 为真 → win32 API）——env 输出始终为真实文件系统答案的形态、无混合分隔符；POSIX 形态 env（如 fixture `/tmp/wd`）在 win32 上 realpath 返回 win32 形态属真实指向，env 整体不存在而回退到 `/` 时同理（real='E:\\' → win32 拼接 → 纯 win32 形态），win32 形态 env 与 POSIX 进程的现有行为均不变 | `writePathFacts.ts` | |
+| 1.4a | **v4 重写（B3-残余 处置，按第三轮评审 4 条建议）：`probeWritePathFact` 目标父目录回退的跨语法守卫**。守卫位置是 `probeWritePathFact` catch 分支的**目标父目录回退循环（:131-146，循环变量 `parent`）**——不是 `canonicalizeThroughExistingParent`（:60-74，那是 env 路径，见 1.3；v3 曾写错位置）。探针实测的污染轨迹：`/etc/hosts` lstat ENOENT → 回退 `/etc` ENOENT → 回退 `/` → **win32 上 `fs.realpath('/')` 成功返回 `'E:\'`** → `path.posix.join('E:\\', ...)` 产出混合形态 `'E:\/etc/hosts'` → 命中 isWindowsAbsolute → 归一 `e:/etc/hosts` 后 system-dir 两方向正则都不命中 → 仍归 outside-workdir，write 探测链路约 8/17 用例仍红。**机制（静默退出，不抛错）**：pathApi 为 posix 时，回退满足任一条件即退出循环、不对该位置采信，normalizedPath 保持 lexical POSIX 形态（`path.posix.resolve` 结果）：① 回退到达语法根 `parent === '/'`（不再对 `/` 发 realpath）；② realpath 成功但返回形态非 POSIX（`isWindowsAbsolute(real)` 为真——跨语法真实答案不采信，防 `E:\etc` 恰好存在时 realpath('/etc') 返回 win32 形态产混合漏判）。**兜底取值**：退出时 `parentReal` = 回退到达的语法位置（根守卫 → `'/'`；形态守卫 → `parent` 本身的 lexical 形态）；`parentIdentity` 由 :149-154 现有 `fs.stat(parentReal)` 取得——win32 上 `fs.stat('/')` / `fs.stat('/etc')` 按当前盘符解释均可成功，**该段无需改动**；极端环境 stat 失败维持现有 WritePathProbeError（真环境错误，fail-closed）。**targetKind**：退出时若 catch 开头已检出 symlinkComponent 则 `'symlink'`（与 :137 语义一致），否则 `'missing'`。**对齐第三轮评审缺陷 2**：正确语义是静默退出（同 `readPathFacts.ts:133` 根守卫），不是抛 WritePathProbeError——`writePathFacts.test.ts:34-37` 直接断言返回值的 zone、gate 侧抛出走 extraction-failed，抛错即红 | `writePathFacts.ts` | **write 探测链路 8 个用例（run_shell×2、run_script×4、远程写入×1、writePathFacts×1）恢复的前置** |
+| 1.4b | **新增（v4）：`probeReadPathFact` 回退循环补对称形态守卫**。现状循环条件 `while (parent !== pathApi.dirname(parent))`（:133）天然挡住语法根（POSIX pathApi 下 `/` 不进 realpath，read 侧无根逃逸、**无需根守卫**），但未挡「中途组件跨语法采信」：`/etc/a/b` 回退到 `/etc` 时若 win32 视角 `E:\etc` 真实存在，realpath 返回 `'E:\etc'`（win32 形态）→ `path.posix.join` 产出混合形态 → isSystemDir 漏判。修法：realpath 成功但 `isWindowsAbsolute(realParent)` 为真时不采信、退出循环、normalizedPath 保持 lexical（一行级改动）。env 路径 canonical（:96-102）同 1.3/1.4a 原则**不加守卫**（truthful） | `readPathFacts.ts` | 与 1.4a 同族；17 个失败用例不依赖本项（read 用例目标均整体不存在，由 :133 条件自然收敛），属同机制对称完备 |
+| 1.4 | 行为边界显式化（写入实现注释与验收文档）：win32 进程上 POSIX 语法路径的真实 fs 探测不可达（`/etc/hosts` 实际探的是当前盘符子树）→ `targetKind='missing'` + zone 由纯函数判 `system-dir`——语义正确（该路径在 win32 文件系统确实不存在），fail-closed。**注意（v4 对齐评审建议 4）：该声明成立的前提是 1.4a/1.4b 的跨语法守卫**——收敛靠「到达语法根 / realpath 返回跨语法形态时静默退出、保持 lexical 形态」，而非抛错（无守卫时 `/` 的 win32 realpath 会把回退带回混合形态） | 两文件 | |
+| 1.5 | **新增跨平台归类单测（回归锚）**：① `E:\work` + `src/x.ts` → `workdir-normal` 且 normalizedPath === `E:\work\src\x.ts`（**B1 回归锚，最高优先**）；② `/tmp/work` + `src/x.ts` → `workdir-normal` 且 `/tmp/work/src/x.ts`；③ POSIX 绝对 + win32 workDir（`/etc/hosts`）→ `system-dir`（**不得被「语法不一致判 outside」快速路径降级**）；④ win32 绝对路径原行为；⑤ pathApi 贯通断言（POSIX 路径的 dirname/join 产 POSIX 形态、无混合分隔符）；⑥ **v4（评审建议 3）**：POSIX 形态 workDir（`'/tmp/wd'` 字面量）+ POSIX 绝对目标（`'/etc/hosts'`）→ `probeWritePathFact` **正常返回不抛错**、`zone='system-dir'`、normalizedPath 保持纯 POSIX 形态——一条锚同时钉住「env canonicalize 不被守卫误伤」（第三轮评审缺陷 3 的现有绿例形态）与「目标回退根守卫静默退出」两个语义；workDir canonicalize 取真实 realpath 答案（形态不限），zone 判定与之解耦，不依赖测试机 `E:\tmp` 是否存在 | 三个 extractors 的 test 文件 | 评审 B1：原清单全是绝对路径，恰好漏掉③类回归锚；v2 补齐①②；v4 补⑥ |
 | 1.6 | pathClassifier 回归锚（B2 处置）：新增测试钉住现有正确行为——`/etc/hosts` + win32 workDir → `system-dir`、`C:\Windows\...` → `system-dir`；**不修改 pathClassifier 本体** | `pathClassifier` 测试 | 防「未来误以为它也有漂移」误改 |
 
 **撤回项（B2）**：~~修改 `pathClassifier.resolveForEnvironment`~~、~~「语法不一致直接判 outside」快速路径~~——后者会把 pathClassifier 现有正确的 system-dir 判定降级为 outside-workdir，与 fail-safe 矛盾。pathClassifier 如需改动另行立项并附失败复现。
@@ -139,7 +141,7 @@ win32 运行时上，模型输入 POSIX 形态绝对路径（MSYS/Git Bash 环�
 
 ### 验收口径（v2 按 N1 统一）
 
-- **组 1 的 17 个用例全部恢复**（v1 的「16 个转绿」口径作废）。**v3 前置：write 探测链路的约 8 个用例（run_shell×2、run_script×4、远程写入×1、writePathFacts×1）依赖 1.4a 根守卫**——仅修 resolve 不加守卫时，`/` 的 win32 realpath 会把父目录回退带回混合形态，该 8 个用例仍红。其中 writePathFacts 用例经 1.3/1.4a 修复后自然恢复（`/etc/...` POSIX 绝对 → `path.posix.resolve` → 命中 isSystemDir），**无需 fixture 修正**——推导：该用例 workDir 为 win32 形态临时目录（按自身语法走 win32 API canonicalize，realpath 成功）、目标为 POSIX 绝对，走 ② 分支后不涉及 workDir 拼接；
+- **组 1 的 17 个用例全部恢复**（v1 的「16 个转绿」口径作废）。**v4 前置：write 探测链路的约 8 个用例（run_shell×2、run_script×4、远程写入×1、writePathFacts×1）依赖 1.4a 跨语法守卫**——守卫语义为「回退到达语法根 `/`、或 realpath 返回跨语法形态时静默退出、normalizedPath 保持 lexical POSIX 形态」（不抛错，对齐 readPathFacts:133 根守卫语义）；仅修 resolve 不加守卫时，`/` 的 win32 realpath 会把父目录回退带回混合形态，该 8 个用例仍红。其中 writePathFacts 用例经 1.3/1.4a 修复后自然恢复（`/etc/...` POSIX 绝对 → `path.posix.resolve` → 命中 isSystemDir），**无需 fixture 修正**——推导：该用例 workDir 为 win32 形态临时目录（按自身语法走 win32 API canonicalize，realpath 成功）、目标为 POSIX 绝对，走 ② 分支后不涉及 workDir 拼接；
 - 组 2 的 EACCES 用例按 3.1 重验后转绿（自然恢复或一行修正）；
 - 组 3 的 9 个用例在非特权 win32 显式 skip（理由可查），新增 mock 通路用例全绿，Linux CI / 特权 win32 上真 symlink 路径照常执行；
 - 组 4 转绿；
@@ -164,7 +166,9 @@ win32 运行时上，模型输入 POSIX 形态绝对路径（MSYS/Git Bash 环�
 - 不删除 symlink 用例（以 2.2/2.3 保覆盖）；
 - P3 级遗留（`\\?\` 设备路径、`runLarkCliExecutor` 中文句子 error）另列后续。
 
-### 已知边界记录（v2，随批次 1 落地写入验收文档）
+### 已知边界记录（v4，随批次 1 落地写入验收文档）
+
+- **跨语法 realpath 采信（v4 记录，已由守卫收敛）**：win32 上 POSIX 语法路径的父目录回退可能命中「跨语法真实答案」——`fs.realpath('/')` 成功返回 `'E:\'`（探针已钉死）、或 POSIX 系统目录名恰好存在于当前盘符根（如 `E:\etc`）时 `fs.realpath('/etc')` 返回 win32 形态。目标回退链路：write 侧由 1.4a 双条件守卫（语法根 / 非 POSIX 形态返回均静默退出、不采信）挡住，read 侧由 1.4b 对称形态守卫挡住；**env 路径链路不挡**（评审建议 2：env 取 realpath 真实答案，truthful），其输出形态由 1.3 的「拼接跟随 real 形态」保证无混合分隔符；
 
 - **N4**：win32 上 `/etc/hosts` 按「语法意图」归 system-dir，而非真实指向（当前盘符）；对真实 `E:\etc\` 文件是保护升格（收紧），需安全侧确认接受；
 - **N5（v3 如实改写——v2 的「不构成漏判」论证经探针证伪）**：`classifyReadPathZone`（`readPathFacts.ts:68`）对 POSIX 语法路径 `platform='posix'`，而 userDataDir/homeDir 为 win32 形态——`matchSensitive` 双侧 normalize 后形态不同，**内置/用户目录敏感前缀对 POSIX 语法路径不命中**。且 `/home/...`、`/Users/...`、`/root/...` 等 POSIX 用户目录**不命中** system-dir 根正则（探针实测三者均 false）→ 落 `outside-workdir` 且敏感前缀不命中 → **在 win32 上无 zone 级保护**。这是 pre-existing 行为（非本计划回归，现状 `path.resolve` 漂移后同样不命中），但必须如实告知安全侧：该类路径的拦截依赖 gate/permit 层的其它机制或用户显式配置 POSIX 形态 `customSensitivePrefixes`（如 `/home`、`/root`、`/Users`）。`/etc`、`/var`、`/System` 等系统根仍按 1.4/1.4a 归 `system-dir`（更强保护）；
