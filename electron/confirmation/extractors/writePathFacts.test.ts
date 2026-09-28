@@ -1,4 +1,5 @@
 import fs from 'fs/promises'
+import os from 'os'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
 import { probeWritePathFact } from './writePathFacts'
@@ -91,12 +92,46 @@ describe('probeWritePathFact', () => {
       const target = path.join(actualRoot, 'existing.txt')
       await fs.writeFile(target, 'existing')
       await fs.symlink(actualRoot, path.join(aliasRoot, 'alias'), 'dir')
-      const fact = await probeWritePathFact({ rawPath: path.join(aliasRoot, 'alias', 'existing.txt'), workDir: root, userDataDir: path.join(root, '.userdata'), homeDir: root, customSensitivePrefixes: [] })
+      const fact = await probeWritePathFact({ rawPath: path.join(aliasRoot, 'alias', 'existing.txt'), workDir: root, userDataDir: root, homeDir: root, customSensitivePrefixes: [] })
       expect(fact).toMatchObject({ normalizedPath: target, zone: 'outside-workdir', targetKind: 'symlink' })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
       await fs.rm(aliasRoot, { recursive: true, force: true })
       await fs.rm(actualRoot, { recursive: true, force: true })
     }
+  })
+})
+
+/**
+ * merge-main-28 修复回归锚（docs/review/2026-09-29-merge-main-28-failures-analysis-and-fix-plan.md §5 批次 1.5）。
+ */
+describe('跨平台路径语法分派回归锚', () => {
+  it('锚①(write)：相对路径按 workDir 真实基座 resolve，产 workdir-normal（B1 回归）', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'write-fact-anchor1-')))
+    try {
+      await expect(probeWritePathFact({
+        rawPath: 'src/x.ts',
+        workDir: root,
+        userDataDir: path.join(root, '.userdata'),
+        homeDir: path.join(root, '.home'),
+        customSensitivePrefixes: []
+      })).resolves.toMatchObject({
+        normalizedPath: path.resolve(root, 'src/x.ts'),
+        zone: 'workdir-normal',
+        targetKind: 'missing'
+      })
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it('锚⑥：POSIX workDir 字面量 + POSIX 绝对目标 → 正常返回不抛错、system-dir（1.3 env 豁免 + 1.4a 根守卫静默退出）', async () => {
+    // 目标随平台存在性不同（Linux 上 /etc/hosts 真实存在、win32 上缺失），只断言形态与 zone；
+    // env canonicalize 取真实 realpath 答案（truthful，形态不限），zone 判定与之解耦，不依赖测试机 E:\tmp 是否存在。
+    await expect(probeWritePathFact({
+      rawPath: '/etc/hosts',
+      workDir: '/tmp/wd',
+      userDataDir: '/tmp/user-data',
+      homeDir: '/tmp/home',
+      customSensitivePrefixes: []
+    })).resolves.toMatchObject({ normalizedPath: '/etc/hosts', zone: 'system-dir' })
   })
 })

@@ -559,8 +559,13 @@ describe('evaluateToolCallGate', () => {
       const gate = await evaluateToolCallGate(base({
         appDb: db, workDir: root, userDataDir: path.join(root, '.userdata'), toolName, toolInput, requestId, toolUseId, readConfirmationRegistry: registry
       }))
-      expect(gate.readPathFact?.zone).toBe('system-dir')
-      expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: 'path-system-dir-ask', answerer: 'user' })
+      // win32 上 %SystemRoot%\System32\... 命中内置敏感前缀（shellSensitivePaths 显式收录 C:\Windows）→ sensitive-file；
+      // POSIX 上 /etc 的内置敏感分支为空（该 zone 留给 system-dir）→ system-dir。两条 read 规则同为
+      // locked confirm-every-time（path-sensitive-read-confirm / path-system-dir-ask），“不可被 custom 放宽”语义等价。
+      const expectedZone = process.platform === 'win32' ? 'sensitive-file' : 'system-dir'
+      const expectedRuleId = process.platform === 'win32' ? 'path-sensitive-read-confirm' : 'path-system-dir-ask'
+      expect(gate.readPathFact?.zone).toBe(expectedZone)
+      expect(gate.decision).toMatchObject({ type: 'require-confirm', ruleId: expectedRuleId, answerer: 'user' })
       expect(gate.readExecutionPermit).toBeUndefined()
       if (toolName === 'list_directory') {
         expect(finalizeReadConfirmation({ toolName, toolInput, requestId, toolUseId, outcome: 'approved', answerer: 'user', readPathFact: gate.readPathFact, approvedTargets: gate.readTargetMapping }, registry)?.targets[0]).toMatchObject({ scope: 'direct-entries', targetKind: 'directory' })

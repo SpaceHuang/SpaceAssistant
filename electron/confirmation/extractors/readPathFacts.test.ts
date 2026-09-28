@@ -225,3 +225,51 @@ describe('probeReadPathFact', () => {
     } finally { vi.unstubAllEnvs() }
   })
 })
+
+/**
+ * merge-main-28 修复回归锚（docs/review/2026-09-29-merge-main-28-failures-analysis-and-fix-plan.md §5 批次 1.5）。
+ * 路径解析语义三态分派：win32 绝对 → win32 API；POSIX 绝对 → posix API；相对路径 → 按 workDir 语法。
+ */
+describe('跨平台路径语法分派回归锚', () => {
+  it('锚①：相对路径按 workDir 真实基座 resolve（B1 回归：相对路径不得交给 posix API）', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-facts-anchor1-')))
+    try {
+      await expect(probeReadPathFact({
+        rawPath: 'src/x.ts',
+        workDir: root,
+        userDataDir: path.join(root, 'user-data'),
+        homeDir: path.join(root, 'home'),
+        customSensitivePrefixes: []
+      })).resolves.toMatchObject({
+        normalizedPath: path.resolve(root, 'src/x.ts'),
+        zone: 'workdir-normal',
+        targetKind: 'missing'
+      })
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it('锚②：POSIX 形态 workDir 字面量 + 相对路径不产 cwd 拼接乱码（B1 回归）', async () => {
+    const fact = await probeReadPathFact({
+      rawPath: 'src/x.ts',
+      workDir: '/tmp/work',
+      userDataDir: '/tmp/user-data',
+      homeDir: '/tmp/home',
+      customSensitivePrefixes: []
+    })
+    expect(fact.zone).toBe('workdir-normal')
+    expect(fact.normalizedPath).not.toContain(process.cwd())
+    expect(fact.normalizedPath.endsWith('src/x.ts') || fact.normalizedPath.endsWith('src\\x.ts')).toBe(true)
+  })
+
+  it('锚③：POSIX 绝对 + win32 形态 env → system-dir，normalizedPath 保持纯 POSIX 形态（无混合分隔符）', async () => {
+    // 目标随平台存在性不同（Linux 上 /etc/hosts 真实存在、win32 上缺失），因此只断言形态与 zone；
+    // 1.4b 形态守卫的语义由「normalizedPath 纯 POSIX」间接覆盖（若当前盘符根恰好存在同名目录，缺失该守卫时本锚转红）。
+    await expect(probeReadPathFact({
+      rawPath: '/etc/hosts',
+      workDir: 'C:\\work',
+      userDataDir: 'C:\\user-data',
+      homeDir: 'C:\\Users\\alice',
+      customSensitivePrefixes: []
+    })).resolves.toMatchObject({ normalizedPath: '/etc/hosts', zone: 'system-dir' })
+  })
+})
