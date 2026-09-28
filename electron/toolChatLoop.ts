@@ -131,7 +131,7 @@ function isPackagedApp(): boolean {
   }
 }
 import { channelFor, type ResolveConfirmChannelArgs } from './confirmation/channels'
-import { shouldFallbackToUser } from './confirmation/fallbackToUser'
+import { shouldFallbackToUser, isFallbackEligibleCause } from './confirmation/fallbackToUser'
 import { approvalFallbackReasonFor } from './confirmation/fallbackReason'
 import type { ConfirmationChannel } from '../src/shared/confirmation/types'
 import { AgentChannel } from './confirmation/agentChannel'
@@ -2584,7 +2584,12 @@ async function runToolChatSessionInner(
               void toolConfirmRegistry.prepareToolConfirm?.(requestId, toolUseId, confirmMemoryTiers, { ...preparedTrustScope, sessionId }, undefined)
               // §5.10b：写 / 编辑工具补算 confirmDiff（agent 路径首次事件刻意省略）
               const fallbackDiff = await maybeBuildConfirmDiff(workDir, toolName, inputObj)
-              const fallbackReason = approvalFallbackReasonFor(fallbackCause === 'timeout' ? 'timeout' : 'unavailable', locale)
+              // N3（评审 v2）：undetermined 是 R5 的正常预期产出（第三态唯一用户可见出口）——
+              // 坍缩为「审批服务不可用」会误导用户等待重试而非人工裁决。透传真实 cause。
+              const fallbackReason = approvalFallbackReasonFor(
+                isFallbackEligibleCause(fallbackCause) ? fallbackCause : 'unavailable',
+                locale
+              )
               // §5.8 / §5.3：第二条 confirm-requested——显式清除 autoAnswerer（恢复可交互）、
               // 携带短原因（banner 说明「自动处理未完成」）、补 diff；工具保持 confirming 不置终态（§5.1 第 2 条）
               args.emitFactEvent?.({
@@ -2595,7 +2600,12 @@ async function runToolChatSessionInner(
                 ...(fallbackDiff ? { confirmDiff: fallbackDiff } : {}),
                 ...(shellSecurityHints ? { shellSecurityHints } : {}),
                 autoApproveFallback: {
-                  reasonCode: fallbackCause === 'timeout' ? 'approval_timeout' : 'approval_unavailable',
+                  reasonCode:
+                    fallbackCause === 'timeout'
+                      ? 'approval_timeout'
+                      : fallbackCause === 'agent-undetermined'
+                        ? 'approval_undetermined'
+                        : 'approval_unavailable',
                   reason: fallbackReason
                 },
                 autoAnswerer: false,

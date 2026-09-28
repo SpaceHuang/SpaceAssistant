@@ -35,24 +35,34 @@ export function scanEnvelope(node, at) {
   const aborted = status === 'cancelled'
   const timedOut = terminationReason === 'timeout'
 
+  const snapshot = JSON.stringify({
+    success: node.success,
+    error: node.error,
+    status,
+    exitCode,
+    terminationReason,
+    notExecuted: node.notExecuted,
+    notExecutedReason: node.notExecutedReason
+  })
   // I1：成功分支不得携带 error / notExecuted
   if (node.success === true && ('error' in node || node.notExecuted === true)) {
-    violations.push({ invariant: 'I1', detail: 'success=true 与 error/notExecuted 并存', at })
+    violations.push({ invariant: 'I1', detail: 'success=true 与 error/notExecuted 并存', at, snapshot })
   }
   // I2：有事实依据的成功不得被判失败
   if (exitCode === 0 && terminationReason === 'process_exit' && !aborted && node.success !== true) {
-    violations.push({ invariant: 'I2', detail: 'exitCode=0 + process_exit 被判失败', at })
+    violations.push({ invariant: 'I2', detail: 'exitCode=0 + process_exit 被判失败', at, snapshot })
   }
   // I3：未执行必须带原因
   if (node.notExecuted === true && (typeof node.notExecutedReason !== 'string' || !node.notExecutedReason)) {
-    violations.push({ invariant: 'I3', detail: 'notExecuted=true 缺 notExecutedReason', at })
+    violations.push({ invariant: 'I3', detail: 'notExecuted=true 缺 notExecutedReason', at, snapshot })
   }
   // I4：非零退出 / 中止 / 超时不得被判成功
   if (node.success === true && ((exitCode !== undefined && exitCode !== 0) || aborted || timedOut)) {
     violations.push({
       invariant: 'I4',
       detail: aborted ? '用户取消被判成功' : timedOut ? '超时被判成功' : 'exitCode!=0 被判成功',
-      at
+      at,
+      snapshot
     })
   }
   return violations
@@ -99,7 +109,7 @@ function listJsonlFiles(root) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name)
       if (entry.isDirectory()) walk(full, depth + 1)
-      else if (entry.isFile() && entry.name.endsWith('.jsonl')) out.push(full)
+      else if (entry.isFile() && (entry.name.endsWith('.jsonl') || entry.name.endsWith('.log'))) out.push(full)
     }
   }
   walk(root, 0)
@@ -142,6 +152,11 @@ function main() {
 
   console.log(`[scan-tool-result-invariants] files=${scanned} violations=${violations.length}`)
   console.log(`report: ${path.relative(process.cwd(), reportPath)}`)
+  if (scanned === 0) {
+    // N2（评审 v2）：files=0 = 门禁空转（没读过任何日志）——「矛盾数 0」无意义，必须红。
+    console.error('[scan-tool-result-invariants] FAIL: no .log/.jsonl files scanned — the gate ran on empty input. Pass a real log directory (dev: <root>/logs, packaged: <workDir>/.agent/logs).')
+    process.exit(1)
+  }
   process.exit(violations.length > 0 ? 1 : 0)
 }
 

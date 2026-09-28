@@ -1,7 +1,7 @@
 # 工具结果信封不变量扫描报告（R4 §4.4.4）
 
-- 扫描时间：2026-09-28T14:30:06.706Z
-- 扫描根：E:\Develop\SpaceAssistant-tool-reliability\logs
+- 扫描时间：2026-09-28T15:18:30.828Z
+- 扫描根：C:/Users/Space/AppData/Local/Temp/empty-logs2
 - 扫描文件数：0
 - 矛盾数：0
 

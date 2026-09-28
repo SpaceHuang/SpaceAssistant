@@ -107,6 +107,7 @@ describe('工具调用可靠性护栏（grep 断言）', () => {
     expect(loop).toContain("violations.some((v) => v.invariant !== 'I5')")
     const codes = read('src/shared/errorCodes.ts')
     expect(codes).toContain("'SCRIPT_TIMEOUT'")
+    expect(codes).toContain("'SCRIPT_PROCESS_EXIT'")
     expect(codes).toContain("'LARK_RUNNER_UNAVAILABLE'")
   })
 
@@ -123,6 +124,28 @@ describe('工具调用可靠性护栏（grep 断言）', () => {
     expect(ext).toContain('redactDeep')
     const agent = read('electron/confirmation/approvalAgent.ts')
     expect(agent).toContain('[入参摘要（脱敏后）]')
+  })
+
+  it('护栏 17（N1）：B1 端到端用例的缓存 mock 必须是真实 DecisionCacheEntry 形态（decision: allow）', () => {
+    const t = read('electron/toolReliabilityR5.test.ts')
+    expect(t).not.toContain("decision: 'auto-allow'")
+    expect(t).toContain("decision: 'allow' as const")
+    expect(t).toContain('expect(r.decision.memoryTiers).toEqual([])')
+    // 触达路径：命令必须是 persistable=true 形态（否则走既有 non-persistable 排除，B1 路径未被测试）
+    expect(t).toContain("command: 'echo )'")
+  })
+
+  it('护栏 18（N2）：扫描门禁收 .log/.jsonl 且 files=0 非零退出', () => {
+    const scan = read('scripts/scan-tool-result-invariants.mjs')
+    expect(scan).toContain("endsWith('.log')")
+    expect(scan).toContain('FAIL: no .log/.jsonl files scanned')
+    expect(scan).toContain('process.exit(1)')
+  })
+
+  it('护栏 19（N3）：undetermined 回退文案不坍缩为 unavailable（两处透传）', () => {
+    const loop = read('electron/toolChatLoop.ts')
+    expect(loop).not.toContain("fallbackCause === 'timeout' ? 'timeout' : 'unavailable'")
+    expect(loop).toContain("'approval_undetermined'")
   })
 
   it('护栏 10（R8）：目录错误四分类可分（stat 失败不再共用「不是目录或无法访问」）', () => {

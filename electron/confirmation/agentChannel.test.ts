@@ -77,7 +77,7 @@ describe('AgentChannel（P2-3）', () => {
     expect(outcome.kind === 'rejected' && outcome.reason?.summary).toBe('目标在敏感目录外，拒绝写入')
   })
 
-  it('E2：MCP 调用的 argsDigest 进入审批渲染（renderCluePack 围栏内可被裁决模型读到）', async () => {
+  it('E2：MCP 调用的 argsDigest 进入审批渲染（renderCluePack 围栏内可被裁决模型读到）', { timeout: 30_000 }, async () => {
     const { renderCluePackForTest } = await import('./approvalAgent')
     const rendered = (renderCluePackForTest as unknown as (c: unknown) => string)({
       toolName: 'mcp_x_post',

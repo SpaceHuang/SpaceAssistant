@@ -65,7 +65,7 @@
 | E2 | `renderCluePack` 渲染 `argsDigest`（不可信围栏内）——R3 审批可见入参对裁决模型可达（依赖 E1 先落地） | `approvalAgent.ts`、`agentChannel.test.ts` |
 | F1 | readdir 阶段五类分类闭合（stat 后目录消失的竞态不再 throw 逃逸） | `builtinExecutors.ts` |
 | F2 | entries 循环阶段 abort/超时统一结构化 `READ_TIMEOUT`（消除 throwIfAborted 逃逸与中文句子 error 两种旧形态） | `builtinExecutors.ts` |
-| F3 | contract-violation 告警收窄到 I0–I4（I5 未知码不落日志）+ SCRIPT_*/LARK_* 业务码纳入闭合集合 | `toolChatLoop.ts`、`errorCodes.ts` |
+| F3 | contract-violation 告警收窄到 I0–I4（I5 未知码不落日志）+ SCRIPT_*/LARK_* 业务码纳入闭合集合（v2 复核补齐 `SCRIPT_PROCESS_EXIT`） | `toolChatLoop.ts`、`errorCodes.ts` |
 
 护栏测试扩至 16 条（新增 C2 判据 / B1 记忆阻断 / B3 三态表述 / F3 收窄与闭合 / D1D2 / E1E2）。
 
@@ -77,6 +77,27 @@
 - `npm run i18n:check`：passed（zh-CN / en-US 对齐，1623 处既有硬编码为存量基线）
 - `npm run typecheck:renderer` / `typecheck:shared`：通过
 - `npx tsc -p tsconfig.electron.json --noEmit`：通过
+
+## 4.3 评审 v2 处置（2026-09-28，3 项 P1 + 2 项 P2 同批）
+
+对照 `docs/review/2026-09-28-tool-invocation-reliability-code-review-v2.md`：
+
+| # | 修复 | 红绿验证 |
+| --- | --- | --- |
+| N1 | B1 端到端测试修正：缓存 mock 改真实 `DecisionCacheEntry` 形态（`decision:'allow'`）+ `memoryTiers` 断言改 `toEqual([])`；**且命令改用 persistable=true 形态（`echo )`）**——红绿验证中发现原用例命令含管道会走既有 non-persistable-command 排除，触达不了 B1 新增路径 | 完整闭环：修复在位 11 passed → 回退 B1 转 1 failed → 恢复 11 passed |
+| N2 | 扫描门禁扩展名收 `.log`/`.jsonl`（Agent 日志是 JSON Lines 内容 + .log 扩展名）；`files=0` 改为醒目告警 + **exit 1**（空转门禁=失败）；violation 附字段快照（v1 P2-6 一并修） | 实跑真实 `logs/`：`files=4 violations=0` exit 0；空目录实测 exit 1 |
+| N3 | `agent-undetermined` 回退人工的文案/reasonCode 透传真实 cause（不再坍缩为「审批服务不可用」）；`approval_undetermined` reasonCode + 专用文案断言（三种 cause 文案互不相同） | `fallbackReason.test.ts` 2 用例 + 护栏 19 |
+| P2-3 | 闭合集合补 `SCRIPT_PROCESS_EXIT`（run_script 最高频业务失败码）+ 护栏补钉 | 护栏 14 断言 |
+| P2-4 | E2 用例显式 30s timeout（动态 import 冷加载已实测 flake） | — |
+
+护栏测试扩至 19 条。
+
+## 4.4 门禁真实运行记录（2026-09-28，v2 修复后）
+
+- `npm run test:electron`：**435 文件 / 3612 passed / 5 skipped / 0 failed**（exit 0，445s）
+- `npm run test:renderer`：**294 文件 / 1937 passed / 0 failed**（exit 0）
+- `npm run check:tool-result-invariants`：`files=4 violations=0` exit 0（扫描真实 `logs/`，含 Agent/FeishuCli/WeChatCli/SecurityAudit 四份日志）
+- `npm run i18n:check`：passed；`typecheck:shared` / `tsc -p tsconfig.electron.json`：通过
 
 ## 5. 遗留与后续
 

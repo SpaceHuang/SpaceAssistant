@@ -156,20 +156,29 @@ describe('R5：解析失败降级为确认（shell 侧）', () => {
     const r = await evaluateToolCallGate(base({
       audit,
       lane: 'desktop',
+      // N1 红绿验证的教训：命令必须是「树解析失败但 persistable=true」的真实形态
+      // （评审 v2 实测 `echo )`——圆括号不在 metasyntax 正则内，简单解析器 tokenize 成功）。
+      // 若用含管道的命令，facts 的 command-sequence.persistable=false 会走既有
+      // non-persistable-command 排除，触达不了 B1 新增的 shell-analysis-incomplete 排除路径。
+      toolInput: { command: 'echo )' },
       runShellPrecheck: unsupportedPrecheck(analysis),
       // 缓存中存在同命令的 90 天 allow 条目（用户此前确认过并勾选记住）
+      // N1（评审 v2）：缓存条目形态必须是 DecisionCacheEntry 的真实形态——
+      // decision 取值是 'allow' | 'deny'（policyEngine.lookupCache 只认 'allow'）；
+      // mock 成其他值在任何版本下都不命中，回退 B1 修复本测试也不会红。
       decisionCache: {
-        lookup: () => ({ decision: 'auto-allow', ruleId: 'cache-hit', reason: 'user-approved', expiresAt: Date.now() + 86_400_000 }),
+        lookup: () => ({ decision: 'allow' as const, ruleId: 'cache-hit', reason: 'user-approved', expiresAt: Date.now() + 86_400_000 }),
         record: () => undefined,
         clear: () => 0,
         clearAllSession: () => 0,
         expireDormant: () => 0
       }
     }))
-    // 修复前：缓存命中直接 auto-allow（「partial 永不自动放行」被绕过）
+    // 修复前：投毒缓存命中直接 auto-allow（「partial 永不自动放行」被绕过）
     expect(r.decision.type).toBe('require-confirm')
     if (r.decision.type === 'require-confirm') {
-      expect(r.decision.memoryTiers.some((t) => t === 'persistent')).toBe(false)
+      // MemoryTier 是 {key,label} 对象数组；unsupported 时记忆资格为 none → 必须为空数组
+      expect(r.decision.memoryTiers).toEqual([])
     }
   })
 
