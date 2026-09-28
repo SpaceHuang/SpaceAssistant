@@ -1,9 +1,10 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { classifyFeishuMediaTarget, probeFeishuMediaTarget } from './feishuMediaFacts'
 import type { RegisteredFeishuAttachment } from '../../feishu/feishuAttachmentRegistry'
+import { canCreateSymlinks } from '../../../src/test/symlinkCapability'
 
 const roots: string[] = []
 const messageId = 'message-current'
@@ -46,7 +47,8 @@ describe('classifyFeishuMediaTarget', () => {
     expect(fact.identity).toBeUndefined()
   })
 
-  it('拒绝附件路径中的符号链接', async () => {
+  // 依赖真实 symlink 的用例以能力探测保护：win32 非特权进程 fs.symlink 直接 EPERM；安全语义由下方 mock 通路覆盖。
+  it.skipIf(!canCreateSymlinks())('拒绝附件路径中的符号链接', async () => {
     const userData = await tempRoot('feishu-facts-link-')
     const outside = await tempRoot('feishu-facts-link-target-')
     const mediaRoot = path.join(userData, 'feishu-media')
@@ -58,7 +60,7 @@ describe('classifyFeishuMediaTarget', () => {
     expect(await classifyFeishuMediaTarget(userData, attachmentId, [registration(link)], messageId)).toBe('unknown')
   })
 
-  it('媒体根目录缺失或被替换成符号链接时返回 unknown', async () => {
+  it.skipIf(!canCreateSymlinks())('媒体根目录缺失或被替换成符号链接时返回 unknown', async () => {
     const userData = await tempRoot('feishu-facts-root-')
     const outside = await tempRoot('feishu-facts-root-target-')
     expect(await classifyFeishuMediaTarget(userData, attachmentId, [registration(path.join(userData, 'feishu-media', 'a.txt'))], messageId)).toBe('unknown')
@@ -83,5 +85,31 @@ describe('classifyFeishuMediaTarget', () => {
     const fact = await probeFeishuMediaTarget(userData, attachmentId, [entry], messageId)
     expect(fact.boundary).not.toBe('inside')
     expect(fact.identity).toBeUndefined()
+  })
+
+  it('mock 通路：媒体目录内组件 lstat 报 symlink 时返回 unknown（win32 无特权平台的安全语义锚）', async () => {
+    const userData = await tempRoot('feishu-facts-mock-link-')
+    const mediaRoot = path.join(userData, 'feishu-media')
+    await fs.mkdir(mediaRoot)
+    const escape = path.join(mediaRoot, 'escape.txt')
+    await fs.writeFile(escape, 'secret')
+    const originalLstat = fs.lstat.bind(fs)
+    const lstatSpy = vi.spyOn(fs, 'lstat').mockImplementation(async (target, ...args) => {
+      if (String(target) === escape) {
+        const real = await originalLstat(target, ...args)
+        return {
+          isSymbolicLink: () => true,
+          isFile: () => false,
+          isDirectory: () => false,
+          dev: real.dev, ino: real.ino, mode: real.mode, size: real.size, mtimeMs: real.mtimeMs
+        } as never
+      }
+      return originalLstat(target, ...args)
+    })
+    try {
+      expect(await classifyFeishuMediaTarget(userData, attachmentId, [registration(escape)], messageId)).toBe('unknown')
+    } finally {
+      lstatSpy.mockRestore()
+    }
   })
 })

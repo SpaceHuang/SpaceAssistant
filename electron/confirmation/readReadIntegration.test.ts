@@ -118,7 +118,8 @@ describe('V1 confirmed read executor integration', () => {
       expect(gate.decision).toMatchObject({ type: 'auto-allow', ruleId: 'read-target-workdir-allow' })
       expect(validateReadExecutionBoundary({ toolName: 'list_directory', input, requestId, toolUseId, permit: gate.readExecutionPermit, expectedFacts: gate.readExecutionPermit?.targets })).toEqual({ ok: true })
       const result = await listDirectoryExecutor.execute(input, executorContext(root, requestId, toolUseId, gate.readExecutionPermit))
-      expect(result).toMatchObject({ success: true, data: { entries: [expect.objectContaining({ name: 'visible.txt', path: 'target/visible.txt' })] } })
+      // 执行器 path.relative 产出平台原生分隔符（win32 反斜杠），断言用 path.join 保持跨平台。
+      expect(result).toMatchObject({ success: true, data: { entries: [expect.objectContaining({ name: 'visible.txt', path: path.join('target', 'visible.txt') })] } })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }

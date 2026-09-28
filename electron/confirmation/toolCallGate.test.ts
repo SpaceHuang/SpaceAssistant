@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
+import { canCreateSymlinks } from '../../src/test/symlinkCapability'
 import { loadEffectivePolicyRules, readPolicyPackages } from './policyRulesRuntime'
 import { SqliteDecisionCache } from './sqliteDecisionCache'
 import { getDbConnection, openSqliteDatabase, type AppDatabase } from '../database'
@@ -801,7 +802,9 @@ describe('evaluateToolCallGate', () => {
     expect(fileAutoApproval).toHaveBeenCalledTimes(1)
   })
 
-  it('V2 symlink 写目标产出事实后由 gate 拒绝，不进入确认', async () => {
+  // 依赖真实 symlink 的用例以能力探测保护：win32 非特权进程 fs.symlink 直接 EPERM（无
+  // SeCreateSymbolicLinkPrivilege）；安全语义由下方 mock 通路用例在 win32 覆盖，Linux CI/特权环境真跑。
+  it.skipIf(!canCreateSymlinks())('V2 symlink 写目标产出事实后由 gate 拒绝，不进入确认', async () => {
     const root = await fs.realpath(await fs.mkdtemp('/tmp/write-link-gate-root-'))
     try {
       const target = path.join(root, 'target.txt')
@@ -814,6 +817,42 @@ describe('evaluateToolCallGate', () => {
       expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'write-target-unsupported-deny' })
       expect(lookup).not.toHaveBeenCalled()
     } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('mock 通路：lstat 报 symlink 的写目标产 symlink 事实并由 gate 拒绝（win32 无特权平台的安全语义锚）', async () => {
+    const root = await fs.realpath(await fs.mkdtemp('/tmp/write-link-gate-mock-'))
+    const link = path.join(root, 'link.txt')
+    const outsideReal = path.resolve(root, '..', 'mock-gate-outside.txt')
+    await fs.writeFile(link, 'protected')
+    const originalLstat = fs.lstat.bind(fs)
+    const originalRealpath = fs.realpath.bind(fs)
+    const lstatSpy = vi.spyOn(fs, 'lstat').mockImplementation(async (target, ...args) => {
+      if (String(target) === link) {
+        const real = await originalLstat(target, ...args)
+        return {
+          isSymbolicLink: () => true,
+          isFile: () => false,
+          isDirectory: () => false,
+          dev: real.dev, ino: real.ino, mode: real.mode, size: real.size, mtimeMs: real.mtimeMs, nlink: real.nlink
+        } as never
+      }
+      return originalLstat(target, ...args)
+    })
+    const realpathSpy = vi.spyOn(fs, 'realpath').mockImplementation(async (target, ...args) => {
+      if (String(target) === link) return outsideReal
+      return originalRealpath(target, ...args)
+    })
+    try {
+      const lookup = vi.fn(() => null)
+      const gate = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'write_file', toolInput: { path: link, content: 'replace' }, decisionCache: { lookup, record: () => undefined, clear: () => 0, clearAllSession: () => 0, expireDormant: () => 0 } }))
+      expect(gate.writePathFact?.targetKind).toBe('symlink')
+      expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'write-target-unsupported-deny' })
+      expect(lookup).not.toHaveBeenCalled()
+    } finally {
+      lstatSpy.mockRestore()
+      realpathSpy.mockRestore()
       await fs.rm(root, { recursive: true, force: true })
     }
   })
@@ -1025,7 +1064,7 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
-  it('V4 飞书附件 symlink 越出 feishu-media 时由策略事实 locked deny', async () => {
+  it.skipIf(!canCreateSymlinks())('V4 飞书附件 symlink 越出 feishu-media 时由策略事实 locked deny', async () => {
     const userDataDir = await fs.realpath(await fs.mkdtemp('/tmp/feishu-media-gate-'))
     const outside = await fs.realpath(await fs.mkdtemp('/tmp/feishu-media-outside-'))
     const mediaRoot = path.join(userDataDir, 'feishu-media')
@@ -1675,7 +1714,7 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
-  it('微信发送附件的外部 symlink 目标在 gate 被拒绝并写入脱敏路径事实', async () => {
+  it.skipIf(!canCreateSymlinks())('微信发送附件的外部 symlink 目标在 gate 被拒绝并写入脱敏路径事实', async () => {
     const workDir = await fs.realpath(await fs.mkdtemp('/tmp/wechat-media-work-'))
     const outside = await fs.realpath(await fs.mkdtemp('/tmp/wechat-media-outside-'))
     const privateFile = path.join(outside, 'private-report.txt')

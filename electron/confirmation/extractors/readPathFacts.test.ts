@@ -4,6 +4,7 @@ import path from 'path'
 import { describe, expect, it, vi } from 'vitest'
 import { classifyReadPathZone, probeReadPathFact } from './readPathFacts'
 import { runExtractorsWithReadPathFact } from './runExtractors'
+import { canCreateSymlinks } from '../../../src/test/symlinkCapability'
 
 describe('probeReadPathFact', () => {
   it('POSIX 工作目录归属比较保留大小写', () => {
@@ -137,7 +138,9 @@ describe('probeReadPathFact', () => {
     }
   })
 
-  it('classifies a symlink to an outside file by its real target', async () => {
+  // 依赖真实 symlink 的用例以能力探测保护：win32 非特权进程 fs.symlink 直接 EPERM（无
+  // SeCreateSymbolicLinkPrivilege）；安全语义由下方 mock 通路用例在 win32 覆盖，Linux CI/特权环境真跑。
+  it.skipIf(!canCreateSymlinks())('classifies a symlink to an outside file by its real target', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'read-facts-'))
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'read-facts-out-'))
     try {
@@ -162,7 +165,7 @@ describe('probeReadPathFact', () => {
     }
   })
 
-  it('classifies a directory symlink as symlink while using the real directory zone', async () => {
+  it.skipIf(!canCreateSymlinks())('classifies a directory symlink as symlink while using the real directory zone', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'read-facts-'))
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'read-facts-out-'))
     try {
@@ -171,7 +174,7 @@ describe('probeReadPathFact', () => {
     } finally { await fs.rm(root, { recursive: true, force: true }); await fs.rm(outside, { recursive: true, force: true }) }
   })
 
-  it('resolves a parent directory symlink before classifying the target', async () => {
+  it.skipIf(!canCreateSymlinks())('resolves a parent directory symlink before classifying the target', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'read-facts-'))
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'read-facts-out-'))
     try {
@@ -271,5 +274,46 @@ describe('跨平台路径语法分派回归锚', () => {
       homeDir: 'C:\\Users\\alice',
       customSensitivePrefixes: []
     })).resolves.toMatchObject({ normalizedPath: '/etc/hosts', zone: 'system-dir' })
+  })
+})
+
+/** symlink 越界检测的 mock 通路：不创建真实 symlink（win32 非特权进程 EPERM），每平台固定执行。 */
+describe('symlink 越界检测 mock 通路', () => {
+  it('lstat 报 symlink 且 realpath 指向外部时，读取事实为 symlink/outside', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-facts-mock-link-')))
+    const link = path.join(root, 'link.txt')
+    await fs.writeFile(link, 'content')
+    const outsideReal = path.resolve(root, '..', 'mock-read-outside-secret.txt')
+    const originalLstat = fs.lstat.bind(fs)
+    const originalRealpath = fs.realpath.bind(fs)
+    const lstatSpy = vi.spyOn(fs, 'lstat').mockImplementation(async (target, ...args) => {
+      if (String(target) === link) {
+        const real = await originalLstat(target, ...args)
+        return {
+          isSymbolicLink: () => true,
+          isFile: () => false,
+          isDirectory: () => false,
+          dev: real.dev, ino: real.ino, mode: real.mode, size: real.size, mtimeMs: real.mtimeMs
+        } as never
+      }
+      return originalLstat(target, ...args)
+    })
+    const realpathSpy = vi.spyOn(fs, 'realpath').mockImplementation(async (target, ...args) => {
+      if (String(target) === link) return outsideReal
+      return originalRealpath(target, ...args)
+    })
+    try {
+      await expect(probeReadPathFact({
+        rawPath: 'link.txt',
+        workDir: root,
+        userDataDir: path.join(root, 'user-data'),
+        homeDir: path.join(root, 'home'),
+        customSensitivePrefixes: []
+      })).resolves.toMatchObject({ normalizedPath: outsideReal, zone: 'outside-workdir', targetKind: 'symlink' })
+    } finally {
+      lstatSpy.mockRestore()
+      realpathSpy.mockRestore()
+      await fs.rm(root, { recursive: true, force: true })
+    }
   })
 })

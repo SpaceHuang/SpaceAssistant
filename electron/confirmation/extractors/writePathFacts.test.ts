@@ -3,6 +3,7 @@ import os from 'os'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
 import { probeWritePathFact } from './writePathFacts'
+import { canCreateSymlinks } from '../../../src/test/symlinkCapability'
 
 describe('probeWritePathFact', () => {
   it('为普通存在与缺失目标产出规范化路径、zone 和父目录 identity', async () => {
@@ -41,7 +42,9 @@ describe('probeWritePathFact', () => {
     }
   })
 
-  it.skipIf(process.platform === 'win32')('将 symlink 目标作为事实交给后续机制拒绝，不在 facts 阶段做策略裁决', async () => {
+  // 依赖真实 symlink/hardlink 的用例以能力探测保护：win32 非特权进程无 SeCreateSymbolicLinkPrivilege；
+  // symlink 安全语义由 toolCallGate 的 mock 通路用例在 win32 覆盖，Linux CI/特权环境照常真跑。
+  it.skipIf(!canCreateSymlinks())('将 symlink 目标作为事实交给后续机制拒绝，不在 facts 阶段做策略裁决', async () => {
     const root = await fs.realpath(await fs.mkdtemp('/tmp/write-fact-link-root-'))
     const outside = await fs.realpath(await fs.mkdtemp('/tmp/write-fact-link-out-'))
     try {
@@ -57,7 +60,7 @@ describe('probeWritePathFact', () => {
     }
   })
 
-  it.skipIf(process.platform === 'win32')('把硬链接目标明确分类为 hardlink', async () => {
+  it.skipIf(!canCreateSymlinks())('把硬链接目标明确分类为 hardlink', async () => {
     const root = await fs.realpath(await fs.mkdtemp('/tmp/write-fact-hardlink-'))
     try {
       const original = path.join(root, 'original.txt')
@@ -71,7 +74,7 @@ describe('probeWritePathFact', () => {
     }
   })
 
-  it.skipIf(process.platform === 'win32')('缺失目标经过 symlink 父目录时仍分类为 symlink', async () => {
+  it.skipIf(!canCreateSymlinks())('缺失目标经过 symlink 父目录时仍分类为 symlink', async () => {
     const root = await fs.realpath(await fs.mkdtemp('/tmp/write-fact-parent-link-root-'))
     const outside = await fs.realpath(await fs.mkdtemp('/tmp/write-fact-parent-link-out-'))
     try {
@@ -84,7 +87,7 @@ describe('probeWritePathFact', () => {
     }
   })
 
-  it.skipIf(process.platform === 'win32')('工作目录外的中间 symlink 也必须作为写目标事实保留', async () => {
+  it.skipIf(!canCreateSymlinks())('工作目录外的中间 symlink 也必须作为写目标事实保留', async () => {
     const root = await fs.realpath(await fs.mkdtemp('/tmp/write-fact-out-link-root-'))
     const aliasRoot = await fs.realpath(await fs.mkdtemp('/tmp/write-fact-out-link-alias-'))
     const actualRoot = await fs.realpath(await fs.mkdtemp('/tmp/write-fact-out-link-target-'))
