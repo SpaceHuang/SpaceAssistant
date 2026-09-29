@@ -78,3 +78,170 @@ describe('extractScriptPathFacts', () => {
     expect(extractScriptPathFacts('open("/tmp/x")', 'python')).toMatchObject({ completeness: 'unknown', dynamicAccess: true })
   })
 })
+
+// ============================================================================
+// P0 假阳性修复回归矩阵(docs/develop/script-path-extraction-false-positive-
+// diagnosis-and-improvement-plan.md §7.1 探针矩阵转正 + §5 P0-1~P0-4)。
+// 编号 fN 与方案探针矩阵对应;§10 待确认项的拍板结论在对应用例注释中标明。
+// ============================================================================
+describe('extractScriptPathFacts:P0 假阳性修复(探针矩阵回归)', () => {
+  beforeAll(async () => {
+    await scriptParserService.ensureInitialized()
+  })
+
+  afterAll(() => resetScriptParserServiceForTests())
+
+  // ---- P0-1 路径构造器纳入折叠 ----
+
+  it('f2 裸 os.path.join(全字面量、无 IO)不再触发 unknown', () => {
+    expect(extractScriptPathFacts('import os\nos.path.join("/a", "b")', 'python')).toMatchObject({ paths: [], completeness: 'complete' })
+  })
+
+  it('f4 内层 join 折叠进 open 实参(§10-6 拍板:统一以 / 折叠,平台变体交探测归一)', () => {
+    expect(extractScriptPathFacts('import os\nopen(os.path.join("d", "events.jsonl"))', 'python')).toEqual({
+      paths: ['d/events.jsonl'], completeness: 'complete', dynamicAccess: false
+    })
+  })
+
+  it('os.path.dirname / basename / splitext[0] 折叠为静态路径', () => {
+    expect(extractScriptPathFacts('import os\nopen(os.path.dirname("/d/sub/f.txt"))', 'python')).toMatchObject({ paths: ['/d/sub'], completeness: 'complete' })
+    expect(extractScriptPathFacts('import os\nopen(os.path.basename("/d/f.txt"))', 'python')).toMatchObject({ paths: ['f.txt'], completeness: 'complete' })
+    expect(extractScriptPathFacts('import os\nroot = os.path.splitext("/d/f.txt")[0]\nopen(root)', 'python')).toMatchObject({ paths: ['/d/f'], completeness: 'complete' })
+  })
+
+  it('pathlib Path / PurePath 的 / 运算与构造器折叠', () => {
+    expect(extractScriptPathFacts('from pathlib import Path\np = Path("/a") / "b"\nopen(p)', 'python')).toMatchObject({ paths: ['/a/b'], completeness: 'complete' })
+    expect(extractScriptPathFacts('from pathlib import PurePath\nopen(PurePath("/a") / "b")', 'python')).toMatchObject({ paths: ['/a/b'], completeness: 'complete' })
+  })
+
+  it('import 别名形态的路径构造器同样折叠(osp.join / from-import join)', () => {
+    expect(extractScriptPathFacts('import os.path as osp\nopen(osp.join("d", "f.txt"))', 'python')).toMatchObject({ paths: ['d/f.txt'], completeness: 'complete' })
+    expect(extractScriptPathFacts('from os.path import join\nopen(join("d", "f.txt"))', 'python')).toMatchObject({ paths: ['d/f.txt'], completeness: 'complete' })
+  })
+
+  // ---- P0-2 局部变量常量传播 ----
+
+  it('f3 join 赋值给变量后经 open(变量) 使用 → 传播生效', () => {
+    expect(extractScriptPathFacts('import os\np = os.path.join("/d", "events.jsonl")\nopen(p, "r")', 'python')).toEqual({
+      paths: ['/d/events.jsonl'], completeness: 'complete', dynamicAccess: false
+    })
+  })
+
+  it('f5 链式变量中转(嵌套 join + 字符串拼接)传播生效', () => {
+    expect(extractScriptPathFacts('import os\nbase = os.path.join("/d", "sub")\ntarget = base + "/f.txt"\nopen(target)', 'python')).toMatchObject({ paths: ['/d/sub/f.txt'], completeness: 'complete' })
+  })
+
+  it('变量别名与跨块(-if 体内)传播生效', () => {
+    expect(extractScriptPathFacts('p = "/a"\nq = p\nopen(q)', 'python')).toMatchObject({ paths: ['/a'], completeness: 'complete' })
+    expect(extractScriptPathFacts('import os\nbase = os.path.join("/d", "data")\nif flag:\n    open(os.path.join(base, "x"))', 'python')).toMatchObject({ paths: ['/d/data/x'], completeness: 'complete' })
+  })
+
+  it('f19 典型会话数据分析脚本(join + json + Counter + with-open-as)判 complete', () => {
+    const script = [
+      'import os',
+      'import json',
+      'from collections import Counter',
+      '',
+      'LOG_DIR = os.path.join("logs", "app")',
+      'TARGET = os.path.join(LOG_DIR, "events.jsonl")',
+      '',
+      'counter = Counter()',
+      'with open(TARGET, "r") as f:',
+      '    for line in f:',
+      '        record = json.loads(line)',
+      '        counter[record["type"]] += 1',
+      'print(counter.most_common(5))'
+    ].join('\n')
+    expect(extractScriptPathFacts(script, 'python')).toEqual({
+      paths: ['logs/app/events.jsonl'], completeness: 'complete', dynamicAccess: false
+    })
+  })
+
+  // ---- P0-3 纯计算白名单 ----
+
+  it('f8/f9/f10 collections/json/re 纯计算调用不再触发 unknown', () => {
+    expect(extractScriptPathFacts('from collections import Counter\nc = Counter("aabb")', 'python')).toMatchObject({ completeness: 'complete' })
+    expect(extractScriptPathFacts('import json\njson.loads("{}")', 'python')).toMatchObject({ completeness: 'complete' })
+    expect(extractScriptPathFacts('import re\nre.sub("a", "b", "aaa")', 'python')).toMatchObject({ completeness: 'complete' })
+  })
+
+  it('f7 os.walk 维持 unknown(§10-1 拍板:只读但枚举整棵目录树,保留 caution 级)', () => {
+    expect(extractScriptPathFacts('import os\nfor root, dirs, files in os.walk("."):\n    pass', 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('纯计算白名单负向:危险面(os.popen / os.remove 变量实参)仍 unknown', () => {
+    expect(extractScriptPathFacts('import os\nos.popen("ls")', 'python')).toMatchObject({ completeness: 'unknown', dynamicAccess: true })
+    expect(extractScriptPathFacts('import os\nos.remove(v)', 'python')).toMatchObject({ completeness: 'unknown' })
+    expect(extractScriptPathFacts('import os\nos.system("rm -rf /")', 'python')).toMatchObject({ completeness: 'unknown', dynamicAccess: true })
+  })
+
+  // ---- P0-4 删除三处无条件 unknown ----
+
+  it('f11/f12 函数定义与类定义(体内无 IO)不再触发 unknown;对已定义函数/类的调用同判', () => {
+    expect(extractScriptPathFacts('def helper():\n    return 1\nhelper()', 'python')).toMatchObject({ completeness: 'complete' })
+    expect(extractScriptPathFacts('class Config:\n    pass\nConfig()', 'python')).toMatchObject({ completeness: 'complete' })
+    expect(extractScriptPathFacts('def load():\n    return 1\nv = load()', 'python')).toMatchObject({ completeness: 'complete' })
+  })
+
+  it('f14 自增赋值 x += 1 不再无条件 unknown', () => {
+    expect(extractScriptPathFacts('x = 1\nx += 1', 'python')).toMatchObject({ completeness: 'complete' })
+  })
+
+  it('纯实例方法调用(Counter.update / most_common)不再触发 unknown', () => {
+    expect(extractScriptPathFacts('from collections import Counter\nc = Counter()\nc.update([1, 2])\nprint(c.most_common())', 'python')).toMatchObject({ completeness: 'complete' })
+  })
+
+  it('P0-4 安全底线:函数体/类体内藏 IO 仍被检出', () => {
+    expect(extractScriptPathFacts('def f():\n    open(target)\nf()', 'python')).toMatchObject({ completeness: 'unknown' })
+    expect(extractScriptPathFacts('class C:\n    x = open(target)', 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  // ---- P0-2 失效点(负向:任何重绑定/参数化写入即失效,§9 风险表) ----
+
+  it('条件分支内的重绑定使常量传播失效(防假阴性)', () => {
+    expect(extractScriptPathFacts('p = "/safe"\nif flag:\n    p = "/other"\nopen(p)', 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('循环体内的重绑定按 loop-carried 失效(循环首轮即不可信)', () => {
+    expect(extractScriptPathFacts('p = "/a"\nfor i in range(3):\n    open(p)\n    p = "/b"', 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('for / comprehension 目标重绑定使同名常量失效', () => {
+    expect(extractScriptPathFacts('p = "/a"\nfor p in range(3):\n    open(p)', 'python')).toMatchObject({ completeness: 'unknown' })
+    expect(extractScriptPathFacts('p = "/a"\nrows = [open(p) for p in rows]\nopen(p)', 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('aug_assign 重绑定失效(N3 负向示例:p += os.environ[X] 不得误判可静态确定)', () => {
+    expect(extractScriptPathFacts('import os\np = "/safe"\np += os.environ["X"]\nopen(p)', 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('下标增强赋值(容器变异)不重绑基名,纯度保留', () => {
+    expect(extractScriptPathFacts('from collections import Counter\nc = Counter()\nc["x"] += 1\nprint(c.most_common())', 'python')).toMatchObject({ completeness: 'complete' })
+  })
+
+  it('del 与 with-as 重绑定使常量失效', () => {
+    expect(extractScriptPathFacts('p = "/a"\ndel p\nopen(p)', 'python')).toMatchObject({ completeness: 'unknown' })
+    expect(extractScriptPathFacts('p = "/a"\nwith open("/tmp/log") as p:\n    pass\nopen(p)', 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('元组解包目标按名失效,不影响其他常量', () => {
+    expect(extractScriptPathFacts('p = "/a"\na, b = "x", "y"\nopen(p)', 'python')).toMatchObject({ paths: ['/a'], completeness: 'complete' })
+  })
+
+  it('with-open-as 句柄的方法调用(f.read)不触发 unknown,路径在 open 处提取', () => {
+    expect(extractScriptPathFacts('with open("/tmp/log") as f:\n    data = f.read()\nprint(len(data))', 'python')).toMatchObject({ paths: ['/tmp/log'], completeness: 'complete' })
+  })
+
+  it('导入别名赋值(alias = subprocess)不得经纯度传播洗白', () => {
+    expect(extractScriptPathFacts('import subprocess as sp\nalias = sp\nalias.run("x")', 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('常量不跨函数/类作用域传播(§P0-2 约束),函数包裹的 open(形参) 保持 unknown(§7.2 残留可解释)', () => {
+    expect(extractScriptPathFacts('p = "/a"\ndef f():\n    open(p)', 'python')).toMatchObject({ completeness: 'unknown' })
+    expect(extractScriptPathFacts('def load(path):\n    with open(path) as f:\n        return f.read()', 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('§6 边界案例:未知来源函数结果流入 open 仍 unknown', () => {
+    expect(extractScriptPathFacts('p = custom_api()\nopen(p)', 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+})
