@@ -27,7 +27,12 @@ export type WritePathProbeInput = {
 export async function classifyWriteTargetScope(normalizedPath: string, workDir: string): Promise<'inside-workdir' | 'outside-workdir'> {
   const windowsPath = isWindowsAbsolute(normalizedPath) || isWindowsAbsolute(workDir)
   const pathApi = windowsPath ? path.win32 : path
-  const root = windowsPath ? pathApi.normalize(workDir) : await fs.realpath(workDir)
+  // workDir 真实存在时用 realpath（防 symlink 化的 workDir 误判归属）；尚未创建（新会话首写是常态）
+  // 或不可达时回退 lexical 归一——此前直接 ENOENT 上抛会让调用方判 scope=unknown，远程首写被
+  // remote-write-scope-unknown-deny 终局拒绝（GitHub Linux CI 实证）。
+  const root = windowsPath
+    ? pathApi.normalize(workDir)
+    : await fs.realpath(workDir).catch(() => pathApi.normalize(workDir))
   const target = pathApi.normalize(normalizedPath)
   const relative = pathApi.relative(root, target)
   return relative === '..' || relative.startsWith(`..${pathApi.sep}`) || pathApi.isAbsolute(relative)

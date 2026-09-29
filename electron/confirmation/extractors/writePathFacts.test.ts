@@ -2,7 +2,7 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { probeWritePathFact } from './writePathFacts'
+import { classifyWriteTargetScope, probeWritePathFact } from './writePathFacts'
 import { canCreateSymlinks } from '../../../src/test/symlinkCapability'
 
 describe('probeWritePathFact', () => {
@@ -136,5 +136,28 @@ describe('跨平台路径语法分派回归锚', () => {
       homeDir: '/tmp/home',
       customSensitivePrefixes: []
     })).resolves.toMatchObject({ normalizedPath: '/etc/hosts', zone: 'system-dir' })
+  })
+})
+
+/**
+ * CI 修复回归锚（GitHub Linux runner 红：remote-write-scope-unknown-deny 误伤）：
+ * classifyWriteTargetScope 的 POSIX 分支曾对 workDir 发 fs.realpath——workDir 尚未创建
+ * （新会话首写是常态）时 ENOENT → scope=unknown → 远程写入被 scope-unknown-deny 终局拒绝。
+ */
+describe('classifyWriteTargetScope 存在性依赖回归锚', () => {
+  it('workDir 尚未创建（不可达）时按 lexical 判归属，产出 inside 而非 unknown/outside', async () => {
+    const missingWorkDir = `/tmp/spaceassistant-missing-wd-${Date.now()}`
+    await expect(fs.realpath(missingWorkDir)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(classifyWriteTargetScope(`${missingWorkDir}/a.txt`, missingWorkDir)).resolves.toBe('inside-workdir')
+  })
+
+  it('workDir 真实存在时行为不变：子路径 inside、同层外部路径 outside', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'write-scope-real-')))
+    try {
+      await expect(classifyWriteTargetScope(path.join(root, 'a.txt'), root)).resolves.toBe('inside-workdir')
+      await expect(classifyWriteTargetScope(path.join(path.dirname(root), 'outside.txt'), root)).resolves.toBe('outside-workdir')
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
   })
 })
