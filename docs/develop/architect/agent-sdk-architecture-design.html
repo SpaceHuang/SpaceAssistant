@@ -4869,8 +4869,8 @@
       </div>
     </div>
 
-    <script id="archify-guided-views-data" type="application/json">[{"id":"whole-system","label":"三层边界总览","focus":["product-drivers","product-assembly","sdk-runtime","sdk-core","provider-adapters","storage-adapter"],"note":"产品入口只表达意图，Runtime 装配一次调用，SDK Core 执行，Provider 与宿主能力通过端口接入。"},{"id":"sdk-boundary","label":"Agent SDK 边界","focus":["sdk-runtime","sdk-core","safety-policy","capability-registry","history-port","model-port"],"note":"SDK 对外承诺一次可取消、可嵌套、可观察的调用；不依赖 Electron、SQLite 或具体厂商 SDK。"},{"id":"replacement-axis","label":"Provider 替换轴","focus":["sdk-core","model-port","provider-adapters","host-adapters"],"note":"Anthropic、OpenAI 或其他实现只需通过稳定 Provider / Backend 契约接入。"},{"id":"migration-focus","label":"迁移焦点","focus":["product-assembly","sdk-runtime","sdk-core","history-port","capability-registry","host-adapters","storage-adapter"],"note":"先建立 SDK 的物理包边界，再切 History Port、执行闭包和能力注册表，最后收缩主进程与旧入口。"},{"id":"storage-boundary","label":"Storage 边界","focus":["sdk-core","history-port","storage-adapter","product-assembly"],"note":"SDK 规定消息记录与重建语义，产品宿主选择 SQLite、JSONL 或其他实现；Provider 不参与持久化。"}]</script>
-    <script id="archify-source-evidence-data" type="application/json">{"schemaVersion":1,"verified":true,"repository":{"url":"https://github.com/SpaceHuang/SpaceAssistant","revision":"ce5582ba98dbf5aa608aff004c3d53a2e143df42","shortRevision":"ce5582b"},"referenceCount":25,"nodes":{"product-drivers":[{"path":"electron/preload.ts","line":5,"label":"desktop IPC","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/preload.ts#L5"},{"path":"electron/remote/imRemoteAgent.ts","line":44,"label":"remote invocation","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/remote/imRemoteAgent.ts#L44"},{"path":"electron/butler/butlerInvoker.ts","line":94,"label":"automation invoke","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/butler/butlerInvoker.ts#L94"}],"product-assembly":[{"path":"electron/main.ts","line":256,"label":"host startup","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/main.ts#L256"},{"path":"electron/runtime/invocationAssembler.ts","line":134,"label":"current assembly","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/runtime/invocationAssembler.ts#L134"}],"sdk-runtime":[{"path":"electron/runtime/invocationAssembler.ts","line":32,"label":"target role","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/runtime/invocationAssembler.ts#L32"},{"path":"src/shared/agent/invocation.ts","line":250,"label":"host ports","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/src/shared/agent/invocation.ts#L250"}],"sdk-core":[{"path":"electron/toolChatLoop.ts","line":773,"label":"current entry","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/toolChatLoop.ts#L773"},{"path":"docs/develop/architect/product-architecture-design.html","line":1325,"label":"Core storage contract","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/docs/develop/architect/product-architecture-design.html#L1325"}],"safety-policy":[{"path":"electron/confirmation/toolCallGate.ts","line":1,"label":"tool gate","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/confirmation/toolCallGate.ts#L1"},{"path":"src/shared/policy/policyEngine.ts","line":1,"label":"pure policy","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/src/shared/policy/policyEngine.ts#L1"}],"capability-registry":[{"path":"electron/tools/builtinExecutors.ts","line":1439,"label":"current registry","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/tools/builtinExecutors.ts#L1439"},{"path":"electron/effectiveTools.ts","line":12,"label":"effective tools","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/effectiveTools.ts#L12"}],"history-port":[{"path":"src/shared/agent/invocation.ts","line":178,"label":"loaded context","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/src/shared/agent/invocation.ts#L178"},{"path":"src/shared/agent/invocation.ts","line":194,"label":"storage port","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/src/shared/agent/invocation.ts#L194"},{"path":"electron/chatMessageBuild.ts","line":7,"label":"history rebuild adapter","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/chatMessageBuild.ts#L7"}],"model-port":[{"path":"electron/toolChatLoop.ts","line":1,"label":"current vendor coupling","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/toolChatLoop.ts#L1"},{"path":"electron/anthropicClientFactory.ts","line":1,"label":"provider adapter target","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/anthropicClientFactory.ts#L1"}],"provider-adapters":[{"path":"electron/anthropicClientFactory.ts","line":1,"label":"Anthropic","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/anthropicClientFactory.ts#L1"},{"path":"packages/agent-core/src/index.ts","line":1,"label":"SDK facade","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/packages/agent-core/src/index.ts#L1"}],"host-adapters":[{"path":"electron/main.ts","line":628,"label":"product wiring","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/main.ts#L628"},{"path":"electron/runtime/invocationAssembler.ts","line":294,"label":"port wiring","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/runtime/invocationAssembler.ts#L294"}],"storage-adapter":[{"path":"electron/database/operations.ts","line":383,"label":"message read","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/database/operations.ts#L383"},{"path":"electron/database/operations.ts","line":485,"label":"turn context","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/database/operations.ts#L485"},{"path":"electron/database/sqliteStore.ts","line":3,"label":"SQLite binding","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/ce5582ba98dbf5aa608aff004c3d53a2e143df42/electron/database/sqliteStore.ts#L3"}]}}</script>
+    <script id="archify-guided-views-data" type="application/json">[{"id":"whole-system","label":"三层边界总览","focus":["product-drivers","product-assembly","sdk-runtime","sdk-core","provider-adapters","storage-adapter"],"note":"产品入口只表达意图，Runtime 装配一次调用，SDK Core 执行，Provider 与宿主能力通过端口接入。"},{"id":"sdk-boundary","label":"Agent SDK 边界","focus":["sdk-runtime","sdk-core","safety-policy","capability-registry","history-port","model-port"],"note":"SDK 对外承诺一次可取消、可嵌套、可观察的调用；不依赖 Electron、SQLite 或具体厂商 SDK。"},{"id":"replacement-axis","label":"Provider 替换轴","focus":["sdk-core","model-port","provider-adapters","host-adapters"],"note":"Anthropic、OpenAI 或其他实现只需通过稳定 Provider / Backend 契约接入。"},{"id":"migration-focus","label":"迁移焦点","focus":["product-assembly","sdk-runtime","sdk-core","history-port","capability-registry","host-adapters","storage-adapter"],"note":"V0–V3 已完成；四 lane 统一经 Hosted Runtime，canonical History 为真源，旧执行/Provider/History 迁移路径已下线；D0–D4 owner、证据与路由回滚边界已验收。"},{"id":"storage-boundary","label":"Storage 边界","focus":["sdk-core","history-port","storage-adapter","product-assembly"],"note":"SDK 规定消息记录与重建语义，产品宿主选择 SQLite、JSONL 或其他实现；Provider 不参与持久化。"}]</script>
+    <script id="archify-source-evidence-data" type="application/json">{"schemaVersion":1,"verified":true,"repository":{"url":"https://github.com/SpaceHuang/SpaceAssistant","revision":"b2b2f4f3fec63ad94ce500e38f435f15567a3eeb","shortRevision":"b2b2f4f"},"referenceCount":24,"nodes":{"product-drivers":[{"path":"electron/preload.ts","line":5,"label":"desktop IPC","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/electron/preload.ts#L5"},{"path":"electron/remote/imRemoteAgent.ts","line":44,"label":"remote invocation","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/electron/remote/imRemoteAgent.ts#L44"},{"path":"electron/butler/butlerInvoker.ts","line":94,"label":"automation invoke","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/electron/butler/butlerInvoker.ts#L94"}],"product-assembly":[{"path":"electron/main.ts","line":256,"label":"host startup","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/electron/main.ts#L256"},{"path":"electron/runtime/invocationAssembler.ts","line":134,"label":"current assembly","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/electron/runtime/invocationAssembler.ts#L134"}],"sdk-runtime":[{"path":"electron/runtime/invocationAssembler.ts","line":32,"label":"target role","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/electron/runtime/invocationAssembler.ts#L32"},{"path":"src/shared/agent/invocation.ts","line":250,"label":"host ports","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/src/shared/agent/invocation.ts#L250"}],"sdk-core":[{"path":"packages/agent-sdk/src/turn.ts","line":1,"label":"Hosted turn contract","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/packages/agent-sdk/src/turn.ts#L1"},{"path":"packages/agent-sdk/src/history.ts","line":1,"label":"canonical History port","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/packages/agent-sdk/src/history.ts#L1"}],"safety-policy":[{"path":"packages/agent-sdk/src/safetyGate.ts","line":1,"label":"SDK safety gate","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/packages/agent-sdk/src/safetyGate.ts#L1"},{"path":"electron/confirmation/agentSdkSafetyPolicy.ts","line":1,"label":"host policy adapter","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/electron/confirmation/agentSdkSafetyPolicy.ts#L1"}],"capability-registry":[{"path":"electron/tools/registeredAgentTurnTools.ts","line":1,"label":"registered tool adapter","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/electron/tools/registeredAgentTurnTools.ts#L1"},{"path":"packages/agent-sdk/src/capability.ts","line":1,"label":"capability registry","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/packages/agent-sdk/src/capability.ts#L1"}],"history-port":[{"path":"packages/agent-sdk/src/history.ts","line":1,"label":"History contract","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/packages/agent-sdk/src/history.ts#L1"},{"path":"electron/runtime/sqliteAgentHistory.ts","line":1,"label":"SQLite History adapter","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/electron/runtime/sqliteAgentHistory.ts#L1"}],"model-port":[{"path":"packages/agent-sdk/src/model.ts","line":1,"label":"canonical model contract","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/packages/agent-sdk/src/model.ts#L1"},{"path":"electron/runtime/hostedTurnHandoff.ts","line":63,"label":"Hosted request handoff","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/electron/runtime/hostedTurnHandoff.ts#L63"}],"provider-adapters":[{"path":"packages/agent-provider-pi-ai/src/index.ts","line":35,"label":"pi-ai Anthropic adapter","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/packages/agent-provider-pi-ai/src/index.ts#L35"},{"path":"electron/runtime/hostedTurnHandoff.ts","line":118,"label":"Hosted provider dispatch","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/electron/runtime/hostedTurnHandoff.ts#L118"}],"host-adapters":[{"path":"electron/main.ts","line":628,"label":"product wiring","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/electron/main.ts#L628"},{"path":"electron/runtime/invocationAssembler.ts","line":294,"label":"port wiring","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/electron/runtime/invocationAssembler.ts#L294"}],"storage-adapter":[{"path":"electron/database/operations.ts","line":383,"label":"message read","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/electron/database/operations.ts#L383"},{"path":"electron/database/operations.ts","line":485,"label":"turn context","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/electron/database/operations.ts#L485"},{"path":"electron/database/sqliteStore.ts","line":3,"label":"SQLite binding","href":"https://github.com/SpaceHuang/SpaceAssistant/blob/b2b2f4f3fec63ad94ce500e38f435f15567a3eeb/electron/database/sqliteStore.ts#L3"}]}}</script>
     <div class="guided-views no-print" id="guided-views" hidden aria-label="Guided diagram views">
       <button id="guided-view-prev" type="button" aria-label="Previous guided view" title="Previous guided view ([)">&#8592;</button>
       <div class="guided-view-copy">
@@ -4997,20 +4997,20 @@
         <text data-detail="fine" x="685" y="174" class="t-backend" font-size="7" text-anchor="middle">唯一装配点</text>
         </g>
 
-        <g id="node-sdk-core" data-node-id="sdk-core" data-node-label="Agent SDK Core" tabindex="0" role="button" aria-label="Focus Agent SDK Core, Invocation · context · tool loop, AGENT SDK · 可复制的 Agent 执行库" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Invocation · context · tool loop" data-node-tag="无 Electron / SQLite / vendor 依赖" data-node-context="AGENT SDK · 可复制的 Agent 执行库">
-          <title>Agent SDK Core · Invocation · context · tool loop · AGENT SDK · 可复制的 Agent 执行库 · 无 Electron / SQLite / vendor 依赖</title>
+        <g id="node-sdk-core" data-node-id="sdk-core" data-node-label="Agent SDK Core" tabindex="0" role="button" aria-label="Focus Agent SDK Core, Invocation · lifecycle · model stream, AGENT SDK · 可复制的 Agent 执行库" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Invocation · lifecycle · model stream" data-node-tag="SDK Runtime 已接管完整 turn" data-node-context="AGENT SDK · 可复制的 Agent 执行库">
+          <title>Agent SDK Core · Invocation · lifecycle · model stream · AGENT SDK · 可复制的 Agent 执行库 · SDK Runtime 已接管完整 turn</title>
           <rect x="580" y="280" width="210" height="88" rx="6" class="c-mask"/>
           <rect x="580" y="280" width="210" height="88" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(586 286) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-detail-anchor x="685" y="322" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Agent SDK Core</text>
-        <text data-detail="context" x="685" y="338" class="t-muted" font-size="9" text-anchor="middle">Invocation · context · tool loop</text>
-        <text data-detail="fine" x="685" y="360" class="t-backend" font-size="7" text-anchor="middle">无 Electron / SQLite / vendor 依赖</text>
+        <text data-detail="context" x="685" y="338" class="t-muted" font-size="9" text-anchor="middle">Invocation · lifecycle · model stream</text>
+        <text data-detail="fine" x="685" y="360" class="t-backend" font-size="7" text-anchor="middle">SDK Runtime 已接管完整 turn</text>
         </g>
 
-        <g id="node-safety-policy" data-node-id="safety-policy" data-node-label="Safety Boundary" tabindex="0" role="button" aria-label="Focus Safety Boundary, Policy · Gate · Answerer, AGENT SDK · 可复制的 Agent 执行库" aria-pressed="false" data-node-kind="security" data-node-sublabel="Policy · Gate · Answerer" data-node-tag="不可绕过 / fail-closed" data-node-context="AGENT SDK · 可复制的 Agent 执行库">
-          <title>Safety Boundary · Policy · Gate · Answerer · AGENT SDK · 可复制的 Agent 执行库 · 不可绕过 / fail-closed</title>
+        <g id="node-safety-policy" data-node-id="safety-policy" data-node-label="Safety Boundary" tabindex="0" role="button" aria-label="Focus Safety Boundary, Policy · Gate · Answerer, AGENT SDK · 可复制的 Agent 执行库" aria-pressed="false" data-node-kind="security" data-node-sublabel="Policy · Gate · Answerer" data-node-tag="SafetyGate + 宿主策略复检" data-node-context="AGENT SDK · 可复制的 Agent 执行库">
+          <title>Safety Boundary · Policy · Gate · Answerer · AGENT SDK · 可复制的 Agent 执行库 · SafetyGate + 宿主策略复检</title>
           <rect x="850" y="100" width="190" height="82" rx="6" class="c-mask"/>
           <rect x="850" y="100" width="190" height="82" rx="6" class="c-security" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(856 106) scale(0.6875)">
@@ -5019,7 +5019,7 @@
           </g>
           <text data-detail-anchor x="945" y="139" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Safety Boundary</text>
         <text data-detail="context" x="945" y="155" class="t-muted" font-size="9" text-anchor="middle">Policy · Gate · Answerer</text>
-        <text data-detail="fine" x="945" y="174" class="t-security" font-size="7" text-anchor="middle">不可绕过 / fail-closed</text>
+        <text data-detail="fine" x="945" y="174" class="t-security" font-size="7" text-anchor="middle">SafetyGate + 宿主策略复检</text>
         </g>
 
         <g id="node-capability-registry" data-node-id="capability-registry" data-node-label="Capability Registry" tabindex="0" role="button" aria-label="Focus Capability Registry, Tools · Shell · Browser · MCP, AGENT SDK · 可复制的 Agent 执行库" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Tools · Shell · Browser · MCP" data-node-tag="宿主能力经端口注入" data-node-context="AGENT SDK · 可复制的 Agent 执行库">
@@ -5046,8 +5046,8 @@
         <text data-detail="fine" x="685" y="550" class="t-backend" font-size="7" text-anchor="middle">SDK 语义 / 不含 SQLite</text>
         </g>
 
-        <g id="node-model-port" data-node-id="model-port" data-node-label="Model / Backend Port" tabindex="0" role="button" aria-label="Focus Model / Backend Port, Normalized stream · tool calls · usage, AGENT SDK · 可复制的 Agent 执行库" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Normalized stream · tool calls · usage" data-node-tag="稳定替换接口" data-node-context="AGENT SDK · 可复制的 Agent 执行库">
-          <title>Model / Backend Port · Normalized stream · tool calls · usage · AGENT SDK · 可复制的 Agent 执行库 · 稳定替换接口</title>
+        <g id="node-model-port" data-node-id="model-port" data-node-label="Model / Backend Port" tabindex="0" role="button" aria-label="Focus Model / Backend Port, Normalized stream · tool calls · usage, AGENT SDK · 可复制的 Agent 执行库" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Normalized stream · tool calls · usage" data-node-tag="Canonical request · stream · usage" data-node-context="AGENT SDK · 可复制的 Agent 执行库">
+          <title>Model / Backend Port · Normalized stream · tool calls · usage · AGENT SDK · 可复制的 Agent 执行库 · Canonical request · stream · usage</title>
           <rect x="850" y="470" width="190" height="82" rx="6" class="c-mask"/>
           <rect x="850" y="470" width="190" height="82" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(856 476) scale(0.6875)">
@@ -5055,19 +5055,19 @@
           </g>
           <text data-detail-anchor x="945" y="509" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Model / Backend Port</text>
         <text data-detail="context" x="945" y="525" class="t-muted" font-size="7.9" text-anchor="middle">Normalized stream · tool calls · usage</text>
-        <text data-detail="fine" x="945" y="544" class="t-backend" font-size="7" text-anchor="middle">稳定替换接口</text>
+        <text data-detail="fine" x="945" y="544" class="t-backend" font-size="7" text-anchor="middle">Canonical request · stream · usage</text>
         </g>
 
-        <g id="node-provider-adapters" data-node-id="provider-adapters" data-node-label="Provider Adapters" tabindex="0" role="button" aria-label="Focus Provider Adapters, Anthropic · OpenAI · other backends, PROVIDER / BACKEND REPLACEMENT · 可替换实现" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="Anthropic · OpenAI · other backends" data-node-tag="可替换实现" data-node-context="PROVIDER / BACKEND REPLACEMENT · 可替换实现">
-          <title>Provider Adapters · Anthropic · OpenAI · other backends · PROVIDER / BACKEND REPLACEMENT · 可替换实现 · 可替换实现</title>
+        <g id="node-provider-adapters" data-node-id="provider-adapters" data-node-label="Provider Adapters" tabindex="0" role="button" aria-label="Focus Provider Adapters, Anthropic · pi-ai · canonical SPI, PROVIDER / BACKEND REPLACEMENT · 可替换实现" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="Anthropic · pi-ai · canonical SPI" data-node-tag="Anthropic production route via pi-ai" data-node-context="PROVIDER / BACKEND REPLACEMENT · 可替换实现">
+          <title>Provider Adapters · Anthropic · pi-ai · canonical SPI · PROVIDER / BACKEND REPLACEMENT · 可替换实现 · Anthropic production route via pi-ai</title>
           <rect x="1100" y="467" width="210" height="88" rx="6" class="c-mask"/>
           <rect x="1100" y="467" width="210" height="88" rx="6" class="c-cloud" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(1106 473) scale(0.6875)">
             <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
           </g>
           <text data-detail-anchor x="1205" y="509" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Provider Adapters</text>
-        <text data-detail="context" x="1205" y="525" class="t-muted" font-size="9" text-anchor="middle">Anthropic · OpenAI · other backends</text>
-        <text data-detail="fine" x="1205" y="547" class="t-cloud" font-size="7" text-anchor="middle">可替换实现</text>
+        <text data-detail="context" x="1205" y="525" class="t-muted" font-size="9" text-anchor="middle">Anthropic · pi-ai · canonical SPI</text>
+        <text data-detail="fine" x="1205" y="547" class="t-cloud" font-size="7" text-anchor="middle">Anthropic production route via pi-ai</text>
         </g>
 
         <g id="node-host-adapters" data-node-id="host-adapters" data-node-label="Host Adapters" tabindex="0" role="button" aria-label="Focus Host Adapters, Electron · Delivery · Credentials, PRODUCT HOST · SpaceAssistant 产品宿主" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Electron · Delivery · Credentials" data-node-tag="产品实现端口" data-node-context="PRODUCT HOST · SpaceAssistant 产品宿主">
@@ -5353,61 +5353,61 @@
 
       <div class="card">
         <div class="card-header">
-          <div class="card-dot amber"></div>
+          <div class="card-dot emerald"></div>
           <h3>偏差 D0 · 目录与包边界</h3>
         </div>
         <ul>
-          <li>&bull; 现状：packages/agent-core 只是门面，实际契约仍从 src/shared/agent 转发；Core 在 electron/toolChatLoop.ts，Storage 与 Provider 也在宿主树</li>
-          <li>&bull; 理想：packages/agent-sdk 内部自洽拥有 core / history / ports；Electron 只保留 assembly 与 adapters</li>
-          <li>&bull; 验收：SDK 包闭包零 electron / node:sqlite；第二个宿主只依赖 SDK 公共入口</li>
+          <li>&bull; 状态：已满足 SDK 包边界与入口闭包；Owner：Agent SDK + Electron composition</li>
+          <li>&bull; 证据：packages/agent-sdk 独立 typecheck；入口闭包零 Electron / shared / Renderer / SQLite；shared 单向依赖护栏通过</li>
+          <li>&bull; 回滚：只回滚 Hosted 执行路由；不移除 SDK 公共包或依赖护栏</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
-          <div class="card-dot amber"></div>
+          <div class="card-dot emerald"></div>
           <h3>偏差 D1 · 执行契约</h3>
         </div>
         <ul>
-          <li>&bull; 现状：Agent 入口、装配、循环、工具和存储横跨 electron / src/shared</li>
-          <li>&bull; 理想：SDK 只暴露 Invocation、History Port、Provider Port、Capability Port 等稳定契约</li>
-          <li>&bull; 验收：SDK 可脱离 Electron 构建、测试，并可被第二个宿主接入</li>
+          <li>&bull; 状态：四 lane 与嵌套 Approval 均通过 Hosted SDK 执行；宿主负责 admission、审批与产品投影</li>
+          <li>&bull; 证据：Desktop / Feishu / WeChat / Automation 真实 caller 与 fail-stop；SDK turn lifecycle、取消及 terminal tests</li>
+          <li>&bull; 回滚：按 lane 回退执行路由；已提交 History 与副作用不重放</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
-          <div class="card-dot rose"></div>
+          <div class="card-dot emerald"></div>
           <h3>偏差 D2 · Provider 替换</h3>
         </div>
         <ul>
-          <li>&bull; 现状：toolChatLoop 与 Anthropic client 仍存在直接耦合</li>
-          <li>&bull; 理想：ModelProvider 只暴露规范化流、工具调用、用量和错误</li>
-          <li>&bull; 验收：替换 Provider 不改 Core 与产品 Driver</li>
+          <li>&bull; 状态：SDK 使用规范化 ModelProvider SPI；生产 route 仅开放白名单 Anthropic，Chat / Responses 保持 fake contract；Hosted request 由宿主映射为 canonical SDK request，pi-ai adapter 负责 Anthropic wire</li>
+          <li>&bull; Owner：packages/agent-provider-pi-ai + Electron Hosted request adapter。证据：四 lane 与嵌套 Approval Hosted caller、Anthropic mock-wire golden、route 冻结、stream/tool/usage 与拒绝矩阵；Electron/SDK typecheck 和 package closure 门禁通过</li>
+          <li>&bull; 回滚：只切换执行 route/provider adapter；V2-C lane 不恢复 legacy 安全门控，不重放已提交 History/副作用</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
-          <div class="card-dot slate"></div>
+          <div class="card-dot emerald"></div>
           <h3>偏差 D3 · Storage 边界</h3>
         </div>
         <ul>
-          <li>&bull; 现状：messages / turns / events 的读取、重建和 SQLite 查询分散在 electron</li>
-          <li>&bull; 理想：SDK 定义 Message / Turn / Event 记录语义与 History Port；宿主实现存储</li>
-          <li>&bull; 验收：内存或 JSONL 实现可重建同一份 canonical history；切换 SQLite 不改 Core</li>
+          <li>&bull; 状态：canonical HistoryPort 驱动 Hosted replay、SQLite 重建与 restart recovery；SessionEvent/JSONL 为兼容投影</li>
+          <li>&bull; 证据：四 lane History caller、SQLite crash/restart、compaction、retry/outbox 与 terminal recovery tests</li>
+          <li>&bull; 回滚：只回退 Runtime 读兼容 adapter；不得双写或重放已提交副作用</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
-          <div class="card-dot orange"></div>
+          <div class="card-dot emerald"></div>
           <h3>偏差 D4 · 能力与安全</h3>
         </div>
         <ul>
-          <li>&bull; 现状：工具注册、确认、策略、宿主副作用分散在主进程</li>
-          <li>&bull; 理想：Capability Registry 与 Safety Boundary 成为 SDK 端口</li>
-          <li>&bull; 验收：未注册能力不可执行；高风险调用统一 fail-closed</li>
+          <li>&bull; 状态：四 lane 与嵌套 Approval 共用 CapabilityRegistry、SafetyGate、permit-bound ExecutionPort；V2-C 已收口</li>
+          <li>&bull; 证据：initial/recheck、撤销、身份漂移、fail-stop、确认取消与零 executor 调用聚焦 tests</li>
+          <li>&bull; Owner / 回滚：SDK Safety contracts + lane Host adapters；保持 deny/fail-closed，不恢复旧 gate</li>
         </ul>
       </div>
 
