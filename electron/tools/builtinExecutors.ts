@@ -1065,14 +1065,44 @@ function mapOpenedFileGrepOutput(output: string, filePath: string, outputMode: G
   }).join('\n')
 }
 
+// E2(方案 §3.6.4):降级也不可用时的 Agent 侧替代路径,统一附在分层文案末尾。
+const GREP_ALTERNATIVE_SEARCH_HINT =
+  '替代路径：用 list_directory + read_file 逐层查看文件，或用 run_shell 调用系统搜索（Windows findstr / Select-String，macOS grep / mdfind）。'
+
+/**
+ * E1(评审 P1-2 修订):rg 不可用文案按 source × reason 分层,主进程直接产出
+ * (electron 无 i18n 基建,不引入);含动作指引、不拼原始诊断枚举——枚举经
+ * 失败结果 data.errorClass/reason 走 R8 机器可读通道。环境拦截类原因不得
+ * 给「重新安装应用」指引(重装与拦截无关,方案 §3.6.3)。
+ */
 export function grepRipgrepUnavailableUserMessage(
   resolved: Pick<ReturnType<typeof resolveRipgrepBinary>, 'source' | 'platform' | 'arch'>,
   reason: RipgrepUnavailableReason
 ): string {
-  if (resolved.source === 'development') {
-    return `开发态内置 ripgrep 未准备（${reason}）。请执行 npm run prepare:rg -- --target=${resolved.platform}-${resolved.arch} 后重启应用。`
+  const target = `${resolved.platform}-${resolved.arch}`
+  // D1 瞬时资源(fd 耗尽):只提示稍后重试,不给任何永久性指引
+  if (reason === 'resource_exhausted') {
+    return `内置 ripgrep 本次启动失败（系统临时资源不足，通常稍后自行恢复），请稍后重试本次搜索。${GREP_ALTERNATIVE_SEARCH_HINT}`
   }
-  return `内置 ripgrep 不可用（${reason}）。请重新安装应用后重试。`
+  // D4 平台不支持:如实告知
+  if (reason === 'unsupported') {
+    return `当前平台（${target}）不在内置 ripgrep 支持面内（支持 macOS x64/arm64、Windows x64），重装或重试均无效。${GREP_ALTERNATIVE_SEARCH_HINT}`
+  }
+  if (resolved.source === 'development') {
+    // 开发态主因是未准备(worktree/新克隆默认开局);启动被拦截类成因补安全软件提示
+    const interception = reason === 'exec_format' || reason === 'spawn_failed'
+      ? '若已准备仍失败，检查安全软件是否拦截了 rg。'
+      : ''
+    return `开发态内置 ripgrep 未就绪。请执行 npm run prepare:rg -- --target=${target} 后重启应用；新 worktree 首次 npm run dev 会自动准备。${interception}${GREP_ALTERNATIVE_SEARCH_HINT}`
+  }
+  // 打包态:D3 启动被拦截 vs D2 文件缺失/权限,给对应处置
+  if (reason === 'exec_format' || reason === 'spawn_failed') {
+    const platformHint = resolved.platform === 'darwin'
+      ? 'macOS 可在终端执行 xattr -cr（拖入本应用）去除隔离属性后重新打开。'
+      : 'Windows 可在安全软件中将本应用的 rg 加入白名单后重试。'
+    return `内置 ripgrep 未能启动，通常被安全软件/EDR 拦截。${platformHint}${GREP_ALTERNATIVE_SEARCH_HINT}`
+  }
+  return `内置 ripgrep 文件缺失或不可访问，通常被安全软件隔离或删除；请在安全软件的隔离区/白名单中恢复本应用的 rg 后重试，重装通常无效。${GREP_ALTERNATIVE_SEARCH_HINT}`
 }
 
 // §3.8 降级矩阵(方案 E5 定案):「rg 起不来」才降级;「rg 跑了但报错」不降级。
@@ -1653,15 +1683,26 @@ export const grepExecutor: ToolExecutor = {
       // 降级执行(方案 §3.2/E5):修复后的 grepFallbackJs 自动兜底,不询问、无开关;
       // 产出必须带降级标识前缀 + 边界摘要,scope 与 rg 同源(engine: 'walk')。
       const runFallbackSearch = async (reason: RipgrepUnavailableReason): Promise<ToolExecutorResult> => {
-        const fallback = await grepFallbackJs(
-          ctx.workDir,
-          absSearch,
-          pattern,
-          gargs,
-          ctx.signal,
-          (message) => ctx.sendProgress('grep', message),
-          timeoutMs
-        )
+        let fallback: Awaited<ReturnType<typeof grepFallbackJs>>
+        try {
+          fallback = await grepFallbackJs(
+            ctx.workDir,
+            absSearch,
+            pattern,
+            gargs,
+            ctx.signal,
+            (message) => ctx.sendProgress('grep', message),
+            timeoutMs
+          )
+        } catch {
+          // 降级整体失败:回落 E1 分层文案 + E2 替代路径,绝不静默(方案 §3.8)
+          return {
+            success: false,
+            error: grepRipgrepUnavailableUserMessage(resolved, reason),
+            data: { errorClass: 'GREP_RIPGREP_UNAVAILABLE', reason },
+            duration: Date.now() - started
+          }
+        }
         const plan = planGrepInvocation({ workDir: ctx.workDir, searchPath: absSearch, args: gargs, engine: 'walk' })
         const scope: GrepScope = {
           ...plan.scope,
@@ -1707,7 +1748,7 @@ export const grepExecutor: ToolExecutor = {
           message: createGrepRipgrepUnavailableDiagnostic(resolved, reason)
         })
         if (resolveGrepEngine(reason).engine === 'walk') return await runFallbackSearch(reason)
-        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, reason), duration: Date.now() - started }
+        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, reason), data: { errorClass: 'GREP_RIPGREP_UNAVAILABLE', reason }, duration: Date.now() - started }
       }
       // 出口②:inspect 失败(not_found 等)→ 场景 B/D2 最高频路径,同经单一判定点
       const availability = await inspectRipgrepBinary(resolved)
@@ -1717,7 +1758,7 @@ export const grepExecutor: ToolExecutor = {
           message: createGrepRipgrepUnavailableDiagnostic(resolved, availability.reason)
         })
         if (resolveGrepEngine(availability.reason).engine === 'walk') return await runFallbackSearch(availability.reason)
-        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, availability.reason), duration: Date.now() - started }
+        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, availability.reason), data: { errorClass: 'GREP_RIPGREP_UNAVAILABLE', reason: availability.reason }, duration: Date.now() - started }
       }
       const text = await grepWithRg(
         resolved.path,
@@ -1785,7 +1826,7 @@ export const grepExecutor: ToolExecutor = {
           message: createGrepRipgrepUnavailableDiagnostic(resolved, text.reason)
         })
         if (resolveGrepEngine(text.reason).engine === 'walk') return await runFallbackSearch(text.reason)
-        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, text.reason), duration: Date.now() - started }
+        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, text.reason), data: { errorClass: 'GREP_RIPGREP_UNAVAILABLE', reason: text.reason }, duration: Date.now() - started }
       }
       if (text.kind === 'cancelled') return { success: false, error: `${text.partialOutput}\n[已取消]`, duration: Date.now() - started }
       if (text.kind === 'timeout') return { success: false, error: `${text.partialOutput}\n[搜索超时，仅展示部分结果]`, duration: Date.now() - started }

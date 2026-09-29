@@ -261,7 +261,9 @@ describe('grepExecutor 降级接线(三出口收敛 + 降级标识,AC12/AC14/T-B
     }
     const res = await grepExecutor.execute(input, ctx)
     expect(res.success).toBe(false)
-    // 不降级:无降级标识(Phase 4 分层文案落地后再约束具体措辞,此处只锁矩阵行为)
+    // 不降级:无降级标识
     expect(String(res.error)).not.toContain('[降级搜索：')
+    // R8 机器可读码随失败结果透出,供渲染端走 errorTranslator
+    expect((res.data as { errorClass?: string } | undefined)?.errorClass).toBe('GREP_RIPGREP_UNAVAILABLE')
   })
 })
