@@ -4,7 +4,10 @@ import path from 'path'
 import crypto from 'crypto'
 import { describe, expect, it } from 'vitest'
 
-const afterPack = require('../../scripts/after-pack.cjs') as { copyBundledRipgrep: (context: any) => void }
+const afterPack = require('../../scripts/after-pack.cjs') as {
+  copyBundledRipgrep: (context: any) => void
+  copyOrVerifyLicense: (source: string, target: string, label: string) => void
+}
 
 describe('afterPack bundled ripgrep', () => {
   async function fixtureContext(out: string, arch: number) {
@@ -40,5 +43,17 @@ describe('afterPack bundled ripgrep', () => {
     const context = await fixtureContext(out, 3)
     await expect(Promise.resolve().then(() => afterPack.copyBundledRipgrep(context))).rejects.toThrow(/unsupported ripgrep target/)
     await fs.rm(out, { recursive: true, force: true })
+  })
+
+  it('重复打包时允许完全相同的预置许可证，并拒绝内容不一致', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-after-pack-license-'))
+    const source = path.join(dir, 'source')
+    const target = path.join(dir, 'target')
+    await fs.writeFile(source, 'license')
+    await fs.copyFile(source, target)
+    expect(() => afterPack.copyOrVerifyLicense(source, target, 'COPYING')).not.toThrow()
+    await fs.writeFile(target, 'different')
+    expect(() => afterPack.copyOrVerifyLicense(source, target, 'COPYING')).toThrow(/packaged ripgrep license mismatch: COPYING/)
+    await fs.rm(dir, { recursive: true, force: true })
   })
 })
