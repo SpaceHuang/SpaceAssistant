@@ -1424,7 +1424,7 @@ function classifyDirectoryError(e: unknown): DirectoryErrorClass | 'ABORTED' {
 | C1 | 默认忽略清单归一为 `GREP_DEFAULT_IGNORES`（7 成员）；**隐藏条目语义**按 §4.6.1 实现（rg 侧 `--hidden` 仅在解除时传、walk 侧补对称跳过）；**敏感排除模式由规则生成**（`grepSensitiveExcludes()`，与 `shellSensitivePaths` 同源、两引擎共用） | `electron/tools/builtinExecutors.ts`、`src/shared/builtinToolDefinitions.ts` |
 | C2 | `GrepScope` 统计 + `no_match` 文案与状态区分（含敏感条目跳过标注） | `src/shared/grepScope.ts`（新）、`builtinExecutors.ts` |
 | C3 | 显式路径语义 + `include_ignored` 开关；**grep 首次消费 `isSensitivePath`**（遍历排除、显式点名解除、`include_ignored` 不解除） | 同上 |
-| C4 | walk 回退同样统计（`engine: 'walk'`）+ 隐藏条目与敏感路径的对称判定 | 同上 |
+| C4 | walk 回退同样统计（`engine: 'walk'`）+ 隐藏条目与敏感路径的对称判定（2026-09-29：已随降级接线落地可达；**降级路径须填充 `GrepScope` 全部字段**，见 grep-abort 方案 §3.4） | 同上 |
 | C5 | 测试 T-R6-1 ~ T-R6-6（**先改测试再改实现**） | `electron/tools/ripgrepExecutorProcess.test.ts` 等 |
 | C6 | `normalizeGrepArgs` 单一入口 + 执行器改用 | `electron/tools/builtinExecutors.ts` |
 | C7 | 测试 T-R7-1 ~ T-R7-3 | 新增测试文件 |

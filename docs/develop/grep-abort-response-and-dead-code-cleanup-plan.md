@@ -948,3 +948,21 @@ git diff --check
 | **R8 模式与渲染端 i18n（P1-2）** | `electron/tools/builtinExecutors.ts:420`（机器可读 `data.errorClass`，文案由渲染端 errorTranslator 取 i18n）；`src/renderer/utils/errorTranslator.ts`；`electron/**` 无 i18next 引用 |
 | **vitest 收集范围（P1-3）** | `vitest.config.mts` 三个项目：`electron`（include `electron/**/*.test.ts` **与** `packages/agent-core/**/*.test.ts`）、`renderer`（`src/**/*.test.{ts,tsx}`）、`renderer-perf`（`src/**/*.perf.*.test.tsx`）——**`scripts/**` 在任何项目都不被收集** |
 | 历史测试资产 | 据评审复核：`builtinExecutors.grepFallback.test.ts`（**16 个 `it`**，删除 287 行）、`builtinExecutors.grepDispatch.test.ts`，随 `d7880719` 删除（message 含 `observable fallback`）。**首轮评审记为 18 用例，已订正为 16**；本方案独立核实的部分为「`d7880719` 中已不含该文件」 |
+
+## 九、实施记录（2026-09-29，worktree `.worktrees/feat-grep-abort-fallback`，分支 `feat/grep-abort-fallback`）
+
+按建议顺序 **Phase 0 → 1 → 3 → 4 → 2a** 全部落地，各阶段独立提交（TDD 红→绿）：
+
+| 阶段 | 提交 | 交付 | 测试 |
+|---|---|---|---|
+| Phase 0 | `e9d58480` | `scripts/ensure-dev-ripgrep.mjs`（复用 `prepareTarget`，只备当前平台，失败告警 + exit 0）+ `predev` 接线 | `ensureDevRipgrep.test.ts` 8 例；实机验证：首跑自动下载就位（rg 14.1.1）、二跑幂等零网络 |
+| Phase 1 | `7657c546` | `grepWithRg` 终止纪律：`ProcessKiller` 注入缝（适配二）、spawn `detached: darwin`（适配一）、`ProcessSupervisor` + `requestTermination` + 2000ms 兜底强制结算、`terminated` 字段、`grep.terminate` 日志（forced=warn） | `grepAbortResponse.test.ts` T-A1~T-A6 + 护栏 20（T-A7 detached 静态门禁）；T-A4 fake timers 定时器无残留 |
+| Phase 3 | `877900c1` | `grepFallbackJs` 六处改造（GrepFallbackResult 结构化边界上报、先 stat 后读、2 MiB、signal、读失败计数采样、时间上界、GREP_DEFAULT_IGNORES 单一真相源）+ `resolveGrepEngine` 单一判定点 + §3.8 矩阵 + 降级标识前缀 | `grepFallback.test.ts` T-B1~T-B6/矩阵/三出口 + T-B8（T-R6-5 适配 `.output`）+ 护栏 9 追加；pathAlias 两例由旧「只报错」契约改为降级契约 |
+| Phase 4 | `7a82e9f2` | E1 文案按 source×reason 分层（不拼枚举、拦截类不给「重装」）、E2 替代路径、R8 `data.errorClass`；降级整体失败回落分层文案 | `grepUnavailableMessage.test.ts` 表驱动 + 负面断言 |
+| Phase 2a | `1d4cab51` | `ctx.chatSignal`（方案 a）：grep 合成 `AbortSignal.any([signal, chatSignal])`，rg 路径与降级路径共用；不合并 toolChatLoop 两个独立信号变量 | `grepChatSignal.test.ts` 2 例 |
+
+**历史测试资产处置**：`builtinExecutors.grepFallback.test.ts`（16 it，随 `d7880719` 删除）未逐例恢复——其断言锚定已废弃的 `Promise<string>` 返回契约；新契约下的等价行为由 T-B 系列新用例覆盖（Phase 3 提交说明已登记）。
+
+**文档同步**：`ripgrep-integration-technical-design.md`（顶部口径更新横幅 + §0.1 第 18 条「承诺变事实」+ §1 第 3 条 Linux 已知缺口）、`tool-invocation-reliability-improvement-technical-design.md`（C4 落地标注）、`grep-tool-large-file-fallback-optimization-plan.md`（处置改「部分采纳」）。
+
+**本轮未做（按方案登记保留）**：Phase 2b（`executionContext.signal` 全局替换，需先核查全部消费方）；待拍板项 2/4/6/9/10/11/12（`limitReason` 收窄、`data.cancelled` 标记、Linux 支持面 E4、E6 逐层签名、E7 恢复 Skill、E8 隔离属性自修复、E9 Developer ID 签名）；AC12 的「移走 rg 手工验证」以三出口 seam 注入测试覆盖（真实 app 手工验证留待真机）。
