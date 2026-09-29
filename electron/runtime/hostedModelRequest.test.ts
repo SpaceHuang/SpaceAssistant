@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createHostedModelRequest } from './hostedModelRequest'
+import { bindHostedRequiredUserMessage, createHostedModelRequest } from './hostedModelRequest'
 
 describe('createHostedModelRequest', () => {
   it('直接生成完整的 canonical Hosted request', () => {
@@ -41,5 +41,24 @@ describe('createHostedModelRequest', () => {
       ],
       thinking: { enabled: true, effort: 'high' }
     })
+  })
+})
+
+describe('bindHostedRequiredUserMessage', () => {
+  it('binds by canonical content when transcript replay preserved the user message but lost its id', () => {
+    const originalMessages = [{ id: 'current-user', role: 'user' as const, content: 'continue this task' }]
+    const requestMessages = [{ role: 'system' as const, content: 'dynamic prompt' }, { role: 'user' as const, content: 'continue this task' }]
+    expect(bindHostedRequiredUserMessage({ id: 'current-user', originalMessages, requestMessages })).toEqual({
+      id: 'current-user', message: { role: 'user', content: 'continue this task' }
+    })
+  })
+
+  it('rejects missing or ambiguous current-user content', () => {
+    const originalMessages = [{ id: 'current-user', role: 'user' as const, content: 'same' }]
+    expect(bindHostedRequiredUserMessage({ id: 'current-user', originalMessages, requestMessages: [] })).toBeUndefined()
+    expect(bindHostedRequiredUserMessage({
+      id: 'current-user', originalMessages,
+      requestMessages: [{ role: 'user', content: 'same' }, { role: 'user', content: 'same' }]
+    })).toBeUndefined()
   })
 })

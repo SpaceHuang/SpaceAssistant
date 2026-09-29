@@ -176,7 +176,7 @@ import { buildCommandRetryKey, shouldStopToolRetry } from './toolErrorRetryPolic
 import type { ContextMeter } from '../src/shared/contextMeterService'
 import { buildRequestHeaderPayload } from '../src/shared/requestContext'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
-import { createHostedModelRequest } from './runtime/hostedModelRequest'
+import { bindHostedRequiredUserMessage, createHostedModelRequest } from './runtime/hostedModelRequest'
 
 export const DESKTOP_TOOL_LOOP_MAX_ROUNDS = 50
 
@@ -1037,29 +1037,13 @@ async function runToolChatSessionInner(
         ...(apiKey ? { apiKey } : {}),
         signal: chatSignal
       })
-      const currentUser = args.currentUserMessageId
-        ? messagesStripped.find((message) => (message as Anthropic.MessageParam & { id?: string }).id === args.currentUserMessageId)
+      const requiredUserMessage = args.currentUserMessageId
+        ? bindHostedRequiredUserMessage({ id: args.currentUserMessageId, originalMessages: invocationBaseMessages, requestMessages: canonicalRequest.messages })
         : undefined
-      const [requiredUser] = currentUser
-        ? toCanonicalModelMessages([currentUser as unknown as import('../src/shared/api').ClaudeChatMessageWithBlocks])
-        : []
-      const requiredUserMessage = args.currentUserMessageId && requiredUser
-        ? { id: args.currentUserMessageId, message: requiredUser }
-        : undefined
-      const normalizedRequiredUserContent = (message: import('../packages/agent-sdk/src/model').CanonicalModelMessage) => {
-        if (message.role !== 'user') return undefined
-        if (typeof message.content === 'string') return [{ type: 'text', text: message.content }]
-        return message.content
-      }
-      const requestRequiredUser = requiredUserMessage
-        ? [...canonicalRequest.messages].reverse().find((message) => message.role === 'user' &&
-          JSON.stringify(normalizedRequiredUserContent(message)) === JSON.stringify(normalizedRequiredUserContent(requiredUserMessage.message)))
-        : undefined
-      const hasRequiredUser = !requiredUserMessage || requestRequiredUser !== undefined
-      if (args.currentUserMessageId && (!requiredUserMessage || !hasRequiredUser)) {
+      if (args.currentUserMessageId && !requiredUserMessage) {
         throw new HostedTurnHandoffError(new Error('HOSTED_REQUIRED_USER_NOT_IN_REQUEST'))
       }
-      if (hasRequiredUser) {
+      if (!args.currentUserMessageId || requiredUserMessage) {
         try {
           const handoff = await args.onHostedTurnHandoff({
             request: canonicalRequest,
@@ -1072,7 +1056,7 @@ async function runToolChatSessionInner(
             ...(args.applicationAdmission ? { applicationAdmission: args.applicationAdmission } : {}),
             ...(args.deadlineAt !== undefined ? { deadlineAt: args.deadlineAt } : {}),
             ...(args.currentUserMessageId ? { currentUserMessageId: args.currentUserMessageId } : {}),
-            ...(requiredUserMessage && requestRequiredUser ? { requiredUserMessage: { id: requiredUserMessage.id, message: requestRequiredUser } } : {})
+            ...(requiredUserMessage ? { requiredUserMessage } : {})
           })
           if (!handoff) throw new Error('HOSTED_TURN_HANDOFF_MISSING_RESULT')
           return markHostedTurnFinalization(handoff.result, handoff.finalization)

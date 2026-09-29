@@ -1,4 +1,4 @@
-import type { PreparedModelCall } from '../../packages/agent-sdk/src/model'
+import type { CanonicalModelMessage, PreparedModelCall } from '../../packages/agent-sdk/src/model'
 import type { ClaudeContentBlockMessage } from '../toolChatLoop'
 import { toCanonicalModelMessages } from './canonicalHistory'
 
@@ -39,4 +39,21 @@ export function createHostedModelRequest(input: Readonly<{
       ...(input.effort ? { effort: input.effort } : {})
     }
   }
+}
+
+/** Bind the persisted current-user identity to its unique canonical request message. */
+export function bindHostedRequiredUserMessage(input: Readonly<{
+  id: string
+  originalMessages: readonly ClaudeContentBlockMessage[]
+  requestMessages: readonly CanonicalModelMessage[]
+}>): Readonly<{ id: string; message: CanonicalModelMessage }> | undefined {
+  const original = input.originalMessages.find((message) => message.role === 'user' && message.id === input.id)
+  if (!original) return undefined
+  const [required] = toCanonicalModelMessages([original as never])
+  if (!required || required.role !== 'user') return undefined
+  const contentKey = (message: CanonicalModelMessage) => JSON.stringify(message.role === 'user' ? message.content : undefined)
+  const expected = contentKey(required)
+  const matches = input.requestMessages.filter((message) => message.role === 'user' && contentKey(message) === expected)
+  if (matches.length !== 1) return undefined
+  return { id: input.id, message: matches[0]! }
 }
