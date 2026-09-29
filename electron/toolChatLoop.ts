@@ -3328,6 +3328,9 @@ async function runToolChatSessionInner(
               })
             },
             signal,
+            // Phase 2a（方案 §4）：grep 直接感知聊天中止；仅新增信号来源，
+            // 不合并 signal/chatSignal 两个独立变量（既有「仅工具取消 vs 整聊取消」判定依赖二者）
+            chatSignal,
             fileStateCache: fileCache,
             toolsConfig,
             browserConfig,

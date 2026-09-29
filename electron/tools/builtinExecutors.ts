@@ -1680,6 +1680,12 @@ export const grepExecutor: ToolExecutor = {
     } catch { return { success: false, error: '读取许可校验失败', diagnostic: { caseId: 'read-permit-validation-error', retryable: false, category: 'integration-violation' }, duration: Date.now() - started } }
     try {
       const timeoutMs = (ctx.toolsConfig.grepTimeoutSec ?? 60) * 1000
+      // Phase 2a（方案 §2.4 D1）：grep 直接感知聊天中止——工具级 signal 之外合成
+      // chatSignal,不再依赖 cancelAllToolsForRequest 隐式联动链;不改 ctx.signal
+      // 的全局语义(2b 全局替换另行核查),降级路径共用同一信号源。
+      const grepSignal = ctx.chatSignal
+        ? AbortSignal.any([ctx.signal, ctx.chatSignal])
+        : ctx.signal
       // 降级执行(方案 §3.2/E5):修复后的 grepFallbackJs 自动兜底,不询问、无开关;
       // 产出必须带降级标识前缀 + 边界摘要,scope 与 rg 同源(engine: 'walk')。
       const runFallbackSearch = async (reason: RipgrepUnavailableReason): Promise<ToolExecutorResult> => {
@@ -1690,7 +1696,7 @@ export const grepExecutor: ToolExecutor = {
             absSearch,
             pattern,
             gargs,
-            ctx.signal,
+            grepSignal,
             (message) => ctx.sendProgress('grep', message),
             timeoutMs
           )
@@ -1715,7 +1721,7 @@ export const grepExecutor: ToolExecutor = {
           body,
           fallback.boundarySummary
         ].filter(Boolean).join('\n')
-        if (fallback.aborted && ctx.signal.aborted) {
+        if (fallback.aborted && grepSignal.aborted) {
           return { success: false, error: `${composed}\n[已取消]`, duration: Date.now() - started }
         }
         return {
@@ -1767,7 +1773,7 @@ export const grepExecutor: ToolExecutor = {
         pattern,
         gargs,
         timeoutMs,
-        ctx.signal,
+        grepSignal,
         (message) => ctx.sendProgress('grep', message),
         ctx.grepSpawnProcess,
         processTreeKiller,

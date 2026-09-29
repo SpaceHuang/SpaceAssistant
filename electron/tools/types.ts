@@ -84,6 +84,9 @@ export interface ToolExecutionContext {
   /** run_shell 有效输出模式（主进程在 toolChatLoop 解析） */
   shellOutputMode?: 'plain' | 'terminal'
   signal: AbortSignal
+  /** Phase 2a（方案 §2.4/§4）：聊天级中止信号，由执行器按需合成（如 grep）。
+   *  不得与 signal 合并成同一对象——toolChatLoop 依赖二者独立判定「仅工具取消 vs 整聊取消」。 */
+  chatSignal?: AbortSignal
   fileStateCache: import('../fileStateCache').FileStateCache
   toolsConfig: ToolsConfig
   wikiConfig?: WikiConfig
