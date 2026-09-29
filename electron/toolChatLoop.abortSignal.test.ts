@@ -109,6 +109,34 @@ async function runSession() {
   return runToolChatSession(invocation, ports)
 }
 
+let inGapDeferred: { promise: Promise<void> } = { promise: Promise.resolve() }
+
+/** 安装「产出 message_start 后挂起在事件间隔上」的 mock 流；返回 gap 兜底放行函数（绿态为 no-op）。 */
+function installGapStream(): () => void {
+  let markInGap!: () => void
+  const inGap = new Promise<void>((resolve) => { markInGap = resolve })
+  inGapDeferred = { promise: inGap }
+  let releaseGap!: () => void
+  const gapReleased = new Promise<void>((resolve) => { releaseGap = resolve })
+  mockCreateAnthropicClient.mockReturnValue({
+    messages: {
+      stream: vi.fn((_params: unknown, options?: { signal?: AbortSignal }) => ({
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'message_start', message: { usage: { input_tokens: 500 } } }
+          markInGap()
+          await new Promise<never>((_, reject) => {
+            // SDK RequestOptions.signal 语义：abort 即刻在 fetch 层销毁连接，迭代器抛 APIUserAbortError
+            options?.signal?.addEventListener('abort', () => reject(new APIUserAbortError()))
+            gapReleased.then(() => reject(new Error('gap released by test')))
+          })
+        },
+        finalMessage: vi.fn(async () => { throw new APIUserAbortError() })
+      }))
+    }
+  })
+  return releaseGap
+}
+
 describe('runToolChatSession LLM 流式请求硬中断（chat-abort-latency 方案 Phase 1）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -140,29 +168,9 @@ describe('runToolChatSession LLM 流式请求硬中断（chat-abort-latency 方�
   })
 
   it('流中段 signal abort：无需等待下一个事件即结算为 cancelled，且部分 usage 先落账', async () => {
-    let markInGap!: () => void
-    const inGap = new Promise<void>((resolve) => { markInGap = resolve })
-    let releaseGap!: () => void
-    const gapReleased = new Promise<void>((resolve) => { releaseGap = resolve })
-    mockCreateAnthropicClient.mockReturnValue({
-      messages: {
-        stream: vi.fn((_params: unknown, options?: { signal?: AbortSignal }) => ({
-          async *[Symbol.asyncIterator]() {
-            yield { type: 'message_start', message: { usage: { input_tokens: 500 } } }
-            markInGap()
-            await new Promise<never>((_, reject) => {
-              // SDK RequestOptions.signal 语义：abort 即刻在 fetch 层销毁连接，迭代器抛 APIUserAbortError
-              options?.signal?.addEventListener('abort', () => reject(new APIUserAbortError()))
-              gapReleased.then(() => reject(new Error('gap released by test')))
-            })
-          },
-          finalMessage: vi.fn(async () => { throw new APIUserAbortError() })
-        }))
-      }
-    })
-
+    const releaseGap = installGapStream()
     const run = runSession()
-    await inGap
+    await inGapDeferred.promise
     chatCancelController.abort()
 
     // 中止必须即时生效：不等「下一个事件」放行，run 就应结算
@@ -184,6 +192,28 @@ describe('runToolChatSession LLM 流式请求硬中断（chat-abort-latency 方�
     // 1b：abort 不得落入 llm.error 被结算为 failed
     const llmErrorCalls = vi.mocked(logAgentEvent).mock.calls.filter(([, event]) => event === 'llm.error')
     expect(llmErrorCalls).toHaveLength(0)
+
+    releaseGap()
+  })
+
+  it('llm.cancel 审计：取消判定命中时打点（部分 usage 结算之后、重抛之前），字段含 abortToCatchMs', async () => {
+    const releaseGap = installGapStream()
+    const run = runSession()
+    await inGapDeferred.promise
+    chatCancelController.abort()
+
+    await expect(run).resolves.toMatchObject({ ok: false, cancelled: true })
+
+    // Phase 3：中止可观测——取消判定命中必须留痕
+    const cancelCalls = vi.mocked(logAgentEvent).mock.calls.filter(([, event]) => event === 'llm.cancel')
+    expect(cancelCalls).toHaveLength(1)
+    expect(cancelCalls[0]?.[0]).toBe('warn')
+    expect(cancelCalls[0]?.[2]).toMatchObject({
+      requestId: 'req-abort-1',
+      sessionId: 'sess-abort-1',
+      loopRound: 1,
+      abortToCatchMs: expect.any(Number)
+    })
 
     releaseGap()
   })
