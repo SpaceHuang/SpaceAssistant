@@ -4,14 +4,14 @@
  * 断言 1/2/3 的扫描面统一为「SDK 入口展开出的完整模块闭包」——此前只扫包内 5 文件,
  * 而闭包约 16 个模块在宿主树 src/shared/**,bare 导入可同时绕过两条断言(假绿)。
  * 闭包展开同时匹配单/双引号、副作用 import、require() 与动态 import(P1-5 漏边修复)。
- * 禁止项:闭包内任何文件的 `electron`(bare / 子路径 / 相对逃逸)与 `node:sqlite`。
+ * 禁止项:闭包内任何文件的 `electron`(bare / 子路径 / 相对逃逸)、`node:sqlite`、宿主 shared/Renderer。
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const pkgDir = path.join(root, 'packages', 'agent-core')
+const pkgDir = path.join(root, 'packages', 'agent-sdk')
 const entry = path.join(pkgDir, 'src', 'index.ts')
 
 // ---- 闭包展开(单/双引号、副作用 import、require()、动态 import)----
@@ -65,11 +65,14 @@ for (const file of seen) {
   if (rel.split(path.sep)[0] === 'electron') {
     failures.push(`SDK 入口闭包可达 electron 模块: ${rel}(应为 0)`)
   }
+  if (rel.split(path.sep)[0] === 'src' && (rel.startsWith(`src${path.sep}shared${path.sep}`) || rel.startsWith(`src${path.sep}renderer${path.sep}`))) {
+    failures.push(`SDK 入口闭包可达宿主模块: ${rel}(shared/Renderer 应为 0)`)
+  }
 }
 
 if (failures.length > 0) {
-  console.error('[check:agent-core] 包边界违规:')
+  console.error('[check:agent-sdk] 包边界违规:')
   for (const f of failures) console.error(`  - ${f}`)
   process.exit(1)
 }
-console.log(`[check:agent-core] OK:SDK 入口闭包 ${seen.size} 个模块,全闭包零 electron / 零 node:sqlite`)
+console.log(`[check:agent-sdk] OK:SDK 入口闭包 ${seen.size} 个模块,全闭包零 electron / shared / Renderer / node:sqlite`)

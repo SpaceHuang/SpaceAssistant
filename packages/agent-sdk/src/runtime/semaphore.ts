@@ -12,6 +12,10 @@ export class Semaphore {
     return this.queue.length
   }
 
+  get activeCount(): number {
+    return this.active
+  }
+
   acquire(options: { signal?: AbortSignal } = {}): Promise<void> {
     if (options.signal?.aborted) return Promise.reject(new Error('semaphore-cancelled'))
     if (this.active < this.limit) {

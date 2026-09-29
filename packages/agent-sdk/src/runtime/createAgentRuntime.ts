@@ -24,12 +24,10 @@ export const NOOP_AUDIT: RuntimeAudit = {
 
 /** 内置工具注册表最小面(宿主注入 TypedToolRegistry 或等价物;SDK 纯核缺省空实现)。 */
 export interface BuiltinRegistryLike {
-  getLegacyExecutor(name: string): unknown
   get(name: string): unknown
 }
 
 const EMPTY_REGISTRY: BuiltinRegistryLike = {
-  getLegacyExecutor: () => undefined,
   get: () => undefined
 }
 

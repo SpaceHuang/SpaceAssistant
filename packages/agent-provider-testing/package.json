@@ -1,0 +1,17 @@
+{
+  "name": "@spaceassistant/agent-provider-testing",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Canonical model provider fakes for Agent SDK contract tests",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@spaceassistant/agent-sdk": "file:../agent-sdk"
+  }
+}

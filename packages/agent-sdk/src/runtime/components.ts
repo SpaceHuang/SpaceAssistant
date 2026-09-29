@@ -112,9 +112,10 @@ export class ChatCancelRegistry implements ChatCancelRegistryLike {
   }
 }
 
-export const TOOL_REQUEST_LANES = ['desktop', 'feishu', 'wechat'] as const
+export const TOOL_REQUEST_LANES = ['desktop', 'feishu', 'wechat', 'automation'] as const
 
 type RequestState = { lane: string; revoked: Set<string> }
+export type ToolRevocationEvent = { requestId: string; lane: string; toolName: string }
 
 export interface ToolRevocationRegistryLike {
   registerToolRevocationRequest(requestId: string, lane: string): void
@@ -122,29 +123,47 @@ export interface ToolRevocationRegistryLike {
   revokeToolForAllLanes(toolName: string): number
   isToolRevoked(requestId: string, toolName: string): boolean
   clearToolRevocationRequest(requestId: string): void
+  onRevocation(listener: (event: ToolRevocationEvent) => void): () => void
 }
 
 export class ToolRevocationRegistry implements ToolRevocationRegistryLike {
   private readonly active = new Map<string, RequestState>()
+  private readonly listeners = new Set<(event: ToolRevocationEvent) => void>()
+
+  onRevocation(listener: (event: ToolRevocationEvent) => void): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
 
   registerToolRevocationRequest(requestId: string, lane: string): void {
     this.active.set(requestId, { lane, revoked: new Set() })
   }
 
   revokeToolForLane(lane: string, toolName: string): number {
-    let count = 0
-    for (const state of this.active.values()) {
-      if (state.lane !== lane) continue
-      state.revoked.add(toolName)
-      count++
-    }
-    return count
+    return this.revoke(toolName, lane)
   }
 
   revokeToolForAllLanes(toolName: string): number {
-    let count = 0
-    for (const lane of TOOL_REQUEST_LANES) count += this.revokeToolForLane(lane, toolName)
-    return count
+    return this.revoke(toolName)
+  }
+
+  private revoke(toolName: string, lane?: string): number {
+    const events: ToolRevocationEvent[] = []
+    const knownLanes: ReadonlySet<string> = new Set(TOOL_REQUEST_LANES)
+    for (const [requestId, state] of this.active) {
+      if (lane !== undefined ? state.lane !== lane : !knownLanes.has(state.lane)) continue
+      state.revoked.add(toolName)
+      events.push({ requestId, lane: state.lane, toolName })
+    }
+
+    const failures: unknown[] = []
+    for (const event of events) {
+      for (const listener of this.listeners) {
+        try { listener(event) } catch (error) { failures.push(error) }
+      }
+    }
+    if (failures.length) throw new AggregateError(failures, `tool revocation listeners failed for ${lane ?? 'all lanes'}:${toolName}`)
+    return events.length
   }
 
   isToolRevoked(requestId: string, toolName: string): boolean {

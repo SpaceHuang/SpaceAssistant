@@ -1,5 +1,5 @@
 {
-  "name": "@spaceassistant/agent-core",
+  "name": "@spaceassistant/agent-sdk",
   "version": "0.1.0",
   "private": true,
   "description": "SpaceAssistant Agent SDK 面:契约、端口接口与纯 runtime(偏差 17-20;基线 §13 同进程库形态)",
@@ -9,9 +9,20 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./model": {
+      "types": "./src/model.ts",
+      "default": "./src/model.ts"
     }
   },
   "scripts": {
-    "test": "vitest run packages/agent-core"
+    "test": "vitest run packages/agent-sdk"
+  },
+  "typesVersions": {
+    "*": {
+      "model": [
+        "src/model.ts"
+      ]
+    }
   }
 }

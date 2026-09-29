@@ -8,14 +8,14 @@ import {
   McpConcurrencyGate,
   NOOP_AUDIT
 } from '../src/index'
-import type { AgentInvocation } from '../src/index'
+import type { AgentInvocationIdentity } from '../src/index'
 
 /**
  * SDK 包级测试(A3,偏差 19):纯 node,不启动 Electron、不依赖宿主;
  * 断言 createAgentRuntime 的多实例语义与组件缺省/注入。
  */
 
-describe('@spaceassistant/agent-core(纯 node,零宿主依赖)', () => {
+describe('@spaceassistant/agent-sdk(纯 node,零宿主依赖)', () => {
   it('双 runtime 实例并存,状态互不串', () => {
     const a = createAgentRuntime()
     const b = createAgentRuntime()
@@ -59,6 +59,13 @@ describe('@spaceassistant/agent-core(纯 node,零宿主依赖)', () => {
     expect(registry.isToolRevoked('w1', 'run_shell')).toBe(false)
   })
 
+  it('全局撤回包含 automation lane', () => {
+    const registry = new ToolRevocationRegistry()
+    registry.registerToolRevocationRequest('a1', 'automation')
+    expect(registry.revokeToolForAllLanes('run_shell')).toBe(1)
+    expect(registry.isToolRevoked('a1', 'run_shell')).toBe(true)
+  })
+
   it('MCP 闸:每服务并发上限不被突破', async () => {
     const gate = new McpConcurrencyGate(8, 2)
     let running = 0
@@ -79,8 +86,8 @@ describe('@spaceassistant/agent-core(纯 node,零宿主依赖)', () => {
   it('缺省审计为 NOOP;契约类型随入口可用(类型引用可解析)', () => {
     const rt = createAgentRuntime()
     expect(rt.audit).toBe(NOOP_AUDIT)
-    // 类型层消费(编译期验证入口暴露契约类型);不构造完整 invocation
-    type TraceOk = AgentInvocation['trace'] extends { requestId: string } ? true : false
+    // 类型层消费 SDK 中立的 invocation identity，不带宿主 Session/profile。
+    type TraceOk = AgentInvocationIdentity extends { requestId: string; turnId: string } ? true : false
     const traceOk: TraceOk = true
     expect(traceOk).toBe(true)
   })

@@ -28,4 +28,28 @@ describe('CapacityLedger 统一容量模型', () => {
     expect(ledger.enqueue('normal', 'normal-2')).toBe(true)
     expect(ledger.dequeue('missing')).toBeUndefined()
   })
+
+  it('重复释放旧 application lease 不会释放后来获得的 lease', () => {
+    const ledger = new CapacityLedger({ applicationSlots: 1, approvalCandidateSlots: 1, queueLimit: 1, maxApprovalsPerParent: 1 })
+    const first = ledger.reserveApplicationLease('first')!
+    first.release()
+    const second = ledger.reserveApplicationLease('second')!
+    first.release()
+    expect(ledger.snapshot().applicationLeases).toBe(1)
+    expect(ledger.reserveApplicationLease('third')).toBeUndefined()
+    second.release()
+    expect(ledger.snapshot().applicationLeases).toBe(0)
+  })
+
+  it('重复释放同一父任务的旧审批预留不污染新预留计数', () => {
+    const ledger = new CapacityLedger({ applicationSlots: 1, approvalCandidateSlots: 2, queueLimit: 1, maxApprovalsPerParent: 1 })
+    const first = ledger.reserveApprovalCandidate('parent')!
+    first.release()
+    const second = ledger.reserveApprovalCandidate('parent')!
+    first.release()
+    expect(ledger.snapshot()).toMatchObject({ approvalCandidates: 1, parentApprovalCounts: { parent: 1 } })
+    expect(ledger.reserveApprovalCandidate('parent')).toBeUndefined()
+    second.release()
+    expect(ledger.snapshot()).toMatchObject({ approvalCandidates: 0, parentApprovalCounts: {} })
+  })
 })

@@ -1,0 +1,22 @@
+{
+  "name": "@spaceassistant/agent-provider-pi-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Explicit route adapters backed by a pinned pi-ai provider API",
+  "main": "dist/index.js",
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "0.87.1",
+    "@spaceassistant/agent-sdk": "file:../agent-sdk"
+  },
+  "files": [
+    "dist",
+    "src/index.ts"
+  ]
+}
