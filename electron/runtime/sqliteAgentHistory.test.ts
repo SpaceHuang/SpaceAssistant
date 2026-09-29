@@ -70,7 +70,7 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
-  it('distinguishes a session without History from a latest incomplete canonical stream', async () => {
+  it('distinguishes a session without History from a latest open canonical stream', async () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn, 1, () => 100, 'session-latest-state')
     await expect(history.readLatestInvocationForSession('session-latest-state')).resolves.toEqual({ kind: 'none' })
@@ -80,6 +80,24 @@ describe('SqliteAgentHistory', () => {
     }], 0)
 
     await expect(history.readLatestInvocationForSession('session-latest-state')).resolves.toEqual({ kind: 'unavailable', invocationId: 'latest-incomplete' })
+    conn.close()
+  })
+
+  it('uses the last completed transcript after a later invocation has a failed terminal', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn, 1, () => 100, 'session-failed-latest')
+    await history.appendBatch([
+      { ...event('prior-context', 1), invocationId: 'prior-completed', turnId: 'prior-turn', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'prior' }] } },
+      { ...event('prior-done', 2), invocationId: 'prior-completed', turnId: 'prior-turn', kind: 'invocation-completed', payload: { status: 'completed' } }
+    ], 0)
+    await history.appendBatch([
+      { ...event('failed-context', 1), invocationId: 'latest-failed', turnId: 'latest-turn', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'failed request' }] } },
+      { ...event('failed-terminal', 2), invocationId: 'latest-failed', turnId: 'latest-turn', kind: 'invocation-failed', payload: { status: 'failed' } }
+    ], 0)
+
+    await expect(history.readLatestInvocationForSession('session-failed-latest')).resolves.toMatchObject({
+      kind: 'completed', snapshot: { invocationId: 'prior-completed' }
+    })
     conn.close()
   })
 

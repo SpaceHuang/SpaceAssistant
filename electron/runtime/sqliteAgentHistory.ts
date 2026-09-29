@@ -57,7 +57,7 @@ export class SqliteAgentHistory implements HistoryPort {
     `).all(sessionId) as Array<{ invocation_id: string }>).map(({ invocation_id }) => invocation_id)
   }
 
-  /** Returns the newest session transcript only after its invocation has committed a completed terminal. */
+  /** Returns the newest safe completed transcript; explicitly failed attempts do not shadow prior context. */
   async readLatestCompletedInvocationForSession(sessionId: string, options: { excludeInvocationId?: string } = {}): Promise<HistorySnapshot | undefined> {
     const latest = await this.readLatestInvocationForSession(sessionId, options)
     return latest.kind === 'completed' ? latest.snapshot : undefined
@@ -69,14 +69,23 @@ export class SqliteAgentHistory implements HistoryPort {
     | Readonly<{ kind: 'completed'; snapshot: HistorySnapshot }>
     | Readonly<{ kind: 'unavailable'; invocationId: string }>
   > {
-    const invocationId = this.listInvocationIdsForSession(sessionId).filter((id) => id !== options.excludeInvocationId).at(-1)
-    if (!invocationId) return { kind: 'none' }
-    const snapshot = await this.read(invocationId)
-    if (snapshot.events.at(-1)?.kind !== 'invocation-completed' ||
-      !snapshot.events.some(({ kind }) => kind === 'invocation-context-committed' || kind === 'transcript-compacted')) {
-      return { kind: 'unavailable', invocationId }
+    const invocationIds = this.listInvocationIdsForSession(sessionId).filter((id) => id !== options.excludeInvocationId)
+    if (invocationIds.length === 0) return { kind: 'none' }
+    for (const invocationId of invocationIds.reverse()) {
+      const snapshot = await this.read(invocationId)
+      const terminal = snapshot.events.at(-1)
+      // Open/interrupted streams may represent a crashed turn whose canonical tail is incomplete.
+      if (!terminal || !['invocation-completed', 'invocation-failed'].includes(terminal.kind)) {
+        return { kind: 'unavailable', invocationId }
+      }
+      // Failed turns are closed attempts. Keep searching for the last complete conversation base.
+      if (terminal.kind === 'invocation-failed') continue
+      if (!snapshot.events.some(({ kind }) => kind === 'invocation-context-committed' || kind === 'transcript-compacted')) {
+        return { kind: 'unavailable', invocationId }
+      }
+      return { kind: 'completed', snapshot }
     }
-    return { kind: 'completed', snapshot }
+    return { kind: 'none' }
   }
 
   async read(invocationId: string): Promise<HistorySnapshot> {
