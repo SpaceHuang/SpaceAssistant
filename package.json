@@ -1,6 +1,6 @@
 {
   "name": "spaceassistant",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "license": "Apache-2.0",
   "description": "Electron + React + TypeScript desktop assistant",
@@ -116,7 +116,6 @@
     "electron-builder": "^25.1.8",
     "jsdom": "^25.0.1",
     "png-to-ico": "^2.1.8",
-    "@earendil-works/pi-ai": "0.87.1",
     "rimraf": "^6.0.1",
     "sharp": "^0.33.5",
     "tsx": "^4.22.4",
