@@ -36,6 +36,7 @@ export function restorePendingConfirmToolCalls(messages: Message[], pendingItems
       riskLevel: item.riskLevel,
       ...(item.diff ? { confirmDiff: item.diff } : {}),
       ...(item.shellSecurityHints ? { shellSecurityHints: item.shellSecurityHints } : {}),
+      ...(item.scriptPathHint ? { scriptPathHint: item.scriptPathHint } : {}),
       ...(item.autoApproveFallback ? { autoApproveFallback: item.autoApproveFallback } : {}),
       ...(item.currentPageUrl ? { currentPageUrl: item.currentPageUrl } : {}),
       ...(item.dangerInfo ? { dangerInfo: item.dangerInfo } : {}),

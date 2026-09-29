@@ -25,6 +25,8 @@ export function memoryTierKeyOf(key: CacheKey): NamespaceKeyMap['config'] {
       return 'toolsSecurity.memory.tierMcpTool'
     case 'remote-write':
       return 'toolsSecurity.memory.tierRemoteWrite'
+    case 'script-content':
+      return 'toolsSecurity.memory.tierScriptContent'
   }
 }
 
@@ -41,6 +43,9 @@ export function memoryEntrySummary(key: CacheKey): string {
       return `${key.serverId}/${key.toolName}`
     case 'remote-write':
       return key.sessionId
+    case 'script-content':
+      // 摘要展示指纹前 12 位,完整指纹即键本身(规范化签名,不落原始脚本)
+      return key.digest.slice(0, 12)
   }
 }
 

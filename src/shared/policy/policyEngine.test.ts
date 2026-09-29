@@ -6,7 +6,7 @@ import type {
   PolicyEngineDeps
 } from '../confirmation/types'
 import { DEFAULT_POLICY_RULES } from './defaultRules'
-import { buildMemoryTiers, decide, decideIngress, deriveInvocationPolicyConstraints, signalTokenSet } from './policyEngine'
+import { buildMemoryTiers, decide, decideIngress, deriveCacheKeys, deriveInvocationPolicyConstraints, signalTokenSet } from './policyEngine'
 import { effectiveActionFor, resolvePolicyRules } from './policyPackages'
 import type { PolicyAction } from '../confirmation/types'
 
@@ -800,10 +800,11 @@ describe('decide:P1 脚本 unknown 分级(松绑与兜底,方案 §5 P1-1/P1-2/P
     }
   })
 
-  it('unmodeled unknown 不开放记忆档位(缓存不得绕过未建模路径)', () => {
+  it('unmodeled unknown 记忆收敛为会话级(P2-2 演进:仅 exact-content 键,无 digest 不派生)', () => {
     const constraints = deriveInvocationPolicyConstraints(unmodeledFacts(), mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
-    expect(constraints.memory.canOffer).toBe(false)
-    expect(constraints.memory.canRead).toBe(false)
+    expect(constraints.memory.canOffer).toBe(true)
+    expect(constraints.memory.canRead).toBe(true)
+    // 无 contentDigest → 不派生任何缓存键 → 无档位可记(路径键已整体抑制)
     expect(buildMemoryTiers(unmodeledFacts(), 's1', 'desktop')).toEqual([])
   })
 
@@ -828,5 +829,86 @@ describe('decide:P1 脚本 unknown 分级(松绑与兜底,方案 §5 P1-1/P1-2/P
     expect(tokens.has('script-path-extraction:unknown')).toBe(true)
     expect(tokens.has('script-path-extraction:unmodeled-call')).toBe(true)
     expect(tokens.has('script-dynamic-access')).toBe(false)
+  })
+})
+
+describe('decide:P2 脚本指纹信任与声明式契约(方案 §5 P2-2/P2-3)', () => {
+  const unmodeledDigestFacts = (digest?: string) => mkFacts('run_script', 'execute', [
+    { kind: 'script-analysis', signal: 'clean', patterns: [] },
+    {
+      kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call',
+      ...(digest ? { contentDigest: digest } : {})
+    }
+  ], 'high')
+
+  it('P2-2:unmodeled unknown 派生会话级 script-content 缓存键,命中即放行同一脚本', () => {
+    const digest = 'a'.repeat(64)
+    // 派生:仅 script-content 键(路径键被抑制,防不同脚本经重叠路径命中)
+    const keys = deriveCacheKeys(unmodeledDigestFacts(digest), 's1', 'desktop')
+    expect(keys).toEqual([{ kind: 'script-content', digest, sessionId: 's1' }])
+    // 无 digest / 无会话 / dynamic-execution 不派生
+    expect(deriveCacheKeys(unmodeledDigestFacts(), 's1', 'desktop')).toEqual([])
+    expect(deriveCacheKeys(unmodeledDigestFacts(digest), undefined, 'desktop')).toEqual([])
+    const dynamic = mkFacts('run_script', 'execute', [
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', contentDigest: digest }
+    ], 'high')
+    expect(deriveCacheKeys(dynamic, 's1', 'desktop')).toEqual([])
+    // 命中:缓存 allow → auto-allow(ruleId=cache-hit)
+    const cache: DecisionCacheView = {
+      lookup: (key) => key.kind === 'script-content' && key.digest === digest
+        ? { id: 'c2', key, decision: 'allow', lane: '*', scope: 'session', createdAt: 1, lastHitAt: 1, hitCount: 1, source: 'user-confirm' }
+        : null
+    }
+    const d = decide(unmodeledDigestFacts(digest), mkContext('desktop'), DEFAULT_POLICY_RULES, deps({ cache }))
+    expect(d).toMatchObject({ type: 'auto-allow', ruleId: 'cache-hit' })
+  })
+
+  it('P2-2:unmodeled 确认卡提供「本会话此脚本」记忆档位', () => {
+    const tiers = buildMemoryTiers(unmodeledDigestFacts('b'.repeat(64)), 's1', 'desktop')
+    expect(tiers).toHaveLength(1)
+    expect(tiers[0]!.key).toMatchObject({ kind: 'script-content' })
+    expect(tiers[0]!.label).toContain('本会话')
+  })
+
+  it('P2-3:声明规则默认关闭(configRequires 未配置时不命中,落 unmodeled ask)', () => {
+    const declared = mkFacts('run_script', 'execute', [
+      { kind: 'script-analysis', signal: 'clean', patterns: [] },
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call' },
+      { kind: 'script-path-declaration', scope: 'workdir-readonly', consistent: true }
+    ], 'high')
+    const d = decide(declared, mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
+    expect(d).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' })
+  })
+
+  it('P2-3:设置开启且声明与分析一致 → 桌面免确认;不一致或非 clean 不放行', () => {
+    const declared = mkFacts('run_script', 'execute', [
+      { kind: 'script-analysis', signal: 'clean', patterns: [] },
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call' },
+      { kind: 'script-path-declaration', scope: 'workdir-readonly', consistent: true }
+    ], 'high')
+    const on = decide(declared, mkContext('desktop'), DEFAULT_POLICY_RULES, deps({ config: { allowDeclaredPathScopeScripts: true } }))
+    expect(on).toMatchObject({ type: 'auto-allow', ruleId: 'script-declared-path-scope-allow-desktop' })
+
+    const inconsistent = mkFacts('run_script', 'execute', [
+      { kind: 'script-analysis', signal: 'clean', patterns: [] },
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call' },
+      { kind: 'script-path-declaration', scope: 'workdir-readonly', consistent: false }
+    ], 'high')
+    const off = decide(inconsistent, mkContext('desktop'), DEFAULT_POLICY_RULES, deps({ config: { allowDeclaredPathScopeScripts: true } }))
+    expect(off).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' })
+
+    const suspicious = mkFacts('run_script', 'execute', [
+      { kind: 'script-analysis', signal: 'suspicious', patterns: ['x'] },
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call' },
+      { kind: 'script-path-declaration', scope: 'workdir-readonly', consistent: true }
+    ], 'high')
+    const notClean = decide(suspicious, mkContext('desktop'), DEFAULT_POLICY_RULES, deps({ config: { allowDeclaredPathScopeScripts: true } }))
+    // suspicious+unknown 不松绑:维持 locked 逐次真人确认(P1-2 边界补强)
+    expect(notClean).toMatchObject({ type: 'require-confirm', ruleId: 'script-suspicious-path-unknown-confirm', answerer: 'user' })
+  })
+
+  it('P2-3:声明 allow 规则排位于 script-unmodeled-path-ask 之前(config 关闭时回落 ask)', () => {
+    const ids = DEFAULT_POLICY_RULES.map((r) => r.id)
+    expect(ids.indexOf('script-declared-path-scope-allow-desktop')).toBeLessThan(ids.indexOf('script-unmodeled-path-ask'))
   })
 })

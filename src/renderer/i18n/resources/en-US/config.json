@@ -861,7 +861,8 @@
       "tierDirectory": "Directory",
       "tierZone": "Zone",
       "tierMcpTool": "MCP tool",
-      "tierRemoteWrite": "Remote write grant"
+      "tierRemoteWrite": "Remote write grant",
+      "tierScriptContent": "This script (session fingerprint)"
     },
     "audit": {
       "title": "Security Audit Log",

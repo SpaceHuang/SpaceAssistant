@@ -76,3 +76,15 @@ describe('ScriptConfirmCard', () => {
     expect(screen.getByText('120s')).toBeDefined()
   })
 })
+
+describe('ScriptConfirmCard:P2-1 路径分析提示回显', () => {
+  it('record.scriptPathHint 存在时渲染提示,缺省时不渲染', () => {
+    const hint = '路径分析未覆盖：custom_accessor（未建模调用）'
+    const { rerender } = renderCard(<ScriptConfirmCard record={record({ scriptPathHint: hint })} onConfirm={vi.fn()} />)
+    expect(screen.getByText(hint)).toBeDefined()
+    expect(document.querySelector('.script-confirm-card__path-hint')).not.toBeNull()
+
+    rerender(<ScriptConfirmCard record={record()} onConfirm={vi.fn()} />)
+    expect(document.querySelector('.script-confirm-card__path-hint')).toBeNull()
+  })
+})

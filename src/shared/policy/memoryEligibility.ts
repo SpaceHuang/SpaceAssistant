@@ -26,11 +26,19 @@ export function deriveMemoryEligibility(
     reasons.push('script-network-or-uncertified')
     return { eligibility: 'none', reasons }
   }
-  // P1(方案 §5 P1-2):路径提取 unknown 的脚本不开放记忆——路径键只覆盖已静态提取的路径,
-  // 缓存命中会连「未建模/动态路径」一起放行(与其他脚本信号的「开放记忆即绕过」同理)。
+  // P1/P2(方案 §5):路径提取 unknown 的脚本——dynamic-execution 走 locked 逐次确认,不开放
+  // 任何记忆;unmodeled-call 仅开放会话级(P2-2 脚本内容指纹,exact-content 键;路径键在
+  // deriveCacheKeys 中整体抑制,防止不同脚本经重叠路径命中缓存)。
   if (facts.signals.some((signal) => signal.kind === 'script-path-extraction' && signal.completeness === 'unknown')) {
-    reasons.push('script-path-unknown')
-    return { eligibility: 'none', reasons }
+    const dynamic = facts.signals.some(
+      (signal) => signal.kind === 'script-path-extraction' && signal.unknownReason === 'dynamic-execution'
+    )
+    if (dynamic) {
+      reasons.push('script-path-unknown')
+      return { eligibility: 'none', reasons }
+    }
+    reasons.push('script-path-unknown-session-only')
+    return { eligibility: 'session', reasons }
   }
   if (facts.signals.some((signal) => signal.kind === 'path-target' &&
       (signal.zone === 'sensitive-file' || signal.zone === 'outside-workdir' || signal.zone === 'system-dir'))) {

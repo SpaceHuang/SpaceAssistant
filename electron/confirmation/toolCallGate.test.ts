@@ -892,7 +892,7 @@ describe('evaluateToolCallGate', () => {
     const parseSpy = vi.spyOn(scriptParserService, 'parse')
     const gate = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { code: 'print("hello")' } }))
     expect(parseSpy).toHaveBeenCalledTimes(1)
-    expect(gate.facts.signals).toContainEqual({ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false, unknownReason: null })
+    expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false, unknownReason: null }))
     expect(gate.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-clean-allow-desktop' })
   })
 
@@ -1023,7 +1023,7 @@ describe('evaluateToolCallGate', () => {
 
     const unsupported = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { language: 'ruby', code: 'puts 1' } }))
     expect(unsupported.facts.signals).toContainEqual({ kind: 'script-language-analysis', language: 'unknown', status: 'unverified' })
-    expect(unsupported.facts.signals).toContainEqual({ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution' })
+    expect(unsupported.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution' }))
     expect(unsupported.decision).toMatchObject({ type: 'require-confirm', answerer: 'user' })
   })
 

@@ -109,7 +109,15 @@ export type FactSignal =
    * 注意:`script-path-extraction:unknown` token 对两类继续产出(automation deny 依赖),
    * 分类 token(`script-path-extraction:${unknownReason}`)只增不替。
    */
-  | { kind: 'script-path-extraction'; completeness: 'complete' | 'unknown'; dynamicAccess: boolean; unknownReason: 'dynamic-execution' | 'unmodeled-call' | null }
+  | { kind: 'script-path-extraction'; completeness: 'complete' | 'unknown'; dynamicAccess: boolean; unknownReason: 'dynamic-execution' | 'unmodeled-call' | null
+      /** P2-2:脚本内容指纹(sha256,门控计算);仅 unmodeled-call 时用于派生会话级 script-content 缓存键。 */
+      contentDigest?: string }
+  /**
+   * P2-3:声明式契约事实(脚本首部 `# @path-scope workdir-readonly`)。consistent 表示与分析
+   * 交叉验证一致(无动态执行/网络/非 clean/路径出工作目录)。声明是作者断言,消费侧必须
+   * 以 configRequires 门控(默认关闭)。
+   */
+  | { kind: 'script-path-declaration'; scope: 'workdir-readonly'; consistent: boolean }
   | { kind: 'script-language-analysis'; language: 'javascript' | 'typescript' | 'powershell' | 'unknown'; status: 'unverified' }
   | { kind: 'wiki-raw-target' }
   | { kind: 'feishu-media-target'; boundary: 'inside' | 'outside' | 'unknown' }
@@ -398,6 +406,8 @@ export type CacheKey =
       sessionId?: string
     }
   | { kind: 'remote-write'; sessionId: string }
+  /** P2-2:脚本内容指纹信任(会话级,exact-content;dynamic-execution/路径键不派生)。 */
+  | { kind: 'script-content'; digest: string; sessionId: string }
 
 export interface DecisionCacheEntry {
   id: string

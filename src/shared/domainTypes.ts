@@ -587,6 +587,8 @@ export interface ToolCallRecord {
   confirmDiff?: { oldContent: string; newContent: string; oldPath: string }
   /** run_shell 路径/安全警示（确认卡片展示） */
   shellSecurityHints?: ShellSecurityHints
+  /** P2-1:run_script 路径分析未覆盖的命中原因提示（确认卡片展示） */
+  scriptPathHint?: string
   /** 文件 auto 模式回落 diff 时的原因 */
   autoApproveFallback?: AutoApproveFallback
   /**

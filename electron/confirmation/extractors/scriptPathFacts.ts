@@ -6,12 +6,19 @@ import { scriptParserService } from '../../shell/scriptParserService'
 import * as ts from 'typescript'
 
 export type ScriptPathUnknownReason = 'dynamic-execution' | 'unmodeled-call' | null
+/** P2-1:unknown 证据(调用名;方案 §5「回显具体调用名」),去重封顶。 */
+export type ScriptPathEvidence = { call: string; reason: Exclude<ScriptPathUnknownReason, null> }
+export type ScriptPathDeclaration = 'workdir-readonly'
 export type ScriptPathFacts = {
   paths: string[]
   completeness: 'complete' | 'unknown'
   dynamicAccess: boolean
   /** P1-1:unknown 分类(方案 §5);complete 时为 null。dynamicAccess ⇔ unknownReason === 'dynamic-execution'。 */
   unknownReason: ScriptPathUnknownReason
+  /** P2-1:unknown 证据(去重封顶);complete/fail-closed 时为空数组。 */
+  unknownEvidence: ScriptPathEvidence[]
+  /** P2-3:脚本首部 `# @path-scope <scope>` 声明(仅识别 workdir-readonly);未声明为 undefined。 */
+  declaration?: ScriptPathDeclaration
 }
 export type ScriptPathLanguage = 'python' | 'javascript' | 'typescript' | 'powershell' | 'bash' | string
 
@@ -47,7 +54,7 @@ const PS_FILE_APIS = new Set(['get-content', 'set-content', 'add-content', 'out-
 const PS_SAFE_CALLS = new Set(['write-output', 'write-host', 'write-warning', 'write-error', 'get-date', 'get-location', 'set-location', 'where-object', 'foreach-object', 'sort-object', 'select-object', 'measure-object'])
 
 function emptyUnknown(): ScriptPathFacts {
-  return { paths: [], completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution' }
+  return { paths: [], completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', unknownEvidence: [] }
 }
 
 function newScope(): IrScope { return { modules: new Map(), attrs: new Map() } }
@@ -73,9 +80,20 @@ function bindImport(scope: IrScope, stmt: Extract<IrStmt, { kind: 'import' | 'fr
  * 致使 script-dynamic-access 无区分度。dynamicExecution 供 locked 强处置消费;
  * unmodeledCall 仅作覆盖不足提示(松绑为 ask,可被档位/信任覆盖)。
  */
+/** P2-1 证据封顶:防超大脚本撑爆 facts(超出部分丢弃,不影响判定)。 */
+const UNKNOWN_EVIDENCE_CAP = 8
+
 interface WalkState {
   dynamicExecution: boolean
   unmodeledCall: boolean
+  evidence: ScriptPathEvidence[]
+}
+
+function recordEvidence(state: WalkState, call: string | null, reason: Exclude<ScriptPathUnknownReason, null>): void {
+  const name = call ?? '<unknown>'
+  if (state.evidence.length >= UNKNOWN_EVIDENCE_CAP) return
+  if (state.evidence.some((e) => e.call === name && e.reason === reason)) return
+  state.evidence.push({ call: name, reason })
 }
 
 /**
@@ -223,7 +241,7 @@ function isPathCtorChain(chain: string | null | undefined): boolean {
 function walkExpr(expr: IrExpr, env: WalkEnv, paths: Set<string>, state: WalkState): void {
   if (expr.kind === 'call') {
     const chain = normalizeChain(resolveIrChain(expr.callee, env.scope).fullName)
-    if (chain && PROCESS_CALLS.has(chain)) state.dynamicExecution = true
+    if (chain && PROCESS_CALLS.has(chain)) { state.dynamicExecution = true; recordEvidence(state, chain, 'dynamic-execution') }
     const pathMethod = expr.callee.kind === 'attr' ? expr.callee.attr : ''
     const receiver = expr.callee.kind === 'attr' ? expr.callee.base : undefined
     const receiverConstructor = receiver?.kind === 'call' ? normalizeChain(resolveIrChain(receiver.callee, env.scope).fullName) : undefined
@@ -236,12 +254,13 @@ function walkExpr(expr: IrExpr, env: WalkEnv, paths: Set<string>, state: WalkSta
       const value = receiver?.kind === 'call'
         ? (receiver.args.length === 1 ? staticString(receiver.args[0], env) : null)
         : receiverConst
-      if (value === null) state.dynamicExecution = true
+      if (value === null) { state.dynamicExecution = true; recordEvidence(state, chain, 'dynamic-execution') }
       else paths.add(value)
     } else if (chain && FILE_CALLS.has(chain)) {
       const count = chain === 'os.rename' || chain === 'os.replace' || chain === 'shutil.copy' || chain === 'shutil.copy2' || chain === 'shutil.move' ? 2 : 1
       if (expr.args.length < count || expr.args.slice(0, count).some((arg) => staticString(arg, env) === null)) {
         state.dynamicExecution = true
+        recordEvidence(state, chain, 'dynamic-execution')
       }
       for (const arg of expr.args.slice(0, count)) {
         const value = staticString(arg, env)
@@ -251,7 +270,7 @@ function walkExpr(expr: IrExpr, env: WalkEnv, paths: Set<string>, state: WalkSta
       for (const kw of expr.kwargs) {
         if (['file', 'path', 'src', 'dst', 'source', 'destination'].includes(kw.name)) {
           const value = staticString(kw.value, env)
-          if (value === null) state.dynamicExecution = true
+          if (value === null) { state.dynamicExecution = true; recordEvidence(state, chain, 'dynamic-execution') }
           else paths.add(value)
         }
       }
@@ -266,7 +285,7 @@ function walkExpr(expr: IrExpr, env: WalkEnv, paths: Set<string>, state: WalkSta
     if (
       !(chain && (FILE_CALLS.has(chain) || PROCESS_CALLS.has(chain) || isPureCallChain(chain))) &&
       !isPathMethod && !isPathConstructor && !receiverTyped && !isLocalDefCall
-    ) state.unmodeledCall = true
+    ) { state.unmodeledCall = true; recordEvidence(state, chain, 'unmodeled-call') }
     walkExpr(expr.callee, env, paths, state)
     expr.args.forEach((arg) => walkExpr(arg, env, paths, state))
     expr.kwargs.forEach((kw) => walkExpr(kw.value, env, paths, state))
@@ -500,7 +519,8 @@ function extractTypeScriptPathFacts(code: string, language: 'javascript' | 'type
     paths: [...paths],
     completeness: state.unknown ? 'unknown' : 'complete',
     dynamicAccess: state.unknown,
-    unknownReason: state.unknown ? 'dynamic-execution' : null
+    unknownReason: state.unknown ? 'dynamic-execution' : null,
+    unknownEvidence: []
   }
 }
 
@@ -536,8 +556,24 @@ function extractPowerShellPathFacts(code: string): ScriptPathFacts {
     paths: [...paths],
     completeness: unknown ? 'unknown' : 'complete',
     dynamicAccess: unknown,
-    unknownReason: unknown ? 'dynamic-execution' : null
+    unknownReason: unknown ? 'dynamic-execution' : null,
+    unknownEvidence: []
   }
+}
+
+/**
+ * P2-3:解析脚本首部声明式契约 `# @path-scope <scope>`。仅容忍 shebang / coding 等
+ * 首部注解行;出现第一条非注解语句行即停止;首个声明的 scope 未识别时视为未声明。
+ */
+function parseScriptPathDeclaration(code: string): ScriptPathDeclaration | undefined {
+  for (const line of code.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed.length === 0) continue
+    if (!trimmed.startsWith('#')) break
+    const match = /^#\s*@path-scope\s+([A-Za-z0-9_-]+)\s*$/.exec(trimmed)
+    if (match) return match[1] === 'workdir-readonly' ? 'workdir-readonly' : undefined
+  }
+  return undefined
 }
 
 /**
@@ -557,15 +593,18 @@ export function extractScriptPathFacts(code: string, language: ScriptPathLanguag
   }
   if (!scriptParserService.getStatus().ready) return emptyUnknown()
   const paths = new Set<string>()
-  const state: WalkState = { dynamicExecution: false, unmodeledCall: false }
+  const state: WalkState = { dynamicExecution: false, unmodeledCall: false, evidence: [] }
   const env: WalkEnv = { scope: newScope(), consts: new Map(), pure: new Set(), handles: new Set(), defs: new Set() }
   try { walkStatements(ir.body, env, paths, state, true) } catch { return emptyUnknown() }
   const unknown = state.dynamicExecution || state.unmodeledCall
+  const declaration = parseScriptPathDeclaration(code)
   return {
     paths: [...paths],
     completeness: unknown ? 'unknown' : 'complete',
     dynamicAccess: state.dynamicExecution,
     // 双类并存时按强语义归 dynamic-execution
-    unknownReason: !unknown ? null : state.dynamicExecution ? 'dynamic-execution' : 'unmodeled-call'
+    unknownReason: !unknown ? null : state.dynamicExecution ? 'dynamic-execution' : 'unmodeled-call',
+    unknownEvidence: state.evidence,
+    ...(declaration ? { declaration } : {})
   }
 }

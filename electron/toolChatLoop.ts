@@ -2277,6 +2277,7 @@ async function runToolChatSessionInner(
           }
         : null
       const shellSecurityHints: ShellSecurityHints | undefined = gate.shellPrecheck?.hints
+      const scriptPathHint: string | undefined = gate.scriptPathHint
       let preparedShellExecution: PreparedShellExecution | undefined
       const shellPolicyRevision = JSON.stringify({
         type: gate.decision.type,
@@ -2577,6 +2578,7 @@ async function runToolChatSessionInner(
             ...(confirmMemoryTiers.length ? { memoryTiers: confirmMemoryTiers } : {}),
             ...(diff ? { confirmDiff: diff } : {}),
             ...(shellSecurityHints ? { shellSecurityHints } : {}),
+            ...(scriptPathHint ? { scriptPathHint } : {}),
             ...(autoApproveFallback ? { autoApproveFallback } : {}),
             ...(gate.decision.type === 'require-confirm' && gate.decision.answerer === 'agent'
               ? { autoAnswerer: true as const }
@@ -2791,6 +2793,7 @@ async function runToolChatSessionInner(
                 ...(confirmMemoryTiers.length ? { memoryTiers: confirmMemoryTiers } : {}),
                 ...(fallbackDiff ? { confirmDiff: fallbackDiff } : {}),
                 ...(shellSecurityHints ? { shellSecurityHints } : {}),
+                ...(scriptPathHint ? { scriptPathHint } : {}),
                 autoApproveFallback: {
                   reasonCode:
                     fallbackCause === 'timeout'

@@ -242,6 +242,14 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-dynamic-access'] },
     action: 'confirm-every-time', locked: true, reason: '脚本含动态执行面，路径不可静态确认，需真人确认'
   },
+  // P1-2 边界补强:内容分析 suspicious(suspicious 本身落默认 ask)+ 路径 unknown 的组合,
+  // 维持 locked 逐次确认——松绑仅限 clean;旧 script-path-unknown-confirm 曾无差别兜住该组合。
+  {
+    id: 'script-suspicious-path-unknown-confirm',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['suspicious', 'script-path-extraction:unknown'] },
+    action: 'confirm-every-time', locked: true, reason: '脚本含需确认的危险模式且路径不可静态确认，需真人确认'
+  },
   {
     id: 'script-unverified-language-confirm',
     when: 'invocation',
@@ -322,6 +330,17 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   //  ② 必须先于所有匹配裸 clean 的 run_script 条目（script-clean-certified-remote / script-clean-allow-desktop），
   //     否则远程在 remoteScriptRequiresConfirm=false 时被 askUnlessHolds 降为 allow、桌面被静默放行；
   //  ③ 位于 locked 的 script-uncertified-ask-remote 之后：远程未认证保护（locked）优先于本条非 locked ask。
+  // P2-3:声明式契约 `# @path-scope workdir-readonly` 且与分析交叉一致。声明是作者断言,
+  // 默认关闭(allowDeclaredPathScopeScripts ≠ true 不命中)——开启即接受「声明即授权」信任模型。
+  // 必须先于 script-unmodeled-path-ask(config 关闭时不命中,回落 ask)。
+  {
+    id: 'script-declared-path-scope-allow-desktop',
+    when: 'invocation',
+    match: { lane: ['desktop'], toolName: 'run_script', signals: ['clean', 'script-path-extraction:unknown', 'script-path-declaration-consistent'] },
+    action: 'allow',
+    configRequires: { config: 'allowDeclaredPathScopeScripts', equals: true },
+    reason: '脚本声明仅读工作目录且与分析交叉一致（设置开启后免确认）'
+  },
   {
     id: 'script-unmodeled-path-ask',
     when: 'invocation',

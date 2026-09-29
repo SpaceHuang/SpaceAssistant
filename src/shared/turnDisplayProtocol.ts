@@ -48,6 +48,7 @@ export type ConfirmationDisplay = {
   riskLevel: ToolRiskLevel
   effect: 'read' | 'write' | 'execute' | 'navigate' | 'connect' | 'unknown'
   shellSecurityHints?: ToolCallRecord['shellSecurityHints']
+  scriptPathHint?: ToolCallRecord['scriptPathHint']
   browser: { currentPageUrl?: string; dangerInfo?: ToolCallRecord['dangerInfo']; sessionTrustedHint?: true }
   mcp?: { serverId: string; serverName: string; originalToolName: string; mappedToolName: string; description?: string }
   autoApproveFallback?: ToolCallRecord['autoApproveFallback']
@@ -147,6 +148,7 @@ export function toConfirmationSnapshot(input: { sessionId: string; turnId: strin
       toolCallId: tool.id, input: tool.input, riskLevel: tool.riskLevel, effect: effectForTool(tool.toolName),
       memoryTiers: (tool.memoryTiers ?? []).map((tier, index) => ({ optionId: index + 1, label: tier.label })),
       ...(tool.shellSecurityHints ? { shellSecurityHints: tool.shellSecurityHints } : {}),
+      ...(tool.scriptPathHint ? { scriptPathHint: tool.scriptPathHint } : {}),
       browser: { ...(tool.currentPageUrl ? { currentPageUrl: tool.currentPageUrl } : {}), ...(tool.dangerInfo ? { dangerInfo: tool.dangerInfo } : {}), ...(tool.sessionTrustedHint ? { sessionTrustedHint: true as const } : {}) },
       ...(tool.mcp ? { mcp: { ...tool.mcp, mappedToolName: tool.toolName } } : {}),
       ...(tool.autoApproveFallback ? { autoApproveFallback: tool.autoApproveFallback } : {}),
