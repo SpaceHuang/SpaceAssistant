@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 18
+export const DB_SCHEMA_VERSION = 19
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (
@@ -324,6 +324,22 @@ CREATE INDEX IF NOT EXISTS idx_usage_turn_app_version_day ON usage_turn_facts(ap
  */
 export const MIGRATION_V17_SESSION_THINKING_EFFORT_SQL = `
 ALTER TABLE sessions ADD COLUMN thinking_effort TEXT;
+`
+
+/**
+ * Agent Token 用量归因扩列（v19，AD23 / AD24 / §7.6.3 方案 B1）：
+ * 不新增表、不改 UNIQUE 键；老行新列为 NULL，统计侧按「无归因数据」降级（AT8 / I5）。
+ * - usage_step_facts：输入侧三源真列（SRC-A*，block-v1 整体重估）+ 独立真列 estimator_version
+ *   （AD18：按版本分组过滤需可索引，版本号不放 JSON 内）+ 归因 JSON 列（messages 骨架 + 输出侧）。
+ * - usage_turn_facts：工具维度归因 JSON 列（tools / toolSource / toolResults，§7.6.5）。
+ */
+export const MIGRATION_V19_USAGE_ATTRIBUTION_SQL = `
+ALTER TABLE usage_step_facts ADD COLUMN system_tokens INTEGER;
+ALTER TABLE usage_step_facts ADD COLUMN tools_tokens INTEGER;
+ALTER TABLE usage_step_facts ADD COLUMN message_tokens INTEGER;
+ALTER TABLE usage_step_facts ADD COLUMN estimator_version TEXT;
+ALTER TABLE usage_step_facts ADD COLUMN attribution_json TEXT;
+ALTER TABLE usage_turn_facts ADD COLUMN tool_attribution_json TEXT;
 `
 
 export const SCHEMA_META_KEYS = {

@@ -65,14 +65,14 @@ function turnFact(overrides: Partial<UsageTurnFactInput> = {}): UsageTurnFactInp
 
 describe('v16 用量统计表迁移', () => {
   it('当前 schema version 为 16', () => {
-    expect(DB_SCHEMA_VERSION).toBe(18)
+    expect(DB_SCHEMA_VERSION).toBe(19)
   })
 
   it('v15 库升级到 v16 后两张统计表与索引存在，且重复迁移幂等', () => {
     const conn = createV15Database()
     runMigrations(conn)
 
-    expect(conn.prepare('SELECT value FROM schema_meta WHERE key = ?').get(SCHEMA_META_KEYS.schemaVersion)).toMatchObject({ value: '18' })
+    expect(conn.prepare('SELECT value FROM schema_meta WHERE key = ?').get(SCHEMA_META_KEYS.schemaVersion)).toMatchObject({ value: '19' })
     const tables = (conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((t) => t.name)
     expect(tables).toContain('usage_step_facts')
     expect(tables).toContain('usage_turn_facts')
@@ -157,6 +157,55 @@ describe('usage_step_facts / usage_turn_facts 读写', () => {
     const conn = getDbConnection(db)
     expect(conn.prepare('PRAGMA foreign_key_list(usage_step_facts)').all()).toHaveLength(0)
     expect(conn.prepare('PRAGMA foreign_key_list(usage_turn_facts)').all()).toHaveLength(0)
+    db.close()
+  })
+
+  it('v19 归因列：step 行写入三源真列 + estimator_version + 归因 JSON 并完整读回', () => {
+    const db = createMemoryAppDb()
+    const attributionJson = JSON.stringify({ schemaVersion: 1, blocks: { 'user|text': { chars: 5, tokens: 2 } } })
+    insertUsageStepFact(db, stepFact({
+      systemTokens: 1124,
+      toolsTokens: 16476,
+      messageTokens: 320875,
+      estimatorVersion: 'block-v1',
+      attributionJson
+    }))
+    const rows = getUsageStepFactsForTurn(db, 'sess-1', 'turn-1')
+    expect(rows[0].systemTokens).toBe(1124)
+    expect(rows[0].toolsTokens).toBe(16476)
+    expect(rows[0].messageTokens).toBe(320875)
+    expect(rows[0].estimatorVersion).toBe('block-v1')
+    expect(rows[0].attributionJson).toBe(attributionJson)
+    db.close()
+  })
+
+  it('归因列允许缺省（读回为 null——无归因数据降级语义，AT8）', () => {
+    const db = createMemoryAppDb()
+    insertUsageStepFact(db, stepFact())
+    const rows = getUsageStepFactsForTurn(db, 'sess-1', 'turn-1')
+    expect(rows[0].systemTokens).toBeNull()
+    expect(rows[0].estimatorVersion).toBeNull()
+    expect(rows[0].attributionJson).toBeNull()
+    db.close()
+  })
+
+  it('归因列随重复写覆盖（重试幂等，不残留旧归因）', () => {
+    const db = createMemoryAppDb()
+    insertUsageStepFact(db, stepFact({ estimatorVersion: 'block-v1', attributionJson: '{"schemaVersion":1,"blocks":{}}' }))
+    insertUsageStepFact(db, stepFact())
+    const rows = getUsageStepFactsForTurn(db, 'sess-1', 'turn-1')
+    expect(rows[0].estimatorVersion).toBeNull()
+    expect(rows[0].attributionJson).toBeNull()
+    db.close()
+  })
+
+  it('v19 工具维度列：turn 行写入 tool_attribution_json 并读回；覆盖同样生效', () => {
+    const db = createMemoryAppDb()
+    const toolJson = JSON.stringify({ tools: { grep: 1254 }, toolSource: { builtin: 1254 }, toolResults: { grep: { calls: 3, chars: 900 } } })
+    upsertUsageTurnFact(db, turnFact({ toolAttributionJson: toolJson }))
+    expect(getUsageTurnFact(db, 'turn-1')!.toolAttributionJson).toBe(toolJson)
+    upsertUsageTurnFact(db, turnFact())
+    expect(getUsageTurnFact(db, 'turn-1')!.toolAttributionJson).toBeNull()
     db.close()
   })
 })
