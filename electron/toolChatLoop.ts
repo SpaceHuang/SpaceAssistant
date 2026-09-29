@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk'
+import Anthropic, { APIUserAbortError } from '@anthropic-ai/sdk'
 import { toolIdToOpenAiCompatibleApiToolName } from '../src/shared/anthropicToolSanitize'
 import { sanitizeCapabilityParamsForDisplay } from '../src/shared/capabilityParamSanitize'
 import { normalizeExternalToolName } from '../src/shared/toolNameCompatibility'
@@ -1333,9 +1333,11 @@ async function runToolChatSessionInner(
     }
 
     try {
+      // chat-abort-latency 方案改动 1a：绑定请求级 AbortSignal——TTFB 等待 / 长 thinking / 网络 stall
+      // 期间点中止，fetch 层即刻销毁连接，不必等下一个 SSE 事件才走 throwIfChatCancelled。
       const stream = client.messages.stream({
         ...toolLoopStreamParams
-      } as Parameters<typeof client.messages.stream>[0])
+      } as Parameters<typeof client.messages.stream>[0], { signal: chatSignal })
 
       const contentBlockTypes = new Map<number, string>()
       const contentBlocks: Array<unknown> = []
@@ -1626,7 +1628,12 @@ async function runToolChatSessionInner(
         turnUsageStats.stepCount += 1
         lastValidUsage = usage
       }
-      if (e instanceof ChatCancelledError) throw e
+      // chat-abort-latency 方案改动 1b（评审 B1 修订：本判定必须在上方用量结算块之后）：
+      // signal abort 后 SDK 抛 APIUserAbortError 而非 ChatCancelledError；优先以 chatSignal.aborted
+      // 为锚（同时覆盖 abort 与网络错误竞态），其次识别 APIUserAbortError，统一收敛为取消而非 failed。
+      if (e instanceof ChatCancelledError || chatSignal.aborted || e instanceof APIUserAbortError) {
+        throw new ChatCancelledError()
+      }
       // §7.4：上游拒绝 output_config（明确未知字段类 400）→ 去强度（保留 adaptive）自动重试一次，
       // 落 llm.effort.unsupported 审计 + 进程内记忆（粒度 llmServiceId+model）；其余错误按既有路径上抛
       if (effortOutputConfig && !effortRetryUsed && isOutputConfigRejectedError(e)) {
