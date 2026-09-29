@@ -63,7 +63,10 @@ function bindImport(scope: IrScope, stmt: Extract<IrStmt, { kind: 'import' | 'fr
   if (stmt.kind === 'import') {
     for (const item of stmt.names) {
       const root = item.module.split('.')[0] ?? item.module
-      scope.modules.set(item.alias ?? root, item.module)
+      // 评审 B3:`import os.path` 在 Python 里把根名 os 绑进命名空间(os.system 照常可用)。
+      // 无 alias 时必须绑 root→root——绑完整 module 会把 os.* 全家族污染成 os.path.*,
+      // 命中纯计算白名单而完全绕过确认门。别名形态(import os.path as op)仍绑完整 module。
+      scope.modules.set(item.alias ?? root, item.alias ? item.module : root)
     }
   } else {
     for (const item of stmt.names) {
@@ -82,6 +85,12 @@ function bindImport(scope: IrScope, stmt: Extract<IrStmt, { kind: 'import' | 'fr
  */
 /** P2-1 证据封顶:防超大脚本撑爆 facts(超出部分丢弃,不影响判定)。 */
 const UNKNOWN_EVIDENCE_CAP = 8
+/** N2:常量环境条目上限(超出后不再绑定——名字保持未绑定,IO 处自然落 unknown)。 */
+const CONST_ENV_CAP = 256
+/** N2:路径折叠递归深度上限(防深嵌套表达式爆炸;超限返回 null,保守不折叠)。 */
+const FOLD_DEPTH_CAP = 32
+/** N2:循环体双扫嵌套层数上限(超过后只扫一遍并保守置 unmodeled,防 2^depth 扫描爆炸)。 */
+const DOUBLE_SCAN_DEPTH_CAP = 4
 
 interface WalkState {
   dynamicExecution: boolean
@@ -154,14 +163,15 @@ function posixBasename(value: string): string {
  * 构造器折叠:os.path.join / dirname / basename / splitext[01]、Path·PurePath 构造器与其
  * `/` 运算、以及 P0-2 常量环境中的名字。仅做纯字符串演算,不引入任何 IO 语义。
  */
-function foldPathIr(expr: IrExpr, env: WalkEnv): string | null {
+function foldPathIr(expr: IrExpr, env: WalkEnv, depth = 0): string | null {
+  if (depth > FOLD_DEPTH_CAP) return null
   switch (expr.kind) {
     case 'name':
       return env.consts.get(expr.id) ?? null
     case 'binop': {
       if (expr.op !== '+' && expr.op !== '/') return null
-      const left = foldPathIr(expr.left, env)
-      const right = foldPathIr(expr.right, env)
+      const left = foldPathIr(expr.left, env, depth + 1)
+      const right = foldPathIr(expr.right, env, depth + 1)
       if (left === null || right === null) return null
       return expr.op === '+' ? left + right : joinPathPosix([left, right])
     }
@@ -170,7 +180,7 @@ function foldPathIr(expr: IrExpr, env: WalkEnv): string | null {
       if (expr.value.kind === 'call') {
         const chain = normalizeChain(resolveIrChain(expr.value.callee, env.scope).fullName)
         if (chain === 'os.path.splitext' && expr.value.args.length === 1 && expr.value.kwargs.length === 0 && expr.index.kind === 'number') {
-          const base = foldPathIr(expr.value.args[0]!, env)
+          const base = foldPathIr(expr.value.args[0]!, env, depth + 1)
           if (base !== null) {
             const dot = base.lastIndexOf('.')
             const index = Number(expr.index.value)
@@ -185,19 +195,19 @@ function foldPathIr(expr: IrExpr, env: WalkEnv): string | null {
       const chain = normalizeChain(resolveIrChain(expr.callee, env.scope).fullName)
       const single = expr.args.length === 1 && expr.kwargs.length === 0
       if ((chain === 'pathlib.Path' || chain === 'pathlib.PurePath' || chain === 'Path' || chain === 'PurePath') && single) {
-        return foldPathIr(expr.args[0]!, env)
+        return foldPathIr(expr.args[0]!, env, depth + 1)
       }
       if (chain === 'os.path.join' && expr.args.length >= 1 && expr.kwargs.length === 0) {
         const parts: string[] = []
         for (const arg of expr.args) {
-          const value = foldPathIr(arg, env)
+          const value = foldPathIr(arg, env, depth + 1)
           if (value === null) return null
           parts.push(value)
         }
         return joinPathPosix(parts)
       }
       if (single && (chain === 'os.path.dirname' || chain === 'os.path.basename')) {
-        const value = foldPathIr(expr.args[0]!, env)
+        const value = foldPathIr(expr.args[0]!, env, depth + 1)
         if (value === null) return null
         return chain === 'os.path.dirname' ? posixDirname(value) : posixBasename(value)
       }
@@ -213,12 +223,22 @@ function staticString(expr: IrExpr | undefined, env: WalkEnv): string | null {
   return foldPathIr(expr, env)
 }
 
-/** P0-2 失效点:任何(再)绑定/删除都先从常量环境移除;非简单名(下标/属性/元组拼接文本)是容器变异,不动基名。 */
-function invalidateName(name: string, env: WalkEnv): void {
-  if (!isSimpleName(name)) return
-  env.consts.delete(name)
-  env.pure.delete(name)
-  env.handles.delete(name)
+/**
+ * P0-2 失效点:任何(再)绑定/删除都先从常量环境移除。
+ * - 评审 B2:适配层把元组目标拼成 "p,q" 文本——按逗号切分逐名失效;下标/属性片段
+ *   (如 a[0]、c["x"])仍非简单名,自然跳过(容器变异不动基名)。
+ * - 评审 B1:def 名被重绑定等同 import 名重绑定(事实链断裂)——defs 参与失效,且
+ *   置 dynamic-execution(与 import 重绑定同级,不降级为可信任覆盖的 unmodeled-call)。
+ */
+function invalidateName(name: string, env: WalkEnv, state: WalkState): void {
+  for (const part of name.split(',')) {
+    const partName = part.trim()
+    if (!isSimpleName(partName)) continue
+    env.consts.delete(partName)
+    env.pure.delete(partName)
+    env.handles.delete(partName)
+    if (env.defs.delete(partName)) state.dynamicExecution = true
+  }
 }
 
 function isPureValueExpr(expr: IrExpr, env: WalkEnv): boolean {
@@ -307,7 +327,7 @@ function walkExpr(expr: IrExpr, env: WalkEnv, paths: Set<string>, state: WalkSta
     case 'yield': if (expr.value) walkExpr(expr.value, env, paths, state); break
     case 'comprehension':
       // N7:comprehension 目标失效属无害的过度保守——先失效再走 elt,防止把迭代变量当常量
-      for (const gen of expr.generators) invalidateName(gen.target, env)
+      for (const gen of expr.generators) invalidateName(gen.target, env, state)
       walkExpr(expr.elt, env, paths, state)
       expr.generators.forEach((g) => walkExpr(g.iter, env, paths, state))
       break
@@ -315,7 +335,7 @@ function walkExpr(expr: IrExpr, env: WalkEnv, paths: Set<string>, state: WalkSta
   }
 }
 
-function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state: WalkState, bindable: boolean): void {
+function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state: WalkState, bindable: boolean, depth = 0): void {
   const scope = { modules: new Map(env.scope.modules), attrs: new Map(env.scope.attrs) }
   const blockEnv: WalkEnv = { ...env, scope }
   for (const stmt of stmts) {
@@ -327,11 +347,11 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
         walkExpr(stmt.value, blockEnv, paths, state)
         for (const name of stmt.targets) {
           if (scope.modules.has(name) || scope.attrs.has(name)) state.dynamicExecution = true
-          invalidateName(name, blockEnv)
+          invalidateName(name, blockEnv, state)
           // P0-2:仅顶层单次赋值绑定常量;分支/循环/try/with/函数体内(bindable=false)不绑定,
           // 只失效——分支可能不执行,绑定值不确定(§10-2 拍板:保守优先)。
           if (!bindable || !isSimpleName(name)) continue
-          if (folded !== null) blockEnv.consts.set(name, folded)
+          if (folded !== null && blockEnv.consts.size < CONST_ENV_CAP) blockEnv.consts.set(name, folded)
           else if (isPureValueExpr(stmt.value, blockEnv)) blockEnv.pure.add(name)
           else if (isHandleValueExpr(stmt.value, blockEnv)) blockEnv.handles.add(name)
         }
@@ -342,46 +362,57 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
         // 一律失效(N3:p += os.environ["X"] 不得误判可静态确定)。仅 import 名重绑定保持 unknown。
         if (scope.modules.has(stmt.target) || scope.attrs.has(stmt.target)) state.dynamicExecution = true
         walkExpr(stmt.value, blockEnv, paths, state)
-        invalidateName(stmt.target, blockEnv)
+        invalidateName(stmt.target, blockEnv, state)
         break
       case 'expr': walkExpr(stmt.value, blockEnv, paths, state); break
       case 'if':
         walkExpr(stmt.test, blockEnv, paths, state)
-        walkStatements(stmt.body, blockEnv, paths, state, false)
-        walkStatements(stmt.orelse, blockEnv, paths, state, false)
+        walkStatements(stmt.body, blockEnv, paths, state, false, depth)
+        walkStatements(stmt.orelse, blockEnv, paths, state, false, depth)
         break
       case 'for': {
         walkExpr(stmt.iter, blockEnv, paths, state)
-        invalidateName(stmt.target, blockEnv)
+        invalidateName(stmt.target, blockEnv, state)
         // 循环体两遍扫描:第一遍收集首轮的静态路径;第二遍在体内写入已失效的环境上重扫,
-        // 让 loop-carried 重绑定(p 在体内被改写)在次轮起落 unknown
-        walkStatements(stmt.body, blockEnv, paths, state, false)
-        walkStatements(stmt.body, blockEnv, paths, state, false)
-        walkStatements(stmt.orelse, blockEnv, paths, state, false)
+        // 让 loop-carried 重绑定(p 在体内被改写)在次轮起落 unknown。
+        // N2:嵌套深度封层(2^depth 扫描爆炸防护)——超限只扫一遍并保守置 unmodeled。
+        if (depth < DOUBLE_SCAN_DEPTH_CAP) {
+          walkStatements(stmt.body, blockEnv, paths, state, false, depth + 1)
+          walkStatements(stmt.body, blockEnv, paths, state, false, depth + 1)
+        } else {
+          state.unmodeledCall = true
+          walkStatements(stmt.body, blockEnv, paths, state, false, depth + 1)
+        }
+        walkStatements(stmt.orelse, blockEnv, paths, state, false, depth)
         break
       }
       case 'while':
         walkExpr(stmt.test, blockEnv, paths, state)
-        walkStatements(stmt.body, blockEnv, paths, state, false)
-        walkStatements(stmt.body, blockEnv, paths, state, false)
-        walkStatements(stmt.orelse, blockEnv, paths, state, false)
+        if (depth < DOUBLE_SCAN_DEPTH_CAP) {
+          walkStatements(stmt.body, blockEnv, paths, state, false, depth + 1)
+          walkStatements(stmt.body, blockEnv, paths, state, false, depth + 1)
+        } else {
+          state.unmodeledCall = true
+          walkStatements(stmt.body, blockEnv, paths, state, false, depth + 1)
+        }
+        walkStatements(stmt.orelse, blockEnv, paths, state, false, depth)
         break
       case 'with': {
         for (const item of stmt.items) {
           walkExpr(item.contextExpr, blockEnv, paths, state)
           for (const name of item.optionalVars) {
-            invalidateName(name, blockEnv)
+            invalidateName(name, blockEnv, state)
             if (isSimpleName(name) && isHandleValueExpr(item.contextExpr, blockEnv)) blockEnv.handles.add(name)
           }
         }
-        walkStatements(stmt.body, blockEnv, paths, state, false)
+        walkStatements(stmt.body, blockEnv, paths, state, false, depth)
         break
       }
       case 'try':
-        walkStatements(stmt.body, blockEnv, paths, state, false)
-        stmt.handlers.forEach((h) => { if (h.typeExpr) walkExpr(h.typeExpr, blockEnv, paths, state); walkStatements(h.body, blockEnv, paths, state, false) })
-        walkStatements(stmt.orelse, blockEnv, paths, state, false)
-        walkStatements(stmt.finalbody, blockEnv, paths, state, false)
+        walkStatements(stmt.body, blockEnv, paths, state, false, depth)
+        stmt.handlers.forEach((h) => { if (h.typeExpr) walkExpr(h.typeExpr, blockEnv, paths, state); walkStatements(h.body, blockEnv, paths, state, false, depth) })
+        walkStatements(stmt.orelse, blockEnv, paths, state, false, depth)
+        walkStatements(stmt.finalbody, blockEnv, paths, state, false, depth)
         break
       case 'function_def': {
         stmt.defaults.forEach((v) => walkExpr(v, blockEnv, paths, state))
@@ -390,7 +421,7 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
         // P0-4:函数定义本身不设 unknown(函数体本就递归扫描);常量/纯值/句柄不跨作用域传播,
         // imports 与已知定义(含自身,支持递归)对函数体可见
         const fnEnv: WalkEnv = { scope, consts: new Map(), pure: new Set(), handles: new Set(), defs: new Set(blockEnv.defs) }
-        walkStatements(stmt.body, fnEnv, paths, state, false)
+        walkStatements(stmt.body, fnEnv, paths, state, false, depth)
         break
       }
       case 'class_def': {
@@ -398,7 +429,7 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
         stmt.decorators.forEach((v) => walkExpr(v, blockEnv, paths, state))
         blockEnv.defs.add(stmt.name)
         const classEnv: WalkEnv = { scope, consts: new Map(), pure: new Set(), handles: new Set(), defs: new Set(blockEnv.defs) }
-        walkStatements(stmt.body, classEnv, paths, state, false)
+        walkStatements(stmt.body, classEnv, paths, state, false, depth)
         break
       }
       case 'return': if (stmt.value) walkExpr(stmt.value, blockEnv, paths, state); break
@@ -409,12 +440,14 @@ function walkStatements(stmts: IrStmt[], env: WalkEnv, paths: Set<string>, state
         for (const target of stmt.targets) {
           if (target.kind === 'name') {
             if (scope.modules.has(target.id) || scope.attrs.has(target.id)) state.dynamicExecution = true
-            invalidateName(target.id, blockEnv)
+            invalidateName(target.id, blockEnv, state)
           }
           walkExpr(target, blockEnv, paths, state)
         }
         break
-      case 'global_nonlocal': state.unmodeledCall = true; break
+      // 评审 N1:global/nonlocal 可改写外层绑定(含模块级常量),函数体 env 看不到外层
+      // consts——影响面无法精确判定,恢复基线强度归 dynamic-execution(locked、禁记忆)。
+      case 'global_nonlocal': state.dynamicExecution = true; break
       case 'pass': case 'break': case 'continue': break
     }
   }

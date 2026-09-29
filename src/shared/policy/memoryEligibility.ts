@@ -30,9 +30,11 @@ export function deriveMemoryEligibility(
   // 任何记忆;unmodeled-call 仅开放会话级(P2-2 脚本内容指纹,exact-content 键;路径键在
   // deriveCacheKeys 中整体抑制,防止不同脚本经重叠路径命中缓存)。
   if (facts.signals.some((signal) => signal.kind === 'script-path-extraction' && signal.completeness === 'unknown')) {
+    // 评审 N5 防御:unknownReason 缺失(null)的组合按 dynamic-execution 归类(fail-closed,
+    // 不依赖生产者保证分类一致);评审 N4 防御:同 facts 含 extraction-failed 时一并按 dynamic。
     const dynamic = facts.signals.some(
-      (signal) => signal.kind === 'script-path-extraction' && signal.unknownReason === 'dynamic-execution'
-    )
+      (signal) => signal.kind === 'script-path-extraction' && signal.unknownReason !== 'unmodeled-call'
+    ) || facts.signals.some((signal) => signal.kind === 'extraction-failed')
     if (dynamic) {
       reasons.push('script-path-unknown')
       return { eligibility: 'none', reasons }

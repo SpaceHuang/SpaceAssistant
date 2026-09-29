@@ -1,6 +1,6 @@
 # run_script 路径提取假阳性：诊断与改进方案
 
-- 状态：已实施（2026-09-30，P0 / P1 / P2 全量落地，见 §12 实施记录；端到端真机验收遗留，见 §12.6）
+- 状态：已实施（2026-09-30，P0 / P1 / P2 全量落地；同日评审 B1/B2/B3 阻断项已修复，见 §12.7；端到端真机验收遗留，见 §12.6）
 - 触发场景：会话 `a7981827-5a20-4eab-a6fd-a2971e12659c`（"会话 27"）中 `run_script` 反复弹人工确认卡
 - 涉及模块：`electron/confirmation/extractors/scriptPathFacts.ts`、`electron/shell/scriptIr/pythonAdapter.ts`、`src/shared/policy/defaultRules.ts`
 - 关联文档：`docs/develop/script-security-parser-treesitter-upgrade-plan.md`、`docs/develop/security-approval-experience-improvement-plan.md`
@@ -1071,3 +1071,36 @@ for (const rawPath of scriptPaths.paths) {
 3. **P2-2 会话信任体验**：确认卡「记住 · 本会话此脚本」档位在真实确认流中的呈现与命中；
 4. **P2-3 开关**：`allowDeclaredPathScopeScripts` 目前无设置 UI 入口（config 门控默认关闭），
    如需对外开放需补设置页开关与文案。
+
+### 12.7 评审修复记录（2026-09-30 第二轮）
+
+评审报告：`docs/review/script-path-extraction-fp-review.md`（3 阻断 + 9 非阻断，均动态复现）。
+三个阻断项全部为**确认门完全绕过**级（判 complete 不弹卡），且 49 个既有用例全部 miss——
+缺失的正是负向对抗用例，修复按评审给出的 3 组定向测试先行转红再修。
+
+| 项 | 根因 | 修复 | 测试 |
+|---|---|---|---|
+| B1 | `invalidateName` 不清理 `defs`——def 名被 `=` / `for` 目标 / 分支内重绑定为 `os.system` 后调用走 `isLocalDefCall` 豁免 | `invalidateName` 补 `defs.delete`；且 def 名被重绑定视为事实链断裂，与 import 重绑定同级置 `dynamic-execution`（评审"更稳妥"建议） | B1a–d 四变体（含 with-as）+ 未重绑定对照 |
+| B2 | 适配层把元组目标拼成 `"p,q"` 文本，`isSimpleName` 不过 → `for p, q in items` 后 `open(p)` 用旧常量判 complete | `invalidateName` 按逗号切分逐名失效（下标/属性片段仍非简单名自然跳过） | B2a（for）/ B2b（comprehension） |
+| B3 | `import os.path` 无 alias 时绑 `os → os.path`，`os.system` 被解析成 `os.path.system` 命中纯白名单 | `bindImport` 无 alias 绑 `root→root`（Python 真实语义：`import x.y` 绑根名）；别名形态不变 | B3a（os.system）/ B3b（os.popen、os.remove 变量）/ 折叠对照（`os.path.join` 不受影响） |
+
+非阻断项处置：
+
+- **N1**（global 改写场景降级 unmodeled、卡片路径展示误导）：`global_nonlocal` 恢复基线强度归
+  `dynamic-execution`（函数体 env 看不到外层 consts，影响面无法精确判定 → locked、禁记忆）；
+- **N2**（上限保护未落实）：补三项——`CONST_ENV_CAP=256`（常量环境条目）、
+  `FOLD_DEPTH_CAP=32`（折叠递归深度，超限返回 null 保守不折叠）、
+  `DOUBLE_SCAN_DEPTH_CAP=4`（循环双扫嵌套层数，超限只扫一遍并保守置 unmodeled）；
+- **N3**（with-as 重绑定 def 名）：随 B1 的 `invalidateName` 统一覆盖；
+- **N4/N5**（记忆资格防御）：unknown 分支的 dynamic 判定改为「`unknownReason !== 'unmodeled-call'`
+  或同 facts 含 extraction-failed」——`unknownReason: null` 与探测失败组合一律 fail-closed 禁记忆；
+  `signalTokenSet` 对 unknown 无分类的组合强制产 `script-dynamic-access`（落 locked，不落 ask）；
+- **N6**（gate 侧零覆盖）：补门控级断言——`scriptPathHint` 含调用名、信号携带 64 位
+  `contentDigest`、`script-path-declaration` 信号与 consistent 值；
+- **N7**（hint fallback 文案硬编码 + 注释失实）：文案入 `CONFIRMATION_LABELS`，注释更正；
+- **N8**（声明交叉验证漏 extraction-failed）：`consistent` 增加探测失败排除；
+- **N9**（`allowDeclaredPathScopeScripts` 死开关）：维持默认关闭方向（安全），启用前需补
+  AppConfig 字段与设置 UI——已列 §12.6-4，本项不改代码。
+
+修复后验证：评审 3 组定向测试 + N 系列防御用例转绿（提取器 62 用例）；相关 8 套件
+313 用例通过；全量 `npm test` 与 `typecheck` 复验通过（见提交记录）。

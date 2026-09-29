@@ -822,6 +822,14 @@ describe('decide:P1 脚本 unknown 分级(松绑与兜底,方案 §5 P1-1/P1-2/P
     expect(DEFAULT_POLICY_RULES.find((r) => r.id === 'script-path-unknown-confirm')).toBeUndefined()
   })
 
+  it('N5 防御:unknown 但未携带分类 → 强制产 script-dynamic-access(落 locked,不落 ask)', () => {
+    const tokens = signalTokenSet(mkFacts('run_script', 'execute', [
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: null }
+    ], 'high'))
+    expect(tokens.has('script-dynamic-access')).toBe(true)
+    expect(tokens.has('script-path-extraction:unknown')).toBe(true)
+  })
+
   it('signalTokenSet:分类 token 只增不替(:unknown 与分类并存)', () => {
     const tokens = signalTokenSet(mkFacts('run_script', 'execute', [
       { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call' }

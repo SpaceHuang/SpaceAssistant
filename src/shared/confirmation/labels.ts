@@ -20,6 +20,7 @@ export const CONFIRMATION_LABELS = {
   memoryTierGenericSuffix: '目标',
   scriptMemoryTierSuffix: '本会话此脚本',
   scriptPathUnknownHintPrefix: '路径分析未覆盖：',
+  scriptPathUnknownHintFallback: '无法定位具体调用',
   scriptDynamicExecutionHintPrefix: '脚本含动态执行面：',
   scriptDeclarationHint: '脚本声明仅读工作目录'
 } as const

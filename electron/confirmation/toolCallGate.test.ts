@@ -982,6 +982,30 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
+  it('P2 门控:unknown 脚本回显 scriptPathHint、信号携带 contentDigest、声明进入信号(评审 N6)', async () => {
+    await scriptParserService.ensureInitialized()
+    const root = await fs.mkdtemp('/tmp/script-p2-gate-')
+    try {
+      const gate = await evaluateToolCallGate(base({
+        workDir: root, userDataDir: path.join(root, '.userdata'),
+        toolName: 'run_script',
+        toolInput: { code: 'custom_accessor(target)' }
+      }))
+      expect(gate.scriptPathHint).toContain('custom_accessor')
+      const extraction = gate.facts.signals.find((sig) => sig.kind === 'script-path-extraction')
+      expect(extraction && 'contentDigest' in extraction && /^[0-9a-f]{64}$/.test(extraction.contentDigest ?? '')).toBe(true)
+
+      const declared = await evaluateToolCallGate(base({
+        workDir: root, userDataDir: path.join(root, '.userdata'),
+        toolName: 'run_script',
+        toolInput: { code: '# @path-scope workdir-readonly\nprint("x")' }
+      }))
+      expect(declared.facts.signals).toContainEqual({ kind: 'script-path-declaration', scope: 'workdir-readonly', consistent: true })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('V3 run_script 静态敏感路径与内容分析共享一次解析，并进入敏感路径真人确认规则', async () => {
     const root = await fs.realpath(await fs.mkdtemp('/tmp/script-static-path-root-'))
     const toolInput = { code: 'open("/etc/hosts", "r")' }

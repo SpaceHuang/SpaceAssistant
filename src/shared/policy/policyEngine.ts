@@ -63,7 +63,9 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
       case 'script-path-extraction':
         tokens.add(signal.kind)
         tokens.add(`script-path-extraction:${signal.completeness}`)
-        if (signal.dynamicAccess) tokens.add('script-dynamic-access')
+        // 评审 N5 防御:unknown 但未携带分类(未来生产者遗漏)时强制归 dynamic-access——
+        // 落 locked 强处置(fail-closed),不得落 unmodeled ask。
+        if (signal.dynamicAccess || (signal.completeness === 'unknown' && !signal.unknownReason)) tokens.add('script-dynamic-access')
         // P1-1:分类 token 只增不替——`:unknown` 对两类继续产出(automation-script-path-unknown-deny
         // 依赖它,替换即安全倒退);分类 token 供 script-unmodeled-path-ask 松绑消费。
         if (signal.unknownReason) tokens.add(`script-path-extraction:${signal.unknownReason}`)

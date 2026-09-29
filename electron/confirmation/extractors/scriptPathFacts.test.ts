@@ -271,9 +271,9 @@ describe('extractScriptPathFacts:P1 unknown 分类', () => {
     expect(extractScriptPathFacts('some_module.do_thing("x")', 'python')).toMatchObject({ unknownReason: 'unmodeled-call' })
   })
 
-  it('import 名重绑定视为事实链断裂归 dynamic-execution;global_nonlocal 归 unmodeled-call', () => {
+  it('import 名重绑定视为事实链断裂归 dynamic-execution;global_nonlocal 同级(评审 N1:可改写外层绑定,禁记忆)', () => {
     expect(extractScriptPathFacts('import os\nos = fake\nopen("/a")', 'python')).toMatchObject({ completeness: 'unknown', unknownReason: 'dynamic-execution' })
-    expect(extractScriptPathFacts('def f():\n    global counter\ncounter = 1', 'python')).toMatchObject({ unknownReason: 'unmodeled-call' })
+    expect(extractScriptPathFacts('def f():\n    global counter\ncounter = 1', 'python')).toMatchObject({ unknownReason: 'dynamic-execution' })
   })
 
   it('fail-closed 闸门(语法错误/未接入语言)保守归 dynamic-execution(§10-5:与脚本内容无关的失败不松绑)', () => {
@@ -333,5 +333,124 @@ describe('extractScriptPathFacts:P2 证据与声明', () => {
     expect(extractScriptPathFacts('# @path-scope whatever\nprint("x")', 'python').declaration).toBeUndefined()
     expect(extractScriptPathFacts('import os\n# @path-scope workdir-readonly\nprint("x")', 'python').declaration).toBeUndefined()
     expect(extractScriptPathFacts('# @path-scope workdir-readonly\ncustom_api()', 'python').declaration).toBe('workdir-readonly')
+  })
+})
+
+// ============================================================================
+// 评审修复回归(2026-09-30 评审 B1/B2/B3 阻断项 + N1/N2 非阻断项):
+// 三组对抗用例均为「确认门完全绕过」级——修复前全部判 complete 不弹卡。
+// ============================================================================
+describe('extractScriptPathFacts:评审修复回归(B1 defs 失效 / B2 元组目标 / B3 import 污染)', () => {
+  beforeAll(async () => {
+    await scriptParserService.ensureInitialized()
+  })
+
+  afterAll(() => resetScriptParserServiceForTests())
+
+  // ---- B1:def 名重绑定后调用必须落回 unknown(defs 参与失效) ----
+
+  it('B1a def 名被 = 重绑定为 os.system 后调用 → dynamic-execution(不弹卡的绕过)', () => {
+    expect(extractScriptPathFacts([
+      'import os',
+      'def helper():',
+      '    return 1',
+      'helper = os.system',
+      'helper("rm -rf /tmp/x")'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown', dynamicAccess: true })
+  })
+
+  it('B1b def 名被 for 目标重绑定后调用 → unknown', () => {
+    expect(extractScriptPathFacts([
+      'import os',
+      'def helper():',
+      '    return 1',
+      'for helper in [os.system]:',
+      '    helper("rm -rf /tmp/x")'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('B1c def 名在分支内重绑定后调用 → unknown', () => {
+    expect(extractScriptPathFacts([
+      'import os',
+      'def helper():',
+      '    return 1',
+      'if flag:',
+      '    helper = os.system',
+      'helper("rm -rf /tmp/x")'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('B1d/N3 with-as 重绑定 def 名后调用 → unknown', () => {
+    expect(extractScriptPathFacts([
+      'def helper():',
+      '    return 1',
+      'with ctx() as helper:',
+      '    helper("x")'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('B1 回归对照:未重绑定的 def 名调用仍 complete(不过度收紧)', () => {
+    expect(extractScriptPathFacts('def helper():\n    return 1\nhelper()', 'python')).toMatchObject({ completeness: 'complete' })
+  })
+
+  // ---- B2:for / comprehension 元组目标不失效导致动态路径误判 complete ----
+
+  it('B2a for 元组目标重绑定同名常量后 open(p) → unknown(不再只登记 /safe.txt)', () => {
+    expect(extractScriptPathFacts([
+      'p = "/safe.txt"',
+      'for p, q in items:',
+      '    open(p)'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('B2b 元组 comprehension 目标重绑定同名常量 → unknown', () => {
+    expect(extractScriptPathFacts([
+      'p = "/safe.txt"',
+      'rows = [open(p) for p, q in rows]'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  // ---- B3:import os.path 污染链解析,os.* 危险调用逃逸纯白名单 ----
+
+  it('B3a import os.path 后 os.system → dynamic-execution(不再命中 os.path.* 纯白名单)', () => {
+    expect(extractScriptPathFacts('import os.path\nos.system("rm -rf /tmp/x")', 'python')).toMatchObject({
+      completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution'
+    })
+  })
+
+  it('B3b import os.path 后 os.popen / os.remove(变量) → unknown', () => {
+    expect(extractScriptPathFacts('import os.path\nos.popen("ls")', 'python')).toMatchObject({ unknownReason: 'dynamic-execution' })
+    expect(extractScriptPathFacts('import os.path\nos.remove(v)', 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('B3 回归对照:import os.path 后 os.path.join 折叠与 os.system 检测两不误', () => {
+    expect(extractScriptPathFacts('import os.path\nopen(os.path.join("d", "f.txt"))', 'python')).toMatchObject({
+      paths: ['d/f.txt'], completeness: 'complete'
+    })
+  })
+
+  // ---- N1:global_nonlocal 改写场景恢复基线强度(dynamic-execution) ----
+
+  it('N1 global 声明(含模块级常量被函数内改写场景)归 dynamic-execution,禁记忆', () => {
+    expect(extractScriptPathFacts([
+      'p = "ok.txt"',
+      'def f():',
+      '    global p',
+      '    p = "/etc/passwd"'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution' })
+  })
+
+  // ---- N2:上限保护 ----
+
+  it('N2a 常量环境条目封顶(超出后不再绑定,折叠自然失效落 unknown)', () => {
+    const lines = Array.from({ length: 400 }, (_, i) => `v${i} = "/p${i}"`)
+    lines.push('open(v0)', 'open(v399)')
+    const result = extractScriptPathFacts(lines.join('\n'), 'python')
+    expect(result.completeness).toBe('unknown')
+  })
+
+  it('N2b 深嵌套表达式折叠有深度上限(不栈溢出,结果保守)', () => {
+    const deep = 'x = ' + '('.repeat(200) + '"a"' + ' + "/b")'.repeat(200)
+    expect(() => extractScriptPathFacts(deep, 'python')).not.toThrow()
   })
 })

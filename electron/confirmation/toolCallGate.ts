@@ -180,7 +180,8 @@ export interface ToolCallGateResult {
 
 /**
  * P2-1:把 unknown 分类与调用名证据组织成用户可读的回显文本(摘要与确认卡共用)。
- * 证据可能封顶截断——文案如实标注。文案集中于 CONFIRMATION_LABELS(M4 豁免点)。
+ * 证据在提取器侧封顶(超出静默丢弃);无证据时用 fallback 文案。文案集中于
+ * CONFIRMATION_LABELS(M4 豁免点)。
  */
 function buildScriptPathHint(
   unknownReason: 'dynamic-execution' | 'unmodeled-call' | null,
@@ -191,7 +192,7 @@ function buildScriptPathHint(
   const prefix = unknownReason === 'dynamic-execution'
     ? CONFIRMATION_LABELS.scriptDynamicExecutionHintPrefix
     : CONFIRMATION_LABELS.scriptPathUnknownHintPrefix
-  const body = names.length ? names.join('、') : '无法定位具体调用'
+  const body = names.length ? names.join('、') : CONFIRMATION_LABELS.scriptPathUnknownHintFallback
   const declarationNote = declaration ? `；${CONFIRMATION_LABELS.scriptDeclarationHint}` : ''
   return `${prefix}${body}${declarationNote}`
 }
@@ -526,6 +527,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
         && !signals.some((sig) => sig.kind === 'script-network')
         && !signals.some((sig) => sig.kind === 'script-analysis' && sig.signal !== 'clean')
         && !signals.some((sig) => sig.kind === 'path-target' && sig.zone !== 'workdir-normal')
+        && !signals.some((sig) => sig.kind === 'extraction-failed') // 评审 N8:探测失败 = 事实不完整
       signals.push({ kind: 'script-path-declaration', scope: scriptPaths.declaration, consistent })
     }
     facts = {

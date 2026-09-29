@@ -25,6 +25,16 @@ describe('MemoryEligibility', () => {
     ]), 'desktop')).toEqual({ eligibility: 'none', reasons: ['script-path-unknown'] })
   })
 
+  it('N5/N4 防御:unknown 无分类或同审 extraction-failed → none(fail-closed)', () => {
+    expect(deriveMemoryEligibility(facts([
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: null }
+    ]), 'desktop')).toEqual({ eligibility: 'none', reasons: ['script-path-unknown'] })
+    expect(deriveMemoryEligibility(facts([
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call' },
+      { kind: 'extraction-failed', reason: 'script-path-probe-failed' }
+    ]), 'desktop')).toEqual({ eligibility: 'none', reasons: ['script-path-unknown'] })
+  })
+
   it('disables memory for outside-workdir and system-dir path risks', () => {
     for (const zone of ['outside-workdir', 'system-dir'] as const) {
       expect(deriveMemoryEligibility(facts([{ kind: 'path-target', path: '/risk', zone }]), 'desktop')).toEqual({
