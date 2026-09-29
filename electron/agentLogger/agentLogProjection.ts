@@ -5,7 +5,6 @@ import { isProcessToolName, projectToolResultForSink } from '../../src/shared/pr
 import { projectShellAgentLogFields } from '../shell/shellLogFields'
 
 const TARGET_EVENTS = new Set<AgentLogEventName>([
-  'tool.request', 'tool.error', 'tool.result',
   'llm.silent_overflow',
   'llm.cancel', 'turn.cancel',
   'tool.request', 'tool.error', 'tool.result', 'tool.result.contract-violation',
