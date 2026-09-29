@@ -30,7 +30,8 @@ vi.mock('./floatingNotification', () => ({
 }))
 
 vi.mock('./database', () => ({
-  getSession: vi.fn(() => ({ id: 's1', name: '测试会话' }))
+  getSession: vi.fn(() => ({ id: 's1', name: '测试会话' })),
+  getDbConnection: vi.fn(() => ({})),
 }))
 
 import { FloatingNotificationManager } from './floatingNotificationManager'

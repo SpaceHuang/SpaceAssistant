@@ -22,6 +22,7 @@ export function createButlerSessionEvents(args: {
   workDir: string
   sessionId: string
   sessionCreatedAt: number
+  failClosedCriticalEvents?: boolean
 }): ButlerSessionEvents {
   const sink = getSessionEventSink(args.workDir, args.sessionId, args.sessionCreatedAt)
   const emitSessionEvent = async (event: SessionEventInput): Promise<void> => {
@@ -38,8 +39,10 @@ export function createButlerSessionEvents(args: {
     }
     try {
       await sink.appendCritical(persistable)
-    } catch {
-      // 台账写入失败不阻断回合；诊断经由 agent 日志的 finalize 阶段上报。
+    } catch (error) {
+      // Legacy compatibility remains diagnostic-only; Hosted callers stop before
+      // dispatch so startup recovery can repair the canonical History envelope.
+      if (args.failClosedCriticalEvents) throw error
     }
   }
   return {

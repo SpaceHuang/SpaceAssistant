@@ -11,10 +11,28 @@ vi.mock('electron', () => ({
 
 const mockRunToolChatSession = vi.fn()
 const mockCreateSession = vi.fn()
+const hostedRuntimeFailureInjection = vi.hoisted(() => ({ requestId: '', composeCalls: 0 }))
 
 vi.mock('../toolChatLoop', () => ({
   runToolChatSession: (...args: unknown[]) => mockRunToolChatSession(...args)
 }))
+
+vi.mock('../runtime/invocationAssembler', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../runtime/invocationAssembler')>()
+  return {
+    ...actual,
+    assembleInvocation: (...args: Parameters<typeof actual.assembleInvocation>) => {
+      const assembled = actual.assembleInvocation(...args)
+      if (args[0].requestId === hostedRuntimeFailureInjection.requestId) {
+        assembled.agentSdk.createHostedTurnRuntime = () => {
+          hostedRuntimeFailureInjection.composeCalls += 1
+          throw new Error('nested Approval complete-gate Runtime unavailable')
+        }
+      }
+      return assembled
+    }
+  }
+})
 
 vi.mock('../database', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../database')>()
@@ -24,9 +42,19 @@ vi.mock('../database', async (importOriginal) => {
   }
 })
 
-import { openDatabase } from '../database'
+import { getDbConnection, openDatabase } from '../database'
+import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { APPROVAL_MAX_AUTHORIZATION, parseApprovalVerdict, runApprovalAgent } from './approvalAgent'
 import type { ApprovalCluePack, ApprovalInvocation } from '../../src/shared/confirmation/types'
+import { MODEL_BASELINE } from '../../src/shared/modelBaseline'
+import { createDesktopAgentRuntime } from '../runtime/desktopAgentRuntime'
+import { getDefaultAgentRuntime, setDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
+import { readFileExecutor } from '../tools/builtinExecutors'
+import { writeDisabledPolicyRuleIds } from './policyRulesRuntime'
+import { clearChatCancel, registerChatCancel } from '../chatCancelRegistry'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 
 function clue(overrides: Partial<ApprovalCluePack> = {}): ApprovalCluePack {
   return {
@@ -55,6 +83,7 @@ function invocation(overrides: Partial<ApprovalInvocation> = {}): ApprovalInvoca
 
 const deps = {
   db: openDatabase(':memory:') as never,
+  credentialRef: 'llm-service:approval-test',
   workDir: '/tmp/wd',
   userDataDir: '/tmp/ud',
   getToolsConfig: () => ({}) as never,
@@ -67,7 +96,10 @@ const deps = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  hostedRuntimeFailureInjection.requestId = ''
+  hostedRuntimeFailureInjection.composeCalls = 0
   mockCreateSession.mockImplementation(() => ({ id: 'sess-approval-1', name: '审批', createdAt: 1 }))
+  setDefaultAgentRuntime(createDesktopAgentRuntime())
 })
 
 describe('runApprovalAgent（P2-2 审批执行链）', () => {
@@ -246,6 +278,490 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
     await runApprovalAgent({ ...deps, baseUrl: 'https://relay.example.com' }, invocation())
     const [, prt] = mockRunToolChatSession.mock.calls.at(-1)! as [{ profile: Record<string, unknown> }, { credentials: { networkTarget?: { baseUrl?: string } } }]
     expect(prt.credentials.networkTarget?.baseUrl).toBe('https://relay.example.com')
+  })
+
+  it('嵌套 Approval Agent 为白名单 Anthropic route 冻结父调用凭据身份', async () => {
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')?.[0]
+    expect(modelId).toBeTruthy()
+    const previousRuntime = getDefaultAgentRuntime()
+    setDefaultAgentRuntime(createDesktopAgentRuntime())
+    mockRunToolChatSession.mockResolvedValue({
+      ok: true, content: [{ type: 'text', text: '{"kind":"deny","reason":{"summary":"ok"}}' }]
+    })
+    try {
+      await runApprovalAgent({ ...deps, model: modelId, baseUrl: 'https://relay.example.com', credentialRef: 'llm-service:svc-parent' }, invocation())
+      const agentInvocation = mockRunToolChatSession.mock.calls.at(-1)![0] as { profile: { providerRouteId?: string } }
+      const runOptions = mockRunToolChatSession.mock.calls.at(-1)![2] as { onHostedTurnHandoff?: unknown }
+      expect(agentInvocation.profile.providerRouteId).toBeTruthy()
+      expect(runOptions.onHostedTurnHandoff).toEqual(expect.any(Function))
+      expect(getDefaultAgentRuntime().modelProviders.getRoute(agentInvocation.profile.providerRouteId!)).toMatchObject({
+        profile: { modelId, endpoint: 'https://relay.example.com' },
+        providerId: 'pi-ai-anthropic-messages'
+      })
+    } finally {
+      setDefaultAgentRuntime(previousRuntime)
+    }
+  })
+
+  it('嵌套 Approval Agent 真实执行 Hosted SDK invocation 并自行提交 History terminal', async () => {
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')?.[0]
+    expect(modelId).toBeTruthy()
+    const databaseRoot = await mkdtemp(path.join(os.tmpdir(), 'approval-history-restart-'))
+    const databasePath = path.join(databaseRoot, 'approval.sqlite')
+    let fileDb = openDatabase(databasePath)
+    const childRequestId = 'req-outer:approval:attempt-1'
+    const childInvocationId = 'approval-attempt-1'
+    const previousRuntime = getDefaultAgentRuntime()
+    const runtime = createDesktopAgentRuntime()
+    setDefaultAgentRuntime(runtime)
+    let providerCalls = 0
+    let hostedInvocationId = ''
+    let hostedTurnId = ''
+    let hostedHistory: { read(id: string): Promise<{ invocationId: string; version: number; events: Array<{ kind: string; invocationId: string; turnId: string; sequence: number }> }>; listInvocationIdsForSession(sessionId: string): string[] } | undefined
+    mockRunToolChatSession.mockImplementation(async (agentInvocation: never, ports: never, runOptions: never) => {
+      const invocationRecord = agentInvocation as unknown as { profile: { providerRouteId?: string }; trace: { requestId: string; turnId: string; windowId?: string } }
+      hostedInvocationId = invocationRecord.trace.requestId
+      hostedTurnId = invocationRecord.trace.turnId ?? 'sess-approval-1'
+      const routeId = invocationRecord.profile.providerRouteId
+      if (!routeId) throw new Error('approval Hosted route missing')
+      const configured = runtime.modelProviders.getRoute(routeId)
+      if (!configured) throw new Error('approval Hosted route not registered')
+      runtime.modelProviders.register(configured.profile, { providerId: 'hosted-approval-fixture', stream: async function* () {
+        providerCalls += 1
+        yield { type: 'text-delta', text: '{"kind":"approve","riskLevel":"low","reason":{"summary":"hosted approval"}}' } as const
+        yield { type: 'usage', inputTokens: 3, outputTokens: 8 } as const
+        yield { type: 'finish', reason: 'stop' } as const
+      } })
+      const portRecord = ports as unknown as { history: typeof hostedHistory }
+      hostedHistory = portRecord.history
+      const callback = (runOptions as unknown as { onHostedTurnHandoff: (input: unknown) => Promise<{ result: { content: Array<{ text: string }> } }> }).onHostedTurnHandoff
+      const assembled = agentInvocation as unknown as { messages: { currentUserMessageId?: string; list: Array<{ id?: string }> } }
+      expect(assembled.messages.currentUserMessageId).toBe(`${childRequestId}:approval-user`)
+      expect(assembled.messages.list.at(-1)?.id).toBe(`${childRequestId}:approval-user`)
+      const requiredMessage = assembled.messages.list.at(-1) as { role: 'user'; id: string; content: string }
+      const outcome = await callback({
+        request: { messages: [{ role: 'user', content: requiredMessage.content }], maxTokens: 128, credentials: { apiKey: 'approval-key' } },
+        currentUserMessageId: 'req-outer:approval-user',
+        requiredUserMessage: { id: 'req-outer:approval-user', message: { role: 'user', content: requiredMessage.content } },
+        windowId: invocationRecord.trace.windowId
+      })
+      return { ok: true, content: outcome.result.content, stopReason: 'end_turn' }
+    })
+
+    try {
+      const result = await runApprovalAgent({ ...deps, db: fileDb as never, model: modelId, baseUrl: 'https://relay.example.com', credentialRef: 'llm-service:svc-parent' }, invocation({
+        requestId: childRequestId, invocationId: childInvocationId, sessionId: 'sess-outer'
+      }))
+      expect(result).toMatchObject({ ok: true, verdict: { kind: 'approve', reason: { summary: 'hosted approval' } } })
+      expect(providerCalls).toBe(1)
+      const snapshot = await hostedHistory!.read(hostedInvocationId)
+      expect(snapshot.invocationId).toBe(hostedInvocationId)
+      expect(hostedInvocationId).toBe(childRequestId)
+      expect(hostedInvocationId).not.toBe('req-outer')
+      expect(hostedHistory!.listInvocationIdsForSession('sess-approval-1')).toEqual([childRequestId])
+      expect(hostedHistory!.listInvocationIdsForSession('sess-outer')).toEqual([])
+      expect(snapshot.version).toBe(snapshot.events.length)
+      expect(snapshot.events.map((event) => [event.invocationId, event.turnId])).toEqual(
+        snapshot.events.map(() => [hostedInvocationId, hostedTurnId])
+      )
+      expect(snapshot.events.map((event) => event.sequence)).toEqual(snapshot.events.map((_, index) => index + 1))
+      expect(snapshot.events.filter((event) => event.kind === 'invocation-completed')).toHaveLength(1)
+      expect(snapshot.events.at(-1)?.kind).toBe('invocation-completed')
+      fileDb.close()
+      fileDb = openDatabase(databasePath)
+      const durableHistory = new SqliteAgentHistory(getDbConnection(fileDb), 1, Date.now, 'sess-approval-1')
+      await expect(durableHistory.read(childRequestId)).resolves.toEqual(snapshot)
+      expect(durableHistory.listInvocationIdsForSession('sess-approval-1')).toEqual([childRequestId])
+      expect(durableHistory.listInvocationIdsForSession('sess-outer')).toEqual([])
+    } finally {
+      fileDb.close()
+      await rm(databaseRoot, { recursive: true, force: true })
+      setDefaultAgentRuntime(previousRuntime)
+    }
+  })
+
+  it('嵌套 Approval Agent Hosted Runtime composition failure stops the provider', async () => {
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')?.[0]
+    expect(modelId).toBeTruthy()
+    const requestId = 'req-approval-runtime-compose-failure'
+    const previousRuntime = getDefaultAgentRuntime()
+    const runtime = createDesktopAgentRuntime()
+    setDefaultAgentRuntime(runtime)
+    hostedRuntimeFailureInjection.requestId = requestId
+    let providerCalls = 0
+    const executor = vi.spyOn(readFileExecutor, 'execute')
+    mockRunToolChatSession.mockImplementation(async (agentInvocation: never, _ports: never, runOptions: never) => {
+      const record = agentInvocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
+      const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
+      if (!route) throw new Error('expected nested Approval provider route')
+      runtime.modelProviders.register(route.profile, { providerId: 'approval-compose-failure-fixture', stream: async function* () {
+        providerCalls += 1
+        yield { type: 'text-delta', text: '{"kind":"approve","riskLevel":"low","reason":{"summary":"unexpected approval"}}' } as const
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 } as const
+        yield { type: 'finish', reason: 'stop' } as const
+      } })
+      const handoff = (runOptions as unknown as { onHostedTurnHandoff: (input: unknown) => Promise<{ result: { content: unknown[] } }> }).onHostedTurnHandoff
+      const outcome = await handoff({
+        authorizedToolNames: new Set(['read_file']),
+        request: {
+          messages: [{ role: 'user', content: 'read evidence.txt' }], maxTokens: 64, credentials: { apiKey: 'approval-key' },
+          tools: [{ name: 'read_file', description: 'Read evidence', inputSchema: {
+            type: 'object', properties: { path: { type: 'string' } }, required: ['path']
+          } }]
+        },
+        currentUserMessageId: `${requestId}:approval-user`,
+        requiredUserMessage: { id: `${requestId}:approval-user`, message: { role: 'user', content: 'read evidence.txt' } },
+        windowId: record.trace.windowId
+      })
+      return { ok: true, content: outcome.result.content, stopReason: 'end_turn' }
+    })
+
+    try {
+      const result = await runApprovalAgent({ ...deps, model: modelId }, invocation({ requestId }))
+      expect(result).toEqual({ ok: false, cause: 'unavailable' })
+      expect(hostedRuntimeFailureInjection.composeCalls).toBe(1)
+      expect(providerCalls).toBe(0)
+      expect(executor).not.toHaveBeenCalled()
+    } finally {
+      executor.mockRestore()
+      setDefaultAgentRuntime(previousRuntime)
+    }
+  })
+
+  it('嵌套 Approval Agent 超时时取消 Hosted provider 并提交 cancelled terminal', async () => {
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')?.[0]
+    expect(modelId).toBeTruthy()
+    const previousRuntime = getDefaultAgentRuntime()
+    const runtime = createDesktopAgentRuntime()
+    setDefaultAgentRuntime(runtime)
+    let providerCalls = 0
+    let hostedHistory: { read(id: string): Promise<{ events: Array<{ kind: string; payload?: unknown }> }> } | undefined
+    let cancelProvider!: () => void
+    const providerCancelled = new Promise<void>((resolve) => { cancelProvider = resolve })
+    let handoffSettled!: () => void
+    const handoffDone = new Promise<void>((resolve) => { handoffSettled = resolve })
+    let handoffStarted!: () => void
+    const handoffStartedSignal = new Promise<void>((resolve) => { handoffStarted = resolve })
+    mockRunToolChatSession.mockImplementation(async (agentInvocation: never, ports: never, runOptions: never) => {
+      const invocationRecord = agentInvocation as unknown as { profile: { providerRouteId?: string }; trace: { requestId: string; turnId: string; windowId?: string } }
+      const requestId = invocationRecord.trace.requestId
+      const routeId = invocationRecord.profile.providerRouteId
+      if (!routeId) throw new Error('approval Hosted route missing')
+      const configured = runtime.modelProviders.getRoute(routeId)
+      if (!configured) throw new Error('approval Hosted route not registered')
+      runtime.modelProviders.register(configured.profile, { providerId: 'hosted-approval-timeout-fixture', stream: async function* (input) {
+        providerCalls += 1
+        await new Promise<void>((resolve) => {
+          if (input.request.signal?.aborted) resolve()
+          else input.request.signal?.addEventListener('abort', () => resolve(), { once: true })
+        })
+        cancelProvider()
+        yield { type: 'usage', inputTokens: 0, outputTokens: 0 } as const
+        yield { type: 'finish', reason: 'cancelled' } as const
+      } })
+      hostedHistory = (ports as unknown as { history: typeof hostedHistory }).history
+      const callback = (runOptions as unknown as { onHostedTurnHandoff: (input: unknown) => Promise<unknown> }).onHostedTurnHandoff
+      const signal = registerChatCancel(requestId)
+      handoffStarted()
+      try {
+        await callback({
+          request: { messages: [{ role: 'user', content: 'evaluate this request' }], maxTokens: 128, credentials: { apiKey: 'approval-key' }, signal },
+          currentUserMessageId: `${requestId}:approval-user`,
+          requiredUserMessage: { id: `${requestId}:approval-user`, message: { role: 'user', content: 'evaluate this request' } },
+          windowId: invocationRecord.trace.windowId
+        })
+        return { ok: true, content: [{ type: 'text', text: 'unexpected approval output' }] }
+      } catch {
+        return { ok: false, error: 'APPROVAL_HOSTED_CANCELLED' }
+      } finally {
+        clearChatCancel(requestId)
+        handoffSettled()
+      }
+    })
+
+    try {
+      const result = await runApprovalAgent({ ...deps, model: modelId, baseUrl: 'https://relay.example.com', credentialRef: 'llm-service:svc-parent' }, invocation({ requestId: 'req-approval-timeout', timeoutMs: 100 }))
+      await handoffStartedSignal
+      await Promise.all([providerCancelled, handoffDone])
+      expect(result).toMatchObject({ ok: false, cause: 'timeout' })
+      expect(providerCalls).toBe(1)
+      const history = await hostedHistory!.read('req-approval-timeout')
+      expect(history.events.at(-1)).toMatchObject({
+        kind: 'invocation-interrupted',
+        payload: { status: 'cancelled' }
+      })
+      expect(history.events.filter((event) => ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind))).toHaveLength(1)
+    } finally {
+      clearChatCancel('req-approval-timeout')
+      setDefaultAgentRuntime(previousRuntime)
+    }
+  })
+
+  it('嵌套 Approval Agent 在 Hosted dispatch claim 前撤权时不执行 read_file 并记录未派发', async () => {
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')?.[0]
+    expect(modelId).toBeTruthy()
+    const previousRuntime = getDefaultAgentRuntime()
+    const runtime = createDesktopAgentRuntime()
+    const workDir = await mkdtemp(path.join(os.tmpdir(), 'approval-hosted-revoke-'))
+    await writeFile(path.join(workDir, 'evidence.txt'), 'sensitive evidence')
+    setDefaultAgentRuntime(runtime)
+    let providerCalls = 0
+    let hostedHistory: { read(id: string): Promise<{ events: Array<{ kind: string; payload: unknown }> }> } | undefined
+    const originalAdmission = runtime.executionAdmission
+    const originalRead = readFileExecutor.execute
+    const executor = vi.spyOn(readFileExecutor, 'execute')
+    let reachedClaim!: () => void
+    let releaseClaim!: () => void
+    const atClaim = new Promise<void>((resolve) => { reachedClaim = resolve })
+    const claimBarrier = new Promise<void>((resolve) => { releaseClaim = resolve })
+    let claimObservationTimer: ReturnType<typeof setTimeout> | undefined
+    runtime.executionAdmission = {
+      markPermitConsumed: (...call) => originalAdmission.markPermitConsumed(...call),
+      beginDispatch: async (...call) => {
+        reachedClaim()
+        await claimBarrier
+        return originalAdmission.beginDispatch(...call)
+      },
+      invalidate: (...call) => originalAdmission.invalidate(...call),
+      settle: (...call) => originalAdmission.settle(...call)
+    }
+    mockRunToolChatSession.mockImplementation(async (agentInvocation: never, ports: never, runOptions: never) => {
+      const invocationRecord = agentInvocation as unknown as { profile: { providerRouteId?: string }; trace: { requestId: string; turnId: string; windowId?: string } }
+      const routeId = invocationRecord.profile.providerRouteId!
+      runtime.toolRevocations.registerToolRevocationRequest(invocationRecord.trace.requestId, 'automation')
+      const configured = runtime.modelProviders.getRoute(routeId)
+      if (!configured) throw new Error('approval Hosted route missing')
+      runtime.modelProviders.register(configured.profile, { providerId: 'hosted-approval-revoke-fixture', stream: async function* () {
+        providerCalls += 1
+        if (providerCalls === 1) {
+          yield { type: 'tool-call', toolCallId: 'approval-read-before-revoke', toolName: 'read_file', input: { path: 'evidence.txt' } } as const
+          yield { type: 'usage', inputTokens: 3, outputTokens: 4 } as const
+          yield { type: 'finish', reason: 'tool-calls' } as const
+          return
+        }
+        yield { type: 'text-delta', text: '{"kind":"approve","riskLevel":"low","reason":{"summary":"read was revoked"}}' } as const
+        yield { type: 'usage', inputTokens: 3, outputTokens: 8 } as const
+        yield { type: 'finish', reason: 'stop' } as const
+      } })
+      const portRecord = ports as unknown as { history: typeof hostedHistory }
+      hostedHistory = portRecord.history
+      const callback = (runOptions as unknown as { onHostedTurnHandoff: (input: unknown) => Promise<{ result: { content: Array<{ text: string }> } }> }).onHostedTurnHandoff
+      return callback({
+        authorizedToolNames: new Set(['read_file']),
+        request: {
+          messages: [{ role: 'user', content: 'nested approval evidence' }],
+          tools: [{ name: 'read_file', description: 'Read evidence', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } }],
+          maxTokens: 128,
+          credentials: { apiKey: 'approval-key' }
+        },
+        windowId: invocationRecord.trace.windowId
+      }).then((outcome) => ({ ok: true, content: outcome.result.content, stopReason: 'end_turn' }))
+    })
+    try {
+      const execution = runApprovalAgent({ ...deps, workDir, getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, model: modelId, baseUrl: 'https://approval-revoke.example.com', credentialRef: 'llm-service:svc-approval-revoke' }, invocation({ requestId: 'req-approval-revoke' }))
+      await Promise.race([atClaim, new Promise<never>((_, reject) => { claimObservationTimer = setTimeout(async () => {
+        const id = (mockRunToolChatSession.mock.calls.at(-1)?.[0] as { trace?: { requestId?: string } } | undefined)?.trace?.requestId
+        const events = id && hostedHistory ? (await hostedHistory.read(id)).events.map(({ kind, payload }) => ({ kind, payload })) : []
+        reject(new Error(`claim was not reached; providerCalls=${providerCalls}; history=${JSON.stringify(events)}`))
+      }, 2000) })])
+      if (claimObservationTimer) clearTimeout(claimObservationTimer)
+      expect(executor).not.toHaveBeenCalled()
+      expect(runtime.toolRevocations.revokeToolForLane('automation', 'read_file')).toBeGreaterThan(0)
+      releaseClaim()
+      await expect(execution).resolves.toMatchObject({ ok: true, verdict: { kind: 'approve' } })
+      expect(providerCalls).toBe(2)
+      expect(executor).not.toHaveBeenCalled()
+      const hostedInvocationId = mockRunToolChatSession.mock.calls.at(-1)![0] as { trace: { requestId: string } }
+      const history = await hostedHistory!.read(hostedInvocationId.trace.requestId)
+      expect(history.events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'approval-read-before-revoke', reason: 'REVOKED' }) }))
+      expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
+      expect(history.events.at(-1)?.kind).toBe('invocation-completed')
+    } finally {
+      if (claimObservationTimer) clearTimeout(claimObservationTimer)
+      releaseClaim()
+      const invocationRecord = mockRunToolChatSession.mock.calls.at(-1)?.[0] as { trace?: { requestId?: string } } | undefined
+      if (invocationRecord?.trace?.requestId) runtime.toolRevocations.clearToolRevocationRequest(invocationRecord.trace.requestId)
+      readFileExecutor.execute = originalRead
+      setDefaultAgentRuntime(previousRuntime)
+      await rm(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it.each(['authorization-change', 'revoke', 'cancel'] as const)('嵌套 Approval Agent 在 Hosted executor 已 claim 后遇到 %s 时记录 unknown terminal 且不重试', async (termination) => {
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')?.[0]
+    expect(modelId).toBeTruthy()
+    const previousRuntime = getDefaultAgentRuntime()
+    const runtime = createDesktopAgentRuntime()
+    const workDir = await mkdtemp(path.join(os.tmpdir(), `approval-hosted-post-claim-${termination}-`))
+    await writeFile(path.join(workDir, 'evidence.txt'), 'sensitive evidence')
+    if (termination === 'authorization-change') writeDisabledPolicyRuleIds(deps.db, ['automation-sensitive-path-deny'])
+    setDefaultAgentRuntime(runtime)
+    let providerCalls = 0
+    let hostedHistory: { read(id: string): Promise<{ events: Array<{ kind: string; payload: unknown }> }> } | undefined
+    let executorEntered!: () => void
+    const entered = new Promise<void>((resolve) => { executorEntered = resolve })
+    let executorSignal: AbortSignal | undefined
+    const executor = vi.spyOn(readFileExecutor, 'execute').mockImplementation(async (_input, context) => {
+      executorSignal = context.signal
+      executorEntered()
+      return await new Promise<never>((_resolve, reject) => {
+        context.signal.addEventListener('abort', () => reject(new Error('read outcome interrupted after dispatch')), { once: true })
+      })
+    })
+    mockRunToolChatSession.mockImplementation(async (agentInvocation: never, ports: never, runOptions: never) => {
+      const invocationRecord = agentInvocation as unknown as { profile: { providerRouteId?: string }; trace: { requestId: string; turnId: string; windowId?: string } }
+      const routeId = invocationRecord.profile.providerRouteId!
+      if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(invocationRecord.trace.requestId, 'automation')
+      const configured = runtime.modelProviders.getRoute(routeId)
+      if (!configured) throw new Error('approval Hosted post-claim route missing')
+      runtime.modelProviders.register(configured.profile, { providerId: 'hosted-approval-post-claim-fixture', stream: async function* () {
+        providerCalls += 1
+        yield { type: 'tool-call', toolCallId: `approval-read-after-claim-${termination}`, toolName: 'read_file', input: { path: 'evidence.txt' } } as const
+        yield { type: 'usage', inputTokens: 3, outputTokens: 4 } as const
+        yield { type: 'finish', reason: 'tool-calls' } as const
+      } })
+      hostedHistory = (ports as unknown as { history: typeof hostedHistory }).history
+      const callback = (runOptions as unknown as { onHostedTurnHandoff: (input: unknown) => Promise<unknown> }).onHostedTurnHandoff
+      return callback({
+        authorizedToolNames: new Set(['read_file']),
+        request: {
+          messages: [{ role: 'user', content: 'nested approval evidence' }],
+          tools: [{ name: 'read_file', description: 'Read evidence', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } }],
+          maxTokens: 128,
+          credentials: { apiKey: 'approval-key' },
+          signal: runtime.chatCancels.register(invocationRecord.trace.requestId)
+        },
+        windowId: invocationRecord.trace.windowId
+      })
+    })
+
+    const requestId = `req-approval-post-claim-${termination}`
+    try {
+      const execution = runApprovalAgent({ ...deps, workDir, getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, model: modelId, baseUrl: 'https://approval-post-claim.example.com', credentialRef: 'llm-service:svc-approval-post-claim' }, invocation({ requestId }))
+      await entered
+      expect(readFileExecutor.execute).toHaveBeenCalledOnce()
+      expect(executorSignal?.aborted).toBe(false)
+      if (termination === 'authorization-change') {
+        writeDisabledPolicyRuleIds(deps.db, [])
+        expect(runtime.policyAuthorizationChanges.publish('automation')).toBeGreaterThan(0)
+      } else if (termination === 'revoke') {
+        expect(runtime.toolRevocations.revokeToolForLane('automation', 'read_file')).toBeGreaterThan(0)
+      } else runtime.chatCancels.signalChatCancel(requestId)
+      expect(executorSignal?.aborted).toBe(true)
+      await expect(execution).resolves.toMatchObject({ ok: false, cause: 'unavailable' })
+      expect(providerCalls).toBe(1)
+      const history = await hostedHistory!.read(requestId)
+      expect(history.events.at(-1)).toMatchObject({
+        kind: 'invocation-interrupted',
+        payload: { status: 'interrupted', reason: 'unknown-after-dispatch' }
+      })
+      expect(history.events.some((event) => event.kind === 'tool-call-finished')).toBe(false)
+      expect(history.events.filter((event) => ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind))).toHaveLength(1)
+      expect((runtime.executionAdmission as unknown as { activeLeaseCount(requestId: string): number }).activeLeaseCount(requestId)).toBe(0)
+    } finally {
+      executor.mockRestore()
+      if (termination === 'revoke') runtime.toolRevocations.revokeToolForLane('automation', 'read_file')
+      runtime.toolRevocations.clearToolRevocationRequest(requestId)
+      runtime.chatCancels.clear(requestId)
+      writeDisabledPolicyRuleIds(deps.db, [])
+      setDefaultAgentRuntime(previousRuntime)
+      await rm(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it('嵌套 Approval Agent 在 Hosted dispatch claim 前策略版本变化时不执行 read_file', async () => {
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')?.[0]
+    expect(modelId).toBeTruthy()
+    const previousRuntime = getDefaultAgentRuntime()
+    const runtime = createDesktopAgentRuntime()
+    const workDir = await mkdtemp(path.join(os.tmpdir(), 'approval-hosted-policy-change-'))
+    await writeFile(path.join(workDir, '.env'), 'TOKEN=secret')
+    writeDisabledPolicyRuleIds(deps.db, ['automation-sensitive-path-deny'])
+    setDefaultAgentRuntime(runtime)
+    let providerCalls = 0
+    let hostedHistory: { read(id: string): Promise<{ events: Array<{ kind: string; payload: unknown }> }> } | undefined
+    const originalAdmission = runtime.executionAdmission
+    const originalRead = readFileExecutor.execute
+    const executor = vi.spyOn(readFileExecutor, 'execute')
+    const invalidationReasons: string[] = []
+    let reachedClaim!: () => void
+    let releaseClaim!: () => void
+    const atClaim = new Promise<void>((resolve) => { reachedClaim = resolve })
+    const claimBarrier = new Promise<void>((resolve) => { releaseClaim = resolve })
+    let claimObservationTimer: ReturnType<typeof setTimeout> | undefined
+    runtime.executionAdmission = {
+      markPermitConsumed: (...call) => originalAdmission.markPermitConsumed(...call),
+      beginDispatch: async (...call) => {
+        reachedClaim()
+        await claimBarrier
+        return originalAdmission.beginDispatch(...call)
+      },
+      invalidate: (binding, reason) => { invalidationReasons.push(reason); originalAdmission.invalidate(binding, reason) },
+      settle: (...call) => originalAdmission.settle(...call)
+    }
+    mockRunToolChatSession.mockImplementation(async (agentInvocation: never, ports: never, runOptions: never) => {
+      const invocationRecord = agentInvocation as unknown as { profile: { providerRouteId?: string }; trace: { requestId: string; turnId: string; windowId?: string } }
+      const routeId = invocationRecord.profile.providerRouteId!
+      runtime.toolRevocations.registerToolRevocationRequest(invocationRecord.trace.requestId, 'automation')
+      const configured = runtime.modelProviders.getRoute(routeId)
+      if (!configured) throw new Error('approval Hosted policy route missing')
+      runtime.modelProviders.register(configured.profile, { providerId: 'hosted-approval-policy-change-fixture', stream: async function* () {
+        providerCalls += 1
+        if (providerCalls === 1) {
+          yield { type: 'tool-call', toolCallId: 'approval-read-policy-change', toolName: 'read_file', input: { path: '.env' } } as const
+          yield { type: 'usage', inputTokens: 3, outputTokens: 4 } as const
+          yield { type: 'finish', reason: 'tool-calls' } as const
+          return
+        }
+        yield { type: 'text-delta', text: '{"kind":"approve","riskLevel":"low","reason":{"summary":"policy changed before dispatch"}}' } as const
+        yield { type: 'usage', inputTokens: 3, outputTokens: 8 } as const
+        yield { type: 'finish', reason: 'stop' } as const
+      } })
+      hostedHistory = (ports as unknown as { history: typeof hostedHistory }).history
+      const callback = (runOptions as unknown as { onHostedTurnHandoff: (input: unknown) => Promise<{ result: { content: Array<{ text: string }> } }> }).onHostedTurnHandoff
+      return callback({
+        authorizedToolNames: new Set(['read_file']),
+        request: {
+          messages: [{ role: 'user', content: 'nested approval evidence' }],
+          tools: [{ name: 'read_file', description: 'Read evidence', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } }],
+          maxTokens: 128,
+          credentials: { apiKey: 'approval-key' }
+        },
+        windowId: invocationRecord.trace.windowId
+      }).then((outcome) => ({ ok: true, content: outcome.result.content, stopReason: 'end_turn' }))
+    })
+
+    try {
+      const execution = runApprovalAgent({ ...deps, workDir, getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, model: modelId, baseUrl: 'https://approval-policy-change.example.com', credentialRef: 'llm-service:svc-approval-policy-change' }, invocation({ requestId: 'req-approval-policy-version-change' }))
+      await Promise.race([atClaim, new Promise<never>((_, reject) => { claimObservationTimer = setTimeout(async () => {
+        const id = (mockRunToolChatSession.mock.calls.at(-1)?.[0] as { trace?: { requestId?: string } } | undefined)?.trace?.requestId
+        const events = id && hostedHistory ? (await hostedHistory.read(id)).events.map(({ kind, payload }) => ({ kind, payload })) : []
+        reject(new Error(`claim was not reached; providerCalls=${providerCalls}; history=${JSON.stringify(events)}`))
+      }, 2000) })])
+      if (claimObservationTimer) clearTimeout(claimObservationTimer)
+      expect(executor).not.toHaveBeenCalled()
+      writeDisabledPolicyRuleIds(deps.db, [])
+      expect(runtime.policyAuthorizationChanges.publish('automation')).toBeGreaterThan(0)
+      releaseClaim()
+      await expect(execution).resolves.toMatchObject({ ok: true, verdict: { kind: 'approve' } })
+      expect(providerCalls).toBe(2)
+      expect(invalidationReasons).toContain('authorization-changed')
+      expect(executor).not.toHaveBeenCalled()
+      const hostedInvocation = mockRunToolChatSession.mock.calls.at(-1)![0] as { trace: { requestId: string } }
+      const history = await hostedHistory!.read(hostedInvocation.trace.requestId)
+      expect(history.events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'approval-read-policy-change', reason: 'AUTHORIZATION_STALE' }) }))
+      expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
+      expect(history.events.at(-1)?.kind).toBe('invocation-completed')
+    } finally {
+      if (claimObservationTimer) clearTimeout(claimObservationTimer)
+      releaseClaim()
+      const invocationRecord = mockRunToolChatSession.mock.calls.at(-1)?.[0] as { trace?: { requestId?: string } } | undefined
+      if (invocationRecord?.trace?.requestId) runtime.toolRevocations.clearToolRevocationRequest(invocationRecord.trace.requestId)
+      writeDisabledPolicyRuleIds(deps.db, [])
+      readFileExecutor.execute = originalRead
+      setDefaultAgentRuntime(previousRuntime)
+      await rm(workDir, { recursive: true, force: true })
+    }
   })
 
   it('执行链形态：internal/hidden 会话 + automation lane + 递归豁免标记 + 轮数≤3 + 封闭只读工具集', async () => {

@@ -26,6 +26,8 @@ import { isMessageEligibleForChatApi } from '../../src/shared/chatMessageQueue'
 import { migrateBuiltinModelName } from '../../src/shared/llmModelConfig'
 import { isThinkingEffort } from '../../src/shared/thinkingEffort'
 import { queueInputFingerprint } from '../queueInputFingerprint'
+import { appendSqliteAgentHistoryBatchInTransaction } from './agentHistoryStorage'
+import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
 import {
   estimateThinkingTokensFromMessage,
   estimateTokensFromHistoryImages
@@ -599,6 +601,7 @@ export function claimQueuedTurnAtomically(
     if (!userResult) throw new Error('QUEUE_MESSAGE_NOT_CLAIMABLE')
     const assistant = appendMessage(db, { id: input.assistantMessageId, sessionId: input.sessionId, role: 'assistant', content: '', timestamp: Date.now(), status: 'streaming' })
     createPersistedTurn(db, { turnId: input.turnId, requestId: input.requestId, sessionId: input.sessionId, assistantMessageId: input.assistantMessageId, userMessageId: input.userMessageId, contextBoundarySequence: boundary, state: input.state ?? 'prepared', startToken: input.startToken, intentFingerprint: input.intentFingerprint, excludeMessageIds: input.excludeMessageIds, executionConfig: input.executionConfig })
+    appendSessionInputHistoryInTransaction(conn, { requestId: input.requestId, turnId: input.turnId, sessionId: input.sessionId, user: userResult.message })
     const receipt = conn.prepare('UPDATE queue_input_requests SET turn_id = ?, state = ?, updated_at = ? WHERE session_id = ? AND request_id = ? AND state = ?').run(input.turnId, 'claimed', Date.now(), input.sessionId, input.requestId, 'queued')
     if (changesToNumber(receipt.changes) !== 1) throw new Error('QUEUE_RECEIPT_NOT_CLAIMABLE')
     return { user: userResult, assistant }
@@ -607,7 +610,7 @@ export function claimQueuedTurnAtomically(
 
 export type PersistedTurn = {
   turnId: string; requestId: string; sessionId: string; assistantMessageId: string; state: string
-  userMessageId?: string; contextBoundarySequence?: number; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; version: number; outcome?: string; usage?: unknown; error?: { code: string; message: string }; intentFingerprint?: string; startToken?: string
+  userMessageId?: string; contextBoundarySequence?: number; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; version: number; acceptedInputHistoryVersion?: number; outcome?: string; usage?: unknown; error?: { code: string; message: string }; intentFingerprint?: string; startToken?: string
 }
 
 type PersistedTurnRow = Omit<PersistedTurn, 'usage' | 'error'> & {
@@ -624,7 +627,7 @@ function decodePersistedTurnRow(row: PersistedTurnRow): PersistedTurn {
   return turn
 }
 
-const TURN_SELECT = 'turn_id AS turnId, request_id AS requestId, session_id AS sessionId, assistant_message_id AS assistantMessageId, user_message_id AS userMessageId, context_boundary_sequence AS contextBoundarySequence, exclude_message_ids_json AS excludeMessageIdsJson, execution_config_json AS executionConfigJson, state, version, outcome, COALESCE(terminal_usage_json, usage_json) AS usageJson, error_json AS errorJson, intent_fingerprint AS intentFingerprint, start_token AS startToken'
+const TURN_SELECT = 'turn_id AS turnId, request_id AS requestId, session_id AS sessionId, assistant_message_id AS assistantMessageId, user_message_id AS userMessageId, context_boundary_sequence AS contextBoundarySequence, exclude_message_ids_json AS excludeMessageIdsJson, execution_config_json AS executionConfigJson, state, version, accepted_input_history_version AS acceptedInputHistoryVersion, outcome, COALESCE(terminal_usage_json, usage_json) AS usageJson, error_json AS errorJson, intent_fingerprint AS intentFingerprint, start_token AS startToken'
 
 function decodeTurnContextRow(row: PersistedTurnRow & { excludeMessageIdsJson?: string; executionConfigJson?: string }): PersistedTurn {
   const { excludeMessageIdsJson, executionConfigJson, ...persistedRow } = row
@@ -723,7 +726,13 @@ export function updatePersistedTurnState(db: AppDatabase, turnId: string, state:
   return changed
 }
 
-export function recoverPersistedTurn(db: AppDatabase, turnId: string, assistantMessageId: string): boolean {
+export function recoverPersistedTurn(db: AppDatabase, turnId: string, assistantMessageId: string, options: {
+  completed?: boolean
+  outcome?: 'completed' | 'failed' | 'cancelled' | 'recovered'
+  completedOutputText?: string
+  completedUsage?: unknown
+  completedToolCalls?: Message['toolCalls']
+} = {}): boolean {
   const conn = getDbConnection(db)
   return runInTransaction(conn, () => {
     const turn = conn.prepare("SELECT version, state FROM turns WHERE turn_id = ? AND assistant_message_id = ? AND state IN ('configuring', 'prepared', 'executing', 'waiting-confirm')").get(turnId, assistantMessageId) as { version: number; state: string } | undefined
@@ -731,15 +740,48 @@ export function recoverPersistedTurn(db: AppDatabase, turnId: string, assistantM
     const message = conn.prepare("SELECT status FROM messages WHERE id = ? AND status IN ('streaming', 'failed')").get(assistantMessageId)
     if (!message) return false
     const assistant = getMessage(db, assistantMessageId)
+    if (options.completed && assistant?.toolCalls?.some((tool) => ['calling', 'confirming', 'executing'].includes(tool.status))) return false
     const interruptedToolCalls = assistant?.toolCalls?.map((tool) => {
+      if (options.completed) return tool
       if (tool.status === 'completed' || tool.status === 'failed' || tool.status === 'rejected') return tool
       return { ...tool, status: 'failed' as const, interrupted: true, completedAt: Date.now(), result: { success: false, error: '工具调用因应用退出中断' } }
     })
-    const updated = updateMessageContent(db, assistantMessageId, { status: 'failed', ...(interruptedToolCalls ? { toolCalls: interruptedToolCalls } : {}) })
+    const completedToolCalls = options.completed && options.completedToolCalls !== undefined
+      ? [
+          ...options.completedToolCalls.map((canonical) => {
+            const existing = assistant?.toolCalls?.find((tool) => tool.id === canonical.id)
+            if (!existing) return canonical
+            return {
+              ...existing,
+              ...canonical,
+              // History owns the call identity, input, lifecycle, and execution result. Keep only
+              // checkpoint metadata that History intentionally does not persist.
+              ...(existing.riskLevel !== undefined ? { riskLevel: existing.riskLevel } : {}),
+              ...(existing.confirmedAt !== undefined ? { confirmedAt: existing.confirmedAt } : {}),
+              ...(existing.completedAt !== undefined && canonical.completedAt === undefined ? { completedAt: existing.completedAt } : {}),
+              ...(canonical.approval ?? existing.approval ? { approval: canonical.approval ?? existing.approval } : {})
+            }
+          })
+        ]
+      : undefined
+    const outcome = options.outcome ?? (options.completed ? 'completed' : 'recovered')
+    const completed = outcome === 'completed'
+    const cancelled = outcome === 'cancelled'
+    const updated = updateMessageContent(db, assistantMessageId, {
+      status: completed ? 'completed' : cancelled ? 'cancelled' : 'failed',
+      ...(completed && options.completedOutputText !== undefined ? { content: options.completedOutputText } : {}),
+      ...(completed
+        ? (completedToolCalls !== undefined ? { toolCalls: completedToolCalls } : {})
+        : (interruptedToolCalls ? { toolCalls: interruptedToolCalls } : {}))
+    })
     if (!updated) return false
-    const result = conn.prepare("UPDATE turns SET state = 'terminal', outcome = 'recovered', version = ?, updated_at = ? WHERE turn_id = ? AND state IN ('configuring', 'prepared', 'executing', 'waiting-confirm')").run(turn.version + 1, Date.now(), turnId)
+    const result = conn.prepare("UPDATE turns SET state = 'terminal', outcome = ?, version = ?, usage_json = COALESCE(?, usage_json), updated_at = ? WHERE turn_id = ? AND state IN ('configuring', 'prepared', 'executing', 'waiting-confirm')").run(
+      outcome, turn.version + 1,
+      completed && options.completedUsage !== undefined ? JSON.stringify(options.completedUsage) : null,
+      Date.now(), turnId
+    )
     if (changesToNumber(result.changes) !== 1) return false
-    conn.prepare("UPDATE queue_input_requests SET state = 'recovered', updated_at = ? WHERE turn_id = ? AND state = 'claimed'").run(Date.now(), turnId)
+    conn.prepare("UPDATE queue_input_requests SET state = ?, updated_at = ? WHERE turn_id = ? AND state = 'claimed'").run(outcome, Date.now(), turnId)
     return true
   })
 }
@@ -915,8 +957,34 @@ export function prepareTurnAtomically(
       userMessageId: user.message.id,
       contextBoundarySequence: input.turn.contextBoundarySequence ?? boundary
     })
+    appendSessionInputHistoryInTransaction(conn, { requestId: input.turn.requestId, turnId: input.turn.turnId, sessionId: input.turn.sessionId, user: user.message })
     return { user, assistant }
   })
+}
+
+function appendSessionInputHistoryInTransaction(
+  conn: ReturnType<typeof getDbConnection>,
+  input: { requestId: string; turnId: string; sessionId: string; user: Message }
+): void {
+  const event: HistoryEvent = {
+    invocationId: input.requestId,
+    turnId: input.turnId,
+    sequence: 1,
+    schemaVersion: 1,
+    eventId: `${input.requestId}:session-input`,
+    idempotencyKey: `${input.requestId}:session-input`,
+    kind: 'session-input-committed',
+    payload: {
+      sessionId: input.sessionId,
+      messageId: input.user.id,
+      role: input.user.role,
+      inputFingerprint: queueInputFingerprint({ text: input.user.content, attachments: input.user.attachments })
+    }
+  }
+  appendSqliteAgentHistoryBatchInTransaction(conn, [event], 0, { schemaVersion: 1, sessionId: input.sessionId })
+  const marked = conn.prepare('UPDATE turns SET accepted_input_history_version = 1 WHERE turn_id = ? AND request_id = ? AND session_id = ?')
+    .run(input.turnId, input.requestId, input.sessionId)
+  if (changesToNumber(marked.changes) !== 1) throw new Error('TURN_ACCEPTED_INPUT_RECEIPT_MISSING')
 }
 
 export type ApiContextBaselineRow = {

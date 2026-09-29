@@ -50,3 +50,9 @@ export function createAnthropicClient(apiKey: string, baseURL?: string, options?
   const config = { apiKey, ...(baseURL ? { baseURL } : {}), ...(options ? { fetch: fetchWithRetryAudit } : {}) }
   return new Anthropic(config)
 }
+
+export type AnthropicStreamRequest = Readonly<{ model: unknown; max_tokens: number; system?: unknown; messages: Anthropic.MessageParam[]; tools?: unknown; thinking?: unknown; [key: string]: unknown }>
+export interface AnthropicStreamPort { stream(request: AnthropicStreamRequest): ReturnType<Anthropic['messages']['stream']> }
+export function createAnthropicStreamPort(client: Anthropic): AnthropicStreamPort {
+  return { stream: (request) => client.messages.stream(request as Parameters<Anthropic['messages']['stream']>[0]) }
+}

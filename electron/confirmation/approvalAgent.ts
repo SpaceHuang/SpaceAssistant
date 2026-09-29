@@ -23,6 +23,9 @@ import type { AppLocale } from '../../src/shared/locale'
 import { signalChatCancel } from '../chatCancelRegistry'
 import { markApprovalSessionActive, unmarkApprovalSessionActive } from './agentChannel'
 import { getBundledSecurityApprovalSkill } from '../skills/bundled/securityApprovalSkill'
+import { requireInvocationAnthropicRoute } from '../runtime/invocationProviderRoute'
+import { createHostedTurnHandoff } from '../runtime/hostedTurnHandoff'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 
 /**
  * 审批执行链（P2-2，复用管家模式但**绝不取管家准入票**，评审 N8）：
@@ -61,6 +64,8 @@ export interface ApprovalAgentDeps {
    * 装配方（toolChatLoop）传外层会话已解析的凭证对；缺省 undefined 才回退官方直连。
    */
   baseUrl?: string
+  /** 由父调用传入已解析 service identity，供显式 provider route 绑定凭据来源。 */
+  credentialRef?: string
   /** 界面语言（系统提示渲染用）；缺省由装配方决定，测试可省。 */
   locale?: AppLocale
   /**
@@ -284,8 +289,9 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
     }
 
     // 输入形态：facts + 线索包（单条 user 消息），不给全量会话
-    const messages = [{ role: 'user' as const, content: renderCluePack(inv.clue) }]
-    const { messages: pairedMessages } = ensureToolResultPairing(messages)
+    const currentUserMessageId = `${inv.requestId}:approval-user`
+    const messages = [{ role: 'user' as const, id: currentUserMessageId, content: renderCluePack(inv.clue) }]
+    const { messages: pairedMessages } = ensureToolResultPairing(messages, { requiredUserMessageId: currentUserMessageId })
 
     const system = buildFinalSystemPrompt({
       system: skill.content,
@@ -294,7 +300,14 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
       locale: deps.locale ?? 'zh-CN'
     })
 
-    const { invocation, ports } = assembleInvocation({
+    const model = deps.model ?? DEFAULT_APPROVAL_MODEL
+    const providerRouteId = requireInvocationAnthropicRoute({
+      modelId: model,
+      endpoint: deps.baseUrl,
+      credentialRef: deps.credentialRef ?? ''
+    }, getDefaultAgentRuntime().modelProviders)
+
+    const { invocation, ports, agentSdk } = assembleInvocation({
       requestId: inv.requestId,
       // 子调用零成本档：审批推理不产生 thinking（基线 §5.4 规则 5）
       effort: 'off',
@@ -305,11 +318,13 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
       lane: 'automation',
       internalConfirmExemption: 'approval-agent',
       maxToolLoopRounds: deps.maxRounds ?? APPROVAL_MAX_ROUNDS,
-      model: deps.model ?? DEFAULT_APPROVAL_MODEL,
+      model,
+      providerRouteId,
       // P1-1：凭证对（baseUrl + getApiKey）由装配方按同一模型解析后配对传入，
       // 审批请求与用户实际服务端点一致；undefined 才回退官方直连
       baseUrl: deps.baseUrl,
       messages: pairedMessages,
+      currentUserMessageId,
       system,
       options: { maxTokens: 2048 },
       ...(inv.deadlineAt !== undefined ? { deadlineAt: inv.deadlineAt } : {}),
@@ -324,7 +339,9 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
       emitFactEvent: () => undefined,
       emitSessionEvent: () => undefined
     })
-    const runPromise = runToolChatSession(invocation, ports)
+    const runPromise = runToolChatSession(invocation, ports, {
+      onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: ports.history!, invocationId: inv.requestId, turnId: sessionId, routeId: providerRouteId, sessionId })
+    })
     runCreated = true
     // P1-4：run 收敛时置位（孤儿 run 存续期窗口由 finally 判断保持开启）；拒绝已被 race 派生分支处理
     void runPromise.then(

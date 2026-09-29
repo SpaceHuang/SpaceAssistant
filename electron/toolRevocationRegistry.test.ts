@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  ToolRevocationRegistry,
   clearToolRevocationRequest,
   isToolRevoked,
   registerToolRevocationRequest,
@@ -41,5 +42,16 @@ describe('toolRevocationRegistry', () => {
     expect(isToolRevoked('a', 'write_file')).toBe(true)
     expect(isToolRevoked('b', 'write_file')).toBe(true)
     expect(isToolRevoked('c', 'write_file')).toBe(true)
+  })
+
+  it('automation lane participates in global revocation and publishes the revoke synchronously', () => {
+    const registry = new ToolRevocationRegistry()
+    registry.registerToolRevocationRequest('automation-request', 'automation')
+    const events: unknown[] = []
+    const unsubscribe = registry.onRevocation((event) => events.push(event))
+    expect(registry.revokeToolForAllLanes('write_file')).toBe(1)
+    expect(registry.isToolRevoked('automation-request', 'write_file')).toBe(true)
+    expect(events).toEqual([{ requestId: 'automation-request', lane: 'automation', toolName: 'write_file' }])
+    unsubscribe()
   })
 })

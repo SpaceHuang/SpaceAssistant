@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
 import { appendMessage, createPersistedTurn, createSession, openDatabase, setConfigValue, type AppDatabase } from './database'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
+import { MODEL_BASELINE } from '../src/shared/modelBaseline'
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
 
@@ -53,6 +54,7 @@ vi.mock('./safeWebContentsSend', () => ({
 }))
 
 vi.mock('./anthropicClientFactory', () => ({
+  createAnthropicStreamPort: (client: { messages: { stream: (...args: unknown[]) => unknown } }) => ({ stream: (...args: unknown[]) => client.messages.stream(...args) }),
   createAnthropicClient: (...args: unknown[]) => mockCreateAnthropicClient(...args)
 }))
 
@@ -100,19 +102,21 @@ function makeDb(locale: 'zh-CN' | 'en-US' = 'en-US'): AppDatabase {
   return db
 }
 
-/** trusted-model 必须真能解析出服务与 Key，否则执行层会按「模型不可用」fail-fast */
+/** 白名单 Anthropic baseline 必须能解析出服务与 Key，否则执行层会 fail-fast */
 function seedTrustedModel(db: AppDatabase): void {
+  const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
   setConfigValue(db, 'config.models', JSON.stringify([
-    { id: 'trusted', name: 'trusted-model', maximumContext: 200000, maxTokens: 64000, isDefault: false, isFast: false, isVision: false, enabled: true }
+    { id: modelId, name: modelId, maximumContext: MODEL_BASELINE[modelId]!.maximumContext, maxTokens: MODEL_BASELINE[modelId]!.maxTokens, isDefault: false, isFast: false, isVision: false, enabled: true }
   ]))
   setConfigValue(db, 'config.llmServices', JSON.stringify([
-    { id: 'svc-trusted', name: 'Trusted', baseUrl: 'https://trusted.example.com', supportedModelIds: ['trusted'], createdAt: '1', updatedAt: '1' }
+    { id: 'svc-trusted', name: 'Trusted', baseUrl: 'https://trusted.example.com', supportedModelIds: [modelId], createdAt: '1', updatedAt: '1' }
   ]))
   setConfigValue(db, 'config.activeLlmServiceIds', JSON.stringify(['svc-trusted']))
   setConfigValue(db, 'secrets.llmServiceKeys', JSON.stringify({ 'svc-trusted': 'enc:sk-test' }))
 }
 
 describe('claudeStreamHandlers locale', () => {
+  const supportedAnthropicModel = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
   beforeEach(() => {
     vi.clearAllMocks()
     handlers.clear()
@@ -172,14 +176,14 @@ describe('claudeStreamHandlers locale', () => {
   it('execute 忽略 renderer 伪造配置并使用 turn 冻结快照', async () => {
     const db = makeDb('zh-CN')
     seedTrustedModel(db)
-    const session = createSession(db, { name: 'frozen-execution', model: 'trusted-model', maxTokens: 2048 })
+    const session = createSession(db, { name: 'frozen-execution', model: supportedAnthropicModel, maxTokens: 2048 })
     const user = appendMessage(db, { id: 'frozen-user', sessionId: session.id, role: 'user', content: 'hello', timestamp: 1, status: 'sent' })
     const assistant = appendMessage(db, { id: 'frozen-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
     createPersistedTurn(db, {
       turnId: 'frozen-turn', requestId: 'frozen-request', sessionId: session.id,
       userMessageId: user.message.id, assistantMessageId: assistant.message.id,
       contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'frozen-token',
-      executionConfig: { lane: 'desktop', model: 'trusted-model', system: 'trusted system', skillFragments: ['## Skill: review\n\nreview instructions'], maxTokens: 2048, enableThinking: false, locale: 'zh-CN' }
+      executionConfig: { lane: 'desktop', model: supportedAnthropicModel, system: 'trusted system', skillFragments: ['## Skill: review\n\nreview instructions'], maxTokens: 2048, enableThinking: false, locale: 'zh-CN' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => '/tmp',
@@ -196,9 +200,10 @@ describe('claudeStreamHandlers locale', () => {
       options: { maxTokens: 9999, enableThinking: true }, locale: 'en-US'
     })
 
-    expect(mockRunToolChatSession).toHaveBeenCalledWith(expect.objectContaining({
+    const [invocation, ports, hostedOptions] = mockRunToolChatSession.mock.calls[0]!
+    expect(invocation).toMatchObject({
       profile: expect.objectContaining({
-        model: 'trusted-model', system: 'trusted system',
+        model: supportedAnthropicModel, system: 'trusted system',
         options: { maxTokens: 2048, enableThinking: false }, locale: 'zh-CN',
         skillFragments: ['## Skill: review\n\nreview instructions']
       }),
@@ -206,11 +211,13 @@ describe('claudeStreamHandlers locale', () => {
       additionalContext: expect.objectContaining({
         'facts.history': expect.arrayContaining([expect.objectContaining({ id: 'frozen-user', sessionId: session.id, windowId: session.id })])
       })
-    }), expect.objectContaining({
+    })
+    expect(ports).toMatchObject({
       credentials: expect.objectContaining({
         networkTarget: expect.objectContaining({ baseUrl: 'https://trusted.example.com' })
       })
-    }))
+    })
+    expect(hostedOptions).toMatchObject({ onHostedTurnHandoff: expect.any(Function) })
     expect(mockReadCompactionMarkers).toHaveBeenCalledWith(expect.any(String))
     db.close()
   })
@@ -245,14 +252,14 @@ describe('claudeStreamHandlers locale', () => {
   it('关键事件持久化失败时，错误处理路径仍返回结构化结果且不再次抛出', async () => {
     const db = makeDb('zh-CN')
     seedTrustedModel(db)
-    const session = createSession(db, { name: 'event-failure', model: 'trusted-model' })
+    const session = createSession(db, { name: 'event-failure', model: supportedAnthropicModel })
     const user = appendMessage(db, { id: 'event-failure-user', sessionId: session.id, role: 'user', content: 'hello', timestamp: 1, status: 'sent' })
     const assistant = appendMessage(db, { id: 'event-failure-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
     createPersistedTurn(db, {
       turnId: 'event-failure-turn', requestId: 'event-failure-request', sessionId: session.id,
       userMessageId: user.message.id, assistantMessageId: assistant.message.id,
       contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'event-failure-token',
-      executionConfig: { lane: 'desktop', model: 'trusted-model', maxTokens: 1024, enableThinking: false, locale: 'zh-CN' }
+      executionConfig: { lane: 'desktop', model: supportedAnthropicModel, maxTokens: 1024, enableThinking: false, locale: 'zh-CN' }
     })
     const sink = makeEventSink()
     sink.appendCritical.mockRejectedValue(new Error('JSONL append failed'))
@@ -274,14 +281,14 @@ describe('claudeStreamHandlers locale', () => {
   it('同时保留模型错误与 finalize 持久化错误', async () => {
     const db = makeDb('zh-CN')
     seedTrustedModel(db)
-    const session = createSession(db, { name: 'dual-failure', model: 'trusted-model' })
+    const session = createSession(db, { name: 'dual-failure', model: supportedAnthropicModel })
     const user = appendMessage(db, { id: 'dual-failure-user', sessionId: session.id, role: 'user', content: 'hello', timestamp: 1, status: 'sent' })
     const assistant = appendMessage(db, { id: 'dual-failure-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
     createPersistedTurn(db, {
       turnId: 'dual-failure-turn', requestId: 'dual-failure-request', sessionId: session.id,
       userMessageId: user.message.id, assistantMessageId: assistant.message.id,
       contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'dual-failure-token',
-      executionConfig: { lane: 'desktop', model: 'trusted-model', maxTokens: 1024, enableThinking: false, locale: 'zh-CN' }
+      executionConfig: { lane: 'desktop', model: supportedAnthropicModel, maxTokens: 1024, enableThinking: false, locale: 'zh-CN' }
     })
     const sink = makeEventSink()
     sink.appendCritical

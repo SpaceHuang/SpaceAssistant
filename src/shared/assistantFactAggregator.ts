@@ -37,18 +37,21 @@ export type TurnTerminal = {
 }
 
 type AssistantFactEventPayload =
-  | { type: 'content-delta'; text: string }
+  | { type: 'content-delta'; text: string; sourceTimestamp?: number; newSegment?: boolean }
   | { type: 'preview-rollback' }
   | { type: 'preview-commit' }
   | { type: 'content-reconciled'; text: string }
-  | { type: 'thinking-delta'; text: string }
+  | { type: 'thinking-delta'; text: string; sourceTimestamp?: number }
   | { type: 'thinking-reconciled'; text: string }
-  | { type: 'tool-use'; id: string; toolName: string; input: Record<string, unknown>; riskLevel?: ToolCallRecord['riskLevel']; mcp?: ToolCallRecord['mcp'] }
+  | { type: 'tool-use'; id: string; toolName: string; input: Record<string, unknown>; sourceTimestamp?: number; riskLevel?: ToolCallRecord['riskLevel']; mcp?: ToolCallRecord['mcp'] }
   | { type: 'tool-progress'; id: string; seq: number; text: string; rawDelta?: string; rawEncoding?: string; processPid?: number; processGroupId?: number; processOwnerToken?: string }
   | {
       type: 'confirm-requested'
       id: string
       riskLevel: ToolCallRecord['riskLevel']
+      requestId?: string
+      turnId?: string
+      lane?: import('./confirmation/types').ExecutionLane
       confirmId?: string
       memoryTiers?: ToolCallRecord['memoryTiers']
       confirmDiff?: ToolCallRecord['confirmDiff']
@@ -67,7 +70,7 @@ type AssistantFactEventPayload =
   | {
       type: 'approval-updated'
       id: string
-      approval: import('../../packages/agent-core/src/approval').ApprovalRecord
+      approval: import('./approvalTypes').ApprovalRecord
     }
   | { type: 'tool-confirmed'; id: string; approved: boolean; reason?: string }
   | { type: 'tool-result'; id: string; result: NonNullable<ToolCallRecord['result']> }
@@ -130,9 +133,14 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
     }
     next.content += event.text
     const segments = [...(next.contentSegments ?? [])]
+    const sourceTimestamp = event.sourceTimestamp ?? deps.now
+    if (event.newSegment) {
+      const last = segments.at(-1)
+      if (last && !last.endTime) segments[segments.length - 1] = { ...last, endTime: sourceTimestamp }
+    }
     const last = segments.at(-1)
-    if (last && !last.endTime) segments[segments.length - 1] = { ...last, content: last.content + event.text }
-    else segments.push({ content: event.text, startTime: deps.now })
+    if (!event.newSegment && last && !last.endTime) segments[segments.length - 1] = { ...last, content: last.content + event.text }
+    else segments.push({ content: event.text, startTime: sourceTimestamp })
     next.contentSegments = segments
   } else if (event.type === 'content-reconciled') {
     next.content = event.text
@@ -166,6 +174,7 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
     }
     delete (next as Message & { _provisionalSnapshot?: unknown })._provisionalSnapshot
   } else if (event.type === 'thinking-delta') {
+    const sourceTimestamp = event.sourceTimestamp ?? deps.now
     if (!(next as Message & { _provisionalSnapshot?: unknown })._provisionalSnapshot) {
       (next as Message & { _provisionalSnapshot?: unknown })._provisionalSnapshot = {
         content: state.content,
@@ -173,12 +182,12 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
         thinking: state.thinking ? { ...state.thinking, segments: state.thinking.segments?.map((segment) => ({ ...segment })) } : undefined
       }
     }
-    if (next.contentSegments) next.contentSegments = next.contentSegments.map((segment) => ({ ...segment, endTime: segment.endTime ?? deps.now }))
-    const thinking = next.thinking ?? { content: '', isVisible: true, startTime: deps.now, segments: [] }
+    if (next.contentSegments) next.contentSegments = next.contentSegments.map((segment) => ({ ...segment, endTime: segment.endTime ?? sourceTimestamp }))
+    const thinking = next.thinking ?? { content: '', isVisible: true, startTime: sourceTimestamp, segments: [] }
     const thinkingSegments = [...(thinking.segments ?? [])]
     const lastThinkingSegment = thinkingSegments.at(-1)
     if (lastThinkingSegment && !lastThinkingSegment.endTime) thinkingSegments[thinkingSegments.length - 1] = { ...lastThinkingSegment, content: lastThinkingSegment.content + event.text }
-    else thinkingSegments.push({ content: event.text, startTime: deps.now })
+    else thinkingSegments.push({ content: event.text, startTime: sourceTimestamp })
     next.thinking = { ...thinking, content: thinking.content + event.text, segments: thinkingSegments }
   } else if (event.type === 'thinking-reconciled') {
     next.thinking = event.text.length > 0
@@ -189,7 +198,7 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
       // 首次工具调用是活动时间线的边界：关闭调用前开放的正文/Thinking segment，
       // 否则工具执行期间再次到达的 thinking 会沿用旧 startTime，被渲染到工具之前。
       closeSegments(next, deps.now)
-      next.toolCalls = [...(next.toolCalls ?? []), { id: event.id, toolName: event.toolName, input: event.input, status: 'calling', riskLevel: event.riskLevel ?? 'low', startedAt: deps.now, ...(event.mcp ? { mcp: event.mcp } : {}) }]
+      next.toolCalls = [...(next.toolCalls ?? []), { id: event.id, toolName: event.toolName, input: event.input, status: 'calling', riskLevel: event.riskLevel ?? 'low', startedAt: event.sourceTimestamp ?? deps.now, ...(event.mcp ? { mcp: event.mcp } : {}) }]
     }
   } else if (event.type === 'tool-progress') {
     const processPid = event.processPid
@@ -263,8 +272,8 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
 }
 
 function approvalNotExecutedReason(
-  status: import('../../packages/agent-core/src/approval').ApprovalStatus,
-  cause?: import('../../packages/agent-core/src/approval').ApprovalCause
+  status: import('./approvalTypes').ApprovalStatus,
+  cause?: import('./approvalTypes').ApprovalCause
 ): NonNullable<ToolCallRecord['result']>['notExecutedReason'] {
   if (cause === 'agent-deny') return 'agent_denied'
   if (cause === 'policy-denied') return 'policy_denied'

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import type { CapabilityDescriptor } from './types'
 import type { CapabilityContext } from './types'
@@ -126,6 +126,18 @@ describe('callCapability', () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.error.code).toBe('timeout')
+  })
+
+  it('调用开始前已取消时不进入 capability handler', async () => {
+    const handler = vi.fn(async () => ({ changed: true }))
+    const registry = makeRegistry([{ ...echo, id: 'env.cancelled', handler }])
+    const controller = new AbortController()
+    controller.abort()
+
+    const result = await callCapability(registry, 'env.cancelled', { text: 'x' }, { ...baseCtx(), signal: controller.signal })
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'cancelled' } })
+    expect(handler).not.toHaveBeenCalled()
   })
 
   it('act 能力未经确认返回 denied', async () => {

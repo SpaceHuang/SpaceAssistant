@@ -8,7 +8,7 @@ import { resolveReadPermitTarget } from './readPermitExecutor'
 
 describe('resolveReadPermitTarget', () => {
   it('目录 permit 仅返回身份匹配的 direct-entries 目标', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'read-directory-permit-'))
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-directory-permit-')))
     try {
       const input = { path: dir }
       const stat = await fs.stat(dir)
@@ -26,7 +26,7 @@ describe('resolveReadPermitTarget', () => {
   })
 
   it('按绑定许可返回目标路径，并拒绝变更的请求或输入', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'read-permit-exec-'))
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-permit-exec-')))
     try {
       const file = path.join(dir, 'a.txt'); await fs.writeFile(file, 'x'); const st = await fs.stat(file)
       const input = { path: file }
@@ -43,7 +43,7 @@ describe('resolveReadPermitTarget', () => {
     } finally { await fs.rm(dir, { recursive: true, force: true }) }
   })
   it('拒绝审批后身份变化与缺少许可', async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'read-permit-exec-'))
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-permit-exec-')))
     try {
       const file = path.join(dir, 'a.txt'); await fs.writeFile(file, 'x'); const st = await fs.stat(file)
       const permit = buildReadExecutionPermit({ requestId: 'r', toolUseId: 't', toolName: 'read_file', input: { path: file }, facts: [{ factId: 'f', decisionRuleId: 'read-group-workdir-allow', normalizedPath: file, zone: 'workdir-normal', targetKind: 'file', identity: { dev: st.dev, ino: st.ino, mode: st.mode, size: 99, mtimeMs: st.mtimeMs } }] })

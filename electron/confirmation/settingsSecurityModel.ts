@@ -62,7 +62,7 @@ export function toRuleViews(
       when: rule.when,
       action: o?.action ?? rule.action,
       defaultAction: rule.action,
-      enabled: rule.locked || !disabled.has(rule.id),
+      enabled: (rule.locked && rule.action !== 'deny') || !disabled.has(rule.id),
       locked: rule.locked === true,
       reason: rule.reason,
       overridden: o != null && o.action !== rule.action,

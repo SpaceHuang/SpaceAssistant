@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import fs from 'fs/promises'
+import { constants as fsConstants } from 'fs'
+import { execFileSync } from 'child_process'
 import os from 'os'
 import path from 'path'
 import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
@@ -66,7 +68,176 @@ describe('readFeishuAttachmentExecutor', () => {
     expect(result).toMatchObject({ success: true, data: { content: 'hello attachment', fileName: 'message.txt' } })
   })
 
-  it('消费许可解析器已校验并读取的内容，不在句柄读取后再次按路径重查', async () => {
+  it('路径校验后附件被替换成 FIFO 时非阻塞拒绝且不返回内容', async () => {
+    if (!fsConstants.O_NONBLOCK || process.platform === 'win32') return
+    const userDataDir = await tempRoot('feishu-exec-nonblocking-')
+    const mediaRoot = path.join(userDataDir, 'feishu-media')
+    await fs.mkdir(mediaRoot)
+    const localPath = path.join(mediaRoot, 'message.txt')
+    await fs.writeFile(localPath, 'regular attachment')
+    const ctx = await contextWithPermit(userDataDir, localPath)
+    const actualOpen = fs.open.bind(fs)
+    const open = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      await fs.unlink(localPath)
+      execFileSync('mkfifo', [localPath])
+      return actualOpen(...args)
+    })
+
+    try {
+      const result = await readFeishuAttachmentExecutor.execute({ attachmentId }, ctx)
+      expect(result).toMatchObject({ success: false, diagnostic: { caseId: 'read-target-identity-changed' } })
+      expect(open).toHaveBeenCalledWith(localPath, expect.any(Number))
+      expect(JSON.stringify(result)).not.toContain('regular attachment')
+    } finally {
+      open.mockRestore()
+    }
+  })
+
+  it('执行准入租约已取消时，不读取登记附件内容', async () => {
+    const userDataDir = await tempRoot('feishu-exec-cancelled-')
+    const mediaRoot = path.join(userDataDir, 'feishu-media')
+    await fs.mkdir(mediaRoot)
+    const localPath = path.join(mediaRoot, 'message.txt')
+    await fs.writeFile(localPath, 'must not be returned after lease cancellation')
+    const ctx = await contextWithPermit(userDataDir, localPath)
+    const controller = new AbortController()
+    controller.abort()
+    ctx.signal = controller.signal
+
+    const result = await readFeishuAttachmentExecutor.execute({ attachmentId }, ctx)
+
+    expect(result).toMatchObject({ success: false, diagnostic: { caseId: 'read-permit-cancelled' } })
+    expect(JSON.stringify(result)).not.toContain('must not be returned')
+  })
+
+  it('附件分块读取期间租约取消时丢弃读取结果', async () => {
+    const userDataDir = await tempRoot('feishu-exec-mid-read-cancel-')
+    const mediaRoot = path.join(userDataDir, 'feishu-media')
+    await fs.mkdir(mediaRoot)
+    const localPath = path.join(mediaRoot, 'message.txt')
+    await fs.writeFile(localPath, 'must be discarded after the first read')
+    const ctx = await contextWithPermit(userDataDir, localPath)
+    const controller = new AbortController()
+    ctx.signal = controller.signal
+    const actualOpen = fs.open.bind(fs)
+    const open = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await actualOpen(...args)
+      return {
+        stat: () => handle.stat(),
+        read: async (...readArgs: Parameters<typeof handle.read>) => {
+          const result = await handle.read(...readArgs)
+          controller.abort()
+          return result
+        },
+        close: () => handle.close()
+      } as never
+    })
+
+    try {
+      const result = await readFeishuAttachmentExecutor.execute({ attachmentId }, ctx)
+      expect(result).toMatchObject({ success: false, diagnostic: { caseId: 'read-permit-cancelled' } })
+      expect(JSON.stringify(result)).not.toContain('must be discarded')
+    } finally {
+      open.mockRestore()
+    }
+  })
+
+  it('同一附件句柄读取期间原地改写时丢弃内容并记录 execution veto', async () => {
+    const userDataDir = await tempRoot('feishu-exec-in-place-mutation-')
+    const mediaRoot = path.join(userDataDir, 'feishu-media')
+    await fs.mkdir(mediaRoot)
+    const localPath = path.join(mediaRoot, 'message.txt')
+    await fs.writeFile(localPath, 'approved content')
+    const ctx = await contextWithPermit(userDataDir, localPath)
+    const events: SecurityAuditEvent[] = []
+    ctx.audit = { record: (event) => events.push(event) }
+    const actualOpen = fs.open.bind(fs)
+    const open = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await actualOpen(...args)
+      let mutated = false
+      return {
+        stat: () => handle.stat(),
+        read: async (...readArgs: Parameters<typeof handle.read>) => {
+          if (!mutated) {
+            mutated = true
+            await fs.writeFile(localPath, 'changed content!!')
+          }
+          return handle.read(...readArgs)
+        },
+        close: () => handle.close()
+      } as never
+    })
+    try {
+      const result = await readFeishuAttachmentExecutor.execute({ attachmentId }, ctx)
+      expect(result).toMatchObject({ success: false, diagnostic: { caseId: 'read-target-changed-during-read' } })
+      expect(JSON.stringify(result)).not.toContain('approved content')
+      expect(JSON.stringify(result)).not.toContain('changed content')
+      expect(events).toContainEqual(expect.objectContaining({ event: 'policy.execution-veto', caseId: 'read-target-changed-during-read', failureClass: 'mechanism' }))
+    } finally {
+      open.mockRestore()
+    }
+  })
+
+  it('读取期间文件 mode 改变时按 permit identity 拒绝返回正文', async () => {
+    const userDataDir = await tempRoot('feishu-exec-mode-change-')
+    const mediaRoot = path.join(userDataDir, 'feishu-media')
+    await fs.mkdir(mediaRoot)
+    const localPath = path.join(mediaRoot, 'message.txt')
+    await fs.writeFile(localPath, 'approved content')
+    const ctx = await contextWithPermit(userDataDir, localPath)
+    const actualOpen = fs.open.bind(fs)
+    const open = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await actualOpen(...args)
+      let changed = false
+      return {
+        stat: () => handle.stat(),
+        read: async (...readArgs: Parameters<typeof handle.read>) => {
+          if (!changed) {
+            changed = true
+            await fs.chmod(localPath, 0o600)
+          }
+          return handle.read(...readArgs)
+        },
+        close: () => handle.close()
+      } as never
+    })
+    try {
+      const result = await readFeishuAttachmentExecutor.execute({ attachmentId }, ctx)
+      expect(result).toMatchObject({ success: false, diagnostic: { caseId: 'read-target-changed-during-read' } })
+      expect(JSON.stringify(result)).not.toContain('approved content')
+    } finally {
+      open.mockRestore()
+      await fs.chmod(localPath, 0o644)
+    }
+  })
+
+  it('文件句柄打开后父目录移出媒体根时拒绝同 inode 附件', async () => {
+    const userDataDir = await tempRoot('feishu-exec-parent-move-race-')
+    const mediaRoot = path.join(userDataDir, 'feishu-media')
+    const mediaParent = path.join(mediaRoot, 'cache')
+    const movedParent = path.join(userDataDir, 'moved-cache')
+    await fs.mkdir(mediaParent, { recursive: true })
+    const localPath = path.join(mediaParent, 'message.txt')
+    await fs.writeFile(localPath, 'approved attachment')
+    const ctx = await contextWithPermit(userDataDir, localPath)
+    const actualOpen = fs.open.bind(fs)
+    const open = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await actualOpen(...args)
+      await fs.rename(mediaParent, movedParent)
+      await fs.symlink(movedParent, mediaParent, process.platform === 'win32' ? 'junction' : 'dir')
+      return handle
+    })
+
+    try {
+      const result = await readFeishuAttachmentExecutor.execute({ attachmentId }, ctx)
+      expect(result).toMatchObject({ success: false, diagnostic: { caseId: 'read-target-path-mismatch' } })
+      expect(JSON.stringify(result)).not.toContain('approved attachment')
+    } finally {
+      open.mockRestore()
+    }
+  })
+
+  it('读取已校验附件句柄时，在打开后重新确认登记路径仍位于媒体根', async () => {
     const userDataDir = await tempRoot('feishu-exec-bound-content-')
     const mediaRoot = path.join(userDataDir, 'feishu-media')
     await fs.mkdir(mediaRoot)
@@ -78,12 +249,12 @@ describe('readFeishuAttachmentExecutor', () => {
     const realpathSpy = vi.spyOn(fs, 'realpath')
       .mockResolvedValueOnce(rootRealPath)
       .mockResolvedValueOnce(fileRealPath)
-      .mockRejectedValueOnce(new Error('path changed after the validated handle read'))
+      .mockResolvedValueOnce(fileRealPath)
 
     try {
       const result = await readFeishuAttachmentExecutor.execute({ attachmentId }, ctx)
 
-      expect(realpathSpy).toHaveBeenCalledTimes(2)
+      expect(realpathSpy).toHaveBeenCalledTimes(3)
       expect(result).toMatchObject({ success: true, data: { content: 'content from validated handle' } })
     } finally {
       realpathSpy.mockRestore()

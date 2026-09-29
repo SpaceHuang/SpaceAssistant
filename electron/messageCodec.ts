@@ -1,5 +1,5 @@
 import { sanitizeCapabilityParamsForDisplay } from '../src/shared/capabilityParamSanitize'
-import type { ContentSegment, ChatImageAttachment, Message, SkillHintRecord, ThinkingData, ToolCallRecord, ToolUseData } from '../src/shared/domainTypes'
+import type { ContentSegment, ChatImageAttachment, Message, SkillHintRecord, ThinkingData, ToolCallRecord, ToolCallResultPersisted, ToolUseData } from '../src/shared/domainTypes'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { createCorruptedToolCallPlaceholder } from './database/streamingCleanup'
 import type { McpResultDisplay } from '../src/shared/mcpToolResultDisplay'
@@ -119,7 +119,7 @@ export function deserializeToolCallsFromDb(raw: string | null | undefined): Tool
   if (!raw) return undefined
   try {
     const arr = JSON.parse(raw) as Array<
-      ToolCallRecord & { input: string; result?: { success: boolean; data?: string; error?: string; displayData?: McpResultDisplay } }
+      ToolCallRecord & { input: string; result?: { success: boolean; data?: string; error?: string; auditRef?: string; decisionRuleId?: string; userMessage?: string; dependencyRecovery?: ToolCallResultPersisted['dependencyRecovery']; autoApprovedWrite?: ToolCallResultPersisted['autoApprovedWrite']; displayData?: McpResultDisplay; notExecuted?: true; notExecutedReason?: ToolCallResultPersisted['notExecutedReason'] } }
     >
     if (!Array.isArray(arr)) return undefined
     return arr.map((c) => ({
@@ -127,17 +127,29 @@ export function deserializeToolCallsFromDb(raw: string | null | undefined): Tool
       toolName: c.toolName,
       input: typeof c.input === 'string' ? JSON.parse(c.input || '{}') : (c.input as Record<string, unknown>),
       ...(c.mcp ? { mcp: c.mcp } : {}),
+      ...(c.approval ? { approval: c.approval } : {}),
       result: c.result
         ? {
             success: c.result.success,
             error: c.result.error,
             data: c.result.data !== undefined ? JSON.parse(c.result.data) : undefined,
-            ...(c.result.displayData ? { displayData: c.result.displayData } : {})
+            ...(c.result.displayData ? { displayData: c.result.displayData } : {}),
+            ...(typeof c.result.auditRef === 'string' ? { auditRef: c.result.auditRef } : {}),
+            ...(typeof c.result.decisionRuleId === 'string' ? { decisionRuleId: c.result.decisionRuleId } : {}),
+            ...(typeof c.result.userMessage === 'string' ? { userMessage: c.result.userMessage } : {}),
+            ...(c.result.dependencyRecovery ? { dependencyRecovery: c.result.dependencyRecovery } : {}),
+            ...(c.result.autoApprovedWrite ? { autoApprovedWrite: c.result.autoApprovedWrite } : {}),
+            ...(c.result.notExecuted ? { notExecuted: true as const } : {}),
+            ...(c.result.notExecutedReason ? { notExecutedReason: c.result.notExecutedReason } : {})
           }
         : undefined,
       status: c.status,
       riskLevel: c.riskLevel,
+      ...(Array.isArray(c.memoryTiers) ? { memoryTiers: c.memoryTiers } : {}),
       confirmDiff: c.confirmDiff,
+      ...(typeof c.shellSecurityHints === 'object' && c.shellSecurityHints ? { shellSecurityHints: c.shellSecurityHints } : {}),
+      ...(typeof c.autoApproveFallback === 'object' && c.autoApproveFallback ? { autoApproveFallback: c.autoApproveFallback } : {}),
+      ...(typeof c.autoAnswerer === 'boolean' ? { autoAnswerer: c.autoAnswerer } : {}),
       confirmedAt: c.confirmedAt,
       startedAt: c.startedAt,
       completedAt: c.completedAt,
@@ -145,6 +157,9 @@ export function deserializeToolCallsFromDb(raw: string | null | undefined): Tool
       processPid: c.processPid,
       processGroupId: c.processGroupId,
       processOwnerToken: c.processOwnerToken,
+      ...(typeof c.currentPageUrl === 'string' ? { currentPageUrl: c.currentPageUrl } : {}),
+      ...(typeof c.dangerInfo === 'object' && c.dangerInfo ? { dangerInfo: c.dangerInfo } : {}),
+      ...(c.sessionTrustedHint === true ? { sessionTrustedHint: true as const } : {}),
       corrupted: c.corrupted,
       interrupted: c.interrupted
     }))

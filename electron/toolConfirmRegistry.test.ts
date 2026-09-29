@@ -6,7 +6,7 @@ import {
   submitToolConfirmResponse,
   waitForToolConfirm
 } from './toolConfirmRegistry'
-import { reserveToolConfirmResponse, cancelReservedToolConfirm, restoreReservedToolConfirm, isToolConfirmCommitAllowed } from './toolConfirmRegistry'
+import { reserveToolConfirmResponse, cancelReservedToolConfirm, cancelToolConfirm, restoreReservedToolConfirm, isToolConfirmCommitAllowed } from './toolConfirmRegistry'
 import type { CacheKey } from '../src/shared/confirmation/types'
 
 const sessionTierKey: CacheKey = { kind: 'domain', domain: 'example.com', level: 'domain-any-action', sessionId: 's1' }
@@ -20,6 +20,17 @@ describe('toolConfirmRegistry', () => {
     expect(waited).toBe(prepared)
     expect(submitToolConfirmResponse('req-prepared', 'tool-prepared', false).accepted).toBe(true)
     await expect(prepared).resolves.toBe('rejected')
+  })
+  it('cancels only the selected pending confirmation waiter', async () => {
+    const selected = waitForToolConfirm('req-single-cancel', 'tool-selected')
+    const concurrent = waitForToolConfirm('req-single-cancel', 'tool-concurrent')
+
+    expect(cancelToolConfirm('req-single-cancel', 'tool-selected')).toBe(true)
+    await expect(selected).resolves.toBe('cancelled')
+    expect(isPendingConfirm('req-single-cancel', 'tool-selected')).toBe(false)
+    expect(isPendingConfirm('req-single-cancel', 'tool-concurrent')).toBe(true)
+    expect(submitToolConfirmResponse('req-single-cancel', 'tool-concurrent', false).accepted).toBe(true)
+    await expect(concurrent).resolves.toBe('rejected')
   })
   it('defers confirm resolve to the next event-loop turn', async () => {
     let resolvedSync = false

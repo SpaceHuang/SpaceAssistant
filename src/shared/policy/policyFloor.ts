@@ -4,7 +4,8 @@ import type { PolicyAction, PolicyRule } from '../confirmation/types'
  * P3（偏差 3 语义收口）：locked 底线与嵌套交集的纯函数实现。
  *
  * - 「可收紧不可放宽」：动作宽度序 deny < confirm-every-time < ask < auto-evaluator < allow；
- *   相对底线放宽任何 locked 条目（改宽或移除）= 违规。
+ *   相对底线放宽任何 locked 条目（改宽或移除）= 违规。locked deny 可由显式管理员设置停用，
+ *   只有调用方传入受信任的 disabled id 时才允许该 deny 缺席；locked ask 无此例外。
  * - 嵌套交集：子调用放行集合只能取交集（授权不继承：替换 + 上界）。
  */
 
@@ -27,19 +28,24 @@ function conditionSignature(rule: PolicyRule): string {
 
 /**
  * 校验规则集相对 locked 底线「可收紧不可放宽」（基线 §7.1：Core 侧不可覆盖的校验）。
- * locked 条目三重约束：不可缺失、action 只能收紧、when + match 原样保留——
- * 只比对 action 宽度会被「条件掏空」绕过（保持动作但改 match 使规则永不命中）。
+ * locked 条目约束：action 只能收紧、when + match 原样保留；缺席默认违规，管理员显式停用的
+ * locked deny 除外。只比对 action 宽度会被「条件掏空」绕过（保持动作但改 match 使规则永不命中）。
  */
 export function validatePolicyRulesFloor(
   rules: readonly PolicyRule[],
-  floor: readonly PolicyRule[] = DEFAULT_FLOOR
+  floor: readonly PolicyRule[] = DEFAULT_FLOOR,
+  disabledDenyRuleIds: readonly string[] = []
 ): { ok: true } | { ok: false; violations: string[] } {
   const byId = new Map(rules.map((r) => [r.id, r]))
+  const explicitlyDisabled = new Set(disabledDenyRuleIds)
   const violations: string[] = []
   for (const base of floor) {
     if (!base.locked) continue
     const incoming = byId.get(base.id)
     if (!incoming) {
+      // Locked deny rules have an explicit administrator-controlled enable switch.
+      // Their absence is permitted only when the trusted runtime supplies that setting.
+      if (base.action === 'deny' && explicitlyDisabled.has(base.id)) continue
       violations.push(base.id)
       continue
     }

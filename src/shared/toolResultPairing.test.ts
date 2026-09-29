@@ -34,6 +34,23 @@ function userText(text: string): Msg {
 }
 
 describe('ensureToolResultPairing', () => {
+  it('合并连续 user 输入时保留最新消息身份，供当前输入校验使用', () => {
+    const input: Msg[] = [
+      { role: 'user', id: 'previous-user', content: 'earlier input' },
+      { role: 'user', id: 'current-user', content: 'current input' }
+    ]
+
+    const { messages } = ensureToolResultPairing(input, { requiredUserMessageId: 'current-user' })
+
+    expect(messages).toEqual([{ role: 'user', id: 'current-user', content: 'earlier input\ncurrent input', timestamp: undefined }])
+  })
+
+  it('单条带身份的审批线索经过配对后保留 current user id', () => {
+    const input: Msg[] = [{ role: 'user', id: 'approval-user', content: 'approval clue' }]
+    const { messages } = ensureToolResultPairing(input, { requiredUserMessageId: 'approval-user' })
+    expect(messages).toEqual(input)
+  })
+
   it('1: leaves valid adjacent pairing unchanged', () => {
     const input: Msg[] = [userText('hi'), assistantToolUse('a'), userToolResults({ id: 'a' })]
     const { messages, report } = ensureToolResultPairing(input)

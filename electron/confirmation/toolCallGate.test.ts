@@ -7,7 +7,7 @@ import { SqliteDecisionCache } from './sqliteDecisionCache'
 import { getDbConnection, openSqliteDatabase, type AppDatabase } from '../database'
 import { touchTrustedCommand } from '../shell/shellCommandTrust'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
-import { evaluateToolCallGate, type ToolCallGateArgs } from './toolCallGate'
+import { buildToolCallGateArgs, evaluateToolCallGate, type ToolCallGateArgs } from './toolCallGate'
 import { canonicalKeyJson } from './sqliteDecisionCache'
 import { PolicyRuleStore } from './policyRuleStore'
 import { writePolicyPackages } from './policyRulesRuntime'
@@ -26,6 +26,21 @@ import type { ToolExecutionContext } from '../tools/types'
 import { classifyWorkDirProfileTarget } from '../workDirBinding'
 
 const shells: AppDatabase[] = []
+describe('buildToolCallGateArgs', () => {
+  it('binds phase and call identity while isolating canonical input from gate mutation', () => {
+    const input = { path: 'note.txt' }
+    const args = buildToolCallGateArgs({ sessionId: 'session', workDir: '/workspace', userDataDir: '/data', toolsConfig: {}, effectiveRules: [], decisionCache: {}, shellPrecheck: { touchTrustedCommand() {} } } as never, {
+      toolName: 'write_file', toolInput: input, requestId: 'request', toolUseId: 'call', phase: 'recheck'
+    })
+
+    expect(args).toMatchObject({ toolName: 'write_file', toolInput: { path: 'note.txt' }, requestId: 'request', toolUseId: 'call', phase: 'recheck' })
+    expect(args.toolInput).not.toBe(input)
+    args.toolInput.path = 'mutated'
+    expect(input.path).toBe('note.txt')
+    expect(() => buildToolCallGateArgs({} as never, { toolName: '', toolInput: {}, requestId: 'request', toolUseId: 'call' })).toThrow('TOOL_GATE_CALL_IDENTITY_REQUIRED')
+  })
+})
+
 let nextGateTestId = 0
 function openDb(): AppDatabase {
   const db = openSqliteDatabase(':memory:')
@@ -110,6 +125,25 @@ function auditSink(): { record: (e: SecurityAuditEvent) => void; events: Securit
 }
 
 describe('evaluateToolCallGate', () => {
+  it('missing target 的父目录不存在时在确认和自动审批前直接 deny', async () => {
+    const root = await fs.realpath(await fs.mkdtemp('/tmp/write-gate-parent-missing-'))
+    const fileAutoApproval = vi.fn(async () => ({ approve: true as const }))
+    try {
+      const gate = await evaluateToolCallGate(base({
+        workDir: root,
+        userDataDir: path.join(root, '.userdata'),
+        toolName: 'write_file',
+        toolInput: { path: path.join(root, 'new', 'nested', 'file.txt'), content: 'blocked' },
+        fileAutoApproval
+      }))
+      expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'write-parent-directory-missing' })
+      expect(gate.writePathFact).toBeUndefined()
+      expect(fileAutoApproval).not.toHaveBeenCalled()
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('policy.decision 审计携带 requestId/toolUseId 以关联执行期 veto', async () => {
     const audit = auditSink()
     const gate = await evaluateToolCallGate(base({
@@ -1290,6 +1324,27 @@ describe('evaluateToolCallGate', () => {
     )
     expect(r.decision.type).toBe('auto-allow')
     expect(r.decision.ruleId).toBe('default-write-execute-ask')
+  })
+
+  it('仅 Hosted recheck 重算无副作用的桌面文件快通道，旧 loop recheck 仍 fail closed', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'write-hosted-recheck-')))
+    const fileAutoApproval = vi.fn(async () => ({ approve: true as const }))
+    const common = {
+      workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'write_file',
+      toolInput: { path: 'created.txt', content: 'small write' }, phase: 'recheck' as const, fileAutoApproval
+    }
+    try {
+      const legacy = await evaluateToolCallGate(base(common))
+      expect(legacy.decision.type).toBe('deny')
+      expect(fileAutoApproval).not.toHaveBeenCalled()
+
+      const hosted = await evaluateToolCallGate(base({ ...common, evaluateFastTrackOnRecheck: true }))
+      expect(hosted.decision).toMatchObject({ type: 'auto-allow', ruleId: 'default-write-execute-ask' })
+      expect(hosted.fileAutoApproved).toBe(true)
+      expect(fileAutoApproval).toHaveBeenCalledOnce()
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
   })
 
   it('桌面 write_file 快通道拒绝 → require-confirm(agent) + fallback', async () => {

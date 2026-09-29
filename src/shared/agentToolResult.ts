@@ -1,5 +1,9 @@
 export interface AgentToolResultInput {
   success: boolean
+  decisionRuleId?: string
+  autoApprovedWrite?: import('./domainTypes').AutoApprovedWriteMeta
+  /** Opaque host audit correlation; never serialized into model replay content. */
+  auditRef?: string
   data?: unknown
   diagnostic?: unknown
   error?: string

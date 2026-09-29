@@ -11,6 +11,7 @@ import { readToolsConfig } from './ipcShared'
 import { recordSettingsChange } from '../confirmation/settingsAudit'
 import { revokeAllLegacyTrust, revokeLegacyTrustForCacheKey } from '../confirmation/legacyTrustRevocation'
 import { shell } from 'electron'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 
 export function registerSecurityIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
 const recordSettings = makeRecordSettings(ctx)
@@ -113,6 +114,14 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
 
   setSecurityAuditRetentionDays(readSecurityAuditRetentionDays(ctx.db))
 
+  const publishAuthorizationChange = (lane: 'desktop' | 'wechat' | 'feishu' | 'automation'): void => {
+    getDefaultAgentRuntime().policyAuthorizationChanges.publish(lane)
+  }
+  const publishAffectedPolicyLanes = (rule: { match?: { lane?: readonly string[] } }): void => {
+    const lanes = ['desktop', 'wechat', 'feishu', 'automation'] as const
+    for (const lane of lanes) if (!rule.match?.lane?.length || rule.match.lane.includes(lane)) publishAuthorizationChange(lane)
+  }
+
   const securityDeps = async () => {
     const runtime = await import('../confirmation/policyRulesRuntime')
     const model = await import('../confirmation/settingsSecurityModel')
@@ -166,6 +175,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       packages[lane] = pkg
       runtime.writePolicyPackages(ctx.db, packages)
       ctx.db.flushSave()
+      publishAuthorizationChange(lane)
       recordSettingsChange(getSecurityAuditLog(), {
         kind: 'policy-change',
         lane,
@@ -202,6 +212,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       const before = prev?.action ?? check.rule.action
       store.setOverride({ ruleId, action: payload!.action as never, params })
       ctx.db.flushSave()
+      publishAffectedPolicyLanes(check.rule)
       recordSettingsChange(getSecurityAuditLog(), {
         kind: 'policy-change',
         lane: 'desktop',
@@ -226,6 +237,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
     const removed = store.removeOverride(ruleId)
     ctx.db.flushSave()
     if (removed > 0) {
+      publishAffectedPolicyLanes(rule)
       recordSettingsChange(getSecurityAuditLog(), {
         kind: 'policy-change',
         lane: 'desktop',
@@ -261,6 +273,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
         : Array.from(new Set([...disabledIds, ruleId]))
       runtime.writeDisabledPolicyRuleIds(ctx.db, nextDisabled)
       ctx.db.flushSave()
+      publishAffectedPolicyLanes(rule)
       recordSettingsChange(getSecurityAuditLog(), {
         kind: 'policy-change',
         lane: (rule.match?.lane?.[0] as 'desktop' | 'wechat' | 'feishu' | 'automation') ?? 'desktop',

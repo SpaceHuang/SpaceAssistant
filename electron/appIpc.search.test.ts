@@ -39,10 +39,12 @@ vi.mock('./database', () => ({
   setConfigValue: vi.fn(),
   appendSearchHistory: vi.fn(),
   listSearchHistory: vi.fn(() => []),
-  searchMessages: vi.fn(() => [])
+  searchMessages: vi.fn(() => []),
+  getDbConnection: vi.fn(() => ({})),
 }))
 
 vi.mock('./anthropicClientFactory', () => ({
+  createAnthropicStreamPort: (client: { messages: { stream: (...args: unknown[]) => unknown } }) => ({ stream: (...args: unknown[]) => client.messages.stream(...args) }),
   createAnthropicClient: vi.fn()
 }))
 

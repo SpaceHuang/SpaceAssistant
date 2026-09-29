@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type {
   AgentEventSink,
   AgentHostPorts,
@@ -19,6 +20,7 @@ import { recordStepUsage, recordTurnSummary } from '../usageStats/usageStatsReco
 import { safeAppendDiagnostic } from '../mcp/mcpDiagnostics'
 import { scheduleSessionTitleSuggestion } from '../sessionTitleSuggest'
 import { recordUserAnswerFromDecision } from '../confirmation/decisionCacheWriter'
+import { evaluateToolCallGate } from '../confirmation/toolCallGate'
 import { buildSnapshotFromDb, type McpToolSnapshot } from '../mcp/mcpToolRegistry'
 import { resolveRequestLocale } from '../llmSystemPrompt'
 import { listProfiles } from '../mcp/mcpConfigStore'
@@ -27,8 +29,50 @@ import { getDiagnostics } from '../mcp/mcpDiagnostics'
 import { createMcpOAuthClientProvider } from '../mcp/mcpOauthService'
 import { createMcpToolExecutor } from '../mcp/mcpToolExecutor'
 import { getSecurityAuditLog } from '../confirmation/audit'
-import type { McpConnectionManager } from '../mcp/mcpConnectionManager'
+import { McpConnectionManager } from '../mcp/mcpConnectionManager'
+import { createHostedMcpToolRegistry } from '../mcp/hostedMcpRegistry'
+import { TypedToolRegistry } from '../tools/plannedToolRegistry'
 import { getDefaultAgentRuntime } from './agentRuntimeDefaults'
+import { SqliteAgentHistory } from './sqliteAgentHistory'
+import { createAgentSdkProviderRecovery } from './agentSdkProviderRecovery'
+import { createAgentSdkOutputRecovery } from './agentSdkOutputRecovery'
+import { createAgentSdkUsageRecorder, createAgentSdkUsageSessionEvent } from './agentSdkUsageRecorder'
+import { createAgentSdkDesktopObserver } from './agentSdkDesktopObserver'
+import { createAgentSdkPreflightAdapter, createAgentSdkTurnBoundaryAdapter } from './agentSdkTurnBoundary'
+import { projectAgentToolResult } from '../../src/shared/agentToolResult'
+import { isProcessToolName } from '../../src/shared/processResultProjection'
+import { resolveRegisteredToolName } from '../tools/registeredToolName'
+import { createAgentSdkSafetyPolicy, createAgentSdkStructuralPermitHandoff, markAgentSdkSafetyDecisionConfirmed } from '../confirmation/agentSdkSafetyPolicy'
+import { createAgentSdkConfirmationPort, mapAgentSdkConfirmationOutcome } from '../confirmation/agentSdkConfirmationPort'
+import type { GateConfirmationContext } from '../confirmation/agentSdkConfirmationPort'
+import type { PermitBinding } from '../../packages/agent-sdk/src/safetyPermit'
+import type { ToolCallGateArgs } from '../confirmation/toolCallGate'
+import { createRegisteredAgentTurnTools } from '../tools/registeredAgentTurnTools'
+import { classifyWorkDirProfileTarget } from '../workDirBinding'
+import { sessionDisplayNameRaw } from '../../src/shared/sessionDisplay'
+import { channelFor, type ResolveConfirmChannelArgs } from '../confirmation/channels'
+import { AgentChannel } from '../confirmation/agentChannel'
+import { getCallAdmissionGate } from './callAdmissionGate'
+import { toolIdToOpenAiCompatibleApiToolName } from '../../src/shared/anthropicToolSanitize'
+import { normalizeExternalToolName } from '../../src/shared/toolNameCompatibility'
+import { sanitizeCapabilityParamsForDisplay } from '../../src/shared/capabilityParamSanitize'
+import { CapabilityRegistry } from '../../packages/agent-sdk/src/capability'
+import { SafetyGate } from '../../packages/agent-sdk/src/safetyGate'
+import { createHostedAgentTurnHost } from './hostedAgentTurnHost'
+import type { ConfirmationPort } from '../../packages/agent-sdk/src/turn'
+import { FileStateCache } from '../fileStateCache'
+import { resolveEffectiveShellOutputMode } from '../../src/shared/shellOutputMode'
+import { assessActDanger } from '../browser/actDangerAssessor'
+import { stagehandService } from '../browser/stagehandService'
+import { resolveHostedBrowserGateFacts } from './hostedBrowserGateFacts'
+import { shouldFallbackToUser } from '../confirmation/fallbackToUser'
+import { approvalFallbackReasonFor } from '../confirmation/fallbackReason'
+import type { ConfirmOutcome } from '../../src/shared/confirmation/types'
+import { cancelToolConfirm } from '../toolConfirmRegistry'
+import { buildConfirmationDiff } from '../confirmation/confirmDiff'
+import { extractHostname } from '../browser/urlSecurity'
+import { rememberBrowserSessionActTrust, rememberBrowserSessionTrustedUrl } from '../browser/browserSessionTrust'
+import { computeDiffLineStats } from '../../src/shared/writeDiffStats'
 
 /**
  * Runtime 唯一装配点（roadmap「Runtime 是唯一装配点」在主进程的落位）。
@@ -41,12 +85,16 @@ import { getDefaultAgentRuntime } from './agentRuntimeDefaults'
 /** 调用方装配材料：字段与原 RunToolChatSessionArgs 同构（floatingNotificationManager 由装配器消化为 events.notify）。 */
 export interface AgentInvocationMaterials {
   requestId: string
+  hostedHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
+  appendHistoryEvents?: (events: readonly Readonly<{ kind: import('../../packages/agent-sdk/src/history').HistoryEvent['kind']; payload: unknown }>[]) => Promise<void>
+  expectedHistoryVersion?: () => Promise<number>
   deadlineAt?: number
   sessionId: string
   turnId?: string
   llmServiceId?: string
   windowId?: string
   model: string
+  providerRouteId?: string
   contextWindow?: number
   contextWindowTrusted?: boolean
   baseUrl?: string
@@ -56,7 +104,12 @@ export interface AgentInvocationMaterials {
   /** P4（偏差 6）：显式思维强度档位；优先于 enableThinking 兼容映射；缺省 'off'（零成本档）。 */
   effort?: import('../../src/shared/agent/invocation').AgentReasoningEffort
   toolsConfig: import('../../src/shared/domainTypes').ToolsConfig
+  /** Re-read mutable execution configuration during approved safety recheck and executor refresh. */
+  resolveToolsConfig?: () => import('../../src/shared/domainTypes').ToolsConfig
+  resolveShellConfig?: () => import('../../src/shared/domainTypes').ShellConfig | null
+  resolveWikiConfig?: () => import('../../src/shared/domainTypes').WikiConfig
   browserConfig?: import('../../src/shared/domainTypes').BrowserConfig
+  resolveBrowserConfig?: () => import('../../src/shared/domainTypes').BrowserConfig
   shellConfig?: import('../../src/shared/domainTypes').ShellConfig | null
   wikiConfig?: import('../../src/shared/domainTypes').WikiConfig
   feishuConfig?: import('../../src/shared/domainTypes').FeishuConfig
@@ -67,12 +120,16 @@ export interface AgentInvocationMaterials {
   maxToolLoopRounds?: number
   approvalTaskDigest?: string
   remoteContext?: import('../tools/types').RemoteContext
+  /** Generic remote activity signal; generated answer text remains staged until terminal acceptance. */
+  onRemoteTextActivity?: (text: string) => void
   workDir: string
   workDirManager?: import('../workDirManager').WorkDirManager
   resolveWorkDir?: () => string
   userDataDir: string
   getApiKey: () => Promise<string | null>
   appDb?: unknown
+  /** Optional canonical History adapter override for isolated host composition and non-SQLite lanes. */
+  agentSdkHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
   locale?: import('../../src/shared/domainTypes').AppLocale
   projectMemoryEnabled?: boolean
   skillFragments?: string[]
@@ -93,9 +150,11 @@ export interface AgentInvocationMaterials {
   emitSessionEvent: (event: import('../sessionEvents').SessionEventInput) => void | Promise<void>
   onFileTreeChanged?: (event: import('../../src/shared/fileTreeSync').FileTreeChangeEvent) => void
   onTitleGenerated?: (session: import('../../src/shared/domainTypes').Session) => void
-  appendCompactionTransaction?: (start: Record<string, unknown>, summary: Record<string, unknown>) => Promise<unknown>
+  sessionEventLocation?: { workDir: string; sessionId: string; createdAt: number }
   contextMeter?: import('../toolChatLoop').RunToolChatSessionArgs['contextMeter']
-  onTurnBoundary?: import('../toolChatLoop').RunToolChatSessionArgs['onTurnBoundary']
+  onTurnBoundary?: import('../toolChatLoop').HostedTurnBoundaryCallback
+  /** Runtime facts needed by Hosted SDK gate evaluation that are resolved at tool-call time. */
+  resolveAgentSdkGateSupplement?: (input: { binding: PermitBinding; toolName: string; toolInput: Record<string, unknown>; signal?: AbortSignal }) => Promise<Pick<ToolCallGateArgs, 'dangerAssessment' | 'currentPageUrl' | 'remoteBudgetState' | 'audit'> | undefined> | Pick<ToolCallGateArgs, 'dangerAssessment' | 'currentPageUrl' | 'remoteBudgetState' | 'audit'> | undefined
   approvalAdmission?: import('./agentRuntime').ApprovalAdmissionLike
   invocationRuntime?: import('./agentRuntime').InvocationRuntimeLike
   applicationAdmission?: AgentHostPorts['applicationAdmission']
@@ -141,7 +200,57 @@ function buildEventSink(materials: AgentInvocationMaterials): AgentEventSink {
 
 export function assembleInvocation(materials: AgentInvocationMaterials): {
   invocation: AgentInvocation
-  ports: AgentHostPorts
+  ports: AgentHostPorts & { observer: import('../../packages/agent-sdk/src/turn').AgentTurnObserver }
+  agentSdk: {
+    recoverProviderAttempt: NonNullable<import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']>
+    resolveGateArgs(binding: PermitBinding, call?: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }>): Promise<ToolCallGateArgs>
+    createSafetyPolicy(tools: ReturnType<typeof createRegisteredAgentTurnTools>, resolveToolName?: (providerToolName: string) => string): ReturnType<typeof createAgentSdkSafetyPolicy>
+    createRegisteredTools(input: {
+      registry?: import('../tools/plannedToolRegistry').TypedToolRegistry
+      resolveRegisteredToolName?(providerToolName: string): string
+      createExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>): unknown
+      refreshExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: import('../../packages/agent-sdk/src/turn').ToolPreparationStage & { kind: 'recheck' }, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
+    }): ReturnType<typeof createRegisteredAgentTurnTools>
+    createConfirmationPort(
+      policy: ReturnType<typeof createAgentSdkSafetyPolicy>,
+      adapter: Omit<Parameters<typeof createAgentSdkConfirmationPort>[0], 'onApproved' | 'publish' | 'createChannel'> & Partial<Pick<Parameters<typeof createAgentSdkConfirmationPort>[0], 'publish' | 'createChannel'>> & { agentChannelFactory?: NonNullable<import('../confirmation/channels').ResolveConfirmChannelArgs['agentChannelFactory']> }
+    ): ReturnType<typeof createAgentSdkConfirmationPort>
+    createHostedTurnHost(input: {
+      registeredTools: ReturnType<typeof createRegisteredAgentTurnTools>
+      registry?: import('../tools/plannedToolRegistry').TypedToolRegistry
+      authorizedToolNames: ReadonlySet<string>
+      resolveRegisteredToolName?(providerToolName: string): string
+      policy: ReturnType<typeof createAgentSdkSafetyPolicy>
+      confirmation?: ConfirmationPort
+      hostHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
+      sessionLedgerForInvocationTerminal?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionLedgerForInvocationTerminal']
+      applicationAdmission?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['applicationAdmission']
+      deadlineAt?: number
+      afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
+      recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
+      refreshExecutionContext?: (call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: import('../../packages/agent-sdk/src/turn').ToolPreparationStage & { kind: 'recheck' }, current: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>>
+    }): ReturnType<typeof createHostedAgentTurnHost>
+    createHostedTurnRuntime(input: {
+      registry?: import('../tools/plannedToolRegistry').TypedToolRegistry
+      authorizedToolNames: ReadonlySet<string>
+      resolveRegisteredToolName?(providerToolName: string): string
+      createExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>): unknown
+      refreshExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: import('../../packages/agent-sdk/src/turn').ToolPreparationStage & { kind: 'recheck' }, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
+      maxToolRounds?: number
+      applicationAdmission?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['applicationAdmission']
+      deadlineAt?: number
+      afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
+      confirmationAdapter?: Omit<Parameters<typeof createAgentSdkConfirmationPort>[0], 'onApproved' | 'publish' | 'createChannel'> & Partial<Pick<Parameters<typeof createAgentSdkConfirmationPort>[0], 'publish' | 'createChannel'>> & { agentChannelFactory?: NonNullable<import('../confirmation/channels').ResolveConfirmChannelArgs['agentChannelFactory']> }
+      recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
+      refreshExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: import('../../packages/agent-sdk/src/turn').ToolPreparationStage & { kind: 'recheck' }, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
+    }): {
+      registeredTools: ReturnType<typeof createRegisteredAgentTurnTools>
+      policy: ReturnType<typeof createAgentSdkSafetyPolicy>
+      confirmation: ReturnType<typeof createAgentSdkConfirmationPort>
+      host: ReturnType<typeof createHostedAgentTurnHost>
+      dispose(): Promise<void>
+    }
+  }
 } {
   const db = materials.appDb as AppDatabase | undefined
   const additionalContext: Record<string, unknown> = {}
@@ -217,6 +326,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     },
     profile: {
       model: materials.model,
+      ...(materials.providerRouteId !== undefined ? { providerRouteId: materials.providerRouteId } : {}),
       ...(materials.llmServiceId !== undefined ? { llmServiceId: materials.llmServiceId } : {}),
       ...(materials.contextWindow !== undefined ? { contextWindow: materials.contextWindow } : {}),
       ...(materials.contextWindowTrusted !== undefined ? { contextWindowTrusted: materials.contextWindowTrusted } : {}),
@@ -266,7 +376,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   // P3：带来源解析 + 嵌套交集（floor 上界由调用方声明；放行集合只收窄）
   const withOrigin = db
     ? resolveEffectivePolicyRulesWithOrigin(db, materialsLane)
-    : { rules: DEFAULT_POLICY_RULES as import('../../src/shared/confirmation/types').PolicyRule[], origins: {} as Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }> }
+    : { rules: DEFAULT_POLICY_RULES as import('../../src/shared/confirmation/types').PolicyRule[], origins: {} as Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }>, disabledRuleIds: [] }
   const effectiveRules = materials.policyRuleFloor
     ? intersectPolicyRulesWithFloor(withOrigin.rules, materials.policyRuleFloor)
     : withOrigin.rules
@@ -275,18 +385,41 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     .policyLanePackage
   const lanePackage =
     explicitLanePackage ?? (db ? readPolicyPackages(db)[materialsLane] ?? 'standard' : 'standard')
+  const resolveCurrentAuthorization = () => {
+    const currentOrigin = db
+      ? resolveEffectivePolicyRulesWithOrigin(db, materialsLane)
+      : { rules: DEFAULT_POLICY_RULES as import('../../src/shared/confirmation/types').PolicyRule[], origins: {} as Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }>, disabledRuleIds: [] }
+    const currentRules = materials.policyRuleFloor
+      ? intersectPolicyRulesWithFloor(currentOrigin.rules, materials.policyRuleFloor)
+      : currentOrigin.rules
+    const currentLanePackage = explicitLanePackage ?? (db ? readPolicyPackages(db)[materialsLane] ?? 'standard' : 'standard')
+    const version = createHash('sha256').update(JSON.stringify({
+      effectiveRules: currentRules,
+      lanePackage: currentLanePackage,
+      policyOrigins: currentOrigin.origins
+    })).digest('hex')
+    return { effectiveRules: currentRules, lanePackage: currentLanePackage, policyOrigins: currentOrigin.origins, disabledRuleIds: currentOrigin.disabledRuleIds, authorizationVersion: version }
+  }
+  const currentAuthorization = resolveCurrentAuthorization()
+  const authorizationVersion = currentAuthorization.authorizationVersion
   const policy = db
     ? {
         effectiveRules,
+        disabledPolicyRuleIds: currentAuthorization.disabledRuleIds,
         lanePackage,
+        authorizationVersion,
+        resolveCurrentAuthorization,
         decisionCache: new SqliteDecisionCache(getDbConnection(db)),
         shellPrecheck: { touchTrustedCommand: (command: string) => touchTrustedCommand(db, command) },
         policyOrigins: withOrigin.origins
       }
-    : {
+      : {
         // 无库宿主（内存端口 / 测试）：显式默认材料 + 留痕——不是门控侧静默回退
         effectiveRules: DEFAULT_POLICY_RULES,
+        disabledPolicyRuleIds: [],
         lanePackage,
+        authorizationVersion,
+        resolveCurrentAuthorization,
         decisionCache: { lookup: () => null },
         shellPrecheck: { touchTrustedCommand: () => undefined }
       }
@@ -315,6 +448,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     }
   }
   const storage = {
+    ...(materials.sessionEventLocation ? { sessionEventLocation: materials.sessionEventLocation } : {}),
     ...(db
       ? {
           loaded: { metadata: getSession(db, materials.sessionId)?.metadata },
@@ -328,9 +462,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
               persistObservable('recordUserAnswerFromDecision', () => recordUserAnswerFromDecision({ ...input, db, audit: getSecurityAuditLog() } as never))
           }
         }
-      : {}),
-    ...(materials.appendCompactionTransaction !== undefined
-      ? { appendCompactionTransaction: (start: Record<string, unknown>, summary: Record<string, unknown>) => materials.appendCompactionTransaction!(start, summary) }
       : {})
   }
   // 暴露面规则与门控同源同判（P3：带来源解析；嵌套交集同样适用）
@@ -384,7 +515,580 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     ...(db ? { approvalDatabase: db } : {})
   }
 
-  const ports: AgentHostPorts = {
+  const resolveAgentSdkToolName = (name: string): string => {
+    const registry = getDefaultAgentRuntime().builtinRegistry as { get(name: string): unknown; entries?(): readonly Readonly<{ name: string }>[] }
+    return resolveRegisteredToolName(name, registry)
+  }
+  const resolveAgentSdkGateArgs = async (
+    binding: PermitBinding,
+    call?: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }>,
+    signal?: AbortSignal
+  ): Promise<ToolCallGateArgs> => {
+    if (signal?.aborted) throw new Error('POLICY_EVALUATION_CANCELLED')
+    if (!call) throw new Error('AGENT_SDK_GATE_PREPARED_CALL_REQUIRED')
+    if (call.invocationId !== binding.invocationId || call.toolCallId !== binding.toolCallId) throw new Error('AGENT_SDK_GATE_CALL_BINDING_MISMATCH')
+    const toolName = resolveAgentSdkToolName(call.toolName)
+    const current = resolveCurrentAuthorization()
+    const currentBrowserConfig = binding.phase === 'recheck' ? materials.resolveBrowserConfig?.() ?? materials.browserConfig : materials.browserConfig
+    const browserFacts = await resolveHostedBrowserGateFacts({
+      sessionId: materials.sessionId,
+      toolName,
+      toolInput: structuredClone(call.input),
+      browserConfig: currentBrowserConfig,
+      remote: materialsLane !== 'desktop',
+      peekCurrentUrl: (sessionId) => stagehandService.peekCurrentUrl(sessionId),
+      assess: (sessionId, toolInput, config, failClosed) => assessActDanger(
+        sessionId, toolInput, config, stagehandService, undefined,
+        failClosed ? { failClosedOnUncertainty: true } : undefined
+      ),
+      onAssessing: () => materials.emitFactEvent({ type: 'tool-progress', id: call.toolCallId, seq: 0, text: '正在检查本次操作风险…' })
+    })
+    if (signal?.aborted) throw new Error('POLICY_EVALUATION_CANCELLED')
+    const callerSupplement = await materials.resolveAgentSdkGateSupplement?.({ binding, toolName, toolInput: structuredClone(call.input), ...(signal ? { signal } : {}) })
+    if (signal?.aborted) throw new Error('POLICY_EVALUATION_CANCELLED')
+    const supplement = { ...browserFacts, ...(callerSupplement ?? {}) }
+    const currentShellConfig = binding.phase === 'recheck' ? materials.resolveShellConfig?.() ?? materials.shellConfig : materials.shellConfig
+    const currentWikiConfig = binding.phase === 'recheck' ? materials.resolveWikiConfig?.() ?? materials.wikiConfig : materials.wikiConfig
+    return {
+      toolName,
+      toolInput: structuredClone(call.input),
+      requestId: binding.requestId,
+      toolUseId: binding.toolCallId,
+      sessionId: materials.sessionId,
+      workDir: materials.resolveWorkDir?.() ?? materials.workDir,
+      userDataDir: materials.userDataDir,
+      lane: materialsLane,
+      remoteContext: materials.remoteContext,
+      toolsConfig: binding.phase === 'recheck' ? materials.resolveToolsConfig?.() ?? materials.toolsConfig : materials.toolsConfig,
+      ...(currentShellConfig !== undefined ? { shellConfig: currentShellConfig } : {}),
+      ...(currentBrowserConfig !== undefined ? { browserConfig: currentBrowserConfig } : {}),
+      ...(materials.feishuConfig !== undefined ? { feishuConfig: materials.feishuConfig } : {}),
+      ...(materials.wechatConfig !== undefined ? { wechatConfig: materials.wechatConfig } : {}),
+      ...(currentWikiConfig !== undefined ? { wikiConfig: currentWikiConfig } : {}),
+      effectiveRules: current.effectiveRules,
+      disabledPolicyRuleIds: current.disabledRuleIds,
+      lanePackage: current.lanePackage,
+      policyOrigins: current.policyOrigins,
+      decisionCache: policy.decisionCache as import('../confirmation/toolCallGate').GateDecisionCache,
+      shellPrecheck: policy.shellPrecheck,
+      ...(mcpSnapshot.entries.get(toolName) ? { mcpEntry: mcpSnapshot.entries.get(toolName) } : {}),
+      ...(materials.internalConfirmExemption ? { internalConfirmExemption: materials.internalConfirmExemption } : {}),
+      ...(toolName === 'switch_work_dir' ? { factsProvider: ({ toolInput }: { toolName: string; toolInput: Record<string, unknown> }) => {
+        const profiles = materials.workDirManager?.listProfiles()
+        const status = classifyWorkDirProfileTarget({
+          profile_id: typeof toolInput.profile_id === 'string' ? toolInput.profile_id : undefined,
+          name: typeof toolInput.name === 'string' ? toolInput.name : undefined,
+          alias: typeof toolInput.alias === 'string' ? toolInput.alias : undefined
+        }, profiles)
+        return [{ kind: 'workdir-profile-target', status: status ?? 'unknown' }]
+      } } : {}),
+      ...(supplement ?? {})
+    }
+  }
+  const hostedGateComposition = {
+    resolveGateArgs: resolveAgentSdkGateArgs,
+    createSafetyPolicy: (registered: ReturnType<typeof createRegisteredAgentTurnTools>, resolveToolName = resolveAgentSdkToolName) => {
+      const permitHandoff = createAgentSdkStructuralPermitHandoff({ updateExecutionContext: registered.updateExecutionContext })
+      return createAgentSdkSafetyPolicy({
+        resolveGateArgs: (binding, call, signal) => resolveAgentSdkGateArgs(binding, call, signal),
+        resolveToolCall: registered.getPreparedCall,
+        resolveToolName,
+        evaluateGate: evaluateToolCallGate,
+        ...permitHandoff,
+        onInitialGateResult: async (binding, result, args) => {
+          await permitHandoff.onInitialGateResult?.(binding, result, args)
+          const call = { invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: args.toolName, input: args.toolInput } as const
+          const metadata: Record<string, unknown> = { decisionRuleId: result.decision.ruleId }
+          if (result.fileAutoApproved === true && (args.toolName === 'write_file' || args.toolName === 'edit_file')) {
+            const diff = await buildConfirmationDiff(args.workDir, args.toolName, args.toolInput)
+            const bytesWritten = args.toolName === 'write_file'
+              ? Buffer.byteLength(typeof args.toolInput.content === 'string' ? args.toolInput.content : '', 'utf8')
+              : diff ? Buffer.byteLength(diff.newContent, 'utf8') : 0
+            const stats = diff ? computeDiffLineStats(diff.oldContent, diff.newContent) : { add: 0, remove: 0 }
+            metadata.autoApprovedWrite = { path: typeof args.toolInput.path === 'string' ? args.toolInput.path : '', added: stats.add, removed: stats.remove, bytesWritten }
+          }
+          registered.updateExecutionContext(call, (context) => Object.assign(context, metadata))
+        },
+        onConfirmed: (binding, result, args, answerer) => {
+          permitHandoff.onConfirmed?.(binding, result, args, answerer)
+          if (answerer !== 'user' || result.decision.type !== 'require-confirm' || args.toolName !== 'browser') return
+          let cacheKey: import('../../src/shared/confirmation/types').CacheKey | undefined
+          if (
+            args.toolInput.action === 'navigate' &&
+            (typeof args.toolInput.mode !== 'string' || args.toolInput.mode === 'open') &&
+            typeof args.toolInput.url === 'string' && args.toolInput.url.trim()
+          ) {
+            const url = args.toolInput.url.trim()
+            rememberBrowserSessionTrustedUrl(materials.sessionId, url)
+            const host = extractHostname(url)
+            if (host) cacheKey = { kind: 'domain', domain: host, level: 'domain-any-action', sessionId: materials.sessionId }
+          } else if (args.toolInput.action === 'act' && !args.dangerAssessment?.dangerous) {
+            const currentUrl = stagehandService.peekCurrentUrl(materials.sessionId)
+            const host = currentUrl ? extractHostname(currentUrl) : null
+            if (currentUrl && host) {
+              rememberBrowserSessionActTrust(materials.sessionId, currentUrl)
+              cacheKey = { kind: 'domain', domain: host, level: 'domain+action', sessionId: materials.sessionId }
+            }
+          }
+          if (db && cacheKey) {
+            storage.persist?.recordUserAnswerFromDecision({
+              lane: materialsLane,
+              sessionId: materials.sessionId,
+              key: cacheKey,
+              decision: result.decision,
+              answererKind: 'user',
+              source: 'user-confirm'
+            })
+          }
+        }
+      })
+    },
+    createRegisteredTools: (input: {
+      registry?: import('../tools/plannedToolRegistry').TypedToolRegistry
+      resolveRegisteredToolName?: (providerToolName: string) => string
+      createExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>): unknown
+      refreshExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: import('../../packages/agent-sdk/src/turn').ToolPreparationStage & { kind: 'recheck' }, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
+    }) => {
+      const runtime = getDefaultAgentRuntime()
+      const turnId = materials.turnId ?? materials.sessionId
+      const fileStateCache = new FileStateCache()
+      const createExecutionContext = input.createExecutionContext ?? ((call) => ({
+        workDir: materials.resolveWorkDir?.() ?? materials.workDir,
+        userDataDir: materials.userDataDir,
+        requestId: materials.requestId,
+        toolUseId: call.toolCallId,
+        audit: getSecurityAuditLog(),
+        sessionId: materials.sessionId,
+        sendProgress: (status: string, payload?: string | import('../tools/types').ToolProgressPayload) => {
+          const progress = typeof payload === 'string' ? { message: payload } : payload ?? {}
+          materials.emitFactEvent({
+            type: 'tool-progress', id: call.toolCallId, seq: progress.seq ?? 0, text: progress.message ?? '',
+            ...(progress.rawDelta !== undefined ? { rawDelta: progress.rawDelta } : {}),
+            ...(progress.rawEncoding !== undefined ? { rawEncoding: progress.rawEncoding } : {}),
+            ...(progress.processPid !== undefined ? { processPid: progress.processPid } : {}),
+            ...(progress.processGroupId !== undefined ? { processGroupId: progress.processGroupId } : {}),
+            ...(progress.processOwnerToken !== undefined ? { processOwnerToken: progress.processOwnerToken } : {})
+          })
+          if (status === 'error') logAgentEvent('error', 'tool.progress', { requestId: materials.requestId, sessionId: materials.sessionId, toolUseId: call.toolCallId, toolName: call.toolName, message: progress.message })
+        },
+        recordDiagnostic: (entry: { code: string; message: string }) => logAgentEvent('info', 'tool.result', {
+          requestId: materials.requestId, sessionId: materials.sessionId, toolName: call.toolName, code: entry.code, diagnostic: entry.message
+        }),
+        signal: call.signal ?? new AbortController().signal,
+        fileStateCache,
+        toolsConfig: materials.toolsConfig,
+        ...(materials.browserConfig !== undefined ? { browserConfig: materials.browserConfig } : {}),
+        ...(materials.shellConfig !== undefined ? { shellConfig: materials.shellConfig } : {}),
+        ...(materials.wikiConfig !== undefined ? { wikiConfig: materials.wikiConfig } : {}),
+        ...(materials.feishuConfig !== undefined ? { feishuConfig: materials.feishuConfig } : {}),
+        ...(materials.wechatConfig !== undefined ? { wechatConfig: materials.wechatConfig } : {}),
+        ...(materials.workDirManager ? { workDirManager: materials.workDirManager } : {}),
+        ...(materials.larkCliRunner ? { larkCliRunner: materials.larkCliRunner } : {}),
+        ...(materials.remoteContext ? { remoteContext: materials.remoteContext } : {}),
+        policyRevision: authorizationVersion,
+        shellOutputMode: resolveEffectiveShellOutputMode(materials.shellConfig ?? undefined, undefined, materials.remoteContext?.source),
+        ...(db ? { appDatabase: db } : {}),
+        toolUserConfirmed: false,
+        ...(materials.getBrowserDetectContext ? { getBrowserDetectContext: materials.getBrowserDetectContext } : {}),
+        ...(resolvedLocale ? { requestLocale: resolvedLocale } : {}),
+        lane: materialsLane,
+        ...(materials.historyFacts ? { historyFacts: materials.historyFacts } : {})
+      }))
+      const refreshExecutionContext = async (call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: { confirmation?: { receipt: string } }, current: Record<string, unknown>) => {
+        const refreshed = {
+          ...current,
+          workDir: materials.resolveWorkDir?.() ?? materials.workDir,
+          browserConfig: materials.resolveBrowserConfig?.() ?? current.browserConfig ?? materials.browserConfig,
+          toolsConfig: materials.resolveToolsConfig?.() ?? current.toolsConfig ?? materials.toolsConfig,
+          shellConfig: materials.resolveShellConfig?.() ?? current.shellConfig ?? materials.shellConfig,
+          signal: call.signal ?? current.signal,
+          toolUserConfirmed: Boolean(stage.confirmation)
+        }
+        return input.refreshExecutionContext
+          ? { ...refreshed, ...await input.refreshExecutionContext(call, stage as Extract<import('../../packages/agent-sdk/src/turn').ToolPreparationStage, { kind: 'recheck' }>, refreshed) }
+          : refreshed
+      }
+      return createRegisteredAgentTurnTools({
+        requestId: materials.requestId,
+        turnId,
+        registry: input.registry ?? runtime.builtinRegistry as unknown as import('../tools/plannedToolRegistry').TypedToolRegistry,
+        permits: runtime.safetyPermits,
+        admission: runtime.executionAdmission,
+        createExecutionContext,
+        refreshExecutionContext,
+        resolveAuthorizationVersion: (_call, stage) => stage.kind === 'initial'
+          ? authorizationVersion
+          : resolveCurrentAuthorization().authorizationVersion,
+        subscribeAuthorizationChanges: (call, listener) => runtime.policyAuthorizationChanges.subscribe(
+          call.invocationId,
+          materialsLane,
+          listener
+        ),
+        currentAuthorizationVersion: () => resolveCurrentAuthorization().authorizationVersion,
+        resolveRegisteredToolName: input.resolveRegisteredToolName ?? resolveAgentSdkToolName,
+        workspaceRoot: materials.workDir,
+        resolveWorkspaceRoot: materials.resolveWorkDir ?? (() => materials.workDir),
+        toolRevocations: {
+          getRegisteredTool: (name) => runtime.builtinRegistry.get(name),
+          isToolRevoked: runtime.toolRevocations.isToolRevoked.bind(runtime.toolRevocations),
+          onRevocation: runtime.toolRevocations.onRevocation.bind(runtime.toolRevocations)
+        }
+      })
+    },
+    createConfirmationPort: (
+      safetyPolicy: ReturnType<typeof createAgentSdkSafetyPolicy>,
+      adapter: Omit<Parameters<typeof createAgentSdkConfirmationPort>[0], 'onApproved' | 'publish' | 'createChannel'> & Partial<Pick<Parameters<typeof createAgentSdkConfirmationPort>[0], 'publish' | 'createChannel'>> & { agentChannelFactory?: NonNullable<import('../confirmation/channels').ResolveConfirmChannelArgs['agentChannelFactory']> }
+    ) => {
+      const { agentChannelFactory, ...confirmationAdapter } = adapter
+      const hostedAgentChannelFactory: NonNullable<ResolveConfirmChannelArgs['agentChannelFactory']> = (agentDeps) => new AgentChannel({
+        ...agentDeps,
+        admissionGate: getCallAdmissionGate(),
+        approvalAdmission: materials.approvalAdmission ?? getDefaultAgentRuntime().approvalAdmission,
+        ...(materials.deadlineAt !== undefined ? { deadlineAt: materials.deadlineAt } : {}),
+        ...(materials.approvalTaskDigest ? { taskDigest: materials.approvalTaskDigest } : {}),
+        invokeApproval: (invocation) => {
+          if (!db) return Promise.resolve({ ok: false as const, cause: 'unavailable' as const })
+          return import('../confirmation/approvalAgent').then(({ runApprovalAgent }) => runApprovalAgent({
+            db,
+            policyRuleFloor: materials.policyRuleFloor ?? effectiveRules,
+            workDir: materials.resolveWorkDir?.() ?? materials.workDir,
+            userDataDir: materials.userDataDir,
+            getToolsConfig: () => materials.toolsConfig,
+            ...(materials.shellConfig !== undefined ? { getShellConfig: () => materials.shellConfig ?? null } : {}),
+            ...((materials.resolveBrowserConfig || materials.browserConfig) ? { getBrowserConfig: () => materials.resolveBrowserConfig?.() ?? materials.browserConfig! } : {}),
+            getWorkDir: () => materials.resolveWorkDir?.() ?? materials.workDir,
+            resolveWorkDirForSession: () => materials.resolveWorkDir?.() ?? materials.workDir,
+            maxAuthorization: materialsLane === 'automation' ? 'low' : 'high',
+            model: materials.model,
+            ...(materials.baseUrl ? { baseUrl: materials.baseUrl } : {}),
+            ...(materials.llmServiceId ? { credentialRef: `llm-service:${materials.llmServiceId}` } : {}),
+            ...(materials.locale ? { locale: materials.locale } : {}),
+            getApiKey: materials.getApiKey
+          }, invocation))
+        }
+      })
+      const publishConfirmation = confirmationAdapter.publish ?? ((call: Parameters<ConfirmationPort>[0]['call'], request: import('../../src/shared/confirmation/types').ConfirmRequest, confirmationId: string, context: GateConfirmationContext) => {
+        const details = context as GateConfirmationContext & Record<string, unknown>
+        const confirmationDecision = details.decision as GateConfirmationContext['decision'] & { answerer?: 'user' | 'agent' }
+        const assessment = details.dangerAssessment as { dangerous?: boolean; userReason?: string; consequence?: string; source?: string; fillPreview?: unknown[] } | undefined
+        const precheck = details.shellPrecheck as { hints?: unknown } | undefined
+        const confirmDiff = details.confirmDiff as { oldContent: string; newContent: string; oldPath: string } | undefined
+        const mcpEntry = details.mcpEntry as { serverId?: string; serverName?: string; originalName?: string; description?: string } | undefined
+        const fact: import('../../src/shared/assistantFactAggregator').AssistantFactEvent = {
+          type: 'confirm-requested',
+          id: call.toolCallId,
+          requestId: materials.requestId,
+          turnId: materials.turnId ?? materials.sessionId,
+          lane: materialsLane,
+          confirmId: confirmationId,
+          riskLevel: request.riskLevel === 'low' ? 'medium' : request.riskLevel,
+          ...(request.memoryTiers.length ? { memoryTiers: request.memoryTiers } : {}),
+          ...(confirmDiff ? { confirmDiff } : {}),
+          ...(confirmationDecision.answerer === 'agent' ? { autoAnswerer: true } : {}),
+          ...(confirmationDecision.answerer === 'user' && details.autoApproveFallback ? { autoAnswerer: false } : {}),
+          ...(typeof details.currentPageUrl === 'string' ? { currentPageUrl: details.currentPageUrl } : {}),
+          ...(assessment?.dangerous && assessment.source ? { dangerInfo: {
+            userReason: assessment.userReason ?? '',
+            consequence: (assessment.consequence ?? 'generic') as import('../../src/shared/domainTypes').BrowserActDangerInfo['consequence'],
+            source: assessment.source as 'page-effect' | 'target-effect' | 'keyword',
+            ...(assessment.fillPreview?.length ? { fillPreview: assessment.fillPreview as never } : {})
+          } } : {}),
+          ...(precheck?.hints ? { shellSecurityHints: precheck.hints as never } : {}),
+          ...(details.autoApproveFallback ? { autoApproveFallback: details.autoApproveFallback as never } : {}),
+          ...(mcpEntry?.serverId && mcpEntry.serverName && mcpEntry.originalName ? { mcp: {
+            serverId: mcpEntry.serverId, serverName: mcpEntry.serverName,
+            originalToolName: mcpEntry.originalName,
+            ...(mcpEntry.description ? { description: mcpEntry.description } : {})
+          } } : {})
+        }
+        materials.emitFactEvent(fact)
+        if (confirmationDecision.answerer !== 'agent' && materialsLane === 'desktop') {
+          buildEventSink(materials).notify?.({
+            kind: 'confirm-request', requestId: materials.requestId, sessionId: materials.sessionId,
+            sessionName: sessionDisplayNameRaw((db ? getSession(db, materials.sessionId) : undefined)?.name, materials.sessionId),
+            toolUseId: call.toolCallId, toolName: call.toolName, input: call.input
+          })
+        }
+      })
+      return createAgentSdkConfirmationPort({
+      ...confirmationAdapter,
+      fallback: confirmationAdapter.fallback ?? (async (call, confirmation, context, primaryOutcome) => {
+        if (!shouldFallbackToUser({
+          lane: materialsLane,
+          channelOutcome: primaryOutcome,
+          chatAborted: confirmation.signal?.aborted ?? false,
+          sharedApprovalRecoveryFailed: false
+        })) return undefined
+        const cause = primaryOutcome.cause
+        getSecurityAuditLog().record({
+          ts: Date.now(), event: 'confirm.answerer-fallback-to-user', lane: materialsLane,
+          sessionId: materials.sessionId, requestId: materials.requestId, toolName: call.toolName,
+          cause, actor: 'system'
+        })
+        const userChannel = channelFor({
+          lane: materialsLane, requestId: materials.requestId, sessionId: materials.sessionId,
+          toolName: call.toolName, toolUseId: call.toolCallId, audit: getSecurityAuditLog(),
+          answererPolicy: { kind: 'user' }, suppressRequestAudit: true
+        })
+        // DesktopChannel synchronously registers the waiter before its first await. Start it before
+        // publishing either the fact or floating notification so IPC can never race an absent waiter.
+        const userResponse = userChannel.request({
+          facts: context.facts, riskLevel: context.decision.riskLevel,
+          memoryTiers: context.decision.memoryTiers, timeoutMs: null
+        })
+        const confirmDiff = await buildConfirmationDiff(
+          materials.resolveWorkDir?.() ?? materials.workDir,
+          call.toolName,
+          call.input
+        )
+        await publishConfirmation(call, {
+          facts: context.facts,
+          riskLevel: context.decision.riskLevel,
+          memoryTiers: context.decision.memoryTiers,
+          timeoutMs: null
+        }, confirmation.confirmationId, {
+          ...context,
+          decision: { ...context.decision, answerer: 'user' },
+          ...(confirmDiff ? { confirmDiff } : {}),
+          autoApproveFallback: {
+            reasonCode: cause === 'timeout' ? 'approval_timeout' : 'approval_unavailable',
+            reason: approvalFallbackReasonFor(cause === 'timeout' ? 'timeout' : 'unavailable', materials.locale)
+          },
+        })
+        const userOutcome = await userResponse
+        const attributed: ConfirmOutcome = userOutcome.kind === 'approved-with-action'
+          ? { kind: 'rejected', cause: userOutcome.cause, answererKind: 'user' }
+          : { ...userOutcome, answererKind: 'user' }
+        return mapAgentSdkConfirmationOutcome(attributed, 'user')
+      }),
+      createChannel: confirmationAdapter.createChannel ?? ((call, confirmation) => channelFor({
+        lane: materialsLane,
+        requestId: materials.requestId,
+        sessionId: materials.sessionId,
+        toolName: call.toolName,
+        toolUseId: call.toolCallId,
+        audit: getSecurityAuditLog(),
+        answererPolicy: { kind: confirmation.answerer },
+        agentChannelFactory: agentChannelFactory ?? hostedAgentChannelFactory,
+        ...(materials.remoteContext?.imChannel ? {
+          imChannel: materials.remoteContext.imChannel,
+          buildImPending: (request) => ({
+            sessionId: materials.sessionId,
+            toolName: call.toolName,
+            toolInput: call.input,
+            messageId: materials.remoteContext!.messageId,
+            matchKey: materials.remoteContext!.source === 'feishu'
+              ? (materials.remoteContext!.chatId ?? '')
+              : (materials.remoteContext!.userId ?? ''),
+            context: materials.remoteContext!.source === 'feishu'
+              ? materials.remoteContext!.chatId
+              : materials.remoteContext!.inboundRaw,
+            ...(materials.remoteContext!.authOwner ? { authOwner: materials.remoteContext!.authOwner } : {}),
+            ...(materials.remoteContext!.authorizationGeneration != null
+              ? { authorizationGeneration: materials.remoteContext!.authorizationGeneration }
+              : {}),
+            requestId: materials.requestId,
+            memoryTiers: request.memoryTiers
+          })
+        } : {})
+      })),
+      publish: publishConfirmation,
+      onApproved: (call, outcome) => markAgentSdkSafetyDecisionConfirmed(
+        safetyPolicy,
+        call,
+        outcome.answerer === 'agent' ? 'agent' : 'user'
+      )
+      })
+    },
+    createHostedTurnHost: (input: {
+      registeredTools: ReturnType<typeof createRegisteredAgentTurnTools>
+      registry?: import('../tools/plannedToolRegistry').TypedToolRegistry
+      authorizedToolNames: ReadonlySet<string>
+      hostHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
+      policy: ReturnType<typeof createAgentSdkSafetyPolicy>
+      confirmation?: ConfirmationPort
+      sessionLedgerForInvocationTerminal?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionLedgerForInvocationTerminal']
+      applicationAdmission?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['applicationAdmission']
+      deadlineAt?: number
+      afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
+      recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
+      resolveRegisteredToolName?: (providerToolName: string) => string
+    }) => {
+      const routeId = materials.providerRouteId
+      if (!routeId) throw new Error('HOSTED_PROVIDER_ROUTE_REQUIRED')
+      const runtime = getDefaultAgentRuntime()
+      const history = input.hostHistory ?? ports.history
+      if (!history) throw new Error('HOSTED_HISTORY_REQUIRED')
+      const toolRegistry = input.registry ?? runtime.builtinRegistry as unknown as import('../tools/plannedToolRegistry').TypedToolRegistry
+      const capabilities = new CapabilityRegistry()
+      const safetyGate = new SafetyGate({ capabilities, permitStore: runtime.safetyPermits, policy: input.policy })
+      const toolCallStepIds = new Map<string, string>()
+      const toolStepId = (toolCallId: string) => toolCallStepIds.get(toolCallId) ?? materials.requestId
+    return createHostedAgentTurnHost({
+        invocationId: materials.requestId,
+        turnId: materials.turnId ?? materials.sessionId,
+        routeId,
+        providerRegistry: runtime.modelProviders,
+        toolRegistry,
+        authorizedToolNames: input.authorizedToolNames,
+        ...(input.resolveRegisteredToolName ? { resolveRegisteredToolName: input.resolveRegisteredToolName } : {}),
+        capabilities,
+        permits: runtime.safetyPermits,
+        admission: runtime.executionAdmission,
+        safetyGate,
+        history,
+        ...(input.sessionLedgerForInvocationTerminal ? { sessionLedgerForInvocationTerminal: input.sessionLedgerForInvocationTerminal } : {}),
+        ...(input.applicationAdmission ? { applicationAdmission: input.applicationAdmission } : {}),
+        ...(input.deadlineAt !== undefined ? { deadlineAt: input.deadlineAt } : {}),
+        prepareTool: input.registeredTools.prepareTool,
+        discardPreparedTool: input.registeredTools.discardPreparedTool,
+        ...(input.confirmation ? { confirmation: input.confirmation } : {}),
+        toolExecution: input.registeredTools.toolExecution,
+        ...(input.afterToolResult ? { afterToolResult: input.afterToolResult } : {}),
+        observer: ports.observer,
+        recordProviderAttemptUsage: ports.recordProviderAttemptUsage,
+        recoverProviderAttempt: input.recoverProviderAttempt,
+        recoverOutputLimit: createAgentSdkOutputRecovery({ location: materials.sessionEventLocation, turnId: materials.turnId ?? materials.sessionId, stepId: materials.requestId }),
+        ...(ports.preflightModelRequest ? { preflightModelRequest: ports.preflightModelRequest as never } : {}),
+        ...(ports.turnBoundary ? { turnBoundary: ports.turnBoundary as never } : {}),
+        maxConcurrentTools: materials.toolExecutionConcurrency ?? runtime.toolExecutionConcurrency,
+        maxModelTurns: Math.max(12, (materials.maxToolLoopRounds ?? 0) + 1),
+        ...(materials.maxToolLoopRounds !== undefined ? { maxToolRounds: materials.maxToolLoopRounds } : {}),
+        resourceLocks: (materials.resourceLocks ?? runtime.resourceLocks) as never,
+        toolResourceKeys: input.registeredTools.toolResourceKeys,
+        isApprovalCandidate: input.registeredTools.isApprovalCandidate,
+        ...(materials.sessionEventLocation ? { sessionLedgerForToolResult: (call: { toolCallId: string; toolName: string; input: Record<string, unknown> }, execution: { output: unknown; isError?: boolean; auditRef?: string }) => {
+          const record = execution.output && typeof execution.output === 'object' && !Array.isArray(execution.output) ? execution.output as Record<string, unknown> : undefined
+          const result = projectAgentToolResult({
+            success: typeof record?.success === 'boolean' ? record.success : !(execution.isError ?? false),
+            ...('data' in (record ?? {}) ? { data: record!.data } : { data: execution.output }),
+            ...(typeof record?.error === 'string' ? { error: record.error } : {}),
+            ...(typeof record?.userMessage === 'string' ? { userMessage: record.userMessage } : {}),
+            ...(typeof record?.decisionRuleId === 'string' ? { decisionRuleId: record.decisionRuleId } : {}),
+            ...(record?.autoApprovedWrite && typeof record.autoApprovedWrite === 'object' ? { autoApprovedWrite: record.autoApprovedWrite as import('../../src/shared/domainTypes').AutoApprovedWriteMeta } : {})
+          }, { workspaceRoot: materials.workDir, processTool: isProcessToolName(call.toolName) })
+          if (execution.auditRef) result.auditRef = execution.auditRef
+          return {
+            location: materials.sessionEventLocation, stepId: toolStepId(call.toolCallId), result,
+            requestId: materials.requestId, invocationRequestId: materials.requestId,
+            ...(materialsLane ? { lane: materialsLane } : {}), turnId: materials.turnId ?? materials.sessionId
+          }
+        } } : {}),
+        ...(materials.sessionEventLocation ? { sessionLedgerForNotDispatched: (call: { toolCallId: string }, _reason: string, result: Record<string, unknown>) => ({
+          location: materials.sessionEventLocation, stepId: toolStepId(call.toolCallId), result,
+          requestId: materials.requestId, invocationRequestId: materials.requestId,
+          ...(materialsLane ? { lane: materialsLane } : {}), turnId: materials.turnId ?? materials.sessionId
+        }) } : {}),
+        ...(materials.sessionEventLocation ? {
+          sessionLedgerForAttemptUsage: (attempt: Record<string, unknown>) => {
+            const event = createAgentSdkUsageSessionEvent({ requestId: materials.requestId, turnId: materials.turnId ?? materials.sessionId, baseUrl: materials.baseUrl }, attempt)
+            return event ? { location: materials.sessionEventLocation, requestUsage: event.payload } : {}
+          },
+          sessionLedgerForModelResponse: (message: import('../../packages/agent-sdk/src/turn').CanonicalTurnMessage, modelTurn: number, _attempt: number, committedSessionLedger?: unknown) => {
+            let stepId = `${materials.requestId}:model:${modelTurn}`
+            if (committedSessionLedger !== undefined) {
+              if (!committedSessionLedger || typeof committedSessionLedger !== 'object' || Array.isArray(committedSessionLedger)) {
+                throw new Error('HOST_COMMITTED_SESSION_LEDGER_INVALID')
+              }
+              const committed = committedSessionLedger as { location?: unknown; stepId?: unknown; toolCalls?: unknown }
+              const expectedLocation = materials.sessionEventLocation!
+              const locationMatches = committed.location && typeof committed.location === 'object' && !Array.isArray(committed.location) &&
+                (committed.location as typeof expectedLocation).workDir === expectedLocation.workDir &&
+                (committed.location as typeof expectedLocation).sessionId === expectedLocation.sessionId &&
+                (committed.location as typeof expectedLocation).createdAt === expectedLocation.createdAt
+              const calls = message.role === 'assistant' ? message.toolCalls ?? [] : []
+              const committedCalls = Array.isArray(committed.toolCalls) ? committed.toolCalls : []
+              const committedIds = committedCalls.flatMap((call) => call && typeof call === 'object' && !Array.isArray(call) && typeof (call as { toolUseId?: unknown }).toolUseId === 'string'
+                ? [(call as { toolUseId: string }).toolUseId] : [])
+              if (!locationMatches || typeof committed.stepId !== 'string' || !committed.stepId.trim() ||
+                committedIds.length !== calls.length || calls.some((call) => !committedIds.includes(call.id))) {
+                throw new Error('HOST_COMMITTED_SESSION_LEDGER_IDENTITY_MISMATCH')
+              }
+              stepId = committed.stepId
+            }
+            const toolCalls = (message.role === 'assistant' ? message.toolCalls ?? [] : []).map((call) => {
+              toolCallStepIds.set(call.id, stepId)
+              const canonicalName = normalizeExternalToolName(call.name).canonicalName
+              const name = toolIdToOpenAiCompatibleApiToolName(canonicalName)
+              const args = structuredClone(call.input)
+              return {
+                toolUseId: call.id, name,
+                requestId: materials.requestId,
+                invocationRequestId: materials.requestId,
+                ...(materialsLane ? { lane: materialsLane } : {}),
+                turnId: materials.turnId ?? materials.sessionId,
+                args: name === 'toolkit_call' || name === 'toolkit.call' ? sanitizeCapabilityParamsForDisplay(args) : args
+              }
+            })
+            return { location: materials.sessionEventLocation, stepId, toolCalls }
+          }
+        } : {})
+      })
+    },
+    createHostedTurnRuntime: (input: {
+      registry?: import('../tools/plannedToolRegistry').TypedToolRegistry
+      authorizedToolNames: ReadonlySet<string>
+      resolveRegisteredToolName?: (providerToolName: string) => string
+      hostHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
+      afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
+      createExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>): unknown
+      refreshExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: import('../../packages/agent-sdk/src/turn').ToolPreparationStage & { kind: 'recheck' }, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
+      maxToolRounds?: number
+      applicationAdmission?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['applicationAdmission']
+      deadlineAt?: number
+      confirmationAdapter?: Omit<Parameters<typeof createAgentSdkConfirmationPort>[0], 'onApproved' | 'publish' | 'createChannel'> & Partial<Pick<Parameters<typeof createAgentSdkConfirmationPort>[0], 'publish' | 'createChannel'>> & { agentChannelFactory?: NonNullable<import('../confirmation/channels').ResolveConfirmChannelArgs['agentChannelFactory']> }
+      recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
+    }) => {
+      const runtime = getDefaultAgentRuntime()
+      const baseRegistry = input.registry ?? runtime.builtinRegistry as unknown as TypedToolRegistry
+      const mcpPorts = ports.mcp
+      const mcpSnapshot = mcpPorts?.snapshot as McpToolSnapshot | undefined
+      const manager = mcpSnapshot?.entries.size ? new McpConnectionManager({
+        appendDiagnostic: (serverId, entry) => ports.diagnostics?.append(serverId, entry as never)
+      }) : undefined
+      let registry = baseRegistry
+      if (manager && mcpSnapshot && mcpPorts?.resolveExecutor) {
+        if (typeof baseRegistry.entries !== 'function') throw new Error('HOSTED_MCP_BASE_REGISTRY_NOT_ENUMERABLE')
+        registry = createHostedMcpToolRegistry({
+          base: baseRegistry as TypedToolRegistry,
+          snapshot: mcpSnapshot,
+          manager,
+          resolveExecutor: (name, connectionManager) => mcpPorts.resolveExecutor?.(name, connectionManager) as import('../tools/types').ToolExecutor | undefined
+        })
+      } else if (mcpSnapshot?.entries.size) {
+        throw new Error('HOSTED_MCP_EXECUTOR_PORT_REQUIRED')
+      }
+      const resolveToolName = input.resolveRegisteredToolName ?? ((name: string) => resolveRegisteredToolName(name, registry))
+      const registeredTools = hostedGateComposition.createRegisteredTools({ ...input, registry, resolveRegisteredToolName: resolveToolName })
+      const policy = hostedGateComposition.createSafetyPolicy(registeredTools, resolveToolName)
+      const confirmation = hostedGateComposition.createConfirmationPort(policy, input.confirmationAdapter ?? {
+        cancel: (call) => { cancelToolConfirm(materials.requestId, call.toolCallId) }
+      })
+      const host = hostedGateComposition.createHostedTurnHost({
+        registeredTools,
+        registry,
+        authorizedToolNames: input.authorizedToolNames,
+        ...(input.hostHistory ? { hostHistory: input.hostHistory } : {}),
+        ...(input.afterToolResult ? { afterToolResult: input.afterToolResult } : {}),
+        ...(input.maxToolRounds !== undefined ? { maxToolRounds: input.maxToolRounds } : {}),
+        ...(input.applicationAdmission ? { applicationAdmission: input.applicationAdmission } : {}),
+        ...(input.deadlineAt !== undefined ? { deadlineAt: input.deadlineAt } : {}),
+        policy,
+        confirmation,
+        recoverProviderAttempt: input.recoverProviderAttempt,
+        ...(input.refreshExecutionContext ? { refreshExecutionContext: input.refreshExecutionContext } : {}),
+        ...(materials.sessionEventLocation ? { sessionLedgerForInvocationTerminal: (terminal) => ({
+          location: materials.sessionEventLocation,
+          turnId: terminal.turnId,
+          reason: terminal.sessionEventReason ?? terminal.status
+        }) } : {}),
+        resolveRegisteredToolName: resolveToolName
+      })
+      return { registeredTools, policy, confirmation, host, dispose: async () => { await manager?.shutdown() } }
+    }
+  }
+
+  const ports = {
     toolExecutionConcurrency: materials.toolExecutionConcurrency ?? (() => {
       try { return getDefaultAgentRuntime().toolExecutionConcurrency } catch { return 2 }
     })(),
@@ -398,11 +1102,93 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     approvalAdmission: materials.approvalAdmission ?? (() => {
       try { return getDefaultAgentRuntime().approvalAdmission } catch { return undefined }
     })(),
+    toolRevocations: (() => {
+      try {
+        const runtime = getDefaultAgentRuntime()
+        const revocations = runtime.toolRevocations
+        return {
+          registerToolRevocationRequest: revocations.registerToolRevocationRequest.bind(revocations),
+          revokeToolForLane: revocations.revokeToolForLane.bind(revocations),
+          revokeToolForAllLanes: revocations.revokeToolForAllLanes.bind(revocations),
+          isToolRevoked: revocations.isToolRevoked.bind(revocations),
+          clearToolRevocationRequest: revocations.clearToolRevocationRequest.bind(revocations),
+          onRevocation: revocations.onRevocation.bind(revocations),
+          getRegisteredTool: (name: string) => runtime.builtinRegistry.get(name)
+        }
+      } catch { return undefined }
+    })(),
+    executionAdmission: (() => {
+      try { return getDefaultAgentRuntime().executionAdmission } catch { return undefined }
+    })(),
+    safetyPermits: (() => {
+      try { return getDefaultAgentRuntime().safetyPermits } catch { return undefined }
+    })(),
+    ...((materials.agentSdkHistory || db) ? (() => {
+      const history = materials.agentSdkHistory ?? new SqliteAgentHistory(getDbConnection(db!), 1, Date.now, materials.sessionId)
+      return { history }
+      })() : {}),
     policy,
     storage,
     exposure,
     mcp,
     usage,
+    recordProviderAttemptUsage: createAgentSdkUsageRecorder({
+      requestId: materials.requestId,
+      sessionId: materials.sessionId,
+      turnId: materials.turnId ?? materials.sessionId,
+      model: materials.model,
+      llmServiceId: materials.llmServiceId,
+      baseUrl: materials.baseUrl,
+      recordStepUsage: usage?.recordStepUsage,
+      emitSessionEvent: materials.emitSessionEvent,
+      emitFactEvent: materials.emitFactEvent
+    }),
+    observer: createAgentSdkDesktopObserver({
+      requestId: materials.requestId,
+      sessionId: materials.sessionId,
+      turnId: materials.turnId ?? materials.sessionId,
+      lane: materialsLane,
+      model: materials.model,
+      contextWindow: materials.contextWindow,
+      windowId: materials.windowId,
+      ...(materials.sessionEventLocation ? { sessionEventLocation: materials.sessionEventLocation } : {}),
+      turnIdForRetry: materials.turnId ?? materials.sessionId,
+      stageAssistantContentUntilTurnFinished: materials.remoteContext !== undefined,
+      onRemoteTextActivity: materials.onRemoteTextActivity,
+      assistantMessageId: materials.assistantMessageId,
+      emitSessionEvent: materials.emitSessionEvent,
+      onProviderRetry: (retry) => materials.emitSessionEvent({
+        type: 'request_retry',
+        payload: {
+          turnId: materials.turnId ?? materials.sessionId,
+          stepId: materials.requestId,
+          requestId: retry.requestId,
+          attempt: retry.attempt,
+          backoffMs: 0,
+          code: retry.code
+        }
+      }),
+      emitFactEvent: materials.emitFactEvent,
+      notify: buildEventSink(materials).notify,
+      onFileTreeChanged: materials.onFileTreeChanged,
+      mapToolResult: (call, output, isError) => {
+        const record = output && typeof output === 'object' && !Array.isArray(output) ? output as Record<string, unknown> : undefined
+        const projected = projectAgentToolResult({
+          success: typeof record?.success === 'boolean' ? record.success : !isError,
+          ...('data' in (record ?? {}) ? { data: record!.data } : { data: output }),
+          ...(typeof record?.error === 'string' ? { error: record.error } : {}),
+          ...(typeof record?.userMessage === 'string' ? { userMessage: record.userMessage } : {}),
+          ...(typeof record?.decisionRuleId === 'string' ? { decisionRuleId: record.decisionRuleId } : {}),
+          ...(record?.autoApprovedWrite && typeof record.autoApprovedWrite === 'object' ? { autoApprovedWrite: record.autoApprovedWrite as import('../../src/shared/domainTypes').AutoApprovedWriteMeta } : {})
+        }, { workspaceRoot: materials.workDir, processTool: isProcessToolName(call.toolName) })
+        if (projected.success && projected.autoApprovedWrite) {
+          logAgentEvent('info', 'file.auto_approve', { requestId: materials.requestId, sessionId: materials.sessionId,
+            toolUseId: call.toolCallId, tool: call.toolName, relPath: projected.autoApprovedWrite.path,
+            bytesWritten: projected.autoApprovedWrite.bytesWritten, timestamp: Date.now() })
+        }
+        return projected
+      }
+    }),
     diagnostics,
     answerer,
     workspace: {
@@ -420,8 +1206,39 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       ? { hostFacts: { getBrowserDetectContext: () => materials.getBrowserDetectContext!() } }
       : {}),
     ...(materials.contextMeter !== undefined ? { contextMeter: materials.contextMeter } : {}),
-    ...(materials.onTurnBoundary !== undefined ? { turnBoundary: (input) => materials.onTurnBoundary!(input as never) } : {})
+    ...(materials.onTurnBoundary !== undefined ? { preflightModelRequest: createAgentSdkPreflightAdapter({
+      compact: async (input) => materials.onTurnBoundary!({ ...input, phase: 'preflight', messages: input.messages as never })
+    }) } : {}),
+    ...(materials.onTurnBoundary !== undefined ? { turnBoundary: createAgentSdkTurnBoundaryAdapter({
+      compact: async (input) => {
+        const projection = input.plannerInputs
+        if (!projection) return undefined
+        const system = projection.system
+        const messages = input.legacyMessages
+        return materials.onTurnBoundary!({
+          requestId: projection.requestId, windowId: projection.windowId, system, tools: projection.tools,
+          surfaceSnapshot: projection.surfaceSnapshot, messages: messages as never, budget: projection.budget,
+          contextUsage: projection.contextUsage,
+          toolExecutionCheckpoint: projection.toolExecutionCheckpoint, requiredSurfaceSet: projection.requiredSurfaceSet
+        })
+      }
+    }) } : {}),
+    recoverProviderAttempt: createAgentSdkProviderRecovery({
+      contextWindow: materials.contextWindow,
+      contextWindowTrusted: materials.contextWindowTrusted,
+      model: materials.model,
+      llmServiceId: materials.llmServiceId,
+      onEffortUnsupported: (error) => logAgentEvent('warn', 'llm.effort.unsupported', {
+        requestId: materials.requestId,
+        sessionId: materials.sessionId,
+        model: materials.model,
+        llmServiceId: materials.llmServiceId,
+        requestedEffort: materials.effort,
+        fallback: 'adaptive',
+        error: error instanceof Error ? error.message : String(error)
+      })
+    })
   }
 
-  return { invocation, ports }
+  return { invocation, ports: ports as AgentHostPorts & { observer: import('../../packages/agent-sdk/src/turn').AgentTurnObserver }, agentSdk: { ...hostedGateComposition, recoverProviderAttempt: ports.recoverProviderAttempt! } }
 }

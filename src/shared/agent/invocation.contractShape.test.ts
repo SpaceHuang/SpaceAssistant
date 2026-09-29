@@ -31,12 +31,18 @@ describe('契约形状断言(A1,偏差 17)', () => {
     expect(violations, JSON.stringify(violations)).toEqual([])
   })
 
+  it('shared invocation 契约不反向导入 Agent SDK 实现', () => {
+    const imports = [...code.matchAll(/(?:from\s*|import\s*)['"]([^'"]+)['"]/g)].map((match) => match[1])
+    expect(imports.filter((specifier) => specifier.includes('packages/agent-sdk') || specifier === '@spaceassistant/agent-sdk')).toEqual([])
+  })
+
   it('宿主端口符号均为接口方法形态(白名单存在性)', () => {
     for (const signature of [
       'resolveApiKey(): Promise<string | null>',
       'resolveWorkDir?(): string',
       'getBrowserDetectContext?(): BrowserDetectContext',
-      'turnBoundary?(input: unknown): Promise<void>',
+      'turnBoundary?(input: unknown): Promise<unknown>',
+      'recoverProviderAttempt?(input: unknown): Promise<unknown>',
       'translate?(message: LocalizedMessage): string',
       'touchTrustedCommand(command: string): void'
     ]) {

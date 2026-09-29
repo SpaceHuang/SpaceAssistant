@@ -11,7 +11,12 @@ export class CapabilityRegistry {
     if (this.descriptors.has(descriptor.id)) {
       throw new Error(`CAPABILITY_ALREADY_REGISTERED:${descriptor.id}`)
     }
-    this.descriptors.set(descriptor.id, descriptor)
+    const owned = Object.freeze({
+      ...descriptor,
+      keywords: Object.freeze([...descriptor.keywords]),
+      ...(descriptor.notes ? { notes: Object.freeze([...descriptor.notes]) } : {})
+    }) as CapabilityDescriptor
+    this.descriptors.set(descriptor.id, owned)
   }
 
   get(id: string): CapabilityDescriptor | undefined {

@@ -1,5 +1,5 @@
 import type { AppDatabase } from '../database'
-import { getMessages, getConfigValue } from '../database'
+import { getMessages, getConfigValue, getSession, getPersistedTurn } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
 import { assembleInvocation, type AgentInvocationMaterials } from '../runtime/invocationAssembler'
 import { buildResolveWorkDirCallback, resolveWorkDirForSession, type WorkDirManager } from '../workDirManager'
@@ -28,6 +28,14 @@ import {
   type FeishuBrowserRemoteHint
 } from '../../src/shared/browserRemotePolicy'
 import { resolveRemoteOutboundSessionId } from './remoteSessionSwitchFollow'
+import { requireInvocationAnthropicRoute } from '../runtime/invocationProviderRoute'
+import { createHostedTurnHandoff } from '../runtime/hostedTurnHandoff'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
+import { getSessionEventSink } from '../sessionEvents'
+import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from '../runtime/hostedTurnFinalization'
+import { loadAcceptedTurnMessages } from '../runtime/acceptedTurnContext'
+import { buildRemoteProgressHookContext } from './buildRemoteProgressContext'
+import { onRemoteTextSegmentClosed } from './remoteProgressHooks'
 
 export function extractTextFromContent(content: unknown[]): string {
   let s = ''
@@ -85,7 +93,8 @@ export async function runImRemoteAgent(args: {
     priority: 'interactive',
     role: 'top-level',
     disposition: 'reject',
-    requestId
+    requestId,
+    turnId: args.turnId ?? args.sessionId
   })
   if (!admission.ok) {
     return {
@@ -124,6 +133,12 @@ export async function runImRemoteAgent(args: {
   }
 
   async function runAdmittedTurn(): Promise<ImRemoteAgentResult> {
+  let sessionEventReason = 'failed'
+  let sessionEventError: string | undefined
+  let sessionEventStarted = false
+  let turnIdForEvents = args.turnId ?? args.sessionId
+  let sessionEventLocation: { workDir: string; sessionId: string; createdAt: number } | undefined
+  let sessionEventSink: ReturnType<typeof getSessionEventSink> | undefined
   try {
     const resolved = resolveWorkDirForSession(
       args.db,
@@ -137,8 +152,33 @@ export async function runImRemoteAgent(args: {
       return { summary: SENSITIVE_WORKDIR_ERROR, pendingConfirm: false, ok: false }
     }
 
+    const persistedSession = getSession(args.db, args.sessionId)
+    sessionEventLocation = persistedSession && resolved?.workDir
+      ? { workDir: resolved.workDir, sessionId: args.sessionId, createdAt: persistedSession.createdAt }
+      : undefined
+    sessionEventSink = sessionEventLocation
+      ? getSessionEventSink(sessionEventLocation.workDir, sessionEventLocation.sessionId, sessionEventLocation.createdAt)
+      : undefined
+    if (sessionEventSink) {
+      await sessionEventSink.appendCritical({ type: 'turn_start', payload: { turnId: turnIdForEvents } })
+      await sessionEventSink.appendCritical({ type: 'step_start', payload: { turnId: turnIdForEvents, stepId: requestId } })
+      sessionEventStarted = true
+    }
+
     const toolsConfig = args.getToolsConfig()
-    const rawMessages = getMessages(args.db, args.sessionId)
+    let rawMessages: ReturnType<typeof getMessages>
+    let acceptedUserMessageId: string | undefined
+    if (args.turnId) {
+      const persisted = getPersistedTurn(args.db, args.turnId)
+      if (!persisted || persisted.sessionId !== args.sessionId || persisted.requestId !== requestId) {
+        throw new Error('TURN_EXECUTION_CREDENTIALS_INVALID')
+      }
+      if (persisted.state === 'configuring') throw new Error('TURN_EXECUTION_CONFIGURING')
+      rawMessages = loadAcceptedTurnMessages(args.db, persisted)
+      acceptedUserMessageId = persisted.userMessageId
+    } else {
+      rawMessages = getMessages(args.db, args.sessionId)
+    }
     const built = buildClaudeToolChatMessages(rawMessages, {
       workspaceRoot: resolved?.workDir,
       onOversizedToolResult: (info) => {
@@ -152,7 +192,8 @@ export async function runImRemoteAgent(args: {
       }
     })
     const trimmed = trimClaudeToolChatMessages(built, MAX_CHAT_API_MESSAGES)
-    const { messages } = ensureToolResultPairing(trimmed)
+    const currentUserMessageId = acceptedUserMessageId ?? [...rawMessages].reverse().find((message) => message.role === 'user')?.id
+    const { messages } = ensureToolResultPairing(trimmed, { requiredUserMessageId: currentUserMessageId })
 
     const browserConfig = args.getBrowserConfig?.()
     const appendix = args.buildSystemAppendix({
@@ -174,8 +215,14 @@ export async function runImRemoteAgent(args: {
     const creds = await resolveLlmCredentialsForModel(args.db, routeModelName, {})
     const baseUrl = creds.baseUrl ?? args.getBaseUrl()
     const getApiKey = creds.error ? args.getApiKey : creds.getApiKey
+    const providerRouteId = requireInvocationAnthropicRoute({
+      modelId: routeModelName,
+      endpoint: baseUrl,
+      credentialRef: `llm-service:${creds.serviceId || args.llmServiceId || 'default'}`
+    }, getDefaultAgentRuntime().modelProviders)
+    const remoteProgressContext = buildRemoteProgressHookContext(args.sessionId, readAppLocale(args.db))
 
-    const { invocation, ports } = assembleInvocation({
+    const { invocation, ports, agentSdk } = assembleInvocation({
       requestId,
       sessionId: args.sessionId,
       turnId: args.turnId,
@@ -183,14 +230,19 @@ export async function runImRemoteAgent(args: {
       // 会话冻结配置（args.llmServiceId）仅作 resolver 失败时的兜底（评审 P1-2）。
       llmServiceId: creds.serviceId || args.llmServiceId,
       model: routeModelName,
+      providerRouteId,
       contextWindow,
       contextWindowTrusted,
       baseUrl,
       messages,
       system: appendix,
       options: { maxTokens: 8192 },
-      currentUserMessageId: [...rawMessages].reverse().find((message) => message.role === 'user')?.id,
+      currentUserMessageId,
       toolsConfig,
+      resolveToolsConfig: args.getToolsConfig,
+      resolveBrowserConfig: args.getBrowserConfig,
+      resolveShellConfig: args.getShellConfig,
+      resolveWikiConfig: args.getWikiConfig,
       browserConfig: args.getBrowserConfig?.(),
       wikiConfig: args.getWikiConfig?.(),
       shellConfig: args.getShellConfig?.(),
@@ -205,16 +257,24 @@ export async function runImRemoteAgent(args: {
       userDataDir: args.userDataDir,
       getApiKey,
       appDb: args.db,
+      ...(sessionEventLocation ? { sessionEventLocation } : {}),
       remoteContext: args.remoteContext,
+      onRemoteTextActivity: (text) => onRemoteTextSegmentClosed(remoteProgressContext, text),
       locale: readAppLocale(args.db),
       applicationAdmission,
       ...args.toolChatExtras
       ,emitFactEvent: args.emitFactEvent ?? (() => undefined)
-      ,emitSessionEvent: async () => undefined
+      ,emitSessionEvent: async (event) => { await sessionEventSink?.appendCritical(event) }
     })
-    const res = await runToolChatSession(invocation, ports)
+    const res = await runToolChatSession(invocation, ports, {
+      onHostedTurnHandoff: createHostedTurnHandoff({
+        agentSdk, history: ports.history!, invocationId: requestId, turnId: args.turnId ?? args.sessionId,
+        routeId: providerRouteId, sessionId: args.sessionId, maxToolRounds: invocation.limits.maxToolRounds,
+      })
+    })
 
     if (!res.ok) {
+      sessionEventReason = res.cancelled ? 'cancelled' : 'failed'
       const pending = res.error.includes('确认')
       const result = { summary: res.error, pendingConfirm: pending, ok: false as const, ...(res.cancelled ? { outcome: 'cancelled' as const } : {}) }
       args.logDone?.({ ...result, error: res.error })
@@ -222,15 +282,29 @@ export async function runImRemoteAgent(args: {
     }
 
     const text = extractTextFromContent(res.content)
+    sessionEventReason = 'completed'
     const result = { summary: text || '任务已完成。', pendingConfirm: false, ok: true as const }
     args.logDone?.(result)
     return result
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e)
+    if (e instanceof HostedTurnFinalizedError) sessionEventReason = hostedTerminalSessionEventReason(e.outcome)
+    sessionEventError = error
     args.logError?.(error)
     if (args.rethrowAsError) throw new Error(error)
     throw e
   } finally {
+    if (sessionEventStarted) {
+      if (sessionEventLocation && sessionEventSink) {
+        try {
+          await sessionEventSink.appendCritical({ type: 'step_end', payload: { turnId: turnIdForEvents, stepId: requestId, reason: sessionEventReason } })
+          await sessionEventSink.appendCritical({ type: 'turn_end', payload: { turnId: turnIdForEvents, reason: sessionEventReason, ...(sessionEventError ? { error: sessionEventError } : {}) } })
+        } catch (error) {
+          try { args.logError?.(`remote session event finalization failed: ${error instanceof Error ? error.message : String(error)}`) }
+          catch { /* event diagnostics must not replace the turn outcome */ }
+        }
+      }
+    }
     stopRemoteProgressSession(args.sessionId)
     clearRemoteProgressSession(args.sessionId)
     args.onFinally?.()

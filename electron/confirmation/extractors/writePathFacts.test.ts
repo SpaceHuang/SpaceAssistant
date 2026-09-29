@@ -25,6 +25,21 @@ describe('probeWritePathFact', () => {
     }
   })
 
+  it('拒绝父目录不存在的深层新文件，避免 permit 只绑定到更高层祖先', async () => {
+    const root = await fs.realpath(await fs.mkdtemp('/tmp/write-fact-missing-parent-'))
+    try {
+      await expect(probeWritePathFact({
+        rawPath: path.join(root, 'new', 'nested', 'file.txt'),
+        workDir: root,
+        userDataDir: path.join(root, '.userdata'),
+        homeDir: root,
+        customSensitivePrefixes: []
+      })).rejects.toMatchObject({ caseId: 'write-parent-directory-missing' })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('敏感和系统目录优先于工作目录分区', async () => {
     const root = await fs.realpath(await fs.mkdtemp('/tmp/write-fact-zones-'))
     try {

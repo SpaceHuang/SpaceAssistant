@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
@@ -9,6 +9,7 @@ import {
   captureFileIdentity,
   safeAtomicWrite
 } from './safeAtomicWrite'
+import * as directoryHandleWriterModule from './confirmation/directoryHandleWriter'
 
 describe('resolveSafeWriteTarget + safeAtomicWrite', () => {
   let workDir: string
@@ -117,6 +118,55 @@ describe('resolveSafeWriteTarget + safeAtomicWrite', () => {
     expect(await fs.readFile(abs, 'utf8')).toBe('v2-external')
   })
 
+  it.skipIf(process.platform === 'win32')('checks the permit-bound parent identity before cleaning temp files through a replaced symlink', async () => {
+    const parent = path.join(workDir, 'permitted-parent')
+    const victim = path.join(outside, `${SAFE_WRITE_TEMP_PREFIX}external-victim`)
+    await fs.mkdir(parent)
+    await fs.writeFile(victim, 'outside data')
+    const identity = await fs.stat(parent)
+    await fs.rmdir(parent)
+    await fs.symlink(outside, parent, 'dir')
+
+    await expect(safeAtomicWrite({
+      targetPath: path.join(parent, 'new.txt'),
+      parentReal: parent,
+      body: 'blocked',
+      expectedIdentity: null,
+      expectedParentIdentity: { dev: identity.dev, ino: identity.ino, mode: identity.mode }
+    })).rejects.toThrow()
+    expect(await fs.readFile(victim, 'utf8')).toBe('outside data')
+  })
+
+  it.skipIf(process.platform === 'win32')('refuses to clean temp files when the cleanup directory itself is a symlink', async () => {
+    const victim = path.join(outside, `${SAFE_WRITE_TEMP_PREFIX}cleanup-victim`)
+    await fs.writeFile(victim, 'keep')
+    const linked = path.join(workDir, 'cleanup-link')
+    await fs.symlink(outside, linked, 'dir')
+    await cleanupSafeWriteTemps(linked)
+    expect(await fs.readFile(victim, 'utf8')).toBe('keep')
+  })
+
+  it.skipIf(process.platform === 'win32')('binds cleanup to the captured directory identity before unlinking temp files', async () => {
+    const parent = path.join(workDir, 'cleanup-race')
+    const victim = path.join(outside, `${SAFE_WRITE_TEMP_PREFIX}cleanup-race-victim`)
+    await fs.mkdir(parent)
+    await fs.writeFile(path.join(parent, `${SAFE_WRITE_TEMP_PREFIX}local-orphan`), 'local orphan')
+    await fs.writeFile(victim, 'keep')
+    const actualCleanup = directoryHandleWriterModule.cleanupDirectoryTempsBoundToIdentity
+    const cleanup = vi.spyOn(directoryHandleWriterModule, 'cleanupDirectoryTempsBoundToIdentity').mockImplementation(async (input) => {
+      await fs.rename(parent, `${parent}-moved`)
+      await fs.symlink(outside, parent, 'dir')
+      return actualCleanup(input)
+    })
+    try {
+      await cleanupSafeWriteTemps(parent)
+      expect(await fs.readFile(victim, 'utf8')).toBe('keep')
+      expect(await fs.readFile(path.join(`${parent}-moved`, `${SAFE_WRITE_TEMP_PREFIX}local-orphan`), 'utf8')).toBe('local orphan')
+    } finally {
+      cleanup.mockRestore()
+    }
+  })
+
   it('cleans temp on abort and leaves original intact', async () => {
     const abs = path.join(workDir, 'keep.txt')
     await fs.writeFile(abs, 'original')
@@ -136,6 +186,52 @@ describe('resolveSafeWriteTarget + safeAtomicWrite', () => {
     expect(await fs.readFile(abs, 'utf8')).toBe('original')
     const entries = await fs.readdir(workDir)
     expect(entries.filter((e) => e.startsWith(SAFE_WRITE_TEMP_PREFIX))).toEqual([])
+  })
+
+  it('原子写 worker 已启动但取消导致提交结果丢失时返回不确定异常', async () => {
+    const target = await resolveSafeWriteTarget(workDir, 'worker-cancelled.txt')
+    const worker = vi.spyOn(directoryHandleWriterModule, 'writeFileAtomicallyBoundToDirectory')
+      .mockResolvedValue({ ok: false, caseId: 'write-directory-cancelled' })
+
+    await expect(safeAtomicWrite({
+      targetPath: target.targetPath,
+      parentReal: target.parentReal,
+      body: 'possibly committed',
+      expectedIdentity: null,
+      signal: new AbortController().signal
+    })).rejects.toMatchObject({ name: 'SafeAtomicWriteUncertainError' })
+
+    expect(worker).toHaveBeenCalledOnce()
+    worker.mockRestore()
+  })
+
+  it.skipIf(process.platform === 'win32')('commit succeeds before permit-bound parent identity drifts, so outcome is reported as uncertain', async () => {
+    const target = await resolveSafeWriteTarget(workDir, 'post-commit-drift.txt')
+    const parent = await fs.stat(workDir)
+    const moved = `${workDir}-moved`
+    const actualWrite = directoryHandleWriterModule.writeFileAtomicallyBoundToDirectory
+    const worker = vi.spyOn(directoryHandleWriterModule, 'writeFileAtomicallyBoundToDirectory').mockImplementation(async (input) => {
+      const committed = await actualWrite(input)
+      await fs.rename(workDir, moved)
+      await fs.symlink(outside, workDir, 'dir')
+      return committed
+    })
+
+    try {
+      await expect(safeAtomicWrite({
+        targetPath: target.targetPath,
+        parentReal: target.parentReal,
+        body: 'committed in the original directory',
+        expectedIdentity: null,
+        expectedParentIdentity: { dev: parent.dev, ino: parent.ino, mode: parent.mode }
+      })).rejects.toMatchObject({ name: 'SafeAtomicWriteUncertainError' })
+      expect(await fs.readFile(path.join(moved, 'post-commit-drift.txt'), 'utf8')).toBe('committed in the original directory')
+    } finally {
+      worker.mockRestore()
+      await fs.rm(workDir, { recursive: true, force: true })
+      workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'sa-write-cleanup-')))
+      await fs.rm(moved, { recursive: true, force: true })
+    }
   })
 
   it('cleanupSafeWriteTemps removes leftover prefix files', async () => {

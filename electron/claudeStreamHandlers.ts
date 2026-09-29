@@ -4,10 +4,14 @@ import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidReque
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import type { AgentLogFields } from './agentLogger/types'
-import { getTurnContext, getPersistedTurn, getSession, type AppDatabase } from './database'
+import { getDbConnection, getPersistedTurn, getSession, type AppDatabase } from './database'
 import { resolveLlmCredentialsForModel } from './llmServiceResolver'
+import { MODEL_BASELINE } from '../src/shared/modelBaseline'
+import { requireInvocationAnthropicRoute } from './runtime/invocationProviderRoute'
+import { getDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 import { runToolChatSession } from './toolChatLoop'
 import { assembleInvocation } from './runtime/invocationAssembler'
+import { createAgentSdkSessionEventProjector } from './runtime/agentSdkSessionEventProjection'
 import { isAppLocale } from '../src/shared/locale'
 import { buildApprovalTaskDigest } from '../src/shared/approvalTaskDigest'
 import { MAX_IMAGE_BASE64_CHARS } from '../src/shared/chatAttachmentLimits'
@@ -25,7 +29,7 @@ import type { AssistantFactEvent, TurnExecutionConfig } from '../src/shared/assi
 import type { TurnRuntime } from './turnRuntime'
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_API_MESSAGE_TEXT_CHARS, MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
-import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, readSessionEvents, stripPartialJsonForPersist, type SessionEventInput, type SessionEventSink } from './sessionEvents'
+import { appendCompactionTransaction, getSessionEventSink, readCompactionMarkers, readCompactionReplay, readSessionEvents, type SessionEventSink } from './sessionEvents'
 import { applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint, excludeReplayOnlyMessages, projectReplaySurface, projectReplaySurfaceWithSources, restoreReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForProjectionSubset, surfaceItemIdentitiesForSubset, surfaceItemIdentity } from '../src/shared/surfaceReplay'
 import { shouldCompact } from '../src/shared/contextMeter'
 import { ContextMeter } from '../src/shared/contextMeterService'
@@ -35,6 +39,10 @@ import { estimateTokensFromUtf8Text } from '../src/shared/contextUsageEstimate'
 import { planTurnBoundarySurfaceCompaction } from '../src/shared/turnBoundaryCompaction'
 import { extractToolPairIds, validateSurfaceForSend } from '../src/shared/surfacePreflight'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
+import { toCanonicalModelMessages } from './runtime/canonicalHistory'
+import { createHostedTurnHandoff } from './runtime/hostedTurnHandoff'
+import { loadAcceptedTurnMessages } from './runtime/acceptedTurnContext'
+import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from './runtime/hostedTurnFinalization'
 
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
@@ -76,7 +84,7 @@ export function loadAuthoritativeTurnContext(db: AppDatabase, turnId: string, se
   }
   if (persisted.state === 'configuring') throw new Error('TURN_EXECUTION_CONFIGURING')
   if (!persisted.userMessageId) throw new Error('TURN_USER_MESSAGE_MISSING')
-  const messages = getTurnContext(db, sessionId, persisted.contextBoundarySequence, persisted.userMessageId, persisted.excludeMessageIds ?? [])
+  const messages = loadAcceptedTurnMessages(db, persisted)
   return { messages, currentUserMessageId: persisted.userMessageId, ...(persisted.assistantMessageId ? { assistantMessageId: persisted.assistantMessageId } : {}), ...(persisted.executionConfig ? { executionConfig: persisted.executionConfig } : {}) }
 }
 
@@ -303,7 +311,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           priority: 'interactive',
           role: 'top-level',
           disposition: 'queue',
-          requestId
+          requestId,
+          ...(typeof payload.turnId === 'string' && payload.turnId ? { turnId: payload.turnId } : {})
         }, { signal: turnCancelController.signal })
         if (typeof payload.turnId === 'string' && payload.turnId) admissionCancelControllers.delete(payload.turnId)
         if (!admission.ok) throw new Error(`当前调用暂不可运行：${admission.verdict === 'rejected' ? admission.cause : admission.verdict}`)
@@ -359,6 +368,11 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         }
         const baseUrl = creds.baseUrl
         const getApiKey = creds.getApiKey
+        const providerRouteId = requireInvocationAnthropicRoute({
+          modelId: model,
+          endpoint: baseUrl,
+          credentialRef: `llm-service:${creds.serviceId}`
+        }, getDefaultAgentRuntime().modelProviders)
         const userDataDir = deps.getUserDataPath()
         let builtMessages: ClaudeChatMessageWithContentBlocks[]
         const compactionReplay = eventWriter ? await readCompactionReplay(eventWriter.eventsPath) : { committed: [], rejected: [] }
@@ -428,13 +442,14 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const needsToolWorkDir = builtinCandidates.length > 0 || mayBuildMcpToolSnapshot(listProfiles(db))
         const sessionWorkDir = needsToolWorkDir ? deps.resolveWorkDirForSession(sessionId) : ''
 
-        const { invocation: turnInvocation, ports: turnPorts } = assembleInvocation({
+        const { invocation: turnInvocation, ports: turnPorts, agentSdk } = assembleInvocation({
           requestId,
           sessionId,
           turnId,
           llmServiceId,
           windowId: contextWindowId,
           model,
+          providerRouteId,
           contextWindow: frozen.maximumContext,
           contextWindowTrusted: frozen.maximumContextTrusted,
           baseUrl,
@@ -448,6 +463,10 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           // 评审 B1：能力降级时传降级前档位，装配层照旧落 reasoning_degraded 审计（冻结档位仍是 off）
           effort: frozen.requestedThinkingEffort ?? frozen.thinkingEffort,
           toolsConfig: deps.getToolsConfig(),
+          resolveToolsConfig: deps.getToolsConfig,
+          resolveBrowserConfig: deps.getBrowserConfig,
+          resolveShellConfig: deps.getShellConfig,
+          resolveWikiConfig: deps.getWikiConfig,
           browserConfig: deps.getBrowserConfig(),
           shellConfig: deps.getShellConfig(),
           wikiConfig: deps.getWikiConfig(),
@@ -459,6 +478,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           userDataDir,
           getApiKey,
           appDb: deps.getAppDatabase(),
+          ...(session ? { sessionEventLocation: { workDir: deps.getWorkDir(), sessionId, createdAt: session.createdAt } } : {}),
           currentUserMessageId: authoritative.currentUserMessageId,
           historyFacts,
           assistantMessageId: authoritative.assistantMessageId,
@@ -467,33 +487,18 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           getBrowserDetectContext: deps.getBrowserDetectContext,
           floatingNotificationManager: deps.floatingNotificationManager,
           onTitleGenerated: (session) => deps.notifyMainWindow?.('session:title-generated', { session }),
-          onFileTreeChanged: (event) => notifyFileTreeChanged(null, event)
-          ,emitSessionEvent: async (event: SessionEventInput) => {
-            if (!eventWriter) return
-            // R1：tool_call_delta.partialJson 原文不落台账（chunk 拼接可还原凭据）
-            const stripped = stripPartialJsonForPersist(event)
-            const normalized = { ...stripped, payload: { ...stripped.payload, turnId } }
-            if (event.type === 'assistant_chunk') {
-              try {
-                await eventWriter.waitForCapacity()
-                eventWriter.appendChunk(normalized)
-              } catch {
-                // chunk 属可丢事件：sink 进入 fail-stop 后不再重试，只累计供 finalize 诊断。
-                droppedChunkEvents += 1
-              }
-              return
-            }
-            try {
-              const committed = await eventWriter.appendCritical(normalized)
-              contextEventLedger.push({ seq: committed.seq, type: committed.type, payload: committed.payload })
-            } catch (appendError) {
-              eventAppendFailures.push(toEventPersistenceFailure(appendError))
-            }
-          }, appendCompactionTransaction: async (start, summary) => {
-            if (!eventWriter) return
-            await appendCompactionTransaction(eventWriter, { ...start, turnId }, { ...summary, turnId })
-          }
-          ,onTurnBoundary: async ({ requestId: boundaryRequestId, windowId, system, tools, surfaceSnapshot, messages, budget, contextUsage, toolExecutionCheckpoint, requiredSurfaceSet }) => {
+          onFileTreeChanged: (event) => notifyFileTreeChanged(null, event),
+          emitSessionEvent: createAgentSdkSessionEventProjector({
+            turnId,
+            eventWriter,
+            // Hosted SDK projections are part of the committed History contract: if a critical
+            // JSONL projection fails, stop before dispatch and let startup recovery repair it.
+            failClosedCriticalEvents: true,
+            onCommitted: (committed) => contextEventLedger.push({ seq: committed.seq, type: committed.type, payload: committed.payload }),
+            onChunkDropped: () => { droppedChunkEvents += 1 },
+            onCriticalFailure: (error) => eventAppendFailures.push(toEventPersistenceFailure(error))
+          }),
+          onTurnBoundary: async ({ phase = 'turn-boundary', requestId: boundaryRequestId, windowId, system, tools, surfaceSnapshot, messages, budget, contextUsage, toolExecutionCheckpoint, requiredSurfaceSet }) => {
             const projection = contextUsage && {
               ...contextUsage,
               anchorStatus: contextUsage.projectedTokens == null ? 'missing' as const : 'matched' as const,
@@ -501,14 +506,16 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
               bodyRatio: budget.bodyBudget > 0 ? Math.max(0, (contextUsage.projectedTokens ?? surfaceSnapshot.surfaceTokens) - budget.prefixTokens) / budget.bodyBudget : 0,
               contextWindow: { tokens: budget.totalInputBudget + budget.outputReserveTokens, source: 'config' as const }
             }
-            if (!eventWriter || !projection || !shouldCompact(projection, budget) || messages.length < 3) return
+            if (!eventWriter || !session || !projection || !shouldCompact(projection, budget) || (phase !== 'preflight' && messages.length < 3)) return
+            const boundaryEventWriter = eventWriter
             const replayMessages = projectReplaySurface(excludeReplayOnlyMessages(messages, frozen.skillFragments))
             const messageIdentities = surfaceItemIdentities(replayMessages).map((identity, index) => {
               const messageId = (replayMessages[index] as { id?: unknown }).id
               return typeof messageId === 'string' && replayIdentityByMessageId.has(messageId) ? replayIdentityByMessageId.get(messageId)! : identity
             })
             const items = replayMessages.map((message, index) => ({ id: messageIdentities[index]!, tokens: estimateTokensFromUtf8Text(JSON.stringify(message)), required: requiredSurfaceSet.includes(messageIdentities[index]!) || (typeof (message as { id?: unknown }).id === 'string' && requiredSurfaceSet.includes((message as { id: string }).id)) || messageIdentities[index] === authoritative.currentUserMessageId }))
-            const projectionForPlanner = { surfaceTokens: surfaceSnapshot.surfaceTokens, bodyTokens: Math.max(0, surfaceSnapshot.surfaceTokens - budget.prefixTokens), requiredTokens: items.find((item) => item.required)?.tokens ?? 0, totalInputBudget: budget.totalInputBudget, bodyBudget: budget.bodyBudget, targetBodyRatio: budget.targetBodyRatio }
+            const projectedSurfaceTokens = contextUsage?.projectedTokens ?? surfaceSnapshot.surfaceTokens
+            const projectionForPlanner = { surfaceTokens: surfaceSnapshot.surfaceTokens, bodyTokens: Math.max(0, projectedSurfaceTokens - budget.prefixTokens), requiredTokens: items.find((item) => item.required)?.tokens ?? 0, totalInputBudget: budget.totalInputBudget, bodyBudget: budget.bodyBudget, targetBodyRatio: budget.targetBodyRatio }
             const checkpointMessage = { id: `${boundaryRequestId}:checkpoint`, role: 'user' as const, content: '' }
             // 摘要正文在规划后组装；这里必须为固定 envelope 预留非零预算，
             // 否则 planner 会把 summarize 错判为没有收益。
@@ -554,7 +561,15 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             const compactionId = `${windowId}:boundary:${boundaryRequestId}`
             const outputWindowId = isReset ? `${windowId}:reset:${boundaryRequestId}` : undefined
             const candidate = { kind: isReset ? 'reset' as const : 'summary' as const, checkpointMessage, checkpointReplayIdentity: outputIdentities[0], shadowedRanges }
-            await appendCompactionTransaction(eventWriter, { compactionId, windowId, turnId, inputSurfaceFingerprint: replayFingerprint(replayMessages), surfaceBoundaryId: messageIdentities[replayMessages.length - 1], targetTokens: budget.bodyBudget * budget.targetBodyRatio }, { compactionId, windowId, turnId, ...(outputWindowId ? { inputWindowId: windowId, outputWindowId } : {}), summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: replayFingerprint(outputMessages), shadowedRanges, candidate, requiredSurfaceSet, toolExecutionCheckpoint })
+            const start = { compactionId, windowId, turnId, inputSurfaceFingerprint: replayFingerprint(replayMessages), surfaceBoundaryId: messageIdentities[replayMessages.length - 1], targetTokens: budget.bodyBudget * budget.targetBodyRatio }
+            const summary = { compactionId, windowId, turnId, ...(outputWindowId ? { inputWindowId: windowId, outputWindowId } : {}), summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint: replayFingerprint(outputMessages), shadowedRanges, candidate, requiredSurfaceSet, toolExecutionCheckpoint }
+            const location = { workDir: deps.getWorkDir(), sessionId, createdAt: session.createdAt }
+            return {
+              messages: toCanonicalModelMessages(outputMessages as import('../src/shared/api').ClaudeChatMessageWithBlocks[]),
+              ...(outputWindowId ? { windowId: outputWindowId } : {}),
+              historyPayload: { sessionLedger: { location, start, summary } },
+              commitProjection: async () => { await appendCompactionTransaction(boundaryEventWriter, start, summary) }
+            }
           }
           ,emitFactEvent: (fact) => {
             if (deps.turnRuntime) {
@@ -572,10 +587,13 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           }
           ,applicationAdmission
         })
-        const res = await runToolChatSession(turnInvocation, turnPorts)
+        const hostedHandoffOptions = {
+          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: requestId, turnId, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, refreshExecutionContext: (_call, stage, current) => ({ ...current, toolsConfig: deps.getToolsConfig(), shellConfig: deps.getShellConfig(), toolUserConfirmed: Boolean(stage.confirmation) }) })
+        }
+        const res = await runToolChatSession(turnInvocation, turnPorts, hostedHandoffOptions)
 
         if (!res.ok) {
-          const finalized = await finalizeTurn(turnId, 'error', res.error)
+          const finalized = await finalizeTurn(turnId, res.cancelled ? 'cancelled' : 'error', res.error)
           logAgentEvent('error', 'llm.error', {
             requestId,
             sessionId,
@@ -588,9 +606,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const finalized = await finalizeTurn(turnId, 'completed', undefined, res.finalSurfaceSnapshot)
         if (!finalized.ok) {
           return {
-            ok: false as const,
-            error: '事件终态持久化失败',
-            code: finalized.code,
+            ...res,
             eventPersistenceFailed: true,
             eventPersistenceErrors: finalized.eventPersistenceErrors
           }
@@ -608,7 +624,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const message = err instanceof Error ? err.message : String(err)
         let finalized: FinalizeResult | undefined
         if (eventWriter && eventTurnId) {
-          finalized = await finalizeTurn(eventTurnId, 'error', message)
+          const reason = err instanceof HostedTurnFinalizedError ? hostedTerminalSessionEventReason(err.outcome) : 'error'
+          finalized = await finalizeTurn(eventTurnId, reason, message)
         }
         logAgentEvent('error', 'llm.error', {
           requestId: requestId || undefined,
@@ -620,6 +637,13 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         return {
           ok: false as const,
           error: message,
+          ...(err instanceof HostedTurnFinalizedError && err.usage ? { usage: {
+            input_tokens: err.usage.inputTokens,
+            output_tokens: err.usage.outputTokens,
+            ...(err.usage.cacheReadInputTokens !== undefined ? { cache_read_input_tokens: err.usage.cacheReadInputTokens } : {}),
+            ...(err.usage.cacheCreationInputTokens !== undefined ? { cache_creation_input_tokens: err.usage.cacheCreationInputTokens } : {}),
+            cacheSemantics: 'additive' as const
+          } } : {}),
           ...(finalized && !finalized.ok
             ? { eventPersistenceFailed: true, eventPersistenceErrors: finalized.eventPersistenceErrors }
             : {})
