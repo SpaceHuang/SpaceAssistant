@@ -36,10 +36,36 @@ describe('registerInvocationAnthropicRoute', () => {
     expect(registry.getRoute('custom-unlisted-model')).toBeUndefined()
   })
 
+  it('registers a non-Anthropic model on the explicitly configured DeepSeek Anthropic endpoint', () => {
+    const registry = new ModelProviderRegistry()
+    const modelId = 'deepseek-flash'
+    expect(MODEL_BASELINE[modelId]?.sourceProvider).toBe('deepseek')
+    const routeId = registerInvocationAnthropicRoute({
+      modelId,
+      endpoint: 'https://api.deepseek.com/anthropic',
+      credentialRef: 'llm-service:deepseek-service'
+    }, registry)
+    expect(routeId).toBeTruthy()
+    expect(registry.getRoute(routeId!)).toMatchObject({
+      profile: { modelId, endpoint: 'https://api.deepseek.com/anthropic', protocol: 'anthropic-messages' },
+      providerId: 'pi-ai-anthropic-messages'
+    })
+  })
+
+  it('does not infer Anthropic compatibility from a generic DeepSeek endpoint', () => {
+    const registry = new ModelProviderRegistry()
+    expect(registerInvocationAnthropicRoute({
+      modelId: 'deepseek-flash', endpoint: 'https://api.deepseek.com', credentialRef: 'llm-service:deepseek-service'
+    }, registry)).toBeUndefined()
+  })
+
   it('fails closed when a production invocation has no explicitly supported Anthropic route', () => {
     const registry = new ModelProviderRegistry()
     expect(() => requireInvocationAnthropicRoute({
       modelId: 'custom-unlisted-model', endpoint: 'https://gateway.example', credentialRef: 'llm-service:svc-7'
+    }, registry)).toThrow('PROVIDER_ROUTE_UNSUPPORTED')
+    expect(() => requireInvocationAnthropicRoute({
+      modelId: 'deepseek-flash', endpoint: 'https://api.deepseek.com', credentialRef: 'llm-service:svc-7'
     }, registry)).toThrow('PROVIDER_ROUTE_UNSUPPORTED')
     expect(() => requireInvocationAnthropicRoute({
       modelId: 'custom-unlisted-model', endpoint: 'https://gateway.example', credentialRef: ''
