@@ -82,7 +82,7 @@ export function createHostedTurnHandoff(input: {
         logSessionHistoryShadowDiagnostic({ requestId: input.invocationId, sessionId: input.sessionId, message: 'history-unavailable' })
         throw new Error('Canonical session History could not safely provide the Hosted transcript')
       }
-      if (latest.kind === 'completed') {
+      if (latest.kind === 'completed' || latest.kind === 'cancelled') {
         try {
           const result = resolveCanonicalRequestCutover({
             snapshot: latest.snapshot,

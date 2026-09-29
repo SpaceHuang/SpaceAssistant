@@ -67,6 +67,7 @@ export class SqliteAgentHistory implements HistoryPort {
   async readLatestInvocationForSession(sessionId: string, options: { excludeInvocationId?: string } = {}): Promise<
     | Readonly<{ kind: 'none' }>
     | Readonly<{ kind: 'completed'; snapshot: HistorySnapshot }>
+    | Readonly<{ kind: 'cancelled'; snapshot: HistorySnapshot }>
     | Readonly<{ kind: 'unavailable'; invocationId: string }>
   > {
     const invocationIds = this.listInvocationIdsForSession(sessionId).filter((id) => id !== options.excludeInvocationId)
@@ -75,11 +76,20 @@ export class SqliteAgentHistory implements HistoryPort {
       const snapshot = await this.read(invocationId)
       const terminal = snapshot.events.at(-1)
       // Open/interrupted streams may represent a crashed turn whose canonical tail is incomplete.
-      if (!terminal || !['invocation-completed', 'invocation-failed'].includes(terminal.kind)) {
+      if (!terminal || !['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(terminal.kind)) {
         return { kind: 'unavailable', invocationId }
       }
       // Failed turns are closed attempts. Keep searching for the last complete conversation base.
       if (terminal.kind === 'invocation-failed') continue
+      if (terminal.kind === 'invocation-interrupted') {
+        const payload = terminal.payload && typeof terminal.payload === 'object' ? terminal.payload as Record<string, unknown> : {}
+        // User cancellation has a known outcome. The Hosted cutover still validates that the
+        // canonical transcript can be rebuilt and is a prefix of the next request.
+        if (payload.status === 'cancelled' && snapshot.events.some(({ kind }) => kind === 'invocation-context-committed' || kind === 'transcript-compacted')) {
+          return { kind: 'cancelled', snapshot }
+        }
+        return { kind: 'unavailable', invocationId }
+      }
       if (!snapshot.events.some(({ kind }) => kind === 'invocation-context-committed' || kind === 'transcript-compacted')) {
         return { kind: 'unavailable', invocationId }
       }

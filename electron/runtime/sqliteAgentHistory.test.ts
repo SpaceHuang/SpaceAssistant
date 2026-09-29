@@ -101,6 +101,21 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
+  it('returns a user-cancelled canonical transcript for validated next-turn cutover', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn, 1, () => 100, 'session-cancelled-latest')
+    await history.appendBatch([
+      { ...event('cancelled-context', 1), invocationId: 'user-cancelled', turnId: 'cancelled-turn', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'accepted user input' }] } },
+      { ...event('cancelled-terminal', 2), invocationId: 'user-cancelled', turnId: 'cancelled-turn', kind: 'invocation-interrupted', payload: { status: 'cancelled' } }
+    ], 0)
+
+    await expect(history.readLatestInvocationForSession('session-cancelled-latest')).resolves.toMatchObject({
+      kind: 'cancelled', snapshot: { invocationId: 'user-cancelled' }
+    })
+    await expect(history.readLatestCompletedInvocationForSession('session-cancelled-latest')).resolves.toBeUndefined()
+    conn.close()
+  })
+
   it('does not treat a completion-kind terminal with a failed status as a usable session transcript', async () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn, 1, () => 100, 'session-terminal-payload-mismatch')
