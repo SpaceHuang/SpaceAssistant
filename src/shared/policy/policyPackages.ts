@@ -78,6 +78,12 @@ export interface LaneProfile {
    * 目标不存在于传入规则集时不注入（合成规则集恒等）。
    */
   scopePackages?: Partial<Record<'strict' | 'loose', readonly ScopeRule[]>>
+  /**
+   * 按 ruleId 的档位动作覆盖（优先级高于 transforms 的按动作映射）。
+   * 形态同 scopePackages：显式清单、逐条登记；不构成 S1 所禁止的「按动作类别整体宽严变换」。
+   * 仅 desktop 消费（effectiveActionFor 内 lane 白名单，双保险之二）；custom 档不可达（提前恒等）。
+   */
+  ruleActionOverrides?: Partial<Record<PolicyPackage, Partial<Record<string, PolicyAction>>>>
 }
 
 /**
@@ -90,6 +96,25 @@ const DESKTOP_TRANSFORMS: LaneProfile['transforms'] = {
 
 /** wechat/feishu：恒等（S1：strict / loose 宽严映射移除，范围化见各 lane scope 清单）。 */
 const IM_TRANSFORMS: LaneProfile['transforms'] = {}
+
+/**
+ * 桌面按 ruleId 档位覆盖（ask 规则档位统一，docs/develop/desktop-ask-rule-tier-unification-plan.md §5.1）：
+ * - standard：其余桌面 ask 规则（段5 三条 + browser-navigate-ask-desktop / mcp-tool-ask / 合成兜底）
+ *   已由 transforms.standard.ask → auto-evaluator 覆盖；仅 browser-act-ask-desktop 需放行；
+ * - loose：transforms 无 loose 键 → 逐条登记（四条对齐标准档 + browser-act 放行 + 兜底放行）；
+ * - strict 不设：保持恒等 → 全部真人；custom 不设且不可达（effectiveActionFor 对 custom 提前恒等）。
+ * 未来新增桌面 ask 规则若漏登记，由「loose 不得比 standard 严」守卫断言兜底（G12）。
+ */
+const DESKTOP_RULE_OVERRIDES: LaneProfile['ruleActionOverrides'] = {
+  standard: { 'browser-act-ask-desktop': 'allow' },
+  loose: {
+    'script-network-ask-desktop': 'auto-evaluator',
+    'browser-act-danger-ask': 'auto-evaluator',
+    'browser-act-ask-desktop': 'allow',
+    'lark-write-ask': 'auto-evaluator',
+    'default-write-execute-ask': 'allow'
+  }
+}
 
 /**
  * 范围条目构造（S1）：从默认规则派生本档副本——机械命名 scope-<档>-<目标 id>、
@@ -167,7 +192,8 @@ export const LANE_PROFILES: Record<ExecutionLane, LaneProfile> = {
     userSelectable: true,
     availableActions: ['deny', 'allow', 'ask', 'auto-evaluator'],
     transforms: DESKTOP_TRANSFORMS,
-    scopePackages: DESKTOP_SCOPE_PACKAGES
+    scopePackages: DESKTOP_SCOPE_PACKAGES,
+    ruleActionOverrides: DESKTOP_RULE_OVERRIDES
   },
   wechat: {
     availablePackages: ['strict', 'standard', 'loose', 'custom'],
@@ -203,18 +229,26 @@ function isTransformExempt(rule: Pick<PolicyRule, 'action' | 'locked'>): boolean
 
 /**
  * 基线动作 → 生效动作（显示=实际：渲染端与引擎共用）。
- * S1（偏差 15）：映射表仅剩 desktop standard「自动」（路径选择非宽严）；strict / loose 恒等。
+ * S1（偏差 15）：映射表仅剩 desktop standard「自动」（路径选择非宽严）；strict / loose 恒等——
+ * desktop 另有 ruleActionOverrides（按 ruleId 的档位覆盖，优先于 transforms，见 §5.1），
+ * 逐条显式登记、不构成整体宽严变换；strict / loose 除登记条目外恒等。
  * custom 档恒等（用户覆盖即最终动作，动作域合法性由 validateRuleOverride 按 lane 校验）；
  * 档位不在本链路 transforms 中按恒等返回，收敛责任在调用方（M2）。
  */
 export function effectiveActionFor(
   lane: ExecutionLane,
   pkg: PolicyPackage,
-  rule: Pick<PolicyRule, 'action' | 'locked'>
+  rule: Pick<PolicyRule, 'action' | 'locked'> & { id?: string }
 ): PolicyAction {
   if (isTransformExempt(rule)) return rule.action
   if (pkg === 'custom') return rule.action
-  const mapping = LANE_PROFILES[lane].transforms[pkg]
+  const profile = LANE_PROFILES[lane]
+  // ⚠️ 硬编码 lane 白名单：按 ruleId 覆盖仅对 desktop 生效（即便误给远程 profile 配置也不生效）
+  if (lane === 'desktop') {
+    const byId = rule.id ? profile.ruleActionOverrides?.[pkg]?.[rule.id] : undefined
+    if (byId) return byId
+  }
+  const mapping = profile.transforms[pkg]
   return mapping?.[rule.action] ?? rule.action
 }
 

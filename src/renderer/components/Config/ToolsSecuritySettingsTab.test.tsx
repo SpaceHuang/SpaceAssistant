@@ -364,4 +364,48 @@ describe('生效动作与动作域（P2：显示=实际，动作域按 lane）',
     expect(select.closest('.ant-select')!.className).not.toContain('ant-select-disabled')
     expect(within(row as HTMLElement).getByText('自动')).toBeTruthy()
   })
+
+  // 档位覆盖显示=实际（评审 C1 / G13）：按 ruleId 覆盖（ruleActionOverrides）须反映到设置页展示
+  const overrideRuleView = (id: string, lanes?: string[]) =>
+    ({
+      id,
+      when: 'invocation',
+      action: 'ask',
+      defaultAction: 'ask',
+      enabled: true,
+      locked: false,
+      reason: '档位覆盖显示=实际测试',
+      overridden: false,
+      ...(lanes ? { lanes } : {})
+    }) as SecuritySettingsModelPayload['rules'][number]
+
+  it('标准套餐桌面：browser-act-ask-desktop 显示「允许」（覆盖层放行，显示=实际）', { timeout: 20000 }, async () => {
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL,
+      rules: [...MODEL.rules, overrideRuleView('browser-act-ask-desktop', ['desktop'])]
+    })
+    renderTab()
+    const panel = await screen.findByRole('tabpanel')
+    const row = (await within(panel).findByText('browser-act-ask-desktop')).closest('tr')!
+    expect(within(row as HTMLElement).getByText('允许')).toBeTruthy()
+    expect(within(row as HTMLElement).queryByRole('combobox')).toBeNull()
+  })
+
+  it('宽松套餐桌面：段5 ask 规则显示「自动」（覆盖层机审，显示=实际）', { timeout: 20000 }, async () => {
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL,
+      packages: { ...MODEL.packages, desktop: 'loose' },
+      rules: [
+        ...MODEL.rules,
+        overrideRuleView('script-network-ask-desktop', ['desktop']),
+        overrideRuleView('browser-act-danger-ask')
+      ]
+    })
+    renderTab()
+    const panel = await screen.findByRole('tabpanel')
+    for (const id of ['script-network-ask-desktop', 'browser-act-danger-ask']) {
+      const row = (await within(panel).findByText(id)).closest('tr')!
+      expect(within(row as HTMLElement).getByText('自动'), id).toBeTruthy()
+    }
+  })
 })
