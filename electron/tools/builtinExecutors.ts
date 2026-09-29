@@ -28,7 +28,7 @@ import { buildPythonScriptEnv } from '../processOutputEncoding'
 import { UTF8_CONTRACT } from '../processOutput/contracts'
 import { createChildStreamDecoder } from '../processOutput/decodeChildOutput'
 import { processTreeKiller, runCommandWithTimeout } from '../spawnUtil'
-import { ProcessSupervisor } from '../shell/processSupervisor'
+import { ProcessSupervisor, type ProcessKiller, type ProcessTerminationResult } from '../shell/processSupervisor'
 import { snapshotEnvForLog } from '../shell/envSnapshot'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import {
@@ -129,6 +129,12 @@ async function assertDiskMatchesReadCache(
 
 const READ_MAX = READ_FILE_MAX_CHARS
 const GREP_FILE_MAX = 1024 * 1024
+
+// 终止纪律上界(方案 §2.5):supervisor 等待上界 1500ms + 兜底结算宽限 500ms,
+// 无论 rg 是否响应终止,工具 Promise 必在约 2s 内 settle;底层强杀节奏
+// (SIGTERM→250ms→SIGKILL→≤3000ms verified)是 spawnUtil 模块常量,不随此值变化。
+const GREP_TERMINATE_GRACE_MS = 1_500
+const GREP_SETTLE_SLACK_MS = 500
 const SCRIPT_IO_MAX = 100 * 1024
 const GREP_SKIP_DIRS = new Set([
   'node_modules',
@@ -927,9 +933,18 @@ export type RipgrepRunResult =
   | { kind: 'no_match'; output: 'No matches found' }
   | { kind: 'unavailable'; reason: Exclude<RipgrepUnavailableReason, 'unsupported' | 'not_file'> }
   | { kind: 'invalid_request'; message: string }
-  | { kind: 'timeout'; partialOutput: string }
-  | { kind: 'cancelled'; partialOutput: string }
+  | { kind: 'timeout'; partialOutput: string; terminated?: 'graceful' | 'forced' }
+  | { kind: 'cancelled'; partialOutput: string; terminated?: 'graceful' | 'forced' }
   | { kind: 'failed'; exitCode: number | null; message: string }
+
+/** grep.terminate 日志载荷（不落 pattern、cwd、路径，脱敏纪律同 createGrepRipgrepUnavailableDiagnostic）。 */
+export type GrepTerminateInfo = {
+  reason: 'abort' | 'timeout'
+  terminated: 'graceful' | 'forced' | null
+  elapsedMs: number
+  treeKillVerified: boolean | null
+  terminationState: ProcessTerminationResult['state'] | null
+}
 
 /**
  * R7：grep 参数归一的唯一入口（校验层与执行层共用，判定按「生效值」而非「字段是否出现」）。
@@ -1079,7 +1094,9 @@ export async function grepWithRg(
   signal: AbortSignal,
   onProgress: (msg: string) => void,
   spawnProcess: (binary: string, args: string[], options: Parameters<typeof spawn>[2]) => ChildProcess = spawn,
-  openedFile?: { fileHandle: FileHandle; platform?: NodeJS.Platform }
+  killer: ProcessKiller = processTreeKiller,
+  openedFile?: { fileHandle: FileHandle; platform?: NodeJS.Platform },
+  onTerminate?: (info: GrepTerminateInfo) => void
 ): Promise<RipgrepRunResult> {
   if (signal.aborted) return { kind: 'cancelled', partialOutput: '' }
   const openedFileFd = openedFile?.fileHandle.fd
@@ -1118,14 +1135,23 @@ export async function grepWithRg(
     const proc = spawnProcess(binaryPath, rgArgs, {
       cwd: workDir,
       windowsHide: true,
+      // macOS 树杀(processTreeKiller)按进程组 kill(-pid),前提是子进程为组长;
+      // 未 detached 时 -pid 报 ESRCH、一个信号都发不出去而测试可全绿(方案 §2.5 适配一)。
+      detached: process.platform === 'darwin',
       ...(stableFileOnWindows ? { stdio: ['pipe', 'pipe', 'pipe'] } : openedFileFd !== undefined ? { stdio: ['ignore', 'pipe', 'pipe', openedFileFd] } : {})
     })
     let settled = false
     let stableInputStream: ReturnType<FileHandle['createReadStream']> | undefined
     let out = ''
     let stderr = ''
-    let killed = false
     let truncated = false
+    // 终止纪律(方案 §2.5 D2/D3):终止只经 ProcessSupervisor(killer 缝),终态由
+    // terminationReason 显式归属,不再用 killed 布尔事后推断。
+    const supervisor = new ProcessSupervisor(proc, killer)
+    let terminationReason: 'abort' | 'timeout' | null = null
+    let terminationRequestedAt: number | undefined
+    let terminationOutcome: ProcessTerminationResult | undefined
+    let settleTimer: ReturnType<typeof setTimeout> | undefined
     // §12-#5：ripgrep 输出其自身决定编码（正常为 UTF-8），契约显式声明为 utf8 并保留探测兜底；
     // 跨 chunk 的多字节字符由流式解码器保状态，不再逐 chunk toString('utf8')。
     const stdoutDecoder = createChildStreamDecoder({ contract: UTF8_CONTRACT })
@@ -1134,17 +1160,29 @@ export async function grepWithRg(
     const STDOUT_RAW_LIMIT = 400 * 1024
     const STDERR_RAW_LIMIT = 16 * 1024
     let stderrRawBytes = 0
-    const t = setTimeout(() => {
+    const requestTermination = (reason: 'abort' | 'timeout'): void => {
       if (settled) return
-      killed = true
-      proc.kill('SIGTERM')
-    }, timeoutMs)
-    const onAbort = () => {
-      if (!settled) {
-        killed = true
-        proc.kill('SIGTERM')
+      if (terminationReason === null) {
+        terminationReason = reason
+        terminationRequestedAt = Date.now()
+      }
+      // 请求树杀:SIGTERM →(250ms)→ SIGKILL →(≤3000ms) verified;graceMs 只决定
+      // supervisor 何时放弃等待并报 termination_failed。结果消费后经 onTerminate 上报。
+      void supervisor.terminate(GREP_TERMINATE_GRACE_MS).then((result) => { terminationOutcome = result })
+      // 强制结算兜底:到点仍未 close 也必须返回,绝不允许悬挂(G1:结算单点依赖 close)
+      if (settleTimer === undefined) {
+        settleTimer = setTimeout(() => {
+          if (settled) return
+          finish({
+            kind: terminationReason === 'timeout' ? 'timeout' : 'cancelled',
+            partialOutput: out.trimEnd(),
+            terminated: 'forced'
+          })
+        }, GREP_TERMINATE_GRACE_MS + GREP_SETTLE_SLACK_MS)
       }
     }
+    const t = setTimeout(() => requestTermination('timeout'), timeoutMs)
+    const onAbort = () => requestTermination('abort')
     signal.addEventListener('abort', onAbort, { once: true })
     proc.stdout?.on('data', (ch: Buffer) => {
       stdoutRawBytes += ch.length
@@ -1165,8 +1203,23 @@ export async function grepWithRg(
       if (settled) return
       settled = true
       clearTimeout(t)
+      if (settleTimer !== undefined) clearTimeout(settleTimer)
       signal.removeEventListener('abort', onAbort)
+      // 兜底结算时进程可能还活着:必须断开所有管道,避免悬挂句柄与后续数据写进已 resolve 的闭包
       stableInputStream?.destroy()
+      proc.stdin?.destroy()
+      proc.stdout?.destroy()
+      proc.stderr?.destroy()
+      if (terminationReason !== null && onTerminate) {
+        const terminated = result.kind === 'cancelled' || result.kind === 'timeout' ? result.terminated ?? 'graceful' : null
+        onTerminate({
+          reason: terminationReason,
+          terminated,
+          elapsedMs: terminationRequestedAt !== undefined ? Date.now() - terminationRequestedAt : 0,
+          treeKillVerified: terminationOutcome?.treeKillVerified ?? null,
+          terminationState: terminationOutcome?.state ?? null
+        })
+      }
       resolve(result)
     }
     proc.on('error', (err) => {
@@ -1179,9 +1232,13 @@ export async function grepWithRg(
       // MINOR：stdout 截断只应影响 stdout；stderr 的尾部仍必须 flush，
       // 否则「挂死/超限前写出的错误信息」会丢掉未完成的多字节尾巴。
       stderr += stderrDecoder.end()
-      if (signal.aborted) finish({ kind: 'cancelled', partialOutput: out.trimEnd() })
-      else if (killed) finish({ kind: 'timeout', partialOutput: out.trimEnd() })
-      else if (code !== 0 && code !== 1) finish({ kind: 'failed', exitCode: code, message: sanitizeToolOutputText(stderr.trim().slice(0, 4000) || 'ripgrep 返回非成功状态', 'grep') })
+      if (terminationReason !== null) {
+        finish({
+          kind: terminationReason === 'timeout' ? 'timeout' : 'cancelled',
+          partialOutput: out.trimEnd(),
+          terminated: 'graceful'
+        })
+      } else if (code !== 0 && code !== 1) finish({ kind: 'failed', exitCode: code, message: sanitizeToolOutputText(stderr.trim().slice(0, 4000) || 'ripgrep 返回非成功状态', 'grep') })
       else {
         let result = out.trimEnd()
         if (openedFile) result = mapOpenedFileGrepOutput(result, searchPath, args.outputMode)
@@ -1489,7 +1546,22 @@ export const grepExecutor: ToolExecutor = {
         ctx.signal,
         (message) => ctx.sendProgress('grep', message),
         ctx.grepSpawnProcess,
-        permitFileHandle ? { fileHandle: permitFileHandle, platform: process.platform } : undefined
+        processTreeKiller,
+        permitFileHandle ? { fileHandle: permitFileHandle, platform: process.platform } : undefined,
+        (info) => {
+          // grep.terminate(方案 §2.6):中止/超时可观测,不落 pattern、cwd、路径;
+          // forced(进程不响应终止)用 warn 级别单独可见。
+          logAgentEvent(info.terminated === 'forced' ? 'warn' : 'info', 'grep.terminate', {
+            requestId: ctx.requestId ?? null,
+            sessionId: ctx.sessionId,
+            toolUseId: ctx.toolUseId,
+            reason: info.reason,
+            terminated: info.terminated,
+            elapsedMs: info.elapsedMs,
+            treeKillVerified: info.treeKillVerified,
+            terminationState: info.terminationState
+          })
+        }
       )
       if (text.kind === 'success' || text.kind === 'no_match') {
         // R6：范围事实（skipped 由 planGrepInvocation 统一规划；no_match 必带范围）
