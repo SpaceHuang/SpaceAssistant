@@ -737,3 +737,96 @@ describe('desktop loose 语义锚定（评审低项明示）', () => {
     if (d.type === 'require-confirm') expect(d.answerer).toBe('agent')
   })
 })
+
+describe('decide:P1 脚本 unknown 分级(松绑与兜底,方案 §5 P1-1/P1-2/P1-3)', () => {
+  // clean + 未建模调用(unmodeled-call):不带 script-dynamic-access token
+  const unmodeledFacts = () => mkFacts('run_script', 'execute', [
+    { kind: 'script-analysis', signal: 'clean', patterns: [] },
+    { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call' }
+  ], 'high')
+  // clean + 动态执行面/动态路径(dynamic-execution)
+  const dynamicFacts = () => mkFacts('run_script', 'execute', [
+    { kind: 'script-analysis', signal: 'clean', patterns: [] },
+    { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution' }
+  ], 'high')
+
+  it('桌面 clean+unmodeled-call 降为 ask(script-unmodeled-path-ask),不再 locked 逐次确认', () => {
+    const d = decide(unmodeledFacts(), mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
+    expect(d).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask', answerer: 'user' })
+  })
+
+  it('桌面 standard 档位下 unmodeled ask 经档位变换交审批 Agent(§10-3 行为变化)', () => {
+    const d = decide(
+      unmodeledFacts(),
+      mkContext('desktop'),
+      resolvePolicyRules({ lane: 'desktop', rules: DEFAULT_POLICY_RULES }),
+      deps({ transform: (r) => effectiveActionFor('desktop', 'standard', r) })
+    )
+    expect(d.type).toBe('require-confirm')
+    if (d.type === 'require-confirm') {
+      expect(d.ruleId).toBe('script-unmodeled-path-ask')
+      expect(d.answerer).toBe('agent')
+    }
+  })
+
+  it('桌面 clean+dynamic-execution 维持 locked 逐次真人确认(script-dynamic-execution-confirm)', () => {
+    const d = decide(dynamicFacts(), mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
+    expect(d).toMatchObject({ type: 'require-confirm', ruleId: 'script-dynamic-execution-confirm', answerer: 'user' })
+  })
+
+  it('B3 回归:远程 clean+unmodeled 即使 remoteScriptRequiresConfirm=false 且迁移完成也不被放行', () => {
+    const d = decide(
+      unmodeledFacts(),
+      mkContext('wechat'),
+      DEFAULT_POLICY_RULES,
+      deps({ config: { remoteScriptRequiresConfirm: false }, migrationComplete: true })
+    )
+    expect(d.type).toBe('require-confirm')
+    expect(d.type === 'require-confirm' && d.ruleId).toBe('script-unmodeled-path-ask')
+  })
+
+  it('远程 clean+dynamic-execution 维持 locked 确认', () => {
+    const d = decide(dynamicFacts(), mkContext('feishu'), DEFAULT_POLICY_RULES, deps())
+    expect(d).toMatchObject({ type: 'require-confirm', ruleId: 'script-dynamic-execution-confirm', answerer: 'user' })
+  })
+
+  it('N8 回归:automation 对两类 unknown 均维持 deny(:unknown token 只增不替)', () => {
+    for (const unknownReason of ['unmodeled-call', 'dynamic-execution'] as const) {
+      const facts = mkFacts('run_script', 'execute', [
+        { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: unknownReason === 'dynamic-execution', unknownReason }
+      ], 'high')
+      const d = decide(facts, mkContext('automation'), DEFAULT_POLICY_RULES, deps())
+      expect(d).toMatchObject({ type: 'deny', ruleId: 'automation-script-path-unknown-deny' })
+    }
+  })
+
+  it('unmodeled unknown 不开放记忆档位(缓存不得绕过未建模路径)', () => {
+    const constraints = deriveInvocationPolicyConstraints(unmodeledFacts(), mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
+    expect(constraints.memory.canOffer).toBe(false)
+    expect(constraints.memory.canRead).toBe(false)
+    expect(buildMemoryTiers(unmodeledFacts(), 's1', 'desktop')).toEqual([])
+  })
+
+  it('落位硬要求②:unmodeled-path-ask 排位于所有匹配裸 clean 的 run_script 条目之前', () => {
+    const ids = DEFAULT_POLICY_RULES.map((r) => r.id)
+    const askIdx = ids.indexOf('script-unmodeled-path-ask')
+    expect(askIdx).toBeGreaterThanOrEqual(0)
+    expect(askIdx).toBeLessThan(ids.indexOf('script-clean-certified-remote'))
+    expect(askIdx).toBeLessThan(ids.indexOf('script-clean-allow-desktop'))
+    // 落位硬要求③補充:排在 locked 的 script-uncertified-ask-remote 之后(远程未认证保护不被非 locked 规则截胡)
+    expect(askIdx).toBeGreaterThan(ids.indexOf('script-uncertified-ask-remote'))
+  })
+
+  it('旧规则 script-path-unknown-confirm 已被双规则替代移除(P1-3 摘 locked)', () => {
+    expect(DEFAULT_POLICY_RULES.find((r) => r.id === 'script-path-unknown-confirm')).toBeUndefined()
+  })
+
+  it('signalTokenSet:分类 token 只增不替(:unknown 与分类并存)', () => {
+    const tokens = signalTokenSet(mkFacts('run_script', 'execute', [
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call' }
+    ], 'high'))
+    expect(tokens.has('script-path-extraction:unknown')).toBe(true)
+    expect(tokens.has('script-path-extraction:unmodeled-call')).toBe(true)
+    expect(tokens.has('script-dynamic-access')).toBe(false)
+  })
+})

@@ -11,7 +11,12 @@ import { SHELL_REMOTE_DISABLED_ERROR } from '../shellToolDisplay'
  *  - 第 6 步段：其余 `ask / allow` 条目（默认表），段内再按约定 3 排序（安全规则先于放行规则，
  *    带 requiresContext / configRequires 门控的条件放行可先于同域 ask 条目）。
  *
- * 其中的六条脚本规则（连同其顺序）为规范条目，是 P1 等价验收的裁决依据，不得自由调整。
+ * 其中的脚本规则（连同其顺序）为规范条目，是 P1 等价验收的裁决依据，不得自由调整。
+ * P1（script-path-extraction 假阳性松绑，2026-09）起 unknown 双分类：
+ *  - dynamic-execution（动态执行面/动态路径）→ script-dynamic-execution-confirm（locked，替代原
+ *    script-path-unknown-confirm）；
+ *  - unmodeled-call（未建模调用，能力缺口）→ script-unmodeled-path-ask（非 locked，可被档位/信任覆盖；
+ *    落位硬要求：先于所有匹配裸 clean token 的 run_script 条目，后于 locked 的 script-uncertified-ask-remote）。
  * 其余条目为示例（语义等价于现状，只是从代码变成数据）。
  */
 export const DEFAULT_POLICY_RULES: PolicyRule[] = [
@@ -230,11 +235,12 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['path-target:system-dir'] },
     action: 'confirm-every-time', locked: true, reason: '脚本涉及系统目录，需真人确认'
   },
+  // 真·动态执行（eval/exec/subprocess/动态路径）：信息真断裂，维持 locked 逐次真人确认（P1-2）
   {
-    id: 'script-path-unknown-confirm',
+    id: 'script-dynamic-execution-confirm',
     when: 'invocation',
-    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:unknown'] },
-    action: 'confirm-every-time', locked: true, reason: '脚本路径提取不完整，需真人确认'
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-dynamic-access'] },
+    action: 'confirm-every-time', locked: true, reason: '脚本含动态执行面，路径不可静态确认，需真人确认'
   },
   {
     id: 'script-unverified-language-confirm',
@@ -309,6 +315,20 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'ask',
     locked: true,
     reason: '未通过远程安全认证的脚本需确认'
+  },
+  // P1-2:clean + 仅路径未建模（unmodeled-call，不带 script-dynamic-access）降为 ask——能力缺口
+  // 不是危险声明，可被档位/信任覆盖（摘 locked）。落位硬要求（评审 B1/B3）：
+  //  ① token 用裸 clean（script-analysis 只产出裸 token）；
+  //  ② 必须先于所有匹配裸 clean 的 run_script 条目（script-clean-certified-remote / script-clean-allow-desktop），
+  //     否则远程在 remoteScriptRequiresConfirm=false 时被 askUnlessHolds 降为 allow、桌面被静默放行；
+  //  ③ 位于 locked 的 script-uncertified-ask-remote 之后：远程未认证保护（locked）优先于本条非 locked ask。
+  {
+    id: 'script-unmodeled-path-ask',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['clean', 'script-path-extraction:unknown'] },
+    denyClass: 'insufficient-info',
+    action: 'ask',
+    reason: '脚本无危险模式，但路径分析未完全覆盖，需确认'
   },
   // 远程 clean 已认证脚本：消费 remoteScriptRequiresConfirm 配置（迁移门控语义）
   {

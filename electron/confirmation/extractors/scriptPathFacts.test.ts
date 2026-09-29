@@ -10,7 +10,7 @@ describe('extractScriptPathFacts', () => {
   afterAll(() => resetScriptParserServiceForTests())
 
   it('没有文件访问或动态执行时可标记 complete', () => {
-    expect(extractScriptPathFacts('print("hello")', 'python')).toEqual({ paths: [], completeness: 'complete', dynamicAccess: false })
+    expect(extractScriptPathFacts('print("hello")', 'python')).toEqual({ paths: [], completeness: 'complete', dynamicAccess: false, unknownReason: null })
   })
 
   it('从语法树识别 open、pathlib、os 和 shutil 的静态路径参数', () => {
@@ -22,7 +22,7 @@ describe('extractScriptPathFacts', () => {
       'os.remove("./old.txt")',
       'shutil.copy("./a", "./b")'
     ].join('\n'), 'python')
-    expect(result).toEqual({ paths: ['/tmp/report.txt', './notes.txt', './old.txt', './a', './b'], completeness: 'complete', dynamicAccess: false })
+    expect(result).toEqual({ paths: ['/tmp/report.txt', './notes.txt', './old.txt', './a', './b'], completeness: 'complete', dynamicAccess: false, unknownReason: null })
   })
 
   it('任何动态文件路径、别名调用或进程执行都 unknown，并保留可静态提取目标', () => {
@@ -33,7 +33,7 @@ describe('extractScriptPathFacts', () => {
   })
 
   it('静态可解析的 API 导入别名按原始 API 提取目标', () => {
-    expect(extractScriptPathFacts('from os import remove as rm\nrm("./old.txt")', 'python')).toEqual({ paths: ['./old.txt'], completeness: 'complete', dynamicAccess: false })
+    expect(extractScriptPathFacts('from os import remove as rm\nrm("./old.txt")', 'python')).toEqual({ paths: ['./old.txt'], completeness: 'complete', dynamicAccess: false, unknownReason: null })
     expect(extractScriptPathFacts('import subprocess as sp\nsp.run("echo ok")', 'python')).toMatchObject({ completeness: 'unknown', dynamicAccess: true })
   })
 
@@ -51,7 +51,7 @@ describe('extractScriptPathFacts', () => {
       "writeFile('/tmp/out.txt', 'data')"
     ].join('\n')
     expect(extractScriptPathFacts(code, language)).toEqual({
-      paths: ['/etc/hosts', './notes.txt', '/tmp/out.txt'], completeness: 'complete', dynamicAccess: false
+      paths: ['/etc/hosts', './notes.txt', '/tmp/out.txt'], completeness: 'complete', dynamicAccess: false, unknownReason: null
     })
   })
 
@@ -69,7 +69,7 @@ describe('extractScriptPathFacts', () => {
   })
 
   it('PowerShell 提取文件 cmdlet 静态路径，进程和动态访问 unknown', () => {
-    expect(extractScriptPathFacts("Get-Content -LiteralPath 'C:\\secrets\\key.txt'", 'powershell')).toEqual({ paths: ['C:\\secrets\\key.txt'], completeness: 'complete', dynamicAccess: false })
+    expect(extractScriptPathFacts("Get-Content -LiteralPath 'C:\\secrets\\key.txt'", 'powershell')).toEqual({ paths: ['C:\\secrets\\key.txt'], completeness: 'complete', dynamicAccess: false, unknownReason: null })
     expect(extractScriptPathFacts("Remove-Item -Path $target; Start-Process 'cmd.exe'", 'powershell')).toMatchObject({ completeness: 'unknown', dynamicAccess: true })
   })
 
@@ -99,7 +99,7 @@ describe('extractScriptPathFacts:P0 假阳性修复(探针矩阵回归)', () => 
 
   it('f4 内层 join 折叠进 open 实参(§10-6 拍板:统一以 / 折叠,平台变体交探测归一)', () => {
     expect(extractScriptPathFacts('import os\nopen(os.path.join("d", "events.jsonl"))', 'python')).toEqual({
-      paths: ['d/events.jsonl'], completeness: 'complete', dynamicAccess: false
+      paths: ['d/events.jsonl'], completeness: 'complete', dynamicAccess: false, unknownReason: null
     })
   })
 
@@ -123,7 +123,7 @@ describe('extractScriptPathFacts:P0 假阳性修复(探针矩阵回归)', () => 
 
   it('f3 join 赋值给变量后经 open(变量) 使用 → 传播生效', () => {
     expect(extractScriptPathFacts('import os\np = os.path.join("/d", "events.jsonl")\nopen(p, "r")', 'python')).toEqual({
-      paths: ['/d/events.jsonl'], completeness: 'complete', dynamicAccess: false
+      paths: ['/d/events.jsonl'], completeness: 'complete', dynamicAccess: false, unknownReason: null
     })
   })
 
@@ -153,7 +153,7 @@ describe('extractScriptPathFacts:P0 假阳性修复(探针矩阵回归)', () => 
       'print(counter.most_common(5))'
     ].join('\n')
     expect(extractScriptPathFacts(script, 'python')).toEqual({
-      paths: ['logs/app/events.jsonl'], completeness: 'complete', dynamicAccess: false
+      paths: ['logs/app/events.jsonl'], completeness: 'complete', dynamicAccess: false, unknownReason: null
     })
   })
 
@@ -243,5 +243,45 @@ describe('extractScriptPathFacts:P0 假阳性修复(探针矩阵回归)', () => 
 
   it('§6 边界案例:未知来源函数结果流入 open 仍 unknown', () => {
     expect(extractScriptPathFacts('p = custom_api()\nopen(p)', 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+})
+
+// ============================================================================
+// P1-1 unknown 双标志拆分(方案 §5 P1-1 / B2 前置条件):
+// dynamic-execution = 动态执行面 / 动态路径(信息真断裂,维持强处置);
+// unmodeled-call = 未建模调用(能力缺口,不作为风险信号)。
+// :unknown 信号对两类继续产出(automation deny 不受影响),仅 script-dynamic-access 有区分度。
+// ============================================================================
+describe('extractScriptPathFacts:P1 unknown 分类', () => {
+  beforeAll(async () => {
+    await scriptParserService.ensureInitialized()
+  })
+
+  afterAll(() => resetScriptParserServiceForTests())
+
+  it('动态执行面(eval / subprocess)与动态路径 open(变量) 归 dynamic-execution(§7.4 仍弹卡)', () => {
+    expect(extractScriptPathFacts('eval(source)', 'python')).toMatchObject({ completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution' })
+    expect(extractScriptPathFacts('import subprocess\nsubprocess.run(cmd)', 'python')).toMatchObject({ unknownReason: 'dynamic-execution' })
+    expect(extractScriptPathFacts('open(target)', 'python')).toMatchObject({ completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution' })
+    expect(extractScriptPathFacts('p = resolve()\nopen(p)', 'python')).toMatchObject({ unknownReason: 'dynamic-execution' })
+  })
+
+  it('未建模调用(customApi)归 unmodeled-call,不再带 dynamicAccess', () => {
+    expect(extractScriptPathFacts('customApi()', 'python')).toMatchObject({ completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call' })
+    expect(extractScriptPathFacts('some_module.do_thing("x")', 'python')).toMatchObject({ unknownReason: 'unmodeled-call' })
+  })
+
+  it('import 名重绑定视为事实链断裂归 dynamic-execution;global_nonlocal 归 unmodeled-call', () => {
+    expect(extractScriptPathFacts('import os\nos = fake\nopen("/a")', 'python')).toMatchObject({ completeness: 'unknown', unknownReason: 'dynamic-execution' })
+    expect(extractScriptPathFacts('def f():\n    global counter\ncounter = 1', 'python')).toMatchObject({ unknownReason: 'unmodeled-call' })
+  })
+
+  it('fail-closed 闸门(语法错误/未接入语言)保守归 dynamic-execution(§10-5:与脚本内容无关的失败不松绑)', () => {
+    expect(extractScriptPathFacts('open("/tmp/x"', 'python')).toMatchObject({ unknownReason: 'dynamic-execution' })
+    expect(extractScriptPathFacts('ls -la', 'bash')).toMatchObject({ completeness: 'unknown', unknownReason: 'dynamic-execution' })
+  })
+
+  it('complete 结果 unknownReason 为 null', () => {
+    expect(extractScriptPathFacts('print("hello")', 'python')).toEqual({ paths: [], completeness: 'complete', dynamicAccess: false, unknownReason: null })
   })
 })

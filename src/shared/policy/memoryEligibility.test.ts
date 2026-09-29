@@ -16,6 +16,14 @@ describe('MemoryEligibility', () => {
     })
   })
 
+  it('disables memory for script path extraction unknown(P1:缓存不得绕过未建模路径)', () => {
+    for (const unknownReason of ['unmodeled-call', 'dynamic-execution'] as const) {
+      expect(deriveMemoryEligibility(facts([
+        { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: unknownReason === 'dynamic-execution', unknownReason }
+      ]), 'desktop')).toEqual({ eligibility: 'none', reasons: ['script-path-unknown'] })
+    }
+  })
+
   it('disables memory for outside-workdir and system-dir path risks', () => {
     for (const zone of ['outside-workdir', 'system-dir'] as const) {
       expect(deriveMemoryEligibility(facts([{ kind: 'path-target', path: '/risk', zone }]), 'desktop')).toEqual({

@@ -26,6 +26,12 @@ export function deriveMemoryEligibility(
     reasons.push('script-network-or-uncertified')
     return { eligibility: 'none', reasons }
   }
+  // P1(方案 §5 P1-2):路径提取 unknown 的脚本不开放记忆——路径键只覆盖已静态提取的路径,
+  // 缓存命中会连「未建模/动态路径」一起放行(与其他脚本信号的「开放记忆即绕过」同理)。
+  if (facts.signals.some((signal) => signal.kind === 'script-path-extraction' && signal.completeness === 'unknown')) {
+    reasons.push('script-path-unknown')
+    return { eligibility: 'none', reasons }
+  }
   if (facts.signals.some((signal) => signal.kind === 'path-target' &&
       (signal.zone === 'sensitive-file' || signal.zone === 'outside-workdir' || signal.zone === 'system-dir'))) {
     reasons.push('path-risk')

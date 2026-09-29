@@ -892,7 +892,7 @@ describe('evaluateToolCallGate', () => {
     const parseSpy = vi.spyOn(scriptParserService, 'parse')
     const gate = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { code: 'print("hello")' } }))
     expect(parseSpy).toHaveBeenCalledTimes(1)
-    expect(gate.facts.signals).toContainEqual({ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false })
+    expect(gate.facts.signals).toContainEqual({ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false, unknownReason: null })
     expect(gate.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-clean-allow-desktop' })
   })
 
@@ -972,7 +972,8 @@ describe('evaluateToolCallGate', () => {
     try {
       const desktop = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput }))
       expect(desktop.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'unknown' }))
-      expect(desktop.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-path-unknown-confirm', answerer: 'user' })
+      // P1-2:未建模调用降为 ask 后,桌面 standard 档位经变换交审批 Agent(方案 §10-3 行为变化)
+      expect(desktop.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask', answerer: 'agent' })
 
       const unattended = await evaluateToolCallGate(base({ lane: 'automation', workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput }))
       expect(unattended.decision).toMatchObject({ type: 'deny', ruleId: 'automation-script-path-unknown-deny' })
@@ -1022,7 +1023,7 @@ describe('evaluateToolCallGate', () => {
 
     const unsupported = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { language: 'ruby', code: 'puts 1' } }))
     expect(unsupported.facts.signals).toContainEqual({ kind: 'script-language-analysis', language: 'unknown', status: 'unverified' })
-    expect(unsupported.facts.signals).toContainEqual({ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true })
+    expect(unsupported.facts.signals).toContainEqual({ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution' })
     expect(unsupported.decision).toMatchObject({ type: 'require-confirm', answerer: 'user' })
   })
 

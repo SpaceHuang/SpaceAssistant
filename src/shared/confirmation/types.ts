@@ -102,7 +102,14 @@ export type FactSignal =
   | { kind: 'path-target'; path: string; zone: PathZone }
   | { kind: 'command-effect'; effect: 'read-only' | 'mutating' | 'unknown' }
   | { kind: 'path-outside-heuristic'; reason: string }
-  | { kind: 'script-path-extraction'; completeness: 'complete' | 'unknown'; dynamicAccess: boolean }
+  /**
+   * P1-1(方案 §5):unknown 双标志拆分后的分类。dynamic-execution = 动态执行面/动态路径
+   * (信息真断裂,维持强处置);unmodeled-call = 未建模调用(能力缺口,不作为风险信号)。
+   * complete 时为 null;fail-closed 闸门(语法错误/解析器未就绪/未接入语言)保守归 dynamic-execution。
+   * 注意:`script-path-extraction:unknown` token 对两类继续产出(automation deny 依赖),
+   * 分类 token(`script-path-extraction:${unknownReason}`)只增不替。
+   */
+  | { kind: 'script-path-extraction'; completeness: 'complete' | 'unknown'; dynamicAccess: boolean; unknownReason: 'dynamic-execution' | 'unmodeled-call' | null }
   | { kind: 'script-language-analysis'; language: 'javascript' | 'typescript' | 'powershell' | 'unknown'; status: 'unverified' }
   | { kind: 'wiki-raw-target' }
   | { kind: 'feishu-media-target'; boundary: 'inside' | 'outside' | 'unknown' }

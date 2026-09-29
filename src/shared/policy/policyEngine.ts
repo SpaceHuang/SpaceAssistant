@@ -64,6 +64,9 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         tokens.add(signal.kind)
         tokens.add(`script-path-extraction:${signal.completeness}`)
         if (signal.dynamicAccess) tokens.add('script-dynamic-access')
+        // P1-1:分类 token 只增不替——`:unknown` 对两类继续产出(automation-script-path-unknown-deny
+        // 依赖它,替换即安全倒退);分类 token 供 script-unmodeled-path-ask 松绑消费。
+        if (signal.unknownReason) tokens.add(`script-path-extraction:${signal.unknownReason}`)
         break
       case 'script-language-analysis':
         tokens.add(signal.kind)

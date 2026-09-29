@@ -469,7 +469,9 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       ? requestedLanguage
       : 'unknown'
     const scriptPaths = pythonLanguage
-      ? preParsedIr ? extractScriptPathFacts(code, 'python', preParsedIr) : { paths: [], completeness: 'unknown' as const, dynamicAccess: true }
+      ? preParsedIr
+        ? extractScriptPathFacts(code, 'python', preParsedIr)
+        : { paths: [], completeness: 'unknown' as const, dynamicAccess: true, unknownReason: 'dynamic-execution' as const }
       : extractScriptPathFacts(code, language)
     const pythonSignals = pythonLanguage ? extractScriptSignals(code, env, preParsedIr) : undefined
     const signals: FactSignal[] = pythonLanguage
@@ -478,14 +480,14 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     const summary = pythonLanguage
       ? pythonSignals!.summary
       : { text: `run_script ${language} 路径事实已提取；内容安全分析未认证` }
-    signals.push({ kind: 'script-path-extraction', completeness: scriptPaths.completeness, dynamicAccess: scriptPaths.dynamicAccess })
+    signals.push({ kind: 'script-path-extraction', completeness: scriptPaths.completeness, dynamicAccess: scriptPaths.dynamicAccess, unknownReason: scriptPaths.unknownReason })
     for (const rawPath of scriptPaths.paths) {
       try {
         const pathFact = await probeWritePathFact({ rawPath, workDir: args.workDir, userDataDir: args.userDataDir, homeDir: os.homedir(), customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [] })
         signals.push({ kind: 'path-target', path: pathFact.normalizedPath, zone: pathFact.zone })
       } catch {
         signals.push({ kind: 'extraction-failed', reason: 'script-path-probe-failed' })
-        signals.push({ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true })
+        signals.push({ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution' })
       }
     }
     facts = {
