@@ -1329,6 +1329,8 @@ export type GrepFallbackResult = {
   /** 用户中止(walk 条目级 / readFile signal 两类检查点命中) */
   aborted: boolean
   filesScanned: number
+  /** 正则编译失败(降级引擎无法执行该 pattern);executor 据此结算为失败而非成功(与 rg 路径 failed 口径一致) */
+  patternError?: string
 }
 
 /** 测试注入缝:文件系统与时钟;生产缺省用真实 fs / Date.now。 */
@@ -1377,7 +1379,8 @@ export async function grepFallbackJs(
       readErrors: [],
       timedOut: false,
       aborted: false,
-      filesScanned: 0
+      filesScanned: 0,
+      patternError: toToolUserError(e, { toolName: 'grep' })
     }
   }
   const headLimit = args.headLimit <= 0 ? Infinity : args.headLimit
@@ -1709,6 +1712,11 @@ export const grepExecutor: ToolExecutor = {
             duration: Date.now() - started
           }
         }
+        // 无效正则:降级引擎无法执行该 pattern,结算为失败(与 rg 路径 failed 口径一致),
+        // 不带降级标识包装为成功
+        if (fallback.patternError) {
+          return { success: false, error: fallback.patternError, duration: Date.now() - started }
+        }
         const plan = planGrepInvocation({ workDir: ctx.workDir, searchPath: absSearch, args: gargs, engine: 'walk' })
         const scope: GrepScope = {
           ...plan.scope,
@@ -1721,7 +1729,8 @@ export const grepExecutor: ToolExecutor = {
           body,
           fallback.boundarySummary
         ].filter(Boolean).join('\n')
-        if (fallback.aborted && grepSignal.aborted) {
+        // aborted 只由 grepFallbackJs 内部检查合成信号(grepSignal)置位,此处无需再验
+        if (fallback.aborted) {
           return { success: false, error: `${composed}\n[已取消]`, duration: Date.now() - started }
         }
         return {

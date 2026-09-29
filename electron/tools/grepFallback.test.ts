@@ -120,6 +120,13 @@ describe('grepFallbackJs 边界上报(方案 §3.2 六处改造)', () => {
     await rmRoot(root)
   })
 
+  it('无效正则:返回 patternError 标记,不伪装成正常结果', async () => {
+    const root = await makeTree()
+    const res = await grepFallbackJs(root, root, '(', baseArgs(), new AbortController().signal, () => {}, 60_000)
+    expect(res.patternError).toBeTruthy()
+    await rmRoot(root)
+  })
+
   it('T-B5:时间上界——到期返回 timedOut + partial,摘要可见不静默', async () => {
     const root = await makeTree()
     let calls = 0
@@ -248,6 +255,30 @@ describe('grepExecutor 降级接线(三出口收敛 + 降级标识,AC12/AC14/T-B
     expect(output).toContain('No matches found')
     expect(output).toContain('searched:')   // R6 范围说明
     expect(output).toContain('[降级搜索：')  // 降级标识仍在
+  })
+
+  it('无效正则经降级路径结算为失败(与 rg 路径口径一致),不包装为成功(评审跟进 1)', async () => {
+    ripgrep.resolve.mockReturnValue({ path: null, source: 'development', platform: process.platform, arch: process.arch, reason: 'unsupported' })
+    const badInput = { pattern: '(', path: file }
+    const stat = await fs.stat(file)
+    ctx.readExecutionPermit = buildReadExecutionPermit({
+      requestId: ctx.requestId!,
+      toolUseId: ctx.toolUseId!,
+      toolName: 'grep',
+      input: badInput,
+      facts: [{
+        factId: 'grep-fact',
+        decisionRuleId: 'read-group-workdir-allow',
+        normalizedPath: file,
+        zone: 'workdir-normal',
+        targetKind: 'file',
+        identity: { dev: stat.dev, ino: stat.ino, mode: stat.mode, size: stat.size, mtimeMs: stat.mtimeMs }
+      }]
+    })
+    const res = await grepExecutor.execute(badInput, ctx)
+    expect(res.success).toBe(false)
+    expect(String(res.error)).toBeTruthy()
+    expect(String(res.error)).not.toContain('[降级搜索：')
   })
 
   it('resource_exhausted 不降级:显式报错,无降级标识', async () => {
