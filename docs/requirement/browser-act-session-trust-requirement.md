@@ -1,14 +1,20 @@
 # 浏览器 act 操作会话级信任机制 — 产品需求文档
 
-**版本：** 2.3（基于 v2.2 + 确认界面通俗性评审定稿）
-**日期：** 2026-06-20
-**状态：** 待评审
+**版本：** 2.4（基于 v2.3 + 2026-09-30 桌面链路档位统一落地后的开关作用范围核补）
+**日期：** 2026-09-30
+**状态：** 已实施（v2.4 为文档同步修订，信任机制零变化）
 **关联文档：**
 - [web-browser-tools-requirement.md](./web-browser-tools-requirement.md)（浏览器工具整体设计）
 - [browser-network-access-settings-requirement.md](./browser-network-access-settings-requirement.md)（网络访问与可信域名）
 - [confirmation-card-trust-requirement.md](./confirmation-card-trust-requirement.md)（确认卡片信任机制，覆盖 navigate 域名信任与 Shell 命令信任）
 - [web-browser-rate-limit-requirement.md](./web-browser-rate-limit-requirement.md)（速率限制）
 - [../review/browser-act-session-trust-requirement-review.md](../review/browser-act-session-trust-requirement-review.md)（确认界面信息充分性与通俗性评审，本版据此优化）
+- [../develop/desktop-ask-rule-tier-unification-plan.md](../develop/desktop-ask-rule-tier-unification-plan.md)（桌面链路 ask 规则档位统一，v2.4 核补来源）
+
+> **v2.4 相对 v2.3 的主要变更**（档位统一落地后的开关作用范围核补，信任机制零变化）：
+> 1. **NG1 补注**：`actRequiresConfirm` 开关保留且语义不变，但 desktop 标准/宽松档已将 `browser-act-ask-desktop` 按 ruleId 档位覆盖为 `allow`，开关在这两档下不再改变判定结果；其有区分作用的范围收敛为 desktop 严格档/自定义档与远程 lane（§3.2、§5.7）。
+> 2. **§5.7 协作表补「档位覆盖」行**：desktop 标准/宽松档下「L1/L2 信任命中则免确认，否则需确认」的裁决权由档位接管；信任机制与 `trust_auto_approved` 提示仍完整作用于 desktop 严格档/custom 档及远程 lane。
+> 3. **事实澄清**：该开关自引入起即无设置页入口（内部配置位，运行时恒为默认 `true`）；设置页暴露的是信任体系的另两项 `actSessionTrustEnabled` / `actHighRiskKeywords`。未受信域名 act 在标准/宽松档直接放行时无 inline 提示（与信任命中的 `trust_auto_approved` 提示不对称），留作 UX 观察。
 
 > **v2.3 相对 v2.2 的主要变更**（确认界面通俗性优化，面向「只有基本安全/计算机知识」的普通用户）：
 > 1. **危险信息从「字符串」升级为「结构化 `dangerInfo`」**：`assessActDanger` 一次产出 `{ source(仅审计), userReason(人话原因), consequence(后果类别), detail }`（§7.2.3），通过 `tool:confirm-request` 捎带（§7.4.4）。前端只读、不复算，符合已定的方案 A。废弃原 `dangerSummary`/`dangerSource` 两个面向用户展示的字段。
@@ -146,7 +152,7 @@ SpaceAssistant 的浏览器工具（`browser`）对 `navigate(open)` 与 `act` �
 
 | # | 非目标 | 说明 |
 |---|--------|------|
-| NG1 | 不移除 `actRequiresConfirm` 开关 | 该开关仍作为「总开关」存在；本需求是在其为 `true` 时的精细化降级 |
+| NG1 | 不移除 `actRequiresConfirm` 开关 | 该开关仍作为「总开关」存在；本需求是在其为 `true` 时的精细化降级。**v2.4 补注**：desktop 标准/宽松档经档位覆盖（`browser-act-ask-desktop` → `allow`）后，开关在这两档下不再改变判定结果，有区分作用的范围收敛为 desktop 严格档/自定义档与远程 lane；且该开关自引入起即无设置页入口（内部配置位，运行时恒为默认 `true`）——详见 §5.7 协作表「档位覆盖」行 |
 | NG2 | 不对 `observe`/`extract`/`screenshot`/`close` 引入信任机制 | 这些操作本就免确认 |
 | NG3 | 不引入「信任整个工具」或「全局免确认」 | 仅域名级信任 |
 | NG4 | 不对 `navigate` 的非 open 模式（refresh/back/forward）引入信任 | 这些操作本就免确认 |
@@ -403,6 +409,7 @@ if (
 |------|------|
 | `actRequiresConfirm === false` | 总开关关闭时，act 本就免确认，本需求不介入 |
 | `actRequiresConfirm === true`（默认） | 本需求在此前提下生效：L1/L2 信任命中则免确认，否则需确认 |
+| **档位覆盖（v2.4 补行）** | desktop **标准/宽松档**下 `browser-act-ask-desktop` 被按 ruleId 档位覆盖为 `allow`（`ruleActionOverrides`，见 desktop-ask-rule-tier-unification-plan.md §5.1）：一般 act 直接放行，上一行的「信任命中则免确认，否则需确认」裁决权在这两档由档位接管；信任机制与 `trust_auto_approved` 提示仍完整作用于 desktop **严格档/custom 档**及远程 lane。高危 act（`browser-act-danger-ask`）不受总开关管辖，标准/宽松档落机审、严格/custom 档落真人 |
 | `deniedActions` 包含 `act` | executor 层拒绝，本需求不改变（信任仅跳过确认，不绕过 executor 校验） |
 | Plan 探索期 | `isPlanReadonlyBrowserAction('act')` 返回 `false`，executor 拒绝；本需求不改变 |
 | 推理配额 | `browserActionConsumesInference('act')` 返回 `true`，照常计数 |
