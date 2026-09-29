@@ -82,6 +82,10 @@ describe('工具调用可靠性护栏（grep 断言）', () => {
     expect(exec).toContain('planGrepInvocation')
     // 校验层薄壳与执行层同源
     expect(exec).toContain('normalizeGrepArgs(input)')
+    // 清单单一真相源（方案 §3.2 改造 4 / §3.4）：GREP_SKIP_DIRS 已删除，walk 降级路径
+    // 改用 grepScope.ts 的 GREP_DEFAULT_IGNORES，两引擎共用同一份默认忽略清单
+    expect(exec).not.toContain('GREP_SKIP_DIRS')
+    expect(exec).toContain('GREP_DEFAULT_IGNORES')
   })
 
   it('护栏 11（C2）：basis-mismatch 护栏判据不得用 NODE_ENV（打包态恒真），且两侧比较前 realpath 归一', () => {
