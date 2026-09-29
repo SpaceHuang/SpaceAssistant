@@ -440,10 +440,11 @@ export function ChatView() {
     [sessionId, streamingRequestId]
   )
 
+  // chat-abort-latency 方案改动 2a：复用 abortSessionRun 本地立即止血（与 SessionListPane 停止按钮
+  // 同一语义）——点击瞬间移除 runningSessions、清 live、拒绝待确认，取消 IPC 由其内部按 meta 兜底发出。
   const abort = useCallback(() => {
-    const turnId = sessionId ? runningSessions[sessionId]?.turnId : undefined
-    if (turnId) void window.api.chatCancelTurn(turnId)
-  }, [runningSessions, sessionId])
+    if (sessionId) abortSessionRun(sessionId)
+  }, [sessionId])
 
   const { t: tChat } = useTypedTranslation('chat')
 

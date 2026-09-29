@@ -703,6 +703,8 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     const turn = typeof turnRuntime.getTurn === 'function' ? turnRuntime.getTurn(turnId) : undefined
     if (turn?.requestId) getCallAdmissionGate().cancel(turn.requestId)
     const cancelled = turnRuntime.cancel(turnId)
+    // chat-abort-latency 方案 Phase 3：中止入口审计（accepted = cancel 是否被 turnRuntime 接受）
+    logAgentEvent('warn', 'turn.cancel', { turnId, requestId: turn?.requestId, accepted: cancelled })
     if (cancelled && controller) {
       controller.abort()
       configuringAbortControllers.delete(turnId)

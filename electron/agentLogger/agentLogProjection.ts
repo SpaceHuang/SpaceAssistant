@@ -7,6 +7,7 @@ import { projectShellAgentLogFields } from '../shell/shellLogFields'
 const TARGET_EVENTS = new Set<AgentLogEventName>([
   'tool.request', 'tool.error', 'tool.result',
   'llm.silent_overflow',
+  'llm.cancel', 'turn.cancel',
   'tool.request', 'tool.error', 'tool.result', 'tool.result.contract-violation',
   'trust.remove',
   'shell.security.deny', 'shell.trust.command', 'shell.path.confirm', 'shell.path.reject', 'shell.precheck', 'shell.confirm',
@@ -15,6 +16,7 @@ const TARGET_EVENTS = new Set<AgentLogEventName>([
 ])
 const COMMON_KEYS = new Set([
   'requestId', 'sessionId', 'toolUseId', 'loopRound', 'toolName', 'level', 'success', 'durationMs',
+  'turnId', 'accepted', 'abortToCatchMs',
   'inputFingerprint', 'invocationFingerprint', 'commandFingerprint', 'cwdFingerprint', 'environmentFingerprint',
   'model', 'llmServiceId', 'kind', 'inputTokens', 'contextWindow', 'stopReason',
   'planDigest', 'caseId', 'convergenceCaseId', 'errorCode', 'reasonCode', 'errorRedacted', 'reasonRedacted',
