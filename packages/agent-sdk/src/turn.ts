@@ -341,8 +341,9 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
     }
   }
   const appendTerminalHistory = async (kind: HistoryEvent['kind'], payload: unknown, sessionLedger?: Record<string, unknown>): Promise<void> => {
+    const persistedPayload = sessionLedger ? { ...(payload as Record<string, unknown>), sessionLedger } : payload
     try {
-      await appendHistory([{ kind, payload: sessionLedger ? { ...(payload as Record<string, unknown>), sessionLedger } : payload }])
+      await appendHistory([{ kind, payload: persistedPayload }])
     } catch (error) {
       await observe(input.observer, 'history-terminal', () => input.observer?.onObservationError?.(error, 'history-terminal'))
       if (input.history) {
@@ -351,7 +352,9 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
           const terminal = [...snapshot.events].reverse().find((event) =>
             event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted'
           )
-          if (terminal?.kind === kind && JSON.stringify(terminal.payload) === JSON.stringify(payload)) return
+          if (terminal?.kind === kind && terminal.invocationId === input.invocationId &&
+            terminal.turnId === (input.turnId ?? input.invocationId) &&
+            JSON.stringify(terminal.payload) === JSON.stringify(persistedPayload)) return
         } catch { /* The append error remains authoritative when its outcome cannot be read. */ }
       }
       throw error
@@ -369,7 +372,59 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
     await observe(input.observer, 'turn-finished', () => input.observer?.onTurnFinished?.(result))
     return result
   } catch (error) {
-    const resultPersistenceUncertain = error instanceof AgentTurnHistoryAppendError && error.kinds.includes('tool-call-finished')
+    let failureSettlementUncertain = false
+    if (input.history && !(error instanceof AgentTurnHistoryAlreadyTerminalError)) {
+      try {
+        const snapshot = await input.history.read(input.invocationId)
+        const terminalExists = snapshot.events.some((event) => event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted')
+        if (!terminalExists) {
+          const pending = new Map<string, { id: string; name: string; input: Record<string, unknown> }>()
+          const started = new Set<string>()
+          for (const event of snapshot.events) {
+            const payload = event.payload && typeof event.payload === 'object' ? event.payload as {
+              message?: { toolCalls?: readonly { id?: unknown; name?: unknown; input?: unknown }[] }
+              toolCallId?: unknown
+            } : undefined
+            if (event.kind === 'model-response-committed') {
+              for (const tool of payload?.message?.toolCalls ?? []) {
+                if (typeof tool.id === 'string' && typeof tool.name === 'string' && tool.input && typeof tool.input === 'object' && !Array.isArray(tool.input)) {
+                  pending.set(tool.id, { id: tool.id, name: tool.name, input: tool.input as Record<string, unknown> })
+                  started.delete(tool.id)
+                }
+              }
+            }
+            if (event.kind === 'tool-call-started' && typeof payload?.toolCallId === 'string' && pending.has(payload.toolCallId)) started.add(payload.toolCallId)
+            if ((event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') && typeof payload?.toolCallId === 'string') {
+              pending.delete(payload.toolCallId)
+              started.delete(payload.toolCallId)
+            }
+          }
+          for (const tool of pending.values()) {
+            if (started.has(tool.id)) {
+              failureSettlementUncertain = true
+              continue
+            }
+            const reason = 'TURN_FAILED_BEFORE_TOOL_DISPATCH'
+            const sessionResult = { success: false, data: `Tool call was not dispatched (${reason}).` }
+            try {
+              const sessionLedger = input.sessionLedgerForNotDispatched
+                ? await input.sessionLedgerForNotDispatched({ invocationId: input.invocationId, toolCallId: tool.id, toolName: tool.name, input: structuredClone(tool.input) }, reason, sessionResult)
+                : undefined
+              await appendHistory([{ kind: 'tool-call-not-dispatched', payload: {
+                toolCallId: tool.id, reason, replayContent: sessionResult.data, isError: true,
+                ...(sessionLedger ? { sessionLedger } : {})
+              } }])
+            } catch {
+              failureSettlementUncertain = true
+              break
+            }
+          }
+        }
+      } catch {
+        failureSettlementUncertain = true
+      }
+    }
+    const resultPersistenceUncertain = failureSettlementUncertain || error instanceof AgentTurnHistoryAppendError && error.kinds.includes('tool-call-finished')
     const executionUncertain = error instanceof ToolExecutionAfterDispatchError
     const boundaryProjectionUncertain = error instanceof AgentTurnBoundaryProjectionError
     const hostProjectionFailed = error instanceof AgentTurnHostProjectionError

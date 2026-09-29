@@ -771,6 +771,7 @@ describe('runAgentTurn', () => {
       request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 },
       safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: new InMemorySafetyPermitStore(), policy: { evaluate: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' }) } }),
       prepareTool: vi.fn(), toolExecution: toolExecutionPort(new InMemorySafetyPermitStore(), vi.fn()), maxModelTurns: 1,
+      sessionLedgerForInvocationTerminal: async () => ({ stepId: 'terminal-step' }),
       observer: { onTurnFinished }
     })).resolves.toMatchObject({ text: 'committed answer' })
 
@@ -3134,9 +3135,34 @@ describe('runAgentTurn', () => {
     ) })
     const executeTool = vi.fn()
     const safetyGate = new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: new InMemorySafetyPermitStore(), policy: { evaluate: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' }) } })
+    const history = new MemoryHistory()
     await expect(runAgentTurn({ registry, routeId: route.routeId, invocationId: 'inv', request: { messages: [], maxTokens: 10 }, safetyGate,
-      prepareTool: vi.fn(), toolExecution: toolExecutionPort(new InMemorySafetyPermitStore(), executeTool), maxModelTurns: 1 })).rejects.toMatchObject({ code: 'MODEL_TURN_LIMIT' })
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(new InMemorySafetyPermitStore(), executeTool), maxModelTurns: 1, history })).rejects.toMatchObject({ code: 'MODEL_TURN_LIMIT' })
     expect(executeTool).not.toHaveBeenCalled()
+    const events = (await history.read('inv')).events
+    expect(events.filter(({ kind, payload }) => kind === 'tool-call-not-dispatched' && (payload as { toolCallId?: string }).toolCallId === 'tc1')).toHaveLength(1)
+    expect(events.at(-1)).toMatchObject({ kind: 'invocation-failed', payload: { status: 'failed' } })
+  })
+
+  it('settles committed tool proposals and fails the invocation when turn-boundary planning throws', async () => {
+    const registry = new ModelProviderRegistry()
+    registry.register(route, { providerId: 'fake', stream: () => stream(
+      { type: 'tool-call', toolCallId: 'tc-boundary-error', toolName: 'lookup', input: {} },
+      { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+    ) })
+    const history = new MemoryHistory()
+    const permits = new InMemorySafetyPermitStore()
+    const safetyGate = new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' }) } })
+    const executeTool = vi.fn()
+
+    await expect(runAgentTurn({ registry, routeId: route.routeId, invocationId: 'inv-boundary-error', request: { messages: [], maxTokens: 10 }, safetyGate,
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, executeTool), maxModelTurns: 2, history,
+      turnBoundary: async () => { throw new Error('boundary failed') } })).rejects.toThrow('boundary failed')
+
+    expect(executeTool).not.toHaveBeenCalled()
+    const events = (await history.read('inv-boundary-error')).events
+    expect(events.filter(({ kind, payload }) => kind === 'tool-call-not-dispatched' && (payload as { toolCallId?: string }).toolCallId === 'tc-boundary-error')).toHaveLength(1)
+    expect(events.at(-1)).toMatchObject({ kind: 'invocation-failed', payload: { status: 'failed' } })
   })
 
   it('stops after cancellation during tool preparation before issuing or executing a permit', async () => {
