@@ -60,7 +60,7 @@ describe('bundled ripgrep process contract', () => {
       await fs.rename(file, `${file}.moved`)
       await fs.writeFile(file, 'attacker replacement\n', 'utf8')
       const binary = await createFixture(root)
-      const result = await grepWithRg(binary, root, file, 'Needle', args(), 5000, new AbortController().signal, () => undefined, fixtureSpawn(binary), { fileHandle, platform: process.platform })
+      const result = await grepWithRg(binary, root, file, 'Needle', args(), 5000, new AbortController().signal, () => undefined, fixtureSpawn(binary), undefined, { fileHandle, platform: process.platform })
       expect(result).toMatchObject({ kind: 'success' })
     } finally {
       await fileHandle.close()
@@ -79,7 +79,7 @@ describe('bundled ripgrep process contract', () => {
       const run = async (outputMode: GrepExecArgs['outputMode'], context?: number) => {
         const fileHandle = await fs.open(`${file}.moved`, 'r')
         try {
-          return await grepWithRg(binary, root, file, 'Needle', args({ outputMode, context }), 5000, new AbortController().signal, () => undefined, fixtureSpawn(binary), { fileHandle, platform: 'win32' })
+          return await grepWithRg(binary, root, file, 'Needle', args({ outputMode, context }), 5000, new AbortController().signal, () => undefined, fixtureSpawn(binary), undefined, { fileHandle, platform: 'win32' })
         } finally {
           await fileHandle.close()
         }
@@ -92,7 +92,7 @@ describe('bundled ripgrep process contract', () => {
     } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 
-  it('超时和取消返回结构化状态', async () => {
+  it('超时和取消返回结构化状态（含 terminated 终态，方案 §2.6 D3）', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-rg-process-state-'))
     await fs.writeFile(path.join(root, 'a.txt'), 'Needle\n'.repeat(1000), 'utf8')
     const binary = await createFixture(root)
@@ -103,7 +103,9 @@ describe('bundled ripgrep process contract', () => {
     const controller = new AbortController()
     const pending = run(5000, controller.signal)
     setTimeout(() => controller.abort(), 20)
-    await expect(pending).resolves.toMatchObject({ kind: 'cancelled' })
+    await expect(pending).resolves.toMatchObject({ kind: 'cancelled', terminated: 'graceful' })
+    // 超时路径:树杀生效、close 到达 → graceful
+    await expect(run(200, new AbortController().signal)).resolves.toMatchObject({ kind: 'timeout', terminated: 'graceful' })
     await fs.rm(root, { recursive: true, force: true })
   })
 
@@ -126,8 +128,10 @@ describe('bundled ripgrep process contract', () => {
 
   it('开发态不可用时给出准备指引，诊断不包含路径或 pattern', () => {
     const resolved = { source: 'development' as const, platform: 'darwin' as const, arch: 'arm64' }
-    expect(grepRipgrepUnavailableUserMessage(resolved, 'not_found'))
-      .toBe('开发态内置 ripgrep 未准备（not_found）。请执行 npm run prepare:rg -- --target=darwin-arm64 后重启应用。')
+    // E1 分层文案:含动作指引,不拼原始诊断枚举(Phase 4)
+    const message = grepRipgrepUnavailableUserMessage(resolved, 'not_found')
+    expect(message).toContain('npm run prepare:rg -- --target=darwin-arm64')
+    expect(message).not.toContain('not_found')
     const diagnostic = createGrepRipgrepUnavailableDiagnostic(resolved, 'not_found')
     expect(diagnostic).toBe('source=development;platform=darwin;arch=arm64;status=unavailable;reason=not_found')
     expect(diagnostic).not.toMatch(/pattern|cwd|workdir|path/i)

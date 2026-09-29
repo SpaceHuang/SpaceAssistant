@@ -82,6 +82,10 @@ describe('工具调用可靠性护栏（grep 断言）', () => {
     expect(exec).toContain('planGrepInvocation')
     // 校验层薄壳与执行层同源
     expect(exec).toContain('normalizeGrepArgs(input)')
+    // 清单单一真相源（方案 §3.2 改造 4 / §3.4）：GREP_SKIP_DIRS 已删除，walk 降级路径
+    // 改用 grepScope.ts 的 GREP_DEFAULT_IGNORES，两引擎共用同一份默认忽略清单
+    expect(exec).not.toContain('GREP_SKIP_DIRS')
+    expect(exec).toContain('GREP_DEFAULT_IGNORES')
   })
 
   it('护栏 11（C2）：basis-mismatch 护栏判据不得用 NODE_ENV（打包态恒真），且两侧比较前 realpath 归一', () => {
@@ -153,5 +157,14 @@ describe('工具调用可靠性护栏（grep 断言）', () => {
     expect(exec).toContain('classifyDirectoryError')
     expect(exec).toContain("'DIRECTORY_READ_TIMEOUT'")
     expect(exec).toContain("'DIRECTORY_ACCESS_DENIED'")
+  })
+
+  it('护栏 20（T-A7）：grep spawn 必须保留 darwin detached（macOS 树杀前提，跨平台静态门禁）', () => {
+    const exec = read('electron/tools/builtinExecutors.ts')
+    // T-A6 是行为断言，但 Windows 的 taskkill /T /F 对任何子进程都生效，有无 detached 都会通过；
+    // macOS 的进程组 kill（processTreeKiller）依赖「子进程 = 进程组组长」，未 detached 时 -pid 报
+    // ESRCH、一个信号都发不出去而测试全绿（方案 §2.5 适配一）。本仓开发机为 Windows，
+    // 静态断言是该前提唯一的自动化保障。若表达式形态变化（抽常量/辅助函数），护栏需同步更新。
+    expect(exec).toContain("detached: process.platform === 'darwin'")
   })
 })

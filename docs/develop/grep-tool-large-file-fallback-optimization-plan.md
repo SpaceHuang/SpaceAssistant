@@ -3,6 +3,8 @@
 > 文档日期：2026-09-11
 > 依据：`grep-tool-1mib-file-limit-diagnosis.md`（本地分析记录，不入版本控制）
 > 文档性质：现状复核与开发方案；本次不包含代码实现。
+>
+> **2026-09-29 处置更新（部分采纳）**：本文前提「fallback 不可达」已反转——`grepFallbackJs` 经 `grep-abort-response-and-dead-code-cleanup-plan.md` 修复并接线为降级。本轮**已采纳**：超限上报（`skippedFiles` + 摘要，消除静默假阴性）、先 `stat` 后读（超限不再读取）、`partial` 边界摘要、上限 1 MiB → 2 MiB。**登记为后续可选**：流式 + `StringDecoder` 改造（去掉大小上限）。
 
 ## 1. 复核结论
 

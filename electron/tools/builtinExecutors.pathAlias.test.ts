@@ -242,7 +242,8 @@ describe('path field alias normalization', () => {
     expect(spawnProcess).not.toHaveBeenCalled()
   })
 
-  it('开发态 staging 缺失时明确失败，不返回假阴性或 degraded 结果', async () => {
+  it('开发态 staging 缺失时自动降级为 walk 引擎(带降级标识,诊断仍记录)', async () => {
+    // 方案 §3.5/§3.8 反转旧策略:「rg 缺失只报错」改为按矩阵自动降级;诊断仍是一等故障记录
     ripgrep.resolve.mockReturnValue({ path: '/missing/rg', source: 'development', platform: 'darwin', arch: 'arm64' })
     ripgrep.inspect.mockResolvedValue({ available: false, reason: 'not_found' })
     const diagnostic = vi.fn()
@@ -253,17 +254,18 @@ describe('path field alias normalization', () => {
 
     const res = await grepExecutor.execute(input, ctx)
 
-    expect(res).toMatchObject({ success: false })
-    expect(res.error).toContain('npm run prepare:rg -- --target=darwin-arm64')
-    expect(JSON.stringify(res.data ?? {})).not.toContain('No matches found')
-    expect(JSON.stringify(res.data ?? {})).not.toContain('degraded')
+    expect(res).toMatchObject({ success: true })
+    const output = String((res.data as { output?: string }).output)
+    expect(output).toContain('[降级搜索：')
+    expect(output).toContain('a.txt')
+    expect((res.data as { searchScope?: { engine?: string } }).searchScope).toMatchObject({ engine: 'walk' })
     expect(diagnostic).toHaveBeenCalledWith({
       code: 'grep-ripgrep-unavailable',
       message: 'source=development;platform=darwin;arch=arm64;status=unavailable;reason=not_found'
     })
   })
 
-  it('打包态内置 rg 不可用时返回安装完整性错误而非 fallback', async () => {
+  it('打包态内置 rg 不可用时同样自动降级(D2 现实场景,诊断仍记录)', async () => {
     ripgrep.resolve.mockReturnValue({ path: '/missing/rg', source: 'bundled', platform: 'darwin', arch: 'arm64' })
     ripgrep.inspect.mockResolvedValue({ available: false, reason: 'not_found' })
     const diagnostic = vi.fn()
@@ -274,8 +276,9 @@ describe('path field alias normalization', () => {
 
     const res = await grepExecutor.execute(input, ctx)
 
-    expect(res).toMatchObject({ success: false, error: '内置 ripgrep 不可用（not_found）。请重新安装应用后重试。' })
-    expect(JSON.stringify(res.data ?? {})).not.toContain('degraded')
+    expect(res).toMatchObject({ success: true })
+    const output = String((res.data as { output?: string }).output)
+    expect(output).toContain('[降级搜索：')
     expect(diagnostic).toHaveBeenCalledWith({
       code: 'grep-ripgrep-unavailable',
       message: 'source=bundled;platform=darwin;arch=arm64;status=unavailable;reason=not_found'

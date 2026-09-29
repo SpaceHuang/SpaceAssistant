@@ -108,12 +108,12 @@ describe('R6：walk 回退与 rg 同语义（T-R6-5）', () => {
   it('默认：隐藏条目与名单成员不搜（.env / .git / node_modules 均跳过）', async () => {
     const root = setupRoot()
     try {
-      const out = await grepFallbackJs(root, path.resolve(root), 'Needle', baseArgs(), new AbortController().signal, () => {})
-      expect(out).toContain('app.ts')
-      expect(out).toContain('docs')
-      expect(out).not.toContain('.env')
-      expect(out).not.toMatch(/\.git[\\/]config/)
-      expect(out).not.toContain('index.js')
+      const out = await grepFallbackJs(root, path.resolve(root), 'Needle', baseArgs(), new AbortController().signal, () => {}, 60_000)
+      expect(out.output).toContain('app.ts')
+      expect(out.output).toContain('docs')
+      expect(out.output).not.toContain('.env')
+      expect(out.output).not.toMatch(/\.git[\\/]config/)
+      expect(out.output).not.toContain('index.js')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -122,11 +122,11 @@ describe('R6：walk 回退与 rg 同语义（T-R6-5）', () => {
   it('include_ignored：隐藏非敏感条目（.git）与名单成员命中；敏感 .env 仍排除（两引擎一致）', async () => {
     const root = setupRoot()
     try {
-      const out = await grepFallbackJs(root, path.resolve(root), 'Needle', baseArgs({ includeIgnored: true }), new AbortController().signal, () => {})
-      expect(out).toContain('app.ts')
-      expect(out).toMatch(/\.git[\\/]config/)
-      expect(out).toContain('index.js')
-      expect(out).not.toContain('secret')
+      const out = await grepFallbackJs(root, path.resolve(root), 'Needle', baseArgs({ includeIgnored: true }), new AbortController().signal, () => {}, 60_000)
+      expect(out.output).toContain('app.ts')
+      expect(out.output).toMatch(/\.git[\\/]config/)
+      expect(out.output).toContain('index.js')
+      expect(out.output).not.toContain('secret')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -135,8 +135,8 @@ describe('R6：walk 回退与 rg 同语义（T-R6-5）', () => {
   it('显式点名 .env 文件：可搜（尊重明确意图，与 rg 一致）', async () => {
     const root = setupRoot()
     try {
-      const out = await grepFallbackJs(root, path.join(root, '.env'), 'NEEDLE', baseArgs(), new AbortController().signal, () => {})
-      expect(out).toContain('.env')
+      const out = await grepFallbackJs(root, path.join(root, '.env'), 'NEEDLE', baseArgs(), new AbortController().signal, () => {}, 60_000)
+      expect(out.output).toContain('.env')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

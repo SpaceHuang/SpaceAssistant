@@ -28,7 +28,7 @@ import { buildPythonScriptEnv } from '../processOutputEncoding'
 import { UTF8_CONTRACT } from '../processOutput/contracts'
 import { createChildStreamDecoder } from '../processOutput/decodeChildOutput'
 import { processTreeKiller, runCommandWithTimeout } from '../spawnUtil'
-import { ProcessSupervisor } from '../shell/processSupervisor'
+import { ProcessSupervisor, type ProcessKiller, type ProcessTerminationResult } from '../shell/processSupervisor'
 import { snapshotEnvForLog } from '../shell/envSnapshot'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import {
@@ -37,7 +37,7 @@ import {
   resolveRipgrepBinary,
   type RipgrepUnavailableReason
 } from './ripgrepBinary'
-import { planGrepInvocation, formatGrepNoMatchOutput, type GrepScope } from './grepScope'
+import { planGrepInvocation, formatGrepNoMatchOutput, GREP_DEFAULT_IGNORES, type GrepScope } from './grepScope'
 import { isSensitivePath } from '../shell/shellSensitivePaths'
 import { runLarkCliExecutor } from './runLarkCliExecutor'
 import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
@@ -128,17 +128,14 @@ async function assertDiskMatchesReadCache(
 }
 
 const READ_MAX = READ_FILE_MAX_CHARS
-const GREP_FILE_MAX = 1024 * 1024
+const GREP_FILE_MAX = 2 * 1024 * 1024
+
+// 终止纪律上界(方案 §2.5):supervisor 等待上界 1500ms + 兜底结算宽限 500ms,
+// 无论 rg 是否响应终止,工具 Promise 必在约 2s 内 settle;底层强杀节奏
+// (SIGTERM→250ms→SIGKILL→≤3000ms verified)是 spawnUtil 模块常量,不随此值变化。
+const GREP_TERMINATE_GRACE_MS = 1_500
+const GREP_SETTLE_SLACK_MS = 500
 const SCRIPT_IO_MAX = 100 * 1024
-const GREP_SKIP_DIRS = new Set([
-  'node_modules',
-  '.git',
-  '.svn',
-  '__pycache__',
-  'dist',
-  'dist-electron',
-  '.cursor'
-])
 
 async function pathExists(p: string): Promise<boolean> {
   try {
@@ -927,9 +924,18 @@ export type RipgrepRunResult =
   | { kind: 'no_match'; output: 'No matches found' }
   | { kind: 'unavailable'; reason: Exclude<RipgrepUnavailableReason, 'unsupported' | 'not_file'> }
   | { kind: 'invalid_request'; message: string }
-  | { kind: 'timeout'; partialOutput: string }
-  | { kind: 'cancelled'; partialOutput: string }
+  | { kind: 'timeout'; partialOutput: string; terminated?: 'graceful' | 'forced' }
+  | { kind: 'cancelled'; partialOutput: string; terminated?: 'graceful' | 'forced' }
   | { kind: 'failed'; exitCode: number | null; message: string }
+
+/** grep.terminate 日志载荷（不落 pattern、cwd、路径，脱敏纪律同 createGrepRipgrepUnavailableDiagnostic）。 */
+export type GrepTerminateInfo = {
+  reason: 'abort' | 'timeout'
+  terminated: 'graceful' | 'forced' | null
+  elapsedMs: number
+  treeKillVerified: boolean | null
+  terminationState: ProcessTerminationResult['state'] | null
+}
 
 /**
  * R7：grep 参数归一的唯一入口（校验层与执行层共用，判定按「生效值」而非「字段是否出现」）。
@@ -1059,14 +1065,72 @@ function mapOpenedFileGrepOutput(output: string, filePath: string, outputMode: G
   }).join('\n')
 }
 
+// E2(方案 §3.6.4):降级也不可用时的 Agent 侧替代路径,统一附在分层文案末尾。
+const GREP_ALTERNATIVE_SEARCH_HINT =
+  '替代路径：用 list_directory + read_file 逐层查看文件，或用 run_shell 调用系统搜索（Windows findstr / Select-String，macOS grep / mdfind）。'
+
+/**
+ * E1(评审 P1-2 修订):rg 不可用文案按 source × reason 分层,主进程直接产出
+ * (electron 无 i18n 基建,不引入);含动作指引、不拼原始诊断枚举——枚举经
+ * 失败结果 data.errorClass/reason 走 R8 机器可读通道。环境拦截类原因不得
+ * 给「重新安装应用」指引(重装与拦截无关,方案 §3.6.3)。
+ */
 export function grepRipgrepUnavailableUserMessage(
   resolved: Pick<ReturnType<typeof resolveRipgrepBinary>, 'source' | 'platform' | 'arch'>,
   reason: RipgrepUnavailableReason
 ): string {
-  if (resolved.source === 'development') {
-    return `开发态内置 ripgrep 未准备（${reason}）。请执行 npm run prepare:rg -- --target=${resolved.platform}-${resolved.arch} 后重启应用。`
+  const target = `${resolved.platform}-${resolved.arch}`
+  // D1 瞬时资源(fd 耗尽):只提示稍后重试,不给任何永久性指引
+  if (reason === 'resource_exhausted') {
+    return `内置 ripgrep 本次启动失败（系统临时资源不足，通常稍后自行恢复），请稍后重试本次搜索。${GREP_ALTERNATIVE_SEARCH_HINT}`
   }
-  return `内置 ripgrep 不可用（${reason}）。请重新安装应用后重试。`
+  // D4 平台不支持:如实告知
+  if (reason === 'unsupported') {
+    return `当前平台（${target}）不在内置 ripgrep 支持面内（支持 macOS x64/arm64、Windows x64），重装或重试均无效。${GREP_ALTERNATIVE_SEARCH_HINT}`
+  }
+  if (resolved.source === 'development') {
+    // 开发态主因是未准备(worktree/新克隆默认开局);启动被拦截类成因补安全软件提示
+    const interception = reason === 'exec_format' || reason === 'spawn_failed'
+      ? '若已准备仍失败，检查安全软件是否拦截了 rg。'
+      : ''
+    return `开发态内置 ripgrep 未就绪。请执行 npm run prepare:rg -- --target=${target} 后重启应用；新 worktree 首次 npm run dev 会自动准备。${interception}${GREP_ALTERNATIVE_SEARCH_HINT}`
+  }
+  // 打包态:D3 启动被拦截 vs D2 文件缺失/权限,给对应处置
+  if (reason === 'exec_format' || reason === 'spawn_failed') {
+    const platformHint = resolved.platform === 'darwin'
+      ? 'macOS 可在终端执行 xattr -cr（拖入本应用）去除隔离属性后重新打开。'
+      : 'Windows 可在安全软件中将本应用的 rg 加入白名单后重试。'
+    return `内置 ripgrep 未能启动，通常被安全软件/EDR 拦截。${platformHint}${GREP_ALTERNATIVE_SEARCH_HINT}`
+  }
+  return `内置 ripgrep 文件缺失或不可访问，通常被安全软件隔离或删除；请在安全软件的隔离区/白名单中恢复本应用的 rg 后重试，重装通常无效。${GREP_ALTERNATIVE_SEARCH_HINT}`
+}
+
+// §3.8 降级矩阵(方案 E5 定案):「rg 起不来」才降级;「rg 跑了但报错」不降级。
+// resource_exhausted 的根因(fd 耗尽)在降级路径同样存在,降级只会更差 → 显式报错。
+// timeout / cancelled / failed / invalid_request 是 grepWithRg 的执行结果而非引擎
+// 不可用,不经本判定点(矩阵的后四行天然成立)。
+const GREP_DEGRADABLE_REASONS: ReadonlySet<RipgrepUnavailableReason> = new Set([
+  'not_found',
+  'permission_denied',
+  'spawn_failed',
+  'exec_format',
+  'unsupported',
+  'not_file'
+])
+
+export type GrepEngineDecision =
+  | { engine: 'walk'; reason: RipgrepUnavailableReason }
+  | { engine: 'error'; reason: RipgrepUnavailableReason }
+
+/**
+ * rg 不可用的唯一降级判定点(方案 §3.2 修订):executor 的三个不可用出口
+ * (resolve 失败 / inspect 失败 / grepWithRg 返回 unavailable)全部收敛到本函数,
+ * 是否降级由 §3.8 矩阵按 reason 裁定,而不是「凡不可用皆降级」。
+ */
+export function resolveGrepEngine(reason: RipgrepUnavailableReason): GrepEngineDecision {
+  return GREP_DEGRADABLE_REASONS.has(reason)
+    ? { engine: 'walk', reason }
+    : { engine: 'error', reason }
 }
 
 export async function grepWithRg(
@@ -1079,7 +1143,9 @@ export async function grepWithRg(
   signal: AbortSignal,
   onProgress: (msg: string) => void,
   spawnProcess: (binary: string, args: string[], options: Parameters<typeof spawn>[2]) => ChildProcess = spawn,
-  openedFile?: { fileHandle: FileHandle; platform?: NodeJS.Platform }
+  killer: ProcessKiller = processTreeKiller,
+  openedFile?: { fileHandle: FileHandle; platform?: NodeJS.Platform },
+  onTerminate?: (info: GrepTerminateInfo) => void
 ): Promise<RipgrepRunResult> {
   if (signal.aborted) return { kind: 'cancelled', partialOutput: '' }
   const openedFileFd = openedFile?.fileHandle.fd
@@ -1118,14 +1184,23 @@ export async function grepWithRg(
     const proc = spawnProcess(binaryPath, rgArgs, {
       cwd: workDir,
       windowsHide: true,
+      // macOS 树杀(processTreeKiller)按进程组 kill(-pid),前提是子进程为组长;
+      // 未 detached 时 -pid 报 ESRCH、一个信号都发不出去而测试可全绿(方案 §2.5 适配一)。
+      detached: process.platform === 'darwin',
       ...(stableFileOnWindows ? { stdio: ['pipe', 'pipe', 'pipe'] } : openedFileFd !== undefined ? { stdio: ['ignore', 'pipe', 'pipe', openedFileFd] } : {})
     })
     let settled = false
     let stableInputStream: ReturnType<FileHandle['createReadStream']> | undefined
     let out = ''
     let stderr = ''
-    let killed = false
     let truncated = false
+    // 终止纪律(方案 §2.5 D2/D3):终止只经 ProcessSupervisor(killer 缝),终态由
+    // terminationReason 显式归属,不再用 killed 布尔事后推断。
+    const supervisor = new ProcessSupervisor(proc, killer)
+    let terminationReason: 'abort' | 'timeout' | null = null
+    let terminationRequestedAt: number | undefined
+    let terminationOutcome: ProcessTerminationResult | undefined
+    let settleTimer: ReturnType<typeof setTimeout> | undefined
     // §12-#5：ripgrep 输出其自身决定编码（正常为 UTF-8），契约显式声明为 utf8 并保留探测兜底；
     // 跨 chunk 的多字节字符由流式解码器保状态，不再逐 chunk toString('utf8')。
     const stdoutDecoder = createChildStreamDecoder({ contract: UTF8_CONTRACT })
@@ -1134,17 +1209,29 @@ export async function grepWithRg(
     const STDOUT_RAW_LIMIT = 400 * 1024
     const STDERR_RAW_LIMIT = 16 * 1024
     let stderrRawBytes = 0
-    const t = setTimeout(() => {
+    const requestTermination = (reason: 'abort' | 'timeout'): void => {
       if (settled) return
-      killed = true
-      proc.kill('SIGTERM')
-    }, timeoutMs)
-    const onAbort = () => {
-      if (!settled) {
-        killed = true
-        proc.kill('SIGTERM')
+      if (terminationReason === null) {
+        terminationReason = reason
+        terminationRequestedAt = Date.now()
+      }
+      // 请求树杀:SIGTERM →(250ms)→ SIGKILL →(≤3000ms) verified;graceMs 只决定
+      // supervisor 何时放弃等待并报 termination_failed。结果消费后经 onTerminate 上报。
+      void supervisor.terminate(GREP_TERMINATE_GRACE_MS).then((result) => { terminationOutcome = result })
+      // 强制结算兜底:到点仍未 close 也必须返回,绝不允许悬挂(G1:结算单点依赖 close)
+      if (settleTimer === undefined) {
+        settleTimer = setTimeout(() => {
+          if (settled) return
+          finish({
+            kind: terminationReason === 'timeout' ? 'timeout' : 'cancelled',
+            partialOutput: out.trimEnd(),
+            terminated: 'forced'
+          })
+        }, GREP_TERMINATE_GRACE_MS + GREP_SETTLE_SLACK_MS)
       }
     }
+    const t = setTimeout(() => requestTermination('timeout'), timeoutMs)
+    const onAbort = () => requestTermination('abort')
     signal.addEventListener('abort', onAbort, { once: true })
     proc.stdout?.on('data', (ch: Buffer) => {
       stdoutRawBytes += ch.length
@@ -1165,8 +1252,23 @@ export async function grepWithRg(
       if (settled) return
       settled = true
       clearTimeout(t)
+      if (settleTimer !== undefined) clearTimeout(settleTimer)
       signal.removeEventListener('abort', onAbort)
+      // 兜底结算时进程可能还活着:必须断开所有管道,避免悬挂句柄与后续数据写进已 resolve 的闭包
       stableInputStream?.destroy()
+      proc.stdin?.destroy()
+      proc.stdout?.destroy()
+      proc.stderr?.destroy()
+      if (terminationReason !== null && onTerminate) {
+        const terminated = result.kind === 'cancelled' || result.kind === 'timeout' ? result.terminated ?? 'graceful' : null
+        onTerminate({
+          reason: terminationReason,
+          terminated,
+          elapsedMs: terminationRequestedAt !== undefined ? Date.now() - terminationRequestedAt : 0,
+          treeKillVerified: terminationOutcome?.treeKillVerified ?? null,
+          terminationState: terminationOutcome?.state ?? null
+        })
+      }
       resolve(result)
     }
     proc.on('error', (err) => {
@@ -1179,9 +1281,13 @@ export async function grepWithRg(
       // MINOR：stdout 截断只应影响 stdout；stderr 的尾部仍必须 flush，
       // 否则「挂死/超限前写出的错误信息」会丢掉未完成的多字节尾巴。
       stderr += stderrDecoder.end()
-      if (signal.aborted) finish({ kind: 'cancelled', partialOutput: out.trimEnd() })
-      else if (killed) finish({ kind: 'timeout', partialOutput: out.trimEnd() })
-      else if (code !== 0 && code !== 1) finish({ kind: 'failed', exitCode: code, message: sanitizeToolOutputText(stderr.trim().slice(0, 4000) || 'ripgrep 返回非成功状态', 'grep') })
+      if (terminationReason !== null) {
+        finish({
+          kind: terminationReason === 'timeout' ? 'timeout' : 'cancelled',
+          partialOutput: out.trimEnd(),
+          terminated: 'graceful'
+        })
+      } else if (code !== 0 && code !== 1) finish({ kind: 'failed', exitCode: code, message: sanitizeToolOutputText(stderr.trim().slice(0, 4000) || 'ripgrep 返回非成功状态', 'grep') })
       else {
         let result = out.trimEnd()
         if (openedFile) result = mapOpenedFileGrepOutput(result, searchPath, args.outputMode)
@@ -1208,14 +1314,55 @@ export async function grepWithRg(
   })
 }
 
+/** 降级结果(方案 §3.2):在 string 之上承载结构化边界事实,消除「静默假阴性」。 */
+export type GrepFallbackResult = {
+  output: string
+  /** 边界摘要(空串 = 无边界事件);由 executor 拼入最终输出,保证 Agent 可见 */
+  boundarySummary: string
+  /** 任一维度(超限/读失败/超时/中止)触发边界即为 true */
+  partial: boolean
+  skippedFiles: Array<{ path: string; bytes?: number; reason: 'too_large' }>
+  /** 超限文件总数(skippedFiles 数组有采样上限,总数以此为准) */
+  skippedTotal: number
+  readErrors: Array<{ reason: 'read_error'; count: number; sampledPaths: string[] }>
+  timedOut: boolean
+  /** 用户中止(walk 条目级 / readFile signal 两类检查点命中) */
+  aborted: boolean
+  filesScanned: number
+  /** 正则编译失败(降级引擎无法执行该 pattern);executor 据此结算为失败而非成功(与 rg 路径 failed 口径一致) */
+  patternError?: string
+}
+
+/** 测试注入缝:文件系统与时钟;生产缺省用真实 fs / Date.now。 */
+export type GrepFallbackDeps = {
+  stat?: (p: string) => Promise<{ size: number; isFile?: () => boolean }>
+  readFile?: (p: string, opts?: { signal?: AbortSignal }) => Promise<Buffer>
+  readdir?: (p: string, opts: { withFileTypes: true }) => Promise<Dirent[]>
+  now?: () => number
+}
+
+// skippedFiles 数组条数上限:防海量大文件时爆发式返回;总数经 skippedTotal 上报
+const GREP_FALLBACK_SKIPPED_SAMPLE_MAX = 50
+// readErrors.sampledPaths 上限:防 fd 耗尽时爆发式上报(方案 §3.2 改造 5)
+const GREP_FALLBACK_READ_ERROR_SAMPLE_MAX = 5
+// 改造 4:清单单一真相源——与 rg 共用 grepScope.ts 的默认忽略名单(原第二份本地清单已删除)
+const FALLBACK_IGNORE_SET: ReadonlySet<string> = new Set(GREP_DEFAULT_IGNORES)
+
 export async function grepFallbackJs(
   workDir: string,
   absSearch: string,
   pattern: string,
   args: GrepExecArgs,
   signal: AbortSignal,
-  onProgress: (s: string) => void
-): Promise<string> {
+  onProgress: (s: string) => void,
+  timeoutMs: number,
+  deps: GrepFallbackDeps = {}
+): Promise<GrepFallbackResult> {
+  const statD = deps.stat ?? ((p: string) => fs.stat(p))
+  const readFileD = deps.readFile ?? ((p: string, opts?: { signal?: AbortSignal }) => fs.readFile(p, opts))
+  const readdirD = deps.readdir ?? ((p: string) => fs.readdir(p, { withFileTypes: true }))
+  const now = deps.now ?? Date.now
+  const startedAt = now()
   let flags = 'g'
   if (args.ignoreCase) flags += 'i'
   if (args.multiline) flags += 's'
@@ -1223,7 +1370,18 @@ export async function grepFallbackJs(
   try {
     lineRe = new RegExp(pattern, flags)
   } catch (e) {
-    return `Error: ${toToolUserError(e, { toolName: 'grep' })}`
+    return {
+      output: `Error: ${toToolUserError(e, { toolName: 'grep' })}`,
+      boundarySummary: '',
+      partial: false,
+      skippedFiles: [],
+      skippedTotal: 0,
+      readErrors: [],
+      timedOut: false,
+      aborted: false,
+      filesScanned: 0,
+      patternError: toToolUserError(e, { toolName: 'grep' })
+    }
   }
   const headLimit = args.headLimit <= 0 ? Infinity : args.headLimit
   const filesWithMatches: string[] = []
@@ -1231,6 +1389,28 @@ export async function grepFallbackJs(
   const counts = new Map<string, number>()
   let totalMatches = 0
   let filesScanned = 0
+  const skippedFiles: GrepFallbackResult['skippedFiles'] = []
+  let skippedTotal = 0
+  const readErrorSampled: string[] = []
+  let readErrorCount = 0
+  let timedOut = false
+  let aborted = false
+
+  // 改造 6:总时长上界(与 rg 同口径 grepTimeoutSec),在 await 边界检查——
+  // 同步扫描段无法感知 abort/时钟推进(评审 P2-1),不得写入「行循环查 aborted」的死代码
+  const pastDeadline = (): boolean => {
+    if (!timedOut && now() - startedAt >= timeoutMs) timedOut = true
+    return timedOut
+  }
+  const shouldStop = (): boolean => {
+    if (signal.aborted) aborted = true
+    return aborted || pastDeadline()
+  }
+  // 改造 5:读失败计数 + 采样路径(不再静默吞掉;fd 耗尽等场景必须可见)
+  const noteReadError = (rel: string): void => {
+    readErrorCount++
+    if (readErrorSampled.length < GREP_FALLBACK_READ_ERROR_SAMPLE_MAX) readErrorSampled.push(rel)
+  }
 
   // glob 过滤只对目录递归生效；显式命名的单文件目标不应用（与 ripgrep 语义一致）。
   // 匹配前先统一为 posix 分隔符，避免 Windows 反斜杠路径对含 / 的 glob 失配。
@@ -1268,17 +1448,39 @@ export async function grepFallbackJs(
     !applyGlob || !globMatcher || globMatcher(rel)
 
   async function scanFile(full: string, applyGlob: boolean): Promise<void> {
+    if (shouldStop()) return
     const rel = path.relative(workDir, full)
     if (!matchesGlob(rel, applyGlob)) return
+    // 改造 3:先 stat 比大小,超限直接计入跳过、不再读取(内存峰值 ≈ 2 MiB)
+    let size: number
+    try {
+      size = (await statD(full)).size
+    } catch {
+      noteReadError(rel)
+      return
+    }
+    // 改造 1:超限必须计数并上报——静默 return 是「假阴性」的病根
+    if (size > GREP_FILE_MAX) {
+      skippedTotal++
+      if (skippedFiles.length < GREP_FALLBACK_SKIPPED_SAMPLE_MAX) {
+        skippedFiles.push({ path: rel, bytes: size, reason: 'too_large' })
+      }
+      return
+    }
     filesScanned++
     if (filesScanned % 30 === 0) onProgress(`搜索中... 已扫描 ${filesScanned} 个文件`)
     let buf: Buffer
     try {
-      buf = await fs.readFile(full)
+      // 改造 2:异步读取边界挂 signal——这是降级路径真正有效的中止点
+      buf = await readFileD(full, { signal })
     } catch {
+      if (signal.aborted) {
+        aborted = true
+        return
+      }
+      noteReadError(rel)
       return
     }
-    if (buf.length > GREP_FILE_MAX) return
     if (isBinaryBuffer(buf)) return
     const text = buf.toString('utf8')
 
@@ -1383,15 +1585,18 @@ export async function grepFallbackJs(
   async function walk(dir: string): Promise<void> {
     let entries: Dirent[]
     try {
-      entries = await fs.readdir(dir, { withFileTypes: true })
+      entries = await readdirD(dir, { withFileTypes: true })
     } catch {
+      // 改造 5:readdir 失败同样计数上报(不再静默 return)
+      noteReadError(path.relative(workDir, dir) || '.')
       return
     }
     for (const ent of entries) {
-      if (signal.aborted || limitReached()) return
+      if (shouldStop() || limitReached()) return
       const full = path.join(dir, ent.name)
       const isHiddenEntry = ent.name.startsWith('.')
-      if (!args.includeIgnored && (GREP_SKIP_DIRS.has(ent.name) || isHiddenEntry)) continue
+      // 改造 4:改用 GREP_DEFAULT_IGNORES(与 rg 同一份名单),原第二份本地清单已删除
+      if (!args.includeIgnored && (FALLBACK_IGNORE_SET.has(ent.name) || isHiddenEntry)) continue
       // 敏感路径逐条目判定（includeIgnored 不解除；显式点名由调用方处理，walk 不经此路径）
       if (isSensitivePath(full)) continue
       if (ent.isDirectory()) await walk(full)
@@ -1399,27 +1604,53 @@ export async function grepFallbackJs(
     }
   }
 
-  if (signal.aborted) return 'No matches found'
-  const st = await fs.stat(absSearch).catch(() => null)
-  if (st?.isFile()) await scanFile(absSearch, false)
+  const assemble = (body: string): GrepFallbackResult => {
+    const notes: string[] = []
+    if (skippedTotal > 0) {
+      const sampled = skippedFiles.slice(0, GREP_FALLBACK_READ_ERROR_SAMPLE_MAX).map((s) => s.path).join('、')
+      notes.push(`已跳过 ${skippedTotal} 个超过 ${GREP_FILE_MAX / (1024 * 1024)} MiB 上限的文件，其中可能包含匹配${sampled ? `（如：${sampled}）` : ''}`)
+    }
+    if (readErrorCount > 0) {
+      notes.push(`${readErrorCount} 个文件/目录读取失败，其中可能存在匹配${readErrorSampled.length > 0 ? `（如：${readErrorSampled.join('、')}）` : ''}`)
+    }
+    if (timedOut) notes.push('搜索超时，结果可能不完整')
+    if (aborted) notes.push('搜索已被中止，结果可能不完整')
+    return {
+      output: body,
+      boundarySummary: notes.length > 0 ? `[边界摘要]\n- ${notes.join('\n- ')}` : '',
+      partial: skippedTotal > 0 || readErrorCount > 0 || timedOut || aborted,
+      skippedFiles,
+      skippedTotal,
+      readErrors: readErrorCount > 0
+        ? [{ reason: 'read_error' as const, count: readErrorCount, sampledPaths: [...readErrorSampled] }]
+        : [],
+      timedOut,
+      aborted,
+      filesScanned
+    }
+  }
+
+  if (shouldStop()) return assemble('No matches found')
+  const st = await statD(absSearch).catch(() => null)
+  if (st?.isFile?.()) await scanFile(absSearch, false)
   else await walk(absSearch)
   if (args.outputMode === 'files_with_matches') {
-    if (filesWithMatches.length === 0) return 'No matches found'
+    if (filesWithMatches.length === 0) return assemble('No matches found')
     const slice = filesWithMatches.slice(0, headLimit)
-    return `Found ${slice.length} files\n${slice.join('\n')}`
+    return assemble(`Found ${slice.length} files\n${slice.join('\n')}`)
   }
   if (args.outputMode === 'count') {
-    if (counts.size === 0) return 'No matches found'
+    if (counts.size === 0) return assemble('No matches found')
     const lines: string[] = []
     for (const [f, c] of counts) {
       lines.push(`${f}:${c}`)
       if (lines.length >= headLimit) break
     }
-    return `${lines.join('\n')}\n\n共 ${totalMatches} 处匹配，涉及 ${counts.size} 个文件`
+    return assemble(`${lines.join('\n')}\n\n共 ${totalMatches} 处匹配，涉及 ${counts.size} 个文件`)
   }
-  if (contentLines.length === 0) return 'No matches found'
+  if (contentLines.length === 0) return assemble('No matches found')
   const suffix = `\n[共 ${totalMatches} 条匹配${headLimit !== Infinity ? `，限制: ${headLimit}` : ''}]`
-  return contentLines.join('\n') + suffix
+  return assemble(contentLines.join('\n') + suffix)
 }
 
 export const grepExecutor: ToolExecutor = {
@@ -1452,6 +1683,66 @@ export const grepExecutor: ToolExecutor = {
     } catch { return { success: false, error: '读取许可校验失败', diagnostic: { caseId: 'read-permit-validation-error', retryable: false, category: 'integration-violation' }, duration: Date.now() - started } }
     try {
       const timeoutMs = (ctx.toolsConfig.grepTimeoutSec ?? 60) * 1000
+      // Phase 2a（方案 §2.4 D1）：grep 直接感知聊天中止——工具级 signal 之外合成
+      // chatSignal,不再依赖 cancelAllToolsForRequest 隐式联动链;不改 ctx.signal
+      // 的全局语义(2b 全局替换另行核查),降级路径共用同一信号源。
+      const grepSignal = ctx.chatSignal
+        ? AbortSignal.any([ctx.signal, ctx.chatSignal])
+        : ctx.signal
+      // 降级执行(方案 §3.2/E5):修复后的 grepFallbackJs 自动兜底,不询问、无开关;
+      // 产出必须带降级标识前缀 + 边界摘要,scope 与 rg 同源(engine: 'walk')。
+      const runFallbackSearch = async (reason: RipgrepUnavailableReason): Promise<ToolExecutorResult> => {
+        let fallback: Awaited<ReturnType<typeof grepFallbackJs>>
+        try {
+          fallback = await grepFallbackJs(
+            ctx.workDir,
+            absSearch,
+            pattern,
+            gargs,
+            grepSignal,
+            (message) => ctx.sendProgress('grep', message),
+            timeoutMs
+          )
+        } catch {
+          // 降级整体失败:回落 E1 分层文案 + E2 替代路径,绝不静默(方案 §3.8)
+          return {
+            success: false,
+            error: grepRipgrepUnavailableUserMessage(resolved, reason),
+            data: { errorClass: 'GREP_RIPGREP_UNAVAILABLE', reason },
+            duration: Date.now() - started
+          }
+        }
+        // 无效正则:降级引擎无法执行该 pattern,结算为失败(与 rg 路径 failed 口径一致),
+        // 不带降级标识包装为成功
+        if (fallback.patternError) {
+          return { success: false, error: fallback.patternError, duration: Date.now() - started }
+        }
+        const plan = planGrepInvocation({ workDir: ctx.workDir, searchPath: absSearch, args: gargs, engine: 'walk' })
+        const scope: GrepScope = {
+          ...plan.scope,
+          truncated: fallback.partial,
+          ...(fallback.timedOut ? { limitReason: 'timeout' as const } : {})
+        }
+        const body = fallback.output === 'No matches found' ? formatGrepNoMatchOutput(scope) : fallback.output
+        const composed = [
+          '[降级搜索：内置 ripgrep 不可用，已用内置后备引擎完成；能力边界见末尾摘要]',
+          body,
+          fallback.boundarySummary
+        ].filter(Boolean).join('\n')
+        // aborted 只由 grepFallbackJs 内部检查合成信号(grepSignal)置位,此处无需再验
+        if (fallback.aborted) {
+          return { success: false, error: `${composed}\n[已取消]`, duration: Date.now() - started }
+        }
+        return {
+          success: true,
+          data: {
+            output: composed,
+            searchScope: scope,
+            ...(plan.explicitSensitiveHit ? { sensitivePathHit: true } : {})
+          },
+          duration: Date.now() - started
+        }
+      }
       const resolved = resolveRipgrepBinary({
         packaged: app?.isPackaged ?? false,
         resourcesPath: process.resourcesPath,
@@ -1464,20 +1755,25 @@ export const grepExecutor: ToolExecutor = {
         code: 'grep-ripgrep',
         message: createGrepRipgrepDiagnostic(resolved)
       })
+      // 出口①:resolve 失败(unsupported)→ 单一判定点裁定降级或报错
       if (!resolved.path) {
+        const reason: RipgrepUnavailableReason = resolved.reason ?? 'unsupported'
         void ctx.recordDiagnostic?.({
           code: 'grep-ripgrep-unavailable',
-          message: createGrepRipgrepUnavailableDiagnostic(resolved, resolved.reason ?? 'unsupported')
+          message: createGrepRipgrepUnavailableDiagnostic(resolved, reason)
         })
-        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, resolved.reason ?? 'unsupported'), duration: Date.now() - started }
+        if (resolveGrepEngine(reason).engine === 'walk') return await runFallbackSearch(reason)
+        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, reason), data: { errorClass: 'GREP_RIPGREP_UNAVAILABLE', reason }, duration: Date.now() - started }
       }
+      // 出口②:inspect 失败(not_found 等)→ 场景 B/D2 最高频路径,同经单一判定点
       const availability = await inspectRipgrepBinary(resolved)
       if (!availability.available) {
         void ctx.recordDiagnostic?.({
           code: 'grep-ripgrep-unavailable',
           message: createGrepRipgrepUnavailableDiagnostic(resolved, availability.reason)
         })
-        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, availability.reason), duration: Date.now() - started }
+        if (resolveGrepEngine(availability.reason).engine === 'walk') return await runFallbackSearch(availability.reason)
+        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, availability.reason), data: { errorClass: 'GREP_RIPGREP_UNAVAILABLE', reason: availability.reason }, duration: Date.now() - started }
       }
       const text = await grepWithRg(
         resolved.path,
@@ -1486,10 +1782,25 @@ export const grepExecutor: ToolExecutor = {
         pattern,
         gargs,
         timeoutMs,
-        ctx.signal,
+        grepSignal,
         (message) => ctx.sendProgress('grep', message),
         ctx.grepSpawnProcess,
-        permitFileHandle ? { fileHandle: permitFileHandle, platform: process.platform } : undefined
+        processTreeKiller,
+        permitFileHandle ? { fileHandle: permitFileHandle, platform: process.platform } : undefined,
+        (info) => {
+          // grep.terminate(方案 §2.6):中止/超时可观测,不落 pattern、cwd、路径;
+          // forced(进程不响应终止)用 warn 级别单独可见。
+          logAgentEvent(info.terminated === 'forced' ? 'warn' : 'info', 'grep.terminate', {
+            requestId: ctx.requestId ?? null,
+            sessionId: ctx.sessionId,
+            toolUseId: ctx.toolUseId,
+            reason: info.reason,
+            terminated: info.terminated,
+            elapsedMs: info.elapsedMs,
+            treeKillVerified: info.treeKillVerified,
+            terminationState: info.terminationState
+          })
+        }
       )
       if (text.kind === 'success' || text.kind === 'no_match') {
         // R6：范围事实（skipped 由 planGrepInvocation 统一规划；no_match 必带范围）
@@ -1524,11 +1835,13 @@ export const grepExecutor: ToolExecutor = {
         }
       }
       if (text.kind === 'unavailable') {
+        // 出口③:spawn 阶段分类失败 → 同样收敛到单一判定点(评审 B1 修订)
         void ctx.recordDiagnostic?.({
           code: 'grep-ripgrep-unavailable',
           message: createGrepRipgrepUnavailableDiagnostic(resolved, text.reason)
         })
-        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, text.reason), duration: Date.now() - started }
+        if (resolveGrepEngine(text.reason).engine === 'walk') return await runFallbackSearch(text.reason)
+        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, text.reason), data: { errorClass: 'GREP_RIPGREP_UNAVAILABLE', reason: text.reason }, duration: Date.now() - started }
       }
       if (text.kind === 'cancelled') return { success: false, error: `${text.partialOutput}\n[已取消]`, duration: Date.now() - started }
       if (text.kind === 'timeout') return { success: false, error: `${text.partialOutput}\n[搜索超时，仅展示部分结果]`, duration: Date.now() - started }
