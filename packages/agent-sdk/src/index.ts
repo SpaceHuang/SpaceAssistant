@@ -45,5 +45,5 @@ export * from './turn'
 export * from './toolExecutionPort'
 export * from './toolResultContract'
 
-// 契约层(宿主树门面转发;闭包由 CI 护栏断言零 electron、零内嵌 sqlite 依赖)
-export * from '../../../src/shared/agent/invocation'
+// 契约层由 SDK 包定义，宿主 shared 仅提供兼容转发。
+export * from './invocation'

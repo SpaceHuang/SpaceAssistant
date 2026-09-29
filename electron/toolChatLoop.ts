@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { createHash } from 'node:crypto'
 import { normalizeAnthropicMessageUsage } from './anthropicUsageNormalize'
 import { ToolLoopRoundLimitError } from '../packages/agent-sdk/src/turn'
 import type { PermitBoundToolExecutionPort } from '../packages/agent-sdk/src/toolExecutionPort'
@@ -176,6 +177,8 @@ import type { ContextMeter } from '../src/shared/contextMeterService'
 import { buildRequestHeaderPayload } from '../src/shared/requestContext'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
 import { createHostedModelRequest } from './runtime/hostedModelRequest'
+
+export const DESKTOP_TOOL_LOOP_MAX_ROUNDS = 50
 
 const fileCaches = new Map<string, FileStateCache>()
 

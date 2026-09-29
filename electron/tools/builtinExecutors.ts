@@ -503,7 +503,7 @@ export const listDirectoryExecutor: ToolExecutor = {
         if (snapshot.caseId === 'read-directory-cancelled') return dirTimeoutResult()
         const failureClass = snapshot.caseId === 'read-directory-identity-changed' ? 'mechanism' : 'environment'
         recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'list_directory', decisionRuleId: ctx.readExecutionPermit?.decisionRuleId, pathZone: ctx.readExecutionPermit?.targets[0]?.zone, factId: ctx.readExecutionPermit?.targets[0]?.factId, failureClass, caseId: snapshot.caseId })
-        return { success: false, error: snapshot.caseId === 'read-directory-identity-changed' ? '目录在许可校验后发生变化，已停止枚举。' : snapshot.caseId === 'read-directory-cancelled' ? '目录读取已取消。' : '目录不可用，已停止枚举。', diagnostic: { caseId: snapshot.caseId, retryable: false, category: failureClass }, duration: Date.now() - started }
+        return { success: false, error: snapshot.caseId === 'read-directory-identity-changed' ? '目录在许可校验后发生变化，已停止枚举。' : '目录不可用，已停止枚举。', diagnostic: { caseId: snapshot.caseId, retryable: false, category: failureClass }, duration: Date.now() - started }
       }
       const rows = snapshot.entries.map((entry) => {
         const entryPath = path.join(target, entry.name)
