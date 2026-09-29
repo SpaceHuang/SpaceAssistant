@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import type { AppDatabase } from '../database'
 import { DEFAULT_WECHAT_CONFIG } from '../../src/shared/wechatTypes'
-import { WeChatCommandRouter } from './weChatCommandRouter'
+import { WeChatCommandRouter, dispatchWeChatSdkInbound } from './weChatCommandRouter'
 import { makeIncomingMessage } from './__mocks__/wechatBotMock'
 import { WeChatProcessedStore } from './weChatProcessedStore'
 import { WeChatAuditLogger } from './weChatAuditLogger'
@@ -364,5 +364,77 @@ describe('WeChatCommandRouter', () => {
     await r2.handleSdkInbound(raw)
 
     expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining(`会话$${target.id}$`))
+  })
+
+  // 评审 1.1：入站处理链的 bot.reply 在 session 过期/凭据缺失时 reject——handleInbound 顶层
+  // 兜底必须吞掉并只记日志，否则 rejection 沿 fire-and-forget 分发链逃逸崩溃主进程。
+  it('handleInbound 顶层兜底：bot.reply reject 时 promise 链不向调用方逃逸', async () => {
+    reply.mockRejectedValueOnce(new Error('session expired: credentials missing'))
+    const raw = makeIncomingMessage({ userId: 'stranger@test' })
+
+    // stranger 不在 allowlist → not_owner 拒答 reply（reject）——若顶层无兜底，此 await 会 reject
+    await expect(router.handleSdkInbound(raw)).resolves.toBeUndefined()
+    expect(reply).toHaveBeenCalledTimes(1)
+  })
+
+  it('handleInbound 顶层兜底：auditLogger.append reject 同样不逃逸', async () => {
+    const appendBoom = vi.fn(async () => { throw new Error('audit disk io failed') })
+    const raw = makeIncomingMessage({ text: 'audit boom' })
+    // not_owner 之前不走 audit；走 accepted 分支需构造 allowlist 命中的消息，且 mock 掉 processCommand
+    // 之前的链路——直接以 accept 命中 + audit reject 验证：构造一个 allowlist 命中但 processCommand 前
+    // 途被 audit 拦住的场景即可，audit 即 :135 的 append。
+    const r2 = new WeChatCommandRouter({
+      db,
+      turnRuntime: testTurnRuntime,
+      botService: {
+        getBot: () => ({ reply: vi.fn(async () => undefined), sendTyping: vi.fn(), stopTyping: vi.fn() }),
+        getRawBot: () => null
+      } as never,
+      processedStore: {
+        tryClaim: async () => ({ ok: true as const, claimId: 'c1' }),
+        markCompleted: async () => undefined
+      } as never,
+      imChannel: new WeChatImChannel(),
+      auditLogger: { append: appendBoom } as never,
+      getWeChatConfig: () => ({
+        ...DEFAULT_WECHAT_CONFIG,
+        enabled: true,
+        remoteEnabled: true,
+        loggedIn: true,
+        remoteSenderAllowlist: ['wx-user@test']
+      }),
+      getAppConfig: () => ({ defaultModel: 'm1', maxParallelChatSessions: 3 }),
+      getWorkDir: () => tmpDir,
+      workDirManager: {
+        listProfiles: () => [],
+        getActiveProfileId: () => 'p1',
+        getActiveWorkDir: () => tmpDir,
+        checkDirectoryWritable: () => ({ ok: true })
+      } as never,
+      getUserDataPath: () => tmpDir,
+      getApiKey: async () => 'key',
+      getBaseUrl: () => 'https://api.example.com',
+      getMainWebContents: () => null,
+      getModel: () => 'm1',
+      getToolsConfig: () => ({ deniedTools: [] }) as never
+    })
+
+    await expect(r2.handleSdkInbound(raw)).resolves.toBeUndefined()
+    expect(appendBoom).toHaveBeenCalled()
+  })
+
+  // 评审 1.1 防御纵深：dispatch 层 .catch 兜 handleSdkInbound（含 parse 阶段）的任何 rejection。
+  it('dispatchWeChatSdkInbound：链路 rejection 不产生 unhandledRejection', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const badRouter = { handleSdkInbound: vi.fn(async () => { throw new Error('dispatch boom') }) } as never
+      dispatchWeChatSdkInbound(badRouter, makeIncomingMessage({ text: 'x' }))
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
   })
 })

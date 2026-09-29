@@ -221,3 +221,67 @@ describe('env.browserDetect', () => {
     await expect(cap.handler({}, makeCtx())).rejects.toThrow('浏览器检测')
   })
 })
+
+describe('env.workspace（R1 单一事实源）', () => {
+  it('有 workspaceSnapshot 时：workDir 取快照 rootPath，返回 source/revision/profileId，不读全局 active', async () => {
+    const cap = findCap(createEnvCapabilities(), 'env.workspace')
+    let activeWorkDirReads = 0
+    const manager = {
+      listProfiles: () => [
+        { id: 'p-bound', name: 'Bound', path: 'C:\bound' },
+        { id: 'p-active', name: 'Active', path: 'C:\active', isDefault: true }
+      ],
+      getActiveProfileId: () => 'p-active',
+      getActiveWorkDir: () => {
+        activeWorkDirReads += 1
+        return 'C:\active'
+      }
+    }
+    const data = (await cap.handler(
+      {},
+      makeCtx({
+        workDir: 'C:\bound',
+        workDirManager: manager,
+        workspaceSnapshot: {
+          profileId: 'p-bound',
+          rootPath: 'C:\bound',
+          key: 'c:/bound',
+          source: 'session-binding',
+          sensitive: false,
+          revision: 3
+        }
+      })
+    )) as Record<string, unknown>
+    expect(data.workDir).toBe('C:\bound')
+    expect(data.source).toBe('session-binding')
+    expect(data.revision).toBe(3)
+    expect(data.profileId).toBe('p-bound')
+    expect(activeWorkDirReads).toBe(0)
+    const profiles = data.profiles as Array<{ id: string; isBound: boolean }>
+    expect(profiles.find((p) => p.id === 'p-bound')?.isBound).toBe(true)
+    expect(profiles.find((p) => p.id === 'p-active')?.isBound).toBe(false)
+  })
+
+  it('无 manager 且无 snapshot 时：workDir 直接用 ctx.workDir（不再有全局 active 旁路）', async () => {
+    const cap = findCap(createEnvCapabilities(), 'env.workspace')
+    const data = (await cap.handler({}, makeCtx({ workDir: 'C:\session-dir', workDirManager: undefined }))) as {
+      workDir: string
+    }
+    expect(data.workDir).toBe('C:\session-dir')
+  })
+
+  it('有 manager 无 snapshot 时：workDir 用 ctx.workDir（全局 active 旁路已删除）', async () => {
+    const cap = findCap(createEnvCapabilities(), 'env.workspace')
+    const manager = {
+      listProfiles: () => [{ id: 'p1', name: 'One', path: 'C:\one', isDefault: true }],
+      getActiveProfileId: () => 'p1',
+      getActiveWorkDir: () => 'C:\one'
+    }
+    const data = (await cap.handler({}, makeCtx({ workDir: 'C:\ctx', workDirManager: manager }))) as {
+      workDir: string
+      profiles: Array<{ id: string; isBound: boolean }>
+    }
+    expect(data.workDir).toBe('C:\ctx')
+    expect(data.profiles[0].isBound).toBe(true)
+  })
+})

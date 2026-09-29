@@ -1,0 +1,132 @@
+# 工具调用可靠性改进（R1–R8）实施验收证据
+
+- 实施分支：`feat/tool-invocation-reliability`（worktree `SpaceAssistant-tool-reliability`）
+- 上游设计：`docs/develop/tool-invocation-reliability-improvement-technical-design.md`（v1.10）
+- 状态：批 A（R1+R4）、批 B（R2+R3+R5）、批 C（R6+R7+R8）全部落地
+- 日期：2026-09-28
+
+## 1. 落地范围与关键文件
+
+| 问题 | 批次 | 关键落地 | 测试 |
+| --- | --- | --- | --- |
+| R1 工作目录单源 | A | `src/shared/agent/workspace.ts`（快照/比较键/一致性断言）、`electron/workDirSnapshot.ts`（tracker：调用内冻结、调用间跟随，rebound 审计）、`AgentWorkspacePorts.snapshot()/refresh()`、assembler 装配、toolChatLoop 调用边界接线、`env.workspace` 删除全局 active 旁路、桌面链路注入 workDirManager | `workspace.test.ts`、`workDirSnapshot.test.ts`、`invocationAssembler.workspace.test.ts`、`env.test.ts` |
+| R2 结构化诊断 | B | `src/shared/confirmation/diagnostics.ts`（DenyClass 三类 + 键参文案 + 建议动作）、`PolicyRule.denyClass` 全量标注（25 条，O4）、gate 汇总出口 `diagnostics`、审计 `denyClass`/`basis` 字段、i18n `toolReliability` 命名空间 | `diagnostics.test.ts`、`defaultRules.lint.test.ts`、`toolCallGate.test.ts`（诊断契约组） |
+| R3 MCP 载荷 | B | `mcp-invocation` / `payload-incomplete` 信号、`mcpPayloadExtractor.ts`（截断+脱敏）、`approvalPayloadDecl.ts`（inputSchema.required 推导）、`confirm.payload-incomplete` 审计、CluePack 补 `argsDigest`/`targetUrl`/`targetPath` | `mcpPayloadExtractor.test.ts`、`approvalPayloadDecl.test.ts`、`toolCallGate.test.ts`（MCP 载荷组） |
+| R4 结果信封 | A | `packages/agent-core/src/toolResultContract.ts`（五类失败码闭合枚举 + I0–I5 不变量 + 事实优先归一）、validator 切换（矛盾不再静默改判失败）、`SHELL_*`→新码映射（长期保留，O6）、`tool.result.contract-violation` 日志、`scripts/scan-tool-result-invariants.mjs` + `check:tool-result-invariants` 门禁 | `toolResultContract.test.ts`、`types.test.ts`、`scanToolResultInvariants.test.ts` |
+| R5 解析失败降级 | B | `ShellSecurityVerdict` 新增 `unsupported`（+`unsupportedStructures`/`unsupportedReason`）、消费点显式排除（trust 两处 / canSkipShellConfirm）、gate 零特例下传 `shell-unsupported-structure` 信号、审批第三态 `undetermined`（Skill 合同 v2.2 / parseApprovalVerdict / agentChannel 三分支）、`agent-undetermined` cause + `agent_undetermined` notExecutedReason（N2 第六处）、回退白名单加格（O3b）、`automation-unsupported-deny` lane 限定 locked deny（O9 用户决策，排在 catch-all 之前）、`desktop-fail-open-to-user-plan.md` 权威文档同步（B15） | `toolReliabilityR5.test.ts`、`shellCommandTrust.test.ts`（T-R5-5）、`agentChannel.test.ts`、`fallbackToUser.test.ts`、Golden 基线重录（b36–b39 + t2-03） |
+| R6 搜索范围透明 | C | `grepScope.ts`（`GREP_DEFAULT_IGNORES` 语义归一、`planGrepInvocation` 三形态规划、`formatGrepNoMatchOutput`、`grepSensitiveExcludes` 两引擎同源）、rg 接线（`--hidden` 按需 / 名单 glob 按解除 / 敏感 glob）、walk 对称（跳隐藏 + isSensitivePath，修掉「walk 能搜 .env」既有不一致）、`include_ignored` 参数与工具说明公开 | `grepScope.test.ts`、`grepScopeExecutor.test.ts`（T-R6-1/3/4/5/6） |
+| R7 参数同源 | C | `normalizeGrepArgs` 单一入口（按生效值判定，等价默认值通过）、`validateGrepInput` 薄壳、执行器只读归一结果 | `grepNormalize.test.ts`、`grepInputContract.test.ts` |
+| R8 目录错误分类 | C | `classifyDirectoryError` 五类（含 ABORTED）、list_directory 分支改造（ENOENT/EACCES/ENOTDIR/越界/超时各自成型 + suggestions）、`DIRECTORY_ACCESS_DENIED` / `DIRECTORY_READ_TIMEOUT` 新错误码 + i18n | `listDirectoryErrors.test.ts` |
+
+## 2. 验收口径对照（需求 §5）
+
+- **R1 四消费点一致**：`workspace.test.ts`（比较键）+ `invocationAssembler.workspace.test.ts`（装配快照 / refresh revision+1 / rebound 事件）。
+- **R2 三类拒绝**：`denyClassMessageKey` 三键互不相同；`out-of-bounds` 文案参数强制含 `basisWorkDir`；`forbidden` 建议不含绕行。
+- **R3 只读抓取**：`annotations-readonly` → `actionClass='read'` 不变；缺字段 → `payload-incomplete`（审计 reason 明示 construction，不出现「参数缺失」）。
+- **R4 信封**：T-R4-1/2/3 覆盖 I1/I2/I3/I4/I5 与「矛盾改判」废除；扫描脚本退出码门禁就绪（当前 logs 目录无历史数据，矛盾数 0）。
+- **R5 三态通过形态**：`unsupported` → desktop require-confirm（answerer=agent）→ 审批判危险 deny 不回退 / 判不了 `agent-undetermined` 回退人工（T-R5-6 端到端依赖 Electron 运行时，单测层以 fallbackToUser 四维判定 + agentChannel 三分支映射锚定）；automation → `automation-unsupported-deny` 拒绝且无 agent 侧 confirm.request（T-R5-2，O9 锚定）；危险命令仍 deny（T-R5-3）。
+- **R6 三形态**：默认不搜并回报范围（no_match 必带 searchScope）；非隐藏/隐藏成员显式路径命中（自动 `--hidden`）；敏感文件默认与 `include_ignored` 均不搜、显式点名才搜且明示；两引擎同语义（walk 补对称）。
+- **R7**：等价默认值不报错；冲突报 `param-conflict` 含建议写法；校验/执行同一实现。
+- **R8**：不存在/指向文件/越界/超时四类 `errorClass` 与错误码互不相同，超时带 `retryable: true`。
+
+## 3. 既有基线的口径迁移（有意变更，非回归）
+
+1. **Shell Golden 基线重录**（b36-unclosed-quote / b37-trailing-pipe / b38-leading-and / b39-truncated-subst / t2-03-backtick-lead）：这五条「解析失败」样本的 verdict 按 R5 从 `deny` 迁移为 `unsupported`。Golden 的「verdict 弱化硬禁令」机制保持不变（防其他规则静默弱化），迁移通过重录基线完成并在此登记。**安全侧不变量**：这些样本 precheck 不再短路，但 `legacyAutoAllowEligible` 恒 false（analysisCompleteness=partial），desktop 落 require-confirm（永不自动放行），automation 由 locked deny 拒绝。
+2. **`grepInputContract.test.ts`**：非 content 模式冲突文案从「仅适用于」迁移为 `param-conflict` 结构化形态（R7）。
+3. **`toolCallGate.test.ts`** MCP 信号断言：`mcp-invocation` 与 `mcp-tool` 并存（R3 设计行为）。
+4. **`fallbackToUser.test.ts`**：`FALLBACK_ELIGIBLE_CAUSES` 从两格扩为三格（R5）。
+
+## 4. 门禁清单（CI 口径）
+
+| 门禁 | 状态 |
+| --- | --- |
+| `npm run test:electron` | 434 文件 / 3607 passed / 0 failed（2026-09-28 评审修复后重跑，见 §4.2） |
+| `npm run test:renderer` | 294 文件 / 1937 passed / 0 failed（同上） |
+| `npm run check:tool-result-invariants` | 矛盾数 0（exit 0） |
+| `npm run i18n:check` | 通过（zh-CN / en-US 对齐） |
+| `npm run typecheck:renderer` / `typecheck:shared` | 通过 |
+| 护栏断言（`electron/toolReliabilityGuards.test.ts` 10 条） | 通过：active 旁路 / refresh 优先 / 失败态单一推导 / 归一单一出口 / 新失败码 / unsupported 信任排除 / O9 规则序 / 回退白名单 / grep 单一出口 / 目录四分类 |
+
+## 4.1 评审修复批次（2026-09-28，13 项 P1 全量处置）
+
+对照 `docs/review/2026-09-28-tool-invocation-reliability-code-review.md` 的修复记录：
+
+| # | 修复 | 落点 |
+| --- | --- | --- |
+| A1 | Skill 版本断言 2.1.0→2.2.0 + 三态合同断言 | `securityApprovalSkill.test.ts` |
+| B1 | `shell-unsupported-structure` 阻断持久记忆资格（memoryEligibility 排除清单 + gate 端到端「缓存 allow 不命中」断言，persistable=true 形态） | `memoryEligibility.ts`、`toolReliabilityR5.test.ts` |
+| B2 | 段数超限保留 precheck 结构化短路（extractor 不再被 >50 段命令炸穿整轮循环）；structure 类 unsupported 语义不变 | `shellToolLoopHelpers.ts` |
+| B3 | 审批收束指令改三态 + JSDoc 同步 + 「提示词与 Skill 三态合同一致性」护栏 | `approvalAgent.ts`、`approvalAgent.test.ts` |
+| C1 | Windows 盘符根（E:\）归一保留尾分隔符（resolve 前拦截，沙箱基座不漂移到进程 cwd） | `src/shared/agent/workspace.ts` |
+| C2 | basis-mismatch 护栏：fail-loud 判据改 `app.isPackaged`（NODE_ENV 打包态恒真）+ legacy 侧 realpath 归一后再比 key（junction/subst/8.3 不误报）+ junction 行为测试 | `toolChatLoop.ts`、`workDirSnapshot.junction.test.ts` |
+| D1 | rg 排除 glob 改 `--iglob` 大小写无关消费（Secrets/.ENV 变体不绕过；与 isSensitivePath 小写化口径同源） | `grepScope.ts`、`builtinExecutors.ts` |
+| D2 | 显式点名判定改「任一路径段命中」（嵌套成员 sub/node_modules/pkg 解除；嵌套隐藏段 → --hidden） | `grepScope.ts` |
+| E1 | MCP 入参摘要递归脱敏（headers.Authorization / auth.token / apiKeys[] 等任意深度） | `mcpPayloadExtractor.ts` |
+| E2 | `renderCluePack` 渲染 `argsDigest`（不可信围栏内）——R3 审批可见入参对裁决模型可达（依赖 E1 先落地） | `approvalAgent.ts`、`agentChannel.test.ts` |
+| F1 | readdir 阶段五类分类闭合（stat 后目录消失的竞态不再 throw 逃逸） | `builtinExecutors.ts` |
+| F2 | entries 循环阶段 abort/超时统一结构化 `READ_TIMEOUT`（消除 throwIfAborted 逃逸与中文句子 error 两种旧形态） | `builtinExecutors.ts` |
+| F3 | contract-violation 告警收窄到 I0–I4（I5 未知码不落日志）+ SCRIPT_*/LARK_* 业务码纳入闭合集合（v2 复核补齐 `SCRIPT_PROCESS_EXIT`） | `toolChatLoop.ts`、`errorCodes.ts` |
+
+护栏测试扩至 16 条（新增 C2 判据 / B1 记忆阻断 / B3 三态表述 / F3 收窄与闭合 / D1D2 / E1E2）。
+
+## 4.2 门禁真实运行记录（2026-09-28，评审修复后）
+
+- `npm run test:electron`：**434 文件 / 3607 passed / 5 skipped / 0 failed**（exit 0，458s）
+- `npm run test:renderer`：**294 文件 / 1937 passed / 0 failed**（exit 0）
+- `npm run check:tool-result-invariants`：`files=0 violations=0`，退出码 0
+- `npm run i18n:check`：passed（zh-CN / en-US 对齐，1623 处既有硬编码为存量基线）
+- `npm run typecheck:renderer` / `typecheck:shared`：通过
+- `npx tsc -p tsconfig.electron.json --noEmit`：通过
+
+## 4.3 评审 v2 处置（2026-09-28，3 项 P1 + 2 项 P2 同批）
+
+对照 `docs/review/2026-09-28-tool-invocation-reliability-code-review-v2.md`：
+
+| # | 修复 | 红绿验证 |
+| --- | --- | --- |
+| N1 | B1 端到端测试修正：缓存 mock 改真实 `DecisionCacheEntry` 形态（`decision:'allow'`）+ `memoryTiers` 断言改 `toEqual([])`；**且命令改用 persistable=true 形态（`echo )`）**——红绿验证中发现原用例命令含管道会走既有 non-persistable-command 排除，触达不了 B1 新增路径 | 完整闭环：修复在位 11 passed → 回退 B1 转 1 failed → 恢复 11 passed |
+| N2 | 扫描门禁扩展名收 `.log`/`.jsonl`（Agent 日志是 JSON Lines 内容 + .log 扩展名）；`files=0` 改为醒目告警 + **exit 1**（空转门禁=失败）；violation 附字段快照（v1 P2-6 一并修） | 实跑真实 `logs/`：`files=4 violations=0` exit 0；空目录实测 exit 1 |
+| N3 | `agent-undetermined` 回退人工的文案/reasonCode 透传真实 cause（不再坍缩为「审批服务不可用」）；`approval_undetermined` reasonCode + 专用文案断言（三种 cause 文案互不相同） | `fallbackReason.test.ts` 2 用例 + 护栏 19 |
+| P2-3 | 闭合集合补 `SCRIPT_PROCESS_EXIT`（run_script 最高频业务失败码）+ 护栏补钉 | 护栏 14 断言 |
+| P2-4 | E2 用例显式 30s timeout（动态 import 冷加载已实测 flake） | — |
+
+护栏测试扩至 19 条。
+
+## 4.4 门禁真实运行记录（2026-09-28，v2 修复后）
+
+- `npm run test:electron`：**435 文件 / 3612 passed / 5 skipped / 0 failed**（exit 0，445s）
+- `npm run test:renderer`：**294 文件 / 1937 passed / 0 failed**（exit 0）
+- `npm run check:tool-result-invariants`：`files=4 violations=0` exit 0（扫描真实 `logs/`，含 Agent/FeishuCli/WeChatCli/SecurityAudit 四份日志）
+- `npm run i18n:check`：passed；`typecheck:shared` / `tsc -p tsconfig.electron.json`：通过
+
+## 4.5 合并后 28 失败修复（2026-09-29，merge-main-28 批次 1–4）
+
+merge `43b474ab`（可靠性分支合入 main）后 win32 全量出现 28 个失败，根因全部来自 main 侧 boundary policy 系列（fa30f3d6 起）在 Windows 上从未跑过全量，与分支合并内容无关。分析与修复计划（经三轮评审收敛至 v4）：`docs/review/2026-09-29-merge-main-28-failures-analysis-and-fix-plan.md`。
+
+| 批次 | 修复 | 提交 |
+| --- | --- | --- |
+| 1（生产缺陷） | `readPathFacts.ts`/`writePathFacts.ts` 路径解析**三态语法分派**（win32 绝对→win32 API、POSIX 绝对→posix API、相对路径→按 workDir 语法），消除 `path.resolve` 在 win32 上把 `/etc/hosts` 漂移为 `E:\etc\hosts` 的 system-dir 漏判；write 侧 1.4a 双守卫（POSIX 语法根 `realpath('/')` 返回盘符根的根逃逸 + 跨语法形态返回不采信）、read 侧 1.4b 对称形态守卫；env canonicalize 保持 truthful（realpath 真实答案）；回归锚①–⑥ + pathClassifier 1.6 回归锚 | `d7ceffef` |
+| 2（测试基建） | `src/test/symlinkCapability.ts` 能力探测（win32 非特权进程无 SeCreateSymbolicLinkPrivilege）；13 个真实 symlink 用例改 `it.skipIf(!canCreateSymlinks())`（Linux CI/特权 win32 真跑）；新增 4 个 mock 通路回归锚（spyOn `fs.lstat`/`fs.realpath` 返回 symlink 形态，win32 无条件执行）：probeReadPathFact、classifyFeishuMediaTarget、executeWeChatSend、gate V2 写目标 | `229cd181` |
+| 3（测试修正） | 3.1 EACCES 用例经批次 1 自然转绿（mock 字面量恢复命中，无需改动）；3.2 `readReadIntegration` 断言改 `path.join` 跨平台等价 | `229cd181` |
+| 4（门禁固化） | win32 全量 0 failed（见 §4.6）；「win32 全量」固化为合入门禁 | 本节 |
+
+**实施中的归组修正（如实记录）**：原 17 个组 1 失败中的 3 个（read_file/grep/list_directory「系统目录目标不可被 custom 放宽」）实际机制并非 POSIX 漂移——其 fixture 用真实 `%SystemRoot%\System32\...` 路径，win32 上命中内置敏感前缀（`shellSensitivePaths` 显式收录 `C:\Windows`）归 `sensitive-file`，而 Linux 上 POSIX 内置敏感分支为空归 `system-dir`。两条 read 规则同为 `locked confirm-every-time`，语义等价，测试改为分平台等价断言（提交 `d7ceffef`）。
+
+**N4 策略决策（安全侧显式化）**：win32 上 POSIX 语法绝对路径（如 `/etc/hosts`）按**语法意图**归 `system-dir`，而非其 win32 真实指向（当前盘符 `E:\etc\hosts`）。这是 fail-safe 方向的选择：对真实存在于 `E:\etc\` 下的文件，保护从 outside-workdir（custom 可放行）升格为 system-dir（locked 真人确认）——行为变更方向是收紧；`E:\etc` 非 Windows 约定系统目录，误保护代价低。
+
+**跨语法 realpath 采信收敛（1.4a/1.4b）**：win32 上 `fs.realpath('/')` 成功返回盘符根（探针实测 `E:\`），POSIX 语法路径的父目录回退若采信跨语法答案会产出 `E:\/etc/hosts` 混合形态并漏判 system-dir——write/read 两侧守卫均静默退出、保持 lexical POSIX 形态（不抛错）；env 路径链路不守卫（取真实 realpath 答案，truthful），其输出形态由「拼接跟随 real 形态」保证无混合分隔符。
+
+**N5 已知边界（pre-existing，如实告知）**：`classifyReadPathZone` 对 POSIX 语法路径 `platform='posix'`，而 win32 上的 userDataDir/homeDir 为 win32 形态——内置/用户目录敏感前缀对 POSIX 语法路径不命中；且 `/home/...`、`/Users/...`、`/root/...` 不命中 system-dir 根正则（探针实测）→ 该类路径在 win32 上无 zone 级保护，拦截依赖 gate/permit 层其它机制或用户显式配置 POSIX 形态 `customSensitivePrefixes`。此为 pre-existing 行为（漂移时代同样不命中），非本次回归。
+
+## 4.6 门禁真实运行记录（2026-09-29，28 失败修复后，win32 全量）
+
+- `npm test`（electron + renderer 双项目全量，win32 本机）：**755 文件 / 5877 passed / 21 skipped / 0 failed**（exit 0，2513.56s）
+- 21 skipped = 13 个 symlink 能力探测 skip（win32 本机无特权；安全语义由 4 个 mock 通路锚在 win32 覆盖）+ 8 个既有平台条件 skip
+- **门禁固化**：boundary policy 系列的合入门禁自本次起必须包含 win32 全量实跑；`0bc23ea9` 式的 fixture 修改后续必须附 win32 实跑记录
+
+## 5. 遗留与后续
+
+- T-R5-6 的端到端（真实 Electron 会话内「判不了 → 弹卡 → 人工确认」）与「补信息重试即通过」的会话级证据需真机验证一次（本分支无法在单测环境内发起真实 LLM 会话）；机制层（fallback 判定、cause 映射、i18n 键）已由单测锚定。
+- `check:tool-result-invariants` 当前扫描 `logs/` 为空（开发态尚无历史事件流）；打包态 `{workDir}/.agent/logs/**` 由脚本参数支持，接入 CI 时按环境传参。
+- P-1（敏感路径跨工具一致）、P-2（automation 下 extraction-failed）按设计文档 §9.1 保持独立待立项，未在本分支改动。
+- `pathClassifier` 与 `probeReadPathFact`/`probeWritePathFact` 是两套并存的路径归类实现（前者不在 28 失败链路且行为正确，已补回归锚钉住）；统一为单一归类出口另行立项，需附失败复现。

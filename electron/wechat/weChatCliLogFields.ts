@@ -3,6 +3,8 @@ import { contentHash, previewText, urlHostOnly } from '../remote/imCliLogFields'
 
 export { contentHash, previewText }
 export const WECHAT_CLI_PREVIEW_MAX = 4 * 1024
+/** 单行日志里 error/message 摘要的截断上限（对齐飞书侧 FEISHU_CLI_LINE_PREVIEW_MAX）。 */
+export const WECHAT_CLI_LINE_PREVIEW_MAX = 500
 
 export function qrUrlHostOnly(url: string | undefined): string | undefined {
   return urlHostOnly(url)

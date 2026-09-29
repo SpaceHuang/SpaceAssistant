@@ -13,5 +13,6 @@
   },
   "approvalFallbackReasonUnavailable": "Service unavailable",
   "approvalFallbackReasonTimeout": "Timed out",
-  "desktopButlerTitle": "SpaceAssistant Butler"
+  "desktopButlerTitle": "SpaceAssistant Butler",
+  "approvalFallbackReasonUndetermined": "Approval agent could not decide; user confirmation required"
 }

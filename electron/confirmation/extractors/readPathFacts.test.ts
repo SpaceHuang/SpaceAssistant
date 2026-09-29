@@ -4,6 +4,7 @@ import path from 'path'
 import { describe, expect, it, vi } from 'vitest'
 import { classifyReadPathZone, probeReadPathFact } from './readPathFacts'
 import { runExtractorsWithReadPathFact } from './runExtractors'
+import { canCreateSymlinks } from '../../../src/test/symlinkCapability'
 
 describe('probeReadPathFact', () => {
   it('POSIX 工作目录归属比较保留大小写', () => {
@@ -137,7 +138,9 @@ describe('probeReadPathFact', () => {
     }
   })
 
-  it('classifies a symlink to an outside file by its real target', async () => {
+  // 依赖真实 symlink 的用例以能力探测保护：win32 非特权进程 fs.symlink 直接 EPERM（无
+  // SeCreateSymbolicLinkPrivilege）；安全语义由下方 mock 通路用例在 win32 覆盖，Linux CI/特权环境真跑。
+  it.skipIf(!canCreateSymlinks())('classifies a symlink to an outside file by its real target', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'read-facts-'))
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'read-facts-out-'))
     try {
@@ -162,7 +165,7 @@ describe('probeReadPathFact', () => {
     }
   })
 
-  it('classifies a directory symlink as symlink while using the real directory zone', async () => {
+  it.skipIf(!canCreateSymlinks())('classifies a directory symlink as symlink while using the real directory zone', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'read-facts-'))
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'read-facts-out-'))
     try {
@@ -171,7 +174,7 @@ describe('probeReadPathFact', () => {
     } finally { await fs.rm(root, { recursive: true, force: true }); await fs.rm(outside, { recursive: true, force: true }) }
   })
 
-  it('resolves a parent directory symlink before classifying the target', async () => {
+  it.skipIf(!canCreateSymlinks())('resolves a parent directory symlink before classifying the target', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'read-facts-'))
     const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'read-facts-out-'))
     try {
@@ -223,5 +226,94 @@ describe('probeReadPathFact', () => {
         customSensitivePrefixes: []
       })).resolves.toMatchObject({ zone: 'outside-workdir' })
     } finally { vi.unstubAllEnvs() }
+  })
+})
+
+/**
+ * merge-main-28 修复回归锚（docs/review/2026-09-29-merge-main-28-failures-analysis-and-fix-plan.md §5 批次 1.5）。
+ * 路径解析语义三态分派：win32 绝对 → win32 API；POSIX 绝对 → posix API；相对路径 → 按 workDir 语法。
+ */
+describe('跨平台路径语法分派回归锚', () => {
+  it('锚①：相对路径按 workDir 真实基座 resolve（B1 回归：相对路径不得交给 posix API）', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-facts-anchor1-')))
+    try {
+      await expect(probeReadPathFact({
+        rawPath: 'src/x.ts',
+        workDir: root,
+        userDataDir: path.join(root, 'user-data'),
+        homeDir: path.join(root, 'home'),
+        customSensitivePrefixes: []
+      })).resolves.toMatchObject({
+        normalizedPath: path.resolve(root, 'src/x.ts'),
+        zone: 'workdir-normal',
+        targetKind: 'missing'
+      })
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it('锚②：POSIX 形态 workDir 字面量 + 相对路径不产 cwd 拼接乱码（B1 回归）', async () => {
+    const fact = await probeReadPathFact({
+      rawPath: 'src/x.ts',
+      workDir: '/tmp/work',
+      userDataDir: '/tmp/user-data',
+      homeDir: '/tmp/home',
+      customSensitivePrefixes: []
+    })
+    expect(fact.zone).toBe('workdir-normal')
+    expect(fact.normalizedPath).not.toContain(process.cwd())
+    expect(fact.normalizedPath.endsWith('src/x.ts') || fact.normalizedPath.endsWith('src\\x.ts')).toBe(true)
+  })
+
+  it('锚③：POSIX 绝对 + win32 形态 env → system-dir，normalizedPath 保持纯 POSIX 形态（无混合分隔符）', async () => {
+    // 目标随平台存在性不同（Linux 上 /etc/hosts 真实存在、win32 上缺失），因此只断言形态与 zone；
+    // 1.4b 形态守卫的语义由「normalizedPath 纯 POSIX」间接覆盖（若当前盘符根恰好存在同名目录，缺失该守卫时本锚转红）。
+    await expect(probeReadPathFact({
+      rawPath: '/etc/hosts',
+      workDir: 'C:\\work',
+      userDataDir: 'C:\\user-data',
+      homeDir: 'C:\\Users\\alice',
+      customSensitivePrefixes: []
+    })).resolves.toMatchObject({ normalizedPath: '/etc/hosts', zone: 'system-dir' })
+  })
+})
+
+/** symlink 越界检测的 mock 通路：不创建真实 symlink（win32 非特权进程 EPERM），每平台固定执行。 */
+describe('symlink 越界检测 mock 通路', () => {
+  it('lstat 报 symlink 且 realpath 指向外部时，读取事实为 symlink/outside', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-facts-mock-link-')))
+    const link = path.join(root, 'link.txt')
+    await fs.writeFile(link, 'content')
+    const outsideReal = path.resolve(root, '..', 'mock-read-outside-secret.txt')
+    const originalLstat = fs.lstat.bind(fs)
+    const originalRealpath = fs.realpath.bind(fs)
+    const lstatSpy = vi.spyOn(fs, 'lstat').mockImplementation(async (target, ...args) => {
+      if (String(target) === link) {
+        const real = await originalLstat(target, ...args)
+        return {
+          isSymbolicLink: () => true,
+          isFile: () => false,
+          isDirectory: () => false,
+          dev: real.dev, ino: real.ino, mode: real.mode, size: real.size, mtimeMs: real.mtimeMs
+        } as never
+      }
+      return originalLstat(target, ...args)
+    })
+    const realpathSpy = vi.spyOn(fs, 'realpath').mockImplementation(async (target, ...args) => {
+      if (String(target) === link) return outsideReal
+      return originalRealpath(target, ...args)
+    })
+    try {
+      await expect(probeReadPathFact({
+        rawPath: 'link.txt',
+        workDir: root,
+        userDataDir: path.join(root, 'user-data'),
+        homeDir: path.join(root, 'home'),
+        customSensitivePrefixes: []
+      })).resolves.toMatchObject({ normalizedPath: outsideReal, zone: 'outside-workdir', targetKind: 'symlink' })
+    } finally {
+      lstatSpy.mockRestore()
+      realpathSpy.mockRestore()
+      await fs.rm(root, { recursive: true, force: true })
+    }
   })
 })

@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "工作产物写入约束管线",
+    "subtitle": "Agent 文件写入 → 约束校验 → 用户决策 → 执行登记",
+    "quality_profile": "showcase",
+    "animation": "trace",
+    "output": "docs/diagrams/artifact-write-pipeline.workflow.html",
+    "viewBox": [2200, 962],
+    "legend": {
+      "mode": "hidden"
+    },
+    "views": [
+      {
+        "id": "main-pipeline",
+        "label": "主链路",
+        "focus": ["tool_call", "evidence", "resolve", "needs_decision", "decision_round", "reresolve", "lease", "write", "register", "summary"],
+        "note": "从工具调用到完成摘要的完整主路径。"
+      },
+      {
+        "id": "decision-loop",
+        "label": "决策循环",
+        "focus": ["needs_decision", "decision_round", "reresolve", "halt"],
+        "note": "六类决策的循环与超时终止。"
+      },
+      {
+        "id": "guards",
+        "label": "门禁与拒绝",
+        "focus": ["evidence", "reject", "needs_decision"],
+        "note": "证据缺失或不安全路径直接拒绝，不产生文件。"
+      }
+    ]
+  },
+  "lanes": [
+    { "id": "agent", "label": "工具循环" },
+    { "id": "gate", "label": "约束门禁" },
+    { "id": "user", "label": "用户 / 界面" },
+    { "id": "exec", "label": "执行" },
+    { "id": "state", "label": "登记" },
+    { "id": "done", "label": "完成" },
+    { "id": "halt", "label": "异常终止", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "intent", "label": "意图与校验", "fromCol": 0, "toCol": 1 },
+    { "id": "decide", "label": "解析与决策", "fromCol": 2, "toCol": 3 },
+    { "id": "commit", "label": "执行与登记", "fromCol": 4, "toCol": 5 }
+  ],
+  "mainPath": ["tool_call", "evidence", "resolve", "needs_decision", "decision_round", "reresolve", "lease", "write", "register", "summary"],
+  "nodes": [
+    { "id": "tool_call", "lane": "agent", "col": 0, "type": "backend", "label": "文件工具调用", "sublabel": "write_file + artifact" },
+    { "id": "evidence", "lane": "gate", "col": 1, "type": "security", "label": "证据校验", "sublabel": "user 路径带证据" },
+    { "id": "resolve", "lane": "agent", "col": 2, "type": "backend", "label": "路径解析", "sublabel": "容器/角色/溯源" },
+    { "id": "needs_decision", "lane": "gate", "col": 3, "type": "security", "label": "决策门禁", "sublabel": "6 类决策" },
+    { "id": "decision_round", "lane": "user", "col": 3, "type": "frontend", "label": "双通道作答", "sublabel": "桌面+IM" },
+    { "id": "reresolve", "lane": "agent", "col": 4, "type": "backend", "label": "决策后重解析", "sublabel": "改址后复检" },
+    { "id": "lease", "lane": "gate", "col": 5, "type": "security", "label": "路径租约", "sublabel": "跨会话互斥" },
+    { "id": "write", "lane": "exec", "col": 5, "type": "backend", "label": "执行写入", "sublabel": "workDir 内" },
+    { "id": "register", "lane": "state", "col": 5, "type": "database", "label": "产物登记", "sublabel": "登记+溯源" },
+    { "id": "summary", "lane": "done", "col": 5, "type": "frontend", "label": "完成摘要", "sublabel": "产物面板" },
+    { "id": "reject", "lane": "halt", "col": 1, "type": "security", "label": "拒绝", "sublabel": "不产生文件" },
+    { "id": "halt", "lane": "halt", "col": 3, "type": "security", "label": "超时/取消", "sublabel": "TTL 5min" }
+  ],
+  "edges": [
+    { "id": "call-evidence", "from": "tool_call", "to": "evidence", "variant": "default" },
+    { "id": "evidence-resolve", "from": "evidence", "to": "resolve", "variant": "default", "fromSide": "right", "toSide": "bottom", "via": [[300, 243]] },
+    { "id": "evidence-reject", "from": "evidence", "to": "reject", "label": "证据缺失", "variant": "security", "role": "error" },
+    { "id": "resolve-decision", "from": "resolve", "to": "needs_decision", "label": "歧义/占用", "variant": "default", "labelAt": [420, 145] },
+    { "id": "decision-ask", "from": "needs_decision", "to": "decision_round", "label": "推送决策", "variant": "security" },
+    { "id": "answer-reresolve", "from": "decision_round", "to": "reresolve", "label": "原子提交", "variant": "emphasis", "fromSide": "right", "toSide": "right", "via": [[566, 367], [566, 119]], "labelAt": [566, 320] },
+    { "id": "reresolve-lease", "from": "reresolve", "to": "lease", "label": "ready", "variant": "emphasis", "labelAt": [510, 190] },
+    { "id": "reresolve-loop", "from": "reresolve", "to": "needs_decision", "label": "仍需决策", "variant": "dashed", "role": "branch", "route": "return-left", "labelAt": [380, 283] },
+    { "id": "lease-write", "from": "lease", "to": "write", "variant": "default" },
+    { "id": "write-register", "from": "write", "to": "register", "variant": "emphasis" },
+    { "id": "register-summary", "from": "register", "to": "summary", "label": "变更事件", "variant": "default" },
+    { "id": "ask-timeout", "from": "decision_round", "to": "halt", "label": "5min TTL", "variant": "dashed", "role": "error" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "解析规则",
+      "items": [
+        "scratch → 系统分配 .spaceassistant/runs/<sessionId>/",
+        "package primary 无路径 → output-location 决策",
+        "package 材料 → <primary>.materials/ 派生路径",
+        "用户显式路径按字面生效，项目路径永不重定向",
+        "意图明确时无需决策，直接进入租约与写入"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "决策协议",
+      "items": [
+        "决策绑定 requestId / sessionId / toolUseId / attempt",
+        "桌面 IPC 与 IM 私聊先到先得，败者返回 stale",
+        "改名 / 改目录后全量重跑解析与安全检查",
+        "5 分钟 TTL；owner 级 tombstone 10 分钟"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "登记语义",
+      "items": [
+        "只有写入成功才登记，失败不产生登记记录",
+        "登记含 canonicalPath、pathIdentityKey 与溯源",
+        "变更光标聚合本轮产物，完成后生成摘要",
+        "清理只删 scratch（reference 需显式 opt-in）"
+      ]
+    }
+  ]
+}

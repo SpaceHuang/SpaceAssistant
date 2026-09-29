@@ -10,7 +10,8 @@ import type { FallbackEligibleCause } from './fallbackToUser'
 
 const REASON_KEYS: Record<FallbackEligibleCause, string> = {
   unavailable: 'notification.approvalFallbackReasonUnavailable',
-  timeout: 'notification.approvalFallbackReasonTimeout'
+  timeout: 'notification.approvalFallbackReasonTimeout',
+  'agent-undetermined': 'notification.approvalFallbackReasonUndetermined'
 }
 
 const translators = new Map<AppLocale, ReturnType<typeof createHostTranslator>>()

@@ -157,6 +157,8 @@ import fs from 'fs/promises'
 import path from 'path'
 import { assertSafeToolInput } from './toolInputGuards'
 import { logAgentEvent } from './agentLogger/agentLogger'
+import { projectProcessResultForAgentLog } from '../src/shared/agentSafeProjection'
+import { isProcessToolName } from '../src/shared/processResultProjection'
 import {
   effectiveMaxTokensForBuiltinToolLoop,
   TOOL_LOOP_MAX_TOKENS_WITH_BUILTIN_TOOLS_MIN
@@ -781,6 +783,31 @@ async function runToolChatSessionInner(
     const errorText = typeof output?.error === 'string'
       ? output.error
       : typeof result.output === 'string' ? result.output : '执行失败'
+    const processData = output?.data && typeof output.data === 'object' && !Array.isArray(output.data)
+      ? output.data as Record<string, unknown>
+      : undefined
+    if (isProcessToolName(call.toolName)) {
+      let serialized = 'null'
+      try {
+        serialized = JSON.stringify(output?.data ?? null)
+      } catch {
+        serialized = '[unserializable]'
+      }
+      logAgentEvent(result.isError ?? output?.success === false ? 'warn' : 'info', 'tool.result', {
+        requestId: args.requestId,
+        sessionId: args.sessionId,
+        toolUseId: call.toolCallId,
+        toolName: call.toolName,
+        success: !(result.isError ?? output?.success === false),
+        ...projectProcessResultForAgentLog(output?.data, {
+          fingerprint: (value) => createHash('sha256').update(value).digest('hex')
+        }),
+        dataBytes: output?.data == null ? 0 : Buffer.byteLength(serialized, 'utf8'),
+        dataSha256: createHash('sha256').update(serialized).digest('hex'),
+        outputTruncated: Boolean(processData?.truncated),
+        outputRedacted: Boolean(processData && ('stdoutRedaction' in processData || 'stderrRedaction' in processData))
+      })
+    }
     if (source?.kind === 'safety-rejection') {
       if (noteRepeatedResult('safety', call.toolName, errorText) >= maxConsecutiveSafetyRejects) {
         throw new ToolLoopRoundLimitError(args.maxToolLoopRounds ?? maxConsecutiveSafetyRejects,

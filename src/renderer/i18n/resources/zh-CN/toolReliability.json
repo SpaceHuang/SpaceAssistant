@@ -1,0 +1,27 @@
+{
+  "deny": {
+    "forbidden": {
+      "rule": "该操作被安全规则无条件禁止（{{ruleId}}），修改参数也无法执行。如需放行此类操作，请直接联系用户调整策略。"
+    },
+    "insufficientInfo": {
+      "rule": "安全策略需要更多信息才能判定（{{ruleId}}）。请补充必要参数或说明用途后重试。"
+    },
+    "outOfBounds": {
+      "workdir": "目标 {{targetResolved}} 超出本次会话的工作目录基准 {{basisWorkDir}}（规则 {{ruleId}}）。请改用工作目录内的路径，或请求用户通过受信通道授权。"
+    }
+  },
+  "shell": {
+    "unsupportedStructure": "命令使用了当前安全解析器不支持的结构（{{structures}}），无法自动分析安全性：{{shell}}",
+    "deniedByRule": "命令命中危险规则（{{ruleId}}），不可执行"
+  },
+  "confirm": {
+    "payloadIncomplete": "审批载荷构造不完整：{{toolName}} 缺少字段 {{missingFields}}。这是工具调用载荷的构造问题，不是调用参数缺失。"
+  },
+  "grep": {
+    "paramConflict": "参数 {{conflictField}} 仅在 {{allowedCombos}} 下生效；当前 output_mode 为 {{currentMode}}。{{suggestedWrite}}",
+    "scopeNotice": "搜索范围：{{root}}；已跳过 {{skippedCount}} 个默认忽略目录（{{skippedNames}}），其中可能存在匹配内容"
+  },
+  "notExecuted": {
+    "agentUndetermined": "审批 Agent 无法判定该调用的安全性，已按保守策略拦截"
+  }
+}

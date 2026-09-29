@@ -36,7 +36,8 @@ export function isHostInitFailureCode(exitCode: unknown): boolean {
 /** 结构化匹配 executePreparedShellExecution 的宿主初始化失败结果（不依赖具体类型，便于复用）。 */
 export function shouldAttemptHostDegrade(result: { success?: boolean; error?: string; data?: unknown }): boolean {
   if (result.success) return false
-  if (result.error !== 'SHELL_PROCESS_EXIT') return false
+  // R4：run_shell 失败码已细分；宿主初始化失败匹配新旧两码（历史信封兼容）
+  if (result.error !== 'SHELL_PROCESS_EXIT' && result.error !== 'TOOL_EXEC_FAILED') return false
   const data = result.data as
     | { exitCode?: unknown; status?: unknown; timedOut?: unknown; interrupted?: unknown }
     | undefined

@@ -3,7 +3,7 @@ import http from 'http'
 import os from 'os'
 import path from 'path'
 import type { AddressInfo } from 'net'
-import { afterAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js'
 import type { McpServerProfile } from '../../src/shared/mcpTypes'
 import { McpConnectionManager, testConnection } from './mcpConnectionManager'
@@ -523,14 +523,15 @@ rl.on('line', (line) => {
     await manager.disconnect(sseProfile.id)
   })
 
-  it('classifies invalid SSE endpoints as invalid-endpoint', async () => {
+  it('classifies private-address SSE endpoints with the precise code', async () => {
     const profile = makeProfile({
       transport: 'sse',
       stdio: undefined,
       http: { endpoint: 'https://192.168.1.10/sse' }
     })
     const result = await testConnection(profile, { connectTimeoutMs: 1000 })
-    expect(result).toMatchObject({ ok: false, code: 'invalid-endpoint' })
+    expect(result).toMatchObject({ ok: false, code: 'private-address' })
+    expect(result.message).toContain('允许连接内网')
   })
 
   it('requires an endpoint and reports SSE transport diagnostics', async () => {
@@ -560,5 +561,42 @@ rl.on('line', (line) => {
     await vi.waitFor(() => {
       expect(diagnostics.some((entry) => entry.code === 'sse-diagnostic')).toBe(true)
     })
+  })
+})
+
+describe('resolveOauthAuthorizationServerOrigin 私网策略（评审追加）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('returns undefined for private endpoints by default, resolves origin when allowed', async () => {
+    const { resolveOauthAuthorizationServerOrigin } = await import('./mcpConnectionManager')
+    const resourceMetadata = JSON.stringify({ authorization_servers: ['https://auth.intranet.example.com'] })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === 'https://10.154.200.32/mcp') {
+          return new Response(null, {
+            status: 401,
+            headers: {
+              'www-authenticate': 'resource_metadata="https://10.154.200.32/.well-known/oauth-protected-resource"'
+            }
+          })
+        }
+        if (url === 'https://10.154.200.32/.well-known/oauth-protected-resource') {
+          return new Response(resourceMetadata, { status: 200 })
+        }
+        return new Response(null, { status: 404 })
+      })
+    )
+
+    // 默认：私网目标在 fetch 前被拦，挑战路径拿不到 metadata → undefined
+    await expect(resolveOauthAuthorizationServerOrigin('https://10.154.200.32/mcp')).resolves.toBeUndefined()
+
+    // 显式放行：挑战路径可达，解析出授权服务器 origin
+    await expect(
+      resolveOauthAuthorizationServerOrigin('https://10.154.200.32/mcp', { allowPrivateNetwork: true })
+    ).resolves.toBe('https://auth.intranet.example.com')
   })
 })

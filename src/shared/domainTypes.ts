@@ -563,9 +563,11 @@ export interface ToolCallResultPersisted {
   /** 工具未进入执行流程（被授权 / 确认 / 策略 / 预算拦下，或调用整体被放弃），区别于「执行了但失败」（需求 §7.6）。 */
   notExecuted?: true
   /** 未执行的原因码，便于聚合与今后回填区分「未执行」与「执行失败」。
-   *  agent_denied：安全审批 Agent 机审拒绝（P1-D，区别于 user_rejected 的真人拒绝）。 */
+   *  agent_denied：安全审批 Agent 机审拒绝（P1-D，区别于 user_rejected 的真人拒绝）。
+   *  agent_undetermined：审批 Agent 有效裁决「判不了」（R5；区别于 agent_denied 的判定拒绝，
+   *  统计口径要求两者可分——判定不了率 = agent_undetermined ÷ actor='agent' 的 confirm.outcome）。 */
   notExecutedReason?:
-    | 'user_rejected' | 'agent_denied' | 'confirm_timeout' | 'remote_read_only'
+    | 'user_rejected' | 'agent_denied' | 'agent_undetermined' | 'confirm_timeout' | 'remote_read_only'
     | 'authorization_revoked' | 'confirm_cancelled' | 'confirm_unavailable' | 'policy_denied' | 'budget_paused'
     | 'remote_budget_exhausted' | 'not_authorized' | 'unknown_tool'
     | 'model_output_truncated' | 'tool_error_threshold'

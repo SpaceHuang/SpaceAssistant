@@ -7,6 +7,7 @@ import { projectShellAgentLogFields } from '../shell/shellLogFields'
 const TARGET_EVENTS = new Set<AgentLogEventName>([
   'tool.request', 'tool.error', 'tool.result',
   'llm.silent_overflow',
+  'tool.request', 'tool.error', 'tool.result', 'tool.result.contract-violation',
   'trust.remove',
   'shell.security.deny', 'shell.trust.command', 'shell.path.confirm', 'shell.path.reject', 'shell.precheck', 'shell.confirm',
   'shell.exec.start', 'shell.exec.plan_failed', 'shell.exec.spawned', 'shell.exec.auto_background',
@@ -24,7 +25,7 @@ const COMMON_KEYS = new Set([
   'stderrBytes', 'stdoutSha256', 'stderrSha256', 'stdoutRedacted', 'stderrRedacted', 'outputPersistErrorCode',
   'terminationErrorCode', 'terminationSignal', 'treeKillVerified', 'outputLimitReached', 'captureCaseId',
   'progressCaseId', 'terminationCaseId', 'retryCount', 'retryExhausted', 'terminationReason', 'redacted',
-  'dataBytes', 'dataSha256', 'outputTruncated', 'outputRedacted'
+  'dataBytes', 'dataSha256', 'outputTruncated', 'outputRedacted', 'invariants', 'violationCount'
 ])
 
 function hash(value: unknown): string {

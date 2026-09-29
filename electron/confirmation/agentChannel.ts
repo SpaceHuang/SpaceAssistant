@@ -79,6 +79,12 @@ export function deriveClueExtras(facts: ConfirmRequest['facts']): Partial<Approv
       if (files.length > 0) extras.involvedFiles = files
     }
     if (s.kind === 'network-egress' && !extras.url && s.domains.length > 0) extras.url = s.domains[0]
+    // R3：MCP 调用事实 → 线索包（url 优先，其次 path；附脱敏入参摘要）
+    if (s.kind === 'mcp-invocation') {
+      if (!extras.url && s.targetUrl) extras.url = s.targetUrl
+      if (!extras.targetPath && !extras.url && s.targetPath) extras.targetPath = s.targetPath
+      if (!extras.argsDigest && s.argsDigest) extras.argsDigest = s.argsDigest
+    }
   }
   return extras
 }
@@ -315,12 +321,20 @@ export class AgentChannel implements ConfirmationChannel {
             cause: 'agent-approved',
             reason: result.verdict.reason
           }
-        : {
-            kind: 'rejected',
-            answererKind: 'agent',
-            cause: 'agent-deny',
-            reason: result.verdict.reason
-          }
+        // R5：undetermined 是有效裁决「判不了」——映射为独立 cause（缺此分支会静默退化 agent-deny）
+        : result.verdict.kind === 'undetermined'
+          ? {
+              kind: 'rejected',
+              answererKind: 'agent',
+              cause: 'agent-undetermined',
+              reason: result.verdict.reason
+            }
+          : {
+              kind: 'rejected',
+              answererKind: 'agent',
+              cause: 'agent-deny',
+              reason: result.verdict.reason
+            }
 
     this.deps.audit?.record({
       ts: Date.now(),

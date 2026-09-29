@@ -4,7 +4,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest'
 import type { AppDatabase } from '../database'
 import { createTempDatabase } from '../database/testHelpers'
 import { listProfiles } from './mcpConfigStore'
-import { addMcpServer } from './mcpService'
+import { addMcpServer, writeProfileFromInput } from './mcpService'
 import type { McpOAuthClientPreset } from './oauthClientPresets'
 
 vi.mock('../secureApiKey', () => ({
@@ -396,4 +396,30 @@ describe('withMcpSecretWriteLock 重入检测（v3 评审建议 4）', () => {
     expect(order).toEqual(['A-start', 'A-end', 'B'])
   })
 })
+})
+
+describe('writeProfileFromInput 转换点（评审 B1）', () => {
+  const baseInput = {
+    id: 'test-id',
+    name: 'Intranet',
+    enabled: false,
+    transport: 'streamable-http' as const,
+    timeoutSec: 60,
+    auth: { mode: 'none' as const },
+    enabledToolNames: []
+  }
+
+  it('carries allowPrivateNetwork into the http profile and preserves off semantics', () => {
+    const on = writeProfileFromInput({
+      ...baseInput,
+      http: { endpoint: 'https://intranet.example.com/mcp', allowPrivateNetwork: true }
+    })
+    expect(on.http).toEqual({ endpoint: 'https://intranet.example.com/mcp', allowPrivateNetwork: true })
+
+    const off = writeProfileFromInput({
+      ...baseInput,
+      http: { endpoint: 'https://example.com/mcp' }
+    })
+    expect(off.http).toEqual({ endpoint: 'https://example.com/mcp' })
+  })
 })

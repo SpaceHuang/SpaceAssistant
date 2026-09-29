@@ -1,0 +1,7 @@
+interface:
+  display_name: "任务开工标定"
+  short_description: "多阶段任务先划清可验证/需真机边界"
+  default_prompt: "使用 $task-scoping 先盘点这个多阶段方案的验收边界，并拆成可独立交付的阶段。"
+
+policy:
+  allow_implicit_invocation: true

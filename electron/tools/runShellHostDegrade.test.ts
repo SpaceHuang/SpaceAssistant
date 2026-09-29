@@ -55,7 +55,7 @@ function makeCtx(): ToolExecutionContext {
 function hostInitFailure(shellId = 'builtin-windows-powershell'): ToolExecutorResult {
   return {
     success: false,
-    error: 'SHELL_PROCESS_EXIT',
+    error: 'TOOL_EXEC_FAILED',
     data: {
       exitCode: 4294901760,
       status: 'failed',
@@ -145,7 +145,7 @@ describe('runShellWithHostFallback（P0-C 降级编排）', () => {
     const result = await runShellWithHostFallback(d)
     expect(d.runPrepared).not.toHaveBeenCalled()
     expect(result.success).toBe(false)
-    expect(result.error).toBe('SHELL_PROCESS_EXIT')
+    expect(result.error).toBe('TOOL_EXEC_FAILED')
     const data = result.data as { degradedFrom?: string; exitCode?: number; shell?: string }
     expect(data.degradedFrom).toBeUndefined()
     expect(data.exitCode).toBe(4294901760)

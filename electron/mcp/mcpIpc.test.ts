@@ -10,7 +10,7 @@ import { createTempDatabase } from '../database/testHelpers'
 import type { McpServerWriteInput } from '../../src/shared/mcpTypes'
 import { appendDiagnostic } from './mcpDiagnostics'
 import { listProfiles, saveToolCache } from './mcpConfigStore'
-import { registerMcpIpcHandlers } from './mcpIpc'
+import { registerMcpIpcHandlers, writeInputToProfile } from './mcpIpc'
 import * as mcpOauthService from './mcpOauthService'
 import { setSecret } from './mcpSecretStore'
 import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from '../toolRevocationRegistry'
@@ -974,5 +974,57 @@ rl.on('line', (line) => {
       expect(result.code).toBe('auth-required')
       expect(result.message).toContain('连接账户')
     })
+  })
+
+  describe('mcp:refresh-tools 私网拒绝透传（评审 B3 回归）', () => {
+    it('字面私网 IP endpoint：结果与 lastError.code 均为精确码 private-address', async () => {
+      await handlers['mcp:save-profiles']!(null, {
+        servers: [
+          makeInput({
+            id: 'private-blocked',
+            name: 'PrivateBlocked',
+            enabled: true,
+            transport: 'streamable-http',
+            stdio: undefined,
+            http: { endpoint: 'https://10.154.200.32/mcp' }
+          })
+        ]
+      })
+
+      const result = (await handlers['mcp:refresh-tools']!(null, { serverId: 'private-blocked' })) as {
+        ok: boolean
+        code?: string
+        message?: string
+      }
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe('private-address')
+      expect(result.message).toContain('允许连接内网')
+
+      const profile = listProfiles(db).find((p) => p.id === 'private-blocked')
+      expect(profile?.status).toBe('failed')
+      expect(profile?.lastError?.code).toBe('private-address')
+    })
+  })
+})
+
+describe('writeInputToProfile 转换点（评审 B1）', () => {
+  it('carries allowPrivateNetwork into the http profile and preserves off semantics', () => {
+    const on = writeInputToProfile(
+      makeInput({
+        transport: 'streamable-http',
+        stdio: undefined,
+        http: { endpoint: 'https://intranet.example.com/mcp', allowPrivateNetwork: true }
+      })
+    )
+    expect(on.http).toEqual({ endpoint: 'https://intranet.example.com/mcp', allowPrivateNetwork: true })
+
+    const off = writeInputToProfile(
+      makeInput({
+        transport: 'streamable-http',
+        stdio: undefined,
+        http: { endpoint: 'https://example.com/mcp' }
+      })
+    )
+    expect(off.http).toEqual({ endpoint: 'https://example.com/mcp' })
   })
 })

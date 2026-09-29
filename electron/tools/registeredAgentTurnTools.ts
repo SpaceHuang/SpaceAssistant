@@ -9,6 +9,8 @@ import { resolveRegisteredToolName } from './registeredToolName'
 import { projectAgentToolResult, serializeAgentToolResult } from '../../src/shared/agentToolResult'
 import { isProcessToolName } from '../../src/shared/processResultProjection'
 import { compactOversizedToolResultContent } from '../../src/shared/oversizedToolResult'
+import { logAgentEvent } from '../agentLogger/agentLogger'
+import { validateToolExecutorResultForTool, validateToolExecutorResultWithViolations } from './types'
 
 type TurnToolCall = Readonly<{
   invocationId: string
@@ -194,7 +196,12 @@ export function createRegisteredAgentTurnTools(input: {
         const withPolicyMetadata = raw && typeof raw === 'object' && !Array.isArray(raw)
           ? { ...raw as Record<string, unknown>, ...(typeof runtimeContext?.decisionRuleId === 'string' ? { decisionRuleId: runtimeContext.decisionRuleId } : {}), ...(runtimeContext?.autoApprovedWrite && typeof runtimeContext.autoApprovedWrite === 'object' ? { autoApprovedWrite: runtimeContext.autoApprovedWrite } : {}) }
           : raw
-        return input.mapExecutionResult?.(withPolicyMetadata, call) ?? mapSafeExecutionResult(withPolicyMetadata, call, input.resolveWorkspaceRoot?.() ?? input.workspaceRoot)
+        const processValidation = isProcessToolName(call.toolName) ? validateToolExecutorResultWithViolations(withPolicyMetadata) : undefined
+        for (const violation of processValidation?.violations ?? []) {
+          logAgentEvent('warn', 'tool.result.contract-violation', { requestId: input.requestId, toolUseId: call.toolCallId, toolName: call.toolName, invariant: violation.invariant, detail: violation.detail })
+        }
+        const normalized = processValidation?.result ?? validateToolExecutorResultForTool(call.toolName, withPolicyMetadata)
+        return input.mapExecutionResult?.(normalized, call) ?? mapSafeExecutionResult(normalized, call, input.resolveWorkspaceRoot?.() ?? input.workspaceRoot)
       } finally {
         combined.dispose()
         record.handle.release()

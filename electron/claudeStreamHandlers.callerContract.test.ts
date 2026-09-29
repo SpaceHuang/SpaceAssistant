@@ -32,7 +32,8 @@ const mockReadCompactionReplay = vi.fn(async () => ({ committed: [], rejected: [
 const mockReadSessionEvents = vi.fn(async () => [])
 
 vi.mock('./toolChatLoop', () => ({
-  runToolChatSession: (...args: unknown[]) => mockRunToolChatSession(...args)
+  runToolChatSession: (...args: unknown[]) => mockRunToolChatSession(...args),
+  DESKTOP_TOOL_LOOP_MAX_ROUNDS: 50
 }))
 
 vi.mock('./sessionEvents', () => ({
@@ -203,6 +204,8 @@ describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
     expect(ports.legacy?.appDb).toBe(db)
     // 桌面调用方不显式声明 lane（Core 缺省 desktop）
     expect(invocation.profile.lane).toBeUndefined()
+    // 评审 2.1：桌面 lane 必须有工具循环轮数上界（成功路径无既有熔断）
+    expect(invocation.limits.maxToolRounds).toBe(50)
     // 事件出口接线：fact / session 双出口 + 标题 / 文件树出口接 notifyMainWindow
     expect(invocation.events.onFact).toBeTypeOf('function')
     expect(invocation.events.onSessionEvent).toBeTypeOf('function')

@@ -42,6 +42,8 @@ export interface CapabilityContext {
   /** Phase 2 功能执行系列所需的主进程服务 */
   appDatabase?: unknown
   workDirManager?: unknown
+  /** R1：装配期解析的工作目录快照（单一事实源）；env.workspace 等能力消费，不读全局 active。 */
+  workspaceSnapshot?: import('../../src/shared/agent/workspace').WorkspaceSnapshot
 }
 
 /**

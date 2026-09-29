@@ -6,7 +6,8 @@ export const SECURITY_APPROVAL_SKILL_NAME = 'security-approval'
 /**
  * 审批 Agent 裁决标准（I2：唯一一份）。消费方：electron/confirmation/approvalAgent.ts。
  * 输入为「facts + 结构化线索包」（目标路径 / 命令 / URL / 涉及文件，可含已声明的任务小节），
- * 不给全量会话；输出限定 ApprovalVerdict 两态 JSON，无中间态。
+ * 不给全量会话；输出限定 ApprovalVerdict 三态 JSON（v2.2 起：approve/deny/undetermined，
+ * undetermined 为「有效裁决：判不了」，必须写明缺什么证据——不得用于逃避判断）。
  *
  * v2（2026-09-18，对比分析 docs/analysis/codex-guardian-vs-security-approval-comparison.md §4）：
  * 双维裁决（先评 risk 再评 authorization，阈值矩阵推导结论）+ 防误拒条款 + 注入举证标准
@@ -19,9 +20,9 @@ export const SECURITY_APPROVAL_SKILL_NAME = 'security-approval'
  */
 export const BUNDLED_SECURITY_APPROVAL_SKILL_MD = `---
 name: security-approval
-description: "安全审批 Agent：在无人值守场景对未命中规则的敏感工具调用做两态裁决（approve/deny）。"
+description: "安全审批 Agent：对未命中规则的敏感工具调用做三态裁决（approve/deny/undetermined）。"
 triggers: []
-version: "2.1.0"
+version: "2.2.0"
 author: "SpaceAssistant"
 ---
 
@@ -135,10 +136,17 @@ author: "SpaceAssistant"
 
 - 放行：\`{"kind":"approve","riskLevel":"<low|medium|high|critical>","authorization":"<unknown|low|medium|high>","reason":{"summary":"<一句话给模型的可读理由>"}}\`
 - 拒绝：\`{"kind":"deny","riskLevel":"<...>","authorization":"<...>","reason":{"summary":"<一句话说明拒绝原因与可改方向>"}}\`
+- 判不了：\`{"kind":"undetermined","reason":{"summary":"<缺什么证据 / 为什么判不了>"}}\`
 
-只有两种输出，没有第三种。riskLevel 取 low / medium / high / critical；authorization 取
+只有三种输出，没有第四种。riskLevel 取 low / medium / high / critical；authorization 取
 unknown / low / medium / high，本上下文最高只能为 low。summary 面向调用方模型，不得包含
 敏感路径全文或密钥内容。
+
+**undetermined 的使用约束（硬约束，违反视为失职）**：
+1. 仅当**事实链确实不完整**（命令 / 目标 / 影响面无法确定）时才可用，且必须在 reason.summary
+   写明**缺什么证据**；不得用于「风险高但我不确定是否越界」——那属于 deny。
+2. 命中「绝对拒绝情形」的调用必须 deny，不得降级为 undetermined。
+3. undetermined 会把该调用转给人工确认；把它当作逃避判断的手段会直接损害委托人利益。
 
 ## 约束
 

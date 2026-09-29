@@ -39,6 +39,19 @@ export async function precheckRunShellTool(args: {
     args.userDataDir
   )
 
+  // R5：仅 deny 预检短路；unsupported 不再产出 shellPrecheckDeny——
+  // 该事实随 analysis 下传，由 gate 提取为 shell-unsupported-structure 信号走引擎（§4.5.1 零特例）
+  // B2（评审 2026-09-28）：段数超限保留结构化短路——gate 的 extractor 会裸调
+  // parseShellSegments（无捕获），>50 段命令会以未捕获异常炸掉整轮工具循环；
+  // 该类命令本就无法安全分析，fail-closed 且错误形态可读。
+  if (analysis.verdict === 'unsupported' && analysis.unsupportedReason === 'too-many-segments') {
+    return {
+      ok: false,
+      error: analysis.denyReason ?? '命令段数过多，无法进行安全分析，已拒绝执行',
+      auditReason: analysis.denyReason ?? 'too_many_segments',
+      denyType: 'strong'
+    }
+  }
   if (analysis.verdict === 'deny') {
     return {
       ok: false,

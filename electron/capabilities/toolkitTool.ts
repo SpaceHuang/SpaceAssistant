@@ -51,7 +51,8 @@ export function buildCapabilityContext(ctx: ToolExecutionContext): CapabilityCon
       return stagehandService.detectDependencies(force)
     },
     appDatabase: ctx.appDatabase,
-    workDirManager: ctx.workDirManager
+    workDirManager: ctx.workDirManager,
+    workspaceSnapshot: ctx.workspaceSnapshot
   }
 }
 

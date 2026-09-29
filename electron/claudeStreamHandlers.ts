@@ -9,7 +9,7 @@ import { resolveLlmCredentialsForModel } from './llmServiceResolver'
 import { MODEL_BASELINE } from '../src/shared/modelBaseline'
 import { requireInvocationAnthropicRoute } from './runtime/invocationProviderRoute'
 import { getDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
-import { runToolChatSession } from './toolChatLoop'
+import { runToolChatSession, DESKTOP_TOOL_LOOP_MAX_ROUNDS } from './toolChatLoop'
 import { assembleInvocation } from './runtime/invocationAssembler'
 import { createAgentSdkSessionEventProjector } from './runtime/agentSdkSessionEventProjection'
 import { isAppLocale } from '../src/shared/locale'
@@ -48,6 +48,8 @@ export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
   getWorkDir: () => string
   resolveWorkDirForSession: (sessionId: string) => string
+  /** R1：桌面链路注入 manager，使装配期快照与调用边界 refresh() 可解析会话绑定（不再只传回合起点字符串） */
+  getWorkDirManager?: () => import('./workDirManager').WorkDirManager | undefined
   getUserDataPath: () => string
   getToolsConfig: () => ToolsConfig
   getBrowserConfig: () => BrowserConfig
@@ -470,11 +472,15 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           browserConfig: deps.getBrowserConfig(),
           shellConfig: deps.getShellConfig(),
           wikiConfig: deps.getWikiConfig(),
+          // 评审 2.1：桌面 lane 必须有工具循环轮数上界——「模型持续产出成功工具调用」的路径
+          // 无任何既有熔断，不传值时 while(true) 无上界、token 无界消耗。
+          maxToolLoopRounds: DESKTOP_TOOL_LOOP_MAX_ROUNDS,
           // §6 桌面授权证据：当前 turn 用户消息摘要进审批线索包「已声明的任务」段
           approvalTaskDigest: buildApprovalTaskDigest(
             authoritative.messages.find((m) => m.id === authoritative.currentUserMessageId)?.content ?? ''
           ),
           workDir: sessionWorkDir,
+          ...(deps.getWorkDirManager ? { workDirManager: deps.getWorkDirManager() } : {}),
           userDataDir,
           getApiKey,
           appDb: deps.getAppDatabase(),

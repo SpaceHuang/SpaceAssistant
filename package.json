@@ -1,6 +1,6 @@
 {
   "name": "spaceassistant",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "license": "Apache-2.0",
   "description": "Electron + React + TypeScript desktop assistant",
@@ -59,6 +59,8 @@
     "pack:mac": "npm run prepare:rg -- --target=darwin-x64 --target=darwin-arm64 && npm run build && electron-builder --mac",
     "pack:linux": "npm run build && electron-builder --linux",
     "build:agent-provider-pi-ai": "tsc -p packages/agent-provider-pi-ai/tsconfig.build.json",
+    "check:tool-result-invariants": "node scripts/scan-tool-result-invariants.mjs",
+    "test:tool-reliability": "npm run test:electron && npm run check:tool-result-invariants",
     "check:pi-ai-runtime-closure": "node scripts/check-pi-ai-runtime-closure.mjs"
   },
   "dependencies": {

@@ -17,7 +17,7 @@ import { resolveWeChatSession } from './weChatSessionResolver'
 import { tryClaimOrRelease, createProcessedClaimFinalizer } from '../remote/imCommandRouterHelpers'
 import { evaluateImInboundGuard, revalidateImInboundGuard, type ImAuthSnapshot } from '../remote/imInboundGuard'
 import type { IncomingMessage } from '@wechatbot/wechatbot'
-import { inboundSummaryForLog } from './weChatCliLogFields'
+import { inboundSummaryForLog, previewText, WECHAT_CLI_LINE_PREVIEW_MAX } from './weChatCliLogFields'
 import { logWeChatCliEvent } from './weChatCliLogger'
 import { auditEntryToLoggerPayload } from '../remote/remoteSessionSwitchAudit'
 import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
@@ -81,6 +81,20 @@ export class WeChatCommandRouter {
   }
 
   async handleInbound(msg: WeChatInboundMessage, inboundRaw?: IncomingMessage): Promise<void> {
+    // 入站处理链含多处 `await bot.reply(...)` 与 auditLogger.append（session 过期/凭据缺失、磁盘故障时
+    // reject）。本链路被 fire-and-forget 分发调用，任何 rejection 都会沿链逃逸并崩溃主进程（评审 1.1）——
+    // 顶层兜底记日志并吞掉；分发层的 .catch 仅作为防御纵深保留。
+    try {
+      await this.handleInboundUnchecked(msg, inboundRaw)
+    } catch (error) {
+      logWeChatCliEvent('error', 'wechat.inbound.handler_failed', {
+        messageId: msg.messageId,
+        errorPreview: previewText(error instanceof Error ? error.message : String(error), WECHAT_CLI_LINE_PREVIEW_MAX)
+      })
+    }
+  }
+
+  private async handleInboundUnchecked(msg: WeChatInboundMessage, inboundRaw?: IncomingMessage): Promise<void> {
     this.lastInboundAt = Date.now()
     logWeChatCliEvent('info', 'wechat.inbound.received', inboundSummaryForLog(msg))
     const config = mergeWeChatConfig(this.deps.getWeChatConfig())
@@ -477,4 +491,21 @@ export class WeChatCommandRouter {
       }
     }
   }
+}
+
+/**
+ * fire-and-forget 分发微信 SDK 入站消息（评审 1.1）：handleSdkInbound 的 parse 与处理链中任何
+ * rejection 都不得逃逸——Node ≥15 默认 throw 模式下逃逸 rejection 会直接崩溃主进程。
+ * 处理链失败由 handleInbound 顶层兜底记日志；此处 .catch 是防御纵深（兜 parse 阶段与兜底自身
+ * 失效的场景），对齐飞书侧 feishu.event.inbound_dispatch_failed 写法。
+ */
+export function dispatchWeChatSdkInbound(router: WeChatCommandRouter | null | undefined, msg: IncomingMessage): void {
+  void router?.handleSdkInbound(msg).catch((error) => {
+    // messageId 是 parse 后的字段；dispatch 层拿到的是 SDK raw——用同款推导兜底（parse 失败时 client_id 可能缺席）。
+    const messageIdHint = typeof msg.raw?.client_id === 'string' && msg.raw.client_id ? msg.raw.client_id : 'unparsed'
+    logWeChatCliEvent('error', 'wechat.event.inbound_dispatch_failed', {
+      messageId: messageIdHint,
+      errorPreview: previewText(error instanceof Error ? error.message : String(error), WECHAT_CLI_LINE_PREVIEW_MAX)
+    })
+  })
 }

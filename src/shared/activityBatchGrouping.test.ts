@@ -184,4 +184,21 @@ describe('isActivityBatchInProgress', () => {
       })
     ).toBe(true)
   })
+
+  // ---- 活动时间线稳定性：主进程工具记录不携带 startedAt；旧实现 fallback 为
+  // i*1000+999 且 completedAt 优先 → 工具进入终态瞬间排序时间戳从伪值跳到真实值，
+  // 批次拆分/成员换位（整块闪动）。fallback 必须是发起序（timestamp+i），终态不参与。
+  it('resolves tools without startedAt by invocation order, ignoring completedAt', () => {
+    const message = {
+      content: '',
+      timestamp: 1000,
+      toolCalls: [
+        { ...baseTool('t1'), status: 'completed', completedAt: 9000 },
+        { ...baseTool('t2'), status: 'executing' }
+      ]
+    }
+    const resolve = buildActivityItemTimestampResolver(message)
+    expect(resolve({ kind: 'tool', toolId: 't1' })).toBe(1001)
+    expect(resolve({ kind: 'tool', toolId: 't2' })).toBe(1002)
+  })
 })

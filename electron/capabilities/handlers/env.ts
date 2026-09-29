@@ -193,23 +193,49 @@ const workspaceCapability: CapabilityDescriptor = {
   keywords: ['工作目录', '目录', 'workspace', '当前目录', '路径'],
   paramsSchema: z.object({}).passthrough(),
   paramsDoc: '{ }；无参数',
-  returnsDoc: '{ workDir, profiles?: [{ id, name, path, isBound, isDefault }] }',
+  returnsDoc: '{ workDir, profiles?: [{ id, name, path, isBound, isDefault }], source?, revision?, profileId? }',
   risk: 'read',
   handler: async (_params, ctx) => {
+    // R1：workDir 唯一事实源是装配期快照；不再读「全局 active profile」（旁路已删除）。
+    if (ctx.workspaceSnapshot) {
+      const snapshot = ctx.workspaceSnapshot
+      const manager = ctx.workDirManager as
+        | {
+            listProfiles(): Array<{ id: string; name: string; path: string; isDefault?: boolean }>
+          }
+        | undefined
+      return {
+        workDir: snapshot.rootPath,
+        profileId: snapshot.profileId,
+        source: snapshot.source,
+        revision: snapshot.revision,
+        ...(manager && typeof manager.listProfiles === 'function'
+          ? {
+              profiles: manager.listProfiles().map((p) => ({
+                id: p.id,
+                name: p.name,
+                path: p.path,
+                isBound: p.id === snapshot.profileId,
+                isDefault: Boolean(p.isDefault)
+              }))
+            }
+          : {})
+      }
+    }
     const manager = ctx.workDirManager as
       | {
           listProfiles(): Array<{ id: string; name: string; path: string; isDefault?: boolean }>
           getActiveProfileId(): string | undefined
-          getActiveWorkDir?(): string
         }
       | undefined
     if (!manager || typeof manager.listProfiles !== 'function') {
       return { workDir: ctx.workDir }
     }
+    // 过渡兼容：无快照时 workDir 直接用 ctx.workDir（R1：全局 active 旁路已删除，
+    // isBound 仍按 active 列表口径标注，仅列表展示用）
     const activeProfileId = manager.getActiveProfileId()
-    const activeWorkDir = manager.getActiveWorkDir?.()
     return {
-      workDir: activeWorkDir || ctx.workDir,
+      workDir: ctx.workDir,
       profiles: manager.listProfiles().map((p) => ({
         id: p.id,
         name: p.name,

@@ -38,7 +38,9 @@ function isWindowsAbsolute(value: string): boolean {
 }
 
 function normalize(value: string, platform: 'win32' | 'posix' = isWindowsAbsolute(value) ? 'win32' : 'posix'): string {
-  const resolved = isWindowsAbsolute(value) ? path.win32.normalize(value) : path.resolve(value)
+  // 语法三态分派：win32 绝对 → win32 API；其余（POSIX 绝对/相对）→ posix API。
+  // 进程平台相关的 path.resolve 在 win32 上会把 '/etc/hosts' 漂移成 'E:\etc\hosts'（当前盘符），导致 system-dir 漏判。
+  const resolved = isWindowsAbsolute(value) ? path.win32.normalize(value) : path.posix.normalize(value)
   const normalized = resolved.replace(/\\/g, '/').replace(/\/+$/, '')
   return platform === 'win32' ? normalized.toLowerCase() : normalized
 }
@@ -94,7 +96,8 @@ export async function probeReadPathFact(input: ProbeInput): Promise<ReadPathFact
     throw new ReadPathProbeError(code || 'UNKNOWN')
   }
   const canonical = async (value: string) => {
-    try { return await fs.realpath(value) } catch (error) { return fallbackIfMissing(error, path.resolve(value)) }
+    // env 路径按自身语法解析：POSIX 语法失败时保持 POSIX 形态（不落进程平台的盘符漂移）。
+    try { return await fs.realpath(value) } catch (error) { return fallbackIfMissing(error, path.posix.resolve(value)) }
   }
   const canonicalPlatformPath = async (value: string) => {
     if (!isWindowsAbsolute(value)) return canonical(value)
@@ -108,8 +111,15 @@ export async function probeReadPathFact(input: ProbeInput): Promise<ReadPathFact
     customSensitivePrefixes: await Promise.all(input.customSensitivePrefixes.map(canonicalPlatformPath))
   }
   const rawIsWindowsAbsolute = isWindowsAbsolute(input.rawPath)
-  const pathApi = rawIsWindowsAbsolute ? path.win32 : path
-  const lexical = rawIsWindowsAbsolute ? path.win32.normalize(input.rawPath) : path.resolve(effectiveInput.workDir, input.rawPath)
+  // 三态分派：win32 绝对 → win32 API；POSIX 绝对 → posix API；相对路径 → 按 workDir 的语法 resolve。
+  const pathApi = rawIsWindowsAbsolute
+    ? path.win32
+    : input.rawPath.startsWith('/')
+      ? path.posix
+      : isWindowsAbsolute(effectiveInput.workDir) ? path.win32 : path.posix
+  const lexical = rawIsWindowsAbsolute
+    ? path.win32.normalize(input.rawPath)
+    : pathApi.resolve(effectiveInput.workDir, input.rawPath)
   let normalizedPath = lexical
   let targetKind: ReadTargetKind = 'missing'
   let resolvedKind: 'file' | 'directory' | 'special' | undefined
@@ -133,6 +143,9 @@ export async function probeReadPathFact(input: ProbeInput): Promise<ReadPathFact
       while (parent !== pathApi.dirname(parent)) {
         try {
           const realParent = await fs.realpath(parent)
+          // 跨语法守卫：POSIX 语法路径在 win32 上父目录可能探到真实存在的盘符形态答案
+          // （如 E:\etc 恰好存在），采信会产出混合分隔符形态并漏判 system-dir；不采信则保持 lexical。
+          if (pathApi === path.posix && isWindowsAbsolute(realParent)) break
           normalizedPath = pathApi.join(realParent, pathApi.relative(parent, lexical))
           break
         } catch (error) {

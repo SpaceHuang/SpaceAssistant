@@ -43,7 +43,8 @@
     "commandSummary": "Command: {{command}}",
     "endpointSummary": "Endpoint: {{endpoint}}",
     "untestedHint": "Unnamed server",
-    "noToolsEnabledWarning": "{{total}} tools discovered but none enabled; they will not be available in chats. Select tools in the list and save"
+    "noToolsEnabledWarning": "{{total}} tools discovered but none enabled; they will not be available in chats. Select tools in the list and save",
+    "privateNetworkBlocked": "Connection rejected: the endpoint resolved to a private/reserved address. If this service is really deployed on your intranet, enable \"Allow private network addresses\" in its edit form and retry (https required)."
   },
   "form": {
     "basicTitle": "Basic info",
@@ -87,7 +88,11 @@
     "skippedHint": "{{count}} tools were skipped after validation",
     "diagnosticsTitle": "Recent errors",
     "diagnosticsEmpty": "No error records",
-    "clearDiagnostics": "Clear records"
+    "clearDiagnostics": "Clear records",
+    "allowPrivateNetworkLabel": "Allow private network addresses",
+    "allowPrivateNetworkHelpTitle": "Why is this off by default?",
+    "allowPrivateNetworkHelpBody": "MCP connections are made by the app main process. By default only public addresses and the local loopback (localhost) are allowed, preventing a malicious or tampered endpoint from using the app to reach intranet services (cloud metadata, admin panels, databases). When enabled, this server may resolve and connect to private network addresses; DNS is still re-resolved and re-checked on every connection. Only enable this for trusted services that are genuinely deployed on your intranet.When enabled, OAuth authorization-server discovery is likewise allowed to reach intranet addresses.",
+    "allowPrivateNetworkHttpsNote": "The server must provide https; plaintext http remains loopback-only so access credentials are never sent in cleartext across the intranet."
   },
   "messages": {
     "saved": "MCP server saved",

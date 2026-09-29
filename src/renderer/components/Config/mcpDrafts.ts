@@ -40,7 +40,7 @@ export type McpServerDraft = {
     env: McpEnvDraft[]
     commandTrustedAt?: string
   }
-  http?: { endpoint: string }
+  http?: { endpoint: string; allowPrivateNetwork?: boolean }
   enabledToolNames: string[]
   createdAt?: string
   updatedAt?: string
@@ -100,7 +100,9 @@ export function initMcpServerDraft(profile: McpServerProfile): McpServerDraft {
           }
         }
       : {}),
-    ...(profile.http ? { http: { endpoint: profile.http.endpoint } } : {}),
+    ...(profile.http
+      ? { http: { endpoint: profile.http.endpoint, allowPrivateNetwork: profile.http.allowPrivateNetwork === true } }
+      : {}),
     enabledToolNames: profile.enabledToolNames,
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt
@@ -132,7 +134,11 @@ export function draftToWriteInput(draft: McpServerDraft): McpServerWriteInput {
       }
     : undefined
   const http = (draft.transport === 'streamable-http' || draft.transport === 'sse') && draft.http
-    ? { endpoint: draft.http.endpoint }
+    ? {
+        endpoint: draft.http.endpoint,
+        // 仅在显式开启时写入，false 不落库（默认关闭语义）
+        ...(draft.http.allowPrivateNetwork === true ? { allowPrivateNetwork: true as const } : {})
+      }
     : undefined
   // 若同名环境变量已重新填入新值，则之前的删除标记应被抵消，避免误清 Secret
   const activeEnvKeys = new Set((draft.stdio?.env ?? []).map((e) => e.key))
@@ -184,6 +190,7 @@ export function isMcpDraftDirty(
       (draft.stdio?.env ?? []).map((e) => ({ key: e.key, valuePresent: e.valuePresent }))
     ) ||
     (profile.http?.endpoint ?? '') !== (draft.http?.endpoint ?? '') ||
+    (profile.http?.allowPrivateNetwork === true) !== (draft.http?.allowPrivateNetwork === true) ||
     !jsonEqual(profile.enabledToolNames, draft.enabledToolNames) ||
     (draft.clearSecretKinds?.length ?? 0) > 0 ||
     (draft.stdio?.env.some((e) => e.clear) ?? false)

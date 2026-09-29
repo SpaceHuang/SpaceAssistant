@@ -15,7 +15,7 @@ import { WeChatProcessedStore } from './weChatProcessedStore'
 import { WeChatAuditLogger } from './weChatAuditLogger'
 import { WeChatImChannel } from './weChatImChannel'
 import { WeChatBotService, detectWeChatSdk } from './weChatBotService'
-import { WeChatCommandRouter } from './weChatCommandRouter'
+import { WeChatCommandRouter, dispatchWeChatSdkInbound } from './weChatCommandRouter'
 import type { WorkDirManager } from '../workDirManager'
 import { getMainWindow } from '../windowRef'
 import { mergeToolsConfig } from '../../src/shared/domainTypes'
@@ -85,7 +85,7 @@ export function createWeChatBundle(deps: {
     appVersion: deps.appVersion,
     getWebContents: getWc,
     onInbound: (msg) => {
-      void bundle?.router?.handleSdkInbound(msg)
+      dispatchWeChatSdkInbound(bundle?.router, msg)
     }
   })
 

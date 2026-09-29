@@ -61,6 +61,11 @@ import { auditFactId } from './auditFactId'
 import { effectiveActionFor, type PolicyPackage } from '../../src/shared/policy/policyPackages'
 import type { ShellAnalysisResult } from '../shell/shellTypes'
 import { classifyWikiPath, resolveWikiRelPath } from '../wiki/wikiPaths'
+import { buildSafetyDiagnostics, type SafetyDiagnostics } from '../../src/shared/confirmation/diagnostics'
+import { extractMcpInvocationSignal } from './extractors/mcpPayloadExtractor'
+import { approvalPayloadDeclForMcp, assertApprovalPayloadComplete } from './extractors/approvalPayloadDecl'
+import type { WorkspaceSnapshot } from '../../src/shared/agent/workspace'
+import { sanitizeAgentText } from '../../src/shared/agentSafeText'
 import type { ShellSecurityHints } from '../../src/shared/domainTypes'
 
 
@@ -82,6 +87,8 @@ export interface ToolCallGateArgs {
   sessionId: string
   workDir: string
   userDataDir: string
+  /** R1/R2：装配期解析的工作目录快照（诊断 basis 的权威来源；缺省用 workDir 字符串兜底） */
+  workspace?: WorkspaceSnapshot
   /** 显式 lane（偏差 21：由驱动源层解析后随调用传入）；缺省回退 remoteContext 推导，最终 desktop。 */
   lane?: ExecutionLane
   remoteContext?: RemoteContext
@@ -188,6 +195,8 @@ export interface ToolCallGateResult {
   mcpEntry?: McpToolSnapshotEntry
   /** run_script 原始分析（拒绝消息桥接 / 日志 patterns）。 */
   rawScriptAnalysis?: ScriptAnalysisResult
+  /** R2：结构化诊断（deny / require-confirm 与 decision 成对出现；auto-allow 不产）。 */
+  diagnostics?: SafetyDiagnostics
 }
 
 function laneOf(remoteContext: RemoteContext | undefined, explicitLane?: ExecutionLane): ExecutionLane {
@@ -413,9 +422,21 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     // 由 mcp-readonly-allow 规则放行（strict 套餐自动上调为 ask）。actionClass：注解安全 → read，否则 write。
     const annotationsSafe =
       args.mcpEntry.annotations?.readOnlyHint === true && args.mcpEntry.annotations.destructiveHint !== true
+    const mcpActionClass = annotationsSafe ? ('read' as const) : ('write' as const)
+    const mcpInvocation = extractMcpInvocationSignal({
+      serverId: args.mcpEntry.serverId,
+      toolName: args.mcpEntry.originalName,
+      toolInput: args.toolInput,
+      annotationsSafe,
+      actionClass: mcpActionClass,
+      inputSchema: args.mcpEntry.inputSchema
+    })
+    // R3：载荷完整性（声明来自 server inputSchema.required；未声明不误报）
+    const payloadDecl = approvalPayloadDeclForMcp(args.mcpEntry.inputSchema)
+    const payloadCheck = assertApprovalPayloadComplete(payloadDecl, args.toolInput)
     facts = {
       toolName: args.toolName,
-      actionClass: annotationsSafe ? 'read' : 'write',
+      actionClass: mcpActionClass,
       baseRiskLevel: 'medium',
       signals: [
         {
@@ -431,11 +452,34 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
                 toolName: args.mcpEntry.originalName
               } as const
             ]
-          : [])
+          : []),
+        mcpInvocation,
+        ...(payloadCheck.ok
+          ? []
+          : [{ kind: 'payload-incomplete' as const, toolName: args.toolName, missing: payloadCheck.missing }])
       ],
-      summary: { text: `MCP ${args.mcpEntry.serverName}/${args.mcpEntry.originalName}` }
+      // 分类依据写进摘要（schema-heuristic 时明示「依据：schema 无写声明」，供规则层与审计追溯）
+      summary: {
+        text: `MCP ${args.mcpEntry.serverName}/${args.mcpEntry.originalName}${
+          mcpInvocation.kind === 'mcp-invocation' && mcpInvocation.classificationBasis === 'schema-heuristic'
+            ? '（分类依据：schema 无写声明）'
+            : ''
+        }`
+      }
     }
     result.mcpEntry = args.mcpEntry
+    if (!payloadCheck.ok) {
+      audit.record({
+        ts: Date.now(),
+        lane,
+        actor: 'system',
+        event: 'confirm.payload-incomplete',
+        sessionId: args.sessionId,
+        toolName: args.toolName,
+        factsSummary: `payload-incomplete: ${payloadCheck.missing.join(',')}`,
+        reason: 'approval payload missing declared required fields (construction, not invocation args)'
+      })
+    }
   } else if (args.toolName === 'run_script') {
     const code = typeof args.toolInput.code === 'string' ? args.toolInput.code : ''
     const requestedLanguage = typeof args.toolInput.language === 'string' ? args.toolInput.language : 'python'
@@ -632,6 +676,23 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   }
 
   if (args.toolName === 'run_shell' && facts) facts.signals.push(...shellPathSignals)
+  // ===== R5：shell unsupported 事实下传（gate 层零特例——不派发 desktop 规则，照常进引擎）=====
+  if (args.toolName === 'run_shell' && result.shellPrecheck) {
+    const analysis = result.shellPrecheck.analysis
+    if (analysis.verdict === 'unsupported') {
+      facts = {
+        ...facts,
+        signals: [
+          ...facts.signals,
+          {
+            kind: 'shell-unsupported-structure',
+            structures: analysis.unsupportedStructures ?? [],
+            reason: analysis.unsupportedReason ?? 'structure'
+          }
+        ]
+      }
+    }
+  }
 
   // ===== 执行上下文（预算/授权只读 peek；记账留主循环）=====
   const context: ExecutionContext = { lane, origin, sessionId: args.sessionId }
@@ -884,6 +945,33 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   }
 
 
+  // ===== R2：结构化诊断（deny / require-confirm 与 decision 成对；路径事实经脱敏） =====
+  if (decision.type === 'deny' || decision.type === 'require-confirm') {
+    const ruleDenyClass =
+      rules.find((r) => r.id === decision.ruleId)?.denyClass ??
+      (args.effectiveRules.find((r) => r.id === decision.ruleId)?.denyClass)
+    const targets = facts.signals
+      .filter((sig) => sig.kind === 'path-target')
+      .map((sig) => {
+        const p = (sig as { path: string }).path
+        return {
+          raw: sanitizeAgentText(p).text,
+          resolved: sanitizeAgentText(p).text,
+          zone: (sig as { zone: import('../../src/shared/confirmation/types').PathZone }).zone
+        }
+      })
+    const diagnostics = buildSafetyDiagnostics({
+      ruleId: decision.ruleId,
+      ruleSource: args.policyOrigins?.[decision.ruleId]?.source,
+      ruleDenyClass,
+      workspace: args.workspace,
+      workDir: args.workDir,
+      targets,
+      ...(decision.type === 'deny' ? { cause: 'rules-violated' as const } : {})
+    })
+    result.diagnostics = diagnostics
+  }
+
   // 判定即记录（§5.6）：policy.decision 事件
   if (lane === 'desktop' && (args.toolName === 'write_file' || args.toolName === 'edit_file')) {
     audit.record({
@@ -922,6 +1010,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     ...(args.policyOrigins?.[decision.ruleId]
       ? { ruleOrigin: args.policyOrigins[decision.ruleId]!.source }
       : {}),
+    ...(result.diagnostics ? { denyClass: result.diagnostics.denyClass, basis: result.diagnostics.basis } : {}),
     ...(args.factsProvider ? { factSources } : {}),
     actor: 'system'
   })

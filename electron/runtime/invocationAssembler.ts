@@ -32,6 +32,7 @@ import { getSecurityAuditLog } from '../confirmation/audit'
 import { McpConnectionManager } from '../mcp/mcpConnectionManager'
 import { createHostedMcpToolRegistry } from '../mcp/hostedMcpRegistry'
 import { TypedToolRegistry } from '../tools/plannedToolRegistry'
+import { createWorkspaceSnapshotTracker } from '../workDirSnapshot'
 import { getDefaultAgentRuntime } from './agentRuntimeDefaults'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { createAgentSdkProviderRecovery } from './agentSdkProviderRecovery'
@@ -160,6 +161,35 @@ export interface AgentInvocationMaterials {
   applicationAdmission?: AgentHostPorts['applicationAdmission']
   resourceLocks?: import('./agentRuntime').ResourceLockRegistryLike
   toolExecutionConcurrency?: number
+}
+
+/** R1：会话工作目录单一事实源——装配期解析快照，调用边界经 refresh() 跟随绑定变更。 */
+function buildWorkspacePorts(materials: AgentInvocationMaterials, db: AppDatabase | undefined): AgentHostPorts['workspace'] {
+  const tracker = createWorkspaceSnapshotTracker({
+    db,
+    sessionId: materials.sessionId,
+    workDirManager: materials.workDirManager as import('../workDirManager').WorkDirManager | undefined,
+    fallbackWorkDir: materials.workDir,
+    onRebound: (e) => {
+      getSecurityAuditLog().record({
+        ts: Date.now(),
+        lane: materials.lane ?? 'desktop',
+        actor: 'system',
+        event: 'workspace.rebound',
+        sessionId: e.sessionId,
+        reason: JSON.stringify({ fromProfileId: e.fromProfileId, toProfileId: e.toProfileId, revision: e.revision })
+      })
+    }
+  })
+  const initial = tracker.snapshot()
+  return {
+    workDir: initial.rootPath || materials.workDir,
+    snapshot: () => tracker.snapshot(),
+    refresh: () => tracker.refresh(),
+    ...(materials.workDirManager !== undefined ? { workDirManager: materials.workDirManager } : {}),
+    ...(materials.resolveWorkDir !== undefined ? { resolveWorkDir: materials.resolveWorkDir } : {}),
+    userDataDir: materials.userDataDir
+  }
 }
 
 /** 把宿主 FloatingNotificationManager 包装为 events.notify 出口实现（§5.5 收口）。 */
@@ -1191,12 +1221,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     }),
     diagnostics,
     answerer,
-    workspace: {
-      workDir: materials.workDir,
-      ...(materials.workDirManager !== undefined ? { workDirManager: materials.workDirManager } : {}),
-      ...(materials.resolveWorkDir !== undefined ? { resolveWorkDir: materials.resolveWorkDir } : {}),
-      userDataDir: materials.userDataDir
-    },
+    workspace: buildWorkspacePorts(materials, db),
     credentials: {
       resolveApiKey: () => materials.getApiKey(),
       ...(materials.baseUrl !== undefined ? { networkTarget: { baseUrl: materials.baseUrl } } : {})

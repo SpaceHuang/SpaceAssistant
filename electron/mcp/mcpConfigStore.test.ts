@@ -9,6 +9,7 @@ import {
   clearToolCache,
   deleteServer,
   getToolCache,
+  appendServer,
   listProfiles,
   refreshProfilesSecretFlags,
   saveProfiles,
@@ -58,6 +59,34 @@ describe('mcpConfigStore', () => {
 
   it('listProfiles returns an empty list when nothing is stored', () => {
     expect(listProfiles(db)).toEqual([])
+  })
+
+  it('persists allowPrivateNetwork through save and append round-trips', async () => {
+    const httpInput = makeWriteInput({
+      transport: 'streamable-http',
+      stdio: undefined,
+      http: { endpoint: 'https://intranet.example.com/mcp', allowPrivateNetwork: true }
+    })
+    await saveProfiles(db, [httpInput])
+    // 落库读回（saveProfilesLocked 转换点）不丢开关
+    expect(listProfiles(db).find((p) => p.id === httpInput.id)?.http?.allowPrivateNetwork).toBe(true)
+
+    // append 另一个服务（existingProfilesAsWriteInputs 合并路径）不得静默洗掉已开启的开关
+    await appendServer(
+      db,
+      makeWriteInput({
+        id: '22222222-2222-4333-8444-555555555555',
+        name: 'Other',
+        transport: 'streamable-http',
+        stdio: undefined,
+        http: { endpoint: 'https://example.com/mcp' }
+      })
+    )
+    expect(listProfiles(db).find((p) => p.id === httpInput.id)?.http?.allowPrivateNetwork).toBe(true)
+
+    // 关闭语义：字段缺省视为关闭，重存后不残留
+    await saveProfiles(db, [{ ...httpInput, http: { endpoint: 'https://intranet.example.com/mcp' } }])
+    expect(listProfiles(db).find((p) => p.id === httpInput.id)?.http?.allowPrivateNetwork).toBeUndefined()
   })
 
   it('saveProfiles persists profiles and marks secretPresent from stored secrets', async () => {

@@ -77,6 +77,42 @@ describe('AgentChannel（P2-3）', () => {
     expect(outcome.kind === 'rejected' && outcome.reason?.summary).toBe('目标在敏感目录外，拒绝写入')
   })
 
+  it('E2：MCP 调用的 argsDigest 进入审批渲染（renderCluePack 围栏内可被裁决模型读到）', { timeout: 30_000 }, async () => {
+    const { renderCluePackForTest } = await import('./approvalAgent')
+    const rendered = (renderCluePackForTest as unknown as (c: unknown) => string)({
+      toolName: 'mcp_x_post',
+      actionClass: 'write',
+      riskLevel: 'medium',
+      summary: 'MCP x/post',
+      signals: ['mcp-tool', 'mcp-invocation'],
+      url: 'https://example.com',
+      argsDigest: '{"url":"https://example.com","headers":{"Authorization":"[REDACTED]"}}'
+    })
+    expect(rendered).toContain('[入参摘要（脱敏后）]')
+    expect(rendered).toContain('[REDACTED]')
+    // 渲染在不可信围栏内
+    const fenceIdx = rendered.indexOf('```')
+    const digestIdx = rendered.indexOf('[入参摘要')
+    expect(digestIdx).toBeGreaterThan(fenceIdx)
+  })
+
+  it('R5：undetermined 裁决 → rejected + cause=agent-undetermined（三分支映射，不得静默退化 agent-deny）', async () => {
+    const ch2 = new AgentChannel({
+      lane: 'desktop',
+      requestId: 'r-und',
+      sessionId: 's',
+      toolName: 'run_shell',
+      policy: { kind: 'agent' },
+      invokeApproval: async () => ({
+        ok: true,
+        verdict: { kind: 'undetermined', reason: { summary: '缺少命令目标路径，无法评估影响面' } }
+      })
+    })
+    const outcome = await ch2.request(req())
+    expect(outcome).toMatchObject({ kind: 'rejected', answererKind: 'agent', cause: 'agent-undetermined' })
+    expect(outcome.kind === 'rejected' && outcome.reason?.summary).toBe('缺少命令目标路径，无法评估影响面')
+  })
+
   it('invokeApproval 超时 → rejected + cause=timeout（非挂 5 分钟）', async () => {
     const { ch } = channel({
       invokeApproval: () => new Promise<ApprovalInvocationResult>(() => undefined)

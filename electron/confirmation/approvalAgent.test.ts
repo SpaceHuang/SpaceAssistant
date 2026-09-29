@@ -973,3 +973,24 @@ describe('线索包任务声明（D：可信证据分区）', () => {
     expect(inv.messages.list[0]!.content).not.toContain('已声明的任务')
   })
 })
+
+describe('R5 护栏：审批提示词与 Skill 三态合同一致性（防漂移）', () => {
+  it('renderCluePack 尾部收束指令必须是三态表述且含 undetermined 引导', async () => {
+    const { renderCluePackForTest } = await import('./approvalAgent')
+    const { getBundledSecurityApprovalSkill } = await import('../skills/bundled/securityApprovalSkill')
+    const clue = {
+      toolName: 'run_shell',
+      actionClass: 'execute' as const,
+      riskLevel: 'high' as const,
+      summary: 's',
+      signals: ['command-sequence']
+    }
+    const rendered = (renderCluePackForTest as unknown as (c: unknown) => string)(clue)
+    // 收束指令不得再要求「两态」
+    expect(rendered).not.toContain('两态')
+    expect(rendered).toContain('undetermined')
+    // 与 Skill 合同的三态取值一致（kind 取值集合同源）
+    const skill = getBundledSecurityApprovalSkill()
+    expect(skill.content).toContain('"kind":"undetermined"')
+  })
+})

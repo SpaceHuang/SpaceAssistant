@@ -77,7 +77,7 @@ export interface McpServerProfile {
     env: Array<{ key: string; valuePresent: boolean }>
     commandTrustedAt?: string
   }
-  http?: { endpoint: string }
+  http?: { endpoint: string; /** 显式允许该服务解析/连接到私网地址（默认 false，需 https）。 */ allowPrivateNetwork?: boolean }
   enabledToolNames: string[]
   discoveredAt?: string
   discoveredProtocolVersion?: string
@@ -112,7 +112,7 @@ export interface McpServerWriteInput {
     env: Array<{ key: string; valuePresent: boolean; value?: string; clear?: boolean }>
     commandTrustedAt?: string
   }
-  http?: { endpoint: string }
+  http?: { endpoint: string; allowPrivateNetwork?: boolean }
   enabledToolNames: string[]
   createdAt?: string
   updatedAt?: string
@@ -247,7 +247,8 @@ const McpStdioSchema = z.object({
 })
 
 const McpHttpSchema = z.object({
-  endpoint: z.string().trim().min(1).max(2048)
+  endpoint: z.string().trim().min(1).max(2048),
+  allowPrivateNetwork: z.boolean().optional()
 })
 
 /**
@@ -327,7 +328,12 @@ const McpWriteStdioSchema = z
   })
   .strict()
 
-const McpWriteHttpSchema = z.object({ endpoint: z.string().trim().min(1).max(2048) }).strict()
+const McpWriteHttpSchema = z
+  .object({
+    endpoint: z.string().trim().min(1).max(2048),
+    allowPrivateNetwork: z.boolean().optional()
+  })
+  .strict()
 
 /**
  * IPC 请求体专用：strict() 禁止未知字段，杜绝 Secret 泄漏进意外位置。

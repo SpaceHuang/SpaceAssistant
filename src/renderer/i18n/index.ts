@@ -18,6 +18,7 @@ import zhCNContextUsage from './resources/zh-CN/contextUsage.json'
 import zhCNNotification from './resources/zh-CN/notification.json'
 import zhCNMcp from './resources/zh-CN/mcp.json'
 import zhCNUsageStats from './resources/zh-CN/usageStats.json'
+import zhCNToolReliability from './resources/zh-CN/toolReliability.json'
 import enUSCommon from './resources/en-US/common.json'
 import enUSConfig from './resources/en-US/config.json'
 import enUSChat from './resources/en-US/chat.json'
@@ -32,6 +33,7 @@ import enUSContextUsage from './resources/en-US/contextUsage.json'
 import enUSNotification from './resources/en-US/notification.json'
 import enUSMcp from './resources/en-US/mcp.json'
 import enUSUsageStats from './resources/en-US/usageStats.json'
+import enUSToolReliability from './resources/en-US/toolReliability.json'
 
 const initialLocale = detectLocale(
   readStoredLocale(),
@@ -57,7 +59,8 @@ void i18n
         contextUsage: zhCNContextUsage,
         notification: zhCNNotification,
         mcp: zhCNMcp,
-        usageStats: zhCNUsageStats
+        usageStats: zhCNUsageStats,
+        toolReliability: zhCNToolReliability
       },
       'en-US': {
         common: enUSCommon,
@@ -73,7 +76,8 @@ void i18n
         contextUsage: enUSContextUsage,
         notification: enUSNotification,
         mcp: enUSMcp,
-        usageStats: enUSUsageStats
+        usageStats: enUSUsageStats,
+        toolReliability: enUSToolReliability
       }
     },
     lng: initialLocale,

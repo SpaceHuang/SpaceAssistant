@@ -95,7 +95,7 @@ describe('shouldFallbackToUser（§4.4 四维判定）', () => {
     })
   })
 
-  it('FALLBACK_ELIGIBLE_CAUSES 与 §4 矩阵可回退两格一致（数据化判定表）', () => {
-    expect([...FALLBACK_ELIGIBLE_CAUSES].sort()).toEqual(['timeout', 'unavailable'])
+  it('FALLBACK_ELIGIBLE_CAUSES 与 §4 矩阵可回退格一致（R5 起三格：环境两格 + 审批判不了）', () => {
+    expect([...FALLBACK_ELIGIBLE_CAUSES].sort()).toEqual(['agent-undetermined', 'timeout', 'unavailable'])
   })
 })
