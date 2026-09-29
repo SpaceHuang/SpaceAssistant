@@ -35,7 +35,7 @@ import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { signalChatCancel } from './chatCancelRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
-import { beginSessionEventShutdown, flushAllSessionEventSinks, reconcileSessionEventFilesDetailed } from './sessionEvents'
+import { beginSessionEventShutdown, ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, flushAllSessionEventSinks, getSessionEventSink, reconcileSessionEventFilesDetailed } from './sessionEvents'
 import { runSessionEventRetentionMaintenance } from './storage/sessionEventRetention'
 import { pruneAgentLogs } from './storage/agentLogRetention'
 import { resolveRetentionPolicyFromDb } from './storage/retentionPolicy'
@@ -43,6 +43,8 @@ import { cleanupUsageFactsByRetention, reconcileUsageTurnFacts } from './usageSt
 import { setUsageStatsAppVersion } from './usageStats/usageStatsRecorder'
 import { backfillUsageStats } from './usageStats/usageStatsBackfill'
 import { getDbConnection } from './database/sqliteStore'
+import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
+import { getSessionLedgerRecoveryRoots, isSessionLedgerLocationAllowed, resolveSessionLedgerLocation as resolveAcceptedInputLedgerLocation, toSessionLedgerToolCallProjection, toSessionLedgerToolResultProjection } from './runtime/sessionLedgerRecovery'
 import { SCHEMA_META_KEYS } from './database/schema'
 import { getSchemaMeta, setSchemaMeta } from './database/sqliteStore'
 import { cleanupOrphanProcess } from './shell/orphanProcessCleanup'
@@ -282,6 +284,116 @@ app.whenReady().then(async () => {
     return
   }
   appDb = db
+  const recoveryWorkDir = getConfigValue(db, 'config.workDir') ?? path.join(app.getPath('userData'), 'workspace')
+  const recoveryWorkDirs = getSessionLedgerRecoveryRoots(recoveryWorkDir, getConfigValue(db, 'config.workDirProfiles'))
+  try {
+    const interrupted = await new SqliteAgentHistory(getDbConnection(db)).recoverInterruptedInvocations({
+      resolveSessionLedgerLocation: (sessionId) => {
+        const session = getSession(db, sessionId)
+        if (!session) return undefined
+        const location = resolveAcceptedInputLedgerLocation({
+          sessionId,
+          createdAt: session.createdAt,
+          workDirProfileId: session.workDirProfileId,
+          activeProfileId: getConfigValue(db, 'config.activeWorkDirProfileId'),
+          configuredWorkDir: recoveryWorkDir,
+          profilesJson: getConfigValue(db, 'config.workDirProfiles')
+        })
+        return location && isSessionLedgerLocationAllowed(location, recoveryWorkDirs) ? location : undefined
+      },
+      onSessionLocationResolveError: (error, invocationId, sessionId) => {
+        logAgentEvent('warn', 'tool.error', { requestId: invocationId, sessionId, toolName: 'history-session-location-recovery', message: error instanceof Error ? error.message : String(error) })
+      },
+      repairCompaction: async (location, start, summary) => {
+        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
+          throw new Error('canonical compaction ledger location does not match a configured workspace root')
+        }
+        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+        try { await ensureCompactionTransaction(sink, start, summary) }
+        finally { await sink.close() }
+      },
+      repairToolLedger: async (location, result) => {
+        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
+          throw new Error('canonical tool ledger location does not match a configured workspace root')
+        }
+        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+        try { await ensureToolResultEvent(sink, toSessionLedgerToolResultProjection(result as { toolUseId: string; turnId?: string; stepId: string; result: Record<string, unknown> })) }
+        finally { await sink.close() }
+      },
+      repairInvocationTerminal: async (location, terminal) => {
+        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
+          throw new Error('canonical invocation terminal ledger location does not match a configured workspace root')
+        }
+        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+        try { await ensureTurnEndEvent(sink, String(terminal.turnId), String(terminal.reason)) }
+        finally { await sink.close() }
+      },
+      repairToolCallLedger: async (location, toolCall) => {
+        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
+          throw new Error('canonical tool ledger location does not match a configured workspace root')
+        }
+        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+        try { await ensureToolCallEvent(sink, toSessionLedgerToolCallProjection(toolCall as { toolUseId: string; turnId?: string; stepId: string; name: string; args: Record<string, unknown> })) }
+        finally { await sink.close() }
+      },
+      repairModelRequestLedger: async (location, projection) => {
+        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
+          throw new Error('canonical model request ledger location does not match a configured workspace root')
+        }
+        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+        try { await ensureRequestProjectionEvents(sink, projection) }
+        finally { await sink.close() }
+      },
+      repairProviderRetryLedger: async (location, retry) => {
+        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
+          throw new Error('canonical provider retry ledger location does not match a configured workspace root')
+        }
+        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+        try { await ensureRequestRetryEvent(sink, retry) }
+        finally { await sink.close() }
+      },
+      repairUsageLedger: async (location, requestUsage) => {
+        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
+          throw new Error('canonical usage ledger location does not match a configured workspace root')
+        }
+        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+        try { await ensureRequestUsageEvent(sink, requestUsage) }
+        finally { await sink.close() }
+      },
+      repairFinalRequestContextLedger: async (location, requestContext) => {
+        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
+          throw new Error('canonical final request context ledger location does not match a configured workspace root')
+        }
+        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+        try { await ensureFinalRequestContextEvent(sink, requestContext) }
+        finally { await sink.close() }
+      },
+      onCompactionRepairError: (error, invocationId, compactionId) => {
+        console.warn('[agentHistory] compaction ledger repair degraded:', { invocationId, compactionId, error: error instanceof Error ? error.message : String(error) })
+      },
+      onToolLedgerRepairError: (error, invocationId, toolCallId) => {
+        console.warn('[agentHistory] tool result ledger repair degraded:', { invocationId, toolCallId, error: error instanceof Error ? error.message : String(error) })
+      },
+      onModelRequestLedgerRepairError: (error, invocationId, requestId) => {
+        console.warn('[agentHistory] model request ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
+      },
+      onProviderRetryLedgerRepairError: (error, invocationId, requestId) => {
+        console.warn('[agentHistory] provider retry ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
+      },
+      onUsageLedgerRepairError: (error, invocationId, requestId) => {
+        console.warn('[agentHistory] usage ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
+      },
+      onFinalRequestContextLedgerRepairError: (error, invocationId, requestId) => {
+        console.warn('[agentHistory] final request context ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
+      },
+      onInvocationTerminalRepairError: (error, invocationId, turnId) => {
+        console.warn('[agentHistory] invocation terminal ledger repair degraded:', { invocationId, turnId, error: error instanceof Error ? error.message : String(error) })
+      }
+    })
+    if (interrupted.length > 0) console.warn('[agentHistory] interrupted invocations recovered:', interrupted.map(({ invocationId }) => invocationId))
+  } catch (error) {
+    console.warn('[agentHistory] startup recovery degraded:', error instanceof Error ? error.message : String(error))
+  }
   // 进程重启 cleanup 必须先于 Runtime recovery：仅对带 owner token 的本机 run_shell 执行校验，
   // 无身份或不属于本应用的 PID 交给后续 turn recovery 收敛，绝不裸杀。
   await cleanupPersistedOrphansOnStartup({
@@ -302,7 +414,7 @@ app.whenReady().then(async () => {
     persistExpiredTrustedCommandMarks(db)
   })
 
-  workDirState = getConfigValue(db, 'config.workDir') ?? path.join(app.getPath('userData'), 'workspace')
+  workDirState = recoveryWorkDir
   // 默认 workDir 可能尚不存在，提前创建避免 file:list-directory 等处理器 ENOENT
   try {
     mkdirSync(workDirState, { recursive: true })

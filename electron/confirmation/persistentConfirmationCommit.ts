@@ -1,7 +1,7 @@
 import type { AppDatabase } from '../database'
 import { getDbConnection } from '../database'
 import { runInTransaction, TransactionCommitUnknownError } from '../database/transaction'
-import type { CommitPlan, CommitReceipt, ConfirmationCommitStatus } from '../../packages/agent-core/src/confirmationCommit'
+import type { CommitPlan, CommitReceipt, ConfirmationCommitStatus } from '../../packages/agent-sdk/src/confirmationCommit'
 
 type SubmissionRow = {
   submission_id: string

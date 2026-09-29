@@ -15,6 +15,51 @@ describe('deserializeToolCallsFromDb', () => {
     }])
     expect(deserializeToolCallsFromDb(raw)?.[0]?.result?.displayData?.text).toBe('可读结果')
   })
+  it('round-trips notExecuted so restored denied tools remain distinguishable from execution failures', () => {
+    const raw = serializeToolCallsForDb([{
+      id: 'denied-1', toolName: 'run_shell', input: { command: 'whoami' }, status: 'rejected', riskLevel: 'high',
+      result: { success: false, data: 'Tool call was not dispatched (POLICY_DENIED).', notExecuted: true }
+    }])
+    expect(deserializeToolCallsFromDb(raw)?.[0]?.result).toMatchObject({ success: false, notExecuted: true })
+  })
+  it('round-trips canonical audit correlation and user-facing tool result metadata', () => {
+    const raw = serializeToolCallsForDb([{
+      id: 'audited-1', toolName: 'write_file', input: { path: 'a.txt' }, status: 'completed', riskLevel: 'high',
+      result: { success: true, data: { bytesWritten: 4 }, auditRef: 'audit:turn-1:call-1', decisionRuleId: 'policy-write-confirm', userMessage: '文件已写入' }
+    }])
+    expect(deserializeToolCallsFromDb(raw)?.[0]?.result).toMatchObject({
+      success: true, data: { bytesWritten: 4 }, auditRef: 'audit:turn-1:call-1', decisionRuleId: 'policy-write-confirm', userMessage: '文件已写入'
+    })
+  })
+  it('round-trips structured browser recovery and auto-approved write result metadata', () => {
+    const dependencyRecovery = {
+      errorCode: 'chromium_missing' as const, errorMessage: 'Chromium missing', recommendedCwd: '/workspace',
+      installCommand: 'npx playwright install chromium',
+      detectResult: { stagehand: { installed: true }, playwright: { installed: true, browsers: [] }, chromium: { ready: false }, node: { version: '22', meetsRequirement: true }, canInitialize: false, primaryFailure: 'chromium_missing' as const, errors: ['Chromium missing'], recommendedCwd: '/workspace', installContext: 'development' as const }
+    }
+    const autoApprovedWrite = { path: 'a.txt', added: 1, removed: 0, bytesWritten: 4 }
+    const raw = serializeToolCallsForDb([{
+      id: 'metadata-1', toolName: 'write_file', input: { path: 'a.txt' }, status: 'completed', riskLevel: 'low',
+      result: { success: false, dependencyRecovery, autoApprovedWrite }
+    }])
+    expect(deserializeToolCallsFromDb(raw)?.[0]?.result).toMatchObject({ dependencyRecovery, autoApprovedWrite })
+  })
+  it('round-trips approval and confirmation-card metadata needed after restart', () => {
+    const call = {
+      id: 'approval-call-1', toolName: 'run_shell', input: { command: 'npm test' }, status: 'confirming' as const, riskLevel: 'high' as const,
+      approval: { schemaVersion: 1 as const, approvalId: 'approval-1', attemptId: 'attempt-1', toolUseId: 'approval-call-1', answerer: 'user' as const, status: 'awaiting-user' as const, requestedAt: 10, revision: 1 },
+      memoryTiers: [{ key: 'session' as const, label: '本会话' }], autoAnswerer: true,
+      shellSecurityHints: { requiresRiskAck: true, outsideWorkDirRisk: false, warnings: ['检查命令副作用'], canTrust: true },
+      autoApproveFallback: { reason: '自动批准失败', reasonCode: 'approval_unavailable' },
+      currentPageUrl: 'https://example.com', dangerInfo: { userReason: '可能提交表单', consequence: 'file' as const, source: 'target-effect' as const },
+      sessionTrustedHint: true as const
+    }
+    const restored = deserializeToolCallsFromDb(serializeToolCallsForDb([call]))?.[0]
+    expect(restored).toMatchObject({
+      approval: call.approval, memoryTiers: call.memoryTiers, autoAnswerer: true, shellSecurityHints: call.shellSecurityHints,
+      autoApproveFallback: call.autoApproveFallback, currentPageUrl: call.currentPageUrl, dangerInfo: call.dangerInfo, sessionTrustedHint: true
+    })
+  })
   it('13: returns corrupted placeholder and logs on parse failure', () => {
     const result = deserializeToolCallsFromDb('not-valid-json{{{')
     expect(result).toHaveLength(1)

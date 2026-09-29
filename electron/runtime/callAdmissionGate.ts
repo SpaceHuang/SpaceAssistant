@@ -442,6 +442,7 @@ export class CallAdmissionGate {
   ): void {
     logAgentEvent(level, event, {
       requestId: request.requestId,
+      ...(request.turnId ? { turnId: request.turnId } : {}),
       lane: request.lane,
       priority: request.priority,
       role: request.role,

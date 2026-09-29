@@ -1,5 +1,6 @@
 import type { IpcMain } from 'electron'
 import type { AppIpcContext } from '../appIpc'
+import type { AppDatabase } from '../database'
 import {
   McpSaveProfilesPayloadSchema,
   McpTestConnectionPayloadSchema,
@@ -8,6 +9,7 @@ import {
 } from '../../src/shared/mcpTypes'
 import {
   deleteServer,
+  getToolCache,
   listProfiles,
   refreshProfilesSecretFlags,
   saveProfiles,
@@ -69,18 +71,57 @@ function writeInputToProfile(input: McpServerWriteInput): McpServerProfile {
 }
 
 function revokeMcpToolsThatBecameUnavailable(
+  db: AppDatabase,
   previous: McpServerProfile[],
-  next: McpServerProfile[]
+  next: McpServerProfile[],
+  secretChangedServerIds: ReadonlySet<string> = new Set()
 ): void {
   const nextById = new Map(next.map((profile) => [profile.id, profile]))
+  const executionBinding = (profile: McpServerProfile) => JSON.stringify({
+    enabled: profile.enabled,
+    transport: profile.transport,
+    timeoutSec: profile.timeoutSec,
+    auth: {
+      mode: profile.auth.mode,
+      headerName: profile.auth.headerName,
+      valuePrefix: profile.auth.valuePrefix,
+      oauthClientId: profile.auth.oauthClientId,
+      oauthScopes: profile.auth.oauthScopes,
+      accessTokenExpiresAt: profile.auth.accessTokenExpiresAt
+    },
+    stdio: profile.stdio && {
+      command: profile.stdio.command,
+      args: profile.stdio.args,
+      cwd: profile.stdio.cwd,
+      envKeys: profile.stdio.env.map(({ key }) => key),
+      commandTrustedAt: profile.stdio.commandTrustedAt
+    },
+    http: profile.http,
+    enabledToolNames: profile.enabledToolNames
+  })
   for (const oldProfile of previous) {
     const nextProfile = nextById.get(oldProfile.id)
     const nextNames = nextProfile?.enabled ? new Set(nextProfile.enabledToolNames) : new Set<string>()
+    const executionBindingChanged = !nextProfile || executionBinding(nextProfile) !== executionBinding(oldProfile) || secretChangedServerIds.has(oldProfile.id)
     for (const toolName of oldProfile.enabledToolNames) {
-      if (nextNames.has(toolName)) continue
-      revokeToolForAllLanes(toolName)
-      rejectPendingConfirmsForToolAcrossLanes(toolName)
+      if (nextNames.has(toolName) && !executionBindingChanged) continue
+      revokeProfileTool(profileToolName(db, oldProfile, toolName))
     }
+  }
+}
+
+function profileToolName(db: AppDatabase, profile: McpServerProfile, originalName: string): string {
+  return getToolCache(db, profile.id)?.tools.find((tool) => tool.originalName === originalName)?.mappedName ?? originalName
+}
+
+function revokeProfileTool(toolName: string): void {
+  revokeToolForAllLanes(toolName)
+  rejectPendingConfirmsForToolAcrossLanes(toolName)
+}
+
+function revokeMcpProfileTools(db: AppDatabase, profile: McpServerProfile | undefined): void {
+  for (const toolName of profile?.enabledToolNames ?? []) {
+    revokeProfileTool(profile ? profileToolName(db, profile, toolName) : toolName)
   }
 }
 
@@ -104,7 +145,13 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
     const previous = listProfiles(ctx.db)
     const next = parsed.servers.map(writeInputToProfile)
-    revokeMcpToolsThatBecameUnavailable(previous, next)
+    const secretChangedServerIds = new Set(parsed.servers
+      .filter((server) => Boolean(
+        server.auth.accessToken?.trim() || server.auth.headerValue?.trim() ||
+        server.clearSecretKinds?.length || server.stdio?.env.some((entry) => entry.clear || entry.value !== undefined)
+      ))
+      .map((server) => server.id))
+    revokeMcpToolsThatBecameUnavailable(ctx.db, previous, next, secretChangedServerIds)
     const servers = await saveProfiles(ctx.db, parsed.servers)
     return { servers }
   })
@@ -123,10 +170,7 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     }
     const previous = listProfiles(ctx.db)
     const deleted = previous.find((profile) => profile.id === serverId)
-    for (const toolName of deleted?.enabledToolNames ?? []) {
-      revokeToolForAllLanes(toolName)
-      rejectPendingConfirmsForToolAcrossLanes(toolName)
-    }
+    revokeMcpProfileTools(ctx.db, deleted)
     await deleteServer(ctx.db, serverId)
     return { ok: true }
   })
@@ -138,6 +182,7 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     if (isOAuthFlowActive(serverId)) {
       throw new Error('该服务正在授权中，暂不能清除凭据')
     }
+    revokeMcpProfileTools(ctx.db, listProfiles(ctx.db).find((profile) => profile.id === serverId))
     await clearSecret(ctx.db, serverId, kind)
     return { servers: refreshProfilesSecretFlags(ctx.db) }
   })
@@ -158,7 +203,9 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   ipcMain.handle('mcp:oauth-start', async (_e, payload: { serverId?: unknown }) => {
     const serverId = typeof payload?.serverId === 'string' ? payload.serverId : ''
     if (!serverId) throw new Error('serverId 不能为空')
-    return startOAuthFlow(ctx.db, serverId)
+    const result = await startOAuthFlow(ctx.db, serverId)
+    if (result.ok) revokeMcpProfileTools(ctx.db, listProfiles(ctx.db).find((profile) => profile.id === serverId))
+    return result
   })
 
   ipcMain.handle('mcp:refresh-tools', async (_e, payload: { serverId?: unknown }) => {
@@ -166,6 +213,7 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     if (!serverId) throw new Error('serverId 不能为空')
     const profile = listProfiles(ctx.db).find((p) => p.id === serverId)
     if (!profile) return { ok: false, code: 'not-found', message: '服务不存在' }
+    const previousCache = getToolCache(ctx.db, serverId)
 
     const manager = new McpConnectionManager({
       appendDiagnostic: (id, entry) => safeAppendDiagnostic(ctx.db, id, entry)
@@ -180,7 +228,8 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
               interactive: false,
               onInteractiveAuthRequired: () => {
                 interactiveAuthRequired = true
-              }
+              },
+              onTokensRefreshed: () => revokeMcpProfileTools(ctx.db, profile)
             })
           : undefined
       const session = await manager.connect(profile, secretProvider, { oauthProvider })
@@ -198,6 +247,20 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
           lastError: { code: discovery.code, message: discovery.message, occurredAt: new Date().toISOString() }
         })
         return discovery
+      }
+      const discoveredByOriginalName = new Map(discovery.tools.map((tool) => [tool.originalName, tool]))
+      for (const previousTool of previousCache?.tools ?? []) {
+        if (!profile.enabledToolNames.includes(previousTool.originalName)) continue
+        const nextTool = discoveredByOriginalName.get(previousTool.originalName)
+        const binding = (tool: typeof previousTool | undefined) => tool && JSON.stringify({
+          serverId: tool.serverId,
+          originalName: tool.originalName,
+          mappedName: tool.mappedName,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          annotations: tool.annotations
+        })
+        if (binding(nextTool) !== binding(previousTool)) revokeProfileTool(previousTool.mappedName)
       }
       // 白名单自动回填：服务启用且从未勾选过工具（如会话内 action.mcp.add 创建后仅在设置页完成授权）
       // 时，刷新发现成功即全选本次工具，消除「已连接但 0 工具注入」的静默不可用态；已有选择不覆盖。

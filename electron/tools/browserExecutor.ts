@@ -31,6 +31,18 @@ const BROWSER_ACTIONS: readonly BrowserAction[] = [
   'close'
 ]
 
+export class BrowserExecutionUncertainError extends Error {
+  constructor() {
+    super('浏览器操作未获得完整结果，最终页面状态未知')
+    this.name = 'BrowserExecutionUncertainError'
+  }
+}
+
+function isBrowserOperationTimeout(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /超时|timeout/i.test(message)
+}
+
 function truncateOutput(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text
   return text.slice(0, maxChars)
@@ -267,6 +279,7 @@ export const browserExecutor: ToolExecutor = {
       }
     }
 
+    let browserActionStarted = false
     try {
       if (action === 'navigate') {
         const mode = typeof input.mode === 'string' ? input.mode : 'open'
@@ -283,6 +296,7 @@ export const browserExecutor: ToolExecutor = {
           const stopNavigation = () => {
             void page.evaluate(() => window.stop()).catch(() => {})
           }
+          browserActionStarted = true
           await raceWithUserAbort(
             withTimeout(
               page.goto(validated.normalizedUrl, {
@@ -317,6 +331,7 @@ export const browserExecutor: ToolExecutor = {
           }
         }
         if (mode === 'refresh') {
+          browserActionStarted = true
           await raceWithUserAbort(
             withTimeout(page.reload({ timeout: shortTimeout }), shortTimeout, '刷新'),
             ctx.signal,
@@ -325,6 +340,7 @@ export const browserExecutor: ToolExecutor = {
             }
           )
         } else if (mode === 'back') {
+          browserActionStarted = true
           await raceWithUserAbort(
             withTimeout(page.goBack({ timeout: shortTimeout }), shortTimeout, '后退'),
             ctx.signal,
@@ -333,6 +349,7 @@ export const browserExecutor: ToolExecutor = {
             }
           )
         } else if (mode === 'forward') {
+          browserActionStarted = true
           await raceWithUserAbort(
             withTimeout(page.goForward({ timeout: shortTimeout }), shortTimeout, '前进'),
             ctx.signal,
@@ -368,6 +385,7 @@ export const browserExecutor: ToolExecutor = {
 
         if (action === 'observe') {
           ctx.sendProgress('observing', '正在分析页面元素…')
+          browserActionStarted = true
           const result = await raceWithUserAbort(
             withTimeout(stagehand.observe(instruction, opts), navTimeout, 'observe'),
             ctx.signal
@@ -378,6 +396,7 @@ export const browserExecutor: ToolExecutor = {
 
         if (action === 'extract') {
           ctx.sendProgress('extracting', '正在提取页面内容…')
+          browserActionStarted = true
           const result = await raceWithUserAbort(
             withTimeout(stagehand.extract(instruction, opts), navTimeout, 'extract'),
             ctx.signal
@@ -394,6 +413,7 @@ export const browserExecutor: ToolExecutor = {
 
         ctx.sendProgress('acting', instruction.slice(0, 120))
         const urlBefore = page.url()
+        browserActionStarted = true
         const actResult = (await raceWithUserAbort(
           withTimeout(stagehand.act(instruction), navTimeout, 'act'),
           ctx.signal
@@ -432,6 +452,7 @@ export const browserExecutor: ToolExecutor = {
         await fs.mkdir(capDir, { recursive: true })
         const filePath = path.join(capDir, `${Date.now()}.png`)
         const fullPage = input.full_page === true
+        browserActionStarted = true
         await raceWithUserAbort(
           withTimeout(
             page.screenshot({ path: filePath, fullPage, timeout: shortTimeout }),
@@ -450,7 +471,15 @@ export const browserExecutor: ToolExecutor = {
       return { success: false, error: '无效的 action', duration: Date.now() - started }
     } catch (e) {
       if (isUserAbortError(e) || ctx.signal.aborted) {
+        if (browserActionStarted) {
+          await Promise.resolve(stagehandService.closeSession(ctx.sessionId)).catch(() => undefined)
+          throw new BrowserExecutionUncertainError()
+        }
         return { success: false, error: CHAT_CANCELLED_MESSAGE, duration: Date.now() - started }
+      }
+      if (browserActionStarted && isBrowserOperationTimeout(e)) {
+        await Promise.resolve(stagehandService.closeSession(ctx.sessionId)).catch(() => undefined)
+        throw new BrowserExecutionUncertainError()
       }
 
       const crash = await handlePlaywrightCrash(ctx.sessionId, e)

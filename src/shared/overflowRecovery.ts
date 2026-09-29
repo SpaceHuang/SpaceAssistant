@@ -69,10 +69,23 @@ export function decideOverflowRecovery(input: OverflowRecoveryInput): OverflowRe
   return { action: 'reset_and_retry_provider', nextRetry: input.retries + 1 }
 }
 
-export function selectRecoveryMessages<T extends { role: string; id?: string; content?: unknown }>(messages: readonly T[], currentUserMessageId?: string): T[] {
+export function selectRecoveryMessages<T extends { role: string; id?: string; content?: unknown }>(
+  messages: readonly T[],
+  currentUserMessageId?: string,
+  requiredCurrentUserMessage?: T
+): T[] {
   // 当前用户消息之后属于本次 invoke；保留它和后续完整工具轮次，丢弃更早的历史工具对。
   // 这样既不会丢掉当前问题依赖的工具结果，也不会把所有历史 tool_result 原样带回超窗重试。
   let currentIndex = currentUserMessageId ? messages.findIndex((message) => message.id === currentUserMessageId) : -1
+  if (currentIndex < 0 && requiredCurrentUserMessage) {
+    const required = JSON.stringify(requiredCurrentUserMessage)
+    for (let index = messages.length - 1; index >= 0; index--) {
+      if (JSON.stringify(messages[index]) === required) {
+        currentIndex = index
+        break
+      }
+    }
+  }
   if (currentIndex < 0 && !currentUserMessageId) {
     for (let index = messages.length - 1; index >= 0; index--) {
       const message = messages[index]!

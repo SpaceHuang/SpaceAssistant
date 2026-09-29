@@ -33,6 +33,8 @@ export interface RemoteContext {
   feishuAttachments?: readonly RegisteredFeishuAttachment[]
   wechatConfig?: WeChatConfig
   larkCliRunner?: LarkCliRunner
+  /** Executable resolved by the prepared run_lark_cli adapter at planning time. */
+  preparedLarkCliExecutable?: string
   /** 合并后的 IM 确认通道单例（lane 由实例决定）；主循环经 channelFor 直接调用。 */
   imChannel?: ImChannel
   /** Tool-loop timeout error text; platforms set when building remoteContext. */
@@ -96,6 +98,8 @@ export interface ToolExecutionContext {
   appDatabase?: AppDatabase
   workDirManager?: WorkDirManager
   larkCliRunner?: LarkCliRunner
+  /** Host-prepared executable for run_lark_cli; pins the target selected before confirmation. */
+  preparedLarkCliExecutable?: string
   remoteContext?: RemoteContext
   /** 用户已在确认卡片（或飞书确认）中明确批准执行本次工具调用 */
   toolUserConfirmed?: boolean

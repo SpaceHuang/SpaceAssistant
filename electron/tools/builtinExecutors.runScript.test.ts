@@ -1,13 +1,16 @@
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it, vi } from 'vitest'
-import { getToolExecutor, resolvePythonInterpreter } from './builtinExecutors'
+import { createBuiltinToolRegistry, resolvePythonInterpreter, runScriptExecutor } from './builtinExecutors'
 import { createAgentRuntime } from '../runtime/agentRuntime'
 import { setDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
-import { createBuiltinToolRegistry } from '../tools/builtinExecutors'
 import { ConfirmIdSpace } from '../remote/confirmId'
 import { ChatCancelRegistry } from '../chatCancelRegistry'
 import { ToolRevocationRegistry } from '../toolRevocationRegistry'
 import { McpConcurrencyGate } from '../mcp/mcpToolExecutor'
+import { createRunScriptRegisteredTool, RunScriptExecutionUncertainError } from './runScriptRegisteredTool'
+import { executeRegisteredTool } from './toolInvocationCoordinator'
+import { createPermitBoundCoordinatorDispatch } from './permitBoundCoordinatorDispatch'
+import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
 
 
 /**
@@ -51,8 +54,183 @@ function ctx() {
 }
 
 describe('run_script language dispatch', () => {
+  it('script 已启动后超时将结果归为不确定，避免部分副作用作为可重试结果返回', async () => {
+    const executor = vi.fn(async () => ({ success: false, error: 'SCRIPT_TIMEOUT' }))
+    const registered = createRunScriptRegisteredTool({ name: 'run_script', execute: executor } as never)
+    const executionContext = ctx()
+    const handle = await registered.begin(
+      { language: 'python', code: 'write_then_wait()', timeout: 1 },
+      { requestId: 'script-timeout', toolUseId: 'script-timeout-call', signal: executionContext.signal, executionContext }
+    )
+    handle.awaitConfirmation()
+    handle.confirm()
+
+    try {
+      await expect(handle.execute({
+        requestId: 'script-timeout', toolUseId: 'script-timeout-call', signal: executionContext.signal,
+        toolName: 'run_script', runtimeContext: executionContext
+      } as never)).rejects.toBeInstanceOf(RunScriptExecutionUncertainError)
+      expect(executor).toHaveBeenCalledOnce()
+    } finally {
+      handle.release()
+    }
+  })
+
+  it('script claim barrier 中授权版本变化时不会启动进程执行器', async () => {
+    const registry = new ToolRevocationRegistry()
+    registry.registerToolRevocationRequest('script-auth-version', 'desktop')
+    const ledger = new InMemoryExecutionAdmissionCoordinator()
+    let reachedClaim!: () => void
+    let releaseClaim!: () => void
+    const atClaim = new Promise<void>((resolve) => { reachedClaim = resolve })
+    const barrier = new Promise<void>((resolve) => { releaseClaim = resolve })
+    const admission = {
+      markPermitConsumed: (permitId: string, binding: Parameters<typeof ledger.markPermitConsumed>[1]) => ledger.markPermitConsumed(permitId, binding),
+      beginDispatch: async (...args: Parameters<typeof ledger.beginDispatch>) => {
+        reachedClaim()
+        await barrier
+        return ledger.beginDispatch(...args)
+      },
+      invalidate: (...args: Parameters<typeof ledger.invalidate>) => ledger.invalidate(...args),
+      settle: (permitId: string) => ledger.settle(permitId)
+    }
+    const input = { language: 'python', code: 'print("must not execute")' }
+    let authorizationVersion = 'rule-v1'
+    const dispatch = createPermitBoundCoordinatorDispatch({
+      requestId: 'script-auth-version', turnId: 'turn', canonicalInput: input,
+      authorizationVersion: 'rule-v1', currentAuthorizationVersion: () => authorizationVersion,
+      targetVersion: 'target-v1', phase: 'recheck', initialFactsHash: 'facts-v1',
+      isAllowed: () => !registry.isToolRevoked('script-auth-version', 'run_script'),
+      recheck: async () => ({ allowed: true, authorizationVersion: 'rule-v1', targetVersion: 'target-v1', factsHash: 'facts-v1' }),
+      safetyPolicy: { evaluate: async () => ({ kind: 'allow' as const, authorizationVersion: 'rule-v1' }) },
+      toolRevocations: registry, admission
+    })
+    const executor = vi.fn(async () => ({ success: true }))
+    const registered = createRunScriptRegisteredTool({ name: 'run_script', execute: executor } as never)
+    const runtime = ctx()
+    const result = executeRegisteredTool(registered, input, {
+      requestId: 'script-auth-version', toolUseId: 'script-auth-version-call', signal: runtime.signal,
+      executionContext: runtime
+    }, { confirm: async () => true, dispatch })
+    await atClaim
+    expect(executor).not.toHaveBeenCalled()
+    authorizationVersion = 'rule-v2'
+    releaseClaim()
+    await expect(result).rejects.toThrow('AUTHORIZATION_STALE')
+    expect(executor).not.toHaveBeenCalled()
+    expect(ledger.activeLeaseCount('script-auth-version')).toBe(0)
+  })
+
+  it('script revoke after permit consume and before admission claim prevents process executor entry', async () => {
+    const registry = new ToolRevocationRegistry()
+    registry.registerToolRevocationRequest('script-claim', 'desktop')
+    const ledger = new InMemoryExecutionAdmissionCoordinator()
+    let reachedClaim!: () => void
+    let releaseClaim!: () => void
+    const atClaim = new Promise<void>((resolve) => { reachedClaim = resolve })
+    const barrier = new Promise<void>((resolve) => { releaseClaim = resolve })
+    const admission = {
+      markPermitConsumed: (permitId: string, binding: Parameters<typeof ledger.markPermitConsumed>[1]) => ledger.markPermitConsumed(permitId, binding),
+      beginDispatch: async (...args: Parameters<typeof ledger.beginDispatch>) => {
+        reachedClaim()
+        await barrier
+        return ledger.beginDispatch(...args)
+      },
+      invalidate: (...args: Parameters<typeof ledger.invalidate>) => ledger.invalidate(...args),
+      settle: (permitId: string) => ledger.settle(permitId)
+    }
+    const input = { language: 'python', code: 'print("must not execute")' }
+    const safetyPolicy = { evaluate: async () => ({ kind: 'allow' as const, authorizationVersion: 'rule-v1' }) }
+    const dispatch = createPermitBoundCoordinatorDispatch({
+      requestId: 'script-claim', turnId: 'turn', canonicalInput: input,
+      authorizationVersion: 'rule-v1', targetVersion: 'target-v1', phase: 'recheck', initialFactsHash: 'facts-v1',
+      isAllowed: () => !registry.isToolRevoked('script-claim', 'run_script'),
+      recheck: async () => ({ allowed: true, authorizationVersion: 'rule-v1', targetVersion: 'target-v1', factsHash: 'facts-v1' }),
+      safetyPolicy, toolRevocations: registry, admission
+    })
+    const executor = vi.spyOn(runScriptExecutor, 'execute')
+    const registered = createBuiltinToolRegistry().get('run_script')!
+    const runtime = ctx() as { signal: AbortSignal; workDir: string; userDataDir: string; toolsConfig: unknown }
+    const result = executeRegisteredTool(registered, input, {
+      requestId: 'script-claim', toolUseId: 'script-claim-call', signal: runtime.signal,
+      executionContext: runtime as never
+    }, { confirm: async () => true, dispatch })
+    await atClaim
+    expect(executor).not.toHaveBeenCalled()
+    expect(registry.revokeToolForLane('desktop', 'run_script')).toBe(1)
+    releaseClaim()
+    await expect(result).rejects.toThrow('REVOKED')
+    expect(executor).not.toHaveBeenCalled()
+    expect(ledger.activeLeaseCount('script-claim')).toBe(0)
+    executor.mockRestore()
+  })
+
+  it('script revoke after dispatch claim aborts the execution lease signal and settles', async () => {
+    const registry = new ToolRevocationRegistry()
+    registry.registerToolRevocationRequest('script-running', 'desktop')
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    const input = { language: 'python', code: 'print("running")' }
+    const execution = vi.fn(async (_input: unknown, context: { signal: AbortSignal }) => {
+      await new Promise<void>((resolve) => context.signal.addEventListener('abort', () => resolve(), { once: true }))
+      return { success: false, error: 'SCRIPT_CANCELLED' }
+    })
+    const tool = createRunScriptRegisteredTool({
+      name: 'run_script',
+      execute: execution
+    } as never)
+    const context = ctx() as { signal: AbortSignal; workDir: string; userDataDir: string; toolsConfig: unknown }
+    let leaseSignal: AbortSignal | undefined
+    const dispatch = createPermitBoundCoordinatorDispatch({
+      requestId: 'script-running', turnId: 'turn', canonicalInput: input,
+      authorizationVersion: 'rule-v1', targetVersion: 'target-v1', phase: 'recheck', initialFactsHash: 'facts-v1',
+      isAllowed: () => !registry.isToolRevoked('script-running', 'run_script'),
+      recheck: async () => ({ allowed: true, authorizationVersion: 'rule-v1', targetVersion: 'target-v1', factsHash: 'facts-v1' }),
+      safetyPolicy: { evaluate: async () => ({ kind: 'allow' as const, authorizationVersion: 'rule-v1' }) },
+      toolRevocations: registry, admission
+    })
+    const result = executeRegisteredTool(tool, input, {
+      requestId: 'script-running', toolUseId: 'script-running-call', signal: context.signal,
+      executionContext: context as never
+    }, { confirm: async () => true, dispatch: async (handle, toolContext, execute) => {
+      const dispatched = await dispatch(handle, toolContext, async (signal) => {
+        leaseSignal = signal
+        return execute(signal)
+      })
+      return dispatched
+    } })
+    await vi.waitFor(() => expect(leaseSignal).toBeDefined())
+    expect(leaseSignal?.aborted).toBe(false)
+    expect(registry.revokeToolForLane('desktop', 'run_script')).toBe(1)
+    await expect(result).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+    expect(execution).toHaveBeenCalledOnce()
+    expect(leaseSignal?.aborted).toBe(true)
+    expect(admission.activeLeaseCount('script-running')).toBe(0)
+  })
+
+  it('interpreter settings changed after preparation reject before dispatch and executor', async () => {
+    const execution = vi.fn(async () => ({ success: true }))
+    const tool = createRunScriptRegisteredTool({ name: 'run_script', execute: execution } as never)
+    const runtime = ctx() as { workDir: string; userDataDir: string; toolsConfig: { scriptTimeout: number; pythonPath: string } }
+    let dispatchEntered = false
+    await expect(executeRegisteredTool(tool, { language: 'python', code: 'print(1)' }, {
+      requestId: 'script-prepared', toolUseId: 'call-1', signal: new AbortController().signal,
+      executionContext: runtime as never
+    }, {
+      confirm: async () => {
+        runtime.toolsConfig.pythonPath = 'replacement-python'
+        return true
+      },
+      dispatch: async (_handle, _context, execute) => {
+        dispatchEntered = true
+        return execute(new AbortController().signal)
+      }
+    })).rejects.toThrow('RUN_SCRIPT_PREPARED_SETTINGS_CHANGED')
+    expect(dispatchEntered).toBe(false)
+    expect(execution).not.toHaveBeenCalled()
+  })
+
   it('executes JavaScript and TypeScript with Node after gate-level language selection', async () => {
-    const executor = getToolExecutor('run_script')!
+    const executor = runScriptExecutor
     const context = () => ({
       ...ctx(),
       toolsConfig: {
@@ -71,14 +249,14 @@ describe('run_script language dispatch', () => {
 
 describe.skipIf(!pythonInterpreter)('run_script result contract', () => {
   it('失败时保留结构化 stderr 与稳定错误码', async () => {
-    const executor = getToolExecutor('run_script')!
+    const executor = runScriptExecutor
     const result = await executor.execute({ code: "import sys; print('ValueError: bad', file=sys.stderr); raise SystemExit(1)" }, ctx())
     expect(result).toMatchObject({ success: false, error: 'SCRIPT_PROCESS_EXIT', data: { status: 'failed', exitCode: 1 } })
     expect(String(result.data && (result.data as { stderr?: string }).stderr)).toContain('ValueError: bad')
   }, 20_000)
 
   it('成功空 stdout 仍然是 succeeded，不伪造成失败', async () => {
-    const executor = getToolExecutor('run_script')!
+    const executor = runScriptExecutor
     const result = await executor.execute({ code: 'pass' }, ctx())
     expect(result).toMatchObject({ success: true, data: { status: 'succeeded', exitCode: 0 } })
   }, 20_000)

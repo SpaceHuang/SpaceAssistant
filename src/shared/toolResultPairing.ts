@@ -39,6 +39,7 @@ type ContentBlock = Record<string, unknown>
 
 export interface EnsureToolResultPairingOptions {
   strict?: boolean
+  requiredUserMessageId?: string
 }
 
 function emptyFixes(): PairingRepairReport['fixes'] {
@@ -288,7 +289,8 @@ function fixRoleAlternation(
   messages: ClaudeChatMessageWithBlocks[],
   fixes: PairingRepairReport['fixes'],
   report: PairingRepairReport,
-  strict: boolean
+  strict: boolean,
+  requiredUserMessageId?: string
 ): ClaudeChatMessageWithBlocks[] {
   if (messages.length === 0) return messages
   const out: ClaudeChatMessageWithBlocks[] = [messages[0]!]
@@ -299,7 +301,10 @@ function fixRoleAlternation(
       fixes.roleAlternationFixed++
       report.repaired = true
       throwIfStrict(report, strict)
-      out[out.length - 1] = mergeMessages(prev, cur)
+      const merged = mergeMessages(prev, cur)
+      out[out.length - 1] = requiredUserMessageId && (prev.id === requiredUserMessageId || cur.id === requiredUserMessageId)
+        ? { ...merged, id: requiredUserMessageId }
+        : merged
     } else {
       out.push(cur)
     }
@@ -340,7 +345,7 @@ export function ensureToolResultPairing(
   }
 
   let working = dropLeadingAssistants(messages, report.fixes, report, strict)
-  working = fixRoleAlternation(working, report.fixes, report, strict)
+  working = fixRoleAlternation(working, report.fixes, report, strict, opts?.requiredUserMessageId)
   working = processBlockMessages(working, report.fixes, strict, report)
   working = fillEmptyMessages(working, report.fixes, report, strict)
 

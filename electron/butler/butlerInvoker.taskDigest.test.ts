@@ -37,6 +37,7 @@ vi.mock('../agentLogger/agentLogger', () => ({
 
 import { openDatabase, setConfigValue, type AppDatabase } from '../database'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
+import { MODEL_BASELINE } from '../../src/shared/modelBaseline'
 import { TurnRuntime } from '../turnRuntime'
 import { createTurnCoordinatorStorage } from '../turnCoordinatorStorage'
 import { runButlerTask, buildApprovalTaskDigest } from './butlerInvoker'
@@ -54,7 +55,7 @@ describe('butlerInvoker 任务声明装配（D）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     db = openDatabase(':memory:')
-    setConfigValue(db, 'config.defaultModel', 'claude-sonnet-4-20250514')
+    setConfigValue(db, 'config.defaultModel', Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0])
     mockResolveLlmCredentials.mockResolvedValue({
       error: undefined,
       serviceId: 'svc-1',

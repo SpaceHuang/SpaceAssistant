@@ -40,10 +40,12 @@ vi.mock('./database', () => ({
   listSearchHistory: vi.fn(() => []),
   setSessionUsage: (...args: unknown[]) => mockSetSessionUsage(...args),
   getSessionUsage: (...args: unknown[]) => mockGetSessionUsage(...args),
-  deleteSessionUsage: (...args: unknown[]) => mockDeleteSessionUsage(...args)
+  deleteSessionUsage: (...args: unknown[]) => mockDeleteSessionUsage(...args),
+  getDbConnection: vi.fn(() => ({})),
 }))
 
 vi.mock('./anthropicClientFactory', () => ({
+  createAnthropicStreamPort: (client: { messages: { stream: (...args: unknown[]) => unknown } }) => ({ stream: (...args: unknown[]) => client.messages.stream(...args) }),
   createAnthropicClient: vi.fn()
 }))
 

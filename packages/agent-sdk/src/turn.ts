@@ -1,0 +1,1645 @@
+import { collectModelAttempt, ModelRouteChangedError, snapshotPreparedModelCall, type CanonicalContentBlock, type CanonicalModelMessage, type CollectedModelStream, type ModelProvider, type ModelProviderRegistry, type PreparedModelCall, type StreamChunk } from './model'
+import type { PermitBinding } from './safetyPermit'
+import { SafetyGate, type SafetyDenyReason } from './safetyGate'
+import { ToolExecutionAfterDispatchError, ToolExecutionRejectedError, type PermitBoundToolExecutionPort } from './toolExecutionPort'
+import { createHash } from 'node:crypto'
+import { InvocationHistoryWriter, type HistoryEvent, type HistoryPort } from './history'
+import { ResourceLockRegistry } from './resourceLock'
+import { CapacityLedger, type CapacityReservation } from './capacity'
+import { Semaphore } from './runtime/semaphore'
+
+export type AgentTurnPorts = Readonly<{
+  registry: ModelProviderRegistry
+  safetyGate: SafetyGate
+  prepareTool(call: CanonicalToolExecutionCall, stage: ToolPreparationStage): Promise<PermitBinding>
+  /** Release host planning state when a proposal is deterministically stopped before dispatch. */
+  discardPreparedTool?(call: CanonicalToolExecutionCall, reason: string): void | Promise<void>
+  /** Persist actual provider usage once, including complete responses discarded during recovery. */
+  recordProviderAttemptUsage?(input: Record<string, unknown>): void | Promise<void>
+  /** Recover one provider attempt that failed before an assistant response was accepted. */
+  recoverProviderAttempt?(input: Readonly<{ error?: unknown; response?: Readonly<{ finishReason: Extract<StreamChunk, { type: 'finish' }>['reason']; usage: Extract<StreamChunk, { type: 'usage' }>; hasOutputContent: boolean }>; attempt: number; modelTurn: number; routeId: string; request: PreparedModelCall['request']; messages: readonly CanonicalTurnMessage[]; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): Promise<Readonly<{ kind?: 'retry'; reasonCode: string; messages: readonly CanonicalTurnMessage[]; retryEvent?: Readonly<{ attempt: number; code: string }>; requestPatch?: Partial<Pick<PreparedModelCall['request'], 'thinking' | 'maxTokens'>>; recordTranscriptCompaction?: boolean } | { kind: 'reject'; reasonCode: string }> | undefined>
+  /** Convert an accepted max-output-limit response into a bounded runtime continuation message. */
+  recoverOutputLimit?(input: Readonly<{ invocationId: string; modelTurn: number; attempt: number; hadVisibleText: boolean; toolCalls: readonly CanonicalToolExecutionCall[] }>): Promise<Readonly<{ continuation?: CanonicalModelMessage; toolCallErrorContent?: string; retryLocation?: unknown; retryTurnId?: string; retryStepId?: string }> | undefined>
+  confirmation?: ConfirmationPort
+  toolExecution: PermitBoundToolExecutionPort<CanonicalToolExecutionCall, CanonicalToolExecutionResult>
+  request: Omit<PreparedModelCall['request'], 'messages'>
+  observer?: AgentTurnObserver
+  routeId: string
+  invocationId: string
+  turnId?: string
+  windowId?: string
+  currentUserMessageId?: string
+  requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>
+  history?: HistoryPort
+  maxModelTurns: number
+  /** Legacy product bound counts dispatched tool rounds; model requests do not consume this bound. */
+  maxToolRounds?: number
+  /** Product hosts may preserve the legacy conversational denial result instead of terminating the invocation. */
+  returnDeniedToolsToModel?: boolean
+  maxConcurrentTools?: number
+  /** Resource identity resolver supplied by the host; unknown side effects are serialized conservatively. */
+  resourceLocks?: { acquire(keys: readonly string[], options?: { signal?: AbortSignal }): Promise<{ release(): void }> }
+  /** Returns the normalized host resource keys affected by this call; undefined is treated as an unknown side effect. */
+  toolResourceKeys?(call: CanonicalToolExecutionCall): readonly string[] | undefined
+  /** Uses the host's existing tool metadata to preserve bounded approval-candidate scheduling. */
+  isApprovalCandidate?(call: CanonicalToolExecutionCall): boolean
+  applicationAdmission?: ApplicationAdmissionPort
+  deadlineAt?: number
+  sessionLedgerForToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult): Promise<Record<string, unknown>> | Record<string, unknown>
+  /** Host product policy after a tool result is durably committed and before the next model request. */
+  afterToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult, source?: Readonly<{ kind: 'execution' | 'safety-rejection'; reasonCode?: string }>): void | Promise<void>
+  /** Compact or otherwise recover a request before its canonical request event and provider dispatch. */
+  preflightModelRequest?(input: Readonly<{ invocationId: string; modelTurn: number; windowId?: string; request: PreparedModelCall['request']; messages: readonly CanonicalTurnMessage[]; requestProjection?: unknown; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): Promise<Readonly<{ messages: readonly CanonicalTurnMessage[]; windowId?: string; historyPayload?: Record<string, unknown>; commitProjection?(): void | Promise<void> } | { rejected: 'OVER_BUDGET' }> | void>
+  sessionLedgerForNotDispatched?(call: CanonicalToolExecutionCall, reason: string, result: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>
+  sessionLedgerForModelResponse?(message: CanonicalTurnMessage, modelTurn: number, attempt: number, committedSessionLedger?: unknown): Promise<Record<string, unknown>> | Record<string, unknown>
+  sessionLedgerForAttemptUsage?(attempt: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>
+  sessionLedgerForInvocationTerminal?(terminal: { status: 'completed' | 'failed' | 'interrupted'; turnId: string; sessionEventReason?: 'completed' | 'failed' | 'interrupted' | 'cancelled' }): Promise<Record<string, unknown>> | Record<string, unknown>
+  /** Host planning/compaction after an accepted response and before its tools or next model request. */
+  turnBoundary?(input: Readonly<{ invocationId: string; modelTurn: number; windowId?: string; response: CanonicalTurnMessage; messages: readonly CanonicalTurnMessage[]; toolCalls: readonly CanonicalToolExecutionCall[]; usage: AgentTurnResult['usage']; requestProjection?: unknown; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): Promise<Readonly<{ messages: readonly CanonicalTurnMessage[]; windowId?: string; historyPayload?: Record<string, unknown>; commitProjection?(): void | Promise<void> }> | void>
+}>
+
+export type AgentTurnHost = Readonly<{
+  createPorts(invocation: { invocationId: string; turnId?: string; windowId?: string; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>; routeId: string; request: PreparedModelCall['request'] }): Promise<AgentTurnPorts>
+}>
+
+export type AgentTurnObserver = Readonly<{
+  /** Treat host response projection as a required commit step; failures stop before tool dispatch. */
+  criticalModelResponseProjection?: boolean
+  criticalModelRequestProjection?: boolean
+  /** Require durable accounting for each completed or discarded provider attempt. */
+  criticalModelAttemptUsageProjection?: boolean
+  /** Treat host tool lifecycle projections as required steps around dispatch and before the next model request. */
+  criticalToolProjection?: boolean
+  onModelRequest?(request: Readonly<{ modelTurn: number; attempt: number; routeId: string; windowId?: string; request: PreparedModelCall['request']; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): void | Promise<void>
+  prepareModelRequest?(request: Readonly<{ modelTurn: number; attempt: number; routeId: string; windowId?: string; request: PreparedModelCall['request']; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): Readonly<{ sessionLedger?: unknown; requestProjection?: unknown }> | void | Promise<Readonly<{ sessionLedger?: unknown; requestProjection?: unknown }> | void>
+  onProviderRetry?(retry: Readonly<{ attempt: number; modelTurn: number; routeId: string; requestId: string; code: string }>): void | Promise<void>
+  onModelAttemptDiscarded?(attempt: Readonly<{ attempt: number; modelTurn: number; reasonCode: string }>): void | Promise<void>
+  prepareProviderRetry?(retry: Readonly<{ attempt: number; modelTurn: number; routeId: string; requestId: string; code: string }>): Readonly<{ location: unknown; requestRetry: Record<string, unknown> }> | void | Promise<Readonly<{ location: unknown; requestRetry: Record<string, unknown> }> | void>
+  prepareModelResponseProjection?(response: Readonly<{ message: CanonicalTurnMessage; finishReason: Extract<import('./model').StreamChunk, { type: 'finish' }>['reason']; usage: Extract<StreamChunk, { type: 'usage' }>; modelTurn: number }>): Readonly<{ sessionLedger?: unknown; turnBoundaryProjection?: unknown }> | void | Promise<Readonly<{ sessionLedger?: unknown; turnBoundaryProjection?: unknown }> | void>
+  onOutputRecovery?(recovery: Readonly<{ attempt: number; modelTurn: number; requestId: string; toolCalls: readonly CanonicalToolExecutionCall[]; willRetry: boolean; toolCallErrorContent: string; sessionLedgerEvents: readonly HistoryEvent[] }>): void | Promise<void>
+  onModelChunk?(chunk: Exclude<import('./model').StreamChunk, { type: 'finish' }>): void | Promise<void>
+  onModelResponseCommitted?(response: Readonly<{ message: CanonicalTurnMessage; finishReason: Extract<import('./model').StreamChunk, { type: 'finish' }>['reason']; usage: Extract<StreamChunk, { type: 'usage' }>; modelTurn: number; alreadyProjected?: boolean; committedStepId?: string }>): void | Promise<void>
+  onToolStarted?(call: CanonicalToolExecutionCall): void | Promise<void>
+  onToolFinished?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult): void | Promise<void>
+  onTurnOutputReady?(result: AgentTurnResult): void | Promise<void>
+  onTurnFinished?(result: AgentTurnResult): void | Promise<void>
+  onTurnFailed?(failure: Readonly<{ error: unknown; status: 'cancelled' | 'interrupted' | 'denied' | 'failed' }>): void | Promise<void>
+  onObservationError?(error: unknown, stage: 'model-request' | 'model-chunk' | 'model-attempt-discarded' | 'model-response-committed' | 'model-attempt-usage' | 'tool-started' | 'tool-finished' | 'turn-output-ready' | 'turn-finished' | 'turn-failed' | 'history-terminal' | 'prepared-tool-discard'): void | Promise<void>
+}>
+
+export type HostCommittedModelResponse = Readonly<{
+  message: CanonicalTurnMessage
+  finishReason: Extract<StreamChunk, { type: 'finish' }>['reason']
+  usage: Extract<StreamChunk, { type: 'usage' }>
+  historyCommitted: true
+  /** The existing host already committed this response to user facts and session-event projections. */
+  hostProjectionCommitted?: true
+}>
+
+export type AgentTurnResult = Readonly<{
+  text: string
+  messages: readonly CanonicalTurnMessage[]
+  modelTurns: number
+  finishReason: Extract<StreamChunk, { type: 'finish' }>['reason']
+  /** Aggregate provider usage across every model request in this turn. */
+  usage: Readonly<{ inputTokens: number; outputTokens: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number }>
+}>
+
+function freezeRequestSnapshot<T>(value: T): T {
+  if (!value || typeof value !== 'object') return value
+  if (typeof AbortSignal !== 'undefined' && value instanceof AbortSignal) return value
+  if (Array.isArray(value)) {
+    for (const item of value) freezeRequestSnapshot(item)
+  } else {
+    for (const item of Object.values(value as Record<string, unknown>)) freezeRequestSnapshot(item)
+  }
+  return Object.freeze(value)
+}
+
+function snapshotHostedRequest(request: PreparedModelCall['request']): PreparedModelCall['request'] {
+  return freezeRequestSnapshot({
+    ...request,
+    messages: structuredClone([...request.messages]),
+    ...(request.tools ? { tools: structuredClone([...request.tools]) } : {}),
+    ...(request.thinking ? { thinking: structuredClone(request.thinking) } : {}),
+    ...(request.credentials ? { credentials: structuredClone(request.credentials) } : {})
+  })
+}
+
+/** Host entrypoint: the SDK owns the turn loop; hosts only resolve model/safety/execution ports. */
+export async function runHostedAgentTurn(input: {
+  host: AgentTurnHost
+  invocationId: string
+  sessionId?: string
+  turnId?: string
+  windowId?: string
+  currentUserMessageId?: string
+  requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>
+  routeId: string
+  request: PreparedModelCall['request']
+  /** Optional already-collected first response; requires an exact matching committed History event. */
+  initialResponse?: HostCommittedModelResponse
+  observer?: AgentTurnObserver
+}): Promise<AgentTurnResult> {
+  if (!input.routeId.trim()) throw new Error('hosted turn routeId is required')
+  if (input.currentUserMessageId && !input.requiredUserMessage) {
+    throw new Error('current user message id requires an explicit canonical required user message')
+  }
+  if (input.currentUserMessageId && input.requiredUserMessage?.id !== input.currentUserMessageId) {
+    throw new Error('current user message id does not match its required user message')
+  }
+  if (input.requiredUserMessage && (input.requiredUserMessage.message.role !== 'user' ||
+    !input.request.messages.some((message) => JSON.stringify(message) === JSON.stringify(input.requiredUserMessage!.message)))) {
+    throw new Error('required user message must exactly match a request message')
+  }
+  const request = snapshotHostedRequest(input.request)
+  const requiredUserMessage = input.requiredUserMessage ? freezeRequestSnapshot(structuredClone(input.requiredUserMessage)) : undefined
+  const ports = await input.host.createPorts({ invocationId: input.invocationId, ...(input.turnId ? { turnId: input.turnId } : {}), ...(input.windowId ? { windowId: input.windowId } : {}), ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(requiredUserMessage ? { requiredUserMessage } : {}), routeId: input.routeId, request })
+  if (ports.invocationId !== input.invocationId) throw new Error('host returned ports for a different invocation')
+  if (input.turnId && ports.turnId !== input.turnId) throw new Error('host returned ports for a different turn')
+  if (ports.routeId !== input.routeId) throw new Error('host returned ports for a different route')
+  return runAgentTurn({ ...ports, request, sessionId: input.sessionId, windowId: input.windowId ?? ports.windowId, currentUserMessageId: input.currentUserMessageId, ...(requiredUserMessage ? { requiredUserMessage } : {}), ...(input.initialResponse ? { initialResponse: input.initialResponse } : {}), maxToolRounds: ports.maxToolRounds, observer: input.observer ?? ports.observer })
+}
+
+export type { CanonicalContentBlock, CanonicalToolCall } from './model'
+export type CanonicalTurnMessage = CanonicalModelMessage
+
+type CanonicalToolExecutionCall = { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }
+type CanonicalToolExecutionResult = { output: unknown; replayContent?: unknown; isError?: boolean; auditRef?: string }
+export type ApplicationAdmissionPort = Readonly<{
+  park(checkpoint?: unknown): unknown
+  discard?(handle: unknown): void
+  resume(handle: unknown, options?: { signal?: AbortSignal; deadlineAt?: number }): boolean | { ok: true } | { ok: false; retryable: boolean; cause?: string } | Promise<boolean | { ok: true } | { ok: false; retryable: boolean; cause?: string }>
+}>
+export type ToolPreparationStage =
+  | Readonly<{ kind: 'initial' }>
+  | Readonly<{ kind: 'recheck'; confirmation?: Readonly<{ receipt: string }> }>
+export type ToolConfirmationResult = Readonly<{
+  answerer?: 'user' | 'agent'
+  cause?: string
+  userMessage?: string
+}> & (
+  | Readonly<{ kind: 'approved'; receipt: string }>
+  | Readonly<{ kind: 'denied' | 'timeout' | 'unavailable' | 'cancelled' }>
+)
+export type ConfirmationPort = (input: {
+  call: CanonicalToolExecutionCall
+  confirmationId: string
+  answerer: 'user' | 'agent'
+  reasonCode: string
+  context?: unknown
+  signal?: AbortSignal
+}) => Promise<ToolConfirmationResult>
+
+export class ToolDeniedError extends Error {
+  readonly code = 'TOOL_DENIED'
+  constructor(readonly reasonCode: SafetyDenyReason | string, readonly userMessage?: string) { super(`tool call denied: ${reasonCode}`); this.name = 'ToolDeniedError' }
+}
+
+export class ModelTurnLimitError extends Error {
+  readonly code = 'MODEL_TURN_LIMIT'
+  constructor(readonly maxModelTurns: number) { super(`model turn limit reached: ${maxModelTurns}`); this.name = 'ModelTurnLimitError' }
+}
+
+export class ModelPreflightRejectedError extends Error {
+  readonly code = 'MODEL_PREFLIGHT_REJECTED'
+  constructor(readonly reason: 'OVER_BUDGET') { super(`model request preflight rejected: ${reason}`); this.name = 'ModelPreflightRejectedError' }
+}
+
+export class ToolLoopRoundLimitError extends Error {
+  readonly code = 'TOOL_LOOP_MAX_ROUNDS_EXCEEDED'
+  constructor(readonly maxToolRounds: number, message = `TOOL_LOOP_MAX_ROUNDS_EXCEEDED(${maxToolRounds})`) { super(message); this.name = 'ToolLoopRoundLimitError' }
+}
+
+export class ModelOutputTokenLimitError extends Error {
+  readonly code = 'MODEL_OUTPUT_TOKEN_LIMIT_EXHAUSTED'
+  constructor(readonly attempts: number) { super(`model output token limit recovery exhausted after ${attempts} attempts`); this.name = 'ModelOutputTokenLimitError' }
+}
+
+export class AgentTurnCancelledError extends Error {
+  readonly code = 'TURN_CANCELLED'
+  constructor() { super('agent turn cancelled'); this.name = 'AgentTurnCancelledError' }
+}
+
+export class InvalidTurnBoundaryError extends Error {
+  readonly code = 'INVALID_TURN_BOUNDARY'
+  constructor(message: string) { super(message); this.name = 'InvalidTurnBoundaryError' }
+}
+
+class AgentTurnBoundaryProjectionError extends Error {
+  constructor(readonly originalError: unknown) {
+    super(`turn boundary ledger projection failed: ${originalError instanceof Error ? originalError.message : String(originalError)}`)
+    this.name = 'AgentTurnBoundaryProjectionError'
+  }
+}
+
+export class ModelAttemptRecoveryRejectedError extends Error {
+  readonly code = 'MODEL_ATTEMPT_RECOVERY_REJECTED'
+  constructor(readonly reasonCode: string) { super(`model attempt recovery rejected: ${reasonCode}`); this.name = 'ModelAttemptRecoveryRejectedError' }
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new AgentTurnCancelledError()
+}
+
+export type RunAgentTurnInput = {
+  registry: ModelProviderRegistry
+  routeId: string
+  request: Omit<PreparedModelCall['request'], 'messages'> & { messages: readonly CanonicalTurnMessage[] }
+  initialResponse?: HostCommittedModelResponse
+  safetyGate: SafetyGate
+  prepareTool(call: CanonicalToolExecutionCall, stage: ToolPreparationStage): Promise<PermitBinding>
+  discardPreparedTool?(call: CanonicalToolExecutionCall, reason: string): void | Promise<void>
+  recordProviderAttemptUsage?(input: Record<string, unknown>): void | Promise<void>
+  confirmation?: ConfirmationPort
+  /** Only the SDK's permit-bound factory can produce this port; host resolver must use its private prepared record. */
+  toolExecution: PermitBoundToolExecutionPort<CanonicalToolExecutionCall, CanonicalToolExecutionResult>
+  invocationId: string
+  sessionId?: string
+  windowId?: string
+  maxModelTurns: number
+  /** Product bound counts tool execution rounds independently from provider request retries. */
+  maxToolRounds?: number
+  returnDeniedToolsToModel?: boolean
+  observer?: AgentTurnObserver
+  turnId?: string
+  currentUserMessageId?: string
+  requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>
+  history?: HistoryPort
+  maxConcurrentTools?: number
+  resourceLocks?: { acquire(keys: readonly string[], options?: { signal?: AbortSignal }): Promise<{ release(): void }> }
+  toolResourceKeys?(call: CanonicalToolExecutionCall): readonly string[] | undefined
+  isApprovalCandidate?(call: CanonicalToolExecutionCall): boolean
+  applicationAdmission?: ApplicationAdmissionPort
+  deadlineAt?: number
+  sessionLedgerForToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult): Promise<Record<string, unknown>> | Record<string, unknown>
+  afterToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult, source?: Readonly<{ kind: 'execution' | 'safety-rejection'; reasonCode?: string }>): void | Promise<void>
+  sessionLedgerForNotDispatched?(call: CanonicalToolExecutionCall, reason: string, result: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>
+  sessionLedgerForModelResponse?(message: CanonicalTurnMessage, modelTurn: number, attempt: number, committedSessionLedger?: unknown): Promise<Record<string, unknown>> | Record<string, unknown>
+  sessionLedgerForAttemptUsage?(attempt: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>
+  sessionLedgerForInvocationTerminal?(terminal: { status: 'completed' | 'failed' | 'interrupted'; turnId: string; sessionEventReason?: 'completed' | 'failed' | 'interrupted' | 'cancelled' }): Promise<Record<string, unknown>> | Record<string, unknown>
+  preflightModelRequest?(input: Parameters<NonNullable<AgentTurnPorts['preflightModelRequest']>>[0]): ReturnType<NonNullable<AgentTurnPorts['preflightModelRequest']>>
+  turnBoundary?(input: Parameters<NonNullable<AgentTurnPorts['turnBoundary']>>[0]): ReturnType<NonNullable<AgentTurnPorts['turnBoundary']>>
+  recoverProviderAttempt?(input: Parameters<NonNullable<AgentTurnPorts['recoverProviderAttempt']>>[0]): ReturnType<NonNullable<AgentTurnPorts['recoverProviderAttempt']>>
+  recoverOutputLimit?(input: Parameters<NonNullable<AgentTurnPorts['recoverOutputLimit']>>[0]): ReturnType<NonNullable<AgentTurnPorts['recoverOutputLimit']>>
+}
+
+type AppendTurnHistory = (events: readonly Readonly<{ kind: HistoryEvent['kind']; payload: unknown }>[]) => Promise<readonly HistoryEvent[]>
+
+class AgentTurnHistoryAppendError extends Error {
+  constructor(readonly kinds: readonly HistoryEvent['kind'][], readonly originalError: unknown) {
+    const detail = originalError instanceof Error ? originalError.message : String(originalError)
+    super(`history append failed (${kinds.join(',')}): ${detail}`)
+    this.name = 'AgentTurnHistoryAppendError'
+  }
+}
+
+class AgentTurnHostProjectionError extends Error {
+  constructor(readonly originalError: unknown) {
+    super(`host response projection failed: ${originalError instanceof Error ? originalError.message : String(originalError)}`)
+    this.name = 'AgentTurnHostProjectionError'
+  }
+}
+
+class AgentTurnToolProjectionError extends Error {
+  constructor(readonly originalError: unknown) {
+    super(`host tool projection failed: ${originalError instanceof Error ? originalError.message : String(originalError)}`)
+    this.name = 'AgentTurnToolProjectionError'
+  }
+}
+
+class AgentTurnHistoryAlreadyTerminalError extends Error {
+  constructor(invocationId: string) {
+    super(`History invocation is already terminal: ${invocationId}`)
+    this.name = 'AgentTurnHistoryAlreadyTerminalError'
+  }
+}
+
+export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnResult> {
+  if (input.observer?.criticalModelResponseProjection && !input.observer.onModelResponseCommitted) {
+    throw new Error('critical model response projection requires onModelResponseCommitted')
+  }
+  if (input.observer?.criticalModelRequestProjection && !input.observer.onModelRequest) {
+    throw new Error('critical model request projection requires onModelRequest')
+  }
+  if (input.observer?.criticalModelAttemptUsageProjection && !input.recordProviderAttemptUsage) {
+    throw new Error('critical model attempt usage projection requires recordProviderAttemptUsage')
+  }
+  if (input.observer?.criticalToolProjection && (!input.observer.onToolStarted || !input.observer.onToolFinished)) {
+    throw new Error('critical tool projection requires onToolStarted and onToolFinished')
+  }
+  const writer = input.history
+    ? new InvocationHistoryWriter(input.history, { invocationId: input.invocationId, turnId: input.turnId ?? input.invocationId })
+    : undefined
+  const appendHistory: AppendTurnHistory = async (events) => {
+    if (!writer) return []
+    try {
+      const result = await writer.append(events)
+      return result.events
+    } catch (error) {
+      throw new AgentTurnHistoryAppendError(events.map(({ kind }) => kind), error)
+    }
+  }
+  const appendTerminalHistory = async (kind: HistoryEvent['kind'], payload: unknown, sessionLedger?: Record<string, unknown>): Promise<void> => {
+    const persistedPayload = sessionLedger ? { ...(payload as Record<string, unknown>), sessionLedger } : payload
+    try {
+      await appendHistory([{ kind, payload: persistedPayload }])
+    } catch (error) {
+      await observe(input.observer, 'history-terminal', () => input.observer?.onObservationError?.(error, 'history-terminal'))
+      if (input.history) {
+        try {
+          const snapshot = await input.history.read(input.invocationId)
+          const terminal = [...snapshot.events].reverse().find((event) =>
+            event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted'
+          )
+          if (terminal?.kind === kind && terminal.invocationId === input.invocationId &&
+            terminal.turnId === (input.turnId ?? input.invocationId) &&
+            JSON.stringify(terminal.payload) === JSON.stringify(persistedPayload)) return
+        } catch { /* The append error remains authoritative when its outcome cannot be read. */ }
+      }
+      throw error
+    }
+  }
+  let lastValidUsage: Extract<StreamChunk, { type: 'usage' }> | undefined
+  try {
+    const result = await runAgentTurnLoop(input, appendHistory, (usage) => { lastValidUsage = usage })
+    await projectTurnOutput(input.observer, result)
+    const terminalPayload = { status: 'completed' as const, outputText: result.text, usage: result.usage }
+    const sessionLedger = input.sessionLedgerForInvocationTerminal
+      ? await input.sessionLedgerForInvocationTerminal({ ...terminalPayload, turnId: input.turnId ?? input.invocationId })
+      : undefined
+    await appendTerminalHistory('invocation-completed', terminalPayload, sessionLedger)
+    await observe(input.observer, 'turn-finished', () => input.observer?.onTurnFinished?.(result))
+    return result
+  } catch (error) {
+    let failureSettlementUncertain = false
+    if (input.history && !(error instanceof AgentTurnHistoryAlreadyTerminalError)) {
+      try {
+        const snapshot = await input.history.read(input.invocationId)
+        const terminalExists = snapshot.events.some((event) => event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted')
+        if (!terminalExists) {
+          const pending = new Map<string, { id: string; name: string; input: Record<string, unknown> }>()
+          const started = new Set<string>()
+          for (const event of snapshot.events) {
+            const payload = event.payload && typeof event.payload === 'object' ? event.payload as {
+              message?: { toolCalls?: readonly { id?: unknown; name?: unknown; input?: unknown }[] }
+              toolCallId?: unknown
+            } : undefined
+            if (event.kind === 'model-response-committed') {
+              for (const tool of payload?.message?.toolCalls ?? []) {
+                if (typeof tool.id === 'string' && typeof tool.name === 'string' && tool.input && typeof tool.input === 'object' && !Array.isArray(tool.input)) {
+                  pending.set(tool.id, { id: tool.id, name: tool.name, input: tool.input as Record<string, unknown> })
+                  started.delete(tool.id)
+                }
+              }
+            }
+            if (event.kind === 'tool-call-started' && typeof payload?.toolCallId === 'string' && pending.has(payload.toolCallId)) started.add(payload.toolCallId)
+            if ((event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') && typeof payload?.toolCallId === 'string') {
+              pending.delete(payload.toolCallId)
+              started.delete(payload.toolCallId)
+            }
+          }
+          for (const tool of pending.values()) {
+            if (started.has(tool.id)) {
+              failureSettlementUncertain = true
+              continue
+            }
+            const reason = 'TURN_FAILED_BEFORE_TOOL_DISPATCH'
+            const sessionResult = { success: false, data: `Tool call was not dispatched (${reason}).` }
+            try {
+              const sessionLedger = input.sessionLedgerForNotDispatched
+                ? await input.sessionLedgerForNotDispatched({ invocationId: input.invocationId, toolCallId: tool.id, toolName: tool.name, input: structuredClone(tool.input) }, reason, sessionResult)
+                : undefined
+              await appendHistory([{ kind: 'tool-call-not-dispatched', payload: {
+                toolCallId: tool.id, reason, replayContent: sessionResult.data, isError: true,
+                ...(sessionLedger ? { sessionLedger } : {})
+              } }])
+            } catch {
+              failureSettlementUncertain = true
+              break
+            }
+          }
+        }
+      } catch {
+        failureSettlementUncertain = true
+      }
+    }
+    const resultPersistenceUncertain = failureSettlementUncertain || error instanceof AgentTurnHistoryAppendError && error.kinds.includes('tool-call-finished')
+    const executionUncertain = error instanceof ToolExecutionAfterDispatchError
+    const boundaryProjectionUncertain = error instanceof AgentTurnBoundaryProjectionError
+    const hostProjectionFailed = error instanceof AgentTurnHostProjectionError
+    const toolProjectionFailed = error instanceof AgentTurnToolProjectionError
+    const status = error instanceof AgentTurnCancelledError
+      ? 'cancelled' as const
+      : resultPersistenceUncertain || executionUncertain || hostProjectionFailed || toolProjectionFailed || boundaryProjectionUncertain
+        ? 'interrupted' as const
+        : error instanceof ToolDeniedError ? 'denied' as const : 'failed' as const
+    if (!(error instanceof AgentTurnHistoryAlreadyTerminalError)) {
+      try {
+        const terminalKind = error instanceof AgentTurnCancelledError || resultPersistenceUncertain || executionUncertain || hostProjectionFailed || toolProjectionFailed || boundaryProjectionUncertain ? 'invocation-interrupted' : 'invocation-failed'
+        const terminalPayload = error instanceof AgentTurnCancelledError
+            ? { status: 'cancelled', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
+            : hostProjectionFailed
+              ? { status: 'interrupted', reason: 'host-projection-failed', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
+            : toolProjectionFailed
+              ? { status: 'interrupted', reason: 'tool-projection-failed', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
+            : boundaryProjectionUncertain
+              ? { status: 'interrupted', reason: 'turn-boundary-ledger-projection-failed', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
+            : resultPersistenceUncertain || executionUncertain
+              ? { status: 'interrupted', reason: 'unknown-after-dispatch', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
+            : error instanceof ToolDeniedError
+              ? { status: 'denied', reason: error.reasonCode, ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
+              : { status: 'failed', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
+        const status = terminalKind === 'invocation-interrupted' ? 'interrupted' as const : 'failed' as const
+        const sessionLedger = input.sessionLedgerForInvocationTerminal
+          ? await input.sessionLedgerForInvocationTerminal({ status, turnId: input.turnId ?? input.invocationId, ...(error instanceof AgentTurnCancelledError ? { sessionEventReason: 'cancelled' } : {}) })
+          : undefined
+        await appendTerminalHistory(terminalKind, terminalPayload, sessionLedger)
+      } catch { /* Preserve the original turn failure when terminal persistence also fails. */ }
+    }
+    await observe(input.observer, 'turn-failed', () => input.observer?.onTurnFailed?.({ error, status }))
+    throw error
+  }
+}
+
+async function ensureInitialHistoryContext(input: RunAgentTurnInput, call: PreparedModelCall, appendHistory: AppendTurnHistory): Promise<void> {
+  if (!input.history) return
+  const snapshot = await input.history.read(input.invocationId)
+  if (snapshot.events.some(({ kind }) => kind === 'invocation-completed' || kind === 'invocation-failed' || kind === 'invocation-interrupted' || kind === 'invocation-parked')) {
+    throw new AgentTurnHistoryAlreadyTerminalError(input.invocationId)
+  }
+  if (snapshot.events.some(({ kind }) => kind === 'invocation-context-committed' || kind === 'transcript-compacted')) {
+    assertHistoryRequestCompatibility(snapshot.events, call)
+    return
+  }
+  const requiredUserMessage = input.requiredUserMessage
+  if (input.currentUserMessageId && (!requiredUserMessage || requiredUserMessage.id !== input.currentUserMessageId)) {
+    throw new Error('current user message id requires an explicit canonical required user message')
+  }
+  if (snapshot.events.length > 0) {
+    const [sessionInput] = snapshot.events
+    const payload = sessionInput?.kind === 'session-input-committed' && sessionInput.payload && typeof sessionInput.payload === 'object'
+      ? sessionInput.payload as { sessionId?: unknown; messageId?: unknown; role?: unknown; inputFingerprint?: unknown }
+      : undefined
+    if (snapshot.events.length !== 1 || !input.sessionId || !requiredUserMessage || payload?.sessionId !== input.sessionId ||
+      payload.messageId !== requiredUserMessage.id || payload.role !== 'user' || typeof payload.inputFingerprint !== 'string' || !payload.inputFingerprint.trim() ||
+      requiredUserMessage.id !== input.currentUserMessageId) {
+      throw new Error('history base context is missing for a non-empty invocation')
+    }
+  }
+  if (requiredUserMessage && (requiredUserMessage.message.role !== 'user' ||
+    !input.request.messages.some((message) => JSON.stringify(message) === JSON.stringify(requiredUserMessage.message)))) {
+      throw new Error('required user message must exactly match a message in the history base')
+  }
+  await appendHistory([{
+    kind: 'invocation-context-committed',
+    payload: {
+      messages: structuredClone(call.request.messages),
+      requestSnapshot: canonicalRequestSnapshot(call),
+      ...(requiredUserMessage
+        ? { requiredUserMessage: structuredClone(requiredUserMessage) }
+        : {})
+    }
+  }])
+}
+
+function assertHistoryRequestCompatibility(events: readonly HistoryEvent[], call: PreparedModelCall): void {
+  const withoutMessages = (request: Record<string, unknown>) => Object.fromEntries(Object.entries(request).filter(([key]) => key !== 'messages'))
+  const allowedOptions: string[] = []
+  let latestOptions: Record<string, unknown> | undefined
+  for (const event of events) {
+    if (event.kind === 'invocation-context-committed' || event.kind === 'model-request-started' || event.kind === 'model-response-committed') {
+      const payload = event.payload && typeof event.payload === 'object' ? event.payload as { requestSnapshot?: unknown } : undefined
+      if (payload?.requestSnapshot === undefined) continue // Pre-snapshot history remains readable during the migration window.
+      if (!payload.requestSnapshot || typeof payload.requestSnapshot !== 'object') throw new Error('History request snapshot is invalid')
+      const persisted = payload.requestSnapshot as { route?: unknown; request?: unknown }
+      if (!persisted.route || typeof persisted.route !== 'object' || !persisted.request || typeof persisted.request !== 'object') {
+        throw new Error('History request snapshot is incomplete')
+      }
+      if (!sameRouteIdentity(persisted.route as PreparedModelCall['route'], call.route)) {
+        throw new Error(`History request snapshot route mismatch: ${event.eventId}`)
+      }
+      const options = stableRequestValue(withoutMessages(persisted.request as Record<string, unknown>))
+      if (allowedOptions.length && !allowedOptions.includes(options)) throw new Error(`History request snapshot options mismatch: ${event.eventId}`)
+      if (!allowedOptions.length) allowedOptions.push(options)
+      if (!latestOptions) latestOptions = withoutMessages(persisted.request as Record<string, unknown>)
+      else if (options === stableRequestValue(latestOptions)) latestOptions = withoutMessages(persisted.request as Record<string, unknown>)
+      continue
+    }
+    if (event.kind === 'model-attempt-discarded') {
+      const payload = event.payload && typeof event.payload === 'object' ? event.payload as { reasonCode?: unknown; requestPatch?: unknown } : undefined
+      if (payload?.reasonCode !== 'EFFORT_UNSUPPORTED' || payload.requestPatch === undefined) continue
+      if (!latestOptions || !payload.requestPatch || typeof payload.requestPatch !== 'object') throw new Error(`History request patch is invalid: ${event.eventId}`)
+      const patch = payload.requestPatch as { thinking?: unknown }
+      if (!patch.thinking || typeof patch.thinking !== 'object' || typeof (patch.thinking as { enabled?: unknown }).enabled !== 'boolean' || 'effort' in (patch.thinking as Record<string, unknown>)) {
+        throw new Error(`History effort fallback patch is invalid: ${event.eventId}`)
+      }
+      latestOptions = { ...latestOptions, thinking: patch.thinking }
+      allowedOptions.push(stableRequestValue(latestOptions))
+    }
+  }
+  if (latestOptions) {
+    const currentOptions = withoutMessages(snapshotPreparedModelCall(call).request as Record<string, unknown>)
+    if (stableRequestValue(currentOptions) !== stableRequestValue(latestOptions)) throw new Error('History request snapshot options mismatch: current request')
+  }
+}
+
+function stableRequestValue(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableRequestValue).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, nested]) => `${JSON.stringify(key)}:${stableRequestValue(nested)}`).join(',')}}`
+  }
+  return JSON.stringify(value) ?? 'undefined'
+}
+
+async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendTurnHistory, onAcceptedUsage: (usage: Extract<StreamChunk, { type: 'usage' }>) => void): Promise<AgentTurnResult> {
+  if (!Number.isInteger(input.maxModelTurns) || input.maxModelTurns <= 0) throw new Error('maxModelTurns must be a positive integer')
+  if (!input.invocationId.trim()) throw new Error('invocationId is required')
+  const invocationId = input.invocationId
+  const messages: CanonicalTurnMessage[] = structuredClone([...input.request.messages])
+  const resourceLocks = input.resourceLocks ?? new ResourceLockRegistry()
+  let text = ''
+  let inputTokens = 0
+  let outputTokens = 0
+  let cacheReadInputTokens = 0
+  let cacheCreationInputTokens = 0
+  let outputRecoveryAttempts = 0
+  let dispatchedToolRounds = 0
+  let requestTemplate: Omit<PreparedModelCall['request'], 'messages'> = { ...input.request }
+  let activeWindowId = input.windowId
+  let pinnedRoute: PreparedModelCall['route'] | undefined
+  let pinnedProvider: ModelProvider | undefined
+
+  for (let modelTurns = 1; modelTurns <= input.maxModelTurns; modelTurns += 1) {
+    throwIfAborted(input.request.signal)
+    let call = input.registry.prepare(input.routeId, { ...requestTemplate, messages })
+    await ensureInitialHistoryContext(input, call, appendHistory)
+    const initialResponse = modelTurns === 1 ? input.initialResponse : undefined
+    let requestObservation = { modelTurn: modelTurns, attempt: 1, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: call.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
+    let preparedRequestProjection = !initialResponse ? await input.observer?.prepareModelRequest?.(requestObservation) : undefined
+    if (!initialResponse && input.preflightModelRequest) {
+      const requestExceedsBudget = (projection: unknown): boolean => {
+        if (!projection || typeof projection !== 'object' || Array.isArray(projection)) return false
+        const record = projection as { budget?: { totalInputBudget?: unknown }; surfaceSnapshot?: { surfaceTokens?: unknown }; contextUsage?: { projectedTokens?: unknown } }
+        if (typeof record.budget?.totalInputBudget !== 'number') return false
+        const projectedTokens = typeof record.contextUsage?.projectedTokens === 'number'
+          ? record.contextUsage.projectedTokens
+          : record.surfaceSnapshot?.surfaceTokens
+        return typeof projectedTokens === 'number' && projectedTokens > record.budget.totalInputBudget
+      }
+      const overBudgetBeforeRecovery = requestExceedsBudget(preparedRequestProjection?.requestProjection)
+      const preflight = await input.preflightModelRequest({
+        invocationId,
+        modelTurn: modelTurns,
+        ...(activeWindowId ? { windowId: activeWindowId } : {}),
+        request: call.request,
+        messages: structuredClone(messages),
+        ...(preparedRequestProjection?.requestProjection !== undefined ? { requestProjection: preparedRequestProjection.requestProjection } : {}),
+        ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}),
+        ...(input.requiredUserMessage ? { requiredUserMessage: structuredClone(input.requiredUserMessage) } : {})
+      })
+      if (preflight && 'rejected' in preflight) {
+        throw new ModelPreflightRejectedError('OVER_BUDGET')
+      }
+      const preflightRecovery = preflight && 'messages' in preflight ? preflight : undefined
+      const didRecover = Boolean(preflightRecovery?.messages && JSON.stringify(preflightRecovery.messages) !== JSON.stringify(messages))
+      if (didRecover && preflightRecovery?.messages) {
+        const compacted = structuredClone([...preflightRecovery.messages])
+        if (input.currentUserMessageId && input.requiredUserMessage) {
+          const required = JSON.stringify(input.requiredUserMessage.message)
+          if (!compacted.some((message) => message.role === 'user' && JSON.stringify(message) === required)) {
+            throw new InvalidTurnBoundaryError(`preflight omitted required user message: ${input.currentUserMessageId}`)
+          }
+        }
+        if (!input.history) throw new InvalidTurnBoundaryError('preflight transcript replacement requires canonical History')
+        await appendHistory([{
+          kind: 'transcript-compacted',
+          payload: {
+            ...(preflightRecovery.historyPayload ? structuredClone(preflightRecovery.historyPayload) : {}),
+            messages: compacted,
+            inputFingerprint: createHash('sha256').update(JSON.stringify(messages)).digest('hex'),
+            outputFingerprint: createHash('sha256').update(JSON.stringify(compacted)).digest('hex'),
+            ...(input.requiredUserMessage ? { requiredUserMessage: structuredClone(input.requiredUserMessage) } : {})
+          }
+        }])
+        if (preflightRecovery.commitProjection) {
+          try { await preflightRecovery.commitProjection() }
+          catch (error) { throw new AgentTurnBoundaryProjectionError(error) }
+        }
+        messages.splice(0, messages.length, ...compacted)
+        if (preflightRecovery.windowId) activeWindowId = preflightRecovery.windowId
+        call = input.registry.prepare(input.routeId, { ...requestTemplate, messages })
+        requestObservation = { modelTurn: modelTurns, attempt: 1, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: call.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
+        preparedRequestProjection = await input.observer?.prepareModelRequest?.(requestObservation)
+      }
+      if (overBudgetBeforeRecovery && (!didRecover || requestExceedsBudget(preparedRequestProjection?.requestProjection))) {
+        throw new ModelPreflightRejectedError('OVER_BUDGET')
+      }
+    }
+    const provider = input.registry.getProvider(call)
+    if (pinnedRoute && (!sameRouteIdentity(pinnedRoute, call.route) || pinnedProvider !== provider)) {
+      throw new ModelRouteChangedError(input.routeId)
+    }
+    pinnedRoute ??= call.route
+    pinnedProvider ??= provider
+    if (!initialResponse) {
+      await appendHistory([{
+        kind: 'model-request-started',
+        payload: {
+          requestId: `${invocationId}:round:${modelTurns}`,
+          modelTurn: modelTurns,
+          attempt: 1,
+          routeId: input.routeId,
+          requestSnapshot: canonicalRequestSnapshot(call),
+          ...(preparedRequestProjection?.sessionLedger !== undefined ? { sessionLedger: preparedRequestProjection.sessionLedger } : {})
+        }
+      }])
+      const onModelRequest = () => input.observer?.onModelRequest?.(requestObservation)
+      if (input.observer?.criticalModelRequestProjection) await onModelRequest()
+      else await observe(input.observer, 'model-request', onModelRequest)
+    }
+    // The host has already streamed and committed this response; reduce its canonical message without re-emitting provisional chunks.
+    let collected: CollectedModelStream
+    let recoveredAttempt = false
+    const recover = async (details: {
+      error?: unknown
+      response?: Readonly<{ finishReason: Extract<StreamChunk, { type: 'finish' }>['reason']; usage: Extract<StreamChunk, { type: 'usage' }>; hasOutputContent: boolean }>
+    }): Promise<CollectedModelStream | undefined> => {
+      if (!input.recoverProviderAttempt) return undefined
+      const recovery = await input.recoverProviderAttempt({
+        ...details,
+        attempt: recoveredAttempt ? 2 : 1,
+        modelTurn: modelTurns,
+        routeId: input.routeId,
+        request: { ...requestTemplate, messages: structuredClone(messages) },
+        messages: structuredClone(messages),
+        ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}),
+        ...(input.requiredUserMessage ? { requiredUserMessage: structuredClone(input.requiredUserMessage) } : {})
+      })
+      if (!recovery) return undefined
+      if (recoveredAttempt) throw new ModelAttemptRecoveryRejectedError('RETRY_LIMIT_EXCEEDED')
+      if (!/^[A-Z0-9_]{1,64}$/.test(recovery.reasonCode)) throw new Error('provider recovery reasonCode must be a stable uppercase code')
+      const recordDiscardedUsage = async (response: NonNullable<typeof details.response>, attempt: number): Promise<Record<string, unknown> | undefined> => {
+        inputTokens += response.usage.inputTokens
+        outputTokens += response.usage.outputTokens
+        cacheReadInputTokens += response.usage.cacheReadInputTokens ?? 0
+        cacheCreationInputTokens += response.usage.cacheCreationInputTokens ?? 0
+        const attemptUsage = {
+          invocationId,
+          modelTurn: modelTurns,
+          attempt,
+          routeId: input.routeId,
+          usage: response.usage,
+          finishReason: response.finishReason,
+          disposition: 'discarded',
+          reasonCode: recovery.reasonCode
+        }
+        await projectModelAttemptUsage(input, attemptUsage)
+        return input.sessionLedgerForAttemptUsage ? await input.sessionLedgerForAttemptUsage(attemptUsage) : undefined
+      }
+      if (recovery.kind === 'reject') {
+        const sessionLedger = details.response ? await recordDiscardedUsage(details.response, recoveredAttempt ? 2 : 1) : undefined
+        if (details.response && input.history) await appendHistory([{
+          kind: 'model-attempt-discarded',
+          payload: { modelTurn: modelTurns, attempt: recoveredAttempt ? 2 : 1, reasonCode: recovery.reasonCode, finishReason: details.response.finishReason, usage: details.response.usage, ...(sessionLedger ? { sessionLedger } : {}) }
+        }])
+        throwIfAborted(input.request.signal)
+        throw new ModelAttemptRecoveryRejectedError(recovery.reasonCode)
+      }
+      throwIfAborted(input.request.signal)
+      if (recoveredAttempt) throw new ModelAttemptRecoveryRejectedError('RETRY_LIMIT_EXCEEDED')
+      const recoveredMessages = structuredClone([...recovery.messages])
+      if (input.currentUserMessageId && input.requiredUserMessage &&
+        !recoveredMessages.some((message) => message.role === 'user' && JSON.stringify(message) === JSON.stringify(input.requiredUserMessage!.message))) {
+        throw new InvalidTurnBoundaryError(`provider recovery omitted required user message: ${input.currentUserMessageId}`)
+      }
+      const sessionLedger = details.response ? await recordDiscardedUsage(details.response, recoveredAttempt ? 2 : 1) : undefined
+      if (input.history && recovery.recordTranscriptCompaction === false && recovery.requestPatch) await appendHistory([{
+        kind: 'model-attempt-discarded',
+        payload: { modelTurn: modelTurns, attempt: recoveredAttempt ? 2 : 1, reasonCode: recovery.reasonCode, requestPatch: recovery.requestPatch, ...(sessionLedger ? { sessionLedger } : {}) }
+      }])
+      if (input.history && recovery.recordTranscriptCompaction !== false) await appendHistory([
+        ...(details.response ? [{
+          kind: 'model-attempt-discarded' as const,
+          payload: {
+            modelTurn: modelTurns,
+            attempt: recoveredAttempt ? 2 : 1,
+            reasonCode: recovery.reasonCode,
+            finishReason: details.response.finishReason,
+            usage: details.response.usage,
+            ...(sessionLedger ? { sessionLedger } : {})
+          }
+        }] : []),
+        {
+        kind: 'transcript-compacted',
+        payload: {
+          messages: recoveredMessages,
+          inputFingerprint: createHash('sha256').update(JSON.stringify(messages)).digest('hex'),
+          outputFingerprint: createHash('sha256').update(JSON.stringify(recoveredMessages)).digest('hex'),
+          recoveryReason: recovery.reasonCode,
+          ...(input.requiredUserMessage ? { requiredUserMessage: structuredClone(input.requiredUserMessage) } : {})
+        }
+      }])
+      if (recovery.retryEvent) {
+        if (input.observer?.criticalModelRequestProjection && !input.observer.onProviderRetry) {
+          throw new Error('critical model request projection requires onProviderRetry')
+        }
+        const retry = {
+          attempt: recovery.retryEvent.attempt,
+          modelTurn: modelTurns,
+          routeId: input.routeId,
+          requestId: `${invocationId}:round:${modelTurns}`,
+          code: recovery.retryEvent.code
+        }
+        const retryLedger = await input.observer?.prepareProviderRetry?.(retry)
+        await appendHistory([{
+          kind: 'provider-retry-scheduled',
+          payload: {
+            requestId: retry.requestId,
+            modelTurn: retry.modelTurn,
+            routeId: retry.routeId,
+            retryAttempt: retry.attempt,
+            code: recovery.retryEvent.code,
+            backoffMs: 0,
+            ...(retryLedger ? { sessionLedger: { location: retryLedger.location, requestRetry: retryLedger.requestRetry } } : {})
+          }
+        }])
+        await observe(input.observer, 'model-attempt-discarded', () => input.observer?.onModelAttemptDiscarded?.({
+          attempt: retry.attempt,
+          modelTurn: retry.modelTurn,
+          reasonCode: recovery.reasonCode
+        }))
+        const onProviderRetry = () => input.observer?.onProviderRetry?.(retry)
+        if (input.observer?.criticalModelRequestProjection) await onProviderRetry()
+        else await observe(input.observer, 'model-request', onProviderRetry)
+      }
+      throwIfAborted(input.request.signal)
+      messages.splice(0, messages.length, ...recoveredMessages)
+      requestTemplate = { ...requestTemplate, ...(recovery.requestPatch ?? {}) }
+        const retryCall = input.registry.prepare(input.routeId, { ...requestTemplate, messages })
+        const retryProvider = input.registry.getProvider(retryCall)
+        if (!sameRouteIdentity(retryCall.route, call.route) || retryProvider !== provider) throw new ModelRouteChangedError(input.routeId)
+        recoveredAttempt = true
+        const retryRequestObservation = { modelTurn: modelTurns, attempt: 2, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: retryCall.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
+        const retryProjection = await input.observer?.prepareModelRequest?.(retryRequestObservation)
+        await appendHistory([{
+          kind: 'model-request-started',
+          payload: {
+            requestId: `${invocationId}:round:${modelTurns}`,
+            modelTurn: modelTurns,
+            attempt: 2,
+            routeId: input.routeId,
+            requestSnapshot: canonicalRequestSnapshot(retryCall),
+            ...(retryProjection?.sessionLedger !== undefined ? { sessionLedger: retryProjection.sessionLedger } : {})
+          }
+        }])
+        const onRetryModelRequest = () => input.observer?.onModelRequest?.(retryRequestObservation)
+        if (input.observer?.criticalModelRequestProjection) await onRetryModelRequest()
+        else await observe(input.observer, 'model-request', onRetryModelRequest)
+      return collectProviderAttempt(retryProvider.stream(retryCall), modelTurns, 2)
+    }
+    if (initialResponse) {
+      collected = collectCanonicalHostResponse(initialResponse)
+    } else {
+      try {
+        collected = await collectProviderAttempt(provider.stream(call), modelTurns, recoveredAttempt ? 2 : 1)
+      } catch (error) {
+        const retry = await recover({ error })
+        if (!retry) throw error
+        collected = retry
+      }
+      if (input.recoverProviderAttempt && !recoveredAttempt) {
+        const hasOutputContent = collected.chunks.some((chunk) => chunk.type === 'text-delta' || chunk.type === 'thinking-delta' || chunk.type === 'thinking-signature' || chunk.type === 'tool-call')
+        const retry = await recover({ response: { finishReason: collected.finish.reason, usage: collected.usage, hasOutputContent } })
+        if (retry) {
+          collected = retry
+          const retryHasOutputContent = collected.chunks.some((chunk) => chunk.type === 'text-delta' || chunk.type === 'thinking-delta' || chunk.type === 'thinking-signature' || chunk.type === 'tool-call')
+          const retryAgain = await recover({ response: { finishReason: collected.finish.reason, usage: collected.usage, hasOutputContent: retryHasOutputContent } })
+          if (retryAgain) collected = retryAgain
+        }
+      }
+    }
+    if (collected.finish.reason === 'cancelled') throw new AgentTurnCancelledError()
+    throwIfAborted(input.request.signal)
+    const toolCalls = collected.chunks.filter((chunk): chunk is Extract<typeof chunk, { type: 'tool-call' }> => chunk.type === 'tool-call')
+    inputTokens += collected.usage.inputTokens
+    outputTokens += collected.usage.outputTokens
+    cacheReadInputTokens += collected.usage.cacheReadInputTokens ?? 0
+    cacheCreationInputTokens += collected.usage.cacheCreationInputTokens ?? 0
+    const textDelta = collected.chunks.filter((chunk): chunk is Extract<typeof chunk, { type: 'text-delta' }> => chunk.type === 'text-delta').map((chunk) => chunk.text).join('')
+    const assistantContent: CanonicalContentBlock[] = []
+    for (const chunk of collected.chunks) {
+      if (chunk.type === 'text-delta') {
+        const previous = assistantContent.at(-1)
+        if (previous?.type === 'text') assistantContent[assistantContent.length - 1] = { type: 'text', text: previous.text + chunk.text }
+        else assistantContent.push({ type: 'text', text: chunk.text })
+      } else if (chunk.type === 'thinking-delta') {
+        const previous = assistantContent.at(-1)
+        if (previous?.type === 'thinking' && !previous.thinkingSignature && !previous.redacted) assistantContent[assistantContent.length - 1] = { ...previous, thinking: previous.thinking + chunk.text }
+        else assistantContent.push({ type: 'thinking', thinking: chunk.text })
+      }
+      else if (chunk.type === 'thinking-signature') {
+        let index = assistantContent.length - 1
+        while (index >= 0 && assistantContent[index]?.type !== 'thinking') index -= 1
+        if (index < 0) assistantContent.push({ type: 'thinking', thinking: '', thinkingSignature: chunk.signature, ...(chunk.redacted ? { redacted: true } : {}) })
+        else {
+          const current = assistantContent[index] as Extract<CanonicalContentBlock, { type: 'thinking' }>
+          assistantContent[index] = {
+            type: 'thinking',
+            thinking: chunk.redacted ? '' : current.thinking,
+            thinkingSignature: chunk.signature,
+            ...(chunk.redacted ? { redacted: true } : {})
+          }
+        }
+      }
+    }
+    text += textDelta
+
+    if (collected.finish.reason !== 'length' && ((collected.finish.reason === 'tool-calls') !== (toolCalls.length > 0))) {
+      throw new Error('model finish reason does not match tool calls')
+    }
+    const ids = new Set<string>()
+    for (const tool of toolCalls) {
+      if (!tool.toolCallId.trim() || ids.has(tool.toolCallId)) throw new Error('duplicate or empty tool call id')
+      ids.add(tool.toolCallId)
+    }
+
+    // Mixed assistant text + tool proposals keep canonical block structure, matching persisted host History.
+    const canonicalAssistantBlocks = toolCalls.length > 0
+      ? assistantContent.filter((block) => block.type !== 'text' || block.text.trim().length > 0)
+      : assistantContent
+    const assistantContentValue = toolCalls.length > 0
+      ? (canonicalAssistantBlocks.length > 0 ? canonicalAssistantBlocks : undefined)
+      : assistantHistoryContent(assistantContent, textDelta)
+    const reducedAssistantMessage: CanonicalTurnMessage = toolCalls.length
+      ? {
+          role: 'assistant',
+          ...(assistantContentValue !== undefined ? { content: assistantContentValue } : {}),
+          toolCalls: toolCalls.map((tool) => ({ id: tool.toolCallId, name: tool.toolName, input: structuredClone(tool.input), ...(tool.thoughtSignature ? { thoughtSignature: tool.thoughtSignature } : {}) }))
+      }
+      : { role: 'assistant', content: assistantContentValue ?? '' }
+    const assistantMessage: CanonicalTurnMessage = initialResponse?.message ?? reducedAssistantMessage
+    const toolDispatchStates = new Map(toolCalls.map((tool) => [tool.toolCallId, 'pending' as 'pending' | 'not-dispatched' | 'started' | 'finished']))
+    const markNotDispatched = async (tool: (typeof toolCalls)[number], reason: string, userMessage?: string): Promise<void> => {
+      if (toolDispatchStates.get(tool.toolCallId) !== 'pending') return
+      const replayContent = userMessage ?? `Tool call was not dispatched (${reason}).`
+      const sessionResult = { success: false, data: replayContent }
+      const sessionLedger = input.sessionLedgerForNotDispatched
+        ? await input.sessionLedgerForNotDispatched({ ...tool, invocationId }, reason, sessionResult)
+        : undefined
+      let appendFailed = false
+      let appendError: unknown
+      try {
+        await appendHistory([{
+          kind: 'tool-call-not-dispatched',
+          payload: {
+            toolCallId: tool.toolCallId,
+            reason,
+            replayContent,
+            isError: true,
+            ...(sessionLedger ? { sessionLedger } : {})
+          }
+        }])
+      } catch (error) {
+        appendFailed = true
+        appendError = error
+      }
+      toolDispatchStates.set(tool.toolCallId, 'not-dispatched')
+      try {
+        await input.discardPreparedTool?.({ invocationId, toolCallId: tool.toolCallId, toolName: tool.toolName, input: structuredClone(tool.input), ...(input.request.signal ? { signal: input.request.signal } : {}) }, reason)
+      } catch (error) {
+        await observe(input.observer, 'prepared-tool-discard', () => input.observer?.onObservationError?.(error, 'prepared-tool-discard'))
+      }
+      if (appendFailed) throw appendError
+    }
+    let committedInitialResponseStepId: string | undefined
+    if (initialResponse) {
+      const committedResponse = await assertHostCommittedResponse(input.history, input.invocationId, initialResponse)
+      committedInitialResponseStepId = committedResponse.sessionLedgerStepId
+      // Seed read-only host projections from the canonical committed response. Do not append
+      // another model-response event or replay any already committed side effects.
+      if (input.sessionLedgerForModelResponse) {
+        await input.sessionLedgerForModelResponse(committedResponse.message, modelTurns, 1, committedResponse.sessionLedger)
+      }
+    }
+    const acceptedAttemptNumber = recoveredAttempt ? 2 : 1
+    let attemptUsageLedger: Record<string, unknown> | undefined
+    if (!initialResponse) {
+      const acceptedAttemptUsage = {
+        invocationId,
+        modelTurn: modelTurns,
+        ...(activeWindowId ? { windowId: activeWindowId } : {}),
+        attempt: acceptedAttemptNumber,
+        routeId: input.routeId,
+        usage: collected.usage,
+        finishReason: collected.finish.reason,
+        disposition: 'completed'
+      }
+      await projectModelAttemptUsage(input, acceptedAttemptUsage)
+      attemptUsageLedger = input.sessionLedgerForAttemptUsage ? await input.sessionLedgerForAttemptUsage(acceptedAttemptUsage) : undefined
+    }
+    const responseProjection = !initialResponse ? await input.observer?.prepareModelResponseProjection?.({
+      message: assistantMessage,
+      finishReason: collected.finish.reason,
+      usage: collected.usage,
+      modelTurn: modelTurns
+    }) : undefined
+    const committedResponse = modelTurns === 1 && input.initialResponse ? [] : await appendHistory([{
+      kind: 'model-response-committed',
+      payload: {
+        requestId: `${invocationId}:turn:${modelTurns}`,
+        modelTurn: modelTurns,
+        attempt: acceptedAttemptNumber,
+        requestSnapshot: canonicalRequestSnapshot(call),
+        message: assistantMessage,
+        finishReason: collected.finish.reason,
+        usage: collected.usage,
+        ...((input.sessionLedgerForModelResponse || attemptUsageLedger || responseProjection?.sessionLedger !== undefined) ? { sessionLedger: {
+          ...(input.sessionLedgerForModelResponse ? await input.sessionLedgerForModelResponse(assistantMessage, modelTurns, acceptedAttemptNumber) : {}),
+          ...(responseProjection?.sessionLedger && typeof responseProjection.sessionLedger === 'object' ? structuredClone(responseProjection.sessionLedger) as Record<string, unknown> : {}),
+          ...(attemptUsageLedger ?? {})
+        } } : {})
+      }
+    }])
+    onAcceptedUsage(collected.usage)
+    const committedMessage = committedResponse.length
+      ? (committedResponse[0]?.payload as { message: CanonicalTurnMessage }).message
+      : assistantMessage
+    const responseObservation = {
+      message: committedMessage,
+      finishReason: collected.finish.reason,
+      usage: collected.usage,
+      modelTurn: modelTurns,
+      ...(initialResponse?.hostProjectionCommitted ? { alreadyProjected: true } : {}),
+      ...(committedInitialResponseStepId ? { committedStepId: committedInitialResponseStepId } : {})
+    } as const
+    if (input.observer?.criticalModelResponseProjection && input.observer.onModelResponseCommitted) {
+      try {
+        await input.observer.onModelResponseCommitted(responseObservation)
+      } catch (error) {
+        await observe(input.observer, 'model-response-committed', () => input.observer?.onObservationError?.(error, 'model-response-committed'))
+        for (const tool of toolCalls) {
+          if (toolDispatchStates.get(tool.toolCallId) === 'pending') await markNotDispatched(tool, 'HOST_PROJECTION_FAILED')
+        }
+        throw new AgentTurnHostProjectionError(error)
+      }
+    } else {
+      await observe(input.observer, 'model-response-committed', () => input.observer?.onModelResponseCommitted?.(responseObservation))
+    }
+    if (collected.finish.reason === 'length') {
+      const recoveryAttempt = outputRecoveryAttempts + 1
+      const recovery = await input.recoverOutputLimit?.({
+        invocationId,
+        modelTurn: modelTurns,
+        attempt: recoveryAttempt,
+        hadVisibleText: textDelta.trim().length > 0,
+        toolCalls: toolCalls.map((tool) => ({ invocationId, toolCallId: tool.toolCallId, toolName: tool.toolName, input: structuredClone(tool.input) }))
+      })
+      const recoveryMessage = recovery?.continuation
+      if (recoveryMessage && (recoveryMessage.role !== 'user' || typeof recoveryMessage.content !== 'string' || !recoveryMessage.content.trim())) throw new Error('invalid output recovery continuation message')
+      const toolCallErrorContent = recovery?.toolCallErrorContent ?? 'Tool call was not dispatched because the model output reached its limit.'
+      const recoveryEvents = [
+        ...await Promise.all(toolCalls.map(async (tool) => {
+          const result = { success: false, error: 'model_output_token_limit', userMessage: toolCallErrorContent, notExecuted: true, notExecutedReason: 'model_output_truncated' }
+          const sessionLedger = input.sessionLedgerForNotDispatched
+            ? await input.sessionLedgerForNotDispatched({ ...tool, invocationId }, 'MODEL_OUTPUT_TRUNCATED', result)
+            : undefined
+          return { kind: 'tool-call-not-dispatched' as const, payload: {
+            toolCallId: tool.toolCallId,
+            reason: 'MODEL_OUTPUT_TRUNCATED',
+            replayContent: toolCallErrorContent,
+            isError: true,
+            ...(sessionLedger ? { sessionLedger } : {})
+          } }
+        })),
+        ...(recoveryMessage && recovery?.retryLocation ? [{ kind: 'provider-retry-scheduled' as const, payload: {
+          requestId: `${invocationId}:round:${modelTurns}`, modelTurn: modelTurns, routeId: input.routeId,
+          retryAttempt: recoveryAttempt, code: 'model_output_token_limit', backoffMs: 0,
+          sessionLedger: { location: recovery.retryLocation, requestRetry: {
+            turnId: recovery.retryTurnId ?? input.turnId ?? invocationId,
+            stepId: recovery.retryStepId ?? invocationId,
+            requestId: `${invocationId}:round:${modelTurns}`, attempt: recoveryAttempt,
+            backoffMs: 0, code: 'model_output_token_limit'
+          } }
+        } }] : []),
+        ...(recoveryMessage ? [{ kind: 'replay-message-committed' as const, payload: { message: recoveryMessage } }] : [])
+      ]
+      const committedRecoveryEvents = recoveryEvents.length ? await appendHistory(recoveryEvents) : []
+      const failedToolMessages: CanonicalTurnMessage[] = toolCalls.map((tool) => ({
+        role: 'tool', toolCallId: tool.toolCallId,
+        content: toolCallErrorContent,
+        isError: true
+      }))
+      const committedContent = committedMessage.role === 'assistant' ? committedMessage.content : undefined
+      const hasCommittedAssistantContent = typeof committedContent === 'string'
+        ? committedContent.length > 0
+        : Array.isArray(committedContent) && committedContent.length > 0
+      const hasCommittedToolCalls = committedMessage.role === 'assistant' && Boolean(committedMessage.toolCalls?.length)
+      if (hasCommittedAssistantContent || hasCommittedToolCalls) messages.push(committedMessage)
+      messages.push(...failedToolMessages, ...(recoveryMessage ? [structuredClone(recoveryMessage)] : []))
+      outputRecoveryAttempts = recoveryAttempt
+      const recoveryNotice = { attempt: recoveryAttempt, modelTurn: modelTurns, requestId: `${invocationId}:round:${modelTurns}`, toolCalls: toolCalls.map((tool) => ({ invocationId, toolCallId: tool.toolCallId, toolName: tool.toolName, input: structuredClone(tool.input) })), willRetry: Boolean(recoveryMessage), toolCallErrorContent }
+      const sessionLedgerEvents = committedRecoveryEvents.filter((event) => event.kind === 'tool-call-not-dispatched' && toolCalls.some((tool) => tool.toolCallId === (event.payload as { toolCallId?: unknown }).toolCallId) || event.kind === 'provider-retry-scheduled' && (event.payload as { requestId?: unknown }).requestId === recoveryNotice.requestId)
+      await observe(input.observer, 'model-request', () => input.observer?.onOutputRecovery?.({ ...recoveryNotice, sessionLedgerEvents }))
+      if (!recoveryMessage) throw new ModelOutputTokenLimitError(recoveryAttempt)
+      continue
+    }
+    let boundaryReplacedTranscript = false
+    if (input.turnBoundary) {
+      const boundaryInputMessages = structuredClone([...messages, committedMessage])
+      const boundary = await input.turnBoundary({
+        invocationId,
+        modelTurn: modelTurns,
+        response: committedMessage,
+        messages: boundaryInputMessages,
+        toolCalls: toolCalls.map((tool) => ({ invocationId, toolCallId: tool.toolCallId, toolName: tool.toolName, input: structuredClone(tool.input) })),
+        usage: { inputTokens, outputTokens, ...(cacheReadInputTokens ? { cacheReadInputTokens } : {}), ...(cacheCreationInputTokens ? { cacheCreationInputTokens } : {}) },
+        ...(responseProjection?.turnBoundaryProjection !== undefined ? { requestProjection: responseProjection.turnBoundaryProjection } : {}),
+        ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}),
+        ...(input.requiredUserMessage ? { requiredUserMessage: structuredClone(input.requiredUserMessage) } : {})
+      })
+      if (boundary?.messages) {
+        const compacted = structuredClone(boundary.messages)
+        const compactedToolCalls = new Map(compacted.flatMap((message) => message.role === 'assistant' ? (message.toolCalls ?? []).map((tool) => [tool.id, tool] as const) : []))
+        for (const tool of toolCalls) {
+          const preserved = compactedToolCalls.get(tool.toolCallId)
+          if (!preserved || preserved.name !== tool.toolName || JSON.stringify(preserved.input) !== JSON.stringify(tool.input)) {
+            throw new InvalidTurnBoundaryError(`turn boundary omitted or changed pending tool proposal: ${tool.toolCallId}`)
+          }
+        }
+        if (input.currentUserMessageId && input.requiredUserMessage) {
+          const required = JSON.stringify(input.requiredUserMessage.message)
+          if (!compacted.some((message) => message.role === 'user' && JSON.stringify(message) === required)) {
+            throw new InvalidTurnBoundaryError(`turn boundary omitted required user message: ${input.currentUserMessageId}`)
+          }
+        }
+        if (input.history) await appendHistory([{
+          kind: 'transcript-compacted',
+          payload: {
+            ...(boundary.historyPayload ? structuredClone(boundary.historyPayload) : {}),
+            messages: compacted,
+            inputFingerprint: createHash('sha256').update(JSON.stringify(boundaryInputMessages)).digest('hex'),
+            outputFingerprint: createHash('sha256').update(JSON.stringify(compacted)).digest('hex'),
+            ...(input.requiredUserMessage ? { requiredUserMessage: structuredClone(input.requiredUserMessage) } : {})
+          }
+        }])
+        if (boundary.commitProjection) {
+          if (!input.history) throw new AgentTurnBoundaryProjectionError(new Error('turn boundary projection requires canonical History'))
+          try { await boundary.commitProjection() }
+          catch (error) { throw new AgentTurnBoundaryProjectionError(error) }
+        }
+        messages.splice(0, messages.length, ...compacted)
+        if (boundary.windowId) activeWindowId = boundary.windowId
+        boundaryReplacedTranscript = true
+      }
+    }
+
+    if (!boundaryReplacedTranscript) messages.push(committedMessage)
+
+    if (toolCalls.length === 0) {
+      const result = { text, messages, modelTurns, finishReason: collected.finish.reason, usage: { inputTokens, outputTokens, ...(cacheReadInputTokens ? { cacheReadInputTokens } : {}), ...(cacheCreationInputTokens ? { cacheCreationInputTokens } : {}) } }
+      return result
+    }
+    if (input.maxToolRounds !== undefined && dispatchedToolRounds >= input.maxToolRounds) {
+      for (const tool of toolCalls) await markNotDispatched(tool, 'tool_loop_max_rounds_exceeded')
+      throw new ToolLoopRoundLimitError(input.maxToolRounds)
+    }
+    if (modelTurns === input.maxModelTurns) throw new ModelTurnLimitError(input.maxModelTurns)
+
+    const candidateSlots = new ApprovalCandidateSlots(2, Math.max(toolCalls.length, 1))
+    const approvalSlots = new Semaphore(2)
+    const applicationAdmission = new TurnApplicationAdmission(input.applicationAdmission, input.request.signal, input.deadlineAt, invocationId)
+    const settledTools = await mapWithConcurrency(toolCalls, input.maxConcurrentTools ?? 2, async (tool) => {
+      const executionCall = {
+        invocationId, toolCallId: tool.toolCallId, toolName: tool.toolName,
+        input: structuredClone(tool.input),
+        ...(input.request.signal ? { signal: input.request.signal } : {})
+      }
+      const approvalCandidate = input.isApprovalCandidate?.(executionCall)
+        ?? ['write_file', 'edit_file', 'run_shell', 'run_script', 'browser', 'browser_action'].includes(tool.toolName)
+      let queuedForCandidate = false
+      let releaseCandidate: (() => void) | undefined
+      let approvalPermitHeld = false
+      try {
+      await applicationAdmission.activate(tool.toolCallId)
+      releaseCandidate = approvalCandidate ? await candidateSlots.acquire(invocationId, input.request.signal, async () => {
+        queuedForCandidate = true
+        await applicationAdmission.wait(tool.toolCallId, 'approval-wait-capacity')
+      }) : undefined
+      if (queuedForCandidate) await applicationAdmission.activate(tool.toolCallId)
+      const initialBinding = await input.prepareTool(executionCall, { kind: 'initial' })
+      await projectTool(input.observer, 'tool-started', () => input.observer?.onToolStarted?.(executionCall))
+      throwIfAborted(input.request.signal)
+      if (initialBinding.invocationId !== invocationId || initialBinding.toolCallId !== tool.toolCallId || initialBinding.capabilityId !== tool.toolName || initialBinding.phase !== 'initial-compat') {
+        await markNotDispatched(tool, 'PREPARED_CALL_MISMATCH')
+        throw new ToolDeniedError('PREPARED_CALL_MISMATCH')
+      }
+        const initialDecision = await input.safetyGate.evaluate(initialBinding, input.request.signal)
+      throwIfAborted(input.request.signal)
+
+      let confirmation: Readonly<{ receipt: string }> | undefined
+      if (initialDecision.kind === 'deny') {
+        await markNotDispatched(tool, initialDecision.reasonCode)
+        throw new ToolDeniedError(initialDecision.reasonCode)
+      }
+      if (initialDecision.kind === 'ask') {
+        if (!input.confirmation) {
+          await markNotDispatched(tool, 'CONFIRMATION_REQUIRED')
+          throw new ToolDeniedError('CONFIRMATION_REQUIRED')
+        }
+        const approvalWasQueued = approvalSlots.pending > 0 || approvalSlots.activeCount >= approvalSlots.limit
+        try {
+          if (approvalWasQueued) await applicationAdmission.wait(tool.toolCallId, 'approval-wait-capacity')
+          await approvalSlots.acquire(input.request.signal ? { signal: input.request.signal } : {})
+          approvalPermitHeld = true
+          if (approvalWasQueued) await applicationAdmission.activate(tool.toolCallId)
+        }
+        catch (error) {
+          await markNotDispatched(tool, input.request.signal?.aborted ? 'REQUEST_CANCELLED' : error instanceof AgentTurnApplicationAdmissionError ? 'APPLICATION_ADMISSION_RECOVERY_FAILED' : 'CONFIRMATION_CAPACITY_UNAVAILABLE')
+          throw error
+        }
+        await appendHistory([{
+          kind: 'approval-waiting',
+          payload: {
+            toolCallId: tool.toolCallId,
+            approvalId: initialDecision.confirmationId,
+            answerer: initialDecision.answerer,
+            reasonCode: initialDecision.reasonCode,
+            requestedAt: Date.now()
+          }
+        }])
+        try {
+          throwIfAborted(input.request.signal)
+          await applicationAdmission.wait(tool.toolCallId)
+        }
+        catch (error) {
+          if (approvalPermitHeld) { approvalSlots.release(); approvalPermitHeld = false }
+          const cancelled = error instanceof AgentTurnCancelledError || input.request.signal?.aborted
+          await appendHistory([{ kind: 'approval-resolved', payload: { toolCallId: tool.toolCallId, approvalId: initialDecision.confirmationId, approved: false, outcome: cancelled ? 'cancelled' : 'unavailable', settledAt: Date.now() } }])
+          await markNotDispatched(tool, cancelled ? 'REQUEST_CANCELLED' : 'APPLICATION_ADMISSION_RECOVERY_FAILED')
+          throw cancelled && !(error instanceof AgentTurnCancelledError) ? new AgentTurnCancelledError() : error
+        }
+        let result: ToolConfirmationResult
+        try {
+          result = await input.confirmation({
+            call: executionCall,
+            confirmationId: initialDecision.confirmationId,
+            answerer: initialDecision.answerer,
+            reasonCode: initialDecision.reasonCode,
+            ...(initialDecision.context !== undefined ? { context: structuredClone(initialDecision.context) } : {}),
+            ...(input.request.signal ? { signal: input.request.signal } : {})
+          })
+        } catch (error) {
+          await appendHistory([{ kind: 'approval-resolved', payload: { toolCallId: tool.toolCallId, approvalId: initialDecision.confirmationId, approved: false, outcome: 'unavailable', settledAt: Date.now() } }])
+          throw error
+        } finally {
+          if (approvalPermitHeld) { approvalSlots.release(); approvalPermitHeld = false }
+        }
+        try { await applicationAdmission.activate(tool.toolCallId) }
+        catch (error) {
+          const cancelled = error instanceof AgentTurnCancelledError || input.request.signal?.aborted
+          await appendHistory([{ kind: 'approval-resolved', payload: { toolCallId: tool.toolCallId, approvalId: initialDecision.confirmationId, approved: false, outcome: cancelled ? 'cancelled' : 'unavailable', settledAt: Date.now() } }])
+          await markNotDispatched(tool, cancelled ? 'REQUEST_CANCELLED' : 'APPLICATION_ADMISSION_RECOVERY_FAILED')
+          throw error
+        }
+        const approved = result.kind === 'approved' && Boolean(result.receipt.trim())
+        const approvalOutcome = approved ? 'approved' : result.kind === 'approved' ? 'denied' : result.kind
+        await appendHistory([{ kind: 'approval-resolved', payload: {
+          toolCallId: tool.toolCallId,
+          approvalId: initialDecision.confirmationId,
+          approved,
+          outcome: approvalOutcome,
+          ...(result.answerer ? { answerer: result.answerer } : {}),
+          ...(result.cause ? { cause: result.cause } : {}),
+          settledAt: Date.now()
+        } }])
+        if (input.request.signal?.aborted) {
+          await markNotDispatched(tool, 'REQUEST_CANCELLED')
+          throwIfAborted(input.request.signal)
+        }
+        if (result.kind !== 'approved' || !result.receipt.trim()) {
+          const reason = `CONFIRMATION_${result.kind.toUpperCase()}`
+          await markNotDispatched(tool, reason, result.userMessage)
+          throw new ToolDeniedError(reason, result.userMessage)
+        }
+        confirmation = { receipt: result.receipt }
+      }
+
+      let resourceLease: { release(): void } | undefined
+      let executionResult: CanonicalToolExecutionResult
+      try {
+        const resourceKeys = input.toolResourceKeys?.(executionCall) ?? [`unknown:${invocationId}`]
+        resourceLease = await resourceLocks.acquire(resourceKeys, input.request.signal ? { signal: input.request.signal } : undefined)
+        // Match the host lifecycle: resource ownership is acquired before the final policy/facts recheck.
+        let recheckBinding: PermitBinding
+        try {
+          recheckBinding = await input.prepareTool(executionCall, { kind: 'recheck', ...(confirmation ? { confirmation } : {}) })
+        } catch (error) {
+          throwIfAborted(input.request.signal)
+          const message = error instanceof Error ? error.message : ''
+          const reasonCode = /^[A-Z0-9_]{1,64}$/.test(message) ? message : 'PREPARED_RECHECK_FAILED'
+          await markNotDispatched(tool, reasonCode)
+          throw new ToolDeniedError(reasonCode)
+        }
+        throwIfAborted(input.request.signal)
+        if (!matchesRecheckBinding(initialBinding, recheckBinding)) {
+          await markNotDispatched(tool, 'STALE_AUTHORIZATION')
+          throw new ToolDeniedError('STALE_AUTHORIZATION')
+        }
+        const authorization = await input.safetyGate.authorize(recheckBinding, input.request.signal)
+        if (input.request.signal?.aborted && authorization.kind === 'allow') {
+          input.safetyGate.discardPermit(authorization.permitId)
+        }
+        throwIfAborted(input.request.signal)
+        if (authorization.kind !== 'allow') {
+          const reason = authorization.kind === 'deny' ? authorization.reasonCode : 'RECHECK_REQUIRES_CONFIRMATION'
+          await markNotDispatched(tool, reason)
+          throw new ToolDeniedError(reason)
+        }
+        try {
+          executionResult = await input.toolExecution.execute(executionCall, authorization.permitId, async () => {
+            await appendHistory([{
+              kind: 'tool-call-started',
+              payload: {
+                toolCallId: tool.toolCallId,
+                toolName: tool.toolName,
+                inputHash: createHash('sha256').update(JSON.stringify(tool.input)).digest('hex'),
+                decisionRuleId: recheckBinding.authorizationVersion
+              }
+            }])
+            toolDispatchStates.set(tool.toolCallId, 'started')
+          })
+        } catch (error) {
+          if (error instanceof ToolExecutionRejectedError) {
+            if (error.reason === 'CANCELLED' || input.request.signal?.aborted) {
+              await markNotDispatched(tool, 'REQUEST_CANCELLED')
+              throw new AgentTurnCancelledError()
+            }
+            await markNotDispatched(tool, error.reason)
+            throw new ToolDeniedError(error.reason)
+          }
+          throw error
+        }
+      } catch (error) {
+        if (error instanceof ToolExecutionAfterDispatchError) throw error
+        throwIfAborted(input.request.signal)
+        throw error
+      } finally {
+        resourceLease?.release()
+      }
+      const replayContent = executionResult.replayContent ?? executionResult.output
+      const committedToolResult = await appendHistory([{
+        kind: 'tool-call-finished',
+        payload: {
+          toolCallId: tool.toolCallId,
+          success: !(executionResult.isError ?? false),
+          result: executionResult.output,
+          replayContent,
+          isError: executionResult.isError ?? false,
+          ...(executionResult.auditRef ? { auditRef: executionResult.auditRef } : {}),
+          ...(input.sessionLedgerForToolResult ? { sessionLedger: await input.sessionLedgerForToolResult({ ...tool, invocationId: input.invocationId }, executionResult) } : {})
+        }
+      }])
+      toolDispatchStates.set(tool.toolCallId, 'finished')
+      const committedPayload = committedToolResult[0]?.payload as { toolCallId?: string; result?: unknown; replayContent?: unknown; success?: boolean; isError?: boolean } | undefined
+      const canonicalResult: CanonicalTurnMessage = {
+        role: 'tool',
+        toolCallId: committedPayload?.toolCallId ?? tool.toolCallId,
+        content: committedPayload && 'replayContent' in committedPayload
+          ? committedPayload.replayContent
+          : committedPayload && 'result' in committedPayload ? committedPayload.result : replayContent,
+        isError: committedPayload ? committedPayload.isError ?? committedPayload.success === false : executionResult.isError ?? false
+      }
+      await projectTool(input.observer, 'tool-finished', () => input.observer?.onToolFinished?.(executionCall, executionResult))
+      await input.afterToolResult?.(executionCall, executionResult, { kind: 'execution' })
+      return canonicalResult
+      } finally {
+        if (approvalPermitHeld) approvalSlots.release()
+        releaseCandidate?.()
+        await applicationAdmission.finish(tool.toolCallId)
+      }
+    })
+    const deniedToolResults = new Map<string, CanonicalTurnMessage>()
+    let stopAfterDenied: unknown
+    if (input.returnDeniedToolsToModel) {
+      for (const [index, settled] of settledTools.entries()) {
+        if (!settled) continue
+        if (settled.status !== 'rejected' || !(settled.reason instanceof ToolDeniedError)) continue
+        const matchingTool = toolCalls[index]
+        if (!matchingTool) continue
+        const content = settled.reason.userMessage ?? `Tool call was not dispatched (${settled.reason.reasonCode}).`
+        const executionCall = { invocationId, toolCallId: matchingTool.toolCallId, toolName: matchingTool.toolName, input: structuredClone(matchingTool.input), ...(input.request.signal ? { signal: input.request.signal } : {}) }
+        const result = { output: content, replayContent: content, isError: true }
+        deniedToolResults.set(matchingTool.toolCallId, { role: 'tool', toolCallId: matchingTool.toolCallId, content, isError: true })
+        await projectTool(input.observer, 'tool-finished', () => input.observer?.onToolFinished?.(executionCall, result))
+        try { await input.afterToolResult?.(executionCall, result, { kind: 'safety-rejection', reasonCode: settled.reason.reasonCode }) }
+        catch (error) { stopAfterDenied ??= error }
+      }
+    }
+    const rejectedTools = settledTools.filter((settled, index): settled is PromiseRejectedResult => settled.status === 'rejected' &&
+      !(input.returnDeniedToolsToModel && deniedToolResults.has(toolCalls[index]?.toolCallId ?? '')))
+    const rejectedTool = rejectedTools.find(({ reason }) => reason instanceof ToolExecutionAfterDispatchError)
+      ?? rejectedTools.find(({ reason }) => reason instanceof AgentTurnHistoryAppendError && reason.kinds.includes('tool-call-finished'))
+      ?? rejectedTools.find(({ reason }) => reason instanceof AgentTurnCancelledError)
+      ?? rejectedTools[0]
+    if (rejectedTool || stopAfterDenied) {
+      for (const tool of toolCalls) {
+        if (toolDispatchStates.get(tool.toolCallId) === 'pending') {
+          await markNotDispatched(tool, input.request.signal?.aborted ? 'REQUEST_CANCELLED' : 'TURN_STOPPED_BEFORE_DISPATCH')
+        }
+      }
+      throw rejectedTool?.reason ?? stopAfterDenied
+    }
+    // Keep transcript order tied to the provider's tool-call order, independent of dispatch completion order.
+    messages.push(...settledTools.map((settled) => settled.status === 'fulfilled'
+      ? settled.value
+      : deniedToolResults.get(toolCalls[settledTools.indexOf(settled)]?.toolCallId ?? '')!))
+    dispatchedToolRounds += 1
+  }
+
+  async function collectProviderAttempt(stream: AsyncIterable<StreamChunk>, modelTurn: number, attempt: number): Promise<CollectedModelStream> {
+    return collectModelAttempt(stream, {
+      onChunk: (chunk) => observe(input.observer, 'model-chunk', () => input.observer?.onModelChunk?.(chunk)),
+      onStreamError: async ({ usage }) => {
+        if (!usage) return
+        await projectModelAttemptUsage(input, {
+          invocationId, modelTurn, attempt, routeId: input.routeId,
+          usage, disposition: 'failed', reasonCode: 'PROVIDER_STREAM_FAILED'
+        })
+      }
+    })
+  }
+  throw new ModelTurnLimitError(input.maxModelTurns)
+}
+
+function collectCanonicalHostResponse(response: HostCommittedModelResponse): CollectedModelStream {
+  if (response.message.role !== 'assistant') throw new Error('host-committed model response must be an assistant message')
+  if (!['stop', 'tool-calls', 'length', 'cancelled'].includes(response.finishReason)) throw new Error('host-committed model response has an invalid finish reason')
+  if (!Number.isInteger(response.usage.inputTokens) || response.usage.inputTokens < 0 || !Number.isInteger(response.usage.outputTokens) || response.usage.outputTokens < 0) {
+    throw new Error('host-committed model response has invalid usage')
+  }
+  const chunks: Array<Exclude<StreamChunk, { type: 'finish' | 'usage' }>> = []
+  if (typeof response.message.content === 'string') {
+    if (response.message.content) chunks.push({ type: 'text-delta', text: response.message.content })
+  } else if (response.message.content) {
+    for (const block of response.message.content) {
+      if (block.type === 'text') chunks.push({ type: 'text-delta', text: block.text })
+      else if (block.type === 'thinking') {
+        if (block.thinking) chunks.push({ type: 'thinking-delta', text: block.thinking })
+        if (block.thinkingSignature) chunks.push({ type: 'thinking-signature', signature: block.thinkingSignature, ...(block.redacted ? { redacted: true } : {}) })
+      }
+    }
+  }
+  for (const tool of response.message.toolCalls ?? []) chunks.push({ type: 'tool-call', toolCallId: tool.id, toolName: tool.name, input: structuredClone(tool.input), ...(tool.thoughtSignature ? { thoughtSignature: tool.thoughtSignature } : {}) })
+  return { chunks, usage: response.usage, finish: { type: 'finish', reason: response.finishReason } }
+}
+
+async function assertHostCommittedResponse(history: HistoryPort | undefined, invocationId: string, response: HostCommittedModelResponse): Promise<Readonly<{ message: CanonicalTurnMessage; sessionLedger?: unknown; sessionLedgerStepId?: string }>> {
+  if (!history) throw new Error('host-committed model response requires HistoryPort')
+  const snapshot = await history.read(invocationId)
+  const latest = snapshot.events.at(-1)
+  if (!latest || latest.kind !== 'model-response-committed') {
+    throw new Error('host-committed model response is not the latest History event')
+  }
+  const payload = latest?.payload as { message?: unknown; finishReason?: unknown; usage?: unknown } | undefined
+  if (!latest || JSON.stringify(payload?.message) !== JSON.stringify(response.message)) {
+    throw new Error('host-committed model response does not match the latest canonical History event')
+  }
+  const hostFinishReason = response.finishReason === 'tool-calls' ? 'tool_use'
+    : response.finishReason === 'length' ? 'max_tokens'
+      : response.finishReason === 'cancelled' ? 'cancelled' : 'end_turn'
+  if (payload?.finishReason !== hostFinishReason) throw new Error('host-committed model response finish reason does not match History')
+  const expectedUsage = {
+    inputTokens: response.usage.inputTokens,
+    outputTokens: response.usage.outputTokens,
+    ...(response.usage.cacheReadInputTokens !== undefined ? { cacheReadInputTokens: response.usage.cacheReadInputTokens } : {}),
+    ...(response.usage.cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens: response.usage.cacheCreationInputTokens } : {})
+  }
+  if (JSON.stringify(payload?.usage) !== JSON.stringify(expectedUsage)) {
+    throw new Error('host-committed model response usage does not match History')
+  }
+  const sessionLedger = (payload as { sessionLedger?: unknown } | undefined)?.sessionLedger
+  const sessionLedgerStepId = sessionLedger && typeof sessionLedger === 'object' && !Array.isArray(sessionLedger) && typeof (sessionLedger as { stepId?: unknown }).stepId === 'string'
+    ? (sessionLedger as { stepId: string }).stepId
+    : undefined
+  return {
+    message: response.message,
+    ...(sessionLedger !== undefined ? { sessionLedger } : {}),
+    ...(sessionLedgerStepId ? { sessionLedgerStepId } : {})
+  }
+}
+
+function canonicalRequestSnapshot(call: PreparedModelCall): Readonly<{
+  route: PreparedModelCall['route']
+  request: Omit<PreparedModelCall['request'], 'credentials' | 'signal'>
+}> {
+  return snapshotPreparedModelCall(call)
+}
+
+function sameRouteIdentity(left: PreparedModelCall['route'], right: PreparedModelCall['route']): boolean {
+  const normalize = (route: PreparedModelCall['route']) => Object.entries(route).sort(([a], [b]) => a.localeCompare(b))
+  return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right))
+}
+
+async function mapWithConcurrency<T, R>(items: readonly T[], limit: number, run: (item: T, index: number) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
+  if (!Number.isInteger(limit) || limit < 1) throw new Error('maxConcurrentTools must be a positive integer')
+  const results = new Array<PromiseSettledResult<R>>(items.length)
+  let nextIndex = 0
+  let stopped = false
+  const worker = async () => {
+    while (!stopped) {
+      const index = nextIndex++
+      if (index >= items.length) return
+      try {
+        results[index] = { status: 'fulfilled', value: await run(items[index]!, index) }
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason }
+        stopped = true
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()))
+  return results
+}
+
+class ApprovalCandidateSlots {
+  private readonly ledger: CapacityLedger
+  private readonly waiters: Array<() => void> = []
+  constructor(limit: number, queueLimit: number) {
+    this.ledger = new CapacityLedger({ applicationSlots: 1, approvalCandidateSlots: limit, queueLimit, maxApprovalsPerParent: limit })
+  }
+  async acquire(parentTaskId: string, signal?: AbortSignal, onWait?: () => void | Promise<void>): Promise<() => void> {
+    let waitingNotified = false
+    while (true) {
+      if (signal?.aborted) throw new AgentTurnCancelledError()
+      const reservation: CapacityReservation | undefined = this.ledger.reserveApprovalCandidate(parentTaskId)
+      if (reservation) return () => { reservation.release(); this.waiters.shift()?.() }
+      if (!waitingNotified) {
+        waitingNotified = true
+        await onWait?.()
+      }
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => { const index = this.waiters.indexOf(wake); if (index >= 0) this.waiters.splice(index, 1); reject(new AgentTurnCancelledError()) }
+        const wake = () => { signal?.removeEventListener('abort', onAbort); resolve() }
+        this.waiters.push(wake)
+        signal?.addEventListener('abort', onAbort, { once: true })
+      })
+    }
+  }
+}
+
+class TurnApplicationAdmission {
+  private handle: unknown
+  private readonly active = new Set<string>()
+  private readonly waiting = new Set<string>()
+  private recovery: Promise<void> | undefined
+  private parkCheckpoint: Record<string, unknown>
+  constructor(private readonly port: ApplicationAdmissionPort | undefined, private readonly signal?: AbortSignal, private readonly deadlineAt?: number, private readonly requestId = '') {
+    this.parkCheckpoint = { reason: 'approval-wait', requestId }
+  }
+
+  async activate(id: string): Promise<void> {
+    this.waiting.delete(id)
+    this.active.add(id)
+    await this.resumeIfParked()
+  }
+
+  async wait(id: string, reason: 'approval-wait' | 'approval-wait-capacity' = 'approval-wait'): Promise<void> {
+    this.active.delete(id)
+    this.waiting.add(id)
+    this.parkCheckpoint = reason === 'approval-wait'
+      ? { reason, requestId: this.requestId, toolUseId: id }
+      : { reason, requestId: this.requestId }
+    await this.parkIfIdle()
+  }
+
+  async finish(id: string): Promise<void> {
+    this.active.delete(id)
+    this.waiting.delete(id)
+    if (this.active.size === 0 && this.waiting.size > 0) {
+      this.parkCheckpoint = { reason: 'approval-wait-repark', requestId: this.requestId }
+      await this.parkIfIdle()
+    }
+    else if (this.active.size === 0 && this.waiting.size === 0) this.discardParked()
+  }
+
+  private async parkIfIdle(): Promise<void> {
+    if (!this.port || this.active.size > 0 || this.waiting.size === 0 || this.handle !== undefined) return
+    const handle = this.port.park(this.parkCheckpoint)
+    if (handle === undefined) throw new AgentTurnApplicationAdmissionError('application admission park failed')
+    this.handle = handle
+  }
+
+  private async resumeIfParked(): Promise<void> {
+    if (!this.port || this.handle === undefined) return
+    if (this.recovery) return this.recovery
+    this.recovery = (async () => {
+      const delays = [50, 250] as const
+      for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+        if (this.signal?.aborted) {
+          this.discardParked()
+          throw new AgentTurnCancelledError()
+        }
+        const handle = this.handle
+        if (handle === undefined) return
+        let raw: ReturnType<ApplicationAdmissionPort['resume']>
+        try {
+          raw = await this.port!.resume(handle, { ...(this.signal ? { signal: this.signal } : {}), ...(this.deadlineAt !== undefined ? { deadlineAt: this.deadlineAt } : {}) })
+        } catch (error) {
+          if (this.signal?.aborted) {
+            this.discardParked()
+            throw new AgentTurnCancelledError()
+          }
+          throw error
+        }
+        if (this.signal?.aborted) {
+          this.discardParked()
+          throw new AgentTurnCancelledError()
+        }
+        const result = typeof raw === 'boolean' ? { ok: raw, retryable: false } : raw
+        if (result?.ok) { this.handle = undefined; return }
+        if (!result?.retryable || attempt === delays.length) {
+          this.discardParked()
+          throw new AgentTurnApplicationAdmissionError(`application admission resume failed${result && 'cause' in result && result.cause ? `: ${result.cause}` : ''}`)
+        }
+        const deadline = this.deadlineAt ?? Date.now() + 10 * 60_000
+        const remaining = deadline - Date.now()
+        if (remaining <= 0 || this.signal?.aborted) {
+          this.discardParked()
+          throw new AgentTurnApplicationAdmissionError('application admission resume deadline elapsed')
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, Math.min(delays[attempt]!, remaining)))
+      }
+    })().finally(() => { this.recovery = undefined })
+    return this.recovery
+  }
+
+  private discardParked(): void {
+    const handle = this.handle
+    if (handle === undefined) return
+    this.handle = undefined
+    this.port?.discard?.(handle)
+  }
+}
+
+class AgentTurnApplicationAdmissionError extends Error {
+  readonly code = 'APPLICATION_ADMISSION_RECOVERY_FAILED'
+}
+
+function assistantHistoryContent(content: readonly CanonicalContentBlock[], text: string): string | readonly CanonicalContentBlock[] | undefined {
+  if (content.some((block) => block.type === 'thinking')) return content
+  return text || (content.length ? content.map((block) => block.type === 'text' ? block.text : '').join('') : undefined)
+}
+
+async function observe(observer: AgentTurnObserver | undefined, stage: Parameters<NonNullable<AgentTurnObserver['onObservationError']>>[1], callback: () => void | Promise<void> | undefined): Promise<void> {
+  try { await callback() } catch (error) {
+    try { await observer?.onObservationError?.(error, stage) } catch { /* observation diagnostics cannot change execution */ }
+  }
+}
+
+async function projectTool(observer: AgentTurnObserver | undefined, stage: 'tool-started' | 'tool-finished', callback: () => void | Promise<void> | undefined): Promise<void> {
+  if (!observer?.criticalToolProjection) {
+    await observe(observer, stage, callback)
+    return
+  }
+  try { await callback() }
+  catch (error) {
+    try { await observer.onObservationError?.(error, stage) } catch { /* diagnostic delivery cannot replace the projection failure */ }
+    throw new AgentTurnToolProjectionError(error)
+  }
+}
+
+async function projectTurnOutput(observer: AgentTurnObserver | undefined, result: AgentTurnResult): Promise<void> {
+  if (!observer?.onTurnOutputReady) return
+  try { await observer.onTurnOutputReady(result) }
+  catch (error) {
+    try { await observer.onObservationError?.(error, 'turn-output-ready') } catch { /* diagnostic delivery cannot replace the projection failure */ }
+    throw new AgentTurnHostProjectionError(error)
+  }
+}
+
+async function projectModelAttemptUsage(input: RunAgentTurnInput, usage: Record<string, unknown>): Promise<void> {
+  const project = () => input.recordProviderAttemptUsage?.(usage)
+  if (!input.observer?.criticalModelAttemptUsageProjection) {
+    await observe(input.observer, 'model-attempt-usage', project)
+    return
+  }
+  try { await project() }
+  catch (error) {
+    try { await input.observer.onObservationError?.(error, 'model-attempt-usage') } catch { /* diagnostic delivery cannot replace the usage failure */ }
+    throw error
+  }
+}
+
+function matchesRecheckBinding(initial: PermitBinding, recheck: PermitBinding): boolean {
+  return recheck.phase === 'recheck' &&
+    initial.requestId === recheck.requestId &&
+    initial.turnId === recheck.turnId &&
+    initial.invocationId === recheck.invocationId &&
+    initial.toolCallId === recheck.toolCallId &&
+    initial.capabilityId === recheck.capabilityId &&
+    initial.inputSnapshotHash === recheck.inputSnapshotHash &&
+    initial.planDigest === recheck.planDigest &&
+    initial.factsDigest === recheck.factsDigest &&
+    initial.authorizationVersion === recheck.authorizationVersion
+}

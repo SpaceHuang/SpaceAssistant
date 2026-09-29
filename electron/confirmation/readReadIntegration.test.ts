@@ -124,6 +124,118 @@ describe('V1 confirmed read executor integration', () => {
     }
   })
 
+  it('拒绝父目录移出 workspace 后通过同 inode symlink 继续访问已许可文件', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-parent-move-e2e-')))
+    const workspace = path.join(root, 'workspace')
+    const outside = path.join(root, 'outside')
+    try {
+      await fs.mkdir(workspace)
+      const directory = path.join(workspace, 'docs')
+      const moved = path.join(outside, 'docs')
+      await fs.mkdir(directory)
+      await fs.mkdir(outside)
+      const file = path.join(directory, 'approved.txt')
+      await fs.writeFile(file, 'approved file content')
+      const input = { path: 'docs/approved.txt' }
+      const requestId = 'read-parent-move-req'
+      const toolUseId = 'read-parent-move-tool'
+      const registry = new ReadConfirmationRegistry()
+      const gate = await evaluateToolCallGate(gateDeps(workspace, input, requestId, toolUseId, registry))
+      expect(gate.decision).toMatchObject({ type: 'auto-allow', ruleId: 'read-target-workdir-allow' })
+
+      await fs.rename(directory, moved)
+      await fs.symlink(moved, directory, 'dir')
+      const result = await readFileExecutor.execute(input, executorContext(workspace, requestId, toolUseId, gate.readExecutionPermit))
+
+      expect(result).toMatchObject({ success: false, diagnostic: { category: 'mechanism' } })
+      expect(JSON.stringify(result)).not.toContain('approved file content')
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('拒绝父目录移出 workspace 后通过同 inode symlink 搜索已许可文件', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'grep-parent-move-e2e-')))
+    const workspace = path.join(root, 'workspace')
+    const outside = path.join(root, 'outside')
+    try {
+      await fs.mkdir(workspace)
+      const directory = path.join(workspace, 'docs')
+      const moved = path.join(outside, 'docs')
+      await fs.mkdir(directory)
+      await fs.mkdir(outside)
+      await fs.writeFile(path.join(directory, 'approved.txt'), 'APPROVED_SEARCH_SECRET')
+      const input = { path: 'docs/approved.txt', pattern: 'APPROVED_SEARCH_SECRET', output_mode: 'content' }
+      const requestId = 'grep-parent-move-req'
+      const toolUseId = 'grep-parent-move-tool'
+      const registry = new ReadConfirmationRegistry()
+      const gate = await evaluateToolCallGate(gateDeps(workspace, input, requestId, toolUseId, registry, 'grep'))
+      expect(gate.decision).toMatchObject({ type: 'auto-allow', ruleId: 'read-target-workdir-allow' })
+
+      await fs.rename(directory, moved)
+      await fs.symlink(moved, directory, 'dir')
+      const result = await grepExecutor.execute(input, executorContext(workspace, requestId, toolUseId, gate.readExecutionPermit))
+
+      expect(result).toMatchObject({ success: false, diagnostic: { category: 'mechanism' } })
+      expect(JSON.stringify(result)).not.toContain('APPROVED_SEARCH_SECRET')
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('拒绝获准目录移出 workspace 后通过同 inode symlink 枚举', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'list-parent-move-e2e-')))
+    const workspace = path.join(root, 'workspace')
+    const outside = path.join(root, 'outside')
+    try {
+      await fs.mkdir(workspace)
+      const directory = path.join(workspace, 'docs')
+      const moved = path.join(outside, 'docs')
+      await fs.mkdir(directory)
+      await fs.mkdir(outside)
+      await fs.writeFile(path.join(directory, 'approved.txt'), 'approved')
+      const input = { path: 'docs' }
+      const requestId = 'list-parent-move-req'
+      const toolUseId = 'list-parent-move-tool'
+      const registry = new ReadConfirmationRegistry()
+      const gate = await evaluateToolCallGate(gateDeps(workspace, input, requestId, toolUseId, registry, 'list_directory'))
+      expect(gate.decision).toMatchObject({ type: 'auto-allow', ruleId: 'read-target-workdir-allow' })
+
+      await fs.rename(directory, moved)
+      await fs.symlink(moved, directory, 'dir')
+      const result = await listDirectoryExecutor.execute(input, executorContext(workspace, requestId, toolUseId, gate.readExecutionPermit))
+
+      expect(result).toMatchObject({ success: false, diagnostic: { category: 'mechanism' } })
+      expect(JSON.stringify(result)).not.toContain('approved.txt')
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('目录在 permit 校验与 opendir 之间被替换时，不枚举替换目录', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'list-dir-race-e2e-')))
+    try {
+      const directory = path.join(root, 'target')
+      const moved = path.join(root, 'target-approved')
+      await fs.mkdir(directory)
+      await fs.writeFile(path.join(directory, 'approved.txt'), 'approved')
+      const input = { path: 'target' }
+      const requestId = 'list-dir-race-req'
+      const toolUseId = 'list-dir-race-tool'
+      const registry = new ReadConfirmationRegistry()
+      const gate = await evaluateToolCallGate(gateDeps(root, input, requestId, toolUseId, registry, 'list_directory'))
+      await fs.rename(directory, moved)
+      await fs.mkdir(directory)
+      await fs.writeFile(path.join(directory, 'unapproved.txt'), 'secret')
+      const result = await listDirectoryExecutor.execute(input, executorContext(root, requestId, toolUseId, gate.readExecutionPermit))
+      expect(result).toMatchObject({ success: false, diagnostic: { category: 'mechanism', caseId: 'read-directory-identity-changed' } })
+      expect(JSON.stringify(result)).not.toContain('secret')
+    } finally {
+      vi.restoreAllMocks()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('strict/custom ask 获批后才由生产 list_directory executor 枚举', async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'list-dir-confirmed-e2e-')))
     try {

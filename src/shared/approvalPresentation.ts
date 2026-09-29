@@ -1,4 +1,4 @@
-import type { ApprovalStatus } from '../../packages/agent-core/src/approval'
+import type { ApprovalStatus } from './approvalTypes'
 
 export type ApprovalPresentationState = 'waiting' | 'evaluating' | 'approved' | 'denied' | 'incomplete' | 'cancelled'
 

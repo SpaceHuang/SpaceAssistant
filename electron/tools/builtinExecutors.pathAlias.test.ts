@@ -231,6 +231,26 @@ describe('path field alias normalization', () => {
     expect(veto).toMatchObject({ success: false, diagnostic: { caseId: 'read-target-identity-changed', factId: 'original-grep-fact' } })
   })
 
+  it('grep discards output if the authorized inode mutates before ripgrep settles', async () => {
+    const file = path.join(tmpDir, 'mutating-grep.txt')
+    await fs.writeFile(file, 'needle original\n', 'utf8')
+    const fixture = path.join(tmpDir, 'rg-mutating-fixture.cjs')
+    await fs.writeFile(fixture, `const fs=require('fs'); const file=${JSON.stringify(file)}; setTimeout(()=>{fs.writeFileSync(file,'changed while grep runs with a different size'); process.stdout.write(file+':1:needle original\\n')},20)`)
+    const input = { pattern: 'needle', path: file, output_mode: 'content' }
+    const stat = await fs.stat(file)
+    const ctx = {
+      ...makeCtx(tmpDir, cache), lane: 'desktop' as const,
+      grepSpawnProcess: (_binary: string, args: string[], options: never) => spawn(process.execPath, [fixture, ...args], options)
+    }
+    ctx.readExecutionPermit = buildReadExecutionPermit({
+      requestId: ctx.requestId!, toolUseId: ctx.toolUseId!, toolName: 'grep', input,
+      facts: [{ factId: 'grep-mutation-fact', decisionRuleId: 'read-group-workdir-allow', normalizedPath: file, zone: 'workdir-normal', targetKind: 'file', identity: { dev: stat.dev, ino: stat.ino, mode: stat.mode, size: stat.size, mtimeMs: stat.mtimeMs } }]
+    })
+    await expect(grepExecutor.execute(input, ctx)).resolves.toMatchObject({
+      success: false, diagnostic: { caseId: 'read-target-identity-changed-during-read', category: 'mechanism', factId: 'grep-mutation-fact' }
+    })
+  })
+
   it.each(['wechat', 'feishu', 'automation'] as const)('%s lane grep 缺 permit 时不启动 ripgrep', async (lane) => {
     const file = path.join(tmpDir, 'remote.txt')
     await fs.writeFile(file, 'needle')

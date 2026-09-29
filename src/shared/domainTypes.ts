@@ -549,6 +549,8 @@ export interface AutoApprovedWriteMeta {
 
 export interface ToolCallResultPersisted {
   success: boolean
+  /** Opaque host audit correlation for the canonical execution record. */
+  auditRef?: string
   /** Gate 决策规则 ID，用于串联 policy.decision 与执行结果审计。 */
   decisionRuleId?: string
   data?: unknown
@@ -576,7 +578,7 @@ export interface ToolCallRecord {
   input: Record<string, unknown>
   result?: ToolCallResultPersisted
   /** Canonical approval projection; execution status remains independent. */
-  approval?: import('../../packages/agent-core/src/approval').ApprovalRecord
+  approval?: import('./approvalTypes').ApprovalRecord
   status: ToolCallStatus
   riskLevel: ToolRiskLevel
   /** 确认卡片可选的"记忆档位"（由主进程决策引擎下发，无则不展示选择器）。 */

@@ -28,6 +28,7 @@ vi.mock('electron', () => ({
 }))
 
 vi.mock('./database', () => ({
+  getDbConnection: vi.fn((db: unknown) => db),
   listSessions: vi.fn(() => []),
   createSession: vi.fn(),
   getSession: vi.fn(),
@@ -44,6 +45,7 @@ vi.mock('./database', () => ({
 }))
 
 vi.mock('./anthropicClientFactory', () => ({
+  createAnthropicStreamPort: (client: { messages: { stream: (...args: unknown[]) => unknown } }) => ({ stream: (...args: unknown[]) => client.messages.stream(...args) }),
   createAnthropicClient: vi.fn()
 }))
 

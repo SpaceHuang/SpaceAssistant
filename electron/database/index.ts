@@ -18,6 +18,7 @@ export type {
   QueueInputReceipt,
   RetryContextTarget,
   PersistedMessageEntry,
+  PersistedTurn,
   ContextHistoryDbBaseline,
   SearchCorpusPage
 } from './operations'

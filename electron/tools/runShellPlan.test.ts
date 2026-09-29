@@ -50,6 +50,16 @@ describe('planRunShellExecution', () => {
     })).rejects.toMatchObject({ code: 'PLAN_STALE' })
   })
 
+  it.each([
+    ['enabled', { ...ctx.shellConfig, enabled: false }],
+    ['rules', { ...ctx.shellConfig, rules: [{ id: 'deny-echo', pattern: 'echo', decision: 'deny' as const }] }],
+    ['sensitive path boundaries', { ...ctx.shellConfig, customSensitivePrefixes: ['/srv/private'] }]
+  ])('确认等待期间 ShellConfig %s 变化会阻止执行', async (_field, shellConfig) => {
+    const prepared = await planRunShellExecution({ command: 'echo config-security-stale' }, ctx)
+    await expect(revalidatePreparedShellExecution(prepared, { shellConfig }))
+      .rejects.toMatchObject({ code: 'PLAN_STALE', reasons: ['configRevision'] })
+  })
+
   it('确认等待期间 policy revision 变化会阻止执行并返回 PLAN_STALE', async () => {
     const prepared = await planRunShellExecution({ command: 'echo policy-stale' }, {
       ...ctx,
@@ -61,14 +71,14 @@ describe('planRunShellExecution', () => {
     })).rejects.toMatchObject({ code: 'PLAN_STALE' })
   })
 
-  it('确认等待期间 outputMode 改变仍按冻结快照重验证', async () => {
+  it('确认等待期间 outputMode 改变会使 prepared plan 失效', async () => {
     const prepared = await planRunShellExecution({ command: 'echo frozen-mode' }, {
       ...ctx,
       shellConfig: { ...ctx.shellConfig, outputMode: 'terminal' }
     })
     await expect(revalidatePreparedShellExecution(prepared, {
       shellConfig: { ...ctx.shellConfig, outputMode: 'plain' }
-    })).resolves.toBeUndefined()
+    })).rejects.toMatchObject({ code: 'PLAN_STALE', reasons: ['configRevision'] })
     expect(prepared.shellOutputMode).toBe('terminal')
     expect(prepared.spawnStdio).toEqual(['ignore', 'pipe', 'pipe'])
   })

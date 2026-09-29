@@ -20,6 +20,8 @@ export interface ProjectableToolResult {
   error?: string
   userMessage?: string
   diagnostic?: unknown
+  decisionRuleId?: string
+  autoApprovedWrite?: import('./domainTypes').AutoApprovedWriteMeta
 }
 
 export interface ProjectedTelemetryResult {
@@ -385,6 +387,7 @@ function projectProcessDataForSink(
   const maxOutputChars = Math.max(1, Math.floor(options.maxOutputChars ?? 32 * 1024))
   for (const [key, entry] of Object.entries(source)) {
     if (!PROCESS_KEYS.has(key)) continue
+    if (entry === undefined) continue
     if (key === 'persistedOutputPath') {
       if (typeof entry === 'string') out.artifactId = artifactIdForPersistedPath(entry)
       continue
@@ -651,6 +654,8 @@ export function projectToolResultForSink(
     success: result.success,
     ...(safeError && (!processData || STABLE_CODE_RE.test(safeError)) ? { error: safeError } : processData ? { error: 'TOOL_EXECUTION_FAILED' } : {}),
     ...(safeUserMessage ? { userMessage: safeUserMessage } : {}),
+    ...(result.decisionRuleId ? { decisionRuleId: result.decisionRuleId } : {}),
+    ...(result.autoApprovedWrite ? { autoApprovedWrite: result.autoApprovedWrite } : {}),
     data: processData ? projectProcessDataForSink(result.data as Record<string, unknown>, sink, options) : projectGenericData(result.data, options),
     ...(diagnostic ? { diagnostic } : {})
   }

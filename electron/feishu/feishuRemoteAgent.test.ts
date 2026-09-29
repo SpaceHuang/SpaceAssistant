@@ -3,6 +3,9 @@ import type { WebContents } from 'electron'
 import { AppDatabase, openDatabase, setConfigValue } from '../database'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { buildFeishuRemoteSystemAppendix } from '../../src/shared/feishuPrompts'
+import { MODEL_BASELINE } from '../../src/shared/modelBaseline'
+
+const SUPPORTED_ANTHROPIC_MODEL = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
 
 const mockRunToolChatSession = vi.fn()
 const mockReadAppLocale = vi.fn<[], 'zh-CN' | 'en-US'>(() => 'en-US')
@@ -85,7 +88,7 @@ function baseCtx(getMainWebContents: () => WebContents | null) {
     getMainWebContents,
     getApiKey: async () => 'key',
     getBaseUrl: () => 'https://api.example.com',
-    getModel: () => 'claude-sonnet-4-20250514',
+    getModel: () => SUPPORTED_ANTHROPIC_MODEL,
     runner: {} as never,
     imChannel: {} as never,
     getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
@@ -130,7 +133,8 @@ describe('runFeishuRemoteAgent locale', () => {
 
     expect(mockRunToolChatSession).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ legacy: expect.objectContaining({ appDb: expect.anything() }) })
+      expect.objectContaining({ legacy: expect.objectContaining({ appDb: expect.anything() }) }),
+      expect.objectContaining({ onHostedTurnHandoff: expect.any(Function) })
     )
   })
 
@@ -152,7 +156,8 @@ describe('runFeishuRemoteAgent locale', () => {
     await runFeishuRemoteAgent(baseCtx(() => null))
     expect(mockRunToolChatSession).toHaveBeenCalledWith(
       expect.objectContaining({ profile: expect.objectContaining({ system: appendix }) }),
-      expect.anything()
+      expect.anything(),
+      expect.objectContaining({ onHostedTurnHandoff: expect.any(Function) })
     )
   })
 
@@ -165,7 +170,8 @@ describe('runFeishuRemoteAgent locale', () => {
           workDirManager: expect.anything(),
           resolveWorkDir: expect.any(Function)
         })
-      })
+      }),
+      expect.objectContaining({ onHostedTurnHandoff: expect.any(Function) })
     )
   })
 

@@ -24,6 +24,7 @@ export interface AdmissionRequest {
   role: AdmissionRole
   disposition: AdmissionDisposition
   requestId?: string
+  turnId?: string
 }
 
 export interface AdmissionPolicy {

@@ -93,6 +93,8 @@ export interface ToolCallGateArgs {
   wikiConfig?: WikiConfig
   /** 装配期解析的生效规则集（B1：必填，缺料 fail-loud，不回退内置默认规则）。 */
   effectiveRules: PolicyRule[]
+  /** Trusted disabled locked-deny IDs loaded from persisted security settings. */
+  disabledPolicyRuleIds?: readonly string[]
   /**
    * 「自动」变换的档位来源（§2.1 LANE_PROFILES，与 effectiveRules 同源装配注入）；
    * 缺省 standard——装配方未显式声明时按恒等处理（fail-safe：少自动化不多自动化）。
@@ -130,6 +132,30 @@ export interface ToolCallGateArgs {
   requestId?: string
   toolUseId?: string
   readConfirmationRegistry?: ReadConfirmationRegistry
+  /** Recheck-only mode forbids confirmation registration and trusted-command writes. */
+  phase?: 'initial' | 'recheck'
+  /** SDK host tells the evaluator a matching request was approved; SafetyPolicy still verifies rule/facts identity. */
+  previouslyConfirmed?: boolean
+  /** Allow the Hosted safety adapter to re-run the side-effect-free desktop file fast-track on recheck. */
+  evaluateFastTrackOnRecheck?: boolean
+}
+
+/** Build one invocation-scoped gate request; identity, canonical input and phase cannot drift apart. */
+export function buildToolCallGateArgs(
+  context: Omit<ToolCallGateArgs, 'toolName' | 'toolInput' | 'requestId' | 'toolUseId' | 'phase' | 'previouslyConfirmed' | 'evaluateFastTrackOnRecheck'> & Partial<Pick<ToolCallGateArgs, 'requestId' | 'toolUseId'>>,
+  call: Readonly<{ toolName: string; toolInput: Record<string, unknown>; requestId: string; toolUseId: string; phase?: ToolCallGateArgs['phase']; previouslyConfirmed?: boolean; evaluateFastTrackOnRecheck?: boolean }>
+): ToolCallGateArgs {
+  if (!call.toolName.trim() || !call.requestId.trim() || !call.toolUseId.trim()) throw new Error('TOOL_GATE_CALL_IDENTITY_REQUIRED')
+  return {
+    ...context,
+    toolName: call.toolName,
+    toolInput: structuredClone(call.toolInput),
+    requestId: call.requestId,
+    toolUseId: call.toolUseId,
+    ...(call.phase ? { phase: call.phase } : {}),
+    ...(call.previouslyConfirmed ? { previouslyConfirmed: true } : {}),
+    ...(call.evaluateFastTrackOnRecheck ? { evaluateFastTrackOnRecheck: true } : {})
+  }
 }
 
 export interface ToolCallGateResult {
@@ -218,7 +244,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
 
   // ===== P3 底线校验（§7.1 判据 2）：传入规则集相对 locked 底线可收紧不可放宽 =====
   // 违规 → 拒绝本次工具调用 + cause=rules-violated 审计（与正常拒绝、缺料失败互斥不混计）
-  const floorCheck = validatePolicyRulesFloor(args.effectiveRules)
+  const floorCheck = validatePolicyRulesFloor(args.effectiveRules, undefined, args.disabledPolicyRuleIds)
   if (!floorCheck.ok) {
     result.decision = {
       type: 'deny',
@@ -287,7 +313,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       workDir: args.workDir,
       userDataDir: args.userDataDir,
       shellConfig: args.shellConfig,
-      shellPrecheck: args.shellPrecheck,
+      shellPrecheck: args.phase === 'recheck' ? undefined : args.shellPrecheck,
       analysis: shellAnalysis
     })
     if (!precheck.ok) {
@@ -379,6 +405,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   let readPathProbeFailure: ReadPathProbeError | undefined
   let writePathFact: WritePathFact | undefined
   let writePathProbeFailure: WritePathProbeError | undefined
+  let wikiRawTargetFailure = false
   let writePathInputFailure = false
   if (args.mcpEntry) {
     // MCP：事实提取为纯信号——总是产 mcp-tool（落 mcp-tool-ask 默认确认，会话信任经缓存命中放行）；
@@ -498,11 +525,15 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       } catch (error) {
         if (!(error instanceof WritePathProbeError)) throw error
         writePathProbeFailure = error
+        wikiRawTargetFailure = args.wikiConfig?.enabled === true && classifyWikiPath(args.workDir, args.wikiConfig, resolveWikiRelPath(args.workDir, args.wikiConfig, rawPath)) === 'raw'
         facts = {
           toolName: descriptor.toolName,
           actionClass: descriptor.actionClass,
           baseRiskLevel: descriptor.riskLevel,
-          signals: [{ kind: 'extraction-failed', reason: error.caseId }],
+          signals: [
+            { kind: 'extraction-failed', reason: error.caseId },
+            ...(wikiRawTargetFailure ? [{ kind: 'wiki-raw-target' as const }] : [])
+          ],
           summary: { text: '写入目标无法检查' }
         }
       }
@@ -650,7 +681,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   // 条目的 match.toolName + match.lane 声明评估域与 lane 标注），不再是按工具名写死的代码分支。
   // 确定性预过滤地位保留在回答者之前（审批计划已拍板，复核记录留痕）。
   const autoEvaluatorRoutes = new Map<string, string>()
-  if (lane === 'desktop') {
+  if (lane === 'desktop' && (args.phase !== 'recheck' || args.evaluateFastTrackOnRecheck)) {
     // §2.3：「自动」动作的内建快通道——desktop 下 write_file/edit_file 恒注册（不依赖基线规则，
     // desktop-auto-approve 规则已删；custom 覆盖为 ask 时规则动作不再消费评估器，路由天然旁路）
     autoEvaluatorRoutes.set('write_file', 'file-fast-track')
@@ -708,7 +739,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
 
   // 写路径事实必须先于桌面写快通道。快通道只能消费已探测事实，不能自行重做路径分类。
   let fileAutoApprove: boolean | undefined
-  if (lane === 'desktop' && (args.toolName === 'write_file' || args.toolName === 'edit_file')) {
+  if ((args.phase !== 'recheck' || args.evaluateFastTrackOnRecheck) && lane === 'desktop' && (args.toolName === 'write_file' || args.toolName === 'edit_file')) {
     if (writePathProbeFailure) {
       result.autoApproveFallback = { reason: '写入目标事实探测失败', reasonCode: 'write_path_probe_failed' }
     } else {
@@ -754,6 +785,8 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     : undefined
   let decision = writePathInputFailure
     ? { type: 'deny' as const, ruleId: 'write-path-input-invalid', reason: '缺少有效的路径参数，已阻止写入' }
+    : wikiRawTargetFailure
+    ? { type: 'deny' as const, ruleId: 'wiki-raw-write-deny', reason: 'Wiki 原始文件目标禁止由模型直接写入' }
     : writePathProbeFailure
     ? { type: 'deny' as const, ruleId: writePathProbeFailure.caseId, reason: '写入目标事实探测失败，已阻止执行' }
     : readPathProbeFailure
@@ -789,13 +822,15 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     decision = { type: 'deny', ruleId: 'recursion-guard', reason }
   }
 
+  if (args.phase === 'recheck' && decision.type === 'require-confirm' && !args.previouslyConfirmed) decision = { type: 'deny', ruleId: 'recheck-requires-confirm', reason: '确认后复检不得发起第二次确认' }
+
   if (readPathFact && isPermitReadTool && (decision.type === 'auto-allow' || (decision.type === 'require-confirm' && decision.answerer === 'user')) && (readPathFact.targetKind !== 'directory' || isListDirectoryTool)) {
     const readTarget = { factId: `fact-${readPathFact.normalizedPath}`, decisionRuleId: decision.ruleId }
     result.readTargetMapping = [readTarget]
     if (decision.type === 'auto-allow') result.approvedFactIds = [readTarget]
   }
 
-  if (readPathFact && isPermitReadTool && decision.type === 'auto-allow' && (readPathFact.targetKind !== 'directory' || isListDirectoryTool)) {
+  if (args.phase !== 'recheck' && readPathFact && isPermitReadTool && decision.type === 'auto-allow' && (readPathFact.targetKind !== 'directory' || isListDirectoryTool)) {
     result.readExecutionPermit = buildReadExecutionPermit({
       requestId: args.requestId ?? args.sessionId,
       toolUseId: args.toolUseId ?? args.toolName,
@@ -804,7 +839,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       input: args.toolInput,
       facts: [{ factId: `fact-${readPathFact.normalizedPath}`, decisionRuleId: decision.ruleId, normalizedPath: readPathFact.normalizedPath, zone: readPathFact.zone, targetKind: isListDirectoryTool && (readPathFact.targetKind === 'directory' || readPathFact.resolvedKind === 'directory') ? 'directory' : readPathFact.targetKind, ...(isListDirectoryTool ? { scope: 'direct-entries' as const } : {}), ...(readPathFact.resolvedKind ? { resolvedKind: readPathFact.resolvedKind } : {}), ...(readPathFact.identity ? { identity: readPathFact.identity } : {}) }]
     })
-  } else if (readPathFact && decision.type === 'require-confirm' && decision.answerer === 'user' && (readPathFact.targetKind !== 'directory' || isListDirectoryTool)) {
+  } else if (args.phase !== 'recheck' && readPathFact && decision.type === 'require-confirm' && decision.answerer === 'user' && (readPathFact.targetKind !== 'directory' || isListDirectoryTool)) {
     const registry = args.readConfirmationRegistry ?? readConfirmationRegistry
     const registered = registry.register({
       requestId: args.requestId ?? args.sessionId,
@@ -817,12 +852,12 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     if (!registered) decision = { type: 'deny', ruleId: 'read-confirmation-registration-failed', reason: '无法建立本次读取确认登记，已阻止执行' }
   }
 
-  if (feishuMediaFact?.boundary === 'inside' && feishuMediaFact.targetKind === 'file' && feishuMediaFact.normalizedPath && feishuMediaFact.identity && (decision.type === 'auto-allow' || (decision.type === 'require-confirm' && decision.answerer === 'user'))) {
+  if (feishuMediaFact?.boundary === 'inside' && feishuMediaFact.targetKind === 'file' && feishuMediaFact.normalizedPath && feishuMediaFact.identity && (decision.type === 'auto-allow' || (decision.type === 'require-confirm' && args.phase !== 'recheck'))) {
     const factId = `fact-${feishuMediaFact.normalizedPath}`
     const readTarget = { factId, decisionRuleId: decision.ruleId }
     result.readTargetMapping = [readTarget]
     if (decision.type === 'auto-allow') result.approvedFactIds = [readTarget]
-    else {
+    else if (decision.type === 'require-confirm') {
       const registry = args.readConfirmationRegistry ?? readConfirmationRegistry
       const registered = registry.register({
         requestId: args.requestId ?? args.sessionId,

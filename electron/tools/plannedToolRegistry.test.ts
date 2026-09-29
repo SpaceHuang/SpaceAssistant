@@ -5,14 +5,57 @@ const context = { requestId: 'r1', toolUseId: 'u1' }
 const execution = { ...context, signal: new AbortController().signal }
 
 describe('plannedToolRegistry', () => {
-  it('actionClass 从 direct/planned/legacy 定义传播到 RegisteredTool', () => {
+  it.each([
+    ['undefined', undefined], ['NaN', Number.NaN], ['Infinity', Number.POSITIVE_INFINITY], ['BigInt', 1n],
+    ['nested undefined', { value: undefined }], ['nested Date', { value: new Date(0) }],
+    ['nested Map', { value: new Map([['key', 'value']]) }], ['symbol key', { [Symbol('hidden')]: 'value' }]
+  ])('rejects non-JSON %s input before parsing or planning', async (_shape, raw) => {
+    const parseInput = vi.fn((value: unknown) => value)
+    const plan = vi.fn(async (value: unknown) => ({ value }))
+    const tool = definePlannedTool({ name: 'json-input', parseInput, plan, execute: async () => 'unexpected' })
+
+    await expect(tool.begin(raw, context)).rejects.toThrow('INVALID_CANONICAL_TOOL_INPUT')
+    expect(parseInput).not.toHaveBeenCalled()
+    expect(plan).not.toHaveBeenCalled()
+  })
+
+  it('rejects cyclic values and accessor properties without invoking the accessor', async () => {
+    const cycle: Record<string, unknown> = {}
+    cycle.self = cycle
+    let getterCalls = 0
+    const accessor = Object.defineProperty({}, 'value', { enumerable: true, get: () => { getterCalls += 1; return 'hidden' } })
+    const tool = definePlannedTool({ name: 'json-tree', parseInput: (raw) => raw, plan: async () => ({}), execute: async () => 'unexpected' })
+
+    await expect(tool.begin(cycle, context)).rejects.toThrow('INVALID_CANONICAL_TOOL_INPUT')
+    await expect(tool.begin(accessor, context)).rejects.toThrow('INVALID_CANONICAL_TOOL_INPUT')
+    expect(getterCalls).toBe(0)
+  })
+
+  it('rejects sparse arrays and shared object references that JSON would normalize or duplicate', async () => {
+    const child = { value: 1 }
+    const shared = { left: child, right: child }
+    const sparse: unknown[] = []
+    sparse.length = 1
+    const tool = definePlannedTool({ name: 'json-tree-shape', parseInput: (raw) => raw, plan: async () => ({}), execute: async () => 'unexpected' })
+
+    await expect(tool.begin(shared, context)).rejects.toThrow('INVALID_CANONICAL_TOOL_INPUT')
+    await expect(tool.begin(sparse, context)).rejects.toThrow('INVALID_CANONICAL_TOOL_INPUT')
+  })
+
+  it('accepts empty JSON objects and null-prototype records with the same canonical digest', async () => {
+    const tool = definePlannedTool({ name: 'empty-json-object', parseInput: (raw) => raw, plan: async (raw) => raw, execute: async () => 'ok' })
+    const ordinary = await tool.begin({}, context)
+    const nullPrototype = await tool.begin(Object.create(null), context)
+
+    expect(ordinary.prepared.inputDigest).toBe(nullPrototype.prepared.inputDigest)
+    expect(ordinary.prepared.inputDigest).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('actionClass 从 direct/planned 定义传播到 RegisteredTool', () => {
     const direct = defineDirectTool({ name: 'write-direct', actionClass: 'write', parseInput: (raw) => raw, execute: async () => 'ok' })
     const planned = definePlannedTool({ name: 'execute-planned', actionClass: 'execute', parseInput: (raw) => raw, plan: async () => ({}), execute: async () => 'ok' })
-    const registry = new TypedToolRegistry()
-    registry.registerLegacyExecutor({ name: 'outbound-legacy', actionClass: 'outbound', execute: async () => ({ success: true }) })
     expect(direct.actionClass).toBe('write')
     expect(planned.actionClass).toBe('execute')
-    expect(registry.get('outbound-legacy')?.actionClass).toBe('outbound')
   })
   it('TypedToolRegistry 只注册判别式 RegisteredTool 并拒绝重复名称', () => {
     const registry = new TypedToolRegistry()
@@ -23,53 +66,13 @@ describe('plannedToolRegistry', () => {
     expect(() => registry.register(direct)).toThrow('TOOL_ALREADY_REGISTERED:direct-registry')
   })
 
-  it('legacy direct executor 共享同一 registry 名称唯一性约束', () => {
+  it('移除迁移期 legacy executor 双重注册 API', () => {
     const registry = new TypedToolRegistry()
-    const executor = { name: 'legacy', execute: async () => ({ success: true }) }
-    registry.registerLegacyExecutor(executor)
-    expect(registry.getLegacyExecutor('legacy')).toBe(executor)
-    expect(registry.get('legacy')?.kind).toBe('direct')
-    expect(registry.entries().map((tool) => tool.name)).toEqual(['legacy'])
-    expect(registry.legacyEntries()).toEqual([executor])
-    expect(() => registry.registerLegacyExecutor(executor)).toThrow('TOOL_ALREADY_REGISTERED:legacy')
-    const direct = defineDirectTool({ name: 'direct-duplicate', parseInput: (raw) => raw, execute: async () => 'ok' })
-    registry.register(direct)
-    expect(registry.get('direct-duplicate')).toBe(direct)
+    expect(registry).not.toHaveProperty('registerLegacyExecutor')
+    expect(registry).not.toHaveProperty('getLegacyExecutor')
+    expect(registry).not.toHaveProperty('legacyEntries')
   })
 
-  it('legacy executor 的 typed direct 视图执行时消费 runtimeContext', async () => {
-    let received: unknown
-    const registry = new TypedToolRegistry()
-    registry.registerLegacyExecutor({
-      name: 'legacy-runtime',
-      execute: async (input, runtime) => {
-        received = { input, runtime }
-        return { success: true }
-      }
-    })
-    const tool = registry.get('legacy-runtime')
-    expect(tool?.kind).toBe('direct')
-    const handle = await tool!.begin({ value: 1 }, context)
-    handle.confirm()
-    const runtime = { requestId: 'r1', toolUseId: 'u1', signal: execution.signal } as never
-    await expect(handle.execute({ ...execution, runtimeContext: runtime })).resolves.toEqual({ success: true })
-    expect(received).toEqual({ input: { value: 1 }, runtime })
-  })
-
-  it('planned registration 可以覆盖先生成的 legacy direct 迁移别名', () => {
-    const registry = new TypedToolRegistry()
-    registry.registerLegacyExecutor({ name: 'migration-order', execute: async () => ({ success: true }) })
-    const planned = definePlannedTool({
-      name: 'migration-order',
-      parseInput: (raw) => raw,
-      plan: async () => ({ frozen: true }),
-      execute: async () => 'planned'
-    })
-    registry.register(planned)
-    expect(registry.get('migration-order')).toBe(planned)
-    expect(registry.get('migration-order')?.kind).toBe('planned')
-    expect(registry.getLegacyExecutor('migration-order')).toBeTruthy()
-  })
   it('支持 direct 工具并拒绝未确认和重复执行', async () => {
     const tool = defineDirectTool({ name: 'echo', parseInput: (raw) => String(raw), execute: async (input) => input })
     const handle = await tool.begin('ok', context)

@@ -50,7 +50,7 @@ describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
     expect(loadEffectivePolicyRules(d, 'wechat')).toBe(DEFAULT_POLICY_RULES)
   })
 
-  it('普通规则可被禁用；locked 规则不允许进入 disabled 集合', () => {
+  it('普通规则与 locked deny 保护规则可禁用，但 locked ask 不可禁用', () => {
     const d = db()
     // 未禁用：标准套餐返回 DEFAULT_POLICY_RULES 引用（快路径）
     expect(loadEffectivePolicyRules(d, 'wechat')).toBe(DEFAULT_POLICY_RULES)
@@ -62,15 +62,16 @@ describe('policyRulesRuntime（套餐/覆盖运行时装配）', () => {
     expect(rules.find((r) => r.id === 'im-write-ask')).toBeUndefined()
     expect(rules.find((r) => r.id === 'script-network-ask-desktop')).toBeTruthy()
     // disabled 集合读写往返
-    writeDisabledPolicyRuleIds(d, ['a', 'b', 'a'])
-    expect(readDisabledPolicyRuleIds(d)).toEqual(['a', 'b'])
+    writeDisabledPolicyRuleIds(d, ['a', 'b', 'a', 'automation-sensitive-path-deny', 'automation-default-confirm'])
+    expect(readDisabledPolicyRuleIds(d)).toEqual(['a', 'b', 'automation-sensitive-path-deny'])
+    expect(loadEffectivePolicyRules(d, 'automation').some((rule) => rule.id === 'automation-sensitive-path-deny')).toBe(false)
   })
 
-  it('历史 disabled locked id 会被 fail-safe 清理且 locked 规则继续生效', () => {
+  it('历史 disabled locked ask 会被 fail-safe 清理且 ask 规则继续生效', () => {
     const d = db()
-    setConfigValue(d, DISABLED_POLICY_RULE_IDS_CONFIG_KEY, JSON.stringify(['remote-shell-disabled', 'im-write-ask']))
+    setConfigValue(d, DISABLED_POLICY_RULE_IDS_CONFIG_KEY, JSON.stringify(['automation-default-confirm', 'im-write-ask']))
     const rules = loadEffectivePolicyRules(d, 'feishu')
-    expect(rules.find((r) => r.id === 'remote-shell-disabled')).toBeTruthy()
+    expect(loadEffectivePolicyRules(d, 'automation').find((r) => r.id === 'automation-default-confirm')).toBeTruthy()
     expect(readDisabledPolicyRuleIds(d)).toEqual(['im-write-ask'])
   })
 

@@ -12,7 +12,7 @@ import type {
   ConfirmRequest,
   SecurityAuditEvent
 } from '../../src/shared/confirmation/types'
-import { ApprovalAdmission } from '../../packages/agent-core/src/approval'
+import { ApprovalAdmission } from '../../packages/agent-sdk/src/approval'
 
 function req(overrides: Partial<ConfirmRequest> = {}): ConfirmRequest {
   return {

@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 18
+export const DB_SCHEMA_VERSION = 22
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (
@@ -114,6 +114,88 @@ UPDATE confirmation_submissions SET revision = expected_revision WHERE revision 
 UPDATE confirmation_commit_audits SET session_id = (SELECT session_id FROM confirmation_submissions WHERE confirmation_submissions.submission_id = confirmation_commit_audits.submission_id) WHERE session_id = '';
 UPDATE confirmation_commit_audits SET generation = (SELECT generation FROM confirmation_submissions WHERE confirmation_submissions.submission_id = confirmation_commit_audits.submission_id);
 UPDATE confirmation_commit_audits SET revision = (SELECT revision FROM confirmation_submissions WHERE confirmation_submissions.submission_id = confirmation_commit_audits.submission_id);
+`
+
+/** v18 → v19：Agent SDK canonical history streams and idempotent events. */
+export const MIGRATION_V19_AGENT_HISTORY_SQL = `
+CREATE TABLE IF NOT EXISTS agent_history_streams (
+  invocation_id TEXT PRIMARY KEY NOT NULL,
+  version INTEGER NOT NULL DEFAULT 0 CHECK(version >= 0),
+  schema_version INTEGER NOT NULL CHECK(schema_version > 0)
+);
+
+CREATE TABLE IF NOT EXISTS agent_history_events (
+  invocation_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL CHECK(sequence > 0),
+  event_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  schema_version INTEGER NOT NULL CHECK(schema_version > 0),
+  kind TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(invocation_id, sequence),
+  UNIQUE(invocation_id, event_id),
+  UNIQUE(invocation_id, idempotency_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_history_events_turn
+  ON agent_history_events(invocation_id, turn_id, sequence);
+`
+
+/** v19 → v20：bind canonical invocation streams to their owning application session. */
+export const MIGRATION_V20_AGENT_HISTORY_SESSION_SQL = `
+ALTER TABLE agent_history_streams ADD COLUMN session_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_agent_history_streams_session
+  ON agent_history_streams(session_id, invocation_id);
+`
+
+/** v20 → v21：backfill legacy invocation ownership only from an unambiguous turn receipt. */
+export const MIGRATION_V21_AGENT_HISTORY_SESSION_BACKFILL_SQL = `
+WITH owner_candidates AS (
+  SELECT request_id AS invocation_id, session_id
+  FROM turns
+  WHERE trim(session_id) <> ''
+  UNION
+  SELECT invocation_id,
+    CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.sessionId') END AS session_id
+  FROM agent_history_events
+  WHERE kind = 'session-input-committed'
+    AND sequence = 1
+    AND json_valid(payload_json) = 1
+    AND json_type(payload_json, '$.sessionId') = 'text'
+    AND trim(json_extract(payload_json, '$.sessionId')) <> ''
+    AND json_type(payload_json, '$.messageId') = 'text'
+    AND trim(json_extract(payload_json, '$.messageId')) <> ''
+    AND json_extract(payload_json, '$.role') = 'user'
+    AND json_type(payload_json, '$.inputFingerprint') = 'text'
+    AND trim(json_extract(payload_json, '$.inputFingerprint')) <> ''
+  UNION
+  SELECT invocation_id,
+    CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.sessionLedger.location.sessionId') END AS session_id
+  FROM agent_history_events
+  WHERE kind IN ('transcript-compacted', 'invocation-completed', 'invocation-failed', 'invocation-interrupted')
+    AND json_valid(payload_json) = 1
+    AND json_type(payload_json, '$.sessionLedger.location.sessionId') = 'text'
+    AND trim(json_extract(payload_json, '$.sessionLedger.location.sessionId')) <> ''
+    AND json_type(payload_json, '$.sessionLedger.location.workDir') = 'text'
+    AND trim(json_extract(payload_json, '$.sessionLedger.location.workDir')) <> ''
+    AND json_type(payload_json, '$.sessionLedger.location.createdAt') IN ('integer', 'real')
+), unique_owners AS (
+  SELECT invocation_id, MIN(session_id) AS session_id
+  FROM owner_candidates
+  GROUP BY invocation_id
+  HAVING COUNT(DISTINCT session_id) = 1
+)
+UPDATE agent_history_streams
+SET session_id = (SELECT session_id FROM unique_owners WHERE unique_owners.invocation_id = agent_history_streams.invocation_id)
+WHERE session_id IS NULL
+  AND EXISTS (SELECT 1 FROM unique_owners WHERE unique_owners.invocation_id = agent_history_streams.invocation_id);
+`
+
+/** v21 → v22: distinguish new atomic input commitments from legacy turn receipts. */
+export const MIGRATION_V22_TURN_INPUT_HISTORY_VERSION_SQL = `
+ALTER TABLE turns ADD COLUMN accepted_input_history_version INTEGER NOT NULL DEFAULT 0 CHECK(accepted_input_history_version >= 0);
 `
 
 /**

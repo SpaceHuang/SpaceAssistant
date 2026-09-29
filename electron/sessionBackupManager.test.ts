@@ -96,6 +96,19 @@ describe('SessionBackupManager', () => {
     expect(restored?.messages.map((m) => m.id)).toEqual(['m1', 'm2'])
   })
 
+  it('reads backup events without repairing or modifying a torn JSONL tail', async () => {
+    const mgr = new SessionBackupManager(workDir)
+    const session = makeSession()
+    const eventsPath = path.join(sessionDir(session), 'events.jsonl')
+    const valid = JSON.stringify({ seq: 1, time: 1, type: 'turn_start', payload: { turnId: 't' } })
+    const original = `${valid}\n{"seq":2`
+    await fs.mkdir(path.dirname(eventsPath), { recursive: true })
+    await fs.writeFile(eventsPath, original)
+
+    await expect(mgr.readEvents(session.id)).resolves.toMatchObject([{ seq: 1, type: 'turn_start' }])
+    await expect(fs.readFile(eventsPath, 'utf8')).resolves.toBe(original)
+  })
+
   it('reads across multiple pages and preserves full ordering (no truncation)', async () => {
     const mgr = new SessionBackupManager(workDir)
     const session = makeSession()

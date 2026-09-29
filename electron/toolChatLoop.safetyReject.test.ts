@@ -39,7 +39,7 @@ vi.mock('./sessionTitleSuggest', () => ({
 }))
 
 vi.mock('./toolConfirmRegistry', () => ({
-  registerToolCancel: vi.fn(() => ({ aborted: false, addEventListener: vi.fn() })),
+  registerToolCancel: vi.fn(() => new AbortController().signal),
   clearToolCancel: vi.fn(),
   cancelAllToolConfirmsForRequest: vi.fn(),
   prepareToolConfirm: vi.fn(),
@@ -86,6 +86,7 @@ const SR_FACTS: ContentFacts = {
 const SR_DECISION: Decision = {
   type: 'require-confirm',
   ruleId: 'automation-default-confirm',
+  answerer: 'agent',
   riskLevel: 'medium',
   facts: SR_FACTS,
   memoryTiers: [],
@@ -106,15 +107,23 @@ vi.mock('./confirmation/toolCallGate', async (importOriginal) => {
 const mockCreateAnthropicClient = vi.fn()
 
 vi.mock('./anthropicClientFactory', () => ({
+  createAnthropicStreamPort: (client: { messages: { stream: (...args: unknown[]) => unknown } }) => ({ stream: (...args: unknown[]) => client.messages.stream(...args) }),
   createAnthropicClient: (...args: unknown[]) => mockCreateAnthropicClient(...args)
 }))
 
 import { runToolChatSession } from './toolChatLoop'
+import { registerChatCancel } from './chatCancelRegistry'
 import { assembleInvocation } from './runtime/invocationAssembler'
+import { createAgentRuntime } from './runtime/agentRuntime'
+import { getDefaultAgentRuntime, setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
+import { ToolRevocationRegistry } from './toolRevocationRegistry'
+import { createHostedTurnHandoff } from './runtime/hostedTurnHandoff'
 
 /** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
 function runAssembledSession(materials: unknown) {
   const { invocation, ports } = assembleInvocation(materials as never)
+  // 该用例用 mock bare executor 覆盖旧 loop 行为，不代表 production runtime host。
+  ports.toolRevocations = undefined
   return runToolChatSession(invocation, ports)
 }
 import { createMemoryAppDb } from './database/testHelpers'
@@ -190,57 +199,253 @@ describe('P1 安全拒绝理由回传与计数口径分离', () => {
   })
 
   it('连续 3 次同类安全拒绝不中止 Turn：模型在第 4 轮收敛并看到拒绝理由', async () => {
-    installStreamClient()
-    const db = makeDb()
-    const res = await runAssembledSession(baseArgs(db))
+    const { defineDirectTool, TypedToolRegistry } = await import('./tools/plannedToolRegistry')
+    const providerRouteId = 'desktop-anthropic:safety-reject-rounds'
+    const runtime = getDefaultAgentRuntime()
+    const execute = vi.fn(async () => ({ success: true, data: 'must not run' }))
+    const toolRegistry = new TypedToolRegistry()
+    toolRegistry.register(defineDirectTool({
+      name: 'write_file', actionClass: 'write',
+      parseInput: (raw) => raw as { path: string; content: string }, execute
+    }))
+    const providerCalls: Array<{ messages: unknown[] }> = []
+    let providerTurn = 0
+    runtime.modelProviders.register({
+      routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01',
+      adapterVersion: 'pi-ai@0.87.1', modelId: 'claude-sonnet-4-20250514'
+    }, { providerId: 'safety-reject-rounds', async *stream(call) {
+      providerCalls.push({ messages: call.request.messages })
+      providerTurn += 1
+      if (providerTurn <= SAFE_ROUNDS) {
+        yield { type: 'tool-call', toolCallId: `toolu-sr-${providerTurn}`, toolName: 'write_file', input: { path: 'out.txt', content: 'x' } }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'tool-calls' }
+      } else {
+        yield { type: 'text-delta', text: '已完成：部分工作因安全拒绝未能执行' }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'stop' }
+      }
+    } })
+    const materials = { ...baseArgs(makeDb()), providerRouteId }
+    const assembled = assembleInvocation(materials as never)
+    assembled.ports.toolRevocations = undefined
+    vi.mocked(registerChatCancel).mockReturnValue(new AbortController().signal as never)
+    const agentSdk = {
+      ...assembled.agentSdk,
+      createHostedTurnRuntime: (input: Parameters<typeof assembled.agentSdk.createHostedTurnRuntime>[0]) =>
+        assembled.agentSdk.createHostedTurnRuntime({ ...input, registry: toolRegistry })
+    }
+    const handoff = createHostedTurnHandoff({
+      agentSdk: agentSdk as never, history: assembled.ports.history!,
+      invocationId: assembled.invocation.trace.requestId, turnId: assembled.invocation.trace.turnId,
+      routeId: providerRouteId
+    })
+    const res = await runToolChatSession(assembled.invocation, assembled.ports, { onHostedTurnHandoff: handoff })
     expect(res.ok).toBe(true)
-    // 第 4 轮请求发生 = 第 3 次拒绝后未 break（旧代码 safety 拒绝同键满 3 次即中止 → 红）
-    expect(capturedStreamParams.length).toBeGreaterThanOrEqual(4)
+    // 第四次真实 Hosted provider request 发生，即前三次拒绝均作为工具结果交回模型。
+    expect(providerCalls).toHaveLength(SAFE_ROUNDS + 1)
     // 理由回传：第 2 轮起模型可见的 tool_result 中携带 reason.summary 渲染文案（旧代码为固定「用户拒绝执行此工具」→ 红）
-    const secondRoundMessages = capturedStreamParams[1]!.messages
+    const secondRoundMessages = providerCalls[1]!.messages
     const serialized = JSON.stringify(secondRoundMessages)
     expect(serialized).toContain(SAFETY_SUMMARY)
     expect(serialized).not.toContain('用户拒绝执行此工具')
+    expect(execute).not.toHaveBeenCalled()
+    expect(mockCreateAnthropicClient).not.toHaveBeenCalled()
+  })
+
+  it('连续 5 次同类安全拒绝后按既有安全阈值终止 Turn', async () => {
+    const { defineDirectTool, TypedToolRegistry } = await import('./tools/plannedToolRegistry')
+    const providerRouteId = 'desktop-anthropic:safety-reject-threshold'
+    const runtime = getDefaultAgentRuntime()
+    const execute = vi.fn(async () => ({ success: true, data: 'must not run' }))
+    const toolRegistry = new TypedToolRegistry()
+    toolRegistry.register(defineDirectTool({
+      name: 'write_file', actionClass: 'write',
+      parseInput: (raw) => raw as { path: string; content: string }, execute
+    }))
+    let providerCalls = 0
+    runtime.modelProviders.register({
+      routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01',
+      adapterVersion: 'pi-ai@0.87.1', modelId: 'claude-sonnet-4-20250514'
+    }, { providerId: 'safety-reject-threshold', async *stream() {
+      providerCalls += 1
+      yield { type: 'tool-call', toolCallId: `toolu-safety-${providerCalls}`, toolName: 'write_file', input: { path: 'out.txt', content: 'x' } }
+      yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish', reason: 'tool-calls' }
+    } })
+    const assembled = assembleInvocation({ ...baseArgs(makeDb()), providerRouteId } as never)
+    assembled.ports.toolRevocations = undefined
+    vi.mocked(registerChatCancel).mockReturnValue(new AbortController().signal as never)
+    const agentSdk = {
+      ...assembled.agentSdk,
+      createHostedTurnRuntime: (input: Parameters<typeof assembled.agentSdk.createHostedTurnRuntime>[0]) =>
+        assembled.agentSdk.createHostedTurnRuntime({ ...input, registry: toolRegistry })
+    }
+    const handoff = createHostedTurnHandoff({
+      agentSdk: agentSdk as never, history: assembled.ports.history!,
+      invocationId: assembled.invocation.trace.requestId, turnId: assembled.invocation.trace.turnId,
+      routeId: providerRouteId
+    })
+    const result = await runToolChatSession(assembled.invocation, assembled.ports, { onHostedTurnHandoff: handoff })
+    expect(providerCalls).toBe(5)
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining('安全拒绝已连续出现 5 次') })
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it('Hosted 写工具在 recheck deny 时不会进入 executor', async () => {
+    const { defineDirectTool, TypedToolRegistry } = await import('./tools/plannedToolRegistry')
+    const { evaluateToolCallGate } = await import('./confirmation/toolCallGate')
+    const execute = vi.fn(async () => ({ success: true, data: 'side effect' }))
+    const registeredTool = defineDirectTool({
+      name: 'write_file',
+      actionClass: 'write',
+      parseInput: (raw) => raw as { path: string; content: string },
+      execute
+    })
+    const previousRuntime = getDefaultAgentRuntime()
+    const toolRegistry = new TypedToolRegistry()
+    toolRegistry.register(registeredTool)
+    const runtime = createAgentRuntime({
+      toolRevocations: new ToolRevocationRegistry(),
+      builtinRegistry: toolRegistry as never
+    })
+    setDefaultAgentRuntime(runtime)
+    const providerRouteId = 'desktop-anthropic:safety-recheck-deny'
+    vi.mocked(evaluateToolCallGate).mockImplementation(async (args?: { phase?: string }): Promise<ToolCallGateResult> =>
+      args?.phase === 'recheck'
+        ? { decision: { type: 'deny', ruleId: 'recheck-deny', reason: 'policy changed' }, facts: SR_FACTS }
+        : { decision: { type: 'auto-allow', ruleId: 'initial-allow', reason: 'initial allow' }, facts: SR_FACTS }
+    )
+    let providerTurn = 0
+    runtime.modelProviders.register({
+      routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01',
+      adapterVersion: 'pi-ai@0.87.1', modelId: 'claude-sonnet-4-20250514'
+    }, { providerId: 'safety-recheck-deny', async *stream() {
+      providerTurn += 1
+      if (providerTurn === 1) {
+        yield { type: 'tool-call', toolCallId: 'toolu-recheck-denied', toolName: 'write_file', input: { path: 'out.txt', content: 'x' } }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'tool-calls' }
+      } else {
+        yield { type: 'text-delta', text: 'blocked' }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'stop' }
+      }
+    } })
+
+    try {
+      const materials = { ...baseArgs(makeDb()), providerRouteId }
+      const { invocation, ports, agentSdk } = assembleInvocation(materials as never)
+      ports.toolRevocations = undefined
+      vi.mocked(registerChatCancel).mockReturnValue(new AbortController().signal as never)
+      const handoff = createHostedTurnHandoff({
+        agentSdk: agentSdk as never, history: ports.history!, invocationId: invocation.trace.requestId,
+        turnId: invocation.trace.turnId, routeId: providerRouteId
+      })
+      await expect(runToolChatSession(invocation, ports, { onHostedTurnHandoff: handoff })).resolves.toMatchObject({ ok: true })
+      expect(vi.mocked(evaluateToolCallGate).mock.calls.map(([gateArgs]) => gateArgs?.phase ?? 'initial')).toEqual(['initial', 'recheck'])
+      expect(execute).not.toHaveBeenCalled()
+      expect(providerTurn).toBe(2)
+    } finally {
+      vi.mocked(evaluateToolCallGate).mockImplementation(async (): Promise<ToolCallGateResult> => ({
+        decision: SR_DECISION,
+        facts: SR_FACTS
+      }))
+      setDefaultAgentRuntime(previousRuntime)
+    }
   })
 
   it('执行失败桶阈值不变：同一执行错误连续 3 次仍中止 Turn（既有行为回归）', async () => {
     mockChannelOutcome.mockImplementation(() => ({ kind: 'approved', cause: 'user-approved' }) satisfies ConfirmOutcome)
-    // 执行器恒失败（同一错误文案）
-    const { getToolExecutor } = await import('./tools/builtinExecutors')
-    vi.mocked(getToolExecutor).mockImplementation((name: string) =>
-      name === 'write_file'
-        ? { name, execute: async () => ({ success: false, error: 'EACCES: permission denied', userMessage: 'EACCES: permission denied' }) }
-        : undefined
-    )
-    installStreamClient()
-    const db = makeDb()
-    await runAssembledSession(baseArgs(db))
-    // 3 次执行失败后 break：第 4 轮请求不发生
-    expect(capturedStreamParams.length).toBe(3)
+    const { defineDirectTool, TypedToolRegistry } = await import('./tools/plannedToolRegistry')
+    const providerRouteId = 'desktop-anthropic:execution-error-threshold'
+    const runtime = getDefaultAgentRuntime()
+    const execute = vi.fn(async () => ({ success: false, error: 'EACCES: permission denied', userMessage: 'EACCES: permission denied' }))
+    const toolRegistry = new TypedToolRegistry()
+    toolRegistry.register(defineDirectTool({
+      name: 'write_file', actionClass: 'write',
+      parseInput: (raw) => raw as { path: string; content: string }, execute
+    }))
+    const providerCalls: unknown[] = []
+    runtime.modelProviders.register({
+      routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01',
+      adapterVersion: 'pi-ai@0.87.1', modelId: 'claude-sonnet-4-20250514'
+    }, { providerId: 'execution-error-threshold', async *stream(call) {
+      providerCalls.push(call)
+      if (providerCalls.length <= 4) {
+        yield { type: 'tool-call', toolCallId: `toolu-error-${providerCalls.length}`, toolName: 'write_file', input: { path: 'out.txt', content: 'x' } }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'tool-calls' }
+      } else {
+        yield { type: 'text-delta', text: 'done' }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'stop' }
+      }
+    } })
+    const assembled = assembleInvocation({ ...baseArgs(makeDb()), providerRouteId } as never)
+    assembled.ports.toolRevocations = undefined
+    vi.mocked(registerChatCancel).mockReturnValue(new AbortController().signal as never)
+    const agentSdk = {
+      ...assembled.agentSdk,
+      createHostedTurnRuntime: (input: Parameters<typeof assembled.agentSdk.createHostedTurnRuntime>[0]) =>
+        assembled.agentSdk.createHostedTurnRuntime({ ...input, registry: toolRegistry })
+    }
+    const handoff = createHostedTurnHandoff({
+      agentSdk: agentSdk as never, history: assembled.ports.history!,
+      invocationId: assembled.invocation.trace.requestId, turnId: assembled.invocation.trace.turnId,
+      routeId: providerRouteId
+    })
+    const result = await runToolChatSession(assembled.invocation, assembled.ports, { onHostedTurnHandoff: handoff })
+    // 三次相同执行错误后停止；不得请求模型第四次或执行第四个 proposal。
+    expect(providerCalls).toHaveLength(3)
+    expect(execute).toHaveBeenCalledTimes(3)
+    expect(result.ok).toBe(false)
   })
 
   it('同一模型回合达到错误阈值后，不执行后续工具节点', async () => {
     mockChannelOutcome.mockImplementation(() => ({ kind: 'approved', cause: 'user-approved' }) satisfies ConfirmOutcome)
+    const { defineDirectTool, TypedToolRegistry } = await import('./tools/plannedToolRegistry')
     const executions: string[] = []
-    const { getToolExecutor } = await import('./tools/builtinExecutors')
-    vi.mocked(getToolExecutor).mockImplementation((name: string) => name === 'write_file'
-      ? { name, execute: async (input: { path?: string }) => {
-          executions.push(input.path ?? '')
-          return { success: false, error: 'EACCES: permission denied', userMessage: 'EACCES: permission denied' }
-        } }
-      : undefined)
-    streamRound = 0
-    mockCreateAnthropicClient.mockReturnValue({
-      messages: {
-        stream: vi.fn(() => {
-          const content = streamRound++ === 0
-            ? Array.from({ length: 4 }, (_, index) => ({ type: 'tool_use', id: `toolu-stop-${index}`, name: 'write_file', input: { path: `out-${index}.txt`, content: 'x' } }))
-            : [{ type: 'text', text: 'stopped' }]
-          return { async *[Symbol.asyncIterator]() {}, finalMessage: vi.fn(async () => ({ content, stop_reason: streamRound === 1 ? 'tool_use' : 'end_turn' })) }
-        })
+    const toolRegistry = new TypedToolRegistry()
+    toolRegistry.register(defineDirectTool({
+      name: 'write_file', actionClass: 'write',
+      parseInput: (raw) => raw as { path: string; content: string },
+      execute: async (input) => {
+        executions.push(input.path)
+        return { success: false, error: 'EACCES: permission denied', userMessage: 'EACCES: permission denied' }
       }
-    })
-    await runAssembledSession(baseArgs(makeDb()))
-    expect(executions).toHaveLength(3)
+    }))
+    const providerRouteId = 'desktop-anthropic:same-turn-error-threshold'
+    const previousRuntime = getDefaultAgentRuntime()
+    const runtime = createAgentRuntime({ toolRevocations: new ToolRevocationRegistry(), builtinRegistry: toolRegistry as never, toolExecutionConcurrency: 1 })
+    setDefaultAgentRuntime(runtime)
+    let providerCalls = 0
+    runtime.modelProviders.register({
+      routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01',
+      adapterVersion: 'pi-ai@0.87.1', modelId: 'claude-sonnet-4-20250514'
+    }, { providerId: 'same-turn-error-threshold', async *stream() {
+      providerCalls += 1
+      for (let index = 0; index < 4; index += 1) {
+        yield { type: 'tool-call', toolCallId: `toolu-stop-${index}`, toolName: 'write_file', input: { path: `out-${index}.txt`, content: 'x' } }
+      }
+      yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish', reason: 'tool-calls' }
+    } })
+    try {
+      const materials = { ...baseArgs(makeDb()), providerRouteId, toolExecutionConcurrency: 1 }
+      const { invocation, ports, agentSdk } = assembleInvocation(materials as never)
+      ports.toolRevocations = undefined
+      vi.mocked(registerChatCancel).mockReturnValue(new AbortController().signal as never)
+      const handoff = createHostedTurnHandoff({
+        agentSdk: agentSdk as never, history: ports.history!, invocationId: invocation.trace.requestId,
+        turnId: invocation.trace.turnId, routeId: providerRouteId
+      })
+      const result = await runToolChatSession(invocation, ports, { onHostedTurnHandoff: handoff })
+      expect(providerCalls).toBe(1)
+      expect(executions).toHaveLength(3)
+      expect(result.ok).toBe(false)
+    } finally {
+      setDefaultAgentRuntime(previousRuntime)
+    }
   })
 })

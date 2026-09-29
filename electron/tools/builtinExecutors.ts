@@ -11,9 +11,12 @@ import {
   captureFileIdentity,
   identityFromStat,
   safeAtomicWrite,
+  SafeAtomicWriteUncertainError,
   type FileIdentity
 } from '../safeAtomicWrite'
 import { resolveReadPermitTarget } from '../confirmation/readPermitExecutor'
+import { recordPolicyExecutionVeto } from '../confirmation/audit'
+import { readDirectoryBoundToIdentity } from '../confirmation/directoryHandleReader'
 import { validateWriteExecutionPermit } from '../confirmation/writeExecutionPermit'
 import { resolvePermittedWriteTarget } from '../confirmation/writePermitExecutor'
 import { classifyWriteTargetScope } from '../confirmation/extractors/writePathFacts'
@@ -44,6 +47,15 @@ import { browserExecutor } from './browserExecutor'
 import { runShellExecutor } from './runShellExecutor'
 import { TypedToolRegistry } from './plannedToolRegistry'
 import { runShellRegisteredTool } from './runShellRegisteredTool'
+import { createRunScriptRegisteredTool } from './runScriptRegisteredTool'
+import { createReadRegisteredTools } from './readRegisteredTools'
+import { createWriteFileRegisteredTools } from './writeFileRegisteredTools'
+import { createSwitchWorkDirRegisteredTool } from './workDirRegisteredTools'
+import { createSwitchSessionRegisteredTool } from './remoteSessionRegisteredTools'
+import { createBrowserRegisteredTool } from './browserRegisteredTool'
+import { createWeChatOutboundRegisteredTools } from './wechatOutboundRegisteredTools'
+import { createRunLarkCliRegisteredTool } from './runLarkCliRegisteredTool'
+import { createListWorkDirsRegisteredTool } from './listWorkDirsRegisteredTool'
 import { skillsReadTool } from './skillsReadTool'
 import { historyReadTool } from './historyTool'
 import { toolkitFindTool, toolkitCallTool } from '../capabilities/toolkitTool'
@@ -193,6 +205,10 @@ function fileToolAbortResult(
   return null
 }
 
+function readIdentityMatches(stat: Pick<Awaited<ReturnType<Awaited<ReturnType<typeof fs.open>>['stat']>>, 'dev' | 'ino' | 'mode' | 'size' | 'mtimeMs'>, identity: NonNullable<NonNullable<ToolExecutionContext['readExecutionPermit']>['targets'][number]['identity']>): boolean {
+  return stat.dev === identity.dev && stat.ino === identity.ino && stat.mode === identity.mode && stat.size === identity.size && stat.mtimeMs === identity.mtimeMs
+}
+
 export const readFileExecutor: ToolExecutor = {
   name: 'read_file',
   resourceKeys: (input, context) => workspaceResourceKeys(input, context, 'read'),
@@ -220,6 +236,17 @@ export const readFileExecutor: ToolExecutor = {
         const ab = fileToolAbortResult(op, '读取超时，请检查文件路径或网络连接', started)
         if (ab) return ab
         throw e
+      }
+      const authorizedIdentity = ctx.readExecutionPermit?.targets[0]?.identity
+      const identityChanged = (caseId: 'read-target-identity-changed' | 'read-target-identity-changed-during-read'): ToolExecutorResult => {
+        recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'read_file', decisionRuleId: ctx.readExecutionPermit?.decisionRuleId ?? ctx.readExecutionPermit?.targets[0]?.decisionRuleId, pathZone: ctx.readExecutionPermit?.targets[0]?.zone, factId: ctx.readExecutionPermit?.targets[0]?.factId, failureClass: 'mechanism', caseId })
+        return { success: false, error: '读取期间文件身份或内容发生变化，已丢弃读取结果。', diagnostic: { caseId, retryable: false, category: 'mechanism', ...(ctx.readExecutionPermit?.targets[0]?.factId ? { factId: ctx.readExecutionPermit.targets[0].factId } : {}) }, duration: Date.now() - started }
+      }
+      if (permitFileHandle && authorizedIdentity && !readIdentityMatches(st, authorizedIdentity)) return identityChanged('read-target-identity-changed')
+      const validateAfterRead = async (): Promise<ToolExecutorResult | undefined> => {
+        if (!permitFileHandle || !authorizedIdentity) return undefined
+        const after = await permitFileHandle.stat()
+        return readIdentityMatches(after, authorizedIdentity) ? undefined : identityChanged('read-target-identity-changed-during-read')
       }
       if (st.isDirectory()) {
         return {
@@ -290,6 +317,10 @@ export const readFileExecutor: ToolExecutor = {
           const tail =
             typeof tailRaw === 'number' && Number.isFinite(tailRaw) ? Math.floor(tailRaw) : 1
           const tailed = await readFileTailFromDisk(abs, tail, { signal: op, fileSize: st.size, ...(permitFileHandle ? { fileHandle: permitFileHandle } : {}) })
+          const abortResult = fileToolAbortResult(op, '读取超时，请检查文件路径或网络连接', started)
+          if (abortResult) return abortResult
+          const changed = await validateAfterRead()
+          if (changed) return changed
           const limited = applyReadCharLimit(tailed.content, {
             isTail: true,
             hasMoreBefore: tailed.hasMoreBefore
@@ -334,6 +365,10 @@ export const readFileExecutor: ToolExecutor = {
             fileSize: st.size,
             ...(permitFileHandle ? { fileHandle: permitFileHandle } : {})
           })
+          const abortResult = fileToolAbortResult(op, '读取超时，请检查文件路径或网络连接', started)
+          if (abortResult) return abortResult
+          const changed = await validateAfterRead()
+          if (changed) return changed
           const limited = applyReadCharLimit(ranged.content, { isTail: false })
           const truncated = limited.truncated || ranged.truncated
           recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
@@ -362,7 +397,11 @@ export const readFileExecutor: ToolExecutor = {
         }
 
         // Full：小文件全文（边界附近可能仍超字符上限 → Meta）
-        const buf = permitFileHandle ? await permitFileHandle.readFile() : await fs.readFile(abs, { signal: op })
+        const buf = permitFileHandle ? await permitFileHandle.readFile({ signal: op }) : await fs.readFile(abs, { signal: op })
+        const abortResult = fileToolAbortResult(op, '读取超时，请检查文件路径或网络连接', started)
+        if (abortResult) return abortResult
+        const changed = await validateAfterRead()
+        if (changed) return changed
         if (isBinaryBuffer(buf)) {
           return { success: false, error: '文件为二进制格式，无法读取', duration: Date.now() - started }
         }
@@ -426,34 +465,18 @@ export const listDirectoryExecutor: ToolExecutor = {
       if (!permitted.ok) return { success: false, error: '目录读取许可校验失败', diagnostic: { caseId: permitted.caseId, retryable: false, category: permitted.failureClass, ...(permitted.factId ? { factId: permitted.factId } : {}) }, duration: Date.now() - started }
       const target = permitted.path
       const root = path.resolve(ctx.workDir)
-      const rows: Array<{ name: string; path: string; isDirectory: boolean; size?: number; mtimeMs?: number }> = []
-      const dir = await fs.opendir(target)
-      try {
-        for await (const ent of dir) {
-          if (rows.length % 25 === 0) throwIfAborted(op)
-          const p = path.join(target, ent.name)
-          let size: number | undefined
-          let mtimeMs: number | undefined
-          try {
-            const s = await fs.lstat(p)
-            mtimeMs = s.mtimeMs
-            if (s.isFile()) size = s.size
-          } catch (e) {
-            const ab = fileToolAbortResult(op, '目录读取超时', started)
-            if (ab) return ab
-            /* skip entry */
-          }
-          rows.push({
-            name: ent.name,
-            path: path.relative(root, p) || '.',
-            isDirectory: ent.isDirectory(),
-            size,
-            mtimeMs
-          })
-        }
-      } finally {
-        await dir.close().catch(() => undefined)
+      const identity = ctx.readExecutionPermit?.targets[0]?.identity
+      if (!identity) return { success: false, error: '目录读取许可缺少身份事实。', diagnostic: { caseId: 'read-directory-identity-missing', retryable: false, category: 'mechanism' }, duration: Date.now() - started }
+      const snapshot = await readDirectoryBoundToIdentity(target, identity, op)
+      if (!snapshot.ok) {
+        const failureClass = snapshot.caseId === 'read-directory-identity-changed' ? 'mechanism' : snapshot.caseId === 'read-directory-cancelled' ? 'environment' : 'environment'
+        recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'list_directory', decisionRuleId: ctx.readExecutionPermit?.decisionRuleId, pathZone: ctx.readExecutionPermit?.targets[0]?.zone, factId: ctx.readExecutionPermit?.targets[0]?.factId, failureClass, caseId: snapshot.caseId })
+        return { success: false, error: snapshot.caseId === 'read-directory-identity-changed' ? '目录在许可校验后发生变化，已停止枚举。' : snapshot.caseId === 'read-directory-cancelled' ? '目录读取已取消。' : '目录不可用，已停止枚举。', diagnostic: { caseId: snapshot.caseId, retryable: false, category: failureClass }, duration: Date.now() - started }
       }
+      const rows = snapshot.entries.map((entry) => {
+        const entryPath = path.join(target, entry.name)
+        return { name: entry.name, path: path.relative(root, entryPath) || '.', isDirectory: entry.isDirectory, ...(entry.size === undefined ? {} : { size: entry.size }), ...(entry.mtimeMs === undefined ? {} : { mtimeMs: entry.mtimeMs }) }
+      })
       rows.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name))
       return { success: true, data: { entries: rows }, duration: Date.now() - started }
     } finally {
@@ -641,6 +664,7 @@ export const editFileExecutor: ToolExecutor = {
   name: 'edit_file',
   resourceKeys: (input, context) => workspaceResourceKeys(input, context, 'write'),
   async execute(input, ctx): Promise<ToolExecutorResult> {
+    const writePermitAtStart = ctx.writeExecutionPermit
     const started = Date.now()
     const rel = extractPathField(input)
     if (rel === undefined) {
@@ -715,6 +739,9 @@ export const editFileExecutor: ToolExecutor = {
           }
         }
         throwIfAborted(op)
+        if (ctx.writeExecutionPermit !== writePermitAtStart) {
+          return { ...writePermitFailure(new Error('write-permit-changed-during-execution')), duration: Date.now() - started }
+        }
         try {
           await safeAtomicWrite({
             targetPath: abs,
@@ -725,6 +752,7 @@ export const editFileExecutor: ToolExecutor = {
             signal: op
           })
         } catch (e) {
+          if (e instanceof SafeAtomicWriteUncertainError) throw e
           const ab = fileToolAbortResult(op, '编辑超时', started)
           if (ab) return ab
           throw e
@@ -776,6 +804,7 @@ export const writeFileExecutor: ToolExecutor = {
   name: 'write_file',
   resourceKeys: (input, context) => workspaceResourceKeys(input, context, 'write'),
   async execute(input, ctx): Promise<ToolExecutorResult> {
+    const writePermitAtStart = ctx.writeExecutionPermit
     const started = Date.now()
     const rel = extractPathField(input)
     if (rel === undefined) {
@@ -841,6 +870,9 @@ export const writeFileExecutor: ToolExecutor = {
         expectedIdentity = identityFromStat(writeTarget.existingStat)
       }
       throwIfAborted(op)
+      if (ctx.writeExecutionPermit !== writePermitAtStart) {
+        return { ...writePermitFailure(new Error('write-permit-changed-during-execution')), duration: Date.now() - started }
+      }
       try {
         await safeAtomicWrite({
           targetPath: abs,
@@ -851,6 +883,7 @@ export const writeFileExecutor: ToolExecutor = {
           signal: op
         })
       } catch (e) {
+        if (e instanceof SafeAtomicWriteUncertainError) throw e
         const ab = fileToolAbortResult(op, '写入超时', started)
         if (ab) return ab
         throw e
@@ -1336,6 +1369,12 @@ export const grepExecutor: ToolExecutor = {
         ctx.grepSpawnProcess,
         permitFileHandle ? { fileHandle: permitFileHandle, platform: process.platform } : undefined
       )
+      const authorizedIdentity = ctx.readExecutionPermit?.targets[0]?.identity
+      if (permitFileHandle && authorizedIdentity && !readIdentityMatches(await permitFileHandle.stat(), authorizedIdentity)) {
+        const caseId = 'read-target-identity-changed-during-read'
+        recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'grep', decisionRuleId: ctx.readExecutionPermit?.decisionRuleId ?? ctx.readExecutionPermit?.targets[0]?.decisionRuleId, pathZone: ctx.readExecutionPermit?.targets[0]?.zone, factId: ctx.readExecutionPermit?.targets[0]?.factId, failureClass: 'mechanism', caseId })
+        return { success: false, error: '搜索期间文件身份或内容发生变化，已丢弃搜索结果。', diagnostic: { caseId, retryable: false, category: 'mechanism', ...(ctx.readExecutionPermit?.targets[0]?.factId ? { factId: ctx.readExecutionPermit.targets[0].factId } : {}) }, duration: Date.now() - started }
+      }
       if (text.kind === 'success' || text.kind === 'no_match') {
         return { success: true, data: { output: text.output }, duration: Date.now() - started }
       }
@@ -1467,7 +1506,8 @@ export const runScriptExecutor: ToolExecutor = {
         cwd: ctx.workDir,
         env,
         windowsHide: true,
-        shell: false
+        shell: false,
+        detached: process.platform === 'darwin'
       })
       logAgentEvent('info', 'script.exec.spawned', { ...scriptBaseLog, pid: proc.pid ?? null })
       const supervisor = new ProcessSupervisor(proc, processTreeKiller)
@@ -1576,36 +1616,27 @@ export const runScriptExecutor: ToolExecutor = {
 export function createBuiltinToolRegistry(): TypedToolRegistry {
   const registry = new TypedToolRegistry()
   registry.register(runShellRegisteredTool)
+  registry.register(createRunScriptRegisteredTool(runScriptExecutor))
+  for (const tool of createReadRegisteredTools({ readFile: readFileExecutor, listDirectory: listDirectoryExecutor, grep: grepExecutor, readFeishuAttachment: readFeishuAttachmentExecutor })) {
+    registry.register(tool)
+  }
+  for (const tool of createWriteFileRegisteredTools({ writeFile: writeFileExecutor, editFile: editFileExecutor })) {
+    registry.register(tool)
+  }
+  registry.register(createSwitchWorkDirRegisteredTool(switchWorkDirExecutor))
+  registry.register(createSwitchSessionRegisteredTool(switchSessionExecutor))
+  registry.register(createBrowserRegisteredTool(browserExecutor))
+  for (const tool of createWeChatOutboundRegisteredTools({ send: wechatSendExecutor, reply: wechatReplyExecutor })) {
+    registry.register(tool)
+  }
+  registry.register(createRunLarkCliRegisteredTool(runLarkCliExecutor))
+  registry.register(createListWorkDirsRegisteredTool(listWorkDirsExecutor))
   registry.register(skillsReadTool)
   registry.register(historyReadTool)
   // toolkit 网关：能力集合的两个稳定工具（browser_detect 已收编为 env.browserDetect 能力）
   registry.register(toolkitFindTool)
   registry.register(toolkitCallTool)
-  for (const executor of [
-    readFileExecutor,
-    listDirectoryExecutor,
-    editFileExecutor,
-    writeFileExecutor,
-    grepExecutor,
-    runScriptExecutor,
-    runLarkCliExecutor,
-    readFeishuAttachmentExecutor,
-    wechatReplyExecutor,
-    wechatSendExecutor,
-    browserExecutor,
-    runShellExecutor,
-    listWorkDirsExecutor,
-    switchWorkDirExecutor,
-    switchSessionExecutor
-  ]) {
-    registry.registerLegacyExecutor(executor)
-  }
   return registry
-}
-
-/** @deprecated 兼容转发(偏差 18,一个发布周期,P8 评估删除):经默认 runtime 实例。 */
-export function getToolExecutor(name: string): ToolExecutor | undefined {
-  return getDefaultAgentRuntime().builtinRegistry.getLegacyExecutor(name) as ToolExecutor | undefined
 }
 
 /** @deprecated 兼容转发(偏差 18)。 */

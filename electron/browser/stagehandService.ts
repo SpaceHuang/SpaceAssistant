@@ -196,17 +196,17 @@ export class StagehandService {
       internal.idleTimer = undefined
     }
     internal.closing = true
-    try {
-      await internal.state.stagehand.close()
-    } catch {
-      /* ignore */
-    }
     if (internal.browserHost) {
       try {
         await internal.browserHost.close()
       } catch {
         /* ignore */
       }
+    }
+    try {
+      await internal.state.stagehand.close()
+    } catch {
+      /* ignore */
     }
     this.sessions.delete(sessionId)
   }

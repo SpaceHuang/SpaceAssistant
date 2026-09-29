@@ -14,6 +14,13 @@ import {
   readSessionEvents,
   readSessionEventsDetailed,
   appendCompactionTransaction,
+  ensureCompactionTransaction,
+  ensureRequestRetryEvent,
+  ensureToolCallEvent,
+  ensureToolResultEvent,
+  ensureTurnEndEvent,
+  ensureRequestProjectionEvents,
+  ensureFinalRequestContextEvent,
   replayCompactionEvents,
   readCompactionMarkers,
   readCompactionReplay,
@@ -25,6 +32,293 @@ import {
 import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
 
 describe('session events', () => {
+  it('treats a recovered tool result with reordered nested object keys as the same projection', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-tool-result-key-order-'))
+    const sink = getSessionEventSink(root, 'tool-result-key-order', 1000)
+    const original = { toolUseId: 'tool-1', stepId: 'step-1', result: { content: [{ type: 'text', text: 'ok' }], isError: false } }
+    try {
+      await sink.appendCritical({ type: 'tool_result', payload: original })
+
+      await expect(ensureToolResultEvent(sink, {
+        toolUseId: 'tool-1', stepId: 'step-1', result: { isError: false, content: [{ text: 'ok', type: 'text' }] }
+      })).resolves.toMatchObject({ type: 'tool_result', payload: original })
+      expect((await readSessionEvents(sink.eventsPath)).filter((event) => event.type === 'tool_result')).toHaveLength(1)
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects duplicate tool result identities even when the first projection matches canonical History', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-tool-result-duplicate-'))
+    const sink = getSessionEventSink(root, 'tool-result-duplicate', 1000)
+    const canonical = { toolUseId: 'tool-duplicate', stepId: 'step-1', result: { text: 'canonical' } }
+    try {
+      await sink.appendCritical({ type: 'tool_result', payload: canonical })
+      await sink.appendCritical({ type: 'tool_result', payload: { ...canonical, result: { text: 'conflict' } } })
+
+      await expect(ensureToolResultEvent(sink, canonical)).rejects.toThrow(/duplicate tool result ledger event/)
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it.each([
+    {
+      type: 'tool_call' as const,
+      payload: { toolUseId: 'tool-payload-drift', turnId: 'turn-1', stepId: 'step-1', name: 'read_file', args: { path: 'note.txt' }, source: 'conflicting' },
+      repair: (sink: ReturnType<typeof getSessionEventSink>) => ensureToolCallEvent(sink, {
+        toolUseId: 'tool-payload-drift', turnId: 'turn-1', stepId: 'step-1', name: 'read_file', args: { path: 'note.txt' }
+      })
+    },
+    {
+      type: 'tool_result' as const,
+      payload: { toolUseId: 'tool-payload-drift', turnId: 'turn-1', stepId: 'step-1', result: { success: true }, source: 'conflicting' },
+      repair: (sink: ReturnType<typeof getSessionEventSink>) => ensureToolResultEvent(sink, {
+        toolUseId: 'tool-payload-drift', turnId: 'turn-1', stepId: 'step-1', result: { success: true }
+      })
+    }
+  ])('rejects extra conflicting $type payload fields during canonical repair', async ({ type, payload, repair }) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-tool-payload-drift-'))
+    const sink = getSessionEventSink(root, `tool-payload-${type}`, 1000)
+    try {
+      await sink.appendCritical({ type, payload })
+      await expect(repair(sink)).rejects.toThrow(/conflicting tool (call|result) ledger event/)
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps legacy tool projection idempotency when canonical sidecars have no turnId', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-tool-legacy-turn-'))
+    const sink = getSessionEventSink(root, 'tool-legacy-turn', 1000)
+    try {
+      await sink.appendCritical({ type: 'tool_call', payload: { toolUseId: 'legacy-tool', turnId: 'legacy-turn', stepId: 'step-1', name: 'read_file', args: { path: 'note.txt' } } })
+      await expect(ensureToolCallEvent(sink, { toolUseId: 'legacy-tool', stepId: 'step-1', name: 'read_file', args: { path: 'note.txt' } }))
+        .resolves.toMatchObject({ type: 'tool_call', payload: { turnId: 'legacy-turn' } })
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects duplicate turn_end identities during canonical terminal repair', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-turn-end-duplicate-'))
+    const sink = getSessionEventSink(root, 'turn-end-duplicate', 1000)
+    try {
+      await sink.appendCritical({ type: 'turn_start', payload: { turnId: 'turn-duplicate' } })
+      await sink.appendCritical({ type: 'turn_end', payload: { turnId: 'turn-duplicate', reason: 'completed' } })
+      await sink.appendCritical({ type: 'turn_end', payload: { turnId: 'turn-duplicate', reason: 'failed' } })
+
+      await expect(ensureTurnEndEvent(sink, 'turn-duplicate', 'completed')).rejects.toThrow(/duplicate invocation terminal projection/)
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects turn_end payload drift when terminal identity and reason match canonical History', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-turn-end-drift-'))
+    const sink = getSessionEventSink(root, 'turn-end-drift', 1000)
+    try {
+      await sink.appendCritical({ type: 'turn_start', payload: { turnId: 'turn-drift' } })
+      await sink.appendCritical({ type: 'turn_end', payload: { turnId: 'turn-drift', reason: 'completed', outputText: 'conflicting projection' } })
+
+      await expect(ensureTurnEndEvent(sink, 'turn-drift', 'completed')).rejects.toThrow(/conflicting invocation terminal projection/)
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps optional terminal diagnostics when repairing an existing turn_end projection', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-turn-end-diagnostics-'))
+    const sink = getSessionEventSink(root, 'turn-end-diagnostics', 1000)
+    try {
+      await sink.appendCritical({ type: 'turn_start', payload: { turnId: 'turn-diagnostics' } })
+      const existing = await sink.appendCritical({
+        type: 'turn_end',
+        payload: { turnId: 'turn-diagnostics', reason: 'interrupted', error: 'policy changed', finalSurfaceSnapshot: { text: 'partial' } }
+      })
+
+      await expect(ensureTurnEndEvent(sink, 'turn-diagnostics', 'interrupted')).resolves.toEqual(existing)
+      expect((await readSessionEvents(sink.eventsPath)).filter((event) => event.type === 'turn_end')).toHaveLength(1)
+      await expect(ensureTurnEndEvent(sink, 'turn-diagnostics', 'failed')).rejects.toThrow(/conflicting invocation terminal projection/)
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects ambiguous duplicate turn_start owners during canonical terminal repair', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-turn-start-duplicate-'))
+    const sink = getSessionEventSink(root, 'turn-start-duplicate', 1000)
+    try {
+      await sink.appendCritical({ type: 'turn_start', payload: { turnId: 'turn-duplicate-start' } })
+      await sink.appendCritical({ type: 'turn_start', payload: { turnId: 'turn-duplicate-start' } })
+
+      await expect(ensureTurnEndEvent(sink, 'turn-duplicate-start', 'completed')).rejects.toThrow(/duplicate invocation turn_start projection/)
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('appends final request context after initial projection once and rejects conflicting finals', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-final-request-context-'))
+    const sink = getSessionEventSink(root, 'final-context', 1000)
+    const initial = { requestId: 'inv:round:1', turnId: 'turn', attempt: 1, provider: 'anthropic', model: 'test' }
+    const final = { ...initial, contextUsage: { pressureTokens: 12 }, projectionStage: 'final' as const }
+    await sink.appendCritical({ type: 'request_context', payload: initial })
+    await ensureFinalRequestContextEvent(sink, final)
+    await ensureFinalRequestContextEvent(sink, final)
+    await expect(ensureFinalRequestContextEvent(sink, { ...initial, contextUsage: { pressureTokens: 13 }, projectionStage: 'final' })).rejects.toThrow(/conflicting final request context/i)
+    await expect(readSessionEvents(sink.eventsPath)).resolves.toMatchObject([
+      { type: 'request_context', payload: initial }, { type: 'request_context', payload: final }
+    ])
+    await sink.close()
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('repairs initial model request projection when its final context shares the same request and attempt', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-request-projection-with-final-'))
+    const sink = getSessionEventSink(root, 'request-projection-final', 1000)
+    const requestHeader = { requestId: 'inv:round:1', attempt: 1, route: 'anthropic.messages.stream' }
+    const requestContext = { requestId: 'inv:round:1', turnId: 'turn', attempt: 1, provider: 'anthropic', model: 'test' }
+    try {
+      await sink.appendCritical({ type: 'request_header', payload: requestHeader })
+      await sink.appendCritical({ type: 'request_context', payload: requestContext })
+      await sink.appendCritical({ type: 'request_context', payload: { ...requestContext, contextUsage: { pressureTokens: 12 }, projectionStage: 'final' } })
+
+      await expect(ensureRequestProjectionEvents(sink, { requestHeader, requestContext })).resolves.toBeUndefined()
+      await expect(readSessionEvents(sink.eventsPath)).resolves.toHaveLength(3)
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('repairs the final context when the initial context already includes a usage projection', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-initial-usage-context-'))
+    const sink = getSessionEventSink(root, 'initial-usage-context', 1000)
+    const base = { requestId: 'inv:round:1', turnId: 'turn', attempt: 1, provider: 'anthropic', model: 'test' }
+    const initial = { ...base, contextUsage: { pressureTokens: null, projectedTokens: null, surfaceTokens: 20, hardFit: true, bodyFit: true } }
+    const final = { ...base, contextUsage: { pressureTokens: 12, projectedTokens: 15, surfaceTokens: 23, hardFit: true, bodyFit: true }, projectionStage: 'final' as const }
+    await sink.appendCritical({ type: 'request_context', payload: initial })
+
+    await expect(ensureFinalRequestContextEvent(sink, final)).resolves.toMatchObject({ type: 'request_context', payload: final })
+    await expect(readSessionEvents(sink.eventsPath)).resolves.toEqual([
+      expect.objectContaining({ type: 'request_context', payload: initial }),
+      expect.objectContaining({ type: 'request_context', payload: final })
+    ])
+    await sink.close()
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('rejects final request context with a nonpositive attempt or array usage', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-invalid-final-context-'))
+    const sink = getSessionEventSink(root, 'invalid-final-context', 1000)
+    const base = { requestId: 'inv:round:1', turnId: 'turn', attempt: 1, provider: 'anthropic', model: 'test' }
+    await expect(ensureFinalRequestContextEvent(sink, { ...base, attempt: 0, contextUsage: {} })).rejects.toThrow(/identity is invalid/i)
+    await expect(ensureFinalRequestContextEvent(sink, { ...base, contextUsage: [] })).rejects.toThrow(/identity is invalid/i)
+    await sink.close()
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('rejects a session identity whose ledger directory escapes the workspace sessions root', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-path-confinement-'))
+    expect(() => getSessionEventSink(root, '../../outside-ledger', 1000)).toThrow(/escapes sessions root/i)
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it.each(['sessions-root', 'session-directory', 'session-parent', 'events-file', 'index-file', 'events-hardlink'] as const)(
+    'does not follow a symlink at the %s recovery write boundary', async (linkKind) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-symlink-confinement-'))
+      const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-symlink-target-'))
+      const sessionId = linkKind === 'session-parent' ? 'nested/symlink-case' : 'symlink-case'
+      const sessionDirectory = path.join(root, 'sessions', `${sessionId}-19700101`)
+      let sink: ReturnType<typeof getSessionEventSink> | undefined
+      try {
+        if (linkKind === 'sessions-root') {
+          await fs.symlink(outside, path.join(root, 'sessions'), 'dir')
+        } else if (linkKind === 'session-parent') {
+          await fs.mkdir(path.join(root, 'sessions'), { recursive: true })
+          await fs.symlink(outside, path.join(root, 'sessions', 'nested'), 'dir')
+        } else {
+          await fs.mkdir(path.dirname(sessionDirectory), { recursive: true })
+          if (linkKind === 'session-directory') await fs.symlink(outside, sessionDirectory, 'dir')
+          else {
+            await fs.mkdir(sessionDirectory, { recursive: true })
+            const fileName = linkKind === 'events-file' ? 'events.jsonl' : 'events.index.json'
+            if (linkKind === 'events-hardlink') {
+              await fs.writeFile(path.join(outside, 'events.jsonl'), 'outside sentinel\n')
+              await fs.link(path.join(outside, 'events.jsonl'), path.join(sessionDirectory, 'events.jsonl'))
+            } else {
+              await fs.symlink(path.join(outside, fileName), path.join(sessionDirectory, fileName))
+            }
+          }
+        }
+        sink = getSessionEventSink(root, sessionId, 1000)
+
+        await expect(sink.appendCritical({ type: 'tool_result', payload: { toolUseId: 't', result: {} } }))
+          .rejects.toThrow(/symbolic link|hard link|session event path/i)
+        if (linkKind === 'events-hardlink') {
+          await expect(fs.readFile(path.join(outside, 'events.jsonl'), 'utf8')).resolves.toBe('outside sentinel\n')
+        } else {
+          await expect(fs.readdir(outside)).resolves.toEqual([])
+        }
+      } finally {
+        await sink?.close().catch(() => undefined)
+        await fs.rm(root, { recursive: true, force: true })
+        await fs.rm(outside, { recursive: true, force: true })
+      }
+    }
+  )
+
+  it('repairs provider retry projections by request and retry attempt identity', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-request-retry-'))
+    const sink = getSessionEventSink(root, 'retry-repair', 1000)
+    const payload = { turnId: 't', stepId: 'inv', requestId: 'inv:round:1', attempt: 2, backoffMs: 0, code: 'provider_context_overflow' }
+    await ensureRequestRetryEvent(sink, payload)
+    await ensureRequestRetryEvent(sink, payload)
+    await expect(ensureRequestRetryEvent(sink, { ...payload, code: 'effort_unsupported' })).rejects.toThrow(/conflicting request retry/i)
+    await expect(readSessionEvents(sink.eventsPath)).resolves.toMatchObject([{ type: 'request_retry', payload }])
+    await sink.close()
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  it('repairs a missing compaction transaction idempotently from its canonical envelope', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-compaction-repair-'))
+    const writer = new SessionEventWriter(root, 'compaction-repair')
+    const start = { compactionId: 'recover-c1', windowId: 'w1', inputSurfaceFingerprint: 'in', targetTokens: 1 }
+    const summary = { compactionId: 'recover-c1', windowId: 'w1', summaryHash: computeCompactionSummaryHash({}), outputSurfaceFingerprint: 'out', candidate: {} }
+
+    await ensureCompactionTransaction(writer, start, summary)
+    await ensureCompactionTransaction(writer, start, summary)
+
+    const events = await readSessionEvents(writer.eventsPath)
+    expect(events.map((event) => event.type)).toEqual(['compaction_start', 'compaction_summary', 'compaction_end'])
+    expect(replayCompactionEvents(events).committed).toHaveLength(1)
+    await writer.close()
+  })
+
+  it('completes a compaction transaction when only its start event reached the ledger', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-compaction-prefix-'))
+    const writer = new SessionEventWriter(root, 'compaction-prefix')
+    const start = { compactionId: 'recover-prefix', windowId: 'w1', inputSurfaceFingerprint: 'in', targetTokens: 1 }
+    const summary = { compactionId: 'recover-prefix', windowId: 'w1', summaryHash: computeCompactionSummaryHash({}), outputSurfaceFingerprint: 'out', candidate: {} }
+    await writer.appendCritical({ type: 'compaction_start', payload: start })
+
+    await ensureCompactionTransaction(writer, start, summary)
+
+    const events = await readSessionEvents(writer.eventsPath)
+    expect(events.map((event) => event.type)).toEqual(['compaction_start', 'compaction_summary', 'compaction_end'])
+    expect(replayCompactionEvents(events).committed).toHaveLength(1)
+    await writer.close()
+  })
+
   it('commits compaction start, summary, and end in order', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-compaction-'))
     const writer = new SessionEventWriter(root, 'compaction')
@@ -88,6 +382,18 @@ describe('session events', () => {
     const result = reconcileSessionEvents(events, 4)
     expect(result.map((e) => e.type)).toEqual(['step_end', 'tool_result', 'turn_end'])
     expect(result[1]).toMatchObject({ type: 'tool_result', payload: { toolUseId: 'u1', synthetic: true } })
+  })
+
+  it('preserves turn and step identities containing the legacy delimiter during recovery', () => {
+    const events: SessionEvent[] = [
+      { seq: 1, time: 1, type: 'turn_start', payload: { turnId: 'turn:parent:child' } },
+      { seq: 2, time: 2, type: 'step_start', payload: { turnId: 'turn:parent:child', stepId: 'request:model:2' } }
+    ]
+
+    expect(reconcileSessionEvents(events, 3)).toEqual([
+      { seq: 3, time: expect.any(Number), type: 'step_end', payload: { turnId: 'turn:parent:child', stepId: 'request:model:2', reason: 'interrupted' } },
+      { seq: 4, time: expect.any(Number), type: 'turn_end', payload: { turnId: 'turn:parent:child', reason: 'interrupted' } }
+    ])
   })
 
   it('recomputes usage from request facts', () => {
@@ -360,6 +666,23 @@ describe('session events', () => {
     expect(result.issues).toMatchObject([{ line: 2, code: 'malformed-json', truncated: false }])
   })
 
+  it('keeps torn tails untouched for readers and repairs them only when explicitly requested', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-tail-read-'))
+    const eventsPath = path.join(root, 'events.jsonl')
+    const first = JSON.stringify({ seq: 1, time: 1, type: 'turn_start', payload: { turnId: 't' } })
+    const original = `${first}\n{"seq":2`
+    await fs.writeFile(eventsPath, original)
+
+    const inspected = await readSessionEventsDetailed(eventsPath)
+
+    expect(inspected.integrity).toBe('recovered-tail')
+    expect(inspected.events).toHaveLength(1)
+    await expect(fs.readFile(eventsPath, 'utf8')).resolves.toBe(original)
+    const repaired = await readSessionEventsDetailed(eventsPath, { repairTail: true })
+    expect(repaired.events).toHaveLength(1)
+    await expect(fs.readFile(eventsPath, 'utf8')).resolves.toBe(`${first}\n`)
+  })
+
   it('isolates a failed session during startup reconciliation', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-reconcile-isolation-'))
     const sessionsRoot = path.join(root, 'sessions')
@@ -379,6 +702,61 @@ describe('session events', () => {
     expect(result.failures).toMatchObject([{ sessionName: 'bad-19700101', phase: 'append-events' }])
     expect((await readSessionEvents(path.join(good, 'events.jsonl'))).map((event) => event.type)).toEqual(['turn_start', 'turn_end'])
     appendSpy.mockRestore()
+  })
+
+  it.each(['sessions-root', 'session-directory', 'events-symlink', 'events-hardlink'] as const)(
+    'startup reconciliation refuses a %s path alias', async (aliasKind) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-reconcile-alias-root-'))
+      const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'session-reconcile-alias-outside-'))
+      const sessionsRoot = path.join(root, 'sessions')
+      const sessionDir = path.join(sessionsRoot, 'alias-19700101')
+      let outsideEvents = path.join(outside, 'events.jsonl')
+      const openTurn = JSON.stringify({ seq: 1, time: 1, type: 'turn_start', payload: { turnId: 'external' } }) + '\n'
+      if (aliasKind === 'sessions-root') {
+        const outsideSession = path.join(outside, 'alias-19700101')
+        await fs.mkdir(outsideSession)
+        outsideEvents = path.join(outsideSession, 'events.jsonl')
+        await fs.writeFile(outsideEvents, openTurn)
+        await fs.symlink(outside, sessionsRoot, 'dir')
+      } else {
+        await fs.mkdir(sessionDir, { recursive: true })
+        await fs.writeFile(outsideEvents, openTurn)
+        if (aliasKind === 'session-directory') {
+          await fs.rm(sessionDir, { recursive: true })
+          await fs.symlink(outside, sessionDir, 'dir')
+        } else if (aliasKind === 'events-symlink') {
+          await fs.symlink(outsideEvents, path.join(sessionDir, 'events.jsonl'))
+        } else {
+          await fs.link(outsideEvents, path.join(sessionDir, 'events.jsonl'))
+        }
+      }
+
+      const result = await reconcileSessionEventFilesDetailed(root)
+
+      expect(result.fixed).toBe(0)
+      expect(result.failures).toHaveLength(1)
+      await expect(fs.readFile(outsideEvents, 'utf8')).resolves.toBe(openTurn)
+      await fs.rm(root, { recursive: true, force: true })
+      await fs.rm(outside, { recursive: true, force: true })
+    }
+  )
+
+  it('does not append recovery events to a degraded ledger with an invalid final record', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-reconcile-degraded-'))
+    const eventsDir = path.join(root, 'sessions', 'degraded-19700101')
+    const eventsPath = path.join(eventsDir, 'events.jsonl')
+    const validStart = JSON.stringify({ seq: 1, time: 1, type: 'turn_start', payload: { turnId: 't' } })
+    const invalidFinal = JSON.stringify({ seq: 2, type: 'turn_end', payload: { turnId: 't' } })
+    const original = `${validStart}\n${invalidFinal}`
+    await fs.mkdir(eventsDir, { recursive: true })
+    await fs.writeFile(eventsPath, original)
+
+    const result = await reconcileSessionEventFilesDetailed(root)
+
+    expect(result.fixed).toBe(0)
+    expect(result.failures).toMatchObject([{ sessionName: 'degraded-19700101', phase: 'read-events', jsonlCommitted: false }])
+    expect(result.sessions).toMatchObject([{ sessionName: 'degraded-19700101', integrity: 'degraded', fixed: 0 }])
+    await expect(fs.readFile(eventsPath, 'utf8')).resolves.toBe(original)
   })
 
   it('reports index failure after recovery append without duplicating repair events', async () => {

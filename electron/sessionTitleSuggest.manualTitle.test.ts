@@ -15,12 +15,14 @@ const mockGetApiKey = vi.fn()
 vi.mock('./database', () => ({
   updateSession: (...args: unknown[]) => mockUpdateSession(...args),
   getSession: vi.fn(),
-  getMessages: vi.fn(() => [])
+  getMessages: vi.fn(() => []),
+  getDbConnection: vi.fn(() => ({})),
 }))
 
 import { getSession } from './database'
 
 vi.mock('./anthropicClientFactory', () => ({
+  createAnthropicStreamPort: (client: { messages: { stream: (...args: unknown[]) => unknown } }) => ({ stream: (...args: unknown[]) => client.messages.stream(...args) }),
   createAnthropicClient: (...args: unknown[]) => mockCreateAnthropicClient(...args)
 }))
 

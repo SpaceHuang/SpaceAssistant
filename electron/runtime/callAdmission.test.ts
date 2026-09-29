@@ -242,9 +242,9 @@ describe('CallAdmissionGate 排队唤醒与审计(0b 语义)', () => {
     await Promise.resolve()
     await Promise.resolve()
     expect(gate.queuedCount).toBe(1)
-    const third = await gate.acquire(req({ requestId: 'r3' }))
+    const third = await gate.acquire(req({ requestId: 'r3', turnId: 'turn-r3' }))
     expect(third).toEqual({ ok: false, verdict: 'rejected', cause: 'queue-full' })
-    expect(warnSpy).toHaveBeenCalledWith('warn', 'admission.rejected', expect.objectContaining({ cause: 'queue-full', requestId: 'r3' }))
+    expect(warnSpy).toHaveBeenCalledWith('warn', 'admission.rejected', expect.objectContaining({ cause: 'queue-full', requestId: 'r3', turnId: 'turn-r3' }))
     // 收尾:释放并排空队列,避免悬挂 promise
     first.ok && first.ticket.release()
     const drained = await pending

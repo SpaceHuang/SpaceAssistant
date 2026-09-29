@@ -25,11 +25,27 @@ export function readInputDigest(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex')
 }
 
+function freezeDeep<T>(value: T): T {
+  if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return value
+  for (const key of Reflect.ownKeys(value)) {
+    freezeDeep((value as Record<PropertyKey, unknown>)[key])
+  }
+  return Object.freeze(value)
+}
+
 export function buildReadExecutionPermit(input: ReadPermitInput): ReadExecutionPermit {
   const factIds = input.facts.map((fact) => fact.factId)
   const ruleIds = [...new Set(input.facts.map((fact) => fact.decisionRuleId))]
   if (!input.requestId || !input.toolUseId || input.facts.length === 0 || new Set(factIds).size !== factIds.length || ruleIds.length !== 1 || (input.decisionRuleId !== undefined && input.decisionRuleId !== ruleIds[0]) || input.facts.some((fact) => !fact.factId || typeof fact.normalizedPath !== 'string' || !isAbsoluteReadTargetPath(fact.normalizedPath) || !fact.decisionRuleId || ['unknown', 'default', 'placeholder'].includes(fact.decisionRuleId))) throw new Error('INVALID_READ_PERMIT_TARGET')
-  return Object.freeze({ ...input, inputDigest: readInputDigest(input.input), targets: input.facts.map((fact) => Object.freeze({ ...fact })) })
+  const inputSnapshot = freezeDeep(structuredClone(input.input))
+  const targets = Object.freeze(input.facts.map((fact) => freezeDeep(structuredClone(fact)))) as unknown as ReadPermitTarget[]
+  return Object.freeze({
+    ...input,
+    input: inputSnapshot,
+    facts: targets,
+    inputDigest: readInputDigest(inputSnapshot),
+    targets
+  })
 }
 
 export function validateReadExecutionPermit(permit: ReadExecutionPermit, expected: ReadPermitInput): { ok: true } | { ok: false; caseId: string } {

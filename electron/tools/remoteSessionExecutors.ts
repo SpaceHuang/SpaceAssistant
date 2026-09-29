@@ -48,6 +48,13 @@ function hasPendingConfirm(remoteContext: RemoteContext, sessionId: string): boo
   return remoteContext.imChannel?.hasPendingForSession(sessionId) ?? false
 }
 
+export class RemoteSessionSwitchExecutionUncertainError extends Error {
+  constructor(readonly cause: unknown) {
+    super('远程会话切换请求已发出，但未收到可确认结果')
+    this.name = 'RemoteSessionSwitchExecutionUncertainError'
+  }
+}
+
 export const switchSessionExecutor: ToolExecutor = {
   name: 'switch_session',
   async execute(input, ctx) {
@@ -110,16 +117,10 @@ export const switchSessionExecutor: ToolExecutor = {
       let switchResult: { desktopSwitched: boolean; viewChanged: boolean }
       try {
         switchResult = await requestRendererSessionSwitch(wc, targetSessionId)
-      } catch (e) {
-        const err = e instanceof Error ? e.message : String(e)
-        recordSessionSwitchDenied(remoteContext, {
-          callerSessionId: sessionId,
-          targetSessionId,
-          requestId,
-          reason: 'ipc',
-          error: err
-        })
-        return { success: false, error: err }
+      } catch (error) {
+        // The renderer request has crossed the dispatch boundary. A missing acknowledgement
+        // cannot prove that the renderer did not switch, so callers must not retry it.
+        throw new RemoteSessionSwitchExecutionUncertainError(error)
       }
 
       const resolved = resolveWorkDirForSession(

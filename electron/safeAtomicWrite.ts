@@ -4,6 +4,7 @@ import fsc from 'fs'
 import path from 'path'
 import type { Stats } from 'fs'
 import type { FileHandle } from 'fs/promises'
+import { cleanupDirectoryTempsBoundToIdentity, writeFileAtomicallyBoundToDirectory } from './confirmation/directoryHandleWriter'
 
 /** 应用专属临时文件前缀；初始化时只清理该前缀的遗留普通文件 */
 export const SAFE_WRITE_TEMP_PREFIX = '.sa-wtmp-'
@@ -72,15 +73,6 @@ function assertRegularFileSingleLink(st: Stats, label: string): void {
   }
 }
 
-function openFlagsExclusive(): number {
-  const c = fsc.constants
-  let flags = c.O_WRONLY | c.O_CREAT | c.O_EXCL
-  if (typeof c.O_NOFOLLOW === 'number') {
-    flags |= c.O_NOFOLLOW
-  }
-  return flags
-}
-
 function openFlagsReadNoFollow(): number {
   const c = fsc.constants
   let flags = c.O_RDONLY
@@ -90,30 +82,20 @@ function openFlagsReadNoFollow(): number {
   return flags
 }
 
-async function unlinkQuiet(p: string): Promise<void> {
-  await fs.unlink(p).catch(() => {})
-}
-
 /**
  * 在已验证父目录内清理应用专属前缀的遗留普通文件（非目录、非符号链接）。
  */
 export async function cleanupSafeWriteTemps(parentDir: string): Promise<void> {
-  let entries: string[]
   try {
-    entries = await fs.readdir(parentDir)
+    const parentLstat = await fs.lstat(parentDir)
+    if (parentLstat.isSymbolicLink() || !parentLstat.isDirectory() || await fs.realpath(parentDir) !== parentDir) return
+    await cleanupDirectoryTempsBoundToIdentity({
+      directory: parentDir,
+      expectedDirectoryIdentity: { dev: parentLstat.dev, ino: parentLstat.ino, mode: parentLstat.mode, size: parentLstat.size, mtimeMs: parentLstat.mtimeMs },
+      tempPrefix: SAFE_WRITE_TEMP_PREFIX
+    })
   } catch {
     return
-  }
-  for (const name of entries) {
-    if (!name.startsWith(SAFE_WRITE_TEMP_PREFIX)) continue
-    const full = path.join(parentDir, name)
-    try {
-      const st = await fs.lstat(full)
-      if (st.isSymbolicLink() || !st.isFile()) continue
-      await fs.unlink(full)
-    } catch {
-      // ignore
-    }
   }
 }
 
@@ -128,6 +110,16 @@ export type SafeAtomicWriteOptions = {
   /** Permit 写入时绑定的最近已存在目录 identity。 */
   expectedParentIdentity?: { dev: number; ino: number; mode: number }
   signal?: AbortSignal
+}
+
+export class SafeAtomicWriteUncertainError extends Error {
+  constructor(cause?: unknown) {
+    super(cause === undefined
+      ? '原子写入 worker 未返回提交结果，目标文件状态未知'
+      : '原子写入已提交但许可父目录复核失败，目标文件状态未知')
+    this.name = 'SafeAtomicWriteUncertainError'
+    if (cause !== undefined) (this as Error & { cause?: unknown }).cause = cause
+  }
 }
 
 /** Windows 瞬时锁（杀软/索引器短暂持住 rename/link 目标）下的有界重试；仅针对瞬时拒绝类错误码。 */
@@ -175,8 +167,6 @@ export async function safeAtomicWrite(opts: SafeAtomicWriteOptions): Promise<Fil
     }
   }
 
-  await cleanupSafeWriteTemps(parentDirForTarget(targetPath, parentReal))
-
   // 确保从 parentReal 到目标的中间目录存在（仅在已验证父目录下创建）
   const targetParent = path.dirname(targetPath)
   if (targetParent !== parentReal && !targetParent.startsWith(parentReal + path.sep) && targetParent !== parentReal) {
@@ -193,109 +183,38 @@ export async function safeAtomicWrite(opts: SafeAtomicWriteOptions): Promise<Fil
   }
 
   await verifyParentIdentity()
-
-  throwIfAborted(signal)
-  const tmpName = `${SAFE_WRITE_TEMP_PREFIX}${randomBytes(12).toString('hex')}`
-  const tmpPath = path.join(path.dirname(targetPath), tmpName)
-
-  let tmpFh: FileHandle | null = null
-  try {
-    tmpFh = await fs.open(tmpPath, openFlagsExclusive(), 0o600)
-    const buf = typeof body === 'string' ? Buffer.from(body, 'utf8') : body
-    await writeAllBytes(tmpFh, buf, 0)
-    throwIfAborted(signal)
-    await verifyParentIdentity()
-    await tmpFh.sync()
-    const tmpStat = await tmpFh.stat()
-    assertRegularFileSingleLink(tmpStat, '临时文件')
-    const tmpIdentity = identityFromStat(tmpStat)
-    await tmpFh.close()
-    tmpFh = null
-
-    throwIfAborted(signal)
-
-    if (expectedIdentity === null) {
-      // 新文件：link 提交，目标已存在则失败（不替换）
-      await verifyParentIdentity()
-      try {
-        await withTransientLockRetry(() => fs.link(tmpPath, targetPath), signal)
-      } catch (e: unknown) {
-        const code = e && typeof e === 'object' && 'code' in e ? String((e as { code: unknown }).code) : ''
-        if (code === 'EEXIST') {
-          throw new Error('目标文件已存在，拒绝覆盖新建路径')
-        }
-        throw e
-      }
-      await unlinkQuiet(tmpPath)
-      const finalFh = await fs.open(targetPath, openFlagsReadNoFollow())
-      try {
-        const finalStat = await finalFh.stat()
-        assertRegularFileSingleLink(finalStat, '最终目标')
-        const finalId = identityFromStat(finalStat)
-        // link 后 ino 应与临时文件一致（同一 inode）；size/mtime 一致
-        if (finalId.dev !== tmpIdentity.dev || finalId.ino !== tmpIdentity.ino) {
-          throw new Error('提交后文件 identity 不一致')
-        }
-        if (finalId.nlink !== 1) {
-          // link 成功后临时已删，应为 1；若仍 >1 说明另有硬链接
-          throw new Error('最终目标是硬链接，拒绝写入')
-        }
-        return finalId
-      } finally {
-        await finalFh.close()
-      }
-    }
-
-    // 覆盖：重新打开当前目标，校验 identity 后 rename
-    let verifyFh: FileHandle | null = null
-    try {
-      verifyFh = await fs.open(targetPath, openFlagsReadNoFollow())
-      const curStat = await verifyFh.stat()
-      assertRegularFileSingleLink(curStat, '覆盖目标')
-      const curId = identityFromStat(curStat)
-      if (!identitiesMatch(curId, expectedIdentity)) {
-        throw new Error('文件在写入前被外部修改或替换，请重新读取后再写入')
-      }
-    } finally {
-      if (verifyFh) await verifyFh.close()
-    }
-
-    throwIfAborted(signal)
-    await verifyParentIdentity()
-    await withTransientLockRetry(() => fs.rename(tmpPath, targetPath), signal)
-
-    const finalFh = await fs.open(targetPath, openFlagsReadNoFollow())
-    try {
-      const finalStat = await finalFh.stat()
-      assertRegularFileSingleLink(finalStat, '最终目标')
-      const finalId = identityFromStat(finalStat)
-      // rename 后临时 inode 成为目标；应与 tmpIdentity 的 size 一致，ino 为临时文件的 ino
-      if (finalId.size !== tmpIdentity.size) {
-        throw new Error('提交后文件内容不完整')
-      }
-      if (finalId.nlink !== 1) {
-        throw new Error('最终目标是硬链接，拒绝写入')
-      }
-      if (finalId.dev !== tmpIdentity.dev || finalId.ino !== tmpIdentity.ino) {
-        throw new Error('提交后文件 identity 与临时文件不一致')
-      }
-      return finalId
-    } finally {
-      await finalFh.close()
-    }
-  } catch (e) {
-    if (tmpFh) {
-      await tmpFh.close().catch(() => {})
-      tmpFh = null
-    }
-    await unlinkQuiet(tmpPath)
-    throw e
+  const targetParentHandle = await fs.stat(targetParent)
+  if (!targetParentHandle.isDirectory() || await fs.realpath(targetParent) !== targetParent) {
+    throw new Error('写入父目录 identity 已变化，拒绝提交')
   }
-}
-
-function parentDirForTarget(targetPath: string, parentReal: string): string {
-  const dir = path.dirname(targetPath)
-  return dir || parentReal
+  const result = await writeFileAtomicallyBoundToDirectory({
+    directory: targetParent,
+    expectedDirectoryIdentity: { dev: targetParentHandle.dev, ino: targetParentHandle.ino, mode: targetParentHandle.mode, size: targetParentHandle.size, mtimeMs: targetParentHandle.mtimeMs },
+    targetName: path.basename(targetPath),
+    tempName: `${SAFE_WRITE_TEMP_PREFIX}${randomBytes(12).toString('hex')}`,
+    body,
+    expectedFileIdentity: expectedIdentity,
+    signal
+  })
+  if (!result.ok) {
+    if (result.caseId === 'write-directory-cancelled') throw new SafeAtomicWriteUncertainError()
+    const message = result.caseId === 'write-target-exists'
+      ? '目标文件已存在，拒绝覆盖新建路径'
+      : result.caseId === 'write-file-identity-changed'
+        ? '文件在写入前被外部修改或替换，请重新读取后再写入'
+        : result.caseId === 'write-directory-identity-changed'
+          ? '写入父目录 identity 已变化，拒绝提交'
+          : result.caseId
+    throw new Error(message)
+  }
+  try {
+    await verifyParentIdentity()
+  } catch (error) {
+    // The worker already committed. A later identity failure cannot truthfully
+    // be reported as a normal write rejection because the side effect happened.
+    throw new SafeAtomicWriteUncertainError(error)
+  }
+  return result.identity
 }
 
 async function assertNoSymlinkAlong(fromReal: string, toPath: string): Promise<void> {

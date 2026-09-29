@@ -70,12 +70,30 @@ function copyBundledRipgrep(context) {
     const sourceLicense = path.join(licenseSource, license)
     if (!fs.existsSync(sourceLicense)) throw new Error(`[afterPack] missing ripgrep license: ${sourceLicense}`)
     fs.mkdirSync(licenseDestination, { recursive: true })
-    fs.copyFileSync(sourceLicense, path.join(licenseDestination, license), fs.constants.COPYFILE_EXCL)
+    copyOrVerifyLicense(sourceLicense, path.join(licenseDestination, license), license)
   }
   console.log(`[afterPack] bundled ripgrep ${key}: ${destination}`)
 }
 
 module.exports.copyBundledRipgrep = copyBundledRipgrep
+
+function copyOrVerifyLicense(sourceLicense, targetLicense, label) {
+  if (!fs.existsSync(targetLicense)) {
+    fs.copyFileSync(sourceLicense, targetLicense, fs.constants.COPYFILE_EXCL)
+    return
+  }
+  const sourceStat = fs.statSync(sourceLicense)
+  const targetStat = fs.lstatSync(targetLicense)
+  if (!targetStat.isFile() || targetStat.isSymbolicLink() || sourceStat.size !== targetStat.size ||
+      !crypto.timingSafeEqual(
+        crypto.createHash('sha256').update(fs.readFileSync(sourceLicense)).digest(),
+        crypto.createHash('sha256').update(fs.readFileSync(targetLicense)).digest(),
+      )) {
+    throw new Error(`[afterPack] packaged ripgrep license mismatch: ${label}`)
+  }
+}
+
+module.exports.copyOrVerifyLicense = copyOrVerifyLicense
 
 /**
  * 无 Apple 开发者证书时对 macOS app 做 ad-hoc 签名，使 arm64 可本机启动

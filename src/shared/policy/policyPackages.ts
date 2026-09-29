@@ -9,7 +9,8 @@ import { DEFAULT_POLICY_RULES } from './defaultRules'
  *   strict = 全部非 locked 自动放行域纳入确认范围；loose = 显式低风险域移出确认范围（清单外一律 standard）；
  * - custom：应用用户在 policy_rules 表中的规则覆盖（仅动作/参数，规则不可增删、顺序不可改）。
  *
- * locked 条目在任何套餐下都不可被调松/改写（系统保护底线，policyFloor 校验兜底）。
+ * locked 条目在任何套餐下都不可被调松/改写（系统保护底线，policyFloor 校验兜底）；locked deny
+ * 可通过显式安全设置停用，runtime 仅凭持久化 disabled-id 清单接受其缺席，locked ask 不可停用。
  */
 
 /** 范围条目（S1）：取代 supersedes 指向的默认条目（仅本档生效集内），其余字段为完整 PolicyRule。 */

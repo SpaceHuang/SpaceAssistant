@@ -94,6 +94,17 @@ describe('validatePolicyRulesFloor（locked 底线校验，纯函数）', () => 
     if (!res.ok) expect(res.violations).toContain('remote-shell-disabled')
   })
 
+  it('只有显式停用设置允许移除 locked deny；locked ask 仍不能移除', () => {
+    const toggleable = DEFAULT_POLICY_RULES.filter((r) => r.id !== 'automation-sensitive-path-deny')
+    expect(validatePolicyRulesFloor(toggleable).ok).toBe(false)
+    expect(validatePolicyRulesFloor(toggleable, undefined, ['automation-sensitive-path-deny'])).toEqual({ ok: true })
+    const softened = DEFAULT_POLICY_RULES.map((r) => r.id === 'automation-sensitive-path-deny' ? { ...r, action: 'allow' as const } : r)
+    expect(validatePolicyRulesFloor(softened, undefined, ['automation-sensitive-path-deny']).ok).toBe(false)
+
+    const missingAsk = DEFAULT_POLICY_RULES.filter((r) => r.id !== 'automation-default-confirm')
+    expect(validatePolicyRulesFloor(missingAsk, undefined, ['automation-default-confirm']).ok).toBe(false)
+  })
+
   it('非 locked 条目放宽不构成违规（底线只管 locked）', () => {
     const relaxed = DEFAULT_POLICY_RULES.map((r) =>
       r.id === 'mcp-readonly-allow' ? { ...r, action: 'allow' as const } : r

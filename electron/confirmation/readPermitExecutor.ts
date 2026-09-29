@@ -23,6 +23,7 @@ export async function resolveReadPermitTarget(toolName: 'read_file' | 'grep' | '
     recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName, decisionRuleId: permit?.decisionRuleId, pathZone: permit?.targets[0]?.zone, factId: permit?.targets[0]?.factId, failureClass, caseId })
     return { ok: false as const, caseId, failureClass, ...(permit?.targets[0]?.factId ? { factId: permit.targets[0].factId } : {}) }
   }
+  if (ctx.signal?.aborted) return deny('read-permit-cancelled', 'environment')
   const feishuAttachment = toolName === 'read_feishu_attachment'
     ? findRegisteredFeishuAttachment(ctx.remoteContext?.source === 'feishu' ? ctx.remoteContext.feishuAttachments : undefined, input.attachmentId)
     : undefined
@@ -41,6 +42,7 @@ export async function resolveReadPermitTarget(toolName: 'read_file' | 'grep' | '
       if (!stat.isDirectory() || stat.dev !== target.identity.dev || stat.ino !== target.identity.ino || stat.mode !== target.identity.mode || stat.size !== target.identity.size || stat.mtimeMs !== target.identity.mtimeMs) {
         return deny('read-directory-identity-changed', 'mechanism')
       }
+      if (await fs.realpath(target.normalizedPath) !== target.normalizedPath) return deny('read-directory-identity-changed', 'mechanism')
       return { ok: true, path: target.normalizedPath }
     } catch {
       return deny('read-directory-unavailable', 'environment')
@@ -59,11 +61,17 @@ export async function resolveReadPermitTarget(toolName: 'read_file' | 'grep' | '
       if (realPath !== target.normalizedPath || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
         return deny('read-target-path-mismatch', 'input')
       }
-      fileHandle = await fs.open(attachment.localPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+      fileHandle = await fs.open(attachment.localPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0))
       const stat = await fileHandle.stat()
       if (!stat.isFile() || stat.dev !== target.identity.dev || stat.ino !== target.identity.ino || stat.mode !== target.identity.mode || stat.size !== target.identity.size || stat.mtimeMs !== target.identity.mtimeMs) {
         await fileHandle.close()
         return deny('read-target-identity-changed', 'mechanism')
+      }
+      const openedPath = await fs.realpath(attachment.localPath)
+      const openedRelative = path.relative(root, openedPath)
+      if (openedPath !== target.normalizedPath || openedRelative === '..' || openedRelative.startsWith(`..${path.sep}`) || path.isAbsolute(openedRelative)) {
+        await fileHandle.close()
+        return deny('read-target-path-mismatch', 'mechanism')
       }
       if (stat.size > MAX_FEISHU_ATTACHMENT_BYTES) {
         await fileHandle.close()
@@ -72,6 +80,10 @@ export async function resolveReadPermitTarget(toolName: 'read_file' | 'grep' | '
       const content = Buffer.alloc(stat.size)
       let offset = 0
       while (offset < content.length) {
+        if (ctx.signal?.aborted) {
+          await fileHandle.close()
+          return deny('read-permit-cancelled', 'environment')
+        }
         const { bytesRead } = await fileHandle.read(content, offset, content.length - offset, null)
         if (bytesRead <= 0) {
           await fileHandle.close()
@@ -79,9 +91,13 @@ export async function resolveReadPermitTarget(toolName: 'read_file' | 'grep' | '
         }
         offset += bytesRead
       }
+      if (ctx.signal?.aborted) {
+        await fileHandle.close()
+        return deny('read-permit-cancelled', 'environment')
+      }
       const after = await fileHandle.stat()
       await fileHandle.close()
-      if (after.dev !== stat.dev || after.ino !== stat.ino || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) {
+      if (after.dev !== stat.dev || after.ino !== stat.ino || after.mode !== stat.mode || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) {
         return deny('read-target-changed-during-read', 'mechanism')
       }
       return { ok: true, path: target.normalizedPath, content }
@@ -105,6 +121,10 @@ export async function resolveReadPermitTarget(toolName: 'read_file' | 'grep' | '
   try {
     const stat = await fileHandle.stat()
     if (!stat.isFile() || stat.dev !== target.identity.dev || stat.ino !== target.identity.ino || stat.mode !== target.identity.mode || stat.size !== target.identity.size || stat.mtimeMs !== target.identity.mtimeMs) {
+      await fileHandle.close()
+      return deny('read-target-identity-changed', 'mechanism')
+    }
+    if (await fs.realpath(target.normalizedPath) !== target.normalizedPath) {
       await fileHandle.close()
       return deny('read-target-identity-changed', 'mechanism')
     }

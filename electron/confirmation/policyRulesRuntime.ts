@@ -72,8 +72,8 @@ export function readDisabledPolicyRuleIds(db: AppDatabase): string[] {
 
 /** 写回被「不启用」的系统保护规则 id 集合（去重、保序）。 */
 export function writeDisabledPolicyRuleIds(db: AppDatabase, ids: string[]): void {
-  const lockedIds = new Set(DEFAULT_POLICY_RULES.filter((rule) => rule.locked).map((rule) => rule.id))
-  const uniq = Array.from(new Set(ids)).filter((id) => !lockedIds.has(id))
+  const nonToggleableLockedIds = new Set(DEFAULT_POLICY_RULES.filter((rule) => rule.locked && rule.action !== 'deny').map((rule) => rule.id))
+  const uniq = Array.from(new Set(ids)).filter((id) => !nonToggleableLockedIds.has(id))
   setConfigValue(db, DISABLED_POLICY_RULE_IDS_CONFIG_KEY, JSON.stringify(uniq))
 }
 
@@ -103,12 +103,12 @@ export interface PolicyRuleOrigin {
 export function resolveEffectivePolicyRulesWithOrigin(
   db: AppDatabase,
   lane: ExecutionLane
-): { rules: PolicyRule[]; origins: Record<string, PolicyRuleOrigin> } {
+): { rules: PolicyRule[]; origins: Record<string, PolicyRuleOrigin>; disabledRuleIds: string[] } {
   const origins: Record<string, PolicyRuleOrigin> = {}
   const packages = readPolicyPackages(db)
   const disabledRuleIds = readDisabledPolicyRuleIds(db)
-  const lockedIds = new Set(DEFAULT_POLICY_RULES.filter((rule) => rule.locked).map((rule) => rule.id))
-  const safeDisabledRuleIds = disabledRuleIds.filter((id) => !lockedIds.has(id))
+  const nonToggleableLockedIds = new Set(DEFAULT_POLICY_RULES.filter((rule) => rule.locked && rule.action !== 'deny').map((rule) => rule.id))
+  const safeDisabledRuleIds = disabledRuleIds.filter((id) => !nonToggleableLockedIds.has(id))
   const pkg = packages[lane] ?? 'standard'
   const baseRules = safeDisabledRuleIds.length
     ? (DEFAULT_POLICY_RULES.filter((r) => !safeDisabledRuleIds.includes(r.id)) as PolicyRule[])
@@ -128,14 +128,14 @@ export function resolveEffectivePolicyRulesWithOrigin(
       origins[rule.id] = { source: 'builtin' }
     }
   }
-  return { rules: resolved, origins }
+  return { rules: resolved, origins, disabledRuleIds: safeDisabledRuleIds }
 }
 
 export function loadLanePolicyContext(db: AppDatabase, lane: ExecutionLane): { rules: PolicyRule[]; pkg: PolicyPackage } {
   const packages = readPolicyPackages(db)
   const disabledRuleIds = readDisabledPolicyRuleIds(db)
-  const lockedIds = new Set(DEFAULT_POLICY_RULES.filter((rule) => rule.locked).map((rule) => rule.id))
-  const safeDisabledRuleIds = disabledRuleIds.filter((id) => !lockedIds.has(id))
+  const nonToggleableLockedIds = new Set(DEFAULT_POLICY_RULES.filter((rule) => rule.locked && rule.action !== 'deny').map((rule) => rule.id))
+  const safeDisabledRuleIds = disabledRuleIds.filter((id) => !nonToggleableLockedIds.has(id))
   if (safeDisabledRuleIds.length !== disabledRuleIds.length) writeDisabledPolicyRuleIds(db, safeDisabledRuleIds)
   const pkg = packages[lane] ?? 'standard'
   const baseRules = safeDisabledRuleIds.length

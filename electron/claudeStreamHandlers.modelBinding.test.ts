@@ -54,6 +54,7 @@ vi.mock('./projectMemory', async (importOriginal) => {
 vi.mock('./safeWebContentsSend', () => ({ safeWebContentsSend: vi.fn() }))
 
 vi.mock('./anthropicClientFactory', () => ({
+  createAnthropicStreamPort: (client: { messages: { stream: (...args: unknown[]) => unknown } }) => ({ stream: (...args: unknown[]) => client.messages.stream(...args) }),
   createAnthropicClient: (...args: unknown[]) => mockCreateAnthropicClient(...args)
 }))
 

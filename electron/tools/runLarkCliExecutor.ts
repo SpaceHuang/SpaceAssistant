@@ -1,7 +1,7 @@
 import type { ToolExecutor, ToolExecutionContext, ToolExecutorResult } from './types'
 import { assertSafeLarkCliArgs } from '../feishu/larkCliSecurity'
 import { parseLarkCliError } from '../feishu/larkCliErrors'
-import type { LarkCliRunner } from '../feishu/larkCliRunner'
+import { LarkCliExecutionUncertainError, type LarkCliRunner } from '../feishu/larkCliRunner'
 import { logFeishuCliEvent } from '../feishu/feishuCliLogger'
 import { isLarkCliWriteOperation } from '../feishu/larkCliSecurity'
 import { redactLarkCliArgsForLog } from '../feishu/feishuCliLogFields'
@@ -38,10 +38,22 @@ export const runLarkCliExecutor: ToolExecutor = {
 
     const r = await runner.run({
       args,
+      ...(ctx.preparedLarkCliExecutable ? { resolvedExecutable: ctx.preparedLarkCliExecutable } : {}),
       timeoutSec,
       onStdout: (t) => ctx.sendProgress('lark-cli', t.slice(-4000)),
       signal: ctx.signal
     })
+
+    if (r.cancelledBeforeStart) {
+      return {
+        success: false,
+        error: 'LARK_CANCELLED_BEFORE_START',
+        userMessage: 'lark-cli 在启动前已取消',
+        data: { processResult: null, status: 'cancelled_before_start' },
+        duration: Date.now() - started
+      }
+    }
+    if (ctx.signal.aborted || r.timedOut) throw new LarkCliExecutionUncertainError()
 
     const durationMs = Date.now() - started
     const stdoutSafe = sanitizeToolOutput(r.stdout, 'run_lark_cli').text

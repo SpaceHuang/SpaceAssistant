@@ -7,8 +7,11 @@ import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { READ_FILE_MAX_CHARS } from '../../src/shared/toolResultLimits'
 import { buildReadExecutionPermit } from '../confirmation/readExecutionPermit'
 import { attachTestReadPermit } from './readPermitTestUtils'
+import { createReadRegisteredTools } from './readRegisteredTools'
+import { executeRegisteredTool } from './toolInvocationCoordinator'
 import type { ToolExecutionContext } from './types'
 import { editFileExecutor, readFileExecutor, writeFileExecutor } from './builtinExecutors'
+import * as readFileStreaming from './readFileStreaming'
 
 function makeCtx(workDir: string, cache: FileStateCache): ToolExecutionContext {
   return {
@@ -103,6 +106,70 @@ describe('read_file offset/limit', () => {
     expect(res.success).toBe(true)
     expect(res.data).toMatchObject({ content: body, encoding: 'utf8' })
     expect(res.data).not.toHaveProperty('totalLines')
+  })
+
+  it('全文读取完成的同时租约取消时丢弃句柄读取结果', async () => {
+    const file = path.join(tmpDir, 'cancel-on-read.txt')
+    await fs.writeFile(file, 'discard after cancellation')
+    const controller = new AbortController()
+    const ctx = makeCtx(tmpDir, cache)
+    ctx.signal = controller.signal
+    const input = { path: file }
+    await attachTestReadPermit('read_file', input, ctx)
+    const actualOpen = fs.open.bind(fs)
+    const open = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await actualOpen(...args)
+      return {
+        stat: () => handle.stat(),
+        read: (...readArgs: Parameters<typeof handle.read>) => handle.read(...readArgs),
+        readFile: async (...readArgs: Parameters<typeof handle.readFile>) => {
+          const result = await handle.readFile(...readArgs)
+          controller.abort()
+          return result
+        },
+        close: () => handle.close()
+      } as never
+    })
+
+    try {
+      const result = await readFileExecutor.execute(input, ctx)
+      expect(result).toMatchObject({ success: false, error: '用户取消执行' })
+      expect(JSON.stringify(result)).not.toContain('discard after cancellation')
+    } finally {
+      open.mockRestore()
+    }
+  })
+
+  it('registered read executor 收到 admission lease 的取消信号并在打开文件前关闭', async () => {
+    const file = path.join(tmpDir, 'registered-cancel.txt')
+    await fs.writeFile(file, 'must not be opened')
+    const ctx = makeCtx(tmpDir, cache)
+    const input = { path: file }
+    await attachTestReadPermit('read_file', input, ctx)
+    const [tool] = createReadRegisteredTools({
+      readFile: readFileExecutor,
+      listDirectory: { name: 'list_directory', execute: vi.fn() } as never,
+      grep: { name: 'grep', execute: vi.fn() } as never,
+      readFeishuAttachment: { name: 'read_feishu_attachment', execute: vi.fn() } as never
+    })
+    const open = vi.spyOn(fs, 'open')
+
+    try {
+      const result = await executeRegisteredTool(tool!, input, {
+        requestId: ctx.requestId!, toolUseId: ctx.toolUseId!, signal: ctx.signal,
+        executionContext: ctx as never
+      }, {
+        confirm: async () => true,
+        dispatch: async (_handle, _context, run) => {
+          const leaseSignal = AbortSignal.abort()
+          return run(leaseSignal)
+        }
+      })
+      expect(result).toMatchObject({ success: false, diagnostic: { caseId: 'read-permit-cancelled' } })
+      expect(open).not.toHaveBeenCalled()
+    } finally {
+      open.mockRestore()
+    }
   })
 
   it('does not overwrite fileStateCache on range read after full read', async () => {
@@ -363,10 +430,11 @@ describe('read_file tail / meta / large range', () => {
       const file = path.join(outside, 'approved.txt')
       await fs.writeFile(file, 'approved outside content')
       const stat = await fs.stat(file)
+      const canonicalFile = await fs.realpath(file)
       const input = { path: file }
       const permit = buildReadExecutionPermit({
         requestId: 'req-test', toolUseId: 'tool-test', toolName: 'read_file', input,
-        facts: [{ factId: 'outside-read-fact', decisionRuleId: 'read-group-outside-allow', normalizedPath: file, zone: 'outside-workdir', targetKind: 'file', identity: { dev: stat.dev, ino: stat.ino, mode: stat.mode, size: stat.size, mtimeMs: stat.mtimeMs } }]
+        facts: [{ factId: 'outside-read-fact', decisionRuleId: 'read-group-outside-allow', normalizedPath: canonicalFile, zone: 'outside-workdir', targetKind: 'file', identity: { dev: stat.dev, ino: stat.ino, mode: stat.mode, size: stat.size, mtimeMs: stat.mtimeMs } }]
       })
       const ctx = { ...makeCtx(workspace, new FileStateCache()), lane: 'desktop', readExecutionPermit: permit }
       const result = await readFileExecutor.execute(input, ctx)
@@ -375,5 +443,28 @@ describe('read_file tail / meta / large range', () => {
       await fs.rm(workspace, { recursive: true, force: true })
       await fs.rm(outside, { recursive: true, force: true })
     }
+  })
+
+  it('discards range content when the authorized inode changes while bytes are being read', async () => {
+    const file = path.join(tmpDir, 'mutating-during-read.txt')
+    await fs.writeFile(file, 'authorized line\n')
+    const stat = await fs.stat(file)
+    const input = { path: file, offset: 1, limit: 1 }
+    const ctx = makeCtx(tmpDir, cache)
+    ctx.readExecutionPermit = buildReadExecutionPermit({
+      requestId: ctx.requestId!, toolUseId: ctx.toolUseId!, toolName: 'read_file', input,
+      facts: [{ factId: 'mutation-read-fact', decisionRuleId: 'read-group-workdir-allow', normalizedPath: file, zone: 'workdir-normal', targetKind: 'file', identity: { dev: stat.dev, ino: stat.ino, mode: stat.mode, size: stat.size, mtimeMs: stat.mtimeMs } }]
+    })
+    const originalRead = readFileStreaming.readFileRangeFromDisk
+    const read = vi.spyOn(readFileStreaming, 'readFileRangeFromDisk').mockImplementation(async (...args) => {
+      const original = await originalRead(...args)
+      await fs.writeFile(file, 'changed after authorized bytes were read\n')
+      return original
+    })
+    try {
+      await expect(readFileExecutor.execute(input, ctx)).resolves.toMatchObject({
+        success: false, diagnostic: { caseId: 'read-target-identity-changed-during-read', category: 'mechanism' }
+      })
+    } finally { read.mockRestore() }
   })
 })

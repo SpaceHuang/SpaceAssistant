@@ -79,6 +79,17 @@ describe('StagehandService', () => {
     expect(mockInit).toHaveBeenCalledTimes(1)
   })
 
+  it('closeSession terminates the browser host before waiting for Stagehand close', async () => {
+    const closeOrder: string[] = []
+    mockBrowserHostClose.mockImplementationOnce(async () => { closeOrder.push('browser-host') })
+    mockClose.mockImplementationOnce(async () => { closeOrder.push('stagehand') })
+    await svc.getOrCreate('s-close-order', DEFAULT_BROWSER_CONFIG, creds)
+
+    await svc.closeSession('s-close-order')
+
+    expect(closeOrder).toEqual(['browser-host', 'stagehand'])
+  })
+
   it('closeSession on missing id does not throw', async () => {
     await expect(svc.closeSession('missing')).resolves.toBeUndefined()
   })

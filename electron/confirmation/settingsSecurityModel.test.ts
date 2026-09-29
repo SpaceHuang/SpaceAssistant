@@ -50,15 +50,17 @@ describe('toRuleViews（规则合并视图）', () => {
     expect(views[1]).toMatchObject({ id: 'b', action: 'deny', overridden: false, locked: true, enabled: true })
   })
 
-  it('locked 规则即使出现在 disabled 集合中也始终 enabled', async () => {
+  it('locked deny 可从 disabled 集合投影为停用；普通/locked ask 保持启用', async () => {
     const { toRuleViews } = await import('./settingsSecurityModel')
     const rules = [
       { id: 'script-network-deny-remote', when: 'invocation' as const, action: 'deny' as const, locked: true, reason: 'r1' },
-      { id: 'im-write-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'r2' }
+      { id: 'im-write-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'r2' },
+      { id: 'automation-default-confirm', when: 'invocation' as const, action: 'ask' as const, locked: true, reason: 'r3' }
     ]
-    const views = toRuleViews(rules, [], ['script-network-deny-remote'])
-    expect(views[0]).toMatchObject({ id: 'script-network-deny-remote', enabled: true, locked: true })
-    expect(views[1]).toMatchObject({ id: 'im-write-ask', enabled: true, locked: false })
+    const views = toRuleViews(rules, [], ['script-network-deny-remote', 'im-write-ask', 'automation-default-confirm'])
+    expect(views[0]).toMatchObject({ id: 'script-network-deny-remote', enabled: false, locked: true })
+    expect(views[1]).toMatchObject({ id: 'im-write-ask', enabled: false, locked: false })
+    expect(views[2]).toMatchObject({ id: 'automation-default-confirm', enabled: true, locked: true })
   })
 
   it('lanes 透传 match.lane（无 lane 限定的规则保持缺省=全链路通用）', async () => {

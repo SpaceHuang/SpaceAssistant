@@ -9,10 +9,18 @@ import type { AppDatabase } from '../database'
 import { createTempDatabase } from '../database/testHelpers'
 import type { McpServerWriteInput } from '../../src/shared/mcpTypes'
 import { appendDiagnostic } from './mcpDiagnostics'
-import { listProfiles } from './mcpConfigStore'
+import { listProfiles, saveToolCache } from './mcpConfigStore'
 import { registerMcpIpcHandlers } from './mcpIpc'
 import * as mcpOauthService from './mcpOauthService'
 import { setSecret } from './mcpSecretStore'
+import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from '../toolRevocationRegistry'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
+import { createRegisteredMcpTool } from './registeredMcpTool'
+import { executeRegisteredTool } from '../tools/toolInvocationCoordinator'
+import { createPermitBoundCoordinatorDispatch } from '../tools/permitBoundCoordinatorDispatch'
+import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
+import { McpConnectionManager } from './mcpConnectionManager'
+import { rejectPendingConfirmsForToolAcrossLanes, waitForToolConfirm } from '../toolConfirmRegistry'
 
 vi.mock('../secureApiKey', () => ({
   isSecretStorageAvailable: () => true,
@@ -288,6 +296,403 @@ describe('mcp IPC handlers', () => {
     expect(result.servers).toEqual([])
   })
 
+  it('disabling an MCP server revokes its active tool calls across every execution lane', async () => {
+    const profileId = 'mcp-global-revocation'
+    const toolName = 'lookup_weather'
+    const server = makeInput({ id: profileId, name: 'Global revocation', enabled: true, enabledToolNames: [toolName] })
+    await handlers['mcp:save-profiles']!(null, { servers: [server] })
+    for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
+      registerToolRevocationRequest(`${lane}-mcp-active`, lane)
+    }
+
+    try {
+      await handlers['mcp:save-profiles']!(null, { servers: [{ ...server, enabled: false }] })
+      for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
+        expect(isToolRevoked(`${lane}-mcp-active`, toolName)).toBe(true)
+      }
+    } finally {
+      for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
+        clearToolRevocationRequest(`${lane}-mcp-active`)
+      }
+    }
+  })
+
+  it('changing an enabled MCP server execution target revokes its active tool calls across every lane', async () => {
+    const profileId = 'mcp-target-change-revocation'
+    const toolName = 'lookup_target_change'
+    const server = makeInput({
+      id: profileId, name: 'Target change', enabled: true, transport: 'streamable-http',
+      http: { endpoint: 'https://old.example.test/mcp' }, enabledToolNames: [toolName]
+    })
+    await handlers['mcp:save-profiles']!(null, { servers: [server] })
+    for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
+      registerToolRevocationRequest(`${lane}-mcp-target-change`, lane)
+    }
+
+    try {
+      await handlers['mcp:save-profiles']!(null, {
+        servers: [{ ...server, http: { endpoint: 'https://new.example.test/mcp' } }]
+      })
+      for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
+        expect(isToolRevoked(`${lane}-mcp-target-change`, toolName)).toBe(true)
+      }
+    } finally {
+      for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
+        clearToolRevocationRequest(`${lane}-mcp-target-change`)
+      }
+    }
+  })
+
+  it('clearing credentials revokes active tools on their enabled MCP server across every lane', async () => {
+    const profileId = 'mcp-clear-secret-revocation'
+    const toolName = 'lookup_auth_change'
+    const server = makeInput({
+      id: profileId, name: 'Credential change', enabled: true, transport: 'streamable-http',
+      auth: { mode: 'bearer-token', accessToken: 'saved-secret' },
+      http: { endpoint: 'https://auth.example.test/mcp' }, enabledToolNames: [toolName]
+    })
+    await handlers['mcp:save-profiles']!(null, { servers: [server] })
+    for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
+      registerToolRevocationRequest(`${lane}-mcp-clear-secret`, lane)
+    }
+
+    try {
+      await handlers['mcp:clear-secret']!(null, { serverId: profileId, kind: 'access-token' })
+      for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
+        expect(isToolRevoked(`${lane}-mcp-clear-secret`, toolName)).toBe(true)
+      }
+    } finally {
+      for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
+        clearToolRevocationRequest(`${lane}-mcp-clear-secret`)
+      }
+    }
+  })
+
+  it('deleting an MCP server revokes its active tool calls across every execution lane', async () => {
+    const profileId = 'mcp-global-delete-revocation'
+    const toolName = 'lookup_calendar'
+    await handlers['mcp:save-profiles']!(null, {
+      servers: [makeInput({ id: profileId, name: 'Delete revocation', enabled: true, enabledToolNames: [toolName] })]
+    })
+    for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
+      registerToolRevocationRequest(`${lane}-mcp-delete-active`, lane)
+    }
+
+    try {
+      await handlers['mcp:delete-server']!(null, { serverId: profileId })
+      for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
+        expect(isToolRevoked(`${lane}-mcp-delete-active`, toolName)).toBe(true)
+      }
+    } finally {
+      for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
+        clearToolRevocationRequest(`${lane}-mcp-delete-active`)
+      }
+    }
+  })
+
+  it.each(['desktop', 'feishu', 'wechat', 'automation'] as const)('$lane MCP deletion aborts a claimed registered-tool executor through the production revocation registry', async (lane) => {
+    const profileId = 'mcp-claimed-revocation'
+    const requestId = `mcp-claimed-delete-${lane}-request`
+    const toolUseId = 'mcp-claimed-delete-call'
+    const toolName = 'lookup_active'
+    await handlers['mcp:save-profiles']!(null, {
+      servers: [makeInput({ id: profileId, name: 'Claimed revocation', enabled: true, enabledToolNames: [toolName] })]
+    })
+    registerToolRevocationRequest(requestId, lane)
+    const revocations = getDefaultAgentRuntime().toolRevocations
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    let enteredExecutor!: () => void
+    const atExecutor = new Promise<void>((resolve) => { enteredExecutor = resolve })
+    let observedSignal: AbortSignal | undefined
+    const executor = vi.fn(async (_input: Record<string, unknown>, context: { signal: AbortSignal }) => {
+      observedSignal = context.signal
+      enteredExecutor()
+      return await new Promise<never>((_resolve, reject) => {
+        context.signal.addEventListener('abort', () => reject(new Error('MCP response unknown after cancellation')), { once: true })
+      })
+    })
+    const registered = createRegisteredMcpTool({ name: toolName, execute: executor } as never)
+    const input = { query: 'active request' }
+    const dispatch = createPermitBoundCoordinatorDispatch({
+      requestId, turnId: 'mcp-claimed-delete-turn', canonicalInput: input,
+      authorizationVersion: 'mcp-rule-v1', targetVersion: 'mcp-target-v1',
+      phase: 'recheck', initialFactsHash: 'mcp-facts-v1',
+      isAllowed: () => !revocations.isToolRevoked(requestId, toolName),
+      recheck: async () => ({ allowed: true, authorizationVersion: 'mcp-rule-v1', targetVersion: 'mcp-target-v1', factsHash: 'mcp-facts-v1' }),
+      safetyPolicy: { evaluate: async () => ({ kind: 'allow' as const, authorizationVersion: 'mcp-rule-v1' }) },
+      toolRevocations: revocations,
+      admission
+    })
+    const signal = new AbortController().signal
+    const execution = executeRegisteredTool(registered, input, {
+      requestId, toolUseId, signal, executionContext: { lane } as never
+    }, { confirm: async () => true, dispatch })
+
+    try {
+      await atExecutor
+      expect(observedSignal?.aborted).toBe(false)
+      await handlers['mcp:delete-server']!(null, { serverId: profileId })
+      expect(isToolRevoked(requestId, toolName)).toBe(true)
+      expect(observedSignal?.aborted).toBe(true)
+      await expect(execution).rejects.toThrow()
+      expect(executor).toHaveBeenCalledOnce()
+      expect(admission.activeLeaseCount(requestId)).toBe(0)
+    } finally {
+      clearToolRevocationRequest(requestId)
+    }
+  })
+
+  it.each(['desktop', 'feishu', 'wechat', 'automation'] as const)('$lane MCP allowlist update aborts a claimed registered-tool executor', async (lane) => {
+    const profileId = 'mcp-claimed-allowlist-revocation'
+    const requestId = `mcp-claimed-allowlist-${lane}-request`
+    const toolUseId = 'mcp-claimed-allowlist-call'
+    const toolName = 'lookup_allowlist_active'
+    const server = makeInput({ id: profileId, name: 'Claimed allowlist revocation', enabled: true, enabledToolNames: [toolName] })
+    await handlers['mcp:save-profiles']!(null, { servers: [server] })
+    registerToolRevocationRequest(requestId, lane)
+    const revocations = getDefaultAgentRuntime().toolRevocations
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    let enteredExecutor!: () => void
+    const atExecutor = new Promise<void>((resolve) => { enteredExecutor = resolve })
+    let observedSignal: AbortSignal | undefined
+    const executor = vi.fn(async (_input: Record<string, unknown>, context: { signal: AbortSignal }) => {
+      observedSignal = context.signal
+      enteredExecutor()
+      return await new Promise<never>((_resolve, reject) => {
+        context.signal.addEventListener('abort', () => reject(new Error('MCP response unknown after cancellation')), { once: true })
+      })
+    })
+    const registered = createRegisteredMcpTool({ name: toolName, execute: executor } as never)
+    const input = { query: 'active request' }
+    const dispatch = createPermitBoundCoordinatorDispatch({
+      requestId, turnId: 'mcp-claimed-allowlist-turn', canonicalInput: input,
+      authorizationVersion: 'mcp-rule-v1', targetVersion: 'mcp-target-v1',
+      phase: 'recheck', initialFactsHash: 'mcp-facts-v1',
+      isAllowed: () => !revocations.isToolRevoked(requestId, toolName),
+      recheck: async () => ({ allowed: true, authorizationVersion: 'mcp-rule-v1', targetVersion: 'mcp-target-v1', factsHash: 'mcp-facts-v1' }),
+      safetyPolicy: { evaluate: async () => ({ kind: 'allow' as const, authorizationVersion: 'mcp-rule-v1' }) },
+      toolRevocations: revocations,
+      admission
+    })
+    const execution = executeRegisteredTool(registered, input, {
+      requestId, toolUseId, signal: new AbortController().signal, executionContext: { lane } as never
+    }, { confirm: async () => true, dispatch })
+
+    try {
+      await atExecutor
+      expect(observedSignal?.aborted).toBe(false)
+      await handlers['mcp:save-profiles']!(null, { servers: [{ ...server, enabledToolNames: [] }] })
+      expect(isToolRevoked(requestId, toolName)).toBe(true)
+      expect(observedSignal?.aborted).toBe(true)
+      await expect(execution).rejects.toThrow()
+      expect(executor).toHaveBeenCalledOnce()
+      expect(admission.activeLeaseCount(requestId)).toBe(0)
+    } finally {
+      clearToolRevocationRequest(requestId)
+    }
+  })
+
+  it.each(['desktop', 'feishu', 'wechat', 'automation'] as const)('$lane MCP endpoint change aborts a claimed executor while its tool stays enabled', async (lane) => {
+    const profileId = 'mcp-claimed-endpoint-change'
+    const requestId = `mcp-endpoint-change-${lane}-request`
+    const toolUseId = 'mcp-endpoint-change-call'
+    const toolName = 'lookup_endpoint_active'
+    const server = makeInput({
+      id: profileId, name: 'Claimed endpoint change', enabled: true, transport: 'streamable-http',
+      http: { endpoint: 'https://old.example.test/mcp' }, enabledToolNames: [toolName]
+    })
+    await handlers['mcp:save-profiles']!(null, { servers: [server] })
+    registerToolRevocationRequest(requestId, lane)
+    const revocations = getDefaultAgentRuntime().toolRevocations
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    let enteredExecutor!: () => void
+    const atExecutor = new Promise<void>((resolve) => { enteredExecutor = resolve })
+    let observedSignal: AbortSignal | undefined
+    const executor = vi.fn(async (_input: Record<string, unknown>, context: { signal: AbortSignal }) => {
+      observedSignal = context.signal
+      enteredExecutor()
+      return await new Promise<never>((_resolve, reject) => {
+        context.signal.addEventListener('abort', () => reject(new Error('MCP response unknown after endpoint change')), { once: true })
+      })
+    })
+    const registered = createRegisteredMcpTool({ name: toolName, execute: executor } as never)
+    const input = { query: 'in flight' }
+    const dispatch = createPermitBoundCoordinatorDispatch({
+      requestId, turnId: 'mcp-endpoint-change-turn', canonicalInput: input,
+      authorizationVersion: 'mcp-rule-v1', targetVersion: 'mcp-target-v1',
+      phase: 'recheck', initialFactsHash: 'mcp-facts-v1',
+      isAllowed: () => !revocations.isToolRevoked(requestId, toolName),
+      recheck: async () => ({ allowed: true, authorizationVersion: 'mcp-rule-v1', targetVersion: 'mcp-target-v1', factsHash: 'mcp-facts-v1' }),
+      safetyPolicy: { evaluate: async () => ({ kind: 'allow' as const, authorizationVersion: 'mcp-rule-v1' }) },
+      toolRevocations: revocations,
+      admission
+    })
+    const execution = executeRegisteredTool(registered, input, {
+      requestId, toolUseId, signal: new AbortController().signal, executionContext: { lane } as never
+    }, { confirm: async () => true, dispatch })
+
+    try {
+      await atExecutor
+      expect(observedSignal?.aborted).toBe(false)
+      await handlers['mcp:save-profiles']!(null, { servers: [{ ...server, http: { endpoint: 'https://new.example.test/mcp' } }] })
+      expect(isToolRevoked(requestId, toolName)).toBe(true)
+      expect(observedSignal?.aborted).toBe(true)
+      await expect(execution).rejects.toThrow()
+      expect(executor).toHaveBeenCalledOnce()
+      expect(admission.activeLeaseCount(requestId)).toBe(0)
+      expect((await handlers['mcp:list']!(null) as { servers: Array<{ enabledToolNames: string[] }> }).servers[0]?.enabledToolNames).toContain(toolName)
+    } finally {
+      clearToolRevocationRequest(requestId)
+    }
+  })
+
+  it('endpoint change rejects a pending confirmation for the cached mapped MCP capability', async () => {
+    const profileId = 'mcp-pending-confirm-endpoint-change'
+    const requestId = 'mcp-pending-confirm-endpoint-change-request'
+    const toolName = 'mcp_docs_search'
+    const server = makeInput({
+      id: profileId, name: 'Pending confirmation', enabled: true, transport: 'streamable-http',
+      http: { endpoint: 'https://old.example.test/mcp' }, enabledToolNames: ['search']
+    })
+    await handlers['mcp:save-profiles']!(null, { servers: [server] })
+    saveToolCache(db, profileId, {
+      protocolVersion: '2025-06-18', discoveredAt: '2026-01-01T00:00:00.000Z',
+      tools: [{
+        serverId: profileId, originalName: 'search', mappedName: toolName, description: 'Search docs',
+        inputSchema: { type: 'object' }, annotations: { destructiveHint: true }, discoveredAt: '2026-01-01T00:00:00.000Z'
+      }]
+    })
+    registerToolRevocationRequest(requestId, 'desktop')
+    const pendingConfirmation = waitForToolConfirm(requestId, 'mapped-confirmation-call', undefined, {
+      toolName, lane: 'desktop'
+    })
+
+    try {
+      await handlers['mcp:save-profiles']!(null, {
+        servers: [{ ...server, http: { endpoint: 'https://new.example.test/mcp' } }]
+      })
+      await expect(pendingConfirmation).resolves.toBe('cancelled')
+      expect(isToolRevoked(requestId, toolName)).toBe(true)
+      expect((await handlers['mcp:list']!(null) as { servers: Array<{ enabledToolNames: string[] }> }).servers[0]?.enabledToolNames).toContain('search')
+    } finally {
+      clearToolRevocationRequest(requestId)
+    }
+  })
+
+  it('refresh-tools preserves mapped identity and revokes pending confirmation when discovered authority changes', async () => {
+    const profileId = 'mcp-refresh-pending-confirm'
+    const requestId = 'mcp-refresh-pending-confirm-request'
+    const toolName = 'mcp_docs_search'
+    const server = makeInput({
+      id: profileId, name: 'Docs', enabled: true, transport: 'streamable-http',
+      http: { endpoint: 'https://docs.example.test/mcp' }, enabledToolNames: ['search']
+    })
+    await handlers['mcp:save-profiles']!(null, { servers: [server] })
+    saveToolCache(db, profileId, {
+      protocolVersion: '2025-06-18', discoveredAt: '2026-01-01T00:00:00.000Z',
+      tools: [{
+        serverId: profileId, originalName: 'search', mappedName: toolName, description: 'Search docs',
+        inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
+        annotations: { readOnlyHint: true }, discoveredAt: '2026-01-01T00:00:00.000Z'
+      }]
+    })
+    const connect = vi.spyOn(McpConnectionManager.prototype, 'connect').mockResolvedValue({
+      serverId: profileId,
+      client: { listTools: async () => ({ tools: [{
+        name: 'search', description: 'Search docs',
+        inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
+        annotations: { readOnlyHint: false, destructiveHint: true }
+      }] }) },
+      info: { name: 'Docs' }, protocolVersion: '2025-06-18', capabilities: {}, close: async () => undefined
+    } as never)
+    registerToolRevocationRequest(requestId, 'desktop')
+    const pendingConfirmation = waitForToolConfirm(requestId, 'refresh-confirmation-call', undefined, {
+      toolName, lane: 'desktop'
+    })
+
+    try {
+      const result = await handlers['mcp:refresh-tools']!(null, { serverId: profileId }) as {
+        ok: boolean; tools?: Array<{ mappedName: string }>
+      }
+      expect(result.ok).toBe(true)
+      expect(result.tools?.map((tool) => tool.mappedName)).toEqual([toolName])
+      expect(isToolRevoked(requestId, toolName)).toBe(true)
+      await expect(pendingConfirmation).resolves.toBe('cancelled')
+    } finally {
+      rejectPendingConfirmsForToolAcrossLanes(toolName)
+      await pendingConfirmation
+      clearToolRevocationRequest(requestId)
+      connect.mockRestore()
+    }
+  })
+
+  it('background OAuth token refresh through mcp:refresh-tools aborts an active claimed MCP executor', async () => {
+    const profileId = 'mcp-background-oauth-refresh'
+    const requestId = 'mcp-background-oauth-active-request'
+    const toolName = 'lookup_oauth_refresh'
+    await handlers['mcp:save-profiles']!(null, {
+      servers: [makeInput({
+        id: profileId, name: 'Background OAuth refresh', enabled: true, transport: 'streamable-http',
+        http: { endpoint: 'https://mcp.example.test' }, auth: { mode: 'oauth', oauthClientId: 'oauth-client' },
+        enabledToolNames: [toolName]
+      })]
+    })
+    await setSecret(db, profileId, 'access-token', 'old-access')
+    await setSecret(db, profileId, 'refresh-token', 'old-refresh')
+    registerToolRevocationRequest(requestId, 'desktop')
+    const runtime = getDefaultAgentRuntime()
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    let enteredExecutor!: () => void
+    const atExecutor = new Promise<void>((resolve) => { enteredExecutor = resolve })
+    let observedSignal: AbortSignal | undefined
+    const executor = vi.fn(async (_input: Record<string, unknown>, context: { signal: AbortSignal }) => {
+      observedSignal = context.signal
+      enteredExecutor()
+      return await new Promise<never>((_resolve, reject) => {
+        context.signal.addEventListener('abort', () => reject(new Error('MCP result uncertain after OAuth refresh')), { once: true })
+      })
+    })
+    const registered = createRegisteredMcpTool({ name: toolName, execute: executor } as never)
+    const input = { query: 'active during refresh' }
+    const dispatch = createPermitBoundCoordinatorDispatch({
+      requestId, turnId: 'mcp-oauth-refresh-turn', canonicalInput: input,
+      authorizationVersion: 'mcp-rule-v1', targetVersion: 'mcp-target-v1', phase: 'recheck', initialFactsHash: 'mcp-facts-v1',
+      isAllowed: () => !runtime.toolRevocations.isToolRevoked(requestId, toolName),
+      recheck: async () => ({ allowed: true, authorizationVersion: 'mcp-rule-v1', targetVersion: 'mcp-target-v1', factsHash: 'mcp-facts-v1' }),
+      safetyPolicy: { evaluate: async () => ({ kind: 'allow' as const, authorizationVersion: 'mcp-rule-v1' }) },
+      toolRevocations: runtime.toolRevocations, admission
+    })
+    const execution = executeRegisteredTool(registered, input, {
+      requestId, toolUseId: 'mcp-oauth-refresh-call', signal: new AbortController().signal,
+      executionContext: { lane: 'desktop' } as never
+    }, { confirm: async () => true, dispatch })
+    const connect = vi.spyOn(McpConnectionManager.prototype, 'connect').mockImplementation(async (_profile, _secrets, options) => {
+      await options?.oauthProvider?.saveTokens({ access_token: 'new-access', refresh_token: 'new-refresh', token_type: 'Bearer' })
+      return {
+        serverId: profileId, client: { listTools: async () => ({ tools: [{ name: 'remote-tool', inputSchema: { type: 'object' } }] }) },
+        info: { name: 'OAuth MCP' }, protocolVersion: '2025-06-18', capabilities: {}, close: async () => undefined
+      } as never
+    })
+
+    try {
+      await atExecutor
+      expect(observedSignal?.aborted).toBe(false)
+      const refresh = await handlers['mcp:refresh-tools']!(null, { serverId: profileId })
+      expect(refresh).toMatchObject({ ok: true })
+      expect(connect).toHaveBeenCalledOnce()
+      expect(await mcpOauthService.createMcpOAuthClientProvider(db, listProfiles(db)[0]!).tokens()).toMatchObject({
+        access_token: 'new-access', refresh_token: 'new-refresh'
+      })
+      expect(runtime.toolRevocations.isToolRevoked(requestId, toolName)).toBe(true)
+      expect(observedSignal?.aborted).toBe(true)
+      await expect(execution).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+      expect(admission.activeLeaseCount(requestId)).toBe(0)
+    } finally {
+      clearToolRevocationRequest(requestId)
+      connect.mockRestore()
+    }
+  })
+
   it('mcp:get-diagnostics returns stored sanitized entries', async () => {
     await appendDiagnostic(db, makeInput().id, { code: 'init_failed', message: 'boom sk-ant-api03-xyz' })
     const result = (await handlers['mcp:get-diagnostics']!(null, {
@@ -345,6 +750,34 @@ rl.on('line', (line) => {
     })) as { ok: boolean; code?: string }
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('not-found')
+  })
+
+  it('successful MCP OAuth reauthorization revokes active calls across every execution lane', async () => {
+    const profileId = 'mcp-oauth-reauth-revocation'
+    const toolName = 'lookup_oauth_reauth'
+    await handlers['mcp:save-profiles']!(null, {
+      servers: [makeInput({
+        id: profileId, name: 'OAuth reauthorization', enabled: true, transport: 'streamable-http',
+        http: { endpoint: 'https://oauth.example.test/mcp' }, auth: { mode: 'oauth', oauthClientId: 'client' },
+        enabledToolNames: [toolName]
+      })]
+    })
+    const startOAuth = vi.spyOn(mcpOauthService, 'startOAuthFlow').mockResolvedValue({ ok: true } as never)
+    for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
+      registerToolRevocationRequest(`${lane}-mcp-oauth-reauth`, lane)
+    }
+
+    try {
+      await handlers['mcp:oauth-start']!(null, { serverId: profileId })
+      for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
+        expect(isToolRevoked(`${lane}-mcp-oauth-reauth`, toolName)).toBe(true)
+      }
+    } finally {
+      startOAuth.mockRestore()
+      for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
+        clearToolRevocationRequest(`${lane}-mcp-oauth-reauth`)
+      }
+    }
   })
 
   it('mcp:test-connection sends the OAuth token for an already-authorized draft', async () => {

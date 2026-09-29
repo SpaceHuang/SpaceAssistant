@@ -31,7 +31,7 @@ registry.register(registered)
 
 // PreparedInvocation is intentionally opaque to callers; construction is factory-only.
 type PreparedKeys = keyof PreparedInvocation
-const requiredKeys: PreparedKeys[] = ['invocationId', 'requestId', 'toolUseId', 'toolName', 'kind', 'planDigest', 'factsDigest', 'displayDigest']
+const requiredKeys: PreparedKeys[] = ['invocationId', 'requestId', 'toolUseId', 'toolName', 'kind', 'inputDigest', 'planDigest', 'factsDigest', 'displayDigest']
 void requiredKeys
 
 describe('plannedToolRegistry type contracts', () => {

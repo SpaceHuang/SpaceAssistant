@@ -37,6 +37,7 @@ import {
 } from './operations'
 import { getDbConnection, type AppDatabase } from './sqliteStore'
 import { setConfigValue } from './operations'
+import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 
 describe('createSession 默认模型', () => {
   it('回退到配置里的默认模型，而不是写死的历史模型名', () => {
@@ -403,6 +404,24 @@ describe('queue input receipts', () => {
     expect(getQueueInputReceipt(db, session.id, 'recover-r')?.state).toBe('recovered')
   })
 
+  it.each(['calling', 'confirming', 'executing'] as const)('completed recovery refuses pending %s tool calls without partial writes', (status) => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: `queue-completed-recover-${status}` })
+    const queued = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: `completed-recover-${status}`, content: 'queued' })
+    claimQueuedTurnAtomically(db, { sessionId: session.id, userMessageId: queued.persisted.message.id, turnId: `completed-turn-${status}`, assistantMessageId: `completed-assistant-${status}`, requestId: `completed-recover-${status}` })
+    updateMessageContentIfStreaming(db, `completed-assistant-${status}`, { toolCalls: [{ id: 'pending-tool', toolName: 'write_file', input: { path: 'x' }, status, riskLevel: 'low' }] })
+
+    expect(recoverPersistedTurn(db, `completed-turn-${status}`, `completed-assistant-${status}`, { completed: true, completedOutputText: 'canonical output' })).toBe(false)
+    expect(getMessage(db, `completed-assistant-${status}`)).toMatchObject({ status: 'streaming', content: '', toolCalls: [{ id: 'pending-tool', status }] })
+    expect(getPersistedTurn(db, `completed-turn-${status}`)).toMatchObject({ state: 'prepared', version: 0 })
+    expect(getQueueInputReceipt(db, session.id, `completed-recover-${status}`)?.state).toBe('claimed')
+
+    expect(recoverPersistedTurn(db, `completed-turn-${status}`, `completed-assistant-${status}`)).toBe(true)
+    expect(getMessage(db, `completed-assistant-${status}`)).toMatchObject({ status: 'failed', toolCalls: [{ id: 'pending-tool', status: 'failed', interrupted: true }] })
+    expect(getPersistedTurn(db, `completed-turn-${status}`)).toMatchObject({ state: 'terminal', outcome: 'recovered', version: 1 })
+    expect(getQueueInputReceipt(db, session.id, `completed-recover-${status}`)?.state).toBe('recovered')
+  })
+
   it('recoverPersistedTurn 也收敛重启前等待确认的 turn，避免重试被 busy 阻断', () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'confirm-recover' })
@@ -445,6 +464,83 @@ describe('queue input receipts', () => {
       version: 4, outcome: 'failed', usage: { input_tokens: 3 },
       error: { code: 'PROVIDER_FAILED', message: 'provider failed' }, intentFingerprint: 'sha256:intent', startToken: 'start-token'
     })
+  })
+})
+
+describe('turn prepare and canonical History atomicity', () => {
+  it('commits the user input identity to the session-bound invocation History in the prepare transaction', async () => {
+    const db = createMemoryAppDb()
+    const sessionId = createSession(db, { name: 'atomic-history-success' }).id
+    const prepared = prepareTurnAtomically(db, {
+      user: { id: 'input-user', sessionId, role: 'user', content: 'sensitive text is not copied', timestamp: 1, status: 'sent' },
+      assistant: { id: 'input-assistant', sessionId, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
+      turn: { turnId: 'input-turn', requestId: 'input-request', sessionId, assistantMessageId: 'input-assistant', state: 'prepared' }
+    })
+    const snapshot = new SqliteAgentHistory(getDbConnection(db)).readLatestCompletedInvocationForSession(sessionId)
+
+    expect(prepared.user.message.id).toBe('input-user')
+    expect(getPersistedTurn(db, 'input-turn')?.acceptedInputHistoryVersion).toBe(1)
+    expect(await snapshot).toBeUndefined()
+    expect(getDbConnection(db).prepare('SELECT session_id FROM agent_history_streams WHERE invocation_id = ?').get('input-request')).toEqual({ session_id: sessionId })
+    expect(getDbConnection(db).prepare('SELECT kind, payload_json FROM agent_history_events WHERE invocation_id = ?').get('input-request'))
+      .toMatchObject({ kind: 'session-input-committed' })
+    const persisted = getDbConnection(db).prepare('SELECT payload_json FROM agent_history_events WHERE invocation_id = ?').get('input-request') as { payload_json: string }
+    expect(JSON.parse(persisted.payload_json)).toMatchObject({ sessionId, messageId: 'input-user', role: 'user' })
+    expect(persisted.payload_json).not.toContain('sensitive text')
+  })
+
+  it('commits queued input History when the queued turn is claimed', async () => {
+    const db = createMemoryAppDb()
+    const sessionId = createSession(db, { name: 'queued-history' }).id
+    const queued = enqueueQueuedUserMessage(db, { sessionId, requestId: 'queued-request', content: 'queued question' })
+    claimQueuedTurnAtomically(db, {
+      sessionId, requestId: 'queued-request', userMessageId: queued.persisted.message.id,
+      turnId: 'queued-turn', assistantMessageId: 'queued-assistant'
+    })
+
+    const history = await new SqliteAgentHistory(getDbConnection(db)).read('queued-request')
+    expect(getPersistedTurn(db, 'queued-turn')?.acceptedInputHistoryVersion).toBe(1)
+    expect(history.events).toMatchObject([{
+      sequence: 1, kind: 'session-input-committed',
+      payload: { sessionId, messageId: queued.persisted.message.id, role: 'user' }
+    }])
+  })
+
+  it('keeps queued input claimable if its canonical History event fails to commit', () => {
+    const db = createMemoryAppDb()
+    const sessionId = createSession(db, { name: 'queued-history-rollback' }).id
+    const queued = enqueueQueuedUserMessage(db, { sessionId, requestId: 'queued-rollback-request', content: 'queued question' })
+    getDbConnection(db).exec(`CREATE TRIGGER reject_queued_canonical_input BEFORE INSERT ON agent_history_events
+      WHEN NEW.kind = 'session-input-committed' BEGIN SELECT RAISE(ABORT, 'history unavailable'); END`)
+
+    expect(() => claimQueuedTurnAtomically(db, {
+      sessionId, requestId: 'queued-rollback-request', userMessageId: queued.persisted.message.id,
+      turnId: 'queued-rollback-turn', assistantMessageId: 'queued-rollback-assistant'
+    })).toThrow(/history unavailable/)
+
+    expect(getMessage(db, queued.persisted.message.id)?.status).toBe('queued')
+    expect(getMessage(db, 'queued-rollback-assistant')).toBeUndefined()
+    expect(getPersistedTurn(db, 'queued-rollback-turn')).toBeUndefined()
+    expect(getQueueInputReceipt(db, sessionId, 'queued-rollback-request')?.state).toBe('queued')
+  })
+
+  it('rolls back user/assistant messages and turn when the canonical input event cannot be committed', () => {
+    const db = createMemoryAppDb()
+    const sessionId = createSession(db, { name: 'atomic-history' }).id
+    const conn = getDbConnection(db)
+    conn.exec(`CREATE TRIGGER reject_canonical_input BEFORE INSERT ON agent_history_events
+      WHEN NEW.kind = 'session-input-committed' BEGIN SELECT RAISE(ABORT, 'history unavailable'); END`)
+
+    expect(() => prepareTurnAtomically(db, {
+      user: { id: 'atomic-user', sessionId, role: 'user', content: 'hello', timestamp: 1, status: 'sent' },
+      assistant: { id: 'atomic-assistant', sessionId, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
+      turn: { turnId: 'atomic-turn', requestId: 'atomic-request', sessionId, assistantMessageId: 'atomic-assistant', state: 'prepared' }
+    })).toThrow(/history unavailable/)
+
+    expect(getMessage(db, 'atomic-user')).toBeUndefined()
+    expect(getMessage(db, 'atomic-assistant')).toBeUndefined()
+    expect(getPersistedTurn(db, 'atomic-turn')).toBeUndefined()
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_streams WHERE invocation_id = ?').get('atomic-request')).toEqual({ count: 0 })
   })
 })
 

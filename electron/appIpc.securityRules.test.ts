@@ -11,6 +11,7 @@ import { ConfirmIdSpace } from './remote/confirmId'
 import { ChatCancelRegistry } from './chatCancelRegistry'
 import { ToolRevocationRegistry } from './toolRevocationRegistry'
 import { McpConcurrencyGate } from './mcp/mcpToolExecutor'
+import { PolicyAuthorizationChangeRegistry } from './runtime/policyAuthorizationChangeRegistry'
 
 
 const WORK_DIR = path.resolve('/fake/workdir')
@@ -54,6 +55,7 @@ vi.mock('./database', () => ({
 }))
 
 vi.mock('./anthropicClientFactory', () => ({
+  createAnthropicStreamPort: (client: { messages: { stream: (...args: unknown[]) => unknown } }) => ({ stream: (...args: unknown[]) => client.messages.stream(...args) }),
   createAnthropicClient: vi.fn()
 }))
 
@@ -67,7 +69,7 @@ vi.mock('./windowRef', () => ({
   getMainWindow: vi.fn(() => ({ webContents: { send: mockSend } }))
 }))
 
-const mockSetOverride = vi.fn()
+const { mockSetOverride, mockRecordSettingsChange } = vi.hoisted(() => ({ mockSetOverride: vi.fn(), mockRecordSettingsChange: vi.fn() }))
 
 vi.mock('./confirmation/policyRuleStore', () => ({
   PolicyRuleStore: class {
@@ -82,7 +84,7 @@ vi.mock('./confirmation/policyRuleStore', () => ({
 }))
 
 vi.mock('./confirmation/settingsAudit', () => ({
-  recordSettingsChange: vi.fn()
+  recordSettingsChange: mockRecordSettingsChange
 }))
 
 vi.mock('./confirmation/audit', async (importOriginal) => ({
@@ -162,11 +164,13 @@ function makeCtx(): AppIpcContext {
 }
 
 // P8:显式装配含真 builtin registry 的默认 runtime(兼容转发打到真实注册表)
+const policyAuthorizationChanges = new PolicyAuthorizationChangeRegistry()
 setDefaultAgentRuntime(
   createAgentRuntime({
     confirmIds: new ConfirmIdSpace(),
     chatCancels: new ChatCancelRegistry(),
     toolRevocations: new ToolRevocationRegistry(),
+    policyAuthorizationChanges,
     mcpGate: new McpConcurrencyGate(),
     builtinRegistry: createBuiltinToolRegistry()
   })
@@ -207,19 +211,83 @@ describe('security:set-rule-enabled 仅限 locked+deny 系统保护规则（fail
     expect(pushes.map((c) => (c[1] as { lane: string }).lane).sort()).toEqual(['desktop', 'feishu', 'wechat'])
   })
 
+  it('变更远程专属保护规则只发布受影响 lane 的授权版本', async () => {
+    const desktop = vi.fn()
+    const wechat = vi.fn()
+    const feishu = vi.fn()
+    const automation = vi.fn()
+    const unsubscribe = [
+      policyAuthorizationChanges.subscribe('desktop-request', 'desktop', desktop),
+      policyAuthorizationChanges.subscribe('wechat-request', 'wechat', wechat),
+      policyAuthorizationChanges.subscribe('feishu-request', 'feishu', feishu),
+      policyAuthorizationChanges.subscribe('automation-request', 'automation', automation)
+    ]
+    try {
+      const result = await invoke({ ruleId: 'remote-shell-disabled', enabled: false })
+      expect(result.ok).toBe(true)
+      expect(desktop).not.toHaveBeenCalled()
+      expect(wechat).toHaveBeenCalledOnce()
+      expect(feishu).toHaveBeenCalledOnce()
+      expect(automation).not.toHaveBeenCalled()
+    } finally {
+      unsubscribe.forEach((remove) => remove())
+    }
+  })
+
+  it('变更 automation 专属保护规则只发布 automation lane 的授权版本', async () => {
+    const desktop = vi.fn()
+    const wechat = vi.fn()
+    const feishu = vi.fn()
+    const automation = vi.fn()
+    const unsubscribe = [
+      policyAuthorizationChanges.subscribe('desktop-automation-rule', 'desktop', desktop),
+      policyAuthorizationChanges.subscribe('wechat-automation-rule', 'wechat', wechat),
+      policyAuthorizationChanges.subscribe('feishu-automation-rule', 'feishu', feishu),
+      policyAuthorizationChanges.subscribe('automation-rule', 'automation', automation)
+    ]
+    try {
+      const result = await invoke({ ruleId: 'automation-sensitive-path-deny', enabled: false })
+      expect(result.ok).toBe(true)
+      expect(desktop).not.toHaveBeenCalled()
+      expect(wechat).not.toHaveBeenCalled()
+      expect(feishu).not.toHaveBeenCalled()
+      expect(automation).toHaveBeenCalledOnce()
+    } finally {
+      unsubscribe.forEach((remove) => remove())
+    }
+  })
+
+  it('策略已 flush 后审计失败仍先撤销受影响 lane 的活动授权', async () => {
+    const wechat = vi.fn()
+    const remove = policyAuthorizationChanges.subscribe('wechat-active', 'wechat', wechat)
+    mockRecordSettingsChange.mockImplementationOnce(() => { throw new Error('audit unavailable') })
+    try {
+      await expect(invoke({ ruleId: 'remote-shell-disabled', enabled: false })).rejects.toThrow('audit unavailable')
+      expect(wechat).toHaveBeenCalledOnce()
+    } finally {
+      remove()
+    }
+  })
+
   it.each([
     { name: 'deniedTools', tools: { deniedTools: ['list_work_dirs'] } },
     { name: 'enabled=false', tools: { enabled: false } }
   ])('全局工具配置变更会撤销远程专属工具（$name）', async ({ tools }) => {
+    registerToolRevocationRequest('desktop-request', 'desktop')
     registerToolRevocationRequest('feishu-request', 'feishu')
     registerToolRevocationRequest('wechat-request', 'wechat')
+    registerToolRevocationRequest('automation-request', 'automation')
     try {
       await ipc.getHandler('config:set')?.(null, { tools })
+      expect(isToolRevoked('desktop-request', 'list_work_dirs')).toBe(true)
       expect(isToolRevoked('feishu-request', 'list_work_dirs')).toBe(true)
       expect(isToolRevoked('wechat-request', 'list_work_dirs')).toBe(true)
+      expect(isToolRevoked('automation-request', 'list_work_dirs')).toBe(true)
     } finally {
+      clearToolRevocationRequest('desktop-request')
       clearToolRevocationRequest('feishu-request')
       clearToolRevocationRequest('wechat-request')
+      clearToolRevocationRequest('automation-request')
     }
   })
 })

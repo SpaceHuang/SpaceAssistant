@@ -181,6 +181,19 @@ export function submitToolConfirmResponse(requestId: string, toolUseId: string, 
   return { accepted: true, outcome }
 }
 
+/** Cancel one pending confirmation waiter without affecting concurrent tool confirmations. */
+export function cancelToolConfirm(requestId: string, toolUseId: string): boolean {
+  const key = confirmKey(requestId, toolUseId)
+  const waiter = pending.get(key)
+  if (!waiter) return false
+  if (waiter.status === 'committing') return cancelReservedToolConfirm(requestId, toolUseId)
+  clearTimeout(waiter.timeoutId)
+  pending.delete(key)
+  waiter.status = 'cancelled'
+  waiter.resolve('cancelled')
+  return true
+}
+
 /** 独占确认项，写入期间超时/并发响应不得消费或撤销该项。 */
 export function reserveToolConfirmResponse(requestId: string, toolUseId: string): boolean {
   const waiter = pending.get(confirmKey(requestId, toolUseId))

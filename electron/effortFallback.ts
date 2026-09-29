@@ -1,5 +1,7 @@
 import type { AgentReasoningEffort } from '../src/shared/agent/invocation'
-import type { ToolLoopOutputConfig, ToolLoopThinkingConfig } from './claudeToolLoopStreamParams'
+
+export type ToolLoopThinkingConfig = { type: 'adaptive' } | { type: 'disabled' }
+export type ToolLoopOutputConfig = { effort: AgentReasoningEffort }
 
 /**
  * 档位 → wire 参数映射（需求 §7.3）：

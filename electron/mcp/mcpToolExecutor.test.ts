@@ -195,7 +195,7 @@ describe('mcpToolExecutor', () => {
     expect(result.error).toMatch(/参数/)
   })
 
-  it('cancels the call on abort and returns a safe error', async () => {
+  it('cancels the call on abort and rejects with uncertain outcome after MCP accepted the request', async () => {
     const dir = makeTempDir()
     const script = writeEchoServer(dir, ECHO_SLOW)
     const profile = makeProfile('server-1', script)
@@ -220,17 +220,38 @@ describe('mcpToolExecutor', () => {
     const resultPromise = executor.execute({ text: 'x' }, makeContext({ signal: controller.signal }))
     await new Promise((resolve) => setTimeout(resolve, 500))
     controller.abort()
-    const result = await resultPromise
+    await expect(resultPromise).rejects.toMatchObject({ name: 'McpToolExecutionUncertainError' })
     await manager.shutdown()
-
-    expect(result.success).toBe(false)
-    expect(result.error).toMatch(/超时或已取消/)
     // Server 应收到 notifications/cancelled
     const events = fs.readFileSync(path.join(dir, 'events.log'), 'utf8')
     expect(events).toContain('notifications/cancelled')
   })
 
-  it('times out the call when the server is slow', async () => {
+  it('rejects with uncertain outcome when an in-flight MCP call is aborted', async () => {
+    const controller = new AbortController()
+    let enteredCall!: () => void
+    const atCall = new Promise<void>((resolve) => { enteredCall = resolve })
+    const callTool = async (_request: unknown, _schema: unknown, options: { signal: AbortSignal }) => {
+      enteredCall()
+      return new Promise<never>((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(Object.assign(new Error('MCP request cancelled'), { name: 'AbortError' })), { once: true })
+      })
+    }
+    const executor = createMcpToolExecutor({
+      serverId: 'server-uncertain', serverName: 'Docs', originalName: 'publish', mappedName: 'mcp_docs_publish', description: '', inputSchema: { type: 'object' }
+    }, {
+      getSession: async () => ({ client: { callTool } }) as never,
+      getProfile: () => makeProfile('server-uncertain', 'unused'),
+      invalidateSession: async () => undefined
+    })
+    const pending = executor.execute({ text: 'publish' }, makeContext({ signal: controller.signal }))
+    await atCall
+    controller.abort()
+
+    await expect(pending).rejects.toMatchObject({ name: 'McpToolExecutionUncertainError' })
+  })
+
+  it('times out the call with uncertain outcome when the server is slow', async () => {
     const dir = makeTempDir()
     const script = writeEchoServer(dir, ECHO_SLOW)
     const profile = { ...makeProfile('server-1', script), timeoutSec: 1 }
@@ -252,16 +273,15 @@ describe('mcpToolExecutor', () => {
     )
 
     const started = Date.now()
-    const result = await executor.execute({ text: 'x' }, makeContext())
+    const result = executor.execute({ text: 'x' }, makeContext())
+    await expect(result).rejects.toMatchObject({ name: 'McpToolExecutionUncertainError' })
     const elapsed = Date.now() - started
     await manager.shutdown()
 
-    expect(result.success).toBe(false)
-    expect(result.error).toMatch(/超时|取消/)
     expect(elapsed).toBeLessThan(3000)
   })
 
-  it('surfaces the raw timeout message and recent diagnostics to the model', async () => {
+  it('keeps sanitized timeout diagnostics on an uncertain in-flight request', async () => {
     const failingSession = {
       serverId: 'server-1',
       client: {
@@ -299,13 +319,15 @@ describe('mcpToolExecutor', () => {
       }
     )
 
-    const result = await executor.execute({ text: 'x' }, makeContext())
-    expect(result.success).toBe(false)
-    expect(result.error).toContain('Request timed out after 60000ms')
-    expect(result.error).toContain('[stdio-stderr]')
-    expect(result.error).toContain('AuthRequired')
+    const result = executor.execute({ text: 'x' }, makeContext())
+    await expect(result).rejects.toMatchObject({
+      name: 'McpToolExecutionUncertainError',
+      safeMessage: expect.stringContaining('Request timed out after 60000ms')
+    })
+    await expect(result).rejects.toMatchObject({ safeMessage: expect.stringContaining('[stdio-stderr]') })
+    await expect(result).rejects.toMatchObject({ safeMessage: expect.stringContaining('AuthRequired') })
     // ANSI 转义序列应被剥离
-    expect(result.error).not.toContain('\x1b')
+    await expect(result).rejects.not.toMatchObject({ safeMessage: expect.stringContaining('\x1b') })
   })
 
   it('classifies AuthRequired as an auth failure and invalidates the session', async () => {
@@ -342,10 +364,8 @@ describe('mcpToolExecutor', () => {
       }
     )
 
-    const result = await executor.execute({ text: 'x' }, makeContext())
-    expect(result.success).toBe(false)
-    expect(result.error).toContain('认证失效')
-    expect(result.error).toContain('AuthRequired')
+    const result = executor.execute({ text: 'x' }, makeContext())
+    await expect(result).rejects.toMatchObject({ name: 'McpToolExecutionUncertainError', safeMessage: expect.stringContaining('AuthRequired') })
     expect(invalidated).toBe(1)
   })
 
@@ -381,10 +401,8 @@ describe('mcpToolExecutor', () => {
       }
     )
 
-    const result = await executor.execute({ text: 'x' }, makeContext())
-    expect(result.success).toBe(false)
-    expect(result.error).toContain('暂时不可达')
-    expect(result.error).toContain('Transport channel closed')
+    const result = executor.execute({ text: 'x' }, makeContext())
+    await expect(result).rejects.toMatchObject({ name: 'McpToolExecutionUncertainError', safeMessage: expect.stringContaining('Transport channel closed') })
     expect(invalidated).toBe(1)
   })
 })

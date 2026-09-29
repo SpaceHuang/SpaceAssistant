@@ -4,6 +4,12 @@ import type { TurnRuntime } from '../turnRuntime'
 
 type RemoteResult = { ok: boolean; outcome?: 'cancelled' | 'timed-out' }
 
+function persistedUsageFromRemoteResult(result: RemoteResult): unknown {
+  if (!('usageJson' in result) || typeof result.usageJson !== 'string') return undefined
+  try { return JSON.parse(result.usageJson) }
+  catch { return undefined }
+}
+
 // 保留本进程内已完成 remote 调用的返回值；重试如果被 Coordinator 判定为已终态，
 // 不再重新调用 provider，但仍需向上层返回与首次调用一致的业务结果。
 const completedResults = new Map<string, RemoteResult>()
@@ -30,7 +36,9 @@ export async function executeRemoteTurn<T extends RemoteResult>(args: {
             ? { type: 'source-timeout' }
             : { type: 'source-failed' }
       args.runtime!.consumeForRequest(args.requestId, terminal)
-      return { outcome: result.ok ? 'completed' as const : 'failed' as const }
+      const usage = persistedUsageFromRemoteResult(result)
+      const outcome = result.ok ? 'completed' as const : result.outcome ?? 'failed' as const
+      return { outcome, ...(usage !== undefined ? { usage } : {}) }
     } catch (error) {
       args.runtime!.consumeForRequest(args.requestId, { type: 'source-failed' })
       throw error
@@ -41,8 +49,14 @@ export async function executeRemoteTurn<T extends RemoteResult>(args: {
   if (completed) return completed
   if (execution && 'outcome' in execution) {
     // 跨进程恢复时 Runtime 只有持久化 terminal outcome，没有首次 provider 的
-    // 业务摘要；向 remote 调用方返回稳定的成功/失败契约，禁止重新执行 provider。
-    return { ok: execution.outcome === 'completed' } as T
+    // 进程内结果；从 prepare 恢复的 assistant checkpoint 回填成功回复，禁止重新执行 provider。
+    const summary = args.prepared.assistantMessage.content
+    return {
+      ok: execution.outcome === 'completed',
+      ...((execution.outcome === 'cancelled' || execution.outcome === 'timed-out') ? { outcome: execution.outcome } : {}),
+      ...(execution.outcome === 'completed' && typeof summary === 'string' ? { summary } : {}),
+      ...(execution.usage !== undefined ? { usageJson: JSON.stringify(execution.usage) } : {})
+    } as T
   }
   throw new Error('REMOTE_TURN_RESULT_MISSING')
 }

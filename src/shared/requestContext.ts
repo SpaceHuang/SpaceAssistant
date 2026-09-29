@@ -31,6 +31,8 @@ export type RequestContextPayload = {
   ruleVersion: string
   decisionFingerprint: string
   planningStatus: 'target_reached' | 'fits_without_headroom' | 'exhausted' | 'uncompressible'
+  /** Distinguishes the response-anchored projection from the initial request snapshot. */
+  projectionStage?: 'final'
 }
 
 export type RequestHeaderPayload = {

@@ -1,7 +1,5 @@
 import { createHash } from 'crypto'
 import type { ToolExecutionContext as RuntimeToolExecutionContext } from './types'
-import type { ToolExecutor } from './types'
-import { BUILTIN_TOOL_METADATA } from '../../src/shared/builtinToolMetadata'
 
 const preparedInvocationBrand = Symbol('PreparedInvocation')
 
@@ -30,6 +28,8 @@ export interface PreparedInvocation {
   readonly toolUseId: string
   readonly toolName: string
   readonly kind: 'direct' | 'planned'
+  /** Hash of the canonical raw tool input accepted by parseInput; no input data is exposed. */
+  readonly inputDigest: string
   readonly planDigest: string
   readonly factsDigest: string
   readonly displayDigest: string
@@ -53,6 +53,8 @@ export interface InvocationHandle {
   confirm(): void
   beginValidation(): void
   finishValidation(): void
+  /** Run the host prepared-plan validator before dispatch admission is claimed. */
+  validatePrepared(context: ToolExecutionContext): Promise<void>
   fail(): void
   /** 终态后释放私有 plan/execute 闭包引用；可重复调用。 */
   release(): void
@@ -97,61 +99,20 @@ export interface PlannedToolSpec<I, P, O> {
 
 export class TypedToolRegistry {
   private readonly tools = new Map<string, RegisteredTool>()
-  private readonly legacyExecutors = new Map<string, ToolExecutor>()
-  private readonly generatedLegacyDirectNames = new Set<string>()
 
   register(tool: RegisteredTool): void {
     if (this.tools.has(tool.name)) {
-      if (this.generatedLegacyDirectNames.has(tool.name) && tool.kind === 'planned') {
-        this.tools.set(tool.name, tool)
-        this.generatedLegacyDirectNames.delete(tool.name)
-        return
-      }
       throw new Error(`TOOL_ALREADY_REGISTERED:${tool.name}`)
     }
-    // planned + legacy 是迁移期间同一工具的两个执行视图，允许共存；同一槽位仍拒绝重复。
     this.tools.set(tool.name, tool)
-  }
-
-  /** 兼容尚未迁移到 RegisteredTool 的 direct executor；仍受同一 registry 名称唯一性约束。 */
-  registerLegacyExecutor(executor: ToolExecutor): void {
-    if (this.legacyExecutors.has(executor.name)) {
-      throw new Error(`TOOL_ALREADY_REGISTERED:${executor.name}`)
-    }
-    this.legacyExecutors.set(executor.name, executor)
-    // 迁移期间保留旧 executor 出口，同时为未被 planned registration
-    // 占用的工具提供 typed direct 视图。direct 视图不复制输入或运行时状态，
-    // 只在 coordinator execute 阶段把已注入的 runtimeContext 交给旧实现。
-    if (!this.tools.has(executor.name)) {
-      const actionClass = executor.actionClass ?? BUILTIN_TOOL_METADATA[executor.name]?.actionClass
-      this.tools.set(executor.name, defineDirectTool({
-        name: executor.name,
-        ...(actionClass ? { actionClass } : {}),
-        parseInput: (raw) => raw as Record<string, unknown>,
-        ...(executor.resourceKeys ? { resourceKeys: (input, context) => context ? executor.resourceKeys!(input as Record<string, unknown>, context) : undefined } : {}),
-        execute: async (input, context) => executor.execute(
-          input as Record<string, unknown>,
-          context.runtimeContext ?? context as unknown as Parameters<ToolExecutor['execute']>[1]
-        )
-      }))
-      this.generatedLegacyDirectNames.add(executor.name)
-    }
   }
 
   get(name: string): RegisteredTool | undefined {
     return this.tools.get(name)
   }
 
-  getLegacyExecutor(name: string): ToolExecutor | undefined {
-    return this.legacyExecutors.get(name)
-  }
-
   entries(): readonly RegisteredTool[] {
     return [...this.tools.values()]
-  }
-
-  legacyEntries(): readonly ToolExecutor[] {
-    return [...this.legacyExecutors.values()]
   }
 }
 
@@ -164,6 +125,41 @@ function stableSerialize(value: unknown): string {
 
 function digest(value: unknown): string {
   return createHash('sha256').update(stableSerialize(value)).digest('hex')
+}
+
+function assertCanonicalJsonInput(value: unknown): void {
+  const seen = new WeakSet<object>()
+  const visit = (current: unknown): void => {
+    if (current === null || typeof current === 'string' || typeof current === 'boolean') return
+    if (typeof current === 'number') {
+      if (Number.isFinite(current)) return
+      throw new Error('INVALID_CANONICAL_TOOL_INPUT')
+    }
+    if (typeof current !== 'object') throw new Error('INVALID_CANONICAL_TOOL_INPUT')
+    if (seen.has(current)) throw new Error('INVALID_CANONICAL_TOOL_INPUT')
+    seen.add(current)
+
+    const array = Array.isArray(current)
+    const prototype = Object.getPrototypeOf(current)
+    if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) {
+      throw new Error('INVALID_CANONICAL_TOOL_INPUT')
+    }
+    const keys = Reflect.ownKeys(current)
+    if (keys.some((key) => typeof key === 'symbol')) throw new Error('INVALID_CANONICAL_TOOL_INPUT')
+    const propertyKeys = array ? keys.filter((key) => key !== 'length') : keys
+    if (array && propertyKeys.length !== current.length) throw new Error('INVALID_CANONICAL_TOOL_INPUT')
+    for (const key of propertyKeys) {
+      const descriptor = Object.getOwnPropertyDescriptor(current, key)
+      if (!descriptor?.enumerable || !('value' in descriptor)) throw new Error('INVALID_CANONICAL_TOOL_INPUT')
+      if (array && (typeof key !== 'string' || !/^(0|[1-9]\d*)$/.test(key) || Number(key) >= current.length)) {
+        throw new Error('INVALID_CANONICAL_TOOL_INPUT')
+      }
+      visit(descriptor.value)
+    }
+  }
+
+  try { visit(value) }
+  catch { throw new Error('INVALID_CANONICAL_TOOL_INPUT') }
 }
 
 function deepFreeze<T>(value: T): T {
@@ -183,7 +179,9 @@ function makeHandle(
   facts: unknown = payload,
   display: unknown = payload,
   initialState: InvocationState = 'awaiting-confirm',
-  initialHistory: readonly InvocationState[] = []
+  initialHistory: readonly InvocationState[] = [],
+  validateFn: (context: ToolExecutionContext) => Promise<void> | void = () => undefined,
+  inputDigest: string = digest(payload)
 ): InvocationHandle {
   let confirmed = false
   let executed = false
@@ -201,7 +199,7 @@ function makeHandle(
   const prepared = Object.freeze({
     [preparedInvocationBrand]: true as const,
     invocationId: crypto.randomUUID(), requestId: context.requestId, toolUseId: context.toolUseId,
-    toolName: name, kind, planDigest: digest(frozenPayload), factsDigest: digest(frozenFacts), displayDigest: digest(frozenDisplay)
+    toolName: name, kind, inputDigest, planDigest: digest(frozenPayload), factsDigest: digest(frozenFacts), displayDigest: digest(frozenDisplay)
   })
   return {
     prepared,
@@ -223,6 +221,10 @@ function makeHandle(
     finishValidation: () => {
       if (state !== 'validating') throw new Error('INVOCATION_NOT_VALIDATING')
       transition('confirmed')
+    },
+    validatePrepared: async (context) => {
+      if (state !== 'validating') throw new Error('INVOCATION_NOT_VALIDATING')
+      await validateFn(context)
     },
     fail: () => {
       if (state !== 'settled' && state !== 'failed') transition('failed')
@@ -280,8 +282,10 @@ function makePlanningHandle(begin: () => Promise<InvocationHandle>): PlanningHan
 
 export function defineDirectTool<I, O>(spec: DirectToolSpec<I, O>): RegisteredTool {
   const begin = async (raw: unknown, context: InvocationContext): Promise<InvocationHandle> => {
+    assertCanonicalJsonInput(raw)
+    const inputDigest = digest(raw)
     const input = spec.parseInput(raw)
-    return makeHandle(spec.name, 'direct', input, context, (execution) => spec.execute(input, execution))
+    return makeHandle(spec.name, 'direct', input, context, (execution) => spec.execute(input, execution), input, input, undefined, [], undefined, inputDigest)
   }
   return {
     name: spec.name,
@@ -295,22 +299,29 @@ export function defineDirectTool<I, O>(spec: DirectToolSpec<I, O>): RegisteredTo
 
 export function definePlannedTool<I, P, O>(spec: PlannedToolSpec<I, P, O>): RegisteredTool {
   const begin = async (raw: unknown, context: InvocationContext): Promise<InvocationHandle> => {
+    assertCanonicalJsonInput(raw)
+    const inputDigest = digest(raw)
     const input = spec.parseInput(raw)
     const signal = (context as InvocationContext & { signal?: AbortSignal }).signal ?? new AbortController().signal
     if (signal.aborted) throw new Error('PLAN_CANCELLED')
     const plan = await spec.plan(input, { ...context, signal })
     if (signal.aborted) throw new Error('PLAN_CANCELLED')
     const frozenPlan = structuredClone(plan)
+    const validate = async (execution: ToolExecutionContext): Promise<void> => {
+      if (spec.validate) await spec.validate(frozenPlan, execution)
+    }
     return makeHandle(
       spec.name, 'planned', frozenPlan, context,
       async (execution) => {
-        if (spec.validate) await spec.validate(frozenPlan, execution)
+        await validate(execution)
         return spec.execute(frozenPlan, execution)
       },
       spec.facts ? spec.facts(frozenPlan) : frozenPlan,
       spec.display ? spec.display(frozenPlan) : frozenPlan,
       'planned',
-      ['planning']
+      ['planning'],
+      validate,
+      inputDigest
     )
   }
   return {
