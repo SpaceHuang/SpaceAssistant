@@ -23,6 +23,20 @@ export function registerInvocationAnthropicRoute(input: {
     maxOutputTokens: baseline.maxTokens,
     reasoning: baseline.reasoning
   })
+  const existing = registry.getRoute(profile.routeId)
+  if (existing) {
+    const matches = existing.providerId === 'pi-ai-anthropic-messages' &&
+      existing.profile.routeId === profile.routeId &&
+      existing.profile.protocol === profile.protocol &&
+      existing.profile.dialect === profile.dialect &&
+      existing.profile.adapterVersion === profile.adapterVersion &&
+      existing.profile.modelId === profile.modelId &&
+      existing.profile.endpoint === profile.endpoint
+    if (!matches) throw new Error('PROVIDER_ROUTE_IDENTITY_COLLISION')
+    // Route IDs include the credential identity. Re-registering an identical route would
+    // increment registry generation and invalidate calls from concurrent invocations.
+    return profile.routeId
+  }
   return registerDesktopAnthropicRoute(registry, profile)
 }
 

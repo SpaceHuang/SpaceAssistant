@@ -52,6 +52,16 @@ describe('registerInvocationAnthropicRoute', () => {
     })
   })
 
+  it('keeps an identical route stable across overlapping invocations', () => {
+    const registry = new ModelProviderRegistry()
+    const input = { modelId: 'deepseek-flash', endpoint: 'https://api.deepseek.com/anthropic', credentialRef: 'llm-service:shared' }
+    const routeId = registerInvocationAnthropicRoute(input, registry)!
+    const prepared = registry.prepare(routeId, { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 })
+
+    expect(registerInvocationAnthropicRoute(input, registry)).toBe(routeId)
+    expect(() => registry.getProvider(prepared)).not.toThrow()
+  })
+
   it('does not infer Anthropic compatibility from a generic DeepSeek endpoint', () => {
     const registry = new ModelProviderRegistry()
     expect(registerInvocationAnthropicRoute({
