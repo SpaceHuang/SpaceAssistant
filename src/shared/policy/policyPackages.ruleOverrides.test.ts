@@ -211,6 +211,9 @@ describe('G10：远程 lane 零变化（desktop-only 覆盖不外溢）', () => 
 })
 
 describe('G11：硬编码 lane 白名单防御（负向）', () => {
+  // 注意（评审 P3）：本用例临时 mutate LANE_PROFILES 模块单例并 try/finally 恢复，
+  // 依赖同文件内顺序执行（renderer 项目 threads 池按文件分片、文件内串行）；
+  // 若未来改为文件内并行，需改为依赖注入或 per-test 模块隔离。
   it('即便人为给远程 profile 配 ruleActionOverrides，也不生效', () => {
     const wechatProfile = LANE_PROFILES.wechat as { ruleActionOverrides?: unknown }
     const feishuProfile = LANE_PROFILES.feishu as { ruleActionOverrides?: unknown }
@@ -228,8 +231,26 @@ describe('G11：硬编码 lane 白名单防御（负向）', () => {
 })
 
 describe('G12：「loose 不得比 standard 严」守卫（Q9 选法 A，防未来漂移）', () => {
-  /** 定义域：桌面可命中的非 locked ask 规则 = 数组内 6 条 + 合成兜底（v13 评审 D1）。 */
-  const DOMAIN = [
+  /**
+   * 定义域从基线规则**派生**（评审 P3）：桌面可命中的非 locked ask 规则
+   * （invocation 层、lane 未限定或含 desktop）+ 合成兜底——未来新增桌面 ask 规则
+   * 自动纳入守卫，无需人工同步清单；派生条件意外缩水由下方锚点用例兜住（v14 盘点 = 7 条）。
+   */
+  const DOMAIN: string[] = [
+    ...DEFAULT_POLICY_RULES
+      .filter(
+        (r) =>
+          r.when === 'invocation' &&
+          r.action === 'ask' &&
+          !r.locked &&
+          (!r.match?.lane || r.match.lane.includes('desktop'))
+      )
+      .map((r) => r.id),
+    FALLBACK_ID
+  ]
+
+  /** 方案 v14 盘点的定义域（数组内 6 条 + 合成兜底）：派生清单的**最小域**锚点。 */
+  const MIN_DOMAIN = [
     'script-network-ask-desktop',
     'browser-act-danger-ask',
     'browser-act-ask-desktop',
@@ -238,6 +259,12 @@ describe('G12：「loose 不得比 standard 严」守卫（Q9 选法 A，防未�
     'mcp-tool-ask',
     FALLBACK_ID
   ]
+
+  it('守卫定义域完整性锚点：派生清单必须覆盖方案 v14 盘点的 7 条（防派生条件缩水）', () => {
+    for (const id of MIN_DOMAIN) {
+      expect(DOMAIN, id).toContain(id)
+    }
+  })
 
   it('standard 生效为 auto-evaluator 的规则，loose 生效须为 auto-evaluator 或 allow', () => {
     const standardResolved = resolvePolicyRules({ lane: 'desktop', packages: { desktop: 'standard' }, rules: DEFAULT_POLICY_RULES })
