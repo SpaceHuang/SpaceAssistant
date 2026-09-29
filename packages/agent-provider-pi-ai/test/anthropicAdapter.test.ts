@@ -76,6 +76,24 @@ describe('PiAiAnthropicProvider', () => {
     expect(Object.keys(options).some((key) => /key/i.test(key))).toBe(true)
   })
 
+  it('awaits lazy async transcript normalization before calling the provider stream', async () => {
+    let receivedContext: unknown
+    const normalizedContext = { messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }] }
+    const bridge: PiAnthropicBridge = {
+      normalizeContext: async () => normalizedContext,
+      stream: async function* (_model, context) {
+        receivedContext = context
+        if (!Array.isArray((context as { messages?: unknown }).messages)) throw new Error('messages is not iterable')
+        yield { type: 'done', reason: 'stop', message: { usage: { input: 1, output: 1 } } }
+      }
+    }
+    const provider = new PiAiAnthropicProvider({ profiles: [profile], bridge })
+    const chunks = []
+    for await (const chunk of provider.stream(prepared())) chunks.push(chunk)
+    expect(receivedContext).toEqual(normalizedContext)
+    expect(chunks).toContainEqual({ type: 'finish', reason: 'stop' })
+  })
+
   it('preserves signed thinking history and maps canonical effort to pi-ai', async () => {
     let normalized: unknown
     let options: unknown

@@ -26,7 +26,7 @@ type PiModel = {
 }
 type PiCallOptions = { apiKey: string; signal?: AbortSignal; maxRetries: 0; maxTokens: number; thinkingEnabled?: boolean; thinkingBudgetTokens?: number; effort?: 'low' | 'medium' | 'high' | 'max' }
 export type PiAnthropicBridge = {
-  normalizeContext(context: { messages: unknown[]; tools?: Array<{ name: string; description: string; parameters: unknown; constrainedSampling?: { type: 'json_schema'; strict: 'prefer' | 'require' } }> }): unknown
+  normalizeContext(context: { messages: unknown[]; tools?: Array<{ name: string; description: string; parameters: unknown; constrainedSampling?: { type: 'json_schema'; strict: 'prefer' | 'require' } }> }): unknown | Promise<unknown>
   stream(model: PiModel, context: unknown, options: PiCallOptions): AsyncIterable<PiEvent>
 }
 
@@ -98,7 +98,7 @@ export class PiAiAnthropicProvider implements ModelProvider {
       maxTokens: profile.modelCapabilities.maxOutputTokens,
       compat: { supportsStrictTools: profile.modelCapabilities.strictJsonSchema, allowEmptySignature: new URL(profile.endpoint).hostname === 'api.deepseek.com' }
     }
-    const context = bridge.normalizeContext({
+    const context = await bridge.normalizeContext({
       messages: serializeCanonicalMessages(call.request.messages, profile.modelId),
       ...(call.request.tools ? { tools: call.request.tools.map((tool) => ({
         name: tool.name,
