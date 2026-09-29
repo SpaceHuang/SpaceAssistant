@@ -563,8 +563,9 @@ export interface PolicyEngineDeps {
   autoEvaluator?: AutoEvaluator
   /**
    * 档位动作变换（§2.1 LANE_PROFILES 按当前 lane+档位绑定；缺省恒等）。
-   * 规则集变换由 resolvePolicyRules 完成，此项仅用于引擎合成规则（default-write-execute-ask）
+   * 规则集变换由 resolvePolicyRules 完成，此项仅用于引擎产出层（数组规则与合成规则
+   * default-write-execute-ask——须携带 id 供按 ruleId 档位覆盖消费）
    * ——extraction-failed 兜底不参与变换（不变换例外）。
    */
-  transform?: (rule: Pick<PolicyRule, 'action' | 'locked'>) => PolicyAction
+  transform?: (rule: Pick<PolicyRule, 'action' | 'locked'> & { id?: string }) => PolicyAction
 }

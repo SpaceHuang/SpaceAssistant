@@ -318,7 +318,10 @@ function applyDefault(
   }
   // default-write-execute-ask 照常参与档位变换（desktop standard → auto-evaluator，§5.2）：
   // 变换后先走快通道（确定性预判），未裁决交审批 Agent（answerer=agent）。
-  const effective = deps.transform ? deps.transform({ action: 'ask' }) : 'ask'
+  // 合成规则须携带 id：按 ruleId 档位覆盖（ruleActionOverrides）依赖 id 命中（如 desktop loose → allow）。
+  const effective = deps.transform
+    ? deps.transform({ id: 'default-write-execute-ask', action: 'ask' })
+    : 'ask'
   if (effective === 'auto-evaluator') {
     if (deps.autoEvaluator) {
       const res = deps.autoEvaluator(facts, context)
