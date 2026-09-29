@@ -26,7 +26,8 @@ const mockReadSessionEvents = vi.fn(async () => [])
 const capturedStreamSystems: (string | undefined)[] = []
 
 vi.mock('./toolChatLoop', () => ({
-  runToolChatSession: (...args: unknown[]) => mockRunToolChatSession(...args)
+  runToolChatSession: (...args: unknown[]) => mockRunToolChatSession(...args),
+  DESKTOP_TOOL_LOOP_MAX_ROUNDS: 50
 }))
 
 vi.mock('./sessionEvents', () => ({
