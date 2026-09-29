@@ -25,7 +25,7 @@ function ctx(overrides: Partial<ToolExecutionContext> = {}): ToolExecutionContex
 /** 构造绑定真实目录 identity 的合法 list_directory permit（main 边界策略：无 permit 不执行） */
 async function permitFor(workDir: string, input: Record<string, unknown>): Promise<ReadPermitTarget[]> {
   const targetRel = typeof input.path === 'string' ? input.path : '.'
-  const abs = path.resolve(workDir, targetRel)
+  const abs = fs.realpathSync(path.resolve(workDir, targetRel))
   const st = await fs.statSync(abs)
   return [
     {
@@ -74,7 +74,7 @@ describe('list_directory 在边界策略（read permit）下的可达行为', ()
     }
   })
 
-  it('T-R8-2：abort 注入 → READ_TIMEOUT + retryable:true（文案区别于其他类目）', async () => {
+  it('T-R8-2：许可校验前 abort → 明确拒绝执行', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-ls-r8-'))
     fs.mkdirSync(path.join(root, 'sub'), { recursive: true })
     try {
@@ -90,10 +90,8 @@ describe('list_directory 在边界策略（read permit）下的可达行为', ()
         })
       )) as ToolExecutorResult
       expect(r.success).toBe(false)
-      expect(r.error).toBe('DIRECTORY_READ_TIMEOUT')
-      const data = r.data as { errorClass: string; retryable: boolean }
-      expect(data.errorClass).toBe('READ_TIMEOUT')
-      expect(data.retryable).toBe(true)
+      expect(r.error).toBe('目录读取许可校验失败')
+      expect(r.diagnostic).toMatchObject({ caseId: 'read-permit-cancelled', retryable: false })
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

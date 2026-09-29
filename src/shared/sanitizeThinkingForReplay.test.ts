@@ -6,4 +6,8 @@ describe('sanitizeThinkingForReplay', () => {
     const messages = [{ role: 'assistant', content: [{ type: 'thinking', thinking: 'gateway' }, { type: 'thinking', thinking: 'signed', signature: 'sig' }, { type: 'tool_use', id: 't' }] }]
     expect(sanitizeThinkingForReplay(messages)[0]?.content).toEqual([{ type: 'thinking', thinking: 'signed', signature: 'sig' }, { type: 'tool_use', id: 't' }])
   })
+  it('preserves unsigned thinking for providers that require thinking passback', () => {
+    const messages = [{ role: 'assistant', content: [{ type: 'thinking', thinking: 'reasoning' }, { type: 'tool_use', id: 't' }] }]
+    expect(sanitizeThinkingForReplay(messages, true)).toEqual(messages)
+  })
 })

@@ -881,8 +881,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           decision: { ...context.decision, answerer: 'user' },
           ...(confirmDiff ? { confirmDiff } : {}),
           autoApproveFallback: {
-            reasonCode: cause === 'timeout' ? 'approval_timeout' : 'approval_unavailable',
-            reason: approvalFallbackReasonFor(cause === 'timeout' ? 'timeout' : 'unavailable', materials.locale)
+            reasonCode: cause === 'timeout' ? 'approval_timeout' : cause === 'agent-undetermined' ? 'approval_undetermined' : 'approval_unavailable',
+            reason: approvalFallbackReasonFor(cause === 'agent-undetermined' ? 'agent-undetermined' : cause === 'timeout' ? 'timeout' : 'unavailable', materials.locale)
           },
         })
         const userOutcome = await userResponse

@@ -58,10 +58,12 @@ export const runShellRegisteredTool: RegisteredTool = definePlannedTool<
       environmentFingerprint: prepared.dependencySnapshot.environmentFingerprint,
       planDigest: prepared.planDigest
     })
-    if (execution.signal.aborted && result.error === 'SHELL_CANCELLED') {
+    if (execution.signal.aborted && result.data && typeof result.data === 'object' &&
+      'terminationReason' in result.data && result.data.terminationReason === 'user_cancel') {
       throw new RunShellExecutionUncertainError()
     }
-    if (result.error === 'SHELL_TIMEOUT' || result.error === 'OUTPUT_LIMIT_REACHED') {
+    if (result.error === 'SHELL_TIMEOUT' || result.error === 'OUTPUT_LIMIT_REACHED' || result.data && typeof result.data === 'object' &&
+      'terminationReason' in result.data && result.data.terminationReason === 'timeout') {
       throw new RunShellExecutionUncertainError()
     }
     if (result.data && typeof result.data === 'object' &&

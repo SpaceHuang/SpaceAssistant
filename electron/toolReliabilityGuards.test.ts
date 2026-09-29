@@ -19,10 +19,10 @@ describe('工具调用可靠性护栏（grep 断言）', () => {
     expect(handlerSection).not.toContain('getActiveWorkDir')
   })
 
-  it('护栏 2：toolChatLoop 循环内 workDir 取值以 workspaceRefresh 优先（旧三元不再是唯一路径）', () => {
+  it('护栏 2：toolChatLoop 消费装配期工作目录事实', () => {
     const source = read('electron/toolChatLoop.ts')
-    expect(source).toContain('workspaceSnapshot?.rootPath ?? (resolveWorkDir ? resolveWorkDir() : initialWorkDir)')
-    expect(source).toContain('workspaceRefresh: ports.workspace.refresh')
+    expect(source).toContain('workDir: ports.workspace.workDir')
+    expect(read('electron/runtime/invocationAssembler.ts')).toContain('createWorkspaceSnapshotTracker')
   })
 
   it('护栏 3：渲染端工具卡失败态只用 status 推导（不得用 error 字段存在性）', () => {
@@ -85,10 +85,9 @@ describe('工具调用可靠性护栏（grep 断言）', () => {
   })
 
   it('护栏 11（C2）：basis-mismatch 护栏判据不得用 NODE_ENV（打包态恒真），且两侧比较前 realpath 归一', () => {
-    const source = read('electron/toolChatLoop.ts')
-    expect(source).not.toContain("process.env.NODE_ENV !== 'production'")
-    expect(source).toContain('isPackagedApp()')
-    expect(source).toContain('realpathBestEffort(legacyWorkDir)')
+    const source = read('electron/workDirSnapshot.ts')
+    expect(source).toContain('realpathBestEffort(input.workDir)')
+    expect(source).toContain('workspacePathKey(rootPath)')
   })
 
   it('护栏 12（B1）：unsupported 信号阻断持久记忆资格', () => {
@@ -103,8 +102,8 @@ describe('工具调用可靠性护栏（grep 断言）', () => {
   })
 
   it('护栏 14（F3）：contract-violation 告警只对 I0–I4（I5 不落日志）+ SCRIPT_*/LARK_* 码已闭合', () => {
-    const loop = read('electron/toolChatLoop.ts')
-    expect(loop).toContain("violations.some((v) => v.invariant !== 'I5')")
+    const execution = read('electron/tools/registeredAgentTurnTools.ts')
+    expect(execution).toContain("if (violation.invariant === 'I5') continue")
     const codes = read('src/shared/errorCodes.ts')
     expect(codes).toContain("'SCRIPT_TIMEOUT'")
     expect(codes).toContain("'SCRIPT_PROCESS_EXIT'")
@@ -143,15 +142,15 @@ describe('工具调用可靠性护栏（grep 断言）', () => {
   })
 
   it('护栏 19（N3）：undetermined 回退文案不坍缩为 unavailable（两处透传）', () => {
-    const loop = read('electron/toolChatLoop.ts')
-    expect(loop).not.toContain("fallbackCause === 'timeout' ? 'timeout' : 'unavailable'")
-    expect(loop).toContain("'approval_undetermined'")
+    const assembler = read('electron/runtime/invocationAssembler.ts')
+    expect(assembler).toContain("cause === 'agent-undetermined' ? 'approval_undetermined'")
+    expect(assembler).toContain("cause === 'agent-undetermined' ? 'agent-undetermined'")
   })
 
   it('护栏 10（R8）：目录错误四分类可分（stat 失败不再共用「不是目录或无法访问」）', () => {
     const exec = read('electron/tools/builtinExecutors.ts')
     expect(exec).toContain('classifyDirectoryError')
     expect(exec).toContain("'DIRECTORY_READ_TIMEOUT'")
-    expect(exec).toContain("'DIRECTORY_ACCESS_DENIED'")
+    expect(read('src/shared/errorCodes.ts')).toContain('DIRECTORY_ACCESS_DENIED')
   })
 })

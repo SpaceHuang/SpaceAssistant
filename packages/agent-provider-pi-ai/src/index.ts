@@ -22,7 +22,7 @@ type PiEvent =
 type PiModel = {
   id: string; name: string; api: 'anthropic-messages'; provider: 'anthropic'; baseUrl: string; reasoning: boolean
   input: ('text' | 'image')[]; cost: { input: number; output: number; cacheRead: number; cacheWrite: number }
-  contextWindow: number; maxTokens: number; compat?: { supportsStrictTools?: boolean }
+  contextWindow: number; maxTokens: number; compat?: { supportsStrictTools?: boolean; allowEmptySignature?: boolean }
 }
 type PiCallOptions = { apiKey: string; signal?: AbortSignal; maxRetries: 0; maxTokens: number; thinkingEnabled?: boolean; thinkingBudgetTokens?: number; effort?: 'low' | 'medium' | 'high' | 'max' }
 export type PiAnthropicBridge = {
@@ -96,7 +96,7 @@ export class PiAiAnthropicProvider implements ModelProvider {
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: profile.modelCapabilities.contextWindow,
       maxTokens: profile.modelCapabilities.maxOutputTokens,
-      compat: { supportsStrictTools: profile.modelCapabilities.strictJsonSchema }
+      compat: { supportsStrictTools: profile.modelCapabilities.strictJsonSchema, allowEmptySignature: new URL(profile.endpoint).hostname === 'api.deepseek.com' }
     }
     const context = bridge.normalizeContext({
       messages: serializeCanonicalMessages(call.request.messages, profile.modelId),

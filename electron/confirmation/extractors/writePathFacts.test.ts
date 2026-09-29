@@ -127,6 +127,7 @@ describe('跨平台路径语法分派回归锚', () => {
   it('锚①(write)：相对路径按 workDir 真实基座 resolve，产 workdir-normal（B1 回归）', async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'write-fact-anchor1-')))
     try {
+      await fs.mkdir(path.join(root, 'src'))
       await expect(probeWritePathFact({
         rawPath: 'src/x.ts',
         workDir: root,
@@ -150,7 +151,7 @@ describe('跨平台路径语法分派回归锚', () => {
       userDataDir: '/tmp/user-data',
       homeDir: '/tmp/home',
       customSensitivePrefixes: []
-    })).resolves.toMatchObject({ normalizedPath: '/etc/hosts', zone: 'system-dir' })
+    })).resolves.toMatchObject({ normalizedPath: await fs.realpath('/etc/hosts').catch(() => '/etc/hosts'), zone: 'system-dir' })
   })
 })
 

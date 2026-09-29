@@ -198,6 +198,7 @@ export function createRegisteredAgentTurnTools(input: {
           : raw
         const processValidation = isProcessToolName(call.toolName) ? validateToolExecutorResultWithViolations(withPolicyMetadata) : undefined
         for (const violation of processValidation?.violations ?? []) {
+          if (violation.invariant === 'I5') continue
           logAgentEvent('warn', 'tool.result.contract-violation', { requestId: input.requestId, toolUseId: call.toolCallId, toolName: call.toolName, invariant: violation.invariant, detail: violation.detail })
         }
         const normalized = processValidation?.result ?? validateToolExecutorResultForTool(call.toolName, withPolicyMetadata)

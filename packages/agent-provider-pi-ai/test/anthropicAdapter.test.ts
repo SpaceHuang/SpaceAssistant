@@ -20,6 +20,26 @@ function routeOf(value: AnthropicRouteProfile): PreparedModelCall['route'] {
 }
 
 describe('PiAiAnthropicProvider', () => {
+  it('enables empty thinking signatures for DeepSeek passback only', async () => {
+    const deepSeekProfile = { ...profile, routeId: 'deepseek', modelId: 'deepseek-v4-pro', endpoint: 'https://api.deepseek.com/anthropic' }
+    const models: unknown[] = []
+    const bridge: PiAnthropicBridge = {
+      normalizeContext: (context) => context,
+      stream: async function* (model) {
+        models.push(model)
+        yield { type: 'done', reason: 'stop', message: { usage: { input: 1, output: 1 } } }
+      }
+    }
+    for (const selectedProfile of [profile, deepSeekProfile]) {
+      const provider = new PiAiAnthropicProvider({ profiles: [selectedProfile], bridge })
+      for await (const _chunk of provider.stream({ ...prepared(), route: routeOf(selectedProfile) })) { /* consume */ }
+    }
+    expect(models).toMatchObject([
+      { compat: { allowEmptySignature: false } },
+      { compat: { allowEmptySignature: true } }
+    ])
+  })
+
   it('preserves Anthropic cache input usage fields in the SDK usage chunk', async () => {
     const provider = new PiAiAnthropicProvider({ profiles: [profile], bridge: {
       normalizeContext: (context) => context,

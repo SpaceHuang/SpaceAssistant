@@ -451,6 +451,8 @@ export function notExecutedReasonForConfirmation(input: {
   switch (input.cause) {
     case 'agent-deny':
       return 'agent_denied'
+    case 'agent-undetermined':
+      return 'agent_undetermined'
     case 'timeout':
       return 'confirm_timeout'
     case 'unavailable':
@@ -911,7 +913,7 @@ async function runToolChatSessionInner(
   const stripThinking = (msgs: Anthropic.MessageParam[]): Anthropic.MessageParam[] => {
     // thinking 开启时须保留 assistant 消息中的 thinking/redacted_thinking（含 signature），
     // 否则多轮 tool loop 会触发 Anthropic 400（final assistant 须以 thinking 块开头）。
-    if (reasoningEffort !== 'off') return sanitizeThinkingForReplay(msgs)
+    if (reasoningEffort !== 'off') return sanitizeThinkingForReplay(msgs, /^https:\/\/api\.deepseek\.com(?:\/|$)/i.test(baseUrl ?? ''))
     return stripThinkingBlocksFromAssistantMessages(msgs)
   }
 
