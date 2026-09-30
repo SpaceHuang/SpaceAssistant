@@ -5,14 +5,13 @@ import { isProcessToolName, projectToolResultForSink } from '../../src/shared/pr
 import { projectShellAgentLogFields } from '../shell/shellLogFields'
 
 const TARGET_EVENTS = new Set<AgentLogEventName>([
-  'tool.request', 'tool.error', 'tool.result',
   'llm.silent_overflow',
   'tool.request', 'tool.error', 'tool.result', 'tool.result.contract-violation',
   'trust.remove',
   'history.cutover', 'session.transcript.reconciliation',
   'shell.security.deny', 'shell.trust.command', 'shell.path.confirm', 'shell.path.reject', 'shell.precheck', 'shell.confirm',
   'shell.exec.start', 'shell.exec.plan_failed', 'shell.exec.spawned', 'shell.exec.auto_background',
-  'shell.exec.background', 'shell.exec.finish', 'shell.exec.error'
+  'shell.exec.background', 'shell.exec.finish', 'shell.exec.error', 'grep.terminate'
 ])
 const COMMON_KEYS = new Set([
   'requestId', 'sessionId', 'toolUseId', 'loopRound', 'toolName', 'level', 'success', 'durationMs',
@@ -26,6 +25,7 @@ const COMMON_KEYS = new Set([
   'stderrBytes', 'stdoutSha256', 'stderrSha256', 'stdoutRedacted', 'stderrRedacted', 'outputPersistErrorCode',
   'terminationErrorCode', 'terminationSignal', 'treeKillVerified', 'outputLimitReached', 'captureCaseId',
   'progressCaseId', 'terminationCaseId', 'retryCount', 'retryExhausted', 'terminationReason', 'redacted',
+  'reason', 'terminated', 'elapsedMs', 'terminationState',
   'dataBytes', 'dataSha256', 'outputTruncated', 'outputRedacted', 'invariants', 'violationCount',
   'turnId', 'stage', 'historyStreamId', 'previousTurnId', 'snapshotVersion', 'transcriptVersion', 'reconciledCount',
   'releasedUnstarted', 'markedUncertain', 'repairedCheckpoints'

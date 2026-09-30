@@ -198,3 +198,39 @@ build 仅报告已有动态 import 无法拆 chunk 和 chunk 超过 500 kB 的�
 阶段 6 继续执行中：云端 fetch 后 SHA 仍为 `8dad02848c44692bafa7f61271bc6e3d6f406216`，分叉为 remote-only 46 / local-only 34。逐提交清单见计划 §2.1；已用 `git log --reverse --format='%H%x09%P%x09%s' <merge-base>..origin/main` 固定完整 SHA/父提交/主题，并对每个 SHA 导出文件变更。普通提交按其 commit tree diff 审核；4 个 merge commit（`6fad2cb6`、`98857144`、`a06c966c`、`c96acc2e`、`773e11d7`、`ac97b559`，共 6 个）按第一父 tree diff 审核，同时核对第二父及该分支子提交各自的处置行。初始 46 项中 6 个是 merge commit；其余普通提交与文件清单均和 §2.1 的唯一处置相符。最后的 `8dad0284` 同时触及策略注册与规则测试，继续按“排除”处理，不能只保留测试改动。
 
 生命周期修复已以 `ae092513fc670c5e50655e1c22287903e32cd5c5` 提交。双亲 merge、最终树审查、推送/PR、云端接受和本地 main 对齐仍未完成。
+
+### 双亲 merge 与文件准入清理
+
+开始合并时 `git merge --no-ff --no-commit origin/main` 报告 8 个冲突文件：数据库 migration/schema 与测试 5 个、旧 `electron/toolChatLoop.ts` 1 个、两个已有本地取消测试的 add/add 2 个。数据库冲突保留本地 schema/迁移及测试；`toolChatLoop.ts` 保留 Hosted Runtime/agent-sdk 执行路径，取消语义由已通过阶段 1–5 的 SDK/provider/host 实现提供；add/add 保留本地 turn-scoped renderer 测试。没有将旧 tool loop 或远端归因迁移带入合并树。
+
+无冲突改动按逐提交处置表处理：移除远端 v19 attribution schema/operations/query/API/UI/i18n/测试及新增归因需求文档；移除 grep 自动降级、fallback 专用测试、不可用提示分层和 dev rg 自动准备；移除脚本路径提取、安全规则档位、loose allow 和会话信任改动。原本地基线已有的同名 helper/行为保持不动，判断依据是相对本地 HEAD 的最终 tree diff。
+
+适配准入的 grep 生命周期仅保留 ProcessSupervisor 有界树终止、forced settle、Mac 进程组启动、结构化 cancelled/timeout 终态，以及不带 pattern/cwd/path 的 `grep.terminate` allowlist 诊断；加入执行器对 `ctx.signal`（Hosted 当前 turn signal）的测试，不复制旧循环单独 `chatSignal` 字段。远端 logger `llm.cancel`/`turn.cancel` 不带入，因为现有 History/session terminal 已覆盖诊断。保留 `agentLogProjection` allowlist 去重。release commit 只准入 `package.json` 和 lockfile 的 `0.2.2` 版本号，不带其他依赖/脚本变化。
+
+红灯：在临时恢复本地原有 SIGTERM-only `builtinExecutors.ts` 后，`npx vitest run electron/tools/grepAbortResponse.test.ts -t "T-A6"` 失败：返回值缺少 `terminated: forced`，注入的 ProcessKiller 未被消费。恢复有界 ProcessSupervisor 实现后，grep 终止、turn signal、ripgrep process、日志投影聚焦测试为 **7 文件 / 65 项通过**；Electron build 退出码 0。
+
+### 最终合并树门禁
+
+完成冲突及准入清理后，在完整 merge index/tree 上执行：
+
+```text
+$ npm test
+Exit code: 0
+Test Files  806 passed | 1 skipped (807)
+Tests       7091 passed | 106 skipped (7197)
+
+$ npm run typecheck:agent-sdk
+Exit code: 0
+$ npm run typecheck:agent-provider-pi-ai
+Exit code: 0
+$ npm run typecheck:renderer
+Exit code: 0
+$ npm run typecheck:shared
+Exit code: 0
+$ npm run check:agent-sdk
+Exit code: 0
+$ npm run build
+Exit code: 0
+```
+
+build 只有已有的动态 import 与 chunk size 提示。最终代码符号扫描未命中云端新增的归因 schema/API/UI、`script-unmodeled-path-ask` loose 覆盖、grep fallback 自动路由或 dev rg prepare 入口；相对远端 HEAD 的文件清单可见被排除的新归因模块/测试及 fallback/dev prepare/script-path 文档为明确删除。当前 index 已通过 `git diff --cached --check`，没有未解决冲突。双亲 merge commit 尚未创建，推送/PR 与本地对齐尚未执行。

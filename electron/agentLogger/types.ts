@@ -77,6 +77,7 @@ export type AgentLogEventName =
   | 'script.exec.start'
   | 'script.exec.spawned'
   | 'script.exec.finish'
+  | 'grep.terminate'
   | 'tool.confirm.skip_confirm'
   | 'mcp.confirm.session_trust'
   | 'mcp.trust.session'

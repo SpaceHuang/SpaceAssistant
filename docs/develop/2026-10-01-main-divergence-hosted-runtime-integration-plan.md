@@ -258,7 +258,7 @@ npm run build
 | 3. UI 与 turn 隔离 | 完成 | request 索引按会话保存并在身份歧义时拒绝回退；停止操作同步清理本会话 UI 并按 turnId 通知主进程。renderer、admission、Hosted handoff 和 SDK 跨会话共享 requestId 回归验证通过，见实施记录。 |
 | 4. 取消审计隐私 | 完成 | agent logger 投影/日志与 Hosted Host 定向测试 31/31 通过；取消/失败继续由既有 History 和 session `turn_end` 区分，不新增重复事件；既有 allowlist 投影测试通过。 |
 | 5. 全量兼容门禁 | 完成 | `npm test` 终验 804 文件通过、1 跳过；7081 项通过、106 跳过。agent-sdk/provider/renderer/shared 类型检查、`check:agent-sdk` 与 `npm run build` 均通过。首轮全量发现 5 项旧 display 缺 activity 失败，新增共享协议兼容回归并在转换边界默认空轨迹后重跑全量通过；build 仅有 chunk/import 提示。 |
-| 6. 历史收敛、最终树审核与云端接受 | 待开始 | |
+| 6. 历史收敛、最终树审核与云端接受 | 进行中 | 云端 46 项逐提交分类及文件清单已审阅；生命周期与计划文档已分组提交，已执行双亲 `--no-commit` merge，8 处冲突按 Runtime 架构和排除表解决。最终树仅适配 grep 终止/turn signal、日志 allowlist 去重及 0.2.2 release metadata；全量测试 7091 通过/106 跳过，类型、边界、build 均通过。merge commit、普通推送/PR、云端接受与本地 main 对齐仍待完成，详情见实施记录。 |
 
 ## 7. 逐项完成判定表
 

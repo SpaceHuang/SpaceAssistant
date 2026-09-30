@@ -31,7 +31,7 @@ import { buildPythonScriptEnv } from '../processOutputEncoding'
 import { UTF8_CONTRACT } from '../processOutput/contracts'
 import { createChildStreamDecoder } from '../processOutput/decodeChildOutput'
 import { processTreeKiller, runCommandWithTimeout } from '../spawnUtil'
-import { ProcessSupervisor } from '../shell/processSupervisor'
+import { ProcessSupervisor, type ProcessKiller, type ProcessTerminationResult } from '../shell/processSupervisor'
 import { snapshotEnvForLog } from '../shell/envSnapshot'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import {
@@ -945,9 +945,20 @@ export type RipgrepRunResult =
   | { kind: 'no_match'; output: 'No matches found' }
   | { kind: 'unavailable'; reason: Exclude<RipgrepUnavailableReason, 'unsupported' | 'not_file'> }
   | { kind: 'invalid_request'; message: string }
-  | { kind: 'timeout'; partialOutput: string }
-  | { kind: 'cancelled'; partialOutput: string }
+  | { kind: 'timeout'; partialOutput: string; terminated?: 'graceful' | 'forced' }
+  | { kind: 'cancelled'; partialOutput: string; terminated?: 'graceful' | 'forced' }
   | { kind: 'failed'; exitCode: number | null; message: string }
+
+export type GrepTerminateInfo = {
+  reason: 'abort' | 'timeout'
+  terminated: 'graceful' | 'forced' | null
+  elapsedMs: number
+  treeKillVerified: boolean | null
+  terminationState: ProcessTerminationResult['state'] | null
+}
+
+const GREP_TERMINATE_GRACE_MS = 1_500
+const GREP_SETTLE_SLACK_MS = 500
 
 /**
  * R7：grep 参数归一的唯一入口（校验层与执行层共用，判定按「生效值」而非「字段是否出现」）。
@@ -1097,7 +1108,9 @@ export async function grepWithRg(
   signal: AbortSignal,
   onProgress: (msg: string) => void,
   spawnProcess: (binary: string, args: string[], options: Parameters<typeof spawn>[2]) => ChildProcess = spawn,
-  openedFile?: { fileHandle: FileHandle; platform?: NodeJS.Platform }
+  openedFile?: { fileHandle: FileHandle; platform?: NodeJS.Platform },
+  killer: ProcessKiller = processTreeKiller,
+  onTerminate?: (info: GrepTerminateInfo) => void
 ): Promise<RipgrepRunResult> {
   if (signal.aborted) return { kind: 'cancelled', partialOutput: '' }
   const openedFileFd = openedFile?.fileHandle.fd
@@ -1136,14 +1149,19 @@ export async function grepWithRg(
     const proc = spawnProcess(binaryPath, rgArgs, {
       cwd: workDir,
       windowsHide: true,
+      detached: process.platform === 'darwin',
       ...(stableFileOnWindows ? { stdio: ['pipe', 'pipe', 'pipe'] } : openedFileFd !== undefined ? { stdio: ['ignore', 'pipe', 'pipe', openedFileFd] } : {})
     })
     let settled = false
     let stableInputStream: ReturnType<FileHandle['createReadStream']> | undefined
     let out = ''
     let stderr = ''
-    let killed = false
     let truncated = false
+    const supervisor = new ProcessSupervisor(proc, killer)
+    let terminationReason: 'abort' | 'timeout' | null = null
+    let terminationRequestedAt: number | undefined
+    let terminationOutcome: ProcessTerminationResult | undefined
+    let settleTimer: ReturnType<typeof setTimeout> | undefined
     // §12-#5：ripgrep 输出其自身决定编码（正常为 UTF-8），契约显式声明为 utf8 并保留探测兜底；
     // 跨 chunk 的多字节字符由流式解码器保状态，不再逐 chunk toString('utf8')。
     const stdoutDecoder = createChildStreamDecoder({ contract: UTF8_CONTRACT })
@@ -1152,16 +1170,27 @@ export async function grepWithRg(
     const STDOUT_RAW_LIMIT = 400 * 1024
     const STDERR_RAW_LIMIT = 16 * 1024
     let stderrRawBytes = 0
-    const t = setTimeout(() => {
+    const requestTermination = (reason: 'abort' | 'timeout'): void => {
       if (settled) return
-      killed = true
-      proc.kill('SIGTERM')
-    }, timeoutMs)
-    const onAbort = () => {
-      if (!settled) {
-        killed = true
-        proc.kill('SIGTERM')
+      if (terminationReason === null) {
+        terminationReason = reason
+        terminationRequestedAt = Date.now()
       }
+      void supervisor.terminate(GREP_TERMINATE_GRACE_MS).then((result) => { terminationOutcome = result })
+      if (settleTimer === undefined) {
+        settleTimer = setTimeout(() => {
+          if (settled) return
+          finish({
+            kind: terminationReason === 'timeout' ? 'timeout' : 'cancelled',
+            partialOutput: out.trimEnd(),
+            terminated: 'forced'
+          })
+        }, GREP_TERMINATE_GRACE_MS + GREP_SETTLE_SLACK_MS)
+      }
+    }
+    const t = setTimeout(() => requestTermination('timeout'), timeoutMs)
+    const onAbort = () => {
+      requestTermination('abort')
     }
     signal.addEventListener('abort', onAbort, { once: true })
     proc.stdout?.on('data', (ch: Buffer) => {
@@ -1183,8 +1212,22 @@ export async function grepWithRg(
       if (settled) return
       settled = true
       clearTimeout(t)
+      if (settleTimer !== undefined) clearTimeout(settleTimer)
       signal.removeEventListener('abort', onAbort)
       stableInputStream?.destroy()
+      proc.stdin?.destroy()
+      proc.stdout?.destroy()
+      proc.stderr?.destroy()
+      if (terminationReason !== null && onTerminate) {
+        const terminated = result.kind === 'cancelled' || result.kind === 'timeout' ? result.terminated ?? 'graceful' : null
+        onTerminate({
+          reason: terminationReason,
+          terminated,
+          elapsedMs: terminationRequestedAt !== undefined ? Date.now() - terminationRequestedAt : 0,
+          treeKillVerified: terminationOutcome?.treeKillVerified ?? null,
+          terminationState: terminationOutcome?.state ?? null
+        })
+      }
       resolve(result)
     }
     proc.on('error', (err) => {
@@ -1197,8 +1240,11 @@ export async function grepWithRg(
       // MINOR：stdout 截断只应影响 stdout；stderr 的尾部仍必须 flush，
       // 否则「挂死/超限前写出的错误信息」会丢掉未完成的多字节尾巴。
       stderr += stderrDecoder.end()
-      if (signal.aborted) finish({ kind: 'cancelled', partialOutput: out.trimEnd() })
-      else if (killed) finish({ kind: 'timeout', partialOutput: out.trimEnd() })
+      if (terminationReason !== null) finish({
+        kind: terminationReason === 'timeout' ? 'timeout' : 'cancelled',
+        partialOutput: out.trimEnd(),
+        terminated: 'graceful'
+      })
       else if (code !== 0 && code !== 1) finish({ kind: 'failed', exitCode: code, message: sanitizeToolOutputText(stderr.trim().slice(0, 4000) || 'ripgrep 返回非成功状态', 'grep') })
       else {
         let result = out.trimEnd()
@@ -1507,7 +1553,14 @@ export const grepExecutor: ToolExecutor = {
         ctx.signal,
         (message) => ctx.sendProgress('grep', message),
         ctx.grepSpawnProcess,
-        permitFileHandle ? { fileHandle: permitFileHandle, platform: process.platform } : undefined
+        permitFileHandle ? { fileHandle: permitFileHandle, platform: process.platform } : undefined,
+        processTreeKiller,
+        (info) => logAgentEvent(info.terminated === 'forced' || info.terminationState === 'termination_failed' ? 'warn' : 'info', 'grep.terminate', {
+          requestId: ctx.requestId,
+          sessionId: ctx.sessionId,
+          toolUseId: ctx.toolUseId,
+          ...info
+        })
       )
       const authorizedIdentity = ctx.readExecutionPermit?.targets[0]?.identity
       if (permitFileHandle && authorizedIdentity && !readIdentityMatches(await permitFileHandle.stat(), authorizedIdentity)) {

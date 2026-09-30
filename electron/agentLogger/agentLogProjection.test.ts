@@ -42,4 +42,15 @@ describe('projectAgentLogFields', () => {
       stopReason: 'end_turn'
     })
   })
+
+  it('projects grep termination facts without retaining paths or search input', () => {
+    expect(projectAgentLogFields('grep.terminate', {
+      requestId: 'request-1', sessionId: 'session-1', toolUseId: 'tool-1', reason: 'abort',
+      terminated: 'graceful', elapsedMs: 275, treeKillVerified: true, terminationState: 'terminated',
+      pattern: 'private search', cwd: '/private/worktree', path: '/private/file'
+    })).toEqual({
+      requestId: 'request-1', sessionId: 'session-1', toolUseId: 'tool-1', reason: 'abort',
+      terminated: 'graceful', elapsedMs: 275, treeKillVerified: true, terminationState: 'terminated'
+    })
+  })
 })
