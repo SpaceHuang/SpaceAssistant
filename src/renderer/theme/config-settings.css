@@ -1688,12 +1688,8 @@
   padding: 0 12px 6px;
 }
 
-/* 当前绑定模型：列表选中统一 --sa-list-selected-*（DESIGN.md 系统约定；琥珀 accent 不作选中色） */
-.composer-prefs__models .composer-model-picker__item--active,
-.composer-prefs__models .composer-model-picker__item--active:hover {
-  background: var(--sa-list-selected-bg);
-}
-
+/* 当前绑定模型：橙色模型名做恒定信号（--sa-list-selected-fg）。
+   不铺 tint 底——双行大块上整片橙底过于抢眼（用户反馈）；hover 仍是中性底，两者构成两类反馈 */
 .composer-prefs__models .composer-model-picker__item--active .composer-model-picker__model {
   color: var(--sa-list-selected-fg);
 }
@@ -1706,52 +1702,61 @@
   box-shadow: var(--sa-shadow-glow);
 }
 
-/* 强度分区：横向 N 档自适应（FR10）——min-width 保 2 字档位可读，flex-wrap 适配换行（5 档两行，不溢出）。
-   容器锁宽：不随模型区变宽，保证档位区在任意浮层宽度下换行行为一致。
-   项不设 flex-grow（需求 §5.2：2–3 档不得拉伸成「巨大按钮」占满整行，末行不补满），自然宽 + 左对齐；
-   禁止写 width: calc(25% - 3px) 之类的固定等分硬编码。 */
+/* 强度分区：分段控件（segmented）形态——整组档位共用一个轨道外壳（系统「分段控件轨道」语言），
+   表达「这是一个互斥的档位选择器」而非散落的标签（用户反馈）。
+   项自然宽 + 左对齐：不设 flex-grow（§5.2：2–3 档不得拉伸成「巨大按钮」）；flex-wrap 适配换行，
+   换行后轨道仍包住两行，整体控件感不变；禁止 width: calc(25% - 3px) 之类的固定等分硬编码。 */
 .composer-prefs__efforts {
   display: flex;
   flex-wrap: wrap;
   align-items: stretch;
-  gap: 4px;
-  max-width: 264px;
-  padding: 2px 12px 12px;
+  gap: 2px;
+  width: fit-content;
+  max-width: calc(100% - 24px);
+  margin: 2px 12px 12px;
+  padding: 3px;
+  background: var(--sa-bg-muted);
+  border-radius: var(--sa-radius-sm);
 }
 
 .composer-prefs__effort {
   flex: 0 1 auto;
   min-width: 52px;
-  padding: 7px 12px;
+  padding: 5px 10px;
   border: none;
-  border-radius: var(--sa-radius-sm);
+  border-radius: calc(var(--sa-radius-sm) - 3px);
   background: transparent;
   cursor: pointer;
   text-align: center;
   font-size: var(--sa-config-font);
-  color: var(--sa-text);
+  color: var(--sa-text-secondary);
   white-space: nowrap;
   transition:
     background var(--sa-duration-fast) var(--sa-ease-out),
-    color var(--sa-duration-fast) var(--sa-ease-out);
+    color var(--sa-duration-fast) var(--sa-ease-out),
+    box-shadow var(--sa-duration-fast) var(--sa-ease-out);
 }
 
 .composer-prefs__effort:hover {
-  background: var(--sa-bg-muted);
+  color: var(--sa-text);
+  background: color-mix(in srgb, var(--sa-bg-elevated) 55%, transparent);
 }
 
+/* 选中：白块浮起（antd Segmented 语言）+ 橙字，与轨道形成明确的主从关系 */
 .composer-prefs__effort--active,
 .composer-prefs__effort--active:hover {
   color: var(--sa-list-selected-fg);
   font-weight: 500;
-  background: var(--sa-list-selected-bg);
+  background: var(--sa-bg-elevated);
+  box-shadow: var(--sa-shadow-sm);
 }
 
-/* 禁用态：显式 tertiary 色（opacity 会把 12px tertiary 压到对比不足） */
+/* 禁用态：显式 tertiary 色（opacity 会把 12px 小字压到对比不足） */
 .composer-prefs__effort:disabled {
   cursor: not-allowed;
   color: var(--sa-text-tertiary);
   background: transparent;
+  box-shadow: none;
 }
 
 .composer-prefs__effort-disabled {
