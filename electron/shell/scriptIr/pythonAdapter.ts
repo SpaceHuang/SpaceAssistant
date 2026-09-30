@@ -678,9 +678,15 @@ function adaptExpr(node: TsNode): IrExpr {
       return inner ? adaptExpr(inner) : { kind: 'none' }
     }
     case 'named_expression': {
-      // (x := 1) 海象表达式：对安全面保守取值表达式
+      // (x := 1) 海象表达式：目标是绑定位置，必须完整建模（v3 评审）——只取 value 侧会丢
+      // 目标名，消费方的常量失效/def 名失效全部漏过（确认门绕过根因）。
       const value = fieldNode(node, 'value')
-      return value ? adaptExpr(value) : { kind: 'none' }
+      const targetNode = fieldNode(node, 'name') ?? fieldNode(node, 'left') ?? fieldNode(node, 'target') ?? firstNamed(node)
+      return {
+        kind: 'named_expr',
+        target: targetNode ? assignTargetName(targetNode) : '',
+        value: value ? adaptExpr(value) : { kind: 'none' }
+      }
     }
     case 'list_comprehension':
     case 'set_comprehension':

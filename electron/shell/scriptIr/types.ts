@@ -5,7 +5,13 @@
 //  1. 覆盖 scriptContentSecurity.ts 中 Analyzer（A0–A9/B1–B11）与 RemoteCertifier 消费的事实全集；
 //  2. 每个节点种类在适配器遍历时必须落入四分类之一（已建模 / 可忽略叶子 / 结构性穿透 / 抛
 //     IrCoverageError），禁止静默丢弃（§3 不变量 7）；
-//  3. 「语法能解析」≠「已建模」——未建模构造由适配器抛错落人工（fail-closed）。
+//  3. 「语法能解析」≠「已建模」——未建模构造由适配器抛错落人工（fail-closed）；
+//  4. 新增 IR 节点的**绑定位置强制审查清单**（v3 评审固化，防止失效点漏建导致确认门绕过）：
+//     凡携带赋值/绑定语义的节点，消费方（scriptPathFacts）必须先遍历 value 侧（按旧环境求值、
+//     IO 检测不漏），再对目标文本走 invalidateTargetText 失效（consts/pure/handles/defs）。
+//     已覆盖位置：assign / aug_assign / for 目标 / comprehension 目标 / with-as / del /
+//     函数参数 / named_expr(walrus)。论证安全无需失效：def·class 语句（体已递归扫描）、
+//     import（链解析携带真实模块路径）、lambda 参数（任何调用路径必先落 unknown）。
 //
 // ——— 与旧自研 AST（ModuleAst/Expr/Stmt）的字段级映射表（P1-T1 等价性证明，§2.2 锚点）———
 // 旧 Expr.string{value}            → IrExpr string{value}（f-string/隐式拼接由适配器折叠）
@@ -67,6 +73,8 @@ export type IrExpr =
   | { kind: 'starred'; value: IrExpr }
   | { kind: 'yield'; value: IrExpr | null }
   | { kind: 'comprehension'; elt: IrExpr; generators: Array<{ target: string; iter: IrExpr }> ; compKind: 'list' | 'set' | 'dict' | 'generator' }
+  /** (x := v) 海象表达式（v3 评审）：target 是绑定位置，消费方必须先走 value 再失效 target。 */
+  | { kind: 'named_expr'; target: string; value: IrExpr }
   | { kind: 'bool'; value: boolean }
   | { kind: 'none' }
   | { kind: 'ellipsis' }

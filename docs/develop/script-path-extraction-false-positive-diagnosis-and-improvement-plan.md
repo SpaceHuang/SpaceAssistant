@@ -1,6 +1,6 @@
 # run_script 路径提取假阳性：诊断与改进方案
 
-- 状态：已实施（2026-09-30，P0 / P1 / P2 全量落地；两轮评审阻断项 B1/B2/B3 及变体 B1-R/B2-R 均已修复，见 §12.7–§12.8；端到端真机验收遗留，见 §12.6）
+- 状态：已实施（2026-09-30，P0 / P1 / P2 全量落地；三轮评审阻断项 B1/B2/B3 及变体 B1-R/B2-R、walrus 均已修复，见 §12.7–§12.9；端到端真机验收遗留，见 §12.6）
 - 触发场景：会话 `a7981827-5a20-4eab-a6fd-a2971e12659c`（"会话 27"）中 `run_script` 反复弹人工确认卡
 - 涉及模块：`electron/confirmation/extractors/scriptPathFacts.ts`、`electron/shell/scriptIr/pythonAdapter.ts`、`src/shared/policy/defaultRules.ts`
 - 关联文档：`docs/develop/script-security-parser-treesitter-upgrade-plan.md`、`docs/develop/security-approval-experience-improvement-plan.md`
@@ -1133,3 +1133,33 @@ for (const rawPath of scriptPaths.paths) {
 | `global`/`nonlocal` | ✅（N1：归 dynamic-execution） |
 
 修复后验证：v2 变体用例转绿（提取器 70 用例）；相关 8 套件 382 用例通过；全量 `npm test` 复验通过。
+
+### 12.9 第三轮评审修复记录（2026-09-30，walrus :=）
+
+评审报告：`docs/review/script-path-extraction-fp-review-v3.md`。v2 修复核验通过（B1-R/B2-R
+全部 PoC 及变体归 dynamic-execution，v1 无回潮），但按绑定位置 checklist 继续排查发现
+**walrus（:=）是漏网项**：`pythonAdapter.ts` 对 `named_expression` 只取 value 侧返回，
+目标名完全不失效（注释里「对安全面保守」的判断不成立）——同一根因两种完整绕过：
+
+1. 敏感文件保护绕过：`p = "/safe.txt"; if (p := "/etc/passwd"): open(p)` → 判
+   complete 只登记 /safe.txt，运行时打开 /etc/passwd；
+2. 进程执行绕过：`if (helper := os.system): helper("rm -rf /tmp/x")` → helper 滞留
+   defs 被当本地定义调用，运行时执行 os.system。
+
+修复（评审建议方案：IR 加节点，一处修复堵两个形态）：
+
+- `types.ts` IrExpr 新增 `{ kind: 'named_expr'; target; value }`，并把**绑定位置强制
+  审查清单固化进头注释**（评审要求：后续新增 IR 节点时的强制审查项）；
+- `pythonAdapter.ts` `named_expression` 完整建模（target + value，防御性取字段/首命名子节点）；
+- `scriptPathFacts.walkExpr` 新增分支：**先按旧环境走 value（RHS 先求值、IO 检测不漏），
+  再 `invalidateTargetText` 失效目标**（语义与 assign 一致）；
+- `scriptContentSecurity.analyzeExpr` 新增 named_expr 值侧递归（walrus 值内的调用
+  不逃逸内容分析；目标失效归路径提取器）。
+
+非阻断观察处置：①参数遮蔽在定义时即置 dynamic 偏严——作为 FP 观察项记录（方向安全，
+误伤面仅「参数名与 def 同名」的罕见写法）；②pandas 类调用归 unmodeled ask 属 P1 设计内
+行为。绑定位置 checklist 全表见 §12.8，named_expr(walrus) 已入表。
+
+修复后验证：v3 用例转红→绿（提取器 73 用例；合法高频 walrus
+`while (line := f.readline())` 不误伤对照保持 complete + 路径正常提取）；
+相关 8 套件 385 用例通过；全量 `npm test` 复验通过。

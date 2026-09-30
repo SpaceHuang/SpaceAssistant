@@ -595,6 +595,11 @@ class Analyzer {
       this.analyzeExpr(expr.value, scope, decodeBindings, stmtIndex)
       return
     }
+    if (expr.kind === 'named_expr') {
+      // v3 评审:walrus 值侧递归分析(调用不逃逸);目标失效由路径提取器负责
+      this.analyzeExpr(expr.value, scope, decodeBindings, stmtIndex)
+      return
+    }
     if (expr.kind === 'yield') {
       if (expr.value) this.analyzeExpr(expr.value, scope, decodeBindings, stmtIndex)
       return

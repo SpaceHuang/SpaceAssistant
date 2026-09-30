@@ -456,6 +456,47 @@ describe('extractScriptPathFacts:评审修复回归(B1 defs 失效 / B2 元组�
 })
 
 // ============================================================================
+// v3 评审修复回归(walrus := 目标失效——评审 B3-R):
+// 适配层原只取 named_expression 的 value 侧,目标名完全不失效,
+// 同一根因两种确认门完全绕过(均实测 complete 不弹卡)。
+// ============================================================================
+describe('extractScriptPathFacts:v3 评审修复回归(walrus :=)', () => {
+  beforeAll(async () => {
+    await scriptParserService.ensureInitialized()
+  })
+
+  afterAll(() => resetScriptParserServiceForTests())
+
+  it('v3a if (p := "/etc/passwd") 重绑定同名常量 → unknown(敏感文件保护不再绕过)', () => {
+    expect(extractScriptPathFacts([
+      'p = "/safe.txt"',
+      'if (p := "/etc/passwd"):',
+      '    open(p)'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('v3b if (helper := os.system) 遮蔽 def 名 → unknown(进程执行不再绕过)', () => {
+    expect(extractScriptPathFacts([
+      'import os',
+      'def helper():',
+      '    pass',
+      'if (helper := os.system):',
+      '    helper("rm -rf /tmp/x")'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('v3c 对照:合法高频 walrus(while (line := f.readline()))不误伤,句柄路径正常提取', () => {
+    expect(extractScriptPathFacts([
+      'f = open("/data/log.txt")',
+      'while (line := f.readline()):',
+      '    print(len(line))'
+    ].join('\n'), 'python')).toMatchObject({
+      paths: ['/data/log.txt'], completeness: 'complete', dynamicAccess: false
+    })
+  })
+})
+
+// ============================================================================
 // v2 评审修复回归(B2-R 带括号/嵌套元组目标 / B1-R 函数参数遮蔽 def 名):
 // 同 B1/B2 根因的变体形态,修复前均判 complete 完全绕过确认门。
 // ============================================================================

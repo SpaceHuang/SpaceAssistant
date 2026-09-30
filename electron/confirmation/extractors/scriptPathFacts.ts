@@ -370,6 +370,12 @@ function walkExpr(expr: IrExpr, env: WalkEnv, paths: Set<string>, state: WalkSta
       walkExpr(expr.elt, env, paths, state)
       expr.generators.forEach((g) => walkExpr(g.iter, env, paths, state))
       break
+    case 'named_expr':
+      // v3 评审:walrus 目标是绑定位置——先按旧环境走 value(RHS 先求值、IO 不漏),
+      // 再失效目标(语义与 assign 一致;目标文本形态复用 invalidateTargetText)
+      walkExpr(expr.value, env, paths, state)
+      invalidateTargetText(expr.target, env, state)
+      break
     case 'f_string': if (expr.interpolations.length) state.unmodeledCall = true; expr.interpolations.forEach((v) => walkExpr(v, env, paths, state)); break
   }
 }
