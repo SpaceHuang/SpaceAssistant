@@ -1,6 +1,6 @@
 # run_script 路径提取假阳性：诊断与改进方案
 
-- 状态：已实施（2026-09-30，P0 / P1 / P2 全量落地；三轮评审阻断项全部修复，第四轮非阻断观察项 obs1–obs3 亦已落地，见 §12.7–§12.10；端到端真机验收遗留，见 §12.6）
+- 状态：已实施（2026-09-30，P0 / P1 / P2 全量落地；五轮评审阻断项 B1/B2/B3 及变体 B1-R/B2-R、walrus、B5 全部修复，第四轮观察项 obs1–obs3 落地，见 §12.7–§12.11；端到端真机验收遗留，见 §12.6）
 - 触发场景：会话 `a7981827-5a20-4eab-a6fd-a2971e12659c`（"会话 27"）中 `run_script` 反复弹人工确认卡
 - 涉及模块：`electron/confirmation/extractors/scriptPathFacts.ts`、`electron/shell/scriptIr/pythonAdapter.ts`、`src/shared/policy/defaultRules.ts`
 - 关联文档：`docs/develop/script-security-parser-treesitter-upgrade-plan.md`、`docs/develop/security-approval-experience-improvement-plan.md`
@@ -1192,3 +1192,28 @@ assign 同语义方向落实，并做了 sound 性收窄）：
 
 修复后验证：新增 8 用例（obs1a/b/c、obs3、comp-cond×2、对照×1 + v3a 升级）先行转红；
 提取器/适配器/内容分析等 5 套件 198 用例通过；全量 `npm test` 复验通过。
+
+### 12.11 第五轮评审修复记录（2026-09-30，B5 + N14）
+
+评审报告：`docs/review/script-path-extraction-fp-review-v4.md`。v3 观察项修复核验通过
+（walrus 静态重绑、短路只失效、模块级 global、推导式条件子句均确认生效），但发现基线
+`6fad2cb6` 即存在、与本分支加固管线正确性直接相关的**新阻断项 B5**：
+
+- **B5（字典推导式 key 逃逸，基线既有）**：tree-sitter 结构是
+  `dictionary_comprehension(body: pair(key, value))`,key 是 **pair 节点**的字段;旧
+  `adaptComprehension` 在推导式节点上取 `fieldNode(node, 'key')` 恒为 null(dict 分支
+  是死代码),落到 `case 'pair'` 的「防御性处理」只取 value **静默丢弃 key**——
+  `{os.system(k): v for k, v in rows}` 判 complete 不弹卡,运行时逐轮执行 os.system。
+  修复：dict 分支从 body 的 pair 取 key/value(非 pair 形态防御为 key=none + value 完整
+  表达式);`case 'pair'` 按评审建议由静默降级**改为抛 IrCoverageError**(fail-closed)——
+  「静默降级代替抛错」正是此洞能藏到现在的根因。普通字典字面量走 `case 'dictionary'`
+  自行处理 pair,不受影响(有对照用例)。
+- **N14（decode→exec 链在块边界断裂，非阻断一并收口）**：`walkStmts` 每层新建
+  decodeBindings 数组,if 的 test 调用未传链、while body 走全新数组——`if (x :=
+  b64decode(...)): exec(x)` 与 while-body-decode-then-exec 两种形态的 B11 升级不生效
+  (后果是 dangerous 降级 locked 确认,非静默绕过)。修复：walkStmts 增加继承参数,
+  if/for/while/with/try 的体与 if/for 的 test 全部透传当前链(词法作用域真实语义;
+  远距误报由 checkB11 的 ≤3 语句窗口兜底)。
+
+修复后验证：新增 4 用例先行转红(B5a/B5b/B5-analyzer/N14 两形态);提取器/内容分析/
+适配器 5 套件 202 用例通过(pair 抛错未破坏任何既有路径);全量 `npm test` 复验通过。

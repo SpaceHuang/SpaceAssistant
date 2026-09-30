@@ -497,6 +497,35 @@ describe('extractScriptPathFacts:v3 评审修复回归(walrus :=)', () => {
 })
 
 // ============================================================================
+// v5 评审阻断项 B5:字典推导式 key 表达式逃逸——tree-sitter 结构为
+// dictionary_comprehension(body: pair(key, value)),key 是 pair 的字段,
+// 旧实现在推导式节点上取 key 恒为 null(死代码),pair 又只取 value 静默丢 key。
+// ============================================================================
+describe('extractScriptPathFacts:v5 评审 B5(字典推导式 key)', () => {
+  beforeAll(async () => {
+    await scriptParserService.ensureInitialized()
+  })
+
+  afterAll(() => resetScriptParserServiceForTests())
+
+  it('B5a key 位置的 os.system 调用不再逃逸 → dynamic-execution', () => {
+    expect(extractScriptPathFacts([
+      'import os',
+      'd = {os.system(k): v for k, v in rows}'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution' })
+  })
+
+  it('B5b key 位置未建模调用 → unknown(不再只看 value 侧)', () => {
+    expect(extractScriptPathFacts('d = {make(k): v for k, v in rows}', 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('B5 对照:良性 key 与普通字典字面量不误伤', () => {
+    expect(extractScriptPathFacts('d = {str(k): len(v) for k, v in rows}', 'python')).toMatchObject({ completeness: 'complete' })
+    expect(extractScriptPathFacts('d = {"a": 1, "b": 2}', 'python')).toMatchObject({ completeness: 'complete' })
+  })
+})
+
+// ============================================================================
 // v4 评审非阻断项修复(obs1 walrus 重绑语义 / obs3 模块级 global 误伤 /
 // comprehension 条件子句建模——walrus 常驻位置,适配层原整块丢弃):
 // ============================================================================

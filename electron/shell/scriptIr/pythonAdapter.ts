@@ -633,11 +633,11 @@ function adaptExpr(node: TsNode): IrExpr {
       }
       return { kind: 'dict', keys, values }
     }
-    case 'pair': {
-      // 独立 pair 防御性处理
-      const value = fieldNode(node, 'value')
-      return value ? adaptExpr(value) : { kind: 'none' }
-    }
+    case 'pair':
+      // v5 评审:pair 只应出现在 dictionary 字面量(case 'dictionary' 自行处理)与
+      // dictionary_comprehension 的 body(上方分支自行处理)。落到这里说明消费方遗漏,
+      // 静默降级只取 value 正是 B5(key 逃逸)能藏住的根因——改 fail-closed 抛错落人工。
+      throw new IrCoverageError(type, 'pair reached adaptExpr (must be handled by dictionary/comprehension branches)')
     case 'subscript': {
       const value = fieldNode(node, 'value')
       const sub = fieldNode(node, 'subscript')
@@ -796,9 +796,20 @@ function adaptComprehension(node: TsNode): IrExpr {
       if (lastGenerator && cond) lastGenerator.conditions.push(adaptExpr(cond))
     }
   }
-  if (compKind === 'dict' && keyNode && body) {
-    dictKey = adaptExpr(keyNode)
-    elt = adaptExpr(body)
+  if (compKind === 'dict' && body) {
+    // v5 评审 B5:tree-sitter 结构是 dictionary_comprehension(body: pair(key, value)),
+    // key 是 **pair 节点**的字段——在推导式节点上取 key 恒为 null(死代码分支),
+    // 导致 key 位置表达式(如 os.system(k))整块逃逸分析。必须从 body 的 pair 取。
+    if (body.type === 'pair') {
+      const pairKey = fieldNode(body, 'key')
+      const pairValue = fieldNode(body, 'value')
+      dictKey = pairKey ? adaptExpr(pairKey) : { kind: 'none' }
+      elt = pairValue ? adaptExpr(pairValue) : { kind: 'none' }
+    } else {
+      // 非 pair 形态(防御):key 记 none,value 走完整表达式——消费方按 tuple 遍历不漏
+      dictKey = { kind: 'none' }
+      elt = adaptExpr(body)
+    }
     return {
       kind: 'comprehension',
       elt: { kind: 'tuple', elts: [dictKey, elt] },
