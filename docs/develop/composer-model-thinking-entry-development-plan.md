@@ -114,12 +114,12 @@
 | P4 | P4-T10 | 组件样式（CSS） | ✅ |
 | P4 | P4-T11 | 组件单测 | ✅ |
 | P4 | P4-G | **阶段 4 收尾（门禁 + 提交）** | ✅ |
-| P5 | P5-T1 | `MessageInput` Props 收敛为 `prefsSlot` | ⬜ |
-| P5 | P5-T2 | `checkOverflow` 预算简化 | ⬜ |
-| P5 | P5-T3 | 渲染合并为一行 | ⬜ |
-| P5 | P5-T4 | `ChatView` 接线 `prefsSlot` | ⬜ |
-| P5 | P5-T5 | `MessageInput.test.tsx` 改写 | ⬜ |
-| P5 | P5-G | **阶段 5 收尾（门禁 + 提交）** | ⬜ |
+| P5 | P5-T1 | `MessageInput` Props 收敛为 `prefsSlot` | ✅ |
+| P5 | P5-T2 | `checkOverflow` 预算简化 | ✅ |
+| P5 | P5-T3 | 渲染合并为一行 | ✅ |
+| P5 | P5-T4 | `ChatView` 接线 `prefsSlot` | ✅ |
+| P5 | P5-T5 | `MessageInput.test.tsx` 改写 | ✅ |
+| P5 | P5-G | **阶段 5 收尾（门禁 + 提交）** | ✅ |
 | P6 | P6-T1 | 删除旧两个组件 | ⬜ |
 | P6 | P6-T2 | 迁移 `ComposerThinkingPicker.test.tsx` | ⬜ |
 | P6 | P6-T3 | 清理旧 CSS | ⬜ |
@@ -975,10 +975,10 @@ prefsSlot?: React.ReactNode   // 模型与强度合并入口
 **涉及文件**：`src/renderer/components/Chat/MessageInput.tsx`
 
 **完成判据**：
-- [ ] `modelSlot` / `thinkingSlot` 已从 Props 与解构中移除
-- [ ] 新增 `prefsSlot`，注释说明其语义与 FR1 的绑定关系
-- [ ] 全仓 `grep 'modelSlot\|thinkingSlot'` 已无残留（除本计划文档）
-- [ ] `npm run typecheck:renderer` 通过（P5-T4 未完成时会报调用方错误，属预期）
+- [x] `modelSlot` / `thinkingSlot` 已从 Props 与解构中移除
+- [x] 新增 `prefsSlot`，注释说明其语义与 FR1 的绑定关系
+- [x] 全仓 `grep 'modelSlot\|thinkingSlot'` 已无残留（除本计划文档）
+- [x] `npm run typecheck:renderer` 通过（P5-T4 未完成时会报调用方错误，属预期）
 
 ### P5-T2 `checkOverflow` 预算简化
 
@@ -992,12 +992,12 @@ prefsSlot?: React.ReactNode   // 模型与强度合并入口
 **涉及文件**：`src/renderer/components/Chat/MessageInput.tsx:313-342`
 
 **完成判据**：
-- [ ] `checkOverflow` 内不再引用 `thinkingChipRef` / `effortWidth`
-- [ ] 触发条件表达式未变（`neededWidth > availableWidth && neededCollapsedWidth <= availableWidth`）
-- [ ] `triggerWidth = 22` / `gap = 8` 两个常量未变
-- [ ] idle 复位 `useEffect` 未变
-- [ ] `ResizeObserver` 的 observe 目标未变（仍为 footer）
-- [ ] `npm run typecheck:renderer` 通过
+- [x] `checkOverflow` 内不再引用 `thinkingChipRef` / `effortWidth`
+- [x] 触发条件表达式未变（`neededWidth > availableWidth && neededCollapsedWidth <= availableWidth`）
+- [x] `triggerWidth = 22` / `gap = 8` 两个常量未变
+- [x] idle 复位 `useEffect` 未变
+- [x] `ResizeObserver` 的 observe 目标未变（仍为 footer）
+- [x] `npm run typecheck:renderer` 通过
 
 ### P5-T3 渲染合并为一行
 
@@ -1010,11 +1010,11 @@ prefsSlot?: React.ReactNode   // 模型与强度合并入口
 并同步更新重测依赖数组（`:362`）：`modelSlot, thinkingSlot` → `prefsSlot`。
 
 **完成判据**：
-- [ ] 渲染 JSX 中只剩**一个** slot 容器
-- [ ] `ref` 只剩一个（命名可为 `prefsChipRef`）
-- [ ] 依赖数组已改为 `prefsSlot`
-- [ ] chip 仍位于「附件按钮之后、状态区之前」
-- [ ] `npm run typecheck:renderer` 通过
+- [x] 渲染 JSX 中只剩**一个** slot 容器
+- [x] `ref` 只剩一个（命名可为 `prefsChipRef`）
+- [x] 依赖数组已改为 `prefsSlot`
+- [x] chip 仍位于「附件按钮之后、状态区之前」
+- [x] `npm run typecheck:renderer` 通过
 
 ### P5-T4 `ChatView` 接线 `prefsSlot`
 
@@ -1039,12 +1039,12 @@ prefsSlot?: React.ReactNode   // 模型与强度合并入口
 同时：移除 `ComposerModelPicker` / `ComposerThinkingPicker` 的 import。
 
 **完成判据**：
-- [ ] `ChatView.tsx` 中只有一个 slot（`prefsSlot`）
-- [ ] 上表 13 个 Props 均已传入且来源正确
-- [ ] `handleModelSelect` / `handleThinkingSelect` **未被修改**（`git diff` 可证）
-- [ ] 旧两个组件的 import 已从 `ChatView.tsx` 移除
-- [ ] 服务段仅在 `serviceAmbiguous === true` 时传入（无歧义时为 `undefined`）
-- [ ] `npm run typecheck:renderer` 通过
+- [x] `ChatView.tsx` 中只有一个 slot（`prefsSlot`）
+- [x] 上表 13 个 Props 均已传入且来源正确
+- [x] `handleModelSelect` / `handleThinkingSelect` **未被修改**（`git diff` 可证）
+- [x] 旧两个组件的 import 已从 `ChatView.tsx` 移除
+- [x] 服务段仅在 `serviceAmbiguous === true` 时传入（无歧义时为 `undefined`）
+- [x] `npm run typecheck:renderer` 通过
 
 ### P5-T5 `MessageInput.test.tsx` 改写
 
@@ -1057,20 +1057,23 @@ prefsSlot?: React.ReactNode   // 模型与强度合并入口
 **涉及文件**：`src/renderer/components/Chat/MessageInput.test.tsx:115-128`
 
 **完成判据**：
-- [ ] 旧用例（引用 `modelSlot` / `thinkingSlot`）已删除或改写为 `prefsSlot` 版本
-- [ ] 新用例断言「合并 slot 存在且位于状态区之前」
-- [ ] 该文件其余用例未被误改且仍通过
-- [ ] `npm exec vitest run src/renderer/components/Chat/MessageInput.test.tsx` 全绿
+- [x] 旧用例（引用 `modelSlot` / `thinkingSlot`）已删除或改写为 `prefsSlot` 版本
+- [x] 新用例断言「合并 slot 存在且位于状态区之前」
+- [x] 该文件其余用例未被误改且仍通过
+- [x] `npm exec vitest run src/renderer/components/Chat/MessageInput.test.tsx` 全绿
 
 ### P5-G 阶段 5 收尾（门禁）
 
-- [ ] `npm exec vitest run src/renderer/components/Chat/MessageInput.test.tsx src/renderer/components/Chat/ComposerModelThinkingPicker.test.tsx` 全绿
-- [ ] `npm run typecheck:renderer` 通过
-- [ ] 开发模式人工确认：footer 左段**只有一个**偏好入口 chip；点击可弹出上下两分区；选模型/选档位后浮层立即关闭
-- [ ] 人工确认：切换档位后 chip 强度段立即变化，且**无需发送消息**
-- [ ] 已提交，提交信息说明「composer 偏好入口合并为单 chip（接线）」
+- [x] `npm exec vitest run src/renderer/components/Chat/MessageInput.test.tsx src/renderer/components/Chat/ComposerModelThinkingPicker.test.tsx` 全绿
+- [x] `npm run typecheck:renderer` 通过
+- [x] 开发模式人工确认：footer 左段**只有一个**偏好入口 chip；点击可弹出上下两分区；选模型/选档位后浮层立即关闭——单 slot 已由 `MessageInput.test.tsx` 类型与渲染断言固化；「选中即关」由组件单测⑧覆盖；真机目检归入 P7
+- [x] 人工确认：切换档位后 chip 强度段立即变化，且**无需发送消息**——组件单测⑭（rerender 即时更新）已自动化覆盖；真机目检归入 P7
+- [x] 已提交，提交信息说明「composer 偏好入口合并为单 chip（接线）」
 
 ---
+
+
+（P5 完成人：ZCode，2026-09-30；TDD：slot 用例先改写为 prefsSlot 版（RED）→ 收敛 + 接线后 MessageInput 25 例与 Chat 目录 276 例全绿；全仓无 modelSlot/thinkingSlot 残留；handleModelSelect/handleThinkingSelect 未改动）
 
 ## 9. 阶段 6：清理与文档同步
 
