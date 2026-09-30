@@ -2,7 +2,9 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getSession, openDatabase, createSession, setConfigValue } from '../database'
+import { getSession, openDatabase, createSession, setConfigValue, getPersistedTurn } from '../database'
+import { createTurnCoordinatorStorage } from '../turnCoordinatorStorage'
+import { TurnRuntime } from '../turnRuntime'
 import { createWorkDirManager } from '../workDirManager'
 import { RemoteCommandRouter } from './remoteCommandRouter'
 import type { FeishuInboundMessage } from '../../src/shared/feishuTypes'
@@ -158,12 +160,12 @@ describe('RemoteCommandRouter workdir binding', () => {
   function makeRouter(
     db: ReturnType<typeof openDatabase>,
     manager: ReturnType<typeof createWorkDirManager>,
-    options?: { maxParallel?: number; tryResolveConfirm?: boolean; wc?: { send: (...args: unknown[]) => void } }
+    options?: { maxParallel?: number; tryResolveConfirm?: boolean; wc?: { send: (...args: unknown[]) => void }; turnRuntime?: TurnRuntime }
   ) {
     const auditAppend = vi.fn().mockResolvedValue(undefined)
     const processedStore = makeProcessedStore()
     const router = new RemoteCommandRouter({
-      turnRuntime: testTurnRuntime,
+      turnRuntime: options?.turnRuntime ?? testTurnRuntime,
       db,
       runner: { run: vi.fn() } as never,
       processedStore: processedStore as never,
@@ -336,11 +338,11 @@ describe('RemoteCommandRouter busy guard', () => {
   function makeRouter(
     db: ReturnType<typeof openDatabase>,
     manager: ReturnType<typeof createWorkDirManager>,
-    options?: { maxParallel?: number; tryResolveConfirm?: boolean }
+    options?: { maxParallel?: number; tryResolveConfirm?: boolean; turnRuntime?: TurnRuntime }
   ) {
     const processedStore = makeProcessedStore()
     const router = new RemoteCommandRouter({
-      turnRuntime: testTurnRuntime,
+      turnRuntime: options?.turnRuntime ?? testTurnRuntime,
       db,
       runner: { run: vi.fn() } as never,
       processedStore: processedStore as never,
@@ -463,6 +465,35 @@ describe('RemoteCommandRouter busy guard', () => {
     const calls = testTurnRuntime.consumeForRequest.mock.calls
     expect(calls.findIndex(([, event]) => (event as { type: string }).type === 'tool-use'))
       .toBeLessThan(calls.findIndex(([, event]) => (event as { type: string }).type === 'source-completed'))
+  })
+
+  it('Feishu router 将同一个 prepared turn 交给 agent 并用该 turnId 写入终态', async () => {
+    const { db, manager } = setup()
+    const session = createSession(db, { name: 'Feishu turn identity chain' })
+    let turnSequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `feishu-chain-${++turnSequence}` } })
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: 'identity chain' })
+    mockResolveFeishuSession.mockResolvedValue({ sessionId: session.id, isNew: false })
+    mockRunFeishuRemoteAgent.mockResolvedValue({ summary: 'done', pendingConfirm: false, ok: true })
+
+    const { router } = makeRouter(db, manager, { turnRuntime: runtime })
+    await router.handleInbound(makeInbound({ messageId: 'identity-chain-feishu' }))
+
+    const [agentArgs] = mockRunFeishuRemoteAgent.mock.calls[0] as [{
+      requestId: string
+      turnId: string
+      acceptedTurn: { turnId: string; requestId: string; sessionId: string; currentUserMessageId: string }
+    }]
+    const persisted = getPersistedTurn(db, agentArgs.turnId)
+    expect(agentArgs.acceptedTurn).toMatchObject({
+      turnId: agentArgs.turnId,
+      requestId: agentArgs.requestId,
+      sessionId: session.id,
+      currentUserMessageId: persisted?.userMessageId
+    })
+    expect(persisted).toMatchObject({
+      requestId: agentArgs.requestId, sessionId: session.id, state: 'terminal', outcome: 'completed'
+    })
   })
 
   it('confirm-requested 进入 Core，并向 Feishu 出站 pending-confirm 提示', async () => {

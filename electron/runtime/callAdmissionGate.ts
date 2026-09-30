@@ -222,10 +222,19 @@ export class CallAdmissionGate {
   }
 
   cancel(requestId: string): boolean {
+    return this.cancelQueued((request) => request.requestId === requestId)
+  }
+
+  /** Cancel only the queued execution owned by this canonical turn. */
+  cancelByTurnId(turnId: string): boolean {
+    return this.cancelQueued((request) => request.turnId === turnId)
+  }
+
+  private cancelQueued(matches: (request: AdmissionRequest) => boolean): boolean {
     let cancelled = false
     for (let index = this.waiters.length - 1; index >= 0; index -= 1) {
       const waiter = this.waiters[index]!
-      if (waiter.request.requestId !== requestId) continue
+      if (!matches(waiter.request)) continue
       this.waiters.splice(index, 1)
       waiter.cleanup?.()
       waiter.resolve({ ok: false, verdict: 'rejected', cause: 'cancelled' })

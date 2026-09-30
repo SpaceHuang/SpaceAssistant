@@ -25,6 +25,61 @@ function toolExecutionPort(permits: InMemorySafetyPermitStore, execute: (call: {
 }
 
 describe('runAgentTurn', () => {
+  it('在 tool-call-started 的异步 History 提交期间取消时不进入 executor', async () => {
+    const registry = new ModelProviderRegistry()
+    registry.register(route, { providerId: 'async-start-cancel', stream: () => stream(
+      { type: 'tool-call', toolCallId: 'async-start-cancel-tool', toolName: 'lookup', input: { query: 'safe' } },
+      { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+    ) })
+    const backingHistory = new MemoryHistory()
+    let releaseStartAppend!: () => void
+    let reportStartAppend!: () => void
+    const startAppend = new Promise<void>((resolve) => { reportStartAppend = resolve })
+    const release = new Promise<void>((resolve) => { releaseStartAppend = resolve })
+    const history = {
+      read: (invocationId: string) => backingHistory.read(invocationId),
+      appendBatch: async (events: readonly HistoryEvent[], expectedVersion: number) => {
+        if (events.some((event) => event.kind === 'tool-call-started')) {
+          reportStartAppend()
+          await release
+        }
+        return backingHistory.appendBatch(events, expectedVersion)
+      }
+    }
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('async-start-cancel', ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    const controller = new AbortController()
+    const execute = vi.fn(async () => ({ output: 'must not execute' }))
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } })
+    const execution = createPermitBoundToolExecutionPort({
+      permits, admission, allowedPhase: 'recheck',
+      resolveExpected: async (call) => ({ ...toolBinding, requestId: 'async-start-cancel', turnId: 'async-start-cancel-turn', invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: 'recheck' as const }),
+      execute
+    })
+    const running = runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'async-start-cancel', turnId: 'async-start-cancel-turn',
+      request: { messages: [{ role: 'user', content: 'lookup safely' }], maxTokens: 20, signal: controller.signal }, history,
+      safetyGate,
+      prepareTool: async (call, stage) => ({ ...toolBinding, requestId: 'async-start-cancel', turnId: 'async-start-cancel-turn', invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: execution, maxModelTurns: 2
+    })
+
+    await startAppend
+    controller.abort('cancel during History start commit')
+    releaseStartAppend()
+    await expect(running).rejects.toMatchObject({ code: 'TURN_CANCELLED' })
+
+    expect(execute).not.toHaveBeenCalled()
+    expect(admission.executorEntries).toBe(0)
+    const events = (await backingHistory.read('async-start-cancel')).events
+    expect(events.some((event) => event.kind === 'tool-call-started' && (event.payload as { toolCallId?: string }).toolCallId === 'async-start-cancel-tool')).toBe(true)
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'async-start-cancel-tool', reason: 'REQUEST_CANCELLED' }) }))
+    expect(events.some((event) => event.kind === 'tool-call-finished' && (event.payload as { toolCallId?: string }).toolCallId === 'async-start-cancel-tool')).toBe(false)
+    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'cancelled' } })
+  })
+
   it('persists an explicitly timed out Hosted turn as timed_out rather than cancelled', async () => {
     const registry = new ModelProviderRegistry()
     registry.register(route, { providerId: 'fake-timeout', stream: async function* (call) {

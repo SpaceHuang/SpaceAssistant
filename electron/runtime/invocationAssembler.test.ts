@@ -560,7 +560,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
 
   it('passes Hosted agent answerer decisions to the injected AgentChannel factory', async () => {
     const { agentSdk } = assembleInvocation({
-      requestId: 'req-agent-confirm', sessionId: 'session-agent-confirm', model: 'test-model', locale: 'zh-CN',
+      requestId: 'req-agent-confirm', sessionId: 'session-agent-confirm', turnId: 'turn-agent-confirm', model: 'test-model', locale: 'zh-CN',
       messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'key',
       emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
     })
@@ -574,7 +574,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     })
 
     expect(agentChannelFactory).toHaveBeenCalledWith(expect.objectContaining({
-      lane: 'desktop', requestId: 'req-agent-confirm', sessionId: 'session-agent-confirm', toolName: 'write_file',
+      lane: 'desktop', requestId: 'req-agent-confirm', turnId: 'turn-agent-confirm', sessionId: 'session-agent-confirm', toolName: 'write_file',
       policy: { kind: 'agent' }
     }))
     expect(requestChannel.request).toHaveBeenCalledOnce()

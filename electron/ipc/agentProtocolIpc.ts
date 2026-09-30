@@ -737,7 +737,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     const controller = configuringAbortControllers.get(turnId)
     cancelClaudeAdmission(turnId)
     const turn = typeof turnRuntime.getTurn === 'function' ? turnRuntime.getTurn(turnId) : undefined
-    if (turn?.requestId) getCallAdmissionGate().cancel(turn.requestId)
+    getCallAdmissionGate().cancelByTurnId(turnId)
     const cancelled = turnRuntime.cancel(turnId)
     if (cancelled && controller) {
       controller.abort()

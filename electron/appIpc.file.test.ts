@@ -6,6 +6,7 @@ import { waitForToolConfirm } from './toolConfirmRegistry'
 import * as database from './database'
 import { getMainWindow } from './windowRef'
 import { BrowserWindow } from 'electron'
+import { getCallAdmissionGate } from './runtime/callAdmissionGate'
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
@@ -469,6 +470,7 @@ describe('file IPC handlers', () => {
     const cancel = vi.fn().mockReturnValue(true)
     const recover = vi.fn()
     const runtimeCancel = vi.fn().mockReturnValue(true)
+    const cancelQueuedTurn = vi.spyOn(getCallAdmissionGate(), 'cancelByTurnId')
     ctx.turnRuntime = {
       coordinator: { cancel, recover },
       cancel: runtimeCancel,
@@ -481,6 +483,7 @@ describe('file IPC handlers', () => {
     const result = await ipc.getHandler('chat:cancel-turn')!({}, 'turn-desktop-1')
 
     expect(result).toBe(true)
+    expect(cancelQueuedTurn).toHaveBeenCalledWith('turn-desktop-1')
     expect(runtimeCancel).toHaveBeenCalledWith('turn-desktop-1')
     expect(cancel).not.toHaveBeenCalled()
   })

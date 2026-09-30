@@ -220,6 +220,28 @@ describe('CallAdmissionGate 排队唤醒与审计(0b 语义)', () => {
     setCallAdmissionGate(null)
   })
 
+  it('取消一个 turn 不会移除另一会话共享 requestId 的排队调用', async () => {
+    const gate = new CallAdmissionGate({ policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
+    const blocker = await gate.acquire(req({ requestId: 'blocker' }))
+    expect(blocker.ok).toBe(true)
+    const controllerA = new AbortController()
+    const controllerB = new AbortController()
+    const pendingA = gate.acquire(req({ requestId: 'shared-request', turnId: 'turn-a' }), { signal: controllerA.signal })
+    const pendingB = gate.acquire(req({ requestId: 'shared-request', turnId: 'turn-b' }), { signal: controllerB.signal })
+    await Promise.resolve()
+    expect(gate.queuedCount).toBe(2)
+
+    const cancelled = gate.cancelByTurnId('turn-a')
+
+    expect(cancelled).toBe(true)
+    await expect(pendingA).resolves.toMatchObject({ ok: false, cause: 'cancelled' })
+    expect(gate.queuedCount).toBe(1)
+    controllerB.abort()
+    await expect(pendingB).resolves.toMatchObject({ ok: false, cause: 'cancelled' })
+    expect(gate.queuedCount).toBe(0)
+    if (blocker.ok) blocker.ticket.release()
+  })
+
   it('并发满 → disposition=queue 排队等待;释放后队首复核唤醒', async () => {
     const gate = new CallAdmissionGate({ policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
     const first = await gate.acquire(req({ requestId: 'r1' }))

@@ -10,7 +10,9 @@ import fs from 'fs/promises'
 import fsSync from 'fs'
 import os from 'os'
 import path from 'path'
-import { openDatabase, createSession, setConfigValue } from '../database'
+import { openDatabase, createSession, setConfigValue, getPersistedTurn } from '../database'
+import { createTurnCoordinatorStorage } from '../turnCoordinatorStorage'
+import { TurnRuntime } from '../turnRuntime'
 import {
   resetRunningRemoteAgentRegistryForTests,
   tryClaimRemoteSession,
@@ -200,6 +202,44 @@ describe('WeChatCommandRouter', () => {
     const calls = testTurnRuntime.consumeForRequest.mock.calls
     expect(calls.findIndex(([, event]) => (event as { type: string }).type === 'tool-use'))
       .toBeLessThan(calls.findIndex(([, event]) => (event as { type: string }).type === 'source-completed'))
+  })
+
+  it('WeChat router 将同一个 prepared turn 交给 agent 并用该 turnId 写入终态', async () => {
+    mockRunAgent.mockResolvedValue({ summary: 'done', pendingConfirm: false, ok: true })
+    let turnSequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `wechat-chain-${++turnSequence}` } })
+    router = new WeChatCommandRouter({
+      db, turnRuntime: runtime,
+      botService: {
+        getBot: () => ({ reply, sendTyping: vi.fn(), stopTyping: vi.fn() }),
+        getRawBot: () => null
+      } as never,
+      processedStore: processed, imChannel: new WeChatImChannel(), auditLogger: audit,
+      getWeChatConfig: () => ({ ...DEFAULT_WECHAT_CONFIG, enabled: true, remoteEnabled: true, loggedIn: true, remoteSenderAllowlist: ['wx-user@test'] }),
+      getAppConfig: () => ({ defaultModel: 'm1', maxParallelChatSessions: 3 }),
+      getWorkDir: () => tmpDir,
+      workDirManager: { listProfiles: () => [], getActiveProfileId: () => 'p1', getActiveWorkDir: () => tmpDir, checkDirectoryWritable: () => ({ ok: true }) } as never,
+      getUserDataPath: () => tmpDir, getApiKey: async () => 'key', getBaseUrl: () => 'https://api.example.com',
+      getMainWebContents: () => ({ send: vi.fn() }) as never, getModel: () => 'm1', getToolsConfig: () => ({ deniedTools: [] }) as never
+    })
+
+    await router.handleSdkInbound(makeIncomingMessage({ text: 'identity chain' }))
+
+    const [agentArgs] = mockRunAgent.mock.calls[0] as [{
+      requestId: string
+      turnId: string
+      acceptedTurn: { turnId: string; requestId: string; sessionId: string; currentUserMessageId: string }
+    }]
+    const persisted = getPersistedTurn(db, agentArgs.turnId)
+    expect(agentArgs.acceptedTurn).toMatchObject({
+      turnId: agentArgs.turnId,
+      requestId: agentArgs.requestId,
+      sessionId,
+      currentUserMessageId: persisted?.userMessageId
+    })
+    expect(persisted).toMatchObject({
+      requestId: agentArgs.requestId, sessionId, state: 'terminal', outcome: 'completed'
+    })
   })
 
   it('confirm-requested 进入 Core，并保留 WeChat pending-confirm 出站结果', async () => {

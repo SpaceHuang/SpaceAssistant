@@ -55,6 +55,27 @@ function channel(overrides: Partial<ConstructorParameters<typeof AgentChannel>[0
 }
 
 describe('AgentChannel（P2-3）', () => {
+  it('相同 requestId 的不同 turn 分别获得审批父任务配额', async () => {
+    const pool = new ApprovalAdmission({ concurrency: 2, queueLimit: 0, maxInFlightPerParent: 1 })
+    let releaseA!: (result: ApprovalInvocationResult) => void
+    const first = channel({
+      turnId: 'turn-a', approvalAdmission: pool,
+      invokeApproval: () => new Promise<ApprovalInvocationResult>((resolve) => { releaseA = resolve })
+    }).ch
+    const secondInvoke = vi.fn(async () => ({ ok: true as const, verdict: APPROVE }))
+    const second = channel({ turnId: 'turn-b', approvalAdmission: pool, invokeApproval: secondInvoke }).ch
+
+    const firstResult = first.request(req({ timeoutMs: 5_000 }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const secondResult = second.request(req({ timeoutMs: 5_000 }))
+
+    await expect(secondResult).resolves.toMatchObject({ kind: 'approved' })
+    expect(secondInvoke).toHaveBeenCalledOnce()
+    first.cancel('outer')
+    await expect(firstResult).resolves.toMatchObject({ kind: 'rejected', cause: 'cancelled' })
+    void releaseA
+  })
+
   it('approve 裁决 → approved + answererKind=agent + cause=agent-approved，无 memory（I3）', async () => {
     const { ch } = channel()
     const outcome = await ch.request(req())

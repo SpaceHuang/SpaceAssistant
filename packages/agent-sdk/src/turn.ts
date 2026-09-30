@@ -1297,6 +1297,10 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           })
         } catch (error) {
           if (error instanceof ToolExecutionRejectedError) {
+            // tool-call-started is committed before the dispatch lease's final abort check.
+            // A rejection here proves the executor was never entered, so settle the
+            // proposal as not-dispatched even if that start projection already exists.
+            toolDispatchStates.set(tool.toolCallId, 'pending')
             if (error.reason === 'CANCELLED' || input.request.signal?.aborted) {
               await markNotDispatched(tool, isTurnTimeoutSignal(input.request.signal) ? 'REQUEST_TIMEOUT' : 'REQUEST_CANCELLED')
               throw abortErrorForSignal(input.request.signal)

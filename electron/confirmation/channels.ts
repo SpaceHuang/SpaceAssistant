@@ -158,6 +158,7 @@ export function channelFor(args: ResolveConfirmChannelArgs): ConfirmationChannel
 export interface ResolveConfirmChannelArgs {
   lane: ExecutionLane
   requestId: string
+  turnId?: string
   sessionId: string
   toolName: string
   toolUseId?: string
@@ -170,6 +171,7 @@ export interface ResolveConfirmChannelArgs {
   agentChannelFactory?: (deps: {
     lane: ExecutionLane
     requestId: string
+    turnId?: string
     sessionId: string
     toolName: string
     policy: ConfirmAnswererPolicy
@@ -207,6 +209,7 @@ export function resolveConfirmChannel(args: ResolveConfirmChannelArgs): Confirma
     return args.agentChannelFactory({
       lane: args.lane,
       requestId: args.requestId,
+      ...(args.turnId ? { turnId: args.turnId } : {}),
       sessionId: args.sessionId,
       toolName: args.toolName,
       policy: answerer,

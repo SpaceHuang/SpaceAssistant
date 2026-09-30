@@ -910,6 +910,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       createChannel: confirmationAdapter.createChannel ?? ((call, confirmation) => channelFor({
         lane: materialsLane,
         requestId: materials.requestId,
+        turnId: materials.acceptedTurn?.turnId ?? materials.turnId,
         sessionId: materials.sessionId,
         toolName: call.toolName,
         toolUseId: call.toolCallId,
