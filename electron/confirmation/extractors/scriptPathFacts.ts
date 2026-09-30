@@ -350,29 +350,32 @@ function walkExpr(expr: IrExpr, env: WalkEnv, paths: Set<string>, state: WalkSta
       !(chain && (FILE_CALLS.has(chain) || PROCESS_CALLS.has(chain) || isPureCallChain(chain))) &&
       !isPathMethod && !isPathConstructor && !receiverTyped && !isLocalDefCall
     ) { state.unmodeledCall = true; recordEvidence(state, chain, 'unmodeled-call') }
-    walkExpr(expr.callee, env, paths, state)
-    expr.args.forEach((arg) => walkExpr(arg, env, paths, state))
-    expr.kwargs.forEach((kw) => walkExpr(kw.value, env, paths, state))
+    walkExpr(expr.callee, env, paths, state, conditionallyEvaluated)
+    expr.args.forEach((arg) => walkExpr(arg, env, paths, state, conditionallyEvaluated))
+    expr.kwargs.forEach((kw) => walkExpr(kw.value, env, paths, state, conditionallyEvaluated))
     return
   }
   switch (expr.kind) {
-    case 'attr': walkExpr(expr.base, env, paths, state); break
-    case 'binop': walkExpr(expr.left, env, paths, state); walkExpr(expr.right, env, paths, state); break
-    case 'unaryop': walkExpr(expr.operand, env, paths, state); break
-    case 'compare': walkExpr(expr.left, env, paths, state); walkExpr(expr.right, env, paths, state); break
+    // v5 评审 B6:attr/binop/unaryop/compare/list/tuple/set/dict/subscript/slice 均为
+    // 纯递归位置(恒定随外层求值,不改变条件性)——标志必须原样透传,否则深层 walrus 被
+    // 丢回「恒定求值」而错误重绑(永不执行的 walrus 覆盖敏感路径)。
+    case 'attr': walkExpr(expr.base, env, paths, state, conditionallyEvaluated); break
+    case 'binop': walkExpr(expr.left, env, paths, state, conditionallyEvaluated); walkExpr(expr.right, env, paths, state, conditionallyEvaluated); break
+    case 'unaryop': walkExpr(expr.operand, env, paths, state, conditionallyEvaluated); break
+    case 'compare': walkExpr(expr.left, env, paths, state, conditionallyEvaluated); walkExpr(expr.right, env, paths, state, conditionallyEvaluated); break
     case 'boolop': expr.values.forEach((v, i) => walkExpr(v, env, paths, state, i > 0)); break
     case 'conditional': walkExpr(expr.test, env, paths, state); walkExpr(expr.body, env, paths, state, true); walkExpr(expr.orelse, env, paths, state, true); break
-    case 'list': case 'tuple': case 'set': expr.elts.forEach((v) => walkExpr(v, env, paths, state)); break
-    case 'dict': [...expr.keys, ...expr.values].forEach((v) => { if (v) walkExpr(v, env, paths, state) }); break
-    case 'subscript': walkExpr(expr.value, env, paths, state); walkExpr(expr.index, env, paths, state); break
-    case 'slice': [expr.lower, expr.upper, expr.step].forEach((v) => { if (v) walkExpr(v, env, paths, state) }); break
+    case 'list': case 'tuple': case 'set': expr.elts.forEach((v) => walkExpr(v, env, paths, state, conditionallyEvaluated)); break
+    case 'dict': [...expr.keys, ...expr.values].forEach((v) => { if (v) walkExpr(v, env, paths, state, conditionallyEvaluated) }); break
+    case 'subscript': walkExpr(expr.value, env, paths, state, conditionallyEvaluated); walkExpr(expr.index, env, paths, state, conditionallyEvaluated); break
+    case 'slice': [expr.lower, expr.upper, expr.step].forEach((v) => { if (v) walkExpr(v, env, paths, state, conditionallyEvaluated) }); break
     case 'lambda':
       // 绑定位置排查(评审 checklist):lambda 参数遮蔽外层常量不另失效——lambda 体读到的
       // 是调用方实参,而 lambda 的任何调用路径必然先落 unknown(直接调用 chain 为 null、
       // 经绑定名调用该名非 def),陈旧常量读不可达;defaults 仍按定义时求值遍历。
       expr.defaults.forEach((v) => walkExpr(v, env, paths, state)); walkExpr(expr.body, env, paths, state, true); break
-    case 'await': case 'starred': walkExpr(expr.value, env, paths, state); break
-    case 'yield': if (expr.value) walkExpr(expr.value, env, paths, state); break
+    case 'await': case 'starred': walkExpr(expr.value, env, paths, state, conditionallyEvaluated); break
+    case 'yield': if (expr.value) walkExpr(expr.value, env, paths, state, conditionallyEvaluated); break
     case 'comprehension':
       // N7:comprehension 目标失效属无害的过度保守——先失效再走 elt,防止把迭代变量当常量
       for (const gen of expr.generators) invalidateTargetText(gen.target, env, state)
@@ -398,7 +401,7 @@ function walkExpr(expr: IrExpr, env: WalkEnv, paths: Set<string>, state: WalkSta
         else if (isHandleValueExpr(expr.value, env)) env.handles.add(expr.target)
       }
       break
-    case 'f_string': if (expr.interpolations.length) state.unmodeledCall = true; expr.interpolations.forEach((v) => walkExpr(v, env, paths, state)); break
+    case 'f_string': if (expr.interpolations.length) state.unmodeledCall = true; expr.interpolations.forEach((v) => walkExpr(v, env, paths, state, conditionallyEvaluated)); break
   }
 }
 

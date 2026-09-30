@@ -497,6 +497,54 @@ describe('extractScriptPathFacts:v3 评审修复回归(walrus :=)', () => {
 })
 
 // ============================================================================
+// v5 评审阻断项 B6:conditionallyEvaluated 标志未沿纯递归分支透传——
+// 永不执行的 walrus 被错误重绑,敏感路径被低估(确认门绕过)。
+// ============================================================================
+describe('extractScriptPathFacts:v5 评审 B6(walrus 重绑标志透传)', () => {
+  beforeAll(async () => {
+    await scriptParserService.ensureInitialized()
+  })
+
+  afterAll(() => resetScriptParserServiceForTests())
+
+  it('B6a 空迭代推导式 key 位置的 walrus 永不执行,不得重绑(评审 PoC)', () => {
+    expect(extractScriptPathFacts([
+      'p = "/etc/passwd"',
+      'd = {(p := "/safe.txt"): 1 for x in []}',
+      'open(p)'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('B6b ternary 分支里容器内的 walrus 不重绑', () => {
+    expect(extractScriptPathFacts([
+      'p = "/a"',
+      'v = ((p := "/b"), 1) if flag else 0',
+      'open(p)'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('B6c and 短路右侧调用实参里的 walrus 不重绑', () => {
+    expect(extractScriptPathFacts([
+      'p = "/a"',
+      'if flag and len((p := "/b")):',
+      '    open(p)'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('B6 对照:合法恒定求值位置的重绑不受透传影响(v3a/obs1a 语义保持)', () => {
+    expect(extractScriptPathFacts([
+      'p = "/safe.txt"',
+      'if (p := "/etc/passwd"):',
+      '    open(p)'
+    ].join('\n'), 'python')).toMatchObject({ paths: ['/etc/passwd'], completeness: 'complete', dynamicAccess: false })
+    expect(extractScriptPathFacts([
+      'if (p := "/tmp/x.txt"):',
+      '    open(p)'
+    ].join('\n'), 'python')).toMatchObject({ paths: ['/tmp/x.txt'], completeness: 'complete' })
+  })
+})
+
+// ============================================================================
 // v5 评审阻断项 B5:字典推导式 key 表达式逃逸——tree-sitter 结构为
 // dictionary_comprehension(body: pair(key, value)),key 是 pair 的字段,
 // 旧实现在推导式节点上取 key 恒为 null(死代码),pair 又只取 value 静默丢 key。

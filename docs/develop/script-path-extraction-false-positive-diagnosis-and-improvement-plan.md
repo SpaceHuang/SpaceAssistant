@@ -1,6 +1,6 @@
 # run_script 路径提取假阳性：诊断与改进方案
 
-- 状态：已实施（2026-09-30，P0 / P1 / P2 全量落地；五轮评审阻断项 B1/B2/B3 及变体 B1-R/B2-R、walrus、B5 全部修复，第四轮观察项 obs1–obs3 落地，见 §12.7–§12.11；端到端真机验收遗留，见 §12.6）
+- 状态：已实施（2026-09-30，P0 / P1 / P2 全量落地；六轮评审阻断项 B1/B2/B3 及变体 B1-R/B2-R、walrus、B5、B6 全部修复，第四轮观察项 obs1–obs3 落地，见 §12.7–§12.12；端到端真机验收遗留，见 §12.6）
 - 触发场景：会话 `a7981827-5a20-4eab-a6fd-a2971e12659c`（"会话 27"）中 `run_script` 反复弹人工确认卡
 - 涉及模块：`electron/confirmation/extractors/scriptPathFacts.ts`、`electron/shell/scriptIr/pythonAdapter.ts`、`src/shared/policy/defaultRules.ts`
 - 关联文档：`docs/develop/script-security-parser-treesitter-upgrade-plan.md`、`docs/develop/security-approval-experience-improvement-plan.md`
@@ -1217,3 +1217,28 @@ assign 同语义方向落实，并做了 sound 性收窄）：
 
 修复后验证：新增 4 用例先行转红(B5a/B5b/B5-analyzer/N14 两形态);提取器/内容分析/
 适配器 5 套件 202 用例通过(pair 抛错未破坏任何既有路径);全量 `npm test` 复验通过。
+
+### 12.12 第六轮评审修复记录（2026-09-30，B6）
+
+评审报告：`docs/review/script-path-extraction-fp-review-v5.md`。B5/N14 修复核验通过,
+但 v4 引入的 walrus 重绑特性被检出 **soundness 缺陷 B6**:`conditionallyEvaluated`
+标志在穿过容器/调用实参等纯递归分支时被丢回默认值(false)——「永不执行的 walrus」
+被错误重绑,敏感路径被低估:
+
+```python
+p = "/etc/passwd"
+d = {(p := "/safe.txt"): 1 for x in []}   # 空迭代,walrus 永不执行
+open(p)                                    # 提取器误认为只碰 /safe.txt → complete
+```
+
+ternary 分支内的元组、and 短路右侧调用实参两变体同理。
+
+修复(评审给定方案:标志沿所有纯递归分支透传):attr / binop / unaryop / compare /
+list / tuple / set / dict / subscript / slice / await / starred / yield / f-string 插值 /
+call 的 callee 与实参——这些位置恒定随外层求值,不改变条件性,标志原样穿透;
+已引入条件性的分支(boolop 右侧、conditional 分支、lambda 体、推导式 elt/条件/后续
+生成器)维持现覆盖。
+
+修复后验证:三形态用例先行转红(B6c 初版因 check 未建模而假绿,改用纯函数 len 后
+准确命中重绑点);提取器/内容分析/适配器/门控 6 套件 318 用例通过(v3a/obs1a 合法
+重绑对照保持 complete);全量 `npm test` 复验通过。
