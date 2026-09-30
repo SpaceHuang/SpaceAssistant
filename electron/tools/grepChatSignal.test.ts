@@ -48,8 +48,9 @@ async function createSleepFixture(root: string): Promise<string> {
   const fixture = path.join(root, 'sleep-fixture.cjs')
   await fs.writeFile(fixture, `
 if (process.argv.includes('--sleep')) {
-  process.stdin.resume()
-  process.stdin.on('end', () => process.exit(0))
+  // grep 的授权文件模式将 stdin 设为 ignore。这里不能依赖 stdin EOF 维持夹具，
+  // 否则子进程会在取消信号到达前正常退出。
+  process.stderr.write('ready\\n')
   setTimeout(() => {}, 30000)
 } else {
   process.stdout.write('hit:1:Needle\\n')
@@ -108,11 +109,22 @@ describe('Phase 2a:grep 直接感知聊天中止', () => {
     const binary = await createSleepFixture(root)
     ripgrep.resolve.mockReturnValue({ path: binary, source: 'development', platform: process.platform, arch: process.arch })
     ripgrep.inspect.mockResolvedValue({ available: true })
-    ctx.grepSpawnProcess = (_binary, rgArgs, options) => spawn(process.execPath, [binary, '--sleep', ...rgArgs], options)
+    let markReady!: () => void
+    const fixtureReady = new Promise<void>((resolve) => { markReady = resolve })
+    ctx.grepSpawnProcess = (_binary, rgArgs, options) => {
+      const child = spawn(process.execPath, [binary, '--sleep', ...rgArgs], options)
+      let stderr = ''
+      child.stderr?.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString('utf8')
+        if (stderr.includes('ready')) markReady()
+      })
+      return child
+    }
     const turn = new AbortController()
     ctx.signal = turn.signal
     const pending = grepExecutor.execute(input, ctx)
-    setTimeout(() => turn.abort(), 30)
+    await fixtureReady
+    turn.abort()
     const res = await pending
     expect(res.success).toBe(false)
     expect(String(res.error)).toContain('已取消')

@@ -276,3 +276,24 @@ Tests       7091 passed | 106 skipped (7197)
 ```
 
 随后 `typecheck:shared`、`typecheck:renderer`、`typecheck:agent-sdk`、`typecheck:agent-provider-pi-ai`、`check:agent-sdk` 和 `npm run build` 均退出码 0；build 只有既有 chunk/import 警告。测试文件修改通过 `git diff --check`。代码及本记录以 `574947ec2edf812b881d0636cadb0758ba8238b8`（`test: isolate lifecycle fixtures from temp roots`）提交并普通推送至 `main`。Actions run `36762179210` 对该 SHA 的所有 jobs 均 Success，包括 Ubuntu 全量测试、Windows Golden、Shell lifecycle 各平台、SQLite Electron probes、SDK/类型门禁和 build。该提交云端接受后执行 `git fetch origin`：`HEAD` 与 `origin/main` 均为 `574947ec2edf812b881d0636cadb0758ba8238b8`，`git rev-list --left-right --count origin/main...main` 输出 `0 0`，`git status --short --branch` 为干净状态。最终对齐及计划整体收口在文档证据提交后再核验一次。
+
+### 文档验收提交后的 grep 取消夹具修正
+
+文档证据提交 `b5710dabd9b9100cd53784d24efb631f6401a3d6` 触发 Actions run `36763579955`。Ubuntu 全量测试报告两项失败：`grepChatSignal.test.ts` 收到成功而非取消；Unix 忽略 SIGTERM 测试也收到成功而非取消。检查 fixture 后确认均为测试夹具未维持“进程正在运行”条件，不是生产取消路径回归：
+
+- `grepChatSignal.test.ts` 使用授权文件读取模式，`grepWithRg` 为该子进程配置 `stdin: ignore`；夹具原先依赖 stdin 的 `end` 事件退出，因此会在取消信号前正常结束并返回成功。修正为夹具在 stderr 发出 ready 标记并持续运行，测试等 ready 后才 abort。
+- `grepAbortResponse.test.ts` 的 Unix 用例仅传入 `--fixture-ignore-sigterm`，而 fixture 只有在收到 `--fixture-sleep` 时才挂起；在快速 runner 上它先正常输出并退出，测试随后才触发 abort。修正 fixture 让“忽略 SIGTERM”模式同时进入持续运行状态。
+
+针对性绿灯及全量回归：
+
+```text
+$ TMPDIR=/tmp npx vitest run electron/tools/grepChatSignal.test.ts electron/tools/grepAbortResponse.test.ts
+Test Files  2 passed
+Tests       9 passed
+
+$ TMPDIR=/tmp npm test
+Test Files  806 passed | 1 skipped (807)
+Tests       7091 passed | 106 skipped (7197)
+```
+
+该测试夹具修正尚待提交、推送及云端全平台 Actions 复验；阶段 6 在取得成功 CI 与最终 SHA/工作树对齐证据前保持进行中。

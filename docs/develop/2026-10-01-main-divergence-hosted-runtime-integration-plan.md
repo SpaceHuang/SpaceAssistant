@@ -258,7 +258,7 @@ npm run build
 | 3. UI 与 turn 隔离 | 完成 | request 索引按会话保存并在身份歧义时拒绝回退；停止操作同步清理本会话 UI 并按 turnId 通知主进程。renderer、admission、Hosted handoff 和 SDK 跨会话共享 requestId 回归验证通过，见实施记录。 |
 | 4. 取消审计隐私 | 完成 | agent logger 投影/日志与 Hosted Host 定向测试 31/31 通过；取消/失败继续由既有 History 和 session `turn_end` 区分，不新增重复事件；既有 allowlist 投影测试通过。 |
 | 5. 全量兼容门禁 | 完成 | `npm test` 终验 804 文件通过、1 跳过；7081 项通过、106 跳过。agent-sdk/provider/renderer/shared 类型检查、`check:agent-sdk` 与 `npm run build` 均通过。首轮全量发现 5 项旧 display 缺 activity 失败，新增共享协议兼容回归并在转换边界默认空轨迹后重跑全量通过；build 仅有 chunk/import 提示。 |
-| 6. 历史收敛、最终树审核与云端接受 | 完成 | 云端 46 项逐提交分类及文件清单已审阅；生命周期修复、计划文档、双亲 merge、workflow 修复和跨平台测试夹具修复均已推送。第二次 Actions 暴露的 Ubuntu `/tmp` 夹具问题已按 TDD 修正；`TMPDIR=/tmp` 全量测试、类型/SDK 门禁和 build 通过。实现提交 `574947ec` 的云端 Actions run `36762179210` 全部 job 成功；普通 main 推送成功，fetch 后本地 `main` 与 `origin/main` 同 SHA，rev-list 为 `0 0`，工作树干净。详细证据见实施记录。 |
+| 6. 历史收敛、最终树审核与云端接受 | 进行中 | 云端 46 项逐提交分类及文件清单已审阅；生命周期修复、计划文档、双亲 merge、workflow 修复和跨平台测试夹具修复均已推送。实现提交 `574947ec` 的云端 Actions run `36762179210` 全部 job 成功，随后 doc-only 提交触发的 run `36763579955` 暴露两处 grep 测试夹具缺陷；已按 TDD 修正并通过 `TMPDIR=/tmp npm test`（7091 项通过、106 项跳过）。须将该测试夹具修复提交推送，并确认其全平台 Actions 成功，再记录最终本地/云端 SHA 与干净状态。详细证据见实施记录。 |
 
 ## 7. 逐项完成判定表
 

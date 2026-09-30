@@ -19,7 +19,7 @@ async function createFixture(root: string): Promise<string> {
   await fs.writeFile(fixture, `
 const a = process.argv.slice(2)
 if (a.includes('--fixture-ignore-sigterm')) process.on('SIGTERM', () => {})
-if (a.includes('--fixture-sleep')) {
+if (a.includes('--fixture-sleep') || a.includes('--fixture-ignore-sigterm')) {
   process.stdin.resume()
   process.stdin.on('end', () => process.exit(0))
   setTimeout(() => {}, 30000)
