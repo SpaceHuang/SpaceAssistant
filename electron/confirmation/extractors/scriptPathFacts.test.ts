@@ -454,3 +454,87 @@ describe('extractScriptPathFacts:评审修复回归(B1 defs 失效 / B2 元组�
     expect(() => extractScriptPathFacts(deep, 'python')).not.toThrow()
   })
 })
+
+// ============================================================================
+// v2 评审修复回归(B2-R 带括号/嵌套元组目标 / B1-R 函数参数遮蔽 def 名):
+// 同 B1/B2 根因的变体形态,修复前均判 complete 完全绕过确认门。
+// ============================================================================
+describe('extractScriptPathFacts:v2 评审修复回归(变体形态)', () => {
+  beforeAll(async () => {
+    await scriptParserService.ensureInitialized()
+  })
+
+  afterAll(() => resetScriptParserServiceForTests())
+
+  // ---- B2-R:带括号/嵌套元组目标 ----
+
+  it('B2-Ra for 带括号扁平元组目标 (p, q) 重绑定同名常量 → unknown', () => {
+    expect(extractScriptPathFacts([
+      'p = "/safe.txt"',
+      'for (p, q) in items:',
+      '    open(p)'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('B2-Rb 嵌套元组目标 x, (p, r) 重绑定同名常量 → unknown', () => {
+    expect(extractScriptPathFacts([
+      'p = "/safe.txt"',
+      'for x, (p, r) in items:',
+      '    open(p)'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('B2-Rc 带括号元组的 comprehension 目标 → unknown', () => {
+    expect(extractScriptPathFacts([
+      'p = "/safe.txt"',
+      'rows = [open(p) for (p, q) in rows]'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('B2-R 对照:元组目标与常量不同名时不误伤(正常传播保持)', () => {
+    expect(extractScriptPathFacts([
+      'p = "/safe.txt"',
+      'for x, y in items:',
+      '    open(p)'
+    ].join('\n'), 'python')).toMatchObject({ paths: ['/safe.txt'], completeness: 'complete' })
+  })
+
+  // ---- B1-R:函数参数遮蔽 def 名 ----
+
+  it('B1-Ra 参数遮蔽 def 名后体内调用(评审 PoC)→ unknown', () => {
+    expect(extractScriptPathFacts([
+      'import os',
+      'def helper():',
+      '    pass',
+      'def run(helper):',
+      '    helper("rm -rf /tmp/x")',
+      'run(os.system)'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('B1-Rb 带默认值参数形态同样剔除 def 名 → unknown', () => {
+    expect(extractScriptPathFacts([
+      'import os',
+      'def helper():',
+      '    pass',
+      'def run(helper=None):',
+      '    helper("rm -rf /tmp/x")',
+      'run(os.system)'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('B1-Rc *args 形态剔除 def 名 → unknown(保守:绑定值不可调用也不放行)', () => {
+    expect(extractScriptPathFacts([
+      'def helper():',
+      '    pass',
+      'def run(*helper):',
+      '    helper("rm -rf /tmp/x")'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('B1-R 对照:普通参数名(不与 def 同名)不误伤', () => {
+    expect(extractScriptPathFacts('def run(path):\n    open("/tmp/known.txt")\nrun("x")', 'python')).toMatchObject({
+      paths: ['/tmp/known.txt'], completeness: 'complete'
+    })
+  })
+})

@@ -1,6 +1,6 @@
 # run_script 路径提取假阳性：诊断与改进方案
 
-- 状态：已实施（2026-09-30，P0 / P1 / P2 全量落地；同日评审 B1/B2/B3 阻断项已修复，见 §12.7；端到端真机验收遗留，见 §12.6）
+- 状态：已实施（2026-09-30，P0 / P1 / P2 全量落地；两轮评审阻断项 B1/B2/B3 及变体 B1-R/B2-R 均已修复，见 §12.7–§12.8；端到端真机验收遗留，见 §12.6）
 - 触发场景：会话 `a7981827-5a20-4eab-a6fd-a2971e12659c`（"会话 27"）中 `run_script` 反复弹人工确认卡
 - 涉及模块：`electron/confirmation/extractors/scriptPathFacts.ts`、`electron/shell/scriptIr/pythonAdapter.ts`、`src/shared/policy/defaultRules.ts`
 - 关联文档：`docs/develop/script-security-parser-treesitter-upgrade-plan.md`、`docs/develop/security-approval-experience-improvement-plan.md`
@@ -1104,3 +1104,32 @@ for (const rawPath of scriptPaths.paths) {
 
 修复后验证：评审 3 组定向测试 + N 系列防御用例转绿（提取器 62 用例）；相关 8 套件
 313 用例通过；全量 `npm test` 与 `typecheck` 复验通过（见提交记录）。
+
+### 12.8 第二轮评审修复记录（2026-09-30，B1-R / B2-R）
+
+评审报告：`docs/review/script-path-extraction-fp-review-v2.md`。v1 的 B1/B2/B3 字面 PoC 已全部
+修复到位，但**同一根因的两类变体仍可完全绕过**（判 complete 不弹卡）——第一轮修复只堵了
+字面形态，变体未入测试。本轮按评审给出的「绑定位置枚举 checklist」整体排查后修复。
+
+| 项 | 变体形态 | 修复 | 测试 |
+|---|---|---|---|
+| B2-R | `for (p, q) in items`（带括号）、`for x, (p, r)`（嵌套元组）、comprehension 带括号形态——括号文本过不了 `isSimpleName`，同名常量不失效 | `invalidateName` 升级为 `invalidateTargetText`：先剥**配平的整层括号**（`wrapsBalanced` 防误剥 `(p) + (q)`），再按**括号深度 0** 的逗号切分，递归失效；下标/属性片段仍自然跳过 | B2-Ra/b/c + 不同名不误伤对照 |
+| B1-R | `def run(helper): helper(...)`——参数遮蔽外层 def 名，`fnEnv.defs` 直接继承未剔参数名，体内调用被 `isLocalDefCall` 抑制 | function_def 构造 `fnEnv` 后按参数清单剔除（适配层已把 default/typed/splat 参数归一为裸名）；参数值由调用方注入，事实链断裂 → dynamic-execution | B1-Ra/b/c（位置/默认值/\*args 三形态）+ 普通参数不误伤对照 |
+
+**绑定位置 checklist 全量排查结论**（评审要求，防第三轮同族变体）：
+
+| 绑定位置 | 状态 |
+|---|---|
+| `=`（assign，含元组解包） | ✅ invalidateTargetText |
+| `aug_assign` | ✅ |
+| `for` 目标 | ✅（B2-R 后覆盖括号/嵌套元组） |
+| comprehension 目标 | ✅（同上） |
+| `with … as` | ✅ |
+| `del` | ✅ |
+| **函数参数** | ✅（本轮 B1-R 修复；default/typed/splat 由适配层归一为裸名） |
+| def/class 语句本身 | 安全（论证）：绑定值就是新函数/类，其体已被递归扫描；旧常量滞留仅超报路径（安全方向） |
+| `import` | 安全（论证，已在 bindImport 注释）：遮蔽 def 名后调用经 scope 解析到**真实模块链**（`from os import system as x` → `os.system` 命中 PROCESS）；遮蔽常量只多报路径 |
+| lambda 参数 | 安全（论证，已在 walkExpr 注释）：lambda 体的任何调用路径必然先落 unknown（直接调用 chain 为 null、经绑定名调用该名非 def），陈旧常量读不可达 |
+| `global`/`nonlocal` | ✅（N1：归 dynamic-execution） |
+
+修复后验证：v2 变体用例转绿（提取器 70 用例）；相关 8 套件 382 用例通过；全量 `npm test` 复验通过。
