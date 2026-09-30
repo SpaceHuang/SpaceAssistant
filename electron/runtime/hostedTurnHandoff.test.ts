@@ -281,6 +281,80 @@ describe('createHostedTurnHandoff', () => {
     db.close()
   })
 
+  it('恢复旧 accepted input 时匹配重复文本的正确出现位置且不要求 API 消息带数据库时间戳', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'restart-empty-input', model: 'model' })
+    const earlier = appendMessage(db, { id: 'restart-empty-earlier', sessionId: session.id, role: 'user', content: 'previous conversation', timestamp: 5, status: 'sent' }).message
+    const accepted = appendMessage(db, { id: 'restart-empty-accepted', sessionId: session.id, role: 'user', content: earlier.content, timestamp: 10, status: 'sent' }).message
+    const conn = getDbConnection(db)
+    let historyClock = 0
+    const history = new SqliteAgentHistory(conn, 1, () => ++historyClock, session.id)
+    const acceptedTurnId = 'restart-empty-interrupted-turn'
+    const priorTurnId = 'restart-empty-failed-turn'
+    await history.appendBatch([
+      { invocationId: 'restart-empty-earlier-history', turnId: 'restart-empty-earlier-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'restart-empty-earlier-context', idempotencyKey: 'restart-empty-earlier-context', kind: 'invocation-context-committed',
+        payload: { messages: [{ role: 'user', content: earlier.content, timestamp: earlier.timestamp }] } },
+      { invocationId: 'restart-empty-earlier-history', turnId: 'restart-empty-earlier-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'restart-empty-earlier-done', idempotencyKey: 'restart-empty-earlier-done', kind: 'invocation-completed', payload: { status: 'completed' } }
+    ], 0)
+    const beforeAccepted = history.listInvocationIdsForSession(session.id)
+    await history.appendBatch([
+      { invocationId: acceptedTurnId, turnId: acceptedTurnId, sequence: 1, schemaVersion: 1,
+        eventId: 'restart-empty-input', idempotencyKey: 'restart-empty-input', kind: 'session-input-committed',
+        payload: { sessionId: session.id, messageId: accepted.id, role: 'user', inputFingerprint: queueInputFingerprint({ text: accepted.content }) } }
+    ], 0)
+    await history.appendBatch([
+      { invocationId: acceptedTurnId, turnId: acceptedTurnId, sequence: 2, schemaVersion: 1,
+        eventId: 'restart-empty-terminal', idempotencyKey: 'restart-empty-terminal', kind: 'invocation-interrupted',
+        payload: { status: 'interrupted', reason: 'process-restart' } }
+    ], 1)
+    expect(history.listInvocationIdsForSession(session.id)).toEqual([...beforeAccepted, acceptedTurnId])
+    await history.appendBatch([
+      { invocationId: 'restart-empty-failed-latest', turnId: priorTurnId, sequence: 1, schemaVersion: 1,
+        eventId: 'restart-empty-failed-context', idempotencyKey: 'restart-empty-failed-context', kind: 'invocation-context-committed',
+        payload: { messages: [{ role: 'user', content: earlier.content, timestamp: earlier.timestamp }, { role: 'user', content: 'failed attempt' }] } },
+      { invocationId: 'restart-empty-failed-latest', turnId: priorTurnId, sequence: 2, schemaVersion: 1,
+        eventId: 'restart-empty-failed-terminal', idempotencyKey: 'restart-empty-failed-terminal', kind: 'invocation-failed', payload: { status: 'failed' } }
+    ], 0)
+    expect(history.listInvocationIdsForSession(session.id)).toEqual([...beforeAccepted, acceptedTurnId, 'restart-empty-failed-latest'])
+    const current = { role: 'user' as const, content: 'please continue' }
+    const request = { messages: [
+      { role: 'system' as const, content: 'dynamic' },
+      { role: 'user' as const, content: earlier.content, timestamp: earlier.timestamp },
+      { role: 'user' as const, content: accepted.content },
+      { role: 'assistant' as const, content: ' ' },
+      { role: 'user' as const, content: 'retry request context' },
+      current
+    ], maxTokens: 100 }
+    mockRunHostedAgentTurn.mockImplementationOnce(async ({ invocationId, request: hostedRequest }: {
+      invocationId: string; request: { messages: unknown[] }
+    }) => {
+      await history.appendBatch([
+        { invocationId, turnId: 'restart-empty-retry-turn', sequence: 1, schemaVersion: 1,
+          eventId: 'restart-empty-retry-context', idempotencyKey: 'restart-empty-retry-context', kind: 'invocation-context-committed', payload: { messages: hostedRequest.messages } },
+        { invocationId, turnId: 'restart-empty-retry-turn', sequence: 2, schemaVersion: 1,
+          eventId: 'restart-empty-retry-done', idempotencyKey: 'restart-empty-retry-done', kind: 'invocation-completed', payload: { status: 'completed' } }
+      ], 0)
+      return { text: 'done', modelTurns: 1, finishReason: 'stop', usage: { inputTokens: 2, outputTokens: 1 }, messages: [...hostedRequest.messages] }
+    })
+    const handoff = createHostedTurnHandoff({
+      agentSdk: { createHostedTurnRuntime: vi.fn(() => ({ host: {}, dispose: async () => undefined })) },
+      history, invocationId: 'restart-empty-retry-invocation', turnId: 'restart-empty-retry-turn', routeId: 'route',
+      sessionId: session.id, sessionDb: db
+    })
+
+    await expect(handoff({ request, requiredUserMessage: { id: 'current-user', message: current } })).resolves.toMatchObject({ result: { ok: true } })
+
+    expect(mockRunHostedAgentTurn.mock.calls.at(-1)?.[0].request.messages).toEqual([
+      { role: 'system', content: 'dynamic' },
+      { role: 'user', content: earlier.content, timestamp: earlier.timestamp },
+      { role: 'user', content: accepted.content },
+      current
+    ])
+    db.close()
+  })
+
   it('does not fall back to an older completed transcript when the newest session invocation was interrupted', async () => {
     const conn = new DatabaseSync(':memory:')
     conn.exec("CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")
@@ -328,7 +402,7 @@ describe('createHostedTurnHandoff', () => {
   it('preserves timed-out terminal outcome in the caller error and committed transcript', async () => {
     const db = createMemoryAppDb()
     const failure = new Error('deadline exceeded')
-    const history = { read: vi.fn(async () => ({ events: [{ kind: 'invocation-failed', payload: { status: 'timed_out', reason: 'timeout' } }] })) }
+    const history = { read: vi.fn(async () => ({ events: [{ kind: 'invocation-failed', payload: { status: 'failed', reason: 'timeout' } }] })) }
     mockRunHostedAgentTurn.mockRejectedValue(failure)
     const user = { role: 'user' as const, content: 'finish this task' }
     const handoff = createHostedTurnHandoff({ agentSdk: { createHostedTurnRuntime: () => ({ host: {}, dispose: async () => undefined }) }, history: history as never, invocationId: 'timeout-invocation', turnId: 'timeout-turn', routeId: 'route', sessionId: 'timeout-session', sessionDb: db })
@@ -360,7 +434,7 @@ describe('createHostedTurnHandoff', () => {
   it.each([
     ['failed', { kind: 'invocation-failed', payload: { status: 'failed', reason: 'provider-error' } }, 'failed'],
     ['cancelled', { kind: 'invocation-interrupted', payload: { status: 'cancelled', reason: 'user-cancelled' } }, 'cancelled'],
-    ['timed_out', { kind: 'invocation-failed', payload: { status: 'timed_out', reason: 'deadline' } }, 'timed_out'],
+    ['timed_out', { kind: 'invocation-failed', payload: { status: 'failed', reason: 'timeout' } }, 'timed_out'],
     ['interrupted', { kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'process-restart' } }, 'interrupted']
   ] as const)('terminal matrix retains only accepted input for %s', async (label, terminal, expectedOutcome) => {
     const db = createMemoryAppDb()
@@ -385,7 +459,7 @@ describe('createHostedTurnHandoff', () => {
   it.each([
     ['failed', { kind: 'invocation-failed', payload: { status: 'failed', reason: 'provider-error' } }, 'failed'],
     ['cancelled', { kind: 'invocation-interrupted', payload: { status: 'cancelled', reason: 'user-cancelled' } }, 'cancelled'],
-    ['timed_out', { kind: 'invocation-failed', payload: { status: 'timed_out', reason: 'deadline' } }, 'timed_out'],
+    ['timed_out', { kind: 'invocation-failed', payload: { status: 'failed', reason: 'timeout' } }, 'timed_out'],
     ['interrupted', { kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'process-restart' } }, 'interrupted']
   ] as const)('first legacy History cutover preserves prior transcript when the initial turn ends %s', async (label, terminal, expectedOutcome) => {
     const db = createMemoryAppDb()

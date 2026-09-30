@@ -25,7 +25,7 @@ function hostedFailureOutcome(terminal: Parameters<typeof decodeTerminalOutcome>
   const outcome = decodeTerminalOutcome(terminal)
   if (outcome === 'cancelled' || outcome === 'interrupted') return outcome
   if (outcome === 'timed_out') return 'timed-out'
-  return outcome === 'commit_uncertain' ? 'commit-uncertain' : 'failed'
+  return 'failed'
 }
 
 type HostedRuntimeFactory = Readonly<{
@@ -80,6 +80,7 @@ function recoverAcceptedRestartInput(input: {
   db: AppDatabase
   sessionId: string
   requestMessages: readonly CanonicalModelMessage[]
+  requiredUserMessage: CanonicalModelMessage
 }): { id: string; message: CanonicalModelMessage } | undefined {
   const [accepted, terminal] = input.snapshot.events
   const terminalPayload = terminal?.payload && typeof terminal.payload === 'object' && !Array.isArray(terminal.payload)
@@ -93,11 +94,28 @@ function recoverAcceptedRestartInput(input: {
   const stored = getMessage(input.db, marker.messageId)
   if (!stored || stored.sessionId !== input.sessionId || stored.role !== 'user' || stored.attachments?.length ||
     queueInputFingerprint({ text: stored.content, attachments: stored.attachments }) !== marker.inputFingerprint) return undefined
-  const message: CanonicalModelMessage = { role: 'user', content: ensureApiTextContent(stored.content), timestamp: stored.timestamp }
-  const matchesRequest = input.requestMessages.some((requestMessage) => requestMessage.role === 'user' &&
-    JSON.stringify(requestMessage) === JSON.stringify(message))
-  if (!matchesRequest) return undefined
-  return { id: stored.id, message }
+  const content = ensureApiTextContent(stored.content)
+  let currentUserIndex = -1
+  const requiredUserJson = JSON.stringify(input.requiredUserMessage)
+  for (let index = input.requestMessages.length - 1; index >= 0; index -= 1) {
+    if (input.requestMessages[index]?.role === 'user' && JSON.stringify(input.requestMessages[index]) === requiredUserJson) {
+      currentUserIndex = index
+      break
+    }
+  }
+  if (currentUserIndex < 0) return undefined
+  let requestMessage: CanonicalModelMessage | undefined
+  for (let index = currentUserIndex - 1; index >= 0; index -= 1) {
+    const candidate = input.requestMessages[index]
+    if (candidate?.role === 'user' && typeof candidate.content === 'string' && candidate.content === content) {
+      requestMessage = candidate
+      break
+    }
+  }
+  if (!requestMessage || requestMessage.role !== 'user') return undefined
+  // Persisted message timestamps are not part of the Hosted model transcript. Return the
+  // request's canonical shape so cutover matching does not depend on storage metadata.
+  return { id: stored.id, message: requestMessage }
 }
 
 function latestCompactedTranscript(snapshot: Awaited<ReturnType<HistoryPort['read']>>): CanonicalModelMessage[] | undefined {
@@ -191,7 +209,8 @@ export function createHostedTurnHandoff(input: {
           snapshotVersion = snapshot.version
           previousTurnId = snapshot.events.at(-1)?.turnId
           const acceptedInput = input.sessionDb && handoff.requiredUserMessage
-            ? recoverAcceptedRestartInput({ snapshot, db: input.sessionDb, sessionId: input.sessionId, requestMessages: handoff.request.messages })
+            ? recoverAcceptedRestartInput({ snapshot, db: input.sessionDb, sessionId: input.sessionId, requestMessages: handoff.request.messages,
+                requiredUserMessage: handoff.requiredUserMessage.message })
             : undefined
           if (acceptedInput && handoff.requiredUserMessage) {
             const prior = await input.history.readLatestInvocationForSession(input.sessionId, {

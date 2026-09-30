@@ -16,4 +16,8 @@ describe('decodeTerminalOutcome', () => {
     expect(decodeTerminalOutcome({ kind: 'invocation-failed', payload: { status: 'failed' } as never })).toBe('failed')
     expect(decodeTerminalOutcome({ kind: 'invocation-completed', payload: { status: 'completed' } as never })).toBe('completed')
   })
+
+  it('does not reinterpret a session reconciliation fence as a History execution terminal', () => {
+    expect(decodeTerminalOutcome({ kind: 'invocation-failed', payload: { status: 'commit_uncertain' } as never })).toBeUndefined()
+  })
 })
