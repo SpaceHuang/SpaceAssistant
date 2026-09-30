@@ -341,3 +341,44 @@ export function normalizeTokensLargestRemainder(weights: readonly number[], exac
   }
   return result
 }
+
+export type NormalizedInputAttribution = {
+  system: number
+  tools: number
+  /** 键与 blocks 一致；多模态（tokens null）按 0 摊回（留位不伪造） */
+  messageBlocks: Record<string, number>
+}
+
+/**
+ * §6.3 两段式归一化（输入侧）：估算层给结构占比，精确层给总量。
+ * 分子分母整体来自同一 StepAttribution（block-v1，覆盖三源，I1/§6.3 约束 5）；
+ * 精确总量 = input + cache_creation + cache_read（同一次请求，不跨请求混用）。
+ * 结果满足 system + tools + ΣmessageBlocks == exactInputTokens（AT7 / I4）。
+ */
+export function normalizeInputAttribution(attribution: StepAttribution, exactInputTokens: number): NormalizedInputAttribution {
+  const blockKeys = Object.keys(attribution.blocks)
+  const weights: number[] = [attribution.threeSources.systemTokens, attribution.threeSources.toolsTokens]
+  for (const key of blockKeys) weights.push(attribution.blocks[key]!.tokens ?? 0)
+  const normalized = normalizeTokensLargestRemainder(weights, exactInputTokens)
+  const messageBlocks: Record<string, number> = {}
+  blockKeys.forEach((key, index) => {
+    messageBlocks[key] = normalized[index + 2]!
+  })
+  return { system: normalized[0]!, tools: normalized[1]!, messageBlocks }
+}
+
+/**
+ * 输出侧三类按精确 output_tokens 摊回（SRC-D1）。
+ * Anthropic 不单列 thinking token（§4.3），三类占比来自本地估算、总量来自协议回报。
+ */
+export function normalizeOutputAttribution(
+  attribution: StepAttribution,
+  exactOutputTokens: number
+): { thinking: number; text: number; toolUseArgs: number } {
+  const output = attribution.output
+  const normalized = normalizeTokensLargestRemainder(
+    [output?.thinking.tokens ?? 0, output?.text.tokens ?? 0, output?.toolUseArgs.tokens ?? 0],
+    exactOutputTokens
+  )
+  return { thinking: normalized[0]!, text: normalized[1]!, toolUseArgs: normalized[2]! }
+}

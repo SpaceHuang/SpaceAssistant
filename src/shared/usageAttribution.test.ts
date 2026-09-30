@@ -8,6 +8,8 @@ import {
   classifyToolSource,
   emptyTurnToolDimension,
   estimateBlockV1ThreeSources,
+  normalizeInputAttribution,
+  normalizeOutputAttribution,
   normalizeTokensLargestRemainder,
   splitSystemSkillSection,
   summarizeOutputBlocks,
@@ -207,5 +209,71 @@ describe('normalizeTokensLargestRemainder（§6.3 约束 6 / AT7 依赖）', () 
       const out = normalizeTokensLargestRemainder(weights, total)
       expect(out.reduce((a, b) => a + b, 0)).toBe(total)
     }
+  })
+})
+
+describe('normalizeInputAttribution（§6.3 两段式归一化 / AT7 恒等式）', () => {
+  const attribution = buildStepAttribution({
+    system: 'sys',
+    tools: [{ name: 'grep' }],
+    messages: [
+      { role: 'user', content: '问一下' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't', name: 'grep', input: { p: 1 } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: '结果'.repeat(100) }] }
+    ],
+    outputContent: [{ type: 'text', text: '答' }]
+  })
+
+  it('AT7：归一化后 system + tools + 各消息块之和 == 精确输入总量，误差为 0', () => {
+    const exactInput = 456105
+    const out = normalizeInputAttribution(attribution, exactInput)
+    const sum = out.system + out.tools + Object.values(out.messageBlocks).reduce((a, b) => a + b, 0)
+    expect(sum).toBe(exactInput)
+  })
+
+  it('估算占比自洽：大块占比更高（结构来自估算层，总量来自精确层）', () => {
+    const out = normalizeInputAttribution(attribution, 1000)
+    const toolResultTokens = out.messageBlocks['user|tool_result']!
+    const userTextTokens = out.messageBlocks['user|text']!
+    expect(toolResultTokens).toBeGreaterThan(userTextTokens)
+  })
+
+  it('精确总量为 0 时全部归 0，不抛错（AT8/I5 降级语义）', () => {
+    const out = normalizeInputAttribution(attribution, 0)
+    expect(out.system).toBe(0)
+    expect(out.tools).toBe(0)
+    expect(Object.values(out.messageBlocks).every((v) => v === 0)).toBe(true)
+  })
+
+  it('多模态块 tokens 为 null 时按 0 权重参与（不伪造数值，留位不摊分）', () => {
+    const withImage = buildStepAttribution({
+      system: 's',
+      tools: [],
+      messages: [{ role: 'user', content: [{ type: 'image', source: {} }, { type: 'text', text: 'abc' }] }]
+    })
+    const out = normalizeInputAttribution(withImage, 300)
+    expect(out.messageBlocks['user|image']).toBe(0)
+    expect(out.system + out.tools + out.messageBlocks['user|text']!).toBe(300)
+  })
+})
+
+describe('normalizeOutputAttribution（SRC-D1：输出侧三类按 output_tokens 摊回）', () => {
+  it('三类之和 == 精确 output_tokens', () => {
+    const attribution = buildStepAttribution({
+      system: 's',
+      tools: [],
+      messages: [{ role: 'user', content: 'hi' }],
+      outputContent: [
+        { type: 'thinking', thinking: 't'.repeat(300) },
+        { type: 'text', text: 'a'.repeat(100) },
+        { type: 'tool_use', id: 'x', name: 'grep', input: { q: 'b'.repeat(50) } }
+      ]
+    })
+    const out = normalizeOutputAttribution(attribution, 292827)
+    const sum = out.thinking + out.text + out.toolUseArgs
+    expect(sum).toBe(292827)
+    // thinking 权重最大 → 摊回值最大
+    expect(out.thinking).toBeGreaterThan(out.text)
+    expect(out.thinking).toBeGreaterThan(out.toolUseArgs)
   })
 })
