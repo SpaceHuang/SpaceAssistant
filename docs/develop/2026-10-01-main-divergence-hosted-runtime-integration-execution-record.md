@@ -187,7 +187,7 @@ $ npm run build
 Exit code: 0
 ```
 
-build 仅报告已有动态 import 无法拆 chunk 和 chunk 超过 500 kB 的提示，无构建错误。构建生成的图标与 i18n 文件在 Git 状态核对中没有留下差异。排除功能关键符号扫描未命中本轮生产 diff；尚待阶段 6 合并后的全树扫描。
+build 仅报告已有动态 import 无法拆 chunk 和 chunk 超过 500 kB 的提示，无构建错误。构建生成的图标与 i18n 文件在 Git 状态核对中没有留下差异。该阶段的排除功能关键符号扫描未命中本轮生产 diff；完整 merge tree 扫描结果见阶段 6。
 
 ## 阶段 6：历史收敛、最终树审核与云端接受
 
@@ -195,7 +195,7 @@ build 仅报告已有动态 import 无法拆 chunk 和 chunk 超过 500 kB 的�
 
 原本地 `main` 到 PR 最终 source 分支的 diff 只能用于定位差异，不能单独代表原有本地提交，也不能单独证明其中的准入改动进入了 PR。提交可能被合并、回退、重排或重写，导致这组 diff 与原提交内容不一一对应。核对本地准入内容时，以逐项准入记录为索引，结合 PR 最终 diff、云端合并后的 tree，以及必要的代码和测试证据逐项确认。另行审查 PR base 前进后新增的云端提交及其 tree 变化；只有确认差异均归属于已审核远端新增改动或完整进入云端的本地准入改动，才执行本地 `main` 对齐。
 
-阶段 6 继续执行中：云端 fetch 后 SHA 仍为 `8dad02848c44692bafa7f61271bc6e3d6f406216`，分叉为 remote-only 46 / local-only 34。逐提交清单见计划 §2.1；已用 `git log --reverse --format='%H%x09%P%x09%s' <merge-base>..origin/main` 固定完整 SHA/父提交/主题，并对每个 SHA 导出文件变更。普通提交按其 commit tree diff 审核；4 个 merge commit（`6fad2cb6`、`98857144`、`a06c966c`、`c96acc2e`、`773e11d7`、`ac97b559`，共 6 个）按第一父 tree diff 审核，同时核对第二父及该分支子提交各自的处置行。初始 46 项中 6 个是 merge commit；其余普通提交与文件清单均和 §2.1 的唯一处置相符。最后的 `8dad0284` 同时触及策略注册与规则测试，继续按“排除”处理，不能只保留测试改动。
+阶段 6 开始时：云端 fetch 后 SHA 为 `8dad02848c44692bafa7f61271bc6e3d6f406216`，分叉为 remote-only 46 / local-only 34。逐提交清单见计划 §2.1；已用 `git log --reverse --format='%H%x09%P%x09%s' <merge-base>..origin/main` 固定完整 SHA/父提交/主题，并对每个 SHA 导出文件变更。普通提交按其 commit tree diff 审核；4 个 merge commit（`6fad2cb6`、`98857144`、`a06c966c`、`c96acc2e`、`773e11d7`、`ac97b559`，共 6 个）按第一父 tree diff 审核，同时核对第二父及该分支子提交各自的处置行。初始 46 项中 6 个是 merge commit；其余普通提交与文件清单均和 §2.1 的唯一处置相符。最后的 `8dad0284` 同时触及策略注册与规则测试，继续按“排除”处理，不能只保留测试改动。
 
 生命周期修复已以 `ae092513fc670c5e50655e1c22287903e32cd5c5` 提交。
 
@@ -275,4 +275,4 @@ Test Files  806 passed | 1 skipped (807)
 Tests       7091 passed | 106 skipped (7197)
 ```
 
-随后 `typecheck:shared`、`typecheck:renderer`、`typecheck:agent-sdk`、`typecheck:agent-provider-pi-ai`、`check:agent-sdk` 和 `npm run build` 均退出码 0；build 只有既有 chunk/import 警告。测试文件修改通过 `git diff --check`。本轮测试夹具与记录将一并提交推送；新 Actions run、云端接受及最终 `main`/`origin/main` 对齐仍待验证。
+随后 `typecheck:shared`、`typecheck:renderer`、`typecheck:agent-sdk`、`typecheck:agent-provider-pi-ai`、`check:agent-sdk` 和 `npm run build` 均退出码 0；build 只有既有 chunk/import 警告。测试文件修改通过 `git diff --check`。代码及本记录以 `574947ec2edf812b881d0636cadb0758ba8238b8`（`test: isolate lifecycle fixtures from temp roots`）提交并普通推送至 `main`。Actions run `36762179210` 对该 SHA 的所有 jobs 均 Success，包括 Ubuntu 全量测试、Windows Golden、Shell lifecycle 各平台、SQLite Electron probes、SDK/类型门禁和 build。该提交云端接受后执行 `git fetch origin`：`HEAD` 与 `origin/main` 均为 `574947ec2edf812b881d0636cadb0758ba8238b8`，`git rev-list --left-right --count origin/main...main` 输出 `0 0`，`git status --short --branch` 为干净状态。最终对齐及计划整体收口在文档证据提交后再核验一次。
