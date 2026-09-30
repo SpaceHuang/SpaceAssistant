@@ -1,6 +1,6 @@
 # run_script 路径提取假阳性：诊断与改进方案
 
-- 状态：已实施（2026-09-30，P0 / P1 / P2 全量落地；三轮评审阻断项 B1/B2/B3 及变体 B1-R/B2-R、walrus 均已修复，见 §12.7–§12.9；端到端真机验收遗留，见 §12.6）
+- 状态：已实施（2026-09-30，P0 / P1 / P2 全量落地；三轮评审阻断项全部修复，第四轮非阻断观察项 obs1–obs3 亦已落地，见 §12.7–§12.10；端到端真机验收遗留，见 §12.6）
 - 触发场景：会话 `a7981827-5a20-4eab-a6fd-a2971e12659c`（"会话 27"）中 `run_script` 反复弹人工确认卡
 - 涉及模块：`electron/confirmation/extractors/scriptPathFacts.ts`、`electron/shell/scriptIr/pythonAdapter.ts`、`src/shared/policy/defaultRules.ts`
 - 关联文档：`docs/develop/script-security-parser-treesitter-upgrade-plan.md`、`docs/develop/security-approval-experience-improvement-plan.md`
@@ -1163,3 +1163,32 @@ for (const rawPath of scriptPaths.paths) {
 修复后验证：v3 用例转红→绿（提取器 73 用例；合法高频 walrus
 `while (line := f.readline())` 不误伤对照保持 complete + 路径正常提取）；
 相关 8 套件 385 用例通过；全量 `npm test` 复验通过。
+
+### 12.10 第四轮评审观察项处理记录（2026-09-30，obs1–obs3，非阻断）
+
+第四轮评审结论为不阻拦合入，附 3 条非阻断观察，本轮全部处理（其中 obs1 按评审建议的
+assign 同语义方向落实，并做了 sound 性收窄）：
+
+- **obs1（walrus 静态字面量落 dynamic 偏严）**：落地「fold 成功且可绑位置则重绑」，但
+  **重绑必须 sound**——`walkExpr` 引入 `conditionallyEvaluated` 条件求值线程（and/or 右侧、
+  conditional 分支、lambda 体、推导式 elt/条件/后续生成器 = 可能不求值）+ `env.bindable`
+  语句上下文标记（模块顶层可绑定；分支/循环/try/with/函数体内沿用失效语义，防 loop-carried
+  假阴性）。效果：`if (p := "/tmp/x.txt"): open(p)` → complete + 路径正确提取（clean 放行；
+  若字面量为敏感路径则由 path-target:sensitive-file 的 locked 规则兜底弹卡——v3a 用例
+  期望随之升级）；短路位置（`flag and (p := "/b")`）与循环体内维持 unknown。
+- **obs2（analyzer decode→exec 链不覆盖 walrus 目标）**：`analyzeExpr` 的 named_expr 分支
+  补齐与 assign 同语义的 `applyAssignmentRebind` + `isDecodeCall` 登记——
+  `(x := b64decode(...)); exec(x)` 恢复升级为 dangerous（硬拒），不再降级 locked 确认。
+- **obs3（模块级 global 误伤）**：`WalkEnv` 增加 `moduleScope` 标记（入口 env 为 true，
+  函数/类体 env 为 false，块内继承）；`global_nonlocal` 仅在非模块作用域置 dynamic——
+  模块级 `global p`（语义空操作）不再白拿 locked 卡，函数体内维持 N1 强度。
+
+**同根因扩展修复（本轮自检发现）**：comprehension **条件子句被适配层整块丢弃**
+（`adaptComprehension` 只处理 `for_in_clause`，而 tree-sitter 把条件解析为其兄弟节点
+`if_clause`）——`[y for y in rows if (p := y)]` 的 walrus、条件内任何调用均逃逸分析，
+属绑定位置 checklist 的同一失效根因。已建模：IR generators 增加 `conditions: IrExpr[]`
+（挂在最近生成器上），提取器按条件求值上下文遍历、analyzer 同步遍历。纯比较条件
+（`y > 0`）不误伤对照保持 complete。
+
+修复后验证：新增 8 用例（obs1a/b/c、obs3、comp-cond×2、对照×1 + v3a 升级）先行转红；
+提取器/适配器/内容分析等 5 套件 198 用例通过；全量 `npm test` 复验通过。

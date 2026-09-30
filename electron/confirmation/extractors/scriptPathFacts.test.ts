@@ -467,12 +467,12 @@ describe('extractScriptPathFacts:v3 评审修复回归(walrus :=)', () => {
 
   afterAll(() => resetScriptParserServiceForTests())
 
-  it('v3a if (p := "/etc/passwd") 重绑定同名常量 → unknown(敏感文件保护不再绕过)', () => {
+  it('v3a if (p := "/etc/passwd") 重绑定同名常量 → 正确提取敏感路径(complete;弹卡由 path-target:sensitive-file 的 locked 规则兜底,v4 obs1 重绑语义)', () => {
     expect(extractScriptPathFacts([
       'p = "/safe.txt"',
       'if (p := "/etc/passwd"):',
       '    open(p)'
-    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+    ].join('\n'), 'python')).toMatchObject({ paths: ['/etc/passwd'], completeness: 'complete', dynamicAccess: false })
   })
 
   it('v3b if (helper := os.system) 遮蔽 def 名 → unknown(进程执行不再绕过)', () => {
@@ -493,6 +493,72 @@ describe('extractScriptPathFacts:v3 评审修复回归(walrus :=)', () => {
     ].join('\n'), 'python')).toMatchObject({
       paths: ['/data/log.txt'], completeness: 'complete', dynamicAccess: false
     })
+  })
+})
+
+// ============================================================================
+// v4 评审非阻断项修复(obs1 walrus 重绑语义 / obs3 模块级 global 误伤 /
+// comprehension 条件子句建模——walrus 常驻位置,适配层原整块丢弃):
+// ============================================================================
+describe('extractScriptPathFacts:v4 评审观察项(walrus 重绑 / 模块级 global / 推导式条件)', () => {
+  beforeAll(async () => {
+    await scriptParserService.ensureInitialized()
+  })
+
+  afterAll(() => resetScriptParserServiceForTests())
+
+  it('obs1a 静态字面量 walrus 按 assign 语义重绑 → complete + 路径提取(不再拿 locked 卡)', () => {
+    expect(extractScriptPathFacts([
+      'if (p := "/tmp/x.txt"):',
+      '    open(p)'
+    ].join('\n'), 'python')).toMatchObject({ paths: ['/tmp/x.txt'], completeness: 'complete', dynamicAccess: false })
+  })
+
+  it('obs1b 短路位置(and 右侧)的 walrus 不重绑(运行时可能不求值,重绑即假阴性)', () => {
+    expect(extractScriptPathFacts([
+      'p = "/a"',
+      'if flag and (p := "/b"):',
+      '    open(p)'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('obs1c 循环体内 walrus 维持失效(可绑定语句上下文之外的保守语义)', () => {
+    expect(extractScriptPathFacts([
+      'p = "/a"',
+      'for x in items:',
+      '    if (p := "/b"):',
+      '        open(p)'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('obs3 模块级 global 语句是语义空操作,不再误伤 locked 卡', () => {
+    expect(extractScriptPathFacts([
+      'global p',
+      'p = "/a"',
+      'open(p)'
+    ].join('\n'), 'python')).toMatchObject({ paths: ['/a'], completeness: 'complete', dynamicAccess: false })
+  })
+
+  it('comp-cond 推导式条件子句进入 IR:条件内 walrus 不重绑、未知调用不再逃逸', () => {
+    expect(extractScriptPathFacts([
+      'p = "/safe.txt"',
+      'rows = [y for y in rows if (p := y)]',
+      'open(p)'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+    expect(extractScriptPathFacts([
+      'import os',
+      'names = [y for y in rows if os.path.exists(y)]',
+      'print(names)'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'complete' })
+    expect(extractScriptPathFacts('rows = [make(y) for y in rows if check(y)]', 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('comp-cond 对照:纯比较条件不误伤(正常推导保持 complete)', () => {
+    expect(extractScriptPathFacts([
+      'p = "/a"',
+      'rows = [y for y in rows if y > 0]',
+      'open(p)'
+    ].join('\n'), 'python')).toMatchObject({ paths: ['/a'], completeness: 'complete' })
   })
 })
 

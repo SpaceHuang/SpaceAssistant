@@ -596,7 +596,12 @@ class Analyzer {
       return
     }
     if (expr.kind === 'named_expr') {
-      // v3 评审:walrus 值侧递归分析(调用不逃逸);目标失效由路径提取器负责
+      // v4 评审 obs2:walrus 目标与 assign 同语义——decode→exec 链登记 + 危险别名重绑,
+      // 使 (x := b64decode(...)); exec(x) 仍升级为 dangerous(而非降级 locked 确认)。
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(expr.target)) {
+        applyAssignmentRebind(expr.target, expr.value, scope)
+        if (isDecodeCall(expr.value)) decodeBindings.push({ name: expr.target, stmtOffset: stmtIndex })
+      }
       this.analyzeExpr(expr.value, scope, decodeBindings, stmtIndex)
       return
     }
@@ -606,7 +611,11 @@ class Analyzer {
     }
     if (expr.kind === 'comprehension') {
       this.analyzeExpr(expr.elt, scope, decodeBindings, stmtIndex)
-      for (const g of expr.generators) this.analyzeExpr(g.iter, scope, decodeBindings, stmtIndex)
+      for (const g of expr.generators) {
+        this.analyzeExpr(g.iter, scope, decodeBindings, stmtIndex)
+        // v4:条件子句进入分析(条件内调用不逃逸)
+        for (const cond of g.conditions) this.analyzeExpr(cond, scope, decodeBindings, stmtIndex)
+      }
       return
     }
     if (expr.kind === 'lambda') {

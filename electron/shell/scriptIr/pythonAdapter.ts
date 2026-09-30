@@ -776,17 +776,24 @@ function adaptComprehension(node: TsNode): IrExpr {
     node.type === 'list_comprehension' ? 'list' : node.type === 'set_comprehension' ? 'set' : node.type === 'dictionary_comprehension' ? 'dict' : 'generator'
   let elt: IrExpr | null = null
   let dictKey: IrExpr | null = null
-  const generators: Array<{ target: string; iter: IrExpr }> = []
+  const generators: Array<{ target: string; iter: IrExpr; conditions: IrExpr[] }> = []
   const body = fieldNode(node, 'body')
   const keyNode = fieldNode(node, 'key')
+  // v4 评审:条件子句必须进 IR(每轮迭代可能不求值;条件内调用/walrus 不得逃逸分析)。
+  // tree-sitter 形态:if_clause 是 for_in_clause 的**兄弟节点**,按归属挂到最近的生成器上。
   for (const child of namedChildren(node)) {
     if (child.type === 'for_in_clause') {
       const left = fieldNode(child, 'left')
       const right = fieldNode(child, 'right')
       generators.push({
         target: left ? assignTargetName(left) : '',
-        iter: right ? adaptExpr(right) : { kind: 'none' }
+        iter: right ? adaptExpr(right) : { kind: 'none' },
+        conditions: []
       })
+    } else if (child.type === 'if_clause') {
+      const cond = fieldNode(child, 'condition') ?? firstNamed(child)
+      const lastGenerator = generators.at(-1)
+      if (lastGenerator && cond) lastGenerator.conditions.push(adaptExpr(cond))
     }
   }
   if (compKind === 'dict' && keyNode && body) {
