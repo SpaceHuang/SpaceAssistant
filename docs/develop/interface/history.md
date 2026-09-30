@@ -26,7 +26,7 @@ interface HistoryPort {
 }
 ```
 
-`HistoryEventKind` 为闭合枚举（18 项）：
+`HistoryEvent['kind']` 为闭合联合（18 项，内联在 `HistoryEvent` 上，无独立类型别名）：
 
 `session-input-committed`、`invocation-context-committed`、`transcript-compacted`、`model-request-started`、`provider-retry-scheduled`、`model-attempt-discarded`、`model-response-committed`、`replay-message-committed`、`tool-call-started`、`tool-call-finished`、`tool-call-not-dispatched`、`approval-waiting`、`approval-resolved`、`approval-updated`、`invocation-parked`、`invocation-interrupted`、`invocation-completed`、`invocation-failed`。
 

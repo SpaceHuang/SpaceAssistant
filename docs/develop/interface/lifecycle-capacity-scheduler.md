@@ -68,14 +68,15 @@ type ToolNode<T> = {
   onDependencyFailure?: (dependencies: readonly string[]) => Promise<T> | T
 }
 
+type ToolSchedulerReservationErrorReason = 'no-progress-subscription' | 'progress-timeout'
+
 class ToolSchedulerReservationError extends Error {
   readonly code = 'tool-reservation-unavailable'
   readonly retryable = true
-  constructor(reason?: 'no-progress-subscription' | 'progress-timeout')
+  readonly reason: ToolSchedulerReservationErrorReason   // 缺省 'no-progress-subscription'
+  constructor(reason?: ToolSchedulerReservationErrorReason)
 }
 const DEFAULT_PROGRESS_WAIT_TIMEOUT_MS = 30_000
-
-function canParkInvocation(activeNodeCount: number, waitingApprovalCount: number): boolean
 
 class ToolScheduler {
   constructor(options?: {
@@ -113,26 +114,19 @@ class ToolScheduler {
 
 路径归一：去掉尾部 `/`（长度 > 1 时），故 `/src` 与 `/src2` 属独立资源。
 
-`canParkInvocation(activeNodeCount, waitingApprovalCount)`：两个计数均为整数、`activeNodeCount > 0` 且 `waitingApprovalCount >= activeNodeCount` —— Core 对 Runtime park 的最小判定（只有没有其它可运行节点时才能让出父租约）。
-
-### InvocationRuntime（调用级运行租约 / park）
+### InvocationRuntime（调用级运行租约）
 
 ```ts
 type RuntimeLease = { runtimeId: string; invocationId: string; generation: number; release: () => void }
-type ParkHandle = { runtimeId: string; invocationId: string; generation: number; checkpoint: unknown }
 
 class InvocationRuntime {
-  constructor(readonly runtimeId: string, options?: { maxParkedTurns?: number })  // 缺省 32，必须正整数
-  acquireLease(invocationId: string): RuntimeLease      // 已持有或已 park 时抛 'invocation already leased'
-  park(invocationId: string, lease: RuntimeLease, checkpoint?: unknown): ParkHandle | undefined
-  resume(handle: ParkHandle): boolean
-  resumeLease(handle: ParkHandle): RuntimeLease | undefined
+  constructor(readonly runtimeId: string)
+  acquireLease(invocationId: string): RuntimeLease      // 已持有租约时抛 'invocation already leased'
 }
 ```
 
-- `generation` 单调递增；`release` 只在 generation 匹配时生效且幂等。
-- `park` 校验 lease 归属（runtimeId / invocationId / generation 匹配且 generation > 0），并在 `parked.size >= maxParkedTurns` 时返回 `undefined`。
-- `resumeLease` 重新取得租约；**旧 park handle 只能消费一次**（第二次调用返回 `undefined`）。
+- `generation` 单调递增；`release` 只在 generation 匹配时生效且幂等；释放后可重新 `acquireLease`（generation 继续递增）。
+- **park 家族已下线**（2026-09-30）：`park` / `resume` / `resumeLease` / `ParkHandle` / `maxParkedTurns` / `canParkInvocation` 在 SDK 内无生产调用者，已从 `scheduler.ts` 删除。真实的审批等待让出 / 恢复由 `turn.ts` 的 `TurnApplicationAdmission` + 宿主 `applicationAdmission` 端口承担，宿主装配只注入 `acquireLease`。残留形状：SDK 包契约 `AgentHostPorts.invocationRuntime` 仍声明 `park` / `resumeLease`，而宿主转发层 `src/shared/agent/invocation.ts` 已收窄删除（见 [host-ports.md](./host-ports.md)）；旧 History 的 `invocation-parked` 事件仍兼容读取。
 
 ## 4. 资源互斥锁（resourceLock.ts）
 

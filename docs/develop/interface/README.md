@@ -2,6 +2,8 @@
 
 `packages/agent-sdk`（包名 `@spaceassistant/agent-sdk`）是 SpaceAssistant 的 **SDK 面**：契约类型 + 端口接口 + 纯 runtime 核。本目录按模块梳理它对外暴露的接口，供宿主（electron 主进程）装配方与 SDK 维护者查阅。
 
+> **基准**：本目录对齐 `main` 提交 `083e0c00`。文档首版落在 `e5801089`，其后 SDK 的两笔改动（`c76c7aab`、`fa796649`）已并入：turn 超时语义（`AgentTurnTimedOutError` / `TURN_TIMED_OUT` / `REQUEST_TIMEOUT`）、审批获批后才激活应用运行槽、执行端口在派发声明之后的 abort 复检、`InvocationRuntime` 的 park 家族下线。核对方式与宿主转发层的形状差异见文末「维护」。
+
 ## 定位与边界
 
 - 入口 `packages/agent-sdk/src/index.ts`；`package.json` 的 `main` / `types` 直接指向 `src/index.ts`，`exports` 暴露 `.` 与 `./model` 两个入口。
@@ -11,6 +13,23 @@
   1. 契约只放可序列化数据与消息，禁止函数句柄；
   2. 宿主能力一律经接口注入（`AgentHostPorts`）；
   3. 跨调用可变状态全部随 runtime 实例走（多实例，`AgentRuntime.instanceId`）。
+
+## 入口与导出面
+
+`package.json` 声明两个入口（`main` / `types` 指向 `src/index.ts`，源码直出，无构建产物）：
+
+| 入口 | 文件 | 内容 |
+| --- | --- | --- |
+| `@spaceassistant/agent-sdk` | `src/index.ts` | runtime 工厂（`createAgentRuntime`、`NOOP_AUDIT`、`AgentRuntime` 等）+ 纯组件（`ConfirmIdSpace`、`ChatCancelRegistry`、`ToolRevocationRegistry`、`Semaphore` / `withSemaphore` / `McpConcurrencyGate`）+ 逐模块 `export *` |
+| `@spaceassistant/agent-sdk/model` | `src/model.ts` | 窄入口：模型流与 canonical 消息契约（`StreamChunk`、`CanonicalModelMessage`、`collectModelAttempt`、`ModelProviderRegistry`、`prepareModelCall`、路由错误类）。供只需类型 / 流收集、不想引入 turn 闭环的调用方使用 |
+
+`typesVersions` 为不支持 `exports` 的 TS 版本兜底 `model` 子路径。
+
+`src/index.ts` 以 `export *` 转发的模块：`approval`、`capacity`、`scheduler`、`resourceLock`、`confirmationCommit`、`history`、`provider`、`lifecycle`、`model`、`safetyPermit`、`executionAdmission`、`capability`、`safetyGate`、`turn`、`toolExecutionPort`、`toolResultContract`、`invocation`（契约层由 SDK 定义，宿主 `src/shared/agent` 仅提供兼容转发）。
+
+注意：`turn.ts` 中大部分投影 / 恢复失败类是模块内部类型，**不经入口导出**；装配方只能按 `error.name` 判定（见 [turn-loop.md](./turn-loop.md) 的「错误类型」）。
+
+宿主另有一份转发层 `src/shared/agent/invocation.ts`（electron / renderer 直接 import），与 SDK 包内契约面存在少量差异（`acceptedTurn`、`snapshot()` / `refresh()` 返回类型、`invocationRuntime` 是否含 park 家族），见 [host-ports.md](./host-ports.md) 第 4 节。
 
 ## 模块地图
 
@@ -71,3 +90,17 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 | `ToolExecutionRejectedError` (`TOOL_EXECUTION_REJECTED`) | `toolExecutionPort.ts` | 执行前被拒（未进入执行器） |
 | `ToolExecutionAfterDispatchError` (`TOOL_EXECUTION_UNKNOWN_AFTER_DISPATCH`) | `toolExecutionPort.ts` | 已进入执行器，异常无法证明无副作用 |
 | `ChatCancelledError` (`CHAT_CANCELLED`) | `runtime/components.ts` | 聊天取消 |
+| `AgentTurnHistoryAppendError`（未导出，按 name 判定） | `turn.ts` | history 追加失败；`kinds` 含 `tool-call-finished` 视为结果持久化不确定 |
+| `AgentTurnApplicationAdmissionError`（未导出） / `APPLICATION_ADMISSION_RECOVERY_FAILED` | `turn.ts` | 宿主应用运行槽激活/恢复失败 |
+| `AgentTurnHostProjectionError` / `AgentTurnToolProjectionError` / `AgentTurnBoundaryProjectionError`（均未导出） | `turn.ts` | critical 投影提交失败，回合结算 `interrupted` |
+| `AgentTurnHistoryAlreadyTerminalError`（未导出） | `turn.ts` | history 已是终态，跳过重复终态写入 |
+| `ToolSchedulerReservationErrorReason` | `scheduler.ts` | 预留失败原因联合类型（`no-progress-subscription` / `progress-timeout`） |
+
+## 维护
+
+文档只描述 `packages/agent-sdk/src` 的对外接口，需随 SDK 源码同步。核对方法：
+
+1. **找差异**：`git log --oneline <基准提交>..HEAD -- packages/agent-sdk/src`，再看 `git diff <基准提交> HEAD -- packages/agent-sdk/src`。
+2. **导出面自检**：比对 `src/**/*.ts` 的 `export` 与本文档正文，确认新增 / 删除的符号都已覆盖（易漏点：`turn.ts` 的未导出错误类、`scheduler.ts` 的联合类型与已下线的 park 家族）。
+3. **行为自检**：`turn.ts`（阶段顺序与 reasonCode）、`toolExecutionPort.ts`（派发前后的边界判定）、`scheduler.ts`（并发 / 预留 / 资源冲突）、`history.ts`（事件 kind 与不变量）四处最易与文档漂移。
+4. 基准提交更新后，同步修改上方「基准」行。

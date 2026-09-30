@@ -249,6 +249,8 @@ executionAdmission?: unknown        // Runtime 级 cancel/revoke 与 dispatch cl
 safetyPermits?: unknown             // Runtime 级 permit ledger，按 permit ID settle
 ```
 
+**关于 `invocationRuntime` 的 park 家族**：`park` / `resumeLease` 目前只存在于 **SDK 包内这一份契约**；宿主转发层（`src/shared/agent/invocation.ts`）已收窄为只保留 `acquireLease`，SDK 侧 `scheduler.ts` 的 `InvocationRuntime` 参考实现也删除了 park 家族（2026-09-30）。审批等待期间运行槽的让出 / 恢复由 `applicationAdmission`（`park` / `resume` / `discard`）承担，生产装配（`electron/runtime/desktopAgentRuntime.ts`）只注入 `acquireLease`。旧 History 的 `invocation-parked` 事件仍兼容读取。
+
 **历史与模型生命周期钩子**
 
 ```ts
@@ -276,7 +278,21 @@ legacy?: { appDb?: unknown }
 
 `appDb` 原样透传给循环体内既有取用路径，是"端口一律接口"唯一声明的过渡豁免期。
 
-## 4. 装配注意
+## 4. 与宿主转发层的差异（src/shared/agent/invocation.ts）
+
+SDK 包内这份契约是 SDK 循环实际依赖的最小面；宿主另有转发层 `src/shared/agent/invocation.ts`（供 electron / renderer 直接 import），两者定义并不逐字相同：
+
+| 差异点 | SDK 包（`packages/agent-sdk/src/invocation.ts`） | 宿主转发层（`src/shared/agent/invocation.ts`） |
+| --- | --- | --- |
+| 宿主类型引用 | 一律以 `any` 占位，不 import `src/shared`（`invocation.contractShape.test.ts` 守护） | 引用真实类型（`WorkspaceSnapshot`、`AcceptedTurn`、`BrowserDetectContext` 等） |
+| `AgentInvocation.acceptedTurn` | 无此字段 | `acceptedTurn?: AcceptedTurn`（迁移期字段） |
+| `AgentTraceContext.turnId` 注释 | 「缺省回退 sessionId 占位」 | 「本回合规范执行身份；迁移期旧调用可省略，不能使用 sessionId 代替」 |
+| `AgentWorkspacePorts.snapshot()` / `refresh()` | 返回 `unknown` | 返回 `WorkspaceSnapshot` |
+| `AgentHostPorts.invocationRuntime` | 保留 `park` / `resumeLease` | 已收窄，仅 `acquireLease` |
+
+装配方在 electron 侧一般 import 转发层，此时以转发层为准（`acceptedTurn` 可用、`invocationRuntime` 无 `park`）；SDK 内部只按包内面读取端口。
+
+## 5. 装配注意
 
 - 所有以 `unknown` 声明的字段都是 electron 专属类型的占位，收窄动作应集中在宿主的装配器（如 `invocationAssembler`）与 Core 展开层。
 - 契约层位于 shared，**不得**引用 electron 侧类型；SDK 决策硬约束"契约禁函数句柄"与"端口一律接口"即是此文件的设计规则。

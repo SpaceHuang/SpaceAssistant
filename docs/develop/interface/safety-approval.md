@@ -149,9 +149,10 @@ function createPermitBoundToolExecutionPort<TCall, TResult>(deps: {
 2. **先订阅**撤权与授权变更（保证排队中的工作也会被失效、活动 lease 会被 abort），再 `isRevoked` 检查、授权版本比对（不一致 → 置 stale 并失效；`currentAuthorizationVersion` 返回 `undefined` 时抛 `CURRENT_AUTHORIZATION_VERSION_UNAVAILABLE`）。
 3. `call.signal` 监听：abort 时同时失效许可与准入（`cancelled`）。
 4. `permits.consume` → 失败转 `ToolExecutionRejectedError(consumed.reason)` → `admission.markPermitConsumed` → `admission.beginDispatch`。
-5. `onDispatchClaimed(cancel)`（SDK turn 循环在此写 `tool-call-started`）；该回调抛错会 `lease.close('failed')`。
-6. `lease.markEntered()` → `execute(call, dispatch.signal)`；执行成功但 signal 已 abort → 抛 `Execution lease aborted before acknowledgement`；执行抛错 → 一律包成 `ToolExecutionAfterDispatchError`（进入执行器后异常无法证明无副作用），`outcome` 记为 `unknown-after-dispatch`（被 abort 时）或 `failed`。
-7. `finally`：移除监听、`admission.settle` 与 `permits.settle`。
+5. `onDispatchClaimed(cancel)`（SDK turn 循环在此写 `tool-call-started`）；该回调抛错会 `lease.close('failed')` 并原样抛出。
+6. **派发前复检**（进入执行器前最后一道同步判定）：`onDispatchClaimed` 可能异步（例如 History 写入），其间 lease 可能被撤销 / 授权变更 / 取消；因此若 `dispatch.signal.aborted`，则 `lease.close('cancelled')` 并按 `signal.reason` 抛 `ToolExecutionRejectedError('REVOKED' | 'AUTHORIZATION_STALE' | 'CANCELLED')` —— 该路径可证执行器**未进入**（turn 循环据此把已写的 `tool-call-started` 提案回退为未派发）。
+7. `lease.markEntered()` → `execute(call, dispatch.signal)`；执行成功但 signal 已 abort → 抛 `Execution lease aborted before acknowledgement`；执行抛错 → 一律包成 `ToolExecutionAfterDispatchError`（进入执行器后异常无法证明无副作用），`outcome` 记为 `unknown-after-dispatch`（被 abort 时）或 `failed`。
+8. `finally`：移除监听、`admission.settle` 与 `permits.settle`。
 
 相关错误：
 

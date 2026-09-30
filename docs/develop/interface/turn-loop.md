@@ -113,10 +113,10 @@ type AgentTurnResult = Readonly<{
 
 对 `modelTurns = 1 .. maxModelTurns`：
 
-1. **回合前检查**：`throwIfAborted`；`registry.prepare`；`ensureInitialHistoryContext`（无历史或首事件不合规即拒绝；有 `invocation-context-committed` / `transcript-compacted` 时校验请求快照兼容性）。
+1. **回合前检查**：`throwIfAborted`（超时信号 → `AgentTurnTimedOutError`，否则 `AgentTurnCancelledError`）；`registry.prepare`；`ensureInitialHistoryContext`（无历史或首事件不合规即拒绝；有 `invocation-context-committed` / `transcript-compacted` 时校验请求快照兼容性）。
 2. **请求投影与预检**：`observer.prepareModelRequest` → `preflightModelRequest`（可返回替换后的 messages，此时追加 `transcript-compacted` 并重算请求；超预算抛 `ModelPreflightRejectedError('OVER_BUDGET')`）。
 3. **路由冻结**：`registry.getProvider`；首轮固化 `pinnedRoute` / `pinnedProvider`，后续不匹配抛 `ModelRouteChangedError`。
-4. **provider 尝试**：追加 `model-request-started` → 流式收集（`collectModelAttempt`）；失败或输出内容可疑时走 `recoverProviderAttempt`（至多一次重试，超限抛 `ModelAttemptRecoveryRejectedError('RETRY_LIMIT_EXCEEDED')`）；`finish.reason === 'cancelled'` → `AgentTurnCancelledError`。
+4. **provider 尝试**：追加 `model-request-started` → 流式收集（`collectModelAttempt`）；失败或输出内容可疑时走 `recoverProviderAttempt`（至多一次重试，超限抛 `ModelAttemptRecoveryRejectedError('RETRY_LIMIT_EXCEEDED')`）；`finish.reason === 'cancelled'` → 先按 `request.signal` 判定：超时信号（`signal.reason === AGENT_TURN_TIMEOUT_ABORT_REASON`）抛 `AgentTurnTimedOutError`，否则抛 `AgentTurnCancelledError`。
 5. **响应归约与提交**：拼装 assistant canonical 消息（thinking / text 合并、`thinking-signature` 回填）→ `recordProviderAttemptUsage` → `prepareModelResponseProjection` → 追加 `model-response-committed` → `onModelResponseCommitted`。
 6. **输出上限恢复**：`finish.reason === 'length'` 时对每个工具调用追加 `tool-call-not-dispatched`（`MODEL_OUTPUT_TRUNCATED`），可选 `provider-retry-scheduled` 与 `replay-message-committed`，然后 `continue`；没有续写消息则抛 `ModelOutputTokenLimitError`。
 7. **turn boundary**：`turnBoundary` 返回 `messages` 时校验"待派发提案与必需 user 消息不得被破坏"，追加 `transcript-compacted`，再执行 `commitProjection`（失败抛 `AgentTurnBoundaryProjectionError`）。
@@ -129,16 +129,23 @@ type AgentTurnResult = Readonly<{
 
 并发由 `mapWithConcurrency(toolCalls, maxConcurrentTools ?? 2)` 控制，单工具顺序：
 
-1. **应用准入**：`TurnApplicationAdmission.activate`；审批候选工具先占审批候选槽（`ApprovalCandidateSlots`，基于 `CapacityLedger`，审批与恢复队列的等待会 park）。
-2. **初始准备**：`prepareTool(call, { kind: 'initial' })`；校验绑定为 `initial-compat` 且 `invocationId` / `toolCallId` / `capabilityId` 一致，否则 `markNotDispatched('PREPARED_CALL_MISMATCH')` 并抛 `ToolDeniedError`。
-3. **策略评估**：`safetyGate.evaluate` — `deny` → `markNotDispatched(reasonCode)` + `ToolDeniedError`；`ask` → 走确认流程（审批槽 `Semaphore(2)`）：
-   - 追加 `approval-waiting`；
-   - 调 `confirmation(...)`；
-   - 追加 `approval-resolved`（含 `outcome` / `answerer` / `cause` / `settledAt`）；
-   - 未获批 → `markNotDispatched('CONFIRMATION_<KIND>')` + `ToolDeniedError`，`receipt` 为空也视为未获批。
-4. **资源锁 → 终检 → 授权**：先 `resourceLocks.acquire(resourceKeys ?? ['unknown:<invocationId>'])`，再 `prepareTool(call, { kind: 'recheck', confirmation? })`（失败按 `^[A-Z0-9_]{1,64}$` 判定 reasonCode，否则 `PREPARED_RECHECK_FAILED`），`matchesRecheckBinding` 不匹配 → `STALE_AUTHORIZATION`，然后 `safetyGate.authorize`；取消竞态下已签发 permit 用 `discardPermit` 回收。
-5. **执行**：`toolExecution.execute(call, permitId, onDispatchClaimed)`；`onDispatchClaimed` 内追加 `tool-call-started`（含 `inputHash`、`decisionRuleId`）。`ToolExecutionRejectedError` 会被转成 `ToolDeniedError` / 取消错误。
+1. **进入执行前的应用准入**：`TurnApplicationAdmission.activate(toolCallId)`；审批候选工具再申请候选槽 `candidateSlots.acquire(invocationId, signal, onWait)`，排队期间经 `onWait` 让出运行槽（`applicationAdmission.wait(toolCallId, 'approval-wait-capacity')`），拿到槽后重新 `activate`。此段失败 → `markNotDispatched`（`REQUEST_CANCELLED` / `APPLICATION_ADMISSION_RECOVERY_FAILED` / `CONFIRMATION_CAPACITY_UNAVAILABLE`）。
+2. **初始准备**：`prepareTool(call, { kind: 'initial' })` → `onToolStarted` 投影；校验绑定为 `initial-compat` 且 `invocationId` / `toolCallId` / `capabilityId` 一致，否则 `markNotDispatched('PREPARED_CALL_MISMATCH')` 并抛 `ToolDeniedError`。
+3. **策略评估**：`safetyGate.evaluate` — `deny` → `markNotDispatched(reasonCode)` + `ToolDeniedError`；`ask` → 确认流程（候选槽 `ApprovalCandidateSlots(2, max(toolCalls.length, 1))`、审批槽 `Semaphore(2)` 均按工具轮新建）：
+   - 未注入 `confirmation` 端口 → `markNotDispatched('CONFIRMATION_REQUIRED')` + `ToolDeniedError`；
+   - **审批槽**：`approvalSlots` 已有等待者或已占满时先 park 运行槽，再 `approvalSlots.acquire(signal)`，拿到槽后重新 `activate`；该段失败 → `markNotDispatched`（`REQUEST_CANCELLED` / `APPLICATION_ADMISSION_RECOVERY_FAILED` / `CONFIRMATION_CAPACITY_UNAVAILABLE`）；
+   - 追加 `approval-waiting`（含 `approvalId` / `answerer` / `reasonCode` / `requestedAt`）；
+   - `applicationAdmission.wait(toolCallId)` 真正让出运行槽；等待失败 → 释放审批槽、补写 `approval-resolved`（`outcome` = `timeout` / `cancelled` / `unavailable`）、`markNotDispatched`（`REQUEST_TIMEOUT` / `REQUEST_CANCELLED` / `APPLICATION_ADMISSION_RECOVERY_FAILED`），并抛超时或取消错误；
+   - 调 `confirmation(...)`；抛错 → 补写 `approval-resolved(outcome: 'unavailable')` 后原样抛出；`finally` 释放审批槽；
+   - 追加 `approval-resolved`（`approved` / `outcome` / `answerer` / `cause` / `settledAt`）；
+   - signal abort 复检 → `markNotDispatched('REQUEST_TIMEOUT' | 'REQUEST_CANCELLED')`；
+   - 未获批 → `markNotDispatched('CONFIRMATION_<KIND>')` + `ToolDeniedError`，`receipt` 为空也视为未获批；
+   - **获批之后**才 `applicationAdmission.activate(toolCallId)` 取回执行槽；失败 → `markNotDispatched`（`REQUEST_TIMEOUT` / `REQUEST_CANCELLED` / `APPLICATION_ADMISSION_RECOVERY_FAILED`），随后再做一次 abort 复检。
+4. **资源锁 → 终检 → 授权**：先 `resourceLocks.acquire(resourceKeys ?? ['unknown:<invocationId>'])`，再 `prepareTool(call, { kind: 'recheck', confirmation? })`（失败按 `^[A-Z0-9_]{1,64}$` 判定 reasonCode，否则 `PREPARED_RECHECK_FAILED`），`matchesRecheckBinding` 不匹配 → `STALE_AUTHORIZATION`，然后 `safetyGate.authorize`；非 `allow` → `markNotDispatched(reasonCode 或 'RECHECK_REQUIRES_CONFIRMATION')`；取消竞态下已签发 permit 用 `discardPermit` 回收。
+5. **执行**：`toolExecution.execute(call, permitId, onDispatchClaimed)`；`onDispatchClaimed` 内追加 `tool-call-started`（含 `inputHash`、`decisionRuleId`）并把派发状态记为 `started`。执行端口在 `onDispatchClaimed` 返回后、进入执行器之前还有**一次 abort 复检**（[safety-approval.md](./safety-approval.md) 第 5 节）：此刻若已取消 / 撤权 / 授权变更则抛 `ToolExecutionRejectedError`。循环收到该错误时把 `tool-call-started` 提案**回退为未派发**（派发状态回到 `pending`，可补写 `tool-call-not-dispatched`），再按原因转成 `AgentTurnCancelledError` / `AgentTurnTimedOutError` 或 `ToolDeniedError(reason)`；`ToolExecutionAfterDispatchError` 原样上抛。
 6. **结果提交**：追加 `tool-call-finished`，随后 `onToolFinished` 与 `afterToolResult`；返回的 canonical 结果以**已提交**的 history payload 为准。
+
+`markNotDispatched` 使用的原因码覆盖：准备 / 授权类（`PREPARED_CALL_MISMATCH`、`PREPARED_RECHECK_FAILED`、`STALE_AUTHORIZATION`、`RECHECK_REQUIRES_CONFIRMATION`）、策略与确认类（策略 `reasonCode`、`CONFIRMATION_REQUIRED`、`CONFIRMATION_<KIND>`、`CONFIRMATION_CAPACITY_UNAVAILABLE`）、请求生命周期类（`REQUEST_TIMEOUT`、`REQUEST_CANCELLED`、`APPLICATION_ADMISSION_RECOVERY_FAILED`、`TURN_FAILED_BEFORE_TOOL_DISPATCH`）与执行端口拒绝原因（`ToolExecutionRejectReason`）。
 
 `returnDeniedToolsToModel = true` 时，被拒工具不会终止回合，而是生成 `role: 'tool'` 的拒绝结果回灌给模型，并 `afterToolResult(..., { kind: 'safety-rejection', reasonCode })`。
 
@@ -149,10 +156,12 @@ type AgentTurnResult = Readonly<{
 | 判定 | status | 终态事件 |
 | --- | --- | --- |
 | `AgentTurnCancelledError` | `cancelled` | `invocation-interrupted` |
-| 结果持久化不确定 / `ToolExecutionAfterDispatchError` / 宿主投影失败 / 工具投影失败 / 边界投影失败 | `interrupted` | `invocation-interrupted` |
+| `AgentTurnTimedOutError` | `failed` | `invocation-failed`（`reason: 'timeout'`） |
+| 结果持久化不确定（含 `AgentTurnHistoryAppendError` 且 `kinds` 含 `tool-call-finished`） / `ToolExecutionAfterDispatchError` / 宿主投影失败 / 工具投影失败 / 边界投影失败 | `interrupted` | `invocation-interrupted` |
 | `ToolDeniedError` | `denied` | `invocation-failed` |
 | 其他 | `failed` | `invocation-failed` |
 
+- 「先抛出的错误」判定中，`AgentTurnCancelledError` 与 `AgentTurnTimedOutError` 等价看待（都是请求生命周期错误，优先于其它拒绝码）。
 - 失败前会把 history 中仍 pending 且未 started 的工具补写 `tool-call-not-dispatched`（reason `TURN_FAILED_BEFORE_TOOL_DISPATCH`）；若补写失败则标记为"结果持久化不确定"。
 - 终态事件 payload 会带上 `status`、`reason`（如 `timeout`、`host-projection-failed`、`tool-projection-failed`、`turn-boundary-ledger-projection-failed`、`unknown-after-dispatch`、拒绝码）与 `lastValidUsage`。
 - 若 history 已是终态（`AgentTurnHistoryAlreadyTerminalError`），不再重复写终态；`appendTerminalHistory` 在追加失败时会读回确认是否已等价落库。
@@ -160,19 +169,34 @@ type AgentTurnResult = Readonly<{
 
 ## 错误类型
 
-| 类 | code |
-| --- | --- |
-| `ToolDeniedError` | `TOOL_DENIED`（含 `reasonCode`、可选 `userMessage`） |
-| `ModelTurnLimitError` | `MODEL_TURN_LIMIT` |
-| `ModelPreflightRejectedError` | `MODEL_PREFLIGHT_REJECTED` |
-| `ToolLoopRoundLimitError` | `TOOL_LOOP_MAX_ROUNDS_EXCEEDED` |
-| `ModelOutputTokenLimitError` | `MODEL_OUTPUT_TOKEN_LIMIT_EXHAUSTED` |
-| `AgentTurnCancelledError` | `TURN_CANCELLED` |
-| `AgentTurnTimedOutError` | `TURN_TIMED_OUT` |
-| `InvalidTurnBoundaryError` | `INVALID_TURN_BOUNDARY` |
-| `ModelAttemptRecoveryRejectedError` | `MODEL_ATTEMPT_RECOVERY_REJECTED` |
+**已导出**（装配方可 `instanceof` 判定）：
+
+| 类 | code | 备注 |
+| --- | --- | --- |
+| `ToolDeniedError` | `TOOL_DENIED` | 含 `reasonCode`、可选 `userMessage` |
+| `ModelTurnLimitError` | `MODEL_TURN_LIMIT` | |
+| `ModelPreflightRejectedError` | `MODEL_PREFLIGHT_REJECTED` | `reasonCode` 目前仅 `OVER_BUDGET` |
+| `ToolLoopRoundLimitError` | `TOOL_LOOP_MAX_ROUNDS_EXCEEDED` | |
+| `ModelOutputTokenLimitError` | `MODEL_OUTPUT_TOKEN_LIMIT_EXHAUSTED` | 输出上限恢复已耗尽 |
+| `AgentTurnCancelledError` | `TURN_CANCELLED` | |
+| `AgentTurnTimedOutError` | `TURN_TIMED_OUT` | |
+| `InvalidTurnBoundaryError` | `INVALID_TURN_BOUNDARY` | 边界投影破坏必需消息 / 待派发提案 |
+| `ModelAttemptRecoveryRejectedError` | `MODEL_ATTEMPT_RECOVERY_REJECTED` | `reasonCode` 如 `RETRY_LIMIT_EXCEEDED` |
+
+**未导出**（turn 内部信号，装配方只能按 `error.name` 判定；均继承 `Error`）：
+
+| 类（name） | code | 语义 |
+| --- | --- | --- |
+| `AgentTurnHistoryAppendError` | — | history 追加失败；携带 `kinds`（失败批次的事件 kind 列表）与 `originalError`。`kinds` 含 `tool-call-finished` 时回合按"结果持久化不确定"结算 |
+| `AgentTurnApplicationAdmissionError` | `APPLICATION_ADMISSION_RECOVERY_FAILED` | 宿主应用运行槽激活 / 恢复失败；未派发工具会以同名 reasonCode 落 `tool-call-not-dispatched` |
+| `AgentTurnHostProjectionError` | — | 宿主响应投影提交失败（critical 回调抛错），回合结算 `interrupted` |
+| `AgentTurnToolProjectionError` | — | 工具投影提交失败，同上 |
+| `AgentTurnBoundaryProjectionError` | — | turn boundary 投影失败，同上 |
+| `AgentTurnHistoryAlreadyTerminalError` | — | 追加终态事件时 history 已是终态，不再重复写 |
 
 超时与取消的区分靠 `AbortSignal.reason === AGENT_TURN_TIMEOUT_ABORT_REASON`（`'agent-turn-timeout'`）。
+
+另有非错误码的明文标识 `model_output_token_limit`：输出上限恢复时用作未派发工具的结果错误值，并写入 `provider-retry-scheduled` 事件的 `code` / `sessionLedger.requestRetry.code`。
 
 ## 其他导出
 
