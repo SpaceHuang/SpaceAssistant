@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Tooltip } from 'antd'
 import { useTranslation } from 'react-i18next'
 import { useTypedSelector } from '../../hooks'
@@ -9,6 +9,7 @@ import {
   estimateTokensFromImageAttachments,
   resolveEffectiveMaximumContext
 } from '../../../shared/contextUsageEstimate'
+import { normalizeTokensLargestRemainder } from '../../../shared/usageAttribution'
 import { effectiveMaxTokensForBuiltinToolLoop } from '../../../shared/llm/toolLoopMaxTokens'
 import { resolveSessionModelBinding } from '../../services/sessionModelBinding'
 
@@ -31,6 +32,14 @@ type Props = {
   pendingImageAttachments?: ChatImageAttachment[]
   historyImageTokens?: number
   thinkingTokensToExclude?: number
+}
+
+/** usage_step_facts 归因列的渲染端最小投影（避免引入主进程模块）。 */
+type LatestStepAttribution = {
+  estimatorVersion: string | null
+  systemTokens: number | null
+  toolsTokens: number | null
+  messageTokens: number | null
 }
 
 /** 在同一圆环上按顺序拼接：已用 | 输出预留 | 剩余（由底色轨道表示） */
@@ -110,6 +119,37 @@ export function ContextUsageRing({
     return buildContextRingSegments(display.usedRatio, display.reservedRatio, circumference)
   }, [display, circumference])
 
+  // 口径 B 构成（P2，§6.7）：取本会话最近一条带归因的 step 行（block-v1 落库），
+  // 按三源权重归一化到「上轮输入」（totalRequestInput，精确三档和，AD17），
+  // 恒等式 Σ构成段 == totalRequestInput 精确成立（AT15）。
+  const [latestAttribution, setLatestAttribution] = useState<LatestStepAttribution | null>(null)
+  useEffect(() => {
+    if (!sessionId) {
+      setLatestAttribution(null)
+      return
+    }
+    let cancelled = false
+    window.api
+      ?.usageStatsLatestSessionAttribution?.(sessionId)
+      .then((row) => {
+        if (!cancelled) setLatestAttribution(row)
+      })
+      .catch(() => {
+        if (!cancelled) setLatestAttribution(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [sessionId, display?.totalRequestInput])
+
+  const composition = useMemo(() => {
+    if (!display || !latestAttribution?.estimatorVersion) return null
+    const weights = [latestAttribution.systemTokens ?? 0, latestAttribution.toolsTokens ?? 0, latestAttribution.messageTokens ?? 0]
+    if (weights.every((w) => w <= 0)) return null
+    const normalized = normalizeTokensLargestRemainder(weights, display.totalRequestInput)
+    return { version: latestAttribution.estimatorVersion, system: normalized[0]!, tools: normalized[1]!, messages: normalized[2]! }
+  }, [display, latestAttribution])
+
   const tooltipTitle = useMemo(() => {
     if (!hasData || !display) {
       if (pendingImageTokens > 0 || historyImageTokens > 0) {
@@ -131,47 +171,68 @@ export function ContextUsageRing({
       return t('tooltip.noData')
     }
 
+    // 分组结构（AD21）：占用 / 构成 / 缓存 / 预留；总计与图例不归组。
+    // 约束：既有文案字符串一个不改；空组连标题一起隐藏；usedRatio 与环形不受影响。
     const locale = i18n.language
-    const lines: string[] = []
-    lines.push(`${t('tooltip.estimatedOccupancy')}　${formatNum(display.estimatedOccupancy, locale)}`)
-    lines.push(`${t('tooltip.lastRequestInput')}　${formatNum(display.totalRequestInput, locale)}`)
+    const occupationLines: string[] = []
+    occupationLines.push(`${t('tooltip.estimatedOccupancy')}　${formatNum(display.estimatedOccupancy, locale)}`)
+    occupationLines.push(`${t('tooltip.lastRequestInput')}　${formatNum(display.totalRequestInput, locale)}`)
     if (display.lastOutput > 0) {
-      lines.push(`${t('tooltip.lastOutput')}　${formatNum(display.lastOutput, locale)}`)
+      occupationLines.push(`${t('tooltip.lastOutput')}　${formatNum(display.lastOutput, locale)}`)
     }
     if (thinkingTokensToExclude > 0) {
-      lines.push(
-        t('tooltip.thinkingExcluded', { count: formatNum(thinkingTokensToExclude, locale) })
-      )
+      occupationLines.push(t('tooltip.thinkingExcluded', { count: formatNum(thinkingTokensToExclude, locale) }))
     }
-    if (lastUsage?.cache_read_input_tokens && lastUsage.cache_read_input_tokens > 0) {
-      lines.push(`${t('tooltip.cacheRead')}　${formatNum(lastUsage.cache_read_input_tokens, locale)}`)
-    }
-    if (lastUsage?.cache_creation_input_tokens && lastUsage.cache_creation_input_tokens > 0) {
-      lines.push(`${t('tooltip.cacheWrite')}　${formatNum(lastUsage.cache_creation_input_tokens, locale)}`)
-    }
-    lines.push(`${t('tooltip.outputReserve')}　${formatNum(display.effectiveOutputMax, locale)}`)
     if (pendingImageTokens > 0) {
-      lines.push(t('tooltip.pendingImages', { count: pendingImageTokens }))
+      occupationLines.push(t('tooltip.pendingImages', { count: pendingImageTokens }))
     }
     if (historyImageTokens > 0) {
-      lines.push(t('tooltip.historyImages', { count: historyImageTokens }))
+      occupationLines.push(t('tooltip.historyImages', { count: historyImageTokens }))
     }
-    lines.push(t('tooltip.separator'))
-    lines.push(
-      `${t('tooltip.total')} ${formatNum(display.estimatedOccupancy, locale)} / ${formatNum(display.maximumContext, locale)}（${display.percentUsed.toFixed(1)}%）`
-    )
-    lines.push(
-      `${t('tooltip.legend')}　　■ ${t('tooltip.legendUsed')}　■ ${t('tooltip.legendReserved')}　□ ${t('tooltip.legendFree')}`
-    )
 
-    return (
-      <div className="context-usage-tooltip">
+    const cacheRead = lastUsage?.cache_read_input_tokens ?? 0
+    const cacheWrite = lastUsage?.cache_creation_input_tokens ?? 0
+
+    const renderGroup = (title: string, lines: string[], key: string, muted = true, titleAttr?: string) => (
+      <div key={key} className="context-usage-tooltip-group" title={titleAttr}>
+        {muted && (
+          <div style={{ opacity: 0.65, marginTop: 4 }} data-testid={`usage-tooltip-group-${key}`}>
+            {title}
+          </div>
+        )}
         {lines.map((line, index) => (
           <div key={index}>{line}</div>
         ))}
       </div>
     )
-  }, [hasData, lastUsage, display, pendingImageTokens, historyImageTokens, thinkingTokensToExclude, t, i18n.language])
+
+    const compositionLines: string[] = []
+    if (composition) {
+      // 界面只给「≈数值」与来源名；估算器版本号（block-v1）属内部口径，仅放悬停 title 供排障
+      compositionLines.push(`${t('composition.estimatedMark', { count: formatNum(composition.system, locale) })} · ${t('composition.systemPrompt')}`)
+      compositionLines.push(`${t('composition.estimatedMark', { count: formatNum(composition.tools, locale) })} · ${t('composition.tools')}`)
+      compositionLines.push(`${t('composition.estimatedMark', { count: formatNum(composition.messages, locale) })} · ${t('composition.messages')}`)
+    }
+
+    const cacheLines: string[] = []
+    if (cacheRead > 0) cacheLines.push(`${t('tooltip.cacheRead')}　${formatNum(cacheRead, locale)}`)
+    if (cacheWrite > 0) cacheLines.push(`${t('tooltip.cacheWrite')}　${formatNum(cacheWrite, locale)}`)
+
+    return (
+      <div className="context-usage-tooltip">
+        {renderGroup(t('groups.occupation'), occupationLines, 'occupation')}
+        {compositionLines.length > 0 &&
+          renderGroup(t('groups.composition'), compositionLines, 'composition', true, composition?.version)}
+        {cacheLines.length > 0 && renderGroup(t('groups.cache'), cacheLines, 'cache')}
+        {renderGroup(t('groups.reserve'), [`${t('tooltip.outputReserve')}　${formatNum(display.effectiveOutputMax, locale)}`], 'reserve')}
+        <div>{t('tooltip.separator')}</div>
+        <div>
+          {t('tooltip.total')} {formatNum(display.estimatedOccupancy, locale)} / {formatNum(display.maximumContext, locale)}（{display.percentUsed.toFixed(1)}%）
+        </div>
+        <div>{`${t('tooltip.legend')}　　■ ${t('tooltip.legendUsed')}　■ ${t('tooltip.legendReserved')}　□ ${t('tooltip.legendFree')}`}</div>
+      </div>
+    )
+  }, [hasData, lastUsage, display, pendingImageTokens, historyImageTokens, thinkingTokensToExclude, composition, t, i18n.language])
 
   const ariaLabel =
     hasData && display

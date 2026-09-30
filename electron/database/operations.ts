@@ -1437,6 +1437,14 @@ export type UsageStepFactInput = {
   cacheCreationTokens: number
   cacheSemantics?: string | null
   source: string
+  /** v19 归因：输入侧三源真列（block-v1 整体重估）；缺省为 NULL（无归因数据降级） */
+  systemTokens?: number | null
+  toolsTokens?: number | null
+  messageTokens?: number | null
+  /** 估算器版本（AD18：独立真列，P1 期 null，P2 起 'block-v1'） */
+  estimatorVersion?: string | null
+  /** 归因 JSON 列：messages 骨架 + 输出侧（调用方序列化） */
+  attributionJson?: string | null
 }
 
 export type UsageStepFactRow = {
@@ -1455,6 +1463,11 @@ export type UsageStepFactRow = {
   cacheCreationTokens: number
   cacheSemantics: string | null
   source: string
+  systemTokens: number | null
+  toolsTokens: number | null
+  messageTokens: number | null
+  estimatorVersion: string | null
+  attributionJson: string | null
 }
 
 type UsageStepFactSqlRow = {
@@ -1473,6 +1486,11 @@ type UsageStepFactSqlRow = {
   cache_creation_tokens: number
   cache_semantics: string | null
   source: string
+  system_tokens: number | null
+  tools_tokens: number | null
+  message_tokens: number | null
+  estimator_version: string | null
+  attribution_json: string | null
 }
 
 function rowToUsageStepFact(row: UsageStepFactSqlRow): UsageStepFactRow {
@@ -1491,7 +1509,12 @@ function rowToUsageStepFact(row: UsageStepFactSqlRow): UsageStepFactRow {
     cacheReadTokens: row.cache_read_tokens,
     cacheCreationTokens: row.cache_creation_tokens,
     cacheSemantics: row.cache_semantics,
-    source: row.source
+    source: row.source,
+    systemTokens: row.system_tokens,
+    toolsTokens: row.tools_tokens,
+    messageTokens: row.message_tokens,
+    estimatorVersion: row.estimator_version,
+    attributionJson: row.attribution_json
   }
 }
 
@@ -1502,10 +1525,12 @@ export function insertUsageStepFact(db: AppDatabase, fact: UsageStepFactInput): 
     .prepare(
       `INSERT INTO usage_step_facts (
         session_id, turn_id, step_id, created_at, day, model, llm_service_id, app_version,
-        input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cache_semantics, source
+        input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cache_semantics, source,
+        system_tokens, tools_tokens, message_tokens, estimator_version, attribution_json
       ) VALUES (
         @sessionId, @turnId, @stepId, @createdAt, @day, @model, @llmServiceId, @appVersion,
-        @inputTokens, @outputTokens, @cacheReadTokens, @cacheCreationTokens, @cacheSemantics, @source
+        @inputTokens, @outputTokens, @cacheReadTokens, @cacheCreationTokens, @cacheSemantics, @source,
+        @systemTokens, @toolsTokens, @messageTokens, @estimatorVersion, @attributionJson
       )
       ON CONFLICT(session_id, turn_id, step_id) DO UPDATE SET
         created_at = excluded.created_at,
@@ -1518,7 +1543,12 @@ export function insertUsageStepFact(db: AppDatabase, fact: UsageStepFactInput): 
         cache_read_tokens = excluded.cache_read_tokens,
         cache_creation_tokens = excluded.cache_creation_tokens,
         cache_semantics = excluded.cache_semantics,
-        source = excluded.source`
+        source = excluded.source,
+        system_tokens = excluded.system_tokens,
+        tools_tokens = excluded.tools_tokens,
+        message_tokens = excluded.message_tokens,
+        estimator_version = excluded.estimator_version,
+        attribution_json = excluded.attribution_json`
     )
     .run({
       sessionId: fact.sessionId,
@@ -1534,9 +1564,28 @@ export function insertUsageStepFact(db: AppDatabase, fact: UsageStepFactInput): 
       cacheReadTokens: fact.cacheReadTokens,
       cacheCreationTokens: fact.cacheCreationTokens,
       cacheSemantics: fact.cacheSemantics ?? null,
-      source: fact.source
+      source: fact.source,
+      systemTokens: fact.systemTokens ?? null,
+      toolsTokens: fact.toolsTokens ?? null,
+      messageTokens: fact.messageTokens ?? null,
+      estimatorVersion: fact.estimatorVersion ?? null,
+      attributionJson: fact.attributionJson ?? null
     })
   db.save()
+}
+
+/** 该会话最近一条带归因的 step 行（环构成段数据源，P2/§6.7）；无归因行时 undefined（AT8 降级）。 */
+export function getLatestAttributedStepFactForSession(db: AppDatabase, sessionId: string): UsageStepFactRow | undefined {
+  const conn = getDbConnection(db)
+  const row = conn
+    .prepare(
+      `SELECT * FROM usage_step_facts
+       WHERE session_id = ? AND attribution_json IS NOT NULL
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`
+    )
+    .get(sessionId) as UsageStepFactSqlRow | undefined
+  return row ? rowToUsageStepFact(row) : undefined
 }
 
 export function getUsageStepFactsForTurn(db: AppDatabase, sessionId: string, turnId: string): UsageStepFactRow[] {
@@ -1561,6 +1610,8 @@ export type UsageTurnFactInput = {
   toolSkippedCount: number
   /** 回填的台账缺 turn_end 时为 null（不臆断结果） */
   outcome: string | null
+  /** v19 归因：工具维度 JSON 列（tools / toolSource / toolResults，§7.6.5）；缺省为 NULL */
+  toolAttributionJson?: string | null
 }
 
 export type UsageTurnFactRow = {
@@ -1576,6 +1627,7 @@ export type UsageTurnFactRow = {
   toolErrorCount: number
   toolSkippedCount: number
   outcome: string | null
+  toolAttributionJson: string | null
 }
 
 type UsageTurnFactSqlRow = {
@@ -1591,6 +1643,7 @@ type UsageTurnFactSqlRow = {
   tool_error_count: number
   tool_skipped_count: number
   outcome: string | null
+  tool_attribution_json: string | null
 }
 
 function rowToUsageTurnFact(row: UsageTurnFactSqlRow): UsageTurnFactRow {
@@ -1606,7 +1659,8 @@ function rowToUsageTurnFact(row: UsageTurnFactSqlRow): UsageTurnFactRow {
     toolCallCount: row.tool_call_count,
     toolErrorCount: row.tool_error_count,
     toolSkippedCount: row.tool_skipped_count,
-    outcome: row.outcome
+    outcome: row.outcome,
+    toolAttributionJson: row.tool_attribution_json
   }
 }
 
@@ -1617,10 +1671,10 @@ export function upsertUsageTurnFact(db: AppDatabase, fact: UsageTurnFactInput): 
     .prepare(
       `INSERT INTO usage_turn_facts (
         turn_id, session_id, created_at, day, model, llm_service_id, app_version,
-        step_count, tool_call_count, tool_error_count, tool_skipped_count, outcome
+        step_count, tool_call_count, tool_error_count, tool_skipped_count, outcome, tool_attribution_json
       ) VALUES (
         @turnId, @sessionId, @createdAt, @day, @model, @llmServiceId, @appVersion,
-        @stepCount, @toolCallCount, @toolErrorCount, @toolSkippedCount, @outcome
+        @stepCount, @toolCallCount, @toolErrorCount, @toolSkippedCount, @outcome, @toolAttributionJson
       )
       ON CONFLICT(turn_id) DO UPDATE SET
         session_id = excluded.session_id,
@@ -1633,7 +1687,8 @@ export function upsertUsageTurnFact(db: AppDatabase, fact: UsageTurnFactInput): 
         tool_call_count = excluded.tool_call_count,
         tool_error_count = excluded.tool_error_count,
         tool_skipped_count = excluded.tool_skipped_count,
-        outcome = excluded.outcome`
+        outcome = excluded.outcome,
+        tool_attribution_json = excluded.tool_attribution_json`
     )
     .run({
       turnId: fact.turnId,
@@ -1647,7 +1702,8 @@ export function upsertUsageTurnFact(db: AppDatabase, fact: UsageTurnFactInput): 
       toolCallCount: fact.toolCallCount,
       toolErrorCount: fact.toolErrorCount,
       toolSkippedCount: fact.toolSkippedCount,
-      outcome: fact.outcome
+      outcome: fact.outcome,
+      toolAttributionJson: fact.toolAttributionJson ?? null
     })
   db.save()
 }

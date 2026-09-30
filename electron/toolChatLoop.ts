@@ -225,6 +225,7 @@ import {
 import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { ensureApiTextContent } from '../src/shared/claudeToolHistory'
+import { accumulateToolResultVolume, buildStepAttribution, classifyToolSource, emptyTurnToolDimension, summarizeToolDeclarations, type TurnToolDimension } from '../src/shared/usageAttribution'
 import { computeEffectiveTools, authorizeToolCall } from './effectiveTools'
 import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from './toolRevocationRegistry'
 import { buildRequestContextPayload, buildRequestHeaderPayload, computeMessagePrefixStats, digestSurfaceItems, elideConstantHeaderFields, type CacheBreakpoints, type ConstantHeaderFingerprints } from '../src/shared/requestContext'
@@ -679,6 +680,11 @@ export type TurnUsageStats = {
   toolCallCount: number
   toolErrorCount: number
   toolSkippedCount: number
+  /**
+   * 工具维度归因（v19，AD24/§7.6.5）：声明明细 + 返回体量，随 turn 收口写入 usage_turn_facts。
+   * 工具返回发生在该次 LLM 调用之后，recordStepUsage 时不可知，故只能在收口写。
+   */
+  toolDimension: TurnToolDimension
 }
 
 /**
@@ -873,7 +879,7 @@ export async function runToolChatSession(invocation: AgentInvocation, ports: Age
   }
   // 用量统计收口（C16）：计数对象随本回合创建，inner 内就近累计，这里在返回前一次落库。
   // 三条链路（桌面 / 远程 / butler）共用本函数，Turn 数与工具计数对全部渠道生效。
-  const turnUsageStats: TurnUsageStats = { stepCount: 0, toolCallCount: 0, toolErrorCount: 0, toolSkippedCount: 0 }
+  const turnUsageStats: TurnUsageStats = { stepCount: 0, toolCallCount: 0, toolErrorCount: 0, toolSkippedCount: 0, toolDimension: emptyTurnToolDimension() }
   let turnOutcome: UsageTurnOutcome = 'failed'
   try {
     const result = await runToolChatSessionInner({ ...args, invocationLeaseState, chatSignal, getMcpConnectionManager, turnUsageStats })
@@ -894,6 +900,7 @@ export async function runToolChatSession(invocation: AgentInvocation, ports: Age
       sessionId: args.sessionId,
       outcome: turnOutcome,
       counts: turnUsageStats,
+      toolAttribution: turnUsageStats.toolDimension,
       model: args.model,
       llmServiceId: args.llmServiceId
     })
@@ -1251,6 +1258,12 @@ async function runToolChatSessionInner(
     })
     const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools: tools as unknown as unknown[], messages: plannedMessages, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds: prefixTelemetry.incrementalCompletedToolUseIds, replayForbidden: false }, messagePrefixStats: prefixTelemetry.messagePrefixStats, cacheBreakpoints: prefixTelemetry.cacheBreakpoints })
     const wireHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools: tools as unknown as unknown[], messages: toolLoopStreamParams.messages as unknown[], requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
+    // 工具声明明细随本 attempt 整表替换进 turn 维度（§7.6.5）：工具面收窄时旧声明不得残留；
+    // toolResults 是跨 attempt 累计的返回体量，与声明表生命周期不同，不在此重置
+    const declarationSummary = summarizeToolDeclarations(tools as unknown as unknown[])
+    turnUsageStats.toolDimension.tools = declarationSummary.tools
+    turnUsageStats.toolDimension.toolSource = declarationSummary.toolSource
+    turnUsageStats.toolDimension.toolSources = declarationSummary.toolSources
     const requestContext = buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, windowId: contextWindowId, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } })
     lastRequestHeader = requestHeader
     lastRequestContext = requestContext
@@ -1305,7 +1318,7 @@ async function runToolChatSessionInner(
     })
     beginLlm(sessionId, requestId)
 
-    let content: Anthropic.ContentBlock[]
+    let content: Anthropic.ContentBlock[] = []
     let stopReason: NormalizedStopReason | undefined
     let usage: ToolLoopUsage | undefined
     let attemptUsageRecorded = false
@@ -1531,7 +1544,15 @@ async function runToolChatSessionInner(
           usage: attemptUsage,
           baseUrl,
           model,
-          llmServiceId: args.llmServiceId
+          llmServiceId: args.llmServiceId,
+          // 输入侧归因（AD23）：与用量同一次调用落同一行（usage_step_facts 扩列）；
+          // block-v1 整体重估三源 + messages 骨架 + 输出侧三类（§7.2/§7.4）
+          attribution: buildStepAttribution({
+            system: requestHeader.system ?? '',
+            tools: requestHeader.tools ?? [],
+            messages: toolLoopStreamParams.messages as unknown[],
+            outputContent: content as unknown[]
+          })
         })
         turnUsageStats.stepCount += 1
         lastValidUsage = attemptUsage
@@ -1627,7 +1648,13 @@ async function runToolChatSessionInner(
           usage,
           baseUrl,
           model,
-          llmServiceId: args.llmServiceId
+          llmServiceId: args.llmServiceId,
+          attribution: buildStepAttribution({
+            system: requestHeader.system ?? '',
+            tools: requestHeader.tools ?? [],
+            messages: toolLoopStreamParams.messages as unknown[],
+            outputContent: content as unknown[]
+          })
         })
         turnUsageStats.stepCount += 1
         lastValidUsage = usage
@@ -1693,6 +1720,11 @@ async function runToolChatSessionInner(
     const toolUses = content.filter((b) =>
       Boolean(b && typeof b === 'object' && (b as { type?: string }).type === 'tool_use')
     ) as Array<{ type: 'tool_use'; id: string; name: string; input: unknown }>
+    // toolUseId → 工具名：体量累计与 tool_result 冗余字段（AD10）都依赖它（实测关联率 100%，§5.7）
+    const toolNameByToolUseId = new Map<string, string>()
+    for (const toolUse of toolUses) {
+      if (typeof toolUse.id === 'string' && typeof toolUse.name === 'string') toolNameByToolUseId.set(toolUse.id, toolUse.name)
+    }
 
     // 必须先使用与下一轮相同的 replay 清理，再判断是否追加 assistant。
     // 否则无签名 thinking-only 截断会在下一轮变成空 assistant 消息。
@@ -1722,17 +1754,20 @@ async function runToolChatSessionInner(
       if (failedResults.length > 0) {
         messagesForApi = [...messagesForApi, { role: 'user', content: failedResults }]
         for (const failedResult of failedResults) {
+          const failedToolName = toolNameByToolUseId.get(failedResult.tool_use_id)
           const result: ToolCallResultPersisted = {
             success: false,
             error: 'model_output_token_limit',
             userMessage: failedResult.content,
             // §7.6 #15：输出截断整体放弃，未进入执行流程 → 未执行
             notExecuted: true,
-            notExecutedReason: 'model_output_truncated'
+            notExecutedReason: 'model_output_truncated',
+            ...(failedToolName ? { toolName: failedToolName, toolSource: classifyToolSource(failedToolName) } : {})
           }
           await args.emitSessionEvent?.({ type: 'tool_result', payload: { turnId: eventTurnId, stepId: requestId, toolUseId: failedResult.tool_use_id, result } })
           // 第 15 处 tool_result 发出点（绕过 recordToolResult）：同样计入三分类统计（需求 §2.4.0）。
           noteToolResultForStats(turnUsageStats, result)
+          if (failedToolName) accumulateToolResultVolume(turnUsageStats.toolDimension, failedToolName, failedResult.content)
           args.emitFactEvent?.({ type: 'tool-result', id: failedResult.tool_use_id, result })
         }
       }
@@ -1866,6 +1901,13 @@ async function runToolChatSessionInner(
       if (decisionRuleId) {
         decisionRuleIdsByToolUse.delete(block.tool_use_id)
         result = { ...result, decisionRuleId }
+      }
+      const resultToolName = toolNameByToolUseId.get(block.tool_use_id)
+      if (resultToolName) {
+        // AD10：tool_result 冗余 toolName/toolSource（可选改造，不新增事件类型）
+        result = { ...result, toolName: resultToolName, toolSource: classifyToolSource(resultToolName) }
+        // 工具返回体量累计（SRC-C1 原料，随 turn 收口落库）
+        accumulateToolResultVolume(turnUsageStats.toolDimension, resultToolName, block.content)
       }
       toolResults.push(block)
       await args.emitSessionEvent?.({

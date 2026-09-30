@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
-import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, MIGRATION_V4_TABLES_SQL, MIGRATION_V5_TURN_TABLE_SQL, MIGRATION_V6_TURN_CHECKPOINT_SQL, MIGRATION_V7_QUEUE_RECEIPT_SQL, MIGRATION_V8_TURN_START_TOKEN_SQL, MIGRATION_V9_TURN_RECOVERY_FIELDS_SQL, MIGRATION_V10_TURN_TERMINAL_USAGE_SQL, MIGRATION_V11_TURN_CONTEXT_SQL, MIGRATION_V12_TURN_EXECUTION_CONFIG_SQL, MIGRATION_V13_TURN_ROUTING_INDEXES_SQL, MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL, MIGRATION_V15_BUTLER_TABLES_SQL, MIGRATION_V16_USAGE_STATS_SQL, MIGRATION_V17_SESSION_THINKING_EFFORT_SQL, MIGRATION_V18_CONFIRMATION_COMMIT_IDENTITY_SQL, SCHEMA_META_KEYS } from './schema'
+import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, MIGRATION_V4_TABLES_SQL, MIGRATION_V5_TURN_TABLE_SQL, MIGRATION_V6_TURN_CHECKPOINT_SQL, MIGRATION_V7_QUEUE_RECEIPT_SQL, MIGRATION_V8_TURN_START_TOKEN_SQL, MIGRATION_V9_TURN_RECOVERY_FIELDS_SQL, MIGRATION_V10_TURN_TERMINAL_USAGE_SQL, MIGRATION_V11_TURN_CONTEXT_SQL, MIGRATION_V12_TURN_EXECUTION_CONFIG_SQL, MIGRATION_V13_TURN_ROUTING_INDEXES_SQL, MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL, MIGRATION_V15_BUTLER_TABLES_SQL, MIGRATION_V16_USAGE_STATS_SQL, MIGRATION_V17_SESSION_THINKING_EFFORT_SQL, MIGRATION_V18_CONFIRMATION_COMMIT_IDENTITY_SQL, MIGRATION_V19_USAGE_ATTRIBUTION_SQL, SCHEMA_META_KEYS } from './schema'
 import { runInTransaction } from './transaction'
 
 export class DatabaseUpgradeRequiredError extends Error {
@@ -169,6 +169,27 @@ export function runMigrations(conn: DatabaseSync): void {
         conn.exec('UPDATE confirmation_commit_audits SET revision = (SELECT revision FROM confirmation_submissions WHERE confirmation_submissions.submission_id = confirmation_commit_audits.submission_id)')
       }
       version = 18
+      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    }
+    if (version === 18) {
+      // 归因扩列（v19，AD23/AD24）：带表/列存在性防护，容忍无统计表的开发库，保持升级幂等
+      const hasUsageStepFacts =
+        (conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'usage_step_facts'").all() as unknown[]).length > 0
+      if (hasUsageStepFacts) {
+        const stepColumns = conn.prepare('PRAGMA table_info(usage_step_facts)').all() as Array<{ name: string }>
+        if (!stepColumns.some((column) => column.name === 'attribution_json')) {
+          conn.exec(MIGRATION_V19_USAGE_ATTRIBUTION_SQL)
+        }
+        const hasUsageTurnFacts =
+          (conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'usage_turn_facts'").all() as unknown[]).length > 0
+        if (hasUsageTurnFacts) {
+          const turnColumns = conn.prepare('PRAGMA table_info(usage_turn_facts)').all() as Array<{ name: string }>
+          if (!turnColumns.some((column) => column.name === 'tool_attribution_json')) {
+            conn.exec('ALTER TABLE usage_turn_facts ADD COLUMN tool_attribution_json TEXT')
+          }
+        }
+      }
+      version = 19
       conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
     }
   })

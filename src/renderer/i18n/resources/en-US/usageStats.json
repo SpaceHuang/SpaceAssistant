@@ -41,5 +41,67 @@
   },
   "empty": "No usage yet. Start a conversation to see token consumption, cache hit rate and tool call statistics.",
   "rangeTooLong": "Maximum range is 365 days; showing the last 365 days",
-  "loadFailed": "Failed to load usage statistics"
+  "loadFailed": "Failed to load usage statistics",
+  "tab": {
+    "overview": "Overview",
+    "composition": "Cost Composition"
+  },
+  "composition": {
+    "estimated": "Estimated",
+    "derived": "Derived · chars",
+    "coverage": "Attribution coverage {{percent}}",
+    "unattributed": "{{tokens}} tokens have no attribution data (predating attribution or estimator version mismatch)",
+    "emptyTitle": "No attribution data",
+    "emptyReason": "Requests in this range predate attribution capability or contain no attributable usage.",
+    "snapshot": "Composition snapshot",
+    "snapshotHint": "normalized to attributable input",
+    "drift": "Composition drift (daily)",
+    "driftScale": {
+      "absolute": "Absolute",
+      "percent": "Share"
+    },
+    "output": "Output composition",
+    "outputHint": "normalized to attributable output",
+    "categories": {
+      "system": "System prompt",
+      "tools": "Tool declarations",
+      "userText": "User messages",
+      "assistantText": "Assistant replies",
+      "toolResults": "Tool results",
+      "assistantThinking": "Historical thinking",
+      "assistantToolUse": "Historical tool args",
+      "other": "Other"
+    },
+    "outputCategories": {
+      "thinking": "Thinking",
+      "text": "Text",
+      "toolUseArgs": "Tool args"
+    },
+    "breakdown": {
+      "title": "Tool breakdown",
+      "tool": "Tool",
+      "source": "Source",
+      "declaredChars": "Declared chars",
+      "calls": "Calls",
+      "resultChars": "Result chars",
+      "unusedTitle": "Unused tools (declared, never called)",
+      "unusedCount": "{{count}}",
+      "unusedEmpty": "Every declared tool has been called at least once"
+    }
+  },
+  "insight": {
+    "title": "Insights",
+    "unusedTools": {
+      "title": "{{count}} tools never used, {{percent}} of standing declaration cost",
+      "action": "Action: mount MCP on demand / trim declarations"
+    },
+    "fixedCost": {
+      "title": "Fixed cost is only {{percent}} — optimization lies on the incremental side",
+      "action": "Action: truncate tool results / compact context"
+    },
+    "topToolResults": {
+      "title": "Top 3 tools take {{percent}} of tool result volume",
+      "action": "Action: truncate results / summarize and backfill"
+    }
+  }
 }

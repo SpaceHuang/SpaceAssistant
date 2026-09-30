@@ -1,10 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import dayjs, { type Dayjs } from 'dayjs'
-import { Alert, Button, DatePicker, Drawer, Radio, Select, Space, Spin, Typography } from 'antd'
+import { Alert, Button, DatePicker, Drawer, Radio, Select, Space, Spin, Tabs, Typography } from 'antd'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
-import type { UsageDailyPoint, UsageDimensions, UsageStatsFilters, UsageStatsRangeArgs, UsageSummary } from '../../../shared/usageStatsTypes'
+import type {
+  UsageAttributionComposition,
+  UsageAttributionDailyPoint,
+  UsageAttributionOutputSplit,
+  UsageDailyPoint,
+  UsageDimensions,
+  UsageStatsFilters,
+  UsageStatsRangeArgs,
+  UsageSummary,
+  UsageToolAttributionBreakdown
+} from '../../../shared/usageStatsTypes'
+import { BLOCK_V1_ESTIMATOR_VERSION } from '../../../shared/usageAttribution'
 import { UsageStatsKpiCards } from './UsageStatsKpiCards'
 import { UsageTrendChart } from './UsageTrendChart'
+import { UsageCompositionPanel } from './UsageCompositionPanel'
 import { formatLocalDay, localTimeZoneLabel } from './format'
 
 type Props = {
@@ -13,6 +25,15 @@ type Props = {
 }
 
 type RangePreset = '7' | '30' | '90' | 'custom'
+
+type AttributionData = {
+  composition: UsageAttributionComposition | null
+  daily: UsageAttributionDailyPoint[]
+  outputSplit: UsageAttributionOutputSplit | null
+  toolBreakdown: UsageToolAttributionBreakdown | null
+}
+
+const EMPTY_ATTRIBUTION: AttributionData = { composition: null, daily: [], outputSplit: null, toolBreakdown: null }
 
 const { RangePicker } = DatePicker
 
@@ -36,6 +57,8 @@ export function UsageStatsDrawer({ open, onClose }: Props) {
   const [dimensions, setDimensions] = useState<UsageDimensions | null>(null)
   const [summary, setSummary] = useState<UsageSummary | null>(null)
   const [points, setPoints] = useState<UsageDailyPoint[]>([])
+  const [attribution, setAttribution] = useState<AttributionData>(EMPTY_ATTRIBUTION)
+  const [attributionLoadError, setAttributionLoadError] = useState(false)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState(false)
 
@@ -63,15 +86,34 @@ export function UsageStatsDrawer({ open, onClose }: Props) {
   const fetchData = useCallback(async (args: UsageStatsRangeArgs) => {
     setLoading(true)
     setLoadError(false)
+    setAttributionLoadError(false)
     try {
-      const [nextSummary, nextPoints, nextDimensions] = await Promise.all([
+      // 成本构成 Tab 与总览共用同一套筛选与区间（AD13/AT14 硬约束）：归因查询在此一并发出，
+      // 估算器版本固定 block-v1（I1：同一报表内不得混用版本）。
+      // 归因四条查询失败单独标记（attributionLoadError）：查询失败 ≠ 无归因数据，
+      // 不得复用「早于归因能力上线」的空态事实（评审 P1-2）。
+      const attributionArgs = { ...args, estimatorVersion: BLOCK_V1_ESTIMATOR_VERSION }
+      const safe = async <T,>(p: Promise<T>, fallback: T): Promise<T> => {
+        try {
+          return await p
+        } catch {
+          setAttributionLoadError(true)
+          return fallback
+        }
+      }
+      const [nextSummary, nextPoints, nextDimensions, composition, daily, outputSplit, toolBreakdown] = await Promise.all([
         window.api.usageStatsSummary(args),
         window.api.usageStatsDaily(args),
-        window.api.usageStatsDimensions()
+        window.api.usageStatsDimensions(),
+        safe(window.api.usageStatsAttributionComposition(attributionArgs), null),
+        safe(window.api.usageStatsAttributionDaily(attributionArgs), []),
+        safe(window.api.usageStatsAttributionOutput(attributionArgs), null),
+        safe(window.api.usageStatsAttributionTools(args), null)
       ])
       setSummary(nextSummary)
       setPoints(nextPoints)
       setDimensions(nextDimensions)
+      setAttribution({ composition, daily, outputSplit, toolBreakdown })
     } catch {
       setLoadError(true)
     } finally {
@@ -193,14 +235,39 @@ export function UsageStatsDrawer({ open, onClose }: Props) {
             {t('empty')}
           </Typography.Paragraph>
         ) : (
-          <Spin spinning={loading}>
-            <Space direction="vertical" size={16} style={{ width: '100%' }}>
-              <UsageStatsKpiCards summary={summary} loading={loading} />
-              <div data-testid="usage-trend-chart">
-                <UsageTrendChart points={points} />
-              </div>
-            </Space>
-          </Spin>
+          <Tabs
+            defaultActiveKey="overview"
+            items={[
+              {
+                key: 'overview',
+                label: t('tab.overview'),
+                children: (
+                  <Spin spinning={loading}>
+                    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                      <UsageStatsKpiCards summary={summary} loading={loading} />
+                      <div data-testid="usage-trend-chart">
+                        <UsageTrendChart points={points} />
+                      </div>
+                    </Space>
+                  </Spin>
+                )
+              },
+              {
+                key: 'composition',
+                label: t('tab.composition'),
+                children: (
+                  <UsageCompositionPanel
+                    composition={attribution.composition}
+                    daily={attribution.daily}
+                    outputSplit={attribution.outputSplit}
+                    toolBreakdown={attribution.toolBreakdown}
+                    loading={loading}
+                    loadError={attributionLoadError}
+                  />
+                )
+              }
+            ]}
+          />
         )}
       </Space>
     </Drawer>

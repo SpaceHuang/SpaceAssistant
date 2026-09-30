@@ -1,6 +1,7 @@
 import { computeTotalRequestInputTokens } from '../../src/shared/contextUsageEstimate'
 import { resolveUsageCacheSemanticsFromBaseUrl } from '../../src/shared/usageCacheSemantics'
 import type { SessionUsage } from '../../src/shared/sessionUsage'
+import type { StepAttribution, TurnToolDimension } from '../../src/shared/usageAttribution'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import type { AppDatabase } from '../database'
 import { insertUsageStepFact, upsertUsageTurnFact } from '../database/operations'
@@ -30,6 +31,11 @@ export type UsageStepUsageInput = {
   model?: string | null
   llmServiceId?: string | null
   now?: number
+  /**
+   * 输入侧归因（v19，AD23）：blocks/输出侧 JSON 列 + 三源真列 + estimator_version（AD18）。
+   * 缺省为无归因数据（老行 NULL 降级语义，AT8/I5）。
+   */
+  attribution?: StepAttribution | null
 }
 
 export type UsageTurnToolCounts = {
@@ -46,6 +52,8 @@ export type TurnSummaryInput = {
   sessionId: string
   outcome: UsageTurnOutcome
   counts: UsageTurnToolCounts
+  /** 工具维度归因（v19，AD24/§7.6.5）：tools/toolSource/toolResults JSON 列。缺省为无归因数据。 */
+  toolAttribution?: TurnToolDimension | null
   model?: string | null
   llmServiceId?: string | null
   now?: number
@@ -77,6 +85,10 @@ export function recordStepUsage(db: AppDatabase | undefined, input: UsageStepUsa
   const usage = input.usage
   const cacheSemantics = usage.cacheSemantics ?? resolveUsageCacheSemanticsFromBaseUrl(input.baseUrl)
   const inputTokens = computeTotalRequestInputTokens({ ...usage, cacheSemantics })
+  // 归因 JSON 列只放 schemaVersion + blocks + 输出侧；estimatorVersion 落独立真列（AD18：单一真相源）
+  const { threeSources, ...attributionJson } = input.attribution ?? {}
+  const attributionJsonString =
+    input.attribution && 'blocks' in attributionJson ? safeStringifyAttribution(attributionJson) : null
   safeWrite(db, input.turnId, input.stepId, () => {
     insertUsageStepFact(db!, {
       sessionId: input.sessionId,
@@ -92,9 +104,22 @@ export function recordStepUsage(db: AppDatabase | undefined, input: UsageStepUsa
       cacheReadTokens: usage.cache_read_input_tokens ?? 0,
       cacheCreationTokens: usage.cache_creation_input_tokens ?? 0,
       cacheSemantics,
-      source: 'api'
+      source: 'api',
+      systemTokens: threeSources?.systemTokens ?? null,
+      toolsTokens: threeSources?.toolsTokens ?? null,
+      messageTokens: threeSources?.messageTokens ?? null,
+      estimatorVersion: threeSources?.estimatorVersion ?? null,
+      attributionJson: attributionJsonString
     })
   })
+}
+
+function safeStringifyAttribution(value: unknown): string | null {
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return null
+  }
 }
 
 /** Turn 收口时写一行 usage_turn_facts（重复收口按主键覆盖，恢复/重试幂等）。 */
@@ -113,7 +138,8 @@ export function recordTurnSummary(db: AppDatabase | undefined, input: TurnSummar
       toolCallCount: input.counts.toolCallCount,
       toolErrorCount: input.counts.toolErrorCount,
       toolSkippedCount: input.counts.toolSkippedCount,
-      outcome: input.outcome
+      outcome: input.outcome,
+      toolAttributionJson: input.toolAttribution ? safeStringifyAttribution(input.toolAttribution) : null
     })
   })
 }
