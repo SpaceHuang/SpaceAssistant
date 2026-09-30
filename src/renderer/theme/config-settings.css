@@ -1742,21 +1742,19 @@
   background: color-mix(in srgb, var(--sa-bg-elevated) 55%, transparent);
 }
 
-/* 选中：白块浮起（antd Segmented 语言）+ 橙字，与轨道形成明确的主从关系 */
+/* 选中：同一轨道平面内的「点亮格」——浅橙 tint + 橙字，与全组件「选中 = 橙」语言一致。
+   不用白块浮起 / 阴影（用户反馈：立体悬浮感让选中项看起来不在序列中） */
 .composer-prefs__effort--active,
 .composer-prefs__effort--active:hover {
   color: var(--sa-list-selected-fg);
   font-weight: 500;
-  background: var(--sa-bg-elevated);
-  box-shadow: var(--sa-shadow-sm);
+  background: var(--sa-primary-subtle);
 }
 
-/* 禁用态：显式 tertiary 色（opacity 会把 12px 小字压到对比不足） */
+/* 禁用态：只降字色（保留 active 格的 tint 底，禁用时当前档位位置仍可辨） */
 .composer-prefs__effort:disabled {
   cursor: not-allowed;
   color: var(--sa-text-tertiary);
-  background: transparent;
-  box-shadow: none;
 }
 
 .composer-prefs__effort-disabled {
