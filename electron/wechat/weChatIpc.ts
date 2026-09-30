@@ -70,6 +70,7 @@ export function createWeChatBundle(deps: {
   getMaxParallel: () => number
   getToolsConfig: () => ReturnType<typeof mergeToolsConfig>
   appVersion: string
+  onReachabilityChange?: (reachable: boolean) => void
   turnRuntime?: TurnRuntime
 }): WeChatServiceBundle {
   const userData = deps.getUserDataPath()
@@ -83,6 +84,7 @@ export function createWeChatBundle(deps: {
   const botService = new WeChatBotService({
     storageDir,
     appVersion: deps.appVersion,
+    onReachabilityChange: deps.onReachabilityChange,
     getWebContents: getWc,
     onInbound: (msg) => {
       dispatchWeChatSdkInbound(bundle?.router, msg)

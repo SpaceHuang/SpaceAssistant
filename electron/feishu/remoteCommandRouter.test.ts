@@ -25,15 +25,18 @@ const mockSendFeishuRemoteOutbound = vi.fn()
 const mockShouldAcceptInbound = vi.fn()
 
 const testTurnRuntime = {
-  prepare: vi.fn(() => ({
-    turnId: 'turn-test',
-    requestId: 'request-test',
-    sessionId: 'session-test',
-    assistantMessage: { id: 'assistant-test' },
+  bindRequest: vi.fn(),
+  unbindRequest: vi.fn(),
+  prepare: vi.fn((intent: { requestId: string; sessionId: string }) => ({
+    turnId: `turn-${intent.requestId}`,
+    requestId: intent.requestId,
+    sessionId: intent.sessionId,
+    userMessage: { id: `user-${intent.requestId}` },
+    assistantMessage: { id: `assistant-${intent.requestId}` },
     version: 0,
-    startToken: 'token-test'
+    startToken: `token-${intent.requestId}`
   })),
-  executeWithSource: vi.fn(async (_turnId: string, _token: string, source: (a: unknown, b: string) => Promise<unknown>) => source({}, 'token-test')),
+  executeWithSource: vi.fn(async (_turnId: string, token: string, source: (a: unknown, b: string) => Promise<unknown>) => source({}, token)),
   consumeForRequest: vi.fn()
 } as never
 
@@ -232,9 +235,30 @@ describe('RemoteCommandRouter workdir binding', () => {
     expect(mockRunFeishuRemoteAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         workDir: dirA,
-        workDirManager: manager
+        workDirManager: manager,
+        acceptedTurn: expect.objectContaining({ sessionId: session.id, lane: 'feishu', currentUserMessageId: expect.stringMatching(/^user-/) })
       })
     )
+  })
+
+  it('记录远端 Agent 执行失败为失败终态，而不是成功', async () => {
+    const { db, manager } = setupDbAndManager()
+    const session = createSession(db, { name: 'Failed Feishu turn' })
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: 'run and fail' })
+    mockResolveFeishuSession.mockResolvedValue({ sessionId: session.id, isNew: false })
+    mockRunFeishuRemoteAgent.mockResolvedValue({ summary: 'provider failed', pendingConfirm: false, ok: false })
+
+    const { router, auditAppend } = makeRouter(db, manager)
+    await router.handleInbound(makeInbound({ messageId: 'failed-turn-1' }))
+
+    expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
+      expect.any(String),
+      { type: 'source-failed' },
+      expect.any(String)
+    )
+    expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'agent_done', sessionId: session.id, success: false
+    }))
   })
 
   it('completion/audit/pending-confirm stay on the origin session after a mid-run switch_session, while outbound reply follows the switched session', async () => {
@@ -428,11 +452,13 @@ describe('RemoteCommandRouter busy guard', () => {
 
     expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ type: 'tool-use', id: 'tool-1' })
+      expect.objectContaining({ type: 'tool-use', id: 'tool-1' }),
+      expect.any(String)
     )
     expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
       expect.any(String),
-      { type: 'source-completed' }
+      { type: 'source-completed' },
+      expect.any(String)
     )
     const calls = testTurnRuntime.consumeForRequest.mock.calls
     expect(calls.findIndex(([, event]) => (event as { type: string }).type === 'tool-use'))
@@ -454,7 +480,8 @@ describe('RemoteCommandRouter busy guard', () => {
 
     expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ type: 'confirm-requested', toolUseId: 'tool-feishu-confirm' })
+      expect.objectContaining({ type: 'confirm-requested', toolUseId: 'tool-feishu-confirm' }),
+      expect.any(String)
     )
     // pending-confirm 的桌面窗口通知已有 origin-session switch fixture 覆盖；此处锁定
     // 远程确认事实不会被 adapter 过滤掉。

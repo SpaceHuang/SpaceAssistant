@@ -11,6 +11,7 @@ import { FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG } from '../../src/shared/remotePr
 import { runImRemoteAgent } from '../remote/imRemoteAgent'
 import type { WorkDirManager } from '../workDirManager'
 import type { AssistantFactEvent } from '../../src/shared/assistantFactAggregator'
+import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
 
 export async function runFeishuRemoteAgent(ctx: {
   db: AppDatabase
@@ -20,6 +21,7 @@ export async function runFeishuRemoteAgent(ctx: {
   requestId: string
   /** 本回合真实 Turn ID（C17）：供用量统计落库。 */
   turnId?: string
+  acceptedTurn?: AcceptedTurn
   /** 冻结执行配置里的 LLM 服务 ID（DIM3）。 */
   llmServiceId?: string
   feishuConfig: FeishuConfig
@@ -50,6 +52,7 @@ export async function runFeishuRemoteAgent(ctx: {
     sessionId: ctx.sessionId,
     requestId: ctx.requestId,
     turnId: ctx.turnId,
+    acceptedTurn: ctx.acceptedTurn,
     llmServiceId: ctx.llmServiceId,
     workDir: ctx.workDir,
     workDirManager: ctx.workDirManager,

@@ -299,7 +299,7 @@ describe('runWeChatRemoteAgent', () => {
     packages.wechat = 'standard'
     writePolicyPackages(args.db, packages)
     args.db.flushSave()
-    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'wechat')
+    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'wechat', requestId)
 
     const originalAdmission = runtime.executionAdmission
     let reachedClaim!: () => void
@@ -453,7 +453,7 @@ describe('runWeChatRemoteAgent', () => {
         expect(projected.find((event) => event.type === 'tool_result')?.payload).toMatchObject({
           toolUseId: 'wechat-reply-hosted-success', result: { success: true }
         })
-        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: session.id, reason: 'completed' })
+        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'completed' })
       } finally { await sink.close() }
     } finally {
       mockGetWeChatBundle.mockReset()
@@ -496,7 +496,7 @@ describe('runWeChatRemoteAgent', () => {
     packages.wechat = 'standard'
     writePolicyPackages(args.db, packages)
     args.db.flushSave()
-    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'wechat')
+    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'wechat', requestId)
 
     let executorSignal: AbortSignal | undefined
     const originalExecute = wechatReplyExecutor.execute
@@ -558,7 +558,7 @@ describe('runWeChatRemoteAgent', () => {
         const projected = await readSessionEvents(sink.eventsPath)
         expect(projected.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: toolCallId, name: 'wechat_reply' })
         expect(projected.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId)).toBe(false)
-        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: session.id, reason: 'interrupted' })
+        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'interrupted' })
       } finally { await sink.close() }
       expect(runtime.executionAdmission.activeLeaseCount(requestId)).toBe(0)
     } finally {
@@ -747,7 +747,7 @@ describe('runWeChatRemoteAgent', () => {
     packages.wechat = 'standard'
     writePolicyPackages(args.db, packages)
     args.db.flushSave()
-    runtime.toolRevocations.registerToolRevocationRequest(requestId, 'wechat')
+    runtime.toolRevocations.registerToolRevocationRequest(requestId, 'wechat', requestId)
     const originalAdmission = runtime.executionAdmission
     let reachedClaim!: () => void
     let releaseClaim!: () => void
@@ -854,7 +854,7 @@ describe('runWeChatRemoteAgent', () => {
     packages.wechat = 'standard'
     writePolicyPackages(args.db, packages)
     args.db.flushSave()
-    runtime.toolRevocations.registerToolRevocationRequest(requestId, 'wechat')
+    runtime.toolRevocations.registerToolRevocationRequest(requestId, 'wechat', requestId)
     let dispatchReached!: () => void
     let releaseDispatch!: () => void
     let dispatchSignal!: AbortSignal
@@ -1297,7 +1297,7 @@ describe('runWeChatRemoteAgent', () => {
         expect(events.find((event) => event.type === 'tool_result')?.payload).toMatchObject({
           toolUseId: toolCallId, result: { success: true, data: { sessionId: targetSession.id, desktopSwitched: true, viewChanged: true } }
         })
-        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: callerSession.id, reason: 'completed' })
+        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'completed' })
       } finally { await sink.close() }
     } finally {
       executeSwitch.mockRestore()
@@ -1332,7 +1332,7 @@ describe('runWeChatRemoteAgent', () => {
     packages.wechat = 'standard'
     writePolicyPackages(args.db, packages)
     args.db.flushSave()
-    runtime.toolRevocations.registerToolRevocationRequest(requestId, 'wechat')
+    runtime.toolRevocations.registerToolRevocationRequest(requestId, 'wechat', requestId)
     const originalAdmission = runtime.executionAdmission
     let reachedClaim!: () => void
     let releaseClaim!: () => void
@@ -1439,7 +1439,7 @@ describe('runWeChatRemoteAgent', () => {
     packages.wechat = 'standard'
     writePolicyPackages(args.db, packages)
     args.db.flushSave()
-    runtime.toolRevocations.registerToolRevocationRequest(requestId, 'wechat')
+    runtime.toolRevocations.registerToolRevocationRequest(requestId, 'wechat', requestId)
     let markRendererRequested!: () => void
     let rejectRenderer!: (error: Error) => void
     const rendererRequested = new Promise<void>((resolve) => { markRendererRequested = resolve })
@@ -1511,7 +1511,7 @@ describe('runWeChatRemoteAgent', () => {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: toolCallId, name: 'switch_session' })
         expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId)).toBe(false)
-        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: callerSession.id, reason: 'interrupted' })
+        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'interrupted' })
       } finally { await sink.close() }
     } finally {
       rejectRenderer?.(new Error('test cleanup'))
@@ -1760,7 +1760,7 @@ describe('runWeChatRemoteAgent', () => {
     packages.wechat = 'standard'
     writePolicyPackages(args.db, packages)
     args.db.flushSave()
-    runtime.toolRevocations.registerToolRevocationRequest(requestId, 'wechat')
+    runtime.toolRevocations.registerToolRevocationRequest(requestId, 'wechat', requestId)
     const originalAdmission = runtime.executionAdmission
     let reachedClaim!: () => void
     let releaseClaim!: () => void
@@ -1870,7 +1870,7 @@ describe('runWeChatRemoteAgent', () => {
     packages.wechat = 'standard'
     writePolicyPackages(args.db, packages)
     args.db.flushSave()
-    runtime.toolRevocations.registerToolRevocationRequest(requestId, 'wechat')
+    runtime.toolRevocations.registerToolRevocationRequest(requestId, 'wechat', requestId)
     let dispatchReached!: () => void
     let releaseDispatch!: () => void
     let dispatchSignal!: AbortSignal
@@ -2019,7 +2019,7 @@ describe('runWeChatRemoteAgent', () => {
       expect(repairErrors).toEqual([])
       const repaired = await readSessionEvents(recoveredSink.eventsPath)
       expect(repaired.filter((event) => event.type === 'turn_end')).toHaveLength(1)
-      expect(repaired.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: session.id, reason: 'completed' })
+      expect(repaired.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'completed' })
       await recoveredSink.close()
     } finally {
       appendSpy.mockRestore()
@@ -2262,7 +2262,7 @@ describe('runWeChatRemoteAgent', () => {
 
     try {
       // runToolChatSession is mocked in this caller test; mirror its production pre-handoff registration.
-      runtime.toolRevocations.registerToolRevocationRequest(args.requestId, 'wechat')
+      runtime.toolRevocations.registerToolRevocationRequest(args.requestId, 'wechat', args.requestId)
       await expect(runWeChatRemoteAgent(context)).resolves.toMatchObject({ ok: true, summary: '本次读取已被撤销，未执行。' })
       expect(providerCalls).toBe(2)
       expect(executor).not.toHaveBeenCalled()

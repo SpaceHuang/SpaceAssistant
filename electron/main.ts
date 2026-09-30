@@ -10,18 +10,25 @@ import { readBrowserConfigFromDb } from './browser/browserConfigDb'
 import { readShellConfigFromDb } from './shell/shellConfigDb'
 import { registerButlerIpcHandlers } from './butler/butlerIpc'
 import { createDeliveryHub } from './driver/deliveryHub'
+import { SqliteDeliveryJournal } from './driver/sqliteDeliveryJournal'
+import { registerButlerDeliveryDrivers } from './butler/butlerDelivery'
+import { sendFeishuTextToTarget } from './feishu/feishuReply'
+import { sendWeChatTextToUser } from './wechat/weChatReplyService'
 import { ButlerTaskScheduler } from './butler/taskScheduler'
 import { runButlerTask, type ButlerInvokerDeps } from './butler/butlerInvoker'
+import { syncAutomationTaskRunDeliveryStatuses } from './butler/taskStore'
 import { stagehandService } from './browser/stagehandService'
 import {
   autoStartFeishuEventIfNeeded,
   createFeishuBundle,
+  getFeishuBundle,
   registerFeishuIpcHandlers,
   shutdownFeishuServices
 } from './feishu/feishuIpc'
 import {
   autoStartWeChatPollIfNeeded,
   createWeChatBundle,
+  getWeChatBundle,
   pauseWeChatPollIfWindowClosed,
   registerWeChatIpcHandlers,
   shutdownWeChatServices
@@ -160,6 +167,7 @@ function getRendererIndexPath(): string {
 let workDirState = ''
 let workDirManager: WorkDirManager | null = null
 let appDb: AppDatabase | null = null
+let mainIpcReady = false
 /** 模块级持有防抖备份管理器：退出流程 flush 挂起备份用（评审 2.2）。 */
 let sessionBackupManager: DebouncedSessionBackupManager | null = null
 
@@ -216,6 +224,9 @@ export function getIsQuitting(): boolean {
 }
 
 export async function createMainWindow(): Promise<void> {
+  // macOS may emit `activate` while async startup recovery is still running.
+  // Do not expose a renderer until every main-process IPC handler is registered.
+  if (!mainIpcReady) return
   const existing = getMainWindow()
   if (existing && !existing.isDestroyed()) {
     existing.show()
@@ -312,6 +323,8 @@ app.whenReady().then(async () => {
   appDb = db
   const recoveryWorkDir = getConfigValue(db, 'config.workDir') ?? path.join(app.getPath('userData'), 'workspace')
   const recoveryWorkDirs = getSessionLedgerRecoveryRoots(recoveryWorkDir, getConfigValue(db, 'config.workDirProfiles'))
+  let sessionHistoryRecoverySucceeded = false
+  let sessionHistoryRepairFailureCount = 0
   try {
     const interrupted = await new SqliteAgentHistory(getDbConnection(db)).recoverInterruptedInvocations({
       resolveSessionLedgerLocation: (sessionId) => {
@@ -328,6 +341,7 @@ app.whenReady().then(async () => {
         return location && isSessionLedgerLocationAllowed(location, recoveryWorkDirs) ? location : undefined
       },
       onSessionLocationResolveError: (error, invocationId, sessionId) => {
+        sessionHistoryRepairFailureCount += 1
         logAgentEvent('warn', 'tool.error', { requestId: invocationId, sessionId, toolName: 'history-session-location-recovery', message: error instanceof Error ? error.message : String(error) })
       },
       repairCompaction: async (location, start, summary) => {
@@ -395,27 +409,35 @@ app.whenReady().then(async () => {
         finally { await sink.close() }
       },
       onCompactionRepairError: (error, invocationId, compactionId) => {
+        sessionHistoryRepairFailureCount += 1
         console.warn('[agentHistory] compaction ledger repair degraded:', { invocationId, compactionId, error: error instanceof Error ? error.message : String(error) })
       },
       onToolLedgerRepairError: (error, invocationId, toolCallId) => {
+        sessionHistoryRepairFailureCount += 1
         console.warn('[agentHistory] tool result ledger repair degraded:', { invocationId, toolCallId, error: error instanceof Error ? error.message : String(error) })
       },
       onModelRequestLedgerRepairError: (error, invocationId, requestId) => {
+        sessionHistoryRepairFailureCount += 1
         console.warn('[agentHistory] model request ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
       },
       onProviderRetryLedgerRepairError: (error, invocationId, requestId) => {
+        sessionHistoryRepairFailureCount += 1
         console.warn('[agentHistory] provider retry ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
       },
       onUsageLedgerRepairError: (error, invocationId, requestId) => {
+        sessionHistoryRepairFailureCount += 1
         console.warn('[agentHistory] usage ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
       },
       onFinalRequestContextLedgerRepairError: (error, invocationId, requestId) => {
+        sessionHistoryRepairFailureCount += 1
         console.warn('[agentHistory] final request context ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
       },
       onInvocationTerminalRepairError: (error, invocationId, turnId) => {
+        sessionHistoryRepairFailureCount += 1
         console.warn('[agentHistory] invocation terminal ledger repair degraded:', { invocationId, turnId, error: error instanceof Error ? error.message : String(error) })
       }
     })
+    sessionHistoryRecoverySucceeded = sessionHistoryRepairFailureCount === 0
     if (interrupted.length > 0) console.warn('[agentHistory] interrupted invocations recovered:', interrupted.map(({ invocationId }) => invocationId))
   } catch (error) {
     console.warn('[agentHistory] startup recovery degraded:', error instanceof Error ? error.message : String(error))
@@ -592,7 +614,7 @@ app.whenReady().then(async () => {
   const turnRuntime = new TurnRuntime({
     storage: createTurnCoordinatorStorage(db),
     deps: { now: Date.now, id: randomUUID },
-    onCancel: (turn) => signalChatCancel(turn.requestId),
+    onCancel: (turn) => signalChatCancel(turn.turnId),
     onEvent: (turn, event) => {
       const display = turnToDisplay(turn)
       if (event.type === 'source-cancelled') display.outcome = 'cancelled'
@@ -762,12 +784,19 @@ app.whenReady().then(async () => {
     if (!payload.turnId || !payload.turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
     turnRuntime.bindRequest(payload.requestId, payload.turnId)
     return turnRuntime.executeWithSource(payload.turnId, payload.turnStartToken, async (turn) => {
-      const result = await executeClaudeRequest(sender, payload) as { ok?: boolean; error?: string; usage?: unknown }
+      const result = await executeClaudeRequest(sender, payload) as { ok?: boolean; error?: string; usage?: unknown; outcome?: 'commit-uncertain' }
       if (result.ok) {
-        turnRuntime.consumeForRequest(payload.requestId, { type: 'source-completed' })
+        turnRuntime.consumeForRequest(payload.requestId, { type: 'source-completed' }, payload.turnId)
         return { outcome: 'completed' as const, usage: result.usage }
       }
-      turnRuntime.consumeForRequest(payload.requestId, { type: 'source-failed', message: result.error })
+      if (result.outcome === 'commit-uncertain') {
+        turnRuntime.consumeForRequest(payload.requestId, { type: 'source-uncertain', message: result.error }, payload.turnId)
+        return {
+          outcome: 'commit-uncertain' as const,
+          error: { code: 'SESSION_TRANSCRIPT_COMMIT_UNCERTAIN', message: result.error ?? 'Session transcript commit is uncertain' }
+        }
+      }
+      turnRuntime.consumeForRequest(payload.requestId, { type: 'source-failed', message: result.error }, payload.turnId)
       return { outcome: 'failed' as const, error: { code: 'source-failed', message: result.error ?? 'Claude execution failed' } }
     })
   }
@@ -789,6 +818,7 @@ app.whenReady().then(async () => {
     floatingNotificationManager: floatingManager,
     isTrayEnabled,
     turnRuntime,
+    sessionHistoryRecoverySucceeded,
     executeTurn
   })
 
@@ -801,7 +831,17 @@ app.whenReady().then(async () => {
   // P6：共享投递入口（装配器持有，状态随实例走）。桌面 sink 的注册在 butlerDelivery
   // （deliveryPorts.notifyDesktop 即桌面实现，闭包与投递同源）；此处只建 hub 容器传递，
   // 避免同 id 驱动源被 butlerDelivery 覆盖注册后此处退化为死代码。
-  const sharedDeliveryHub = createDeliveryHub()
+  const deliveryJournal = new SqliteDeliveryJournal(db)
+  deliveryJournal.markInterruptedDispatchesUncertain()
+  const sharedDeliveryHub = createDeliveryHub({ journal: deliveryJournal, onDeferredSettled: () => { syncAutomationTaskRunDeliveryStatuses(db) } })
+  syncAutomationTaskRunDeliveryStatuses(db)
+  const flushDeliveries = (driverId: 'feishu' | 'wechat') => {
+    void sharedDeliveryHub.reportReachability(driverId)
+      .then(() => { syncAutomationTaskRunDeliveryStatuses(db) })
+      .catch((error) => console.error(`[Delivery] ${driverId} reachability flush failed`, error))
+  }
+  let feishuDeliveryReachable = false
+  let wechatDeliveryReachable = false
   const butlerInvokerDeps: ButlerInvokerDeps = {
     db,
     turnRuntime,
@@ -847,9 +887,25 @@ app.whenReady().then(async () => {
         })
         notification.on('click', () => void showMainWindow())
         notification.show()
+      },
+      isFeishuReachable: () => feishuDeliveryReachable,
+      sendFeishu: async (text, rawTarget) => {
+        const target = rawTarget?.trim()
+        if (!target) throw new Error('FEISHU_DELIVERY_TARGET_REQUIRED')
+        const bundle = getFeishuBundle()
+        if (!bundle) throw new Error('FEISHU_DELIVERY_UNAVAILABLE')
+        await sendFeishuTextToTarget(bundle.runner, target, text)
+      },
+      isWechatReachable: () => wechatDeliveryReachable,
+      sendWechat: async (text, target) => {
+        if (!target?.trim()) throw new Error('WECHAT_DELIVERY_TARGET_REQUIRED')
+        const bot = getWeChatBundle()?.botService.getRawBot()
+        if (!bot) throw new Error('WECHAT_DELIVERY_UNAVAILABLE')
+        await sendWeChatTextToUser(bot, target.trim(), text)
       }
     }
   }
+  registerButlerDeliveryDrivers(sharedDeliveryHub, butlerInvokerDeps.deliveryPorts ?? {})
   registerButlerIpcHandlers(ipcMain, butlerInvokerDeps)
 
   // P6 定时调度器：托盘前提（P0 决策 a）+ 启动恢复 + interval tick；before-quit 停机标 interrupted。
@@ -874,6 +930,7 @@ app.whenReady().then(async () => {
       const raw = getConfigValue(db, 'config.maxParallelChatSessions')
       return raw ? Number(raw) : 3
     },
+    onReachabilityChange: (reachable) => { feishuDeliveryReachable = reachable; if (reachable) flushDeliveries('feishu') },
     getToolsConfig: () => {
       const raw = getConfigValue(db, TOOLS_CONFIG_KEY)
       if (!raw) return mergeToolsConfig(null)
@@ -928,7 +985,8 @@ app.whenReady().then(async () => {
         return mergeToolsConfig(null)
       }
     },
-    appVersion: app.getVersion()
+    appVersion: app.getVersion(),
+    onReachabilityChange: (reachable) => { wechatDeliveryReachable = reachable; if (reachable) flushDeliveries('wechat') }
   })
   registerWeChatIpcHandlers(ipcMain, {
     db,
@@ -967,6 +1025,7 @@ app.whenReady().then(async () => {
   void autoStartWeChatPollIfNeeded(db)
 
   setupWindowIconThemeListener(__dirname)
+  mainIpcReady = true
   void createMainWindow()
     .then(() => {
       usageStatsStartupMaintenance?.()

@@ -19,6 +19,7 @@ import { resolveRemoteOutboundSessionId } from '../remote/remoteSessionSwitchFol
 import type { TurnRuntime } from '../turnRuntime'
 import { resolveFeishuSession } from './feishuSessionResolver'
 import { tryClaimOrRelease, createProcessedClaimFinalizer } from '../remote/imCommandRouterHelpers'
+import { bindRemoteSessionExecutionId } from '../remote/remoteAgentRegistry'
 import { evaluateImInboundGuard, revalidateImInboundGuard, type ImAuthSnapshot } from '../remote/imInboundGuard'
 import { runFeishuRemoteAgent } from './feishuRemoteAgent'
 import {
@@ -37,6 +38,7 @@ import { createRateLimiter } from '../remote/imRateLimit'
 import { FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE } from '../remote/remoteConfirmPolicy'
 import { executeRemoteTurn } from '../remote/turnExecutionAdapter'
 import { resolveTrustedTurnExecutionConfig } from '../turnExecutionConfig'
+import { createAcceptedTurnFromPrepared } from '../runtime/acceptedTurnContext'
 import {
   maskOpenId,
   parseFeishuBindProtocol,
@@ -668,6 +670,9 @@ export class RemoteCommandRouter {
           config: executionConfig
         })
         if (!prepared) throw new Error('REMOTE_TURN_PREPARE_REQUIRED')
+        if (!bindRemoteSessionExecutionId(sessionId, requestId, prepared.turnId)) {
+          throw new Error('REMOTE_SESSION_LEASE_LOST')
+        }
         const assistantMessageId = prepared.assistantMessage.id
 
         const remoteContext = {
@@ -694,6 +699,9 @@ export class RemoteCommandRouter {
         }
 
         let result: Awaited<ReturnType<typeof runFeishuRemoteAgent>>
+        const acceptedTurn = prepared
+          ? createAcceptedTurnFromPrepared(this.deps.db, prepared, 'feishu', executionConfig ?? { lane: 'feishu' })
+          : undefined
         try {
           result = await executeRemoteTurn({
             runtime: this.deps.turnRuntime,
@@ -706,6 +714,7 @@ export class RemoteCommandRouter {
             replyMessageId: msg.messageId,
             requestId,
             turnId: prepared?.turnId,
+            acceptedTurn,
             llmServiceId: executionConfig?.llmServiceId,
             feishuConfig: config,
             workDir,
@@ -723,7 +732,7 @@ export class RemoteCommandRouter {
             remoteContext,
             emitFactEvent: this.deps.turnRuntime && prepared ? (event) => {
               if (event.type === 'source-completed' || event.type === 'source-failed' || event.type === 'source-cancelled' || event.type === 'source-timeout') return
-              this.deps.turnRuntime!.consumeForRequest(requestId, event)
+              this.deps.turnRuntime!.consumeForRequest(requestId, event, prepared!.turnId)
             } : undefined
             })
           })
@@ -755,7 +764,7 @@ export class RemoteCommandRouter {
         await this.deps.auditLogger.append({
           type: 'agent_done',
           sessionId,
-          success: !result.pendingConfirm,
+          success: result.ok && !result.pendingConfirm,
           summaryLen: result.summary.length
         })
         await this.deps.auditLogger.append({

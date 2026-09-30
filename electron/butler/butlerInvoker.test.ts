@@ -136,6 +136,7 @@ import { grepExecutor, listDirectoryExecutor, readFileExecutor, writeFileExecuto
 import { createDesktopAgentRuntime } from '../runtime/desktopAgentRuntime'
 import { getDefaultAgentRuntime, setDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { CallAdmissionGate } from '../runtime/callAdmissionGate'
+import { HostedTurnFinalizedError } from '../runtime/hostedTurnFinalization'
 import { readDisabledPolicyRuleIds, resolveEffectivePolicyRulesWithOrigin, writeDisabledPolicyRuleIds } from '../confirmation/policyRulesRuntime'
 import { registerAppIpcHandlers } from '../appIpc'
 import type { AppIpcContext } from '../appIpc'
@@ -178,6 +179,11 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       resolveWorkDirForSession: () => '/tmp/wd',
       ...overrides
     }
+  }
+
+  function cancellationIdForRequest(requestId: string): string {
+    const turn = getDbConnection(db).prepare('SELECT turn_id AS turnId FROM turns WHERE request_id = ?').get(requestId) as { turnId?: string } | undefined
+    return turn?.turnId ?? requestId
   }
 
   function makePolicySettingsInvoker() {
@@ -228,6 +234,173 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     expect(session?.visibility).toBe('section')
   })
 
+  it('Hosted transcript commit uncertain leaves the automation run interrupted, not failed', async () => {
+    const task = createAutomationTask(db, {
+      name: 'uncertain transcript commit', schedule: { kind: 'interval', intervalMinutes: 30 },
+      prompt: 'perform one action', deliveryPref: 'none'
+    })
+    const runTurn = vi.spyOn(toolChatLoop, 'runToolChatSession').mockRejectedValue(
+      new HostedTurnFinalizedError(new Error('SESSION_TRANSCRIPT_COMMIT_UNCERTAIN:checkpoint-write-failed'), 'commit-uncertain')
+    )
+
+    const result = await runButlerTask(makeDeps(), task.id, { trigger: 'manual', requestId: 'req-butler-commit-uncertain' })
+
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining('SESSION_TRANSCRIPT_COMMIT_UNCERTAIN') })
+    expect(getLatestRunForTask(db, task.id)).toMatchObject({
+      status: 'interrupted',
+      error: expect.stringContaining('SESSION_TRANSCRIPT_COMMIT_UNCERTAIN')
+    })
+    expect(runTurn).toHaveBeenCalledOnce()
+    runTurn.mockRestore()
+  })
+
+  it.each(['checkpoint', 'history-terminal'] as const)('SQLite $fault failure through the real Hosted handoff preserves the Butler outcome', async (fault) => {
+    const conn = getDbConnection(db)
+    conn.exec(fault === 'checkpoint'
+      ? `CREATE TRIGGER fail_transcript_checkpoint_update BEFORE INSERT ON session_transcript_checkpoints
+          WHEN NEW.version > 0 BEGIN SELECT RAISE(ABORT, 'injected hosted checkpoint failure'); END`
+      : `CREATE TRIGGER fail_transcript_checkpoint_update BEFORE INSERT ON agent_history_events
+          WHEN NEW.kind='invocation-completed' BEGIN SELECT RAISE(ABORT, 'injected hosted terminal failure'); END`)
+    const task = createAutomationTask(db, {
+      name: 'hosted checkpoint uncertainty', schedule: { kind: 'interval', intervalMinutes: 30 },
+      prompt: 'complete once', deliveryPref: 'none'
+    })
+    let providerCalls = 0
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({
+      async *[Symbol.asyncIterator]() {},
+      finalMessage: vi.fn(async () => {
+        providerCalls += 1
+        return { content: [{ type: 'text', text: 'canonical answer' }], stop_reason: 'end_turn', usage: { input_tokens: 5, output_tokens: 3 } }
+      })
+    })) } })
+
+    const requestId = `req-butler-real-${fault}-failure`
+    const result = await runButlerTask(makeDeps(), task.id, { trigger: 'manual', requestId })
+
+    const injectedFailure = fault === 'checkpoint' ? 'injected hosted checkpoint failure' : 'injected hosted terminal failure'
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining(injectedFailure) })
+    expect(providerCalls).toBe(1)
+    const run = getLatestRunForTask(db, task.id)!
+    expect(run).toMatchObject({
+      status: fault === 'checkpoint' ? 'interrupted' : 'failed', error: expect.stringContaining(injectedFailure)
+    })
+    const turn = conn.prepare('SELECT turn_id AS turnId, session_id AS sessionId FROM turns WHERE request_id=?').get(requestId) as { turnId: string; sessionId: string }
+    const history = await new SqliteAgentHistory(conn).read(turn.turnId)
+    expect(history.events.at(-1)).toMatchObject(fault === 'checkpoint'
+      ? { kind: 'invocation-completed', payload: { status: 'completed' } }
+      : { kind: 'invocation-failed', payload: { status: 'failed' } })
+    if (fault === 'checkpoint') {
+      expect(conn.prepare('SELECT status FROM session_transcript_checkpoints WHERE session_id=?').get(turn.sessionId))
+        .toEqual({ status: 'commit_uncertain' })
+      expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(turn.sessionId))
+        .toEqual({ status: 'commit_uncertain' })
+    } else {
+      expect(conn.prepare('SELECT outcome FROM session_transcript_entries WHERE session_id=? AND turn_id=?').get(turn.sessionId, turn.turnId))
+        .toEqual({ outcome: 'failed' })
+    }
+    conn.exec('DROP TRIGGER fail_transcript_checkpoint_update')
+  })
+
+  it('Automation checkpoint failure after a real Hosted tool result keeps the side effect single across SQLite restart', async () => {
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-tool-checkpoint-restart-'))
+    const dbPath = path.join(workDir, 'automation.db')
+    const requestId = 'req-butler-tool-checkpoint-restart'
+    let readCalls = 0
+    const originalRead = readFileExecutor.execute
+    const readSpy = vi.spyOn(readFileExecutor, 'execute').mockImplementation(async (...args) => {
+      readCalls += 1
+      return await originalRead(...args)
+    })
+    try {
+      db.close()
+      db = openDatabase(dbPath)
+      setConfigValue(db, 'config.defaultModel', Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0])
+      const notePath = path.join(workDir, 'note.txt')
+      await fs.writeFile(notePath, 'canonical tool side effect')
+      const task = createAutomationTask(db, {
+        name: 'tool checkpoint restart', schedule: { kind: 'interval', intervalMinutes: 30 },
+        prompt: 'read note.txt', deliveryPref: 'none'
+      })
+      getDbConnection(db).exec(`CREATE TRIGGER fail_tool_transcript_checkpoint BEFORE INSERT ON session_transcript_checkpoints
+        WHEN NEW.version > 0 BEGIN SELECT RAISE(ABORT, 'injected tool checkpoint failure'); END`)
+      let providerCalls = 0
+      mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({
+        async *[Symbol.asyncIterator]() {},
+        finalMessage: vi.fn(async () => {
+          providerCalls += 1
+          return providerCalls === 1
+            ? { content: [{ type: 'tool_use', id: 'butler-checkpoint-read', name: 'read_file', input: { path: notePath } }], stop_reason: 'tool_use', usage: { input_tokens: 8, output_tokens: 3 } }
+            : { content: [{ type: 'text', text: 'read finished' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 2 } }
+        })
+      })) } })
+
+      const first = await runButlerTask(makeDeps({
+        getWorkDir: () => workDir,
+        resolveWorkDirForSession: () => workDir
+      }), task.id, { trigger: 'manual', requestId })
+
+      expect(first).toMatchObject({ ok: false, error: expect.stringContaining('injected tool checkpoint failure') })
+      expect(readCalls).toBe(1)
+      expect(providerCalls).toBe(2)
+      const run = getLatestRunForTask(db, task.id)!
+      expect(run).toMatchObject({ status: 'interrupted', error: expect.stringContaining('injected tool checkpoint failure') })
+      const turn = getDbConnection(db).prepare('SELECT turn_id AS turnId,session_id AS sessionId FROM turns WHERE request_id=?')
+        .get(requestId) as { turnId: string; sessionId: string }
+      const history = await new SqliteAgentHistory(getDbConnection(db)).read(turn.turnId)
+      expect(history.events.filter((event) => event.kind === 'tool-call-started')).toHaveLength(1)
+      expect(history.events.filter((event) => event.kind === 'tool-call-finished')).toHaveLength(1)
+      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-completed', payload: { status: 'completed' } })
+      expect(getDbConnection(db).prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(turn.sessionId))
+        .toEqual({ status: 'commit_uncertain' })
+
+      db.close()
+      db = openDatabase(dbPath)
+      const providerCallsBeforeRetry = providerCalls
+      const retry = await runButlerTask(makeDeps({
+        getWorkDir: () => workDir,
+        resolveWorkDirForSession: () => workDir
+      }), task.id, { trigger: 'manual', requestId })
+
+      expect(retry).toMatchObject({ ok: false, error: expect.stringContaining('重复触发') })
+      expect(providerCalls).toBe(providerCallsBeforeRetry)
+      expect(readCalls).toBe(1)
+      expect(getLatestRunForTask(db, task.id)).toMatchObject({ status: 'interrupted' })
+    } finally {
+      readSpy.mockRestore()
+      db.close()
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
+  })
+
+  it.each([
+    { deliveryTarget: 'ou-test', expectedStatus: 'delivery-uncertain', deliveryPorts: { sendFeishu: vi.fn(async () => { throw new Error('ack missing') }) } },
+    { deliveryTarget: undefined, expectedStatus: 'failed-degraded', deliveryPorts: {} },
+    { deliveryTarget: 'ou-test', expectedStatus: 'pending', deliveryPorts: { sendFeishu: vi.fn(async () => undefined), isFeishuReachable: () => false } },
+    { deliveryTarget: 'ou-test', expectedStatus: 'delivered', deliveryPorts: { sendFeishu: vi.fn(async () => undefined) } }
+  ] as const)('IM 投递为 $expectedStatus 时不伪记 deliveredAt', async ({ deliveryTarget, expectedStatus, deliveryPorts }) => {
+    const task = createAutomationTask(db, {
+      name: '不确定送达', schedule: { kind: 'interval', intervalMinutes: 30 },
+      prompt: '检查状态', deliveryPref: 'feishu', ...(deliveryTarget ? { deliveryTarget } : {})
+    })
+    mockCreateAnthropicClient.mockReturnValue({
+      messages: {
+        stream: vi.fn(() => ({
+          async *[Symbol.asyncIterator]() {},
+          finalMessage: vi.fn(async () => ({
+            content: [{ type: 'text', text: '检查完成' }], stop_reason: 'end_turn',
+            usage: { input_tokens: 10, output_tokens: 4 }
+          }))
+        }))
+      }
+    })
+
+    const result = await runButlerTask(makeDeps({ deliveryPorts }), task.id, { trigger: 'manual', requestId: `req-butler-${expectedStatus}-delivery-at` })
+
+    expect(result).toMatchObject({ ok: true, deliveryStatus: expectedStatus })
+    if (expectedStatus === 'delivered') expect(getLatestRunForTask(db, task.id)?.deliveredAt).toEqual(expect.any(Number))
+    else expect(getLatestRunForTask(db, task.id)?.deliveredAt).toBeUndefined()
+  })
+
   it('Automation Anthropic invocation freezes a provider route from resolved service credentials', async () => {
     const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')?.[0]
     expect(modelId).toBeTruthy()
@@ -243,9 +416,12 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
         prompt: 'summarize status', deliveryPref: 'none'
       })
       await runButlerTask(makeDeps(), task.id, { trigger: 'manual', requestId: 'req-butler-provider-route' })
-      const invocation = runLoop.mock.calls[0]?.[0] as { profile: { providerRouteId?: string } } | undefined
+      const invocation = runLoop.mock.calls[0]?.[0] as { profile: { providerRouteId?: string }; acceptedTurn?: { turnId: string; requestId: string; currentUserMessageId: string } } | undefined
       const runOptions = runLoop.mock.calls[0]?.[2] as { onHostedTurnHandoff?: unknown } | undefined
       expect(invocation?.profile.providerRouteId).toBeTruthy()
+      expect(invocation?.acceptedTurn).toMatchObject({
+        turnId: expect.any(String), requestId: 'req-butler-provider-route', currentUserMessageId: expect.any(String)
+      })
       expect(runOptions?.onHostedTurnHandoff).toEqual(expect.any(Function))
       expect(getDefaultAgentRuntime().modelProviders.getRoute(invocation!.profile.providerRouteId!)).toMatchObject({
         profile: { modelId, endpoint: 'https://mock.local' },
@@ -398,6 +574,10 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       })
 
       expect(result).toMatchObject({ ok: false, error: 'injected provider failure' })
+      expect(getLatestRunForTask(db, task.id)).toMatchObject({ status: 'failed', error: 'injected provider failure' })
+      const canonical = await new SqliteAgentHistory(getDbConnection(db)).read('req-butler-terminal-failure')
+      expect(canonical.events.filter((event) => ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind)))
+        .toEqual([expect.objectContaining({ kind: 'invocation-failed' })])
       const session = getSession(db, createdSessionId)!
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
@@ -514,6 +694,10 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       }), task.id, { trigger: 'manual', requestId: 'req-butler-result-recovery' })
 
       expect(result).toMatchObject({ ok: false, error: expect.stringContaining('tool projection failed') })
+      expect(getLatestRunForTask(db, task.id)).toMatchObject({
+        status: 'failed',
+        error: expect.stringContaining('tool projection failed')
+      })
       expect(providerCalls).toBe(1)
       expect(executor).toHaveBeenCalledOnce()
       const session = getSession(db, createdSessionId)!
@@ -614,7 +798,8 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
 
       expect(result).toMatchObject({ ok: true, summary: 'The file says automation canonical read.' })
       expect(providerCalls).toBe(2)
-      const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
+      const acceptedTurn = getDbConnection(db).prepare('SELECT turn_id AS turnId FROM turns WHERE request_id = ?').get(requestId) as { turnId: string }
+      const history = await new SqliteAgentHistory(getDbConnection(db)).read(acceptedTurn.turnId)
       const session = getSession(db, getLatestRunForTask(db, task.id)!.sessionId!)!
       sink = getSessionEventSink(workDir, session.id, session.createdAt)
       const projected = await readSessionEvents(sink.eventsPath)
@@ -694,11 +879,13 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       }
       await historyAdapter.recoverInterruptedInvocations({ ...repairs,
         onModelRequestLedgerRepairError: (error) => recoveryErrors.push(error),
+        onUsageLedgerRepairError: (error) => recoveryErrors.push(error),
         onToolLedgerRepairError: (error) => recoveryErrors.push(error),
         onInvocationTerminalRepairError: (error) => recoveryErrors.push(error)
       })
       await historyAdapter.recoverInterruptedInvocations({ ...repairs,
         onModelRequestLedgerRepairError: (error) => recoveryErrors.push(error),
+        onUsageLedgerRepairError: (error) => recoveryErrors.push(error),
         onToolLedgerRepairError: (error) => recoveryErrors.push(error),
         onInvocationTerminalRepairError: (error) => recoveryErrors.push(error)
       })
@@ -975,14 +1162,15 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       }), task.id, { trigger: 'manual', requestId })
       await entered
       expect(executorSignal?.aborted).toBe(false)
-      runtime.chatCancels.signalChatCancel(requestId)
+      runtime.chatCancels.signalChatCancel(cancellationIdForRequest(requestId))
       const result = await runningTask
       expect(result).toMatchObject({ ok: false, error: expect.stringContaining('tool execution failed after dispatch') })
 
       expect(providerCalls).toBe(1)
       expect(executorSignal?.aborted).toBe(true)
       expect(executeSpy).toHaveBeenCalledOnce()
-      const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
+      const acceptedTurn = getDbConnection(db).prepare('SELECT turn_id AS turnId FROM turns WHERE request_id = ?').get(requestId) as { turnId: string }
+      const history = await new SqliteAgentHistory(getDbConnection(db)).read(acceptedTurn.turnId)
       expect(history.events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId: 'butler-read-cancelled-after-claim' })
       expect(history.events.at(-1)).toMatchObject({
         kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'unknown-after-dispatch' }
@@ -990,8 +1178,8 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       expect(history.events.some((event) => event.kind === 'tool-call-finished')).toBe(false)
       expect((runtime.executionAdmission as unknown as { activeLeaseCount(requestId: string): number }).activeLeaseCount(requestId)).toBe(0)
     } finally {
-      runtime.chatCancels.signalChatCancel(requestId)
-      runtime.chatCancels.clear(requestId)
+      runtime.chatCancels.signalChatCancel(cancellationIdForRequest(requestId))
+      runtime.chatCancels.clear(cancellationIdForRequest(requestId))
       readFileExecutor.execute = originalExecute
       vi.restoreAllMocks()
       await fs.rm(workDir, { recursive: true, force: true })
@@ -1052,7 +1240,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
         if (termination === 'revoke') {
           expect(runtime.toolRevocations.revokeToolForLane('automation', toolName)).toBe(1)
         } else if (termination === 'cancel') {
-          runtime.chatCancels.signalChatCancel(requestId)
+          runtime.chatCancels.signalChatCancel(cancellationIdForRequest(requestId))
         } else {
           await makePolicySettingsInvoker()(null, { ruleId: 'automation-sensitive-path-deny', enabled: true })
         }
@@ -1233,7 +1421,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       if (termination === 'revoke') {
         expect(runtime.toolRevocations.revokeToolForLane('automation', toolName)).toBe(1)
       } else if (termination === 'cancel') {
-        runtime.chatCancels.signalChatCancel(requestId)
+        runtime.chatCancels.signalChatCancel(cancellationIdForRequest(requestId))
       } else {
         const settingsHandler = makePolicySettingsInvoker()
         await settingsHandler(null, { ruleId: 'automation-sensitive-path-deny', enabled: true })

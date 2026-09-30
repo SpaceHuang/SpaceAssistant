@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { WebContents } from 'electron'
-import { createSession, getDbConnection, getSession, openDatabase, type AppDatabase } from '../database'
+import { createSession, getDbConnection, getSession, openDatabase, prepareTurnAtomically, type AppDatabase } from '../database'
 import { DEFAULT_BROWSER_CONFIG, DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { DEFAULT_REMOTE_PROGRESS_CONFIG } from '../../src/shared/remoteProgressTypes'
 import { SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
@@ -87,6 +87,8 @@ vi.mock('../workDirManager', async (importOriginal) => {
 })
 
 import { runImRemoteAgent } from './imRemoteAgent'
+import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
+import { acceptTurnContext, readAcceptedTurn } from '../database/acceptedTurnStorage'
 import { MODEL_BASELINE } from '../../src/shared/modelBaseline'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { createDesktopAgentRuntime } from '../runtime/desktopAgentRuntime'
@@ -104,6 +106,12 @@ import { releaseRemoteSession, tryClaimRemoteSession } from '../remote/remoteAge
 import { readPolicyPackages, writePolicyPackages } from '../confirmation/policyRulesRuntime'
 import { invalidateSkillsCache } from '../skills/skillCache'
 import { setCallAdmissionGate } from '../runtime/callAdmissionGate'
+import { HostedTurnFinalizedError } from '../runtime/hostedTurnFinalization'
+import { reconcileStartupSessionTranscripts, recoverTurnCoordinatorForStartup } from '../runtime/sessionTranscriptStartup'
+import { createTurnCoordinatorStorage } from '../turnCoordinatorStorage'
+import { TurnRuntime } from '../turnRuntime'
+import { listPersistedTurns } from '../database/operations'
+import { claimSessionExecution, readSessionTranscript } from '../database/sessionTranscript'
 
 const SUPPORTED_ANTHROPIC_MODEL = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
 
@@ -413,6 +421,221 @@ describe('runImRemoteAgent', () => {
     }
   })
 
+  it.each((['feishu', 'wechat'] as const).flatMap((lane) => [false, true].map((matchingCheckpoint) => ({ lane, matchingCheckpoint }))))(
+    '$lane wrapper after Hosted checkpoint failure $matchingCheckpoint startup reconciliation branch', async ({ lane, matchingCheckpoint }) => {
+    const previousRuntime = getDefaultAgentRuntime()
+    const runtime = createDesktopAgentRuntime()
+    setDefaultAgentRuntime(runtime)
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `remote-${lane}-checkpoint-uncertain-`))
+    await fs.writeFile(path.join(workDir, 'checkpoint-evidence.txt'), 'executed before checkpoint failure')
+    const dbPath = path.join(workDir, 'runtime.db')
+    let db = openDatabase(dbPath)
+    getDbConnection(db).exec(`CREATE TRIGGER fail_remote_transcript_checkpoint BEFORE INSERT ON session_transcript_checkpoints
+      WHEN NEW.version > 0 BEGIN SELECT RAISE(ABORT, 'injected remote checkpoint failure'); END`)
+    const args = baseArgs({
+      db,
+      workDir,
+      requestId: `${lane}-checkpoint-request`,
+      remoteContext: { source: lane, messageId: `message-${lane}`, chatId: `chat-${lane}`, confirmPolicy: 'always' },
+      createProgressAdapter: () => ({ channel: lane, reply: vi.fn() })
+    })
+    const session = createSession(db, { name: `${lane} checkpoint uncertainty`, model: SUPPORTED_ANTHROPIC_MODEL })
+    const turnId = `${lane}-checkpoint-turn`
+    const userMessageId = `${lane}-checkpoint-user`
+    const startToken = `${lane}-checkpoint-start`
+    prepareTurnAtomically(db, {
+      user: { id: userMessageId, sessionId: session.id, role: 'user', content: `${lane} lifecycle check`, timestamp: 1, status: 'sent' },
+      assistant: { id: `${lane}-checkpoint-assistant`, sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
+      turn: { turnId, requestId: args.requestId, sessionId: session.id, assistantMessageId: `${lane}-checkpoint-assistant`, state: 'prepared', startToken }
+    })
+    const acceptedTurn = createAcceptedTurn({
+      turnId, requestId: args.requestId, sessionId: session.id, lane, startToken,
+      currentUserMessageId: userMessageId, transcriptVersion: 0, config: { lane, model: SUPPORTED_ANTHROPIC_MODEL }
+    })
+    acceptTurnContext(db, acceptedTurn)
+    const context = {
+      ...args, sessionId: session.id, turnId, acceptedTurn, workDir,
+      workDirManager: { ...args.workDirManager, getActiveWorkDir: () => workDir }
+    }
+    mockResolveWorkDirForSession.mockReturnValue({ profileId: `${lane}-checkpoint`, workDir, isSensitive: false })
+    const requestId = args.requestId
+    let providerCalls = 0
+    const readExecutor = vi.spyOn(readFileExecutor, 'execute')
+    mockRunToolChatSession.mockImplementation(async (invocation: never, _ports: never, options: never) => {
+      const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
+      const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
+      if (!route) throw new Error(`expected ${lane} provider route`)
+      runtime.modelProviders.register(route.profile, { providerId: `${lane}-checkpoint-uncertain-fixture`, stream: async function* () {
+        providerCalls += 1
+        if (providerCalls === 1) {
+          yield { type: 'tool-call', toolCallId: `${lane}-checkpoint-read`, toolName: 'read_file', input: { path: 'checkpoint-evidence.txt' } } as const
+          yield { type: 'usage', inputTokens: 2, outputTokens: 3 } as const
+          yield { type: 'finish', reason: 'tool-calls' } as const
+          return
+        }
+        yield { type: 'text-delta', text: `${lane} answer` } as const
+        yield { type: 'usage', inputTokens: 2, outputTokens: 3 } as const
+        yield { type: 'finish', reason: 'stop' } as const
+      } })
+      const handoff = (options as unknown as { onHostedTurnHandoff: (input: unknown) => Promise<{ result: unknown }> }).onHostedTurnHandoff
+      const acceptedUserContent = `${lane} lifecycle check`
+      return (await handoff({
+        authorizedToolNames: new Set(['read_file']),
+        request: {
+          messages: [{ role: 'user', content: acceptedUserContent }], maxTokens: 64, credentials: { apiKey: 'remote-key' },
+          tools: [{ name: 'read_file', description: 'Read evidence', inputSchema: {
+            type: 'object', properties: { path: { type: 'string' } }, required: ['path']
+          } }]
+        },
+        currentUserMessageId: userMessageId,
+        requiredUserMessage: { id: userMessageId, message: { role: 'user', content: acceptedUserContent } },
+        windowId: record.trace.windowId
+      })).result
+    })
+
+    try {
+      await expect(runImRemoteAgent(context)).rejects.toMatchObject({
+        name: 'HostedTurnFinalizedError', outcome: 'commit-uncertain', message: expect.stringContaining('injected remote checkpoint failure')
+      })
+      expect(providerCalls).toBe(2)
+      expect(readExecutor).toHaveBeenCalledOnce()
+      const accepted = readAcceptedTurn(db, session.id, requestId)!
+      const history = await new SqliteAgentHistory(getDbConnection(db)).read(accepted.turnId)
+      expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({
+        toolCallId: `${lane}-checkpoint-read`, result: { success: true, data: { content: 'executed before checkpoint failure' } }
+      })
+      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-completed', payload: { status: 'completed' } })
+      expect(getDbConnection(db).prepare('SELECT status FROM session_transcript_checkpoints WHERE session_id=?').get(session.id))
+        .toEqual({ status: 'commit_uncertain' })
+      expect(getDbConnection(db).prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(session.id))
+        .toEqual({ status: 'commit_uncertain' })
+
+      if (matchingCheckpoint) {
+        // 模拟 checkpoint entry 已 durable commit、进程随后只来得及写入 uncertain fence。
+        const conn = getDbConnection(db)
+        conn.prepare(`INSERT INTO session_transcript_entries
+          (session_id,turn_id,base_version,version,outcome,messages_json,created_at)
+          VALUES(?,?,0,1,'completed',?,?)`).run(
+          session.id, turnId, JSON.stringify([{ role: 'user', content: `${lane} lifecycle check` }]), 3
+        )
+        conn.prepare(`UPDATE session_transcript_checkpoints SET version=1,last_turn_id=?,status='commit_uncertain' WHERE session_id=?`)
+          .run(turnId, session.id)
+      }
+
+      db.close()
+      db = openDatabase(dbPath)
+      const recoveredAccepted = readAcceptedTurn(db, session.id, requestId)
+      expect(recoveredAccepted).toMatchObject({ turnId, requestId, sessionId: session.id })
+      context.db = db
+      context.acceptedTurn = recoveredAccepted!
+      const restartedRuntime = createDesktopAgentRuntime()
+      setDefaultAgentRuntime(restartedRuntime)
+      if (!matchingCheckpoint) {
+        await expect(runImRemoteAgent(context)).rejects.toThrow('SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED')
+        expect(getDbConnection(db).prepare('SELECT status FROM session_transcript_checkpoints WHERE session_id=?').get(session.id))
+          .toEqual({ status: 'commit_uncertain' })
+      } else {
+        const storage = createTurnCoordinatorStorage(db)
+        const turnRuntime = new TurnRuntime({ storage, deps: { now: () => 4_001, id: () => 'im-restart-recovery-id' } })
+        const turnRecovery = recoverTurnCoordinatorForStartup(db, () => {
+          for (const state of ['configuring', 'prepared', 'executing', 'waiting-confirm']) {
+            for (const persisted of listPersistedTurns(db, state)) {
+              const assistant = storage.getMessage(persisted.assistantMessageId)
+              if (assistant) turnRuntime.coordinator.restoreTurn(persisted, assistant)
+            }
+          }
+          turnRuntime.recover()
+        })
+        expect(turnRecovery.succeeded, turnRecovery.error instanceof Error ? turnRecovery.error.message : String(turnRecovery.error)).toBe(true)
+        expect(reconcileStartupSessionTranscripts(db, {
+          historyRecoverySucceeded: true, turnCoordinatorRecoverySucceeded: turnRecovery.succeeded
+        }, 4_000)).toMatchObject({ reconciled: 1 })
+        expect(readSessionTranscript(db, session.id)).toMatchObject({ version: 1, lastTurnId: turnId, status: 'ready' })
+        expect(claimSessionExecution(db, { sessionId: session.id, turnId: `${turnId}-next`, ownerId: 'new-process' }))
+          .toMatchObject({ acquired: true })
+      }
+      expect(providerCalls).toBe(2)
+      expect(readExecutor).toHaveBeenCalledOnce()
+    } finally {
+      readExecutor.mockRestore()
+      db.close()
+      setDefaultAgentRuntime(previousRuntime)
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
+    }
+  )
+
+  it.each(['feishu', 'wechat'] as const)('%s wrapper persists a failed terminal when SQLite rejects Hosted completion', async (lane) => {
+    const previousRuntime = getDefaultAgentRuntime()
+    const runtime = createDesktopAgentRuntime()
+    setDefaultAgentRuntime(runtime)
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `remote-${lane}-history-terminal-failure-`))
+    const db = openDatabase(':memory:')
+    getDbConnection(db).exec(`CREATE TRIGGER fail_remote_completed_terminal BEFORE INSERT ON agent_history_events
+      WHEN NEW.kind='invocation-completed' BEGIN SELECT RAISE(ABORT, 'injected remote terminal failure'); END`)
+    const args = baseArgs({
+      db, workDir, requestId: `${lane}-history-terminal-request`, rethrowAsError: true,
+      remoteContext: { source: lane, messageId: `message-${lane}`, chatId: `chat-${lane}`, confirmPolicy: 'always' },
+      createProgressAdapter: () => ({ channel: lane, reply: vi.fn() })
+    })
+    const session = createSession(db, { name: `${lane} terminal failure`, model: SUPPORTED_ANTHROPIC_MODEL })
+    const turnId = `${lane}-history-terminal-turn`
+    const userMessageId = `${lane}-history-terminal-user`
+    const startToken = `${lane}-history-terminal-start`
+    const userContent = `${lane} terminal failure`
+    prepareTurnAtomically(db, {
+      user: { id: userMessageId, sessionId: session.id, role: 'user', content: userContent, timestamp: 1, status: 'sent' },
+      assistant: { id: `${lane}-history-terminal-assistant`, sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
+      turn: { turnId, requestId: args.requestId, sessionId: session.id, assistantMessageId: `${lane}-history-terminal-assistant`, state: 'prepared', startToken }
+    })
+    const acceptedTurn = createAcceptedTurn({
+      turnId, requestId: args.requestId, sessionId: session.id, lane, startToken,
+      currentUserMessageId: userMessageId, transcriptVersion: 0, config: { lane, model: SUPPORTED_ANTHROPIC_MODEL }
+    })
+    acceptTurnContext(db, acceptedTurn)
+    const context = {
+      ...args, sessionId: session.id, turnId, acceptedTurn, workDir,
+      workDirManager: { ...args.workDirManager, getActiveWorkDir: () => workDir }
+    }
+    mockResolveWorkDirForSession.mockReturnValue({ profileId: `${lane}-terminal-failure`, workDir, isSensitive: false })
+    let providerCalls = 0
+    mockRunToolChatSession.mockImplementation(async (invocation: never, _ports: never, options: never) => {
+      const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
+      const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)
+      if (!route) throw new Error(`expected ${lane} provider route`)
+      runtime.modelProviders.register(route.profile, { providerId: `${lane}-terminal-failure-fixture`, stream: async function* () {
+        providerCalls += 1
+        yield { type: 'text-delta', text: 'response before terminal failure' } as const
+        yield { type: 'usage', inputTokens: 2, outputTokens: 3 } as const
+        yield { type: 'finish', reason: 'stop' } as const
+      } })
+      const handoff = (options as unknown as { onHostedTurnHandoff: (input: unknown) => Promise<unknown> }).onHostedTurnHandoff
+      return await handoff({
+        authorizedToolNames: new Set<string>(),
+        request: { messages: [{ role: 'user', content: userContent }], maxTokens: 64, credentials: { apiKey: 'remote-key' } },
+        currentUserMessageId: userMessageId,
+        requiredUserMessage: { id: userMessageId, message: { role: 'user', content: userContent } },
+        windowId: record.trace.windowId
+      })
+    })
+
+    try {
+      await expect(runImRemoteAgent(context)).rejects.toMatchObject({
+        name: 'HostedTurnFinalizedError', outcome: 'failed', message: expect.stringContaining('injected remote terminal failure')
+      })
+      expect(providerCalls).toBe(1)
+      const canonical = await new SqliteAgentHistory(getDbConnection(db)).read(turnId)
+      expect(canonical.events.filter((event) => ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind)))
+        .toEqual([expect.objectContaining({ kind: 'invocation-failed' })])
+      expect(getDbConnection(db).prepare('SELECT outcome FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
+        .get(session.id, turnId)).toEqual({ outcome: 'failed' })
+    } finally {
+      db.close()
+      setDefaultAgentRuntime(previousRuntime)
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
+  })
+
   it('Hosted Remote context uses the prepared turn user message instead of the session tail', async () => {
     const db = makeDb()
     const session = createSession(db, { name: 'remote-current-turn-input' })
@@ -428,17 +651,22 @@ describe('runImRemoteAgent', () => {
       { id: 'remote-accepted-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
       { id: 'remote-later-user', sessionId: session.id, role: 'user', content: 'unrelated session tail', timestamp: 3, status: 'sent' }
     ] as never)
-    let captured: { list: Array<{ id?: string; content?: unknown }>; currentUserMessageId?: string } | undefined
+    let captured: { messages: { list: Array<{ id?: string; content?: unknown }>; currentUserMessageId?: string }; acceptedTurn?: unknown } | undefined
     mockRunToolChatSession.mockImplementation(async (invocation: never, _ports: never, options: never) => {
-      captured = (invocation as unknown as { messages: { list: Array<{ id?: string; content?: unknown }>; currentUserMessageId?: string } }).messages as never
+      captured = invocation as never
       return { ok: true, content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn' }
     })
 
-    await runImRemoteAgent(baseArgs({ db, sessionId: session.id, requestId: 'remote-accepted-request', turnId: 'remote-accepted-turn' }))
+    const acceptedTurn = createAcceptedTurn({
+      turnId: 'remote-accepted-turn', requestId: 'remote-accepted-request', sessionId: session.id, lane: 'feishu',
+      startToken: 'remote-accepted-token', currentUserMessageId: 'remote-accepted-user', transcriptVersion: 0, config: { lane: 'feishu' }
+    })
+    await runImRemoteAgent(baseArgs({ db, sessionId: session.id, requestId: 'remote-accepted-request', turnId: 'remote-accepted-turn', acceptedTurn }))
 
-    expect(captured?.list.map((message) => message.id)).toContain('remote-accepted-user')
-    expect(captured?.currentUserMessageId).toBe('remote-accepted-user')
-    expect(captured?.list.map((message) => message.content)).not.toContain('unrelated session tail')
+    expect(captured?.messages.list.map((message) => message.id)).toContain('remote-accepted-user')
+    expect(captured?.messages.currentUserMessageId).toBe('remote-accepted-user')
+    expect(captured?.messages.list.map((message) => message.content)).not.toContain('unrelated session tail')
+    expect(captured?.acceptedTurn).toBe(acceptedTurn)
     expect(mockGetMessages).not.toHaveBeenCalled()
     db.close()
   })
@@ -470,7 +698,7 @@ describe('runImRemoteAgent', () => {
       turn: { turnId: 'remote-turn-owner-turn', requestId: 'remote-turn-owner-request', sessionId: session.id, assistantMessageId: 'remote-turn-owner-assistant', state: 'prepared', startToken: 'remote-turn-owner-token' }
     })
     getDbConnection(db).prepare("UPDATE agent_history_events SET turn_id = ? WHERE invocation_id = ? AND kind = 'session-input-committed'")
-      .run('foreign-turn', 'remote-turn-owner-request')
+      .run('foreign-turn', 'remote-turn-owner-turn')
 
     await expect(runImRemoteAgent(baseArgs({ db, sessionId: session.id, requestId: 'remote-turn-owner-request', turnId: 'remote-turn-owner-turn' })))
       .rejects.toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
@@ -706,7 +934,7 @@ describe('runImRemoteAgent', () => {
       writePolicyPackages(args.db, packages)
       args.db.flushSave()
       const requestId = args.requestId
-      if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, lane)
+      if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, lane, requestId)
 
       const originalAdmission = runtime.executionAdmission
       let reachedClaim!: () => void
@@ -875,7 +1103,7 @@ describe('runImRemoteAgent', () => {
       expect(repairErrors).toEqual([])
       const repaired = await readSessionEvents(recoveredSink.eventsPath)
       expect(repaired.filter((event) => event.type === 'turn_end')).toHaveLength(1)
-      expect(repaired.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: session.id, reason: 'completed' })
+      expect(repaired.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'completed' })
       await recoveredSink.close()
     } finally {
       appendSpy.mockRestore()
@@ -929,7 +1157,7 @@ describe('runImRemoteAgent', () => {
       ))
     } })
     const requestId = `feishu-hosted-cli-${termination}`
-    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'feishu')
+    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'feishu', requestId)
     const chatSignal = runtime.chatCancels.register(requestId)
     const runner = {
       resolveExecutable: () => '/approved/lark-cli',
@@ -1006,7 +1234,7 @@ describe('runImRemoteAgent', () => {
         const events = await readSessionEvents(ledger.eventsPath)
         expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: `feishu-${termination}-cli`, name: 'run_lark_cli' })
         expect(events.some((event) => event.type === 'tool_result')).toBe(false)
-        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: session.id, reason: 'interrupted' })
+        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: requestId, reason: 'interrupted' })
       } finally { await ledger.close() }
     } finally {
       runtime.chatCancels.clear(requestId)
@@ -1043,7 +1271,7 @@ describe('runImRemoteAgent', () => {
     packages.feishu = 'standard'
     writePolicyPackages(args.db, packages)
     args.db.flushSave()
-    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'feishu')
+    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'feishu', requestId)
     const originalAdmission = runtime.executionAdmission
     let reachedClaim!: () => void
     let releaseClaim!: () => void
@@ -1151,7 +1379,7 @@ describe('runImRemoteAgent', () => {
     packages[lane] = 'standard'
     writePolicyPackages(args.db, packages)
     args.db.flushSave()
-    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, lane)
+    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, lane, requestId)
 
     const originalAdmission = runtime.executionAdmission
     let reachedClaim!: () => void
@@ -1284,7 +1512,7 @@ describe('runImRemoteAgent', () => {
     packages[lane] = 'standard'
     writePolicyPackages(args.db, packages)
     args.db.flushSave()
-    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, lane)
+    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, lane, requestId)
 
     let executorEntered!: () => void
     let releaseExecutor!: () => void
@@ -1358,7 +1586,7 @@ describe('runImRemoteAgent', () => {
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const projected = await readSessionEvents(sink.eventsPath)
-        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: session.id, reason: 'interrupted' })
+        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'interrupted' })
       } finally { await sink.close() }
       expect(runtime.executionAdmission.activeLeaseCount(requestId)).toBe(0)
     } finally {
@@ -1398,7 +1626,7 @@ describe('runImRemoteAgent', () => {
     packages[lane] = 'standard'
     writePolicyPackages(args.db, packages)
     args.db.flushSave()
-    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, lane)
+    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, lane, requestId)
 
     const originalAdmission = runtime.executionAdmission
     let reachedClaim!: () => void
@@ -1517,7 +1745,7 @@ describe('runImRemoteAgent', () => {
     packages[lane] = 'standard'
     writePolicyPackages(args.db, packages)
     args.db.flushSave()
-    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, lane)
+    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, lane, requestId)
 
     let executorEntered!: () => void
     let releaseExecutor!: () => void
@@ -1587,7 +1815,7 @@ describe('runImRemoteAgent', () => {
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const projected = await readSessionEvents(sink.eventsPath)
-        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: session.id, reason: 'interrupted' })
+        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'interrupted' })
       } finally { await sink.close() }
       expect(runtime.executionAdmission.activeLeaseCount(requestId)).toBe(0)
     } finally {
@@ -1666,7 +1894,7 @@ describe('runImRemoteAgent', () => {
       try {
         const projected = await readSessionEvents(sink.eventsPath)
         expect(projected.find((event) => event.type === 'tool_result')?.payload).toMatchObject({ toolUseId: toolCallId, result: { success: true } })
-        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: session.id, reason: 'completed' })
+        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'completed' })
       } finally { await sink.close() }
     } finally {
       executeBrowser.mockRestore()
@@ -1745,7 +1973,7 @@ describe('runImRemoteAgent', () => {
 
     try {
       // The mocked legacy loop normally registers the request before invoking this Hosted handoff.
-      runtime.toolRevocations.registerToolRevocationRequest(args.requestId, 'feishu')
+      runtime.toolRevocations.registerToolRevocationRequest(args.requestId, 'feishu', args.requestId)
       await expect(runImRemoteAgent({ ...args, sessionId: session.id })).resolves.toMatchObject({ ok: true, summary: '读取已撤销，未执行。' })
       expect(providerCalls).toBe(2)
       expect(executor).not.toHaveBeenCalled()
@@ -2117,7 +2345,7 @@ describe('runImRemoteAgent', () => {
     packages.feishu = 'standard'
     writePolicyPackages(args.db, packages)
     args.db.flushSave()
-    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(args.requestId, 'feishu')
+    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(args.requestId, 'feishu', args.requestId)
     const originalAdmission = runtime.executionAdmission
     let reachedClaim!: () => void
     let releaseClaim!: () => void
@@ -2214,7 +2442,7 @@ describe('runImRemoteAgent', () => {
         { matchKey: pending.matchKey, messageId: `${requestId}-approved` }
       ))
     } })
-    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'feishu')
+    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'feishu', requestId)
     const chatSignal = runtime.chatCancels.register(requestId)
     const workDirManager = { ...args.workDirManager, getActiveWorkDir: () => workDir }
     const sessionArgs = {
@@ -2540,7 +2768,7 @@ describe('runImRemoteAgent', () => {
     packages.feishu = 'standard'
     writePolicyPackages(args.db, packages)
     args.db.flushSave()
-    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'feishu')
+    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'feishu', requestId)
     const originalAdmission = runtime.executionAdmission
     let reachedClaim!: () => void
     let releaseClaim!: () => void
@@ -2647,7 +2875,7 @@ describe('runImRemoteAgent', () => {
     packages.feishu = 'standard'
     writePolicyPackages(args.db, packages)
     args.db.flushSave()
-    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'feishu')
+    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'feishu', requestId)
     let dispatchReached!: () => void
     let releaseDispatch!: () => void
     let dispatchSignal!: AbortSignal
@@ -3011,6 +3239,13 @@ describe('runImRemoteAgent', () => {
     const result = await runImRemoteAgent(baseArgs())
     expect(result).toMatchObject({ ok: false, pendingConfirm: false, outcome: 'cancelled' })
   })
+
+  it('rethrowAsError preserves Hosted terminal classification for the remote turn adapter', async () => {
+    const terminalError = new HostedTurnFinalizedError(new Error('provider deadline exceeded'), 'timed-out')
+    mockRunToolChatSession.mockRejectedValue(terminalError)
+
+    await expect(runImRemoteAgent(baseArgs({ rethrowAsError: true }))).rejects.toBe(terminalError)
+  })
 })
 
 describe('调用方契约特征化（P0：入参 → Core args 平移）', () => {
@@ -3330,7 +3565,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
         expect(events.find((event) => event.type === 'tool_result')?.payload).toMatchObject({
           toolUseId: 'feishu-attachment-hosted-success', result: { success: true, data: { content: 'Registered attachment body', fileName: 'brief.txt' } }
         })
-        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: session.id, reason: 'completed' })
+        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'completed' })
       } finally { await sink.close() }
     } finally {
       executeAttachment.mockRestore()
@@ -3362,7 +3597,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
       }
     }
     mockResolveWorkDirForSession.mockReturnValue({ profileId: `feishu-attachment-${termination}`, workDir, isSensitive: false })
-    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'feishu')
+    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'feishu', requestId)
     const chatSignal = runtime.chatCancels.register(requestId)
     const originalAdmission = runtime.executionAdmission
     let reachedClaim!: () => void
@@ -3460,7 +3695,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
       }
     }
     mockResolveWorkDirForSession.mockReturnValue({ profileId: `feishu-attachment-${termination}-postclaim`, workDir, isSensitive: false })
-    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'feishu')
+    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'feishu', requestId)
     const chatSignal = runtime.chatCancels.register(requestId)
     let providerCalls = 0
     mockRunToolChatSession.mockImplementation(async (invocation: never, _ports: never, options: never) => {
@@ -3525,7 +3760,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: `attachment-${termination}-postclaim`, name: 'read_feishu_attachment' })
         expect(events.some((event) => event.type === 'tool_result')).toBe(false)
-        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: session.id, reason: 'interrupted' })
+        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'interrupted' })
       } finally { await sink.close() }
     } finally {
       releaseRead()
@@ -3683,7 +3918,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const projected = await readSessionEvents(sink.eventsPath)
-        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: session.id, reason: 'completed' })
+        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'completed' })
       } finally { await sink.close() }
     } finally {
       executeBrowser.mockRestore()
@@ -3716,7 +3951,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
     packages.feishu = 'standard'
     writePolicyPackages(args.db, packages)
     args.db.flushSave()
-    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'feishu')
+    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'feishu', requestId)
     const originalAdmission = runtime.executionAdmission
     let reachedClaim!: () => void
     let releaseClaim!: () => void
@@ -3877,7 +4112,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
         expect(events.find((event) => event.type === 'tool_result')?.payload).toMatchObject({
           toolUseId: toolCallId, result: { success: true, data: { sessionId: targetSession.id, desktopSwitched: true, viewChanged: true } }
         })
-        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: callerSession.id, reason: 'completed' })
+        expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'completed' })
       } finally { await sink.close() }
     } finally {
       executeSwitch.mockRestore()
@@ -3913,7 +4148,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
     packages.feishu = 'standard'
     writePolicyPackages(args.db, packages)
     args.db.flushSave()
-    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'feishu')
+    if (termination === 'revoke') runtime.toolRevocations.registerToolRevocationRequest(requestId, 'feishu', requestId)
 
     let markRendererRequested!: () => void
     let rejectRenderer!: (error: Error) => void
@@ -3986,7 +4221,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
         const projected = await readSessionEvents(sink.eventsPath)
         expect(projected.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: toolCallId, name: 'switch_session' })
         expect(projected.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId)).toBe(false)
-        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: callerSession.id, reason: 'interrupted' })
+        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: requestId, reason: 'interrupted' })
       } finally { await sink.close() }
     } finally {
       rejectRenderer?.(new Error('test cleanup'))
@@ -4059,7 +4294,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const projected = await readSessionEvents(sink.eventsPath)
-        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: session.id, reason: 'cancelled' })
+        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'cancelled' })
       } finally { await sink.close() }
     } finally {
       setDefaultAgentRuntime(previousRuntime)

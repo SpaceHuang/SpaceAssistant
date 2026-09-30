@@ -16,6 +16,7 @@ export type WeChatBotServiceDeps = {
   appVersion: string
   getWebContents: () => WebContents | null
   onInbound: IncomingHandler
+  onReachabilityChange?: (reachable: boolean) => void
 }
 
 export type WeChatLoginStartOptions = {
@@ -245,6 +246,7 @@ export class WeChatBotService {
     try {
       await bot.start()
       this.pollState = 'polling'
+      this.deps.onReachabilityChange?.(true)
       this.startedAt = this.startedAt ?? Date.now()
       this.lastError = undefined
       logWeChatCliEvent('info', 'wechat.poll.started', {
@@ -254,6 +256,7 @@ export class WeChatBotService {
     } catch (e) {
       this.lastError = e instanceof Error ? e.message : String(e)
       this.pollState = 'error'
+      this.deps.onReachabilityChange?.(false)
       logWeChatCliEvent('error', 'wechat.poll.start_failed', { lastError: this.lastError })
     }
     return this.getStatus()
@@ -264,6 +267,7 @@ export class WeChatBotService {
       await this.bot.stop()
     }
     this.pollState = 'stopped'
+    this.deps.onReachabilityChange?.(false)
     logWeChatCliEvent('info', 'wechat.poll.stopped', { processedCount: this.processedCount })
     return this.getStatus()
   }

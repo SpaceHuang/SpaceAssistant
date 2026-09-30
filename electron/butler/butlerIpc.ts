@@ -36,6 +36,10 @@ function parseDeliveryPref(raw: unknown): 'desktop' | 'feishu' | 'wechat' | 'non
   return raw === 'desktop' || raw === 'feishu' || raw === 'wechat' || raw === 'none' ? raw : undefined
 }
 
+function hasRequiredDeliveryTarget(pref: 'desktop' | 'feishu' | 'wechat' | 'none', target: unknown): boolean {
+  return (pref !== 'feishu' && pref !== 'wechat') || (typeof target === 'string' && target.trim().length > 0 && target.trim().length <= 512)
+}
+
 export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: ButlerIpcDeps): void {
   const { db } = deps
 
@@ -49,6 +53,7 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     if (!name || !prompt || !schedule || !deliveryPref) {
       return { ok: false, error: '任务参数不完整（名称 / 提示词 / 触发方式 / 投递偏好）' }
     }
+    if (!hasRequiredDeliveryTarget(deliveryPref, payload?.deliveryTarget)) return { ok: false, error: '飞书或微信投递必须填写有效接收对象' }
     const task = createAutomationTask(db, {
       name,
       prompt,
@@ -63,7 +68,8 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
 
   ipcMain.handle('butler:update', (_e, payload: { id: string; patch: Record<string, unknown> }): { ok: boolean; error?: string } => {
     const id = typeof payload?.id === 'string' ? payload.id : ''
-    if (!id || !getAutomationTask(db, id)) return { ok: false, error: '任务不存在' }
+    const existing = id ? getAutomationTask(db, id) : undefined
+    if (!id || !existing) return { ok: false, error: '任务不存在' }
     const patch = payload?.patch ?? {}
     const next: Record<string, unknown> = {}
     if (typeof patch.name === 'string' && patch.name.trim()) next.name = patch.name.trim()
@@ -73,6 +79,9 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     const deliveryPref = parseDeliveryPref(patch.deliveryPref)
     if (deliveryPref) next.deliveryPref = deliveryPref
     if (typeof patch.deliveryTarget === 'string') next.deliveryTarget = patch.deliveryTarget
+    if (!hasRequiredDeliveryTarget(deliveryPref ?? existing.deliveryPref, typeof patch.deliveryTarget === 'string' ? patch.deliveryTarget : existing.deliveryTarget)) {
+      return { ok: false, error: '飞书或微信投递必须填写有效接收对象' }
+    }
     if (typeof patch.modelOverride === 'string') next.modelOverride = patch.modelOverride
     if (typeof patch.enabled === 'boolean') next.enabled = patch.enabled
     updateAutomationTask(db, id, next)
@@ -85,13 +94,13 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     return { ok: deleteAutomationTask(db, id) }
   })
 
-  ipcMain.handle('butler:run-task', async (_e, payload: { taskId: string; requestId?: string }): Promise<{ ok: boolean; runId?: string; sessionId?: string; summary?: string; error?: string }> => {
+  ipcMain.handle('butler:run-task', async (_e, payload: { taskId: string; requestId?: string }): Promise<{ ok: boolean; runId?: string; sessionId?: string; summary?: string; deliveryStatus?: import('../../src/shared/automationTaskTypes').AutomationTaskRun['deliveryStatus']; error?: string }> => {
     const taskId = typeof payload?.taskId === 'string' ? payload.taskId.trim() : ''
     if (!taskId) return { ok: false, error: '任务 ID 缺失' }
     const requestId = typeof payload?.requestId === 'string' && payload.requestId.trim() ? payload.requestId.trim() : undefined
     const result = await runButlerTask(deps, taskId, { trigger: 'manual', ...(requestId ? { requestId } : {}) })
     if (result.ok) {
-      return { ok: true, runId: result.runId, sessionId: result.sessionId, summary: result.summary }
+      return { ok: true, runId: result.runId, sessionId: result.sessionId, summary: result.summary, deliveryStatus: result.deliveryStatus }
     }
     return { ok: false, runId: result.runId, error: result.error }
   })

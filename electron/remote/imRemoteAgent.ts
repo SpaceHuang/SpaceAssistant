@@ -36,6 +36,7 @@ import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from '../r
 import { loadAcceptedTurnMessages } from '../runtime/acceptedTurnContext'
 import { buildRemoteProgressHookContext } from './buildRemoteProgressContext'
 import { onRemoteTextSegmentClosed } from './remoteProgressHooks'
+import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
 
 export function extractTextFromContent(content: unknown[]): string {
   let s = ''
@@ -58,6 +59,7 @@ export async function runImRemoteAgent(args: {
   requestId: string
   /** 本回合真实 Turn ID（C17）：由 router 的 prepared.turnId 下传，供用量统计落库。 */
   turnId?: string
+  acceptedTurn?: AcceptedTurn
   /** 冻结执行配置里的 LLM 服务 ID（DIM3：同模型跨服务分开统计）。 */
   llmServiceId?: string
   workDir: string
@@ -94,7 +96,7 @@ export async function runImRemoteAgent(args: {
     role: 'top-level',
     disposition: 'reject',
     requestId,
-    turnId: args.turnId ?? args.sessionId
+    turnId: args.turnId ?? requestId
   })
   if (!admission.ok) {
     return {
@@ -136,7 +138,7 @@ export async function runImRemoteAgent(args: {
   let sessionEventReason = 'failed'
   let sessionEventError: string | undefined
   let sessionEventStarted = false
-  let turnIdForEvents = args.turnId ?? args.sessionId
+  let turnIdForEvents = args.turnId ?? requestId
   let sessionEventLocation: { workDir: string; sessionId: string; createdAt: number } | undefined
   let sessionEventSink: ReturnType<typeof getSessionEventSink> | undefined
   try {
@@ -226,6 +228,7 @@ export async function runImRemoteAgent(args: {
       requestId,
       sessionId: args.sessionId,
       turnId: args.turnId,
+      acceptedTurn: args.acceptedTurn,
       // DIM3：统计维度以实际解析出的服务为准——resolver 未指定 serviceId 时可能回落默认服务，
       // 会话冻结配置（args.llmServiceId）仅作 resolver 失败时的兜底（评审 P1-2）。
       llmServiceId: creds.serviceId || args.llmServiceId,
@@ -268,8 +271,8 @@ export async function runImRemoteAgent(args: {
     })
     const res = await runToolChatSession(invocation, ports, {
       onHostedTurnHandoff: createHostedTurnHandoff({
-        agentSdk, history: ports.history!, invocationId: requestId, turnId: args.turnId ?? args.sessionId,
-        routeId: providerRouteId, sessionId: args.sessionId, maxToolRounds: invocation.limits.maxToolRounds,
+        agentSdk, history: ports.history!, invocationId: args.acceptedTurn?.turnId ?? args.turnId ?? requestId, turnId: args.acceptedTurn?.turnId ?? args.turnId ?? requestId, acceptedTurn: args.acceptedTurn,
+        sessionDb: args.db, routeId: providerRouteId, sessionId: args.sessionId, maxToolRounds: invocation.limits.maxToolRounds,
       })
     })
 
@@ -291,7 +294,7 @@ export async function runImRemoteAgent(args: {
     if (e instanceof HostedTurnFinalizedError) sessionEventReason = hostedTerminalSessionEventReason(e.outcome)
     sessionEventError = error
     args.logError?.(error)
-    if (args.rethrowAsError) throw new Error(error)
+    if (args.rethrowAsError) throw e instanceof Error ? e : new Error(error)
     throw e
   } finally {
     if (sessionEventStarted) {

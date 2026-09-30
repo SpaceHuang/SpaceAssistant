@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { signalChatCancel } from '../chatCancelRegistry'
+vi.mock('../chatCancelRegistry', () => ({ signalChatCancel: vi.fn() }))
 import {
   cancelRemoteSession,
+  bindRemoteSessionExecutionId,
   countRunningRemoteAgents,
   getRemoteAgentLease,
   isRemoteAgentRunning,
@@ -76,15 +79,37 @@ describe('remoteAgentRegistry', () => {
     expect(isRemoteAgentRunning('s1')).toBe(false)
   })
 
-  it('expired leases are reclaimable by a new requestId and force-reaped', () => {
+  it('cancels an expired lease before allowing a new request to take over', () => {
     const cancel = vi.fn()
     const now = 1_000
     expect(tryClaimRemoteSession('s1', 'req-1', 2, { cancel, ttlMs: 1000, now })).toBe('ok')
     expect(isRemoteAgentRunning('s1', { now: now + 500 })).toBe(true)
     // Past expiry: a new requestId can claim (stale lease reclaimed), old owner no longer owns it.
     expect(tryClaimRemoteSession('s1', 'req-2', 2, { now: now + 2000 })).toBe('ok')
+    expect(cancel).toHaveBeenCalledTimes(1)
     expect(isRequestLeaseOwner('s1', 'req-1', now + 2000)).toBe(false)
     expect(isRequestLeaseOwner('s1', 'req-2', now + 2000)).toBe(true)
+    releaseRemoteSession('s1', 'req-1')
+    expect(isRequestLeaseOwner('s1', 'req-2', now + 2000)).toBe(true)
+  })
+
+  it('default cancellation targets the bound execution id rather than the request id', async () => {
+    vi.mocked(signalChatCancel).mockClear()
+    const now = 1_000
+    expect(tryClaimRemoteSession('s1', 'req-1', 2, { ttlMs: 500, now })).toBe('ok')
+    bindRemoteSessionExecutionId('s1', 'req-1', 'turn-1')
+
+    expect(reapExpiredRemoteSessions(now + 1000)).toBe(1)
+    expect(signalChatCancel).toHaveBeenCalledWith('turn-1')
+  })
+
+  it('explicit cancellation targets the bound execution id', () => {
+    vi.mocked(signalChatCancel).mockClear()
+    expect(tryClaimRemoteSession('s1', 'req-1', 2)).toBe('ok')
+    expect(bindRemoteSessionExecutionId('s1', 'req-1', 'turn-1')).toBe(true)
+
+    expect(cancelRemoteSession('s1', 'req-1')).toBe(true)
+    expect(signalChatCancel).toHaveBeenCalledWith('turn-1')
   })
 
   it('reapExpiredRemoteSessions removes only stale leases and fires their cancel handles', () => {

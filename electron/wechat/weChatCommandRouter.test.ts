@@ -22,10 +22,13 @@ const mockRunAgent = vi.fn()
 const mockResolveSession = vi.fn()
 
 const testTurnRuntime = {
-  prepare: vi.fn(() => ({
+  bindRequest: vi.fn(),
+  unbindRequest: vi.fn(),
+  prepare: vi.fn((intent: { requestId: string; sessionId: string }) => ({
     turnId: 'turn-test',
-    requestId: 'request-test',
-    sessionId: 'session-test',
+    requestId: intent.requestId,
+    sessionId: intent.sessionId,
+    userMessage: { id: 'user-test' },
     assistantMessage: { id: 'assistant-test' },
     version: 0,
     startToken: 'token-test'
@@ -170,6 +173,9 @@ describe('WeChatCommandRouter', () => {
     const raw = makeIncomingMessage({ text: 'list files' })
     await router.handleSdkInbound(raw)
     expect(mockRunAgent).toHaveBeenCalledTimes(1)
+    expect(mockRunAgent).toHaveBeenCalledWith(expect.objectContaining({
+      acceptedTurn: expect.objectContaining({ turnId: 'turn-test', lane: 'wechat', currentUserMessageId: 'user-test' })
+    }))
     expect(reply).toHaveBeenCalled()
   })
 
@@ -183,11 +189,13 @@ describe('WeChatCommandRouter', () => {
 
     expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ type: 'tool-use', id: 'tool-wechat-1' })
+      expect.objectContaining({ type: 'tool-use', id: 'tool-wechat-1' }),
+      expect.any(String)
     )
     expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
       expect.any(String),
-      { type: 'source-completed' }
+      { type: 'source-completed' },
+      expect.any(String)
     )
     const calls = testTurnRuntime.consumeForRequest.mock.calls
     expect(calls.findIndex(([, event]) => (event as { type: string }).type === 'tool-use'))
@@ -204,7 +212,8 @@ describe('WeChatCommandRouter', () => {
 
     expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ type: 'confirm-requested', toolUseId: 'tool-wechat-confirm' })
+      expect.objectContaining({ type: 'confirm-requested', toolUseId: 'tool-wechat-confirm' }),
+      expect.any(String)
     )
     expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('已收到，正在处理'))
   })

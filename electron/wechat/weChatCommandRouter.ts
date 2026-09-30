@@ -15,6 +15,7 @@ import { sendWeChatRemoteOutbound } from './weChatRemoteOutbound'
 import { runWeChatRemoteAgent } from './weChatRemoteAgent'
 import { resolveWeChatSession } from './weChatSessionResolver'
 import { tryClaimOrRelease, createProcessedClaimFinalizer } from '../remote/imCommandRouterHelpers'
+import { bindRemoteSessionExecutionId } from '../remote/remoteAgentRegistry'
 import { evaluateImInboundGuard, revalidateImInboundGuard, type ImAuthSnapshot } from '../remote/imInboundGuard'
 import type { IncomingMessage } from '@wechatbot/wechatbot'
 import { inboundSummaryForLog, previewText, WECHAT_CLI_LINE_PREVIEW_MAX } from './weChatCliLogFields'
@@ -29,6 +30,7 @@ import { WECHAT_REMOTE_CONFIRM_TIMEOUT_MESSAGE } from '../remote/remoteConfirmPo
 import type { TurnRuntime } from '../turnRuntime'
 import { executeRemoteTurn } from '../remote/turnExecutionAdapter'
 import { resolveTrustedTurnExecutionConfig } from '../turnExecutionConfig'
+import { createAcceptedTurnFromPrepared } from '../runtime/acceptedTurnContext'
 
 
 const rateLimiter = createRateLimiter()
@@ -383,6 +385,9 @@ export class WeChatCommandRouter {
           config: executionConfig
         })
         if (!prepared) throw new Error('REMOTE_TURN_PREPARE_REQUIRED')
+        if (!bindRemoteSessionExecutionId(sessionId, requestId, prepared.turnId)) {
+          throw new Error('REMOTE_SESSION_LEASE_LOST')
+        }
         const assistantMessageId = prepared.assistantMessage.id
 
         const remoteContext = {
@@ -408,6 +413,9 @@ export class WeChatCommandRouter {
         }
 
         let result: { summary: string; pendingConfirm: boolean; ok: boolean }
+        const acceptedTurn = prepared
+          ? createAcceptedTurnFromPrepared(this.deps.db, prepared, 'wechat', executionConfig ?? { lane: 'wechat' })
+          : undefined
         try {
           result = await executeRemoteTurn({
             runtime: this.deps.turnRuntime,
@@ -420,6 +428,7 @@ export class WeChatCommandRouter {
             replyMessageId: msg.messageId,
             requestId,
             turnId: prepared?.turnId,
+            acceptedTurn,
             llmServiceId: executionConfig?.llmServiceId,
             wechatConfig: config,
             workDir,
@@ -439,7 +448,7 @@ export class WeChatCommandRouter {
             userId: msg.userId
             ,emitFactEvent: this.deps.turnRuntime && prepared ? (event) => {
               if (event.type === 'source-completed' || event.type === 'source-failed' || event.type === 'source-cancelled' || event.type === 'source-timeout') return
-              this.deps.turnRuntime!.consumeForRequest(requestId, event)
+              this.deps.turnRuntime!.consumeForRequest(requestId, event, prepared!.turnId)
             } : undefined
             })
           })

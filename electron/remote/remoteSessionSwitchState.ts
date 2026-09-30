@@ -44,11 +44,8 @@ export function endTool(sessionId: string, requestId: string, _toolName: string)
   if (entry && entry.tool > 0) entry.tool--
 }
 
-export function clearRequest(requestId: string): void {
-  const suffix = `\0${requestId}`
-  for (const key of [...stateBySessionRequest.keys()]) {
-    if (key.endsWith(suffix)) stateBySessionRequest.delete(key)
-  }
+export function clearRequest(sessionId: string, requestId: string): void {
+  stateBySessionRequest.delete(stateKey(sessionId, requestId))
 }
 
 export function getSessionSwitchBlockers(

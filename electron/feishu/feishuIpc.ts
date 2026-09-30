@@ -103,6 +103,7 @@ export function createFeishuBundle(deps: {
   getModel: () => string
   getMaxParallel: () => number
   getToolsConfig: () => ReturnType<typeof mergeToolsConfig>
+  onReachabilityChange?: (reachable: boolean) => void
   turnRuntime?: TurnRuntime
 }): FeishuServiceBundle {
   const userData = deps.getUserDataPath()
@@ -198,7 +199,7 @@ export function createFeishuBundle(deps: {
         errorPreview: previewText(error instanceof Error ? error.message : String(error), FEISHU_CLI_LINE_PREVIEW_MAX)
       })
     })
-  }, () => {})
+  }, (status) => deps.onReachabilityChange?.(status.state === 'connected'))
 
   const cfg = readCfg()
   bundle = { runner, processedStore, imChannel, auditLogger, eventService, router, ownerBind }
