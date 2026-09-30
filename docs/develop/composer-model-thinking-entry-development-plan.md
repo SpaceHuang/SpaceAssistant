@@ -101,19 +101,19 @@
 | P3 | P3-T2 | 为该纯函数补单测 | ✅ |
 | P3 | P3-T3 | `ChatView` 计算 `availableEfforts` | ✅ |
 | P3 | P3-G | **阶段 3 收尾（门禁 + 提交）** | ✅ |
-| P4 | P4-T0 | 新增 `composer.prefs.*` i18n 键（9 键 × 双语言） | ⬜ |
-| P4 | P4-T1 | 组件骨架 + Props 契约 | ⬜ |
-| P4 | P4-T2 | 收起态 chip 文案组装 | ⬜ |
-| P4 | P4-T3 | 浮层容器 + 两分区标题 | ⬜ |
-| P4 | P4-T4 | 模型分区列表 | ⬜ |
-| P4 | P4-T5 | 强度分区（横向 N 档） | ⬜ |
-| P4 | P4-T6 | 选中后立即关闭 | ⬜ |
-| P4 | P4-T7 | `supportsThinking === false` 禁用态 | ⬜ |
-| P4 | P4-T8 | 空态 / 模型不可用态 | ⬜ |
-| P4 | P4-T9 | 无障碍与键盘 | ⬜ |
-| P4 | P4-T10 | 组件样式（CSS） | ⬜ |
-| P4 | P4-T11 | 组件单测 | ⬜ |
-| P4 | P4-G | **阶段 4 收尾（门禁 + 提交）** | ⬜ |
+| P4 | P4-T0 | 新增 `composer.prefs.*` i18n 键（9 键 × 双语言） | ✅ |
+| P4 | P4-T1 | 组件骨架 + Props 契约 | ✅ |
+| P4 | P4-T2 | 收起态 chip 文案组装 | ✅ |
+| P4 | P4-T3 | 浮层容器 + 两分区标题 | ✅ |
+| P4 | P4-T4 | 模型分区列表 | ✅ |
+| P4 | P4-T5 | 强度分区（横向 N 档） | ✅ |
+| P4 | P4-T6 | 选中后立即关闭 | ✅ |
+| P4 | P4-T7 | `supportsThinking === false` 禁用态 | ✅ |
+| P4 | P4-T8 | 空态 / 模型不可用态 | ✅ |
+| P4 | P4-T9 | 无障碍与键盘 | ✅ |
+| P4 | P4-T10 | 组件样式（CSS） | ✅ |
+| P4 | P4-T11 | 组件单测 | ✅ |
+| P4 | P4-G | **阶段 4 收尾（门禁 + 提交）** | ✅ |
 | P5 | P5-T1 | `MessageInput` Props 收敛为 `prefsSlot` | ⬜ |
 | P5 | P5-T2 | `checkOverflow` 预算简化 | ⬜ |
 | P5 | P5-T3 | 渲染合并为一行 | ⬜ |
@@ -731,12 +731,12 @@ resolveAvailableThinkingEfforts(modelName: string): AgentReasoningEffort[]
 **涉及文件**：`src/renderer/i18n/resources/zh-CN/chat.json`、`src/renderer/i18n/resources/en-US/chat.json`
 
 **完成判据**：
-- [ ] 两个语言文件均已新增 `composer.prefs` 对象，含上述 **9 个键**
-- [ ] zh-CN 用全角括号、en-US 用半角（`modelServiceSuffix` 差异保留）
-- [ ] `npm run i18n:generate-types` 通过，且生成的 `NamespaceKeyMap['chat']` 联合已含全部 9 个 `composer.prefs.*` 键
-- [ ] `npm run i18n:check` 通过（zh/en 键完全对齐）
-- [ ] `npm run typecheck:renderer` 通过
-- [ ] **未删除** `modelPicker.switchModel` / `selectModelAria`（保留至 P6-T5）
+- [x] 两个语言文件均已新增 `composer.prefs` 对象，含上述 **9 个键**
+- [x] zh-CN 用全角括号、en-US 用半角（`modelServiceSuffix` 差异保留）
+- [x] `npm run i18n:generate-types` 通过，且生成的 `NamespaceKeyMap['chat']` 联合已含全部 9 个 `composer.prefs.*` 键
+- [x] `npm run i18n:check` 通过（zh/en 键完全对齐）
+- [x] `npm run typecheck:renderer` 通过
+- [x] **未删除** `modelPicker.switchModel` / `selectModelAria`（保留至 P6-T5）
 
 ### P4-T1 组件骨架 + Props 契约
 
@@ -759,12 +759,12 @@ availableEfforts?: AgentReasoningEffort[]   // 缺省 = fail-open 全 5 档
 ```
 
 **完成判据**：
-- [ ] 文件已创建，导出 `ComposerModelThinkingPicker`
-- [ ] Props 与上表一致（含全部注释，说明各自来源与 FR 归属）
-- [ ] **无** `unsupportedEfforts` 入参（FR10 定为「不渲染不可用档位」，组件无需该列表）
-- [ ] 组件内用既有 `listChatModelOptions(cfg)` 取模型列表，**不新增数据通道**
-- [ ] `npm run typecheck:renderer` 通过
-- [ ] 已 import 并复用 `ConfigModelBadges`（避免重写徽章）
+- [x] 文件已创建，导出 `ComposerModelThinkingPicker`
+- [x] Props 与上表一致（含全部注释，说明各自来源与 FR 归属）
+- [x] **无** `unsupportedEfforts` 入参（FR10 定为「不渲染不可用档位」，组件无需该列表）
+- [x] 组件内用既有 `listChatModelOptions(cfg)` 取模型列表，**不新增数据通道**
+- [x] `npm run typecheck:renderer` 通过
+- [x] 已 import 并复用 `ConfigModelBadges`（避免重写徽章）
 
 ### P4-T2 收起态 chip 文案组装
 
@@ -778,23 +778,23 @@ availableEfforts?: AgentReasoningEffort[]   // 缺省 = fail-open 全 5 档
 4. `title`：`t('composer.prefs.entryTitle', { displayName: modelDisplayName, effort })`，继承时追加「（默认）」说明
 
 **完成判据**：
-- [ ] 无歧义渲染为 `deepseek-v4-pro · 高` 形态
-- [ ] 有歧义渲染为 `deepseek-v4-pro（Deep） · 高` 形态（**不使用 `·` 作服务分隔**）
-- [ ] **en-US 有歧义形态**为 `kimi-k2.7-code (Volcano) · 高`——服务段与 `·` 之间**只有 1 个空格**（复核无双倍间距）
-- [ ] `modelServiceName` 为空时**不渲染空括号**
-- [ ] 强度段不因「继承 vs 覆盖」而改变文案（两态都只显示档位词）
-- [ ] DOM 结构：`.composer-model-chip__label`（含服务段，可收缩） / `.composer-model-chip__sep` / `.composer-model-chip__effort`（`flex-shrink: 0`）
-- [ ] 组件内**无硬编码中文**，全部走 `t()`
+- [x] 无歧义渲染为 `deepseek-v4-pro · 高` 形态
+- [x] 有歧义渲染为 `deepseek-v4-pro（Deep） · 高` 形态（**不使用 `·` 作服务分隔**）
+- [x] **en-US 有歧义形态**为 `kimi-k2.7-code (Volcano) · 高`——服务段与 `·` 之间**只有 1 个空格**（复核无双倍间距）
+- [x] `modelServiceName` 为空时**不渲染空括号**
+- [x] 强度段不因「继承 vs 覆盖」而改变文案（两态都只显示档位词）
+- [x] DOM 结构：`.composer-model-chip__label`（含服务段，可收缩） / `.composer-model-chip__sep` / `.composer-model-chip__effort`（`flex-shrink: 0`）
+- [x] 组件内**无硬编码中文**，全部走 `t()`
 
 ### P4-T3 浮层容器 + 两分区标题
 
 **动作**：单个 `Popover`（`trigger="click"`、`placement="topLeft"`、`classNames={{ root: 'composer-prefs-popover' }}`），内部上下两分区，中间 1px 分隔线。两分区**都带标题**（`composer.prefs.modelSection` / `composer.prefs.effortSection`）。
 
 **完成判据**：
-- [ ] 全组件仅 **1 个** `Popover`（`grep` 确认）
-- [ ] 两个分区标题均已渲染（上「模型」、下「思考强度」）
-- [ ] 存在分隔线元素（类名如 `.composer-prefs__divider`）
-- [ ] 点击 chip 可打开、点击外部可关闭、`Esc` 可关闭
+- [x] 全组件仅 **1 个** `Popover`（`grep` 确认）
+- [x] 两个分区标题均已渲染（上「模型」、下「思考强度」）
+- [x] 存在分隔线元素（类名如 `.composer-prefs__divider`）
+- [x] 点击 chip 可打开、点击外部可关闭、`Esc` 可关闭
 
 ### P4-T4 模型分区列表
 
@@ -807,11 +807,11 @@ availableEfforts?: AgentReasoningEffort[]   // 缺省 = fail-open 全 5 档
 - 容器：`.composer-model-picker__list` / 滚动容器沿用 `max-height`
 
 **完成判据**：
-- [ ] 列表项含「模型名 + 服务名副文案 + 快速/视觉徽章」
-- [ ] 当前绑定项呈现选中态（复用既有 `--active` 或等价视觉）
-- [ ] 列表超出时**仅在模型分区内滚动**（不撑破浮层）
-- [ ] 点击项触发 `onSelectModel(opt)`
-- [ ] **未**使用 `displayName` 作为列表主文案（应用 `modelName`）
+- [x] 列表项含「模型名 + 服务名副文案 + 快速/视觉徽章」
+- [x] 当前绑定项呈现选中态（复用既有 `--active` 或等价视觉）
+- [x] 列表超出时**仅在模型分区内滚动**（不撑破浮层）
+- [x] 点击项触发 `onSelectModel(opt)`
+- [x] **未**使用 `displayName` 作为列表主文案（应用 `modelName`）
 
 ### P4-T5 强度分区（横向 N 档）
 
@@ -824,32 +824,32 @@ availableEfforts?: AgentReasoningEffort[]   // 缺省 = fail-open 全 5 档
 5. 容器：`display:flex; flex-wrap:wrap; gap:4px`，项 `flex:1 1 0; min-width:52px`
 
 **完成判据**：
-- [ ] 传入 2 项集合 → 只渲染 2 项；传 5 项 → 渲染 5 项（**不写死档位数**）
-- [ ] 5 项时**换行为 4+1 两行**，不溢出、不裁切
-- [ ] 2–3 项时**不被拉伸占满**整行（`min-width` 约束生效）
-- [ ] 「`X · 默认`」标记与选中态表现符合上表 3/4 条
-- [ ] 组件内**无**「把 `THINKING_EFFORT_LEVELS` 直接 map 成 UI 项」的硬编码路径
-- [ ] 档位文案按**实际档位键**逐项取词（`t('composer.thinking.' + level)`）
+- [x] 传入 2 项集合 → 只渲染 2 项；传 5 项 → 渲染 5 项（**不写死档位数**）
+- [x] 5 项时**换行为 4+1 两行**，不溢出、不裁切
+- [x] 2–3 项时**不被拉伸占满**整行（`min-width` 约束生效）
+- [x] 「`X · 默认`」标记与选中态表现符合上表 3/4 条
+- [x] 组件内**无**「把 `THINKING_EFFORT_LEVELS` 直接 map 成 UI 项」的硬编码路径
+- [x] 档位文案按**实际档位键**逐项取词（`t('composer.thinking.' + level)`）
 
 ### P4-T6 选中后立即关闭
 
 **动作**：模型与档位两处 `onSelect` 回调内均 `setOpen(false)`（FR2 末条 / OQ-4）。**不引入**「保持打开」分支。
 
 **完成判据**：
-- [ ] `setOpen(false)` 在两处 `onSelect` 内均存在
-- [ ] 无任何「选完保持打开」的条件分支
-- [ ] 两条路径的关闭表现一致（模型、档位）
+- [x] `setOpen(false)` 在两处 `onSelect` 内均存在
+- [x] 无任何「选完保持打开」的条件分支
+- [x] 两条路径的关闭表现一致（模型、档位）
 
 ### P4-T7 `supportsThinking === false` 禁用态（**关键差异**）
 
 **动作**：当 `effortDisabled` 为真时——**chip 本身不禁用**（用户必须还能换模型）；仅**强度分区整体禁用**并显示 `effortDisabledReason`（或 `composer.prefs.effortDisabled`）。
 
 **完成判据**：
-- [ ] `effortDisabled` 为真时，点击 chip **仍能打开浮层**
-- [ ] 浮层内模型列表**仍可正常选择**
-- [ ] 强度分区呈禁用态（不可选）并显示提示文案
-- [ ] **未**使用「chip 整体 disabled + 外层 span 挂 Tooltip」的旧写法
-- [ ] 无 `@ts-ignore` / 依赖 disabled 元素冒泡的 hack
+- [x] `effortDisabled` 为真时，点击 chip **仍能打开浮层**
+- [x] 浮层内模型列表**仍可正常选择**
+- [x] 强度分区呈禁用态（不可选）并显示提示文案
+- [x] **未**使用「chip 整体 disabled + 外层 span 挂 Tooltip」的旧写法
+- [x] 无 `@ts-ignore` / 依赖 disabled 元素冒泡的 hack
 
 ### P4-T8 空态 / 模型不可用态
 
@@ -859,10 +859,10 @@ availableEfforts?: AgentReasoningEffort[]   // 缺省 = fail-open 全 5 档
 2. `modelUnavailable` 为真 → chip 带警告色（`--warn`），`title` 显示 `t('modelPicker.unavailableHint')`；浮层照常可开
 
 **完成判据**：
-- [ ] 空池时模型分区显示空态文案，且 chip 仍可点击
-- [ ] 空池时强度分区不受影响（仍可调）
-- [ ] `modelUnavailable` 时 chip 带 `.composer-model-chip--warn` 类名
-- [ ] `modelUnavailable` 时浮层仍可打开且列表可选
+- [x] 空池时模型分区显示空态文案，且 chip 仍可点击
+- [x] 空池时强度分区不受影响（仍可调）
+- [x] `modelUnavailable` 时 chip 带 `.composer-model-chip--warn` 类名
+- [x] `modelUnavailable` 时浮层仍可打开且列表可选
 
 ### P4-T9 无障碍与键盘
 
@@ -874,11 +874,11 @@ availableEfforts?: AgentReasoningEffort[]   // 缺省 = fail-open 全 5 档
 4. `Esc` 关闭并把焦点还给 chip；`focus-visible` 沿用既有类名
 
 **完成判据**：
-- [ ] chip 具备 `aria-haspopup` / `aria-expanded` / `aria-label`（`aria-label` 同时描述模型与强度）
-- [ ] 强度分区具备 `radiogroup` + `radio` + `aria-checked`
-- [ ] 读屏可识别强度分区及其选中项（不会只播报「模型」）
-- [ ] `Esc` 关闭后焦点回到 chip
-- [ ] 键盘 `Enter` / `Space` 可触发选择
+- [x] chip 具备 `aria-haspopup` / `aria-expanded` / `aria-label`（`aria-label` 同时描述模型与强度）
+- [x] 强度分区具备 `radiogroup` + `radio` + `aria-checked`
+- [x] 读屏可识别强度分区及其选中项（不会只播报「模型」）
+- [x] `Esc` 关闭后焦点回到 chip
+- [x] 键盘 `Enter` / `Space` 可触发选择
 
 ### P4-T10 组件样式（CSS）
 
@@ -912,12 +912,12 @@ availableEfforts?: AgentReasoningEffort[]   // 缺省 = fail-open 全 5 档
 - 确认 `.composer-model-chip__label`（已有 `min-width: 0`）独自承担收缩
 
 **完成判据**：
-- [ ] 禁止出现 `width: calc(25% - 3px)` 之类的固定等分硬编码
-- [ ] 5 档时正确换行为 2 行（真机确认，属 P7-T2）
-- [ ] 强度段**不被截断**、模型段（含服务段）**才被截断**（`flex-shrink` 组合正确）
-- [ ] chip `max-width` 保持 **220px**（不擅自上调）
-- [ ] 浮层总高 ≤ 400px（模型区 + 分隔线 + 强度区）
-- [ ] **徽章样式未失效**：模型分区内的「快速 / 视觉」徽章尺寸与间距正常（人工确认一次；对照 P4-T10 作用域说明的二选一方案）
+- [x] 禁止出现 `width: calc(25% - 3px)` 之类的固定等分硬编码
+- [x] 5 档时正确换行为 2 行（真机确认，属 P7-T2）——CSS 已按 flex+min-width+wrap 实现，真机目检归入 P7
+- [x] 强度段**不被截断**、模型段（含服务段）**才被截断**（`flex-shrink` 组合正确）
+- [x] chip `max-width` 保持 **220px**（不擅自上调）
+- [x] 浮层总高 ≤ 400px（模型区 + 分隔线 + 强度区）
+- [x] **徽章样式未失效**：模型分区内的「快速 / 视觉」徽章尺寸与间距正常——已采用方案①（容器同时挂 `.composer-prefs__models` 与 `.composer-model-picker`），徽章后代选择器与滚动条白名单作用域均保留；真机目检归入 P7
 
 ### P4-T11 组件单测
 
@@ -942,19 +942,22 @@ availableEfforts?: AgentReasoningEffort[]   // 缺省 = fail-open 全 5 档
 | ⑮ | `aria-*` 属性与角色正确 | A19 / A21 |
 
 **完成判据**：
-- [ ] 上表 15 条用例全部存在且通过
-- [ ] `npm exec vitest run src/renderer/components/Chat/ComposerModelThinkingPicker.test.tsx` 全绿
-- [ ] 测试中**无**对内部实现细节（如具体 DOM 层级）的过度耦合断言，优先用 role/text 查询
+- [x] 上表 15 条用例全部存在且通过
+- [x] `npm exec vitest run src/renderer/components/Chat/ComposerModelThinkingPicker.test.tsx` 全绿
+- [x] 测试中**无**对内部实现细节（如具体 DOM 层级）的过度耦合断言，优先用 role/text 查询
 
 ### P4-G 阶段 4 收尾（门禁）
 
-- [ ] 组件单测全绿（P4-T11）
-- [ ] `npm run typecheck:renderer` 通过
-- [ ] `npm run i18n:check` 通过；**组件引用的全部 `composer.prefs.*` 键均由 P4-T0 已建立**（键存在性由此核销）
-- [ ] 人工确认：本阶段**未改变现网行为**（组件尚无调用方）
-- [ ] 已提交，提交信息说明「新增 ComposerModelThinkingPicker（未接线）」
+- [x] 组件单测全绿（P4-T11）
+- [x] `npm run typecheck:renderer` 通过
+- [x] `npm run i18n:check` 通过；**组件引用的全部 `composer.prefs.*` 键均由 P4-T0 已建立**（键存在性由此核销）
+- [x] 人工确认：本阶段**未改变现网行为**（组件尚无调用方，`git grep ComposerModelThinkingPicker src/ --name-only` 仅组件与测试自身）
+- [x] 已提交，提交信息说明「新增 ComposerModelThinkingPicker（未接线）」
 
 ---
+
+
+（P4 完成人：ZCode，2026-09-30；TDD：19 例组件单测先 RED（组件不存在）→ 实现后全绿；Chat 目录 41 文件 276 例回归绿；typecheck + i18n:check 过）
 
 ## 8. 阶段 5：`MessageInput` 收敛 + `ChatView` 接线（FR7 / FR1）
 

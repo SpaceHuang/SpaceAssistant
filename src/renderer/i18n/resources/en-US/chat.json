@@ -250,6 +250,17 @@
   },
   "writeSuccess": {},
   "composer": {
+    "prefs": {
+      "label": "Model & thinking effort",
+      "aria": "Model and thinking effort, current model {{model}}, thinking effort {{effort}}",
+      "chipSeparator": " · ",
+      "modelServiceSuffix": " ({{service}})",
+      "modelSection": "Model",
+      "effortSection": "Thinking effort",
+      "effortDisabled": "This model does not support thinking; switch model to adjust",
+      "unknownModel": "No model configured",
+      "entryTitle": "{{displayName}} · Thinking effort: {{effort}}"
+    },
     "thinking": {
       "label": "Thinking effort",
       "aria": "Choose thinking effort",

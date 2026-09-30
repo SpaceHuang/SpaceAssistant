@@ -1647,6 +1647,89 @@
   padding: 0;
 }
 
+/* ===== composer 偏好合并入口浮层（composer-model-thinking-entry FR2）：上模型 / 下强度，单 Popover 两分区 ===== */
+.composer-prefs-popover .ant-popover-inner {
+  padding: 0;
+}
+
+.composer-prefs__section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.composer-prefs__section-title {
+  padding: 8px 12px 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--sa-text-tertiary);
+}
+
+.composer-prefs__divider {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--sa-border);
+}
+
+/* 滚动容器：宽度/高度策略沿用 .composer-model-picker（下方既有规则）。
+   ⚠️ 容器同时保留 `composer-model-picker` 类（P4-T10 方案①）：
+   它是 config-settings.css 中 `.composer-model-picker .config-model-badge*`
+   后代选择器的祖先作用域锚点，也是 components.css 细滚动条白名单类名——去掉即静默失效（R14）。
+   max-height 收窄为 240px（需求 §5.2：合并浮层总高 ≤ 400px = 模型区 ~240 + 分隔线 + 强度区），
+   仅作用于本浮层（.composer-prefs-popover 作用域），旧模型浮层不受影响。 */
+.composer-prefs-popover .composer-prefs__models.composer-model-picker {
+  max-height: 240px;
+  border-radius: 0;
+}
+
+/* 强度分区：横向 N 档自适应（FR10）——flex 等分 + min-width + flex-wrap 三者配合适配可变档位数，
+   5 档时按 4+1 换行（每行容量 = 4×52 + 3×4 = 220 ≤ 236），2–3 档时不拉伸占满（§5.2）。
+   禁止写 width: calc(25% - 3px) 之类的固定等分硬编码。 */
+.composer-prefs__efforts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 4px;
+  padding: 4px 12px 10px;
+}
+
+.composer-prefs__effort {
+  flex: 1 1 0;
+  min-width: 52px;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--sa-radius-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: center;
+  font-size: var(--sa-config-font);
+  color: var(--sa-text);
+  white-space: nowrap;
+}
+
+.composer-prefs__effort:hover {
+  background: var(--sa-bg-muted);
+}
+
+.composer-prefs__effort--active {
+  color: var(--sa-accent);
+  font-weight: 500;
+  background: color-mix(in srgb, var(--sa-accent) 10%, transparent);
+}
+
+.composer-prefs__effort:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.composer-prefs__effort-disabled {
+  padding: 0 12px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--sa-text-tertiary);
+}
+
+
 .composer-model-picker {
   min-width: 260px;
   max-width: 360px;
