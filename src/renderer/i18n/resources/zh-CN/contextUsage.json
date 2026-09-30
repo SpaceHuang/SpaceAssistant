@@ -21,5 +21,18 @@
   "aria": {
     "noData": "暂无上下文用量数据",
     "hasData": "上下文用量约 {{percent}}%"
+  },
+  "groups": {
+    "occupation": "占用",
+    "composition": "构成（上轮请求快照）",
+    "cache": "缓存",
+    "reserve": "预留"
+  },
+  "composition": {
+    "systemPrompt": "系统提示",
+    "tools": "工具声明",
+    "messages": "消息体",
+    "estimatedMark": "≈{{count}} · 估算 {{version}}",
+    "unavailable": "暂无内部构成数据"
   }
 }

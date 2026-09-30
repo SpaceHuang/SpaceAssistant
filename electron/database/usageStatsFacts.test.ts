@@ -4,6 +4,7 @@ import { DB_SCHEMA_VERSION, SCHEMA_META_KEYS } from './schema'
 import { runMigrations } from './migrations'
 import {
   deleteUsageFactsBeforeDay,
+  getLatestAttributedStepFactForSession,
   getUsageStepFactsForTurn,
   getUsageTurnFact,
   insertUsageStepFact,
@@ -206,6 +207,20 @@ describe('usage_step_facts / usage_turn_facts 读写', () => {
     expect(getUsageTurnFact(db, 'turn-1')!.toolAttributionJson).toBe(toolJson)
     upsertUsageTurnFact(db, turnFact())
     expect(getUsageTurnFact(db, 'turn-1')!.toolAttributionJson).toBeNull()
+    db.close()
+  })
+})
+
+describe('getLatestAttributedStepFactForSession（环构成 P2 数据源）', () => {
+  it('取该会话最近一条带归因的 step 行；无归因行时 undefined（AT8 降级）', () => {
+    const db = createMemoryAppDb()
+    expect(getLatestAttributedStepFactForSession(db, 'sess-1')).toBeUndefined()
+    insertUsageStepFact(db, stepFact({ stepId: 'r1', createdAt: 1000 }))
+    insertUsageStepFact(db, stepFact({ stepId: 'r2', createdAt: 2000, estimatorVersion: 'block-v1', attributionJson: '{"schemaVersion":1,"blocks":{}}' }))
+    insertUsageStepFact(db, stepFact({ stepId: 'r3', createdAt: 3000 }))
+    const row = getLatestAttributedStepFactForSession(db, 'sess-1')
+    expect(row?.stepId).toBe('r2')
+    expect(row?.estimatorVersion).toBe('block-v1')
     db.close()
   })
 })

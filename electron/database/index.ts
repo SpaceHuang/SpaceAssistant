@@ -22,6 +22,7 @@ export type {
   SearchCorpusPage
 } from './operations'
 export {
+  getLatestAttributedStepFactForSession,
   appendMessage,
   appendMessagesAtomically,
   prepareTurnAtomically,

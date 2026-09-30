@@ -422,6 +422,7 @@ export type SpaceAssistantApi = {
   usageStatsAttributionDaily: (args: import('./usageStatsTypes').UsageAttributionRangeArgs) => Promise<import('./usageStatsTypes').UsageAttributionDailyPoint[]>
   usageStatsAttributionOutput: (args: import('./usageStatsTypes').UsageAttributionRangeArgs) => Promise<import('./usageStatsTypes').UsageAttributionOutputSplit>
   usageStatsAttributionTools: (args: import('./usageStatsTypes').UsageStatsRangeArgs) => Promise<import('./usageStatsTypes').UsageToolAttributionBreakdown>
+  usageStatsLatestSessionAttribution: (sessionId: string) => Promise<import('../../electron/database/operations').UsageStepFactRow | null>
   usageStatsDimensions: () => Promise<import('./usageStatsTypes').UsageDimensions>
 
   onOpenSettings: (cb: () => void) => () => void

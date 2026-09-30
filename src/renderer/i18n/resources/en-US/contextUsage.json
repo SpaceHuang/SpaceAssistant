@@ -21,5 +21,18 @@
   "aria": {
     "noData": "No context usage data",
     "hasData": "Context usage about {{percent}}%"
+  },
+  "groups": {
+    "occupation": "Usage",
+    "composition": "Composition (last request snapshot)",
+    "cache": "Cache",
+    "reserve": "Reserve"
+  },
+  "composition": {
+    "systemPrompt": "System prompt",
+    "tools": "Tool declarations",
+    "messages": "Messages",
+    "estimatedMark": "≈{{count}} · estimated {{version}}",
+    "unavailable": "No internal composition data"
   }
 }

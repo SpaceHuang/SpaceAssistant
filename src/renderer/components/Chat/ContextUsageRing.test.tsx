@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi, afterEach } from 'vitest'
 import type { ComponentProps } from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { Provider } from 'react-redux'
@@ -347,5 +347,76 @@ describe('ContextUsageRing', () => {
       const text = screen.getByRole('tooltip').textContent ?? ''
       expect(text).toContain('已扣除思考')
     })
+  })
+})
+
+describe('ContextUsageRing Tooltip 分组与构成段（AD21 / P2 §6.7）', () => {
+  afterEach(() => {
+    ;(window as unknown as { api?: unknown }).api = undefined
+  })
+
+  function mockAttributionApi(row: Record<string, unknown> | null): void {
+    ;(window as unknown as { api: unknown }).api = {
+      usageStatsLatestSessionAttribution: vi.fn(async () => row)
+    }
+  }
+
+  it('分组结构：占用/缓存/预留组标题渲染，既有行文案不变（硬约束 1/3）', async () => {
+    mockAttributionApi(null)
+    renderRing({ input_tokens: 1000, output_tokens: 5000, cache_read_input_tokens: 800, cache_creation_input_tokens: 0 })
+    const svg = document.querySelector('svg')!
+    fireEvent.mouseEnter(svg)
+    await waitFor(() => {
+      const text = screen.getByRole('tooltip').textContent ?? ''
+      expect(text).toContain('占用')
+      expect(text).toContain('预估占用')
+      expect(text).toContain('上轮输入')
+      expect(text).toContain('缓存')
+      expect(text).toContain('缓存命中')
+      expect(text).toContain('预留')
+      expect(text).toContain('输出预留')
+      expect(text).toContain('总计')
+      expect(text).toContain('图例')
+    })
+  })
+
+  it('空组连标题一起隐藏：缓存读写均为 0 时不渲染「缓存」组（硬约束 2）', async () => {
+    mockAttributionApi(null)
+    renderRing({ input_tokens: 1000, output_tokens: 5000 })
+    const svg = document.querySelector('svg')!
+    fireEvent.mouseEnter(svg)
+    await waitFor(() => {
+      const text = screen.getByRole('tooltip').textContent ?? ''
+      expect(text).toContain('占用')
+    })
+    expect(screen.queryByTestId('usage-tooltip-group-cache')).toBeNull()
+  })
+
+  it('构成段：block-v1 行归一化到上轮输入，Σ构成段 == totalRequestInput（AT15/AD17）', async () => {
+    mockAttributionApi({ estimatorVersion: 'block-v1', systemTokens: 1124, toolsTokens: 16476, messageTokens: 320875 })
+    renderRing({ input_tokens: 135281, output_tokens: 3000, cache_read_input_tokens: 320824 })
+    const svg = document.querySelector('svg')!
+    fireEvent.mouseEnter(svg)
+    await waitFor(() => {
+      const text = screen.getByRole('tooltip').textContent ?? ''
+      expect(text).toContain('构成（上轮请求快照）')
+      expect(text).toContain('系统提示')
+      expect(text).toContain('工具声明')
+      expect(text).toContain('消息体')
+      expect(text).toContain('≈')
+      expect(text).toContain('block-v1')
+    })
+  })
+
+  it('无归因数据（老会话/API null）时构成组整体隐藏，不补 0（AT8/I5）', async () => {
+    mockAttributionApi(null)
+    renderRing({ input_tokens: 1000, output_tokens: 5000 })
+    const svg = document.querySelector('svg')!
+    fireEvent.mouseEnter(svg)
+    await waitFor(() => {
+      const text = screen.getByRole('tooltip').textContent ?? ''
+      expect(text).toContain('占用')
+    })
+    expect(screen.queryByTestId('usage-tooltip-group-composition')).toBeNull()
   })
 })

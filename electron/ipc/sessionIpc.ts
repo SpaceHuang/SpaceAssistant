@@ -18,6 +18,7 @@ import { deleteSessionChatAttachmentsWithRetry } from '../chatAttachmentManager'
 import { isRemoteAgentRunning } from '../remote/remoteAgentRegistry'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { normalizeSessionSkillsState } from '../../src/shared/domainTypes'
+import { getLatestAttributedStepFactForSession } from '../database'
 import { queryAttributionComposition, queryAttributionDaily, queryAttributionOutputSplit, queryToolAttributionBreakdown, queryUsageDaily, queryUsageDimensions, queryUsageSummary } from '../usageStats/usageStatsQueries'
 
 export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
@@ -210,4 +211,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
 
   ipcMain.handle('usage-stats:attribution-tools', (_e, args: UsageStatsRangeArgs): UsageToolAttributionBreakdown =>
     queryToolAttributionBreakdown(ctx.db, args))
+
+  ipcMain.handle('usage-stats:latest-session-attribution', (_e, sessionId: string) =>
+    getLatestAttributedStepFactForSession(ctx.db, sessionId) ?? null)
 }

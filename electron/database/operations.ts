@@ -1574,6 +1574,20 @@ export function insertUsageStepFact(db: AppDatabase, fact: UsageStepFactInput): 
   db.save()
 }
 
+/** 该会话最近一条带归因的 step 行（环构成段数据源，P2/§6.7）；无归因行时 undefined（AT8 降级）。 */
+export function getLatestAttributedStepFactForSession(db: AppDatabase, sessionId: string): UsageStepFactRow | undefined {
+  const conn = getDbConnection(db)
+  const row = conn
+    .prepare(
+      `SELECT * FROM usage_step_facts
+       WHERE session_id = ? AND attribution_json IS NOT NULL
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`
+    )
+    .get(sessionId) as UsageStepFactSqlRow | undefined
+  return row ? rowToUsageStepFact(row) : undefined
+}
+
 export function getUsageStepFactsForTurn(db: AppDatabase, sessionId: string, turnId: string): UsageStepFactRow[] {
   const conn = getDbConnection(db)
   const rows = conn
