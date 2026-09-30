@@ -8,7 +8,8 @@ export type ThinkingAvailability = {
   source: ThinkingSupportSource
 }
 
-const PRODUCT_EFFORTS: readonly AgentReasoningEffort[] = ['low', 'medium', 'high']
+/** 可被基线显式 `null` 排除的档位（不含 `off`——`off` 恒可用；`max` 已随 FR11 纳入）。 */
+const EXCLUDABLE_EFFORTS: readonly AgentReasoningEffort[] = ['low', 'medium', 'high', 'max']
 
 /**
  * 用模型目录的逐模型元数据做 fail-open 事前捷径，不改变档位校验或允许用户选择的值。
@@ -19,7 +20,7 @@ export function resolveThinkingAvailability(
   opts: { effortUnsupportedByMemo: boolean }
 ): ThinkingAvailability {
   if (opts.effortUnsupportedByMemo === true) {
-    return { unsupported: [...PRODUCT_EFFORTS], source: 'memo' }
+    return { unsupported: [...EXCLUDABLE_EFFORTS], source: 'memo' }
   }
 
   try {
@@ -32,7 +33,7 @@ export function resolveThinkingAvailability(
       return { unsupported: [], source: 'unknown' }
     }
     return {
-      unsupported: PRODUCT_EFFORTS.filter((effort) => map[effort] === null),
+      unsupported: EXCLUDABLE_EFFORTS.filter((effort) => map[effort] === null),
       source: 'baseline'
     }
   } catch {

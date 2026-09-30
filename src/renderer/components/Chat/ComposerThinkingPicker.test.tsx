@@ -29,12 +29,12 @@ describe('ComposerThinkingPicker（§5.2 会话级强度覆盖）', () => {
   })
 
   // 交互定稿（用户指示）：「是否默认」是档位的属性而非独立选项——
-  // 列表只有 4 档，等于当前全局档位的项带「· 默认」标记；点它 = 清除覆盖回到继承
-  it('点击弹出 4 档，等于全局档位的项带「· 默认」属性标记', () => {
+  // 列表为全部档位，等于当前全局档位的项带「· 默认」标记；点它 = 清除覆盖回到继承
+  it('点击弹出全部档位，等于全局档位的项带「· 默认」属性标记', () => {
     renderPicker({ globalEffort: 'medium' })
     fireEvent.click(screen.getByRole('button', { name: /默认（中）/ }))
     const options = screen.getAllByRole('menuitem')
-    expect(options.map((o) => o.textContent)).toEqual(['关闭', '低', '中 · 默认', '高'])
+    expect(options.map((o) => o.textContent)).toEqual(['关闭', '低', '中 · 默认', '高', '最高'])
   })
 
   it('未覆盖时带默认标记的项处于选中态；覆盖后选中项切到覆盖档位', () => {

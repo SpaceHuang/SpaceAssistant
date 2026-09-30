@@ -259,6 +259,7 @@
       "low": "Low",
       "medium": "Medium",
       "high": "High",
+      "max": "Max",
       "notSupported": "This model does not support thinking"
     }
   }

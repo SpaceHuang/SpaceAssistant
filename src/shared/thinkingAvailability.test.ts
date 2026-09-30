@@ -12,7 +12,7 @@ describe('resolveThinkingAvailability', () => {
     expect(resolveThinkingAvailability('unlisted', { effortUnsupportedByMemo: false }))
       .toEqual({ unsupported: [], source: 'unknown' })
     expect(resolveThinkingAvailability('claude-sonnet-4-6', { effortUnsupportedByMemo: true }))
-      .toEqual({ unsupported: ['low', 'medium', 'high'], source: 'memo' })
+      .toEqual({ unsupported: ['low', 'medium', 'high', 'max'], source: 'memo' })
   })
 
   it('never treats off as an unsupported level', () => {

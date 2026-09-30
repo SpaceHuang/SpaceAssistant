@@ -2,7 +2,7 @@ import rawBaseline from '../../res/resource/model-baseline.json'
 import type { AgentReasoningEffort } from './agent/invocation'
 import { MODEL_PARAMETER_OVERRIDES, UNRESOLVED_MODEL_VISION_OVERRIDES } from './modelBaselineOverrides'
 
-export type ThinkingLevelMap = Partial<Record<AgentReasoningEffort | 'minimal' | 'max', string | null>>
+export type ThinkingLevelMap = Partial<Record<AgentReasoningEffort | 'minimal' | 'xhigh', string | null>>
 
 export type ModelBaselineEntry = {
   maximumContext: number

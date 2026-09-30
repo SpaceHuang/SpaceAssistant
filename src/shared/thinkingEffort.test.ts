@@ -8,16 +8,16 @@ import {
 } from './thinkingEffort'
 
 describe('isThinkingEffort', () => {
-  it('accepts exactly the four contract levels', () => {
-    expect(THINKING_EFFORT_LEVELS).toEqual(['off', 'low', 'medium', 'high'])
+  it('accepts exactly the five contract levels', () => {
+    expect(THINKING_EFFORT_LEVELS).toEqual(['off', 'low', 'medium', 'high', 'max'])
     for (const level of THINKING_EFFORT_LEVELS) {
       expect(isThinkingEffort(level)).toBe(true)
     }
   })
 
-  it('rejects server-only and malformed values (OQ-1: xhigh/max not exposed)', () => {
+  it('rejects non-product and malformed values (OQ-1: xhigh 仍不暴露；max 已随 composer-model-thinking-entry 暴露)', () => {
     expect(isThinkingEffort('xhigh')).toBe(false)
-    expect(isThinkingEffort('max')).toBe(false)
+    expect(isThinkingEffort('max')).toBe(true)
     expect(isThinkingEffort(true)).toBe(false)
     expect(isThinkingEffort(undefined)).toBe(false)
     expect(isThinkingEffort('')).toBe(false)

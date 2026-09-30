@@ -20,7 +20,7 @@ describe('buildThinkingWireParams（§7.3 档位映射表）', () => {
     expect(buildThinkingWireParams('off').outputConfig).toBeUndefined()
   })
 
-  it('low / medium / high → adaptive thinking + output_config.effort（同发，官方迁移写法）', () => {
+  it('low / medium / high / max → adaptive thinking + output_config.effort（同发，官方迁移写法）', () => {
     expect(buildThinkingWireParams('low')).toEqual({
       thinking: { type: 'adaptive' },
       outputConfig: { effort: 'low' }
@@ -32,6 +32,11 @@ describe('buildThinkingWireParams（§7.3 档位映射表）', () => {
     expect(buildThinkingWireParams('high')).toEqual({
       thinking: { type: 'adaptive' },
       outputConfig: { effort: 'high' }
+    })
+    // max 在 @anthropic-ai/sdk OutputConfig.effort 白名单内，无需类型转换
+    expect(buildThinkingWireParams('max')).toEqual({
+      thinking: { type: 'adaptive' },
+      outputConfig: { effort: 'max' }
     })
   })
 

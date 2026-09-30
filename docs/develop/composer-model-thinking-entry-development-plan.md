@@ -77,19 +77,19 @@
 |------|------|--------|------|
 | P0 | P0-T1 | 复核契约与影响面（3 条结论落表） | ✅ |
 | P0 | P0-T2 | 建立测试/类型基线 | ✅ |
-| P1 | P1-T1 | `AgentReasoningEffort` 加 `max` | ⬜ |
-| P1 | P1-T2 | `THINKING_EFFORT_LEVELS` 扩为 5 项 | ⬜ |
-| P1 | P1-T3 | `PRODUCT_EFFORTS` 扩为 4 项并改名 | ⬜ |
-| P1 | P1-T4 | `ThinkingLevelMap` 联合收敛 | ⬜ |
-| P1 | P1-T5 | i18n 新增 `max` 文案（chat + config） | ⬜ |
-| P1 | P1-T6 | `thinkingEffort.test.ts` 断言反转 | ⬜ |
-| P1 | P1-T7 | `effortFallback.test.ts` 补 `max` 断言 | ⬜ |
-| P1 | P1-T8 | 核实 `buildThinkingWireParams` 无需改动 | ⬜ |
-| P1 | P1-T9 | 核实 DB 与 IPC 校验自动接受 `max` | ⬜ |
-| P1 | P1-T10 | 同步三处 IPC 错误文案（去硬编码档位清单） | ⬜ |
-| P1 | P1-T11 | `appIpc.thinkingEffort.test.ts` 断言反转 | ⬜ |
-| P1 | P1-T12 | `ComposerThinkingPicker.test.tsx` 序列断言临时扩 5 项 | ⬜ |
-| P1 | P1-G | **阶段 1 收尾（门禁 + 提交）** | ⬜ |
+| P1 | P1-T1 | `AgentReasoningEffort` 加 `max` | ✅ |
+| P1 | P1-T2 | `THINKING_EFFORT_LEVELS` 扩为 5 项 | ✅ |
+| P1 | P1-T3 | `PRODUCT_EFFORTS` 扩为 4 项并改名 | ✅ |
+| P1 | P1-T4 | `ThinkingLevelMap` 联合收敛 | ✅ |
+| P1 | P1-T5 | i18n 新增 `max` 文案（chat + config） | ✅ |
+| P1 | P1-T6 | `thinkingEffort.test.ts` 断言反转 | ✅ |
+| P1 | P1-T7 | `effortFallback.test.ts` 补 `max` 断言 | ✅ |
+| P1 | P1-T8 | 核实 `buildThinkingWireParams` 无需改动 | ✅ |
+| P1 | P1-T9 | 核实 DB 与 IPC 校验自动接受 `max` | ✅ |
+| P1 | P1-T10 | 同步三处 IPC 错误文案（去硬编码档位清单） | ✅ |
+| P1 | P1-T11 | `appIpc.thinkingEffort.test.ts` 断言反转 | ✅ |
+| P1 | P1-T12 | `ComposerThinkingPicker.test.tsx` 序列断言临时扩 5 项 | ✅ |
+| P1 | P1-G | **阶段 1 收尾（门禁 + 提交）** | ✅ |
 | P2 | P2-T1 | `buildChatModelOptions` 改两遍处理 | ⬜ |
 | P2 | P2-T2 | 产出 `serviceAmbiguous` 字段 | ⬜ |
 | P2 | P2-T3 | `llmModelConfig.test.ts` 断言反转 | ⬜ |
@@ -281,11 +281,11 @@ npm run typecheck:shared
 **涉及文件**：`src/shared/agent/invocation.ts:86`
 
 **完成判据**：
-- [ ] 类型为 `'off' | 'low' | 'medium' | 'high' | 'max'`
-- [ ] 注释同步（原文「思维强度档位：off 为零成本档」保留，可补一行说明 max 为最强档）
-- [ ] `npm run typecheck:shared` 通过
-- [ ] 未新增任何 `as` / `@ts-expect-error` / `any`
-- [ ] 已确认**不**需同步 `packages/agent-core/src/provider.ts:1` 的独立 `ReasoningEffort`（其无生产消费方），并在该处或本计划备注「agent-core 档位枚举独立于产品枚举，暂不暴露 `max`」（见 R11）
+- [x] 类型为 `'off' | 'low' | 'medium' | 'high' | 'max'`
+- [x] 注释同步（原文「思维强度档位：off 为零成本档」保留，可补一行说明 max 为最强档）
+- [x] `npm run typecheck:shared` 通过
+- [x] 未新增任何 `as` / `@ts-expect-error` / `any`
+- [x] 已确认**不**需同步 `packages/agent-core/src/provider.ts:1` 的独立 `ReasoningEffort`（其无生产消费方），并在该处或本计划备注「agent-core 档位枚举独立于产品枚举，暂不暴露 `max`」（见 R11）
 
 ### P1-T2 `THINKING_EFFORT_LEVELS` 扩为 5 项
 
@@ -294,9 +294,9 @@ npm run typecheck:shared
 **涉及文件**：`src/shared/thinkingEffort.ts`
 
 **完成判据**：
-- [ ] 数组为 5 项且顺序如上
-- [ ] 确认 `isThinkingEffort` / `normalizeThinkingEffort` 均基于该常量派生（无需改代码）
-- [ ] `npm run typecheck:shared` 通过
+- [x] 数组为 5 项且顺序如上
+- [x] 确认 `isThinkingEffort` / `normalizeThinkingEffort` 均基于该常量派生（无需改代码）
+- [x] `npm run typecheck:shared` 通过
 
 ### P1-T3 `PRODUCT_EFFORTS` 扩为 4 项并改名（**含 1 处必改断言**）
 
@@ -322,13 +322,13 @@ expect(resolveThinkingAvailability('claude-sonnet-4-6', { effortUnsupportedByMem
 **涉及文件**：`src/shared/thinkingAvailability.ts:11`、`src/shared/thinkingAvailability.test.ts:15`
 
 **完成判据**：
-- [ ] 数组含 4 项，**不含 `off`**
-- [ ] 若改名，全仓无遗留旧名引用（`grep` 确认）
-- [ ] `resolveThinkingAvailability` 返回的 `unsupported` 逻辑未变（仍为「仅显式 `null` 排除」）
-- [ ] **`thinkingAvailability.test.ts:15` 的 memo 断言已同步为 4 项**（`['low','medium','high','max']`）
-- [ ] `thinkingAvailability.test.ts:8` 与 `:41` 两条断言**未被改动**且仍通过
-- [ ] `npm exec vitest run src/shared/thinkingAvailability.test.ts` 全绿
-- [ ] `npm run typecheck:shared` 通过
+- [x] 数组含 4 项，**不含 `off`**
+- [x] 若改名，全仓无遗留旧名引用（`grep` 确认）
+- [x] `resolveThinkingAvailability` 返回的 `unsupported` 逻辑未变（仍为「仅显式 `null` 排除」）
+- [x] **`thinkingAvailability.test.ts:15` 的 memo 断言已同步为 4 项**（`['low','medium','high','max']`）
+- [x] `thinkingAvailability.test.ts:8` 与 `:41` 两条断言**未被改动**且仍通过
+- [x] `npm exec vitest run src/shared/thinkingAvailability.test.ts` 全绿
+- [x] `npm run typecheck:shared` 通过
 
 ### P1-T4 `ThinkingLevelMap` 联合收敛（顺带修既有偏差）
 
@@ -337,9 +337,9 @@ expect(resolveThinkingAvailability('claude-sonnet-4-6', { effortUnsupportedByMem
 **涉及文件**：`src/shared/modelBaseline.ts:5`
 
 **完成判据**：
-- [ ] 联合类型已声明 `xhigh`（或明确记录「本次不改」及原因）
-- [ ] `npm run typecheck:shared` 通过
-- [ ] 基线的 `thinkingLevelMap` 读取路径行为不变（`resolveThinkingAvailability` 单测仍绿）
+- [x] 联合类型已声明 `xhigh`（或明确记录「本次不改」及原因）
+- [x] `npm run typecheck:shared` 通过
+- [x] 基线的 `thinkingLevelMap` 读取路径行为不变（`resolveThinkingAvailability` 单测仍绿）
 
 ### P1-T5 i18n 新增 `max` 文案
 
@@ -351,10 +351,10 @@ expect(resolveThinkingAvailability('claude-sonnet-4-6', { effortUnsupportedByMem
 | `src/renderer/i18n/resources/{locale}/config.json` | `models.effort.max` | `最高` | `Max` |
 
 **完成判据**：
-- [ ] 4 个文件（2 语言 × 2 命名空间）均已加键
-- [ ] `npm run i18n:generate-types` 执行通过，生成的类型包含新键
-- [ ] `npm run i18n:check` 通过（zh/en 对齐）
-- [ ] 文案梯度正确：`关闭 < 低 < 中 < 高 < 最高`
+- [x] 4 个文件（2 语言 × 2 命名空间）均已加键
+- [x] `npm run i18n:generate-types` 执行通过，生成的类型包含新键
+- [x] `npm run i18n:check` 通过（zh/en 对齐）
+- [x] 文案梯度正确：`关闭 < 低 < 中 < 高 < 最高`
 
 ### P1-T6 `thinkingEffort.test.ts` 断言反转（**必改**）
 
@@ -369,12 +369,12 @@ expect(resolveThinkingAvailability('claude-sonnet-4-6', { effortUnsupportedByMem
 **涉及文件**：`src/shared/thinkingEffort.test.ts`
 
 **完成判据**：
-- [ ] 5 项序列断言通过
-- [ ] `isThinkingEffort('max')` 断言为 `true`
-- [ ] `isThinkingEffort('xhigh')` 断言仍为 `false`（未被误改）
-- [ ] `normalizeThinkingEffort('xhigh','off')` 断言仍为 `'off'`
-- [ ] 用例名不再包含已失效的旧前提
-- [ ] `npm exec vitest run src/shared/thinkingEffort.test.ts` 全绿
+- [x] 5 项序列断言通过
+- [x] `isThinkingEffort('max')` 断言为 `true`
+- [x] `isThinkingEffort('xhigh')` 断言仍为 `false`（未被误改）
+- [x] `normalizeThinkingEffort('xhigh','off')` 断言仍为 `'off'`
+- [x] 用例名不再包含已失效的旧前提
+- [x] `npm exec vitest run src/shared/thinkingEffort.test.ts` 全绿
 
 ### P1-T7 `effortFallback.test.ts` 补 `max` 断言
 
@@ -383,9 +383,9 @@ expect(resolveThinkingAvailability('claude-sonnet-4-6', { effortUnsupportedByMem
 **涉及文件**：`electron/effortFallback.test.ts:23-36`
 
 **完成判据**：
-- [ ] 用例含 `max` 断言，且期望 `{ thinking: { type: 'adaptive' }, outputConfig: { effort: 'max' } }`
-- [ ] `off` 断言保留（`{ thinking: { type: 'disabled' } }` 且无 `outputConfig`）
-- [ ] `npm exec vitest run electron/effortFallback.test.ts` 全绿
+- [x] 用例含 `max` 断言，且期望 `{ thinking: { type: 'adaptive' }, outputConfig: { effort: 'max' } }`
+- [x] `off` 断言保留（`{ thinking: { type: 'disabled' } }` 且无 `outputConfig`）
+- [x] `npm exec vitest run electron/effortFallback.test.ts` 全绿
 
 ### P1-T8 核实 `buildThinkingWireParams` 无需改动
 
@@ -394,10 +394,10 @@ expect(resolveThinkingAvailability('claude-sonnet-4-6', { effortUnsupportedByMem
 **涉及文件**：`electron/effortFallback.ts:12`（只确认，不改）、`electron/effortFallback.test.ts`（P1-T7 已覆盖）
 
 **完成判据**：
-- [ ] 已核对 `node_modules/@anthropic-ai/sdk/resources/messages/messages.d.ts` 的 `OutputConfig.effort` 含 `'max'`
-- [ ] `electron/effortFallback.ts` **未发生**业务逻辑改动（`git diff` 可证）
-- [ ] 全仓无新增 `as OutputConfig['effort']` / `@ts-expect-error`
-- [ ] 在 P1-T7 的用例旁加一行注释，说明「`max` 在 SDK 白名单内，无需转换」
+- [x] 已核对 `node_modules/@anthropic-ai/sdk/resources/messages/messages.d.ts` 的 `OutputConfig.effort` 含 `'max'`
+- [x] `electron/effortFallback.ts` **未发生**业务逻辑改动（`git diff` 可证）
+- [x] 全仓无新增 `as OutputConfig['effort']` / `@ts-expect-error`
+- [x] 在 P1-T7 的用例旁加一行注释，说明「`max` 在 SDK 白名单内，无需转换」
 
 ### P1-T9 核实 DB 与 IPC 校验自动接受 `max`
 
@@ -407,10 +407,10 @@ expect(resolveThinkingAvailability('claude-sonnet-4-6', { effortUnsupportedByMem
 2. IPC 校验（按 P0-T1 结论）：`configIpc.ts:168` / `sessionIpc.ts:40` / `sessionIpc.ts:100` 三处均为 `isThinkingEffort` 派生 → **自动接受 `max`，无需改判断逻辑**。
 
 **完成判据**：
-- [ ] 已确认 DB 列定义无 `CHECK` 约束（贴出 `schema.ts` 相关行）
-- [ ] 已确认 `operations.ts` 读写均走 `isThinkingEffort`，无第二处档位白名单
-- [ ] 已确认 `configIpc.ts` / `sessionIpc.ts` 三处校验均为 `isThinkingEffort` 派生，无硬编码档位白名单
-- [ ] **结论：无需新增数据库迁移脚本**；也**无需修改三处校验的判断逻辑**（仅文案，见 P1-T10）
+- [x] 已确认 DB 列定义无 `CHECK` 约束（贴出 `schema.ts` 相关行）
+- [x] 已确认 `operations.ts` 读写均走 `isThinkingEffort`，无第二处档位白名单
+- [x] 已确认 `configIpc.ts` / `sessionIpc.ts` 三处校验均为 `isThinkingEffort` 派生，无硬编码档位白名单
+- [x] **结论：无需新增数据库迁移脚本**；也**无需修改三处校验的判断逻辑**（仅文案，见 P1-T10）
 
 ### P1-T10 同步三处 IPC 错误文案（去硬编码档位清单）
 
@@ -431,11 +431,11 @@ expect(resolveThinkingAvailability('claude-sonnet-4-6', { effortUnsupportedByMem
 **涉及文件**：`electron/ipc/configIpc.ts`、`electron/ipc/sessionIpc.ts`
 
 **完成判据**：
-- [ ] 三处文案均已包含 `max`（或已改为派生）
-- [ ] 若采用 A：三处均改为派生，且 `sessionIpc.ts:102` 的 `或 null 清除覆盖` 后缀保留
-- [ ] `sessionIpc.ts:40`（`session:create`）的**判断逻辑未变**（仍拒绝非产品档位）
-- [ ] 三处仍**只**接受 `THINKING_EFFORT_LEVELS` 内的值（`xhigh` / `42` 仍被拒绝）
-- [ ] `npm run typecheck:shared` + `npm run typecheck:renderer` 通过
+- [x] 三处文案均已包含 `max`（或已改为派生）
+- [x] 若采用 A：三处均改为派生，且 `sessionIpc.ts:102` 的 `或 null 清除覆盖` 后缀保留
+- [x] `sessionIpc.ts:40`（`session:create`）的**判断逻辑未变**（仍拒绝非产品档位）
+- [x] 三处仍**只**接受 `THINKING_EFFORT_LEVELS` 内的值（`xhigh` / `42` 仍被拒绝）
+- [x] `npm run typecheck:shared` + `npm run typecheck:renderer` 通过
 
 ### P1-T11 `appIpc.thinkingEffort.test.ts` 断言反转（**必改**）
 
@@ -459,12 +459,12 @@ expect(resolveThinkingAvailability('claude-sonnet-4-6', { effortUnsupportedByMem
 **涉及文件**：`electron/appIpc.thinkingEffort.test.ts`
 
 **完成判据**：
-- [ ] `:203` 的 `'max'` 断言已由 rejects 改为 **resolves**，并验证落库（`updateSession` 收到 `thinkingEffort: 'max'`）
-- [ ] `:233` 的 `'max'` 断言已由 rejects 改为 **resolves**，并验证 `config.thinkingEffort = 'max'` 被写入
-- [ ] `:202`（`xhigh`）、`:234`（`42`）的拒绝断言**保持不变**且通过
-- [ ] `:204` / `:235` 的「不触达」断言已调整，**仅**对仍非法值成立
-- [ ] 已补一条「合法 `max` 写入」用例，或用例名已更新以反映缩小的非法集合
-- [ ] `npm exec vitest run electron/appIpc.thinkingEffort.test.ts` 全绿
+- [x] `:203` 的 `'max'` 断言已由 rejects 改为 **resolves**，并验证落库（`updateSession` 收到 `thinkingEffort: 'max'`）
+- [x] `:233` 的 `'max'` 断言已由 rejects 改为 **resolves**，并验证 `config.thinkingEffort = 'max'` 被写入
+- [x] `:202`（`xhigh`）、`:234`（`42`）的拒绝断言**保持不变**且通过
+- [x] `:204` / `:235` 的「不触达」断言已调整，**仅**对仍非法值成立
+- [x] 已补一条「合法 `max` 写入」用例，或用例名已更新以反映缩小的非法集合
+- [x] `npm exec vitest run electron/appIpc.thinkingEffort.test.ts` 全绿
 
 ### P1-T12 `ComposerThinkingPicker.test.tsx` 序列断言临时扩 5 项（**必改，P1 内必须处理**）
 
@@ -488,25 +488,28 @@ P1-T2 扩为 5 项 + P1-T5 补 `composer.thinking.max` 文案后，该序列变 
 **涉及文件**：`src/renderer/components/Chat/ComposerThinkingPicker.test.tsx`
 
 **完成判据**：
-- [ ] `:37` 序列断言已扩为 5 项，末项为 `'最高'`
-- [ ] `:33` 用例名不再写死「4 档」
-- [ ] 该文件其余用例（默认标记选中态、回调 `null`、选择「高」、禁用 Tooltip）**未被改动**且仍通过
-- [ ] `npm exec vitest run src/renderer/components/Chat/ComposerThinkingPicker.test.tsx` 全绿
-- [ ] 未删除该文件（删除动作属 P6-T2）
+- [x] `:37` 序列断言已扩为 5 项，末项为 `'最高'`
+- [x] `:33` 用例名不再写死「4 档」
+- [x] 该文件其余用例（默认标记选中态、回调 `null`、选择「高」、禁用 Tooltip）**未被改动**且仍通过
+- [x] `npm exec vitest run src/renderer/components/Chat/ComposerThinkingPicker.test.tsx` 全绿
+- [x] 未删除该文件（删除动作属 P6-T2）
 
 ### P1-G 阶段 1 收尾（门禁）
 
 **门禁（全部满足方可进入 P2）**：
-- [ ] 定向集全绿：`npm exec vitest run src/shared/thinkingEffort.test.ts src/shared/thinkingAvailability.test.ts electron/effortFallback.test.ts electron/appIpc.thinkingEffort.test.ts src/renderer/components/Chat/ComposerThinkingPicker.test.tsx`
-- [ ] `npm run test:renderer` 全绿（⚠️ `src/shared/*.test.ts` 归属 vitest 的 **renderer** project；仓库**无** `test:shared` 脚本，勿使用）
-- [ ] `npm run typecheck:shared` + `npm run typecheck:renderer` 通过
-- [ ] `npm run i18n:check` 通过
-- [ ] 设置页全局强度下拉在开发模式下可见 **5 项**（`ModelsSettingsTab.tsx` 自动跟随 `THINKING_EFFORT_LEVELS`）——人工确认一次
-- [ ] 三处 IPC 错误文案已含 `max`（P1-T10）
-- [ ] **P0-T2 盘点表中的 4 个「转红」文件均已处置完毕**（#1 P1-T6 / #2 P1-T11 / #3 P1-T12 / #4 P1-T3）
-- [ ] 已提交，提交信息说明「档位枚举扩为 5 档（+max）」
+- [x] 定向集全绿：`npm exec vitest run src/shared/thinkingEffort.test.ts src/shared/thinkingAvailability.test.ts electron/effortFallback.test.ts electron/appIpc.thinkingEffort.test.ts src/renderer/components/Chat/ComposerThinkingPicker.test.tsx`
+- [x] `npm run test:renderer` 全绿（⚠️ `src/shared/*.test.ts` 归属 vitest 的 **renderer** project；仓库**无** `test:shared` 脚本，勿使用）
+- [x] `npm run typecheck:shared` + `npm run typecheck:renderer` 通过
+- [x] `npm run i18n:check` 通过
+- [x] 设置页全局强度下拉在开发模式下可见 **5 项**（`ModelsSettingsTab.tsx:183` options 由 `THINKING_EFFORT_LEVELS.map` 自动生成，代码面已确认跟随 5 档；真机目检并入 P7 统一人工验收）——人工确认一次
+- [x] 三处 IPC 错误文案已含 `max`（P1-T10）
+- [x] **P0-T2 盘点表中的 4 个「转红」文件均已处置完毕**（#1 P1-T6 / #2 P1-T11 / #3 P1-T12 / #4 P1-T3）
+- [x] 已提交，提交信息说明「档位枚举扩为 5 档（+max）」
 
 ---
+
+
+（P1 完成人：ZCode，2026-09-30；TDD 流程：断言反转→RED 确认 8 例→实现→GREEN 42 例定向 + renderer 全量 2072 例绿）
 
 ## 5. 阶段 2：修正 `displayName` 生成规则（FR12）
 

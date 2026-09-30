@@ -259,6 +259,7 @@
       "low": "低",
       "medium": "中",
       "high": "高",
+      "max": "最高",
       "notSupported": "该模型不支持 Thinking"
     }
   }

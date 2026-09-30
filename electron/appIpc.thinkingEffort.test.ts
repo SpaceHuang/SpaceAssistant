@@ -200,8 +200,22 @@ describe('thinkingEffort IPC 接线（§6.3 白名单 / §8.4 校验）', () => 
 
       const handler = ipc.getHandler('session:update')!
       await expect(handler({}, { sessionId: 'session-1', thinkingEffort: 'xhigh' })).rejects.toThrow()
-      await expect(handler({}, { sessionId: 'session-1', thinkingEffort: 'max' })).rejects.toThrow()
       expect(mockUpdateSession).not.toHaveBeenCalled()
+    })
+
+    it('合法档位 max 写入并落库（FR11：档位枚举扩为 5 档）', async () => {
+      const cur = stubSession({ thinkingEffort: 'high' })
+      mockGetSession.mockReturnValue(cur)
+      mockUpdateSession.mockImplementation((_db, _id, patch) => ({ ...cur, ...patch }))
+
+      const handler = ipc.getHandler('session:update')!
+      await handler({}, { sessionId: 'session-1', thinkingEffort: 'max' })
+
+      expect(mockUpdateSession).toHaveBeenCalledWith(
+        ctx.db,
+        'session-1',
+        expect.objectContaining({ thinkingEffort: 'max' })
+      )
     })
 
     it('payload 不带档位时不写该字段（其他字段更新不受影响）', async () => {
@@ -228,11 +242,20 @@ describe('thinkingEffort IPC 接线（§6.3 白名单 / §8.4 校验）', () => 
       expect(mockSetConfigValue.mock.calls.some((c) => c[1] === 'config.thinkingEnabled')).toBe(false)
     })
 
-    it('非法档位被拒绝并提示（§8.4 净新增校验；thinkingEnabled 曾被 String() 静默强转）', async () => {
+    it('非法档位被拒绝并提示（§8.4 净新增校验；xhigh / 42 仍在非法集内）', async () => {
       const handler = ipc.getHandler('config:set')!
-      await expect(handler({}, { thinkingEffort: 'max' })).rejects.toThrow()
+      await expect(handler({}, { thinkingEffort: 'xhigh' })).rejects.toThrow()
       await expect(handler({}, { thinkingEffort: 42 })).rejects.toThrow()
       expect(mockSetConfigValue.mock.calls.some((c) => c[1] === 'config.thinkingEffort')).toBe(false)
+    })
+
+    it('合法档位 max 写入 config.thinkingEffort（FR11：档位枚举扩为 5 档）', async () => {
+      const handler = ipc.getHandler('config:set')!
+      await handler({}, { thinkingEffort: 'max' })
+
+      const effortWrites = mockSetConfigValue.mock.calls.filter((c) => c[1] === 'config.thinkingEffort')
+      expect(effortWrites).toHaveLength(1)
+      expect(effortWrites[0][2]).toBe('max')
     })
 
     it('payload 不带档位时不写该键', async () => {
