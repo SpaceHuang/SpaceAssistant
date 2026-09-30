@@ -13,7 +13,7 @@ describe('createAgentSdkTurnDispatch', () => {
   it('在 coordinator execute 前完成一次 fresh gate 与 permit-bound dispatch', async () => {
     const events: string[] = []
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest('req', 'desktop')
+    revocations.registerToolRevocationRequest('req', 'desktop', 'req')
     const evaluate = vi.fn(async () => {
       events.push('fresh-gate')
       return gateResult({ type: 'require-confirm', ruleId: 'human', answerer: 'user', riskLevel: 'medium', facts, memoryTiers: [], timeoutMs: 1000 })
@@ -40,7 +40,7 @@ describe('createAgentSdkTurnDispatch', () => {
 
   it('fresh facts 与初始授权不一致时在 executor 前拒绝', async () => {
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest('req', 'desktop')
+    revocations.registerToolRevocationRequest('req', 'desktop', 'req')
     const changedFacts = { ...facts, summary: { text: 'different target' } }
     const execute = vi.fn(async () => 'must not run')
     const dispatch = createAgentSdkTurnDispatch({

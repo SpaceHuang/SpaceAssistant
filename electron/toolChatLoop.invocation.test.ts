@@ -279,7 +279,7 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
         assembled.agentSdk.createHostedTurnRuntime({ ...input, registry: toolRegistry })
     }
     const handoff = createHostedTurnHandoff({
-      agentSdk: agentSdk as never, history: ports.history!, invocationId: invocation.trace.requestId,
+      agentSdk: agentSdk as never, history: ports.history!, invocationId: invocation.trace.turnId,
       turnId: invocation.trace.turnId, routeId: providerRouteId, recoverProviderAttempt: assembled.agentSdk.recoverProviderAttempt
     })
 
@@ -323,14 +323,14 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
     const history = new MemoryHistory()
     ports.history = history
     const handoff = createHostedTurnHandoff({
-      agentSdk: assembled.agentSdk as never, history, invocationId: invocation.trace.requestId,
+      agentSdk: assembled.agentSdk as never, history, invocationId: invocation.trace.turnId,
       turnId: invocation.trace.turnId, routeId: providerRouteId, recoverProviderAttempt: assembled.agentSdk.recoverProviderAttempt
     })
 
     await expect(runToolChatSession(invocation, ports, { onHostedTurnHandoff: handoff })).resolves.toMatchObject({ ok: true })
     expect(mockCreateAnthropicClient).not.toHaveBeenCalled()
     expect(capturedFacts.some((event) => event.type === 'content-delta' && event.text === 'SDK route answer')).toBe(true)
-    const committed = (await history.read(invocation.trace.requestId)).events.find(({ kind }) => kind === 'model-response-committed')
+    const committed = (await history.read(invocation.trace.turnId)).events.find(({ kind }) => kind === 'model-response-committed')
     expect(committed?.payload).toMatchObject({ requestSnapshot: { route: { routeId: providerRouteId, modelId: 'claude-sonnet-4-20250514' }, request: { maxTokens: expect.any(Number), messages: expect.any(Array) } } })
     expect(JSON.stringify(committed?.payload)).not.toContain('apiKey')
     const requestLog = vi.mocked(logAgentEvent).mock.calls.find((call) => call[1] === 'llm.request')
@@ -369,7 +369,7 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
     const { invocation, ports } = assembled
     ports.toolRevocations = undefined
     const handoff = createHostedTurnHandoff({
-      agentSdk: assembled.agentSdk as never, history: ports.history!, invocationId: invocation.trace.requestId,
+      agentSdk: assembled.agentSdk as never, history: ports.history!, invocationId: invocation.trace.turnId,
       turnId: invocation.trace.turnId, routeId: providerRouteId, recoverProviderAttempt: assembled.agentSdk.recoverProviderAttempt
     })
 
@@ -401,12 +401,12 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
     const toolRegistry = new TypedToolRegistry()
     toolRegistry.register(defineDirectTool({ name: 'read_file', actionClass: 'read', parseInput: (raw) => raw as { path: string }, execute }))
     const agentSdk = { ...assembled.agentSdk, createHostedTurnRuntime: (input: Parameters<typeof assembled.agentSdk.createHostedTurnRuntime>[0]) => assembled.agentSdk.createHostedTurnRuntime({ ...input, registry: toolRegistry }) }
-    const handoff = createHostedTurnHandoff({ agentSdk: agentSdk as never, history: ports.history!, invocationId: invocation.trace.requestId, turnId: invocation.trace.turnId, routeId: providerRouteId, maxToolRounds: invocation.limits.maxToolRounds })
+    const handoff = createHostedTurnHandoff({ agentSdk: agentSdk as never, history: ports.history!, invocationId: invocation.trace.turnId, turnId: invocation.trace.turnId, routeId: providerRouteId, maxToolRounds: invocation.limits.maxToolRounds })
 
     await expect(runToolChatSession(invocation, ports, { onHostedTurnHandoff: handoff })).resolves.toMatchObject({ ok: false, error: 'TOOL_LOOP_MAX_ROUNDS_EXCEEDED(2)' })
     expect(providerTurns).toBe(3)
     expect(execute).toHaveBeenCalledTimes(2)
-    expect((await ports.history!.read(invocation.trace.requestId)).events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'limit-3', reason: 'tool_loop_max_rounds_exceeded' }) }))
+    expect((await ports.history!.read(invocation.trace.turnId)).events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'limit-3', reason: 'tool_loop_max_rounds_exceeded' }) }))
   })
 
   beforeEach(() => {
@@ -427,7 +427,7 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
     await expect(runToolChatSession(failed.invocation, failed.ports, { onHostedTurnHandoff: handoff })).resolves.toMatchObject({ ok: false, error: 'API key not configured' })
     expect(handoff).not.toHaveBeenCalled()
     expect(mockCreateAnthropicClient).not.toHaveBeenCalled()
-    await expect(failedHistory.read('req-invocation-1')).resolves.toMatchObject({
+    await expect(failedHistory.read('turn-invocation-1')).resolves.toMatchObject({
       events: [expect.objectContaining({ kind: 'invocation-failed', payload: { status: 'failed' } })]
     })
   })
@@ -522,7 +522,7 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
       expect(input.authorizedToolNames).toBeInstanceOf(Set)
       return createHostedTurnHandoff({
         agentSdk: assembled.agentSdk as never,
-        history: ports.history!, invocationId: invocation.trace.requestId, turnId: invocation.trace.turnId, routeId: providerRouteId
+        history: ports.history!, invocationId: invocation.trace.turnId, turnId: invocation.trace.turnId, routeId: providerRouteId
       })(input as never)
     })
 
@@ -532,7 +532,7 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
     expect(handoff).toHaveBeenCalledOnce()
     expect(callCount).toBe(1)
     expect(providerStream).toHaveBeenCalledTimes(1)
-    const history = await ports.history!.read(invocation.trace.requestId)
+    const history = await ports.history!.read(invocation.trace.turnId)
     expect(history.events.map(({ kind }) => kind)).toContain('invocation-completed')
     expect(history.events.some(({ kind }) => kind === 'model-response-committed')).toBe(true)
   })
@@ -577,7 +577,7 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
     await expect(runToolChatSession(assembled.invocation, assembled.ports))
       .rejects.toThrow('HOSTED_HANDOFF_REQUIRED')
     expect(mockCreateAnthropicClient).not.toHaveBeenCalled()
-    await expect(history.read('req-invocation-1')).resolves.toMatchObject({
+    await expect(history.read('turn-invocation-1')).resolves.toMatchObject({
       events: [expect.objectContaining({ kind: 'invocation-failed', payload: { status: 'failed' } })]
     })
   })
@@ -617,7 +617,7 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
       const handoff = createHostedTurnHandoff({
         agentSdk: { createHostedTurnRuntime: vi.fn(() => { throw failure }) },
         history: assembled.ports.history!,
-        invocationId: assembled.invocation.trace.requestId,
+        invocationId: assembled.invocation.trace.turnId,
         turnId: assembled.invocation.trace.turnId,
         routeId: providerRouteId
       })
@@ -628,7 +628,7 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
       expect(provider.messages.stream).not.toHaveBeenCalled()
       expect(hostedProviderCalls).toBe(0)
       expect(getDefaultAgentRuntime().modelProviders.getRoute(providerRouteId)?.providerId).toBe(`unavailable-${lane}`)
-      const history = await assembled.ports.history!.read(assembled.invocation.trace.requestId)
+      const history = await assembled.ports.history!.read(assembled.invocation.trace.turnId)
       expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-failed', payload: { status: 'failed' } })
       expect(history.events.some((event) => event.kind === 'invocation-completed')).toBe(false)
     }
@@ -706,11 +706,11 @@ describe('thinking effort 档位与上游降级（§7.3 / §7.4）', () => {
       if (!ports.history) throw new Error('expected invocation History')
       const result = await runToolChatSession(invocation, ports, {
         onHostedTurnHandoff: createHostedTurnHandoff({
-          agentSdk, history: ports.history, invocationId: requestId, turnId: `turn-${requestId}`, routeId: providerRouteId,
+          agentSdk, history: ports.history, invocationId: `turn-${requestId}`, turnId: `turn-${requestId}`, routeId: providerRouteId,
           recoverProviderAttempt: agentSdk.recoverProviderAttempt
         })
       })
-      hostedHistories.set(requestId, (await ports.history.read(requestId)).events)
+      hostedHistories.set(requestId, (await ports.history.read(`turn-${requestId}`)).events)
       return result
     }
 
@@ -726,13 +726,13 @@ describe('thinking effort 档位与上游降级（§7.3 / §7.4）', () => {
     const retryRequestIndex = firstEvents.findIndex((event) => event.kind === 'model-request-started' && event.payload.attempt === 2)
     const retry = firstEvents[retryIndex]
     expect(retry?.payload).toMatchObject({
-      requestId: 'req-hosted-effort-first:round:1', code: 'effort_unsupported',
-      sessionLedger: { requestRetry: { requestId: 'req-hosted-effort-first:round:1', code: 'effort_unsupported', attempt: 1 } }
+      requestId: 'turn-req-hosted-effort-first:round:1', code: 'effort_unsupported',
+      sessionLedger: { requestRetry: { requestId: 'turn-req-hosted-effort-first:round:1', code: 'effort_unsupported', attempt: 1 } }
     })
     expect(retryIndex).toBeGreaterThan(-1)
     expect(retryRequestIndex).toBeGreaterThan(retryIndex)
     expect(capturedSessionEvents).toContainEqual(expect.objectContaining({
-      type: 'request_retry', payload: expect.objectContaining({ requestId: 'req-hosted-effort-first:round:1', code: 'effort_unsupported' })
+      type: 'request_retry', payload: expect.objectContaining({ requestId: 'turn-req-hosted-effort-first:round:1', code: 'effort_unsupported' })
     }))
     expect(hostedHistories.get('req-hosted-effort-second')?.some((event) => event.kind === 'provider-retry-scheduled')).toBe(false)
     expect(vi.mocked(logAgentEvent).mock.calls.filter((call) => call[1] === 'llm.effort.unsupported_memoized')).toHaveLength(1)

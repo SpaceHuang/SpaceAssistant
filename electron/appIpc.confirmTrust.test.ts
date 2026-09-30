@@ -179,8 +179,8 @@ describe('tool:confirm-response 信任写入与 pending 确认挂钩（H1）', (
       trustMcpServerId: 'server-1',
       trustMcpToolName: 'create_issue'
     })
-    expect(getPendingMcpTrust('req-mcp', 'tu-mcp')).toEqual({ serverId: 'server-1', toolName: 'create_issue' })
-    expect(isPendingTrust('req-mcp', 'tu-mcp', 'mcp', 'server-1', 'create_issue')).toBe(true)
+      expect(getPendingMcpTrust('req-mcp', 'tu-mcp', 's1')).toEqual({ serverId: 'server-1', toolName: 'create_issue' })
+    expect(isPendingTrust('req-mcp', 'tu-mcp', 'mcp', 'server-1', 'create_issue', 's1')).toBe(true)
     const result = await invoke({
       requestId: 'req-mcp',
       toolUseId: 'tu-mcp',
@@ -193,7 +193,7 @@ describe('tool:confirm-response 信任写入与 pending 确认挂钩（H1）', (
     expect(mockRememberMcpSessionTrust).toHaveBeenCalledWith('s1', 'server-1', 'create_issue')
   })
 
-  it('MCP 信任省略可选 sessionId 时仍使用 pending owner session 写入', async () => {
+  it('MCP 确认响应缺少 sessionId 时拒绝跨会话提交', async () => {
     void waitForToolConfirm('req-mcp-no-session', 'tu-mcp-no-session', undefined, {
       toolName: 'mcp_server_create_issue',
       lane: 'desktop',
@@ -208,8 +208,9 @@ describe('tool:confirm-response 信任写入与 pending 确认挂钩（H1）', (
       trustMcpServerId: 'server-1',
       trustMcpToolName: 'create_issue'
     })
-    expect(result).toMatchObject({ accepted: true, outcome: 'approved' })
-    expect(mockRememberMcpSessionTrust).toHaveBeenCalledWith('owner-session', 'server-1', 'create_issue')
+    expect(result).toMatchObject({ accepted: false, outcome: 'missing' })
+    expect(mockRememberMcpSessionTrust).not.toHaveBeenCalled()
+    clearToolCancel('req-mcp-no-session', 'tu-mcp-no-session', 'owner-session')
   })
 
   it('MCP 信任不得借用同类工具或其他 server 的 pending 身份', async () => {

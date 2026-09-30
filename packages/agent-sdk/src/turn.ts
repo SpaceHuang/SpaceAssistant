@@ -221,6 +221,21 @@ export class AgentTurnCancelledError extends Error {
   constructor() { super('agent turn cancelled'); this.name = 'AgentTurnCancelledError' }
 }
 
+export const AGENT_TURN_TIMEOUT_ABORT_REASON = 'agent-turn-timeout' as const
+
+export class AgentTurnTimedOutError extends Error {
+  readonly code = 'TURN_TIMED_OUT'
+  constructor() { super('agent turn timed out'); this.name = 'AgentTurnTimedOutError' }
+}
+
+function isTurnTimeoutSignal(signal?: AbortSignal): boolean {
+  return signal?.aborted === true && signal.reason === AGENT_TURN_TIMEOUT_ABORT_REASON
+}
+
+function abortErrorForSignal(signal?: AbortSignal): AgentTurnCancelledError | AgentTurnTimedOutError {
+  return isTurnTimeoutSignal(signal) ? new AgentTurnTimedOutError() : new AgentTurnCancelledError()
+}
+
 export class InvalidTurnBoundaryError extends Error {
   readonly code = 'INVALID_TURN_BOUNDARY'
   constructor(message: string) { super(message); this.name = 'InvalidTurnBoundaryError' }
@@ -239,7 +254,7 @@ export class ModelAttemptRecoveryRejectedError extends Error {
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) throw new AgentTurnCancelledError()
+  if (signal?.aborted) throw abortErrorForSignal(signal)
 }
 
 export type RunAgentTurnInput = {
@@ -439,6 +454,8 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
         const terminalKind = error instanceof AgentTurnCancelledError || resultPersistenceUncertain || executionUncertain || hostProjectionFailed || toolProjectionFailed || boundaryProjectionUncertain ? 'invocation-interrupted' : 'invocation-failed'
         const terminalPayload = error instanceof AgentTurnCancelledError
             ? { status: 'cancelled', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
+            : error instanceof AgentTurnTimedOutError
+              ? { status: 'failed', reason: 'timeout', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
             : hostProjectionFailed
               ? { status: 'interrupted', reason: 'host-projection-failed', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
             : toolProjectionFailed
@@ -819,7 +836,10 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         }
       }
     }
-    if (collected.finish.reason === 'cancelled') throw new AgentTurnCancelledError()
+    if (collected.finish.reason === 'cancelled') {
+      throwIfAborted(input.request.signal)
+      throw new AgentTurnCancelledError()
+    }
     throwIfAborted(input.request.signal)
     const toolCalls = collected.chunks.filter((chunk): chunk is Extract<typeof chunk, { type: 'tool-call' }> => chunk.type === 'tool-call')
     inputTokens += collected.usage.inputTokens
@@ -1174,10 +1194,11 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         }
         catch (error) {
           if (approvalPermitHeld) { approvalSlots.release(); approvalPermitHeld = false }
-          const cancelled = error instanceof AgentTurnCancelledError || input.request.signal?.aborted
-          await appendHistory([{ kind: 'approval-resolved', payload: { toolCallId: tool.toolCallId, approvalId: initialDecision.confirmationId, approved: false, outcome: cancelled ? 'cancelled' : 'unavailable', settledAt: Date.now() } }])
-          await markNotDispatched(tool, cancelled ? 'REQUEST_CANCELLED' : 'APPLICATION_ADMISSION_RECOVERY_FAILED')
-          throw cancelled && !(error instanceof AgentTurnCancelledError) ? new AgentTurnCancelledError() : error
+          const timedOut = error instanceof AgentTurnTimedOutError || isTurnTimeoutSignal(input.request.signal)
+          const cancelled = error instanceof AgentTurnCancelledError || (input.request.signal?.aborted === true && !timedOut)
+          await appendHistory([{ kind: 'approval-resolved', payload: { toolCallId: tool.toolCallId, approvalId: initialDecision.confirmationId, approved: false, outcome: timedOut ? 'timeout' : cancelled ? 'cancelled' : 'unavailable', settledAt: Date.now() } }])
+          await markNotDispatched(tool, timedOut ? 'REQUEST_TIMEOUT' : cancelled ? 'REQUEST_CANCELLED' : 'APPLICATION_ADMISSION_RECOVERY_FAILED')
+          throw timedOut ? abortErrorForSignal(input.request.signal) : cancelled && !(error instanceof AgentTurnCancelledError) ? abortErrorForSignal(input.request.signal) : error
         }
         let result: ToolConfirmationResult
         try {
@@ -1195,16 +1216,9 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         } finally {
           if (approvalPermitHeld) { approvalSlots.release(); approvalPermitHeld = false }
         }
-        try { await applicationAdmission.activate(tool.toolCallId) }
-        catch (error) {
-          const cancelled = error instanceof AgentTurnCancelledError || input.request.signal?.aborted
-          await appendHistory([{ kind: 'approval-resolved', payload: { toolCallId: tool.toolCallId, approvalId: initialDecision.confirmationId, approved: false, outcome: cancelled ? 'cancelled' : 'unavailable', settledAt: Date.now() } }])
-          await markNotDispatched(tool, cancelled ? 'REQUEST_CANCELLED' : 'APPLICATION_ADMISSION_RECOVERY_FAILED')
-          throw error
-        }
         const approved = result.kind === 'approved' && Boolean(result.receipt.trim())
         const approvalOutcome = approved ? 'approved' : result.kind === 'approved' ? 'denied' : result.kind
-        await appendHistory([{ kind: 'approval-resolved', payload: {
+        const resolvedApproval = {
           toolCallId: tool.toolCallId,
           approvalId: initialDecision.confirmationId,
           approved,
@@ -1212,15 +1226,27 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           ...(result.answerer ? { answerer: result.answerer } : {}),
           ...(result.cause ? { cause: result.cause } : {}),
           settledAt: Date.now()
-        } }])
+        }
+        await appendHistory([{ kind: 'approval-resolved', payload: resolvedApproval }])
         if (input.request.signal?.aborted) {
-          await markNotDispatched(tool, 'REQUEST_CANCELLED')
+          await markNotDispatched(tool, isTurnTimeoutSignal(input.request.signal) ? 'REQUEST_TIMEOUT' : 'REQUEST_CANCELLED')
           throwIfAborted(input.request.signal)
         }
         if (result.kind !== 'approved' || !result.receipt.trim()) {
           const reason = `CONFIRMATION_${result.kind.toUpperCase()}`
           await markNotDispatched(tool, reason, result.userMessage)
           throw new ToolDeniedError(reason, result.userMessage)
+        }
+        try { await applicationAdmission.activate(tool.toolCallId) }
+        catch (error) {
+          const timedOut = error instanceof AgentTurnTimedOutError || isTurnTimeoutSignal(input.request.signal)
+          const cancelled = error instanceof AgentTurnCancelledError || (input.request.signal?.aborted === true && !timedOut)
+          await markNotDispatched(tool, timedOut ? 'REQUEST_TIMEOUT' : cancelled ? 'REQUEST_CANCELLED' : 'APPLICATION_ADMISSION_RECOVERY_FAILED')
+          throw timedOut && !(error instanceof AgentTurnTimedOutError) ? abortErrorForSignal(input.request.signal) : error
+        }
+        if (input.request.signal?.aborted) {
+          await markNotDispatched(tool, isTurnTimeoutSignal(input.request.signal) ? 'REQUEST_TIMEOUT' : 'REQUEST_CANCELLED')
+          throwIfAborted(input.request.signal)
         }
         confirmation = { receipt: result.receipt }
       }
@@ -1272,8 +1298,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         } catch (error) {
           if (error instanceof ToolExecutionRejectedError) {
             if (error.reason === 'CANCELLED' || input.request.signal?.aborted) {
-              await markNotDispatched(tool, 'REQUEST_CANCELLED')
-              throw new AgentTurnCancelledError()
+              await markNotDispatched(tool, isTurnTimeoutSignal(input.request.signal) ? 'REQUEST_TIMEOUT' : 'REQUEST_CANCELLED')
+              throw abortErrorForSignal(input.request.signal)
             }
             await markNotDispatched(tool, error.reason)
             throw new ToolDeniedError(error.reason)
@@ -1340,7 +1366,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       !(input.returnDeniedToolsToModel && deniedToolResults.has(toolCalls[index]?.toolCallId ?? '')))
     const rejectedTool = rejectedTools.find(({ reason }) => reason instanceof ToolExecutionAfterDispatchError)
       ?? rejectedTools.find(({ reason }) => reason instanceof AgentTurnHistoryAppendError && reason.kinds.includes('tool-call-finished'))
-      ?? rejectedTools.find(({ reason }) => reason instanceof AgentTurnCancelledError)
+      ?? rejectedTools.find(({ reason }) => reason instanceof AgentTurnCancelledError || reason instanceof AgentTurnTimedOutError)
       ?? rejectedTools[0]
     if (rejectedTool || stopAfterDenied) {
       for (const tool of toolCalls) {
@@ -1471,7 +1497,7 @@ class ApprovalCandidateSlots {
   async acquire(parentTaskId: string, signal?: AbortSignal, onWait?: () => void | Promise<void>): Promise<() => void> {
     let waitingNotified = false
     while (true) {
-      if (signal?.aborted) throw new AgentTurnCancelledError()
+          if (signal?.aborted) throw abortErrorForSignal(signal)
       const reservation: CapacityReservation | undefined = this.ledger.reserveApprovalCandidate(parentTaskId)
       if (reservation) return () => { reservation.release(); this.waiters.shift()?.() }
       if (!waitingNotified) {
@@ -1479,7 +1505,7 @@ class ApprovalCandidateSlots {
         await onWait?.()
       }
       await new Promise<void>((resolve, reject) => {
-        const onAbort = () => { const index = this.waiters.indexOf(wake); if (index >= 0) this.waiters.splice(index, 1); reject(new AgentTurnCancelledError()) }
+        const onAbort = () => { const index = this.waiters.indexOf(wake); if (index >= 0) this.waiters.splice(index, 1); reject(abortErrorForSignal(signal)) }
         const wake = () => { signal?.removeEventListener('abort', onAbort); resolve() }
         this.waiters.push(wake)
         signal?.addEventListener('abort', onAbort, { once: true })
@@ -1538,7 +1564,7 @@ class TurnApplicationAdmission {
       for (let attempt = 0; attempt <= delays.length; attempt += 1) {
         if (this.signal?.aborted) {
           this.discardParked()
-          throw new AgentTurnCancelledError()
+          throw abortErrorForSignal(this.signal)
         }
         const handle = this.handle
         if (handle === undefined) return
@@ -1548,13 +1574,13 @@ class TurnApplicationAdmission {
         } catch (error) {
           if (this.signal?.aborted) {
             this.discardParked()
-            throw new AgentTurnCancelledError()
+            throw abortErrorForSignal(this.signal)
           }
           throw error
         }
         if (this.signal?.aborted) {
           this.discardParked()
-          throw new AgentTurnCancelledError()
+          throw abortErrorForSignal(this.signal)
         }
         const result = typeof raw === 'boolean' ? { ok: raw, retryable: false } : raw
         if (result?.ok) { this.handle = undefined; return }

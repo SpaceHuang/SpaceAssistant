@@ -207,7 +207,7 @@ describe('switchSessionExecutor', () => {
     remoteContext.outboundSessionId = caller.id
     remoteContext.appendSessionSwitchAudit = (entry: unknown) => audit.push(entry)
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest(ctx.requestId!, 'feishu')
+    revocations.registerToolRevocationRequest(ctx.requestId!, 'feishu', ctx.requestId!)
     const ledger = new InMemoryExecutionAdmissionCoordinator()
     let reachedClaim!: () => void
     let releaseClaim!: () => void
@@ -406,7 +406,7 @@ describe('switchSessionExecutor', () => {
     const remoteContext = { source: 'feishu' as const, messageId: 'm1', confirmPolicy: 'always' as const, chatId: 'chat-1', outboundSessionId: caller.id }
     const ctx = makeCtx(db, manager, caller.id, remoteContext, requestId)
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest(requestId, 'feishu')
+    revocations.registerToolRevocationRequest(requestId, 'feishu', requestId)
     let reachedRenderer!: () => void
     let rejectRenderer!: (error: Error) => void
     const rendererRequested = new Promise<void>((resolve) => { reachedRenderer = resolve })

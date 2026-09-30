@@ -302,7 +302,7 @@ describe('mcp IPC handlers', () => {
     const server = makeInput({ id: profileId, name: 'Global revocation', enabled: true, enabledToolNames: [toolName] })
     await handlers['mcp:save-profiles']!(null, { servers: [server] })
     for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
-      registerToolRevocationRequest(`${lane}-mcp-active`, lane)
+      registerToolRevocationRequest(`${lane}-mcp-active`, lane, `${lane}-mcp-active`)
     }
 
     try {
@@ -326,7 +326,7 @@ describe('mcp IPC handlers', () => {
     })
     await handlers['mcp:save-profiles']!(null, { servers: [server] })
     for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
-      registerToolRevocationRequest(`${lane}-mcp-target-change`, lane)
+      registerToolRevocationRequest(`${lane}-mcp-target-change`, lane, `${lane}-mcp-target-change`)
     }
 
     try {
@@ -353,7 +353,7 @@ describe('mcp IPC handlers', () => {
     })
     await handlers['mcp:save-profiles']!(null, { servers: [server] })
     for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
-      registerToolRevocationRequest(`${lane}-mcp-clear-secret`, lane)
+      registerToolRevocationRequest(`${lane}-mcp-clear-secret`, lane, `${lane}-mcp-clear-secret`)
     }
 
     try {
@@ -375,7 +375,7 @@ describe('mcp IPC handlers', () => {
       servers: [makeInput({ id: profileId, name: 'Delete revocation', enabled: true, enabledToolNames: [toolName] })]
     })
     for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
-      registerToolRevocationRequest(`${lane}-mcp-delete-active`, lane)
+      registerToolRevocationRequest(`${lane}-mcp-delete-active`, lane, `${lane}-mcp-delete-active`)
     }
 
     try {
@@ -398,7 +398,7 @@ describe('mcp IPC handlers', () => {
     await handlers['mcp:save-profiles']!(null, {
       servers: [makeInput({ id: profileId, name: 'Claimed revocation', enabled: true, enabledToolNames: [toolName] })]
     })
-    registerToolRevocationRequest(requestId, lane)
+    registerToolRevocationRequest(requestId, lane, 'mcp-claimed-delete-turn')
     const revocations = getDefaultAgentRuntime().toolRevocations
     const admission = new InMemoryExecutionAdmissionCoordinator()
     let enteredExecutor!: () => void
@@ -449,7 +449,7 @@ describe('mcp IPC handlers', () => {
     const toolName = 'lookup_allowlist_active'
     const server = makeInput({ id: profileId, name: 'Claimed allowlist revocation', enabled: true, enabledToolNames: [toolName] })
     await handlers['mcp:save-profiles']!(null, { servers: [server] })
-    registerToolRevocationRequest(requestId, lane)
+    registerToolRevocationRequest(requestId, lane, 'mcp-claimed-allowlist-turn')
     const revocations = getDefaultAgentRuntime().toolRevocations
     const admission = new InMemoryExecutionAdmissionCoordinator()
     let enteredExecutor!: () => void
@@ -502,7 +502,7 @@ describe('mcp IPC handlers', () => {
       http: { endpoint: 'https://old.example.test/mcp' }, enabledToolNames: [toolName]
     })
     await handlers['mcp:save-profiles']!(null, { servers: [server] })
-    registerToolRevocationRequest(requestId, lane)
+    registerToolRevocationRequest(requestId, lane, 'mcp-endpoint-change-turn')
     const revocations = getDefaultAgentRuntime().toolRevocations
     const admission = new InMemoryExecutionAdmissionCoordinator()
     let enteredExecutor!: () => void
@@ -562,7 +562,7 @@ describe('mcp IPC handlers', () => {
         inputSchema: { type: 'object' }, annotations: { destructiveHint: true }, discoveredAt: '2026-01-01T00:00:00.000Z'
       }]
     })
-    registerToolRevocationRequest(requestId, 'desktop')
+    registerToolRevocationRequest(requestId, 'desktop', requestId)
     const pendingConfirmation = waitForToolConfirm(requestId, 'mapped-confirmation-call', undefined, {
       toolName, lane: 'desktop'
     })
@@ -605,7 +605,7 @@ describe('mcp IPC handlers', () => {
       }] }) },
       info: { name: 'Docs' }, protocolVersion: '2025-06-18', capabilities: {}, close: async () => undefined
     } as never)
-    registerToolRevocationRequest(requestId, 'desktop')
+    registerToolRevocationRequest(requestId, 'desktop', requestId)
     const pendingConfirmation = waitForToolConfirm(requestId, 'refresh-confirmation-call', undefined, {
       toolName, lane: 'desktop'
     })
@@ -639,7 +639,7 @@ describe('mcp IPC handlers', () => {
     })
     await setSecret(db, profileId, 'access-token', 'old-access')
     await setSecret(db, profileId, 'refresh-token', 'old-refresh')
-    registerToolRevocationRequest(requestId, 'desktop')
+    registerToolRevocationRequest(requestId, 'desktop', 'mcp-oauth-refresh-turn')
     const runtime = getDefaultAgentRuntime()
     const admission = new InMemoryExecutionAdmissionCoordinator()
     let enteredExecutor!: () => void
@@ -764,7 +764,7 @@ rl.on('line', (line) => {
     })
     const startOAuth = vi.spyOn(mcpOauthService, 'startOAuthFlow').mockResolvedValue({ ok: true } as never)
     for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
-      registerToolRevocationRequest(`${lane}-mcp-oauth-reauth`, lane)
+      registerToolRevocationRequest(`${lane}-mcp-oauth-reauth`, lane, `${lane}-mcp-oauth-reauth`)
     }
 
     try {

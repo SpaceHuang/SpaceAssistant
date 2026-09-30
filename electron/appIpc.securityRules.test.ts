@@ -273,10 +273,10 @@ describe('security:set-rule-enabled 仅限 locked+deny 系统保护规则（fail
     { name: 'deniedTools', tools: { deniedTools: ['list_work_dirs'] } },
     { name: 'enabled=false', tools: { enabled: false } }
   ])('全局工具配置变更会撤销远程专属工具（$name）', async ({ tools }) => {
-    registerToolRevocationRequest('desktop-request', 'desktop')
-    registerToolRevocationRequest('feishu-request', 'feishu')
-    registerToolRevocationRequest('wechat-request', 'wechat')
-    registerToolRevocationRequest('automation-request', 'automation')
+    registerToolRevocationRequest('desktop-request', 'desktop', 'desktop-request')
+    registerToolRevocationRequest('feishu-request', 'feishu', 'feishu-request')
+    registerToolRevocationRequest('wechat-request', 'wechat', 'wechat-request')
+    registerToolRevocationRequest('automation-request', 'automation', 'automation-request')
     try {
       await ipc.getHandler('config:set')?.(null, { tools })
       expect(isToolRevoked('desktop-request', 'list_work_dirs')).toBe(true)

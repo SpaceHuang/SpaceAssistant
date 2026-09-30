@@ -118,6 +118,7 @@ import { createAgentRuntime } from './runtime/agentRuntime'
 import { getDefaultAgentRuntime, setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 import { ToolRevocationRegistry } from './toolRevocationRegistry'
 import { createHostedTurnHandoff } from './runtime/hostedTurnHandoff'
+import { InvocationRuntime } from '../packages/agent-sdk/src/scheduler'
 
 /** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
 function runAssembledSession(materials: unknown) {
@@ -196,6 +197,50 @@ describe('P1 安全拒绝理由回传与计数口径分离', () => {
       cause: 'agent-deny',
       reason: { summary: SAFETY_SUMMARY }
     }) satisfies ConfirmOutcome)
+  })
+
+  it('不同 session 的相同 requestId 可在同一 InvocationRuntime 中并发执行', async () => {
+    const previousRuntime = getDefaultAgentRuntime()
+    const runtime = createAgentRuntime({ invocationRuntime: new InvocationRuntime('shared-request-id-regression') })
+    setDefaultAgentRuntime(runtime)
+    const providerRouteId = 'desktop-anthropic:shared-request-id-regression'
+    let releaseFirst!: () => void
+    const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve })
+    let firstStarted: (() => void) | undefined
+    const firstStartedPromise = new Promise<void>((resolve) => { firstStarted = resolve })
+    runtime.modelProviders.register({
+      routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01',
+      adapterVersion: 'pi-ai@0.87.1', modelId: 'claude-sonnet-4-20250514'
+    }, { providerId: 'shared-request-id-regression', async *stream() {
+      if (firstStarted) {
+        const markStarted = firstStarted
+        firstStarted = undefined
+        markStarted()
+        await firstBlocked
+      }
+      yield { type: 'text-delta' as const, text: 'answer' }
+      yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish' as const, reason: 'stop' as const }
+    } })
+
+    const handoffFor = (assembled: ReturnType<typeof assembleInvocation>) => createHostedTurnHandoff({
+      agentSdk: assembled.agentSdk as never, history: assembled.ports.history!,
+      invocationId: assembled.invocation.trace.turnId!, turnId: assembled.invocation.trace.turnId!, routeId: providerRouteId
+    })
+    const first = assembleInvocation({ ...baseArgs(makeDb()), requestId: 'shared-request', sessionId: 'session-a', turnId: 'turn-a', providerRouteId } as never)
+    const second = assembleInvocation({ ...baseArgs(makeDb()), requestId: 'shared-request', sessionId: 'session-b', turnId: 'turn-b', providerRouteId } as never)
+
+    try {
+      const firstRun = runToolChatSession(first.invocation, first.ports, { onHostedTurnHandoff: handoffFor(first) })
+      await firstStartedPromise
+      await expect(runToolChatSession(second.invocation, second.ports, { onHostedTurnHandoff: handoffFor(second) })).resolves.toMatchObject({ ok: true })
+      expect(vi.mocked(registerChatCancel).mock.calls).toEqual([['turn-a'], ['turn-b']])
+      releaseFirst()
+      await expect(firstRun).resolves.toMatchObject({ ok: true })
+    } finally {
+      releaseFirst()
+      setDefaultAgentRuntime(previousRuntime)
+    }
   })
 
   it('连续 3 次同类安全拒绝不中止 Turn：模型在第 4 轮收敛并看到拒绝理由', async () => {

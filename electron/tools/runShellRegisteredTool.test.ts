@@ -268,7 +268,7 @@ describe('runShellRegisteredTool', () => {
   it('shell prepared builtin 在 consume 后撤权时不会进入实际 executor', async () => {
     const command = process.platform === 'win32' ? 'Write-Output barrier' : 'printf barrier'
     const toolRevocations = new ToolRevocationRegistry()
-    toolRevocations.registerToolRevocationRequest('r', 'desktop')
+    toolRevocations.registerToolRevocationRequest('r', 'desktop', 'turn')
     const ledger = new InMemoryExecutionAdmissionCoordinator()
     let reachedClaim!: () => void
     let releaseClaim!: () => void
@@ -309,7 +309,7 @@ describe('runShellRegisteredTool', () => {
   it('shell prepared builtin 在 claim barrier 中授权版本变化时不会启动 shell', async () => {
     const command = process.platform === 'win32' ? 'Write-Output stale' : 'printf stale'
     const toolRevocations = new ToolRevocationRegistry()
-    toolRevocations.registerToolRevocationRequest('r', 'desktop')
+    toolRevocations.registerToolRevocationRequest('r', 'desktop', 'turn')
     const ledger = new InMemoryExecutionAdmissionCoordinator()
     let reachedClaim!: () => void
     let releaseClaim!: () => void

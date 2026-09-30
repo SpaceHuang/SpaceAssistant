@@ -14,8 +14,8 @@ export type { ToolRevocationEvent }
 export class ToolRevocationRegistry extends AgentSdkToolRevocationRegistry {}
 
 /** @deprecated 兼容转发(偏差 18,一个发布周期,P8 评估删除):经默认 runtime 实例。 */
-export function registerToolRevocationRequest(requestId: string, lane: string): void {
-  getDefaultAgentRuntime().toolRevocations.registerToolRevocationRequest(requestId, lane)
+export function registerToolRevocationRequest(requestId: string, lane: string, executionId: string): void {
+  getDefaultAgentRuntime().toolRevocations.registerToolRevocationRequest(requestId, lane, executionId)
 }
 
 /** @deprecated 兼容转发(偏差 18)。 */
@@ -29,11 +29,11 @@ export function revokeToolForAllLanes(toolName: string): number {
 }
 
 /** @deprecated 兼容转发(偏差 18)。 */
-export function isToolRevoked(requestId: string, toolName: string): boolean {
-  return getDefaultAgentRuntime().toolRevocations.isToolRevoked(requestId, toolName)
+export function isToolRevoked(requestId: string, toolName: string, executionId?: string): boolean {
+  return getDefaultAgentRuntime().toolRevocations.isToolRevoked(requestId, toolName, executionId)
 }
 
 /** @deprecated 兼容转发(偏差 18)。 */
-export function clearToolRevocationRequest(requestId: string): void {
-  getDefaultAgentRuntime().toolRevocations.clearToolRevocationRequest(requestId)
+export function clearToolRevocationRequest(requestId: string, executionId?: string): void {
+  getDefaultAgentRuntime().toolRevocations.clearToolRevocationRequest(requestId, executionId)
 }

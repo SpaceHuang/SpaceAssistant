@@ -6,6 +6,8 @@ import { DEFAULT_USER_CONFIRMATION_TIMEOUT_MS } from './confirmation/confirmatio
 export type ToolConfirmOutcome = 'approved' | 'rejected' | 'timeout' | 'cancelled' | 'unavailable'
 
 type Waiter = {
+  requestId: string
+  toolUseId: string
   promise: Promise<ToolConfirmOutcome>
   resolve: (v: ToolConfirmOutcome) => void
   timeoutId: ReturnType<typeof setTimeout>
@@ -31,8 +33,8 @@ export const CONFIRM_MS = DEFAULT_USER_CONFIRMATION_TIMEOUT_MS
 const pending = new Map<string, Waiter>()
 let nextConfirmationGeneration = 0
 
-export function confirmKey(requestId: string, toolUseId: string): string {
-  return `${requestId}\0${toolUseId}`
+export function confirmKey(requestId: string, toolUseId: string, sessionId?: string): string {
+  return sessionId === undefined ? `${requestId}\0${toolUseId}` : `${requestId}\0${toolUseId}\0${sessionId}`
 }
 
 export function waitForToolConfirm(
@@ -42,7 +44,7 @@ export function waitForToolConfirm(
   scope?: { toolName: string; lane: string; sessionId?: string; generation?: number; revision?: number; trustCommands?: string[]; trustDomains?: string[]; trustActDomains?: string[]; trustMcpServerId?: string; trustMcpToolName?: string },
   timeoutMs?: number
 ): Promise<ToolConfirmOutcome> {
-  const key = confirmKey(requestId, toolUseId)
+  const key = confirmKey(requestId, toolUseId, scope?.sessionId)
   const existing = pending.get(key)
   if (existing) return existing.promise
   let promise!: Promise<ToolConfirmOutcome>
@@ -51,13 +53,15 @@ export function waitForToolConfirm(
     const deadlineAt = Date.now() + (timeoutMs ?? CONFIRM_MS)
     const timeoutId = setTimeout(() => {
       if (pending.get(key)?.status === 'committing') {
-        expireReservedToolConfirm(requestId, toolUseId)
+        expireReservedToolConfirm(requestId, toolUseId, scope?.sessionId)
         return
       }
       pending.delete(key)
       resolve('timeout')
     }, timeoutMs ?? CONFIRM_MS)
-    pending.set(key, {
+      pending.set(key, {
+      requestId,
+      toolUseId,
       promise,
       resolve,
       timeoutId,
@@ -94,8 +98,8 @@ export function prepareToolConfirm(
   return waitForToolConfirm(requestId, toolUseId, memoryTiers, scope, timeoutMs)
 }
 
-export function isPendingTrust(requestId: string, toolUseId: string, kind: 'command' | 'domain' | 'act-domain' | 'mcp', value: string, secondaryValue?: string): boolean {
-  const w = pending.get(confirmKey(requestId, toolUseId))
+export function isPendingTrust(requestId: string, toolUseId: string, kind: 'command' | 'domain' | 'act-domain' | 'mcp', value: string, secondaryValue?: string, sessionId?: string): boolean {
+  const w = pending.get(confirmKey(requestId, toolUseId, sessionId))
   if (!w) return false
   if (kind === 'command') { const argv = tokenizeShellArgv(value); return !!w.trustCommands && !!argv && w.trustCommands.has(JSON.stringify(argv)) }
   if (kind === 'domain') return !!w.trustDomains && w.trustDomains.has(value)
@@ -103,8 +107,8 @@ export function isPendingTrust(requestId: string, toolUseId: string, kind: 'comm
   return w.trustMcpServerId === value && w.trustMcpToolName === secondaryValue
 }
 
-export function getPendingMcpTrust(requestId: string, toolUseId: string): { serverId: string; toolName: string } | undefined {
-  const waiter = pending.get(confirmKey(requestId, toolUseId))
+export function getPendingMcpTrust(requestId: string, toolUseId: string, sessionId?: string): { serverId: string; toolName: string } | undefined {
+  const waiter = pending.get(confirmKey(requestId, toolUseId, sessionId))
   if (!waiter?.trustMcpServerId || !waiter.trustMcpToolName) return undefined
   return { serverId: waiter.trustMcpServerId, toolName: waiter.trustMcpToolName }
 }
@@ -113,7 +117,7 @@ export function rejectPendingConfirmsForTool(lane: string, toolName: string): nu
   let rejected = 0
   for (const [key, waiter] of pending) {
     if (waiter.lane !== lane || waiter.toolName !== toolName) continue
-    if (waiter.status === 'committing') { const [requestId, toolUseId] = key.split('\0'); cancelReservedToolConfirm(requestId!, toolUseId!); rejected++; continue }
+    if (waiter.status === 'committing') { cancelReservedToolConfirm(waiter.requestId, waiter.toolUseId, waiter.sessionId); rejected++; continue }
     clearTimeout(waiter.timeoutId)
     pending.delete(key)
     waiter.resolve('cancelled')
@@ -130,47 +134,47 @@ export function rejectPendingConfirmsForToolAcrossLanes(toolName: string): numbe
 }
 
 /** 该 (requestId, toolUseId) 是否存在已登记的 pending 确认（H1：信任写入的前置校验）。 */
-export function isPendingConfirm(requestId: string, toolUseId: string): boolean {
-  const waiter = pending.get(confirmKey(requestId, toolUseId))
+export function isPendingConfirm(requestId: string, toolUseId: string, sessionId?: string): boolean {
+  const waiter = pending.get(confirmKey(requestId, toolUseId, sessionId))
   return !!waiter && waiter.status !== 'cancelled'
 }
 
-export function getPendingConfirmToolName(requestId: string, toolUseId: string): string | undefined {
-  return pending.get(confirmKey(requestId, toolUseId))?.toolName
+export function getPendingConfirmToolName(requestId: string, toolUseId: string, sessionId?: string): string | undefined {
+  return pending.get(confirmKey(requestId, toolUseId, sessionId))?.toolName
 }
 
-export function getPendingConfirmSessionId(requestId: string, toolUseId: string): string | undefined {
-  return pending.get(confirmKey(requestId, toolUseId))?.sessionId
+export function getPendingConfirmSessionId(requestId: string, toolUseId: string, sessionId?: string): string | undefined {
+  return pending.get(confirmKey(requestId, toolUseId, sessionId))?.sessionId
 }
 
-export function getPendingConfirmGeneration(requestId: string, toolUseId: string): number | undefined {
-  return pending.get(confirmKey(requestId, toolUseId))?.generation
+export function getPendingConfirmGeneration(requestId: string, toolUseId: string, sessionId?: string): number | undefined {
+  return pending.get(confirmKey(requestId, toolUseId, sessionId))?.generation
 }
 
-export function getPendingConfirmRevision(requestId: string, toolUseId: string): number | undefined {
-  return pending.get(confirmKey(requestId, toolUseId))?.revision
+export function getPendingConfirmRevision(requestId: string, toolUseId: string, sessionId?: string): number | undefined {
+  return pending.get(confirmKey(requestId, toolUseId, sessionId))?.revision
 }
 
 /**
  * 校验渲染端回传的 memoryTier 是否属于该待确认请求决策层给出的档位（B1）。
  * 无 pending 请求、请求未登记档位、或键不在档位内时一律 false（fail-closed）。
  */
-export function isPendingMemoryTier(requestId: string, toolUseId: string, key: CacheKey): boolean {
-  const w = pending.get(confirmKey(requestId, toolUseId))
+export function isPendingMemoryTier(requestId: string, toolUseId: string, key: CacheKey, sessionId?: string): boolean {
+  const w = pending.get(confirmKey(requestId, toolUseId, sessionId))
   if (!w?.memoryKeys) return false
   return w.memoryKeys.has(canonicalKeyJson(key))
 }
 
-export function getPendingMemoryTiers(requestId: string, toolUseId: string): readonly MemoryTier[] {
-  return pending.get(confirmKey(requestId, toolUseId))?.memoryTiers ?? []
+export function getPendingMemoryTiers(requestId: string, toolUseId: string, sessionId?: string): readonly MemoryTier[] {
+  return pending.get(confirmKey(requestId, toolUseId, sessionId))?.memoryTiers ?? []
 }
 
 export type ToolConfirmSubmitResult =
   | { accepted: true; outcome: 'approved' | 'rejected' }
   | { accepted: false; outcome: 'missing' }
 
-export function submitToolConfirmResponse(requestId: string, toolUseId: string, approved: boolean): ToolConfirmSubmitResult {
-  const key = confirmKey(requestId, toolUseId)
+export function submitToolConfirmResponse(requestId: string, toolUseId: string, approved: boolean, sessionId?: string): ToolConfirmSubmitResult {
+  const key = confirmKey(requestId, toolUseId, sessionId)
   const w = pending.get(key)
   if (!w || w.status === 'cancelled') return { accepted: false, outcome: 'missing' }
   clearTimeout(w.timeoutId)
@@ -182,11 +186,11 @@ export function submitToolConfirmResponse(requestId: string, toolUseId: string, 
 }
 
 /** Cancel one pending confirmation waiter without affecting concurrent tool confirmations. */
-export function cancelToolConfirm(requestId: string, toolUseId: string): boolean {
-  const key = confirmKey(requestId, toolUseId)
+export function cancelToolConfirm(requestId: string, toolUseId: string, sessionId?: string): boolean {
+  const key = confirmKey(requestId, toolUseId, sessionId)
   const waiter = pending.get(key)
   if (!waiter) return false
-  if (waiter.status === 'committing') return cancelReservedToolConfirm(requestId, toolUseId)
+  if (waiter.status === 'committing') return cancelReservedToolConfirm(requestId, toolUseId, sessionId)
   clearTimeout(waiter.timeoutId)
   pending.delete(key)
   waiter.status = 'cancelled'
@@ -195,40 +199,40 @@ export function cancelToolConfirm(requestId: string, toolUseId: string): boolean
 }
 
 /** 独占确认项，写入期间超时/并发响应不得消费或撤销该项。 */
-export function reserveToolConfirmResponse(requestId: string, toolUseId: string): boolean {
-  const waiter = pending.get(confirmKey(requestId, toolUseId))
+export function reserveToolConfirmResponse(requestId: string, toolUseId: string, sessionId?: string): boolean {
+  const waiter = pending.get(confirmKey(requestId, toolUseId, sessionId))
   if (!waiter || waiter.status === 'committing') return false
   waiter.status = 'committing'
   clearTimeout(waiter.timeoutId)
   const remaining = waiter.deadlineAt - Date.now()
   if (remaining <= 0) {
     waiter.status = 'cancelled'
-    pending.delete(confirmKey(requestId, toolUseId))
+    pending.delete(confirmKey(requestId, toolUseId, sessionId))
     waiter.resolve('timeout')
     return false
   }
-  waiter.timeoutId = setTimeout(() => expireReservedToolConfirm(requestId, toolUseId), remaining)
+  waiter.timeoutId = setTimeout(() => expireReservedToolConfirm(requestId, toolUseId, sessionId), remaining)
   return true
 }
 
-export function isToolConfirmCommitAllowed(requestId: string, toolUseId: string): boolean {
-  const key = confirmKey(requestId, toolUseId)
+export function isToolConfirmCommitAllowed(requestId: string, toolUseId: string, sessionId?: string): boolean {
+  const key = confirmKey(requestId, toolUseId, sessionId)
   const waiter = pending.get(key)
   if (!waiter || waiter.status !== 'committing') return false
   if (Date.now() >= waiter.deadlineAt) {
-    cancelReservedToolConfirm(requestId, toolUseId)
+    cancelReservedToolConfirm(requestId, toolUseId, sessionId)
     return false
   }
   return true
 }
 
-export function cancelReservedToolConfirm(requestId: string, toolUseId: string): boolean {
-  return settleReservedToolConfirm(requestId, toolUseId, 'cancelled')
+export function cancelReservedToolConfirm(requestId: string, toolUseId: string, sessionId?: string): boolean {
+  return settleReservedToolConfirm(requestId, toolUseId, 'cancelled', sessionId)
 }
 
 /** 提交事务在 COMMIT 前回滚时恢复原确认项，允许用户重试同一授权。 */
-export function restoreReservedToolConfirm(requestId: string, toolUseId: string): boolean {
-  const key = confirmKey(requestId, toolUseId)
+export function restoreReservedToolConfirm(requestId: string, toolUseId: string, sessionId?: string): boolean {
+  const key = confirmKey(requestId, toolUseId, sessionId)
   const waiter = pending.get(key)
   if (!waiter || waiter.status !== 'committing' || Date.now() >= waiter.deadlineAt) return false
   // 同一确认项的第二次提交是新的 attempt revision；持久 receipt 不能把
@@ -243,12 +247,12 @@ export function restoreReservedToolConfirm(requestId: string, toolUseId: string)
   return true
 }
 
-function expireReservedToolConfirm(requestId: string, toolUseId: string): boolean {
-  return settleReservedToolConfirm(requestId, toolUseId, 'timeout')
+function expireReservedToolConfirm(requestId: string, toolUseId: string, sessionId?: string): boolean {
+  return settleReservedToolConfirm(requestId, toolUseId, 'timeout', sessionId)
 }
 
-function settleReservedToolConfirm(requestId: string, toolUseId: string, outcome: 'cancelled' | 'timeout' | 'unavailable'): boolean {
-  const key = confirmKey(requestId, toolUseId)
+function settleReservedToolConfirm(requestId: string, toolUseId: string, outcome: 'cancelled' | 'timeout' | 'unavailable', sessionId?: string): boolean {
+  const key = confirmKey(requestId, toolUseId, sessionId)
   const waiter = pending.get(key)
   if (!waiter || waiter.status !== 'committing') return false
   clearTimeout(waiter.timeoutId)
@@ -260,8 +264,8 @@ function settleReservedToolConfirm(requestId: string, toolUseId: string, outcome
 
 const cancelControllers = new Map<string, AbortController>()
 
-export function registerToolCancel(requestId: string, toolUseId: string): AbortSignal {
-  const key = confirmKey(requestId, toolUseId)
+export function registerToolCancel(requestId: string, toolUseId: string, sessionId?: string): AbortSignal {
+  const key = confirmKey(requestId, toolUseId, sessionId)
   const prev = cancelControllers.get(key)
   prev?.abort()
   const ac = new AbortController()
@@ -269,13 +273,13 @@ export function registerToolCancel(requestId: string, toolUseId: string): AbortS
   return ac.signal
 }
 
-export function signalToolCancel(requestId: string, toolUseId: string): void {
-  const key = confirmKey(requestId, toolUseId)
+export function signalToolCancel(requestId: string, toolUseId: string, sessionId?: string): void {
+  const key = confirmKey(requestId, toolUseId, sessionId)
   cancelControllers.get(key)?.abort()
 }
 
-export function clearToolCancel(requestId: string, toolUseId: string): void {
-  const key = confirmKey(requestId, toolUseId)
+export function clearToolCancel(requestId: string, toolUseId: string, sessionId?: string): void {
+  const key = confirmKey(requestId, toolUseId, sessionId)
   cancelControllers.delete(key)
 }
 
@@ -283,7 +287,7 @@ export function cancelAllToolConfirmsForRequest(requestId: string): void {
   const prefix = `${requestId}\0`
   for (const [key, w] of pending) {
     if (!key.startsWith(prefix)) continue
-    if (w.status === 'committing') { const [requestId, toolUseId] = key.split('\0'); cancelReservedToolConfirm(requestId!, toolUseId!); continue }
+    if (w.status === 'committing') { cancelReservedToolConfirm(w.requestId, w.toolUseId, w.sessionId); continue }
     clearTimeout(w.timeoutId)
     pending.delete(key)
     w.resolve('cancelled')
@@ -299,7 +303,7 @@ export function cancelAllToolsForRequest(requestId: string): void {
 
 export function cancelAllPendingToolConfirms(): void {
   for (const [key, w] of pending) {
-    if (w.status === 'committing') { const [requestId, toolUseId] = key.split('\0'); cancelReservedToolConfirm(requestId!, toolUseId!); continue }
+    if (w.status === 'committing') { cancelReservedToolConfirm(w.requestId, w.toolUseId, w.sessionId); continue }
     clearTimeout(w.timeoutId)
     pending.delete(key)
     w.resolve('cancelled')

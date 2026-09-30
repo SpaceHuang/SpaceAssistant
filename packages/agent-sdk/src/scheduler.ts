@@ -39,14 +39,6 @@ function resourcesConflict(a: string, b: string): boolean {
   return left.startsWith(`${right}/`) || right.startsWith(`${left}/`)
 }
 
-/** Core 对 Runtime park 的最小判定：只有没有其它可运行节点时才能让出父租约。 */
-export function canParkInvocation(activeNodeCount: number, waitingApprovalCount: number): boolean {
-  return Number.isInteger(activeNodeCount)
-    && Number.isInteger(waitingApprovalCount)
-    && activeNodeCount > 0
-    && waitingApprovalCount >= activeNodeCount
-}
-
 /** Dependency scheduler with an injected per-invocation execution bound. */
 export class ToolScheduler {
   constructor(private readonly options: {
@@ -185,21 +177,15 @@ export class ToolScheduler {
 }
 
 export type RuntimeLease = { runtimeId: string; invocationId: string; generation: number; release: () => void }
-export type ParkHandle = { runtimeId: string; invocationId: string; generation: number; checkpoint: unknown }
 
 export class InvocationRuntime {
   private generation = 0
   private active = new Map<string, number>()
-  private parked = new Map<string, ParkHandle>()
-  constructor(readonly runtimeId: string, private readonly options: { maxParkedTurns?: number } = {}) {
-    if (options.maxParkedTurns !== undefined && (!Number.isInteger(options.maxParkedTurns) || options.maxParkedTurns < 1)) {
-      throw new Error('maxParkedTurns must be positive')
-    }
-  }
+  constructor(readonly runtimeId: string) {}
 
   acquireLease(invocationId: string): RuntimeLease {
     const generation = ++this.generation
-    if (this.active.has(invocationId) || this.parked.has(invocationId)) throw new Error('invocation already leased')
+    if (this.active.has(invocationId)) throw new Error('invocation already leased')
     this.active.set(invocationId, generation)
     let released = false
     return { runtimeId: this.runtimeId, invocationId, generation, release: () => {
@@ -207,30 +193,5 @@ export class InvocationRuntime {
       released = true
       if (this.active.get(invocationId) === generation) this.active.delete(invocationId)
     } }
-  }
-
-  park(invocationId: string, lease: RuntimeLease, checkpoint: unknown = {}): ParkHandle | undefined {
-    if (this.active.get(invocationId) !== lease.generation || lease.runtimeId !== this.runtimeId || lease.invocationId !== invocationId || lease.generation <= 0) return undefined
-    const maxParkedTurns = this.options.maxParkedTurns ?? 32
-    if (this.parked.size >= maxParkedTurns) return undefined
-    const handle = { runtimeId: this.runtimeId, invocationId, generation: lease.generation, checkpoint }
-    this.parked.set(invocationId, handle)
-    this.active.delete(invocationId)
-    return handle
-  }
-
-  resume(handle: ParkHandle): boolean {
-    const current = this.parked.get(handle.invocationId)
-    if (!current || current.runtimeId !== this.runtimeId || current.generation !== handle.generation) return false
-    this.parked.delete(handle.invocationId)
-    return true
-  }
-
-  /** 恢复时重新取得运行租约；旧 park handle 只能消费一次。 */
-  resumeLease(handle: ParkHandle): RuntimeLease | undefined {
-    const current = this.parked.get(handle.invocationId)
-    if (!current || current.runtimeId !== this.runtimeId || current.generation !== handle.generation) return undefined
-    this.parked.delete(handle.invocationId)
-    return this.acquireLease(handle.invocationId)
   }
 }

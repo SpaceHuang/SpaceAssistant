@@ -26,6 +26,10 @@ import { getBundledSecurityApprovalSkill } from '../skills/bundled/securityAppro
 import { requireInvocationAnthropicRoute } from '../runtime/invocationProviderRoute'
 import { createHostedTurnHandoff } from '../runtime/hostedTurnHandoff'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
+import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
+import { readSessionTranscript } from '../database/sessionTranscript'
+import { acceptTurnContext } from '../database/acceptedTurnStorage'
+import { AGENT_TURN_TIMEOUT_ABORT_REASON } from '../../packages/agent-sdk/src/turn'
 
 /**
  * 审批执行链（P2-2，复用管家模式但**绝不取管家准入票**，评审 N8）：
@@ -320,6 +324,18 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
     })
 
     const model = deps.model ?? DEFAULT_APPROVAL_MODEL
+    const acceptedTranscript = readSessionTranscript(db, sessionId)
+    if (acceptedTranscript.status !== 'ready') throw new Error('SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED')
+    const acceptedTurn = acceptTurnContext(db, createAcceptedTurn({
+      turnId: inv.requestId,
+      requestId: inv.requestId,
+      sessionId,
+      lane: 'automation',
+      startToken: inv.requestId,
+      currentUserMessageId,
+      transcriptVersion: acceptedTranscript.version,
+      config: { lane: 'automation', model }
+    }))
     const providerRouteId = requireInvocationAnthropicRoute({
       modelId: model,
       endpoint: deps.baseUrl,
@@ -328,6 +344,8 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
 
     const { invocation, ports, agentSdk } = assembleInvocation({
       requestId: inv.requestId,
+      turnId: acceptedTurn.turnId,
+      acceptedTurn,
       // 子调用零成本档：审批推理不产生 thinking（基线 §5.4 规则 5）
       effort: 'off',
       // P7（偏差 16）：封闭只读工具集平移为按调用裁剪声明（数据化实例，白名单内容不变）
@@ -359,7 +377,7 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
       emitSessionEvent: () => undefined
     })
     const runPromise = runToolChatSession(invocation, ports, {
-      onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: ports.history!, invocationId: inv.requestId, turnId: sessionId, routeId: providerRouteId, sessionId })
+      onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: ports.history!, invocationId: acceptedTurn.turnId, turnId: acceptedTurn.turnId, acceptedTurn, sessionDb: deps.db, routeId: providerRouteId, sessionId })
     })
     runCreated = true
     // P1-4：run 收敛时置位（孤儿 run 存续期窗口由 finally 判断保持开启）；拒绝已被 race 派生分支处理
@@ -376,7 +394,7 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
     // 超时同时取消内层调用，避免孤儿 run 继续消耗
     const timeoutPromise = new Promise<{ kind: 'timeout' }>((resolve) => {
       timeoutHandle = setTimeout(() => {
-        signalChatCancel(inv.requestId)
+        signalChatCancel(acceptedTurn.turnId, AGENT_TURN_TIMEOUT_ABORT_REASON)
         resolve({ kind: 'timeout' })
       }, inv.timeoutMs)
     })

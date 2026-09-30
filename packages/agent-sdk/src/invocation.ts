@@ -231,11 +231,11 @@ export interface AgentMcpPorts {
 export interface AgentToolRevocationPort {
   getRegisteredTool(name: string): unknown
   onRevocation(listener: AgentToolRevocationListener): AgentToolRevocationUnsubscribe
-  isToolRevoked(requestId: string, toolName: string): boolean
+  isToolRevoked(requestId: string, toolName: string, executionId?: string): boolean
 }
 
 export interface AgentToolRevocationListener {
-  (event: { requestId: string; lane: string; toolName: string }): void
+  (event: { requestId: string; executionId: string; lane: string; toolName: string }): void
 }
 
 export interface AgentToolRevocationUnsubscribe {

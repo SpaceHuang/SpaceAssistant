@@ -60,7 +60,7 @@ describe('run_lark_cli planned registration', () => {
   it('Feishu run_lark_cli 在 permit 已消费但 claim 等待时撤权，不进入 CLI runner', async () => {
     const { context, run } = setup()
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest('r', 'feishu')
+    revocations.registerToolRevocationRequest('r', 'feishu', 'turn')
     const ledger = new InMemoryExecutionAdmissionCoordinator()
     let reachedClaim!: () => void
     let releaseClaim!: () => void
@@ -110,7 +110,7 @@ describe('run_lark_cli planned registration', () => {
       return runnerResult
     })
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest('r', 'feishu')
+    revocations.registerToolRevocationRequest('r', 'feishu', 'turn')
     const ledger = new InMemoryExecutionAdmissionCoordinator()
     const dispatch = createPermitBoundCoordinatorDispatch({
       requestId: 'r', turnId: 'turn', canonicalInput: { args: ['doc', 'get'] },
@@ -136,7 +136,7 @@ describe('run_lark_cli planned registration', () => {
   it('Hosted Feishu SDK turn 在 claim 前撤权时不调用生产 RegisteredTool executor', async () => {
     const { context, run } = setup()
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest('r', 'feishu')
+    revocations.registerToolRevocationRequest('r', 'feishu', 'turn')
     const ledger = new InMemoryExecutionAdmissionCoordinator()
     let reachedClaim!: () => void
     let releaseClaim!: () => void
@@ -208,7 +208,7 @@ describe('run_lark_cli planned registration', () => {
       return { exitCode: 143, stdout: '', stderr: 'terminated', timedOut: false }
     })
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest('r', 'feishu')
+    revocations.registerToolRevocationRequest('r', 'feishu', 'turn')
     const admission = new InMemoryExecutionAdmissionCoordinator()
     const registered = createRunLarkCliRegisteredTool(runLarkCliExecutor)
     const registry = new TypedToolRegistry()

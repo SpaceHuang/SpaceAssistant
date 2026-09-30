@@ -433,7 +433,7 @@ describe('createAgentSdkSafetyPolicy', () => {
     })
   })
 
-  it('finalizes the registered read confirmation exactly once before attaching its structural permit', () => {
+  it('finalizes a user fallback approval even when the original decision asked the approval agent', async () => {
     const registry = new ReadConfirmationRegistry({ now: () => 10 })
     const input = { path: '/tmp/approved.txt' }
     const mapping = [{ factId: 'fact-/tmp/approved.txt', decisionRuleId: 'human' }]
@@ -449,14 +449,26 @@ describe('createAgentSdkSafetyPolicy', () => {
       }
     })
     const gateResult = {
-      ...result({ type: 'require-confirm', ruleId: 'human', answerer: 'user', riskLevel: 'medium', facts, memoryTiers: [], timeoutMs: 1000 }),
+      ...result({ type: 'require-confirm', ruleId: 'human', answerer: 'agent', riskLevel: 'medium', facts, memoryTiers: [], timeoutMs: 1000 }),
       readPathFact: { normalizedPath: input.path, zone: 'sensitive-file' as const, targetKind: 'file' as const },
       readTargetMapping: mapping
     }
     const args = { ...baseArgs, toolName: 'read_file', toolInput: input, requestId: binding.requestId, toolUseId: binding.toolCallId } as ToolCallGateArgs
-    handoff.onConfirmed?.(binding, gateResult, args)
+    const policy = createAgentSdkSafetyPolicy({
+      resolveGateArgs: async () => args,
+      evaluateGate: async () => gateResult,
+      ...handoff
+    })
+    const confirmedBinding = {
+      ...binding,
+      inputSnapshotHash: createHash('sha256').update(JSON.stringify(input)).digest('hex'),
+      authorizationVersion: 'policy-v1'
+    }
+    await expect(policy.evaluate(confirmedBinding)).resolves.toMatchObject({ kind: 'ask', answerer: 'agent' })
+    markAgentSdkSafetyDecisionConfirmed(policy, confirmedBinding, 'user')
     const attached = contexts.get(JSON.stringify([binding.invocationId, binding.toolCallId]))?.readExecutionPermit
     expect(attached).toMatchObject({ requestId: binding.requestId, toolUseId: binding.toolCallId, toolName: 'read_file', targets: mapping.map((target) => expect.objectContaining(target)) })
+    await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toEqual({ kind: 'allow', authorizationVersion: 'policy-v1' })
     expect(registry.stats().activeEntries).toBe(0)
   })
 

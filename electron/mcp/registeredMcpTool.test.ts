@@ -47,7 +47,7 @@ describe('createRegisteredMcpTool', () => {
     const invocationId = 'mcp-invocation'
     const toolName = 'mcp_docs_search'
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest(requestId, 'desktop')
+    revocations.registerToolRevocationRequest(requestId, 'desktop', 'mcp-turn')
     const admission = new InMemoryExecutionAdmissionCoordinator()
     const permits = new InMemorySafetyPermitStore()
     const execute = vi.fn(async (_input: Record<string, unknown>, context: { signal: AbortSignal }) => {
@@ -117,7 +117,7 @@ describe('createRegisteredMcpTool', () => {
     const requestId = 'mcp-hosted-claim-request'
     const toolName = 'mcp_docs_search'
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest(requestId, 'desktop')
+    revocations.registerToolRevocationRequest(requestId, 'desktop', 'mcp-hosted-claim-turn')
     const admissionLedger = new InMemoryExecutionAdmissionCoordinator()
     let reachedClaim!: () => void
     let releaseClaim!: () => void

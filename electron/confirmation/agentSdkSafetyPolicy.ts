@@ -149,7 +149,7 @@ export function createAgentSdkStructuralPermitHandoff(input: {
         })
       }
     },
-    onConfirmed(binding, result, args) {
+    onConfirmed(binding, result, args, answerer = 'user') {
       const call = { invocationId: binding.invocationId, toolCallId: binding.toolCallId, toolName: args.toolName, input: args.toolInput }
       if (result.decision.type !== 'require-confirm') return
       const readPermit = finalizeReadConfirmation({
@@ -158,7 +158,7 @@ export function createAgentSdkStructuralPermitHandoff(input: {
         requestId: binding.requestId,
         toolUseId: binding.toolCallId,
         outcome: 'approved',
-        answerer: result.decision.answerer,
+        answerer,
         readPathFact: result.readPathFact,
         feishuMediaFact: result.feishuMediaFact,
         approvedTargets: result.readTargetMapping

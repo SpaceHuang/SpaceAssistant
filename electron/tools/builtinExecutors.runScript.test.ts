@@ -78,7 +78,7 @@ describe('run_script language dispatch', () => {
 
   it('script claim barrier 中授权版本变化时不会启动进程执行器', async () => {
     const registry = new ToolRevocationRegistry()
-    registry.registerToolRevocationRequest('script-auth-version', 'desktop')
+    registry.registerToolRevocationRequest('script-auth-version', 'desktop', 'script-auth-version')
     const ledger = new InMemoryExecutionAdmissionCoordinator()
     let reachedClaim!: () => void
     let releaseClaim!: () => void
@@ -123,7 +123,7 @@ describe('run_script language dispatch', () => {
 
   it('script revoke after permit consume and before admission claim prevents process executor entry', async () => {
     const registry = new ToolRevocationRegistry()
-    registry.registerToolRevocationRequest('script-claim', 'desktop')
+    registry.registerToolRevocationRequest('script-claim', 'desktop', 'turn')
     const ledger = new InMemoryExecutionAdmissionCoordinator()
     let reachedClaim!: () => void
     let releaseClaim!: () => void
@@ -167,7 +167,7 @@ describe('run_script language dispatch', () => {
 
   it('script revoke after dispatch claim aborts the execution lease signal and settles', async () => {
     const registry = new ToolRevocationRegistry()
-    registry.registerToolRevocationRequest('script-running', 'desktop')
+    registry.registerToolRevocationRequest('script-running', 'desktop', 'turn')
     const admission = new InMemoryExecutionAdmissionCoordinator()
     const input = { language: 'python', code: 'print("running")' }
     const execution = vi.fn(async (_input: unknown, context: { signal: AbortSignal }) => {

@@ -26,7 +26,10 @@ type PreparedRecord = {
   handle: Awaited<ReturnType<RegisteredTool['begin']>>
   runtimeContext: unknown
   signal: AbortSignal
+  disposeSignal(): void
+  unregisterActiveCancellation?: () => void
   binding: PermitBinding
+  cleaned?: boolean
 }
 
 /** Adapt the host's private RegisteredTool plans to the SDK's prepare and permit-bound execute ports. */
@@ -53,6 +56,8 @@ export function createRegisteredAgentTurnTools(input: {
   isRevoked?(call: TurnToolCall): boolean
   subscribeRevocation?(call: TurnToolCall, onRevocation: () => void): () => void
   mapExecutionResult?(result: unknown, call: TurnToolCall): TurnToolResult
+  /** Expose the active SDK dispatch lease to the desktop's exact-identity cancel IPC. */
+  registerActiveCancellation?(call: TurnToolCall, cancel: () => void): void | (() => void) | Promise<void | (() => void)>
 }): {
   prepareTool(call: TurnToolCall, stage: ToolPreparationStage): Promise<PermitBinding>
   discardPreparedTool(call: TurnToolCall): void
@@ -64,10 +69,20 @@ export function createRegisteredAgentTurnTools(input: {
 } {
   const prepared = new Map<string, PreparedRecord>()
   const keyFor = (call: TurnToolCall) => JSON.stringify([call.invocationId, call.toolCallId])
-  const isRevoked = (call: TurnToolCall) => input.isRevoked?.(call) ?? input.toolRevocations?.isToolRevoked(input.requestId, call.toolName) ?? false
+  const cleanupPrepared = (record: PreparedRecord): void => {
+    if (record.cleaned) return
+    record.cleaned = true
+    if (record.handle.state !== 'settled' && record.handle.state !== 'failed') record.handle.fail()
+    record.handle.release()
+    record.unregisterActiveCancellation?.()
+    record.disposeSignal()
+    const key = keyFor(record.call)
+    if (prepared.get(key) === record) prepared.delete(key)
+  }
+  const isRevoked = (call: TurnToolCall) => input.isRevoked?.(call) ?? input.toolRevocations?.isToolRevoked(input.requestId, call.toolName, input.turnId) ?? false
   const subscribeRevocation = input.subscribeRevocation ?? (input.toolRevocations
     ? (call: TurnToolCall, listener: () => void) => input.toolRevocations!.onRevocation((event) => {
-        if (event.requestId === input.requestId && event.toolName === call.toolName) listener()
+        if (event.requestId === input.requestId && event.executionId === input.turnId && event.toolName === call.toolName) listener()
       })
     : undefined)
 
@@ -79,28 +94,36 @@ export function createRegisteredAgentTurnTools(input: {
       const registeredToolName = input.resolveRegisteredToolName?.(call.toolName) ?? resolveRegisteredToolName(call.toolName, input.registry)
       const registeredTool = input.registry.get(registeredToolName)
       if (!registeredTool) throw new Error(`REGISTERED_TOOL_NOT_FOUND:${call.toolName}`)
-      const signal = call.signal ?? new AbortController().signal
-      const runtimeContext = input.createExecutionContext(call)
-      const planningContext = {
-        requestId: input.requestId,
-        toolUseId: call.toolCallId,
-        signal,
-        executionContext: runtimeContext as ToolExecutionContext['runtimeContext']
-      } as Parameters<RegisteredTool['beginPlanning']>[1] & { signal: AbortSignal }
-      const planning = registeredTool.beginPlanning(call.input, planningContext)
-      const handle = await planning.result
-      if (handle.prepared.requestId !== input.requestId || handle.prepared.toolUseId !== call.toolCallId || handle.prepared.toolName !== registeredTool.name) {
-        handle.fail()
-        handle.release()
-        throw new Error('PREPARED_TOOL_IDENTITY_MISMATCH')
-      }
+      const cancelController = new AbortController()
+      const combined = combineSignals(call.signal ?? new AbortController().signal, cancelController.signal)
+      let unregisterActiveCancellation: void | (() => void) = undefined
+      let handle: Awaited<ReturnType<RegisteredTool['begin']>> | undefined
       try {
+        unregisterActiveCancellation = await input.registerActiveCancellation?.(call, () => cancelController.abort('tool-cancelled'))
+        const runtimeContext = input.createExecutionContext(call)
+        const planningContext = {
+          requestId: input.requestId,
+          toolUseId: call.toolCallId,
+          signal: combined.signal,
+          executionContext: runtimeContext as ToolExecutionContext['runtimeContext']
+        } as Parameters<RegisteredTool['beginPlanning']>[1] & { signal: AbortSignal }
+        const planning = registeredTool.beginPlanning(call.input, planningContext)
+        handle = await planning.result
+        if (combined.signal.aborted) throw new Error('REQUEST_CANCELLED')
+        if (handle.prepared.requestId !== input.requestId || handle.prepared.toolUseId !== call.toolCallId || handle.prepared.toolName !== registeredTool.name) {
+          throw new Error('PREPARED_TOOL_IDENTITY_MISMATCH')
+        }
         const binding = await createBinding(input, call, handle, stage)
-        prepared.set(key, { call: snapshotCall(call), registeredTool, handle, runtimeContext, signal, binding })
+        prepared.set(key, { call: snapshotCall(call), registeredTool, handle, runtimeContext, signal: combined.signal, disposeSignal: combined.dispose,
+          ...(unregisterActiveCancellation ? { unregisterActiveCancellation } : {}), binding })
         return binding
       } catch (error) {
-        handle.fail()
-        handle.release()
+        if (handle) {
+          if (handle.state !== 'settled' && handle.state !== 'failed') handle.fail()
+          handle.release()
+        }
+        unregisterActiveCancellation?.()
+        combined.dispose()
         throw error
       }
     }
@@ -129,9 +152,7 @@ export function createRegisteredAgentTurnTools(input: {
       record.binding = binding
       return binding
     } catch (error) {
-      record.handle.fail()
-      record.handle.release()
-      prepared.delete(key)
+      cleanupPrepared(record)
       throw error
     }
   }
@@ -140,9 +161,7 @@ export function createRegisteredAgentTurnTools(input: {
     const key = keyFor(call)
     const record = prepared.get(key)
     if (!record || !sameCall(record.call, call)) return
-    if (record.handle.state !== 'settled' && record.handle.state !== 'failed') record.handle.fail()
-    record.handle.release()
-    prepared.delete(key)
+    cleanupPrepared(record)
   }
 
   const getPreparedCall = (identity: Pick<TurnToolCall, 'invocationId' | 'toolCallId'>): TurnToolCall | undefined => {
@@ -163,7 +182,7 @@ export function createRegisteredAgentTurnTools(input: {
     update(record.runtimeContext as Record<string, unknown>)
   }
 
-  const toolExecution = createPermitBoundToolExecutionPort<TurnToolCall, TurnToolResult>({
+  const permitBoundExecution = createPermitBoundToolExecutionPort<TurnToolCall, TurnToolResult>({
     permits: input.permits,
     admission: input.admission,
     allowedPhase: 'recheck',
@@ -205,11 +224,17 @@ export function createRegisteredAgentTurnTools(input: {
         return input.mapExecutionResult?.(normalized, call) ?? mapSafeExecutionResult(normalized, call, input.resolveWorkspaceRoot?.() ?? input.workspaceRoot)
       } finally {
         combined.dispose()
-        record.handle.release()
-        prepared.delete(keyFor(call))
+        cleanupPrepared(record)
       }
     }
   })
+  const toolExecution: typeof permitBoundExecution = {
+    ...permitBoundExecution,
+    async execute(call, permitId, onDispatchClaimed) {
+      const record = prepared.get(keyFor(call))
+      return permitBoundExecution.execute(record ? { ...call, signal: record.signal } : call, permitId, onDispatchClaimed)
+    }
+  }
 
   return {
     prepareTool,

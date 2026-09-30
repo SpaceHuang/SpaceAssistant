@@ -52,8 +52,8 @@ describe('@spaceassistant/agent-sdk(纯 node,零宿主依赖)', () => {
 
   it('撤回注册表:lane 撤回只影响该 lane 登记的请求', () => {
     const registry = new ToolRevocationRegistry()
-    registry.registerToolRevocationRequest('d1', 'desktop')
-    registry.registerToolRevocationRequest('w1', 'wechat')
+    registry.registerToolRevocationRequest('d1', 'desktop', 'd1')
+    registry.registerToolRevocationRequest('w1', 'wechat', 'w1')
     expect(registry.revokeToolForLane('desktop', 'run_shell')).toBe(1)
     expect(registry.isToolRevoked('d1', 'run_shell')).toBe(true)
     expect(registry.isToolRevoked('w1', 'run_shell')).toBe(false)
@@ -61,7 +61,7 @@ describe('@spaceassistant/agent-sdk(纯 node,零宿主依赖)', () => {
 
   it('全局撤回包含 automation lane', () => {
     const registry = new ToolRevocationRegistry()
-    registry.registerToolRevocationRequest('a1', 'automation')
+    registry.registerToolRevocationRequest('a1', 'automation', 'a1')
     expect(registry.revokeToolForAllLanes('run_shell')).toBe(1)
     expect(registry.isToolRevoked('a1', 'run_shell')).toBe(true)
   })

@@ -7,16 +7,17 @@ import type { SafetyPermitStore } from '../../packages/agent-sdk/src/safetyPermi
  * so a concurrent beginDispatch loses if this revocation listener runs first.
  */
 export function bindToolRevocationToExecution(input: {
-  registry: { onRevocation(listener: (event: { requestId: string; lane: string; toolName: string }) => void): () => void }
+  registry: { onRevocation(listener: (event: { requestId: string; executionId: string; lane: string; toolName: string }) => void): () => void }
   permits: SafetyPermitStore
   admission: ExecutionAdmissionCoordinator
   prepared: { invalidate(invocationId: string): void }
   requestId: string
+  executionId?: string
   invocationId: string
   toolName: string
 }): () => void {
   return input.registry.onRevocation((event) => {
-    if (event.requestId !== input.requestId || event.toolName !== input.toolName) return
+    if (event.requestId !== input.requestId || event.executionId !== (input.executionId ?? input.requestId) || event.toolName !== input.toolName) return
     input.admission.invalidate({ requestId: input.requestId, invocationId: input.invocationId }, 'revoked')
     input.permits.invalidateBinding(input.requestId, input.invocationId, 'revoked')
     input.prepared.invalidate(input.invocationId)

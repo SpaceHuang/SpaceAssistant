@@ -57,6 +57,48 @@ describe('permit-bound ToolExecutionPort', () => {
     expect(admission.activeLeaseCount(binding.requestId)).toBe(0)
   })
 
+  it.each(['cancelled', 'revoked', 'authorization-changed'] as const)(
+    'does not enter executor when %s invalidates the claimed lease while dispatch-start is pending',
+    async (invalidation) => {
+      const permits = new InMemorySafetyPermitStore()
+      const admission = new InMemoryExecutionAdmissionCoordinator()
+      const permitId = permits.issue(binding, Date.now() + 10_000)
+      const controller = new AbortController()
+      let releaseDispatchStart!: () => void
+      let onRevocation!: () => void
+      let onAuthorizationChange!: () => void
+      let authorizationVersion = 'auth-v1'
+      const dispatchStartPending = new Promise<void>((resolve) => { releaseDispatchStart = resolve })
+      const execute = vi.fn(async () => ({ output: 'should not execute' }))
+      const port = createPermitBoundToolExecutionPort({
+        permits,
+        admission,
+        resolveExpected: async () => binding,
+        currentAuthorizationVersion: () => authorizationVersion,
+        subscribeRevocation: (_call, listener) => { onRevocation = listener; return () => undefined },
+        subscribeAuthorizationChange: (_call, listener) => { onAuthorizationChange = listener; return () => undefined },
+        execute
+      })
+
+      const pending = port.execute({ ...call, signal: controller.signal }, permitId, () => dispatchStartPending)
+      await vi.waitFor(() => expect(admission.activeLeaseCount(binding.requestId)).toBe(1))
+
+      if (invalidation === 'cancelled') controller.abort()
+      if (invalidation === 'revoked') onRevocation()
+      if (invalidation === 'authorization-changed') {
+        authorizationVersion = 'auth-v2'
+        onAuthorizationChange()
+      }
+      releaseDispatchStart()
+
+      await expect(pending).rejects.toMatchObject({ code: 'TOOL_EXECUTION_REJECTED' })
+      expect(execute).not.toHaveBeenCalled()
+      expect(admission.executorEntries).toBe(0)
+      expect(admission.closedOutcomes.get(permitId)).toBe('cancelled')
+      expect(admission.activeLeaseCount(binding.requestId)).toBe(0)
+    }
+  )
+
   it('fails before executor entry when permit consumption rejects', async () => {
     const execute = vi.fn()
     const port = createPermitBoundToolExecutionPort({

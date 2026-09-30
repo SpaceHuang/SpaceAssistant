@@ -12,7 +12,7 @@ const binding: PermitBinding = {
 describe('permit revocation bridge', () => {
   it('invalidates issued permits, prepared state and unclaimed dispatch for the revoked invocation', async () => {
     const registry = new ToolRevocationRegistry()
-    registry.registerToolRevocationRequest('req', 'automation')
+    registry.registerToolRevocationRequest('req', 'automation', 'req')
     const permits = new InMemorySafetyPermitStore()
     const admission = new InMemoryExecutionAdmissionCoordinator()
     const prepared = { invalidate: vi.fn() }
@@ -34,7 +34,7 @@ describe('permit revocation bridge', () => {
 
   it('ignores revocations for another request or capability', () => {
     const registry = new ToolRevocationRegistry()
-    registry.registerToolRevocationRequest('req', 'desktop')
+    registry.registerToolRevocationRequest('req', 'desktop', 'req')
     const permits = new InMemorySafetyPermitStore()
     const admission = new InMemoryExecutionAdmissionCoordinator()
     const prepared = { invalidate: vi.fn() }

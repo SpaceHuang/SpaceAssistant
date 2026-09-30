@@ -138,12 +138,12 @@ describe('createAgentSdkConfirmationPort', () => {
         context: { ...context, facts: { ...facts, toolName: 'write_file', actionClass: 'write' } },
         signal
       })
-      await vi.waitFor(() => expect(isPendingConfirm(requestId, toolCallId)).toBe(true))
+      await vi.waitFor(() => expect(isPendingConfirm(requestId, toolCallId, 'session-1')).toBe(true))
 
       chatCancels.signalChatCancel(requestId)
 
       await expect(pending).resolves.toMatchObject({ kind: 'cancelled', cause: 'cancelled' })
-      expect(isPendingConfirm(requestId, toolCallId)).toBe(false)
+      expect(isPendingConfirm(requestId, toolCallId, 'session-1')).toBe(false)
     } finally {
       chatCancels.clear(requestId)
     }

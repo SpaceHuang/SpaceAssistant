@@ -70,7 +70,7 @@ describe('workDirExecutors', () => {
     const tool = createSwitchWorkDirRegisteredTool(switchWorkDirExecutor)
     const executor = vi.spyOn(switchWorkDirExecutor, 'execute').mockResolvedValue({ success: true })
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest('req-switch', 'feishu')
+    revocations.registerToolRevocationRequest('req-switch', 'feishu', 'req-switch')
     const ledger = new InMemoryExecutionAdmissionCoordinator()
     let reachedClaim!: () => void
     let releaseClaim!: () => void

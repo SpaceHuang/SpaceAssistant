@@ -47,7 +47,7 @@ describe('WeChat outbound prepared registrations', () => {
       })
       const registered = adapters.find((tool) => tool.name === toolName)!
       const revocations = new ToolRevocationRegistry()
-      revocations.registerToolRevocationRequest(requestId, 'wechat')
+      revocations.registerToolRevocationRequest(requestId, 'wechat', `turn-${toolName}-version`)
       const ledger = new InMemoryExecutionAdmissionCoordinator()
       let reachedClaim!: () => void
       let releaseClaim!: () => void
@@ -202,7 +202,7 @@ describe('WeChat outbound prepared registrations', () => {
   it('Hosted WeChat reply claim 后撤权且 acknowledgement 晚到时不重放结果', async () => {
     const runtime = makeRuntime()
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest('request-reply-revoke', 'wechat')
+    revocations.registerToolRevocationRequest('request-reply-revoke', 'wechat', 'turn-reply-revoke')
     let observedSignal: AbortSignal | undefined
     let enteredReply!: () => void
     const atReply = new Promise<void>((resolve) => { enteredReply = resolve })
@@ -270,7 +270,7 @@ describe('WeChat outbound prepared registrations', () => {
   it('Hosted WeChat send claim 后撤权且 acknowledgement 晚到时不重放结果', async () => {
     const runtime = makeRuntime()
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest('request-send-revoke', 'wechat')
+    revocations.registerToolRevocationRequest('request-send-revoke', 'wechat', 'turn-send-revoke')
     let observedSignal: AbortSignal | undefined
     let enteredSend!: () => void
     const atSend = new Promise<void>((resolve) => { enteredSend = resolve })
@@ -341,7 +341,7 @@ describe('WeChat outbound prepared registrations', () => {
       const invocationId = `inv-${toolName}-unknown`
       const turnId = `turn-${toolName}-unknown`
       const revocations = new ToolRevocationRegistry()
-      revocations.registerToolRevocationRequest(requestId, 'wechat')
+      revocations.registerToolRevocationRequest(requestId, 'wechat', turnId)
       let executionSignal!: AbortSignal
       let enteredOutbound!: () => void
       const atOutbound = new Promise<void>((resolve) => { enteredOutbound = resolve })

@@ -176,7 +176,7 @@ import { buildCommandRetryKey, shouldStopToolRetry } from './toolErrorRetryPolic
 import type { ContextMeter } from '../src/shared/contextMeterService'
 import { buildRequestHeaderPayload } from '../src/shared/requestContext'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
-import { bindHostedRequiredUserMessage, createHostedModelRequest } from './runtime/hostedModelRequest'
+import { bindHostedRequiredUserMessage, canonicalHostedRequiredUserMessage, createHostedModelRequest } from './runtime/hostedModelRequest'
 
 export const DESKTOP_TOOL_LOOP_MAX_ROUNDS = 500
 
@@ -249,7 +249,7 @@ export type RunToolChatSessionArgs = {
   hostHistory?: import('../packages/agent-sdk/src/history').HistoryPort
   appendHistoryEvents?: (events: readonly Readonly<{ kind: HistoryEvent['kind']; payload: unknown }>[]) => Promise<void>
   sessionId: string
-  /** 本回合真实 Turn ID（C17）：桌面 / 远程 / butler 三个调用方各传现成值；缺省回退 sessionId 占位（桌面包装层仍会覆写台账 payload）。 */
+  /** 本回合规范 Turn ID；迁移期旧调用缺省时以 requestId 作为兼容 stream ID。 */
   turnId?: string
   /** 冻结执行配置里的 LLM 服务 ID（DIM3：同模型跨服务分开统计）。 */
   llmServiceId?: string
@@ -575,16 +575,17 @@ function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): R
 
 export async function runToolChatSession(invocation: AgentInvocation, ports: RunToolChatSessionPorts, options: Pick<RunToolChatSessionArgs, 'onHostedTurnHandoff'> = {}): Promise<AgentInvocationResult> {
   const args = { ...expandInvocation(invocation, ports), ...options, hostHistory: ports.hostHistory }
-  const historyWriter = args.history ? new InvocationHistoryWriter(args.history as never, { invocationId: args.requestId, turnId: args.turnId ?? args.sessionId }) : undefined
+  const executionId = args.turnId ?? args.requestId
+  const historyWriter = args.history ? new InvocationHistoryWriter(args.history as never, { invocationId: executionId, turnId: executionId }) : undefined
   const appendHistoryEvents = async (events: readonly Readonly<{ kind: HistoryEvent['kind']; payload: unknown }>[]): Promise<void> => {
     if (!historyWriter) return
     await historyWriter.append(events)
   }
   if (historyWriter && args.history) args.hostHistory = createHostedInvocationHistory(historyWriter, args.history)
   const invocationLeaseState = ports.invocationRuntime
-    ? { current: ports.invocationRuntime.acquireLease(args.requestId) }
+    ? { current: ports.invocationRuntime.acquireLease(executionId) }
     : undefined
-  const chatSignal = registerChatCancel(args.requestId)
+  const chatSignal = registerChatCancel(executionId)
   // sessionId→活跃流反向登记：供 action.session.status/list 判定会话运行中（需求 §9.4，
   // 与下方 finally 的 clearSessionActiveStream 成对、按 requestId 粒度删除，重入安全）
   registerSessionActiveStream(args.sessionId, args.requestId)
@@ -594,7 +595,7 @@ export async function runToolChatSession(invocation: AgentInvocation, ports: Run
         ? 'feishu'
         : 'wechat'
       : 'desktop')
-  registerToolRevocationRequest(args.requestId, requestLane)
+  registerToolRevocationRequest(args.requestId, requestLane, executionId)
   let mcpConnectionManager: McpConnectionManager | undefined
   const getMcpConnectionManager = (): McpConnectionManager => {
     if (!mcpConnectionManager) {
@@ -668,7 +669,7 @@ export async function runToolChatSession(invocation: AgentInvocation, ports: Run
     invocationLeaseState?.current?.release()
     // 中2（评审复验）：internal/hidden 会话（审批 Agent / automation）的用量不进统计
     args.hostUsage?.recordTurnSummary?.({
-      turnId: args.turnId ?? args.sessionId,
+      turnId: args.turnId ?? args.requestId,
       sessionId: args.sessionId,
       outcome: turnOutcome,
       counts: turnUsageStats,
@@ -678,10 +679,10 @@ export async function runToolChatSession(invocation: AgentInvocation, ports: Run
     if (chatSignal.aborted) {
       invocation.events.notify?.({ kind: 'request-all-cancelled', requestId: args.requestId })
     }
-    clearChatCancel(args.requestId)
+    clearChatCancel(executionId)
     clearSessionActiveStream(args.sessionId, args.requestId)
-    clearToolRevocationRequest(args.requestId)
-    clearRequest(args.requestId)
+    clearToolRevocationRequest(args.requestId, executionId)
+    clearRequest(args.sessionId, args.requestId)
     await mcpConnectionManager?.shutdown().catch(() => undefined)
   }
 }
@@ -732,8 +733,8 @@ async function runToolChatSessionInner(
     hasImageAttachments,
     turnUsageStats
   } = args
-  // 台账事件与统计写入共用的 Turn ID：真实 turnId 优先，缺省回退 sessionId（现状占位）。
-  const eventTurnId = args.turnId ?? sessionId
+  // 台账事件与统计写入共用 Turn ID；requestId 仅供未迁移的旧调用兼容。
+  const eventTurnId = args.turnId ?? args.requestId
   const contextWindowId = args.windowId ?? requestId
   const apiKey = await getApiKey()
   if (!apiKey) {
@@ -991,9 +992,9 @@ async function runToolChatSessionInner(
       const requiredUserMessage = args.currentUserMessageId
         ? messagesStripped.find((message) => (message as Anthropic.MessageParam & { id?: string }).id === args.currentUserMessageId)
         : undefined
-      const [canonicalRequiredUserMessage] = requiredUserMessage
-        ? toCanonicalModelMessages([requiredUserMessage as unknown as import('../src/shared/api').ClaudeChatMessageWithBlocks])
-        : []
+      const canonicalRequiredUserMessage = requiredUserMessage
+        ? canonicalHostedRequiredUserMessage(requiredUserMessage as unknown as ClaudeContentBlockMessage)
+        : undefined
       await appendCanonicalHistory([{
         kind: 'invocation-context-committed',
         payload: {
@@ -1038,7 +1039,7 @@ async function runToolChatSessionInner(
         signal: chatSignal
       })
       const requiredUserMessage = args.currentUserMessageId
-        ? bindHostedRequiredUserMessage({ id: args.currentUserMessageId, originalMessages: invocationBaseMessages, requestMessages: canonicalRequest.messages })
+        ? bindHostedRequiredUserMessage({ id: args.currentUserMessageId, originalMessages: messagesStripped as unknown as ClaudeContentBlockMessage[], requestMessages: canonicalRequest.messages })
         : undefined
       if (args.currentUserMessageId && !requiredUserMessage) {
         throw new HostedTurnHandoffError(new Error('HOSTED_REQUIRED_USER_NOT_IN_REQUEST'))

@@ -39,8 +39,8 @@ export class ChatCancelRegistry {
     return ac.signal
   }
 
-  signalChatCancel(requestId: string): void {
-    this.chatCancelControllers.get(requestId)?.abort()
+  signalChatCancel(requestId: string, reason?: unknown): void {
+    this.chatCancelControllers.get(requestId)?.abort(reason)
     ;(this.deps.cancelToolConfirmsForRequest ?? cancelAllToolConfirmsForRequest)(requestId)
     ;(this.deps.cancelToolsForRequest ?? cancelAllToolsForRequest)(requestId)
   }
@@ -71,8 +71,8 @@ export function registerChatCancel(requestId: string): AbortSignal {
 }
 
 /** @deprecated 兼容转发(偏差 18)。 */
-export function signalChatCancel(requestId: string): void {
-  getDefaultAgentRuntime().chatCancels.signalChatCancel(requestId)
+export function signalChatCancel(requestId: string, reason?: unknown): void {
+  getDefaultAgentRuntime().chatCancels.signalChatCancel(requestId, reason)
 }
 
 /** @deprecated 兼容转发(偏差 18)。 */

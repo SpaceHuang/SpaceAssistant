@@ -156,9 +156,8 @@ export function registerSessionRun(sessionId: string, requestId: string, turnId?
 
 export function finishSessionRun(sessionId: string, requestId: string, assistantMessageId?: string): void {
   // Core projection 已负责 assistant 的 checkpoint/finalize；结束运行索引不再触发 renderer DB flush。
-  void sessionId
   void assistantMessageId
-  pendingConfirmStore.removeAllForRequest(requestId)
+  pendingConfirmStore.removeAllForRequest(requestId, sessionId)
   unregisterRunRequest(requestId)
 }
 

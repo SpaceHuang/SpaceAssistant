@@ -218,7 +218,7 @@ describe('toolkit prepared registrations', () => {
     const typed = new TypedToolRegistry()
     typed.register(createToolkitCallTool(capabilityRegistry))
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest('toolkit-revoke-request', 'desktop')
+    revocations.registerToolRevocationRequest('toolkit-revoke-request', 'desktop', 'toolkit-revoke-request')
     const permits = new InMemorySafetyPermitStore()
     const admission = new InMemoryExecutionAdmissionCoordinator()
     const tools = createRegisteredAgentTurnTools({

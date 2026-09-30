@@ -270,7 +270,7 @@ describe('browserExecutor', () => {
     const admission = new InMemoryExecutionAdmissionCoordinator()
     const permits = new InMemorySafetyPermitStore()
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest(requestId, 'desktop')
+    revocations.registerToolRevocationRequest(requestId, 'desktop', requestId)
     const registry = new TypedToolRegistry()
     registry.register(createBrowserRegisteredTool(browserExecutor))
     const tools = createRegisteredAgentTurnTools({

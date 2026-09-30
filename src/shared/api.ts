@@ -438,7 +438,7 @@ export type SpaceAssistantApi = {
   sessionOnCreated: (cb: (data: { session: Session }) => void) => () => void
 
   toolConfirmResponse: (payload: ToolConfirmResponsePayload) => Promise<ToolConfirmResponseResult>
-  toolCancel: (payload: { requestId: string; toolUseId: string }) => Promise<void>
+  toolCancel: (payload: { requestId: string; toolUseId: string; sessionId: string; turnId: string }) => Promise<void>
   shellOpenTerminal: (payload: { cwd: string }) => Promise<{ ok: true } | { ok: false; error: string }>
   shellManageTrustedCommands: (
     payload: ShellManageTrustedCommandsAction

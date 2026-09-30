@@ -424,7 +424,7 @@ export function ChatView() {
       const pending = sessionId ? pendingConfirmStore.find(sessionId, toolUseId) : undefined
       const requestId = pending?.requestId ?? streamingRequestId
       if (!requestId) return
-      pendingConfirmStore.respond(requestId, toolUseId, approved, options)
+      pendingConfirmStore.respond(requestId, toolUseId, approved, options, pending?.sessionId ?? sessionId ?? undefined)
       dispatch(setConfirmFocusToolUseId(null))
     },
     [dispatch, sessionId, streamingRequestId]
@@ -434,10 +434,12 @@ export function ChatView() {
     (toolUseId: string) => {
       const pending = sessionId ? pendingConfirmStore.find(sessionId, toolUseId) : undefined
       const requestId = pending?.requestId ?? streamingRequestId
-      if (!requestId) return
-      void window.api.toolCancel({ requestId, toolUseId })
+      const ownerSessionId = pending?.sessionId ?? sessionId
+      const turnId = ownerSessionId ? runningSessions[ownerSessionId]?.turnId : undefined
+      if (!requestId || !ownerSessionId || !turnId) return
+      void window.api.toolCancel({ requestId, toolUseId, sessionId: ownerSessionId, turnId })
     },
-    [sessionId, streamingRequestId]
+    [sessionId, streamingRequestId, runningSessions]
   )
 
   const abort = useCallback(() => {

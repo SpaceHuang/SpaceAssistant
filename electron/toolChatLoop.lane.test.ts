@@ -190,11 +190,11 @@ describe('runToolChatSession lane 穿透（偏差 21：MCP 仅 desktop lane 注�
           })
       }
       const handoff = createHostedTurnHandoff({
-        agentSdk: hostedAgentSdk as never, history: ports.history!, invocationId: invocation.trace.requestId,
+        agentSdk: hostedAgentSdk as never, history: ports.history!, invocationId: invocation.trace.turnId,
         turnId: invocation.trace.turnId, routeId: providerRouteId
       })
       const result = await runToolChatSession(invocation, ports, { onHostedTurnHandoff: handoff })
-      const history = await ports.history!.read(requestId)
+      const history = await ports.history!.read(invocation.trace.turnId)
       return { result, history, tools: capturedTools.flatMap((tools) => tools.map((tool) => tool.name)), requestMessages }
     } finally {
       setDefaultAgentRuntime(previousRuntime)

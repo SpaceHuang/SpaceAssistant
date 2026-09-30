@@ -39,8 +39,8 @@ export function createPermitBoundCoordinatorDispatch(input: {
   initialFactsHash?: string
   recheck?: () => Promise<{ allowed: boolean; authorizationVersion: string; targetVersion: string; factsHash: string }>
   toolRevocations: {
-    onRevocation(listener: (event: { requestId: string; lane: string; toolName: string }) => void): () => void
-    isToolRevoked(requestId: string, toolName: string): boolean
+    onRevocation(listener: (event: { requestId: string; executionId: string; lane: string; toolName: string }) => void): () => void
+    isToolRevoked(requestId: string, toolName: string, executionId?: string): boolean
   }
   admission?: ExecutionAdmissionCoordinator
   permits?: SafetyPermitStore
@@ -95,12 +95,12 @@ export function createPermitBoundCoordinatorDispatch(input: {
     let revokedBeforeClaim = false
     const removeRevocationBridge = bindToolRevocationToExecution({
       registry: input.toolRevocations, permits, admission, prepared: preparedStore,
-      requestId: input.requestId, invocationId: prepared.invocationId, toolName: prepared.toolName
+      requestId: input.requestId, executionId: input.turnId, invocationId: prepared.invocationId, toolName: prepared.toolName
     })
     const removeRevocationCheck = input.toolRevocations.onRevocation((event) => {
-      if (event.requestId === input.requestId && event.toolName === prepared.toolName) revokedBeforeClaim = true
+      if (event.requestId === input.requestId && event.executionId === input.turnId && event.toolName === prepared.toolName) revokedBeforeClaim = true
     })
-    if (input.toolRevocations.isToolRevoked(input.requestId, prepared.toolName)) revokedBeforeClaim = true
+    if (input.toolRevocations.isToolRevoked(input.requestId, prepared.toolName, input.turnId)) revokedBeforeClaim = true
     const onAbort = () => {
       admission.invalidate({ requestId: input.requestId, invocationId: prepared.invocationId }, 'cancelled')
       permits.invalidateBinding(input.requestId, prepared.invocationId, 'cancelled')

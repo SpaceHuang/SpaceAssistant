@@ -105,6 +105,19 @@ export function createPermitBoundToolExecutionPort<TCall extends PermitBoundTool
           throw error
         }
 
+        // Dispatch-start projection may be asynchronous (for example, a History write).
+        // Revocation, authorization changes, or cancellation can invalidate the claimed
+        // lease while it is pending, so recheck immediately before the executor boundary.
+        if (dispatch.signal.aborted) {
+          dispatch.lease.close('cancelled')
+          const reason: ToolExecutionRejectReason = dispatch.signal.reason === 'revoked'
+            ? 'REVOKED'
+            : dispatch.signal.reason === 'authorization-changed'
+              ? 'AUTHORIZATION_STALE'
+              : 'CANCELLED'
+          throw new ToolExecutionRejectedError(reason)
+        }
+
         dispatch.lease.markEntered()
         let outcome: 'completed' | 'failed' | 'cancelled' | 'unknown-after-dispatch' = 'unknown-after-dispatch'
         try {

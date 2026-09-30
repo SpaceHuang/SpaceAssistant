@@ -19,7 +19,7 @@ const allowPolicy = (authorizationVersion = 'rule-v1') => ({ evaluate: async () 
 
 function setup() {
   const toolRevocations = new ToolRevocationRegistry()
-  toolRevocations.registerToolRevocationRequest('req', 'desktop')
+  toolRevocations.registerToolRevocationRequest('req', 'desktop', 'turn')
   const tool = definePlannedTool({
     name: 'lookup', parseInput: (raw) => raw as { query: string },
     plan: async (input) => ({ query: input.query }),
@@ -270,7 +270,7 @@ describe('permit-bound coordinator dispatch adapter', () => {
 
   it('真实 WeChat outbound adapter 在 permit consume 后、claim 前撤权时不发送消息', async () => {
     const toolRevocations = new ToolRevocationRegistry()
-    toolRevocations.registerToolRevocationRequest('wechat-req', 'wechat')
+    toolRevocations.registerToolRevocationRequest('wechat-req', 'wechat', 'wechat-turn')
     const ledger = new InMemoryExecutionAdmissionCoordinator()
     let reachedClaim!: () => void
     let releaseClaim!: () => void
@@ -322,7 +322,7 @@ describe('permit-bound coordinator dispatch adapter', () => {
 
   it('真实 WeChat outbound adapter 在 claim 后撤权并返回晚到确认时按未知结果关闭租约', async () => {
     const toolRevocations = new ToolRevocationRegistry()
-    toolRevocations.registerToolRevocationRequest('wechat-live-req', 'wechat')
+    toolRevocations.registerToolRevocationRequest('wechat-live-req', 'wechat', 'wechat-live-turn')
     const ledger = new InMemoryExecutionAdmissionCoordinator()
     let reachedExecutor!: () => void
     const atExecutor = new Promise<void>((resolve) => { reachedExecutor = resolve })
@@ -368,7 +368,7 @@ describe('permit-bound coordinator dispatch adapter', () => {
 
   it('真实 browser prepared adapter 在 permit consume 后、claim 前撤权时不进入浏览器 executor', async () => {
     const toolRevocations = new ToolRevocationRegistry()
-    toolRevocations.registerToolRevocationRequest('browser-req', 'desktop')
+    toolRevocations.registerToolRevocationRequest('browser-req', 'desktop', 'browser-turn')
     const ledger = new InMemoryExecutionAdmissionCoordinator()
     let reachedClaim!: () => void
     let releaseClaim!: () => void
@@ -462,7 +462,7 @@ describe('permit-bound coordinator dispatch adapter', () => {
 
   it('真实 browser prepared adapter 在 claim 后撤权并收到晚到结果时按未知结果关闭租约', async () => {
     const toolRevocations = new ToolRevocationRegistry()
-    toolRevocations.registerToolRevocationRequest('browser-live-req', 'desktop')
+    toolRevocations.registerToolRevocationRequest('browser-live-req', 'desktop', 'browser-live-turn')
     const ledger = new InMemoryExecutionAdmissionCoordinator()
     let reachedClaim!: () => void
     const atClaim = new Promise<void>((resolve) => { reachedClaim = resolve })

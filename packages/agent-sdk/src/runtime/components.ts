@@ -114,15 +114,15 @@ export class ChatCancelRegistry implements ChatCancelRegistryLike {
 
 export const TOOL_REQUEST_LANES = ['desktop', 'feishu', 'wechat', 'automation'] as const
 
-type RequestState = { lane: string; revoked: Set<string> }
-export type ToolRevocationEvent = { requestId: string; lane: string; toolName: string }
+type RequestState = { requestId: string; lane: string; revoked: Set<string> }
+export type ToolRevocationEvent = { requestId: string; executionId: string; lane: string; toolName: string }
 
 export interface ToolRevocationRegistryLike {
-  registerToolRevocationRequest(requestId: string, lane: string): void
+  registerToolRevocationRequest(requestId: string, lane: string, executionId: string): void
   revokeToolForLane(lane: string, toolName: string): number
   revokeToolForAllLanes(toolName: string): number
-  isToolRevoked(requestId: string, toolName: string): boolean
-  clearToolRevocationRequest(requestId: string): void
+  isToolRevoked(requestId: string, toolName: string, executionId?: string): boolean
+  clearToolRevocationRequest(requestId: string, executionId?: string): void
   onRevocation(listener: (event: ToolRevocationEvent) => void): () => void
 }
 
@@ -135,8 +135,9 @@ export class ToolRevocationRegistry implements ToolRevocationRegistryLike {
     return () => this.listeners.delete(listener)
   }
 
-  registerToolRevocationRequest(requestId: string, lane: string): void {
-    this.active.set(requestId, { lane, revoked: new Set() })
+  registerToolRevocationRequest(requestId: string, lane: string, executionId: string): void {
+    if (!executionId.trim()) throw new Error('tool revocation executionId required')
+    this.active.set(executionId, { requestId, lane, revoked: new Set() })
   }
 
   revokeToolForLane(lane: string, toolName: string): number {
@@ -150,10 +151,10 @@ export class ToolRevocationRegistry implements ToolRevocationRegistryLike {
   private revoke(toolName: string, lane?: string): number {
     const events: ToolRevocationEvent[] = []
     const knownLanes: ReadonlySet<string> = new Set(TOOL_REQUEST_LANES)
-    for (const [requestId, state] of this.active) {
+    for (const [executionId, state] of this.active) {
       if (lane !== undefined ? state.lane !== lane : !knownLanes.has(state.lane)) continue
       state.revoked.add(toolName)
-      events.push({ requestId, lane: state.lane, toolName })
+      events.push({ requestId: state.requestId, executionId, lane: state.lane, toolName })
     }
 
     const failures: unknown[] = []
@@ -166,11 +167,22 @@ export class ToolRevocationRegistry implements ToolRevocationRegistryLike {
     return events.length
   }
 
-  isToolRevoked(requestId: string, toolName: string): boolean {
-    return this.active.get(requestId)?.revoked.has(toolName) ?? false
+  isToolRevoked(requestId: string, toolName: string, executionId?: string): boolean {
+    if (executionId !== undefined) {
+      const state = this.active.get(executionId)
+      return state?.requestId === requestId && state.revoked.has(toolName)
+    }
+    return [...this.active.values()].some((state) => state.requestId === requestId && state.revoked.has(toolName))
   }
 
-  clearToolRevocationRequest(requestId: string): void {
-    this.active.delete(requestId)
+  clearToolRevocationRequest(requestId: string, executionId?: string): void {
+    if (executionId !== undefined) {
+      const state = this.active.get(executionId)
+      if (state?.requestId === requestId) this.active.delete(executionId)
+      return
+    }
+    const matches = [...this.active].filter(([, state]) => state.requestId === requestId)
+    if (matches.length > 1) throw new Error('ambiguous tool revocation request')
+    if (matches[0]) this.active.delete(matches[0][0])
   }
 }

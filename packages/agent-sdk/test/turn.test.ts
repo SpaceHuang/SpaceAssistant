@@ -25,6 +25,40 @@ function toolExecutionPort(permits: InMemorySafetyPermitStore, execute: (call: {
 }
 
 describe('runAgentTurn', () => {
+  it('persists an explicitly timed out Hosted turn as timed_out rather than cancelled', async () => {
+    const registry = new ModelProviderRegistry()
+    registry.register(route, { providerId: 'fake-timeout', stream: async function* (call) {
+      await new Promise<void>((resolve) => {
+        if (call.request.signal?.aborted) resolve()
+        else call.request.signal?.addEventListener('abort', () => resolve(), { once: true })
+      })
+      yield { type: 'usage', inputTokens: 1, outputTokens: 0 } as const
+      yield { type: 'finish', reason: 'cancelled' } as const
+    } })
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('hosted-timeout', [])
+    const permits = new InMemorySafetyPermitStore()
+    const controller = new AbortController()
+    const host: AgentTurnHost = { createPorts: async ({ invocationId, turnId, routeId, request }) => ({
+      registry, routeId, invocationId, ...(turnId ? { turnId } : {}), request, history,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'allow' as const, authorizationVersion: 'v1' }) } }),
+      prepareTool: async () => toolBinding,
+      toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
+      maxModelTurns: 1
+    }) }
+    const running = runHostedAgentTurn({
+      host, invocationId: 'hosted-timeout', turnId: 'hosted-timeout-turn', routeId: route.routeId,
+      request: { messages: [{ role: 'user', content: 'timeout this turn' }], maxTokens: 10, signal: controller.signal }
+    })
+    setTimeout(() => controller.abort('agent-turn-timeout'), 0)
+
+    await expect(running).rejects.toMatchObject({ code: 'TURN_TIMED_OUT' })
+    expect((await history.read('hosted-timeout')).events.at(-1)).toMatchObject({
+      kind: 'invocation-failed', payload: { status: 'failed', reason: 'timeout' }
+    })
+  })
+
   it('parks the application admission while a tool awaits confirmation and resumes before dispatch', async () => {
     const registry = new ModelProviderRegistry()
     let modelTurn = 0
@@ -66,7 +100,7 @@ describe('runAgentTurn', () => {
     expect(events).toEqual(['park', 'confirmation', 'resume', 'resume', 'execute'])
   })
 
-  it('fails closed and resolves approval unavailable when application admission cannot resume', async () => {
+  it('fails closed while preserving the completed approval outcome when application admission cannot resume', async () => {
     const registry = new ModelProviderRegistry()
     let modelTurn = 0
     registry.register(route, { providerId: 'fake', stream: () => {
@@ -99,9 +133,50 @@ describe('runAgentTurn', () => {
     expect(execute).not.toHaveBeenCalled()
     expect(discard).toHaveBeenCalledWith('parked-ticket')
     const snapshot = await history.read('inv')
-    expect(snapshot.events).toContainEqual(expect.objectContaining({ kind: 'approval-resolved', payload: expect.objectContaining({ toolCallId: 'admission-fail', approved: false, outcome: 'unavailable' }) }))
+    expect(snapshot.events).toContainEqual(expect.objectContaining({ kind: 'approval-resolved', payload: expect.objectContaining({ toolCallId: 'admission-fail', approved: true, outcome: 'approved' }) }))
     expect(snapshot.events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'admission-fail', reason: 'APPLICATION_ADMISSION_RECOVERY_FAILED' }) }))
     expect(snapshot.events.at(-1)).toMatchObject({ kind: 'invocation-failed' })
+  })
+
+  it('returns a rejected confirmation to the model without recovering execution admission', async () => {
+    const registry = new ModelProviderRegistry()
+    let modelTurn = 0
+    registry.register(route, { providerId: 'fake', stream: () => {
+      modelTurn += 1
+      return modelTurn === 1
+        ? stream({ type: 'tool-call', toolCallId: 'rejected-script', toolName: 'run_script', input: { code: 'print(1)' } }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' })
+        : stream({ type: 'text-delta', text: 'understood' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
+    } })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('inv', ['run_script'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    const execute = vi.fn(async (_call: { invocationId: string; toolCallId: string; toolName: string }) => ({ output: 'must not execute' }))
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => binding.phase === 'initial-compat'
+      ? { kind: 'ask', confirmationId: 'approval-script', answerer: 'user', reasonCode: 'script-confirm' }
+      : { kind: 'allow', authorizationVersion: binding.authorizationVersion } } })
+    const applicationAdmission = {
+      park: vi.fn(() => 'parked'),
+      resume: vi.fn(async () => ({ ok: false as const, retryable: false as const, cause: 'terminal' as const })),
+      discard: vi.fn()
+    }
+
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'inv', history, request: { messages: [], maxTokens: 20 }, safetyGate,
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
+      confirmation: async () => ({ kind: 'denied', cause: 'user-denied' }),
+      toolExecution: toolExecutionPort(permits, async (call) => execute(call)), maxModelTurns: 2,
+      returnDeniedToolsToModel: true, applicationAdmission
+    })
+
+    expect(result.text).toBe('understood')
+    expect(result.messages).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'rejected-script', isError: true, content: expect.stringContaining('CONFIRMATION_DENIED') }))
+    expect(applicationAdmission.resume).not.toHaveBeenCalled()
+    expect(execute).not.toHaveBeenCalled()
+    const snapshot = await history.read('inv')
+    expect(snapshot.events).toContainEqual(expect.objectContaining({ kind: 'approval-resolved', payload: expect.objectContaining({ toolCallId: 'rejected-script', approved: false, outcome: 'denied', cause: 'user-denied' }) }))
+    expect(snapshot.events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'rejected-script', reason: 'CONFIRMATION_DENIED', isError: true }) }))
+    expect(snapshot.events.at(-1)).toMatchObject({ kind: 'invocation-completed' })
   })
 
   it('limits active confirmation channels to two and records legacy admission checkpoints', async () => {
@@ -197,7 +272,7 @@ describe('runAgentTurn', () => {
     expect(execute).not.toHaveBeenCalled()
     expect(discard).toHaveBeenCalledWith('parked-cancel')
     const snapshot = await history.read('inv')
-    expect(snapshot.events).toContainEqual(expect.objectContaining({ kind: 'approval-resolved', payload: expect.objectContaining({ toolCallId: 'admission-cancel', outcome: 'cancelled' }) }))
+    expect(snapshot.events).toContainEqual(expect.objectContaining({ kind: 'approval-resolved', payload: expect.objectContaining({ toolCallId: 'admission-cancel', approved: true, outcome: 'approved' }) }))
     expect(snapshot.events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'admission-cancel', reason: 'REQUEST_CANCELLED' }) }))
     expect(snapshot.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'cancelled' } })
   })

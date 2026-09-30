@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canParkInvocation, InvocationRuntime, ToolScheduler, ToolSchedulerReservationError } from '../src/scheduler'
+import { InvocationRuntime, ToolScheduler, ToolSchedulerReservationError } from '../src/scheduler'
 
 describe('SDK tool scheduler', () => {
   it('不会让失败依赖继续启动后继，也不受原型属性影响', async () => {
@@ -278,46 +278,18 @@ describe('SDK tool scheduler', () => {
   })
 })
 
-describe('runtime park/resume handles', () => {
-  it('only parks when every active node is waiting for approval', () => {
-    expect(canParkInvocation(2, 1)).toBe(false)
-    expect(canParkInvocation(2, 2)).toBe(true)
-    expect(canParkInvocation(0, 0)).toBe(false)
+describe('invocation runtime leases', () => {
+  it('InvocationRuntime 只公开生产调用链使用的 acquireLease 生命周期', () => {
+    const runtime = new InvocationRuntime('runtime-lease-contract')
+    expect(Object.getOwnPropertyNames(Object.getPrototypeOf(runtime)).sort()).toEqual(['acquireLease', 'constructor'])
   })
 
-  it('rejects foreign and stale handles and does not duplicate leases', () => {
-    const a = new InvocationRuntime('runtime-a')
-    const b = new InvocationRuntime('runtime-b')
-    const lease = a.acquireLease('inv-1')
-    const parked = a.park('inv-1', lease)
-    expect(parked).toBeDefined()
-    if (!parked) return
-    expect(b.resume(parked)).toBe(false)
-    expect(a.resume(parked)).toBe(true)
-    expect(a.resume(parked)).toBe(false)
-    lease.release()
-    expect(a.park('inv-1', lease)).toBeUndefined()
-  })
-
-  it('park 让出租约，resumeLease 返回新的 generation', () => {
+  it('同一 invocation 同时只有一个租约，释放后可重新取得', () => {
     const runtime = new InvocationRuntime('runtime-lease')
     const lease = runtime.acquireLease('inv-lease')
-    const parked = runtime.park('inv-lease', lease, { nodes: ['approval-wait'] })
-    expect(parked).toBeDefined()
     expect(() => runtime.acquireLease('inv-lease')).toThrow('invocation already leased')
-    expect(runtime.resumeLease(parked!)).toBeDefined()
-    expect(runtime.resumeLease(parked!)).toBeUndefined()
-  })
-
-  it('rejects park when the runtime parked-turn bound is full', () => {
-    const runtime = new InvocationRuntime('runtime-cap', { maxParkedTurns: 1 })
-    const first = runtime.acquireLease('inv-1')
-    const firstPark = runtime.park('inv-1', first)
-    expect(firstPark).toBeDefined()
-    const second = runtime.acquireLease('inv-2')
-    expect(runtime.park('inv-2', second)).toBeUndefined()
-    expect(() => runtime.acquireLease('inv-2')).toThrow('invocation already leased')
-    second.release()
-    expect(runtime.resumeLease(firstPark!)).toBeDefined()
+    lease.release()
+    const resumed = runtime.acquireLease('inv-lease')
+    expect(resumed.generation).toBeGreaterThan(lease.generation)
   })
 })

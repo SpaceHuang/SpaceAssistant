@@ -33,6 +33,8 @@ import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
 import { probeWritePathFact } from '../confirmation/extractors/writePathFacts'
 import { buildWriteExecutionPermit } from '../confirmation/writeExecutionPermit'
 import * as directoryHandleWriterModule from '../confirmation/directoryHandleWriter'
+import { cancelActiveAgentTool } from '../activeAgentToolCancellation'
+import { registerActiveAgentToolCancellation } from '../activeAgentToolCancellation'
 
 const route = { routeId: 'registered-tools', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }
 const requestId = 'req-sdk-host'
@@ -660,7 +662,7 @@ describe('createRegisteredAgentTurnTools', () => {
         return 'finished after revoke'
       }
     }))
-    const listeners = new Set<(event: { requestId: string; lane: string; toolName: string }) => void>()
+    const listeners = new Set<(event: { requestId: string; executionId: string; lane: string; toolName: string }) => void>()
     let revoked = false
     const toolRevocations: AgentToolRevocationPort = {
       getRegisteredTool: () => undefined,
@@ -694,10 +696,10 @@ describe('createRegisteredAgentTurnTools', () => {
       safetyGate, prepareTool: tools.prepareTool, toolExecution: tools.toolExecution, maxModelTurns: 2, history
     })
     await vi.waitFor(() => expect(executorSignal).toBeDefined())
-    for (const listener of [...listeners]) listener({ requestId, lane: 'desktop', toolName: 'different-tool' })
+    for (const listener of [...listeners]) listener({ requestId, executionId: turnId, lane: 'desktop', toolName: 'different-tool' })
     expect(executorSignal.aborted).toBe(false)
     revoked = true
-    for (const listener of [...listeners]) listener({ requestId, lane: 'desktop', toolName: 'write_file' })
+    for (const listener of [...listeners]) listener({ requestId, executionId: turnId, lane: 'desktop', toolName: 'write_file' })
     expect(executorSignal.aborted).toBe(true)
     await expect(runningTurn).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
     expect(admission.activeLeaseCount(requestId, invocationId)).toBe(0)
@@ -709,7 +711,7 @@ describe('createRegisteredAgentTurnTools', () => {
 
   it('Hosted WeChat send executor 收到 claim 后撤权 signal，记录失败结果并释放 lease', async () => {
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest(requestId, 'wechat')
+    revocations.registerToolRevocationRequest(requestId, 'wechat', turnId)
     const admission = new InMemoryExecutionAdmissionCoordinator()
     const permits = new InMemorySafetyPermitStore()
     let executorSignal!: AbortSignal
@@ -784,7 +786,7 @@ describe('createRegisteredAgentTurnTools', () => {
     const admission = new InMemoryExecutionAdmissionCoordinator()
     const permits = new InMemorySafetyPermitStore()
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest(requestId, 'desktop')
+    revocations.registerToolRevocationRequest(requestId, 'desktop', turnId)
     let executionSignal!: AbortSignal
     let markEntered!: () => void
     const entered = new Promise<void>((resolve) => { markEntered = resolve })
@@ -840,13 +842,152 @@ describe('createRegisteredAgentTurnTools', () => {
     expect(admission.activeLeaseCount(requestId, invocationId)).toBe(0)
   })
 
+  it('运行中工具取消按 session、turn、toolCall 身份中止 SDK 执行租约', async () => {
+    const sessionId = 'cancel-session'
+    const activeTurnId = 'cancel-turn'
+    const activeToolCallId = 'script-cancel-call'
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    const permits = new InMemorySafetyPermitStore()
+    let executionSignal!: AbortSignal
+    let markEntered!: () => void
+    const entered = new Promise<void>((resolve) => { markEntered = resolve })
+    const runScript = vi.fn(async (_input: unknown, context: { signal: AbortSignal }) => {
+      executionSignal = context.signal
+      markEntered()
+      await new Promise<void>((resolve) => context.signal.addEventListener('abort', () => resolve(), { once: true }))
+      return { success: false, error: 'SCRIPT_CANCELLED' }
+    })
+    const registry = new TypedToolRegistry()
+    registry.register(createRunScriptRegisteredTool({ name: 'run_script', execute: runScript } as never))
+    const tools = createRegisteredAgentTurnTools({
+      requestId, turnId: activeTurnId, registry, permits, admission,
+      createExecutionContext: (call) => ({
+        workDir: '/workspace', userDataDir: '/user-data', requestId, toolUseId: call.toolCallId,
+        signal: call.signal, sessionId, toolsConfig: { scriptTimeout: 30, pythonPath: 'python' }
+      } as never),
+      resolveAuthorizationVersion: () => 'policy-v1',
+      registerActiveCancellation: (call, cancel) => import('../activeAgentToolCancellation').then(({ registerActiveAgentToolCancellation }) =>
+        registerActiveAgentToolCancellation(sessionId, activeTurnId, call.toolCallId, cancel))
+    })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['run_script'])
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: {
+      evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion })
+    } })
+    const providers = new ModelProviderRegistry()
+    providers.register(route, { providerId: 'run-script-cancel', stream: () => stream(
+      { type: 'tool-call', toolCallId: activeToolCallId, toolName: 'run_script', input: { language: 'python', code: 'wait()' } },
+      { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+    ) })
+    const history = new MemoryHistory()
+    const running = runAgentTurn({
+      registry: providers, routeId: route.routeId, invocationId, turnId: activeTurnId,
+      request: { messages: [{ role: 'user', content: 'run script' }], maxTokens: 50 },
+      safetyGate, prepareTool: tools.prepareTool, discardPreparedTool: tools.discardPreparedTool,
+      toolExecution: tools.toolExecution, maxModelTurns: 2, history
+    })
+
+    await entered
+    expect(executionSignal.aborted).toBe(false)
+    expect(cancelActiveAgentTool('other-session', activeTurnId, activeToolCallId)).toBe(false)
+    expect(cancelActiveAgentTool(sessionId, 'other-turn', activeToolCallId)).toBe(false)
+    expect(executionSignal.aborted).toBe(false)
+    expect(cancelActiveAgentTool(sessionId, activeTurnId, activeToolCallId)).toBe(true)
+    expect(executionSignal.aborted).toBe(true)
+    await expect(running).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+    expect(runScript).toHaveBeenCalledOnce()
+    expect(admission.activeLeaseCount(requestId, invocationId)).toBe(0)
+    expect(cancelActiveAgentTool(sessionId, activeTurnId, activeToolCallId)).toBe(false)
+  })
+
+  it('获批后、dispatch claim 前取消会阻止脚本进入 executor', async () => {
+    const sessionId = 'pre-dispatch-cancel-session'
+    const activeTurnId = 'pre-dispatch-cancel-turn'
+    const activeToolCallId = 'pre-dispatch-script-call'
+    let finishRecheck!: () => void
+    let markRecheckStarted!: () => void
+    const recheckStarted = new Promise<void>((resolve) => { markRecheckStarted = resolve })
+    const recheckBarrier = new Promise<void>((resolve) => { finishRecheck = resolve })
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    const permits = new InMemorySafetyPermitStore()
+    const runScript = vi.fn(async () => ({ success: true, data: 'script ran' }))
+    const registry = new TypedToolRegistry()
+    registry.register(createRunScriptRegisteredTool({ name: 'run_script', execute: runScript } as never))
+    const tools = createRegisteredAgentTurnTools({
+      requestId, turnId: activeTurnId, registry, permits, admission,
+      createExecutionContext: (call) => ({
+        workDir: '/workspace', userDataDir: '/user-data', requestId, toolUseId: call.toolCallId,
+        signal: call.signal, sessionId, toolsConfig: { scriptTimeout: 30, pythonPath: 'python' }
+      } as never),
+      resolveAuthorizationVersion: async (_call, stage) => {
+        if (stage.kind === 'recheck') { markRecheckStarted(); await recheckBarrier }
+        return 'policy-v1'
+      },
+      registerActiveCancellation: (call, cancel) => registerActiveAgentToolCancellation(sessionId, activeTurnId, call.toolCallId, cancel)
+    })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['run_script'])
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: {
+      evaluate: async (binding) => binding.phase === 'initial-compat'
+        ? { kind: 'ask', confirmationId: 'script-approval', answerer: 'user', reasonCode: 'script-confirm' }
+        : { kind: 'allow', authorizationVersion: binding.authorizationVersion }
+    } })
+    const providers = new ModelProviderRegistry()
+    providers.register(route, { providerId: 'pre-dispatch-run-script-cancel', stream: () => stream(
+      { type: 'tool-call', toolCallId: activeToolCallId, toolName: 'run_script', input: { language: 'python', code: 'print("must not run")' } },
+      { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+    ) })
+    const history = new MemoryHistory()
+    const running = runAgentTurn({
+      registry: providers, routeId: route.routeId, invocationId, turnId: activeTurnId,
+      request: { messages: [{ role: 'user', content: 'run script' }], maxTokens: 50 },
+      safetyGate, prepareTool: tools.prepareTool, discardPreparedTool: tools.discardPreparedTool,
+      confirmation: async () => ({ kind: 'approved', receipt: 'script-approved', cause: 'user-approved' }),
+      toolExecution: tools.toolExecution, maxModelTurns: 2, history
+    })
+
+    await recheckStarted
+    expect(cancelActiveAgentTool(sessionId, activeTurnId, activeToolCallId)).toBe(true)
+    finishRecheck()
+    await expect(running).rejects.toMatchObject({ name: 'AgentTurnCancelledError' })
+    expect(runScript).not.toHaveBeenCalled()
+    const events = (await history.read(invocationId)).events
+    expect(events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({ toolCallId: activeToolCallId, reason: 'REQUEST_CANCELLED' })
+    expect(events.some((event) => event.kind === 'tool-call-started' && event.payload.toolCallId === activeToolCallId)).toBe(false)
+  })
+
+  it('recheck 失败会释放 prepared tool 的取消登记', async () => {
+    const sessionId = 'failed-recheck-session'
+    const activeTurnId = 'failed-recheck-turn'
+    const activeToolCallId = 'failed-recheck-tool'
+    const registry = new TypedToolRegistry()
+    registry.register(definePlannedTool({ name: 'test-tool', parseInput: (raw) => raw, plan: async (input) => input, execute: async () => 'unused' }))
+    const tools = createRegisteredAgentTurnTools({
+      requestId, turnId: activeTurnId, registry, permits: new InMemorySafetyPermitStore(), admission: new InMemoryExecutionAdmissionCoordinator(),
+      createExecutionContext: () => ({}),
+      resolveAuthorizationVersion: (_call, stage) => {
+        if (stage.kind === 'recheck') throw new Error('RECHECK_FAIL')
+        return 'policy-v1'
+      },
+      registerActiveCancellation: (call, cancel) => registerActiveAgentToolCancellation(sessionId, activeTurnId, call.toolCallId, cancel)
+    })
+    const call = { invocationId, toolCallId: activeToolCallId, toolName: 'test-tool', input: {} }
+    await tools.prepareTool(call, { kind: 'initial' })
+    expect(cancelActiveAgentTool(sessionId, activeTurnId, activeToolCallId)).toBe(true)
+
+    await expect(tools.prepareTool(call, { kind: 'recheck', confirmation: { receipt: 'approved' } })).rejects.toThrow('RECHECK_FAIL')
+
+    expect(cancelActiveAgentTool(sessionId, activeTurnId, activeToolCallId)).toBe(false)
+    tools.discardPreparedTool(call)
+  })
+
   it('Hosted run_script 超时后以 unknown-after-dispatch 收尾且不再次请求模型', async () => {
     const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'hosted-script-timeout-')))
     const markerPath = path.join(workDir, 'script-started.txt')
     const admission = new InMemoryExecutionAdmissionCoordinator()
     const permits = new InMemorySafetyPermitStore()
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest(requestId, 'desktop')
+    revocations.registerToolRevocationRequest(requestId, 'desktop', turnId)
     const registry = new TypedToolRegistry()
     registry.register(createRunScriptRegisteredTool(runScriptExecutor))
     const tools = createRegisteredAgentTurnTools({
@@ -901,7 +1042,7 @@ describe('createRegisteredAgentTurnTools', () => {
     const admission = new InMemoryExecutionAdmissionCoordinator()
     const permits = new InMemorySafetyPermitStore()
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest(requestId, 'desktop')
+    revocations.registerToolRevocationRequest(requestId, 'desktop', turnId)
     let markSpawned!: () => void
     const spawned = new Promise<void>((resolve) => { markSpawned = resolve })
     const registry = new TypedToolRegistry()
@@ -957,7 +1098,7 @@ describe('createRegisteredAgentTurnTools', () => {
     const admission = new InMemoryExecutionAdmissionCoordinator()
     const permits = new InMemorySafetyPermitStore()
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest(requestId, 'desktop')
+    revocations.registerToolRevocationRequest(requestId, 'desktop', turnId)
     const registry = new TypedToolRegistry()
     registry.register(runShellRegisteredTool)
     const tools = createRegisteredAgentTurnTools({
