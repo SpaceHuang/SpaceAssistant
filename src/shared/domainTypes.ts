@@ -739,6 +739,8 @@ export interface Message {
   thinking?: ThinkingData
   /** 助手正文分段（与 thinking / toolCalls 按时间线交错展示） */
   contentSegments?: ContentSegment[]
+  /** bounded turn display 的规范活动顺序，避免恢复轻量快照时重排工具卡片 */
+  activity?: import('./assistantActivityTimeline').AssistantActivityItem[]
   /** Skill 提示（与工具卡片按 shownAt 交错展示；system 消息可仅含此项） */
   skillHints?: SkillHintRecord[]
   status: MessageStatus

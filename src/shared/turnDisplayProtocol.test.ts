@@ -91,6 +91,7 @@ describe('turn display protocol', () => {
     const message = turnDisplayToMessage(display)
     expect(message.toolCalls?.[0]).toMatchObject({ id: 'tool-1', toolName: 'grep', input: {} })
     expect(message.content).toBe(baseMessage.content)
+    expect(message.activity).toEqual(display.message.activity)
     expect(message.toolCalls?.[0]?.result).toBeUndefined()
   })
 

@@ -10,6 +10,17 @@ export function restorePendingConfirmToolCalls(messages: Message[], pendingItems
   const bySession = new Map<string, PendingConfirmItem[]>()
   for (const item of pendingItems) bySession.set(item.sessionId, [...(bySession.get(item.sessionId) ?? []), item])
   const targetMessageIds = new Set<string>()
+  // DB 分页、实时 turn display 和旧消息可能暂时同时包含同一 toolUseId。
+  // 只有仍处于 confirming 的节点才代表当前待审批项；旧终态/执行态快照不可占用它。
+  const confirmingBySession = new Map<string, Set<string>>()
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue
+    let ids = confirmingBySession.get(message.sessionId)
+    if (!ids) confirmingBySession.set(message.sessionId, ids = new Set())
+    for (const tool of message.toolCalls ?? []) {
+      if (tool.status === 'confirming' && !tool.autoAnswerer) ids.add(tool.id)
+    }
+  }
   for (const sessionId of bySession.keys()) {
     const candidates = messages.filter((message) => message.sessionId === sessionId && message.role === 'assistant')
     const target = [...candidates].reverse().find((message) => message.status === 'streaming') ?? candidates.at(-1)
@@ -19,7 +30,8 @@ export function restorePendingConfirmToolCalls(messages: Message[], pendingItems
     const sessionItems = bySession.get(message.sessionId)
     if (!sessionItems?.length || !targetMessageIds.has(message.id)) return message
     const existingIds = new Set((message.toolCalls ?? []).map((tool) => tool.id))
-    const missing = sessionItems.filter((item) => !existingIds.has(item.toolUseId))
+    const representedIds = confirmingBySession.get(message.sessionId) ?? new Set<string>()
+    const missing = sessionItems.filter((item) => !representedIds.has(item.toolUseId) && !existingIds.has(item.toolUseId))
     const hasStalePending = message.toolCalls?.some((tool) =>
       sessionItems.some((item) => item.toolUseId === tool.id) && tool.status !== 'confirming'
     ) ?? false

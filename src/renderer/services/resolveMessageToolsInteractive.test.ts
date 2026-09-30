@@ -98,6 +98,34 @@ describe('resolveMessageToolsInteractive', () => {
     expect(restored[0]).toBe(history)
     expect(restored[1]).not.toBe(restored[0])
   })
+
+  it('同一 pending 工具已存在于另一条助手消息时不在目标消息复制确认卡', () => {
+    const earlier = { ...confirmingMessage, id: 'earlier-message', toolCalls: [{ ...confirmingMessage.toolCalls![0]!, status: 'confirming' as const }] }
+    const latest = { ...confirmingMessage, id: 'latest-message', toolCalls: [] }
+    const restored = restorePendingConfirmToolCalls([earlier, latest], [pendingItem])
+
+    expect(restored[0]?.toolCalls).toHaveLength(1)
+    expect(restored[1]?.toolCalls).toEqual([])
+  })
+
+  it.each(['calling', 'executing', 'completed', 'failed'] as const)(
+    '旧消息中的 %s 快照不会阻止当前消息恢复待审批卡片',
+    (status) => {
+      const earlier = {
+        ...confirmingMessage,
+        id: 'earlier-message',
+        status: 'completed' as const,
+        toolCalls: [{ ...confirmingMessage.toolCalls![0]!, status }]
+      }
+      const latest = { ...confirmingMessage, id: 'latest-message', toolCalls: [] }
+      const restored = restorePendingConfirmToolCalls([earlier, latest], [pendingItem])
+
+      expect(restored[0]?.toolCalls?.[0]?.status).toBe(status)
+      expect(restored[1]?.toolCalls).toEqual([
+        expect.objectContaining({ id: pendingItem.toolUseId, status: 'confirming' })
+      ])
+    }
+  )
   it('detects confirming tools on message', () => {
     expect(messageHasConfirmingTool(confirmingMessage)).toBe(true)
     expect(messageHasConfirmingTool({ ...confirmingMessage, toolCalls: [] })).toBe(false)
