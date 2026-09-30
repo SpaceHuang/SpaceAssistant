@@ -134,6 +134,10 @@ const api: SpaceAssistantApi = {
   usageStatsDaily: (args) => ipcRenderer.invoke('usage-stats:daily', args),
   usageStatsSummary: (args) => ipcRenderer.invoke('usage-stats:summary', args),
   usageStatsDimensions: () => ipcRenderer.invoke('usage-stats:dimensions'),
+  usageStatsAttributionComposition: (args) => ipcRenderer.invoke('usage-stats:attribution-composition', args),
+  usageStatsAttributionDaily: (args) => ipcRenderer.invoke('usage-stats:attribution-daily', args),
+  usageStatsAttributionOutput: (args) => ipcRenderer.invoke('usage-stats:attribution-output', args),
+  usageStatsAttributionTools: (args) => ipcRenderer.invoke('usage-stats:attribution-tools', args),
 
   onOpenSettings: (cb) => {
     const fn = () => cb()

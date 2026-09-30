@@ -47,7 +47,8 @@ export type BlockV1ThreeSources = {
   systemTokens: number
   toolsTokens: number
   messageTokens: number
-  estimatorVersion: typeof BLOCK_V1_ESTIMATOR_VERSION
+  /** 实际产出恒为 block-v1；类型放宽为 string 以支持从落库行重建归一化输入 */
+  estimatorVersion: string
 }
 
 export type StepAttribution = StepAttributionJson & {
