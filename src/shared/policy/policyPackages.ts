@@ -109,6 +109,9 @@ const DESKTOP_RULE_OVERRIDES: LaneProfile['ruleActionOverrides'] = {
   standard: { 'browser-act-ask-desktop': 'allow' },
   loose: {
     'script-network-ask-desktop': 'auto-evaluator',
+    // P1-2(脚本路径假阳性松绑):clean + 未建模路径属例行确认而非危险面,
+    // loose 档按 P1-3「摘 locked、允许档位覆盖」放行(与 browser-act-ask 同类)。
+    'script-unmodeled-path-ask': 'allow',
     'browser-act-danger-ask': 'auto-evaluator',
     'browser-act-ask-desktop': 'allow',
     'lark-write-ask': 'auto-evaluator',

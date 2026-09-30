@@ -234,7 +234,7 @@ describe('G12：「loose 不得比 standard 严」守卫（Q9 选法 A，防未�
   /**
    * 定义域从基线规则**派生**（评审 P3）：桌面可命中的非 locked ask 规则
    * （invocation 层、lane 未限定或含 desktop）+ 合成兜底——未来新增桌面 ask 规则
-   * 自动纳入守卫，无需人工同步清单；派生条件意外缩水由下方锚点用例兜住（v14 盘点 = 7 条）。
+   * 自动纳入守卫，无需人工同步清单；派生条件意外缩水由下方锚点用例兜住（v14 盘点 = 7 条 + P1 新增 script-unmodeled-path-ask = 8 条）。
    */
   const DOMAIN: string[] = [
     ...DEFAULT_POLICY_RULES
@@ -249,9 +249,10 @@ describe('G12：「loose 不得比 standard 严」守卫（Q9 选法 A，防未�
     FALLBACK_ID
   ]
 
-  /** 方案 v14 盘点的定义域（数组内 6 条 + 合成兜底）：派生清单的**最小域**锚点。 */
+  /** 方案 v14 盘点的定义域（数组内 7 条 + 合成兜底;含 P1 新增脚本规则）：派生清单的**最小域**锚点。 */
   const MIN_DOMAIN = [
     'script-network-ask-desktop',
+    'script-unmodeled-path-ask',
     'browser-act-danger-ask',
     'browser-act-ask-desktop',
     'lark-write-ask',
@@ -289,11 +290,12 @@ describe('G12：「loose 不得比 standard 严」守卫（Q9 选法 A，防未�
     }
   })
 
-  it('当前五条登记恰好覆盖矩阵要求（防漏登记的显式锚点）', () => {
+  it('当前六条登记恰好覆盖矩阵要求（防漏登记的显式锚点）', () => {
     const overrides = LANE_PROFILES.desktop.ruleActionOverrides ?? {}
     expect(overrides.standard).toEqual({ 'browser-act-ask-desktop': 'allow' })
     expect(overrides.loose).toEqual({
       'script-network-ask-desktop': 'auto-evaluator',
+      'script-unmodeled-path-ask': 'allow',
       'browser-act-danger-ask': 'auto-evaluator',
       'browser-act-ask-desktop': 'allow',
       'lark-write-ask': 'auto-evaluator',
