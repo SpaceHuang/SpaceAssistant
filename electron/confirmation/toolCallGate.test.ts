@@ -111,7 +111,9 @@ function base(overrides: Partial<ToolCallGateArgs> = {}): ToolCallGateArgs {
     sessionId: 's1',
     requestId: `gate-test-req-${++nextGateTestId}`,
     toolUseId: `gate-test-tool-${nextGateTestId}`,
-    workDir: '/tmp/wd',
+    // The write-path probe intentionally rejects missing parent directories.
+    // Use an existing neutral directory instead of relying on a machine-local /tmp/wd.
+    workDir: os.tmpdir(),
     userDataDir: '/tmp/ud',
     toolsConfig: toolsConfig(),
     audit: { record: () => undefined },

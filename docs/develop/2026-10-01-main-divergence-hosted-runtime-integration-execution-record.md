@@ -197,7 +197,7 @@ build 仅报告已有动态 import 无法拆 chunk 和 chunk 超过 500 kB 的�
 
 阶段 6 继续执行中：云端 fetch 后 SHA 仍为 `8dad02848c44692bafa7f61271bc6e3d6f406216`，分叉为 remote-only 46 / local-only 34。逐提交清单见计划 §2.1；已用 `git log --reverse --format='%H%x09%P%x09%s' <merge-base>..origin/main` 固定完整 SHA/父提交/主题，并对每个 SHA 导出文件变更。普通提交按其 commit tree diff 审核；4 个 merge commit（`6fad2cb6`、`98857144`、`a06c966c`、`c96acc2e`、`773e11d7`、`ac97b559`，共 6 个）按第一父 tree diff 审核，同时核对第二父及该分支子提交各自的处置行。初始 46 项中 6 个是 merge commit；其余普通提交与文件清单均和 §2.1 的唯一处置相符。最后的 `8dad0284` 同时触及策略注册与规则测试，继续按“排除”处理，不能只保留测试改动。
 
-生命周期修复已以 `ae092513fc670c5e50655e1c22287903e32cd5c5` 提交。双亲 merge、最终树审查、推送/PR、云端接受和本地 main 对齐仍未完成。
+生命周期修复已以 `ae092513fc670c5e50655e1c22287903e32cd5c5` 提交。
 
 ### 双亲 merge 与文件准入清理
 
@@ -233,10 +233,46 @@ $ npm run build
 Exit code: 0
 ```
 
-build 只有已有的动态 import 与 chunk size 提示。最终代码符号扫描未命中云端新增的归因 schema/API/UI、`script-unmodeled-path-ask` loose 覆盖、grep fallback 自动路由或 dev rg prepare 入口；相对远端 HEAD 的文件清单可见被排除的新归因模块/测试及 fallback/dev prepare/script-path 文档为明确删除。当前 index 已通过 `git diff --cached --check`，没有未解决冲突。双亲 merge commit 尚未创建，推送/PR 与本地对齐尚未执行。
+build 只有已有的动态 import 与 chunk size 提示。最终代码符号扫描未命中云端新增的归因 schema/API/UI、`script-unmodeled-path-ask` loose 覆盖、grep fallback 自动路由或 dev rg prepare 入口；相对远端 HEAD 的文件清单可见被排除的新归因模块/测试及 fallback/dev prepare/script-path 文档为明确删除。index 通过 `git diff --cached --check`，没有未解决冲突。双亲 merge commit 为 `5debe7919d57dbf26835bbf5b4b715ff083d889c`，已推送并进入云端 CI；后续 CI 修复和最终验收见下文。
 
 ### 首次推送后的 CI 修复
 
 普通 `git push origin main` 已将 merge commit `5debe7919d57dbf26835bbf5b4b715ff083d889c` 推到云端，fetch 确认当时 `main` 与 `origin/main` 同 SHA。Actions run `36757493758` 的 `test` job 随后在 `Run npm run typecheck:agent-core` 失败；当前 package scripts 已无此命令（本机复现明确输出 `npm error Missing script: "typecheck:agent-core"`），workflow 还引用不存在的 `check:agent-core`、`packages/agent-core/test/agentCore.test.ts` 和 `electron/toolChatLoop.inMemoryPorts.test.ts`。
 
-更新 `.github/workflows/ci.yml` 使用当前 SDK 边界门禁，并换成现存的 `packages/agent-sdk/test/agentCore.test.ts`、`packages/agent-sdk/test/turn.test.ts`、`electron/runtime/hostedAgentTurnHost.test.ts`。本机验证：`typecheck:agent-sdk`、`check:agent-sdk` 均退出码 0；workflow 对应的聚焦 Vitest 为 3 文件 / 148 项通过。已触发第一次云端 run 的 job 终态仍需等完整 run 收敛；workflow 修复 commit 和第二次云端 CI 结果待完成。
+更新 `.github/workflows/ci.yml` 使用当前 SDK 边界门禁，并换成现存的 `packages/agent-sdk/test/agentCore.test.ts`、`packages/agent-sdk/test/turn.test.ts`、`electron/runtime/hostedAgentTurnHost.test.ts`。本机验证：`typecheck:agent-sdk`、`check:agent-sdk` 均退出码 0；workflow 对应的聚焦 Vitest 为 3 文件 / 148 项通过。首次 Actions run `36757493758` 因失效的 `agent-core` 脚本与测试路径失败；workflow 修复已作为 `cd2d3d5eb5edd6cc0dd2bf2caade521d686f3fd6` 推送。
+
+### 第二次云端 CI 回归与 Linux 临时目录夹具修复
+
+Actions run `36757868285`（head `cd2d3d5eb5edd6cc0dd2bf2caade521d686f3fd6`）中 Windows Golden、SQLite Electron probes、各平台 Shell lifecycle，以及 SDK typecheck、边界检查、build 和聚焦测试均通过；Ubuntu `npm test` 报 10 项失败：Hosted checkpoint 测试 3 项未执行读取器；`toolCallGate.test.ts` 的 5 项写入决策预期收到 `deny`；Hosted 集成的 2 项自动批准/初始放行断言实际进入确认路径。
+
+**红灯证据：**在修复前将 macOS 的 Node 临时目录显式设为 Linux 常见的 `/tmp`，逐文件重跑得到相同失败：
+
+```text
+$ TMPDIR=/tmp npx vitest run electron/remote/imRemoteAgent.test.ts -t 'Hosted checkpoint failure'
+Tests  4 failed | 135 skipped
+AssertionError: expected "execute" to be called once, but got 0 times
+
+$ TMPDIR=/tmp npx vitest run electron/claudeStreamHandlers.hostedIntegration.test.ts -t 'Desktop auto-approved write audit|initial-allow read when its target changes'
+Tests  2 failed | 118 skipped
+auto-approved write metadata missing; initial decision expected auto-allow, received require-confirm
+```
+
+根因是测试夹具依赖了 macOS 本机 `/tmp` 状态：门控 helper 默认工作目录 `/tmp/wd` 在本机恰好存在，Linux 上不存在，写路径探针因目标父目录缺失而按安全契约拒绝；remote/Hosted 测试把 `userDataDir` 固定为 `/tmp`，Linux 临时工作区也位于该目录下，因此被正确分类为敏感路径。修复限定在测试夹具：门控默认工作目录改为已存在的 `os.tmpdir()`；remote Agent、WeChat、Hosted 测试将用户数据根设为独立于临时工作区的路径。未更改生产策略或放宽敏感路径判定。
+
+**绿灯证据：**
+
+```text
+$ TMPDIR=/tmp npx vitest run electron/remote/imRemoteAgent.test.ts
+Tests  139 passed
+$ TMPDIR=/tmp npx vitest run electron/confirmation/toolCallGate.test.ts
+Tests  120 passed
+$ TMPDIR=/tmp npx vitest run electron/claudeStreamHandlers.hostedIntegration.test.ts
+Tests  120 passed
+$ TMPDIR=/tmp npx vitest run electron/wechat/weChatRemoteAgent.test.ts -t 'aborts a claimed read lease when its SQLite policy package changes'
+Tests  1 passed | 50 skipped
+$ TMPDIR=/tmp npm test
+Test Files  806 passed | 1 skipped (807)
+Tests       7091 passed | 106 skipped (7197)
+```
+
+随后 `typecheck:shared`、`typecheck:renderer`、`typecheck:agent-sdk`、`typecheck:agent-provider-pi-ai`、`check:agent-sdk` 和 `npm run build` 均退出码 0；build 只有既有 chunk/import 警告。测试文件修改通过 `git diff --check`。本轮测试夹具与记录将一并提交推送；新 Actions run、云端接受及最终 `main`/`origin/main` 对齐仍待验证。

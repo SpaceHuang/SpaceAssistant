@@ -132,7 +132,8 @@ function baseCtx(getMainWebContents: () => WebContents | null, db: AppDatabase =
     wechatConfig: { ...DEFAULT_WECHAT_CONFIG, remoteTypingEnabled: false, remoteProgressHeartbeatSec: 0 },
     workDir: '/tmp',
     workDirManager: makeWorkDirManager(),
-    userDataDir: '/tmp',
+    // Keep test user data disjoint from OS temp workspaces (which are /tmp on Linux).
+    userDataDir: path.join(os.tmpdir(), 'spaceassistant-wechat-test-user-data'),
     getMainWebContents,
     getApiKey: async () => 'key',
     getBaseUrl: () => 'https://api.example.com',

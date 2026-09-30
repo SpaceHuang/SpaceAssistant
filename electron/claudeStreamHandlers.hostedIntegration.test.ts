@@ -40,6 +40,8 @@ import { getUsageStepFactsForTurn, getUsageTurnFact } from './database/operation
 import type { AssistantFactEvent } from '../src/shared/assistantFactAggregator'
 import { logAgentEvent } from './agentLogger/agentLogger'
 
+const hostedTestUserDataDir = path.join(os.tmpdir(), 'spaceassistant-hosted-test-user-data')
+
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
 const hostedRuntimeFailureInjection = vi.hoisted(() => ({ requestId: '', composeCalls: 0 }))
 vi.mock('electron', () => ({
@@ -268,7 +270,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     })
 
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: 1, autoApproveMaxEditChars: 1 }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -292,7 +294,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     expect(JSON.stringify(providerRequests[0]?.find((message) => (message as { role?: string }).role === 'system'))).toContain('Simplified Chinese')
     expect(runApprovalAgent).toHaveBeenCalledOnce()
     expect(runApprovalAgent.mock.calls[0]?.[0]).toMatchObject({
-      db, workDir, userDataDir: '/tmp', baseUrl: endpoint, credentialRef: 'llm-service:svc-hosted',
+      db, workDir, userDataDir: hostedTestUserDataDir, baseUrl: endpoint, credentialRef: 'llm-service:svc-hosted',
       maxAuthorization: 'high', policyRuleFloor: expect.any(Array)
     })
     expect(runApprovalAgent.mock.calls[0]?.[1]).toMatchObject({ lane: 'desktop', clue: { toolName: 'write_file' } })
@@ -451,7 +453,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const consumeForRequest = vi.fn()
     const execute = registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir,
-      getUserDataPath: () => '/tmp', getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
+      getUserDataPath: () => hostedTestUserDataDir, getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
@@ -508,7 +510,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       WHEN NEW.kind='invocation-completed' BEGIN SELECT RAISE(ABORT, 'injected Desktop terminal failure'); END`)
     const execute = registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir,
-      getUserDataPath: () => '/tmp', getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
+      getUserDataPath: () => hostedTestUserDataDir, getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
@@ -565,7 +567,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       userMessageId: user.message.id, assistantMessageId: assistant.message.id, contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'hosted-auto-approved-write-start',
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' } })
     const execute = registerClaudeStreamHandlers(ipcMain, { getApiKey: async () => 'test-key', getWorkDir: () => workDir,
-      resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp', getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: 100 }),
+      resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir, getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: 100 }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }), turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never })
@@ -624,7 +626,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'zh-CN' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: 1 }), getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
@@ -686,7 +688,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: '', maximumContext: MODEL_BASELINE[modelId]!.maximumContext, maxTokens: MODEL_BASELINE[modelId]!.maxTokens, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: ['read_file'] }), getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
@@ -751,7 +753,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: '', maximumContext: contextWindow, maxTokens: MODEL_BASELINE[modelId]!.maxTokens, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: [] }), getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
@@ -803,7 +805,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: '', maximumContext: contextWindow, maxTokens, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, allowedTools: [] }), getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
@@ -863,7 +865,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
@@ -970,7 +972,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
@@ -1060,7 +1062,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
@@ -1165,7 +1167,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     })
     const turnRuntime = { bindRequest: vi.fn(), consumeForRequest: vi.fn((_requestId: string, event: AssistantFactEvent) => { facts.push(event) }) }
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -1243,7 +1245,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'zh-CN' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -1358,7 +1360,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     })
     await fs.writeFile(path.join(workDir, 'note.txt'), 'canonical tool result')
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
@@ -1512,7 +1514,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: toolName === 'run_shell', shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -1653,7 +1655,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -1774,7 +1776,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
@@ -1888,7 +1890,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       })
     }
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
@@ -1984,7 +1986,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
@@ -2077,7 +2079,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
@@ -2171,7 +2173,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
@@ -2277,7 +2279,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
@@ -2375,7 +2377,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
@@ -2470,7 +2472,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, scriptTimeout: 30 }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -2713,7 +2715,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -2816,7 +2818,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'zh-CN' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
@@ -2897,7 +2899,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     })
     const facts: AssistantFactEvent[] = []
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
@@ -2968,7 +2970,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'zh-CN' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: 1, autoApproveMaxEditChars: 1 }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -3050,7 +3052,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       return new Promise(() => undefined)
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: 1, autoApproveMaxEditChars: 1 }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -3136,7 +3138,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       return await confirmation
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -3231,7 +3233,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -3353,7 +3355,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: 0, autoApproveMaxEditChars: 0 }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -3475,7 +3477,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'zh-CN' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: 1, autoApproveMaxEditChars: 1 }),
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -3563,7 +3565,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     })
 
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => browserConfig,
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -3630,7 +3632,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
@@ -3703,7 +3705,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, navigateRequiresConfirm: true, actRequiresConfirm: true }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -3835,7 +3837,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'zh-CN' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG }),
       getBrowserConfig: () => ({ ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, actRequiresConfirm: true }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -3924,7 +3926,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     })
     const browserConfig = { ...DEFAULT_BROWSER_CONFIG, enabled: true, navigateRequiresConfirm: true }
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => browserConfig,
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
@@ -4025,7 +4027,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'zh-CN' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => toolName === 'edit_file'
         ? { ...DEFAULT_TOOLS_CONFIG, autoApproveMaxEditChars: autoApproveThreshold }
         : { ...DEFAULT_TOOLS_CONFIG, autoApproveMaxBytes: autoApproveThreshold },
@@ -4108,7 +4110,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'zh-CN' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -4195,7 +4197,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'zh-CN' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -4278,7 +4280,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'en-US' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => toolsConfig,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -4418,7 +4420,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     })
 
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -4480,7 +4482,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'zh-CN' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
@@ -4541,7 +4543,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'zh-CN' }
     })
     const execute = registerClaudeStreamHandlers(ipcMain, {
-      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => '/tmp',
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
       getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),

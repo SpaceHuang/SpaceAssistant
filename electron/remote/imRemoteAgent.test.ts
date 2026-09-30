@@ -136,7 +136,9 @@ function baseArgs(overrides: Record<string, unknown> = {}) {
     requestId: '00000000-0000-4000-8000-000000000001',
     workDir: '/tmp',
     workDirManager: makeWorkDirManager(),
-    userDataDir: '/tmp',
+    // Keep the user-data root separate from OS temp workspaces. On Linux,
+    // temporary fixtures live under /tmp, so /tmp itself makes them sensitive.
+    userDataDir: path.join(os.tmpdir(), 'spaceassistant-remote-test-user-data'),
     getMainWebContents: () => null as WebContents | null,
     getApiKey: async () => 'fallback-key',
     getBaseUrl: () => 'https://fallback.example.com',
