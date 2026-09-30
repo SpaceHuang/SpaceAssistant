@@ -28,13 +28,13 @@ jobs:
       - run: npm run typecheck:shared
       - run: npm run check:model-baseline
       - run: npm run typecheck:renderer
-      # SDK 包独立 tsconfig(A3,偏差 19:包 typecheck 独立于 tsconfig.electron.json)
-      - run: npm run typecheck:agent-core
-      # SDK 包边界护栏(A3,偏差 19):禁 electron / 禁 sqlite 直依赖 / 入口闭包零 electron
-      - run: npm run check:agent-core
+      # Agent SDK 包独立 tsconfig，独立于 Electron 主进程 typecheck。
+      - run: npm run typecheck:agent-sdk
+      # SDK 包边界和生产依赖闭包护栏。
+      - run: npm run check:agent-sdk
       - run: npm run build:electron
-      # SDK 级验收常驻回归（A4，偏差 20）：createAgentRuntime + 内存端口，不启动 Electron 跑完整回合
-      - run: npm exec vitest run electron/toolChatLoop.inMemoryPorts.test.ts packages/agent-core/test/agentCore.test.ts
+      # SDK turn 与 Hosted Host 生命周期回归，不启动 Electron UI。
+      - run: npm exec vitest run packages/agent-sdk/test/agentCore.test.ts packages/agent-sdk/test/turn.test.ts electron/runtime/hostedAgentTurnHost.test.ts
       - run: npm test
 
   golden-windows:

@@ -234,3 +234,9 @@ Exit code: 0
 ```
 
 build 只有已有的动态 import 与 chunk size 提示。最终代码符号扫描未命中云端新增的归因 schema/API/UI、`script-unmodeled-path-ask` loose 覆盖、grep fallback 自动路由或 dev rg prepare 入口；相对远端 HEAD 的文件清单可见被排除的新归因模块/测试及 fallback/dev prepare/script-path 文档为明确删除。当前 index 已通过 `git diff --cached --check`，没有未解决冲突。双亲 merge commit 尚未创建，推送/PR 与本地对齐尚未执行。
+
+### 首次推送后的 CI 修复
+
+普通 `git push origin main` 已将 merge commit `5debe7919d57dbf26835bbf5b4b715ff083d889c` 推到云端，fetch 确认当时 `main` 与 `origin/main` 同 SHA。Actions run `36757493758` 的 `test` job 随后在 `Run npm run typecheck:agent-core` 失败；当前 package scripts 已无此命令（本机复现明确输出 `npm error Missing script: "typecheck:agent-core"`），workflow 还引用不存在的 `check:agent-core`、`packages/agent-core/test/agentCore.test.ts` 和 `electron/toolChatLoop.inMemoryPorts.test.ts`。
+
+更新 `.github/workflows/ci.yml` 使用当前 SDK 边界门禁，并换成现存的 `packages/agent-sdk/test/agentCore.test.ts`、`packages/agent-sdk/test/turn.test.ts`、`electron/runtime/hostedAgentTurnHost.test.ts`。本机验证：`typecheck:agent-sdk`、`check:agent-sdk` 均退出码 0；workflow 对应的聚焦 Vitest 为 3 文件 / 148 项通过。已触发第一次云端 run 的 job 终态仍需等完整 run 收敛；workflow 修复 commit 和第二次云端 CI 结果待完成。
