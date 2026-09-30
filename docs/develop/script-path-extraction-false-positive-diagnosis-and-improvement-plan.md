@@ -1,6 +1,6 @@
 # run_script 路径提取假阳性：诊断与改进方案
 
-- 状态：已实施（2026-09-30，P0 / P1 / P2 全量落地；六轮评审阻断项 B1/B2/B3 及变体 B1-R/B2-R、walrus、B5、B6 全部修复，第四轮观察项 obs1–obs3 落地，见 §12.7–§12.12；端到端真机验收遗留，见 §12.6）
+- 状态：已实施（2026-09-30，P0 / P1 / P2 全量落地；六轮评审全部阻断项（B1/B2/B3、B1-R/B2-R、walrus、B5、B6、B6-R）修复完毕，观察项 obs1–obs3 落地，见 §12.7–§12.13；端到端真机验收遗留，见 §12.6）
 - 触发场景：会话 `a7981827-5a20-4eab-a6fd-a2971e12659c`（"会话 27"）中 `run_script` 反复弹人工确认卡
 - 涉及模块：`electron/confirmation/extractors/scriptPathFacts.ts`、`electron/shell/scriptIr/pythonAdapter.ts`、`src/shared/policy/defaultRules.ts`
 - 关联文档：`docs/develop/script-security-parser-treesitter-upgrade-plan.md`、`docs/develop/security-approval-experience-improvement-plan.md`
@@ -1242,3 +1242,25 @@ call 的 callee 与实参——这些位置恒定随外层求值,不改变条件
 修复后验证:三形态用例先行转红(B6c 初版因 check 未建模而假绿,改用纯函数 len 后
 准确命中重绑点);提取器/内容分析/适配器/门控 6 套件 318 用例通过(v3a/obs1a 合法
 重绑对照保持 complete);全量 `npm test` 复验通过。
+
+### 12.13 第六轮评审修复记录（2026-09-30，B6-R）
+
+评审报告：`docs/review/script-path-extraction-fp-review-v6.md`。B6 的纯递归透传核验完整,
+但**引入条件性的三个分支用新值覆盖传入标志而非叠加**——boolop 首值(`i > 0` 恒 false)、
+conditional test(不传参恒 false)、comprehension 首个生成器 iter(`i > 0` 同)。
+外层已处条件位置(推导式 elt / and 短路右侧)时,这三处的 walrus 被丢回「恒定求值」
+而错误重绑,R1/R2/R4 三形态均 complete 不弹卡。
+
+修复(三行级):三处全部改为**合并**传入——`conditionallyEvaluated || i > 0`、
+conditional test 透传 `conditionallyEvaluated`。
+
+**防再发(评审建议落地)**:`walkExpr` 的 `conditionallyEvaluated` 参数**去掉默认值改必传**——
+上下文标志传播靠人肉逐分支核对天然易漏(本轮正是「修了透传、漏了叠加」),改由 TS 编译器
+强制每个递归点显式决策,漏传即编译错误。语句级表达式调用点固定传 `false`(语句执行则
+表达式恒定求值;walrus 重绑合法性由 `env.bindable` 把关,与本标志正交)。必传化随即
+由编译器抓出 12 处语句级调用点逐一显式化。
+
+修复后验证:R1/R2/R4 三用例先行转红(R 对照首版期望写错——把 walrus 放在了 conditional
+body 位,v4 语义 body 永不重绑是保守正确行为;修正为真正的 test 位形态);提取器/内容
+分析/适配器/门控/策略 9 套件 412 用例通过(合法重绑对照保持 complete);全量 `npm test`
+复验通过。

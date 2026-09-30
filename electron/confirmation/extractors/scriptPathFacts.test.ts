@@ -545,6 +545,56 @@ describe('extractScriptPathFacts:v5 评审 B6(walrus 重绑标志透传)', () =>
 })
 
 // ============================================================================
+// v5 评审 B6-R 残留:引入条件性的分支用新值覆盖传入标志而非叠加——
+// boolop 首值 / conditional test / comprehension 首个 iter 三处。
+// ============================================================================
+describe('extractScriptPathFacts:v5 评审 B6-R(标志覆盖而非合并)', () => {
+  beforeAll(async () => {
+    await scriptParserService.ensureInitialized()
+  })
+
+  afterAll(() => resetScriptParserServiceForTests())
+
+  it('R1 conditional test 位藏在零迭代推导式 elt 里(评审 PoC)→ unknown', () => {
+    expect(extractScriptPathFacts([
+      'p = "/etc/passwd"',
+      'x = [1 if (p := "/safe.txt") else 2 for y in []]',
+      'open(p)'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('R2 boolop 首值在条件性外层内(推导式 elt)→ unknown', () => {
+    expect(extractScriptPathFacts([
+      'p = "/etc/passwd"',
+      'x = [(p := "/safe.txt") or 1 for y in []]',
+      'open(p)'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('R4 and 短路右侧推导式的首个生成器 iter → unknown', () => {
+    expect(extractScriptPathFacts([
+      'p = "/etc/passwd"',
+      'if flag and [y for y in (p := "/safe.txt")]:',
+      '    open(p)'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('R 对照:真正恒定求值的 test/首值位重绑合法语义保持', () => {
+    // 模块级 if test 的 boolop 首值 walrus:恒定求值 + 可绑定 → 合法重绑
+    expect(extractScriptPathFacts([
+      'if (p := "/x") or flag:',
+      '    open(p)'
+    ].join('\n'), 'python')).toMatchObject({ paths: ['/x'], completeness: 'complete' })
+    // conditional test 总被求值:顶层重绑合法(p 更新为 '/b' 并被 open(p) 提取)
+    expect(extractScriptPathFacts([
+      'p = "/a"',
+      'v = 0 if (p := "/b") else 1',
+      'open(p)'
+    ].join('\n'), 'python')).toMatchObject({ paths: ['/b'], completeness: 'complete' })
+  })
+})
+
+// ============================================================================
 // v5 评审阻断项 B5:字典推导式 key 表达式逃逸——tree-sitter 结构为
 // dictionary_comprehension(body: pair(key, value)),key 是 pair 的字段,
 // 旧实现在推导式节点上取 key 恒为 null(死代码),pair 又只取 value 静默丢 key。
