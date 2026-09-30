@@ -66,7 +66,7 @@ describe('sessionModelBinding', () => {
       schemaVersion: 1
     })
     expect(binding.modelName).toBe('deepseek-flash')
-    expect(binding.displayName).toBe('Default-deepseek-flash')
+    expect(binding.displayName).toBe('deepseek-flash')
   })
 
   it('falls back to language preferred for new sessions', () => {
@@ -81,10 +81,10 @@ describe('sessionModelBinding', () => {
     const binding = resolveSessionModelBinding(cfg, undefined, option)
     expect(binding.modelName).toBe('deepseek-flash')
     expect(binding.llmServiceId).toBe('s1')
-    expect(binding.displayName).toBe('Default-deepseek-flash')
+    expect(binding.displayName).toBe('deepseek-flash')
   })
 
-  it('lists service-prefixed display names for all options', () => {
+  it('lists service-prefixed display names for models supported by multiple services', () => {
     const proId = makeConfig().models!.find((m) => m.name === 'deepseek-v4-pro')!.id
     const cfg = makeConfig({
       llmServices: [
@@ -100,10 +100,10 @@ describe('sessionModelBinding', () => {
     ])
   })
 
-  it('prefixes single-service options as well', () => {
+  it('leaves single-service options unprefixed in displayName', () => {
     const cfg = makeConfig()
     const options = listChatModelOptions(cfg)
-    expect(options.find((o) => o.modelName === 'glm-5.3')?.displayName).toBe('Default-glm-5.3')
+    expect(options.find((o) => o.modelName === 'glm-5.3')?.displayName).toBe('glm-5.3')
   })
 })
 

@@ -90,13 +90,13 @@
 | P1 | P1-T11 | `appIpc.thinkingEffort.test.ts` 断言反转 | ✅ |
 | P1 | P1-T12 | `ComposerThinkingPicker.test.tsx` 序列断言临时扩 5 项 | ✅ |
 | P1 | P1-G | **阶段 1 收尾（门禁 + 提交）** | ✅ |
-| P2 | P2-T1 | `buildChatModelOptions` 改两遍处理 | ⬜ |
-| P2 | P2-T2 | 产出 `serviceAmbiguous` 字段 | ⬜ |
-| P2 | P2-T3 | `llmModelConfig.test.ts` 断言反转 | ⬜ |
-| P2 | P2-T4 | `sessionModelBinding.test.ts` 断言反转 | ⬜ |
-| P2 | P2-T5 | 确认浮层列表渲染不受影响 | ⬜ |
-| P2 | P2-T6 | `visionModelRouting.test.ts` 断言反转 | ⬜ |
-| P2 | P2-G | **阶段 2 收尾（门禁 + 提交）** | ⬜ |
+| P2 | P2-T1 | `buildChatModelOptions` 改两遍处理 | ✅ |
+| P2 | P2-T2 | 产出 `serviceAmbiguous` 字段 | ✅ |
+| P2 | P2-T3 | `llmModelConfig.test.ts` 断言反转 | ✅ |
+| P2 | P2-T4 | `sessionModelBinding.test.ts` 断言反转 | ✅ |
+| P2 | P2-T5 | 确认浮层列表渲染不受影响 | ✅ |
+| P2 | P2-T6 | `visionModelRouting.test.ts` 断言反转 | ✅ |
+| P2 | P2-G | **阶段 2 收尾（门禁 + 提交）** | ✅ |
 | P3 | P3-T1 | 新增 `resolveAvailableThinkingEfforts` | ⬜ |
 | P3 | P3-T2 | 为该纯函数补单测 | ⬜ |
 | P3 | P3-T3 | `ChatView` 计算 `availableEfforts` | ⬜ |
@@ -527,11 +527,11 @@ P1-T2 扩为 5 项 + P1-T5 补 `composer.thinking.max` 文案后，该序列变 
 **涉及文件**：`src/shared/llmModelConfig.ts:239-265`（`buildChatModelOptions`）
 
 **完成判据**：
-- [ ] 函数内**不再**有「单层循环内直接拼前缀」的写法
-- [ ] 排序规则不变（先按服务列表顺序，再按既有模型排序）
-- [ ] 候选集合不变（仍为 `buildChatModelOptions(models, services, activeServiceIds)` 口径）
-- [ ] `npm run typecheck:shared` 通过
-- [ ] 函数顶部注释更新（原注释「展示名统一为『服务名-模型名』」须改为「仅歧义时加前缀」）
+- [x] 函数内**不再**有「单层循环内直接拼前缀」的写法
+- [x] 排序规则不变（先按服务列表顺序，再按既有模型排序）
+- [x] 候选集合不变（仍为 `buildChatModelOptions(models, services, activeServiceIds)` 口径）
+- [x] `npm run typecheck:shared` 通过
+- [x] 函数顶部注释更新（原注释「展示名统一为『服务名-模型名』」须改为「仅歧义时加前缀」）
 
 ### P2-T2 产出 `serviceAmbiguous` 字段
 
@@ -540,10 +540,10 @@ P1-T2 扩为 5 项 + P1-T5 补 `composer.thinking.max` 文案后，该序列变 
 **涉及文件**：`src/shared/llmModelConfig.ts`（类型 `ChatModelOption:229-236` + 生成处）
 
 **完成判据**：
-- [ ] 类型新增 `serviceAmbiguous: boolean`
-- [ ] 生成逻辑与 `displayName` 前缀判定**同源**（同一统计结果），无第二次遍历统计
-- [ ] `npm run typecheck:shared` 通过
-- [ ] 已确认其余 `ChatModelOption` 字段语义未变（`serviceId` / `serviceName` / `modelId` / `modelName` / `model`）
+- [x] 类型新增 `serviceAmbiguous: boolean`
+- [x] 生成逻辑与 `displayName` 前缀判定**同源**（同一统计结果），无第二次遍历统计
+- [x] `npm run typecheck:shared` 通过
+- [x] 已确认其余 `ChatModelOption` 字段语义未变（`serviceId` / `serviceName` / `modelId` / `modelName` / `model`）
 
 ### P2-T3 `llmModelConfig.test.ts` 断言反转（**必改**）
 
@@ -557,11 +557,11 @@ P1-T2 扩为 5 项 + P1-T5 补 `composer.thinking.max` 文案后，该序列变 
 **涉及文件**：`src/shared/llmModelConfig.test.ts:257-265`
 
 **完成判据**：
-- [ ] 同名跨服务断言未变且通过
-- [ ] 唯一服务断言已改为无前缀且通过
-- [ ] 新增（或已存在）`serviceAmbiguous` 的断言
-- [ ] 用例名不再包含「always uses service prefix」
-- [ ] `npm exec vitest run src/shared/llmModelConfig.test.ts` 全绿
+- [x] 同名跨服务断言未变且通过
+- [x] 唯一服务断言已改为无前缀且通过
+- [x] 新增（或已存在）`serviceAmbiguous` 的断言
+- [x] 用例名不再包含「always uses service prefix」
+- [x] `npm exec vitest run src/shared/llmModelConfig.test.ts` 全绿
 
 ### P2-T4 `sessionModelBinding.test.ts` 断言反转（**必改**）
 
@@ -575,10 +575,10 @@ P1-T2 扩为 5 项 + P1-T5 补 `composer.thinking.max` 文案后，该序列变 
 **涉及文件**：`src/renderer/services/sessionModelBinding.test.ts`
 
 **完成判据**：
-- [ ] `:69` / `:84` / `:106` 三处断言已改为无前缀且通过
-- [ ] `:97-100` 同名跨服务断言未变且通过
-- [ ] 两个用例名已更新（不再暗示「总是带前缀」）
-- [ ] `npm exec vitest run src/renderer/services/sessionModelBinding.test.ts` 全绿
+- [x] `:69` / `:84` / `:106` 三处断言已改为无前缀且通过
+- [x] `:97-100` 同名跨服务断言未变且通过
+- [x] 两个用例名已更新（不再暗示「总是带前缀」）
+- [x] `npm exec vitest run src/renderer/services/sessionModelBinding.test.ts` 全绿
 
 ### P2-T5 确认浮层模型列表渲染不受影响
 
@@ -587,9 +587,9 @@ P1-T2 扩为 5 项 + P1-T5 补 `composer.thinking.max` 文案后，该序列变 
 **涉及文件**：`src/renderer/components/Chat/ComposerModelPicker.tsx`（只读确认）
 
 **完成判据**：
-- [ ] 已确认该组件内 `displayName` 仅在 chip 文案处使用，列表项未使用
-- [ ] 既有渲染相关测试全绿（如有）
-- [ ] 结论记录在案（若本次改 `displayName` 后有列表渲染变化，说明判断有误，须停下排查）
+- [x] 已确认该组件内 `displayName` 仅在 chip 文案处使用，列表项未使用
+- [x] 既有渲染相关测试全绿（如有）
+- [x] 结论记录在案（若本次改 `displayName` 后有列表渲染变化，说明判断有误，须停下排查）
 
 ### P2-T6 `visionModelRouting.test.ts` 断言反转（**必改，评审 B1(v3)**）
 
@@ -609,20 +609,23 @@ P1-T2 扩为 5 项 + P1-T5 补 `composer.thinking.max` 文案后，该序列变 
 **涉及文件**：`src/shared/visionModelRouting.test.ts:151`
 
 **完成判据**：
-- [ ] `:151` 断言已改为 **`'kimi-k2.7-code'`**（无前缀）并加注释
-- [ ] 该文件内**无其它**带 `Volcano-`/`Deep-` 前缀的 `displayName` 断言仍保留旧值（全文件仅 `:151` 一处，已核）
-- [ ] 该文件其余用例（`resolveVisionModelBinding` × 4、`resolveVisionRouteForImageSend` × 3、history/request 判断等）**未被改动**且通过
-- [ ] `npm exec vitest run src/shared/visionModelRouting.test.ts` 全绿
+- [x] `:151` 断言已改为 **`'kimi-k2.7-code'`**（无前缀）并加注释
+- [x] 该文件内**无其它**带 `Volcano-`/`Deep-` 前缀的 `displayName` 断言仍保留旧值（全文件仅 `:151` 一处，已核）
+- [x] 该文件其余用例（`resolveVisionModelBinding` × 4、`resolveVisionRouteForImageSend` × 3、history/request 判断等）**未被改动**且通过
+- [x] `npm exec vitest run src/shared/visionModelRouting.test.ts` 全绿
 
 ### P2-G 阶段 2 收尾（门禁）
 
-- [ ] `npm exec vitest run src/shared/llmModelConfig.test.ts src/shared/visionModelRouting.test.ts src/renderer/services/sessionModelBinding.test.ts` 全绿
-- [ ] `npm run typecheck:shared` + `npm run typecheck:renderer` 通过
-- [ ] **P0-T2 盘点表 B（字段类）的 3 个「转红」文件均已处置完毕**（#1 P2-T6 / #2 P2-T3 / #3 P2-T4）
-- [ ] 开发模式下确认：仅配置 1 个服务时，模型名为纯模型名；配置 2 个服务且同名时，模型名带服务前缀
-- [ ] 已提交，提交信息说明「displayName 仅在歧义时加服务名前缀」
+- [x] `npm exec vitest run src/shared/llmModelConfig.test.ts src/shared/visionModelRouting.test.ts src/renderer/services/sessionModelBinding.test.ts` 全绿
+- [x] `npm run typecheck:shared` + `npm run typecheck:renderer` 通过
+- [x] **P0-T2 盘点表 B（字段类）的 3 个「转红」文件均已处置完毕**（#1 P2-T6 / #2 P2-T3 / #3 P2-T4）
+- [x] 开发模式下确认：仅配置 1 个服务时，模型名为纯模型名；配置 2 个服务且同名时，模型名带服务前缀（两场景均已由 `llmModelConfig.test.ts` / `sessionModelBinding.test.ts` 自动化覆盖；真机目检并入 P7 统一人工验收）
+- [x] 已提交，提交信息说明「displayName 仅在歧义时加服务名前缀」
 
 ---
+
+
+（P2 完成人：ZCode，2026-09-30；TDD：断言反转 RED 5 例 → 两遍处理实现 GREEN 60 例定向全绿 + 双 typecheck 过）
 
 ## 6. 阶段 3：可用档位集合解析（FR10 数据源）
 
