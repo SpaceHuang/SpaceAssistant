@@ -803,6 +803,7 @@ describe('queued and retry queries', () => {
     const target = resolveRetryContext(db, sessionId, 'a1')
     expect(target?.currentUser.message.id).toBe('u1')
     expect(target?.failedAssistant.message.id).toBe('a1')
+    expect(target?.excludeMessageIds).toEqual(['a1'])
   })
 
   it('连续排队时按 turn.user_message_id 找到真实 retry user，而不是最近物理 user', () => {
@@ -816,6 +817,25 @@ describe('queued and retry queries', () => {
       assistantMessageId: 'b-assistant', userMessageId: 'b-user', state: 'terminal', outcome: 'failed'
     })
     expect(resolveRetryContext(db, sessionId, 'b-assistant')?.currentUser.message.id).toBe('b-user')
+  })
+
+  it('重试同一用户输入时排除它之前所有失败的助手尝试', () => {
+    appendMessage(db, { id: 'retry-chain-user', sessionId, role: 'user', content: 'retry me', timestamp: 1, status: 'sent' })
+    for (const [index, assistantId] of ['retry-chain-failed-1', 'retry-chain-failed-2', 'retry-chain-failed-3'].entries()) {
+      appendMessage(db, { id: assistantId, sessionId, role: 'assistant', content: '', timestamp: index + 2, status: 'failed' })
+      createPersistedTurn(db, {
+        turnId: `${assistantId}-turn`, requestId: `${assistantId}-request`, sessionId,
+        userMessageId: 'retry-chain-user', assistantMessageId: assistantId, state: 'terminal', outcome: 'failed'
+      })
+    }
+
+    const target = resolveRetryContext(db, sessionId, 'retry-chain-failed-3')
+    expect(target).toMatchObject({
+      currentUser: { message: { id: 'retry-chain-user' } },
+      excludeMessageIds: ['retry-chain-failed-1', 'retry-chain-failed-2', 'retry-chain-failed-3']
+    })
+    expect(getTurnContext(db, sessionId, target!.failedAssistant.sequence, target!.currentUser.message.id, target!.excludeMessageIds)
+      .map(({ id }) => id)).toEqual(['retry-chain-user'])
   })
 })
 

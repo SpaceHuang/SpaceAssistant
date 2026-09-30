@@ -46,6 +46,8 @@ export type QueuedMessageEntry = {
 export type RetryContextTarget = {
   failedAssistant: { message: Message; sequence: number }
   currentUser: { message: Message; sequence: number }
+  /** Failed assistant attempts linked to currentUser and excluded from retry API history. */
+  excludeMessageIds?: string[]
 }
 
 export type ApiContextRequest = {

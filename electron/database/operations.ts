@@ -1246,6 +1246,7 @@ export function getNextQueuedMessage(db: AppDatabase, sessionId: string): Queued
 export type RetryContextTarget = {
   failedAssistant: { message: Message; sequence: number }
   currentUser: { message: Message; sequence: number }
+  excludeMessageIds: string[]
 }
 
 export function resolveRetryContext(
@@ -1260,6 +1261,19 @@ export function resolveRetryContext(
   if (!failedRow) return null
   const failedMessage = rowToStoredMessage(failedRow)
   if (failedMessage.role !== 'assistant' || failedMessage.status !== 'failed') return null
+
+  const excludeFailedAttempts = (userMessageId: string): string[] => {
+    const rows = conn.prepare(`
+      SELECT assistant.id
+      FROM turns t
+      JOIN messages assistant ON assistant.id = t.assistant_message_id AND assistant.session_id = t.session_id
+      WHERE t.session_id = ? AND t.user_message_id = ?
+        AND assistant.role = 'assistant' AND assistant.status = 'failed'
+      ORDER BY assistant.sequence ASC
+    `).all(sessionId, userMessageId) as Array<{ id: string }>
+    const ids = rows.map(({ id }) => id)
+    return ids.includes(failedMessage.id) ? ids : [...ids, failedMessage.id]
+  }
 
   // 优先使用 turn 的真实因果关联。连续排队时，物理 sequence 上 failed assistant
   // 之前最近的 user 可能已经属于下一条排队输入，不能再按相邻消息猜测。
@@ -1276,7 +1290,8 @@ export function resolveRetryContext(
       const linkedSequence = linked.sequence
       return {
         failedAssistant: { message: failedMessage, sequence: failedRow.sequence },
-        currentUser: { message: linkedMessage, sequence: linkedSequence }
+        currentUser: { message: linkedMessage, sequence: linkedSequence },
+        excludeMessageIds: excludeFailedAttempts(linkedMessage.id)
       }
     }
   }
@@ -1296,7 +1311,8 @@ export function resolveRetryContext(
     if (!message.content.trim()) continue
     return {
       failedAssistant: { message: failedMessage, sequence: failedRow.sequence },
-      currentUser: { message, sequence: row.sequence }
+      currentUser: { message, sequence: row.sequence },
+      excludeMessageIds: excludeFailedAttempts(message.id)
     }
   }
   return null

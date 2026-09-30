@@ -630,7 +630,7 @@ export function ChatView() {
             message: target.currentUser.message,
             order: { kind: 'persisted', sequence: target.currentUser.sequence }
           },
-          excludeMessageIds: [target.failedAssistant.message.id]
+          excludeMessageIds: target.excludeMessageIds
         }
       })
     },
