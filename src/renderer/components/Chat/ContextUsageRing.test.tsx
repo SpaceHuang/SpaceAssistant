@@ -392,7 +392,7 @@ describe('ContextUsageRing Tooltip 分组与构成段（AD21 / P2 §6.7）', () 
     expect(screen.queryByTestId('usage-tooltip-group-cache')).toBeNull()
   })
 
-  it('构成段：block-v1 行归一化到上轮输入，Σ构成段 == totalRequestInput（AT15/AD17）', async () => {
+  it('构成段：block-v1 行归一化到上轮输入，Σ构成段 == totalRequestInput（AT15/AD17）；版本号不进可见文本', async () => {
     mockAttributionApi({ estimatorVersion: 'block-v1', systemTokens: 1124, toolsTokens: 16476, messageTokens: 320875 })
     renderRing({ input_tokens: 135281, output_tokens: 3000, cache_read_input_tokens: 320824 })
     const svg = document.querySelector('svg')!
@@ -404,8 +404,10 @@ describe('ContextUsageRing Tooltip 分组与构成段（AD21 / P2 §6.7）', () 
       expect(text).toContain('工具声明')
       expect(text).toContain('消息体')
       expect(text).toContain('≈')
-      expect(text).toContain('block-v1')
+      // 估算器版本号是内部口径，不得出现在用户可见文本（仅悬停 title 供排障）
+      expect(text).not.toContain('block-v1')
     })
+    expect(screen.getByTestId('usage-tooltip-group-composition').closest('.context-usage-tooltip-group')?.getAttribute('title')).toBe('block-v1')
   })
 
   it('无归因数据（老会话/API null）时构成组整体隐藏，不补 0（AT8/I5）', async () => {

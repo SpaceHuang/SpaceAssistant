@@ -47,7 +47,7 @@
     "composition": "成本构成"
   },
   "composition": {
-    "estimated": "估算 · {{version}}",
+    "estimated": "估算",
     "derived": "派生 · 字符口径",
     "coverage": "归因覆盖率 {{percent}}",
     "unattributed": "另有 {{tokens}} tokens 无可归因数据（早于归因能力上线或估算器版本不一致）",

@@ -32,7 +32,7 @@
     "systemPrompt": "系统提示",
     "tools": "工具声明",
     "messages": "消息体",
-    "estimatedMark": "≈{{count}} · 估算 {{version}}",
+    "estimatedMark": "≈{{count}}",
     "unavailable": "暂无内部构成数据"
   }
 }

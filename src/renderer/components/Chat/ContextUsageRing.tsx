@@ -193,8 +193,8 @@ export function ContextUsageRing({
     const cacheRead = lastUsage?.cache_read_input_tokens ?? 0
     const cacheWrite = lastUsage?.cache_creation_input_tokens ?? 0
 
-    const renderGroup = (title: string, lines: string[], key: string, muted = true) => (
-      <div key={key} className="context-usage-tooltip-group">
+    const renderGroup = (title: string, lines: string[], key: string, muted = true, titleAttr?: string) => (
+      <div key={key} className="context-usage-tooltip-group" title={titleAttr}>
         {muted && (
           <div style={{ opacity: 0.65, marginTop: 4 }} data-testid={`usage-tooltip-group-${key}`}>
             {title}
@@ -208,9 +208,10 @@ export function ContextUsageRing({
 
     const compositionLines: string[] = []
     if (composition) {
-      compositionLines.push(t('composition.estimatedMark', { count: formatNum(composition.system, locale), version: composition.version }) + ` · ${t('composition.systemPrompt')}`)
-      compositionLines.push(t('composition.estimatedMark', { count: formatNum(composition.tools, locale), version: composition.version }) + ` · ${t('composition.tools')}`)
-      compositionLines.push(t('composition.estimatedMark', { count: formatNum(composition.messages, locale), version: composition.version }) + ` · ${t('composition.messages')}`)
+      // 界面只给「≈数值」与来源名；估算器版本号（block-v1）属内部口径，仅放悬停 title 供排障
+      compositionLines.push(`${t('composition.estimatedMark', { count: formatNum(composition.system, locale) })} · ${t('composition.systemPrompt')}`)
+      compositionLines.push(`${t('composition.estimatedMark', { count: formatNum(composition.tools, locale) })} · ${t('composition.tools')}`)
+      compositionLines.push(`${t('composition.estimatedMark', { count: formatNum(composition.messages, locale) })} · ${t('composition.messages')}`)
     }
 
     const cacheLines: string[] = []
@@ -220,7 +221,8 @@ export function ContextUsageRing({
     return (
       <div className="context-usage-tooltip">
         {renderGroup(t('groups.occupation'), occupationLines, 'occupation')}
-        {compositionLines.length > 0 && renderGroup(t('groups.composition'), compositionLines, 'composition')}
+        {compositionLines.length > 0 &&
+          renderGroup(t('groups.composition'), compositionLines, 'composition', true, composition?.version)}
         {cacheLines.length > 0 && renderGroup(t('groups.cache'), cacheLines, 'cache')}
         {renderGroup(t('groups.reserve'), [`${t('tooltip.outputReserve')}　${formatNum(display.effectiveOutputMax, locale)}`], 'reserve')}
         <div>{t('tooltip.separator')}</div>

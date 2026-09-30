@@ -47,7 +47,7 @@
     "composition": "Cost Composition"
   },
   "composition": {
-    "estimated": "Estimated · {{version}}",
+    "estimated": "Estimated",
     "derived": "Derived · chars",
     "coverage": "Attribution coverage {{percent}}",
     "unattributed": "{{tokens}} tokens have no attribution data (predating attribution or estimator version mismatch)",

@@ -55,7 +55,7 @@ function outputSplit(overrides: Partial<UsageAttributionOutputSplit> = {}): Usag
 }
 
 describe('UsageCompositionBar（视图①：构成快照）', () => {
-  it('渲染各类别段与图例，并带估算标注（AT2/AT10）', () => {
+  it('渲染各类别段与图例，并带「估算」标注；估算器版本号不得出现在界面文本（内部口径）', () => {
     render(
       <ConfigProvider>
         <UsageCompositionBar composition={composition()} />
@@ -67,8 +67,11 @@ describe('UsageCompositionBar（视图①：构成快照）', () => {
     // 段宽按占比（横向 100% 堆叠条形，AD19 不做饼图）
     const widths = segments.map((el) => Number((el as HTMLElement).style.width.replace('%', '')))
     expect(Math.round(widths.reduce((a, b) => a + b, 0))).toBe(100)
-    expect(screen.getByTestId('usage-composition-bar').textContent).toContain('估算')
-    expect(screen.getByTestId('usage-composition-bar').textContent).toContain('block-v1')
+    const bar = screen.getByTestId('usage-composition-bar')
+    expect(bar.textContent).toContain('估算')
+    // 版本号只保留在悬停 title 中（排障可查），不进可见文本
+    expect(bar.textContent).not.toContain('block-v1')
+    expect(bar.getAttribute('title')).toBe('block-v1')
   })
 })
 

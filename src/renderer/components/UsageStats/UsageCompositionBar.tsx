@@ -44,9 +44,9 @@ export function UsageCompositionBar({ composition }: Props) {
   })).filter((s) => s.tokens > 0)
 
   return (
-    <div data-testid="usage-composition-bar">
+    <div data-testid="usage-composition-bar" title={composition.estimatorVersion}>
       <Typography.Text type="secondary">
-        {t('composition.snapshot')}（{t('composition.snapshotHint')} · {t('composition.estimated', { version: composition.estimatorVersion })}）
+        {t('composition.snapshot')}（{t('composition.snapshotHint')} · {t('composition.estimated')}）
       </Typography.Text>
       <div style={{ display: 'flex', height: 28, borderRadius: 4, overflow: 'hidden', marginTop: 8 }}>
         {segments.map((segment) => (
