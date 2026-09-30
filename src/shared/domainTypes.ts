@@ -560,6 +560,13 @@ export interface ToolCallResultPersisted {
   displayData?: import('./mcpToolResultDisplay').McpResultDisplay
   /** 工具未进入执行流程（被授权 / 确认 / 策略 / 预算拦下，或调用整体被放弃），区别于「执行了但失败」（需求 §7.6）。 */
   notExecuted?: true
+  /**
+   * 归因冗余字段（agent-token-usage-content-attribution §7.3 / AD10，可选）：工具名与来源分类。
+   * 让 tool_result 不依赖跨事件配对与 mcp_ 命名约定即可归因；对远程链路（台账 no-op）无影响，
+   * 工具维度的正式落库走 usage_turn_facts（§7.6.5）。
+   */
+  toolName?: string
+  toolSource?: 'builtin' | 'mcp' | 'skill' | 'other'
   /** 未执行的原因码，便于聚合与今后回填区分「未执行」与「执行失败」。
    *  agent_denied：安全审批 Agent 机审拒绝（P1-D，区别于 user_rejected 的真人拒绝）。
    *  agent_undetermined：审批 Agent 有效裁决「判不了」（R5；区别于 agent_denied 的判定拒绝，
