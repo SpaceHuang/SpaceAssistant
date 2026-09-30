@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { AppConfig } from '../../shared/domainTypes'
 import { normalizeModelEntry } from '../../shared/llmModelConfig'
-import { resolveSessionModelBinding, resolveSessionThinkingBinding, listChatModelOptions } from './sessionModelBinding'
+import {
+  resolveSessionModelBinding,
+  resolveSessionThinkingBinding,
+  resolveAvailableThinkingEfforts,
+  listChatModelOptions
+} from './sessionModelBinding'
 
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   const models = [
@@ -104,6 +109,44 @@ describe('sessionModelBinding', () => {
     const cfg = makeConfig()
     const options = listChatModelOptions(cfg)
     expect(options.find((o) => o.modelName === 'glm-5.3')?.displayName).toBe('glm-5.3')
+  })
+})
+
+
+describe('resolveAvailableThinkingEfforts（FR10：renderer 自算可用档位集合，A22 / A22a / A22b）', () => {
+  it('gpt-5-pro：仅 high 有值（low/medium/max 显式 null）→ [\'off\',\'high\']（off 恒可用，不在排除集）', () => {
+    expect(resolveAvailableThinkingEfforts('gpt-5-pro')).toEqual(['off', 'high'])
+  })
+
+  it('claude-opus-4-6：map 仅 max 键 → 键缺失不排除（A22a）→ 全 5 档', () => {
+    expect(resolveAvailableThinkingEfforts('claude-opus-4-6')).toEqual(['off', 'low', 'medium', 'high', 'max'])
+  })
+
+  it('claude-haiku-4-5：无 thinkingLevelMap → fail-open 全 5 档（A22b）', () => {
+    expect(resolveAvailableThinkingEfforts('claude-haiku-4-5')).toEqual(['off', 'low', 'medium', 'high', 'max'])
+  })
+
+  it('deepseek-v4-pro：minimal/low/medium 为 null → [\'off\',\'high\',\'max\']（3 档）', () => {
+    expect(resolveAvailableThinkingEfforts('deepseek-v4-pro')).toEqual(['off', 'high', 'max'])
+  })
+
+  it('未知模型名（不在基线内）→ fail-open 全 5 档（A22b）', () => {
+    expect(resolveAvailableThinkingEfforts('unlisted-model')).toEqual(['off', 'low', 'medium', 'high', 'max'])
+  })
+
+  it('旧内置名经 migrateBuiltinModelName 归一后仍能查到基线（deepseek-v4-flash → deepseek-flash）', () => {
+    // deepseek-flash 基线：仅 medium 显式 null → [\'off\',\'low\',\'high\',\'max\']
+    expect(resolveAvailableThinkingEfforts('deepseek-v4-flash')).toEqual(['off', 'low', 'high', 'max'])
+  })
+
+  it('返回顺序严格为 THINKING_EFFORT_LEVELS 的子序列（由弱到强）', () => {
+    const levels: readonly string[] = ['off', 'low', 'medium', 'high', 'max']
+    for (const name of ['gpt-5-pro', 'deepseek-v4-pro', 'deepseek-v4-flash', 'unlisted-model']) {
+      const result = resolveAvailableThinkingEfforts(name)
+      const idx = result.map((e) => levels.indexOf(e))
+      expect([...idx].sort((a, b) => a - b)).toEqual(idx)
+      expect(result.every((e) => levels.includes(e))).toBe(true)
+    }
   })
 })
 

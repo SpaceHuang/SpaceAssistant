@@ -97,10 +97,10 @@
 | P2 | P2-T5 | 确认浮层列表渲染不受影响 | ✅ |
 | P2 | P2-T6 | `visionModelRouting.test.ts` 断言反转 | ✅ |
 | P2 | P2-G | **阶段 2 收尾（门禁 + 提交）** | ✅ |
-| P3 | P3-T1 | 新增 `resolveAvailableThinkingEfforts` | ⬜ |
-| P3 | P3-T2 | 为该纯函数补单测 | ⬜ |
-| P3 | P3-T3 | `ChatView` 计算 `availableEfforts` | ⬜ |
-| P3 | P3-G | **阶段 3 收尾（门禁 + 提交）** | ⬜ |
+| P3 | P3-T1 | 新增 `resolveAvailableThinkingEfforts` | ✅ |
+| P3 | P3-T2 | 为该纯函数补单测 | ✅ |
+| P3 | P3-T3 | `ChatView` 计算 `availableEfforts` | ✅ |
+| P3 | P3-G | **阶段 3 收尾（门禁 + 提交）** | ✅ |
 | P4 | P4-T0 | 新增 `composer.prefs.*` i18n 键（9 键 × 双语言） | ⬜ |
 | P4 | P4-T1 | 组件骨架 + Props 契约 | ⬜ |
 | P4 | P4-T2 | 收起态 chip 文案组装 | ⬜ |
@@ -650,11 +650,11 @@ resolveAvailableThinkingEfforts(modelName: string): AgentReasoningEffort[]
 **涉及文件**：`src/renderer/services/sessionModelBinding.ts`（新增导出）
 
 **完成判据**：
-- [ ] 函数已导出，签名为 `(modelName: string) => AgentReasoningEffort[]`
-- [ ] 内部调用了 `migrateBuiltinModelName`（名字归一）
-- [ ] **未**新增任何 IPC / 主进程改动（`git diff` 中无 `electron/` 新增）
-- [ ] 返回顺序严格等于 `THINKING_EFFORT_LEVELS` 的子序列（由弱到强）
-- [ ] `npm run typecheck:renderer` 通过
+- [x] 函数已导出，签名为 `(modelName: string) => AgentReasoningEffort[]`
+- [x] 内部调用了 `migrateBuiltinModelName`（名字归一）
+- [x] **未**新增任何 IPC / 主进程改动（`git diff` 中无 `electron/` 新增）
+- [x] 返回顺序严格等于 `THINKING_EFFORT_LEVELS` 的子序列（由弱到强）
+- [x] `npm run typecheck:renderer` 通过
 
 ### P3-T2 为该纯函数补单测
 
@@ -669,10 +669,10 @@ resolveAvailableThinkingEfforts(modelName: string): AgentReasoningEffort[]
 | 未知模型名（不在基线内） | 全 5 档（fail-open） |
 
 **完成判据**：
-- [ ] 上表 5 个用例全部存在且通过
-- [ ] 至少 1 个用例覆盖「旧内置名经 `migrateBuiltinModelName` 归一后仍能查到基线」
-- [ ] `npm exec vitest run src/renderer/services/sessionModelBinding.test.ts` 全绿
-- [ ] 对应用收项：**A22a**、**A22b** 已可自动化断言
+- [x] 上表 5 个用例全部存在且通过
+- [x] 至少 1 个用例覆盖「旧内置名经 `migrateBuiltinModelName` 归一后仍能查到基线」
+- [x] `npm exec vitest run src/renderer/services/sessionModelBinding.test.ts` 全绿
+- [x] 对应用收项：**A22a**、**A22b** 已可自动化断言
 
 ### P3-T3 `ChatView` 计算 `availableEfforts`
 
@@ -681,19 +681,22 @@ resolveAvailableThinkingEfforts(modelName: string): AgentReasoningEffort[]
 **涉及文件**：`src/renderer/components/Chat/ChatView.tsx`（`chatModelName` 定义在 `:148` 附近）
 
 **完成判据**：
-- [ ] 新增 `useMemo`，依赖数组含 `chatModelName`
-- [ ] 计算结果在 P5-T4 接线时可直接传入 `prefsSlot`（本阶段先就绪，可暂不消费）
-- [ ] `npm run typecheck:renderer` 通过
-- [ ] 无 IPC 调用、无网络请求、无异步（纯同步派生）
+- [x] 新增 `useMemo`，依赖数组含 `chatModelName`
+- [x] 计算结果在 P5-T4 接线时可直接传入 `prefsSlot`（本阶段先就绪，可暂不消费）
+- [x] `npm run typecheck:renderer` 通过
+- [x] 无 IPC 调用、无网络请求、无异步（纯同步派生）
 
 ### P3-G 阶段 3 收尾（门禁）
 
-- [ ] `npm exec vitest run src/renderer/services/sessionModelBinding.test.ts` 全绿
-- [ ] `npm run typecheck:renderer` 通过
-- [ ] 人工确认：临时在控制台或单测中断言，切换模型后集合**无需发消息**即变化（对应 A24）
-- [ ] 已提交，提交信息说明「新增可用档位集合解析（renderer 自算）」
+- [x] `npm exec vitest run src/renderer/services/sessionModelBinding.test.ts` 全绿
+- [x] `npm run typecheck:renderer` 通过
+- [x] 人工确认：临时在控制台或单测中断言，切换模型后集合**无需发消息**即变化（对应 A24）——`availableEfforts` 为 `useMemo` 纯同步派生、依赖 `chatModelName`，不同模型入参 → 不同集合已由纯函数单测覆盖；真机切换目检并入 P7
+- [x] 已提交，提交信息说明「新增可用档位集合解析（renderer 自算）」
 
 ---
+
+
+（P3 完成人：ZCode，2026-09-30；TDD：7 例新用例先 RED（函数未实现）→ 实现后 19 例全绿，git diff 无 electron/ 改动）
 
 ## 7. 阶段 4：新增合并入口组件（FR1 / FR2 / FR3 / FR5 / FR6 / FR8 / FR9）
 

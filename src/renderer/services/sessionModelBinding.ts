@@ -4,10 +4,23 @@ import {
   buildChatModelOptions,
   findChatModelOption,
   getAvailableModels,
+  migrateBuiltinModelName,
   resolvePreferredModelEntry,
   type ChatModelOption
 } from '../../shared/llmModelConfig'
-import { isThinkingEffort, normalizeThinkingEffort } from '../../shared/thinkingEffort'
+import { isThinkingEffort, normalizeThinkingEffort, THINKING_EFFORT_LEVELS } from '../../shared/thinkingEffort'
+import { resolveThinkingAvailability } from '../../shared/thinkingAvailability'
+
+/**
+ * 当前模型的可用档位集合（FR10 / A22，方案 A：renderer 自算，零 IPC 改动）：
+ * 名字先经 migrateBuiltinModelName 归一（与主进程基线口径对齐），再由模型基线的显式 `null` 排除；
+ * 键缺失 / 未知模型 fail-open 返回全部 5 档，顺序严格为 THINKING_EFFORT_LEVELS 的子序列（由弱到强）。
+ */
+export function resolveAvailableThinkingEfforts(modelName: string): AgentReasoningEffort[] {
+  const normalizedName = migrateBuiltinModelName(modelName)
+  const { unsupported } = resolveThinkingAvailability(normalizedName, { effortUnsupportedByMemo: false })
+  return THINKING_EFFORT_LEVELS.filter((level) => !unsupported.includes(level))
+}
 
 /** 会话级 Thinking 强度绑定（需求 §5.2）：继承语义 + composer 草稿保持，与 resolveSessionModelBinding 同构。 */
 export function resolveSessionThinkingBinding(

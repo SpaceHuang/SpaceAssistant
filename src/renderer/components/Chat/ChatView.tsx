@@ -50,7 +50,7 @@ import { resolveChatLocale } from '../../utils/resolveChatLocale'
 import { buildToolChatPayload } from '../../services/chatToolSessionService'
 import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
 import { ComposerModelPicker } from './ComposerModelPicker'
-import { resolveSessionModelBinding, resolveSessionThinkingBinding } from '../../services/sessionModelBinding'
+import { resolveSessionModelBinding, resolveSessionThinkingBinding, resolveAvailableThinkingEfforts } from '../../services/sessionModelBinding'
 import type { AgentReasoningEffort } from '../../../shared/agent/invocation'
 import { ComposerThinkingPicker } from './ComposerThinkingPicker'
 import { resolveFailureReasonForMessage } from '../../services/turnFailureDisplay'
@@ -147,6 +147,8 @@ export function ChatView() {
   }, [currentSessionId])
   const chatModelName = sessionBinding?.modelName ?? cfg?.model ?? ''
   const chatLlmServiceId = sessionBinding?.llmServiceId
+  // 当前模型可用档位集合（FR10，renderer 自算）：随模型切换立即重算（A24），P5 接线时传入 prefsSlot
+  const availableEfforts = useMemo(() => resolveAvailableThinkingEfforts(chatModelName), [chatModelName])
   const currentModelEntry = useMemo(
     () => (cfg && chatModelName ? cfg.models.find((m) => m.name === chatModelName) : undefined),
     [cfg, chatModelName]
