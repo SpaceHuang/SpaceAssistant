@@ -41,5 +41,67 @@
   },
   "empty": "暂无用量数据。发起对话后，这里会展示 Token 消耗、缓存命中率与工具调用统计。",
   "rangeTooLong": "时间跨度最大 365 天，已自动按 365 天展示",
-  "loadFailed": "加载用量统计失败"
+  "loadFailed": "加载用量统计失败",
+  "tab": {
+    "overview": "总览",
+    "composition": "成本构成"
+  },
+  "composition": {
+    "estimated": "估算 · {{version}}",
+    "derived": "派生 · 字符口径",
+    "coverage": "归因覆盖率 {{percent}}",
+    "unattributed": "另有 {{tokens}} tokens 无可归因数据（早于归因能力上线或估算器版本不一致）",
+    "emptyTitle": "无可归因数据",
+    "emptyReason": "该区间的请求早于归因能力上线，或不含可归因的用量数据。",
+    "snapshot": "构成快照",
+    "snapshotHint": "归一化到可归因输入",
+    "drift": "构成漂移（按天）",
+    "driftScale": {
+      "absolute": "绝对量",
+      "percent": "占比"
+    },
+    "output": "输出侧构成",
+    "outputHint": "归一化到可归因输出",
+    "categories": {
+      "system": "系统提示",
+      "tools": "工具声明",
+      "userText": "用户消息",
+      "assistantText": "历史回复",
+      "toolResults": "工具返回",
+      "assistantThinking": "历史思考",
+      "assistantToolUse": "历史工具参数",
+      "other": "其他"
+    },
+    "outputCategories": {
+      "thinking": "思考",
+      "text": "正文",
+      "toolUseArgs": "工具参数"
+    },
+    "breakdown": {
+      "title": "工具明细排行",
+      "tool": "工具",
+      "source": "来源",
+      "declaredChars": "声明字符",
+      "calls": "调用次数",
+      "resultChars": "返回字符",
+      "unusedTitle": "未使用工具（有声明、无调用）",
+      "unusedCount": "{{count}} 个",
+      "unusedEmpty": "所有已声明工具都至少被调用过一次"
+    }
+  },
+  "insight": {
+    "title": "洞察",
+    "unusedTools": {
+      "title": "{{count}} 个工具从未使用，占声明常驻 {{percent}}",
+      "action": "建议：按需挂载 / 精简工具声明"
+    },
+    "fixedCost": {
+      "title": "固定成本仅占 {{percent}}，优化重心在增量侧",
+      "action": "建议：工具结果截断 / 上下文压缩"
+    },
+    "topToolResults": {
+      "title": "Top 3 工具占工具返回体量 {{percent}}",
+      "action": "建议：结果截断 / 摘要回填"
+    }
+  }
 }

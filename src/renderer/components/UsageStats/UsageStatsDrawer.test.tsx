@@ -145,6 +145,10 @@ describe('UsageStatsDrawer', () => {
         sessions: [{ sessionId: 'sess-1', name: null }],
         appVersions: ['0.1.5']
       })),
+      usageStatsAttributionComposition: vi.fn(async () => null),
+      usageStatsAttributionDaily: vi.fn(async () => []),
+      usageStatsAttributionOutput: vi.fn(async () => null),
+      usageStatsAttributionTools: vi.fn(async () => null),
       ...overrides
     }
     ;(window as unknown as { api: unknown }).api = api
@@ -225,6 +229,55 @@ describe('UsageStatsDrawer', () => {
     await waitFor(() => {
       expect(screen.getByTestId('usage-empty')).toBeTruthy()
     })
+  })
+
+  it('AT14：成本构成 Tab 与总览共用同一筛选——切换 Tab 不重置筛选，且归因查询携带同一区间与 block-v1 版本', async () => {
+    mockChartSize()
+    const api = mockApi()
+    renderDrawer(true)
+    await waitFor(() => {
+      expect(api.usageStatsAttributionComposition).toHaveBeenCalled()
+    })
+    // 切换到「成本构成」Tab
+    const compositionTab = screen.getAllByText('成本构成').at(-1) as HTMLElement
+    fireEvent.click(compositionTab)
+    await waitFor(() => {
+      // 面板渲染（无归因数据 → 空态）
+      expect(screen.getByTestId('usage-attribution-empty')).toBeTruthy()
+    })
+    // 切 Tab 不触发重新查询（数据同一次 fetchData 已取好，共用同一筛选）
+    const callsAfterTabSwitch = api.usageStatsSummary.mock.calls.length
+    expect(api.usageStatsAttributionComposition.mock.calls.length).toBe(callsAfterTabSwitch)
+    // 归因查询参数：与总览同一 from/to + 固定 block-v1 版本（I1）
+    const [attributionArgs] = api.usageStatsAttributionComposition.mock.calls[0] as Array<{ from: string; to: string; estimatorVersion: string }>
+    expect(attributionArgs.estimatorVersion).toBe('block-v1')
+    const [summaryArgs] = api.usageStatsSummary.mock.calls[0] as Array<{ from: string; to: string }>
+    expect(attributionArgs.from).toBe(summaryArgs.from)
+    expect(attributionArgs.to).toBe(summaryArgs.to)
+  })
+
+  it('AT14：成本构成 Tab 渲染归因面板（覆盖率/快照/明细）', async () => {
+    mockChartSize()
+    mockApi({
+      usageStatsAttributionComposition: vi.fn(async () => ({
+        estimatorVersion: 'block-v1',
+        attributableInputTokens: 100_000,
+        totalInputTokens: 150_000,
+        attributionCoverage: 2 / 3,
+        categories: { system: 2_000, tools: 18_000, userText: 10_000, assistantText: 20_000, toolResults: 48_000, assistantThinking: 1_000, assistantToolUse: 500, other: 500 }
+      })),
+      usageStatsAttributionDaily: vi.fn(async () => []),
+      usageStatsAttributionOutput: vi.fn(async () => null),
+      usageStatsAttributionTools: vi.fn(async () => ({ used: [], unused: [], totalDeclaredChars: 0, unusedDeclaredChars: 0 }))
+    })
+    renderDrawer(true)
+    const compositionTab = screen.getAllByText('成本构成').at(-1) as HTMLElement
+    fireEvent.click(compositionTab)
+    // 覆盖率 < 100% 显式展示（I7）
+    await waitFor(() => {
+      expect(screen.getByTestId('usage-attribution-coverage')).toBeTruthy()
+    })
+    expect(screen.getByTestId('usage-attribution-coverage').textContent).toContain('66.7%')
   })
 
   it('P0 回归：自定义模式选定日期后 RangePicker 以 dayjs 渲染，不白屏且按新范围查询', async () => {
