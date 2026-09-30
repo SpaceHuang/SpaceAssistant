@@ -1,7 +1,7 @@
 import type { AppDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
 import type { UsageTurnFactRow } from '../database/operations'
-import { normalizeInputAttribution, normalizeOutputAttribution, type NormalizedInputAttribution, type StepAttributionJson } from '../../src/shared/usageAttribution'
+import { ATTRIBUTION_SCHEMA_VERSION, normalizeInputAttribution, normalizeOutputAttribution, type NormalizedInputAttribution, type StepAttributionJson } from '../../src/shared/usageAttribution'
 import {
   USAGE_MAX_RANGE_DAYS,
   type UsageAttributionCategory,
@@ -298,7 +298,10 @@ function parseAttribution(row: AttributionRow): StepAttributionJson | null {
   if (!row.attribution_json) return null
   try {
     const parsed = JSON.parse(row.attribution_json) as StepAttributionJson
-    return parsed && typeof parsed === 'object' && parsed.blocks ? parsed : null
+    // schemaVersion 校验（AD7）：未来 v2 格式的行不得当 v1 静默混入——按「无归因数据」降级（留在分母、不进分子）
+    if (!parsed || typeof parsed !== 'object' || !parsed.blocks) return null
+    if (parsed.schemaVersion !== ATTRIBUTION_SCHEMA_VERSION) return null
+    return parsed
   } catch {
     return null
   }
@@ -318,6 +321,8 @@ type AttributionRow = {
 function fetchAttributionRows(db: AppDatabase, args: UsageAttributionRangeArgs): AttributionRow[] {
   const { whereToken, paramsToken } = buildFilterWhere(args.dimensions)
   const conn = getDbConnection(db)
+  // 注意：不得把 estimator_version 过滤下推到这条 SQL——版本不一致/无归因的行仍需进入
+  // 覆盖率分母（AT16/I7），下推会让它们整行消失、覆盖率恒为 100%。版本校验在 normalizeRow* 内存中做。
   return conn
     .prepare(
       `SELECT day, input_tokens, output_tokens, system_tokens, tools_tokens, estimator_version, attribution_json
@@ -358,6 +363,9 @@ function normalizeRowOutput(row: AttributionRow, estimatorVersion: string): { th
   if (row.estimator_version !== estimatorVersion) return null
   const attribution = parseAttribution(row)
   if (!attribution) return null
+  // 无 output 段的行（旧格式/异常行）给不出输出侧结构占比——整行排除出可归因子集，
+  // 否则 Σcategories < attributableOutputTokens，输出侧恒等式（AT7 同型）被破坏
+  if (!attribution.output) return null
   return normalizeOutputAttribution(
     { ...attribution, threeSources: { systemTokens: 0, toolsTokens: 0, messageTokens: 0, estimatorVersion } },
     numberValue(row.output_tokens)
@@ -442,7 +450,7 @@ export function queryAttributionOutputSplit(db: AppDatabase, args: UsageAttribut
 
 type ToolDimensionRow = { tool_attribution_json: string | null }
 
-function parseToolDimension(row: ToolDimensionRow): { tools: Record<string, number>; toolSource: Record<string, number>; toolResults: Record<string, { calls: number; chars: number }> } | null {
+function parseToolDimension(row: ToolDimensionRow): { tools: Record<string, number>; toolSource: Record<string, number>; toolSources?: Record<string, string>; toolResults: Record<string, { calls: number; chars: number }> } | null {
   if (!row.tool_attribution_json) return null
   try {
     const parsed = JSON.parse(row.tool_attribution_json) as ReturnType<typeof parseToolDimension>
@@ -467,8 +475,7 @@ export function queryToolAttributionBreakdown(db: AppDatabase, args: UsageStatsR
     .all(args.from, args.to, ...paramsTurn) as ToolDimensionRow[]
 
   const declaredChars = new Map<string, number>()
-  const sourceByName = new Map<string, string>()
-  const sourceChars = new Map<string, number>()
+  const explicitSourceByName = new Map<string, string>()
   const calls = new Map<string, number>()
   const resultChars = new Map<string, number>()
   for (const row of rows) {
@@ -477,17 +484,18 @@ export function queryToolAttributionBreakdown(db: AppDatabase, args: UsageStatsR
     for (const [name, chars] of Object.entries(dim.tools)) {
       declaredChars.set(name, (declaredChars.get(name) ?? 0) + chars)
     }
-    for (const [source, chars] of Object.entries(dim.toolSource)) {
-      sourceChars.set(source, (sourceChars.get(source) ?? 0) + chars)
+    // 逐名显式来源（写入侧 classifyToolSource 产出）；显式值优先于 mcp_ 前缀推断
+    for (const [name, source] of Object.entries(dim.toolSources ?? {})) {
+      explicitSourceByName.set(name, source)
     }
     for (const [name, entry] of Object.entries(dim.toolResults)) {
       calls.set(name, (calls.get(name) ?? 0) + entry.calls)
       resultChars.set(name, (resultChars.get(name) ?? 0) + entry.chars)
     }
   }
-  // 来源分类：toolResults/toolSource 未携带逐名来源时按名称推断（mcp_ 前缀约定，§7.3）
+  // 来源分类：优先显式字段，缺失时按名称推断（mcp_ 前缀约定，§7.3）
   const sourceOf = (name: string): string => {
-    return name.startsWith('mcp_') ? 'mcp' : 'builtin'
+    return explicitSourceByName.get(name) ?? (name.startsWith('mcp_') ? 'mcp' : 'builtin')
   }
   const used: UsageToolAttributionEntry[] = []
   const unused: UsageToolAttributionEntry[] = []

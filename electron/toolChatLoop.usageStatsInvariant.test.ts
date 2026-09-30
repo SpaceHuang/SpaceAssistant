@@ -64,6 +64,6 @@ describe('noteToolResultForStats 三分类恒等式不变量（R6 纪律）', ()
     const stats: TurnUsageStats = { stepCount: 0, toolCallCount: 0, toolErrorCount: 0, toolSkippedCount: 0, toolDimension: emptyTurnToolDimension() }
     // 模拟批次中断：只有触发者落了终态，其余 tool_call 为孤儿（不调用本函数）
     noteToolResultForStats(stats, { success: false, error: 'paused', notExecuted: true, notExecutedReason: 'budget_paused' })
-    expect(stats).toEqual({ stepCount: 0, toolCallCount: 1, toolErrorCount: 0, toolSkippedCount: 1, toolDimension: { tools: {}, toolSource: {}, toolResults: {} } })
+    expect(stats).toEqual({ stepCount: 0, toolCallCount: 1, toolErrorCount: 0, toolSkippedCount: 1, toolDimension: { tools: {}, toolSource: {}, toolSources: {}, toolResults: {} } })
   })
 })

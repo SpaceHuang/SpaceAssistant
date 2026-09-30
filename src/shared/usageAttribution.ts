@@ -65,6 +65,8 @@ export type TurnToolDimension = {
   tools: Record<string, number>
   /** 按来源分组的声明 schema 字符数（SRC-B2） */
   toolSource: Record<string, number>
+  /** 逐名显式来源（classifyToolSource 产出）；读取侧优先于 mcp_ 前缀推断 */
+  toolSources: Record<string, ToolSourceClass>
   /** 按工具名的调用次数与返回字符数（SRC-C1 / SRC-C2；SRC-B4 = tools ∖ toolResults） */
   toolResults: Record<string, { calls: number; chars: number }>
 }
@@ -192,9 +194,11 @@ export function classifyToolSource(name: string, explicit?: string): ToolSourceC
 export function summarizeToolDeclarations(tools: readonly unknown[]): {
   tools: Record<string, number>
   toolSource: Record<string, number>
+  toolSources: Record<string, ToolSourceClass>
 } {
   const byName: Record<string, number> = {}
   const bySource: Record<string, number> = {}
+  const sourceByName: Record<string, ToolSourceClass> = {}
   for (const tool of tools) {
     if (!isRecord(tool) || typeof tool.name !== 'string') continue
     let chars = 0
@@ -206,12 +210,13 @@ export function summarizeToolDeclarations(tools: readonly unknown[]): {
     byName[tool.name] = (byName[tool.name] ?? 0) + chars
     const source = classifyToolSource(tool.name)
     bySource[source] = (bySource[source] ?? 0) + chars
+    sourceByName[tool.name] = source
   }
-  return { tools: byName, toolSource: bySource }
+  return { tools: byName, toolSource: bySource, toolSources: sourceByName }
 }
 
 export function emptyTurnToolDimension(): TurnToolDimension {
-  return { tools: {}, toolSource: {}, toolResults: {} }
+  return { tools: {}, toolSource: {}, toolSources: {}, toolResults: {} }
 }
 
 /** 把一次工具返回按工具名累计进 turn 维度（调用次数 + 返回字符数）。 */
@@ -235,6 +240,8 @@ export type SystemSkillSplit = {
 /**
  * §5.4 / SRC-B5 / SRC-B6：system 尾部 skill 清单区块切分。
  * 位置以 `## Skills` 标记为准；skill 正文（SKILL.md）不在此处（走 skills_read 计入消息体）。
+ * 条目格式与 skillPrompt.ts 的 buildSkillCatalogSection 对齐：`- **name**: desc (read: path)`；
+ * 预算截断的尾部条目可能没有 `(read: …)`，按缺失处理。
  */
 export function splitSystemSkillSection(system: string): SystemSkillSplit | null {
   const marker = '## Skills'
@@ -242,17 +249,15 @@ export function splitSystemSkillSection(system: string): SystemSkillSplit | null
   if (idx < 0) return null
   const skillsSection = system.slice(idx)
   const skills: SystemSkillSplit['skills'] = []
-  // 条目形如 `- <name> (read: <path>) <desc>`；read 为空即内联型
-  const entryRegex = /^-\s+(\S+)\s+\(read:\s*([^)]*)\)/gm
-  let match: RegExpExecArray | null
-  while ((match = entryRegex.exec(skillsSection)) !== null) {
-    const start = match.index
-    const next = skillsSection.indexOf('\n-', entryRegex.lastIndex)
-    const end = next < 0 ? skillsSection.length : next
+  for (const line of skillsSection.split('\n')) {
+    const entry = /^- \*\*(.+?)\*\*:/.exec(line)
+    if (!entry) continue
+    const read = /\(read:\s*([^)]*)\)/.exec(line)
+    const readPath = read?.[1]?.trim()
     skills.push({
-      name: match[1]!,
-      chars: end - start,
-      readPath: match[2]!.trim().length > 0 ? match[2]!.trim() : null
+      name: entry[1]!,
+      chars: line.length,
+      readPath: readPath ? readPath : null
     })
   }
   return { baseChars: idx, skillsChars: skillsSection.length, skills }

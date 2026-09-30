@@ -1,29 +1,8 @@
 import { Typography } from 'antd'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
-import type { UsageAttributionCategory, UsageAttributionComposition } from '../../../shared/usageStatsTypes'
+import type { UsageAttributionComposition } from '../../../shared/usageStatsTypes'
 import { formatCount, formatPercent, type AbbreviationLocale } from './format'
-
-const CATEGORY_COLORS: Record<UsageAttributionCategory, string> = {
-  system: '#5b8ff9',
-  tools: '#f6903d',
-  userText: '#61bf8f',
-  assistantText: '#7f6be0',
-  toolResults: '#d65f5f',
-  assistantThinking: '#c084fc',
-  assistantToolUse: '#e8a33d',
-  other: '#8c8c8c'
-}
-
-const CATEGORY_ORDER: UsageAttributionCategory[] = [
-  'system',
-  'tools',
-  'userText',
-  'assistantText',
-  'toolResults',
-  'assistantThinking',
-  'assistantToolUse',
-  'other'
-]
+import { ATTRIBUTION_CATEGORY_COLORS, ATTRIBUTION_CATEGORY_ORDER } from './categories'
 
 type Props = {
   composition: UsageAttributionComposition
@@ -37,10 +16,10 @@ export function UsageCompositionBar({ composition }: Props) {
   const { t, i18n } = useTypedTranslation('usageStats')
   const abbrevLocale: AbbreviationLocale = String(i18n.language).startsWith('zh') ? 'zh-CN' : 'en-US'
   const total = composition.attributableInputTokens
-  const segments = CATEGORY_ORDER.map((key) => ({
+  const segments = ATTRIBUTION_CATEGORY_ORDER.map((key) => ({
     key,
     tokens: composition.categories[key] ?? 0,
-    color: CATEGORY_COLORS[key]
+    color: ATTRIBUTION_CATEGORY_COLORS[key]
   })).filter((s) => s.tokens > 0)
 
   return (
@@ -54,7 +33,7 @@ export function UsageCompositionBar({ composition }: Props) {
             key={segment.key}
             data-testid="usage-composition-segment"
             title={`${t(`composition.categories.${segment.key}`)} · ${formatCount(segment.tokens, abbrevLocale)}（${formatPercent(total > 0 ? segment.tokens / total : null)}）`}
-            style={{ width: `${total > 0 ? (segment.tokens / total) * 100 : 0}%`, background: segment.color, minWidth: segment.tokens > 0 ? 2 : 0 }}
+            style={{ width: `${total > 0 ? (segment.tokens / total) * 100 : 0}%`, background: segment.color }}
           />
         ))}
       </div>

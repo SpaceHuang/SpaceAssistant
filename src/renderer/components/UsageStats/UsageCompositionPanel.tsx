@@ -18,13 +18,15 @@ type Props = {
   outputSplit: UsageAttributionOutputSplit | null
   toolBreakdown: UsageToolAttributionBreakdown | null
   loading: boolean
+  /** 归因查询失败（区别于「无归因数据」——失败时不得展示「早于归因能力上线」的错误事实，评审 P1-2） */
+  loadError?: boolean
 }
 
 /**
  * 「成本构成」Tab（AD13）：与「总览」共用筛选状态，本组件只承接数据。
  * 覆盖率是一等展示数字（I7）；无归因数据时空态 + 原因说明，不补 0、不报错（AT16/I5）。
  */
-export function UsageCompositionPanel({ composition, daily, outputSplit, toolBreakdown, loading }: Props) {
+export function UsageCompositionPanel({ composition, daily, outputSplit, toolBreakdown, loading, loadError }: Props) {
   const { t, i18n } = useTypedTranslation('usageStats')
   const abbrevLocale: AbbreviationLocale = String(i18n.language).startsWith('zh') ? 'zh-CN' : 'en-US'
 
@@ -38,6 +40,14 @@ export function UsageCompositionPanel({ composition, daily, outputSplit, toolBre
 
   const hasAttributableData = composition !== null && composition.attributableInputTokens > 0
   if (!hasAttributableData) {
+    // 查询失败：中性错误文案（可重试的临时态），不冒充「早于归因能力上线」的数据事实
+    if (loadError) {
+      return (
+        <div data-testid="usage-attribution-load-error">
+          <Alert type="error" showIcon message={t('loadFailed')} />
+        </div>
+      )
+    }
     return (
       <div data-testid="usage-attribution-empty">
         <Alert
@@ -65,6 +75,14 @@ export function UsageCompositionPanel({ composition, daily, outputSplit, toolBre
             data-testid="usage-attribution-coverage"
             message={t('composition.coverage', { percent: formatPercent(coverage) })}
             description={t('composition.unattributed', { tokens: formatCount(unattributedTokens, abbrevLocale) })}
+          />
+        )}
+        {loadError && (
+          <Alert
+            type="warning"
+            showIcon
+            data-testid="usage-attribution-partial-error"
+            message={t('loadFailed')}
           />
         )}
         {composition && <UsageInsightCards composition={composition} toolBreakdown={breakdown ?? { used: [], unused: [], totalDeclaredChars: 0, unusedDeclaredChars: 0 }} />}

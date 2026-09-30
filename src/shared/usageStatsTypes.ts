@@ -146,3 +146,15 @@ export type UsageToolAttributionBreakdown = {
   totalDeclaredChars: number
   unusedDeclaredChars: number
 }
+
+/** usage_step_facts 最近归因行（环构成段数据源，§6.7）：渲染端投影，单一类型来源在 shared。 */
+export type UsageLatestSessionAttribution = {
+  stepId: string
+  turnId: string
+  createdAt: number
+  estimatorVersion: string | null
+  systemTokens: number | null
+  toolsTokens: number | null
+  messageTokens: number | null
+  attributionJson: string | null
+}

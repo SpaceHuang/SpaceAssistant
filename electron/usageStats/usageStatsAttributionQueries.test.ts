@@ -183,3 +183,85 @@ describe('queryAttributionOutputSplit（输出侧三类，SRC-D1）', () => {
     db.close()
   })
 })
+
+describe('归因行防御（评审 P1-1 / P2 输出侧恒等式）', () => {
+  it('schemaVersion 缺失或为未来版本的行按「无归因数据」降级——留分母不进分子（AD7）', () => {
+    const db = createMemoryAppDb()
+    // 正常行
+    insertAttributedStep(db, { stepId: 'ok', day: day(1), inputTokens: 10000, attribution: true })
+    // schemaVersion=99 的未来格式行
+    const future = buildStepAttribution({ system: 's', tools: [], messages: [{ role: 'user', content: 'x' }] })
+    const { threeSources, ...futureJson } = future
+    insertUsageStepFact(db, {
+      sessionId: 'sess-1', turnId: 'turn-1', stepId: 'future', createdAt: 1758000001000, day: day(1),
+      inputTokens: 5000, outputTokens: 10, cacheReadTokens: 0, cacheCreationTokens: 0, source: 'api',
+      systemTokens: threeSources.systemTokens, toolsTokens: threeSources.toolsTokens, messageTokens: threeSources.messageTokens,
+      estimatorVersion: threeSources.estimatorVersion,
+      attributionJson: JSON.stringify({ ...futureJson, schemaVersion: 99 })
+    })
+    const result = queryAttributionComposition(db, { from: day(1), to: day(1), estimatorVersion: 'block-v1' })
+    expect(result.totalInputTokens).toBe(15000)
+    expect(result.attributableInputTokens).toBe(10000)
+    const sum = Object.values(result.categories).reduce((a, b) => a + b, 0)
+    expect(sum).toBe(result.attributableInputTokens)
+    db.close()
+  })
+
+  it('cache_read > 0 的行：可归因量按三档和锚定（recorder 已把 input_tokens 归一为三档和，此处锁定列语义）', () => {
+    const db = createMemoryAppDb()
+    const attribution = buildStepAttribution({ system: 's', tools: [], messages: [{ role: 'user', content: 'x' }] })
+    const { threeSources, ...json } = attribution
+    // input_tokens=1000 为三档和（cache_read=25000 已并入）；三档拆分仅作场景真实感
+    insertUsageStepFact(db, {
+      sessionId: 'sess-1', turnId: 'turn-1', stepId: 'cached', createdAt: 1758000000000, day: day(1),
+      inputTokens: 26000, outputTokens: 100, cacheReadTokens: 25000, cacheCreationTokens: 0,
+      cacheSemantics: 'additive', source: 'api',
+      systemTokens: threeSources.systemTokens, toolsTokens: threeSources.toolsTokens, messageTokens: threeSources.messageTokens,
+      estimatorVersion: threeSources.estimatorVersion, attributionJson: JSON.stringify(json)
+    })
+    const result = queryAttributionComposition(db, { from: day(1), to: day(1), estimatorVersion: 'block-v1' })
+    expect(result.attributableInputTokens).toBe(26000)
+    const sum = Object.values(result.categories).reduce((a, b) => a + b, 0)
+    expect(sum).toBe(26000)
+    expect(result.attributionCoverage).toBe(1)
+    db.close()
+  })
+
+  it('有 blocks 无 output 段的行不进输出侧可归因子集，Σcategories == attributableOutputTokens 不被破坏', () => {
+    const db = createMemoryAppDb()
+    insertAttributedStep(db, { stepId: 'with-output', day: day(1), inputTokens: 1000, outputTokens: 500, attribution: true })
+    // 有归因 JSON 但无 output 段（旧格式/异常行）
+    const noOutput = buildStepAttribution({ system: 's', tools: [], messages: [{ role: 'user', content: 'x' }] })
+    const { threeSources, ...noOutputJson } = noOutput
+    delete (noOutputJson as { output?: unknown }).output
+    insertUsageStepFact(db, {
+      sessionId: 'sess-1', turnId: 'turn-1', stepId: 'no-output', createdAt: 1758000001000, day: day(1),
+      inputTokens: 1000, outputTokens: 700, cacheReadTokens: 0, cacheCreationTokens: 0, source: 'api',
+      systemTokens: threeSources.systemTokens, toolsTokens: threeSources.toolsTokens, messageTokens: threeSources.messageTokens,
+      estimatorVersion: threeSources.estimatorVersion, attributionJson: JSON.stringify(noOutputJson)
+    })
+    const result = queryAttributionOutputSplit(db, { from: day(1), to: day(1), estimatorVersion: 'block-v1' })
+    expect(result.totalOutputTokens).toBe(1200)
+    expect(result.attributableOutputTokens).toBe(500)
+    const sum = result.categories.thinking + result.categories.text + result.categories.toolUseArgs
+    expect(sum).toBe(500)
+    db.close()
+  })
+
+  it('逐名显式来源（toolSources）优先于 mcp_ 前缀推断', () => {
+    const db = createMemoryAppDb()
+    const dim = emptyTurnToolDimension()
+    dim.tools['forwarded_name'] = 300
+    dim.toolSources['forwarded_name'] = 'mcp'
+    dim.toolResults['forwarded_name'] = { calls: 2, chars: 10 }
+    upsertUsageTurnFact(db, {
+      turnId: 't-explicit', sessionId: 'sess-1', createdAt: 1758000000000, day: day(1),
+      stepCount: 1, toolCallCount: 2, toolErrorCount: 0, toolSkippedCount: 0, outcome: 'completed',
+      toolAttributionJson: JSON.stringify(dim)
+    })
+    const result = queryToolAttributionBreakdown(db, { from: day(1), to: day(1) })
+    const entry = result.used.find((t) => t.name === 'forwarded_name')
+    expect(entry?.source).toBe('mcp')
+    db.close()
+  })
+})

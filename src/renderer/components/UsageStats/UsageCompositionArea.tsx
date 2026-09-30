@@ -2,30 +2,9 @@ import { useState } from 'react'
 import { Radio, Typography } from 'antd'
 import { Area, AreaChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip as RechartsTooltip, XAxis, YAxis } from 'recharts'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
-import type { UsageAttributionCategory, UsageAttributionDailyPoint } from '../../../shared/usageStatsTypes'
+import type { UsageAttributionDailyPoint } from '../../../shared/usageStatsTypes'
 import { formatCount, formatInteger, formatPercent, type AbbreviationLocale } from './format'
-
-const CATEGORY_COLORS: Record<UsageAttributionCategory, string> = {
-  system: '#5b8ff9',
-  tools: '#f6903d',
-  userText: '#61bf8f',
-  assistantText: '#7f6be0',
-  toolResults: '#d65f5f',
-  assistantThinking: '#c084fc',
-  assistantToolUse: '#e8a33d',
-  other: '#8c8c8c'
-}
-
-const CATEGORY_ORDER: UsageAttributionCategory[] = [
-  'toolResults',
-  'assistantText',
-  'tools',
-  'userText',
-  'system',
-  'assistantThinking',
-  'assistantToolUse',
-  'other'
-]
+import { ATTRIBUTION_CATEGORY_COLORS, ATTRIBUTION_CATEGORY_ORDER } from './categories'
 
 type Props = {
   points: UsageAttributionDailyPoint[]
@@ -44,7 +23,7 @@ export function UsageCompositionArea({ points }: Props) {
   const data = points.map((point) => {
     const total = point.attributableInputTokens
     const row: Record<string, string | number> = { day: point.day }
-    for (const key of CATEGORY_ORDER) {
+    for (const key of ATTRIBUTION_CATEGORY_ORDER) {
       const tokens = point.categories[key] ?? 0
       row[key] = scale === 'percent' && total > 0 ? (tokens / total) * 100 : tokens
     }
@@ -85,15 +64,15 @@ export function UsageCompositionArea({ points }: Props) {
               ]}
             />
             <Legend />
-            {CATEGORY_ORDER.map((key) => (
+            {ATTRIBUTION_CATEGORY_ORDER.map((key) => (
               <Area
                 key={key}
                 type="monotone"
                 dataKey={key}
                 stackId="composition"
                 name={t(`composition.categories.${key}`)}
-                stroke={CATEGORY_COLORS[key]}
-                fill={CATEGORY_COLORS[key]}
+                stroke={ATTRIBUTION_CATEGORY_COLORS[key]}
+                fill={ATTRIBUTION_CATEGORY_COLORS[key]}
                 fillOpacity={0.6}
                 isAnimationActive={false}
               />

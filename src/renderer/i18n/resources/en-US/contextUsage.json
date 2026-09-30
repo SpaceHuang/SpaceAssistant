@@ -32,7 +32,6 @@
     "systemPrompt": "System prompt",
     "tools": "Tool declarations",
     "messages": "Messages",
-    "estimatedMark": "≈{{count}}",
-    "unavailable": "No internal composition data"
+    "estimatedMark": "≈{{count}}"
   }
 }

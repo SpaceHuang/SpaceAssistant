@@ -116,7 +116,7 @@ describe('summarizeToolDeclarations / classifyToolSource', () => {
 
 describe('工具返回体量累计', () => {
   it('emptyTurnToolDimension 为全空结构', () => {
-    expect(emptyTurnToolDimension()).toEqual({ tools: {}, toolSource: {}, toolResults: {} })
+    expect(emptyTurnToolDimension()).toEqual({ tools: {}, toolSource: {}, toolSources: {}, toolResults: {} })
   })
 
   it('accumulateToolResultVolume 按工具名累加调用次数与返回字符', () => {
@@ -136,16 +136,24 @@ describe('splitSystemSkillSection', () => {
     expect(splitSystemSkillSection(BASE)).toBeNull()
   })
 
-  it('从 ## Skills 处切出固定样板与 skill 段，并逐条解析 skill 名称与字符', () => {
-    const system = `${BASE}\n## Skills\n### Available skills\n- browser-setup-guide (read: ) desc\n- diagram-design (read: C:\\skills\\diagram-design\\SKILL.md) long desc`
+  it('从 ## Skills 处切出固定样板与 skill 段，条目格式对齐 skillPrompt 生产格式（- **name**: desc (read: path)）', () => {
+    const system = `${BASE}
+## Skills
+
+### Available skills
+
+- **browser-setup-guide**: setup guide (read: )
+- **diagram-design**: long desc here (read: C:\skills\diagram-design\SKILL.md)
+- **truncated-skill**: 描述被预算截断无 read`
     const split = splitSystemSkillSection(system)
     expect(split).not.toBeNull()
     expect(split!.baseChars).toBe(system.indexOf('## Skills'))
     expect(split!.skillsChars).toBe(system.length - split!.baseChars)
-    expect(split!.skills.map((s) => s.name)).toEqual(['browser-setup-guide', 'diagram-design'])
+    expect(split!.skills.map((s) => s.name)).toEqual(['browser-setup-guide', 'diagram-design', 'truncated-skill'])
     expect(split!.skills.every((s) => s.chars > 0)).toBe(true)
-    expect(split!.skills[1]!.readPath).toBe('C:\\skills\\diagram-design\\SKILL.md')
+    expect(split!.skills[1]!.readPath).toBe('C:\skills\diagram-design\SKILL.md')
     expect(split!.skills[0]!.readPath).toBeNull()
+    expect(split!.skills[2]!.readPath).toBeNull()
   })
 })
 
@@ -275,5 +283,56 @@ describe('normalizeOutputAttribution（SRC-D1：输出侧三类按 output_tokens
     // thinking 权重最大 → 摊回值最大
     expect(out.thinking).toBeGreaterThan(out.text)
     expect(out.thinking).toBeGreaterThan(out.toolUseArgs)
+  })
+})
+
+describe('工具体量累计不变量（AGENTS 纪律：随机操作序列 + 守恒断言）', () => {
+  it('mulberry32 随机累计后：每工具 Σcalls == 累计次数、Σchars == 累计字符，总调用数守恒', () => {
+    // mulberry32 确定性伪随机（与 butlerAdmission.test.ts 同款做法）
+    let seed = 20260930
+    const rand = () => {
+      seed |= 0; seed = (seed + 0x6d2b79f5) | 0
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    }
+    const toolNames = ['grep', 'read_file', 'mcp_a', 'mcp_b', 'write_file']
+    const expectedCalls = new Map<string, number>()
+    const expectedChars = new Map<string, number>()
+    const dim: TurnToolDimension = emptyTurnToolDimension()
+    let totalCalls = 0
+    let totalChars = 0
+    for (let i = 0; i < 500; i++) {
+      const name = toolNames[Math.floor(rand() * toolNames.length)]!
+      const contentLen = Math.floor(rand() * 200)
+      accumulateToolResultVolume(dim, name, 'x'.repeat(contentLen))
+      expectedCalls.set(name, (expectedCalls.get(name) ?? 0) + 1)
+      expectedChars.set(name, (expectedChars.get(name) ?? 0) + contentLen)
+      totalCalls += 1
+      totalChars += contentLen
+      // 每步不变量：Σcalls 守恒
+      const sumCalls = Object.values(dim.toolResults).reduce((a, b) => a + b.calls, 0)
+      expect(sumCalls).toBe(totalCalls)
+    }
+    for (const name of toolNames) {
+      expect(dim.toolResults[name]).toEqual({ calls: expectedCalls.get(name), chars: expectedChars.get(name) })
+    }
+    expect(Object.values(dim.toolResults).reduce((a, b) => a + b.chars, 0)).toBe(totalChars)
+  })
+
+  it('声明明细整表替换语义：工具面收窄后旧声明不残留、toolResults 不受影响', () => {
+    const dim: TurnToolDimension = emptyTurnToolDimension()
+    const first = summarizeToolDeclarations([{ name: 'grep' }, { name: 'mcp_x' }])
+    dim.tools = first.tools
+    dim.toolSource = first.toolSource
+    dim.toolSources = first.toolSources
+    accumulateToolResultVolume(dim, 'grep', 'abc')
+    const narrowed = summarizeToolDeclarations([{ name: 'grep' }])
+    dim.tools = narrowed.tools
+    dim.toolSource = narrowed.toolSource
+    dim.toolSources = narrowed.toolSources
+    expect(Object.keys(dim.tools)).toEqual(['grep'])
+    expect(Object.keys(dim.toolSource)).toEqual(['builtin'])
+    expect(dim.toolResults['grep']).toEqual({ calls: 1, chars: 3 })
   })
 })

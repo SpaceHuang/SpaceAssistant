@@ -58,6 +58,7 @@ export function UsageStatsDrawer({ open, onClose }: Props) {
   const [summary, setSummary] = useState<UsageSummary | null>(null)
   const [points, setPoints] = useState<UsageDailyPoint[]>([])
   const [attribution, setAttribution] = useState<AttributionData>(EMPTY_ATTRIBUTION)
+  const [attributionLoadError, setAttributionLoadError] = useState(false)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState(false)
 
@@ -85,18 +86,29 @@ export function UsageStatsDrawer({ open, onClose }: Props) {
   const fetchData = useCallback(async (args: UsageStatsRangeArgs) => {
     setLoading(true)
     setLoadError(false)
+    setAttributionLoadError(false)
     try {
       // 成本构成 Tab 与总览共用同一套筛选与区间（AD13/AT14 硬约束）：归因查询在此一并发出，
       // 估算器版本固定 block-v1（I1：同一报表内不得混用版本）。
+      // 归因四条查询失败单独标记（attributionLoadError）：查询失败 ≠ 无归因数据，
+      // 不得复用「早于归因能力上线」的空态事实（评审 P1-2）。
       const attributionArgs = { ...args, estimatorVersion: BLOCK_V1_ESTIMATOR_VERSION }
+      const safe = async <T,>(p: Promise<T>, fallback: T): Promise<T> => {
+        try {
+          return await p
+        } catch {
+          setAttributionLoadError(true)
+          return fallback
+        }
+      }
       const [nextSummary, nextPoints, nextDimensions, composition, daily, outputSplit, toolBreakdown] = await Promise.all([
         window.api.usageStatsSummary(args),
         window.api.usageStatsDaily(args),
         window.api.usageStatsDimensions(),
-        window.api.usageStatsAttributionComposition(attributionArgs).catch(() => null),
-        window.api.usageStatsAttributionDaily(attributionArgs).catch(() => []),
-        window.api.usageStatsAttributionOutput(attributionArgs).catch(() => null),
-        window.api.usageStatsAttributionTools(args).catch(() => null)
+        safe(window.api.usageStatsAttributionComposition(attributionArgs), null),
+        safe(window.api.usageStatsAttributionDaily(attributionArgs), []),
+        safe(window.api.usageStatsAttributionOutput(attributionArgs), null),
+        safe(window.api.usageStatsAttributionTools(args), null)
       ])
       setSummary(nextSummary)
       setPoints(nextPoints)
@@ -250,6 +262,7 @@ export function UsageStatsDrawer({ open, onClose }: Props) {
                     outputSplit={attribution.outputSplit}
                     toolBreakdown={attribution.toolBreakdown}
                     loading={loading}
+                    loadError={attributionLoadError}
                   />
                 )
               }

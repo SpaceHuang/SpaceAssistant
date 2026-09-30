@@ -1258,10 +1258,12 @@ async function runToolChatSessionInner(
     })
     const requestHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools: tools as unknown as unknown[], messages: plannedMessages, requiredSurfaceSet: args.currentUserMessageId ? [args.currentUserMessageId] : [], toolExecutionCheckpoint: { completedToolUseIds: prefixTelemetry.incrementalCompletedToolUseIds, replayForbidden: false }, messagePrefixStats: prefixTelemetry.messagePrefixStats, cacheBreakpoints: prefixTelemetry.cacheBreakpoints })
     const wireHeader = buildRequestHeaderPayload({ requestId: attemptRequestId, system: systemPrompt ?? '', tools: tools as unknown as unknown[], messages: toolLoopStreamParams.messages as unknown[], requiredSurfaceSet: requestHeader.requiredSurfaceSet, toolExecutionCheckpoint: requestHeader.toolExecutionCheckpoint })
-    // 工具声明明细随本 attempt 刷新进 turn 维度（§7.6.5：声明集在 turn 内通常不变，按名覆盖等值）
+    // 工具声明明细随本 attempt 整表替换进 turn 维度（§7.6.5）：工具面收窄时旧声明不得残留；
+    // toolResults 是跨 attempt 累计的返回体量，与声明表生命周期不同，不在此重置
     const declarationSummary = summarizeToolDeclarations(tools as unknown as unknown[])
-    Object.assign(turnUsageStats.toolDimension.tools, declarationSummary.tools)
-    Object.assign(turnUsageStats.toolDimension.toolSource, declarationSummary.toolSource)
+    turnUsageStats.toolDimension.tools = declarationSummary.tools
+    turnUsageStats.toolDimension.toolSource = declarationSummary.toolSource
+    turnUsageStats.toolDimension.toolSources = declarationSummary.toolSources
     const requestContext = buildRequestContextPayload({ requestId: attemptRequestId, provider: 'anthropic', model, contextWindow: args.contextWindow, maxTokensEffective, surfaceSnapshot: requestHeader.surfaceSnapshot, windowId: contextWindowId, decision: { decisionId: attemptRequestId, phase: 'tool_loop', reason: 'proactive', ruleVersion: 'adaptive-v1' } })
     lastRequestHeader = requestHeader
     lastRequestContext = requestContext
