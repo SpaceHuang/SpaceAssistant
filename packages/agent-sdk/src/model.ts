@@ -25,10 +25,19 @@ export class InvalidModelStreamError extends Error {
   constructor(message: string) { super(message); this.name = 'InvalidModelStreamError' }
 }
 
+type CollectedModelChunks = readonly Exclude<StreamChunk, { type: 'finish' }>[]
+type CollectedUsage = Extract<StreamChunk, { type: 'usage' }>
+type CancelledFinish = Readonly<{ type: 'finish'; reason: 'cancelled' }>
+type NonCancelledFinish = Readonly<{ type: 'finish'; reason: 'stop' | 'tool-calls' | 'length' }>
+
 export type CollectedModelStream = Readonly<{
-  chunks: readonly Exclude<StreamChunk, { type: 'finish' }>[]
-  usage: Extract<StreamChunk, { type: 'usage' }>
-  finish: Extract<StreamChunk, { type: 'finish' }>
+  chunks: CollectedModelChunks
+  finish: CancelledFinish
+  usage?: CollectedUsage
+}> | Readonly<{
+  chunks: CollectedModelChunks
+  finish: NonCancelledFinish
+  usage: CollectedUsage
 }>
 
 export type ModelStreamObserver = Readonly<{
@@ -57,8 +66,8 @@ export async function collectModelAttempt(stream: AsyncIterable<StreamChunk>, ob
       usage = chunk
       accepted.push(chunk)
     } else if (chunk.type === 'finish') {
-      if (!usage) throw new InvalidModelStreamError('finish received before usage')
-      if (chunk.reason !== 'length' && ((chunk.reason === 'tool-calls') !== hasToolCall)) throw new InvalidModelStreamError('finish reason does not match tool-call chunks')
+      if (!usage && chunk.reason !== 'cancelled') throw new InvalidModelStreamError('finish received before usage')
+      if (chunk.reason !== 'length' && chunk.reason !== 'cancelled' && ((chunk.reason === 'tool-calls') !== hasToolCall)) throw new InvalidModelStreamError('finish reason does not match tool-call chunks')
       finish = chunk
     } else {
       if (chunk.type === 'tool-call') {
@@ -71,9 +80,10 @@ export async function collectModelAttempt(stream: AsyncIterable<StreamChunk>, ob
     }
     if (chunk.type !== 'finish') await observer?.onChunk?.(chunk)
   }
-  if (!usage) throw new InvalidModelStreamError('stream ended without usage')
   if (!finish) throw new InvalidModelStreamError('stream ended without finish')
-  return { chunks: accepted, usage, finish }
+  if (finish.reason === 'cancelled') return { chunks: accepted, ...(usage ? { usage } : {}), finish: finish as CancelledFinish }
+  if (!usage) throw new InvalidModelStreamError('stream ended without usage')
+  return { chunks: accepted, usage, finish: finish as NonCancelledFinish }
 }
 
 /** Backward-compatible name retained while callers migrate to the attempt-oriented API. */

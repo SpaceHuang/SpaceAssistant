@@ -169,7 +169,7 @@ export function turnDisplayToMessage(display: TurnDisplay): Message {
     toolCalls: display.message.toolCalls.map((tool) => ({ id: tool.id, toolName: tool.toolName, input: {}, status: tool.status, riskLevel: tool.display.confirmRisk, ...(tool.display.autoAnswerer !== undefined ? { autoAnswerer: tool.display.autoAnswerer } : {}), ...(tool.startedAt !== undefined ? { startedAt: tool.startedAt } : {}), ...(tool.completedAt !== undefined ? { completedAt: tool.completedAt } : {}), ...(tool.duration !== undefined ? { duration: tool.duration } : {}) })),
     // 活动轨迹是正文/思考/工具的规范顺序。恢复为轻量 Message 时必须保留，
     // 否则 renderer 会按不完整快照重新推导顺序，待确认卡可能跳到消息末尾。
-    activity: display.message.activity.map((item) => ({ ...item }))
+    activity: (display.message.activity ?? []).map((item) => ({ ...item }))
   }
 }
 

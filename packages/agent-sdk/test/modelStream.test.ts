@@ -79,12 +79,35 @@ describe('canonical model stream', () => {
 
   it('rejects missing usage, duplicate finish, and events after finish', async () => {
     await expect(collectModelStream(chunks([{ type: 'finish', reason: 'stop' }]))).rejects.toBeInstanceOf(InvalidModelStreamError)
+    await expect(collectModelStream(chunks([{ type: 'finish', reason: 'tool-calls' }]))).rejects.toBeInstanceOf(InvalidModelStreamError)
     await expect(collectModelStream(chunks([
       { type: 'usage', inputTokens: 0, outputTokens: 0 }, { type: 'finish', reason: 'stop' }, { type: 'finish', reason: 'stop' }
     ]))).rejects.toBeInstanceOf(InvalidModelStreamError)
     await expect(collectModelStream(chunks([
       { type: 'usage', inputTokens: 0, outputTokens: 0 }, { type: 'finish', reason: 'stop' }, { type: 'text-delta', text: 'late' }
     ]))).rejects.toBeInstanceOf(InvalidModelStreamError)
+  })
+
+  it('allows missing usage only for a cancelled attempt and represents the absence explicitly', async () => {
+    await expect(collectModelAttempt(chunks([
+      { type: 'text-delta', text: 'partial output is not committed' },
+      { type: 'tool-call', toolCallId: 'partial-tool', toolName: 'lookup', input: {} },
+      { type: 'finish', reason: 'cancelled' }
+    ]))).resolves.toEqual({
+      chunks: [
+        { type: 'text-delta', text: 'partial output is not committed' },
+        { type: 'tool-call', toolCallId: 'partial-tool', toolName: 'lookup', input: {} }
+      ],
+      finish: { type: 'finish', reason: 'cancelled' }
+    })
+    await expect(collectModelAttempt(chunks([
+      { type: 'usage', inputTokens: 0, outputTokens: 0 },
+      { type: 'finish', reason: 'cancelled' }
+    ]))).resolves.toEqual({
+      chunks: [{ type: 'usage', inputTokens: 0, outputTokens: 0 }],
+      usage: { type: 'usage', inputTokens: 0, outputTokens: 0 },
+      finish: { type: 'finish', reason: 'cancelled' }
+    })
   })
 
   it('freezes route and request data while preserving the invocation AbortSignal identity', () => {

@@ -443,9 +443,8 @@ export function ChatView() {
   )
 
   const abort = useCallback(() => {
-    const turnId = sessionId ? runningSessions[sessionId]?.turnId : undefined
-    if (turnId) void window.api.chatCancelTurn(turnId)
-  }, [runningSessions, sessionId])
+    if (sessionId) abortSessionRun(sessionId)
+  }, [sessionId])
 
   const { t: tChat } = useTypedTranslation('chat')
 

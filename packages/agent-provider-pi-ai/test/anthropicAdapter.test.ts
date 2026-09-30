@@ -380,32 +380,78 @@ describe('PiAiAnthropicProvider', () => {
       .toThrow('unsupported Anthropic route profile')
   })
 
-  it('turns pre-dispatch and in-flight aborts into one cancelled terminal without retry', async () => {
+  it('does not dispatch or fabricate usage when cancellation predates provider dispatch', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const stream = vi.fn<PiAnthropicBridge['stream']>(async function* () {
+      yield { type: 'done', reason: 'stop', message: { usage: { input: 1, output: 1 } } }
+    })
+    const provider = new PiAiAnthropicProvider({ profiles: [profile], bridge: { normalizeContext: (context) => context, stream } })
+    const chunks = []
+    for await (const chunk of provider.stream(prepared({ signal: controller.signal }))) chunks.push(chunk)
+    expect(stream).not.toHaveBeenCalled()
+    expect(chunks).toEqual([{ type: 'finish', reason: 'cancelled' }])
+  })
+
+  it.each([
+    { name: 'error without usage', event: { type: 'error', error: { errorMessage: 'aborted' } } as const, expected: [{ type: 'finish', reason: 'cancelled' }] },
+    { name: 'error with explicit zero usage', event: { type: 'error', error: { errorMessage: 'aborted', usage: { input: 0, output: 0 } } } as const, expected: [{ type: 'usage', inputTokens: 0, outputTokens: 0 }, { type: 'finish', reason: 'cancelled' }] },
+    { name: 'done aborted without usage', event: { type: 'done', reason: 'aborted', message: {} } as const, expected: [{ type: 'finish', reason: 'cancelled' }] },
+    { name: 'done aborted with actual usage', event: { type: 'done', reason: 'aborted', message: { usage: { input: 7, output: 2, cacheRead: 3 } } } as const, expected: [{ type: 'usage', inputTokens: 7, outputTokens: 2, cacheReadInputTokens: 3 }, { type: 'finish', reason: 'cancelled' }] }
+  ])('maps an in-flight abort from $name without inventing usage', async ({ event, expected }) => {
     const controller = new AbortController()
     const stream = vi.fn<PiAnthropicBridge['stream']>(async function* (_model, _context, options) {
       expect(options.signal).toBe(controller.signal)
       controller.abort()
-      yield { type: 'error', error: { errorMessage: 'aborted' } }
+      yield event
     })
     const provider = new PiAiAnthropicProvider({ profiles: [profile], bridge: { normalizeContext: (context) => context, stream } })
-    controller.abort()
-    const preAborted = []
-    for await (const chunk of provider.stream(prepared({ signal: controller.signal }))) preAborted.push(chunk)
-    expect(preAborted).toEqual([{ type: 'usage', inputTokens: 0, outputTokens: 0 }, { type: 'finish', reason: 'cancelled' }])
-    expect(stream).not.toHaveBeenCalled()
+    const chunks = []
+    for await (const chunk of provider.stream(prepared({ signal: controller.signal }))) chunks.push(chunk)
+    expect(stream).toHaveBeenCalledOnce()
+    expect(chunks).toEqual(expected)
+  })
 
-    const inFlight = new AbortController()
-    const inFlightProvider = new PiAiAnthropicProvider({ profiles: [profile], bridge: {
+  it('ends a stalled upstream stream on abort without waiting for another provider event', async () => {
+    const controller = new AbortController()
+    let started!: () => void
+    const enteredStream = new Promise<void>((resolve) => { started = resolve })
+    const stream = vi.fn<PiAnthropicBridge['stream']>(async function* (_model, _context, options) {
+      expect(options.signal).toBe(controller.signal)
+      started()
+      await new Promise<void>((resolve) => options.signal?.addEventListener('abort', () => resolve(), { once: true }))
+    })
+    const provider = new PiAiAnthropicProvider({ profiles: [profile], bridge: { normalizeContext: (context) => context, stream } })
+    const chunks: unknown[] = []
+    const consumption = (async () => {
+      for await (const chunk of provider.stream(prepared({ signal: controller.signal }))) chunks.push(chunk)
+    })()
+    await enteredStream
+    controller.abort()
+    await expect(consumption).resolves.toBeUndefined()
+    expect(chunks).toEqual([{ type: 'finish', reason: 'cancelled' }])
+  }, 1000)
+
+  it('maps an iterator error racing after abort to cancellation and preserves ordinary failures', async () => {
+    const aborted = new AbortController()
+    const cancelledProvider = new PiAiAnthropicProvider({ profiles: [profile], bridge: {
       normalizeContext: (context) => context,
-      stream: async function* (_model, _context, options) {
-        expect(options.signal).toBe(inFlight.signal)
-        inFlight.abort()
-        yield { type: 'error', error: { errorMessage: 'aborted' } }
+      stream: async function* () {
+        aborted.abort()
+        throw new Error('network reset')
       }
     } })
-    const chunks = []
-    for await (const chunk of inFlightProvider.stream(prepared({ signal: inFlight.signal }))) chunks.push(chunk)
-    expect(chunks).toEqual([{ type: 'usage', inputTokens: 0, outputTokens: 0 }, { type: 'finish', reason: 'cancelled' }])
+    const cancelledChunks = []
+    for await (const chunk of cancelledProvider.stream(prepared({ signal: aborted.signal }))) cancelledChunks.push(chunk)
+    expect(cancelledChunks).toEqual([{ type: 'finish', reason: 'cancelled' }])
+
+    const active = new AbortController()
+    const failingProvider = new PiAiAnthropicProvider({ profiles: [profile], bridge: {
+      normalizeContext: (context) => context,
+      stream: async function* () { throw new Error('network reset') }
+    } })
+    const consume = async () => { for await (const _chunk of failingProvider.stream(prepared({ signal: active.signal }))) void _chunk }
+    await expect(consume()).rejects.toThrow('network reset')
   })
 
   it('requires explicit registered route identity, credential injection, and passes cancellation', async () => {

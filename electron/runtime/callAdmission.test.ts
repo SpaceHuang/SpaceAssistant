@@ -236,10 +236,12 @@ describe('CallAdmissionGate 排队唤醒与审计(0b 语义)', () => {
     expect(cancelled).toBe(true)
     await expect(pendingA).resolves.toMatchObject({ ok: false, cause: 'cancelled' })
     expect(gate.queuedCount).toBe(1)
-    controllerB.abort()
-    await expect(pendingB).resolves.toMatchObject({ ok: false, cause: 'cancelled' })
-    expect(gate.queuedCount).toBe(0)
     if (blocker.ok) blocker.ticket.release()
+    const admittedB = await pendingB
+    expect(admittedB.ok).toBe(true)
+    if (admittedB.ok) admittedB.ticket.release()
+    expect(gate.queuedCount).toBe(0)
+    expect(controllerB.signal.aborted).toBe(false)
   })
 
   it('并发满 → disposition=queue 排队等待;释放后队首复核唤醒', async () => {

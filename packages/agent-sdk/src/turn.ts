@@ -1,4 +1,4 @@
-import { collectModelAttempt, ModelRouteChangedError, snapshotPreparedModelCall, type CanonicalContentBlock, type CanonicalModelMessage, type CollectedModelStream, type ModelProvider, type ModelProviderRegistry, type PreparedModelCall, type StreamChunk } from './model'
+import { collectModelAttempt, InvalidModelStreamError, ModelRouteChangedError, snapshotPreparedModelCall, type CanonicalContentBlock, type CanonicalModelMessage, type CollectedModelStream, type ModelProvider, type ModelProviderRegistry, type PreparedModelCall, type StreamChunk } from './model'
 import type { PermitBinding } from './safetyPermit'
 import { SafetyGate, type SafetyDenyReason } from './safetyGate'
 import { ToolExecutionAfterDispatchError, ToolExecutionRejectedError, type PermitBoundToolExecutionPort } from './toolExecutionPort'
@@ -815,31 +815,84 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         else await observe(input.observer, 'model-request', onRetryModelRequest)
       return collectProviderAttempt(retryProvider.stream(retryCall), modelTurns, 2)
     }
+    const settleCancelledAttempt = async (cancelled: CollectedModelStream): Promise<never> => {
+      if (cancelled.finish.reason !== 'cancelled') throw new Error('cancel settlement requires a cancelled provider attempt')
+      if (cancelled.usage) {
+        const cancelledAttemptUsage = {
+          invocationId,
+          modelTurn: modelTurns,
+          attempt: recoveredAttempt ? 2 : 1,
+          routeId: input.routeId,
+          usage: cancelled.usage,
+          finishReason: 'cancelled',
+          disposition: 'cancelled'
+        }
+        await projectModelAttemptUsage(input, cancelledAttemptUsage)
+        const sessionLedger = input.sessionLedgerForAttemptUsage
+          ? await input.sessionLedgerForAttemptUsage(cancelledAttemptUsage)
+          : undefined
+        if (input.history) await appendHistory([{
+          kind: 'model-attempt-discarded',
+          payload: {
+            modelTurn: modelTurns,
+            attempt: recoveredAttempt ? 2 : 1,
+            reasonCode: 'TURN_CANCELLED',
+            finishReason: 'cancelled',
+            usage: cancelled.usage,
+            ...(sessionLedger ? { sessionLedger } : {})
+          }
+        }])
+        onAcceptedUsage(cancelled.usage)
+      }
+      throwIfAborted(input.request.signal)
+      throw new AgentTurnCancelledError()
+    }
     if (initialResponse) {
       collected = collectCanonicalHostResponse(initialResponse)
     } else {
       try {
         collected = await collectProviderAttempt(provider.stream(call), modelTurns, recoveredAttempt ? 2 : 1)
       } catch (error) {
+        throwIfAborted(input.request.signal)
         const retry = await recover({ error })
         if (!retry) throw error
         collected = retry
       }
+      if (input.request.signal?.aborted && collected.finish.reason !== 'cancelled') {
+        collected = { ...collected, finish: { type: 'finish', reason: 'cancelled' } }
+      }
+      if (collected.finish.reason === 'cancelled') {
+        await settleCancelledAttempt(collected)
+        throw new AgentTurnCancelledError()
+      }
+      const collectedUsage = collected.usage
+      if (!collectedUsage) throw new InvalidModelStreamError('non-cancelled provider attempt completed without usage')
       if (input.recoverProviderAttempt && !recoveredAttempt) {
         const hasOutputContent = collected.chunks.some((chunk) => chunk.type === 'text-delta' || chunk.type === 'thinking-delta' || chunk.type === 'thinking-signature' || chunk.type === 'tool-call')
-        const retry = await recover({ response: { finishReason: collected.finish.reason, usage: collected.usage, hasOutputContent } })
+        const retry = await recover({ response: { finishReason: collected.finish.reason, usage: collectedUsage, hasOutputContent } })
         if (retry) {
           collected = retry
+          if (collected.finish.reason === 'cancelled') {
+            await settleCancelledAttempt(collected)
+            throw new AgentTurnCancelledError()
+          }
+          if (!collected.usage) throw new InvalidModelStreamError('non-cancelled provider retry completed without usage')
           const retryHasOutputContent = collected.chunks.some((chunk) => chunk.type === 'text-delta' || chunk.type === 'thinking-delta' || chunk.type === 'thinking-signature' || chunk.type === 'tool-call')
           const retryAgain = await recover({ response: { finishReason: collected.finish.reason, usage: collected.usage, hasOutputContent: retryHasOutputContent } })
           if (retryAgain) collected = retryAgain
         }
       }
+      if (collected.finish.reason === 'cancelled') await settleCancelledAttempt(collected)
+      if (!collected.usage) throw new InvalidModelStreamError('non-cancelled provider attempt completed without usage')
     }
     if (collected.finish.reason === 'cancelled') {
-      throwIfAborted(input.request.signal)
-      throw new AgentTurnCancelledError()
+      if (initialResponse) {
+        throwIfAborted(input.request.signal)
+        throw new AgentTurnCancelledError()
+      }
+      await settleCancelledAttempt(collected)
     }
+    if (!collected.usage) throw new InvalidModelStreamError('non-cancelled model attempt completed without usage')
     throwIfAborted(input.request.signal)
     const toolCalls = collected.chunks.filter((chunk): chunk is Extract<typeof chunk, { type: 'tool-call' }> => chunk.type === 'tool-call')
     inputTokens += collected.usage.inputTokens
@@ -1421,6 +1474,7 @@ function collectCanonicalHostResponse(response: HostCommittedModelResponse): Col
     }
   }
   for (const tool of response.message.toolCalls ?? []) chunks.push({ type: 'tool-call', toolCallId: tool.id, toolName: tool.name, input: structuredClone(tool.input), ...(tool.thoughtSignature ? { thoughtSignature: tool.thoughtSignature } : {}) })
+  if (response.finishReason === 'cancelled') return { chunks, usage: response.usage, finish: { type: 'finish', reason: 'cancelled' } }
   return { chunks, usage: response.usage, finish: { type: 'finish', reason: response.finishReason } }
 }
 

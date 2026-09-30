@@ -3414,4 +3414,218 @@ describe('runAgentTurn', () => {
       { type: 'text', text: 'public answer' }
     ] })
   })
+
+  it('settles provider cancellation once and persists only usage actually observed before cancellation', async () => {
+    for (const observedUsage of [undefined, { type: 'usage' as const, inputTokens: 0, outputTokens: 0 }]) {
+      const invocationId = observedUsage ? 'cancel-with-real-zero-usage' : 'cancel-without-usage'
+      const registry = new ModelProviderRegistry()
+      const controller = new AbortController()
+      const dispatch = vi.fn(async function* () {
+        controller.abort()
+        yield { type: 'tool-call' as const, toolCallId: 'cancelled-tool-proposal', toolName: 'lookup', input: { query: 'must not dispatch' } }
+        if (observedUsage) yield observedUsage
+        yield { type: 'finish' as const, reason: 'cancelled' as const }
+      })
+      registry.register(route, { providerId: 'cancel-provider', stream: dispatch })
+      const history = new MemoryHistory()
+      const recordProviderAttemptUsage = vi.fn()
+      const sessionLedgerForAttemptUsage = vi.fn(() => ({ location: { sessionId: invocationId } }))
+      const recoverProviderAttempt = vi.fn(async () => undefined)
+      const executeTool = vi.fn(async () => ({ output: 'must not execute' }))
+      const permits = new InMemorySafetyPermitStore()
+      const capabilities = new CapabilityRegistry()
+      capabilities.define(invocationId, ['lookup'])
+      const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } })
+
+      await expect(runAgentTurn({
+        registry, routeId: route.routeId, invocationId, turnId: `${invocationId}-turn`,
+        request: { messages: [{ role: 'user', content: 'lookup this' }], maxTokens: 20, signal: controller.signal },
+        history, safetyGate,
+        prepareTool: vi.fn(async () => toolBinding),
+        toolExecution: toolExecutionPort(permits, executeTool),
+        recordProviderAttemptUsage, sessionLedgerForAttemptUsage, recoverProviderAttempt,
+        maxModelTurns: 2
+      })).rejects.toMatchObject({ code: 'TURN_CANCELLED' })
+
+      expect(dispatch).toHaveBeenCalledOnce()
+      expect(recoverProviderAttempt).not.toHaveBeenCalled()
+      expect(recordProviderAttemptUsage).toHaveBeenCalledTimes(observedUsage ? 1 : 0)
+      expect(sessionLedgerForAttemptUsage).toHaveBeenCalledTimes(observedUsage ? 1 : 0)
+      expect(executeTool).not.toHaveBeenCalled()
+      const terminalEvents = (await history.read(invocationId)).events.filter((event) =>
+        ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind)
+      )
+      expect(terminalEvents).toHaveLength(1)
+      expect(terminalEvents[0]).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'cancelled' } })
+      if (observedUsage) {
+        expect(recordProviderAttemptUsage).toHaveBeenCalledWith(expect.objectContaining({
+          invocationId, modelTurn: 1, attempt: 1, usage: { type: 'usage', inputTokens: 0, outputTokens: 0 }, finishReason: 'cancelled'
+        }))
+        expect(terminalEvents[0]?.payload).toMatchObject({ usage: observedUsage })
+      } else {
+        expect(terminalEvents[0]?.payload).not.toHaveProperty('usage')
+      }
+    }
+
+    const invocationId = 'cancel-before-provider-dispatch'
+    const controller = new AbortController()
+    controller.abort()
+    const registry = new ModelProviderRegistry()
+    const dispatch = vi.fn(async function* () {
+      yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish' as const, reason: 'stop' as const }
+    })
+    registry.register(route, { providerId: 'pre-cancel-provider', stream: dispatch })
+    const history = new MemoryHistory()
+    const recordProviderAttemptUsage = vi.fn()
+    const sessionLedgerForAttemptUsage = vi.fn()
+    const permits = new InMemorySafetyPermitStore()
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId,
+      request: { messages: [{ role: 'user', content: 'already cancelled' }], maxTokens: 10, signal: controller.signal },
+      history,
+      safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(async () => toolBinding), toolExecution: toolExecutionPort(permits, vi.fn()),
+      recordProviderAttemptUsage, sessionLedgerForAttemptUsage, maxModelTurns: 1
+    })).rejects.toMatchObject({ code: 'TURN_CANCELLED' })
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(recordProviderAttemptUsage).not.toHaveBeenCalled()
+    expect(sessionLedgerForAttemptUsage).not.toHaveBeenCalled()
+    expect((await history.read(invocationId)).events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'cancelled' } })
+  })
+
+  it('does not recover an iterator error that races after abort, while un-aborted network errors still fail', async () => {
+    for (const aborted of [true, false]) {
+      const invocationId = aborted ? 'iterator-error-after-abort' : 'iterator-error-without-abort'
+      const registry = new ModelProviderRegistry()
+      const controller = new AbortController()
+      const dispatch = vi.fn(async function* () {
+        if (aborted) controller.abort()
+        throw new Error('network reset')
+      })
+      registry.register(route, { providerId: 'throwing-provider', stream: dispatch })
+      const history = new MemoryHistory()
+      const recoverProviderAttempt = vi.fn(async () => undefined)
+      const permits = new InMemorySafetyPermitStore()
+      const input = {
+        registry, routeId: route.routeId, invocationId,
+        request: { messages: [{ role: 'user' as const, content: 'hello' }], maxTokens: 20, signal: controller.signal },
+        history, safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+        prepareTool: vi.fn(async () => toolBinding),
+        toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: 'unused' }))),
+        recoverProviderAttempt, maxModelTurns: 1
+      }
+
+      if (aborted) await expect(runAgentTurn(input)).rejects.toMatchObject({ code: 'TURN_CANCELLED' })
+      else await expect(runAgentTurn(input)).rejects.toThrow('network reset')
+
+      expect(dispatch).toHaveBeenCalledOnce()
+      expect(recoverProviderAttempt).toHaveBeenCalledTimes(aborted ? 0 : 1)
+      const events = (await history.read(invocationId)).events
+      expect(events.filter((event) => ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind))).toHaveLength(1)
+      expect(events.at(-1)).toMatchObject(aborted
+        ? { kind: 'invocation-interrupted', payload: { status: 'cancelled' } }
+        : { kind: 'invocation-failed', payload: { status: 'failed' } })
+    }
+  })
+
+  it('cancels only turn A when different sessions share requestId and keeps B confirmation, tool, and History alive', async () => {
+    const sharedRequestId = 'shared-cross-session-request'
+    const sessionA = { sessionId: 'session-a', invocationId: 'invocation-a', turnId: 'turn-a', userText: 'A' }
+    const sessionB = { sessionId: 'session-b', invocationId: 'invocation-b', turnId: 'turn-b', userText: 'B' }
+    expect(sessionA.sessionId).not.toBe(sessionB.sessionId)
+    expect(sessionA.turnId).not.toBe(sessionB.turnId)
+    expect(sharedRequestId).toBe('shared-cross-session-request')
+    const controllers = { A: new AbortController(), B: new AbortController() }
+    const registries = new ModelProviderRegistry()
+    const providerDispatches: string[] = []
+    registries.register(route, { providerId: 'shared-request-provider', stream: async function* (call) {
+      const owner = call.request.messages.find((message) => message.role === 'user')?.content
+      const session = owner === 'A' ? sessionA : sessionB
+      providerDispatches.push(session.turnId)
+      const hasToolResult = call.request.messages.some((message) => message.role === 'tool')
+      if (hasToolResult) {
+        yield { type: 'text-delta' as const, text: `${session.userText} completed` }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'stop' as const }
+      } else {
+        yield { type: 'tool-call' as const, toolCallId: `tool-${session.userText}`, toolName: 'run_shell', input: { command: `echo ${session.userText}` } }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'tool-calls' as const }
+      }
+    } })
+    const makeBinding = (session: typeof sessionA, toolCallId: string, phase: PermitBinding['phase']): PermitBinding => ({
+      requestId: sharedRequestId, turnId: session.turnId, invocationId: session.invocationId,
+      toolCallId, capabilityId: 'run_shell', inputSnapshotHash: `hash-${toolCallId}`,
+      planDigest: `plan-${toolCallId}`, factsDigest: `facts-${toolCallId}`, authorizationVersion: 'auth-v1', phase
+    })
+    const histories = { A: new MemoryHistory(), B: new MemoryHistory() }
+    const permits = { A: new InMemorySafetyPermitStore(), B: new InMemorySafetyPermitStore() }
+    const executions = vi.fn(async (call: { invocationId: string }, signal: AbortSignal) => ({ output: `${call.invocationId}-tool-result` }))
+    let enteredConfirmationCount = 0
+    let markConfirmationsEntered!: () => void
+    const confirmationsEntered = new Promise<void>((resolve) => { markConfirmationsEntered = resolve })
+    let resolveBConfirmation!: (result: { kind: 'approved'; receipt: string; answerer: 'user' }) => void
+    const confirmation = vi.fn(({ call, signal }: { call: { invocationId: string }; signal?: AbortSignal }) => {
+      enteredConfirmationCount += 1
+      if (enteredConfirmationCount === 2) markConfirmationsEntered()
+      if (call.invocationId === sessionA.invocationId) {
+        return new Promise<{ kind: 'cancelled' }>((resolve) => {
+          signal?.addEventListener('abort', () => resolve({ kind: 'cancelled' }), { once: true })
+        })
+      }
+      return new Promise<{ kind: 'approved'; receipt: string; answerer: 'user' }>((resolve) => { resolveBConfirmation = resolve })
+    })
+    const createTurn = (session: typeof sessionA, key: 'A' | 'B') => {
+      const capabilityRegistry = new CapabilityRegistry()
+      capabilityRegistry.define(session.invocationId, ['run_shell'])
+      const permitsForTurn = permits[key]
+      const safetyGate = new SafetyGate({
+        capabilities: capabilityRegistry, permitStore: permitsForTurn,
+        policy: { evaluate: async (binding) => binding.phase === 'initial-compat'
+          ? { kind: 'ask' as const, confirmationId: `${session.turnId}-approval`, answerer: 'user' as const, reasonCode: 'shell-confirm' }
+          : { kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }
+        }
+      })
+      const admission = new InMemoryExecutionAdmissionCoordinator()
+      const toolExecution = createPermitBoundToolExecutionPort({
+        permits: permitsForTurn, admission, allowedPhase: 'recheck',
+        resolveExpected: async (call) => makeBinding(session, call.toolCallId, 'recheck'),
+        execute: async (call, signal) => executions(call, signal)
+      })
+      return runAgentTurn({
+        registry: registries, routeId: route.routeId, invocationId: session.invocationId, turnId: session.turnId,
+        sessionId: session.sessionId,
+        request: { messages: [{ role: 'user', content: session.userText }], maxTokens: 20, signal: controllers[key].signal },
+        history: histories[key], safetyGate,
+        prepareTool: async (call, stage) => makeBinding(session, call.toolCallId, stage.kind === 'initial' ? 'initial-compat' : 'recheck'),
+        confirmation,
+        toolExecution,
+        maxModelTurns: 2,
+        isApprovalCandidate: () => true
+      })
+    }
+
+    const turnA = createTurn(sessionA, 'A')
+    const turnB = createTurn(sessionB, 'B')
+    await confirmationsEntered
+    controllers.A.abort()
+    await expect(turnA).rejects.toMatchObject({ code: 'TURN_CANCELLED' })
+
+    expect(controllers.B.signal.aborted).toBe(false)
+    expect(resolveBConfirmation).toBeTypeOf('function')
+    expect(executions).not.toHaveBeenCalled()
+    expect((await histories.B.read(sessionB.invocationId)).events.some((event) => event.kind === 'approval-resolved')).toBe(false)
+
+    resolveBConfirmation({ kind: 'approved', receipt: 'turn-b-approved', answerer: 'user' })
+    await expect(turnB).resolves.toMatchObject({ text: 'B completed' })
+    expect(executions).toHaveBeenCalledOnce()
+    expect(executions).toHaveBeenCalledWith(expect.objectContaining({ invocationId: sessionB.invocationId }), expect.objectContaining({ aborted: false }))
+    expect(providerDispatches).toEqual(['turn-a', 'turn-b', 'turn-b'])
+    expect((await histories.A.read(sessionA.invocationId)).events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'cancelled' } })
+    expect((await histories.B.read(sessionB.invocationId)).events.at(-1)).toMatchObject({ kind: 'invocation-completed', payload: { status: 'completed' } })
+    expect((await histories.B.read(sessionB.invocationId)).events.find((event) => event.kind === 'approval-resolved')).toMatchObject({
+      kind: 'approval-resolved', payload: { toolCallId: 'tool-B', approved: true, outcome: 'approved' }
+    })
+  })
 })

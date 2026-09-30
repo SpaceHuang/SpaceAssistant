@@ -19,6 +19,8 @@ type PiEvent =
   | { type: 'done'; reason: 'stop' | 'length' | 'toolUse' | 'error' | 'aborted'; message: { usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }; errorMessage?: string; content?: Array<{ type?: string; thinkingSignature?: string; redacted?: boolean }> } }
   | { type: 'error'; error?: { errorMessage?: string; status?: number; usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number } } }
 
+type PiUsage = { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }
+
 type PiModel = {
   id: string; name: string; api: 'anthropic-messages'; provider: 'anthropic'; baseUrl: string; reasoning: boolean
   input: ('text' | 'image')[]; cost: { input: number; output: number; cacheRead: number; cacheWrite: number }
@@ -80,7 +82,6 @@ export class PiAiAnthropicProvider implements ModelProvider {
     }
     validateImageInputs(call.request.messages)
     if (call.request.signal?.aborted) {
-      yield { type: 'usage', inputTokens: 0, outputTokens: 0 }
       yield { type: 'finish', reason: 'cancelled' }
       return
     }
@@ -117,45 +118,63 @@ export class PiAiAnthropicProvider implements ModelProvider {
       ...(call.request.thinking?.effort !== undefined ? { effort: call.request.thinking.effort } : {})
     })
     let terminal = false
-    for await (const event of events) {
-      if (terminal) throw new Error('pi-ai emitted event after terminal')
-      if (event.type === 'text_delta') yield { type: 'text-delta', text: event.delta }
-      else if (event.type === 'thinking_delta') yield { type: 'thinking-delta', text: event.delta }
-      else if (event.type === 'toolcall_end') {
-        const args = event.toolCall.arguments
-        if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('PI_TOOL_ARGUMENTS_INVALID')
-        const thoughtSignature = (event.toolCall as { thoughtSignature?: unknown }).thoughtSignature
-        yield { type: 'tool-call', toolCallId: event.toolCall.id, toolName: event.toolCall.name, input: args as Record<string, unknown>, ...(typeof thoughtSignature === 'string' ? { thoughtSignature } : {}) }
-      } else if (event.type === 'error') {
-        if (call.request.signal?.aborted) {
-          yield { type: 'usage', inputTokens: event.error?.usage?.input ?? 0, outputTokens: event.error?.usage?.output ?? 0, ...(event.error?.usage?.cacheRead ? { cacheReadInputTokens: event.error.usage.cacheRead } : {}), ...(event.error?.usage?.cacheWrite ? { cacheCreationInputTokens: event.error.usage.cacheWrite } : {}) }
-          yield { type: 'finish', reason: 'cancelled' }
-          terminal = true
-          continue
-        }
-        throw normalizeProviderError(event.error?.errorMessage, event.error?.status)
-      } else if (event.type === 'done') {
-        if (event.reason === 'error' || event.reason === 'aborted') {
-          if (event.reason === 'aborted') {
-            yield { type: 'usage', inputTokens: event.message.usage?.input ?? 0, outputTokens: event.message.usage?.output ?? 0, ...(event.message.usage?.cacheRead ? { cacheReadInputTokens: event.message.usage.cacheRead } : {}), ...(event.message.usage?.cacheWrite ? { cacheCreationInputTokens: event.message.usage.cacheWrite } : {}) }
+    try {
+      for await (const event of events) {
+        if (terminal) throw new Error('pi-ai emitted event after terminal')
+        if (event.type === 'text_delta') yield { type: 'text-delta', text: event.delta }
+        else if (event.type === 'thinking_delta') yield { type: 'thinking-delta', text: event.delta }
+        else if (event.type === 'toolcall_end') {
+          const args = event.toolCall.arguments
+          if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('PI_TOOL_ARGUMENTS_INVALID')
+          const thoughtSignature = (event.toolCall as { thoughtSignature?: unknown }).thoughtSignature
+          yield { type: 'tool-call', toolCallId: event.toolCall.id, toolName: event.toolCall.name, input: args as Record<string, unknown>, ...(typeof thoughtSignature === 'string' ? { thoughtSignature } : {}) }
+        } else if (event.type === 'error') {
+          if (call.request.signal?.aborted) {
+            const usage = mapCancelledUsage(event.error?.usage)
+            if (usage) yield usage
             yield { type: 'finish', reason: 'cancelled' }
             terminal = true
-            continue
+            return
           }
-          throw normalizeProviderError(event.message.errorMessage)
-        }
-        const usage = event.message.usage
-        if (!usage || typeof usage.input !== 'number' || typeof usage.output !== 'number') throw new Error('MODEL_USAGE_MISSING')
-        for (const block of event.message.content ?? []) {
-          if (block.type === 'thinking' && typeof block.thinkingSignature === 'string') {
-            yield { type: 'thinking-signature', signature: block.thinkingSignature, ...(block.redacted ? { redacted: true } : {}) }
+          throw normalizeProviderError(event.error?.errorMessage, event.error?.status)
+        } else if (event.type === 'done') {
+          if (event.reason === 'error' || event.reason === 'aborted') {
+            if (event.reason === 'aborted') {
+              const usage = mapCancelledUsage(event.message.usage)
+              if (usage) yield usage
+              yield { type: 'finish', reason: 'cancelled' }
+              terminal = true
+              return
+            }
+            throw normalizeProviderError(event.message.errorMessage)
           }
+          const usage = event.message.usage
+          if (!usage || typeof usage.input !== 'number' || typeof usage.output !== 'number') throw new Error('MODEL_USAGE_MISSING')
+          for (const block of event.message.content ?? []) {
+            if (block.type === 'thinking' && typeof block.thinkingSignature === 'string') {
+              yield { type: 'thinking-signature', signature: block.thinkingSignature, ...(block.redacted ? { redacted: true } : {}) }
+            }
+          }
+          yield { type: 'usage', inputTokens: usage.input, outputTokens: usage.output, ...(usage.cacheRead ? { cacheReadInputTokens: usage.cacheRead } : {}), ...(usage.cacheWrite ? { cacheCreationInputTokens: usage.cacheWrite } : {}) }
+          yield { type: 'finish', reason: event.reason === 'toolUse' ? 'tool-calls' : event.reason }
+          terminal = true
         }
-        yield { type: 'usage', inputTokens: usage.input, outputTokens: usage.output, ...(usage.cacheRead ? { cacheReadInputTokens: usage.cacheRead } : {}), ...(usage.cacheWrite ? { cacheCreationInputTokens: usage.cacheWrite } : {}) }
-        yield { type: 'finish', reason: event.reason === 'toolUse' ? 'tool-calls' : event.reason }
-        terminal = true
       }
+    } catch (error) {
+      if (!call.request.signal?.aborted) throw error
+      yield { type: 'finish', reason: 'cancelled' }
+      terminal = true
     }
+    if (!terminal && call.request.signal?.aborted) yield { type: 'finish', reason: 'cancelled' }
+  }
+}
+
+function mapCancelledUsage(usage?: PiUsage): StreamChunk | undefined {
+  if (!usage || typeof usage.input !== 'number' || typeof usage.output !== 'number') return undefined
+  return {
+    type: 'usage', inputTokens: usage.input, outputTokens: usage.output,
+    ...(typeof usage.cacheRead === 'number' ? { cacheReadInputTokens: usage.cacheRead } : {}),
+    ...(typeof usage.cacheWrite === 'number' ? { cacheCreationInputTokens: usage.cacheWrite } : {})
   }
 }
 

@@ -16,6 +16,8 @@ import { createHostedAgentTurnHost } from './hostedAgentTurnHost'
 import { assembleInvocation } from './invocationAssembler'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { createAgentSdkOutputRecovery } from './agentSdkOutputRecovery'
+import { createAgentSdkUsageRecorder, createAgentSdkUsageSessionEvent } from './agentSdkUsageRecorder'
+import { decodeTerminalOutcome } from './terminalOutcome'
 import { rebuildClaudeMessagesFromHistory } from './canonicalHistory'
 import { createAgentRuntime } from './agentRuntime'
 import { getDefaultAgentRuntime, resetDefaultAgentRuntimeForTests, setDefaultAgentRuntime } from './agentRuntimeDefaults'
@@ -172,6 +174,62 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
     await expect(deps.history.read(deps.invocationId)).resolves.toMatchObject({
       events: expect.arrayContaining([expect.objectContaining({ kind: 'model-response-committed' }), expect.objectContaining({ kind: 'invocation-completed' })])
     })
+  })
+
+  it('records only observed usage for cancelled Hosted model attempts', async () => {
+    for (const withUsage of [false, true]) {
+      const deps = baseDependencies()
+      const controller = new AbortController()
+      const providerStream = vi.fn(async function* () {
+        controller.abort()
+        if (withUsage) yield { type: 'usage' as const, inputTokens: 0, outputTokens: 0 }
+        yield { type: 'finish' as const, reason: 'cancelled' as const }
+      })
+      deps.providerRegistry.register(route, { providerId: 'cancel-hosted-provider', stream: providerStream })
+      const recordStepUsage = vi.fn()
+      const emitSessionEvent = vi.fn()
+      const emitFactEvent = vi.fn()
+      const recordProviderAttemptUsage = createAgentSdkUsageRecorder({
+        requestId: deps.invocationId, sessionId: 'session-host', turnId: deps.turnId,
+        recordStepUsage, emitSessionEvent, emitFactEvent
+      })
+      const sessionLedgerForAttemptUsage = vi.fn((attempt: Record<string, unknown>) => {
+        const event = createAgentSdkUsageSessionEvent({ requestId: deps.invocationId, turnId: deps.turnId }, attempt)
+        return event ? { location: { sessionId: 'session-host' }, requestUsage: event.payload } : {}
+      })
+      const host = createHostedAgentTurnHost({ ...deps, recordProviderAttemptUsage, sessionLedgerForAttemptUsage })
+
+      await expect(runHostedAgentTurn({
+        host, invocationId: deps.invocationId, turnId: deps.turnId, routeId: deps.routeId,
+        request: { messages: [{ role: 'user', content: 'cancel this request' }], maxTokens: 32, signal: controller.signal }
+      })).rejects.toMatchObject({ code: 'TURN_CANCELLED' })
+
+      expect(providerStream).toHaveBeenCalledOnce()
+      expect(recordStepUsage).toHaveBeenCalledTimes(withUsage ? 1 : 0)
+      expect(emitSessionEvent).toHaveBeenCalledTimes(withUsage ? 1 : 0)
+      expect(emitFactEvent).toHaveBeenCalledTimes(withUsage ? 1 : 0)
+      if (withUsage) expect(emitSessionEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'request_usage', payload: expect.objectContaining({
+          requestId: `${deps.invocationId}:round:1`, turnId: deps.turnId,
+          usage: expect.objectContaining({ input_tokens: 0, output_tokens: 0 })
+        }) }))
+      expect(sessionLedgerForAttemptUsage).toHaveBeenCalledTimes(withUsage ? 1 : 0)
+      const events = (await deps.history.read(deps.invocationId)).events
+      const terminals = events.filter((event) => ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind))
+      expect(terminals).toHaveLength(1)
+      expect(terminals[0]).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'cancelled' } })
+      expect(decodeTerminalOutcome(terminals[0]!)).toBe('cancelled')
+      const attemptUsageEvents = events.filter((event) => event.kind === 'model-attempt-discarded')
+      expect(attemptUsageEvents).toHaveLength(withUsage ? 1 : 0)
+      if (withUsage) {
+        expect(terminals[0]?.payload).toHaveProperty('usage', { type: 'usage', inputTokens: 0, outputTokens: 0 })
+        expect(attemptUsageEvents[0]).toMatchObject({
+          payload: {
+            reasonCode: 'TURN_CANCELLED', finishReason: 'cancelled',
+            sessionLedger: { requestUsage: { requestId: `${deps.invocationId}:round:1`, turnId: deps.turnId } }
+          }
+        })
+      } else expect(terminals[0]?.payload).not.toHaveProperty('usage')
+    }
   })
 
   it('stops after the configured tool round limit and records the next proposal as not dispatched', async () => {

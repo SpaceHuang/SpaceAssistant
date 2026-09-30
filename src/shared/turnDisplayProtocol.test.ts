@@ -95,6 +95,16 @@ describe('turn display protocol', () => {
     expect(message.toolCalls?.[0]?.result).toBeUndefined()
   })
 
+  it('旧 display 缺少 activity 时按空轨迹恢复 renderer Message', () => {
+    const display = toTurnDisplay({ turnId: 't-legacy', requestId: 'r-legacy', version: 1, lifecycle: 'failed', message: baseMessage })
+    const legacyDisplay = {
+      ...display,
+      message: { ...display.message, activity: undefined }
+    } as unknown as typeof display
+
+    expect(turnDisplayToMessage(legacyDisplay).activity).toEqual([])
+  })
+
   it('保留审批 Agent 标记，避免 bounded display 把自动裁决恢复成人工确认', () => {
     const messageWithAgentApproval = {
       ...baseMessage,
