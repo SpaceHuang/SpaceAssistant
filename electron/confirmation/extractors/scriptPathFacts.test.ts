@@ -595,6 +595,33 @@ describe('extractScriptPathFacts:v5 评审 B6-R(标志覆盖而非合并)', () =
 })
 
 // ============================================================================
+// v5 评审 B6-R2:lambda 默认值位硬编码 false——lambda 是表达式,其默认值随
+// lambda 表达式求值才求值,条件求值位置时可能永不执行,不得重绑。
+// ============================================================================
+describe('extractScriptPathFacts:v5 评审 B6-R2(lambda 默认值位)', () => {
+  beforeAll(async () => {
+    await scriptParserService.ensureInitialized()
+  })
+
+  afterAll(() => resetScriptParserServiceForTests())
+
+  it('B6-R2 conditional 分支里的 lambda 默认值 walrus 永不求值,不得重绑(评审 PoC)', () => {
+    expect(extractScriptPathFacts([
+      'p = "/etc/passwd"',
+      'x = (lambda q=(p := "/safe.txt"): q) if False else None',
+      'open(p)'
+    ].join('\n'), 'python')).toMatchObject({ completeness: 'unknown' })
+  })
+
+  it('B6-R2 对照:顶层 lambda 默认值恒定求值,重绑合法语义保持', () => {
+    expect(extractScriptPathFacts([
+      'f = lambda q=(p := "/safe.txt"): q',
+      'open(p)'
+    ].join('\n'), 'python')).toMatchObject({ paths: ['/safe.txt'], completeness: 'complete' })
+  })
+})
+
+// ============================================================================
 // v5 评审阻断项 B5:字典推导式 key 表达式逃逸——tree-sitter 结构为
 // dictionary_comprehension(body: pair(key, value)),key 是 pair 的字段,
 // 旧实现在推导式节点上取 key 恒为 null(死代码),pair 又只取 value 静默丢 key。

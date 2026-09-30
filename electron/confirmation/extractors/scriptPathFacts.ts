@@ -379,7 +379,9 @@ function walkExpr(expr: IrExpr, env: WalkEnv, paths: Set<string>, state: WalkSta
       // 绑定位置排查(评审 checklist):lambda 参数遮蔽外层常量不另失效——lambda 体读到的
       // 是调用方实参,而 lambda 的任何调用路径必然先落 unknown(直接调用 chain 为 null、
       // 经绑定名调用该名非 def),陈旧常量读不可达;defaults 仍按定义时求值遍历。
-      expr.defaults.forEach((v) => walkExpr(v, env, paths, state, false)); walkExpr(expr.body, env, paths, state, true); break
+      // B6-R2:lambda 是表达式,默认值随 lambda 表达式求值才求值——条件性透传,
+      // 硬编码 false 会让条件位置的 lambda 默认值 walrus 被错误重绑。
+      expr.defaults.forEach((v) => walkExpr(v, env, paths, state, conditionallyEvaluated)); walkExpr(expr.body, env, paths, state, true); break
     case 'await': case 'starred': walkExpr(expr.value, env, paths, state, conditionallyEvaluated); break
     case 'yield': if (expr.value) walkExpr(expr.value, env, paths, state, conditionallyEvaluated); break
     case 'comprehension':
