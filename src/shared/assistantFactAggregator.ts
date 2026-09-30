@@ -53,6 +53,7 @@ type AssistantFactEventPayload =
       memoryTiers?: ToolCallRecord['memoryTiers']
       confirmDiff?: ToolCallRecord['confirmDiff']
       shellSecurityHints?: ToolCallRecord['shellSecurityHints']
+      scriptPathHint?: ToolCallRecord['scriptPathHint']
       autoApproveFallback?: ToolCallRecord['autoApproveFallback']
       currentPageUrl?: ToolCallRecord['currentPageUrl']
       dangerInfo?: ToolCallRecord['dangerInfo']
@@ -219,6 +220,7 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
           ...(event.memoryTiers ? { memoryTiers: event.memoryTiers } : {}),
           ...(event.confirmDiff ? { confirmDiff: event.confirmDiff } : {}),
           ...(event.shellSecurityHints ? { shellSecurityHints: event.shellSecurityHints } : {}),
+          ...(event.scriptPathHint ? { scriptPathHint: event.scriptPathHint } : {}),
           ...(event.autoApproveFallback ? { autoApproveFallback: event.autoApproveFallback } : {}),
           ...(event.currentPageUrl ? { currentPageUrl: event.currentPageUrl } : {}),
           ...(event.dangerInfo ? { dangerInfo: event.dangerInfo } : {}),

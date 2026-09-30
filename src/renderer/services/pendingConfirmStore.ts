@@ -12,6 +12,7 @@ export type PendingConfirmItem = {
   riskLevel: ToolRiskLevel
   diff?: ToolCallRecord['confirmDiff']
   shellSecurityHints?: ShellSecurityHints
+  scriptPathHint?: string
   autoApproveFallback?: AutoApproveFallback
   currentPageUrl?: string
   dangerInfo?: BrowserActDangerInfo
@@ -52,6 +53,7 @@ function sameItemPayload(a: ConfirmPayloadFields, b: ConfirmPayloadFields): bool
     && JSON.stringify(a.input ?? null) === JSON.stringify(b.input ?? null)
     && JSON.stringify(a.diff ?? null) === JSON.stringify(b.diff ?? null)
     && JSON.stringify(a.shellSecurityHints ?? null) === JSON.stringify(b.shellSecurityHints ?? null)
+    && (a.scriptPathHint ?? '') === (b.scriptPathHint ?? '')
     && JSON.stringify(a.dangerInfo ?? null) === JSON.stringify(b.dangerInfo ?? null)
     && JSON.stringify(a.mcp ?? null) === JSON.stringify(b.mcp ?? null)
     && JSON.stringify(a.memoryTiers ?? null) === JSON.stringify(b.memoryTiers ?? null)
@@ -120,6 +122,7 @@ class PendingConfirmStore {
         riskLevel: tool.riskLevel,
         ...(tool.confirmDiff ? { diff: tool.confirmDiff } : {}),
         ...(tool.shellSecurityHints ? { shellSecurityHints: tool.shellSecurityHints } : {}),
+        ...(tool.scriptPathHint ? { scriptPathHint: tool.scriptPathHint } : {}),
         ...(tool.autoApproveFallback ? { autoApproveFallback: tool.autoApproveFallback } : {}),
         ...(tool.currentPageUrl ? { currentPageUrl: tool.currentPageUrl } : {}),
         ...(tool.dangerInfo ? { dangerInfo: tool.dangerInfo } : {}),
@@ -192,6 +195,7 @@ class PendingConfirmStore {
         current.riskLevel = result.confirmation.riskLevel
         if (!current.memoryTiers?.length && result.confirmation.memoryTiers.length) current.memoryTiers = result.confirmation.memoryTiers.map((tier) => ({ label: tier.label, key: { kind: 'path', path: '', level: 'zone' } }))
         if (result.confirmation.shellSecurityHints) current.shellSecurityHints = result.confirmation.shellSecurityHints
+        if (result.confirmation.scriptPathHint) current.scriptPathHint = result.confirmation.scriptPathHint
         if (result.confirmation.autoApproveFallback) current.autoApproveFallback = result.confirmation.autoApproveFallback
         if (result.confirmation.browser.currentPageUrl) current.currentPageUrl = result.confirmation.browser.currentPageUrl
         if (result.confirmation.browser.dangerInfo) current.dangerInfo = result.confirmation.browser.dangerInfo

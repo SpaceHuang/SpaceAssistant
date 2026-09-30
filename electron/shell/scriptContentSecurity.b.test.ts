@@ -63,6 +63,16 @@ describe('scriptContentSecurity — List B (must ask or deny)', () => {
     mustNotAllow("import base64\nt = base64.b64decode('cGFzcw==')\nexec(t)", 'B11')
     mustNotAllow("import codecs\nt = codecs.decode(b'x', 'utf-8')\ncompile(t, '<s>', 'exec')", 'B11')
     mustNotAllow("t = bytes.fromhex('70617373')\n__import__(t)", 'B11')
+    // v4 评审 obs2:walrus 目标与 assign 同语义登记 decode→exec 链
+    mustNotAllow("import base64\n(x := base64.b64decode('cGFzcw=='))\nexec(x)", 'B11')
+    // v5 评审 N14:walrus 在 if test 位置、decode 在 while body 内的链路同样登记
+    mustNotAllow("import base64\nif (x := base64.b64decode('cGFzcw==')):\n    exec(x)", 'B11')
+    mustNotAllow("import base64\nwhile flag:\n    x = base64.b64decode('cGFzcw==')\nexec(x)", 'B11')
+  })
+
+  it('v5 B5 — dict comprehension key expression must not escape', () => {
+    const r = analyzeScriptContent("import os\nd = {os.system(k): v for k, v in rows}")
+    expect(r.verdict).not.toBe('allow')
   })
 
   it('assignment rebind of dangerous module / callable must not allow', () => {

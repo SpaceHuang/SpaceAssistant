@@ -63,7 +63,18 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
       case 'script-path-extraction':
         tokens.add(signal.kind)
         tokens.add(`script-path-extraction:${signal.completeness}`)
-        if (signal.dynamicAccess) tokens.add('script-dynamic-access')
+        // 评审 N5 防御:unknown 但未携带分类(未来生产者遗漏)时强制归 dynamic-access——
+        // 落 locked 强处置(fail-closed),不得落 unmodeled ask。
+        if (signal.dynamicAccess || (signal.completeness === 'unknown' && !signal.unknownReason)) tokens.add('script-dynamic-access')
+        // P1-1:分类 token 只增不替——`:unknown` 对两类继续产出(automation-script-path-unknown-deny
+        // 依赖它,替换即安全倒退);分类 token 供 script-unmodeled-path-ask 松绑消费。
+        if (signal.unknownReason) tokens.add(`script-path-extraction:${signal.unknownReason}`)
+        break
+      case 'script-path-declaration':
+        // P2-3:声明事实 token;consistent 汇总为独立 token 供 config 门控规则消费
+        tokens.add(signal.kind)
+        tokens.add(`script-path-declaration:${signal.scope}`)
+        if (signal.consistent) tokens.add('script-path-declaration-consistent')
         break
       case 'script-language-analysis':
         tokens.add(signal.kind)
@@ -114,6 +125,11 @@ export function deriveCacheKeys(
 ): CacheKey[] {
   if (constraints && !constraints.memory.canRead) return []
   const keys: CacheKey[] = []
+  // P2-2:路径提取 unknown 的脚本只派生 exact-content 会话键——路径键只覆盖已静态提取的
+  // 路径,不同脚本经重叠路径命中缓存会连「未建模/动态路径」一起放行,必须整体抑制。
+  const pathUnknown = facts.signals.some(
+    (signal) => signal.kind === 'script-path-extraction' && signal.completeness === 'unknown'
+  )
   for (const signal of facts.signals) {
     switch (signal.kind) {
       case 'command-sequence':
@@ -154,7 +170,16 @@ export function deriveCacheKeys(
       case 'path-target':
         // B4：敏感文件（sensitive-file zone）不派生任何缓存键——既不给记忆档位，也不消费已有条目。
         if (signal.zone === 'sensitive-file') break
+        // P2-2：脚本路径 unknown 时路径键整体抑制(见上方 pathUnknown)
+        if (pathUnknown) break
         keys.push({ kind: 'path', path: signal.path, level: 'file' })
+        break
+      case 'script-path-extraction':
+        // P2-2:脚本内容指纹(会话级)。仅 unmodeled-call 派生——dynamic-execution 走 locked
+        // 逐次确认,constraints.memory.canRead=false 已在入口阻断,不会到达此处。
+        if (signal.unknownReason === 'unmodeled-call' && signal.contentDigest && sessionId) {
+          keys.push({ kind: 'script-content', digest: signal.contentDigest, sessionId })
+        }
         break
       default:
         break

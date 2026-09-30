@@ -1,4 +1,7 @@
+import { createHash } from 'node:crypto'
+import type { ScriptPathFacts } from './extractors/scriptPathFacts'
 import { decide } from '../../src/shared/policy/policyEngine'
+import { CONFIRMATION_LABELS } from '../../src/shared/confirmation/labels'
 import type { PolicyRule } from '../../src/shared/confirmation/types'
 import { validatePolicyRulesFloor } from '../../src/shared/policy/policyFloor'
 import { getBuiltinToolMetadata } from '../../src/shared/builtinToolMetadata'
@@ -169,8 +172,29 @@ export interface ToolCallGateResult {
   mcpEntry?: McpToolSnapshotEntry
   /** run_script 原始分析（拒绝消息桥接 / 日志 patterns）。 */
   rawScriptAnalysis?: ScriptAnalysisResult
+  /** P2-1:run_script 路径分析未覆盖时的命中原因提示（确认卡片展示）。 */
+  scriptPathHint?: string
   /** R2：结构化诊断（deny / require-confirm 与 decision 成对出现；auto-allow 不产）。 */
   diagnostics?: SafetyDiagnostics
+}
+
+/**
+ * P2-1:把 unknown 分类与调用名证据组织成用户可读的回显文本(摘要与确认卡共用)。
+ * 证据在提取器侧封顶(超出静默丢弃);无证据时用 fallback 文案。文案集中于
+ * CONFIRMATION_LABELS(M4 豁免点)。
+ */
+function buildScriptPathHint(
+  unknownReason: 'dynamic-execution' | 'unmodeled-call' | null,
+  evidence: ReadonlyArray<{ call: string; reason: 'dynamic-execution' | 'unmodeled-call' }>,
+  declaration?: 'workdir-readonly'
+): string {
+  const names = evidence.map((e) => e.call)
+  const prefix = unknownReason === 'dynamic-execution'
+    ? CONFIRMATION_LABELS.scriptDynamicExecutionHintPrefix
+    : CONFIRMATION_LABELS.scriptPathUnknownHintPrefix
+  const body = names.length ? names.join('、') : CONFIRMATION_LABELS.scriptPathUnknownHintFallback
+  const declarationNote = declaration ? `；${CONFIRMATION_LABELS.scriptDeclarationHint}` : ''
+  return `${prefix}${body}${declarationNote}`
 }
 
 function laneOf(remoteContext: RemoteContext | undefined, explicitLane?: ExecutionLane): ExecutionLane {
@@ -468,25 +492,43 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     const language: 'python' | 'javascript' | 'typescript' | 'powershell' | 'unknown' = requestedLanguage === 'python' || requestedLanguage === 'javascript' || requestedLanguage === 'typescript' || requestedLanguage === 'powershell'
       ? requestedLanguage
       : 'unknown'
-    const scriptPaths = pythonLanguage
-      ? preParsedIr ? extractScriptPathFacts(code, 'python', preParsedIr) : { paths: [], completeness: 'unknown' as const, dynamicAccess: true }
+    const scriptPaths: ScriptPathFacts = pythonLanguage
+      ? preParsedIr
+        ? extractScriptPathFacts(code, 'python', preParsedIr)
+        : { paths: [], completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', unknownEvidence: [] }
       : extractScriptPathFacts(code, language)
+    // P2-2:脚本内容指纹(sha256,语言无关),供 unmodeled-call 会话级信任派生缓存键
+    const contentDigest = createHash('sha256').update(code, 'utf8').digest('hex')
     const pythonSignals = pythonLanguage ? extractScriptSignals(code, env, preParsedIr) : undefined
     const signals: FactSignal[] = pythonLanguage
       ? pythonSignals!.signals
       : [{ kind: 'script-language-analysis' as const, language: language === 'python' ? 'unknown' as const : language, status: 'unverified' as const }]
-    const summary = pythonLanguage
+    let summary = pythonLanguage
       ? pythonSignals!.summary
       : { text: `run_script ${language} 路径事实已提取；内容安全分析未认证` }
-    signals.push({ kind: 'script-path-extraction', completeness: scriptPaths.completeness, dynamicAccess: scriptPaths.dynamicAccess })
+    signals.push({ kind: 'script-path-extraction', completeness: scriptPaths.completeness, dynamicAccess: scriptPaths.dynamicAccess, unknownReason: scriptPaths.unknownReason, contentDigest })
     for (const rawPath of scriptPaths.paths) {
       try {
         const pathFact = await probeWritePathFact({ rawPath, workDir: args.workDir, userDataDir: args.userDataDir, homeDir: os.homedir(), customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [] })
         signals.push({ kind: 'path-target', path: pathFact.normalizedPath, zone: pathFact.zone })
       } catch {
         signals.push({ kind: 'extraction-failed', reason: 'script-path-probe-failed' })
-        signals.push({ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true })
+        signals.push({ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution' })
       }
+    }
+    // P2-1:unknown 时把命中原因(调用名)回显进摘要与确认卡提示;P2-3:声明信号与交叉验证。
+    let scriptPathHint: string | undefined
+    if (scriptPaths.completeness === 'unknown') {
+      scriptPathHint = buildScriptPathHint(scriptPaths.unknownReason, scriptPaths.unknownEvidence, scriptPaths.declaration)
+      summary = { ...summary, text: `${summary.text} ${scriptPathHint}` }
+    }
+    if (pythonLanguage && scriptPaths.declaration) {
+      const consistent = scriptPaths.dynamicAccess === false
+        && !signals.some((sig) => sig.kind === 'script-network')
+        && !signals.some((sig) => sig.kind === 'script-analysis' && sig.signal !== 'clean')
+        && !signals.some((sig) => sig.kind === 'path-target' && sig.zone !== 'workdir-normal')
+        && !signals.some((sig) => sig.kind === 'extraction-failed') // 评审 N8:探测失败 = 事实不完整
+      signals.push({ kind: 'script-path-declaration', scope: scriptPaths.declaration, consistent })
     }
     facts = {
       toolName: 'run_script',
@@ -495,6 +537,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       signals,
       summary
     }
+    result.scriptPathHint = scriptPathHint
     result.rawScriptAnalysis = pythonLanguage
       ? analyzeScriptContent(code, { remote: lane !== 'desktop' }, preParsedIr)
       : { verdict: 'ask', patterns: ['script-language-analysis-unverified'], reason: '该脚本语言尚未接入完整内容安全分析' }

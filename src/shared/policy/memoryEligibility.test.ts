@@ -16,6 +16,25 @@ describe('MemoryEligibility', () => {
     })
   })
 
+  it('script path unknown:unmodeled 仅开放会话档(P2-2 脚本指纹),dynamic 维持禁用', () => {
+    expect(deriveMemoryEligibility(facts([
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call' }
+    ]), 'desktop')).toEqual({ eligibility: 'session', reasons: ['script-path-unknown-session-only'] })
+    expect(deriveMemoryEligibility(facts([
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution' }
+    ]), 'desktop')).toEqual({ eligibility: 'none', reasons: ['script-path-unknown'] })
+  })
+
+  it('N5/N4 防御:unknown 无分类或同审 extraction-failed → none(fail-closed)', () => {
+    expect(deriveMemoryEligibility(facts([
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: null }
+    ]), 'desktop')).toEqual({ eligibility: 'none', reasons: ['script-path-unknown'] })
+    expect(deriveMemoryEligibility(facts([
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call' },
+      { kind: 'extraction-failed', reason: 'script-path-probe-failed' }
+    ]), 'desktop')).toEqual({ eligibility: 'none', reasons: ['script-path-unknown'] })
+  })
+
   it('disables memory for outside-workdir and system-dir path risks', () => {
     for (const zone of ['outside-workdir', 'system-dir'] as const) {
       expect(deriveMemoryEligibility(facts([{ kind: 'path-target', path: '/risk', zone }]), 'desktop')).toEqual({
