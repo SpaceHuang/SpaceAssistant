@@ -1,11 +1,12 @@
 import { describe, expect, it, beforeEach } from 'vitest'
-import { createMemoryAppDb } from './testHelpers'
+import { createMemoryAppDb, createTempDatabase } from './testHelpers'
 import {
   appendMessage,
   appendMessagesAtomically,
   updateMessageContentIfStreaming,
   checkpointTurnAtomically,
   createSession,
+  deleteSession,
   getApiContextBaseline,
   getTurnContext,
   getMessage,
@@ -38,6 +39,97 @@ import {
 import { getDbConnection, type AppDatabase } from './sqliteStore'
 import { setConfigValue } from './operations'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
+import { openDatabase } from './index'
+
+describe('deleteSession persisted transcript cleanup', () => {
+  it('deletes owned History and transcript records durably without touching another or ambiguous session data', () => {
+    const { db, dbPath, cleanup } = createTempDatabase('sa-delete-session-transcript-')
+    const conn = getDbConnection(db)
+    const owned = createSession(db, { name: 'owned' })
+    const other = createSession(db, { name: 'other' })
+    const now = Date.now()
+    const insertStream = conn.prepare('INSERT INTO agent_history_streams(invocation_id,version,schema_version,session_id) VALUES(?,1,1,?)')
+    const insertEvent = conn.prepare('INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at) VALUES(?,1,?,?,?,1,?,?,?)')
+    insertStream.run('owned-history', owned.id)
+    insertEvent.run('owned-history', 'owned-event', 'owned-key', 'owned-turn', 'invocation-context-committed', JSON.stringify({ messages: [{ role: 'user', content: 'PRIVATE_HISTORY_SENTINEL' }] }), now)
+    insertStream.run('other-history', other.id)
+    insertEvent.run('other-history', 'other-event', 'other-key', 'other-turn', 'invocation-context-committed', JSON.stringify({ messages: [{ role: 'user', content: 'OTHER_HISTORY_SENTINEL' }] }), now)
+    insertStream.run('bound-other-conflict', other.id)
+    insertEvent.run('bound-other-conflict', 'conflicting-input', 'conflicting-input-key', 'conflicting-turn', 'session-input-committed', JSON.stringify({
+      sessionId: owned.id, messageId: 'conflicting-user-message', role: 'user', inputFingerprint: 'conflicting-fingerprint'
+    }), now)
+
+    // An unbound legacy stream can be removed only when its committed input identifies one owner.
+    conn.prepare('INSERT INTO agent_history_streams(invocation_id,version,schema_version,session_id) VALUES(?,1,1,NULL)').run('legacy-owned-history')
+    insertEvent.run('legacy-owned-history', 'legacy-input', 'legacy-input-key', 'legacy-turn', 'session-input-committed', JSON.stringify({
+      sessionId: owned.id, messageId: 'legacy-user-message', role: 'user', inputFingerprint: 'legacy-fingerprint'
+    }), now)
+    insertEvent.run('legacy-orphan-event', 'orphan-input', 'orphan-input-key', 'orphan-turn', 'session-input-committed', JSON.stringify({
+      sessionId: owned.id, messageId: 'orphan-user-message', role: 'user', inputFingerprint: 'orphan-fingerprint'
+    }), now)
+    conn.prepare('INSERT INTO agent_history_streams(invocation_id,version,schema_version,session_id) VALUES(?,1,1,NULL)').run('ambiguous-history')
+    insertEvent.run('ambiguous-history', 'ambiguous-input', 'ambiguous-input-key', 'ambiguous-turn', 'session-input-committed', JSON.stringify({
+      sessionId: owned.id, messageId: 'ambiguous-user-message', role: 'user', inputFingerprint: 'ambiguous-fingerprint'
+    }), now)
+    conn.prepare(`INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at)
+      VALUES(?,2,?,?,?,1,'invocation-completed',?,?)`).run('ambiguous-history', 'ambiguous-terminal', 'ambiguous-terminal-key', 'ambiguous-turn', JSON.stringify({
+      status: 'completed', sessionLedger: { location: { sessionId: other.id, workDir: '/work', createdAt: now } }
+    }), now)
+
+    conn.prepare('INSERT INTO session_transcript_checkpoints(session_id,version,last_turn_id,status,updated_at) VALUES(?,1,?,\'ready\',?)').run(owned.id, 'owned-turn', now)
+    conn.prepare('INSERT INTO session_transcript_entries(session_id,turn_id,base_version,version,outcome,messages_json,created_at) VALUES(?,?,0,1,\'failed\',?,?)')
+      .run(owned.id, 'owned-turn', JSON.stringify([{ role: 'user', content: 'PRIVATE_TRANSCRIPT_SENTINEL' }]), now)
+    conn.prepare('INSERT INTO session_transcript_reconciliations(resolution_id,session_id,turn_id,resolved_version,resolution,operator_id,rationale,created_at) VALUES(?,?,?,1,\'commit-reviewed\',\'operator\',?,?)')
+      .run('owned-resolution', owned.id, 'owned-turn', 'private rationale', now)
+    conn.prepare('INSERT INTO accepted_turn_contexts(turn_id,session_id,request_id,accepted_turn_json,created_at) VALUES(?,?,?,?,?)')
+      .run('owned-turn', owned.id, 'owned-request', JSON.stringify({ message: 'PRIVATE_ACCEPTED_TURN_SENTINEL' }), now)
+    conn.prepare('INSERT INTO session_execution_claims(session_id,turn_id,owner_id,generation,status,enqueued_at,updated_at) VALUES(?,?,?,1,\'commit_uncertain\',?,?)')
+      .run(owned.id, 'owned-turn', 'owner', now, now)
+    conn.prepare('INSERT INTO session_execution_queue(session_id,turn_id,owner_id,generation,status,enqueued_at,updated_at) VALUES(?,?,?,1,\'commit_uncertain\',?,?)')
+      .run(owned.id, 'owned-turn', 'owner', now, now)
+
+    deleteSession(db, owned.id)
+    db.close()
+
+    const reopened = openDatabase(dbPath)
+    const persisted = getDbConnection(reopened)
+    expect(persisted.prepare('SELECT id FROM sessions WHERE id=?').get(owned.id)).toBeUndefined()
+    for (const table of ['session_transcript_checkpoints', 'session_transcript_entries', 'session_transcript_reconciliations', 'accepted_turn_contexts', 'session_execution_claims', 'session_execution_queue']) {
+      expect(persisted.prepare(`SELECT 1 FROM ${table} WHERE session_id=? LIMIT 1`).get(owned.id), table).toBeUndefined()
+    }
+    expect(persisted.prepare('SELECT payload_json FROM agent_history_events WHERE invocation_id=?').get('owned-history')).toBeUndefined()
+    expect(persisted.prepare('SELECT invocation_id FROM agent_history_streams WHERE invocation_id=?').get('owned-history')).toBeUndefined()
+    expect(persisted.prepare('SELECT payload_json FROM agent_history_events WHERE invocation_id=?').get('legacy-owned-history')).toBeUndefined()
+    expect(persisted.prepare('SELECT invocation_id FROM agent_history_streams WHERE invocation_id=?').get('legacy-owned-history')).toBeUndefined()
+    expect(persisted.prepare('SELECT payload_json FROM agent_history_events WHERE invocation_id=?').get('legacy-orphan-event')).toBeUndefined()
+    expect(persisted.prepare('SELECT session_id FROM agent_history_streams WHERE invocation_id=?').get('other-history')).toEqual({ session_id: other.id })
+    expect(persisted.prepare('SELECT session_id FROM agent_history_streams WHERE invocation_id=?').get('bound-other-conflict')).toEqual({ session_id: other.id })
+    expect(persisted.prepare('SELECT payload_json FROM agent_history_events WHERE invocation_id=?').get('bound-other-conflict')).toBeDefined()
+    expect(persisted.prepare('SELECT payload_json FROM agent_history_events WHERE invocation_id=?').get('ambiguous-history')).toBeDefined()
+    reopened.close()
+    cleanup()
+  })
+
+  it('rolls back session and History deletion together when a transcript cleanup fails', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const session = createSession(db, { name: 'atomic-delete' })
+    conn.prepare('INSERT INTO agent_history_streams(invocation_id,version,schema_version,session_id) VALUES(\'atomic-history\',1,1,?)').run(session.id)
+    conn.prepare(`INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at)
+      VALUES('atomic-history',1,'event','key','turn',1,'invocation-context-committed','{"messages":[{"role":"user","content":"PRIVATE_ATOMIC_SENTINEL"}]}',1)`).run()
+    conn.prepare('INSERT INTO accepted_turn_contexts(turn_id,session_id,request_id,accepted_turn_json,created_at) VALUES(\'atomic-turn\',?,\'atomic-request\',\'{}\',1)').run(session.id)
+    conn.exec(`CREATE TRIGGER fail_session_delete_cleanup BEFORE DELETE ON accepted_turn_contexts
+      BEGIN SELECT RAISE(ABORT, 'forced cleanup failure'); END`)
+
+    expect(() => deleteSession(db, session.id, { flush: false })).toThrow('forced cleanup failure')
+    expect(conn.prepare('SELECT id FROM sessions WHERE id=?').get(session.id)).toEqual({ id: session.id })
+    expect(conn.prepare('SELECT payload_json FROM agent_history_events WHERE invocation_id=\'atomic-history\'').get()).toMatchObject({
+      payload_json: expect.stringContaining('PRIVATE_ATOMIC_SENTINEL')
+    })
+    expect(conn.prepare('SELECT turn_id FROM accepted_turn_contexts WHERE session_id=?').get(session.id)).toEqual({ turn_id: 'atomic-turn' })
+    db.close()
+  })
+})
 
 describe('createSession 默认模型', () => {
   it('回退到配置里的默认模型，而不是写死的历史模型名', () => {
@@ -481,10 +573,10 @@ describe('turn prepare and canonical History atomicity', () => {
     expect(prepared.user.message.id).toBe('input-user')
     expect(getPersistedTurn(db, 'input-turn')?.acceptedInputHistoryVersion).toBe(1)
     expect(await snapshot).toBeUndefined()
-    expect(getDbConnection(db).prepare('SELECT session_id FROM agent_history_streams WHERE invocation_id = ?').get('input-request')).toEqual({ session_id: sessionId })
-    expect(getDbConnection(db).prepare('SELECT kind, payload_json FROM agent_history_events WHERE invocation_id = ?').get('input-request'))
+    expect(getDbConnection(db).prepare('SELECT session_id FROM agent_history_streams WHERE invocation_id = ?').get('input-turn')).toEqual({ session_id: sessionId })
+    expect(getDbConnection(db).prepare('SELECT kind, payload_json FROM agent_history_events WHERE invocation_id = ?').get('input-turn'))
       .toMatchObject({ kind: 'session-input-committed' })
-    const persisted = getDbConnection(db).prepare('SELECT payload_json FROM agent_history_events WHERE invocation_id = ?').get('input-request') as { payload_json: string }
+    const persisted = getDbConnection(db).prepare('SELECT payload_json FROM agent_history_events WHERE invocation_id = ?').get('input-turn') as { payload_json: string }
     expect(JSON.parse(persisted.payload_json)).toMatchObject({ sessionId, messageId: 'input-user', role: 'user' })
     expect(persisted.payload_json).not.toContain('sensitive text')
   })
@@ -498,7 +590,7 @@ describe('turn prepare and canonical History atomicity', () => {
       turnId: 'queued-turn', assistantMessageId: 'queued-assistant'
     })
 
-    const history = await new SqliteAgentHistory(getDbConnection(db)).read('queued-request')
+    const history = await new SqliteAgentHistory(getDbConnection(db)).read('queued-turn')
     expect(getPersistedTurn(db, 'queued-turn')?.acceptedInputHistoryVersion).toBe(1)
     expect(history.events).toMatchObject([{
       sequence: 1, kind: 'session-input-committed',

@@ -99,6 +99,27 @@ describe('TurnRuntime', () => {
     expect(() => runtime.consumeForRequest('request-1', { type: 'content-delta', text: 'late' })).toThrow(/unknown turn request/)
   })
 
+  it('同 requestId 并发绑定多个会话时要求 turnId 并按 turn 路由事实', () => {
+    const projected: Array<{ turnId: string; sessionId: string; type: string }> = []
+    const runtime = new TurnRuntime({
+      storage: storage(), deps: { now: () => 1, id: (() => { let n = 0; return () => `shared-request-${++n}` })() },
+      onEvent: (turn, event) => projected.push({ turnId: turn.turnId, sessionId: turn.sessionId, type: event.type })
+    })
+    const turnA = runtime.prepare({ mode: 'create-user', requestId: 'shared-request', sessionId: 'session-a', input: { text: 'A' }, config: {} })
+    const turnB = runtime.prepare({ mode: 'create-user', requestId: 'shared-request', sessionId: 'session-b', input: { text: 'B' }, config: {} })
+    runtime.bindRequest('shared-request', turnA.turnId)
+    runtime.bindRequest('shared-request', turnB.turnId)
+
+    expect(() => runtime.consumeForRequest('shared-request', { type: 'content-delta', text: 'ambiguous' })).toThrow(/ambiguous turn request/)
+    runtime.consumeForRequest('shared-request', { type: 'content-delta', text: 'A' }, turnA.turnId)
+    runtime.consumeForRequest('shared-request', { type: 'content-delta', text: 'B' }, turnB.turnId)
+
+    expect(projected).toEqual([
+      { turnId: turnA.turnId, sessionId: 'session-a', type: 'content-delta' },
+      { turnId: turnB.turnId, sessionId: 'session-b', type: 'content-delta' }
+    ])
+  })
+
   it('只允许把 transport request 绑定到同 requestId 的 prepared turn', () => {
     const runtime = new TurnRuntime({ storage: storage(), deps: { now: () => 1, id: () => 'id' }, source: vi.fn() as never })
     const turn = runtime.prepare({ mode: 'create-user', requestId: 'prepared-request', sessionId: 's1', input: { text: 'hi' }, config: {} })

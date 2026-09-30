@@ -14,16 +14,17 @@ function applyProjectedUsage(sessionId: string, usage: SessionUsage, projected: 
 
 function applyTerminalStatus(payload: TurnProjectionPayload): void {
   const { type } = payload.event
-  if (type !== 'source-completed' && type !== 'source-failed' && type !== 'source-cancelled' && type !== 'source-timeout') return
+  if (type !== 'source-completed' && type !== 'source-failed' && type !== 'source-cancelled' && type !== 'source-timeout' && type !== 'source-uncertain') return
   store.dispatch(setChatStatus({
-    status: type === 'source-failed' || type === 'source-timeout' ? 'error' : 'completed',
+    status: type === 'source-failed' || type === 'source-timeout' || type === 'source-uncertain' ? 'error' : 'completed',
     requestId: null,
     sessionId: payload.turn.sessionId,
     turnId: payload.turn.turnId,
     ...(type === 'source-failed' ? { error: 'source-failed' } : {}),
+    ...(type === 'source-uncertain' ? { error: 'commit-uncertain' } : {}),
     ...(type === 'source-timeout' ? { error: 'TURN_TIMEOUT' } : {})
   }))
-  if (type === 'source-failed' || type === 'source-timeout') void projectTurnFailure(payload)
+  if (type === 'source-failed' || type === 'source-timeout' || type === 'source-uncertain') void projectTurnFailure(payload)
 }
 
 /**
@@ -89,7 +90,7 @@ export function initTurnProjectionBridge(onMetric?: (metric: TurnProjectionMetri
     versions.set(payload.turn.turnId, payload.turn.version)
     routePatchMessage(payload.turn.sessionId, payload.turn.assistantMessage.id, payload.turn.assistantMessage)
     const hasConfirmation = (payload.turn.assistantMessage.toolCalls ?? []).some((tool) => tool.status === 'confirming')
-    const isTerminal = payload.event.type === 'source-completed' || payload.event.type === 'source-failed' || payload.event.type === 'source-cancelled' || payload.event.type === 'source-timeout'
+    const isTerminal = payload.event.type === 'source-completed' || payload.event.type === 'source-failed' || payload.event.type === 'source-cancelled' || payload.event.type === 'source-timeout' || payload.event.type === 'source-uncertain'
     if (hasConfirmation || isTerminal) {
       pendingConfirmStore.syncFromProjection({ sessionId: payload.turn.sessionId, requestId: payload.turn.requestId, turnId: payload.turn.turnId, turnVersion: payload.turn.version, message: payload.turn.assistantMessage })
     }
@@ -156,7 +157,7 @@ export function initTurnProjectionBridge(onMetric?: (metric: TurnProjectionMetri
         }
         // display 协议本身不带失败详情，终态失败原因只能随这里已回查到的 terminal 带下去，
         // 否则失败气泡当场只剩通用提示，要等重开页面回查才能看到真实原因。
-        const failureReason = display.outcome === 'failed' || display.outcome === 'timed-out' ? terminal?.error?.message?.trim() || undefined : undefined
+        const failureReason = display.outcome === 'failed' || display.outcome === 'timed-out' || display.outcome === 'interrupted' || display.outcome === 'commit-uncertain' ? terminal?.error?.message?.trim() || undefined : undefined
         return window.api.chatGetMessagePage({ sessionId: display.sessionId, limit: 60 }).then((page) => ({ page, failureReason }))
       }).then((result) => {
         if (versions.get(display.turnId) !== display.version) return
@@ -166,14 +167,14 @@ export function initTurnProjectionBridge(onMetric?: (metric: TurnProjectionMetri
           // 评审 2.4：terminal 已 committed 但 60 条消息窗口内找不到该 assistant 消息（提交后
           // 拉页前同会话又写入大量消息）——移除 display 的同时必须落终态，否则会话永久卡 running。
           terminalRetries.delete(display.turnId)
-          store.dispatch(setChatStatus({ status: display.outcome === 'failed' || display.outcome === 'timed-out' ? 'error' : 'completed', requestId: null, sessionId: display.sessionId, turnId: display.turnId }))
+          store.dispatch(setChatStatus({ status: display.outcome === 'failed' || display.outcome === 'timed-out' || display.outcome === 'interrupted' || display.outcome === 'commit-uncertain' ? 'error' : 'completed', requestId: null, sessionId: display.sessionId, turnId: display.turnId }))
           import('./turnDisplayStore').then(({ turnDisplayStore }) => turnDisplayStore.remove(display.turnId))
           return
         }
         routePatchMessage(display.sessionId, message.id, message)
         if (result.failureReason) store.dispatch(setTurnFailure({ messageId: message.id, reason: result.failureReason }))
         terminalRetries.delete(display.turnId)
-        store.dispatch(setChatStatus({ status: display.outcome === 'failed' || display.outcome === 'timed-out' ? 'error' : 'completed', requestId: null, sessionId: display.sessionId, turnId: display.turnId }))
+        store.dispatch(setChatStatus({ status: display.outcome === 'failed' || display.outcome === 'timed-out' || display.outcome === 'interrupted' || display.outcome === 'commit-uncertain' ? 'error' : 'completed', requestId: null, sessionId: display.sessionId, turnId: display.turnId }))
         import('./turnDisplayStore').then(({ turnDisplayStore }) => turnDisplayStore.remove(display.turnId))
       }).catch(() => {
         const attempt = terminalRetries.get(display.turnId) ?? 0

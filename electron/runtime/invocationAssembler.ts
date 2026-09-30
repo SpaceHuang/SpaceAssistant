@@ -45,6 +45,7 @@ import { isProcessToolName } from '../../src/shared/processResultProjection'
 import { resolveRegisteredToolName } from '../tools/registeredToolName'
 import { createAgentSdkSafetyPolicy, createAgentSdkStructuralPermitHandoff, markAgentSdkSafetyDecisionConfirmed } from '../confirmation/agentSdkSafetyPolicy'
 import { createAgentSdkConfirmationPort, mapAgentSdkConfirmationOutcome } from '../confirmation/agentSdkConfirmationPort'
+import { registerActiveAgentToolCancellation } from '../activeAgentToolCancellation'
 import type { GateConfirmationContext } from '../confirmation/agentSdkConfirmationPort'
 import type { PermitBinding } from '../../packages/agent-sdk/src/safetyPermit'
 import type { ToolCallGateArgs } from '../confirmation/toolCallGate'
@@ -86,6 +87,7 @@ import { computeDiffLineStats } from '../../src/shared/writeDiffStats'
 /** 调用方装配材料：字段与原 RunToolChatSessionArgs 同构（floatingNotificationManager 由装配器消化为 events.notify）。 */
 export interface AgentInvocationMaterials {
   requestId: string
+  acceptedTurn?: import('../../src/shared/acceptedTurn').AcceptedTurn
   hostedHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
   appendHistoryEvents?: (events: readonly Readonly<{ kind: import('../../packages/agent-sdk/src/history').HistoryEvent['kind']; payload: unknown }>[]) => Promise<void>
   expectedHistoryVersion?: () => Promise<number>
@@ -282,6 +284,18 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     }
   }
 } {
+  if (materials.acceptedTurn && (materials.acceptedTurn.requestId !== materials.requestId ||
+    materials.acceptedTurn.sessionId !== materials.sessionId ||
+    (materials.turnId !== undefined && materials.acceptedTurn.turnId !== materials.turnId))) {
+    throw new Error('ACCEPTED_TURN_INVOCATION_IDENTITY_MISMATCH')
+  }
+  if (materials.acceptedTurn && materials.currentUserMessageId !== undefined &&
+    materials.currentUserMessageId !== materials.acceptedTurn.currentUserMessageId) {
+    throw new Error('ACCEPTED_TURN_USER_MESSAGE_ID_MISMATCH')
+  }
+  const currentUserMessageId = materials.currentUserMessageId ?? materials.acceptedTurn?.currentUserMessageId
+  const acceptedTurnId = materials.acceptedTurn?.turnId ?? materials.turnId
+  const runtimeTurnId = acceptedTurnId ?? materials.requestId
   const db = materials.appDb as AppDatabase | undefined
   const additionalContext: Record<string, unknown> = {}
   if (materials.approvalTaskDigest !== undefined) {
@@ -347,10 +361,11 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   const reasoning = { effort: reasoningEffort, ...(reasoningDegraded ? { degraded: reasoningDegraded } : {}) }
 
   const invocation: AgentInvocation = {
+    ...(materials.acceptedTurn ? { acceptedTurn: materials.acceptedTurn } : {}),
     session: { sessionId: materials.sessionId },
     messages: {
       list: materials.messages as AgentInvocation['messages']['list'],
-      ...(materials.currentUserMessageId !== undefined ? { currentUserMessageId: materials.currentUserMessageId } : {}),
+      ...(currentUserMessageId !== undefined ? { currentUserMessageId } : {}),
       ...(materials.assistantMessageId !== undefined ? { assistantMessageId: materials.assistantMessageId } : {}),
       ...(materials.hasImageAttachments !== undefined ? { hasImageAttachments: materials.hasImageAttachments } : {})
     },
@@ -389,7 +404,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     additionalContext,
     trace: {
       requestId: materials.requestId,
-      ...(materials.turnId !== undefined ? { turnId: materials.turnId } : {}),
+      ...(acceptedTurnId !== undefined ? { turnId: acceptedTurnId } : {}),
       ...(materials.windowId !== undefined ? { windowId: materials.windowId } : {})
     },
     ...(materials.remoteContext !== undefined ? { driverContext: materials.remoteContext } : {})
@@ -680,7 +695,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       refreshExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: import('../../packages/agent-sdk/src/turn').ToolPreparationStage & { kind: 'recheck' }, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
     }) => {
       const runtime = getDefaultAgentRuntime()
-      const turnId = materials.turnId ?? materials.sessionId
+      const turnId = runtimeTurnId
       const fileStateCache = new FileStateCache()
       const createExecutionContext = input.createExecutionContext ?? ((call) => ({
         workDir: materials.resolveWorkDir?.() ?? materials.workDir,
@@ -762,7 +777,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           getRegisteredTool: (name) => runtime.builtinRegistry.get(name),
           isToolRevoked: runtime.toolRevocations.isToolRevoked.bind(runtime.toolRevocations),
           onRevocation: runtime.toolRevocations.onRevocation.bind(runtime.toolRevocations)
-        }
+        },
+        registerActiveCancellation: (call, cancel) => registerActiveAgentToolCancellation(materials.sessionId, turnId, call.toolCallId, cancel)
       })
     },
     createConfirmationPort: (
@@ -808,7 +824,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           type: 'confirm-requested',
           id: call.toolCallId,
           requestId: materials.requestId,
-          turnId: materials.turnId ?? materials.sessionId,
+          turnId: runtimeTurnId,
           lane: materialsLane,
           confirmId: confirmationId,
           riskLevel: request.riskLevel === 'low' ? 'medium' : request.riskLevel,
@@ -955,8 +971,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       const toolCallStepIds = new Map<string, string>()
       const toolStepId = (toolCallId: string) => toolCallStepIds.get(toolCallId) ?? materials.requestId
     return createHostedAgentTurnHost({
-        invocationId: materials.requestId,
-        turnId: materials.turnId ?? materials.sessionId,
+        invocationId: runtimeTurnId,
+        turnId: runtimeTurnId,
         routeId,
         providerRegistry: runtime.modelProviders,
         toolRegistry,
@@ -978,7 +994,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         observer: ports.observer,
         recordProviderAttemptUsage: ports.recordProviderAttemptUsage,
         recoverProviderAttempt: input.recoverProviderAttempt,
-        recoverOutputLimit: createAgentSdkOutputRecovery({ location: materials.sessionEventLocation, turnId: materials.turnId ?? materials.sessionId, stepId: materials.requestId }),
+        recoverOutputLimit: createAgentSdkOutputRecovery({ location: materials.sessionEventLocation, turnId: runtimeTurnId, stepId: materials.requestId }),
         ...(ports.preflightModelRequest ? { preflightModelRequest: ports.preflightModelRequest as never } : {}),
         ...(ports.turnBoundary ? { turnBoundary: ports.turnBoundary as never } : {}),
         maxConcurrentTools: materials.toolExecutionConcurrency ?? runtime.toolExecutionConcurrency,
@@ -1001,17 +1017,17 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           return {
             location: materials.sessionEventLocation, stepId: toolStepId(call.toolCallId), result,
             requestId: materials.requestId, invocationRequestId: materials.requestId,
-            ...(materialsLane ? { lane: materialsLane } : {}), turnId: materials.turnId ?? materials.sessionId
+            ...(materialsLane ? { lane: materialsLane } : {}), turnId: runtimeTurnId
           }
         } } : {}),
         ...(materials.sessionEventLocation ? { sessionLedgerForNotDispatched: (call: { toolCallId: string }, _reason: string, result: Record<string, unknown>) => ({
           location: materials.sessionEventLocation, stepId: toolStepId(call.toolCallId), result,
           requestId: materials.requestId, invocationRequestId: materials.requestId,
-          ...(materialsLane ? { lane: materialsLane } : {}), turnId: materials.turnId ?? materials.sessionId
+          ...(materialsLane ? { lane: materialsLane } : {}), turnId: runtimeTurnId
         }) } : {}),
         ...(materials.sessionEventLocation ? {
           sessionLedgerForAttemptUsage: (attempt: Record<string, unknown>) => {
-            const event = createAgentSdkUsageSessionEvent({ requestId: materials.requestId, turnId: materials.turnId ?? materials.sessionId, baseUrl: materials.baseUrl }, attempt)
+            const event = createAgentSdkUsageSessionEvent({ requestId: materials.requestId, turnId: runtimeTurnId, baseUrl: materials.baseUrl }, attempt)
             return event ? { location: materials.sessionEventLocation, requestUsage: event.payload } : {}
           },
           sessionLedgerForModelResponse: (message: import('../../packages/agent-sdk/src/turn').CanonicalTurnMessage, modelTurn: number, _attempt: number, committedSessionLedger?: unknown) => {
@@ -1046,7 +1062,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
                 requestId: materials.requestId,
                 invocationRequestId: materials.requestId,
                 ...(materialsLane ? { lane: materialsLane } : {}),
-                turnId: materials.turnId ?? materials.sessionId,
+                turnId: runtimeTurnId,
                 args: name === 'toolkit_call' || name === 'toolkit.call' ? sanitizeCapabilityParamsForDisplay(args) : args
               }
             })
@@ -1092,7 +1108,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       const registeredTools = hostedGateComposition.createRegisteredTools({ ...input, registry, resolveRegisteredToolName: resolveToolName })
       const policy = hostedGateComposition.createSafetyPolicy(registeredTools, resolveToolName)
       const confirmation = hostedGateComposition.createConfirmationPort(policy, input.confirmationAdapter ?? {
-        cancel: (call) => { cancelToolConfirm(materials.requestId, call.toolCallId) }
+        cancel: (call) => { cancelToolConfirm(materials.requestId, call.toolCallId, materials.sessionId) }
       })
       const host = hostedGateComposition.createHostedTurnHost({
         registeredTools,
@@ -1165,7 +1181,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     recordProviderAttemptUsage: createAgentSdkUsageRecorder({
       requestId: materials.requestId,
       sessionId: materials.sessionId,
-      turnId: materials.turnId ?? materials.sessionId,
+      turnId: runtimeTurnId,
       model: materials.model,
       llmServiceId: materials.llmServiceId,
       baseUrl: materials.baseUrl,
@@ -1176,13 +1192,13 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     observer: createAgentSdkDesktopObserver({
       requestId: materials.requestId,
       sessionId: materials.sessionId,
-      turnId: materials.turnId ?? materials.sessionId,
+      turnId: runtimeTurnId,
       lane: materialsLane,
       model: materials.model,
       contextWindow: materials.contextWindow,
       windowId: materials.windowId,
       ...(materials.sessionEventLocation ? { sessionEventLocation: materials.sessionEventLocation } : {}),
-      turnIdForRetry: materials.turnId ?? materials.sessionId,
+      turnIdForRetry: runtimeTurnId,
       stageAssistantContentUntilTurnFinished: materials.remoteContext !== undefined,
       onRemoteTextActivity: materials.onRemoteTextActivity,
       assistantMessageId: materials.assistantMessageId,
@@ -1190,7 +1206,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       onProviderRetry: (retry) => materials.emitSessionEvent({
         type: 'request_retry',
         payload: {
-          turnId: materials.turnId ?? materials.sessionId,
+          turnId: runtimeTurnId,
           stepId: materials.requestId,
           requestId: retry.requestId,
           attempt: retry.attempt,

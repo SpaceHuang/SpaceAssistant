@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bindHostedRequiredUserMessage, createHostedModelRequest } from './hostedModelRequest'
+import { bindHostedRequiredUserMessage, canonicalHostedRequiredUserMessage, createHostedModelRequest } from './hostedModelRequest'
 
 describe('createHostedModelRequest', () => {
   it('直接生成完整的 canonical Hosted request', () => {
@@ -53,12 +53,62 @@ describe('bindHostedRequiredUserMessage', () => {
     })
   })
 
-  it('rejects missing or ambiguous current-user content', () => {
+  it('matches equivalent accepted text after recovery changes string content into a text block', () => {
+    const originalMessages = [{ id: 'current-user', role: 'user' as const, content: '继续' }]
+    const requestMessages = [{ role: 'user' as const, content: [{ type: 'text' as const, text: '继续' }] }]
+    expect(bindHostedRequiredUserMessage({ id: 'current-user', originalMessages, requestMessages })).toEqual({
+      id: 'current-user', message: { role: 'user', content: [{ type: 'text', text: '继续' }] }
+    })
+  })
+
+  it('rejects missing or mismatched current-user content', () => {
     const originalMessages = [{ id: 'current-user', role: 'user' as const, content: 'same' }]
     expect(bindHostedRequiredUserMessage({ id: 'current-user', originalMessages, requestMessages: [] })).toBeUndefined()
     expect(bindHostedRequiredUserMessage({
       id: 'current-user', originalMessages,
-      requestMessages: [{ role: 'user', content: 'same' }, { role: 'user', content: 'same' }]
+      requestMessages: [{ role: 'user', content: 'different' }]
     })).toBeUndefined()
+  })
+
+  it('binds the current user by message position when earlier turns used identical text', () => {
+    const originalMessages = [
+      { id: 'earlier-user', role: 'user' as const, content: '继续' },
+      { id: 'earlier-assistant', role: 'assistant' as const, content: '请补充信息。' },
+      { id: 'current-user', role: 'user' as const, content: '继续' }
+    ]
+    const requestMessages = [
+      { role: 'user' as const, content: '继续' },
+      { role: 'assistant' as const, content: '请补充信息。' },
+      { role: 'user' as const, content: '继续' }
+    ]
+    expect(bindHostedRequiredUserMessage({ id: 'current-user', originalMessages, requestMessages })).toEqual({
+      id: 'current-user', message: { role: 'user', content: '继续' }
+    })
+  })
+
+  it('binds the actual user text when role repair merged a preceding tool result into the same user message', () => {
+    const originalMessages = [{
+      id: 'current-user', role: 'user' as const,
+      content: [
+        { type: 'tool_result' as const, tool_use_id: 'previous-call', content: 'tool output' },
+        { type: 'text' as const, text: 'Q' }
+      ]
+    }]
+    const requestMessages = [
+      { role: 'tool' as const, toolCallId: 'previous-call', content: 'tool output', isError: false },
+      { role: 'user' as const, content: [{ type: 'text' as const, text: 'Q' }] }
+    ]
+    expect(bindHostedRequiredUserMessage({ id: 'current-user', originalMessages, requestMessages })).toEqual({
+      id: 'current-user', message: { role: 'user', content: [{ type: 'text', text: 'Q' }] }
+    })
+  })
+
+  it('selects the accepted user portion after canonicalizing a mixed tool-result user message', () => {
+    expect(canonicalHostedRequiredUserMessage({
+      role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'previous-call', content: 'tool output' },
+        { type: 'text', text: '继续' }
+      ]
+    } as never)).toEqual({ role: 'user', content: [{ type: 'text', text: '继续' }] })
   })
 })

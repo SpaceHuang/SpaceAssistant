@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 22
+export const DB_SCHEMA_VERSION = 27
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (
@@ -197,6 +197,106 @@ WHERE session_id IS NULL
 export const MIGRATION_V22_TURN_INPUT_HISTORY_VERSION_SQL = `
 ALTER TABLE turns ADD COLUMN accepted_input_history_version INTEGER NOT NULL DEFAULT 0 CHECK(accepted_input_history_version >= 0);
 `
+
+/** v22 → v23：durable driver delivery intents and append-only transitions. */
+export const MIGRATION_V23_DRIVER_DELIVERY_SQL = `
+CREATE TABLE IF NOT EXISTS driver_deliveries (
+  delivery_id TEXT NOT NULL,
+  target TEXT NOT NULL,
+  preference_json TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending','deferred','delivering','delivered','failed','expired','superseded','delivery-uncertain')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  last_error TEXT,
+  PRIMARY KEY(delivery_id, target)
+);
+CREATE INDEX IF NOT EXISTS idx_driver_deliveries_status_created ON driver_deliveries(status, created_at);
+CREATE TABLE IF NOT EXISTS driver_delivery_events (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  delivery_id TEXT NOT NULL,
+  target TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  details_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_driver_delivery_events_intent ON driver_delivery_events(delivery_id, target, sequence);
+`
+
+/** v23 → v24：versioned session transcript and cross-process turn admission claims. */
+export const MIGRATION_V24_SESSION_TRANSCRIPT_SQL = `
+CREATE TABLE IF NOT EXISTS session_transcript_checkpoints (
+  session_id TEXT PRIMARY KEY NOT NULL,
+  version INTEGER NOT NULL DEFAULT 0 CHECK(version >= 0),
+  last_turn_id TEXT,
+  status TEXT NOT NULL DEFAULT 'ready' CHECK(status IN ('ready','commit_uncertain','blocked')),
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_transcript_entries (
+  session_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  base_version INTEGER NOT NULL,
+  version INTEGER NOT NULL,
+  outcome TEXT NOT NULL,
+  messages_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(session_id, turn_id),
+  UNIQUE(session_id, version)
+);
+CREATE TABLE IF NOT EXISTS session_execution_claims (
+  session_id TEXT PRIMARY KEY NOT NULL,
+  turn_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('queued','claimed','executing','commit_uncertain')),
+  enqueued_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+`
+
+/** v24 → v25：durable FIFO queue entries for session execution admission. */
+export const MIGRATION_V25_SESSION_EXECUTION_QUEUE_SQL = `
+CREATE TABLE IF NOT EXISTS session_execution_queue (
+  session_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  generation INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL CHECK(status IN ('queued','claimed','executing','commit_uncertain')),
+  enqueued_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(session_id, turn_id)
+);
+CREATE INDEX IF NOT EXISTS idx_session_execution_queue_order ON session_execution_queue(session_id, status, enqueued_at, turn_id);
+`
+
+/** v25 → v26：auditable operator resolutions for uncertain session transcript commits. */
+export const MIGRATION_V26_SESSION_TRANSCRIPT_RECONCILIATION_SQL = `
+CREATE TABLE IF NOT EXISTS session_transcript_reconciliations (
+  resolution_id TEXT PRIMARY KEY NOT NULL,
+  session_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  resolved_version INTEGER NOT NULL,
+  resolution TEXT NOT NULL CHECK(resolution IN ('commit-reviewed')),
+  operator_id TEXT NOT NULL,
+  rationale TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_session_transcript_reconciliations_session ON session_transcript_reconciliations(session_id, resolved_version);
+`
+
+/** v26 → v27：durable immutable AcceptedTurn identity and request mapping. */
+export const MIGRATION_V27_ACCEPTED_TURN_CONTEXT_SQL = `
+CREATE TABLE IF NOT EXISTS accepted_turn_contexts (
+  turn_id TEXT PRIMARY KEY NOT NULL,
+  session_id TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  accepted_turn_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE(session_id, request_id)
+);
+CREATE INDEX IF NOT EXISTS idx_accepted_turn_contexts_request ON accepted_turn_contexts(request_id, session_id);
+`
+
 
 /**
  * v3 → v4：工具确认机制框架 —— 决策缓存表 + 用户规则覆盖表。

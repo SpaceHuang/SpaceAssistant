@@ -92,6 +92,50 @@ describe('resolveCanonicalRequestCutover', () => {
       .toEqual({ kind: 'matched', messages: [system, ...retained, current] })
   })
 
+  it('matches legacy turns that coalesce assistant tool rounds while preserving canonical order', () => {
+    const callA = { id: 'call-a', name: 'read_file', input: { path: 'a.txt' } }
+    const callB = { id: 'call-b', name: 'read_file', input: { path: 'b.txt' } }
+    const firstRound: CanonicalModelMessage[] = [
+      { role: 'user', content: 'inspect both files' },
+      { role: 'assistant', content: [{ type: 'thinking', thinking: 'private reasoning' }, { type: 'text', text: 'Reading the first file.' }], toolCalls: [callA] },
+      { role: 'tool', toolCallId: 'call-a', content: 'first file', isError: false },
+      { role: 'assistant', content: [{ type: 'text', text: 'Now the second.' }], toolCalls: [callB] },
+      { role: 'tool', toolCallId: 'call-b', content: 'second file', isError: false }
+    ]
+    const history: HistorySnapshot = { invocationId: 'coalesced-turn', version: 1, schemaVersion: 1, events: [{
+      invocationId: 'coalesced-turn', turnId: 'prior-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: firstRound }
+    }] }
+    const system = { role: 'system' as const, content: 'current system' }
+    const current = { role: 'user' as const, content: 'continue' }
+    const legacyAssistant = {
+      role: 'assistant' as const,
+      content: [{ type: 'text' as const, text: ' ' }, { type: 'text' as const, text: 'Reading the first file.' }, { type: 'text' as const, text: 'Now the second.' }],
+      toolCalls: [callA, callB]
+    }
+    const result = resolveCanonicalRequestCutover({
+      snapshot: history,
+      requestMessages: [system, firstRound[0]!, legacyAssistant,
+        { role: 'tool', toolCallId: 'call-a', content: 'first file', isError: false },
+        { role: 'tool', toolCallId: 'call-b', content: 'second file', isError: false }, current],
+      requiredUserMessage: current
+    })
+
+    expect(result).toEqual({ kind: 'matched', messages: [system, ...firstRound, current] })
+  })
+
+  it('uses the final matching user message and drops uncommitted failed-attempt suffixes', () => {
+    const system = { role: 'system' as const, content: 'current system' }
+    const retryUser = { role: 'user' as const, content: '继续' }
+    const retryFailure = { role: 'assistant' as const, content: '回复未能完成。' }
+    const current = { role: 'user' as const, content: '继续' }
+    expect(resolveCanonicalRequestCutover({
+      snapshot,
+      requestMessages: [system, ...prior, retryUser, retryFailure, current],
+      requiredUserMessage: current
+    })).toEqual({ kind: 'matched', messages: [system, ...prior, current] })
+  })
+
   it('does not bind a duplicate transcript occurrence by value when its canonical timestamp identity differs', () => {
     const duplicate = { role: 'user' as const, content: 'same question', timestamp: 10 }
     const laterDuplicate = { role: 'user' as const, content: 'same question', timestamp: 20 }
@@ -110,6 +154,6 @@ describe('resolveCanonicalRequestCutover', () => {
       .toEqual({ kind: 'matched', messages: [matchedOccurrence, current] })
     const duplicateRequired = { ...current }
     expect(resolveCanonicalRequestCutover({ snapshot: history, requestMessages: [matchedOccurrence, current, duplicateRequired], requiredUserMessage: current }))
-      .toEqual({ kind: 'required-user-missing' })
+      .toEqual({ kind: 'transcript-mismatch' })
   })
 })

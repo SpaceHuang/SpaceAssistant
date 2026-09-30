@@ -6,6 +6,8 @@ export type AgentLogEventName =
   | 'agent.persist.failed'
   | 'agent.profile.reasoning_degraded'
   | 'driver.delivery.record'
+  | 'history.cutover'
+  | 'session.transcript.reconciliation'
   | 'agent.tools.trim_widen_denied'
   | 'driver.deferred.invalidated'
   | 'outbound.session.created'

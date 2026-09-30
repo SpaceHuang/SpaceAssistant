@@ -21,6 +21,40 @@ import { getDbConnection } from '../database'
 import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import { isBrowserSessionTrustedHost, resetBrowserSessionTrustForTests } from '../browser/browserSessionTrust'
 
+describe('AcceptedTurn propagation', () => {
+  it('carries the immutable accepted-turn snapshot into the runtime invocation', () => {
+    const acceptedTurn = Object.freeze({
+      turnId: 'accepted-turn', requestId: 'accepted-request', sessionId: 'accepted-session', lane: 'desktop' as const,
+      startToken: 'accepted-start', currentUserMessageId: 'accepted-user', transcriptVersion: 4,
+      config: Object.freeze({ lane: 'desktop' as const })
+    })
+    const { invocation } = assembleInvocation({
+      requestId: acceptedTurn.requestId, sessionId: acceptedTurn.sessionId,
+      acceptedTurn, model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key',
+      emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+    expect(invocation.acceptedTurn).toBe(acceptedTurn)
+    expect(invocation.trace.turnId).toBe(acceptedTurn.turnId)
+    expect(invocation.messages.currentUserMessageId).toBe(acceptedTurn.currentUserMessageId)
+  })
+
+  it('rejects an invocation whose current user message id conflicts with the accepted turn', () => {
+    const acceptedTurn = Object.freeze({
+      turnId: 'accepted-turn', requestId: 'accepted-request', sessionId: 'accepted-session', lane: 'desktop' as const,
+      startToken: 'accepted-start', currentUserMessageId: 'accepted-user', transcriptVersion: 4,
+      config: Object.freeze({ lane: 'desktop' as const })
+    })
+
+    expect(() => assembleInvocation({
+      requestId: acceptedTurn.requestId, sessionId: acceptedTurn.sessionId,
+      acceptedTurn, currentUserMessageId: 'different-user', model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key',
+      emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })).toThrow('ACCEPTED_TURN_USER_MESSAGE_ID_MISMATCH')
+  })
+})
+
 vi.mock('electron', () => ({ app: { getLocale: () => 'en-US' }, ipcMain: { handle: vi.fn(), removeHandler: vi.fn() } }))
 
 describe('assembleInvocation runtime tool revocation adapter', () => {
@@ -61,12 +95,12 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const adapter = ports.toolRevocations!
     const revoked = vi.fn()
 
-    adapter.registerToolRevocationRequest('req-adapter', 'desktop')
+    adapter.registerToolRevocationRequest('req-adapter', 'desktop', 'req-adapter')
     adapter.onRevocation(revoked)
     runtime.toolRevocations.revokeToolForLane('desktop', 'write_file')
 
     expect(adapter.isToolRevoked('req-adapter', 'write_file')).toBe(true)
-    expect(revoked).toHaveBeenCalledWith({ requestId: 'req-adapter', lane: 'desktop', toolName: 'write_file' })
+    expect(revoked).toHaveBeenCalledWith({ requestId: 'req-adapter', executionId: 'req-adapter', lane: 'desktop', toolName: 'write_file' })
     expect(adapter.getRegisteredTool?.('probe-tool')).toBe(runtime.builtinRegistry.get('probe-tool'))
   })
 
@@ -186,15 +220,15 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       providerId: 'host-factory-test', stream: async function* () { yield { type: 'finish' as const, reason: 'stop' as const } }
     })
     const host = agentSdk.createHostedTurnHost({ registeredTools: registeredTools as never, registry: registry as never, authorizedToolNames: new Set(['probe-tool']), policy: policy as never })
-    const ports = await host.createPorts({ invocationId: 'req-host-factory', turnId: 'turn-host-factory', routeId: 'hosted-route', request: { messages: [], maxTokens: 10, tools: [{ name: 'probe-tool', description: 'probe', inputSchema: {} }] } })
+    const ports = await host.createPorts({ invocationId: 'turn-host-factory', turnId: 'turn-host-factory', routeId: 'hosted-route', request: { messages: [], maxTokens: 10, tools: [{ name: 'probe-tool', description: 'probe', inputSchema: {} }] } })
 
-    expect(ports).toMatchObject({ invocationId: 'req-host-factory', turnId: 'turn-host-factory', routeId: 'hosted-route', history: expect.any(Object), registry: runtime.modelProviders, observer: expect.any(Object) })
+    expect(ports).toMatchObject({ invocationId: 'turn-host-factory', turnId: 'turn-host-factory', routeId: 'hosted-route', history: expect.any(Object), registry: runtime.modelProviders, observer: expect.any(Object) })
     expect(ports.prepareTool).toBe(registeredTools.prepareTool)
     expect(ports.discardPreparedTool).toBe(registeredTools.discardPreparedTool)
     expect(ports.toolExecution).toBe(registeredTools.toolExecution)
     expect(ports.maxConcurrentTools).toBe(runtime.toolExecutionConcurrency)
-    await expect(ports.safetyGate.evaluate({ requestId: 'req-host-factory', turnId: 'turn-host-factory', invocationId: 'req-host-factory', toolCallId: 'call', capabilityId: 'missing', inputSnapshotHash: 'input', planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'auth', phase: 'initial-compat' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'UNKNOWN_CAPABILITY' })
-    await expect(ports.safetyGate.evaluate({ requestId: 'req-host-factory', turnId: 'turn-host-factory', invocationId: 'req-host-factory', toolCallId: 'call', capabilityId: 'probe-tool', inputSnapshotHash: 'input', planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'auth', phase: 'initial-compat' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'POLICY_DENY' })
+    await expect(ports.safetyGate.evaluate({ requestId: 'req-host-factory', turnId: 'turn-host-factory', invocationId: 'turn-host-factory', toolCallId: 'call', capabilityId: 'missing', inputSnapshotHash: 'input', planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'auth', phase: 'initial-compat' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'UNKNOWN_CAPABILITY' })
+    await expect(ports.safetyGate.evaluate({ requestId: 'req-host-factory', turnId: 'turn-host-factory', invocationId: 'turn-host-factory', toolCallId: 'call', capabilityId: 'probe-tool', inputSnapshotHash: 'input', planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'auth', phase: 'initial-compat' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'POLICY_DENY' })
     expect(policy.evaluate).toHaveBeenCalledOnce()
   })
 
@@ -317,11 +351,11 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const deadlineAt = Date.now() + 10_000
     const composed = agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['probe-tool']), applicationAdmission, deadlineAt })
     const ports = await composed.host.createPorts({
-      invocationId: requestId, turnId, routeId,
+      invocationId: turnId, turnId, routeId,
       request: { messages: [{ role: 'user', content: 'run probe' }], maxTokens: 10, tools: [{ name: 'probe-tool', description: 'probe', inputSchema: {} }] }
     })
 
-    expect(ports).toMatchObject({ invocationId: requestId, turnId, routeId, confirmation: composed.confirmation, observer: expect.any(Object) })
+    expect(ports).toMatchObject({ invocationId: turnId, turnId, routeId, confirmation: composed.confirmation, observer: expect.any(Object) })
     expect(ports.prepareTool).toBe(composed.registeredTools.prepareTool)
     expect(ports.toolExecution).toBe(composed.registeredTools.toolExecution)
     expect(ports.isApprovalCandidate).toBe(composed.registeredTools.isApprovalCandidate)
@@ -444,9 +478,9 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       authorizedToolNames: new Set(['probe-tool']),
       policy: policy as never
     } as never)
-    const ports = await host.createPorts({ invocationId: 'req-host-runtime-registry', turnId: 'turn-host-runtime-registry', routeId: 'runtime-registry-route', request: { messages: [], maxTokens: 10, tools: [{ name: 'probe-tool', description: 'probe', inputSchema: {} }] } })
+    const ports = await host.createPorts({ invocationId: 'turn-host-runtime-registry', turnId: 'turn-host-runtime-registry', routeId: 'runtime-registry-route', request: { messages: [], maxTokens: 10, tools: [{ name: 'probe-tool', description: 'probe', inputSchema: {} }] } })
 
-    await expect(ports.safetyGate.evaluate({ requestId: 'req-host-runtime-registry', turnId: 'turn-host-runtime-registry', invocationId: 'req-host-runtime-registry', toolCallId: 'call', capabilityId: 'probe-tool', inputSnapshotHash: 'input', planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'auth', phase: 'initial-compat' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'POLICY_DENY' })
+    await expect(ports.safetyGate.evaluate({ requestId: 'req-host-runtime-registry', turnId: 'turn-host-runtime-registry', invocationId: 'turn-host-runtime-registry', toolCallId: 'call', capabilityId: 'probe-tool', inputSnapshotHash: 'input', planDigest: 'plan', factsDigest: 'facts', authorizationVersion: 'auth', phase: 'initial-compat' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'POLICY_DENY' })
     expect(policy.evaluate).toHaveBeenCalledOnce()
     expect(runtime.builtinRegistry.get('probe-tool')).toBeDefined()
   })
@@ -576,8 +610,8 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     })
 
     try {
-      await vi.waitFor(() => expect(isPendingConfirm(requestId, toolCallId)).toBe(true))
-      expect(submitToolConfirmResponse(requestId, toolCallId, true).accepted).toBe(true)
+      await vi.waitFor(() => expect(isPendingConfirm(requestId, toolCallId, 'session-hosted-agent-fallback')).toBe(true))
+      expect(submitToolConfirmResponse(requestId, toolCallId, true, 'session-hosted-agent-fallback').accepted).toBe(true)
       await expect(pending).resolves.toMatchObject({ kind: 'approved', answerer: 'user', cause: 'user-approved' })
       expect(emitFactEvent).toHaveBeenCalledTimes(2)
       expect(emitFactEvent).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -591,7 +625,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
         sessionId: 'session-hosted-agent-fallback', toolName: 'write_file', cause: 'unavailable', actor: 'system'
       }))
     } finally {
-      if (isPendingConfirm(requestId, toolCallId)) submitToolConfirmResponse(requestId, toolCallId, false)
+      if (isPendingConfirm(requestId, toolCallId, 'session-hosted-agent-fallback')) submitToolConfirmResponse(requestId, toolCallId, false, 'session-hosted-agent-fallback')
       await fs.rm(workDir, { recursive: true, force: true })
     }
   })
@@ -605,7 +639,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
     })
     const confirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never, {
-      cancel: (call) => { cancelToolConfirm(requestId, call.toolCallId) },
+      cancel: (call) => { cancelToolConfirm(requestId, call.toolCallId, 'session-hosted-agent-fallback-cancel') },
       agentChannelFactory: () => ({
         request: async () => ({ kind: 'rejected', cause: 'unavailable', answererKind: 'agent' }),
         cancel: vi.fn()
@@ -621,10 +655,10 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       }
     })
 
-    await vi.waitFor(() => expect(isPendingConfirm(requestId, toolCallId)).toBe(true))
+    await vi.waitFor(() => expect(isPendingConfirm(requestId, toolCallId, 'session-hosted-agent-fallback-cancel')).toBe(true))
     controller.abort()
     await expect(pending).resolves.toMatchObject({ kind: 'cancelled', cause: 'cancelled' })
-    expect(isPendingConfirm(requestId, toolCallId)).toBe(false)
+    expect(isPendingConfirm(requestId, toolCallId, 'session-hosted-agent-fallback-cancel')).toBe(false)
   })
 
   it('keeps a user rejection on the Hosted fallback attributed to user-denied', async () => {
@@ -636,7 +670,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
     })
     const confirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never, {
-      cancel: (call) => { cancelToolConfirm(requestId, call.toolCallId) },
+      cancel: (call) => { cancelToolConfirm(requestId, call.toolCallId, 'session-hosted-agent-fallback-denied') },
       agentChannelFactory: () => ({
         request: async () => ({ kind: 'rejected', cause: 'unavailable', answererKind: 'agent' }),
         cancel: vi.fn()
@@ -652,11 +686,11 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     })
 
     try {
-      await vi.waitFor(() => expect(isPendingConfirm(requestId, toolCallId)).toBe(true))
-      expect(submitToolConfirmResponse(requestId, toolCallId, false).accepted).toBe(true)
+      await vi.waitFor(() => expect(isPendingConfirm(requestId, toolCallId, 'session-hosted-agent-fallback-denied')).toBe(true))
+      expect(submitToolConfirmResponse(requestId, toolCallId, false, 'session-hosted-agent-fallback-denied').accepted).toBe(true)
       await expect(pending).resolves.toMatchObject({ kind: 'denied', answerer: 'user', cause: 'user-denied' })
     } finally {
-      if (isPendingConfirm(requestId, toolCallId)) cancelToolConfirm(requestId, toolCallId)
+      if (isPendingConfirm(requestId, toolCallId, 'session-hosted-agent-fallback-denied')) cancelToolConfirm(requestId, toolCallId, 'session-hosted-agent-fallback-denied')
     }
   })
 
@@ -685,7 +719,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     expect(gateDecision).toMatchObject({ kind: 'ask', reasonCode: 'browser-navigate-ask-desktop' })
     if (gateDecision.kind !== 'ask') throw new Error('EXPECTED_BROWSER_NAVIGATE_CONFIRMATION')
     const confirmation = agentSdk.createConfirmationPort(policy, {
-      cancel: (call) => { cancelToolConfirm(requestId, call.toolCallId) },
+      cancel: (call) => { cancelToolConfirm(requestId, call.toolCallId, sessionId) },
       agentChannelFactory: () => ({
         request: async () => ({ kind: 'rejected', cause: 'unavailable', answererKind: 'agent' }),
         cancel: vi.fn()
@@ -697,13 +731,13 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     })
 
     try {
-      await vi.waitFor(() => expect(isPendingConfirm(requestId, toolCallId)).toBe(true))
-      expect(submitToolConfirmResponse(requestId, toolCallId, true).accepted).toBe(true)
+      await vi.waitFor(() => expect(isPendingConfirm(requestId, toolCallId, sessionId)).toBe(true))
+      expect(submitToolConfirmResponse(requestId, toolCallId, true, sessionId).accepted).toBe(true)
       await expect(pending).resolves.toMatchObject({ kind: 'approved', answerer: 'user', cause: 'user-approved' })
       expect(isBrowserSessionTrustedHost(sessionId, 'example.com')).toBe(true)
       expect(new SqliteDecisionCache(getDbConnection(db)).lookup(key)).not.toBeNull()
     } finally {
-      if (isPendingConfirm(requestId, toolCallId)) cancelToolConfirm(requestId, toolCallId)
+      if (isPendingConfirm(requestId, toolCallId, sessionId)) cancelToolConfirm(requestId, toolCallId, sessionId)
       registered.discardPreparedTool(call)
       resetBrowserSessionTrustForTests()
     }

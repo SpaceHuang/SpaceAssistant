@@ -42,6 +42,9 @@ import { getCallAdmissionGate } from './runtime/callAdmissionGate'
 import { toCanonicalModelMessages } from './runtime/canonicalHistory'
 import { createHostedTurnHandoff } from './runtime/hostedTurnHandoff'
 import { loadAcceptedTurnMessages } from './runtime/acceptedTurnContext'
+import { createAcceptedTurn } from '../src/shared/acceptedTurn'
+import { acceptTurnContext } from './database/acceptedTurnStorage'
+import { readSessionTranscript } from './database/sessionTranscript'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from './runtime/hostedTurnFinalization'
 
 export type ClaudeStreamDeps = {
@@ -352,10 +355,16 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           await eventWriter.appendCritical({ type: 'turn_start', payload: { turnId } })
           // reset 后 marker 的 output window 不再等于 sessionId；台账读取必须消费完整提交链。
           const committedMarkers = await readCompactionMarkers(eventWriter.eventsPath)
-          for (const marker of committedMarkers) deps.turnRuntime.consumeForRequest(requestId, { type: 'compaction-committed', ...marker })
+          for (const marker of committedMarkers) deps.turnRuntime.consumeForRequest(requestId, { type: 'compaction-committed', ...marker }, turnId)
         }
         const frozen = authoritative.executionConfig
         if (!frozen) throw new Error('TURN_LEGACY_EXECUTION_CONFIG_UNAVAILABLE')
+        const acceptedTranscript = readSessionTranscript(db, sessionId)
+        if (acceptedTranscript.status !== 'ready') throw new Error('SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED')
+        const acceptedTurn = acceptTurnContext(db, createAcceptedTurn({
+          turnId, requestId, sessionId, lane: frozen.lane ?? 'desktop', startToken: turnStartToken,
+          currentUserMessageId: authoritative.currentUserMessageId, transcriptVersion: acceptedTranscript.version, config: frozen
+        }))
         const model = assertValidModel(frozen.model ?? '')
         await eventWriter?.appendCritical({ type: 'step_start', payload: { turnId, stepId: requestId } })
 
@@ -448,6 +457,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           requestId,
           sessionId,
           turnId,
+          acceptedTurn,
           llmServiceId,
           windowId: contextWindowId,
           model,
@@ -583,7 +593,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
               // terminal 事件不能与 Coordinator 的 finalize 竞争。
               if (fact.type === 'source-completed' || fact.type === 'source-failed' || fact.type === 'source-cancelled' || fact.type === 'source-timeout') return
               try {
-                deps.turnRuntime.consumeForRequest(requestId, fact)
+                deps.turnRuntime.consumeForRequest(requestId, fact, turnId)
                 return
               } catch {
                 // 未迁移请求仍走 legacy callback，避免切换期间丢失 stream 事件。
@@ -594,7 +604,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           ,applicationAdmission
         })
         const hostedHandoffOptions = {
-          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: requestId, turnId, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, refreshExecutionContext: (_call, stage, current) => ({ ...current, toolsConfig: deps.getToolsConfig(), shellConfig: deps.getShellConfig(), toolUserConfirmed: Boolean(stage.confirmation) }) })
+          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: turnId, turnId, acceptedTurn, sessionDb: db, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, refreshExecutionContext: (_call, stage, current) => ({ ...current, toolsConfig: deps.getToolsConfig(), shellConfig: deps.getShellConfig(), toolUserConfirmed: Boolean(stage.confirmation) }) })
         }
         const res = await runToolChatSession(turnInvocation, turnPorts, hostedHandoffOptions)
 
@@ -643,6 +653,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         return {
           ok: false as const,
           error: message,
+          ...(err instanceof HostedTurnFinalizedError && err.outcome === 'commit-uncertain' ? { outcome: 'commit-uncertain' as const } : {}),
           ...(err instanceof HostedTurnFinalizedError && err.usage ? { usage: {
             input_tokens: err.usage.inputTokens,
             output_tokens: err.usage.outputTokens,

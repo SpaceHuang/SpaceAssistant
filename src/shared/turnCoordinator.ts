@@ -24,7 +24,7 @@ export type TurnStorage = {
   listRecoverableResidues?: () => Array<{ message: Message; turnId?: string; turnOutcome?: string }>
   finalizeResidueMessage?: (messageId: string, targetStatus: 'cancelled' | 'failed') => boolean
   listUnfinishedTurns: () => Array<{ turnId: string; assistantMessageId: string }>
-  recoverTurn: (turnId: string, assistantMessageId: string) => boolean | Extract<TurnOutcome, 'completed' | 'failed' | 'cancelled' | 'recovered'>
+  recoverTurn: (turnId: string, assistantMessageId: string) => boolean | Extract<TurnOutcome, 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'recovered' | 'commit-uncertain'>
   saveTurn: (turn: { turnId: string; requestId: string; sessionId: string; assistantMessageId: string; state: string; userMessageId?: string; contextBoundarySequence?: number; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig }) => void
   updateTurnState: (turnId: string, state: string, patch?: { version?: number; outcome?: string; usage?: unknown; error?: { code: string; message: string } }) => void
 }
@@ -275,6 +275,7 @@ export class TurnCoordinator {
       || type === 'source-failed'
       || type === 'source-cancelled'
       || type === 'source-timeout'
+      || type === 'source-uncertain'
   }
 
   private scheduleCheckpoint(turnId: string): void {

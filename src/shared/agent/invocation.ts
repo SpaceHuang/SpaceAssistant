@@ -12,6 +12,7 @@ import type {
 } from '../domainTypes'
 import type { DecisionCacheView, ExecutionLane, PolicyRule } from '../confirmation/types'
 import type { LocalizedMessage } from '../localization'
+import type { AcceptedTurn } from '../acceptedTurn'
 
 /**
  * Agent 调用契约（基线 §6.2；本计划 P1 落形）。
@@ -28,7 +29,7 @@ import type { LocalizedMessage } from '../localization'
 /** 请求追踪（requestId / turnId / windowId 归此）。 */
 export interface AgentTraceContext {
   requestId: string
-  /** 本回合真实 Turn ID；缺省回退 sessionId 占位。 */
+  /** 本回合规范执行身份；迁移期旧调用可省略，不能使用 sessionId 代替。 */
   turnId?: string
   /** 宿主 UI 簿记（P2 后评估移出契约、由出口实现持有）。 */
   windowId?: string
@@ -148,6 +149,8 @@ export type AgentDriverContext = unknown
 
 /** Agent 调用入参（基线 §6.2 形状；steering 按基线明确预留、本期不实现）。 */
 export interface AgentInvocation {
+  /** Immutable acceptance identity/configuration; legacy integrations may omit it during migration. */
+  acceptedTurn?: AcceptedTurn
   session: AgentSessionAnchor
   messages: AgentMessagesSection
   profile: AgentInvocationProfile
@@ -230,11 +233,11 @@ export interface AgentMcpPorts {
 export interface AgentToolRevocationPort {
   getRegisteredTool(name: string): unknown
   onRevocation(listener: AgentToolRevocationListener): AgentToolRevocationUnsubscribe
-  isToolRevoked(requestId: string, toolName: string): boolean
+  isToolRevoked(requestId: string, toolName: string, executionId?: string): boolean
 }
 
 export interface AgentToolRevocationListener {
-  (event: { requestId: string; lane: string; toolName: string }): void
+  (event: { requestId: string; executionId: string; lane: string; toolName: string }): void
 }
 
 export interface AgentToolRevocationUnsubscribe {
@@ -301,8 +304,6 @@ export interface AgentHostPorts {
   /** 调用级运行租约；工具循环不得自行接触全局准入账本。 */
   invocationRuntime?: {
     acquireLease(invocationId: string): { runtimeId: string; invocationId: string; generation: number; release(): void }
-    park(invocationId: string, lease: { runtimeId: string; invocationId: string; generation: number; release(): void }, checkpoint?: unknown): { runtimeId: string; invocationId: string; generation: number; checkpoint: unknown } | undefined
-    resumeLease(handle: { runtimeId: string; invocationId: string; generation: number; checkpoint: unknown }): { runtimeId: string; invocationId: string; generation: number; release(): void } | undefined
   }
   /** 运行时持有的审批尝试准入池。 */
   approvalAdmission?: {

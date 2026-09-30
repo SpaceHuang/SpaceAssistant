@@ -264,8 +264,8 @@ describe('createTurnCoordinatorStorage', () => {
       turn: { turnId: 'history-gap-turn', requestId: 'history-gap-request', sessionId: session.id, userMessageId: 'history-gap-user', assistantMessageId: 'history-gap-assistant', state: 'executing' }
     })
     await new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id).appendBatch([
-      { invocationId: 'history-gap-request', turnId: 'history-gap-turn', sequence: 2, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'answer' }], requiredUserMessage: { id: 'history-gap-user', message: { role: 'user', content: 'answer' } } } },
-      { invocationId: 'history-gap-request', turnId: 'history-gap-turn', sequence: 3, schemaVersion: 1, eventId: 'completed', idempotencyKey: 'completed', kind: 'invocation-completed', payload: { status: 'completed', outputText: 'canonical answer', usage: { inputTokens: 12, outputTokens: 3 } } }
+      { invocationId: 'history-gap-turn', turnId: 'history-gap-turn', sequence: 2, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'answer' }], requiredUserMessage: { id: 'history-gap-user', message: { role: 'user', content: 'answer' } } } },
+      { invocationId: 'history-gap-turn', turnId: 'history-gap-turn', sequence: 3, schemaVersion: 1, eventId: 'completed', idempotencyKey: 'completed', kind: 'invocation-completed', payload: { status: 'completed', outputText: 'canonical answer', usage: { inputTokens: 12, outputTokens: 3 } } }
     ], 1)
     db.flushSave()
     db.close()
@@ -287,7 +287,7 @@ describe('createTurnCoordinatorStorage', () => {
       version: 1, persistedOutcome: 'completed', persistedUsage: { inputTokens: 12, outputTokens: 3 },
       assistantMessage: { status: 'completed' }
     })
-    const recoveredHistory = await new SqliteAgentHistory(getDbConnection(reopened), 1, () => 5, session.id).read('history-gap-request')
+    const recoveredHistory = await new SqliteAgentHistory(getDbConnection(reopened), 1, () => 5, session.id).read('history-gap-turn')
     expect(recoveredHistory.events[0]).toMatchObject({
       turnId: 'history-gap-turn', sequence: 1,
       kind: 'session-input-committed',
@@ -298,7 +298,7 @@ describe('createTurnCoordinatorStorage', () => {
       payload: { requiredUserMessage: { id: 'history-gap-user' } }
     })
     expect(recoveredHistory.events.at(-1)).toMatchObject({
-      invocationId: 'history-gap-request', turnId: 'history-gap-turn', kind: 'invocation-completed'
+      invocationId: 'history-gap-turn', turnId: 'history-gap-turn', kind: 'invocation-completed'
     })
     reopened.close()
     temp.cleanup()
@@ -306,6 +306,7 @@ describe('createTurnCoordinatorStorage', () => {
 
   it.each([
     { caseName: 'failed', kind: 'invocation-failed' as const, status: 'failed', expectedOutcome: 'failed', expectedMessageStatus: 'failed' },
+    { caseName: 'timed-out', kind: 'invocation-failed' as const, status: 'failed', expectedOutcome: 'timed-out', expectedMessageStatus: 'failed' },
     { caseName: 'cancelled', kind: 'invocation-interrupted' as const, status: 'cancelled', expectedOutcome: 'cancelled', expectedMessageStatus: 'cancelled' },
     { caseName: 'unknown-after-dispatch', kind: 'invocation-interrupted' as const, status: 'interrupted', expectedOutcome: 'recovered', expectedMessageStatus: 'failed' }
   ])('重启时以 canonical $caseName terminal 收敛尚未终结的 turn', async ({ caseName, kind, status, expectedOutcome, expectedMessageStatus }) => {
@@ -320,8 +321,8 @@ describe('createTurnCoordinatorStorage', () => {
       assistantMessageId: `terminal-${caseName}-assistant`, requestId, state: 'executing'
     })
     await new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id).appendBatch([
-      { invocationId: requestId, turnId, sequence: 2, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'request' }], requiredUserMessage: { id: queued.persisted.message.id, message: { role: 'user', content: 'request' } } } },
-      { invocationId: requestId, turnId, sequence: 3, schemaVersion: 1, eventId: 'canonical-terminal', idempotencyKey: 'canonical-terminal', kind, payload: { status, ...(caseName === 'unknown-after-dispatch' ? { reason: caseName } : {}) } }
+      { invocationId: turnId, turnId, sequence: 2, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'request' }], requiredUserMessage: { id: queued.persisted.message.id, message: { role: 'user', content: 'request' } } } },
+      { invocationId: turnId, turnId, sequence: 3, schemaVersion: 1, eventId: 'canonical-terminal', idempotencyKey: 'canonical-terminal', kind, payload: { status, ...(caseName === 'unknown-after-dispatch' ? { reason: caseName } : caseName === 'timed-out' ? { reason: 'timeout' } : {}) } }
     ], 1)
     db.flushSave()
     db.close()
@@ -360,15 +361,15 @@ describe('createTurnCoordinatorStorage', () => {
       turn: { turnId: 'tool-gap-turn', requestId: 'tool-gap-request', sessionId: session.id, userMessageId: 'tool-gap-user', assistantMessageId: 'tool-gap-assistant', state: 'executing' }
     })
     await new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id).appendBatch([
-      { invocationId: 'tool-gap-request', turnId: 'tool-gap-turn', sequence: 2, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'read it' }], requiredUserMessage: { id: 'tool-gap-user', message: { role: 'user', content: 'read it' } } } },
-      { invocationId: 'tool-gap-request', turnId: 'tool-gap-turn', sequence: 3, schemaVersion: 1, eventId: 'response', idempotencyKey: 'response', kind: 'model-response-committed', payload: { message: { role: 'assistant', toolCalls: [{ id: 'read-1', name: 'read_file', input: { path: 'notes.txt' } }, { id: 'read-2', name: 'read_file', input: { path: 'other.txt' } }] } } },
-      { invocationId: 'tool-gap-request', turnId: 'tool-gap-turn', sequence: 4, schemaVersion: 1, eventId: 'approval-wait', idempotencyKey: 'approval-wait', kind: 'approval-waiting', payload: { toolCallId: 'read-1', approvalId: 'confirmation-1', answerer: 'user', reasonCode: 'sensitive-read', requestedAt: 30 } },
-      { invocationId: 'tool-gap-request', turnId: 'tool-gap-turn', sequence: 5, schemaVersion: 1, eventId: 'approval-resolved', idempotencyKey: 'approval-resolved', kind: 'approval-resolved', payload: { toolCallId: 'read-1', approvalId: 'confirmation-1', approved: true, outcome: 'approved', settledAt: 31 } },
-      { invocationId: 'tool-gap-request', turnId: 'tool-gap-turn', sequence: 6, schemaVersion: 1, eventId: 'started', idempotencyKey: 'started', kind: 'tool-call-started', payload: { toolCallId: 'read-1', toolName: 'read_file', inputHash: 'a'.repeat(64) } },
-      { invocationId: 'tool-gap-request', turnId: 'tool-gap-turn', sequence: 7, schemaVersion: 1, eventId: 'finished', idempotencyKey: 'finished', kind: 'tool-call-finished', payload: { toolCallId: 'read-1', success: true, result: { success: true, data: 'file contents' } } },
-      { invocationId: 'tool-gap-request', turnId: 'tool-gap-turn', sequence: 8, schemaVersion: 1, eventId: 'started-2', idempotencyKey: 'started-2', kind: 'tool-call-started', payload: { toolCallId: 'read-2', toolName: 'read_file', inputHash: 'b'.repeat(64) } },
-      { invocationId: 'tool-gap-request', turnId: 'tool-gap-turn', sequence: 9, schemaVersion: 1, eventId: 'finished-2', idempotencyKey: 'finished-2', kind: 'tool-call-finished', payload: { toolCallId: 'read-2', success: true, result: { success: true, data: 'other contents' } } },
-      { invocationId: 'tool-gap-request', turnId: 'tool-gap-turn', sequence: 10, schemaVersion: 1, eventId: 'completed', idempotencyKey: 'completed', kind: 'invocation-completed', payload: { status: 'completed', outputText: 'found it' } }
+      { invocationId: 'tool-gap-turn', turnId: 'tool-gap-turn', sequence: 2, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'read it' }], requiredUserMessage: { id: 'tool-gap-user', message: { role: 'user', content: 'read it' } } } },
+      { invocationId: 'tool-gap-turn', turnId: 'tool-gap-turn', sequence: 3, schemaVersion: 1, eventId: 'response', idempotencyKey: 'response', kind: 'model-response-committed', payload: { message: { role: 'assistant', toolCalls: [{ id: 'read-1', name: 'read_file', input: { path: 'notes.txt' } }, { id: 'read-2', name: 'read_file', input: { path: 'other.txt' } }] } } },
+      { invocationId: 'tool-gap-turn', turnId: 'tool-gap-turn', sequence: 4, schemaVersion: 1, eventId: 'approval-wait', idempotencyKey: 'approval-wait', kind: 'approval-waiting', payload: { toolCallId: 'read-1', approvalId: 'confirmation-1', answerer: 'user', reasonCode: 'sensitive-read', requestedAt: 30 } },
+      { invocationId: 'tool-gap-turn', turnId: 'tool-gap-turn', sequence: 5, schemaVersion: 1, eventId: 'approval-resolved', idempotencyKey: 'approval-resolved', kind: 'approval-resolved', payload: { toolCallId: 'read-1', approvalId: 'confirmation-1', approved: true, outcome: 'approved', settledAt: 31 } },
+      { invocationId: 'tool-gap-turn', turnId: 'tool-gap-turn', sequence: 6, schemaVersion: 1, eventId: 'started', idempotencyKey: 'started', kind: 'tool-call-started', payload: { toolCallId: 'read-1', toolName: 'read_file', inputHash: 'a'.repeat(64) } },
+      { invocationId: 'tool-gap-turn', turnId: 'tool-gap-turn', sequence: 7, schemaVersion: 1, eventId: 'finished', idempotencyKey: 'finished', kind: 'tool-call-finished', payload: { toolCallId: 'read-1', success: true, result: { success: true, data: 'file contents' } } },
+      { invocationId: 'tool-gap-turn', turnId: 'tool-gap-turn', sequence: 8, schemaVersion: 1, eventId: 'started-2', idempotencyKey: 'started-2', kind: 'tool-call-started', payload: { toolCallId: 'read-2', toolName: 'read_file', inputHash: 'b'.repeat(64) } },
+      { invocationId: 'tool-gap-turn', turnId: 'tool-gap-turn', sequence: 9, schemaVersion: 1, eventId: 'finished-2', idempotencyKey: 'finished-2', kind: 'tool-call-finished', payload: { toolCallId: 'read-2', success: true, result: { success: true, data: 'other contents' } } },
+      { invocationId: 'tool-gap-turn', turnId: 'tool-gap-turn', sequence: 10, schemaVersion: 1, eventId: 'completed', idempotencyKey: 'completed', kind: 'invocation-completed', payload: { status: 'completed', outputText: 'found it' } }
     ], 1)
     const runtime = new TurnRuntime({ storage, deps: { now: () => 4, id: () => 'tool-gap-recovery' } })
     const turn = listPersistedTurns(db, 'executing')[0]!
@@ -378,7 +379,7 @@ describe('createTurnCoordinatorStorage', () => {
     expect(storage.getMessage('tool-gap-assistant')).toMatchObject({
       status: 'completed', content: 'found it',
       toolCalls: [
-        { id: 'read-1', toolName: 'read_file', input: { path: 'notes.txt' }, status: 'completed', confirmedAt: 7, result: { success: true, data: 'file contents' }, approval: { schemaVersion: 1, approvalId: 'confirmation-1', attemptId: 'tool-gap-request:approval:read-1', toolUseId: 'read-1', answerer: 'user', status: 'approved', reason: { summary: 'sensitive-read' }, requestedAt: 30, settledAt: 31, revision: 2 } },
+      { id: 'read-1', toolName: 'read_file', input: { path: 'notes.txt' }, status: 'completed', confirmedAt: 7, result: { success: true, data: 'file contents' }, approval: { schemaVersion: 1, approvalId: 'confirmation-1', attemptId: 'tool-gap-turn:approval:read-1', toolUseId: 'read-1', answerer: 'user', status: 'approved', reason: { summary: 'sensitive-read' }, requestedAt: 30, settledAt: 31, revision: 2 } },
         { id: 'read-2', toolName: 'read_file', input: { path: 'other.txt' }, status: 'completed', result: { success: true, data: 'other contents' } }
       ]
     })
@@ -397,11 +398,11 @@ describe('createTurnCoordinatorStorage', () => {
       turn: { turnId: 'stale-tool-turn', requestId: 'stale-tool-request', sessionId: session.id, userMessageId: 'stale-tool-user', assistantMessageId: 'stale-tool-assistant', state: 'executing' }
     })
     await new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id).appendBatch([
-      { invocationId: 'stale-tool-request', turnId: 'stale-tool-turn', sequence: 2, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'read it' }], requiredUserMessage: { id: 'stale-tool-user', message: { role: 'user', content: 'read it' } } } },
-      { invocationId: 'stale-tool-request', turnId: 'stale-tool-turn', sequence: 3, schemaVersion: 1, eventId: 'response', idempotencyKey: 'response', kind: 'model-response-committed', payload: { message: { role: 'assistant', toolCalls: [{ id: 'read-1', name: 'read_file', input: { path: 'notes.txt' } }] } } },
-      { invocationId: 'stale-tool-request', turnId: 'stale-tool-turn', sequence: 4, schemaVersion: 1, eventId: 'started', idempotencyKey: 'started', kind: 'tool-call-started', payload: { toolCallId: 'read-1', toolName: 'read_file', inputHash: 'a'.repeat(64) } },
-      { invocationId: 'stale-tool-request', turnId: 'stale-tool-turn', sequence: 5, schemaVersion: 1, eventId: 'finished', idempotencyKey: 'finished', kind: 'tool-call-finished', payload: { toolCallId: 'read-1', success: true, result: { success: true, data: 'canonical contents' } } },
-      { invocationId: 'stale-tool-request', turnId: 'stale-tool-turn', sequence: 6, schemaVersion: 1, eventId: 'completed', idempotencyKey: 'completed', kind: 'invocation-completed', payload: { status: 'completed', outputText: 'found it' } }
+      { invocationId: 'stale-tool-turn', turnId: 'stale-tool-turn', sequence: 2, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'read it' }], requiredUserMessage: { id: 'stale-tool-user', message: { role: 'user', content: 'read it' } } } },
+      { invocationId: 'stale-tool-turn', turnId: 'stale-tool-turn', sequence: 3, schemaVersion: 1, eventId: 'response', idempotencyKey: 'response', kind: 'model-response-committed', payload: { message: { role: 'assistant', toolCalls: [{ id: 'read-1', name: 'read_file', input: { path: 'notes.txt' } }] } } },
+      { invocationId: 'stale-tool-turn', turnId: 'stale-tool-turn', sequence: 4, schemaVersion: 1, eventId: 'started', idempotencyKey: 'started', kind: 'tool-call-started', payload: { toolCallId: 'read-1', toolName: 'read_file', inputHash: 'a'.repeat(64) } },
+      { invocationId: 'stale-tool-turn', turnId: 'stale-tool-turn', sequence: 5, schemaVersion: 1, eventId: 'finished', idempotencyKey: 'finished', kind: 'tool-call-finished', payload: { toolCallId: 'read-1', success: true, result: { success: true, data: 'canonical contents' } } },
+      { invocationId: 'stale-tool-turn', turnId: 'stale-tool-turn', sequence: 6, schemaVersion: 1, eventId: 'completed', idempotencyKey: 'completed', kind: 'invocation-completed', payload: { status: 'completed', outputText: 'found it' } }
     ], 1)
     const runtime = new TurnRuntime({ storage, deps: { now: () => 4, id: () => 'stale-tool-recovery' } })
     const turn = listPersistedTurns(db, 'executing')[0]!
@@ -414,6 +415,42 @@ describe('createTurnCoordinatorStorage', () => {
     ])
   })
 
+  it('canonical History 已完成工具后可修复仍为 executing 的 SQLite 工具 checkpoint', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'history-completed-executing-checkpoint' })
+    const storage = createTurnCoordinatorStorage(db)
+    storage.prepareAtomic?.({
+      user: { id: 'executing-tool-user', sessionId: session.id, role: 'user', content: 'read it', timestamp: 1, status: 'sent' },
+      assistant: { id: 'executing-tool-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming', toolCalls: [
+        { id: 'read-executing', toolName: 'read_file', input: { path: 'notes.txt' }, status: 'executing', riskLevel: 'high' }
+      ] },
+      turn: { turnId: 'executing-tool-turn', requestId: 'executing-tool-request', sessionId: session.id, userMessageId: 'executing-tool-user', assistantMessageId: 'executing-tool-assistant', state: 'executing' }
+    })
+    await new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id).appendBatch([
+      { invocationId: 'executing-tool-turn', turnId: 'executing-tool-turn', sequence: 2, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'read it' }], requiredUserMessage: { id: 'executing-tool-user', message: { role: 'user', content: 'read it' } } } },
+      { invocationId: 'executing-tool-turn', turnId: 'executing-tool-turn', sequence: 3, schemaVersion: 1, eventId: 'response', idempotencyKey: 'response', kind: 'model-response-committed', payload: { message: { role: 'assistant', toolCalls: [{ id: 'read-executing', name: 'read_file', input: { path: 'notes.txt' } }] } } },
+      { invocationId: 'executing-tool-turn', turnId: 'executing-tool-turn', sequence: 4, schemaVersion: 1, eventId: 'started', idempotencyKey: 'started', kind: 'tool-call-started', payload: { toolCallId: 'read-executing', toolName: 'read_file', inputHash: 'a'.repeat(64) } },
+      { invocationId: 'executing-tool-turn', turnId: 'executing-tool-turn', sequence: 5, schemaVersion: 1, eventId: 'finished', idempotencyKey: 'finished', kind: 'tool-call-finished', payload: { toolCallId: 'read-executing', success: true, result: { success: true, data: 'canonical contents' } } },
+      { invocationId: 'executing-tool-turn', turnId: 'executing-tool-turn', sequence: 6, schemaVersion: 1, eventId: 'completed', idempotencyKey: 'completed', kind: 'invocation-completed', payload: { status: 'completed', outputText: 'found it' } }
+    ], 1)
+    const canonicalHistory = new SqliteAgentHistory(getDbConnection(db))
+    expect(canonicalHistory.readCompletedInvocationForSession('executing-tool-turn', session.id, 'executing-tool-turn')).toEqual({ outputText: 'found it' })
+    expect(canonicalHistory.readCompletedToolCallsForSession('executing-tool-turn', session.id, 'executing-tool-turn')).toMatchObject([
+      { id: 'read-executing', status: 'completed', result: { success: true, data: 'canonical contents' } }
+    ])
+    const runtime = new TurnRuntime({ storage, deps: { now: () => 4, id: () => 'executing-tool-recovery' } })
+    const turn = listPersistedTurns(db, 'executing')[0]!
+    runtime.coordinator.restoreTurn(turn, storage.getMessage(turn.assistantMessageId)!)
+
+    expect(runtime.recover()).toBe(1)
+    expect(getPersistedTurn(db, 'executing-tool-turn')).toMatchObject({ state: 'terminal', outcome: 'completed' })
+    expect(storage.getMessage('executing-tool-assistant')).toMatchObject({
+      status: 'completed', content: 'found it',
+      toolCalls: [{ id: 'read-executing', status: 'completed', result: { success: true, data: 'canonical contents' } }]
+    })
+    db.close()
+  })
+
   it('completed recovery 清除 canonical History 未记录的 checkpoint 工具调用', async () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'history-empty-tool-checkpoint' })
@@ -424,9 +461,9 @@ describe('createTurnCoordinatorStorage', () => {
       turn: { turnId: 'empty-tool-turn', requestId: 'empty-tool-request', sessionId: session.id, userMessageId: 'empty-tool-user', assistantMessageId: 'empty-tool-assistant', state: 'executing' }
     })
     await new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id).appendBatch([
-      { invocationId: 'empty-tool-request', turnId: 'empty-tool-turn', sequence: 2, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'answer' }], requiredUserMessage: { id: 'empty-tool-user', message: { role: 'user', content: 'answer' } } } },
-      { invocationId: 'empty-tool-request', turnId: 'empty-tool-turn', sequence: 3, schemaVersion: 1, eventId: 'response', idempotencyKey: 'response', kind: 'model-response-committed', payload: { message: { role: 'assistant', content: 'no tools needed' } } },
-      { invocationId: 'empty-tool-request', turnId: 'empty-tool-turn', sequence: 4, schemaVersion: 1, eventId: 'completed', idempotencyKey: 'completed', kind: 'invocation-completed', payload: { status: 'completed', outputText: 'no tools needed' } }
+      { invocationId: 'empty-tool-turn', turnId: 'empty-tool-turn', sequence: 2, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'answer' }], requiredUserMessage: { id: 'empty-tool-user', message: { role: 'user', content: 'answer' } } } },
+      { invocationId: 'empty-tool-turn', turnId: 'empty-tool-turn', sequence: 3, schemaVersion: 1, eventId: 'response', idempotencyKey: 'response', kind: 'model-response-committed', payload: { message: { role: 'assistant', content: 'no tools needed' } } },
+      { invocationId: 'empty-tool-turn', turnId: 'empty-tool-turn', sequence: 4, schemaVersion: 1, eventId: 'completed', idempotencyKey: 'completed', kind: 'invocation-completed', payload: { status: 'completed', outputText: 'no tools needed' } }
     ], 1)
     const runtime = new TurnRuntime({ storage, deps: { now: () => 4, id: () => 'empty-tool-recovery' } })
     const turn = listPersistedTurns(db, 'executing')[0]!
@@ -447,11 +484,11 @@ describe('createTurnCoordinatorStorage', () => {
       turn: { turnId: 'not-dispatched-turn', requestId: 'not-dispatched-request', sessionId: session.id, userMessageId: 'not-dispatched-user', assistantMessageId: 'not-dispatched-assistant', state: 'executing' }
     })
     await new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id).appendBatch([
-      { invocationId: 'not-dispatched-request', turnId: 'not-dispatched-turn', sequence: 2, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'run it' }], requiredUserMessage: { id: 'not-dispatched-user', message: { role: 'user', content: 'run it' } } } },
-      { invocationId: 'not-dispatched-request', turnId: 'not-dispatched-turn', sequence: 3, schemaVersion: 1, eventId: 'response', idempotencyKey: 'response', kind: 'model-response-committed', payload: { message: { role: 'assistant', toolCalls: [{ id: 'denied-1', name: 'run_shell', input: { command: 'whoami' } }] } } },
-      { invocationId: 'not-dispatched-request', turnId: 'not-dispatched-turn', sequence: 4, schemaVersion: 1, eventId: 'not-dispatched', idempotencyKey: 'not-dispatched', kind: 'tool-call-not-dispatched', payload: { toolCallId: 'denied-1', reason: 'POLICY_DENIED', replayContent: 'Tool call was not dispatched (POLICY_DENIED).', isError: true } },
-      { invocationId: 'not-dispatched-request', turnId: 'not-dispatched-turn', sequence: 5, schemaVersion: 1, eventId: 'final-response', idempotencyKey: 'final-response', kind: 'model-response-committed', payload: { message: { role: 'assistant', content: 'I could not run it.' } } },
-      { invocationId: 'not-dispatched-request', turnId: 'not-dispatched-turn', sequence: 6, schemaVersion: 1, eventId: 'completed', idempotencyKey: 'completed', kind: 'invocation-completed', payload: { status: 'completed', outputText: 'I could not run it.' } }
+      { invocationId: 'not-dispatched-turn', turnId: 'not-dispatched-turn', sequence: 2, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'run it' }], requiredUserMessage: { id: 'not-dispatched-user', message: { role: 'user', content: 'run it' } } } },
+      { invocationId: 'not-dispatched-turn', turnId: 'not-dispatched-turn', sequence: 3, schemaVersion: 1, eventId: 'response', idempotencyKey: 'response', kind: 'model-response-committed', payload: { message: { role: 'assistant', toolCalls: [{ id: 'denied-1', name: 'run_shell', input: { command: 'whoami' } }] } } },
+      { invocationId: 'not-dispatched-turn', turnId: 'not-dispatched-turn', sequence: 4, schemaVersion: 1, eventId: 'not-dispatched', idempotencyKey: 'not-dispatched', kind: 'tool-call-not-dispatched', payload: { toolCallId: 'denied-1', reason: 'POLICY_DENIED', replayContent: 'Tool call was not dispatched (POLICY_DENIED).', isError: true } },
+      { invocationId: 'not-dispatched-turn', turnId: 'not-dispatched-turn', sequence: 5, schemaVersion: 1, eventId: 'final-response', idempotencyKey: 'final-response', kind: 'model-response-committed', payload: { message: { role: 'assistant', content: 'I could not run it.' } } },
+      { invocationId: 'not-dispatched-turn', turnId: 'not-dispatched-turn', sequence: 6, schemaVersion: 1, eventId: 'completed', idempotencyKey: 'completed', kind: 'invocation-completed', payload: { status: 'completed', outputText: 'I could not run it.' } }
     ], 1)
     const runtime = new TurnRuntime({ storage, deps: { now: () => 4, id: () => 'not-dispatched-recovery' } })
     const turn = listPersistedTurns(db, 'executing')[0]!
@@ -475,10 +512,10 @@ describe('createTurnCoordinatorStorage', () => {
     })
     const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id)
     await history.appendBatch([
-      { invocationId: 'shared-request-id', turnId: 'sqlite-turn-owner', sequence: 2, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'request' }], requiredUserMessage: { id: 'owner-mismatch-user', message: { role: 'user', content: 'request' } } } },
-      { invocationId: 'shared-request-id', turnId: 'sqlite-turn-owner', sequence: 3, schemaVersion: 1, eventId: 'completed', idempotencyKey: 'completed', kind: 'invocation-completed', payload: { status: 'completed', outputText: 'belongs to another turn' } }
+      { invocationId: 'sqlite-turn-owner', turnId: 'sqlite-turn-owner', sequence: 2, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'request' }], requiredUserMessage: { id: 'owner-mismatch-user', message: { role: 'user', content: 'request' } } } },
+      { invocationId: 'sqlite-turn-owner', turnId: 'sqlite-turn-owner', sequence: 3, schemaVersion: 1, eventId: 'completed', idempotencyKey: 'completed', kind: 'invocation-completed', payload: { status: 'completed', outputText: 'belongs to another turn' } }
     ], 1)
-    getDbConnection(db).prepare('UPDATE agent_history_events SET turn_id = ? WHERE invocation_id = ? AND sequence = 3').run('other-turn-owner', 'shared-request-id')
+    getDbConnection(db).prepare('UPDATE agent_history_events SET turn_id = ? WHERE invocation_id = ? AND sequence = 3').run('other-turn-owner', 'sqlite-turn-owner')
     const runtime = new TurnRuntime({ storage, deps: { now: () => 4, id: () => 'owner-mismatch-recovery' } })
     const turn = listPersistedTurns(db, 'executing')[0]!
     runtime.coordinator.restoreTurn(turn, storage.getMessage(turn.assistantMessageId)!)
@@ -500,9 +537,9 @@ describe('createTurnCoordinatorStorage', () => {
       turn: { turnId: 'malformed-tool-turn', requestId: 'malformed-tool-request', sessionId: session.id, userMessageId: 'malformed-tool-user', assistantMessageId: 'malformed-tool-assistant', state: 'executing' }
     })
     await new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id).appendBatch([
-      { invocationId: 'malformed-tool-request', turnId: 'malformed-tool-turn', sequence: 2, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'read' }], requiredUserMessage: { id: 'malformed-tool-user', message: { role: 'user', content: 'read' } } } },
-      { invocationId: 'malformed-tool-request', turnId: 'malformed-tool-turn', sequence: 3, schemaVersion: 1, eventId: 'response', idempotencyKey: 'response', kind: 'model-response-committed', payload: { message: { role: 'assistant', toolCalls: [{ name: 'read_file' }] } } },
-      { invocationId: 'malformed-tool-request', turnId: 'malformed-tool-turn', sequence: 4, schemaVersion: 1, eventId: 'completed', idempotencyKey: 'completed', kind: 'invocation-completed', payload: { status: 'completed', outputText: 'claimed answer' } }
+      { invocationId: 'malformed-tool-turn', turnId: 'malformed-tool-turn', sequence: 2, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'read' }], requiredUserMessage: { id: 'malformed-tool-user', message: { role: 'user', content: 'read' } } } },
+      { invocationId: 'malformed-tool-turn', turnId: 'malformed-tool-turn', sequence: 3, schemaVersion: 1, eventId: 'response', idempotencyKey: 'response', kind: 'model-response-committed', payload: { message: { role: 'assistant', toolCalls: [{ name: 'read_file' }] } } },
+      { invocationId: 'malformed-tool-turn', turnId: 'malformed-tool-turn', sequence: 4, schemaVersion: 1, eventId: 'completed', idempotencyKey: 'completed', kind: 'invocation-completed', payload: { status: 'completed', outputText: 'claimed answer' } }
     ], 1)
     const runtime = new TurnRuntime({ storage, deps: { now: () => 4, id: () => 'malformed-tool-recovery' } })
     const turn = listPersistedTurns(db, 'executing')[0]!

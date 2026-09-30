@@ -193,17 +193,21 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
     seedTrustedModel(db, modelId)
     const endpoint = 'https://hosted.example.test'
-    const routeId = createDesktopAnthropicRouteProfile({
+    const routeProfile = createDesktopAnthropicRouteProfile({
       modelId, endpoint, credentialRef: 'llm-service:svc-hosted',
       contextWindow: MODEL_BASELINE[modelId]!.maximumContext,
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens,
       reasoning: MODEL_BASELINE[modelId]!.reasoning
-    }).routeId
+    })
+    const routeId = routeProfile.routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
     const modelProviders = runtime.modelProviders
     const providerRequests: Array<readonly unknown[]> = []
-    modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-integration-fake',
+    modelProviders.register({
+      routeId: routeProfile.routeId, protocol: routeProfile.protocol, dialect: routeProfile.dialect,
+      adapterVersion: routeProfile.adapterVersion, modelId: routeProfile.modelId, endpoint: routeProfile.endpoint
+    }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* (input) {
         providerRequests.push(input.request.messages)
         providerCalls += 1
@@ -248,8 +252,6 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
         yield { type: 'finish', reason: 'stop' } as const
       }
     })
-    const register = modelProviders.register.bind(modelProviders)
-    modelProviders.register = (profile, provider) => profile.routeId === routeId ? routeId : register(profile, provider)
     setDefaultAgentRuntime(runtime)
 
     const session = createSession(db, { name: 'hosted-integration', model: modelId, maxTokens: 512 })
@@ -281,7 +283,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       requestId: 'hosted-request', turnId: 'hosted-turn', turnStartToken: 'hosted-start-token', sessionId: session.id
     })
 
-    expect(result).toMatchObject({
+    expect(result, JSON.stringify(result)).toMatchObject({
       ok: true, eventPersistenceFailed: true, eventPersistenceErrors: [expect.objectContaining({ code: 'EVENT_PERSISTENCE_FAILED' })],
       content: [{ type: 'text', text: 'Hosted desktop answer' }],
       usage: { input_tokens: 28, output_tokens: 21, cacheSemantics: 'additive' }
@@ -415,6 +417,121 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     evaluateGateSpy.mockRestore()
   })
 
+  it('preserves Desktop Hosted commit-uncertain across the real IPC execution path', async () => {
+    workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-sdk-hosted-checkpoint-uncertain-'))
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    seedTrustedModel(db, modelId)
+    const endpoint = 'https://hosted.example.test'
+    const route = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted',
+      contextWindow: MODEL_BASELINE[modelId]!.maximumContext, maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens,
+      reasoning: MODEL_BASELINE[modelId]!.reasoning })
+    runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
+    runtime.modelProviders.register({
+      routeId: route.routeId, protocol: route.protocol, dialect: route.dialect, adapterVersion: route.adapterVersion,
+      modelId: route.modelId, endpoint: route.endpoint
+    }, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
+      providerCalls += 1
+      yield { type: 'text-delta', text: 'completed before checkpoint failure' } as const
+      yield { type: 'usage', inputTokens: 2, outputTokens: 3 } as const
+      yield { type: 'finish', reason: 'stop' } as const
+    } })
+    setDefaultAgentRuntime(runtime)
+
+    const session = createSession(db, { name: 'desktop-checkpoint-uncertain', model: modelId, maxTokens: 512 })
+    const user = appendMessage(db, { id: 'desktop-uncertain-user', sessionId: session.id, role: 'user', content: 'run once', timestamp: 1, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'desktop-uncertain-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, {
+      turnId: 'desktop-uncertain-turn', requestId: 'desktop-uncertain-request', sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: assistant.message.id,
+      contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'desktop-uncertain-token',
+      executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'zh-CN' }
+    })
+    getDbConnection(db).exec(`CREATE TRIGGER fail_desktop_transcript_checkpoint BEFORE INSERT ON session_transcript_checkpoints
+      WHEN NEW.version > 0 BEGIN SELECT RAISE(ABORT, 'injected desktop checkpoint failure'); END`)
+    const consumeForRequest = vi.fn()
+    const execute = registerClaudeStreamHandlers(ipcMain, {
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir,
+      getUserDataPath: () => '/tmp', getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
+      getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
+      getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
+      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getBrowserDetectContext: () => ({ workDir }),
+      turnRuntime: { bindRequest: vi.fn(), consumeForRequest } as never
+    })
+
+    const result = await execute(makeSender(), {
+      requestId: 'desktop-uncertain-request', turnId: 'desktop-uncertain-turn',
+      turnStartToken: 'desktop-uncertain-token', sessionId: session.id
+    })
+
+    expect(result).toMatchObject({ ok: false, outcome: 'commit-uncertain', error: expect.stringContaining('injected desktop checkpoint failure') })
+    expect(providerCalls).toBe(1)
+    const history = await new SqliteAgentHistory(getDbConnection(db)).read('desktop-uncertain-turn')
+    expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-completed', payload: { status: 'completed' } })
+    expect(getDbConnection(db).prepare('SELECT status FROM session_transcript_checkpoints WHERE session_id=?').get(session.id))
+      .toEqual({ status: 'commit_uncertain' })
+    expect(getDbConnection(db).prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(session.id))
+      .toEqual({ status: 'commit_uncertain' })
+  })
+
+
+  it('keeps Desktop canonical failure when SQLite rejects the completed terminal before commit', async () => {
+    workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-sdk-hosted-history-terminal-failure-'))
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    seedTrustedModel(db, modelId)
+    const endpoint = 'https://hosted.example.test'
+    const route = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted',
+      contextWindow: MODEL_BASELINE[modelId]!.maximumContext, maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens,
+      reasoning: MODEL_BASELINE[modelId]!.reasoning })
+    runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
+    runtime.modelProviders.register({
+      routeId: route.routeId, protocol: route.protocol, dialect: route.dialect, adapterVersion: route.adapterVersion,
+      modelId: route.modelId, endpoint: route.endpoint
+    }, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
+      providerCalls += 1
+      yield { type: 'text-delta', text: 'response before terminal failure' } as const
+      yield { type: 'usage', inputTokens: 2, outputTokens: 3 } as const
+      yield { type: 'finish', reason: 'stop' } as const
+    } })
+    setDefaultAgentRuntime(runtime)
+
+    const session = createSession(db, { name: 'desktop-history-terminal-failure', model: modelId, maxTokens: 512 })
+    const user = appendMessage(db, { id: 'desktop-history-terminal-user', sessionId: session.id, role: 'user', content: 'run once', timestamp: 1, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'desktop-history-terminal-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, {
+      turnId: 'desktop-history-terminal-turn', requestId: 'desktop-history-terminal-request', sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: assistant.message.id,
+      contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'desktop-history-terminal-token',
+      executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'zh-CN' }
+    })
+    getDbConnection(db).exec(`CREATE TRIGGER fail_desktop_completed_terminal BEFORE INSERT ON agent_history_events
+      WHEN NEW.kind='invocation-completed' BEGIN SELECT RAISE(ABORT, 'injected Desktop terminal failure'); END`)
+    const execute = registerClaudeStreamHandlers(ipcMain, {
+      getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir,
+      getUserDataPath: () => '/tmp', getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
+      getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
+      getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
+      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
+      getBrowserDetectContext: () => ({ workDir }),
+      turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
+    })
+
+    const result = await execute(makeSender(), {
+      requestId: 'desktop-history-terminal-request', turnId: 'desktop-history-terminal-turn',
+      turnStartToken: 'desktop-history-terminal-token', sessionId: session.id
+    })
+
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining('injected Desktop terminal failure') })
+    expect(providerCalls).toBe(1)
+    const history = await new SqliteAgentHistory(getDbConnection(db)).read('desktop-history-terminal-turn')
+    expect(history.events.filter((event) => ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(event.kind)))
+      .toEqual([expect.objectContaining({ kind: 'invocation-failed', payload: expect.objectContaining({ status: 'failed' }) })])
+    const transcript = getDbConnection(db).prepare('SELECT outcome,messages_json FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
+      .get(session.id, 'desktop-history-terminal-turn') as { outcome: string; messages_json: string }
+    expect(transcript.outcome).toBe('failed')
+    expect(JSON.parse(transcript.messages_json)).toEqual([{ role: 'user', content: 'run once' }])
+  })
+
   it('preserves Desktop auto-approved write audit and result metadata through Hosted execution', async () => {
     workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-sdk-hosted-auto-approved-write-'))
     const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
@@ -423,8 +540,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const route = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted',
       contextWindow: MODEL_BASELINE[modelId]!.maximumContext, maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning })
     runtime = createDesktopAgentRuntime()
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-auto-approved-write-fixture',
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: route.protocol, dialect: route.dialect, adapterVersion: route.adapterVersion, modelId: route.modelId, endpoint: route.endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -453,8 +570,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }), turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never })
 
-    await expect(execute(makeSender(), { requestId: 'hosted-auto-approved-write-request', turnId: 'hosted-auto-approved-write-turn', turnStartToken: 'hosted-auto-approved-write-start', sessionId: session.id }))
-      .resolves.toMatchObject({ ok: true, content: [{ type: 'text', text: 'written' }] })
+    const executionResult = await execute(makeSender(), { requestId: 'hosted-auto-approved-write-request', turnId: 'hosted-auto-approved-write-turn', turnStartToken: 'hosted-auto-approved-write-start', sessionId: session.id })
+    expect(executionResult, JSON.stringify(executionResult)).toMatchObject({ ok: true, content: [{ type: 'text', text: 'written' }] })
     await expect(fs.readFile(path.join(workDir, 'auto.txt'), 'utf8')).resolves.toBe('hello')
     const resultEvent = sessionEvents.find((event) => event.type === 'tool_result' && event.payload.toolUseId === 'hosted-auto-approved-write')
     expect(resultEvent?.payload.result).toMatchObject({ decisionRuleId: expect.any(String),
@@ -471,14 +588,15 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
     seedTrustedModel(db, modelId)
     const endpoint = 'https://hosted.example.test'
-    const routeId = createDesktopAnthropicRouteProfile({
+    const routeProfile = createDesktopAnthropicRouteProfile({
       modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow: MODEL_BASELINE[modelId]!.maximumContext,
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
-    }).routeId
+    })
+    const routeId = routeProfile.routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
     const modelRequests: Array<readonly unknown[]> = []
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-oversized-result',
+    runtime.modelProviders.register({ routeId, protocol: routeProfile.protocol, dialect: routeProfile.dialect, adapterVersion: routeProfile.adapterVersion, modelId: routeProfile.modelId, endpoint: routeProfile.endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* (input) {
         providerCalls += 1
         modelRequests.push(input.request.messages)
@@ -539,11 +657,12 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
     seedTrustedModel(db, modelId)
     const endpoint = 'https://hosted.example.test'
-    const routeId = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow: MODEL_BASELINE[modelId]!.maximumContext, maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning }).routeId
+    const routeProfile = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow: MODEL_BASELINE[modelId]!.maximumContext, maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning })
+    const routeId = routeProfile.routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
     const requests: unknown[] = []
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-boundary-compaction-fixture',
+    runtime.modelProviders.register({ routeId, protocol: routeProfile.protocol, dialect: routeProfile.dialect, adapterVersion: routeProfile.adapterVersion, modelId: routeProfile.modelId, endpoint: routeProfile.endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* (input) {
         providerCalls += 1
         requests.push(input.request.messages)
@@ -602,11 +721,12 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     seedTrustedModel(db, modelId)
     const endpoint = 'https://hosted.example.test'
     const contextWindow = 150_000
-    const routeId = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow, maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning }).routeId
+    const routeProfile = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow, maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning })
+    const routeId = routeProfile.routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
     const requests: unknown[] = []
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-initial-preflight-fixture',
+    runtime.modelProviders.register({ routeId, protocol: routeProfile.protocol, dialect: routeProfile.dialect, adapterVersion: routeProfile.adapterVersion, modelId: routeProfile.modelId, endpoint: routeProfile.endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* (input) {
         requests.push(input.request.messages)
         yield { type: 'text-delta', text: 'accepted answer' } as const
@@ -658,10 +778,11 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const endpoint = 'https://hosted.example.test'
     const contextWindow = 4_096
     const maxTokens = 512
-    const routeId = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow, maxOutputTokens: maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning }).routeId
+    const routeProfile = createDesktopAnthropicRouteProfile({ modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow, maxOutputTokens: maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning })
+    const routeId = routeProfile.routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-required-user-over-budget-fixture',
+    runtime.modelProviders.register({ routeId, protocol: routeProfile.protocol, dialect: routeProfile.dialect, adapterVersion: routeProfile.adapterVersion, modelId: routeProfile.modelId, endpoint: routeProfile.endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         yield { type: 'text-delta', text: 'must not dispatch' } as const
@@ -714,8 +835,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
     runtime = createDesktopAgentRuntime()
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-initial-allow-drift',
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -823,8 +944,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow: MODEL_BASELINE[modelId]!.maximumContext,
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-skills-drift-fixture', stream: async function* () {
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId, toolName: toolName.replace('.', '_'), input: toolName === 'skills.read' ? { name: 'hosted-drift' } : { query: toolName === 'toolkit.find' ? 'env.agent' : 'Read hosted-drift' } } as const
@@ -919,8 +1040,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
     const providerToolName = toolName.replace('.', '_')
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-snapshot-late-fixture', stream: async function* () {
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         yield { type: 'tool-call', toolCallId, toolName: providerToolName, input: toolName === 'skills.read' ? { name: 'snapshot-late' } : { query: 'snapshot' } } as const
         yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
@@ -952,7 +1073,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
         executeEntered,
         runningTurn.then((result) => { throw new Error(`Hosted snapshot turn ended before RegisteredTool execute: ${JSON.stringify(result)}`) })
       ])
-      if (invalidation === 'request-cancel') runtime.chatCancels.signalChatCancel(requestId)
+      if (invalidation === 'request-cancel') runtime.chatCancels.signalChatCancel(turnId)
       if (invalidation === 'revoke') expect(runtime.toolRevocations.revokeToolForLane('desktop', providerToolName)).toBe(1)
       if (invalidation === 'authorization-change') {
         const packages = readPolicyPackages(db)
@@ -980,7 +1101,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
         expect(JSON.stringify(events)).not.toContain('SNAPSHOT_PRIVATE_BODY')
       } finally { await sink.close() }
     } finally {
-      if (!invalidationSent) runtime.chatCancels.signalChatCancel(requestId)
+      if (!invalidationSent) runtime.chatCancels.signalChatCancel(turnId)
       releaseLateSnapshot()
       tool.beginPlanning = beginPlanning
       invalidateSkillsCache()
@@ -1011,8 +1132,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     let markOverflowTextYielded!: () => void
     const overflowResponseGate = new Promise<void>((resolve) => { releaseOverflowResponse = resolve })
     const overflowTextYielded = new Promise<void>((resolve) => { markOverflowTextYielded = resolve })
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-provider-overflow-fixture',
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* (input) {
         providerCalls += 1
         attempts.push(input.request.messages)
@@ -1099,8 +1220,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       reasoning: MODEL_BASELINE[modelId]!.reasoning
     }).routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-terminal-jsonl-recovery-fake',
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         yield { type: 'text-delta', text: 'canonical result survives projection failure' } as const
@@ -1207,8 +1328,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     }).routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-tool-jsonl-recovery-fake',
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -1341,7 +1462,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     initialPackages.desktop = 'standard'
     writePolicyPackages(db, initialPackages)
     db.flushSave()
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, { providerId: 'desktop-hosted-revoke-claim', stream: async function* () {
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, { providerId: 'pi-ai-anthropic-messages', stream: async function* () {
       providerCalls += 1
       if (providerCalls === 1) {
         yield { type: 'tool-call', toolCallId, toolName, input: toolInput } as const
@@ -1407,7 +1528,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       if (toolName === 'list_directory') await expect(fs.readdir(targetPath)).resolves.toEqual([])
       const expectedReason = invalidation === 'cancel' ? 'REQUEST_CANCELLED' : invalidation === 'revoke' ? 'REVOKED' : 'AUTHORIZATION_STALE'
       if (invalidation === 'cancel') {
-        runtime.chatCancels.signalChatCancel(requestId)
+        runtime.chatCancels.signalChatCancel(turnId)
       } else if (invalidation === 'revoke') {
         expect(runtime.toolRevocations.revokeToolForLane('desktop', toolName)).toBe(1)
       } else {
@@ -1489,8 +1610,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow: MODEL_BASELINE[modelId]!.maximumContext,
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-mcp-claim-revoke-fixture',
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -1547,7 +1668,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       expect(connect).not.toHaveBeenCalled()
       const expectedReason = invalidation === 'cancel' ? 'REQUEST_CANCELLED' : invalidation === 'authorization-change' ? 'AUTHORIZATION_STALE' : 'REVOKED'
       if (invalidation === 'cancel') {
-        runtime.chatCancels.signalChatCancel(requestId)
+        runtime.chatCancels.signalChatCancel(turnId)
       } else if (invalidation === 'revoke') {
         expect(runtime.toolRevocations.revokeToolForLane('desktop', toolName)).toBe(1)
       } else if (invalidation === 'authorization-change') {
@@ -1618,8 +1739,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow: MODEL_BASELINE[modelId]!.maximumContext,
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-mcp-refresh-confirmation-fixture',
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -1723,8 +1844,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow: MODEL_BASELINE[modelId]!.maximumContext,
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-mcp-agent-cancel-fixture',
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         yield { type: 'tool-call', toolCallId, toolName, input: { query: 'release notes' } } as const
@@ -1781,7 +1902,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       if (answerer === 'agent') expect(runApprovalAgent).toHaveBeenCalledOnce()
       else expect(waitForToolConfirm).toHaveBeenCalledOnce()
       expect(connect).not.toHaveBeenCalled()
-      runtime.chatCancels.signalChatCancel(requestId)
+      runtime.chatCancels.signalChatCancel(turnId)
       await expect(runningTurn).resolves.toMatchObject({ ok: false })
 
       expect(providerCalls).toBe(1)
@@ -1798,7 +1919,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
         (event.payload as { toolCallId?: string }).toolCallId === toolCallId
       )).toBe(false)
     } finally {
-      runtime.chatCancels.signalChatCancel(requestId)
+      runtime.chatCancels.signalChatCancel(turnId)
       connect.mockRestore()
     }
   })
@@ -1831,8 +1952,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow: MODEL_BASELINE[modelId]!.maximumContext,
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-capability-descriptor-drift',
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -1917,8 +2038,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow: MODEL_BASELINE[modelId]!.maximumContext,
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-mcp-postclaim-cancel-fixture',
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         yield { type: 'tool-call', toolCallId, toolName, input: { query: 'release notes' } } as const
@@ -1967,7 +2088,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       const runningTurn = execute(makeSender(), { requestId, turnId, turnStartToken: startToken, sessionId: session.id })
       await toolCallStarted
       expect(observedSignal?.aborted).toBe(false)
-      if (invalidation === 'cancel') runtime.chatCancels.signalChatCancel(requestId)
+      if (invalidation === 'cancel') runtime.chatCancels.signalChatCancel(turnId)
       if (invalidation === 'revoke') expect(runtime.toolRevocations.revokeToolForLane('desktop', toolName)).toBe(1)
       if (invalidation === 'authorization-change') {
         const changedPackages = readPolicyPackages(db)
@@ -1989,7 +2110,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
       expect(sessionEvents.some((event) => event.type === 'tool_result' && event.payload.toolCallId === toolCallId)).toBe(false)
     } finally {
-      runtime.chatCancels.signalChatCancel(requestId)
+      runtime.chatCancels.signalChatCancel(turnId)
       returnToolResult?.({ content: [{ type: 'text', text: 'cleanup acknowledgement' }] })
       connect.mockRestore()
     }
@@ -2024,8 +2145,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow: MODEL_BASELINE[modelId]!.maximumContext,
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-toolkit-approval-cancel-fixture', stream: async function* () {
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
           yield { type: 'tool-call', toolCallId, toolName: 'toolkit_call', input: { id: capabilityId, params: {} } } as const
@@ -2075,7 +2196,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       ])
       expect(waitForToolConfirm).toHaveBeenCalledOnce()
       expect(handler).not.toHaveBeenCalled()
-      runtime.chatCancels.signalChatCancel(requestId)
+      runtime.chatCancels.signalChatCancel(turnId)
       await expect(runningTurn).resolves.toMatchObject({ ok: false })
 
       expect(providerCalls).toBe(1)
@@ -2088,7 +2209,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       )).toBe(false)
       expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted' })
     } finally {
-      runtime.chatCancels.signalChatCancel(requestId)
+      runtime.chatCancels.signalChatCancel(turnId)
       restoreCapabilities()
     }
   })
@@ -2116,8 +2237,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow: MODEL_BASELINE[modelId]!.maximumContext,
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-toolkit-claim-barrier',
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -2167,7 +2288,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       const runningTurn = execute(makeSender(), { requestId, turnId, turnStartToken: startToken, sessionId: session.id })
       await atClaim
       expect(handler).not.toHaveBeenCalled()
-      if (invalidation === 'cancel') runtime.chatCancels.signalChatCancel(requestId)
+      if (invalidation === 'cancel') runtime.chatCancels.signalChatCancel(turnId)
       if (invalidation === 'revoke') expect(runtime.toolRevocations.revokeToolForLane('desktop', 'toolkit_call')).toBe(1)
       if (invalidation === 'authorization-change') {
         const changedPackages = readPolicyPackages(db)
@@ -2192,7 +2313,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     } finally {
       releaseClaim()
       runtime.executionAdmission = originalAdmission
-      runtime.chatCancels.signalChatCancel(requestId)
+      runtime.chatCancels.signalChatCancel(turnId)
       const descriptors = (capabilityRegistry as unknown as { descriptors: Map<string, unknown> }).descriptors
       descriptors.delete(capabilityId)
     }
@@ -2227,8 +2348,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       modelId, endpoint, credentialRef: 'llm-service:svc-hosted', contextWindow: MODEL_BASELINE[modelId]!.maximumContext,
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-toolkit-late-ack-fixture',
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -2268,7 +2389,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
         runningTurn.then((result) => ({ result }))
       ])
       expect(beforeHandler).toBe('handler-entered')
-      if (invalidation === 'cancel') runtime.chatCancels.signalChatCancel(requestId)
+      if (invalidation === 'cancel') runtime.chatCancels.signalChatCancel(turnId)
       if (invalidation === 'revoke') expect(runtime.toolRevocations.revokeToolForLane('desktop', 'toolkit.call')).toBe(1)
       if (invalidation === 'authorization-change') {
         const changedPackages = readPolicyPackages(db)
@@ -2290,7 +2411,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       await vi.waitFor(() => expect(sideEffectCompleted).toBe(true))
       expect((await new SqliteAgentHistory(getDbConnection(db)).read(requestId)).events.some((event) => event.kind === 'tool-call-finished' && event.payload.toolCallId === toolCallId)).toBe(false)
     } finally {
-      runtime.chatCancels.signalChatCancel(requestId)
+      runtime.chatCancels.signalChatCancel(turnId)
       releaseHandler()
     }
   })
@@ -2320,8 +2441,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     initialPackages.desktop = 'standard'
     writePolicyPackages(db, initialPackages)
     db.flushSave()
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-run-script-postclaim-fixture',
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         yield {
@@ -2391,7 +2512,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       if (invalidation === 'revoke') {
         expect(runtime.toolRevocations.revokeToolForLane('desktop', 'run_script')).toBe(1)
       } else if (invalidation === 'cancel') {
-        runtime.chatCancels.signalChatCancel(requestId)
+        runtime.chatCancels.signalChatCancel(turnId)
         expect(scriptExecutionSignal?.aborted).toBe(true)
       } else {
         const changedPackages = readPolicyPackages(db)
@@ -2421,7 +2542,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       } finally { await sink.close() }
     } finally {
       if (runningTurn && providerCalls > 0) {
-        if (invalidation === 'cancel') runtime.chatCancels.signalChatCancel(requestId)
+        if (invalidation === 'cancel') runtime.chatCancels.signalChatCancel(turnId)
         else runtime.toolRevocations.revokeToolForLane('desktop', 'run_script')
       }
       executeScript.mockRestore()
@@ -2453,8 +2574,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     initialPackages.desktop = 'standard'
     writePolicyPackages(db, initialPackages)
     db.flushSave()
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-run-shell-postclaim-fixture',
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         yield {
@@ -2508,7 +2629,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       if (invalidation === 'revoke') {
         expect(runtime.toolRevocations.revokeToolForLane('desktop', 'run_shell')).toBe(1)
       } else if (invalidation === 'cancel') {
-        runtime.chatCancels.signalChatCancel(requestId)
+        runtime.chatCancels.signalChatCancel(turnId)
       } else {
         const changedPackages = readPolicyPackages(db)
         changedPackages.desktop = 'strict'
@@ -2536,7 +2657,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       } finally { await sink.close() }
     } finally {
       if (runningTurn && providerCalls > 0) {
-        if (invalidation === 'cancel') runtime.chatCancels.signalChatCancel(requestId)
+        if (invalidation === 'cancel') runtime.chatCancels.signalChatCancel(turnId)
         else runtime.toolRevocations.revokeToolForLane('desktop', 'run_shell')
       }
     }
@@ -2559,8 +2680,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       builtinRegistry: createBuiltinToolRegistry(),
       policyAuthorizationChanges: new PolicyAuthorizationChangeRegistry()
     })
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-policy-change-fake',
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         yield { type: 'tool-call', toolCallId: 'desktop-policy-change-read', toolName: 'read_file', input: { path: 'note.txt' } } as const
@@ -2640,7 +2761,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       expect(projectedAfterRecovery.filter((event) => event.type === 'turn_end')).toHaveLength(1)
       await projectedSink.close()
     } finally {
-      if (!observedSignal?.aborted) runtime.chatCancels.signalChatCancel('policy-change-request')
+      if (!observedSignal?.aborted) runtime.chatCancels.signalChatCancel('policy-change-turn')
       readFileExecutor.execute = originalRead
       vi.restoreAllMocks()
     }
@@ -2658,8 +2779,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     }).routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
     const providerRequests: Array<readonly unknown[]> = []
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-output-recovery-fake',
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* (call) {
         providerCalls += 1
         providerRequests.push(call.request.messages)
@@ -2715,7 +2836,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const notDispatched = history.events.find((event) => event.kind === 'tool-call-not-dispatched')!
     const retry = history.events.find((event) => event.kind === 'provider-retry-scheduled')!
     expect(notDispatched.payload).toMatchObject({ toolCallId: 'hosted-truncated-write', reason: 'MODEL_OUTPUT_TRUNCATED', sessionLedger: { result: expect.objectContaining({ notExecutedReason: 'model_output_truncated' }) } })
-    expect(retry.payload).toMatchObject({ code: 'model_output_token_limit', sessionLedger: { requestRetry: { requestId: 'hosted-output-request:round:1', code: 'model_output_token_limit' } } })
+    expect(retry.payload).toMatchObject({ code: 'model_output_token_limit', sessionLedger: { requestRetry: { requestId: 'hosted-output-turn:round:1', code: 'model_output_token_limit' } } })
     expect(sessionEvents.find((event) => event.type === 'tool_result')?.payload.result).toEqual((notDispatched.payload.sessionLedger as { result: unknown }).result)
     expect(sessionEvents.find((event) => event.type === 'request_retry')?.payload).toMatchObject((retry.payload.sessionLedger as { requestRetry: Record<string, unknown> }).requestRetry)
     expect(sessionEvents.find((event) => event.type === 'request_retry')?.payload).toMatchObject({
@@ -2738,8 +2859,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     }).routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
     const providerRequests: Array<readonly unknown[]> = []
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-text-recovery-fake',
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* (call) {
         providerCalls += 1
         providerRequests.push(call.request.messages)
@@ -2799,7 +2920,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const history = await new SqliteAgentHistory(getDbConnection(db)).read('hosted-text-request')
     expect(history.events.map((event) => event.kind)).toEqual(expect.arrayContaining(['model-response-committed', 'replay-message-committed', 'tool-call-finished', 'invocation-completed']))
     expect(history.events.find((event) => event.kind === 'provider-retry-scheduled')?.payload).toMatchObject({
-      code: 'model_output_token_limit', sessionLedger: { requestRetry: { requestId: 'hosted-text-request:round:1' } }
+      code: 'model_output_token_limit', sessionLedger: { requestRetry: { requestId: 'hosted-text-turn:round:1' } }
     })
   })
 
@@ -2817,8 +2938,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     }).routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
     const modelProviders = runtime.modelProviders
-    modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-denied-fixture',
+    modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -2894,8 +3015,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
     runtime = createDesktopAgentRuntime()
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-confirm-cancel-fixture',
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -2943,7 +3064,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     let cancellationSent = false
     try {
       await approvalStarted
-      runtime.chatCancels.signalChatCancel('hosted-cancelled-request')
+      runtime.chatCancels.signalChatCancel('hosted-cancelled-turn')
       cancellationSent = true
       const result = await runningTurn
 
@@ -2959,7 +3080,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       ]))
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {
-      if (!cancellationSent) runtime.chatCancels.signalChatCancel('hosted-cancelled-request')
+      if (!cancellationSent) runtime.chatCancels.signalChatCancel('hosted-cancelled-turn')
     }
   })
 
@@ -2985,8 +3106,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
     runtime = createDesktopAgentRuntime()
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-read-confirm-cancel-fixture',
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         yield { type: 'tool-call', toolCallId, toolName, input: toolName === 'grep' ? { pattern: 'SECRET', path: '.env' } : { path: '.env' } } as const
@@ -3030,7 +3151,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       const runningTurn = execute(makeSender(), { requestId, turnId, turnStartToken: startToken, sessionId: session.id })
       await waiterStarted
       expect(executeRead).not.toHaveBeenCalled()
-      runtime.chatCancels.signalChatCancel(requestId)
+      runtime.chatCancels.signalChatCancel(turnId)
       cancellationSent = true
       await expect(runningTurn).resolves.toMatchObject({ ok: false })
 
@@ -3058,7 +3179,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
         expect(JSON.stringify(events)).not.toContain('SECRET=must-remain-private')
       } finally { await sink.close() }
     } finally {
-      if (!cancellationSent) runtime.chatCancels.signalChatCancel(requestId)
+      if (!cancellationSent) runtime.chatCancels.signalChatCancel(turnId)
       executeRead.mockRestore()
     }
   })
@@ -3087,8 +3208,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
     runtime = createDesktopAgentRuntime()
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: `desktop-hosted-${toolName}-late-result-fixture`,
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         yield { type: 'tool-call', toolCallId, toolName, input: toolName === 'grep' ? { pattern: 'SECRET', path: '.env' } : { path: '.env' } } as const
@@ -3136,7 +3257,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     try {
       const runningTurn = execute(makeSender(), { requestId, turnId, turnStartToken: startToken, sessionId: session.id })
       await executorEntered
-      if (invalidation === 'request-cancel') runtime.chatCancels.signalChatCancel(requestId)
+      if (invalidation === 'request-cancel') runtime.chatCancels.signalChatCancel(turnId)
       if (invalidation === 'revoke') expect(runtime.toolRevocations.revokeToolForLane('desktop', toolName)).toBe(1)
       if (invalidation === 'authorization-change') {
         const packages = readPolicyPackages(db)
@@ -3168,9 +3289,9 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       } finally { await sink.close() }
     } finally {
       if (!cancellationSent) {
-        if (invalidation === 'request-cancel') runtime.chatCancels.signalChatCancel(requestId)
+        if (invalidation === 'request-cancel') runtime.chatCancels.signalChatCancel(turnId)
         if (invalidation === 'revoke') runtime.toolRevocations.revokeToolForLane('desktop', providerToolName)
-        if (invalidation === 'authorization-change') runtime.chatCancels.signalChatCancel(requestId)
+        if (invalidation === 'authorization-change') runtime.chatCancels.signalChatCancel(turnId)
       }
       releaseLateResult()
       executor.mockRestore()
@@ -3196,8 +3317,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
     runtime = createDesktopAgentRuntime()
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: `desktop-hosted-${toolName}-late-write-fixture`,
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (toolName === 'edit_file' && providerCalls === 1) {
@@ -3261,7 +3382,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       const runningTurn = execute(makeSender(), { requestId, turnId, turnStartToken: startToken, sessionId: session.id })
       await sideEffectCommitted
       await expect(fs.readFile(targetPath, 'utf8')).resolves.toBe(toolName === 'write_file' ? 'after approved write' : 'after approved edit')
-      if (invalidation === 'request-cancel') runtime.chatCancels.signalChatCancel(requestId)
+      if (invalidation === 'request-cancel') runtime.chatCancels.signalChatCancel(turnId)
       if (invalidation === 'revoke') expect(runtime.toolRevocations.revokeToolForLane('desktop', toolName)).toBe(1)
       if (invalidation === 'authorization-change') {
         const packages = readPolicyPackages(db)
@@ -3290,9 +3411,9 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       } finally { await sink.close() }
     } finally {
       if (!cancellationSent) {
-        if (invalidation === 'request-cancel') runtime.chatCancels.signalChatCancel(requestId)
+        if (invalidation === 'request-cancel') runtime.chatCancels.signalChatCancel(turnId)
         if (invalidation === 'revoke') runtime.toolRevocations.revokeToolForLane('desktop', toolName)
-        if (invalidation === 'authorization-change') runtime.chatCancels.signalChatCancel(requestId)
+        if (invalidation === 'authorization-change') runtime.chatCancels.signalChatCancel(turnId)
       }
       releaseLateResult()
       executor.mockRestore()
@@ -3316,8 +3437,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       reasoning: MODEL_BASELINE[modelId]!.reasoning
     }).routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-target-drift-fixture',
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -3393,8 +3514,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       reasoning: MODEL_BASELINE[modelId]!.reasoning
     }).routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-browser-config-drift-fixture',
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -3486,8 +3607,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
     let hostedProviderCalls = 0
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-runtime-failure-fixture', stream: async function* () {
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages', stream: async function* () {
         hostedProviderCalls += 1
         yield { type: 'text-delta', text: 'must not complete without the safety Runtime' } as const
         yield { type: 'usage', inputTokens: 1, outputTokens: 1 } as const
@@ -3555,8 +3676,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     initialPackages.desktop = 'standard'
     writePolicyPackages(db, initialPackages)
     db.flushSave()
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-browser-late-result-fixture',
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         yield { type: 'tool-call', toolCallId, toolName: 'browser', input: action === 'navigate'
@@ -3609,7 +3730,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       await entered
       cancellationSent = true
       if (invalidation === 'cancel') {
-        runtime.chatCancels.signalChatCancel(requestId)
+        runtime.chatCancels.signalChatCancel(turnId)
       } else if (invalidation === 'revoke') {
         expect(runtime.toolRevocations.revokeToolForLane('desktop', 'browser')).toBe(1)
       } else {
@@ -3638,7 +3759,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
         expect(JSON.stringify(events)).not.toContain(`browser ${action} completed after invalidation`)
       } finally { await sink.close() }
     } finally {
-      if (!cancellationSent) runtime.chatCancels.signalChatCancel(requestId)
+      if (!cancellationSent) runtime.chatCancels.signalChatCancel(turnId)
       releaseLateResult()
       executor.mockRestore()
     }
@@ -3662,8 +3783,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       policyAuthorizationChanges: new PolicyAuthorizationChangeRegistry(),
       chatCancels: new ChatCancelRegistry()
     })
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: `desktop-hosted-browser-${invalidation}-claim-fixture`,
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -3729,7 +3850,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       await atClaim
       expect(executeBrowser).not.toHaveBeenCalled()
       if (invalidation === 'cancel') {
-        runtime.chatCancels.signalChatCancel(requestId)
+        runtime.chatCancels.signalChatCancel(turnId)
       } else if (invalidation === 'revoke') {
         expect(runtime.toolRevocations.revokeToolForLane('desktop', 'browser')).toBe(1)
       } else {
@@ -3773,8 +3894,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
     runtime = createDesktopAgentRuntime()
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-browser-confirm-cancel-fixture',
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         yield { type: 'tool-call', toolCallId, toolName: 'browser', input: { action: 'navigate', mode: 'open', url: 'https://example.com/private' } } as const
@@ -3816,7 +3937,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       const runningTurn = execute(makeSender(), { requestId, turnId, turnStartToken: startToken, sessionId: session.id })
       await approvalStarted
       expect(executeBrowser).not.toHaveBeenCalled()
-      runtime.chatCancels.signalChatCancel(requestId)
+      runtime.chatCancels.signalChatCancel(turnId)
       cancellationSent = true
       await expect(runningTurn).resolves.toMatchObject({ ok: false })
 
@@ -3837,7 +3958,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
         expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId)).toBe(false)
       } finally { await sink.close() }
     } finally {
-      if (!cancellationSent) runtime.chatCancels.signalChatCancel(requestId)
+      if (!cancellationSent) runtime.chatCancels.signalChatCancel(turnId)
       executeBrowser.mockRestore()
     }
   })
@@ -3860,8 +3981,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       reasoning: MODEL_BASELINE[modelId]!.reasoning
     }).routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: `desktop-hosted-${toolName}-config-drift-fixture`,
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         const proposingEdit = toolName === 'edit_file' && providerCalls === 2
@@ -3953,8 +4074,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       reasoning: MODEL_BASELINE[modelId]!.reasoning
     }).routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-read-identity-drift-fixture',
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -4035,8 +4156,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       reasoning: MODEL_BASELINE[modelId]!.reasoning
     }).routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-directory-read-drift-fixture',
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -4124,8 +4245,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-script-config-drift-fixture',
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -4193,8 +4314,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       maxOutputTokens: MODEL_BASELINE[modelId]!.maxTokens, reasoning: MODEL_BASELINE[modelId]!.reasoning
     })
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
-    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-shell-config-drift-fixture',
+    runtime.modelProviders.register({ routeId: route.routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -4267,8 +4388,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       reasoning: MODEL_BASELINE[modelId]!.reasoning
     }).routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-ledger-failure-fake',
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -4336,8 +4457,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       reasoning: MODEL_BASELINE[modelId]!.reasoning
     }).routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-usage-failure-fake',
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         yield { type: 'text-delta', text: 'response whose usage cannot be projected' } as const
@@ -4393,8 +4514,8 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       reasoning: MODEL_BASELINE[modelId]!.reasoning
     }).routeId
     runtime = createAgentRuntime({ builtinRegistry: createBuiltinToolRegistry() })
-    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'test', modelId, endpoint }, {
-      providerId: 'desktop-hosted-last-valid-usage-fake',
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId, endpoint }, {
+      providerId: 'pi-ai-anthropic-messages',
       stream: async function* () {
         providerCalls += 1
         if (providerCalls === 1) {
@@ -4439,4 +4560,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const history = await new SqliteAgentHistory(getDbConnection(db)).read('hosted-last-valid-usage-request')
     expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-failed', payload: { usage: { inputTokens: 1000, outputTokens: 50 } } })
   })
+
+
+
 })

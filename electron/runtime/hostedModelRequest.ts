@@ -41,19 +41,37 @@ export function createHostedModelRequest(input: Readonly<{
   }
 }
 
+/** Extract the actual user message when a repaired user surface also carries preceding tool results. */
+export function canonicalHostedRequiredUserMessage(message: ClaudeContentBlockMessage): CanonicalModelMessage | undefined {
+  return toCanonicalModelMessages([message as never]).reverse().find((candidate) => candidate.role === 'user')
+}
+
 /** Bind the persisted current-user identity to its unique canonical request message. */
 export function bindHostedRequiredUserMessage(input: Readonly<{
   id: string
   originalMessages: readonly ClaudeContentBlockMessage[]
   requestMessages: readonly CanonicalModelMessage[]
 }>): Readonly<{ id: string; message: CanonicalModelMessage }> | undefined {
-  const original = input.originalMessages.find((message) => message.role === 'user' && message.id === input.id)
-  if (!original) return undefined
-  const [required] = toCanonicalModelMessages([original as never])
+  const sourceIndex = input.originalMessages.findIndex((message) => message.role === 'user' && message.id === input.id)
+  if (sourceIndex < 0) return undefined
+  const original = input.originalMessages[sourceIndex]!
+  const required = canonicalHostedRequiredUserMessage(original)
   if (!required || required.role !== 'user') return undefined
-  const contentKey = (message: CanonicalModelMessage) => JSON.stringify(message.role === 'user' ? message.content : undefined)
+  const contentKey = (message: CanonicalModelMessage) => {
+    if (message.role !== 'user') return undefined
+    const content = typeof message.content === 'string'
+      ? [{ type: 'text', text: message.content }]
+      : message.content.map((block) => block.type === 'text' ? { type: 'text', text: block.text } : block)
+    return JSON.stringify(content)
+  }
   const expected = contentKey(required)
-  const matches = input.requestMessages.filter((message) => message.role === 'user' && contentKey(message) === expected)
-  if (matches.length !== 1) return undefined
-  return { id: input.id, message: matches[0]! }
+  const beforeCount = input.originalMessages.slice(0, sourceIndex)
+    .reduce((count, message) => count + toCanonicalModelMessages([message as never]).length, 0)
+  const originalCanonical = toCanonicalModelMessages([original as never])
+  const requiredOffset = originalCanonical.findIndex((message) => message.role === 'user' && contentKey(message) === expected)
+  if (requiredOffset < 0) return undefined
+  const requestTranscript = input.requestMessages.filter((message) => message.role !== 'system')
+  const candidate = requestTranscript[beforeCount + requiredOffset]
+  if (!candidate || candidate.role !== 'user' || contentKey(candidate) !== expected) return undefined
+  return { id: input.id, message: candidate }
 }

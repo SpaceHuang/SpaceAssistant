@@ -390,9 +390,12 @@ export class CallAdmissionGate {
         }
         waiter.onAbort = cancel
         if (options.signal) waiter.cleanup = () => options.signal!.removeEventListener('abort', cancel)
+        // A parked turn keeps its original execution deadline. The standalone resume cap is
+        // only a fallback for callers without one; a fixed short cap can terminate a valid
+        // approval merely because unrelated turns still occupy the admission slots.
         const remaining = options.deadlineAt === undefined
           ? this.resumeTimeoutMs
-          : Math.min(this.resumeTimeoutMs, Math.max(1, options.deadlineAt - this.nowFn()))
+          : Math.max(1, options.deadlineAt - this.nowFn())
         waiter.timer = setTimeout(() => {
           const index = this.resumeWaiters.indexOf(waiter)
           if (index < 0) return
@@ -415,9 +418,11 @@ export class CallAdmissionGate {
           if (index >= 0) this.resumeWaiters.splice(index, 1)
           if (waiter.timer) clearTimeout(waiter.timer)
           waiter.cleanup?.()
-          this.parked.delete(handle.token)
           this.state = previousState
-          resolve({ ok: false, verdict: 'rejected', cause: 'persistence-failed', retryable: false })
+          // Queue insertion did not commit, so keep the accepted parked identity and let
+          // its owner retry. Consuming it here turns a transient SQLite error into a lost
+          // admission lease and makes every SDK retry fail as stale-park-handle.
+          resolve({ ok: false, verdict: 'rejected', cause: 'persistence-failed', retryable: true })
         }
       })
     }

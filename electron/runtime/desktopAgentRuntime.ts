@@ -64,7 +64,7 @@ export function createDesktopAgentRuntime(): ReturnType<typeof createAgentRuntim
     mcpGate: new McpConcurrencyGate(),
     builtinRegistry: createBuiltinToolRegistry(),
     approvalAdmission: new ApprovalAdmission({ concurrency: 4, queueLimit: 32, maxInFlightPerParent: 2 }),
-    invocationRuntime: new InvocationRuntime('desktop-agent-runtime', { maxParkedTurns: 32 }),
+    invocationRuntime: new InvocationRuntime('desktop-agent-runtime'),
     resourceLocks: new ResourceLockRegistry(),
     modelProviders,
     toolExecutionConcurrency: 2

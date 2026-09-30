@@ -24,6 +24,7 @@ import type { AppDatabase } from './database'
 import { getDbConnection } from './database'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { HistoryCorruptionError } from '../packages/agent-sdk/src/history'
+import { decodeTerminalOutcome } from './runtime/terminalOutcome'
 
 /** 将 coordinator 的持久化端口绑定到 SQLite；requestId 幂等必须跨进程重启由 turns 表保证。 */
 export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
@@ -69,11 +70,17 @@ export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
     recoverTurn: (turnId, assistantMessageId) => {
       const turn = getPersistedTurn(db, turnId)
       const assistant = getMessage(db, assistantMessageId)
+      const sessionInvocationIds = turn ? history.listInvocationIdsForSession(turn.sessionId) : []
+      // Newly accepted turns own a canonical stream keyed by turnId. Read the
+      // requestId stream only as a compatibility fallback for pre-cutover data.
+      const historyInvocationId = turn && sessionInvocationIds.includes(turn.turnId)
+        ? turn.turnId
+        : turn?.requestId
       let completedHistory: ReturnType<SqliteAgentHistory['readCompletedInvocationForSession']>
       let completedToolCalls: ReturnType<SqliteAgentHistory['readCompletedToolCallsForSession']>
       try {
-        completedHistory = turn?.sessionId ? history.readCompletedInvocationForSession(turn.requestId, turn.sessionId, turn.turnId) : undefined
-        completedToolCalls = turn?.sessionId ? history.readCompletedToolCallsForSession(turn.requestId, turn.sessionId, turn.turnId) : undefined
+        completedHistory = turn?.sessionId && historyInvocationId ? history.readCompletedInvocationForSession(historyInvocationId, turn.sessionId, turn.turnId) : undefined
+        completedToolCalls = turn?.sessionId && historyInvocationId ? history.readCompletedToolCallsForSession(historyInvocationId, turn.sessionId, turn.turnId) : undefined
       } catch (error) {
         if (!(error instanceof HistoryCorruptionError)) throw error
         // Corrupt canonical history cannot authorize success. Preserve startup recovery by
@@ -81,7 +88,7 @@ export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
         return recoverPersistedTurn(db, turnId, assistantMessageId)
       }
       const canonicalCompleted = Boolean(turn && turn.assistantMessageId === assistantMessageId &&
-        turn.sessionId && assistant && !assistant.toolCalls?.some((tool) => ['calling', 'confirming', 'executing'].includes(tool.status)) &&
+        turn.sessionId && assistant &&
         completedHistory && completedToolCalls)
       if (canonicalCompleted && recoverPersistedTurn(db, turnId, assistantMessageId, {
         completed: true,
@@ -89,17 +96,17 @@ export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
         completedUsage: completedHistory?.usage,
         completedToolCalls
       })) return 'completed'
-      let canonicalOutcome: 'failed' | 'cancelled' | 'recovered' | undefined
+      let canonicalOutcome: 'failed' | 'cancelled' | 'timed-out' | 'recovered' | undefined
       try {
-        if (turn && turn.assistantMessageId === assistantMessageId && history.listInvocationIdsForSession(turn.sessionId).includes(turn.requestId)) {
-          const events = history.readSync(turn.requestId).events
+        if (turn && historyInvocationId && turn.assistantMessageId === assistantMessageId && sessionInvocationIds.includes(historyInvocationId)) {
+          const events = history.readSync(historyInvocationId).events
           const terminal = events.at(-1)
-          if (terminal?.turnId === turn.turnId && terminal.kind === 'invocation-failed') canonicalOutcome = 'failed'
-          else if (terminal?.turnId === turn.turnId && terminal?.kind === 'invocation-interrupted') {
-            const status = terminal.payload && typeof terminal.payload === 'object'
-              ? (terminal.payload as { status?: unknown }).status
-              : undefined
-            canonicalOutcome = status === 'cancelled' ? 'cancelled' : 'recovered'
+          if (terminal?.turnId === turn.turnId) {
+            const decoded = decodeTerminalOutcome(terminal)
+            if (decoded === 'failed') canonicalOutcome = 'failed'
+            else if (decoded === 'timed_out') canonicalOutcome = 'timed-out'
+            else if (decoded === 'cancelled') canonicalOutcome = 'cancelled'
+            else if (decoded === 'interrupted') canonicalOutcome = 'recovered'
           }
         }
       } catch (error) {

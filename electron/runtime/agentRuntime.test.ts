@@ -97,8 +97,8 @@ describe('createAgentRuntime(偏差 18:模块级状态 → 实例)', () => {
   it('工具撤回注册表互不串:a 实例登记的请求不受 b 实例撤回影响', () => {
     const a = createAgentRuntime(assembleComponents())
     const b = createAgentRuntime(assembleComponents())
-    a.toolRevocations.registerToolRevocationRequest('req-a', 'desktop')
-    b.toolRevocations.registerToolRevocationRequest('req-b', 'desktop')
+    a.toolRevocations.registerToolRevocationRequest('req-a', 'desktop', 'req-a')
+    b.toolRevocations.registerToolRevocationRequest('req-b', 'desktop', 'req-b')
     b.toolRevocations.revokeToolForAllLanes('run_shell')
     expect(a.toolRevocations.isToolRevoked('req-a', 'run_shell')).toBe(false)
     expect(b.toolRevocations.isToolRevoked('req-b', 'run_shell')).toBe(true)
@@ -141,8 +141,8 @@ describe('默认 runtime 装配与兼容转发(行为等价)', () => {
     legacySignalChatCancel('req-legacy')
     expect(signal.aborted).toBe(true)
 
-    legacyRegisterToolRevocationRequest('req-legacy', 'desktop')
-    expect(rt.toolRevocations.isToolRevoked('req-legacy', 'run_shell')).toBe(false)
+    legacyRegisterToolRevocationRequest('req-legacy', 'desktop', 'turn-legacy')
+    expect(rt.toolRevocations.isToolRevoked('req-legacy', 'run_shell', 'turn-legacy')).toBe(false)
   })
 
   it('setDefaultAgentRuntime 后:getSecurityAuditLog 返回 runtime 的审计实例', () => {

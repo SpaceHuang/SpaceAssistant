@@ -12,6 +12,7 @@ import { InMemorySafetyPermitStore } from '../../packages/agent-sdk/src/safetyPe
 import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
 import { createPermitBoundToolExecutionPort } from '../../packages/agent-sdk/src/toolExecutionPort'
 import { runMigrations } from '../database/migrations'
+import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, getSessionEventSink, readSessionEvents } from '../sessionEvents'
 
@@ -29,6 +30,108 @@ const event = (id: string, sequence: number): HistoryEvent => ({
 })
 
 describe('SqliteAgentHistory', () => {
+  it.each(['before-commit', 'after-commit-ack-lost'] as const)('settles SDK terminal History append failure against real SQLite: %s', async (failurePoint) => {
+    const conn = createDb()
+    const durableHistory = new SqliteAgentHistory(conn)
+    const registry = new ModelProviderRegistry()
+    let providerCalls = 0
+    registry.register({ routeId: `terminal-${failurePoint}`, protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test' }, {
+      providerId: 'terminal-fault-provider', stream: async function* () {
+        providerCalls += 1
+        yield { type: 'text-delta', text: 'accepted answer' }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'stop' }
+      }
+    })
+    const history = failurePoint === 'before-commit'
+      ? (() => {
+          conn.exec(`CREATE TRIGGER fail_completion_terminal BEFORE INSERT ON agent_history_events
+            WHEN NEW.kind='invocation-completed' BEGIN SELECT RAISE(ABORT, 'injected terminal History failure'); END`)
+          return durableHistory
+        })()
+      : {
+          appendBatch: async (events: readonly HistoryEvent[], version: number) => {
+            const result = await durableHistory.appendBatch(events, version)
+            if (events.some((entry) => entry.kind === 'invocation-completed')) throw new Error('completion acknowledgement lost')
+            return result
+          },
+          read: (invocationId: string) => durableHistory.read(invocationId)
+        }
+    const permits = new InMemorySafetyPermitStore()
+    const onTurnFinished = vi.fn()
+
+    const run = runAgentTurn({
+      registry, routeId: `terminal-${failurePoint}`, invocationId: `terminal-${failurePoint}`, turnId: `turn-${failurePoint}`,
+      request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 10 }, maxModelTurns: 1, history,
+      safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(),
+      toolExecution: createPermitBoundToolExecutionPort({
+        permits, admission: new InMemoryExecutionAdmissionCoordinator(),
+        resolveExpected: async () => { throw new Error('tool execution is not expected') },
+        execute: async () => ({ output: undefined })
+      }),
+      observer: { onTurnFinished }
+    })
+
+    if (failurePoint === 'before-commit') await expect(run).rejects.toThrow('injected terminal History failure')
+    else await expect(run).resolves.toMatchObject({ text: 'accepted answer' })
+
+    const events = (await durableHistory.read(`terminal-${failurePoint}`)).events
+    const terminals = events.filter((entry) => ['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(entry.kind))
+    expect(providerCalls).toBe(1)
+    expect(terminals).toHaveLength(1)
+    expect(terminals[0]?.kind).toBe(failurePoint === 'before-commit' ? 'invocation-failed' : 'invocation-completed')
+    expect(onTurnFinished).toHaveBeenCalledTimes(failurePoint === 'before-commit' ? 0 : 1)
+    conn.close()
+  })
+
+  it('resolves requestId to the canonical turn stream from the durable AcceptedTurn ledger', async () => {
+    const conn = createDb()
+    const acceptedTurn = createAcceptedTurn({
+      turnId: 'approval-turn', requestId: 'approval-request', sessionId: 'approval-session', lane: 'automation',
+      startToken: 'approval-start', currentUserMessageId: 'approval-user', transcriptVersion: 0, config: { lane: 'automation' }
+    })
+    conn.prepare('INSERT INTO accepted_turn_contexts(turn_id,session_id,request_id,accepted_turn_json,created_at) VALUES(?,?,?,?,?)')
+      .run(acceptedTurn.turnId, acceptedTurn.sessionId, acceptedTurn.requestId, JSON.stringify(acceptedTurn), 1)
+    const history = new SqliteAgentHistory(conn, 1, Date.now, 'approval-session')
+    await history.appendBatch([{ ...event('approval-event', 1), invocationId: acceptedTurn.turnId, turnId: acceptedTurn.turnId }], 0)
+
+    expect(conn.prepare('SELECT request_id,turn_id FROM accepted_turn_contexts').all()).toEqual([{ request_id: 'approval-request', turn_id: 'approval-turn' }])
+    expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='accepted_turn_contexts'").get()).toBeDefined()
+    expect(history.readSync('approval-request')).toMatchObject({ invocationId: 'approval-turn', events: [{ turnId: 'approval-turn' }] })
+    conn.close()
+  })
+
+  it('resolves a shared requestId only to the turn owned by this session', async () => {
+    const conn = createDb()
+    conn.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY NOT NULL);
+      CREATE TABLE messages (id TEXT PRIMARY KEY NOT NULL, session_id TEXT NOT NULL, role TEXT, content TEXT);
+      CREATE TABLE turns (turn_id TEXT PRIMARY KEY NOT NULL, request_id TEXT NOT NULL, session_id TEXT NOT NULL, assistant_message_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(session_id, request_id));`)
+    for (const sessionId of ['session-a', 'session-b']) {
+      conn.prepare('INSERT INTO sessions(id) VALUES(?)').run(sessionId)
+      const messageId = `${sessionId}-assistant`
+      conn.prepare("INSERT INTO messages(id,session_id,role,content) VALUES(?,?,'assistant','')").run(messageId, sessionId)
+      conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at)
+        VALUES(?, 'same-request', ?, ?, 'completed', 1, 1)`).run(`${sessionId}-turn`, sessionId, messageId)
+      const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
+      await history.appendBatch([
+        { ...event(`${sessionId}-context`, 1), invocationId: `${sessionId}-turn`, turnId: `${sessionId}-turn`, kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: sessionId }] } },
+        { ...event(`${sessionId}-terminal`, 2), invocationId: `${sessionId}-turn`, turnId: `${sessionId}-turn`, kind: 'invocation-completed', payload: { status: 'completed' } }
+      ], 0)
+    }
+
+    const sessionASnapshot = new SqliteAgentHistory(conn, 1, Date.now, 'session-a').readSync('same-request')
+    const sessionBSnapshot = new SqliteAgentHistory(conn, 1, Date.now, 'session-b').readSync('same-request')
+    expect(sessionASnapshot.invocationId).toBe('session-a-turn')
+    expect(sessionASnapshot.events[0]?.payload).toMatchObject({ messages: [{ role: 'user', content: 'session-a' }] })
+    expect(sessionBSnapshot.invocationId).toBe('session-b-turn')
+    expect(sessionBSnapshot.events[0]?.payload).toMatchObject({ messages: [{ role: 'user', content: 'session-b' }] })
+    expect(() => new SqliteAgentHistory(conn, 1, Date.now, 'session-a').readSync('session-b-turn'))
+      .toThrow(/does not belong to session/)
+    expect(() => new SqliteAgentHistory(conn).readSync('same-request')).toThrow(/maps to multiple session turns/)
+    conn.close()
+  })
+
   it('indexes invocations by owning session and rejects rebinding a stream to another session', async () => {
     const conn = createDb()
     const sessionA = new SqliteAgentHistory(conn, 1, Date.now, 'session-a')
@@ -1578,6 +1681,7 @@ describe('SqliteAgentHistory', () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn)
     const location = { workDir: '/workspace', sessionId: 'session-invalid-request', createdAt: 1000 }
+    const sensitiveSystemPrompt = 'PRIVATE_SYSTEM_PROMPT_SHOULD_NOT_ENTER_RECOVERY_DIAGNOSTICS'
     const repairModelRequestLedger = vi.fn(async () => undefined)
     const repairUsageLedger = vi.fn(async () => undefined)
     const requestRepairError = vi.fn()
@@ -1586,7 +1690,7 @@ describe('SqliteAgentHistory', () => {
         ...event('request-started-invalid', 1), kind: 'model-request-started',
         payload: { requestId: 'wrong-request-id', modelTurn: 1, attempt: 1, routeId: 'route-1',
           requestSnapshot: { route: { routeId: 'route-1' }, request: { messages: [] } },
-          sessionLedger: { location, requestHeader: { requestId: 'wrong-request-id', attempt: 1 }, requestContext: { requestId: 'wrong-request-id', attempt: 1 } } }
+          sessionLedger: { location, requestHeader: { requestId: 'wrong-request-id', attempt: 1, system: sensitiveSystemPrompt, tools: [{ name: 'private-tool-definition' }] }, requestContext: { requestId: 'wrong-request-id', attempt: 1, system: sensitiveSystemPrompt } } }
       },
       {
         ...event('response-after-invalid-request', 2), kind: 'model-response-committed',
@@ -1598,6 +1702,7 @@ describe('SqliteAgentHistory', () => {
     await history.recoverInterruptedInvocations({ repairModelRequestLedger, repairUsageLedger, onModelRequestLedgerRepairError: requestRepairError })
 
     expect(requestRepairError).toHaveBeenCalledTimes(1)
+    expect(String(requestRepairError.mock.calls[0]?.[0])).not.toContain(sensitiveSystemPrompt)
     expect(repairModelRequestLedger).not.toHaveBeenCalled()
     expect(repairUsageLedger).not.toHaveBeenCalled()
     conn.close()

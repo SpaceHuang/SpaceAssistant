@@ -340,10 +340,73 @@ export function updateSession(
 export function deleteSession(db: AppDatabase, sessionId: string, options?: { flush?: boolean }): void {
   const conn = getDbConnection(db)
   runInTransaction(conn, () => {
+    // v21 uses the same evidence rules when backfilling session ownership. For legacy
+    // streams with no bound session_id, only a single, consistent owner is sufficient.
+    const legacyHistoryOwners = conn.prepare(`
+      WITH owner_candidates AS (
+        SELECT request_id AS invocation_id, session_id
+        FROM turns
+        WHERE trim(session_id) <> ''
+        UNION
+        SELECT invocation_id, json_extract(payload_json, '$.sessionId') AS session_id
+        FROM agent_history_events
+        WHERE kind = 'session-input-committed'
+          AND sequence = 1
+          AND json_valid(payload_json) = 1
+          AND json_type(payload_json, '$.sessionId') = 'text'
+          AND trim(json_extract(payload_json, '$.sessionId')) <> ''
+          AND json_type(payload_json, '$.messageId') = 'text'
+          AND trim(json_extract(payload_json, '$.messageId')) <> ''
+          AND json_extract(payload_json, '$.role') = 'user'
+          AND json_type(payload_json, '$.inputFingerprint') = 'text'
+          AND trim(json_extract(payload_json, '$.inputFingerprint')) <> ''
+        UNION
+        SELECT invocation_id, json_extract(payload_json, '$.sessionLedger.location.sessionId') AS session_id
+        FROM agent_history_events
+        WHERE kind IN ('transcript-compacted', 'invocation-completed', 'invocation-failed', 'invocation-interrupted')
+          AND json_valid(payload_json) = 1
+          AND json_type(payload_json, '$.sessionLedger.location.sessionId') = 'text'
+          AND trim(json_extract(payload_json, '$.sessionLedger.location.sessionId')) <> ''
+          AND json_type(payload_json, '$.sessionLedger.location.workDir') = 'text'
+          AND trim(json_extract(payload_json, '$.sessionLedger.location.workDir')) <> ''
+          AND json_type(payload_json, '$.sessionLedger.location.createdAt') IN ('integer', 'real')
+      ), unique_owners AS (
+        SELECT invocation_id, MIN(session_id) AS session_id
+        FROM owner_candidates
+        GROUP BY invocation_id
+        HAVING COUNT(DISTINCT session_id) = 1
+      )
+      SELECT streams.invocation_id
+      FROM agent_history_streams AS streams
+      WHERE streams.session_id = ?
+         OR (streams.session_id IS NULL AND streams.invocation_id IN (
+           SELECT invocation_id FROM unique_owners WHERE session_id = ?
+         ))
+      UNION
+      SELECT owners.invocation_id
+      FROM unique_owners AS owners
+      LEFT JOIN agent_history_streams AS streams ON streams.invocation_id = owners.invocation_id
+      WHERE owners.session_id = ?
+        AND (streams.invocation_id IS NULL OR streams.session_id IS NULL)
+    `).all(sessionId, sessionId, sessionId) as Array<{ invocation_id: string }>
+
+    const deleteHistoryEvents = conn.prepare('DELETE FROM agent_history_events WHERE invocation_id = ?')
+    const deleteHistoryStream = conn.prepare('DELETE FROM agent_history_streams WHERE invocation_id = ?')
+    for (const { invocation_id } of legacyHistoryOwners) {
+      deleteHistoryEvents.run(invocation_id)
+      deleteHistoryStream.run(invocation_id)
+    }
+
+    conn.prepare('DELETE FROM session_transcript_reconciliations WHERE session_id = ?').run(sessionId)
+    conn.prepare('DELETE FROM session_transcript_entries WHERE session_id = ?').run(sessionId)
+    conn.prepare('DELETE FROM session_transcript_checkpoints WHERE session_id = ?').run(sessionId)
+    conn.prepare('DELETE FROM accepted_turn_contexts WHERE session_id = ?').run(sessionId)
+    conn.prepare('DELETE FROM session_execution_queue WHERE session_id = ?').run(sessionId)
+    conn.prepare('DELETE FROM session_execution_claims WHERE session_id = ?').run(sessionId)
+    conn.prepare('DELETE FROM session_usages WHERE session_id = ?').run(sessionId)
     conn.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId)
     bumpScopeVersionInTx(db, 'session-list')
   })
-  deleteSessionUsage(db, sessionId)
   if (options?.flush !== false) db.flushSave()
 }
 
@@ -728,7 +791,7 @@ export function updatePersistedTurnState(db: AppDatabase, turnId: string, state:
 
 export function recoverPersistedTurn(db: AppDatabase, turnId: string, assistantMessageId: string, options: {
   completed?: boolean
-  outcome?: 'completed' | 'failed' | 'cancelled' | 'recovered'
+  outcome?: 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'recovered' | 'commit-uncertain'
   completedOutputText?: string
   completedUsage?: unknown
   completedToolCalls?: Message['toolCalls']
@@ -740,7 +803,10 @@ export function recoverPersistedTurn(db: AppDatabase, turnId: string, assistantM
     const message = conn.prepare("SELECT status FROM messages WHERE id = ? AND status IN ('streaming', 'failed')").get(assistantMessageId)
     if (!message) return false
     const assistant = getMessage(db, assistantMessageId)
-    if (options.completed && assistant?.toolCalls?.some((tool) => ['calling', 'confirming', 'executing'].includes(tool.status))) return false
+    // A completed canonical History may repair a stale executing tool projection, but
+    // only when the caller supplied the fully reconciled History tool-call snapshot.
+    if (options.completed && options.completedToolCalls === undefined &&
+      assistant?.toolCalls?.some((tool) => ['calling', 'confirming', 'executing'].includes(tool.status))) return false
     const interruptedToolCalls = assistant?.toolCalls?.map((tool) => {
       if (options.completed) return tool
       if (tool.status === 'completed' || tool.status === 'failed' || tool.status === 'rejected') return tool
@@ -967,12 +1033,12 @@ function appendSessionInputHistoryInTransaction(
   input: { requestId: string; turnId: string; sessionId: string; user: Message }
 ): void {
   const event: HistoryEvent = {
-    invocationId: input.requestId,
+    invocationId: input.turnId,
     turnId: input.turnId,
     sequence: 1,
     schemaVersion: 1,
-    eventId: `${input.requestId}:session-input`,
-    idempotencyKey: `${input.requestId}:session-input`,
+    eventId: `${input.turnId}:session-input`,
+    idempotencyKey: `${input.turnId}:session-input`,
     kind: 'session-input-committed',
     payload: {
       sessionId: input.sessionId,

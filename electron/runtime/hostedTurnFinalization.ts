@@ -21,7 +21,8 @@ export type HostedFailureUsage = Readonly<{
   cacheCreationInputTokens?: number
 }>
 
-export function hostedTerminalSessionEventReason(outcome: UsageTurnOutcome): 'completed' | 'failed' | 'cancelled' | 'interrupted' {
+export function hostedTerminalSessionEventReason(outcome: UsageTurnOutcome): 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'commit_uncertain' {
+  if (outcome === 'commit-uncertain') return 'commit_uncertain'
   if (outcome === 'completed' || outcome === 'cancelled' || outcome === 'interrupted') return outcome
   return 'failed'
 }
@@ -60,7 +61,7 @@ export class HostedTurnFinalizedError extends Error {
   readonly historyTerminalCommitted = true
   constructor(
     readonly cause: unknown,
-    readonly outcome: Exclude<UsageTurnOutcome, 'completed' | 'recovered' | 'timed-out'>,
+    readonly outcome: Exclude<UsageTurnOutcome, 'completed' | 'recovered'>,
     readonly usage?: HostedFailureUsage
   ) {
     super(cause instanceof Error ? cause.message : String(cause))

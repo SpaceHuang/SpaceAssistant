@@ -52,7 +52,7 @@ describe('createDesktopAgentRuntime(生产装配 smoke)', () => {
 
   it('toolRevocations 撤回事实生效(非恒 false 桩)', () => {
     const rt = createDesktopAgentRuntime()
-    rt.toolRevocations.registerToolRevocationRequest('rev-req', 'desktop')
+    rt.toolRevocations.registerToolRevocationRequest('rev-req', 'desktop', 'rev-req')
     rt.toolRevocations.revokeToolForLane('desktop', 'run_shell')
     expect(rt.toolRevocations.isToolRevoked('rev-req', 'run_shell')).toBe(true)
   })

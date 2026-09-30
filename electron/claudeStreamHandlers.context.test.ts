@@ -66,7 +66,7 @@ describe('loadAuthoritativeTurnContext', () => {
       turn: { turnId: 'accepted-owner-turn', requestId: 'accepted-owner-request', sessionId: session.id, assistantMessageId: 'accepted-owner-assistant', state: 'prepared', startToken: 'accepted-owner-token' }
     })
     getDbConnection(db).prepare("UPDATE agent_history_events SET turn_id = ? WHERE invocation_id = ? AND kind = 'session-input-committed'")
-      .run('foreign-turn', 'accepted-owner-request')
+      .run('foreign-turn', 'accepted-owner-turn')
 
     expect(() => loadAuthoritativeTurnContext(db, 'accepted-owner-turn', session.id, 'accepted-owner-request', 'accepted-owner-token'))
       .toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
@@ -85,7 +85,7 @@ describe('loadAuthoritativeTurnContext', () => {
     const history = new SqliteAgentHistory(conn)
     const marker = history.readSync('marker-order-request').events[0]!
     conn.prepare('UPDATE agent_history_events SET kind = ?, payload_json = ? WHERE invocation_id = ? AND sequence = 1')
-      .run('invocation-context-committed', JSON.stringify({ messages: [] }), 'marker-order-request')
+      .run('invocation-context-committed', JSON.stringify({ messages: [] }), 'marker-order-turn')
     await history.appendBatch([{
       ...marker, sequence: 2, eventId: 'late-input-marker', idempotencyKey: 'late-input-marker'
     }], 1)
@@ -122,8 +122,8 @@ describe('loadAuthoritativeTurnContext', () => {
       assistant: { id: 'missing-stream-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
       turn: { turnId: 'missing-stream-turn', requestId: 'missing-stream-request', sessionId: session.id, assistantMessageId: 'missing-stream-assistant', state: 'prepared', startToken: 'missing-stream-token' }
     })
-    getDbConnection(db).prepare('DELETE FROM agent_history_events WHERE invocation_id = ?').run('missing-stream-request')
-    getDbConnection(db).prepare('DELETE FROM agent_history_streams WHERE invocation_id = ?').run('missing-stream-request')
+    getDbConnection(db).prepare('DELETE FROM agent_history_events WHERE invocation_id = ?').run('missing-stream-turn')
+    getDbConnection(db).prepare('DELETE FROM agent_history_streams WHERE invocation_id = ?').run('missing-stream-turn')
 
     expect(() => loadAuthoritativeTurnContext(db, 'missing-stream-turn', session.id, 'missing-stream-request', 'missing-stream-token'))
       .toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')

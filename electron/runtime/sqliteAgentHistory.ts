@@ -17,6 +17,7 @@ import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHis
 import { sanitizeCapabilityParamsForDisplay } from '../../src/shared/capabilityParamSanitize'
 import { toolIdToOpenAiCompatibleApiToolName } from '../../src/shared/anthropicToolSanitize'
 import { normalizeExternalToolName } from '../../src/shared/toolNameCompatibility'
+import { decodeTerminalOutcome } from './terminalOutcome'
 
 type StreamRow = { invocation_id: string; version: number; schema_version: number; session_id: string | null }
 type EventRow = {
@@ -82,10 +83,10 @@ export class SqliteAgentHistory implements HistoryPort {
       // Failed turns are closed attempts. Keep searching for the last complete conversation base.
       if (terminal.kind === 'invocation-failed') continue
       if (terminal.kind === 'invocation-interrupted') {
-        const payload = terminal.payload && typeof terminal.payload === 'object' ? terminal.payload as Record<string, unknown> : {}
+        const outcome = decodeTerminalOutcome(terminal)
         // User cancellation has a known outcome. The Hosted cutover still validates that the
         // canonical transcript can be rebuilt and is a prefix of the next request.
-        if (payload.status === 'cancelled' && snapshot.events.some(({ kind }) => kind === 'invocation-context-committed' || kind === 'transcript-compacted')) {
+        if (outcome === 'cancelled' && snapshot.events.some(({ kind }) => kind === 'invocation-context-committed' || kind === 'transcript-compacted')) {
           return { kind: 'cancelled', snapshot }
         }
         return { kind: 'unavailable', invocationId }
@@ -104,11 +105,44 @@ export class SqliteAgentHistory implements HistoryPort {
 
   /** Synchronous read for startup coordinators whose recovery contract is intentionally synchronous. */
   readSync(invocationId: string): HistorySnapshot {
-    const stream = this.conn.prepare('SELECT invocation_id, version, schema_version, session_id FROM agent_history_streams WHERE invocation_id = ?').get(invocationId) as StreamRow | undefined
+    // Compatibility adapter: callers holding an accepted requestId can still read its
+    // canonical turn stream. Exact stream IDs always win for legacy records.
+    const exactStream = this.conn.prepare('SELECT invocation_id, version, schema_version, session_id FROM agent_history_streams WHERE invocation_id = ?').get(invocationId) as StreamRow | undefined
+    if (exactStream && this.sessionId && exactStream.session_id !== this.sessionId) {
+      throw new HistoryBatchError(`invocation ${invocationId} does not belong to session ${this.sessionId}`)
+    }
+    const hasTurnTable = Boolean(this.conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'turns'").get())
+    const hasAcceptedTurnTable = Boolean(this.conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'accepted_turn_contexts'").get())
+    let mappedInvocationId: string | undefined
+    if (!exactStream && hasTurnTable) {
+      const turnMappings = this.conn.prepare(`
+      SELECT turns.turn_id AS turnId FROM turns
+      JOIN agent_history_streams streams ON streams.invocation_id = turns.turn_id
+      WHERE turns.request_id = ? AND (? IS NULL OR turns.session_id = ?)
+      ORDER BY turns.rowid DESC LIMIT 2
+      `).all(invocationId, this.sessionId ?? null, this.sessionId ?? null) as Array<{ turnId: string }>
+      if (!this.sessionId && turnMappings.length > 1) {
+        throw new HistoryBatchError(`requestId ${invocationId} maps to multiple session turns`)
+      }
+      mappedInvocationId = turnMappings[0]?.turnId
+    }
+    if (!exactStream && !mappedInvocationId && hasAcceptedTurnTable) {
+      const acceptedMappings = this.conn.prepare(`
+        SELECT turn_id FROM accepted_turn_contexts
+        WHERE request_id = ? AND (? IS NULL OR session_id = ?)
+        ORDER BY created_at DESC LIMIT 2
+      `).all(invocationId, this.sessionId ?? null, this.sessionId ?? null) as Array<{ turn_id: string }>
+      if (!this.sessionId && acceptedMappings.length > 1) {
+        throw new HistoryBatchError(`requestId ${invocationId} maps to multiple accepted turns`)
+      }
+      if (acceptedMappings.length === 1) mappedInvocationId = acceptedMappings[0]!.turn_id
+    }
+    const resolvedInvocationId = exactStream ? invocationId : mappedInvocationId ?? invocationId
+    const stream = exactStream ?? this.conn.prepare('SELECT invocation_id, version, schema_version, session_id FROM agent_history_streams WHERE invocation_id = ?').get(resolvedInvocationId) as StreamRow | undefined
     const rows = this.conn.prepare(`
       SELECT invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json
       FROM agent_history_events WHERE invocation_id = ? ORDER BY sequence ASC
-    `).all(invocationId) as EventRow[]
+    `).all(resolvedInvocationId) as EventRow[]
     if (!stream && rows.length > 0) throw new HistoryCorruptionError(invocationId, 'events exist without a stream record')
     if (stream && stream.schema_version !== this.schemaVersion) {
       throw new HistoryCorruptionError(invocationId, `unsupported schema version ${stream.schema_version} (adapter supports ${this.schemaVersion})`)
@@ -128,7 +162,7 @@ export class SqliteAgentHistory implements HistoryPort {
     }
     try { validateHistoryTransition([], events) }
     catch (error) { throw new HistoryCorruptionError(invocationId, error instanceof Error ? error.message : String(error)) }
-    return { invocationId, version: stream?.version ?? 0, schemaVersion: stream?.schema_version ?? this.schemaVersion, events }
+    return { invocationId: stream?.invocation_id ?? invocationId, version: stream?.version ?? 0, schemaVersion: stream?.schema_version ?? this.schemaVersion, events }
   }
 
   /** Trust a completed terminal only when the invocation is owned by this session or has no migrated owner. */
@@ -140,7 +174,7 @@ export class SqliteAgentHistory implements HistoryPort {
   readCompletedInvocationForSession(invocationId: string, sessionId: string, expectedTurnId?: string): { outputText?: string; usage?: unknown } | undefined {
     try {
       const snapshot = this.readSync(invocationId)
-      const stream = this.conn.prepare('SELECT session_id FROM agent_history_streams WHERE invocation_id = ?').get(invocationId) as { session_id: string | null } | undefined
+      const stream = this.conn.prepare('SELECT session_id FROM agent_history_streams WHERE invocation_id = ?').get(snapshot.invocationId) as { session_id: string | null } | undefined
       if (!stream || (stream.session_id !== null && stream.session_id !== sessionId)) return undefined
       const terminal = snapshot.events.at(-1)
       if (terminal?.kind !== 'invocation-completed' || !terminal.payload || typeof terminal.payload !== 'object' ||
@@ -163,7 +197,7 @@ export class SqliteAgentHistory implements HistoryPort {
   readCompletedToolCallsForSession(invocationId: string, sessionId: string, expectedTurnId: string): import('../../src/shared/domainTypes').ToolCallRecord[] | undefined {
     try {
       const snapshot = this.readSync(invocationId)
-      const stream = this.conn.prepare('SELECT session_id FROM agent_history_streams WHERE invocation_id = ?').get(invocationId) as { session_id: string | null } | undefined
+      const stream = this.conn.prepare('SELECT session_id FROM agent_history_streams WHERE invocation_id = ?').get(snapshot.invocationId) as { session_id: string | null } | undefined
       const terminal = snapshot.events.at(-1)
       if (!stream || (stream.session_id !== null && stream.session_id !== sessionId) ||
         terminal?.kind !== 'invocation-completed' || !terminal.payload || typeof terminal.payload !== 'object' ||
@@ -291,6 +325,18 @@ export class SqliteAgentHistory implements HistoryPort {
       let sawCanonicalModelResponse = false
       const ledgerKey = (location: CompactionLedgerLocation) => JSON.stringify([location.workDir, location.sessionId, location.createdAt])
       const recoveryLocations = new Map<string, CompactionLedgerLocation>()
+      const requestIdsByTurn = new Map<string, string>()
+      for (const event of snapshot.events) {
+        if (event.kind !== 'model-request-started') continue
+        const payload = event.payload as { modelTurn?: unknown; attempt?: unknown; sessionLedger?: { requestHeader?: unknown } } | undefined
+        const header = payload?.sessionLedger?.requestHeader
+        const requestId = header && typeof header === 'object' && !Array.isArray(header)
+          ? (header as Record<string, unknown>).requestId
+          : undefined
+        if (Number.isInteger(payload?.modelTurn) && Number.isInteger(payload?.attempt) && typeof requestId === 'string' && requestId.trim()) {
+          requestIdsByTurn.set(`${event.turnId}:${payload!.modelTurn}:${payload!.attempt}`, requestId)
+        }
+      }
       for (const event of snapshot.events) {
         const location = (event.payload as { sessionLedger?: { location?: unknown } } | undefined)?.sessionLedger?.location
         if (!location || typeof location !== 'object' || Array.isArray(location)) continue
@@ -348,18 +394,45 @@ export class SqliteAgentHistory implements HistoryPort {
             const validAttempt = Number.isInteger(payload.attempt) && (payload.attempt as number) > 0
             const requestHeader = ledger?.requestHeader
             const requestContext = ledger?.requestContext
-            const expectedRequestId = validModelTurn ? `${invocationId}:round:${payload.modelTurn}` : undefined
+            // The event's request ID owns its model round. The projection can retain
+            // a separate external request namespace, but must agree with itself and
+            // remain bound to this canonical turn.
+            const expectedRequestId = validModelTurn && typeof payload.requestId === 'string' && payload.requestId.endsWith(`:round:${payload.modelTurn}`)
+              ? payload.requestId
+              : undefined
+            const projectionRequestId = requestHeader && typeof requestHeader === 'object' && !Array.isArray(requestHeader)
+              ? (requestHeader as Record<string, unknown>).requestId
+              : undefined
+            const header = requestHeader && typeof requestHeader === 'object' && !Array.isArray(requestHeader)
+              ? requestHeader as Record<string, unknown>
+              : undefined
+            const context = requestContext && typeof requestContext === 'object' && !Array.isArray(requestContext)
+              ? requestContext as Record<string, unknown>
+              : undefined
+            const projectionIdentity = {
+              validModelTurn,
+              validAttempt,
+              payloadRequestIdMatchesExpected: requestId === expectedRequestId,
+              requestHeaderPresent: header !== undefined,
+              requestHeaderRequestIdMatchesPayload: typeof projectionRequestId === 'string' && projectionRequestId === requestId,
+              requestHeaderAttemptMatchesPayload: header?.attempt === payload.attempt,
+              requestHeaderTurnMatchesEvent: header?.turnId === undefined || header?.turnId === event.turnId,
+              requestContextPresent: context !== undefined,
+              requestContextRequestIdMatchesHeader: context?.requestId === projectionRequestId,
+              requestContextAttemptMatchesPayload: context?.attempt === payload.attempt,
+              requestContextTurnMatchesEvent: context?.turnId === undefined || context?.turnId === event.turnId
+            }
             const validProjection = validModelTurn && validAttempt && requestId === expectedRequestId &&
-              requestHeader && typeof requestHeader === 'object' && !Array.isArray(requestHeader) &&
-              requestContext && typeof requestContext === 'object' && !Array.isArray(requestContext) &&
-              (requestHeader as Record<string, unknown>).requestId === expectedRequestId && (requestHeader as Record<string, unknown>).attempt === payload.attempt &&
-              ((requestHeader as Record<string, unknown>).turnId === undefined || (requestHeader as Record<string, unknown>).turnId === event.turnId)
+              header !== undefined && context !== undefined &&
+              typeof projectionRequestId === 'string' && projectionRequestId.endsWith(`:round:${payload.modelTurn}`) &&
+              header.attempt === payload.attempt &&
+              (header.turnId === undefined || header.turnId === event.turnId)
             const validRequestContext = validProjection &&
-              (requestContext as Record<string, unknown>).requestId === expectedRequestId && (requestContext as Record<string, unknown>).attempt === payload.attempt &&
-              ((requestContext as Record<string, unknown>).turnId === undefined || (requestContext as Record<string, unknown>).turnId === event.turnId)
+              context !== undefined && context.requestId === projectionRequestId && context.attempt === payload.attempt &&
+              (context.turnId === undefined || context.turnId === event.turnId)
             if (!validRequestContext) {
               blockedSessionLedgers.add(key)
-              try { options.onModelRequestLedgerRepairError?.(new Error('canonical model request projection identity is invalid'), invocationId, requestId) }
+              try { options.onModelRequestLedgerRepairError?.(new Error(`canonical model request projection identity is invalid: ${JSON.stringify(projectionIdentity)}`), invocationId, requestId) }
               catch { /* Diagnostics must not discard the canonical repair envelope. */ }
             } else if (!blockedSessionLedgers.has(key)) {
               try {
@@ -413,20 +486,18 @@ export class SqliteAgentHistory implements HistoryPort {
             const key = ledgerKey(location as CompactionLedgerLocation)
             const usagePayload = event.payload as { modelTurn?: unknown; attempt?: unknown }
             const modelTurn = usagePayload.modelTurn
-            const expectedRequestId = Number.isInteger(modelTurn) && (modelTurn as number) > 0
-              ? `${invocationId}:round:${modelTurn}`
-              : undefined
             const attempt = usagePayload.attempt === undefined ? 1 : usagePayload.attempt
-            const expectedUsageRequestId = expectedRequestId && Number.isInteger(attempt) && (attempt as number) > 0
-              ? `${expectedRequestId}${(attempt as number) > 1 ? `:attempt:${attempt}` : ''}`
+            const expectedUsageRequestId = Number.isInteger(modelTurn) && (modelTurn as number) > 0 && Number.isInteger(attempt) && (attempt as number) > 0
+              ? requestIdsByTurn.get(`${event.turnId}:${modelTurn}:${attempt}`) ??
+                `${invocationId}:round:${modelTurn}${(attempt as number) > 1 ? `:attempt:${attempt}` : ''}`
               : undefined
             if ((event.kind === 'model-response-committed' || event.kind === 'model-attempt-discarded') && ledger.requestUsage && typeof ledger.requestUsage === 'object' && !Array.isArray(ledger.requestUsage)) {
               const usage = ledger.requestUsage as Record<string, unknown>
-              if (!expectedUsageRequestId || usage.requestId !== expectedUsageRequestId || usage.turnId !== event.turnId) {
+              if (!expectedUsageRequestId || typeof usage.requestId !== 'string' || usage.requestId !== expectedUsageRequestId || usage.turnId !== event.turnId) {
                 blockedSessionLedgers.add(key)
                 try {
                   options.onUsageLedgerRepairError?.(
-                    new Error('canonical request usage identity does not match its History invocation, model turn, or turn'),
+                    new Error('canonical request usage identity does not match its History request, model turn, or turn'),
                     invocationId,
                     typeof usage.requestId === 'string' ? usage.requestId : 'request-usage'
                   )
@@ -444,21 +515,21 @@ export class SqliteAgentHistory implements HistoryPort {
               const requestContext = (ledger as Partial<CanonicalToolCallLedger> & { requestContext?: unknown }).requestContext
               if (requestContext !== undefined && (!requestContext || typeof requestContext !== 'object' || Array.isArray(requestContext))) {
                 blockedSessionLedgers.add(key)
-                try { options.onFinalRequestContextLedgerRepairError?.(new Error('canonical final request context is not an object'), invocationId, expectedRequestId ?? 'final-request-context') }
+                try { options.onFinalRequestContextLedgerRepairError?.(new Error('canonical final request context is not an object'), invocationId, expectedUsageRequestId ?? 'final-request-context') }
                 catch { /* Diagnostics must not discard the canonical repair envelope. */ }
               } else if (requestContext && typeof requestContext === 'object' && !Array.isArray(requestContext)) {
                 const finalContext = requestContext as Record<string, unknown>
-                if (!expectedRequestId || finalContext.requestId !== expectedRequestId || finalContext.turnId !== event.turnId ||
+                if (typeof finalContext.requestId !== 'string' || finalContext.requestId !== expectedUsageRequestId || finalContext.turnId !== event.turnId ||
                   !Number.isInteger(finalContext.attempt) || (finalContext.attempt as number) <= 0 || !finalContext.contextUsage ||
                   typeof finalContext.contextUsage !== 'object' || Array.isArray(finalContext.contextUsage)) {
                   blockedSessionLedgers.add(key)
-                  try { options.onFinalRequestContextLedgerRepairError?.(new Error('canonical final request context identity or usage is invalid'), invocationId, expectedRequestId ?? 'final-request-context') }
+                  try { options.onFinalRequestContextLedgerRepairError?.(new Error('canonical final request context identity or usage is invalid'), invocationId, expectedUsageRequestId ?? 'final-request-context') }
                   catch { /* Diagnostics must not discard the canonical repair envelope. */ }
                 } else {
-                  try { await options.repairFinalRequestContextLedger(location as CompactionLedgerLocation, finalContext) }
-                  catch (error) {
-                    blockedSessionLedgers.add(key)
-                    try { options.onFinalRequestContextLedgerRepairError?.(error, invocationId, expectedRequestId) }
+                    try { await options.repairFinalRequestContextLedger(location as CompactionLedgerLocation, finalContext) }
+                    catch (error) {
+                      blockedSessionLedgers.add(key)
+                      try { options.onFinalRequestContextLedgerRepairError?.(error, invocationId, expectedUsageRequestId ?? 'final-request-context') }
                     catch { /* Diagnostics must not discard the canonical repair envelope. */ }
                   }
                 }
@@ -524,7 +595,7 @@ export class SqliteAgentHistory implements HistoryPort {
               continue
             }
             const proposal = canonicalToolCalls.get(payload.toolCallId)
-            if ((sawCanonicalModelResponse || event.kind === 'tool-call-not-dispatched') && (!canonicalProposalIds.has(payload.toolCallId) || !proposal || ledgerKey(proposal.location) !== key)) {
+            if ((sawCanonicalModelResponse || event.kind === 'tool-call-not-dispatched') && !canonicalProposalIds.has(payload.toolCallId)) {
               blockedSessionLedgers.add(key)
               try { options.onToolLedgerRepairError?.(new Error('canonical tool result identity does not match a preceding model response proposal'), invocationId, payload.toolCallId) }
               catch { /* Diagnostics must not discard the canonical repair envelope. */ }

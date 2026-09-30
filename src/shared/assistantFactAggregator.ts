@@ -1,7 +1,7 @@
 import type { ChatImageAttachment, Message, ToolCallRecord } from './domainTypes'
 import { appendProgressOutputRaw } from './terminalScrollback'
 
-export type TurnOutcome = 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'recovered'
+export type TurnOutcome = 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'recovered' | 'commit-uncertain'
 
 /** prepare 时冻结的非敏感执行快照；API key、授权凭据和工具 permit 禁止进入该结构。 */
 export type TurnExecutionConfig = {
@@ -81,6 +81,7 @@ type AssistantFactEventPayload =
   | { type: 'source-completed' }
   /** message：失败原因（诊断文本），随事实透出到渲染层，避免只剩一句「回复未能完成」 */
   | { type: 'source-failed'; message?: string }
+  | { type: 'source-uncertain'; message?: string }
   | { type: 'source-cancelled' }
   | { type: 'source-timeout' }
 
@@ -261,7 +262,7 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
   } else if (event.type === 'usage-updated' || event.type === 'context-projection-updated' || event.type === 'compaction-committed') {
     // usage 属于会话级投影数据，不改变 assistant message 本身。
   } else {
-    if (event.type === 'source-cancelled' || event.type === 'source-timeout' || event.type === 'source-failed') {
+    if (event.type === 'source-cancelled' || event.type === 'source-timeout' || event.type === 'source-failed' || event.type === 'source-uncertain') {
       Object.assign(next, restoreProvisionalSnapshot(state))
     }
     closeSegments(next, deps.now)

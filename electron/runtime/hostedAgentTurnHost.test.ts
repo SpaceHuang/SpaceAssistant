@@ -475,7 +475,7 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
     const toolCall = { id: 'legacy-tool-call', name: 'lookup', input: { query: 'plan' } }
     const assistantMessage = { role: 'assistant' as const, content: [], toolCalls: [toolCall] }
     const proposalStepId = 'legacy:committed:model-step:owner'
-    const writer = new InvocationHistoryWriter(deps.history, { invocationId: deps.invocationId, turnId: deps.turnId })
+    const writer = new InvocationHistoryWriter(deps.history, { invocationId: deps.turnId, turnId: deps.turnId })
     await writer.append([
       { kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'find plan' }] } },
       { kind: 'model-response-committed', payload: {
@@ -498,7 +498,7 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
       evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion })
     } as never })
     const request = { messages: [{ role: 'user' as const, content: 'find plan' }], maxTokens: 128, tools: [{ name: 'lookup', description: 'lookup', inputSchema: {} }] }
-    const hostPorts = await host.createPorts({ invocationId: deps.invocationId, turnId: deps.turnId, routeId: deps.routeId, request })
+    const hostPorts = await host.createPorts({ invocationId: deps.turnId, turnId: deps.turnId, routeId: deps.routeId, request })
     expect(() => hostPorts.sessionLedgerForModelResponse?.(assistantMessage, 1, 1, {
       location: { workDir: '/other-workspace', sessionId: 'session-handoff-step', createdAt: 1 },
       stepId: proposalStepId,
@@ -506,12 +506,12 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
     })).toThrow('HOST_COMMITTED_SESSION_LEDGER_IDENTITY_MISMATCH')
 
     await runHostedAgentTurn({
-      host, invocationId: deps.invocationId, turnId: deps.turnId, routeId: deps.routeId,
+      host, invocationId: deps.turnId, turnId: deps.turnId, routeId: deps.routeId,
       request,
       initialResponse: { message: assistantMessage, finishReason: 'tool-calls', usage: { type: 'usage', inputTokens: 1, outputTokens: 1 }, historyCommitted: true, hostProjectionCommitted: true }
     })
 
-    const events = (await deps.history.read(deps.invocationId)).events
+    const events = (await deps.history.read(deps.turnId)).events
     const finished = events.find((event) => event.kind === 'tool-call-finished')
     expect(events.map((event) => ({ kind: event.kind, payload: event.payload }))).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'tool-call-finished' })]))
     expect((finished?.payload as { sessionLedger?: { stepId?: string } }).sessionLedger?.stepId).toBe(proposalStepId)
@@ -618,7 +618,7 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
     const deps = baseDependencies()
     deps.authorizedToolNames = new Set(['run_script'])
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest(deps.invocationId, 'desktop')
+    revocations.registerToolRevocationRequest(deps.invocationId, 'desktop', deps.turnId)
     const typedRegistry = new TypedToolRegistry()
     let executorSignal: AbortSignal | undefined
     let markEntered!: () => void

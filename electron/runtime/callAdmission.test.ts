@@ -541,6 +541,64 @@ describe('CallAdmissionGate park/resume（D2）', () => {
 })
 
 describe('v5 恢复生命周期', () => {
+  it('有 turn deadline 时恢复等待持续到该 deadline，而非固定的 30 秒恢复上限', async () => {
+    vi.useFakeTimers()
+    try {
+      const now = Date.now()
+      const gate = new CallAdmissionGate({
+        resumeTimeoutMs: 5,
+        now: () => Date.now(),
+        policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 }
+      })
+      const first = await gate.acquire(req({ requestId: 'deadline-resume-source' }))
+      expect(first.ok).toBe(true)
+      if (!first.ok) return
+      const parked = gate.park(first.ticket)!
+      const blocker = await gate.acquire(req({ requestId: 'deadline-resume-blocker' }))
+      expect(blocker.ok).toBe(true)
+      if (!blocker.ok) return
+
+      const resumed = gate.resume(parked, { deadlineAt: now + 1_000 })
+      await vi.advanceTimersByTimeAsync(10)
+      expect(gate.queuedCount).toBe(1)
+      blocker.ticket.release()
+      await expect(resumed).resolves.toMatchObject({ ok: true })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('恢复排队时一次性持久化失败保留 parked handle 并可重试恢复', async () => {
+    const db = openSqliteDatabase(':memory:')
+    try {
+      const gate = new CallAdmissionGate({
+        db,
+        policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 }
+      })
+      const first = await gate.acquire(req({ requestId: 'queue-persist-source' }))
+      expect(first.ok).toBe(true)
+      if (!first.ok) return
+      const parked = gate.park(first.ticket)!
+      const blocker = await gate.acquire(req({ requestId: 'queue-persist-blocker' }))
+      expect(blocker.ok).toBe(true)
+      if (!blocker.ok) return
+
+      const persist = vi.spyOn(admissionStoreModule, 'saveAdmissionState').mockImplementationOnce(() => {
+        throw new Error('injected transient persistence failure')
+      })
+      await expect(gate.resume(parked)).resolves.toEqual({
+        ok: false, verdict: 'rejected', cause: 'persistence-failed', retryable: true
+      })
+      persist.mockRestore()
+
+      const resumed = gate.resume(parked)
+      blocker.ticket.release()
+      await expect(resumed).resolves.toMatchObject({ ok: true })
+    } finally {
+      db.close()
+    }
+  })
+
   it('恢复等待超过 deadline 会失效 parked handle 且不永久挂起', async () => {
     const gate = new CallAdmissionGate({
       resumeTimeoutMs: 5,

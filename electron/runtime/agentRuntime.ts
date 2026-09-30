@@ -36,19 +36,19 @@ export interface ConfirmIdSpaceLike {
 
 export interface ChatCancelRegistryLike {
   register(requestId: string): AbortSignal
-  signalChatCancel(requestId: string): void
+  signalChatCancel(requestId: string, reason?: unknown): void
   clear(requestId: string): void
   throwIfCancelled(signal: AbortSignal): void
   cancelAllActiveChats(): void
 }
 
 export interface ToolRevocationRegistryLike {
-  registerToolRevocationRequest(requestId: string, lane: string): void
+  registerToolRevocationRequest(requestId: string, lane: string, executionId: string): void
   revokeToolForLane(lane: string, toolName: string): number
   revokeToolForAllLanes(toolName: string): number
-  isToolRevoked(requestId: string, toolName: string): boolean
-  clearToolRevocationRequest(requestId: string): void
-  onRevocation(listener: (event: { requestId: string; lane: string; toolName: string }) => void): () => void
+  isToolRevoked(requestId: string, toolName: string, executionId?: string): boolean
+  clearToolRevocationRequest(requestId: string, executionId?: string): void
+  onRevocation(listener: (event: { requestId: string; executionId: string; lane: string; toolName: string }) => void): () => void
 }
 
 export interface PolicyAuthorizationChangeRegistryLike {
@@ -75,8 +75,6 @@ export interface ApprovalAdmissionLike {
 
 export interface InvocationRuntimeLike {
   acquireLease(invocationId: string): InvocationLeaseLike
-  park(invocationId: string, lease: InvocationLeaseLike, checkpoint?: unknown): InvocationParkHandleLike | undefined
-  resumeLease(handle: InvocationParkHandleLike): InvocationLeaseLike | undefined
 }
 
 export interface ResourceLockRegistryLike {
@@ -88,13 +86,6 @@ export interface InvocationLeaseLike {
   invocationId: string
   generation: number
   release(): void
-}
-
-export interface InvocationParkHandleLike {
-  runtimeId: string
-  invocationId: string
-  generation: number
-  checkpoint: unknown
 }
 
 export interface AgentRuntimeComponents {
@@ -188,9 +179,7 @@ export function createAgentRuntime(components: AgentRuntimeComponents = {}): Age
       cancel: () => false
     },
     invocationRuntime: components.invocationRuntime ?? {
-      acquireLease: (invocationId) => ({ runtimeId: 'noop', invocationId, generation: 0, release: () => undefined }),
-      park: () => undefined,
-      resumeLease: () => undefined
+      acquireLease: (invocationId) => ({ runtimeId: 'noop', invocationId, generation: 0, release: () => undefined })
     },
     resourceLocks: components.resourceLocks ?? { acquire: async () => ({ release: () => undefined }) },
     toolExecutionConcurrency: components.toolExecutionConcurrency ?? 2,

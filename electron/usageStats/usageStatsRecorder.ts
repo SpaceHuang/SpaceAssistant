@@ -39,7 +39,7 @@ export type UsageTurnToolCounts = {
   toolSkippedCount: number
 }
 
-export type UsageTurnOutcome = 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'recovered' | 'interrupted'
+export type UsageTurnOutcome = 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'recovered' | 'interrupted' | 'commit-uncertain'
 
 export type TurnSummaryInput = {
   turnId: string
