@@ -256,6 +256,8 @@
       "modelSection": "Model",
       "effortSection": "Thinking effort",
       "effortDisabled": "This model does not support thinking; switch model to adjust",
+      "effortCurrent": "{{effort}} · Current",
+      "effortCurrentHint": "Not supported by this model — pick another level",
       "unknownModel": "No model configured",
       "entryTitle": "{{displayName}} · Thinking effort: {{effort}}"
     },

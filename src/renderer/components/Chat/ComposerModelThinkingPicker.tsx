@@ -93,6 +93,18 @@ export function ComposerModelThinkingPicker({
 
   // FR10：渲染集合由 prop 驱动；缺省 fail-open 取产品枚举全集
   const efforts = availableEfforts ?? [...THINKING_EFFORT_LEVELS]
+  // 兜底（FR10 例外，用户反馈）：生效档位不在可用集合（如调用方未接降级解析）时，
+  // 以「· 当前」禁用项插入序列原位——否则收起态显示的档位在浮层中无处可寻，选中状态与列表割裂
+  const renderable = useMemo(() => {
+    if (efforts.includes(effort)) return efforts
+    const merged = [...efforts]
+    const insertAt = merged.findIndex(
+      (l) => THINKING_EFFORT_LEVELS.indexOf(l) > THINKING_EFFORT_LEVELS.indexOf(effort)
+    )
+    if (insertAt === -1) merged.push(effort)
+    else merged.splice(insertAt, 0, effort)
+    return merged
+  }, [efforts, effort])
 
   const closeAndRefocusChip = () => {
     setOpen(false)
@@ -154,20 +166,25 @@ export function ComposerModelThinkingPicker({
         aria-labelledby={effortTitleId}
         aria-disabled={effortDisabled || undefined}
       >
-        {efforts.map((level) => {
+        {renderable.map((level) => {
           // 「是否默认」是档位的属性而非独立选项：等于全局档位的项带「· 默认」，点它 = 清除覆盖（回调 null）
           const isDefaultSlot = level === globalEffort
-          const selected = effortOverridden ? level === effort : isDefaultSlot
+          // 生效档位不被当前模型支持（兜底插入项）：只作当前值指示，不可选
+          const isCurrentPlaceholder = level === effort && !efforts.includes(level)
+          // 选中态跟随解析后的生效档位（继承时为全局档、被模型排除时为降级档）
+          const selected = level === effort
           return (
             <button
               key={level}
               type="button"
               role="radio"
               aria-checked={selected}
-              disabled={effortDisabled}
+              disabled={effortDisabled || isCurrentPlaceholder}
+              title={isCurrentPlaceholder ? t('composer.prefs.effortCurrentHint') : undefined}
               className={[
                 'composer-prefs__effort',
-                selected ? 'composer-prefs__effort--active' : ''
+                selected ? 'composer-prefs__effort--active' : '',
+                isCurrentPlaceholder ? 'composer-prefs__effort--current' : ''
               ]
                 .filter(Boolean)
                 .join(' ')}
@@ -176,9 +193,11 @@ export function ComposerModelThinkingPicker({
                 setOpen(false)
               }}
             >
-              {isDefaultSlot
-                ? t('composer.thinking.defaultSuffix', { effort: effortLabel(level) })
-                : effortLabel(level)}
+              {isCurrentPlaceholder
+                ? t('composer.prefs.effortCurrent', { effort: effortLabel(level) })
+                : isDefaultSlot
+                  ? t('composer.thinking.defaultSuffix', { effort: effortLabel(level) })
+                  : effortLabel(level)}
             </button>
           )
         })}

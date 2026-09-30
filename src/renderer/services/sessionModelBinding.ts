@@ -22,24 +22,40 @@ export function resolveAvailableThinkingEfforts(modelName: string): AgentReasoni
   return THINKING_EFFORT_LEVELS.filter((level) => !unsupported.includes(level))
 }
 
-/** 会话级 Thinking 强度绑定（需求 §5.2）：继承语义 + composer 草稿保持，与 resolveSessionModelBinding 同构。 */
+/**
+ * 会话级 Thinking 强度绑定（需求 §4.2 两层解析 + §5.2 草稿保持），与 resolveSessionModelBinding 同构。
+ *
+ * 档位降级（FR10 演进，用户反馈）：传入 `availableEfforts` 时，解析出的生效档位若不被当前模型
+ * 支持（不在集合内），沿 THINKING_EFFORT_LEVELS **向下**取最近可用档（依据需求 v1.4 实测结论
+ * 「low ≈ medium」，向下替代行为最接近，且不造成成本意外；off 恒可用，必有底）。
+ * 降级只作用于解析结果（显示与选择语义），**不改写** session.thinkingEffort / config 存储值；
+ * 不传 `availableEfforts` 时保持原行为（向后兼容）。
+ */
 export function resolveSessionThinkingBinding(
   cfg: AppConfig,
   session: Session | undefined,
-  draftEffort?: AgentReasoningEffort
+  draftEffort?: AgentReasoningEffort,
+  availableEfforts?: readonly AgentReasoningEffort[]
 ): { effort: AgentReasoningEffort; overridden: boolean; globalEffort: AgentReasoningEffort } {
   const globalEffort = normalizeThinkingEffort(cfg.thinkingEffort, 'medium')
+  const downgrade = (raw: AgentReasoningEffort): AgentReasoningEffort => {
+    if (!availableEfforts || availableEfforts.includes(raw)) return raw
+    for (let i = THINKING_EFFORT_LEVELS.indexOf(raw) - 1; i >= 0; i--) {
+      if (availableEfforts.includes(THINKING_EFFORT_LEVELS[i])) return THINKING_EFFORT_LEVELS[i]
+    }
+    return availableEfforts[0] ?? raw
+  }
   if (!session) {
     // composer 在首个会话创建前渲染：草稿选择视为覆盖，随会话创建一并写入
     return isThinkingEffort(draftEffort)
-      ? { effort: draftEffort, overridden: true, globalEffort }
-      : { effort: globalEffort, overridden: false, globalEffort }
+      ? { effort: downgrade(draftEffort), overridden: true, globalEffort }
+      : { effort: downgrade(globalEffort), overridden: false, globalEffort }
   }
   if (isThinkingEffort(session.thinkingEffort)) {
-    return { effort: session.thinkingEffort, overridden: true, globalEffort }
+    return { effort: downgrade(session.thinkingEffort), overridden: true, globalEffort }
   }
   // undefined / null / 损坏值 = 未覆盖，每次解析读全局当前值（继承而非快照，§4.2）
-  return { effort: globalEffort, overridden: false, globalEffort }
+  return { effort: downgrade(globalEffort), overridden: false, globalEffort }
 }
 
 export function resolveSessionModelBinding(

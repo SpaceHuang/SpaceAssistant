@@ -1757,6 +1757,15 @@
   color: var(--sa-text-tertiary);
 }
 
+/* 「· 当前」悬挂项（FR10 例外兜底）：生效档位被模型基线排除时的占位指示——
+   橙字标识当前值，虚线内框标识不可选（区别于普通禁用项与选中格） */
+.composer-prefs__effort.composer-prefs__effort--current,
+.composer-prefs__effort.composer-prefs__effort--current:disabled {
+  color: var(--sa-list-selected-fg);
+  outline: 1px dashed var(--sa-border-strong);
+  outline-offset: -1px;
+}
+
 .composer-prefs__effort-disabled {
   padding: 0 12px 12px;
   font-size: var(--sa-config-font-sm);

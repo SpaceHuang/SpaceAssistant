@@ -256,6 +256,8 @@
       "modelSection": "模型",
       "effortSection": "思考强度",
       "effortDisabled": "该模型不支持 Thinking，切换模型后可调整",
+      "effortCurrent": "{{effort}} · 当前",
+      "effortCurrentHint": "该模型不支持此档位，可改选其他档位",
       "unknownModel": "未配置模型",
       "entryTitle": "{{displayName}} · 思考强度：{{effort}}"
     },

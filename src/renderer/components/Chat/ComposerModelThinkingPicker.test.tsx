@@ -247,6 +247,37 @@ describe('ComposerModelThinkingPicker（FR1/2/3/5/6/8/9/10）', () => {
     expect(chip.textContent).toBe('glm-5.3 · 最高')
   })
 
+  it('⑯ 当前生效档位不在可用集合内：以「· 当前」禁用项插入序列原位（选中状态与列表不割裂）', () => {
+    // 场景：全局默认 medium 被该模型基线排除（如 deepseek-flash：medium: null），会话继承生效「中」
+    const { chip, onSelectEffort } = renderPicker({
+      effort: 'medium',
+      effortOverridden: false,
+      globalEffort: 'medium',
+      availableEfforts: ['off', 'low', 'high', 'max']
+    })
+    openPopover(chip)
+    const radios = screen.getAllByRole('radio')
+    // 「中」按产品顺序插在「低」「高」之间，带「· 当前」标记
+    expect(radios.map((r) => r.textContent)).toEqual(['关闭', '低', '中 · 当前', '高', '最高'])
+    const current = screen.getByRole('radio', { name: '中 · 当前' })
+    // 不可选（模型不支持），但标记为当前生效值
+    expect((current as HTMLButtonElement).disabled).toBe(true)
+    expect(current.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(current)
+    expect(onSelectEffort).not.toHaveBeenCalled()
+    // 悬挂项不可点 → 浮层保持打开;正常项仍可选
+    expect(chip.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(screen.getByRole('radio', { name: '高' }))
+    expect(onSelectEffort).toHaveBeenCalledWith('high')
+  })
+
+  it('⑰ 当前档位在可用集合内时不出现「· 当前」项（常规路径不变）', () => {
+    const { chip } = renderPicker({ effort: 'high', effortOverridden: true, availableEfforts: ALL_EFFORTS })
+    openPopover(chip)
+    expect(screen.queryByRole('radio', { name: /当前/ })).toBeNull()
+    expect(screen.getByRole('radio', { name: '高' }).getAttribute('aria-checked')).toBe('true')
+  })
+
   it('⑮ aria 属性与角色正确（FR8/A19/A21）', () => {
     const { chip } = renderPicker({ modelName: 'glm-5.3', modelServiceName: 'Deep', modelDisplayName: 'glm-5.3' })
     expect(chip.getAttribute('aria-haspopup')).toBe('dialog')

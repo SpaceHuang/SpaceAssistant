@@ -130,10 +130,15 @@ export function ChatView() {
     () => (cfg ? resolveSessionModelBinding(cfg, currentSession, draftModelOption) : null),
     [cfg, currentSession, draftModelOption]
   )
-  // 会话级 Thinking 强度（§4.2 两层解析）：会话覆盖 > composer 草稿 > 全局默认
+  const chatModelName = sessionBinding?.modelName ?? cfg?.model ?? ''
+  const chatLlmServiceId = sessionBinding?.llmServiceId
+  // 当前模型可用档位集合（FR10，renderer 自算）：随模型切换立即重算（A24），供档位降级与 prefsSlot 使用
+  const availableEfforts = useMemo(() => resolveAvailableThinkingEfforts(chatModelName), [chatModelName])
+  // 会话级 Thinking 强度（§4.2 两层解析 + FR10 演进降级）：会话覆盖 > composer 草稿 > 全局默认；
+  // 生效档位不被当前模型支持时沿枚举向下降级（不改写存储值）
   const thinkingBinding = useMemo(
-    () => (cfg ? resolveSessionThinkingBinding(cfg, currentSession, draftThinkingEffort) : null),
-    [cfg, currentSession, draftThinkingEffort]
+    () => (cfg ? resolveSessionThinkingBinding(cfg, currentSession, draftThinkingEffort, availableEfforts) : null),
+    [cfg, currentSession, draftThinkingEffort, availableEfforts]
   )
   // 评审 N6：草稿只服务「composer 先于首个会话」的窗口；一旦存在会话（含侧边栏新建）即清除，
   // 防止草稿在回到无会话状态时「复活」并被带入无关会话（draftModelOption 同款沿袭缺陷一并修复）
@@ -144,10 +149,6 @@ export function ChatView() {
       setDraftModelOption(undefined)
     }
   }, [currentSessionId])
-  const chatModelName = sessionBinding?.modelName ?? cfg?.model ?? ''
-  const chatLlmServiceId = sessionBinding?.llmServiceId
-  // 当前模型可用档位集合（FR10，renderer 自算）：随模型切换立即重算（A24），P5 接线时传入 prefsSlot
-  const availableEfforts = useMemo(() => resolveAvailableThinkingEfforts(chatModelName), [chatModelName])
   const currentModelEntry = useMemo(
     () => (cfg && chatModelName ? cfg.models.find((m) => m.name === chatModelName) : undefined),
     [cfg, chatModelName]

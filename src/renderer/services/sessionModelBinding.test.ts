@@ -215,4 +215,44 @@ describe('resolveSessionThinkingBinding（§4.2 两层解析 + §5.2 草稿保�
     const b = resolveSessionThinkingBinding(cfg, undefined)
     expect(b.effort).toBe('medium')
   })
+
+  // ── 档位降级（FR10 演进，用户反馈）──
+  // 场景来源：glm-5.3-flash 基线 medium: null，全局默认「中」继承后原样显示无效档；
+  // 传入可用集合时，生效档位不被支持则沿枚举向下取最近可用档（low ≈ medium，行为最接近）
+  it('继承全局 medium 不被支持 → 降到 low（off 恒可用兜底）', () => {
+    const cfg = makeConfig({ thinkingEffort: 'medium' })
+    const b = resolveSessionThinkingBinding(cfg, undefined, undefined, ['off', 'low', 'high', 'max'])
+    expect(b).toEqual({ effort: 'low', overridden: false, globalEffort: 'medium' })
+  })
+
+  it('会话覆盖 medium 同样降级（overridden 保持 true——存储值未被改写，仅解析生效值）', () => {
+    const cfg = makeConfig({ thinkingEffort: 'medium' })
+    const b = resolveSessionThinkingBinding(cfg, makeSession({ thinkingEffort: 'medium' }), undefined, ['off', 'low', 'high', 'max'])
+    expect(b).toEqual({ effort: 'low', overridden: true, globalEffort: 'medium' })
+  })
+
+  it('逐档向下：gpt-5-pro 仅 off/high，继承 medium → low 不在 → 一路降到 off；草稿 high 可用则不降', () => {
+    const cfg = makeConfig({ thinkingEffort: 'medium' })
+    const efforts: Array<'off' | 'low' | 'medium' | 'high' | 'max'> = ['off', 'high']
+    expect(resolveSessionThinkingBinding(cfg, undefined, undefined, efforts).effort).toBe('off')
+    expect(resolveSessionThinkingBinding(cfg, undefined, 'high', efforts).effort).toBe('high')
+  })
+
+  it('生效档位在可用集合内 → 原样返回（常规路径不受影响）', () => {
+    const cfg = makeConfig({ thinkingEffort: 'medium' })
+    const all: Array<'off' | 'low' | 'medium' | 'high' | 'max'> = ['off', 'low', 'medium', 'high', 'max']
+    expect(resolveSessionThinkingBinding(cfg, undefined, undefined, all).effort).toBe('medium')
+    expect(resolveSessionThinkingBinding(cfg, makeSession({ thinkingEffort: 'high' }), undefined, all).effort).toBe('high')
+  })
+
+  it('不传可用集合 → 原行为（向后兼容，既有调用方不传时无降级）', () => {
+    const cfg = makeConfig({ thinkingEffort: 'medium' })
+    expect(resolveSessionThinkingBinding(cfg, undefined).effort).toBe('medium')
+  })
+
+  it('草稿档位不被支持 → 同样降级（composer 先于会话的窗口内显示一致）', () => {
+    const cfg = makeConfig({ thinkingEffort: 'medium' })
+    const b = resolveSessionThinkingBinding(cfg, undefined, 'medium', ['off', 'low', 'high', 'max'])
+    expect(b.effort).toBe('low')
+  })
 })

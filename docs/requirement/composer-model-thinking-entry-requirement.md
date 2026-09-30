@@ -396,7 +396,7 @@ unsupported = PRODUCT_EFFORTS.filter(e => map[e] === null)
 - 强度分区的档位项**必须**由「该模型的可用档位集合」生成，**禁止**硬编码档位数组。集合定义见 §2.6 R1–R3。
 - **档位键取自产品枚举（5 档）**：`AgentReasoningEffort`，本次扩展后为 `off/low/medium/high/max`（FR11）。
 - **数据来源**（方案 A，§10）：renderer 调用共享纯函数 `resolveThinkingAvailability(modelName, { effortUnsupportedByMemo: false })`，由 `unsupported` 反推 `availableEfforts`。详见 §6.6。
-- **当前选中档位不在可用集合内时**（如基线升级后某档变为 `null`）：入口强度段仍**如实显示**该档位词（反映会话实际值）；**不得**静默改写 `session.thinkingEffort`（运行时降级语义由 §7.4 负责，UI 不越权）。注意：定为「不渲染」（§10）后，该档位**不出现在**浮层列表里，故无从"禁用提示"。
+- ~~**当前选中档位不在可用集合内时**（如基线升级后某档变为 `null`）：入口强度段仍**如实显示**该档位词（反映会话实际值）；**不得**静默改写 `session.thinkingEffort`~~ **已修订（2026-10-01，真机反馈）**：原「如实显示无效档 + 浮层不渲染」的组合造成割裂——收起态显示「中」而浮层列表无「中」、无任何选中项。现改为**解析层降级**：`resolveSessionThinkingBinding` 接受可用集合，生效档位不被支持时沿枚举**向下**取最近可用档（依据 v1.4 实测「low ≈ medium」，行为最接近且无成本意外；off 恒可用兜底），**仍不改写** `session.thinkingEffort` 存储值（UI 不越权保留）。防御兜底：若生效档位仍抵达组件（如调用方未接降级解析），以「`{{档位}} · 当前`」禁用格插入序列原位，悬浮提示不可选原因。
 - **不可用档位不渲染（§10）**：`availability.unsupported` 命中的档位**直接从列表中剔除**，不做"渲染但禁用"。依据：当前基线最少也有 **2 档**（§2.6），不会出现"只剩一个按钮"的失衡。
 - **可用档位仅 2 个**（当前基线的最少情况，如 `gpt-5-pro` = `off`/`high`、`openai/o3-mini-high` = `off`/`high`；**5 档口径下 `deepseek-v4-pro` 为 3 档**，见 §2.6）：只渲染这 2 项；容器左对齐、不拉伸占满（§5.2）。
 - **`source: 'unknown'`（整个 map 键缺失）**：按 R3 fail-open，渲染**全部 5 档**（副作用见 §2.6「fail-open 的副作用」）。
