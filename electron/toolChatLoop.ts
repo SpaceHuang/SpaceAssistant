@@ -178,7 +178,7 @@ import { buildRequestHeaderPayload } from '../src/shared/requestContext'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
 import { bindHostedRequiredUserMessage, createHostedModelRequest } from './runtime/hostedModelRequest'
 
-export const DESKTOP_TOOL_LOOP_MAX_ROUNDS = 50
+export const DESKTOP_TOOL_LOOP_MAX_ROUNDS = 500
 
 const fileCaches = new Map<string, FileStateCache>()
 

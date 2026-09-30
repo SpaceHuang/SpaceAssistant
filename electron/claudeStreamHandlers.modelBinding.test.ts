@@ -22,7 +22,7 @@ const mockCreateAnthropicClient = vi.fn()
 
 vi.mock('./toolChatLoop', () => ({
   runToolChatSession: (...args: unknown[]) => mockRunToolChatSession(...args),
-  DESKTOP_TOOL_LOOP_MAX_ROUNDS: 50
+  DESKTOP_TOOL_LOOP_MAX_ROUNDS: 500
 }))
 
 vi.mock('./sessionEvents', () => ({
