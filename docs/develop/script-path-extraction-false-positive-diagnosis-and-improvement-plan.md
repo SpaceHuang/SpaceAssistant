@@ -1,6 +1,6 @@
 # run_script 路径提取假阳性：诊断与改进方案
 
-- 状态：已实施（2026-09-30，P0 / P1 / P2 全量落地；六轮评审全部阻断项（B1/B2/B3、B1-R/B2-R、walrus、B5、B6、B6-R）修复完毕，观察项 obs1–obs3 落地，见 §12.7–§12.13；端到端真机验收遗留，见 §12.6）
+- 状态：已实施（2026-09-30，P0 / P1 / P2 全量落地；六轮评审全部阻断项（B1/B2/B3、B1-R/B2-R、walrus、B5、B6、B6-R 及其残留 B6-R2）修复完毕，观察项 obs1–obs3 落地，见 §12.7–§12.14；端到端真机验收遗留，见 §12.6）
 - 触发场景：会话 `a7981827-5a20-4eab-a6fd-a2971e12659c`（"会话 27"）中 `run_script` 反复弹人工确认卡
 - 涉及模块：`electron/confirmation/extractors/scriptPathFacts.ts`、`electron/shell/scriptIr/pythonAdapter.ts`、`src/shared/policy/defaultRules.ts`
 - 关联文档：`docs/develop/script-security-parser-treesitter-upgrade-plan.md`、`docs/develop/security-approval-experience-improvement-plan.md`
@@ -1264,3 +1264,18 @@ conditional test 透传 `conditionallyEvaluated`。
 body 位,v4 语义 body 永不重绑是保守正确行为;修正为真正的 test 位形态);提取器/内容
 分析/适配器/门控/策略 9 套件 412 用例通过(合法重绑对照保持 complete);全量 `npm test`
 复验通过。
+
+### 12.14 第七轮评审修复记录（2026-09-30，B6-R2）
+
+评审报告：`docs/review/script-path-extraction-fp-review-v7.md`。B6-R 三处合并、标志必传
+防再发核验通过(评审对照 diff 穷举全部 walkExpr 调用点),确认**表达式级硬编码 false
+仅剩一处**——lambda 默认值位。lambda 是表达式,其默认值随 lambda 表达式求值才求值,
+处在条件求值位置时可能永不执行,硬编码 false 让其中的 walrus 被错误重绑:
+`(lambda q=(p := "/safe.txt"): q) if False else None` 判 complete 不弹卡。
+
+修复(一行):lambda defaults 遍历透传 `conditionallyEvaluated`(语句级的 def 默认值
+不在其列——def 语句执行则默认值恒定求值,维持语句级双重论证)。顶层对照
+`f = lambda q=(p := "/safe.txt"): q` 的合法重绑语义保持(评审已验证,本分支补用例钉死)。
+
+修复后验证:PoC 转红→绿;提取器/内容分析/适配器/门控/策略 7 套件 395 用例通过;
+全量 `npm test` 复验通过。
