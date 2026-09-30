@@ -118,9 +118,7 @@
   },
   "modelPicker": {
     "empty": "No models available. Configure API services and models in Settings.",
-    "unavailableHint": "Current session model is unavailable. Please select another.",
-    "selectModelAria": "Select model, current {{name}}",
-    "switchModel": "Switch model"
+    "unavailableHint": "Current session model is unavailable. Please select another."
   },
   "toolCall": {
     "confirm": {

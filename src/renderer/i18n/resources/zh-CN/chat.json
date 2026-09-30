@@ -118,9 +118,7 @@
   },
   "modelPicker": {
     "empty": "暂无可用模型，请前往设置配置 API 服务与模型",
-    "unavailableHint": "当前会话模型不可用，请重新选择",
-    "selectModelAria": "选择模型，当前 {{name}}",
-    "switchModel": "切换模型"
+    "unavailableHint": "当前会话模型不可用，请重新选择"
   },
   "toolCall": {
     "confirm": {

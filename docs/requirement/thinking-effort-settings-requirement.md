@@ -179,7 +179,7 @@ client.messages.create(
 )
 ```
 
-**服务端档位比 SDK 枚举更宽**：SDK 0.79.0 为 `low | medium | high | max`，而服务端实际另有 **`xhigh`**（位于 `high` 与 `max` 之间，随 Opus 4.7 引入）。即 SDK 枚举**落后于**服务端。本需求只暴露四档（§4.1），不受影响；但实现时**不得**用 SDK 枚举反推「服务端只认这四个值」。
+**服务端档位比 SDK 枚举更宽**：SDK 0.79.0 为 `low | medium | high | max`，而服务端实际另有 **`xhigh`**（位于 `high` 与 `max` 之间，随 Opus 4.7 引入）。即 SDK 枚举**落后于**服务端。~~本需求只暴露四档（§4.1），不受影响~~ **已修订（2026-09-30，依据 composer-model-thinking-entry §FR11）：本产品现暴露五档（+`max`，恰在 SDK 白名单内），仍不暴露 `xhigh`**；实现时**不得**用 SDK 枚举反推「服务端只认这几个值」。
 
 **effort 的作用面比 thinking 更宽**：除思考长度外，亦影响工具调用频率等其他 token 消耗，更接近全局「节俭度」旋钮。对本产品（以工具循环为主）属**正向收益**——降档同时降低工具调用开销；但需知晓「降一档」的影响不止思考链。
 
@@ -316,7 +316,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 ```typescript
 /** 复用既有契约类型，不新造枚举 */
-type ThinkingEffort = 'off' | 'low' | 'medium' | 'high'   // src/shared/agent/invocation.ts:84
+type ThinkingEffort = 'off' | 'low' | 'medium' | 'high' | 'max'   // src/shared/agent/invocation.ts:85
 ```
 
 | 档位 | UI 文案（zh-CN） | en-US | 语义 |
@@ -325,8 +325,9 @@ type ThinkingEffort = 'off' | 'low' | 'medium' | 'high'   // src/shared/agent/in
 | `low` | 低 | Low | 最短思考，优先响应速度 |
 | `medium` | 中 | Medium | 默认档，兼顾质量与速度 |
 | `high` | 高 | High | 完整推理，用于复杂任务 |
+| `max` | 最高 | Max | 最强档（**2026-09-30 修订新增**，语义依据 composer-model-thinking-entry §FR11） |
 
-> 与契约保持四档，**不新增 `max` / `xhigh`**（OQ-1 决策；服务端另有 `xhigh` / `max`，见 §2.3）。
+> ~~与契约保持四档，**不新增 `max` / `xhigh`**~~ **已修订（2026-09-30，依据 `composer-model-thinking-entry-requirement.md` §FR11）**：**新增 `max`（共 5 档）——SDK `OutputConfig.effort` 白名单本就含 `max`，无需类型转换；`xhigh` / `minimal` 仍不暴露**（服务端另有 `xhigh`，见 §2.3）。
 
 **档位非等距（重要，v1.4 补）**：社区实测（Simon Willison 五档对比，经多篇文章引用）显示 **`low` 与 `medium` 的实际差异很小**——两者在多数任务上几乎不产生可见 reasoning token，接近「不推理、只换价签」；要到 `high` 及以上才有明显推理。两个产品含义：
 
@@ -383,7 +384,7 @@ type ThinkingEffort = 'off' | 'low' | 'medium' | 'high'   // src/shared/agent/in
 
 | 项 | 规格 |
 |----|------|
-| 控件 | `Select`（4 项：关闭 / 低 / 中 / 高） |
+| 控件 | ~~`Select`（4 项：关闭 / 低 / 中 / 高）~~ `Select`（**5 项：关闭 / 低 / 中 / 高 / 最高**，2026-09-30 修订，依据 composer-model-thinking-entry §FR11；options 由 `THINKING_EFFORT_LEVELS.map` 自动跟随，`ModelsSettingsTab.tsx:183`） |
 | 位置 | 原 Switch 所在行（`config-models-thinking-row`），保持贴底、右对齐 |
 | 标签 | `Thinking 强度`（i18n `models.defaults.effortLabel`） |
 | 提示 | `对会长时间思考的模型，可在此调低默认强度；也可在对话中单独调整当前会话。`（`models.defaults.effortHint`） |
@@ -397,11 +398,11 @@ type ThinkingEffort = 'off' | 'low' | 'medium' | 'high'   // src/shared/agent/in
 
 | 项 | 规格 |
 |----|------|
-| 位置 | 聊天区 composer footer 左段 `.composer-footer__start` 内，**模型 chip 之后、状态区之前**（结构见 §2.7） |
-| 触发 | 点击当前强度展示区，弹出列表（Popover / Dropdown，沿用模型选择器交互） |
-| 选项 | ~~**5 项**：`默认（继承）` / `关闭` / `低` / `中` / `高`~~ **已变更（实施期用户定稿）**：列表仅 **4 档** `关闭 / 低 / 中 / 高`；「是否默认」是档位的**属性**而非独立选项——等于当前全局档位的项带「`<档位> · 默认`」标记，点它 = 清除覆盖回到继承（写 `null`，继承语义 §4.2 不变）。取舍：与全局值相同的显式快照不可表达（其与继承无可感知差异，接受） |
-| 值 | 会话字段：`undefined`（继承）/ `off` / `low` / `medium` / `high` |
-| 展示态 | 未覆盖时显示 `默认（中）`，括注为**当前全局档位**，避免用户不确定实际值 |
+| 位置 | ~~聊天区 composer footer 左段 `.composer-footer__start` 内，**模型 chip 之后、状态区之前**~~ **已修订（2026-09-30，依据 composer-model-thinking-entry §FR1/FR2）**：与模型选择合并为**单一偏好入口 chip**（`ComposerModelThinkingPicker`），仍位于附件按钮之后、状态区之前；点击弹出**一个**浮层，模型分区在上、强度分区在下 |
+| 触发 | 点击合并入口 chip，弹出一体化浮层（单 Popover，上下两分区，中间 1px 分隔线） |
+| 选项 | ~~**5 项**：`默认（继承）` / `关闭` / `低` / `中` / `高`~~ **已变更（实施期用户定稿）**：列表仅 **4 档** `关闭 / 低 / 中 / 高`；「是否默认」是档位的**属性**而非独立选项——等于当前全局档位的项带「`<档位> · 默认`」标记，点它 = 清除覆盖回到继承（写 `null`，继承语义 §4.2 不变）。取舍：与全局值相同的显式快照不可表达（其与继承无可感知差异，接受）。**2026-09-30 再修订（composer-model-thinking-entry §FR10/FR11）**：档位项**数据驱动**（按模型可用集合渲染，2–5 档，不写死档位数），枚举扩为 5 档（+`最高`） |
+| 值 | 会话字段：`undefined`（继承）/ `off` / `low` / `medium` / `high` / `max`（**+`max`，2026-09-30 修订**） |
+| 展示态 | ~~未覆盖时显示 `默认（中）`，括注为**当前全局档位**~~ **已修订（2026-09-30，依据 composer-model-thinking-entry §FR3）**：收起态**恒定显示档位词**（` · 中`，不区分继承/覆盖，省宽度）；「是否继承」由浮层内 `· 默认` 标记、选中态与入口 `title` 承载 |
 | 选择效果 | 写 `Session.thinkingEffort`（`session:update`），**下次发送生效** |
 | 选择「默认」 | 清除会话覆盖（写回 `null`） |
 | 能力联动 | 当前会话模型 `supportsThinking === false` 时，控件禁用并提示「该模型不支持 Thinking」 |
@@ -474,6 +475,7 @@ idle 时 `footerStatusLabel`（`MessageInput.tsx:121-128`）随之返回空串�
 | `models.effort.low` | `低` | `Low` |
 | `models.effort.medium` | `中` | `Medium` |
 | `models.effort.high` | `高` | `High` |
+| `models.effort.max` | `最高` | `Max`（**2026-09-30 新增**，FR11 五档梯度：关闭 < 低 < 中 < 高 < 最高） |
 | `models.effort.notSupported` | `该模型不支持 Thinking` | `This model does not support thinking` |
 | `models.effort.unsupportedBadge` | `无思考` | `No thinking` |
 | `models.add.supportsThinking` | `支持 Extended Thinking` | `Supports extended thinking` |
@@ -589,6 +591,7 @@ function resolveThinkingEffort(
 | `low` | `{ type: 'adaptive' }` | `{ effort: 'low' }` | 最短思考 |
 | `medium` | `{ type: 'adaptive' }` | `{ effort: 'medium' }` | **缺省档** |
 | `high` | `{ type: 'adaptive' }` | `{ effort: 'high' }` | 完整推理 |
+| `max` | `{ type: 'adaptive' }` | `{ effort: 'max' }` | 最强档（**2026-09-30 新增行**，依据 composer-model-thinking-entry §FR11；`max` 本就在 SDK `OutputConfig.effort` 白名单内，**无需类型转换**，`buildThinkingWireParams` 直通） |
 
 - **字段顺序约定**：`claudeToolLoopStreamParams` 现约定「固定字段在前、`thinking` 置尾，便于上游前缀 / KV 缓存对齐」（该文件顶部注释 + `claudeToolLoopStreamParams.test.ts:44` 断言键序）。扩展为 `... , output_config, thinking`（`thinking` 仍为最后一名）；
 - `output_config` 目前仅承载 `effort`；实现时须**合并而非覆盖**其他 `output_config` 用途（如 structured outputs），避免后续冲突；
