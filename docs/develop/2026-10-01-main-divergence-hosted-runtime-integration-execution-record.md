@@ -296,4 +296,6 @@ Test Files  806 passed | 1 skipped (807)
 Tests       7091 passed | 106 skipped (7197)
 ```
 
-该测试夹具修正尚待提交、推送及云端全平台 Actions 复验；阶段 6 在取得成功 CI 与最终 SHA/工作树对齐证据前保持进行中。
+测试夹具修正以 `219dae60f7d8d8114a5ee92625e731b6420628bf`（`test(grep): stabilize cancellation fixtures`）提交并普通推送至 `main`。Actions run `36765447018` 的全部 jobs 均 Success：Ubuntu 全量 `npm test`、Windows Golden、Windows/macOS Shell lifecycle、Windows/macOS SQLite probes、SDK/类型门禁及 Electron build。`TMPDIR=/tmp npm test` 在本机同样通过（806 个文件通过、1 个跳过；7091 项通过、106 项跳过）。
+
+推送后执行 `git fetch origin` 并核验：`HEAD` 与 `origin/main` 均为 `219dae60f7d8d8114a5ee92625e731b6420628bf`，`git rev-list --left-right --count origin/main...main` 为 `0 0`，`git status --short --branch` 干净。阶段 6 的历史准入、云端 CI 和分叉对齐验收完成。
