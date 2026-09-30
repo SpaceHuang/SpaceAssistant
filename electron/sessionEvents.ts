@@ -163,6 +163,19 @@ export async function ensureToolCallEvent(
 }
 
 /** Repairs the legacy turn boundary from a canonical terminal History record. */
+export async function ensureTurnStartEvent(sink: SessionEventSink, turnId: string): Promise<CommittedEvent | undefined> {
+  if (!turnId.trim()) throw new Error('invocation turn start identity is invalid')
+  const events = await readSessionEvents(sink.eventsPath)
+  const starts = events.filter((event) => event.type === 'turn_start' && event.payload.turnId === turnId)
+  if (starts.length > 1) throw new Error(`duplicate invocation turn_start projection: ${turnId}`)
+  if (starts[0]) return starts[0]
+  if (events.some((event) => event.type === 'turn_end' && event.payload.turnId === turnId)) {
+    throw new Error(`invocation terminal projection has no matching turn_start: ${turnId}`)
+  }
+  return sink.appendCritical({ type: 'turn_start', payload: { turnId } })
+}
+
+/** Repairs the legacy turn boundary from a canonical terminal History record. */
 export async function ensureTurnEndEvent(sink: SessionEventSink, turnId: string, reason: string): Promise<CommittedEvent | undefined> {
   if (!turnId.trim() || !['completed', 'failed', 'interrupted', 'cancelled', 'denied'].includes(reason)) {
     throw new Error('invocation terminal ledger identity is invalid')

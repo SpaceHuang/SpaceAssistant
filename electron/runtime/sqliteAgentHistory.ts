@@ -65,13 +65,14 @@ export class SqliteAgentHistory implements HistoryPort {
   }
 
   /** Distinguishes an empty session from a latest canonical stream that cannot safely supply a transcript. */
-  async readLatestInvocationForSession(sessionId: string, options: { excludeInvocationId?: string } = {}): Promise<
+  async readLatestInvocationForSession(sessionId: string, options: { excludeInvocationId?: string; excludeInvocationIds?: readonly string[] } = {}): Promise<
     | Readonly<{ kind: 'none' }>
     | Readonly<{ kind: 'completed'; snapshot: HistorySnapshot }>
     | Readonly<{ kind: 'cancelled'; snapshot: HistorySnapshot }>
     | Readonly<{ kind: 'unavailable'; invocationId: string }>
   > {
-    const invocationIds = this.listInvocationIdsForSession(sessionId).filter((id) => id !== options.excludeInvocationId)
+    const excluded = new Set([...(options.excludeInvocationId ? [options.excludeInvocationId] : []), ...(options.excludeInvocationIds ?? [])])
+    const invocationIds = this.listInvocationIdsForSession(sessionId).filter((id) => !excluded.has(id))
     if (invocationIds.length === 0) return { kind: 'none' }
     for (const invocationId of invocationIds.reverse()) {
       const snapshot = await this.read(invocationId)

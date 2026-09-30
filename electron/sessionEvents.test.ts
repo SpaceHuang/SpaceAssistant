@@ -19,6 +19,7 @@ import {
   ensureToolCallEvent,
   ensureToolResultEvent,
   ensureTurnEndEvent,
+  ensureTurnStartEvent,
   ensureRequestProjectionEvents,
   ensureFinalRequestContextEvent,
   replayCompactionEvents,
@@ -32,6 +33,24 @@ import {
 import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
 
 describe('session events', () => {
+  it('canonical terminal recovery recreates a missing turn_start before turn_end', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-turn-start-recovery-'))
+    const sink = getSessionEventSink(root, 'turn-start-recovery', 1000)
+    try {
+      const start = await ensureTurnStartEvent(sink, 'recovered-turn')
+      const repeatedStart = await ensureTurnStartEvent(sink, 'recovered-turn')
+      const end = await ensureTurnEndEvent(sink, 'recovered-turn', 'interrupted')
+
+      expect(start).toMatchObject({ type: 'turn_start', payload: { turnId: 'recovered-turn' } })
+      expect(repeatedStart).toEqual(start)
+      expect(end).toMatchObject({ type: 'turn_end', payload: { turnId: 'recovered-turn', reason: 'interrupted' } })
+      expect((await readSessionEvents(sink.eventsPath)).map((event) => event.type)).toEqual(['turn_start', 'turn_end'])
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('treats a recovered tool result with reordered nested object keys as the same projection', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-tool-result-key-order-'))
     const sink = getSessionEventSink(root, 'tool-result-key-order', 1000)

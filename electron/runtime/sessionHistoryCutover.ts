@@ -135,9 +135,10 @@ export function resolveSessionHistoryCutover(input: {
 
 /** Project the current request's intentional context selection from canonical History. */
 export function resolveCanonicalRequestCutover(input: {
-  snapshot: HistorySnapshot
+  snapshot?: HistorySnapshot
   requestMessages: readonly import('../../packages/agent-sdk/src/model').CanonicalModelMessage[]
   requiredUserMessage: import('../../packages/agent-sdk/src/model').CanonicalModelMessage
+  additionalAcceptedMessages?: readonly import('../../packages/agent-sdk/src/model').CanonicalModelMessage[]
 }): CanonicalRequestCutoverResult {
   try {
     const required = stable(input.requiredUserMessage)
@@ -153,7 +154,10 @@ export function resolveCanonicalRequestCutover(input: {
       return { kind: 'required-user-not-last' }
     }
     const requestPrefix = input.requestMessages.slice(0, requiredIndex).filter((message) => message.role !== 'system')
-    const historyMessages = toCanonicalModelMessages(rebuildClaudeMessagesFromHistory(input.snapshot.events)).filter((message) => message.role !== 'system')
+    const historyMessages = [
+      ...(input.snapshot ? toCanonicalModelMessages(rebuildClaudeMessagesFromHistory(input.snapshot.events)) : []),
+      ...(input.additionalAcceptedMessages ?? [])
+    ].filter((message) => message.role !== 'system')
     const requestUnits = transcriptUnits(requestPrefix)
     const historyUnits = transcriptUnits(historyMessages)
     const selectedHistory: CanonicalModelMessage[] = []

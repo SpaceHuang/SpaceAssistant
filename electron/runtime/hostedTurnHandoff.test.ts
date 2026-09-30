@@ -13,9 +13,10 @@ import { createHostedTurnHandoff } from './hostedTurnHandoff'
 import { runMigrations } from '../database/migrations'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
-import { getDbConnection, openDatabase } from '../database'
+import { appendMessage, createSession, getDbConnection, openDatabase } from '../database'
 import { claimSessionExecution, commitSessionTranscript, readSessionTranscript, releaseSessionExecution } from '../database/sessionTranscript'
 import { reconcileStartupSessionTranscripts } from './sessionTranscriptStartup'
+import { queueInputFingerprint } from '../queueInputFingerprint'
 
 describe('createHostedTurnHandoff', () => {
   beforeEach(() => { mockRunHostedAgentTurn.mockReset(); mockLogAgentEvent.mockReset() })
@@ -208,6 +209,76 @@ describe('createHostedTurnHandoff', () => {
     }))
     expect(JSON.stringify(mockLogAgentEvent.mock.calls)).not.toContain('private')
     await conn.close()
+  })
+
+  it('从纯 session-input + process-restart History 安全恢复已接受用户消息', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'restart-recovery', model: 'model' })
+    const earlierUser = appendMessage(db, {
+      id: 'restart-earlier-user', sessionId: session.id, role: 'user', content: 'earlier completed request',
+      timestamp: 5, status: 'sent'
+    }).message
+    const earlierAssistant = appendMessage(db, {
+      id: 'restart-earlier-assistant', sessionId: session.id, role: 'assistant', content: 'earlier completed answer',
+      timestamp: 6, status: 'completed'
+    }).message
+    const prior = appendMessage(db, {
+      id: 'restart-accepted-user', sessionId: session.id, role: 'user', content: 'previous accepted request',
+      timestamp: 10, status: 'sent'
+    }).message
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 1, session.id)
+    const acceptedTurnId = 'restart-interrupted-turn'
+    const earlierTranscript = [
+      { role: 'user' as const, content: earlierUser.content, timestamp: earlierUser.timestamp },
+      { role: 'assistant' as const, content: earlierAssistant.content, timestamp: earlierAssistant.timestamp }
+    ]
+    await history.appendBatch([
+      { invocationId: 'restart-earlier-history', turnId: 'restart-earlier-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'earlier-context', idempotencyKey: 'earlier-context', kind: 'invocation-context-committed',
+        payload: { messages: earlierTranscript } },
+      { invocationId: 'restart-earlier-history', turnId: 'restart-earlier-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'earlier-completed', idempotencyKey: 'earlier-completed', kind: 'invocation-completed', payload: { status: 'completed' } }
+    ], 0)
+    await history.appendBatch([
+      { invocationId: 'restart-interrupted-history', turnId: acceptedTurnId, sequence: 1, schemaVersion: 1,
+        eventId: 'restart-input', idempotencyKey: 'restart-input', kind: 'session-input-committed',
+        payload: { sessionId: session.id, messageId: prior.id, role: 'user', inputFingerprint: queueInputFingerprint({ text: prior.content }) } },
+      { invocationId: 'restart-interrupted-history', turnId: acceptedTurnId, sequence: 2, schemaVersion: 1,
+        eventId: 'restart-terminal', idempotencyKey: 'restart-terminal', kind: 'invocation-interrupted',
+        payload: { status: 'interrupted', reason: 'process-restart' } }
+    ], 0)
+    const current = { role: 'user' as const, content: 'continue after restart' }
+    const request = { messages: [{ role: 'system' as const, content: 'dynamic' }, ...earlierTranscript,
+      { role: 'user' as const, content: prior.content, timestamp: prior.timestamp }, current], maxTokens: 100 }
+    mockRunHostedAgentTurn.mockImplementationOnce(async ({ invocationId, request: hostedRequest }: {
+      invocationId: string; request: { messages: unknown[] }
+    }) => {
+      await history.appendBatch([
+        { invocationId, turnId: 'restart-retry-turn', sequence: 1, schemaVersion: 1,
+          eventId: 'retry-context', idempotencyKey: 'retry-context', kind: 'invocation-context-committed',
+          payload: { messages: hostedRequest.messages } },
+        { invocationId, turnId: 'restart-retry-turn', sequence: 2, schemaVersion: 1,
+          eventId: 'retry-completed', idempotencyKey: 'retry-completed', kind: 'invocation-completed', payload: { status: 'completed' } }
+      ], 0)
+      return { text: 'done', modelTurns: 1, finishReason: 'stop', usage: { inputTokens: 2, outputTokens: 1 },
+        messages: [...hostedRequest.messages, { role: 'assistant', content: 'done' }] }
+    })
+    const handoff = createHostedTurnHandoff({
+      agentSdk: { createHostedTurnRuntime: vi.fn(() => ({ host: {}, dispose: async () => undefined })) },
+      history, invocationId: 'restart-retry-invocation', turnId: 'restart-retry-turn', routeId: 'route',
+      sessionId: session.id, sessionDb: db
+    })
+
+    await expect(handoff({ request, requiredUserMessage: { id: 'current-user', message: current } })).resolves.toMatchObject({ result: { ok: true } })
+
+    expect(mockRunHostedAgentTurn.mock.calls.at(-1)?.[0]).toMatchObject({ request: { messages: [
+      { role: 'system', content: 'dynamic' }, ...earlierTranscript,
+      { role: 'user', content: prior.content }, current
+    ] } })
+    expect(readSessionTranscript(db, session.id)).toMatchObject({ version: 1, status: 'ready', messages: [
+      ...earlierTranscript, { role: 'user', content: prior.content }, current, { role: 'assistant', content: 'done' }
+    ] })
+    db.close()
   })
 
   it('does not fall back to an older completed transcript when the newest session invocation was interrupted', async () => {

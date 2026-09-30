@@ -42,7 +42,7 @@ import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { signalChatCancel } from './chatCancelRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
-import { beginSessionEventShutdown, ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, flushAllSessionEventSinks, getSessionEventSink, reconcileSessionEventFilesDetailed } from './sessionEvents'
+import { beginSessionEventShutdown, ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, ensureTurnStartEvent, flushAllSessionEventSinks, getSessionEventSink, reconcileSessionEventFilesDetailed } from './sessionEvents'
 import { runSessionEventRetentionMaintenance } from './storage/sessionEventRetention'
 import { pruneAgentLogs } from './storage/agentLogRetention'
 import { resolveRetentionPolicyFromDb } from './storage/retentionPolicy'
@@ -365,7 +365,10 @@ app.whenReady().then(async () => {
           throw new Error('canonical invocation terminal ledger location does not match a configured workspace root')
         }
         const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
-        try { await ensureTurnEndEvent(sink, String(terminal.turnId), String(terminal.reason)) }
+        try {
+          await ensureTurnStartEvent(sink, String(terminal.turnId))
+          await ensureTurnEndEvent(sink, String(terminal.turnId), String(terminal.reason))
+        }
         finally { await sink.close() }
       },
       repairToolCallLedger: async (location, toolCall) => {

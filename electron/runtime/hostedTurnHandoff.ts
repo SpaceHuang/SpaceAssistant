@@ -16,6 +16,9 @@ import { decodeTerminalOutcome } from './terminalOutcome'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
 import type { AppDatabase } from '../database/sqliteStore'
 import { cancelQueuedSessionExecution, claimSessionExecution, commitSessionTranscript, markSessionExecutionStarted, markSessionExecutionUncertain, readSessionTranscript, releaseSessionExecution } from '../database/sessionTranscript'
+import { getMessage } from '../database/operations'
+import { queueInputFingerprint } from '../queueInputFingerprint'
+import { ensureApiTextContent } from '../../src/shared/claudeToolHistory'
 import { randomUUID } from 'node:crypto'
 
 function hostedFailureOutcome(terminal: Parameters<typeof decodeTerminalOutcome>[0]): 'failed' | 'interrupted' | 'cancelled' | 'timed-out' | 'commit-uncertain' {
@@ -70,6 +73,31 @@ function terminalUsage(terminal: { payload?: unknown }): import('./hostedTurnFin
 
 function committedTranscriptMessages(messages: readonly CanonicalModelMessage[]): CanonicalModelMessage[] {
   return messages.filter((message) => message.role !== 'system')
+}
+
+function recoverAcceptedRestartInput(input: {
+  snapshot: Awaited<ReturnType<HistoryPort['read']>>
+  db: AppDatabase
+  sessionId: string
+  requestMessages: readonly CanonicalModelMessage[]
+}): { id: string; message: CanonicalModelMessage } | undefined {
+  const [accepted, terminal] = input.snapshot.events
+  const terminalPayload = terminal?.payload && typeof terminal.payload === 'object' && !Array.isArray(terminal.payload)
+    ? terminal.payload as Record<string, unknown>
+    : undefined
+  if (input.snapshot.events.length !== 2 || accepted?.kind !== 'session-input-committed' || terminal?.kind !== 'invocation-interrupted' ||
+    accepted.turnId !== terminal.turnId || terminalPayload?.status !== 'interrupted' || terminalPayload?.reason !== 'process-restart') return undefined
+  const marker = accepted.payload && typeof accepted.payload === 'object' ? accepted.payload as Record<string, unknown> : undefined
+  if (marker?.sessionId !== input.sessionId || marker.role !== 'user' || typeof marker.messageId !== 'string' ||
+    typeof marker.inputFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(marker.inputFingerprint)) return undefined
+  const stored = getMessage(input.db, marker.messageId)
+  if (!stored || stored.sessionId !== input.sessionId || stored.role !== 'user' || stored.attachments?.length ||
+    queueInputFingerprint({ text: stored.content, attachments: stored.attachments }) !== marker.inputFingerprint) return undefined
+  const message: CanonicalModelMessage = { role: 'user', content: ensureApiTextContent(stored.content), timestamp: stored.timestamp }
+  const matchesRequest = input.requestMessages.some((requestMessage) => requestMessage.role === 'user' &&
+    JSON.stringify(requestMessage) === JSON.stringify(message))
+  if (!matchesRequest) return undefined
+  return { id: stored.id, message }
 }
 
 function latestCompactedTranscript(snapshot: Awaited<ReturnType<HistoryPort['read']>>): CanonicalModelMessage[] | undefined {
@@ -157,13 +185,42 @@ export function createHostedTurnHandoff(input: {
       if (latest.kind === 'unavailable') {
         let previousTurnId: string | undefined
         let snapshotVersion: number | undefined
+        let recoveredRestartInput = false
         try {
           const snapshot = await input.history.read(latest.invocationId)
           snapshotVersion = snapshot.version
           previousTurnId = snapshot.events.at(-1)?.turnId
+          const acceptedInput = input.sessionDb && handoff.requiredUserMessage
+            ? recoverAcceptedRestartInput({ snapshot, db: input.sessionDb, sessionId: input.sessionId, requestMessages: handoff.request.messages })
+            : undefined
+          if (acceptedInput && handoff.requiredUserMessage) {
+            const prior = await input.history.readLatestInvocationForSession(input.sessionId, {
+              excludeInvocationIds: [input.invocationId, latest.invocationId]
+            })
+            if (prior.kind !== 'unavailable') {
+              const priorSnapshot = prior.kind === 'completed' || prior.kind === 'cancelled' ? prior.snapshot : undefined
+              const recovered = resolveCanonicalRequestCutover({
+                ...(priorSnapshot ? { snapshot: priorSnapshot } : {}),
+                requestMessages: handoff.request.messages,
+                requiredUserMessage: handoff.requiredUserMessage.message,
+                ...(acceptedInput.id !== handoff.requiredUserMessage.id ? { additionalAcceptedMessages: [acceptedInput.message] } : {})
+              })
+              if (recovered.kind === 'matched') {
+                request = { ...handoff.request, messages: [...recovered.messages] }
+                recoveredRestartInput = true
+                logAgentEvent('info', 'history.cutover', {
+                  requestId: input.invocationId, turnId: input.turnId, sessionId: input.sessionId,
+                  stage: 'match-current-message', reasonCode: 'recovered-process-restart-input', outcome: 'matched',
+                  historyStreamId: latest.invocationId, previousTurnId, snapshotVersion
+                })
+              }
+            }
+          }
         } catch { /* 保持原始 unavailable 原因，诊断不改变执行分支 */ }
-        logSessionHistoryShadowDiagnostic({ requestId: input.invocationId, turnId: input.turnId, sessionId: input.sessionId, stage: 'select-snapshot', reasonCode: 'history-unavailable', historyStreamId: latest.invocationId, ...(previousTurnId ? { previousTurnId } : {}), ...(snapshotVersion !== undefined ? { snapshotVersion } : {}) })
-        throw new Error('Canonical session History could not safely provide the Hosted transcript')
+        if (!recoveredRestartInput) {
+          logSessionHistoryShadowDiagnostic({ requestId: input.invocationId, turnId: input.turnId, sessionId: input.sessionId, stage: 'select-snapshot', reasonCode: 'history-unavailable', historyStreamId: latest.invocationId, ...(previousTurnId ? { previousTurnId } : {}), ...(snapshotVersion !== undefined ? { snapshotVersion } : {}) })
+          throw new Error('Canonical session History could not safely provide the Hosted transcript')
+        }
       }
       if (latest.kind === 'completed' || latest.kind === 'cancelled') {
         try {
