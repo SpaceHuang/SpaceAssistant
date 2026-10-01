@@ -31,6 +31,13 @@ describe('JavaScript grep fallback', () => {
     expect(out).not.toContain('src/b.js')
   })
 
+  it('treats glob metacharacters as literals without evaluating them as a main-thread regex', async () => {
+    const root = fixture({ '(a+)+needle.ts': 'needle', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ts': 'needle' })
+    const out = await grepFallbackJs(root, root, 'needle', args({ glob: '(a+)+*.ts' }), new AbortController().signal, () => {})
+    expect(out).toContain('(a+)+needle.ts')
+    expect(out).not.toContain('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ts')
+  })
+
   it('supports multiline matching and count output', async () => {
     const root = fixture({ 'a.txt': 'alpha\nbeta\nalpha beta\n' })
     const multiline = await grepFallbackJs(root, root, 'alpha\\nbeta', args({ multiline: true }), new AbortController().signal, () => {})
@@ -46,5 +53,31 @@ describe('JavaScript grep fallback', () => {
     expect(out).toContain('[共 1 条匹配')
     expect(out).not.toContain('large.txt')
     expect(out).not.toContain('binary.bin')
+  })
+
+  it('terminates catastrophic-backtracking regexes without blocking the main process', async () => {
+    const root = fixture({ 'hostile.txt': `${'a'.repeat(30_000)}!` })
+    const started = Date.now()
+    const out = await grepFallbackJs(root, root, '(a+)+$', args(), new AbortController().signal, () => {}, 5_000)
+    expect(out).toMatch(/正则.*超时|regex.*timeout/i)
+    expect(Date.now() - started).toBeLessThan(2_500)
+  })
+
+  it('cancels an in-flight regex worker promptly when the caller aborts', async () => {
+    const root = fixture({ 'hostile.txt': `${'a'.repeat(30_000)}!` })
+    const controller = new AbortController()
+    const started = Date.now()
+    const pending = grepFallbackJs(root, root, '(a+)+$', args(), controller.signal, () => {}, 5_000)
+    setTimeout(() => controller.abort(), 40)
+    await expect(pending).resolves.toBe('No matches found')
+    expect(Date.now() - started).toBeLessThan(1_000)
+  })
+
+  it('honors the caller total timeout while matching in the worker', async () => {
+    const root = fixture({ 'hostile.txt': `${'a'.repeat(30_000)}!` })
+    const started = Date.now()
+    const out = await grepFallbackJs(root, root, '(a+)+$', args(), new AbortController().signal, () => {}, 40)
+    expect(out).toMatch(/超时/)
+    expect(Date.now() - started).toBeLessThan(1_000)
   })
 })

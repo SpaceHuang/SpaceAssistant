@@ -1,5 +1,6 @@
 import { createHash } from 'crypto'
 import { spawn, type ChildProcess } from 'child_process'
+import { Worker } from 'node:worker_threads'
 import { app } from 'electron'
 import fs from 'fs/promises'
 import { realpathSync } from 'fs'
@@ -141,6 +142,45 @@ async function assertDiskMatchesReadCache(
 
 const READ_MAX = READ_FILE_MAX_CHARS
 const GREP_FILE_MAX = 1024 * 1024
+const GREP_REGEX_FILE_TIMEOUT_MS = 250
+const GREP_REGEX_WORKER_SOURCE = `
+const { parentPort } = require('node:worker_threads');
+parentPort.on('message', ({ id, pattern, flags, text, multiline, mode, matchLimit }) => {
+  try {
+    const regex = new RegExp(pattern, flags);
+    const matches = [];
+    let count = 0;
+    const add = (match, lineIndex) => {
+      count++;
+      if (mode === 'content') matches.push({ index: match.index, text: match[0], lineIndex });
+    };
+    if (multiline) {
+      let match;
+      while ((match = regex.exec(text)) !== null) {
+        add(match, undefined);
+        if (matchLimit > 0 && count >= matchLimit) break;
+        if (match[0].length === 0) regex.lastIndex++;
+      }
+    } else {
+      const lines = text.split(/\\r?\\n/);
+      let offset = 0;
+      for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+        const line = lines[lineIndex];
+        regex.lastIndex = 0;
+        const match = regex.exec(line);
+        if (match) {
+          add({ index: offset + match.index, 0: line }, lineIndex);
+          if (matchLimit > 0 && count >= matchLimit) break;
+        }
+        offset += line.length + (text.slice(offset + line.length, offset + line.length + 2) === '\\r\\n' ? 2 : text[offset + line.length] === '\\n' ? 1 : 0);
+      }
+    }
+    parentPort.postMessage({ id, ok: true, count, matches });
+  } catch (error) {
+    parentPort.postMessage({ id, ok: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
+`
 const SCRIPT_IO_MAX = 100 * 1024
 const GREP_SKIP_DIRS = new Set([
   'node_modules',
@@ -1278,16 +1318,71 @@ export async function grepFallbackJs(
   pattern: string,
   args: GrepExecArgs,
   signal: AbortSignal,
-  onProgress: (s: string) => void
+  onProgress: (s: string) => void,
+  timeoutMs = 60_000
 ): Promise<string> {
   let flags = 'g'
   if (args.ignoreCase) flags += 'i'
   if (args.multiline) flags += 's'
-  let lineRe: RegExp
-  try {
-    lineRe = new RegExp(pattern, flags)
-  } catch (e) {
-    return `Error: ${toToolUserError(e, { toolName: 'grep' })}`
+  const deadline = Date.now() + Math.max(1, timeoutMs)
+  let regexWorker: Worker | undefined
+  let nextRegexJobId = 0
+  let pendingRegexJob: {
+    id: number
+    resolve: (result: { count: number; matches: Array<{ index: number; text: string; lineIndex?: number }> }) => void
+    reject: (error: Error) => void
+    timer: ReturnType<typeof setTimeout>
+    abort: () => void
+  } | undefined
+  const terminateRegexWorker = (): void => {
+    const worker = regexWorker
+    regexWorker = undefined
+    if (pendingRegexJob) {
+      clearTimeout(pendingRegexJob.timer)
+      signal.removeEventListener('abort', pendingRegexJob.abort)
+      pendingRegexJob = undefined
+    }
+    if (worker) void worker.terminate()
+  }
+  const scanText = (text: string, matchLimit: number): Promise<{ count: number; matches: Array<{ index: number; text: string; lineIndex?: number }> }> => {
+    if (signal.aborted) return Promise.resolve({ count: 0, matches: [] })
+    const remainingMs = deadline - Date.now()
+    if (remainingMs <= 0) return Promise.reject(new Error('正则搜索总时间已超时'))
+    regexWorker ??= new Worker(GREP_REGEX_WORKER_SOURCE, { eval: true })
+    const worker = regexWorker
+    const id = ++nextRegexJobId
+    return new Promise((resolve, reject) => {
+      const settle = (action: () => void): void => {
+        if (!pendingRegexJob || pendingRegexJob.id !== id) return
+        clearTimeout(pendingRegexJob.timer)
+        signal.removeEventListener('abort', pendingRegexJob.abort)
+        pendingRegexJob = undefined
+        action()
+      }
+      const timer = setTimeout(() => {
+        terminateRegexWorker()
+        reject(new Error('单文件正则执行超时，已终止隔离扫描'))
+      }, Math.min(GREP_REGEX_FILE_TIMEOUT_MS, remainingMs))
+      const abort = (): void => {
+        terminateRegexWorker()
+        resolve({ count: 0, matches: [] })
+      }
+      pendingRegexJob = { id, resolve, reject, timer, abort }
+      signal.addEventListener('abort', abort, { once: true })
+      worker.once('message', (result: { id: number; ok: boolean; count?: number; matches?: Array<{ index: number; text: string; lineIndex?: number }>; error?: string }) => {
+        if (result.id !== id) return
+        if (!result.ok) {
+          settle(() => reject(new Error(result.error ?? '无效的正则表达式')))
+          return
+        }
+        settle(() => resolve({ count: result.count ?? 0, matches: result.matches ?? [] }))
+      })
+      worker.once('error', (error) => settle(() => reject(error)))
+      worker.postMessage({
+        id, pattern, flags, text, multiline: args.multiline,
+        mode: args.outputMode, matchLimit
+      })
+    })
   }
   const headLimit = args.headLimit <= 0 ? Infinity : args.headLimit
   const filesWithMatches: string[] = []
@@ -1309,21 +1404,42 @@ export async function grepFallbackJs(
         return p.endsWith(gg) || base === gg
       }
     }
-    const rx = g
-      .replace(/\./g, '\\.')
-      .replace(/\*\*/g, '___')
-      .replace(/\*/g, '[^/]*')
-      .replace(/___/g, '.*')
-    let re: RegExp
-    try {
-      re = new RegExp(`^${rx}$`, 'i')
-    } catch {
-      return () => true
+    const wildcardMatch = (pattern: string, value: string): boolean => {
+      const p = pattern.toLowerCase()
+      const v = value.toLowerCase()
+      let pi = 0
+      let vi = 0
+      let starIndex = -1
+      let starCanMatchSlash = false
+      let starValueIndex = 0
+      let starNextPatternIndex = 0
+      while (vi < v.length) {
+        if (pi < p.length && (p[pi] === '?' || p[pi] === v[vi])) {
+          pi++
+          vi++
+        } else if (p[pi] === '*') {
+          const doubleStar = p[pi + 1] === '*'
+          starIndex = pi
+          starCanMatchSlash = doubleStar
+          pi += doubleStar ? 2 : 1
+          starNextPatternIndex = pi
+          starValueIndex = vi
+        } else if (starIndex >= 0 && (starCanMatchSlash || v[starValueIndex] !== '/')) {
+          starValueIndex++
+          vi = starValueIndex
+          pi = starNextPatternIndex
+        } else {
+          return false
+        }
+      }
+      while (p[pi] === '*') pi++
+      return pi === p.length
     }
     return (rel: string): boolean => {
       const p = toPosix(rel)
       const base = p.slice(p.lastIndexOf('/') + 1)
-      return re.test(p) || re.test(base)
+      const pattern = toPosix(g)
+      return wildcardMatch(pattern, p) || wildcardMatch(pattern, base)
     }
   }
 
@@ -1332,6 +1448,7 @@ export async function grepFallbackJs(
     !applyGlob || !globMatcher || globMatcher(rel)
 
   async function scanFile(full: string, applyGlob: boolean): Promise<void> {
+    if (Date.now() >= deadline) throw new Error('正则搜索总时间已超时')
     const rel = path.relative(workDir, full)
     if (!matchesGlob(rel, applyGlob)) return
     filesScanned++
@@ -1345,21 +1462,42 @@ export async function grepFallbackJs(
     if (buf.length > GREP_FILE_MAX) return
     if (isBinaryBuffer(buf)) return
     const text = buf.toString('utf8')
-
+    const matchLimit = args.outputMode === 'content'
+      ? Math.max(1, headLimit === Infinity ? 100_000 : headLimit - totalMatches)
+      : 0
+    const scan = await scanText(text, matchLimit)
+    if (signal.aborted || scan.count === 0) return
+    totalMatches += scan.count
     if (args.outputMode === 'content') {
-      if (args.multiline) scanContentMultiline(rel, text)
-      else scanContentLines(rel, text)
+      if (args.multiline) {
+        for (const match of scan.matches) {
+          const startLine = text.slice(0, match.index).split('\n').length
+          pushContentLine(rel, startLine, match.text, true)
+        }
+      } else {
+        const lines = text.split(/\r?\n/)
+        const ctx = args.context && args.context > 0 ? args.context : 0
+        const emitted = new Set<number>()
+        for (const match of scan.matches) {
+          const lineIndex = match.lineIndex!
+          if (ctx > 0) {
+            const lo = Math.max(0, lineIndex - ctx)
+            const hi = Math.min(lines.length - 1, lineIndex + ctx)
+            for (let cix = lo; cix <= hi; cix++) {
+              if (emitted.has(cix)) continue
+              emitted.add(cix)
+              pushContentLine(rel, cix + 1, lines[cix]!, cix === lineIndex)
+            }
+          } else pushContentLine(rel, lineIndex + 1, lines[lineIndex]!, true)
+        }
+      }
       return
     }
-
-    const matches = countMatches(text)
-    if (matches === 0) return
-    totalMatches += matches
     if (args.outputMode === 'files_with_matches') {
       filesWithMatches.push(rel)
-      if (filesWithMatches.length >= headLimit) return
+      return
     } else if (args.outputMode === 'count') {
-      counts.set(rel, matches)
+      counts.set(rel, scan.count)
     }
   }
 
@@ -1380,64 +1518,6 @@ export async function grepFallbackJs(
     }
   }
 
-  // 逐行匹配（非 multiline），context>0 时附带上下文行
-  function scanContentLines(rel: string, text: string): void {
-    const lines = text.split(/\r?\n/)
-    const ctx = args.context && args.context > 0 ? args.context : 0
-    const emitted = new Set<number>()
-    for (let idx = 0; idx < lines.length; idx++) {
-      const line = lines[idx]!
-      lineRe.lastIndex = 0
-      if (!lineRe.test(line)) continue
-      totalMatches++
-      if (ctx > 0) {
-        const lo = Math.max(0, idx - ctx)
-        const hi = Math.min(lines.length - 1, idx + ctx)
-        for (let cix = lo; cix <= hi; cix++) {
-          if (emitted.has(cix)) continue
-          emitted.add(cix)
-          pushContentLine(rel, cix + 1, lines[cix]!, cix === idx)
-        }
-      } else {
-        pushContentLine(rel, idx + 1, line, true)
-      }
-      if (totalMatches >= headLimit) return
-    }
-  }
-
-  // 跨行匹配（multiline）：对整段文本做匹配，输出命中块
-  function scanContentMultiline(rel: string, text: string): void {
-    lineRe.lastIndex = 0
-    let m: RegExpExecArray | null
-    while ((m = lineRe.exec(text)) !== null) {
-      totalMatches++
-      const startLine = text.slice(0, m.index).split('\n').length
-      pushContentLine(rel, startLine, m[0], true)
-      if (totalMatches >= headLimit) return
-      if (m[0].length === 0) lineRe.lastIndex++
-    }
-  }
-
-  // count/files 模式用于判断文件是否命中并统计：multiline 按整段计数，否则按行计数
-  function countMatches(text: string): number {
-    let c = 0
-    if (args.multiline) {
-      lineRe.lastIndex = 0
-      let m: RegExpExecArray | null
-      while ((m = lineRe.exec(text)) !== null) {
-        c++
-        if (m[0].length === 0) lineRe.lastIndex++
-      }
-      return c
-    }
-    const lines = text.split(/\r?\n/)
-    for (const line of lines) {
-      lineRe.lastIndex = 0
-      if (lineRe.test(line)) c++
-    }
-    return c
-  }
-
   const limitReached = (): boolean =>
     (args.outputMode === 'content' && totalMatches >= headLimit) ||
     (args.outputMode === 'files_with_matches' && filesWithMatches.length >= headLimit)
@@ -1445,6 +1525,7 @@ export async function grepFallbackJs(
   // R6（C4）：walk 与 rg 同语义——默认跳名单成员 + 隐藏条目 + 敏感路径（修掉「walk 能搜到 .env、
   // rg 不能」的既有两引擎不一致；这是收紧，非放宽）。includeIgnored 解除名单与隐藏（不解除敏感）。
   async function walk(dir: string): Promise<void> {
+    if (Date.now() >= deadline) throw new Error('正则搜索总时间已超时')
     let entries: Dirent[]
     try {
       entries = await fs.readdir(dir, { withFileTypes: true })
@@ -1452,6 +1533,7 @@ export async function grepFallbackJs(
       return
     }
     for (const ent of entries) {
+      if (Date.now() >= deadline) throw new Error('正则搜索总时间已超时')
       if (signal.aborted || limitReached()) return
       const full = path.join(dir, ent.name)
       const isHiddenEntry = ent.name.startsWith('.')
@@ -1463,10 +1545,16 @@ export async function grepFallbackJs(
     }
   }
 
-  if (signal.aborted) return 'No matches found'
-  const st = await fs.stat(absSearch).catch(() => null)
-  if (st?.isFile()) await scanFile(absSearch, false)
-  else await walk(absSearch)
+  try {
+    if (signal.aborted) return 'No matches found'
+    const st = await fs.stat(absSearch).catch(() => null)
+    if (st?.isFile()) await scanFile(absSearch, false)
+    else await walk(absSearch)
+  } catch (error) {
+    return `Error: ${toToolUserError(error, { toolName: 'grep' })}`
+  } finally {
+    terminateRegexWorker()
+  }
   if (args.outputMode === 'files_with_matches') {
     if (filesWithMatches.length === 0) return 'No matches found'
     const slice = filesWithMatches.slice(0, headLimit)
@@ -1531,7 +1619,7 @@ export const grepExecutor: ToolExecutor = {
       const executeFallback = async (): Promise<ToolExecutorResult> => {
         const fallbackText = await grepFallbackJs(
           ctx.workDir, absSearch, pattern, gargs, ctx.signal,
-          (message) => ctx.sendProgress('grep', message)
+          (message) => ctx.sendProgress('grep', message), timeoutMs
         )
         const authorizedIdentity = ctx.readExecutionPermit?.targets[0]?.identity
         const currentStat = authorizedIdentity ? await fs.stat(absSearch).catch(() => null) : null
