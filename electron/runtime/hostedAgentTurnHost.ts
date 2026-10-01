@@ -35,6 +35,9 @@ export type HostedAgentTurnHostDependencies<TCall extends { invocationId: string
   deferredToolNames?: ReadonlySet<string>
   /** FR8：延迟工具未浮现直调判定（sessionLedgerForToolResult 持久化投影查询）。 */
   deferredUnsurfacedCheck?: (toolName: string) => boolean
+  /** FR12②：本轮因预算被裁的工具名（快照层 budgetDropped ∪ 广告面层 eagerBudgetDropped）；
+   *  被拒文案据此区分「预算未注入」与「服务不可用」。 */
+  budgetDroppedNames?: ReadonlySet<string>
   resolveRegisteredToolName?(providerToolName: string): string
   capabilities: CapabilityRegistry
   permits: SafetyPermitStore
@@ -118,6 +121,27 @@ export function createHostedAgentTurnHost<
       const known = [...new Set([...visibleTools, ...deferredNames])]
       const authorized = [...new Set([...invocationAuthorized, ...deferredNames])]
       dependencies.capabilities.define(input.invocationId, known, authorized)
+      // FR12②：对 UNKNOWN/UNAUTHORIZED 拒绝附加区分文案——预算裁剪名单内 =「预算未注入」，
+      // 其余（幻觉名/服务已移除）=「服务不可用」。包装仅叠加 userMessage，决策语义不变。
+      const safetyGate = dependencies.safetyGate
+      const budgetDroppedNames = dependencies.budgetDroppedNames
+      const wrappedSafetyGate = budgetDroppedNames && budgetDroppedNames.size > 0
+        ? Object.assign(Object.create(safetyGate), {
+            evaluate: async (binding: Parameters<SafetyGate['evaluate']>[0], signal?: AbortSignal) => {
+              const decision = await safetyGate.evaluate(binding, signal)
+              if (decision.kind === 'deny' &&
+                (decision.reasonCode === 'UNKNOWN_CAPABILITY' || decision.reasonCode === 'UNAUTHORIZED_CAPABILITY')) {
+                return {
+                  ...decision,
+                  userMessage: budgetDroppedNames.has(binding.capabilityId)
+                    ? `工具 ${binding.capabilityId} 因本轮上下文预算未注入（已被裁剪），本轮无法调用。请减少同时启用的 MCP 工具，或在设置页查看工具预算裁剪记录。`
+                    : `工具 ${binding.capabilityId} 当前不可用：MCP 工具可能已变更或服务不可用。请确认服务连接，并在设置页刷新工具列表后重试。`
+                }
+              }
+              return decision
+            }
+          })
+        : safetyGate
       if (!input.request.messages.length && input.currentUserMessageId) throw new Error('HOSTED_CURRENT_USER_MESSAGE_MISSING')
       if (input.currentUserMessageId && input.requiredUserMessage?.id !== input.currentUserMessageId) throw new Error('HOSTED_REQUIRED_USER_ID_MISMATCH')
       if (input.requiredUserMessage && !input.request.messages.some((message) => sameMessage(message, input.requiredUserMessage!.message))) throw new Error('HOSTED_REQUIRED_USER_MESSAGE_MISSING')
@@ -130,7 +154,7 @@ export function createHostedAgentTurnHost<
         ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}),
         ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}),
         registry: dependencies.providerRegistry,
-        safetyGate: dependencies.safetyGate,
+        safetyGate: wrappedSafetyGate,
         prepareTool: dependencies.prepareTool as AgentTurnPorts['prepareTool'],
         ...(dependencies.refreshExecutionContext ? { refreshExecutionContext: dependencies.refreshExecutionContext } : {}),
         ...(dependencies.discardPreparedTool ? { discardPreparedTool: dependencies.discardPreparedTool as AgentTurnPorts['discardPreparedTool'] } : {}),

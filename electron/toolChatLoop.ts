@@ -230,6 +230,8 @@ export type RunToolChatSessionArgs = {
     deferredToolNames?: ReadonlySet<string>
     /** FR8：延迟工具未浮现直调判定（sessionLedger 持久化投影查询用）。 */
     deferredUnsurfacedCheck?: (toolName: string) => boolean
+    /** FR12②：广告面层被裁工具名（被拒文案区分用）。 */
+    eagerBudgetDroppedNames?: ReadonlySet<string>
     resolveRegisteredToolName: (providerToolName: string) => string
     windowId?: string
     maxToolRounds?: number
@@ -801,21 +803,36 @@ async function runToolChatSessionInner(
       : undefined
     // FR8/§6.4：tool_search 成功后并入命中名（surfacedNames）；延迟工具未浮现直调 → deferredUnsurfaced 观测
     if (call.toolName === 'tool_search' && !(result.isError ?? output?.success === false)) {
-      const matches = output?.data && typeof output.data === 'object' && !Array.isArray(output.data)
-        ? (output.data as { matches?: Array<{ name?: unknown }> }).matches
+      const data = output?.data && typeof output.data === 'object' && !Array.isArray(output.data)
+        ? output.data as { matches?: Array<{ name?: unknown }>; totalMatches?: unknown; truncated?: unknown }
         : undefined
-      for (const match of Array.isArray(matches) ? matches : []) {
+      const matches = Array.isArray(data?.matches) ? data!.matches : []
+      for (const match of matches) {
         if (match && typeof match.name === 'string') surfacedNames.add(match.name)
       }
+      // §6.3/10.2.6：检索返回体校准埋点（truncated 触发率、命中量分布）
+      logAgentEvent('info', 'mcp.tool_search_result', {
+        requestId: args.requestId,
+        sessionId: args.sessionId,
+        toolUseId: call.toolCallId,
+        matchCount: matches.length,
+        totalMatches: typeof data?.totalMatches === 'number' ? data.totalMatches : undefined,
+        truncated: data?.truncated === true
+      })
     }
     if (deferredUnsurfacedCheck(call.toolName) && !(result.isError ?? output?.success === false)) {
       surfacedNames.add(call.toolName)
+      // R1 校准：未检索直调（兜底触发）观测
+      calledDeferredNames.add(call.toolName)
       logAgentEvent('info', 'tool.deferred_unsurfaced', {
         requestId: args.requestId,
         sessionId: args.sessionId,
         toolUseId: call.toolCallId,
         toolName: call.toolName
       })
+    } else if (deferredToolNames.has(call.toolName) && !(result.isError ?? output?.success === false)) {
+      // §6.3/10.2.6：surface 后未调用条目占比的分母侧——浮现后实际调用的延迟工具
+      calledDeferredNames.add(call.toolName)
     }
     if (isProcessToolName(call.toolName)) {
       let serialized = 'null'
@@ -990,6 +1007,8 @@ async function runToolChatSessionInner(
   }
   // FR8/D2 观测：本 invoke 内 tool_search 成功下发的延迟工具名；延迟工具执行时不在集合内 → deferredUnsurfaced
   const surfacedNames = new Set<string>()
+  // §6.3/10.2.6 校准：浮现后实际调用的延迟工具名（surface 后未调用占比的分母侧）
+  const calledDeferredNames = new Set<string>()
   const deferredUnsurfacedCheck = (toolName: string): boolean =>
     deferredToolNames.has(toolName) && !surfacedNames.has(toolName)
   if (toolNames.includes('browser')) {
@@ -1114,6 +1133,23 @@ async function runToolChatSessionInner(
             // FR3/A 方案：延迟名随依赖传入，capabilities.define 并入 known + authorized（门禁簿记，零上下文成本）
             deferredToolNames,
             deferredUnsurfacedCheck,
+            // FR8：延迟维度（turn 计量；索引每轮重发，节省量按轮落日志）
+            ...(deferredToolNames.size > 0 && mcpCatalog && deferredPlan.mode === 'deferred'
+              ? {
+                  deferredDimension: {
+                    toolCount: deferredToolNames.size,
+                    indexChars: mcpCatalog.text.length,
+                    eagerEquivalentChars: deferredPlan.deferredEntries.reduce(
+                      (sum, entry) => sum + JSON.stringify(entry).length,
+                      0
+                    )
+                  }
+                }
+              : {}),
+            // FR12②：广告面层被裁名（eagerBudgetDropped）传给拒绝文案区分
+            ...(effectiveTools.eagerBudgetDropped.length > 0
+              ? { eagerBudgetDroppedNames: new Set(effectiveTools.eagerBudgetDropped.map((drop) => drop.mappedName)) }
+              : {}),
             windowId: contextWindowId,
             ...(args.maxToolLoopRounds !== undefined ? { maxToolRounds: args.maxToolLoopRounds } : {}),
             ...(args.hostHistory ? { hostHistory: args.hostHistory } : {}),
@@ -1123,6 +1159,17 @@ async function runToolChatSessionInner(
             ...(requiredUserMessage ? { requiredUserMessage } : {})
           })
           if (!handoff) throw new Error('HOSTED_TURN_HANDOFF_MISSING_RESULT')
+          // §6.3/10.2.6 校准：surface 后未调用条目占比（surfacedNames − calledDeferredNames）
+          if (surfacedNames.size > 0) {
+            const unusedSurfaced = [...surfacedNames].filter((name) => !calledDeferredNames.has(name))
+            logAgentEvent('info', 'mcp.deferred_unused_surfaced', {
+              requestId,
+              sessionId,
+              surfacedCount: surfacedNames.size,
+              calledCount: calledDeferredNames.size,
+              unusedSurfacedCount: unusedSurfaced.length
+            })
+          }
           return markHostedTurnFinalization(handoff.result, handoff.finalization)
         } catch (error) {
           if (error instanceof HostedTurnFinalizedError || error instanceof ToolLoopRoundLimitError) throw error

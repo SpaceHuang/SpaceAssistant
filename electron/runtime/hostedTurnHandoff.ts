@@ -29,7 +29,7 @@ function hostedFailureOutcome(terminal: Parameters<typeof decodeTerminalOutcome>
 }
 
 type HostedRuntimeFactory = Readonly<{
-  createHostedTurnRuntime(input: Readonly<{ confirmationAdapter?: unknown; authorizedToolNames: ReadonlySet<string>; /** FR3：延迟名集合（并入 capabilities known + authorized）。 */ deferredToolNames?: ReadonlySet<string>; /** FR8：延迟工具未浮现直调判定（sessionLedger 持久化投影用）。 */ deferredUnsurfacedCheck?: (toolName: string) => boolean; resolveRegisteredToolName?: (providerToolName: string) => string; hostHistory?: HistoryPort; applicationAdmission?: ApplicationAdmissionPort; deadlineAt?: number; afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']; recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']; refreshExecutionContext?(call: { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }, stage: Extract<import('../../packages/agent-sdk/src/turn').ToolPreparationStage, { kind: 'recheck' }>, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>> }>): Promise<Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>> | Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>
+  createHostedTurnRuntime(input: Readonly<{ confirmationAdapter?: unknown; authorizedToolNames: ReadonlySet<string>; /** FR3：延迟名集合（并入 capabilities known + authorized）。 */ deferredToolNames?: ReadonlySet<string>; /** FR8：延迟维度（turn 计量）。 */ deferredDimension?: import('../../src/shared/usageAttribution').DeferredToolDimension; /** FR8：延迟工具未浮现直调判定（sessionLedger 持久化投影用）。 */ deferredUnsurfacedCheck?: (toolName: string) => boolean; /** FR12②：广告面层被裁工具名。 */ eagerBudgetDroppedNames?: ReadonlySet<string>; resolveRegisteredToolName?: (providerToolName: string) => string; hostHistory?: HistoryPort; applicationAdmission?: ApplicationAdmissionPort; deadlineAt?: number; afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']; recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']; refreshExecutionContext?(call: { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }, stage: Extract<import('../../packages/agent-sdk/src/turn').ToolPreparationStage, { kind: 'recheck' }>, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>> }>): Promise<Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>> | Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>
 }>
 
 type HandoffInput = Readonly<{
@@ -37,8 +37,12 @@ type HandoffInput = Readonly<{
   authorizedToolNames: ReadonlySet<string>
   /** FR3：延迟名集合（不在 request.tools、在授权面）。 */
   deferredToolNames?: ReadonlySet<string>
+  /** FR8：延迟维度（turn 计量）。 */
+  deferredDimension?: import('../../src/shared/usageAttribution').DeferredToolDimension
   /** FR8：延迟工具未浮现直调判定。 */
   deferredUnsurfacedCheck?: (toolName: string) => boolean
+  /** FR12②：广告面层被裁工具名（被拒文案区分用）。 */
+  eagerBudgetDroppedNames?: ReadonlySet<string>
   resolveRegisteredToolName: (providerToolName: string) => string
   windowId?: string
   hostHistory?: HistoryPort
@@ -275,7 +279,9 @@ export function createHostedTurnHandoff(input: {
       ...(input.confirmationAdapter ? { confirmationAdapter: input.confirmationAdapter } : {}),
       authorizedToolNames: handoff.authorizedToolNames,
       ...(handoff.deferredToolNames ? { deferredToolNames: handoff.deferredToolNames } : {}),
+      ...(handoff.deferredDimension ? { deferredDimension: handoff.deferredDimension } : {}),
       ...(handoff.deferredUnsurfacedCheck ? { deferredUnsurfacedCheck: handoff.deferredUnsurfacedCheck } : {}),
+      ...(handoff.eagerBudgetDroppedNames ? { eagerBudgetDroppedNames: handoff.eagerBudgetDroppedNames } : {}),
       resolveRegisteredToolName: handoff.resolveRegisteredToolName,
       hostHistory: handoff.hostHistory ?? input.hostHistory ?? historyFacade,
       ...(handoff.applicationAdmission ? { applicationAdmission: handoff.applicationAdmission } : {}),

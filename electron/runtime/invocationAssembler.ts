@@ -597,6 +597,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
 
   const attributionByModelTurn = new Map<number, StepAttribution>()
   let turnToolAttribution: import('../../src/shared/usageAttribution').TurnToolDimension | undefined
+  // FR8：延迟维度共享引用（createHostedTurnRuntime 写入、observer 每模型请求读取累计）
+  const deferredDimensionRef: { current?: import('../../src/shared/usageAttribution').DeferredToolDimension } = {}
   const resolveAgentSdkToolName = (name: string): string => {
     const registry = getDefaultAgentRuntime().builtinRegistry as { get(name: string): unknown; entries?(): readonly Readonly<{ name: string }>[] }
     return resolveRegisteredToolName(name, registry)
@@ -1018,6 +1020,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       deferredToolNames?: ReadonlySet<string>
       /** FR8：延迟工具未浮现直调判定（sessionLedgerForToolResult 投影查询）。 */
       deferredUnsurfacedCheck?: (toolName: string) => boolean
+      /** FR12②：广告面层被裁工具名（computeEffectiveTools.eagerBudgetDropped），与快照层合并进被拒文案区分。 */
+      eagerBudgetDroppedNames?: ReadonlySet<string>
       resolveRegisteredToolName?: (providerToolName: string) => string
     }) => {
       const routeId = materials.providerRouteId
@@ -1039,6 +1043,14 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         authorizedToolNames: input.authorizedToolNames,
         ...(input.deferredToolNames ? { deferredToolNames: input.deferredToolNames } : {}),
         ...(input.deferredUnsurfacedCheck ? { deferredUnsurfacedCheck: input.deferredUnsurfacedCheck } : {}),
+        ...(input.eagerBudgetDroppedNames || mcpSnapshot.budgetDropped.length > 0
+          ? {
+              budgetDroppedNames: new Set<string>([
+                ...mcpSnapshot.budgetDropped.map((drop) => drop.mappedName),
+                ...(input.eagerBudgetDroppedNames ?? [])
+              ])
+            }
+          : {}),
         ...(input.resolveRegisteredToolName ? { resolveRegisteredToolName: input.resolveRegisteredToolName } : {}),
         capabilities,
         permits: runtime.safetyPermits,
@@ -1142,8 +1154,12 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       authorizedToolNames: ReadonlySet<string>
       /** FR3：延迟名集合（并入 capabilities known + authorized，门禁簿记零上下文成本）。 */
       deferredToolNames?: ReadonlySet<string>
+      /** FR8：延迟维度（turn 计量：索引字符数 / eager 等效字符数；写入 observer 共享引用）。 */
+      deferredDimension?: import('../../src/shared/usageAttribution').DeferredToolDimension
       /** FR8：延迟工具未浮现直调判定（sessionLedgerForToolResult 持久化投影查询用）。 */
       deferredUnsurfacedCheck?: (toolName: string) => boolean
+      /** FR12②：广告面层被裁工具名（computeEffectiveTools.eagerBudgetDropped）。 */
+      eagerBudgetDroppedNames?: ReadonlySet<string>
       resolveRegisteredToolName?: (providerToolName: string) => string
       hostHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
       afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
@@ -1175,13 +1191,42 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         throw new Error('HOSTED_MCP_EXECUTOR_PORT_REQUIRED')
       }
       const resolveToolName = input.resolveRegisteredToolName ?? ((name: string) => resolveRegisteredToolName(name, registry))
+      // FR8：延迟维度写入共享引用（observer 每模型请求读取累计）
+      deferredDimensionRef.current = input.deferredDimension
       const registeredTools = hostedGateComposition.createRegisteredTools({ ...input, registry, resolveRegisteredToolName: resolveToolName })
+      // FR12②：REGISTERED_TOOL_NOT_FOUND（幻觉名/被裁名）映射为结构化拒绝 + 区分文案——
+      // 预算裁剪名单内 =「预算未注入」，其余 =「服务不可用/已变更」；turn 不再因幻名整体失败。
+      const budgetDroppedNames = new Set<string>([
+        ...(mcpSnapshot?.budgetDropped ?? []).map((drop) => drop.mappedName),
+        ...(input.eagerBudgetDroppedNames ?? [])
+      ])
+      const registeredToolsForTurn = {
+        ...registeredTools,
+        prepareTool: async (call: Parameters<typeof registeredTools.prepareTool>[0], stage: Parameters<typeof registeredTools.prepareTool>[1]) => {
+          try {
+            return await registeredTools.prepareTool(call, stage)
+          } catch (error) {
+            const message = error instanceof Error ? error.message : ''
+            if (message.startsWith('REGISTERED_TOOL_NOT_FOUND:')) {
+              const isBudgetDropped = budgetDroppedNames.has(call.toolName)
+              const { ToolDeniedError } = await import('../../packages/agent-sdk/src/turn')
+              throw new ToolDeniedError(
+                isBudgetDropped ? 'BUDGET_NOT_SURFACED' : 'UNKNOWN_CAPABILITY',
+                isBudgetDropped
+                  ? `工具 ${call.toolName} 因本轮上下文预算未注入（已被裁剪），本轮无法调用。请减少同时启用的 MCP 工具，或在设置页查看工具预算裁剪记录。`
+                  : `工具 ${call.toolName} 当前不可用：MCP 工具可能已变更或服务不可用。请确认服务连接，并在设置页刷新工具列表后重试。`
+              )
+            }
+            throw error
+          }
+        }
+      }
       const policy = hostedGateComposition.createSafetyPolicy(registeredTools, resolveToolName)
       const confirmation = hostedGateComposition.createConfirmationPort(policy, input.confirmationAdapter ?? {
         cancel: (call) => { cancelToolConfirm(materials.requestId, call.toolCallId, materials.sessionId) }
       })
       const host = hostedGateComposition.createHostedTurnHost({
-        registeredTools,
+        registeredTools: registeredToolsForTurn,
         registry,
         authorizedToolNames: input.authorizedToolNames,
         // FR3：延迟名随依赖传入（hostedAgentTurnHost 的 capabilities.define 并入 known + authorized）
@@ -1292,6 +1337,19 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       emitFactEvent: materials.emitFactEvent,
       onUsageAttribution: ({ modelTurn, attribution }) => attributionByModelTurn.set(modelTurn, attribution),
       onTurnToolAttribution: (dimension) => { turnToolAttribution = dimension },
+      deferredDimensionRef,
+      onDeferredSavings: ({ modelTurn, toolCount, eagerEquivalentTokens, indexTokens, savedTokens }) => {
+        logAgentEvent('info', 'mcp.deferred_savings', {
+          requestId: materials.requestId,
+          sessionId: materials.sessionId,
+          lane: materialsLane,
+          modelTurn,
+          deferredToolCount: toolCount,
+          eagerEquivalentTokens,
+          indexTokens,
+          savedTokens
+        })
+      },
       notify: buildEventSink(materials).notify,
       onFileTreeChanged: materials.onFileTreeChanged,
       mapToolResult: (call, output, isError) => {

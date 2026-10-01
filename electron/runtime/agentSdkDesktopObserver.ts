@@ -11,7 +11,7 @@ import { buildRequestContextPayload, buildRequestHeaderPayload, computeAnthropic
 import { projectRequestHeaderForWindow } from './requestHeaderProjection'
 import { computeContextPressure } from '../../src/shared/contextMeter'
 import { projectUsageAfterToolResults, type ContextUsageRaw } from '../../src/shared/contextUsageEstimate'
-import { accumulateToolDeclarationSnapshot, accumulateToolResultVolume, buildStepAttribution, emptyTurnToolDimension, summarizeToolDeclarations, type TurnToolDimension } from '../../src/shared/usageAttribution'
+import { accumulateDeferredDimension, accumulateToolDeclarationSnapshot, accumulateToolResultVolume, buildStepAttribution, emptyTurnToolDimension, estimateDeferredSavings, summarizeToolDeclarations, type DeferredToolDimension, type TurnToolDimension } from '../../src/shared/usageAttribution'
 
 type ObserverChunk = Exclude<import('../../packages/agent-sdk/src/model').StreamChunk, { type: 'finish' }>
 
@@ -40,6 +40,10 @@ export function createAgentSdkDesktopObserver(input: {
   mapToolResult?(call: { toolCallId: string; toolName: string; input: Record<string, unknown> }, output: unknown, isError: boolean): NonNullable<Extract<AssistantFactEvent, { type: 'tool-result' }>['result']>
   onUsageAttribution?(input: { modelTurn: number; attribution: ReturnType<typeof buildStepAttribution> & { toolDeclarationSnapshot: ReturnType<typeof summarizeToolDeclarations> } }): void
   onTurnToolAttribution?(dimension: TurnToolDimension): void
+  /** FR8：延迟维度共享引用（createHostedTurnRuntime 时写入；每模型请求读取累计）。 */
+  deferredDimensionRef?: { current?: DeferredToolDimension }
+  /** FR8：节省量按轮日志出口（assembler 落 agentLogger；事件面不进 wire 面与会话事件流）。 */
+  onDeferredSavings?(input: { modelTurn: number; toolCount: number; eagerEquivalentTokens: number; indexTokens: number; savedTokens: number }): void
 }): AgentTurnObserver {
   let pendingChunks: ObserverChunk[] = []
   let streamedText = ''
@@ -302,6 +306,17 @@ export function createAgentSdkDesktopObserver(input: {
       const tools = (request.tools ?? []).map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema, ...(tool.strictSchema === 'require' ? { strict: true } : {}) }))
       const toolDeclarationSnapshot = summarizeToolDeclarations(tools)
       accumulateToolDeclarationSnapshot(turnToolDimension, toolDeclarationSnapshot)
+      // FR8：延迟维度按轮累计 + 节省量日志（eager 等效 − 索引，chars÷3.5）
+      const deferred = input.deferredDimensionRef?.current
+      if (deferred && deferred.toolCount > 0) {
+        accumulateDeferredDimension(turnToolDimension, deferred)
+        const savings = estimateDeferredSavings(deferred)
+        input.onDeferredSavings?.({
+          modelTurn,
+          toolCount: deferred.toolCount,
+          ...savings
+        })
+      }
       const attribution = { ...buildStepAttribution({ system, tools, messages }), toolDeclarationSnapshot }
       input.onUsageAttribution?.({ modelTurn, attribution })
       return attribution

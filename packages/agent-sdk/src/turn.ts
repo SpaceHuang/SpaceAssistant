@@ -1208,7 +1208,18 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         await applicationAdmission.wait(tool.toolCallId, 'approval-wait-capacity')
       }) : undefined
       if (queuedForCandidate) await applicationAdmission.activate(tool.toolCallId)
-      const initialBinding = await input.prepareTool(executionCall, { kind: 'initial' })
+      const initialBinding = await (async () => {
+        try {
+          return await input.prepareTool(executionCall, { kind: 'initial' })
+        } catch (error) {
+          // FR12②：host 侧 prepareTool 可抛 ToolDeniedError（如 REGISTERED_TOOL_NOT_FOUND → 结构化拒绝）；
+          // 与 safetyGate deny 路径一致，先解除 pending 再抛，避免 invocation 终态校验挂起。
+          if (error instanceof ToolDeniedError) {
+            await markNotDispatched(tool, error.reasonCode, error.userMessage)
+          }
+          throw error
+        }
+      })()
       await projectTool(input.observer, 'tool-started', () => input.observer?.onToolStarted?.(executionCall))
       throwIfAborted(input.request.signal)
       if (initialBinding.invocationId !== invocationId || initialBinding.toolCallId !== tool.toolCallId || initialBinding.capabilityId !== tool.toolName || initialBinding.phase !== 'initial-compat') {
@@ -1221,7 +1232,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       let confirmation: Readonly<{ receipt: string }> | undefined
       if (initialDecision.kind === 'deny') {
         await markNotDispatched(tool, initialDecision.reasonCode)
-        throw new ToolDeniedError(initialDecision.reasonCode)
+        // FR12②：deny 决策可携带模型可见的区分文案（预算未注入 vs 服务不可用）
+        throw new ToolDeniedError(initialDecision.reasonCode, initialDecision.userMessage)
       }
       if (initialDecision.kind === 'ask') {
         if (!input.confirmation) {

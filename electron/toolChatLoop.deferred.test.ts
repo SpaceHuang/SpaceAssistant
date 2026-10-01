@@ -296,4 +296,34 @@ describe('MCP 工具延迟加载（Phase 1 装配接线）', () => {
     expect(tools).not.toContain(MCP_TOOL)
     expect(tools).toContain('tool_search')
   })
+
+  it('被裁工具被拒：文案区分「预算未注入」而非「服务不可用」（FR12②/10.1.14）', async () => {
+    const routeId = 'route-deferred-budget-denied'
+    const droppedTool = 'mcp_docs_trimmed_9'
+    const { providerCalls } = registerProvider(routeId, [
+      { calls: [{ toolName: droppedTool, input: {} }] },
+      { calls: [] }
+    ])
+    const { ports: mcpPorts } = makeMcpPorts(makeSnapshot())
+    mcpPorts.snapshot.budgetDropped = [{ mappedName: droppedTool, reason: 'bytes' }]
+    await runWith(baseMaterials({ providerRouteId: routeId }), mcpPorts)
+
+    const round2Messages = JSON.stringify(providerCalls[1]!.request.messages)
+    expect(round2Messages).toContain('预算')
+    expect(round2Messages).not.toContain('服务不可用')
+  })
+
+  it('幻觉工具名被拒：文案为「服务不可用/已变更」口径（FR12②）', async () => {
+    const routeId = 'route-deferred-ghost-denied'
+    const { providerCalls } = registerProvider(routeId, [
+      { calls: [{ toolName: 'mcp_ghost_never_existed', input: {} }] },
+      { calls: [] }
+    ])
+    const { ports: mcpPorts } = makeMcpPorts(makeSnapshot())
+    await runWith(baseMaterials({ providerRouteId: routeId }), mcpPorts)
+
+    const round2Messages = JSON.stringify(providerCalls[1]!.request.messages)
+    expect(round2Messages).toContain('不可用')
+    expect(round2Messages).not.toContain('预算')
+  })
 })

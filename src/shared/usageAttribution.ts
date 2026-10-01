@@ -69,6 +69,45 @@ export type TurnToolDimension = {
   toolSources: Record<string, ToolSourceClass>
   /** 按工具名的调用次数与返回字符数（SRC-C1 / SRC-C2；SRC-B4 = tools ∖ toolResults） */
   toolResults: Record<string, { calls: number; chars: number }>
+  /** FR8：MCP 延迟加载维度（加性字段；缺省 = 本 turn 未启用延迟，读取侧容忍缺失）。 */
+  deferred?: DeferredToolDimension
+}
+
+/** FR8：延迟加载维度——多轮请求重复计入（索引每轮重发，与工具声明累计口径一致）。 */
+export type DeferredToolDimension = {
+  /** 延迟工具数量（延迟模式索引中的工具数） */
+  toolCount: number
+  /** 「MCP 工具索引」区块字符数（含标题与提示行） */
+  indexChars: number
+  /** eager 等效字符数：延迟条目若全量注入的 descriptor JSON 总字节（节省量分母） */
+  eagerEquivalentChars: number
+}
+
+/** FR8：节省量（按轮）：eager 等效 toolsTokens − 索引 token（chars÷3.5 口径）。 */
+export type DeferredSavings = {
+  eagerEquivalentTokens: number
+  indexTokens: number
+  savedTokens: number
+}
+
+/** 累计一次延迟维度观测（每模型请求一次；多 step 重复计入请求成本）。 */
+export function accumulateDeferredDimension(dim: TurnToolDimension, deferred: DeferredToolDimension): void {
+  if (deferred.toolCount <= 0) return
+  const current = dim.deferred ?? { toolCount: 0, indexChars: 0, eagerEquivalentChars: 0 }
+  current.toolCount = Math.max(current.toolCount, deferred.toolCount)
+  current.indexChars += deferred.indexChars
+  current.eagerEquivalentChars += deferred.eagerEquivalentChars
+  dim.deferred = current
+}
+
+/** FR8：节省量估算（不计实际 toolsTokens 的既有 builtin 面——它本来就与延迟无关）。 */
+export function estimateDeferredSavings(deferred?: DeferredToolDimension): DeferredSavings {
+  if (!deferred || deferred.eagerEquivalentChars <= 0) {
+    return { eagerEquivalentTokens: 0, indexTokens: 0, savedTokens: 0 }
+  }
+  const eagerEquivalentTokens = Math.ceil(deferred.eagerEquivalentChars / 3.5)
+  const indexTokens = Math.ceil(deferred.indexChars / 3.5)
+  return { eagerEquivalentTokens, indexTokens, savedTokens: Math.max(0, eagerEquivalentTokens - indexTokens) }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

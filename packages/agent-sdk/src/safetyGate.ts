@@ -4,7 +4,7 @@ import type { PermitBinding, SafetyPermitStore } from './safetyPermit'
 export type SafetyPolicyDecision =
   | { kind: 'allow'; authorizationVersion: string; expiresAt?: number }
   | { kind: 'ask'; confirmationId: string; answerer: 'user' | 'agent'; reasonCode: string; context?: unknown }
-  | { kind: 'deny'; reasonCode: SafetyDenyReason }
+  | { kind: 'deny'; reasonCode: SafetyDenyReason; /** FR12②：模型可见的区分文案（经 ToolDeniedError.userMessage 以 is_error 工具结果回模型）；缺省走通用 fallback。 */ userMessage?: string }
 
 export type SafetyDenyReason =
   | 'UNKNOWN_CAPABILITY' | 'UNAUTHORIZED_CAPABILITY' | 'MISSING_MATERIAL' | 'RULES_FLOOR_VIOLATED'
