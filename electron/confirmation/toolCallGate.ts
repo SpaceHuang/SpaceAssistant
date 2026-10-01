@@ -33,7 +33,7 @@ import { probeReadPathFact, ReadPathProbeError, type ReadPathFact } from './extr
 import { probeFeishuMediaTarget, type FeishuMediaTargetFact } from './extractors/feishuMediaFacts'
 import { classifyWriteTargetScope, probeWritePathFact, WritePathProbeError, type WritePathFact } from './extractors/writePathFacts'
 import { extractPathField } from '../toolPathField'
-import { buildReadExecutionPermit, readInputDigest, type ReadExecutionPermit } from './readExecutionPermit'
+import { buildReadExecutionPermit, readInputDigest, type ReadExecutionPermit, type ReadPermitScope } from './readExecutionPermit'
 import type { WriteExecutionPermit } from './writeExecutionPermit'
 import { readConfirmationRegistry, type ReadConfirmationRegistry } from './readConfirmationRegistry'
 import { validateDesktopReadV1 } from '../../src/shared/policy/readPolicyV1'
@@ -868,7 +868,8 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   const isReadTool = args.toolName === 'read_file' || args.toolName === 'grep'
   const isListDirectoryTool = args.toolName === 'list_directory'
   const isPermitReadTool = isReadTool || isListDirectoryTool
-  const explicitReadPath = isListDirectoryTool ? (extractPathField(args.toolInput) ?? '.') : isReadTool ? extractPathField(args.toolInput) : undefined
+  // grep 与 list_directory 一致：path 缺省视为工作目录根（'.'）——grep 递归搜索能力释放 §7.4 改动 1
+  const explicitReadPath = isReadTool || isListDirectoryTool ? (extractPathField(args.toolInput) ?? '.') : undefined
   const readHasUnsupportedPattern = explicitReadPath !== undefined && hasUnsupportedV1ReadTarget(args.toolName, args.toolInput)
   const desktopReadValidation = lane === 'desktop' && isReadTool
     ? validateDesktopReadV1({ facts, context, zone: readPathFact?.zone, targetKind: readPathFact?.targetKind, hasExplicitPath: explicitReadPath !== undefined, hasUnsupportedPattern: readHasUnsupportedPattern })
@@ -878,9 +879,22 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       ? { type: 'deny' as const, ruleId: 'directory-read-target-unsupported', reason: '目录读取仅支持存在的目录目标' }
       : undefined
     : undefined
-  const fileReadValidation = (args.toolName === 'read_file' || args.toolName === 'grep') && readPathFact &&
-    !(['file', 'missing'].includes(readPathFact.targetKind) || (readPathFact.targetKind === 'symlink' && readPathFact.resolvedKind === 'file'))
-    ? { type: 'deny' as const, ruleId: 'read-v1-target-unsupported', reason: 'V1 文件读取仅支持单个普通文件目标' }
+  // read_file：文件或 missing；grep：文件或目录均可，missing 允许（由 permit 层报 read-target-missing）——§7.4 改动 2
+  const isResolvedDirectory = readPathFact?.targetKind === 'directory' ||
+    (readPathFact?.targetKind === 'symlink' && readPathFact.resolvedKind === 'directory')
+  const isResolvedFile = readPathFact?.targetKind === 'file' ||
+    (readPathFact?.targetKind === 'symlink' && readPathFact.resolvedKind === 'file')
+  const fileReadValidation = args.toolName === 'read_file' && readPathFact &&
+    !(['file', 'missing'].includes(readPathFact.targetKind) || isResolvedFile)
+    ? { type: 'deny' as const, ruleId: 'read-v1-target-unsupported', reason: 'read_file 仅支持单个普通文件目标' }
+    : undefined
+  const grepReadValidation = args.toolName === 'grep' && readPathFact &&
+    !(['file', 'missing'].includes(readPathFact.targetKind) || isResolvedFile || isResolvedDirectory)
+    ? { type: 'deny' as const, ruleId: 'read-v1-target-unsupported', reason: 'grep 搜索根仅支持文件或目录' }
+    : undefined
+  // 通配/多路径抢先于 unknown 染色给出准确原因与可操作指引——§7.4 改动 5（AC-25 依赖，不可选）
+  const readPatternValidation = readHasUnsupportedPattern
+    ? { type: 'deny' as const, ruleId: 'read-path-pattern-unsupported', reason: 'path 只接受文件或目录路径；文件名过滤请改用 glob 参数（如 glob:"*.ts"），通配路径与多路径不受支持' }
     : undefined
   let decision = writePathInputFailure
     ? { type: 'deny' as const, ruleId: 'write-path-input-invalid', reason: '缺少有效的路径参数，已阻止写入' }
@@ -890,14 +904,18 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     ? { type: 'deny' as const, ruleId: writePathProbeFailure.caseId, reason: '写入目标事实探测失败，已阻止执行' }
     : readPathProbeFailure
     ? { type: 'deny' as const, ruleId: readPathProbeFailure.caseId, reason: '读取目标事实探测失败，已阻止执行' }
+    : readPatternValidation
+    ? readPatternValidation
     : directoryReadValidation
     ? directoryReadValidation
     : fileReadValidation
     ? fileReadValidation
+    : grepReadValidation
+    ? grepReadValidation
     : desktopReadValidation
     ? desktopReadValidation
-    : lane === 'automation' && isReadTool && (!readPathFact || readPathFact.targetKind === 'directory' || readHasUnsupportedPattern)
-      ? { type: 'deny' as const, ruleId: 'automation-read-target-unsupported', reason: 'automation lane 仅支持显式、单目标文件读取' }
+    : lane === 'automation' && isReadTool && (!readPathFact || readHasUnsupportedPattern)
+      ? { type: 'deny' as const, ruleId: 'automation-read-target-unsupported', reason: 'automation lane 仅支持显式、单目标文件或目录读取' }
       : decide(facts, context, rules, deps)
 
   // 目录外只读是安全边界例外，只能细化已放行的结果，不能覆盖套餐或自定义规则要求的确认。
@@ -923,22 +941,32 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
 
   if (args.phase === 'recheck' && decision.type === 'require-confirm' && !args.previouslyConfirmed) decision = { type: 'deny', ruleId: 'recheck-requires-confirm', reason: '确认后复检不得发起第二次确认' }
 
-  if (readPathFact && isPermitReadTool && (decision.type === 'auto-allow' || (decision.type === 'require-confirm' && decision.answerer === 'user')) && (readPathFact.targetKind !== 'directory' || isListDirectoryTool)) {
+  // 目录目标可签发 permit 的工具：list_directory（direct-entries）与 grep（subtree）——§7.4 改动 4
+  const directoryPermittable = isListDirectoryTool || args.toolName === 'grep'
+
+  if (readPathFact && isPermitReadTool && (decision.type === 'auto-allow' || (decision.type === 'require-confirm' && decision.answerer === 'user')) && (readPathFact.targetKind !== 'directory' || directoryPermittable)) {
     const readTarget = { factId: `fact-${readPathFact.normalizedPath}`, decisionRuleId: decision.ruleId }
     result.readTargetMapping = [readTarget]
     if (decision.type === 'auto-allow') result.approvedFactIds = [readTarget]
   }
 
-  if (args.phase !== 'recheck' && readPathFact && isPermitReadTool && decision.type === 'auto-allow' && (readPathFact.targetKind !== 'directory' || isListDirectoryTool)) {
+  if (args.phase !== 'recheck' && readPathFact && isPermitReadTool && decision.type === 'auto-allow' && (readPathFact.targetKind !== 'directory' || directoryPermittable)) {
+    // targetKind 归一：symlink→directory 也表达为 directory；grep 目录签 subtree scope——§7.4 改动 4
+    const permitTargetKind = (isListDirectoryTool || args.toolName === 'grep') && isResolvedDirectory ? 'directory' as const : readPathFact.targetKind
+    const permitScope: ReadPermitScope | undefined = isListDirectoryTool
+      ? 'direct-entries'
+      : args.toolName === 'grep' && permitTargetKind === 'directory'
+        ? 'subtree'
+        : undefined
     result.readExecutionPermit = buildReadExecutionPermit({
       requestId: args.requestId ?? args.sessionId,
       toolUseId: args.toolUseId ?? args.toolName,
       toolName: args.toolName as 'read_file' | 'grep' | 'list_directory',
       decisionRuleId: decision.ruleId,
       input: args.toolInput,
-      facts: [{ factId: `fact-${readPathFact.normalizedPath}`, decisionRuleId: decision.ruleId, normalizedPath: readPathFact.normalizedPath, zone: readPathFact.zone, targetKind: isListDirectoryTool && (readPathFact.targetKind === 'directory' || readPathFact.resolvedKind === 'directory') ? 'directory' : readPathFact.targetKind, ...(isListDirectoryTool ? { scope: 'direct-entries' as const } : {}), ...(readPathFact.resolvedKind ? { resolvedKind: readPathFact.resolvedKind } : {}), ...(readPathFact.identity ? { identity: readPathFact.identity } : {}) }]
+      facts: [{ factId: `fact-${readPathFact.normalizedPath}`, decisionRuleId: decision.ruleId, normalizedPath: readPathFact.normalizedPath, zone: readPathFact.zone, targetKind: permitTargetKind, ...(permitScope ? { scope: permitScope } : {}), ...(readPathFact.resolvedKind ? { resolvedKind: readPathFact.resolvedKind } : {}), ...(readPathFact.identity ? { identity: readPathFact.identity } : {}) }]
     })
-  } else if (args.phase !== 'recheck' && readPathFact && decision.type === 'require-confirm' && decision.answerer === 'user' && (readPathFact.targetKind !== 'directory' || isListDirectoryTool)) {
+  } else if (args.phase !== 'recheck' && readPathFact && decision.type === 'require-confirm' && decision.answerer === 'user' && (readPathFact.targetKind !== 'directory' || directoryPermittable)) {
     const registry = args.readConfirmationRegistry ?? readConfirmationRegistry
     const registered = registry.register({
       requestId: args.requestId ?? args.sessionId,

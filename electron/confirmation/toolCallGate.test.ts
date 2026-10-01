@@ -700,15 +700,15 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
-  it.each(['wechat', 'feishu', 'automation'] as const)('%s lane 的目录型和省略路径 grep 在 gate 明确拒绝且不签 permit', async (lane) => {
+  it.each(['wechat', 'feishu', 'automation'] as const)('%s lane 对 workDir 内目录/省略路径 grep 放行并签 subtree permit（AC-27b/AC-27c，§3.3/§3.3b）', async (lane) => {
     const root = await fs.realpath(await fs.mkdtemp('/tmp/grep-directory-boundary-'))
     try {
       await fs.writeFile(path.join(root, 'note.txt'), 'needle')
       for (const toolInput of [{ pattern: 'needle', path: '.' }, { pattern: 'needle' }]) {
         const gate = await evaluateToolCallGate(base({ lane, workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'grep', toolInput }))
         expect(gate.readPathFact?.targetKind).toBe('directory')
-        expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'read-v1-target-unsupported' })
-        expect(gate.readExecutionPermit).toBeUndefined()
+        expect(gate.decision.type).toBe('auto-allow')
+        expect(gate.readExecutionPermit?.targets[0]).toMatchObject({ targetKind: 'directory', scope: 'subtree' })
       }
     } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
@@ -1570,27 +1570,47 @@ describe('evaluateToolCallGate', () => {
     expect(lookup).not.toHaveBeenCalled()
   })
 
-  it('desktop read V1 拒绝目录 grep、通配路径和缺失路径', async () => {
+  it('desktop read V1：目录 grep 放行并签 subtree permit；通配/多路径报 read-path-pattern-unsupported；read_file 目录仍拒', async () => {
     const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-gate-v1-targets-')))
     try {
+      await fs.writeFile(path.join(workDir, 'note.txt'), 'needle')
       const common = { workDir, userDataDir: path.join(workDir, '.userdata') }
       const directory = await evaluateToolCallGate(base({ ...common, toolName: 'grep', toolInput: { path: '.', pattern: 'x' } }))
       const wildcard = await evaluateToolCallGate(base({ ...common, toolName: 'grep', toolInput: { path: '**/*.ts', pattern: 'x' } }))
       const multiplePaths = await evaluateToolCallGate(base({ ...common, toolName: 'grep', toolInput: { path: 'src/a.ts', paths: ['src/a.ts', 'src/b.ts'], pattern: 'x' } }))
+      const readFileOnDir = await evaluateToolCallGate(base({ ...common, toolName: 'read_file', toolInput: { path: '.' } }))
       const missing = await evaluateToolCallGate(base({ ...common, toolInput: {} }))
-      expect(directory.decision).toMatchObject({ type: 'deny', ruleId: 'read-v1-target-unsupported' })
-      expect(wildcard.decision).toMatchObject({ type: 'deny', ruleId: 'read-v1-target-unsupported' })
+      // AC-14：目录 grep 不再被 read-v1-target-unsupported 拒绝，走 auto-allow 并签发 subtree permit
+      expect(directory.decision.type).toBe('auto-allow')
+      expect(directory.readExecutionPermit?.targets[0]).toMatchObject({ targetKind: 'directory', scope: 'subtree' })
+      // AC-25：通配 path 报专用 ruleId，文案含「glob 参数」指引
+      expect(wildcard.decision).toMatchObject({ type: 'deny', ruleId: 'read-path-pattern-unsupported' })
+      expect(wildcard.decision.reason).toContain('glob 参数')
       expect(wildcard.readPathFact?.targetKind).toBe('unknown')
-      expect(multiplePaths.decision).toMatchObject({ type: 'deny', ruleId: 'read-v1-target-unsupported' })
+      // AC-26：多路径字段仍拒绝
+      expect(multiplePaths.decision).toMatchObject({ type: 'deny', ruleId: 'read-path-pattern-unsupported' })
       expect(multiplePaths.readPathFact?.targetKind).toBe('unknown')
+      // AC-24：read_file 传目录仍被拒（N8 不回归）
+      expect(readFileOnDir.decision).toMatchObject({ type: 'deny', ruleId: 'read-v1-target-unsupported' })
+      expect(readFileOnDir.readExecutionPermit).toBeUndefined()
       expect(missing.decision).toMatchObject({ type: 'deny', ruleId: 'read-v1-facts-missing' })
-      expect(directory.readExecutionPermit).toBeUndefined()
       expect(wildcard.readExecutionPermit).toBeUndefined()
       expect(multiplePaths.readExecutionPermit).toBeUndefined()
       expect(missing.readExecutionPermit).toBeUndefined()
     } finally {
       await fs.rm(workDir, { recursive: true, force: true })
     }
+  })
+
+  it('grep 省略 path 按工作目录根探测并签发 subtree permit（C1，AC-15）', async () => {
+    const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'grep-omit-path-gate-')))
+    try {
+      await fs.writeFile(path.join(workDir, 'note.txt'), 'needle')
+      const gate = await evaluateToolCallGate(base({ workDir, userDataDir: path.join(workDir, '.userdata'), toolName: 'grep', toolInput: { pattern: 'needle' } }))
+      expect(gate.decision.type).toBe('auto-allow')
+      expect(gate.readPathFact?.targetKind).toBe('directory')
+      expect(gate.readExecutionPermit?.targets[0]).toMatchObject({ targetKind: 'directory', scope: 'subtree' })
+    } finally { await fs.rm(workDir, { recursive: true, force: true }) }
   })
 
   it.each([

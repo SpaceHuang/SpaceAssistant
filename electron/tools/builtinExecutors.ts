@@ -1658,7 +1658,6 @@ export const grepExecutor: ToolExecutor = {
     const started = Date.now()
     const pattern = typeof input.pattern === 'string' ? input.pattern : ''
     if (!pattern) return { success: false, error: '缺少 pattern', duration: Date.now() - started }
-    const relPath = extractPathField(input) ?? ''
     // R7：校验与执行同源——只经 normalizeGrepArgs 单一入口，执行器不再各自读 input.*
     const normalized = normalizeGrepArgs(input)
     if (!normalized.ok) {
