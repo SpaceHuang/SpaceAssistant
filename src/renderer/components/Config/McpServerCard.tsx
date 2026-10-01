@@ -1,4 +1,4 @@
-import { Button, Switch, Tag, Tooltip } from 'antd'
+import { Button, Switch, Tag } from 'antd'
 import type { McpServerProfile, McpToolDescriptor } from '../../../shared/mcpTypes'
 import type { McpServerDraft } from './mcpDrafts'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
@@ -19,8 +19,6 @@ export type McpServerCardProps = {
   onOpenDiagnostics: () => void
   onOauthStart: () => void
   onToggleEnabled: (checked: boolean) => void
-  /** FR6：始终全量加载开关（跳过延迟与索引）。 */
-  onToggleAlwaysLoad?: (checked: boolean) => void
 }
 
 const STATUS_KEYS = {
@@ -55,11 +53,9 @@ export function McpServerCard({
   onClearSecret,
   onOpenDiagnostics,
   onOauthStart,
-  onToggleEnabled,
-  onToggleAlwaysLoad
+  onToggleEnabled
 }: McpServerCardProps) {
   const { t } = useTypedTranslation('mcp')
-  const { t: tc } = useTypedTranslation('config')
   const status = profile?.status ?? 'untested'
   const enabledCount = draft.enabledToolNames.length
 
@@ -102,19 +98,6 @@ export function McpServerCard({
           {t('card.toolSummary', { enabled: enabledCount, total: tools.length })}
           {toolsStale ? ` · ${t('card.toolsStale')}` : ''}
         </span>
-        {onToggleAlwaysLoad ? (
-          <Tooltip title={tc('mcp.alwaysLoadHint')}>
-            <span className="mcp-server-card__always-load">
-              <Switch
-                size="small"
-                checked={draft.alwaysLoad === true}
-                onChange={onToggleAlwaysLoad}
-                aria-label={tc('mcp.alwaysLoad')}
-              />
-              <span>{tc('mcp.alwaysLoad')}</span>
-            </span>
-          </Tooltip>
-        ) : null}
       </div>
 
       {profile?.lastError?.code === 'resolved-private-address' || profile?.lastError?.code === 'private-address' ? (

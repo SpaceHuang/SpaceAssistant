@@ -523,7 +523,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   // FR11（评审 P1 修复）：装配器先读档位再建快照——auto/always 档按偏执上限（512/1 MiB）准入，
   // off 档走现状路径（64/96 KiB 裁剪，10.1.1 逐字节兼容）。档位与 toolChatLoop 的 plan 计算同源
   // （同一份 materials.toolsConfig），快照与 plan 天然一致。
-  const mcpDeferredMode = materials.toolsConfig.mcpDeferredLoading ?? 'off'
+  const mcpDeferredMode = materials.toolsConfig.mcpDeferredLoading ?? 'always'
   const mcpSnapshotRaw: McpToolSnapshot = db
     ? buildSnapshotFromDb(db, {
         remoteContext: materialsLane !== 'desktop',

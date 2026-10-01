@@ -264,11 +264,11 @@ describe('MCP 工具延迟加载（Phase 1 装配接线）', () => {
     expect(ledger?.result?.deferredUnsurfaced).toBe(true)
   })
 
-  it('off 档（默认）：现状路径——MCP 工具全量注入广告面（10.1.1）', async () => {
+  it('off 档（显式回退路径）：现状路径——MCP 工具全量注入广告面（10.1.1；默认已切 always）', async () => {
     const routeId = 'route-deferred-off'
     const { providerCalls } = registerProvider(routeId, [{ calls: [] }])
     const { ports: mcpPorts } = makeMcpPorts(makeSnapshot())
-    await runWith(baseMaterials({ providerRouteId: routeId }), mcpPorts)
+    await runWith(baseMaterials({ providerRouteId: routeId, toolsConfig: { ...DEFAULT_TOOLS_CONFIG, mcpDeferredLoading: 'off' } }), mcpPorts)
 
     const tools = providerCalls[0]!.request.tools.map((t) => t.name)
     expect(tools).toContain(MCP_TOOL)

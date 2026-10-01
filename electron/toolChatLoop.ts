@@ -970,7 +970,7 @@ async function runToolChatSessionInner(
   /** 请求级 MCP 工具快照：仅桌面 lane 注入（装配期构建，仍为首循环前）。 */
   const mcpSnapshot: McpToolSnapshot = hostMcp?.snapshot ?? { entries: new Map(), budgetDropped: [] }
   // FR5/§6.5：延迟加载计划（off 档 = 现状路径；档位/阈值取自 ToolsConfig，缺省 off/16 KiB）
-  const deferredMode = toolsConfig.mcpDeferredLoading ?? 'off'
+  const deferredMode = toolsConfig.mcpDeferredLoading ?? 'always'
   const deferredThresholdBytes = toolsConfig.mcpDeferredSchemaBudgetBytes ?? MCP_DEFERRED_SCHEMA_BUDGET_BYTES_DEFAULT
   const mcpProfiles = hostMcp?.executorDatabase
     ? listProfiles(hostMcp.executorDatabase as Parameters<typeof listProfiles>[0])

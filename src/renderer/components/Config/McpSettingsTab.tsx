@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { App, Button, Drawer, Empty, Modal, Select, Spin, Tag } from 'antd'
+import { App, Button, Drawer, Empty, Modal, Spin, Tag } from 'antd'
 import { Plus } from 'lucide-react'
 import { MCP_MAX_SERVERS, type McpBudgetDiagnostic, type McpServerProfile, type McpToolCacheEntry } from '../../../shared/mcpTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
@@ -19,8 +19,6 @@ export type McpSettingsTabProps = {
   /** 设置页是否打开。 */
   open?: boolean
 }
-
-type DeferredMode = 'auto' | 'always' | 'off'
 
 const BUDGET_SOURCE_KEYS = {
   snapshot: 'mcp.deferredBudgetSource.snapshot',
@@ -42,7 +40,6 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
   const [servers, setServers] = useState<McpServerProfile[]>([])
   const [drafts, setDrafts] = useState<McpServerDraft[]>([])
   const [toolCaches, setToolCaches] = useState<Record<string, McpToolCacheEntry>>({})
-  const [deferredMode, setDeferredMode] = useState<DeferredMode>('off')
   const [budgetDiagnostics, setBudgetDiagnostics] = useState<McpBudgetDiagnostic[]>([])
   const [editingId, setEditingId] = useState<string | null>(null)
   const [refreshingId, setRefreshingId] = useState<string | null>(null)
@@ -59,16 +56,11 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
       // silent 模式不切换全屏 Spin，避免刷新时整个分区（含编辑弹窗）卸载重建。
       if (!options?.silent) setLoading(true)
       try {
-        const [config, appConfig] = await Promise.all([
-          window.api.mcpList(),
-          window.api.configGet().catch(() => undefined)
-        ])
+        const config = await window.api.mcpList()
         setServers(config.servers)
         setToolCaches(config.toolCaches ?? {})
         setDrafts(config.servers.map(initMcpServerDraft))
         setBudgetDiagnostics(config.budgetDiagnostics ?? [])
-        const mode = appConfig?.tools.mcpDeferredLoading ?? 'off'
-        setDeferredMode(mode)
         dirtyRef.current = false
       } catch (error) {
         message.error(error instanceof Error ? error.message : String(error))
@@ -104,21 +96,6 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
     dirtyRef.current = true
   }, [])
 
-  /** FR5：三档策略切换（立即落库；渲染端薄壳，校验在主进程 configSet）。 */
-  const changeDeferredMode = useCallback(
-    async (mode: DeferredMode) => {
-      const previous = deferredMode
-      setDeferredMode(mode)
-      try {
-        await window.api.configSet({ tools: { mcpDeferredLoading: mode } })
-        await load({ silent: true })
-      } catch (error) {
-        setDeferredMode(previous)
-        message.error(error instanceof Error ? error.message : String(error))
-      }
-    },
-    [deferredMode, load, message]
-  )
 
   /** 启用服务时自动把已发现工具全部加入白名单，降低逐个勾选负担。 */
   const toggleServerEnabled = useCallback((id: string, checked: boolean, toolNames: string[]) => {
@@ -395,17 +372,6 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
       <div className="mcp-deferred-settings">
         <div className="mcp-deferred-settings__row">
           <span className="mcp-deferred-settings__label">{tc('mcp.deferredTitle')}</span>
-          <Select<DeferredMode>
-            size="small"
-            value={deferredMode}
-            onChange={(value) => void changeDeferredMode(value)}
-            style={{ minWidth: 220 }}
-            options={[
-              { value: 'off', label: tc('mcp.deferredOff') },
-              { value: 'auto', label: tc('mcp.deferredAuto') },
-              { value: 'always', label: tc('mcp.deferredAlways') }
-            ]}
-          />
         </div>
         <p className="mcp-deferred-settings__hint">{tc('mcp.deferredHint')}</p>
         <div className="mcp-deferred-settings__budget">
@@ -463,7 +429,6 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
                   tools.map((t) => t.originalName)
                 )
               }
-              onToggleAlwaysLoad={(checked) => patchDraft(draft.id, { alwaysLoad: checked ? true : undefined })}
             />
           )
         })}

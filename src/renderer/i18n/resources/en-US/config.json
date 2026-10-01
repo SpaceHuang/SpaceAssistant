@@ -959,9 +959,6 @@
   "mcp": {
     "deferredTitle": "MCP deferred tool loading",
     "deferredHint": "When enabled, the context only carries a name/description index; full schemas are fetched on model retrieval, greatly reducing context usage for large MCP servers.",
-    "deferredOff": "Off (full injection)",
-    "deferredAuto": "Auto (small sets eager, large sets deferred)",
-    "deferredAlways": "Always deferred",
     "deferredBudgetTitle": "Tool budget trims",
     "deferredBudgetEmpty": "No budget trim triggered by current configuration",
     "deferredBudgetSource": {
@@ -973,8 +970,6 @@
       "count": "Count exceeded",
       "bytes": "Size exceeded",
       "executor_unavailable": "Executor unavailable"
-    },
-    "alwaysLoad": "Always full load",
-    "alwaysLoadHint": "This server's tools are always injected in full and never deferred"
+    }
   }
 }

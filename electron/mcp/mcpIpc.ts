@@ -149,7 +149,7 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       const toolsRaw = getConfigValue(ctx.db, CONFIG_KEYS.tools)
       const toolsConfig = mergeToolsConfig(toolsRaw ? (JSON.parse(toolsRaw) as Partial<ToolsConfig>) : null)
       budgetDiagnostics = computeBudgetDiagnostics(ctx.db, {
-        mode: toolsConfig.mcpDeferredLoading ?? 'off',
+        mode: toolsConfig.mcpDeferredLoading ?? 'always',
         thresholdBytes: toolsConfig.mcpDeferredSchemaBudgetBytes ?? MCP_DEFERRED_SCHEMA_BUDGET_BYTES_DEFAULT
       })
     } catch {

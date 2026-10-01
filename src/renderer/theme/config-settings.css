@@ -1112,14 +1112,6 @@
   gap: var(--sa-config-gap-tight);
 }
 
-.mcp-server-card__always-load {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--sa-config-font-sm);
-  color: var(--sa-text-secondary);
-  white-space: nowrap;
-}
 
 .mcp-settings-empty .ant-btn {
   height: 40px;

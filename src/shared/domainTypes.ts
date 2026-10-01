@@ -50,8 +50,9 @@ export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
   grepTimeoutSec: 60,
   autoApproveMaxBytes: 256 * 1024,
   autoApproveMaxEditChars: 64 * 1024,
-  // 灰度计划起点（评审 B1）：Phase 1–3 交付构建一律 'off'，10.2 真机验收通过后单独提交切 'auto'
-  mcpDeferredLoading: 'off'
+  // 应用决策（2026-10-02，真机验收遵循度 100% 后用户拍板）：默认恒定始终延迟（always 语义），
+  // 设置页不提供三档选择；'off' 保留为配置级回退路径（mergeToolsConfig 可覆盖），auto 档机制保留但不暴露 UI
+  mcpDeferredLoading: 'always'
 }
 
 export function mergeToolsConfig(partial?: Partial<ToolsConfig> | null): ToolsConfig {

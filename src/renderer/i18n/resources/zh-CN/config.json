@@ -959,9 +959,6 @@
   "mcp": {
     "deferredTitle": "MCP 工具延迟加载",
     "deferredHint": "开启后上下文只保留工具名与描述索引，完整参数定义在模型检索后才下发，显著降低大体量 MCP 服务的上下文占用。",
-    "deferredOff": "关闭（全量注入）",
-    "deferredAuto": "自动（小工具集全量、大体量延迟）",
-    "deferredAlways": "始终延迟",
     "deferredBudgetTitle": "工具预算裁剪记录",
     "deferredBudgetEmpty": "当前配置未触发任何预算裁剪",
     "deferredBudgetSource": {
@@ -973,8 +970,6 @@
       "count": "数量超限",
       "bytes": "体积超限",
       "executor_unavailable": "执行器不可用"
-    },
-    "alwaysLoad": "始终全量加载",
-    "alwaysLoadHint": "该服务的工具始终随请求全量下发，不进入延迟索引"
+    }
   }
 }

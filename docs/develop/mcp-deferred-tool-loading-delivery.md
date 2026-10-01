@@ -14,17 +14,19 @@
 | f02be149 | Phase 3 | 计量与观测 |
 | 99220290 | 验收收尾 | tool_search 元数据/设置文案补齐 |
 | 4fa75c8a | 评审修复 | 评审（docs/review/20261002-mcp-deferred-tool-loading-code-review.md）P1/P2/P3 全项：FR11 快照准入放宽运行时接线（含 >64 工具真实路径用例）、索引 trim 过滤、package-lock 还原、常量复用、FR13 探针 O(N)、safetyGate 显式委托 |
+| 3b036402 | 验收工具链 | logSanitize 精确豁免——deferred_savings 三字段被凭据宽匹配误脱敏（真机验收发现） |
+| （切换提交） | 应用决策 | 用户拍板（2026-10-02，真机验收遵循度 100%/0 兜底后）：默认恒定 always、设置页去三档选择入口与 alwaysLoad 卡片开关（机制保留，off 为配置级回退） |
 
 ## 需求覆盖对照（§5 功能需求）
 
 - **FR1/FR4**：「MCP 工具索引」区块（`src/shared/toolCatalogPrompt.ts`，order 45，头部计数「共 N / 已列出 K」、预算截断、截断检索提示；索引是截断视图非准入名单）。
 - **FR2**：`tool_search` 元工具（定义入 `builtinToolDefinitions`、执行器 `electron/tools/toolSearchTool.ts`：分词 OR 召回、空 query 分页遍历保底、32 KiB 溢出响应、描述原文返回、schema 永不截断、只读自动放行、桌面 lane 门控）。
 - **FR3（A 方案）**：`computeEffectiveTools` 产出 `deferredToolNames`，经 handoff 链传入 `hostedAgentTurnHost`，`capabilities.define` 并入 known+authorized（门禁簿记零上下文成本；SDK 分发/审批/执行零改动）。
-- **FR5/FR6**：`ToolsConfig.mcpDeferredLoading`（auto/always/off，**交付默认 off** 灰度起点）+ `mcpDeferredSchemaBudgetBytes`（16 KiB）；`McpServerProfile.alwaysLoad` 按服务覆盖（computeDeferredPlan 规则 2：alwaysLoad 永远 eager）。
+- **FR5/FR6**：`ToolsConfig.mcpDeferredLoading`（auto/always/off 三档机制保留）+ `mcpDeferredSchemaBudgetBytes`（16 KiB）；`McpServerProfile.alwaysLoad` 按服务覆盖（computeDeferredPlan 规则 2：alwaysLoad 永远 eager）。**应用决策（2026-10-02）**：默认值 `always`（恒定始终延迟），设置页三档选择入口与 alwaysLoad 卡片开关移除（机制保留：off 可经配置覆盖回退，alwaysLoad 字段经持久化链路仍生效）；§10.2.1 真机验收（会话 dcc5a99c：遵循度 100%、兜底 0 次、无失败会话）达标后用户拍板跳过 auto 灰度。
 - **FR7**：`buildToolCapabilityConventionHint` 延迟分支 + compat 名口径（tool_search 无点号恒等）。
 - **FR8**：turn 维度 `deferred` 加性字段（toolCount/indexChars/eagerEquivalentChars）+ 节省量按轮日志 `mcp.deferred_savings`；`summarizeToolDeclarations` 天然只含广告面。
 - **FR9**：tool_search 显示名「工具检索（MCP）」（`shared/toolCallLabel.ts`，带 query 附检索词）。
-- **FR10**：设置页三档 Select + 每服务「始终全量加载」开关 + i18n（`config.mcp.*` 命名空间，O12），`npm run i18n:check` 通过。
+- **FR10**：设置页 i18n（`config.mcp.*` 命名空间，O12），`npm run i18n:check` 通过；设置页仅保留 budgetDiagnostics 预算裁剪记录区块（三档选择与 alwaysLoad 开关已按应用决策移除）。
 - **FR11**：延迟档快照准入放宽（偏执上限 512/1 MiB，`MCP_DEFERRED_PARANOID_MAX_*`）——**评审修复后运行时已接线**：`buildSnapshotFromDb` 增 `admission` 参数，`invocationAssembler` 读 `materials.toolsConfig.mcpDeferredLoading`（与 plan 计算同一事实源）传 `deferred`/`standard`；白名单为唯一门槛；**白名单上限（512）= 偏执上限 → 延迟模式快照层 `budgetDropped` 恒空不变量由配置层保证（O2），并有 >64 工具走真实快照路径的装配级用例固化（10.1.12）**。
 - **FR12①**：`computeBudgetDiagnostics`（snapshot/eager/executor 三源合并）经 `mcp:list` 载荷扩展 `budgetDiagnostics` 下发，设置页按 source 分组渲染。
 - **FR12②**：被拒文案区分——SDK deny 决策补 `userMessage` 透传（最小扩展）；`REGISTERED_TOOL_NOT_FOUND` 在 hosted 组装层映射为结构化拒绝（先解除 pending）：预算裁剪名单内=「预算未注入」，其余=「服务不可用/已变更」；turn 不再因幻名整体失败。
@@ -55,4 +57,4 @@
 5. 大体量 server（>64 工具）索引可读性与检索命中率。
 6. 检索返回体校准（`mcp.tool_search_result` 的 truncated 触发率、`mcp.deferred_unused_surfaced` 占比）。
 
-真机验收通过后，单独提交将 `DEFAULT_TOOLS_CONFIG.mcpDeferredLoading` 切为 `'auto'`（§9），发布说明需声明存量超阈值配置的行为翻转与 `off` 回退路径（§7.3）。
+~~真机验收通过后，单独提交将 `DEFAULT_TOOLS_CONFIG.mcpDeferredLoading` 切为 `'auto'`（§9）~~——**已被应用决策替代（2026-10-02）**：真机验收（遵循度 100%、兜底 0/2、truncated 2/2 无追加检索障碍）后用户拍板跳过 auto 灰度，直接默认恒定 `always` 并移除设置页两处入口；发布说明仍需声明存量超阈值配置的行为翻转（部分注入+静默裁剪 → 索引+检索）与 `off` 配置级回退路径（§7.3）。
