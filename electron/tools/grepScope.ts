@@ -34,12 +34,26 @@ export function grepSensitiveExcludes(): string[] {
   return ['!**/.env', '!**/.env.*', '!**/.env/**', '!**/secrets/**', '!**/secrets']
 }
 
+/**
+ * 浅层敏感条目统计的名称判定（§7.10「判定基准」，v3 M2 订正）：
+ * 与 grepSensitiveExcludes() 的名称语义对齐——不得直接用 isSensitivePath
+ * （其 secrets 判定要求两侧分隔符，对根级裸 secrets/ 不命中，而 rg 侧的反向 glob 实际排除它；
+ * glob 文本此处从略（其双星加斜杠的字面序列会提前终止块注释）。
+ */
+function isSensitiveEntryName(name: string): boolean {
+  return name === '.env' || name.startsWith('.env.') || name === 'secrets'
+}
+
 export interface GrepScope {
   /** 实际搜索根（相对 workDir） */
   root: string
   engine: 'ripgrep' | 'walk'
-  /** 被跳过、且未命中调用方搜索范围的目录（纯范围事实，不含安全语义；sensitive 为跳过原因标注） */
-  skipped: Array<{ name: string; explicit: boolean; sensitive?: boolean }>
+  /**
+   * 被跳过、且未命中调用方搜索范围的条目（纯范围事实，不含安全语义）。
+   * kind 区分文件/目录（敏感名单混含两者，§7.10）；sensitive 为跳过原因标注（明示义务，§1.6）。
+   * 原 explicit 字段已删除：其语义被「显式点名即解除（不进名单）」完整取代，全历史恒 false（§1.6 死字段）。
+   */
+  skipped: Array<{ name: string; kind: 'file' | 'directory'; sensitive?: boolean }>
   skippedCount: number
   /** head_limit / 超时截断 */
   truncated: boolean
@@ -103,6 +117,11 @@ export function planGrepInvocation(opts: {
   const searchRel = toPosix(path.relative(workDir, searchPath))
   const searchRelInsideWorkDir = Boolean(searchRel) && searchRel !== '.' && !searchRel.startsWith('..')
 
+  // 3) 敏感路径：遍历中始终排除（include_ignored 不解除）；显式点名该文件/目录内部才搜索
+  //    （提前计算：浅层敏感条目统计依赖 explicitSensitiveHit 开关，§7.10）
+  const explicitSensitiveHit = searchRelInsideWorkDir && isSensitivePath(searchPath)
+  const sensitiveExcludes = explicitSensitiveHit ? [] : grepSensitiveExcludes()
+
   // 1) 默认忽略成员：实际存在、且未命中调用方搜索范围（任一段点名即解除）→ 计入 skipped
   //    searchKind='file'：单文件根无遍历语义，不产名单 glob 与 skipped 统计（rg 的 glob 对显式文件参数本就不生效）
   const skipped: GrepScope['skipped'] = []
@@ -112,20 +131,31 @@ export function planGrepInvocation(opts: {
       const isExplicitTarget = searchRelInsideWorkDir && isInsideMember(searchRel, name)
       if (isExplicitTarget) continue
       const exists = fs.existsSync(path.join(workDir, name))
-      if (exists) skipped.push({ name, explicit: false })
+      if (exists) skipped.push({ name, kind: 'directory' })
       // include_ignored 一并解除；显式点名只解除被点名成员
       if (!args.includeIgnored && !isExplicitTarget) {
         ignoreGlobs.push(`!**/${name}/**`)
+      }
+    }
+    // H（§7.10）：敏感条目明示义务——对搜索根做一层浅层 readdir，命中敏感名的条目如实上报。
+    // 仅 !explicitSensitiveHit 时统计（点名时条目实际被搜索，与排除 glob 同开关，名单与行为一致）；
+    // 深层条目不逐条上报（D13，由「skipped items may contain matches」文案兜底）。
+    if (!explicitSensitiveHit) {
+      try {
+        const entries = fs.readdirSync(searchPath, { withFileTypes: true })
+        for (const ent of entries) {
+          if (!isSensitiveEntryName(ent.name)) continue
+          if (skipped.some((s) => s.name === ent.name)) continue
+          skipped.push({ name: ent.name, kind: ent.isDirectory() ? 'directory' : 'file', sensitive: true })
+        }
+      } catch {
+        // 搜索根不可读时无浅层名单可统计；范围事实由 no_match 输出的其他字段承担
       }
     }
   }
 
   // 2) 隐藏过滤：搜索目标子树内含任一隐藏段（含普通隐藏目录）或 include_ignored → --hidden
   const hidden = args.includeIgnored || (searchRelInsideWorkDir && hasHiddenSegment(searchRel))
-
-  // 3) 敏感路径：遍历中始终排除（include_ignored 不解除）；显式点名该文件/目录内部才搜索
-  const explicitSensitiveHit = searchRelInsideWorkDir && isSensitivePath(searchPath)
-  const sensitiveExcludes = explicitSensitiveHit ? [] : grepSensitiveExcludes()
 
   // G（D1）：搜索被 Git 忽略的路径——只追加 --no-ignore-vcs（解除 .gitignore 系），
   // 不追加 --no-ignore/-u（会连 .ignore/.rgignore 一起解除，越界，§6.5 实测选型）
@@ -159,5 +189,6 @@ export function formatGrepNoMatchOutput(scope: GrepScope): string {
   const names = scope.skipped
     .map((s) => (s.sensitive ? `${s.name} (sensitive, not searched)` : s.name))
     .join(', ')
-  return `${base}; skipped ${scope.skippedCount} directories: ${names}; skipped directories may contain matches)`
+  // 计数词用 items：敏感名单混含文件与目录，「directories」语义容纳不下（§7.10 H4）
+  return `${base}; skipped ${scope.skippedCount} items: ${names}; skipped items may contain matches)`
 }

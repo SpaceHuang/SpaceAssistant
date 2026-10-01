@@ -121,7 +121,7 @@ describe('formatGrepNoMatchOutput（R6：no_match 必带范围）', () => {
     }
     const out = formatGrepNoMatchOutput(scope)
     expect(out).toContain('No matches found')
-    expect(out).toContain('skipped 2 directories')
+    expect(out).toContain('skipped 2 items')
     expect(out).toContain('node_modules')
     expect(out).toContain('.git')
     expect(out).toContain('may contain matches')
@@ -279,5 +279,75 @@ describe('searchGitignored → noIgnoreVcs（阶段 G，§7.9 改动 2）', () =
 
   it('OR 语义：设置项为「下限」，调用方 includeIgnored 不得收窄', () => {
     expect(run({ includeIgnored: true }, { searchGitignored: true }).noIgnoreVcs).toBe(true)
+  })
+})
+
+describe('敏感条目明示（阶段 H，§7.10，AC-39~43）', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true })
+  })
+
+  function setupRootWithSensitive(): string {
+    const root = tempDir()
+    dirs.push(root)
+    fs.writeFileSync(path.join(root, '.env'), 'SECRET=1')
+    fs.writeFileSync(path.join(root, '.env.local'), 'SECRET=2')
+    fs.mkdirSync(path.join(root, 'secrets'), { recursive: true })
+    fs.writeFileSync(path.join(root, 'secrets', 'key.txt'), 'SECRET=3')
+    fs.writeFileSync(path.join(root, 'a.txt'), 'hello')
+    return root
+  }
+
+  const baseArgs = { includeIgnored: false, outputMode: 'files_with_matches' as const, ignoreCase: false, showLineNumber: true, multiline: false, headLimit: 100 }
+
+  it('H1：目录模式对根级 .env（file）与 secrets/（directory）产出 sensitive: true 条目（AC-40）', () => {
+    const root = setupRootWithSensitive()
+    const plan = planGrepInvocation({ workDir: root, searchPath: path.resolve(root), args: baseArgs })
+    const sensitive = plan.scope.skipped.filter((s) => s.sensitive)
+    expect(sensitive).toHaveLength(3)
+    const byName = new Map(sensitive.map((s) => [s.name, s]))
+    expect(byName.get('.env')).toMatchObject({ kind: 'file', sensitive: true })
+    expect(byName.get('.env.local')).toMatchObject({ kind: 'file', sensitive: true })
+    expect(byName.get('secrets')).toMatchObject({ kind: 'directory', sensitive: true })
+  })
+
+  it('H1：explicitSensitiveHit=true（显式点名敏感路径）时不产生敏感 skipped 条目（AC-41）', () => {
+    const root = setupRootWithSensitive()
+    const plan = planGrepInvocation({ workDir: root, searchPath: path.join(root, '.env'), args: baseArgs })
+    expect(plan.explicitSensitiveHit).toBe(true)
+    expect(plan.scope.skipped.filter((s) => s.sensitive)).toHaveLength(0)
+  })
+
+  it('H1：searchKind=file 时 skipped 恒空——敏感统计不破坏 §1.4 修复（AC-42）', () => {
+    const root = setupRootWithSensitive()
+    const plan = planGrepInvocation({ workDir: root, searchPath: path.join(root, 'a.txt'), args: baseArgs, searchKind: 'file' })
+    expect(plan.scope.skipped).toEqual([])
+  })
+
+  it('H1：skipped 条目不含 explicit 死字段（§1.6）', () => {
+    const root = setupRootWithSensitive()
+    const plan = planGrepInvocation({ workDir: root, searchPath: path.resolve(root), args: baseArgs })
+    expect(plan.scope.skipped.length).toBeGreaterThan(0)
+    expect(plan.scope.skipped.some((s) => 'explicit' in s)).toBe(false)
+  })
+
+  it('H3：无匹配文案对敏感条目标注 (sensitive, not searched) 且计数词为 items（AC-40 文本形态）', () => {
+    const scope: GrepScope = {
+      root: '.',
+      engine: 'ripgrep',
+      skipped: [
+        { name: 'node_modules', kind: 'directory' },
+        { name: '.env', kind: 'file', sensitive: true },
+        { name: 'secrets', kind: 'directory', sensitive: true }
+      ],
+      skippedCount: 3,
+      truncated: false
+    }
+    const text = formatGrepNoMatchOutput(scope)
+    expect(text).toContain('skipped 3 items:')
+    expect(text).toContain('.env (sensitive, not searched)')
+    expect(text).toContain('secrets (sensitive, not searched)')
+    expect(text).not.toContain('directories:')
   })
 })
