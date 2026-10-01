@@ -68,25 +68,40 @@ export async function collectModelAttempt(
   let hasToolCall = false
   const toolCallIds = new Set<string>()
   const idleTimeoutMs = options?.idleTimeoutMs
-  const observedStream = (async function* () {
-    try { yield* stream }
-    catch (error) {
+  const sourceIterator = stream[Symbol.asyncIterator]()
+  // 评审 P2 实证：经 async generator（yield* 委托）包装后，generator 挂起在委托 next() 的 await
+  // 上时其 return() 永不 resolve 也不转发——取消必须直接作用于底层 iterator。
+  // provider 流抛错时先观测（onStreamError）再上抛，保持原 generator 包装的语义。
+  const consumeSource = async (): Promise<IteratorResult<StreamChunk>> => {
+    try {
+      return await sourceIterator.next()
+    } catch (error) {
       await observer?.onStreamError?.({ error, ...(usage ? { usage } : {}) })
       throw error
     }
-  })()
-  const iterator = observedStream[Symbol.asyncIterator]()
+  }
   // 每 chunk 到位即重置计时：超过 idleTimeoutMs 无任何新字节 → 判定 provider 流挂起（无整体超时，长回复不受限）
   const nextWithIdleGuard = (): Promise<IteratorResult<StreamChunk>> => {
-    if (!idleTimeoutMs || idleTimeoutMs <= 0) return iterator.next()
+    if (!idleTimeoutMs || idleTimeoutMs <= 0) return consumeSource()
     let timer: ReturnType<typeof setTimeout> | undefined
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new ModelStreamIdleTimeoutError(idleTimeoutMs)), idleTimeoutMs)
+    let rejectIdle!: (error: ModelStreamIdleTimeoutError) => void
+    const idleFailure = new Promise<never>((_, reject) => {
+      rejectIdle = (error) => reject(error)
+      timer = setTimeout(() => rejectIdle(new ModelStreamIdleTimeoutError(idleTimeoutMs)), idleTimeoutMs)
     })
-    return Promise.race([
-      iterator.next().finally(() => { if (timer) clearTimeout(timer) }),
-      timeout
-    ])
+    const next = consumeSource().finally(() => { if (timer) clearTimeout(timer) })
+    // 评审 P2：超时赢得 race 后，悬挂的 next() 无论 resolve/reject 都不再有人等待——挂空 catch
+    // 防 unhandledRejection（agent-sdk 独立包复用时宿主未必有 processSafetyNet）
+    next.catch(() => {})
+    // 超时动作必须挂在 race 结果的 catch 上（而非 idleFailure.then 衍生链——那条链的 rejection
+    // 无人等待，既丢 return() 调用又自身成为 unhandledRejection 源）
+    return Promise.race([next, idleFailure]).catch((error) => {
+      if (error instanceof ModelStreamIdleTimeoutError) {
+        // best-effort 直接取消底层流（触发其清理/断连），替代方案是让连接挂到 SDK 自身 10 分钟超时
+        void sourceIterator.return?.().catch(() => {})
+      }
+      throw error
+    })
   }
   try {
     for (let step = await nextWithIdleGuard(); !step.done; step = await nextWithIdleGuard()) {

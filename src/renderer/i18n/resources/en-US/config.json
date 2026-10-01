@@ -955,6 +955,5 @@
     "tabTitle": "Scheduled tasks",
     "tabIntro": "Butler tasks run automatically on schedule; results are delivered per task preference",
     "lastRun": "Last run {{time}}"
-  },
-  "mcp": {}
+  }
 }
