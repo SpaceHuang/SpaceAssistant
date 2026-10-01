@@ -90,7 +90,7 @@ git log --reverse --format='%H%x09%P%x09%s' 2c2611c6..8dad0284
 1. 先为审批原因展示增加契约测试：命中具体 policy rule、因分析不确定要求人工确认、目标变化导致重新确认等情形都有稳定、脱敏的解释字段。
 2. 先测试 trust 生命周期：只由用户显式批准后创建；身份包含来源定义的脚本指纹/作用域；脚本字节、目标或规则身份变化使 trust 失效；取消/拒绝不创建 trust；撤权立即失效；会话间隔离。
 3. 红灯后移植当前 confirmation persistence/decision cache 边界；不得持久化脚本文本、敏感参数或 prompt；用户确认卡片文案必须经过 i18n。
-4. 若来源 trust 模型不能与当前 `readExecutionPermit`/`writeExecutionPermit` 证明绑定，保留解释功能并暂停 trust 子项，实施记录写出不兼容点和需要重新设计的最小接口。
+4. 执行许可必须在调用前重新核对当前事实、授权版本和脚本内容摘要。恢复范围沿用云端原有模型：精确脚本内容摘要绑定当前会话；不额外引入云端没有的分析器版本字段。未知原因不能明确归类、分析结果缺失或动态执行时保持 fail-closed，不提供脚本内容记忆。
 
 **验收：** `approvalAgent.test.ts`、`toolCallGate.test.ts`、`persistentConfirmationCommit.test.ts`、`ScriptConfirmCard.test.tsx` 及新增信任存储测试通过；脚本变化、规则变化、会话切换和 revoke 各有独立断言；审计日志不含脚本正文或凭据；信任不能授权新路径/新副作用。
 
@@ -168,19 +168,19 @@ npm run pack:mac
 
 ### 阶段 8：兼容、构建和打包（本机验收完成）
 
-日期：2026-10-01。按当前 checkout 实际测试路径依次完成阶段回归组：阶段 1/安全 gate 144 项；策略、安全 floor 与 UI 172 项；归因纯逻辑、迁移、SDK recorder 及桌面/Butler/远程 SQLite 集成 230 项；grep fallback/scope/Hosted read gate 43 项通过。SDK/provider 类型检查、shared/renderer 类型检查和 `check:agent-sdk` 均通过。
+日期：2026-10-01。按当前 checkout 实际测试路径依次完成阶段回归组：阶段 1/安全 gate 146 项；策略、安全 floor 与 UI 170 项；归因纯逻辑、迁移、SDK recorder 及桌面/Butler/远程 SQLite 集成 230 项；grep fallback/scope/Hosted read gate 31 项通过。阶段 3 新增 extractor、gate、policy、approval-port 聚焦回归 231 项。SDK/provider 类型检查、shared/renderer 类型检查和 `check:agent-sdk` 均通过。
 
 全量回归期间发现并修复了测试历史版本断言（schema v28）、轻量迁移 fixture 缺少两张 usage 表的兼容处理，以及漂移 History 原因由 `POLICY_DENY` 细化为 `FACTS_CHANGED` 后的过期断言。v28 部分 usage schema 仍触发事务失败并回滚；两张 usage 表都缺失的轻量 fixture 可跳过 attribution DDL。
 
 严格 i18n 检查器改为解析 TypeScript/TSX 语法节点，只把运行时字符串和 JSX 文案计为硬编码内容，不再把中文注释当成界面文案。随后将 renderer 中 118 个实际中文字符串片段迁入中英文 `runtime` 资源，并补充中英文切换、插值、格式化单位及浏览器摘要语言切换测试。`npm run i18n:check:strict` 通过：生产代码 0 条硬编码中文；测试文件的 941 条中文测试数据/断言按现有门禁规则提示但允许。资源 key 对齐检查通过。
 
-阶段 8 四组顺序回归分别通过 144、172、230、43 项。最终 `npm test`：814 个测试文件通过、1 个跳过；7157 项通过、106 项跳过（共 7263）。SDK attribution 每次 attempt 只准备一次的回归测试曾先红（同一次调用实际准备两次），在阶段 4 事实层提交中修复后转绿。shared、renderer、agent SDK、两个 provider 的类型检查和 `check:agent-sdk` 均通过。
+阶段 8 四组顺序回归分别通过 146、170、230、31 项。最终 `npm test`：814 个测试文件通过、1 个跳过；7164 项通过、106 项跳过（共 7270）。SDK attribution 每次 attempt 只准备一次的回归测试曾先红（同一次调用实际准备两次），在阶段 4 事实层提交中修复后转绿。shared、renderer、agent SDK、两个 provider 的类型检查和 `check:agent-sdk` 均通过。
 
 `npm run build` 通过；Vite 报告 main bundle 3180.50 kB（gzip 879.65 kB）、三个 >500 kB 的 chunk 警告及两个 ineffective dynamic import 警告。
 
-`npm run pack:mac` 通过，生成 `release/SpaceAssistant-0.2.2.dmg` 与 `release/SpaceAssistant-0.2.2-arm64.dmg`。两个 DMG 的 `hdiutil verify` CRC 均有效；app 主程序分别识别为 x86_64/arm64。两个包内 ripgrep 均通过 manifest SHA-256、架构、可执行权限和许可证检查；tree-sitter 7 项资源校验通过；归因与 runtime 双语 JSON 资源、对应 renderer 文案均进入构建产物。macOS app 为 ad-hoc 签名，环境没有 Developer ID 证书。asar 未发现 `agent-core`；现有当前架构 `toolChatLoop` 兼容装配仍在基线入口使用，没有移植云端旧 loop。
+`npm run pack:mac` 通过，生成 `release/SpaceAssistant-0.2.2.dmg` 与 `release/SpaceAssistant-0.2.2-arm64.dmg`。两个 DMG 的 `hdiutil verify` CRC 均有效；app 主程序分别识别为 x86_64/arm64。两个包内 ripgrep 均通过 manifest SHA-256、架构、可执行权限和许可证检查；tree-sitter 7 项资源校验通过；归因、安全与 runtime 双语资源进入构建产物。macOS app 为 ad-hoc 签名，环境没有 Developer ID 证书。asar 未发现 `agent-core`；现有当前架构 `toolChatLoop` 兼容装配仍在基线入口使用，没有移植云端旧 loop。
 
-阶段 5 的 AT17 已于 2026-10-01 使用真实微信远程回合完成，验收记录见阶段 5 实施记录。阶段 3 的脚本指纹 trust 子项按 §3.4 独立延期。严格 i18n 门禁通过：生产代码 0 条硬编码中文；941 条测试数据/断言中的中文按门禁现行规则允许。提交顺序和无代码差异的组别记录见下方。
+阶段 5 的 AT17 已于 2026-10-01 使用真实微信远程回合完成，验收记录见阶段 5 实施记录。阶段 3 的脚本指纹会话信任已按云端行为补齐，详见下方阶段 3 续记。严格 i18n 门禁通过：生产代码 0 条硬编码中文；941 条测试数据/断言中的中文按门禁现行规则允许。提交顺序和无代码差异的组别记录见下方。
 
 打包只在所有功能和全量门禁通过后执行；检查 x64/arm64 DMG 均由当前源码生成、版本和资源正确、归因/安全 UI 文案进入构建产物、ripgrep/fallback runtime assets 符合打包契约。该计划不要求在本机手工启动 Windows；CI 提供的 Windows job 若触发则记录结果。
 
@@ -190,7 +190,7 @@ npm run pack:mac
 
 按依赖顺序拆分，只有对应阶段验收通过后才提交该组：
 
-实施结果（按恢复依赖顺序）：阶段 1 提取器和阶段 7 准备/事实实现均已存在于基线，按计划运行回归后无需产生空提交。阶段 2 提交 `3f3620da`；阶段 3 审批解释提交 `7ffca482`，其中脚本指纹 trust 按 §3.4 独立延期；阶段 4 提交 `b0b09baf`（包含 attribution exactly-once 的红绿回归）；阶段 5/6 提交 `fef080a0`；阶段 7 fallback 提交 `a8fbd537`。计划与来源清单在代码验收后单独归档。完整 SHA 以实施记录的 Git 历史为准。
+实施结果（按恢复依赖顺序）：阶段 1 提取器和阶段 7 准备/事实实现均已存在于基线，按计划运行回归后无需产生空提交。阶段 2 提交 `3f3620da`；阶段 3 审批解释提交 `7ffca482`，脚本指纹会话信任由本次后续功能提交补齐；阶段 4 提交 `b0b09baf`（包含 attribution exactly-once 的红绿回归）；阶段 5/6 提交 `fef080a0`；阶段 7 fallback 提交 `a8fbd537`。计划与来源清单在代码验收后单独归档。完整 SHA 以实施记录的 Git 历史为准。
 
 1. `fix(security): restore script path fact extraction` — extractor/IR 及安全回归。
 2. `feat(security): restore rule-level policy controls` — 档位、规则覆盖和设置页。
@@ -200,7 +200,7 @@ npm run pack:mac
 6. `feat(grep): restore scoped JavaScript fallback` — fallback 和错误分流测试。
 7. `chore(grep): restore development ripgrep preparation` — dev 环境准备脚本、校验和诊断。
 
-如果安全 trust 子项需重新设计，可以单独延期该提交组；不得为提交完整性把未通过安全验收的行为混入其他组。
+阶段 3 会话信任单独作为安全功能提交，并通过精确内容、会话隔离、动态执行拒绝记忆和撤权测试后才纳入完成结论。
 
 ## 6. 排除项和暂停条件
 
@@ -218,7 +218,7 @@ npm run pack:mac
 | 0 来源与工作区 | 完成 | 基线/source SHA、逐提交与文件清单、当前三处文档 diff 保留证明 |
 | 1 脚本路径提取 | 完成 | false-positive 红绿、恶意/歧义 fail-closed、permit 身份验证 |
 | 2 规则档位 | 完成 | action precedence 表、policy floor、设置持久化/i18n、loose allow 单独结论 |
-| 3 审批解释与 trust | 完成或按本计划说明独立延期 | trust 身份/失效/撤权/会话隔离测试、脱敏证据 |
+| 3 审批解释与 trust | 完成 | 审批解释、脚本 SHA-256 身份、内容变化/会话隔离/撤权/拒绝写入测试、脱敏证据 |
 | 4 归因算法 | 完成 | 指标矩阵、守恒/估算版本/不伪造事实测试；0%/部分/100% 覆盖率定义和版本混合测试 |
 | 5 usage 事实层 | 完成或待外部验收 | v27→新版本迁移、SDK exactly-once、无 usage 不记零值；桌面/远程/Butler 本机入口各自写入 SQLite 的证据；AT17 真实飞书/微信收发后 SQLite 归因列及工具维度列验收记录 |
 | 6 查询和 UI | 完成 | IPC ownership、跨会话隔离、同筛选 KPI 与覆盖率、0%/部分/100% 和版本混合呈现、精确/估算区分、i18n |
@@ -241,12 +241,12 @@ npm run pack:mac
 
 日期：2026-10-01。用户在真实微信远程会话发起测试消息；开发版应用接收并完成回合。直接查询本次运行使用的 SQLite：session `31ba46de…f743a626`、turn `dda125d4…f585-4597-b379-248ca9cf0d86`，二者通过 `turns.session_id` 一致关联；该 turn 为 `terminal / completed`，对应微信来源会话。`usage_step_facts` 有 2 行，2 行均 `attribution_json` 与 `estimator_version` 非 NULL；`usage_turn_facts` 有 1 行且 `tool_attribution_json` 非 NULL，回合记录包含 1 次工具调用。查询以 `session_id + turn_id` 同时核对，不记录或披露消息正文。验收人：用户发起真实微信消息，Codex 直接查询运行数据库并核对结果。
 
-至此阶段 5 的 AT17 真实环境验收已通过；本机 SQLite 集成用例和 v27→v28 迁移证据见前述测试记录。该结论关闭 AT17 外部验证项；阶段 3 trust 子项仍按 §3.4 独立延期。
+至此阶段 5 的 AT17 真实环境验收已通过；本机 SQLite 集成用例和 v27→v28 迁移证据见前述测试记录。该结论关闭 AT17 外部验证项。
 
-### 阶段 3：审批解释已恢复；脚本指纹 trust 独立延期
+### 阶段 3：脚本指纹会话信任补齐
 
-日期：2026-10-01。当前 confirmation extractor 的 `ScriptPathFacts` 仅提供 `paths / completeness / dynamicAccess`，共享 `script-path-extraction` signal 也没有 `unknownReason`；因此无法区分可限制为会话范围的 `unmodeled-call` 与必须逐次确认的动态执行。现有 `readExecutionPermit` / `writeExecutionPermit` 将许可绑定当前 tool input digest、事实集和授权版本，没有持久脚本指纹、分析器版本或 trust 撤权身份。直接复用现有 memory tiers 会把“路径相似”误当成“脚本字节相同”，与 §3.3 的信任身份/执行对象约束冲突。
+日期：2026-10-01。按 TDD 先新增 extractor、policy、gate、审批 fallback 和 SQLite 生命周期测试，确认旧实现无法区分未知调用与动态执行、无法按精确脚本内容提供会话记忆；随后实现并转绿。`ScriptPathFacts` 增加 `unknownReason`，只将已分类且无动态执行的 `unmodeled-call` 纳入有限会话记忆；动态执行、缺失分析、结构错误、未分类未知和危险脚本继续锁定为每次人工确认/拒绝。
 
-按 §3.4，trust 子项独立暂停，等待阶段 1 的未知原因分类与分析器版本事实、以及可由执行前 permit 复验的脚本字节指纹接口。重新开启 trust 前至少需要：人类确认后创建的 hash-only trust 记录；会话/范围和规则身份参与键；执行前重新计算脚本指纹并与确认快照比较；脚本、目标、规则或授权撤销后失效；取消/拒绝不写记录；测试证明新路径/新副作用不能借用旧信任。当前不持久化脚本正文或凭据，也不通过扩宽 loose policy 绕过此接口缺口。
+`run_script` 的精确信任身份是执行代码 UTF-8 字节的 SHA-256，并与当前 session ID 组成缓存键。内容增删一个空格或换 session 均重新确认；未知提取结果抑制路径记忆，避免路径相似误复用脚本信任。执行许可继续在调用前复核当前事实与授权版本。只在人类明确批准并选择“记住本会话此脚本”时写入现有 decision cache；写入端验证该键确为本次决策提供的选项。取消、拒绝、agent 代答、动态执行、未分类未知均不创建此记忆；清除记忆后重新确认。记录只存摘要和会话范围，不存脚本正文或凭据，设置页双语显示为“本会话相同脚本 / Same script in this session”。
 
-审批解释通过当前 Hosted History/UI 链路恢复：初始 ask 保留稳定规则 ID；脚本分析不完整映射为双语说明；已确认事实在 permit recheck 发生变化时产生 `FACTS_CHANGED`，Canonical History 回放标记未执行及事实变化原因。聚焦测试和 `typecheck:shared`、`typecheck:renderer` 已通过。该记录仅关闭阶段 3 中与当前边界兼容的解释部分；阶段 3 的 trust 状态为“按计划独立延期”，后续阶段 1/安全接口具备条件后仍需回看。
+云端来源逻辑使用按脚本正文 hash 的本会话信任；没有分析器版本键。本实现因此遵守来源的身份模型，并以当前 permit 重验、未知原因分类、动态脚本锁定来保持安全边界，没有额外宣称跨版本复用安全。审批解释保留稳定规则 ID、双语未知原因和 `FACTS_CHANGED` 回放。阶段 3 聚焦测试、SQLite 写入/命中/变更/session/revoke 集成、全量测试、类型检查和 i18n 均通过。
