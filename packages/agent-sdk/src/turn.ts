@@ -1233,7 +1233,22 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             requestedAt: Date.now()
           }
         }])
-        throwIfAborted(input.request.signal)
+        if (input.request.signal?.aborted) {
+          const timedOut = isTurnTimeoutSignal(input.request.signal)
+          await appendHistory([{
+            kind: 'approval-resolved',
+            payload: {
+              toolCallId: tool.toolCallId,
+              approvalId: initialDecision.confirmationId,
+              approved: false,
+              outcome: timedOut ? 'timeout' : 'cancelled',
+              cause: timedOut ? 'timeout' : 'cancelled',
+              settledAt: Date.now()
+            }
+          }])
+          await markNotDispatched(tool, timedOut ? 'REQUEST_TIMEOUT' : 'REQUEST_CANCELLED')
+          throwIfAborted(input.request.signal)
+        }
         let result: ToolConfirmationResult
         try {
           result = await input.confirmation({
