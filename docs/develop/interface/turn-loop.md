@@ -116,12 +116,13 @@ type AgentTurnResult = Readonly<{
 1. **回合前检查**：`throwIfAborted`（超时信号 → `AgentTurnTimedOutError`，否则 `AgentTurnCancelledError`）；`registry.prepare`；`ensureInitialHistoryContext`（无历史或首事件不合规即拒绝；有 `invocation-context-committed` / `transcript-compacted` 时校验请求快照兼容性）。
 2. **请求投影与预检**：`observer.prepareModelRequest` → `preflightModelRequest`（可返回替换后的 messages，此时追加 `transcript-compacted` 并重算请求；超预算抛 `ModelPreflightRejectedError('OVER_BUDGET')`）。
 3. **路由冻结**：`registry.getProvider`；首轮固化 `pinnedRoute` / `pinnedProvider`，后续不匹配抛 `ModelRouteChangedError`。
-4. **provider 尝试**：追加 `model-request-started` → 流式收集（`collectModelAttempt`）；失败或输出内容可疑时走 `recoverProviderAttempt`（至多一次重试，超限抛 `ModelAttemptRecoveryRejectedError('RETRY_LIMIT_EXCEEDED')`）；`finish.reason === 'cancelled'` → 先按 `request.signal` 判定：超时信号（`signal.reason === AGENT_TURN_TIMEOUT_ABORT_REASON`）抛 `AgentTurnTimedOutError`，否则抛 `AgentTurnCancelledError`。
-5. **响应归约与提交**：拼装 assistant canonical 消息（thinking / text 合并、`thinking-signature` 回填）→ `recordProviderAttemptUsage` → `prepareModelResponseProjection` → 追加 `model-response-committed` → `onModelResponseCommitted`。
-6. **输出上限恢复**：`finish.reason === 'length'` 时对每个工具调用追加 `tool-call-not-dispatched`（`MODEL_OUTPUT_TRUNCATED`），可选 `provider-retry-scheduled` 与 `replay-message-committed`，然后 `continue`；没有续写消息则抛 `ModelOutputTokenLimitError`。
-7. **turn boundary**：`turnBoundary` 返回 `messages` 时校验"待派发提案与必需 user 消息不得被破坏"，追加 `transcript-compacted`，再执行 `commitProjection`（失败抛 `AgentTurnBoundaryProjectionError`）。
-8. **无工具调用即结束**：返回 `AgentTurnResult`。
-9. **工具阶段**（见下），完成后 `dispatchedToolRounds += 1` 进入下一轮。
+4. **provider 尝试**：追加 `model-request-started` → 流式收集（`collectModelAttempt`）；流抛错时**先** `throwIfAborted`，再走 `recoverProviderAttempt`（至多一次重试，超限抛 `ModelAttemptRecoveryRejectedError('RETRY_LIMIT_EXCEEDED')`）；若 `request.signal` 已 abort 而收尾 finish 不是 `cancelled`，finish 会被改写成 `cancelled`（**取消优先于已收到的终态**）。
+5. **取消结算**：`finish.reason === 'cancelled'` 时先结算这次尝试——投影 attempt usage（`finishReason: 'cancelled'`、`disposition: 'cancelled'`）→ 追加 `model-attempt-discarded`（`reasonCode: 'TURN_CANCELLED'`，带 `modelTurn` / `attempt` / `finishReason` / `usage`，可选 `sessionLedger`）→ `onAcceptedUsage`（`onAcceptedUsage` 计入回合用量）——然后按 `request.signal` 判定：超时信号（`signal.reason === AGENT_TURN_TIMEOUT_ABORT_REASON`）抛 `AgentTurnTimedOutError`，否则抛 `AgentTurnCancelledError`。**无 `usage` 的 cancelled 尝试**只做 abort 校验后抛错（不投影、不写事件）；`initialResponse` 路径一律不结算，判定后直接抛错。
+6. **响应归约与提交**：非 cancelled 尝试必须带 `usage`，否则抛 `InvalidModelStreamError('non-cancelled provider attempt completed without usage')`；随后拼装 assistant canonical 消息（thinking / text 合并、`thinking-signature` 回填）→ `recordProviderAttemptUsage` → `prepareModelResponseProjection` → 追加 `model-response-committed` → `onModelResponseCommitted`。
+7. **输出上限恢复**：`finish.reason === 'length'` 时对每个工具调用追加 `tool-call-not-dispatched`（`MODEL_OUTPUT_TRUNCATED`），可选 `provider-retry-scheduled` 与 `replay-message-committed`，然后 `continue`；没有续写消息则抛 `ModelOutputTokenLimitError`。
+8. **turn boundary**：`turnBoundary` 返回 `messages` 时校验"待派发提案与必需 user 消息不得被破坏"，追加 `transcript-compacted`，再执行 `commitProjection`（失败抛 `AgentTurnBoundaryProjectionError`）。
+9. **无工具调用即结束**：返回 `AgentTurnResult`。
+10. **工具阶段**（见下），完成后 `dispatchedToolRounds += 1` 进入下一轮。
 
 循环末尾兜底抛 `ModelTurnLimitError`。
 
@@ -233,4 +234,4 @@ type CanonicalTurnMessage = CanonicalModelMessage
 // 另导出 CanonicalContentBlock / CanonicalToolCall 类型再导出
 ```
 
-`initialResponse`（`HostCommittedModelResponse`）用于宿主已自行流式提交首响应的场景：要求 history 最新事件为完全匹配的 `model-response-committed`，SDK 不会重复写事件、也不重放已提交副作用；`hostProjectionCommitted` 时 observer 会带 `alreadyProjected: true`。
+`initialResponse`（`HostCommittedModelResponse`）用于宿主已自行流式提交首响应的场景：要求 history 最新事件为完全匹配的 `model-response-committed`，SDK 不会重复写事件、也不重放已提交副作用；`hostProjectionCommitted` 时 observer 会带 `alreadyProjected: true`。该路径下若 `finishReason === 'cancelled'`，只做 `throwIfAborted` 后抛超时 / 取消错误，**不走**第 5 步的取消结算（首响应已由宿主提交，SDK 不补写 `model-attempt-discarded`）。

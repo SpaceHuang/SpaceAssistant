@@ -237,6 +237,14 @@ npm run pack:mac
 
 阶段 6 不依赖阶段 5 的真实外部收发验收。AT17 真实微信验收已于上方阶段 5 记录完成。阶段 8 全部本机门禁也已于 2026-10-01 通过；恢复代码已按 §5 依赖顺序提交，记录见第 5 节。
 
+### 阶段 8：逐路径复核后的最终重验（完成）
+
+日期：2026-10-01。对恢复计划原先标记未逐项核对的 405 个路径完成语义复核，另将前序 111 个功能路径按当前工作树重新核对；结论见 `docs/develop/2026-10-01-cloud-main-516-path-audit.tsv`。发现的真实问题均按 TDD 处理，包括 ripgrep 开发提示旧断言，以及 arm64 Electron 框架签名失败与双架构打包的磁盘峰值问题。
+
+最终按阶段 8 顺序重跑：四组回归分别为 226、176、233、44 项；shared、renderer、agent-sdk、pi-ai provider 类型检查、SDK 边界和严格 i18n 均通过；`npm test` 819 个文件通过、1 个跳过，7294 项通过、106 项跳过；`npm run build` 与 `npm run pack:mac` 通过。pack:mac 现在顺序生成 x64/arm64 DMG，中间清理 x64 解包 app 以控制磁盘峰值。两份 DMG CRC 有效，app 架构与 ad-hoc 签名正确，包内 ripgrep 哈希/许可和双语用量资源核对通过；asar 不含 `agent-core`。
+
+云端 tip 后续版本仍没有配置为远端分支：`origin` 只有共同基线 `main`。shell plan 快照和 Butler 投递两项差异已在审计底表列为外部版本核实，不影响当前本地恢复和阶段验收结论。
+
 ### 阶段 5：usage 事实层与 AT17 真实微信验收（完成）
 
 日期：2026-10-01。用户在真实微信远程会话发起测试消息；开发版应用接收并完成回合。直接查询本次运行使用的 SQLite：session `31ba46de…f743a626`、turn `dda125d4…f585-4597-b379-248ca9cf0d86`，二者通过 `turns.session_id` 一致关联；该 turn 为 `terminal / completed`，对应微信来源会话。`usage_step_facts` 有 2 行，2 行均 `attribution_json` 与 `estimator_version` 非 NULL；`usage_turn_facts` 有 1 行且 `tool_attribution_json` 非 NULL，回合记录包含 1 次工具调用。查询以 `session_id + turn_id` 同时核对，不记录或披露消息正文。验收人：用户发起真实微信消息，Codex 直接查询运行数据库并核对结果。
