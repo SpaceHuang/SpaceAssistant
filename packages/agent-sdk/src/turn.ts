@@ -469,7 +469,10 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
               ? { status: 'interrupted', reason: 'unknown-after-dispatch', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
             : error instanceof ToolDeniedError
               ? { status: 'denied', reason: error.reasonCode, ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
-              : { status: 'failed', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
+              : error && typeof error === 'object' && 'code' in error &&
+                (error.code === 'TOOL_LOOP_MAX_ROUNDS_EXCEEDED' || error.code === 'SHELL_DIALECT_MISMATCH')
+                ? { status: 'failed', reason: error instanceof Error ? error.message : String(error), errorCode: error.code, ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
+                : { status: 'failed', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
         const status = terminalKind === 'invocation-interrupted' ? 'interrupted' as const : 'failed' as const
         const sessionLedger = input.sessionLedgerForInvocationTerminal
           ? await input.sessionLedgerForInvocationTerminal({ status, turnId: input.turnId ?? input.invocationId, ...(error instanceof AgentTurnCancelledError ? { sessionEventReason: 'cancelled' } : {}) })
