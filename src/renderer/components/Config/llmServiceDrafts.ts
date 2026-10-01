@@ -1,4 +1,5 @@
 import type { LlmServiceProfile, ModelEntry } from '../../../shared/domainTypes'
+import { runtimeText } from '../../i18n/runtimeText'
 
 export const MAX_LLM_SERVICES = 10
 
@@ -55,13 +56,17 @@ export function buildServiceSummary(
   draft: LlmServiceDraft,
   supportedCount?: number
 ): string {
-  const keyLabel = draft.apiKeyPresent || draft.apiKeyDraft.trim() ? 'Key 已配置' : '未配置 Key'
+  const keyLabel = draft.apiKeyPresent || draft.apiKeyDraft.trim()
+    ? runtimeText('config.llmService.keyConfigured')
+    : runtimeText('config.llmService.keyNotConfigured')
   const modelPart =
-    supportedCount !== undefined ? ` · 已支持 ${supportedCount} 个模型` : ` · 已支持 ${draft.supportedModelIds.length} 个模型`
+    runtimeText('config.llmService.supportedModels', {
+      count: supportedCount !== undefined ? supportedCount : draft.supportedModelIds.length
+    })
   if (draft.baseUrl.trim()) {
-    return `${draft.baseUrl.trim()} · ${keyLabel}${modelPart}`
+    return `${draft.baseUrl.trim()} · ${keyLabel} · ${modelPart}`
   }
-  return `官方默认 · ${keyLabel}${modelPart}`
+  return `${runtimeText('config.llmService.officialDefault')} · ${keyLabel} · ${modelPart}`
 }
 
 export function toggleActiveService(
@@ -73,7 +78,7 @@ export function toggleActiveService(
   if (!isActive && draft && draft.supportedModelIds.length === 0) {
     return {
       error: 'needModels',
-      name: draft.name.trim() || '未命名服务'
+      name: draft.name.trim() || runtimeText('config.llmService.unnamed')
     }
   }
 
@@ -105,7 +110,7 @@ export function addNewServiceDraft(
   enabledModelIds: string[]
 ): LlmServiceTabState | { error: string } {
   if (state.order.length >= MAX_LLM_SERVICES) {
-    return { error: `最多配置 ${MAX_LLM_SERVICES} 套大模型服务` }
+    return { error: runtimeText('config.llmService.maxServices', { count: MAX_LLM_SERVICES }) }
   }
   const id = crypto.randomUUID()
   const draft: LlmServiceDraft = {
@@ -130,7 +135,7 @@ export function removeServiceDraft(
   serviceId: string
 ): LlmServiceTabState | { error: string } {
   if (state.order.length <= 1) {
-    return { error: '至少保留一套服务' }
+    return { error: runtimeText('config.llmService.keepOne') }
   }
   const order = state.order.filter((id) => id !== serviceId)
   const drafts = { ...state.drafts }
@@ -169,34 +174,29 @@ export function setAllSupportedModels(state: LlmServiceTabState, serviceId: stri
   return updateServiceDraft(state, serviceId, { supportedModelIds: [...modelIds] })
 }
 
-export function formatLlmServiceValidationError(
-  err: string,
-  t: (key: 'llmService.validationNeedModels', params: { name: string }) => string
-): string {
-  const match = err.match(/^服务「(.+)」须至少支持一个模型$/)
-  if (match) {
-    return t('llmService.validationNeedModels', { name: match[1]! })
-  }
-  return err
-}
-
 export function validateLlmServiceDrafts(state: LlmServiceTabState): string | null {
-  if (state.order.length === 0) return '至少保留一套大模型服务'
-  if (state.activeIds.length === 0) return '至少选择一个当前使用的服务'
+  if (state.order.length === 0) return runtimeText('config.llmService.needOneModelService')
+  if (state.activeIds.length === 0) return runtimeText('config.llmService.selectActiveService')
 
   const names = new Set<string>()
   for (const id of state.order) {
     const d = state.drafts[id]
     if (!d) continue
     const name = d.name.trim()
-    if (!name) return '服务名称不能为空'
-    if (name.length > 32) return '服务名称不能超过 32 个字符'
+    if (!name) return runtimeText('config.llmService.nameRequired')
+    if (name.length > 32) return runtimeText('config.llmService.nameTooLong')
     const key = name.toLowerCase()
-    if (names.has(key)) return `服务名称「${name}」重复`
+    if (names.has(key)) return runtimeText('config.llmService.duplicateName', { name })
     names.add(key)
-    if (d.isNew && !d.apiKeyDraft.trim()) return `新建服务「${name || '新服务'}」须填写 API Key`
+    if (d.isNew && !d.apiKeyDraft.trim()) {
+      return runtimeText('config.llmService.apiKeyRequired', {
+        name: name || runtimeText('config.llmService.newService')
+      })
+    }
     if (d.supportedModelIds.length === 0) {
-      return `服务「${name || '未命名服务'}」须至少支持一个模型`
+      return runtimeText('config.llmService.modelRequired', {
+        name: name || runtimeText('config.llmService.unnamed')
+      })
     }
   }
   return null

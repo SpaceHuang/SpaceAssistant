@@ -1,5 +1,6 @@
 import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import type { BrowserDetectResult } from '../../shared/browserTypes'
+import { runtimeText } from '../i18n/runtimeText'
 
 const CLIENT_DETECT_TTL_MS = 30_000
 
@@ -61,7 +62,7 @@ const browserDetectSlice = createSlice({
       })
       .addCase(fetchBrowserDetect.rejected, (state, action) => {
         state.detecting = false
-        state.error = action.payload ?? '检测失败'
+        state.error = action.payload ?? runtimeText('browserDetect.failed')
       })
   }
 })

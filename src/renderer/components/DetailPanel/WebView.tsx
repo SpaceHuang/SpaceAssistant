@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Spin, Typography } from 'antd'
 import type { WebViewController } from './DetailPanelContext'
+import { runtimeText } from '../../i18n/runtimeText'
 
 type WebviewElement = HTMLElement & {
   src: string
@@ -93,7 +94,7 @@ export function WebView({
     const handleFinish = () => {
       onLoadFinish?.(safeGetURL(el, url))
     }
-    const handleFail = () => onLoadError?.('页面加载失败，请检查网络或 URL')
+    const handleFail = () => onLoadError?.(runtimeText('detailPanel.webLoadFailed'))
     const handleNewWindow = (event: Event) => {
       const detail = event as Event & { url?: string; disposition?: string }
       if (!detail.url) return

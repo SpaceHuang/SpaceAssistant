@@ -5,6 +5,7 @@ import { SerializeAddon } from '@xterm/addon-serialize'
 import '@xterm/xterm/css/xterm.css'
 import { decodeProgressRawTailForXterm, exportTerminalScrollback, type TerminalExportSource } from '../../../shared/terminalScrollback'
 import type { ShellTerminalScrollback } from '../../../shared/domainTypes'
+import { runtimeText } from '../../i18n/runtimeText'
 import { buildShellTerminalOptions, SHELL_TERMINAL_COLS } from './terminalTheme'
 import {
   appendTerminalRawProgress,
@@ -244,7 +245,7 @@ export function ShellTerminalView({
       <div ref={hostRef} className="shell-terminal-host" />
       {showResumeFollow ? (
         <button type="button" className="shell-terminal__resume-follow" onClick={resumeFollow}>
-          恢复跟随
+          {runtimeText('chat.shell.resumeFollow')}
         </button>
       ) : null}
     </div>

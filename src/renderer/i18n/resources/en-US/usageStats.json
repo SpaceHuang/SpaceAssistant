@@ -41,5 +41,30 @@
   },
   "empty": "No usage yet. Start a conversation to see token consumption, cache hit rate and tool call statistics.",
   "rangeTooLong": "Maximum range is 365 days; showing the last 365 days",
-  "loadFailed": "Failed to load usage statistics"
+  "loadFailed": "Failed to load usage statistics",
+  "tabs": {
+    "overview": "Overview",
+    "attribution": "Attribution"
+  },
+  "attribution": {
+    "loading": "Loading attribution…",
+    "noExactInput": "No exact input usage exists for these filters.",
+    "noAttribution": "Requests in this range predate attribution support, so no composition is available.",
+    "exactInput": "Exact input tokens",
+    "estimatorVersion": "Select estimator version",
+    "coverage": "Attribution coverage {{percent}}%",
+    "unattributed": "{{count}} tokens have no attributable data",
+    "snapshot": "Input composition snapshot",
+    "drift": "Daily composition drift",
+    "system": "System prompt",
+    "tools": "Tool declarations",
+    "toolName": "Tool",
+    "declarationChars": "Declaration chars",
+    "calls": "Calls",
+    "resultChars": "Result chars",
+    "fixedInsight": "System prompt and tool declarations are {{percent}}% of attributable input.",
+    "resultInsight": "Largest result volume: {{toolName}} ({{chars}} characters, derived).",
+    "toolDimensions": "Tool dimensions",
+    "noToolDimensions": "No tool dimension data."
+  }
 }

@@ -169,6 +169,31 @@ describe('ContextUsageRing', () => {
     expect(screen.queryByText(/缓存写入/)).toBeNull()
   })
 
+  it('shows latest single-step attribution, coverage gap, and estimator version in tooltip', async () => {
+    window.api.usageStatsLatestAttribution = async () => ({
+      exactInputTokens: 100,
+      estimatorVersion: 'block-v1',
+      attributableInputTokens: 75,
+      unattributedInputTokens: 25,
+      coverageRatio: 0.75,
+      composition: { system: 10, tools: 15, messageBlocks: { 'user|text': 50 } }
+    })
+    renderRing({ input_tokens: 100, output_tokens: 0 })
+    const svg = document.querySelector('svg')!
+    fireEvent.mouseEnter(svg)
+    await waitFor(() => {
+      const text = screen.getByRole('tooltip').textContent ?? ''
+      expect(text).toContain('归因构成')
+      expect(text).toContain('block-v1')
+      expect(text).toContain('75%')
+      expect(text).toContain('另有 25 tokens 无可归因数据')
+      expect(text).toContain('系统提示')
+      expect(text).toContain('75')
+    })
+    const used = Array.from(document.querySelectorAll('circle')).find((circle) => circle.getAttribute('stroke') === 'var(--sa-primary)')
+    expect(used?.getAttribute('stroke-dasharray')).toBeTruthy()
+  })
+
   it('uses current session effective request maxTokens for output reserve', async () => {
     renderRing({ input_tokens: 10000, output_tokens: 0 })
     const svg = document.querySelector('svg')!

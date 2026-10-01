@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import dayjs, { type Dayjs } from 'dayjs'
-import { Alert, Button, DatePicker, Drawer, Radio, Select, Space, Spin, Typography } from 'antd'
+import { Alert, Button, DatePicker, Drawer, Radio, Select, Space, Spin, Tabs, Typography } from 'antd'
+import { useTranslation } from 'react-i18next'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
-import type { UsageDailyPoint, UsageDimensions, UsageStatsFilters, UsageStatsRangeArgs, UsageSummary } from '../../../shared/usageStatsTypes'
+import type { UsageAttributionSummary, UsageDailyPoint, UsageDimensions, UsageStatsFilters, UsageStatsRangeArgs, UsageSummary } from '../../../shared/usageStatsTypes'
 import { UsageStatsKpiCards } from './UsageStatsKpiCards'
 import { UsageTrendChart } from './UsageTrendChart'
+import { UsageAttributionView } from './UsageAttributionView'
 import { formatLocalDay, localTimeZoneLabel } from './format'
 
 type Props = {
@@ -27,6 +29,7 @@ function shiftDay(day: string, n: number): string {
 /** Token 用量统计面板（C6：Drawer 宽 86%，destroyOnClose；筛选状态在面板会话内保持，关闭即重置）。 */
 export function UsageStatsDrawer({ open, onClose }: Props) {
   const { t } = useTypedTranslation('usageStats')
+  const { i18n } = useTranslation()
   const { t: tCommon } = useTypedTranslation('common')
   const [preset, setPreset] = useState<RangePreset>('30')
   // rc-picker 的 value/onChange 均为 dayjs 对象；存字符串再强转会在渲染期抛
@@ -36,6 +39,7 @@ export function UsageStatsDrawer({ open, onClose }: Props) {
   const [dimensions, setDimensions] = useState<UsageDimensions | null>(null)
   const [summary, setSummary] = useState<UsageSummary | null>(null)
   const [points, setPoints] = useState<UsageDailyPoint[]>([])
+  const [attribution, setAttribution] = useState<UsageAttributionSummary | null>(null)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState(false)
 
@@ -64,14 +68,16 @@ export function UsageStatsDrawer({ open, onClose }: Props) {
     setLoading(true)
     setLoadError(false)
     try {
-      const [nextSummary, nextPoints, nextDimensions] = await Promise.all([
+      const [nextSummary, nextPoints, nextDimensions, nextAttribution] = await Promise.all([
         window.api.usageStatsSummary(args),
         window.api.usageStatsDaily(args),
-        window.api.usageStatsDimensions()
+        window.api.usageStatsDimensions(),
+        window.api.usageStatsAttribution(args)
       ])
       setSummary(nextSummary)
       setPoints(nextPoints)
       setDimensions(nextDimensions)
+      setAttribution(nextAttribution)
     } catch {
       setLoadError(true)
     } finally {
@@ -188,20 +194,28 @@ export function UsageStatsDrawer({ open, onClose }: Props) {
           />
         </Space>
         {loadError && <Alert type="error" showIcon message={t('loadFailed')} />}
-        {hasNoData ? (
-          <Typography.Paragraph type="secondary" data-testid="usage-empty">
-            {t('empty')}
-          </Typography.Paragraph>
-        ) : (
-          <Spin spinning={loading}>
-            <Space direction="vertical" size={16} style={{ width: '100%' }}>
-              <UsageStatsKpiCards summary={summary} loading={loading} />
-              <div data-testid="usage-trend-chart">
-                <UsageTrendChart points={points} />
-              </div>
-            </Space>
-          </Spin>
-        )}
+        <Tabs
+          defaultActiveKey="overview"
+          items={[
+            {
+              key: 'overview', label: t('tabs.overview'), children: hasNoData ? (
+                <Typography.Paragraph type="secondary" data-testid="usage-empty">{t('empty')}</Typography.Paragraph>
+              ) : (
+                <Spin spinning={loading}>
+                  <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                    <UsageStatsKpiCards summary={summary} loading={loading} />
+                    <div data-testid="usage-trend-chart"><UsageTrendChart points={points} /></div>
+                  </Space>
+                </Spin>
+              )
+            },
+            {
+              key: 'attribution', label: t('tabs.attribution'), children: (
+                <Spin spinning={loading}><UsageAttributionView data={attribution} loading={loading} locale={i18n.language} /></Spin>
+              )
+            }
+          ]}
+        />
       </Space>
     </Drawer>
   )

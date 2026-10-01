@@ -8,6 +8,7 @@ import { summarizeBrowserConfirmInput } from './browserConfirmDisplay'
 import { ConfirmCardDecision } from './ConfirmCardDecision'
 import { MemoryTierSelect } from './MemoryTierSelect'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import { runtimeText } from '../../i18n/runtimeText'
 
 type Props = {
   record: ToolCallRecord
@@ -55,7 +56,7 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
   const mode = typeof record.input.mode === 'string' ? record.input.mode : 'open'
   const trustableDomain = useMemo(() => {
     if (action === 'navigate' && mode === 'open') {
-      return urlValue && urlValue !== '(未指定 URL)' ? extractTrustableDomain(urlValue) : null
+      return urlValue && urlValue !== runtimeText('chat.browser.unspecifiedUrl') ? extractTrustableDomain(urlValue) : null
     }
     if (action === 'act') {
       return pageUrl ? extractTrustableDomain(pageUrl) : null
@@ -65,7 +66,7 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
 
   if (!summary) return null
 
-  const canOpenInViewer = Boolean(urlValue && urlValue !== '(未指定 URL)' && normalizeViewerUrl(urlValue))
+  const canOpenInViewer = Boolean(urlValue && urlValue !== runtimeText('chat.browser.unspecifiedUrl') && normalizeViewerUrl(urlValue))
   const canOpenPageInViewer = Boolean(pageUrl && normalizeViewerUrl(pageUrl))
 
   const dangerInfo = record.dangerInfo
@@ -165,7 +166,7 @@ export function BrowserConfirmCard({ record, onConfirm }: Props) {
             <button
               type="button"
               className="write-confirm-card__subject-value browser-confirm-card__url browser-confirm-card__url-link"
-              title={`在内容查看器中打开：${urlValue}`}
+              title={runtimeText('chat.browser.openInViewer', { url: urlValue })}
               onClick={handleOpenInViewer}
             >
               {urlValue}

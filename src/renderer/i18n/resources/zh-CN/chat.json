@@ -220,6 +220,11 @@
       "riskHint": "该能力为产品内置功能；变更类能力（如添加 MCP 连接）执行前需确认。",
       "allow": "允许",
       "deny": "拒绝"
+    },
+    "reason": {
+      "analysisIncomplete": "脚本分析不完整，请确认该操作。",
+      "targetChanged": "确认后目标发生变化，操作未执行。",
+      "policyRule": "安全策略“{{ruleId}}”要求确认。"
     }
   },
   "chatView": {

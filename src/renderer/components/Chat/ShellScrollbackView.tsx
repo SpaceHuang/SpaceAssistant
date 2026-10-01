@@ -7,6 +7,7 @@ import { REDACTED_ARTIFACT_ID } from '../../../shared/processResultProjection'
 import { needsOutputTrustNotice } from '../../../shared/shellToolDisplay'
 import { pickScrollbackRestorePayload } from '../../../shared/terminalScrollback'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import { runtimeText } from '../../i18n/runtimeText'
 import { buildShellTerminalOptions } from './terminalTheme'
 import { ShellOutputView } from './ShellOutputView'
 import {
@@ -138,11 +139,11 @@ export function ShellScrollbackView({
     <div className="shell-output-block">
       {showExitCode ? (
         <pre className="shell-output shell-output__stderr shell-output__exit-tag">
-          {`退出码 ${exitCode}`}
+          {runtimeText('chat.shell.exitCode', { code: exitCode })}
         </pre>
       ) : null}
       {scrollback?.truncated ? (
-        <div className="shell-output__meta">终端记录已截断（超过 256KB）</div>
+        <div className="shell-output__meta">{runtimeText('chat.shell.scrollbackTruncated')}</div>
       ) : null}
       {needsOutputTrustNotice({ outputTrust }) ? (
         <div className="shell-output__trust-warning" role="status">
@@ -161,7 +162,7 @@ export function ShellScrollbackView({
           className="shell-output__truncated-hint"
           onClick={() => void window.api.shellOpenOutputPath(openTarget)}
         >
-          输出已截断，打开完整日志 →
+          {runtimeText('chat.shell.outputTruncated')}
         </button>
       ) : null}
     </div>

@@ -8,7 +8,7 @@ import { ErrorCodes } from '../../src/shared/errorCodes'
 import { REMOTE_SESSION_BUSY_MESSAGE, REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE } from '../remote/remoteSessionGuardMessages'
 import { SESSION_META_TITLE_USER_CUSTOM, scheduleSessionTitleOpenBackfillIfNeeded } from '../sessionTitleSuggest'
 import { Session, SessionSkillsState } from '../../src/shared/domainTypes'
-import { UsageDailyPoint, UsageDimensions, UsageStatsRangeArgs, UsageSummary } from '../../src/shared/usageStatsTypes'
+import { UsageAttributionSummary, UsageDailyPoint, UsageDimensions, UsageStatsRangeArgs, UsageSummary } from '../../src/shared/usageStatsTypes'
 import { arrayMessagePageReader } from '../sessionBackupManager'
 import { assertValidOptionalAnthropicBaseUrl } from '../claudeRequestGuards'
 import { clearDecisionCacheOnSessionDelete } from '../confirmation/cacheMaintenanceHooks'
@@ -18,7 +18,7 @@ import { deleteSessionChatAttachmentsWithRetry } from '../chatAttachmentManager'
 import { isRemoteAgentRunning } from '../remote/remoteAgentRegistry'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { normalizeSessionSkillsState } from '../../src/shared/domainTypes'
-import { queryUsageDaily, queryUsageDimensions, queryUsageSummary } from '../usageStats/usageStatsQueries'
+import { queryLatestUsageAttribution, queryUsageAttribution, queryUsageDaily, queryUsageDimensions, queryUsageSummary } from '../usageStats/usageStatsQueries'
 
 export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   ipcMain.handle('session:list', (): Session[] => {
@@ -196,6 +196,12 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
 
   ipcMain.handle('usage-stats:summary', (_e, args: UsageStatsRangeArgs): UsageSummary =>
     queryUsageSummary(ctx.db, args))
+
+  ipcMain.handle('usage-stats:attribution', (_e, args: UsageStatsRangeArgs): UsageAttributionSummary =>
+    queryUsageAttribution(ctx.db, args))
+
+  ipcMain.handle('usage-stats:latest-attribution', (_e, sessionId: string) =>
+    queryLatestUsageAttribution(ctx.db, sessionId))
 
   ipcMain.handle('usage-stats:dimensions', (): UsageDimensions => queryUsageDimensions(ctx.db))
 }

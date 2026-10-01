@@ -5,6 +5,7 @@ import { resolveShellTuiNotice } from '../../../shared/shellToolDisplay'
 import { message as antMessage } from 'antd'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import { runtimeText } from '../../i18n/runtimeText'
 
 type Props = {
   workDir?: string
@@ -37,8 +38,8 @@ export function ShellTuiFallbackHint({ workDir, resultData }: Props) {
   if (!notice) return null
 
   const hintLines = notice.kind === 'undetectable'
-    ? [t('shell.tuiLine1', { program: notice.program ?? '交互式程序' }), t('shell.tuiUndetectableLine')]
-    : [t('shell.tuiLine1', { program: notice.program ?? '交互式程序' }), t('shell.tuiLine2')]
+    ? [t('shell.tuiLine1', { program: notice.program ?? runtimeText('chat.shell.interactiveProgram') }), t('shell.tuiUndetectableLine')]
+    : [t('shell.tuiLine1', { program: notice.program ?? runtimeText('chat.shell.interactiveProgram') }), t('shell.tuiLine2')]
 
   return (
     <div className="shell-tui-fallback" role="alert">

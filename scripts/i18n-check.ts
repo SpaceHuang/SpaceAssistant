@@ -1,6 +1,7 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
+import { findHardcodedChinese } from './i18n/i18nSourceScan'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -63,7 +64,6 @@ function walkDir(dir: string, extensions: string[]): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name)
     if (entry.isDirectory()) {
-      if (entry.name === 'i18n') continue
       results.push(...walkDir(full, extensions))
     } else if (extensions.some((ext) => entry.name.endsWith(ext))) {
       results.push(full)
@@ -75,7 +75,6 @@ function walkDir(dir: string, extensions: string[]): string[] {
 function checkHardcodedChinese(): boolean {
   const srcDir = path.resolve(__dirname, '../src/renderer')
   const files = walkDir(srcDir, ['.tsx', '.ts'])
-  const chinesePattern = /[一-鿿]/
   let totalCount = 0
   let testCount = 0
   let codeCount = 0
@@ -83,20 +82,18 @@ function checkHardcodedChinese(): boolean {
   for (const file of files) {
     if (file.includes(`${path.sep}i18n${path.sep}resources${path.sep}`)) continue
     const content = fs.readFileSync(file, 'utf-8')
-    const lines = content.split('\n')
     const isTestFile = file.includes('.test.') || file.includes(`${path.sep}test${path.sep}`)
-    for (let i = 0; i < lines.length; i++) {
-      if (chinesePattern.test(lines[i]!)) {
-        const relPath = path.relative(path.resolve(__dirname, '..'), file)
-        if (strictHardcoded) {
-          console.warn(`⚠️  Hardcoded Chinese: ${relPath}:${i + 1}`)
-        }
-        totalCount++
-        if (isTestFile) {
-          testCount++
-        } else {
-          codeCount++
-        }
+    const occurrences = findHardcodedChinese(content, file)
+    const relPath = path.relative(path.resolve(__dirname, '..'), file)
+    for (const occurrence of occurrences) {
+      if (strictHardcoded) {
+        console.warn(`⚠️  Hardcoded Chinese: ${relPath}:${occurrence.line}`)
+      }
+      totalCount++
+      if (isTestFile) {
+        testCount++
+      } else {
+        codeCount++
       }
     }
   }

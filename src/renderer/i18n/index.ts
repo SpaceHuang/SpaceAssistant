@@ -8,6 +8,7 @@ import zhCNCommon from './resources/zh-CN/common.json'
 import zhCNConfig from './resources/zh-CN/config.json'
 import zhCNChat from './resources/zh-CN/chat.json'
 import zhCNErrors from './resources/zh-CN/errors.json'
+import zhCNRuntime from './resources/zh-CN/runtime.json'
 import zhCNFileTree from './resources/zh-CN/fileTree.json'
 import zhCNSearch from './resources/zh-CN/search.json'
 import zhCNFeishu from './resources/zh-CN/feishu.json'
@@ -23,6 +24,7 @@ import enUSCommon from './resources/en-US/common.json'
 import enUSConfig from './resources/en-US/config.json'
 import enUSChat from './resources/en-US/chat.json'
 import enUSErrors from './resources/en-US/errors.json'
+import enUSRuntime from './resources/en-US/runtime.json'
 import enUSFileTree from './resources/en-US/fileTree.json'
 import enUSSearch from './resources/en-US/search.json'
 import enUSFeishu from './resources/en-US/feishu.json'
@@ -50,6 +52,7 @@ void i18n
         config: zhCNConfig,
         chat: zhCNChat,
         errors: zhCNErrors,
+        runtime: zhCNRuntime,
         fileTree: zhCNFileTree,
         search: zhCNSearch,
         feishu: zhCNFeishu,
@@ -67,6 +70,7 @@ void i18n
         config: enUSConfig,
         chat: enUSChat,
         errors: enUSErrors,
+        runtime: enUSRuntime,
         fileTree: enUSFileTree,
         search: enUSSearch,
         feishu: enUSFeishu,
@@ -83,7 +87,7 @@ void i18n
     lng: initialLocale,
     fallbackLng: 'zh-CN',
     defaultNS: 'common',
-    ns: ['common', 'config', 'chat', 'errors', 'fileTree', 'search', 'feishu', 'wechat', 'wiki', 'detailPanel', 'contextUsage', 'notification', 'mcp', 'usageStats'],
+    ns: ['common', 'config', 'chat', 'errors', 'runtime', 'fileTree', 'search', 'feishu', 'wechat', 'wiki', 'detailPanel', 'contextUsage', 'notification', 'mcp', 'usageStats'],
     interpolation: { escapeValue: false },
     debug: import.meta.env.DEV && !import.meta.env.VITEST,
     detection: {

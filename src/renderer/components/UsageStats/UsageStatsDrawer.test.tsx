@@ -140,6 +140,7 @@ describe('UsageStatsDrawer', () => {
     const api = {
       usageStatsSummary: vi.fn(async () => summary()),
       usageStatsDaily: vi.fn(async () => [] as UsageDailyPoint[]),
+      usageStatsAttribution: vi.fn(async () => ({ exactInputTokens: 0, byEstimatorVersion: [], dailyByEstimatorVersion: [], toolDimensions: { tools: {}, toolSource: {}, toolSources: {}, toolResults: {} } })),
       usageStatsDimensions: vi.fn(async () => ({
         models: [{ model: 'deepseek-v4-pro', llmServiceId: 'svc-a' }],
         sessions: [{ sessionId: 'sess-1', name: null }],
@@ -267,4 +268,48 @@ describe('UsageStatsDrawer', () => {
     expect(latest.from).toBe('2026-08-01')
     expect(latest.to).toBe('2026-08-15')
   })
+
+  it('keeps filters shared across Overview and Attribution tabs and renders partial coverage', async () => {
+    mockChartSize()
+    const attribution = {
+      exactInputTokens: 100,
+      byEstimatorVersion: [{ estimatorVersion: 'block-v1', attributableInputTokens: 60, unattributedInputTokens: 40, coverageRatio: 0.6,
+        composition: { system: 10, tools: 20, messageBlocks: { 'user|text': 30 } } }],
+      dailyByEstimatorVersion: [{ day: '2026-09-16', estimatorVersion: 'block-v1', inputTokens: 60,
+        composition: { system: 10, tools: 20, messageBlocks: { 'user|text': 30 } } }],
+      toolDimensions: { tools: { grep: 50 }, toolSource: { builtin: 50 }, toolSources: { grep: 'builtin' as const }, toolResults: { grep: { calls: 2, chars: 90 } } }
+    }
+    const api = mockApi({ usageStatsAttribution: vi.fn(async () => attribution) })
+    renderDrawer()
+    await waitFor(() => expect(api.usageStatsAttribution).toHaveBeenCalled())
+    expect(api.usageStatsAttribution).toHaveBeenLastCalledWith(expect.objectContaining({ from: expect.any(String), to: expect.any(String), dimensions: {} }))
+    fireEvent.click(screen.getByRole('tab', { name: '成本构成' }))
+    expect((await screen.findByTestId('attribution-coverage')).textContent).toContain('60.0%')
+    expect(screen.getByText(/40 tokens/)).toBeDefined()
+    expect(screen.getByTestId('usage-attribution-view')).toBeDefined()
+  })
+
+  it('shows the 0% explanation without rendering any attribution composition', async () => {
+    const api = mockApi({
+      usageStatsAttribution: vi.fn(async () => ({ exactInputTokens: 90, byEstimatorVersion: [], dailyByEstimatorVersion: [], toolDimensions: { tools: {}, toolSource: {}, toolSources: {}, toolResults: {} } }))
+    })
+    renderDrawer()
+    await waitFor(() => expect(api.usageStatsAttribution).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('tab', { name: '成本构成' }))
+    expect(await screen.findByTestId('attribution-empty')).toBeTruthy()
+    expect(screen.queryByTestId('usage-attribution-view')).toBeNull()
+  })
+
+  it('passes identical changed date and dimensions to summary, daily, and attribution reads', async () => {
+    const api = mockApi()
+    renderDrawer()
+    await waitFor(() => expect(api.usageStatsAttribution).toHaveBeenCalled())
+    const before = api.usageStatsAttribution.mock.calls.length
+    fireEvent.click(document.querySelector('input.ant-radio-button-input[value="7"]')!)
+    await waitFor(() => expect(api.usageStatsAttribution.mock.calls.length).toBeGreaterThan(before))
+    const attributionArgs = api.usageStatsAttribution.mock.calls.at(-1)?.[0]
+    expect(api.usageStatsSummary.mock.calls.at(-1)?.[0]).toEqual(attributionArgs)
+    expect(api.usageStatsDaily.mock.calls.at(-1)?.[0]).toEqual(attributionArgs)
+  })
+
 })

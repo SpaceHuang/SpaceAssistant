@@ -1,8 +1,19 @@
 import type { AppDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
 import {
+  calculateAttributionCoverage,
+  emptyTurnToolDimension,
+  hasAttributionWeights,
+  normalizeInputAttribution,
+  type StepAttributionJson,
+  type TurnToolDimension,
+  type ToolSourceClass
+} from '../../src/shared/usageAttribution'
+import {
   USAGE_MAX_RANGE_DAYS,
+  type UsageAttributionSummary,
   type UsageDailyPoint,
+  type UsageLatestAttribution,
   type UsageDimensions,
   type UsageStatsFilters,
   type UsageStatsRangeArgs,
@@ -40,17 +51,20 @@ type SqlFilterParams = {
 }
 
 /** 把 Filters 展开为两表共用的 WHERE 片段（多项之间「或」，§8.1）。 */
-function buildFilterWhere(dimensions: UsageStatsFilters | undefined): SqlFilterParams {
+function buildFilterWhere(dimensions: UsageStatsFilters | undefined, aliases: { token?: string; turn?: string } = {}): SqlFilterParams {
   const tokenConds: string[] = []
   const turnConds: string[] = []
+  const tokenPrefix = aliases.token ? `${aliases.token}.` : ''
+  const turnPrefix = aliases.turn ? `${aliases.turn}.` : ''
   const paramsToken: (string | null)[] = []
   const paramsTurn: (string | null)[] = []
 
   const models = dimensions?.models ?? []
   if (models.length > 0) {
-    const parts = models.map(() => '(model = ? AND (? IS NULL OR llm_service_id = ?))')
+    const parts = models.map(() => `(${tokenPrefix}model = ? AND (? IS NULL OR ${tokenPrefix}llm_service_id = ?))`)
+    const turnParts = models.map(() => `(${turnPrefix}model = ? AND (? IS NULL OR ${turnPrefix}llm_service_id = ?))`)
     tokenConds.push(`(${parts.join(' OR ')})`)
-    turnConds.push(`(${parts.join(' OR ')})`)
+    turnConds.push(`(${turnParts.join(' OR ')})`)
     for (const m of models) {
       const values = [m.model, m.llmServiceId ?? null, m.llmServiceId ?? null]
       paramsToken.push(...values)
@@ -59,15 +73,15 @@ function buildFilterWhere(dimensions: UsageStatsFilters | undefined): SqlFilterP
   }
   const sessionIds = dimensions?.sessionIds ?? []
   if (sessionIds.length > 0) {
-    tokenConds.push(`session_id IN (${sessionIds.map(() => '?').join(', ')})`)
-    turnConds.push(`session_id IN (${sessionIds.map(() => '?').join(', ')})`)
+    tokenConds.push(`${tokenPrefix}session_id IN (${sessionIds.map(() => '?').join(', ')})`)
+    turnConds.push(`${turnPrefix}session_id IN (${sessionIds.map(() => '?').join(', ')})`)
     paramsToken.push(...sessionIds)
     paramsTurn.push(...sessionIds)
   }
   const appVersions = dimensions?.appVersions ?? []
   if (appVersions.length > 0) {
-    tokenConds.push(`app_version IN (${appVersions.map(() => '?').join(', ')})`)
-    turnConds.push(`app_version IN (${appVersions.map(() => '?').join(', ')})`)
+    tokenConds.push(`${tokenPrefix}app_version IN (${appVersions.map(() => '?').join(', ')})`)
+    turnConds.push(`${turnPrefix}app_version IN (${appVersions.map(() => '?').join(', ')})`)
     paramsToken.push(...appVersions)
     paramsTurn.push(...appVersions)
   }
@@ -266,5 +280,180 @@ export function queryUsageDimensions(db: AppDatabase): UsageDimensions {
     models: modelRows.map((row) => ({ model: row.model, llmServiceId: row.llmServiceId ?? undefined })),
     sessions: sessionRows.map((row) => ({ sessionId: row.sessionId, name: row.name ?? null })),
     appVersions: versionRows.map((row) => row.app_version)
+  }
+}
+
+type AttributionSqlRow = {
+  day: string
+  sessionId: string
+  turnId: string
+  stepId: string
+  inputTokens: number | null
+  attributionJson: string | null
+  estimatorVersion: string | null
+  systemTokens: number | null
+  toolsTokens: number | null
+  messageTokens: number | null
+}
+
+function parseRecordJson(value: string | null): Record<string, unknown> | undefined {
+  if (value === null) return undefined
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined
+  } catch { return undefined }
+}
+
+function addNumericRecord(target: Record<string, number>, source: unknown): void {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return
+  for (const [key, raw] of Object.entries(source)) {
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) target[key] = (target[key] ?? 0) + raw
+  }
+}
+
+function aggregateToolDimensions(rows: readonly { toolAttributionJson: string | null }[]): UsageAttributionSummary['toolDimensions'] {
+  const result: TurnToolDimension = emptyTurnToolDimension()
+  for (const row of rows) {
+    const json = parseRecordJson(row.toolAttributionJson)
+    if (!json) continue
+    addNumericRecord(result.tools, json.tools)
+    addNumericRecord(result.toolSource, json.toolSource)
+    if (json.toolSources && typeof json.toolSources === 'object' && !Array.isArray(json.toolSources)) {
+      for (const [name, source] of Object.entries(json.toolSources)) {
+        if (source === 'builtin' || source === 'mcp' || source === 'skill' || source === 'other') result.toolSources[name] = source as ToolSourceClass
+      }
+    }
+    if (json.toolResults && typeof json.toolResults === 'object' && !Array.isArray(json.toolResults)) {
+      for (const [name, raw] of Object.entries(json.toolResults)) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+        const value = raw as { calls?: unknown; chars?: unknown }
+        if (typeof value.calls !== 'number' || !Number.isFinite(value.calls) || value.calls < 0 || typeof value.chars !== 'number' || !Number.isFinite(value.chars) || value.chars < 0) continue
+        const total = result.toolResults[name] ?? { calls: 0, chars: 0 }
+        total.calls += value.calls
+        total.chars += value.chars
+        result.toolResults[name] = total
+      }
+    }
+  }
+  return result
+}
+
+/** Cross-session input attribution and turn tool dimensions, using the exact summary filters and composite ownership keys. */
+export function queryUsageAttribution(db: AppDatabase, args: UsageStatsRangeArgs): UsageAttributionSummary {
+  const { whereToken, whereTurn, paramsToken, paramsTurn } = buildFilterWhere(args.dimensions)
+  const conn = getDbConnection(db)
+  const rows = conn.prepare(
+    `SELECT day, session_id AS sessionId, turn_id AS turnId, step_id AS stepId,
+            input_tokens AS inputTokens, attribution_json AS attributionJson, estimator_version AS estimatorVersion,
+            system_tokens AS systemTokens, tools_tokens AS toolsTokens, message_tokens AS messageTokens
+     FROM usage_step_facts
+     WHERE day >= ? AND day <= ?${whereToken}
+     ORDER BY session_id, turn_id, step_id`
+  ).all(args.from, args.to, ...paramsToken) as AttributionSqlRow[]
+
+  const summary = queryUsageSummary(db, args)
+  const coverage = calculateAttributionCoverage(rows.map((row) => ({
+    inputTokens: row.inputTokens,
+    attributionJson: row.attributionJson,
+    estimatorVersion: row.estimatorVersion
+  })))
+  if (coverage.exactInputTokens !== summary.inputTokens) throw new Error('USAGE_ATTRIBUTION_FILTERED_INPUT_TOTAL_MISMATCH')
+
+  const versions = new Map<string, UsageAttributionSummary['byEstimatorVersion'][number]>()
+  const dailyVersions = new Map<string, UsageAttributionSummary['dailyByEstimatorVersion'][number]>()
+  for (const row of rows) {
+    if (row.inputTokens === null || row.attributionJson === null || !row.estimatorVersion) continue
+    const json = parseRecordJson(row.attributionJson) as StepAttributionJson | undefined
+    if (!json || !hasAttributionWeights(json)) continue
+    const attribution = {
+      ...json,
+      threeSources: {
+        systemTokens: row.systemTokens ?? 0,
+        toolsTokens: row.toolsTokens ?? 0,
+        messageTokens: row.messageTokens ?? 0,
+        estimatorVersion: row.estimatorVersion
+      }
+    }
+    const normalized = normalizeInputAttribution(attribution, row.inputTokens)
+    const version = versions.get(row.estimatorVersion) ?? {
+      estimatorVersion: row.estimatorVersion,
+      attributableInputTokens: 0,
+      unattributedInputTokens: 0,
+      coverageRatio: null,
+      composition: { system: 0, tools: 0, messageBlocks: {} }
+    }
+    version.attributableInputTokens += row.inputTokens
+    version.composition.system += normalized.system
+    version.composition.tools += normalized.tools
+    for (const [key, value] of Object.entries(normalized.messageBlocks)) version.composition.messageBlocks[key] = (version.composition.messageBlocks[key] ?? 0) + value
+    versions.set(row.estimatorVersion, version)
+    const dailyKey = `${row.day}\u0000${row.estimatorVersion}`
+    const daily = dailyVersions.get(dailyKey) ?? {
+      day: row.day, estimatorVersion: row.estimatorVersion, inputTokens: 0,
+      composition: { system: 0, tools: 0, messageBlocks: {} }
+    }
+    daily.inputTokens += row.inputTokens
+    daily.composition.system += normalized.system
+    daily.composition.tools += normalized.tools
+    for (const [key, value] of Object.entries(normalized.messageBlocks)) daily.composition.messageBlocks[key] = (daily.composition.messageBlocks[key] ?? 0) + value
+    dailyVersions.set(dailyKey, daily)
+  }
+  for (const coverageGroup of coverage.byEstimatorVersion) {
+    const version = versions.get(coverageGroup.estimatorVersion)
+    if (version) {
+      version.unattributedInputTokens = coverageGroup.unattributedInputTokens
+      version.coverageRatio = coverageGroup.coverageRatio
+    }
+  }
+
+  const { whereTurn: whereTurnAliased, paramsTurn: paramsTurnAliased } = buildFilterWhere(args.dimensions, { turn: 't' })
+  const turnRows = conn.prepare(
+    `SELECT t.tool_attribution_json AS toolAttributionJson
+     FROM usage_turn_facts t
+     INNER JOIN (
+       SELECT DISTINCT session_id, turn_id FROM usage_step_facts
+       WHERE day >= ? AND day <= ?${whereToken}
+     ) selected ON selected.session_id = t.session_id AND selected.turn_id = t.turn_id
+     WHERE t.day >= ? AND t.day <= ?${whereTurnAliased}`
+  ).all(args.from, args.to, ...paramsToken, args.from, args.to, ...paramsTurnAliased) as Array<{ toolAttributionJson: string | null }>
+
+  return {
+    exactInputTokens: summary.inputTokens,
+    byEstimatorVersion: [...versions.values()].sort((a, b) => a.estimatorVersion.localeCompare(b.estimatorVersion)),
+    dailyByEstimatorVersion: [...dailyVersions.values()].sort((a, b) => a.day.localeCompare(b.day) || a.estimatorVersion.localeCompare(b.estimatorVersion)),
+    toolDimensions: aggregateToolDimensions(turnRows)
+  }
+}
+
+/** Latest attributable exact step for one session, identified by the persisted session/turn/step key. */
+export function queryLatestUsageAttribution(db: AppDatabase, sessionId: string): UsageLatestAttribution | null {
+  const conn = getDbConnection(db)
+  const row = conn.prepare(
+    `SELECT input_tokens AS inputTokens, attribution_json AS attributionJson, estimator_version AS estimatorVersion,
+            system_tokens AS systemTokens, tools_tokens AS toolsTokens, message_tokens AS messageTokens
+     FROM usage_step_facts
+     WHERE session_id = ? AND input_tokens IS NOT NULL
+     ORDER BY created_at DESC, id DESC
+     LIMIT 1`
+  ).get(sessionId) as AttributionSqlRow | undefined
+  if (!row || row.inputTokens === null || !row.estimatorVersion || row.attributionJson === null) return null
+  const json = parseRecordJson(row.attributionJson)
+  if (!json || !hasAttributionWeights(json)) return null
+  const normalized = normalizeInputAttribution({
+    ...json,
+    threeSources: {
+      systemTokens: row.systemTokens ?? 0,
+      toolsTokens: row.toolsTokens ?? 0,
+      messageTokens: row.messageTokens ?? 0,
+      estimatorVersion: row.estimatorVersion
+    }
+  } as StepAttributionJson & { threeSources: { systemTokens: number; toolsTokens: number; messageTokens: number; estimatorVersion: string } }, row.inputTokens)
+  return {
+    exactInputTokens: row.inputTokens,
+    estimatorVersion: row.estimatorVersion,
+    attributableInputTokens: row.inputTokens,
+    unattributedInputTokens: 0,
+    coverageRatio: 1,
+    composition: normalized
   }
 }
