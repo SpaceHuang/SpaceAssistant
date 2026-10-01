@@ -45,13 +45,29 @@ export type ModelStreamObserver = Readonly<{
   onStreamError?(input: Readonly<{ error: unknown; usage?: Extract<StreamChunk, { type: 'usage' }> }>): void | Promise<void>
 }>
 
+/** Provider 流空闲超时（无进展护栏）：相邻 chunk 间隔（含首字节）超过阈值即抛出，宿主恢复层可据此重试。 */
+export const PROVIDER_STREAM_IDLE_TIMEOUT = 'PROVIDER_STREAM_IDLE_TIMEOUT' as const
+
+export class ModelStreamIdleTimeoutError extends Error {
+  code = PROVIDER_STREAM_IDLE_TIMEOUT
+  constructor(readonly idleTimeoutMs: number) {
+    super(`model provider stream stalled for more than ${idleTimeoutMs}ms without progress`)
+    this.name = 'ModelStreamIdleTimeoutError'
+  }
+}
+
 /** Collect and validate one provider attempt; callers retain responsibility for retry and commit policy. */
-export async function collectModelAttempt(stream: AsyncIterable<StreamChunk>, observer?: ModelStreamObserver): Promise<CollectedModelStream> {
+export async function collectModelAttempt(
+  stream: AsyncIterable<StreamChunk>,
+  observer?: ModelStreamObserver,
+  options?: { idleTimeoutMs?: number }
+): Promise<CollectedModelStream> {
   const accepted: Array<Exclude<StreamChunk, { type: 'finish' }>> = []
   let usage: Extract<StreamChunk, { type: 'usage' }> | undefined
   let finish: Extract<StreamChunk, { type: 'finish' }> | undefined
   let hasToolCall = false
   const toolCallIds = new Set<string>()
+  const idleTimeoutMs = options?.idleTimeoutMs
   const observedStream = (async function* () {
     try { yield* stream }
     catch (error) {
@@ -59,26 +75,48 @@ export async function collectModelAttempt(stream: AsyncIterable<StreamChunk>, ob
       throw error
     }
   })()
-  for await (const chunk of observedStream) {
-    if (finish) throw new InvalidModelStreamError('event received after finish')
-    if (chunk.type === 'usage') {
-      if (usage) throw new InvalidModelStreamError('duplicate usage')
-      usage = chunk
-      accepted.push(chunk)
-    } else if (chunk.type === 'finish') {
-      if (!usage && chunk.reason !== 'cancelled') throw new InvalidModelStreamError('finish received before usage')
-      if (chunk.reason !== 'length' && chunk.reason !== 'cancelled' && ((chunk.reason === 'tool-calls') !== hasToolCall)) throw new InvalidModelStreamError('finish reason does not match tool-call chunks')
-      finish = chunk
-    } else {
-      if (chunk.type === 'tool-call') {
-        if (!chunk.toolCallId.trim() || toolCallIds.has(chunk.toolCallId)) throw new InvalidModelStreamError('empty or duplicate tool-call id')
-        if (!chunk.toolName.trim() || !chunk.input || typeof chunk.input !== 'object' || Array.isArray(chunk.input)) throw new InvalidModelStreamError('invalid tool-call payload')
-        toolCallIds.add(chunk.toolCallId)
+  const iterator = observedStream[Symbol.asyncIterator]()
+  // 每 chunk 到位即重置计时：超过 idleTimeoutMs 无任何新字节 → 判定 provider 流挂起（无整体超时，长回复不受限）
+  const nextWithIdleGuard = (): Promise<IteratorResult<StreamChunk>> => {
+    if (!idleTimeoutMs || idleTimeoutMs <= 0) return iterator.next()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new ModelStreamIdleTimeoutError(idleTimeoutMs)), idleTimeoutMs)
+    })
+    return Promise.race([
+      iterator.next().finally(() => { if (timer) clearTimeout(timer) }),
+      timeout
+    ])
+  }
+  try {
+    for (let step = await nextWithIdleGuard(); !step.done; step = await nextWithIdleGuard()) {
+      const chunk = step.value
+      if (finish) throw new InvalidModelStreamError('event received after finish')
+      if (chunk.type === 'usage') {
+        if (usage) throw new InvalidModelStreamError('duplicate usage')
+        usage = chunk
+        accepted.push(chunk)
+      } else if (chunk.type === 'finish') {
+        if (!usage && chunk.reason !== 'cancelled') throw new InvalidModelStreamError('finish received before usage')
+        if (chunk.reason !== 'length' && chunk.reason !== 'cancelled' && ((chunk.reason === 'tool-calls') !== hasToolCall)) throw new InvalidModelStreamError('finish reason does not match tool-call chunks')
+        finish = chunk
+      } else {
+        if (chunk.type === 'tool-call') {
+          if (!chunk.toolCallId.trim() || toolCallIds.has(chunk.toolCallId)) throw new InvalidModelStreamError('empty or duplicate tool-call id')
+          if (!chunk.toolName.trim() || !chunk.input || typeof chunk.input !== 'object' || Array.isArray(chunk.input)) throw new InvalidModelStreamError('invalid tool-call payload')
+          toolCallIds.add(chunk.toolCallId)
+        }
+        accepted.push(chunk)
+        if (chunk.type === 'tool-call') hasToolCall = true
       }
-      accepted.push(chunk)
-      if (chunk.type === 'tool-call') hasToolCall = true
+      if (chunk.type !== 'finish') await observer?.onChunk?.(chunk)
     }
-    if (chunk.type !== 'finish') await observer?.onChunk?.(chunk)
+  } catch (error) {
+    // 空闲超时是本层注入的护栏错误（provider 流本身未抛错）——补观测后上抛，恢复层据此重试
+    if (error instanceof ModelStreamIdleTimeoutError) {
+      await observer?.onStreamError?.({ error, ...(usage ? { usage } : {}) })
+    }
+    throw error
   }
   if (!finish) throw new InvalidModelStreamError('stream ended without finish')
   if (finish.reason === 'cancelled') return { chunks: accepted, ...(usage ? { usage } : {}), finish: finish as CancelledFinish }

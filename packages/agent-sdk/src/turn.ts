@@ -298,6 +298,9 @@ export type RunAgentTurnInput = {
   turnBoundary?(input: Parameters<NonNullable<AgentTurnPorts['turnBoundary']>>[0]): ReturnType<NonNullable<AgentTurnPorts['turnBoundary']>>
   recoverProviderAttempt?(input: Parameters<NonNullable<AgentTurnPorts['recoverProviderAttempt']>>[0]): ReturnType<NonNullable<AgentTurnPorts['recoverProviderAttempt']>>
   recoverOutputLimit?(input: Parameters<NonNullable<AgentTurnPorts['recoverOutputLimit']>>[0]): ReturnType<NonNullable<AgentTurnPorts['recoverOutputLimit']>>
+  /** Provider 流空闲超时（无进展护栏）：相邻 chunk（含首字节）间隔超过该毫秒数即抛
+   *  ModelStreamIdleTimeoutError 并走 recoverProviderAttempt 重试；缺省 120s，0/负值关闭。 */
+  providerStreamIdleTimeoutMs?: number
 }
 
 type AppendTurnHistory = (events: readonly Readonly<{ kind: HistoryEvent['kind']; payload: unknown }>[]) => Promise<readonly HistoryEvent[]>
@@ -1471,7 +1474,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           usage, disposition: 'failed', reasonCode: 'PROVIDER_STREAM_FAILED'
         })
       }
-    })
+    }, { idleTimeoutMs: input.providerStreamIdleTimeoutMs ?? 120_000 })
   }
   throw new ModelTurnLimitError(input.maxModelTurns)
 }
