@@ -29,6 +29,11 @@ export type PendingConfirmItem = {
   memoryTiers?: MemoryTier[]
   turnId?: string
   turnVersion?: number
+  /** 来源投影中的助手消息与顺序；恢复卡片时用于回到原消息位置。 */
+  assistantMessageId?: string
+  toolIndex?: number
+  activityIndex?: number
+  startedAt?: number
 }
 
 type Listener = () => void
@@ -73,6 +78,10 @@ function samePendingItems(a: PendingConfirmItem[], b: PendingConfirmItem[]): boo
     const prev = index.get(JSON.stringify([item.sessionId, item.requestId, item.toolUseId]))
     if (!prev) return false
     if (prev.turnId !== item.turnId
+      || prev.assistantMessageId !== item.assistantMessageId
+      || prev.toolIndex !== item.toolIndex
+      || prev.activityIndex !== item.activityIndex
+      || prev.startedAt !== item.startedAt
       || prev.confirmationReady !== item.confirmationReady) return false
     if (!sameItemPayload(prev, item)) return false
   }
@@ -110,10 +119,16 @@ class PendingConfirmStore {
     else if (args.turnId) this.latestProjections.set(args.turnId, args)
     const keep = this.items.filter((item) => item.sessionId !== args.sessionId || item.requestId !== args.requestId)
     const next = confirming.map((tool) => {
+      const toolIndex = args.message.toolCalls?.findIndex((candidate) => candidate.id === tool.id) ?? -1
+      const activityIndex = args.message.activity?.findIndex((item) => item.kind === 'tool' && item.toolId === tool.id) ?? -1
       const base = {
         sessionId: args.sessionId,
         requestId: args.requestId,
         toolUseId: tool.id,
+        assistantMessageId: args.message.id,
+        ...(toolIndex >= 0 ? { toolIndex } : {}),
+        ...(activityIndex >= 0 ? { activityIndex } : {}),
+        ...(tool.startedAt !== undefined ? { startedAt: tool.startedAt } : {}),
         toolName: tool.toolName,
         input: tool.input,
         ...(tool.memoryTiers ? { memoryTiers: tool.memoryTiers } : {}),

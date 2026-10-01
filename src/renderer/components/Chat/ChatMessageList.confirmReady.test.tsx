@@ -7,6 +7,7 @@ import type { PendingConfirmItem } from '../../services/pendingConfirmStore'
 import { completedAssistantMessage, streamingAssistantMessage } from './testUtils/chatMessageFixtures'
 import { toTurnDisplay } from '../../../shared/turnDisplayProtocol'
 import { useTurnDisplay } from '../../hooks/useTurnDisplay'
+import type { AssistantActivityItem } from '../../../shared/assistantActivityTimeline'
 
 /**
  * J-03（docs/develop/chat-message-list-streaming-jitter-fix-plan.md）：
@@ -17,6 +18,7 @@ import { useTurnDisplay } from '../../hooks/useTurnDisplay'
 
 type BubbleProps = {
   message: Message
+  displayActivity?: AssistantActivityItem[]
   confirmationReadyByToolId?: Record<string, boolean | undefined>
 }
 
@@ -209,5 +211,54 @@ describe('ChatMessageList confirmationReadyByToolId stability', () => {
     )
 
     expect(lastBubbleProps().message.toolCalls?.[0]).toMatchObject({ status: 'confirming', autoAnswerer: true })
+  })
+
+  it('turn display 缺少已恢复 pending 工具时按原始发起时间补回活动顺序', () => {
+    const message = streamingAssistantMessage({
+      id: 'm-origin',
+      content: 'checking',
+      timestamp: 100,
+      contentSegments: [{ content: 'checking', startTime: 100 }],
+      toolCalls: [{
+        id: 'later-tool', toolName: 'run_shell', input: {}, status: 'calling', riskLevel: 'low', startedAt: 300
+      }],
+      activity: [
+        { kind: 'text', segmentIndex: 0 },
+        { kind: 'tool', toolId: 'later-tool' }
+      ]
+    })
+    const display = toTurnDisplay({
+      turnId: 'turn-origin', requestId: 'request-origin', version: 3, lifecycle: 'running',
+      message
+    })
+    mockedUseTurnDisplay.mockReturnValue(display)
+
+    render(
+      <ChatMessageList
+        messages={[message]}
+        turnId="turn-origin"
+        confirmationReadyBySession={{}}
+        pendingConfirmItems={[makeItem({
+          toolUseId: 'missing-tool',
+          toolName: 'run_script',
+          assistantMessageId: 'm-origin',
+          toolIndex: 0,
+          activityIndex: 1,
+          startedAt: 200
+        })]}
+        actions={undefined}
+        resolveToolsInteractive={() => undefined}
+        showArchiveToWiki={() => false}
+        canRetry={() => false}
+        canCancelQueued={() => false}
+      />
+    )
+
+    expect(lastBubbleProps().message.toolCalls?.map((tool) => tool.id)).toEqual(['missing-tool', 'later-tool'])
+    expect(lastBubbleProps().displayActivity).toEqual([
+      { kind: 'text', segmentIndex: 0, contentStart: 0, contentEnd: 8 },
+      { kind: 'tool', toolId: 'missing-tool' },
+      { kind: 'tool', toolId: 'later-tool' }
+    ])
   })
 })

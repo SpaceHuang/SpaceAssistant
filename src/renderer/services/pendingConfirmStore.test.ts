@@ -628,4 +628,39 @@ describe('pendingConfirmStore', () => {
       vi.useRealTimers()
     }
   })
+
+  it('保留 pending 卡片的来源消息与活动顺序元数据', () => {
+    pendingConfirmStore.syncFromProjection({
+      sessionId: 'session-position',
+      requestId: 'request-position',
+      message: {
+        id: 'assistant-position',
+        sessionId: 'session-position',
+        role: 'assistant',
+        content: 'working',
+        timestamp: 1,
+        status: 'streaming',
+        schemaVersion: 1,
+        activity: [
+          { kind: 'text', segmentIndex: 0 },
+          { kind: 'tool', toolId: 'tool-before' },
+          { kind: 'tool', toolId: 'tool-pending' }
+        ],
+        toolCalls: [
+          { id: 'tool-before', toolName: 'run_script', input: {}, status: 'completed', riskLevel: 'low', startedAt: 101 },
+          { id: 'tool-pending', toolName: 'run_shell', input: {}, status: 'confirming', riskLevel: 'high', startedAt: 202 }
+        ]
+      }
+    })
+
+    expect(pendingConfirmStore.getItems()).toEqual([
+      expect.objectContaining({
+        toolUseId: 'tool-pending',
+        assistantMessageId: 'assistant-position',
+        toolIndex: 1,
+        activityIndex: 2,
+        startedAt: 202
+      })
+    ])
+  })
 })
