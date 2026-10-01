@@ -84,7 +84,8 @@ describe('R6：rg 参数拼装（范围语义）', () => {
       await grepWithRg('rg', root, envFile, 'SECRET', baseArgs(), 5000, new AbortController().signal, () => {}, capturingSpawn(captured))
       const rgArgs = captured[0]!
       expect(rgArgs).not.toContain('!**/.env')
-      expect(rgArgs[rgArgs.length - 1]).toBe(envFile)
+      // I6：workDir 内搜索根传相对形态（.env），敏感点名语义不变
+      expect(rgArgs[rgArgs.length - 1]).toBe('.env')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -216,6 +217,22 @@ describe('G8：--no-ignore-vcs 接线守卫（§7.9 改动 3，B1：漏 grepWith
       expect(rgArgs).not.toContain('--no-ignore')
       expect(rgArgs).not.toContain('-u')
       expect(rgArgs).not.toContain('--unrestricted')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+})
+
+describe('I3：超长行统一「行首截断 + 明示标注」（§7.11 子项 2，D14/D15，AC-45/46）', () => {
+  it('rgArgs 常含 --max-columns 300 与 --max-columns-preview（AC-46）', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-maxcols-'))
+    fs.writeFileSync(path.join(root, 'a.txt'), 'needle')
+    try {
+      const captured: string[][] = []
+      await grepWithRg('rg', root, path.resolve(root), 'needle', baseArgs({ outputMode: 'content' }), 5000, new AbortController().signal, () => {}, capturingSpawn(captured))
+      const rgArgs = captured[0]!
+      const mcIndex = rgArgs.indexOf('--max-columns')
+      expect(mcIndex).toBeGreaterThanOrEqual(0)
+      expect(rgArgs[mcIndex + 1]).toBe('300')
+      expect(rgArgs).toContain('--max-columns-preview')
     } finally { fs.rmSync(root, { recursive: true, force: true }) }
   })
 })

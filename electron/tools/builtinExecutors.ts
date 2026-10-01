@@ -262,6 +262,20 @@ function readIdentityMatches(stat: Pick<Awaited<ReturnType<Awaited<ReturnType<ty
   return stat.dev === identity.dev && stat.ino === identity.ino && stat.mode === identity.mode && stat.size === identity.size && stat.mtimeMs === identity.mtimeMs
 }
 
+/**
+ * §7.11 子项 3（I2）：searchScope 返回体形态瘦身——
+ * 常态默认值（engine=ripgrep、truncated=false）与派生字段（skippedCount=skipped.length）不进返回体；
+ * 内存 GrepScope 类型不动（status 判定等内部逻辑依赖 skippedCount）。
+ */
+function serializeSearchScope(scope: GrepScope): Record<string, unknown> {
+  return {
+    root: scope.root,
+    skipped: scope.skipped,
+    ...(scope.engine !== 'ripgrep' ? { engine: scope.engine } : {}),
+    ...(scope.truncated ? { truncated: true, ...(scope.limitReason ? { limitReason: scope.limitReason } : {}) } : {})
+  }
+}
+
 export const readFileExecutor: ToolExecutor = {
   name: 'read_file',
   resourceKeys: (input, context) => workspaceResourceKeys(input, context, 'read'),
@@ -1207,7 +1221,10 @@ export async function grepWithRg(
     if (args.context != null && args.context > 0) rgArgs.push('-C', String(args.context))
     if (args.multiline) rgArgs.push('-U', '--multiline-dotall')
   }
-  rgArgs.push('--max-columns', '500')
+  // I4（§7.11 子项 2，D14）：超长行「行首截断 + 明示标注」，--max-columns 按显示列宽计（组 11b 实测）；
+  // preview 实测为「行首 + 截断标注」（组 11），与 walk 侧 clampLine 同形态
+  rgArgs.push('--max-columns', '300')
+  rgArgs.push('--max-columns-preview')
   if (plan.hidden) rgArgs.push('--hidden')
   // G（D1）：设置项 grepSearchGitignored / 调用方 includeIgnored 的 OR——只追加 --no-ignore-vcs，
   // 禁止 --no-ignore / -u / --unrestricted（会越界解除 .ignore/.rgignore，§6.5 I2）
@@ -1221,8 +1238,15 @@ export async function grepWithRg(
     for (const g of plan.ignoreGlobs) rgArgs.push('--glob', g)
     for (const g of plan.sensitiveExcludes) rgArgs.push('--glob', g)
   }
+  // I6（§7.11 子项 1，D12 重审）：搜索根 workDir 内 → 传相对路径（rg cwd 已为 workDir，输出形态跟随输入，零输出解析）；
+  // workDir 外 → 保留绝对（../../ 形态长且分不出项目内外，AC-48）。
+  // `.` 根的 rg 相对输出带 `.`+分隔符前缀（组 11c 实测 `.\cn.txt`）→ 行首窄剥离（「零输出加工」唯一登记例外）。
+  const searchRelToWorkDir = path.relative(workDir, searchPath)
+  const searchRelUsable = !path.isAbsolute(searchRelToWorkDir) && !searchRelToWorkDir.startsWith('..')
+  const rgSearchArg = searchRelUsable ? (searchRelToWorkDir || '.') : searchPath
+  const stripDotPrefix = searchRelUsable && (!searchRelToWorkDir || searchRelToWorkDir === '.')
   // 有读取许可时只从已打开目标读取：类 Unix 继承 fd，Windows 通过 stdin 流传递句柄内容。
-  rgArgs.push(stableFileOnWindows ? '-' : openedFileFd !== undefined ? '/dev/fd/3' : searchPath)
+  rgArgs.push(stableFileOnWindows ? '-' : openedFileFd !== undefined ? '/dev/fd/3' : rgSearchArg)
   return await new Promise((resolve) => {
     const proc = spawnProcess(binaryPath, rgArgs, {
       cwd: workDir,
@@ -1327,6 +1351,10 @@ export async function grepWithRg(
       else {
         let result = out.trimEnd()
         if (openedFile) result = mapOpenedFileGrepOutput(result, searchPath, args.outputMode)
+        // I6：`.` 根场景 rg 相对输出带 `.`+分隔符前缀 → 行首窄剥离（仅字面 `.\` / `./`，固定 2 字符无歧义）
+        if (stripDotPrefix && result) {
+          result = result.split('\n').map((line) => line.startsWith('.\\') || line.startsWith('./') ? line.slice(2) : line).join('\n')
+        }
         if (args.headLimit > 0) {
           const lines = result.split('\n')
           if (lines.length > args.headLimit) {
@@ -1583,10 +1611,35 @@ export async function grepFallbackJs(
     }
   }
 
-  // 统一展示规则：内嵌换行转义为字面量 \n（保证一条匹配一行），单条展示上限 500 字符
+  // I4（§7.11 子项 2，D14）：行首截断 + 明示标注；计长口径=显示列宽（CJK 范围=2，与 rg --max-columns 同口径；
+  // emoji 组合序列等极端形态允许偏差，登记为近似）。按字符（码点）边界切，不产生坏字节。
+  function charDisplayWidth(ch: string): number {
+    const code = ch.codePointAt(0) ?? 0
+    if (
+      (code >= 0x1100 && code <= 0x115f) ||
+      (code >= 0x2e80 && code <= 0xa4cf) ||
+      (code >= 0xac00 && code <= 0xd7a3) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xfe30 && code <= 0xfe4f) ||
+      (code >= 0xff00 && code <= 0xff60) ||
+      (code >= 0xffe0 && code <= 0xffe6) ||
+      (code >= 0x20000 && code <= 0x3fffd)
+    ) return 2
+    return 1
+  }
+
+  const GREP_MAX_DISPLAY_COLUMNS = 300
   function clampLine(line: string): string {
     let display = line.replace(/\r?\n/g, '\\n')
-    if (display.length > 500) display = display.slice(0, 500) + ' [行被截断]'
+    let width = 0
+    let cutIndex = -1
+    let idx = 0
+    for (const ch of display) {
+      width += charDisplayWidth(ch)
+      if (width > GREP_MAX_DISPLAY_COLUMNS) { cutIndex = idx; break }
+      idx += ch.length
+    }
+    if (cutIndex >= 0) display = display.slice(0, cutIndex) + ' [行被截断]'
     return display
   }
 
@@ -1653,6 +1706,8 @@ export async function grepFallbackJs(
   if (args.outputMode === 'files_with_matches') {
     if (filesWithMatches.length === 0) return finishOutput('No matches found')
     const slice = filesWithMatches.slice(0, headLimit)
+    // 截断透明：slice 静默丢弃会让「无匹配表象」失真（R6 范围透明），boundary 同时驱动 truncated/limitReason
+    if (slice.length < filesWithMatches.length) boundary.push(`结果已按 head_limit=${headLimit} 截断，共 ${filesWithMatches.length} 个文件命中`)
     return finishOutput(`Found ${slice.length} files\n${slice.join('\n')}`)
   }
   if (args.outputMode === 'count') {
@@ -1662,9 +1717,12 @@ export async function grepFallbackJs(
       lines.push(`${f}:${c}`)
       if (lines.length >= headLimit) break
     }
+    if (lines.length < counts.size) boundary.push(`结果已按 head_limit=${headLimit} 截断，共 ${counts.size} 个文件命中`)
     return finishOutput(`${lines.join('\n')}\n\n共 ${totalMatches} 处匹配，涉及 ${counts.size} 个文件`)
   }
   if (contentLines.length === 0) return finishOutput('No matches found')
+  // 截断透明（与 rg 侧「已按 head_limit=」标记同语义）：worker 在 matchLimit 处截停，恰好等于限制数时也可能有更多——偏向提示可能不完整
+  if (headLimit !== Infinity && totalMatches >= headLimit) boundary.push(`结果已按 head_limit=${headLimit} 截断，共 ${totalMatches} 条匹配`)
   const suffix = `\n[共 ${totalMatches} 条匹配${headLimit !== Infinity ? `，限制: ${headLimit}` : ''}]`
   return finishOutput(contentLines.join('\n') + suffix)
 }
@@ -1722,8 +1780,16 @@ export const grepExecutor: ToolExecutor = {
         const permitTarget = ctx.readExecutionPermit?.targets[0]
         const authorizedIdentity = permitTarget?.identity
         const currentStat = authorizedIdentity ? await fs.stat(absSearch).catch(() => null) : null
+        // 目录 permit（subtree）无句柄；且目录身份只绑 dev/ino/mode（§5.3 B2：size/mtimeMs 随条目增删即变）
+        const isDirectoryPermit = permitTarget?.targetKind === 'directory'
         const handleStat = permitFileHandle && authorizedIdentity ? await permitFileHandle.stat().catch(() => null) : null
-        if (authorizedIdentity && (!currentStat || !handleStat || !readIdentityMatches(currentStat, authorizedIdentity) || !readIdentityMatches(handleStat, authorizedIdentity))) {
+        const identityMatches = !authorizedIdentity
+          ? true
+          : isDirectoryPermit
+          ? Boolean(currentStat &&
+              currentStat.dev === authorizedIdentity.dev && currentStat.ino === authorizedIdentity.ino && currentStat.mode === authorizedIdentity.mode)
+          : Boolean(currentStat && handleStat && readIdentityMatches(currentStat, authorizedIdentity) && readIdentityMatches(handleStat, authorizedIdentity))
+        if (authorizedIdentity && !identityMatches) {
           const caseId = 'read-target-identity-changed-during-read'
           recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'grep', decisionRuleId: ctx.readExecutionPermit?.decisionRuleId ?? permitTarget?.decisionRuleId, pathZone: permitTarget?.zone, factId: permitTarget?.factId, failureClass: 'mechanism', caseId })
           return { success: false, error: '搜索期间文件身份或内容发生变化，已丢弃搜索结果。', diagnostic: { caseId, retryable: false, category: 'mechanism' as const, ...(permitTarget?.factId ? { factId: permitTarget.factId } : {}) }, duration: Date.now() - started }
@@ -1749,7 +1815,7 @@ export const grepExecutor: ToolExecutor = {
           data: {
             output,
             ...(noMatch ? { status: scope.skippedCount > 0 ? 'no_match_with_skips' : 'no_match' } : {}),
-            searchScope: scope,
+            searchScope: serializeSearchScope(scope),
             ...(plan.explicitSensitiveHit ? { sensitivePathHit: true } : {})
           },
           duration: Date.now() - started
@@ -1812,7 +1878,7 @@ export const grepExecutor: ToolExecutor = {
             data: {
               output: formatGrepNoMatchOutput(scope),
               status: scope.skippedCount > 0 ? 'no_match_with_skips' : 'no_match',
-              searchScope: scope,
+              searchScope: serializeSearchScope(scope),
               ...(plan.explicitSensitiveHit ? { sensitivePathHit: true } : {})
             },
             duration: Date.now() - started
@@ -1822,7 +1888,7 @@ export const grepExecutor: ToolExecutor = {
           success: true,
           data: {
             output: text.output,
-            searchScope: scope,
+            searchScope: serializeSearchScope(scope),
             ...(plan.explicitSensitiveHit ? { sensitivePathHit: true } : {})
           },
           duration: Date.now() - started

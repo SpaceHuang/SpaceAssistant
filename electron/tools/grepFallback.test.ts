@@ -239,3 +239,20 @@ describe('目录递归端到端（E1，AC-12/13/17 walk 侧）', () => {
     expect(out).not.toContain('secret.txt')
   })
 })
+
+describe('I3：clampLine 显示列宽口径（§7.11 子项 2，AC-45 walk 侧）', () => {
+  it('中文行按 2 列/字计：200 汉字（400 列）超 300 列即截断（旧字符数口径 500 不会截断——口径区分点）', async () => {
+    const root = fixture({ 'cn.txt': `${'汉'.repeat(200)}NEEDLE\n` })
+    const out = await grepFallbackJs(root, root, 'NEEDLE', args({ outputMode: 'content' }), new AbortController().signal, () => {})
+    expect(out).toContain('[行被截断]')
+    // 行首 300 显示列 ≈ 150 汉字，NEEDLE 在行尾应被截掉
+    expect(out).not.toContain('NEEDLE')
+  })
+
+  it('ASCII 300 列边界：290 列不截断、310 列截断', async () => {
+    const root = fixture({ 'a.txt': `${'x'.repeat(290)}NEEDLE\n`, 'b.txt': `${'y'.repeat(310)}NEEDLE\n` })
+    const out = await grepFallbackJs(root, root, 'NEEDLE', args({ outputMode: 'content' }), new AbortController().signal, () => {})
+    expect(out).toContain('x'.repeat(290) + 'NEEDLE')
+    expect(out).toContain('[行被截断]')
+  })
+})

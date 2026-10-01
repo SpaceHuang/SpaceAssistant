@@ -1,5 +1,6 @@
 import fs from 'fs/promises'
 import fsSync from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import os from 'os'
 import path from 'path'
 import { spawn } from 'child_process'
@@ -38,6 +39,23 @@ if (pattern === 'Needle' && content.includes('Needle')) {
 
 const fixtureSpawn = (fixture: string) => (_binary: string, rgArgs: string[], options: Parameters<typeof spawn>[2]) =>
   spawn(process.execPath, [fixture, ...rgArgs], options)
+
+/**
+ * 真随包 rg 二进制定位：从测试文件位置推导仓库根（forks worker 的 process.cwd() 不保证是项目根，
+ * 曾导致全部真机用例静默跳过——AC-34/I5 曾因此假绿）。
+ * 候选顺序：SA_TEST_RG_BIN 环境变量 → 本 checkout resources → 主 checkout resources（worktree 布局，
+ * resources/ripgrep 不入库，仅本地开发便利）。
+ */
+const findRealRg = (): string | null => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+  const rgName = process.platform === 'win32' ? 'rg.exe' : 'rg'
+  const candidates = [
+    process.env.SA_TEST_RG_BIN,
+    path.join(repoRoot, 'resources', 'ripgrep', `${process.platform}-${process.arch}`, rgName),
+    path.resolve(repoRoot, '..', '..', 'resources', 'ripgrep', `${process.platform}-${process.arch}`, rgName)
+  ].filter((c): c is string => Boolean(c))
+  return candidates.find((c) => fsSync.existsSync(c)) ?? null
+}
 
 describe('bundled ripgrep process contract', () => {
   it('覆盖成功、无匹配和非法正则，不启动第二引擎', async () => {
@@ -153,14 +171,14 @@ describe('grep 目录递归（E2，rg 路径）', () => {
       const result = await grepWithRg(binary, root, root, 'Needle', args(), 5000, new AbortController().signal, () => undefined, spawnDir(capturedStore))
       expect(result).toMatchObject({ kind: 'success' })
       if (result.kind === 'success') expect(result.output).toContain('sub/b.txt')
-      // 目录搜索根作为 rg 的最后一个位置参数（无 /dev/fd/N、无 '-'）
+      // 目录搜索根作为 rg 的最后一个位置参数（无 /dev/fd/N、无 '-'）；I6 后 workDir 内传相对形态（根为 '.'）
       const lastArg = capturedStore[0]![capturedStore[0]!.length - 1]
-      expect(lastArg).toBe(root)
+      expect(lastArg).toBe('.')
     } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 
   it('真随包 rg：目录递归命中多文件（AC-14，二进制缺失时跳过）', async () => {
-    const binary = path.join(process.cwd(), 'resources', 'ripgrep', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'rg.exe' : 'rg')
+    const binary = findRealRg()
     if (!fsSync.existsSync(binary)) return
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-rg-real-dir-'))
     try {
@@ -184,11 +202,6 @@ describe('grep 目录递归（E2，rg 路径）', () => {
 })
 
 describe('G12：grepSearchGitignored 真机端到端（AC-34/AC-35/AC-36，§6.5 E1：须先建 .git 否则 .gitignore 不生效）', () => {
-  const findRealRg = (): string | null => {
-    const binary = path.join(process.cwd(), 'resources', 'ripgrep', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'rg.exe' : 'rg')
-    return fsSync.existsSync(binary) ? binary : null
-  }
-
   it('设置开启：被 .gitignore 忽略的文件出现（AC-34），敏感条目仍排除（AC-35）', async () => {
     const binary = findRealRg()
     if (!binary) return
@@ -201,7 +214,8 @@ describe('G12：grepSearchGitignored 真机端到端（AC-34/AC-35/AC-36，§6.5
       await fs.writeFile(path.join(root, '.env'), 'NEEDLE secret\n')
       await fs.mkdir(path.join(root, 'secrets'), { recursive: true })
       await fs.writeFile(path.join(root, 'secrets', 'key.txt'), 'NEEDLE secret\n')
-      const result = await grepWithRg(binary, root, root, 'NEEDLE', args({ outputMode: 'files_with_matches' }), 10000, new AbortController().signal, () => undefined, undefined, undefined, undefined, { searchGitignored: true })
+      // 实参序列：onProgress(8), spawnProcess(9), openedFile(10), killer(11), onTerminate(12), planOverrides(13)
+      const result = await grepWithRg(binary, root, root, 'NEEDLE', args({ outputMode: 'files_with_matches' }), 10000, new AbortController().signal, () => undefined, undefined, undefined, undefined, undefined, { searchGitignored: true })
       expect(result).toMatchObject({ kind: 'success' })
       if (result.kind === 'success') {
         expect(result.output).toContain('tracked.txt')
@@ -228,5 +242,45 @@ describe('G12：grepSearchGitignored 真机端到端（AC-34/AC-35/AC-36，§6.5
         expect(result.output).not.toContain('ignored.txt')
       }
     } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+})
+
+describe('I5/I6：rg 侧路径相对化（§7.11 子项 1，AC-47/AC-48）', () => {
+  it('workDir 内目录搜索：rg 输出相对路径且无 ./ 前缀（AC-47，与 walk 同形态）', async () => {
+    const binary = findRealRg()
+    if (!binary) return
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-rg-rel-'))
+    try {
+      await fs.mkdir(path.join(root, 'sub'), { recursive: true })
+      await fs.writeFile(path.join(root, 'a.txt'), 'NEEDLE one\n')
+      await fs.writeFile(path.join(root, 'sub', 'b.txt'), 'NEEDLE two\n')
+      const result = await grepWithRg(binary, root, root, 'NEEDLE', args({ outputMode: 'files_with_matches' }), 10000, new AbortController().signal, () => undefined)
+      expect(result).toMatchObject({ kind: 'success' })
+      if (result.kind === 'success') {
+        fsSync.appendFileSync(path.join(process.cwd(), 'dbg-rel.txt'), JSON.stringify(result.output) + '\n')
+        expect(result.output).toContain(path.join('sub', 'b.txt'))
+        expect(result.output).not.toContain(root)
+        expect(result.output).not.toContain('.\\')
+        expect(result.output).not.toContain('./')
+      }
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it('workDir 外搜索根：rg 输出绝对路径（AC-48）', async () => {
+    const binary = findRealRg()
+    if (!binary) return
+    const inner = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-rg-rel-inner-'))
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-rg-rel-out-'))
+    try {
+      await fs.writeFile(path.join(outside, 'found.txt'), 'NEEDLE\n')
+      const result = await grepWithRg(binary, inner, outside, 'NEEDLE', args({ outputMode: 'files_with_matches' }), 10000, new AbortController().signal, () => undefined)
+      expect(result).toMatchObject({ kind: 'success' })
+      if (result.kind === 'success') {
+        expect(result.output).toContain(path.join(outside, 'found.txt'))
+      }
+    } finally {
+      await fs.rm(inner, { recursive: true, force: true })
+      await fs.rm(outside, { recursive: true, force: true })
+    }
   })
 })
