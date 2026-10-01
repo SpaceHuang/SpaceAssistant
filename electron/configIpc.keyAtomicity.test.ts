@@ -10,6 +10,7 @@ import {
   persistLlmServices,
   readLlmServices,
 } from './llmServiceResolver';
+import { decryptSecret } from './secureApiKey';
 
 vi.mock('electron', () => ({
   app: { getLocale: () => 'zh-CN' },
@@ -21,7 +22,7 @@ vi.mock('electron', () => ({
 vi.mock('./secureApiKey', () => ({
   isSecretStorageAvailable: () => true,
   encryptSecret: (plain: string) => `enc:${plain}`,
-  decryptSecret: (enc: string) => enc.replace(/^enc:/, ''),
+  decryptSecret: vi.fn((enc: string) => enc.replace(/^enc:/, '')),
 }));
 
 function makeIpc() {
@@ -104,6 +105,13 @@ describe('config:set API Key transaction boundary', () => {
       [serviceId],
       { [serviceId]: 'old-secret' },
     );
+    vi.mocked(decryptSecret).mockImplementationOnce(() => {
+      throw new Error('authorization denied');
+    });
+    await expect(getLlmServiceApiKey(db, serviceId)).rejects.toThrow(
+      'LLM_KEY_ACCESS_DENIED',
+    );
+    vi.mocked(decryptSecret).mockClear();
 
     const ipc = makeIpc();
     registerConfigIpc(ipc as unknown as IpcMain, makeContext(db));
@@ -129,9 +137,11 @@ describe('config:set API Key transaction boundary', () => {
       ),
     ).rejects.toThrow('须至少支持一个模型');
 
-    await expect(getLlmServiceApiKey(db, serviceId)).resolves.toBe(
-      'old-secret',
+    vi.mocked(decryptSecret).mockClear();
+    await expect(getLlmServiceApiKey(db, serviceId)).rejects.toThrow(
+      'LLM_KEY_ACCESS_DENIED',
     );
+    expect(decryptSecret).not.toHaveBeenCalled();
     expect(readLlmServices(db)[0]?.name).toBe('Old name');
     expect(JSON.parse(getConfigValue(db, 'config.models') ?? '[]')).toEqual([
       oldModel,

@@ -10,7 +10,7 @@ import { CONFIG_KEYS, readAppLocale, stripPlanConfigFromDbIfNeeded, readSkillsCo
 import { mergeSkillsConfig, mergeToolsConfig, stripPlanFieldsFromAppConfig } from '../../src/shared/domainTypes'
 import { ErrorCodes } from '../../src/shared/errorCodes'
 import { FetchServiceModelsResult } from '../../src/shared/llmModelConfig'
-import { LlmKeyAccessError, LlmServiceValidationError, migrateLegacyLlmServicesIfNeeded, migrateMultiServiceModelConfig, persistLlmServices, readActiveLlmServiceId, readActiveLlmServiceIds, readLlmServices, resolveTestConnectionCredentials, resolveTestConnectionModel, verifyLlmServiceApiKey } from '../llmServiceResolver'
+import { clearLlmServiceApiKeyAccessFailure, LlmKeyAccessError, LlmServiceValidationError, migrateLegacyLlmServicesIfNeeded, migrateMultiServiceModelConfig, persistLlmServices, readActiveLlmServiceId, readActiveLlmServiceIds, readLlmServices, resolveTestConnectionCredentials, resolveTestConnectionModel, verifyLlmServiceApiKey } from '../llmServiceResolver'
 import { WikiConfig, FeishuConfig, WeChatConfig, BrowserConfig, ShellConfig } from '../../src/shared/domainTypes'
 import { clampMaxParallelChatSessions } from '../../src/shared/chatParallelConfig'
 import { createAnthropicClient } from '../anthropicClientFactory'
@@ -192,7 +192,13 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
           const activeIds =
             payload.activeLlmServiceIds ??
             (payload.activeLlmServiceId ? [payload.activeLlmServiceId] : readActiveLlmServiceIds(ctx.db))
-          persistLlmServices(ctx.db, payload.llmServices, activeIds, payload.llmServiceKeys)
+          persistLlmServices(
+            ctx.db,
+            payload.llmServices,
+            activeIds,
+            payload.llmServiceKeys,
+            atomicKeySave ? { deferAccessFailureClear: true } : undefined
+          )
         } else if (payload.apiKey !== undefined && payload.apiKey.trim()) {
           migrateLegacyLlmServicesIfNeeded(ctx.db)
           const activeId = readActiveLlmServiceId(ctx.db) ?? readLlmServices(ctx.db)[0]?.id
@@ -467,6 +473,11 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
         if (atomicKeySave && ctx.getWorkDir() !== previousWorkDir) ctx.setWorkDir(previousWorkDir)
         if (e instanceof LlmKeyAccessError || e instanceof LlmServiceValidationError) throw new Error(e.message)
         throw e
+      }
+      if (atomicKeySave) {
+        for (const [id, key] of Object.entries(payload.llmServiceKeys ?? {})) {
+          if (key?.trim()) clearLlmServiceApiKeyAccessFailure(ctx.db, id)
+        }
       }
       if (payload.workDir !== undefined && payload.workDirProfiles === undefined) {
         ctx.setWorkDir(payload.workDir)

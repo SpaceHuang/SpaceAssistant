@@ -82,6 +82,10 @@ function accessFailures(db: AppDatabase): Map<string, { enc: string; code: LlmKe
   return failures
 }
 
+export function clearLlmServiceApiKeyAccessFailure(db: AppDatabase, serviceId: string): void {
+  accessFailures(db).delete(serviceId)
+}
+
 export class LlmKeyAccessError extends Error {
   constructor(public readonly code: LlmKeyAccessErrorCode, public readonly serviceId: string, serviceName?: string, locale?: string) {
     const name = serviceName || serviceId
@@ -435,7 +439,8 @@ export function persistLlmServices(
   db: AppDatabase,
   services: LlmServiceProfile[],
   activeLlmServiceIds: string[],
-  keysPayload?: Record<string, string>
+  keysPayload?: Record<string, string>,
+  options?: { deferAccessFailureClear?: boolean }
 ): void {
   const previousIds = new Set(readLlmServices(db).map((s) => s.id))
   const existingKeys = readLlmServiceKeysMap(db)
@@ -494,7 +499,11 @@ export function persistLlmServices(
     writeLlmServiceKeysMap(db, keysMap)
     syncActiveServiceMirror(db, withPresent, primaryActive)
   })
-  for (const id of Object.keys(keysPayload ?? {})) accessFailures(db).delete(id)
+  if (!options?.deferAccessFailureClear) {
+    for (const [id, key] of Object.entries(keysPayload ?? {})) {
+      if (key?.trim()) clearLlmServiceApiKeyAccessFailure(db, id)
+    }
+  }
 }
 
 export function getActiveLlmService(db: AppDatabase): {
