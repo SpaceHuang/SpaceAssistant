@@ -67,6 +67,11 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         if (signal.unknownReason) tokens.add(`script-path-extraction:${signal.unknownReason}`)
         else if (signal.completeness === 'unknown') tokens.add('script-path-extraction:unclassified')
         break
+      case 'script-path-declaration':
+        tokens.add(signal.kind)
+        tokens.add(`script-path-declaration:${signal.scope}`)
+        if (signal.consistent) tokens.add('script-path-declaration-consistent')
+        break
       case 'script-language-analysis':
         tokens.add(signal.kind)
         tokens.add(`script-language-analysis:${signal.status}`)
@@ -161,8 +166,8 @@ export function deriveCacheKeys(
         keys.push({ kind: 'path', path: signal.path, level: 'file' })
         break
       case 'script-path-extraction':
-        if (signal.completeness === 'unknown' && signal.unknownReason === 'unmodeled-call' && !signal.dynamicAccess && signal.contentDigest && /^[a-f0-9]{64}$/.test(signal.contentDigest) && sessionId) {
-          keys.push({ kind: 'script-content', digest: signal.contentDigest, sessionId })
+        if (signal.completeness === 'unknown' && signal.unknownReason === 'unmodeled-call' && !signal.dynamicAccess && signal.contentDigest && /^[a-f0-9]{64}$/.test(signal.contentDigest) && signal.workdirDigest && /^[a-f0-9]{64}$/.test(signal.workdirDigest) && sessionId) {
+          keys.push({ kind: 'script-content', digest: signal.contentDigest, workdirDigest: signal.workdirDigest, sessionId })
         }
         break
       default:

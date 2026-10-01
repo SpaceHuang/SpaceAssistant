@@ -101,6 +101,7 @@ const DESKTOP_RULE_ACTION_OVERRIDES: LaneProfile['ruleActionOverrides'] = {
   },
   loose: {
     'script-network-ask-desktop': 'auto-evaluator',
+    'script-unmodeled-path-ask': 'allow',
     'browser-act-ask-desktop': 'allow',
     'browser-act-danger-ask': 'auto-evaluator',
     'lark-write-ask': 'auto-evaluator',

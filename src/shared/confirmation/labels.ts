@@ -18,7 +18,11 @@ export const CONFIRMATION_LABELS = {
   summarySuspiciousScript: '脚本含需确认的危险模式',
   memoryTierPrefix: '记住',
   memoryTierGenericSuffix: '目标',
-  memoryTierScriptContent: '记住本会话此脚本'
+  memoryTierScriptContent: '记住本会话此脚本',
+  scriptPathUnknownHintPrefix: '路径分析未覆盖：',
+  scriptPathUnknownHintFallback: '无法定位具体调用',
+  scriptDynamicExecutionHintPrefix: '脚本含动态执行面：',
+  scriptDeclarationHint: '脚本声明仅读工作目录'
 } as const
 
 /** 记忆档位标签：用户可见，如实描述将记住的内容（最窄可用档）。 */

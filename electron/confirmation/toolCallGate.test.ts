@@ -1011,8 +1011,9 @@ describe('evaluateToolCallGate', () => {
     try {
       const desktop = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput }))
       expect(desktop.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'unknown' }))
+      expect(desktop.scriptPathHint).toContain('路径分析未覆盖：')
       expect(desktop.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask', answerer: 'agent' })
-      expect(desktop.decision.type === 'require-confirm' && desktop.decision.memoryTiers[0]).toMatchObject({ key: { kind: 'script-content', digest: expect.any(String), sessionId: 's1' }, label: '记住本会话此脚本' })
+      expect(desktop.decision.type === 'require-confirm' && desktop.decision.memoryTiers[0]).toMatchObject({ key: { kind: 'script-content', digest: expect.any(String), workdirDigest: expect.any(String), sessionId: 's1' }, label: '记住本会话此脚本' })
 
       const unattended = await evaluateToolCallGate(base({ lane: 'automation', workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput }))
       expect(unattended.decision).toMatchObject({ type: 'deny', ruleId: 'automation-script-path-unknown-deny' })
@@ -1028,7 +1029,7 @@ describe('evaluateToolCallGate', () => {
     const first = await evaluateToolCallGate(base({ sessionId: 'script-session-1', toolName: 'run_script', toolInput: input, appDb: db }))
     expect(first.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' })
     if (first.decision.type !== 'require-confirm') throw new Error('expected script confirmation')
-    const key = { kind: 'script-content' as const, digest: createHash('sha256').update(code, 'utf8').digest('hex'), sessionId: 'script-session-1' }
+    const key = { kind: 'script-content' as const, digest: createHash('sha256').update(code, 'utf8').digest('hex'), workdirDigest: createHash('sha256').update(path.resolve(base().workDir), 'utf8').digest('hex'), sessionId: 'script-session-1' }
     expect(first.decision.memoryTiers.map((tier) => tier.key)).toContainEqual(key)
     recordUserAnswerFromDecision({
       db, lane: 'desktop', sessionId: 'script-session-1', key,
@@ -1038,6 +1039,8 @@ describe('evaluateToolCallGate', () => {
 
     await expect(evaluateToolCallGate(base({ sessionId: 'script-session-1', toolName: 'run_script', toolInput: input, appDb: db })))
       .resolves.toMatchObject({ decision: { type: 'auto-allow', ruleId: 'cache-hit' } })
+    await expect(evaluateToolCallGate(base({ sessionId: 'script-session-1', workDir: path.join(base().workDir, 'other'), toolName: 'run_script', toolInput: input, appDb: db })))
+      .resolves.toMatchObject({ decision: { type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' } })
     await expect(evaluateToolCallGate(base({ sessionId: 'script-session-1', toolName: 'run_script', toolInput: { code: `${code} ` }, appDb: db })))
       .resolves.toMatchObject({ decision: { type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' } })
     await expect(evaluateToolCallGate(base({ sessionId: 'script-session-2', toolName: 'run_script', toolInput: input, appDb: db })))
@@ -1062,7 +1065,29 @@ describe('evaluateToolCallGate', () => {
     const unknownScript = await evaluateToolCallGate(base({
       appDb: db, toolName: 'run_script', toolInput: { code: 'custom_accessor(target)' }
     }))
-    expect(unknownScript.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask', answerer: 'user' })
+    expect(unknownScript.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-unmodeled-path-ask' })
+
+    writePolicyPackages(db, { desktop: 'standard', wechat: 'standard', feishu: 'standard', automation: 'standard' })
+    const declaredByDefault = await evaluateToolCallGate(base({
+      appDb: db, toolName: 'run_script',
+      toolInput: { code: '# @path-scope workdir-readonly\ncustom_accessor(target)' }
+    }))
+    expect(declaredByDefault.decision.type).not.toBe('auto-allow')
+
+    const declaredWhenEnabled = await evaluateToolCallGate(base({
+      appDb: db, toolsConfig: { ...DEFAULT_TOOLS_CONFIG, allowDeclaredPathScopeScripts: true },
+      toolName: 'run_script',
+      toolInput: { code: '# @path-scope workdir-readonly\ncustom_accessor(target)' }
+    }))
+    expect(declaredWhenEnabled.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-declared-path-scope-allow-desktop' })
+
+    const declaredWithSensitivePath = await evaluateToolCallGate(base({
+      appDb: db, toolsConfig: { ...DEFAULT_TOOLS_CONFIG, allowDeclaredPathScopeScripts: true },
+      toolName: 'run_script',
+      toolInput: { code: '# @path-scope workdir-readonly\ncustom_accessor(target)\nopen("/etc/hosts", "r")' }
+    }))
+    expect(declaredWithSensitivePath.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-declaration', consistent: false }))
+    expect(declaredWithSensitivePath.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-system-dir-confirm' })
   })
 
   it('V3 run_script 静态敏感路径与内容分析共享一次解析，并进入敏感路径真人确认规则', async () => {

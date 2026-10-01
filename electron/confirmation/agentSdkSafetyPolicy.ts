@@ -115,7 +115,8 @@ export function createAgentSdkSafetyPolicy(input: {
               ...(result.writeExecutionPermit ? { writeExecutionPermit: result.writeExecutionPermit } : {}),
               ...(result.shellPrecheck ? { shellPrecheck: result.shellPrecheck } : {}),
               ...(result.autoApproveFallback ? { autoApproveFallback: result.autoApproveFallback } : {}),
-              ...(result.mcpEntry ? { mcpEntry: result.mcpEntry } : {})
+              ...(result.mcpEntry ? { mcpEntry: result.mcpEntry } : {}),
+              ...(result.scriptPathHint ? { scriptPathHint: result.scriptPathHint } : {})
             }
           }
         }

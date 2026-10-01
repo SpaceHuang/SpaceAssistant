@@ -332,7 +332,7 @@ describe('pythonAdapter：IR 结构快照（独立于判定结果的中间层断
     ['for i in [1]:\n    continue', [{ kind: 'for', target: 'i', iter: { kind: 'list', elts: [{ kind: 'number', value: '1' }] }, body: [{ kind: 'continue' }], orelse: [] }]],
     ['with open("f"):\n    pass', [{ kind: 'with', items: [{ contextExpr: { kind: 'call', callee: { kind: 'name', id: 'open' }, args: [{ kind: 'string', value: 'f' }], kwargs: [] }, optionalVars: [] }], body: [{ kind: 'pass' }] }]],
     ['try:\n    pass\nfinally:\n    pass', [{ kind: 'try', body: [{ kind: 'pass' }], handlers: [], orelse: [], finalbody: [{ kind: 'pass' }] }]],
-    ['g = (x for x in y)', [{ kind: 'assign', targets: ['g'], value: { kind: 'comprehension', elt: { kind: 'name', id: 'x' }, generators: [{ target: 'x', iter: { kind: 'name', id: 'y' } }], compKind: 'generator' } }]],
+    ['g = (x for x in y)', [{ kind: 'assign', targets: ['g'], value: { kind: 'comprehension', elt: { kind: 'name', id: 'x' }, generators: [{ target: 'x', iter: { kind: 'name', id: 'y' }, conditions: [] }], compKind: 'generator' } }]],
     ['await_task = await f()', [{ kind: 'assign', targets: ['await_task'], value: { kind: 'await', value: { kind: 'call', callee: { kind: 'name', id: 'f' }, args: [], kwargs: [] } } }]]
   ]
 

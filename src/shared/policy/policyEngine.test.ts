@@ -62,17 +62,17 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
     const digest = 'a'.repeat(64)
     const unknownScript = mkFacts('run_script', 'execute', [
       { kind: 'script-analysis', signal: 'clean', patterns: [] },
-      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: digest }
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: digest, workdirDigest: 'd'.repeat(64) }
     ], 'high')
     const decision = decide(unknownScript, mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
     expect(decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask', answerer: 'user' })
     expect(decision.type === 'require-confirm' && decision.memoryTiers).toEqual([
-      expect.objectContaining({ key: { kind: 'script-content', digest, sessionId: 's1' } })
+      expect.objectContaining({ key: { kind: 'script-content', digest, workdirDigest: 'd'.repeat(64), sessionId: 's1' } })
     ])
 
     const dynamicScript = mkFacts('run_script', 'execute', [
       { kind: 'script-analysis', signal: 'clean', patterns: [] },
-      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', contentDigest: digest }
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', contentDigest: digest, workdirDigest: 'd'.repeat(64) }
     ], 'high')
     const dynamic = decide(dynamicScript, mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
     expect(dynamic).toMatchObject({ type: 'require-confirm', ruleId: 'script-path-unknown-confirm', answerer: 'user', memoryTiers: [] })
@@ -82,22 +82,22 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
     const digest = 'b'.repeat(64)
     const facts = mkFacts('run_script', 'execute', [
       { kind: 'script-analysis', signal: 'clean', patterns: [] },
-      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: digest }
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: digest, workdirDigest: 'e'.repeat(64) }
     ], 'high')
     const lookups: Array<{ kind: string; digest?: string; sessionId?: string }> = []
     const cache: DecisionCacheView = {
       lookup: (key) => {
         lookups.push(key as typeof lookups[number])
-        return key.kind === 'script-content' && key.digest === digest && key.sessionId === 's1'
+        return key.kind === 'script-content' && key.digest === digest && key.workdirDigest === 'e'.repeat(64) && key.sessionId === 's1'
           ? { id: 'script-memory', key, decision: 'allow', lane: 'desktop', scope: 'session', createdAt: 1, lastHitAt: 1, hitCount: 1, source: 'user-confirm' }
           : null
       }
     }
     expect(decide(facts, mkContext('desktop'), DEFAULT_POLICY_RULES, deps({ cache }))).toMatchObject({ type: 'auto-allow', ruleId: 'cache-hit' })
-    expect(lookups).toContainEqual({ kind: 'script-content', digest, sessionId: 's1' })
+    expect(lookups).toContainEqual({ kind: 'script-content', digest, workdirDigest: 'e'.repeat(64), sessionId: 's1' })
     lookups.length = 0
     expect(decide(facts, { ...mkContext('desktop'), sessionId: 's2' }, DEFAULT_POLICY_RULES, deps({ cache }))).toMatchObject({ type: 'require-confirm' })
-    expect(lookups).toContainEqual({ kind: 'script-content', digest, sessionId: 's2' })
+    expect(lookups).toContainEqual({ kind: 'script-content', digest, workdirDigest: 'e'.repeat(64), sessionId: 's2' })
   })
 
   it('可疑脚本、动态执行和缺少分类/摘要时都不提供记忆且不消费缓存', () => {
@@ -105,7 +105,7 @@ describe('decide：脚本规则族（规范条目顺序）', () => {
     const cases: ContentFacts[] = [
       mkFacts('run_script', 'execute', [
         { kind: 'script-analysis', signal: 'suspicious', patterns: ['network'] },
-        { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: digest }
+        { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: digest, workdirDigest: 'd'.repeat(64) }
       ], 'high'),
       mkFacts('run_script', 'execute', [
         { kind: 'script-analysis', signal: 'clean', patterns: [] },

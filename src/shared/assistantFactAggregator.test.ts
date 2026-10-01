@@ -278,6 +278,14 @@ describe('AssistantFactAggregator', () => {
 })
 
 describe('AssistantFactAggregator：agent 裁决路径标记（H1）', () => {
+  it('confirm-requested 将脚本路径分析提示投影到工具记录', () => {
+    const result = apply([
+      { type: 'tool-use', id: 't-script', toolName: 'run_script', input: { code: 'custom_accessor(x)' } },
+      { type: 'confirm-requested', id: 't-script', riskLevel: 'high', scriptPathHint: '路径分析未覆盖：custom_accessor' }
+    ])
+    expect(result.toolCalls?.[0]?.scriptPathHint).toBe('路径分析未覆盖：custom_accessor')
+  })
+
   it('confirm-requested 带 autoAnswerer 时写入 tool record（渲染端据此出只读「自动审批中」卡）', () => {
     const result = apply([
       { type: 'tool-use', id: 't-auto', toolName: 'run_shell', input: { command: 'ls' } },

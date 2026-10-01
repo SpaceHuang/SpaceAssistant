@@ -381,8 +381,11 @@ class Analyzer {
     return this.hits
   }
 
-  private walkStmts(stmts: IrStmt[], scope: Scope, startIndex: number): void {
-    const decodeBindings: { name: string; stmtOffset: number }[] = []
+  private walkStmts(stmts: IrStmt[], scope: Scope, startIndex: number, inheritedDecodeBindings?: { name: string; stmtOffset: number }[]): void {
+    // v5 评审 N14:decode→exec 链必须贯穿块边界——if test 里的 walrus 登记、
+    // while body 内的 decode 赋值,在其后的语句(含嵌套块)应可见(词法作用域真实语义;
+    // 窗口 ≤3 语句由 checkB11 兜底防远距误报)。
+    const decodeBindings = inheritedDecodeBindings ?? []
 
     for (let i = 0; i < stmts.length; i++) {
       const stmt = stmts[i]!
@@ -433,20 +436,21 @@ class Analyzer {
       }
 
       if (stmt.kind === 'if') {
-        this.analyzeExpr(stmt.test, scope)
+        // N14:if test 是 walrus 的典型位置——decode 登记必须进主链
+        this.analyzeExpr(stmt.test, scope, decodeBindings, stmtIndex)
         const child = createScope(scope)
-        this.walkStmts(stmt.body, child, stmtIndex)
-        this.walkStmts(stmt.orelse, child, stmtIndex)
+        this.walkStmts(stmt.body, child, stmtIndex, decodeBindings)
+        this.walkStmts(stmt.orelse, child, stmtIndex, decodeBindings)
         continue
       }
 
       if (stmt.kind === 'for') {
-        this.analyzeExpr(stmt.iter, scope)
+        this.analyzeExpr(stmt.iter, scope, decodeBindings, stmtIndex)
         const child = createScope(scope)
         child.attrs.set(stmt.target, { module: stmt.target, attr: undefined })
-        this.walkStmts(stmt.body, child, stmtIndex)
+        this.walkStmts(stmt.body, child, stmtIndex, decodeBindings)
         // P0-3 评审修复：for...else 的 else 体在循环正常结束时真实执行——必须分析
-        this.walkStmts(stmt.orelse, child, stmtIndex)
+        this.walkStmts(stmt.orelse, child, stmtIndex, decodeBindings)
         continue
       }
 
@@ -460,26 +464,26 @@ class Analyzer {
       }
       if (stmt.kind === 'while') {
         this.analyzeExpr(stmt.test, scope, decodeBindings, stmtIndex)
-        this.walkStmts(stmt.body, createScope(scope), stmtIndex)
+        this.walkStmts(stmt.body, createScope(scope), stmtIndex, decodeBindings)
         // P1-1 评审修复（补全）：while...else 的 else 体在循环正常结束时真实执行——必须分析
-        this.walkStmts(stmt.orelse, createScope(scope), stmtIndex)
+        this.walkStmts(stmt.orelse, createScope(scope), stmtIndex, decodeBindings)
         continue
       }
       if (stmt.kind === 'with') {
         for (const item of stmt.items) {
           this.analyzeExpr(item.contextExpr, scope, decodeBindings, stmtIndex)
         }
-        this.walkStmts(stmt.body, createScope(scope), stmtIndex)
+        this.walkStmts(stmt.body, createScope(scope), stmtIndex, decodeBindings)
         continue
       }
       if (stmt.kind === 'try') {
-        this.walkStmts(stmt.body, createScope(scope), stmtIndex)
+        this.walkStmts(stmt.body, createScope(scope), stmtIndex, decodeBindings)
         for (const handler of stmt.handlers) {
           if (handler.typeExpr) this.analyzeExpr(handler.typeExpr, scope, decodeBindings, stmtIndex)
-          this.walkStmts(handler.body, createScope(scope), stmtIndex)
+          this.walkStmts(handler.body, createScope(scope), stmtIndex, decodeBindings)
         }
-        this.walkStmts(stmt.orelse, createScope(scope), stmtIndex)
-        this.walkStmts(stmt.finalbody, createScope(scope), stmtIndex)
+        this.walkStmts(stmt.orelse, createScope(scope), stmtIndex, decodeBindings)
+        this.walkStmts(stmt.finalbody, createScope(scope), stmtIndex, decodeBindings)
         continue
       }
       if (stmt.kind === 'function_def') {
@@ -595,13 +599,27 @@ class Analyzer {
       this.analyzeExpr(expr.value, scope, decodeBindings, stmtIndex)
       return
     }
+    if (expr.kind === 'named_expr') {
+      // v4 评审 obs2:walrus 目标与 assign 同语义——decode→exec 链登记 + 危险别名重绑,
+      // 使 (x := b64decode(...)); exec(x) 仍升级为 dangerous(而非降级 locked 确认)。
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(expr.target)) {
+        applyAssignmentRebind(expr.target, expr.value, scope)
+        if (isDecodeCall(expr.value)) decodeBindings.push({ name: expr.target, stmtOffset: stmtIndex })
+      }
+      this.analyzeExpr(expr.value, scope, decodeBindings, stmtIndex)
+      return
+    }
     if (expr.kind === 'yield') {
       if (expr.value) this.analyzeExpr(expr.value, scope, decodeBindings, stmtIndex)
       return
     }
     if (expr.kind === 'comprehension') {
       this.analyzeExpr(expr.elt, scope, decodeBindings, stmtIndex)
-      for (const g of expr.generators) this.analyzeExpr(g.iter, scope, decodeBindings, stmtIndex)
+      for (const g of expr.generators) {
+        this.analyzeExpr(g.iter, scope, decodeBindings, stmtIndex)
+        // v4:条件子句进入分析(条件内调用不逃逸)
+        for (const cond of g.conditions) this.analyzeExpr(cond, scope, decodeBindings, stmtIndex)
+      }
       return
     }
     if (expr.kind === 'lambda') {

@@ -255,6 +255,14 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
     action: 'confirm-every-time', locked: true, reason: '可疑脚本不允许记忆放行'
   },
   {
+    id: 'script-declared-path-scope-allow-desktop',
+    when: 'invocation',
+    match: { lane: ['desktop'], toolName: 'run_script', signals: ['clean', 'script-path-extraction:unknown', 'script-path-declaration-consistent'] },
+    action: 'allow',
+    configRequires: { config: 'allowDeclaredPathScopeScripts', equals: true },
+    reason: '脚本声明仅读工作目录且与分析交叉一致（设置开启后免确认）'
+  },
+  {
     id: 'script-unmodeled-path-ask',
     when: 'invocation',
     match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:unmodeled-call'] },

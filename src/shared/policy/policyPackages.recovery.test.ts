@@ -3,10 +3,11 @@ import { DEFAULT_POLICY_RULES } from './defaultRules'
 import { effectiveActionFor, LANE_PROFILES } from './policyPackages'
 
 describe('恢复档位覆盖的安全 floor', () => {
-  it('loose 档的未知脚本路径仍需真人确认', () => {
-    const rule = DEFAULT_POLICY_RULES.find((candidate) => candidate.id === 'script-path-unknown-confirm')
+  it('desktop loose 档按云端语义放行未建模调用规则', () => {
+    const rule = DEFAULT_POLICY_RULES.find((candidate) => candidate.id === 'script-unmodeled-path-ask')
     expect(rule).toBeDefined()
-    expect(effectiveActionFor('desktop', 'loose', rule!)).toBe('confirm-every-time')
+    expect(effectiveActionFor('desktop', 'loose', rule!)).toBe('allow')
+    expect(effectiveActionFor('wechat', 'loose', rule!)).toBe('ask')
   })
 
   it('动态执行规则保持 locked 且不能被档位转换放宽', () => {
@@ -32,7 +33,8 @@ describe('恢复档位覆盖的安全 floor', () => {
     expect(effectiveActionFor('desktop', 'custom', { id: 'default-write-execute-ask', action: 'ask' })).toBe('ask')
   })
 
-  it('loose 不加入未知脚本路径的宽松覆盖', () => {
-    expect(LANE_PROFILES.desktop.ruleActionOverrides?.loose).not.toHaveProperty('script-unmodeled-path-ask')
+  it('声明式范围自动放行规则默认关闭，可由显式配置开启', () => {
+    const rule = DEFAULT_POLICY_RULES.find((candidate) => candidate.id === 'script-declared-path-scope-allow-desktop')
+    expect(rule).toMatchObject({ action: 'allow', configRequires: { config: 'allowDeclaredPathScopeScripts', equals: true } })
   })
 })

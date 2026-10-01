@@ -125,6 +125,7 @@ function sameToolRecord(a: ToolCallRecord, b: ToolCallRecord): boolean {
     && a.memoryTiers === b.memoryTiers
     && a.confirmDiff === b.confirmDiff
     && a.shellSecurityHints === b.shellSecurityHints
+    && a.scriptPathHint === b.scriptPathHint
     && a.autoApproveFallback === b.autoApproveFallback
     && a.dangerInfo === b.dangerInfo
     && a.mcp === b.mcp

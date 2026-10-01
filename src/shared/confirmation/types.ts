@@ -110,7 +110,10 @@ export type FactSignal =
       unknownReason?: 'dynamic-execution' | 'unmodeled-call' | null
       /** SHA-256 of exact run_script code; used only for session-scoped trust. */
       contentDigest?: string
+      /** Opaque SHA-256 of the active work directory; scopes script trust to its filesystem boundary. */
+      workdirDigest?: string
     }
+  | { kind: 'script-path-declaration'; scope: 'workdir-readonly'; consistent: boolean }
   | { kind: 'script-language-analysis'; language: 'javascript' | 'typescript' | 'powershell' | 'unknown'; status: 'unverified' }
   | { kind: 'wiki-raw-target' }
   | { kind: 'feishu-media-target'; boundary: 'inside' | 'outside' | 'unknown' }
@@ -399,7 +402,7 @@ export type CacheKey =
       sessionId?: string
     }
   | { kind: 'remote-write'; sessionId: string }
-  | { kind: 'script-content'; digest: string; sessionId: string }
+  | { kind: 'script-content'; digest: string; workdirDigest: string; sessionId: string }
 
 export interface DecisionCacheEntry {
   id: string
