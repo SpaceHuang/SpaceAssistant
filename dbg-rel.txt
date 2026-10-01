@@ -1,6 +1,0 @@
-"sub\\b.txt\na.txt"
-"a.txt\nsub\\b.txt"
-"a.txt\nsub\\b.txt"
-"a.txt\nsub\\b.txt"
-"a.txt\nsub\\b.txt"
-"a.txt\nsub\\b.txt"

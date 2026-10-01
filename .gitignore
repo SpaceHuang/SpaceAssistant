@@ -75,3 +75,4 @@ llm-wiki/
 
 # Impeccable hook 本地配置
 .github/hooks/
+dbg-rel.txt
