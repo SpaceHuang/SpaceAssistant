@@ -1529,8 +1529,8 @@ git init -q
 | `npm run i18n:check` | ✅ passed（0 in source） |
 | `npm run i18n:generate-types` | 已执行（合并 main 后重生成） |
 | `git diff --check` | 干净（方案文档 EOF 空行已修正） |
-| `npm test`（全量） | 见下方补充留痕 |
-| `npm run build` | 见下方补充留痕 |
+| `npm test`（全量） | 7510 passed / 42 failed（828 文件）；同口径五目录对照：分支 28 failed vs 基线(3c8ed640) 29 failed——**零新增失败**（基线多 1 条 flaky：grepFallback regex worker cancel），名单 diff 无分支新增项 |
+| `npm run build` | ✓ exit 0（tray icon + renderer + electron + pi-ai closure check 全通过） |
 
 ### 17.4 E5/H5/I7 真机验证的替代与留待
 
