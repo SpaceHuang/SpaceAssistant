@@ -145,9 +145,13 @@ const GREP_FILE_MAX = 1024 * 1024
 const GREP_REGEX_FILE_TIMEOUT_MS = 250
 const GREP_REGEX_WORKER_SOURCE = `
 const { parentPort } = require('node:worker_threads');
-parentPort.on('message', ({ id, pattern, flags, text, multiline, mode, matchLimit }) => {
+parentPort.on('message', ({ id, pattern, flags, text, multiline, mode, matchLimit, validateOnly }) => {
   try {
     const regex = new RegExp(pattern, flags);
+    if (validateOnly) {
+      parentPort.postMessage({ id, ok: true, count: 0, matches: [] });
+      return;
+    }
     const matches = [];
     let count = 0;
     const add = (match, lineIndex) => {
@@ -1344,7 +1348,7 @@ export async function grepFallbackJs(
     }
     if (worker) void worker.terminate()
   }
-  const scanText = (text: string, matchLimit: number): Promise<{ count: number; matches: Array<{ index: number; text: string; lineIndex?: number }> }> => {
+  const scanText = (text: string, matchLimit: number, validateOnly = false): Promise<{ count: number; matches: Array<{ index: number; text: string; lineIndex?: number }> }> => {
     if (signal.aborted) return Promise.resolve({ count: 0, matches: [] })
     const remainingMs = deadline - Date.now()
     if (remainingMs <= 0) return Promise.reject(new Error('正则搜索总时间已超时'))
@@ -1380,7 +1384,7 @@ export async function grepFallbackJs(
       worker.once('error', (error) => settle(() => reject(error)))
       worker.postMessage({
         id, pattern, flags, text, multiline: args.multiline,
-        mode: args.outputMode, matchLimit
+        mode: args.outputMode, matchLimit, validateOnly
       })
     })
   }
@@ -1546,6 +1550,8 @@ export async function grepFallbackJs(
   }
 
   try {
+    if (signal.aborted) return 'No matches found'
+    await scanText('', 1, true)
     if (signal.aborted) return 'No matches found'
     const st = await fs.stat(absSearch).catch(() => null)
     if (st?.isFile()) await scanFile(absSearch, false)

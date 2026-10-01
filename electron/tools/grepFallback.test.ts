@@ -38,6 +38,20 @@ describe('JavaScript grep fallback', () => {
     expect(out).not.toContain('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.ts')
   })
 
+  it('rejects an invalid regex even when the search directory has no files', async () => {
+    const root = fixture({})
+    const out = await grepFallbackJs(root, root, '[', args(), new AbortController().signal, () => {})
+    expect(out).toMatch(/^Error:/)
+    expect(out).not.toBe('No matches found')
+  })
+
+  it('rejects an invalid regex when every file is excluded by the glob', async () => {
+    const root = fixture({ 'readme.txt': 'content is excluded' })
+    const out = await grepFallbackJs(root, root, '[', args({ glob: '*.js' }), new AbortController().signal, () => {})
+    expect(out).toMatch(/^Error:/)
+    expect(out).not.toBe('No matches found')
+  })
+
   it('supports multiline matching and count output', async () => {
     const root = fixture({ 'a.txt': 'alpha\nbeta\nalpha beta\n' })
     const multiline = await grepFallbackJs(root, root, 'alpha\\nbeta', args({ multiline: true }), new AbortController().signal, () => {})
