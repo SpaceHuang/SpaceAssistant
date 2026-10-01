@@ -5,6 +5,7 @@ import type { SessionUsage } from '../../shared/sessionUsage'
 import type { TurnFailureReasons } from '../services/turnFailureDisplay'
 import type { ContextPressureProjection } from '../../shared/contextMeter'
 import {
+  compareDisplayMessageEntry,
   ackDisplayEntryPersisted,
   appendOptimisticDisplayEntry,
   mergeDisplayEntries,
@@ -180,6 +181,14 @@ export const chatSlice = createSlice({
       state.displayEntries = next
       syncMessagesFromEntries(state)
     },
+    reorderDisplayMessageSequences(state, action: PayloadAction<Array<{ messageId: string; sequence: number }>>) {
+      const sequenceById = new Map(action.payload.map(({ messageId, sequence }) => [messageId, sequence]))
+      state.displayEntries = state.displayEntries.map((entry) => {
+        const sequence = sequenceById.get(entry.message.id)
+        return sequence === undefined ? entry : { ...entry, order: { kind: 'persisted' as const, sequence } }
+      }).sort(compareDisplayMessageEntry)
+      syncMessagesFromEntries(state)
+    },
     removeDisplayMessage(state, action: PayloadAction<string>) {
       state.displayEntries = state.displayEntries.filter((e) => e.message.id !== action.payload)
       syncMessagesFromEntries(state)
@@ -275,6 +284,7 @@ export const {
   setLoadingBefore,
   addMessage,
   ackDisplayMessagePersisted,
+  reorderDisplayMessageSequences,
   patchDisplayMessage,
   removeDisplayMessage,
   patchMessage,

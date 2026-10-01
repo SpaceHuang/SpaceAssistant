@@ -10,6 +10,7 @@ import {
   getApiContextBaseline,
   getTurnContext,
   getMessage,
+  getSession,
   getChatMessagePage,
   getContextHistorySummaryBaseline,
   getMessagesPage,
@@ -30,6 +31,7 @@ import {
   updateQueueInputReceiptState,
   getNextQueuedMessage,
   getSearchCorpusPage,
+  updateQueuedUserMessageContent,
   resolveRetryContext,
   setPersistedTurnExecutionConfig,
   updatePersistedTurnState,
@@ -931,6 +933,63 @@ describe('getSearchCorpusPage', () => {
     const second = getSearchCorpusPage(db, sessionId, first.nextSequence, 100)
     expect(second.entries[0]?.message.id).toBe('m100')
     expect(second.hasMore).toBe(false)
+  })
+
+  it('搜索语料排除排队用户消息且排除后游标仍能推进到下一页', () => {
+    for (let i = 0; i < 60; i++) {
+      appendMessage(db, { id: `search-${i}`, sessionId, role: 'user', content: `c${i}`, timestamp: i, status: i === 0 ? 'queued' : 'sent' })
+    }
+    const first = getSearchCorpusPage(db, sessionId, 0, 50)
+    expect(first.entries.some(({ message }) => message.status === 'queued')).toBe(false)
+    expect(first.entries).toHaveLength(50)
+    expect(first.hasMore).toBe(true)
+    const second = getSearchCorpusPage(db, sessionId, first.nextSequence, 50)
+    expect(second.entries.map(({ message }) => message.id)).toEqual(['search-51', 'search-52', 'search-53', 'search-54', 'search-55', 'search-56', 'search-57', 'search-58', 'search-59'])
+    expect(second.hasMore).toBe(false)
+  })
+})
+
+describe('updateQueuedUserMessageContent', () => {
+  let db: AppDatabase
+  let sessionId: string
+
+  beforeEach(() => {
+    db = createMemoryAppDb()
+    sessionId = createSession(db, { name: 'queued edit' }).id
+  })
+
+  it('拒绝非排队消息和空内容', () => {
+    const sent = appendMessage(db, { id: 'edit-sent', sessionId, role: 'user', content: 'sent', timestamp: 1, status: 'sent' })
+    expect(updateQueuedUserMessageContent(db, { sessionId, messageId: sent.message.id, content: 'updated' })).toEqual({ ok: false, error: 'message_not_queued' })
+    const queued = enqueueQueuedUserMessage(db, { sessionId, requestId: 'edit-empty', content: 'queued' })
+    expect(updateQueuedUserMessageContent(db, { sessionId, messageId: queued.persisted.message.id, content: '   ' })).toEqual({ ok: false, error: 'empty_content' })
+  })
+
+  it('成功后内容与指纹同步更新，且更新最后一条 preview', () => {
+    const queued = enqueueQueuedUserMessage(db, { sessionId, requestId: 'edit-success', content: 'before' })
+    const result = updateQueuedUserMessageContent(db, { sessionId, messageId: queued.persisted.message.id, content: ' after ' })
+    expect(result).toMatchObject({ ok: true, message: { content: 'after', status: 'queued' }, sequence: queued.persisted.sequence })
+    expect(getQueueInputReceipt(db, sessionId, 'edit-success')?.fingerprint).not.toBe(queued.receipt.fingerprint)
+    expect(getSession(db, sessionId)?.preview).toBe('after')
+    expect(enqueueQueuedUserMessage(db, { sessionId, requestId: 'edit-success', content: 'after' }).duplicate).toBe(true)
+  })
+
+  it('编辑非最后一条不更新 preview', () => {
+    enqueueQueuedUserMessage(db, { sessionId, requestId: 'edit-prior', content: 'prior' })
+    const last = enqueueQueuedUserMessage(db, { sessionId, requestId: 'edit-last', content: 'last' })
+    const preview = getSession(db, sessionId)?.preview
+    expect(updateQueuedUserMessageContent(db, { sessionId, messageId: last.persisted.message.id, content: 'latest' }).ok).toBe(true)
+    expect(getSession(db, sessionId)?.preview).not.toBe(preview)
+    const prior = getQueueInputReceipt(db, sessionId, 'edit-prior')!
+    expect(updateQueuedUserMessageContent(db, { sessionId, messageId: prior.queuedMessageId!, content: 'older' }).ok).toBe(true)
+    expect(getSession(db, sessionId)?.preview).toBe('latest')
+  })
+
+  it('编辑已 claim 的消息返回 message_not_queued 且内容不变', () => {
+    const queued = enqueueQueuedUserMessage(db, { sessionId, requestId: 'edit-claimed', content: 'before' })
+    claimQueuedTurnAtomically(db, { sessionId, userMessageId: queued.persisted.message.id, turnId: 'edit-turn', assistantMessageId: 'edit-assistant', requestId: 'edit-claimed' })
+    expect(updateQueuedUserMessageContent(db, { sessionId, messageId: queued.persisted.message.id, content: 'after' })).toEqual({ ok: false, error: 'message_not_queued' })
+    expect(getMessage(db, queued.persisted.message.id)?.content).toBe('before')
   })
 })
 

@@ -16,6 +16,7 @@ import { store } from '../store'
 import {
   ackDisplayMessagePersisted,
   patchDisplayMessage,
+  reorderDisplayMessageSequences,
   removeDisplayMessage,
   removeMessage,
   patchMessage
@@ -24,6 +25,13 @@ import {
 export type PersistedMessageEntry = {
   message: Message
   sequence: number
+}
+
+const queuedMessageEditChains = new Map<string, { tail: Promise<void>; pending: number }>()
+const queuedMessageReorderChains = new Map<string, { tail: Promise<void>; pending: number }>()
+
+function queuedMessageEditKey(sessionId: string, messageId: string): string {
+  return `${sessionId}:${messageId}`
 }
 
 /**
@@ -98,4 +106,56 @@ export async function commitMessageDelete(args: {
   removeLiveMessage(args.sessionId, args.messageId)
   store.dispatch(removeMessage(args.messageId))
   store.dispatch(removeDisplayMessage(args.messageId))
+}
+
+export async function commitQueuedMessageEdit(args: { sessionId: string; messageId: string; content: string }): Promise<void> {
+  const key = queuedMessageEditKey(args.sessionId, args.messageId)
+  const requestChain = queuedMessageEditChains.get(key) ?? { tail: Promise.resolve(), pending: 0 }
+  requestChain.pending += 1
+  queuedMessageEditChains.set(key, requestChain)
+  const operation = requestChain.tail.then(async () => {
+    const result = await window.api.chatUpdateQueuedMessage(args)
+    if (!result.ok) {
+      const error = new Error(result.error) as Error & { code: string }
+      error.code = result.error
+      throw error
+    }
+    const patch = { content: result.message.content }
+    routePatchMessage(args.sessionId, args.messageId, patch)
+    store.dispatch(patchMessage({ id: args.messageId, patch }))
+    store.dispatch(patchDisplayMessage({ id: args.messageId, patch }))
+  })
+  requestChain.tail = operation.then(() => undefined, () => undefined)
+  try {
+    await operation
+  } finally {
+    requestChain.pending -= 1
+    if (requestChain.pending === 0 && queuedMessageEditChains.get(key) === requestChain) {
+      queuedMessageEditChains.delete(key)
+    }
+  }
+}
+
+export async function commitQueuedMessageReorder(args: { sessionId: string; messageIds: string[] }): Promise<void> {
+  const requestChain = queuedMessageReorderChains.get(args.sessionId) ?? { tail: Promise.resolve(), pending: 0 }
+  requestChain.pending += 1
+  queuedMessageReorderChains.set(args.sessionId, requestChain)
+  const operation = requestChain.tail.then(async () => {
+    const result = await window.api.chatReorderQueuedMessages(args)
+    if (!result.ok) {
+      const error = new Error(result.error) as Error & { code: string }
+      error.code = result.error
+      throw error
+    }
+    store.dispatch(reorderDisplayMessageSequences(result.entries.map(({ message, sequence }) => ({ messageId: message.id, sequence }))))
+  })
+  requestChain.tail = operation.then(() => undefined, () => undefined)
+  try {
+    await operation
+  } finally {
+    requestChain.pending -= 1
+    if (requestChain.pending === 0 && queuedMessageReorderChains.get(args.sessionId) === requestChain) {
+      queuedMessageReorderChains.delete(args.sessionId)
+    }
+  }
 }

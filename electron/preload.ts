@@ -70,6 +70,10 @@ const api: SpaceAssistantApi = {
     ipcRenderer.invoke('chat:delete-queued-message', payload) as Promise<
       { ok: true; sessionId: string } | { ok: false; error: string }
     >,
+  chatUpdateQueuedMessage: (payload: { sessionId: string; messageId: string; content: string }) =>
+    ipcRenderer.invoke('chat:update-queued-message', payload) as Promise<{ ok: true; message: Message; sequence: number } | { ok: false; error: string }>,
+  chatReorderQueuedMessages: (payload: { sessionId: string; messageIds: string[] }) =>
+    ipcRenderer.invoke('chat:reorder-queued-messages', payload) as Promise<{ ok: true; entries: Array<{ message: Message; sequence: number }> } | { ok: false; error: 'queue_changed' }>,
 
   chatStageImage: (args) => ipcRenderer.invoke('chat:stage-image', args),
   chatDiscardStagedImage: (args) => ipcRenderer.invoke('chat:discard-staged-image', args),

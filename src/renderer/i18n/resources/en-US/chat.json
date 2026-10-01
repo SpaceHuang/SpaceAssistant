@@ -108,9 +108,22 @@
     "hintRunning": "Click Stop to abort",
     "hintRunningQueue": "Enter to send and queue",
     "queueSend": "Send and queue",
-    "queuePending": "{{count}} queued",
     "addImage": "Add image",
     "tooManyImages": "You can attach at most {{max}} images"
+  },
+  "queuedBar": {
+    "heading": "Queued · {{count}}",
+    "cancel": "Cancel",
+    "cancelAria": "Cancel queued message: {{preview}}",
+    "imageOnly": "Image message",
+    "editAria": "Edit queued message: {{preview}}",
+    "dragHandle": "Reorder queued message {{index}}",
+    "dragHint": "Drag to reorder, or focus and use the arrow keys",
+    "orderChanged": "The queue changed. Please try reordering again.",
+    "save": "Save",
+    "discardEdit": "Discard changes",
+    "alreadyStarted": "This message has started and can no longer be edited.",
+    "unsavedChanges": "This edit has unsaved changes. Save or discard them first."
   },
   "attachment": {
     "alt": "Attachment: {{name}}",

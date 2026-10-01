@@ -1205,6 +1205,7 @@ export function getSearchCorpusPage(
     .prepare(
       `SELECT * FROM messages
        WHERE session_id = ? AND sequence >= ?
+         AND NOT (role = 'user' AND status = 'queued')
        ORDER BY sequence ASC
        LIMIT ?`
     )
@@ -1226,6 +1227,39 @@ export type QueuedMessageEntry = {
   message: Message
   sequence: number
   requestId?: string
+}
+
+export function reorderQueuedUserMessages(
+  db: AppDatabase,
+  input: { sessionId: string; messageIds: string[] }
+): { ok: true; entries: Array<{ message: Message; sequence: number }> } | { ok: false; error: 'queue_changed' } {
+  const conn = getDbConnection(db)
+  return runInTransaction(conn, () => {
+    const rows = conn.prepare("SELECT * FROM messages WHERE session_id = ? AND role = 'user' AND status = 'queued' ORDER BY sequence ASC")
+      .all(input.sessionId) as MessageRow[]
+    const currentIds = rows.map((row) => row.id)
+    if (input.messageIds.length !== currentIds.length || new Set(input.messageIds).size !== currentIds.length || input.messageIds.some((id) => !currentIds.includes(id))) {
+      return { ok: false, error: 'queue_changed' }
+    }
+    if (rows.length < 2 || input.messageIds.every((id, index) => id === currentIds[index])) {
+      return { ok: true, entries: rows.map((row) => ({ message: rowToStoredMessage(row), sequence: row.sequence })) }
+    }
+
+    const maxSequence = (conn.prepare('SELECT COALESCE(MAX(sequence), -1) AS sequence FROM messages WHERE session_id = ?').get(input.sessionId) as { sequence: number }).sequence
+    const updateSequence = conn.prepare('UPDATE messages SET sequence = ? WHERE id = ? AND session_id = ? AND status = \'queued\'')
+    rows.forEach((row, index) => updateSequence.run(maxSequence + index + 1, row.id, input.sessionId))
+    const sequenceById = new Map(rows.map((row, index) => [input.messageIds[index]!, row.sequence]))
+    for (const [messageId, sequence] of sequenceById) updateSequence.run(sequence, messageId, input.sessionId)
+
+    const entries = input.messageIds.map((messageId) => {
+      const row = conn.prepare('SELECT * FROM messages WHERE id = ? AND session_id = ?').get(messageId, input.sessionId) as MessageRow
+      return { message: rowToStoredMessage(row), sequence: row.sequence }
+    })
+    const lastMessage = conn.prepare('SELECT content FROM messages WHERE session_id = ? ORDER BY sequence DESC LIMIT 1').get(input.sessionId) as { content: string } | undefined
+    updateSession(db, input.sessionId, { preview: lastMessage?.content.slice(0, 120) ?? '' })
+    bumpScopeVersionInTx(db, `session:${input.sessionId}:messages`)
+    return { ok: true, entries }
+  })
 }
 
 export function getNextQueuedMessage(db: AppDatabase, sessionId: string): QueuedMessageEntry | null {
@@ -1354,6 +1388,28 @@ export function deleteQueuedUserMessage(
     })
     bumpScopeVersionInTx(db, `session:${sessionId}:messages`)
     return { ok: true, sessionId }
+  })
+}
+
+export function updateQueuedUserMessageContent(
+  db: AppDatabase,
+  input: { sessionId: string; messageId: string; content: string }
+): { ok: true; message: Message; sequence: number } | { ok: false; error: 'message_not_queued' | 'empty_content' } {
+  const conn = getDbConnection(db)
+  return runInTransaction(conn, () => {
+    const row = conn.prepare("SELECT * FROM messages WHERE id = ? AND session_id = ? AND role = 'user' AND status = 'queued'")
+      .get(input.messageId, input.sessionId) as MessageRow | undefined
+    if (!row) return { ok: false, error: 'message_not_queued' }
+    const content = input.content.trim()
+    if (!content) return { ok: false, error: 'empty_content' }
+    const updated = updateMessageContent(db, input.messageId, { content })
+    if (!updated) return { ok: false, error: 'message_not_queued' }
+    conn.prepare('UPDATE queue_input_requests SET fingerprint = ?, updated_at = ? WHERE queued_message_id = ? AND session_id = ?')
+      .run(queueInputFingerprint({ text: content, attachments: updated.message.attachments }), Date.now(), input.messageId, input.sessionId)
+    const last = conn.prepare('SELECT id FROM messages WHERE session_id = ? ORDER BY sequence DESC LIMIT 1').get(input.sessionId) as { id?: string } | undefined
+    if (last?.id === input.messageId) updateSession(db, input.sessionId, { preview: content.slice(0, 120) })
+    bumpScopeVersionInTx(db, `session:${input.sessionId}:messages`)
+    return { ok: true, ...updated }
   })
 }
 

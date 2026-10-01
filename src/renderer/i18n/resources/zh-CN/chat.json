@@ -108,9 +108,22 @@
     "hintRunning": "点击停止按钮中止",
     "hintRunningQueue": "Enter 发送并排队",
     "queueSend": "发送并排入队列",
-    "queuePending": "还有 {{count}} 条排队",
     "addImage": "添加图片",
     "tooManyImages": "最多只能添加 {{max}} 张图片"
+  },
+  "queuedBar": {
+    "heading": "排队中 · {{count}} 条",
+    "cancel": "取消",
+    "cancelAria": "取消排队：{{preview}}",
+    "imageOnly": "图片消息",
+    "editAria": "编辑排队消息：{{preview}}",
+    "dragHandle": "拖动调整顺序，第 {{index}} 条",
+    "dragHint": "拖动排序；也可聚焦后使用上下方向键调整",
+    "orderChanged": "队列已变化，请重新调整顺序。",
+    "save": "保存",
+    "discardEdit": "放弃修改",
+    "alreadyStarted": "该消息已开始执行，无法再编辑。",
+    "unsavedChanges": "当前编辑有未保存的修改，请先保存或放弃。"
   },
   "attachment": {
     "alt": "附件：{{name}}",

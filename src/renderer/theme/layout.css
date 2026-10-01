@@ -1391,6 +1391,39 @@
   background: var(--sa-bg-elevated);
 }
 
+.queued-task-bar {
+  max-height: calc(28px + 3 * 36px);
+  margin-bottom: 8px;
+  overflow: hidden;
+  color: var(--sa-text);
+}
+
+.queued-task-bar__heading {
+  min-height: 24px;
+  color: var(--sa-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.queued-task-bar__list { max-height: 108px; overflow-y: auto; }
+.queued-task-bar--editing { max-height: calc(28px + 4 * 36px + 36px); }
+.queued-task-bar--editing .queued-task-bar__list { max-height: 180px; }
+.queued-task-bar__row { display: flex; align-items: center; gap: 8px; min-height: 36px; }
+.queued-task-bar__drag-handle { display: inline-flex; flex: 0 0 18px; align-items: center; justify-content: center; border: 0; padding: 0; background: transparent; color: var(--sa-text-muted); cursor: grab; }
+.queued-task-bar__drag-handle:active { cursor: grabbing; }
+.queued-task-bar__drag-handle:disabled { cursor: default; opacity: .45; }
+.queued-task-bar__drag-handle:focus-visible { outline: 2px solid var(--sa-primary); outline-offset: 2px; }
+.queued-task-bar__row--dragging { opacity: .45; }
+.queued-task-bar__index { width: 24px; flex: 0 0 24px; color: var(--sa-text-muted); font-size: 11px; text-align: right; }
+.queued-task-bar__dot { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: var(--sa-primary); }
+.queued-task-bar__summary { min-width: 0; flex: 1; overflow: hidden; border: 0; padding: 0; background: transparent; color: var(--sa-text); text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.queued-task-bar__summary:focus-visible { outline: 2px solid var(--sa-primary); outline-offset: 2px; }
+.queued-task-bar__badge { color: var(--sa-text-muted); font-size: 11px; }
+.queued-task-bar__cancel, .queued-task-bar__save, .queued-task-bar__discard { flex: 0 0 auto; }
+.queued-task-bar__editor { display: flex; flex: 1; align-items: center; gap: 6px; min-width: 0; }
+.queued-task-bar__editor textarea { flex: 1; min-width: 0; resize: none; border: 1px solid var(--sa-border); border-radius: var(--sa-radius-sm); padding: 5px 8px; background: var(--sa-bg-base); color: var(--sa-text); font: inherit; }
+@media (prefers-reduced-motion: reduce) { .queued-task-bar * { transition: none !important; animation: none !important; } }
+
 .composer-box {
   border: 1px solid var(--sa-border);
   border-radius: var(--sa-radius-xl);
@@ -1500,12 +1533,6 @@
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
   color: var(--sa-text-tertiary);
-}
-
-.composer-status__queue {
-  flex-shrink: 0;
-  color: var(--sa-text-secondary);
-  font-size: 11px;
 }
 
 .composer-status__sep {

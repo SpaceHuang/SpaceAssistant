@@ -17,7 +17,7 @@ import { TurnStarted } from '../../src/shared/turnCoordinator'
 import { getDbConnection } from '../database'
 import { WikiStatus } from '../../src/shared/domainTypes'
 import { app, shell } from 'electron'
-import { appendMessage, createSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getApiContextBaseline, getChatMessagePage, getContextHistorySummaryBaseline, getSearchCorpusPage, getConfigValue, getMessageSequence, getMessage, getMessages, getRecentTurnRoutingMessages, hasVisionInTurnRoutingContext, getNextQueuedMessage, getSession, getTurnByRequestId, getPersistedTurn, setPersistedTurnExecutionConfig, failConfiguringTurn, listPersistedTurns, listTurnErrorsByAssistantMessageIds, resolveRetryContext, setConfigValue, updateMessageContent, updateSession } from '../database'
+import { appendMessage, createSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getApiContextBaseline, getChatMessagePage, getContextHistorySummaryBaseline, getSearchCorpusPage, getConfigValue, getMessageSequence, getMessage, getMessages, getRecentTurnRoutingMessages, hasVisionInTurnRoutingContext, getNextQueuedMessage, reorderQueuedUserMessages, getSession, getTurnByRequestId, getPersistedTurn, setPersistedTurnExecutionConfig, failConfiguringTurn, listPersistedTurns, listTurnErrorsByAssistantMessageIds, resolveRetryContext, setConfigValue, updateMessageContent, updateQueuedUserMessageContent, updateSession } from '../database'
 import { canonicalQueueInput } from '../../src/shared/queueInputFingerprint'
 import { clampMaxParallelChatSessions } from '../../src/shared/chatParallelConfig'
 import { classifyWikiPath } from '../wiki/wikiPaths'
@@ -882,6 +882,18 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       return result
     }
   )
+
+  ipcMain.handle('chat:update-queued-message', async (_e, payload: { sessionId: string; messageId: string; content: string }) => {
+    const result = updateQueuedUserMessageContent(ctx.db, payload)
+    if (result.ok) await flushBackup(ctx, payload.sessionId)
+    return result
+  })
+
+  ipcMain.handle('chat:reorder-queued-messages', async (_e, payload: { sessionId: string; messageIds: string[] }) => {
+    const result = reorderQueuedUserMessages(ctx.db, payload)
+    if (result.ok) await flushBackup(ctx, payload.sessionId)
+    return result
+  })
 
   ipcMain.handle(
     'exposure:get-tools',

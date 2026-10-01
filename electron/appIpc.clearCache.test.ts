@@ -29,6 +29,7 @@ vi.mock('electron', () => ({
 vi.mock('./database', () => ({
   listSessions: vi.fn(() => []),
   createSession: vi.fn(),
+  updateQueuedUserMessageContent: vi.fn(),
   getSession: vi.fn(),
   updateSession: vi.fn(),
   deleteSession: vi.fn(),
@@ -139,6 +140,22 @@ describe('security:clear-cache 联动撤销旧信任存储（B6/B7）', () => {
 
   const invoke = (payload?: Record<string, unknown>) =>
     ipc.getHandler('security:clear-cache')?.(null, payload) as Promise<{ ok: boolean; cleared: number }>
+
+  it('queued message edit IPC returns declared success result and flushes backup', async () => {
+    const message = { id: 'q1', sessionId: 's1', role: 'user', content: 'edited', timestamp: 1, status: 'queued', schemaVersion: 1 }
+    vi.mocked((await import('./database')).updateQueuedUserMessageContent).mockReturnValue({ ok: true, message, sequence: 7 } as never)
+    const result = await ipc.getHandler('chat:update-queued-message')?.(null, { sessionId: 's1', messageId: 'q1', content: 'edited' })
+    expect((await import('./database')).updateQueuedUserMessageContent).toHaveBeenCalledWith(ctx.db, { sessionId: 's1', messageId: 'q1', content: 'edited' })
+    expect(result).toEqual({ ok: true, message, sequence: 7 })
+    expect(ctx.backup.flush).toHaveBeenCalledWith('s1', expect.any(Function))
+  })
+
+  it('queued message edit IPC preserves declared error result without flushing backup', async () => {
+    vi.mocked((await import('./database')).updateQueuedUserMessageContent).mockReturnValue({ ok: false, error: 'message_not_queued' })
+    const result = await ipc.getHandler('chat:update-queued-message')?.(null, { sessionId: 's1', messageId: 'q1', content: 'edited' })
+    expect(result).toEqual({ ok: false, error: 'message_not_queued' })
+    expect(ctx.backup.flush).not.toHaveBeenCalled()
+  })
 
   it('单键清除时联动撤销该键对应的旧库信任', async () => {
     const key = { kind: 'shell-command', verb: 'git status', level: 'exact' }
