@@ -1,4 +1,5 @@
 import fs from 'fs/promises'
+import fsSync from 'node:fs'
 import os from 'os'
 import path from 'path'
 import { spawn } from 'child_process'
@@ -133,5 +134,51 @@ describe('bundled ripgrep process contract', () => {
     const diagnostic = createGrepRipgrepUnavailableDiagnostic(resolved, 'not_found')
     expect(diagnostic).toBe('source=development;platform=darwin;arch=arm64;status=unavailable;reason=not_found')
     expect(diagnostic).not.toMatch(/pattern|cwd|workdir|path/i)
+  })
+})
+
+describe('grep 目录递归（E2，rg 路径）', () => {
+  it('目录 searchPath 直传 rg（无 openedFile 时），多文件输出原样返回', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-rg-dir-'))
+    const binary = await createFixture(root)
+    try {
+      const captured: string[][] = []
+      const spawnDir = (captured: string[][]) => (_binary: string, rgArgs: string[], options: Parameters<typeof spawn>[2]) => {
+        captured.push(rgArgs)
+        // 模拟 rg 对目录递归的行为：返回两个文件的命中
+        const proc = spawn(process.execPath, ['-e', 'process.stdout.write(["sub/a.txt:1:Needle", "sub/b.txt:1:Needle"].join(String.fromCharCode(10)))'], options)
+        return proc
+      }
+      const capturedStore: string[][] = []
+      const result = await grepWithRg(binary, root, root, 'Needle', args(), 5000, new AbortController().signal, () => undefined, spawnDir(capturedStore))
+      expect(result).toMatchObject({ kind: 'success' })
+      if (result.kind === 'success') expect(result.output).toContain('sub/b.txt')
+      // 目录搜索根作为 rg 的最后一个位置参数（无 /dev/fd/N、无 '-'）
+      const lastArg = capturedStore[0]![capturedStore[0]!.length - 1]
+      expect(lastArg).toBe(root)
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it('真随包 rg：目录递归命中多文件（AC-14，二进制缺失时跳过）', async () => {
+    const binary = path.join(process.cwd(), 'resources', 'ripgrep', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'rg.exe' : 'rg')
+    if (!fsSync.existsSync(binary)) return
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-rg-real-dir-'))
+    try {
+      await fs.mkdir(path.join(root, 'sub'), { recursive: true })
+      await fs.writeFile(path.join(root, 'a.txt'), 'NEEDLE one\n')
+      await fs.writeFile(path.join(root, 'sub', 'b.txt'), 'NEEDLE two\n')
+      await fs.writeFile(path.join(root, 'node_modules', 'ignore.txt'), 'NEEDLE three\n').catch(async () => {
+        await fs.mkdir(path.join(root, 'node_modules'), { recursive: true })
+        await fs.writeFile(path.join(root, 'node_modules', 'ignore.txt'), 'NEEDLE three\n')
+      })
+      const result = await grepWithRg(binary, root, root, 'NEEDLE', args({ outputMode: 'files_with_matches' }), 10000, new AbortController().signal, () => undefined)
+      expect(result).toMatchObject({ kind: 'success' })
+      if (result.kind === 'success') {
+        expect(result.output).toContain('a.txt')
+        expect(result.output).toContain(path.join('sub', 'b.txt'))
+        // 默认忽略名单内的文件不出现（rg 经 --iglob 排除）
+        expect(result.output).not.toContain('ignore.txt')
+      }
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 })

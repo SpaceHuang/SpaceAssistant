@@ -3,6 +3,7 @@ import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { grepFallbackJs, type GrepExecArgs } from './builtinExecutors'
+import { canCreateSymlinks } from '../../src/test/symlinkCapability'
 
 const roots: string[] = []
 const args = (overrides: Partial<GrepExecArgs> = {}): GrepExecArgs => ({
@@ -182,5 +183,59 @@ describe('输出路径形态（D7/I6 最终口径：workDir 内相对、workDir 
     fs.writeFileSync(path.join(outsideDir, 'found.txt'), 'NEEDLE\n')
     const out = await grepFallbackJs(inner, outsideDir, 'NEEDLE', args({ outputMode: 'files_with_matches' }), new AbortController().signal, () => {})
     expect(out).toContain(path.join(outsideDir, 'found.txt'))
+  })
+})
+
+describe('目录递归端到端（E1，AC-12/13/17 walk 侧）', () => {
+  const relPath = (...segs: string[]) => segs.join(path.sep)
+
+  it('递归命中多文件且默认忽略/隐藏/敏感条目不出现在结果（AC-12）', async () => {
+    const root = fixture({
+      'src/a.txt': 'NEEDLE\n',
+      'src/nested/b.txt': 'NEEDLE\n',
+      'node_modules/pkg/c.txt': 'NEEDLE\n',
+      '.git/internal.txt': 'NEEDLE\n',
+      '.env': 'NEEDLE\n',
+      '.env.local': 'NEEDLE\n',
+      'secrets/key.txt': 'NEEDLE\n',
+      'dist/bundle.txt': 'NEEDLE\n'
+    })
+    const out = await grepFallbackJs(root, root, 'NEEDLE', args({ outputMode: 'files_with_matches' }), new AbortController().signal, () => {})
+    expect(out).toContain(relPath('src', 'a.txt'))
+    expect(out).toContain(relPath('src', 'nested', 'b.txt'))
+    expect(out).not.toContain(relPath('node_modules', 'pkg', 'c.txt'))
+    expect(out).not.toContain(relPath('.git', 'internal.txt'))
+    expect(out).not.toContain('.env')
+    expect(out).not.toContain(relPath('secrets', 'key.txt'))
+    expect(out).not.toContain(relPath('dist', 'bundle.txt'))
+  })
+
+  it('include_ignored 解除默认忽略名单与隐藏过滤（AC-17 walk 侧；敏感不解除）', async () => {
+    const root = fixture({
+      'src/a.txt': 'NEEDLE\n',
+      'node_modules/pkg/c.txt': 'NEEDLE\n',
+      '.git/internal.txt': 'NEEDLE\n',
+      '.env': 'NEEDLE\n',
+      'secrets/key.txt': 'NEEDLE\n'
+    })
+    const out = await grepFallbackJs(root, root, 'NEEDLE', args({ outputMode: 'files_with_matches', includeIgnored: true }), new AbortController().signal, () => {})
+    expect(out).toContain(relPath('node_modules', 'pkg', 'c.txt'))
+    expect(out).toContain(relPath('.git', 'internal.txt'))
+    expect(out).not.toContain('.env')
+    expect(out).not.toContain(relPath('secrets', 'key.txt'))
+  })
+
+  it('目录内 symlink/junction 指向敏感位置时内容不可见（AC-13/AC-13b）', async () => {
+    // Windows junction 不需要特权，始终验证（AC-13b）；非 Windows 需 symlink 能力（AC-13）
+    if (process.platform !== 'win32' && !(await canCreateSymlinks())) return
+    const root = fixture({ 'src/a.txt': 'NEEDLE\n' })
+    const outside = fs.mkdtempSync(path.join(path.dirname(root), 'sa-grep-sensitive-target-'))
+    roots.push(outside)
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 'NEEDLE-SECRET\n')
+    await fs.promises.symlink(outside, path.join(root, 'src', 'slink'), process.platform === 'win32' ? 'junction' : 'dir')
+    const out = await grepFallbackJs(root, root, 'NEEDLE', args({ outputMode: 'files_with_matches' }), new AbortController().signal, () => {})
+    expect(out).toContain(relPath('src', 'a.txt'))
+    expect(out).not.toContain('slink')
+    expect(out).not.toContain('secret.txt')
   })
 })
