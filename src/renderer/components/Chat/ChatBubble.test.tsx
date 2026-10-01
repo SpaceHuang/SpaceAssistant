@@ -157,6 +157,14 @@ describe('ChatBubble streaming render', () => {
     expect(screen.getByText(/会话模型「claude-sonnet-4-20250514」当前不可用/)).toBeDefined()
   })
 
+  it('凭据读取失败提供直达模型服务设置的入口', () => {
+    const onOpenModelSettings = vi.fn()
+    render(<ChatBubble message={assistantMessage({ status: 'failed' })} failureReason="LLM_KEY_ACCESS_DENIED" onOpenModelSettings={onOpenModelSettings} />)
+    expect(screen.getByText(/请先到设置验证 Key/)).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: '打开模型服务设置' }))
+    expect(onOpenModelSettings).toHaveBeenCalledOnce()
+  })
+
   it('没有失败原因时只显示通用提示，不渲染空的原因行', () => {
     render(<ChatBubble message={assistantMessage({ status: 'failed' })} />)
     expect(screen.queryByText('失败原因')).toBeNull()

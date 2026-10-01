@@ -71,7 +71,7 @@
 .config-models-settings .llm-service-model-stale-tag {
   margin-left: var(--sa-config-gap-tight);
   padding: 0 4px;
-  border-radius: 4px;
+  border-radius: var(--sa-radius-xs);
   font-size: var(--sa-config-font-sm);
   color: var(--sa-warning, #d48806);
   background: color-mix(in srgb, var(--sa-warning, #d48806) 14%, transparent);
@@ -181,6 +181,13 @@
   line-height: var(--sa-config-line);
   color: var(--sa-text-secondary);
   margin-top: var(--sa-config-gap-tight);
+}
+
+.config-models-settings .llm-service-key-access-notice {
+  margin: 0 0 var(--sa-config-gap-tight);
+  color: var(--sa-text-secondary);
+  font-size: var(--sa-config-font);
+  line-height: var(--sa-config-line);
 }
 
 .config-models-settings .llm-service-test-row {

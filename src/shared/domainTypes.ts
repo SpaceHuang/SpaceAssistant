@@ -794,6 +794,8 @@ export interface LlmServiceProfile {
 }
 
 export interface AppConfig {
+  /** 仅启动时一次性提示：当前版本首次运行且已有已保存的模型服务 Key */
+  apiKeyAccessUpgradeNoticeRequired?: boolean
   /** 界面语言，遵循 BCP 47 标签 */
   locale: AppLocale
   /** 是否已配置 API Key（激活服务的镜像，兼容旧逻辑） */

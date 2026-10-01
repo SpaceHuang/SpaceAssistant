@@ -29,8 +29,10 @@
     "archiveToWiki": "Archive to Wiki",
     "assistantReply": "Assistant reply",
     "retryFailedMessage": "The reply could not be completed. You can retry or continue from the existing context.",
+    "keyAccessFailedMessage": "The model service key could not be read. Verify it in settings, then retry this message.",
     "failureReason": "Reason",
-    "retry": "Retry reply"
+    "retry": "Retry reply",
+    "openModelSettings": "Open model service settings"
   },
   "scrollToLatest": {
     "label": "Jump to latest message"
