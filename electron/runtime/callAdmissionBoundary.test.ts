@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 /**
  * B1(偏差 23 验收):渲染端不可绕过的结构断言——
  * 受理端口 chat:submit-outbound 是桌面唯一发起通道(preload API 面盘点);
- * 四处发起入口(三入口 + 一处嵌套,评审 N2 口径)统一接入调用级准入。
+ * 普通 Agent turn 的三个入口统一接入调用级准入；安全审批走独立容量池。
  */
 
 const root = process.cwd()
@@ -20,7 +20,7 @@ describe('渲染端 API 面无绕过通道(偏差 23 结构断言)', () => {
     expect(preload.includes("'Codex-chat-create-with-tools'")).toBe(false)
   })
 
-  it('四处发起入口统一接入准入(桌面受理 / 远端 / 管家 / 嵌套回答者)', () => {
+  it('普通 turn 入口接入应用准入，安全审批使用独立容量池', () => {
     const acceptor = read('electron/outbound/outboundAcceptor.ts')
     expect(acceptor.includes("lane: 'desktop'")).toBe(true)
     expect(acceptor.includes("disposition: 'reject'")).toBe(true)
@@ -34,6 +34,7 @@ describe('渲染端 API 面无绕过通道(偏差 23 结构断言)', () => {
     expect(butler.includes("priority: 'background'")).toBe(true)
 
     const channel = read('electron/confirmation/agentChannel.ts')
-    expect(channel.includes("role: 'approval-answerer'")).toBe(true)
+    expect(channel.includes('approvalAdmission.acquire')).toBe(true)
+    expect(channel.includes('admissionGate.acquire')).toBe(false)
   })
 })

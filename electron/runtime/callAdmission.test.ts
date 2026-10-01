@@ -60,6 +60,8 @@ describe('judgeAdmission 判定纯函数(偏差 23 逐场景)', () => {
       if (result.verdict === 'admit') admitted += 1
     }
     expect(admitted).toBe(100)
+    const fullyOccupied = { ...state, activeInteractive: 100, laneActive: { ...state.laneActive, desktop: 100 } }
+    expect(judgeAdmission(req({ lane: 'desktop', disposition: 'reject' }), fullyOccupied, DEFAULT_ADMISSION_POLICY, 0)).toEqual({ verdict: 'reject', cause: 'concurrency-cap' })
     expect(judgeAdmission(req({ lane: 'wechat' }), { ...state, activeInteractive: 8, laneActive: { ...state.laneActive, wechat: 8 } }, DEFAULT_ADMISSION_POLICY, 0)).toEqual({ verdict: 'queue' })
     expect(judgeAdmission(req({ lane: 'feishu' }), { ...state, activeInteractive: 8, laneActive: { ...state.laneActive, feishu: 8 } }, DEFAULT_ADMISSION_POLICY, 0)).toEqual({ verdict: 'queue' })
     expect(judgeAdmission(req({ lane: 'automation', priority: 'background' }), { ...state, activeBackground: 4, laneActive: { ...state.laneActive, automation: 4 } }, DEFAULT_ADMISSION_POLICY, 0)).toEqual({ verdict: 'queue' })
@@ -81,14 +83,13 @@ describe('judgeAdmission 判定纯函数(偏差 23 逐场景)', () => {
     expect(judgeAdmission(req({ priority: 'interactive' }), bgFull, policy, 0)).toEqual({ verdict: 'admit' })
   })
 
-  it('审批回答者保留位:interactive 满 → 顶层排队,回答者(继承 interactive)凭保留位准入', () => {
-    const policy: AdmissionPolicy = { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 2, approvalReservedSlots: 1 }
+  it('所有普通调用角色都受同一个严格全局与 lane 上限约束', () => {
+    const policy: AdmissionPolicy = { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 2, laneMaxConcurrent: { ...DEFAULT_ADMISSION_POLICY.laneMaxConcurrent, desktop: 2 } }
     const full: AdmissionState = { ...emptyAdmissionState(0), activeInteractive: 2 }
     expect(judgeAdmission(req({ role: 'top-level' }), full, policy, 0)).toEqual({ verdict: 'queue' })
-    expect(judgeAdmission(req({ role: 'approval-answerer', disposition: 'reject' }), full, policy, 0)).toEqual({ verdict: 'admit' })
-    // 保留位也有上限:max + reserved
-    const overFull: AdmissionState = { ...emptyAdmissionState(0), activeInteractive: 3 }
-    expect(judgeAdmission(req({ role: 'approval-answerer', disposition: 'reject' }), overFull, policy, 0)).toEqual({ verdict: 'reject', cause: 'concurrency-cap' })
+    expect(judgeAdmission(req({ role: 'subagent', disposition: 'reject' }), full, policy, 0)).toEqual({ verdict: 'reject', cause: 'concurrency-cap' })
+    const laneFull: AdmissionState = { ...emptyAdmissionState(0), activeInteractive: 1, laneActive: { ...emptyAdmissionState(0).laneActive, desktop: 2 } }
+    expect(judgeAdmission(req({ role: 'subagent', disposition: 'reject' }), laneFull, policy, 0)).toEqual({ verdict: 'reject', cause: 'lane-concurrency-cap' })
   })
 
   it('lane 并发配额独立于全局', () => {
@@ -147,7 +148,7 @@ describe('judgeAdmission 属性/不变量(偏差 23 验收;mulberry32 随机操�
       const roll = rand()
       const lane = LANES[Math.floor(rand() * LANES.length)]
       const priority = rand() < 0.7 ? 'interactive' : 'background'
-      const role = rand() < 0.15 ? 'approval-answerer' : 'top-level'
+      const role = rand() < 0.15 ? 'subagent' : 'top-level'
       if (roll < 0.55 || outstanding.length === 0) {
         const request = req({ lane, priority, role })
         const verdict = judgeAdmission(request, state, policy, 0)
@@ -161,16 +162,12 @@ describe('judgeAdmission 属性/不变量(偏差 23 验收;mulberry32 随机操�
         const released = outstanding.splice(idx, 1)[0]
         state = applyRelease(state, released)
       }
-      // 不变量(每步断言);保留位放宽按 outstanding 实际构成计(存在 interactive 回答者时 +reserved)
+      // 不变量(每步断言):所有角色共用严格全局与 lane 上限。
       const total = state.activeInteractive + state.activeBackground
-      const globalCeiling = policy.globalMaxConcurrent + (outstanding.some((o) => o.role === 'approval-answerer' && o.priority === 'interactive') ? policy.approvalReservedSlots : 0)
-      expect(total, `step ${step}: 全局活跃 ≤ 上界`).toBeLessThanOrEqual(globalCeiling)
+      expect(total, `step ${step}: 全局活跃 ≤ 上界`).toBeLessThanOrEqual(policy.globalMaxConcurrent)
       expect(state.activeBackground, `step ${step}: background ≤ 子界`).toBeLessThanOrEqual(policy.backgroundMaxConcurrent)
       for (const lane of LANES) {
-        // 保留位放宽:outstanding 中该 lane 存在审批回答者时,上界 = 配额 + reserved(防自锁的合法越配额)
-        const hasApprovalAnswerer = outstanding.some((o) => o.lane === lane && o.role === 'approval-answerer')
-        const laneCeiling = policy.laneMaxConcurrent[lane] + (hasApprovalAnswerer ? policy.approvalReservedSlots : 0)
-        expect(state.laneActive[lane], `step ${step}: lane ${lane} 活跃 ≤ 配额${hasApprovalAnswerer ? '+保留位' : ''}`).toBeLessThanOrEqual(laneCeiling)
+        expect(state.laneActive[lane], `step ${step}: lane ${lane} 活跃 ≤ 配额`).toBeLessThanOrEqual(policy.laneMaxConcurrent[lane])
         expect(state.laneActive[lane]).toBeGreaterThanOrEqual(0)
       }
       expect(total).toBe(outstanding.length)
@@ -178,30 +175,6 @@ describe('judgeAdmission 属性/不变量(偏差 23 验收;mulberry32 随机操�
     expect(admittedThroughGate).toBeGreaterThan(0)
   })
 
-  it('保留位防自锁属性:N 条并发各等裁决时,审批回答者至少有一条能拿到位', () => {
-    const policy: AdmissionPolicy = { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 3, approvalReservedSlots: 1 }
-    let state = emptyAdmissionState(0)
-    // 3 条顶层 interactive 全部占位
-    for (let i = 0; i < 3; i++) {
-      const verdict = judgeAdmission(req({}), state, policy, 0)
-      expect(verdict.verdict).toBe('admit')
-      state = applyAdmit(state, req({}))
-    }
-    // 顶层第 4 条被限
-    expect(judgeAdmission(req({}), state, policy, 0).verdict).toBe('queue')
-    // 回答者仍能拿到位(防 N 条互锁自锁)
-    expect(judgeAdmission(req({ role: 'approval-answerer', disposition: 'reject' }), state, policy, 0)).toEqual({ verdict: 'admit' })
-  })
-
-  it('保留位防自锁(lane 维度):等待方持满 automation lane 票据,审批回答者仍可准入', () => {
-    const policy: AdmissionPolicy = { ...structuredClone(DEFAULT_ADMISSION_POLICY), laneMaxConcurrent: { ...DEFAULT_ADMISSION_POLICY.laneMaxConcurrent, automation: 1 } }
-    let state = emptyAdmissionState(0)
-    state = applyAdmit(state, req({ lane: 'automation', priority: 'background' }))
-    // 顶层 automation 第 2 条被 lane 配额限
-    expect(judgeAdmission(req({ lane: 'automation', priority: 'background', disposition: 'reject' }), state, policy, 0)).toEqual({ verdict: 'reject', cause: 'lane-concurrency-cap' })
-    // 外层管家等裁决 → 内层审批回答者(automation 域)凭保留位准入(自锁回旋)
-    expect(judgeAdmission(req({ lane: 'automation', priority: 'interactive', role: 'approval-answerer', disposition: 'reject' }), state, policy, 0)).toEqual({ verdict: 'admit' })
-  })
 })
 
 describe('CallAdmissionGate 排队唤醒与审计(0b 语义)', () => {

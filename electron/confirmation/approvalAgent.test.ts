@@ -966,30 +966,15 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
     expect(messages[0]!.content).toContain('out.txt')
   })
 
-  it('P2-7 准入死锁禁令：外层持票（automation lane 配额=1）状态下审批调用限时完成、不复取票', async () => {
-    // B1(偏差 23):真统一准入门,外层管家先占满 automation lane 唯一配额;
-    // 审批链若按顶层角色再取票即被拒/排队,限时完成即证明不复取顶层票(回答者走保留位)。
-    const { CallAdmissionGate } = await import('../runtime/callAdmissionGate')
-    const { DEFAULT_ADMISSION_POLICY } = await import('../runtime/callAdmission')
-    const gate = new CallAdmissionGate({
-      policy: {
-        ...structuredClone(DEFAULT_ADMISSION_POLICY),
-        globalMaxConcurrent: 1,
-        laneMaxConcurrent: { ...DEFAULT_ADMISSION_POLICY.laneMaxConcurrent, automation: 1 }
-      }
-    })
-    const outer = await gate.acquire({ lane: 'automation', priority: 'background', role: 'top-level', disposition: 'queue', requestId: 'outer-req' })
-    if (!outer.ok) throw new Error('外层取票应成功')
+  it('安全审批调用不携带普通 turn 的 application admission', async () => {
     mockRunToolChatSession.mockResolvedValue({
       ok: true,
       content: [{ type: 'text', text: '{"kind":"approve","riskLevel":"low","reason":{"summary":"ok"}}' }]
     })
-    const res = await Promise.race([
-      runApprovalAgent(deps, invocation()),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('审批在持票状态下未限时完成')), 2000))
-    ])
+    const res = await runApprovalAgent(deps, invocation())
     expect(res).toMatchObject({ ok: true })
-    outer.ok && outer.ticket.release()
+    const inv = mockRunToolChatSession.mock.calls[0]![0] as Record<string, unknown>
+    expect(inv.applicationAdmission).toBeUndefined()
   })
 
   it('侦查轮数上界缺省 = APPROVAL_MAX_ROUNDS=3（Profile 硬上界不因覆盖口存在而漂移）', async () => {

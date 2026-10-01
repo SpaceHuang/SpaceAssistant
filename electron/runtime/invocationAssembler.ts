@@ -55,7 +55,6 @@ import { classifyWorkDirProfileTarget } from '../workDirBinding'
 import { sessionDisplayNameRaw } from '../../src/shared/sessionDisplay'
 import { channelFor, type ResolveConfirmChannelArgs } from '../confirmation/channels'
 import { AgentChannel } from '../confirmation/agentChannel'
-import { getCallAdmissionGate } from './callAdmissionGate'
 import { toolIdToOpenAiCompatibleApiToolName } from '../../src/shared/anthropicToolSanitize'
 import { normalizeExternalToolName } from '../../src/shared/toolNameCompatibility'
 import { sanitizeCapabilityParamsForDisplay } from '../../src/shared/capabilityParamSanitize'
@@ -815,7 +814,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       const { agentChannelFactory, ...confirmationAdapter } = adapter
       const hostedAgentChannelFactory: NonNullable<ResolveConfirmChannelArgs['agentChannelFactory']> = (agentDeps) => new AgentChannel({
         ...agentDeps,
-        admissionGate: getCallAdmissionGate(),
         approvalAdmission: materials.approvalAdmission ?? getDefaultAgentRuntime().approvalAdmission,
         ...(materials.deadlineAt !== undefined ? { deadlineAt: materials.deadlineAt } : {}),
         ...(materials.approvalTaskDigest ? { taskDigest: materials.approvalTaskDigest } : {}),

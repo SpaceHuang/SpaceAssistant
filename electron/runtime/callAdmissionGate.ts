@@ -16,10 +16,10 @@ import { loadAdmissionState, resolveAdmissionPolicy, saveAdmissionState } from '
 
 /**
  * 调用级准入门(B1 0b,偏差 23):判定(纯函数)+ 状态(Storage)+ 排队唤醒 + 审计出口的组合。
- * - 四处发起入口(桌面受理端口 / 远端发起 / 管家发起 / 嵌套 invokeApproval)同一准入(评审 N2 口径);
+ * - 普通 Agent turn 的发起入口(桌面受理端口 / 远端发起 / 管家发起)共用此准入；安全审批由独立池管理;
  * - 排队语义:资源不足且调用方声明 queue 时入 FIFO 等待队列,释放时唤醒队首**重新判定**
  *   (票据计数不漂移——butlerAdmission 评审 P1 教训的机制化消除);
- * - 审计:拒绝必落 `admission.rejected`(cause=并发/速率/配额维度),排队/延后/降级落
+ * - 审计:拒绝必落 `admission.rejected`(cause=并发/lane 上限/队列容量),排队/延后/降级落
  *   `admission.queued|deferred|degraded`——准入拒绝(资源)与裁决为否(agent-deny,confirmation
  *   审计体系)事件名分立,不得混计(基线 §7)。
  */
@@ -301,7 +301,7 @@ export class CallAdmissionGate {
     try { this.persist() } catch { /* 唤醒结果已逐项结算，不能把已结算 promise 重新变成挂起。 */ }
   }
 
-  /** 让出运行槽但保留已受理身份；恢复不增加小时启动计数。 */
+  /** 让出运行槽但保留已受理身份；恢复时只重新申请并发容量。 */
   isActiveTicket(ticket: AdmissionTicket): boolean {
     return this.activeTickets.has(ticket)
   }
