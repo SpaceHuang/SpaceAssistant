@@ -148,7 +148,8 @@ describe('resolveVisionRouteForImageSend', () => {
       switched: false,
       modelName: 'kimi-k2.7-code',
       llmServiceId: 's2',
-      displayName: 'Volcano-kimi-k2.7-code'
+      // 该模型仅 s2 支持 → 单服务 → 无前缀（FR12）
+      displayName: 'kimi-k2.7-code'
     })
   })
 

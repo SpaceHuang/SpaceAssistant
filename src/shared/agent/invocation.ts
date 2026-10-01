@@ -85,8 +85,11 @@ export interface AgentInvocationProfile {
   reasoning?: AgentReasoningProfile
 }
 
-/** 思维强度档位：off 为零成本档（子调用默认）。 */
-export type AgentReasoningEffort = 'off' | 'low' | 'medium' | 'high'
+/**
+ * 思维强度档位：off 为零成本档（子调用默认）；max 为最强档
+ * （composer-model-thinking-entry 需求 FR11；SDK OutputConfig.effort 白名单已含）。
+ */
+export type AgentReasoningEffort = 'off' | 'low' | 'medium' | 'high' | 'max'
 
 export interface AgentReasoningProfile {
   effort: AgentReasoningEffort

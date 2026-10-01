@@ -1,3 +1,4 @@
+// agent-core 档位枚举独立于产品枚举（src/shared/thinkingEffort.ts），暂不暴露 max（见 R11，如需统一另立需求）
 export type ReasoningEffort = 'off' | 'low' | 'medium' | 'high'
 export type ProviderInput = { model: string; reasoning: ReasoningEffort; prompt: string; signal?: AbortSignal }
 export type ProviderOutput = { content: string; usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number } }

@@ -1,4 +1,4 @@
-import { isThinkingEffort, resolveGlobalThinkingEffort } from '../../src/shared/thinkingEffort'
+import { isThinkingEffort, resolveGlobalThinkingEffort, THINKING_EFFORT_LEVELS } from '../../src/shared/thinkingEffort'
 // Phase 2 拆分:本文件自 appIpc.ts 纯移动而来,通道名与行为不变(driver-authority-refactor Phase 2)。
 import fs from 'fs/promises'
 import path from 'path'
@@ -166,7 +166,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
     ): Promise<void> => {
       // §8.4 / 评审 C2:档位校验前置到任何写入之前,非法值整体拒绝、不产生部分写入
       if (payload.thinkingEffort !== undefined && !isThinkingEffort(payload.thinkingEffort)) {
-        throw new Error(`无效的 Thinking 强度档位:${String(payload.thinkingEffort)}(允许 off / low / medium / high)`)
+        throw new Error(`无效的 Thinking 强度档位:${String(payload.thinkingEffort)}(允许 ${THINKING_EFFORT_LEVELS.join(' / ')})`)
       }
       try {
         if (payload.llmServices !== undefined) {

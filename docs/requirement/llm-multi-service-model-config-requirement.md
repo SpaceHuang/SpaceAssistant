@@ -501,7 +501,7 @@ function getAvailableModels(
 |--------|------|
 | 位置 | 聊天输入区或 composer 工具栏（与上下文环、发送按钮同一视觉层级；具体锚点实现时与现网布局对齐） |
 | 触发 | **点击** 当前模型展示区域，弹出 **可选模型列表**（Popover / Dropdown，非设置页 Select） |
-| 当前展示 | 显示当前会话生效的 **展示名**（见 §9.3）；未创建会话或未选定时显示语言优选对应展示名 |
+| 当前展示 | ~~显示当前会话生效的 **展示名**（见 §9.3）~~ **已修订（2026-09-30，依据 `composer-model-thinking-entry-requirement.md` §FR3）**：收起态 = **模型名（纯模型名，不含服务前缀）＋（歧义时的服务段 `（服务名）`）＋ 当前推理强度**（如 `deepseek-v4-pro（Deep） · 高`）；完整展示名（`{服务名}-{模型名}`）由入口 `title` 悬浮提示承载；未创建会话或未选定时显示语言优选对应模型名 |
 | 选择效果 | 更新 **当前会话** 的模型绑定并持久化到 `session.model` + 新增 `session.llmServiceId`（见 §10.1） |
 | 范围 | 列表项 = §8.1 **可用模型池** 展开为 **服务 × 模型** 条目（每个启用服务与其 `supportedModelIds` 的笛卡尔子集） |
 
@@ -513,6 +513,8 @@ function getAvailableModels(
 |------|--------|
 | 该 `model.name` 在可用池中 **仅出现 1 次**（只有一个服务支持） | `{model.name}`，例如 `deepseek-v4-pro` |
 | 该 `model.name` 被 **≥2 个** 启用服务同时支持 | `{serviceName}-{model.name}`，例如 `Deep-deepseek-v4-pro`、`火山CodingPlan-deepseek-v4-pro` |
+
+> **状态升级（2026-09-30）：本节已由「规定」升级为「已实现」**——`buildChatModelOptions`（`src/shared/llmModelConfig.ts`）已按本表两遍处理实现，并产出同源的 `ChatModelOption.serviceAmbiguous` 字段供服务段判定复用。**自 composer-model-thinking-entry 交付版本起生效**（此前现网实现曾为「一律加前缀」的偏差，已随该需求修正，依据 `composer-model-thinking-entry-requirement.md` §FR12）。
 
 说明：
 

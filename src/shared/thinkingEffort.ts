@@ -3,11 +3,12 @@ import type { AgentReasoningEffort } from './agent/invocation'
 export type { AgentReasoningEffort }
 
 /**
- * Thinking 强度档位（需求：thinking-effort-settings-requirement.md §4.1）。
- * 复用契约类型 AgentReasoningEffort，不新造枚举；服务端另有 xhigh/max，
- * 本产品不暴露（OQ-1），校验时不得用 SDK 枚举反推服务端能力。
+ * Thinking 强度档位（需求：thinking-effort-settings-requirement.md §4.1，
+ * 已按 composer-model-thinking-entry FR11 扩为 5 档）。
+ * 复用契约类型 AgentReasoningEffort，不新造枚举；顺序即 UI 顺序（由弱到强）。
+ * 服务端另有 xhigh / minimal，本产品不暴露（OQ-1），校验时不得用 SDK 枚举反推服务端能力。
  */
-export const THINKING_EFFORT_LEVELS = ['off', 'low', 'medium', 'high'] as const satisfies readonly AgentReasoningEffort[]
+export const THINKING_EFFORT_LEVELS = ['off', 'low', 'medium', 'high', 'max'] as const satisfies readonly AgentReasoningEffort[]
 
 export function isThinkingEffort(value: unknown): value is AgentReasoningEffort {
   return typeof value === 'string' && (THINKING_EFFORT_LEVELS as readonly string[]).includes(value)

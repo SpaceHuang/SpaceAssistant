@@ -27,9 +27,8 @@ type Props = {
   runningDetail?: string
   /** 可为字符串或叶子计时节点，避免输入区主体随秒级时钟刷新 */
   runningElapsed?: React.ReactNode
-  modelSlot?: React.ReactNode
-  /** 会话级 Thinking 强度控件（模型 chip 之后、状态区之前，§5.2） */
-  thinkingSlot?: React.ReactNode
+  /** 模型与强度合并入口（composer-model-thinking-entry FR1：单一常驻偏好 chip，模型 chip 之后、状态区之前） */
+  prefsSlot?: React.ReactNode
   sessionId?: string
   historyImageTokens?: number
   thinkingTokensToExclude?: number
@@ -73,8 +72,7 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
     runningStatus,
     runningDetail,
     runningElapsed,
-    modelSlot,
-    thinkingSlot,
+    prefsSlot,
     sessionId,
     historyImageTokens = 0,
     thinkingTokensToExclude = 0,
@@ -91,8 +89,7 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
   const fileInputRef = useRef<HTMLInputElement>(null)
   const leftRowRef = useRef<HTMLDivElement>(null)
   const statusMeasureRef = useRef<HTMLSpanElement>(null)
-  const modelChipRef = useRef<HTMLSpanElement>(null)
-  const thinkingChipRef = useRef<HTMLSpanElement>(null)
+  const prefsChipRef = useRef<HTMLSpanElement>(null)
   const attachButtonRef = useRef<HTMLButtonElement>(null)
   const [statusCollapsed, setStatusCollapsed] = useState(false)
 
@@ -324,19 +321,17 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
     const availableWidth = footer.clientWidth - rightWidth - footerGap
 
     const attachWidth = attachButtonRef.current ? attachButtonRef.current.offsetWidth : 28
-    const chipWidth = modelChipRef.current ? modelChipRef.current.offsetWidth : 0
-    const effortWidth = thinkingChipRef.current ? thinkingChipRef.current.offsetWidth : 0
+    // FR7：合并后预算只含单个 chip 项——chip 宽度（offsetWidth 实测）已包含强度段，无需为强度另加预算
+    const chipWidth = prefsChipRef.current ? prefsChipRef.current.offsetWidth : 0
     const statusWidth = measure.offsetWidth
     const triggerWidth = 22
     const gap = 8
 
     let neededWidth = attachWidth + gap + statusWidth
     if (chipWidth > 0) neededWidth += gap + chipWidth
-    if (effortWidth > 0) neededWidth += gap + effortWidth
 
     let neededCollapsedWidth = attachWidth + gap + triggerWidth
     if (chipWidth > 0) neededCollapsedWidth += gap + chipWidth
-    if (effortWidth > 0) neededCollapsedWidth += gap + effortWidth
 
     setStatusCollapsed(neededWidth > availableWidth && neededCollapsedWidth <= availableWidth)
   }, [])
@@ -358,7 +353,7 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
 
   useEffect(() => {
     checkOverflow()
-  }, [modelSlot, thinkingSlot, running, canQueueSend, footerStatusLabel, pendingAttachments.length, checkOverflow])
+  }, [prefsSlot, running, canQueueSend, footerStatusLabel, pendingAttachments.length, checkOverflow])
 
   useEffect(() => {
     if (!tooManyHint) return
@@ -468,8 +463,7 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
                 <Plus size={16} strokeWidth={1.75} aria-hidden />
               </button>
             </Tooltip>
-            {modelSlot ? <span ref={modelChipRef}>{modelSlot}</span> : null}
-            {thinkingSlot ? <span ref={thinkingChipRef}>{thinkingSlot}</span> : null}
+            {prefsSlot ? <span ref={prefsChipRef}>{prefsSlot}</span> : null}
             {/* §5.2.1（OQ-9）：idle 态唯一内容是 hintIdle，移除后整块不渲染（腾位给强度控件）；
                 running 态的「生成中」/耗时/队列/脉冲点走独立通道，全部保留 */}
             {running ? (

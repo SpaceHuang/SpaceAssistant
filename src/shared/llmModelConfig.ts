@@ -233,9 +233,14 @@ export type ChatModelOption = {
   modelName: string
   model: ModelEntry
   displayName: string
+  /** 模型名被 ≥2 个活跃服务支持（FR12/FR3）：displayName 前缀与 chip 服务段共用此判定，全仓仅此一处实现 */
+  serviceAmbiguous: boolean
 }
 
-/** §9 聊天区模型列表：按服务顺序 × 模型排序展开；展示名统一为「服务名-模型名」 */
+/**
+ * §9 聊天区模型列表：按服务顺序 × 模型排序展开。
+ * displayName 仅在模型名歧义（≥2 个活跃服务支持同名模型）时加「服务名-」前缀，否则用纯模型名（FR12）。
+ */
 export function buildChatModelOptions(
   models: ModelEntry[],
   services: LlmServiceProfile[],
@@ -243,25 +248,38 @@ export function buildChatModelOptions(
 ): ChatModelOption[] {
   const available = getAvailableModels(models, services, activeServiceIds)
 
-  const options: ChatModelOption[] = []
+  // 第一遍：按既有「服务顺序 × supportedModelIds」收集全部候选 (service, model)
+  const candidates: Array<{ serviceId: string; service: LlmServiceProfile; modelId: string; model: ModelEntry }> = []
   for (const serviceId of activeServiceIds) {
     const service = services.find((s) => s.id === serviceId)
     if (!service) continue
     for (const modelId of service.supportedModelIds ?? []) {
       const model = available.find((m) => m.id === modelId)
       if (!model) continue
-      const displayName = `${service.name.trim()}-${model.name}`
-      options.push({
-        serviceId,
-        serviceName: service.name,
-        modelId,
-        modelName: model.name,
-        model,
-        displayName
-      })
+      candidates.push({ serviceId, service, modelId, model })
     }
   }
-  return options
+
+  // 统计每个模型名在候选池中的出现次数（同名跨服务 → 歧义）
+  const nameCounts = new Map<string, number>()
+  for (const candidate of candidates) {
+    nameCounts.set(candidate.model.name, (nameCounts.get(candidate.model.name) ?? 0) + 1)
+  }
+
+  // 第二遍：displayName 与 serviceAmbiguous 复用同一份统计结果
+  return candidates.map(({ serviceId, service, modelId, model }) => {
+    const serviceAmbiguous = (nameCounts.get(model.name) ?? 0) >= 2
+    const displayName = serviceAmbiguous ? `${service.name.trim()}-${model.name}` : model.name
+    return {
+      serviceId,
+      serviceName: service.name,
+      modelId,
+      modelName: model.name,
+      model,
+      displayName,
+      serviceAmbiguous
+    }
+  })
 }
 
 export function findChatModelOption(

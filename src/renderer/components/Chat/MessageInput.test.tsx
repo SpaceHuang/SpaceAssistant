@@ -117,18 +117,15 @@ describe('MessageInput', () => {
     expect(container.querySelector('.composer-status__hint')?.textContent).toContain('发送并排队')
   })
 
-  // §5.2：强度控件落位在模型 chip 之后、状态区之前
-  it('places thinking slot after model slot and before status area', () => {
+  // FR1：模型与强度合并为单一 prefsSlot——slot 存在且位于状态区之前（两个 slot 已收敛为一个）
+  it('places the merged prefs slot before the status area', () => {
     const { container } = renderInput({
-      modelSlot: <span data-testid="model-slot">model</span>,
-      thinkingSlot: <button type="button">默认（中）</button>,
+      prefsSlot: <button type="button">deepseek-v4-pro · 中</button>,
       running: true,
       runningStatus: '生成中'
     })
-    const modelSlot = container.querySelector('[data-testid="model-slot"]')!
-    const thinking = screen.getByRole('button', { name: '默认（中）' })
+    const prefsChip = screen.getByRole('button', { name: 'deepseek-v4-pro · 中' })
     const status = container.querySelector('.composer-status--running')!
-    expect(modelSlot.compareDocumentPosition(thinking) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(thinking.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(prefsChip.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

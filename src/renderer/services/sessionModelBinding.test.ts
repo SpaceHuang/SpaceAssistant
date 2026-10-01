@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { AppConfig } from '../../shared/domainTypes'
 import { normalizeModelEntry } from '../../shared/llmModelConfig'
-import { resolveSessionModelBinding, resolveSessionThinkingBinding, listChatModelOptions } from './sessionModelBinding'
+import {
+  resolveSessionModelBinding,
+  resolveSessionThinkingBinding,
+  resolveAvailableThinkingEfforts,
+  listChatModelOptions
+} from './sessionModelBinding'
 
 function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   const models = [
@@ -66,7 +71,7 @@ describe('sessionModelBinding', () => {
       schemaVersion: 1
     })
     expect(binding.modelName).toBe('deepseek-flash')
-    expect(binding.displayName).toBe('Default-deepseek-flash')
+    expect(binding.displayName).toBe('deepseek-flash')
   })
 
   it('falls back to language preferred for new sessions', () => {
@@ -81,10 +86,10 @@ describe('sessionModelBinding', () => {
     const binding = resolveSessionModelBinding(cfg, undefined, option)
     expect(binding.modelName).toBe('deepseek-flash')
     expect(binding.llmServiceId).toBe('s1')
-    expect(binding.displayName).toBe('Default-deepseek-flash')
+    expect(binding.displayName).toBe('deepseek-flash')
   })
 
-  it('lists service-prefixed display names for all options', () => {
+  it('lists service-prefixed display names for models supported by multiple services', () => {
     const proId = makeConfig().models!.find((m) => m.name === 'deepseek-v4-pro')!.id
     const cfg = makeConfig({
       llmServices: [
@@ -100,10 +105,48 @@ describe('sessionModelBinding', () => {
     ])
   })
 
-  it('prefixes single-service options as well', () => {
+  it('leaves single-service options unprefixed in displayName', () => {
     const cfg = makeConfig()
     const options = listChatModelOptions(cfg)
-    expect(options.find((o) => o.modelName === 'glm-5.3')?.displayName).toBe('Default-glm-5.3')
+    expect(options.find((o) => o.modelName === 'glm-5.3')?.displayName).toBe('glm-5.3')
+  })
+})
+
+
+describe('resolveAvailableThinkingEfforts（FR10：renderer 自算可用档位集合，A22 / A22a / A22b）', () => {
+  it('gpt-5-pro：仅 high 有值（low/medium/max 显式 null）→ [\'off\',\'high\']（off 恒可用，不在排除集）', () => {
+    expect(resolveAvailableThinkingEfforts('gpt-5-pro')).toEqual(['off', 'high'])
+  })
+
+  it('claude-opus-4-6：map 仅 max 键 → 键缺失不排除（A22a）→ 全 5 档', () => {
+    expect(resolveAvailableThinkingEfforts('claude-opus-4-6')).toEqual(['off', 'low', 'medium', 'high', 'max'])
+  })
+
+  it('claude-haiku-4-5：无 thinkingLevelMap → fail-open 全 5 档（A22b）', () => {
+    expect(resolveAvailableThinkingEfforts('claude-haiku-4-5')).toEqual(['off', 'low', 'medium', 'high', 'max'])
+  })
+
+  it('deepseek-v4-pro：minimal/low/medium 为 null → [\'off\',\'high\',\'max\']（3 档）', () => {
+    expect(resolveAvailableThinkingEfforts('deepseek-v4-pro')).toEqual(['off', 'high', 'max'])
+  })
+
+  it('未知模型名（不在基线内）→ fail-open 全 5 档（A22b）', () => {
+    expect(resolveAvailableThinkingEfforts('unlisted-model')).toEqual(['off', 'low', 'medium', 'high', 'max'])
+  })
+
+  it('旧内置名经 migrateBuiltinModelName 归一后仍能查到基线（deepseek-v4-flash → deepseek-flash）', () => {
+    // deepseek-flash 基线：仅 medium 显式 null → [\'off\',\'low\',\'high\',\'max\']
+    expect(resolveAvailableThinkingEfforts('deepseek-v4-flash')).toEqual(['off', 'low', 'high', 'max'])
+  })
+
+  it('返回顺序严格为 THINKING_EFFORT_LEVELS 的子序列（由弱到强）', () => {
+    const levels: readonly string[] = ['off', 'low', 'medium', 'high', 'max']
+    for (const name of ['gpt-5-pro', 'deepseek-v4-pro', 'deepseek-v4-flash', 'unlisted-model']) {
+      const result = resolveAvailableThinkingEfforts(name)
+      const idx = result.map((e) => levels.indexOf(e))
+      expect([...idx].sort((a, b) => a - b)).toEqual(idx)
+      expect(result.every((e) => levels.includes(e))).toBe(true)
+    }
   })
 })
 
@@ -171,5 +214,45 @@ describe('resolveSessionThinkingBinding（§4.2 两层解析 + §5.2 草稿保�
     delete (cfg as { thinkingEffort?: string }).thinkingEffort
     const b = resolveSessionThinkingBinding(cfg, undefined)
     expect(b.effort).toBe('medium')
+  })
+
+  // ── 档位降级（FR10 演进，用户反馈）──
+  // 场景来源：glm-5.3-flash 基线 medium: null，全局默认「中」继承后原样显示无效档；
+  // 传入可用集合时，生效档位不被支持则沿枚举向下取最近可用档（low ≈ medium，行为最接近）
+  it('继承全局 medium 不被支持 → 降到 low（off 恒可用兜底）', () => {
+    const cfg = makeConfig({ thinkingEffort: 'medium' })
+    const b = resolveSessionThinkingBinding(cfg, undefined, undefined, ['off', 'low', 'high', 'max'])
+    expect(b).toEqual({ effort: 'low', overridden: false, globalEffort: 'medium' })
+  })
+
+  it('会话覆盖 medium 同样降级（overridden 保持 true——存储值未被改写，仅解析生效值）', () => {
+    const cfg = makeConfig({ thinkingEffort: 'medium' })
+    const b = resolveSessionThinkingBinding(cfg, makeSession({ thinkingEffort: 'medium' }), undefined, ['off', 'low', 'high', 'max'])
+    expect(b).toEqual({ effort: 'low', overridden: true, globalEffort: 'medium' })
+  })
+
+  it('逐档向下：gpt-5-pro 仅 off/high，继承 medium → low 不在 → 一路降到 off；草稿 high 可用则不降', () => {
+    const cfg = makeConfig({ thinkingEffort: 'medium' })
+    const efforts: Array<'off' | 'low' | 'medium' | 'high' | 'max'> = ['off', 'high']
+    expect(resolveSessionThinkingBinding(cfg, undefined, undefined, efforts).effort).toBe('off')
+    expect(resolveSessionThinkingBinding(cfg, undefined, 'high', efforts).effort).toBe('high')
+  })
+
+  it('生效档位在可用集合内 → 原样返回（常规路径不受影响）', () => {
+    const cfg = makeConfig({ thinkingEffort: 'medium' })
+    const all: Array<'off' | 'low' | 'medium' | 'high' | 'max'> = ['off', 'low', 'medium', 'high', 'max']
+    expect(resolveSessionThinkingBinding(cfg, undefined, undefined, all).effort).toBe('medium')
+    expect(resolveSessionThinkingBinding(cfg, makeSession({ thinkingEffort: 'high' }), undefined, all).effort).toBe('high')
+  })
+
+  it('不传可用集合 → 原行为（向后兼容，既有调用方不传时无降级）', () => {
+    const cfg = makeConfig({ thinkingEffort: 'medium' })
+    expect(resolveSessionThinkingBinding(cfg, undefined).effort).toBe('medium')
+  })
+
+  it('草稿档位不被支持 → 同样降级（composer 先于会话的窗口内显示一致）', () => {
+    const cfg = makeConfig({ thinkingEffort: 'medium' })
+    const b = resolveSessionThinkingBinding(cfg, undefined, 'medium', ['off', 'low', 'high', 'max'])
+    expect(b.effort).toBe('low')
   })
 })

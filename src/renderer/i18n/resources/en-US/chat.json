@@ -131,9 +131,7 @@
   },
   "modelPicker": {
     "empty": "No models available. Configure API services and models in Settings.",
-    "unavailableHint": "Current session model is unavailable. Please select another.",
-    "selectModelAria": "Select model, current {{name}}",
-    "switchModel": "Switch model"
+    "unavailableHint": "Current session model is unavailable. Please select another."
   },
   "toolCall": {
     "confirm": {
@@ -268,6 +266,19 @@
   },
   "writeSuccess": {},
   "composer": {
+    "prefs": {
+      "label": "Model & thinking effort",
+      "aria": "Model and thinking effort, current model {{model}}, thinking effort {{effort}}",
+      "chipSeparator": " · ",
+      "modelServiceSuffix": " ({{service}})",
+      "modelSection": "Model",
+      "effortSection": "Thinking effort",
+      "effortDisabled": "This model does not support thinking; switch model to adjust",
+      "effortCurrent": "{{effort}} · Current",
+      "effortCurrentHint": "Not supported by this model — pick another level",
+      "unknownModel": "No model configured",
+      "entryTitle": "{{displayName}} · Thinking effort: {{effort}}"
+    },
     "thinking": {
       "label": "Thinking effort",
       "aria": "Choose thinking effort",
@@ -277,6 +288,7 @@
       "low": "Low",
       "medium": "Medium",
       "high": "High",
+      "max": "Max",
       "notSupported": "This model does not support thinking"
     }
   }

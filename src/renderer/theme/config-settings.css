@@ -1647,6 +1647,133 @@
   padding: 0;
 }
 
+/* ===== composer 偏好合并入口浮层（composer-model-thinking-entry FR2）：上模型 / 下强度，单 Popover 两分区 ===== */
+.composer-prefs-popover .ant-popover-inner {
+  padding: 0;
+}
+
+.composer-prefs__section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.composer-prefs__section-title {
+  padding: 10px 12px 6px;
+  font-size: var(--sa-config-font-sm);
+  line-height: 1.4;
+  color: var(--sa-text-tertiary);
+}
+
+/* 浮层内分隔：暖白底上 --sa-border 过淡，用系统「卡片内分隔」档 --sa-border-strong 保证可辨 */
+.composer-prefs__divider {
+  height: 1px;
+  margin: 6px 0;
+  background: var(--sa-border-strong);
+}
+
+/* 滚动容器：宽度/高度策略沿用 .composer-model-picker（下方既有规则）。
+   ⚠️ 容器同时保留 `composer-model-picker` 类（P4-T10 方案①）：
+   它是 config-settings.css 中 `.composer-model-picker .config-model-badge*`
+   后代选择器的祖先作用域锚点，也是 components.css 细滚动条白名单类名——去掉即静默失效（R14）。
+   max-height 收窄为 240px（需求 §5.2：合并浮层总高 ≤ 400px = 模型区 ~240 + 分隔线 + 强度区），
+   仅作用于本浮层（.composer-prefs-popover 作用域），旧模型浮层不受影响。
+   左缘与分区标题 / 强度区统一对齐（列表自带 12px 项内距，容器左 padding 收为 0 防双层缩进）。 */
+.composer-prefs-popover .composer-prefs__models.composer-model-picker {
+  max-height: 240px;
+  border-radius: 0;
+}
+
+.composer-prefs__models .composer-model-picker__list {
+  padding: 0 12px 6px;
+}
+
+/* 当前绑定模型：橙色模型名做恒定信号（--sa-list-selected-fg）。
+   不铺 tint 底——双行大块上整片橙底过于抢眼（用户反馈）；hover 仍是中性底，两者构成两类反馈 */
+.composer-prefs__models .composer-model-picker__item--active .composer-model-picker__model {
+  color: var(--sa-list-selected-fg);
+}
+
+/* 键盘焦点可见（设计原则 5）：primary 描边 + glow，与全系统 focus 语言一致 */
+.composer-prefs__models .composer-model-picker__item:focus-visible,
+.composer-prefs__effort:focus-visible {
+  outline: 2px solid var(--sa-primary);
+  outline-offset: 1px;
+  box-shadow: var(--sa-shadow-glow);
+}
+
+/* 强度分区：分段控件（segmented）形态——整组档位共用一个轨道外壳（系统「分段控件轨道」语言），
+   表达「这是一个互斥的档位选择器」而非散落的标签（用户反馈）。
+   项自然宽 + 左对齐：不设 flex-grow（§5.2：2–3 档不得拉伸成「巨大按钮」）；flex-wrap 适配换行，
+   换行后轨道仍包住两行，整体控件感不变；禁止 width: calc(25% - 3px) 之类的固定等分硬编码。 */
+.composer-prefs__efforts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 2px;
+  width: fit-content;
+  max-width: calc(100% - 24px);
+  margin: 2px 12px 12px;
+  padding: 3px;
+  background: var(--sa-bg-muted);
+  border-radius: var(--sa-radius-sm);
+}
+
+.composer-prefs__effort {
+  flex: 0 1 auto;
+  min-width: 52px;
+  padding: 5px 10px;
+  border: none;
+  border-radius: calc(var(--sa-radius-sm) - 3px);
+  background: transparent;
+  cursor: pointer;
+  text-align: center;
+  font-size: var(--sa-config-font);
+  color: var(--sa-text-secondary);
+  white-space: nowrap;
+  transition:
+    background var(--sa-duration-fast) var(--sa-ease-out),
+    color var(--sa-duration-fast) var(--sa-ease-out),
+    box-shadow var(--sa-duration-fast) var(--sa-ease-out);
+}
+
+.composer-prefs__effort:hover {
+  color: var(--sa-text);
+  background: color-mix(in srgb, var(--sa-bg-elevated) 55%, transparent);
+}
+
+/* 选中：同一轨道平面内的「点亮格」——浅橙 tint + 橙字，与全组件「选中 = 橙」语言一致。
+   不用白块浮起 / 阴影（用户反馈：立体悬浮感让选中项看起来不在序列中） */
+.composer-prefs__effort--active,
+.composer-prefs__effort--active:hover {
+  color: var(--sa-list-selected-fg);
+  font-weight: 500;
+  background: var(--sa-primary-subtle);
+}
+
+/* 禁用态：只降字色（保留 active 格的 tint 底，禁用时当前档位位置仍可辨） */
+.composer-prefs__effort:disabled {
+  cursor: not-allowed;
+  color: var(--sa-text-tertiary);
+}
+
+/* 「· 当前」悬挂项（FR10 例外兜底）：生效档位被模型基线排除时的占位指示——
+   橙字标识当前值，虚线内框标识不可选（区别于普通禁用项与选中格） */
+.composer-prefs__effort.composer-prefs__effort--current,
+.composer-prefs__effort.composer-prefs__effort--current:disabled {
+  color: var(--sa-list-selected-fg);
+  outline: 1px dashed var(--sa-border-strong);
+  outline-offset: -1px;
+}
+
+.composer-prefs__effort-disabled {
+  padding: 0 12px 12px;
+  font-size: var(--sa-config-font-sm);
+  line-height: 1.5;
+  color: var(--sa-text-tertiary);
+}
+
+
 .composer-model-picker {
   min-width: 260px;
   max-width: 360px;
@@ -1690,43 +1817,6 @@
 .composer-model-picker__item:hover .config-model-badge--vision {
   border-color: color-mix(in srgb, #7c5cff 48%, transparent);
   background: color-mix(in srgb, #7c5cff 22%, var(--sa-bg-elevated));
-}
-
-/* 会话级 Thinking 强度选择器（§5.2）：复用模型 chip 视觉，列表为 5 项单列 */
-.composer-thinking-picker__list {
-  list-style: none;
-  margin: 0;
-  padding: 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.composer-thinking-picker__item {
-  width: 100%;
-  padding: 7px 12px;
-  border: none;
-  border-radius: var(--sa-radius-sm);
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-  font-size: var(--sa-config-font);
-  color: var(--sa-text);
-}
-
-.composer-thinking-picker__item:hover {
-  background: var(--sa-bg-muted);
-}
-
-.composer-thinking-picker__item--active {
-  color: var(--sa-accent);
-  font-weight: 500;
-}
-
-/* 禁用态包裹层（评审 B2）：Tooltip 挂点——disabled chip 自身不派发鼠标事件，提示由外层 span 承载 */
-.composer-thinking-chip--disabled-wrapper {
-  display: inline-flex;
-  cursor: not-allowed;
 }
 
 .composer-model-picker__service {

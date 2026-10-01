@@ -254,14 +254,21 @@ describe('llmModelConfig', () => {
     expect(resolvePreferredModelId('vision', available, 'local-only-vision')).toBe('pi-vision')
   })
 
-  it('buildChatModelOptions always uses service prefix in displayName', () => {
+  it('buildChatModelOptions prefixes displayName only when the model name is ambiguous', () => {
     const options = buildChatModelOptions(models, services, ['s1', 's2'])
     const pro = options.filter((o) => o.modelName === 'deepseek-v4-pro')
     expect(pro).toHaveLength(2)
+    // 同名模型被 ≥2 个活跃服务支持 → 歧义 → 带服务前缀（FR12）
     expect(pro.map((o) => o.displayName).sort()).toEqual(['Deep-deepseek-v4-pro', 'Volcano-deepseek-v4-pro'])
+    expect(pro.map((o) => o.serviceAmbiguous)).toEqual([true, true])
 
+    // 仅单一服务支持 → 无前缀（FR12）
     const flash = options.find((o) => o.modelName === 'deepseek-flash')
-    expect(flash?.displayName).toBe('Deep-deepseek-flash')
+    expect(flash?.displayName).toBe('deepseek-flash')
+    expect(flash?.serviceAmbiguous).toBe(false)
+    const kimi = options.find((o) => o.modelName === 'kimi-k2.7-code')
+    expect(kimi?.displayName).toBe('kimi-k2.7-code')
+    expect(kimi?.serviceAmbiguous).toBe(false)
   })
 
   it('pruneMissingModelsFromServices removes ids absent from the model catalog', () => {

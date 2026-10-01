@@ -1595,6 +1595,20 @@
   min-width: 0;
 }
 
+/* composer 偏好合并入口（composer-model-thinking-entry FR3）：
+   chip 语义扩展为「模型段（含可选服务段）+ 强度段」——截断只作用于 __label（含服务段），
+   __sep / __effort 恒定可见（flex-shrink: 0），确保窄窗口下强度随时可查（A2c）。 */
+.composer-model-chip__sep {
+  flex-shrink: 0;
+  color: var(--sa-text-tertiary);
+}
+
+.composer-model-chip__effort {
+  flex-shrink: 0;
+  color: var(--sa-text-tertiary);
+  font-weight: 400;
+}
+
 .composer-model-chip__chevron {
   flex-shrink: 0;
   opacity: 0.72;
