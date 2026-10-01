@@ -13,6 +13,7 @@
 | 1aef2cca | Phase 2 | 策略与设置 UI（默认值维持 off） |
 | f02be149 | Phase 3 | 计量与观测 |
 | 99220290 | 验收收尾 | tool_search 元数据/设置文案补齐 |
+| 4fa75c8a | 评审修复 | 评审（docs/review/20261002-mcp-deferred-tool-loading-code-review.md）P1/P2/P3 全项：FR11 快照准入放宽运行时接线（含 >64 工具真实路径用例）、索引 trim 过滤、package-lock 还原、常量复用、FR13 探针 O(N)、safetyGate 显式委托 |
 
 ## 需求覆盖对照（§5 功能需求）
 
@@ -24,12 +25,13 @@
 - **FR8**：turn 维度 `deferred` 加性字段（toolCount/indexChars/eagerEquivalentChars）+ 节省量按轮日志 `mcp.deferred_savings`；`summarizeToolDeclarations` 天然只含广告面。
 - **FR9**：tool_search 显示名「工具检索（MCP）」（`shared/toolCallLabel.ts`，带 query 附检索词）。
 - **FR10**：设置页三档 Select + 每服务「始终全量加载」开关 + i18n（`config.mcp.*` 命名空间，O12），`npm run i18n:check` 通过。
-- **FR11**：延迟档快照准入放宽（偏执上限 512/1 MiB，`MCP_DEFERRED_PARANOID_MAX_*`）；白名单为唯一门槛；**白名单上限（512）= 偏执上限 → 延迟模式快照层 `budgetDropped` 恒空不变量由配置层保证**（O2）。
+- **FR11**：延迟档快照准入放宽（偏执上限 512/1 MiB，`MCP_DEFERRED_PARANOID_MAX_*`）——**评审修复后运行时已接线**：`buildSnapshotFromDb` 增 `admission` 参数，`invocationAssembler` 读 `materials.toolsConfig.mcpDeferredLoading`（与 plan 计算同一事实源）传 `deferred`/`standard`；白名单为唯一门槛；**白名单上限（512）= 偏执上限 → 延迟模式快照层 `budgetDropped` 恒空不变量由配置层保证（O2），并有 >64 工具走真实快照路径的装配级用例固化（10.1.12）**。
 - **FR12①**：`computeBudgetDiagnostics`（snapshot/eager/executor 三源合并）经 `mcp:list` 载荷扩展 `budgetDiagnostics` 下发，设置页按 source 分组渲染。
 - **FR12②**：被拒文案区分——SDK deny 决策补 `userMessage` 透传（最小扩展）；`REGISTERED_TOOL_NOT_FOUND` 在 hosted 组装层映射为结构化拒绝（先解除 pending）：预算裁剪名单内=「预算未注入」，其余=「服务不可用/已变更」；turn 不再因幻名整体失败。
 - **FR13**：装配期快照清洗 `sanitizeMcpSnapshotForExecutors`（全档位一致；坏条目快照层剔除 + `executorDropped` 诊断 + warn 日志；off 档降级偏离已显式声明）。
 - **FR14**：alwaysLoad 持久化链路五处覆盖（写 strict schema / 读 schema / 类型 / writeInputToProfile / mcpDrafts）+ 往返测试。
 - **模式冻结（R7）**：plan 每 invoke 重算（快照纯用户触发式刷新的现状下无中途翻转面）；`contextWindowId` 冻结属预防性加固，随 list_changed 接线一并评估。
+- **SDK 改动补充（评审 P3-3）**：新增 `SafetyGatePort = Pick<SafetyGate, 'evaluate' | 'authorize' | 'discardPermit'>`，turn.ts 的 ports.safetyGate 类型放宽为该端口（实例赋值兼容）；FR12② 的拒绝文案包装为显式委托对象，消除原型链包装的脆弱性。
 
 ## 关键设计事实（评审对照）
 
@@ -40,8 +42,8 @@
 
 ## 验证结果
 
-- 新增测试 8 文件（effectiveTools.deferred / toolSearchTool / toolCatalogPrompt / skillPrompt.deferred / invocationAssembler.deferred / toolChatLoop.deferred / mcpIpc.persist / budgetDiagnostics / usageAttribution.deferred），加上各阶段定向回归，分支累计定向测试全绿。
-- **全量 `npm test`：834 文件 / 7573 用例，43 failed / 7503 passed / 27 skipped**。43 个失败**全部为基线/环境失败**——已在基线 commit 386e04b6（本分支起点）逐文件复现同一批（run_shell side-effect 4 例依赖真实 shell spawn、临时目录/路径别名类 39 例），与本需求改动无关（对照验证方法：临时 worktree 检出基线运行同批文件）。
+- 新增测试 9 文件（effectiveTools.deferred / toolSearchTool / toolCatalogPrompt / skillPrompt.deferred / invocationAssembler.deferred / toolChatLoop.deferred / mcpIpc.persist / budgetDiagnostics / usageAttribution.deferred），加上各阶段定向回归与评审修复用例，分支累计定向测试全绿（评审修复面定向组 359 passed）。
+- **全量 `npm test`（评审修复后复验，834 文件 / 7577 用例）：42 failed / 7508 passed / 27 skipped**。失败文件清单（13 个）与基线 commit 386e04b6 完全一致——均为基线/环境失败（run_shell side-effect 依赖真实 shell spawn、临时目录/路径别名类，已在基线逐文件复现），与本需求改动无关。
 - `npm run build:electron:incremental`、`npm run typecheck:renderer`、`npm run i18n:check` 全部通过。
 
 ## 待真机验收（§10.2，需真实 API Key / 真实 MCP 服务）
