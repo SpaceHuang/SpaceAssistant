@@ -19,7 +19,7 @@ import { ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequ
 function createDb(dbPath = ':memory:'): DatabaseSync {
   const conn = new DatabaseSync(dbPath)
   conn.exec("CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")
-  conn.prepare('INSERT OR IGNORE INTO schema_meta(key, value) VALUES(?, ?)').run('schema_version', '18')
+  conn.prepare('INSERT OR IGNORE INTO schema_meta(key, value) VALUES(?, ?)').run('schema_version', '15')
   runMigrations(conn)
   return conn
 }
@@ -2146,6 +2146,26 @@ describe('SqliteAgentHistory', () => {
     await expect(history.recoverInterruptedInvocations()).resolves.toEqual([])
     await expect(history.read('inv-denied')).resolves.toMatchObject({ version: 1, events: [expect.objectContaining({ kind: 'invocation-failed', payload: { status: 'denied', reason: 'POLICY_DENY' } })] })
     await expect(history.read('inv-cancelled')).resolves.toMatchObject({ version: 1, events: [expect.objectContaining({ kind: 'invocation-interrupted', payload: { status: 'cancelled' } })] })
+    conn.close()
+  })
+
+  it('projects a post-approval fact change as a denied, unexecuted action', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn, 1, Date.now, 'session-facts-changed')
+    const makeEvent = (sequence: number, kind: HistoryEvent['kind'], payload: unknown): HistoryEvent => ({
+      invocationId: 'inv-facts-changed', turnId: 'turn-facts-changed', sequence, schemaVersion: 1,
+      eventId: `facts-changed-${sequence}`, idempotencyKey: `facts-changed-${sequence}`, kind, payload
+    })
+    await history.appendBatch([
+      makeEvent(1, 'model-response-committed', { message: { role: 'assistant', toolCalls: [{ id: 'changed-write', name: 'run_script', input: { code: 'secret script' } }] } }),
+      makeEvent(2, 'approval-waiting', { toolCallId: 'changed-write', approvalId: 'approval-changed-write', answerer: 'user', reasonCode: 'script-path-unknown-confirm', requestedAt: 10 }),
+      makeEvent(3, 'approval-resolved', { toolCallId: 'changed-write', approvalId: 'approval-changed-write', approved: true, outcome: 'approved', answerer: 'user', settledAt: 11 }),
+      makeEvent(4, 'tool-call-not-dispatched', { toolCallId: 'changed-write', reason: 'FACTS_CHANGED', replayContent: '目标变化，未执行', isError: true }),
+      makeEvent(5, 'invocation-completed', { status: 'completed' })
+    ], 0)
+    const projected = history.readCompletedToolCallsForSession('inv-facts-changed', 'session-facts-changed', 'turn-facts-changed')?.[0]
+    expect(projected?.approval).toMatchObject({ status: 'denied', cause: 'facts-changed', reason: { summary: 'facts-changed' } })
+    expect(projected?.result).toMatchObject({ success: false, notExecuted: true })
     conn.close()
   })
 

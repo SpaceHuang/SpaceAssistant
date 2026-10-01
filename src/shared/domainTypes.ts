@@ -27,6 +27,8 @@ export interface ToolsConfig {
   grepTimeoutSec: number
   autoApproveMaxBytes?: number
   autoApproveMaxEditChars?: number
+  /** 云端兼容开关：允许经交叉校验的 workdir-readonly 脚本声明免确认。默认关闭。 */
+  allowDeclaredPathScopeScripts?: boolean
 }
 
 export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
@@ -589,6 +591,8 @@ export interface ToolCallRecord {
   confirmDiff?: { oldContent: string; newContent: string; oldPath: string }
   /** run_shell 路径/安全警示（确认卡片展示） */
   shellSecurityHints?: ShellSecurityHints
+  /** run_script 路径分析未覆盖时的原因提示。 */
+  scriptPathHint?: string
   /** 文件 auto 模式回落 diff 时的原因 */
   autoApproveFallback?: AutoApproveFallback
   /**

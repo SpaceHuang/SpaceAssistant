@@ -861,7 +861,8 @@
       "tierDirectory": "目录",
       "tierZone": "目录区",
       "tierMcpTool": "MCP 工具",
-      "tierRemoteWrite": "远程写授权"
+      "tierRemoteWrite": "远程写授权",
+      "tierScriptContent": "本会话相同脚本"
     },
     "audit": {
       "title": "安全审计记录",

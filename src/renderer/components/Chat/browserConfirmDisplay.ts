@@ -7,11 +7,16 @@ export type BrowserConfirmSummary = {
   pageUrl?: string
 }
 
-const NAV_MODE_LABELS: Record<string, string> = {
-  open: '打开网页',
-  refresh: '刷新页面',
-  back: '后退',
-  forward: '前进'
+import { runtimeText } from '../../i18n/runtimeText'
+
+function navigationLabel(mode: string): string | undefined {
+  switch (mode) {
+    case 'open': return runtimeText('chat.browser.openPage')
+    case 'refresh': return runtimeText('chat.browser.refreshPage')
+    case 'back': return runtimeText('chat.browser.back')
+    case 'forward': return runtimeText('chat.browser.forward')
+    default: return undefined
+  }
 }
 
 export function summarizeBrowserConfirmInput(
@@ -21,38 +26,38 @@ export function summarizeBrowserConfirmInput(
   const action = typeof input.action === 'string' ? input.action : ''
   if (action === 'navigate') {
     const mode = typeof input.mode === 'string' ? input.mode : 'open'
-    const headline = NAV_MODE_LABELS[mode] ?? '导航'
+    const headline = navigationLabel(mode) ?? runtimeText('chat.browser.navigate')
     if (mode === 'open') {
       const url = typeof input.url === 'string' ? input.url.trim() : ''
       return {
         headline,
         detailLabel: 'URL',
-        detailValue: url || '(未指定 URL)',
-        hint: '将在隔离浏览器中打开上述地址。确认后，本会话内访问同域名将不再询问。'
+        detailValue: url || runtimeText('chat.browser.unspecifiedUrl'),
+        hint: runtimeText('chat.browser.hintOpen')
       }
     }
     return {
       headline,
-      detailLabel: '操作',
+      detailLabel: runtimeText('chat.browser.action'),
       detailValue: mode,
-      hint: '将在当前浏览器会话中执行导航'
+      hint: runtimeText('chat.browser.hintNavigate')
     }
   }
   if (action === 'act') {
     const instruction = typeof input.instruction === 'string' ? input.instruction.trim() : ''
     const pageUrl = typeof currentPageUrl === 'string' ? currentPageUrl.trim() : ''
     return {
-      headline: '浏览器操作',
-      detailLabel: '指令',
-      detailValue: instruction || '(未指定指令)',
-      instructionValue: instruction || '(未指定指令)',
+      headline: runtimeText('chat.browser.actionLabel'),
+      detailLabel: runtimeText('chat.browser.commandLabel'),
+      detailValue: instruction || runtimeText('chat.browser.unspecifiedInstruction'),
+      instructionValue: instruction || runtimeText('chat.browser.unspecifiedInstruction'),
       pageUrl: pageUrl || undefined,
-      hint: '将在当前页面执行单步自然语言操作。'
+      hint: runtimeText('chat.browser.hintAct')
     }
   }
   return {
     headline: action ? `browser · ${action}` : 'browser',
-    detailLabel: '参数',
+    detailLabel: runtimeText('chat.browser.arguments'),
     detailValue: JSON.stringify(input, null, 2)
   }
 }
@@ -60,17 +65,17 @@ export function summarizeBrowserConfirmInput(
 export function formatBrowserToolLabel(input: Record<string, unknown>): string {
   const summary = summarizeBrowserConfirmInput(input)
   if (!summary) return 'browser'
-  if (summary.detailLabel === 'URL' && summary.detailValue && summary.detailValue !== '(未指定 URL)') {
+  if (summary.detailLabel === 'URL' && summary.detailValue && summary.detailValue !== runtimeText('chat.browser.unspecifiedUrl')) {
     try {
       const u = new URL(summary.detailValue)
-      return `打开 ${u.hostname}${u.pathname !== '/' ? u.pathname : ''}`
+      return runtimeText('chat.browser.openHost', { target: `${u.hostname}${u.pathname !== '/' ? u.pathname : ''}` })
     } catch {
-      return `打开 ${summary.detailValue.slice(0, 48)}`
+      return runtimeText('chat.browser.openHost', { target: summary.detailValue.slice(0, 48) })
     }
   }
-  if (summary.detailLabel === '指令') {
+  if (summary.detailLabel === runtimeText('chat.browser.commandLabel')) {
     const t = summary.detailValue
-    return t.length > 40 ? `浏览器操作 · ${t.slice(0, 40)}…` : `浏览器操作 · ${t}`
+    return runtimeText('chat.browser.actionSummary', { instruction: t.length > 40 ? `${t.slice(0, 40)}…` : t })
   }
   return summary.headline
 }
@@ -79,6 +84,6 @@ export function formatBrowserToolLabelTitle(input: Record<string, unknown>): str
   const summary = summarizeBrowserConfirmInput(input)
   if (!summary) return undefined
   if (summary.detailLabel === 'URL') return summary.detailValue
-  if (summary.detailLabel === '指令') return summary.detailValue
+  if (summary.detailLabel === runtimeText('chat.browser.commandLabel')) return summary.detailValue
   return undefined
 }

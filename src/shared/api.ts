@@ -420,6 +420,8 @@ export type SpaceAssistantApi = {
 
   usageStatsDaily: (args: import('./usageStatsTypes').UsageStatsRangeArgs) => Promise<import('./usageStatsTypes').UsageDailyPoint[]>
   usageStatsSummary: (args: import('./usageStatsTypes').UsageStatsRangeArgs) => Promise<import('./usageStatsTypes').UsageSummary>
+  usageStatsAttribution: (args: import('./usageStatsTypes').UsageStatsRangeArgs) => Promise<import('./usageStatsTypes').UsageAttributionSummary>
+  usageStatsLatestAttribution: (sessionId: string) => Promise<import('./usageStatsTypes').UsageLatestAttribution | null>
   usageStatsDimensions: () => Promise<import('./usageStatsTypes').UsageDimensions>
 
   onOpenSettings: (cb: () => void) => () => void

@@ -2,7 +2,7 @@
 
 `packages/agent-sdk`（包名 `@spaceassistant/agent-sdk`）是 SpaceAssistant 的 **SDK 面**：契约类型 + 端口接口 + 纯 runtime 核。本目录按模块梳理它对外暴露的接口，供宿主（electron 主进程）装配方与 SDK 维护者查阅。
 
-> **基准**：本目录对齐 `main` 提交 `083e0c00`。文档首版落在 `e5801089`，其后 SDK 的两笔改动（`c76c7aab`、`fa796649`）已并入：turn 超时语义（`AgentTurnTimedOutError` / `TURN_TIMED_OUT` / `REQUEST_TIMEOUT`）、审批获批后才激活应用运行槽、执行端口在派发声明之后的 abort 复检、`InvocationRuntime` 的 park 家族下线。核对方式与宿主转发层的形状差异见文末「维护」。
+> **基准**：本目录对齐 `main` 提交 `4e3d44fd`。文档首版落在 `e5801089`，其后 SDK 的改动已并入：`c76c7aab`、`fa796649`（turn 超时语义（`AgentTurnTimedOutError` / `TURN_TIMED_OUT` / `REQUEST_TIMEOUT`）、审批获批后才激活应用运行槽、执行端口在派发声明之后的 abort 复检、`InvocationRuntime` 的 park 家族下线），以及 `ae092513`（provider 取消结算：`CollectedModelStream` 的 cancelled 分支允许缺 `usage`、取消尝试先投影 usage 并写 `model-attempt-discarded` 再抛取消 / 超时、非 cancelled 尝试缺 usage 视为流非法）。核对方式与宿主转发层的形状差异见文末「维护」。
 
 ## 定位与边界
 
@@ -73,7 +73,7 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 
 | 名称 | 出处 | 语义 |
 | --- | --- | --- |
-| `InvalidModelStreamError` (`INVALID_MODEL_STREAM`) | `model.ts` | 模型流事件序列非法 |
+| `InvalidModelStreamError` (`INVALID_MODEL_STREAM`) | `model.ts` | 模型流事件序列非法（cancelled finish 允许缺 `usage`；非 cancelled 流结束缺 `usage` 也算非法） |
 | `UnknownModelRouteError` (`UNKNOWN_MODEL_ROUTE`) | `model.ts` | 路由未注册 |
 | `ModelRouteChangedError` (`MODEL_ROUTE_CHANGED`) | `model.ts` | 调用期间路由身份变化 |
 | `UnsupportedReasoningError` (`unsupported-reasoning`) | `provider.ts` | provider 不支持请求的思维档 |

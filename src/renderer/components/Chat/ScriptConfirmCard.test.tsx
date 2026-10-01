@@ -75,4 +75,9 @@ describe('ScriptConfirmCard', () => {
     )
     expect(screen.getByText('120s')).toBeDefined()
   })
+
+  it('shows the path analysis reason when it is available', () => {
+    renderCard(<ScriptConfirmCard record={record({ scriptPathHint: '路径分析未覆盖：custom_accessor' })} onConfirm={vi.fn()} />)
+    expect(screen.getByText('路径分析未覆盖：custom_accessor')).toBeDefined()
+  })
 })

@@ -1,0 +1,125 @@
+{
+  "chat": {
+    "browser": {
+      "openPage": "Open webpage",
+      "refreshPage": "Refresh page",
+      "back": "Back",
+      "forward": "Forward",
+      "navigate": "Navigate",
+      "unspecifiedUrl": "(URL not specified)",
+      "unspecifiedInstruction": "(Instruction not specified)",
+      "hintOpen": "This address will open in an isolated browser. After confirmation, visits to the same domain in this session will not ask again.",
+      "action": "Action",
+      "hintNavigate": "Navigation will run in the current browser session.",
+      "actionLabel": "Browser action",
+      "commandLabel": "Instruction",
+      "hintAct": "A single natural-language action will run on the current page.",
+      "arguments": "Arguments",
+      "openHost": "Open {{target}}",
+      "actionSummary": "Browser action · {{instruction}}",
+      "openInViewer": "Open in content viewer: {{url}}"
+    },
+    "browserDependency": {
+      "title": "Web access dependency is not ready",
+      "description": "The assistant can run the installation command for you (with your confirmation). If Shell is disabled, use the button below to do it manually in a terminal.",
+      "workDir": "Working directory",
+      "openTerminal": "Open in terminal"
+    },
+    "devPreview": {
+      "notificationShown": "A floating notification was shown with test data. Click it or close it with the ✕ button.",
+      "confirmed": "Test preview: approved (no action taken)",
+      "rejected": "Test preview: denied (no action taken)",
+      "cancelled": "Test preview: canceled (no action taken)",
+      "previewInProgress": "[Dev] Test card preview is in progress. Please wait…",
+      "showingCards": "[Dev] Showing {{count}} test cards…",
+      "previewComplete": "[Dev] Test card preview is complete"
+    },
+    "wikiArchivePrompt": "/wiki query Archive the following assistant response as a new Wiki page (suggested path: wiki/queries/{{name}}-archive.md). Update the index and log, and keep the body clearly structured:\n\n{{content}}",
+    "mcpImageResult": "Image result · {{value}}",
+    "mcpImageAlt": "Image result · {{mimeType}}",
+    "shell": {
+      "outputTruncated": "Output truncated. Open the full log →",
+      "exitCode": "Exit code {{code}}",
+      "scrollbackTruncated": "Terminal history was truncated (over 256 KB)",
+      "resumeFollow": "Resume following",
+      "copy": "Copy",
+      "interactiveProgram": "interactive program"
+    },
+    "pending": {
+      "confirmScript": "{{session}} · Awaiting confirmation · Run existing script",
+      "confirmShell": "{{session}} · Awaiting confirmation · Shell command",
+      "confirmFeishu": "{{session}} · Awaiting confirmation · Feishu CLI"
+    },
+    "skillLoaded": "[Skill] Loaded: {{name}} (built-in dependency recovery)",
+    "auditCharacters": "{{prefix}} {{count}} chars"
+  },
+  "config": {
+    "llmService": {
+      "keyConfigured": "Key configured",
+      "keyNotConfigured": "No Key configured",
+      "supportedModels": "{{count}} supported models",
+      "officialDefault": "Official default",
+      "unnamed": "Unnamed service",
+      "maxServices": "Configure up to {{count}} model services",
+      "keepOne": "Keep at least one service",
+      "needOneModelService": "Keep at least one model service",
+      "selectActiveService": "Select at least one service to use",
+      "nameRequired": "Service name cannot be empty",
+      "nameTooLong": "Service name cannot exceed 32 characters",
+      "duplicateName": "Service name “{{name}}” is duplicated",
+      "newService": "New service",
+      "apiKeyRequired": "Enter an API Key for the new service “{{name}}”",
+      "modelRequired": "Service “{{name}}” must support at least one model"
+    }
+  },
+  "detailPanel": {
+    "fileTooLarge": "File is too large to preview (maximum 2 MB)",
+    "previewUrlFailed": "Could not create a local web preview URL",
+    "invalidUrl": "Invalid URL",
+    "refreshed": "Refreshed",
+    "openLink": "Open link",
+    "openInViewer": "Open in viewer",
+    "openExternalBrowser": "Open in external browser",
+    "webLoadFailed": "Page failed to load. Check the network or URL.",
+    "waitForSession": "The current session is responding. Wait for it to finish before switching.",
+    "switchFailed": "Switch failed",
+    "configureWorkDirFirst": "Configure a working directory first",
+    "setWorkDir": "Set working directory...",
+    "switchWorkDir": "Switch working directory",
+    "selectOrCreateSession": "Select or create a session first",
+    "projectFiles": "Project files"
+  },
+  "usage": {
+    "compactBillions": "{{value}}M",
+    "compactTenThousands": "{{value}}K"
+  },
+  "generic": {
+    "delete": "Delete",
+    "cancel": "Cancel"
+  },
+  "browserRecovery": {
+    "chromiumMissing": "Chromium browser is not installed",
+    "downloadChromium": "Download the Playwright Chromium browser (about 150–200 MB; internet required)"
+  },
+  "testCards": {
+    "outsideWorkDir": "Command includes a path outside the working directory",
+    "searchTimeout": "Search timed out",
+    "userRejected": "User denied",
+    "failed": "Failed",
+    "detectTimeout": "Detection timed out",
+    "commandFailed": "Command failed (exit code: {{code}})"
+  },
+  "wiki": {
+    "importedRaw": "Imported raw: {{name}}. Ingest started.",
+    "ingestStarted": "Ingest started: {{name}}",
+    "enableFirst": "Enable Wiki in Settings first",
+    "initializeFirst": "Wiki is not initialized. Initialize it in Settings or from a Wiki segment first.",
+    "schemaSection": "## Wiki Schema (Project Conventions)"
+  },
+  "workDir": {
+    "switchFailed": "Failed to switch working directory"
+  },
+  "browserDetect": {
+    "failed": "Detection failed"
+  }
+}

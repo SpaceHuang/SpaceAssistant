@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ConfirmationChannel } from '../../src/shared/confirmation/types'
-import { createAgentSdkConfirmationPort } from './agentSdkConfirmationPort'
+import { createAgentSdkConfirmationPort, mapAgentSdkConfirmationOutcome } from './agentSdkConfirmationPort'
 import { DesktopChannel } from './channels'
 import { ChatCancelRegistry } from '../chatCancelRegistry'
 import { isPendingConfirm } from '../toolConfirmRegistry'
@@ -13,6 +13,17 @@ const context = {
 }
 
 describe('createAgentSdkConfirmationPort', () => {
+  it('将人工选择的记忆键交给宿主确认提交回调', async () => {
+    const memory = { kind: 'script-content' as const, digest: 'a'.repeat(64), sessionId: 'session-1' }
+    const onApproved = vi.fn()
+    const port = createAgentSdkConfirmationPort({
+      createChannel: () => ({ request: async () => ({ kind: 'approved', answererKind: 'user', cause: 'user-approved', memory }), cancel: vi.fn() }),
+      publish: async () => undefined, cancel: vi.fn(), onApproved
+    })
+    await port({ call: { invocationId: 'inv', toolCallId: 'tool-memory', toolName: 'run_script', input: { code: 'custom_api()' } }, confirmationId: 'tool-memory', answerer: 'user', reasonCode: 'script-unmodeled-path-ask', context })
+    expect(onApproved).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'approved' }), expect.anything(), context, memory)
+  })
+
   it('从 policy context 还原 ConfirmRequest，并在发布卡片前登记 channel waiter', async () => {
     const order: string[] = []
     const channel: ConfirmationChannel = {
@@ -74,6 +85,7 @@ describe('createAgentSdkConfirmationPort', () => {
   it.each(['unavailable', 'timeout'] as const)('allows the host to resolve an agent %s result through a user fallback and confirms only the final approval', async (cause) => {
     const order: string[] = []
     const onApproved = vi.fn(() => { order.push('approved') })
+    const memory = { kind: 'script-content' as const, digest: 'a'.repeat(64), sessionId: 'session-1' }
     const port = createAgentSdkConfirmationPort({
       createChannel: () => ({ request: async () => cause === 'timeout'
         ? ({ kind: 'timeout', cause, answererKind: 'agent' })
@@ -83,7 +95,7 @@ describe('createAgentSdkConfirmationPort', () => {
       onApproved,
       fallback: async (_call, _confirmation, _context, primary) => {
         order.push(`fallback:${primary.kind}:${primary.cause}`)
-        return { kind: 'approved', receipt: 'fallback-receipt', answerer: 'user', cause: 'user-approved' }
+        return mapAgentSdkConfirmationOutcome({ kind: 'approved', cause: 'user-approved', answererKind: 'user', memory }, 'user')
       }
     })
 
@@ -95,6 +107,7 @@ describe('createAgentSdkConfirmationPort', () => {
     expect(result).toMatchObject({ kind: 'approved', answerer: 'user', cause: 'user-approved' })
     expect(order).toEqual([`fallback:${cause === 'timeout' ? 'timeout' : 'rejected'}:${cause}`, 'approved'])
     expect(onApproved).toHaveBeenCalledOnce()
+    expect(onApproved).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ selectedMemory: memory }), expect.anything(), context, memory)
   })
 
   it('publish 失败时取消已登记 waiter，并以 unavailable fail closed', async () => {

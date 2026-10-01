@@ -7,11 +7,12 @@ import {
   getUsageStepFactsForTurn,
   getUsageTurnFact,
   insertUsageStepFact,
-  listOrphanUsageTurns,
-  upsertUsageTurnFact
+  upsertUsageTurnFact,
+  listOrphanUsageTurns
 } from './operations'
 import type { UsageStepFactInput, UsageTurnFactInput } from './operations'
 import { getDbConnection } from './sqliteStore'
+import { ATTRIBUTION_SCHEMA_VERSION, BLOCK_V1_ESTIMATOR_VERSION, buildStepAttribution } from '../../src/shared/usageAttribution'
 import { createMemoryAppDb } from './testHelpers'
 import type { AppDatabase } from './index'
 
@@ -65,14 +66,14 @@ function turnFact(overrides: Partial<UsageTurnFactInput> = {}): UsageTurnFactInp
 
 describe('v16 用量统计表迁移', () => {
   it('当前 schema version 包含后续迁移并为 22', () => {
-    expect(DB_SCHEMA_VERSION).toBe(27)
+    expect(DB_SCHEMA_VERSION).toBe(28)
   })
 
   it('v15 库升级到 v16 后两张统计表与索引存在，且重复迁移幂等', () => {
     const conn = createV15Database()
     runMigrations(conn)
 
-    expect(conn.prepare('SELECT value FROM schema_meta WHERE key = ?').get(SCHEMA_META_KEYS.schemaVersion)).toMatchObject({ value: '27' })
+    expect(conn.prepare('SELECT value FROM schema_meta WHERE key = ?').get(SCHEMA_META_KEYS.schemaVersion)).toMatchObject({ value: '28' })
     const tables = (conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map((t) => t.name)
     expect(tables).toContain('usage_step_facts')
     expect(tables).toContain('usage_turn_facts')
@@ -132,6 +133,9 @@ describe('usage_step_facts / usage_turn_facts 读写', () => {
     expect(rows[0].llmServiceId).toBeNull()
     expect(rows[0].appVersion).toBeNull()
     expect(rows[0].cacheSemantics).toBeNull()
+    expect(rows[0].attributionJson).toBeNull()
+    expect(rows[0].estimatorVersion).toBeNull()
+    expect(rows[0].systemTokens).toBeNull()
     db.close()
   })
 
@@ -221,6 +225,76 @@ describe('保留期清理（按天、返回留痕信息）', () => {
       earliestDeletedDay: null,
       latestDeletedDay: null
     })
+    db.close()
+  })
+})
+
+
+describe('v27 → v28 usage 归因迁移', () => {
+  it('升级时保留历史精确 usage 并将新归因列置空，重复打开保持幂等', () => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec("CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL); INSERT INTO schema_meta VALUES ('schema_version', '1');")
+    runMigrations(conn)
+    conn.prepare('INSERT INTO sessions (id, name, model, temperature, max_tokens, created_at, updated_at, skills_state, metadata, schema_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run('legacy-session', 'legacy', 'm', 0.2, 100, 1, 1, '{}', '{}', 1)
+    conn.prepare(`INSERT INTO usage_step_facts (session_id, turn_id, step_id, created_at, day, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, source)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run('legacy-session', 'legacy-turn', 'legacy-step', 1, '2026-01-01', 41, 7, 2, 0, 'api')
+    conn.prepare(`INSERT INTO usage_turn_facts (turn_id, session_id, created_at, day, step_count, tool_call_count, tool_error_count, tool_skipped_count)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run('legacy-turn', 'legacy-session', 1, '2026-01-01', 1, 0, 0, 0)
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run('27', SCHEMA_META_KEYS.schemaVersion)
+    conn.exec('ALTER TABLE usage_step_facts DROP COLUMN system_tokens')
+    conn.exec('ALTER TABLE usage_step_facts DROP COLUMN tools_tokens')
+    conn.exec('ALTER TABLE usage_step_facts DROP COLUMN message_tokens')
+    conn.exec('ALTER TABLE usage_step_facts DROP COLUMN estimator_version')
+    conn.exec('ALTER TABLE usage_step_facts DROP COLUMN attribution_json')
+    conn.exec('ALTER TABLE usage_turn_facts DROP COLUMN tool_attribution_json')
+
+    runMigrations(conn)
+    expect(conn.prepare('SELECT value FROM schema_meta WHERE key = ?').get(SCHEMA_META_KEYS.schemaVersion)).toMatchObject({ value: '28' })
+    expect(conn.prepare('SELECT input_tokens AS inputTokens, output_tokens AS outputTokens, attribution_json AS attributionJson, estimator_version AS estimatorVersion FROM usage_step_facts WHERE turn_id = ?').get('legacy-turn')).toEqual({ inputTokens: 41, outputTokens: 7, attributionJson: null, estimatorVersion: null })
+    expect(conn.prepare('SELECT tool_attribution_json AS toolAttributionJson FROM usage_turn_facts WHERE turn_id = ?').get('legacy-turn')).toEqual({ toolAttributionJson: null })
+    expect(() => runMigrations(conn)).not.toThrow()
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM usage_step_facts').get()).toEqual({ count: 1 })
+    conn.close()
+  })
+
+  it('v28 migration 中途失败时回滚新增列与版本号', () => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec("CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL); INSERT INTO schema_meta VALUES ('schema_version', '1');")
+    runMigrations(conn)
+    conn.exec('ALTER TABLE usage_step_facts DROP COLUMN system_tokens')
+    conn.exec('ALTER TABLE usage_step_facts DROP COLUMN tools_tokens')
+    conn.exec('ALTER TABLE usage_step_facts DROP COLUMN message_tokens')
+    conn.exec('ALTER TABLE usage_step_facts DROP COLUMN estimator_version')
+    conn.exec('ALTER TABLE usage_step_facts DROP COLUMN attribution_json')
+    conn.exec('ALTER TABLE usage_turn_facts DROP COLUMN tool_attribution_json')
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run('27', SCHEMA_META_KEYS.schemaVersion)
+    // 让 step 表 DDL 成功后，在 turn 表 DDL 处失败；runMigrations 应回滚整个迁移事务。
+    conn.exec('DROP TABLE usage_turn_facts')
+    expect(() => runMigrations(conn)).toThrow(/no such table: usage_turn_facts/)
+    expect(conn.prepare('SELECT value FROM schema_meta WHERE key = ?').get(SCHEMA_META_KEYS.schemaVersion)).toMatchObject({ value: '27' })
+    const columns = conn.prepare('PRAGMA table_info(usage_step_facts)').all() as Array<{ name: string }>
+    expect(columns.some((column) => column.name === 'system_tokens')).toBe(false)
+    conn.close()
+  })
+})
+
+describe('v28 usage 归因快照', () => {
+  it('将归因快照和估算版本写入 step 事实，旧行保持 NULL', () => {
+    const db = createMemoryAppDb()
+    const attribution = buildStepAttribution({ system: 'sys', tools: [{ name: 'grep' }], messages: [{ role: 'user', content: 'hello' }] })
+    const { threeSources, ...snapshot } = attribution
+    insertUsageStepFact(db, stepFact({
+      attributionJson: JSON.stringify(snapshot), estimatorVersion: threeSources.estimatorVersion,
+      systemTokens: threeSources.systemTokens, toolsTokens: threeSources.toolsTokens, messageTokens: threeSources.messageTokens
+    }))
+    const row = getUsageStepFactsForTurn(db, 'sess-1', 'turn-1')[0]!
+    expect(row.attributionJson).toContain(`\"schemaVersion\":${ATTRIBUTION_SCHEMA_VERSION}`)
+    expect(row.estimatorVersion).toBe(BLOCK_V1_ESTIMATOR_VERSION)
+    expect(row.systemTokens).not.toBeNull()
+    expect(row.toolsTokens).not.toBeNull()
+    expect(row.messageTokens).not.toBeNull()
+    upsertUsageTurnFact(db, turnFact({ toolAttributionJson: JSON.stringify({ tools: { grep: 1 }, toolSource: { builtin: 1 }, toolResults: { grep: { calls: 1, chars: 2 } } }) }))
+    expect(getUsageTurnFact(db, 'turn-1')?.toolAttributionJson).toContain('toolResults')
     db.close()
   })
 })

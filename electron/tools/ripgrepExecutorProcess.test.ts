@@ -126,8 +126,10 @@ describe('bundled ripgrep process contract', () => {
 
   it('开发态不可用时给出准备指引，诊断不包含路径或 pattern', () => {
     const resolved = { source: 'development' as const, platform: 'darwin' as const, arch: 'arm64' }
-    expect(grepRipgrepUnavailableUserMessage(resolved, 'not_found'))
-      .toBe('开发态内置 ripgrep 未准备（not_found）。请执行 npm run prepare:rg -- --target=darwin-arm64 后重启应用。')
+    const message = grepRipgrepUnavailableUserMessage(resolved, 'not_found')
+    expect(message).toContain('npm run prepare:rg -- --target=darwin-arm64')
+    expect(message).toContain('新 worktree 首次 npm run dev 会自动准备')
+    expect(message).not.toMatch(/pattern|cwd|workdir|(?:\/Users\/|[A-Z]:\\)/i)
     const diagnostic = createGrepRipgrepUnavailableDiagnostic(resolved, 'not_found')
     expect(diagnostic).toBe('source=development;platform=darwin;arch=arm64;status=unavailable;reason=not_found')
     expect(diagnostic).not.toMatch(/pattern|cwd|workdir|path/i)

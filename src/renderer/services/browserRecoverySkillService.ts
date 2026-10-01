@@ -2,6 +2,7 @@ import type { BrowserDependencyToolError } from '../../shared/browserTypes'
 import { activateRecoverySkillInState, resolveDependencyRecoverySkill } from '../../shared/browserDependencyRecovery'
 import type { SessionSkillsState } from '../../shared/domainTypes'
 import { normalizeSessionSkillsState } from '../../shared/domainTypes'
+import { runtimeText } from '../i18n/runtimeText'
 
 export async function activateBrowserRecoverySkillIfNeeded(args: {
   dependencyRecovery: BrowserDependencyToolError
@@ -24,6 +25,6 @@ export async function activateBrowserRecoverySkillIfNeeded(args: {
   return {
     activated: true,
     skillsState,
-    hint: `[Skill] 已加载：${skillName}（内置，依赖恢复）`
+    hint: runtimeText('chat.skillLoaded', { name: skillName })
   }
 }

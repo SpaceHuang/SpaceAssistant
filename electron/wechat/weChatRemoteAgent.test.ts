@@ -2409,7 +2409,7 @@ describe('runWeChatRemoteAgent', () => {
       await expect(fs.readFile(targetPath, 'utf8')).resolves.toBe('created-during-approval')
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'wechat-write-target-drift', reason: 'POLICY_DENY'
+        toolCallId: 'wechat-write-target-drift', reason: 'FACTS_CHANGED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {
@@ -2480,7 +2480,7 @@ describe('runWeChatRemoteAgent', () => {
       expect(executeRead).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'wechat-read-identity-drift', reason: 'POLICY_DENY'
+        toolCallId: 'wechat-read-identity-drift', reason: 'FACTS_CHANGED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {
@@ -2556,7 +2556,7 @@ describe('runWeChatRemoteAgent', () => {
       await expect(fs.access(targetPath)).rejects.toMatchObject({ code: 'ENOENT' })
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'wechat-write-config-drift', reason: 'POLICY_DENY'
+        toolCallId: 'wechat-write-config-drift', reason: 'FACTS_CHANGED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {

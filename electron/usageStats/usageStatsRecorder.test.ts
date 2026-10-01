@@ -152,6 +152,14 @@ describe('recordTurnSummary', () => {
     vi.clearAllMocks()
   })
 
+  it('Turn 汇总写入工具归因 JSON 并读回', () => {
+    const db = createMemoryAppDb()
+    const toolAttributionJson = JSON.stringify({ tools: { grep: 30 }, toolSource: { builtin: 30 }, toolSources: { grep: 'builtin' }, toolResults: { grep: { calls: 1, chars: 12 } } })
+    recordTurnSummary(db, { turnId: 'turn-attribution', sessionId: 'session-attribution', outcome: 'completed', counts: { stepCount: 1, toolCallCount: 1, toolErrorCount: 0, toolSkippedCount: 0 }, toolAttributionJson })
+    expect(getUsageTurnFact(db, 'turn-attribution')?.toolAttributionJson).toBe(toolAttributionJson)
+    db.close()
+  })
+
   it('写入 Turn 汇总（计数与 outcome）', () => {
     const db = createMemoryAppDb()
     recordTurnSummary(db, {

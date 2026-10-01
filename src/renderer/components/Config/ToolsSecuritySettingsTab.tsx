@@ -234,13 +234,13 @@ function PolicyPackageSection({
             if (r.locked) {
               return (
                 <span className={r.enabled ? undefined : 'config-field__hint'}>
-                  {actionLabel(effectiveActionFor(lane, pkg, { action: r.action, locked: r.locked }))}
+                  {actionLabel(effectiveActionFor(lane, pkg, { id: r.id, action: r.action, locked: r.locked }))}
                 </span>
               )
             }
             if (pkg !== 'custom') {
               // 非 custom 档只读：展示当前档位下的生效动作
-              return <span>{actionLabel(effectiveActionFor(lane, pkg, { action: r.action, locked: r.locked }))}</span>
+              return <span>{actionLabel(effectiveActionFor(lane, pkg, { id: r.id, action: r.action, locked: r.locked }))}</span>
             }
             // custom 档：动作域按 lane（B2）——desktop 4 态（deny/allow/ask/auto-evaluator）、
             // wechat/feishu 3 态；覆盖动作即最终动作

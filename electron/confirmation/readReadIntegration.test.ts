@@ -5,9 +5,10 @@ import { spawn } from 'child_process'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => process.cwd() } }))
+const rgAvailability = vi.hoisted(() => ({ unavailable: false }))
 vi.mock('../tools/ripgrepBinary', async (importActual) => {
   const actual = await importActual<typeof import('../tools/ripgrepBinary')>()
-  return { ...actual, resolveRipgrepBinary: () => ({ path: 'fixture-rg', source: 'development', platform: process.platform, arch: process.arch }), inspectRipgrepBinary: async () => ({ available: true }) }
+  return { ...actual, resolveRipgrepBinary: () => ({ path: 'fixture-rg', source: 'development', platform: process.platform, arch: process.arch }), inspectRipgrepBinary: async () => rgAvailability.unavailable ? ({ available: false, reason: 'not_found' as const }) : ({ available: true }) }
 })
 
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
@@ -71,6 +72,23 @@ async function approveRead(root: string, file: string, requestId: string, toolUs
 }
 
 describe('V1 confirmed read executor integration', () => {
+  it('Hosted read gate + production grep executor uses walk fallback when ripgrep is unavailable', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'hosted-grep-fallback-')))
+    try {
+      await fs.writeFile(path.join(root, 'note.txt'), 'fallback marker\n')
+      const input = { path: 'note.txt', pattern: 'fallback marker', output_mode: 'content' }
+      const registry = new ReadConfirmationRegistry()
+      const gate = await evaluateToolCallGate(gateDeps(root, input, 'fallback-e2e-req', 'fallback-e2e-tool', registry, 'grep'))
+      expect(gate.decision).toMatchObject({ type: 'auto-allow', ruleId: 'read-target-workdir-allow' })
+      rgAvailability.unavailable = true
+      const result = await grepExecutor.execute(input, executorContext(root, 'fallback-e2e-req', 'fallback-e2e-tool', gate.readExecutionPermit))
+      expect(result).toMatchObject({ success: true, data: { searchScope: { engine: 'walk' } } })
+      expect(result.data?.output).toContain('note.txt:1:fallback marker')
+    } finally {
+      rgAvailability.unavailable = false
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
   it('许可身份变化形成可关联且不泄露路径的 policy.execution-veto', async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-veto-audit-e2e-')))
     try {

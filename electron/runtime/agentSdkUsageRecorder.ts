@@ -1,6 +1,7 @@
 import { annotateUsageCacheSemantics } from '../../src/shared/usageCacheSemantics'
 import type { AssistantFactEvent } from '../../src/shared/assistantFactAggregator'
 import type { SessionEventInput } from '../sessionEvents'
+import { buildStepAttribution, type StepAttribution } from '../../src/shared/usageAttribution'
 
 export function createAgentSdkUsageSessionEvent(input: {
   requestId: string
@@ -51,8 +52,10 @@ export function createAgentSdkUsageRecorder(input: {
   llmServiceId?: string
   baseUrl?: string
   recordStepUsage?(fact: Record<string, unknown>): void
+  attribution?: StepAttribution
   emitSessionEvent?(event: SessionEventInput): void | Promise<void>
   emitFactEvent?(event: AssistantFactEvent): void
+  attributionForModelTurn?(modelTurn: number): StepAttribution | undefined
 }): (attempt: Record<string, unknown>) => Promise<void> {
   return async (attempt) => {
     const sessionEvent = createAgentSdkUsageSessionEvent({ requestId: input.requestId, turnId: input.turnId, baseUrl: input.baseUrl }, attempt)
@@ -76,6 +79,14 @@ export function createAgentSdkUsageRecorder(input: {
       ...(cacheReadTokens !== undefined ? { cache_read_input_tokens: cacheReadTokens } : {}),
       ...(cacheCreationTokens !== undefined ? { cache_creation_input_tokens: cacheCreationTokens } : {})
     }, { baseUrl: input.baseUrl })
+    const modelTurnNumber = modelTurn as number
+    const rawAttribution = input.attribution ?? input.attributionForModelTurn?.(modelTurnNumber) ?? (attempt.attributionInput && typeof attempt.attributionInput === 'object' ? attempt.attributionInput as Record<string, unknown> : undefined)
+    const attribution = rawAttribution && typeof rawAttribution === 'object' && 'blocks' in rawAttribution
+      ? rawAttribution as unknown as StepAttribution
+      : rawAttribution && typeof rawAttribution.system === 'string' && Array.isArray(rawAttribution.tools) && Array.isArray(rawAttribution.messages)
+        ? buildStepAttribution(rawAttribution as unknown as Parameters<typeof buildStepAttribution>[0])
+        : undefined
+    const attributionSnapshot = attribution ? (({ threeSources: _sources, toolDeclarationSnapshot: _tools, ...snapshot }) => snapshot)(attribution as StepAttribution & { toolDeclarationSnapshot?: unknown }) : undefined
     input.recordStepUsage?.({
       sessionId: input.sessionId,
       turnId: input.turnId,
@@ -86,6 +97,7 @@ export function createAgentSdkUsageRecorder(input: {
         ...(cacheReadTokens ? { cache_read_input_tokens: cacheReadTokens } : {}),
         ...(cacheCreationTokens ? { cache_creation_input_tokens: cacheCreationTokens } : {})
       },
+      ...(attribution ? { attribution: { ...attributionSnapshot, threeSources: attribution.threeSources, ...(attributionSnapshot ? { attributionJson: JSON.stringify(attributionSnapshot) } : {}) } } : {}),
       ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.llmServiceId !== undefined ? { llmServiceId: input.llmServiceId } : {})

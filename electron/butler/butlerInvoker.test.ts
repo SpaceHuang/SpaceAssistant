@@ -128,6 +128,7 @@ import { runButlerTask } from './butlerInvoker'
 import { createAutomationTask, getLatestRunForTask } from './taskStore'
 import { getSession } from '../database'
 import { getDbConnection } from '../database'
+import { getUsageStepFactsForTurn, getUsageTurnFact } from '../database/operations'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, getSessionEventSink, readSessionEvents } from '../sessionEvents'
 import { MODEL_BASELINE } from '../../src/shared/modelBaseline'
@@ -232,6 +233,23 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     const session = run?.sessionId ? getSession(db, run.sessionId) : undefined
     expect(session?.ownership).toBe('automation')
     expect(session?.visibility).toBe('section')
+    const conn = getDbConnection(db)
+    const turn = conn.prepare('SELECT turn_id AS turnId FROM turns WHERE request_id = ?').get('req-butler-1') as { turnId?: string }
+    expect(turn.turnId).toBeTruthy()
+    const stepFacts = getUsageStepFactsForTurn(db, session!.id, turn.turnId!)
+    expect(stepFacts).toHaveLength(1)
+    expect(stepFacts[0]).toMatchObject({ sessionId: session!.id, turnId: turn.turnId, stepId: 'req-butler-1:model:1:attempt:1' })
+    expect(stepFacts[0]?.attributionJson).not.toBeNull()
+    expect(stepFacts[0]?.estimatorVersion).not.toBeNull()
+    const turnFact = getUsageTurnFact(db, turn.turnId!)
+    expect(turnFact).toMatchObject({ sessionId: session!.id, turnId: turn.turnId })
+    expect(turnFact?.toolAttributionJson).not.toBeNull()
+    expect(JSON.parse(turnFact!.toolAttributionJson!)).toMatchObject({
+      tools: expect.any(Object), toolSource: expect.any(Object), toolResults: expect.any(Object)
+    })
+    const persistedToolDimensions = JSON.parse(turnFact!.toolAttributionJson!) as { tools: Record<string, number>; toolSource: Record<string, number> }
+    expect(Object.values(persistedToolDimensions.tools).some((value) => value > 0)).toBe(true)
+    expect(Object.values(persistedToolDimensions.toolSource).some((value) => value > 0)).toBe(true)
   })
 
   it('Hosted transcript commit uncertain leaves the automation run interrupted, not failed', async () => {

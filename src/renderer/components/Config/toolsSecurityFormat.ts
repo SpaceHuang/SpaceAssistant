@@ -25,6 +25,8 @@ export function memoryTierKeyOf(key: CacheKey): NamespaceKeyMap['config'] {
       return 'toolsSecurity.memory.tierMcpTool'
     case 'remote-write':
       return 'toolsSecurity.memory.tierRemoteWrite'
+    case 'script-content':
+      return 'toolsSecurity.memory.tierScriptContent'
   }
 }
 
@@ -41,6 +43,8 @@ export function memoryEntrySummary(key: CacheKey): string {
       return `${key.serverId}/${key.toolName}`
     case 'remote-write':
       return key.sessionId
+    case 'script-content':
+      return 'run_script'
   }
 }
 

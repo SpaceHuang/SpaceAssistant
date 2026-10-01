@@ -133,6 +133,8 @@ export type AgentLogEventName =
   | 'admission.queued'
   | 'admission.deferred'
   | 'admission.degraded'
+  | 'admission.park.failed'
+  | 'admission.park.fallback'
   | 'automation.admission.queued'
   | 'automation.task.triggered'
   | 'automation.task.completed'

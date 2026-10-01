@@ -2,6 +2,7 @@ import type { AppDispatch } from '../store'
 import { addMessage } from '../store/chatSlice'
 import { CURRENT_SCHEMA_VERSION, type Message } from '../../shared/domainTypes'
 import { getAllTestCardFixtures } from './testCardsFixtures'
+import { runtimeText } from '../i18n/runtimeText'
 
 const PREVIEW_DELAY_MS = 400
 
@@ -30,7 +31,7 @@ export type RunTestCardsPreviewDeps = {
 
 export async function runTestCardsPreview(deps: RunTestCardsPreviewDeps): Promise<void> {
   if (previewRunning) {
-    await deps.persistSystemHint('[Dev] 测试卡片预览进行中，请稍候…')
+    await deps.persistSystemHint(runtimeText('chat.devPreview.previewInProgress'))
     return
   }
 
@@ -50,7 +51,7 @@ export async function runTestCardsPreview(deps: RunTestCardsPreviewDeps): Promis
     deps.dispatch(addMessage(userMsg))
     await window.api.messageAppendNonTurn(userMsg)
 
-    await deps.persistSystemHint(`[Dev] 开始展示 ${fixtures.length} 张测试卡片…`)
+    await deps.persistSystemHint(runtimeText('chat.devPreview.showingCards', { count: fixtures.length }))
 
     for (const fixture of fixtures) {
       if (!previewRunning) break
@@ -74,7 +75,7 @@ export async function runTestCardsPreview(deps: RunTestCardsPreviewDeps): Promis
     }
 
     if (previewRunning) {
-      await deps.persistSystemHint('[Dev] 测试卡片展示完成')
+      await deps.persistSystemHint(runtimeText('chat.devPreview.previewComplete'))
     }
   } finally {
     previewRunning = false

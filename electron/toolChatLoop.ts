@@ -668,14 +668,15 @@ export async function runToolChatSession(invocation: AgentInvocation, ports: Run
   } finally {
     invocationLeaseState?.current?.release()
     // 中2（评审复验）：internal/hidden 会话（审批 Agent / automation）的用量不进统计
-    args.hostUsage?.recordTurnSummary?.({
+    const summaryInput = {
       turnId: args.turnId ?? args.requestId,
       sessionId: args.sessionId,
       outcome: turnOutcome,
       counts: turnUsageStats,
       model: args.model,
       llmServiceId: args.llmServiceId
-    })
+    }
+    args.hostUsage?.recordTurnSummary?.(summaryInput)
     if (chatSignal.aborted) {
       invocation.events.notify?.({ kind: 'request-all-cancelled', requestId: args.requestId })
     }

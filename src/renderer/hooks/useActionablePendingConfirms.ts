@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import type { PendingConfirmItem } from '../services/pendingConfirmStore'
 import type { Session } from '../../shared/domainTypes'
+import { runtimeText } from '../i18n/runtimeText'
 
 export function shouldShowToolConfirm(
   item: PendingConfirmItem,
@@ -33,13 +34,13 @@ export function labelForPendingConfirmItem(
   sessionName: string
 ): string {
   if (item.toolName === 'run_script') {
-    return `${sessionName} · 待确认 · 运行已有脚本`
+    return runtimeText('chat.pending.confirmScript', { session: sessionName })
   }
   if (item.toolName === 'run_shell') {
-    return `${sessionName} · 待确认 · Shell 命令`
+    return runtimeText('chat.pending.confirmShell', { session: sessionName })
   }
   if (item.toolName === 'run_lark_cli') {
-    return `${sessionName} · 待确认 · 飞书 CLI`
+    return runtimeText('chat.pending.confirmFeishu', { session: sessionName })
   }
   return `${sessionName} · ${item.toolName}`
 }

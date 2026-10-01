@@ -39,6 +39,7 @@ import { estimateTokensFromUtf8Text } from '../src/shared/contextUsageEstimate'
 import { planTurnBoundarySurfaceCompaction } from '../src/shared/turnBoundaryCompaction'
 import { extractToolPairIds, validateSurfaceForSend } from '../src/shared/surfacePreflight'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
+import { createApplicationAdmissionPort } from './runtime/applicationAdmissionPort'
 import { toCanonicalModelMessages } from './runtime/canonicalHistory'
 import { createHostedTurnHandoff } from './runtime/hostedTurnHandoff'
 import { loadAcceptedTurnMessages } from './runtime/acceptedTurnContext'
@@ -271,7 +272,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
       let eventWriter: SessionEventSink | undefined
       let eventTurnId = ''
       let finalizePromise: Promise<FinalizeResult> | undefined
-      let activeAdmissionTicket: import('./runtime/callAdmissionGate').AdmissionTicket | undefined
+      let releaseApplicationAdmission: (() => void) | undefined
       let applicationAdmission: import('../src/shared/agent/invocation').AgentHostPorts['applicationAdmission']
       // 台账写入失败必须可见，但不能把整轮对话打成 llm.error（瞬时 IO 错误会丢弃已流式输出的内容）。
       // 这里只累计，由 finalizeTurn 统一上报为 eventPersistenceFailed。
@@ -321,23 +322,16 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         }, { signal: turnCancelController.signal })
         if (typeof payload.turnId === 'string' && payload.turnId) admissionCancelControllers.delete(payload.turnId)
         if (!admission.ok) throw new Error(`当前调用暂不可运行：${admission.verdict === 'rejected' ? admission.cause : admission.verdict}`)
-        activeAdmissionTicket = admission.ticket
-        applicationAdmission = {
-          park: (checkpoint?: unknown) => {
-            if (!activeAdmissionTicket) return undefined
-            const parked = admissionGate.park(activeAdmissionTicket)
-            if (parked) activeAdmissionTicket = undefined
-            return parked ? { ...parked, checkpoint } : undefined
-          },
-          discard: (handle: unknown) => { if (handle) admissionGate.discard(handle as never) },
-          resume: async (handle: unknown, options?: { signal?: AbortSignal; deadlineAt?: number }) => {
-            if (!handle || activeAdmissionTicket) return { ok: false as const, retryable: false, cause: 'invalid-park-handle' }
-            const resumed = await admissionGate.resume(handle as never, options)
-            if (!resumed.ok) return { ok: false as const, retryable: resumed.retryable, cause: resumed.cause }
-            activeAdmissionTicket = resumed.ticket
-            return { ok: true as const }
-          }
-        }
+        const admissionPort = createApplicationAdmissionPort(admissionGate, admission.ticket, () => {
+          logAgentEvent('warn', 'admission.park.fallback', {
+            requestId,
+            ...(typeof payload.turnId === 'string' && payload.turnId ? { turnId: payload.turnId } : {}),
+            lane: 'desktop',
+            reason: 'admission-ticket-retained'
+          })
+        })
+        applicationAdmission = admissionPort.port
+        releaseApplicationAdmission = admissionPort.release
         const turnId = typeof payload.turnId === 'string' ? payload.turnId.trim() : ''
         const turnStartToken = typeof payload.turnStartToken === 'string' ? payload.turnStartToken : ''
         if (deps.turnRuntime && turnId && turnStartToken) {
@@ -666,7 +660,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             : {})
         }
       } finally {
-        activeAdmissionTicket?.release()
+        releaseApplicationAdmission?.()
       }
   }
 

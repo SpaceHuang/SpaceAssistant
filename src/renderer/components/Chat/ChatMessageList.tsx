@@ -7,6 +7,8 @@ import type { ChatMessageActions } from './ChatMessageActions'
 import type { PendingConfirmItem } from '../../services/pendingConfirmStore'
 import { restorePendingConfirmToolCalls } from '../../services/resolveMessageToolsInteractive'
 import { useTurnDisplay } from '../../hooks/useTurnDisplay'
+import { buildAssistantActivityTimeline } from '../../../shared/assistantActivityTimeline'
+import type { ActivityDisplayItem } from '../../../shared/turnDisplayProtocol'
 
 /** 空确认映射常量：保证无确认项时行内 props 引用稳定（ChatBubble.memo 浅比较依赖）。 */
 const EMPTY_CONFIRM_READY: Record<string, boolean | undefined> = {}
@@ -88,6 +90,33 @@ export function ChatMessageList({
             }) }
           : m
         const toolsInteractive = resolveToolsInteractive(boundedMessage)
+        const missingPendingActivityItems = display ? pendingConfirmItems.filter((item) =>
+          item.sessionId === m.sessionId &&
+          boundedMessage.toolCalls?.some((tool) => tool.id === item.toolUseId) &&
+          !display.message.activity.some((entry) => entry.kind === 'tool' && entry.toolId === item.toolUseId)
+        ) : []
+        const displayActivity: ActivityDisplayItem[] | undefined = display && (m.status === 'streaming' || display.message.id === m.id)
+          ? missingPendingActivityItems.length === 0
+            ? display.message.activity
+            : missingPendingActivityItems.every((item) => item.activityIndex !== undefined)
+              ? (() => {
+                  const activity = [...display.message.activity]
+                  for (const item of [...missingPendingActivityItems].sort((a, b) => b.activityIndex! - a.activityIndex!)) {
+                    const index = Math.max(0, Math.min(item.activityIndex!, activity.length))
+                    activity.splice(index, 0, { kind: 'tool', toolId: item.toolUseId })
+                  }
+                  return activity
+                })()
+              : buildAssistantActivityTimeline(boundedMessage).map((item): ActivityDisplayItem => {
+                  if (item.kind !== 'text') return item
+                  const existing = display.message.activity.find((entry) => entry.kind === 'text' && entry.segmentIndex === item.segmentIndex)
+                  return {
+                    ...item,
+                    contentStart: existing?.kind === 'text' ? existing.contentStart : 0,
+                    contentEnd: existing?.kind === 'text' ? existing.contentEnd : 0
+                  }
+                })
+          : undefined
         const rowFocus =
           focusToolUseId &&
           m.toolCalls?.some((tc) => tc.id === focusToolUseId && tc.status === 'confirming')
@@ -99,7 +128,7 @@ export function ChatMessageList({
             key={m.id}
             message={boundedMessage}
             turnId={rowTurnId}
-            displayActivity={display && (m.status === 'streaming' || display.message.id === m.id) ? display.message.activity : undefined}
+            displayActivity={displayActivity}
             displayToolSummaries={display && (m.status === 'streaming' || display.message.id === m.id) ? Object.fromEntries(display.message.toolCalls.map((tool) => [tool.id, tool.display])) : undefined}
             confirmationReadyByToolId={confirmationReadyBySession[m.sessionId] ?? EMPTY_CONFIRM_READY}
             enter={m.id === enterMessageId}

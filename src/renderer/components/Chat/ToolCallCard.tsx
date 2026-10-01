@@ -125,6 +125,7 @@ function sameToolRecord(a: ToolCallRecord, b: ToolCallRecord): boolean {
     && a.memoryTiers === b.memoryTiers
     && a.confirmDiff === b.confirmDiff
     && a.shellSecurityHints === b.shellSecurityHints
+    && a.scriptPathHint === b.scriptPathHint
     && a.autoApproveFallback === b.autoApproveFallback
     && a.dangerInfo === b.dangerInfo
     && a.mcp === b.mcp
@@ -219,6 +220,13 @@ export const ToolCallCard = memo(function ToolCallCard({
     ? { ...loadedDetail, ...sourceRecord, input: Object.keys(sourceRecord.input).length ? sourceRecord.input : loadedDetail.input, result: sourceRecord.result ?? loadedDetail.result }
     : sourceRecord
   const approvalPresentation = record.approval ? projectApprovalPresentation(record.approval) : undefined
+  const approvalReasonLabel = approvalPresentation?.reasonCode === 'analysis-incomplete'
+    ? t('confirm.reason.analysisIncomplete')
+    : approvalPresentation?.reasonCode === 'target-changed'
+      ? t('confirm.reason.targetChanged')
+      : approvalPresentation?.reasonCode === 'policy-rule' && approvalPresentation.reasonRuleId
+        ? t('confirm.reason.policyRule', { ruleId: approvalPresentation.reasonRuleId })
+        : approvalPresentation?.reason
   const mcp = isMcpRecord(record)
   const currentLoadedDetail = loadedDetail && loadedForSource === sourceRecord ? loadedDetail : undefined
   const cardRef = useRef<HTMLDivElement>(null)
@@ -526,7 +534,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   if (record.status === 'confirming' && record.autoAnswerer) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
-        <div className="sa-chat-inset-code" role="status">
+        <div className="sa-chat-inset-code sa-auto-answering-status" role="status">
           {t('confirm.autoAnswering')}
         </div>
         {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
@@ -588,7 +596,7 @@ export const ToolCallCard = memo(function ToolCallCard({
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         {fallbackBannerNode}
-        <ScriptConfirmCard record={record} onConfirm={onConfirm} />
+        <ScriptConfirmCard record={record} onConfirm={onConfirm} reasonLabel={approvalReasonLabel} />
         {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
     )
@@ -693,7 +701,7 @@ export const ToolCallCard = memo(function ToolCallCard({
           aria-hidden={!showDetail}
         >
           <div className="tool-row-detail__inner">
-          {approvalPresentation?.reason ? <div className="tool-row-detail__message">{approvalPresentation.reason}</div> : null}
+          {approvalReasonLabel ? <div className="tool-row-detail__message">{approvalReasonLabel}</div> : null}
           {mcp && showDetail && durationPhases.totalMs !== undefined ? (
             <div className="tool-row-detail__message tool-row__duration-phases">
               {durationPhases.waitingMs !== undefined ? `${t('mcp.waitingConfirm', { value: formatToolDuration(durationPhases.waitingMs) })} · ` : ''}

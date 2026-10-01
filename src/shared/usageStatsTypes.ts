@@ -78,3 +78,43 @@ export const DEFAULT_USAGE_RETENTION_DAYS: UsageRetentionDays = '365'
 
 /** 折线图数据量保护（§5.3.2：最多渲染 366 个点）。 */
 export const USAGE_MAX_RANGE_DAYS = 366
+
+/** 按 estimatorVersion 隔离的归因快照；各构成和严格等于对应可归因输入子集。 */
+export type UsageAttributionVersion = {
+  estimatorVersion: string
+  attributableInputTokens: number
+  unattributedInputTokens: number
+  coverageRatio: number | null
+  composition: {
+    system: number
+    tools: number
+    messageBlocks: Record<string, number>
+    /** Block categories present in the request but intentionally left unestimated, such as images. */
+  }
+}
+
+/** 只读归因查询结果，与同条件 UsageSummary.inputTokens 共用精确分母。 */
+export type UsageAttributionDailyPoint = {
+  day: string
+  estimatorVersion: string
+  inputTokens: number
+  composition: UsageAttributionVersion['composition']
+}
+
+export type UsageAttributionSummary = {
+  exactInputTokens: number
+  byEstimatorVersion: UsageAttributionVersion[]
+  dailyByEstimatorVersion: UsageAttributionDailyPoint[]
+  toolDimensions: {
+    tools: Record<string, number>
+    toolSource: Record<string, number>
+    toolSources: Record<string, 'builtin' | 'mcp' | 'skill' | 'other'>
+    toolResults: Record<string, { calls: number; chars: number }>
+  }
+}
+
+/** 当前会话最近一条精确 usage step 的归因快照；不可得时 API 返回 null。 */
+export type UsageLatestAttribution = UsageAttributionVersion & {
+  exactInputTokens: number
+  coverageRatio: number
+}

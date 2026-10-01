@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Tooltip } from 'antd'
 import { useTranslation } from 'react-i18next'
 import { useTypedSelector } from '../../hooks'
@@ -11,6 +11,7 @@ import {
 } from '../../../shared/contextUsageEstimate'
 import { effectiveMaxTokensForBuiltinToolLoop } from '../../../shared/llm/toolLoopMaxTokens'
 import { resolveSessionModelBinding } from '../../services/sessionModelBinding'
+import type { UsageLatestAttribution } from '../../../shared/usageStatsTypes'
 
 const RING_SIZE = 28
 const CENTER = RING_SIZE / 2
@@ -65,6 +66,18 @@ export function ContextUsageRing({
   const config = useTypedSelector((s) => s.config.config)
   const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const currentSession = useTypedSelector((s) => s.session.list.find((session) => session.id === sessionId))
+  const [latestAttribution, setLatestAttribution] = useState<UsageLatestAttribution | null>(null)
+
+  useEffect(() => {
+    let active = true
+    setLatestAttribution(null)
+    if (sessionId) {
+      void window.api.usageStatsLatestAttribution(sessionId)
+        .then((result) => { if (active) setLatestAttribution(result) })
+        .catch(() => { if (active) setLatestAttribution(null) })
+    }
+    return () => { active = false }
+  }, [sessionId, lastUsage])
 
   const pendingImageTokens = useMemo(() => {
     if (!pendingImageAttachments?.length) return 0
@@ -157,6 +170,32 @@ export function ContextUsageRing({
       lines.push(t('tooltip.historyImages', { count: historyImageTokens }))
     }
     lines.push(t('tooltip.separator'))
+    if (latestAttribution && latestAttribution.exactInputTokens > 0 && latestAttribution.attributableInputTokens > 0) {
+      lines.push(t('tooltip.attributionTitle', { version: latestAttribution.estimatorVersion }))
+      lines.push(t('tooltip.attributionCoverage', { percent: Math.round(latestAttribution.coverageRatio * 100) }))
+      if (latestAttribution.unattributedInputTokens > 0) {
+        lines.push(t('tooltip.unattributed', { count: formatNum(latestAttribution.unattributedInputTokens, locale) }))
+      }
+      lines.push(t('tooltip.attributionExact', { count: formatNum(latestAttribution.exactInputTokens, locale) }))
+      lines.push(t('tooltip.attributionEstimated'))
+      lines.push(`${t('tooltip.system')}: ${formatNum(latestAttribution.composition.system, locale)}`)
+      lines.push(`${t('tooltip.tools')}: ${formatNum(latestAttribution.composition.tools, locale)}`)
+      for (const [key, tokens] of Object.entries(latestAttribution.composition.messageBlocks)) {
+        const [role, type] = key.split('|')
+        const roleLabel = role === 'system' ? t('tooltip.roleSystem')
+          : role === 'user' ? t('tooltip.roleUser')
+            : role === 'assistant' ? t('tooltip.roleAssistant')
+              : role === 'tool' ? t('tooltip.roleTool') : role
+        const typeLabel = type === 'text' ? t('tooltip.blockText')
+          : type === 'thinking' ? t('tooltip.blockThinking')
+            : type === 'tool_use' ? t('tooltip.blockToolUse')
+              : type === 'tool_result' ? t('tooltip.blockToolResult')
+                : type === 'image' ? t('tooltip.blockImage')
+                  : type === 'document' ? t('tooltip.blockDocument')
+                    : type === 'audio' ? t('tooltip.blockAudio') : type
+        lines.push(`${role && type ? `${roleLabel} · ${typeLabel}` : key}: ${formatNum(tokens, locale)}`)
+      }
+    }
     lines.push(
       `${t('tooltip.total')} ${formatNum(display.estimatedOccupancy, locale)} / ${formatNum(display.maximumContext, locale)}（${display.percentUsed.toFixed(1)}%）`
     )
@@ -171,7 +210,7 @@ export function ContextUsageRing({
         ))}
       </div>
     )
-  }, [hasData, lastUsage, display, pendingImageTokens, historyImageTokens, thinkingTokensToExclude, t, i18n.language])
+  }, [hasData, lastUsage, display, pendingImageTokens, historyImageTokens, thinkingTokensToExclude, latestAttribution, t, i18n.language])
 
   const ariaLabel =
     hasData && display

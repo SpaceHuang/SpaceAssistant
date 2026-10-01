@@ -7,10 +7,11 @@ import type { SessionEventInput } from '../sessionEvents'
 import type { AgentNotifyEvent } from '../../src/shared/agent/invocation'
 import type { FileTreeChangeEvent } from '../../src/shared/fileTreeSync'
 import type { ExecutionLane } from '../../src/shared/confirmation/types'
-import { buildRequestContextPayload, buildRequestHeaderPayload } from '../../src/shared/requestContext'
+import { buildRequestContextPayload, buildRequestHeaderPayload, computeAnthropicCacheBreakpointPositions } from '../../src/shared/requestContext'
 import { projectRequestHeaderForWindow } from './requestHeaderProjection'
 import { computeContextPressure } from '../../src/shared/contextMeter'
 import { projectUsageAfterToolResults, type ContextUsageRaw } from '../../src/shared/contextUsageEstimate'
+import { accumulateToolDeclarationSnapshot, accumulateToolResultVolume, buildStepAttribution, emptyTurnToolDimension, summarizeToolDeclarations, type TurnToolDimension } from '../../src/shared/usageAttribution'
 
 type ObserverChunk = Exclude<import('../../packages/agent-sdk/src/model').StreamChunk, { type: 'finish' }>
 
@@ -37,12 +38,16 @@ export function createAgentSdkDesktopObserver(input: {
   notify?(event: AgentNotifyEvent): void
   onFileTreeChanged?(event: FileTreeChangeEvent): void
   mapToolResult?(call: { toolCallId: string; toolName: string; input: Record<string, unknown> }, output: unknown, isError: boolean): NonNullable<Extract<AssistantFactEvent, { type: 'tool-result' }>['result']>
+  onUsageAttribution?(input: { modelTurn: number; attribution: ReturnType<typeof buildStepAttribution> & { toolDeclarationSnapshot: ReturnType<typeof summarizeToolDeclarations> } }): void
+  onTurnToolAttribution?(dimension: TurnToolDimension): void
 }): AgentTurnObserver {
   let pendingChunks: ObserverChunk[] = []
   let streamedText = ''
   let streamedThinking = ''
   let hasPreview = false
   let recoveredOutput = false
+  const turnToolDimension: TurnToolDimension = emptyTurnToolDimension()
+  const previousCacheBreakpointsByWindow = new Map<string, string[]>()
   let activeModelTurn = 0
   let lastAssistantActivityTimestamp = 0
   let newTextSegmentAfterTool = false
@@ -98,12 +103,25 @@ export function createAgentSdkDesktopObserver(input: {
       ...(tool.strictSchema === 'require' ? { strict: true } : {})
     }))
     const requestId = `${input.requestId}:round:${request.modelTurn}`
+    const cacheWindowId = request.windowId ?? input.windowId ?? input.requestId
+    const cacheControl = process.env.PI_CACHE_RETENTION !== 'none'
+    const cacheBreakpointPositions = computeAnthropicCacheBreakpointPositions({ system, messages, cacheControl })
+    const previousCacheBreakpoints = previousCacheBreakpointsByWindow.get(cacheWindowId) ?? null
+    const cacheBreakpoints = {
+      count: cacheBreakpointPositions.positions.length,
+      positions: cacheBreakpointPositions.positions,
+      tailIsString: cacheBreakpointPositions.tailIsString,
+      prevPositions: previousCacheBreakpoints,
+      moved: previousCacheBreakpoints !== null && JSON.stringify(previousCacheBreakpoints) !== JSON.stringify(cacheBreakpointPositions.positions)
+    }
+    previousCacheBreakpointsByWindow.set(cacheWindowId, [...cacheBreakpointPositions.positions])
     const header = buildRequestHeaderPayload({
       requestId,
       system,
       tools,
       messages: messages as unknown[],
       requiredSurfaceSet,
+      cacheBreakpoints,
       toolExecutionCheckpoint: {
         completedToolUseIds: messages.flatMap((message) => message.role === 'tool' ? [message.toolCallId] : []),
         replayForbidden: false
@@ -278,6 +296,16 @@ export function createAgentSdkDesktopObserver(input: {
     criticalModelResponseProjection: true,
     criticalModelAttemptUsageProjection: true,
     criticalToolProjection: true,
+    prepareUsageAttribution({ modelTurn, request }) {
+      const system = request.messages.filter((message) => message.role === 'system').map((message) => typeof message.content === 'string' ? message.content : '').join('\n')
+      const messages = request.messages.filter((message) => message.role !== 'system')
+      const tools = (request.tools ?? []).map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema, ...(tool.strictSchema === 'require' ? { strict: true } : {}) }))
+      const toolDeclarationSnapshot = summarizeToolDeclarations(tools)
+      accumulateToolDeclarationSnapshot(turnToolDimension, toolDeclarationSnapshot)
+      const attribution = { ...buildStepAttribution({ system, tools, messages }), toolDeclarationSnapshot }
+      input.onUsageAttribution?.({ modelTurn, attribution })
+      return attribution
+    },
     async prepareProviderRetry(retry) {
       return input.sessionEventLocation ? {
         location: input.sessionEventLocation,
@@ -463,6 +491,8 @@ export function createAgentSdkDesktopObserver(input: {
     },
     async onToolStarted() {},
     async onToolFinished(call, result) {
+      const toolName = normalizeExternalToolName(call.toolName).canonicalName
+      accumulateToolResultVolume(turnToolDimension, toolName, result.output)
       const isError = result.isError ?? false
       const output = result.output && typeof result.output === 'object' && !Array.isArray(result.output)
         ? result.output as Record<string, unknown>
@@ -490,6 +520,7 @@ export function createAgentSdkDesktopObserver(input: {
       if (input.stageAssistantContentUntilTurnFinished || recoveredOutput) emitFact({ type: 'content-reconciled', text: result.text })
     },
     async onTurnFinished() {
+      input.onTurnToolAttribution?.(structuredClone(turnToolDimension))
       recoveredOutput = false
       hasPreview = false
     },

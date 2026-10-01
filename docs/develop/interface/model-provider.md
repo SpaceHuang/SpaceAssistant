@@ -45,22 +45,30 @@ async function collectModelAttempt(
 const collectModelStream = collectModelAttempt   // 兼容别名
 ```
 
-返回：
+返回（**判别式联合**：取消分支允许缺 `usage`）：
 
 ```ts
-type CollectedModelStream = Readonly<{
-  chunks: readonly Exclude<StreamChunk, { type: 'finish' }>[]
-  usage: Extract<StreamChunk, { type: 'usage' }>
-  finish: Extract<StreamChunk, { type: 'finish' }>
-}>
+type CancelledFinish = Readonly<{ type: 'finish'; reason: 'cancelled' }>
+type NonCancelledFinish = Readonly<{ type: 'finish'; reason: 'stop' | 'tool-calls' | 'length' }>
+
+type CollectedModelStream =
+  | Readonly<{ chunks: readonly Exclude<StreamChunk, { type: 'finish' }>[]; finish: CancelledFinish; usage?: Extract<StreamChunk, { type: 'usage' }> }>
+  | Readonly<{ chunks: readonly Exclude<StreamChunk, { type: 'finish' }>[]; finish: NonCancelledFinish; usage: Extract<StreamChunk, { type: 'usage' }> }>
 ```
+
+`finish.reason === 'cancelled'` 是**唯一**允许 `usage` 缺失的分支：被中断的 provider 可能还没吐出 usage。消费方必须显式处理该分支，不能假定 `usage` 一定存在。
 
 校验规则（违规一律抛 `InvalidModelStreamError`，`code = 'INVALID_MODEL_STREAM'`）：
 
 - `finish` 之后不得再出现任何事件（`event received after finish`）。
-- `usage` 必须唯一（`duplicate usage`）、必须在 `finish` 之前（`finish received before usage`）、流结束时必须存在（`stream ended without usage` / `stream ended without finish`）。
-- `finish.reason` 必须与 tool-call 块一致：非 `length` 时 `(reason === 'tool-calls') !== hasToolCall` 即报错。
+- `usage` 必须唯一（`duplicate usage`）、必须在 `finish` 之前（`finish received before usage`）——**cancelled finish 例外**（取消可以不经过 usage）。
+- 流结束时必须有 `finish`（`stream ended without finish`）；非 cancelled 流结束时必须有 `usage`（`stream ended without usage`），cancelled 流允许缺失。
+- `finish.reason` 必须与 tool-call 块一致：`reason` 既非 `length` 也非 `cancelled` 时，`(reason === 'tool-calls') !== hasToolCall` 即报错。
 - `tool-call`：`toolCallId` 非空且唯一；`input` 必须是非数组对象。
+
+取消分支的消费方约定见 [turn-loop.md](./turn-loop.md#循环阶段概览)：turn loop 会先做 cancelled attempt 结算（投影 usage + `model-attempt-discarded`），再抛取消 / 超时错误。
+
+**provider 侧实现约定**（`ModelProvider.stream`）：取消时只在**确有真实用量**时先 yield `usage`、再 yield `finish: { reason: 'cancelled' }`；**不得**用 `usage: 0/0` 之类的伪造值占位，没有用量就直接给 cancelled finish。cancelled finish 之后不得再产出任何事件。
 
 观察者：
 

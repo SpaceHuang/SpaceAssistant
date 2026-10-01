@@ -233,6 +233,11 @@
       "riskHint": "This capability is built into the product; mutating capabilities (e.g. adding an MCP connection) require confirmation.",
       "allow": "Allow",
       "deny": "Deny"
+    },
+    "reason": {
+      "analysisIncomplete": "Script analysis is incomplete. Please review this action.",
+      "targetChanged": "The target changed after confirmation, so the action was not executed.",
+      "policyRule": "Security rule “{{ruleId}}” requires confirmation."
     }
   },
   "chatView": {

@@ -37,6 +37,7 @@ import { invalidateSkillsCache } from './skills/skillCache'
 import { isTruncatedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { getUsageStepFactsForTurn, getUsageTurnFact } from './database/operations'
+import { queryUsageAttribution } from './usageStats/usageStatsQueries'
 import type { AssistantFactEvent } from '../src/shared/assistantFactAggregator'
 import { logAgentEvent } from './agentLogger/agentLogger'
 
@@ -415,6 +416,25 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       const toolResult = sessionEvents.find((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCall.payload.toolUseId)
       expect(toolResult?.payload.stepId).toBe(toolCall.payload.stepId)
     }
+    const usageSteps = getUsageStepFactsForTurn(db, session.id, 'hosted-turn')
+    expect(usageSteps.length).toBeGreaterThan(0)
+    expect(usageSteps.every((step) => step.sessionId === session.id && step.turnId === 'hosted-turn')).toBe(true)
+    expect(new Set(usageSteps.map((step) => step.stepId)).size).toBe(usageSteps.length)
+    expect(usageSteps.every((step) => step.attributionJson !== null && step.estimatorVersion !== null)).toBe(true)
+    const usageTurn = getUsageTurnFact(db, 'hosted-turn')
+    expect(usageTurn).toMatchObject({ sessionId: session.id, turnId: 'hosted-turn' })
+    expect(usageTurn?.toolAttributionJson).not.toBeNull()
+    expect(JSON.parse(usageTurn!.toolAttributionJson!)).toMatchObject({
+      tools: expect.any(Object), toolSource: expect.any(Object), toolResults: expect.any(Object)
+    })
+    const persistedToolDimensions = JSON.parse(usageTurn!.toolAttributionJson!) as { tools: Record<string, number>; toolSource: Record<string, number> }
+    expect(Object.values(persistedToolDimensions.tools).some((value) => value > 0)).toBe(true)
+    expect(Object.values(persistedToolDimensions.toolSource).some((value) => value > 0)).toBe(true)
+    const queriedUsage = queryUsageAttribution(db, {
+      from: usageSteps[0]!.day!, to: usageSteps[0]!.day!, dimensions: { sessionIds: [session.id] }
+    })
+    expect(Object.values(queriedUsage.toolDimensions.tools).some((value) => value > 0)).toBe(true)
+    expect(Object.values(queriedUsage.toolDimensions.toolSource).some((value) => value > 0)).toBe(true)
     await expect(fs.readFile(path.join(workDir, 'created.txt'), 'utf8')).resolves.toBe('Hosted SDK write result')
     evaluateGateSpy.mockRestore()
   })
@@ -3499,7 +3519,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     await expect(fs.readFile(targetPath, 'utf8')).resolves.toBe(toolName === 'edit_file' ? 'replacement-after-approval-request' : 'created-after-approval-request')
     const history = await new SqliteAgentHistory(getDbConnection(db)).read('hosted-target-drift-request')
     expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-      toolCallId: `desktop-${toolName}-target-drift`, reason: 'POLICY_DENY'
+      toolCallId: `desktop-${toolName}-target-drift`, reason: 'FACTS_CHANGED'
     })
     expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
   })
@@ -4050,7 +4070,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       else await expect(fs.readFile(targetPath, 'utf8')).resolves.toBe('original content to edit')
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId, reason: 'POLICY_DENY'
+        toolCallId, reason: 'FACTS_CHANGED'
       })
       expect(history.events.some((event) =>
         (event.kind === 'tool-call-started' || event.kind === 'tool-call-finished') &&
@@ -4131,7 +4151,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       expect(executeRead).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(db)).read('hosted-read-identity-drift-request')
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'desktop-read-identity-drift', reason: 'POLICY_DENY'
+        toolCallId: 'desktop-read-identity-drift', reason: 'FACTS_CHANGED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {
@@ -4218,7 +4238,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       expect(executeDirectory).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(`hosted-${toolName}-read-drift-request`)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: `desktop-${toolName}-read-drift`, reason: 'POLICY_DENY'
+        toolCallId: `desktop-${toolName}-read-drift`, reason: 'FACTS_CHANGED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {

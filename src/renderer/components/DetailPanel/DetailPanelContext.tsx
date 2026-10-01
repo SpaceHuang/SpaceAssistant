@@ -25,6 +25,7 @@ import {
   subscribeFileContentSync
 } from '../../services/fileContentSyncBus'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import { runtimeText } from '../../i18n/runtimeText'
 import {
   canGoBack,
   canGoForward,
@@ -118,7 +119,7 @@ function applyReadResult(
       previewContent: null,
       imageDataUrl: null,
       fileType,
-      loadError: '文件过大，无法预览（最大 2MB）',
+      loadError: runtimeText('detailPanel.fileTooLarge'),
       unsupportedExt: null,
       tooLargeSize: result.size
     }
@@ -254,7 +255,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
       setDisplayUrl(url)
     }
     if (!url) {
-      setWebViewError('无法生成本地网页预览地址')
+      setWebViewError(runtimeText('detailPanel.previewUrlFailed'))
     }
   }, [])
 
@@ -446,7 +447,7 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
     async (rawUrl: string) => {
       const normalized = normalizeViewerUrl(rawUrl)
       if (!normalized) {
-        message.error('无效的 URL')
+        message.error(runtimeText('detailPanel.invalidUrl'))
         return
       }
       cancelFileContentSync()
@@ -478,12 +479,12 @@ export function DetailPanelProvider({ children }: { children: ReactNode }) {
   const refreshFile = useCallback(async () => {
     if (contentMode === 'url' || (fileType === 'html' && viewMode === 'render')) {
       refreshPage()
-      message.success('已刷新')
+      message.success(runtimeText('detailPanel.refreshed'))
       return
     }
     if (!selectedFile) return
     await loadFile(selectedFile, { preserveViewMode: true })
-    message.success('已刷新')
+    message.success(runtimeText('detailPanel.refreshed'))
   }, [contentMode, fileType, loadFile, refreshPage, selectedFile, viewMode, message])
 
   useEffect(() => {

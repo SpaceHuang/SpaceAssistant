@@ -1,4 +1,5 @@
 import { canCollectToWiki } from '../../shared/wikiImportPaths'
+import { runtimeText } from '../i18n/runtimeText'
 
 export type WikiImportRawResult =
   | { ok: true; rawRelPath: string; copied: boolean }
@@ -19,8 +20,8 @@ export async function importRawToWiki(srcRelPath: string): Promise<WikiImportRaw
 
 export function formatCollectToWikiToast(result: Extract<WikiImportRawResult, { ok: true }>): string {
   return result.copied
-    ? `已导入 raw：${result.rawRelPath}，Ingest 已开始`
-    : `Ingest 已开始：${result.rawRelPath}`
+    ? runtimeText('wiki.importedRaw', { name: result.rawRelPath })
+    : runtimeText('wiki.ingestStarted', { name: result.rawRelPath })
 }
 
 export function triggerWikiIngest(rawRelPath: string): void {
@@ -38,7 +39,7 @@ export async function collectToWiki(
   }
 ): Promise<WikiImportRawResult | null> {
   if (!options.wikiEnabled) {
-    options.onError?.('请先在设置中启用 Wiki')
+    options.onError?.(runtimeText('wiki.enableFirst'))
     return null
   }
   if (!options.sessionId) {
@@ -48,7 +49,7 @@ export async function collectToWiki(
 
   const status = await window.api.wikiStatus()
   if (!status.initialized) {
-    options.onError?.('Wiki 尚未初始化，请先在设置或 Wiki 分段中初始化')
+    options.onError?.(runtimeText('wiki.initializeFirst'))
     return null
   }
 

@@ -87,6 +87,7 @@ import { useChatMessageEnter } from '../../hooks/useChatMessageEnter'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { filterMessagesForChatApi, filterOutQueuedUserMessages, listQueuedUserMessages } from '../../../shared/chatMessageQueue'
 import { QueuedTaskBar } from './QueuedTaskBar'
+import { runtimeText } from '../../i18n/runtimeText'
 import type { OutboundContextIntent } from '../../../shared/outboundProtocol'
 import { ChatMessageListSearch } from '../Search/ChatMessageListSearch'
 
@@ -544,7 +545,7 @@ export function ChatView() {
         if (effectiveSessionId && effectiveSessionId !== sessionId) dispatch(setSession(effectiveSessionId))
         if (cmd.kind === 'test-pop-run') {
           await window.api.testPopShow()
-          message.info('浮动通知已弹出（测试数据），点击通知或手动关闭 ✕ 按钮关闭。')
+          message.info(runtimeText('chat.devPreview.notificationShown'))
           return result
         }
         if (cmd.kind === 'test-cards-run') {
@@ -798,9 +799,7 @@ export function ChatView() {
         .then((updated) => {
           if (updated) dispatch(upsertSession(updated))
         })
-      void send(
-        `/wiki query 请将以下助手回答归档为 Wiki 新页（建议 wiki/queries/${date}-archive.md），更新 index 与 log，并确保正文结构清晰：\n\n${excerpt}`
-      )
+      void send(runtimeText('chat.wikiArchivePrompt', { name: date, content: excerpt }))
     },
     [send, sessionId, cfg?.wiki?.rootPath, currentSession?.metadata, dispatch]
   )
@@ -837,10 +836,10 @@ export function ChatView() {
         ? {
             requestId: 'test-cards-preview',
             onToolConfirm: (_toolUseId: string, approved: boolean) => {
-              message.info(approved ? '测试预览：已确认（无实际操作）' : '测试预览：已拒绝（无实际操作）')
+              message.info(approved ? runtimeText('chat.devPreview.confirmed') : runtimeText('chat.devPreview.rejected'))
             },
             onToolCancel: () => {
-              message.info('测试预览：已取消（无实际操作）')
+              message.info(runtimeText('chat.devPreview.cancelled'))
             }
           }
         : undefined,

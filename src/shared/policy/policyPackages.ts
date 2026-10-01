@@ -79,6 +79,8 @@ export interface LaneProfile {
    * 目标不存在于传入规则集时不注入（合成规则集恒等）。
    */
   scopePackages?: Partial<Record<'strict' | 'loose', readonly ScopeRule[]>>
+  /** 按 ruleId 登记的档位动作映射；当前仅桌面链路消费。 */
+  ruleActionOverrides?: Partial<Record<PolicyPackage, Partial<Record<string, PolicyAction>>>>
 }
 
 /**
@@ -87,6 +89,24 @@ export interface LaneProfile {
  */
 const DESKTOP_TRANSFORMS: LaneProfile['transforms'] = {
   standard: { ask: 'auto-evaluator' }
+}
+
+const DESKTOP_RULE_ACTION_OVERRIDES: LaneProfile['ruleActionOverrides'] = {
+  standard: {
+    'browser-act-ask-desktop': 'allow',
+    'script-network-ask-desktop': 'auto-evaluator',
+    'browser-act-danger-ask': 'auto-evaluator',
+    'lark-write-ask': 'auto-evaluator',
+    'default-write-execute-ask': 'auto-evaluator'
+  },
+  loose: {
+    'script-network-ask-desktop': 'auto-evaluator',
+    'script-unmodeled-path-ask': 'allow',
+    'browser-act-ask-desktop': 'allow',
+    'browser-act-danger-ask': 'auto-evaluator',
+    'lark-write-ask': 'auto-evaluator',
+    'default-write-execute-ask': 'allow'
+  }
 }
 
 /** wechat/feishu：恒等（S1：strict / loose 宽严映射移除，范围化见各 lane scope 清单）。 */
@@ -168,7 +188,8 @@ export const LANE_PROFILES: Record<ExecutionLane, LaneProfile> = {
     userSelectable: true,
     availableActions: ['deny', 'allow', 'ask', 'auto-evaluator'],
     transforms: DESKTOP_TRANSFORMS,
-    scopePackages: DESKTOP_SCOPE_PACKAGES
+    scopePackages: DESKTOP_SCOPE_PACKAGES,
+    ruleActionOverrides: DESKTOP_RULE_ACTION_OVERRIDES
   },
   wechat: {
     availablePackages: ['strict', 'standard', 'loose', 'custom'],
@@ -211,11 +232,16 @@ function isTransformExempt(rule: Pick<PolicyRule, 'action' | 'locked'>): boolean
 export function effectiveActionFor(
   lane: ExecutionLane,
   pkg: PolicyPackage,
-  rule: Pick<PolicyRule, 'action' | 'locked'>
+  rule: Pick<PolicyRule, 'action' | 'locked'> & { id?: string }
 ): PolicyAction {
   if (isTransformExempt(rule)) return rule.action
   if (pkg === 'custom') return rule.action
-  const mapping = LANE_PROFILES[lane].transforms[pkg]
+  const profile = LANE_PROFILES[lane]
+  if (lane === 'desktop') {
+    const override = rule.id ? profile.ruleActionOverrides?.[pkg]?.[rule.id] : undefined
+    if (override) return override
+  }
+  const mapping = profile.transforms[pkg]
   return mapping?.[rule.action] ?? rule.action
 }
 

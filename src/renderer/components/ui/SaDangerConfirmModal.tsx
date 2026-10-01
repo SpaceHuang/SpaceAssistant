@@ -1,5 +1,6 @@
 import { Modal } from 'antd'
 import type { ReactNode } from 'react'
+import { runtimeText } from '../../i18n/runtimeText'
 import './saConfirmModal.css'
 
 export type SaDangerConfirmModalProps = {
@@ -17,8 +18,8 @@ export type SaDangerConfirmModalProps = {
 export function SaDangerConfirmModal({
   open,
   title,
-  okText = '删除',
-  cancelText = '取消',
+  okText = runtimeText('generic.delete'),
+  cancelText = runtimeText('generic.cancel'),
   confirmLoading = false,
   onOk,
   onCancel,

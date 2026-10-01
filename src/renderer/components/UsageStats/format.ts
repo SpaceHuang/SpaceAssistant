@@ -15,8 +15,8 @@ function abbreviate(value: number): string {
 export function formatCount(value: number, locale: AbbreviationLocale = 'en-US'): string {
   if (locale === 'zh-CN') {
     // 中文进位习惯：万（1e4）、亿（1e8）；不足一万用千分位（1000 万是自然表述，不强制升亿）
-    if (value >= 1e8) return `${abbreviate(value / 1e8)} 亿`
-    if (value >= 1e4) return `${abbreviate(value / 1e4)} 万`
+    if (value >= 1e8) return runtimeText('usage.compactBillions', { value: abbreviate(value / 1e8), lng: locale })
+    if (value >= 1e4) return runtimeText('usage.compactTenThousands', { value: abbreviate(value / 1e4), lng: locale })
     return formatInteger(value)
   }
   // 英文进位习惯：K（1e3）、M（1e6）；不足一千用千分位
@@ -51,3 +51,4 @@ export function localTimeZoneLabel(_now: number, offsetMinutes: number): string 
   const hours = Math.floor(Math.abs(offsetMinutes) / 60)
   return `UTC${sign}${hours}`
 }
+import { runtimeText } from '../../i18n/runtimeText'

@@ -1,9 +1,20 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import i18n from '../../i18n'
 import {
   formatBrowserToolLabel,
   formatBrowserToolLabelTitle,
   summarizeBrowserConfirmInput
 } from './browserConfirmDisplay'
+
+const initialLanguage = i18n.language
+
+beforeEach(async () => {
+  await i18n.changeLanguage('zh-CN')
+})
+
+afterEach(async () => {
+  await i18n.changeLanguage(initialLanguage)
+})
 
 describe('summarizeBrowserConfirmInput', () => {
   it('shows URL for navigate open', () => {
@@ -15,6 +26,12 @@ describe('summarizeBrowserConfirmInput', () => {
     expect(s?.headline).toBe('打开网页')
     expect(s?.detailLabel).toBe('URL')
     expect(s?.detailValue).toBe('https://www.zhihu.com/billboard')
+  })
+
+  it('uses the active language when building the summary', async () => {
+    await i18n.changeLanguage('en-US')
+    const s = summarizeBrowserConfirmInput({ action: 'navigate', mode: 'open', url: 'https://example.com' })
+    expect(s?.headline).toBe('Open webpage')
   })
 
   it('shows instruction for act', () => {
