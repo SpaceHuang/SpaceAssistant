@@ -91,22 +91,28 @@ export function planGrepInvocation(opts: {
   searchPath: string
   args: Pick<GrepExecArgs, 'includeIgnored'> & { glob?: string }
   engine?: 'ripgrep' | 'walk'
+  /** 搜索根类型：'file' 时无目录遍历语义——skipped 与 ignoreGlobs 恒空（§7.5，修复 §1.4 虚报）；缺省 'directory' */
+  searchKind?: 'file' | 'directory'
 }): GrepInvocationPlan {
   const { workDir, searchPath, args } = opts
+  const searchKind = opts.searchKind ?? 'directory'
   const searchRel = toPosix(path.relative(workDir, searchPath))
   const searchRelInsideWorkDir = Boolean(searchRel) && searchRel !== '.' && !searchRel.startsWith('..')
 
   // 1) 默认忽略成员：实际存在、且未命中调用方搜索范围（任一段点名即解除）→ 计入 skipped
+  //    searchKind='file'：单文件根无遍历语义，不产名单 glob 与 skipped 统计（rg 的 glob 对显式文件参数本就不生效）
   const skipped: GrepScope['skipped'] = []
   const ignoreGlobs: string[] = []
-  for (const name of GREP_DEFAULT_IGNORES) {
-    const isExplicitTarget = searchRelInsideWorkDir && isInsideMember(searchRel, name)
-    if (isExplicitTarget) continue
-    const exists = fs.existsSync(path.join(workDir, name))
-    if (exists) skipped.push({ name, explicit: false })
-    // include_ignored 一并解除；显式点名只解除被点名成员
-    if (!args.includeIgnored && !isExplicitTarget) {
-      ignoreGlobs.push(`!**/${name}/**`)
+  if (searchKind === 'directory') {
+    for (const name of GREP_DEFAULT_IGNORES) {
+      const isExplicitTarget = searchRelInsideWorkDir && isInsideMember(searchRel, name)
+      if (isExplicitTarget) continue
+      const exists = fs.existsSync(path.join(workDir, name))
+      if (exists) skipped.push({ name, explicit: false })
+      // include_ignored 一并解除；显式点名只解除被点名成员
+      if (!args.includeIgnored && !isExplicitTarget) {
+        ignoreGlobs.push(`!**/${name}/**`)
+      }
     }
   }
 

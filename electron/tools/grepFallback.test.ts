@@ -148,3 +148,39 @@ describe('JavaScript grep fallback', () => {
     expect(Date.now() - started).toBeLessThan(1_000)
   })
 })
+
+describe('输出路径形态（D7/I6 最终口径：workDir 内相对、workDir 外绝对）', () => {
+  // Windows 输出走平台分隔符（rg 组11c 实测同为反斜杠），断言用 path.sep 构造保持跨平台
+  const relPath = (...segs: string[]) => segs.join(path.sep)
+
+  it('AC-20b/AC-47：workDir 内目录搜索输出相对路径且无 ./ 前缀', async () => {
+    const root = fixture({ 'sub/a.txt': 'NEEDLE\n' })
+    const out = await grepFallbackJs(root, root, 'NEEDLE', args({ outputMode: 'files_with_matches' }), new AbortController().signal, () => {})
+    expect(out).toContain(relPath('sub', 'a.txt'))
+    expect(out).not.toMatch(/\.\\|\.\//)
+    expect(out).not.toContain(root)
+  })
+
+  it('AC-20c：displayPath 解耦后 glob 过滤仍生效（*.ts 只留 ts）', async () => {
+    const root = fixture({ 'src/a.ts': 'NEEDLE-ts\n', 'src/b.js': 'NEEDLE-js\n' })
+    const out = await grepFallbackJs(root, root, 'NEEDLE', args({ outputMode: 'files_with_matches', glob: '*.ts' }), new AbortController().signal, () => {})
+    expect(out).toContain(relPath('src', 'a.ts'))
+    expect(out).not.toContain(relPath('src', 'b.js'))
+  })
+
+  it('AC-20d：单文件 walk 降级路径输出 workDir 内相对路径', async () => {
+    const root = fixture({ 'solo.txt': 'NEEDLE\n' })
+    const out = await grepFallbackJs(root, path.join(root, 'solo.txt'), 'NEEDLE', args({ outputMode: 'files_with_matches' }), new AbortController().signal, () => {})
+    expect(out).toContain('solo.txt')
+    expect(out).not.toContain(root)
+  })
+
+  it('AC-48：workDir 外搜索根输出绝对路径', async () => {
+    const inner = fixture({ 'in-workdir.txt': 'placeholder\n' })
+    const outsideDir = fs.mkdtempSync(path.join(path.dirname(inner), 'sa-grep-outside-'))
+    roots.push(outsideDir)
+    fs.writeFileSync(path.join(outsideDir, 'found.txt'), 'NEEDLE\n')
+    const out = await grepFallbackJs(inner, outsideDir, 'NEEDLE', args({ outputMode: 'files_with_matches' }), new AbortController().signal, () => {})
+    expect(out).toContain(path.join(outsideDir, 'found.txt'))
+  })
+})

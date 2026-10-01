@@ -196,3 +196,55 @@ describe('D1/D2（评审 2026-09-28）：大小写变体与嵌套点名', () => 
     expect(plan.caseInsensitiveGlobs).toBe(true)
   })
 })
+
+describe('planGrepInvocation searchKind（§7.5，C6：单文件不产目录遍历语义）', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true })
+  })
+
+  function setupRoot(): string {
+    const root = tempDir()
+    dirs.push(root)
+    for (const name of ['node_modules', 'dist', '.git']) {
+      fs.mkdirSync(path.join(root, name), { recursive: true })
+    }
+    fs.writeFileSync(path.join(root, 'a.txt'), 'hello')
+    return root
+  }
+
+  it("searchKind='file'：skipped 恒空、ignoreGlobs 恒空（§1.4 虚报修复，AC-14/AC-19）", () => {
+    const root = setupRoot()
+    const file = path.join(root, 'a.txt')
+    const plan = planGrepInvocation({
+      workDir: root, searchPath: file,
+      args: { includeIgnored: false, outputMode: 'files_with_matches', ignoreCase: false, showLineNumber: true, multiline: false, headLimit: 100 },
+      searchKind: 'file'
+    })
+    expect(plan.scope.skipped).toEqual([])
+    expect(plan.scope.skippedCount).toBe(0)
+    expect(plan.ignoreGlobs).toEqual([])
+  })
+
+  it("searchKind='file' 且显式点名敏感文件：sensitiveExcludes 仍按 explicitSensitiveHit 语义", () => {
+    const root = setupRoot()
+    fs.writeFileSync(path.join(root, '.env'), 'SECRET=1')
+    const plan = planGrepInvocation({
+      workDir: root, searchPath: path.join(root, '.env'),
+      args: { includeIgnored: false, outputMode: 'files_with_matches', ignoreCase: false, showLineNumber: true, multiline: false, headLimit: 100 },
+      searchKind: 'file'
+    })
+    expect(plan.explicitSensitiveHit).toBe(true)
+    expect(plan.sensitiveExcludes).toEqual([])
+  })
+
+  it('缺省 searchKind 保持既有目录语义（回归）', () => {
+    const root = setupRoot()
+    const plan = planGrepInvocation({
+      workDir: root, searchPath: root,
+      args: { includeIgnored: false, outputMode: 'files_with_matches', ignoreCase: false, showLineNumber: true, multiline: false, headLimit: 100 }
+    })
+    expect(plan.scope.skipped.length).toBeGreaterThan(0)
+    expect(plan.ignoreGlobs.length).toBeGreaterThan(0)
+  })
+})

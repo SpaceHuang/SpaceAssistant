@@ -142,3 +142,45 @@ describe('R6：walk 回退与 rg 同语义（T-R6-5）', () => {
     }
   })
 })
+
+describe('安全不变量静态守卫（§6.4 I1/I2/I3，D6）', () => {
+  it('I1：rgArgs 永不出现 --follow / -L（遍历不跟随链接）', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-invariant-follow-'))
+    fs.writeFileSync(path.join(root, 'a.txt'), 'needle')
+    try {
+      const captured: string[][] = []
+      await grepWithRg('rg', root, path.resolve(root), 'needle', baseArgs(), 5000, new AbortController().signal, () => {}, capturingSpawn(captured))
+      const rgArgs = captured[0]!
+      expect(rgArgs).not.toContain('--follow')
+      expect(rgArgs).not.toContain('-L')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
+  it.each([false, true])('I2：rgArgs 永不出现 --no-ignore / -u / --unrestricted（includeIgnored=%s）', async (includeIgnored) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-invariant-noignore-'))
+    fs.writeFileSync(path.join(root, 'a.txt'), 'needle')
+    try {
+      const captured: string[][] = []
+      await grepWithRg('rg', root, path.resolve(root), 'needle', baseArgs({ includeIgnored }), 5000, new AbortController().signal, () => {}, capturingSpawn(captured))
+      const rgArgs = captured[0]!
+      // 精确匹配，不误伤未来的 --no-ignore-vcs（L5 边界）
+      expect(rgArgs).not.toContain('--no-ignore')
+      expect(rgArgs).not.toContain('-u')
+      expect(rgArgs).not.toContain('--unrestricted')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
+  it('I3：敏感排除经 --iglob（大小写无关），且默认目录搜索必含敏感排除组', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-invariant-iglob-'))
+    fs.writeFileSync(path.join(root, '.env'), 'SECRET=1')
+    fs.writeFileSync(path.join(root, 'a.txt'), 'needle')
+    try {
+      const captured: string[][] = []
+      await grepWithRg('rg', root, path.resolve(root), 'needle', baseArgs(), 5000, new AbortController().signal, () => {}, capturingSpawn(captured))
+      const rgArgs = captured[0]!
+      expect(rgArgs).toContain('--iglob')
+      const iglobValues = rgArgs.filter((arg, i) => i > 0 && rgArgs[i - 1] === '--iglob')
+      expect(iglobValues).toContain('!**/.env')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+})

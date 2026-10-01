@@ -1178,14 +1178,16 @@ export async function grepWithRg(
   spawnProcess: (binary: string, args: string[], options: Parameters<typeof spawn>[2]) => ChildProcess = spawn,
   openedFile?: { fileHandle: FileHandle; platform?: NodeJS.Platform },
   killer: ProcessKiller = processTreeKiller,
-  onTerminate?: (info: GrepTerminateInfo) => void
+  onTerminate?: (info: GrepTerminateInfo) => void,
+  /** 一次规划、两处消费：与 grepExecutor 的 searchScope 输出共用同一组规划覆盖（§7.6 改动 2，防 rg 行为与对外报告范围不一致） */
+  planOverrides?: { searchKind?: 'file' | 'directory' }
 ): Promise<RipgrepRunResult> {
   if (signal.aborted) return { kind: 'cancelled', partialOutput: '' }
   const openedFileFd = openedFile?.fileHandle.fd
   const stableFilePlatform = openedFile?.platform ?? process.platform
   const stableFileOnWindows = openedFileFd !== undefined && stableFilePlatform === 'win32'
   // R6：范围规划由 planGrepInvocation 统一产出（显式路径解除 / --hidden / 敏感排除同源）
-  const plan = planGrepInvocation({ workDir, searchPath, args })
+  const plan = planGrepInvocation({ workDir, searchPath, args, ...planOverrides })
   const rgArgs = ['--no-config', '--color', 'never', '--regexp', pattern]
   if (args.ignoreCase) rgArgs.push('-i')
   if (args.glob) {
@@ -1490,15 +1492,19 @@ export async function grepFallbackJs(
   async function scanFile(full: string, applyGlob: boolean): Promise<void> {
     if (shouldStop()) return
     const rel = path.relative(workDir, full)
+    // D7/I6：glob 匹配输入与输出显示解耦——rel 只供 matchesGlob；输出路径形态为
+    // 「workDir 内相对 / workDir 外绝对」（两引擎统一口径，AC-20b/20d/AC-48）
+    const relInside = !rel.startsWith('..')
+    const displayPath = relInside ? (rel || '.') : full
     if (!matchesGlob(rel, applyGlob)) return
     filesScanned++
     if (filesScanned % 30 === 0) onProgress(`搜索中... 已扫描 ${filesScanned} 个文件`)
     let buf: Buffer
     if (stableFileHandle && !applyGlob && path.resolve(full) === path.resolve(absSearch)) {
       let before: Awaited<ReturnType<FileHandle['stat']>>
-      try { before = await stableFileHandle.stat() } catch { noteReadError(rel); return }
-      if (!before.isFile()) { noteReadError(rel); return }
-      if (before.size > GREP_FILE_MAX) { skippedTotal++; if (skippedSample.length < GREP_FALLBACK_SAMPLE_MAX) skippedSample.push(rel); return }
+      try { before = await stableFileHandle.stat() } catch { noteReadError(displayPath); return }
+      if (!before.isFile()) { noteReadError(displayPath); return }
+      if (before.size > GREP_FILE_MAX) { skippedTotal++; if (skippedSample.length < GREP_FALLBACK_SAMPLE_MAX) skippedSample.push(displayPath); return }
       buf = Buffer.alloc(before.size)
       let offset = 0
       while (offset < buf.length) {
@@ -1506,7 +1512,7 @@ export async function grepFallbackJs(
         if (bytesRead <= 0) break
         offset += bytesRead
       }
-      if (offset !== buf.length) { noteReadError(rel); return }
+      if (offset !== buf.length) { noteReadError(displayPath); return }
       const after = await stableFileHandle.stat()
       if (after.dev !== before.dev || after.ino !== before.ino || after.mode !== before.mode || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
         throw new Error('搜索期间获准文件发生变化，已丢弃搜索结果')
@@ -1514,16 +1520,16 @@ export async function grepFallbackJs(
     } else {
       try {
         const st = await (deps.stat ? deps.stat(full) : fs.stat(full))
-        if (!st.isFile()) { noteReadError(rel); return }
-        if (st.size > GREP_FILE_MAX) { skippedTotal++; if (skippedSample.length < GREP_FALLBACK_SAMPLE_MAX) skippedSample.push(rel); return }
+        if (!st.isFile()) { noteReadError(displayPath); return }
+        if (st.size > GREP_FILE_MAX) { skippedTotal++; if (skippedSample.length < GREP_FALLBACK_SAMPLE_MAX) skippedSample.push(displayPath); return }
         buf = await (deps.readFile ? deps.readFile(full, { signal }) : fs.readFile(full, { signal }))
       } catch {
         if (signal.aborted) aborted = true
-        else noteReadError(rel)
+        else noteReadError(displayPath)
         return
       }
     }
-    if (buf.length > GREP_FILE_MAX) { skippedTotal++; if (skippedSample.length < GREP_FALLBACK_SAMPLE_MAX) skippedSample.push(rel); return }
+    if (buf.length > GREP_FILE_MAX) { skippedTotal++; if (skippedSample.length < GREP_FALLBACK_SAMPLE_MAX) skippedSample.push(displayPath); return }
     if (isBinaryBuffer(buf)) return
     const text = buf.toString('utf8')
     const matchLimit = args.outputMode === 'content'
@@ -1540,7 +1546,7 @@ export async function grepFallbackJs(
       if (args.multiline) {
         for (const match of scan.matches) {
           const startLine = text.slice(0, match.index).split('\n').length
-          pushContentLine(rel, startLine, match.text, true)
+          pushContentLine(displayPath, startLine, match.text, true)
         }
       } else {
         const lines = text.split(/\r?\n/)
@@ -1554,18 +1560,18 @@ export async function grepFallbackJs(
             for (let cix = lo; cix <= hi; cix++) {
               if (emitted.has(cix)) continue
               emitted.add(cix)
-              pushContentLine(rel, cix + 1, lines[cix]!, cix === lineIndex)
+              pushContentLine(displayPath, cix + 1, lines[cix]!, cix === lineIndex)
             }
-          } else pushContentLine(rel, lineIndex + 1, lines[lineIndex]!, true)
+          } else pushContentLine(displayPath, lineIndex + 1, lines[lineIndex]!, true)
         }
       }
       return
     }
     if (args.outputMode === 'files_with_matches') {
-      filesWithMatches.push(rel)
+      filesWithMatches.push(displayPath)
       return
     } else if (args.outputMode === 'count') {
-      counts.set(rel, scan.count)
+      counts.set(displayPath, scan.count)
     }
   }
 
@@ -1599,7 +1605,11 @@ export async function grepFallbackJs(
       entries = await (deps.readdir ? deps.readdir(dir) : fs.readdir(dir, { withFileTypes: true }))
     } catch {
       if (signal.aborted) aborted = true
-      else noteReadError(path.relative(workDir, dir) || '.')
+      else {
+        // 边界摘要的读错误目录与输出同口径：workDir 内相对 / workDir 外绝对（D7/I6）
+        const relDir = path.relative(workDir, dir)
+        noteReadError(!relDir.startsWith('..') ? (relDir || '.') : dir)
+      }
       return
     }
     for (const ent of entries) {
@@ -1692,6 +1702,10 @@ export const grepExecutor: ToolExecutor = {
         code: 'grep-ripgrep',
         message: createGrepRipgrepDiagnostic(resolved)
       })
+      // 一次规划、三处消费：rgArgs 驱动（经 grepWithRg 透传）、walk plan、searchScope 输出 plan
+      // 必须同一组 overrides，否则 rg 实际行为与对外报告的范围会不一致（§7.6 改动 2，B1）
+      const searchKind: 'file' | 'directory' = ctx.readExecutionPermit?.targets[0]?.targetKind === 'directory' ? 'directory' : 'file'
+      const planOverrides = { searchKind }
       const executeFallback = async (): Promise<ToolExecutorResult> => {
         const fallbackText = await grepFallbackJs(
           ctx.workDir, absSearch, pattern, gargs, ctx.signal,
@@ -1707,7 +1721,7 @@ export const grepExecutor: ToolExecutor = {
           return { success: false, error: '搜索期间文件身份或内容发生变化，已丢弃搜索结果。', diagnostic: { caseId, retryable: false, category: 'mechanism' as const, ...(permitTarget?.factId ? { factId: permitTarget.factId } : {}) }, duration: Date.now() - started }
         }
         if (ctx.signal.aborted) return { success: false, error: '搜索已取消。', duration: Date.now() - started }
-        const plan = planGrepInvocation({ workDir: ctx.workDir, searchPath: absSearch, args: gargs, engine: 'walk' })
+        const plan = planGrepInvocation({ workDir: ctx.workDir, searchPath: absSearch, args: gargs, engine: 'walk', ...planOverrides })
         const boundaryIndex = fallbackText.indexOf('\n[边界摘要]')
         const fallbackBody = boundaryIndex >= 0 ? fallbackText.slice(0, boundaryIndex) : fallbackText
         const boundarySummary = boundaryIndex >= 0 ? fallbackText.slice(boundaryIndex) : ''
@@ -1765,7 +1779,8 @@ export const grepExecutor: ToolExecutor = {
           sessionId: ctx.sessionId,
           toolUseId: ctx.toolUseId,
           ...info
-        })
+        }),
+        planOverrides
       )
       const authorizedIdentity = ctx.readExecutionPermit?.targets[0]?.identity
       if (permitFileHandle && authorizedIdentity && !readIdentityMatches(await permitFileHandle.stat(), authorizedIdentity)) {
@@ -1775,7 +1790,7 @@ export const grepExecutor: ToolExecutor = {
       }
       if (text.kind === 'success' || text.kind === 'no_match') {
         // R6：范围事实（skipped 由 planGrepInvocation 统一规划；no_match 必带范围）
-        const plan = planGrepInvocation({ workDir: ctx.workDir, searchPath: absSearch, args: gargs })
+        const plan = planGrepInvocation({ workDir: ctx.workDir, searchPath: absSearch, args: gargs, ...planOverrides })
         const truncatedByHead = text.output.includes('已按 head_limit=')
         const scope: GrepScope = {
           ...plan.scope,
