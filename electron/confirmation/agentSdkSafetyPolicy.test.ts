@@ -22,6 +22,31 @@ const baseArgs = { toolName: 'read_file', toolInput: { path: 'x' }, sessionId: '
 const result = (decision: Decision): ToolCallGateResult => ({ decision, facts, approvedFactIds: [] })
 
 describe('createAgentSdkSafetyPolicy', () => {
+  it('把用户明确选择的记忆键传到确认提交回调，未选择则不写入', async () => {
+    const key = { kind: 'script-content' as const, digest: 'a'.repeat(64), sessionId: 'session-1' }
+    const scriptFacts: ContentFacts = {
+      toolName: 'run_script', actionClass: 'execute', baseRiskLevel: 'high',
+      signals: [
+        { kind: 'script-analysis', signal: 'clean', patterns: [] },
+        { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: key.digest }
+      ], summary: { text: 'script' }
+    }
+    const selected = vi.fn()
+    const scriptArgs = { ...baseArgs, toolName: 'run_script', toolInput: { code: 'custom_api()' }, sessionId: key.sessionId } as ToolCallGateArgs
+    const policy = createAgentSdkSafetyPolicy({
+      resolveGateArgs: async () => scriptArgs,
+      evaluateGate: async () => ({
+        decision: { type: 'require-confirm', ruleId: 'script-unmodeled-path-ask', answerer: 'user', riskLevel: 'high', facts: scriptFacts, memoryTiers: [{ key, label: '记住本会话此脚本' }], timeoutMs: null },
+        facts: scriptFacts, approvedFactIds: []
+      }),
+      onConfirmed: (_binding, _result, _args, _answerer, memory) => { if (memory) selected(memory) }
+    })
+    const scriptBinding = { ...binding, capabilityId: 'run_script', inputSnapshotHash: createHash('sha256').update('{"code":"custom_api()"}').digest('hex'), capability: { state: 'known-authorized' as const, id: 'run_script' } }
+    await expect(policy.evaluate(scriptBinding)).resolves.toMatchObject({ kind: 'ask' })
+    markAgentSdkSafetyDecisionConfirmed(policy, scriptBinding, 'user', key)
+    expect(selected).toHaveBeenCalledWith(key)
+  })
+
   it('denies a confirmed edit_file when the fresh gate reports a replaced target identity', async () => {
     const originalTarget = { rawPath: 'approved.txt', normalizedPath: '/workspace/approved.txt', zone: 'workdir-normal' as const, targetKind: 'file' as const, parentReal: '/workspace', parentIdentity: { dev: 1, ino: 2, mode: 0o40755, size: 0, mtimeMs: 1, nlink: 2 }, identity: { dev: 1, ino: 3, mode: 0o100644, size: 16, mtimeMs: 1, nlink: 1 } }
     const replacedTarget = { ...originalTarget, identity: { ...originalTarget.identity, ino: 4 } }

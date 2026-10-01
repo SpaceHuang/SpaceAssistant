@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
@@ -26,6 +27,7 @@ import { scriptParserService } from '../shell/scriptParserService'
 import { readFeishuAttachmentExecutor } from '../tools/readFeishuAttachmentExecutor'
 import type { ToolExecutionContext } from '../tools/types'
 import { classifyWorkDirProfileTarget } from '../workDirBinding'
+import { recordUserAnswerFromDecision } from './decisionCacheWriter'
 
 const shells: AppDatabase[] = []
 describe('buildToolCallGateArgs', () => {
@@ -929,7 +931,7 @@ describe('evaluateToolCallGate', () => {
     const parseSpy = vi.spyOn(scriptParserService, 'parse')
     const gate = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { code: 'print("hello")' } }))
     expect(parseSpy).toHaveBeenCalledTimes(1)
-    expect(gate.facts.signals).toContainEqual({ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false })
+    expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false, contentDigest: expect.any(String) }))
     expect(gate.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-clean-allow-desktop' })
   })
 
@@ -1003,19 +1005,46 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
-  it('V3 run_script 动态文件访问在有人 lane 确认、automation lane 拒绝', async () => {
+  it('V3 run_script 未建模调用在有人 lane 可选会话信任、automation lane 拒绝', async () => {
     const root = await fs.realpath(await fs.mkdtemp('/tmp/script-facts-root-'))
     const toolInput = { code: 'custom_accessor(target)' }
     try {
       const desktop = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput }))
       expect(desktop.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'unknown' }))
-      expect(desktop.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-path-unknown-confirm', answerer: 'user' })
+      expect(desktop.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask', answerer: 'agent' })
+      expect(desktop.decision.type === 'require-confirm' && desktop.decision.memoryTiers[0]).toMatchObject({ key: { kind: 'script-content', digest: expect.any(String), sessionId: 's1' }, label: '记住本会话此脚本' })
 
       const unattended = await evaluateToolCallGate(base({ lane: 'automation', workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput }))
       expect(unattended.decision).toMatchObject({ type: 'deny', ruleId: 'automation-script-path-unknown-deny' })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }
+  })
+
+  it('脚本记忆只命中同会话同内容，内容或会话变化后重新确认', async () => {
+    const db = openDb()
+    const code = 'custom_accessor(target)'
+    const input = { code }
+    const first = await evaluateToolCallGate(base({ sessionId: 'script-session-1', toolName: 'run_script', toolInput: input, appDb: db }))
+    expect(first.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' })
+    if (first.decision.type !== 'require-confirm') throw new Error('expected script confirmation')
+    const key = { kind: 'script-content' as const, digest: createHash('sha256').update(code, 'utf8').digest('hex'), sessionId: 'script-session-1' }
+    expect(first.decision.memoryTiers.map((tier) => tier.key)).toContainEqual(key)
+    recordUserAnswerFromDecision({
+      db, lane: 'desktop', sessionId: 'script-session-1', key,
+      decision: first.decision, answererKind: 'user', source: 'user-confirm'
+    })
+    expect(new SqliteDecisionCache(getDbConnection(db)).lookup(key, 'desktop')).toMatchObject({ scope: 'session', key })
+
+    await expect(evaluateToolCallGate(base({ sessionId: 'script-session-1', toolName: 'run_script', toolInput: input, appDb: db })))
+      .resolves.toMatchObject({ decision: { type: 'auto-allow', ruleId: 'cache-hit' } })
+    await expect(evaluateToolCallGate(base({ sessionId: 'script-session-1', toolName: 'run_script', toolInput: { code: `${code} ` }, appDb: db })))
+      .resolves.toMatchObject({ decision: { type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' } })
+    await expect(evaluateToolCallGate(base({ sessionId: 'script-session-2', toolName: 'run_script', toolInput: input, appDb: db })))
+      .resolves.toMatchObject({ decision: { type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' } })
+    new SqliteDecisionCache(getDbConnection(db)).clear(key)
+    await expect(evaluateToolCallGate(base({ sessionId: 'script-session-1', toolName: 'run_script', toolInput: input, appDb: db })))
+      .resolves.toMatchObject({ decision: { type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' } })
   })
 
   it('恢复的按 ruleId 档位覆盖在真实 tool gate 生效且不放宽危险脚本', async () => {
@@ -1033,7 +1062,7 @@ describe('evaluateToolCallGate', () => {
     const unknownScript = await evaluateToolCallGate(base({
       appDb: db, toolName: 'run_script', toolInput: { code: 'custom_accessor(target)' }
     }))
-    expect(unknownScript.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-path-unknown-confirm', answerer: 'user' })
+    expect(unknownScript.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask', answerer: 'user' })
   })
 
   it('V3 run_script 静态敏感路径与内容分析共享一次解析，并进入敏感路径真人确认规则', async () => {
@@ -1077,7 +1106,7 @@ describe('evaluateToolCallGate', () => {
 
     const unsupported = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { language: 'ruby', code: 'puts 1' } }))
     expect(unsupported.facts.signals).toContainEqual({ kind: 'script-language-analysis', language: 'unknown', status: 'unverified' })
-    expect(unsupported.facts.signals).toContainEqual({ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true })
+    expect(unsupported.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', contentDigest: expect.any(String) }))
     expect(unsupported.decision).toMatchObject({ type: 'require-confirm', answerer: 'user' })
   })
 

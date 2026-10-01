@@ -32,6 +32,15 @@ describe('extractScriptPathFacts', () => {
     expect(extractScriptPathFacts('eval(source)', 'python')).toMatchObject({ completeness: 'unknown', dynamicAccess: true })
   })
 
+  it('区分可选会话信任的未建模调用与必须逐次确认的动态执行', () => {
+    expect(extractScriptPathFacts('custom_api()', 'python')).toMatchObject({
+      completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call'
+    })
+    expect(extractScriptPathFacts('eval(source)', 'python')).toMatchObject({
+      completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution'
+    })
+  })
+
   it('静态可解析的 API 导入别名按原始 API 提取目标', () => {
     expect(extractScriptPathFacts('from os import remove as rm\nrm("./old.txt")', 'python')).toEqual({ paths: ['./old.txt'], completeness: 'complete', dynamicAccess: false })
     expect(extractScriptPathFacts('import subprocess as sp\nsp.run("echo ok")', 'python')).toMatchObject({ completeness: 'unknown', dynamicAccess: true })

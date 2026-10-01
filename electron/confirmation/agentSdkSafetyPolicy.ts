@@ -20,8 +20,8 @@ export function createAgentSdkSafetyPolicy(input: {
   /** Attach structural read/write permits from the initial host gate to the call-private execution context. */
   onInitialGateResult?(binding: PermitBinding, result: ToolCallGateResult, args: ToolCallGateArgs): void | Promise<void>
   /** Finalize user-approved structural permits after the existing confirmation channel approves. */
-  onConfirmed?(binding: PermitBinding, result: ToolCallGateResult, args: ToolCallGateArgs, answerer: 'user' | 'agent'): void
-}): SafetyPolicyPort & { markConfirmed(call: Pick<PermitBinding, 'invocationId' | 'toolCallId'>, answerer?: 'user' | 'agent'): void } {
+  onConfirmed?(binding: PermitBinding, result: ToolCallGateResult, args: ToolCallGateArgs, answerer: 'user' | 'agent', memory?: import('../../src/shared/confirmation/types').CacheKey): void
+}): SafetyPolicyPort & { markConfirmed(call: Pick<PermitBinding, 'invocationId' | 'toolCallId'>, answerer?: 'user' | 'agent', memory?: import('../../src/shared/confirmation/types').CacheKey): void } {
   const initial = new Map<string, { binding: PermitBinding; result: ToolCallGateResult; args: ToolCallGateArgs; confirmed: boolean }>()
   const callKey = (binding: PermitBinding) => JSON.stringify([binding.invocationId, binding.toolCallId])
   const deny = (binding: PermitBinding, reasonCode: SafetyDenyReason) => {
@@ -29,10 +29,10 @@ export function createAgentSdkSafetyPolicy(input: {
     return { kind: 'deny' as const, reasonCode }
   }
   return {
-    markConfirmed(call: Pick<PermitBinding, 'invocationId' | 'toolCallId'>, answerer: 'user' | 'agent' = 'user') {
+    markConfirmed(call: Pick<PermitBinding, 'invocationId' | 'toolCallId'>, answerer: 'user' | 'agent' = 'user', memory?: import('../../src/shared/confirmation/types').CacheKey) {
       const decision = initial.get(JSON.stringify([call.invocationId, call.toolCallId]))
       if (decision) {
-        input.onConfirmed?.(decision.binding, decision.result, decision.args, answerer)
+        input.onConfirmed?.(decision.binding, decision.result, decision.args, answerer, memory)
         decision.confirmed = true
       }
     },
@@ -204,10 +204,11 @@ function writeApprovalConfigurationSnapshot(args: ToolCallGateArgs): string {
 }
 
 /** Mark the exact initial decision as user/agent approved before a later fresh policy recheck. */
-export function markAgentSdkSafetyDecisionConfirmed(policy: SafetyPolicyPort, call: Pick<PermitBinding, 'invocationId' | 'toolCallId'>, answerer: 'user' | 'agent' = 'user'): void {
+export function markAgentSdkSafetyDecisionConfirmed(policy: SafetyPolicyPort, call: Pick<PermitBinding, 'invocationId' | 'toolCallId'>, answerer: 'user' | 'agent' = 'user', memory?: import('../../src/shared/confirmation/types').CacheKey): void {
   // Confirmation state is deliberately owned by the policy instance; only the dedicated wrapper exposes this transition.
-  const transition = policy as SafetyPolicyPort & { markConfirmed?: (call: Pick<PermitBinding, 'invocationId' | 'toolCallId'>, answerer?: 'user' | 'agent') => void }
-  transition.markConfirmed?.(call, answerer)
+  const transition = policy as SafetyPolicyPort & { markConfirmed?: (call: Pick<PermitBinding, 'invocationId' | 'toolCallId'>, answerer?: 'user' | 'agent', memory?: import('../../src/shared/confirmation/types').CacheKey) => void }
+  if (memory === undefined) transition.markConfirmed?.(call, answerer)
+  else transition.markConfirmed?.(call, answerer, memory)
 }
 
 function authorizedCapabilityId(capability: CapabilityLookup): string {

@@ -17,11 +17,13 @@ export const CONFIRMATION_LABELS = {
   summaryDangerousScript: '脚本含危险模式，已拒绝',
   summarySuspiciousScript: '脚本含需确认的危险模式',
   memoryTierPrefix: '记住',
-  memoryTierGenericSuffix: '目标'
+  memoryTierGenericSuffix: '目标',
+  memoryTierScriptContent: '记住本会话此脚本'
 } as const
 
 /** 记忆档位标签：用户可见，如实描述将记住的内容（最窄可用档）。 */
 export function memoryTierLabel(key: CacheKey): string {
+  if (key.kind === 'script-content') return CONFIRMATION_LABELS.memoryTierScriptContent
   if (key.kind === 'shell-command') {
     return `${CONFIRMATION_LABELS.memoryTierPrefix} ${key.verb}`
   }

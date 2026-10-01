@@ -179,6 +179,8 @@ export type ToolConfirmationResult = Readonly<{
   answerer?: 'user' | 'agent'
   cause?: string
   userMessage?: string
+  /** Opaque host-selected confirmation memory; consumed by the host callback and never written to History. */
+  selectedMemory?: unknown
 }> & (
   | Readonly<{ kind: 'approved'; receipt: string }>
   | Readonly<{ kind: 'denied' | 'timeout' | 'unavailable' | 'cancelled' }>

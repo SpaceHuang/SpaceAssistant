@@ -71,6 +71,7 @@ import { resolveHostedBrowserGateFacts } from './hostedBrowserGateFacts'
 import { shouldFallbackToUser } from '../confirmation/fallbackToUser'
 import { approvalFallbackReasonFor } from '../confirmation/fallbackReason'
 import type { ConfirmOutcome } from '../../src/shared/confirmation/types'
+import type { CacheKey } from '../../src/shared/confirmation/types'
 import { cancelToolConfirm } from '../toolConfirmRegistry'
 import { buildConfirmationDiff } from '../confirmation/confirmDiff'
 import { extractHostname } from '../browser/urlSecurity'
@@ -164,6 +165,15 @@ export interface AgentInvocationMaterials {
   applicationAdmission?: AgentHostPorts['applicationAdmission']
   resourceLocks?: import('./agentRuntime').ResourceLockRegistryLike
   toolExecutionConcurrency?: number
+}
+
+function scriptContentMemoryKey(value: unknown): CacheKey | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const candidate = value as Partial<Extract<CacheKey, { kind: 'script-content' }>>
+  return candidate.kind === 'script-content' && typeof candidate.sessionId === 'string' &&
+    typeof candidate.digest === 'string' && /^[a-f0-9]{64}$/.test(candidate.digest)
+    ? candidate as Extract<CacheKey, { kind: 'script-content' }>
+    : undefined
 }
 
 /** R1：会话工作目录单一事实源——装配期解析快照，调用边界经 refresh() 跟随绑定变更。 */
@@ -660,9 +670,21 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           }
           registered.updateExecutionContext(call, (context) => Object.assign(context, metadata))
         },
-        onConfirmed: (binding, result, args, answerer) => {
+        onConfirmed: (binding, result, args, answerer, selectedMemory) => {
           permitHandoff.onConfirmed?.(binding, result, args, answerer)
-          if (answerer !== 'user' || result.decision.type !== 'require-confirm' || args.toolName !== 'browser') return
+          if (answerer !== 'user' || result.decision.type !== 'require-confirm') return
+          if (args.toolName === 'run_script' && selectedMemory?.kind === 'script-content' && db) {
+            storage.persist?.recordUserAnswerFromDecision({
+              lane: materialsLane,
+              sessionId: materials.sessionId,
+              key: selectedMemory,
+              decision: result.decision,
+              answererKind: 'user',
+              source: 'user-confirm'
+            })
+            return
+          }
+          if (args.toolName !== 'browser') return
           let cacheKey: import('../../src/shared/confirmation/types').CacheKey | undefined
           if (
             args.toolInput.action === 'navigate' &&
@@ -946,10 +968,11 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         } : {})
       })),
       publish: publishConfirmation,
-      onApproved: (call, outcome) => markAgentSdkSafetyDecisionConfirmed(
+      onApproved: (call, outcome, _confirmation, _context, selectedMemory) => markAgentSdkSafetyDecisionConfirmed(
         safetyPolicy,
         call,
-        outcome.answerer === 'agent' ? 'agent' : 'user'
+        outcome.answerer === 'agent' ? 'agent' : 'user',
+        scriptContentMemoryKey(selectedMemory)
       )
       })
     },

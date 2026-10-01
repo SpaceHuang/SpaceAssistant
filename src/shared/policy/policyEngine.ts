@@ -64,6 +64,8 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         tokens.add(signal.kind)
         tokens.add(`script-path-extraction:${signal.completeness}`)
         if (signal.dynamicAccess) tokens.add('script-dynamic-access')
+        if (signal.unknownReason) tokens.add(`script-path-extraction:${signal.unknownReason}`)
+        else if (signal.completeness === 'unknown') tokens.add('script-path-extraction:unclassified')
         break
       case 'script-language-analysis':
         tokens.add(signal.kind)
@@ -114,6 +116,7 @@ export function deriveCacheKeys(
 ): CacheKey[] {
   if (constraints && !constraints.memory.canRead) return []
   const keys: CacheKey[] = []
+  const scriptPathsUnknown = facts.signals.some((signal) => signal.kind === 'script-path-extraction' && signal.completeness === 'unknown')
   for (const signal of facts.signals) {
     switch (signal.kind) {
       case 'command-sequence':
@@ -152,9 +155,15 @@ export function deriveCacheKeys(
         }
         break
       case 'path-target':
+        if (scriptPathsUnknown) break
         // B4：敏感文件（sensitive-file zone）不派生任何缓存键——既不给记忆档位，也不消费已有条目。
         if (signal.zone === 'sensitive-file') break
         keys.push({ kind: 'path', path: signal.path, level: 'file' })
+        break
+      case 'script-path-extraction':
+        if (signal.completeness === 'unknown' && signal.unknownReason === 'unmodeled-call' && !signal.dynamicAccess && signal.contentDigest && /^[a-f0-9]{64}$/.test(signal.contentDigest) && sessionId) {
+          keys.push({ kind: 'script-content', digest: signal.contentDigest, sessionId })
+        }
         break
       default:
         break

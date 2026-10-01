@@ -233,8 +233,32 @@ export const DEFAULT_POLICY_RULES: PolicyRule[] = [
   {
     id: 'script-path-unknown-confirm',
     when: 'invocation',
-    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:unknown'] },
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-dynamic-access'] },
     action: 'confirm-every-time', locked: true, reason: '脚本路径提取不完整，需真人确认'
+  },
+  {
+    id: 'script-path-unclassified-confirm',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:unclassified'] },
+    action: 'confirm-every-time', locked: true, reason: '脚本分析原因未分类，需真人确认'
+  },
+  {
+    id: 'script-dynamic-execution-confirm',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:dynamic-execution'] },
+    action: 'confirm-every-time', locked: true, reason: '脚本存在动态执行，需逐次真人确认'
+  },
+  {
+    id: 'script-suspicious-path-unknown-confirm',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-analysis:suspicious', 'script-path-extraction:unmodeled-call'] },
+    action: 'confirm-every-time', locked: true, reason: '可疑脚本不允许记忆放行'
+  },
+  {
+    id: 'script-unmodeled-path-ask',
+    when: 'invocation',
+    match: { lane: ['desktop', 'wechat', 'feishu'], toolName: 'run_script', signals: ['script-path-extraction:unmodeled-call'] },
+    action: 'ask', denyClass: 'insufficient-info', reason: '脚本含未建模调用；可选择仅在本会话信任相同脚本'
   },
   {
     id: 'script-unverified-language-confirm',

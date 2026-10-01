@@ -26,7 +26,10 @@ export function mapAgentSdkConfirmationOutcome(outcome: ConfirmOutcome, requeste
     ? { userMessage: outcome.reason.summary.trim() }
     : {}
   if (outcome.kind === 'approved' && (outcome.cause === 'user-approved' || outcome.cause === 'agent-approved')) {
-    return { kind: 'approved', receipt: `confirmation:${randomUUID()}`, ...attribution, ...reason }
+    return {
+      kind: 'approved', receipt: `confirmation:${randomUUID()}`, ...attribution, ...reason,
+      ...(outcome.memory ? { selectedMemory: outcome.memory } : {})
+    }
   }
   if (outcome.kind === 'timeout') return { kind: 'timeout', ...attribution, ...reason }
   if (outcome.cause === 'cancelled') return { kind: 'cancelled', ...attribution, ...reason }
@@ -43,7 +46,8 @@ export function createAgentSdkConfirmationPort(input: {
     call: Parameters<ConfirmationPort>[0]['call'],
     outcome: Awaited<ReturnType<ConfirmationPort>>,
     confirmation: Parameters<ConfirmationPort>[0],
-    context: GateConfirmationContext
+    context: GateConfirmationContext,
+    selectedMemory?: unknown
   ): void
   fallback?(
     call: Parameters<ConfirmationPort>[0]['call'],
@@ -97,7 +101,7 @@ export function createAgentSdkConfirmationPort(input: {
         result.outcome.answererKind === 'agent' && !confirmation.signal?.aborted && input.fallback) {
         outcome = await input.fallback(confirmation.call, confirmation, confirmation.context as GateConfirmationContext, result.outcome) ?? outcome
       }
-      if (outcome.kind === 'approved') input.onApproved?.(confirmation.call, outcome, confirmation, confirmation.context as GateConfirmationContext)
+      if (outcome.kind === 'approved') input.onApproved?.(confirmation.call, outcome, confirmation, confirmation.context as GateConfirmationContext, outcome.selectedMemory)
       return outcome
     } finally {
       if (abort) confirmation.signal?.removeEventListener('abort', abort)

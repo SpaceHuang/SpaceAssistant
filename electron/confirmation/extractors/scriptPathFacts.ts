@@ -5,7 +5,12 @@ import type { IrExpr, IrModule, IrStmt } from '../../shell/scriptIr/types'
 import { scriptParserService } from '../../shell/scriptParserService'
 import * as ts from 'typescript'
 
-export type ScriptPathFacts = { paths: string[]; completeness: 'complete' | 'unknown'; dynamicAccess: boolean }
+export type ScriptPathFacts = {
+  paths: string[]
+  completeness: 'complete' | 'unknown'
+  dynamicAccess: boolean
+  unknownReason?: 'dynamic-execution' | 'unmodeled-call' | null
+}
 export type ScriptPathLanguage = 'python' | 'javascript' | 'typescript' | 'powershell' | 'bash' | string
 
 const FILE_CALLS = new Set([
@@ -57,22 +62,22 @@ function staticString(expr: IrExpr | undefined): string | null {
   return foldStringIr(expr)
 }
 
-function walkExpr(expr: IrExpr, scope: IrScope, paths: Set<string>, state: { unknown: boolean }): void {
+function walkExpr(expr: IrExpr, scope: IrScope, paths: Set<string>, state: { unknown: boolean; dynamic: boolean }): void {
   if (expr.kind === 'call') {
     const chain = resolveIrChain(expr.callee, scope).fullName
-    if (chain && PROCESS_CALLS.has(chain)) state.unknown = true
+    if (chain && PROCESS_CALLS.has(chain)) { state.unknown = true; state.dynamic = true }
     const pathMethod = expr.callee.kind === 'attr' ? expr.callee.attr : ''
     const receiver = expr.callee.kind === 'attr' ? expr.callee.base : undefined
     const receiverConstructor = receiver?.kind === 'call' ? resolveIrChain(receiver.callee, scope).fullName : undefined
     const isPathMethod = Boolean(receiverConstructor && (receiverConstructor === 'Path' || receiverConstructor.endsWith('.Path')) && ['open', 'read_text', 'read_bytes', 'write_text', 'write_bytes'].includes(pathMethod))
     if (isPathMethod) {
       const value = receiver?.kind === 'call' ? staticString(receiver.args[0]) : null
-      if (value === null || receiver?.kind !== 'call' || receiver.args.length !== 1) state.unknown = true
+      if (value === null || receiver?.kind !== 'call' || receiver.args.length !== 1) { state.unknown = true; state.dynamic = true }
       else paths.add(value)
     } else if (chain && FILE_CALLS.has(chain)) {
       const count = chain === 'os.rename' || chain === 'os.replace' || chain === 'shutil.copy' || chain === 'shutil.copy2' || chain === 'shutil.move' ? 2 : 1
       if (expr.args.length < count || expr.args.slice(0, count).some((arg) => staticString(arg) === null)) {
-        state.unknown = true
+        state.unknown = true; state.dynamic = true
       }
       for (const arg of expr.args.slice(0, count)) {
         const value = staticString(arg)
@@ -82,7 +87,7 @@ function walkExpr(expr: IrExpr, scope: IrScope, paths: Set<string>, state: { unk
       for (const kw of expr.kwargs) {
         if (['file', 'path', 'src', 'dst', 'source', 'destination'].includes(kw.name)) {
           const value = staticString(kw.value)
-          if (value === null) state.unknown = true
+          if (value === null) { state.unknown = true; state.dynamic = true }
           else paths.add(value)
         }
       }
@@ -109,30 +114,30 @@ function walkExpr(expr: IrExpr, scope: IrScope, paths: Set<string>, state: { unk
     case 'await': case 'starred': walkExpr(expr.value, scope, paths, state); break
     case 'yield': if (expr.value) walkExpr(expr.value, scope, paths, state); break
     case 'comprehension': walkExpr(expr.elt, scope, paths, state); expr.generators.forEach((g) => walkExpr(g.iter, scope, paths, state)); break
-    case 'f_string': if (expr.interpolations.length) state.unknown = true; expr.interpolations.forEach((v) => walkExpr(v, scope, paths, state)); break
+    case 'f_string': if (expr.interpolations.length) { state.unknown = true; state.dynamic = true }; expr.interpolations.forEach((v) => walkExpr(v, scope, paths, state)); break
   }
 }
 
-function walkStatements(stmts: IrStmt[], inherited: IrScope, paths: Set<string>, state: { unknown: boolean }): void {
+function walkStatements(stmts: IrStmt[], inherited: IrScope, paths: Set<string>, state: { unknown: boolean; dynamic: boolean }): void {
   const scope = { modules: new Map(inherited.modules), attrs: new Map(inherited.attrs) }
   for (const stmt of stmts) {
     if (stmt.kind === 'import' || stmt.kind === 'from_import') { bindImport(scope, stmt); continue }
     switch (stmt.kind) {
-      case 'assign': stmt.targets.forEach((name) => { if (scope.modules.has(name) || scope.attrs.has(name)) state.unknown = true }); walkExpr(stmt.value, scope, paths, state); break
-      case 'aug_assign': state.unknown = true; walkExpr(stmt.value, scope, paths, state); break
+      case 'assign': stmt.targets.forEach((name) => { if (scope.modules.has(name) || scope.attrs.has(name)) { state.unknown = true; state.dynamic = true } }); walkExpr(stmt.value, scope, paths, state); break
+      case 'aug_assign': state.unknown = true; state.dynamic = true; walkExpr(stmt.value, scope, paths, state); break
       case 'expr': walkExpr(stmt.value, scope, paths, state); break
       case 'if': walkExpr(stmt.test, scope, paths, state); walkStatements(stmt.body, scope, paths, state); walkStatements(stmt.orelse, scope, paths, state); break
       case 'for': walkExpr(stmt.iter, scope, paths, state); walkStatements(stmt.body, scope, paths, state); walkStatements(stmt.orelse, scope, paths, state); break
       case 'while': walkExpr(stmt.test, scope, paths, state); walkStatements(stmt.body, scope, paths, state); walkStatements(stmt.orelse, scope, paths, state); break
       case 'with': stmt.items.forEach((item) => walkExpr(item.contextExpr, scope, paths, state)); walkStatements(stmt.body, scope, paths, state); break
       case 'try': walkStatements(stmt.body, scope, paths, state); stmt.handlers.forEach((h) => { if (h.typeExpr) walkExpr(h.typeExpr, scope, paths, state); walkStatements(h.body, scope, paths, state) }); walkStatements(stmt.orelse, scope, paths, state); walkStatements(stmt.finalbody, scope, paths, state); break
-      case 'function_def': state.unknown = true; stmt.defaults.forEach((v) => walkExpr(v, scope, paths, state)); stmt.decorators.forEach((v) => walkExpr(v, scope, paths, state)); walkStatements(stmt.body, scope, paths, state); break
-      case 'class_def': state.unknown = true; stmt.bases.forEach((v) => walkExpr(v, scope, paths, state)); stmt.decorators.forEach((v) => walkExpr(v, scope, paths, state)); walkStatements(stmt.body, scope, paths, state); break
+      case 'function_def': state.unknown = true; state.dynamic = true; stmt.defaults.forEach((v) => walkExpr(v, scope, paths, state)); stmt.decorators.forEach((v) => walkExpr(v, scope, paths, state)); walkStatements(stmt.body, scope, paths, state); break
+      case 'class_def': state.unknown = true; state.dynamic = true; stmt.bases.forEach((v) => walkExpr(v, scope, paths, state)); stmt.decorators.forEach((v) => walkExpr(v, scope, paths, state)); walkStatements(stmt.body, scope, paths, state); break
       case 'return': if (stmt.value) walkExpr(stmt.value, scope, paths, state); break
       case 'assert': walkExpr(stmt.test, scope, paths, state); break
       case 'raise': if (stmt.value) walkExpr(stmt.value, scope, paths, state); break
-      case 'delete': stmt.targets.forEach((v) => { state.unknown = true; walkExpr(v, scope, paths, state) }); break
-      case 'global_nonlocal': state.unknown = true; break
+      case 'delete': stmt.targets.forEach((v) => { state.unknown = true; state.dynamic = true; walkExpr(v, scope, paths, state) }); break
+      case 'global_nonlocal': state.unknown = true; state.dynamic = true; break
       case 'pass': case 'break': case 'continue': break
     }
   }
@@ -232,7 +237,7 @@ function extractTypeScriptPathFacts(code: string, language: 'javascript' | 'type
     node.forEachChild(visit)
   }
   visit(source)
-  return { paths: [...paths], completeness: state.unknown ? 'unknown' : 'complete', dynamicAccess: state.unknown }
+  return { paths: [...paths], completeness: state.unknown ? 'unknown' : 'complete', dynamicAccess: state.unknown, ...(state.unknown ? { unknownReason: 'dynamic-execution' as const } : {}) }
 }
 
 function extractPowerShellPathFacts(code: string): ScriptPathFacts {
@@ -262,7 +267,7 @@ function extractPowerShellPathFacts(code: string): ScriptPathFacts {
       values.forEach((value) => paths.add(value))
     } else if (!PS_SAFE_CALLS.has(name)) unknown = true
   }
-  return { paths: [...paths], completeness: unknown ? 'unknown' : 'complete', dynamicAccess: unknown }
+  return { paths: [...paths], completeness: unknown ? 'unknown' : 'complete', dynamicAccess: unknown, ...(unknown ? { unknownReason: 'dynamic-execution' as const } : {}) }
 }
 
 /** 基于与脚本安全分析相同 Python 语法树 IR 提取文件路径；未知或间接效果一律 fail-closed。 */
@@ -276,7 +281,10 @@ export function extractScriptPathFacts(code: string, language: ScriptPathLanguag
   }
   if (!scriptParserService.getStatus().ready) return emptyUnknown()
   const paths = new Set<string>()
-  const state = { unknown: false }
+  const state = { unknown: false, dynamic: false }
   try { walkStatements(ir.body, newScope(), paths, state) } catch { return emptyUnknown() }
-  return { paths: [...paths], completeness: state.unknown ? 'unknown' : 'complete', dynamicAccess: state.unknown }
+  return {
+    paths: [...paths], completeness: state.unknown ? 'unknown' : 'complete', dynamicAccess: state.dynamic,
+    ...(state.unknown ? { unknownReason: state.dynamic ? 'dynamic-execution' as const : 'unmodeled-call' as const } : {})
+  }
 }
