@@ -44,6 +44,8 @@ describe('createHostedTurnHandoff', () => {
   })
 
   it('session claim 等待超时后移除排队行，不让后续 turn 永久卡在 FIFO 队首', async () => {
+    vi.useFakeTimers()
+    try {
     const db = createMemoryAppDb()
     const first = claimSessionExecution(db, { sessionId: 'queue-timeout-session', turnId: 'active-turn', ownerId: 'active-owner' })
     if (!first.acquired) throw new Error('test setup failed to claim session')
@@ -54,10 +56,13 @@ describe('createHostedTurnHandoff', () => {
       sessionId: 'queue-timeout-session', sessionDb: db
     })
 
-    await expect(handoff({
+    const pending = handoff({
       request: { messages: [{ role: 'user', content: 'queued then timed out' }] },
       deadlineAt: Date.now() - 1
-    } as never)).rejects.toThrow('SESSION_EXECUTION_QUEUE_TIMEOUT')
+    } as never)
+    const timedOut = expect(pending).rejects.toThrow('SESSION_EXECUTION_QUEUE_TIMEOUT')
+    await vi.advanceTimersByTimeAsync(30_001)
+    await timedOut
     expect(getDbConnection(db).prepare('SELECT status FROM session_execution_queue WHERE session_id=? AND turn_id=?')
       .get('queue-timeout-session', 'timed-out-turn')).toBeUndefined()
 
@@ -67,6 +72,9 @@ describe('createHostedTurnHandoff', () => {
     expect(claimSessionExecution(db, { sessionId: 'queue-timeout-session', turnId: 'next-turn', ownerId: 'next-owner' }))
       .toMatchObject({ acquired: true })
     db.close()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('replaces the prior request transcript with latest completed session History before Hosted execution', async () => {
@@ -846,11 +854,10 @@ describe('createHostedTurnHandoff', () => {
     const request = { messages: [{ role: 'user', content: 'hello' }], maxTokens: 100 }
     const initialResponse = { message: { role: 'assistant', content: 'first' }, finishReason: 'stop', usage: { type: 'usage', inputTokens: 3, outputTokens: 2 }, historyCommitted: true as const }
     const applicationAdmission = { park: vi.fn(() => 'parked'), resume: vi.fn(async () => true) }
-    const deadlineAt = Date.now() + 10_000
+    const result = await handoff({ request, initialResponse, applicationAdmission })
 
-    const result = await handoff({ request, initialResponse, applicationAdmission, deadlineAt })
-
-    expect(agentSdk.createHostedTurnRuntime).toHaveBeenCalledWith(expect.objectContaining({ applicationAdmission, deadlineAt }))
+    expect(agentSdk.createHostedTurnRuntime).toHaveBeenCalledWith(expect.objectContaining({ applicationAdmission }))
+    expect(agentSdk.createHostedTurnRuntime).not.toHaveBeenCalledWith(expect.objectContaining({ deadlineAt: expect.any(Number) }))
     expect(mockRunHostedAgentTurn).toHaveBeenCalledWith(expect.objectContaining({ host: runtime.host, invocationId: 'req-1', turnId: 'turn-1', routeId: 'route-1', request, initialResponse }))
     expect(result).toMatchObject({ result: { ok: true, content: [{ text: 'finished' }], usage: { input_tokens: 20, output_tokens: 9, cache_read_input_tokens: 4 } }, finalization: { outcome: 'completed', usage: { modelTurns: 2, initialMessageCount: 1, notDispatchedToolCallIds: ['denied-tool'] } } })
     expect(dispose).toHaveBeenCalledOnce()

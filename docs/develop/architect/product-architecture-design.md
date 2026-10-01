@@ -3,6 +3,7 @@
 > 定位：本文阐述 SpaceAssistant 的**架构理想态** —— 产品要支撑什么、主进程分哪几块、每块负责什么、对外接口是什么、今天差在哪、往哪走。它是方向共识，不是具体方案。
 > 上游（业务预期、当前问题、工作块与优先级）：`docs/develop/architect/agent-core-roadmap.md`。
 > 下游（具体方案）：`agent-core-roadmap.md` §9 的方案清单，已完成的如 `docs/develop/architect/confirmation-answerer-and-auto-approval-design.md`。
+> 当前准入策略（并发额度、排队容量与审批恢复等待语义）：[`docs/requirement/agent-runtime-admission-policy-requirement.md`](../../requirement/agent-runtime-admission-policy-requirement.md)。本文中早期关于速率、配额和审批有界等待的规划表述以该策略记录为准。
 > 参考（外部实现的对照研究，非基线）：`docs/develop/architect/codex-architecture-comparison-and-learnings.md`（Codex）、`docs/develop/architect/dsh-architecture-comparison-and-learnings.md`（DeepSeek Harness）、`docs/develop/architect/claude-code-architecture-comparison-and-learnings.md`（Claude Code）；三家横向汇总见 `docs/develop/architect/three-products-architecture-benchmark-summary.md`。
 > 引用约定：`roadmap §N.M` 指规划文档的小节；不带前缀的 `§N` 指本文小节。
 > 状态：待评审 ｜ 基线：工作区 HEAD ｜ 摸排日期：2026-09-12
@@ -94,7 +95,7 @@
 
 1. **意图产生**（渲染进程，或飞书 / 微信、定时器、事件源）：用户点发送，只表达意图（发了什么、点了什么），不决定用哪个模型、哪些工具、要不要确认。
 2. **进入主干**（Driver）：桌面走 IPC 驱动协议，远端走 IM 网关，定时 / 事件由主进程内的触发源直接进入。Driver 负责入站解析与身份归属（哪个输入方、映射到哪个会话域与 Profile）。
-3. **准入与装配**（Runtime）：先按全局并发、速率与配额**准入**（§5），再解析 Profile（模型档 / 工具能力集 / Skill / 策略档）、解析模型与服务凭据、装配事件出口实现，产出**一个 Invocation**（§6.2）。**Driver 不直接调 Core**（§4.3）。
+3. **准入与装配**（Runtime）：先按全局并发与 lane 并发上限**准入**（§5），再解析 Profile（模型档 / 工具能力集 / Skill / 策略档）、解析模型与服务凭据、装配事件出口实现，产出**一个 Invocation**（§6.2）。**Driver 不直接调 Core**（§4.3）。
 4. **执行**（Core 加 Safety）：Core 按会话锚点经 `loadContext` 装载历史并装配上下文（§6.2），跑推理循环；每次工具调用都经过 Safety 的门控（规则 → 缓存 → 回答者），安全审计独立落盘。
 5. **观察与落盘**（事件出口加 Storage）：执行中的事实经出口流出（无窗口时 no-op，不影响执行），会话台账与内部调用记录由 Storage 落盘。
 6. **回投**（Runtime 加 Driver）：调用返回 `InvocationResult`，Driver 按投递路由把结果送回发起方或最近可用入口；视图更新走失效通知（§4.4）。
@@ -113,7 +114,7 @@
 | --- | --- | --- | --- |
 | **Core**（Agent 内核） | 推理循环、上下文装配、工具执行、事实与事件产出、执行预算与取消 | 换了它，执行语义就变了；对外只暴露 Invocation | `toolChatLoop.ts`、`tools/`、`assistantFactAggregator`、`sessionEvents` |
 | **Safety**（安全与审计） | 策略引擎与门控、确认通道解析、缓存写入准入、审计落盘 | **不可被 Runtime 的配置绕过**；策略内容在外，底线在此 | `src/shared/policy/`、`confirmation/`（含审计日志与读取器） |
-| **Runtime**（准入与宿主装配） | **准入**（并发 / 速率 / 配额），加把宿主的东西装配成一次 Invocation：Profile 解析、Tools 与 Skill 供给、模型与服务解析、事件出口实现、Turn 协调 | 只回答「这次能不能跑、带什么、过程往哪里说」 | `turnExecutionConfig.ts`、`effectiveTools.ts`、`skills/`、`llmServiceResolver.ts`、`turnRuntime` / `turnCoordinator`；**出口实现的雏形**：`floatingNotification*`、`safeWebContentsSend`（见 §4.1 模糊地带） |
+| **Runtime**（准入与宿主装配） | **准入**（全局与 lane 并发上限），加把宿主的东西装配成一次 Invocation：Profile 解析、Tools 与 Skill 供给、模型与服务解析、事件出口实现、Turn 协调 | 只回答「这次能不能跑、带什么、过程往哪里说」 | `turnExecutionConfig.ts`、`effectiveTools.ts`、`skills/`、`llmServiceResolver.ts`、`turnRuntime` / `turnCoordinator`；**出口实现的雏形**：`floatingNotification*`、`safeWebContentsSend`（见 §4.1 模糊地带） |
 | **Driver**（驱动源） | 四类发起者：桌面界面、远端输入方、定时、事件；各自负责「怎么收指令、结果怎么回去」 | 只回答「谁发起、何时发起、结果给谁」 | `main.ts`、`tray` / `menu`、`appIpc.ts` / `preload.ts`、`feishu/`、`wechat/`、`remote/` |
 | **Storage**（持久化） | 会话与消息（含内部会话 / 内部调用记录）、安全审计文件、决策缓存 | 语义敏感：归属、可见性、只追加、保留期 | `database/`、`sessionBackupManager` |
 | **Utils**（支撑） | 日志、脱敏、路径安全、加解密机制、i18n、纯逻辑与类型 | 删掉它不影响语义，只影响质量或便利 | `agentLogger/`、`logSanitize`、`pathSecurity`、`secureApiKey`、`src/shared/` 纯逻辑、i18n 机制（见下方「横切关注点」） |
@@ -149,7 +150,7 @@
 - **Safety 在 Core 的判定路径上，不可绕**；但它读的「生效规则」随 Invocation 传入，自己不去读库（§7.1）。
 - **Safety 只依赖端口，不依赖 Runtime**：确认回答者（`answerer`）的实现由 Runtime 在装配期注入。当回答者是「审批 Agent」时，该实现（块 2 方案的 `AgentChannel`）会在运行期发起一次**嵌套 Core 调用** —— 这是全文唯一一条「判定路径回到 Core」的边（§7.2 规则 5、`confirmation-answerer-and-auto-approval-design.md` §4.3）。
   它是**运行期递归，不是结构依赖**：Safety 看不到 Runtime、拿不到 Invocation，只看到一个 `ConfirmationChannel`，把人换成 Agent 它一行不改。递归有界靠两条：审批调用的工具集**封闭只读、在策略层显式免再审批**（否则会「审批套审批」）；轮数 / 深度 / 预算有上界（块 2 方案 §4.4）。**若豁免被配置破坏、深度上界触发，结论是 fail-closed 并落一条可区分审计**（`confirm.outcome` 的 `cause=recursion-blocked`）。它归**不可变集**而非 `locked` 底线集：`locked` 只拦放宽，拦不住收紧引发的停摆（§7.2）。
-- **准入在 Runtime、配额状态在 Storage**：跨调用的全局约束（并发 / 速率 / lane 配额）不属于任何一次调用，不放 Core 的 `limits`；由 Runtime 在装配前施加，状态落 Storage（§5）。**嵌套调用同样过准入、不豁免**，但优先级按「谁在等它」定：同步依赖继承等待方的优先级且有界等待，可放弃的派生同权排队（§5）。
+- **准入在 Runtime、并发状态在 Storage**：跨调用的并发约束不属于任何一次调用，不放 Core 的 `limits`；由 Runtime 在装配前施加，状态落 Storage（§5）。**嵌套调用同样过准入**，但优先级按「谁在等它」定：同步依赖继承等待方的优先级与保留位，可放弃的派生同权排队（§5）。
 - **Storage 被 Core（经两个端口）、Safety、Runtime、Driver 共同使用**，它不反向依赖任何人（§8）。
 - **Utils 可以被任何一层使用**，但不得持有语义。
 
@@ -343,16 +344,16 @@
 
 Runtime 回答**三个**问题，顺序也是它们发生的顺序：
 
-1. **这次调用能不能跑**（准入）：并发、速率、配额。
+1. **这次调用能不能跑**（准入）：全局并发与 lane 并发上限。
 2. **这次调用带什么**（装配）：Profile / Tools / Skill / 模型解析。
 3. **过程往哪里说**（出口）：事件出口实现。
 
-**准入是这一轮新增的一层，也是最容易漏掉的一层。** `Invocation.limits` 管**单次调用内**的上界（轮数、时长、单次 token、**调用内并发**）；**跨调用的全局约束**（同时跑几个后台 Agent、总 token 速率、每个 lane 的配额）不属于任何一次调用，必须有公共前置，那就是准入。**没有它，管家 Agent 加定时与事件源一上线就会爆**：多个定时任务同一分钟触发，单看都「合法」，合起来把配额和机器打满。
+**准入是这一轮新增的一层，也是最容易漏掉的一层。** `Invocation.limits` 管**单次调用内**的上界（轮数、时长、单次 token、**调用内并发**）；跨调用的全局并发约束不属于任何一次调用，必须有公共前置，那就是准入。并发上限用于控制同时运行的 Agent 数量；它不代表 CPU、内存或模型服务配额。
 
 | 层 | 管什么 | 谁施加 | 状态 |
 | --- | --- | --- | --- |
 | 单次调用内 | 轮数、时长、单次 token 上界、**调用内并发**（工具并发与子调用 fan-out） | `Invocation.limits`，Core 施加 | 随调用，不持久 |
-| **跨调用全局** | 并发数、速率、lane 配额 | **Runtime 的准入**（新增） | **Storage**：跨重启不丢 |
+| **跨调用全局** | 并发数、lane 并发上限 | **Runtime 的准入**（新增） | **Storage**：跨重启不丢 |
 | 触发时刻编排 | 定时、事件、重试节奏 | Driver（触发源） | 配置数据 |
 
 **为什么是 Runtime，而不是 Driver、也不是新增一层**：所有调用都经过 Runtime（§2.6 的唯一装配点），它是唯一的公共前置。Driver 是**多个并行驱动源**、没有中心，全局判定放进去会变成「各驱动源各判一次」的竞态；新增一层「Scheduler」也要先回答「谁调用它」，答案仍是「Runtime 调」，等于多一层转发。**它与「谁发起」（Driver）是两件事**：Driver 决定「要不要发起」，Runtime 决定「发起之后现在能不能跑」。
@@ -368,7 +369,7 @@ Runtime 回答**三个**问题，顺序也是它们发生的顺序：
 
 | 嵌套调用 | 例子 | 准入语义 |
 | --- | --- | --- |
-| **关键路径上的同步依赖** | 审批回答者（`invokeApproval`） | 优先级**继承正在等待它的那条调用**（交互式等就是交互式，后台等就是后台）—— 不提升也不降级，避免后台的审批插到前台用户前面（硬要求 2 的推广）。**有界等待**：超出上界即视为「拿不到裁决」，不能让一条工具调用无限期挂在准入队列里（上界随 Profile 声明，与轮数、预算同处一处，§5.4） |
+| **关键路径上的同步依赖** | 审批回答者（`invokeApproval`） | 优先级**继承正在等待它的那条调用**（交互式等就是交互式，后台等就是后台）—— 不提升也不降级，避免后台的审批插到前台用户前面（硬要求 2 的推广）。审批通过后的运行资格恢复持续排队，直到取得资格、队列已满或 turn 被取消；不使用固定的 admission 等待时限（当前决策见准入策略文档） |
 | **可放弃的派生** | SubAgent、工具内派生调用 | **同权排队**。被拒时把「资源不足」作为**工具结果**回灌父调用，让父自己换方案（缩范围 / 换工具 / 报告用户），而不是整条调用失败 |
 
 **准入拒绝永远不构成安全结论**（硬要求 1 的推论）：审批调用拿不到配额时，Safety 得到的事实是「**无法获得裁决**」，不是「裁决为否」。审计上两者必须可区分（`confirm.outcome` 的 `cause=unavailable` 对 `cause=agent-deny`），否则「配额不足」会被统计成「审批判定危险」，安全指标与审计口径同时失真。处置仍是 **fail-closed**（工具调用被拒），不存在「拿不到裁决就放行」；但不接受**静默** fail-closed：必须落审计，并给调用方**可区分的理由**（同硬要求 3、4）。原因拆开后，「该自动批却被拒」就从模糊抱怨变成可定位、可告警的准入事实。
@@ -535,7 +536,7 @@ Invocation
   └─ events        或经由出口流式产出
 ```
 
-**`limits` 只装单次调用内的上界，不含全局并发**：跨调用的并发数、速率、lane 配额由 Runtime 的**准入**施加，状态落 Storage，不进 `limits`（§5）。`limits` 里的「并发」指**调用内并发**：一次调用内同时发起的工具执行与子调用 fan-out 的上界，只在这条调用活着时有效。两者的区别不是粒度，而是**判定时刻**：调用内并发由 Core 在循环里施加，全局并发必须在装配之前施加（同 §5「Driver 决定要不要发起，Runtime 决定现在能不能跑」）。
+**`limits` 只装单次调用内的上界，不含全局并发**：跨调用的并发数与 lane 并发上限由 Runtime 的**准入**施加，状态落 Storage，不进 `limits`（§5）。`limits` 里的「并发」指**调用内并发**：一次调用内同时发起的工具执行与子调用 fan-out 的上界，只在这条调用活着时有效。两者的区别不是粒度，而是**判定时刻**：调用内并发由 Core 在循环里施加，全局并发必须在装配之前施加（同 §5「Driver 决定要不要发起，Runtime 决定现在能不能跑」）。
 
 **「上下文从哪来」要说死，否则会与 §8 的存储端口打架**：`messages` 只是**本次调用的新增输入**（用户新发的消息、确认回复、父调用交给 SubAgent 的初始任务；定时触发可以没有），**历史不经它传入**。完整上下文由 Core 在循环内装配：① 经 `loadContext` 端口按会话锚点装载**已有历史**与可寻址材料；② 与本次 `messages` 增量及 `additionalContext`（调用方给的可寻址材料）合并；③ 应用裁剪与注入规则，产出最终上下文。**历史不能改由调用方装载**，否则装配规则随调用方分叉（Runtime、IM 网关、后台触发各一份），「同样的历史必须产生同样的上下文」（§8）立刻失效，压缩与重放也失去统一落点。**`loadContext` 因此是 Core 的端口，不是 Runtime 的**：接口形状在 Core、实现由 Storage 注入、调用方在 Core 内部 —— 「Core 不认识表与 SQL」与「装配规则唯一」的唯一交点（§5.2、§8）。
 
@@ -789,7 +790,7 @@ Safety 管两件事：**该不该放行**（策略引擎，§7.1）与**由谁�
 | 20 | 可复用性没有验收：不启动 Electron 跑不完一个回合 | 全仓没有「非 Electron 环境跑完一个 Agent 回合」的测试；`npm run probe:sqlite` 也必须在完整 Electron 主进程里跑 | `createAgentRuntime(deps)` 之后在纯 node 环境跑完「带工具调用的回合 + 一次确认 + 一次拒绝」（§9、`agent-sdk-shape-decision.md` §6） | 1、2、17、18、19 → `—` | 未解决 |
 | 21 | 驱动源到 lane 的映射不全：`automation` 在类型里存在，在代码里不可达 | `rg -n 'automation' electron/confirmation/channels.ts` → **0 行**；`rg -n 'automation' src/shared/policy/defaultRules.ts` → **0 行**（反向证据） | lane 由驱动源层解析后随 Invocation 传入，桌面 / 远端 / 定时 / 事件四类各有可达的 lane；`automation` 不能只在类型里占个位（`ExecutionLane` 四个值、`laneOf()` 只返回三种）（§4.1、§7.1） | 1、3 → 22 | 已解决（20260916） |
 | 22 | lane 有档位、没有规则：`automation` 配了档位却零规则，落进通用兜底，并继承 desktop 的专属豁免 | `rg -n 'automation' src/shared/policy/` → 只有 `policyPackages.ts` 的两处档位配置，没有任何规则以它为 lane（反向证据） | 无人类应答者的驱动源（定时 / 事件）不得继承桌面豁免；规则集要显式写出来，兜底 fail-closed（§7.1、§7.2） | 3 → — | 已解决（20260916） |
-| 23 | Runtime 准入只做了三分之一、维度也不对：只有全局按会话的并发上限，没有速率与配额 | `rg -n -e admission -e rateLimit -e quota src/shared electron --glob '!*.test.ts'` → 命中全在浏览器域与 IM 入口，没有一处拦在调用入口上（反向证据） | 准入按**调用**施加、维度补齐（并发 / 速率 / 配额），对四类驱动源一致；渲染端不能绕过（§5） | 1、2、9 → — | 未解决 |
+| 23 | Runtime 准入只做了三分之一、维度也不对：只有全局按会话的并发上限，没有速率与配额 | `rg -n -e admission -e rateLimit -e quota src/shared electron --glob '!*.test.ts'` → 命中全在浏览器域与 IM 入口，没有一处拦在调用入口上（反向证据） | 准入按**调用**施加全局与 lane 并发上限，对四类驱动源一致；渲染端不能绕过（§5）。当前不施加 Agent 每小时启动配额 | 1、2、9 → — | 未解决 |
 | 24 | Storage 的保留语义没有归位：事件台账的保留与清理写在事件流实现同一个文件里，上限参数钉在启动流程中 | `electron/sessionEvents.ts:622`（`enforceSessionEventRetention` 与 `:626` `enforceSessionEventRetentionDetailed`，与事件流写入同处 `sessionEvents.ts` —— §2.4 该文件归 Core）、`electron/main.ts:426`（`enforceSessionEventRetentionDetailed(workDirState, 100)`，上限硬编码，调用点在启动维护流程 —— 归 Driver） | 保留期与清理随台账落盘一起归 **Storage**（§8「清理、保留期」、§2.3 第 5 步「会话台账…由 Storage 落盘」）；Driver 只触发、不持策略参数；保留的单位与上限可配、删除留痕 | — → — | 未解决 |
 
 

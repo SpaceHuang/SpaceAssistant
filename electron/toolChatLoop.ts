@@ -235,7 +235,6 @@ export type RunToolChatSessionArgs = {
   }>) => Promise<Readonly<{ result: RunToolChatSessionResult; finalization: HostedTurnFinalization }> | undefined>
   requestId: string
   /** 顶层父任务的绝对截止时间；缺省仅兼容旧入口，使用统一 10 分钟上限。 */
-  deadlineAt?: number
   toolExecutionConcurrency?: number
   resourceLocks?: AgentHostPorts['resourceLocks']
   applicationAdmission?: AgentHostPorts['applicationAdmission']
@@ -503,7 +502,6 @@ function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): R
   const additional = invocation.additionalContext
   return {
     requestId: invocation.trace.requestId,
-    deadlineAt: invocation.limits.deadlineAt,
     toolExecutionConcurrency: ports.toolExecutionConcurrency,
     resourceLocks: ports.resourceLocks,
     applicationAdmission: ports.applicationAdmission,
@@ -1056,7 +1054,6 @@ async function runToolChatSessionInner(
             ...(args.maxToolLoopRounds !== undefined ? { maxToolRounds: args.maxToolLoopRounds } : {}),
             ...(args.hostHistory ? { hostHistory: args.hostHistory } : {}),
             ...(args.applicationAdmission ? { applicationAdmission: args.applicationAdmission } : {}),
-            ...(args.deadlineAt !== undefined ? { deadlineAt: args.deadlineAt } : {}),
             ...(args.currentUserMessageId ? { currentUserMessageId: args.currentUserMessageId } : {}),
             ...(requiredUserMessage ? { requiredUserMessage } : {})
           })

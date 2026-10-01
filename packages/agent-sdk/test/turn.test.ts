@@ -138,11 +138,11 @@ describe('runAgentTurn', () => {
       toolExecution: toolExecutionPort(permits, async () => { events.push('execute'); return { output: 'written' } }),
       maxModelTurns: 2
     }
-    Object.assign(turnInput, { deadlineAt: Date.now() + 5000, applicationAdmission: {
+    Object.assign(turnInput, { deadlineAt: Date.now() - 1, applicationAdmission: {
       park: () => { events.push('park'); return 'parked-ticket' },
-      resume: async (handle: unknown, options?: { deadlineAt?: number }) => {
+      resume: async (handle: unknown, options?: { signal?: AbortSignal; deadlineAt?: number }) => {
         expect(handle).toBe('parked-ticket')
-        expect(options?.deadlineAt).toBe(turnInput.deadlineAt)
+        expect(options?.deadlineAt).toBeUndefined()
         events.push('resume')
         resumeCalls += 1
         return resumeCalls === 1 ? { ok: false as const, retryable: true } : { ok: true as const }

@@ -8,7 +8,6 @@ import {
   emptyAdmissionState,
   judgeAdmission,
   judgeResumeAdmission,
-  rollAdmissionWindow,
   type AdmissionPolicy,
   type AdmissionRequest,
   type AdmissionState
@@ -48,6 +47,24 @@ function req(partial: Partial<AdmissionRequest> = {}): AdmissionRequest {
 }
 
 describe('judgeAdmission 判定纯函数(偏差 23 逐场景)', () => {
+  it('默认并发额度为总量 100，移动链路各 8、自动化 4，桌面可使用剩余总量', () => {
+    expect(DEFAULT_ADMISSION_POLICY).toMatchObject({
+      globalMaxConcurrent: 100,
+      backgroundMaxConcurrent: 100,
+      laneMaxConcurrent: { desktop: 100, wechat: 8, feishu: 8, automation: 4 }
+    })
+    const state = emptyAdmissionState(0)
+    let admitted = 0
+    for (let index = 0; index < 100; index += 1) {
+      const result = judgeAdmission(req({ requestId: `desktop-cap-${index}` }), { ...state, activeInteractive: admitted, laneActive: { ...state.laneActive, desktop: admitted } }, DEFAULT_ADMISSION_POLICY, 0)
+      if (result.verdict === 'admit') admitted += 1
+    }
+    expect(admitted).toBe(100)
+    expect(judgeAdmission(req({ lane: 'wechat' }), { ...state, activeInteractive: 8, laneActive: { ...state.laneActive, wechat: 8 } }, DEFAULT_ADMISSION_POLICY, 0)).toEqual({ verdict: 'queue' })
+    expect(judgeAdmission(req({ lane: 'feishu' }), { ...state, activeInteractive: 8, laneActive: { ...state.laneActive, feishu: 8 } }, DEFAULT_ADMISSION_POLICY, 0)).toEqual({ verdict: 'queue' })
+    expect(judgeAdmission(req({ lane: 'automation', priority: 'background' }), { ...state, activeBackground: 4, laneActive: { ...state.laneActive, automation: 4 } }, DEFAULT_ADMISSION_POLICY, 0)).toEqual({ verdict: 'queue' })
+  })
+
   it('空状态 + 容量内 → admit', () => {
     const state = emptyAdmissionState(1_000)
     expect(judgeAdmission(req(), state, DEFAULT_ADMISSION_POLICY, 1_000)).toEqual({ verdict: 'admit' })
@@ -74,19 +91,9 @@ describe('judgeAdmission 判定纯函数(偏差 23 逐场景)', () => {
     expect(judgeAdmission(req({ role: 'approval-answerer', disposition: 'reject' }), overFull, policy, 0)).toEqual({ verdict: 'reject', cause: 'concurrency-cap' })
   })
 
-  it('速率与 lane 配额:超每小时启动上限按处置映射;窗口滚动重置', () => {
-    const policy: AdmissionPolicy = { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalHourlyStarts: 5 }
-    const state: AdmissionState = { ...emptyAdmissionState(0), windowStarts: 5 }
-    expect(judgeAdmission(req({ disposition: 'reject' }), state, policy, 1000)).toEqual({ verdict: 'reject', cause: 'rate-limit' })
-    expect(judgeAdmission(req({ disposition: 'defer' }), state, policy, 1000)).toEqual({ verdict: 'defer' })
-    expect(judgeAdmission(req({ disposition: 'degrade' }), state, policy, 1000)).toEqual({ verdict: 'degrade' })
-    // 窗口外 → 重置后放行
-    expect(judgeAdmission(req({ disposition: 'reject' }), state, policy, 3_600_000)).toEqual({ verdict: 'admit' })
-  })
-
   it('lane 并发配额独立于全局', () => {
     const policy: AdmissionPolicy = structuredClone(DEFAULT_ADMISSION_POLICY)
-    const state: AdmissionState = { ...emptyAdmissionState(0), laneActive: { ...emptyAdmissionState(0).laneActive, automation: 1 } }
+    const state: AdmissionState = { ...emptyAdmissionState(0), activeBackground: 4, laneActive: { ...emptyAdmissionState(0).laneActive, automation: 4 } }
     expect(judgeAdmission(req({ lane: 'automation', disposition: 'reject' }), state, policy, 0)).toEqual({ verdict: 'reject', cause: 'lane-concurrency-cap' })
     expect(judgeAdmission(req({ lane: 'desktop', disposition: 'reject' }), state, policy, 0)).toEqual({ verdict: 'admit' })
   })
@@ -100,7 +107,6 @@ describe('judgeAdmission 判定纯函数(偏差 23 逐场景)', () => {
     expect(state.activeInteractive).toBe(1)
     expect(state.activeBackground).toBe(1)
     expect(state.laneActive.automation).toBe(1)
-    expect(state.windowStarts).toBe(2)
     state = applyRelease(state, r1)
     state = applyRelease(state, r2)
     expect(state.activeInteractive).toBe(0)
@@ -108,13 +114,6 @@ describe('judgeAdmission 判定纯函数(偏差 23 逐场景)', () => {
     expect(state.laneActive.automation).toBe(0)
   })
 
-  it('rollAdmissionWindow 纯滚动', () => {
-    const state = { ...emptyAdmissionState(0), windowStarts: 9 }
-    const rolled = rollAdmissionWindow(state, 3_600_000)
-    expect(rolled.windowStarts).toBe(0)
-    expect(rolled.windowStart).toBe(3_600_000)
-    expect(state.windowStarts).toBe(9)
-  })
 })
 
 describe('CallAdmissionGate 普通队列取消', () => {
@@ -140,8 +139,6 @@ describe('judgeAdmission 属性/不变量(偏差 23 验收;mulberry32 随机操�
       globalMaxConcurrent: 4,
       backgroundMaxConcurrent: 2,
       laneMaxConcurrent: { desktop: 2, wechat: 2, feishu: 1, automation: 1 },
-      globalHourlyStarts: 50,
-      laneHourlyStarts: { desktop: 50, wechat: 50, feishu: 50, automation: 50 }
     }
     let state = emptyAdmissionState(0)
     const outstanding: AdmissionRequest[] = []
@@ -177,7 +174,6 @@ describe('judgeAdmission 属性/不变量(偏差 23 验收;mulberry32 随机操�
         expect(state.laneActive[lane]).toBeGreaterThanOrEqual(0)
       }
       expect(total).toBe(outstanding.length)
-      expect(state.windowStarts).toBeLessThanOrEqual(policy.globalHourlyStarts + outstanding.length)
     }
     expect(admittedThroughGate).toBeGreaterThan(0)
   })
@@ -383,30 +379,23 @@ describe('CallAdmissionGate 持久化失败收敛', () => {
     expect(remove).toHaveBeenCalled()
   })
 
-  it('恢复 waiter 超时终结时移除 AbortSignal listener', async () => {
-    vi.useFakeTimers()
-    try {
-      const gate = new CallAdmissionGate({
-        resumeTimeoutMs: 50,
-        policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 }
-      })
-      const first = await gate.acquire(req({ requestId: 'resume-timeout-listener-first' }))
-      expect(first.ok).toBe(true)
-      if (!first.ok) return
-      const parked = gate.park(first.ticket)!
-      const blocker = await gate.acquire(req({ requestId: 'resume-timeout-listener-blocker' }))
-      expect(blocker.ok).toBe(true)
-      if (!blocker.ok) return
-      const controller = new AbortController()
-      const remove = vi.spyOn(controller.signal, 'removeEventListener')
-      const pending = gate.resume(parked, { signal: controller.signal })
-      await vi.advanceTimersByTimeAsync(51)
-      await expect(pending).resolves.toMatchObject({ ok: false, cause: 'resume-timeout' })
-      expect(remove).toHaveBeenCalled()
-      blocker.ticket.release()
-    } finally {
-      vi.useRealTimers()
-    }
+  it('恢复 waiter 不设等待时限，获准时移除 AbortSignal listener', async () => {
+    const gate = new CallAdmissionGate({ policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
+    const first = await gate.acquire(req({ requestId: 'resume-wait-listener-first' }))
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    const parked = gate.park(first.ticket)!
+    const blocker = await gate.acquire(req({ requestId: 'resume-wait-listener-blocker' }))
+    expect(blocker.ok).toBe(true)
+    if (!blocker.ok) return
+    const controller = new AbortController()
+    const remove = vi.spyOn(controller.signal, 'removeEventListener')
+    const pending = gate.resume(parked, { signal: controller.signal })
+    await Promise.resolve()
+    expect(gate.queuedCount).toBe(1)
+    blocker.ticket.release()
+    await expect(pending).resolves.toMatchObject({ ok: true })
+    expect(remove).toHaveBeenCalled()
   })
 
   it('普通 waiter 取消时持久化失败也必须结算，不得永久挂起', async () => {
@@ -428,11 +417,8 @@ describe('CallAdmissionGate 持久化失败收敛', () => {
     if (first.ok) first.ticket.release()
   })
 
-  it('恢复 waiter 取消或超时时持久化失败也必须结算', async () => {
-    const gate = new CallAdmissionGate({
-      policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 },
-      resumeTimeoutMs: 10
-    })
+  it('恢复 waiter 取消时持久化失败也必须结算', async () => {
+    const gate = new CallAdmissionGate({ policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
     const first = await gate.acquire(req({ requestId: 'resume-persist-first' }))
     expect(first.ok).toBe(true)
     const parked = first.ok ? gate.park(first.ticket) : undefined
@@ -449,16 +435,6 @@ describe('CallAdmissionGate 持久化失败收敛', () => {
 
     persist.mockRestore()
     if (blocker.ok) blocker.ticket.release()
-    const second = await gate.acquire(req({ requestId: 'resume-persist-second' }))
-    const secondParked = second.ok ? gate.park(second.ticket) : undefined
-    expect(secondParked).toBeDefined()
-    const secondBlocker = await gate.acquire(req({ requestId: 'resume-persist-second-blocker' }))
-    expect(secondBlocker.ok).toBe(true)
-    const timeoutPersist = vi.spyOn(admissionStoreModule, 'saveAdmissionState').mockImplementation(() => { throw new Error('db-full') })
-    const timedOut = gate.resume(secondParked!)
-    await expect(timedOut).resolves.toEqual({ ok: false, verdict: 'rejected', cause: 'resume-timeout', retryable: false })
-    timeoutPersist.mockRestore()
-    if (secondBlocker.ok) secondBlocker.ticket.release()
   })
 
   it('唤醒阶段持久化失败不抛出且不留下幽灵 waiter', async () => {
@@ -516,28 +492,7 @@ describe('CallAdmissionGate park/resume（D2）', () => {
     expect(gate.snapshotState().activeInteractive).toBe(0)
     const resumed = await gate.resume(parked!)
     expect(resumed.ok).toBe(true)
-    expect(gate.snapshotState().windowStarts).toBe(1)
     if (resumed.ok) resumed.ticket.release()
-  })
-
-  it('hourly quota exhausted but slot free: accepted task can resume without incrementing starts', async () => {
-    const policy = { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalHourlyStarts: 1, laneHourlyStarts: { ...DEFAULT_ADMISSION_POLICY.laneHourlyStarts, desktop: 1 } }
-    const initial = { ...emptyAdmissionState(0), windowStarts: 1, laneWindowStarts: { ...emptyAdmissionState(0).laneWindowStarts, desktop: 1 } }
-    const request = req({ requestId: 'already-accepted', lane: 'desktop', disposition: 'reject' })
-    expect(judgeAdmission(request, initial, policy, 0).verdict).toBe('reject')
-    expect(judgeResumeAdmission(request, initial, policy)).toEqual({ verdict: 'admit' })
-    const gate = new CallAdmissionGate({ policy, initialState: { ...initial, windowStarts: 0, laneWindowStarts: { ...initial.laneWindowStarts, desktop: 0 } } })
-    const admitted = await gate.acquire(request)
-    expect(admitted.ok).toBe(true)
-    if (!admitted.ok) return
-    const parked = gate.park(admitted.ticket)
-    expect(parked).toBeDefined()
-    const liveState = gate.snapshotState()
-    liveState.windowStarts = 1
-    liveState.laneWindowStarts.desktop = 1
-    const resumed = await gate.resume(parked!)
-    expect(resumed.ok).toBe(true)
-    expect(gate.snapshotState().windowStarts).toBe(1)
   })
 
   it('parked task waits behind a newly admitted task, then resumes before new waiters', async () => {
@@ -559,31 +514,27 @@ describe('CallAdmissionGate park/resume（D2）', () => {
     second.ticket.release()
     const restored = await resumedPending
     expect(restored.ok).toBe(true)
-    expect(gate.snapshotState().windowStarts).toBe(2)
     if (restored.ok) restored.ticket.release()
   })
 })
 
 describe('v5 恢复生命周期', () => {
-  it('有 turn deadline 时恢复等待持续到该 deadline，而非固定的 30 秒恢复上限', async () => {
+  it('恢复等待超过较长时间仍保留排队项，拿到名额后继续', async () => {
     vi.useFakeTimers()
     try {
-      const now = Date.now()
       const gate = new CallAdmissionGate({
-        resumeTimeoutMs: 5,
         now: () => Date.now(),
         policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 }
       })
-      const first = await gate.acquire(req({ requestId: 'deadline-resume-source' }))
+      const first = await gate.acquire(req({ requestId: 'long-resume-source' }))
       expect(first.ok).toBe(true)
       if (!first.ok) return
       const parked = gate.park(first.ticket)!
-      const blocker = await gate.acquire(req({ requestId: 'deadline-resume-blocker' }))
+      const blocker = await gate.acquire(req({ requestId: 'long-resume-blocker' }))
       expect(blocker.ok).toBe(true)
       if (!blocker.ok) return
-
-      const resumed = gate.resume(parked, { deadlineAt: now + 1_000 })
-      await vi.advanceTimersByTimeAsync(10)
+      const resumed = gate.resume(parked)
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1_000)
       expect(gate.queuedCount).toBe(1)
       blocker.ticket.release()
       await expect(resumed).resolves.toMatchObject({ ok: true })
@@ -623,10 +574,9 @@ describe('v5 恢复生命周期', () => {
     }
   })
 
-  it('恢复等待超过 deadline 会失效 parked handle 且不永久挂起', async () => {
+  it('恢复队列满时立即拒绝并失效 parked handle', async () => {
     const gate = new CallAdmissionGate({
-      resumeTimeoutMs: 5,
-      policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 }
+      policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1, queueLimit: 0 }
     })
     const first = await gate.acquire(req({ requestId: 'timeout-source' }))
     expect(first.ok).toBe(true)
@@ -635,7 +585,7 @@ describe('v5 恢复生命周期', () => {
     const blocker = await gate.acquire(req({ requestId: 'timeout-blocker' }))
     expect(blocker.ok).toBe(true)
     if (!blocker.ok) return
-    await expect(gate.resume(parked)).resolves.toEqual({ ok: false, verdict: 'rejected', cause: 'resume-timeout', retryable: false })
+    await expect(gate.resume(parked)).resolves.toEqual({ ok: false, verdict: 'rejected', cause: 'queue-full', retryable: false })
     expect(gate.queuedCount).toBe(0)
     blocker.ticket.release()
     await expect(gate.resume(parked)).resolves.toMatchObject({ ok: false, cause: 'stale-park-handle' })
@@ -727,25 +677,6 @@ describe('v5 恢复生命周期', () => {
     if ((await a2).ok && admittedB.ok) admittedB.ticket.release()
   })
 
-  it('小时配额窗口到期会唤醒排队请求', async () => {
-    vi.useFakeTimers()
-    try {
-    let now = 0
-    const policy = { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1, globalHourlyStarts: 1 }
-    const gate = new CallAdmissionGate({ policy, now: () => now })
-    const first = await gate.acquire(req({ requestId: 'first' }))
-    if (!first.ok) return
-    const pending = gate.acquire(req({ requestId: 'later', disposition: 'queue' }))
-    first.ticket.release()
-    now = 3_600_001
-    await vi.advanceTimersByTimeAsync(3_600_001)
-    const later = await pending
-    expect(later.ok).toBe(true)
-    if (later.ok) later.ticket.release()
-    } finally {
-      vi.useRealTimers()
-    }
-  })
 })
 
 describe('评审修复验收(P1-1 / P1-2)', () => {
@@ -769,41 +700,6 @@ describe('评审修复验收(P1-1 / P1-2)', () => {
     b.ok && b.ticket.release()
   })
 
-  it('P1-2 跨 HOUR 边界:速率窗口随滚动落状态,每小时内限流、跨窗重置', async () => {
-    const policy = { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalHourlyStarts: 2, globalMaxConcurrent: 50 }
-    let now = 0
-    const gate = new CallAdmissionGate({ policy, now: () => now })
-    const r1 = await gate.acquire(req({ requestId: 'r1' }))
-    const r2 = await gate.acquire(req({ requestId: 'r2' }))
-    expect(r1.ok && r2.ok).toBe(true)
-    // 窗口内第 3 次:超每小时启动上限 → 拒绝(disposition=reject)
-    const queued = await gate.acquire(req({ requestId: 'r3', disposition: 'reject' }))
-    expect(queued).toEqual({ ok: false, verdict: 'rejected', cause: 'rate-limit' })
-    // 跨窗口边界:滚动落状态 → 计数重置,重新放行
-    now = 3_600_000
-    const r4 = await gate.acquire(req({ requestId: 'r4', disposition: 'reject' }))
-    expect(r4.ok).toBe(true)
-    r4.ok && r4.ticket.release()
-    r1.ok && r1.ticket.release()
-    r2.ok && r2.ticket.release()
-  })
-
-  it('P1-2(管家 lane 配额维度)跨边界同样恢复', async () => {
-    const policy = { ...structuredClone(DEFAULT_ADMISSION_POLICY), laneHourlyStarts: { ...DEFAULT_ADMISSION_POLICY.laneHourlyStarts, automation: 1 } }
-    let now = 0
-    const gate = new CallAdmissionGate({ policy, now: () => now })
-    const first = await gate.acquire(req({ lane: 'automation', priority: 'background', disposition: 'reject', requestId: 'a1' }))
-    if (!first.ok) console.error('[DEBUG a1]', JSON.stringify(first))
-    expect(first.ok).toBe(true)
-    const second = await gate.acquire(req({ lane: 'automation', priority: 'background', disposition: 'reject', requestId: 'a2' }))
-    expect(second).toEqual({ ok: false, verdict: 'rejected', cause: 'lane-hourly-quota' })
-    now = 3_600_000
-    first.ok && first.ticket.release() // 释放并发位(验证的是配额窗口恢复,不并发占位)
-    const third = await gate.acquire(req({ lane: 'automation', priority: 'background', disposition: 'reject', requestId: 'a3' }))
-    expect(third.ok).toBe(true)
-    third.ok && third.ticket.release()
-  })
-
   it('ticket 双释放幂等(P2):第二次 release 不吞其他活跃调用计数', async () => {
     const gate = new CallAdmissionGate({ policy: { ...structuredClone(DEFAULT_ADMISSION_POLICY), globalMaxConcurrent: 1 } })
     const first = await gate.acquire(req({ requestId: 'r1' }))
@@ -817,7 +713,7 @@ describe('评审修复验收(P1-1 / P1-2)', () => {
 })
 
 describe('Storage 状态(callAdmissionStore,偏差 23:准入状态归 Storage)', () => {
-  it('状态持久化跨实例可读;启动维护清零活跃段、保留速率窗口计数', () => {
+  it('状态持久化跨实例可读;启动维护清零活跃段', () => {
     const db = openSqliteDatabase(':memory:')
     const state = emptyAdmissionState(1_000)
     const withActivity: AdmissionState = {
@@ -825,13 +721,10 @@ describe('Storage 状态(callAdmissionStore,偏差 23:准入状态归 Storage)',
       activeInteractive: 2,
       activeBackground: 1,
       laneActive: { ...state.laneActive, desktop: 3 },
-      windowStarts: 7,
-      laneWindowStarts: { ...state.laneWindowStarts, desktop: 7 },
       queued: 1
     }
     saveAdmissionState(db, withActivity)
     expect(loadAdmissionState(db, 2_000).activeInteractive).toBe(2)
-    expect(loadAdmissionState(db, 2_000).windowStarts).toBe(7)
 
     resetActiveAdmissionOnStartup(db, 2_000)
     const after = loadAdmissionState(db, 2_000)
@@ -839,8 +732,6 @@ describe('Storage 状态(callAdmissionStore,偏差 23:准入状态归 Storage)',
     expect(after.activeBackground).toBe(0)
     expect(after.laneActive.desktop).toBe(0)
     expect(after.queued).toBe(0)
-    // 速率/配额计数保留(防重启绕过限流)
-    expect(after.windowStarts).toBe(7)
   })
 
   it('损坏状态 JSON 收敛空状态(fail-closed);策略可配且非法值收敛默认', () => {

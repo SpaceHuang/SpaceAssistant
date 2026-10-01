@@ -3,7 +3,7 @@ import type { AdmissionTicket, CallAdmissionGate } from './callAdmissionGate'
 type AdmissionPort = {
   park(checkpoint?: unknown): unknown
   discard?(handle: unknown): void
-  resume(handle: unknown, options?: { signal?: AbortSignal; deadlineAt?: number }): { ok: true } | { ok: false; retryable: boolean; cause?: string } | Promise<{ ok: true } | { ok: false; retryable: boolean; cause?: string }>
+  resume(handle: unknown, options?: { signal?: AbortSignal }): { ok: true } | { ok: false; retryable: boolean; cause?: string } | Promise<{ ok: true } | { ok: false; retryable: boolean; cause?: string }>
 }
 
 /** 将一轮对话的准入票据适配到 Hosted 审批生命周期。暂停持久化失败时保留运行名额，继续审批。 */

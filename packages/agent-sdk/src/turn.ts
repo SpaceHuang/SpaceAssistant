@@ -44,7 +44,6 @@ export type AgentTurnPorts = Readonly<{
   /** Uses the host's existing tool metadata to preserve bounded approval-candidate scheduling. */
   isApprovalCandidate?(call: CanonicalToolExecutionCall): boolean
   applicationAdmission?: ApplicationAdmissionPort
-  deadlineAt?: number
   sessionLedgerForToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult): Promise<Record<string, unknown>> | Record<string, unknown>
   /** Host product policy after a tool result is durably committed and before the next model request. */
   afterToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult, source?: Readonly<{ kind: 'execution' | 'safety-rejection'; reasonCode?: string }>): void | Promise<void>
@@ -170,7 +169,7 @@ type CanonicalToolExecutionResult = { output: unknown; replayContent?: unknown; 
 export type ApplicationAdmissionPort = Readonly<{
   park(checkpoint?: unknown): unknown
   discard?(handle: unknown): void
-  resume(handle: unknown, options?: { signal?: AbortSignal; deadlineAt?: number }): boolean | { ok: true } | { ok: false; retryable: boolean; cause?: string } | Promise<boolean | { ok: true } | { ok: false; retryable: boolean; cause?: string }>
+  resume(handle: unknown, options?: { signal?: AbortSignal }): boolean | { ok: true } | { ok: false; retryable: boolean; cause?: string } | Promise<boolean | { ok: true } | { ok: false; retryable: boolean; cause?: string }>
 }>
 export type ToolPreparationStage =
   | Readonly<{ kind: 'initial' }>
@@ -289,7 +288,6 @@ export type RunAgentTurnInput = {
   toolResourceKeys?(call: CanonicalToolExecutionCall): readonly string[] | undefined
   isApprovalCandidate?(call: CanonicalToolExecutionCall): boolean
   applicationAdmission?: ApplicationAdmissionPort
-  deadlineAt?: number
   sessionLedgerForToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult): Promise<Record<string, unknown>> | Record<string, unknown>
   afterToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult, source?: Readonly<{ kind: 'execution' | 'safety-rejection'; reasonCode?: string }>): void | Promise<void>
   sessionLedgerForNotDispatched?(call: CanonicalToolExecutionCall, reason: string, result: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>
@@ -1192,7 +1190,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
 
     const candidateSlots = new ApprovalCandidateSlots(2, Math.max(toolCalls.length, 1))
     const approvalSlots = new Semaphore(2)
-    const applicationAdmission = new TurnApplicationAdmission(input.applicationAdmission, input.request.signal, input.deadlineAt, invocationId)
+    const applicationAdmission = new TurnApplicationAdmission(input.applicationAdmission, input.request.signal, invocationId)
     const settledTools = await mapWithConcurrency(toolCalls, input.maxConcurrentTools ?? 2, async (tool) => {
       const executionCall = {
         invocationId, toolCallId: tool.toolCallId, toolName: tool.toolName,
@@ -1589,7 +1587,7 @@ class TurnApplicationAdmission {
   private readonly waiting = new Set<string>()
   private recovery: Promise<void> | undefined
   private parkCheckpoint: Record<string, unknown>
-  constructor(private readonly port: ApplicationAdmissionPort | undefined, private readonly signal?: AbortSignal, private readonly deadlineAt?: number, private readonly requestId = '') {
+  constructor(private readonly port: ApplicationAdmissionPort | undefined, private readonly signal?: AbortSignal, private readonly requestId = '') {
     this.parkCheckpoint = { reason: 'approval-wait', requestId }
   }
 
@@ -1639,7 +1637,9 @@ class TurnApplicationAdmission {
         if (handle === undefined) return
         let raw: ReturnType<ApplicationAdmissionPort['resume']>
         try {
-          raw = await this.port!.resume(handle, { ...(this.signal ? { signal: this.signal } : {}), ...(this.deadlineAt !== undefined ? { deadlineAt: this.deadlineAt } : {}) })
+          // Admission resume owns its queue timeout. A turn may contain long-running tools,
+          // so its age must not shorten a later wait for an application slot.
+          raw = await this.port!.resume(handle, this.signal ? { signal: this.signal } : undefined)
         } catch (error) {
           if (this.signal?.aborted) {
             this.discardParked()
@@ -1657,13 +1657,7 @@ class TurnApplicationAdmission {
           this.discardParked()
           throw new AgentTurnApplicationAdmissionError(`application admission resume failed${result && 'cause' in result && result.cause ? `: ${result.cause}` : ''}`)
         }
-        const deadline = this.deadlineAt ?? Date.now() + 10 * 60_000
-        const remaining = deadline - Date.now()
-        if (remaining <= 0 || this.signal?.aborted) {
-          this.discardParked()
-          throw new AgentTurnApplicationAdmissionError('application admission resume deadline elapsed')
-        }
-        await new Promise<void>((resolve) => setTimeout(resolve, Math.min(delays[attempt]!, remaining)))
+        await new Promise<void>((resolve) => setTimeout(resolve, delays[attempt]!))
       }
     })().finally(() => { this.recovery = undefined })
     return this.recovery
