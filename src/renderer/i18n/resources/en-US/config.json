@@ -956,20 +956,5 @@
     "tabIntro": "Butler tasks run automatically on schedule; results are delivered per task preference",
     "lastRun": "Last run {{time}}"
   },
-  "mcp": {
-    "deferredTitle": "MCP deferred tool loading",
-    "deferredHint": "When enabled, the context only carries a name/description index; full schemas are fetched on model retrieval, greatly reducing context usage for large MCP servers.",
-    "deferredBudgetTitle": "Tool budget trims",
-    "deferredBudgetEmpty": "No budget trim triggered by current configuration",
-    "deferredBudgetSource": {
-      "snapshot": "Snapshot admission trims",
-      "eager": "Context advertisement trims",
-      "executor": "Executor registration failures"
-    },
-    "deferredBudgetReason": {
-      "count": "Count exceeded",
-      "bytes": "Size exceeded",
-      "executor_unavailable": "Executor unavailable"
-    }
-  }
+  "mcp": {}
 }

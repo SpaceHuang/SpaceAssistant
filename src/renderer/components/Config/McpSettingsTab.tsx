@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { App, Button, Drawer, Empty, Modal, Spin, Tag } from 'antd'
+import { App, Button, Drawer, Empty, Modal, Spin } from 'antd'
 import { Plus } from 'lucide-react'
-import { MCP_MAX_SERVERS, type McpBudgetDiagnostic, type McpServerProfile, type McpToolCacheEntry } from '../../../shared/mcpTypes'
+import { MCP_MAX_SERVERS, type McpServerProfile, type McpToolCacheEntry } from '../../../shared/mcpTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import {
   draftToWriteInput,
@@ -20,27 +20,13 @@ export type McpSettingsTabProps = {
   open?: boolean
 }
 
-const BUDGET_SOURCE_KEYS = {
-  snapshot: 'mcp.deferredBudgetSource.snapshot',
-  eager: 'mcp.deferredBudgetSource.eager',
-  executor: 'mcp.deferredBudgetSource.executor'
-} as const
-
-const BUDGET_REASON_KEYS = {
-  count: 'mcp.deferredBudgetReason.count',
-  bytes: 'mcp.deferredBudgetReason.bytes',
-  executor_unavailable: 'mcp.deferredBudgetReason.executor_unavailable'
-} as const
-
 export function McpSettingsTab({ active = true, open = true }: McpSettingsTabProps) {
   const { modal, message } = App.useApp()
   const { t } = useTypedTranslation('mcp')
-  const { t: tc } = useTypedTranslation('config')
   const [loading, setLoading] = useState(false)
   const [servers, setServers] = useState<McpServerProfile[]>([])
   const [drafts, setDrafts] = useState<McpServerDraft[]>([])
   const [toolCaches, setToolCaches] = useState<Record<string, McpToolCacheEntry>>({})
-  const [budgetDiagnostics, setBudgetDiagnostics] = useState<McpBudgetDiagnostic[]>([])
   const [editingId, setEditingId] = useState<string | null>(null)
   const [refreshingId, setRefreshingId] = useState<string | null>(null)
   const [testingId, setTestingId] = useState<string | null>(null)
@@ -60,7 +46,6 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
         setServers(config.servers)
         setToolCaches(config.toolCaches ?? {})
         setDrafts(config.servers.map(initMcpServerDraft))
-        setBudgetDiagnostics(config.budgetDiagnostics ?? [])
         dirtyRef.current = false
       } catch (error) {
         message.error(error instanceof Error ? error.message : String(error))
@@ -368,29 +353,6 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
             {t('addServer')}
           </Button>
         ) : null}
-      </div>
-      <div className="mcp-deferred-settings">
-        <div className="mcp-deferred-settings__row">
-          <span className="mcp-deferred-settings__label">{tc('mcp.deferredTitle')}</span>
-        </div>
-        <p className="mcp-deferred-settings__hint">{tc('mcp.deferredHint')}</p>
-        <div className="mcp-deferred-settings__budget">
-          <span className="mcp-deferred-settings__label">{tc('mcp.deferredBudgetTitle')}</span>
-          {budgetDiagnostics.length === 0 ? (
-            <span className="mcp-deferred-settings__budget-empty">{tc('mcp.deferredBudgetEmpty')}</span>
-          ) : (
-            <span className="mcp-deferred-settings__budget-list">
-              {budgetDiagnostics.map((entry) => (
-                <Tag key={`${entry.source}:${entry.mappedName}`} color="warning">
-                  {tc(BUDGET_SOURCE_KEYS[entry.source])}：{entry.mappedName}
-                  {entry.reason in BUDGET_REASON_KEYS
-                    ? `（${tc(BUDGET_REASON_KEYS[entry.reason as keyof typeof BUDGET_REASON_KEYS])}）`
-                    : ''}
-                </Tag>
-              ))}
-            </span>
-          )}
-        </div>
       </div>
       {drafts.length === 0 ? (
         <div className="mcp-settings-empty">

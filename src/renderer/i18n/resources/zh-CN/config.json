@@ -956,20 +956,5 @@
     "tabIntro": "到点自动运行管家任务；任务在后台执行，结果按投递偏好送达",
     "lastRun": "上次运行 {{time}}"
   },
-  "mcp": {
-    "deferredTitle": "MCP 工具延迟加载",
-    "deferredHint": "开启后上下文只保留工具名与描述索引，完整参数定义在模型检索后才下发，显著降低大体量 MCP 服务的上下文占用。",
-    "deferredBudgetTitle": "工具预算裁剪记录",
-    "deferredBudgetEmpty": "当前配置未触发任何预算裁剪",
-    "deferredBudgetSource": {
-      "snapshot": "快照准入裁剪",
-      "eager": "上下文广告面裁剪",
-      "executor": "执行注册失败剔除"
-    },
-    "deferredBudgetReason": {
-      "count": "数量超限",
-      "bytes": "体积超限",
-      "executor_unavailable": "执行器不可用"
-    }
-  }
+  "mcp": {}
 }
