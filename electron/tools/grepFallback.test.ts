@@ -52,6 +52,24 @@ describe('JavaScript grep fallback', () => {
     expect(out).not.toBe('No matches found')
   })
 
+  it('reads an explicitly authorized file from its permit handle after its path is replaced', async () => {
+    const root = fixture({ 'target.txt': 'authorized content' })
+    const outside = path.join(root, '..', `sa-grep-outside-${Date.now()}.txt`)
+    fs.writeFileSync(outside, 'UNAUTHORIZED_SECRET')
+    const target = path.join(root, 'target.txt')
+    const handle = await fs.promises.open(target, 'r')
+    try {
+      fs.renameSync(target, `${target}.original`)
+      fs.symlinkSync(outside, target)
+      const out = await grepFallbackJs(root, target, 'content|SECRET', args(), new AbortController().signal, () => {}, 60_000, handle)
+      expect(out).toContain('authorized content')
+      expect(out).not.toContain('UNAUTHORIZED_SECRET')
+    } finally {
+      await handle.close()
+      fs.rmSync(outside, { force: true })
+    }
+  })
+
   it('supports multiline matching and count output', async () => {
     const root = fixture({ 'a.txt': 'alpha\nbeta\nalpha beta\n' })
     const multiline = await grepFallbackJs(root, root, 'alpha\\nbeta', args({ multiline: true }), new AbortController().signal, () => {})
@@ -62,18 +80,53 @@ describe('JavaScript grep fallback', () => {
   })
 
   it('respects head limit and treats oversized and binary files as non-results', async () => {
-    const root = fixture({ 'a.txt': 'needle\nneedle\n', 'large.txt': 'needle'.repeat(200_000), 'binary.bin': '\u0000needle' })
+    const root = fixture({ 'a.txt': 'needle\nneedle\n', 'large.txt': 'needle'.repeat(400_000), 'binary.bin': '\u0000needle' })
     const out = await grepFallbackJs(root, root, 'needle', args({ headLimit: 1 }), new AbortController().signal, () => {})
     expect(out).toContain('[共 1 条匹配')
     expect(out).not.toContain('large.txt')
     expect(out).not.toContain('binary.bin')
   })
 
+  it('searches a 1.5 MiB file within the cloud fallback size limit', async () => {
+    const root = fixture({ 'medium-large.txt': `${'x'.repeat(1_500_000)}\nNeedle at the end\n` })
+    const out = await grepFallbackJs(root, root, 'Needle at the end', args(), new AbortController().signal, () => {})
+    expect(out).toContain('medium-large.txt:2:Needle at the end')
+    expect(out).not.toContain('[边界摘要]')
+  })
+
+  it('reports oversized files so a no-match result is visibly incomplete', async () => {
+    const root = fixture({ 'large.txt': 'needle'.repeat(400_000) })
+    const out = await grepFallbackJs(root, root, 'needle', args(), new AbortController().signal, () => {})
+    expect(out).toContain('No matches found')
+    expect(out).toContain('[边界摘要]')
+    expect(out).toContain('large.txt')
+    expect(out).toContain('可能包含匹配')
+  })
+
+  it('reports read errors instead of presenting them as a complete no-match result', async () => {
+    const root = fixture({ 'blocked.txt': 'needle' })
+    const out = await grepFallbackJs(root, root, 'needle', args(), new AbortController().signal, () => {}, 60_000, undefined, {
+      readFile: async () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }) }
+    })
+    expect(out).toContain('No matches found')
+    expect(out).toContain('读取失败')
+    expect(out).toContain('blocked.txt')
+  })
+
+  it('returns partial results with an explicit timeout boundary', async () => {
+    const root = fixture({ 'a.txt': 'needle' })
+    let calls = 0
+    const now = (): number => (++calls > 4 ? 100_000 : 0)
+    const out = await grepFallbackJs(root, root, 'needle', args(), new AbortController().signal, () => {}, 60_000, undefined, { now })
+    expect(out).toContain('搜索超时')
+    expect(out).toContain('[边界摘要]')
+  })
+
   it('terminates catastrophic-backtracking regexes without blocking the main process', async () => {
     const root = fixture({ 'hostile.txt': `${'a'.repeat(30_000)}!` })
     const started = Date.now()
     const out = await grepFallbackJs(root, root, '(a+)+$', args(), new AbortController().signal, () => {}, 5_000)
-    expect(out).toMatch(/正则.*超时|regex.*timeout/i)
+    expect(out).toMatch(/超时/)
     expect(Date.now() - started).toBeLessThan(2_500)
   })
 

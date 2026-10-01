@@ -282,6 +282,57 @@ describe('path field alias normalization', () => {
     })
   })
 
+  it('fallback 中授权路径被替换为外部链接时只读取许可句柄内容', async () => {
+    ripgrep.resolve.mockReturnValue({ path: '/missing/rg', source: 'development', platform: 'darwin', arch: 'arm64' })
+    ripgrep.inspect.mockResolvedValue({ available: false, reason: 'not_found' })
+    const target = path.join(tmpDir, 'permitted-fallback.txt')
+    const outside = path.join(tmpDir, '..', `sa-outside-secret-${Date.now()}.txt`)
+    await fs.writeFile(target, 'authorized marker')
+    await fs.writeFile(outside, 'UNAUTHORIZED_SECRET')
+    const input = { pattern: 'marker|SECRET', path: target, output_mode: 'content' }
+    const ctx = { ...makeCtx(tmpDir, cache), lane: 'desktop' as const }
+    const stat = await fs.stat(target)
+    ctx.readExecutionPermit = buildReadExecutionPermit({
+      requestId: ctx.requestId!, toolUseId: ctx.toolUseId!, toolName: 'grep', input,
+      facts: [{ factId: 'fallback-replaced-fact', decisionRuleId: 'read-group-workdir-allow', normalizedPath: target, zone: 'workdir-normal', targetKind: 'file', identity: { dev: stat.dev, ino: stat.ino, mode: stat.mode, size: stat.size, mtimeMs: stat.mtimeMs } }]
+    })
+    const replaceAtFallback = ripgrep.inspect.getMockImplementation()
+    ripgrep.inspect.mockImplementation(async (...args) => {
+      await fs.rename(target, `${target}.original`)
+      await fs.symlink(outside, target)
+      return replaceAtFallback!(...args)
+    })
+    try {
+      const result = await grepExecutor.execute(input, ctx)
+      expect(result.success).toBe(false)
+      expect(String(result.error)).not.toContain('UNAUTHORIZED_SECRET')
+    } finally {
+      await fs.rm(outside, { force: true })
+    }
+  })
+
+  it('fallback 中获准文件路径消失时拒绝以无匹配成功结算', async () => {
+    ripgrep.resolve.mockReturnValue({ path: '/missing/rg', source: 'development', platform: 'darwin', arch: 'arm64' })
+    const target = path.join(tmpDir, 'permitted-disappears.txt')
+    await fs.writeFile(target, 'authorized marker')
+    const input = { pattern: 'marker', path: target, output_mode: 'content' }
+    const ctx = { ...makeCtx(tmpDir, cache), lane: 'desktop' as const }
+    const stat = await fs.stat(target)
+    ctx.readExecutionPermit = buildReadExecutionPermit({
+      requestId: ctx.requestId!, toolUseId: ctx.toolUseId!, toolName: 'grep', input,
+      facts: [{ factId: 'fallback-disappeared-fact', decisionRuleId: 'read-group-workdir-allow', normalizedPath: target, zone: 'workdir-normal', targetKind: 'file', identity: { dev: stat.dev, ino: stat.ino, mode: stat.mode, size: stat.size, mtimeMs: stat.mtimeMs } }]
+    })
+    ripgrep.inspect.mockImplementation(async () => {
+      await fs.rename(target, `${target}.original`)
+      return { available: false, reason: 'not_found' }
+    })
+    const result = await grepExecutor.execute(input, ctx)
+    expect(result).toMatchObject({
+      success: false,
+      diagnostic: { caseId: 'read-target-identity-changed-during-read', factId: 'fallback-disappeared-fact' }
+    })
+  })
+
   it('打包态 rg 缺失同样只在 unavailable 时降级并保留诊断', async () => {
     ripgrep.resolve.mockReturnValue({ path: '/missing/rg', source: 'bundled', platform: 'darwin', arch: 'arm64' })
     ripgrep.inspect.mockResolvedValue({ available: false, reason: 'not_found' })

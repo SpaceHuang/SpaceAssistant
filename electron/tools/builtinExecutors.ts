@@ -141,8 +141,15 @@ async function assertDiskMatchesReadCache(
 }
 
 const READ_MAX = READ_FILE_MAX_CHARS
-const GREP_FILE_MAX = 1024 * 1024
+const GREP_FILE_MAX = 2 * 1024 * 1024
 const GREP_REGEX_FILE_TIMEOUT_MS = 250
+const GREP_FALLBACK_SAMPLE_MAX = 5
+type GrepFallbackDeps = {
+  stat?: (file: string) => Promise<{ size: number; isFile: () => boolean }>
+  readFile?: (file: string, options?: { signal?: AbortSignal }) => Promise<Buffer>
+  readdir?: (dir: string) => Promise<Dirent[]>
+  now?: () => number
+}
 const GREP_REGEX_WORKER_SOURCE = `
 const { parentPort } = require('node:worker_threads');
 parentPort.on('message', ({ id, pattern, flags, text, multiline, mode, matchLimit, validateOnly }) => {
@@ -1136,10 +1143,27 @@ export function grepRipgrepUnavailableUserMessage(
   resolved: Pick<ReturnType<typeof resolveRipgrepBinary>, 'source' | 'platform' | 'arch'>,
   reason: RipgrepUnavailableReason
 ): string {
-  if (resolved.source === 'development') {
-    return `开发态内置 ripgrep 未准备（${reason}）。请执行 npm run prepare:rg -- --target=${resolved.platform}-${resolved.arch} 后重启应用。`
+  const target = `${resolved.platform}-${resolved.arch}`
+  const alternative = '替代路径：用 list_directory + read_file 逐层查看文件，或用 run_shell 调用系统搜索（Windows findstr / Select-String，macOS grep / mdfind）。'
+  if (reason === 'resource_exhausted') {
+    return `内置 ripgrep 本次启动失败（系统临时资源不足，通常稍后自行恢复），请稍后重试本次搜索。${alternative}`
   }
-  return `内置 ripgrep 不可用（${reason}）。请重新安装应用后重试。`
+  if (reason === 'unsupported') {
+    return `当前平台（${target}）不在内置 ripgrep 支持面内（支持 macOS x64/arm64、Windows x64），重装或重试均无效。${alternative}`
+  }
+  if (resolved.source === 'development') {
+    const interception = reason === 'exec_format' || reason === 'spawn_failed'
+      ? '若已准备仍失败，检查安全软件是否拦截了 rg。'
+      : ''
+    return `开发态内置 ripgrep 未就绪。请执行 npm run prepare:rg -- --target=${target} 后重启应用；新 worktree 首次 npm run dev 会自动准备。${interception}${alternative}`
+  }
+  if (reason === 'exec_format' || reason === 'spawn_failed') {
+    const platformHint = resolved.platform === 'darwin'
+      ? 'macOS 可在终端执行 xattr -cr（拖入本应用）去除隔离属性后重新打开。'
+      : 'Windows 可在安全软件中将本应用的 rg 加入白名单后重试。'
+    return `内置 ripgrep 未能启动，通常被安全软件/EDR 拦截。${platformHint}${alternative}`
+  }
+  return `内置 ripgrep 文件缺失或不可访问，通常被安全软件隔离或删除；请在安全软件的隔离区/白名单中恢复本应用的 rg 后重试，重装通常无效。${alternative}`
 }
 
 export async function grepWithRg(
@@ -1323,12 +1347,15 @@ export async function grepFallbackJs(
   args: GrepExecArgs,
   signal: AbortSignal,
   onProgress: (s: string) => void,
-  timeoutMs = 60_000
+  timeoutMs = 60_000,
+  stableFileHandle?: FileHandle,
+  deps: GrepFallbackDeps = {}
 ): Promise<string> {
   let flags = 'g'
   if (args.ignoreCase) flags += 'i'
   if (args.multiline) flags += 's'
-  const deadline = Date.now() + Math.max(1, timeoutMs)
+  const now = deps.now ?? Date.now
+  const deadline = now() + Math.max(1, timeoutMs)
   let regexWorker: Worker | undefined
   let nextRegexJobId = 0
   let pendingRegexJob: {
@@ -1350,7 +1377,7 @@ export async function grepFallbackJs(
   }
   const scanText = (text: string, matchLimit: number, validateOnly = false): Promise<{ count: number; matches: Array<{ index: number; text: string; lineIndex?: number }> }> => {
     if (signal.aborted) return Promise.resolve({ count: 0, matches: [] })
-    const remainingMs = deadline - Date.now()
+    const remainingMs = deadline - now()
     if (remainingMs <= 0) return Promise.reject(new Error('正则搜索总时间已超时'))
     regexWorker ??= new Worker(GREP_REGEX_WORKER_SOURCE, { eval: true })
     const worker = regexWorker
@@ -1394,6 +1421,15 @@ export async function grepFallbackJs(
   const counts = new Map<string, number>()
   let totalMatches = 0
   let filesScanned = 0
+  let skippedTotal = 0
+  let readErrorCount = 0
+  const skippedSample: string[] = []
+  const readErrorSample: string[] = []
+  let timedOut = false
+  let aborted = false
+  const pastDeadline = (): boolean => { if (!timedOut && now() >= deadline) timedOut = true; return timedOut }
+  const shouldStop = (): boolean => { if (signal.aborted) aborted = true; return aborted || pastDeadline() }
+  const noteReadError = (rel: string): void => { readErrorCount++; if (readErrorSample.length < GREP_FALLBACK_SAMPLE_MAX) readErrorSample.push(rel) }
 
   // glob 过滤只对目录递归生效；显式命名的单文件目标不应用（与 ripgrep 语义一致）。
   // 匹配前先统一为 posix 分隔符，避免 Windows 反斜杠路径对含 / 的 glob 失配。
@@ -1452,24 +1488,52 @@ export async function grepFallbackJs(
     !applyGlob || !globMatcher || globMatcher(rel)
 
   async function scanFile(full: string, applyGlob: boolean): Promise<void> {
-    if (Date.now() >= deadline) throw new Error('正则搜索总时间已超时')
+    if (shouldStop()) return
     const rel = path.relative(workDir, full)
     if (!matchesGlob(rel, applyGlob)) return
     filesScanned++
     if (filesScanned % 30 === 0) onProgress(`搜索中... 已扫描 ${filesScanned} 个文件`)
     let buf: Buffer
-    try {
-      buf = await fs.readFile(full)
-    } catch {
-      return
+    if (stableFileHandle && !applyGlob && path.resolve(full) === path.resolve(absSearch)) {
+      let before: Awaited<ReturnType<FileHandle['stat']>>
+      try { before = await stableFileHandle.stat() } catch { noteReadError(rel); return }
+      if (!before.isFile()) { noteReadError(rel); return }
+      if (before.size > GREP_FILE_MAX) { skippedTotal++; if (skippedSample.length < GREP_FALLBACK_SAMPLE_MAX) skippedSample.push(rel); return }
+      buf = Buffer.alloc(before.size)
+      let offset = 0
+      while (offset < buf.length) {
+        const { bytesRead } = await stableFileHandle.read(buf, offset, buf.length - offset, offset)
+        if (bytesRead <= 0) break
+        offset += bytesRead
+      }
+      if (offset !== buf.length) { noteReadError(rel); return }
+      const after = await stableFileHandle.stat()
+      if (after.dev !== before.dev || after.ino !== before.ino || after.mode !== before.mode || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+        throw new Error('搜索期间获准文件发生变化，已丢弃搜索结果')
+      }
+    } else {
+      try {
+        const st = await (deps.stat ? deps.stat(full) : fs.stat(full))
+        if (!st.isFile()) { noteReadError(rel); return }
+        if (st.size > GREP_FILE_MAX) { skippedTotal++; if (skippedSample.length < GREP_FALLBACK_SAMPLE_MAX) skippedSample.push(rel); return }
+        buf = await (deps.readFile ? deps.readFile(full, { signal }) : fs.readFile(full, { signal }))
+      } catch {
+        if (signal.aborted) aborted = true
+        else noteReadError(rel)
+        return
+      }
     }
-    if (buf.length > GREP_FILE_MAX) return
+    if (buf.length > GREP_FILE_MAX) { skippedTotal++; if (skippedSample.length < GREP_FALLBACK_SAMPLE_MAX) skippedSample.push(rel); return }
     if (isBinaryBuffer(buf)) return
     const text = buf.toString('utf8')
     const matchLimit = args.outputMode === 'content'
       ? Math.max(1, headLimit === Infinity ? 100_000 : headLimit - totalMatches)
       : 0
-    const scan = await scanText(text, matchLimit)
+    let scan: Awaited<ReturnType<typeof scanText>>
+    try { scan = await scanText(text, matchLimit) } catch (error) {
+      if (pastDeadline() || (error instanceof Error && /超时/.test(error.message))) { timedOut = true; return }
+      throw error
+    }
     if (signal.aborted || scan.count === 0) return
     totalMatches += scan.count
     if (args.outputMode === 'content') {
@@ -1529,16 +1593,17 @@ export async function grepFallbackJs(
   // R6（C4）：walk 与 rg 同语义——默认跳名单成员 + 隐藏条目 + 敏感路径（修掉「walk 能搜到 .env、
   // rg 不能」的既有两引擎不一致；这是收紧，非放宽）。includeIgnored 解除名单与隐藏（不解除敏感）。
   async function walk(dir: string): Promise<void> {
-    if (Date.now() >= deadline) throw new Error('正则搜索总时间已超时')
+    if (shouldStop()) return
     let entries: Dirent[]
     try {
-      entries = await fs.readdir(dir, { withFileTypes: true })
+      entries = await (deps.readdir ? deps.readdir(dir) : fs.readdir(dir, { withFileTypes: true }))
     } catch {
+      if (signal.aborted) aborted = true
+      else noteReadError(path.relative(workDir, dir) || '.')
       return
     }
     for (const ent of entries) {
-      if (Date.now() >= deadline) throw new Error('正则搜索总时间已超时')
-      if (signal.aborted || limitReached()) return
+      if (shouldStop() || limitReached()) return
       const full = path.join(dir, ent.name)
       const isHiddenEntry = ent.name.startsWith('.')
       if (!args.includeIgnored && (GREP_SKIP_DIRS.has(ent.name) || isHiddenEntry)) continue
@@ -1550,10 +1615,10 @@ export async function grepFallbackJs(
   }
 
   try {
-    if (signal.aborted) return 'No matches found'
+    if (shouldStop()) return 'No matches found'
     await scanText('', 1, true)
-    if (signal.aborted) return 'No matches found'
-    const st = await fs.stat(absSearch).catch(() => null)
+    if (shouldStop()) return 'No matches found'
+    const st = await (deps.stat ? deps.stat(absSearch) : fs.stat(absSearch)).catch(() => null)
     if (st?.isFile()) await scanFile(absSearch, false)
     else await walk(absSearch)
   } catch (error) {
@@ -1561,23 +1626,29 @@ export async function grepFallbackJs(
   } finally {
     terminateRegexWorker()
   }
+  const boundary: string[] = []
+  if (skippedTotal > 0) boundary.push(`已跳过 ${skippedTotal} 个超过 ${GREP_FILE_MAX / (1024 * 1024)} MiB 上限的文件，其中可能包含匹配${skippedSample.length ? `（如：${skippedSample.join('、')}）` : ''}`)
+  if (readErrorCount > 0) boundary.push(`${readErrorCount} 个文件/目录读取失败，其中可能存在匹配${readErrorSample.length ? `（如：${readErrorSample.join('、')}）` : ''}`)
+  if (timedOut) boundary.push('搜索超时，结果可能不完整')
+  if (aborted) boundary.push('搜索已被中止，结果可能不完整')
+  const finishOutput = (body: string): string => boundary.length ? `${body}\n[边界摘要]\n- ${boundary.join('\n- ')}` : body
   if (args.outputMode === 'files_with_matches') {
-    if (filesWithMatches.length === 0) return 'No matches found'
+    if (filesWithMatches.length === 0) return finishOutput('No matches found')
     const slice = filesWithMatches.slice(0, headLimit)
-    return `Found ${slice.length} files\n${slice.join('\n')}`
+    return finishOutput(`Found ${slice.length} files\n${slice.join('\n')}`)
   }
   if (args.outputMode === 'count') {
-    if (counts.size === 0) return 'No matches found'
+    if (counts.size === 0) return finishOutput('No matches found')
     const lines: string[] = []
     for (const [f, c] of counts) {
       lines.push(`${f}:${c}`)
       if (lines.length >= headLimit) break
     }
-    return `${lines.join('\n')}\n\n共 ${totalMatches} 处匹配，涉及 ${counts.size} 个文件`
+    return finishOutput(`${lines.join('\n')}\n\n共 ${totalMatches} 处匹配，涉及 ${counts.size} 个文件`)
   }
-  if (contentLines.length === 0) return 'No matches found'
+  if (contentLines.length === 0) return finishOutput('No matches found')
   const suffix = `\n[共 ${totalMatches} 条匹配${headLimit !== Infinity ? `，限制: ${headLimit}` : ''}]`
-  return contentLines.join('\n') + suffix
+  return finishOutput(contentLines.join('\n') + suffix)
 }
 
 export const grepExecutor: ToolExecutor = {
@@ -1625,22 +1696,33 @@ export const grepExecutor: ToolExecutor = {
       const executeFallback = async (): Promise<ToolExecutorResult> => {
         const fallbackText = await grepFallbackJs(
           ctx.workDir, absSearch, pattern, gargs, ctx.signal,
-          (message) => ctx.sendProgress('grep', message), timeoutMs
+          (message) => ctx.sendProgress('grep', message), timeoutMs, permitFileHandle
         )
-        const authorizedIdentity = ctx.readExecutionPermit?.targets[0]?.identity
+        const permitTarget = ctx.readExecutionPermit?.targets[0]
+        const authorizedIdentity = permitTarget?.identity
         const currentStat = authorizedIdentity ? await fs.stat(absSearch).catch(() => null) : null
-        if (authorizedIdentity && (!currentStat || !readIdentityMatches(currentStat, authorizedIdentity))) {
-          return { success: false, error: '搜索期间文件身份或内容发生变化，已丢弃搜索结果。', diagnostic: { caseId: 'read-target-identity-changed-during-read', retryable: false, category: 'mechanism' as const, ...(ctx.readExecutionPermit?.targets[0]?.factId ? { factId: ctx.readExecutionPermit.targets[0].factId } : {}) }, duration: Date.now() - started }
+        const handleStat = permitFileHandle && authorizedIdentity ? await permitFileHandle.stat().catch(() => null) : null
+        if (authorizedIdentity && (!currentStat || !handleStat || !readIdentityMatches(currentStat, authorizedIdentity) || !readIdentityMatches(handleStat, authorizedIdentity))) {
+          const caseId = 'read-target-identity-changed-during-read'
+          recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'grep', decisionRuleId: ctx.readExecutionPermit?.decisionRuleId ?? permitTarget?.decisionRuleId, pathZone: permitTarget?.zone, factId: permitTarget?.factId, failureClass: 'mechanism', caseId })
+          return { success: false, error: '搜索期间文件身份或内容发生变化，已丢弃搜索结果。', diagnostic: { caseId, retryable: false, category: 'mechanism' as const, ...(permitTarget?.factId ? { factId: permitTarget.factId } : {}) }, duration: Date.now() - started }
         }
         if (ctx.signal.aborted) return { success: false, error: '搜索已取消。', duration: Date.now() - started }
         const plan = planGrepInvocation({ workDir: ctx.workDir, searchPath: absSearch, args: gargs, engine: 'walk' })
-        const noMatch = fallbackText === 'No matches found'
+        const boundaryIndex = fallbackText.indexOf('\n[边界摘要]')
+        const fallbackBody = boundaryIndex >= 0 ? fallbackText.slice(0, boundaryIndex) : fallbackText
+        const boundarySummary = boundaryIndex >= 0 ? fallbackText.slice(boundaryIndex) : ''
+        const noMatch = fallbackBody === 'No matches found'
         if (fallbackText.startsWith('Error:')) {
           return { success: false, error: fallbackText.slice('Error:'.length).trim(), duration: Date.now() - started }
         }
-        const truncated = fallbackText.includes('已按 head_limit=')
-        const scope: GrepScope = { ...plan.scope, truncated, ...(truncated ? { limitReason: 'head_limit' as const } : {}) }
-        const output = noMatch ? formatGrepNoMatchOutput(scope) : fallbackText
+        const truncated = fallbackText.includes('已按 head_limit=') || boundaryIndex >= 0
+        const scope: GrepScope = {
+          ...plan.scope,
+          truncated,
+          ...(fallbackText.includes('搜索超时') ? { limitReason: 'timeout' as const } : fallbackText.includes('已按 head_limit=') ? { limitReason: 'head_limit' as const } : {})
+        }
+        const output = `${noMatch ? formatGrepNoMatchOutput(scope) : fallbackBody}${boundarySummary}`
         return {
           success: true,
           data: {
@@ -1657,7 +1739,7 @@ export const grepExecutor: ToolExecutor = {
           code: 'grep-ripgrep-unavailable',
           message: createGrepRipgrepUnavailableDiagnostic(resolved, resolved.reason ?? 'unsupported')
         })
-        return executeFallback()
+        return await executeFallback()
       }
       const availability = await inspectRipgrepBinary(resolved)
       if (!availability.available) {
@@ -1665,7 +1747,7 @@ export const grepExecutor: ToolExecutor = {
           code: 'grep-ripgrep-unavailable',
           message: createGrepRipgrepUnavailableDiagnostic(resolved, availability.reason)
         })
-        return executeFallback()
+        return await executeFallback()
       }
       const text = await grepWithRg(
         resolved.path,
@@ -1729,7 +1811,7 @@ export const grepExecutor: ToolExecutor = {
           code: 'grep-ripgrep-unavailable',
           message: createGrepRipgrepUnavailableDiagnostic(resolved, text.reason)
         })
-        return executeFallback()
+        return await executeFallback()
       }
       if (text.kind === 'cancelled') return { success: false, error: `${text.partialOutput}\n[已取消]`, duration: Date.now() - started }
       if (text.kind === 'timeout') return { success: false, error: `${text.partialOutput}\n[搜索超时，仅展示部分结果]`, duration: Date.now() - started }
