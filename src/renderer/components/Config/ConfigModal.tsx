@@ -188,7 +188,9 @@ export function ConfigSettingsPage() {
 
     maxFileSnapshots: 100,
 
-    grepTimeoutSec: 60
+    grepTimeoutSec: 60,
+
+    grepSearchGitignored: false
 
   })
 
@@ -332,7 +334,9 @@ export function ConfigSettingsPage() {
 
         maxFileSnapshots: cfg.tools.maxFileSnapshots,
 
-        grepTimeoutSec: cfg.tools.grepTimeoutSec
+        grepTimeoutSec: cfg.tools.grepTimeoutSec,
+
+        grepSearchGitignored: cfg.tools.grepSearchGitignored ?? false
 
       })
 
@@ -629,7 +633,9 @@ export function ConfigSettingsPage() {
 
           maxFileSnapshots: toolUi.maxFileSnapshots,
 
-          grepTimeoutSec: toolUi.grepTimeoutSec
+          grepTimeoutSec: toolUi.grepTimeoutSec,
+
+          grepSearchGitignored: toolUi.grepSearchGitignored
 
         },
 

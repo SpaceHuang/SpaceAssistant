@@ -398,7 +398,9 @@
       "interpreterPathPlaceholder": "Command name or absolute path",
       "test": "Test",
       "timeoutLabel": "Default script timeout (seconds)",
-      "grepTimeoutLabel": "grep timeout (seconds)"
+      "grepTimeoutLabel": "grep timeout (seconds)",
+      "grepSearchGitignoredLabel": "Search Git-ignored files",
+      "grepSearchGitignoredHint": "When enabled, grep also searches paths ignored by .gitignore (equivalent to ripgrep --no-ignore-vcs). Off by default; sensitive entries such as .env and secrets/ are always excluded regardless. No effect in non-Git directories."
     }
   },
   "shell": {

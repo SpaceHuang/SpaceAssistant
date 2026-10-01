@@ -104,7 +104,8 @@ export function buildConfigModalSnapshot(input: ConfigModalSnapshotInput): strin
       scriptTimeout: input.toolUi.scriptTimeout,
       fileCheckpointingEnabled: input.toolUi.fileCheckpointingEnabled,
       maxFileSnapshots: input.toolUi.maxFileSnapshots,
-      grepTimeoutSec: input.toolUi.grepTimeoutSec
+      grepTimeoutSec: input.toolUi.grepTimeoutSec,
+      grepSearchGitignored: input.toolUi.grepSearchGitignored
     },
     maxParallelChatSessions: input.maxParallelChatSessions,
     wiki: input.wiki,
@@ -142,7 +143,8 @@ export function buildConfigModalSnapshotFromConfig(
       scriptTimeout: cfg.tools.scriptTimeout,
       fileCheckpointingEnabled: cfg.tools.fileCheckpointingEnabled,
       maxFileSnapshots: cfg.tools.maxFileSnapshots,
-      grepTimeoutSec: cfg.tools.grepTimeoutSec
+      grepTimeoutSec: cfg.tools.grepTimeoutSec,
+      grepSearchGitignored: cfg.tools.grepSearchGitignored ?? false
     },
     maxParallelChatSessions: cfg.maxParallelChatSessions,
     wiki: cfg.wiki,

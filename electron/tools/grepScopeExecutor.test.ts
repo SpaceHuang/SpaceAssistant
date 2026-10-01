@@ -184,3 +184,38 @@ describe('安全不变量静态守卫（§6.4 I1/I2/I3，D6）', () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }) }
   })
 })
+
+describe('G8：--no-ignore-vcs 接线守卫（§7.9 改动 3，B1：漏 grepWithRg 透传则永不推送）', () => {
+  it('searchGitignored 透传到 grepWithRg 内部 plan → rgArgs 含 --no-ignore-vcs（AC-34 前置）', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-nivcs-on-'))
+    fs.writeFileSync(path.join(root, 'a.txt'), 'needle')
+    try {
+      const captured: string[][] = []
+      await grepWithRg('rg', root, path.resolve(root), 'needle', baseArgs(), 5000, new AbortController().signal, () => {}, capturingSpawn(captured), undefined, undefined, undefined, { searchGitignored: true })
+      expect(captured[0]).toContain('--no-ignore-vcs')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
+  it('未开启时 rgArgs 不含 --no-ignore-vcs（默认行为逐字一致，AC-33）', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-nivcs-off-'))
+    fs.writeFileSync(path.join(root, 'a.txt'), 'needle')
+    try {
+      const captured: string[][] = []
+      await grepWithRg('rg', root, path.resolve(root), 'needle', baseArgs(), 5000, new AbortController().signal, () => {}, capturingSpawn(captured))
+      expect(captured[0]).not.toContain('--no-ignore-vcs')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+
+  it.each([true, false])('推送 --no-ignore-vcs 时（on=%s）rgArgs 仍不含 --no-ignore / -u / --unrestricted（AC-37）', async (on) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-nivcs-guard-'))
+    fs.writeFileSync(path.join(root, 'a.txt'), 'needle')
+    try {
+      const captured: string[][] = []
+      await grepWithRg('rg', root, path.resolve(root), 'needle', baseArgs({ includeIgnored: on }), 5000, new AbortController().signal, () => {}, capturingSpawn(captured))
+      const rgArgs = captured[0]!
+      expect(rgArgs).not.toContain('--no-ignore')
+      expect(rgArgs).not.toContain('-u')
+      expect(rgArgs).not.toContain('--unrestricted')
+    } finally { fs.rmSync(root, { recursive: true, force: true }) }
+  })
+})

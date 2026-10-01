@@ -248,3 +248,36 @@ describe('planGrepInvocation searchKind（§7.5，C6：单文件不产目录遍�
     expect(plan.ignoreGlobs.length).toBeGreaterThan(0)
   })
 })
+
+describe('searchGitignored → noIgnoreVcs（阶段 G，§7.9 改动 2）', () => {
+  const dirs: string[] = []
+  afterEach(() => {
+    for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true })
+  })
+
+  function run(argsOverride: Record<string, unknown>, opts: Record<string, unknown> = {}): { noIgnoreVcs: boolean } & Record<string, unknown> {
+    const root = tempDir()
+    dirs.push(root)
+    return planGrepInvocation({
+      workDir: root, searchPath: root,
+      args: { includeIgnored: false, outputMode: 'files_with_matches', ignoreCase: false, showLineNumber: true, multiline: false, headLimit: 100, ...argsOverride },
+      ...opts
+    }) as never
+  }
+
+  it('设置项 searchGitignored: true → noIgnoreVcs: true（AC-34 前置）', () => {
+    expect(run({}, { searchGitignored: true }).noIgnoreVcs).toBe(true)
+  })
+
+  it('仅 includeIgnored: true → noIgnoreVcs: true（AC-36）', () => {
+    expect(run({ includeIgnored: true }).noIgnoreVcs).toBe(true)
+  })
+
+  it('二者皆假 → noIgnoreVcs: false（默认行为与改动前逐字一致，AC-33）', () => {
+    expect(run({}).noIgnoreVcs).toBe(false)
+  })
+
+  it('OR 语义：设置项为「下限」，调用方 includeIgnored 不得收窄', () => {
+    expect(run({ includeIgnored: true }, { searchGitignored: true }).noIgnoreVcs).toBe(true)
+  })
+})

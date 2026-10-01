@@ -25,6 +25,8 @@ export interface ToolsConfig {
   fileCheckpointingEnabled: boolean
   maxFileSnapshots: number
   grepTimeoutSec: number
+  /** grep 是否搜索被 Git 忽略（.gitignore 等）的路径；默认 false。仅追加 --no-ignore-vcs，不解除敏感排除（R6） */
+  grepSearchGitignored: boolean
   autoApproveMaxBytes?: number
   autoApproveMaxEditChars?: number
   /** 云端兼容开关：允许经交叉校验的 workdir-readonly 脚本声明免确认。默认关闭。 */
@@ -41,6 +43,7 @@ export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
   fileCheckpointingEnabled: true,
   maxFileSnapshots: 100,
   grepTimeoutSec: 60,
+  grepSearchGitignored: false,
   autoApproveMaxBytes: 256 * 1024,
   autoApproveMaxEditChars: 64 * 1024
 }

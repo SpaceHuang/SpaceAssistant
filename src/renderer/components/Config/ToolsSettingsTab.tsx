@@ -20,6 +20,7 @@ export type ToolsSettingsUi = {
   fileCheckpointingEnabled: boolean
   maxFileSnapshots: number
   grepTimeoutSec: number
+  grepSearchGitignored: boolean
 }
 
 type Props = {
@@ -197,6 +198,12 @@ export function ToolsSettingsTab({
                 value={toolUi.grepTimeoutSec}
                 onChange={(v) => setToolUi((s) => ({ ...s, grepTimeoutSec: v ?? 60 }))}
                 style={{ width: '100%' }}
+              />
+            </Form.Item>
+            <Form.Item label={t('tools.script.grepSearchGitignoredLabel')} extra={t('tools.script.grepSearchGitignoredHint')}>
+              <Switch
+                checked={toolUi.grepSearchGitignored}
+                onChange={(v) => setToolUi((s) => ({ ...s, grepSearchGitignored: v }))}
               />
             </Form.Item>
           </div>

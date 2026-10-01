@@ -987,7 +987,12 @@ export type GrepExecArgs = {
   context?: number
   multiline: boolean
   headLimit: number
-  /** R6：对齐 ripgrep -uu（--no-ignore --hidden）；敏感路径不由此开关解除 */
+  /**
+   * R6：解除默认忽略名单（GREP_DEFAULT_IGNORES）与隐藏条目过滤（--hidden）。
+   * 不解除 ignore 文件（.gitignore 等，rg 默认尊重）——后者由设置项 grepSearchGitignored
+   * 经 --no-ignore-vcs 控制（§1.5 订正：原注释声称对齐 -uu 落了一半，--no-ignore 从未推送）。
+   * 敏感路径不由此开关解除。
+   */
   includeIgnored: boolean
 }
 
@@ -1180,7 +1185,7 @@ export async function grepWithRg(
   killer: ProcessKiller = processTreeKiller,
   onTerminate?: (info: GrepTerminateInfo) => void,
   /** 一次规划、两处消费：与 grepExecutor 的 searchScope 输出共用同一组规划覆盖（§7.6 改动 2，防 rg 行为与对外报告范围不一致） */
-  planOverrides?: { searchKind?: 'file' | 'directory' }
+  planOverrides?: { searchKind?: 'file' | 'directory'; searchGitignored?: boolean }
 ): Promise<RipgrepRunResult> {
   if (signal.aborted) return { kind: 'cancelled', partialOutput: '' }
   const openedFileFd = openedFile?.fileHandle.fd
@@ -1204,6 +1209,9 @@ export async function grepWithRg(
   }
   rgArgs.push('--max-columns', '500')
   if (plan.hidden) rgArgs.push('--hidden')
+  // G（D1）：设置项 grepSearchGitignored / 调用方 includeIgnored 的 OR——只追加 --no-ignore-vcs，
+  // 禁止 --no-ignore / -u / --unrestricted（会越界解除 .ignore/.rgignore，§6.5 I2）
+  if (plan.noIgnoreVcs) rgArgs.push('--no-ignore-vcs')
   // D1（评审 2026-09-28）：glob 大小写无关（--iglob）——isSensitivePath 是小写化判定，
   // 大小写敏感的 --glob 会让 Secrets/、.ENV、NodeModules 等变体绕过排除。
   if (plan.caseInsensitiveGlobs) {
@@ -1705,7 +1713,7 @@ export const grepExecutor: ToolExecutor = {
       // 一次规划、三处消费：rgArgs 驱动（经 grepWithRg 透传）、walk plan、searchScope 输出 plan
       // 必须同一组 overrides，否则 rg 实际行为与对外报告的范围会不一致（§7.6 改动 2，B1）
       const searchKind: 'file' | 'directory' = ctx.readExecutionPermit?.targets[0]?.targetKind === 'directory' ? 'directory' : 'file'
-      const planOverrides = { searchKind }
+      const planOverrides = { searchKind, searchGitignored: ctx.toolsConfig.grepSearchGitignored }
       const executeFallback = async (): Promise<ToolExecutorResult> => {
         const fallbackText = await grepFallbackJs(
           ctx.workDir, absSearch, pattern, gargs, ctx.signal,

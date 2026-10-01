@@ -182,3 +182,51 @@ describe('grep 目录递归（E2，rg 路径）', () => {
     } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 })
+
+describe('G12：grepSearchGitignored 真机端到端（AC-34/AC-35/AC-36，§6.5 E1：须先建 .git 否则 .gitignore 不生效）', () => {
+  const findRealRg = (): string | null => {
+    const binary = path.join(process.cwd(), 'resources', 'ripgrep', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'rg.exe' : 'rg')
+    return fsSync.existsSync(binary) ? binary : null
+  }
+
+  it('设置开启：被 .gitignore 忽略的文件出现（AC-34），敏感条目仍排除（AC-35）', async () => {
+    const binary = findRealRg()
+    if (!binary) return
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-rg-gitignored-on-'))
+    try {
+      await fs.mkdir(path.join(root, '.git'), { recursive: true })
+      await fs.writeFile(path.join(root, '.gitignore'), 'ignored.txt\n.env\nsecrets/\n')
+      await fs.writeFile(path.join(root, 'tracked.txt'), 'NEEDLE tracked\n')
+      await fs.writeFile(path.join(root, 'ignored.txt'), 'NEEDLE ignored\n')
+      await fs.writeFile(path.join(root, '.env'), 'NEEDLE secret\n')
+      await fs.mkdir(path.join(root, 'secrets'), { recursive: true })
+      await fs.writeFile(path.join(root, 'secrets', 'key.txt'), 'NEEDLE secret\n')
+      const result = await grepWithRg(binary, root, root, 'NEEDLE', args({ outputMode: 'files_with_matches' }), 10000, new AbortController().signal, () => undefined, undefined, undefined, undefined, { searchGitignored: true })
+      expect(result).toMatchObject({ kind: 'success' })
+      if (result.kind === 'success') {
+        expect(result.output).toContain('tracked.txt')
+        expect(result.output).toContain('ignored.txt')
+        expect(result.output).not.toContain('.env')
+        expect(result.output).not.toContain('secrets')
+      }
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it('设置关闭：被 .gitignore 忽略的文件不出现（默认行为与改动前逐字一致，AC-33）', async () => {
+    const binary = findRealRg()
+    if (!binary) return
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-rg-gitignored-off-'))
+    try {
+      await fs.mkdir(path.join(root, '.git'), { recursive: true })
+      await fs.writeFile(path.join(root, '.gitignore'), 'ignored.txt\n')
+      await fs.writeFile(path.join(root, 'tracked.txt'), 'NEEDLE tracked\n')
+      await fs.writeFile(path.join(root, 'ignored.txt'), 'NEEDLE ignored\n')
+      const result = await grepWithRg(binary, root, root, 'NEEDLE', args({ outputMode: 'files_with_matches' }), 10000, new AbortController().signal, () => undefined)
+      expect(result).toMatchObject({ kind: 'success' })
+      if (result.kind === 'success') {
+        expect(result.output).toContain('tracked.txt')
+        expect(result.output).not.toContain('ignored.txt')
+      }
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+})

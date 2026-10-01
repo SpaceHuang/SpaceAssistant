@@ -85,7 +85,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
         include_ignored: {
           type: 'boolean',
           description:
-            '对齐 ripgrep 的 -uu：同时解除默认忽略规则与隐藏条目过滤（含 .git 等点目录），默认 false。注意：敏感文件（如 .env）仍不会被搜索，如需搜索请直接指定该文件路径'
+            '解除默认忽略规则（node_modules、dist 等）与隐藏条目过滤（含 .git 等点目录），默认 false。不解除 .gitignore 等 ignore 文件（搜索被 Git 忽略的路径由设置项控制）。注意：敏感文件（如 .env）仍不会被搜索，如需搜索请直接指定该文件路径'
         },
         path: {
           type: 'string',

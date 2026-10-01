@@ -48,7 +48,8 @@ describe('buildConfigModalSnapshot', () => {
         scriptTimeout: 300,
         fileCheckpointingEnabled: true,
         maxFileSnapshots: 100,
-        grepTimeoutSec: 60
+        grepTimeoutSec: 60,
+        grepSearchGitignored: false
       },
       maxParallelChatSessions: 3,
       wiki: { ...DEFAULT_WIKI_CONFIG },
@@ -84,7 +85,8 @@ describe('buildConfigModalSnapshot', () => {
           scriptTimeout: 300,
           fileCheckpointingEnabled: true,
           maxFileSnapshots: 100,
-          grepTimeoutSec: 60
+          grepTimeoutSec: 60,
+          grepSearchGitignored: false
         },
         maxParallelChatSessions: 3,
         wiki: { ...DEFAULT_WIKI_CONFIG },
@@ -113,7 +115,8 @@ describe('buildConfigModalSnapshot', () => {
           scriptTimeout: 300,
           fileCheckpointingEnabled: true,
           maxFileSnapshots: 100,
-          grepTimeoutSec: 60
+          grepTimeoutSec: 60,
+          grepSearchGitignored: false
         },
         maxParallelChatSessions: 3,
         wiki: { ...DEFAULT_WIKI_CONFIG },
@@ -141,7 +144,8 @@ describe('buildConfigModalSnapshot', () => {
         scriptTimeout: 300,
         fileCheckpointingEnabled: true,
         maxFileSnapshots: 100,
-        grepTimeoutSec: 60
+        grepTimeoutSec: 60,
+        grepSearchGitignored: false
       },
       maxParallelChatSessions: 3,
       wiki: { ...DEFAULT_WIKI_CONFIG },
@@ -173,7 +177,8 @@ describe('buildConfigModalSnapshot', () => {
           scriptTimeout: 300,
           fileCheckpointingEnabled: true,
           maxFileSnapshots: 100,
-          grepTimeoutSec: 60
+          grepTimeoutSec: 60,
+          grepSearchGitignored: false
         },
         maxParallelChatSessions: 3,
         wiki: { ...DEFAULT_WIKI_CONFIG },
@@ -201,7 +206,8 @@ describe('buildConfigModalSnapshot 优选默认模型', () => {
       scriptTimeout: 300,
       fileCheckpointingEnabled: true,
       maxFileSnapshots: 100,
-      grepTimeoutSec: 60
+      grepTimeoutSec: 60,
+      grepSearchGitignored: false
     },
     maxParallelChatSessions: 3,
     wiki: { ...DEFAULT_WIKI_CONFIG },
@@ -249,7 +255,8 @@ describe('buildConfigModalSnapshot 优选默认模型', () => {
             scriptTimeout: 300,
             fileCheckpointingEnabled: true,
             maxFileSnapshots: 100,
-            grepTimeoutSec: 60
+            grepTimeoutSec: 60,
+            grepSearchGitignored: false
           },
           maxParallelChatSessions: 3,
           wiki: { ...DEFAULT_WIKI_CONFIG },
@@ -283,7 +290,8 @@ describe('buildConfigModalSnapshot Thinking 强度与能力标记（§5.5 / §2.
       scriptTimeout: 300,
       fileCheckpointingEnabled: true,
       maxFileSnapshots: 100,
-      grepTimeoutSec: 60
+      grepTimeoutSec: 60,
+      grepSearchGitignored: false
     },
     maxParallelChatSessions: 3,
     wiki: { ...DEFAULT_WIKI_CONFIG },
@@ -319,5 +327,43 @@ describe('buildConfigModalSnapshot Thinking 强度与能力标记（§5.5 / §2.
         buildConfigModalSnapshot({ ...base, models: [notSupports] })
       )
     ).toBe(false)
+  })
+})
+
+describe('AC-51：快照对 grepSearchGitignored 翻转敏感（v3 B2：防脏检查静默失灵）', () => {
+  it('翻转 grepSearchGitignored 后快照变化，脏检查判定生效', () => {
+    const llmState = initLlmServiceTabState(
+      [{ id: 's1', name: 'Main', baseUrl: '', apiKeyPresent: true, supportedModelIds: ['1'] }],
+      ['s1'],
+      ['1']
+    )
+    const base = {
+      ...preferredIds,
+      workDirProfiles: [{ id: 'd1', name: 'Work', path: '/tmp/work', isDefault: true }],
+      locale: 'zh-CN' as const,
+      thinkingEffort: 'medium' as const,
+      models: [{ id: '1', name: 'claude', maximumContext: 200000, maxTokens: 64000, isDefault: true, isFast: false, isVision: false, enabled: true }],
+      llmState,
+      toolUi: {
+        deniedTools: ['browser'],
+        pythonPath: 'python',
+        scriptTimeout: 300,
+        fileCheckpointingEnabled: true,
+        maxFileSnapshots: 100,
+        grepTimeoutSec: 60,
+        grepSearchGitignored: false
+      },
+      maxParallelChatSessions: 3,
+      wiki: { ...DEFAULT_WIKI_CONFIG },
+      feishu: { ...DEFAULT_FEISHU_CONFIG },
+      wechat: { ...DEFAULT_WECHAT_CONFIG },
+      browser: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowedDomains: [] },
+      shell: { ...DEFAULT_SHELL_CONFIG, enabled: true },
+      shellEnabled: true,
+    }
+    const before = buildConfigModalSnapshot(base)
+    const after = buildConfigModalSnapshot({ ...base, toolUi: { ...base.toolUi, grepSearchGitignored: true } })
+    expect(after).not.toBe(before)
+    expect(buildConfigModalSnapshot(base)).toBe(before)
   })
 })

@@ -59,6 +59,8 @@ export interface GrepInvocationPlan {
   caseInsensitiveGlobs: boolean
   /** 范围事实骨架（skipped 在执行前统计） */
   scope: GrepScope
+  /** D1/G：--no-ignore-vcs 开关（设置项 grepSearchGitignored 与调用方 includeIgnored 的 OR——设置项是下限，只能放宽不能收窄） */
+  noIgnoreVcs: boolean
 }
 
 function toPosix(p: string): string {
@@ -93,6 +95,8 @@ export function planGrepInvocation(opts: {
   engine?: 'ripgrep' | 'walk'
   /** 搜索根类型：'file' 时无目录遍历语义——skipped 与 ignoreGlobs 恒空（§7.5，修复 §1.4 虚报）；缺省 'directory' */
   searchKind?: 'file' | 'directory'
+  /** 设置项要求解除 gitignore（调用方的 include_ignored 为另一来源；生效语义为 OR，§7.9） */
+  searchGitignored?: boolean
 }): GrepInvocationPlan {
   const { workDir, searchPath, args } = opts
   const searchKind = opts.searchKind ?? 'directory'
@@ -123,11 +127,16 @@ export function planGrepInvocation(opts: {
   const explicitSensitiveHit = searchRelInsideWorkDir && isSensitivePath(searchPath)
   const sensitiveExcludes = explicitSensitiveHit ? [] : grepSensitiveExcludes()
 
+  // G（D1）：搜索被 Git 忽略的路径——只追加 --no-ignore-vcs（解除 .gitignore 系），
+  // 不追加 --no-ignore/-u（会连 .ignore/.rgignore 一起解除，越界，§6.5 实测选型）
+  const noIgnoreVcs = Boolean(opts.searchGitignored) || Boolean(args.includeIgnored)
+
   return {
     hidden,
     ignoreGlobs,
     sensitiveExcludes,
     explicitSensitiveHit,
+    noIgnoreVcs,
     // D1（评审 2026-09-28）：rg 侧 glob 用 --iglob（大小写无关）消费——isSensitivePath
     // 是小写化判定，大小写敏感的 `--glob` 会让 Secrets/、.ENV 变体绕过排除并进入结果。
     caseInsensitiveGlobs: true,
