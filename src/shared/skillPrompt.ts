@@ -87,24 +87,32 @@ export function buildSkillRouteSignature(
     .join('|')
 }
 
+/** FR7：延迟模式的附加提示参数（MCP 工具延迟加载需求）。 */
+export type ToolHintDeferredOptions = { mcpDeferredCount?: number }
+
 /** 注入当前会话实际可用的内置工具列表，避免 Skill 引用未启用的工具（如 run_shell） */
-export function buildAvailableToolsHint(toolNames: string[]): string {
-  if (toolNames.length === 0) return ''
+export function buildAvailableToolsHint(toolNames: string[], options?: ToolHintDeferredOptions): string {
+  if (toolNames.length === 0 && !options?.mcpDeferredCount) return ''
   const list = toolNames.join(', ')
   const shellNote = toolNames.includes('run_shell')
     ? 'run_shell 可在工作目录执行 shell 命令（执行前会弹出确认卡片）。'
     : 'run_shell 当前未启用：不得调用 run_shell；需要执行 shell 时请按 Skill 的 fallback（口述步骤或引导用户在终端执行）。'
+  // FR7：延迟生效时清单尾部注明另有 N 个 MCP 工具，消除「仅可调用」与兜底可调用的表述矛盾
+  const deferredNote = options?.mcpDeferredCount
+    ? `另有 ${options.mcpDeferredCount} 个 MCP 工具未在此列出：它们未随请求下发参数定义，可经「MCP 工具索引」查看并用 tool_search 检索后调用。`
+    : ''
   return [
     '## 当前可用工具',
     `仅可调用以下工具名称：${list}`,
     '',
     '注意：run_shell（shell 命令）与 run_script（Python 脚本）是完全不同的工具，不可互相替代。',
-    shellNote
-  ].join('\n')
+    shellNote,
+    deferredNote
+  ].filter(Boolean).join('\n')
 }
 
 /** 工具能力由 API tools 数组表达；system 只保留最小的调用约定。 */
-export function buildToolCapabilityConventionHint(toolNames: readonly string[]): string {
+export function buildToolCapabilityConventionHint(toolNames: readonly string[], options?: ToolHintDeferredOptions): string {
   const shell = toolNames.includes('run_shell')
     ? 'run_shell 可执行 shell 命令；run_script 用于 Python 脚本，两者不可互相替代。'
     : 'run_shell 当前未启用；需要执行 shell 时请遵循 Skill 的 fallback，不要编造或调用该工具。'
@@ -112,7 +120,11 @@ export function buildToolCapabilityConventionHint(toolNames: readonly string[]):
   const toolkit = toolNames.includes('toolkit_find')
     ? '产品提供能力集合（toolkit_find / toolkit_call）：需要了解运行环境（产品/系统/开发环境/工作目录/时间/浏览器依赖）或执行产品功能（MCP 管理、会话状态/列表/消息）时，先用 toolkit_find 按用途描述查询用法，再用 toolkit_call 以返回的能力 id 调用；能力不足时如实报告，不要编造。'
     : ''
-  return ['工具能力以当前请求的 tools 定义为准，不要调用未定义的工具。' + shell, toolkit]
+  // FR7：延迟模式约定（compat 名口径，tool_search 无点号恒等映射）
+  const deferred = options?.mcpDeferredCount && toolNames.includes('tool_search')
+    ? 'MCP 工具的参数定义未随请求下发：调用「MCP 工具索引」中的工具前，先用 tool_search 检索获取完整参数 schema，再按 schema 传参调用。'
+    : ''
+  return ['工具能力以当前请求的 tools 定义为准，不要调用未定义的工具。' + shell, toolkit, deferred]
     .filter(Boolean)
     .join('\n')
 }

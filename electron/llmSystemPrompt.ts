@@ -76,12 +76,16 @@ export function buildFinalSystemPrompt(args: {
   hasImageAttachments?: boolean
   skillCatalog?: SkillDefinition[]
   contextWindow?: number
+  /** FR1：MCP 工具索引区块（延迟模式生成；无延迟工具时缺省，不产生空区块）。 */
+  mcpCatalog?: PromptSection
 }): string | undefined {
   const sections: PromptSection[] = [
     buildBaseSystemSection(args),
     buildToolConventionSection(args.locale),
     ...(args.hasImageAttachments ? [buildImageAttachmentsSection(args.locale)] : []),
     buildUiLocaleSection(args.locale),
+    // order 45：位于工具约定 hint（order 20/40）与 ## Skills（order 50）之间（§6.2）
+    ...(args.mcpCatalog ? [args.mcpCatalog] : []),
     ...(args.skillCatalog?.length ? [buildSkillCatalogSection(args.skillCatalog, args.contextWindow ?? 200_000)] : [])
   ]
   return renderPrompt(buildPromptAssembly({ sections })) || undefined

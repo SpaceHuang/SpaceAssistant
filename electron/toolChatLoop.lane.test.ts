@@ -81,7 +81,9 @@ vi.mock('./mcp/mcpToolRegistry', () => ({
       description: `外部 MCP 服务「${e.serverName}」提供的工具`,
       input_schema: e.inputSchema
     }))
-  )
+  ),
+  // FR13：测试快照条目均可解析（保持透传语义）
+  sanitizeMcpSnapshotForExecutors: vi.fn((snapshot: unknown) => snapshot)
 }))
 
 vi.mock('./mcp/mcpConfigStore', () => ({

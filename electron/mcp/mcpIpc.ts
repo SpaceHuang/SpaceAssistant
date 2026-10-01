@@ -22,7 +22,11 @@ import { clearDiagnostics, getDiagnostics, safeAppendDiagnostic } from './mcpDia
 import { McpConnectionManager } from './mcpConnectionManager'
 // 从策略原点导入：mcpConnectionManager 在测试中常被整体 mock，运行时类引用必须绕开
 import { McpEndpointValidationError } from './endpointPolicy'
-import { discoverToolsFromSession, getCachedTools } from './mcpToolRegistry'
+import { computeBudgetDiagnostics, discoverToolsFromSession, getCachedTools } from './mcpToolRegistry'
+import { getConfigValue } from '../database'
+import { CONFIG_KEYS } from '../ipc/ipcShared'
+import { mergeToolsConfig, MCP_DEFERRED_SCHEMA_BUDGET_BYTES_DEFAULT, type ToolsConfig } from '../../src/shared/domainTypes'
+import type { McpBudgetDiagnostic } from '../../src/shared/mcpTypes'
 import {
   createMcpOAuthClientProvider,
   isOAuthFlowActive,
@@ -69,6 +73,7 @@ export function writeInputToProfile(input: McpServerWriteInput): McpServerProfil
       ? { http: { endpoint: input.http.endpoint, ...(input.http.allowPrivateNetwork === true ? { allowPrivateNetwork: true as const } : {}) } }
       : {}),
     enabledToolNames: input.enabledToolNames,
+    ...(input.alwaysLoad !== undefined ? { alwaysLoad: input.alwaysLoad } : {}),
     status: 'untested',
     createdAt: input.createdAt ?? now,
     updatedAt: input.updatedAt ?? now
@@ -138,7 +143,19 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       const cache = getCachedTools(ctx.db, server.id)
       if (cache) toolCaches[server.id] = cache
     }
-    return { servers, toolCaches }
+    // FR12①/§6.7：按需重算预算诊断（纯配置 + 缓存、确定性输出；用户从未发起聊天也有值）
+    let budgetDiagnostics: McpBudgetDiagnostic[] | undefined
+    try {
+      const toolsRaw = getConfigValue(ctx.db, CONFIG_KEYS.tools)
+      const toolsConfig = mergeToolsConfig(toolsRaw ? (JSON.parse(toolsRaw) as Partial<ToolsConfig>) : null)
+      budgetDiagnostics = computeBudgetDiagnostics(ctx.db, {
+        mode: toolsConfig.mcpDeferredLoading ?? 'off',
+        thresholdBytes: toolsConfig.mcpDeferredSchemaBudgetBytes ?? MCP_DEFERRED_SCHEMA_BUDGET_BYTES_DEFAULT
+      })
+    } catch {
+      // 诊断失败不阻塞 mcp:list（设置页主功能优先）
+    }
+    return { servers, toolCaches, ...(budgetDiagnostics ? { budgetDiagnostics } : {}) }
   })
 
   ipcMain.handle('mcp:save-profiles', async (_e, payload: unknown) => {

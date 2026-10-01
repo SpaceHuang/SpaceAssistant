@@ -286,7 +286,22 @@ BUILTIN_TOOL_DEFINITIONS.push(
   { name: 'skills.read', description: '读取技能目录中指定技能的完整说明。', input_schema: { type: 'object', properties: { name: { type: 'string' }, max_chars: { type: 'integer' } }, required: ['name'] } },
   // 能力集合（toolkit）网关：模型面恒定两条，能力增删不改变 schema（docs/requirement/agent-toolkit-capability-gateway-requirement.md §3.1）
   { name: 'toolkit.find', description: '查询产品能力集合。需要了解运行环境（产品/系统/开发环境/工作目录/时间/浏览器依赖）或执行产品功能（MCP 管理、会话查询）时，先用本工具按用途描述或能力 id 查询，获取调用方式后再用 toolkit.call 执行。', input_schema: { type: 'object', properties: { query: { type: 'string', description: '自然语言用途描述，或精确能力 id' }, family: { type: 'string', enum: ['env', 'action'], description: '可选：env=环境知觉（只读），action=功能执行' } }, required: ['query'] } },
-  { name: 'toolkit.call', description: '调用能力集合中的具体能力。先用 toolkit.find 查询能力 id 与参数说明，再调用本工具；act 类能力需用户确认。', input_schema: { type: 'object', properties: { id: { type: 'string', description: '能力 id（来自 toolkit.find）' }, params: { type: 'object', description: '能力参数，格式见 toolkit.find 返回的 usage' } }, required: ['id'] } }
+  { name: 'toolkit.call', description: '调用能力集合中的具体能力。先用 toolkit.find 查询能力 id 与参数说明，再调用本工具；act 类能力需用户确认。', input_schema: { type: 'object', properties: { id: { type: 'string', description: '能力 id（来自 toolkit.find）' }, params: { type: 'object', description: '能力参数，格式见 toolkit.find 返回的 usage' } }, required: ['id'] } },
+  // MCP 工具延迟加载（deferred tool loading）的检索元工具：仅桌面 lane 注入（toolsConfigRuntime 门控）。
+  // 命名保留 tool_search（决策 D7：Claude 系模型对该名有「延迟工具先检索」行为先验）；无点号、compat 恒等映射。
+  {
+    name: 'tool_search',
+    description: '检索本会话可用但参数定义未随请求下发的 MCP 工具（见系统提示中的「MCP 工具索引」）。返回匹配工具的完整参数 schema（input_schema），随后即可直接调用。查询产品自身能力（非 MCP）请改用 toolkit_find。当索引中的工具不确定参数时使用。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '检索关键词，匹配工具名与描述，不区分大小写，空格分词后任一词命中即候选；缺省或空串 = 按快照顺序分页列出全部（遍历保底）', maxLength: 256 },
+        server: { type: 'string', description: '可选：仅检索指定 MCP 服务（按名称或 id）' },
+        limit: { type: 'integer', description: '最多返回的完整定义数，默认 5，上限 10' },
+        offset: { type: 'integer', description: '跳过的条目数（与 limit 配合分页遍历），默认 0' }
+      }
+    }
+  }
 )
 
 export const ALL_BUILTIN_TOOL_NAMES = BUILTIN_TOOL_DEFINITIONS.map((t) => t.name)

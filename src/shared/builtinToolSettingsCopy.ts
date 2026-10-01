@@ -77,6 +77,11 @@ const TOOL_I18N_KEYS: Record<string, BuiltinToolI18nKeys> = {
     summary: 'tools.builtin.toolkitCall.summary' as NamespaceKeyMap['config'],
     disabledHint: 'tools.builtin.toolkitCall.disabledHint' as NamespaceKeyMap['config']
   },
+  tool_search: {
+    displayName: 'tools.builtin.toolSearch.displayName' as NamespaceKeyMap['config'],
+    summary: 'tools.builtin.toolSearch.summary' as NamespaceKeyMap['config'],
+    disabledHint: 'tools.builtin.toolSearch.disabledHint' as NamespaceKeyMap['config']
+  },
   list_work_dirs: {
     displayName: 'tools.builtin.listWorkDirs.displayName' as NamespaceKeyMap['config'],
     summary: 'tools.builtin.listWorkDirs.summary' as NamespaceKeyMap['config'],
