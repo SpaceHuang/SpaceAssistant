@@ -9,6 +9,37 @@ import { buildAssistantActivityTimeline } from '../../src/shared/assistantActivi
 import type { Message } from '../../src/shared/domainTypes'
 
 describe('createAgentSdkDesktopObserver', () => {
+  it('accumulates each model request tool declaration into the persisted turn dimensions', async () => {
+    let turnDimensions: unknown
+    const observer = createAgentSdkDesktopObserver({
+      requestId: 'tool-declaration-usage', sessionId: 's', turnId: 't',
+      onTurnToolAttribution: (dimension) => { turnDimensions = dimension }
+    })
+    const request = {
+      messages: [{ role: 'user' as const, content: 'hello' }],
+      maxTokens: 100,
+      tools: [
+        { name: 'grep', description: 'search workspace', inputSchema: { type: 'object' } },
+        { name: 'mcp_docs_search', description: 'search docs', inputSchema: { type: 'object' } }
+      ]
+    }
+
+    observer.prepareUsageAttribution?.({ modelTurn: 1, request })
+    observer.prepareUsageAttribution?.({ modelTurn: 2, request })
+    await observer.onTurnFinished?.({ text: '', messages: [], modelTurns: 2, finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 0 } })
+
+    expect(turnDimensions).toMatchObject({
+      tools: { grep: expect.any(Number), mcp_docs_search: expect.any(Number) },
+      toolSource: { builtin: expect.any(Number), mcp: expect.any(Number) },
+      toolSources: { grep: 'builtin', mcp_docs_search: 'mcp' }
+    })
+    const dimensions = turnDimensions as { tools: Record<string, number>; toolSource: Record<string, number> }
+    expect(dimensions.tools.grep).toBeGreaterThan(0)
+    expect(dimensions.tools.mcp_docs_search).toBeGreaterThan(0)
+    expect(dimensions.toolSource.builtin).toBeGreaterThan(0)
+    expect(dimensions.toolSource.mcp).toBeGreaterThan(0)
+  })
+
   it('writes request headers for the first and follow-up Hosted model turns', async () => {
     const emitSessionEvent = vi.fn()
     const observer = createAgentSdkDesktopObserver({ requestId: 'r', sessionId: 's', turnId: 't', emitSessionEvent, model: 'claude-test', contextWindow: 1000, windowId: 'projection-window' })

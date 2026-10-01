@@ -37,6 +37,7 @@ import { invalidateSkillsCache } from './skills/skillCache'
 import { isTruncatedToolResultContent } from '../src/shared/oversizedToolResult'
 import { MAX_TOOL_RESULT_CONTENT_CHARS } from '../src/shared/toolResultLimits'
 import { getUsageStepFactsForTurn, getUsageTurnFact } from './database/operations'
+import { queryUsageAttribution } from './usageStats/usageStatsQueries'
 import type { AssistantFactEvent } from '../src/shared/assistantFactAggregator'
 import { logAgentEvent } from './agentLogger/agentLogger'
 
@@ -426,6 +427,14 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     expect(JSON.parse(usageTurn!.toolAttributionJson!)).toMatchObject({
       tools: expect.any(Object), toolSource: expect.any(Object), toolResults: expect.any(Object)
     })
+    const persistedToolDimensions = JSON.parse(usageTurn!.toolAttributionJson!) as { tools: Record<string, number>; toolSource: Record<string, number> }
+    expect(Object.values(persistedToolDimensions.tools).some((value) => value > 0)).toBe(true)
+    expect(Object.values(persistedToolDimensions.toolSource).some((value) => value > 0)).toBe(true)
+    const queriedUsage = queryUsageAttribution(db, {
+      from: usageSteps[0]!.day!, to: usageSteps[0]!.day!, dimensions: { sessionIds: [session.id] }
+    })
+    expect(Object.values(queriedUsage.toolDimensions.tools).some((value) => value > 0)).toBe(true)
+    expect(Object.values(queriedUsage.toolDimensions.toolSource).some((value) => value > 0)).toBe(true)
     await expect(fs.readFile(path.join(workDir, 'created.txt'), 'utf8')).resolves.toBe('Hosted SDK write result')
     evaluateGateSpy.mockRestore()
   })

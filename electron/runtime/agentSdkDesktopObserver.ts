@@ -11,7 +11,7 @@ import { buildRequestContextPayload, buildRequestHeaderPayload } from '../../src
 import { projectRequestHeaderForWindow } from './requestHeaderProjection'
 import { computeContextPressure } from '../../src/shared/contextMeter'
 import { projectUsageAfterToolResults, type ContextUsageRaw } from '../../src/shared/contextUsageEstimate'
-import { accumulateToolResultVolume, buildStepAttribution, emptyTurnToolDimension, summarizeToolDeclarations, type TurnToolDimension } from '../../src/shared/usageAttribution'
+import { accumulateToolDeclarationSnapshot, accumulateToolResultVolume, buildStepAttribution, emptyTurnToolDimension, summarizeToolDeclarations, type TurnToolDimension } from '../../src/shared/usageAttribution'
 
 type ObserverChunk = Exclude<import('../../packages/agent-sdk/src/model').StreamChunk, { type: 'finish' }>
 
@@ -286,7 +286,9 @@ export function createAgentSdkDesktopObserver(input: {
       const system = request.messages.filter((message) => message.role === 'system').map((message) => typeof message.content === 'string' ? message.content : '').join('\n')
       const messages = request.messages.filter((message) => message.role !== 'system')
       const tools = (request.tools ?? []).map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema, ...(tool.strictSchema === 'require' ? { strict: true } : {}) }))
-      const attribution = { ...buildStepAttribution({ system, tools, messages }), toolDeclarationSnapshot: summarizeToolDeclarations(tools) }
+      const toolDeclarationSnapshot = summarizeToolDeclarations(tools)
+      accumulateToolDeclarationSnapshot(turnToolDimension, toolDeclarationSnapshot)
+      const attribution = { ...buildStepAttribution({ system, tools, messages }), toolDeclarationSnapshot }
       input.onUsageAttribution?.({ modelTurn, attribution })
       return attribution
     },

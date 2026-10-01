@@ -219,6 +219,19 @@ export function emptyTurnToolDimension(): TurnToolDimension {
   return { tools: {}, toolSource: {}, toolSources: {}, toolResults: {} }
 }
 
+/** 累计一次模型请求实际发送的工具声明；多 step 重复发送会重复计入请求成本。 */
+export function accumulateToolDeclarationSnapshot(dim: TurnToolDimension, snapshot: ReturnType<typeof summarizeToolDeclarations>): void {
+  for (const [name, chars] of Object.entries(snapshot.tools)) {
+    if (!Number.isFinite(chars) || chars < 0) continue
+    dim.tools[name] = (dim.tools[name] ?? 0) + chars
+  }
+  for (const [source, chars] of Object.entries(snapshot.toolSource)) {
+    if (!Number.isFinite(chars) || chars < 0) continue
+    dim.toolSource[source] = (dim.toolSource[source] ?? 0) + chars
+  }
+  for (const [name, source] of Object.entries(snapshot.toolSources)) dim.toolSources[name] = source
+}
+
 /** 把一次工具返回按工具名累计进 turn 维度（调用次数 + 返回字符数）。 */
 export function accumulateToolResultVolume(dim: TurnToolDimension, toolName: string, content: unknown): void {
   const chars = toolResultContentChars(content)
@@ -351,15 +364,17 @@ export function normalizeTokensLargestRemainder(weights: readonly number[], exac
 export type NormalizedInputAttribution = {
   system: number
   tools: number
-  /** 键与 blocks 一致；多模态（tokens null）按 0 摊回（留位不伪造） */
+  /** Only blocks with estimated weights receive normalized token values. */
   messageBlocks: Record<string, number>
+  /** Blocks with null estimates stay explicitly unknown; exact usage cannot split them safely. */
+  unestimatedMessageBlocks: string[]
 }
 
 /**
  * §6.3 两段式归一化（输入侧）：估算层给结构占比，精确层给总量。
  * 分子分母整体来自同一 StepAttribution（block-v1，覆盖三源，I1/§6.3 约束 5）；
  * 精确总量 = input + cache_creation + cache_read（同一次请求，不跨请求混用）。
- * 结果满足 system + tools + ΣmessageBlocks == exactInputTokens（AT7 / I4）。
+ * 纯文本输入满足 system + tools + ΣmessageBlocks == exactInputTokens（AT7 / I4）。含未知多模态时保留未知块标记。
  */
 export function normalizeInputAttribution(attribution: StepAttribution, exactInputTokens: number): NormalizedInputAttribution {
   const blockKeys = Object.keys(attribution.blocks)
@@ -367,10 +382,12 @@ export function normalizeInputAttribution(attribution: StepAttribution, exactInp
   for (const key of blockKeys) weights.push(attribution.blocks[key]!.tokens ?? 0)
   const normalized = normalizeTokensLargestRemainder(weights, exactInputTokens)
   const messageBlocks: Record<string, number> = {}
+  const unestimatedMessageBlocks: string[] = []
   blockKeys.forEach((key, index) => {
-    messageBlocks[key] = normalized[index + 2]!
+    if (attribution.blocks[key]!.tokens === null) unestimatedMessageBlocks.push(key)
+    else messageBlocks[key] = normalized[index + 2]!
   })
-  return { system: normalized[0]!, tools: normalized[1]!, messageBlocks }
+  return { system: normalized[0]!, tools: normalized[1]!, messageBlocks, unestimatedMessageBlocks }
 }
 
 /**
@@ -394,6 +411,10 @@ export type AttributionCoverageFact = {
   inputTokens: number | null
   attributionJson: string | null
   estimatorVersion: string | null
+  /** Same-row denormalized three-source weights; required for image-only blocks with null message weights. */
+  systemTokens?: number | null
+  toolsTokens?: number | null
+  messageTokens?: number | null
 }
 
 export type AttributionCoverage = {
@@ -422,7 +443,20 @@ export function calculateAttributionCoverage(facts: readonly AttributionCoverage
     if (fact.attributionJson === null || typeof fact.estimatorVersion !== 'string' || fact.estimatorVersion.trim() === '') continue
     let attribution: unknown
     try { attribution = JSON.parse(fact.attributionJson) } catch { continue }
-    if (!isRecord(attribution) || !hasAttributionWeights(attribution)) continue
+    if (!isRecord(attribution)) continue
+    let attributionRecord: Record<string, unknown> = attribution
+    if (typeof fact.systemTokens === 'number' && typeof fact.toolsTokens === 'number' && typeof fact.messageTokens === 'number') {
+      attributionRecord = {
+        ...attributionRecord,
+        threeSources: {
+          systemTokens: fact.systemTokens,
+          toolsTokens: fact.toolsTokens,
+          messageTokens: fact.messageTokens,
+          estimatorVersion: fact.estimatorVersion
+        }
+      }
+    }
+    if (!hasAttributionWeights(attributionRecord)) continue
     attributedByVersion.set(fact.estimatorVersion, (attributedByVersion.get(fact.estimatorVersion) ?? 0) + fact.inputTokens)
   }
   return {
@@ -449,6 +483,14 @@ export function hasAttributionWeights(value: Record<string, unknown>): boolean {
   if (isRecord(output)) {
     for (const entry of Object.values(output)) {
       if (isRecord(entry) && typeof entry.tokens === 'number' && Number.isFinite(entry.tokens) && entry.tokens > 0) total += entry.tokens
+    }
+  }
+  const threeSources = value.threeSources
+  if (isRecord(threeSources)) {
+    const version = threeSources.estimatorVersion
+    const sources = [threeSources.systemTokens, threeSources.toolsTokens, threeSources.messageTokens]
+    if (typeof version === 'string' && version.trim() && sources.every((tokens) => typeof tokens === 'number' && Number.isFinite(tokens) && tokens >= 0)) {
+      total += sources.reduce<number>((sum, tokens) => sum + (tokens as number), 0)
     }
   }
   return total > 0

@@ -54,6 +54,7 @@
     "estimatorVersion": "Select estimator version",
     "coverage": "Attribution coverage {{percent}}%",
     "unattributed": "{{count}} tokens have no attributable data",
+    "unestimatedBlocks": "These message types contain unestimated content; their share is unknown: {{blocks}}",
     "snapshot": "Input composition snapshot",
     "drift": "Daily composition drift",
     "system": "System prompt",

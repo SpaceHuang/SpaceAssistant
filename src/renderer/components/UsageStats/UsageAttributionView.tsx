@@ -30,6 +30,7 @@ export function UsageAttributionView({ data, loading, locale }: Props) {
   if (versions.length === 0 || !version) return <Typography.Paragraph type="secondary" data-testid="attribution-empty">{t('attribution.noAttribution')}</Typography.Paragraph>
 
   const messageKeys = Object.keys(version.composition.messageBlocks)
+  const unestimatedMessageBlocks = version.composition.unestimatedMessageBlocks ?? []
   const categories = [t('attribution.system'), t('attribution.tools'), ...messageKeys]
   const toolNames = [...new Set([...Object.keys(data.toolDimensions.tools), ...Object.keys(data.toolDimensions.toolResults)])].sort()
   const topResult = Object.entries(data.toolDimensions.toolResults).sort((a, b) => b[1].chars - a[1].chars)[0]
@@ -60,6 +61,11 @@ export function UsageAttributionView({ data, loading, locale }: Props) {
       {version.coverageRatio !== null && version.coverageRatio < 1 ? (
         <Typography.Paragraph type="warning" data-testid="attribution-coverage">
           {t('attribution.coverage', { percent: (version.coverageRatio * 100).toFixed(1) })} · {t('attribution.unattributed', { count: number(version.unattributedInputTokens, locale) })}
+        </Typography.Paragraph>
+      ) : null}
+      {unestimatedMessageBlocks.length > 0 ? (
+        <Typography.Paragraph type="secondary" data-testid="attribution-unestimated-blocks">
+          {t('attribution.unestimatedBlocks', { blocks: unestimatedMessageBlocks.join(', ') })}
         </Typography.Paragraph>
       ) : null}
       <section aria-label={t('attribution.snapshot')}>

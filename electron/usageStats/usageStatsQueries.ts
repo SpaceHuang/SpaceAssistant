@@ -355,7 +355,10 @@ export function queryUsageAttribution(db: AppDatabase, args: UsageStatsRangeArgs
   const coverage = calculateAttributionCoverage(rows.map((row) => ({
     inputTokens: row.inputTokens,
     attributionJson: row.attributionJson,
-    estimatorVersion: row.estimatorVersion
+    estimatorVersion: row.estimatorVersion,
+    systemTokens: row.systemTokens,
+    toolsTokens: row.toolsTokens,
+    messageTokens: row.messageTokens
   })))
   if (coverage.exactInputTokens !== summary.inputTokens) throw new Error('USAGE_ATTRIBUTION_FILTERED_INPUT_TOTAL_MISMATCH')
 
@@ -363,10 +366,10 @@ export function queryUsageAttribution(db: AppDatabase, args: UsageStatsRangeArgs
   const dailyVersions = new Map<string, UsageAttributionSummary['dailyByEstimatorVersion'][number]>()
   for (const row of rows) {
     if (row.inputTokens === null || row.attributionJson === null || !row.estimatorVersion) continue
-    const json = parseRecordJson(row.attributionJson) as StepAttributionJson | undefined
-    if (!json || !hasAttributionWeights(json)) continue
+    const parsed = parseRecordJson(row.attributionJson) as StepAttributionJson | undefined
+    if (!parsed) continue
     const attribution = {
-      ...json,
+      ...parsed,
       threeSources: {
         systemTokens: row.systemTokens ?? 0,
         toolsTokens: row.toolsTokens ?? 0,
@@ -374,28 +377,37 @@ export function queryUsageAttribution(db: AppDatabase, args: UsageStatsRangeArgs
         estimatorVersion: row.estimatorVersion
       }
     }
+    if (!hasAttributionWeights(attribution)) continue
     const normalized = normalizeInputAttribution(attribution, row.inputTokens)
     const version = versions.get(row.estimatorVersion) ?? {
       estimatorVersion: row.estimatorVersion,
       attributableInputTokens: 0,
       unattributedInputTokens: 0,
       coverageRatio: null,
-      composition: { system: 0, tools: 0, messageBlocks: {} }
+      composition: { system: 0, tools: 0, messageBlocks: {}, unestimatedMessageBlocks: [] }
     }
     version.attributableInputTokens += row.inputTokens
     version.composition.system += normalized.system
     version.composition.tools += normalized.tools
     for (const [key, value] of Object.entries(normalized.messageBlocks)) version.composition.messageBlocks[key] = (version.composition.messageBlocks[key] ?? 0) + value
+    for (const key of normalized.unestimatedMessageBlocks) {
+      const unknownBlocks = version.composition.unestimatedMessageBlocks ??= []
+      if (!unknownBlocks.includes(key)) unknownBlocks.push(key)
+    }
     versions.set(row.estimatorVersion, version)
     const dailyKey = `${row.day}\u0000${row.estimatorVersion}`
     const daily = dailyVersions.get(dailyKey) ?? {
       day: row.day, estimatorVersion: row.estimatorVersion, inputTokens: 0,
-      composition: { system: 0, tools: 0, messageBlocks: {} }
+      composition: { system: 0, tools: 0, messageBlocks: {}, unestimatedMessageBlocks: [] }
     }
     daily.inputTokens += row.inputTokens
     daily.composition.system += normalized.system
     daily.composition.tools += normalized.tools
     for (const [key, value] of Object.entries(normalized.messageBlocks)) daily.composition.messageBlocks[key] = (daily.composition.messageBlocks[key] ?? 0) + value
+    for (const key of normalized.unestimatedMessageBlocks) {
+      const unknownBlocks = daily.composition.unestimatedMessageBlocks ??= []
+      if (!unknownBlocks.includes(key)) unknownBlocks.push(key)
+    }
     dailyVersions.set(dailyKey, daily)
   }
   for (const coverageGroup of coverage.byEstimatorVersion) {
@@ -438,8 +450,8 @@ export function queryLatestUsageAttribution(db: AppDatabase, sessionId: string):
   ).get(sessionId) as AttributionSqlRow | undefined
   if (!row || row.inputTokens === null || !row.estimatorVersion || row.attributionJson === null) return null
   const json = parseRecordJson(row.attributionJson)
-  if (!json || !hasAttributionWeights(json)) return null
-  const normalized = normalizeInputAttribution({
+  if (!json) return null
+  const attribution = {
     ...json,
     threeSources: {
       systemTokens: row.systemTokens ?? 0,
@@ -447,6 +459,10 @@ export function queryLatestUsageAttribution(db: AppDatabase, sessionId: string):
       messageTokens: row.messageTokens ?? 0,
       estimatorVersion: row.estimatorVersion
     }
+  }
+  if (!hasAttributionWeights(attribution)) return null
+  const normalized = normalizeInputAttribution({
+    ...attribution
   } as StepAttributionJson & { threeSources: { systemTokens: number; toolsTokens: number; messageTokens: number; estimatorVersion: string } }, row.inputTokens)
   return {
     exactInputTokens: row.inputTokens,

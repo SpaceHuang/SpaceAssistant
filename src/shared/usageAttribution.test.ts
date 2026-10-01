@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   accumulateToolResultVolume,
+  accumulateToolDeclarationSnapshot,
   ATTRIBUTION_SCHEMA_VERSION,
   BLOCK_V1_ESTIMATOR_VERSION,
   buildMessageSkeleton,
@@ -8,6 +9,7 @@ import {
   classifyToolSource,
   emptyTurnToolDimension,
   estimateBlockV1ThreeSources,
+  hasAttributionWeights,
   normalizeInputAttribution,
   normalizeOutputAttribution,
   normalizeTokensLargestRemainder,
@@ -126,6 +128,41 @@ describe('工具返回体量累计', () => {
     accumulateToolResultVolume(dim, 'read_file', [{ type: 'text', text: 'abc' }])
     expect(dim.toolResults['grep']).toEqual({ calls: 2, chars: 7 })
     expect(dim.toolResults['read_file']).toEqual({ calls: 1, chars: 3 })
+  })
+})
+
+describe('工具声明 turn 维度累计', () => {
+  it('重复声明按每次模型请求累计成本，来源分类保持稳定', () => {
+    const dimension = emptyTurnToolDimension()
+    const snapshot = summarizeToolDeclarations([
+      { name: 'grep', description: 'search', input_schema: { type: 'object' } },
+      { name: 'mcp_docs_search', description: 'docs', input_schema: { type: 'object' } }
+    ])
+    accumulateToolDeclarationSnapshot(dimension, snapshot)
+    accumulateToolDeclarationSnapshot(dimension, snapshot)
+    expect(dimension.tools).toEqual({
+      grep: snapshot.tools.grep! * 2,
+      mcp_docs_search: snapshot.tools.mcp_docs_search! * 2
+    })
+    expect(dimension.toolSource).toEqual({
+      builtin: snapshot.toolSource.builtin! * 2,
+      mcp: snapshot.toolSource.mcp! * 2
+    })
+    expect(dimension.toolSources).toEqual({ grep: 'builtin', mcp_docs_search: 'mcp' })
+  })
+})
+
+describe('多模态输入归因有效性', () => {
+  it('纯图片消息保留 null message 权重，同时识别有效 system/tools 三源估算', () => {
+    const attribution = buildStepAttribution({
+      system: 'stable system prompt',
+      tools: [{ name: 'grep', description: 'search workspace', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', data: 'opaque' } }] }]
+    })
+    expect(attribution.blocks['user|image']).toEqual({ chars: 0, tokens: null })
+    expect(attribution.threeSources.systemTokens).toBeGreaterThan(0)
+    expect(attribution.threeSources.toolsTokens).toBeGreaterThan(0)
+    expect(hasAttributionWeights(attribution as unknown as Record<string, unknown>)).toBe(true)
   })
 })
 
@@ -260,7 +297,8 @@ describe('normalizeInputAttribution（§6.3 两段式归一化 / AT7 恒等式�
       messages: [{ role: 'user', content: [{ type: 'image', source: {} }, { type: 'text', text: 'abc' }] }]
     })
     const out = normalizeInputAttribution(withImage, 300)
-    expect(out.messageBlocks['user|image']).toBe(0)
+    expect(out.messageBlocks).not.toHaveProperty('user|image')
+    expect(out.unestimatedMessageBlocks).toEqual(['user|image'])
     expect(out.system + out.tools + out.messageBlocks['user|text']!).toBe(300)
   })
 })

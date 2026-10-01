@@ -51,6 +51,36 @@ describe('usageStatsAttributionQueries', () => {
     db.close()
   })
 
+  it('counts pure multimodal input as attributable when system or tool declaration estimates are present', () => {
+    const db = createMemoryAppDb()
+    const imageOnly = attributed({
+      system: 'stable system prompt',
+      tools: [{ name: 'grep', description: 'search workspace', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', data: 'opaque' } }] }]
+    })
+    insertUsageStepFact(db, step('image-session', 'image-turn', 120, imageOnly))
+
+    const latest = queryLatestUsageAttribution(db, 'image-session')
+    expect(latest).toMatchObject({
+      exactInputTokens: 120,
+      estimatorVersion: 'block-v1',
+      attributableInputTokens: 120,
+      unattributedInputTokens: 0,
+      coverageRatio: 1
+    })
+    expect(latest?.composition.system).toBeGreaterThan(0)
+    expect(latest?.composition.tools).toBeGreaterThan(0)
+    expect(latest?.composition.messageBlocks).toEqual({})
+    expect(latest?.composition.unestimatedMessageBlocks).toEqual(['user|image'])
+
+    const summary = queryUsageAttribution(db, { from: day, to: day })
+    expect(summary.byEstimatorVersion).toHaveLength(1)
+    expect(summary.byEstimatorVersion[0]).toMatchObject({ attributableInputTokens: 120, coverageRatio: 1 })
+    expect(summary.byEstimatorVersion[0]?.composition.messageBlocks).toEqual({})
+    expect(summary.byEstimatorVersion[0]?.composition.unestimatedMessageBlocks).toEqual(['user|image'])
+    db.close()
+  })
+
   it('uses the same filters and exact input denominator as the summary; old NULL facts remain uncovered', () => {
     const db = createMemoryAppDb()
     insertUsageStepFact(db, step('session-a', 'turn-a', 100, attributed()))

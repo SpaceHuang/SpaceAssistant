@@ -183,6 +183,9 @@ export function ContextUsageRing({
       for (const [key, tokens] of Object.entries(latestAttribution.composition.messageBlocks)) {
         lines.push(`${key}: ${formatNum(tokens, locale)}`)
       }
+      for (const key of latestAttribution.composition.unestimatedMessageBlocks ?? []) {
+        lines.push(t('tooltip.attributionUnestimatedBlock', { block: key }))
+      }
     }
     lines.push(
       `${t('tooltip.total')} ${formatNum(display.estimatedOccupancy, locale)} / ${formatNum(display.maximumContext, locale)}（${display.percentUsed.toFixed(1)}%）`

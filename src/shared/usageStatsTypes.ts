@@ -89,6 +89,8 @@ export type UsageAttributionVersion = {
     system: number
     tools: number
     messageBlocks: Record<string, number>
+    /** Block categories present in the request but intentionally left unestimated, such as images. */
+    unestimatedMessageBlocks?: string[]
   }
 }
 

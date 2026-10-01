@@ -247,6 +247,9 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     expect(JSON.parse(turnFact!.toolAttributionJson!)).toMatchObject({
       tools: expect.any(Object), toolSource: expect.any(Object), toolResults: expect.any(Object)
     })
+    const persistedToolDimensions = JSON.parse(turnFact!.toolAttributionJson!) as { tools: Record<string, number>; toolSource: Record<string, number> }
+    expect(Object.values(persistedToolDimensions.tools).some((value) => value > 0)).toBe(true)
+    expect(Object.values(persistedToolDimensions.toolSource).some((value) => value > 0)).toBe(true)
   })
 
   it('Hosted transcript commit uncertain leaves the automation run interrupted, not failed', async () => {

@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { appendMessage, createSession, getDbConnection, openDatabase, prepareTurnAtomically, setConfigValue, type AppDatabase } from '../database'
 import { getUsageStepFactsForTurn, getUsageTurnFact } from '../database/operations'
+import { queryUsageAttribution } from '../usageStats/usageStatsQueries'
 import { MODEL_BASELINE } from '../../src/shared/modelBaseline'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { DEFAULT_REMOTE_PROGRESS_CONFIG } from '../../src/shared/remoteProgressTypes'
@@ -88,5 +89,13 @@ describe('Feishu production entry usage attribution SQLite integration', () => {
     expect(JSON.parse(turnFact!.toolAttributionJson!)).toMatchObject({
       tools: expect.any(Object), toolSource: expect.any(Object), toolResults: expect.any(Object)
     })
+    const persistedToolDimensions = JSON.parse(turnFact!.toolAttributionJson!) as { tools: Record<string, number>; toolSource: Record<string, number> }
+    expect(Object.values(persistedToolDimensions.tools).some((value) => value > 0)).toBe(true)
+    expect(Object.values(persistedToolDimensions.toolSource).some((value) => value > 0)).toBe(true)
+    const queriedUsage = queryUsageAttribution(db, {
+      from: steps[0]!.day!, to: steps[0]!.day!, dimensions: { sessionIds: [session.id] }
+    })
+    expect(Object.values(queriedUsage.toolDimensions.tools).some((value) => value > 0)).toBe(true)
+    expect(Object.values(queriedUsage.toolDimensions.toolSource).some((value) => value > 0)).toBe(true)
   })
 })
