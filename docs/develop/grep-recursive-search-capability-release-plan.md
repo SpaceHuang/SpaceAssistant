@@ -1536,3 +1536,52 @@ git init -q
 
 - **已完成的真机等价验证**：真随包 rg.exe（14.1.1 win32-x64）端到端——目录递归命中多文件（AC-14）、默认忽略排除、`.gitignore`×`grepSearchGitignored` 开/关（AC-33/34/35，夹具含 `.git`）、workDir 内相对/workDir 外绝对路径形态（AC-47/48，dump 留痕）。
 - **留待用户真机 GUI 操作**（无法由自动化替代）：Electron 应用内发起 `grep(pattern)` / `grep(pattern, path=<目录>)` 等 C1~C6 六项能力各一次、含 `.env`/`secrets/` 目录的无匹配返回体（AC-40 返回体原件）、设置页开关的实际点击保存。测试覆盖已等价锁定行为语义，GUI 操作仅作最终确认。
+
+---
+
+## 18. 附录：代码评审整改记录（2026-10，报告 `docs/review/grep-recursive-search-code-review.md`）
+
+> 评审结论：2 P0 + 5 P1 + 8 P2。以下逐项整改；提交 `6dc8f003` + 合并 `0bde7b11`。
+
+### 18.1 P0 整改
+
+| # | 评审发现 | 整改 | 验证 |
+|---|---|---|---|
+| P0-1 | grep 目录「确认后兑现」链路断裂：`finalizeReadConfirmation` 对 grep 目录返回 undefined、且不产 `subtree` scope → 用户批准后执行器报「读取许可缺失」，阶段 H「点名敏感目录→确认→搜索并明示」不可达，且无测试覆盖 | ① `readConfirmationFlow.ts`：grep 放行目录/symlink→directory/missing，目录 targetKind 归一 + `scope:'subtree'`（与 gate auto-allow 路径同口径）；read_file 保持不收目录（N8）② **连带暴露并修复**：walk 引擎对显式点名的敏感目录仍逐条目 `isSensitivePath(full) continue` → 空结果——根本身命中敏感前缀（经 zone 判定 + permit 放行）时豁免子树条目，与 rg 侧 `explicitSensitiveHit → sensitiveExcludes=[]` 同语义 ③ 补闭环用例「gate 注册确认 → finalize 兑现 subtree permit → resolveReadPermitTarget 放行 → executor 命中并标 `sensitivePathHit`」（红→绿验证） | `readReadIntegration.test.ts` 闭环用例 ✓（修复前红：finalize undefined / walk 空结果） |
+| P0-2 | AC-49 首条（单文件 stdin 映射相对化）声称完成但实现缺失：`mapOpenedFileGrepOutput` 收到恒绝对的 `searchPath`；引证用例未经过 stdin 映射路径，证据张冠李戴 | 映射目标改传相对形态（workDir 内 → `path.relative`）；Windows stdin 既有用例断言由绝对改相对（真 RED→GREEN，经真实 stdin 泵送路径） | `ripgrepExecutorProcess.test.ts`「Windows 固定句柄 grep 通过 stdin」4 断言全走相对形态 ✓ |
+
+### 18.2 P1 整改
+
+| # | 评审发现 | 整改 |
+|---|---|---|
+| P1-1 | `include_ignored` schema 描述称「不解除 .gitignore」，与实现（OR 公式→推 `--no-ignore-vcs`）矛盾 | 按实现订正描述：解除默认忽略名单 + 隐藏过滤，**并解除 .gitignore 等版本库忽略规则（与设置项为 OR）**；不解除 `.ignore`/`.rgignore`；敏感条目仍排除。两处（schema + `GrepExecArgs.includeIgnored` 注释）同步 |
+| P1-2 | rg `--max-columns` 实为码点口径（400 汉字与 400 ASCII 同截 300），非方案 §13 组 11b 判定的「显示列宽」；walk 按 CJK=2 列计，CJK 截断宽度两引擎差 2 倍 | 本机真 rg 实测复核（`汉`.repeat(400) → 预览 301 字符；ASCII 同）——**评审正确，组 11b 结论有误**。walk `clampLine` 改码点口径（`Array.from` 切码点，防代理对坏字节），删除 CJK=2 宽度函数；rg 参数注释同步订正；测试改为「200 汉字不截 / 400 汉字截 300 / ASCII 290/310 边界」 |
+| P1-3 | 相对路径化后以 `-` 开头的目录名会被 rg 吞为 flag（挂起/搜错范围，理论上脱离 permit 绑定子树） | 位置参数前统一插 `--`（stdin/fd 形态不经此路径）；补真 rg 用例「workDir 内 `-scripts` 目录」验证命中 `subtree/a.txt` 形态输出 |
+| P1-4 | rg 路径缺目录 permit 读后身份复查（`permitFileHandle &&` 前提使目录恒跳过），与 walk fallback 防御纵深不一致 | rg 路径补目录分支：`fs.stat` + `fs.realpath` 复核（dev/ino/mode + 根未被换成链接），失败 veto `read-target-identity-changed-during-read`；补「根被替换 → veto」「未替换 → 放行」两用例 |
+| P1-5 | 分支落后 main 缺 `b25ec887`（file closed 根因修复） | 已合并 main 两次（`84b3f63d`→9c36c928、`0bde7b11`→0b25868d），共 10+ 提交，含 file closed 修复与 shell 描述/timeout 诊断。合并交互修复：main 新增 `fsErrorDegrade.test` 的 permit mock 补 `targetKind:'file'`（阶段 C 契约使旧 mock 句柄被当目录丢弃而失真）；`degradedFsReadResult` 引用的已删 `relPath` 改用 `extractPathField` |
+
+### 18.3 P2 整改
+
+| # | 处置 |
+|---|---|
+| P2-1 | `isSensitiveEntryName` 小写化（`.ENV`/`Secrets` 变体进明示名单），补用例 |
+| P2-2 | `readPolicyV1` targetKind 拒绝文案改为「读取目标类型不支持该工具（read_file 仅文件；grep 支持文件与目录）」；`hasUnsupportedPattern` 分支保留为 shared API 防御路径（gate 侧由 `readPatternValidation` 抢前给指引） |
+| P2-3 | walk 不读 ignore 文件的差异已在 §7.9 语义边界表「walk 路径」行登记；i18n hint 补充「非 ripgrep 引擎时无效」表述（en/zh） |
+| P2-4 | `planGrepInvocation` 重复规划接受登记（rgArgs 驱动与 scope 输出必须同源是 §7.6 B1 的刻意设计；浅层 readdir 成本与「范围规划轻量」权衡，本期不动） |
+| P2-5 | AC-47 用例的 `dbg-rel.txt` dump 代码删除；`.gitignore` 加该名防复发 |
+| P2-6 | `grepFallback.test` 正斜杠断言改 `path.sep` 构造（Windows 转绿；EPERM symlink 用例为环境限制保留） |
+| P2-7 | automation lane 通配 grep ruleId 变化系 §7.4 改动 5（`readPatternValidation` 抢前）的有意结果，本次在提交说明中显式登记 |
+| P2-8 | §17 首部提交范围/行号勘误；全量门禁已重跑留痕（§18.4） |
+
+### 18.4 整改后门禁留痕（合并 main@0b25868d 后）
+
+| 门禁 | 结果 |
+|---|---|
+| `npx vitest run electron/tools/ electron/confirmation/ src/shared/ src/shared/policy/` | 2630 passed / 17 failed / 19 skipped——17 条全部为评审报告已双人核实的非本分支引入名单（Windows POSIX 夹具 10 + symlink 特权 5 + readFeishu 句柄 2）± flaky（regex worker cancel 1，基线同现） |
+| `npx tsc -p tsconfig.electron.json --noEmit` | ✓ |
+| `npm run typecheck:renderer` / `typecheck:shared` | ✓ / ok |
+| `npm run i18n:check` | ✅ |
+| `npm run build` | ✓（见提交后补记） |
+| 主仓库 `src/shared/builtinShellToolContract.test.ts` | 合并 0b25868d 后 ✓（该文件在旧 main 基线红，系 main 侧描述/测试漂移，非本分支） |
+
+**AC 证据订正**：AC-45 证据改「码点口径（评审 P1-2 实测订正）」；AC-47 证据补 P1-3 `--` 分隔符；AC-49 证据改「ripgrepExecutorProcess『Windows 固定句柄 grep 通过 stdin』4 断言（真实 stdin 泵送路径）」。
