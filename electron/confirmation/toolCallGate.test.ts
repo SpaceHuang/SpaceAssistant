@@ -8,6 +8,7 @@ import { SqliteDecisionCache } from './sqliteDecisionCache'
 import { getDbConnection, openSqliteDatabase, type AppDatabase } from '../database'
 import { touchTrustedCommand } from '../shell/shellCommandTrust'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
+import { effectiveActionFor } from '../../src/shared/policy/policyPackages'
 import { buildToolCallGateArgs, evaluateToolCallGate, type ToolCallGateArgs } from './toolCallGate'
 import { canonicalKeyJson } from './sqliteDecisionCache'
 import { PolicyRuleStore } from './policyRuleStore'
@@ -1015,6 +1016,24 @@ describe('evaluateToolCallGate', () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }
+  })
+
+  it('恢复的按 ruleId 档位覆盖在真实 tool gate 生效且不放宽危险脚本', async () => {
+    const db = openDb()
+    writePolicyPackages(db, { desktop: 'standard', wechat: 'standard', feishu: 'standard', automation: 'standard' })
+    const ordinaryBrowser = await evaluateToolCallGate(base({
+      appDb: db, toolName: 'browser', toolInput: { action: 'act', url: 'https://example.test', text: 'safe' }
+    }))
+    expect(ordinaryBrowser.decision).toMatchObject({ type: 'auto-allow', ruleId: 'browser-act-ask-desktop' })
+
+    const networkRule = DEFAULT_POLICY_RULES.find((rule) => rule.id === 'script-network-ask-desktop')!
+    expect(effectiveActionFor('desktop', 'standard', networkRule)).toBe('auto-evaluator')
+
+    writePolicyPackages(db, { desktop: 'loose', wechat: 'standard', feishu: 'standard', automation: 'standard' })
+    const unknownScript = await evaluateToolCallGate(base({
+      appDb: db, toolName: 'run_script', toolInput: { code: 'custom_accessor(target)' }
+    }))
+    expect(unknownScript.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-path-unknown-confirm', answerer: 'user' })
   })
 
   it('V3 run_script 静态敏感路径与内容分析共享一次解析，并进入敏感路径真人确认规则', async () => {
