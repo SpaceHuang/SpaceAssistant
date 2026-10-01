@@ -67,11 +67,16 @@ export function shellConfigRevision(shellConfig?: ShellConfig | null, platform: 
   const ioMax = normalizedConfig?.maxInlineOutputBytes ?? DEFAULT_IO_MAX
   const spec = resolveSpec(normalizedConfig, platform)
   return JSON.stringify({
+    enabled: normalizedConfig?.enabled ?? true,
     timeoutSec,
     ioMax,
     shell: spec.shellId,
     executable: spec.executable,
-    argsPrefix: spec.args.slice(0, -1)
+    argsPrefix: spec.args.slice(0, -1),
+    rules: normalizedConfig?.rules ?? [],
+    customSensitivePrefixes: normalizedConfig?.customSensitivePrefixes ?? [],
+    outputMode: normalizedConfig?.outputMode ?? 'terminal',
+    trustedCommands: normalizedConfig?.trustedCommands ?? []
   })
 }
 

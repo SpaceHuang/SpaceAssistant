@@ -32,12 +32,14 @@ describe('toolsSecurityFormat（确认记忆展示装配）', () => {
     expect(memoryTierKeyOf({ kind: 'path', path: '/tmp/a', level: 'zone' })).toBe('toolsSecurity.memory.tierZone')
     expect(memoryTierKeyOf({ kind: 'mcp-tool', serverId: 's', toolName: 't' })).toBe('toolsSecurity.memory.tierMcpTool')
     expect(memoryTierKeyOf({ kind: 'remote-write', sessionId: 's1' })).toBe('toolsSecurity.memory.tierRemoteWrite')
+    expect(memoryTierKeyOf({ kind: 'script-content', digest: 'a'.repeat(64), sessionId: 's1' })).toBe('toolsSecurity.memory.tierScriptContent')
   })
 
   it('memoryEntrySummary：按键型产出规范化摘要', () => {
     expect(memoryEntrySummary({ kind: 'shell-command', verb: 'git', target: 'push', level: 'verb+target' })).toBe('git push')
     expect(memoryEntrySummary({ kind: 'domain', domain: 'a.com', level: 'domain-any-action' })).toBe('a.com')
     expect(memoryEntrySummary({ kind: 'mcp-tool', serverId: 'fs', toolName: 'read' })).toBe('fs/read')
+    expect(memoryEntrySummary({ kind: 'script-content', digest: 'a'.repeat(64), sessionId: 's1' })).toBe('run_script')
   })
 
   it('groupMemoryEntries：按作用域+档位分组，持久组在前', () => {

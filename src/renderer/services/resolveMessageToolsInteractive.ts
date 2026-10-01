@@ -9,21 +9,28 @@ export type ToolsInteractiveScalars = {
 export function restorePendingConfirmToolCalls(messages: Message[], pendingItems: PendingConfirmItem[]): Message[] {
   const bySession = new Map<string, PendingConfirmItem[]>()
   for (const item of pendingItems) bySession.set(item.sessionId, [...(bySession.get(item.sessionId) ?? []), item])
-  const targetMessageIds = new Set<string>()
-  for (const sessionId of bySession.keys()) {
+  const itemsByMessage = new Map<string, PendingConfirmItem[]>()
+  for (const [sessionId, items] of bySession) {
     const candidates = messages.filter((message) => message.sessionId === sessionId && message.role === 'assistant')
-    const target = [...candidates].reverse().find((message) => message.status === 'streaming') ?? candidates.at(-1)
-    if (target) targetMessageIds.add(target.id)
+    const fallback = [...candidates].reverse().find((message) => message.status === 'streaming') ?? candidates.at(-1)
+    for (const item of items) {
+      // toolUseId 是稳定身份：即使 DB 中状态仍是 executing/completed，也要在原气泡内修正。
+      const existing = candidates.find((message) => message.toolCalls?.some((tool) => tool.id === item.toolUseId))
+      const positioned = item.assistantMessageId
+        ? candidates.find((message) => message.id === item.assistantMessageId)
+        : undefined
+      // 带有明确来源消息但该行尚未加载时，不把卡片错放到另一轮最新消息里。
+      const target = positioned ?? existing ?? (item.assistantMessageId ? undefined : fallback)
+      if (!target) continue
+      itemsByMessage.set(target.id, [...(itemsByMessage.get(target.id) ?? []), item])
+    }
   }
+
   return messages.map((message) => {
-    const sessionItems = bySession.get(message.sessionId)
-    if (!sessionItems?.length || !targetMessageIds.has(message.id)) return message
-    const existingIds = new Set((message.toolCalls ?? []).map((tool) => tool.id))
-    const missing = sessionItems.filter((item) => !existingIds.has(item.toolUseId))
-    const hasStalePending = message.toolCalls?.some((tool) =>
-      sessionItems.some((item) => item.toolUseId === tool.id) && tool.status !== 'confirming'
-    ) ?? false
-    if (missing.length === 0 && !hasStalePending) return message
+    const sessionItems = itemsByMessage.get(message.id)
+    if (!sessionItems?.length) return message
+    const existingCalls = [...(message.toolCalls ?? [])]
+    const missing = sessionItems.filter((item) => !existingCalls.some((tool) => tool.id === item.toolUseId))
     const calls: ToolCallRecord[] = missing.map((item) => ({
       id: item.toolUseId,
       toolName: item.toolName,
@@ -34,6 +41,7 @@ export function restorePendingConfirmToolCalls(messages: Message[], pendingItems
           : {}),
       status: 'confirming',
       riskLevel: item.riskLevel,
+      ...(item.startedAt !== undefined ? { startedAt: item.startedAt } : {}),
       ...(item.diff ? { confirmDiff: item.diff } : {}),
       ...(item.shellSecurityHints ? { shellSecurityHints: item.shellSecurityHints } : {}),
       ...(item.autoApproveFallback ? { autoApproveFallback: item.autoApproveFallback } : {}),
@@ -49,14 +57,31 @@ export function restorePendingConfirmToolCalls(messages: Message[], pendingItems
               description: item.mcp.description
             }
           }
-        : {})
+      : {})
     }))
-    const existingCalls = (message.toolCalls ?? []).map((tool) =>
-      sessionItems.some((item) => item.toolUseId === tool.id) && tool.status !== 'confirming'
-        ? { ...tool, status: 'confirming' as const }
-        : tool
-    )
-    return { ...message, toolCalls: [...existingCalls, ...calls] }
+    for (const item of sessionItems) {
+      const index = existingCalls.findIndex((tool) => tool.id === item.toolUseId)
+      if (index >= 0 && existingCalls[index]!.status !== 'confirming') {
+        existingCalls[index] = { ...existingCalls[index]!, status: 'confirming' }
+      }
+    }
+    for (const item of missing.sort((a, b) => (b.toolIndex ?? Number.MAX_SAFE_INTEGER) - (a.toolIndex ?? Number.MAX_SAFE_INTEGER))) {
+      const record = calls.find((candidate) => candidate.id === item.toolUseId)
+      if (!record) continue
+      const index = item.toolIndex === undefined ? existingCalls.length : Math.max(0, Math.min(item.toolIndex, existingCalls.length))
+      existingCalls.splice(index, 0, record)
+    }
+
+    let activity = message.activity
+    if (activity) {
+      activity = [...activity]
+      const missingActivity = sessionItems.filter((item) => !activity!.some((entry) => entry.kind === 'tool' && entry.toolId === item.toolUseId))
+      for (const item of missingActivity.sort((a, b) => (b.activityIndex ?? Number.MAX_SAFE_INTEGER) - (a.activityIndex ?? Number.MAX_SAFE_INTEGER))) {
+        const index = item.activityIndex === undefined ? activity.length : Math.max(0, Math.min(item.activityIndex, activity.length))
+        activity.splice(index, 0, { kind: 'tool', toolId: item.toolUseId })
+      }
+    }
+    return { ...message, toolCalls: existingCalls, ...(activity ? { activity } : {}) }
   })
 }
 

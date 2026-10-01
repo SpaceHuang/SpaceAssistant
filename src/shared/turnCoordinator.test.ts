@@ -690,7 +690,7 @@ describe('TurnCoordinator', () => {
     coordinator.restoreTurn({ turnId: 'turn-recover', requestId: 'request-recover', sessionId: 's1', assistantMessageId: 'a1', state: 'executing', version: 4, startToken: 'token' }, assistant)
     expect(coordinator.recover()).toBe(1)
     expect(coordinator.listActive('s1')).toEqual([])
-    expect(coordinator.getTerminal('turn-recover')).toMatchObject({ outcome: 'recovered', version: 4, message: { status: 'failed' } })
+    expect(coordinator.getTerminal('turn-recover')).toMatchObject({ outcome: 'recovered', version: 5, message: { status: 'failed' } })
   })
 
   it('restoreTurn 保留持久 turn 的 version 和 startToken', () => {

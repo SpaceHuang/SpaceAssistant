@@ -46,8 +46,7 @@ export function buildSettingsSecurityModel(args: {
 
 /**
  * 默认规则 → 展示视图（无覆盖）。action 保留基线/覆盖动作；各链路档位下的**生效动作**
- * （standard 桌面「询问」→「自动」；desktop 另有按 ruleId 档位覆盖 ruleActionOverrides）
- * 由渲染端按 LANE_PROFILES.effectiveActionFor 计算（显示=实际，两端口径同源）。
+ * （standard 桌面「询问」→「自动」）由渲染端按 LANE_PROFILES.effectiveActionFor 计算（显示=实际，两端口径同源）。
  */
 export function toRuleViews(
   rules: PolicyRule[],
@@ -63,7 +62,7 @@ export function toRuleViews(
       when: rule.when,
       action: o?.action ?? rule.action,
       defaultAction: rule.action,
-      enabled: rule.locked || !disabled.has(rule.id),
+      enabled: (rule.locked && rule.action !== 'deny') || !disabled.has(rule.id),
       locked: rule.locked === true,
       reason: rule.reason,
       overridden: o != null && o.action !== rule.action,

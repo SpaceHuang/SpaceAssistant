@@ -1,4 +1,4 @@
-import type { ConfirmAnswererKind, ContentFacts, ExecutionLane } from '../confirmation/types'
+import type { ConfirmAnswererKind, ContentFacts, ExecutionLane, FactSignal } from '../confirmation/types'
 
 export type MemoryEligibility = 'none' | 'session' | 'persistent'
 
@@ -44,6 +44,23 @@ export function deriveMemoryEligibility(
   if (facts.signals.some((signal) => signal.kind === 'command-sequence' && signal.persistable !== true)) {
     reasons.push('non-persistable-command')
     return { eligibility: 'none', reasons }
+  }
+  const incompleteScript = facts.signals.find((signal): signal is Extract<FactSignal, { kind: 'script-path-extraction' }> =>
+    signal.kind === 'script-path-extraction' && signal.completeness === 'unknown'
+  )
+  const validContentDigest = Boolean(incompleteScript && incompleteScript.contentDigest && /^[a-f0-9]{64}$/.test(incompleteScript.contentDigest))
+  if (incompleteScript && (incompleteScript.unknownReason !== 'unmodeled-call' || incompleteScript.dynamicAccess || !validContentDigest)) {
+    reasons.push('script-analysis-incomplete')
+    return { eligibility: 'none', reasons }
+  }
+  if (facts.signals.some((signal) => signal.kind === 'script-analysis' && signal.signal !== 'clean') ||
+      (incompleteScript && !facts.signals.some((signal) => signal.kind === 'script-analysis' && signal.signal === 'clean'))) {
+    reasons.push('script-not-clean')
+    return { eligibility: 'none', reasons }
+  }
+  if (incompleteScript) {
+    reasons.push('script-content-session-only')
+    return { eligibility: 'session', reasons }
   }
   if (lane === 'wechat' || lane === 'feishu') {
     reasons.push('remote-session-only')

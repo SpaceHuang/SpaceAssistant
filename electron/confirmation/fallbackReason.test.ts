@@ -1,18 +1,29 @@
-
+import { describe, expect, it } from 'vitest'
 import { approvalFallbackReasonFor } from './fallbackReason'
 
+describe('approvalFallbackReasonFor', () => {
+  it.each([
+    ['unavailable', 'zh-CN', '服务暂不可用'],
+    ['timeout', 'zh-CN', '等待超时'],
+    ['unavailable', 'en-US', 'Service unavailable'],
+    ['timeout', 'en-US', 'Timed out']
+  ] as const)('maps %s/%s to the localized short reason', (cause, locale, expected) => {
+    expect(approvalFallbackReasonFor(cause, locale)).toBe(expected)
+  })
+})
+
 describe('N3（评审 v2）：agent-undetermined 的用户可见文案不坍缩为「服务不可用」', () => {
-  it('approvalFallbackReasonFor(agent-undetermined) 返回 undetermined 专用文案', () => {
-    const undetermined = approvalFallbackReasonFor('agent-undetermined', 'zh-CN')
-    const unavailable = approvalFallbackReasonFor('unavailable', 'zh-CN')
+   it('approvalFallbackReasonFor(agent-undetermined) 返回 undetermined 专用文案', () => {
+     const undetermined = approvalFallbackReasonFor('agent-undetermined', 'zh-CN')
+     const unavailable = approvalFallbackReasonFor('unavailable', 'zh-CN')
     expect(undetermined).toContain('无法判定')
     expect(undetermined).not.toBe(unavailable)
   })
 
   it('三种可回退 cause 的短文案互不相同', () => {
     const keys = new Set(
-      (['unavailable', 'timeout', 'agent-undetermined'] as const).map((c) => approvalFallbackReasonFor(c, 'zh-CN'))
-    )
+     (['unavailable', 'timeout', 'agent-undetermined'] as const).map((c) => approvalFallbackReasonFor(c, 'zh-CN'))
+   )
     expect(keys.size).toBe(3)
   })
 })

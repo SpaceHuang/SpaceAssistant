@@ -1,7 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { buildRequestContextPayload, buildRequestHeaderPayload } from './requestContext'
+import { buildRequestContextPayload, buildRequestHeaderPayload, computeAnthropicCacheBreakpointPositions } from './requestContext'
 
 describe('request context payload', () => {
+  it('projects Anthropic cache breakpoints for system plus the final user or tool result', () => {
+    expect(computeAnthropicCacheBreakpointPositions({
+      system: 'policy', cacheControl: true,
+      messages: [{ role: 'user', content: 'hello' }, { role: 'tool', content: [{ type: 'text', text: 'result' }] }]
+    })).toEqual({ positions: ['system', 'msg:1'], tailIsString: false })
+    expect(computeAnthropicCacheBreakpointPositions({
+      system: '', cacheControl: true, messages: [{ role: 'assistant', content: 'answer' }]
+    })).toEqual({ positions: [], tailIsString: true })
+    expect(computeAnthropicCacheBreakpointPositions({
+      system: 'policy', cacheControl: false, messages: [{ role: 'user', content: 'hello' }]
+    })).toEqual({ positions: [], tailIsString: true })
+  })
   it('estimates image blocks without counting base64 as text tokens', () => {
     const payload = buildRequestHeaderPayload({ requestId: 'img', system: '', tools: [], messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'x'.repeat(700_000) } }] }] })
     expect(payload.surfaceSnapshot.messageTokens).toBeLessThan(1_000)

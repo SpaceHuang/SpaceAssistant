@@ -13,6 +13,8 @@ export type CapabilityErrorCode =
   | 'denied'
   | 'failed'
   | 'timeout'
+  | 'cancelled'
+  | 'interrupted'
 
 export type CapabilityCallResult =
   | { ok: true; id: string; data: unknown }
@@ -50,6 +52,13 @@ class CapabilityCancelledError extends Error {
   constructor() {
     super('CAPABILITY_CANCELLED')
     this.name = 'CapabilityCancelledError'
+  }
+}
+
+class CapabilityInterruptedError extends Error {
+  constructor() {
+    super('CAPABILITY_INTERRUPTED')
+    this.name = 'CapabilityInterruptedError'
   }
 }
 
@@ -121,11 +130,22 @@ export async function callCapability(
     }
   }
 
+  // A cancellation observed before handler entry proves that no capability side effect was started.
+  if (ctx.signal.aborted) {
+    return { ok: false, id, error: { code: 'cancelled', message: '调用已取消（会话中止）', hint: FIND_HINT } }
+  }
+
   const timeoutMs = options?.timeoutMs ?? CAPABILITY_TIMEOUT_MS
   // AbortController 链（评审建议 5）：chat 取消与超时都会 abort handler 收到的 signal，
   // 尽力通知 handler 中止；不监听 signal 的 handler 仍可能后台完成（JS 语义极限）。
   const controller = new AbortController()
-  const onCtxAbort = () => controller.abort(new CapabilityCancelledError())
+  let rejectInterrupted!: (error: Error) => void
+  const interruptedPromise = new Promise<never>((_resolve, reject) => { rejectInterrupted = reject })
+  interruptedPromise.catch(() => undefined)
+  const onCtxAbort = () => {
+    controller.abort(new CapabilityCancelledError())
+    rejectInterrupted(new CapabilityInterruptedError())
+  }
   if (ctx.signal.aborted) onCtxAbort()
   else ctx.signal.addEventListener('abort', onCtxAbort, { once: true })
   // 超时同时做两件事：abort handler signal + 让调用方在时限内返回（race 强制收敛）
@@ -140,7 +160,8 @@ export async function callCapability(
   try {
     const raw = await Promise.race([
       descriptor.handler(parsed.data, { ...ctx, signal: controller.signal }),
-      timeoutPromise
+      timeoutPromise,
+      interruptedPromise
     ])
     const sanitized = sanitizeCapabilityResult(raw)
     const maxBytes = options?.maxResultBytes ?? CAPABILITY_MAX_RESULT_BYTES
@@ -158,6 +179,9 @@ export async function callCapability(
     }
     return { ok: true, id, data: sanitized }
   } catch (error) {
+    if (error instanceof CapabilityInterruptedError) {
+      return { ok: false, id, error: { code: 'interrupted', message: '能力执行期间请求已取消，副作用结果未知', hint: FIND_HINT } }
+    }
     if (error instanceof CapabilityTimeoutError) {
       return { ok: false, id, error: { code: 'timeout', message: `能力 ${id} 执行超时（${timeoutMs}ms）`, hint: FIND_HINT } }
     }

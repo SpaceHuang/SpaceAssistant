@@ -31,6 +31,8 @@ export type RequestContextPayload = {
   ruleVersion: string
   decisionFingerprint: string
   planningStatus: 'target_reached' | 'fits_without_headroom' | 'exhausted' | 'uncompressible'
+  /** Distinguishes the response-anchored projection from the initial request snapshot. */
+  projectionStage?: 'final'
 }
 
 export type RequestHeaderPayload = {
@@ -88,6 +90,29 @@ export type CacheBreakpoints = {
   tailIsString: boolean
   prevPositions: string[] | null
   moved: boolean
+}
+
+/**
+ * 计算当前 pi-ai Anthropic Messages adapter 会使用的提示缓存断点。
+ * adapter 将 system 提示单独标记，并在对话末尾是 user/tool 结果时标记最后一个消息。
+ */
+export function computeAnthropicCacheBreakpointPositions(args: {
+  system: string
+  messages: readonly unknown[]
+  cacheControl: boolean
+}): { positions: string[]; tailIsString: boolean } {
+  const positions: string[] = []
+  if (!args.cacheControl) return { positions, tailIsString: typeof (args.messages.at(-1) as { content?: unknown } | undefined)?.content === 'string' }
+  if (args.system.trim().length > 0) positions.push('system')
+  const lastIndex = args.messages.length - 1
+  const last = lastIndex >= 0 ? args.messages[lastIndex] as { role?: unknown; content?: unknown } : undefined
+  const tailIsString = typeof last?.content === 'string'
+  // pi-ai converts tool results into a user message before adding its final cache marker.
+  if (last && (last.role === 'user' || last.role === 'tool') &&
+      (tailIsString || (Array.isArray(last.content) && last.content.length > 0))) {
+    positions.push(`msg:${lastIndex}`)
+  }
+  return { positions, tailIsString }
 }
 
 function fingerprint(value: string): string {

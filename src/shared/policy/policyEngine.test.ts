@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type {
   ContentFacts,
   DecisionCacheView,
@@ -58,6 +58,78 @@ function deps(overrides: Partial<PolicyEngineDeps> = {}): PolicyEngineDeps {
 }
 
 describe('decide：脚本规则族（规范条目顺序）', () => {
+  it('unmodeled-call 只提供同会话 exact-content 记忆；动态执行仍逐次真人确认', () => {
+    const digest = 'a'.repeat(64)
+    const unknownScript = mkFacts('run_script', 'execute', [
+      { kind: 'script-analysis', signal: 'clean', patterns: [] },
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: digest, workdirDigest: 'd'.repeat(64) }
+    ], 'high')
+    const decision = decide(unknownScript, mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
+    expect(decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask', answerer: 'user' })
+    expect(decision.type === 'require-confirm' && decision.memoryTiers).toEqual([
+      expect.objectContaining({ key: { kind: 'script-content', digest, workdirDigest: 'd'.repeat(64), sessionId: 's1' } })
+    ])
+
+    const dynamicScript = mkFacts('run_script', 'execute', [
+      { kind: 'script-analysis', signal: 'clean', patterns: [] },
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', contentDigest: digest, workdirDigest: 'd'.repeat(64) }
+    ], 'high')
+    const dynamic = decide(dynamicScript, mkContext('desktop'), DEFAULT_POLICY_RULES, deps())
+    expect(dynamic).toMatchObject({ type: 'require-confirm', ruleId: 'script-path-unknown-confirm', answerer: 'user', memoryTiers: [] })
+  })
+
+  it('脚本内容记忆只在当前会话按完全相同的 SHA-256 键查找', () => {
+    const digest = 'b'.repeat(64)
+    const facts = mkFacts('run_script', 'execute', [
+      { kind: 'script-analysis', signal: 'clean', patterns: [] },
+      { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: digest, workdirDigest: 'e'.repeat(64) }
+    ], 'high')
+    const lookups: Array<{ kind: string; digest?: string; sessionId?: string }> = []
+    const cache: DecisionCacheView = {
+      lookup: (key) => {
+        lookups.push(key as typeof lookups[number])
+        return key.kind === 'script-content' && key.digest === digest && key.workdirDigest === 'e'.repeat(64) && key.sessionId === 's1'
+          ? { id: 'script-memory', key, decision: 'allow', lane: 'desktop', scope: 'session', createdAt: 1, lastHitAt: 1, hitCount: 1, source: 'user-confirm' }
+          : null
+      }
+    }
+    expect(decide(facts, mkContext('desktop'), DEFAULT_POLICY_RULES, deps({ cache }))).toMatchObject({ type: 'auto-allow', ruleId: 'cache-hit' })
+    expect(lookups).toContainEqual({ kind: 'script-content', digest, workdirDigest: 'e'.repeat(64), sessionId: 's1' })
+    lookups.length = 0
+    expect(decide(facts, { ...mkContext('desktop'), sessionId: 's2' }, DEFAULT_POLICY_RULES, deps({ cache }))).toMatchObject({ type: 'require-confirm' })
+    expect(lookups).toContainEqual({ kind: 'script-content', digest, workdirDigest: 'e'.repeat(64), sessionId: 's2' })
+  })
+
+  it('可疑脚本、动态执行和缺少分类/摘要时都不提供记忆且不消费缓存', () => {
+    const digest = 'c'.repeat(64)
+    const cases: ContentFacts[] = [
+      mkFacts('run_script', 'execute', [
+        { kind: 'script-analysis', signal: 'suspicious', patterns: ['network'] },
+        { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: digest, workdirDigest: 'd'.repeat(64) }
+      ], 'high'),
+      mkFacts('run_script', 'execute', [
+        { kind: 'script-analysis', signal: 'clean', patterns: [] },
+        { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', contentDigest: digest }
+      ], 'high'),
+      mkFacts('run_script', 'execute', [
+        { kind: 'script-analysis', signal: 'clean', patterns: [] },
+        { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false }
+      ], 'high'),
+      mkFacts('run_script', 'execute', [
+        { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: digest }
+      ], 'high'),
+      mkFacts('run_script', 'execute', [
+        { kind: 'script-analysis', signal: 'clean', patterns: [] },
+        { kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: false, unknownReason: 'unmodeled-call', contentDigest: 'not-a-sha256' }
+      ], 'high')
+    ]
+    for (const facts of cases) {
+      const lookup = vi.fn(() => ({ id: 'should-not-hit', key: { kind: 'script-content', digest, sessionId: 's1' }, decision: 'allow', lane: 'desktop', scope: 'session', createdAt: 1, lastHitAt: 1, hitCount: 1, source: 'user-confirm' } as never))
+      const decision = decide(facts, mkContext('desktop'), DEFAULT_POLICY_RULES, deps({ cache: { lookup } }))
+      expect(decision).toMatchObject({ type: 'require-confirm', memoryTiers: [] })
+      expect(lookup).not.toHaveBeenCalled()
+    }
+  })
   it('敏感读取必须真人确认，且不受缓存影响', () => {
     const d = decide(mkFacts('read_file', 'read', [{ kind: 'path-target', path: '/x/.env', zone: 'sensitive-file' }]), mkContext('desktop'), DEFAULT_POLICY_RULES, deps({ cache: cacheWith('allow') }))
     expect(d).toMatchObject({ type: 'require-confirm', ruleId: 'path-sensitive-read-confirm', answerer: 'user' })

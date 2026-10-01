@@ -3,6 +3,7 @@ import type { WorkDirProfile } from '../../shared/feishuTypes'
 import type { AppDispatch } from '../store'
 import { setConfig } from '../store/configSlice'
 import { setSessions } from '../store/sessionSlice'
+import { runtimeText } from '../i18n/runtimeText'
 
 /** 保存设置时保留当前 active 工作区；仅当 active 已被删除时回退到默认 */
 export function resolveWorkDirProfileForSave(
@@ -44,7 +45,7 @@ async function switchWorkDirProfile(
 ): Promise<EnsureWorkDirResult> {
   const result = await window.api.workdirSwitch(profileId)
   if (!result.success) {
-    return { ok: false, error: result.error ?? '切换工作目录失败' }
+    return { ok: false, error: result.error ?? runtimeText('workDir.switchFailed') }
   }
 
   // 主进程已切到目标；若已被取代，不把旧结果写进 renderer store（由调用方按需补偿回滚）。

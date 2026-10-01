@@ -102,7 +102,18 @@ export type FactSignal =
   | { kind: 'path-target'; path: string; zone: PathZone }
   | { kind: 'command-effect'; effect: 'read-only' | 'mutating' | 'unknown' }
   | { kind: 'path-outside-heuristic'; reason: string }
-  | { kind: 'script-path-extraction'; completeness: 'complete' | 'unknown'; dynamicAccess: boolean }
+  | {
+      kind: 'script-path-extraction'
+      completeness: 'complete' | 'unknown'
+      dynamicAccess: boolean
+      /** Present only when incomplete analysis was classified; absent stays fail-closed. */
+      unknownReason?: 'dynamic-execution' | 'unmodeled-call' | null
+      /** SHA-256 of exact run_script code; used only for session-scoped trust. */
+      contentDigest?: string
+      /** Opaque SHA-256 of the active work directory; scopes script trust to its filesystem boundary. */
+      workdirDigest?: string
+    }
+  | { kind: 'script-path-declaration'; scope: 'workdir-readonly'; consistent: boolean }
   | { kind: 'script-language-analysis'; language: 'javascript' | 'typescript' | 'powershell' | 'unknown'; status: 'unverified' }
   | { kind: 'wiki-raw-target' }
   | { kind: 'feishu-media-target'; boundary: 'inside' | 'outside' | 'unknown' }
@@ -391,6 +402,7 @@ export type CacheKey =
       sessionId?: string
     }
   | { kind: 'remote-write'; sessionId: string }
+  | { kind: 'script-content'; digest: string; workdirDigest: string; sessionId: string }
 
 export interface DecisionCacheEntry {
   id: string
@@ -563,9 +575,8 @@ export interface PolicyEngineDeps {
   autoEvaluator?: AutoEvaluator
   /**
    * 档位动作变换（§2.1 LANE_PROFILES 按当前 lane+档位绑定；缺省恒等）。
-   * 规则集变换由 resolvePolicyRules 完成，此项仅用于引擎产出层（数组规则与合成规则
-   * default-write-execute-ask——须携带 id 供按 ruleId 档位覆盖消费）
+   * 规则集变换由 resolvePolicyRules 完成，此项仅用于引擎合成规则（default-write-execute-ask）
    * ——extraction-failed 兜底不参与变换（不变换例外）。
    */
-  transform?: (rule: Pick<PolicyRule, 'action' | 'locked'> & { id?: string }) => PolicyAction
+  transform?: (rule: Pick<PolicyRule, 'action' | 'locked'>) => PolicyAction
 }

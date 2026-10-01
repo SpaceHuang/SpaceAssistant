@@ -17,8 +17,8 @@ export class TurnRuntime {
   private readonly source: ModelSource
   private readonly onEvent?: TurnRuntimeOptions['onEvent']
   private readonly listeners = new Set<TurnProjectionListener>()
-  private readonly requestToTurn = new Map<string, string>()
-  private readonly requestEventSeq = new Map<string, number>()
+  private readonly requestToTurns = new Map<string, Set<string>>()
+  private readonly turnEventSeq = new Map<string, number>()
 
   constructor(options: TurnRuntimeOptions) {
     this.source = options.source ?? (async () => { throw new Error('TURN_MODEL_SOURCE_NOT_CONFIGURED') })
@@ -34,7 +34,9 @@ export class TurnRuntime {
   bindRequest(requestId: string, turnId: string): void {
     const turn = this.coordinator.getTurn(turnId)
     if (!turn || turn.requestId !== requestId) throw new Error('turn request mismatch')
-    this.requestToTurn.set(requestId, turnId)
+    const turnIds = this.requestToTurns.get(requestId) ?? new Set<string>()
+    turnIds.add(turnId)
+    this.requestToTurns.set(requestId, turnIds)
   }
 
   subscribe(listener: TurnProjectionListener): () => void {
@@ -42,17 +44,30 @@ export class TurnRuntime {
     return () => this.listeners.delete(listener)
   }
 
-  unbindRequest(requestId: string): void { this.requestToTurn.delete(requestId); this.requestEventSeq.delete(requestId) }
+  unbindRequest(requestId: string, turnId?: string): void {
+    const turnIds = this.requestToTurns.get(requestId)
+    if (!turnIds) return
+    if (!turnId && turnIds.size > 1) throw new Error('ambiguous turn request')
+    const targetTurnId = turnId ?? turnIds.values().next().value
+    if (!targetTurnId || !turnIds.delete(targetTurnId)) return
+    this.turnEventSeq.delete(targetTurnId)
+    if (turnIds.size === 0) this.requestToTurns.delete(requestId)
+  }
 
-  consumeForRequest(requestId: string, event: AssistantFactEvent): TurnStarted {
-    const turnId = this.requestToTurn.get(requestId)
+  consumeForRequest(requestId: string, event: AssistantFactEvent, requestedTurnId?: string): TurnStarted {
+    const turnIds = this.requestToTurns.get(requestId)
+    if (!requestedTurnId && (turnIds?.size ?? 0) > 1) throw new Error('ambiguous turn request')
+    const turnId = requestedTurnId ?? (turnIds?.size === 1 ? turnIds.values().next().value : undefined)
     if (!turnId) throw new Error('unknown turn request')
+    if (!turnIds?.has(turnId)) throw new Error('unknown turn request')
+    const boundTurn = this.coordinator.getTurn(turnId)
+    if (!boundTurn || boundTurn.requestId !== requestId) throw new Error('turn request mismatch')
     const nextEvent = event.eventSeq == null
-      ? { ...event, eventSeq: (this.requestEventSeq.get(requestId) ?? 0) + 1 }
+      ? { ...event, eventSeq: (this.turnEventSeq.get(turnId) ?? 0) + 1 }
       : event
     const turn = this.consume(turnId, nextEvent)
-    if (nextEvent.eventSeq != null) this.requestEventSeq.set(requestId, nextEvent.eventSeq)
-    if (nextEvent.type === 'source-completed' || nextEvent.type === 'source-failed' || nextEvent.type === 'source-cancelled' || nextEvent.type === 'source-timeout') this.unbindRequest(requestId)
+    if (nextEvent.eventSeq != null) this.turnEventSeq.set(turnId, nextEvent.eventSeq)
+    if (nextEvent.type === 'source-completed' || nextEvent.type === 'source-failed' || nextEvent.type === 'source-cancelled' || nextEvent.type === 'source-timeout' || nextEvent.type === 'source-uncertain') this.unbindRequest(requestId, turnId)
     return turn
   }
 

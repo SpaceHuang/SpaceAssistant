@@ -12,6 +12,7 @@ import type {
 } from '../domainTypes'
 import type { DecisionCacheView, ExecutionLane, PolicyRule } from '../confirmation/types'
 import type { LocalizedMessage } from '../localization'
+import type { AcceptedTurn } from '../acceptedTurn'
 
 /**
  * Agent 调用契约（基线 §6.2；本计划 P1 落形）。
@@ -28,7 +29,7 @@ import type { LocalizedMessage } from '../localization'
 /** 请求追踪（requestId / turnId / windowId 归此）。 */
 export interface AgentTraceContext {
   requestId: string
-  /** 本回合真实 Turn ID；缺省回退 sessionId 占位。 */
+  /** 本回合规范执行身份；迁移期旧调用可省略，不能使用 sessionId 代替。 */
   turnId?: string
   /** 宿主 UI 簿记（P2 后评估移出契约、由出口实现持有）。 */
   windowId?: string
@@ -54,6 +55,8 @@ export interface AgentMessagesSection {
 /** 模型档（解析结果冻结快照语义保留；P4 换 reasoning.effort 并移出 baseUrl）。 */
 export interface AgentInvocationProfile {
   model: string
+  /** 宿主按明确的 protocol/dialect/endpoint 能力解析的不可变 provider route identity。 */
+  providerRouteId?: string
   /** 冻结执行配置里的 LLM 服务 ID（DIM3：同模型跨服务分开统计）。 */
   llmServiceId?: string
   contextWindow?: number
@@ -149,6 +152,8 @@ export type AgentDriverContext = unknown
 
 /** Agent 调用入参（基线 §6.2 形状；steering 按基线明确预留、本期不实现）。 */
 export interface AgentInvocation {
+  /** Immutable acceptance identity/configuration; legacy integrations may omit it during migration. */
+  acceptedTurn?: AcceptedTurn
   session: AgentSessionAnchor
   messages: AgentMessagesSection
   profile: AgentInvocationProfile
@@ -204,6 +209,8 @@ export interface AgentPersistPorts {
 export interface AgentStoragePorts {
   /** 装配期 loadContext 装载的会话材料。 */
   loaded?: AgentLoadedSessionContext
+  /** Stable session-event ledger location used to reconcile canonical compaction commits after restart. */
+  sessionEventLocation?: { workDir: string; sessionId: string; createdAt: number }
   /** 现读通道（循环内消费点需要最新值，如浮动通知的会话名）。 */
   readSession?(sessionId: string): unknown
   persist?: AgentPersistPorts
@@ -223,6 +230,21 @@ export interface AgentMcpPorts {
   resolveExecutor?(toolName: string, manager: unknown): unknown
   /** 工具执行上下文的宿主库（工具实现的装配材料，非 Core 依赖）。 */
   executorDatabase?: unknown
+}
+
+/** 撤销通知只描述事实；SDK 通过此端口查询当前 typed 注册与撤权状态。 */
+export interface AgentToolRevocationPort {
+  getRegisteredTool(name: string): unknown
+  onRevocation(listener: AgentToolRevocationListener): AgentToolRevocationUnsubscribe
+  isToolRevoked(requestId: string, toolName: string, executionId?: string): boolean
+}
+
+export interface AgentToolRevocationListener {
+  (event: { requestId: string; executionId: string; lane: string; toolName: string }): void
+}
+
+export interface AgentToolRevocationUnsubscribe {
+  (): void
 }
 
 /** 用量观察类端口：失败降级重试、不改执行结论，但不得静默。 */
@@ -249,6 +271,15 @@ export interface AgentAnswererPorts {
  */
 export interface AgentPolicyPorts {
   effectiveRules: readonly PolicyRule[]
+  /** Frozen authorization material version used to bind a prepared tool invocation. */
+  authorizationVersion?: string
+  /** Re-resolves host policy material immediately before dispatch admission. */
+  resolveCurrentAuthorization?(): {
+    effectiveRules: readonly PolicyRule[]
+    lanePackage: string
+    policyOrigins: Record<string, { source: 'builtin' | 'package' | 'user-override' | 'migration' }>
+    authorizationVersion: string
+  }
   /** electron 侧为 GateDecisionCache（lookup + 写/清理族的完整形状）。 */
   decisionCache: unknown
   shellPrecheck: { touchTrustedCommand(command: string): void }
@@ -276,8 +307,6 @@ export interface AgentHostPorts {
   /** 调用级运行租约；工具循环不得自行接触全局准入账本。 */
   invocationRuntime?: {
     acquireLease(invocationId: string): { runtimeId: string; invocationId: string; generation: number; release(): void }
-    park(invocationId: string, lease: { runtimeId: string; invocationId: string; generation: number; release(): void }, checkpoint?: unknown): { runtimeId: string; invocationId: string; generation: number; checkpoint: unknown } | undefined
-    resumeLease(handle: { runtimeId: string; invocationId: string; generation: number; checkpoint: unknown }): { runtimeId: string; invocationId: string; generation: number; release(): void } | undefined
   }
   /** 运行时持有的审批尝试准入池。 */
   approvalAdmission?: {
@@ -286,6 +315,23 @@ export interface AgentHostPorts {
       | { kind: 'rejected'; cause: string }
     >
     cancel(requestId: string): boolean
+  }
+  /** 当前请求内 typed executor 调度所需的撤权订阅端口。 */
+  toolRevocations?: AgentToolRevocationPort
+  /** Runtime 级共享的 cancel/revoke 与 dispatch claim 线性化组件。 */
+  executionAdmission?: unknown
+  /** Runtime 级 permit ledger；调用完成后按 permit ID settle。 */
+  safetyPermits?: unknown
+  /** Canonical HistoryPort 装配端口；逐 lane 真源切换前只做可重放事件影子写入。 */
+  history?: {
+    appendBatch(events: readonly {
+      eventId: string; idempotencyKey: string; invocationId: string; turnId: string; sequence: number;
+      schemaVersion: number; kind: 'session-input-committed' | 'invocation-context-committed' | 'transcript-compacted' | 'model-request-started' | 'provider-retry-scheduled' | 'model-attempt-discarded' | 'model-response-committed' | 'replay-message-committed' | 'tool-call-started' | 'tool-call-finished' | 'tool-call-not-dispatched' | 'approval-waiting' | 'approval-resolved' | 'approval-updated' | 'invocation-parked' | 'invocation-interrupted' | 'invocation-completed' | 'invocation-failed'; payload: unknown
+    }[], expectedVersion: number): Promise<{ version: number; duplicate: boolean }>
+    read(invocationId: string): Promise<{ invocationId: string; version: number; schemaVersion: number; events: Array<{
+      eventId: string; idempotencyKey: string; invocationId: string; turnId: string; sequence: number;
+      schemaVersion: number; kind: 'session-input-committed' | 'invocation-context-committed' | 'transcript-compacted' | 'model-request-started' | 'provider-retry-scheduled' | 'model-attempt-discarded' | 'model-response-committed' | 'replay-message-committed' | 'tool-call-started' | 'tool-call-finished' | 'tool-call-not-dispatched' | 'approval-waiting' | 'approval-resolved' | 'approval-updated' | 'invocation-parked' | 'invocation-interrupted' | 'invocation-completed' | 'invocation-failed'; payload: unknown
+    }> }>
   }
   /** P2（B1）：门控与暴露面规则的装配期材料。 */
   policy?: AgentPolicyPorts
@@ -297,6 +343,8 @@ export interface AgentHostPorts {
   mcp?: AgentMcpPorts
   /** P2：用量落库（观察类）。 */
   usage?: AgentUsagePorts
+  /** Persist per-provider-attempt usage (accepted or discarded) into the usage-step ledger. */
+  recordProviderAttemptUsage?(input: Record<string, unknown>): void
   /** P2：MCP 连接诊断（观察类）。 */
   diagnostics?: AgentDiagnosticsPorts
   /** P2：回答者策略与审批装配材料。 */
@@ -318,7 +366,11 @@ export interface AgentHostPorts {
   /** electron 侧为 ContextMeter（Core 以 session event ledger 提供的测量适配器）。 */
   contextMeter?: unknown
   /** 成功完成 provider 请求后，在下一轮发送前执行 turn-boundary 规划。 */
-  turnBoundary?(input: unknown): Promise<void>
+  turnBoundary?(input: unknown): Promise<unknown>
+  /** 初始及后续 provider dispatch 前按冻结预算恢复 transcript。 */
+  preflightModelRequest?(input: unknown): Promise<unknown>
+  /** Provider 响应未被接受时，由宿主决定是否恢复 transcript 并安全重试一次。 */
+  recoverProviderAttempt?(input: unknown): Promise<unknown>
 }
 
 /** 调用结果（本期先落形状：ok/cancelled 布尔的四态化在后续阶段收敛为 status）。 */

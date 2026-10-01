@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import path from 'path'
 import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
-import { waitForToolConfirm } from './toolConfirmRegistry'
+import { isPendingConfirm, waitForToolConfirm } from './toolConfirmRegistry'
 import type { CacheKey } from '../src/shared/confirmation/types'
 
 const WORK_DIR = path.resolve('/fake/workdir')
@@ -45,6 +45,7 @@ vi.mock('./database', () => ({
 }))
 
 vi.mock('./anthropicClientFactory', () => ({
+  createAnthropicStreamPort: (client: { messages: { stream: (...args: unknown[]) => unknown } }) => ({ stream: (...args: unknown[]) => client.messages.stream(...args) }),
   createAnthropicClient: vi.fn()
 }))
 
@@ -237,5 +238,20 @@ describe('tool:confirm-response memoryTier 校验（B1/B2）', () => {
     await expect(invoke({ requestId: 'req-owner', toolUseId: 'tool-owner', approved: true, sessionId: 'forged-session' })).resolves.toMatchObject({ accepted: false, outcome: 'missing' })
     await expect(invoke({ requestId: 'req-owner', toolUseId: 'tool-owner', approved: false, sessionId: 'trusted-session' })).resolves.toMatchObject({ accepted: true, outcome: 'rejected' })
     await pending
+  })
+
+  it('相同 requestId/toolUseId 在两个会话中审批时只结算目标会话 waiter', async () => {
+    const sessionA = waitForToolConfirm('shared-request', 'shared-tool', undefined, { toolName: 'run_shell', lane: 'desktop', sessionId: 'session-a' })
+    const sessionB = waitForToolConfirm('shared-request', 'shared-tool', undefined, { toolName: 'run_shell', lane: 'desktop', sessionId: 'session-b' })
+
+    await expect(invoke({ requestId: 'shared-request', toolUseId: 'shared-tool', approved: false, sessionId: 'session-b' }))
+      .resolves.toMatchObject({ accepted: true, outcome: 'rejected' })
+    await expect(sessionB).resolves.toBe('rejected')
+    expect(isPendingConfirm('shared-request', 'shared-tool', 'session-a')).toBe(true)
+    expect(isPendingConfirm('shared-request', 'shared-tool', 'session-b')).toBe(false)
+
+    await expect(invoke({ requestId: 'shared-request', toolUseId: 'shared-tool', approved: false, sessionId: 'session-a' }))
+      .resolves.toMatchObject({ accepted: true, outcome: 'rejected' })
+    await expect(sessionA).resolves.toBe('rejected')
   })
 })

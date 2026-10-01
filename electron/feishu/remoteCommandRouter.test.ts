@@ -2,7 +2,9 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getSession, openDatabase, createSession, setConfigValue } from '../database'
+import { getSession, openDatabase, createSession, setConfigValue, getPersistedTurn } from '../database'
+import { createTurnCoordinatorStorage } from '../turnCoordinatorStorage'
+import { TurnRuntime } from '../turnRuntime'
 import { createWorkDirManager } from '../workDirManager'
 import { RemoteCommandRouter } from './remoteCommandRouter'
 import type { FeishuInboundMessage } from '../../src/shared/feishuTypes'
@@ -25,15 +27,18 @@ const mockSendFeishuRemoteOutbound = vi.fn()
 const mockShouldAcceptInbound = vi.fn()
 
 const testTurnRuntime = {
-  prepare: vi.fn(() => ({
-    turnId: 'turn-test',
-    requestId: 'request-test',
-    sessionId: 'session-test',
-    assistantMessage: { id: 'assistant-test' },
+  bindRequest: vi.fn(),
+  unbindRequest: vi.fn(),
+  prepare: vi.fn((intent: { requestId: string; sessionId: string }) => ({
+    turnId: `turn-${intent.requestId}`,
+    requestId: intent.requestId,
+    sessionId: intent.sessionId,
+    userMessage: { id: `user-${intent.requestId}` },
+    assistantMessage: { id: `assistant-${intent.requestId}` },
     version: 0,
-    startToken: 'token-test'
+    startToken: `token-${intent.requestId}`
   })),
-  executeWithSource: vi.fn(async (_turnId: string, _token: string, source: (a: unknown, b: string) => Promise<unknown>) => source({}, 'token-test')),
+  executeWithSource: vi.fn(async (_turnId: string, token: string, source: (a: unknown, b: string) => Promise<unknown>) => source({}, token)),
   consumeForRequest: vi.fn()
 } as never
 
@@ -155,12 +160,12 @@ describe('RemoteCommandRouter workdir binding', () => {
   function makeRouter(
     db: ReturnType<typeof openDatabase>,
     manager: ReturnType<typeof createWorkDirManager>,
-    options?: { maxParallel?: number; tryResolveConfirm?: boolean; wc?: { send: (...args: unknown[]) => void } }
+    options?: { maxParallel?: number; tryResolveConfirm?: boolean; wc?: { send: (...args: unknown[]) => void }; turnRuntime?: TurnRuntime }
   ) {
     const auditAppend = vi.fn().mockResolvedValue(undefined)
     const processedStore = makeProcessedStore()
     const router = new RemoteCommandRouter({
-      turnRuntime: testTurnRuntime,
+      turnRuntime: options?.turnRuntime ?? testTurnRuntime,
       db,
       runner: { run: vi.fn() } as never,
       processedStore: processedStore as never,
@@ -232,9 +237,30 @@ describe('RemoteCommandRouter workdir binding', () => {
     expect(mockRunFeishuRemoteAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         workDir: dirA,
-        workDirManager: manager
+        workDirManager: manager,
+        acceptedTurn: expect.objectContaining({ sessionId: session.id, lane: 'feishu', currentUserMessageId: expect.stringMatching(/^user-/) })
       })
     )
+  })
+
+  it('记录远端 Agent 执行失败为失败终态，而不是成功', async () => {
+    const { db, manager } = setupDbAndManager()
+    const session = createSession(db, { name: 'Failed Feishu turn' })
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: 'run and fail' })
+    mockResolveFeishuSession.mockResolvedValue({ sessionId: session.id, isNew: false })
+    mockRunFeishuRemoteAgent.mockResolvedValue({ summary: 'provider failed', pendingConfirm: false, ok: false })
+
+    const { router, auditAppend } = makeRouter(db, manager)
+    await router.handleInbound(makeInbound({ messageId: 'failed-turn-1' }))
+
+    expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
+      expect.any(String),
+      { type: 'source-failed' },
+      expect.any(String)
+    )
+    expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'agent_done', sessionId: session.id, success: false
+    }))
   })
 
   it('completion/audit/pending-confirm stay on the origin session after a mid-run switch_session, while outbound reply follows the switched session', async () => {
@@ -312,11 +338,11 @@ describe('RemoteCommandRouter busy guard', () => {
   function makeRouter(
     db: ReturnType<typeof openDatabase>,
     manager: ReturnType<typeof createWorkDirManager>,
-    options?: { maxParallel?: number; tryResolveConfirm?: boolean }
+    options?: { maxParallel?: number; tryResolveConfirm?: boolean; turnRuntime?: TurnRuntime }
   ) {
     const processedStore = makeProcessedStore()
     const router = new RemoteCommandRouter({
-      turnRuntime: testTurnRuntime,
+      turnRuntime: options?.turnRuntime ?? testTurnRuntime,
       db,
       runner: { run: vi.fn() } as never,
       processedStore: processedStore as never,
@@ -428,15 +454,46 @@ describe('RemoteCommandRouter busy guard', () => {
 
     expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ type: 'tool-use', id: 'tool-1' })
+      expect.objectContaining({ type: 'tool-use', id: 'tool-1' }),
+      expect.any(String)
     )
     expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
       expect.any(String),
-      { type: 'source-completed' }
+      { type: 'source-completed' },
+      expect.any(String)
     )
     const calls = testTurnRuntime.consumeForRequest.mock.calls
     expect(calls.findIndex(([, event]) => (event as { type: string }).type === 'tool-use'))
       .toBeLessThan(calls.findIndex(([, event]) => (event as { type: string }).type === 'source-completed'))
+  })
+
+  it('Feishu router 将同一个 prepared turn 交给 agent 并用该 turnId 写入终态', async () => {
+    const { db, manager } = setup()
+    const session = createSession(db, { name: 'Feishu turn identity chain' })
+    let turnSequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `feishu-chain-${++turnSequence}` } })
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: 'identity chain' })
+    mockResolveFeishuSession.mockResolvedValue({ sessionId: session.id, isNew: false })
+    mockRunFeishuRemoteAgent.mockResolvedValue({ summary: 'done', pendingConfirm: false, ok: true })
+
+    const { router } = makeRouter(db, manager, { turnRuntime: runtime })
+    await router.handleInbound(makeInbound({ messageId: 'identity-chain-feishu' }))
+
+    const [agentArgs] = mockRunFeishuRemoteAgent.mock.calls[0] as [{
+      requestId: string
+      turnId: string
+      acceptedTurn: { turnId: string; requestId: string; sessionId: string; currentUserMessageId: string }
+    }]
+    const persisted = getPersistedTurn(db, agentArgs.turnId)
+    expect(agentArgs.acceptedTurn).toMatchObject({
+      turnId: agentArgs.turnId,
+      requestId: agentArgs.requestId,
+      sessionId: session.id,
+      currentUserMessageId: persisted?.userMessageId
+    })
+    expect(persisted).toMatchObject({
+      requestId: agentArgs.requestId, sessionId: session.id, state: 'terminal', outcome: 'completed'
+    })
   })
 
   it('confirm-requested 进入 Core，并向 Feishu 出站 pending-confirm 提示', async () => {
@@ -454,7 +511,8 @@ describe('RemoteCommandRouter busy guard', () => {
 
     expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
       expect.any(String),
-      expect.objectContaining({ type: 'confirm-requested', toolUseId: 'tool-feishu-confirm' })
+      expect.objectContaining({ type: 'confirm-requested', toolUseId: 'tool-feishu-confirm' }),
+      expect.any(String)
     )
     // pending-confirm 的桌面窗口通知已有 origin-session switch fixture 覆盖；此处锁定
     // 远程确认事实不会被 adapter 过滤掉。

@@ -30,6 +30,27 @@ describe('read execution permit', () => {
     expect(readInputDigest({ path: '/tmp/a', options: { limit: 1, mode: 'text' } }))
       .toBe(readInputDigest({ options: { mode: 'text', limit: 1 }, path: '/tmp/a' }))
   })
+
+  it('深拷贝并冻结输入和嵌套目标身份，调用者后续修改不能改写已签发许可', () => {
+    const mutableInput = { path: '/work/a.txt', options: { limit: 10 } }
+    const mutableFacts = [{
+      factId: 'fact-identity', decisionRuleId: 'read-group-workdir-allow', normalizedPath: '/work/a.txt',
+      zone: 'workdir-normal' as const, targetKind: 'file' as const,
+      identity: { dev: 1, ino: 2, mode: 0o100644, size: 10, mtimeMs: 20 }
+    }]
+    const permit = buildReadExecutionPermit({ requestId: 'req', toolUseId: 'tool', toolName: 'read_file', input: mutableInput, facts: mutableFacts })
+
+    mutableInput.options.limit = 999
+    mutableFacts[0]!.identity!.ino = 999
+    mutableFacts[0]!.normalizedPath = '/work/replaced.txt'
+
+    expect(permit.input).toEqual({ path: '/work/a.txt', options: { limit: 10 } })
+    expect(permit.targets[0]).toMatchObject({ normalizedPath: '/work/a.txt', identity: { ino: 2 } })
+    expect(Object.isFrozen(permit.input)).toBe(true)
+    expect(Object.isFrozen(permit.input.options)).toBe(true)
+    expect(Object.isFrozen(permit.targets)).toBe(true)
+    expect(Object.isFrozen(permit.targets[0]?.identity)).toBe(true)
+  })
 })
 
 describe('buildUserConfirmedReadExecutionPermit', () => {

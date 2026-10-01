@@ -7,6 +7,7 @@ import { setSession, setChatStatus } from '../../store/chatSlice'
 import { setSessions } from '../../store/sessionSlice'
 import type { WorkDirProfile } from '../../../shared/feishuTypes'
 import { useDetailPanel } from './DetailPanelContext'
+import { runtimeText } from '../../i18n/runtimeText'
 
 function profileLabel(profile: Pick<WorkDirProfile, 'name' | 'path'>): string {
   const trimmed = profile.name.trim()
@@ -53,7 +54,7 @@ export function WorkDirSelector({ disabled }: Props) {
     (profileId: string) => {
       if (profileId === activeId) return
       if (isStreaming || disabled) {
-        message.warning('当前会话正在响应，请等待完成后再切换')
+        message.warning(runtimeText('detailPanel.waitForSession'))
         return
       }
       if (debounceRef.current) clearTimeout(debounceRef.current)
@@ -61,7 +62,7 @@ export function WorkDirSelector({ disabled }: Props) {
         void (async () => {
           const result = await window.api.workdirSwitch(profileId)
           if (!result.success) {
-            message.error(result.error ?? '切换失败')
+            message.error(result.error ?? runtimeText('detailPanel.switchFailed'))
             return
           }
           const nextConfig = await window.api.configGet()
@@ -83,7 +84,7 @@ export function WorkDirSelector({ disabled }: Props) {
         className="workdir-selector-empty"
         onClick={() => dispatch(openSettings({ tab: 'general' }))}
       >
-        请先配置工作目录
+        {runtimeText('detailPanel.configureWorkDirFirst')}
       </button>
     )
   }
@@ -107,13 +108,13 @@ export function WorkDirSelector({ disabled }: Props) {
               className="workdir-selector-settings-action"
               onClick={handleOpenSettings}
             >
-              设置工作目录...
+              {runtimeText('detailPanel.setWorkDir')}
             </button>
           </div>
         </>
       )}
-      aria-label="切换工作目录"
-      title="切换工作目录"
+      aria-label={runtimeText('detailPanel.switchWorkDir')}
+      title={runtimeText('detailPanel.switchWorkDir')}
       suffixIcon={<ChevronDown size={14} strokeWidth={2} aria-hidden />}
     />
   )

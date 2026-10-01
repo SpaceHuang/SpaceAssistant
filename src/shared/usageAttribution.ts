@@ -219,6 +219,19 @@ export function emptyTurnToolDimension(): TurnToolDimension {
   return { tools: {}, toolSource: {}, toolSources: {}, toolResults: {} }
 }
 
+/** 累计一次模型请求实际发送的工具声明；多 step 重复发送会重复计入请求成本。 */
+export function accumulateToolDeclarationSnapshot(dim: TurnToolDimension, snapshot: ReturnType<typeof summarizeToolDeclarations>): void {
+  for (const [name, chars] of Object.entries(snapshot.tools)) {
+    if (!Number.isFinite(chars) || chars < 0) continue
+    dim.tools[name] = (dim.tools[name] ?? 0) + chars
+  }
+  for (const [source, chars] of Object.entries(snapshot.toolSource)) {
+    if (!Number.isFinite(chars) || chars < 0) continue
+    dim.toolSource[source] = (dim.toolSource[source] ?? 0) + chars
+  }
+  for (const [name, source] of Object.entries(snapshot.toolSources)) dim.toolSources[name] = source
+}
+
 /** 把一次工具返回按工具名累计进 turn 维度（调用次数 + 返回字符数）。 */
 export function accumulateToolResultVolume(dim: TurnToolDimension, toolName: string, content: unknown): void {
   const chars = toolResultContentChars(content)
@@ -351,7 +364,6 @@ export function normalizeTokensLargestRemainder(weights: readonly number[], exac
 export type NormalizedInputAttribution = {
   system: number
   tools: number
-  /** 键与 blocks 一致；多模态（tokens null）按 0 摊回（留位不伪造） */
   messageBlocks: Record<string, number>
 }
 
@@ -359,17 +371,18 @@ export type NormalizedInputAttribution = {
  * §6.3 两段式归一化（输入侧）：估算层给结构占比，精确层给总量。
  * 分子分母整体来自同一 StepAttribution（block-v1，覆盖三源，I1/§6.3 约束 5）；
  * 精确总量 = input + cache_creation + cache_read（同一次请求，不跨请求混用）。
- * 结果满足 system + tools + ΣmessageBlocks == exactInputTokens（AT7 / I4）。
+ * 纯文本输入满足 system + tools + ΣmessageBlocks == exactInputTokens（AT7 / I4）。含未知多模态时整行不做归因。
  */
 export function normalizeInputAttribution(attribution: StepAttribution, exactInputTokens: number): NormalizedInputAttribution {
+  if (Object.values(attribution.blocks).some((entry) => entry.tokens === null)) {
+    throw new Error('ATTRIBUTION_HAS_UNESTIMATED_BLOCK')
+  }
   const blockKeys = Object.keys(attribution.blocks)
   const weights: number[] = [attribution.threeSources.systemTokens, attribution.threeSources.toolsTokens]
   for (const key of blockKeys) weights.push(attribution.blocks[key]!.tokens ?? 0)
   const normalized = normalizeTokensLargestRemainder(weights, exactInputTokens)
   const messageBlocks: Record<string, number> = {}
-  blockKeys.forEach((key, index) => {
-    messageBlocks[key] = normalized[index + 2]!
-  })
+  blockKeys.forEach((key, index) => { messageBlocks[key] = normalized[index + 2]! })
   return { system: normalized[0]!, tools: normalized[1]!, messageBlocks }
 }
 
@@ -387,4 +400,95 @@ export function normalizeOutputAttribution(
     exactOutputTokens
   )
   return { thinking: normalized[0]!, text: normalized[1]!, toolUseArgs: normalized[2]! }
+}
+
+export type AttributionCoverageFact = {
+  /** 精确归一化 input_tokens；NULL 表示该行没有可用精确输入量。 */
+  inputTokens: number | null
+  attributionJson: string | null
+  estimatorVersion: string | null
+  /** Same-row denormalized three-source weights; required for image-only blocks with null message weights. */
+  systemTokens?: number | null
+  toolsTokens?: number | null
+  messageTokens?: number | null
+}
+
+export type AttributionCoverage = {
+  /** 所有有精确输入量行的分母，和总览精确 input KPI 共用。 */
+  exactInputTokens: number
+  /** 每个估算器版本独立对完整分母计算；禁止把不同版本的分子合并。 */
+  byEstimatorVersion: Array<{
+    estimatorVersion: string
+    attributableInputTokens: number
+    unattributedInputTokens: number
+    coverageRatio: number | null
+  }>
+}
+
+/**
+ * 混合历史/新归因数据覆盖率。调用方必须先对行应用与总览完全相同的筛选条件。
+ * 无精确 usage 的行完全排除；归因缺失、损坏或版本缺失的精确行留在分母但不进入任何版本分子。
+ */
+export function calculateAttributionCoverage(facts: readonly AttributionCoverageFact[]): AttributionCoverage {
+  let exactInputTokens = 0
+  const attributedByVersion = new Map<string, number>()
+  for (const fact of facts) {
+    if (fact.inputTokens === null) continue
+    if (!Number.isSafeInteger(fact.inputTokens) || fact.inputTokens < 0) throw new Error('ATTRIBUTION_COVERAGE_INPUT_TOKENS_INVALID')
+    exactInputTokens += fact.inputTokens
+    if (fact.attributionJson === null || typeof fact.estimatorVersion !== 'string' || fact.estimatorVersion.trim() === '') continue
+    let attribution: unknown
+    try { attribution = JSON.parse(fact.attributionJson) } catch { continue }
+    if (!isRecord(attribution)) continue
+    let attributionRecord: Record<string, unknown> = attribution
+    if (typeof fact.systemTokens === 'number' && typeof fact.toolsTokens === 'number' && typeof fact.messageTokens === 'number') {
+      attributionRecord = {
+        ...attributionRecord,
+        threeSources: {
+          systemTokens: fact.systemTokens,
+          toolsTokens: fact.toolsTokens,
+          messageTokens: fact.messageTokens,
+          estimatorVersion: fact.estimatorVersion
+        }
+      }
+    }
+    if (!hasAttributionWeights(attributionRecord)) continue
+    attributedByVersion.set(fact.estimatorVersion, (attributedByVersion.get(fact.estimatorVersion) ?? 0) + fact.inputTokens)
+  }
+  return {
+    exactInputTokens,
+    byEstimatorVersion: [...attributedByVersion.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([estimatorVersion, attributableInputTokens]) => ({
+      estimatorVersion,
+      attributableInputTokens,
+      unattributedInputTokens: exactInputTokens - attributableInputTokens,
+      coverageRatio: exactInputTokens > 0 ? attributableInputTokens / exactInputTokens : null
+    }))
+  }
+}
+
+/** A serialized object without any usable estimated source is not attribution evidence. */
+export function hasAttributionWeights(value: Record<string, unknown>): boolean {
+  const blocks = value.blocks
+  if (!isRecord(blocks)) return false
+  let total = 0
+  for (const entry of Object.values(blocks)) {
+    if (!isRecord(entry)) continue
+    if (entry.tokens === null) return false
+    if (typeof entry.tokens === 'number' && Number.isFinite(entry.tokens) && entry.tokens > 0) total += entry.tokens
+  }
+  const output = value.output
+  if (isRecord(output)) {
+    for (const entry of Object.values(output)) {
+      if (isRecord(entry) && typeof entry.tokens === 'number' && Number.isFinite(entry.tokens) && entry.tokens > 0) total += entry.tokens
+    }
+  }
+  const threeSources = value.threeSources
+  if (isRecord(threeSources)) {
+    const version = threeSources.estimatorVersion
+    const sources = [threeSources.systemTokens, threeSources.toolsTokens, threeSources.messageTokens]
+    if (typeof version === 'string' && version.trim() && sources.every((tokens) => typeof tokens === 'number' && Number.isFinite(tokens) && tokens >= 0)) {
+      total += sources.reduce<number>((sum, tokens) => sum + (tokens as number), 0)
+    }
+  }
+  return total > 0
 }

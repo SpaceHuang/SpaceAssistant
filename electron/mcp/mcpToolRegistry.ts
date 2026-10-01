@@ -109,7 +109,7 @@ export function buildMappedToolDescriptors(
   serverId: string,
   serverName: string,
   rawTools: unknown[],
-  options?: { usedMappedNames?: ReadonlySet<string> }
+  options?: { usedMappedNames?: ReadonlySet<string>; previousMappedNames?: ReadonlyMap<string, string> }
 ): {
   descriptors: McpToolDescriptor[]
   skipped: Array<{ name: string; reason: string }>
@@ -130,7 +130,10 @@ export function buildMappedToolDescriptors(
       continue
     }
     const base = generateMappedToolName({ serverId, serverName, toolName: validation.tool.name })
-    const mappedName = deriveUniqueMappedToolName(base, used)
+    const previousMappedName = options?.previousMappedNames?.get(validation.tool.name)
+    const mappedName = previousMappedName && !used.has(previousMappedName)
+      ? previousMappedName
+      : deriveUniqueMappedToolName(base, used)
     used.add(mappedName)
     descriptors.push({
       serverId,
@@ -183,14 +186,18 @@ export async function discoverToolsFromSession(
     const toolsResult = await session.client.listTools()
     const used = new Set<string>()
     const cached = getCachedTools(db, profile.id)
-    if (cached) {
-      for (const tool of cached.tools) used.add(tool.mappedName)
+    for (const otherProfile of listProfiles(db)) {
+      if (otherProfile.id === profile.id) continue
+      for (const tool of getCachedTools(db, otherProfile.id)?.tools ?? []) used.add(tool.mappedName)
     }
     const { descriptors, skipped } = buildMappedToolDescriptors(
       profile.id,
       profile.name,
       toolsResult.tools as unknown[],
-      { usedMappedNames: used }
+      {
+        usedMappedNames: used,
+        previousMappedNames: new Map((cached?.tools ?? []).map((tool) => [tool.originalName, tool.mappedName]))
+      }
     )
     cacheTools(db, profile.id, {
       tools: descriptors,

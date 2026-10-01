@@ -1,6 +1,6 @@
 import { getCachedSkills } from '../skills/skillCache'
 import { readSkillForTool } from '../../src/shared/skillPrompt'
-import { defineDirectTool } from './plannedToolRegistry'
+import { createSnapshotReadRegisteredTool } from './snapshotReadRegisteredTool'
 import type { ToolExecutorResult } from './types'
 import type { ToolExecutionContext } from './types'
 const SKILLS_READ_MAX_CHARS = 32_000
@@ -17,10 +17,4 @@ export const readSkillsToolExecutor = async (input: Record<string, unknown>, con
   }
 }
 
-export const skillsReadTool = defineDirectTool<Record<string, unknown>, ToolExecutorResult>({
-  name: 'skills.read',
-  parseInput: (raw) => raw && typeof raw === 'object' ? raw as Record<string, unknown> : {},
-  async execute(input, context) {
-    return readSkillsToolExecutor(input, context.runtimeContext as ToolExecutionContext)
-  }
-})
+export const skillsReadTool = createSnapshotReadRegisteredTool('skills.read', readSkillsToolExecutor)

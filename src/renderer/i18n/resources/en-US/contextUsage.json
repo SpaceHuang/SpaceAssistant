@@ -9,6 +9,24 @@
     "cacheWrite": "Cache write",
     "outputReserve": "Output reserve",
     "separator": "─────────",
+    "attributionTitle": "Latest request attribution ({{version}})",
+    "attributionCoverage": "Attribution coverage {{percent}}%",
+    "unattributed": "{{count}} tokens have no attributable data",
+    "attributionExact": "Exact input {{count}} tokens",
+    "attributionEstimated": "Estimated composition (not exact usage)",
+    "system": "System prompt",
+    "tools": "Tool definitions",
+    "roleSystem": "System",
+    "roleUser": "User",
+    "roleAssistant": "Assistant",
+    "roleTool": "Tool",
+    "blockText": "Text",
+    "blockThinking": "Thinking",
+    "blockToolUse": "Tool call",
+    "blockToolResult": "Tool result",
+    "blockImage": "Image",
+    "blockDocument": "Document",
+    "blockAudio": "Audio",
     "total": "Total",
     "legend": "Legend",
     "legendUsed": "Used",
@@ -21,17 +39,5 @@
   "aria": {
     "noData": "No context usage data",
     "hasData": "Context usage about {{percent}}%"
-  },
-  "groups": {
-    "occupation": "Usage",
-    "composition": "Composition (last request snapshot)",
-    "cache": "Cache",
-    "reserve": "Reserve"
-  },
-  "composition": {
-    "systemPrompt": "System prompt",
-    "tools": "Tool declarations",
-    "messages": "Messages",
-    "estimatedMark": "≈{{count}}"
   }
 }

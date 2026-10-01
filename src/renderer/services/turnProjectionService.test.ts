@@ -47,6 +47,29 @@ describe('turn projection bridge', () => {
     off()
   })
 
+  it.each(['commit-uncertain', 'interrupted'] as const)('%s terminal settles the existing chat state as an error with its cause', async (outcome) => {
+    let listener: ((data: any) => void) | undefined
+    vi.stubGlobal('window', {
+      api: {
+        chatOnTurnDisplay: vi.fn((cb) => { listener = cb; return () => undefined }),
+        chatGetTurnTerminal: vi.fn().mockResolvedValue({ version: 4, committedVersion: 4, outcome, error: { message: 'recovered turn was interrupted' } }),
+        chatGetMessagePage: vi.fn().mockResolvedValue({ entries: [{ message: { id: 'uncertain-assistant', sessionId: 's1', role: 'assistant', content: '', timestamp: 1, status: 'failed', schemaVersion: 1 } }] })
+      }
+    })
+    const off = initTurnProjectionBridge()
+    listener?.({ display: {
+      turnId: 'uncertain-turn', requestId: 'uncertain-request', sessionId: 's1', version: 4,
+      lifecycle: 'failed', outcome,
+      message: { id: 'uncertain-assistant', content: '', contentSegments: [], toolCalls: [], activity: [] }
+    } })
+
+    await vi.waitFor(() => {
+      expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: 'chat/setChatStatus', payload: expect.objectContaining({ status: 'error', turnId: 'uncertain-turn' }) }))
+      expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: 'chat/setTurnFailure', payload: expect.objectContaining({ messageId: 'uncertain-assistant', reason: 'recovered turn was interrupted' }) }))
+    })
+    off()
+  })
+
   it('为成功投影输出可关联到 turn/version 的处理耗时指标', () => {
     let listener: ((data: any) => void) | undefined
     const metrics: Array<{ kind: string; turnId: string; version: number }> = []
@@ -71,7 +94,8 @@ describe('turn projection bridge', () => {
     ['source-completed', 'completed'],
     ['source-cancelled', 'completed'],
     ['source-failed', 'error'],
-    ['source-timeout', 'error']
+    ['source-timeout', 'error'],
+    ['source-uncertain', 'error']
   ] as const)('%s projection 清理 renderer running session', (eventType, status) => {
     let listener: ((data: any) => void) | undefined
     vi.stubGlobal('window', { api: {

@@ -42,11 +42,12 @@ export async function classifyWriteTargetScope(normalizedPath: string, workDir: 
 
 export class WritePathProbeError extends Error {
   readonly failureClass = 'environment' as const
-  readonly caseId = 'write-path-probe-environment-error' as const
+  readonly caseId: string
 
-  constructor(readonly code: string) {
+  constructor(readonly code: string, caseId = 'write-path-probe-environment-error') {
     super('写入目标事实探测失败')
     this.name = 'WritePathProbeError'
+    this.caseId = caseId
   }
 }
 
@@ -183,6 +184,9 @@ export async function probeWritePathFact(input: WritePathProbeInput): Promise<Wr
     parentIdentity = identityOf(await fs.stat(parentReal))
   } catch (error) {
     throw new WritePathProbeError(asCode(error))
+  }
+  if (targetKind === 'missing' && pathApi.dirname(normalizedPath) !== parentReal) {
+    throw new WritePathProbeError('PARENT_DIRECTORY_MISSING', 'write-parent-directory-missing')
   }
   const zone = classifyReadPathZone({
     rawPath,

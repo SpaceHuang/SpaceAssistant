@@ -9,7 +9,7 @@ export default defineConfig({
         test: {
           name: 'electron',
           // SDK 包级测试(A3):纯 node,随 electron 项目 forks 单 worker 跑
-          include: ['electron/**/*.test.ts', 'packages/agent-core/**/*.test.ts'],
+          include: ['electron/**/*.test.ts', 'packages/agent-sdk/**/*.test.ts', 'packages/agent-provider-testing/**/*.test.ts', 'packages/agent-provider-pi-ai/**/*.test.ts'],
           environment: 'node',
           // Windows 慢机满载下 5s 默认值会误杀重 IO 用例（如 1000 并发台账写盘）；断言本身不受影响
           testTimeout: 15_000,
@@ -52,7 +52,8 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@': path.resolve(import.meta.dirname, './src')
+      '@': path.resolve(import.meta.dirname, './src'),
+      '@spaceassistant/agent-provider-pi-ai': path.resolve(import.meta.dirname, './packages/agent-provider-pi-ai/src/index.ts')
     }
   }
 })

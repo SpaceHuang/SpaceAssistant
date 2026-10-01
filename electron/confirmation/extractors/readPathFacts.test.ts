@@ -254,7 +254,7 @@ describe('跨平台路径语法分派回归锚', () => {
   it('锚②：POSIX 形态 workDir 字面量 + 相对路径不产 cwd 拼接乱码（B1 回归）', async () => {
     const fact = await probeReadPathFact({
       rawPath: 'src/x.ts',
-      workDir: '/tmp/work',
+      workDir: await fs.realpath('/tmp').then((tmp) => path.join(tmp, 'work')),
       userDataDir: '/tmp/user-data',
       homeDir: '/tmp/home',
       customSensitivePrefixes: []
@@ -273,7 +273,7 @@ describe('跨平台路径语法分派回归锚', () => {
       userDataDir: 'C:\\user-data',
       homeDir: 'C:\\Users\\alice',
       customSensitivePrefixes: []
-    })).resolves.toMatchObject({ normalizedPath: '/etc/hosts', zone: 'system-dir' })
+    })).resolves.toMatchObject({ normalizedPath: await fs.realpath('/etc/hosts').catch(() => '/etc/hosts'), zone: 'system-dir' })
   })
 })
 

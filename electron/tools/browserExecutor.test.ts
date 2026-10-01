@@ -50,6 +50,19 @@ import { BROWSER_REMOTE_DISABLED_CODE } from '../../src/shared/browserRemotePoli
 import { ErrorCodes } from '../../src/shared/errorCodes'
 import { RateLimitRejectedError, RateLimitWaitTimeoutError } from '../browser/rateLimiter'
 import { browserExecutor } from './browserExecutor'
+import { createBrowserRegisteredTool } from './browserRegisteredTool'
+import { CapabilityRegistry } from '../../packages/agent-sdk/src/capability'
+import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
+import { SafetyGate } from '../../packages/agent-sdk/src/safetyGate'
+import { InMemorySafetyPermitStore } from '../../packages/agent-sdk/src/safetyPermit'
+import { runAgentTurn } from '../../packages/agent-sdk/src/turn'
+import { MemoryHistory } from '../../packages/agent-sdk/src/history'
+import { ModelProviderRegistry, type StreamChunk } from '../../packages/agent-sdk/src/model'
+import { TypedToolRegistry } from './plannedToolRegistry'
+import { createRegisteredAgentTurnTools } from './registeredAgentTurnTools'
+import { ToolRevocationRegistry } from '../toolRevocationRegistry'
+
+async function* modelChunks(...chunks: StreamChunk[]) { yield* chunks }
 
 function baseCtx(overrides?: Partial<ToolExecutionContext>): ToolExecutionContext {
   return {
@@ -112,6 +125,58 @@ describe('browserExecutor', () => {
     expect(r.error).toContain('未启用')
   })
 
+  it('rejects a prepared browser action when BrowserConfig changes before dispatch', async () => {
+    const registered = createBrowserRegisteredTool(browserExecutor)
+    const controller = new AbortController()
+    const initialContext = baseCtx({ browserConfig: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: false } })
+    const handle = await registered.begin(
+      { action: 'navigate', mode: 'open', url: 'https://example.com' },
+      { requestId: 'browser-config-drift', toolUseId: 'browser-config-drift-call', signal: controller.signal, executionContext: initialContext }
+    )
+    handle.awaitConfirmation()
+    handle.confirm()
+    handle.beginValidation()
+
+    await expect(handle.validatePrepared({
+      requestId: 'browser-config-drift', toolUseId: 'browser-config-drift-call', signal: controller.signal,
+      runtimeContext: baseCtx({ browserConfig: { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true } })
+    })).rejects.toThrow('BROWSER_PREPARED_POLICY_CHANGED')
+    expect(mockGetOrCreate).not.toHaveBeenCalled()
+    handle.fail()
+    handle.release()
+  })
+
+  it('keeps the approved user-confirmation state when validating and executing a prepared browser action', async () => {
+    const execute = vi.fn(async () => ({ success: true }))
+    const registered = createBrowserRegisteredTool({ name: 'browser', execute } as never)
+    const controller = new AbortController()
+    const browserConfig = { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, actRequiresConfirm: true }
+    const initialContext = baseCtx({ browserConfig, lane: 'feishu', remoteContext: { source: 'feishu' }, toolUserConfirmed: false })
+    const refreshedContext = baseCtx({ browserConfig: { ...browserConfig }, lane: 'feishu', remoteContext: { source: 'feishu' }, toolUserConfirmed: true })
+    const handle = await registered.begin(
+      { action: 'act', instruction: 'click the submit button' },
+      { requestId: 'browser-confirmation-state', toolUseId: 'browser-confirmation-state-call', signal: controller.signal, executionContext: initialContext }
+    )
+    handle.awaitConfirmation()
+    handle.confirm()
+    handle.beginValidation()
+
+    await expect(handle.validatePrepared({
+      requestId: 'browser-confirmation-state', toolUseId: 'browser-confirmation-state-call', signal: controller.signal,
+      runtimeContext: refreshedContext
+    })).resolves.toBeUndefined()
+    handle.finishValidation()
+    await expect(handle.execute({
+      requestId: 'browser-confirmation-state', toolUseId: 'browser-confirmation-state-call', signal: controller.signal,
+      runtimeContext: refreshedContext
+    })).resolves.toEqual({ success: true })
+    expect(execute).toHaveBeenCalledWith(
+      { action: 'act', instruction: 'click the submit button' },
+      expect.objectContaining({ toolUserConfirmed: true })
+    )
+    handle.release()
+  })
+
   it('rejects invalid action', async () => {
     const r = await browserExecutor.execute({ action: 'invalid' }, baseCtx())
     expect(r.error).toContain('无效的 action')
@@ -160,10 +225,105 @@ describe('browserExecutor', () => {
     }
     expect(goto).toHaveBeenCalled()
     ac.abort()
-    const r = await exec
-    expect(r.success).toBe(false)
-    expect(r.error).toBe(CHAT_CANCELLED_MESSAGE)
+    await expect(exec).rejects.toMatchObject({ name: 'BrowserExecutionUncertainError' })
   })
+
+  it('Stagehand 操作启动后超时会标记页面结果未知', async () => {
+    const observe = vi.fn(() => new Promise<never>(() => {}))
+    mockGetOrCreate.mockResolvedValueOnce({
+      stagehand: {
+        context: { pages: () => [{ url: () => 'https://example.com' }] },
+        observe
+      }
+    })
+
+    await expect(browserExecutor.execute(
+      { action: 'observe', instruction: 'inspect page' },
+      baseCtx({ sessionId: 'browser-timeout-session', browserConfig: { ...DEFAULT_BROWSER_CONFIG, enabled: true, actionTimeoutSec: 0.01 } })
+    )).rejects.toMatchObject({ name: 'BrowserExecutionUncertainError' })
+    expect(observe).toHaveBeenCalledOnce()
+    expect(mockCloseSession).toHaveBeenCalledWith('browser-timeout-session')
+  })
+
+  it.each([
+    ['act', 'revoke'], ['act', 'cancel'], ['navigate', 'revoke'], ['navigate', 'cancel']
+  ] as const)('Hosted browser %s 在 claim 后 %s 时以 unknown-after-dispatch 收尾且不再次请求模型', async (action, invalidation) => {
+    let enteredAction!: () => void
+    const atAction = new Promise<void>((resolve) => { enteredAction = resolve })
+    const pendingAction = vi.fn(() => {
+      enteredAction()
+      return new Promise<never>(() => {})
+    })
+    const page = {
+      url: () => 'https://example.com',
+      ...(action === 'navigate' ? { goto: pendingAction } : {})
+    }
+    mockGetOrCreate.mockResolvedValueOnce({
+      stagehand: {
+        ...(action === 'act' ? { act: pendingAction } : {}),
+        context: { pages: () => [page] }
+      }
+    })
+    const requestId = 'browser-hosted-revoke'
+    const invocationId = 'browser-hosted-invocation'
+    const turnId = 'browser-hosted-turn'
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    const permits = new InMemorySafetyPermitStore()
+    const revocations = new ToolRevocationRegistry()
+    revocations.registerToolRevocationRequest(requestId, 'desktop', requestId)
+    const registry = new TypedToolRegistry()
+    registry.register(createBrowserRegisteredTool(browserExecutor))
+    const tools = createRegisteredAgentTurnTools({
+      requestId, turnId, registry, permits, admission, toolRevocations: revocations,
+      createExecutionContext: (call) => ({
+        ...baseCtx({ requestId, toolUseId: call.toolCallId, sessionId: 'browser-hosted-session' }),
+        browserConfig: { ...DEFAULT_BROWSER_CONFIG, enabled: true, navigateRequiresConfirm: false, actionTimeoutSec: 0.2 },
+        appDatabase: {} as never,
+        toolUserConfirmed: true
+      } as never),
+      resolveAuthorizationVersion: () => 'browser-policy-v1'
+    })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['browser'])
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: {
+      evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion })
+    } })
+    const route = { routeId: 'browser-hosted-route', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }
+    const providers = new ModelProviderRegistry()
+    const controller = new AbortController()
+    let providerCalls = 0
+    providers.register(route, { providerId: 'browser-hosted-provider', stream: () => {
+        providerCalls += 1
+        return modelChunks(
+        { type: 'tool-call', toolCallId: `browser-${action}-call`, toolName: 'browser', input: action === 'act'
+          ? { action, instruction: 'click the submit button' }
+          : { action, mode: 'open', url: 'https://example.com' } },
+        { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+      )
+    } })
+    const history = new MemoryHistory()
+    const turn = runAgentTurn({
+      registry: providers, routeId: route.routeId, invocationId, turnId,
+      request: { messages: [{ role: 'user', content: 'submit the form' }], maxTokens: 50, signal: controller.signal },
+      safetyGate, prepareTool: tools.prepareTool, discardPreparedTool: tools.discardPreparedTool,
+      toolExecution: tools.toolExecution, maxModelTurns: 2, history
+    })
+
+    await atAction
+    expect(pendingAction).toHaveBeenCalledOnce()
+    if (invalidation === 'revoke') {
+      expect(revocations.revokeToolForLane('desktop', 'browser')).toBe(1)
+    } else {
+      controller.abort()
+    }
+    await expect(turn).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+    const events = (await history.read(invocationId)).events
+    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
+    expect(events.some(({ kind }) => kind === 'tool-call-finished')).toBe(false)
+    expect(providerCalls).toBe(1)
+    expect(admission.activeLeaseCount(requestId, invocationId)).toBe(0)
+    expect(mockCloseSession).toHaveBeenCalledWith('browser-hosted-session')
+  }, 10_000)
 
   it('rejects unconfirmed url when navigate requires confirm', async () => {
     const r = await browserExecutor.execute(

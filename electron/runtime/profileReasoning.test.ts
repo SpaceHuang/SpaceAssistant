@@ -14,6 +14,7 @@ vi.mock('../agentLogger/agentLogger', () => ({
 
 import { openDatabase, setConfigValue } from '../database'
 import { assembleInvocation, type AgentInvocationMaterials } from './invocationAssembler'
+import { writePolicyPackages } from '../confirmation/policyRulesRuntime'
 
 const shells: AppDatabase[] = []
 afterEach(() => {
@@ -116,5 +117,19 @@ describe('偏差 6：思维强度分档（effort）', () => {
   it('无库宿主不做能力校验（显式默认语义，不静默换档）', () => {
     const r = assembleInvocation(materials(undefined, { effort: 'medium' }))
     expect(r.invocation.profile.reasoning?.effort).toBe('medium')
+  })
+})
+
+describe('runtime policy authorization snapshot', () => {
+  it('re-resolves the live policy version instead of reusing the invocation snapshot', () => {
+    const db = openDatabase(':memory:')
+    shells.push(db)
+    seedModel(db, 'model-policy')
+    const { ports } = assembleInvocation(materials(db))
+    const before = ports.policy.authorizationVersion
+    writePolicyPackages(db, { desktop: 'strict', wechat: 'standard', feishu: 'standard', automation: 'standard' })
+    const current = ports.policy.resolveCurrentAuthorization?.()
+    expect(current?.authorizationVersion).not.toBe(before)
+    expect(current?.lanePackage).toBe('strict')
   })
 })

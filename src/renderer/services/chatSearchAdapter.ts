@@ -76,12 +76,13 @@ export function useChatSearchAdapter(
     }
     return mergeSearchCorpusWithLive(dbCorpus, liveEntries)
   }, [dbCorpus, corpusSessionId, args.sessionId, liveEntries])
+  const searchEntries = useMemo(() => entries.filter((entry) => entry.message.status !== 'queued'), [entries])
 
   useChatStructuredSearchAdapter({
     containerRef,
     active,
-    entries,
-    messageCount: entries.length,
+    entries: searchEntries,
+    messageCount: searchEntries.length,
     onNavigateToMatch: (messageId) => {
       // 始终走 scrollToMessageId：消息可能在 store 中但 Virtuoso 未挂载
       store.dispatch(setScrollToMessageId(messageId))

@@ -3,7 +3,6 @@ import type { AppDatabase } from './database'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 
 const mockGetCachedMemoryContent = vi.fn(() => null)
-const mockCreateAnthropicClient = vi.fn()
 
 let mcpSnapshotEntries: Map<string, unknown> = new Map()
 
@@ -31,9 +30,6 @@ vi.mock('./projectMemory', async (importOriginal) => {
   return { ...actual, getCachedMemoryContent: () => mockGetCachedMemoryContent() }
 })
 
-vi.mock('./anthropicClientFactory', () => ({
-  createAnthropicClient: (...args: unknown[]) => mockCreateAnthropicClient(...args)
-}))
 
 vi.mock('./chatCancelRegistry', () => ({
   registerChatCancel: vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
@@ -98,7 +94,13 @@ vi.mock('./database', async (importOriginal) => {
 })
 
 import { runToolChatSession } from './toolChatLoop'
+import { registerChatCancel } from './chatCancelRegistry'
 import { assembleInvocation } from './runtime/invocationAssembler'
+import { getDefaultAgentRuntime, setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
+import { createAgentRuntime } from './runtime/agentRuntime'
+import { ToolRevocationRegistry } from './toolRevocationRegistry'
+import { TypedToolRegistry } from './tools/plannedToolRegistry'
+import { createHostedTurnHandoff } from './runtime/hostedTurnHandoff'
 
 /** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
 function runAssembledSession(materials: unknown) {
@@ -125,47 +127,106 @@ describe('runToolChatSession lane 穿透（偏差 21：MCP 仅 desktop lane 注�
     mockGetCachedMemoryContent.mockReturnValue(null)
   })
 
-  async function run(lane?: 'desktop' | 'automation') {
-    const capturedTools: Array<{ tools?: Array<{ name?: string }> }> = []
-    mockCreateAnthropicClient.mockReturnValue({
-      messages: {
-        stream: vi.fn((params: { tools?: Array<{ name?: string }> }) => {
-          capturedTools.push(params)
-          return {
-            async *[Symbol.asyncIterator]() {},
-            finalMessage: vi.fn(async () => ({
-              content: [{ type: 'text', text: 'ok' }],
-              stop_reason: 'end_turn',
-              usage: { input_tokens: 1, output_tokens: 1 }
-            }))
-          }
-        })
+  async function run(lane: 'desktop' | 'feishu' | 'wechat' | 'automation' = 'desktop', withTool = false) {
+    const requestId = `req-lane-${lane}-${withTool ? 'tool' : 'visibility'}`
+    const sessionId = `sess-lane-${lane}-${withTool ? 'tool' : 'visibility'}`
+    const providerRouteId = `desktop-anthropic:mcp-visibility-${lane}-${withTool ? 'tool' : 'visibility'}`
+    const previousRuntime = getDefaultAgentRuntime()
+    const toolRegistry = new TypedToolRegistry()
+    if (withTool) {
+      const { defineDirectTool } = await import('./tools/plannedToolRegistry')
+      toolRegistry.register(defineDirectTool({
+        name: 'list_work_dirs', actionClass: 'read', parseInput: (raw) => raw as Record<string, never>,
+        execute: async () => ({ success: true, data: 'file-content' })
+      }))
+    }
+    const runtime = createAgentRuntime({ builtinRegistry: toolRegistry as never, toolRevocations: new ToolRevocationRegistry() })
+    setDefaultAgentRuntime(runtime)
+    const capturedTools: Array<Array<{ name?: string }>> = []
+    const requestMessages: unknown[][] = []
+    let providerTurn = 0
+    runtime.modelProviders.register({
+      routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01',
+      adapterVersion: 'pi-ai@0.87.1', modelId: 'claude-sonnet-4-20250514'
+    }, { providerId: `mcp-visibility-${lane}-${withTool ? 'tool' : 'visibility'}`, async *stream(call) {
+      capturedTools.push(call.request.tools ?? [])
+      requestMessages.push([...call.request.messages])
+      providerTurn += 1
+      if (withTool && providerTurn === 1) {
+        yield { type: 'tool-call', toolCallId: 'history-context-tool', toolName: 'list_work_dirs', input: {} }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'tool-calls' }
+      } else {
+        yield { type: 'text-delta', text: 'complete' }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'stop' }
       }
-    })
-    await runAssembledSession({
-      requestId: 'req-lane-1',
-      sessionId: 'sess-lane-1',
-      model: 'claude-sonnet-4-20250514',
-      messages: [{ role: 'user', content: 'hello' }],
-      toolsConfig: DEFAULT_TOOLS_CONFIG,
-      workDir: '/tmp',
-      userDataDir: '/tmp',
-      getApiKey: async () => 'test-key',
-      appDb: createMemoryAppDb('zh-CN') as unknown as AppDatabase,
-      emitFactEvent: () => undefined,
-      emitSessionEvent: async () => undefined,
-      ...(lane ? { lane } : {})
-    } as never)
-    return capturedTools.flatMap((c) => (c.tools ?? []).map((t) => t.name))
+    } })
+    try {
+      const { invocation, ports, agentSdk } = assembleInvocation({
+        requestId, sessionId, turnId: `turn-${requestId}`, lane,
+        model: 'claude-sonnet-4-20250514', providerRouteId,
+        messages: [{ id: 'input-user', role: 'user', content: 'persist me' }], currentUserMessageId: 'input-user',
+        toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key',
+        appDb: createMemoryAppDb('zh-CN') as unknown as AppDatabase,
+        emitFactEvent: () => undefined, emitSessionEvent: async () => undefined
+      } as never)
+      ports.toolRevocations = undefined
+      vi.mocked(registerChatCancel).mockReturnValue(new AbortController().signal as never)
+      const hostedAgentSdk = {
+        ...agentSdk,
+        createHostedTurnRuntime: (input: Parameters<typeof agentSdk.createHostedTurnRuntime>[0]) =>
+          agentSdk.createHostedTurnRuntime({
+            ...input,
+            registry: toolRegistry,
+            confirmationAdapter: {
+              cancel: () => undefined,
+              publish: () => undefined,
+              createChannel: () => ({
+                request: async () => ({ kind: 'approved', cause: 'user-approved' }),
+                cancel: () => undefined
+              })
+            } as never
+          })
+      }
+      const handoff = createHostedTurnHandoff({
+        agentSdk: hostedAgentSdk as never, history: ports.history!, invocationId: invocation.trace.turnId,
+        turnId: invocation.trace.turnId, routeId: providerRouteId
+      })
+      const result = await runToolChatSession(invocation, ports, { onHostedTurnHandoff: handoff })
+      const history = await ports.history!.read(invocation.trace.turnId)
+      return { result, history, tools: capturedTools.flatMap((tools) => tools.map((tool) => tool.name)), requestMessages }
+    } finally {
+      setDefaultAgentRuntime(previousRuntime)
+    }
   }
 
   it('desktop lane：MCP 工具注入', async () => {
-    const names = await run('desktop')
-    expect(names).toContain('mcp1_create_issue')
+    const { tools } = await run('desktop')
+    expect(tools).toContain('mcp1_create_issue')
   })
 
   it('automation lane：MCP 工具不注入（保持「远程与 automation 无 MCP」语义）', async () => {
-    const names = await run('automation')
-    expect(names).not.toContain('mcp1_create_issue')
+    const { tools } = await run('automation')
+    expect(tools).not.toContain('mcp1_create_issue')
+  })
+
+  it.each(['desktop', 'feishu', 'wechat', 'automation'] as const)('%s Hosted lane persists provider context and rebuilds its request from History', async (lane) => {
+    const { result, history, requestMessages } = await run(lane, true)
+    expect(result).toMatchObject({ ok: true })
+    expect(history.events[0]).toMatchObject({
+      kind: 'invocation-context-committed',
+      payload: { messages: [{ role: 'user', content: 'persist me' }], requiredUserMessage: { id: 'input-user' } }
+    })
+    expect(requestMessages[1]?.filter((message) => (message as { role?: string }).role !== 'system')).toEqual([
+      { role: 'user', content: 'persist me' },
+      { role: 'assistant', toolCalls: [{ id: 'history-context-tool', name: 'list_work_dirs', input: {} }] },
+      expect.objectContaining({ role: 'tool', toolCallId: 'history-context-tool' })
+    ])
+    const toolOutcome = history.events.find(({ kind, payload }) =>
+      (kind === 'tool-call-finished' || kind === 'tool-call-not-dispatched') &&
+      (payload as { toolCallId?: string }).toolCallId === 'history-context-tool'
+    )
+    expect(toolOutcome).toBeDefined()
   })
 })

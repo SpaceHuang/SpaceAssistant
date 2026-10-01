@@ -21,7 +21,7 @@ type PendingAttachment = ChatImageAttachment & {
 type Props = {
   disabled?: boolean
   running?: boolean
-  queueCount?: number
+  queuedBarSlot?: React.ReactNode
   /** 当前会话执行中的活动摘要（工具名 / 阶段） */
   runningStatus?: string
   runningDetail?: string
@@ -68,7 +68,7 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
   {
     disabled,
     running,
-    queueCount = 0,
+    queuedBarSlot,
     runningStatus,
     runningDetail,
     runningElapsed,
@@ -112,9 +112,8 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
     if (runningStatus) parts.push(runningStatus)
     if (runningDetail) parts.push(runningDetail)
     if (typeof runningElapsed === 'string' && runningElapsed) parts.push(runningElapsed)
-    if (queueCount > 0) parts.push(t('input.queuePending', { count: queueCount }))
     return parts.join(' · ')
-  }, [running, runningStatus, runningDetail, runningElapsed, queueCount, t])
+  }, [running, runningStatus, runningDetail, runningElapsed])
 
   const showActivity = running && Boolean(activitySummary || runningElapsed)
   /** 已有活动摘要时不再重复「执行中」；无摘要时保留停止说明 */
@@ -354,7 +353,7 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
 
   useEffect(() => {
     checkOverflow()
-  }, [prefsSlot, running, canQueueSend, queueCount, footerStatusLabel, pendingAttachments.length, checkOverflow])
+  }, [prefsSlot, running, canQueueSend, footerStatusLabel, pendingAttachments.length, checkOverflow])
 
   useEffect(() => {
     if (!tooManyHint) return
@@ -376,6 +375,7 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
 
   return (
     <div className="composer">
+      {queuedBarSlot}
       <div
         className="composer-box"
         onDragEnter={preventDragDefaults}
@@ -494,9 +494,6 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
                       ) : (
                         runningElapsed
                       )}
-                      {queueCount > 0 ? (
-                        <span className="composer-status__queue">{t('input.queuePending', { count: queueCount })}</span>
-                      ) : null}
                     </span>
                     {showHint ? (
                       <>

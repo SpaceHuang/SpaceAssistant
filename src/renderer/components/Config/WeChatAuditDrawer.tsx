@@ -3,6 +3,7 @@ import { Button, Drawer, Table } from 'antd'
 import type { WeChatAuditEvent } from '../../../shared/wechatTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import i18n from '../../i18n'
+import { runtimeText } from '../../i18n/runtimeText'
 
 function renderWeChatDetail(event: WeChatAuditEvent, pendingLabel: string): string {
   switch (event.type) {
@@ -11,11 +12,11 @@ function renderWeChatDetail(event: WeChatAuditEvent, pendingLabel: string): stri
     case 'agent_start':
       return event.sessionId
     case 'agent_done':
-      return `${event.success ? '✓' : '✗'} ${event.summaryLen} 字`
+      return runtimeText('chat.auditCharacters', { prefix: event.success ? '✓' : '✗', count: event.summaryLen })
     case 'send':
       return `${event.success ? '✓' : '✗'} ${event.targetId}`
     case 'reply':
-      return `${event.success ? '✓' : '✗'} ${event.len} 字`
+      return runtimeText('chat.auditCharacters', { prefix: event.success ? '✓' : '✗', count: event.len })
     case 'confirm_request':
       return event.decision ?? pendingLabel
     case 'rate_limit':

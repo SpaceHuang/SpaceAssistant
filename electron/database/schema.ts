@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 19
+export const DB_SCHEMA_VERSION = 28
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (
@@ -115,6 +115,188 @@ UPDATE confirmation_commit_audits SET session_id = (SELECT session_id FROM confi
 UPDATE confirmation_commit_audits SET generation = (SELECT generation FROM confirmation_submissions WHERE confirmation_submissions.submission_id = confirmation_commit_audits.submission_id);
 UPDATE confirmation_commit_audits SET revision = (SELECT revision FROM confirmation_submissions WHERE confirmation_submissions.submission_id = confirmation_commit_audits.submission_id);
 `
+
+/** v18 → v19：Agent SDK canonical history streams and idempotent events. */
+export const MIGRATION_V19_AGENT_HISTORY_SQL = `
+CREATE TABLE IF NOT EXISTS agent_history_streams (
+  invocation_id TEXT PRIMARY KEY NOT NULL,
+  version INTEGER NOT NULL DEFAULT 0 CHECK(version >= 0),
+  schema_version INTEGER NOT NULL CHECK(schema_version > 0)
+);
+
+CREATE TABLE IF NOT EXISTS agent_history_events (
+  invocation_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL CHECK(sequence > 0),
+  event_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  schema_version INTEGER NOT NULL CHECK(schema_version > 0),
+  kind TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(invocation_id, sequence),
+  UNIQUE(invocation_id, event_id),
+  UNIQUE(invocation_id, idempotency_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_history_events_turn
+  ON agent_history_events(invocation_id, turn_id, sequence);
+`
+
+/** v19 → v20：bind canonical invocation streams to their owning application session. */
+export const MIGRATION_V20_AGENT_HISTORY_SESSION_SQL = `
+ALTER TABLE agent_history_streams ADD COLUMN session_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_agent_history_streams_session
+  ON agent_history_streams(session_id, invocation_id);
+`
+
+/** v20 → v21：backfill legacy invocation ownership only from an unambiguous turn receipt. */
+export const MIGRATION_V21_AGENT_HISTORY_SESSION_BACKFILL_SQL = `
+WITH owner_candidates AS (
+  SELECT request_id AS invocation_id, session_id
+  FROM turns
+  WHERE trim(session_id) <> ''
+  UNION
+  SELECT invocation_id,
+    CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.sessionId') END AS session_id
+  FROM agent_history_events
+  WHERE kind = 'session-input-committed'
+    AND sequence = 1
+    AND json_valid(payload_json) = 1
+    AND json_type(payload_json, '$.sessionId') = 'text'
+    AND trim(json_extract(payload_json, '$.sessionId')) <> ''
+    AND json_type(payload_json, '$.messageId') = 'text'
+    AND trim(json_extract(payload_json, '$.messageId')) <> ''
+    AND json_extract(payload_json, '$.role') = 'user'
+    AND json_type(payload_json, '$.inputFingerprint') = 'text'
+    AND trim(json_extract(payload_json, '$.inputFingerprint')) <> ''
+  UNION
+  SELECT invocation_id,
+    CASE WHEN json_valid(payload_json) THEN json_extract(payload_json, '$.sessionLedger.location.sessionId') END AS session_id
+  FROM agent_history_events
+  WHERE kind IN ('transcript-compacted', 'invocation-completed', 'invocation-failed', 'invocation-interrupted')
+    AND json_valid(payload_json) = 1
+    AND json_type(payload_json, '$.sessionLedger.location.sessionId') = 'text'
+    AND trim(json_extract(payload_json, '$.sessionLedger.location.sessionId')) <> ''
+    AND json_type(payload_json, '$.sessionLedger.location.workDir') = 'text'
+    AND trim(json_extract(payload_json, '$.sessionLedger.location.workDir')) <> ''
+    AND json_type(payload_json, '$.sessionLedger.location.createdAt') IN ('integer', 'real')
+), unique_owners AS (
+  SELECT invocation_id, MIN(session_id) AS session_id
+  FROM owner_candidates
+  GROUP BY invocation_id
+  HAVING COUNT(DISTINCT session_id) = 1
+)
+UPDATE agent_history_streams
+SET session_id = (SELECT session_id FROM unique_owners WHERE unique_owners.invocation_id = agent_history_streams.invocation_id)
+WHERE session_id IS NULL
+  AND EXISTS (SELECT 1 FROM unique_owners WHERE unique_owners.invocation_id = agent_history_streams.invocation_id);
+`
+
+/** v21 → v22: distinguish new atomic input commitments from legacy turn receipts. */
+export const MIGRATION_V22_TURN_INPUT_HISTORY_VERSION_SQL = `
+ALTER TABLE turns ADD COLUMN accepted_input_history_version INTEGER NOT NULL DEFAULT 0 CHECK(accepted_input_history_version >= 0);
+`
+
+/** v22 → v23：durable driver delivery intents and append-only transitions. */
+export const MIGRATION_V23_DRIVER_DELIVERY_SQL = `
+CREATE TABLE IF NOT EXISTS driver_deliveries (
+  delivery_id TEXT NOT NULL,
+  target TEXT NOT NULL,
+  preference_json TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending','deferred','delivering','delivered','failed','expired','superseded','delivery-uncertain')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  last_error TEXT,
+  PRIMARY KEY(delivery_id, target)
+);
+CREATE INDEX IF NOT EXISTS idx_driver_deliveries_status_created ON driver_deliveries(status, created_at);
+CREATE TABLE IF NOT EXISTS driver_delivery_events (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  delivery_id TEXT NOT NULL,
+  target TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  details_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_driver_delivery_events_intent ON driver_delivery_events(delivery_id, target, sequence);
+`
+
+/** v23 → v24：versioned session transcript and cross-process turn admission claims. */
+export const MIGRATION_V24_SESSION_TRANSCRIPT_SQL = `
+CREATE TABLE IF NOT EXISTS session_transcript_checkpoints (
+  session_id TEXT PRIMARY KEY NOT NULL,
+  version INTEGER NOT NULL DEFAULT 0 CHECK(version >= 0),
+  last_turn_id TEXT,
+  status TEXT NOT NULL DEFAULT 'ready' CHECK(status IN ('ready','commit_uncertain','blocked')),
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_transcript_entries (
+  session_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  base_version INTEGER NOT NULL,
+  version INTEGER NOT NULL,
+  outcome TEXT NOT NULL,
+  messages_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(session_id, turn_id),
+  UNIQUE(session_id, version)
+);
+CREATE TABLE IF NOT EXISTS session_execution_claims (
+  session_id TEXT PRIMARY KEY NOT NULL,
+  turn_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('queued','claimed','executing','commit_uncertain')),
+  enqueued_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+`
+
+/** v24 → v25：durable FIFO queue entries for session execution admission. */
+export const MIGRATION_V25_SESSION_EXECUTION_QUEUE_SQL = `
+CREATE TABLE IF NOT EXISTS session_execution_queue (
+  session_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  generation INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL CHECK(status IN ('queued','claimed','executing','commit_uncertain')),
+  enqueued_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(session_id, turn_id)
+);
+CREATE INDEX IF NOT EXISTS idx_session_execution_queue_order ON session_execution_queue(session_id, status, enqueued_at, turn_id);
+`
+
+/** v25 → v26：auditable operator resolutions for uncertain session transcript commits. */
+export const MIGRATION_V26_SESSION_TRANSCRIPT_RECONCILIATION_SQL = `
+CREATE TABLE IF NOT EXISTS session_transcript_reconciliations (
+  resolution_id TEXT PRIMARY KEY NOT NULL,
+  session_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  resolved_version INTEGER NOT NULL,
+  resolution TEXT NOT NULL CHECK(resolution IN ('commit-reviewed')),
+  operator_id TEXT NOT NULL,
+  rationale TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_session_transcript_reconciliations_session ON session_transcript_reconciliations(session_id, resolved_version);
+`
+
+/** v26 → v27：durable immutable AcceptedTurn identity and request mapping. */
+export const MIGRATION_V27_ACCEPTED_TURN_CONTEXT_SQL = `
+CREATE TABLE IF NOT EXISTS accepted_turn_contexts (
+  turn_id TEXT PRIMARY KEY NOT NULL,
+  session_id TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  accepted_turn_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE(session_id, request_id)
+);
+CREATE INDEX IF NOT EXISTS idx_accepted_turn_contexts_request ON accepted_turn_contexts(request_id, session_id);
+`
+
 
 /**
  * v3 → v4：工具确认机制框架 —— 决策缓存表 + 用户规则覆盖表。
@@ -318,28 +500,22 @@ CREATE INDEX IF NOT EXISTS idx_usage_turn_model_day ON usage_turn_facts(model, d
 CREATE INDEX IF NOT EXISTS idx_usage_turn_app_version_day ON usage_turn_facts(app_version, day);
 `
 
-/**
- * Thinking 强度（v17）：会话级覆盖列。
- * NULL = 继承全局 config.thinkingEffort（§4.2 继承语义）——存量行不加默认值即天然兼容，禁止回填。
- */
-export const MIGRATION_V17_SESSION_THINKING_EFFORT_SQL = `
-ALTER TABLE sessions ADD COLUMN thinking_effort TEXT;
-`
-
-/**
- * Agent Token 用量归因扩列（v19，AD23 / AD24 / §7.6.3 方案 B1）：
- * 不新增表、不改 UNIQUE 键；老行新列为 NULL，统计侧按「无归因数据」降级（AT8 / I5）。
- * - usage_step_facts：输入侧三源真列（SRC-A*，block-v1 整体重估）+ 独立真列 estimator_version
- *   （AD18：按版本分组过滤需可索引，版本号不放 JSON 内）+ 归因 JSON 列（messages 骨架 + 输出侧）。
- * - usage_turn_facts：工具维度归因 JSON 列（tools / toolSource / toolResults，§7.6.5）。
- */
-export const MIGRATION_V19_USAGE_ATTRIBUTION_SQL = `
+/** v28: 当前 SDK usage step 的可选内容归因快照；历史精确 usage 保持原值。 */
+export const MIGRATION_V28_USAGE_ATTRIBUTION_SQL = `
 ALTER TABLE usage_step_facts ADD COLUMN system_tokens INTEGER;
 ALTER TABLE usage_step_facts ADD COLUMN tools_tokens INTEGER;
 ALTER TABLE usage_step_facts ADD COLUMN message_tokens INTEGER;
 ALTER TABLE usage_step_facts ADD COLUMN estimator_version TEXT;
 ALTER TABLE usage_step_facts ADD COLUMN attribution_json TEXT;
 ALTER TABLE usage_turn_facts ADD COLUMN tool_attribution_json TEXT;
+`
+
+/**
+ * Thinking 强度（v17）：会话级覆盖列。
+ * NULL = 继承全局 config.thinkingEffort（§4.2 继承语义）——存量行不加默认值即天然兼容，禁止回填。
+ */
+export const MIGRATION_V17_SESSION_THINKING_EFFORT_SQL = `
+ALTER TABLE sessions ADD COLUMN thinking_effort TEXT;
 `
 
 export const SCHEMA_META_KEYS = {

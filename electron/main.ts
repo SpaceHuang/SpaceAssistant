@@ -10,18 +10,25 @@ import { readBrowserConfigFromDb } from './browser/browserConfigDb'
 import { readShellConfigFromDb } from './shell/shellConfigDb'
 import { registerButlerIpcHandlers } from './butler/butlerIpc'
 import { createDeliveryHub } from './driver/deliveryHub'
+import { SqliteDeliveryJournal } from './driver/sqliteDeliveryJournal'
+import { registerButlerDeliveryDrivers } from './butler/butlerDelivery'
+import { sendFeishuTextToTarget } from './feishu/feishuReply'
+import { sendWeChatTextToUser } from './wechat/weChatReplyService'
 import { ButlerTaskScheduler } from './butler/taskScheduler'
 import { runButlerTask, type ButlerInvokerDeps } from './butler/butlerInvoker'
+import { syncAutomationTaskRunDeliveryStatuses } from './butler/taskStore'
 import { stagehandService } from './browser/stagehandService'
 import {
   autoStartFeishuEventIfNeeded,
   createFeishuBundle,
+  getFeishuBundle,
   registerFeishuIpcHandlers,
   shutdownFeishuServices
 } from './feishu/feishuIpc'
 import {
   autoStartWeChatPollIfNeeded,
   createWeChatBundle,
+  getWeChatBundle,
   pauseWeChatPollIfWindowClosed,
   registerWeChatIpcHandlers,
   shutdownWeChatServices
@@ -35,7 +42,7 @@ import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { signalChatCancel } from './chatCancelRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
-import { beginSessionEventShutdown, flushAllSessionEventSinks, reconcileSessionEventFilesDetailed } from './sessionEvents'
+import { beginSessionEventShutdown, ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, ensureTurnStartEvent, flushAllSessionEventSinks, getSessionEventSink, reconcileSessionEventFilesDetailed } from './sessionEvents'
 import { runSessionEventRetentionMaintenance } from './storage/sessionEventRetention'
 import { pruneAgentLogs } from './storage/agentLogRetention'
 import { resolveRetentionPolicyFromDb } from './storage/retentionPolicy'
@@ -43,6 +50,8 @@ import { cleanupUsageFactsByRetention, reconcileUsageTurnFacts } from './usageSt
 import { setUsageStatsAppVersion } from './usageStats/usageStatsRecorder'
 import { backfillUsageStats } from './usageStats/usageStatsBackfill'
 import { getDbConnection } from './database/sqliteStore'
+import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
+import { getSessionLedgerRecoveryRoots, isSessionLedgerLocationAllowed, resolveSessionLedgerLocation as resolveAcceptedInputLedgerLocation, toSessionLedgerToolCallProjection, toSessionLedgerToolResultProjection } from './runtime/sessionLedgerRecovery'
 import { SCHEMA_META_KEYS } from './database/schema'
 import { getSchemaMeta, setSchemaMeta } from './database/sqliteStore'
 import { cleanupOrphanProcess } from './shell/orphanProcessCleanup'
@@ -158,6 +167,7 @@ function getRendererIndexPath(): string {
 let workDirState = ''
 let workDirManager: WorkDirManager | null = null
 let appDb: AppDatabase | null = null
+let mainIpcReady = false
 /** 模块级持有防抖备份管理器：退出流程 flush 挂起备份用（评审 2.2）。 */
 let sessionBackupManager: DebouncedSessionBackupManager | null = null
 
@@ -214,6 +224,9 @@ export function getIsQuitting(): boolean {
 }
 
 export async function createMainWindow(): Promise<void> {
+  // macOS may emit `activate` while async startup recovery is still running.
+  // Do not expose a renderer until every main-process IPC handler is registered.
+  if (!mainIpcReady) return
   const existing = getMainWindow()
   if (existing && !existing.isDestroyed()) {
     existing.show()
@@ -308,6 +321,130 @@ app.whenReady().then(async () => {
     return
   }
   appDb = db
+  const recoveryWorkDir = getConfigValue(db, 'config.workDir') ?? path.join(app.getPath('userData'), 'workspace')
+  const recoveryWorkDirs = getSessionLedgerRecoveryRoots(recoveryWorkDir, getConfigValue(db, 'config.workDirProfiles'))
+  let sessionHistoryRecoverySucceeded = false
+  let sessionHistoryRepairFailureCount = 0
+  try {
+    const interrupted = await new SqliteAgentHistory(getDbConnection(db)).recoverInterruptedInvocations({
+      resolveSessionLedgerLocation: (sessionId) => {
+        const session = getSession(db, sessionId)
+        if (!session) return undefined
+        const location = resolveAcceptedInputLedgerLocation({
+          sessionId,
+          createdAt: session.createdAt,
+          workDirProfileId: session.workDirProfileId,
+          activeProfileId: getConfigValue(db, 'config.activeWorkDirProfileId'),
+          configuredWorkDir: recoveryWorkDir,
+          profilesJson: getConfigValue(db, 'config.workDirProfiles')
+        })
+        return location && isSessionLedgerLocationAllowed(location, recoveryWorkDirs) ? location : undefined
+      },
+      onSessionLocationResolveError: (error, invocationId, sessionId) => {
+        sessionHistoryRepairFailureCount += 1
+        logAgentEvent('warn', 'tool.error', { requestId: invocationId, sessionId, toolName: 'history-session-location-recovery', message: error instanceof Error ? error.message : String(error) })
+      },
+      repairCompaction: async (location, start, summary) => {
+        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
+          throw new Error('canonical compaction ledger location does not match a configured workspace root')
+        }
+        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+        try { await ensureCompactionTransaction(sink, start, summary) }
+        finally { await sink.close() }
+      },
+      repairToolLedger: async (location, result) => {
+        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
+          throw new Error('canonical tool ledger location does not match a configured workspace root')
+        }
+        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+        try { await ensureToolResultEvent(sink, toSessionLedgerToolResultProjection(result as { toolUseId: string; turnId?: string; stepId: string; result: Record<string, unknown> })) }
+        finally { await sink.close() }
+      },
+      repairInvocationTerminal: async (location, terminal) => {
+        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
+          throw new Error('canonical invocation terminal ledger location does not match a configured workspace root')
+        }
+        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+        try {
+          await ensureTurnStartEvent(sink, String(terminal.turnId))
+          await ensureTurnEndEvent(sink, String(terminal.turnId), String(terminal.reason))
+        }
+        finally { await sink.close() }
+      },
+      repairToolCallLedger: async (location, toolCall) => {
+        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
+          throw new Error('canonical tool ledger location does not match a configured workspace root')
+        }
+        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+        try { await ensureToolCallEvent(sink, toSessionLedgerToolCallProjection(toolCall as { toolUseId: string; turnId?: string; stepId: string; name: string; args: Record<string, unknown> })) }
+        finally { await sink.close() }
+      },
+      repairModelRequestLedger: async (location, projection) => {
+        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
+          throw new Error('canonical model request ledger location does not match a configured workspace root')
+        }
+        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+        try { await ensureRequestProjectionEvents(sink, projection) }
+        finally { await sink.close() }
+      },
+      repairProviderRetryLedger: async (location, retry) => {
+        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
+          throw new Error('canonical provider retry ledger location does not match a configured workspace root')
+        }
+        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+        try { await ensureRequestRetryEvent(sink, retry) }
+        finally { await sink.close() }
+      },
+      repairUsageLedger: async (location, requestUsage) => {
+        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
+          throw new Error('canonical usage ledger location does not match a configured workspace root')
+        }
+        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+        try { await ensureRequestUsageEvent(sink, requestUsage) }
+        finally { await sink.close() }
+      },
+      repairFinalRequestContextLedger: async (location, requestContext) => {
+        if (!isSessionLedgerLocationAllowed(location, recoveryWorkDirs)) {
+          throw new Error('canonical final request context ledger location does not match a configured workspace root')
+        }
+        const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
+        try { await ensureFinalRequestContextEvent(sink, requestContext) }
+        finally { await sink.close() }
+      },
+      onCompactionRepairError: (error, invocationId, compactionId) => {
+        sessionHistoryRepairFailureCount += 1
+        console.warn('[agentHistory] compaction ledger repair degraded:', { invocationId, compactionId, error: error instanceof Error ? error.message : String(error) })
+      },
+      onToolLedgerRepairError: (error, invocationId, toolCallId) => {
+        sessionHistoryRepairFailureCount += 1
+        console.warn('[agentHistory] tool result ledger repair degraded:', { invocationId, toolCallId, error: error instanceof Error ? error.message : String(error) })
+      },
+      onModelRequestLedgerRepairError: (error, invocationId, requestId) => {
+        sessionHistoryRepairFailureCount += 1
+        console.warn('[agentHistory] model request ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
+      },
+      onProviderRetryLedgerRepairError: (error, invocationId, requestId) => {
+        sessionHistoryRepairFailureCount += 1
+        console.warn('[agentHistory] provider retry ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
+      },
+      onUsageLedgerRepairError: (error, invocationId, requestId) => {
+        sessionHistoryRepairFailureCount += 1
+        console.warn('[agentHistory] usage ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
+      },
+      onFinalRequestContextLedgerRepairError: (error, invocationId, requestId) => {
+        sessionHistoryRepairFailureCount += 1
+        console.warn('[agentHistory] final request context ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
+      },
+      onInvocationTerminalRepairError: (error, invocationId, turnId) => {
+        sessionHistoryRepairFailureCount += 1
+        console.warn('[agentHistory] invocation terminal ledger repair degraded:', { invocationId, turnId, error: error instanceof Error ? error.message : String(error) })
+      }
+    })
+    sessionHistoryRecoverySucceeded = sessionHistoryRepairFailureCount === 0
+    if (interrupted.length > 0) console.warn('[agentHistory] interrupted invocations recovered:', interrupted.map(({ invocationId }) => invocationId))
+  } catch (error) {
+    console.warn('[agentHistory] startup recovery degraded:', error instanceof Error ? error.message : String(error))
+  }
   // 进程重启 cleanup 必须先于 Runtime recovery：仅对带 owner token 的本机 run_shell 执行校验，
   // 无身份或不属于本应用的 PID 交给后续 turn recovery 收敛，绝不裸杀。
   await cleanupPersistedOrphansOnStartup({
@@ -328,7 +465,7 @@ app.whenReady().then(async () => {
     persistExpiredTrustedCommandMarks(db)
   })
 
-  workDirState = getConfigValue(db, 'config.workDir') ?? path.join(app.getPath('userData'), 'workspace')
+  workDirState = recoveryWorkDir
   // 默认 workDir 可能尚不存在，提前创建避免 file:list-directory 等处理器 ENOENT
   try {
     mkdirSync(workDirState, { recursive: true })
@@ -480,7 +617,7 @@ app.whenReady().then(async () => {
   const turnRuntime = new TurnRuntime({
     storage: createTurnCoordinatorStorage(db),
     deps: { now: Date.now, id: randomUUID },
-    onCancel: (turn) => signalChatCancel(turn.requestId),
+    onCancel: (turn) => signalChatCancel(turn.turnId),
     onEvent: (turn, event) => {
       const display = turnToDisplay(turn)
       if (event.type === 'source-cancelled') display.outcome = 'cancelled'
@@ -650,12 +787,19 @@ app.whenReady().then(async () => {
     if (!payload.turnId || !payload.turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
     turnRuntime.bindRequest(payload.requestId, payload.turnId)
     return turnRuntime.executeWithSource(payload.turnId, payload.turnStartToken, async (turn) => {
-      const result = await executeClaudeRequest(sender, payload) as { ok?: boolean; error?: string; usage?: unknown }
+      const result = await executeClaudeRequest(sender, payload) as { ok?: boolean; error?: string; usage?: unknown; outcome?: 'commit-uncertain' }
       if (result.ok) {
-        turnRuntime.consumeForRequest(payload.requestId, { type: 'source-completed' })
+        turnRuntime.consumeForRequest(payload.requestId, { type: 'source-completed' }, payload.turnId)
         return { outcome: 'completed' as const, usage: result.usage }
       }
-      turnRuntime.consumeForRequest(payload.requestId, { type: 'source-failed', message: result.error })
+      if (result.outcome === 'commit-uncertain') {
+        turnRuntime.consumeForRequest(payload.requestId, { type: 'source-uncertain', message: result.error }, payload.turnId)
+        return {
+          outcome: 'commit-uncertain' as const,
+          error: { code: 'SESSION_TRANSCRIPT_COMMIT_UNCERTAIN', message: result.error ?? 'Session transcript commit is uncertain' }
+        }
+      }
+      turnRuntime.consumeForRequest(payload.requestId, { type: 'source-failed', message: result.error }, payload.turnId)
       return { outcome: 'failed' as const, error: { code: 'source-failed', message: result.error ?? 'Claude execution failed' } }
     })
   }
@@ -677,6 +821,7 @@ app.whenReady().then(async () => {
     floatingNotificationManager: floatingManager,
     isTrayEnabled,
     turnRuntime,
+    sessionHistoryRecoverySucceeded,
     executeTurn
   })
 
@@ -689,7 +834,17 @@ app.whenReady().then(async () => {
   // P6：共享投递入口（装配器持有，状态随实例走）。桌面 sink 的注册在 butlerDelivery
   // （deliveryPorts.notifyDesktop 即桌面实现，闭包与投递同源）；此处只建 hub 容器传递，
   // 避免同 id 驱动源被 butlerDelivery 覆盖注册后此处退化为死代码。
-  const sharedDeliveryHub = createDeliveryHub()
+  const deliveryJournal = new SqliteDeliveryJournal(db)
+  deliveryJournal.markInterruptedDispatchesUncertain()
+  const sharedDeliveryHub = createDeliveryHub({ journal: deliveryJournal, onDeferredSettled: () => { syncAutomationTaskRunDeliveryStatuses(db) } })
+  syncAutomationTaskRunDeliveryStatuses(db)
+  const flushDeliveries = (driverId: 'feishu' | 'wechat') => {
+    void sharedDeliveryHub.reportReachability(driverId)
+      .then(() => { syncAutomationTaskRunDeliveryStatuses(db) })
+      .catch((error) => console.error(`[Delivery] ${driverId} reachability flush failed`, error))
+  }
+  let feishuDeliveryReachable = false
+  let wechatDeliveryReachable = false
   const butlerInvokerDeps: ButlerInvokerDeps = {
     db,
     turnRuntime,
@@ -735,9 +890,25 @@ app.whenReady().then(async () => {
         })
         notification.on('click', () => void showMainWindow())
         notification.show()
+      },
+      isFeishuReachable: () => feishuDeliveryReachable,
+      sendFeishu: async (text, rawTarget) => {
+        const target = rawTarget?.trim()
+        if (!target) throw new Error('FEISHU_DELIVERY_TARGET_REQUIRED')
+        const bundle = getFeishuBundle()
+        if (!bundle) throw new Error('FEISHU_DELIVERY_UNAVAILABLE')
+        await sendFeishuTextToTarget(bundle.runner, target, text)
+      },
+      isWechatReachable: () => wechatDeliveryReachable,
+      sendWechat: async (text, target) => {
+        if (!target?.trim()) throw new Error('WECHAT_DELIVERY_TARGET_REQUIRED')
+        const bot = getWeChatBundle()?.botService.getRawBot()
+        if (!bot) throw new Error('WECHAT_DELIVERY_UNAVAILABLE')
+        await sendWeChatTextToUser(bot, target.trim(), text)
       }
     }
   }
+  registerButlerDeliveryDrivers(sharedDeliveryHub, butlerInvokerDeps.deliveryPorts ?? {})
   registerButlerIpcHandlers(ipcMain, butlerInvokerDeps)
 
   // P6 定时调度器：托盘前提（P0 决策 a）+ 启动恢复 + interval tick；before-quit 停机标 interrupted。
@@ -762,6 +933,7 @@ app.whenReady().then(async () => {
       const raw = getConfigValue(db, 'config.maxParallelChatSessions')
       return raw ? Number(raw) : 3
     },
+    onReachabilityChange: (reachable) => { feishuDeliveryReachable = reachable; if (reachable) flushDeliveries('feishu') },
     getToolsConfig: () => {
       const raw = getConfigValue(db, TOOLS_CONFIG_KEY)
       if (!raw) return mergeToolsConfig(null)
@@ -816,7 +988,8 @@ app.whenReady().then(async () => {
         return mergeToolsConfig(null)
       }
     },
-    appVersion: app.getVersion()
+    appVersion: app.getVersion(),
+    onReachabilityChange: (reachable) => { wechatDeliveryReachable = reachable; if (reachable) flushDeliveries('wechat') }
   })
   registerWeChatIpcHandlers(ipcMain, {
     db,
@@ -855,6 +1028,7 @@ app.whenReady().then(async () => {
   void autoStartWeChatPollIfNeeded(db)
 
   setupWindowIconThemeListener(__dirname)
+  mainIpcReady = true
   void createMainWindow()
     .then(() => {
       usageStatsStartupMaintenance?.()

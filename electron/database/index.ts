@@ -18,11 +18,11 @@ export type {
   QueueInputReceipt,
   RetryContextTarget,
   PersistedMessageEntry,
+  PersistedTurn,
   ContextHistoryDbBaseline,
   SearchCorpusPage
 } from './operations'
 export {
-  getLatestAttributedStepFactForSession,
   appendMessage,
   appendMessagesAtomically,
   prepareTurnAtomically,
@@ -61,6 +61,7 @@ export {
   getTurnContext,
   getMessagesPage,
   getNextQueuedMessage,
+  reorderQueuedUserMessages,
   getSession,
   getSessionUsage,
   listSearchHistory,
@@ -74,6 +75,7 @@ export {
   setConfigValue,
   setSessionUsage,
   updateMessageContent,
+  updateQueuedUserMessageContent,
   checkpointTurnAtomically,
   updateMessageContentIfStreaming,
   updateSession

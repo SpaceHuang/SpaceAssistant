@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  ChatCancelRegistry,
   cancelAllActiveChats,
   CHAT_CANCELLED_MESSAGE,
   ChatCancelledError,
@@ -64,5 +65,24 @@ describe('chatCancelRegistry', () => {
     cancelAllActiveChats()
     expect(s1.aborted).toBe(true)
     expect(s2.aborted).toBe(true)
+  })
+
+  it('不同 session 共用 requestId 时，按各自 turnId 取消只中止目标 turn', () => {
+    const cancelledToolKeys: string[] = []
+    const registry = new ChatCancelRegistry({
+      cancelToolConfirmsForRequest: (key) => cancelledToolKeys.push(key),
+      cancelToolsForRequest: (key) => cancelledToolKeys.push(key)
+    })
+    const turnA = registry.register('turn-a')
+    const turnB = registry.register('turn-b')
+
+    // 两个活动 turn 可共享同一外部 requestId；取消入口应传 turnId。
+    registry.signalChatCancel('turn-b')
+
+    expect(turnA.aborted).toBe(false)
+    expect(turnB.aborted).toBe(true)
+    expect(cancelledToolKeys).toEqual(['turn-b', 'turn-b'])
+    registry.clear('turn-a')
+    registry.clear('turn-b')
   })
 })

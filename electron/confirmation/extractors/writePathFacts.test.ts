@@ -27,6 +27,21 @@ describe('probeWritePathFact', () => {
     }
   })
 
+  it('拒绝父目录不存在的深层新文件，避免 permit 只绑定到更高层祖先', async () => {
+    const root = await fs.realpath(await fs.mkdtemp('/tmp/write-fact-missing-parent-'))
+    try {
+      await expect(probeWritePathFact({
+        rawPath: path.join(root, 'new', 'nested', 'file.txt'),
+        workDir: root,
+        userDataDir: path.join(root, '.userdata'),
+        homeDir: root,
+        customSensitivePrefixes: []
+      })).rejects.toMatchObject({ caseId: 'write-parent-directory-missing' })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('敏感和系统目录优先于工作目录分区', async () => {
     const root = await fs.realpath(await fs.mkdtemp('/tmp/write-fact-zones-'))
     try {
@@ -112,6 +127,7 @@ describe('跨平台路径语法分派回归锚', () => {
   it('锚①(write)：相对路径按 workDir 真实基座 resolve，产 workdir-normal（B1 回归）', async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'write-fact-anchor1-')))
     try {
+      await fs.mkdir(path.join(root, 'src'))
       await expect(probeWritePathFact({
         rawPath: 'src/x.ts',
         workDir: root,
@@ -135,7 +151,7 @@ describe('跨平台路径语法分派回归锚', () => {
       userDataDir: '/tmp/user-data',
       homeDir: '/tmp/home',
       customSensitivePrefixes: []
-    })).resolves.toMatchObject({ normalizedPath: '/etc/hosts', zone: 'system-dir' })
+    })).resolves.toMatchObject({ normalizedPath: await fs.realpath('/etc/hosts').catch(() => '/etc/hosts'), zone: 'system-dir' })
   })
 })
 

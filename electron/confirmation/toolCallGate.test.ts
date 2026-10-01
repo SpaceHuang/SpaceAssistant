@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
@@ -8,7 +9,8 @@ import { SqliteDecisionCache } from './sqliteDecisionCache'
 import { getDbConnection, openSqliteDatabase, type AppDatabase } from '../database'
 import { touchTrustedCommand } from '../shell/shellCommandTrust'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
-import { evaluateToolCallGate, type ToolCallGateArgs } from './toolCallGate'
+import { effectiveActionFor } from '../../src/shared/policy/policyPackages'
+import { buildToolCallGateArgs, evaluateToolCallGate, type ToolCallGateArgs } from './toolCallGate'
 import { canonicalKeyJson } from './sqliteDecisionCache'
 import { PolicyRuleStore } from './policyRuleStore'
 import { writePolicyPackages } from './policyRulesRuntime'
@@ -25,8 +27,24 @@ import { scriptParserService } from '../shell/scriptParserService'
 import { readFeishuAttachmentExecutor } from '../tools/readFeishuAttachmentExecutor'
 import type { ToolExecutionContext } from '../tools/types'
 import { classifyWorkDirProfileTarget } from '../workDirBinding'
+import { recordUserAnswerFromDecision } from './decisionCacheWriter'
 
 const shells: AppDatabase[] = []
+describe('buildToolCallGateArgs', () => {
+  it('binds phase and call identity while isolating canonical input from gate mutation', () => {
+    const input = { path: 'note.txt' }
+    const args = buildToolCallGateArgs({ sessionId: 'session', workDir: '/workspace', userDataDir: '/data', toolsConfig: {}, effectiveRules: [], decisionCache: {}, shellPrecheck: { touchTrustedCommand() {} } } as never, {
+      toolName: 'write_file', toolInput: input, requestId: 'request', toolUseId: 'call', phase: 'recheck'
+    })
+
+    expect(args).toMatchObject({ toolName: 'write_file', toolInput: { path: 'note.txt' }, requestId: 'request', toolUseId: 'call', phase: 'recheck' })
+    expect(args.toolInput).not.toBe(input)
+    args.toolInput.path = 'mutated'
+    expect(input.path).toBe('note.txt')
+    expect(() => buildToolCallGateArgs({} as never, { toolName: '', toolInput: {}, requestId: 'request', toolUseId: 'call' })).toThrow('TOOL_GATE_CALL_IDENTITY_REQUIRED')
+  })
+})
+
 let nextGateTestId = 0
 function openDb(): AppDatabase {
   const db = openSqliteDatabase(':memory:')
@@ -96,7 +114,9 @@ function base(overrides: Partial<ToolCallGateArgs> = {}): ToolCallGateArgs {
     sessionId: 's1',
     requestId: `gate-test-req-${++nextGateTestId}`,
     toolUseId: `gate-test-tool-${nextGateTestId}`,
-    workDir: '/tmp/wd',
+    // The write-path probe intentionally rejects missing parent directories.
+    // Use an existing neutral directory instead of relying on a machine-local /tmp/wd.
+    workDir: os.tmpdir(),
     userDataDir: '/tmp/ud',
     toolsConfig: toolsConfig(),
     audit: { record: () => undefined },
@@ -272,6 +292,25 @@ describe('evaluateToolCallGate MCP 载荷（R3）', () => {
 })
 
 describe('evaluateToolCallGate', () => {
+  it('missing target 的父目录不存在时在确认和自动审批前直接 deny', async () => {
+    const root = await fs.realpath(await fs.mkdtemp('/tmp/write-gate-parent-missing-'))
+    const fileAutoApproval = vi.fn(async () => ({ approve: true as const }))
+    try {
+      const gate = await evaluateToolCallGate(base({
+        workDir: root,
+        userDataDir: path.join(root, '.userdata'),
+        toolName: 'write_file',
+        toolInput: { path: path.join(root, 'new', 'nested', 'file.txt'), content: 'blocked' },
+        fileAutoApproval
+      }))
+      expect(gate.decision).toMatchObject({ type: 'deny', ruleId: 'write-parent-directory-missing' })
+      expect(gate.writePathFact).toBeUndefined()
+      expect(fileAutoApproval).not.toHaveBeenCalled()
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('policy.decision 审计携带 requestId/toolUseId 以关联执行期 veto', async () => {
     const audit = auditSink()
     const gate = await evaluateToolCallGate(base({
@@ -892,7 +931,7 @@ describe('evaluateToolCallGate', () => {
     const parseSpy = vi.spyOn(scriptParserService, 'parse')
     const gate = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { code: 'print("hello")' } }))
     expect(parseSpy).toHaveBeenCalledTimes(1)
-    expect(gate.facts.signals).toContainEqual({ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false })
+    expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false, contentDigest: expect.any(String) }))
     expect(gate.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-clean-allow-desktop' })
   })
 
@@ -966,19 +1005,89 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
-  it('V3 run_script 动态文件访问在有人 lane 确认、automation lane 拒绝', async () => {
+  it('V3 run_script 未建模调用在有人 lane 可选会话信任、automation lane 拒绝', async () => {
     const root = await fs.realpath(await fs.mkdtemp('/tmp/script-facts-root-'))
     const toolInput = { code: 'custom_accessor(target)' }
     try {
       const desktop = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput }))
       expect(desktop.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'unknown' }))
-      expect(desktop.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-path-unknown-confirm', answerer: 'user' })
+      expect(desktop.scriptPathHint).toContain('路径分析未覆盖：')
+      expect(desktop.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask', answerer: 'agent' })
+      expect(desktop.decision.type === 'require-confirm' && desktop.decision.memoryTiers[0]).toMatchObject({ key: { kind: 'script-content', digest: expect.any(String), workdirDigest: expect.any(String), sessionId: 's1' }, label: '记住本会话此脚本' })
 
       const unattended = await evaluateToolCallGate(base({ lane: 'automation', workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'run_script', toolInput }))
       expect(unattended.decision).toMatchObject({ type: 'deny', ruleId: 'automation-script-path-unknown-deny' })
     } finally {
       await fs.rm(root, { recursive: true, force: true })
     }
+  })
+
+  it('脚本记忆只命中同会话同内容，内容或会话变化后重新确认', async () => {
+    const db = openDb()
+    const code = 'custom_accessor(target)'
+    const input = { code }
+    const first = await evaluateToolCallGate(base({ sessionId: 'script-session-1', toolName: 'run_script', toolInput: input, appDb: db }))
+    expect(first.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' })
+    if (first.decision.type !== 'require-confirm') throw new Error('expected script confirmation')
+    const key = { kind: 'script-content' as const, digest: createHash('sha256').update(code, 'utf8').digest('hex'), workdirDigest: createHash('sha256').update(path.resolve(base().workDir), 'utf8').digest('hex'), sessionId: 'script-session-1' }
+    expect(first.decision.memoryTiers.map((tier) => tier.key)).toContainEqual(key)
+    recordUserAnswerFromDecision({
+      db, lane: 'desktop', sessionId: 'script-session-1', key,
+      decision: first.decision, answererKind: 'user', source: 'user-confirm'
+    })
+    expect(new SqliteDecisionCache(getDbConnection(db)).lookup(key, 'desktop')).toMatchObject({ scope: 'session', key })
+
+    await expect(evaluateToolCallGate(base({ sessionId: 'script-session-1', toolName: 'run_script', toolInput: input, appDb: db })))
+      .resolves.toMatchObject({ decision: { type: 'auto-allow', ruleId: 'cache-hit' } })
+    await expect(evaluateToolCallGate(base({ sessionId: 'script-session-1', workDir: path.join(base().workDir, 'other'), toolName: 'run_script', toolInput: input, appDb: db })))
+      .resolves.toMatchObject({ decision: { type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' } })
+    await expect(evaluateToolCallGate(base({ sessionId: 'script-session-1', toolName: 'run_script', toolInput: { code: `${code} ` }, appDb: db })))
+      .resolves.toMatchObject({ decision: { type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' } })
+    await expect(evaluateToolCallGate(base({ sessionId: 'script-session-2', toolName: 'run_script', toolInput: input, appDb: db })))
+      .resolves.toMatchObject({ decision: { type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' } })
+    new SqliteDecisionCache(getDbConnection(db)).clear(key)
+    await expect(evaluateToolCallGate(base({ sessionId: 'script-session-1', toolName: 'run_script', toolInput: input, appDb: db })))
+      .resolves.toMatchObject({ decision: { type: 'require-confirm', ruleId: 'script-unmodeled-path-ask' } })
+  })
+
+  it('恢复的按 ruleId 档位覆盖在真实 tool gate 生效且不放宽危险脚本', async () => {
+    const db = openDb()
+    writePolicyPackages(db, { desktop: 'standard', wechat: 'standard', feishu: 'standard', automation: 'standard' })
+    const ordinaryBrowser = await evaluateToolCallGate(base({
+      appDb: db, toolName: 'browser', toolInput: { action: 'act', url: 'https://example.test', text: 'safe' }
+    }))
+    expect(ordinaryBrowser.decision).toMatchObject({ type: 'auto-allow', ruleId: 'browser-act-ask-desktop' })
+
+    const networkRule = DEFAULT_POLICY_RULES.find((rule) => rule.id === 'script-network-ask-desktop')!
+    expect(effectiveActionFor('desktop', 'standard', networkRule)).toBe('auto-evaluator')
+
+    writePolicyPackages(db, { desktop: 'loose', wechat: 'standard', feishu: 'standard', automation: 'standard' })
+    const unknownScript = await evaluateToolCallGate(base({
+      appDb: db, toolName: 'run_script', toolInput: { code: 'custom_accessor(target)' }
+    }))
+    expect(unknownScript.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-unmodeled-path-ask' })
+
+    writePolicyPackages(db, { desktop: 'standard', wechat: 'standard', feishu: 'standard', automation: 'standard' })
+    const declaredByDefault = await evaluateToolCallGate(base({
+      appDb: db, toolName: 'run_script',
+      toolInput: { code: '# @path-scope workdir-readonly\ncustom_accessor(target)' }
+    }))
+    expect(declaredByDefault.decision.type).not.toBe('auto-allow')
+
+    const declaredWhenEnabled = await evaluateToolCallGate(base({
+      appDb: db, toolsConfig: { ...DEFAULT_TOOLS_CONFIG, allowDeclaredPathScopeScripts: true },
+      toolName: 'run_script',
+      toolInput: { code: '# @path-scope workdir-readonly\ncustom_accessor(target)' }
+    }))
+    expect(declaredWhenEnabled.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-declared-path-scope-allow-desktop' })
+
+    const declaredWithSensitivePath = await evaluateToolCallGate(base({
+      appDb: db, toolsConfig: { ...DEFAULT_TOOLS_CONFIG, allowDeclaredPathScopeScripts: true },
+      toolName: 'run_script',
+      toolInput: { code: '# @path-scope workdir-readonly\ncustom_accessor(target)\nopen("/etc/hosts", "r")' }
+    }))
+    expect(declaredWithSensitivePath.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-declaration', consistent: false }))
+    expect(declaredWithSensitivePath.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-system-dir-confirm' })
   })
 
   it('V3 run_script 静态敏感路径与内容分析共享一次解析，并进入敏感路径真人确认规则', async () => {
@@ -1022,7 +1131,7 @@ describe('evaluateToolCallGate', () => {
 
     const unsupported = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { language: 'ruby', code: 'puts 1' } }))
     expect(unsupported.facts.signals).toContainEqual({ kind: 'script-language-analysis', language: 'unknown', status: 'unverified' })
-    expect(unsupported.facts.signals).toContainEqual({ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true })
+    expect(unsupported.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'unknown', dynamicAccess: true, unknownReason: 'dynamic-execution', contentDigest: expect.any(String) }))
     expect(unsupported.decision).toMatchObject({ type: 'require-confirm', answerer: 'user' })
   })
 
@@ -1509,6 +1618,27 @@ describe('evaluateToolCallGate', () => {
     )
     expect(r.decision.type).toBe('auto-allow')
     expect(r.decision.ruleId).toBe('default-write-execute-ask')
+  })
+
+  it('仅 Hosted recheck 重算无副作用的桌面文件快通道，旧 loop recheck 仍 fail closed', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'write-hosted-recheck-')))
+    const fileAutoApproval = vi.fn(async () => ({ approve: true as const }))
+    const common = {
+      workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'write_file',
+      toolInput: { path: 'created.txt', content: 'small write' }, phase: 'recheck' as const, fileAutoApproval
+    }
+    try {
+      const legacy = await evaluateToolCallGate(base(common))
+      expect(legacy.decision.type).toBe('deny')
+      expect(fileAutoApproval).not.toHaveBeenCalled()
+
+      const hosted = await evaluateToolCallGate(base({ ...common, evaluateFastTrackOnRecheck: true }))
+      expect(hosted.decision).toMatchObject({ type: 'auto-allow', ruleId: 'default-write-execute-ask' })
+      expect(hosted.fileAutoApproved).toBe(true)
+      expect(fileAutoApproval).toHaveBeenCalledOnce()
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
   })
 
   it('桌面 write_file 快通道拒绝 → require-confirm(agent) + fallback', async () => {

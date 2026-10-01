@@ -3,6 +3,7 @@ import { createAgentRuntime, type AgentRuntime } from './agentRuntime'
 import { ConfirmIdSpace } from '../remote/confirmId'
 import { ChatCancelRegistry } from '../chatCancelRegistry'
 import { ToolRevocationRegistry } from '../toolRevocationRegistry'
+import { PolicyAuthorizationChangeRegistry } from './policyAuthorizationChangeRegistry'
 import { McpConcurrencyGate } from '../mcp/mcpToolExecutor'
 import { createBuiltinToolRegistry } from '../tools/builtinExecutors'
 import {
@@ -22,7 +23,6 @@ import {
   throwIfChatCancelled
 } from '../chatCancelRegistry'
 import { registerToolRevocationRequest as legacyRegisterToolRevocationRequest } from '../toolRevocationRegistry'
-import { getToolExecutor as legacyGetToolExecutor } from '../tools/builtinExecutors'
 
 /**
  * A2(偏差 18):同进程两个 runtime 实例并存、互不串状态;
@@ -40,6 +40,7 @@ function assembleComponents(overrides: Parameters<typeof createAgentRuntime>[0] 
     confirmIds: new ConfirmIdSpace(),
     chatCancels: new ChatCancelRegistry(),
     toolRevocations: new ToolRevocationRegistry(),
+    policyAuthorizationChanges: new PolicyAuthorizationChangeRegistry(),
     mcpGate: new McpConcurrencyGate(),
     builtinRegistry: createBuiltinToolRegistry(),
     ...overrides
@@ -64,6 +65,9 @@ describe('createAgentRuntime(偏差 18:模块级状态 → 实例)', () => {
     expect(a.confirmIds).not.toBe(b.confirmIds)
     expect(a.chatCancels).not.toBe(b.chatCancels)
     expect(a.toolRevocations).not.toBe(b.toolRevocations)
+    expect(a.policyAuthorizationChanges).not.toBe(b.policyAuthorizationChanges)
+    expect(a.executionAdmission).not.toBe(b.executionAdmission)
+    expect(a.safetyPermits).not.toBe(b.safetyPermits)
     expect(a.mcpGate).not.toBe(b.mcpGate)
     expect(a.builtinRegistry).not.toBe(b.builtinRegistry)
   })
@@ -93,8 +97,8 @@ describe('createAgentRuntime(偏差 18:模块级状态 → 实例)', () => {
   it('工具撤回注册表互不串:a 实例登记的请求不受 b 实例撤回影响', () => {
     const a = createAgentRuntime(assembleComponents())
     const b = createAgentRuntime(assembleComponents())
-    a.toolRevocations.registerToolRevocationRequest('req-a', 'desktop')
-    b.toolRevocations.registerToolRevocationRequest('req-b', 'desktop')
+    a.toolRevocations.registerToolRevocationRequest('req-a', 'desktop', 'req-a')
+    b.toolRevocations.registerToolRevocationRequest('req-b', 'desktop', 'req-b')
     b.toolRevocations.revokeToolForAllLanes('run_shell')
     expect(a.toolRevocations.isToolRevoked('req-a', 'run_shell')).toBe(false)
     expect(b.toolRevocations.isToolRevoked('req-b', 'run_shell')).toBe(true)
@@ -117,7 +121,6 @@ describe('createAgentRuntime(偏差 18:模块级状态 → 实例)', () => {
     const a = createAgentRuntime(assembleComponents())
     const b = createAgentRuntime(assembleComponents())
     for (const rt of [a, b]) {
-      expect(rt.builtinRegistry.getLegacyExecutor('run_shell')).toBeDefined()
       expect(rt.builtinRegistry.get('run_shell')).toBeDefined()
     }
   })
@@ -138,8 +141,8 @@ describe('默认 runtime 装配与兼容转发(行为等价)', () => {
     legacySignalChatCancel('req-legacy')
     expect(signal.aborted).toBe(true)
 
-    legacyRegisterToolRevocationRequest('req-legacy', 'desktop')
-    expect(rt.toolRevocations.isToolRevoked('req-legacy', 'run_shell')).toBe(false)
+    legacyRegisterToolRevocationRequest('req-legacy', 'desktop', 'turn-legacy')
+    expect(rt.toolRevocations.isToolRevoked('req-legacy', 'run_shell', 'turn-legacy')).toBe(false)
   })
 
   it('setDefaultAgentRuntime 后:getSecurityAuditLog 返回 runtime 的审计实例', () => {
@@ -157,8 +160,9 @@ describe('默认 runtime 装配与兼容转发(行为等价)', () => {
     expect(getDefaultAgentRuntime()).toBe(rt)
   })
 
-  it('旧 getToolExecutor 经默认 runtime 解析内置工具(行为等价)', () => {
-    setDefaultAgentRuntime(createAgentRuntime(assembleComponents()))
-    expect(legacyGetToolExecutor('run_shell')).toBeDefined()
+  it('默认 runtime 提供唯一的 RegisteredTool 入口', () => {
+    const runtime = createAgentRuntime(assembleComponents())
+    setDefaultAgentRuntime(runtime)
+    expect(runtime.builtinRegistry.get('run_shell')).toBeDefined()
   })
 })

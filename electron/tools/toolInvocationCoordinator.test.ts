@@ -20,6 +20,60 @@ describe('executeRegisteredTool', () => {
     expect(events).toEqual(['plan', 'confirm:awaiting-confirm', 'validate:validating', 'execute'])
   })
 
+  it('所有 typed executor 均可被 permit-bound dispatch 包装，且只在 claim 后取得 executor 回调', async () => {
+    const events: string[] = []
+    const leaseSignal = new AbortController().signal
+    const tool = definePlannedTool({
+      name: 'permit-bound', parseInput: (raw) => raw,
+      plan: async () => { events.push('plan'); return { safe: true } },
+      execute: async (_plan, execution) => { events.push(`execute:${execution.signal === leaseSignal}`); return 'done' }
+    })
+    const result = await executeRegisteredTool(tool, {}, context, {
+      confirm: async () => { events.push('confirm'); return true },
+      validate: async () => { events.push('validate') },
+      dispatch: async (handle, _execution, execute) => {
+        events.push(`claim:${handle.prepared.toolName}:${handle.state}`)
+        return execute(leaseSignal)
+      }
+    })
+    expect(result).toBe('done')
+    expect(events).toEqual(['plan', 'confirm', 'validate', 'claim:permit-bound:confirmed', 'execute:true'])
+  })
+
+  it('planned tool 的专用 validator 在 dispatch claim 前运行，拒绝时不进入 dispatch', async () => {
+    const events: string[] = []
+    let dispatched = false
+    let executed = false
+    const tool = definePlannedTool({
+      name: 'validate-before-claim', parseInput: (raw) => raw,
+      plan: async () => ({ safe: true }),
+      validate: async () => { events.push('prepared-validate'); throw new Error('PREPARED_STALE') },
+      execute: async () => { executed = true; return 'bad' }
+    })
+    await expect(executeRegisteredTool(tool, {}, context, {
+      confirm: async () => true,
+      dispatch: async (_handle, _execution, execute) => {
+        dispatched = true
+        events.push('claim')
+        return execute(new AbortController().signal)
+      }
+    })).rejects.toThrow('PREPARED_STALE')
+    expect(events).toEqual(['prepared-validate'])
+    expect(dispatched).toBe(false)
+    expect(executed).toBe(false)
+  })
+
+  it('dispatch 拒绝时绝不调用 typed executor', async () => {
+    let executed = false
+    const tool = defineDirectTool({ name: 'dispatch-denied', parseInput: (raw) => raw, execute: async () => { executed = true } })
+    await expect(executeRegisteredTool(tool, {}, context, {
+      confirm: async () => true,
+      dispatch: async () => { throw new Error('PERMIT_REJECTED') }
+    })).rejects.toThrow('PERMIT_REJECTED')
+    expect(executed).toBe(false)
+  })
+
+
   it('计划阶段可读取 runtime context，但 execute 阶段不会收到原始 runtime context', async () => {
     const runtime = { shellConfig: { shellDefaultTimeoutSec: 7 } }
     let plannedRuntime: unknown

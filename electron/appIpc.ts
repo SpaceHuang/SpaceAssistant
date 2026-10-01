@@ -31,6 +31,8 @@ export type AppIpcContext = {
   getBrowserDetectContext: () => BrowserDetectContext
   floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
   turnRuntime?: TurnRuntime
+  /** Whether canonical History and its session sidecar startup repair completed without errors. */
+  sessionHistoryRecoverySucceeded?: boolean
   executeTurn?: ClaudeTurnExecution
   /** P0 托盘常驻前提：管家定时任务依赖「关窗进程存活」，设置页据此提示。 */
   isTrayEnabled?: () => boolean

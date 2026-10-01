@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto'
 import { getDbConnection, type AppDatabase } from '../database/sqliteStore'
+import { runInTransaction } from '../database/transaction'
 
 /**
  * 管家任务存储（P4）：automation_tasks / automation_task_runs 两表的对外 API。
@@ -86,7 +87,7 @@ function rowToRun(row: RunRow): AutomationTaskRun {
     ...(row.session_id ? { sessionId: row.session_id } : {}),
     ...(row.result_summary ? { resultSummary: row.result_summary } : {}),
     ...(row.usage_json ? { usageJson: row.usage_json } : {}),
-    deliveryStatus: row.delivery_status === 'delivered' || row.delivery_status === 'failed-degraded' || row.delivery_status === 'none'
+    deliveryStatus: row.delivery_status === 'delivered' || row.delivery_status === 'failed-degraded' || row.delivery_status === 'delivery-uncertain' || row.delivery_status === 'none'
       ? row.delivery_status
       : 'pending',
     ...(row.delivered_at != null ? { deliveredAt: row.delivered_at } : {}),
@@ -311,4 +312,40 @@ export function markActiveRunsInterrupted(db: AppDatabase, error = 'interrupted'
     .run(error, Date.now())
   db.save()
   return Number(result.changes)
+}
+
+/** Reconciles completed task-run delivery summaries with the durable driver journal. */
+export function syncAutomationTaskRunDeliveryStatuses(db: AppDatabase, now = Date.now()): number {
+  const conn = getDbConnection(db)
+  const changed = runInTransaction(conn, () => {
+    const rows = conn.prepare(`SELECT r.id, r.delivery_status, r.delivered_at,
+        COUNT(d.target) AS target_count,
+        SUM(CASE WHEN d.status IN ('pending','deferred','delivering') THEN 1 ELSE 0 END) AS active_count,
+        SUM(CASE WHEN d.status='delivery-uncertain' THEN 1 ELSE 0 END) AS uncertain_count,
+        SUM(CASE WHEN d.status IN ('failed','expired','superseded') THEN 1 ELSE 0 END) AS failed_count
+      FROM automation_task_runs r
+      JOIN driver_deliveries d ON d.delivery_id = r.id
+      WHERE r.status='completed' AND r.delivery_status IN ('pending','delivery-uncertain','delivered','failed-degraded')
+      GROUP BY r.id`).all() as Array<{
+        id: string; delivery_status: string | null; delivered_at: number | null;
+        target_count: number; active_count: number; uncertain_count: number; failed_count: number
+      }>
+    const update = conn.prepare(`UPDATE automation_task_runs SET delivery_status=?,
+      delivered_at=CASE WHEN ?='delivered' THEN COALESCE(delivered_at, ?) ELSE delivered_at END,
+      updated_at=?
+      WHERE id=? AND (delivery_status IS NOT ? OR (?='delivered' AND delivered_at IS NULL))`)
+    let count = 0
+    for (const row of rows) {
+      const next = row.uncertain_count > 0 ? 'delivery-uncertain'
+        : row.active_count > 0 ? 'pending'
+          : row.failed_count > 0 ? 'failed-degraded'
+            : row.target_count > 0 ? 'delivered' : null
+      if (!next || (next === row.delivery_status && (next !== 'delivered' || row.delivered_at != null))) continue
+      const result = update.run(next, next, now, now, row.id, next, next)
+      count += Number(result.changes)
+    }
+    return count
+  })
+  if (changed > 0) db.save()
+  return changed
 }

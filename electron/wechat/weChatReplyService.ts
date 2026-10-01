@@ -1,4 +1,4 @@
-import type { IncomingMessage } from '@wechatbot/wechatbot'
+import type { IncomingMessage, WeChatBot } from '@wechatbot/wechatbot'
 import type { AppDatabase } from '../database'
 import { sendWeChatRemoteOutbound } from './weChatRemoteOutbound'
 
@@ -27,6 +27,13 @@ export function formatWeChatSummary(raw: string): string {
   const lastPara = truncated.lastIndexOf('\n\n')
   if (lastPara > budget * 0.6) truncated = truncated.slice(0, lastPara)
   return `${truncated}…${FOOTER}`
+}
+
+/** Send an automation result to the configured stable WeChat user ID. */
+export async function sendWeChatTextToUser(bot: Pick<WeChatBot, 'send'>, userId: string, text: string): Promise<void> {
+  const target = userId.trim()
+  if (!target) throw new Error('WECHAT_DELIVERY_TARGET_REQUIRED')
+  await bot.send(target, formatWeChatSummary(text))
 }
 
 export interface WeChatReplyBot {

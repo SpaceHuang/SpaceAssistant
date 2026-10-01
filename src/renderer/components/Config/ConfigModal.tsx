@@ -79,9 +79,7 @@ import {
 
   useLlmServiceDrafts,
 
-  validateLlmServiceDrafts,
-
-  formatLlmServiceValidationError
+  validateLlmServiceDrafts
 
 } from './useLlmServiceDrafts'
 
@@ -583,7 +581,7 @@ export function ConfigSettingsPage() {
 
     if (llmErr) {
 
-      message.warning(formatLlmServiceValidationError(llmErr, tConfig))
+      message.warning(llmErr)
 
       return false
 

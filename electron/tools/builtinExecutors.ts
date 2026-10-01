@@ -1,5 +1,6 @@
 import { createHash } from 'crypto'
 import { spawn, type ChildProcess } from 'child_process'
+import { Worker } from 'node:worker_threads'
 import { app } from 'electron'
 import fs from 'fs/promises'
 import { realpathSync } from 'fs'
@@ -11,9 +12,12 @@ import {
   captureFileIdentity,
   identityFromStat,
   safeAtomicWrite,
+  SafeAtomicWriteUncertainError,
   type FileIdentity
 } from '../safeAtomicWrite'
 import { resolveReadPermitTarget } from '../confirmation/readPermitExecutor'
+import { recordPolicyExecutionVeto } from '../confirmation/audit'
+import { readDirectoryBoundToIdentity } from '../confirmation/directoryHandleReader'
 import { validateWriteExecutionPermit } from '../confirmation/writeExecutionPermit'
 import { resolvePermittedWriteTarget } from '../confirmation/writePermitExecutor'
 import { classifyWriteTargetScope } from '../confirmation/extractors/writePathFacts'
@@ -37,7 +41,7 @@ import {
   resolveRipgrepBinary,
   type RipgrepUnavailableReason
 } from './ripgrepBinary'
-import { planGrepInvocation, formatGrepNoMatchOutput, GREP_DEFAULT_IGNORES, type GrepScope } from './grepScope'
+import { planGrepInvocation, formatGrepNoMatchOutput, type GrepScope } from './grepScope'
 import { isSensitivePath } from '../shell/shellSensitivePaths'
 import { runLarkCliExecutor } from './runLarkCliExecutor'
 import { readFeishuAttachmentExecutor } from './readFeishuAttachmentExecutor'
@@ -46,6 +50,15 @@ import { browserExecutor } from './browserExecutor'
 import { runShellExecutor } from './runShellExecutor'
 import { TypedToolRegistry } from './plannedToolRegistry'
 import { runShellRegisteredTool } from './runShellRegisteredTool'
+import { createRunScriptRegisteredTool } from './runScriptRegisteredTool'
+import { createReadRegisteredTools } from './readRegisteredTools'
+import { createWriteFileRegisteredTools } from './writeFileRegisteredTools'
+import { createSwitchWorkDirRegisteredTool } from './workDirRegisteredTools'
+import { createSwitchSessionRegisteredTool } from './remoteSessionRegisteredTools'
+import { createBrowserRegisteredTool } from './browserRegisteredTool'
+import { createWeChatOutboundRegisteredTools } from './wechatOutboundRegisteredTools'
+import { createRunLarkCliRegisteredTool } from './runLarkCliRegisteredTool'
+import { createListWorkDirsRegisteredTool } from './listWorkDirsRegisteredTool'
 import { skillsReadTool } from './skillsReadTool'
 import { historyReadTool } from './historyTool'
 import { toolkitFindTool, toolkitCallTool } from '../capabilities/toolkitTool'
@@ -129,13 +142,66 @@ async function assertDiskMatchesReadCache(
 
 const READ_MAX = READ_FILE_MAX_CHARS
 const GREP_FILE_MAX = 2 * 1024 * 1024
-
-// 终止纪律上界(方案 §2.5):supervisor 等待上界 1500ms + 兜底结算宽限 500ms,
-// 无论 rg 是否响应终止,工具 Promise 必在约 2s 内 settle;底层强杀节奏
-// (SIGTERM→250ms→SIGKILL→≤3000ms verified)是 spawnUtil 模块常量,不随此值变化。
-const GREP_TERMINATE_GRACE_MS = 1_500
-const GREP_SETTLE_SLACK_MS = 500
+const GREP_REGEX_FILE_TIMEOUT_MS = 250
+const GREP_FALLBACK_SAMPLE_MAX = 5
+type GrepFallbackDeps = {
+  stat?: (file: string) => Promise<{ size: number; isFile: () => boolean }>
+  readFile?: (file: string, options?: { signal?: AbortSignal }) => Promise<Buffer>
+  readdir?: (dir: string) => Promise<Dirent[]>
+  now?: () => number
+}
+const GREP_REGEX_WORKER_SOURCE = `
+const { parentPort } = require('node:worker_threads');
+parentPort.on('message', ({ id, pattern, flags, text, multiline, mode, matchLimit, validateOnly }) => {
+  try {
+    const regex = new RegExp(pattern, flags);
+    if (validateOnly) {
+      parentPort.postMessage({ id, ok: true, count: 0, matches: [] });
+      return;
+    }
+    const matches = [];
+    let count = 0;
+    const add = (match, lineIndex) => {
+      count++;
+      if (mode === 'content') matches.push({ index: match.index, text: match[0], lineIndex });
+    };
+    if (multiline) {
+      let match;
+      while ((match = regex.exec(text)) !== null) {
+        add(match, undefined);
+        if (matchLimit > 0 && count >= matchLimit) break;
+        if (match[0].length === 0) regex.lastIndex++;
+      }
+    } else {
+      const lines = text.split(/\\r?\\n/);
+      let offset = 0;
+      for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+        const line = lines[lineIndex];
+        regex.lastIndex = 0;
+        const match = regex.exec(line);
+        if (match) {
+          add({ index: offset + match.index, 0: line }, lineIndex);
+          if (matchLimit > 0 && count >= matchLimit) break;
+        }
+        offset += line.length + (text.slice(offset + line.length, offset + line.length + 2) === '\\r\\n' ? 2 : text[offset + line.length] === '\\n' ? 1 : 0);
+      }
+    }
+    parentPort.postMessage({ id, ok: true, count, matches });
+  } catch (error) {
+    parentPort.postMessage({ id, ok: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
+`
 const SCRIPT_IO_MAX = 100 * 1024
+const GREP_SKIP_DIRS = new Set([
+  'node_modules',
+  '.git',
+  '.svn',
+  '__pycache__',
+  'dist',
+  'dist-electron',
+  '.cursor'
+])
 
 async function pathExists(p: string): Promise<boolean> {
   try {
@@ -192,6 +258,10 @@ function fileToolAbortResult(
   return null
 }
 
+function readIdentityMatches(stat: Pick<Awaited<ReturnType<Awaited<ReturnType<typeof fs.open>>['stat']>>, 'dev' | 'ino' | 'mode' | 'size' | 'mtimeMs'>, identity: NonNullable<NonNullable<ToolExecutionContext['readExecutionPermit']>['targets'][number]['identity']>): boolean {
+  return stat.dev === identity.dev && stat.ino === identity.ino && stat.mode === identity.mode && stat.size === identity.size && stat.mtimeMs === identity.mtimeMs
+}
+
 export const readFileExecutor: ToolExecutor = {
   name: 'read_file',
   resourceKeys: (input, context) => workspaceResourceKeys(input, context, 'read'),
@@ -219,6 +289,17 @@ export const readFileExecutor: ToolExecutor = {
         const ab = fileToolAbortResult(op, '读取超时，请检查文件路径或网络连接', started)
         if (ab) return ab
         throw e
+      }
+      const authorizedIdentity = ctx.readExecutionPermit?.targets[0]?.identity
+      const identityChanged = (caseId: 'read-target-identity-changed' | 'read-target-identity-changed-during-read'): ToolExecutorResult => {
+        recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'read_file', decisionRuleId: ctx.readExecutionPermit?.decisionRuleId ?? ctx.readExecutionPermit?.targets[0]?.decisionRuleId, pathZone: ctx.readExecutionPermit?.targets[0]?.zone, factId: ctx.readExecutionPermit?.targets[0]?.factId, failureClass: 'mechanism', caseId })
+        return { success: false, error: '读取期间文件身份或内容发生变化，已丢弃读取结果。', diagnostic: { caseId, retryable: false, category: 'mechanism', ...(ctx.readExecutionPermit?.targets[0]?.factId ? { factId: ctx.readExecutionPermit.targets[0].factId } : {}) }, duration: Date.now() - started }
+      }
+      if (permitFileHandle && authorizedIdentity && !readIdentityMatches(st, authorizedIdentity)) return identityChanged('read-target-identity-changed')
+      const validateAfterRead = async (): Promise<ToolExecutorResult | undefined> => {
+        if (!permitFileHandle || !authorizedIdentity) return undefined
+        const after = await permitFileHandle.stat()
+        return readIdentityMatches(after, authorizedIdentity) ? undefined : identityChanged('read-target-identity-changed-during-read')
       }
       if (st.isDirectory()) {
         return {
@@ -289,6 +370,10 @@ export const readFileExecutor: ToolExecutor = {
           const tail =
             typeof tailRaw === 'number' && Number.isFinite(tailRaw) ? Math.floor(tailRaw) : 1
           const tailed = await readFileTailFromDisk(abs, tail, { signal: op, fileSize: st.size, ...(permitFileHandle ? { fileHandle: permitFileHandle } : {}) })
+          const abortResult = fileToolAbortResult(op, '读取超时，请检查文件路径或网络连接', started)
+          if (abortResult) return abortResult
+          const changed = await validateAfterRead()
+          if (changed) return changed
           const limited = applyReadCharLimit(tailed.content, {
             isTail: true,
             hasMoreBefore: tailed.hasMoreBefore
@@ -333,6 +418,10 @@ export const readFileExecutor: ToolExecutor = {
             fileSize: st.size,
             ...(permitFileHandle ? { fileHandle: permitFileHandle } : {})
           })
+          const abortResult = fileToolAbortResult(op, '读取超时，请检查文件路径或网络连接', started)
+          if (abortResult) return abortResult
+          const changed = await validateAfterRead()
+          if (changed) return changed
           const limited = applyReadCharLimit(ranged.content, { isTail: false })
           const truncated = limited.truncated || ranged.truncated
           recordReadFileCache(ctx.fileStateCache, abs, st.mtimeMs, {
@@ -361,7 +450,11 @@ export const readFileExecutor: ToolExecutor = {
         }
 
         // Full：小文件全文（边界附近可能仍超字符上限 → Meta）
-        const buf = permitFileHandle ? await permitFileHandle.readFile() : await fs.readFile(abs, { signal: op })
+        const buf = permitFileHandle ? await permitFileHandle.readFile({ signal: op }) : await fs.readFile(abs, { signal: op })
+        const abortResult = fileToolAbortResult(op, '读取超时，请检查文件路径或网络连接', started)
+        if (abortResult) return abortResult
+        const changed = await validateAfterRead()
+        if (changed) return changed
         if (isBinaryBuffer(buf)) {
           return { success: false, error: '文件为二进制格式，无法读取', duration: Date.now() - started }
         }
@@ -454,50 +547,19 @@ export const listDirectoryExecutor: ToolExecutor = {
       if (op.aborted) return dirTimeoutResult()
       const target = permitted.path
       const root = path.resolve(ctx.workDir)
-      const rows: Array<{ name: string; path: string; isDirectory: boolean; size?: number; mtimeMs?: number }> = []
-      let dir: Awaited<ReturnType<typeof fs.opendir>>
-      try {
-        dir = await fs.opendir(target)
-      } catch (e) {
-        // F1（融合）：opendir 阶段与许可后路径五类逐一成型，不再 throw 逃逸
-        const ab = fileToolAbortResult(op, '目录读取超时', started)
-        if (ab) return dirTimeoutResult()
-        const cls = classifyDirectoryError(e)
-        if (cls === 'PATH_NOT_FOUND') {
-          return { success: false, error: 'FILE_NOT_FOUND', data: { errorClass: cls, path: failedPath, suggestions: ['list-parent'] }, duration: Date.now() - started }
-        }
-        if (cls === 'NOT_A_DIRECTORY') {
-          return { success: false, error: 'TARGET_NOT_DIRECTORY', data: { errorClass: cls, path: failedPath, suggestions: ['use-read-file'] }, duration: Date.now() - started }
-        }
-        if (cls === 'ABORTED') return dirTimeoutResult()
-        return { success: false, error: 'DIRECTORY_ACCESS_DENIED', data: { errorClass: 'ACCESS_DENIED', path: failedPath, suggestions: ['provide-path'] }, duration: Date.now() - started }
+      const identity = ctx.readExecutionPermit?.targets[0]?.identity
+      if (!identity) return { success: false, error: '目录读取许可缺少身份事实。', diagnostic: { caseId: 'read-directory-identity-missing', retryable: false, category: 'mechanism' }, duration: Date.now() - started }
+      const snapshot = await readDirectoryBoundToIdentity(target, identity, op)
+      if (!snapshot.ok) {
+        if (snapshot.caseId === 'read-directory-cancelled') return dirTimeoutResult()
+        const failureClass = snapshot.caseId === 'read-directory-identity-changed' ? 'mechanism' : 'environment'
+        recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'list_directory', decisionRuleId: ctx.readExecutionPermit?.decisionRuleId, pathZone: ctx.readExecutionPermit?.targets[0]?.zone, factId: ctx.readExecutionPermit?.targets[0]?.factId, failureClass, caseId: snapshot.caseId })
+        return { success: false, error: snapshot.caseId === 'read-directory-identity-changed' ? '目录在许可校验后发生变化，已停止枚举。' : '目录不可用，已停止枚举。', diagnostic: { caseId: snapshot.caseId, retryable: false, category: failureClass }, duration: Date.now() - started }
       }
-      try {
-        for await (const ent of dir) {
-          // F2（融合）：循环阶段 abort/超时统一结构化 READ_TIMEOUT（不再 throwIfAborted 逃逸）
-          if (rows.length % 25 === 0 && op.aborted) return dirTimeoutResult()
-          const p = path.join(target, ent.name)
-          let size: number | undefined
-          let mtimeMs: number | undefined
-          try {
-            const s = await fs.lstat(p)
-            mtimeMs = s.mtimeMs
-            if (s.isFile()) size = s.size
-          } catch (e) {
-            if (op.aborted) return dirTimeoutResult()
-            /* skip entry */
-          }
-          rows.push({
-            name: ent.name,
-            path: path.relative(root, p) || '.',
-            isDirectory: ent.isDirectory(),
-            size,
-            mtimeMs
-          })
-        }
-      } finally {
-        await dir.close().catch(() => undefined)
-      }
+      const rows = snapshot.entries.map((entry) => {
+        const entryPath = path.join(target, entry.name)
+        return { name: entry.name, path: path.relative(root, entryPath) || '.', isDirectory: entry.isDirectory, ...(entry.size === undefined ? {} : { size: entry.size }), ...(entry.mtimeMs === undefined ? {} : { mtimeMs: entry.mtimeMs }) }
+      })
       rows.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name))
       return { success: true, data: { entries: rows }, duration: Date.now() - started }
     } finally {
@@ -685,6 +747,7 @@ export const editFileExecutor: ToolExecutor = {
   name: 'edit_file',
   resourceKeys: (input, context) => workspaceResourceKeys(input, context, 'write'),
   async execute(input, ctx): Promise<ToolExecutorResult> {
+    const writePermitAtStart = ctx.writeExecutionPermit
     const started = Date.now()
     const rel = extractPathField(input)
     if (rel === undefined) {
@@ -759,6 +822,9 @@ export const editFileExecutor: ToolExecutor = {
           }
         }
         throwIfAborted(op)
+        if (ctx.writeExecutionPermit !== writePermitAtStart) {
+          return { ...writePermitFailure(new Error('write-permit-changed-during-execution')), duration: Date.now() - started }
+        }
         try {
           await safeAtomicWrite({
             targetPath: abs,
@@ -769,6 +835,7 @@ export const editFileExecutor: ToolExecutor = {
             signal: op
           })
         } catch (e) {
+          if (e instanceof SafeAtomicWriteUncertainError) throw e
           const ab = fileToolAbortResult(op, '编辑超时', started)
           if (ab) return ab
           throw e
@@ -820,6 +887,7 @@ export const writeFileExecutor: ToolExecutor = {
   name: 'write_file',
   resourceKeys: (input, context) => workspaceResourceKeys(input, context, 'write'),
   async execute(input, ctx): Promise<ToolExecutorResult> {
+    const writePermitAtStart = ctx.writeExecutionPermit
     const started = Date.now()
     const rel = extractPathField(input)
     if (rel === undefined) {
@@ -885,6 +953,9 @@ export const writeFileExecutor: ToolExecutor = {
         expectedIdentity = identityFromStat(writeTarget.existingStat)
       }
       throwIfAborted(op)
+      if (ctx.writeExecutionPermit !== writePermitAtStart) {
+        return { ...writePermitFailure(new Error('write-permit-changed-during-execution')), duration: Date.now() - started }
+      }
       try {
         await safeAtomicWrite({
           targetPath: abs,
@@ -895,6 +966,7 @@ export const writeFileExecutor: ToolExecutor = {
           signal: op
         })
       } catch (e) {
+        if (e instanceof SafeAtomicWriteUncertainError) throw e
         const ab = fileToolAbortResult(op, '写入超时', started)
         if (ab) return ab
         throw e
@@ -928,7 +1000,6 @@ export type RipgrepRunResult =
   | { kind: 'cancelled'; partialOutput: string; terminated?: 'graceful' | 'forced' }
   | { kind: 'failed'; exitCode: number | null; message: string }
 
-/** grep.terminate 日志载荷（不落 pattern、cwd、路径，脱敏纪律同 createGrepRipgrepUnavailableDiagnostic）。 */
 export type GrepTerminateInfo = {
   reason: 'abort' | 'timeout'
   terminated: 'graceful' | 'forced' | null
@@ -936,6 +1007,9 @@ export type GrepTerminateInfo = {
   treeKillVerified: boolean | null
   terminationState: ProcessTerminationResult['state'] | null
 }
+
+const GREP_TERMINATE_GRACE_MS = 1_500
+const GREP_SETTLE_SLACK_MS = 500
 
 /**
  * R7：grep 参数归一的唯一入口（校验层与执行层共用，判定按「生效值」而非「字段是否出现」）。
@@ -1065,72 +1139,31 @@ function mapOpenedFileGrepOutput(output: string, filePath: string, outputMode: G
   }).join('\n')
 }
 
-// E2(方案 §3.6.4):降级也不可用时的 Agent 侧替代路径,统一附在分层文案末尾。
-const GREP_ALTERNATIVE_SEARCH_HINT =
-  '替代路径：用 list_directory + read_file 逐层查看文件，或用 run_shell 调用系统搜索（Windows findstr / Select-String，macOS grep / mdfind）。'
-
-/**
- * E1(评审 P1-2 修订):rg 不可用文案按 source × reason 分层,主进程直接产出
- * (electron 无 i18n 基建,不引入);含动作指引、不拼原始诊断枚举——枚举经
- * 失败结果 data.errorClass/reason 走 R8 机器可读通道。环境拦截类原因不得
- * 给「重新安装应用」指引(重装与拦截无关,方案 §3.6.3)。
- */
 export function grepRipgrepUnavailableUserMessage(
   resolved: Pick<ReturnType<typeof resolveRipgrepBinary>, 'source' | 'platform' | 'arch'>,
   reason: RipgrepUnavailableReason
 ): string {
   const target = `${resolved.platform}-${resolved.arch}`
-  // D1 瞬时资源(fd 耗尽):只提示稍后重试,不给任何永久性指引
+  const alternative = '替代路径：用 list_directory + read_file 逐层查看文件，或用 run_shell 调用系统搜索（Windows findstr / Select-String，macOS grep / mdfind）。'
   if (reason === 'resource_exhausted') {
-    return `内置 ripgrep 本次启动失败（系统临时资源不足，通常稍后自行恢复），请稍后重试本次搜索。${GREP_ALTERNATIVE_SEARCH_HINT}`
+    return `内置 ripgrep 本次启动失败（系统临时资源不足，通常稍后自行恢复），请稍后重试本次搜索。${alternative}`
   }
-  // D4 平台不支持:如实告知
   if (reason === 'unsupported') {
-    return `当前平台（${target}）不在内置 ripgrep 支持面内（支持 macOS x64/arm64、Windows x64），重装或重试均无效。${GREP_ALTERNATIVE_SEARCH_HINT}`
+    return `当前平台（${target}）不在内置 ripgrep 支持面内（支持 macOS x64/arm64、Windows x64），重装或重试均无效。${alternative}`
   }
   if (resolved.source === 'development') {
-    // 开发态主因是未准备(worktree/新克隆默认开局);启动被拦截类成因补安全软件提示
     const interception = reason === 'exec_format' || reason === 'spawn_failed'
       ? '若已准备仍失败，检查安全软件是否拦截了 rg。'
       : ''
-    return `开发态内置 ripgrep 未就绪。请执行 npm run prepare:rg -- --target=${target} 后重启应用；新 worktree 首次 npm run dev 会自动准备。${interception}${GREP_ALTERNATIVE_SEARCH_HINT}`
+    return `开发态内置 ripgrep 未就绪。请执行 npm run prepare:rg -- --target=${target} 后重启应用；新 worktree 首次 npm run dev 会自动准备。${interception}${alternative}`
   }
-  // 打包态:D3 启动被拦截 vs D2 文件缺失/权限,给对应处置
   if (reason === 'exec_format' || reason === 'spawn_failed') {
     const platformHint = resolved.platform === 'darwin'
       ? 'macOS 可在终端执行 xattr -cr（拖入本应用）去除隔离属性后重新打开。'
       : 'Windows 可在安全软件中将本应用的 rg 加入白名单后重试。'
-    return `内置 ripgrep 未能启动，通常被安全软件/EDR 拦截。${platformHint}${GREP_ALTERNATIVE_SEARCH_HINT}`
+    return `内置 ripgrep 未能启动，通常被安全软件/EDR 拦截。${platformHint}${alternative}`
   }
-  return `内置 ripgrep 文件缺失或不可访问，通常被安全软件隔离或删除；请在安全软件的隔离区/白名单中恢复本应用的 rg 后重试，重装通常无效。${GREP_ALTERNATIVE_SEARCH_HINT}`
-}
-
-// §3.8 降级矩阵(方案 E5 定案):「rg 起不来」才降级;「rg 跑了但报错」不降级。
-// resource_exhausted 的根因(fd 耗尽)在降级路径同样存在,降级只会更差 → 显式报错。
-// timeout / cancelled / failed / invalid_request 是 grepWithRg 的执行结果而非引擎
-// 不可用,不经本判定点(矩阵的后四行天然成立)。
-const GREP_DEGRADABLE_REASONS: ReadonlySet<RipgrepUnavailableReason> = new Set([
-  'not_found',
-  'permission_denied',
-  'spawn_failed',
-  'exec_format',
-  'unsupported',
-  'not_file'
-])
-
-export type GrepEngineDecision =
-  | { engine: 'walk'; reason: RipgrepUnavailableReason }
-  | { engine: 'error'; reason: RipgrepUnavailableReason }
-
-/**
- * rg 不可用的唯一降级判定点(方案 §3.2 修订):executor 的三个不可用出口
- * (resolve 失败 / inspect 失败 / grepWithRg 返回 unavailable)全部收敛到本函数,
- * 是否降级由 §3.8 矩阵按 reason 裁定,而不是「凡不可用皆降级」。
- */
-export function resolveGrepEngine(reason: RipgrepUnavailableReason): GrepEngineDecision {
-  return GREP_DEGRADABLE_REASONS.has(reason)
-    ? { engine: 'walk', reason }
-    : { engine: 'error', reason }
+  return `内置 ripgrep 文件缺失或不可访问，通常被安全软件隔离或删除；请在安全软件的隔离区/白名单中恢复本应用的 rg 后重试，重装通常无效。${alternative}`
 }
 
 export async function grepWithRg(
@@ -1143,8 +1176,8 @@ export async function grepWithRg(
   signal: AbortSignal,
   onProgress: (msg: string) => void,
   spawnProcess: (binary: string, args: string[], options: Parameters<typeof spawn>[2]) => ChildProcess = spawn,
-  killer: ProcessKiller = processTreeKiller,
   openedFile?: { fileHandle: FileHandle; platform?: NodeJS.Platform },
+  killer: ProcessKiller = processTreeKiller,
   onTerminate?: (info: GrepTerminateInfo) => void
 ): Promise<RipgrepRunResult> {
   if (signal.aborted) return { kind: 'cancelled', partialOutput: '' }
@@ -1184,8 +1217,6 @@ export async function grepWithRg(
     const proc = spawnProcess(binaryPath, rgArgs, {
       cwd: workDir,
       windowsHide: true,
-      // macOS 树杀(processTreeKiller)按进程组 kill(-pid),前提是子进程为组长;
-      // 未 detached 时 -pid 报 ESRCH、一个信号都发不出去而测试可全绿(方案 §2.5 适配一)。
       detached: process.platform === 'darwin',
       ...(stableFileOnWindows ? { stdio: ['pipe', 'pipe', 'pipe'] } : openedFileFd !== undefined ? { stdio: ['ignore', 'pipe', 'pipe', openedFileFd] } : {})
     })
@@ -1194,8 +1225,6 @@ export async function grepWithRg(
     let out = ''
     let stderr = ''
     let truncated = false
-    // 终止纪律(方案 §2.5 D2/D3):终止只经 ProcessSupervisor(killer 缝),终态由
-    // terminationReason 显式归属,不再用 killed 布尔事后推断。
     const supervisor = new ProcessSupervisor(proc, killer)
     let terminationReason: 'abort' | 'timeout' | null = null
     let terminationRequestedAt: number | undefined
@@ -1215,10 +1244,7 @@ export async function grepWithRg(
         terminationReason = reason
         terminationRequestedAt = Date.now()
       }
-      // 请求树杀:SIGTERM →(250ms)→ SIGKILL →(≤3000ms) verified;graceMs 只决定
-      // supervisor 何时放弃等待并报 termination_failed。结果消费后经 onTerminate 上报。
       void supervisor.terminate(GREP_TERMINATE_GRACE_MS).then((result) => { terminationOutcome = result })
-      // 强制结算兜底:到点仍未 close 也必须返回,绝不允许悬挂(G1:结算单点依赖 close)
       if (settleTimer === undefined) {
         settleTimer = setTimeout(() => {
           if (settled) return
@@ -1231,7 +1257,9 @@ export async function grepWithRg(
       }
     }
     const t = setTimeout(() => requestTermination('timeout'), timeoutMs)
-    const onAbort = () => requestTermination('abort')
+    const onAbort = () => {
+      requestTermination('abort')
+    }
     signal.addEventListener('abort', onAbort, { once: true })
     proc.stdout?.on('data', (ch: Buffer) => {
       stdoutRawBytes += ch.length
@@ -1254,7 +1282,6 @@ export async function grepWithRg(
       clearTimeout(t)
       if (settleTimer !== undefined) clearTimeout(settleTimer)
       signal.removeEventListener('abort', onAbort)
-      // 兜底结算时进程可能还活着:必须断开所有管道,避免悬挂句柄与后续数据写进已 resolve 的闭包
       stableInputStream?.destroy()
       proc.stdin?.destroy()
       proc.stdout?.destroy()
@@ -1281,13 +1308,12 @@ export async function grepWithRg(
       // MINOR：stdout 截断只应影响 stdout；stderr 的尾部仍必须 flush，
       // 否则「挂死/超限前写出的错误信息」会丢掉未完成的多字节尾巴。
       stderr += stderrDecoder.end()
-      if (terminationReason !== null) {
-        finish({
-          kind: terminationReason === 'timeout' ? 'timeout' : 'cancelled',
-          partialOutput: out.trimEnd(),
-          terminated: 'graceful'
-        })
-      } else if (code !== 0 && code !== 1) finish({ kind: 'failed', exitCode: code, message: sanitizeToolOutputText(stderr.trim().slice(0, 4000) || 'ripgrep 返回非成功状态', 'grep') })
+      if (terminationReason !== null) finish({
+        kind: terminationReason === 'timeout' ? 'timeout' : 'cancelled',
+        partialOutput: out.trimEnd(),
+        terminated: 'graceful'
+      })
+      else if (code !== 0 && code !== 1) finish({ kind: 'failed', exitCode: code, message: sanitizeToolOutputText(stderr.trim().slice(0, 4000) || 'ripgrep 返回非成功状态', 'grep') })
       else {
         let result = out.trimEnd()
         if (openedFile) result = mapOpenedFileGrepOutput(result, searchPath, args.outputMode)
@@ -1314,40 +1340,6 @@ export async function grepWithRg(
   })
 }
 
-/** 降级结果(方案 §3.2):在 string 之上承载结构化边界事实,消除「静默假阴性」。 */
-export type GrepFallbackResult = {
-  output: string
-  /** 边界摘要(空串 = 无边界事件);由 executor 拼入最终输出,保证 Agent 可见 */
-  boundarySummary: string
-  /** 任一维度(超限/读失败/超时/中止)触发边界即为 true */
-  partial: boolean
-  skippedFiles: Array<{ path: string; bytes?: number; reason: 'too_large' }>
-  /** 超限文件总数(skippedFiles 数组有采样上限,总数以此为准) */
-  skippedTotal: number
-  readErrors: Array<{ reason: 'read_error'; count: number; sampledPaths: string[] }>
-  timedOut: boolean
-  /** 用户中止(walk 条目级 / readFile signal 两类检查点命中) */
-  aborted: boolean
-  filesScanned: number
-  /** 正则编译失败(降级引擎无法执行该 pattern);executor 据此结算为失败而非成功(与 rg 路径 failed 口径一致) */
-  patternError?: string
-}
-
-/** 测试注入缝:文件系统与时钟;生产缺省用真实 fs / Date.now。 */
-export type GrepFallbackDeps = {
-  stat?: (p: string) => Promise<{ size: number; isFile?: () => boolean }>
-  readFile?: (p: string, opts?: { signal?: AbortSignal }) => Promise<Buffer>
-  readdir?: (p: string, opts: { withFileTypes: true }) => Promise<Dirent[]>
-  now?: () => number
-}
-
-// skippedFiles 数组条数上限:防海量大文件时爆发式返回;总数经 skippedTotal 上报
-const GREP_FALLBACK_SKIPPED_SAMPLE_MAX = 50
-// readErrors.sampledPaths 上限:防 fd 耗尽时爆发式上报(方案 §3.2 改造 5)
-const GREP_FALLBACK_READ_ERROR_SAMPLE_MAX = 5
-// 改造 4:清单单一真相源——与 rg 共用 grepScope.ts 的默认忽略名单(原第二份本地清单已删除)
-const FALLBACK_IGNORE_SET: ReadonlySet<string> = new Set(GREP_DEFAULT_IGNORES)
-
 export async function grepFallbackJs(
   workDir: string,
   absSearch: string,
@@ -1355,33 +1347,73 @@ export async function grepFallbackJs(
   args: GrepExecArgs,
   signal: AbortSignal,
   onProgress: (s: string) => void,
-  timeoutMs: number,
+  timeoutMs = 60_000,
+  stableFileHandle?: FileHandle,
   deps: GrepFallbackDeps = {}
-): Promise<GrepFallbackResult> {
-  const statD = deps.stat ?? ((p: string) => fs.stat(p))
-  const readFileD = deps.readFile ?? ((p: string, opts?: { signal?: AbortSignal }) => fs.readFile(p, opts))
-  const readdirD = deps.readdir ?? ((p: string) => fs.readdir(p, { withFileTypes: true }))
-  const now = deps.now ?? Date.now
-  const startedAt = now()
+): Promise<string> {
   let flags = 'g'
   if (args.ignoreCase) flags += 'i'
   if (args.multiline) flags += 's'
-  let lineRe: RegExp
-  try {
-    lineRe = new RegExp(pattern, flags)
-  } catch (e) {
-    return {
-      output: `Error: ${toToolUserError(e, { toolName: 'grep' })}`,
-      boundarySummary: '',
-      partial: false,
-      skippedFiles: [],
-      skippedTotal: 0,
-      readErrors: [],
-      timedOut: false,
-      aborted: false,
-      filesScanned: 0,
-      patternError: toToolUserError(e, { toolName: 'grep' })
+  const now = deps.now ?? Date.now
+  const deadline = now() + Math.max(1, timeoutMs)
+  let regexWorker: Worker | undefined
+  let nextRegexJobId = 0
+  let pendingRegexJob: {
+    id: number
+    resolve: (result: { count: number; matches: Array<{ index: number; text: string; lineIndex?: number }> }) => void
+    reject: (error: Error) => void
+    timer: ReturnType<typeof setTimeout>
+    abort: () => void
+  } | undefined
+  const terminateRegexWorker = (): void => {
+    const worker = regexWorker
+    regexWorker = undefined
+    if (pendingRegexJob) {
+      clearTimeout(pendingRegexJob.timer)
+      signal.removeEventListener('abort', pendingRegexJob.abort)
+      pendingRegexJob = undefined
     }
+    if (worker) void worker.terminate()
+  }
+  const scanText = (text: string, matchLimit: number, validateOnly = false): Promise<{ count: number; matches: Array<{ index: number; text: string; lineIndex?: number }> }> => {
+    if (signal.aborted) return Promise.resolve({ count: 0, matches: [] })
+    const remainingMs = deadline - now()
+    if (remainingMs <= 0) return Promise.reject(new Error('正则搜索总时间已超时'))
+    regexWorker ??= new Worker(GREP_REGEX_WORKER_SOURCE, { eval: true })
+    const worker = regexWorker
+    const id = ++nextRegexJobId
+    return new Promise((resolve, reject) => {
+      const settle = (action: () => void): void => {
+        if (!pendingRegexJob || pendingRegexJob.id !== id) return
+        clearTimeout(pendingRegexJob.timer)
+        signal.removeEventListener('abort', pendingRegexJob.abort)
+        pendingRegexJob = undefined
+        action()
+      }
+      const timer = setTimeout(() => {
+        terminateRegexWorker()
+        reject(new Error('单文件正则执行超时，已终止隔离扫描'))
+      }, Math.min(GREP_REGEX_FILE_TIMEOUT_MS, remainingMs))
+      const abort = (): void => {
+        terminateRegexWorker()
+        resolve({ count: 0, matches: [] })
+      }
+      pendingRegexJob = { id, resolve, reject, timer, abort }
+      signal.addEventListener('abort', abort, { once: true })
+      worker.once('message', (result: { id: number; ok: boolean; count?: number; matches?: Array<{ index: number; text: string; lineIndex?: number }>; error?: string }) => {
+        if (result.id !== id) return
+        if (!result.ok) {
+          settle(() => reject(new Error(result.error ?? '无效的正则表达式')))
+          return
+        }
+        settle(() => resolve({ count: result.count ?? 0, matches: result.matches ?? [] }))
+      })
+      worker.once('error', (error) => settle(() => reject(error)))
+      worker.postMessage({
+        id, pattern, flags, text, multiline: args.multiline,
+        mode: args.outputMode, matchLimit, validateOnly
+      })
+    })
   }
   const headLimit = args.headLimit <= 0 ? Infinity : args.headLimit
   const filesWithMatches: string[] = []
@@ -1389,28 +1421,15 @@ export async function grepFallbackJs(
   const counts = new Map<string, number>()
   let totalMatches = 0
   let filesScanned = 0
-  const skippedFiles: GrepFallbackResult['skippedFiles'] = []
   let skippedTotal = 0
-  const readErrorSampled: string[] = []
   let readErrorCount = 0
+  const skippedSample: string[] = []
+  const readErrorSample: string[] = []
   let timedOut = false
   let aborted = false
-
-  // 改造 6:总时长上界(与 rg 同口径 grepTimeoutSec),在 await 边界检查——
-  // 同步扫描段无法感知 abort/时钟推进(评审 P2-1),不得写入「行循环查 aborted」的死代码
-  const pastDeadline = (): boolean => {
-    if (!timedOut && now() - startedAt >= timeoutMs) timedOut = true
-    return timedOut
-  }
-  const shouldStop = (): boolean => {
-    if (signal.aborted) aborted = true
-    return aborted || pastDeadline()
-  }
-  // 改造 5:读失败计数 + 采样路径(不再静默吞掉;fd 耗尽等场景必须可见)
-  const noteReadError = (rel: string): void => {
-    readErrorCount++
-    if (readErrorSampled.length < GREP_FALLBACK_READ_ERROR_SAMPLE_MAX) readErrorSampled.push(rel)
-  }
+  const pastDeadline = (): boolean => { if (!timedOut && now() >= deadline) timedOut = true; return timedOut }
+  const shouldStop = (): boolean => { if (signal.aborted) aborted = true; return aborted || pastDeadline() }
+  const noteReadError = (rel: string): void => { readErrorCount++; if (readErrorSample.length < GREP_FALLBACK_SAMPLE_MAX) readErrorSample.push(rel) }
 
   // glob 过滤只对目录递归生效；显式命名的单文件目标不应用（与 ripgrep 语义一致）。
   // 匹配前先统一为 posix 分隔符，避免 Windows 反斜杠路径对含 / 的 glob 失配。
@@ -1425,21 +1444,42 @@ export async function grepFallbackJs(
         return p.endsWith(gg) || base === gg
       }
     }
-    const rx = g
-      .replace(/\./g, '\\.')
-      .replace(/\*\*/g, '___')
-      .replace(/\*/g, '[^/]*')
-      .replace(/___/g, '.*')
-    let re: RegExp
-    try {
-      re = new RegExp(`^${rx}$`, 'i')
-    } catch {
-      return () => true
+    const wildcardMatch = (pattern: string, value: string): boolean => {
+      const p = pattern.toLowerCase()
+      const v = value.toLowerCase()
+      let pi = 0
+      let vi = 0
+      let starIndex = -1
+      let starCanMatchSlash = false
+      let starValueIndex = 0
+      let starNextPatternIndex = 0
+      while (vi < v.length) {
+        if (pi < p.length && (p[pi] === '?' || p[pi] === v[vi])) {
+          pi++
+          vi++
+        } else if (p[pi] === '*') {
+          const doubleStar = p[pi + 1] === '*'
+          starIndex = pi
+          starCanMatchSlash = doubleStar
+          pi += doubleStar ? 2 : 1
+          starNextPatternIndex = pi
+          starValueIndex = vi
+        } else if (starIndex >= 0 && (starCanMatchSlash || v[starValueIndex] !== '/')) {
+          starValueIndex++
+          vi = starValueIndex
+          pi = starNextPatternIndex
+        } else {
+          return false
+        }
+      }
+      while (p[pi] === '*') pi++
+      return pi === p.length
     }
     return (rel: string): boolean => {
       const p = toPosix(rel)
       const base = p.slice(p.lastIndexOf('/') + 1)
-      return re.test(p) || re.test(base)
+      const pattern = toPosix(g)
+      return wildcardMatch(pattern, p) || wildcardMatch(pattern, base)
     }
   }
 
@@ -1451,53 +1491,81 @@ export async function grepFallbackJs(
     if (shouldStop()) return
     const rel = path.relative(workDir, full)
     if (!matchesGlob(rel, applyGlob)) return
-    // 改造 3:先 stat 比大小,超限直接计入跳过、不再读取(内存峰值 ≈ 2 MiB)
-    let size: number
-    try {
-      size = (await statD(full)).size
-    } catch {
-      noteReadError(rel)
-      return
-    }
-    // 改造 1:超限必须计数并上报——静默 return 是「假阴性」的病根
-    if (size > GREP_FILE_MAX) {
-      skippedTotal++
-      if (skippedFiles.length < GREP_FALLBACK_SKIPPED_SAMPLE_MAX) {
-        skippedFiles.push({ path: rel, bytes: size, reason: 'too_large' })
-      }
-      return
-    }
     filesScanned++
     if (filesScanned % 30 === 0) onProgress(`搜索中... 已扫描 ${filesScanned} 个文件`)
     let buf: Buffer
-    try {
-      // 改造 2:异步读取边界挂 signal——这是降级路径真正有效的中止点
-      buf = await readFileD(full, { signal })
-    } catch {
-      if (signal.aborted) {
-        aborted = true
+    if (stableFileHandle && !applyGlob && path.resolve(full) === path.resolve(absSearch)) {
+      let before: Awaited<ReturnType<FileHandle['stat']>>
+      try { before = await stableFileHandle.stat() } catch { noteReadError(rel); return }
+      if (!before.isFile()) { noteReadError(rel); return }
+      if (before.size > GREP_FILE_MAX) { skippedTotal++; if (skippedSample.length < GREP_FALLBACK_SAMPLE_MAX) skippedSample.push(rel); return }
+      buf = Buffer.alloc(before.size)
+      let offset = 0
+      while (offset < buf.length) {
+        const { bytesRead } = await stableFileHandle.read(buf, offset, buf.length - offset, offset)
+        if (bytesRead <= 0) break
+        offset += bytesRead
+      }
+      if (offset !== buf.length) { noteReadError(rel); return }
+      const after = await stableFileHandle.stat()
+      if (after.dev !== before.dev || after.ino !== before.ino || after.mode !== before.mode || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+        throw new Error('搜索期间获准文件发生变化，已丢弃搜索结果')
+      }
+    } else {
+      try {
+        const st = await (deps.stat ? deps.stat(full) : fs.stat(full))
+        if (!st.isFile()) { noteReadError(rel); return }
+        if (st.size > GREP_FILE_MAX) { skippedTotal++; if (skippedSample.length < GREP_FALLBACK_SAMPLE_MAX) skippedSample.push(rel); return }
+        buf = await (deps.readFile ? deps.readFile(full, { signal }) : fs.readFile(full, { signal }))
+      } catch {
+        if (signal.aborted) aborted = true
+        else noteReadError(rel)
         return
       }
-      noteReadError(rel)
-      return
     }
+    if (buf.length > GREP_FILE_MAX) { skippedTotal++; if (skippedSample.length < GREP_FALLBACK_SAMPLE_MAX) skippedSample.push(rel); return }
     if (isBinaryBuffer(buf)) return
     const text = buf.toString('utf8')
-
+    const matchLimit = args.outputMode === 'content'
+      ? Math.max(1, headLimit === Infinity ? 100_000 : headLimit - totalMatches)
+      : 0
+    let scan: Awaited<ReturnType<typeof scanText>>
+    try { scan = await scanText(text, matchLimit) } catch (error) {
+      if (pastDeadline() || (error instanceof Error && /超时/.test(error.message))) { timedOut = true; return }
+      throw error
+    }
+    if (signal.aborted || scan.count === 0) return
+    totalMatches += scan.count
     if (args.outputMode === 'content') {
-      if (args.multiline) scanContentMultiline(rel, text)
-      else scanContentLines(rel, text)
+      if (args.multiline) {
+        for (const match of scan.matches) {
+          const startLine = text.slice(0, match.index).split('\n').length
+          pushContentLine(rel, startLine, match.text, true)
+        }
+      } else {
+        const lines = text.split(/\r?\n/)
+        const ctx = args.context && args.context > 0 ? args.context : 0
+        const emitted = new Set<number>()
+        for (const match of scan.matches) {
+          const lineIndex = match.lineIndex!
+          if (ctx > 0) {
+            const lo = Math.max(0, lineIndex - ctx)
+            const hi = Math.min(lines.length - 1, lineIndex + ctx)
+            for (let cix = lo; cix <= hi; cix++) {
+              if (emitted.has(cix)) continue
+              emitted.add(cix)
+              pushContentLine(rel, cix + 1, lines[cix]!, cix === lineIndex)
+            }
+          } else pushContentLine(rel, lineIndex + 1, lines[lineIndex]!, true)
+        }
+      }
       return
     }
-
-    const matches = countMatches(text)
-    if (matches === 0) return
-    totalMatches += matches
     if (args.outputMode === 'files_with_matches') {
       filesWithMatches.push(rel)
-      if (filesWithMatches.length >= headLimit) return
+      return
     } else if (args.outputMode === 'count') {
-      counts.set(rel, matches)
+      counts.set(rel, scan.count)
     }
   }
 
@@ -1518,64 +1586,6 @@ export async function grepFallbackJs(
     }
   }
 
-  // 逐行匹配（非 multiline），context>0 时附带上下文行
-  function scanContentLines(rel: string, text: string): void {
-    const lines = text.split(/\r?\n/)
-    const ctx = args.context && args.context > 0 ? args.context : 0
-    const emitted = new Set<number>()
-    for (let idx = 0; idx < lines.length; idx++) {
-      const line = lines[idx]!
-      lineRe.lastIndex = 0
-      if (!lineRe.test(line)) continue
-      totalMatches++
-      if (ctx > 0) {
-        const lo = Math.max(0, idx - ctx)
-        const hi = Math.min(lines.length - 1, idx + ctx)
-        for (let cix = lo; cix <= hi; cix++) {
-          if (emitted.has(cix)) continue
-          emitted.add(cix)
-          pushContentLine(rel, cix + 1, lines[cix]!, cix === idx)
-        }
-      } else {
-        pushContentLine(rel, idx + 1, line, true)
-      }
-      if (totalMatches >= headLimit) return
-    }
-  }
-
-  // 跨行匹配（multiline）：对整段文本做匹配，输出命中块
-  function scanContentMultiline(rel: string, text: string): void {
-    lineRe.lastIndex = 0
-    let m: RegExpExecArray | null
-    while ((m = lineRe.exec(text)) !== null) {
-      totalMatches++
-      const startLine = text.slice(0, m.index).split('\n').length
-      pushContentLine(rel, startLine, m[0], true)
-      if (totalMatches >= headLimit) return
-      if (m[0].length === 0) lineRe.lastIndex++
-    }
-  }
-
-  // count/files 模式用于判断文件是否命中并统计：multiline 按整段计数，否则按行计数
-  function countMatches(text: string): number {
-    let c = 0
-    if (args.multiline) {
-      lineRe.lastIndex = 0
-      let m: RegExpExecArray | null
-      while ((m = lineRe.exec(text)) !== null) {
-        c++
-        if (m[0].length === 0) lineRe.lastIndex++
-      }
-      return c
-    }
-    const lines = text.split(/\r?\n/)
-    for (const line of lines) {
-      lineRe.lastIndex = 0
-      if (lineRe.test(line)) c++
-    }
-    return c
-  }
-
   const limitReached = (): boolean =>
     (args.outputMode === 'content' && totalMatches >= headLimit) ||
     (args.outputMode === 'files_with_matches' && filesWithMatches.length >= headLimit)
@@ -1583,20 +1593,20 @@ export async function grepFallbackJs(
   // R6（C4）：walk 与 rg 同语义——默认跳名单成员 + 隐藏条目 + 敏感路径（修掉「walk 能搜到 .env、
   // rg 不能」的既有两引擎不一致；这是收紧，非放宽）。includeIgnored 解除名单与隐藏（不解除敏感）。
   async function walk(dir: string): Promise<void> {
+    if (shouldStop()) return
     let entries: Dirent[]
     try {
-      entries = await readdirD(dir, { withFileTypes: true })
+      entries = await (deps.readdir ? deps.readdir(dir) : fs.readdir(dir, { withFileTypes: true }))
     } catch {
-      // 改造 5:readdir 失败同样计数上报(不再静默 return)
-      noteReadError(path.relative(workDir, dir) || '.')
+      if (signal.aborted) aborted = true
+      else noteReadError(path.relative(workDir, dir) || '.')
       return
     }
     for (const ent of entries) {
       if (shouldStop() || limitReached()) return
       const full = path.join(dir, ent.name)
       const isHiddenEntry = ent.name.startsWith('.')
-      // 改造 4:改用 GREP_DEFAULT_IGNORES(与 rg 同一份名单),原第二份本地清单已删除
-      if (!args.includeIgnored && (FALLBACK_IGNORE_SET.has(ent.name) || isHiddenEntry)) continue
+      if (!args.includeIgnored && (GREP_SKIP_DIRS.has(ent.name) || isHiddenEntry)) continue
       // 敏感路径逐条目判定（includeIgnored 不解除；显式点名由调用方处理，walk 不经此路径）
       if (isSensitivePath(full)) continue
       if (ent.isDirectory()) await walk(full)
@@ -1604,53 +1614,41 @@ export async function grepFallbackJs(
     }
   }
 
-  const assemble = (body: string): GrepFallbackResult => {
-    const notes: string[] = []
-    if (skippedTotal > 0) {
-      const sampled = skippedFiles.slice(0, GREP_FALLBACK_READ_ERROR_SAMPLE_MAX).map((s) => s.path).join('、')
-      notes.push(`已跳过 ${skippedTotal} 个超过 ${GREP_FILE_MAX / (1024 * 1024)} MiB 上限的文件，其中可能包含匹配${sampled ? `（如：${sampled}）` : ''}`)
-    }
-    if (readErrorCount > 0) {
-      notes.push(`${readErrorCount} 个文件/目录读取失败，其中可能存在匹配${readErrorSampled.length > 0 ? `（如：${readErrorSampled.join('、')}）` : ''}`)
-    }
-    if (timedOut) notes.push('搜索超时，结果可能不完整')
-    if (aborted) notes.push('搜索已被中止，结果可能不完整')
-    return {
-      output: body,
-      boundarySummary: notes.length > 0 ? `[边界摘要]\n- ${notes.join('\n- ')}` : '',
-      partial: skippedTotal > 0 || readErrorCount > 0 || timedOut || aborted,
-      skippedFiles,
-      skippedTotal,
-      readErrors: readErrorCount > 0
-        ? [{ reason: 'read_error' as const, count: readErrorCount, sampledPaths: [...readErrorSampled] }]
-        : [],
-      timedOut,
-      aborted,
-      filesScanned
-    }
+  try {
+    if (shouldStop()) return 'No matches found'
+    await scanText('', 1, true)
+    if (shouldStop()) return 'No matches found'
+    const st = await (deps.stat ? deps.stat(absSearch) : fs.stat(absSearch)).catch(() => null)
+    if (st?.isFile()) await scanFile(absSearch, false)
+    else await walk(absSearch)
+  } catch (error) {
+    return `Error: ${toToolUserError(error, { toolName: 'grep' })}`
+  } finally {
+    terminateRegexWorker()
   }
-
-  if (shouldStop()) return assemble('No matches found')
-  const st = await statD(absSearch).catch(() => null)
-  if (st?.isFile?.()) await scanFile(absSearch, false)
-  else await walk(absSearch)
+  const boundary: string[] = []
+  if (skippedTotal > 0) boundary.push(`已跳过 ${skippedTotal} 个超过 ${GREP_FILE_MAX / (1024 * 1024)} MiB 上限的文件，其中可能包含匹配${skippedSample.length ? `（如：${skippedSample.join('、')}）` : ''}`)
+  if (readErrorCount > 0) boundary.push(`${readErrorCount} 个文件/目录读取失败，其中可能存在匹配${readErrorSample.length ? `（如：${readErrorSample.join('、')}）` : ''}`)
+  if (timedOut) boundary.push('搜索超时，结果可能不完整')
+  if (aborted) boundary.push('搜索已被中止，结果可能不完整')
+  const finishOutput = (body: string): string => boundary.length ? `${body}\n[边界摘要]\n- ${boundary.join('\n- ')}` : body
   if (args.outputMode === 'files_with_matches') {
-    if (filesWithMatches.length === 0) return assemble('No matches found')
+    if (filesWithMatches.length === 0) return finishOutput('No matches found')
     const slice = filesWithMatches.slice(0, headLimit)
-    return assemble(`Found ${slice.length} files\n${slice.join('\n')}`)
+    return finishOutput(`Found ${slice.length} files\n${slice.join('\n')}`)
   }
   if (args.outputMode === 'count') {
-    if (counts.size === 0) return assemble('No matches found')
+    if (counts.size === 0) return finishOutput('No matches found')
     const lines: string[] = []
     for (const [f, c] of counts) {
       lines.push(`${f}:${c}`)
       if (lines.length >= headLimit) break
     }
-    return assemble(`${lines.join('\n')}\n\n共 ${totalMatches} 处匹配，涉及 ${counts.size} 个文件`)
+    return finishOutput(`${lines.join('\n')}\n\n共 ${totalMatches} 处匹配，涉及 ${counts.size} 个文件`)
   }
-  if (contentLines.length === 0) return assemble('No matches found')
+  if (contentLines.length === 0) return finishOutput('No matches found')
   const suffix = `\n[共 ${totalMatches} 条匹配${headLimit !== Infinity ? `，限制: ${headLimit}` : ''}]`
-  return assemble(contentLines.join('\n') + suffix)
+  return finishOutput(contentLines.join('\n') + suffix)
 }
 
 export const grepExecutor: ToolExecutor = {
@@ -1683,66 +1681,6 @@ export const grepExecutor: ToolExecutor = {
     } catch { return { success: false, error: '读取许可校验失败', diagnostic: { caseId: 'read-permit-validation-error', retryable: false, category: 'integration-violation' }, duration: Date.now() - started } }
     try {
       const timeoutMs = (ctx.toolsConfig.grepTimeoutSec ?? 60) * 1000
-      // Phase 2a（方案 §2.4 D1）：grep 直接感知聊天中止——工具级 signal 之外合成
-      // chatSignal,不再依赖 cancelAllToolsForRequest 隐式联动链;不改 ctx.signal
-      // 的全局语义(2b 全局替换另行核查),降级路径共用同一信号源。
-      const grepSignal = ctx.chatSignal
-        ? AbortSignal.any([ctx.signal, ctx.chatSignal])
-        : ctx.signal
-      // 降级执行(方案 §3.2/E5):修复后的 grepFallbackJs 自动兜底,不询问、无开关;
-      // 产出必须带降级标识前缀 + 边界摘要,scope 与 rg 同源(engine: 'walk')。
-      const runFallbackSearch = async (reason: RipgrepUnavailableReason): Promise<ToolExecutorResult> => {
-        let fallback: Awaited<ReturnType<typeof grepFallbackJs>>
-        try {
-          fallback = await grepFallbackJs(
-            ctx.workDir,
-            absSearch,
-            pattern,
-            gargs,
-            grepSignal,
-            (message) => ctx.sendProgress('grep', message),
-            timeoutMs
-          )
-        } catch {
-          // 降级整体失败:回落 E1 分层文案 + E2 替代路径,绝不静默(方案 §3.8)
-          return {
-            success: false,
-            error: grepRipgrepUnavailableUserMessage(resolved, reason),
-            data: { errorClass: 'GREP_RIPGREP_UNAVAILABLE', reason },
-            duration: Date.now() - started
-          }
-        }
-        // 无效正则:降级引擎无法执行该 pattern,结算为失败(与 rg 路径 failed 口径一致),
-        // 不带降级标识包装为成功
-        if (fallback.patternError) {
-          return { success: false, error: fallback.patternError, duration: Date.now() - started }
-        }
-        const plan = planGrepInvocation({ workDir: ctx.workDir, searchPath: absSearch, args: gargs, engine: 'walk' })
-        const scope: GrepScope = {
-          ...plan.scope,
-          truncated: fallback.partial,
-          ...(fallback.timedOut ? { limitReason: 'timeout' as const } : {})
-        }
-        const body = fallback.output === 'No matches found' ? formatGrepNoMatchOutput(scope) : fallback.output
-        const composed = [
-          '[降级搜索：内置 ripgrep 不可用，已用内置后备引擎完成；能力边界见末尾摘要]',
-          body,
-          fallback.boundarySummary
-        ].filter(Boolean).join('\n')
-        // aborted 只由 grepFallbackJs 内部检查合成信号(grepSignal)置位,此处无需再验
-        if (fallback.aborted) {
-          return { success: false, error: `${composed}\n[已取消]`, duration: Date.now() - started }
-        }
-        return {
-          success: true,
-          data: {
-            output: composed,
-            searchScope: scope,
-            ...(plan.explicitSensitiveHit ? { sensitivePathHit: true } : {})
-          },
-          duration: Date.now() - started
-        }
-      }
       const resolved = resolveRipgrepBinary({
         packaged: app?.isPackaged ?? false,
         resourcesPath: process.resourcesPath,
@@ -1755,25 +1693,61 @@ export const grepExecutor: ToolExecutor = {
         code: 'grep-ripgrep',
         message: createGrepRipgrepDiagnostic(resolved)
       })
-      // 出口①:resolve 失败(unsupported)→ 单一判定点裁定降级或报错
+      const executeFallback = async (): Promise<ToolExecutorResult> => {
+        const fallbackText = await grepFallbackJs(
+          ctx.workDir, absSearch, pattern, gargs, ctx.signal,
+          (message) => ctx.sendProgress('grep', message), timeoutMs, permitFileHandle
+        )
+        const permitTarget = ctx.readExecutionPermit?.targets[0]
+        const authorizedIdentity = permitTarget?.identity
+        const currentStat = authorizedIdentity ? await fs.stat(absSearch).catch(() => null) : null
+        const handleStat = permitFileHandle && authorizedIdentity ? await permitFileHandle.stat().catch(() => null) : null
+        if (authorizedIdentity && (!currentStat || !handleStat || !readIdentityMatches(currentStat, authorizedIdentity) || !readIdentityMatches(handleStat, authorizedIdentity))) {
+          const caseId = 'read-target-identity-changed-during-read'
+          recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'grep', decisionRuleId: ctx.readExecutionPermit?.decisionRuleId ?? permitTarget?.decisionRuleId, pathZone: permitTarget?.zone, factId: permitTarget?.factId, failureClass: 'mechanism', caseId })
+          return { success: false, error: '搜索期间文件身份或内容发生变化，已丢弃搜索结果。', diagnostic: { caseId, retryable: false, category: 'mechanism' as const, ...(permitTarget?.factId ? { factId: permitTarget.factId } : {}) }, duration: Date.now() - started }
+        }
+        if (ctx.signal.aborted) return { success: false, error: '搜索已取消。', duration: Date.now() - started }
+        const plan = planGrepInvocation({ workDir: ctx.workDir, searchPath: absSearch, args: gargs, engine: 'walk' })
+        const boundaryIndex = fallbackText.indexOf('\n[边界摘要]')
+        const fallbackBody = boundaryIndex >= 0 ? fallbackText.slice(0, boundaryIndex) : fallbackText
+        const boundarySummary = boundaryIndex >= 0 ? fallbackText.slice(boundaryIndex) : ''
+        const noMatch = fallbackBody === 'No matches found'
+        if (fallbackText.startsWith('Error:')) {
+          return { success: false, error: fallbackText.slice('Error:'.length).trim(), duration: Date.now() - started }
+        }
+        const truncated = fallbackText.includes('已按 head_limit=') || boundaryIndex >= 0
+        const scope: GrepScope = {
+          ...plan.scope,
+          truncated,
+          ...(fallbackText.includes('搜索超时') ? { limitReason: 'timeout' as const } : fallbackText.includes('已按 head_limit=') ? { limitReason: 'head_limit' as const } : {})
+        }
+        const output = `${noMatch ? formatGrepNoMatchOutput(scope) : fallbackBody}${boundarySummary}`
+        return {
+          success: true,
+          data: {
+            output,
+            ...(noMatch ? { status: scope.skippedCount > 0 ? 'no_match_with_skips' : 'no_match' } : {}),
+            searchScope: scope,
+            ...(plan.explicitSensitiveHit ? { sensitivePathHit: true } : {})
+          },
+          duration: Date.now() - started
+        }
+      }
       if (!resolved.path) {
-        const reason: RipgrepUnavailableReason = resolved.reason ?? 'unsupported'
         void ctx.recordDiagnostic?.({
           code: 'grep-ripgrep-unavailable',
-          message: createGrepRipgrepUnavailableDiagnostic(resolved, reason)
+          message: createGrepRipgrepUnavailableDiagnostic(resolved, resolved.reason ?? 'unsupported')
         })
-        if (resolveGrepEngine(reason).engine === 'walk') return await runFallbackSearch(reason)
-        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, reason), data: { errorClass: 'GREP_RIPGREP_UNAVAILABLE', reason }, duration: Date.now() - started }
+        return await executeFallback()
       }
-      // 出口②:inspect 失败(not_found 等)→ 场景 B/D2 最高频路径,同经单一判定点
       const availability = await inspectRipgrepBinary(resolved)
       if (!availability.available) {
         void ctx.recordDiagnostic?.({
           code: 'grep-ripgrep-unavailable',
           message: createGrepRipgrepUnavailableDiagnostic(resolved, availability.reason)
         })
-        if (resolveGrepEngine(availability.reason).engine === 'walk') return await runFallbackSearch(availability.reason)
-        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, availability.reason), data: { errorClass: 'GREP_RIPGREP_UNAVAILABLE', reason: availability.reason }, duration: Date.now() - started }
+        return await executeFallback()
       }
       const text = await grepWithRg(
         resolved.path,
@@ -1782,26 +1756,24 @@ export const grepExecutor: ToolExecutor = {
         pattern,
         gargs,
         timeoutMs,
-        grepSignal,
+        ctx.signal,
         (message) => ctx.sendProgress('grep', message),
         ctx.grepSpawnProcess,
-        processTreeKiller,
         permitFileHandle ? { fileHandle: permitFileHandle, platform: process.platform } : undefined,
-        (info) => {
-          // grep.terminate(方案 §2.6):中止/超时可观测,不落 pattern、cwd、路径;
-          // forced(进程不响应终止)用 warn 级别单独可见。
-          logAgentEvent(info.terminated === 'forced' ? 'warn' : 'info', 'grep.terminate', {
-            requestId: ctx.requestId ?? null,
-            sessionId: ctx.sessionId,
-            toolUseId: ctx.toolUseId,
-            reason: info.reason,
-            terminated: info.terminated,
-            elapsedMs: info.elapsedMs,
-            treeKillVerified: info.treeKillVerified,
-            terminationState: info.terminationState
-          })
-        }
+        processTreeKiller,
+        (info) => logAgentEvent(info.terminated === 'forced' || info.terminationState === 'termination_failed' ? 'warn' : 'info', 'grep.terminate', {
+          requestId: ctx.requestId,
+          sessionId: ctx.sessionId,
+          toolUseId: ctx.toolUseId,
+          ...info
+        })
       )
+      const authorizedIdentity = ctx.readExecutionPermit?.targets[0]?.identity
+      if (permitFileHandle && authorizedIdentity && !readIdentityMatches(await permitFileHandle.stat(), authorizedIdentity)) {
+        const caseId = 'read-target-identity-changed-during-read'
+        recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'grep', decisionRuleId: ctx.readExecutionPermit?.decisionRuleId ?? ctx.readExecutionPermit?.targets[0]?.decisionRuleId, pathZone: ctx.readExecutionPermit?.targets[0]?.zone, factId: ctx.readExecutionPermit?.targets[0]?.factId, failureClass: 'mechanism', caseId })
+        return { success: false, error: '搜索期间文件身份或内容发生变化，已丢弃搜索结果。', diagnostic: { caseId, retryable: false, category: 'mechanism', ...(ctx.readExecutionPermit?.targets[0]?.factId ? { factId: ctx.readExecutionPermit.targets[0].factId } : {}) }, duration: Date.now() - started }
+      }
       if (text.kind === 'success' || text.kind === 'no_match') {
         // R6：范围事实（skipped 由 planGrepInvocation 统一规划；no_match 必带范围）
         const plan = planGrepInvocation({ workDir: ctx.workDir, searchPath: absSearch, args: gargs })
@@ -1835,13 +1807,11 @@ export const grepExecutor: ToolExecutor = {
         }
       }
       if (text.kind === 'unavailable') {
-        // 出口③:spawn 阶段分类失败 → 同样收敛到单一判定点(评审 B1 修订)
         void ctx.recordDiagnostic?.({
           code: 'grep-ripgrep-unavailable',
           message: createGrepRipgrepUnavailableDiagnostic(resolved, text.reason)
         })
-        if (resolveGrepEngine(text.reason).engine === 'walk') return await runFallbackSearch(text.reason)
-        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, text.reason), data: { errorClass: 'GREP_RIPGREP_UNAVAILABLE', reason: text.reason }, duration: Date.now() - started }
+        return await executeFallback()
       }
       if (text.kind === 'cancelled') return { success: false, error: `${text.partialOutput}\n[已取消]`, duration: Date.now() - started }
       if (text.kind === 'timeout') return { success: false, error: `${text.partialOutput}\n[搜索超时，仅展示部分结果]`, duration: Date.now() - started }
@@ -1964,7 +1934,8 @@ export const runScriptExecutor: ToolExecutor = {
         cwd: ctx.workDir,
         env,
         windowsHide: true,
-        shell: false
+        shell: false,
+        detached: process.platform === 'darwin'
       })
       logAgentEvent('info', 'script.exec.spawned', { ...scriptBaseLog, pid: proc.pid ?? null })
       const supervisor = new ProcessSupervisor(proc, processTreeKiller)
@@ -2073,36 +2044,27 @@ export const runScriptExecutor: ToolExecutor = {
 export function createBuiltinToolRegistry(): TypedToolRegistry {
   const registry = new TypedToolRegistry()
   registry.register(runShellRegisteredTool)
+  registry.register(createRunScriptRegisteredTool(runScriptExecutor))
+  for (const tool of createReadRegisteredTools({ readFile: readFileExecutor, listDirectory: listDirectoryExecutor, grep: grepExecutor, readFeishuAttachment: readFeishuAttachmentExecutor })) {
+    registry.register(tool)
+  }
+  for (const tool of createWriteFileRegisteredTools({ writeFile: writeFileExecutor, editFile: editFileExecutor })) {
+    registry.register(tool)
+  }
+  registry.register(createSwitchWorkDirRegisteredTool(switchWorkDirExecutor))
+  registry.register(createSwitchSessionRegisteredTool(switchSessionExecutor))
+  registry.register(createBrowserRegisteredTool(browserExecutor))
+  for (const tool of createWeChatOutboundRegisteredTools({ send: wechatSendExecutor, reply: wechatReplyExecutor })) {
+    registry.register(tool)
+  }
+  registry.register(createRunLarkCliRegisteredTool(runLarkCliExecutor))
+  registry.register(createListWorkDirsRegisteredTool(listWorkDirsExecutor))
   registry.register(skillsReadTool)
   registry.register(historyReadTool)
   // toolkit 网关：能力集合的两个稳定工具（browser_detect 已收编为 env.browserDetect 能力）
   registry.register(toolkitFindTool)
   registry.register(toolkitCallTool)
-  for (const executor of [
-    readFileExecutor,
-    listDirectoryExecutor,
-    editFileExecutor,
-    writeFileExecutor,
-    grepExecutor,
-    runScriptExecutor,
-    runLarkCliExecutor,
-    readFeishuAttachmentExecutor,
-    wechatReplyExecutor,
-    wechatSendExecutor,
-    browserExecutor,
-    runShellExecutor,
-    listWorkDirsExecutor,
-    switchWorkDirExecutor,
-    switchSessionExecutor
-  ]) {
-    registry.registerLegacyExecutor(executor)
-  }
   return registry
-}
-
-/** @deprecated 兼容转发(偏差 18,一个发布周期,P8 评估删除):经默认 runtime 实例。 */
-export function getToolExecutor(name: string): ToolExecutor | undefined {
-  return getDefaultAgentRuntime().builtinRegistry.getLegacyExecutor(name) as ToolExecutor | undefined
 }
 
 /** @deprecated 兼容转发(偏差 18)。 */

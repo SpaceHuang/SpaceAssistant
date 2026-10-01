@@ -19,9 +19,12 @@ export function filterMessagesForChatApi(messages: Message[]): Message[] {
 }
 
 export function listQueuedUserMessages(messages: Message[], sessionId: string): Message[] {
-  return messages
-    .filter((m) => m.sessionId === sessionId && isQueuedUserMessage(m))
-    .sort((a, b) => a.timestamp - b.timestamp)
+  // 调用方保证传入顺序与 DisplayOrder 一致。
+  return messages.filter((m) => m.sessionId === sessionId && isQueuedUserMessage(m))
+}
+
+export function filterOutQueuedUserMessages(messages: Message[], sessionId: string): Message[] {
+  return messages.filter((message) => !(message.sessionId === sessionId && isQueuedUserMessage(message)))
 }
 
 export function countQueuedUserMessages(messages: Message[], sessionId: string): number {

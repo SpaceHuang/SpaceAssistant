@@ -1,5 +1,6 @@
 import { Button } from 'antd'
 import { Copy } from 'lucide-react'
+import { runtimeText } from '../../i18n/runtimeText'
 import { ShikiHighlightedCode } from './ShikiHighlightedCode'
 
 type Props = {
@@ -17,7 +18,7 @@ export function ShikiCodeBlock({ code, language }: Props) {
         className="sa-shiki-copy"
         onClick={() => void navigator.clipboard.writeText(code)}
       >
-        复制
+        {runtimeText('chat.shell.copy')}
       </Button>
       <ShikiHighlightedCode code={code} language={language} />
     </div>

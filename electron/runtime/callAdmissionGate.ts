@@ -222,10 +222,19 @@ export class CallAdmissionGate {
   }
 
   cancel(requestId: string): boolean {
+    return this.cancelQueued((request) => request.requestId === requestId)
+  }
+
+  /** Cancel only the queued execution owned by this canonical turn. */
+  cancelByTurnId(turnId: string): boolean {
+    return this.cancelQueued((request) => request.turnId === turnId)
+  }
+
+  private cancelQueued(matches: (request: AdmissionRequest) => boolean): boolean {
     let cancelled = false
     for (let index = this.waiters.length - 1; index >= 0; index -= 1) {
       const waiter = this.waiters[index]!
-      if (waiter.request.requestId !== requestId) continue
+      if (!matches(waiter.request)) continue
       this.waiters.splice(index, 1)
       waiter.cleanup?.()
       waiter.resolve({ ok: false, verdict: 'rejected', cause: 'cancelled' })
@@ -332,9 +341,29 @@ export class CallAdmissionGate {
   }
 
   /** 让出运行槽但保留已受理身份；恢复不增加小时启动计数。 */
+  isActiveTicket(ticket: AdmissionTicket): boolean {
+    return this.activeTickets.has(ticket)
+  }
+
   park(ticket: AdmissionTicket): ParkedAdmission | undefined {
-    if (!this.activeTickets.has(ticket)) return undefined
-    if (!ticket.release()) return undefined
+    if (!this.activeTickets.has(ticket)) {
+      logAgentEvent('warn', 'admission.park.failed', {
+        requestId: ticket.request.requestId,
+        ...(ticket.request.turnId ? { turnId: ticket.request.turnId } : {}),
+        lane: ticket.request.lane,
+        cause: 'ticket-not-active'
+      })
+      return undefined
+    }
+    if (!ticket.release()) {
+      logAgentEvent('warn', 'admission.park.failed', {
+        requestId: ticket.request.requestId,
+        ...(ticket.request.turnId ? { turnId: ticket.request.turnId } : {}),
+        lane: ticket.request.lane,
+        cause: 'release-persistence-failed'
+      })
+      return undefined
+    }
     this.activeTickets.delete(ticket)
     const token = {}
     this.parked.set(token, ticket.request)
@@ -390,9 +419,12 @@ export class CallAdmissionGate {
         }
         waiter.onAbort = cancel
         if (options.signal) waiter.cleanup = () => options.signal!.removeEventListener('abort', cancel)
+        // A parked turn keeps its original execution deadline. The standalone resume cap is
+        // only a fallback for callers without one; a fixed short cap can terminate a valid
+        // approval merely because unrelated turns still occupy the admission slots.
         const remaining = options.deadlineAt === undefined
           ? this.resumeTimeoutMs
-          : Math.min(this.resumeTimeoutMs, Math.max(1, options.deadlineAt - this.nowFn()))
+          : Math.max(1, options.deadlineAt - this.nowFn())
         waiter.timer = setTimeout(() => {
           const index = this.resumeWaiters.indexOf(waiter)
           if (index < 0) return
@@ -415,9 +447,11 @@ export class CallAdmissionGate {
           if (index >= 0) this.resumeWaiters.splice(index, 1)
           if (waiter.timer) clearTimeout(waiter.timer)
           waiter.cleanup?.()
-          this.parked.delete(handle.token)
           this.state = previousState
-          resolve({ ok: false, verdict: 'rejected', cause: 'persistence-failed', retryable: false })
+          // Queue insertion did not commit, so keep the accepted parked identity and let
+          // its owner retry. Consuming it here turns a transient SQLite error into a lost
+          // admission lease and makes every SDK retry fail as stale-park-handle.
+          resolve({ ok: false, verdict: 'rejected', cause: 'persistence-failed', retryable: true })
         }
       })
     }
@@ -442,6 +476,7 @@ export class CallAdmissionGate {
   ): void {
     logAgentEvent(level, event, {
       requestId: request.requestId,
+      ...(request.turnId ? { turnId: request.turnId } : {}),
       lane: request.lane,
       priority: request.priority,
       role: request.role,

@@ -140,15 +140,12 @@ describe('UsageStatsDrawer', () => {
     const api = {
       usageStatsSummary: vi.fn(async () => summary()),
       usageStatsDaily: vi.fn(async () => [] as UsageDailyPoint[]),
+      usageStatsAttribution: vi.fn(async () => ({ exactInputTokens: 0, byEstimatorVersion: [], dailyByEstimatorVersion: [], toolDimensions: { tools: {}, toolSource: {}, toolSources: {}, toolResults: {} } })),
       usageStatsDimensions: vi.fn(async () => ({
         models: [{ model: 'deepseek-v4-pro', llmServiceId: 'svc-a' }],
         sessions: [{ sessionId: 'sess-1', name: null }],
         appVersions: ['0.1.5']
       })),
-      usageStatsAttributionComposition: vi.fn(async () => null),
-      usageStatsAttributionDaily: vi.fn(async () => []),
-      usageStatsAttributionOutput: vi.fn(async () => null),
-      usageStatsAttributionTools: vi.fn(async () => null),
       ...overrides
     }
     ;(window as unknown as { api: unknown }).api = api
@@ -231,55 +228,6 @@ describe('UsageStatsDrawer', () => {
     })
   })
 
-  it('AT14：成本构成 Tab 与总览共用同一筛选——切换 Tab 不重置筛选，且归因查询携带同一区间与 block-v1 版本', async () => {
-    mockChartSize()
-    const api = mockApi()
-    renderDrawer(true)
-    await waitFor(() => {
-      expect(api.usageStatsAttributionComposition).toHaveBeenCalled()
-    })
-    // 切换到「成本构成」Tab
-    const compositionTab = screen.getAllByText('成本构成').at(-1) as HTMLElement
-    fireEvent.click(compositionTab)
-    await waitFor(() => {
-      // 面板渲染（无归因数据 → 空态）
-      expect(screen.getByTestId('usage-attribution-empty')).toBeTruthy()
-    })
-    // 切 Tab 不触发重新查询（数据同一次 fetchData 已取好，共用同一筛选）
-    const callsAfterTabSwitch = api.usageStatsSummary.mock.calls.length
-    expect(api.usageStatsAttributionComposition.mock.calls.length).toBe(callsAfterTabSwitch)
-    // 归因查询参数：与总览同一 from/to + 固定 block-v1 版本（I1）
-    const [attributionArgs] = api.usageStatsAttributionComposition.mock.calls[0] as Array<{ from: string; to: string; estimatorVersion: string }>
-    expect(attributionArgs.estimatorVersion).toBe('block-v1')
-    const [summaryArgs] = api.usageStatsSummary.mock.calls[0] as Array<{ from: string; to: string }>
-    expect(attributionArgs.from).toBe(summaryArgs.from)
-    expect(attributionArgs.to).toBe(summaryArgs.to)
-  })
-
-  it('AT14：成本构成 Tab 渲染归因面板（覆盖率/快照/明细）', async () => {
-    mockChartSize()
-    mockApi({
-      usageStatsAttributionComposition: vi.fn(async () => ({
-        estimatorVersion: 'block-v1',
-        attributableInputTokens: 100_000,
-        totalInputTokens: 150_000,
-        attributionCoverage: 2 / 3,
-        categories: { system: 2_000, tools: 18_000, userText: 10_000, assistantText: 20_000, toolResults: 48_000, assistantThinking: 1_000, assistantToolUse: 500, other: 500 }
-      })),
-      usageStatsAttributionDaily: vi.fn(async () => []),
-      usageStatsAttributionOutput: vi.fn(async () => null),
-      usageStatsAttributionTools: vi.fn(async () => ({ used: [], unused: [], totalDeclaredChars: 0, unusedDeclaredChars: 0 }))
-    })
-    renderDrawer(true)
-    const compositionTab = screen.getAllByText('成本构成').at(-1) as HTMLElement
-    fireEvent.click(compositionTab)
-    // 覆盖率 < 100% 显式展示（I7）
-    await waitFor(() => {
-      expect(screen.getByTestId('usage-attribution-coverage')).toBeTruthy()
-    })
-    expect(screen.getByTestId('usage-attribution-coverage').textContent).toContain('66.7%')
-  })
-
   it('P0 回归：自定义模式选定日期后 RangePicker 以 dayjs 渲染，不白屏且按新范围查询', async () => {
     mockChartSize()
     const api = mockApi()
@@ -320,4 +268,50 @@ describe('UsageStatsDrawer', () => {
     expect(latest.from).toBe('2026-08-01')
     expect(latest.to).toBe('2026-08-15')
   })
+
+  it('keeps filters shared across Overview and Attribution tabs and renders partial coverage', async () => {
+    mockChartSize()
+    const attribution = {
+      exactInputTokens: 100,
+      byEstimatorVersion: [{ estimatorVersion: 'block-v1', attributableInputTokens: 60, unattributedInputTokens: 40, coverageRatio: 0.6,
+        composition: { system: 10, tools: 20, messageBlocks: { 'user|text': 20, 'assistant|thinking': 5, 'tool|text': 5 } } }],
+      dailyByEstimatorVersion: [{ day: '2026-09-16', estimatorVersion: 'block-v1', inputTokens: 60,
+        composition: { system: 10, tools: 20, messageBlocks: { 'user|text': 20, 'assistant|thinking': 5, 'tool|text': 5 } } }],
+      toolDimensions: { tools: { grep: 50 }, toolSource: { builtin: 50 }, toolSources: { grep: 'builtin' as const }, toolResults: { grep: { calls: 2, chars: 90 } } }
+    }
+    const api = mockApi({ usageStatsAttribution: vi.fn(async () => attribution) })
+    renderDrawer()
+    await waitFor(() => expect(api.usageStatsAttribution).toHaveBeenCalled())
+    expect(api.usageStatsAttribution).toHaveBeenLastCalledWith(expect.objectContaining({ from: expect.any(String), to: expect.any(String), dimensions: {} }))
+    fireEvent.click(screen.getByRole('tab', { name: '成本构成' }))
+    expect((await screen.findByTestId('attribution-coverage')).textContent).toContain('60.0%')
+    expect(screen.getByText(/40 tokens/)).toBeDefined()
+    expect(screen.getByTestId('usage-attribution-view')).toBeDefined()
+    expect(screen.getAllByText(/助手 · 思考/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/工具 · 文本/).length).toBeGreaterThan(0)
+  })
+
+  it('shows the 0% explanation without rendering any attribution composition', async () => {
+    const api = mockApi({
+      usageStatsAttribution: vi.fn(async () => ({ exactInputTokens: 90, byEstimatorVersion: [], dailyByEstimatorVersion: [], toolDimensions: { tools: {}, toolSource: {}, toolSources: {}, toolResults: {} } }))
+    })
+    renderDrawer()
+    await waitFor(() => expect(api.usageStatsAttribution).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('tab', { name: '成本构成' }))
+    expect(await screen.findByTestId('attribution-empty')).toBeTruthy()
+    expect(screen.queryByTestId('usage-attribution-view')).toBeNull()
+  })
+
+  it('passes identical changed date and dimensions to summary, daily, and attribution reads', async () => {
+    const api = mockApi()
+    renderDrawer()
+    await waitFor(() => expect(api.usageStatsAttribution).toHaveBeenCalled())
+    const before = api.usageStatsAttribution.mock.calls.length
+    fireEvent.click(document.querySelector('input.ant-radio-button-input[value="7"]')!)
+    await waitFor(() => expect(api.usageStatsAttribution.mock.calls.length).toBeGreaterThan(before))
+    const attributionArgs = api.usageStatsAttribution.mock.calls.at(-1)?.[0]
+    expect(api.usageStatsSummary.mock.calls.at(-1)?.[0]).toEqual(attributionArgs)
+    expect(api.usageStatsDaily.mock.calls.at(-1)?.[0]).toEqual(attributionArgs)
+  })
+
 })

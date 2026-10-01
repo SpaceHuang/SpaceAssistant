@@ -7,7 +7,6 @@ vi.mock('../agentLogger/agentLogger', () => ({
 
 import { localDayString, recordStepUsage, recordTurnSummary, setUsageStatsAppVersion } from './usageStatsRecorder'
 import type { SessionUsage } from '../../src/shared/sessionUsage'
-import { buildStepAttribution, emptyTurnToolDimension, accumulateToolResultVolume, summarizeToolDeclarations } from '../../src/shared/usageAttribution'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getUsageStepFactsForTurn, getUsageTurnFact } from '../database/operations'
 import { logAgentEvent } from '../agentLogger/agentLogger'
@@ -146,57 +145,19 @@ describe('recordStepUsage', () => {
       })
     ).not.toThrow()
   })
-
-  it('带归因时写入三源真列 + estimator_version + 归因 JSON（blocks 与输出侧，§7.2/§7.4）', () => {
-    const db = createMemoryAppDb()
-    const attribution = buildStepAttribution({
-      system: 'sys-prompt',
-      tools: [{ name: 'grep' }],
-      messages: [{ role: 'user', content: 'hello world' }],
-      outputContent: [{ type: 'text', text: 'answer' }, { type: 'thinking', thinking: 'hmm' }]
-    })
-    recordStepUsage(db, {
-      sessionId: 'sess-1',
-      turnId: 'turn-1',
-      stepId: 'req-1:round:1',
-      usage: { input_tokens: 100, output_tokens: 5 },
-      attribution,
-      now: new Date(2026, 8, 16, 10, 0).getTime()
-    })
-    const rows = getUsageStepFactsForTurn(db, 'sess-1', 'turn-1')
-    expect(rows[0].estimatorVersion).toBe('block-v1')
-    expect(rows[0].systemTokens).toBe(attribution.threeSources.systemTokens)
-    expect(rows[0].toolsTokens).toBe(attribution.threeSources.toolsTokens)
-    expect(rows[0].messageTokens).toBe(attribution.threeSources.messageTokens)
-    const parsed = JSON.parse(rows[0].attributionJson!) as { schemaVersion: number; blocks: Record<string, unknown>; output?: Record<string, unknown> }
-    expect(parsed.schemaVersion).toBe(1)
-    expect(parsed.blocks['user|text']).toEqual({ chars: 11, tokens: expect.any(Number) })
-    expect(parsed.output).toBeDefined()
-    // JSON 列内不含 estimatorVersion（AD18：版本号在独立真列，避免两份真相源）
-    expect(rows[0].attributionJson!).not.toContain('block-v1')
-    db.close()
-  })
-
-  it('不带归因时归因列为 null（无归因数据降级，AT8）', () => {
-    const db = createMemoryAppDb()
-    recordStepUsage(db, {
-      sessionId: 'sess-1',
-      turnId: 'turn-1',
-      stepId: 'req-1:round:1',
-      usage: { input_tokens: 100, output_tokens: 5 },
-      now: 0
-    })
-    const rows = getUsageStepFactsForTurn(db, 'sess-1', 'turn-1')
-    expect(rows[0].estimatorVersion).toBeNull()
-    expect(rows[0].attributionJson).toBeNull()
-    expect(rows[0].systemTokens).toBeNull()
-    db.close()
-  })
 })
 
 describe('recordTurnSummary', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  it('Turn 汇总写入工具归因 JSON 并读回', () => {
+    const db = createMemoryAppDb()
+    const toolAttributionJson = JSON.stringify({ tools: { grep: 30 }, toolSource: { builtin: 30 }, toolSources: { grep: 'builtin' }, toolResults: { grep: { calls: 1, chars: 12 } } })
+    recordTurnSummary(db, { turnId: 'turn-attribution', sessionId: 'session-attribution', outcome: 'completed', counts: { stepCount: 1, toolCallCount: 1, toolErrorCount: 0, toolSkippedCount: 0 }, toolAttributionJson })
+    expect(getUsageTurnFact(db, 'turn-attribution')?.toolAttributionJson).toBe(toolAttributionJson)
+    db.close()
   })
 
   it('写入 Turn 汇总（计数与 outcome）', () => {
@@ -255,42 +216,5 @@ describe('recordTurnSummary', () => {
       'usageStats.write.failed',
       expect.objectContaining({ turnId: 'turn-1' })
     )
-  })
-
-  it('带工具维度时写入 tool_attribution_json（tools/toolSource/toolResults，AD24）', () => {
-    const db = createMemoryAppDb()
-    const dim = emptyTurnToolDimension()
-    Object.assign(dim, summarizeToolDeclarations([{ name: 'grep', description: 'd' }, { name: 'mcp_x_search' }]))
-    accumulateToolResultVolume(dim, 'grep', '12345')
-    recordTurnSummary(db, {
-      turnId: 'turn-1',
-      sessionId: 'sess-1',
-      outcome: 'completed',
-      counts: { stepCount: 1, toolCallCount: 1, toolErrorCount: 0, toolSkippedCount: 0 },
-      toolAttribution: dim,
-      now: new Date(2026, 8, 16, 10, 0).getTime()
-    })
-    const parsed = JSON.parse(getUsageTurnFact(db, 'turn-1')!.toolAttributionJson!) as {
-      tools: Record<string, number>
-      toolSource: Record<string, number>
-      toolResults: Record<string, { calls: number; chars: number }>
-    }
-    expect(Object.keys(parsed.tools).sort()).toEqual(['grep', 'mcp_x_search'])
-    expect(parsed.toolSource.builtin).toBeGreaterThan(0)
-    expect(parsed.toolSource.mcp).toBeGreaterThan(0)
-    expect(parsed.toolResults.grep).toEqual({ calls: 1, chars: 5 })
-  })
-
-  it('不带工具维度时 tool_attribution_json 为 null', () => {
-    const db = createMemoryAppDb()
-    recordTurnSummary(db, {
-      turnId: 'turn-2',
-      sessionId: 'sess-1',
-      outcome: 'completed',
-      counts: { stepCount: 1, toolCallCount: 0, toolErrorCount: 0, toolSkippedCount: 0 },
-      now: 0
-    })
-    expect(getUsageTurnFact(db, 'turn-2')!.toolAttributionJson).toBeNull()
-    db.close()
   })
 })

@@ -57,7 +57,7 @@ export type AutomationTaskRun = {
   sessionId?: string
   resultSummary?: string
   usageJson?: string
-  deliveryStatus: 'pending' | 'delivered' | 'failed-degraded' | 'none'
+  deliveryStatus: 'pending' | 'delivered' | 'failed-degraded' | 'delivery-uncertain' | 'none'
   deliveredAt?: number
   createdAt: number
   updatedAt: number
@@ -70,5 +70,6 @@ export type ButlerRunTaskResult = {
   runId?: string
   sessionId?: string
   summary?: string
+  deliveryStatus?: AutomationTaskRun['deliveryStatus']
   error?: string
 }

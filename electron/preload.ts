@@ -70,6 +70,10 @@ const api: SpaceAssistantApi = {
     ipcRenderer.invoke('chat:delete-queued-message', payload) as Promise<
       { ok: true; sessionId: string } | { ok: false; error: string }
     >,
+  chatUpdateQueuedMessage: (payload: { sessionId: string; messageId: string; content: string }) =>
+    ipcRenderer.invoke('chat:update-queued-message', payload) as Promise<{ ok: true; message: Message; sequence: number } | { ok: false; error: string }>,
+  chatReorderQueuedMessages: (payload: { sessionId: string; messageIds: string[] }) =>
+    ipcRenderer.invoke('chat:reorder-queued-messages', payload) as Promise<{ ok: true; entries: Array<{ message: Message; sequence: number }> } | { ok: false; error: 'queue_changed' }>,
 
   chatStageImage: (args) => ipcRenderer.invoke('chat:stage-image', args),
   chatDiscardStagedImage: (args) => ipcRenderer.invoke('chat:discard-staged-image', args),
@@ -133,12 +137,9 @@ const api: SpaceAssistantApi = {
 
   usageStatsDaily: (args) => ipcRenderer.invoke('usage-stats:daily', args),
   usageStatsSummary: (args) => ipcRenderer.invoke('usage-stats:summary', args),
+  usageStatsAttribution: (args) => ipcRenderer.invoke('usage-stats:attribution', args),
+  usageStatsLatestAttribution: (sessionId) => ipcRenderer.invoke('usage-stats:latest-attribution', sessionId),
   usageStatsDimensions: () => ipcRenderer.invoke('usage-stats:dimensions'),
-  usageStatsAttributionComposition: (args) => ipcRenderer.invoke('usage-stats:attribution-composition', args),
-  usageStatsAttributionDaily: (args) => ipcRenderer.invoke('usage-stats:attribution-daily', args),
-  usageStatsAttributionOutput: (args) => ipcRenderer.invoke('usage-stats:attribution-output', args),
-  usageStatsAttributionTools: (args) => ipcRenderer.invoke('usage-stats:attribution-tools', args),
-  usageStatsLatestSessionAttribution: (sessionId) => ipcRenderer.invoke('usage-stats:latest-session-attribution', sessionId),
 
   onOpenSettings: (cb) => {
     const fn = () => cb()

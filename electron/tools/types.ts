@@ -33,6 +33,8 @@ export interface RemoteContext {
   feishuAttachments?: readonly RegisteredFeishuAttachment[]
   wechatConfig?: WeChatConfig
   larkCliRunner?: LarkCliRunner
+  /** Executable resolved by the prepared run_lark_cli adapter at planning time. */
+  preparedLarkCliExecutable?: string
   /** 合并后的 IM 确认通道单例（lane 由实例决定）；主循环经 channelFor 直接调用。 */
   imChannel?: ImChannel
   /** Tool-loop timeout error text; platforms set when building remoteContext. */
@@ -84,9 +86,6 @@ export interface ToolExecutionContext {
   /** run_shell 有效输出模式（主进程在 toolChatLoop 解析） */
   shellOutputMode?: 'plain' | 'terminal'
   signal: AbortSignal
-  /** Phase 2a（方案 §2.4/§4）：聊天级中止信号，由执行器按需合成（如 grep）。
-   *  不得与 signal 合并成同一对象——toolChatLoop 依赖二者独立判定「仅工具取消 vs 整聊取消」。 */
-  chatSignal?: AbortSignal
   fileStateCache: import('../fileStateCache').FileStateCache
   toolsConfig: ToolsConfig
   wikiConfig?: WikiConfig
@@ -101,6 +100,8 @@ export interface ToolExecutionContext {
   /** R1：本次工具调用边界解析的工作目录快照（env.workspace 等能力消费单一事实源） */
   workspaceSnapshot?: import('../../src/shared/agent/workspace').WorkspaceSnapshot
   larkCliRunner?: LarkCliRunner
+  /** Host-prepared executable for run_lark_cli; pins the target selected before confirmation. */
+  preparedLarkCliExecutable?: string
   remoteContext?: RemoteContext
   /** 用户已在确认卡片（或飞书确认）中明确批准执行本次工具调用 */
   toolUserConfirmed?: boolean
@@ -115,7 +116,7 @@ export interface ToolExecutionContext {
 
 import type { BrowserDependencyToolError } from '../../src/shared/browserTypes'
 import { isProcessToolName } from '../../src/shared/processResultProjection'
-import { normalizeToolResultEnvelope } from '../../packages/agent-core/src/toolResultContract'
+import { normalizeToolResultEnvelope } from '../../packages/agent-sdk/src/toolResultContract'
 import { TOOL_ENVELOPE_KNOWN_ERROR_CODES } from '../../src/shared/errorCodes'
 
 export interface ToolExecutorResult {

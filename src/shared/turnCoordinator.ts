@@ -24,7 +24,7 @@ export type TurnStorage = {
   listRecoverableResidues?: () => Array<{ message: Message; turnId?: string; turnOutcome?: string }>
   finalizeResidueMessage?: (messageId: string, targetStatus: 'cancelled' | 'failed') => boolean
   listUnfinishedTurns: () => Array<{ turnId: string; assistantMessageId: string }>
-  recoverTurn: (turnId: string, assistantMessageId: string) => boolean
+  recoverTurn: (turnId: string, assistantMessageId: string) => boolean | Extract<TurnOutcome, 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'recovered' | 'commit-uncertain'>
   saveTurn: (turn: { turnId: string; requestId: string; sessionId: string; assistantMessageId: string; state: string; userMessageId?: string; contextBoundarySequence?: number; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig }) => void
   updateTurnState: (turnId: string, state: string, patch?: { version?: number; outcome?: string; usage?: unknown; error?: { code: string; message: string } }) => void
 }
@@ -275,6 +275,7 @@ export class TurnCoordinator {
       || type === 'source-failed'
       || type === 'source-cancelled'
       || type === 'source-timeout'
+      || type === 'source-uncertain'
   }
 
   private scheduleCheckpoint(turnId: string): void {
@@ -390,14 +391,22 @@ export class TurnCoordinator {
     let recovered = 0
     for (const turn of unfinished) {
       if (this.recovered.has(turn.assistantMessageId)) continue
-      if (this.storage.recoverTurn(turn.turnId, turn.assistantMessageId)) {
+      const recovery = this.storage.recoverTurn(turn.turnId, turn.assistantMessageId)
+      if (recovery) {
         this.recovered.add(turn.assistantMessageId)
         const inMemory = this.turns.get(turn.turnId)
         if (inMemory) {
-          const failedMessage = { ...acceptedAssistantCheckpoint(inMemory.assistantMessage), status: 'failed' as const }
-          const recoveredTurn = { ...inMemory, assistantMessage: failedMessage, persistedOutcome: 'recovered' as const }
+          const outcome = recovery === true ? 'recovered' : recovery
+          const terminalStatus = outcome === 'completed' ? 'completed' as const : outcome === 'cancelled' ? 'cancelled' as const : 'failed' as const
+          const terminalMessage = { ...acceptedAssistantCheckpoint(inMemory.assistantMessage), status: terminalStatus }
+          const recoveredRecord = this.storage.findByRequestId(inMemory.sessionId, inMemory.requestId)
+          const recoveredTurn = {
+            ...inMemory, assistantMessage: terminalMessage, version: inMemory.version + 1, persistedOutcome: outcome,
+            ...(recoveredRecord?.persistedUsage !== undefined ? { persistedUsage: recoveredRecord.persistedUsage } : {}),
+            ...(recoveredRecord?.persistedError ? { persistedError: recoveredRecord.persistedError } : {})
+          }
           this.turns.set(turn.turnId, recoveredTurn)
-          this.terminals.set(turn.turnId, { turnId: turn.turnId, requestId: inMemory.requestId, sessionId: inMemory.sessionId, assistantMessageId: failedMessage.id, version: inMemory.version, outcome: 'recovered', message: failedMessage })
+          this.terminals.set(turn.turnId, { turnId: turn.turnId, requestId: inMemory.requestId, sessionId: inMemory.sessionId, assistantMessageId: terminalMessage.id, version: recoveredTurn.version, outcome, message: terminalMessage, ...(recoveredRecord?.persistedError ? { error: recoveredRecord.persistedError } : {}) })
         }
         recovered++
       }

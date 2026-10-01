@@ -2,6 +2,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
 import { appendMessage, createPersistedTurn, createSession, openDatabase, setConfigValue, type AppDatabase } from './database'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
+import { MODEL_BASELINE } from '../src/shared/modelBaseline'
+import { getCallAdmissionGate } from './runtime/callAdmissionGate'
 
 /**
  * P0 特征化基线（桌面调用方）：桌面 execute → runToolChatSession 入参契约。
@@ -31,15 +33,26 @@ const mockReadSessionEvents = vi.fn(async () => [])
 
 vi.mock('./toolChatLoop', () => ({
   runToolChatSession: (...args: unknown[]) => mockRunToolChatSession(...args),
-  DESKTOP_TOOL_LOOP_MAX_ROUNDS: 50
+  DESKTOP_TOOL_LOOP_MAX_ROUNDS: 500
 }))
 
 vi.mock('./sessionEvents', () => ({
+  appendCompactionTransaction: vi.fn(async () => undefined),
   getSessionEventSink: (...args: unknown[]) => mockGetSessionEventSink(...args),
   readCompactionMarkers: (...args: unknown[]) => mockReadCompactionMarkers(...args),
   readCompactionReplay: (...args: unknown[]) => mockReadCompactionReplay(...args),
   readSessionEvents: (...args: unknown[]) => mockReadSessionEvents(...args)
 }))
+
+vi.mock('../src/shared/contextMeter', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/shared/contextMeter')>()
+  return { ...actual, shouldCompact: () => true }
+})
+
+vi.mock('../src/shared/surfacePreflight', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/shared/surfacePreflight')>()
+  return { ...actual, validateSurfaceForSend: () => ({ ok: true }) }
+})
 
 vi.mock('./agentLogger/agentLogger', () => ({
   logAgentEvent: vi.fn()
@@ -58,6 +71,7 @@ vi.mock('./safeWebContentsSend', () => ({
 }))
 
 vi.mock('./anthropicClientFactory', () => ({
+  createAnthropicStreamPort: (client: { messages: { stream: (...args: unknown[]) => unknown } }) => ({ stream: (...args: unknown[]) => client.messages.stream(...args) }),
   createAnthropicClient: (...args: unknown[]) => mockCreateAnthropicClient(...args)
 }))
 
@@ -105,11 +119,12 @@ function makeDb(): AppDatabase {
 }
 
 function seedTrustedModel(db: AppDatabase): void {
+  const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
   setConfigValue(db, 'config.models', JSON.stringify([
-    { id: 'trusted', name: 'trusted-model', maximumContext: 200000, maxTokens: 64000, isDefault: false, isFast: false, isVision: false, enabled: true }
+    { id: modelId, name: modelId, maximumContext: MODEL_BASELINE[modelId]!.maximumContext, maxTokens: MODEL_BASELINE[modelId]!.maxTokens, isDefault: false, isFast: false, isVision: false, enabled: true }
   ]))
   setConfigValue(db, 'config.llmServices', JSON.stringify([
-    { id: 'svc-trusted', name: 'Trusted', baseUrl: 'https://trusted.example.com', supportedModelIds: ['trusted'], createdAt: '1', updatedAt: '1' }
+    { id: 'svc-trusted', name: 'Trusted', baseUrl: 'https://trusted.example.com', supportedModelIds: [modelId], createdAt: '1', updatedAt: '1' }
   ]))
   setConfigValue(db, 'config.activeLlmServiceIds', JSON.stringify(['svc-trusted']))
   setConfigValue(db, 'secrets.llmServiceKeys', JSON.stringify({ 'svc-trusted': 'enc:sk-test' }))
@@ -141,17 +156,19 @@ describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
   it('execute → Core args：出口接线 + 会话锚点 + appDb 注入 + lane 缺省（desktop）', async () => {
     const db = makeDb()
     seedTrustedModel(db)
-    const session = createSession(db, { name: 'caller-contract', model: 'trusted-model', maxTokens: 2048 })
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    const session = createSession(db, { name: 'caller-contract', model: modelId, maxTokens: 2048 })
     const user = appendMessage(db, { id: 'cc-user', sessionId: session.id, role: 'user', content: 'hello', timestamp: 1, status: 'sent' })
     const assistant = appendMessage(db, { id: 'cc-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
     createPersistedTurn(db, {
       turnId: 'cc-turn', requestId: 'cc-request', sessionId: session.id,
       userMessageId: user.message.id, assistantMessageId: assistant.message.id,
       contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'cc-token',
-      executionConfig: { lane: 'desktop', model: 'trusted-model', baseUrl: 'https://trusted.example.com', system: 'sys', maxTokens: 2048, enableThinking: false, locale: 'zh-CN' }
+      executionConfig: { lane: 'desktop', model: modelId, baseUrl: 'https://trusted.example.com', system: 'sys', maxTokens: 2048, enableThinking: false, locale: 'zh-CN' }
     })
     const notifyMainWindow = vi.fn()
     const floatingNotificationManager = { onConfirmRequest: vi.fn() }
+    const admissionAcquire = vi.spyOn(getCallAdmissionGate(), 'acquire')
     const execute = registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'key',
       getWorkDir: () => '/tmp',
@@ -173,19 +190,22 @@ describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
     })
 
     expect(mockRunToolChatSession).toHaveBeenCalledTimes(1)
+    expect(admissionAcquire).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'cc-request', turnId: 'cc-turn' }), expect.anything())
     const invocation = mockRunToolChatSession.mock.calls[0]![0] as Record<string, any>
     const ports = mockRunToolChatSession.mock.calls[0]![1] as Record<string, any>
+    const runOptions = mockRunToolChatSession.mock.calls[0]![2] as { onHostedTurnHandoff?: unknown }
 
     // 会话锚点与请求追踪
     expect(invocation.session.sessionId).toBe(session.id)
     expect(invocation.trace.requestId).toBe('cc-request')
     expect(invocation.trace.turnId).toBe('cc-turn')
+    expect(runOptions.onHostedTurnHandoff).toEqual(expect.any(Function))
     // 宿主数据库注入（P1 平移为 ports.legacy.appDb，P2 收口为端口）
     expect(ports.legacy?.appDb).toBe(db)
     // 桌面调用方不显式声明 lane（Core 缺省 desktop）
     expect(invocation.profile.lane).toBeUndefined()
     // 评审 2.1：桌面 lane 必须有工具循环轮数上界（成功路径无既有熔断）
-    expect(invocation.limits.maxToolRounds).toBe(50)
+    expect(invocation.limits.maxToolRounds).toBe(500)
     // 事件出口接线：fact / session 双出口 + 标题 / 文件树出口接 notifyMainWindow
     expect(invocation.events.onFact).toBeTypeOf('function')
     expect(invocation.events.onSessionEvent).toBeTypeOf('function')
@@ -200,6 +220,38 @@ describe('claudeStreamHandlers 桌面调用方契约（P0 特征化）', () => {
     // 偏差 11/3c:文件树失效归一为统一出口(scope:invalidated),不再直发 file:tree-changed
     expect(() => invocation.events.onFileTreeChanged?.({ kind: 'paths', relPaths: ['a.txt'] })).not.toThrow()
     expect(notifyMainWindow).not.toHaveBeenCalledWith('file:tree-changed', expect.anything())
+    db.close()
+  })
+
+  it('忽略旧 V1 路由标记并始终为 Desktop 装配 Hosted Runtime handoff', async () => {
+    const db = makeDb()
+    seedTrustedModel(db)
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    const session = createSession(db, { name: 'caller-contract-v1', model: modelId, maxTokens: 2048 })
+    const user = appendMessage(db, { id: 'cc-v1-user', sessionId: session.id, role: 'user', content: 'hello', timestamp: 1, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'cc-v1-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, {
+      turnId: 'cc-v1-turn', requestId: 'cc-v1-request', sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: assistant.message.id,
+      contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'cc-v1-token',
+      executionConfig: { lane: 'desktop', model: modelId, baseUrl: 'https://trusted.example.com', system: 'sys', maxTokens: 2048, enableThinking: false, locale: 'zh-CN' }
+    })
+    const deps = {
+      desktopSafetyGateMode: 'v1',
+      getApiKey: async () => 'key', getWorkDir: () => '/tmp', resolveWorkDirForSession: () => '/tmp', getUserDataPath: () => '/tmp',
+      getToolsConfig: () => DEFAULT_TOOLS_CONFIG, getBrowserConfig: () => ({ enabled: false, allowRemoteSessions: false }),
+      getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
+      getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir: '/tmp' }),
+      turnRuntime: { bindRequest: vi.fn() } as never
+    }
+    const execute = registerClaudeStreamHandlers(ipcMain, deps)
+
+    await execute(makeSender(), { requestId: 'cc-v1-request', turnId: 'cc-v1-turn', turnStartToken: 'cc-v1-token', sessionId: session.id })
+
+    const invocation = mockRunToolChatSession.mock.calls.at(-1)![0] as { profile: { providerRouteId?: string } }
+    const runOptions = mockRunToolChatSession.mock.calls.at(-1)![2] as { onHostedTurnHandoff?: unknown }
+    expect(invocation.profile.providerRouteId).toEqual(expect.any(String))
+    expect(runOptions.onHostedTurnHandoff).toEqual(expect.any(Function))
     db.close()
   })
 })

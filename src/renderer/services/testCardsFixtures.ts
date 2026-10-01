@@ -1,5 +1,6 @@
 import type { BrowserDependencyToolError } from '../../shared/browserTypes'
 import type { ToolCallRecord } from '../../shared/domainTypes'
+import { runtimeText } from '../i18n/runtimeText'
 
 export interface TestCardFixture {
   id: string
@@ -9,7 +10,7 @@ export interface TestCardFixture {
 
 const dependencyRecovery: BrowserDependencyToolError = {
   errorCode: 'chromium_missing',
-  errorMessage: 'Chromium 浏览器未安装',
+  errorMessage: runtimeText('browserRecovery.chromiumMissing'),
   recommendedCwd: 'E:\\Develop\\SpaceAssistant',
   installCommand: 'npx playwright install chromium',
   detectResult: {
@@ -19,7 +20,7 @@ const dependencyRecovery: BrowserDependencyToolError = {
     node: { version: 'v22.0.0', meetsRequirement: true },
     canInitialize: false,
     primaryFailure: 'chromium_missing',
-    errors: ['Chromium 浏览器未安装'],
+    errors: [runtimeText('browserRecovery.chromiumMissing')],
     recommendedCwd: 'E:\\Develop\\SpaceAssistant',
     installContext: 'development'
   }
@@ -63,12 +64,12 @@ export function getAllTestCardFixtures(): TestCardFixture[] {
       input: { action: 'navigate', mode: 'open', url: 'https://example.com' },
       status: 'failed',
       riskLevel: 'medium',
-      result: { success: false, error: 'Chromium 浏览器未安装', dependencyRecovery }
+      result: { success: false, error: runtimeText('browserRecovery.chromiumMissing'), dependencyRecovery }
     }),
     fixture('shell-confirm-normal', '[Test] ShellConfirmCard · confirming · normal', {
       id: 'shell-confirm-normal',
       toolName: 'run_shell',
-      input: { command: 'npm install', description: '下载 Playwright Chromium 浏览器（约 150-200MB，需联网）' },
+      input: { command: 'npm install', description: runtimeText('browserRecovery.downloadChromium') },
       status: 'confirming',
       riskLevel: 'high'
     }),
@@ -81,7 +82,7 @@ export function getAllTestCardFixtures(): TestCardFixture[] {
       shellSecurityHints: {
         requiresRiskAck: true,
         outsideWorkDirRisk: true,
-        warnings: ['命令包含工作目录外的路径']
+        warnings: [runtimeText('testCards.outsideWorkDir')]
       }
     }),
     fixture('script-confirm', '[Test] ScriptConfirmCard · confirming', {
@@ -134,7 +135,7 @@ export function getAllTestCardFixtures(): TestCardFixture[] {
       input: { pattern: 'foo' },
       status: 'failed',
       riskLevel: 'low',
-      result: { success: false, error: '搜索超时' }
+      result: { success: false, error: runtimeText('testCards.searchTimeout') }
     }),
     fixture('grep-rejected', '[Test] tool-row · rejected · grep', {
       id: 'grep-rejected',
@@ -142,7 +143,7 @@ export function getAllTestCardFixtures(): TestCardFixture[] {
       input: { pattern: 'foo' },
       status: 'rejected',
       riskLevel: 'low',
-      result: { success: false, error: '用户拒绝' }
+      result: { success: false, error: runtimeText('testCards.userRejected') }
     }),
     fixture('read-file-completed', '[Test] tool-row · completed · read_file (collapsed)', {
       id: 'read-file-completed',
@@ -175,7 +176,7 @@ export function getAllTestCardFixtures(): TestCardFixture[] {
       input: { action: 'observe', instruction: 'x' },
       status: 'failed',
       riskLevel: 'medium',
-      result: { success: false, error: '失败' }
+      result: { success: false, error: runtimeText('testCards.failed') }
     }),
     fixture('browser-detect-executing', '[Test] tool-row · executing · browser_detect', {
       id: 'browser-detect-executing',
@@ -195,7 +196,7 @@ export function getAllTestCardFixtures(): TestCardFixture[] {
         data: {
           canInitialize: false,
           primaryFailure: 'chromium_missing',
-          errors: ['Chromium 浏览器未安装']
+          errors: [runtimeText('browserRecovery.chromiumMissing')]
         }
       },
       completedAt: now
@@ -206,7 +207,7 @@ export function getAllTestCardFixtures(): TestCardFixture[] {
       input: {},
       status: 'failed',
       riskLevel: 'low',
-      result: { success: false, error: '检测超时' }
+      result: { success: false, error: runtimeText('testCards.detectTimeout') }
     }),
     fixture('shell-executing-plain', '[Test] tool-row · executing · run_shell plain progress', {
       id: 'shell-executing-plain',
@@ -243,7 +244,7 @@ export function getAllTestCardFixtures(): TestCardFixture[] {
       riskLevel: 'medium',
       result: {
         success: false,
-        error: '命令执行失败（退出码: 1）',
+        error: runtimeText('testCards.commandFailed', { code: 1 }),
         data: { stdout: '', stderr: 'error TS2322: type mismatch', exitCode: 1 }
       },
       completedAt: now

@@ -3,10 +3,10 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const packageJson = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-const dependencyVersion = packageJson.devDependencies?.['@earendil-works/pi-ai']
+const providerPackageJson = JSON.parse(await readFile(path.join(root, 'packages/agent-provider-pi-ai/package.json'), 'utf8'))
+const dependencyVersion = providerPackageJson.dependencies?.['@earendil-works/pi-ai']
 if (!dependencyVersion || dependencyVersion.startsWith('^') || dependencyVersion.startsWith('~')) {
-  throw new Error('@earendil-works/pi-ai must be pinned to an exact version in devDependencies')
+  throw new Error('@earendil-works/pi-ai must be pinned to an exact version in agent-provider-pi-ai dependencies')
 }
 
 const [{ getBuiltinModelDataGeneratedAt, getBuiltinModels, getBuiltinProviders }] = await Promise.all([

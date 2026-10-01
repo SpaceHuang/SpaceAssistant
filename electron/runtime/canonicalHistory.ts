@@ -1,0 +1,269 @@
+import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
+import type { CanonicalContentBlock, CanonicalModelMessage } from '../../packages/agent-sdk/src/model'
+import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
+
+type UnknownRecord = Record<string, unknown>
+
+export class CanonicalCompactionCommitUncertainError extends Error {
+  constructor(readonly compactionId: string, override readonly cause: unknown) {
+    super(`canonical compaction ${compactionId} committed but legacy ledger commit failed`)
+    this.name = 'CanonicalCompactionCommitUncertainError'
+  }
+}
+
+export async function commitCompactionAcrossStores(input: {
+  compactionId: string
+  appendCanonical: () => Promise<unknown>
+  appendLegacy: () => Promise<unknown>
+}): Promise<void> {
+  await input.appendCanonical()
+  try {
+    await input.appendLegacy()
+  } catch (cause) {
+    throw new CanonicalCompactionCommitUncertainError(input.compactionId, cause)
+  }
+}
+
+function canonicalMessagesToClaudeMessages(canonicalMessages: readonly CanonicalModelMessage[], options: { allowPendingToolCalls?: boolean } = {}): ClaudeChatMessageWithBlocks[] {
+  const messages: ClaudeChatMessageWithBlocks[] = []
+  const pendingToolCalls = new Set<string>()
+  let pendingToolResults: Array<{ type: 'tool_result'; tool_use_id: string; content: unknown; is_error: boolean }> = []
+  const flushToolResults = () => {
+    if (pendingToolResults.length) messages.push({ role: 'user', content: pendingToolResults })
+    pendingToolResults = []
+  }
+  for (const message of canonicalMessages) {
+    if (message.role === 'tool') {
+      if (!pendingToolCalls.delete(message.toolCallId)) throw new Error(`compacted history tool result has no call: ${message.toolCallId}`)
+      pendingToolResults.push({ type: 'tool_result', tool_use_id: message.toolCallId, content: message.content, is_error: message.isError })
+      continue
+    }
+    flushToolResults()
+    if (message.role === 'system') continue
+    const blocks: unknown[] = []
+    if (Array.isArray(message.content)) {
+      for (const block of message.content) {
+        if (block.type === 'text') blocks.push({ type: 'text', text: block.text })
+        else if (block.type === 'thinking') blocks.push({ type: 'thinking', thinking: block.thinking,
+          ...(block.thinkingSignature ? { signature: block.thinkingSignature } : {}) })
+        else if (block.type === 'image') blocks.push({ type: 'image', source: { type: 'base64', media_type: block.mimeType, data: block.data } })
+      }
+    }
+    for (const tool of message.role === 'assistant' ? message.toolCalls ?? [] : []) {
+      if (!tool.id.trim() || pendingToolCalls.has(tool.id)) throw new Error(`duplicate compacted history tool call: ${tool.id}`)
+      pendingToolCalls.add(tool.id)
+      blocks.push({ type: 'tool_use', id: tool.id, name: tool.name, input: tool.input,
+        ...(tool.thoughtSignature ? { thought_signature: tool.thoughtSignature } : {}) })
+    }
+    messages.push({
+      role: message.role,
+      content: typeof message.content === 'string' ? message.content : blocks,
+      ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {})
+    })
+  }
+  flushToolResults()
+  if (pendingToolCalls.size && !options.allowPendingToolCalls) throw new Error(`compacted history contains unresolved tool calls: ${[...pendingToolCalls].join(',')}`)
+  return messages
+}
+
+/** Projects an SDK boundary transcript to the legacy planner wire shape while retaining pending proposals. */
+export function toLegacyBoundaryMessages(
+  canonicalMessages: readonly CanonicalModelMessage[],
+  requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>
+): ClaudeChatMessageWithBlocks[] {
+  const messages = canonicalMessagesToClaudeMessages(canonicalMessages, { allowPendingToolCalls: true })
+  if (!requiredUserMessage) return messages
+  if (requiredUserMessage.message.role !== 'user') throw new Error('required boundary message must be a user message')
+  const target = JSON.stringify(requiredUserMessage.message)
+  let matchedIndex = -1
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message?.role !== 'user') continue
+    const [canonical] = toCanonicalModelMessages([message])
+    if (JSON.stringify(canonical) === target) {
+      matchedIndex = index
+      break
+    }
+  }
+  if (matchedIndex < 0) throw new Error(`boundary transcript omitted required message: ${requiredUserMessage.id}`)
+  messages[matchedIndex] = { ...messages[matchedIndex]!, id: requiredUserMessage.id }
+  return messages
+}
+
+/** Convert the host's rebuilt Anthropic surface to the provider-neutral SDK history contract. */
+export function toCanonicalModelMessages(messages: readonly ClaudeChatMessageWithBlocks[]): CanonicalModelMessage[] {
+  const canonical: CanonicalModelMessage[] = []
+  for (const message of messages) {
+    if (typeof message.content === 'string') {
+      canonical.push({ role: message.role, content: message.content, ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {}) })
+      continue
+    }
+    if (!Array.isArray(message.content)) throw new Error('unsupported host message content')
+    if (message.role === 'user') {
+      let userBlocks: CanonicalContentBlock[] = []
+      const flushUser = () => {
+        if (userBlocks.length) canonical.push({ role: 'user', content: userBlocks, ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {}) })
+        userBlocks = []
+      }
+      for (const raw of message.content) {
+        if (!raw || typeof raw !== 'object') throw new Error('unsupported host content block')
+        const block = raw as UnknownRecord
+        if (block.type === 'tool_result') {
+          if (typeof block.tool_use_id !== 'string' || !block.tool_use_id.trim()) throw new Error('invalid host tool-result block')
+          flushUser()
+          canonical.push({ role: 'tool', toolCallId: block.tool_use_id, content: block.content ?? '', isError: block.is_error === true })
+        } else if (block.type === 'text' && typeof block.text === 'string') userBlocks.push({ type: 'text', text: block.text })
+        else if (block.type === 'image') {
+          const source = block.source as UnknownRecord | undefined
+          if (!source || source.type !== 'base64' || typeof source.media_type !== 'string' || typeof source.data !== 'string') throw new Error('unsupported host image source')
+          if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(source.media_type)) throw new Error(`unsupported canonical image MIME type: ${source.media_type}`)
+          userBlocks.push({ type: 'image', mimeType: source.media_type as Extract<CanonicalContentBlock, { type: 'image' }>['mimeType'], data: source.data })
+        } else throw new Error(`unsupported host content block: ${String(block.type)}`)
+      }
+      flushUser()
+      continue
+    }
+    const content: CanonicalContentBlock[] = []
+    const toolCalls: Array<{ id: string; name: string; input: Record<string, unknown>; thoughtSignature?: string }> = []
+    for (const raw of message.content) {
+      if (!raw || typeof raw !== 'object') throw new Error('unsupported host content block')
+      const block = raw as UnknownRecord
+      if (block.type === 'text' && typeof block.text === 'string') {
+        content.push({ type: 'text', text: block.text })
+      } else if (block.type === 'thinking' && typeof block.thinking === 'string') {
+        content.push({ type: 'thinking', thinking: block.thinking,
+          ...(typeof block.signature === 'string' ? { thinkingSignature: block.signature } : {}) })
+      } else if (block.type === 'redacted_thinking' && typeof block.data === 'string') {
+        content.push({ type: 'thinking', thinking: '', thinkingSignature: block.data, redacted: true })
+      } else if (block.type === 'image') {
+        const source = block.source as UnknownRecord | undefined
+        if (!source || source.type !== 'base64' || typeof source.media_type !== 'string' || typeof source.data !== 'string') {
+          throw new Error('unsupported host image source')
+        }
+        if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(source.media_type)) {
+          throw new Error(`unsupported canonical image MIME type: ${source.media_type}`)
+        }
+        content.push({ type: 'image', mimeType: source.media_type as Extract<CanonicalContentBlock, { type: 'image' }>['mimeType'], data: source.data })
+      } else if (block.type === 'tool_use') {
+        if (typeof block.id !== 'string' || !block.id.trim() || typeof block.name !== 'string' || !block.name.trim() ||
+          !block.input || typeof block.input !== 'object' || Array.isArray(block.input)) throw new Error('invalid host tool-use block')
+        toolCalls.push({ id: block.id, name: block.name, input: block.input as Record<string, unknown>,
+          ...(typeof block.thought_signature === 'string' ? { thoughtSignature: block.thought_signature } : {}) })
+      } else {
+        throw new Error(`unsupported host content block: ${String(block.type)}`)
+      }
+    }
+    if (message.role === 'assistant') {
+      const timestamp = message.timestamp !== undefined ? { timestamp: message.timestamp } : {}
+      if (content.length && toolCalls.length) canonical.push({ role: 'assistant', content, toolCalls, ...timestamp })
+      else if (content.length) canonical.push({ role: 'assistant', content, ...timestamp })
+      else canonical.push({ role: 'assistant', toolCalls, ...timestamp })
+    }
+  }
+  return canonical
+}
+
+/** Rebuilds the accepted model/tool suffix from committed History events; incomplete dispatches fail closed. */
+export function rebuildClaudeMessagesFromHistory(events: readonly HistoryEvent[]): ClaudeChatMessageWithBlocks[] {
+  const messages: ClaudeChatMessageWithBlocks[] = []
+  const pendingToolCalls = new Set<string>()
+  const toolCallOrder: string[] = []
+  const replayResults = new Map<string, { type: 'tool_result'; tool_use_id: string; content: unknown; is_error?: boolean }>()
+  const flushResults = () => {
+    const ordered = toolCallOrder.flatMap((toolCallId) => {
+      const result = replayResults.get(toolCallId)
+      return result ? [result] : []
+    })
+    if (ordered.length) messages.push({ role: 'user', content: ordered })
+    for (const toolCallId of toolCallOrder) replayResults.delete(toolCallId)
+    toolCallOrder.length = 0
+  }
+
+  for (const event of events) {
+    if (event.kind === 'invocation-context-committed' || event.kind === 'transcript-compacted') {
+      const payload = event.payload as { messages?: unknown; requiredUserMessage?: { id?: unknown; message?: unknown } }
+      if (!Array.isArray(payload?.messages)) throw new Error(`invalid canonical transcript snapshot: ${event.eventId}`)
+      const canonicalMessages = payload.messages as CanonicalModelMessage[]
+      const replacement = canonicalMessagesToClaudeMessages(canonicalMessages)
+      const required = payload.requiredUserMessage
+      if (typeof required?.id === 'string' && required.message && typeof required.message === 'object') {
+        const target = JSON.stringify(required.message)
+        let match = -1
+        for (let index = replacement.length - 1; index >= 0; index -= 1) {
+          if (replacement[index]?.role !== 'user') continue
+          const [candidate] = toCanonicalModelMessages([replacement[index]!])
+          if (JSON.stringify(candidate) === target) { match = index; break }
+        }
+        if (match < 0) throw new Error(`compacted transcript omitted required message: ${required.id}`)
+        replacement[match] = { ...replacement[match]!, id: required.id }
+      }
+      messages.splice(0, messages.length, ...replacement)
+      pendingToolCalls.clear()
+      toolCallOrder.length = 0
+      replayResults.clear()
+      for (const message of canonicalMessages) {
+        if (message.role === 'assistant') {
+          for (const tool of message.toolCalls ?? []) { pendingToolCalls.add(tool.id); toolCallOrder.push(tool.id) }
+        } else if (message.role === 'tool') pendingToolCalls.delete(message.toolCallId)
+      }
+      continue
+    }
+    if (event.kind === 'replay-message-committed') {
+      flushResults()
+      const payload = event.payload as { message?: unknown }
+      const message = payload?.message as CanonicalModelMessage | undefined
+      if (!message || (message.role !== 'user' && message.role !== 'assistant')) throw new Error(`invalid canonical replay message: ${event.eventId}`)
+      if (message.role === 'assistant') throw new Error('assistant replay messages must use model-response-committed')
+      if (typeof message.content === 'string') messages.push({ role: 'user', content: message.content })
+      else if (Array.isArray(message.content)) messages.push({ role: 'user', content: message.content.map((block) => {
+        if (block.type === 'text') return { type: 'text', text: block.text }
+        return { type: 'image', source: { type: 'base64', media_type: block.mimeType, data: block.data } }
+      }) })
+      else throw new Error(`invalid canonical user replay content: ${event.eventId}`)
+      continue
+    }
+    if (event.kind === 'model-response-committed') {
+      flushResults()
+      const payload = event.payload as { message?: unknown }
+      const message = payload?.message as CanonicalModelMessage | undefined
+      if (!message || message.role !== 'assistant') throw new Error(`invalid canonical assistant response: ${event.eventId}`)
+      const blocks: unknown[] = []
+      if (Array.isArray(message.content)) {
+        for (const block of message.content) {
+          if (block.type === 'text') blocks.push({ type: 'text', text: block.text })
+          else if (block.type === 'thinking') blocks.push({ type: 'thinking', thinking: block.thinking, ...(block.thinkingSignature ? { signature: block.thinkingSignature } : {}) })
+          else if (block.type === 'image') blocks.push({ type: 'image', source: { type: 'base64', media_type: block.mimeType, data: block.data } })
+        }
+      }
+      for (const tool of message.toolCalls ?? []) {
+        if (!tool.id.trim() || pendingToolCalls.has(tool.id)) throw new Error(`duplicate canonical tool call: ${tool.id}`)
+        pendingToolCalls.add(tool.id)
+        toolCallOrder.push(tool.id)
+        blocks.push({ type: 'tool_use', id: tool.id, name: tool.name, input: tool.input, ...(tool.thoughtSignature ? { thought_signature: tool.thoughtSignature } : {}) })
+      }
+      messages.push({ role: 'assistant', content: typeof message.content === 'string' ? message.content : blocks })
+      continue
+    }
+    if (event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') {
+      const payload = event.payload as { toolCallId?: unknown; replayContent?: unknown; isError?: unknown }
+      if (typeof payload?.toolCallId !== 'string' || !pendingToolCalls.has(payload.toolCallId)) {
+        throw new Error(`history tool result has no committed call: ${String(payload?.toolCallId)}`)
+      }
+      pendingToolCalls.delete(payload.toolCallId)
+      const notDispatched = event.kind === 'tool-call-not-dispatched'
+      replayResults.set(payload.toolCallId, {
+        type: 'tool_result', tool_use_id: payload.toolCallId,
+        content: payload.replayContent ?? (notDispatched ? notDispatchedReplayContent((event.payload as { reason?: unknown }).reason) : ''),
+        ...(notDispatched ? { is_error: true } : typeof payload.isError === 'boolean' ? { is_error: payload.isError } : {})
+      })
+    }
+  }
+  flushResults()
+  if (pendingToolCalls.size) throw new Error(`history contains unresolved tool calls: ${[...pendingToolCalls].join(',')}`)
+  return messages
+}
+
+function notDispatchedReplayContent(reason: unknown): string {
+  const stableReason = typeof reason === 'string' && /^[A-Z][A-Z0-9_:-]{0,63}$/.test(reason) ? reason : 'NOT_DISPATCHED'
+  return `Tool call was not dispatched (${stableReason}).`
+}

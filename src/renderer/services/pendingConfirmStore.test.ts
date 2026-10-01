@@ -80,6 +80,22 @@ describe('pendingConfirmStore', () => {
     expect(pendingConfirmStore.getItems()[0]?.sessionId).toBe('sess-direct')
   })
 
+  it('隔离不同会话中复用 requestId 和 toolUseId 的确认项及响应', () => {
+    seedConfirm({ requestId: 'shared-request', sessionId: 'session-a', toolUseId: 'shared-tool', toolName: 'write_file', input: { path: 'a' }, riskLevel: 'medium' })
+    seedConfirm({ requestId: 'shared-request', sessionId: 'session-b', toolUseId: 'shared-tool', toolName: 'write_file', input: { path: 'b' }, riskLevel: 'medium' })
+
+    expect(pendingConfirmStore.getItems()).toHaveLength(2)
+    expect(pendingConfirmStore.find('session-a', 'shared-tool')?.input).toEqual({ path: 'a' })
+    expect(pendingConfirmStore.find('session-b', 'shared-tool')?.input).toEqual({ path: 'b' })
+
+    pendingConfirmStore.respond('shared-request', 'shared-tool', false, undefined, 'session-b')
+    expect(window.api.toolConfirmResponse).toHaveBeenCalledWith(expect.objectContaining({
+      requestId: 'shared-request', toolUseId: 'shared-tool', approved: false, sessionId: 'session-b'
+    }))
+    expect(pendingConfirmStore.find('session-a', 'shared-tool')?.input).toEqual({ path: 'a' })
+    expect(pendingConfirmStore.find('session-b', 'shared-tool')).toBeUndefined()
+  })
+
   it('不把审批 Agent 的 confirming 项暴露为人工待确认', () => {
     pendingConfirmStore.syncFromProjection({
       sessionId: 'sess-agent',
@@ -120,7 +136,11 @@ describe('pendingConfirmStore', () => {
     expect(window.api.toolConfirmResponse).toHaveBeenCalledWith({
       requestId: 'req-1',
       toolUseId: 'tool-1',
-      approved: true
+      approved: true,
+      sessionId: 's1',
+      trustCommand: undefined,
+      trustDomain: undefined,
+      trustActDomain: undefined
     })
     expect(pendingConfirmStore.getItems()).toHaveLength(0)
   })
@@ -148,7 +168,8 @@ describe('pendingConfirmStore', () => {
     expect(window.api.toolConfirmResponse).toHaveBeenCalledWith({
       requestId: 'r1',
       toolUseId: 't1',
-      approved: false
+      approved: false,
+      sessionId: 's1'
     })
     expect(pendingConfirmStore.getItems()).toHaveLength(1)
     expect(pendingConfirmStore.getItems()[0]?.sessionId).toBe('s2')
@@ -606,5 +627,40 @@ describe('pendingConfirmStore', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('保留 pending 卡片的来源消息与活动顺序元数据', () => {
+    pendingConfirmStore.syncFromProjection({
+      sessionId: 'session-position',
+      requestId: 'request-position',
+      message: {
+        id: 'assistant-position',
+        sessionId: 'session-position',
+        role: 'assistant',
+        content: 'working',
+        timestamp: 1,
+        status: 'streaming',
+        schemaVersion: 1,
+        activity: [
+          { kind: 'text', segmentIndex: 0 },
+          { kind: 'tool', toolId: 'tool-before' },
+          { kind: 'tool', toolId: 'tool-pending' }
+        ],
+        toolCalls: [
+          { id: 'tool-before', toolName: 'run_script', input: {}, status: 'completed', riskLevel: 'low', startedAt: 101 },
+          { id: 'tool-pending', toolName: 'run_shell', input: {}, status: 'confirming', riskLevel: 'high', startedAt: 202 }
+        ]
+      }
+    })
+
+    expect(pendingConfirmStore.getItems()).toEqual([
+      expect.objectContaining({
+        toolUseId: 'tool-pending',
+        assistantMessageId: 'assistant-position',
+        toolIndex: 1,
+        activityIndex: 2,
+        startedAt: 202
+      })
+    ])
   })
 })

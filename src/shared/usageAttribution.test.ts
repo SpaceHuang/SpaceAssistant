@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   accumulateToolResultVolume,
+  accumulateToolDeclarationSnapshot,
   ATTRIBUTION_SCHEMA_VERSION,
   BLOCK_V1_ESTIMATOR_VERSION,
   buildMessageSkeleton,
@@ -8,6 +9,7 @@ import {
   classifyToolSource,
   emptyTurnToolDimension,
   estimateBlockV1ThreeSources,
+  hasAttributionWeights,
   normalizeInputAttribution,
   normalizeOutputAttribution,
   normalizeTokensLargestRemainder,
@@ -126,6 +128,41 @@ describe('工具返回体量累计', () => {
     accumulateToolResultVolume(dim, 'read_file', [{ type: 'text', text: 'abc' }])
     expect(dim.toolResults['grep']).toEqual({ calls: 2, chars: 7 })
     expect(dim.toolResults['read_file']).toEqual({ calls: 1, chars: 3 })
+  })
+})
+
+describe('工具声明 turn 维度累计', () => {
+  it('重复声明按每次模型请求累计成本，来源分类保持稳定', () => {
+    const dimension = emptyTurnToolDimension()
+    const snapshot = summarizeToolDeclarations([
+      { name: 'grep', description: 'search', input_schema: { type: 'object' } },
+      { name: 'mcp_docs_search', description: 'docs', input_schema: { type: 'object' } }
+    ])
+    accumulateToolDeclarationSnapshot(dimension, snapshot)
+    accumulateToolDeclarationSnapshot(dimension, snapshot)
+    expect(dimension.tools).toEqual({
+      grep: snapshot.tools.grep! * 2,
+      mcp_docs_search: snapshot.tools.mcp_docs_search! * 2
+    })
+    expect(dimension.toolSource).toEqual({
+      builtin: snapshot.toolSource.builtin! * 2,
+      mcp: snapshot.toolSource.mcp! * 2
+    })
+    expect(dimension.toolSources).toEqual({ grep: 'builtin', mcp_docs_search: 'mcp' })
+  })
+})
+
+describe('多模态输入归因有效性', () => {
+  it('纯图片消息保留 null message 权重，同时识别有效 system/tools 三源估算', () => {
+    const attribution = buildStepAttribution({
+      system: 'stable system prompt',
+      tools: [{ name: 'grep', description: 'search workspace', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', data: 'opaque' } }] }]
+    })
+    expect(attribution.blocks['user|image']).toEqual({ chars: 0, tokens: null })
+    expect(attribution.threeSources.systemTokens).toBeGreaterThan(0)
+    expect(attribution.threeSources.toolsTokens).toBeGreaterThan(0)
+    expect(hasAttributionWeights(attribution as unknown as Record<string, unknown>)).toBe(false)
   })
 })
 
@@ -259,9 +296,7 @@ describe('normalizeInputAttribution（§6.3 两段式归一化 / AT7 恒等式�
       tools: [],
       messages: [{ role: 'user', content: [{ type: 'image', source: {} }, { type: 'text', text: 'abc' }] }]
     })
-    const out = normalizeInputAttribution(withImage, 300)
-    expect(out.messageBlocks['user|image']).toBe(0)
-    expect(out.system + out.tools + out.messageBlocks['user|text']!).toBe(300)
+    expect(() => normalizeInputAttribution(withImage, 300)).toThrow('ATTRIBUTION_HAS_UNESTIMATED_BLOCK')
   })
 })
 
@@ -334,5 +369,34 @@ describe('工具体量累计不变量（AGENTS 纪律：随机操作序列 + 守
     expect(Object.keys(dim.tools)).toEqual(['grep'])
     expect(Object.keys(dim.toolSource)).toEqual(['builtin'])
     expect(dim.toolResults['grep']).toEqual({ calls: 1, chars: 3 })
+  })
+})
+
+describe('calculateAttributionCoverage（筛选集精确输入覆盖率）', () => {
+  it('历史 NULL 与版本不匹配计入缺口；每个 estimator version 独立对同一精确分母计算', async () => {
+    const { calculateAttributionCoverage } = await import('./usageAttribution')
+    const result = calculateAttributionCoverage([
+      { inputTokens: 100, attributionJson: '{"blocks":{"user|text":{"tokens":2}}}', estimatorVersion: 'block-v1' },
+      { inputTokens: 50, attributionJson: '{"blocks":{"user|text":{"tokens":2}}}', estimatorVersion: 'block-v2' },
+      { inputTokens: 25, attributionJson: null, estimatorVersion: null },
+      { inputTokens: null, attributionJson: '{"blocks":{"user|text":{"tokens":2}}}', estimatorVersion: 'block-v1' }
+    ])
+    expect(result.exactInputTokens).toBe(175)
+    expect(result.byEstimatorVersion).toEqual([
+      { estimatorVersion: 'block-v1', attributableInputTokens: 100, unattributedInputTokens: 75, coverageRatio: 100 / 175 },
+      { estimatorVersion: 'block-v2', attributableInputTokens: 50, unattributedInputTokens: 125, coverageRatio: 50 / 175 }
+    ])
+  })
+
+  it('分别表示 0%、100% 覆盖；无精确输入时不构造 0 分母 coverage', async () => {
+    const { calculateAttributionCoverage } = await import('./usageAttribution')
+    expect(calculateAttributionCoverage([{ inputTokens: 40, attributionJson: null, estimatorVersion: null }]))
+      .toMatchObject({ exactInputTokens: 40, byEstimatorVersion: [] })
+    expect(calculateAttributionCoverage([{ inputTokens: 40, attributionJson: '{"blocks":{"user|text":{"tokens":2}}}', estimatorVersion: 'block-v1' }]))
+      .toMatchObject({ exactInputTokens: 40, byEstimatorVersion: [{ estimatorVersion: 'block-v1', attributableInputTokens: 40, unattributedInputTokens: 0, coverageRatio: 1 }] })
+    expect(calculateAttributionCoverage([{ inputTokens: 40, attributionJson: '{"blocks":{}}', estimatorVersion: 'block-v1' }]))
+      .toMatchObject({ exactInputTokens: 40, byEstimatorVersion: [] })
+    expect(calculateAttributionCoverage([{ inputTokens: null, attributionJson: '{"blocks":{"user|text":{"tokens":2}}}', estimatorVersion: 'block-v1' }]))
+      .toEqual({ exactInputTokens: 0, byEstimatorVersion: [] })
   })
 })

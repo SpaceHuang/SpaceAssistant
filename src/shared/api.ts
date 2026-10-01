@@ -287,6 +287,8 @@ export type SpaceAssistantApi = {
     messageId: string
     sessionId: string
   }) => Promise<{ ok: true; sessionId: string } | { ok: false; error: string }>
+  chatUpdateQueuedMessage: (payload: { sessionId: string; messageId: string; content: string }) => Promise<{ ok: true; message: Message; sequence: number } | { ok: false; error: string }>
+  chatReorderQueuedMessages: (payload: { sessionId: string; messageIds: string[] }) => Promise<{ ok: true; entries: Array<{ message: Message; sequence: number }> } | { ok: false; error: 'queue_changed' }>
 
   chatStageImage: (args: {
     sessionId: string
@@ -418,11 +420,8 @@ export type SpaceAssistantApi = {
 
   usageStatsDaily: (args: import('./usageStatsTypes').UsageStatsRangeArgs) => Promise<import('./usageStatsTypes').UsageDailyPoint[]>
   usageStatsSummary: (args: import('./usageStatsTypes').UsageStatsRangeArgs) => Promise<import('./usageStatsTypes').UsageSummary>
-  usageStatsAttributionComposition: (args: import('./usageStatsTypes').UsageAttributionRangeArgs) => Promise<import('./usageStatsTypes').UsageAttributionComposition>
-  usageStatsAttributionDaily: (args: import('./usageStatsTypes').UsageAttributionRangeArgs) => Promise<import('./usageStatsTypes').UsageAttributionDailyPoint[]>
-  usageStatsAttributionOutput: (args: import('./usageStatsTypes').UsageAttributionRangeArgs) => Promise<import('./usageStatsTypes').UsageAttributionOutputSplit>
-  usageStatsAttributionTools: (args: import('./usageStatsTypes').UsageStatsRangeArgs) => Promise<import('./usageStatsTypes').UsageToolAttributionBreakdown>
-  usageStatsLatestSessionAttribution: (sessionId: string) => Promise<import('./usageStatsTypes').UsageLatestSessionAttribution | null>
+  usageStatsAttribution: (args: import('./usageStatsTypes').UsageStatsRangeArgs) => Promise<import('./usageStatsTypes').UsageAttributionSummary>
+  usageStatsLatestAttribution: (sessionId: string) => Promise<import('./usageStatsTypes').UsageLatestAttribution | null>
   usageStatsDimensions: () => Promise<import('./usageStatsTypes').UsageDimensions>
 
   onOpenSettings: (cb: () => void) => () => void
@@ -443,7 +442,7 @@ export type SpaceAssistantApi = {
   sessionOnCreated: (cb: (data: { session: Session }) => void) => () => void
 
   toolConfirmResponse: (payload: ToolConfirmResponsePayload) => Promise<ToolConfirmResponseResult>
-  toolCancel: (payload: { requestId: string; toolUseId: string }) => Promise<void>
+  toolCancel: (payload: { requestId: string; toolUseId: string; sessionId: string; turnId: string }) => Promise<void>
   shellOpenTerminal: (payload: { cwd: string }) => Promise<{ ok: true } | { ok: false; error: string }>
   shellManageTrustedCommands: (
     payload: ShellManageTrustedCommandsAction

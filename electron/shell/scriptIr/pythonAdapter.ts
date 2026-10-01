@@ -633,11 +633,11 @@ function adaptExpr(node: TsNode): IrExpr {
       }
       return { kind: 'dict', keys, values }
     }
-    case 'pair': {
-      // 独立 pair 防御性处理
-      const value = fieldNode(node, 'value')
-      return value ? adaptExpr(value) : { kind: 'none' }
-    }
+    case 'pair':
+      // v5 评审:pair 只应出现在 dictionary 字面量(case 'dictionary' 自行处理)与
+      // dictionary_comprehension 的 body(上方分支自行处理)。落到这里说明消费方遗漏,
+      // 静默降级只取 value 正是 B5(key 逃逸)能藏住的根因——改 fail-closed 抛错落人工。
+      throw new IrCoverageError(type, 'pair reached adaptExpr (must be handled by dictionary/comprehension branches)')
     case 'subscript': {
       const value = fieldNode(node, 'value')
       const sub = fieldNode(node, 'subscript')
@@ -678,9 +678,15 @@ function adaptExpr(node: TsNode): IrExpr {
       return inner ? adaptExpr(inner) : { kind: 'none' }
     }
     case 'named_expression': {
-      // (x := 1) 海象表达式：对安全面保守取值表达式
+      // (x := 1) 海象表达式：目标是绑定位置，必须完整建模（v3 评审）——只取 value 侧会丢
+      // 目标名，消费方的常量失效/def 名失效全部漏过（确认门绕过根因）。
       const value = fieldNode(node, 'value')
-      return value ? adaptExpr(value) : { kind: 'none' }
+      const targetNode = fieldNode(node, 'name') ?? fieldNode(node, 'left') ?? fieldNode(node, 'target') ?? firstNamed(node)
+      return {
+        kind: 'named_expr',
+        target: targetNode ? assignTargetName(targetNode) : '',
+        value: value ? adaptExpr(value) : { kind: 'none' }
+      }
     }
     case 'list_comprehension':
     case 'set_comprehension':
@@ -770,22 +776,40 @@ function adaptComprehension(node: TsNode): IrExpr {
     node.type === 'list_comprehension' ? 'list' : node.type === 'set_comprehension' ? 'set' : node.type === 'dictionary_comprehension' ? 'dict' : 'generator'
   let elt: IrExpr | null = null
   let dictKey: IrExpr | null = null
-  const generators: Array<{ target: string; iter: IrExpr }> = []
+  const generators: Array<{ target: string; iter: IrExpr; conditions: IrExpr[] }> = []
   const body = fieldNode(node, 'body')
   const keyNode = fieldNode(node, 'key')
+  // v4 评审:条件子句必须进 IR(每轮迭代可能不求值;条件内调用/walrus 不得逃逸分析)。
+  // tree-sitter 形态:if_clause 是 for_in_clause 的**兄弟节点**,按归属挂到最近的生成器上。
   for (const child of namedChildren(node)) {
     if (child.type === 'for_in_clause') {
       const left = fieldNode(child, 'left')
       const right = fieldNode(child, 'right')
       generators.push({
         target: left ? assignTargetName(left) : '',
-        iter: right ? adaptExpr(right) : { kind: 'none' }
+        iter: right ? adaptExpr(right) : { kind: 'none' },
+        conditions: []
       })
+    } else if (child.type === 'if_clause') {
+      const cond = fieldNode(child, 'condition') ?? firstNamed(child)
+      const lastGenerator = generators.at(-1)
+      if (lastGenerator && cond) lastGenerator.conditions.push(adaptExpr(cond))
     }
   }
-  if (compKind === 'dict' && keyNode && body) {
-    dictKey = adaptExpr(keyNode)
-    elt = adaptExpr(body)
+  if (compKind === 'dict' && body) {
+    // v5 评审 B5:tree-sitter 结构是 dictionary_comprehension(body: pair(key, value)),
+    // key 是 **pair 节点**的字段——在推导式节点上取 key 恒为 null(死代码分支),
+    // 导致 key 位置表达式(如 os.system(k))整块逃逸分析。必须从 body 的 pair 取。
+    if (body.type === 'pair') {
+      const pairKey = fieldNode(body, 'key')
+      const pairValue = fieldNode(body, 'value')
+      dictKey = pairKey ? adaptExpr(pairKey) : { kind: 'none' }
+      elt = pairValue ? adaptExpr(pairValue) : { kind: 'none' }
+    } else {
+      // 非 pair 形态(防御):key 记 none,value 走完整表达式——消费方按 tuple 遍历不漏
+      dictKey = { kind: 'none' }
+      elt = adaptExpr(body)
+    }
     return {
       kind: 'comprehension',
       elt: { kind: 'tuple', elts: [dictKey, elt] },

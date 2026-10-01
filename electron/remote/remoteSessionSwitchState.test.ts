@@ -60,8 +60,19 @@ describe('remoteSessionSwitchState', () => {
   it('clearRequest removes request-scoped state', () => {
     beginLlm('s1', 'r1')
     beginTool('s1', 'r1', 'grep')
-    clearRequest('r1')
+    clearRequest('s1', 'r1')
     expect(getSessionSwitchBlockers('s1')).toEqual([])
+  })
+
+  it('清理共享 requestId 的一个 session 不会移除另一 session 的运行中守卫', () => {
+    beginLlm('session-a', 'shared')
+    beginLlm('session-b', 'shared')
+    endLlm('session-a', 'shared')
+
+    clearRequest('session-a', 'shared')
+
+    expect(getSessionSwitchBlockers('session-a')).toEqual([])
+    expect(getSessionSwitchBlockers('session-b')).toContain('llm_in_flight')
   })
 
   it('isolates concurrent requests on same session', () => {

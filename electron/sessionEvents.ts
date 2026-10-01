@@ -1,6 +1,7 @@
 import fs from 'fs/promises'
 import path from 'path'
 import { randomUUID } from 'crypto'
+import { isDeepStrictEqual } from 'node:util'
 import type { SessionUsage } from '../src/shared/sessionUsage'
 import { foldCompactionEvents, projectCompactionMarkers, type CompactionReplay, type CompactionMarker } from '../src/shared/compactionEvents'
 import { withTransientLockRetry } from './safeAtomicWrite'
@@ -46,6 +47,16 @@ export async function appendCompactionTransaction(
 ): Promise<CommittedEvent> {
   const startEvent = await sink.appendCritical({ type: 'compaction_start', payload: start })
   const summaryEvent = await sink.appendCritical({ type: 'compaction_summary', payload: summary })
+  return appendCompactionEnd(sink, start, summary, startEvent, summaryEvent)
+}
+
+function appendCompactionEnd(
+  sink: SessionEventSink,
+  start: SessionEventPayload,
+  summary: SessionEventPayload,
+  startEvent: CommittedEvent,
+  summaryEvent: CommittedEvent
+): Promise<CommittedEvent> {
   return sink.appendCritical({ type: 'compaction_end', payload: {
     compactionId: summary.compactionId,
     ...(typeof (summary.outputWindowId ?? start.windowId) === 'string' ? { windowId: summary.outputWindowId ?? start.windowId } : {}),
@@ -59,6 +70,232 @@ export async function appendCompactionTransaction(
     outputSurfaceFingerprint: summary.outputSurfaceFingerprint,
     summaryHash: summary.summaryHash
   } })
+}
+
+/** Idempotently completes or recreates a compaction transaction from its canonical History envelope. */
+export async function ensureCompactionTransaction(
+  sink: SessionEventSink,
+  start: SessionEventPayload,
+  summary: SessionEventPayload
+): Promise<CommittedEvent | undefined> {
+  const compactionId = typeof summary.compactionId === 'string' ? summary.compactionId : undefined
+  if (!compactionId || start.compactionId !== compactionId) throw new Error('compaction transaction identity mismatch')
+  const events = await readSessionEvents(sink.eventsPath)
+  const transactionEvents = events.filter((event) => event.payload.compactionId === compactionId && (event.type === 'compaction_start' || event.type === 'compaction_summary' || event.type === 'compaction_end'))
+  const existingStart = transactionEvents.find((event) => event.type === 'compaction_start')
+  const existingSummary = transactionEvents.find((event) => event.type === 'compaction_summary')
+  const existingEnd = transactionEvents.find((event) => event.type === 'compaction_end' && event.payload.status === 'committed')
+  if (existingStart && !isDeepStrictEqual(existingStart.payload, start)) throw new Error(`conflicting compaction start: ${compactionId}`)
+  if (existingSummary && !isDeepStrictEqual(existingSummary.payload, summary)) throw new Error(`conflicting compaction summary: ${compactionId}`)
+  if (existingEnd) {
+    const replay = replayCompactionEvents(events)
+    const committed = replay.committed.find((item) => item.compactionId === compactionId)
+    if (!committed) throw new Error(`invalid existing compaction transaction: ${compactionId}`)
+    return existingEnd
+  }
+  if (!existingStart) return appendCompactionTransaction(sink, start, summary)
+  if (transactionEvents.some((event) => event.type === 'compaction_start' && event !== existingStart) ||
+    transactionEvents.some((event) => event.type === 'compaction_summary' && event !== existingSummary)) {
+    throw new Error(`duplicate compaction transaction prefix: ${compactionId}`)
+  }
+  if (existingSummary && existingSummary.seq <= existingStart.seq) throw new Error(`invalid compaction transaction order: ${compactionId}`)
+  const startEvent = existingStart
+  const summaryEvent = existingSummary ?? await sink.appendCritical({ type: 'compaction_summary', payload: summary })
+  return appendCompactionEnd(sink, start, summary, startEvent, summaryEvent)
+}
+
+/** Idempotently repairs a tool result projection using its canonical History envelope. */
+export async function ensureToolResultEvent(
+  sink: SessionEventSink,
+  input: { toolUseId: string; stepId: string; result: Record<string, unknown>; turnId?: string; requestId?: string; invocationRequestId?: string; lane?: string }
+): Promise<CommittedEvent | undefined> {
+  if (!input.toolUseId || !input.stepId || !input.result || typeof input.result !== 'object' || Array.isArray(input.result)) {
+    throw new Error('tool result ledger identity is invalid')
+  }
+  const events = await readSessionEvents(sink.eventsPath)
+  const matching = events.filter((event) => event.type === 'tool_result' && event.payload.toolUseId === input.toolUseId)
+  if (matching.length > 1) throw new Error(`duplicate tool result ledger event: ${input.toolUseId}`)
+  const existing = matching[0]
+  const payload = {
+    toolUseId: input.toolUseId, ...(input.turnId ? { turnId: input.turnId } : {}), stepId: input.stepId,
+    ...(input.requestId ? { requestId: input.requestId } : {}), ...(input.invocationRequestId ? { invocationRequestId: input.invocationRequestId } : {}),
+    ...(input.lane ? { lane: input.lane } : {}), result: input.result
+  }
+  if (existing) {
+    const existingPayload = { ...existing.payload }
+    // Pre-turn-owner projections are compatible with canonical sidecars that have no turnId.
+    if (input.turnId === undefined) delete existingPayload.turnId
+    if (!isDeepStrictEqual(existingPayload, payload)) {
+      throw new Error(`conflicting tool result ledger event: ${input.toolUseId}`)
+    }
+    return existing
+  }
+  return sink.appendCritical({ type: 'tool_result', payload })
+}
+
+/** Idempotently repairs a tool proposal projection from its canonical model-response envelope. */
+export async function ensureToolCallEvent(
+  sink: SessionEventSink,
+  input: { toolUseId: string; stepId: string; name: string; args: Record<string, unknown>; turnId?: string; requestId?: string; invocationRequestId?: string; lane?: string }
+): Promise<CommittedEvent | undefined> {
+  if (!input.toolUseId || !input.stepId || !input.name || !input.args || typeof input.args !== 'object' || Array.isArray(input.args)) {
+    throw new Error('tool call ledger identity is invalid')
+  }
+  const events = await readSessionEvents(sink.eventsPath)
+  const matching = events.filter((event) => event.type === 'tool_call' && event.payload.toolUseId === input.toolUseId)
+  if (matching.length > 1) throw new Error(`duplicate tool call ledger event: ${input.toolUseId}`)
+  const existing = matching[0]
+  const payload = {
+    toolUseId: input.toolUseId, ...(input.turnId ? { turnId: input.turnId } : {}), stepId: input.stepId,
+    ...(input.requestId ? { requestId: input.requestId } : {}), ...(input.invocationRequestId ? { invocationRequestId: input.invocationRequestId } : {}),
+    ...(input.lane ? { lane: input.lane } : {}), name: input.name, args: input.args
+  }
+  if (existing) {
+    const existingPayload = { ...existing.payload }
+    // Pre-turn-owner projections are compatible with canonical sidecars that have no turnId.
+    if (input.turnId === undefined) delete existingPayload.turnId
+    if (!isDeepStrictEqual(existingPayload, payload)) {
+      throw new Error(`conflicting tool call ledger event: ${input.toolUseId}`)
+    }
+    return existing
+  }
+  return sink.appendCritical({ type: 'tool_call', payload })
+}
+
+/** Repairs the legacy turn boundary from a canonical terminal History record. */
+export async function ensureTurnStartEvent(sink: SessionEventSink, turnId: string): Promise<CommittedEvent | undefined> {
+  if (!turnId.trim()) throw new Error('invocation turn start identity is invalid')
+  const events = await readSessionEvents(sink.eventsPath)
+  const starts = events.filter((event) => event.type === 'turn_start' && event.payload.turnId === turnId)
+  if (starts.length > 1) throw new Error(`duplicate invocation turn_start projection: ${turnId}`)
+  if (starts[0]) return starts[0]
+  if (events.some((event) => event.type === 'turn_end' && event.payload.turnId === turnId)) {
+    throw new Error(`invocation terminal projection has no matching turn_start: ${turnId}`)
+  }
+  return sink.appendCritical({ type: 'turn_start', payload: { turnId } })
+}
+
+/** Repairs the legacy turn boundary from a canonical terminal History record. */
+export async function ensureTurnEndEvent(sink: SessionEventSink, turnId: string, reason: string): Promise<CommittedEvent | undefined> {
+  if (!turnId.trim() || !['completed', 'failed', 'interrupted', 'cancelled', 'denied'].includes(reason)) {
+    throw new Error('invocation terminal ledger identity is invalid')
+  }
+  const events = await readSessionEvents(sink.eventsPath)
+  const starts = events.filter((event) => event.type === 'turn_start' && event.payload.turnId === turnId)
+  if (!starts.length) throw new Error('canonical invocation terminal has no matching session turn_start')
+  if (starts.length > 1) throw new Error(`duplicate invocation turn_start projection: ${turnId}`)
+  const matching = events.filter((event) => event.type === 'turn_end' && event.payload.turnId === turnId)
+  if (matching.length > 1) throw new Error(`duplicate invocation terminal projection: ${turnId}`)
+  const existing = matching[0]
+  if (existing) {
+    const { turnId: existingTurnId, reason: existingReason, ...additionalPayload } = existing.payload
+    const additionalKeys = Object.keys(additionalPayload)
+    const hasValidDiagnostics = additionalKeys.every((key) => key === 'error' || key === 'finalSurfaceSnapshot') &&
+      (additionalPayload.error === undefined || typeof additionalPayload.error === 'string')
+    if (existingTurnId !== turnId || existingReason !== reason || !hasValidDiagnostics) {
+      throw new Error(`conflicting invocation terminal projection: ${turnId}`)
+    }
+    return existing
+  }
+  return sink.appendCritical({ type: 'turn_end', payload: { turnId, reason } })
+}
+
+/** Idempotently repairs per-attempt provider usage from canonical History metadata. */
+export async function ensureRequestUsageEvent(
+  sink: SessionEventSink,
+  payload: Record<string, unknown>
+): Promise<CommittedEvent | undefined> {
+  if (typeof payload.requestId !== 'string' || !payload.requestId || !payload.usage || typeof payload.usage !== 'object' || Array.isArray(payload.usage)) {
+    throw new Error('request usage ledger identity is invalid')
+  }
+  const events = await readSessionEvents(sink.eventsPath)
+  const matching = events.filter((event) => event.type === 'request_usage' && event.payload.requestId === payload.requestId)
+  if (matching.length > 1) throw new Error(`duplicate request usage ledger event: ${payload.requestId}`)
+  const existing = matching[0]
+  if (existing) {
+    if (!isDeepStrictEqual(existing.payload, payload)) throw new Error(`conflicting request usage ledger event: ${payload.requestId}`)
+    return existing
+  }
+  return sink.appendCritical({ type: 'request_usage', payload })
+}
+
+/** Idempotently repairs a provider retry projection from its canonical History fact. */
+export async function ensureRequestRetryEvent(
+  sink: SessionEventSink,
+  payload: Record<string, unknown>
+): Promise<CommittedEvent | undefined> {
+  if (typeof payload.requestId !== 'string' || !payload.requestId || !Number.isInteger(payload.attempt) || (payload.attempt as number) <= 0 ||
+    typeof payload.code !== 'string' || !payload.code || !Number.isFinite(payload.backoffMs)) {
+    throw new Error('request retry ledger identity is invalid')
+  }
+  const events = await readSessionEvents(sink.eventsPath)
+  const matching = events.filter((event) => event.type === 'request_retry' && event.payload.requestId === payload.requestId && event.payload.attempt === payload.attempt)
+  if (matching.length > 1) throw new Error(`duplicate request retry ledger event: ${payload.requestId}:${payload.attempt}`)
+  const existing = matching[0]
+  if (existing) {
+    if (!isDeepStrictEqual(existing.payload, payload)) throw new Error(`conflicting request retry ledger event: ${payload.requestId}:${payload.attempt}`)
+    return existing
+  }
+  return sink.appendCritical({ type: 'request_retry', payload })
+}
+
+/** Appends the final usage anchored request context once, preserving the initial request projection. */
+export async function ensureFinalRequestContextEvent(
+  sink: SessionEventSink,
+  payload: Record<string, unknown>
+): Promise<CommittedEvent | undefined> {
+  if (typeof payload.requestId !== 'string' || !payload.requestId || !Number.isInteger(payload.attempt) || (payload.attempt as number) <= 0 ||
+    typeof payload.turnId !== 'string' || !payload.contextUsage || typeof payload.contextUsage !== 'object' || Array.isArray(payload.contextUsage)) {
+    throw new Error('final request context ledger identity is invalid')
+  }
+  const events = await readSessionEvents(sink.eventsPath)
+  const sameIdentity = events.filter((event) => event.type === 'request_context' && event.payload.requestId === payload.requestId && event.payload.attempt === payload.attempt)
+  if (sameIdentity.filter((event) => event.payload.projectionStage === 'final').length > 1) {
+    throw new Error(`duplicate final request context ledger event: ${payload.requestId}:${payload.attempt}`)
+  }
+  const finalPayload = { ...payload, projectionStage: 'final' as const }
+  const existingFinal = sameIdentity.find((event) => event.payload.projectionStage === 'final')
+  if (existingFinal) {
+    if (!isDeepStrictEqual(existingFinal.payload, finalPayload)) {
+      throw new Error(`conflicting final request context ledger event: ${payload.requestId}:${payload.attempt}`)
+    }
+    return existingFinal
+  }
+  const existing = sameIdentity.find((event) =>
+    isDeepStrictEqual(event.payload, payload) || isDeepStrictEqual(event.payload, finalPayload)
+  )
+  if (existing) return existing
+  if (sameIdentity.length > 1) {
+    throw new Error(`conflicting final request context ledger event: ${payload.requestId}:${payload.attempt}`)
+  }
+  return sink.appendCritical({ type: 'request_context', payload: finalPayload })
+}
+
+/** Idempotently repairs model request header/context projections from their canonical History outbox. */
+export async function ensureRequestProjectionEvents(
+  sink: SessionEventSink,
+  input: { requestHeader: Record<string, unknown>; requestContext: Record<string, unknown> }
+): Promise<void> {
+  const requestId = input.requestHeader.requestId
+  const attempt = input.requestHeader.attempt
+  if (typeof requestId !== 'string' || !requestId || !Number.isInteger(attempt) || input.requestContext.requestId !== requestId || input.requestContext.attempt !== attempt) {
+    throw new Error('request projection ledger identity is invalid')
+  }
+  const events = await readSessionEvents(sink.eventsPath)
+  const ensure = async (type: 'request_header' | 'request_context', payload: Record<string, unknown>) => {
+    const matching = events.filter((event) => event.type === type && event.payload.requestId === requestId && event.payload.attempt === attempt &&
+      (type !== 'request_context' || event.payload.projectionStage !== 'final'))
+    if (matching.length > 1) throw new Error(`duplicate ${type} ledger event: ${requestId}:${attempt}`)
+    const existing = matching[0]
+    if (existing) {
+      if (!isDeepStrictEqual(existing.payload, payload)) throw new Error(`conflicting ${type} ledger event: ${requestId}:${attempt}`)
+      return
+    }
+    const committed = await sink.appendCritical({ type, payload })
+    events.push(committed)
+  }
+  await ensure('request_header', input.requestHeader)
+  await ensure('request_context', input.requestContext)
 }
 
 const DEFAULT_OPTIONS: SessionEventSinkOptions = {
@@ -103,9 +340,38 @@ function eventInputBytes(input: SessionEventInput): number {
   return Buffer.byteLength(JSON.stringify(input), 'utf8') + 1
 }
 
-function eventPaths(workDir: string, sessionId: string, createdAt: number): { directory: string; eventsPath: string; indexPath: string } {
-  const directory = path.resolve(workDir, 'sessions', sessionDir(sessionId, createdAt))
-  return { directory, eventsPath: path.resolve(directory, 'events.jsonl'), indexPath: path.resolve(directory, 'events.index.json') }
+function eventPaths(workDir: string, sessionId: string, createdAt: number): { sessionsRoot: string; directory: string; eventsPath: string; indexPath: string } {
+  const sessionsRoot = path.resolve(workDir, 'sessions')
+  const directory = path.resolve(sessionsRoot, sessionDir(sessionId, createdAt))
+  if (!isPathInside(sessionsRoot, directory)) throw new Error('session event path escapes sessions root')
+  return { sessionsRoot, directory, eventsPath: path.resolve(directory, 'events.jsonl'), indexPath: path.resolve(directory, 'events.index.json') }
+}
+
+function isPathInside(root: string, target: string): boolean {
+  const relative = path.relative(root, target)
+  return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+}
+
+async function ensureDirectoryWithoutSymlink(directory: string, parent: string): Promise<void> {
+  await fs.mkdir(parent, { recursive: true })
+  try {
+    const stat = await fs.lstat(directory)
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('session event path contains symbolic link or non-directory')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    await fs.mkdir(directory)
+    const stat = await fs.lstat(directory)
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('session event path contains symbolic link or non-directory')
+  }
+}
+
+async function ensureRegularFileOrMissing(filePath: string): Promise<void> {
+  try {
+    const stat = await fs.lstat(filePath)
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1) throw new Error('session event file path contains symbolic link, hard link, or non-file')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
 }
 
 function errorWithJsonlState(error: unknown, jsonlCommitted: boolean): Error & { jsonlCommitted?: boolean } {
@@ -162,6 +428,7 @@ export async function readCompactionReplay(eventsPath: string): Promise<Compacti
 
 /** 每个事件文件唯一的提交 owner；业务代码应通过 getSessionEventSink 获取。 */
 export class SessionEventWriter implements SessionEventSink {
+  readonly sessionsRoot: string
   readonly directory: string
   readonly eventsPath: string
   readonly indexPath: string
@@ -189,6 +456,7 @@ export class SessionEventWriter implements SessionEventSink {
     if (!acceptingSessionEvents) throw sessionEventShutdownError()
     const paths = eventPaths(workDir, sessionId, createdAt)
     if (writerRegistry.has(paths.eventsPath)) throw new Error('an active session event sink already exists for this session')
+    this.sessionsRoot = paths.sessionsRoot
     this.directory = paths.directory
     this.eventsPath = paths.eventsPath
     this.indexPath = paths.indexPath
@@ -377,6 +645,10 @@ export class SessionEventWriter implements SessionEventSink {
     let lineState: { bytes: number; terminated: boolean }
     try {
       lineState = await ensureTerminatedLine(this.eventsPath)
+      if (!lineState.terminated) {
+        await readSessionEventsDetailed(this.eventsPath, { repairTail: true })
+        lineState = await ensureTerminatedLine(this.eventsPath)
+      }
       const prefix = lineState.bytes > 0 && !lineState.terminated ? '\n' : ''
       await fs.appendFile(this.eventsPath, prefix + data, 'utf8')
     } catch (error) {
@@ -408,8 +680,20 @@ export class SessionEventWriter implements SessionEventSink {
   }
 
   private async initialize(): Promise<void> {
-    await fs.mkdir(this.directory, { recursive: true })
+    await ensureDirectoryWithoutSymlink(this.sessionsRoot, path.dirname(this.sessionsRoot))
+    const relativeDirectory = path.relative(this.sessionsRoot, this.directory)
+    let currentDirectory = this.sessionsRoot
+    for (const component of relativeDirectory.split(path.sep).filter(Boolean)) {
+      currentDirectory = path.join(currentDirectory, component)
+      await ensureDirectoryWithoutSymlink(currentDirectory, path.dirname(currentDirectory))
+    }
+    const realSessionsRoot = await fs.realpath(this.sessionsRoot)
+    const realDirectory = await fs.realpath(this.directory)
+    if (!isPathInside(realSessionsRoot, realDirectory)) throw new Error('session event path resolves outside sessions root')
+    await ensureRegularFileOrMissing(this.eventsPath)
+    await ensureRegularFileOrMissing(this.indexPath)
     const readResult = await readSessionEventsDetailed(this.eventsPath, {
+      repairTail: true,
       onIssue: (issue) => this.reportError(issue)
     })
     const events = readResult.events
@@ -518,7 +802,7 @@ async function ensureTerminatedLine(eventsPath: string): Promise<{ bytes: number
 
 export async function readSessionEventsDetailed(
   eventsPath: string,
-  options?: { onIssue?: (issue: SessionEventIssue) => void }
+  options?: { onIssue?: (issue: SessionEventIssue) => void; repairTail?: boolean }
 ): Promise<SessionEventReadResult> {
   const text = await fs.readFile(eventsPath, 'utf8').catch((error) => {
     if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return ''
@@ -546,13 +830,13 @@ export async function readSessionEventsDetailed(
       }
       issues.push(issue)
       options?.onIssue?.(issue)
-      if (isTornTail) {
+      if (isTornTail && options?.repairTail) {
         const lastCompleteNewline = text.lastIndexOf('\n', text.length - 1)
         await fs.truncate(eventsPath, Math.max(0, lastCompleteNewline + 1))
       }
     }
   }
-  if (text.length > 0 && !hasTrailingNewline && events.length > 0 && !issues.some((issue) => issue.truncated)) {
+  if (options?.repairTail && text.length > 0 && !hasTrailingNewline && events.length > 0 && issues.length === 0) {
     await fs.appendFile(eventsPath, '\n', 'utf8')
   }
   const integrity: SessionEventIntegrity = issues.some((issue) => !issue.truncated)
@@ -590,14 +874,42 @@ export async function reconcileSessionEventFiles(workDir: string): Promise<numbe
 
 export async function reconcileSessionEventFilesDetailed(workDir: string): Promise<SessionRecoverySummary> {
   const root = path.join(workDir, 'sessions')
-  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => [])
   const summary: SessionRecoverySummary = { fixed: 0, sessions: [], failures: [] }
+  let rootStat: Awaited<ReturnType<typeof fs.lstat>>
+  try { rootStat = await fs.lstat(root) }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return summary
+    summary.failures.push({ sessionName: 'sessions', eventsPath: root, phase: 'read-events', error, jsonlCommitted: false })
+    return summary
+  }
+  if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) {
+    summary.failures.push({ sessionName: 'sessions', eventsPath: root, phase: 'read-events', error: new Error('session recovery root contains symbolic link or non-directory'), jsonlCommitted: false })
+    return summary
+  }
+  const realRoot = await fs.realpath(root)
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch((error) => {
+    summary.failures.push({ sessionName: 'sessions', eventsPath: root, phase: 'read-events', error, jsonlCommitted: false })
+    return []
+  })
   for (const entry of entries) {
+    if (entry.isSymbolicLink()) {
+      summary.failures.push({ sessionName: entry.name, eventsPath: path.join(root, entry.name), phase: 'read-events', error: new Error('session recovery directory is a symbolic link'), jsonlCommitted: false })
+      continue
+    }
     if (!entry.isDirectory()) continue
     const eventsPath = path.join(root, entry.name, 'events.jsonl')
     let readResult: SessionEventReadResult
     try {
-      readResult = await readSessionEventsDetailed(eventsPath)
+      const directory = path.join(root, entry.name)
+      const directoryStat = await fs.lstat(directory)
+      const realDirectory = await fs.realpath(directory)
+      if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory() || !isPathInside(realRoot, realDirectory)) throw new Error('session recovery directory resolves outside sessions root')
+      await ensureRegularFileOrMissing(eventsPath)
+      readResult = await readSessionEventsDetailed(eventsPath, { repairTail: true })
+      if (readResult.integrity === 'degraded') {
+        summary.sessions.push({ sessionName: entry.name, fixed: 0, integrity: readResult.integrity, issues: readResult.issues })
+        throw new Error('session event ledger is degraded; automatic recovery refused')
+      }
     } catch (error) {
       summary.failures.push({ sessionName: entry.name, eventsPath, phase: 'read-events', error, jsonlCommitted: false })
       continue
@@ -631,19 +943,24 @@ export async function reconcileSessionEventFilesDetailed(workDir: string): Promi
 }
 
 export function reconcileSessionEvents(events: SessionEvent[], startSeq = events.reduce((m, e) => Math.max(m, e.seq), 0) + 1): SessionEvent[] {
-  const openTurns = new Set<string>(), openSteps = new Set<string>(), tools = new Set<string>(), results = new Set<string>()
+  const openTurns = new Set<string>()
+  const openSteps = new Map<string, { turnId: string; stepId: string }>()
+  const tools = new Set<string>(), results = new Set<string>()
   for (const e of events) {
     const p = e.payload
     if (e.type === 'turn_start') openTurns.add(String(p.turnId))
     if (e.type === 'turn_end') openTurns.delete(String(p.turnId))
-    if (e.type === 'step_start') openSteps.add(`${p.turnId}:${p.stepId}`)
-    if (e.type === 'step_end') openSteps.delete(`${p.turnId}:${p.stepId}`)
+    if (e.type === 'step_start') {
+      const turnId = String(p.turnId), stepId = String(p.stepId)
+      openSteps.set(JSON.stringify([turnId, stepId]), { turnId, stepId })
+    }
+    if (e.type === 'step_end') openSteps.delete(JSON.stringify([String(p.turnId), String(p.stepId)]))
     if (e.type === 'tool_call') tools.add(String(p.toolUseId))
     if (e.type === 'tool_result') results.add(String(p.toolUseId))
   }
   const out: SessionEvent[] = []
   let seq = startSeq
-  for (const key of openSteps) { const [turnId, stepId] = key.split(':'); out.push({ seq: seq++, time: Date.now(), type: 'step_end', payload: { turnId, stepId, reason: 'interrupted' } }) }
+  for (const { turnId, stepId } of openSteps.values()) out.push({ seq: seq++, time: Date.now(), type: 'step_end', payload: { turnId, stepId, reason: 'interrupted' } })
   for (const toolUseId of tools) if (!results.has(toolUseId)) out.push({ seq: seq++, time: Date.now(), type: 'tool_result', payload: { toolUseId, synthetic: true, result: { success: false, error: '工具调用因应用退出中断' } } })
   for (const turnId of openTurns) out.push({ seq: seq++, time: Date.now(), type: 'turn_end', payload: { turnId, reason: 'interrupted' } })
   return out

@@ -6,6 +6,7 @@ import {
   ackDisplayMessagePersisted,
   mergeTurnFailures,
   prependDisplayPage,
+  patchDisplayMessage,
   removeMessage,
   restoreLastUsage,
   setChatStatus,
@@ -29,6 +30,8 @@ import { ackApiContextMessagePersisted } from '../../services/apiContextService'
 import {
   commitMessageDelete,
   commitMessagePatch,
+  commitQueuedMessageEdit,
+  commitQueuedMessageReorder,
 } from '../../services/messageMutationGateway'
 import {
   applyContextSummaryDbBaseline,
@@ -81,7 +84,9 @@ import { patchSvg } from '../../utils/patchSvg'
 const scrollToLatestIconSvg = patchSvg(arrowDownLineRaw, 16)
 import { useChatMessageEnter } from '../../hooks/useChatMessageEnter'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
-import { countQueuedUserMessages, filterMessagesForChatApi } from '../../../shared/chatMessageQueue'
+import { filterMessagesForChatApi, filterOutQueuedUserMessages, listQueuedUserMessages } from '../../../shared/chatMessageQueue'
+import { QueuedTaskBar } from './QueuedTaskBar'
+import { runtimeText } from '../../i18n/runtimeText'
 import type { OutboundContextIntent } from '../../../shared/outboundProtocol'
 import { ChatMessageListSearch } from '../Search/ChatMessageListSearch'
 
@@ -102,6 +107,7 @@ function buildClaudePayload(history: Message[]) {
 
 export function ChatView() {
   const { message } = App.useApp()
+  const messageApi = message
   const { t } = useTypedTranslation('chat')
   const { t: tErrors } = useTypedTranslation('errors')
   const { t: tContextUsage } = useTypedTranslation('contextUsage')
@@ -110,6 +116,7 @@ export function ChatView() {
   const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const messages = useTypedSelector((s) => s.chat.messages)
   const displayEntries = useTypedSelector((s) => s.chat.displayEntries)
+  const displayGeneration = useTypedSelector((s) => s.chat.displayGeneration)
   const compactionMarkers = useTypedSelector((s) => s.chat.compactionMarkers)
   const [contextSummaryTick, setContextSummaryTick] = useState(0)
   const contextScalars = useMemo(() => {
@@ -166,6 +173,15 @@ export function ChatView() {
   const viewportRef = useRef<ChatMessageViewportHandle>(null)
   const stickToBottomRef = useRef(true)
   const composerRef = useRef<MessageInputHandle>(null)
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
+  const [editDraft, setEditDraft] = useState('')
+  const editRoundRef = useRef(0)
+  const [editRound, setEditRound] = useState(0)
+  const [editSubmittingTarget, setEditSubmittingTarget] = useState<{ sessionId: string; messageId: string; displayGeneration: number; editRound: number } | null>(null)
+  const editContextRef = useRef({ sessionId, messageId: editingMessageId, displayGeneration, editRound })
+  editContextRef.current = { sessionId, messageId: editingMessageId, displayGeneration, editRound }
+  const editSubmitting = Boolean(editSubmittingTarget && editSubmittingTarget.sessionId === sessionId && editSubmittingTarget.messageId === editingMessageId && editSubmittingTarget.displayGeneration === displayGeneration && editSubmittingTarget.editRound === editRound)
+  const editOrigin = useRef<{ sessionId: string | null; displayGeneration: number; initialized: boolean }>({ sessionId, displayGeneration, initialized: false })
   const sendInternalRef = useRef<
     (
       text: string,
@@ -426,7 +442,7 @@ export function ChatView() {
       const pending = sessionId ? pendingConfirmStore.find(sessionId, toolUseId) : undefined
       const requestId = pending?.requestId ?? streamingRequestId
       if (!requestId) return
-      pendingConfirmStore.respond(requestId, toolUseId, approved, options)
+      pendingConfirmStore.respond(requestId, toolUseId, approved, options, pending?.sessionId ?? sessionId ?? undefined)
       dispatch(setConfirmFocusToolUseId(null))
     },
     [dispatch, sessionId, streamingRequestId]
@@ -436,14 +452,14 @@ export function ChatView() {
     (toolUseId: string) => {
       const pending = sessionId ? pendingConfirmStore.find(sessionId, toolUseId) : undefined
       const requestId = pending?.requestId ?? streamingRequestId
-      if (!requestId) return
-      void window.api.toolCancel({ requestId, toolUseId })
+      const ownerSessionId = pending?.sessionId ?? sessionId
+      const turnId = ownerSessionId ? runningSessions[ownerSessionId]?.turnId : undefined
+      if (!requestId || !ownerSessionId || !turnId) return
+      void window.api.toolCancel({ requestId, toolUseId, sessionId: ownerSessionId, turnId })
     },
-    [sessionId, streamingRequestId]
+    [sessionId, streamingRequestId, runningSessions]
   )
 
-  // chat-abort-latency 方案改动 2a：复用 abortSessionRun 本地立即止血（与 SessionListPane 停止按钮
-  // 同一语义）——点击瞬间移除 runningSessions、清 live、拒绝待确认，取消 IPC 由其内部按 meta 兜底发出。
   const abort = useCallback(() => {
     if (sessionId) abortSessionRun(sessionId)
   }, [sessionId])
@@ -467,10 +483,10 @@ export function ChatView() {
       try {
         await commitMessageDelete({ sessionId: msg.sessionId, messageId })
       } catch {
-        message.warning(t('chatView.warnings.cancelQueueFailed'))
+        messageApi.warning(t('chatView.warnings.cancelQueueFailed'))
       }
     },
-    [message, t]
+    [messageApi, t]
   )
 
 
@@ -531,7 +547,7 @@ export function ChatView() {
         if (effectiveSessionId && effectiveSessionId !== sessionId) dispatch(setSession(effectiveSessionId))
         if (cmd.kind === 'test-pop-run') {
           await window.api.testPopShow()
-          message.info('浮动通知已弹出（测试数据），点击通知或手动关闭 ✕ 按钮关闭。')
+          message.info(runtimeText('chat.devPreview.notificationShown'))
           return result
         }
         if (cmd.kind === 'test-cards-run') {
@@ -631,7 +647,7 @@ export function ChatView() {
             message: target.currentUser.message,
             order: { kind: 'persisted', sequence: target.currentUser.sequence }
           },
-          excludeMessageIds: [target.failedAssistant.message.id]
+          excludeMessageIds: target.excludeMessageIds
         }
       })
     },
@@ -668,7 +684,97 @@ export function ChatView() {
   }, [chatLaunchIntent, sessionId, cfg, currentSession, dispatch, submitOutbound])
 
   const running = sessionRunning
-  const queueCount = sessionId ? countQueuedUserMessages(messages, sessionId) : 0
+  const queuedMessages = useMemo(() => sessionId ? listQueuedUserMessages(messages, sessionId) : [], [messages, sessionId])
+  const visibleMessages = useMemo(() => sessionId ? filterOutQueuedUserMessages(messages, sessionId) : messages, [messages, sessionId])
+  const visibleDisplayEntries = useMemo(() => sessionId ? displayEntries.filter((entry) => !(entry.message.sessionId === sessionId && entry.message.role === 'user' && entry.message.status === 'queued')) : displayEntries, [displayEntries, sessionId])
+
+  useEffect(() => {
+    if (editOrigin.current.initialized && (editOrigin.current.sessionId !== sessionId || editOrigin.current.displayGeneration !== displayGeneration)) {
+      editOrigin.current = { sessionId, displayGeneration, initialized: true }
+      setEditingMessageId(null)
+      setEditDraft('')
+    } else editOrigin.current = { sessionId, displayGeneration, initialized: true }
+  }, [sessionId, displayGeneration])
+
+  const handleBeginQueuedEdit = useCallback((messageId: string) => {
+    const target = queuedMessages.find((item) => item.id === messageId)
+    if (!target) return
+    if (editingMessageId === messageId) return
+    if (editingMessageId) {
+      const current = queuedMessages.find((item) => item.id === editingMessageId)
+      if (current && editDraft !== current.content) { messageApi.info(t('queuedBar.unsavedChanges')); return }
+    }
+    const nextRound = ++editRoundRef.current
+    setEditRound(nextRound)
+    setEditingMessageId(messageId)
+    setEditDraft(target.content)
+  }, [queuedMessages, editingMessageId, editDraft, messageApi, t])
+
+  const notifiedMissingEditId = useRef<string | null>(null)
+  const focusComposerOnQueueEmpty = useRef(false)
+  useEffect(() => {
+    if (queuedMessages.length === 0 && focusComposerOnQueueEmpty.current) {
+      composerRef.current?.focus()
+      focusComposerOnQueueEmpty.current = false
+    }
+  }, [queuedMessages.length])
+  useEffect(() => {
+    if (!editingMessageId) { notifiedMissingEditId.current = null; return }
+    if (queuedMessages.some((item) => item.id === editingMessageId)) return
+    const message = messages.find((item) => item.id === editingMessageId)
+    if (message && message.status !== 'queued' && notifiedMissingEditId.current !== editingMessageId) {
+      notifiedMissingEditId.current = editingMessageId
+      messageApi.info(t('queuedBar.alreadyStarted'))
+    }
+    if (queuedMessages.length === 0) composerRef.current?.focus()
+    setEditingMessageId(null)
+    setEditDraft('')
+  }, [editingMessageId, queuedMessages, messages, messageApi, t])
+
+  const handleCancelQueuedEdit = useCallback((messageId: string) => {
+    if (editingMessageId === messageId) {
+      if (queuedMessages.length === 1) focusComposerOnQueueEmpty.current = true
+      setEditingMessageId(null)
+      setEditDraft('')
+    }
+    void cancelQueuedMessage(messageId)
+  }, [editingMessageId, queuedMessages.length, cancelQueuedMessage])
+
+  const handleReorderQueuedMessages = useCallback(async (messageIds: string[]) => {
+    if (!sessionId) return
+    try {
+      await commitQueuedMessageReorder({ sessionId, messageIds })
+    } catch (err) {
+      if ((err as { code?: string }).code === 'queue_changed') messageApi.info(t('queuedBar.orderChanged'))
+      else messageApi.error(formatUserFacingError(err instanceof Error ? err.message : String(err)))
+    }
+  }, [sessionId, messageApi, t])
+
+  const handleSubmitQueuedEdit = useCallback(async () => {
+    if (!editingMessageId || !sessionId || (editSubmittingTarget?.sessionId === sessionId && editSubmittingTarget.messageId === editingMessageId && editSubmittingTarget.displayGeneration === displayGeneration && editSubmittingTarget.editRound === editRound)) return
+    if (!editDraft.trim()) return
+    const current = queuedMessages.find((item) => item.id === editingMessageId)
+    if (!current) return
+    if (editDraft === current.content) { setEditingMessageId(null); setEditDraft(''); return }
+    const target = { sessionId, messageId: current.id, displayGeneration, editRound }
+    const isCurrentTarget = () => {
+      const context = editContextRef.current
+      return context.sessionId === target.sessionId && context.messageId === target.messageId && context.displayGeneration === target.displayGeneration && context.editRound === target.editRound
+    }
+    setEditSubmittingTarget(target)
+    try {
+      await commitQueuedMessageEdit({ sessionId, messageId: current.id, content: editDraft })
+      if (isCurrentTarget()) { setEditingMessageId(null); setEditDraft('') }
+    } catch (err) {
+      const code = (err as { code?: string }).code
+      if (isCurrentTarget()) {
+        if (code === 'message_not_queued') { messageApi.info(t('queuedBar.alreadyStarted')); setEditingMessageId(null); setEditDraft('') }
+        else messageApi.error(formatUserFacingError(err instanceof Error ? err.message : String(err)))
+      }
+    } finally {
+      setEditSubmittingTarget((currentTarget) => currentTarget?.sessionId === target.sessionId && currentTarget.messageId === target.messageId && currentTarget.displayGeneration === target.displayGeneration && currentTarget.editRound === target.editRound ? null : currentTarget)
+    }
+  }, [editingMessageId, sessionId, editSubmittingTarget, displayGeneration, editRound, queuedMessages, editDraft, messageApi, t])
 
   useEffect(() => {
     const onIngest = (e: Event) => {
@@ -695,9 +801,7 @@ export function ChatView() {
         .then((updated) => {
           if (updated) dispatch(upsertSession(updated))
         })
-      void send(
-        `/wiki query 请将以下助手回答归档为 Wiki 新页（建议 wiki/queries/${date}-archive.md），更新 index 与 log，并确保正文结构清晰：\n\n${excerpt}`
-      )
+      void send(runtimeText('chat.wikiArchivePrompt', { name: date, content: excerpt }))
     },
     [send, sessionId, cfg?.wiki?.rootPath, currentSession?.metadata, dispatch]
   )
@@ -734,10 +838,10 @@ export function ChatView() {
         ? {
             requestId: 'test-cards-preview',
             onToolConfirm: (_toolUseId: string, approved: boolean) => {
-              message.info(approved ? '测试预览：已确认（无实际操作）' : '测试预览：已拒绝（无实际操作）')
+              message.info(approved ? runtimeText('chat.devPreview.confirmed') : runtimeText('chat.devPreview.rejected'))
             },
             onToolCancel: () => {
-              message.info('测试预览：已取消（无实际操作）')
+              message.info(runtimeText('chat.devPreview.cancelled'))
             }
           }
         : undefined,
@@ -919,13 +1023,13 @@ export function ChatView() {
   ) : (
     <ChatMessageListSearch
       sessionId={sessionId}
-      messages={messages}
-      displayEntries={displayEntries}
+      messages={visibleMessages}
+      displayEntries={visibleDisplayEntries}
     >
       {compactionMarkers.length > 0 ? <CompactionMarker count={compactionMarkers.length} /> : null}
       <ChatMessageViewport
         ref={viewportRef}
-        messages={messages}
+        messages={visibleMessages}
         stickToBottom={stickToBottomRef.current}
         onStickToBottomChange={handleStickToBottomChange}
         onStartReached={() => {
@@ -950,7 +1054,9 @@ export function ChatView() {
         historyImageTokens={contextScalars.historyImageTokens}
         thinkingTokensToExclude={contextScalars.thinkingTokensToExclude}
         running={running}
-        queueCount={queueCount}
+        queuedBarSlot={<QueuedTaskBar items={queuedMessages} editingId={editingMessageId} draft={editDraft} submitting={editSubmitting}
+          onBeginEdit={handleBeginQueuedEdit} onDraftChange={setEditDraft} onSubmitEdit={() => void handleSubmitQueuedEdit()}
+          onCancelEdit={() => { setEditingMessageId(null); setEditDraft('') }} onCancel={handleCancelQueuedEdit} onReorder={(ids) => void handleReorderQueuedMessages(ids)} />}
         runningStatus={runningLabels.label}
         runningDetail={runningLabels.detail}
         runningElapsed={runningElapsedNode}

@@ -27,6 +27,8 @@ export interface ToolsConfig {
   grepTimeoutSec: number
   autoApproveMaxBytes?: number
   autoApproveMaxEditChars?: number
+  /** 云端兼容开关：允许经交叉校验的 workdir-readonly 脚本声明免确认。默认关闭。 */
+  allowDeclaredPathScopeScripts?: boolean
 }
 
 export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
@@ -549,6 +551,8 @@ export interface AutoApprovedWriteMeta {
 
 export interface ToolCallResultPersisted {
   success: boolean
+  /** Opaque host audit correlation for the canonical execution record. */
+  auditRef?: string
   /** Gate 决策规则 ID，用于串联 policy.decision 与执行结果审计。 */
   decisionRuleId?: string
   data?: unknown
@@ -560,13 +564,6 @@ export interface ToolCallResultPersisted {
   displayData?: import('./mcpToolResultDisplay').McpResultDisplay
   /** 工具未进入执行流程（被授权 / 确认 / 策略 / 预算拦下，或调用整体被放弃），区别于「执行了但失败」（需求 §7.6）。 */
   notExecuted?: true
-  /**
-   * 归因冗余字段（agent-token-usage-content-attribution §7.3 / AD10，可选）：工具名与来源分类。
-   * 让 tool_result 不依赖跨事件配对与 mcp_ 命名约定即可归因；对远程链路（台账 no-op）无影响，
-   * 工具维度的正式落库走 usage_turn_facts（§7.6.5）。
-   */
-  toolName?: string
-  toolSource?: 'builtin' | 'mcp' | 'skill' | 'other'
   /** 未执行的原因码，便于聚合与今后回填区分「未执行」与「执行失败」。
    *  agent_denied：安全审批 Agent 机审拒绝（P1-D，区别于 user_rejected 的真人拒绝）。
    *  agent_undetermined：审批 Agent 有效裁决「判不了」（R5；区别于 agent_denied 的判定拒绝，
@@ -585,7 +582,7 @@ export interface ToolCallRecord {
   input: Record<string, unknown>
   result?: ToolCallResultPersisted
   /** Canonical approval projection; execution status remains independent. */
-  approval?: import('../../packages/agent-core/src/approval').ApprovalRecord
+  approval?: import('./approvalTypes').ApprovalRecord
   status: ToolCallStatus
   riskLevel: ToolRiskLevel
   /** 确认卡片可选的"记忆档位"（由主进程决策引擎下发，无则不展示选择器）。 */
@@ -594,6 +591,8 @@ export interface ToolCallRecord {
   confirmDiff?: { oldContent: string; newContent: string; oldPath: string }
   /** run_shell 路径/安全警示（确认卡片展示） */
   shellSecurityHints?: ShellSecurityHints
+  /** run_script 路径分析未覆盖时的原因提示。 */
+  scriptPathHint?: string
   /** 文件 auto 模式回落 diff 时的原因 */
   autoApproveFallback?: AutoApproveFallback
   /**
@@ -744,6 +743,8 @@ export interface Message {
   thinking?: ThinkingData
   /** 助手正文分段（与 thinking / toolCalls 按时间线交错展示） */
   contentSegments?: ContentSegment[]
+  /** bounded turn display 的规范活动顺序，避免恢复轻量快照时重排工具卡片 */
+  activity?: import('./assistantActivityTimeline').AssistantActivityItem[]
   /** Skill 提示（与工具卡片按 shownAt 交错展示；system 消息可仅含此项） */
   skillHints?: SkillHintRecord[]
   status: MessageStatus

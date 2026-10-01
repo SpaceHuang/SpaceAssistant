@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, afterEach } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { ComponentProps } from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { Provider } from 'react-redux'
@@ -167,6 +167,58 @@ describe('ContextUsageRing', () => {
       expect(text).toContain('图例')
     })
     expect(screen.queryByText(/缓存写入/)).toBeNull()
+  })
+
+  it('shows latest single-step attribution, coverage gap, and estimator version in tooltip', async () => {
+    window.api.usageStatsLatestAttribution = async () => ({
+      exactInputTokens: 100,
+      estimatorVersion: 'block-v1',
+      attributableInputTokens: 75,
+      unattributedInputTokens: 25,
+      coverageRatio: 0.75,
+      composition: { system: 10, tools: 15, messageBlocks: { 'user|text': 50 } }
+    })
+    renderRing({ input_tokens: 100, output_tokens: 0 })
+    const svg = document.querySelector('svg')!
+    fireEvent.mouseEnter(svg)
+    await waitFor(() => {
+      const text = screen.getByRole('tooltip').textContent ?? ''
+      expect(text).toContain('归因构成')
+      expect(text).toContain('block-v1')
+      expect(text).toContain('75%')
+      expect(text).toContain('另有 25 tokens 无可归因数据')
+      expect(text).toContain('系统提示')
+      expect(text).toContain('用户 · 文本: 50')
+      expect(text).toContain('75')
+    })
+    const used = Array.from(document.querySelectorAll('circle')).find((circle) => circle.getAttribute('stroke') === 'var(--sa-primary)')
+    expect(used?.getAttribute('stroke-dasharray')).toBeTruthy()
+  })
+
+  it('refreshes the latest attribution snapshot when the same session receives new usage', async () => {
+    let requestCount = 0
+    window.api.usageStatsLatestAttribution = vi.fn(async () => {
+      requestCount += 1
+      return requestCount === 1 ? null : {
+        exactInputTokens: 120,
+        estimatorVersion: 'block-v1',
+        attributableInputTokens: 120,
+        unattributedInputTokens: 0,
+        coverageRatio: 1,
+        composition: { system: 20, tools: 10, messageBlocks: { 'assistant|thinking': 30, 'tool|text': 60 } }
+      }
+    })
+    const { store } = renderRing({ input_tokens: 100, output_tokens: 0 })
+    await waitFor(() => expect(requestCount).toBe(1))
+    store.dispatch(restoreLastUsage({ input_tokens: 120, output_tokens: 0 }))
+    await waitFor(() => expect(requestCount).toBe(2))
+    const svg = document.querySelector('svg')!
+    fireEvent.mouseEnter(svg)
+    await waitFor(() => {
+      const text = screen.getByRole('tooltip').textContent ?? ''
+      expect(text).toContain('助手 · 思考: 30')
+      expect(text).toContain('工具 · 文本: 60')
+    })
   })
 
   it('uses current session effective request maxTokens for output reserve', async () => {
@@ -347,78 +399,5 @@ describe('ContextUsageRing', () => {
       const text = screen.getByRole('tooltip').textContent ?? ''
       expect(text).toContain('已扣除思考')
     })
-  })
-})
-
-describe('ContextUsageRing Tooltip 分组与构成段（AD21 / P2 §6.7）', () => {
-  afterEach(() => {
-    ;(window as unknown as { api?: unknown }).api = undefined
-  })
-
-  function mockAttributionApi(row: Record<string, unknown> | null): void {
-    ;(window as unknown as { api: unknown }).api = {
-      usageStatsLatestSessionAttribution: vi.fn(async () => row)
-    }
-  }
-
-  it('分组结构：占用/缓存/预留组标题渲染，既有行文案不变（硬约束 1/3）', async () => {
-    mockAttributionApi(null)
-    renderRing({ input_tokens: 1000, output_tokens: 5000, cache_read_input_tokens: 800, cache_creation_input_tokens: 0 })
-    const svg = document.querySelector('svg')!
-    fireEvent.mouseEnter(svg)
-    await waitFor(() => {
-      const text = screen.getByRole('tooltip').textContent ?? ''
-      expect(text).toContain('占用')
-      expect(text).toContain('预估占用')
-      expect(text).toContain('上轮输入')
-      expect(text).toContain('缓存')
-      expect(text).toContain('缓存命中')
-      expect(text).toContain('预留')
-      expect(text).toContain('输出预留')
-      expect(text).toContain('总计')
-      expect(text).toContain('图例')
-    })
-  })
-
-  it('空组连标题一起隐藏：缓存读写均为 0 时不渲染「缓存」组（硬约束 2）', async () => {
-    mockAttributionApi(null)
-    renderRing({ input_tokens: 1000, output_tokens: 5000 })
-    const svg = document.querySelector('svg')!
-    fireEvent.mouseEnter(svg)
-    await waitFor(() => {
-      const text = screen.getByRole('tooltip').textContent ?? ''
-      expect(text).toContain('占用')
-    })
-    expect(screen.queryByTestId('usage-tooltip-group-cache')).toBeNull()
-  })
-
-  it('构成段：block-v1 行归一化到上轮输入，Σ构成段 == totalRequestInput（AT15/AD17）；版本号不进可见文本', async () => {
-    mockAttributionApi({ estimatorVersion: 'block-v1', systemTokens: 1124, toolsTokens: 16476, messageTokens: 320875 })
-    renderRing({ input_tokens: 135281, output_tokens: 3000, cache_read_input_tokens: 320824 })
-    const svg = document.querySelector('svg')!
-    fireEvent.mouseEnter(svg)
-    await waitFor(() => {
-      const text = screen.getByRole('tooltip').textContent ?? ''
-      expect(text).toContain('构成（上轮请求快照）')
-      expect(text).toContain('系统提示')
-      expect(text).toContain('工具声明')
-      expect(text).toContain('消息体')
-      expect(text).toContain('≈')
-      // 估算器版本号是内部口径，不得出现在用户可见文本（仅悬停 title 供排障）
-      expect(text).not.toContain('block-v1')
-    })
-    expect(screen.getByTestId('usage-tooltip-group-composition').closest('.context-usage-tooltip-group')?.getAttribute('title')).toBe('block-v1')
-  })
-
-  it('无归因数据（老会话/API null）时构成组整体隐藏，不补 0（AT8/I5）', async () => {
-    mockAttributionApi(null)
-    renderRing({ input_tokens: 1000, output_tokens: 5000 })
-    const svg = document.querySelector('svg')!
-    fireEvent.mouseEnter(svg)
-    await waitFor(() => {
-      const text = screen.getByRole('tooltip').textContent ?? ''
-      expect(text).toContain('占用')
-    })
-    expect(screen.queryByTestId('usage-tooltip-group-composition')).toBeNull()
   })
 })

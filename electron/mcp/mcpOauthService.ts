@@ -122,6 +122,8 @@ export type McpOAuthProviderOptions = {
   interactive?: boolean
   /** interactive:false 且 SDK 请求交互授权时回调，供调用方转译为 auth-required 结构化错误。 */
   onInteractiveAuthRequired?: () => void
+  /** OAuth token rotation 已持久化后回调；宿主用于使旧连接授权下的在途调用失效。 */
+  onTokensRefreshed?: () => void
 }
 
 export function createMcpOAuthClientProvider(
@@ -198,8 +200,9 @@ export function createMcpOAuthClientProvider(
                 accessTokenExpiresAt: new Date(Date.now() + (tokens.expires_in ?? 0) * 1000).toISOString()
               }
             }
-          : {})
+        : {})
       })
+      options?.onTokensRefreshed?.()
     },
     invalidateCredentials: async (kind) => {
       if (kind === 'all' || kind === 'tokens') {

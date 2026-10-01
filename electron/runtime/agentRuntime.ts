@@ -1,5 +1,8 @@
 import { randomUUID } from 'crypto'
 import type { AuditSink } from '../confirmation/audit'
+import { InMemoryExecutionAdmissionCoordinator, type ExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
+import { InMemorySafetyPermitStore, type SafetyPermitStore } from '../../packages/agent-sdk/src/safetyPermit'
+import { ModelProviderRegistry } from '../../packages/agent-sdk/src/model'
 
 /**
  * Agent Runtime 纯工厂(A2,偏差 18;P8 结构解环):本模块零业务 import——
@@ -33,18 +36,24 @@ export interface ConfirmIdSpaceLike {
 
 export interface ChatCancelRegistryLike {
   register(requestId: string): AbortSignal
-  signalChatCancel(requestId: string): void
+  signalChatCancel(requestId: string, reason?: unknown): void
   clear(requestId: string): void
   throwIfCancelled(signal: AbortSignal): void
   cancelAllActiveChats(): void
 }
 
 export interface ToolRevocationRegistryLike {
-  registerToolRevocationRequest(requestId: string, lane: string): void
+  registerToolRevocationRequest(requestId: string, lane: string, executionId: string): void
   revokeToolForLane(lane: string, toolName: string): number
   revokeToolForAllLanes(toolName: string): number
-  isToolRevoked(requestId: string, toolName: string): boolean
-  clearToolRevocationRequest(requestId: string): void
+  isToolRevoked(requestId: string, toolName: string, executionId?: string): boolean
+  clearToolRevocationRequest(requestId: string, executionId?: string): void
+  onRevocation(listener: (event: { requestId: string; executionId: string; lane: string; toolName: string }) => void): () => void
+}
+
+export interface PolicyAuthorizationChangeRegistryLike {
+  subscribe(requestId: string, lane: string, listener: () => void): () => void
+  publish(lane: string): number
 }
 
 export interface McpConcurrencyGateLike {
@@ -52,8 +61,8 @@ export interface McpConcurrencyGateLike {
 }
 
 export interface BuiltinRegistryLike {
-  getLegacyExecutor(name: string): unknown
   get(name: string): unknown
+  entries?(): readonly Readonly<{ name: string }>[]
 }
 
 export interface ApprovalAdmissionLike {
@@ -66,8 +75,6 @@ export interface ApprovalAdmissionLike {
 
 export interface InvocationRuntimeLike {
   acquireLease(invocationId: string): InvocationLeaseLike
-  park(invocationId: string, lease: InvocationLeaseLike, checkpoint?: unknown): InvocationParkHandleLike | undefined
-  resumeLease(handle: InvocationParkHandleLike): InvocationLeaseLike | undefined
 }
 
 export interface ResourceLockRegistryLike {
@@ -81,13 +88,6 @@ export interface InvocationLeaseLike {
   release(): void
 }
 
-export interface InvocationParkHandleLike {
-  runtimeId: string
-  invocationId: string
-  generation: number
-  checkpoint: unknown
-}
-
 export interface AgentRuntimeComponents {
   audit?: RuntimeAudit
   /** 桌面:审计惰性构造(agentLogger 目录未就绪时返回 null → NOOP);缺省 NOOP。 */
@@ -95,12 +95,16 @@ export interface AgentRuntimeComponents {
   confirmIds?: ConfirmIdSpaceLike
   chatCancels?: ChatCancelRegistryLike
   toolRevocations?: ToolRevocationRegistryLike
+  policyAuthorizationChanges?: PolicyAuthorizationChangeRegistryLike
   mcpGate?: McpConcurrencyGateLike
   builtinRegistry?: BuiltinRegistryLike
   approvalAdmission?: ApprovalAdmissionLike
   invocationRuntime?: InvocationRuntimeLike
   resourceLocks?: ResourceLockRegistryLike
   toolExecutionConcurrency?: number
+  executionAdmission?: ExecutionAdmissionCoordinator
+  safetyPermits?: SafetyPermitStore
+  modelProviders?: ModelProviderRegistry
 }
 
 export interface AgentRuntime {
@@ -112,16 +116,19 @@ export interface AgentRuntime {
   readonly confirmIds: ConfirmIdSpaceLike
   readonly chatCancels: ChatCancelRegistryLike
   readonly toolRevocations: ToolRevocationRegistryLike
+  readonly policyAuthorizationChanges: PolicyAuthorizationChangeRegistryLike
   readonly mcpGate: McpConcurrencyGateLike
   readonly builtinRegistry: BuiltinRegistryLike
   readonly approvalAdmission: ApprovalAdmissionLike
   readonly invocationRuntime: InvocationRuntimeLike
   readonly resourceLocks: ResourceLockRegistryLike
   readonly toolExecutionConcurrency: number
+  readonly executionAdmission: ExecutionAdmissionCoordinator
+  readonly safetyPermits: SafetyPermitStore
+  readonly modelProviders: ModelProviderRegistry
 }
 
 const EMPTY_REGISTRY: BuiltinRegistryLike = {
-  getLegacyExecutor: () => undefined,
   get: () => undefined
 }
 
@@ -157,7 +164,12 @@ export function createAgentRuntime(components: AgentRuntimeComponents = {}): Age
       revokeToolForLane: () => 0,
       revokeToolForAllLanes: () => 0,
       isToolRevoked: () => false,
-      clearToolRevocationRequest: () => undefined
+      clearToolRevocationRequest: () => undefined,
+      onRevocation: () => () => undefined
+    },
+    policyAuthorizationChanges: components.policyAuthorizationChanges ?? {
+      subscribe: () => () => undefined,
+      publish: () => 0
     },
     mcpGate: components.mcpGate ?? { run: (_serverId, fn) => fn() },
     builtinRegistry: components.builtinRegistry ?? EMPTY_REGISTRY,
@@ -167,12 +179,13 @@ export function createAgentRuntime(components: AgentRuntimeComponents = {}): Age
       cancel: () => false
     },
     invocationRuntime: components.invocationRuntime ?? {
-      acquireLease: (invocationId) => ({ runtimeId: 'noop', invocationId, generation: 0, release: () => undefined }),
-      park: () => undefined,
-      resumeLease: () => undefined
+      acquireLease: (invocationId) => ({ runtimeId: 'noop', invocationId, generation: 0, release: () => undefined })
     },
     resourceLocks: components.resourceLocks ?? { acquire: async () => ({ release: () => undefined }) },
     toolExecutionConcurrency: components.toolExecutionConcurrency ?? 2,
+    executionAdmission: components.executionAdmission ?? new InMemoryExecutionAdmissionCoordinator(),
+    safetyPermits: components.safetyPermits ?? new InMemorySafetyPermitStore(),
+    modelProviders: components.modelProviders ?? new ModelProviderRegistry(),
     get audit() {
       return ensureAudit()
     },

@@ -117,7 +117,6 @@ export function useLlmServiceDrafts(open: boolean, cfg: AppConfig | null, allMod
 export type { LlmServiceTabState, LlmServiceDraft } from './llmServiceDrafts'
 export {
   validateLlmServiceDrafts,
-  formatLlmServiceValidationError,
   buildLlmServicesSavePayload,
   buildServiceSummary,
   setAllSupportedModels,

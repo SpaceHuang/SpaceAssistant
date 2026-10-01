@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { getToolExecutor } from './builtinExecutors'
+import { getRegisteredTool } from './builtinExecutors'
 import { createAgentRuntime } from '../runtime/agentRuntime'
 import { setDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { createBuiltinToolRegistry } from './builtinExecutors'
@@ -7,6 +7,7 @@ import { ConfirmIdSpace } from '../remote/confirmId'
 import { ChatCancelRegistry } from '../chatCancelRegistry'
 import { ToolRevocationRegistry } from '../toolRevocationRegistry'
 import { McpConcurrencyGate } from '../mcp/mcpToolExecutor'
+import { executeRegisteredTool } from './toolInvocationCoordinator'
 import { spawnSync } from 'node:child_process'
 
 vi.mock('../agentLogger/agentLogger', () => ({
@@ -50,6 +51,18 @@ function ctx() {
   } as never
 }
 
+async function executeRunScriptViaCoordinator(input: Record<string, unknown>) {
+  const runtimeContext = ctx()
+  const registered = getRegisteredTool('run_script')
+  if (!registered) throw new Error('run_script registered adapter missing')
+  return executeRegisteredTool(registered, input, {
+    requestId: 'r', toolUseId: 't', signal: runtimeContext.signal, executionContext: runtimeContext
+  }, {
+    confirm: async () => true,
+    dispatch: async (_handle, _context, execute) => execute(runtimeContext.signal)
+  })
+}
+
 setDefaultAgentRuntime(
   createAgentRuntime({
     confirmIds: new ConfirmIdSpace(),
@@ -63,8 +76,7 @@ setDefaultAgentRuntime(
 describe.skipIf(!pythonInterpreter)('run_script 执行期事件（P0-D3 组 1）', () => {
   it('成功执行后落 script.exec.start / spawned / finish，字段与 shell.exec.* 对齐', async () => {
     vi.mocked(logAgentEvent).mockClear()
-    const executor = getToolExecutor('run_script')!
-    const result = await executor.execute({ code: 'print("ok")' }, ctx())
+    const result = await executeRunScriptViaCoordinator({ code: 'print("ok")' })
     expect(result.success).toBe(true)
 
     const events = vi.mocked(logAgentEvent).mock.calls.map(([, event]) => event)
@@ -98,8 +110,7 @@ describe.skipIf(!pythonInterpreter)('run_script 执行期事件（P0-D3 组 1）
 
   it('失败执行：finish 标注 exitCode/success=false，stdout/stderr 只留字节口径', async () => {
     vi.mocked(logAgentEvent).mockClear()
-    const executor = getToolExecutor('run_script')!
-    const result = await executor.execute({ code: "import sys; print('bad', file=sys.stderr); raise SystemExit(3)" }, ctx())
+    const result = await executeRunScriptViaCoordinator({ code: "import sys; print('bad', file=sys.stderr); raise SystemExit(3)" })
     expect(result.success).toBe(false)
 
     const finish = vi.mocked(logAgentEvent).mock.calls.find(([, event]) => event === 'script.exec.finish')?.[2] as Record<string, unknown>

@@ -2,6 +2,24 @@ import { describe, expect, it } from 'vitest'
 import { projectAgentLogFields } from './agentLogProjection'
 
 describe('projectAgentLogFields', () => {
+  it('retains cutover and transcript reconciliation counters without message content', () => {
+    expect(projectAgentLogFields('history.cutover', {
+      requestId: 'request-1', turnId: 'turn-1', sessionId: 'session-1', stage: 'match-current-message',
+      reasonCode: 'matched', historyStreamId: 'legacy-stream', previousTurnId: 'previous-turn', snapshotVersion: 7,
+      message: 'must not be retained'
+    })).toEqual({
+      requestId: 'request-1', turnId: 'turn-1', sessionId: 'session-1', stage: 'match-current-message',
+      reasonCode: 'matched', historyStreamId: 'legacy-stream', previousTurnId: 'previous-turn', snapshotVersion: 7
+    })
+    expect(projectAgentLogFields('session.transcript.reconciliation', {
+      sessionId: 'session-1', turnId: 'turn-1', outcome: 'commit_uncertain', reasonCode: 'version-conflict', transcriptVersion: 4, reconciledCount: 1
+    })).toMatchObject({ outcome: 'commit_uncertain', transcriptVersion: 4, reconciledCount: 1 })
+    expect(projectAgentLogFields('session.transcript.reconciliation', {
+      outcome: 'startup-scan', releasedUnstarted: 2, markedUncertain: 1, repairedCheckpoints: 1, reconciledCount: 1,
+      message: 'must not be retained'
+    })).toEqual({ outcome: 'startup-scan', releasedUnstarted: 2, markedUncertain: 1, repairedCheckpoints: 1, reconciledCount: 1 })
+  })
+
   it('retains the structured facts needed to audit silent context overflow', () => {
     expect(projectAgentLogFields('llm.silent_overflow', {
       requestId: 'req:round:1',
@@ -25,33 +43,14 @@ describe('projectAgentLogFields', () => {
     })
   })
 
-  // chat-abort-latency 方案 Phase 3（评审 N2）：中止审计事件纳入 TARGET_EVENTS 白名单后，
-  // 审计字段必须经 COMMON_KEYS 保留、白名单外字段照常丢弃
-  it('retains llm.cancel audit fields and drops non-allowlisted fields', () => {
-    expect(projectAgentLogFields('llm.cancel', {
-      requestId: 'req-1',
-      sessionId: 'session-1',
-      loopRound: 2,
-      abortToCatchMs: 12,
-      rawDetail: 'must be discarded'
+  it('projects grep termination facts without retaining paths or search input', () => {
+    expect(projectAgentLogFields('grep.terminate', {
+      requestId: 'request-1', sessionId: 'session-1', toolUseId: 'tool-1', reason: 'abort',
+      terminated: 'graceful', elapsedMs: 275, treeKillVerified: true, terminationState: 'terminated',
+      pattern: 'private search', cwd: '/private/worktree', path: '/private/file'
     })).toEqual({
-      requestId: 'req-1',
-      sessionId: 'session-1',
-      loopRound: 2,
-      abortToCatchMs: 12
-    })
-  })
-
-  it('retains turn.cancel audit fields and drops non-allowlisted fields', () => {
-    expect(projectAgentLogFields('turn.cancel', {
-      turnId: 'turn-1',
-      requestId: 'req-1',
-      accepted: true,
-      rawDetail: 'must be discarded'
-    })).toEqual({
-      turnId: 'turn-1',
-      requestId: 'req-1',
-      accepted: true
+      requestId: 'request-1', sessionId: 'session-1', toolUseId: 'tool-1', reason: 'abort',
+      terminated: 'graceful', elapsedMs: 275, treeKillVerified: true, terminationState: 'terminated'
     })
   })
 })

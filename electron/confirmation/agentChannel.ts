@@ -110,6 +110,7 @@ export class AgentChannel implements ConfirmationChannel {
     private readonly deps: {
       lane: ExecutionLane
       requestId: string
+      turnId?: string
       sessionId: string
       toolName: string
       policy: ConfirmAnswererPolicy
@@ -251,7 +252,7 @@ export class AgentChannel implements ConfirmationChannel {
         if (this.deps.approvalAdmission) {
           this.deps.approvalAdmission.acquire({
             requestId: innerRequestId,
-            parentTaskId: this.deps.requestId,
+            parentTaskId: this.deps.turnId ?? this.deps.requestId,
             deadlineAt: startedAt + invocation.timeoutMs
           }).then((admission) => {
             if (admission.kind !== 'granted') {

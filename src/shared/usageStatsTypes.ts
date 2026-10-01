@@ -79,82 +79,42 @@ export const DEFAULT_USAGE_RETENTION_DAYS: UsageRetentionDays = '365'
 /** 折线图数据量保护（§5.3.2：最多渲染 366 个点）。 */
 export const USAGE_MAX_RANGE_DAYS = 366
 
-// ---------- 归因（agent-token-usage-content-attribution §6）----------
-
-/** 归因区间查询参数：在通用区间/维度筛选之上要求指定估算器版本（I1：同报表不得混版本）。 */
-export type UsageAttributionRangeArgs = UsageStatsRangeArgs & {
+/** 按 estimatorVersion 隔离的归因快照；各构成和严格等于对应可归因输入子集。 */
+export type UsageAttributionVersion = {
   estimatorVersion: string
-}
-
-/** 输入侧构成类别（SRC-A1/A2 + SRC-B5 + SRC-C3 的展示归并）。 */
-export type UsageAttributionCategory =
-  | 'system'
-  | 'tools'
-  | 'userText'
-  | 'assistantText'
-  | 'toolResults'
-  | 'assistantThinking'
-  | 'assistantToolUse'
-  | 'other'
-
-/**
- * 构成快照（视图①，口径 A：累计读取量）。
- * Σcategories == attributableInputTokens（AT7/AT14 恒等式，只对可归面子集承诺）；
- * attributionCoverage 是一等展示数字（I7），< 100% 必须显式呈现。
- */
-export type UsageAttributionComposition = {
-  estimatorVersion: string
-  /** 可归因请求的精确输入总量（归一化目标，覆盖率的分子） */
   attributableInputTokens: number
-  /** 区间全部请求的精确输入总量（分母，对齐 KPI「输入 Tokens」） */
-  totalInputTokens: number
-  /** 可归因 ÷ 全部；区间无请求时 null（空态，AT16） */
-  attributionCoverage: number | null
-  categories: Record<UsageAttributionCategory, number>
+  unattributedInputTokens: number
+  coverageRatio: number | null
+  composition: {
+    system: number
+    tools: number
+    messageBlocks: Record<string, number>
+    /** Block categories present in the request but intentionally left unestimated, such as images. */
+  }
 }
 
-/** 构成漂移的单日点（视图②：按天堆叠面积图，Y 轴默认绝对量）。 */
-export type UsageAttributionDailyPoint = Pick<
-  UsageAttributionComposition,
-  'categories' | 'attributableInputTokens' | 'totalInputTokens'
-> & { day: string }
-
-/** 输出侧三类拆分（SRC-D1；总量为协议精确 output_tokens，构成为估算归一化）。 */
-export type UsageAttributionOutputSplit = {
+/** 只读归因查询结果，与同条件 UsageSummary.inputTokens 共用精确分母。 */
+export type UsageAttributionDailyPoint = {
+  day: string
   estimatorVersion: string
-  attributableOutputTokens: number
-  totalOutputTokens: number
-  categories: { thinking: number; text: number; toolUseArgs: number }
+  inputTokens: number
+  composition: UsageAttributionVersion['composition']
 }
 
-/** 工具维度明细行（SRC-B2/B3 声明成本 + SRC-C1/C2 返回体量）。 */
-export type UsageToolAttributionEntry = {
-  name: string
-  source: string
-  /** 声明 schema 字符数（【派生】口径，非 token） */
-  declaredChars: number
-  /** 调用次数；未使用工具为 null */
-  calls: number | null
-  /** 累计返回字符数（【派生】口径，非 token）；未使用工具为 null */
-  resultChars: number | null
+export type UsageAttributionSummary = {
+  exactInputTokens: number
+  byEstimatorVersion: UsageAttributionVersion[]
+  dailyByEstimatorVersion: UsageAttributionDailyPoint[]
+  toolDimensions: {
+    tools: Record<string, number>
+    toolSource: Record<string, number>
+    toolSources: Record<string, 'builtin' | 'mcp' | 'skill' | 'other'>
+    toolResults: Record<string, { calls: number; chars: number }>
+  }
 }
 
-/** 明细排行 + 未使用工具下钻（SRC-B4：unused = 有声明、无调用）。 */
-export type UsageToolAttributionBreakdown = {
-  used: UsageToolAttributionEntry[]
-  unused: UsageToolAttributionEntry[]
-  totalDeclaredChars: number
-  unusedDeclaredChars: number
-}
-
-/** usage_step_facts 最近归因行（环构成段数据源，§6.7）：渲染端投影，单一类型来源在 shared。 */
-export type UsageLatestSessionAttribution = {
-  stepId: string
-  turnId: string
-  createdAt: number
-  estimatorVersion: string | null
-  systemTokens: number | null
-  toolsTokens: number | null
-  messageTokens: number | null
-  attributionJson: string | null
+/** 当前会话最近一条精确 usage step 的归因快照；不可得时 API 返回 null。 */
+export type UsageLatestAttribution = UsageAttributionVersion & {
+  exactInputTokens: number
+  coverageRatio: number
 }

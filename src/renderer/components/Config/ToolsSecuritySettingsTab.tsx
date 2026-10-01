@@ -239,12 +239,8 @@ function PolicyPackageSection({
               )
             }
             if (pkg !== 'custom') {
-              // 非 custom 档只读：展示当前档位下的生效动作（含按 ruleId 档位覆盖 ruleActionOverrides）
-              return (
-                <span>
-                  {actionLabel(effectiveActionFor(lane, pkg, { id: r.id, action: r.action, locked: r.locked }))}
-                </span>
-              )
+              // 非 custom 档只读：展示当前档位下的生效动作
+              return <span>{actionLabel(effectiveActionFor(lane, pkg, { id: r.id, action: r.action, locked: r.locked }))}</span>
             }
             // custom 档：动作域按 lane（B2）——desktop 4 态（deny/allow/ask/auto-evaluator）、
             // wechat/feishu 3 态；覆盖动作即最终动作

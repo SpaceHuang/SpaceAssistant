@@ -14,6 +14,8 @@ const TRUNC_SUFFIX = '\n[输出被截断]'
 
 export interface LarkCliRunOptions {
   args: string[]
+  /** Host-prepared executable path; prevents a settings change from retargeting an approved call. */
+  resolvedExecutable?: string
   timeoutSec?: number
   cwd?: string
   onStdout?: (chunk: string) => void
@@ -26,6 +28,14 @@ export interface LarkCliRunResult {
   stdout: string
   stderr: string
   timedOut: boolean
+  cancelledBeforeStart?: boolean
+}
+
+export class LarkCliExecutionUncertainError extends Error {
+  constructor() {
+    super('lark-cli 未获得完整执行结果，最终副作用状态未知')
+    this.name = 'LarkCliExecutionUncertainError'
+  }
 }
 
 async function runWhich(cmd: string): Promise<string | null> {
@@ -77,8 +87,8 @@ export class LarkCliRunner {
   }
 
   run(options: LarkCliRunOptions): Promise<LarkCliRunResult> {
-    const { args, timeoutSec = 120, cwd, onStdout, onStderr, signal } = options
-    const cliPath = this.resolveExecutable()
+    const { args, resolvedExecutable, timeoutSec = 120, cwd, onStdout, onStderr, signal } = options
+    const cliPath = resolvedExecutable ?? this.resolveExecutable()
     const startedAt = Date.now()
     const { argsRedacted } = redactLarkCliArgsForLog(args)
     logFeishuCliEvent('info', 'feishu.cli.run.start', {
@@ -143,6 +153,11 @@ export class LarkCliRunner {
         resolve(result)
       }
 
+      if (signal?.aborted) {
+        resolve({ exitCode: 1, stdout: '', stderr: '', timedOut: false, cancelledBeforeStart: true })
+        return
+      }
+
       const spawned = spawnCommandSafe(cliPath, args, {
         windowsHide: true,
         cwd: cwd ?? os.homedir(),
@@ -167,6 +182,7 @@ export class LarkCliRunner {
         setTimeout(() => proc.kill('SIGKILL'), 500)
       }
       signal?.addEventListener('abort', onAbort, { once: true })
+      if (signal?.aborted) onAbort()
 
       proc.stdout?.on('data', (d: Buffer<ArrayBufferLike>) => {
         const delta = feed(stdoutDecoder, d, 'stdout')

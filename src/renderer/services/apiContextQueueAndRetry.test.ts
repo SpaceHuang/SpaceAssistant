@@ -70,7 +70,7 @@ describe('apiContext queue and retry', () => {
     expect(historyForApi.find((m) => m.id === 'q-user')?.attachments?.[0]?.fileName).toBe('a.png')
   })
 
-  it('retry excludes failed assistant and includes target user outside baseline', () => {
+  it('retry preserves prior context and target user while excluding every failed attempt outside baseline', () => {
     const baseline: ApiContextBaseline = {
       sessionId: 's1',
       entries: Array.from({ length: 500 }, (_, i) => ({
@@ -84,16 +84,16 @@ describe('apiContext queue and retry', () => {
       }))
     }
     const user = msg({ id: 'u998', role: 'user', content: 'retry me', status: 'sent' })
-    const failed = msg({
-      id: 'a999',
+    const failed = ['a999', 'a1000', 'a1001'].map((id, index) => msg({
+      id,
       role: 'assistant',
-      content: 'broken',
+      content: `broken attempt ${index + 1}`,
       status: 'failed',
-      toolCalls: [{ id: 't1', toolName: 'x', input: {}, status: 'calling', riskLevel: 'low' }]
-    })
+      toolCalls: [{ id: `t${index + 1}`, toolName: 'x', input: {}, status: 'calling', riskLevel: 'low' }]
+    }))
     const overlay = [
       { message: user, order: { kind: 'persisted' as const, sequence: 998 } },
-      { message: failed, order: { kind: 'persisted' as const, sequence: 999 } }
+      ...failed.map((message, index) => ({ message, order: { kind: 'persisted' as const, sequence: 999 + index } }))
     ]
     const merged = mergeApiContextBaselineWithOverlay(baseline, overlay)
     const history = buildHistoryForApiFromEntries(merged, {
@@ -102,10 +102,11 @@ describe('apiContext queue and retry', () => {
         message: user,
         order: { kind: 'persisted', sequence: 998 }
       },
-      excludeMessageIds: [failed.id]
+      excludeMessageIds: failed.map(({ id }) => id)
     })
     expect(history.filter((m) => m.id === 'u998')).toHaveLength(1)
-    expect(history.filter((m) => m.id === 'a999')).toHaveLength(0)
+    expect(history.slice(-2).map(({ id }) => id)).toEqual(['m499', 'u998'])
+    expect(history.some(({ id }) => failed.some((attempt) => attempt.id === id))).toBe(false)
   })
 
   it('Q1/Q2 keeps completed A/B history and excludes queued or streaming placeholders', async () => {

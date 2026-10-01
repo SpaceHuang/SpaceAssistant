@@ -10,6 +10,8 @@ import { attachTestReadPermit } from './readPermitTestUtils'
 import { probeWritePathFact } from '../confirmation/extractors/writePathFacts'
 import { buildWriteExecutionPermit } from '../confirmation/writeExecutionPermit'
 import * as readPathFacts from '../confirmation/extractors/readPathFacts'
+import * as directoryHandleWriterModule from '../confirmation/directoryHandleWriter'
+import * as safeAtomicWriteModule from '../safeAtomicWrite'
 
 function makeCtx(workDir: string, cache: FileStateCache): ToolExecutionContext {
   return {
@@ -270,6 +272,18 @@ describe('edit/write fileStateCache', () => {
     expect(write.error).toMatch(/请勿使用 filePath 或 file_path/)
   })
 
+  it('write_file 不把原子 worker 的取消/失联结果降级成普通失败', async () => {
+    const worker = vi.spyOn(directoryHandleWriterModule, 'writeFileAtomicallyBoundToDirectory')
+      .mockResolvedValue({ ok: false, caseId: 'write-directory-cancelled' })
+    try {
+      await expect(writeFileExecutor.execute({ path: 'uncertain.txt', content: 'value' }, makeCtx(tmpDir, cache)))
+        .rejects.toMatchObject({ name: 'SafeAtomicWriteUncertainError' })
+      expect(worker).toHaveBeenCalledOnce()
+    } finally {
+      worker.mockRestore()
+    }
+  })
+
   it('desktop write consumes a request-bound permit for an outside target', async () => {
     const workDir = path.join(tmpDir, 'work')
     const outsideDir = path.join(tmpDir, 'outside')
@@ -362,5 +376,162 @@ describe('edit/write fileStateCache', () => {
     expect(result.success).toBe(false)
     expect(result.diagnostic).toMatchObject({ category: 'environment' })
     expect(await fs.readFile(target, 'utf8')).toBe('changed after approval')
+  })
+
+  it('edit_file refuses a write permit replaced after initial validation and before atomic commit', async () => {
+    const rel = 'permit-race-edit.txt'
+    const target = path.join(tmpDir, rel)
+    await fs.writeFile(target, 'approved old text')
+    const stat = await fs.stat(target)
+    cache.set(target, { path: target, content: 'approved old text', mtime: stat.mtimeMs, size: stat.size, readAt: Date.now(), isPartial: false })
+    const input = { path: rel, old_string: 'old', new_string: 'new' }
+    const fact = await probeWritePathFact({ rawPath: rel, workDir: tmpDir, userDataDir: path.join(tmpDir, '.userdata'), homeDir: os.homedir(), customSensitivePrefixes: [] })
+    const makePermit = (decisionRuleId: string) => buildWriteExecutionPermit({
+      requestId: 'req-test', toolUseId: 'tool-test', toolName: 'edit_file', input, target: fact, decisionRuleId, approval: 'confirmed'
+    })
+    const ctx = makeCtx(tmpDir, cache)
+    ctx.lane = 'desktop'
+    ctx.writeExecutionPermit = makePermit('approved-rule-v1')
+    const originalGet = cache.get.bind(cache)
+    let replaced = false
+    const get = vi.spyOn(cache, 'get').mockImplementation((key) => {
+      const snapshot = originalGet(key)
+      if (!replaced) {
+        replaced = true
+        ctx.writeExecutionPermit = makePermit('replacement-rule-v2')
+      }
+      return snapshot
+    })
+    const atomicWrite = vi.spyOn(safeAtomicWriteModule, 'safeAtomicWrite')
+
+    try {
+      const result = await editFileExecutor.execute(input, ctx)
+      expect(result.success).toBe(false)
+      expect(result.diagnostic?.caseId).toBe('write-permit-changed-during-execution')
+      expect(atomicWrite).not.toHaveBeenCalled()
+      expect(await fs.readFile(target, 'utf8')).toBe('approved old text')
+    } finally {
+      get.mockRestore()
+      atomicWrite.mockRestore()
+    }
+  })
+
+  it('write_file refuses a write permit replaced after initial validation and before atomic commit', async () => {
+    const rel = 'permit-race-write.txt'
+    const target = path.join(tmpDir, rel)
+    await fs.writeFile(target, 'approved old text')
+    const stat = await fs.stat(target)
+    cache.set(target, { path: target, content: 'approved old text', mtime: stat.mtimeMs, size: stat.size, readAt: Date.now(), isPartial: false })
+    const input = { path: rel, content: 'new text' }
+    const fact = await probeWritePathFact({ rawPath: rel, workDir: tmpDir, userDataDir: path.join(tmpDir, '.userdata'), homeDir: os.homedir(), customSensitivePrefixes: [] })
+    const makePermit = (decisionRuleId: string) => buildWriteExecutionPermit({
+      requestId: 'req-test', toolUseId: 'tool-test', toolName: 'write_file', input, target: fact, decisionRuleId, approval: 'confirmed'
+    })
+    const ctx = makeCtx(tmpDir, cache)
+    ctx.lane = 'desktop'
+    ctx.writeExecutionPermit = makePermit('approved-rule-v1')
+    const originalGet = cache.get.bind(cache)
+    let replaced = false
+    const get = vi.spyOn(cache, 'get').mockImplementation((key) => {
+      const snapshot = originalGet(key)
+      if (!replaced) {
+        replaced = true
+        ctx.writeExecutionPermit = makePermit('replacement-rule-v2')
+      }
+      return snapshot
+    })
+    const atomicWrite = vi.spyOn(safeAtomicWriteModule, 'safeAtomicWrite')
+
+    try {
+      const result = await writeFileExecutor.execute(input, ctx)
+      expect(result.success).toBe(false)
+      expect(result.diagnostic?.caseId).toBe('write-permit-changed-during-execution')
+      expect(atomicWrite).not.toHaveBeenCalled()
+      expect(await fs.readFile(target, 'utf8')).toBe('approved old text')
+    } finally {
+      get.mockRestore()
+      atomicWrite.mockRestore()
+    }
+  })
+
+  it('does not overwrite a new target created after permit validation but before atomic commit', async () => {
+    const target = path.join(tmpDir, 'raced-new-target.txt')
+    const input = { path: 'raced-new-target.txt', content: 'approved content' }
+    const fact = await probeWritePathFact({ rawPath: input.path, workDir: tmpDir, userDataDir: path.join(tmpDir, '.userdata'), homeDir: os.homedir(), customSensitivePrefixes: [] })
+    const ctx = makeCtx(tmpDir, cache)
+    ctx.lane = 'desktop'
+    ctx.writeExecutionPermit = buildWriteExecutionPermit({ requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'write_file', input, target: fact, decisionRuleId: 'workdir-write-allow', approval: 'auto-allow' })
+    const actualAtomicWrite = safeAtomicWriteModule.safeAtomicWrite
+    const commit = vi.spyOn(safeAtomicWriteModule, 'safeAtomicWrite').mockImplementation(async (options) => {
+      await fs.writeFile(target, 'external writer won')
+      return actualAtomicWrite(options)
+    })
+
+    try {
+      await expect(writeFileExecutor.execute(input, ctx)).rejects.toThrow('目标文件已存在，拒绝覆盖新建路径')
+      expect(await fs.readFile(target, 'utf8')).toBe('external writer won')
+    } finally {
+      commit.mockRestore()
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')('does not redirect a permitted write when a newly created parent directory is swapped for a symlink', async () => {
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-write-race-outside-'))
+    const nested = path.join(tmpDir, 'race-parent')
+    await fs.mkdir(nested)
+    const escapedTarget = path.join(outside, 'escaped.txt')
+    const input = { path: 'race-parent/escaped.txt', content: 'must stay inside' }
+    const fact = await probeWritePathFact({ rawPath: input.path, workDir: tmpDir, userDataDir: path.join(tmpDir, '.userdata'), homeDir: os.homedir(), customSensitivePrefixes: [] })
+    const ctx = makeCtx(tmpDir, cache)
+    ctx.lane = 'desktop'
+    ctx.writeExecutionPermit = buildWriteExecutionPermit({ requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'write_file', input, target: fact, decisionRuleId: 'workdir-write-allow', approval: 'auto-allow' })
+    const actualWriteWorker = directoryHandleWriterModule.writeFileAtomicallyBoundToDirectory
+    let swapped = false
+    const writeWorker = vi.spyOn(directoryHandleWriterModule, 'writeFileAtomicallyBoundToDirectory').mockImplementation(async (options) => {
+      if (!swapped) {
+        swapped = true
+        await fs.rename(nested, path.join(tmpDir, 'race-parent-held'))
+        await fs.symlink(outside, nested, 'dir')
+      }
+      return actualWriteWorker(options)
+    })
+
+    try {
+      await expect(writeFileExecutor.execute(input, ctx)).rejects.toThrow()
+      expect(await fs.access(escapedTarget).then(() => true, () => false)).toBe(false)
+      expect(await fs.access(path.join(tmpDir, 'race-parent', 'escaped.txt')).then(() => true, () => false)).toBe(false)
+      await fs.unlink(nested)
+      await fs.rename(path.join(tmpDir, 'race-parent-held'), nested)
+      expect((await fs.readdir(nested)).filter((name) => name.startsWith('.sa-wtmp-'))).toHaveLength(0)
+    } finally {
+      writeWorker.mockRestore()
+      await fs.rm(path.join(tmpDir, 'race-parent'), { recursive: true, force: true })
+      await fs.rename(path.join(tmpDir, 'race-parent-held'), path.join(tmpDir, 'race-parent')).catch(() => {})
+      await fs.rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('preserves an existing target replaced after identity capture but before atomic commit', async () => {
+    const target = path.join(tmpDir, 'raced-existing-target.txt')
+    await fs.writeFile(target, 'approved snapshot')
+    const stat = await fs.stat(target)
+    cache.set(target, { path: target, content: 'approved snapshot', mtime: stat.mtimeMs, size: stat.size, readAt: Date.now(), isPartial: false })
+    const input = { path: target, content: 'approved replacement' }
+    const fact = await probeWritePathFact({ rawPath: target, workDir: tmpDir, userDataDir: path.join(tmpDir, '.userdata'), homeDir: os.homedir(), customSensitivePrefixes: [] })
+    const ctx = makeCtx(tmpDir, cache)
+    ctx.lane = 'desktop'
+    ctx.writeExecutionPermit = buildWriteExecutionPermit({ requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'write_file', input, target: fact, decisionRuleId: 'confirmed-write', approval: 'confirmed' })
+    const actualAtomicWrite = safeAtomicWriteModule.safeAtomicWrite
+    const commit = vi.spyOn(safeAtomicWriteModule, 'safeAtomicWrite').mockImplementation(async (options) => {
+      await fs.writeFile(target, 'external writer won')
+      return actualAtomicWrite(options)
+    })
+
+    try {
+      await expect(writeFileExecutor.execute(input, ctx)).rejects.toThrow()
+      expect(await fs.readFile(target, 'utf8')).toBe('external writer won')
+    } finally {
+      commit.mockRestore()
+    }
   })
 })

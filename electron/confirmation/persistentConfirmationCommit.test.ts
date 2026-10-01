@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { getDbConnection, openSqliteDatabase, type AppDatabase } from '../database'
 import { commitConfirmationSubmission, commitConfirmationSubmissionWithWork, ConfirmationCommitRolledBackError, failConfirmationSubmission, markConfirmationSubmissionReconciling, queryConfirmationSubmission, reconcileConfirmationSubmission, reconcileConfirmationSubmissions, reserveConfirmationSubmission } from './persistentConfirmationCommit'
-import type { CommitPlan } from '../../packages/agent-core/src/confirmationCommit'
+import type { CommitPlan } from '../../packages/agent-sdk/src/confirmationCommit'
 
 const dbs: AppDatabase[] = []
 afterEach(() => dbs.splice(0).forEach((db) => db.close()))

@@ -16,6 +16,21 @@ beforeEach(() => setKnownHomeDir('/Users/alice'))
 afterEach(() => setKnownHomeDir(undefined))
 
 describe('process result projections', () => {
+  it('保留自动批准写入元数据用于 Agent 与本地历史，但不把它暴露到 telemetry', () => {
+    const autoApprovedWrite = { path: 'notes.txt', added: 2, removed: 0, bytesWritten: 5 }
+    const result = {
+      success: true,
+      decisionRuleId: 'workspace-write-auto',
+      autoApprovedWrite,
+      data: { path: 'notes.txt' }
+    }
+
+    expect(projectAgentToolResultForSink(result)).toMatchObject({ decisionRuleId: 'workspace-write-auto', autoApprovedWrite })
+    expect(projectLocalHistoryToolResult(result)).toMatchObject({ decisionRuleId: 'workspace-write-auto', autoApprovedWrite })
+    expect(projectTelemetryToolResult(result)).not.toHaveProperty('decisionRuleId')
+    expect(projectTelemetryToolResult(result)).not.toHaveProperty('autoApprovedWrite')
+  })
+
   it('给 Agent 保留可解释的系统路径，并将 workspace 路径转换为相对路径', () => {
     const result = {
       success: false,
@@ -147,6 +162,15 @@ describe('process result projections', () => {
     expect(projectAgentToolResultForSink(result, processOptions)).toMatchObject({ error: 'SHELL_RESULT_SERIALIZATION_FAILED', data: null })
     expect(projectLocalHistoryToolResult(result, processOptions)).toMatchObject({ error: 'SHELL_RESULT_SERIALIZATION_FAILED', data: null })
     expect(projectTelemetryToolResult(result, processOptions)).toEqual({ ok: false, errorCode: 'SHELL_RESULT_SERIALIZATION_FAILED', data: null })
+  })
+
+  it('进程结果投影移除可选字段中的 undefined，保证可写入规范 History', () => {
+    const projected = projectAgentToolResultForSink({
+      success: true,
+      data: { status: 'succeeded', progressCaseId: undefined, caseId: undefined, exitCode: 0 }
+    }, { processTool: true })
+
+    expect(projected.data).toEqual({ status: 'succeeded', exitCode: 0 })
   })
 
   it('普通工具和 MCP 结果不触发进程终态校验，也不丢弃业务字段', () => {

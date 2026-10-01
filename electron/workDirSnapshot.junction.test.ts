@@ -69,6 +69,6 @@ describe('workDirSnapshot：字面变体与 realpath 归一不误报（C2）', (
       fallbackWorkDir: base + path.sep
     })
     const snapshot = tracker.snapshot()
-    expect(workspacePathKey(base + path.sep)).toBe(snapshot.key)
+    expect(workspacePathKey(fs.realpathSync(base) + path.sep)).toBe(snapshot.key)
   })
 })

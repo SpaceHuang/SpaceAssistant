@@ -1,6 +1,6 @@
 import type { ToolExecutor, ToolExecutionContext, ToolExecutorResult } from './types'
 import { getWeChatBundle, readWeChatConfigFromDb } from '../wechat/weChatIpc'
-import { executeWeChatReply, executeWeChatSend } from './weChatToolExecutor'
+import { executeWeChatReply, executeWeChatSend, WeChatOutboundExecutionUncertainError } from './weChatToolExecutor'
 import { toToolUserError } from './toolUserErrors'
 
 export const wechatReplyExecutor: ToolExecutor = {
@@ -21,7 +21,9 @@ export const wechatReplyExecutor: ToolExecutor = {
           workDir: ctx.workDir,
           botService: bundle.botService,
           db: ctx.appDatabase!,
-          sessionId: ctx.sessionId
+          sessionId: ctx.sessionId,
+          expectedMessageId: ctx.remoteContext?.source === 'wechat' ? ctx.remoteContext.messageId : undefined,
+          signal: ctx.signal
         }
       )
       void bundle.auditLogger.append({
@@ -39,6 +41,7 @@ export const wechatReplyExecutor: ToolExecutor = {
         duration: Date.now() - started
       }
     } catch (e) {
+      if (e instanceof WeChatOutboundExecutionUncertainError) throw e
       return {
         success: false,
         error: toToolUserError(e, { toolName: 'wechat_reply' }),
@@ -73,7 +76,8 @@ export const wechatSendExecutor: ToolExecutor = {
         {
           workDir: ctx.workDir,
           botService: bundle.botService,
-          getWeChatConfig: () => readWeChatConfigFromDb(ctx.appDatabase!)
+          getWeChatConfig: () => readWeChatConfigFromDb(ctx.appDatabase!),
+          signal: ctx.signal
         }
       )
       void bundle.auditLogger.append({
@@ -91,6 +95,7 @@ export const wechatSendExecutor: ToolExecutor = {
         duration: Date.now() - started
       }
     } catch (e) {
+      if (e instanceof WeChatOutboundExecutionUncertainError) throw e
       return {
         success: false,
         error: toToolUserError(e, { toolName: 'wechat_send' }),

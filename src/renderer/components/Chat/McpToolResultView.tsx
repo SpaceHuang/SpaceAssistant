@@ -5,6 +5,7 @@ import { buildMcpCopyText } from '../../../shared/mcpResultCopy'
 import { maskSensitiveText } from '../../../shared/mcpSensitiveText'
 import { writeClipboardText } from '../../utils/selectionCopy'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import { runtimeText } from '../../i18n/runtimeText'
 import { ChatMarkdown } from './ChatMarkdown'
 import type { ChatSearchActiveTarget } from '../../services/chatSearchActiveTarget'
 import type { ReactNode } from 'react'
@@ -68,7 +69,7 @@ export function McpToolResultView({ display, fragmentId, messageId, toolUseId, a
       {display.blocks.filter((block) => block.kind !== 'text').map((block, index) => (
         <div key={index} className="tool-row-detail__message">
           {block.kind === 'image' ? <>
-            {block.previewable && block.data ? <img src={`data:${block.mimeType};base64,${block.data}`} alt={`图片结果 · ${block.mimeType}`} /> : null}
+            {block.previewable && block.data ? <img src={`data:${block.mimeType};base64,${block.data}`} alt={runtimeText('chat.mcpImageAlt', { mimeType: block.mimeType })} /> : null}
             <span>{t('mcp.imageResult', { mimeType: block.mimeType, size: block.byteLength })}</span>
           </> : null}
           {block.kind === 'resource' ? t('mcp.resourceResult', { name: block.name ?? block.uri, uri: block.uri }) : null}

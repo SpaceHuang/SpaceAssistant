@@ -1,21 +1,23 @@
 import type { AppDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
-import type { UsageTurnFactRow } from '../database/operations'
-import { ATTRIBUTION_SCHEMA_VERSION, normalizeInputAttribution, normalizeOutputAttribution, type NormalizedInputAttribution, type StepAttributionJson } from '../../src/shared/usageAttribution'
+import {
+  calculateAttributionCoverage,
+  emptyTurnToolDimension,
+  hasAttributionWeights,
+  normalizeInputAttribution,
+  type StepAttributionJson,
+  type TurnToolDimension,
+  type ToolSourceClass
+} from '../../src/shared/usageAttribution'
 import {
   USAGE_MAX_RANGE_DAYS,
-  type UsageAttributionCategory,
-  type UsageAttributionComposition,
-  type UsageAttributionDailyPoint,
-  type UsageAttributionOutputSplit,
-  type UsageAttributionRangeArgs,
+  type UsageAttributionSummary,
   type UsageDailyPoint,
+  type UsageLatestAttribution,
   type UsageDimensions,
   type UsageStatsFilters,
   type UsageStatsRangeArgs,
-  type UsageSummary,
-  type UsageToolAttributionBreakdown,
-  type UsageToolAttributionEntry
+  type UsageSummary
 } from '../../src/shared/usageStatsTypes'
 
 /** 本地自然日 + n 天（用于跨度截断与日期遍历；跨月/跨年由 Date 处理）。 */
@@ -49,17 +51,20 @@ type SqlFilterParams = {
 }
 
 /** 把 Filters 展开为两表共用的 WHERE 片段（多项之间「或」，§8.1）。 */
-function buildFilterWhere(dimensions: UsageStatsFilters | undefined): SqlFilterParams {
+function buildFilterWhere(dimensions: UsageStatsFilters | undefined, aliases: { token?: string; turn?: string } = {}): SqlFilterParams {
   const tokenConds: string[] = []
   const turnConds: string[] = []
+  const tokenPrefix = aliases.token ? `${aliases.token}.` : ''
+  const turnPrefix = aliases.turn ? `${aliases.turn}.` : ''
   const paramsToken: (string | null)[] = []
   const paramsTurn: (string | null)[] = []
 
   const models = dimensions?.models ?? []
   if (models.length > 0) {
-    const parts = models.map(() => '(model = ? AND (? IS NULL OR llm_service_id = ?))')
+    const parts = models.map(() => `(${tokenPrefix}model = ? AND (? IS NULL OR ${tokenPrefix}llm_service_id = ?))`)
+    const turnParts = models.map(() => `(${turnPrefix}model = ? AND (? IS NULL OR ${turnPrefix}llm_service_id = ?))`)
     tokenConds.push(`(${parts.join(' OR ')})`)
-    turnConds.push(`(${parts.join(' OR ')})`)
+    turnConds.push(`(${turnParts.join(' OR ')})`)
     for (const m of models) {
       const values = [m.model, m.llmServiceId ?? null, m.llmServiceId ?? null]
       paramsToken.push(...values)
@@ -68,15 +73,15 @@ function buildFilterWhere(dimensions: UsageStatsFilters | undefined): SqlFilterP
   }
   const sessionIds = dimensions?.sessionIds ?? []
   if (sessionIds.length > 0) {
-    tokenConds.push(`session_id IN (${sessionIds.map(() => '?').join(', ')})`)
-    turnConds.push(`session_id IN (${sessionIds.map(() => '?').join(', ')})`)
+    tokenConds.push(`${tokenPrefix}session_id IN (${sessionIds.map(() => '?').join(', ')})`)
+    turnConds.push(`${turnPrefix}session_id IN (${sessionIds.map(() => '?').join(', ')})`)
     paramsToken.push(...sessionIds)
     paramsTurn.push(...sessionIds)
   }
   const appVersions = dimensions?.appVersions ?? []
   if (appVersions.length > 0) {
-    tokenConds.push(`app_version IN (${appVersions.map(() => '?').join(', ')})`)
-    turnConds.push(`app_version IN (${appVersions.map(() => '?').join(', ')})`)
+    tokenConds.push(`${tokenPrefix}app_version IN (${appVersions.map(() => '?').join(', ')})`)
+    turnConds.push(`${turnPrefix}app_version IN (${appVersions.map(() => '?').join(', ')})`)
     paramsToken.push(...appVersions)
     paramsTurn.push(...appVersions)
   }
@@ -278,249 +283,185 @@ export function queryUsageDimensions(db: AppDatabase): UsageDimensions {
   }
 }
 
-// ---------- 归因查询（agent-token-usage-content-attribution §6.6）----------
-
-function emptyCategories(): Record<UsageAttributionCategory, number> {
-  return { system: 0, tools: 0, userText: 0, assistantText: 0, toolResults: 0, assistantThinking: 0, assistantToolUse: 0, other: 0 }
-}
-
-/** 骨架键 → 展示类别（SRC-C3 的归并口径）。 */
-function categorizeBlockKey(key: string): UsageAttributionCategory {
-  if (key === 'user|text') return 'userText'
-  if (key === 'assistant|text') return 'assistantText'
-  if (key === 'user|tool_result') return 'toolResults'
-  if (key === 'assistant|thinking') return 'assistantThinking'
-  if (key === 'assistant|tool_use') return 'assistantToolUse'
-  return 'other'
-}
-
-function parseAttribution(row: AttributionRow): StepAttributionJson | null {
-  if (!row.attribution_json) return null
-  try {
-    const parsed = JSON.parse(row.attribution_json) as StepAttributionJson
-    // schemaVersion 校验（AD7）：未来 v2 格式的行不得当 v1 静默混入——按「无归因数据」降级（留在分母、不进分子）
-    if (!parsed || typeof parsed !== 'object' || !parsed.blocks) return null
-    if (parsed.schemaVersion !== ATTRIBUTION_SCHEMA_VERSION) return null
-    return parsed
-  } catch {
-    return null
-  }
-}
-
-type AttributionRow = {
+type AttributionSqlRow = {
   day: string
-  input_tokens: number
-  output_tokens: number
-  /** 三源真列（SRC-A* 权重，block-v1 落库） */
-  system_tokens: number | null
-  tools_tokens: number | null
-  estimator_version: string | null
-  attribution_json: string | null
+  sessionId: string
+  turnId: string
+  stepId: string
+  inputTokens: number | null
+  attributionJson: string | null
+  estimatorVersion: string | null
+  systemTokens: number | null
+  toolsTokens: number | null
+  messageTokens: number | null
 }
 
-function fetchAttributionRows(db: AppDatabase, args: UsageAttributionRangeArgs): AttributionRow[] {
-  const { whereToken, paramsToken } = buildFilterWhere(args.dimensions)
-  const conn = getDbConnection(db)
-  // 注意：不得把 estimator_version 过滤下推到这条 SQL——版本不一致/无归因的行仍需进入
-  // 覆盖率分母（AT16/I7），下推会让它们整行消失、覆盖率恒为 100%。版本校验在 normalizeRow* 内存中做。
-  return conn
-    .prepare(
-      `SELECT day, input_tokens, output_tokens, system_tokens, tools_tokens, estimator_version, attribution_json
-       FROM usage_step_facts
-       WHERE day >= ? AND day <= ?${whereToken}
-       ORDER BY created_at, id`
-    )
-    .all(args.from, args.to, ...paramsToken) as AttributionRow[]
-}
-
-function coverageOf(attributable: number, total: number): number | null {
-  return total > 0 ? attributable / total : null
-}
-
-/**
- * 单行输入侧归一化（§6.3 两段式）：权重 = 三源真列（system/tools）+ 骨架块 tokens（messages），
- * 精确总量 = 该行 input_tokens；版本不一致或无归因 JSON 时返回 null（该行仅留在分母）。
- */
-function normalizeRowInput(row: AttributionRow, estimatorVersion: string): NormalizedInputAttribution | null {
-  if (row.estimator_version !== estimatorVersion) return null
-  const attribution = parseAttribution(row)
-  if (!attribution) return null
-  return normalizeInputAttribution(
-    {
-      ...attribution,
-      threeSources: {
-        systemTokens: numberValue(row.system_tokens),
-        toolsTokens: numberValue(row.tools_tokens),
-        messageTokens: 0,
-        estimatorVersion
-      }
-    },
-    numberValue(row.input_tokens)
-  )
-}
-
-function normalizeRowOutput(row: AttributionRow, estimatorVersion: string): { thinking: number; text: number; toolUseArgs: number } | null {
-  if (row.estimator_version !== estimatorVersion) return null
-  const attribution = parseAttribution(row)
-  if (!attribution) return null
-  // 无 output 段的行（旧格式/异常行）给不出输出侧结构占比——整行排除出可归因子集，
-  // 否则 Σcategories < attributableOutputTokens，输出侧恒等式（AT7 同型）被破坏
-  if (!attribution.output) return null
-  return normalizeOutputAttribution(
-    { ...attribution, threeSources: { systemTokens: 0, toolsTokens: 0, messageTokens: 0, estimatorVersion } },
-    numberValue(row.output_tokens)
-  )
-}
-
-/**
- * 构成快照（视图①，口径 A）。每行独立做 §6.3 两段式归一化（分子分母同请求、同版本，I1），
- * 归一化后再跨行累加——可归面子集的 Σcategories == attributableInputTokens（AT7/AT14）。
- * 版本不一致或无归因数据的行留在分母、不进分子（AT8/AT16/I7）。
- */
-export function queryAttributionComposition(db: AppDatabase, args: UsageAttributionRangeArgs): UsageAttributionComposition {
-  const rows = fetchAttributionRows(db, args)
-  const categories = emptyCategories()
-  let attributableInputTokens = 0
-  let totalInputTokens = 0
-  for (const row of rows) {
-    totalInputTokens += numberValue(row.input_tokens)
-    const normalized = normalizeRowInput(row, args.estimatorVersion)
-    if (!normalized) continue
-    categories.system += normalized.system
-    categories.tools += normalized.tools
-    for (const [key, tokens] of Object.entries(normalized.messageBlocks)) {
-      categories[categorizeBlockKey(key)] += tokens
-    }
-    attributableInputTokens += numberValue(row.input_tokens)
-  }
-  return {
-    estimatorVersion: args.estimatorVersion,
-    attributableInputTokens,
-    totalInputTokens,
-    attributionCoverage: coverageOf(attributableInputTokens, totalInputTokens),
-    categories
-  }
-}
-
-/** 构成漂移（视图②）：按天的构成快照，恒等式逐天成立。 */
-export function queryAttributionDaily(db: AppDatabase, args: UsageAttributionRangeArgs): UsageAttributionDailyPoint[] {
-  const rows = fetchAttributionRows(db, args)
-  const byDay = new Map<string, UsageAttributionDailyPoint>()
-  for (const day of iterateDays(args.from, args.to)) {
-    byDay.set(day, { day, categories: emptyCategories(), attributableInputTokens: 0, totalInputTokens: 0 })
-  }
-  for (const row of rows) {
-    const point = byDay.get(row.day)
-    if (!point) continue
-    point.totalInputTokens += numberValue(row.input_tokens)
-    const normalized = normalizeRowInput(row, args.estimatorVersion)
-    if (!normalized) continue
-    point.categories.system += normalized.system
-    point.categories.tools += normalized.tools
-    for (const [key, tokens] of Object.entries(normalized.messageBlocks)) {
-      point.categories[categorizeBlockKey(key)] += tokens
-    }
-    point.attributableInputTokens += numberValue(row.input_tokens)
-  }
-  return [...byDay.values()]
-}
-
-/** 输出侧三类（SRC-D1）：按精确 output_tokens 摊回，Σcategories == attributableOutputTokens。 */
-export function queryAttributionOutputSplit(db: AppDatabase, args: UsageAttributionRangeArgs): UsageAttributionOutputSplit {
-  const rows = fetchAttributionRows(db, args)
-  const categories = { thinking: 0, text: 0, toolUseArgs: 0 }
-  let attributableOutputTokens = 0
-  let totalOutputTokens = 0
-  for (const row of rows) {
-    totalOutputTokens += numberValue(row.output_tokens)
-    const normalized = normalizeRowOutput(row, args.estimatorVersion)
-    if (!normalized) continue
-    categories.thinking += normalized.thinking
-    categories.text += normalized.text
-    categories.toolUseArgs += normalized.toolUseArgs
-    attributableOutputTokens += numberValue(row.output_tokens)
-  }
-  return {
-    estimatorVersion: args.estimatorVersion,
-    attributableOutputTokens,
-    totalOutputTokens,
-    categories
-  }
-}
-
-type ToolDimensionRow = { tool_attribution_json: string | null }
-
-function parseToolDimension(row: ToolDimensionRow): { tools: Record<string, number>; toolSource: Record<string, number>; toolSources?: Record<string, string>; toolResults: Record<string, { calls: number; chars: number }> } | null {
-  if (!row.tool_attribution_json) return null
+function parseRecordJson(value: string | null): Record<string, unknown> | undefined {
+  if (value === null) return undefined
   try {
-    const parsed = JSON.parse(row.tool_attribution_json) as ReturnType<typeof parseToolDimension>
-    return parsed && typeof parsed === 'object' && parsed.tools ? parsed : null
-  } catch {
-    return null
+    const parsed: unknown = JSON.parse(value)
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined
+  } catch { return undefined }
+}
+
+function addNumericRecord(target: Record<string, number>, source: unknown): void {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return
+  for (const [key, raw] of Object.entries(source)) {
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) target[key] = (target[key] ?? 0) + raw
   }
 }
 
-/**
- * 工具维度明细（视图③，SRC-B2–B4 / SRC-C1–C2）：跨 turn 合并声明与返回体量。
- * 未使用 = 有声明、无调用记录（SRC-B4）；声明字符为【派生】口径，展示层不得呈现为 token（I2）。
- */
-export function queryToolAttributionBreakdown(db: AppDatabase, args: UsageStatsRangeArgs): UsageToolAttributionBreakdown {
-  const { whereTurn, paramsTurn } = buildFilterWhere(args.dimensions)
-  const conn = getDbConnection(db)
-  const rows = conn
-    .prepare(
-      `SELECT tool_attribution_json FROM usage_turn_facts
-       WHERE day >= ? AND day <= ?${whereTurn}`
-    )
-    .all(args.from, args.to, ...paramsTurn) as ToolDimensionRow[]
-
-  const declaredChars = new Map<string, number>()
-  const explicitSourceByName = new Map<string, string>()
-  const calls = new Map<string, number>()
-  const resultChars = new Map<string, number>()
+function aggregateToolDimensions(rows: readonly { toolAttributionJson: string | null }[]): UsageAttributionSummary['toolDimensions'] {
+  const result: TurnToolDimension = emptyTurnToolDimension()
   for (const row of rows) {
-    const dim = parseToolDimension(row)
-    if (!dim) continue
-    for (const [name, chars] of Object.entries(dim.tools)) {
-      declaredChars.set(name, (declaredChars.get(name) ?? 0) + chars)
+    const json = parseRecordJson(row.toolAttributionJson)
+    if (!json) continue
+    addNumericRecord(result.tools, json.tools)
+    addNumericRecord(result.toolSource, json.toolSource)
+    if (json.toolSources && typeof json.toolSources === 'object' && !Array.isArray(json.toolSources)) {
+      for (const [name, source] of Object.entries(json.toolSources)) {
+        if (source === 'builtin' || source === 'mcp' || source === 'skill' || source === 'other') result.toolSources[name] = source as ToolSourceClass
+      }
     }
-    // 逐名显式来源（写入侧 classifyToolSource 产出）；显式值优先于 mcp_ 前缀推断
-    for (const [name, source] of Object.entries(dim.toolSources ?? {})) {
-      explicitSourceByName.set(name, source)
-    }
-    for (const [name, entry] of Object.entries(dim.toolResults)) {
-      calls.set(name, (calls.get(name) ?? 0) + entry.calls)
-      resultChars.set(name, (resultChars.get(name) ?? 0) + entry.chars)
-    }
-  }
-  // 来源分类：优先显式字段，缺失时按名称推断（mcp_ 前缀约定，§7.3）
-  const sourceOf = (name: string): string => {
-    return explicitSourceByName.get(name) ?? (name.startsWith('mcp_') ? 'mcp' : 'builtin')
-  }
-  const used: UsageToolAttributionEntry[] = []
-  const unused: UsageToolAttributionEntry[] = []
-  let totalDeclaredChars = 0
-  let unusedDeclaredChars = 0
-  // 合并声明与调用两个键集：有调用、无声明的工具（如跨 turn 声明缺失）仍计入 used，不静默丢失（I5）
-  const allNames = new Set<string>([...declaredChars.keys(), ...calls.keys()])
-  for (const name of allNames) {
-    const chars = declaredChars.get(name) ?? 0
-    totalDeclaredChars += chars
-    const callCount = calls.get(name)
-    const entry: UsageToolAttributionEntry = {
-      name,
-      source: sourceOf(name),
-      declaredChars: chars,
-      calls: callCount ?? null,
-      resultChars: callCount != null ? (resultChars.get(name) ?? 0) : null
-    }
-    if (callCount != null) used.push(entry)
-    else {
-      unused.push(entry)
-      unusedDeclaredChars += chars
+    if (json.toolResults && typeof json.toolResults === 'object' && !Array.isArray(json.toolResults)) {
+      for (const [name, raw] of Object.entries(json.toolResults)) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+        const value = raw as { calls?: unknown; chars?: unknown }
+        if (typeof value.calls !== 'number' || !Number.isFinite(value.calls) || value.calls < 0 || typeof value.chars !== 'number' || !Number.isFinite(value.chars) || value.chars < 0) continue
+        const total = result.toolResults[name] ?? { calls: 0, chars: 0 }
+        total.calls += value.calls
+        total.chars += value.chars
+        result.toolResults[name] = total
+      }
     }
   }
-  used.sort((a, b) => (b.resultChars ?? 0) - (a.resultChars ?? 0) || b.declaredChars - a.declaredChars)
-  unused.sort((a, b) => b.declaredChars - a.declaredChars)
-  return { used, unused, totalDeclaredChars, unusedDeclaredChars }
+  return result
+}
+
+/** Cross-session input attribution and turn tool dimensions, using the exact summary filters and composite ownership keys. */
+export function queryUsageAttribution(db: AppDatabase, args: UsageStatsRangeArgs): UsageAttributionSummary {
+  const { whereToken, whereTurn, paramsToken, paramsTurn } = buildFilterWhere(args.dimensions)
+  const conn = getDbConnection(db)
+  const rows = conn.prepare(
+    `SELECT day, session_id AS sessionId, turn_id AS turnId, step_id AS stepId,
+            input_tokens AS inputTokens, attribution_json AS attributionJson, estimator_version AS estimatorVersion,
+            system_tokens AS systemTokens, tools_tokens AS toolsTokens, message_tokens AS messageTokens
+     FROM usage_step_facts
+     WHERE day >= ? AND day <= ?${whereToken}
+     ORDER BY session_id, turn_id, step_id`
+  ).all(args.from, args.to, ...paramsToken) as AttributionSqlRow[]
+
+  const summary = queryUsageSummary(db, args)
+  const coverage = calculateAttributionCoverage(rows.map((row) => ({
+    inputTokens: row.inputTokens,
+    attributionJson: row.attributionJson,
+    estimatorVersion: row.estimatorVersion,
+    systemTokens: row.systemTokens,
+    toolsTokens: row.toolsTokens,
+    messageTokens: row.messageTokens
+  })))
+  if (coverage.exactInputTokens !== summary.inputTokens) throw new Error('USAGE_ATTRIBUTION_FILTERED_INPUT_TOTAL_MISMATCH')
+
+  const versions = new Map<string, UsageAttributionSummary['byEstimatorVersion'][number]>()
+  const dailyVersions = new Map<string, UsageAttributionSummary['dailyByEstimatorVersion'][number]>()
+  for (const row of rows) {
+    if (row.inputTokens === null || row.attributionJson === null || !row.estimatorVersion) continue
+    const parsed = parseRecordJson(row.attributionJson) as StepAttributionJson | undefined
+    if (!parsed) continue
+    const attribution = {
+      ...parsed,
+      threeSources: {
+        systemTokens: row.systemTokens ?? 0,
+        toolsTokens: row.toolsTokens ?? 0,
+        messageTokens: row.messageTokens ?? 0,
+        estimatorVersion: row.estimatorVersion
+      }
+    }
+    if (!hasAttributionWeights(attribution)) continue
+    const normalized = normalizeInputAttribution(attribution, row.inputTokens)
+    const version = versions.get(row.estimatorVersion) ?? {
+      estimatorVersion: row.estimatorVersion,
+      attributableInputTokens: 0,
+      unattributedInputTokens: 0,
+      coverageRatio: null,
+      composition: { system: 0, tools: 0, messageBlocks: {} }
+    }
+    version.attributableInputTokens += row.inputTokens
+    version.composition.system += normalized.system
+    version.composition.tools += normalized.tools
+    for (const [key, value] of Object.entries(normalized.messageBlocks)) version.composition.messageBlocks[key] = (version.composition.messageBlocks[key] ?? 0) + value
+    versions.set(row.estimatorVersion, version)
+    const dailyKey = `${row.day}\u0000${row.estimatorVersion}`
+    const daily = dailyVersions.get(dailyKey) ?? {
+      day: row.day, estimatorVersion: row.estimatorVersion, inputTokens: 0,
+      composition: { system: 0, tools: 0, messageBlocks: {} }
+    }
+    daily.inputTokens += row.inputTokens
+    daily.composition.system += normalized.system
+    daily.composition.tools += normalized.tools
+    for (const [key, value] of Object.entries(normalized.messageBlocks)) daily.composition.messageBlocks[key] = (daily.composition.messageBlocks[key] ?? 0) + value
+    dailyVersions.set(dailyKey, daily)
+  }
+  for (const coverageGroup of coverage.byEstimatorVersion) {
+    const version = versions.get(coverageGroup.estimatorVersion)
+    if (version) {
+      version.unattributedInputTokens = coverageGroup.unattributedInputTokens
+      version.coverageRatio = coverageGroup.coverageRatio
+    }
+  }
+
+  const { whereTurn: whereTurnAliased, paramsTurn: paramsTurnAliased } = buildFilterWhere(args.dimensions, { turn: 't' })
+  const turnRows = conn.prepare(
+    `SELECT t.tool_attribution_json AS toolAttributionJson
+     FROM usage_turn_facts t
+     INNER JOIN (
+       SELECT DISTINCT session_id, turn_id FROM usage_step_facts
+       WHERE day >= ? AND day <= ?${whereToken}
+     ) selected ON selected.session_id = t.session_id AND selected.turn_id = t.turn_id
+     WHERE t.day >= ? AND t.day <= ?${whereTurnAliased}`
+  ).all(args.from, args.to, ...paramsToken, args.from, args.to, ...paramsTurnAliased) as Array<{ toolAttributionJson: string | null }>
+
+  return {
+    exactInputTokens: summary.inputTokens,
+    byEstimatorVersion: [...versions.values()].sort((a, b) => a.estimatorVersion.localeCompare(b.estimatorVersion)),
+    dailyByEstimatorVersion: [...dailyVersions.values()].sort((a, b) => a.day.localeCompare(b.day) || a.estimatorVersion.localeCompare(b.estimatorVersion)),
+    toolDimensions: aggregateToolDimensions(turnRows)
+  }
+}
+
+/** Latest attributable exact step for one session, identified by the persisted session/turn/step key. */
+export function queryLatestUsageAttribution(db: AppDatabase, sessionId: string): UsageLatestAttribution | null {
+  const conn = getDbConnection(db)
+  const row = conn.prepare(
+    `SELECT input_tokens AS inputTokens, attribution_json AS attributionJson, estimator_version AS estimatorVersion,
+            system_tokens AS systemTokens, tools_tokens AS toolsTokens, message_tokens AS messageTokens
+     FROM usage_step_facts
+     WHERE session_id = ? AND input_tokens IS NOT NULL
+     ORDER BY created_at DESC, id DESC
+     LIMIT 1`
+  ).get(sessionId) as AttributionSqlRow | undefined
+  if (!row || row.inputTokens === null || !row.estimatorVersion || row.attributionJson === null) return null
+  const json = parseRecordJson(row.attributionJson)
+  if (!json) return null
+  const attribution = {
+    ...json,
+    threeSources: {
+      systemTokens: row.systemTokens ?? 0,
+      toolsTokens: row.toolsTokens ?? 0,
+      messageTokens: row.messageTokens ?? 0,
+      estimatorVersion: row.estimatorVersion
+    }
+  }
+  if (!hasAttributionWeights(attribution)) return null
+  const normalized = normalizeInputAttribution({
+    ...attribution
+  } as StepAttributionJson & { threeSources: { systemTokens: number; toolsTokens: number; messageTokens: number; estimatorVersion: string } }, row.inputTokens)
+  return {
+    exactInputTokens: row.inputTokens,
+    estimatorVersion: row.estimatorVersion,
+    attributableInputTokens: row.inputTokens,
+    unattributedInputTokens: 0,
+    coverageRatio: 1,
+    composition: normalized
+  }
 }

@@ -1,0 +1,125 @@
+{
+  "chat": {
+    "browser": {
+      "openPage": "打开网页",
+      "refreshPage": "刷新页面",
+      "back": "后退",
+      "forward": "前进",
+      "navigate": "导航",
+      "unspecifiedUrl": "(未指定 URL)",
+      "unspecifiedInstruction": "(未指定指令)",
+      "hintOpen": "将在隔离浏览器中打开上述地址。确认后，本会话内访问同域名将不再询问。",
+      "action": "操作",
+      "hintNavigate": "将在当前浏览器会话中执行导航",
+      "actionLabel": "浏览器操作",
+      "commandLabel": "指令",
+      "hintAct": "将在当前页面执行单步自然语言操作。",
+      "arguments": "参数",
+      "openHost": "打开 {{target}}",
+      "actionSummary": "浏览器操作 · {{instruction}}",
+      "openInViewer": "在内容查看器中打开：{{url}}"
+    },
+    "browserDependency": {
+      "title": "网络访问依赖未就绪",
+      "description": "助手将代为运行安装命令（需你确认）；若 Shell 未启用，可使用下方按钮在终端中手动操作。",
+      "workDir": "工作目录",
+      "openTerminal": "在终端中打开"
+    },
+    "devPreview": {
+      "notificationShown": "浮动通知已弹出（测试数据），点击通知或手动关闭 ✕ 按钮关闭。",
+      "confirmed": "测试预览：已确认（无实际操作）",
+      "rejected": "测试预览：已拒绝（无实际操作）",
+      "cancelled": "测试预览：已取消（无实际操作）",
+      "previewInProgress": "[Dev] 测试卡片预览进行中，请稍候…",
+      "showingCards": "[Dev] 开始展示 {{count}} 张测试卡片…",
+      "previewComplete": "[Dev] 测试卡片展示完成"
+    },
+    "wikiArchivePrompt": "/wiki query 请将以下助手回答归档为 Wiki 新页（建议 wiki/queries/{{name}}-archive.md），更新 index 与 log，并确保正文结构清晰：\n\n{{content}}",
+    "mcpImageResult": "图片结果 · {{value}}",
+    "mcpImageAlt": "图片结果 · {{mimeType}}",
+    "shell": {
+      "outputTruncated": "输出已截断，打开完整日志 →",
+      "exitCode": "退出码 {{code}}",
+      "scrollbackTruncated": "终端记录已截断（超过 256KB）",
+      "resumeFollow": "恢复跟随",
+      "copy": "复制",
+      "interactiveProgram": "交互式程序"
+    },
+    "pending": {
+      "confirmScript": "{{session}} · 待确认 · 运行已有脚本",
+      "confirmShell": "{{session}} · 待确认 · Shell 命令",
+      "confirmFeishu": "{{session}} · 待确认 · 飞书 CLI"
+    },
+    "skillLoaded": "[Skill] 已加载：{{name}}（内置，依赖恢复）",
+    "auditCharacters": "{{prefix}} {{count}} 字"
+  },
+  "config": {
+    "llmService": {
+      "keyConfigured": "Key 已配置",
+      "keyNotConfigured": "未配置 Key",
+      "supportedModels": "已支持 {{count}} 个模型",
+      "officialDefault": "官方默认",
+      "unnamed": "未命名服务",
+      "maxServices": "最多配置 {{count}} 套大模型服务",
+      "keepOne": "至少保留一套服务",
+      "needOneModelService": "至少保留一套大模型服务",
+      "selectActiveService": "至少选择一个当前使用的服务",
+      "nameRequired": "服务名称不能为空",
+      "nameTooLong": "服务名称不能超过 32 个字符",
+      "duplicateName": "服务名称「{{name}}」重复",
+      "newService": "新服务",
+      "apiKeyRequired": "新建服务「{{name}}」须填写 API Key",
+      "modelRequired": "服务「{{name}}」须至少支持一个模型"
+    }
+  },
+  "detailPanel": {
+    "fileTooLarge": "文件过大，无法预览（最大 2 MB）",
+    "previewUrlFailed": "无法生成本地网页预览地址",
+    "invalidUrl": "无效的 URL",
+    "refreshed": "已刷新",
+    "openLink": "打开链接",
+    "openInViewer": "在查看器中打开",
+    "openExternalBrowser": "在外部浏览器打开",
+    "webLoadFailed": "页面加载失败，请检查网络或 URL",
+    "waitForSession": "当前会话正在响应，请等待完成后再切换",
+    "switchFailed": "切换失败",
+    "configureWorkDirFirst": "请先配置工作目录",
+    "setWorkDir": "设置工作目录...",
+    "switchWorkDir": "切换工作目录",
+    "selectOrCreateSession": "请先选择或创建一个会话",
+    "projectFiles": "项目文件"
+  },
+  "usage": {
+    "compactBillions": "{{value}} 亿",
+    "compactTenThousands": "{{value}} 万"
+  },
+  "generic": {
+    "delete": "删除",
+    "cancel": "取消"
+  },
+  "browserRecovery": {
+    "chromiumMissing": "Chromium 浏览器未安装",
+    "downloadChromium": "下载 Playwright Chromium 浏览器（约 150-200 MB，需联网）"
+  },
+  "testCards": {
+    "outsideWorkDir": "命令包含工作目录外的路径",
+    "searchTimeout": "搜索超时",
+    "userRejected": "用户拒绝",
+    "failed": "失败",
+    "detectTimeout": "检测超时",
+    "commandFailed": "命令执行失败（退出码: {{code}}）"
+  },
+  "wiki": {
+    "importedRaw": "已导入 raw：{{name}}，Ingest 已开始",
+    "ingestStarted": "Ingest 已开始：{{name}}",
+    "enableFirst": "请先在设置中启用 Wiki",
+    "initializeFirst": "Wiki 尚未初始化，请先在设置或 Wiki 分段中初始化",
+    "schemaSection": "## Wiki Schema（项目规范）"
+  },
+  "workDir": {
+    "switchFailed": "切换工作目录失败"
+  },
+  "browserDetect": {
+    "failed": "检测失败"
+  }
+}

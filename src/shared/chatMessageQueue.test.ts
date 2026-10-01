@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Message } from './domainTypes'
 import {
   countQueuedUserMessages,
+  filterOutQueuedUserMessages,
   filterMessagesForChatApi,
   getNextQueuedUserMessage,
   MAX_CHAT_MESSAGE_QUEUE_SIZE
@@ -52,7 +53,19 @@ describe('chatMessageQueue', () => {
 
   it('lists queued user messages in order', () => {
     const rows = [userMessage('2', 'queued'), userMessage('1', 'queued'), userMessage('3', 'sent')]
-    expect(getNextQueuedUserMessage(rows, 's1')?.id).toBe('1')
+    expect(getNextQueuedUserMessage(rows, 's1')?.id).toBe('2')
     expect(countQueuedUserMessages(rows, 's1')).toBe(2)
+  })
+
+  it('保持传入数组顺序（不按 timestamp 重排）', () => {
+    const rows = [userMessage('later', 'queued'), userMessage('earlier', 'queued')]
+    rows[0].timestamp = 20
+    rows[1].timestamp = 10
+    expect(getNextQueuedUserMessage(rows, 's1')?.id).toBe('later')
+  })
+
+  it('剔除当前会话排队项并保持其余顺序', () => {
+    const rows = [userMessage('1', 'queued'), userMessage('2', 'sent'), userMessage('3', 'queued', 's2')]
+    expect(filterOutQueuedUserMessages(rows, 's1').map((row) => row.id)).toEqual(['2', '3'])
   })
 })

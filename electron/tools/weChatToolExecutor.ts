@@ -6,6 +6,13 @@ import { listSessions } from '../database'
 import { resolveSafeWorkDirPath } from '../pathSecurity'
 import type { WeChatBotService } from '../wechat/weChatBotService'
 import type { WeChatConfig } from '../../src/shared/wechatTypes'
+
+export class WeChatOutboundExecutionUncertainError extends Error {
+  constructor(readonly operation: 'send' | 'reply') {
+    super(`微信${operation === 'send' ? '发送' : '回复'}请求已发出，但未收到可确认结果`)
+    this.name = 'WeChatOutboundExecutionUncertainError'
+  }
+}
 import { formatWeChatSummary } from '../wechat/weChatReplyService'
 import { getWeChatBundle } from '../wechat/weChatIpc'
 
@@ -54,6 +61,7 @@ export async function executeWeChatSend(
     workDir: string
     botService: WeChatBotService
     getWeChatConfig: () => WeChatConfig
+    signal?: AbortSignal
   }
 ): Promise<{ success: boolean; chunksSent?: number; error?: string; diagnostic?: { caseId: string; retryable: boolean; category: 'mechanism' } }> {
   const cfg = ctx.getWeChatConfig()
@@ -65,9 +73,10 @@ export async function executeWeChatSend(
 
   const media = await readMedia(ctx.workDir, input.imagePath, input.filePath)
   if (media.error) return { success: false, error: media.error, ...(media.diagnostic ? { diagnostic: media.diagnostic } : {}) }
+  if (ctx.signal?.aborted) return { success: false, error: '微信发送已取消' }
 
+  const text = formatWeChatSummary(input.text)
   try {
-    const text = formatWeChatSummary(input.text)
     if (media.buffer && media.fileName) {
       const ext = path.extname(media.fileName).toLowerCase()
       if (IMAGE_EXT.has(ext)) {
@@ -78,11 +87,10 @@ export async function executeWeChatSend(
     } else {
       await bot.send(input.userId, text)
     }
-    return { success: true, chunksSent: Math.max(1, Math.ceil(text.length / 2000)) }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    return { success: false, error: msg.includes('timeout') ? '发送超时，请重试' : `网络连接失败，请检查网络后重试：${msg}` }
+  } catch {
+    throw new WeChatOutboundExecutionUncertainError('send')
   }
+  return { success: true, chunksSent: Math.max(1, Math.ceil(text.length / 2000)) }
 }
 
 export async function executeWeChatReply(
@@ -92,6 +100,8 @@ export async function executeWeChatReply(
     botService: WeChatBotService
     db: AppDatabase
     sessionId?: string
+    expectedMessageId?: string
+    signal?: AbortSignal
   }
 ): Promise<{ success: boolean; chunksSent?: number; error?: string; diagnostic?: { caseId: string; retryable: boolean; category: 'mechanism' } }> {
   const bot = ctx.botService.getRawBot()
@@ -112,11 +122,17 @@ export async function executeWeChatReply(
     return { success: false, error: '缺少会话上下文' }
   }
 
+  const currentMessageId = inboundRaw.raw.client_id || `${inboundRaw.userId}-${inboundRaw.timestamp.getTime()}`
+  if (ctx.expectedMessageId && currentMessageId !== ctx.expectedMessageId) {
+    return { success: false, error: '微信入站消息已变化，请重新授权回复' }
+  }
+
   const media = await readMedia(ctx.workDir, input.imagePath, input.filePath)
   if (media.error) return { success: false, error: media.error, ...(media.diagnostic ? { diagnostic: media.diagnostic } : {}) }
+  if (ctx.signal?.aborted) return { success: false, error: '微信回复已取消' }
 
+  const text = formatWeChatSummary(input.text)
   try {
-    const text = formatWeChatSummary(input.text)
     if (media.buffer && media.fileName) {
       const ext = path.extname(media.fileName).toLowerCase()
       if (IMAGE_EXT.has(ext)) {
@@ -127,9 +143,8 @@ export async function executeWeChatReply(
     } else {
       await bot.reply(inboundRaw, text)
     }
-    return { success: true, chunksSent: Math.max(1, Math.ceil(text.length / 2000)) }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    return { success: false, error: msg }
+  } catch {
+    throw new WeChatOutboundExecutionUncertainError('reply')
   }
+  return { success: true, chunksSent: Math.max(1, Math.ceil(text.length / 2000)) }
 }

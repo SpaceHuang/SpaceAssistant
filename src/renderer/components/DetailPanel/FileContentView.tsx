@@ -13,6 +13,7 @@ import { WikiIndexView } from './WikiIndexView'
 import { ImageView } from './ImageView'
 import { UnsupportedView } from './UnsupportedView'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import { runtimeText } from '../../i18n/runtimeText'
 import { WebView } from './WebView'
 import { MarkdownSearchScope } from '../Search/MarkdownSearchScope'
 
@@ -62,10 +63,10 @@ export function FileContentView({ wikiIndexView = false }: Props) {
     (url: string, target: string) => {
       if (target === '_blank') {
         Modal.confirm({
-          title: '打开链接',
+          title: runtimeText('detailPanel.openLink'),
           content: url,
-          okText: '在查看器中打开',
-          cancelText: '在外部浏览器打开',
+          okText: runtimeText('detailPanel.openInViewer'),
+          cancelText: runtimeText('detailPanel.openExternalBrowser'),
           onOk: () => openUrl(url),
           onCancel: () => void openExternalUrl(url)
         })

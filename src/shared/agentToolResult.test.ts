@@ -6,6 +6,19 @@ beforeEach(() => setKnownHomeDir('/Users/alice'))
 afterEach(() => setKnownHomeDir(undefined))
 
 describe('serializeAgentToolResult', () => {
+  it('不把自动批准写入审计元数据序列化进模型回放内容', () => {
+    const replay = serializeAgentToolResult({
+      success: true,
+      decisionRuleId: 'workspace-write-auto',
+      autoApprovedWrite: { path: 'notes.txt', added: 2, removed: 0, bytesWritten: 5 },
+      data: { path: 'notes.txt' }
+    })
+
+    expect(replay).toBe(JSON.stringify({ ok: true, data: { path: 'notes.txt' } }))
+    expect(replay).not.toContain('workspace-write-auto')
+    expect(replay).not.toContain('autoApprovedWrite')
+  })
+
   it('失败结果使用稳定 JSON envelope，并保留 data', () => {
     expect(JSON.parse(serializeAgentToolResult({
       success: false,

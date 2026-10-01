@@ -3,6 +3,7 @@ import { formatShellStderrDisplay, normalizeTerminalOutput } from '../../../shar
 import { REDACTED_ARTIFACT_ID } from '../../../shared/processResultProjection'
 import { needsOutputTrustNotice } from '../../../shared/shellToolDisplay'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import { runtimeText } from '../../i18n/runtimeText'
 
 type Props = {
   /** 实时模式：合并的 stdout+stderr 尾部 */
@@ -110,7 +111,7 @@ export function ShellOutputView({
           className="shell-output__truncated-hint"
           onClick={() => void window.api.shellOpenOutputPath(openTarget)}
         >
-          输出已截断，打开完整日志 →
+          {runtimeText('chat.shell.outputTruncated')}
         </button>
       ) : null}
     </div>

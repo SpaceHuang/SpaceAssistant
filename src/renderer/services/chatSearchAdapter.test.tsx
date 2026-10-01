@@ -206,4 +206,33 @@ describe('useChatSearchAdapter', () => {
     expect(corpusPage).toHaveBeenCalledTimes(1)
     expect(result.current.totalMatches).toBeGreaterThan(0)
   })
+
+  it('排队消息即使来自数据库语料或加载竞态也不进入搜索 entries', async () => {
+    const queued = { ...msg('q', 'secret queued phrase'), status: 'queued' as const }
+    const corpusPage = vi.fn().mockResolvedValue({ entries: [{ message: queued, sequence: 0 }], nextSequence: 1, hasMore: false })
+    Object.assign(window.api ?? {}, { chatGetSearchCorpusPage: corpusPage })
+    const { result } = renderHook(() => {
+      useChatSearchAdapter(createContainer('<div class="chat-message-list" />'), { sessionId: 's1', messages: [queued], displayEntries: [] })
+      return useSearch()
+    }, { wrapper })
+    act(() => { result.current.open(); result.current.setQuery('secret') })
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); vi.advanceTimersByTime(350); await Promise.resolve() })
+    expect(result.current.totalMatches).toBe(0)
+  })
+
+  it('排队项转为 sent 后可以通过实时消息覆盖命中', async () => {
+    const queued = { ...msg('promoted', 'promoted searchable phrase'), status: 'queued' as const }
+    Object.assign(window.api ?? {}, { chatGetSearchCorpusPage: vi.fn().mockResolvedValue({ entries: [{ message: queued, sequence: 0 }], nextSequence: 1, hasMore: false }) })
+    const containerRef = createContainer('<div class="chat-message-list" />')
+    const live = { ...queued, status: 'sent' as const }
+    const { result, rerender } = renderHook(({ current }) => {
+      useChatSearchAdapter(containerRef, { sessionId: 's1', messages: [current], displayEntries: [] })
+      return useSearch()
+    }, { initialProps: { current: queued }, wrapper })
+    act(() => { result.current.open(); result.current.setQuery('promoted') })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    rerender({ current: live })
+    await act(async () => { vi.advanceTimersByTime(350); await Promise.resolve() })
+    expect(result.current.totalMatches).toBe(1)
+  })
 })

@@ -98,6 +98,94 @@ describe('resolveMessageToolsInteractive', () => {
     expect(restored[0]).toBe(history)
     expect(restored[1]).not.toBe(restored[0])
   })
+
+  it('同一 pending 工具已存在于另一条助手消息时不在目标消息复制确认卡', () => {
+    const earlier = { ...confirmingMessage, id: 'earlier-message', toolCalls: [{ ...confirmingMessage.toolCalls![0]!, status: 'confirming' as const }] }
+    const latest = { ...confirmingMessage, id: 'latest-message', toolCalls: [] }
+    const restored = restorePendingConfirmToolCalls([earlier, latest], [pendingItem])
+
+    expect(restored[0]?.toolCalls).toHaveLength(1)
+    expect(restored[1]?.toolCalls).toEqual([])
+  })
+
+  it('按投影记录的助手消息和工具位置恢复缺失卡片，不追加到最新消息末尾', () => {
+    const origin: Message = {
+      ...confirmingMessage,
+      id: 'origin-message',
+      contentSegments: [{ content: 'before', startTime: 1 }],
+      toolCalls: [{ id: 'later-tool', toolName: 'lookup', input: {}, status: 'calling', riskLevel: 'low' }],
+      activity: [
+        { kind: 'text', segmentIndex: 0 },
+        { kind: 'tool', toolId: 'later-tool' }
+      ]
+    }
+    const latest: Message = { ...confirmingMessage, id: 'latest-message', toolCalls: [] }
+    const positionedPending = {
+      ...pendingItem,
+      toolUseId: 'restored-tool',
+      assistantMessageId: origin.id,
+      toolIndex: 0,
+      activityIndex: 0
+    }
+
+    const restored = restorePendingConfirmToolCalls([origin, latest], [positionedPending])
+
+    expect(restored[0]?.toolCalls?.map((tool) => [tool.id, tool.status])).toEqual([
+      ['restored-tool', 'confirming'],
+      ['later-tool', 'calling']
+    ])
+    expect(restored[0]?.activity).toEqual([
+      { kind: 'tool', toolId: 'restored-tool' },
+      { kind: 'text', segmentIndex: 0 },
+      { kind: 'tool', toolId: 'later-tool' }
+    ])
+    expect(restored[1]?.toolCalls).toEqual([])
+  })
+
+  it('按 toolUseId 把旧状态快照提升为原消息中的确认卡', () => {
+    const origin: Message = {
+      ...confirmingMessage,
+      id: 'origin-message',
+      status: 'completed',
+      toolCalls: [
+        { id: 'before', toolName: 'lookup', input: {}, status: 'completed', riskLevel: 'low' },
+        { ...confirmingMessage.toolCalls![0]!, status: 'executing' },
+        { id: 'after', toolName: 'lookup', input: {}, status: 'calling', riskLevel: 'low' }
+      ],
+      activity: [
+        { kind: 'tool', toolId: 'before' },
+        { kind: 'tool', toolId: pendingItem.toolUseId },
+        { kind: 'tool', toolId: 'after' }
+      ]
+    }
+    const latest: Message = { ...confirmingMessage, id: 'latest-message', toolCalls: [] }
+
+    const restored = restorePendingConfirmToolCalls([origin, latest], [{ ...pendingItem, assistantMessageId: origin.id }])
+
+    expect(restored[0]?.toolCalls?.map((tool) => [tool.id, tool.status])).toEqual([
+      ['before', 'completed'],
+      [pendingItem.toolUseId, 'confirming'],
+      ['after', 'calling']
+    ])
+    expect(restored[1]?.toolCalls).toEqual([])
+  })
+
+  it.each(['calling', 'executing', 'completed', 'failed'] as const)(
+    'pending 状态覆盖原消息中的 %s 快照并留在原位置',
+    (status) => {
+      const earlier = {
+        ...confirmingMessage,
+        id: 'earlier-message',
+        status: 'completed' as const,
+        toolCalls: [{ ...confirmingMessage.toolCalls![0]!, status }]
+      }
+      const latest = { ...confirmingMessage, id: 'latest-message', toolCalls: [] }
+      const restored = restorePendingConfirmToolCalls([earlier, latest], [pendingItem])
+
+      expect(restored[0]?.toolCalls?.[0]?.status).toBe('confirming')
+      expect(restored[1]?.toolCalls).toEqual([])
+    }
+  )
   it('detects confirming tools on message', () => {
     expect(messageHasConfirmingTool(confirmingMessage)).toBe(true)
     expect(messageHasConfirmingTool({ ...confirmingMessage, toolCalls: [] })).toBe(false)

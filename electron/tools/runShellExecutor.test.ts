@@ -735,7 +735,7 @@ describe('runShellExecutor', () => {
   it('执行层以 prepared 输出模式为准，不读取实时 ctx', async () => {
     const plannedCtx = { ...baseCtx(workDir, userDataDir), shellOutputMode: 'terminal' as const, shellConfig: { ...baseCtx(workDir, userDataDir).shellConfig, outputMode: 'terminal' as const } }
     const prepared = await planRunShellExecution({ command: 'echo frozen-raw' }, plannedCtx)
-    const currentCtx = { ...baseCtx(workDir, userDataDir), shellOutputMode: 'plain' as const, shellConfig: { ...baseCtx(workDir, userDataDir).shellConfig, outputMode: 'plain' as const } }
+    const currentCtx = { ...baseCtx(workDir, userDataDir), shellOutputMode: 'plain' as const, shellConfig: plannedCtx.shellConfig }
     await executePreparedShellExecution(prepared, currentCtx, Date.now(), { requestId: currentCtx.requestId, sessionId: currentCtx.sessionId, toolUseId: currentCtx.toolUseId })
     expect(vi.mocked(currentCtx.sendProgress).mock.calls.some(([, payload]) => typeof payload === 'object' && payload && 'rawDelta' in payload)).toBe(true)
   }, SPAWN_TEST_TIMEOUT_MS)

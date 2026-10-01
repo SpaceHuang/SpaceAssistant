@@ -6,6 +6,7 @@ import { RemoteStatusBar } from './RemoteStatusBar'
 import { ResizeHandle } from './ResizeHandle'
 import { DetailPanelFileList } from './DetailPanelFileList'
 import { useTypedSelector } from '../../hooks'
+import { runtimeText } from '../../i18n/runtimeText'
 import { collectToWiki } from '../../services/wikiImportService'
 import './detailPanel.css'
 
@@ -28,7 +29,7 @@ export function DetailPanel() {
     void collectToWiki(srcRelPath, {
       wikiEnabled: Boolean(config?.wiki?.enabled),
       sessionId: currentSessionId,
-      onMissingSession: () => message.warning('请先选择或创建一个会话'),
+      onMissingSession: () => message.warning(runtimeText('detailPanel.selectOrCreateSession')),
       onError: (text) => message.error(text),
       onSuccess: (text) => message.success(text)
     })
@@ -50,7 +51,7 @@ export function DetailPanel() {
           gridTemplateRows: `minmax(0, ${topFr}fr) var(--detail-resize-handle-height) minmax(0, ${bottomFr}fr) var(--remote-status-bar-height)`
         }}
       >
-      <div className="detail-panel-top" role="region" aria-label="项目文件">
+      <div className="detail-panel-top" role="region" aria-label={runtimeText('detailPanel.projectFiles')}>
         <DetailPanelFileList
           workDir={config?.workDir ?? ''}
           onFileSelect={handleFileSelect}

@@ -6,13 +6,25 @@ import {
   submitToolConfirmResponse,
   waitForToolConfirm
 } from './toolConfirmRegistry'
-import { reserveToolConfirmResponse, cancelReservedToolConfirm, restoreReservedToolConfirm, isToolConfirmCommitAllowed } from './toolConfirmRegistry'
+import { reserveToolConfirmResponse, cancelReservedToolConfirm, cancelToolConfirm, restoreReservedToolConfirm, isToolConfirmCommitAllowed } from './toolConfirmRegistry'
 import type { CacheKey } from '../src/shared/confirmation/types'
 
 const sessionTierKey: CacheKey = { kind: 'domain', domain: 'example.com', level: 'domain-any-action', sessionId: 's1' }
 const persistentTierKey: CacheKey = { kind: 'shell-command', verb: 'git status', level: 'exact' }
 
 describe('toolConfirmRegistry', () => {
+  it('为不同会话中复用的 requestId 和 toolUseId 建立独立 waiter', async () => {
+    const sessionA = waitForToolConfirm('shared-request', 'shared-tool', undefined, { toolName: 'write_file', lane: 'desktop', sessionId: 'session-a' })
+    const sessionB = waitForToolConfirm('shared-request', 'shared-tool', undefined, { toolName: 'write_file', lane: 'desktop', sessionId: 'session-b' })
+
+    expect(sessionA).not.toBe(sessionB)
+    expect(submitToolConfirmResponse('shared-request', 'shared-tool', true, 'session-b').accepted).toBe(true)
+    await expect(sessionB).resolves.toBe('approved')
+    expect(isPendingConfirm('shared-request', 'shared-tool', 'session-a')).toBe(true)
+    expect(submitToolConfirmResponse('shared-request', 'shared-tool', false, 'session-a').accepted).toBe(true)
+    await expect(sessionA).resolves.toBe('rejected')
+  })
+
   it('prepare 在任何确认卡片发布前建立 pending，且后续 wait 复用同一 promise', async () => {
     const prepared = prepareToolConfirm('req-prepared', 'tool-prepared', undefined, { toolName: 'write_file', lane: 'desktop' }, 1000)
     expect(isPendingConfirm('req-prepared', 'tool-prepared')).toBe(true)
@@ -20,6 +32,17 @@ describe('toolConfirmRegistry', () => {
     expect(waited).toBe(prepared)
     expect(submitToolConfirmResponse('req-prepared', 'tool-prepared', false).accepted).toBe(true)
     await expect(prepared).resolves.toBe('rejected')
+  })
+  it('cancels only the selected pending confirmation waiter', async () => {
+    const selected = waitForToolConfirm('req-single-cancel', 'tool-selected')
+    const concurrent = waitForToolConfirm('req-single-cancel', 'tool-concurrent')
+
+    expect(cancelToolConfirm('req-single-cancel', 'tool-selected')).toBe(true)
+    await expect(selected).resolves.toBe('cancelled')
+    expect(isPendingConfirm('req-single-cancel', 'tool-selected')).toBe(false)
+    expect(isPendingConfirm('req-single-cancel', 'tool-concurrent')).toBe(true)
+    expect(submitToolConfirmResponse('req-single-cancel', 'tool-concurrent', false).accepted).toBe(true)
+    await expect(concurrent).resolves.toBe('rejected')
   })
   it('defers confirm resolve to the next event-loop turn', async () => {
     let resolvedSync = false

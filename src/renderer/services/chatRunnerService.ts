@@ -156,17 +156,16 @@ export function registerSessionRun(sessionId: string, requestId: string, turnId?
 
 export function finishSessionRun(sessionId: string, requestId: string, assistantMessageId?: string): void {
   // Core projection 已负责 assistant 的 checkpoint/finalize；结束运行索引不再触发 renderer DB flush。
-  void sessionId
   void assistantMessageId
-  pendingConfirmStore.removeAllForRequest(requestId)
-  unregisterRunRequest(requestId)
+  pendingConfirmStore.removeAllForRequest(requestId, sessionId)
+  unregisterRunRequest(requestId, sessionId)
 }
 
 export function abortSessionRun(sessionId: string): void {
   const meta = store.getState().chat.runningSessions[sessionId]
   if (meta) {
     if (meta.turnId) void window.api.chatCancelTurn(meta.turnId)
-    unregisterRunRequest(meta.requestId)
+    unregisterRunRequest(meta.requestId, sessionId)
   } else {
     unregisterRunRequestsForSession(sessionId)
   }

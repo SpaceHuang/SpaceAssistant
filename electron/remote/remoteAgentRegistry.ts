@@ -10,6 +10,7 @@ interface RemoteAgentLease {
   requestId: string
   startedAt: number
   expiresAt: number
+  executionId: string
   cancel: () => void
 }
 
@@ -39,7 +40,7 @@ export interface ClaimRemoteSessionOptions {
  */
 const leases = new Map<string, RemoteAgentLease>()
 
-function isLive(lease: RemoteAgentLease | undefined, now: number): lease is RemoteAgentLease {
+function isLive(lease: RemoteAgentLease | undefined, now: number): boolean {
   return Boolean(lease) && lease!.expiresAt > now
 }
 
@@ -56,24 +57,46 @@ export function tryClaimRemoteSession(
   const now = opts.now ?? Date.now()
   const existing = leases.get(originSessionId)
 
-  if (isLive(existing, now)) {
+  if (existing && isLive(existing, now)) {
     if (existing.requestId === requestId) return 'ok'
     return 'session_busy'
   }
-  if (existing) leases.delete(originSessionId)
+  if (existing) {
+    // A new owner can only take over after the stale execution has been signalled.
+    try {
+      existing.cancel()
+    } catch {
+      /* ignore cancel handle errors */
+    }
+    leases.delete(originSessionId)
+  }
 
   if (leases.size >= maxParallel) {
     return 'parallel_full'
   }
 
-  leases.set(originSessionId, {
+  const lease: RemoteAgentLease = {
     originSessionId,
     requestId,
     startedAt: now,
     expiresAt: now + (opts.ttlMs ?? DEFAULT_REMOTE_AGENT_LEASE_TTL_MS),
-    cancel: opts.cancel ?? (() => signalChatCancel(requestId))
-  })
+    executionId: requestId,
+    cancel: opts.cancel ?? (() => signalChatCancel(lease.executionId))
+  }
+  leases.set(originSessionId, lease)
   return 'ok'
+}
+
+/** Bind the actual chat/tool cancellation key once the remote turn has been prepared. */
+export function bindRemoteSessionExecutionId(
+  originSessionId: string,
+  requestId: string,
+  executionId: string
+): boolean {
+  const existing = leases.get(originSessionId)
+  if (!existing || existing.requestId !== requestId) return false
+  existing.executionId = executionId
+  return true
 }
 
 /** Release only succeeds when requestId matches the current lease owner. Idempotent otherwise. */
@@ -111,7 +134,7 @@ export function isRemoteAgentRunning(
 ): boolean {
   const now = opts.now ?? Date.now()
   const existing = leases.get(originSessionId)
-  if (!isLive(existing, now)) return false
+  if (!existing || !isLive(existing, now)) return false
   if (opts.exemptRequestId !== undefined && existing.requestId === opts.exemptRequestId) return false
   return true
 }
@@ -119,12 +142,12 @@ export function isRemoteAgentRunning(
 /** True only when `requestId` is the live lease owner for `originSessionId`. */
 export function isRequestLeaseOwner(originSessionId: string, requestId: string, now = Date.now()): boolean {
   const existing = leases.get(originSessionId)
-  return isLive(existing, now) && existing.requestId === requestId
+  return Boolean(existing && isLive(existing, now) && existing.requestId === requestId)
 }
 
 export function getRemoteAgentLease(originSessionId: string, now = Date.now()): RemoteAgentLeaseSnapshot | undefined {
   const existing = leases.get(originSessionId)
-  if (!isLive(existing, now)) return undefined
+  if (!existing || !isLive(existing, now)) return undefined
   return {
     originSessionId: existing.originSessionId,
     requestId: existing.requestId,

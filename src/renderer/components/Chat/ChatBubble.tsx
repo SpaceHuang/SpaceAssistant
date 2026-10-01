@@ -261,7 +261,7 @@ export const ChatBubble = memo(function ChatBubble({
     const skillById = new Map((message.skillHints ?? []).map((h) => [h.id, h]))
     const timeline =
       message.role !== 'user' && message.role !== 'system'
-        ? (displayActivity ?? buildAssistantActivityTimeline(message))
+        ? (displayActivity ?? message.activity ?? buildAssistantActivityTimeline(message))
         : []
     const getTimestamp = buildActivityItemTimestampResolver(message)
     return {
@@ -282,7 +282,8 @@ export const ChatBubble = memo(function ChatBubble({
     message.timestamp,
     message.id,
     message.sessionId,
-    message.status
+    message.status,
+    message.activity
     ,displayActivity
   ])
 

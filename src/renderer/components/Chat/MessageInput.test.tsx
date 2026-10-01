@@ -98,6 +98,11 @@ describe('MessageInput', () => {
     expect(container.textContent).not.toContain('Enter 发送')
   })
 
+  it('renders queued bar slot before composer box', () => {
+    const { container } = renderInput({ queuedBarSlot: <div data-testid="queued-slot" /> })
+    expect(container.querySelector('[data-testid="queued-slot"]')!.compareDocumentPosition(container.querySelector('.composer-box')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   // §10.2 回归重点：running 态仍显示运行状态标签与耗时（§5.2.1 保留清单）
   it('still renders running status label and elapsed while running', () => {
     const { container } = renderInput({ running: true, runningStatus: '生成中', runningElapsed: '3s' })

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { noteToolResultForStats } from './toolChatLoop'
 import type { TurnUsageStats } from './toolChatLoop'
-import { emptyTurnToolDimension } from '../src/shared/usageAttribution'
 import type { ToolCallResultPersisted } from '../src/shared/domainTypes'
 
 /** mulberry32 确定性伪随机（AGENTS.md 不变量测试纪律）。 */
@@ -34,7 +33,7 @@ describe('noteToolResultForStats 三分类恒等式不变量（R6 纪律）', ()
   for (const seed of [1, 42, 20260918, 7777, 987654321]) {
     it(`随机终态序列后恒等式成立（seed=${seed}）`, () => {
       const rand = mulberry32(seed)
-      const stats: TurnUsageStats = { stepCount: 0, toolCallCount: 0, toolErrorCount: 0, toolSkippedCount: 0, toolDimension: emptyTurnToolDimension() }
+      const stats: TurnUsageStats = { stepCount: 0, toolCallCount: 0, toolErrorCount: 0, toolSkippedCount: 0 }
       let expectedError = 0
       let expectedSkipped = 0
       const steps = 200 + Math.floor(rand() * 300)
@@ -61,9 +60,9 @@ describe('noteToolResultForStats 三分类恒等式不变量（R6 纪律）', ()
   }
 
   it('孤儿 tool_call（无终态）不产生计数 —— 计数只由 tool_result 驱动', () => {
-    const stats: TurnUsageStats = { stepCount: 0, toolCallCount: 0, toolErrorCount: 0, toolSkippedCount: 0, toolDimension: emptyTurnToolDimension() }
+    const stats: TurnUsageStats = { stepCount: 0, toolCallCount: 0, toolErrorCount: 0, toolSkippedCount: 0 }
     // 模拟批次中断：只有触发者落了终态，其余 tool_call 为孤儿（不调用本函数）
     noteToolResultForStats(stats, { success: false, error: 'paused', notExecuted: true, notExecutedReason: 'budget_paused' })
-    expect(stats).toEqual({ stepCount: 0, toolCallCount: 1, toolErrorCount: 0, toolSkippedCount: 1, toolDimension: { tools: {}, toolSource: {}, toolSources: {}, toolResults: {} } })
+    expect(stats).toEqual({ stepCount: 0, toolCallCount: 1, toolErrorCount: 0, toolSkippedCount: 1 })
   })
 })

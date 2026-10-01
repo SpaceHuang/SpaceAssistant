@@ -3,8 +3,6 @@
 制定日期：2026-09-04；修订日期：2026-09-04（评审整改版）  
 状态：本地必做项已完成；外部环境验收项待发布前执行且不阻塞本轮提交
 
-> **2026-09-29 口径更新**：本文档中「删除生产 JS fallback / 不存在第二搜索引擎 / 删除 `grepFallbackJs` 本体」一类处方**已被后续方案反转**——rg 不可用是开发态默认开局与打包态现实风险，「只报错不兜底」等于把可用性归零当方案。现按 `docs/develop/grep-abort-response-and-dead-code-cleanup-plan.md`（§3.1～§3.5、§3.8 降级矩阵）将修复后的 `grepFallbackJs` **接线为自动降级**：6 个不可用 reason 自动切换（`resource_exhausted` 除外），结果带降级标识与边界上报（超限 / 读失败 / 超时 / 中止）。本文其余「rg 独占」表述保留为历史决策记录，以新方案为准。
-
 ## 0. 执行计划与环境边界
 
 本计划采用 TDD 推进。每个本地任务先补充失败测试（RED），再实现代码（GREEN），最后运行聚焦测试、类型检查和构建门禁。GitHub Actions、Windows 原生运行和真实 macOS 发布验收属于后置验证，不作为本 worktree 完成本地实现或提交的前置条件。
@@ -17,7 +15,7 @@
 - [x] 实现下载、重定向白名单、响应体大小限制、归档路径穿越/链接/数量/大小校验、哈希校验和原子 staging。
 - [x] 实现 Mach-O/PE 静态格式与 CPU 架构校验；准备并校验当前支持矩阵的 staging 文件。
 - [x] 实现开发态/打包态绝对路径解析，禁止裸调用 `rg` 和 `PATH` 搜索。
-- [x] 以随包 rg 为首选执行引擎；rg 缺失、权限或加载失败时保留 `grepFallbackJs` 可观测降级，返回可用结果并标记 `degraded`、记录原因。（2026-09-29：本条由空头承诺变为事实——降级已按 §3.8 矩阵在 `unavailable` 时自动接线切换，结果带降级标识与边界上报；不再仅是记录。）
+- [x] 以随包 rg 为首选执行引擎；rg 缺失、权限或加载失败时保留 `grepFallbackJs` 可观测降级，返回可用结果并标记 `degraded`、记录原因。
 - [x] 补齐 spawn `error`/`close` 一次性结算、ENOENT/EACCES/加载失败分类及部分输出边界的 TDD 覆盖。
 - [x] 补齐诊断回调的实际调用测试，确认只记录 source、平台、架构、版本、错误类别和退出码等非敏感字段。
 - [x] 同步 Agent 的 `grep` description、schema 与 executor，禁止部署信息和旧 fallback 语义残留。
@@ -52,7 +50,7 @@
 
 1. Windows x64、macOS x64、macOS arm64 安装包必须携带与目标架构一致的官方 ripgrep 二进制。
 2. 正式包只通过绝对路径调用随包 rg，不读取用户 `PATH`，从而消除环境漂移和同名程序劫持。
-3. bundled rg 集成后以随包 `rg` 为首选；二进制缺失、无执行权限、架构/加载失败均记录非敏感诊断并标记降级原因，同时保留受资源限制的 `grepFallbackJs` 让用户继续完成搜索。降级不得静默，发布验证仍必须将 bundled rg 缺失视为完整性错误。**（已知缺口：`pack:linux` 不含 `prepare:rg`、`after-pack.cjs` 对 linux 静默跳过——该完整性验证对 Linux 未兑现，Linux 构建会静默产出无 rg 的包；能力层面已由降级矩阵覆盖，结构性收口登记为独立待决项 E4，见 grep-abort 方案 §3.6.4。）**
+3. bundled rg 集成后以随包 `rg` 为首选；二进制缺失、无执行权限、架构/加载失败均记录非敏感诊断并标记降级原因，同时保留受资源限制的 `grepFallbackJs` 让用户继续完成搜索。降级不得静默，发布验证仍必须将 bundled rg 缺失视为完整性错误。
 4. 不把 rg 放入 `app.asar`。可执行文件放在 `process.resourcesPath/bin/`，由 `afterPack` 在每个目标产物中按平台和架构复制。
 5. 固定 ripgrep 精确版本、官方来源、许可证，并为每个平台同时固定归档 SHA-256 与解压后二进制 SHA-256；禁止构建时解析“latest”或使用未经校验的第三方镜像。
 6. 本次同步优化 Agent 可见的 `grep` description 和 input schema：只描述 Agent 此刻可依赖的能力、输入、输出与限制，移除跨平台、打包方式和系统依赖等部署信息；文案、schema 与 executor 必须同批合并，不能分期留下错误契约。

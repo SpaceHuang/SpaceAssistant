@@ -70,35 +70,82 @@ function copyBundledRipgrep(context) {
     const sourceLicense = path.join(licenseSource, license)
     if (!fs.existsSync(sourceLicense)) throw new Error(`[afterPack] missing ripgrep license: ${sourceLicense}`)
     fs.mkdirSync(licenseDestination, { recursive: true })
-    fs.copyFileSync(sourceLicense, path.join(licenseDestination, license), fs.constants.COPYFILE_EXCL)
+    copyOrVerifyLicense(sourceLicense, path.join(licenseDestination, license), license)
   }
   console.log(`[afterPack] bundled ripgrep ${key}: ${destination}`)
 }
 
 module.exports.copyBundledRipgrep = copyBundledRipgrep
 
+function copyOrVerifyLicense(sourceLicense, targetLicense, label) {
+  if (!fs.existsSync(targetLicense)) {
+    fs.copyFileSync(sourceLicense, targetLicense, fs.constants.COPYFILE_EXCL)
+    return
+  }
+  const sourceStat = fs.statSync(sourceLicense)
+  const targetStat = fs.lstatSync(targetLicense)
+  if (!targetStat.isFile() || targetStat.isSymbolicLink() || sourceStat.size !== targetStat.size ||
+      !crypto.timingSafeEqual(
+        crypto.createHash('sha256').update(fs.readFileSync(sourceLicense)).digest(),
+        crypto.createHash('sha256').update(fs.readFileSync(targetLicense)).digest(),
+      )) {
+    throw new Error(`[afterPack] packaged ripgrep license mismatch: ${label}`)
+  }
+}
+
+module.exports.copyOrVerifyLicense = copyOrVerifyLicense
+
 /**
  * 无 Apple 开发者证书时对 macOS app 做 ad-hoc 签名，使 arm64 可本机启动
  * （从网络下载的包仍需用户执行 xattr -cr 去除隔离）。
  */
-function adHocSignMacApp(context) {
+async function adHocSignMacApp(
+  context,
+  runCommand = (command, args) => execFileSync(command, args, { stdio: 'inherit' }),
+  wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+) {
   const appPath = path.join(
     context.appOutDir,
     `${context.packager.appInfo.productFilename}.app`,
+  )
+  const electronFrameworkPath = path.join(
+    appPath,
+    'Contents',
+    'Frameworks',
+    'Electron Framework.framework',
   )
   if (!fs.existsSync(appPath)) {
     throw new Error(`[afterPack] macOS .app not found: ${appPath}`)
   }
   // electron-builder 在 afterPack 之后还会跑 sign 步骤：若存在 Developer ID 会重新签名覆盖 ad-hoc；
   // 若无证书（CI）则跳过，ad-hoc 签名得以保留。CSC_IDENTITY_AUTO_DISCOVERY=false 时必须仍执行。
-  execFileSync('codesign', ['--force', '--deep', '--sign', '-', appPath], {
-    stdio: 'inherit',
-  })
-  execFileSync('codesign', ['--verify', '--deep', '--strict', appPath], {
-    stdio: 'inherit',
-  })
+  // Electron arm64 framework binaries may carry com.apple.provenance from the
+  // downloaded build artifact. Remove extended attributes before recursively
+  // ad-hoc signing so codesign does not fail while replacing its nested signature.
+  let signed = false
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    runCommand('xattr', ['-cr', appPath])
+    // Give macOS time to settle provenance metadata written while electron-builder
+    // copies the arm64 framework into the app bundle before codesign replaces it.
+    await wait(1000)
+    try {
+      // Electron's arm64 framework can arrive linker-signed with a bundle
+      // resource seal that ad-hoc recursive signing cannot replace in one pass.
+      runCommand('codesign', ['--force', '--deep', '--sign', '-', electronFrameworkPath])
+      runCommand('codesign', ['--force', '--deep', '--sign', '-', appPath])
+      signed = true
+      break
+    } catch (error) {
+      if (attempt === 1) throw error
+      console.warn('[afterPack] ad-hoc signing failed once; retrying after clearing extended attributes')
+    }
+  }
+  if (!signed) throw new Error('[afterPack] ad-hoc signing failed')
+  runCommand('codesign', ['--verify', '--deep', '--strict', appPath])
   console.log('[afterPack] Ad-hoc signed and verified macOS app:', appPath)
 }
+
+module.exports.adHocSignMacApp = adHocSignMacApp
 
 function patchWindowsIcon(context) {
   const { NtExecutable, NtExecutableResource, Data, Resource } = require('resedit')

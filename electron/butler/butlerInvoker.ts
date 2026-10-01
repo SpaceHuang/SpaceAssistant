@@ -1,5 +1,5 @@
 import type { AppDatabase } from '../database'
-import { getMessages, getConfigValue, getSession, createSession } from '../database'
+import { getMessages, getConfigValue, getSession, createSession, getPersistedTurn } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
 import { assembleInvocation } from '../runtime/invocationAssembler'
 import { buildResolveWorkDirCallback } from '../workDirManager'
@@ -11,6 +11,7 @@ import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
 import { readAppLocale } from '../appIpc'
 import { resolveLlmCredentialsForModel } from '../llmServiceResolver'
 import { logHistoryOversizedToolResult } from '../oversizedToolResultLog'
+import { logAgentEvent } from '../agentLogger/agentLogger'
 import { buildFinalSystemPrompt } from '../llmSystemPrompt'
 import { resolveTrustedTurnExecutionConfig } from '../turnExecutionConfig'
 import type { WorkDirManager } from '../workDirManager'
@@ -20,6 +21,12 @@ import { createButlerSessionEvents } from './butlerSessionEvents'
 import { getCallAdmissionGate } from '../runtime/callAdmissionGate'
 import { deliverTaskResult, type ButlerDeliveryPorts } from './butlerDelivery'
 import { getAutomationTask, insertAutomationTaskRun, updateAutomationTaskRun } from './taskStore'
+import { requireInvocationAnthropicRoute } from '../runtime/invocationProviderRoute'
+import { createHostedTurnHandoff } from '../runtime/hostedTurnHandoff'
+import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
+import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from '../runtime/hostedTurnFinalization'
+import { loadAcceptedTurnMessages } from '../runtime/acceptedTurnContext'
+import { createAcceptedTurnFromPrepared } from '../runtime/acceptedTurnContext'
 
 /**
  * 管家执行链（P4）：定时 / 手动触发的 automation 任务 → 准入取票 → 会话创建（ownership=automation、
@@ -73,12 +80,12 @@ export type ButlerRunRequest = {
 }
 
 export type ButlerRunOutcome =
-  | { ok: true; runId: string; sessionId: string; summary: string }
+  | { ok: true; runId: string; sessionId: string; summary: string; deliveryStatus: import('../../src/shared/automationTaskTypes').AutomationTaskRun['deliveryStatus'] }
   | { ok: false; runId?: string; error: string; admissionDenied?: 'hourly-limit' | 'queue-full' }
 
 type ButlerTurnResult =
   | { ok: true; sessionId: string; summary: string; usageJson?: string }
-  | { ok: false; error: string }
+  | { ok: false; error: string; outcome?: 'commit-uncertain' }
 
 function extractTextFromContent(content: unknown[]): string {
   let s = ''
@@ -171,6 +178,7 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
       input: { text: task.prompt },
       config: executionConfig
     })
+    const acceptedTurn = createAcceptedTurnFromPrepared(db, prepared, 'automation', executionConfig ?? { lane: 'automation' })
     deps.turnRuntime.bindRequest(requestId, prepared.turnId)
 
     const turn = await executeRemoteTurn({
@@ -182,15 +190,17 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
           sessionId,
           requestId,
           turnId: prepared.turnId,
+          acceptedTurn,
           llmServiceId: executionConfig?.llmServiceId,
           taskPrompt: task.prompt,
+          currentUserMessageId: prepared.userMessage?.id,
           assistantMessageId: prepared.assistantMessage.id
           ,applicationAdmission
         })
     })
 
     if (!turn.ok) {
-      updateAutomationTaskRun(db, runId, { status: 'failed', error: turn.error })
+      updateAutomationTaskRun(db, runId, { status: turn.outcome === 'commit-uncertain' ? 'interrupted' : 'failed', error: turn.error })
       return { ok: false, runId, error: turn.error }
     }
     // P5 投递薄分发：run 终态按任务配置送达；只有 completed 才投递（skipped 由调度侧守卫）。
@@ -214,9 +224,9 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
       resultSummary: turn.summary,
       usageJson: turn.usageJson,
       deliveryStatus: delivery.status,
-      ...(delivery.status !== 'none' ? { deliveredAt: Date.now() } : {})
+      ...(delivery.status === 'delivered' ? { deliveredAt: Date.now() } : {})
     })
-    return { ok: true, runId, sessionId: turn.sessionId, summary: turn.summary }
+    return { ok: true, runId, sessionId: turn.sessionId, summary: turn.summary, deliveryStatus: delivery.status }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     // 评审 P1-1：catch 块内的失败落库本身可能再抛（退出竞态下 db 已关闭），
@@ -234,14 +244,25 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
 
 async function runButlerModelTurn(
   deps: ButlerInvokerDeps,
-  args: { sessionId: string; requestId: string; turnId?: string; llmServiceId?: string; taskPrompt: string; assistantMessageId?: string; applicationAdmission?: import('../../src/shared/agent/invocation').AgentHostPorts['applicationAdmission'] }
+  args: { sessionId: string; requestId: string; turnId?: string; acceptedTurn: import('../../src/shared/acceptedTurn').AcceptedTurn; llmServiceId?: string; taskPrompt: string; currentUserMessageId?: string; assistantMessageId?: string; applicationAdmission?: import('../../src/shared/agent/invocation').AgentHostPorts['applicationAdmission'] }
 ): Promise<ButlerTurnResult> {
   const db = deps.db
   const session = getSession(db, args.sessionId)
   if (!session) return { ok: false, error: 'BUTLER_SESSION_MISSING' }
 
   const toolsConfig = deps.getToolsConfig()
-  const rawMessages = getMessages(db, args.sessionId)
+  let rawMessages: ReturnType<typeof getMessages>
+  if (args.turnId) {
+    const persisted = getPersistedTurn(db, args.turnId)
+    if (!persisted || persisted.sessionId !== args.sessionId || persisted.requestId !== args.requestId ||
+      !persisted.userMessageId || persisted.userMessageId !== args.currentUserMessageId) {
+      throw new Error('TURN_EXECUTION_CREDENTIALS_INVALID')
+    }
+    if (persisted.state === 'configuring') throw new Error('TURN_EXECUTION_CONFIGURING')
+    rawMessages = loadAcceptedTurnMessages(db, persisted)
+  } else {
+    rawMessages = getMessages(db, args.sessionId)
+  }
   const built = buildClaudeToolChatMessages(rawMessages, {
     workspaceRoot: deps.getWorkDir(),
     onOversizedToolResult: (info) => {
@@ -255,7 +276,7 @@ async function runButlerModelTurn(
     }
   })
   const trimmed = trimClaudeToolChatMessages(built, MAX_CHAT_API_MESSAGES)
-  const { messages } = ensureToolResultPairing(trimmed)
+  const { messages } = ensureToolResultPairing(trimmed, { requiredUserMessageId: args.currentUserMessageId })
 
   let contextWindow: number | undefined
   let contextWindowTrusted = false
@@ -268,6 +289,11 @@ async function runButlerModelTurn(
 
   const creds = await resolveLlmCredentialsForModel(db, session.model, {})
   if (creds.error) return { ok: false, error: `模型「${session.model}」不可用：${creds.error}` }
+  const providerRouteId = requireInvocationAnthropicRoute({
+    modelId: session.model,
+    endpoint: creds.baseUrl,
+    credentialRef: `llm-service:${creds.serviceId || args.llmServiceId || 'default'}`
+  }, getDefaultAgentRuntime().modelProviders)
 
   const system = buildFinalSystemPrompt({
     system: BUTLER_SYSTEM_APPENDIX,
@@ -279,27 +305,37 @@ async function runButlerModelTurn(
   const butlerEvents = createButlerSessionEvents({
     workDir: deps.getWorkDir(),
     sessionId: args.sessionId,
-    sessionCreatedAt: session.createdAt
+    sessionCreatedAt: session.createdAt,
+    failClosedCriticalEvents: true
   })
+  const hostedTurnId = args.acceptedTurn.turnId
+  await butlerEvents.sink.appendCritical({ type: 'turn_start', payload: { turnId: hostedTurnId } })
+  await butlerEvents.sink.appendCritical({ type: 'step_start', payload: { turnId: hostedTurnId, stepId: args.requestId } })
   const workDir = deps.resolveWorkDirForSession ? deps.resolveWorkDirForSession(args.sessionId) : deps.getWorkDir()
 
-  const { invocation, ports } = assembleInvocation({
+  const { invocation, ports, agentSdk } = assembleInvocation({
     requestId: args.requestId,
     sessionId: args.sessionId,
     turnId: args.turnId,
+    acceptedTurn: args.acceptedTurn,
     // DIM3：统计维度以实际解析出的服务为准（评审 P1-2）；配置值仅作兜底
     llmServiceId: creds.serviceId || args.llmServiceId,
     lane: 'automation',
     // D 任务声明（可信证据）：随执行链进入审批线索包，供任务相关性判断
     approvalTaskDigest: buildApprovalTaskDigest(args.taskPrompt),
     model: session.model,
+    providerRouteId,
     contextWindow,
     contextWindowTrusted,
     baseUrl: creds.baseUrl,
     messages,
     system,
     options: { maxTokens: 8192 },
+    currentUserMessageId: args.currentUserMessageId,
     toolsConfig,
+    resolveToolsConfig: deps.getToolsConfig,
+    resolveBrowserConfig: deps.getBrowserConfig,
+    resolveShellConfig: deps.getShellConfig,
     browserConfig: deps.getBrowserConfig?.(),
     shellConfig: deps.getShellConfig?.() ?? null,
     workDir,
@@ -312,13 +348,40 @@ async function runButlerModelTurn(
     appDb: db,
     locale: readAppLocale(db),
     assistantMessageId: args.assistantMessageId,
+    sessionEventLocation: { workDir: deps.getWorkDir(), sessionId: args.sessionId, createdAt: session.createdAt },
     applicationAdmission: args.applicationAdmission,
     emitFactEvent: butlerEvents.emitFactEvent,
     emitSessionEvent: butlerEvents.emitSessionEvent,
     onFileTreeChanged: butlerEvents.onFileTreeChanged
   })
-  const res = await runToolChatSession(invocation, ports)
-
+  let reason = 'failed'
+  let failure: unknown
+  let res: Awaited<ReturnType<typeof runToolChatSession>> | undefined
+  try {
+    res = await runToolChatSession(invocation, ports, {
+      onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: ports.history!, invocationId: hostedTurnId, turnId: hostedTurnId, acceptedTurn: args.acceptedTurn, sessionDb: db, routeId: providerRouteId, sessionId: args.sessionId, maxToolRounds: invocation.limits.maxToolRounds })
+    })
+    reason = res.ok ? 'completed' : res.cancelled ? 'cancelled' : 'failed'
+  } catch (error) {
+    failure = error
+    if (error instanceof HostedTurnFinalizedError) reason = hostedTerminalSessionEventReason(error.outcome)
+  } finally {
+    try {
+      await butlerEvents.sink.appendCritical({ type: 'step_end', payload: { turnId: hostedTurnId, stepId: args.requestId, reason } })
+      await butlerEvents.sink.appendCritical({ type: 'turn_end', payload: { turnId: hostedTurnId, reason, ...(failure ? { error: failure instanceof Error ? failure.message : String(failure) } : !res?.ok ? { error: res?.error } : {}) } })
+    } catch (error) {
+      try { logAgentEvent('warn', 'tool.error', { requestId: args.requestId, toolName: 'butler-session-event-finalize', message: error instanceof Error ? error.message : String(error) }) }
+      catch { /* Diagnostics must not replace the canonical Hosted turn outcome. */ }
+    } finally {
+      try { await butlerEvents.sink.close() }
+      catch (error) {
+        try { logAgentEvent('warn', 'tool.error', { requestId: args.requestId, toolName: 'butler-session-event-close', message: error instanceof Error ? error.message : String(error) }) }
+        catch { /* Diagnostics must not replace the canonical Hosted turn outcome. */ }
+      }
+    }
+  }
+  if (failure) throw failure
+  if (!res) return { ok: false, error: 'BUTLER_TURN_RESULT_MISSING' }
   if (!res.ok) return { ok: false, error: res.error }
   const summary = extractTextFromContent(res.content) || '任务已完成。'
   return {

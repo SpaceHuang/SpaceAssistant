@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createDesktopAgentRuntime } from './desktopAgentRuntime'
 import { setDefaultAgentRuntime } from './agentRuntimeDefaults'
-import { getToolExecutor, getRegisteredTool } from '../tools/builtinExecutors'
+import { getRegisteredTool } from '../tools/builtinExecutors'
 import { allocateConfirmId, isConfirmIdInUse } from '../remote/confirmId'
 
 /**
@@ -13,16 +13,14 @@ import { allocateConfirmId, isConfirmIdInUse } from '../remote/confirmId'
 describe('createDesktopAgentRuntime(生产装配 smoke)', () => {
   it('builtinRegistry 可解析真实内置工具(非 EMPTY_REGISTRY 未知工具分支)', () => {
     const rt = createDesktopAgentRuntime()
-    expect(rt.builtinRegistry.getLegacyExecutor('run_shell')).toBeDefined()
     expect(rt.builtinRegistry.get('run_shell')).toBeDefined()
     expect(rt.instanceId).toBeTruthy()
   })
 
-  it('槽位覆盖后,兼容转发链(getToolExecutor/getRegisteredTool)解析到同一真实注册表', () => {
+  it('槽位覆盖后，RegisteredTool 查询解析到同一真实注册表', () => {
     const rt = createDesktopAgentRuntime()
     setDefaultAgentRuntime(rt)
     expect(getRegisteredTool('run_shell')).toBe(rt.builtinRegistry.get('run_shell'))
-    expect(getToolExecutor('run_shell')?.name).toBe('run_shell')
   })
 
   it('confirmIds 分配非空 id 且占用语义生效(非空串桩)', () => {
@@ -54,7 +52,7 @@ describe('createDesktopAgentRuntime(生产装配 smoke)', () => {
 
   it('toolRevocations 撤回事实生效(非恒 false 桩)', () => {
     const rt = createDesktopAgentRuntime()
-    rt.toolRevocations.registerToolRevocationRequest('rev-req', 'desktop')
+    rt.toolRevocations.registerToolRevocationRequest('rev-req', 'desktop', 'rev-req')
     rt.toolRevocations.revokeToolForLane('desktop', 'run_shell')
     expect(rt.toolRevocations.isToolRevoked('rev-req', 'run_shell')).toBe(true)
   })

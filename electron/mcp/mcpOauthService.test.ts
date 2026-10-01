@@ -332,6 +332,23 @@ describe('mcpOauthService', () => {
     expect(listProfiles(db)[0]!.auth.accessTokenExpiresAt).toBeTruthy()
   })
 
+  it('notifies the host only after refreshed OAuth credentials are persisted', async () => {
+    const serverId = await saveOauthProfile('https://mcp.example.test')
+    const profile = listProfiles(db)[0]!
+    let credentialsAtCallback: Promise<Array<string | null>> | undefined
+    const onTokensRefreshed = vi.fn(() => {
+      credentialsAtCallback = Promise.all([getSecret(db, serverId, 'access-token'), getSecret(db, serverId, 'refresh-token')])
+    })
+    const provider = createMcpOAuthClientProvider(db, profile, { onTokensRefreshed })
+
+    await provider.saveTokens({ access_token: 'rotated-access', refresh_token: 'rotated-refresh', token_type: 'Bearer' })
+
+    expect(onTokensRefreshed).toHaveBeenCalledOnce()
+    await expect(credentialsAtCallback).resolves.toEqual(['rotated-access', 'rotated-refresh'])
+    expect(await getSecret(db, serverId, 'access-token')).toBe('rotated-access')
+    expect(await getSecret(db, serverId, 'refresh-token')).toBe('rotated-refresh')
+  })
+
   it('marks auth-expired and clears tokens when refresh fails and re-auth is cancelled', async () => {
     const { endpoint, setRejectAccessToken } = await startMockAuthServer({ rejectRefresh: true })
     const serverId = await saveOauthProfile(endpoint)

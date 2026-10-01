@@ -19,7 +19,7 @@ async function createFixture(root: string): Promise<string> {
   await fs.writeFile(fixture, `
 const a = process.argv.slice(2)
 if (a.includes('--fixture-ignore-sigterm')) process.on('SIGTERM', () => {})
-if (a.includes('--fixture-sleep')) {
+if (a.includes('--fixture-sleep') || a.includes('--fixture-ignore-sigterm')) {
   process.stdin.resume()
   process.stdin.on('end', () => process.exit(0))
   setTimeout(() => {}, 30000)
@@ -72,7 +72,7 @@ describe('grep 终止纪律(方案 Phase 1)', () => {  it('T-A1:abort 后进程�
     const binary = await createFixture(root)
     const { killer } = neverKillingKiller()
     const controller = new AbortController()
-    const pending = grepWithRg(binary, root, root, 'Needle', { ...args(), glob: '--fixture-sleep' }, 30000, controller.signal, () => undefined, fixtureSpawn(binary), killer)
+    const pending = grepWithRg(binary, root, root, 'Needle', { ...args(), glob: '--fixture-sleep' }, 30000, controller.signal, () => undefined, fixtureSpawn(binary), undefined, killer)
     setTimeout(() => controller.abort(), 20)
     const started = Date.now()
     await expect(pending).resolves.toMatchObject({ kind: 'cancelled', partialOutput: '', terminated: 'forced' })
@@ -109,7 +109,7 @@ describe('grep 终止纪律(方案 Phase 1)', () => {  it('T-A1:abort 后进程�
     try {
       const baselineTimers = vi.getTimerCount()
       const controller = new AbortController()
-      const pending = grepWithRg(binary, root, root, 'Needle', { ...args(), glob: '--fixture-sleep' }, 30000, controller.signal, () => undefined, fixtureSpawn(binary), killer)
+      const pending = grepWithRg(binary, root, root, 'Needle', { ...args(), glob: '--fixture-sleep' }, 30000, controller.signal, () => undefined, fixtureSpawn(binary), undefined, killer)
       controller.abort()
       await vi.advanceTimersByTimeAsync(10_000)
       await expect(pending).resolves.toMatchObject({ kind: 'cancelled', terminated: 'forced' })
@@ -126,7 +126,7 @@ describe('grep 终止纪律(方案 Phase 1)', () => {  it('T-A1:abort 后进程�
     const { killer, terminate } = neverKillingKiller()
     const onTerminate = vi.fn()
     const controller = new AbortController()
-    const pending = grepWithRg(binary, root, root, 'Needle', { ...args(), glob: '--fixture-sleep' }, 30000, controller.signal, () => undefined, fixtureSpawn(binary), killer, undefined, onTerminate)
+    const pending = grepWithRg(binary, root, root, 'Needle', { ...args(), glob: '--fixture-sleep' }, 30000, controller.signal, () => undefined, fixtureSpawn(binary), undefined, killer, onTerminate)
     setTimeout(() => controller.abort(), 20)
     await expect(pending).resolves.toMatchObject({ kind: 'cancelled', terminated: 'forced' })
     expect(terminate).toHaveBeenCalledTimes(1)

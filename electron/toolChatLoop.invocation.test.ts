@@ -10,6 +10,7 @@ import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 const mockGetCachedMemoryContent = vi.fn(() => null)
 const mockCreateAnthropicClient = vi.fn()
 const mockConfirmOutcome = vi.fn(async () => 'approved' as const)
+const mockChatCancelState = vi.hoisted(() => ({ controller: undefined as AbortController | undefined }))
 let streamRound = 0
 const capturedFacts: Array<Record<string, unknown>> = []
 const capturedSessionEvents: Array<Record<string, unknown>> = []
@@ -28,11 +29,16 @@ vi.mock('./projectMemory', async (importOriginal) => {
 })
 
 vi.mock('./anthropicClientFactory', () => ({
+  createAnthropicStreamPort: (client: { messages: { stream: (...args: unknown[]) => unknown } }) => ({ stream: (...args: unknown[]) => client.messages.stream(...args) }),
   createAnthropicClient: (...args: unknown[]) => mockCreateAnthropicClient(...args)
 }))
 
 vi.mock('./chatCancelRegistry', () => ({
-  registerChatCancel: vi.fn(() => ({ aborted: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+  registerChatCancel: vi.fn(() => {
+    const controller = new AbortController()
+    mockChatCancelState.controller = controller
+    return controller.signal
+  }),
   clearChatCancel: vi.fn(),
   throwIfChatCancelled: vi.fn(),
   ChatCancelledError: class ChatCancelledError extends Error {},
@@ -89,6 +95,12 @@ import { assembleInvocation, type AgentInvocationMaterials } from './runtime/inv
 import { createMemoryAppDb } from './database/testHelpers'
 import { resetEffortMemoForTests } from './effortFallback'
 import { logAgentEvent } from './agentLogger/agentLogger'
+import { MemoryHistory } from '../packages/agent-sdk/src/history'
+import { getDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
+import { createHostedTurnHandoff } from './runtime/hostedTurnHandoff'
+import { defineDirectTool, TypedToolRegistry } from './tools/plannedToolRegistry'
+import { HostedTurnFinalizedError } from './runtime/hostedTurnFinalization'
+import { throwIfChatCancelled, ChatCancelledError } from './chatCancelRegistry'
 
 function makeDb(): AppDatabase {
   return createMemoryAppDb('zh-CN')
@@ -133,13 +145,17 @@ function baseMaterials(overrides: Partial<AgentInvocationMaterials> = {}): Agent
 
 async function run(materials: AgentInvocationMaterials) {
   const { invocation, ports } = assembleInvocation(materials)
+  // Legacy executor fakes in these tests intentionally model a pre-runtime test host.
+  ports.toolRevocations = undefined
   return runToolChatSession(invocation, ports)
 }
 
 describe('assembleInvocation 键位平移（P1 契约形状）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(throwIfChatCancelled).mockImplementation(() => undefined)
     streamRound = 0
+    mockChatCancelState.controller = undefined
     capturedFacts.length = 0
     capturedSessionEvents.length = 0
   })
@@ -153,6 +169,7 @@ describe('assembleInvocation 键位平移（P1 契约形状）', () => {
       historyFacts: [{ id: 'f1', sessionId: 'sess-invocation-1', role: 'user', text: 't', tokens: 1 }] as never,
       remoteContext: { source: 'feishu', messageId: 'm1', confirmPolicy: 'always' } as never,
       system: 'sys',
+      providerRouteId: 'desktop-anthropic:route-snapshot-1',
       locale: 'zh-CN',
       skillFragments: ['frag'],
       baseUrl: 'https://relay.example.com'
@@ -162,6 +179,7 @@ describe('assembleInvocation 键位平移（P1 契约形状）', () => {
     expect(invocation.trace).toEqual({ requestId: 'req-invocation-1', turnId: 'turn-invocation-1', windowId: 'win-1' })
     expect(invocation.session).toEqual({ sessionId: 'sess-invocation-1' })
     expect(invocation.profile.model).toBe('claude-sonnet-4-20250514')
+    expect(invocation.profile.providerRouteId).toBe('desktop-anthropic:route-snapshot-1')
     expect(invocation.profile.llmServiceId).toBe('svc-1')
     // P4：网络目标出契约，归 ports.credentials.networkTarget
     expect(ports.credentials.networkTarget?.baseUrl).toBe('https://relay.example.com')
@@ -223,6 +241,174 @@ describe('assembleInvocation 键位平移（P1 契约形状）', () => {
 })
 
 describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
+  it('feeds SDK provider tool calls into the existing guarded tool scheduler and sends their result on the next turn', async () => {
+    const providerRouteId = 'desktop-anthropic:test-tool-route'
+    const runtime = getDefaultAgentRuntime()
+    let providerTurns = 0
+    const providerCalls: Array<{ route: Record<string, unknown>; request: Record<string, unknown> }> = []
+    runtime.modelProviders.register({
+      routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01',
+      adapterVersion: 'pi-ai@0.87.1', modelId: 'claude-sonnet-4-20250514'
+    }, {
+      providerId: 'test-sdk-tool-provider',
+      async *stream(call) {
+        providerCalls.push(call)
+        providerTurns += 1
+        if (providerTurns === 1) {
+          yield { type: 'tool-call', toolCallId: 'sdk-read-1', toolName: 'read_file', input: { path: 'a.txt' } }
+          yield { type: 'usage', inputTokens: 5, outputTokens: 3 }
+          yield { type: 'finish', reason: 'tool-calls' }
+        } else {
+          yield { type: 'text-delta', text: 'read complete' }
+          yield { type: 'usage', inputTokens: 8, outputTokens: 2 }
+          yield { type: 'finish', reason: 'stop' }
+        }
+      }
+    })
+    const assembled = assembleInvocation(baseMaterials({ providerRouteId }))
+    const { invocation, ports } = assembled
+    ports.toolRevocations = undefined
+    const toolRegistry = new TypedToolRegistry()
+    toolRegistry.register(defineDirectTool({
+      name: 'read_file', actionClass: 'read', parseInput: (raw) => raw as { path: string },
+      execute: async () => ({ success: true, data: 'file-content' })
+    }))
+    const agentSdk = {
+      ...assembled.agentSdk,
+      createHostedTurnRuntime: (input: Parameters<typeof assembled.agentSdk.createHostedTurnRuntime>[0]) =>
+        assembled.agentSdk.createHostedTurnRuntime({ ...input, registry: toolRegistry })
+    }
+    const handoff = createHostedTurnHandoff({
+      agentSdk: agentSdk as never, history: ports.history!, invocationId: invocation.trace.turnId,
+      turnId: invocation.trace.turnId, routeId: providerRouteId, recoverProviderAttempt: assembled.agentSdk.recoverProviderAttempt
+    })
+
+    await expect(runToolChatSession(invocation, ports, { onHostedTurnHandoff: handoff })).resolves.toMatchObject({ ok: true })
+    expect(providerCalls).toHaveLength(2)
+    expect(mockCreateAnthropicClient).not.toHaveBeenCalled()
+    expect(capturedFacts.some((event) => event.type === 'tool-result' && event.id === 'sdk-read-1')).toBe(true)
+    expect(capturedFacts.some((event) => event.type === 'content-delta' && event.text === 'read complete')).toBe(true)
+    expect((providerCalls[1] as { request: { messages: Array<{ role: string; toolCallId?: string }> } }).request.messages.some((message) => message.role === 'tool' && message.toolCallId === 'sdk-read-1')).toBe(true)
+    const requestHeaders = capturedSessionEvents.filter((event) => event.type === 'request_header').map((event) => event.payload as Record<string, any>)
+    expect(requestHeaders).toHaveLength(2)
+    expect(requestHeaders[0]).toMatchObject({ toolExecutionCheckpoint: { completedToolUseIds: [] } })
+    expect(requestHeaders[1]).toMatchObject({ toolExecutionCheckpoint: { completedToolUseIds: ['sdk-read-1'] } })
+    expect(requestHeaders[1]?.system).toBeUndefined()
+    expect(requestHeaders[1]?.tools).toBeUndefined()
+    expect(requestHeaders[1]?.surfaceSnapshot).toMatchObject({
+      systemFingerprint: requestHeaders[0]?.surfaceSnapshot.systemFingerprint,
+      toolsFingerprint: requestHeaders[0]?.surfaceSnapshot.toolsFingerprint
+    })
+  })
+
+  it('uses the invocation-owned SDK provider route and does not construct the legacy Anthropic client', async () => {
+    const providerRouteId = 'desktop-anthropic:test-invocation-route'
+    const runtime = getDefaultAgentRuntime()
+    const providerCalls: unknown[] = []
+    runtime.modelProviders.register({
+      routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01',
+      adapterVersion: 'pi-ai@0.87.1', modelId: 'claude-sonnet-4-20250514'
+    }, {
+      providerId: 'test-sdk-provider',
+      async *stream(call) {
+        providerCalls.push(call)
+        yield { type: 'text-delta', text: 'SDK route answer' }
+        yield { type: 'usage', inputTokens: 7, outputTokens: 3 }
+        yield { type: 'finish', reason: 'stop' }
+      }
+    })
+    const assembled = assembleInvocation(baseMaterials({ providerRouteId }))
+    const { invocation, ports } = assembled
+    ports.toolRevocations = undefined
+    const history = new MemoryHistory()
+    ports.history = history
+    const handoff = createHostedTurnHandoff({
+      agentSdk: assembled.agentSdk as never, history, invocationId: invocation.trace.turnId,
+      turnId: invocation.trace.turnId, routeId: providerRouteId, recoverProviderAttempt: assembled.agentSdk.recoverProviderAttempt
+    })
+
+    await expect(runToolChatSession(invocation, ports, { onHostedTurnHandoff: handoff })).resolves.toMatchObject({ ok: true })
+    expect(mockCreateAnthropicClient).not.toHaveBeenCalled()
+    expect(capturedFacts.some((event) => event.type === 'content-delta' && event.text === 'SDK route answer')).toBe(true)
+    const committed = (await history.read(invocation.trace.turnId)).events.find(({ kind }) => kind === 'model-response-committed')
+    expect(committed?.payload).toMatchObject({ requestSnapshot: { route: { routeId: providerRouteId, modelId: 'claude-sonnet-4-20250514' }, request: { maxTokens: expect.any(Number), messages: expect.any(Array) } } })
+    expect(JSON.stringify(committed?.payload)).not.toContain('apiKey')
+    const requestLog = vi.mocked(logAgentEvent).mock.calls.find((call) => call[1] === 'llm.request')
+    expect(requestLog?.[2]).toMatchObject({
+      requestId: invocation.trace.requestId, turnId: invocation.trace.turnId, lane: 'desktop'
+    })
+    expect(requestLog?.[2]).not.toHaveProperty('messages')
+    expect(requestLog?.[2]).not.toHaveProperty('system')
+    expect(JSON.stringify(requestLog?.[2])).not.toContain('hello')
+    const snapshot = (committed?.payload as { requestSnapshot: { route: unknown; request: Record<string, unknown> } }).requestSnapshot
+    const { credentials: _credentials, signal: _signal, ...persistableRequest } = providerCalls[0]!.request as { credentials?: unknown; signal?: unknown }
+    expect(snapshot.route).toEqual(providerCalls[0]!.route)
+    expect(snapshot.request).toEqual(persistableRequest)
+  })
+
+  it('retries an SDK route without thinking effort when upstream rejects output_config', async () => {
+    const providerRouteId = 'desktop-anthropic:test-effort-fallback-route'
+    const runtime = getDefaultAgentRuntime()
+    const providerCalls: Array<{ request: { thinking?: { effort?: string } } }> = []
+    runtime.modelProviders.register({
+      routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01',
+      adapterVersion: 'pi-ai@0.87.1', modelId: 'claude-sonnet-4-20250514'
+    }, {
+      providerId: 'test-sdk-effort-fallback-provider',
+      async *stream(call) {
+        providerCalls.push(call as typeof providerCalls[number])
+        if (providerCalls.length === 1) {
+          throw Object.assign(new Error('400 output_config rejected'), { status: 400 })
+        }
+        yield { type: 'text-delta', text: 'effort fallback answer' }
+        yield { type: 'usage', inputTokens: 4, outputTokens: 2 }
+        yield { type: 'finish', reason: 'stop' }
+      }
+    })
+    const assembled = assembleInvocation(baseMaterials({ providerRouteId, effort: 'high' }))
+    const { invocation, ports } = assembled
+    ports.toolRevocations = undefined
+    const handoff = createHostedTurnHandoff({
+      agentSdk: assembled.agentSdk as never, history: ports.history!, invocationId: invocation.trace.turnId,
+      turnId: invocation.trace.turnId, routeId: providerRouteId, recoverProviderAttempt: assembled.agentSdk.recoverProviderAttempt
+    })
+
+    await expect(runToolChatSession(invocation, ports, { onHostedTurnHandoff: handoff })).resolves.toMatchObject({ ok: true })
+    expect(providerCalls).toHaveLength(2)
+    expect(providerCalls[0].request.thinking?.effort).toBe('high')
+    expect(providerCalls[1].request.thinking?.effort).toBeUndefined()
+    expect(capturedSessionEvents).toContainEqual(expect.objectContaining({ type: 'request_retry', payload: expect.objectContaining({ code: 'effort_unsupported' }) }))
+    expect(mockCreateAnthropicClient).not.toHaveBeenCalled()
+  })
+
+  it('Desktop Hosted preserves the configured tool round limit and writes the over-limit proposal to History', async () => {
+    const providerRouteId = 'desktop-anthropic:test-tool-round-limit'
+    const runtime = getDefaultAgentRuntime()
+    let providerTurns = 0
+    runtime.modelProviders.register({
+      routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01',
+      adapterVersion: 'pi-ai@0.87.1', modelId: 'claude-sonnet-4-20250514'
+    }, { providerId: 'test-sdk-round-limit-provider', async *stream() {
+      providerTurns += 1
+      yield { type: 'tool-call', toolCallId: `limit-${providerTurns}`, toolName: 'read_file', input: { path: 'a.txt' } }
+      yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish', reason: 'tool-calls' }
+    } })
+    const assembled = assembleInvocation(baseMaterials({ providerRouteId, maxToolLoopRounds: 2 }))
+    const { invocation, ports } = assembled
+    ports.toolRevocations = undefined
+    const execute = vi.fn(async () => ({ success: true, data: 'file-content' }))
+    const toolRegistry = new TypedToolRegistry()
+    toolRegistry.register(defineDirectTool({ name: 'read_file', actionClass: 'read', parseInput: (raw) => raw as { path: string }, execute }))
+    const agentSdk = { ...assembled.agentSdk, createHostedTurnRuntime: (input: Parameters<typeof assembled.agentSdk.createHostedTurnRuntime>[0]) => assembled.agentSdk.createHostedTurnRuntime({ ...input, registry: toolRegistry }) }
+    const handoff = createHostedTurnHandoff({ agentSdk: agentSdk as never, history: ports.history!, invocationId: invocation.trace.turnId, turnId: invocation.trace.turnId, routeId: providerRouteId, maxToolRounds: invocation.limits.maxToolRounds })
+
+    await expect(runToolChatSession(invocation, ports, { onHostedTurnHandoff: handoff })).resolves.toMatchObject({ ok: false, error: 'TOOL_LOOP_MAX_ROUNDS_EXCEEDED(2)' })
+    expect(providerTurns).toBe(3)
+    expect(execute).toHaveBeenCalledTimes(2)
+    expect((await ports.history!.read(invocation.trace.turnId)).events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'limit-3', reason: 'tool_loop_max_rounds_exceeded' }) }))
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     streamRound = 0
@@ -232,100 +418,223 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
     mockConfirmOutcome.mockResolvedValue('approved')
   })
 
-  it('契约入口完整跑一轮带工具调用的回合（events 出口对象化后行为不变）', async () => {
-    mockCreateAnthropicClient.mockReturnValue(
-      makeStreamRounds([
-        { content: [{ type: 'tool_use', id: 'tu-inv1', name: 'read_file', input: { path: 'a.txt' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 5 } },
-        { content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }
-      ])
-    )
-    const res = await run(baseMaterials())
-    expect(res).toMatchObject({ ok: true, content: [{ type: 'text', text: 'done' }] })
-    expect(capturedFacts.some((fact) => fact.type === 'tool-result')).toBe(true)
-    expect(capturedSessionEvents.some((event) => event.type === 'request_header')).toBe(true)
+  it('fails before Hosted handoff and records a failed terminal when API credentials are missing', async () => {
+    const failedHistory = new MemoryHistory()
+    const failed = assembleInvocation(baseMaterials({ getApiKey: async () => null }))
+    failed.ports.history = failedHistory
+    failed.ports.toolRevocations = undefined
+    const handoff = vi.fn()
+    await expect(runToolChatSession(failed.invocation, failed.ports, { onHostedTurnHandoff: handoff })).resolves.toMatchObject({ ok: false, error: 'API key not configured' })
+    expect(handoff).not.toHaveBeenCalled()
+    expect(mockCreateAnthropicClient).not.toHaveBeenCalled()
+    await expect(failedHistory.read('turn-invocation-1')).resolves.toMatchObject({
+      events: [expect.objectContaining({ kind: 'invocation-failed', payload: { status: 'failed' } })]
+    })
   })
 
-  it('确认请求经 events.notify 出口投递（宿主 manager 收到 confirm-request）', async () => {
-    const notifications: Array<Record<string, unknown>> = []
-    const manager = {
-      onConfirmRequest: (entry: Record<string, unknown>) => notifications.push({ kind: 'confirm-request', ...entry }),
-      onToolResult: (requestId: string, toolUseId: string) => notifications.push({ kind: 'tool-result', requestId, toolUseId }),
-      onAllCancelledForRequest: (requestId: string) => notifications.push({ kind: 'request-all-cancelled', requestId })
-    }
-    mockCreateAnthropicClient.mockReturnValue(
-      makeStreamRounds([
-        { content: [{ type: 'tool_use', id: 'tu-inv2', name: 'write_file', input: { path: 'x.txt', content: 'v' } }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 5 } },
-        { content: [{ type: 'text', text: 'written' }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }
-      ])
-    )
-    // P1：无库宿主缺省 standard → write_file 走「自动」（agent 无浮动通知）；user 确认出口契约显式声明 strict
-    const res = await run(baseMaterials({ policyLanePackage: 'strict', floatingNotificationManager: manager as never }))
-    expect(res).toMatchObject({ ok: true })
-    const confirmReq = notifications.find((n) => n.kind === 'confirm-request')
-    expect(confirmReq).toMatchObject({ sessionId: 'sess-invocation-1', toolUseId: 'tu-inv2', toolName: 'write_file', requestId: 'req-invocation-1' })
-    // 工具终态同样经 notify 出口（tool-result）
-    expect(notifications.some((n) => n.kind === 'tool-result' && n.toolUseId === 'tu-inv2')).toBe(true)
+  it('fails closed before provider dispatch when asked to reuse a terminal invocation History stream', async () => {
+    const provider = makeStreamRounds([
+      { content: [{ type: 'text', text: 'must not execute' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }
+    ])
+    mockCreateAnthropicClient.mockReturnValue(provider)
+    const assembled = assembleInvocation(baseMaterials())
+    const history = new MemoryHistory()
+    assembled.ports.history = history
+    await history.appendBatch([
+      { invocationId: 'req-invocation-1', turnId: 'turn-invocation-1', sequence: 1, schemaVersion: 1, eventId: 'context', idempotencyKey: 'context', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'hello' }] } },
+      { invocationId: 'req-invocation-1', turnId: 'turn-invocation-1', sequence: 2, schemaVersion: 1, eventId: 'completed', idempotencyKey: 'completed', kind: 'invocation-completed', payload: { status: 'completed' } }
+    ], 0)
+
+    await expect(runToolChatSession(assembled.invocation, assembled.ports)).rejects.toThrow('INVOCATION_HISTORY_STREAM_ALREADY_TERMINAL')
+    expect(provider.messages.stream).not.toHaveBeenCalled()
+    await expect(history.read('req-invocation-1')).resolves.toMatchObject({
+      version: 2,
+      events: [expect.objectContaining({ kind: 'invocation-context-committed' }), expect.objectContaining({ kind: 'invocation-completed' })]
+    })
   })
 
-  it('审批结束后应用准入恢复失败时 fail-closed，不执行工具', async () => {
-    let executions = 0
-    const { getToolExecutor } = await import('./tools/builtinExecutors')
-    vi.mocked(getToolExecutor).mockImplementation((name: string) => name === 'write_file'
-      ? { name, execute: async () => { executions += 1; return { success: true, data: 'must-not-run' } } }
-      : undefined)
-    mockConfirmOutcome.mockResolvedValue('approved')
-    mockCreateAnthropicClient.mockReturnValue(
-      makeStreamRounds([
-        { content: [{ type: 'tool_use', id: 'tu-resume-fail', name: 'write_file', input: { path: 'x.txt', content: 'v' } }], stop_reason: 'tool_use' },
-        { content: [{ type: 'text', text: 'stopped' }], stop_reason: 'end_turn' }
-      ])
-    )
-    const res = await run(baseMaterials({
-      policyLanePackage: 'strict',
-      applicationAdmission: { park: () => 'application-park', resume: () => ({ ok: false, retryable: false, cause: 'terminal' }) }
-    }))
-    expect(executions).toBe(0)
-    expect(res).toMatchObject({ ok: false })
-  })
-
-  it('应用准入持久化首次失败、重试成功时保留并复用 parked handle', async () => {
-    let executions = 0
-    let resumeCalls = 0
-    const discard = vi.fn()
-    const { getToolExecutor } = await import('./tools/builtinExecutors')
-    vi.mocked(getToolExecutor).mockImplementation((name: string) => name === 'write_file'
-      ? { name, execute: async () => { executions += 1; return { success: true, data: 'written' } } }
-      : undefined)
-    mockConfirmOutcome.mockResolvedValue('approved')
-    mockCreateAnthropicClient.mockReturnValue(
-      makeStreamRounds([
-        { content: [{ type: 'tool_use', id: 'tu-resume-retry', name: 'write_file', input: { path: 'x.txt', content: 'v' } }], stop_reason: 'tool_use' },
-        { content: [{ type: 'text', text: 'written' }], stop_reason: 'end_turn' }
-      ])
-    )
-    const res = await run(baseMaterials({
-      policyLanePackage: 'strict',
-      invocationRuntime: {
-        acquireLease: () => ({ runtimeId: 'test-runtime', invocationId: 'req-invocation-1', generation: 1, release: vi.fn() }),
-        park: (_invocationId, lease, checkpoint) => ({ ...lease, checkpoint }),
-        resumeLease: (handle) => ({ ...handle, release: vi.fn() })
-      },
-      applicationAdmission: {
-        park: () => 'application-park',
-        discard,
-        resume: () => {
-          resumeCalls += 1
-          return resumeCalls === 1
-            ? { ok: false, retryable: true, cause: 'persistence-failed' }
-            : { ok: true }
+  it('在发送首个 provider 请求前把 canonical request 交给 Hosted turn 并跳过 legacy model/tool loop', async () => {
+    const provider = makeStreamRounds([
+      { content: [{ type: 'text', text: 'legacy must not run' }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }
+    ])
+    mockCreateAnthropicClient.mockReturnValue(provider)
+    const assembled = assembleInvocation(baseMaterials())
+    const history = assembled.ports.history!
+    const summary = vi.fn()
+    assembled.ports.usage = { recordTurnSummary: summary }
+    const handoffResult = { ok: true as const, content: [{ type: 'text', text: 'hosted result' }], stopReason: 'end_turn' }
+    const handoff = vi.fn(async (input: { request: { messages: unknown[] }; authorizedToolNames: ReadonlySet<string>; windowId?: string }) => {
+      expect(capturedSessionEvents.some((event) => event.type === 'request_header')).toBe(false)
+      expect(capturedSessionEvents.some((event) => event.type === 'request_context')).toBe(false)
+      const snapshot = await history.read(assembled.invocation.trace.requestId)
+      await history.appendBatch([{
+        invocationId: assembled.invocation.trace.requestId, turnId: assembled.invocation.trace.turnId,
+        sequence: snapshot.version + 1, schemaVersion: snapshot.schemaVersion,
+        eventId: `${assembled.invocation.trace.requestId}:hosted-terminal`,
+        idempotencyKey: `${assembled.invocation.trace.requestId}:hosted-terminal`,
+        kind: 'invocation-completed' as const, payload: { status: 'completed' }
+      }], snapshot.version)
+      return {
+        result: handoffResult,
+        finalization: {
+          outcome: 'completed' as const,
+          usage: {
+            modelTurns: 1,
+            initialMessageCount: input.request.messages.length,
+            messages: [...input.request.messages, { role: 'assistant', content: 'hosted result' }] as never
+          }
         }
       }
-    }))
-    expect(res).toMatchObject({ ok: true })
-    expect(executions).toBe(1)
-    expect(resumeCalls).toBe(2)
-    expect(discard).not.toHaveBeenCalled()
+    })
+
+    const result = await runToolChatSession(assembled.invocation, assembled.ports, { onHostedTurnHandoff: handoff })
+
+    expect(result).toBe(handoffResult)
+    expect(handoff).toHaveBeenCalledOnce()
+    expect(handoff.mock.calls[0]?.[0]).not.toHaveProperty('initialResponse')
+    expect(handoff.mock.calls[0]?.[0].windowId).toBe(assembled.invocation.trace.windowId)
+    expect(handoff.mock.calls[0]?.[0].authorizedToolNames).toBeInstanceOf(Set)
+    expect([...handoff.mock.calls[0]![0].authorizedToolNames]).toEqual(expect.arrayContaining(['read_file', 'write_file']))
+    expect(handoff.mock.calls[0]?.[0].request.messages.some((message: { role?: string }) => message.role === 'user')).toBe(true)
+    expect(handoff.mock.calls[0]?.[0].request.credentials).toEqual({ apiKey: 'test-key' })
+    expect(provider.messages.stream).not.toHaveBeenCalled()
+    const { events } = await history.read(assembled.invocation.trace.requestId)
+    expect(events.filter((event) => event.kind === 'invocation-completed')).toHaveLength(1)
+    expect(summary).toHaveBeenCalledWith(expect.objectContaining({ counts: expect.objectContaining({ stepCount: 1, toolCallCount: 0 }) }))
   })
+
+  it('在 Hosted 首请求前向 Host 传递当前冻结的授权工具集合，且只 handoff 一次', async () => {
+    const providerRouteId = 'desktop-anthropic:hosted-first-request'
+    const runtime = getDefaultAgentRuntime()
+    const providerStream = vi.fn(async function* () {
+      yield { type: 'text-delta' as const, text: 'hosted answer' }
+      yield { type: 'usage' as const, inputTokens: 3, outputTokens: 2 }
+      yield { type: 'finish' as const, reason: 'stop' as const }
+    })
+    runtime.modelProviders.register({ routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId: 'claude-sonnet-4-20250514' }, { providerId: 'hosted-first-request', stream: providerStream })
+    const assembled = assembleInvocation(baseMaterials({ providerRouteId }))
+    const { invocation, ports } = assembled
+    ports.toolRevocations = undefined
+    let callCount = 0
+    const handoff = vi.fn(async (input: { request: { messages: unknown[] }; authorizedToolNames: ReadonlySet<string> }) => {
+      callCount += 1
+      expect(input.request.messages).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'user', content: 'hello' })]))
+      expect(input.authorizedToolNames).toBeInstanceOf(Set)
+      return createHostedTurnHandoff({
+        agentSdk: assembled.agentSdk as never,
+        history: ports.history!, invocationId: invocation.trace.turnId, turnId: invocation.trace.turnId, routeId: providerRouteId
+      })(input as never)
+    })
+
+    const result = await runToolChatSession(invocation, ports, { onHostedTurnHandoff: handoff })
+
+    expect(result).toMatchObject({ ok: true })
+    expect(handoff).toHaveBeenCalledOnce()
+    expect(callCount).toBe(1)
+    expect(providerStream).toHaveBeenCalledTimes(1)
+    const history = await ports.history!.read(invocation.trace.turnId)
+    expect(history.events.map(({ kind }) => kind)).toContain('invocation-completed')
+    expect(history.events.some(({ kind }) => kind === 'model-response-committed')).toBe(true)
+  })
+
+  it('向生产调用方保留 Hosted finalized outcome，避免把 interrupted 折叠成普通失败', async () => {
+    const providerRouteId = 'desktop-anthropic:hosted-interrupted-error'
+    const runtime = getDefaultAgentRuntime()
+    runtime.modelProviders.register({ routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId: 'claude-sonnet-4-20250514' }, { providerId: 'hosted-interrupted-error', stream: async function* () {
+      yield { type: 'finish', reason: 'stop' } as const
+    } })
+    const assembled = assembleInvocation(baseMaterials({ providerRouteId }))
+    const finalized = new HostedTurnFinalizedError(new Error('provider outcome unknown'), 'interrupted')
+
+    await expect(runToolChatSession(assembled.invocation, assembled.ports, {
+      onHostedTurnHandoff: async () => { throw finalized }
+    })).rejects.toBe(finalized)
+  })
+
+  it('Hosted 路由缺失冻结的 current user 时失败关闭，不能回退到 legacy provider', async () => {
+    const provider = makeStreamRounds([
+      { content: [{ type: 'text', text: 'legacy fallback must not run' }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }
+    ])
+    mockCreateAnthropicClient.mockReturnValue(provider)
+    const assembled = assembleInvocation(baseMaterials({ currentUserMessageId: 'message-0' }))
+    const handoff = vi.fn()
+
+    await expect(runToolChatSession(assembled.invocation, assembled.ports, { onHostedTurnHandoff: handoff }))
+      .rejects.toThrow('HOSTED_REQUIRED_USER_NOT_IN_REQUEST')
+
+    expect(handoff).not.toHaveBeenCalled()
+    expect(provider.messages.stream).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['with a provider route', 'desktop-anthropic:missing-hosted-handoff'],
+    ['without a provider route', undefined]
+  ] as const)('requires Hosted handoff %s and never enters the legacy provider loop', async (_label, providerRouteId) => {
+    const assembled = assembleInvocation(baseMaterials(providerRouteId ? { providerRouteId } : {}))
+    const history = new MemoryHistory()
+    assembled.ports.history = history
+
+    await expect(runToolChatSession(assembled.invocation, assembled.ports))
+      .rejects.toThrow('HOSTED_HANDOFF_REQUIRED')
+    expect(mockCreateAnthropicClient).not.toHaveBeenCalled()
+    await expect(history.read('turn-invocation-1')).resolves.toMatchObject({
+      events: [expect.objectContaining({ kind: 'invocation-failed', payload: { status: 'failed' } })]
+    })
+  })
+
+  it('Hosted callback is configured but returns no result: fail closed without legacy provider fallback', async () => {
+    const provider = makeStreamRounds([
+      { content: [{ type: 'text', text: 'legacy fallback must not run' }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }
+    ])
+    mockCreateAnthropicClient.mockReturnValue(provider)
+    const assembled = assembleInvocation(baseMaterials())
+
+    await expect(runToolChatSession(assembled.invocation, assembled.ports, {
+      onHostedTurnHandoff: async () => undefined
+    })).rejects.toThrow('HOSTED_TURN_HANDOFF_MISSING_RESULT')
+
+    expect(provider.messages.stream).not.toHaveBeenCalled()
+  })
+
+  it.each(['desktop', 'feishu', 'wechat', 'automation'] as const)(
+    'Hosted Runtime composition failure stops the %s lane without legacy provider fallback', async (lane) => {
+      const provider = makeStreamRounds([
+        { content: [{ type: 'text', text: 'legacy fallback must not run' }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }
+      ])
+      mockCreateAnthropicClient.mockReturnValue(provider)
+      const providerRouteId = `hosted-unavailable:${lane}`
+      let hostedProviderCalls = 0
+      getDefaultAgentRuntime().modelProviders.register({
+        routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model'
+      }, { providerId: `unavailable-${lane}`, stream: async function* () {
+        hostedProviderCalls += 1
+        yield { type: 'text-delta' as const, text: 'SDK provider fallback must not run' }
+        yield { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish' as const, reason: 'stop' as const }
+      } })
+      const assembled = assembleInvocation(baseMaterials({ lane, providerRouteId }))
+      const failure = new Error('Hosted Runtime composition unavailable')
+      const handoff = createHostedTurnHandoff({
+        agentSdk: { createHostedTurnRuntime: vi.fn(() => { throw failure }) },
+        history: assembled.ports.history!,
+        invocationId: assembled.invocation.trace.turnId,
+        turnId: assembled.invocation.trace.turnId,
+        routeId: providerRouteId
+      })
+
+      await expect(runToolChatSession(assembled.invocation, assembled.ports, { onHostedTurnHandoff: handoff }))
+        .rejects.toThrow('Hosted Runtime composition unavailable')
+
+      expect(provider.messages.stream).not.toHaveBeenCalled()
+      expect(hostedProviderCalls).toBe(0)
+      expect(getDefaultAgentRuntime().modelProviders.getRoute(providerRouteId)?.providerId).toBe(`unavailable-${lane}`)
+      const history = await assembled.ports.history!.read(assembled.invocation.trace.turnId)
+      expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-failed', payload: { status: 'failed' } })
+      expect(history.events.some((event) => event.kind === 'invocation-completed')).toBe(false)
+    }
+  )
+
+
 })
 
 /** 模拟「首轮 output_config 被上游 400 拒绝、去强度后重试成功」的客户端 */
@@ -369,106 +678,64 @@ describe('thinking effort 档位与上游降级（§7.3 / §7.4）', () => {
     resetEffortMemoForTests()
   })
 
-  it('effort=low 的请求 wire 产物为 adaptive + output_config.effort=low（未被折叠成布尔）', async () => {
-    const client = {
-      messages: {
-        stream: vi.fn(() => ({
-          async *[Symbol.asyncIterator]() {},
-          finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
-        }))
+  it('Hosted output_config fallback memo skips effort on the next invocation before SDK request preparation', async () => {
+    const providerRouteId = `hosted-effort-memo-${Date.now()}`
+    const runtime = getDefaultAgentRuntime()
+    const requests: Array<{ thinking?: { effort?: string } }> = []
+    runtime.modelProviders.register({
+      routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01',
+      adapterVersion: 'pi-ai@0.87.1', modelId: 'claude-sonnet-4-20250514'
+    }, {
+      providerId: 'hosted-effort-memo-provider',
+      async *stream(call) {
+        requests.push(call.request as { thinking?: { effort?: string } })
+        if (requests.length === 1) throw Object.assign(new Error('400 output_config rejected'), { status: 400 })
+        yield { type: 'text-delta', text: 'Hosted effort fallback' }
+        yield { type: 'usage', inputTokens: 4, outputTokens: 2 }
+        yield { type: 'finish', reason: 'stop' }
       }
+    })
+    const hostedHistories = new Map<string, HistoryEvent[]>()
+
+    const runHostedInvocation = async (requestId: string) => {
+      const { invocation, ports, agentSdk } = assembleInvocation(baseMaterials({
+        requestId, sessionId: `session-${requestId}`, turnId: `turn-${requestId}`, providerRouteId,
+        effort: 'high', llmServiceId: 'svc-hosted-effort-memo',
+        sessionEventLocation: { workDir: '/workspace', sessionId: `session-${requestId}`, createdAt: 1000 }
+      }))
+      if (!ports.history) throw new Error('expected invocation History')
+      const result = await runToolChatSession(invocation, ports, {
+        onHostedTurnHandoff: createHostedTurnHandoff({
+          agentSdk, history: ports.history, invocationId: `turn-${requestId}`, turnId: `turn-${requestId}`, routeId: providerRouteId,
+          recoverProviderAttempt: agentSdk.recoverProviderAttempt
+        })
+      })
+      hostedHistories.set(requestId, (await ports.history.read(`turn-${requestId}`)).events)
+      return result
     }
-    mockCreateAnthropicClient.mockReturnValue(client)
-    const res = await run(baseMaterials({ effort: 'low' }))
-    expect(res).toMatchObject({ ok: true })
-    const params = client.messages.stream.mock.calls[0][0] as Record<string, unknown>
-    expect(params.thinking).toEqual({ type: 'adaptive' })
-    expect(params.output_config).toEqual({ effort: 'low' })
-    // llm.request 日志记录实际档位（§10.3，不再是布尔）
-    const requestLog = vi.mocked(logAgentEvent).mock.calls.find((c) => c[1] === 'llm.request')
-    expect(requestLog?.[2]).toMatchObject({ effort: 'low' })
+
+    await expect(runHostedInvocation('req-hosted-effort-first')).resolves.toMatchObject({ ok: true })
+    await expect(runHostedInvocation('req-hosted-effort-second')).resolves.toMatchObject({ ok: true })
+
+    expect(requests).toHaveLength(3)
+    expect(requests[0]?.thinking?.effort).toBe('high')
+    expect(requests[1]?.thinking?.effort).toBeUndefined()
+    expect(requests[2]?.thinking?.effort).toBeUndefined()
+    const firstEvents = hostedHistories.get('req-hosted-effort-first') ?? []
+    const retryIndex = firstEvents.findIndex((event) => event.kind === 'provider-retry-scheduled')
+    const retryRequestIndex = firstEvents.findIndex((event) => event.kind === 'model-request-started' && event.payload.attempt === 2)
+    const retry = firstEvents[retryIndex]
+    expect(retry?.payload).toMatchObject({
+      requestId: 'turn-req-hosted-effort-first:round:1', code: 'effort_unsupported',
+      sessionLedger: { requestRetry: { requestId: 'turn-req-hosted-effort-first:round:1', code: 'effort_unsupported', attempt: 1 } }
+    })
+    expect(retryIndex).toBeGreaterThan(-1)
+    expect(retryRequestIndex).toBeGreaterThan(retryIndex)
+    expect(capturedSessionEvents).toContainEqual(expect.objectContaining({
+      type: 'request_retry', payload: expect.objectContaining({ requestId: 'turn-req-hosted-effort-first:round:1', code: 'effort_unsupported' })
+    }))
+    expect(hostedHistories.get('req-hosted-effort-second')?.some((event) => event.kind === 'provider-retry-scheduled')).toBe(false)
+    expect(vi.mocked(logAgentEvent).mock.calls.filter((call) => call[1] === 'llm.effort.unsupported_memoized')).toHaveLength(1)
   })
 
-  it('基线明确不支持 low 时首轮跳过 output_config，high 仍按基线发送', async () => {
-    const lowClient = {
-      messages: {
-        stream: vi.fn(() => ({
-          async *[Symbol.asyncIterator]() {},
-          finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'low' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
-        }))
-      }
-    }
-    mockCreateAnthropicClient.mockReturnValue(lowClient)
-    await run(baseMaterials({ effort: 'low', model: 'deepseek-v4-pro' }))
-    expect(lowClient.messages.stream).toHaveBeenCalledTimes(1)
-    expect((lowClient.messages.stream.mock.calls[0][0] as Record<string, unknown>).output_config).toBeUndefined()
-    expect(vi.mocked(logAgentEvent).mock.calls.filter((call) => call[1] === 'llm.effort.unsupported')).toHaveLength(1)
-    expect(vi.mocked(logAgentEvent).mock.calls.find((call) => call[1] === 'llm.effort.unsupported')?.[2]).toMatchObject({ reason: 'baseline_unsupported', fallback: 'adaptive' })
-
-    const highClient = {
-      messages: {
-        stream: vi.fn(() => ({
-          async *[Symbol.asyncIterator]() {},
-          finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'high' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
-        }))
-      }
-    }
-    mockCreateAnthropicClient.mockReturnValue(highClient)
-    await run(baseMaterials({ effort: 'high', model: 'deepseek-v4-pro' }))
-    expect((highClient.messages.stream.mock.calls[0][0] as Record<string, unknown>).output_config).toEqual({ effort: 'high' })
-  })
-
-  it('上游 400 拒绝 output_config → 自动去强度重试一次成功 + 落 llm.effort.unsupported 审计', async () => {
-    const client = makeEffortRejectionClient([
-      { content: [{ type: 'text', text: 'recovered' }], stop_reason: 'end_turn' }
-    ])
-    mockCreateAnthropicClient.mockReturnValue(client)
-    const res = await run(baseMaterials({ effort: 'low' }))
-    expect(res).toMatchObject({ ok: true, content: [{ type: 'text', text: 'recovered' }] })
-    // 恰好两次请求：首轮带强度、重试去强度（保留 adaptive）
-    expect(client.messages.stream).toHaveBeenCalledTimes(2)
-    expect(client.calls[0].output_config).toEqual({ effort: 'low' })
-    expect(client.calls[1].output_config).toBeUndefined()
-    expect(client.calls[1].thinking).toEqual({ type: 'adaptive' })
-    expect(vi.mocked(logAgentEvent).mock.calls.some((c) => c[1] === 'llm.effort.unsupported')).toBe(true)
-    expect(capturedSessionEvents.some((event) => (event as { type?: string; payload?: { code?: string } }).type === 'request_retry')).toBe(true)
-  })
-
-  it('降级记忆生效：同服务同模型第二次运行首轮即不带 output_config（粒度 llmServiceId+model）', async () => {
-    const first = makeEffortRejectionClient([{ content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' }])
-    mockCreateAnthropicClient.mockReturnValue(first)
-    await run(baseMaterials({ effort: 'low', llmServiceId: 'svc-effort' }))
-    expect(first.messages.stream).toHaveBeenCalledTimes(2)
-
-    const second = {
-      messages: {
-        stream: vi.fn(() => ({
-          async *[Symbol.asyncIterator]() {},
-          finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok2' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
-        }))
-      }
-    }
-    mockCreateAnthropicClient.mockReturnValue(second)
-    const res = await run(baseMaterials({ effort: 'low', llmServiceId: 'svc-effort' }))
-    expect(res).toMatchObject({ ok: true })
-    expect(second.messages.stream).toHaveBeenCalledTimes(1)
-    const params = second.messages.stream.mock.calls[0][0] as Record<string, unknown>
-    expect(params.output_config).toBeUndefined()
-    // 首次跳过落一次 memoized 审计
-    expect(vi.mocked(logAgentEvent).mock.calls.filter((c) => c[1] === 'llm.effort.unsupported_memoized')).toHaveLength(1)
-
-    // 同服务其他模型不受记忆连坐（C1：粒度 = service + model）
-    const third = {
-      messages: {
-        stream: vi.fn(() => ({
-          async *[Symbol.asyncIterator]() {},
-          finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok3' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
-        }))
-      }
-    }
-    mockCreateAnthropicClient.mockReturnValue(third)
-    await run(baseMaterials({ effort: 'low', llmServiceId: 'svc-effort', model: 'another-model' }))
-    const thirdParams = third.messages.stream.mock.calls[0][0] as Record<string, unknown>
-    expect(thirdParams.output_config).toEqual({ effort: 'low' })
-  })
 })

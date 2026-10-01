@@ -6,6 +6,7 @@ import { waitForToolConfirm } from './toolConfirmRegistry'
 import * as database from './database'
 import { getMainWindow } from './windowRef'
 import { BrowserWindow } from 'electron'
+import { getCallAdmissionGate } from './runtime/callAdmissionGate'
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
@@ -57,6 +58,7 @@ vi.mock('./database', () => ({
 }))
 
 vi.mock('./anthropicClientFactory', () => ({
+  createAnthropicStreamPort: (client: { messages: { stream: (...args: unknown[]) => unknown } }) => ({ stream: (...args: unknown[]) => client.messages.stream(...args) }),
   createAnthropicClient: vi.fn()
 }))
 
@@ -468,6 +470,7 @@ describe('file IPC handlers', () => {
     const cancel = vi.fn().mockReturnValue(true)
     const recover = vi.fn()
     const runtimeCancel = vi.fn().mockReturnValue(true)
+    const cancelQueuedTurn = vi.spyOn(getCallAdmissionGate(), 'cancelByTurnId')
     ctx.turnRuntime = {
       coordinator: { cancel, recover },
       cancel: runtimeCancel,
@@ -480,6 +483,7 @@ describe('file IPC handlers', () => {
     const result = await ipc.getHandler('chat:cancel-turn')!({}, 'turn-desktop-1')
 
     expect(result).toBe(true)
+    expect(cancelQueuedTurn).toHaveBeenCalledWith('turn-desktop-1')
     expect(runtimeCancel).toHaveBeenCalledWith('turn-desktop-1')
     expect(cancel).not.toHaveBeenCalled()
   })
@@ -521,6 +525,28 @@ describe('file IPC handlers', () => {
     const changed = await ipc.getHandler('chat:get-turn-displays')!({}, { known: [] }) as { changed: Array<{ turnId: string; lifecycle: string }> }
     expect(changed.changed).toHaveLength(1)
     expect(changed.changed[0]).toMatchObject({ turnId: terminal.turnId, lifecycle: 'completed' })
+  })
+
+  it('重启恢复为 recovered 的未完成 turn 不会被重载投影成 completed', async () => {
+    const terminal = {
+      turnId: 'terminal-recovered-1', requestId: 'request-recovered-1', sessionId: 'session-1',
+      assistantMessageId: 'assistant-recovered-1', version: 5, outcome: 'recovered' as const,
+      message: { id: 'assistant-recovered-1', sessionId: 'session-1', role: 'assistant' as const, content: 'partial', timestamp: 1, status: 'failed' as const, schemaVersion: 1 }
+    }
+    ctx.turnRuntime = {
+      coordinator: { recover: vi.fn() },
+      listActive: vi.fn().mockReturnValue([]),
+      subscribe: vi.fn(() => () => undefined),
+      listTerminals: vi.fn().mockReturnValue([terminal]),
+      checkpointStatus: vi.fn().mockReturnValue('pending')
+    } as unknown as AppIpcContext['turnRuntime']
+    ipc = mockIpcMain()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+
+    const changed = await ipc.getHandler('chat:get-turn-displays')!({}, { known: [] }) as { changed: Array<{ turnId: string; lifecycle: string; outcome?: string }> }
+
+    expect(changed.changed).toHaveLength(1)
+    expect(changed.changed[0]).toMatchObject({ turnId: terminal.turnId, lifecycle: 'failed', outcome: 'interrupted' })
   })
 
   it('已提交的历史 terminal 不会在 renderer 无 known 重载时重新注入', async () => {

@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
-import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, MIGRATION_V4_TABLES_SQL, MIGRATION_V5_TURN_TABLE_SQL, MIGRATION_V6_TURN_CHECKPOINT_SQL, MIGRATION_V7_QUEUE_RECEIPT_SQL, MIGRATION_V8_TURN_START_TOKEN_SQL, MIGRATION_V9_TURN_RECOVERY_FIELDS_SQL, MIGRATION_V10_TURN_TERMINAL_USAGE_SQL, MIGRATION_V11_TURN_CONTEXT_SQL, MIGRATION_V12_TURN_EXECUTION_CONFIG_SQL, MIGRATION_V13_TURN_ROUTING_INDEXES_SQL, MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL, MIGRATION_V15_BUTLER_TABLES_SQL, MIGRATION_V16_USAGE_STATS_SQL, MIGRATION_V17_SESSION_THINKING_EFFORT_SQL, MIGRATION_V18_CONFIRMATION_COMMIT_IDENTITY_SQL, MIGRATION_V19_USAGE_ATTRIBUTION_SQL, SCHEMA_META_KEYS } from './schema'
+import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, MIGRATION_V4_TABLES_SQL, MIGRATION_V5_TURN_TABLE_SQL, MIGRATION_V6_TURN_CHECKPOINT_SQL, MIGRATION_V7_QUEUE_RECEIPT_SQL, MIGRATION_V8_TURN_START_TOKEN_SQL, MIGRATION_V9_TURN_RECOVERY_FIELDS_SQL, MIGRATION_V10_TURN_TERMINAL_USAGE_SQL, MIGRATION_V11_TURN_CONTEXT_SQL, MIGRATION_V12_TURN_EXECUTION_CONFIG_SQL, MIGRATION_V13_TURN_ROUTING_INDEXES_SQL, MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL, MIGRATION_V15_BUTLER_TABLES_SQL, MIGRATION_V16_USAGE_STATS_SQL, MIGRATION_V17_SESSION_THINKING_EFFORT_SQL, MIGRATION_V18_CONFIRMATION_COMMIT_IDENTITY_SQL, MIGRATION_V19_AGENT_HISTORY_SQL, MIGRATION_V20_AGENT_HISTORY_SESSION_SQL, MIGRATION_V21_AGENT_HISTORY_SESSION_BACKFILL_SQL, MIGRATION_V22_TURN_INPUT_HISTORY_VERSION_SQL, MIGRATION_V23_DRIVER_DELIVERY_SQL, MIGRATION_V24_SESSION_TRANSCRIPT_SQL, MIGRATION_V25_SESSION_EXECUTION_QUEUE_SQL, MIGRATION_V26_SESSION_TRANSCRIPT_RECONCILIATION_SQL, MIGRATION_V27_ACCEPTED_TURN_CONTEXT_SQL, MIGRATION_V28_USAGE_ATTRIBUTION_SQL, SCHEMA_META_KEYS } from './schema'
 import { runInTransaction } from './transaction'
 
 export class DatabaseUpgradeRequiredError extends Error {
@@ -172,24 +172,63 @@ export function runMigrations(conn: DatabaseSync): void {
       conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
     }
     if (version === 18) {
-      // 归因扩列（v19，AD23/AD24）：带表/列存在性防护，容忍无统计表的开发库，保持升级幂等
-      const hasUsageStepFacts =
-        (conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'usage_step_facts'").all() as unknown[]).length > 0
-      if (hasUsageStepFacts) {
-        const stepColumns = conn.prepare('PRAGMA table_info(usage_step_facts)').all() as Array<{ name: string }>
-        if (!stepColumns.some((column) => column.name === 'attribution_json')) {
-          conn.exec(MIGRATION_V19_USAGE_ATTRIBUTION_SQL)
-        }
-        const hasUsageTurnFacts =
-          (conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'usage_turn_facts'").all() as unknown[]).length > 0
-        if (hasUsageTurnFacts) {
-          const turnColumns = conn.prepare('PRAGMA table_info(usage_turn_facts)').all() as Array<{ name: string }>
-          if (!turnColumns.some((column) => column.name === 'tool_attribution_json')) {
-            conn.exec('ALTER TABLE usage_turn_facts ADD COLUMN tool_attribution_json TEXT')
-          }
-        }
-      }
+      conn.exec(MIGRATION_V19_AGENT_HISTORY_SQL)
       version = 19
+      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    }
+    if (version === 19) {
+      conn.exec(MIGRATION_V20_AGENT_HISTORY_SESSION_SQL)
+      version = 20
+      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    }
+    if (version === 20) {
+      // Some lightweight migration fixtures omit turns; production databases always have it.
+      const hasTurnsTable = (conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'turns'").get() as unknown) !== undefined
+      if (hasTurnsTable) conn.exec(MIGRATION_V21_AGENT_HISTORY_SESSION_BACKFILL_SQL)
+      version = 21
+      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    }
+    if (version === 21) {
+      const hasTurnsTable = (conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'turns'").get() as unknown) !== undefined
+      if (hasTurnsTable) {
+        const columns = conn.prepare('PRAGMA table_info(turns)').all() as Array<{ name: string }>
+        if (!columns.some((column) => column.name === 'accepted_input_history_version')) conn.exec(MIGRATION_V22_TURN_INPUT_HISTORY_VERSION_SQL)
+      }
+      version = 22
+      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    }
+    if (version === 22) {
+      conn.exec(MIGRATION_V23_DRIVER_DELIVERY_SQL)
+      version = 23
+      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    }
+    if (version === 23) {
+      conn.exec(MIGRATION_V24_SESSION_TRANSCRIPT_SQL)
+      version = 24
+      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    }
+    if (version === 24) {
+      conn.exec(MIGRATION_V25_SESSION_EXECUTION_QUEUE_SQL)
+      version = 25
+      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    }
+    if (version === 25) {
+      conn.exec(MIGRATION_V26_SESSION_TRANSCRIPT_RECONCILIATION_SQL)
+      version = 26
+      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    }
+    if (version === 26) {
+      conn.exec(MIGRATION_V27_ACCEPTED_TURN_CONTEXT_SQL)
+      version = 27
+      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    }
+    if (version === 27) {
+      // Some focused migration fixtures intentionally contain only the tables owned by that test.
+      // Upgrade whichever optional usage fact tables exist; full v27 databases contain both.
+      const hasUsageSteps = conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'usage_step_facts'").get() !== undefined
+      const hasUsageTurns = conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'usage_turn_facts'").get() !== undefined
+      if (hasUsageSteps || hasUsageTurns) conn.exec(MIGRATION_V28_USAGE_ATTRIBUTION_SQL)
+      version = 28
       conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
     }
   })

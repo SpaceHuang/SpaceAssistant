@@ -1,6 +1,6 @@
 {
   "name": "spaceassistant",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "license": "Apache-2.0",
   "description": "Electron + React + TypeScript desktop assistant",
@@ -23,20 +23,22 @@
     "predev": "node scripts/ensure-dev-ripgrep.mjs && npm run i18n:generate-types",
     "prebuild:renderer": "npm run i18n:generate-types",
     "dev:renderer": "vite --strictPort",
-    "dev:electron": "cross-env SPACEASSISTANT_DEV=1 npm run build:electron:incremental && cross-env SPACEASSISTANT_DEV=1 electron dist-electron/electron/main.js",
+    "dev:electron": "cross-env SPACEASSISTANT_DEV=1 npm run build:electron && cross-env SPACEASSISTANT_DEV=1 electron dist-electron/electron/main.js",
     "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
     "build:renderer": "vite build",
     "build:tray-icons": "node scripts/build-tray-icons.mjs",
-    "build:electron": "rimraf dist-electron && tsc -p tsconfig.electron.json",
-    "build:electron:incremental": "tsc -p tsconfig.electron.json",
+    "build:electron": "rimraf dist-electron && npm run check:pi-ai-runtime-closure && npm run build:agent-provider-pi-ai && tsc -p tsconfig.electron.json",
+    "build:electron:incremental": "npm run check:pi-ai-runtime-closure && npm run build:agent-provider-pi-ai && tsc -p tsconfig.electron.json",
     "build": "npm run build:tray-icons && npm run build:renderer && npm run build:electron",
     "typecheck:renderer": "tsc -p tsconfig.renderer.json --noEmit",
-    "typecheck:agent-core": "tsc -p packages/agent-core/tsconfig.json",
+    "typecheck:agent-sdk": "tsc -p packages/agent-sdk/tsconfig.json",
+    "typecheck:agent-provider-testing": "tsc -p packages/agent-provider-testing/tsconfig.json",
+    "typecheck:agent-provider-pi-ai": "tsc -p packages/agent-provider-pi-ai/tsconfig.json",
     "typecheck:shared": "node scripts/check-shared-config-types.mjs",
     "check:message-fact-ownership": "node scripts/check-message-fact-ownership.mjs",
     "check:no-nul": "node scripts/check-no-nul.mjs",
     "check:treesitter-wasm": "node scripts/check-treesitter-wasm.mjs",
-    "check:agent-core": "node scripts/check-agent-core-boundary.mjs",
+    "check:agent-sdk": "node scripts/check-agent-sdk-boundary.mjs && node scripts/check-agent-sdk-dependencies.mjs && node scripts/check-agent-sdk-package-closure.mjs",
     "model:baseline": "node --import tsx scripts/generate-model-baseline.mjs",
     "check:model-baseline": "node --import tsx scripts/generate-model-baseline.mjs --check",
     "probe:sqlite": "electron scripts/probe-node-sqlite.mjs",
@@ -54,16 +56,19 @@
     "reinstall:electron": "rimraf node_modules/electron && npm install",
     "pack": "npm run prepare:rg && npm run build && electron-builder",
     "pack:win": "npm run prepare:rg -- --target=win32-x64 && npm run build && electron-builder --win",
-    "pack:mac": "npm run prepare:rg -- --target=darwin-x64 --target=darwin-arm64 && npm run build && electron-builder --mac",
+    "pack:mac": "npm run prepare:rg -- --target=darwin-x64 --target=darwin-arm64 && npm run build && node scripts/pack-mac-sequential.cjs",
     "pack:linux": "npm run build && electron-builder --linux",
+    "build:agent-provider-pi-ai": "tsc -p packages/agent-provider-pi-ai/tsconfig.build.json",
     "check:tool-result-invariants": "node scripts/scan-tool-result-invariants.mjs",
-    "test:tool-reliability": "npm run test:electron && npm run check:tool-result-invariants"
+    "test:tool-reliability": "npm run test:electron && npm run check:tool-result-invariants",
+    "check:pi-ai-runtime-closure": "node scripts/check-pi-ai-runtime-closure.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.79.0",
     "@browserbasehq/stagehand": "^3.0.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@reduxjs/toolkit": "^2.5.0",
+    "@spaceassistant/agent-provider-pi-ai": "file:packages/agent-provider-pi-ai",
     "@wechatbot/wechatbot": "^2.2.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-serialize": "^0.13.0",
@@ -101,7 +106,6 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.87.1",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/react": "^16.3.0",
     "@types/node": "^24.13.3",
@@ -144,6 +148,31 @@
         "from": "node_modules/micromark-util-subtokenize",
         "to": "node_modules/micromark-util-subtokenize"
       },
+      "!node_modules/@earendil-works/pi-ai/dist/**/*",
+      "node_modules/@earendil-works/pi-ai/package.json",
+      "node_modules/@earendil-works/pi-ai/dist/api/anthropic-messages.js",
+      "node_modules/@earendil-works/pi-ai/dist/api/constrained-sampling.js",
+      "node_modules/@earendil-works/pi-ai/dist/api/github-copilot-headers.js",
+      "node_modules/@earendil-works/pi-ai/dist/api/lazy.js",
+      "node_modules/@earendil-works/pi-ai/dist/api/simple-options.js",
+      "node_modules/@earendil-works/pi-ai/dist/api/transform-messages.js",
+      "node_modules/@earendil-works/pi-ai/dist/auth/context.js",
+      "node_modules/@earendil-works/pi-ai/dist/auth/credential-store.js",
+      "node_modules/@earendil-works/pi-ai/dist/auth/resolve.js",
+      "node_modules/@earendil-works/pi-ai/dist/models-store.js",
+      "node_modules/@earendil-works/pi-ai/dist/models.js",
+      "node_modules/@earendil-works/pi-ai/dist/utils/abort.js",
+      "node_modules/@earendil-works/pi-ai/dist/utils/diagnostics.js",
+      "node_modules/@earendil-works/pi-ai/dist/utils/estimate.js",
+      "node_modules/@earendil-works/pi-ai/dist/utils/event-stream.js",
+      "node_modules/@earendil-works/pi-ai/dist/utils/headers.js",
+      "node_modules/@earendil-works/pi-ai/dist/utils/json-parse.js",
+      "node_modules/@earendil-works/pi-ai/dist/utils/pi-user-agent.js",
+      "node_modules/@earendil-works/pi-ai/dist/utils/provider-env.js",
+      "node_modules/@earendil-works/pi-ai/dist/utils/provider-retry.js",
+      "node_modules/@earendil-works/pi-ai/dist/utils/sanitize-unicode.js",
+      "node_modules/@earendil-works/pi-ai/dist/utils/text.js",
+      "node_modules/@earendil-works/pi-ai/dist/utils/transcript.js",
       "!**/node_modules/bufferutil/**"
     ],
     "extraResources": [
@@ -158,6 +187,10 @@
       {
         "from": "src/renderer/i18n/resources",
         "to": "i18n-resources"
+      },
+      {
+        "from": "resources/licenses",
+        "to": "licenses"
       },
       {
         "from": "res/icons",
@@ -220,6 +253,8 @@
     "electron@44.1.1": true
   },
   "workspaces": [
-    "packages/agent-core"
+    "packages/agent-sdk",
+    "packages/agent-provider-testing",
+    "packages/agent-provider-pi-ai"
   ]
 }

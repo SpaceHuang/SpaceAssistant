@@ -1,5 +1,5 @@
 import { readHistory, type HistoryFact } from '../../src/shared/historyReader'
-import { defineDirectTool } from './plannedToolRegistry'
+import { createSnapshotReadRegisteredTool } from './snapshotReadRegisteredTool'
 import type { ToolExecutionContext, ToolExecutorResult } from './types'
 
 export const readHistoryToolExecutor = async (
@@ -23,12 +23,6 @@ export const readHistoryToolExecutor = async (
   }
 }
 
-export const historyReadTool = defineDirectTool<Record<string, unknown>, ToolExecutorResult>({
-  name: 'history.read',
-  parseInput: (raw) => raw && typeof raw === 'object' ? raw as Record<string, unknown> : {},
-  async execute(input, context) {
-    return readHistoryToolExecutor(input, context.runtimeContext as ToolExecutionContext)
-  }
-})
+export const historyReadTool = createSnapshotReadRegisteredTool('history.read', readHistoryToolExecutor)
 
 export type { HistoryFact }

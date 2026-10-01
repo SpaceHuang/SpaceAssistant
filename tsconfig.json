@@ -11,9 +11,8 @@
     "module": "ESNext",
     "jsx": "react-jsx",
     "types": [],
-    "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["./src/*"]
     }
   },
   "include": ["electron/**/*.ts", "src/**/*.ts", "src/**/*.tsx"]

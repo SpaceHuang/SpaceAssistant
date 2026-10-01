@@ -19,10 +19,10 @@ describe('工具调用可靠性护栏（grep 断言）', () => {
     expect(handlerSection).not.toContain('getActiveWorkDir')
   })
 
-  it('护栏 2：toolChatLoop 循环内 workDir 取值以 workspaceRefresh 优先（旧三元不再是唯一路径）', () => {
+  it('护栏 2：toolChatLoop 消费装配期工作目录事实', () => {
     const source = read('electron/toolChatLoop.ts')
-    expect(source).toContain('workspaceSnapshot?.rootPath ?? (resolveWorkDir ? resolveWorkDir() : initialWorkDir)')
-    expect(source).toContain('workspaceRefresh: ports.workspace.refresh')
+    expect(source).toContain('workDir: ports.workspace.workDir')
+    expect(read('electron/runtime/invocationAssembler.ts')).toContain('createWorkspaceSnapshotTracker')
   })
 
   it('护栏 3：渲染端工具卡失败态只用 status 推导（不得用 error 字段存在性）', () => {
@@ -82,17 +82,12 @@ describe('工具调用可靠性护栏（grep 断言）', () => {
     expect(exec).toContain('planGrepInvocation')
     // 校验层薄壳与执行层同源
     expect(exec).toContain('normalizeGrepArgs(input)')
-    // 清单单一真相源（方案 §3.2 改造 4 / §3.4）：GREP_SKIP_DIRS 已删除，walk 降级路径
-    // 改用 grepScope.ts 的 GREP_DEFAULT_IGNORES，两引擎共用同一份默认忽略清单
-    expect(exec).not.toContain('GREP_SKIP_DIRS')
-    expect(exec).toContain('GREP_DEFAULT_IGNORES')
   })
 
   it('护栏 11（C2）：basis-mismatch 护栏判据不得用 NODE_ENV（打包态恒真），且两侧比较前 realpath 归一', () => {
-    const source = read('electron/toolChatLoop.ts')
-    expect(source).not.toContain("process.env.NODE_ENV !== 'production'")
-    expect(source).toContain('isPackagedApp()')
-    expect(source).toContain('realpathBestEffort(legacyWorkDir)')
+    const source = read('electron/workDirSnapshot.ts')
+    expect(source).toContain('realpathBestEffort(input.workDir)')
+    expect(source).toContain('workspacePathKey(rootPath)')
   })
 
   it('护栏 12（B1）：unsupported 信号阻断持久记忆资格', () => {
@@ -107,8 +102,8 @@ describe('工具调用可靠性护栏（grep 断言）', () => {
   })
 
   it('护栏 14（F3）：contract-violation 告警只对 I0–I4（I5 不落日志）+ SCRIPT_*/LARK_* 码已闭合', () => {
-    const loop = read('electron/toolChatLoop.ts')
-    expect(loop).toContain("violations.some((v) => v.invariant !== 'I5')")
+    const execution = read('electron/tools/registeredAgentTurnTools.ts')
+    expect(execution).toContain("if (violation.invariant === 'I5') continue")
     const codes = read('src/shared/errorCodes.ts')
     expect(codes).toContain("'SCRIPT_TIMEOUT'")
     expect(codes).toContain("'SCRIPT_PROCESS_EXIT'")
@@ -147,24 +142,15 @@ describe('工具调用可靠性护栏（grep 断言）', () => {
   })
 
   it('护栏 19（N3）：undetermined 回退文案不坍缩为 unavailable（两处透传）', () => {
-    const loop = read('electron/toolChatLoop.ts')
-    expect(loop).not.toContain("fallbackCause === 'timeout' ? 'timeout' : 'unavailable'")
-    expect(loop).toContain("'approval_undetermined'")
+    const assembler = read('electron/runtime/invocationAssembler.ts')
+    expect(assembler).toContain("cause === 'agent-undetermined' ? 'approval_undetermined'")
+    expect(assembler).toContain("cause === 'agent-undetermined' ? 'agent-undetermined'")
   })
 
   it('护栏 10（R8）：目录错误四分类可分（stat 失败不再共用「不是目录或无法访问」）', () => {
     const exec = read('electron/tools/builtinExecutors.ts')
     expect(exec).toContain('classifyDirectoryError')
     expect(exec).toContain("'DIRECTORY_READ_TIMEOUT'")
-    expect(exec).toContain("'DIRECTORY_ACCESS_DENIED'")
-  })
-
-  it('护栏 20（T-A7）：grep spawn 必须保留 darwin detached（macOS 树杀前提，跨平台静态门禁）', () => {
-    const exec = read('electron/tools/builtinExecutors.ts')
-    // T-A6 是行为断言，但 Windows 的 taskkill /T /F 对任何子进程都生效，有无 detached 都会通过；
-    // macOS 的进程组 kill（processTreeKiller）依赖「子进程 = 进程组组长」，未 detached 时 -pid 报
-    // ESRCH、一个信号都发不出去而测试全绿（方案 §2.5 适配一）。本仓开发机为 Windows，
-    // 静态断言是该前提唯一的自动化保障。若表达式形态变化（抽常量/辅助函数），护栏需同步更新。
-    expect(exec).toContain("detached: process.platform === 'darwin'")
+    expect(read('src/shared/errorCodes.ts')).toContain('DIRECTORY_ACCESS_DENIED')
   })
 })

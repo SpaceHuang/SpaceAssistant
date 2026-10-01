@@ -158,11 +158,21 @@ export function createMcpToolExecutor(
       return gate.run(entry.serverId, async () => {
           const session = await deps.getSession(entry.serverId)
           try {
-            const result = await session.client.callTool(
-              { name: entry.originalName, arguments: input },
-              undefined,
-              { signal: ctx.signal, timeout: timeoutMs }
-            )
+            let result: Awaited<ReturnType<typeof session.client.callTool>>
+            try {
+              result = await session.client.callTool(
+                { name: entry.originalName, arguments: input },
+                undefined,
+                { signal: ctx.signal, timeout: timeoutMs }
+              )
+            } catch (error) {
+              if (isAuthFailure(error) || isConnectionFailure(error)) void deps.invalidateSession(entry.serverId)
+              const message = error instanceof Error ? error.message : String(error)
+              const safeMessage = /timed out|timeout|Request timed out/i.test(message)
+                ? appendRecentDiagnostics(deps, entry.serverId, safeServerSummary(message))
+                : safeServerSummary(message)
+              throw new McpToolExecutionUncertainError(safeMessage)
+            }
             if (result.isError) {
               return { success: false, error: safeServerSummary(extractContentText(result)) }
             }
@@ -209,6 +219,7 @@ export function createMcpToolExecutor(
             const data = (result.structuredContent ?? result.content) as unknown
             return { success: true, data: compactResultIfNeeded(data), displayData }
           } catch (error) {
+            if (error instanceof McpToolExecutionUncertainError) throw error
             if (ctx.signal.aborted) {
               return { success: false, error: 'MCP 工具调用超时或已取消。' }
             }
@@ -256,6 +267,13 @@ export function createMcpToolExecutor(
           }
         })
     }
+  }
+}
+
+export class McpToolExecutionUncertainError extends Error {
+  constructor(readonly safeMessage: string) {
+    super(`MCP 工具执行结果未知：${safeMessage}`)
+    this.name = 'McpToolExecutionUncertainError'
   }
 }
 
