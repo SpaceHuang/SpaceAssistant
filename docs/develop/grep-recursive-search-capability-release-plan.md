@@ -1486,4 +1486,3 @@ git init -q
 
 - **I7 前提提前关闭**：renderer 与远程桥（feishu/wechat/remote）均不解析 grep 输出路径——I7 收窄为回归 + 真机（§8 已更新）。
 - **§15.4① 边界补充**：`wechat_send` / `wechat_reply` 的 `filePath` **禁止**走别名归一化（`toolPathField.ts:7-9`）——阶段 A 的 §7.3 / §7.4 改动 1 触碰同段代码时勿波及此例外。
-
