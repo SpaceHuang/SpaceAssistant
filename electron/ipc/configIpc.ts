@@ -10,7 +10,7 @@ import { CONFIG_KEYS, readAppLocale, stripPlanConfigFromDbIfNeeded, readSkillsCo
 import { mergeSkillsConfig, mergeToolsConfig, stripPlanFieldsFromAppConfig } from '../../src/shared/domainTypes'
 import { ErrorCodes } from '../../src/shared/errorCodes'
 import { FetchServiceModelsResult } from '../../src/shared/llmModelConfig'
-import { LlmServiceValidationError, migrateLegacyLlmServicesIfNeeded, migrateMultiServiceModelConfig, persistLlmServices, readActiveLlmServiceId, readActiveLlmServiceIds, readLlmServices, resolveTestConnectionCredentials, resolveTestConnectionModel } from '../llmServiceResolver'
+import { LlmKeyAccessError, LlmServiceValidationError, migrateLegacyLlmServicesIfNeeded, migrateMultiServiceModelConfig, persistLlmServices, readActiveLlmServiceId, readActiveLlmServiceIds, readLlmServices, resolveTestConnectionCredentials, resolveTestConnectionModel, verifyLlmServiceApiKey } from '../llmServiceResolver'
 import { WikiConfig, FeishuConfig, WeChatConfig, BrowserConfig, ShellConfig } from '../../src/shared/domainTypes'
 import { clampMaxParallelChatSessions } from '../../src/shared/chatParallelConfig'
 import { createAnthropicClient } from '../anthropicClientFactory'
@@ -130,6 +130,18 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
     } as AppConfig)
   })
 
+  ipcMain.handle('config:verify-llm-key', async (_e, serviceId: string): Promise<{ ok: boolean; code?: string }> => {
+    if (typeof serviceId !== 'string' || !readLlmServices(ctx.db).some((service) => service.id === serviceId)) {
+      return { ok: false, code: 'LLM_KEY_NOT_CONFIGURED' }
+    }
+    try {
+      const key = await verifyLlmServiceApiKey(ctx.db, serviceId)
+      return key ? { ok: true } : { ok: false, code: 'LLM_KEY_NOT_CONFIGURED' }
+    } catch (error) {
+      return { ok: false, code: error instanceof LlmKeyAccessError ? error.code : 'LLM_KEY_ACCESS_DENIED' }
+    }
+  })
+
 
   ipcMain.handle(
     'config:set',
@@ -198,6 +210,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
           }
         }
       } catch (e) {
+        if (e instanceof LlmKeyAccessError) throw new Error(e.message)
         if (e instanceof LlmServiceValidationError) {
           throw new Error(e.message)
         }
@@ -505,7 +518,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
         })
         return { success: true }
       } catch (e) {
-        return { success: false, error: e instanceof Error ? e.message : String(e) }
+        return { success: false, error: e instanceof LlmKeyAccessError ? e.message : '连接测试失败，请检查服务配置后重试' }
       }
     }
   )
@@ -520,9 +533,9 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       try {
         creds = await resolveTestConnectionCredentials(ctx.db, options)
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        logAgentEvent('warn', 'llm.fetch_models', { success: false, error: message })
-        return { ok: false, error: /baseurl/i.test(message) ? 'invalid-base-url' : 'network' }
+        const isInvalidBaseUrl = error instanceof Error && /baseurl/i.test(error.message)
+        logAgentEvent('warn', 'llm.fetch_models', { success: false, error: isInvalidBaseUrl ? 'invalid-base-url' : 'credential-read-failed' })
+        return { ok: false, error: isInvalidBaseUrl ? 'invalid-base-url' : 'network' }
       }
       try {
         if (creds.error || !creds.apiKey) return { ok: false, error: 'no-api-key' }
@@ -537,7 +550,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       } catch (error) {
         logAgentEvent('warn', 'llm.fetch_models', {
           success: false,
-          error: error instanceof Error ? error.message : String(error)
+          error: 'network'
         })
         return { ok: false, error: 'network' }
       }

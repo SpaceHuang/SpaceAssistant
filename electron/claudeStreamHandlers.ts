@@ -5,7 +5,7 @@ import { logAgentEvent } from './agentLogger/agentLogger'
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import type { AgentLogFields } from './agentLogger/types'
 import { getDbConnection, getPersistedTurn, getSession, type AppDatabase } from './database'
-import { resolveLlmCredentialsForModel } from './llmServiceResolver'
+import { LlmKeyAccessError, resolveLlmCredentialsForModel } from './llmServiceResolver'
 import { MODEL_BASELINE } from '../src/shared/modelBaseline'
 import { requireInvocationAnthropicRoute } from './runtime/invocationProviderRoute'
 import { getDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
@@ -643,13 +643,15 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           const reason = err instanceof HostedTurnFinalizedError ? hostedTerminalSessionEventReason(err.outcome) : 'error'
           finalized = await finalizeTurn(eventTurnId, reason, message)
         }
-        logAgentEvent('error', 'llm.error', {
-          requestId: requestId || undefined,
-          sessionId: typeof payload?.sessionId === 'string' ? payload.sessionId : undefined,
-          model: typeof payload?.model === 'string' ? payload.model : undefined,
-          error: message,
-          stack: err instanceof Error ? err.stack : undefined
-        })
+        logAgentEvent('error', 'llm.error', err instanceof LlmKeyAccessError
+          ? { requestId: requestId || undefined, serviceId: err.serviceId, stage: 'credential-read', code: err.code }
+          : {
+              requestId: requestId || undefined,
+              sessionId: typeof payload?.sessionId === 'string' ? payload.sessionId : undefined,
+              model: typeof payload?.model === 'string' ? payload.model : undefined,
+              error: message,
+              stack: err instanceof Error ? err.stack : undefined
+            })
         return {
           ok: false as const,
           error: message,

@@ -28,6 +28,8 @@ export function useLlmServiceDrafts(open: boolean, cfg: AppConfig | null, allMod
       const currentIds = modelIdsRef.current
       const modelIds = currentIds.length ? currentIds : getModelIds(cfg.models ?? [])
       setState(initLlmServiceTabState(cfg.llmServices ?? [], ids, modelIds))
+    } else if (!open) {
+      setState({ drafts: {}, activeIds: [], order: [] })
     }
   }, [open, cfg])
 
@@ -102,6 +104,13 @@ export function useLlmServiceDrafts(open: boolean, cfg: AppConfig | null, allMod
     []
   )
 
+  const clearKeyDrafts = useCallback(() => {
+    setState((current) => ({
+      ...current,
+      drafts: Object.fromEntries(Object.entries(current.drafts).map(([id, draft]) => [id, { ...draft, apiKeyDraft: '' }]))
+    }))
+  }, [])
+
   return {
     state,
     cardRefs,
@@ -110,7 +119,8 @@ export function useLlmServiceDrafts(open: boolean, cfg: AppConfig | null, allMod
     addService,
     removeService,
     patchDraft,
-    resetFromConfig
+    resetFromConfig,
+    clearKeyDrafts
   }
 }
 

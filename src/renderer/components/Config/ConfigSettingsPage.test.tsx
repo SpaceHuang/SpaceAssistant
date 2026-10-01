@@ -115,9 +115,19 @@ describe('ConfigSettingsPage 优选默认模型', () => {
     api.workdirCheckWritable = vi.fn(async () => ({ ok: true }))
     api.windowGetPlatform = vi.fn(async () => 'win32')
     api.llmFetchServiceModels = vi.fn(async () => ({ ok: false, error: 'network' }))
+    api.configVerifyLlmKey = vi.fn(async () => ({ ok: true }))
     store.dispatch(setConfig(cfg))
     store.dispatch(setSettingsActiveTab('models'))
     store.dispatch(setSettingsOpen(true))
+  })
+
+  it('在手动验证前展示钥匙串说明，且仅点击验证时请求读取已保存 Key', async () => {
+    renderPage()
+    const verify = (window.api as unknown as { configVerifyLlmKey: ReturnType<typeof vi.fn> }).configVerifyLlmKey
+    expect(verify).not.toHaveBeenCalled()
+    expect(screen.getByText(/macOS 可能要求批准钥匙串访问/)).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: '验证已保存 Key' }))
+    await waitFor(() => expect(verify).toHaveBeenCalledWith('ds'))
   })
 
   it('「语言模型 → 默认」可改选快速模型并保存生效', async () => {

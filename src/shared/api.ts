@@ -376,6 +376,7 @@ export type SpaceAssistantApi = {
       locale: import('./domainTypes').AppLocale
     }>
   ) => Promise<void>
+  configVerifyLlmKey: (serviceId: string) => Promise<{ ok: boolean; code?: 'LLM_KEY_NOT_CONFIGURED' | 'LLM_KEY_STORAGE_UNAVAILABLE' | 'LLM_KEY_ACCESS_DENIED' }>
   configTestConnection: (options?: {
     serviceId?: string
     apiKey?: string

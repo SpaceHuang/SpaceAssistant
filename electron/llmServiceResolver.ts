@@ -9,7 +9,7 @@ import {
   resolveServiceForModel
 } from '../src/shared/llmModelConfig'
 import type { AppDatabase } from './database'
-import { deleteConfigValue, getConfigValue, setConfigValue } from './database'
+import { deleteConfigValue, getConfigValue, getDbConnection, runInTransaction, setConfigValue } from './database'
 import { assertValidOptionalAnthropicBaseUrl } from './claudeRequestGuards'
 import { decryptSecret, encryptSecret, isSecretStorageAvailable } from './secureApiKey'
 
@@ -70,22 +70,87 @@ function writeLlmServiceKeysMap(db: AppDatabase, map: LlmServiceKeysMap): void {
   setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.llmServiceKeys, JSON.stringify(map))
 }
 
-export function getLlmServiceApiKey(db: AppDatabase, serviceId: string): Promise<string | null> {
+export type LlmKeyAccessErrorCode = 'LLM_KEY_STORAGE_UNAVAILABLE' | 'LLM_KEY_ACCESS_DENIED'
+const failedReads = new WeakMap<AppDatabase, Map<string, { enc: string; code: LlmKeyAccessErrorCode }>>()
+
+function accessFailures(db: AppDatabase): Map<string, { enc: string; code: LlmKeyAccessErrorCode }> {
+  let failures = failedReads.get(db)
+  if (!failures) {
+    failures = new Map()
+    failedReads.set(db, failures)
+  }
+  return failures
+}
+
+export class LlmKeyAccessError extends Error {
+  constructor(public readonly code: LlmKeyAccessErrorCode, public readonly serviceId: string, serviceName?: string, locale?: string) {
+    const name = serviceName || serviceId
+    super(locale === 'en-US'
+      ? `API key for “${name}” ${code === 'LLM_KEY_STORAGE_UNAVAILABLE' ? 'cannot be read because secure storage is unavailable' : 'could not be read from secure storage'}. Verify or replace it in model service settings (${code}).`
+      : `服务「${name}」的 API Key ${code === 'LLM_KEY_STORAGE_UNAVAILABLE' ? '安全存储不可用' : '读取授权未完成'}，请到模型服务设置验证或重新输入（${code}）`)
+    this.name = 'LlmKeyAccessError'
+  }
+}
+
+function decryptLlmKey(enc: string, serviceId: string): string {
+  if (!isSecretStorageAvailable()) throw new LlmKeyAccessError('LLM_KEY_STORAGE_UNAVAILABLE', serviceId)
+  try {
+    const plain = decryptSecret(enc)
+    if (!plain) throw new Error('empty decrypted API key')
+    return plain
+  } catch {
+    throw new LlmKeyAccessError('LLM_KEY_ACCESS_DENIED', serviceId)
+  }
+}
+
+function encryptLlmKey(plain: string, serviceId: string): string {
+  if (!isSecretStorageAvailable()) throw new LlmKeyAccessError('LLM_KEY_STORAGE_UNAVAILABLE', serviceId)
+  try {
+    return encryptSecret(plain)
+  } catch {
+    throw new LlmKeyAccessError('LLM_KEY_STORAGE_UNAVAILABLE', serviceId)
+  }
+}
+
+function readLlmServiceApiKey(db: AppDatabase, serviceId: string, retry: boolean): Promise<string | null> {
   const map = readLlmServiceKeysMap(db)
   const enc = map[serviceId]
   if (!enc) return Promise.resolve(null)
-  if (!isSecretStorageAvailable()) return Promise.resolve(null)
-  try {
-    return Promise.resolve(decryptSecret(enc))
-  } catch {
-    return Promise.resolve(null)
+  const failures = accessFailures(db)
+  const cached = failures.get(serviceId)
+  if (!retry && cached?.enc === enc) {
+    const name = readLlmServices(db).find((service) => service.id === serviceId)?.name
+    return Promise.reject(new LlmKeyAccessError(cached.code, serviceId, name, getConfigValue(db, 'config.locale')))
   }
+  try { return Promise.resolve(decryptLlmKey(enc, serviceId)) }
+  catch (error) {
+    if (error instanceof LlmKeyAccessError) {
+      failures.set(serviceId, { enc, code: error.code })
+      const name = readLlmServices(db).find((service) => service.id === serviceId)?.name
+      return Promise.reject(new LlmKeyAccessError(error.code, serviceId, name, getConfigValue(db, 'config.locale')))
+    }
+    return Promise.reject(error)
+  }
+}
+
+export function getLlmServiceApiKey(db: AppDatabase, serviceId: string): Promise<string | null> {
+  return readLlmServiceApiKey(db, serviceId, false)
+}
+
+export async function verifyLlmServiceApiKey(db: AppDatabase, serviceId: string): Promise<string | null> {
+  const key = await readLlmServiceApiKey(db, serviceId, true)
+  accessFailures(db).delete(serviceId)
+  return key
 }
 
 export function setLlmServiceApiKey(db: AppDatabase, serviceId: string, plainKey: string): void {
   const map = readLlmServiceKeysMap(db)
-  map[serviceId] = encryptSecret(plainKey.trim())
+  const plain = plainKey.trim()
+  const enc = encryptLlmKey(plain, serviceId)
+  if (decryptLlmKey(enc, serviceId) !== plain) throw new LlmKeyAccessError('LLM_KEY_ACCESS_DENIED', serviceId)
+  map[serviceId] = enc
   writeLlmServiceKeysMap(db, map)
+  accessFailures(db).delete(serviceId)
 }
 
 export function removeLlmServiceApiKeys(db: AppDatabase, serviceIds: string[]): void {
@@ -95,6 +160,7 @@ export function removeLlmServiceApiKeys(db: AppDatabase, serviceIds: string[]): 
   for (const id of serviceIds) {
     if (id in map) {
       delete map[id]
+      accessFailures(db).delete(id)
       changed = true
     }
   }
@@ -401,30 +467,34 @@ export function persistLlmServices(
     }
   })
 
-  setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.llmServices, JSON.stringify(toStore))
-  setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.activeLlmServiceIds, JSON.stringify(activeLlmServiceIds))
-  const primaryActive = activeLlmServiceIds[0] ?? ''
-  if (primaryActive) setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.activeLlmServiceId, primaryActive)
-
   const keysMap = { ...existingKeys }
   if (keysPayload) {
     for (const [id, plain] of Object.entries(keysPayload)) {
       if (plain?.trim()) {
-        keysMap[id] = encryptSecret(plain.trim())
+        const trimmed = plain.trim()
+        const enc = encryptLlmKey(trimmed, id)
+        if (decryptLlmKey(enc, id) !== trimmed) throw new LlmKeyAccessError('LLM_KEY_ACCESS_DENIED', id)
+        keysMap[id] = enc
       }
     }
   }
+  const primaryActive = activeLlmServiceIds[0] ?? ''
   const newIds = new Set(services.map((s) => s.id))
   for (const id of Object.keys(keysMap)) {
     if (!newIds.has(id)) delete keysMap[id]
   }
-  writeLlmServiceKeysMap(db, keysMap)
-
   const withPresent = attachApiKeyPresent(
     toStore.map((s) => ({ ...s, apiKeyPresent: false })),
     keysMap
   )
-  syncActiveServiceMirror(db, withPresent, primaryActive)
+  runInTransaction(getDbConnection(db), () => {
+    setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.llmServices, JSON.stringify(toStore))
+    setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.activeLlmServiceIds, JSON.stringify(activeLlmServiceIds))
+    if (primaryActive) setConfigValue(db, LLM_SERVICE_CONFIG_KEYS.activeLlmServiceId, primaryActive)
+    writeLlmServiceKeysMap(db, keysMap)
+    syncActiveServiceMirror(db, withPresent, primaryActive)
+  })
+  for (const id of Object.keys(keysPayload ?? {})) accessFailures(db).delete(id)
 }
 
 export function getActiveLlmService(db: AppDatabase): {

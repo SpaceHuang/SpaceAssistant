@@ -29,8 +29,10 @@
     "archiveToWiki": "归档到 Wiki",
     "assistantReply": "助手回复",
     "retryFailedMessage": "回复未能完成。你可以重试生成，或基于已有上下文继续对话。",
+    "keyAccessFailedMessage": "模型服务凭据暂时无法读取。请先到设置验证 Key，再重试这条消息。",
     "failureReason": "失败原因",
-    "retry": "重试回复"
+    "retry": "重试回复",
+    "openModelSettings": "打开模型服务设置"
   },
   "scrollToLatest": {
     "label": "跳到最新消息"
