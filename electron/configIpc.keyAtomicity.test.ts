@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { IpcMain } from 'electron';
 import { createTempDatabase } from './database/testHelpers';
 import { getConfigValue, setConfigValue } from './database';
@@ -69,8 +69,16 @@ function makeContext(db: AppIpcContext['db']): AppIpcContext {
 
 describe('config:set API Key transaction boundary', () => {
   let cleanup: (() => void) | undefined;
+  // config:get 的 apiKeyAccessUpgradeNoticeRequired 带 process.platform === 'darwin' 守卫，
+  // 断言与运行平台无关，统一 stub 为 darwin（沿用 bashPathFork.test.ts 的恢复式写法）。
+  const platformDesc = Object.getOwnPropertyDescriptor(process, 'platform');
+
+  beforeEach(() => {
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+  });
 
   afterEach(() => {
+    if (platformDesc) Object.defineProperty(process, 'platform', platformDesc);
     cleanup?.();
     cleanup = undefined;
   });
