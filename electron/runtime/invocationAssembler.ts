@@ -21,7 +21,7 @@ import { safeAppendDiagnostic } from '../mcp/mcpDiagnostics'
 import { scheduleSessionTitleSuggestion } from '../sessionTitleSuggest'
 import { recordUserAnswerFromDecision } from '../confirmation/decisionCacheWriter'
 import { evaluateToolCallGate } from '../confirmation/toolCallGate'
-import { buildSnapshotFromDb, type McpToolSnapshot } from '../mcp/mcpToolRegistry'
+import { buildSnapshotFromDb, sanitizeMcpSnapshotForExecutors, type McpToolSnapshot } from '../mcp/mcpToolRegistry'
 import { resolveRequestLocale } from '../llmSystemPrompt'
 import { listProfiles } from '../mcp/mcpConfigStore'
 import { getSecret } from '../mcp/mcpSecretStore'
@@ -523,27 +523,47 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   }
   // 暴露面规则与门控同源同判（P3：带来源解析；嵌套交集同样适用）
   const exposure = db ? { rules: effectiveRules } : undefined
-  const mcpSnapshot: McpToolSnapshot = db
+  const mcpSnapshotRaw: McpToolSnapshot = db
     ? buildSnapshotFromDb(db, { remoteContext: materialsLane !== 'desktop' })
     : { entries: new Map(), budgetDropped: [] }
+  const mcpResolveExecutor = db
+    ? (toolName: string, manager: McpConnectionManager) => {
+        const entry = mcpSnapshotRaw.entries.get(toolName)
+        if (!entry) return undefined
+        const profile = listProfiles(db).find((p) => p.id === entry.serverId)
+        if (!profile) return undefined
+        const oauthProvider =
+          profile.auth.mode === 'oauth' ? createMcpOAuthClientProvider(db, profile) : undefined
+        return createMcpToolExecutor(entry, {
+          getSession: (serverId: string) =>
+            manager.connect(profile, async (kind) => getSecret(db, serverId, kind), { oauthProvider }),
+          getProfile: () => profile,
+          invalidateSession: (serverId: string) => manager.disconnect(serverId),
+          getRecentDiagnostics: (serverId: string) => getDiagnostics(db, serverId)
+        })
+      }
+    : undefined
+  // FR13（评审 B6/R9）：建快照后、档位分支与 plan 计算前，逐条试解析 executor，
+  // 失败条目快照层剔除（索引/deferredNames/授权面/注册表天然同步）+ warn 日志；invoke 降级继续。
+  // 全档位一致；这是 off 档「现状逐字节一致」承诺的唯一有意偏离（现状坏条目使整 invoke throw）。
+  const mcpSnapshot: McpToolSnapshot = db && mcpSnapshotRaw.entries.size > 0
+    ? sanitizeMcpSnapshotForExecutors(mcpSnapshotRaw, (entry) => {
+        const executor = mcpResolveExecutor?.(entry.mappedName, {} as McpConnectionManager)
+        return Boolean(executor) && executor!.name === entry.mappedName
+      }, (drop) => {
+        logAgentEvent('warn', 'mcp.snapshot.executor_dropped', {
+          requestId: materials.requestId,
+          sessionId: materials.sessionId,
+          lane: materialsLane,
+          mappedName: drop.mappedName,
+          reason: drop.reason
+        })
+      })
+    : mcpSnapshotRaw
   const mcp = db
     ? {
         snapshot: mcpSnapshot,
-        resolveExecutor: (toolName: string, manager: McpConnectionManager) => {
-          const entry = mcpSnapshot.entries.get(toolName)
-          if (!entry) return undefined
-          const profile = listProfiles(db).find((p) => p.id === entry.serverId)
-          if (!profile) return undefined
-          const oauthProvider =
-            profile.auth.mode === 'oauth' ? createMcpOAuthClientProvider(db, profile) : undefined
-          return createMcpToolExecutor(entry, {
-            getSession: (serverId: string) =>
-              manager.connect(profile, async (kind) => getSecret(db, serverId, kind), { oauthProvider }),
-            getProfile: () => profile,
-            invalidateSession: (serverId: string) => manager.disconnect(serverId),
-            getRecentDiagnostics: (serverId: string) => getDiagnostics(db, serverId)
-          })
-        },
+        resolveExecutor: mcpResolveExecutor!,
         executorDatabase: db
       }
     : { snapshot: mcpSnapshot }
@@ -766,7 +786,11 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(materials.getBrowserDetectContext ? { getBrowserDetectContext: materials.getBrowserDetectContext } : {}),
         ...(resolvedLocale ? { requestLocale: resolvedLocale } : {}),
         lane: materialsLane,
-        ...(materials.historyFacts ? { historyFacts: materials.historyFacts } : {})
+        ...(materials.historyFacts ? { historyFacts: materials.historyFacts } : {}),
+        // FR2：tool_search 检索域——读 ports.mcp 的实时快照（唯一事实源；装配期构建或宿主注入均可）
+        ...(((ports.mcp?.snapshot) as McpToolSnapshot | undefined) && (ports.mcp?.snapshot as McpToolSnapshot).entries.size
+          ? { mcpToolSnapshot: ports.mcp!.snapshot as McpToolSnapshot }
+          : {})
       }))
       const refreshExecutionContext = async (call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: { confirmation?: { receipt: string } }, current: Record<string, unknown>) => {
         const refreshed = {
@@ -990,6 +1014,10 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       deadlineAt?: number
       afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
       recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
+      /** FR3：延迟名集合（hostedAgentTurnHost 的 capabilities.define 并入 known + authorized）。 */
+      deferredToolNames?: ReadonlySet<string>
+      /** FR8：延迟工具未浮现直调判定（sessionLedgerForToolResult 投影查询）。 */
+      deferredUnsurfacedCheck?: (toolName: string) => boolean
       resolveRegisteredToolName?: (providerToolName: string) => string
     }) => {
       const routeId = materials.providerRouteId
@@ -1009,6 +1037,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         providerRegistry: runtime.modelProviders,
         toolRegistry,
         authorizedToolNames: input.authorizedToolNames,
+        ...(input.deferredToolNames ? { deferredToolNames: input.deferredToolNames } : {}),
+        ...(input.deferredUnsurfacedCheck ? { deferredUnsurfacedCheck: input.deferredUnsurfacedCheck } : {}),
         ...(input.resolveRegisteredToolName ? { resolveRegisteredToolName: input.resolveRegisteredToolName } : {}),
         capabilities,
         permits: runtime.safetyPermits,
@@ -1046,6 +1076,10 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
             ...(record?.autoApprovedWrite && typeof record.autoApprovedWrite === 'object' ? { autoApprovedWrite: record.autoApprovedWrite as import('../../src/shared/domainTypes').AutoApprovedWriteMeta } : {})
           }, { workspaceRoot: materials.workDir, processTool: isProcessToolName(call.toolName) })
           if (execution.auditRef) result.auditRef = execution.auditRef
+          // FR8/AD10：延迟工具未浮现直调 → 持久化面标记（不进 wire 面工具结果块，B4）
+          if (!(execution.isError ?? record?.success === false) && input.deferredUnsurfacedCheck?.(call.toolName)) {
+            result.deferredUnsurfaced = true
+          }
           return {
             location: materials.sessionEventLocation, stepId: toolStepId(call.toolCallId), result,
             requestId: materials.requestId, invocationRequestId: materials.requestId,
@@ -1106,6 +1140,10 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     createHostedTurnRuntime: (input: {
       registry?: import('../tools/plannedToolRegistry').TypedToolRegistry
       authorizedToolNames: ReadonlySet<string>
+      /** FR3：延迟名集合（并入 capabilities known + authorized，门禁簿记零上下文成本）。 */
+      deferredToolNames?: ReadonlySet<string>
+      /** FR8：延迟工具未浮现直调判定（sessionLedgerForToolResult 持久化投影查询用）。 */
+      deferredUnsurfacedCheck?: (toolName: string) => boolean
       resolveRegisteredToolName?: (providerToolName: string) => string
       hostHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
       afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
@@ -1146,6 +1184,10 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         registeredTools,
         registry,
         authorizedToolNames: input.authorizedToolNames,
+        // FR3：延迟名随依赖传入（hostedAgentTurnHost 的 capabilities.define 并入 known + authorized）
+        ...(input.deferredToolNames ? { deferredToolNames: input.deferredToolNames } : {}),
+        // FR8：延迟工具未浮现判定（sessionLedgerForToolResult 持久化投影查询用）
+        ...(input.deferredUnsurfacedCheck ? { deferredUnsurfacedCheck: input.deferredUnsurfacedCheck } : {}),
         ...(input.hostHistory ? { hostHistory: input.hostHistory } : {}),
         ...(input.afterToolResult ? { afterToolResult: input.afterToolResult } : {}),
         ...(input.maxToolRounds !== undefined ? { maxToolRounds: input.maxToolRounds } : {}),

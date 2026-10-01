@@ -8,6 +8,8 @@ export interface AgentToolResultInput {
   diagnostic?: unknown
   error?: string
   userMessage?: string
+  /** MCP 延迟加载观测（AD10）：延迟工具未浮现直调标记；仅持久化/事件面，不进 wire 面（B4）。 */
+  deferredUnsurfaced?: true
 }
 
 import { projectAgentToolResultForSink, type ProcessProjectionOptions } from './processResultProjection'

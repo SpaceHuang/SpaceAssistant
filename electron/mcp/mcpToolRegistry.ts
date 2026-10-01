@@ -236,6 +236,36 @@ export type McpToolSnapshot = {
   entries: Map<string, McpToolSnapshotEntry>
   /** 因上下文预算未注入的工具（供设置页展示）。 */
   budgetDropped: Array<{ mappedName: string; reason: 'count' | 'bytes' }>
+  /** FR13：装配期快照清洗剔除的 executor 不可解析条目（budgetDiagnostics source:'executor' 数据源）。 */
+  executorDropped?: Array<{ mappedName: string; reason: string }>
+}
+
+/** FR13（评审 B6/R9）：装配期快照清洗——executor 不可解析条目在快照层剔除，
+ * 坏条目不进快照 → 索引/deferredNames/授权面/每 turn 注册表天然同步，无需额外簿记；
+ * 全档位一致（off/auto/always），invoke 降级继续不中断。禁止「留在快照仅跳过注册」的弱剔除。 */
+export function sanitizeMcpSnapshotForExecutors(
+  snapshot: McpToolSnapshot,
+  canResolve: (entry: McpToolSnapshotEntry) => boolean,
+  onDrop?: (drop: { mappedName: string; reason: string }) => void
+): McpToolSnapshot {
+  const entries = new Map<string, McpToolSnapshotEntry>()
+  const executorDropped: Array<{ mappedName: string; reason: string }> = []
+  for (const [name, entry] of snapshot.entries) {
+    let ok = false
+    try {
+      ok = canResolve(entry)
+    } catch {
+      ok = false
+    }
+    if (ok) {
+      entries.set(name, entry)
+    } else {
+      const drop = { mappedName: name, reason: 'executor_unavailable' }
+      executorDropped.push(drop)
+      onDrop?.(drop)
+    }
+  }
+  return { entries, budgetDropped: snapshot.budgetDropped, executorDropped }
 }
 
 export function mayBuildMcpToolSnapshot(profiles: McpServerProfile[], remoteContext = false): boolean {

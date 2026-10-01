@@ -79,6 +79,8 @@ export interface McpServerProfile {
   }
   http?: { endpoint: string; /** 显式允许该服务解析/连接到私网地址（默认 false，需 https）。 */ allowPrivateNetwork?: boolean }
   enabledToolNames: string[]
+  /** FR6（对齐 Claude Code alwaysLoad 语义）：true = 该服务工具始终全量注入（跳过延迟与索引）；缺省跟随全局档位。 */
+  alwaysLoad?: boolean
   discoveredAt?: string
   discoveredProtocolVersion?: string
   status: McpConnectionStatus

@@ -49,6 +49,8 @@ import { computeDiffLineStats } from '../src/shared/writeDiffStats'
 import { sessionDisplayNameRaw } from '../src/shared/sessionDisplay'
 import { evaluateFileToolAutoApproval } from './tools/writeFileAutoApproval'
 import { buildToolCapabilityConventionHint } from '../src/shared/skillPrompt'
+import { buildMcpToolCatalogSection } from '../src/shared/toolCatalogPrompt'
+import { MCP_DEFERRED_SCHEMA_BUDGET_BYTES_DEFAULT } from '../src/shared/domainTypes'
 import { getSkillByName } from './skills/skillScanner'
 import { getCachedSkills } from './skills/skillCache'
 import { recordStepUsage, recordTurnSummary, type UsageTurnOutcome } from './usageStats/usageStatsRecorder'
@@ -170,7 +172,7 @@ import {
   releaseWritePath,
   releaseAllWritePathsForSession
 } from './toolWriteConflict'
-import { computeEffectiveTools, authorizeToolCall } from './effectiveTools'
+import { computeDeferredPlan, computeEffectiveTools, authorizeToolCall } from './effectiveTools'
 import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from './toolRevocationRegistry'
 import { buildCommandRetryKey, shouldStopToolRetry } from './toolErrorRetryPolicy'
 import type { ContextMeter } from '../src/shared/contextMeterService'
@@ -224,6 +226,10 @@ export type RunToolChatSessionArgs = {
   onHostedTurnHandoff?: (input: Readonly<{
     request: PreparedModelCall['request']
     authorizedToolNames: ReadonlySet<string>
+    /** FR3：延迟名集合（并入 capabilities known + authorized，门禁簿记零上下文成本）。 */
+    deferredToolNames?: ReadonlySet<string>
+    /** FR8：延迟工具未浮现直调判定（sessionLedger 持久化投影查询用）。 */
+    deferredUnsurfacedCheck?: (toolName: string) => boolean
     resolveRegisteredToolName: (providerToolName: string) => string
     windowId?: string
     maxToolRounds?: number
@@ -793,6 +799,24 @@ async function runToolChatSessionInner(
     const processData = output?.data && typeof output.data === 'object' && !Array.isArray(output.data)
       ? output.data as Record<string, unknown>
       : undefined
+    // FR8/§6.4：tool_search 成功后并入命中名（surfacedNames）；延迟工具未浮现直调 → deferredUnsurfaced 观测
+    if (call.toolName === 'tool_search' && !(result.isError ?? output?.success === false)) {
+      const matches = output?.data && typeof output.data === 'object' && !Array.isArray(output.data)
+        ? (output.data as { matches?: Array<{ name?: unknown }> }).matches
+        : undefined
+      for (const match of Array.isArray(matches) ? matches : []) {
+        if (match && typeof match.name === 'string') surfacedNames.add(match.name)
+      }
+    }
+    if (deferredUnsurfacedCheck(call.toolName) && !(result.isError ?? output?.success === false)) {
+      surfacedNames.add(call.toolName)
+      logAgentEvent('info', 'tool.deferred_unsurfaced', {
+        requestId: args.requestId,
+        sessionId: args.sessionId,
+        toolUseId: call.toolCallId,
+        toolName: call.toolName
+      })
+    }
     if (isProcessToolName(call.toolName)) {
       let serialized = 'null'
       try {
@@ -930,6 +954,18 @@ async function runToolChatSessionInner(
   const exposureRules = hostExposureRules as import('../src/shared/confirmation/types').PolicyRule[] | undefined
   /** 请求级 MCP 工具快照：仅桌面 lane 注入（装配期构建，仍为首循环前）。 */
   const mcpSnapshot: McpToolSnapshot = hostMcp?.snapshot ?? { entries: new Map(), budgetDropped: [] }
+  // FR5/§6.5：延迟加载计划（off 档 = 现状路径；档位/阈值取自 ToolsConfig，缺省 off/16 KiB）
+  const deferredMode = toolsConfig.mcpDeferredLoading ?? 'off'
+  const deferredThresholdBytes = toolsConfig.mcpDeferredSchemaBudgetBytes ?? MCP_DEFERRED_SCHEMA_BUDGET_BYTES_DEFAULT
+  const mcpProfiles = hostMcp?.executorDatabase
+    ? listProfiles(hostMcp.executorDatabase as Parameters<typeof listProfiles>[0])
+    : []
+  const deferredPlan = computeDeferredPlan({
+    mcpSnapshot,
+    profiles: mcpProfiles,
+    mode: deferredMode,
+    thresholdBytes: deferredThresholdBytes
+  })
   const effectiveTools = computeEffectiveTools({
     builtinConfig: toolsConfig,
     feishuConfig,
@@ -939,9 +975,23 @@ async function runToolChatSessionInner(
     remoteContext,
     exposureRules,
     mcpSnapshot,
-    trim: toolsTrim
+    trim: toolsTrim,
+    deferredPlan
   })
-  const { tools, toolNames, authorizedToolNames, compatToInternal } = effectiveTools
+  const { tools, toolNames, authorizedToolNames, compatToInternal, deferredToolNames } = effectiveTools
+  if (effectiveTools.deferredDegradedToEager && deferredPlan.mode === 'deferred') {
+    // O4（边界 11）：tool_search 被裁出广告面，延迟计划整体失效回退 eager（agentLogger warn，不进 wire 面与会话事件流）
+    logAgentEvent('warn', 'mcp.deferredDegradedToEager', {
+      requestId,
+      sessionId,
+      lane: effectiveLane,
+      deferredNames: [...deferredPlan.deferredNames]
+    })
+  }
+  // FR8/D2 观测：本 invoke 内 tool_search 成功下发的延迟工具名；延迟工具执行时不在集合内 → deferredUnsurfaced
+  const surfacedNames = new Set<string>()
+  const deferredUnsurfacedCheck = (toolName: string): boolean =>
+    deferredToolNames.has(toolName) && !surfacedNames.has(toolName)
   if (toolNames.includes('browser')) {
     stagehandService.resetInferenceCount(sessionId)
   }
@@ -969,10 +1019,18 @@ async function runToolChatSessionInner(
   }
   const memoryContent = getCachedMemoryContent()
   const baseSystemWithRecovery = typeof system === 'string' && system.trim().length > 0 ? system : undefined
-  const capabilityHint = buildToolCapabilityConventionHint(toolNames)
+  const mcpDeferredCount = deferredToolNames.size
+  const capabilityHint = buildToolCapabilityConventionHint(toolNames, { mcpDeferredCount })
   const systemWithTools = baseSystemWithRecovery ? `${baseSystemWithRecovery}\n\n${capabilityHint}` : capabilityHint
   // P2：locale 装配期定值（请求优先 / 库回退在装配器完成），循环内不再查库
   const locale = payloadLocale as AppLocale
+  // FR1/§6.2：延迟生效时构建「MCP 工具索引」区块（无延迟工具时为 null，不产生空区块）
+  const mcpCatalog = deferredToolNames.size > 0
+    ? buildMcpToolCatalogSection(
+        deferredPlan.mode === 'deferred' ? deferredPlan.deferredEntries : [],
+        args.contextWindow ?? 200_000
+      )
+    : null
   const systemPrompt = buildFinalSystemPrompt({
     system: systemWithTools,
     memoryContent,
@@ -980,7 +1038,8 @@ async function runToolChatSessionInner(
     locale,
     hasImageAttachments: hasImageAttachments ?? false,
     skillCatalog: getCachedSkills(userDataDir, resolveWorkDir?.() ?? initialWorkDir),
-    contextWindow: args.contextWindow
+    contextWindow: args.contextWindow,
+    ...(mcpCatalog ? { mcpCatalog } : {})
   })
   // requestId 按一次 provider 请求尝试定义；同一轮的 header/context/usage 必须共享它。
   const messagesStripped = stripThinking(messagesForApi)
@@ -1052,6 +1111,9 @@ async function runToolChatSessionInner(
             authorizedToolNames,
             resolveRegisteredToolName: (providerToolName) => compatToInternal.get(providerToolName) ?? providerToolName,
             afterToolResult,
+            // FR3/A 方案：延迟名随依赖传入，capabilities.define 并入 known + authorized（门禁簿记，零上下文成本）
+            deferredToolNames,
+            deferredUnsurfacedCheck,
             windowId: contextWindowId,
             ...(args.maxToolLoopRounds !== undefined ? { maxToolRounds: args.maxToolLoopRounds } : {}),
             ...(args.hostHistory ? { hostHistory: args.hostHistory } : {}),

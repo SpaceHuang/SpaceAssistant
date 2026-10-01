@@ -105,6 +105,8 @@ export interface ToolExecutionContext {
   remoteContext?: RemoteContext
   /** 用户已在确认卡片（或飞书确认）中明确批准执行本次工具调用 */
   toolUserConfirmed?: boolean
+  /** MCP 工具快照（装配期冻结）；tool_search 检索域（需求：MCP 工具延迟加载 §6.3）。 */
+  mcpToolSnapshot?: import('../mcp/mcpToolRegistry').McpToolSnapshot
   getBrowserDetectContext?: () => BrowserDetectContext
   /** 本次请求的产品语言（resolveRequestLocale 结果）；toolkit 能力的 env.agent/env.time 用（评审 S2） */
   requestLocale?: string
