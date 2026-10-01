@@ -12,6 +12,7 @@ import { PROGRESS_RAW_MAX_BYTES } from '../../src/shared/terminalScrollback'
 import { ACCIDENT_HEX } from '../processOutput/testFixtures'
 import { SHELL_OUTPUT_TRUST_SUSPECT_NOTICE } from '../../src/shared/shellToolDisplay'
 import { projectAgentToolResultForSink } from '../../src/shared/processResultProjection'
+import { WINDOWS_POWERSHELL_PRELUDE, WINDOWS_POWERSHELL_PROFILE, buildShellArgs } from '../shell/shellProfiles'
 
 vi.mock('../shell/shellAgentLogger', () => ({
   logShellAgentEvent: vi.fn()
@@ -21,7 +22,9 @@ import { logShellAgentEvent } from '../shell/shellAgentLogger'
 
 const isWindows = process.platform === 'win32'
 // Windows 侧每个用例都要真实启动 powershell.exe（本机 ~2s），冷机 CI 会明显更慢。
-const SPAWN_TEST_TIMEOUT_MS = 45_000
+// 2026-10-01 CI 实测：冷 runner 首个真实执行用例吃到 45s+（超时）、次用例 23s、之后 200ms 级，
+// warmup 只覆盖引擎启动还不够，预算需给到分钟级兜底 runner 抖动。
+const SPAWN_TEST_TIMEOUT_MS = 120_000
 
 /**
  * 产品目标方言固定为 Windows PowerShell 5.1 与 POSIX Bash，两者命令文本不通用。
@@ -103,8 +106,11 @@ describe('runShellExecutor', () => {
   beforeAll(async () => {
     if (!isWindows) return
     // PowerShell 首次启动要构建模块分析缓存，CI 冷机可能远超单个用例预算；先预热一次。
+    // 必须走与 executor 完全一致的参数形态（-EncodedCommand + prelude + 真实命令），只跑
+    // `exit 0` 覆盖不到实际用例的首次执行开销（2026-10-01 CI：warmup 后首个用例仍 45s 超时）。
     await new Promise<void>((resolve) => {
-      const warmup = spawn('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', 'exit 0'], {
+      const args = buildShellArgs(WINDOWS_POWERSHELL_PROFILE, 'Write-Output warmup_ok', WINDOWS_POWERSHELL_PRELUDE)
+      const warmup = spawn(WINDOWS_POWERSHELL_PROFILE.executable, args, {
         stdio: 'ignore',
         windowsHide: true
       })
