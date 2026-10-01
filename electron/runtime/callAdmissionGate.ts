@@ -341,9 +341,29 @@ export class CallAdmissionGate {
   }
 
   /** 让出运行槽但保留已受理身份；恢复不增加小时启动计数。 */
+  isActiveTicket(ticket: AdmissionTicket): boolean {
+    return this.activeTickets.has(ticket)
+  }
+
   park(ticket: AdmissionTicket): ParkedAdmission | undefined {
-    if (!this.activeTickets.has(ticket)) return undefined
-    if (!ticket.release()) return undefined
+    if (!this.activeTickets.has(ticket)) {
+      logAgentEvent('warn', 'admission.park.failed', {
+        requestId: ticket.request.requestId,
+        ...(ticket.request.turnId ? { turnId: ticket.request.turnId } : {}),
+        lane: ticket.request.lane,
+        cause: 'ticket-not-active'
+      })
+      return undefined
+    }
+    if (!ticket.release()) {
+      logAgentEvent('warn', 'admission.park.failed', {
+        requestId: ticket.request.requestId,
+        ...(ticket.request.turnId ? { turnId: ticket.request.turnId } : {}),
+        lane: ticket.request.lane,
+        cause: 'release-persistence-failed'
+      })
+      return undefined
+    }
     this.activeTickets.delete(ticket)
     const token = {}
     this.parked.set(token, ticket.request)
