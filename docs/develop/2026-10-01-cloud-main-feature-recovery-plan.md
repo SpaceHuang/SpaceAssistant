@@ -220,7 +220,7 @@ npm run pack:mac
 | 2 规则档位 | 完成 | action precedence 表、policy floor、设置持久化/i18n、loose allow 单独结论 |
 | 3 审批解释与 trust | 完成 | 审批解释、脚本 SHA-256 身份、内容变化/会话隔离/撤权/拒绝写入测试、脱敏证据 |
 | 4 归因算法 | 完成 | 指标矩阵、守恒/估算版本/不伪造事实测试；0%/部分/100% 覆盖率定义和版本混合测试 |
-| 5 usage 事实层 | 完成或待外部验收 | v27→新版本迁移、SDK exactly-once、无 usage 不记零值；桌面/远程/Butler 本机入口各自写入 SQLite 的证据；AT17 真实飞书/微信收发后 SQLite 归因列及工具维度列验收记录 |
+| 5 usage 事实层 | 完成 | v27→v28 迁移、SDK exactly-once、无 usage 不记零值；桌面/远程/Butler 本机入口各自写入 SQLite 的证据；AT17 真实微信收发后 SQLite 归因列及工具维度列验收记录（见阶段 5 实施记录） |
 | 6 查询和 UI | 完成 | IPC ownership、跨会话隔离、同筛选 KPI 与覆盖率、0%/部分/100% 和版本混合呈现、精确/估算区分、i18n |
 | 7 grep fallback/dev | 完成 | scope/security parity、仅 unavailable 降级、取消/超时不降级 |
 | 8 集成与包 | 完成 | 全量测试、类型/边界/i18n/build、macOS 双架构包产物检查 |
