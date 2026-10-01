@@ -59,4 +59,18 @@ describe('useLlmServiceDrafts', () => {
     rerender({ open: true })
     expect(result.current.state.drafts.a!.name).toBe('Service A')
   })
+
+  it('clears a temporary key when settings close or submission fails', () => {
+    const cfg = makeCfg()
+    const { result, rerender } = renderHook(
+      ({ open }: { open: boolean }) => useLlmServiceDrafts(open, cfg, ['m1']),
+      { initialProps: { open: true } }
+    )
+    act(() => result.current.patchDraft('a', { apiKeyDraft: 'temporary-secret' }))
+    act(() => result.current.clearKeyDrafts())
+    expect(result.current.state.drafts.a!.apiKeyDraft).toBe('')
+    act(() => result.current.patchDraft('a', { apiKeyDraft: 'temporary-secret' }))
+    rerender({ open: false })
+    expect(JSON.stringify(result.current.state)).not.toContain('temporary-secret')
+  })
 })

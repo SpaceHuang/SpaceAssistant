@@ -4,7 +4,7 @@ import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
 import { getConfigValue } from './database'
 import { createAnthropicClient } from './anthropicClientFactory'
-import { resolveTestConnectionCredentials } from './llmServiceResolver'
+import { LlmKeyAccessError, resolveTestConnectionCredentials, verifyLlmServiceApiKey } from './llmServiceResolver'
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
@@ -65,7 +65,8 @@ vi.mock('./llmModelListFetcher', () => ({
 
 vi.mock('./llmServiceResolver', async (importActual) => ({
   ...(await importActual<typeof import('./llmServiceResolver')>()),
-  resolveTestConnectionCredentials: vi.fn()
+  resolveTestConnectionCredentials: vi.fn(),
+  verifyLlmServiceApiKey: vi.fn()
 }))
 
 const mockIpcMain = () => {
@@ -177,5 +178,30 @@ describe('config:test-connection IPC handler', () => {
     )) as { success: boolean; error?: string }
     expect(result.success).toBe(false)
     expect(messagesCreate).not.toHaveBeenCalled()
+  })
+
+  it('does not return provider error text that echoes a draft key', async () => {
+    messagesCreate.mockRejectedValueOnce(new Error('provider rejected sk-sensitive-draft'))
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, makeCtx())
+    const handler = ipc.getHandler('config:test-connection')!
+    const result = await handler({}, { serviceId: 's1', apiKey: 'sk-sensitive-draft' })
+    expect(JSON.stringify(result)).not.toContain('sk-sensitive-draft')
+    expect(result).toMatchObject({ success: false })
+  })
+
+  it('returns only verification status for a saved key', async () => {
+    vi.mocked(verifyLlmServiceApiKey).mockResolvedValueOnce('sk-sensitive-saved')
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, makeCtx())
+    const handler = ipc.getHandler('config:verify-llm-key')!
+    const result = await handler({}, 's1')
+    expect(result).toEqual({ ok: true })
+    expect(JSON.stringify(result)).not.toContain('sk-sensitive-saved')
+  })
+
+  it('returns only a stable code when saved-key verification fails', async () => {
+    vi.mocked(verifyLlmServiceApiKey).mockRejectedValueOnce(new LlmKeyAccessError('LLM_KEY_ACCESS_DENIED', 's1'))
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, makeCtx())
+    const result = await ipc.getHandler('config:verify-llm-key')!({}, 's1')
+    expect(result).toEqual({ ok: false, code: 'LLM_KEY_ACCESS_DENIED' })
   })
 })

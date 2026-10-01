@@ -99,6 +99,7 @@ const api: SpaceAssistantApi = {
     return () => ipcRenderer.removeListener('exposure:tools-changed', fn)
   },
   configSet: (payload) => ipcRenderer.invoke('config:set', payload),
+  configVerifyLlmKey: (serviceId: string) => ipcRenderer.invoke('config:verify-llm-key', serviceId),
   configTestConnection: (options?: {
     serviceId?: string
     apiKey?: string

@@ -73,6 +73,7 @@ export function LlmServiceCard({
   const { t } = useTypedTranslation('config')
   const { t: tCommon } = useTypedTranslation('common')
   const [testing, setTesting] = useState(false)
+  const [verifying, setVerifying] = useState(false)
   const expanded = draft.expanded
 
   const testConnection = async () => {
@@ -93,6 +94,19 @@ export function LlmServiceCard({
       else message.error(r.error ?? t('messages.connectionFailed'))
     } finally {
       setTesting(false)
+    }
+  }
+
+  const verifySavedKey = async () => {
+    setVerifying(true)
+    try {
+      const result = await window.api.configVerifyLlmKey(draft.id)
+      if (result.ok) message.success(t('llmService.keyVerified'))
+      else message.error(t(result.code === 'LLM_KEY_STORAGE_UNAVAILABLE' ? 'llmService.storageUnavailable' : 'llmService.keyAccessFailed'))
+    } catch {
+      message.error(t('llmService.keyAccessFailed'))
+    } finally {
+      setVerifying(false)
     }
   }
 
@@ -224,6 +238,7 @@ export function LlmServiceCard({
           </div>
           <div className="llm-service-key-field">
             <div className="llm-service-field-label">{t('llmService.apiKeyLabel')}</div>
+            <p className="llm-service-key-access-notice">{t('llmService.keyAccessNotice')}</p>
             <Input.Password
               placeholder="sk-ant-..."
               autoComplete="off"
@@ -235,6 +250,11 @@ export function LlmServiceCard({
                 ? t('llmService.apiKeyHintConfigured')
                 : t('llmService.apiKeyHintEmpty')}
             </div>
+            {draft.apiKeyPresent && !draft.apiKeyDraft.trim() ? (
+              <Button size="small" loading={verifying} onClick={() => void verifySavedKey()}>
+                {t('llmService.verifySavedKey')}
+              </Button>
+            ) : null}
           </div>
           <div className="llm-service-url-field">
             <div className="llm-service-field-label">{t('llmService.baseUrlLabel')}</div>
