@@ -28,6 +28,7 @@ import { readFeishuConfigFromDb, persistFeishuConfig } from '../feishu/feishuIpc
 import { readWeChatConfigFromDb, persistWeChatConfig } from '../wechat/weChatIpc'
 import { rebuildAppMenu } from '../menu'
 import { createHostTranslator } from '../i18n/hostTranslate'
+import { APP_VERSION } from '../../src/shared/appMeta'
 import { rejectPendingConfirmsForToolAcrossLanes } from '../toolConfirmRegistry'
 import { revokeToolForAllLanes } from '../toolRevocationRegistry'
 
@@ -52,6 +53,10 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
     const migrated = migrateMultiServiceModelConfig(ctx.db, models)
     models = migrated.models
     const llmServices = migrated.services
+    const apiKeyAccessUpgradeNoticeRequired =
+      process.platform === 'darwin' &&
+      llmServices.some((service) => service.apiKeyPresent) &&
+      getConfigValue(ctx.db, CONFIG_KEYS.apiKeyAccessNoticeVersion) !== APP_VERSION
     const activeLlmServiceIds = migrated.activeLlmServiceIds
     const activeLlmServiceId = activeLlmServiceIds[0] ?? ''
     const activeService = llmServices.find((s) => s.id === activeLlmServiceId) ?? llmServices[0]
@@ -126,8 +131,14 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       workDirProfiles,
       activeWorkDirProfileId,
       browser,
-      shell
+      shell,
+      apiKeyAccessUpgradeNoticeRequired
     } as AppConfig)
+  })
+
+  ipcMain.handle('config:ack-key-access-upgrade-notice', async (): Promise<void> => {
+    setConfigValue(ctx.db, CONFIG_KEYS.apiKeyAccessNoticeVersion, APP_VERSION)
+    ctx.db.flushSave()
   })
 
   ipcMain.handle('config:verify-llm-key', async (_e, serviceId: string): Promise<{ ok: boolean; code?: string }> => {
@@ -136,6 +147,10 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
     }
     try {
       const key = await verifyLlmServiceApiKey(ctx.db, serviceId)
+      if (key) {
+        setConfigValue(ctx.db, CONFIG_KEYS.apiKeyAccessNoticeVersion, APP_VERSION)
+        ctx.db.flushSave()
+      }
       return key ? { ok: true } : { ok: false, code: 'LLM_KEY_NOT_CONFIGURED' }
     } catch (error) {
       return { ok: false, code: error instanceof LlmKeyAccessError ? error.code : 'LLM_KEY_ACCESS_DENIED' }
@@ -464,6 +479,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
         setConfigValue(ctx.db, CONFIG_KEYS.locale, payload.locale)
         localeToRebuild = payload.locale
       }
+      if (atomicKeySave) setConfigValue(ctx.db, CONFIG_KEYS.apiKeyAccessNoticeVersion, APP_VERSION)
       stripPlanConfigFromDbIfNeeded(ctx.db)
       }
       try {

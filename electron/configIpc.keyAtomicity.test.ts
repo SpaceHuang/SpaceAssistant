@@ -75,6 +75,29 @@ describe('config:set API Key transaction boundary', () => {
     cleanup = undefined;
   });
 
+  it('announces an app-version change once when a saved API Key exists', async () => {
+    const temp = createTempDatabase('sa-config-key-upgrade-notice-');
+    cleanup = temp.cleanup;
+    const db = temp.db;
+    const serviceId = 'service-1';
+    persistLlmServices(
+      db,
+      [{ id: serviceId, name: 'Service', baseUrl: '', apiKeyPresent: false, supportedModelIds: ['model-1'] }],
+      [serviceId],
+      { [serviceId]: 'saved-secret' },
+    );
+
+    const ipc = makeIpc();
+    registerConfigIpc(ipc as unknown as IpcMain, makeContext(db));
+    const getConfig = ipc.getHandler('config:get')!;
+
+    const upgradedConfig = await getConfig();
+    expect(upgradedConfig).toMatchObject({ apiKeyAccessUpgradeNoticeRequired: true });
+    await ipc.getHandler('config:ack-key-access-upgrade-notice')!();
+    const sameVersionConfig = await getConfig();
+    expect(sameVersionConfig).toMatchObject({ apiKeyAccessUpgradeNoticeRequired: false });
+  });
+
   it('keeps the old key and service metadata when a later model validation fails', async () => {
     const temp = createTempDatabase('sa-config-key-atomic-');
     cleanup = temp.cleanup;
@@ -146,5 +169,8 @@ describe('config:set API Key transaction boundary', () => {
     expect(JSON.parse(getConfigValue(db, 'config.models') ?? '[]')).toEqual([
       oldModel,
     ]);
+    await expect(ipc.getHandler('config:get')!()).resolves.toMatchObject({
+      apiKeyAccessUpgradeNoticeRequired: true,
+    });
   });
 });

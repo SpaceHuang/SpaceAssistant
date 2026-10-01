@@ -307,6 +307,7 @@ export type SpaceAssistantApi = {
   }) => Promise<{ mimeType: string; dataBase64: string } | { error: string }>
 
   configGet: () => Promise<AppConfig>
+  configAckKeyAccessUpgradeNotice: () => Promise<void>
   /** exposure 清单：主进程读 DB 按链路求值可见工具名（渲染端薄壳消费，不上行 config）。 */
   getToolExposureList: (payload: { lane: 'desktop' | 'wechat' | 'feishu' }) => Promise<string[]>
   /** 配置变更后主进程重推桌面链路清单。 */
