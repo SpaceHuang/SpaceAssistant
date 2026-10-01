@@ -9,6 +9,6 @@ export function validateDesktopReadV1(input: { facts: ContentFacts; context: Exe
   const allowed: ReadTargetKind[] = facts.toolName === 'grep'
     ? ['file', 'directory', 'symlink', 'missing']
     : ['file', 'symlink', 'missing']
-  if (!allowed.includes(input.targetKind)) return { type: 'deny', ruleId: 'read-v1-target-unsupported', reason: 'V1 仅支持单个显式文件目标' }
+  if (!allowed.includes(input.targetKind)) return { type: 'deny', ruleId: 'read-v1-target-unsupported', reason: '读取目标类型不支持该工具（read_file 仅文件；grep 支持文件与目录）' }
   return undefined
 }

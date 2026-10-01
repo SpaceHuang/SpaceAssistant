@@ -312,6 +312,17 @@ describe('敏感条目明示（阶段 H，§7.10，AC-39~43）', () => {
     expect(byName.get('secrets')).toMatchObject({ kind: 'directory', sensitive: true })
   })
 
+  it("P2-1：大小写变体（.ENV / Secrets）同样进入敏感明示名单（与排除口径一致）", () => {
+    const root = tempDir()
+    dirs.push(root)
+    fs.writeFileSync(path.join(root, '.ENV'), 'SECRET=1')
+    fs.mkdirSync(path.join(root, 'Secrets'), { recursive: true })
+    const plan = planGrepInvocation({ workDir: root, searchPath: path.resolve(root), args: { includeIgnored: false, outputMode: 'files_with_matches', ignoreCase: false, showLineNumber: true, multiline: false, headLimit: 100 } })
+    const names = plan.scope.skipped.filter((x) => x.sensitive).map((x) => x.name)
+    expect(names).toContain('.ENV')
+    expect(names).toContain('Secrets')
+  })
+
   it('H1：explicitSensitiveHit=true（显式点名敏感路径）时不产生敏感 skipped 条目（AC-41）', () => {
     const root = setupRootWithSensitive()
     const plan = planGrepInvocation({ workDir: root, searchPath: path.join(root, '.env'), args: baseArgs })

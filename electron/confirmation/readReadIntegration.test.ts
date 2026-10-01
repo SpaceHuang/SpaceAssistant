@@ -345,4 +345,31 @@ describe('V1 confirmed read executor integration', () => {
       await fs.rm(root, { recursive: true, force: true })
     }
   })
+
+  it('敏感目录 grep：确认注册→兑现 subtree permit→executor 放行并明示 sensitivePathHit（P0-1 闭环）', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-e2e-grep-dir-')))
+    try {
+      // secrets/ 内的目录：isSensitivePath 经 sep+secrets+sep 命中 → path-sensitive-read-confirm（confirm-every-time，locked）
+      const targetDir = path.join(root, 'secrets', 'sub')
+      await fs.mkdir(targetDir, { recursive: true })
+      await fs.writeFile(path.join(targetDir, 'inner.txt'), 'CONFIRMED_DIR_NEEDLE\n')
+      const registry = new ReadConfirmationRegistry()
+      const input = { pattern: 'CONFIRMED_DIR_NEEDLE', path: targetDir, output_mode: 'content' }
+      const requestId = 'grep-dir-confirm-req'
+      const toolUseId = 'grep-dir-confirm-tool'
+      const gate = await evaluateToolCallGate(gateDeps(root, input, requestId, toolUseId, registry, 'grep'))
+      console.log('DBG-DECISION:', JSON.stringify(gate.decision))
+      expect(gate.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', ruleId: 'path-sensitive-read-confirm' })
+      expect(gate.readPathFact?.targetKind).toBe('directory')
+      const permit = finalizeReadConfirmation({ toolName: 'grep', toolInput: input, requestId, toolUseId, outcome: 'approved', answerer: 'user', readPathFact: gate.readPathFact, approvedTargets: gate.readTargetMapping }, registry)
+      expect(permit).toBeDefined()
+      expect(permit!.targets[0]).toMatchObject({ targetKind: 'directory', scope: 'subtree' })
+      const result = await grepExecutor.execute(input, executorContext(root, requestId, toolUseId, permit))
+      expect(result.success).toBe(true)
+      expect(result.data?.output).toContain('inner.txt')
+      expect(result.data).toMatchObject({ sensitivePathHit: true })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
 })

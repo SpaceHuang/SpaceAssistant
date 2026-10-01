@@ -1049,10 +1049,10 @@ export type GrepExecArgs = {
   multiline: boolean
   headLimit: number
   /**
-   * R6：解除默认忽略名单（GREP_DEFAULT_IGNORES）与隐藏条目过滤（--hidden）。
-   * 不解除 ignore 文件（.gitignore 等，rg 默认尊重）——后者由设置项 grepSearchGitignored
-   * 经 --no-ignore-vcs 控制（§1.5 订正：原注释声称对齐 -uu 落了一半，--no-ignore 从未推送）。
-   * 敏感路径不由此开关解除。
+   * R6：解除默认忽略名单（GREP_DEFAULT_IGNORES）与隐藏条目过滤（--hidden），
+   * 并经 noIgnoreVcs（与设置项 grepSearchGitignored 的 OR，§7.9）追加 --no-ignore-vcs 解除 .gitignore 等
+   * 版本库忽略规则；不解除 .ignore/.rgignore（越界的 --no-ignore 不推）。
+   * 敏感路径不由此开关解除。（§1.5 订正：原注释声称对齐 -uu 落了一半，--no-ignore 从未推送）
    */
   includeIgnored: boolean
 }
@@ -1268,7 +1268,7 @@ export async function grepWithRg(
     if (args.context != null && args.context > 0) rgArgs.push('-C', String(args.context))
     if (args.multiline) rgArgs.push('-U', '--multiline-dotall')
   }
-  // I4（§7.11 子项 2，D14）：超长行「行首截断 + 明示标注」，--max-columns 按显示列宽计（组 11b 实测）；
+  // I4（§7.11 子项 2，D14）：超长行「行首截断 + 明示标注」，--max-columns 按码点计（评审 P1-2 实测订正）；
   // preview 实测为「行首 + 截断标注」（组 11），与 walk 侧 clampLine 同形态
   rgArgs.push('--max-columns', '300')
   rgArgs.push('--max-columns-preview')
@@ -1292,8 +1292,15 @@ export async function grepWithRg(
   const searchRelUsable = !path.isAbsolute(searchRelToWorkDir) && !searchRelToWorkDir.startsWith('..')
   const rgSearchArg = searchRelUsable ? (searchRelToWorkDir || '.') : searchPath
   const stripDotPrefix = searchRelUsable && (!searchRelToWorkDir || searchRelToWorkDir === '.')
-  // 有读取许可时只从已打开目标读取：类 Unix 继承 fd，Windows 通过 stdin 流传递句柄内容。
-  rgArgs.push(stableFileOnWindows ? '-' : openedFileFd !== undefined ? '/dev/fd/3' : rgSearchArg)
+  // P1-3（评审）：相对路径化后，以 - 开头的目录名（如 ./-scripts 的相对形态 "-scripts"）会被 rg 吞为
+  // 标志位——挂起或搜错范围。位置参数前统一插 "--" 终止选项解析（stdin/fd 形态不经此路径）。
+  if (stableFileOnWindows) {
+    rgArgs.push('-')
+  } else if (openedFileFd !== undefined) {
+    rgArgs.push('/dev/fd/3')
+  } else {
+    rgArgs.push('--', rgSearchArg)
+  }
   return await new Promise((resolve) => {
     const proc = spawnProcess(binaryPath, rgArgs, {
       cwd: workDir,
@@ -1397,7 +1404,8 @@ export async function grepWithRg(
       else if (code !== 0 && code !== 1) finish({ kind: 'failed', exitCode: code, message: sanitizeToolOutputText(stderr.trim().slice(0, 4000) || 'ripgrep 返回非成功状态', 'grep') })
       else {
         let result = out.trimEnd()
-        if (openedFile) result = mapOpenedFileGrepOutput(result, searchPath, args.outputMode)
+        // I6（§7.11 子项 1）：stdin 映射目标随搜索根相对化（workDir 内 → 相对路径，与 walk 同形态，AC-49）
+        if (openedFile) result = mapOpenedFileGrepOutput(result, searchRelUsable ? (searchRelToWorkDir || '.') : searchPath, args.outputMode)
         // I6：`.` 根场景 rg 相对输出带 `.`+分隔符前缀 → 行首窄剥离（仅字面 `.\` / `./`，固定 2 字符无歧义）
         if (stripDotPrefix && result) {
           result = result.split('\n').map((line) => line.startsWith('.\\') || line.startsWith('./') ? line.slice(2) : line).join('\n')
@@ -1658,35 +1666,16 @@ export async function grepFallbackJs(
     }
   }
 
-  // I4（§7.11 子项 2，D14）：行首截断 + 明示标注；计长口径=显示列宽（CJK 范围=2，与 rg --max-columns 同口径；
-  // emoji 组合序列等极端形态允许偏差，登记为近似）。按字符（码点）边界切，不产生坏字节。
-  function charDisplayWidth(ch: string): number {
-    const code = ch.codePointAt(0) ?? 0
-    if (
-      (code >= 0x1100 && code <= 0x115f) ||
-      (code >= 0x2e80 && code <= 0xa4cf) ||
-      (code >= 0xac00 && code <= 0xd7a3) ||
-      (code >= 0xf900 && code <= 0xfaff) ||
-      (code >= 0xfe30 && code <= 0xfe4f) ||
-      (code >= 0xff00 && code <= 0xff60) ||
-      (code >= 0xffe0 && code <= 0xffe6) ||
-      (code >= 0x20000 && code <= 0x3fffd)
-    ) return 2
-    return 1
-  }
-
+  // I4（§7.11 子项 2，D14）：行首截断 + 明示标注；计长口径=码点（Unicode scalar）。
+  // 【评审 P1-2 订正】rg --max-columns 实测按码点计（400 汉字与 400 ASCII 同截 300），非显示列宽——
+  // §13 组 11b 原判有误；walk 按码点对齐,两引擎 CJK 截断宽度一致。
   const GREP_MAX_DISPLAY_COLUMNS = 300
   function clampLine(line: string): string {
     let display = line.replace(/\r?\n/g, '\\n')
-    let width = 0
-    let cutIndex = -1
-    let idx = 0
-    for (const ch of display) {
-      width += charDisplayWidth(ch)
-      if (width > GREP_MAX_DISPLAY_COLUMNS) { cutIndex = idx; break }
-      idx += ch.length
+    const chars = Array.from(display)
+    if (chars.length > GREP_MAX_DISPLAY_COLUMNS) {
+      display = chars.slice(0, GREP_MAX_DISPLAY_COLUMNS).join('') + ' [行被截断]'
     }
-    if (cutIndex >= 0) display = display.slice(0, cutIndex) + ' [行被截断]'
     return display
   }
 
@@ -1706,6 +1695,9 @@ export async function grepFallbackJs(
 
   // R6（C4）：walk 与 rg 同语义——默认跳名单成员 + 隐藏条目 + 敏感路径（修掉「walk 能搜到 .env、
   // rg 不能」的既有两引擎不一致；这是收紧，非放宽）。includeIgnored 解除名单与隐藏（不解除敏感）。
+  // 显式点名敏感根（搜索根本身命中敏感前缀，经 zone 判定 + 真人确认/permit 放行）时，子树内不再逐条目
+  // 敏感排除——与 rg 侧 explicitSensitiveHit → sensitiveExcludes=[] 同语义（§6.2「两条路径合起来无缺口」）。
+  const explicitSensitiveRoot = isSensitivePath(absSearch)
   async function walk(dir: string): Promise<void> {
     if (shouldStop()) return
     let entries: Dirent[]
@@ -1725,8 +1717,8 @@ export async function grepFallbackJs(
       const full = path.join(dir, ent.name)
       const isHiddenEntry = ent.name.startsWith('.')
       if (!args.includeIgnored && (GREP_SKIP_DIRS.has(ent.name) || isHiddenEntry)) continue
-      // 敏感路径逐条目判定（includeIgnored 不解除；显式点名由调用方处理，walk 不经此路径）
-      if (isSensitivePath(full)) continue
+      // 敏感路径逐条目判定（includeIgnored 不解除）；显式点名敏感根时豁免子树条目
+      if (!explicitSensitiveRoot && isSensitivePath(full)) continue
       if (ent.isDirectory()) await walk(full)
       else if (ent.isFile()) await scanFile(full, true)
     }
@@ -1921,6 +1913,16 @@ export const grepExecutor: ToolExecutor = {
           recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'grep', decisionRuleId: ctx.readExecutionPermit?.decisionRuleId ?? ctx.readExecutionPermit?.targets[0]?.decisionRuleId, pathZone: ctx.readExecutionPermit?.targets[0]?.zone, factId: ctx.readExecutionPermit?.targets[0]?.factId, failureClass: 'mechanism', caseId })
           return { success: false, error: '搜索期间文件身份或内容发生变化，已丢弃搜索结果。', diagnostic: { caseId, retryable: false, category: 'mechanism', ...(ctx.readExecutionPermit?.targets[0]?.factId ? { factId: ctx.readExecutionPermit.targets[0].factId } : {}) }, duration: Date.now() - started }
         }
+      } else if (!permitFileHandle && authorizedIdentity && ctx.readExecutionPermit?.targets[0]?.targetKind === 'directory') {
+        // P1-4（评审）：rg 路径目录 permit（subtree）无句柄，同样做读后身份复查——与 walk fallback 防御纵深一致。
+        // 目录身份只绑 dev/ino/mode（§5.3 B2）；realpath 复核防「搜索期间根被换成链接」。
+        const dirStat = await fs.stat(absSearch).catch(() => null)
+        const dirRealpath = dirStat ? await fs.realpath(absSearch).catch(() => null) : null
+        if (!dirStat || dirRealpath !== absSearch || dirStat.dev !== authorizedIdentity.dev || dirStat.ino !== authorizedIdentity.ino || dirStat.mode !== authorizedIdentity.mode) {
+          const caseId = 'read-target-identity-changed-during-read'
+          recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'grep', decisionRuleId: ctx.readExecutionPermit?.decisionRuleId ?? ctx.readExecutionPermit?.targets[0]?.decisionRuleId, pathZone: ctx.readExecutionPermit?.targets[0]?.zone, factId: ctx.readExecutionPermit?.targets[0]?.factId, failureClass: 'mechanism', caseId })
+          return { success: false, error: '搜索期间搜索根身份发生变化，已丢弃搜索结果。', diagnostic: { caseId, retryable: false, category: 'mechanism', ...(ctx.readExecutionPermit?.targets[0]?.factId ? { factId: ctx.readExecutionPermit.targets[0].factId } : {}) }, duration: Date.now() - started }
+        }
       }
       if (text.kind === 'success' || text.kind === 'no_match') {
         // R6：范围事实（skipped 由 planGrepInvocation 统一规划；no_match 必带范围）
@@ -1966,7 +1968,7 @@ export const grepExecutor: ToolExecutor = {
       return { success: false, error: text.message, duration: Date.now() - started }
     } catch (e) {
       if (ctx.signal?.aborted) return { success: false, error: '搜索已取消。', duration: Date.now() - started }
-      const degraded = degradedFsReadResult(e, '搜索', relPath || '搜索目标', started)
+      const degraded = degradedFsReadResult(e, '搜索', extractPathField(input) ?? '搜索目标', started)
       if (degraded) return degraded
       throw e
     } finally {

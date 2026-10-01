@@ -16,10 +16,16 @@ export function finalizeReadConfirmation(input: { toolName: string; toolInput: R
       ? { normalizedPath: input.feishuMediaFact.normalizedPath, zone: 'outside-workdir' as const, targetKind: 'file' as const, identity: input.feishuMediaFact.identity }
       : undefined
     : input.readPathFact
-  if (!fact || (fact.targetKind === 'directory' && input.toolName !== 'list_directory') || (input.toolName === 'list_directory' && fact.targetKind !== 'directory' && !(fact.targetKind === 'symlink' && fact.resolvedKind === 'directory'))) return undefined
+  if (!fact) return undefined
+  // 目录目标：list_directory（direct-entries）与 grep（subtree）均可经确认兑现；
+  // grep 目录允许 symlink→directory 归一（与 gate auto-allow 路径同口径）。read_file 保持不收目录（N8）。
+  const isResolvedDirectory = fact.targetKind === 'directory' || (fact.targetKind === 'symlink' && fact.resolvedKind === 'directory')
+  const isResolvedFile = fact.targetKind === 'file' || (fact.targetKind === 'symlink' && fact.resolvedKind === 'file')
+  if (input.toolName === 'list_directory' && !isResolvedDirectory) return undefined
+  if (input.toolName === 'grep' && !(isResolvedDirectory || isResolvedFile || fact.targetKind === 'missing')) return undefined
   const mapping = input.approvedTargets
   if (!mapping || mapping.length !== 1 || mapping[0]?.factId !== `fact-${fact.normalizedPath}` || !mapping[0]?.decisionRuleId) return undefined
-  const target = { ...mapping[0], normalizedPath: fact.normalizedPath, zone: fact.zone, targetKind: input.toolName === 'list_directory' ? 'directory' as const : fact.targetKind, ...(input.toolName === 'list_directory' ? { scope: 'direct-entries' as const } : {}), ...(fact.identity ? { identity: fact.identity } : {}) }
+  const target = { ...mapping[0], normalizedPath: fact.normalizedPath, zone: fact.zone, targetKind: input.toolName === 'list_directory' || (input.toolName === 'grep' && isResolvedDirectory) ? 'directory' as const : fact.targetKind, ...(input.toolName === 'list_directory' ? { scope: 'direct-entries' as const } : {}), ...(input.toolName === 'grep' && isResolvedDirectory ? { scope: 'subtree' as const } : {}), ...(fact.identity ? { identity: fact.identity } : {}) }
   if (!registry.approve({ requestId: input.requestId, toolUseId: input.toolUseId, inputDigest: readInputDigest(input.toolInput), approvedFactIds: [target.factId], ruleId: target.decisionRuleId })) return undefined
   try { return buildUserConfirmedReadExecutionPermit({ requestId: input.requestId, toolUseId: input.toolUseId, toolName: input.toolName, input: input.toolInput, facts: [target] }, registry) } catch { return undefined }
 }

@@ -164,7 +164,8 @@ describe('read_file executor 对 fs 异常的降级（2026-10 会话 38 file clo
   })
 
   async function grantAndExecute(ctx: ToolExecutionContext, fileHandle: FileHandle) {
-    mockedResolve.mockResolvedValue({ ok: true, path: realFile, fileHandle } as Awaited<ReturnType<typeof resolveReadPermitTarget>>)
+    // targetKind 必须显式 'file'（阶段 C 契约）：缺省会走目录分支丢句柄，测试即失真
+    mockedResolve.mockResolvedValue({ ok: true, path: realFile, targetKind: 'file', fileHandle } as Awaited<ReturnType<typeof resolveReadPermitTarget>>)
     return readFileExecutor.execute({ path: 'note.txt' }, ctx)
   }
 
@@ -186,6 +187,7 @@ describe('read_file executor 对 fs 异常的降级（2026-10 会话 38 file clo
     mockedResolve.mockResolvedValue({
       ok: true,
       path: realFile,
+      targetKind: 'file',
       fileHandle: {
         stat: async () => {
           throw new TypeError('boom')

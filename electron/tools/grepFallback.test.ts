@@ -26,10 +26,12 @@ describe('JavaScript grep fallback', () => {
   it('supports case insensitive regex, glob, line output, and context lines', async () => {
     const root = fixture({ 'src/a.ts': 'before\nNEEDLE-1\nafter\n', 'src/b.js': 'needle-2\n', 'skip.md': 'Needle' })
     const out = await grepFallbackJs(root, root, 'needle-[0-9]', args({ ignoreCase: true, glob: '*.ts', context: 1 }), new AbortController().signal, () => {})
-    expect(out).toContain('src/a.ts-1-before')
-    expect(out).toContain('src/a.ts:2:NEEDLE-1')
-    expect(out).toContain('src/a.ts-3-after')
-    expect(out).not.toContain('src/b.js')
+    // 输出路径随平台分隔符（Windows `\`、POSIX `/`）
+    const p = (s: string) => s.split('/').join(path.sep)
+    expect(out).toContain(p('src/a.ts-1-before'))
+    expect(out).toContain(p('src/a.ts:2:NEEDLE-1'))
+    expect(out).toContain(p('src/a.ts-3-after'))
+    expect(out).not.toContain(p('src/b.js'))
   })
 
   it('treats glob metacharacters as literals without evaluating them as a main-thread regex', async () => {
@@ -240,16 +242,23 @@ describe('目录递归端到端（E1，AC-12/13/17 walk 侧）', () => {
   })
 })
 
-describe('I3：clampLine 显示列宽口径（§7.11 子项 2，AC-45 walk 侧）', () => {
-  it('中文行按 2 列/字计：200 汉字（400 列）超 300 列即截断（旧字符数口径 500 不会截断——口径区分点）', async () => {
+describe('I3：clampLine 码点口径（§7.11 子项 2，AC-45 walk 侧；评审 P1-2 订正——rg --max-columns 实测按码点计，组 11b 原判「显示列宽」有误）', () => {
+  it('中文行按码点计：200 汉字（200 码点）不截断，与真 rg 实测一致（显示列口径会错截 150 字）', async () => {
     const root = fixture({ 'cn.txt': `${'汉'.repeat(200)}NEEDLE\n` })
     const out = await grepFallbackJs(root, root, 'NEEDLE', args({ outputMode: 'content' }), new AbortController().signal, () => {})
+    expect(out).toContain('汉'.repeat(200) + 'NEEDLE')
+    expect(out).not.toContain('[行被截断]')
+  })
+
+  it('中文行 400 码点超限：截到行首 300 码点，行尾 NEEDLE 被截（与 rg 码点口径一致）', async () => {
+    const root = fixture({ 'cn.txt': `${'汉'.repeat(400)}NEEDLE\n` })
+    const out = await grepFallbackJs(root, root, 'NEEDLE', args({ outputMode: 'content' }), new AbortController().signal, () => {})
+    expect(out).toContain('汉'.repeat(300))
     expect(out).toContain('[行被截断]')
-    // 行首 300 显示列 ≈ 150 汉字，NEEDLE 在行尾应被截掉
     expect(out).not.toContain('NEEDLE')
   })
 
-  it('ASCII 300 列边界：290 列不截断、310 列截断', async () => {
+  it('ASCII 300 码点边界：290 不截断、310 截断', async () => {
     const root = fixture({ 'a.txt': `${'x'.repeat(290)}NEEDLE\n`, 'b.txt': `${'y'.repeat(310)}NEEDLE\n` })
     const out = await grepFallbackJs(root, root, 'NEEDLE', args({ outputMode: 'content' }), new AbortController().signal, () => {})
     expect(out).toContain('x'.repeat(290) + 'NEEDLE')

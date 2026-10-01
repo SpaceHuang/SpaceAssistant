@@ -103,11 +103,12 @@ describe('bundled ripgrep process contract', () => {
           await fileHandle.close()
         }
       }
-      await expect(run('files_with_matches')).resolves.toEqual({ kind: 'success', output: file })
-      await expect(run('count')).resolves.toEqual({ kind: 'success', output: `${file}:1` })
-      await expect(run('content')).resolves.toEqual({ kind: 'success', output: `${file}:1:Needle <stdin>:1` })
+      // I6（§7.11 子项 1）：stdin 映射目标随搜索根相对化（workDir 内单文件 → 相对路径，与 walk 同形态）
+      await expect(run('files_with_matches')).resolves.toEqual({ kind: 'success', output: 'approved.txt' })
+      await expect(run('count')).resolves.toEqual({ kind: 'success', output: 'approved.txt:1' })
+      await expect(run('content')).resolves.toEqual({ kind: 'success', output: 'approved.txt:1:Needle <stdin>:1' })
       await expect(run('content', 1))
-        .resolves.toEqual({ kind: 'success', output: `${file}-1-before\n${file}:2:Needle <stdin>:1\n${file}-3-after` })
+        .resolves.toEqual({ kind: 'success', output: 'approved.txt-1-before\napproved.txt:2:Needle <stdin>:1\napproved.txt-3-after' })
     } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 
@@ -257,7 +258,6 @@ describe('I5/I6：rg 侧路径相对化（§7.11 子项 1，AC-47/AC-48）', () 
       const result = await grepWithRg(binary, root, root, 'NEEDLE', args({ outputMode: 'files_with_matches' }), 10000, new AbortController().signal, () => undefined)
       expect(result).toMatchObject({ kind: 'success' })
       if (result.kind === 'success') {
-        fsSync.appendFileSync(path.join(process.cwd(), 'dbg-rel.txt'), JSON.stringify(result.output) + '\n')
         expect(result.output).toContain(path.join('sub', 'b.txt'))
         expect(result.output).not.toContain(root)
         expect(result.output).not.toContain('.\\')
@@ -282,5 +282,22 @@ describe('I5/I6：rg 侧路径相对化（§7.11 子项 1，AC-47/AC-48）', () 
       await fs.rm(inner, { recursive: true, force: true })
       await fs.rm(outside, { recursive: true, force: true })
     }
+  })
+})
+
+describe('P1-3：位置参数 -- 分隔符（防 - 开头目录名被 rg 吞为 flag）', () => {
+  it('workDir 内以 - 开头的目录：rgArgs 以 "--" 终止选项后再传相对路径', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-rg-dashdir-'))
+    try {
+      await fs.mkdir(path.join(root, '-scripts'), { recursive: true })
+      await fs.writeFile(path.join(root, '-scripts', 'a.txt'), 'NEEDLE\n')
+      const binary = findRealRg()
+      if (!binary) return
+      const result = await grepWithRg(binary, root, path.join(root, '-scripts'), 'NEEDLE', args({ outputMode: 'files_with_matches' }), 10000, new AbortController().signal, () => undefined)
+      expect(result).toMatchObject({ kind: 'success' })
+      if (result.kind === 'success') {
+        expect(result.output).toContain(path.join('-scripts', 'a.txt'))
+      }
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 })

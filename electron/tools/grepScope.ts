@@ -41,7 +41,10 @@ export function grepSensitiveExcludes(): string[] {
  * glob 文本此处从略（其双星加斜杠的字面序列会提前终止块注释）。
  */
 function isSensitiveEntryName(name: string): boolean {
-  return name === '.env' || name.startsWith('.env.') || name === 'secrets'
+  // 与两引擎排除的大小写无关口径对齐（rg --iglob / isSensitivePath 小写化）——
+  // 根级 .ENV / Secrets 变体被实际排除，明示名单必须同样命中（评审 P2-1）
+  const lower = name.toLowerCase()
+  return lower === '.env' || lower.startsWith('.env.') || lower === 'secrets'
 }
 
 export interface GrepScope {

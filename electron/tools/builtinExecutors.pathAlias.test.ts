@@ -378,4 +378,55 @@ describe('path field alias normalization', () => {
     const res = await readFileExecutor.execute(input, ctx)
     expect(res.success).toBe(true)
   })
+
+  it('rg 路径目录 permit：搜索根被替换时读后身份复查 veto（P1-4，与 walk fallback 防御纵深一致）', async () => {
+    const target = path.join(tmpDir, 'subtree')
+    await fs.mkdir(target, { recursive: true })
+    await fs.writeFile(path.join(target, 'a.txt'), 'needle')
+    const fixture = path.join(tmpDir, 'rg-dir-recheck.cjs')
+    await fs.writeFile(fixture, "process.stdout.write('subtree/a.txt:1:needle\\n')")
+    const input = { pattern: 'needle', path: target, output_mode: 'content' }
+    const ctx = {
+      ...makeCtx(tmpDir, cache),
+      lane: 'desktop' as const,
+      grepSpawnProcess: (_binary: string, args: string[], options: never) => spawn(process.execPath, [fixture, ...args], options)
+    }
+    const stat = await fs.stat(target)
+    ctx.readExecutionPermit = buildReadExecutionPermit({
+      requestId: ctx.requestId!, toolUseId: ctx.toolUseId!, toolName: 'grep', input,
+      facts: [{ factId: 'dir-recheck-fact', decisionRuleId: 'read-group-workdir-allow', normalizedPath: target, zone: 'workdir-normal', targetKind: 'directory', scope: 'subtree', identity: { dev: stat.dev, ino: stat.ino, mode: stat.mode, size: stat.size, mtimeMs: stat.mtimeMs } }]
+    })
+    // rg 搜索期间根被替换：rename 换名 + 原位重建（新 inode）
+    ripgrep.inspect.mockImplementation(async () => {
+      await fs.rename(target, `${target}.stolen`)
+      await fs.mkdir(target, { recursive: true })
+      return { available: true }
+    })
+    const res = await grepExecutor.execute(input, ctx)
+    expect(res).toMatchObject({
+      success: false,
+      diagnostic: { caseId: 'read-target-identity-changed-during-read', factId: 'dir-recheck-fact' }
+    })
+  })
+
+  it('rg 路径目录 permit：未替换时正常放行（P1-4 不误伤）', async () => {
+    const target = path.join(tmpDir, 'subtree-ok')
+    await fs.mkdir(target, { recursive: true })
+    await fs.writeFile(path.join(target, 'a.txt'), 'needle')
+    const fixture = path.join(tmpDir, 'rg-dir-ok.cjs')
+    await fs.writeFile(fixture, "process.stdout.write('subtree-ok/a.txt:1:needle\\n')")
+    const input = { pattern: 'needle', path: target, output_mode: 'content' }
+    const ctx = {
+      ...makeCtx(tmpDir, cache),
+      lane: 'desktop' as const,
+      grepSpawnProcess: (_binary: string, args: string[], options: never) => spawn(process.execPath, [fixture, ...args], options)
+    }
+    const stat = await fs.stat(target)
+    ctx.readExecutionPermit = buildReadExecutionPermit({
+      requestId: ctx.requestId!, toolUseId: ctx.toolUseId!, toolName: 'grep', input,
+      facts: [{ factId: 'dir-ok-fact', decisionRuleId: 'read-group-workdir-allow', normalizedPath: target, zone: 'workdir-normal', targetKind: 'directory', scope: 'subtree', identity: { dev: stat.dev, ino: stat.ino, mode: stat.mode, size: stat.size, mtimeMs: stat.mtimeMs } }]
+    })
+    const res = await grepExecutor.execute(input, ctx)
+    expect(res.success).toBe(true)
+  })
 })
