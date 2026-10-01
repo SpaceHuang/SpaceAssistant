@@ -15,7 +15,7 @@ import { WikiConfig, FeishuConfig, WeChatConfig, BrowserConfig, ShellConfig } fr
 import { clampMaxParallelChatSessions } from '../../src/shared/chatParallelConfig'
 import { createAnthropicClient } from '../anthropicClientFactory'
 import { fetchServiceModels } from '../llmModelListFetcher'
-import { getConfigValue, setConfigValue } from '../database'
+import { getConfigValue, getDbConnection, runInTransaction, setConfigValue } from '../database'
 import { getModelIds, pruneMissingModelsFromServices } from '../../src/shared/llmModelConfig'
 import { isAppLocale } from '../../src/shared/locale'
 import { isToolEnabledByConfig } from '../toolsConfigRuntime'
@@ -180,6 +180,13 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       if (payload.thinkingEffort !== undefined && !isThinkingEffort(payload.thinkingEffort)) {
         throw new Error(`无效的 Thinking 强度档位:${String(payload.thinkingEffort)}(允许 off / low / medium / high)`)
       }
+      const atomicKeySave = payload.llmServices !== undefined &&
+        Object.values(payload.llmServiceKeys ?? {}).some((key) => typeof key === 'string' && key.trim().length > 0)
+      const previousWorkDir = ctx.getWorkDir()
+      const toolsToRevoke = new Set<string>()
+      let localeToRebuild: AppConfig['locale'] | undefined
+      let legacyApiKeyToSet: string | undefined
+      const saveConfig = (): void => {
       try {
         if (payload.llmServices !== undefined) {
           const activeIds =
@@ -194,7 +201,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
             const services = readLlmServices(ctx.db)
             persistLlmServices(ctx.db, services, [activeId], keys)
           } else {
-            await ctx.setApiKey(payload.apiKey.trim())
+            legacyApiKeyToSet = payload.apiKey.trim()
           }
         } else if (payload.baseUrl !== undefined) {
           migrateLegacyLlmServicesIfNeeded(ctx.db)
@@ -274,8 +281,6 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       if (payload.thinkingEffort !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.thinkingEffort, payload.thinkingEffort)
       if (payload.workDir !== undefined && payload.workDirProfiles === undefined) {
         setConfigValue(ctx.db, CONFIG_KEYS.workDir, payload.workDir)
-        ctx.setWorkDir(payload.workDir)
-        await fs.mkdir(payload.workDir, { recursive: true })
       }
       if (payload.apiKey !== undefined && payload.apiKey.trim() && payload.llmServices === undefined) {
         /* legacy apiKey without llmServices handled above */
@@ -301,8 +306,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
         )
         for (const toolName of beforeNames) {
           if (afterNames.has(toolName)) continue
-          revokeToolForAllLanes(toolName)
-          rejectPendingConfirmsForToolAcrossLanes(toolName)
+          toolsToRevoke.add(toolName)
         }
         // §5.6-6：deniedTools 变更落 settings.tool-toggle（含新旧值）
         if (
@@ -452,9 +456,32 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       }
       if (payload.locale !== undefined && isAppLocale(payload.locale)) {
         setConfigValue(ctx.db, CONFIG_KEYS.locale, payload.locale)
-        rebuildAppMenu(createHostTranslator({ locale: payload.locale }))
+        localeToRebuild = payload.locale
       }
       stripPlanConfigFromDbIfNeeded(ctx.db)
+      }
+      try {
+        if (atomicKeySave) runInTransaction(getDbConnection(ctx.db), saveConfig)
+        else saveConfig()
+      } catch (e) {
+        if (atomicKeySave && ctx.getWorkDir() !== previousWorkDir) ctx.setWorkDir(previousWorkDir)
+        if (e instanceof LlmKeyAccessError || e instanceof LlmServiceValidationError) throw new Error(e.message)
+        throw e
+      }
+      if (payload.workDir !== undefined && payload.workDirProfiles === undefined) {
+        ctx.setWorkDir(payload.workDir)
+        try {
+          await fs.mkdir(payload.workDir, { recursive: true })
+        } catch (error) {
+          console.warn('[config:set] 工作目录创建失败', error)
+        }
+      }
+      if (legacyApiKeyToSet !== undefined) await ctx.setApiKey(legacyApiKeyToSet)
+      for (const toolName of toolsToRevoke) {
+        revokeToolForAllLanes(toolName)
+        rejectPendingConfirmsForToolAcrossLanes(toolName)
+      }
+      if (localeToRebuild !== undefined) rebuildAppMenu(createHostTranslator({ locale: localeToRebuild }))
       ctx.db.flushSave()
       // exposure 重推：配置变更后主进程重新求值并推送桌面链路清单（§5.2 exposure 定稿）
       await pushExposureToolsChanged('desktop')
