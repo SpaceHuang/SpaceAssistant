@@ -10,11 +10,11 @@ import type { ExecutionLane } from '../../src/shared/confirmation/types'
 import { findRegisteredFeishuAttachment, MAX_FEISHU_ATTACHMENT_BYTES } from '../feishu/feishuAttachmentRegistry'
 
 type PermitResolveFailure = { ok: false; caseId: string; failureClass: 'input' | 'mechanism' | 'environment' | 'integration-violation'; factId?: string }
-type FilePermitResolveSuccess = { ok: true; path: string; fileHandle: FileHandle }
-type DirectoryPermitResolveSuccess = { ok: true; path: string }
+type FilePermitResolveSuccess = { ok: true; path: string; targetKind: 'file'; fileHandle: FileHandle }
+type DirectoryPermitResolveSuccess = { ok: true; path: string; targetKind: 'directory' }
 type FeishuPermitResolveSuccess = { ok: true; path: string; content: Buffer }
 
-export function resolveReadPermitTarget(toolName: 'read_file' | 'grep', input: Record<string, unknown>, ctx: ToolExecutionContext): Promise<FilePermitResolveSuccess | PermitResolveFailure>
+export function resolveReadPermitTarget(toolName: 'read_file' | 'grep', input: Record<string, unknown>, ctx: ToolExecutionContext): Promise<FilePermitResolveSuccess | DirectoryPermitResolveSuccess | PermitResolveFailure>
 export function resolveReadPermitTarget(toolName: 'list_directory', input: Record<string, unknown>, ctx: ToolExecutionContext): Promise<DirectoryPermitResolveSuccess | PermitResolveFailure>
 export function resolveReadPermitTarget(toolName: 'read_feishu_attachment', input: Record<string, unknown>, ctx: ToolExecutionContext): Promise<FeishuPermitResolveSuccess | PermitResolveFailure>
 export async function resolveReadPermitTarget(toolName: 'read_file' | 'grep' | 'list_directory' | 'read_feishu_attachment', input: Record<string, unknown>, ctx: ToolExecutionContext): Promise<FilePermitResolveSuccess | DirectoryPermitResolveSuccess | FeishuPermitResolveSuccess | PermitResolveFailure> {
@@ -38,12 +38,28 @@ export async function resolveReadPermitTarget(toolName: 'read_file' | 'grep' | '
   if (toolName === 'list_directory') {
     if (target.targetKind !== 'directory' || target.scope !== 'direct-entries' || !target.identity) return deny('permit-target-kind-not-enumerable', 'mechanism')
     try {
+      // 目录 identity 只绑 dev/ino/mode：size/mtimeMs 随子条目增删即变，不代表「内容变更」（§5.3 B2）
+      // realpath 失败与 identity 变化分 caseId 上报（§15.1 C8，AC-50）
+      if (await fs.realpath(target.normalizedPath) !== target.normalizedPath) return deny('read-directory-realpath-changed', 'mechanism')
       const stat = await fs.stat(target.normalizedPath)
-      if (!stat.isDirectory() || stat.dev !== target.identity.dev || stat.ino !== target.identity.ino || stat.mode !== target.identity.mode || stat.size !== target.identity.size || stat.mtimeMs !== target.identity.mtimeMs) {
+      if (!stat.isDirectory() || stat.dev !== target.identity.dev || stat.ino !== target.identity.ino || stat.mode !== target.identity.mode) {
         return deny('read-directory-identity-changed', 'mechanism')
       }
-      if (await fs.realpath(target.normalizedPath) !== target.normalizedPath) return deny('read-directory-identity-changed', 'mechanism')
-      return { ok: true, path: target.normalizedPath }
+      return { ok: true, path: target.normalizedPath, targetKind: 'directory' }
+    } catch {
+      return deny('read-directory-unavailable', 'environment')
+    }
+  }
+  // grep 目录递归：绑定根目录 identity（dev/ino/mode），realpath 防「根被换成链接」（§5.3）
+  if (toolName === 'grep' && target.targetKind === 'directory') {
+    if (target.scope !== 'subtree' || !target.identity) return deny('permit-target-scope-mismatch', 'mechanism')
+    try {
+      if (await fs.realpath(target.normalizedPath) !== target.normalizedPath) return deny('read-directory-realpath-changed', 'mechanism')
+      const stat = await fs.stat(target.normalizedPath)
+      if (!stat.isDirectory() || stat.dev !== target.identity.dev || stat.ino !== target.identity.ino || stat.mode !== target.identity.mode) {
+        return deny('read-directory-identity-changed', 'mechanism')
+      }
+      return { ok: true, path: target.normalizedPath, targetKind: 'directory' }
     } catch {
       return deny('read-directory-unavailable', 'environment')
     }
@@ -128,7 +144,7 @@ export async function resolveReadPermitTarget(toolName: 'read_file' | 'grep' | '
       await fileHandle.close()
       return deny('read-target-identity-changed', 'mechanism')
     }
-    return { ok: true, path: target.normalizedPath, fileHandle }
+    return { ok: true, path: target.normalizedPath, targetKind: 'file', fileHandle }
   } catch {
     await fileHandle.close().catch(() => undefined)
     return deny('read-target-unavailable', 'environment')

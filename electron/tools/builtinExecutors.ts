@@ -278,7 +278,7 @@ export const readFileExecutor: ToolExecutor = {
       const permitted = await resolveReadPermitTarget('read_file', input, ctx)
       if (!permitted.ok) return { success: false, error: permitted.caseId === 'read-permit-missing' ? '读取许可缺失，未执行读取' : '读取许可校验失败', diagnostic: { caseId: permitted.caseId, retryable: false, category: permitted.failureClass, ...(permitted.factId ? { factId: permitted.factId } : {}) }, duration: Date.now() - started }
       const abs = permitted.path
-      permitFileHandle = permitted.fileHandle
+      permitFileHandle = permitted.targetKind === 'file' ? permitted.fileHandle : undefined
       if (!permitFileHandle && !(await pathExists(abs))) {
         return { success: true, data: { path: rel, content: '', encoding: 'utf8', note: '文件不存在' }, duration: Date.now() - started }
       }
@@ -1676,7 +1676,7 @@ export const grepExecutor: ToolExecutor = {
       const permitted = await resolveReadPermitTarget('grep', input, ctx)
       if (!permitted.ok) return { success: false, error: permitted.caseId === 'read-permit-missing' ? '读取许可缺失，未执行搜索' : '读取许可校验失败', diagnostic: { caseId: permitted.caseId, retryable: false, category: permitted.failureClass, ...(permitted.factId ? { factId: permitted.factId } : {}) }, duration: Date.now() - started }
       absSearch = permitted.path
-      permitFileHandle = permitted.fileHandle
+      permitFileHandle = permitted.targetKind === 'file' ? permitted.fileHandle : undefined
     } catch { return { success: false, error: '读取许可校验失败', diagnostic: { caseId: 'read-permit-validation-error', retryable: false, category: 'integration-violation' }, duration: Date.now() - started } }
     try {
       const timeoutMs = (ctx.toolsConfig.grepTimeoutSec ?? 60) * 1000
