@@ -277,6 +277,11 @@ export class SqliteAgentHistory implements HistoryPort {
               : { success: payload.success, ...(rawResult !== undefined ? { data: structuredClone(rawResult) } : {}) }
           } else {
             existing.status = 'rejected'
+            if (payload.reason === 'FACTS_CHANGED' && existing.approval) {
+              existing.approval.status = 'denied'
+              existing.approval.cause = 'facts-changed'
+              existing.approval.reason = { summary: 'facts-changed' }
+            }
             const result = payload.result && typeof payload.result === 'object' && !Array.isArray(payload.result) ? structuredClone(payload.result as Record<string, unknown>) : undefined
             if (result && typeof result.success === 'boolean') {
               existing.result = result as unknown as import('../../src/shared/domainTypes').ToolCallResultPersisted

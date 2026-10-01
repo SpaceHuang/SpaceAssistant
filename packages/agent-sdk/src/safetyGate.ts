@@ -8,7 +8,7 @@ export type SafetyPolicyDecision =
 
 export type SafetyDenyReason =
   | 'UNKNOWN_CAPABILITY' | 'UNAUTHORIZED_CAPABILITY' | 'MISSING_MATERIAL' | 'RULES_FLOOR_VIOLATED'
-  | 'POLICY_DENY' | 'STALE_AUTHORIZATION' | 'SHELL_PRECHECK_DENY' | 'FILE_AUTO_APPROVAL_DENY'
+  | 'POLICY_DENY' | 'FACTS_CHANGED' | 'STALE_AUTHORIZATION' | 'SHELL_PRECHECK_DENY' | 'FILE_AUTO_APPROVAL_DENY'
 
 export type SafetyPolicyPort = { evaluate(input: PermitBinding & { capability: ReturnType<CapabilityRegistry['lookup']>; signal?: AbortSignal }): Promise<SafetyPolicyDecision> }
 export type SafetyPolicyResolver = (binding: PermitBinding) => SafetyPolicyPort

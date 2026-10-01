@@ -82,7 +82,13 @@ export function createAgentSdkSafetyPolicy(input: {
           const recheckAllowed = sameAuthorizationVersion && sameWriteTarget && sameReadTarget && sameFeishuMediaTarget && sameWriteApprovalConfiguration &&
             (previous.confirmed ? sameConfirmedDecision : decision.type === 'auto-allow')
           initial.delete(key)
-          if (!recheckAllowed) return { kind: 'deny', reasonCode: 'POLICY_DENY' }
+          if (!recheckAllowed) {
+            const confirmationScopeChanged = Boolean(previous.confirmed) && (
+              !sameFacts || !sameWriteTarget || !sameReadTarget || !sameFeishuMediaTarget ||
+              !sameWriteApprovalConfiguration || !sameConfirmedDecision
+            )
+            return { kind: 'deny', reasonCode: confirmationScopeChanged ? 'FACTS_CHANGED' : 'POLICY_DENY' }
+          }
           return { kind: 'allow', authorizationVersion: binding.authorizationVersion }
         }
         await input.onInitialGateResult?.(structuredClone(binding), structuredClone(result), gateArgs)

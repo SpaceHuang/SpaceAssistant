@@ -34,6 +34,24 @@ describe('MCP status mapping', () => {
   })
 })
 
+describe('ToolCallCard approval explanations', () => {
+  it('shows a localized reason when script analysis is incomplete', () => {
+    render(<ToolCallCard record={writeRecord('confirming', {
+      toolName: 'run_script', input: { code: 'private script source' },
+      approval: { schemaVersion: 1, approvalId: 'approval-1', attemptId: 'attempt-1', toolUseId: 'tool-1', answerer: 'user', status: 'awaiting-user', reason: { summary: 'script-path-unknown-confirm' }, requestedAt: 1, revision: 1 }
+    })} onConfirm={vi.fn()} />)
+    expect(screen.getByText('脚本分析不完整，请确认该操作。')).toBeDefined()
+    expect(screen.getByText('脚本分析不完整，请确认该操作。').textContent).not.toContain('private script source')
+  })
+
+  it('shows a localized reason when the approved target changed before execution', () => {
+    render(<ToolCallCard record={writeRecord('rejected', {
+      approval: { schemaVersion: 1, approvalId: 'approval-2', attemptId: 'attempt-2', toolUseId: 'tool-1', answerer: 'policy', status: 'denied', cause: 'facts-changed', reason: { summary: 'POLICY_DENY' }, requestedAt: 1, settledAt: 2, revision: 2 }
+    })} />)
+    expect(screen.getByText('确认后目标发生变化，操作未执行。')).toBeDefined()
+  })
+})
+
 describe('ToolCallCard file write expand behavior', () => {
   it('失败结果优先显示 userMessage 而非机器错误码', () => {
     render(

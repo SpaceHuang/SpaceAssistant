@@ -324,7 +324,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       await fs.rename(targetPath, `${targetPath}.approved`)
       await fs.writeFile(targetPath, 'replacement content')
       const recheckBinding = await registered.prepareTool(call, { kind: 'recheck', confirmation: { receipt: 'approved' } })
-      await expect(safetyGate.evaluate(recheckBinding)).resolves.toMatchObject({ kind: 'deny', reasonCode: 'POLICY_DENY' })
+      await expect(safetyGate.evaluate(recheckBinding)).resolves.toMatchObject({ kind: 'deny', reasonCode: 'FACTS_CHANGED' })
       registered.discardPreparedTool(call)
       await expect(fs.readFile(targetPath, 'utf8')).resolves.toBe('replacement content')
     } finally {

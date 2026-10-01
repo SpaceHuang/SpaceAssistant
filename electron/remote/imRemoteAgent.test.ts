@@ -3420,7 +3420,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
       await expect(fs.readFile(targetPath, 'utf8')).resolves.toBe('created-during-approval')
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'feishu-write-target-drift', reason: 'POLICY_DENY'
+        toolCallId: 'feishu-write-target-drift', reason: 'FACTS_CHANGED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {
@@ -3491,7 +3491,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
       expect(executeRead).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'feishu-read-identity-drift', reason: 'POLICY_DENY'
+        toolCallId: 'feishu-read-identity-drift', reason: 'FACTS_CHANGED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {

@@ -6,9 +6,10 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 type Props = {
   record: ToolCallRecord
   onConfirm: (approved: boolean) => void
+  reasonLabel?: string
 }
 
-export function ScriptConfirmCard({ record, onConfirm }: Props) {
+export function ScriptConfirmCard({ record, onConfirm, reasonLabel }: Props) {
   const { t } = useTypedTranslation('chat')
 
   const code = typeof record.input.code === 'string' ? record.input.code : ''
@@ -16,6 +17,7 @@ export function ScriptConfirmCard({ record, onConfirm }: Props) {
 
   return (
     <div className="write-confirm-card script-confirm-card">
+      {reasonLabel ? <p className="write-confirm-card__reason">{reasonLabel}</p> : null}
       <ConfirmCardDecision
         actionSummary={t('confirm.script.actionSummary')}
         allowLabel={t('confirm.script.allow')}

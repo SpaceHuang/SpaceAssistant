@@ -36,7 +36,7 @@ describe('createAgentSdkSafetyPolicy', () => {
 
     await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'edit-v1' })).resolves.toMatchObject({ kind: 'ask', reasonCode: 'edit-confirm' })
     markAgentSdkSafetyDecisionConfirmed(policy, testBinding)
-    await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'edit-v1', phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'POLICY_DENY' })
+    await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'edit-v1', phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'FACTS_CHANGED' })
     expect(evaluateGate).toHaveBeenCalledTimes(2)
   })
 
@@ -54,7 +54,7 @@ describe('createAgentSdkSafetyPolicy', () => {
 
     await expect(policy.evaluate(confirmedBinding)).resolves.toMatchObject({ kind: 'ask', reasonCode: 'confirmed-read-rule' })
     markAgentSdkSafetyDecisionConfirmed(policy, confirmedBinding)
-    await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'POLICY_DENY' })
+    await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'FACTS_CHANGED' })
   })
 
   it('accepts an approved ask that rechecks as auto-allow only when rule and facts remain identical', async () => {
@@ -143,7 +143,7 @@ describe('createAgentSdkSafetyPolicy', () => {
 
     await expect(policy.evaluate(confirmedBinding)).resolves.toMatchObject({ kind: 'ask', reasonCode: 'approved-attachment-rule' })
     markAgentSdkSafetyDecisionConfirmed(policy, confirmedBinding)
-    await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'POLICY_DENY' })
+    await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'FACTS_CHANGED' })
   })
 
   it('rechecks a user-confirmed Feishu attachment against the real gate identity snapshot', async () => {
@@ -191,7 +191,7 @@ describe('createAgentSdkSafetyPolicy', () => {
       expect(executionContext.readExecutionPermit).toMatchObject({ toolName: 'read_feishu_attachment', targets: [{ identity: { ino: expect.any(Number) } }] })
       await fs.rename(attachmentPath, `${attachmentPath}.approved`)
       await fs.writeFile(attachmentPath, 'replacement')
-      await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'POLICY_DENY' })
+      await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'FACTS_CHANGED' })
     } finally {
       await fs.rm(userDataDir, { recursive: true, force: true })
     }
@@ -302,7 +302,7 @@ describe('createAgentSdkSafetyPolicy', () => {
       .mockResolvedValueOnce({ ...result({ type: 'require-confirm', ruleId: 'same-rule', answerer: 'user', riskLevel: 'medium', facts, memoryTiers: [], timeoutMs: 1000 }), facts: factsNow }) })
     await drift.evaluate(prepared)
     markAgentSdkSafetyDecisionConfirmed(drift, prepared)
-    await expect(drift.evaluate({ ...prepared, phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'POLICY_DENY' })
+    await expect(drift.evaluate({ ...prepared, phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'FACTS_CHANGED' })
   })
   it('只允许已批准的 Hosted recheck 保留相同 require-confirm 供 SafetyPolicy 比较', async () => {
     const gate = vi.fn(async () => result({ type: 'require-confirm', ruleId: 'same-human-rule', answerer: 'user', riskLevel: 'medium', facts, memoryTiers: [], timeoutMs: 1000 }))
