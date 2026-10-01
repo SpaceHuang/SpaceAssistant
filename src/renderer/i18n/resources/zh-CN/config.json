@@ -337,6 +337,11 @@
         "displayName": "能力集合调用",
         "summary": "调用产品能力集合中的具体能力（act 类需确认）",
         "disabledHint": "该工具是产品功能的执行入口，关闭后 Agent 将无法执行产品功能"
+      },
+      "toolSearch": {
+        "displayName": "工具检索（MCP）",
+        "summary": "按关键词检索延迟加载的 MCP 工具，返回完整参数定义。空关键词按顺序分页列出全部。",
+        "disabledHint": "关闭后无法检索延迟加载的 MCP 工具；MCP 工具将全量注入上下文。"
       }
     },
     "nav": {
