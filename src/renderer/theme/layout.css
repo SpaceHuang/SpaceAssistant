@@ -2105,6 +2105,10 @@
   border-radius: var(--sa-radius-sm);
 }
 
+.sa-auto-answering-status {
+  border: 0;
+}
+
 .tool-row-detail__script-code {
   display: flex;
   flex-direction: column;

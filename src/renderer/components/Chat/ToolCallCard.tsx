@@ -533,7 +533,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   if (record.status === 'confirming' && record.autoAnswerer) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
-        <div className="sa-chat-inset-code" role="status">
+        <div className="sa-chat-inset-code sa-auto-answering-status" role="status">
           {t('confirm.autoAnswering')}
         </div>
         {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
