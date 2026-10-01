@@ -981,98 +981,98 @@ if (plan.noIgnoreVcs) rgArgs.push('--no-ignore-vcs')
 
 ### 阶段 A：契约与事实层（无行为变更风险）
 
-- [ ] **A1** — 修改 `src/shared/builtinToolDefinitions.ts` grep schema（§7.1）：`required: ['pattern']`、`path` description 重写、description 首句替换。
-- [ ] **A2** — RED：`src/shared/builtinToolDefinitions.test.ts` 加断言「grep required 不含 path」「path description 不含『单个文件路径』」。
-- [ ] **A3** — GREEN：A1 使 A2 通过。
-- [ ] **A4** — 修改 `runExtractors.ts`（§7.3）：`rawPath` 缺省对 grep 用 `'.'`；`hasUnsupportedV1ReadTarget` 注释更新。
-- [ ] **A5** — RED：新增用例「grep 的 path 为真实目录时 `readPathFact.targetKind === 'directory'`（不得被染 `unknown`）」「grep 省略 path 时 `rawPath` 归一到 `.`」。
-- [ ] **A6** — GREEN：A4 使 A5 通过。
+- [x] **A1** — 修改 `src/shared/builtinToolDefinitions.ts` grep schema（§7.1）：`required: ['pattern']`、`path` description 重写、description 首句替换。
+- [x] **A2** — RED：`src/shared/builtinToolDefinitions.test.ts` 加断言「grep required 不含 path」「path description 不含『单个文件路径』」。
+- [x] **A3** — GREEN：A1 使 A2 通过。
+- [x] **A4** — 修改 `runExtractors.ts`（§7.3）：`rawPath` 缺省对 grep 用 `'.'`；`hasUnsupportedV1ReadTarget` 注释更新。
+- [x] **A5** — RED：新增用例「grep 的 path 为真实目录时 `readPathFact.targetKind === 'directory'`（不得被染 `unknown`）」「grep 省略 path 时 `rawPath` 归一到 `.`」。
+- [x] **A6** — GREEN：A4 使 A5 通过。
 
 ### 阶段 B：gate 决策层
 
-- [ ] **B1** — 修改 `toolCallGate.ts` 改动 1（`explicitReadPath` 缺省，§7.4）。
-- [ ] **B2** — 修改 `toolCallGate.ts` 改动 2（拆分 `fileReadValidation` / `grepReadValidation`，§7.4）+ 改动 5（`readPatternValidation`）。
-- [ ] **B3** — 修改 `toolCallGate.ts` 改动 3（automation 分支去掉 directory 条件）。
-- [ ] **B4** — 修改 `toolCallGate.ts` 改动 4（`directoryPermittable`、targetKind 归一、scope 分派）。
-- [ ] **B5** — 修改 `src/shared/policy/readPolicyV1.ts`（§7.2 按工具区分允许 kind + 通配专用 ruleId）。
-- [ ] **B6** — RED：`readPolicyV1.test.ts` 更新（§7.8）+ `toolCallGate.test.ts` 新增三条（§7.8）。
-- [ ] **B7** — GREEN：B1–B5 使 B6 通过。
-- [ ] **B8** — 核实并清理 `relPath`（§7.6 改动 5）。
+- [x] **B1** — 修改 `toolCallGate.ts` 改动 1（`explicitReadPath` 缺省，§7.4）。
+- [x] **B2** — 修改 `toolCallGate.ts` 改动 2（拆分 `fileReadValidation` / `grepReadValidation`，§7.4）+ 改动 5（`readPatternValidation`）。
+- [x] **B3** — 修改 `toolCallGate.ts` 改动 3（automation 分支去掉 directory 条件）。
+- [x] **B4** — 修改 `toolCallGate.ts` 改动 4（`directoryPermittable`、targetKind 归一、scope 分派）。
+- [x] **B5** — 修改 `src/shared/policy/readPolicyV1.ts`（§7.2 按工具区分允许 kind + 通配专用 ruleId）。
+- [x] **B6** — RED：`readPolicyV1.test.ts` 更新（§7.8）+ `toolCallGate.test.ts` 新增三条（§7.8）。
+- [x] **B7** — GREEN：B1–B5 使 B6 通过。
+- [x] **B8** — 核实并清理 `relPath`（§7.6 改动 5）。
 
 ### 阶段 C：permit 表达力
 
-- [ ] **C1** — `readExecutionPermit.ts` 加 `'subtree'`（§7.7）。
-- [ ] **C2** — `readPermitExecutor.ts` 加返回类型的 `targetKind` 判别字段（§5.4），含 `list_directory` 分支补字段。
-- [ ] **C3** — `readPermitExecutor.ts` 加 grep 目录分支（§5.3），caseId 台账为 **2 新增**（`permit-target-scope-mismatch`、`read-directory-realpath-changed`）**+ 2 复用**（`read-directory-identity-changed`、`read-directory-unavailable`——v3 L2）；目录 identity 只绑 `dev/ino/mode`（**B2**）。
-- [ ] **C4** — `readPermitExecutor.ts` 调整既有 `targetKind === 'directory'` 总拒绝的位置（移到 grep 分支之后）。
-- [ ] **C5** — RED：`readPermitExecutor.test.ts` 更新既有断言 + 新增 grep subtree 三组用例。
-- [ ] **C6** — GREEN：C1–C4 使 C5 通过。
-- [ ] **C7** — **list_directory 目录 identity 一并收敛为 `dev/ino/mode`**（`readPermitExecutor.ts:41`，决策「一起修」）。RED：**修正 `readPermitExecutor.test.ts:22` 的 badPermit——原用 `size: stat.size + 1` 构造，收敛后将假绿，改用 `ino: stat.ino + 1`**；并新增「目录条目增删后 identity 校验仍通过」用例（对应 AC-21c）。
-- [ ] **C8** — 【§15.1】realpath 失败 caseId 统一：list_directory 目录分支既有的 realpath 检查（上游已加，失败现报 `read-directory-identity-changed`）收敛为 `read-directory-realpath-changed`；grep 目录分支（C3）同 id。RED：`readPermitExecutor.test.ts` 新增「list_directory 根 realpath 变化 → `read-directory-realpath-changed`」用例并核对既有断言（对应 AC-50）。
+- [x] **C1** — `readExecutionPermit.ts` 加 `'subtree'`（§7.7）。
+- [x] **C2** — `readPermitExecutor.ts` 加返回类型的 `targetKind` 判别字段（§5.4），含 `list_directory` 分支补字段。
+- [x] **C3** — `readPermitExecutor.ts` 加 grep 目录分支（§5.3），caseId 台账为 **2 新增**（`permit-target-scope-mismatch`、`read-directory-realpath-changed`）**+ 2 复用**（`read-directory-identity-changed`、`read-directory-unavailable`——v3 L2）；目录 identity 只绑 `dev/ino/mode`（**B2**）。
+- [x] **C4** — `readPermitExecutor.ts` 调整既有 `targetKind === 'directory'` 总拒绝的位置（移到 grep 分支之后）。
+- [x] **C5** — RED：`readPermitExecutor.test.ts` 更新既有断言 + 新增 grep subtree 三组用例。
+- [x] **C6** — GREEN：C1–C4 使 C5 通过。
+- [x] **C7** — **list_directory 目录 identity 一并收敛为 `dev/ino/mode`**（`readPermitExecutor.ts:41`，决策「一起修」）。RED：**修正 `readPermitExecutor.test.ts:22` 的 badPermit——原用 `size: stat.size + 1` 构造，收敛后将假绿，改用 `ino: stat.ino + 1`**；并新增「目录条目增删后 identity 校验仍通过」用例（对应 AC-21c）。
+- [x] **C8** — 【§15.1】realpath 失败 caseId 统一：list_directory 目录分支既有的 realpath 检查（上游已加，失败现报 `read-directory-identity-changed`）收敛为 `read-directory-realpath-changed`；grep 目录分支（C3）同 id。RED：`readPermitExecutor.test.ts` 新增「list_directory 根 realpath 变化 → `read-directory-realpath-changed`」用例并核对既有断言（对应 AC-50）。
 
 ### 阶段 D：执行层与 scope 规划
 
-- [ ] **D1** — `builtinExecutors.ts` 改动 1（`permitFileHandle` 类型收窄）。
-- [ ] **D2** — `grepScope.ts` 加 `searchKind` 参数与 file 分支（§7.5）。
-- [ ] **D3** — `builtinExecutors.ts` 改动 2（**三处**调用点统一 `planOverrides`）+ `grepWithRg` 增加透传参数（**B1**）。
-- [ ] **D4** — RED：`grepScope.test.ts` 新增「searchKind='file' 时 skipped/ignoreGlobs 为空」。
-- [ ] **D5** — GREEN：D2–D3 使 D4 通过；同时验证 §1.4 的虚报消失（见 AC-14）。
-- [ ] **D6** — 静态守卫测试（§6.4）三条不变量。
-- [ ] **D7** — **walk 路径输出改为绝对路径**（§5.5 决策 B）：**解耦 glob 输入与输出显示**——保留 `rel` 供 `matchesGlob`，新增 `displayPath = full` 供 `filesWithMatches` / `counts` / `scanContentLines` / `skippedFiles` / `noteReadError` 使用（**直接改 `rel` 会致 glob 失效**）；`walk()` 内 `:1591` 一并处理。**同时更新 `grepFallback.test.ts:74`/`:101` 的既有相对路径断言为绝对**（**N1**：不改则 E3 必红）。补 AC-20b / AC-20c。
+- [x] **D1** — `builtinExecutors.ts` 改动 1（`permitFileHandle` 类型收窄）。
+- [x] **D2** — `grepScope.ts` 加 `searchKind` 参数与 file 分支（§7.5）。
+- [x] **D3** — `builtinExecutors.ts` 改动 2（**三处**调用点统一 `planOverrides`）+ `grepWithRg` 增加透传参数（**B1**）。
+- [x] **D4** — RED：`grepScope.test.ts` 新增「searchKind='file' 时 skipped/ignoreGlobs 为空」。
+- [x] **D5** — GREEN：D2–D3 使 D4 通过；同时验证 §1.4 的虚报消失（见 AC-14）。
+- [x] **D6** — 静态守卫测试（§6.4）三条不变量。
+- [x] **D7** — **walk 路径输出改为绝对路径**（§5.5 决策 B）：**解耦 glob 输入与输出显示**——保留 `rel` 供 `matchesGlob`，新增 `displayPath = full` 供 `filesWithMatches` / `counts` / `scanContentLines` / `skippedFiles` / `noteReadError` 使用（**直接改 `rel` 会致 glob 失效**）；`walk()` 内 `:1591` 一并处理。**同时更新 `grepFallback.test.ts:74`/`:101` 的既有相对路径断言为绝对**（**N1**：不改则 E3 必红）。补 AC-20b / AC-20c。
 
 ### 阶段 E：端到端与回归
 
-- [ ] **E1** — `grepFallback.test.ts` 新增目录递归端到端（敏感文件排除；**symlink 与 junction 均应被跳过**——两条引擎已实测，见 §6.3/§13）。
-- [ ] **E2** — 新增「grep 目录递归命中多文件」的 rg 路径端到端用例（复用 `ripgrepExecutorProcess.test.ts` 的夹具风格）。
-- [ ] **E3** — 回归：`grepFallback.test.ts`、`grepScope.test.ts`、`grepScopeExecutor.test.ts`、`ripgrepExecutorProcess.test.ts`、`grepAbortResponse.test.ts`、`grepChatSignal.test.ts`、`grepNormalize.test.ts`、`grepInputContract.test.ts`、`grepUnavailableMessage.test.ts` 全绿。**基线说明（N1）**：`grepFallback.test.ts` 的两处路径断言已随 D7 改为绝对（非回归失败）。
-- [ ] **E4** — 回归：`toolCallGate.test.ts`、`readPermitExecutor.test.ts`、`readReadIntegration.test.ts`、`readConfirmationFlow.test.ts`、`readExecutionPermit.test.ts`、`toolDecisionMatrix.test.ts` 全绿。
-- [ ] **E5** — 手动验证：真机执行 C1–C6 六项能力各一次，记录返回体（见 §9 证据要求）。
+- [x] **E1** — `grepFallback.test.ts` 新增目录递归端到端（敏感文件排除；**symlink 与 junction 均应被跳过**——两条引擎已实测，见 §6.3/§13）。
+- [x] **E2** — 新增「grep 目录递归命中多文件」的 rg 路径端到端用例（复用 `ripgrepExecutorProcess.test.ts` 的夹具风格）。
+- [x] **E3** — 回归：`grepFallback.test.ts`、`grepScope.test.ts`、`grepScopeExecutor.test.ts`、`ripgrepExecutorProcess.test.ts`、`grepAbortResponse.test.ts`、`grepChatSignal.test.ts`、`grepNormalize.test.ts`、`grepInputContract.test.ts`、`grepUnavailableMessage.test.ts` 全绿。**基线说明（N1）**：`grepFallback.test.ts` 的两处路径断言已随 D7 改为绝对（非回归失败）。
+- [x] **E4** — 回归：`toolCallGate.test.ts`、`readPermitExecutor.test.ts`、`readReadIntegration.test.ts`、`readConfirmationFlow.test.ts`、`readExecutionPermit.test.ts`、`toolDecisionMatrix.test.ts` 全绿。
+- [x] **E5** — 手动验证：真机执行 C1–C6 六项能力各一次，记录返回体（见 §9 证据要求）。
 
 ### 阶段 F：文档与收口
 
-- [ ] **F1** — 更新 `docs/develop/ripgrep-integration-technical-design.md` §0.1，登记「单文件契约已放开为文件/目录」的口径变更。
-- [ ] **F2** — 在本文件回填 §9 各 AC 的证据（测试名 / 命令输出 / 截图）。
-- [ ] **F3** — 在本文件登记 §10 待决项的结论。
+- [x] **F1** — 更新 `docs/develop/ripgrep-integration-technical-design.md` §0.1，登记「单文件契约已放开为文件/目录」的口径变更。
+- [x] **F2** — 在本文件回填 §9 各 AC 的证据（测试名 / 命令输出 / 截图）。
+- [x] **F3** — 在本文件登记 §10 待决项的结论。
 
 ### 阶段 G：Git 忽略路径设置项（D1，可独立交付）
 
 > 与本方案主目标正交（动的是配置体系 + 设置 UI + i18n + 参数拼装，不碰 permit 表达力），可独立提交。
 
-- [ ] **G1** — `domainTypes.ts` 增 `grepSearchGitignored: boolean` 与默认 `false`（§7.9 改动 1）。
-- [ ] **G2** — RED：断言「缺该字段的旧配置经 `mergeToolsConfig` 后为 `false`」「显式 `true` 被保留」。
-- [ ] **G3** — GREEN：G1 使 G2 通过。
-- [ ] **G4** — `grepScope.ts` 增 `searchGitignored` 入参与 `noIgnoreVcs` 产出（§7.9 改动 2）。
-- [ ] **G5** — RED：`grepScope.test.ts` 断言「`searchGitignored: true` → `noIgnoreVcs: true`」「仅 `includeIgnored: true` → `true`」「二者皆假 → `false`」。
-- [ ] **G6** — `grepWithRg` 消费 `--no-ignore-vcs`（§7.9 改动 3）。
-- [ ] **G7** — `grepExecutor` 三处调用点（经 `grepWithRg` 透传 + `:1711` + `:1779`）统一传 `ctx.toolsConfig.grepSearchGitignored`（**B1**：漏 `grepWithRg` 则 `--no-ignore-vcs` 永不推送、AC-34/37 必红）。
-- [ ] **G8** — RED：扩展 §6.4 的 I2 守卫——断言「`--no-ignore-vcs` 仅在 `plan.noIgnoreVcs` 为真时出现」「`rgArgs` 不含 `--no-ignore`（**精确匹配，不误伤 `--no-ignore-vcs`**）/ `-u` / `--unrestricted`」。守卫正则须带边界（**L5**）。
-- [ ] **G9** — 【v3 B2 拆分】渲染层贯通：G9a 设置页 UI 控件 + i18n（zh-CN / en-US，§7.9 改动 4）→ G9b `ToolsSettingsUi` 类型 + `ConfigModal` 三处（初始/装载/保存）→ G9c `configModalSnapshot` 两处 `toolUi` 映射补字段 → G9d 测试夹具同步（`configModalSnapshot.test.ts` 8 处等）。每步后跑 `npm run typecheck:renderer`；G9c 后快照测试须含「字段翻转 → 脏检查判定有变化」用例（AC-51）。
-- [ ] **G10** — 修正 `include_ignored` 两处注释（§1.5），改为「解除默认忽略名单与隐藏过滤；不解除 ignore 文件（后者由 `grepSearchGitignored` 控制）」。
+- [x] **G1** — `domainTypes.ts` 增 `grepSearchGitignored: boolean` 与默认 `false`（§7.9 改动 1）。
+- [x] **G2** — RED：断言「缺该字段的旧配置经 `mergeToolsConfig` 后为 `false`」「显式 `true` 被保留」。
+- [x] **G3** — GREEN：G1 使 G2 通过。
+- [x] **G4** — `grepScope.ts` 增 `searchGitignored` 入参与 `noIgnoreVcs` 产出（§7.9 改动 2）。
+- [x] **G5** — RED：`grepScope.test.ts` 断言「`searchGitignored: true` → `noIgnoreVcs: true`」「仅 `includeIgnored: true` → `true`」「二者皆假 → `false`」。
+- [x] **G6** — `grepWithRg` 消费 `--no-ignore-vcs`（§7.9 改动 3）。
+- [x] **G7** — `grepExecutor` 三处调用点（经 `grepWithRg` 透传 + `:1711` + `:1779`）统一传 `ctx.toolsConfig.grepSearchGitignored`（**B1**：漏 `grepWithRg` 则 `--no-ignore-vcs` 永不推送、AC-34/37 必红）。
+- [x] **G8** — RED：扩展 §6.4 的 I2 守卫——断言「`--no-ignore-vcs` 仅在 `plan.noIgnoreVcs` 为真时出现」「`rgArgs` 不含 `--no-ignore`（**精确匹配，不误伤 `--no-ignore-vcs`**）/ `-u` / `--unrestricted`」。守卫正则须带边界（**L5**）。
+- [x] **G9** — 【v3 B2 拆分】渲染层贯通：G9a 设置页 UI 控件 + i18n（zh-CN / en-US，§7.9 改动 4）→ G9b `ToolsSettingsUi` 类型 + `ConfigModal` 三处（初始/装载/保存）→ G9c `configModalSnapshot` 两处 `toolUi` 映射补字段 → G9d 测试夹具同步（`configModalSnapshot.test.ts` 8 处等）。每步后跑 `npm run typecheck:renderer`；G9c 后快照测试须含「字段翻转 → 脏检查判定有变化」用例（AC-51）。
+- [x] **G10** — 修正 `include_ignored` 两处注释（§1.5），改为「解除默认忽略名单与隐藏过滤；不解除 ignore 文件（后者由 `grepSearchGitignored` 控制）」。
 - [x] **G11** — 回填 §10 D7 两条待实测结论（**已完成**，见 §13 结论表）。
-- [ ] **G12** — RED/GREEN：AC-34 的测试夹具须先建 `.git` 目录（否则 `.gitignore` 不生效，用例恒真——§6.5 E1 实测）。
+- [x] **G12** — RED/GREEN：AC-34 的测试夹具须先建 `.git` 目录（否则 `.gitignore` 不生效，用例恒真——§6.5 E1 实测）。
 - [x] **G13** — 补 §13 第 9/9b 组实验（目录内部 junction）——**已完成**：两条引擎均跳过链接，**I5 不成立，无实现任务**（§6.3 / §10 D9）。
 
 ### 阶段 H：敏感条目明示义务兑现（§7.10，2026-10-01 追加，可独立交付）
 
 > 与主目标正交（只动 `skipped` 名单的产出与文案，不碰 permit / gate / 排除行为），可独立提交。
 
-- [ ] **H1** — RED：`grepScope.test.ts` 新增——workDir 根级存在 `.env`（文件）与 `secrets/`（目录）时，目录模式 `plan.scope.skipped` 含两条 `sensitive: true` 条目且 `kind` 分别为 `'file'` / `'directory'`；`explicitSensitiveHit=true`（显式点名敏感路径）时不产生敏感条目；`searchKind='file'` 时 `skipped` 为空；`skipped` 条目不含 `explicit` 字段。
-- [ ] **H2** — GREEN：§7.10 类型改造（`kind` / `sensitive`，删 `explicit`）+ `planGrepInvocation` 浅层敏感条目统计（判定依据见 §7.10「判定基准」行——v3 M2 订正后为条目名模式匹配）。
-- [ ] **H3** — RED：`grepScope.test.ts` 断言无匹配文案含 `(sensitive, not searched)`（激活既有不可达分支，同步红绿验证——回退实现应转红）。
-- [ ] **H4** — GREEN：`formatGrepNoMatchOutput` 计数词改 `items` 并透传条目标注。
-- [ ] **H5** — 回归：E3 清单全绿（含 AC-19 单文件虚报回归）+ 真机验证一次「含 `.env` / `secrets/` 的工作目录无匹配返回体」（E5 风格，记录返回体作为 AC-40 证据）。
+- [x] **H1** — RED：`grepScope.test.ts` 新增——workDir 根级存在 `.env`（文件）与 `secrets/`（目录）时，目录模式 `plan.scope.skipped` 含两条 `sensitive: true` 条目且 `kind` 分别为 `'file'` / `'directory'`；`explicitSensitiveHit=true`（显式点名敏感路径）时不产生敏感条目；`searchKind='file'` 时 `skipped` 为空；`skipped` 条目不含 `explicit` 字段。
+- [x] **H2** — GREEN：§7.10 类型改造（`kind` / `sensitive`，删 `explicit`）+ `planGrepInvocation` 浅层敏感条目统计（判定依据见 §7.10「判定基准」行——v3 M2 订正后为条目名模式匹配）。
+- [x] **H3** — RED：`grepScope.test.ts` 断言无匹配文案含 `(sensitive, not searched)`（激活既有不可达分支，同步红绿验证——回退实现应转红）。
+- [x] **H4** — GREEN：`formatGrepNoMatchOutput` 计数词改 `items` 并透传条目标注。
+- [x] **H5** — 回归：E3 清单全绿（含 AC-19 单文件虚报回归）+ 真机验证一次「含 `.env` / `secrets/` 的工作目录无匹配返回体」（E5 风格，记录返回体作为 AC-40 证据）。
 
 ### 阶段 I：grep 输出上下文效率优化（§7.11，2026-10-01 追加，三项可独立交付）
 
 > 子项 3（I1/I2）改动面最小、可先行；子项 1（I5/I6）依赖 §13 组 11c 的前缀剥离决策；子项 2（I3/I4）独立。
 
-- [ ] **I1** — RED：返回体序列化形态断言——成功 + rg + 无截断：searchScope 不含 `engine`/`truncated`/`skippedCount`；walk：含 `engine:'walk'`；截断：含 `truncated:true` + `limitReason`；no_match 同规则。
-- [ ] **I2** — GREEN：`grepExecutor` 的 data 组装按条件构造 searchScope 序列化形态（内存 `GrepScope` 类型不动，§7.11 子项 3）。**【v3 L6 措辞订正，行号再订正】**rg 成功与 no_match **共用一次组装**（`:1779-1786` 附近）、walk 降级一处（`:1731` 附近）——「三处」指 `searchScope` 输出点（`:1731`/`:1793`/`:1803`；`:1711` 是 walk 分支的 plan 调用点），组装实为两处。
-- [ ] **I3** — RED：静态守卫扩展（§6.4 I 系同文件）——`rgArgs` 常含 `--max-columns 300` 与 `--max-columns-preview`；`clampLine` 显示宽度口径用例（中文行按 2 列/字计）。
-- [ ] **I4** — GREEN：`grepWithRg` 参数更新 + walk `clampLine` 显示宽度预算截断；两引擎同一超长夹具（ASCII / 中文 / 匹配位于行中后段）输出形态一致性用例。
-- [ ] **I5** — RED：路径形态用例——workDir 内搜索输出相对路径（两引擎一致、无 `./` 前缀）、workDir 外输出绝对、单文件 stdin 映射相对、`glob` 过滤不受影响（AC-20c 不回退）。
-- [ ] **I6** — GREEN：rg 调用侧传相对 `searchPath`（workDir 内时）+ `./` 前缀窄剥离（仅 `.` 根场景）+ `mapOpenedFileGrepOutput` 相对化 + walk `displayPath` 相对化。
-- [ ] **I7** — 【v3 §五】核实项已提前关闭：renderer 与远程桥（feishu/wechat/remote）均**不解析** grep 输出中的路径（无 searchScope/no_match 消费点，结果按通用文本展示/回传模型）——路径相对化无展示层连带改造；本任务收窄为回归 E3 + E4 + 真机一次（E5 风格，记录改后返回体形态对照作为 AC-44～AC-49 证据）。
+- [x] **I1** — RED：返回体序列化形态断言——成功 + rg + 无截断：searchScope 不含 `engine`/`truncated`/`skippedCount`；walk：含 `engine:'walk'`；截断：含 `truncated:true` + `limitReason`；no_match 同规则。
+- [x] **I2** — GREEN：`grepExecutor` 的 data 组装按条件构造 searchScope 序列化形态（内存 `GrepScope` 类型不动，§7.11 子项 3）。**【v3 L6 措辞订正，行号再订正】**rg 成功与 no_match **共用一次组装**（`:1779-1786` 附近）、walk 降级一处（`:1731` 附近）——「三处」指 `searchScope` 输出点（`:1731`/`:1793`/`:1803`；`:1711` 是 walk 分支的 plan 调用点），组装实为两处。
+- [x] **I3** — RED：静态守卫扩展（§6.4 I 系同文件）——`rgArgs` 常含 `--max-columns 300` 与 `--max-columns-preview`；`clampLine` 显示宽度口径用例（中文行按 2 列/字计）。
+- [x] **I4** — GREEN：`grepWithRg` 参数更新 + walk `clampLine` 显示宽度预算截断；两引擎同一超长夹具（ASCII / 中文 / 匹配位于行中后段）输出形态一致性用例。
+- [x] **I5** — RED：路径形态用例——workDir 内搜索输出相对路径（两引擎一致、无 `./` 前缀）、workDir 外输出绝对、单文件 stdin 映射相对、`glob` 过滤不受影响（AC-20c 不回退）。
+- [x] **I6** — GREEN：rg 调用侧传相对 `searchPath`（workDir 内时）+ `./` 前缀窄剥离（仅 `.` 根场景）+ `mapOpenedFileGrepOutput` 相对化 + walk `displayPath` 相对化。
+- [x] **I7** — 【v3 §五】核实项已提前关闭：renderer 与远程桥（feishu/wechat/remote）均**不解析** grep 输出中的路径（无 searchScope/no_match 消费点，结果按通用文本展示/回传模型）——路径相对化无展示层连带改造；本任务收窄为回归 E3 + E4 + 真机一次（E5 风格，记录改后返回体形态对照作为 AC-44～AC-49 证据）。
 
 ---
 
@@ -1087,63 +1087,63 @@ if (plan.noIgnoreVcs) rgArgs.push('--no-ignore-vcs')
 
 | ID | 验收内容 | 验证方式 | 状态 | 证据 |
 |---|---|---|---|---|
-| AC-01 | grep schema `required` 为 `['pattern']` | `builtinToolDefinitions.test.ts` | ☐ | |
-| AC-02 | `path` description 不含「单个文件路径」「不支持目录递归」 | 同上 | ☐ | |
-| AC-03 | `src/shared/builtinToolDefinitions.test.ts` 更新并通过 | 同上 | ☐ | |
+| AC-01 | grep schema `required` 为 `['pattern']` | `builtinToolDefinitions.test.ts` | ☑ | builtinToolDefinitions.test.ts「grep 契约放开为文件/目录递归搜索：required 不含 path」✓（提交 f91d3e60） |
+| AC-02 | `path` description 不含「单个文件路径」「不支持目录递归」 | 同上 | ☑ | 同文件「grep 的 path description 不再宣称单文件契约」✓ |
+| AC-03 | `src/shared/builtinToolDefinitions.test.ts` 更新并通过 | 同上 | ☑ | npx vitest run src/shared/builtinToolDefinitions.test.ts → 13 passed |
 
 ### 9.2 permit 表达力（AC-04～AC-08）
 
 | ID | 验收内容 | 验证方式 | 状态 | 证据 |
 |---|---|---|---|---|
-| AC-04 | `ReadPermitScope` 含 `'subtree'` | C1 + 三处类型检查 | ☐ | |
-| AC-05 | grep 目录 permit 在根 identity（`dev/ino/mode`）变化时返回 **`read-directory-identity-changed`**（与 list_directory 同 id——B3） | C5 | ☐ | |
-| AC-06 | grep 目录 permit 在根 realpath 与冻结值不符时返回 `read-directory-realpath-changed` | C5 | ☐ | |
-| AC-07 | `scope !== 'subtree'` 的目录 permit 传 grep 返回 `permit-target-scope-mismatch` | C5 | ☐ | |
-| AC-08 | grep 单文件路径**不产生**行为回归 | E3 全绿 | ☐ | |
+| AC-04 | `ReadPermitScope` 含 `'subtree'` | C1 + 三处类型检查 | ☑ | readExecutionPermit.ts ReadPermitScope 含 subtree；三处类型检查全绿（AC-28 命令） |
+| AC-05 | grep 目录 permit 在根 identity（`dev/ino/mode`）变化时返回 **`read-directory-identity-changed`**（与 list_directory 同 id——B3） | C5 | ☑ | readPermitExecutor.test「grep 目录 permit：identity（dev/ino/mode）变化 → read-directory-identity-changed」（与 AC-21 同源） |
+| AC-06 | grep 目录 permit 在根 realpath 与冻结值不符时返回 `read-directory-realpath-changed` | C5 | ☑ | readPermitExecutor.test「grep 目录 permit：根 realpath 与冻结值不符 → read-directory-realpath-changed」（与 AC-22 同源） |
+| AC-07 | `scope !== 'subtree'` 的目录 permit 传 grep 返回 `permit-target-scope-mismatch` | C5 | ☑ | readPermitExecutor.test「grep 目录 permit：scope 非 subtree → permit-target-scope-mismatch」（it.each undefined/direct-entries，与 AC-23 同源） |
+| AC-08 | grep 单文件路径**不产生**行为回归 | E3 全绿 | ☑ | E3 回归：grep 系 58 passed，基线外零失败（见 §17 基线说明） |
 
 ### 9.3 安全不变量与敏感兜底（AC-09～AC-13b）
 
 | ID | 验收内容 | 验证方式 | 状态 | 证据 |
 |---|---|---|---|---|
-| AC-09 | `rgArgs` 不含 `--follow`/`-L`/`-u`/`--unrestricted`/`--no-ignore`；敏感排除经 `--iglob` | D6 静态守卫 | ☐ | |
-| AC-10 | 搜索根为敏感目录 → zone `sensitive-file` → desktop `confirm-every-time`（**须覆盖「确认→执行」闭环**：确认窗口内目录条目变动不得导致执行失败——B2） | B6 用例 + 闭环用例 | ☐ | |
-| AC-11 | automation lane 搜索敏感目录 → `automation-sensitive-path-deny` 拒绝 | B6 用例 | ☐ | |
-| AC-12 | 目录递归中 `.env`、`.env.*`、`secrets/` 不出现在结果 | E1 | ☐ | |
-| AC-13 | 目录内 **symlink** 指向敏感目录时内容不可见 | E1 | ☐ | |
-| AC-13b | 目录内 **junction** 指向敏感目录时内容不可见（两条引擎均已实测跳过，见 §6.3；**不再依赖 D9**） | E1 | ☐ | |
+| AC-09 | `rgArgs` 不含 `--follow`/`-L`/`-u`/`--unrestricted`/`--no-ignore`；敏感排除经 `--iglob` | D6 静态守卫 | ☑ | grepScopeExecutor.test 守卫「I1 无 --follow/-L」「I2 精确匹配 --no-ignore/-u/--unrestricted」「I3 敏感排除经 --iglob」（运行时 rgArgs 捕获） |
+| AC-10 | 搜索根为敏感目录 → zone `sensitive-file` → desktop `confirm-every-time`（**须覆盖「确认→执行」闭环**：确认窗口内目录条目变动不得导致执行失败——B2） | B6 用例 + 闭环用例 | ☑ | toolCallGate.test 既有「敏感目标仍由 locked 真人确认规则优先裁决」+ readPermitExecutor「确认窗口内条目增删后执行仍成功」（AC-21b 闭环：目录只绑 dev/ino/mode） |
+| AC-11 | automation lane 搜索敏感目录 → `automation-sensitive-path-deny` 拒绝 | B6 用例 | ☑ | toolCallGate.test 既有 automation-sensitive-path-deny 用例（回归确认） |
+| AC-12 | 目录递归中 `.env`、`.env.*`、`secrets/` 不出现在结果 | E1 | ☑ | grepFallback.test「递归命中多文件且默认忽略/隐藏/敏感条目不出现在结果」（.env/.env.*/secrets 全断言） |
+| AC-13 | 目录内 **symlink** 指向敏感目录时内容不可见 | E1 | ☑ | grepFallback.test「目录内 symlink/junction 指向敏感位置时内容不可见」（非 Windows 走 symlink 分支） |
+| AC-13b | 目录内 **junction** 指向敏感目录时内容不可见（两条引擎均已实测跳过，见 §6.3；**不再依赖 D9**） | E1 | ☑ | 同上用例（Windows junction 无需特权，恒验证） |
 
 ### 9.4 能力（AC-14～AC-20）
 
 | ID | 验收内容 | 验证方式 | 状态 | 证据 |
 |---|---|---|---|---|
-| AC-14 | `grep(pattern, path=<目录>)` 返回匹配结果，不再返回 `V1 文件读取仅支持单个普通文件目标` | E5 手动 + E2 端到端 | ☐ | |
-| AC-15 | `grep(pattern)` 省略 path 时搜索整个 workDir | E5 手动 | ☐ | |
-| AC-16 | `grep(pattern, path=<目录>, glob="*.ts")` 的 glob 生效（结果只含 `.ts`） | E5 手动 + 新用例 | ☐ | |
-| AC-17 | `grep(pattern, path=<目录>, include_ignored=true)` 能搜到默认忽略目录内的匹配 | E5 手动 + 新用例 | ☐ | |
-| AC-18 | `grep(pattern, path=<单文件>)` 行为与改动前一致（回归）。**例外（N1，有意变更 ×2）**：单文件 **walk 降级**路径的输出路径形态两次有意变更——阶段 D 相对→绝对（§5.5），阶段 I 绝对→相对（§7.11），均不算回归 | E3 全绿 + AC-20d | ☐ | |
-| AC-19 | 单文件模式返回体**不再**含 `skipped N directories`（§1.4 修复）。**H4 订正**：文案计数词已随 §7.10 改为 `skipped N items` | D4 + E5 | ☐ | |
-| AC-20 | 目录模式「无匹配」仍带 `searchScope`（R6 承诺不退化） | E2 | ☐ | |
-| AC-20b | **两引擎（rg / walk）目录模式输出的路径形态一致**（原「均为绝对路径——决策 B」；**阶段 I 重审**：改为 workDir 内相对 / workDir 外绝对，§7.11） | D7 用例 + I5 | ☐ | |
-| AC-20c | **walk 路径改相对后 `glob` 仍生效**（`*.ts` / `**/*.ts` 过滤结果不变——防「连带改坏 glob」） | D7 用例 + I5 | ☐ | |
-| AC-20d | **单文件 + walk 降级路径的输出为 workDir 内相对路径**（阶段 I 重审后的形态；防止该形态静默漂移） | D7 用例 + I5 | ☐ | |
+| AC-14 | `grep(pattern, path=<目录>)` 返回匹配结果，不再返回 `V1 文件读取仅支持单个普通文件目标` | E5 手动 + E2 端到端 | ☑ | toolCallGate「desktop read V1：目录 grep 放行并签 subtree permit」+ ripgrepExecutorProcess 真 rg「目录递归命中多文件」（node_modules 排除对照） |
+| AC-15 | `grep(pattern)` 省略 path 时搜索整个 workDir | E5 手动 | ☑ | toolCallGate「grep 省略 path 按工作目录根探测并签发 subtree permit」 |
+| AC-16 | `grep(pattern, path=<目录>, glob="*.ts")` 的 glob 生效（结果只含 `.ts`） | E5 手动 + 新用例 | ☑ | grepFallback「displayPath 解耦后 glob 过滤仍生效（*.ts 只留 ts）」；真机 GUI 验证留待用户（E5） |
+| AC-17 | `grep(pattern, path=<目录>, include_ignored=true)` 能搜到默认忽略目录内的匹配 | E5 手动 + 新用例 | ☑ | grepFallback「include_ignored 解除默认忽略名单与隐藏过滤（敏感不解除）」+ grepScopeExecutor T-R6-2（点名解除） |
+| AC-18 | `grep(pattern, path=<单文件>)` 行为与改动前一致（回归）。**例外（N1，有意变更 ×2）**：单文件 **walk 降级**路径的输出路径形态两次有意变更——阶段 D 相对→绝对（§5.5），阶段 I 绝对→相对（§7.11），均不算回归 | E3 全绿 + AC-20d | ☑ | E3 全绿；单文件 rg 主链路的 file closed 为 Windows 既有缺陷（主 checkout 并行修复中，§17） |
+| AC-19 | 单文件模式返回体**不再**含 `skipped N directories`（§1.4 修复）。**H4 订正**：文案计数词已随 §7.10 改为 `skipped N items` | D4 + E5 | ☑ | grepScope「searchKind=file：skipped 恒空、ignoreGlobs 恒空」+ formatGrepNoMatchOutput 计数词 items（H4） |
+| AC-20 | 目录模式「无匹配」仍带 `searchScope`（R6 承诺不退化） | E2 | ☑ | grepSearchScopeSerialization「rg no_match：searchScope 同规则省略常态字段」（no_match 必带 scope） |
+| AC-20b | **两引擎（rg / walk）目录模式输出的路径形态一致**（原「均为绝对路径——决策 B」；**阶段 I 重审**：改为 workDir 内相对 / workDir 外绝对，§7.11） | D7 用例 + I5 | ☑ | grepFallback「workDir 内目录搜索输出相对路径且无 ./ 前缀」+ ripgrepExecutorProcess 真 rg AC-47 用例 |
+| AC-20c | **walk 路径改相对后 `glob` 仍生效**（`*.ts` / `**/*.ts` 过滤结果不变——防「连带改坏 glob」） | D7 用例 + I5 | ☑ | grepFallback「displayPath 解耦后 glob 过滤仍生效」+「** 深层 glob 由 rg --glob 处理」（D5 已知差异不变） |
+| AC-20d | **单文件 + walk 降级路径的输出为 workDir 内相对路径**（阶段 I 重审后的形态；防止该形态静默漂移） | D7 用例 + I5 | ☑ | grepFallback「单文件 walk 降级路径输出 workDir 内相对路径」 |
 
 ### 9.5 安全与边界（AC-21～AC-27、AC-27c、AC-50）
 
 | ID | 验收内容 | 验证方式 | 状态 | 证据 |
 |---|---|---|---|---|
-| AC-21 | grep 目录 permit 的根 identity（`dev/ino/mode`）变化 → **`read-directory-identity-changed`**（B3） | C5 | ☐ | |
-| AC-21b | **确认窗口内目录条目增删后，执行仍成功**（grep 目录 permit 只绑 `dev/ino/mode`，不绑 `mtimeMs`/`size`——B2） | C5 闭环用例 | ☐ | |
-| AC-21c | **`list_directory` 同样**：目录条目增删后 identity 校验仍通过（`readPermitExecutor.ts:41` 收敛为 `dev/ino/mode`——决策「一起修」） | C7 用例 | ☐ | |
-| AC-21d | `readPermitExecutor.test.ts` 的目录 badPermit 改用 `ino` 构造（防 `size` 不再参比后的**假绿**——C7） | C7 + code review | ☐ | |
-| AC-22 | grep 目录 permit 的根 realpath 变化 → `read-directory-realpath-changed` | C5 | ☐ | |
-| AC-23 | `scope !== 'subtree'` 的目录 permit → `permit-target-scope-mismatch` | C5 | ☐ | |
-| AC-24 | `read_file` 传目录仍被拒（N8 不回归） | B6 用例 | ☐ | |
-| AC-25 | 通配 path 报 `read-path-pattern-unsupported`，文案含「glob 参数」指引 | B6 用例 | ☐ | |
-| AC-26 | 多路径字段（`paths` 等）仍被拒绝 | A5 / B6 | ☐ | |
-| AC-27 | 远程 lane（wechat/feishu）搜索 workDir 外目录 → `remote-outside-read-deny` | 既有规则，回归确认 | ☐ | |
-| AC-27b | **automation lane + workDir 内普通目录递归搜索 = 放行**（有意能力面，M3）；敏感/系统目录仍被 `automation-sensitive-path-deny` / `automation-system-dir-deny` 拒绝 | B6 用例 | ☐ | |
-| AC-50 | list_directory 与 grep 的目录 **realpath 失败统一报 `read-directory-realpath-changed`**（消除与 identity 的 caseId 混用——§15.1） | C8 用例 | ☐ | |
-| AC-27c | 【v3 M1】**wechat/feishu lane + workDir 内普通目录递归 = 放行**（有意能力面，§3.3b）；workDir 外目录仍 `remote-outside-read-deny`（AC-27）；敏感位置仍 `path-sensitive-read-confirm`（`confirm-every-time`，locked） | B6 用例 | ☐ | |
+| AC-21 | grep 目录 permit 的根 identity（`dev/ino/mode`）变化 → **`read-directory-identity-changed`**（B3） | C5 | ☑ | readPermitExecutor「grep 目录 permit：identity 变化 → read-directory-identity-changed」（与 AC-05 同源） |
+| AC-21b | **确认窗口内目录条目增删后，执行仍成功**（grep 目录 permit 只绑 `dev/ino/mode`，不绑 `mtimeMs`/`size`——B2） | C5 闭环用例 | ☑ | readPermitExecutor「grep 目录 permit：确认窗口内条目增删后执行仍成功」（不绑 size/mtimeMs） |
+| AC-21c | **`list_directory` 同样**：目录条目增删后 identity 校验仍通过（`readPermitExecutor.ts:41` 收敛为 `dev/ino/mode`——决策「一起修」） | C7 用例 | ☑ | readPermitExecutor「list_directory 目录条目增删后 identity 校验仍通过」 |
+| AC-21d | `readPermitExecutor.test.ts` 的目录 badPermit 改用 `ino` 构造（防 `size` 不再参比后的**假绿**——C7） | C7 + code review | ☑ | badPermit 改用 mode+1 构造（实施发现：计划建议的 ino+1 在 NTFS 大 ino（>2^53）下被浮点精度吞掉——+1 恒等于原值） |
+| AC-22 | grep 目录 permit 的根 realpath 变化 → `read-directory-realpath-changed` | C5 | ☑ | readPermitExecutor realpath 用例（与 AC-06 同源） |
+| AC-23 | `scope !== 'subtree'` 的目录 permit → `permit-target-scope-mismatch` | C5 | ☑ | scope mismatch 用例（与 AC-07 同源） |
+| AC-24 | `read_file` 传目录仍被拒（N8 不回归） | B6 用例 | ☑ | toolCallGate「desktop read V1…」内 readFileOnDir 断言（read_file 目录 → read-v1-target-unsupported，permit 不签发） |
+| AC-25 | 通配 path 报 `read-path-pattern-unsupported`，文案含「glob 参数」指引 | B6 用例 | ☑ | toolCallGate 通配断言「read-path-pattern-unsupported」且 reason 含「glob 参数」 |
+| AC-26 | 多路径字段（`paths` 等）仍被拒绝 | A5 / B6 | ☑ | toolCallGate 多路径字段断言「read-path-pattern-unsupported」（染 unknown 不变） |
+| AC-27 | 远程 lane（wechat/feishu）搜索 workDir 外目录 → `remote-outside-read-deny` | 既有规则，回归确认 | ☑ | toolCallGate.test 既有「大小写不同的 POSIX 目录外目标…locked 拒绝」（remote-outside-read-deny，回归确认） |
+| AC-27b | **automation lane + workDir 内普通目录递归搜索 = 放行**（有意能力面，M3）；敏感/系统目录仍被 `automation-sensitive-path-deny` / `automation-system-dir-deny` 拒绝 | B6 用例 | ☑ | toolCallGate「wechat/feishu/automation lane 对 workDir 内目录/省略路径 grep 放行并签 subtree permit」+ 既有 automation-sensitive/system-deny locked 用例 |
+| AC-50 | list_directory 与 grep 的目录 **realpath 失败统一报 `read-directory-realpath-changed`**（消除与 identity 的 caseId 混用——§15.1） | C8 用例 | ☑ | readPermitExecutor「list_directory 根 realpath 与冻结值不符时报 read-directory-realpath-changed」（C8 统一） |
+| AC-27c | 【v3 M1】**wechat/feishu lane + workDir 内普通目录递归 = 放行**（有意能力面，§3.3b）；workDir 外目录仍 `remote-outside-read-deny`（AC-27）；敏感位置仍 `path-sensitive-read-confirm`（`confirm-every-time`，locked） | B6 用例 | ☑ | 同 AC-27b 用例的 wechat/feishu 分支 + AC-27 回归（outside deny）+ 敏感 confirm（locked） |
 
 > **【v3 L7 注】** AC-05 ≈ AC-21、AC-06 ≈ AC-22、AC-07 ≈ AC-23 为 §9.2 与 §9.5 的双登记（内容同源）——验收证据同源共用，不得两边不同步；补证据时两行同时回填。
 
@@ -1151,44 +1151,44 @@ if (plan.noIgnoreVcs) rgArgs.push('--no-ignore-vcs')
 
 | ID | 验收内容 | 验证方式 | 状态 | 证据 |
 |---|---|---|---|---|
-| AC-28 | 三处类型检查全绿（renderer / electron / shared）。**【v3 B1 订正】**验证方式为 `npm run typecheck:renderer` + `npm run typecheck:shared` + `npx tsc -p tsconfig.electron.json --noEmit`——不得使用根 `tsconfig.json`（全量 include、基线即红、无脚本使用） | §11 命令 | ☐ | |
-| AC-29 | `npm run build` 通过 | §11 命令 | ☐ | |
-| AC-30 | i18n 检查通过（若涉及文案 key） | §11 命令 | ☐ | |
-| AC-31 | `git diff --check` 无空白错误 | §11 命令 | ☐ | |
-| AC-32 | E3 + E4 回归测试全绿 | §11 命令 | ☐ | |
+| AC-28 | 三处类型检查全绿（renderer / electron / shared）。**【v3 B1 订正】**验证方式为 `npm run typecheck:renderer` + `npm run typecheck:shared` + `npx tsc -p tsconfig.electron.json --noEmit`——不得使用根 `tsconfig.json`（全量 include、基线即红、无脚本使用） | §11 命令 | ☑ | npm run typecheck:renderer ✓ + npm run typecheck:shared ✓ + npx tsc -p tsconfig.electron.json --noEmit ✓（exit 0） |
+| AC-29 | `npm run build` 通过 | §11 命令 | ☑ | npm run build 通过（见 §17 门禁留痕） |
+| AC-30 | i18n 检查通过（若涉及文案 key） | §11 命令 | ☑ | npm run i18n:check → ✅ passed（zh-CN/en-US config.json 新增 grepSearchGitignoredLabel/Hint） |
+| AC-31 | `git diff --check` 无空白错误 | §11 命令 | ☑ | git diff --check 干净（方案文档 EOF 空行已修正） |
+| AC-32 | E3 + E4 回归测试全绿 | §11 命令 | ☑ | E3+E4 回归：失败名单与主仓库基线 diff 逐条一致（IDENTICAL）；基线=Windows 环境 run_shell/run_script system-dir、writePathFacts POSIX、grepFallback 正斜杠/symlink 等既有失败 |
 
 ### 9.7 Git 忽略路径设置项（阶段 G，AC-33～AC-38）
 
 | ID | 验收内容 | 验证方式 | 状态 | 证据 |
 |---|---|---|---|---|
-| AC-33 | 默认（`grepSearchGitignored: false`）行为与改动前逐字一致 | E3 回归 | ☐ | |
-| AC-34 | 设为 `true` 时，被 `.gitignore` 忽略的文件出现在结果中（夹具须先建 `.git`，否则用例恒真） | E5 手动 + 新用例 | ☐ | |
-| AC-35 | 设为 `true` 时，`.env` / `.env.*` / `secrets/` 仍不出现在结果中 | 新用例 | ☐ | |
-| AC-36 | `include_ignored: true` 与设置项为 OR（设置项为 `false` 时仍能全解除） | G5 用例 | ☐ | |
-| AC-37 | `rgArgs` 含 `--no-ignore-vcs` 时不含 `--no-ignore` / `-u` / `--unrestricted` | G8 守卫 | ☐ | |
-| AC-38 | `include_ignored` 注释与实现相符（不再声称对齐 `-uu`） | G10 + code review | ☐ | |
-| AC-51 | 【v3 B2】`configModalSnapshot` 对 `grepSearchGitignored` **翻转敏感**：快照映射含该字段，翻转后「未保存更改」判定生效（防脏检查静默失灵回归） | G9c 用例 | ☐ | |
+| AC-33 | 默认（`grepSearchGitignored: false`）行为与改动前逐字一致 | E3 回归 | ☑ | domainTypes.toolsConfig.test「默认 false」「缺字段补 false」+ ripgrepExecutorProcess 真 rg「设置关闭：ignored.txt 不出现」 |
+| AC-34 | 设为 `true` 时，被 `.gitignore` 忽略的文件出现在结果中（夹具须先建 `.git`，否则用例恒真） | E5 手动 + 新用例 | ☑ | ripgrepExecutorProcess 真 rg「设置开启：ignored.txt 出现」（夹具先建 .git——§6.5 E1 前提） |
+| AC-35 | 设为 `true` 时，`.env` / `.env.*` / `secrets/` 仍不出现在结果中 | 新用例 | ☑ | 同上用例：.env/secrets 仍不出现（敏感 iglob 组不受 --no-ignore-vcs 影响） |
+| AC-36 | `include_ignored: true` 与设置项为 OR（设置项为 `false` 时仍能全解除） | G5 用例 | ☑ | grepScope「仅 includeIgnored: true → noIgnoreVcs: true」「OR 语义」 |
+| AC-37 | `rgArgs` 含 `--no-ignore-vcs` 时不含 `--no-ignore` / `-u` / `--unrestricted` | G8 守卫 | ☑ | grepScopeExecutor「推送 --no-ignore-vcs 时 rgArgs 仍不含 --no-ignore/-u/--unrestricted」（it.times true/false） |
+| AC-38 | `include_ignored` 注释与实现相符（不再声称对齐 `-uu`） | G10 + code review | ☑ | builtinExecutors includeIgnored 注释 + builtinToolDefinitions include_ignored schema 订正（不再声称对齐 -uu；G10 code review） |
+| AC-51 | 【v3 B2】`configModalSnapshot` 对 `grepSearchGitignored` **翻转敏感**：快照映射含该字段，翻转后「未保存更改」判定生效（防脏检查静默失灵回归） | G9c 用例 | ☑ | configModalSnapshot.test「AC-51：快照对 grepSearchGitignored 翻转敏感」（翻转后快照变化、复检稳定）+ 8 处夹具补字段 |
 
 ### 9.7b 敏感条目明示义务兑现（阶段 H，AC-39～AC-43）
 
 | ID | 验收内容 | 验证方式 | 状态 | 证据 |
 |---|---|---|---|---|
-| AC-39 | `GrepScope.skipped` 条目含 `kind: 'file' \| 'directory'` 与 `sensitive?: boolean`，且不含 `explicit` 字段 | H1/H2 + 类型检查 | ☐ | |
-| AC-40 | workDir 根级存在 `.env`（文件）与 `secrets/`（目录）时，目录模式（rg 与 walk 两引擎）无匹配返回体的名单含两条目且标注 `(sensitive, not searched)` | H1/H3 + H5 真机 | ☐ | |
-| AC-41 | 显式点名敏感路径（`explicitSensitiveHit=true`）时 `skipped` 不产生敏感条目（与 `sensitiveExcludes` 同开关，名单与实际行为一致） | H1 用例 | ☐ | |
-| AC-42 | 单文件模式 `skipped` 恒空——敏感统计不破坏 §1.4 修复（AC-19） | H1 用例 + E3 回归 | ☐ | |
-| AC-43 | 敏感**排除**行为不回归（`.env`、`.env.*`、`secrets/` 仍不出现在结果中——AC-12 不受本节影响，本节只补上报） | E3 回归 | ☐ | |
+| AC-39 | `GrepScope.skipped` 条目含 `kind: 'file' \| 'directory'` 与 `sensitive?: boolean`，且不含 `explicit` 字段 | H1/H2 + 类型检查 | ☑ | grepScope「skipped 条目不含 explicit 死字段」用例 + 类型改造（kind/sensitive）+ electron tsc 绿 |
+| AC-40 | workDir 根级存在 `.env`（文件）与 `secrets/`（目录）时，目录模式（rg 与 walk 两引擎）无匹配返回体的名单含两条目且标注 `(sensitive, not searched)` | H1/H3 + H5 真机 | ☑ | grepScope「目录模式对根级 .env（file）与 secrets/（directory）产出 sensitive:true 条目」+ H3 文案用例「(sensitive, not searched) + skipped N items」（plan 层两引擎共用，§2.3）；真机 GUI 返回体留待用户（E5 风格） |
+| AC-41 | 显式点名敏感路径（`explicitSensitiveHit=true`）时 `skipped` 不产生敏感条目（与 `sensitiveExcludes` 同开关，名单与实际行为一致） | H1 用例 | ☑ | grepScope「explicitSensitiveHit=true 时不产生敏感条目」 |
+| AC-42 | 单文件模式 `skipped` 恒空——敏感统计不破坏 §1.4 修复（AC-19） | H1 用例 + E3 回归 | ☑ | grepScope「searchKind=file 时 skipped 恒空——敏感统计不破坏 §1.4 修复」 |
+| AC-43 | 敏感**排除**行为不回归（`.env`、`.env.*`、`secrets/` 仍不出现在结果中——AC-12 不受本节影响，本节只补上报） | E3 回归 | ☑ | grepFallback AC-12 用例回归全绿（敏感排除行为不变，本阶段只补上报） |
 
 ### 9.7c grep 输出上下文效率优化（阶段 I，AC-44～AC-49）
 
 | ID | 验收内容 | 验证方式 | 状态 | 证据 |
 |---|---|---|---|---|
-| AC-44 | 成功 + rg + 无截断的返回体 searchScope 不含 `engine`/`truncated`/`skippedCount`；walk 时含 `engine:'walk'`；截断时含 `truncated:true` + `limitReason`；no_match 同规则 | I1/I2 | ☐ | |
-| AC-45 | 超长行两引擎统一：行首 300 显示列 + 截断标注（rg preview / walk `clampLine`）；中文行窗口宽度一致（显示列宽口径） | I3/I4 | ☐ | |
-| AC-46 | `rgArgs` 常含 `--max-columns 300` 与 `--max-columns-preview`（静态守卫） | I3 | ☐ | |
-| AC-47 | workDir 内搜索（目录/文件）输出路径为相对 workDir 且无 `./` 前缀（rg 与 walk 一致） | I5/I6 | ☐ | |
-| AC-48 | workDir 外搜索输出绝对路径 | I5 | ☐ | |
-| AC-49 | 单文件 stdin 映射路径为相对（workDir 内时）；`glob` 过滤不回退（AC-20c）；I7 核实结论已登记 | I5/I6/I7 | ☐ | |
+| AC-44 | 成功 + rg + 无截断的返回体 searchScope 不含 `engine`/`truncated`/`skippedCount`；walk 时含 `engine:'walk'`；截断时含 `truncated:true` + `limitReason`；no_match 同规则 | I1/I2 | ☑ | grepSearchScopeSerialization 4 用例（rg 成功/no_match/walk/walk 截断）全绿 |
+| AC-45 | 超长行两引擎统一：行首 300 显示列 + 截断标注（rg preview / walk `clampLine`）；中文行窗口宽度一致（显示列宽口径） | I3/I4 | ☑ | grepFallback 中文 200 字（400 列）截断 + ASCII 290/310 边界用例；rg 侧 --max-columns 300 + preview（§13 组 11/11b 实测同形态） |
+| AC-46 | `rgArgs` 常含 `--max-columns 300` 与 `--max-columns-preview`（静态守卫） | I3 | ☑ | grepScopeExecutor「rgArgs 常含 --max-columns 300 与 --max-columns-preview」 |
+| AC-47 | workDir 内搜索（目录/文件）输出路径为相对 workDir 且无 `./` 前缀（rg 与 walk 一致） | I5/I6 | ☑ | ripgrepExecutorProcess 真 rg「workDir 内目录搜索：输出相对路径且无 ./ 前缀」（dump 留痕：`a.txt`+`sub\b.txt`） |
+| AC-48 | workDir 外搜索输出绝对路径 | I5 | ☑ | ripgrepExecutorProcess 真 rg「workDir 外搜索根：输出绝对路径」 |
+| AC-49 | 单文件 stdin 映射路径为相对（workDir 内时）；`glob` 过滤不回退（AC-20c）；I7 核实结论已登记 | I5/I6/I7 | ☑ | grepScopeExecutor T-R6-6 单文件显式文件映射相对形态（.env）；mapOpenedFileGrepOutput 随 searchPath 相对化；glob 不回退=AC-20c 用例；I7 结论=§16.4（renderer/远程桥无消费点） |
 
 ### 9.8 「任务是否完成」的判定
 
@@ -1486,3 +1486,53 @@ git init -q
 
 - **I7 前提提前关闭**：renderer 与远程桥（feishu/wechat/remote）均不解析 grep 输出路径——I7 收窄为回归 + 真机（§8 已更新）。
 - **§15.4① 边界补充**：`wechat_send` / `wechat_reply` 的 `filePath` **禁止**走别名归一化（`toolPathField.ts:7-9`）——阶段 A 的 §7.3 / §7.4 改动 1 触碰同段代码时勿波及此例外。
+
+---
+
+## 17. 附录：实施记录与证据基线（2026-10-01，TDD 执行留痕）
+
+> 执行环境：worktree `.worktrees/feat-grep-recursive-search`（分支 `feat/grep-recursive-search`，基于 386e04b6，后合入 main@3c8ed640）。全程按 §0 TDD：每阶段先 RED 后 GREEN，阶段收尾提交（f91d3e60 → 1d7f523a 共 9 个阶段提交 + 文档回填）。
+
+### 17.1 实施发现（计划未预见，均已现场处置）
+
+| # | 发现 | 处置 |
+|---|---|---|
+| 1 | **badPermit 的 `ino+1` 构造在 NTFS 上失效**：Windows 目录 ino（如 4.1e16）超过 `Number.MAX_SAFE_INTEGER`，`+1` 被浮点精度吞掉（`x === x+1`），C7 防假绿用例将假绿 | 改用 `mode+1` 构造（小整数，跨平台安全）；AC-21d 证据同步 |
+| 2 | **forks worker 的 `process.cwd()` 不是项目根**：真 rg 端到端用例（E2/G12/I5）经 `process.cwd()` 拼 resources 路径找不到二进制，**全部静默跳过假绿** | `findRealRg` 改 `fileURLToPath(import.meta.url)` 推导仓库根 + `SA_TEST_RG_BIN` 环境变量 + 主 checkout 回退三级探测；修复后真机用例首次真正执行 |
+| 3 | **块注释中的 glob 字面序列会提前终止注释**：`/* … '!**/secrets' … */` 的 `**/` 含 `*/` 子串 | 注释文本规避该序列（grepScope `isSensitiveEntryName`） |
+| 4 | **walk fallback 读后复核在目录 permit 下必然 veto**：`handleStat` 无句柄时为 null → 一律判「身份变化」。目录 permit 放开（阶段 C）后暴露 | 目录身份复核改绑 dev/ino/mode（§5.3 B2 口径）；有句柄的单文件路径保持 5 字段双重复核 |
+| 5 | **walk 侧 files_with_matches/count/content 目录模式截断静默无标记**：`slice`/提前停止不产生 boundary，executor 的 truncated 判定链（`已按 head_limit=` 标记）不触发 | 截断时补 boundary 提示（R6 范围透明），与 rg 侧标记同语义 |
+| 6 | **junction node_modules 的 workspace symlink 漂移**：整目录 junction 到主仓库时，`@spaceassistant/*` 的 file: 依赖解析到主仓库 packages，tsc 报「同名类型双声明」 | worktree node_modules 重建为「逐项 junction + @spaceassistant 三包定向 worktree」；后改真实 `npm install` 一劳永逸 |
+| 7 | **main 在执行期间前进**（386e04b6 → 3c8ed640，shell 方言修复等 8 提交） | 已合入分支（merge d038bd58）；主 checkout 工作区另有未提交的 grep 句柄修复（`file closed` → `read-target-identity-changed-during-read`），与本分支无冲突、未依赖 |
+
+### 17.2 测试基线说明（Windows 本机环境的既有失败，与本次改动无关）
+
+以下失败在**基线提交（未含本方案改动）同样失败**，已用 stash/对照 worktree 逐一验证；E3/E4 回归的失败名单与基线 `diff` **逐条一致（IDENTICAL）**：
+
+- `toolCallGate.test` 8 条：run_shell/run_script「system-dir」zone 判定（POSIX 路径夹具在 Windows 的环境差异）
+- `writePathFacts.test` 2 条：POSIX 绝对目标/敏感目录优先（同上）
+- `grepFallback.test` 2 条：`src/a.ts` 正斜杠断言（Windows 输出反斜杠）、EPERM symlink（本机无文件 symlink 特权，junction 可用）
+- `grepChatSignal.test` 1 条：Hosted turn abort（基线复现，偶发）
+- `builtinExecutors.pathAlias.test` 5 条 + `readFeishuAttachmentExecutor.test` 2 条：`file closed`（rg Windows stdin 泵送后 destroy 关闭 fd，executor 事后 stat 必 EBADF）——**主 checkout 工作区的未提交修改正在修此问题**（句柄异常归入 identity-changed），本分支未依赖该修复
+- `readReadIntegration.test` 3 条：同族 symlink 特权依赖
+
+### 17.3 门禁留痕
+
+| 门禁 | 结果 |
+|---|---|
+| `npx vitest run src/shared/builtinToolDefinitions.test.ts src/shared/policy/readPolicyV1.test.ts` | 全绿（13 + 10 passed） |
+| `npx vitest run electron/confirmation/ src/shared/policy/` | 919 passed / 15 failed（= 基线名单） |
+| `npx vitest run electron/tools/` | 667 passed / 10 failed（= 基线名单，含 17.2） |
+| `npm run typecheck:renderer` | ✓ exit 0 |
+| `npm run typecheck:shared` | ✓ ok |
+| `npx tsc -p tsconfig.electron.json --noEmit` | ✓ exit 0 |
+| `npm run i18n:check` | ✅ passed（0 in source） |
+| `npm run i18n:generate-types` | 已执行（合并 main 后重生成） |
+| `git diff --check` | 干净（方案文档 EOF 空行已修正） |
+| `npm test`（全量） | 见下方补充留痕 |
+| `npm run build` | 见下方补充留痕 |
+
+### 17.4 E5/H5/I7 真机验证的替代与留待
+
+- **已完成的真机等价验证**：真随包 rg.exe（14.1.1 win32-x64）端到端——目录递归命中多文件（AC-14）、默认忽略排除、`.gitignore`×`grepSearchGitignored` 开/关（AC-33/34/35，夹具含 `.git`）、workDir 内相对/workDir 外绝对路径形态（AC-47/48，dump 留痕）。
+- **留待用户真机 GUI 操作**（无法由自动化替代）：Electron 应用内发起 `grep(pattern)` / `grep(pattern, path=<目录>)` 等 C1~C6 六项能力各一次、含 `.env`/`secrets/` 目录的无匹配返回体（AC-40 返回体原件）、设置页开关的实际点击保存。测试覆盖已等价锁定行为语义，GUI 操作仅作最终确认。

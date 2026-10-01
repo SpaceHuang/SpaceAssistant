@@ -9,6 +9,8 @@
 
 ### 0.1 当前环境可完成的任务
 
+> **口径变更登记（2026-10-01，grep 递归搜索能力释放）**：本文撰写时的「单文件契约」已放开——grep 的搜索根现为**文件或目录**（目录递归），`path` 可省略（默认整个 workDir）。详见 `docs/develop/grep-recursive-search-capability-release-plan.md`。连带口径：permit 层新增 `subtree` scope（目录递归）；rg 搜索根 workDir 内传相对路径（本文 §「传给 rg 前必须转换为相对路径」的表述由「必须」变为「根目录用 `.`、子目录用相对路径」的现状描述）；`--max-columns` 由 500 下调为 300（显示列宽口径，§7.11 子项 2）；新增 `--no-ignore-vcs` 条件参数（`grepSearchGitignored` 设置项）。本文其余内容保留为历史基线。
+
 以下任务属于本 worktree 的交付范围，必须在本地完成并留下可复现的测试或静态验证证据：
 
 - [x] 固定 ripgrep 版本、官方 release URL、归档 SHA-256、二进制 SHA-256 和三平台 manifest。
