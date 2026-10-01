@@ -65,6 +65,11 @@ export function assertExtractorsImplemented(descriptors: readonly ToolActionDesc
 
 const MULTI_PATH_GREP_FIELDS = ['paths', 'files', 'filePaths', 'file_paths'] as const
 
+/**
+ * 职责已收窄为「标记 grep 无法表达的 path 形状」（通配符与多路径字段），命中后目标被染成 unknown。
+ * 目录 path 不在此列（目录递归已支持）；「V1 仅支持单文件」的旧职责已移除，
+ * targetKind 契约由 readPolicyV1 / toolCallGate 按工具分别校验。
+ */
 export function hasUnsupportedV1ReadTarget(toolName: string, toolInput: Record<string, unknown>): boolean {
   if (toolName !== 'grep') return false
   const rawPath = extractPathField(toolInput)
@@ -111,7 +116,9 @@ export async function runExtractorsWithReadPathFact(
   toolInput: Record<string, unknown>,
   env: EnvFacts & { userDataDir: string; homeDir: string; customSensitivePrefixes?: readonly string[] }
 ): Promise<{ facts: ContentFacts; readPathFact: ReadPathFact }> {
-  const rawPath = extractPathField(toolInput) ?? (descriptor.toolName === 'list_directory' ? '.' : '')
+  // path 省略时 grep 与 list_directory 一致，按工作目录根（'.'）探测——grep 递归搜索能力释放 §7.3
+  const rawPath = extractPathField(toolInput)
+    ?? (descriptor.toolName === 'list_directory' || descriptor.toolName === 'grep' ? '.' : '')
   const probedFact = await probeReadPathFact({
     rawPath,
     workDir: env.workDir,

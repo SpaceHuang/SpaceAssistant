@@ -74,7 +74,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
   {
     name: 'grep',
     description:
-      '按当前会话安全策略搜索一个明确指定的文件：普通桌面只读可按策略搜索工作目录外路径中的单个文件，敏感或系统位置需真人确认；远程会话只允许工作目录内普通路径中的普通文件。不支持目录递归、通配路径或多路径输入。pattern 使用 ripgrep 默认正则语法。使用 output_mode 选择返回匹配文件、匹配内容或每文件匹配行数，使用 head_limit 限制结果数量。搜索文件内容时使用本工具，无需调用 shell。' +
+      '按当前会话安全策略搜索文本内容，搜索根为文件或目录：普通桌面只读可按策略搜索工作目录外的路径，敏感或系统位置需真人确认；远程会话只允许工作目录内的普通路径。传入目录时递归搜索。不支持通配路径和多路径输入（文件名过滤请用 glob 参数）。pattern 使用 ripgrep 默认正则语法。使用 output_mode 选择返回匹配文件、匹配内容或每文件匹配行数，使用 head_limit 限制结果数量。搜索文件内容时使用本工具，无需调用 shell。' +
       '遍历搜索时的排除行为：默认不搜索以下目录（依赖安装 / 构建产物 / 缓存 / 版本库内部对象）：node_modules、.git、.svn、__pycache__、dist、dist-electron、.cursor；显式指定其内部路径即可搜索（隐藏目录会自动解除隐藏过滤），或传 include_ignored: true 一并解除。' +
       '敏感文件 / 目录（.env、.env.*、secrets/）在遍历中始终排除，include_ignored: true 也不解除；如需搜索请直接指定该文件路径，该方式会执行并在结果中标注「命中敏感路径」。' +
       '「无匹配」结果会附带实际搜索范围与跳过目录（searchScope），跳过目录中可能存在匹配内容。查版本库历史内容建议改用 run_shell 的 git log -S / git grep / git show（效率提示，非安全限制）。',
@@ -89,7 +89,9 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
         },
         path: {
           type: 'string',
-          description: '必填的单个文件路径；支持相对路径和绝对路径，目录、通配路径和多路径不受支持'
+          description:
+            '搜索根：可以是文件或目录，支持相对路径（相对工作目录）与绝对路径；省略时搜索整个工作目录。传入目录会递归搜索其下所有文件。' +
+            '文件名过滤请使用 glob 参数，不要在 path 中写通配符。'
         },
         glob: { type: 'string', description: "使用 .gitignore 风格 glob，支持 !pattern 排除和 {ts,tsx} alternatives；显式单文件 path 不受过滤" },
         output_mode: {
@@ -105,7 +107,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
         head_limit: { type: 'integer', minimum: 0, maximum: 1000000, description: '最多返回的非空输出行数，默认 100；0 不限制行数但仍受 400 KiB 总上限约束' }
       },
       additionalProperties: false,
-      required: ['pattern', 'path']
+      required: ['pattern']
     }
   },
   {

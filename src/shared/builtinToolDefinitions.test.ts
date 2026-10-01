@@ -16,17 +16,36 @@ describe('file-tool descriptions hint the path field name', () => {
   it('读取工具描述反映桌面策略范围与远程工作目录边界', () => {
     for (const name of ['read_file', 'grep', 'list_directory']) {
       const description = BUILTIN_TOOL_DEFINITIONS.find((definition) => definition.name === name)!.description
-      expect(description).toMatch(/普通桌面只读可按策略(?:访问|搜索)工作目录外路径/)
-      expect(description).toContain('远程会话只允许工作目录内普通路径')
+      expect(description).toMatch(/普通桌面只读可按策略(?:访问|搜索)工作目录外(?:的)?路径/)
+      expect(description).toMatch(/远程会话只允许工作目录内(?:的)?普通路径/)
     }
   })
 
   it('grep 使用新的单一 rg 工具契约，不包含部署实现信息', () => {
     const def = BUILTIN_TOOL_DEFINITIONS.find((d) => d.name === 'grep')!
     expect(def.description).toContain('ripgrep 默认正则语法')
-    expect(def.description).toContain('不支持目录递归')
-    expect(def.input_schema.required).toContain('path')
     expect(def.description).not.toMatch(/跨平台|内置实现|系统 grep|findstr|打包路径/)
+  })
+
+  it('grep 契约放开为文件/目录递归搜索：required 不含 path（docs/develop/grep-recursive-search-capability-release-plan.md §4）', () => {
+    const def = BUILTIN_TOOL_DEFINITIONS.find((d) => d.name === 'grep')!
+    expect(def.input_schema.required).toContain('pattern')
+    expect(def.input_schema.required).not.toContain('path')
+  })
+
+  it('grep 的 path description 不再宣称单文件契约', () => {
+    const def = BUILTIN_TOOL_DEFINITIONS.find((d) => d.name === 'grep')!
+    const pathProp = def.input_schema.properties.path as { description: string }
+    expect(pathProp).toBeDefined()
+    expect(pathProp.description).not.toContain('单个文件路径')
+    expect(pathProp.description).not.toContain('不支持目录递归')
+  })
+
+  it('grep description 首句改为文件/目录搜索根契约', () => {
+    const def = BUILTIN_TOOL_DEFINITIONS.find((d) => d.name === 'grep')!
+    expect(def.description).toContain('搜索根为文件或目录')
+    expect(def.description).toContain('传入目录时递归搜索')
+    expect(def.description).not.toContain('不支持目录递归')
   })
 })
 

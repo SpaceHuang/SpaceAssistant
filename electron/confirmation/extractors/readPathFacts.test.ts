@@ -317,3 +317,52 @@ describe('symlink 越界检测 mock 通路', () => {
     }
   })
 })
+
+describe('grep 搜索根事实（grep 递归搜索能力释放 §7.3）', () => {
+  const envFor = (root: string) => ({
+    os: 'darwin' as const,
+    workDir: root,
+    sensitivePaths: [] as string[],
+    userDataDir: path.join(root, 'user-data'),
+    homeDir: path.join(root, 'home')
+  })
+
+  it('grep 的 path 为真实目录时不得被染 unknown（targetKind 保持 directory）', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'grep-dir-fact-'))
+    try {
+      await fs.mkdir(path.join(root, 'sub'))
+      const result = await runExtractorsWithReadPathFact(
+        { toolName: 'grep', actionClass: 'read', riskLevel: 'low', extractors: [] },
+        { path: 'sub' },
+        envFor(root)
+      )
+      expect(result.readPathFact.targetKind).toBe('directory')
+      expect(result.readPathFact.zone).toBe('workdir-normal')
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it('grep 省略 path 时按工作目录根（directory）探测', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'grep-omit-path-'))
+    try {
+      const result = await runExtractorsWithReadPathFact(
+        { toolName: 'grep', actionClass: 'read', riskLevel: 'low', extractors: [] },
+        {},
+        envFor(root)
+      )
+      expect(result.readPathFact.targetKind).toBe('directory')
+      expect(result.readPathFact.normalizedPath).toBe(await fs.realpath(root))
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
+  it('grep 的通配 path 仍被染 unknown（多路径/通配职责不回退）', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'grep-wild-fact-'))
+    try {
+      const result = await runExtractorsWithReadPathFact(
+        { toolName: 'grep', actionClass: 'read', riskLevel: 'low', extractors: [] },
+        { path: 'src/**/*.ts' },
+        envFor(root)
+      )
+      expect(result.readPathFact.targetKind).toBe('unknown')
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+})
