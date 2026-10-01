@@ -55,7 +55,6 @@ import { classifyWorkDirProfileTarget } from '../workDirBinding'
 import { sessionDisplayNameRaw } from '../../src/shared/sessionDisplay'
 import { channelFor, type ResolveConfirmChannelArgs } from '../confirmation/channels'
 import { AgentChannel } from '../confirmation/agentChannel'
-import { getCallAdmissionGate } from './callAdmissionGate'
 import { toolIdToOpenAiCompatibleApiToolName } from '../../src/shared/anthropicToolSanitize'
 import { normalizeExternalToolName } from '../../src/shared/toolNameCompatibility'
 import { sanitizeCapabilityParamsForDisplay } from '../../src/shared/capabilityParamSanitize'
@@ -269,7 +268,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       hostHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
       sessionLedgerForInvocationTerminal?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionLedgerForInvocationTerminal']
       applicationAdmission?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['applicationAdmission']
-      deadlineAt?: number
       afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
       recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
       refreshExecutionContext?: (call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: import('../../packages/agent-sdk/src/turn').ToolPreparationStage & { kind: 'recheck' }, current: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>>
@@ -282,7 +280,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       refreshExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: import('../../packages/agent-sdk/src/turn').ToolPreparationStage & { kind: 'recheck' }, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
       maxToolRounds?: number
       applicationAdmission?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['applicationAdmission']
-      deadlineAt?: number
       afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
       confirmationAdapter?: Omit<Parameters<typeof createAgentSdkConfirmationPort>[0], 'onApproved' | 'publish' | 'createChannel'> & Partial<Pick<Parameters<typeof createAgentSdkConfirmationPort>[0], 'publish' | 'createChannel'>> & { agentChannelFactory?: NonNullable<import('../confirmation/channels').ResolveConfirmChannelArgs['agentChannelFactory']> }
       recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
@@ -817,7 +814,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       const { agentChannelFactory, ...confirmationAdapter } = adapter
       const hostedAgentChannelFactory: NonNullable<ResolveConfirmChannelArgs['agentChannelFactory']> = (agentDeps) => new AgentChannel({
         ...agentDeps,
-        admissionGate: getCallAdmissionGate(),
         approvalAdmission: materials.approvalAdmission ?? getDefaultAgentRuntime().approvalAdmission,
         ...(materials.deadlineAt !== undefined ? { deadlineAt: materials.deadlineAt } : {}),
         ...(materials.approvalTaskDigest ? { taskDigest: materials.approvalTaskDigest } : {}),
@@ -987,7 +983,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       confirmation?: ConfirmationPort
       sessionLedgerForInvocationTerminal?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionLedgerForInvocationTerminal']
       applicationAdmission?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['applicationAdmission']
-      deadlineAt?: number
       afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
       recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
       resolveRegisteredToolName?: (providerToolName: string) => string
@@ -1017,7 +1012,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         history,
         ...(input.sessionLedgerForInvocationTerminal ? { sessionLedgerForInvocationTerminal: input.sessionLedgerForInvocationTerminal } : {}),
         ...(input.applicationAdmission ? { applicationAdmission: input.applicationAdmission } : {}),
-        ...(input.deadlineAt !== undefined ? { deadlineAt: input.deadlineAt } : {}),
         prepareTool: input.registeredTools.prepareTool,
         discardPreparedTool: input.registeredTools.discardPreparedTool,
         ...(input.confirmation ? { confirmation: input.confirmation } : {}),
@@ -1113,7 +1107,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       refreshExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: import('../../packages/agent-sdk/src/turn').ToolPreparationStage & { kind: 'recheck' }, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
       maxToolRounds?: number
       applicationAdmission?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['applicationAdmission']
-      deadlineAt?: number
       confirmationAdapter?: Omit<Parameters<typeof createAgentSdkConfirmationPort>[0], 'onApproved' | 'publish' | 'createChannel'> & Partial<Pick<Parameters<typeof createAgentSdkConfirmationPort>[0], 'publish' | 'createChannel'>> & { agentChannelFactory?: NonNullable<import('../confirmation/channels').ResolveConfirmChannelArgs['agentChannelFactory']> }
       recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
     }) => {
@@ -1150,7 +1143,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(input.afterToolResult ? { afterToolResult: input.afterToolResult } : {}),
         ...(input.maxToolRounds !== undefined ? { maxToolRounds: input.maxToolRounds } : {}),
         ...(input.applicationAdmission ? { applicationAdmission: input.applicationAdmission } : {}),
-        ...(input.deadlineAt !== undefined ? { deadlineAt: input.deadlineAt } : {}),
         policy,
         confirmation,
         recoverProviderAttempt: input.recoverProviderAttempt,

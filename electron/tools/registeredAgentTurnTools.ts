@@ -11,6 +11,36 @@ import { isProcessToolName } from '../../src/shared/processResultProjection'
 import { compactOversizedToolResultContent } from '../../src/shared/oversizedToolResult'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { validateToolExecutorResultForTool, validateToolExecutorResultWithViolations } from './types'
+import { classifyFileReadError, isExecutionOutcomeUncertainError, isUserAbortError } from './toolExecutionResource'
+import { toToolUserError } from './toolUserErrors'
+
+export type ExecutorUnhandledSettlement = { rethrow: true; error: unknown } | { rethrow: false; result: Record<string, unknown> }
+
+/**
+ * Executor 进入后抛出的漏网异常的结算决策：Uncertain（副作用不确定）、取消/中断，以及
+ * 写/执行类工具（write/execute/未声明——动作可能已发生）都必须穿透继续向上，整轮按
+ * unknown-after-dispatch / interrupted 结算；仅读类（actionClass 'read'，无副作用）的
+ * 漏网异常降级为工具级错误结果，让模型可直接重试。
+ */
+export function settleExecutorUnhandledError(error: unknown, toolName: string, actionClass: string | undefined): ExecutorUnhandledSettlement {
+  if (isExecutionOutcomeUncertainError(error)) return { rethrow: true, error }
+  if (isUserAbortError(error) || (error instanceof Error && error.name === 'AbortError')) return { rethrow: true, error }
+  if (actionClass !== 'read') return { rethrow: true, error }
+  const friendly = toToolUserError(error, { toolName })
+  // toToolUserError 对含绝对路径/超长的原始消息会退到通用文案，errno 码是对模型最有
+  // 诊断价值的信号，单独补回（EBADF/EBUSY/ENOENT…），避免技术细节完全丢失。
+  const code = (error as NodeJS.ErrnoException)?.code
+  // retryable 与 executor 内降级（degradedFsReadResult）保持同一信号：errno 瞬态类可重试。
+  const retryable = classifyFileReadError(error) === 'transient'
+  return {
+    rethrow: false,
+    result: {
+      success: false,
+      error: code && !friendly.includes(code) ? `${friendly}（系统错误码 ${code}）` : friendly,
+      diagnostic: { caseId: 'executor-unhandled-error', retryable, category: 'executor' }
+    }
+  }
+}
 
 type TurnToolCall = Readonly<{
   invocationId: string
@@ -208,7 +238,19 @@ export function createRegisteredAgentTurnTools(input: {
       if (!record || !sameCall(record.call, call)) throw new Error('PREPARED_CALL_MISMATCH')
       const combined = combineSignals(call.signal ?? record.signal, leaseSignal)
       try {
-        const raw = await record.handle.execute(executionContextFor(record, combined.signal))
+        let raw: unknown
+        try {
+          raw = await record.handle.execute(executionContextFor(record, combined.signal))
+        } catch (error) {
+          // Executor 已进入（dispatch 后）。副作用是否发生不确定的失败必须抛 *UncertainError
+          // （库内约定），连同取消/中断一起保持向上传播、整轮按 unknown-after-dispatch 结算；
+          // 其余漏网异常（fs 瞬态、环境错误等）视为无副作用失败，降级为工具级错误结果，
+          // 让模型可直接重试而不是把整轮打成 interrupted。
+          const settlement = settleExecutorUnhandledError(error, call.toolName, record.registeredTool?.actionClass)
+          if (settlement.rethrow) throw error
+          logAgentEvent('warn', 'tool.result.executor-unhandled-error', { requestId: input.requestId, toolUseId: call.toolCallId, toolName: call.toolName, error: error instanceof Error ? error.message : String(error) })
+          raw = settlement.result
+        }
         const runtimeContext = record.runtimeContext && typeof record.runtimeContext === 'object' && !Array.isArray(record.runtimeContext)
           ? record.runtimeContext as Record<string, unknown>
           : undefined

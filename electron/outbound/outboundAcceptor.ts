@@ -256,7 +256,7 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
       return { accepted: 'local-command', command: { kind: 'hint-only', hint: testPopCmd.hint } }
     }
 
-    // B1(偏差 23):调用级准入——桌面受理端口(四处发起入口之一,评审 N2 口径)。
+    // B1(偏差 23):调用级准入——桌面受理端口(普通 Agent turn 入口之一)。
     // 受理级票据(瞬时)+ 全局速率约束;queue 语义由既有会话级出站排队承载,故此处声明 reject。
     const admissionGate = deps.admissionGate ?? getCallAdmissionGate()
     const admission = await admissionGate.acquire({

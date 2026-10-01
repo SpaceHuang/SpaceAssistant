@@ -2,6 +2,7 @@ import type { IpcMain, WebContents } from 'electron'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
 import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidRequestId } from './claudeRequestGuards'
 import { logAgentEvent } from './agentLogger/agentLogger'
+import { serializeErrorCauseChain } from './agentLogger/errorCauseChain'
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import type { AgentLogFields } from './agentLogger/types'
 import { getDbConnection, getPersistedTurn, getSession, type AppDatabase } from './database'
@@ -644,7 +645,9 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
               sessionId: typeof payload?.sessionId === 'string' ? payload.sessionId : undefined,
               model: typeof payload?.model === 'string' ? payload.model : undefined,
               error: message,
-              stack: err instanceof Error ? err.stack : undefined
+              stack: err instanceof Error ? err.stack : undefined,
+              // 包装层（HostedTurnFinalizedError 等）的 cause 链里才有最内层抛出点
+              errorChain: serializeErrorCauseChain(err)
             })
         return {
           ok: false as const,

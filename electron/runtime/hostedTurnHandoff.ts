@@ -29,7 +29,7 @@ function hostedFailureOutcome(terminal: Parameters<typeof decodeTerminalOutcome>
 }
 
 type HostedRuntimeFactory = Readonly<{
-  createHostedTurnRuntime(input: Readonly<{ confirmationAdapter?: unknown; authorizedToolNames: ReadonlySet<string>; resolveRegisteredToolName?: (providerToolName: string) => string; hostHistory?: HistoryPort; applicationAdmission?: ApplicationAdmissionPort; deadlineAt?: number; afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']; recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']; refreshExecutionContext?(call: { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }, stage: Extract<import('../../packages/agent-sdk/src/turn').ToolPreparationStage, { kind: 'recheck' }>, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>> }>): Promise<Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>> | Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>
+  createHostedTurnRuntime(input: Readonly<{ confirmationAdapter?: unknown; authorizedToolNames: ReadonlySet<string>; resolveRegisteredToolName?: (providerToolName: string) => string; hostHistory?: HistoryPort; applicationAdmission?: ApplicationAdmissionPort; afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']; recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']; refreshExecutionContext?(call: { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }, stage: Extract<import('../../packages/agent-sdk/src/turn').ToolPreparationStage, { kind: 'recheck' }>, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>> }>): Promise<Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>> | Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>
 }>
 
 type HandoffInput = Readonly<{
@@ -39,7 +39,6 @@ type HandoffInput = Readonly<{
   windowId?: string
   hostHistory?: HistoryPort
   applicationAdmission?: ApplicationAdmissionPort
-  deadlineAt?: number
   afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
   initialResponse?: HostCommittedModelResponse
   currentUserMessageId?: string
@@ -165,7 +164,8 @@ export function createHostedTurnHandoff(input: {
     if (input.sessionDb && input.sessionId) {
       const ownerId = `runtime:${process.pid}:${randomUUID()}`
       queuedOwnership = { sessionId: input.sessionId, turnId: input.turnId, ownerId }
-      const waitUntil = Math.min(handoff.deadlineAt ?? (Date.now() + 30_000), Date.now() + 30_000)
+      // Session ownership has its own queue budget, independent of the parent turn deadline.
+      const waitUntil = Date.now() + 30_000
       for (;;) {
         const claim = claimSessionExecution(input.sessionDb, { sessionId: input.sessionId, turnId: input.turnId, ownerId })
         if (claim.acquired) {
@@ -273,7 +273,6 @@ export function createHostedTurnHandoff(input: {
       resolveRegisteredToolName: handoff.resolveRegisteredToolName,
       hostHistory: handoff.hostHistory ?? input.hostHistory ?? historyFacade,
       ...(handoff.applicationAdmission ? { applicationAdmission: handoff.applicationAdmission } : {}),
-      ...(handoff.deadlineAt !== undefined ? { deadlineAt: handoff.deadlineAt } : {}),
       ...(handoff.afterToolResult ? { afterToolResult: handoff.afterToolResult } : {}),
       ...(input.maxToolRounds !== undefined ? { maxToolRounds: input.maxToolRounds } : {}),
       ...(input.refreshExecutionContext ? { refreshExecutionContext: input.refreshExecutionContext } : {}),

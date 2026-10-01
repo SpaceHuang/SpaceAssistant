@@ -8,8 +8,6 @@ import {
   emptyAdmissionState,
   judgeAdmission,
   judgeResumeAdmission,
-  rollAdmissionWindow,
-  HOUR_MS,
   type AdmissionPolicy,
   type AdmissionRequest,
   type AdmissionState
@@ -18,10 +16,10 @@ import { loadAdmissionState, resolveAdmissionPolicy, saveAdmissionState } from '
 
 /**
  * 调用级准入门(B1 0b,偏差 23):判定(纯函数)+ 状态(Storage)+ 排队唤醒 + 审计出口的组合。
- * - 四处发起入口(桌面受理端口 / 远端发起 / 管家发起 / 嵌套 invokeApproval)同一准入(评审 N2 口径);
+ * - 普通 Agent turn 的发起入口(桌面受理端口 / 远端发起 / 管家发起)共用此准入；安全审批由独立池管理;
  * - 排队语义:资源不足且调用方声明 queue 时入 FIFO 等待队列,释放时唤醒队首**重新判定**
  *   (票据计数不漂移——butlerAdmission 评审 P1 教训的机制化消除);
- * - 审计:拒绝必落 `admission.rejected`(cause=并发/速率/配额维度),排队/延后/降级落
+ * - 审计:拒绝必落 `admission.rejected`(cause=并发/lane 上限/队列容量),排队/延后/降级落
  *   `admission.queued|deferred|degraded`——准入拒绝(资源)与裁决为否(agent-deny,confirmation
  *   审计体系)事件名分立,不得混计(基线 §7)。
  */
@@ -55,14 +53,12 @@ export type AdmissionResumeResult =
   | { ok: false; verdict: 'rejected'; cause: string; retryable: boolean }
 
 type Waiter = { request: AdmissionRequest; resolve: (result: AdmissionAcquireResult) => void; onAbort?: () => void; cleanup?: () => void; sequence: number }
-type ResumeWaiter = { handle: ParkedAdmission; resolve: (result: AdmissionResumeResult) => void; onAbort?: () => void; cleanup?: () => void; timer?: ReturnType<typeof setTimeout>; deadlineAt?: number; sequence: number }
+type ResumeWaiter = { handle: ParkedAdmission; resolve: (result: AdmissionResumeResult) => void; onAbort?: () => void; cleanup?: () => void; sequence: number }
 
 export class CallAdmissionGate {
   private state: AdmissionState
   private readonly policy: AdmissionPolicy
   private readonly db: AppDatabase | null
-  private readonly nowFn: () => number
-  private readonly resumeTimeoutMs: number
   private readonly waiters: Waiter[] = []
   private readonly resumeWaiters: ResumeWaiter[] = []
   private readonly activeTickets = new WeakSet<AdmissionTicket>()
@@ -70,7 +66,6 @@ export class CallAdmissionGate {
   private readonly resumeInflight = new Map<object, Promise<AdmissionResumeResult>>()
   private readonly releaseRetries = new Map<AdmissionTicket, { timer: ReturnType<typeof setTimeout>; delayMs: number }>()
   private queueSequence = 0
-  private wakeTimer: ReturnType<typeof setTimeout> | undefined
 
   private makeTicket(request: AdmissionRequest, apply: (request: AdmissionRequest) => boolean | void = (r) => this.release(r)): AdmissionTicket {
     let ticket!: AdmissionTicket
@@ -113,13 +108,11 @@ export class CallAdmissionGate {
     this.releaseRetries.delete(ticket)
   }
 
-  constructor(options: { db?: AppDatabase; policy?: AdmissionPolicy; now?: () => number; initialState?: AdmissionState; resumeTimeoutMs?: number } = {}) {
+  constructor(options: { db?: AppDatabase; policy?: AdmissionPolicy; now?: () => number; initialState?: AdmissionState } = {}) {
     this.db = options.db ?? null
     this.policy = options.policy ?? (options.db ? resolveAdmissionPolicy(options.db) : structuredClone(DEFAULT_ADMISSION_POLICY))
-    this.nowFn = options.now ?? Date.now
-    this.resumeTimeoutMs = options.resumeTimeoutMs ?? 30_000
-    if (!Number.isFinite(this.resumeTimeoutMs) || this.resumeTimeoutMs <= 0) throw new Error('resumeTimeoutMs must be positive')
-    this.state = options.initialState ?? (options.db ? loadAdmissionState(options.db, this.nowFn()) : emptyAdmissionState(this.nowFn()))
+    const now = options.now?.() ?? Date.now()
+    this.state = options.initialState ?? (options.db ? loadAdmissionState(options.db, now) : emptyAdmissionState(now))
   }
 
   get queuedCount(): number {
@@ -133,10 +126,7 @@ export class CallAdmissionGate {
   /** 判定 + 占位(即时判定与队列唤醒复核共用)。返回 null = 应排队。 */
   private tryAdmit(request: AdmissionRequest): AdmissionAcquireResult | null {
     const previousState = this.state
-    // P1-2(评审):滚动结果必须写回状态——只在副本上判定会让 windowStart 永不前进,
-    // 跨过首个小时边界后速率/配额限流永久失效
-    this.state = rollAdmissionWindow(this.state, this.nowFn())
-    const verdict = judgeAdmission(request, this.state, this.policy, this.nowFn())
+    const verdict = judgeAdmission(request, this.state, this.policy, Date.now())
     switch (verdict.verdict) {
       case 'admit': {
         this.state = applyAdmit(this.state, request)
@@ -201,7 +191,6 @@ export class CallAdmissionGate {
         resolve({ ok: false, verdict: 'rejected', cause: 'persistence-failed' })
         return
       }
-      this.scheduleWake()
     })
   }
 
@@ -211,7 +200,7 @@ export class CallAdmissionGate {
     this.state = applyRelease(this.state, request)
     try {
       // 释放先完成持久化提交，再唤醒后继请求。持久化失败时恢复内存快照，
-      // 让磁盘上的 active/hourly 计数与内存保持一致，并保留票据供调用方重试。
+      // 让磁盘上的 active 计数与内存保持一致，并保留票据供调用方重试。
       this.persist()
     } catch {
       this.state = previousState
@@ -258,8 +247,7 @@ export class CallAdmissionGate {
       if (candidate.kind === 'normal') {
         const next = candidate.waiter
         if (!this.waiters.includes(next)) continue
-        this.state = rollAdmissionWindow(this.state, this.nowFn())
-        const verdict = judgeAdmission(next.request, this.state, this.policy, this.nowFn())
+        const verdict = judgeAdmission(next.request, this.state, this.policy, Date.now())
         if (verdict.verdict !== 'admit') continue
         const previousState = this.state
         const previousIndex = this.waiters.indexOf(next)
@@ -286,24 +274,13 @@ export class CallAdmissionGate {
       if (!request || request !== resumed.handle.request) {
         this.resumeWaiters.splice(index, 1)
         resumed.cleanup?.()
-        if (resumed.timer) clearTimeout(resumed.timer)
-          resumed.resolve({ ok: false, verdict: 'rejected', cause: 'stale-park-handle', retryable: false })
+        resumed.resolve({ ok: false, verdict: 'rejected', cause: 'stale-park-handle', retryable: false })
         continue
       }
-      if (resumed.deadlineAt !== undefined && this.nowFn() >= resumed.deadlineAt) {
-        this.resumeWaiters.splice(index, 1)
-        resumed.cleanup?.()
-        if (resumed.timer) clearTimeout(resumed.timer)
-        this.parked.delete(resumed.handle.token)
-        resumed.resolve({ ok: false, verdict: 'rejected', cause: 'resume-timeout', retryable: false })
-        continue
-      }
-      this.state = rollAdmissionWindow(this.state, this.nowFn())
       const resumeVerdict = judgeResumeAdmission(request, this.state, this.policy)
       if (resumeVerdict.verdict === 'admit') {
         const previousState = this.state
         this.resumeWaiters.splice(index, 1)
-        if (resumed.timer) clearTimeout(resumed.timer)
         resumed.cleanup?.()
         this.parked.delete(resumed.handle.token)
         this.state = applyResume(this.state, request)
@@ -320,27 +297,11 @@ export class CallAdmissionGate {
         continue
       }
     }
-    if (this.waiters.length > 0 || this.resumeWaiters.length > 0) {
-      this.scheduleWake()
-    }
     this.state = { ...this.state, queued: this.waiters.length + this.resumeWaiters.length }
     try { this.persist() } catch { /* 唤醒结果已逐项结算，不能把已结算 promise 重新变成挂起。 */ }
   }
 
-  private scheduleWake(): void {
-    // 恢复队列也可能只受小时窗口阻塞；只检查普通队列会让已受理任务永久沉睡。
-    if (this.wakeTimer || (this.waiters.length === 0 && this.resumeWaiters.length === 0)) return
-    const delay = Math.max(1, this.state.windowStart + HOUR_MS - this.nowFn() + 1)
-    this.wakeTimer = setTimeout(() => {
-      this.wakeTimer = undefined
-      this.state = rollAdmissionWindow(this.state, this.nowFn())
-      this.wakeNext()
-    }, delay)
-    // 后台唤醒不应让测试或应用退出被悬挂的恢复请求阻塞。
-    ;(this.wakeTimer as unknown as { unref?: () => void }).unref?.()
-  }
-
-  /** 让出运行槽但保留已受理身份；恢复不增加小时启动计数。 */
+  /** 让出运行槽但保留已受理身份；恢复时只重新申请并发容量。 */
   isActiveTicket(ticket: AdmissionTicket): boolean {
     return this.activeTickets.has(ticket)
   }
@@ -375,7 +336,7 @@ export class CallAdmissionGate {
     return this.parked.delete(handle.token)
   }
 
-  resume(handle: ParkedAdmission, options: { signal?: AbortSignal; deadlineAt?: number } = {}): Promise<AdmissionResumeResult> {
+  resume(handle: ParkedAdmission, options: { signal?: AbortSignal } = {}): Promise<AdmissionResumeResult> {
     const inflight = this.resumeInflight.get(handle.token)
     if (inflight) return inflight
     const operation = this.resumeInternal(handle, options)
@@ -384,18 +345,13 @@ export class CallAdmissionGate {
     return operation
   }
 
-  private async resumeInternal(handle: ParkedAdmission, options: { signal?: AbortSignal; deadlineAt?: number } = {}): Promise<AdmissionResumeResult> {
+  private async resumeInternal(handle: ParkedAdmission, options: { signal?: AbortSignal } = {}): Promise<AdmissionResumeResult> {
     const request = this.parked.get(handle.token)
     if (!request || request !== handle.request) return { ok: false, verdict: 'rejected', cause: 'stale-park-handle', retryable: false }
     if (options.signal?.aborted) {
       this.parked.delete(handle.token)
       return { ok: false, verdict: 'rejected', cause: 'cancelled', retryable: false }
     }
-    if (options.deadlineAt !== undefined && this.nowFn() >= options.deadlineAt) {
-      this.parked.delete(handle.token)
-      return { ok: false, verdict: 'rejected', cause: 'resume-timeout', retryable: false }
-    }
-    this.state = rollAdmissionWindow(this.state, this.nowFn())
     const verdict = judgeResumeAdmission(request, this.state, this.policy)
     if (verdict.verdict !== 'admit') {
       if (this.queuedCount >= this.policy.queueLimit) {
@@ -405,13 +361,12 @@ export class CallAdmissionGate {
       }
       return new Promise<AdmissionResumeResult>((resolve) => {
         const previousState = this.state
-        const waiter: ResumeWaiter = { handle, resolve, deadlineAt: options.deadlineAt, sequence: ++this.queueSequence }
+        const waiter: ResumeWaiter = { handle, resolve, sequence: ++this.queueSequence }
         const cancel = () => {
           const index = this.resumeWaiters.indexOf(waiter)
           if (index < 0) return
         this.resumeWaiters.splice(index, 1)
         waiter.cleanup?.()
-        if (waiter.timer) clearTimeout(waiter.timer)
           this.parked.delete(handle.token)
           this.state = { ...this.state, queued: this.waiters.length + this.resumeWaiters.length }
           try { this.persist() } catch { /* 恢复取消已结算；不能把异常传播进 AbortSignal 回调。 */ }
@@ -419,23 +374,6 @@ export class CallAdmissionGate {
         }
         waiter.onAbort = cancel
         if (options.signal) waiter.cleanup = () => options.signal!.removeEventListener('abort', cancel)
-        // A parked turn keeps its original execution deadline. The standalone resume cap is
-        // only a fallback for callers without one; a fixed short cap can terminate a valid
-        // approval merely because unrelated turns still occupy the admission slots.
-        const remaining = options.deadlineAt === undefined
-          ? this.resumeTimeoutMs
-          : Math.max(1, options.deadlineAt - this.nowFn())
-        waiter.timer = setTimeout(() => {
-          const index = this.resumeWaiters.indexOf(waiter)
-          if (index < 0) return
-          this.resumeWaiters.splice(index, 1)
-          waiter.cleanup?.()
-          this.parked.delete(handle.token)
-          this.state = { ...this.state, queued: this.waiters.length + this.resumeWaiters.length }
-          try { this.persist() } catch { /* 超时已结算；不能因持久化异常留下悬挂 Promise。 */ }
-          resolve({ ok: false, verdict: 'rejected', cause: 'resume-timeout', retryable: false })
-        }, remaining)
-        ;(waiter.timer as unknown as { unref?: () => void }).unref?.()
         if (options.signal?.aborted) { cancel(); return }
         options.signal?.addEventListener('abort', cancel, { once: true })
         this.resumeWaiters.push(waiter)
@@ -445,7 +383,6 @@ export class CallAdmissionGate {
         } catch {
           const index = this.resumeWaiters.indexOf(waiter)
           if (index >= 0) this.resumeWaiters.splice(index, 1)
-          if (waiter.timer) clearTimeout(waiter.timer)
           waiter.cleanup?.()
           this.state = previousState
           // Queue insertion did not commit, so keep the accepted parked identity and let

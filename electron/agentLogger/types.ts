@@ -35,6 +35,7 @@ export type AgentLogEventName =
   | 'tool.error'
   | 'tool.result'
   | 'tool.result.contract-violation'
+  | 'tool.result.executor-unhandled-error'
   | 'tool.progress'
   | 'skills.load'
   | 'skills.scan.skipped'

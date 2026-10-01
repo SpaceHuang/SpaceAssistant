@@ -9,11 +9,11 @@ import {
 } from '../runtime/callAdmission'
 
 /**
- * 调用级准入——Storage 状态与可配策略(B1 0a,偏差 23;基线依赖纪律 4「准入在 Runtime、配额状态在 Storage」)。
+ * 调用级准入——Storage 状态与可配策略(B1 0a,偏差 23;普通 turn 并发状态归 Storage)。
  * - 状态(configs 表 `admission.state` JSON)跨重启不丢;读写走 runInTransaction;
- * - 启动维护清零「活跃计数」段(进程已终止,票据不再有效),保留速率窗口与配额计数(防重启绕过限流);
+ * - 启动维护清零「活跃计数」段(进程已终止,票据不再有效);
  * - 策略参数可配(`admission.policy.*`),显式默认(缺配置 = 显式声明的默认,非代码常量兜底);
- *   automation lane 首批配置数据化吸收原 butlerAdmission(并发 1 + 每小时 30)。
+ *   旧 hourly-start 策略键保留在配置库中时会被忽略。
  */
 
 const STATE_KEY = 'admission.state'
@@ -21,9 +21,7 @@ const STATE_KEY = 'admission.state'
 const POLICY_CONFIG_KEYS = {
   globalMaxConcurrent: 'admission.policy.globalMaxConcurrent',
   backgroundMaxConcurrent: 'admission.policy.backgroundMaxConcurrent',
-  globalHourlyStarts: 'admission.policy.globalHourlyStarts',
-  queueLimit: 'admission.policy.queueLimit',
-  approvalReservedSlots: 'admission.policy.approvalReservedSlots'
+  queueLimit: 'admission.policy.queueLimit'
 } as const
 
 /** 读取可配策略覆盖(缺省/非法值收敛显式默认,fail-closed)。 */
@@ -32,9 +30,7 @@ export function resolveAdmissionPolicy(db: AppDatabase): AdmissionPolicy {
   const overrides: Array<[string, (v: number) => void]> = [
     [POLICY_CONFIG_KEYS.globalMaxConcurrent, (v) => { policy.globalMaxConcurrent = v }],
     [POLICY_CONFIG_KEYS.backgroundMaxConcurrent, (v) => { policy.backgroundMaxConcurrent = Math.min(v, policy.globalMaxConcurrent) }],
-    [POLICY_CONFIG_KEYS.globalHourlyStarts, (v) => { policy.globalHourlyStarts = v }],
-    [POLICY_CONFIG_KEYS.queueLimit, (v) => { policy.queueLimit = v }],
-    [POLICY_CONFIG_KEYS.approvalReservedSlots, (v) => { policy.approvalReservedSlots = v }]
+    [POLICY_CONFIG_KEYS.queueLimit, (v) => { policy.queueLimit = v }]
   ]
   for (const [key, apply] of overrides) {
     const raw = getConfigValue(db, key)
@@ -43,7 +39,6 @@ export function resolveAdmissionPolicy(db: AppDatabase): AdmissionPolicy {
   }
   policy.globalMaxConcurrent = Math.max(1, policy.globalMaxConcurrent)
   policy.backgroundMaxConcurrent = Math.max(1, policy.backgroundMaxConcurrent)
-  policy.globalHourlyStarts = Math.max(1, policy.globalHourlyStarts)
   return policy
 }
 
@@ -57,14 +52,16 @@ export function loadAdmissionState(db: AppDatabase, now: number): AdmissionState
       typeof parsed.activeInteractive !== 'number' ||
       typeof parsed.activeBackground !== 'number' ||
       !parsed.laneActive ||
-      !parsed.laneWindowStarts ||
-      typeof parsed.windowStart !== 'number' ||
-      typeof parsed.windowStarts !== 'number' ||
       typeof parsed.queued !== 'number'
     ) {
       return emptyAdmissionState(now)
     }
-    return parsed
+    return {
+      activeInteractive: parsed.activeInteractive,
+      activeBackground: parsed.activeBackground,
+      laneActive: parsed.laneActive,
+      queued: parsed.queued
+    }
   } catch {
     return emptyAdmissionState(now)
   }
@@ -77,7 +74,7 @@ export function saveAdmissionState(db: AppDatabase, state: AdmissionState): void
   })
 }
 
-/** 启动维护:清零活跃计数(票据随进程终止失效),保留速率窗口与配额计数。 */
+/** 启动维护:清零活跃计数(票据随进程终止失效)。 */
 export function resetActiveAdmissionOnStartup(db: AppDatabase, now: number): void {
   const state = loadAdmissionState(db, now)
   saveAdmissionState(db, {

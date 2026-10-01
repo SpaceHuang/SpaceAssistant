@@ -24,7 +24,9 @@ import { classifyWriteTargetScope } from '../confirmation/extractors/writePathFa
 import type { ToolExecutor, ToolExecutionContext, ToolExecutorResult } from './types'
 import { sanitizeToolOutput, sanitizeToolOutputText, toToolUserError } from './toolUserErrors'
 import {
+  classifyFileReadError,
   combineUserAbortAndTimeout,
+  fileReadErrorHint,
   outcomeFromFileToolSignal,
   throwIfAborted
 } from './toolExecutionResource'
@@ -258,6 +260,19 @@ function fileToolAbortResult(
   return null
 }
 
+/** 读类工具 fs 异常的降级出口：转成工具级失败结果（模型可重试），而非冒泡成整轮 unknown-after-dispatch 中断。 */
+function degradedFsReadResult(e: unknown, action: '读取' | '读取目录' | '搜索', target: string, started: number): ToolExecutorResult | null {
+  const cls = classifyFileReadError(e)
+  if (!cls) return null
+  const code = (e as NodeJS.ErrnoException).code
+  return {
+    success: false,
+    error: `${action} ${target} 失败（${code ?? String(e)}）。${fileReadErrorHint(cls, code)}`,
+    diagnostic: { caseId: 'read-fs-error', retryable: cls === 'transient', category: 'environment' as const },
+    duration: Date.now() - started
+  }
+}
+
 function readIdentityMatches(stat: Pick<Awaited<ReturnType<Awaited<ReturnType<typeof fs.open>>['stat']>>, 'dev' | 'ino' | 'mode' | 'size' | 'mtimeMs'>, identity: NonNullable<NonNullable<ToolExecutionContext['readExecutionPermit']>['targets'][number]['identity']>): boolean {
   return stat.dev === identity.dev && stat.ino === identity.ino && stat.mode === identity.mode && stat.size === identity.size && stat.mtimeMs === identity.mtimeMs
 }
@@ -300,7 +315,7 @@ export const readFileExecutor: ToolExecutor = {
       try {
         st = permitFileHandle ? await permitFileHandle.stat() : await fs.stat(abs)
       } catch (e) {
-        const ab = fileToolAbortResult(op, '读取超时，请检查文件路径或网络连接', started)
+        const ab = fileToolAbortResult(op, '读取超时。文件可能过大或被其他程序占用，可尝试用 tail 或 offset/limit 分段读取', started)
         if (ab) return ab
         throw e
       }
@@ -312,7 +327,14 @@ export const readFileExecutor: ToolExecutor = {
       if (permitFileHandle && authorizedIdentity && !readIdentityMatches(st, authorizedIdentity)) return identityChanged('read-target-identity-changed')
       const validateAfterRead = async (): Promise<ToolExecutorResult | undefined> => {
         if (!permitFileHandle || !authorizedIdentity) return undefined
-        const after = await permitFileHandle.stat()
+        // 读后身份复核失败（含句柄异常）按「身份已变」处理：无法确认读到的是授权内容时丢弃结果，
+        // 不交由 fs 降级出口误报为可重试的环境错误。
+        let after: Awaited<ReturnType<typeof permitFileHandle.stat>>
+        try {
+          after = await permitFileHandle.stat()
+        } catch {
+          return identityChanged('read-target-identity-changed-during-read')
+        }
         return readIdentityMatches(after, authorizedIdentity) ? undefined : identityChanged('read-target-identity-changed-during-read')
       }
       if (st.isDirectory()) {
@@ -384,7 +406,7 @@ export const readFileExecutor: ToolExecutor = {
           const tail =
             typeof tailRaw === 'number' && Number.isFinite(tailRaw) ? Math.floor(tailRaw) : 1
           const tailed = await readFileTailFromDisk(abs, tail, { signal: op, fileSize: st.size, ...(permitFileHandle ? { fileHandle: permitFileHandle } : {}) })
-          const abortResult = fileToolAbortResult(op, '读取超时，请检查文件路径或网络连接', started)
+          const abortResult = fileToolAbortResult(op, '读取超时。文件可能过大或被其他程序占用，可尝试用 tail 或 offset/limit 分段读取', started)
           if (abortResult) return abortResult
           const changed = await validateAfterRead()
           if (changed) return changed
@@ -432,7 +454,7 @@ export const readFileExecutor: ToolExecutor = {
             fileSize: st.size,
             ...(permitFileHandle ? { fileHandle: permitFileHandle } : {})
           })
-          const abortResult = fileToolAbortResult(op, '读取超时，请检查文件路径或网络连接', started)
+          const abortResult = fileToolAbortResult(op, '读取超时。文件可能过大或被其他程序占用，可尝试用 tail 或 offset/limit 分段读取', started)
           if (abortResult) return abortResult
           const changed = await validateAfterRead()
           if (changed) return changed
@@ -465,7 +487,7 @@ export const readFileExecutor: ToolExecutor = {
 
         // Full：小文件全文（边界附近可能仍超字符上限 → Meta）
         const buf = permitFileHandle ? await permitFileHandle.readFile({ signal: op }) : await fs.readFile(abs, { signal: op })
-        const abortResult = fileToolAbortResult(op, '读取超时，请检查文件路径或网络连接', started)
+        const abortResult = fileToolAbortResult(op, '读取超时。文件可能过大或被其他程序占用，可尝试用 tail 或 offset/limit 分段读取', started)
         if (abortResult) return abortResult
         const changed = await validateAfterRead()
         if (changed) return changed
@@ -506,13 +528,19 @@ export const readFileExecutor: ToolExecutor = {
           duration: Date.now() - started
         }
       } catch (e) {
-        const ab = fileToolAbortResult(op, '读取超时，请检查文件路径或网络连接', started)
+        const ab = fileToolAbortResult(op, '读取超时。文件可能过大或被其他程序占用，可尝试用 tail 或 offset/limit 分段读取', started)
         if (ab) return ab
         if (e instanceof Error && e.message === 'BINARY') {
           return { success: false, error: '文件为二进制格式，无法读取', duration: Date.now() - started }
         }
         throw e
       }
+    } catch (e) {
+      const ab = fileToolAbortResult(op, '读取超时。文件可能过大或被其他程序占用，可尝试用 tail 或 offset/limit 分段读取', started)
+      if (ab) return ab
+      const degraded = degradedFsReadResult(e, '读取', rel, started)
+      if (degraded) return degraded
+      throw e
     } finally {
       await permitFileHandle?.close().catch(() => undefined)
       dispose()
@@ -547,11 +575,11 @@ export const listDirectoryExecutor: ToolExecutor = {
     const started = Date.now()
     ctx.sendProgress('listing', '正在读取目录...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
+    const failedPath = typeof input.path === 'string' && input.path ? input.path : '.'
     try {
       const permitted = await resolveReadPermitTarget('list_directory', input, ctx)
       if (!permitted.ok) return { success: false, error: '目录读取许可校验失败', diagnostic: { caseId: permitted.caseId, retryable: false, category: permitted.failureClass, ...(permitted.factId ? { factId: permitted.factId } : {}) }, duration: Date.now() - started }
       // R8（融合）：结构化超时返回 + 前置 abort 检查；permit 通过后错误一律走五类分类出口
-      const failedPath = typeof input.path === 'string' && input.path ? input.path : '.'
       const dirTimeoutResult = (): ToolExecutorResult => ({
         success: false,
         error: 'DIRECTORY_READ_TIMEOUT',
@@ -576,6 +604,13 @@ export const listDirectoryExecutor: ToolExecutor = {
       })
       rows.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name))
       return { success: true, data: { entries: rows }, duration: Date.now() - started }
+    } catch (e) {
+      const ab = fileToolAbortResult(op, '目录读取超时，可稍后重试', started)
+      if (ab) return ab
+      // 兜底降级与 read/grep 同构：枚举类目错误已在上方转 caseId，此处接住漏网的 fs 异常。
+      const degraded = degradedFsReadResult(e, '读取目录', failedPath, started)
+      if (degraded) return degraded
+      throw e
     } finally {
       dispose()
     }
@@ -804,8 +839,20 @@ export const editFileExecutor: ToolExecutor = {
             return { ...writePermitFailure(new Error('write-target-identity-mismatch')), duration: Date.now() - started }
           }
         } catch (e) {
-          const ab = fileToolAbortResult(op, '编辑超时', started)
+          const ab = fileToolAbortResult(op, '编辑超时，可稍后重试', started)
           if (ab) return ab
+          // 写入尚未开始，目标文件未动：fs 失败降级为工具级错误结果让模型重试，
+          // 不冒泡成整轮 unknown-after-dispatch 中断。
+          const cls = classifyFileReadError(e)
+          if (cls) {
+            const code = (e as NodeJS.ErrnoException).code
+            return {
+              success: false,
+              error: `编辑前读取 ${rel} 失败（${code ?? String(e)}），未修改文件。${fileReadErrorHint(cls, code)}`,
+              diagnostic: { caseId: 'edit-read-fs-error', retryable: cls === 'transient', category: 'environment' as const },
+              duration: Date.now() - started
+            }
+          }
           throw e
         }
       }
@@ -938,7 +985,7 @@ export const writeFileExecutor: ToolExecutor = {
             return { ...writePermitFailure(new Error('write-target-identity-mismatch')), duration: Date.now() - started }
           }
         } catch (e) {
-          const ab = fileToolAbortResult(op, '写入超时', started)
+          const ab = fileToolAbortResult(op, '写入超时，可稍后重试', started)
           if (ab) return ab
           throw e
         }
@@ -958,7 +1005,7 @@ export const writeFileExecutor: ToolExecutor = {
           try {
             await backupIfEnabled(ctx, rel.replace(/\\/g, '/'), Buffer.from(cur, 'utf8'), op)
           } catch (e) {
-            const ab = fileToolAbortResult(op, '写入超时', started)
+            const ab = fileToolAbortResult(op, '写入超时，可稍后重试', started)
             if (ab) return ab
             throw e
           }
@@ -981,7 +1028,7 @@ export const writeFileExecutor: ToolExecutor = {
         })
       } catch (e) {
         if (e instanceof SafeAtomicWriteUncertainError) throw e
-        const ab = fileToolAbortResult(op, '写入超时', started)
+        const ab = fileToolAbortResult(op, '写入超时，可稍后重试', started)
         if (ab) return ab
         throw e
       }
@@ -1857,10 +1904,23 @@ export const grepExecutor: ToolExecutor = {
         planOverrides
       )
       const authorizedIdentity = ctx.readExecutionPermit?.targets[0]?.identity
-      if (permitFileHandle && authorizedIdentity && !readIdentityMatches(await permitFileHandle.stat(), authorizedIdentity)) {
-        const caseId = 'read-target-identity-changed-during-read'
-        recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'grep', decisionRuleId: ctx.readExecutionPermit?.decisionRuleId ?? ctx.readExecutionPermit?.targets[0]?.decisionRuleId, pathZone: ctx.readExecutionPermit?.targets[0]?.zone, factId: ctx.readExecutionPermit?.targets[0]?.factId, failureClass: 'mechanism', caseId })
-        return { success: false, error: '搜索期间文件身份或内容发生变化，已丢弃搜索结果。', diagnostic: { caseId, retryable: false, category: 'mechanism', ...(ctx.readExecutionPermit?.targets[0]?.factId ? { factId: ctx.readExecutionPermit.targets[0].factId } : {}) }, duration: Date.now() - started }
+      if (permitFileHandle && authorizedIdentity) {
+        // Windows stableFile 路径下 rg 提前退出会经 createReadStream 的销毁把 permit 句柄关闭
+        // （autoClose:false 不保护 destroy 路径 → 后续 stat 抛 `EBADF: file closed`）。
+        // 句柄已不可用时以路径复核兜底：realpath 未被替换 + 路径 stat 匹配授权 identity 才放行。
+        let recheckStat: Awaited<ReturnType<typeof permitFileHandle.stat>> | null
+        try {
+          recheckStat = await permitFileHandle.stat()
+        } catch {
+          const pathStat = await fs.stat(absSearch).catch(() => null)
+          const realpathUnchanged = pathStat ? await fs.realpath(absSearch).then((p) => p === absSearch).catch(() => false) : false
+          recheckStat = pathStat && realpathUnchanged ? pathStat : null
+        }
+        if (!recheckStat || !readIdentityMatches(recheckStat, authorizedIdentity)) {
+          const caseId = 'read-target-identity-changed-during-read'
+          recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'grep', decisionRuleId: ctx.readExecutionPermit?.decisionRuleId ?? ctx.readExecutionPermit?.targets[0]?.decisionRuleId, pathZone: ctx.readExecutionPermit?.targets[0]?.zone, factId: ctx.readExecutionPermit?.targets[0]?.factId, failureClass: 'mechanism', caseId })
+          return { success: false, error: '搜索期间文件身份或内容发生变化，已丢弃搜索结果。', diagnostic: { caseId, retryable: false, category: 'mechanism', ...(ctx.readExecutionPermit?.targets[0]?.factId ? { factId: ctx.readExecutionPermit.targets[0].factId } : {}) }, duration: Date.now() - started }
+        }
       }
       if (text.kind === 'success' || text.kind === 'no_match') {
         // R6：范围事实（skipped 由 planGrepInvocation 统一规划；no_match 必带范围）
@@ -1904,6 +1964,11 @@ export const grepExecutor: ToolExecutor = {
       if (text.kind === 'cancelled') return { success: false, error: `${text.partialOutput}\n[已取消]`, duration: Date.now() - started }
       if (text.kind === 'timeout') return { success: false, error: `${text.partialOutput}\n[搜索超时，仅展示部分结果]`, duration: Date.now() - started }
       return { success: false, error: text.message, duration: Date.now() - started }
+    } catch (e) {
+      if (ctx.signal?.aborted) return { success: false, error: '搜索已取消。', duration: Date.now() - started }
+      const degraded = degradedFsReadResult(e, '搜索', relPath || '搜索目标', started)
+      if (degraded) return degraded
+      throw e
     } finally {
       await permitFileHandle?.close().catch(() => undefined)
     }

@@ -57,7 +57,6 @@ export type HostedAgentTurnHostDependencies<TCall extends { invocationId: string
   toolResourceKeys?(call: TCall): readonly string[] | undefined
   isApprovalCandidate?(call: TCall): boolean
   applicationAdmission?: AgentTurnPorts['applicationAdmission']
-  deadlineAt?: number
   sessionLedgerForToolResult?(call: TCall, result: Readonly<{ output: unknown; replayContent?: unknown; isError?: boolean; auditRef?: string }>): Record<string, unknown> | Promise<Record<string, unknown>>
   afterToolResult?(call: TCall, result: Readonly<{ output: unknown; replayContent?: unknown; isError?: boolean; auditRef?: string }>): void | Promise<void>
   sessionLedgerForNotDispatched?(call: TCall, reason: string, result: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
@@ -134,7 +133,6 @@ export function createHostedAgentTurnHost<
         ...(dependencies.toolResourceKeys ? { toolResourceKeys: dependencies.toolResourceKeys as AgentTurnPorts['toolResourceKeys'] } : {}),
         ...(dependencies.isApprovalCandidate ? { isApprovalCandidate: dependencies.isApprovalCandidate as AgentTurnPorts['isApprovalCandidate'] } : {}),
         ...(dependencies.applicationAdmission ? { applicationAdmission: dependencies.applicationAdmission } : {}),
-        ...(dependencies.deadlineAt !== undefined ? { deadlineAt: dependencies.deadlineAt } : {}),
         ...(dependencies.sessionLedgerForToolResult ? { sessionLedgerForToolResult: dependencies.sessionLedgerForToolResult as AgentTurnPorts['sessionLedgerForToolResult'] } : {}),
         ...(dependencies.afterToolResult ? { afterToolResult: dependencies.afterToolResult as AgentTurnPorts['afterToolResult'] } : {}),
         ...(dependencies.sessionLedgerForNotDispatched ? { sessionLedgerForNotDispatched: dependencies.sessionLedgerForNotDispatched as AgentTurnPorts['sessionLedgerForNotDispatched'] } : {}),
