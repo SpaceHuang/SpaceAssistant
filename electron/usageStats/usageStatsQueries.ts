@@ -384,30 +384,22 @@ export function queryUsageAttribution(db: AppDatabase, args: UsageStatsRangeArgs
       attributableInputTokens: 0,
       unattributedInputTokens: 0,
       coverageRatio: null,
-      composition: { system: 0, tools: 0, messageBlocks: {}, unestimatedMessageBlocks: [] }
+      composition: { system: 0, tools: 0, messageBlocks: {} }
     }
     version.attributableInputTokens += row.inputTokens
     version.composition.system += normalized.system
     version.composition.tools += normalized.tools
     for (const [key, value] of Object.entries(normalized.messageBlocks)) version.composition.messageBlocks[key] = (version.composition.messageBlocks[key] ?? 0) + value
-    for (const key of normalized.unestimatedMessageBlocks) {
-      const unknownBlocks = version.composition.unestimatedMessageBlocks ??= []
-      if (!unknownBlocks.includes(key)) unknownBlocks.push(key)
-    }
     versions.set(row.estimatorVersion, version)
     const dailyKey = `${row.day}\u0000${row.estimatorVersion}`
     const daily = dailyVersions.get(dailyKey) ?? {
       day: row.day, estimatorVersion: row.estimatorVersion, inputTokens: 0,
-      composition: { system: 0, tools: 0, messageBlocks: {}, unestimatedMessageBlocks: [] }
+      composition: { system: 0, tools: 0, messageBlocks: {} }
     }
     daily.inputTokens += row.inputTokens
     daily.composition.system += normalized.system
     daily.composition.tools += normalized.tools
     for (const [key, value] of Object.entries(normalized.messageBlocks)) daily.composition.messageBlocks[key] = (daily.composition.messageBlocks[key] ?? 0) + value
-    for (const key of normalized.unestimatedMessageBlocks) {
-      const unknownBlocks = daily.composition.unestimatedMessageBlocks ??= []
-      if (!unknownBlocks.includes(key)) unknownBlocks.push(key)
-    }
     dailyVersions.set(dailyKey, daily)
   }
   for (const coverageGroup of coverage.byEstimatorVersion) {

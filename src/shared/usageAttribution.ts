@@ -364,30 +364,26 @@ export function normalizeTokensLargestRemainder(weights: readonly number[], exac
 export type NormalizedInputAttribution = {
   system: number
   tools: number
-  /** Only blocks with estimated weights receive normalized token values. */
   messageBlocks: Record<string, number>
-  /** Blocks with null estimates stay explicitly unknown; exact usage cannot split them safely. */
-  unestimatedMessageBlocks: string[]
 }
 
 /**
  * §6.3 两段式归一化（输入侧）：估算层给结构占比，精确层给总量。
  * 分子分母整体来自同一 StepAttribution（block-v1，覆盖三源，I1/§6.3 约束 5）；
  * 精确总量 = input + cache_creation + cache_read（同一次请求，不跨请求混用）。
- * 纯文本输入满足 system + tools + ΣmessageBlocks == exactInputTokens（AT7 / I4）。含未知多模态时保留未知块标记。
+ * 纯文本输入满足 system + tools + ΣmessageBlocks == exactInputTokens（AT7 / I4）。含未知多模态时整行不做归因。
  */
 export function normalizeInputAttribution(attribution: StepAttribution, exactInputTokens: number): NormalizedInputAttribution {
+  if (Object.values(attribution.blocks).some((entry) => entry.tokens === null)) {
+    throw new Error('ATTRIBUTION_HAS_UNESTIMATED_BLOCK')
+  }
   const blockKeys = Object.keys(attribution.blocks)
   const weights: number[] = [attribution.threeSources.systemTokens, attribution.threeSources.toolsTokens]
   for (const key of blockKeys) weights.push(attribution.blocks[key]!.tokens ?? 0)
   const normalized = normalizeTokensLargestRemainder(weights, exactInputTokens)
   const messageBlocks: Record<string, number> = {}
-  const unestimatedMessageBlocks: string[] = []
-  blockKeys.forEach((key, index) => {
-    if (attribution.blocks[key]!.tokens === null) unestimatedMessageBlocks.push(key)
-    else messageBlocks[key] = normalized[index + 2]!
-  })
-  return { system: normalized[0]!, tools: normalized[1]!, messageBlocks, unestimatedMessageBlocks }
+  blockKeys.forEach((key, index) => { messageBlocks[key] = normalized[index + 2]! })
+  return { system: normalized[0]!, tools: normalized[1]!, messageBlocks }
 }
 
 /**
@@ -477,6 +473,7 @@ export function hasAttributionWeights(value: Record<string, unknown>): boolean {
   let total = 0
   for (const entry of Object.values(blocks)) {
     if (!isRecord(entry)) continue
+    if (entry.tokens === null) return false
     if (typeof entry.tokens === 'number' && Number.isFinite(entry.tokens) && entry.tokens > 0) total += entry.tokens
   }
   const output = value.output

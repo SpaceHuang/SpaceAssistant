@@ -51,33 +51,21 @@ describe('usageStatsAttributionQueries', () => {
     db.close()
   })
 
-  it('counts pure multimodal input as attributable when system or tool declaration estimates are present', () => {
+  it('leaves pure multimodal exact input uncovered instead of assigning its tokens to system/tools', () => {
     const db = createMemoryAppDb()
     const imageOnly = attributed({
       system: 'stable system prompt',
       tools: [{ name: 'grep', description: 'search workspace', input_schema: { type: 'object' } }],
       messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', data: 'opaque' } }] }]
     })
-    insertUsageStepFact(db, step('image-session', 'image-turn', 120, imageOnly))
+    insertUsageStepFact(db, step('image-session', 'image-turn-small', 120, imageOnly))
+    insertUsageStepFact(db, step('image-session', 'image-turn-large', 1200, imageOnly))
 
-    const latest = queryLatestUsageAttribution(db, 'image-session')
-    expect(latest).toMatchObject({
-      exactInputTokens: 120,
-      estimatorVersion: 'block-v1',
-      attributableInputTokens: 120,
-      unattributedInputTokens: 0,
-      coverageRatio: 1
-    })
-    expect(latest?.composition.system).toBeGreaterThan(0)
-    expect(latest?.composition.tools).toBeGreaterThan(0)
-    expect(latest?.composition.messageBlocks).toEqual({})
-    expect(latest?.composition.unestimatedMessageBlocks).toEqual(['user|image'])
+    expect(queryLatestUsageAttribution(db, 'image-session')).toBeNull()
 
     const summary = queryUsageAttribution(db, { from: day, to: day })
-    expect(summary.byEstimatorVersion).toHaveLength(1)
-    expect(summary.byEstimatorVersion[0]).toMatchObject({ attributableInputTokens: 120, coverageRatio: 1 })
-    expect(summary.byEstimatorVersion[0]?.composition.messageBlocks).toEqual({})
-    expect(summary.byEstimatorVersion[0]?.composition.unestimatedMessageBlocks).toEqual(['user|image'])
+    expect(summary.exactInputTokens).toBe(1320)
+    expect(summary.byEstimatorVersion).toEqual([])
     db.close()
   })
 

@@ -14,7 +14,6 @@
     "unattributed": "{{count}} tokens have no attributable data",
     "attributionExact": "Exact input {{count}} tokens",
     "attributionEstimated": "Estimated composition (not exact usage)",
-    "attributionUnestimatedBlock": "{{block}}: contains unestimated content; share unknown",
     "system": "System prompt",
     "tools": "Tool definitions",
     "total": "Total",

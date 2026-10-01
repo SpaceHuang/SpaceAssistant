@@ -14,7 +14,6 @@
     "unattributed": "另有 {{count}} tokens 无可归因数据",
     "attributionExact": "精确输入 {{count}} tokens",
     "attributionEstimated": "以下为估算构成（非精确用量）",
-    "attributionUnestimatedBlock": "{{block}}：含未估算内容，份额未知",
     "system": "系统提示",
     "tools": "工具定义",
     "total": "总计",

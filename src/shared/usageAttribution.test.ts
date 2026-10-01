@@ -162,7 +162,7 @@ describe('多模态输入归因有效性', () => {
     expect(attribution.blocks['user|image']).toEqual({ chars: 0, tokens: null })
     expect(attribution.threeSources.systemTokens).toBeGreaterThan(0)
     expect(attribution.threeSources.toolsTokens).toBeGreaterThan(0)
-    expect(hasAttributionWeights(attribution as unknown as Record<string, unknown>)).toBe(true)
+    expect(hasAttributionWeights(attribution as unknown as Record<string, unknown>)).toBe(false)
   })
 })
 
@@ -296,10 +296,7 @@ describe('normalizeInputAttribution（§6.3 两段式归一化 / AT7 恒等式�
       tools: [],
       messages: [{ role: 'user', content: [{ type: 'image', source: {} }, { type: 'text', text: 'abc' }] }]
     })
-    const out = normalizeInputAttribution(withImage, 300)
-    expect(out.messageBlocks).not.toHaveProperty('user|image')
-    expect(out.unestimatedMessageBlocks).toEqual(['user|image'])
-    expect(out.system + out.tools + out.messageBlocks['user|text']!).toBe(300)
+    expect(() => normalizeInputAttribution(withImage, 300)).toThrow('ATTRIBUTION_HAS_UNESTIMATED_BLOCK')
   })
 })
 

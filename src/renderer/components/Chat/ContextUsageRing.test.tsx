@@ -176,7 +176,7 @@ describe('ContextUsageRing', () => {
       attributableInputTokens: 75,
       unattributedInputTokens: 25,
       coverageRatio: 0.75,
-      composition: { system: 10, tools: 15, messageBlocks: { 'user|text': 50 }, unestimatedMessageBlocks: ['user|image'] }
+      composition: { system: 10, tools: 15, messageBlocks: { 'user|text': 50 } }
     })
     renderRing({ input_tokens: 100, output_tokens: 0 })
     const svg = document.querySelector('svg')!
@@ -188,7 +188,6 @@ describe('ContextUsageRing', () => {
       expect(text).toContain('75%')
       expect(text).toContain('另有 25 tokens 无可归因数据')
       expect(text).toContain('系统提示')
-      expect(text).toContain('user|image：含未估算内容，份额未知')
       expect(text).toContain('75')
     })
     const used = Array.from(document.querySelectorAll('circle')).find((circle) => circle.getAttribute('stroke') === 'var(--sa-primary)')

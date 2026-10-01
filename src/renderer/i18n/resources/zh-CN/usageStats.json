@@ -54,7 +54,6 @@
     "estimatorVersion": "选择估算器版本",
     "coverage": "归因覆盖率 {{percent}}%",
     "unattributed": "另有 {{count}} tokens 无可归因数据",
-    "unestimatedBlocks": "以下消息类型含未估算内容，份额未知：{{blocks}}",
     "snapshot": "输入构成快照",
     "drift": "按日构成变化",
     "system": "系统提示",
