@@ -3,6 +3,8 @@ import { deleteConfigValue, getConfigValue, setConfigValue } from '../database'
 import {
   MCP_TOOL_SCHEMA_MAX_BYTES,
   MCP_TOOL_SCHEMA_MAX_DEPTH,
+  MCP_TOOLS_PER_ROUND_MAX,
+  MCP_TOOLS_TOTAL_BYTES_MAX,
   deriveUniqueMappedToolName,
   generateMappedToolName,
   parseMcpToolCache,
@@ -350,4 +352,72 @@ export function buildSnapshotFromDb(
     if (cache) caches.set(profile.id, cache)
   }
   return buildSnapshotTools(profiles, caches, { remoteContext: options?.remoteContext })
+}
+
+/** 延迟档快照准入的偏执上限（FR11/D6：防病态 server；白名单是唯一准入门槛）。 */
+export const MCP_DEFERRED_PARANOID_MAX_COUNT = 512
+export const MCP_DEFERRED_PARANOID_MAX_TOTAL_BYTES = 1024 * 1024
+
+/**
+ * FR12①/§6.7：设置页预算诊断（按需重算——纯配置 + 缓存、确定性输出、不依赖会话）。
+ * 双源合并：snapshot 源 = 快照准入裁剪（off 档既有预算 / 延迟档偏执上限）；
+ * eager 源 = 广告面裁剪（auto-eager / alwaysLoad 服务，与 computeEffectiveTools 同函数同口径）；
+ * executor 源 = 注册失败剔除（诊断层做轻量近似：服务 profile 缺失检查；完整试解析在 invoke 期 FR13）。
+ */
+export function computeBudgetDiagnostics(
+  db: AppDatabase,
+  args: { mode: 'auto' | 'always' | 'off'; thresholdBytes: number }
+): import('../../src/shared/mcpTypes').McpBudgetDiagnostic[] {
+  const diagnostics: import('../../src/shared/mcpTypes').McpBudgetDiagnostic[] = []
+  const profiles = listProfiles(db)
+  const caches = new Map<string, McpToolCacheEntry>()
+  for (const profile of profiles) {
+    const cache = getCachedTools(db, profile.id)
+    if (cache) caches.set(profile.id, cache)
+  }
+  const deferredMode = args.mode !== 'off'
+  const snapshot = buildSnapshotTools(profiles, caches, deferredMode
+    ? { maxCount: MCP_DEFERRED_PARANOID_MAX_COUNT, maxTotalBytes: MCP_DEFERRED_PARANOID_MAX_TOTAL_BYTES }
+    : {})
+  for (const drop of snapshot.budgetDropped) {
+    diagnostics.push({ source: 'snapshot', mappedName: drop.mappedName, reason: drop.reason })
+  }
+  // executor 源（轻量近似）：快照条目引用的服务 profile 已不存在
+  for (const entry of snapshot.entries.values()) {
+    if (!profiles.some((p) => p.id === entry.serverId)) {
+      diagnostics.push({ source: 'executor', mappedName: entry.mappedName, reason: 'executor_unavailable' })
+    }
+  }
+  // eager 源：广告面条目 = 快照全量 − 延迟条目（computeDeferredPlan 同规则），套既有广告预算
+  const deferredNames = new Set<string>()
+  if (deferredMode) {
+    const deferredEntries: McpToolSnapshotEntry[] = []
+    for (const entry of snapshot.entries.values()) {
+      const profile = profiles.find((p) => p.id === entry.serverId)
+      if (profile?.enabled && profile.alwaysLoad === true) continue
+      deferredEntries.push(entry)
+    }
+    if (deferredEntries.length > 0) {
+      if (args.mode === 'auto') {
+        let uncoveredBytes = 0
+        for (const entry of deferredEntries) uncoveredBytes += JSON.stringify(entry).length
+        if (uncoveredBytes <= args.thresholdBytes && deferredEntries.length <= MCP_TOOLS_PER_ROUND_MAX) {
+          deferredEntries.length = 0 // auto-eager：无延迟条目
+        }
+      }
+      for (const entry of deferredEntries) deferredNames.add(entry.mappedName)
+    }
+  }
+  const advertiseEntries: McpToolDescriptor[] = [...snapshot.entries.values()]
+    .filter((entry) => !deferredNames.has(entry.mappedName)) as unknown as McpToolDescriptor[]
+  if (advertiseEntries.length > 0) {
+    // 与 computeEffectiveTools 同口径（trimMcpToolsForBudget，O3）
+    const trimmed = trimMcpToolsForBudget(advertiseEntries, {
+      ...(deferredMode ? { maxCount: MCP_TOOLS_PER_ROUND_MAX, maxTotalBytes: MCP_TOOLS_TOTAL_BYTES_MAX } : {})
+    })
+    for (const drop of trimmed.dropped) {
+      diagnostics.push({ source: 'eager', mappedName: drop.tool.mappedName, reason: drop.reason })
+    }
+  }
+  return diagnostics
 }

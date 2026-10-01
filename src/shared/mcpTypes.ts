@@ -116,6 +116,8 @@ export interface McpServerWriteInput {
   }
   http?: { endpoint: string; allowPrivateNetwork?: boolean }
   enabledToolNames: string[]
+  /** FR14：与 McpServerProfile.alwaysLoad 同步（写入 payload 字段；strict schema 未收录即抛错）。 */
+  alwaysLoad?: boolean
   createdAt?: string
   updatedAt?: string
   clearSecretKinds?: string[]
@@ -151,6 +153,8 @@ export interface McpConfig {
   servers: McpServerProfile[]
   /** 每服务工具缓存（非敏感），供设置页展示工具列表与启用状态。 */
   toolCaches?: Record<string, McpToolCacheEntry>
+  /** FR12①：预算裁剪诊断（snapshot / eager / executor 三源合并；按需重算，§6.7）。 */
+  budgetDiagnostics?: McpBudgetDiagnostic[]
 }
 
 export interface McpSaveProfilesPayload {
@@ -274,6 +278,7 @@ export const McpServerProfileSchema = z
       .array(z.string().min(1).max(256))
       .max(512)
       .refine(uniqueStrings, { message: 'enabledToolNames must be unique' }),
+    alwaysLoad: z.boolean().optional(),
     discoveredAt: z.string().max(64).optional(),
     discoveredProtocolVersion: z.string().max(32).optional(),
     status: z.enum(MCP_CONNECTION_STATUSES),
@@ -358,6 +363,7 @@ export const McpServerWriteInputSchema = z
       .array(z.string().min(1).max(256))
       .max(512)
       .refine(uniqueStrings, { message: 'enabledToolNames must be unique' }),
+    alwaysLoad: z.boolean().optional(),
     createdAt: z.string().optional(),
     updatedAt: z.string().optional(),
     clearSecretKinds: z.array(z.string().min(1).max(256)).max(64).optional()
@@ -606,6 +612,14 @@ export function maskSensitiveArgs(input: unknown): unknown {
 export type McpBudgetTrimResult = {
   kept: McpToolDescriptor[]
   dropped: Array<{ tool: McpToolDescriptor; reason: 'count' | 'bytes' }>
+}
+
+/** FR12①/§6.7：设置页预算诊断条目（双源合并口径，按 source 分组呈现）。 */
+export type McpBudgetDiagnostic = {
+  /** snapshot = 快照准入裁剪（off 档既有预算 / 延迟档偏执上限）；eager = 广告面裁剪（auto-eager / alwaysLoad）；executor = FR13 注册失败剔除。 */
+  source: 'snapshot' | 'eager' | 'executor'
+  mappedName: string
+  reason: string
 }
 
 /**
