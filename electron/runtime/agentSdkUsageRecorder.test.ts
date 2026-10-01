@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createAgentSdkUsageRecorder } from './agentSdkUsageRecorder'
+import { buildStepAttribution } from '../../src/shared/usageAttribution'
 
 describe('createAgentSdkUsageRecorder', () => {
   it('maps accepted and discarded attempt usage to distinct existing usage-step facts', () => {
@@ -24,6 +25,16 @@ describe('createAgentSdkUsageRecorder', () => {
     const record = createAgentSdkUsageRecorder({ requestId: 'r', sessionId: 's', turnId: 't', recordStepUsage })
     record({ modelTurn: 0, attempt: -1, usage: { inputTokens: -1, outputTokens: 2 } })
     expect(recordStepUsage).not.toHaveBeenCalled()
+  })
+
+  it('attaches an estimator-versioned snapshot from the current prepared request material', () => {
+    const recordStepUsage = vi.fn()
+    const record = createAgentSdkUsageRecorder({ requestId: 'r', sessionId: 's', turnId: 't', recordStepUsage })
+    const attributionInput = { system: 'system template', tools: [{ name: 'grep' }], messages: [{ role: 'user', content: 'hello' }] }
+    record({ modelTurn: 1, attempt: 1, usage: { inputTokens: 10, outputTokens: 1 }, attributionInput })
+    expect(recordStepUsage).toHaveBeenCalledWith(expect.objectContaining({ attribution: expect.objectContaining({
+      ...buildStepAttribution(attributionInput), attributionJson: JSON.stringify((( { threeSources: _sources, ...snapshot }) => snapshot)(buildStepAttribution(attributionInput)))
+    }) }))
   })
 
   it('projects actual attempt usage into the desktop session ledger and usage fact, including discarded overflow', async () => {

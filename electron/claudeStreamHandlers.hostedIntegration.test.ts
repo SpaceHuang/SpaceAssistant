@@ -415,6 +415,17 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       const toolResult = sessionEvents.find((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCall.payload.toolUseId)
       expect(toolResult?.payload.stepId).toBe(toolCall.payload.stepId)
     }
+    const usageSteps = getUsageStepFactsForTurn(db, session.id, 'hosted-turn')
+    expect(usageSteps.length).toBeGreaterThan(0)
+    expect(usageSteps.every((step) => step.sessionId === session.id && step.turnId === 'hosted-turn')).toBe(true)
+    expect(new Set(usageSteps.map((step) => step.stepId)).size).toBe(usageSteps.length)
+    expect(usageSteps.every((step) => step.attributionJson !== null && step.estimatorVersion !== null)).toBe(true)
+    const usageTurn = getUsageTurnFact(db, 'hosted-turn')
+    expect(usageTurn).toMatchObject({ sessionId: session.id, turnId: 'hosted-turn' })
+    expect(usageTurn?.toolAttributionJson).not.toBeNull()
+    expect(JSON.parse(usageTurn!.toolAttributionJson!)).toMatchObject({
+      tools: expect.any(Object), toolSource: expect.any(Object), toolResults: expect.any(Object)
+    })
     await expect(fs.readFile(path.join(workDir, 'created.txt'), 'utf8')).resolves.toBe('Hosted SDK write result')
     evaluateGateSpy.mockRestore()
   })

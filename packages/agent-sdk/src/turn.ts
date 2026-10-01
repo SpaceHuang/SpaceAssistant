@@ -71,6 +71,7 @@ export type AgentTurnObserver = Readonly<{
   /** Treat host tool lifecycle projections as required steps around dispatch and before the next model request. */
   criticalToolProjection?: boolean
   onModelRequest?(request: Readonly<{ modelTurn: number; attempt: number; routeId: string; windowId?: string; request: PreparedModelCall['request']; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): void | Promise<void>
+  prepareUsageAttribution?(input: Readonly<{ modelTurn: number; request: PreparedModelCall['request'] }>): Record<string, unknown> | void
   prepareModelRequest?(request: Readonly<{ modelTurn: number; attempt: number; routeId: string; windowId?: string; request: PreparedModelCall['request']; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): Readonly<{ sessionLedger?: unknown; requestProjection?: unknown }> | void | Promise<Readonly<{ sessionLedger?: unknown; requestProjection?: unknown }> | void>
   onProviderRetry?(retry: Readonly<{ attempt: number; modelTurn: number; routeId: string; requestId: string; code: string }>): void | Promise<void>
   onModelAttemptDiscarded?(attempt: Readonly<{ attempt: number; modelTurn: number; reasonCode: string }>): void | Promise<void>
@@ -701,12 +702,15 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         outputTokens += response.usage.outputTokens
         cacheReadInputTokens += response.usage.cacheReadInputTokens ?? 0
         cacheCreationInputTokens += response.usage.cacheCreationInputTokens ?? 0
+        const requestForAttempt = { ...requestTemplate, messages: structuredClone(messages) }
+        const attributionInput = input.observer?.prepareUsageAttribution?.({ modelTurn: modelTurns, request: requestForAttempt })
         const attemptUsage = {
           invocationId,
           modelTurn: modelTurns,
           attempt,
           routeId: input.routeId,
           usage: response.usage,
+          ...(attributionInput ? { attributionInput } : {}),
           finishReason: response.finishReason,
           disposition: 'discarded',
           reasonCode: recovery.reasonCode
@@ -998,6 +1002,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
     const acceptedAttemptNumber = recoveredAttempt ? 2 : 1
     let attemptUsageLedger: Record<string, unknown> | undefined
     if (!initialResponse) {
+      const attributionInput = input.observer?.prepareUsageAttribution?.({ modelTurn: modelTurns, request: call.request })
       const acceptedAttemptUsage = {
         invocationId,
         modelTurn: modelTurns,
@@ -1005,6 +1010,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         attempt: acceptedAttemptNumber,
         routeId: input.routeId,
         usage: collected.usage,
+        ...(attributionInput ? { attributionInput } : {}),
         finishReason: collected.finish.reason,
         disposition: 'completed'
       }

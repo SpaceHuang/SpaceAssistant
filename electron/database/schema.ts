@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 27
+export const DB_SCHEMA_VERSION = 28
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (
@@ -498,6 +498,16 @@ CREATE INDEX IF NOT EXISTS idx_usage_turn_day ON usage_turn_facts(day);
 CREATE INDEX IF NOT EXISTS idx_usage_turn_session_day ON usage_turn_facts(session_id, day);
 CREATE INDEX IF NOT EXISTS idx_usage_turn_model_day ON usage_turn_facts(model, day);
 CREATE INDEX IF NOT EXISTS idx_usage_turn_app_version_day ON usage_turn_facts(app_version, day);
+`
+
+/** v28: 当前 SDK usage step 的可选内容归因快照；历史精确 usage 保持原值。 */
+export const MIGRATION_V28_USAGE_ATTRIBUTION_SQL = `
+ALTER TABLE usage_step_facts ADD COLUMN system_tokens INTEGER;
+ALTER TABLE usage_step_facts ADD COLUMN tools_tokens INTEGER;
+ALTER TABLE usage_step_facts ADD COLUMN message_tokens INTEGER;
+ALTER TABLE usage_step_facts ADD COLUMN estimator_version TEXT;
+ALTER TABLE usage_step_facts ADD COLUMN attribution_json TEXT;
+ALTER TABLE usage_turn_facts ADD COLUMN tool_attribution_json TEXT;
 `
 
 /**

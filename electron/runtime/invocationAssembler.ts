@@ -38,6 +38,7 @@ import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { createAgentSdkProviderRecovery } from './agentSdkProviderRecovery'
 import { createAgentSdkOutputRecovery } from './agentSdkOutputRecovery'
 import { createAgentSdkUsageRecorder, createAgentSdkUsageSessionEvent } from './agentSdkUsageRecorder'
+import type { StepAttribution } from '../../src/shared/usageAttribution'
 import { createAgentSdkDesktopObserver } from './agentSdkDesktopObserver'
 import { createAgentSdkPreflightAdapter, createAgentSdkTurnBoundaryAdapter } from './agentSdkTurnBoundary'
 import { projectAgentToolResult } from '../../src/shared/agentToolResult'
@@ -550,7 +551,10 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           : (input: Record<string, unknown>) => recordStepUsage(db, input as never),
         recordTurnSummary: usageExempt
           ? () => undefined
-          : (input: Record<string, unknown>) => recordTurnSummary(db, input as never)
+          : (input: Record<string, unknown>) => recordTurnSummary(db, {
+              ...input,
+              ...(turnToolAttribution ? { toolAttributionJson: JSON.stringify(turnToolAttribution) } : {})
+            } as never)
       }
     : undefined
   const diagnostics = db
@@ -560,6 +564,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     ...(db ? { approvalDatabase: db } : {})
   }
 
+  const attributionByModelTurn = new Map<number, StepAttribution>()
+  let turnToolAttribution: import('../../src/shared/usageAttribution').TurnToolDimension | undefined
   const resolveAgentSdkToolName = (name: string): string => {
     const registry = getDefaultAgentRuntime().builtinRegistry as { get(name: string): unknown; entries?(): readonly Readonly<{ name: string }>[] }
     return resolveRegisteredToolName(name, registry)
@@ -1187,6 +1193,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       llmServiceId: materials.llmServiceId,
       baseUrl: materials.baseUrl,
       recordStepUsage: usage?.recordStepUsage,
+      attributionForModelTurn: (modelTurn) => attributionByModelTurn.get(modelTurn),
       emitSessionEvent: materials.emitSessionEvent,
       emitFactEvent: materials.emitFactEvent
     }),
@@ -1216,6 +1223,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         }
       }),
       emitFactEvent: materials.emitFactEvent,
+      onUsageAttribution: ({ modelTurn, attribution }) => attributionByModelTurn.set(modelTurn, attribution),
+      onTurnToolAttribution: (dimension) => { turnToolAttribution = dimension },
       notify: buildEventSink(materials).notify,
       onFileTreeChanged: materials.onFileTreeChanged,
       mapToolResult: (call, output, isError) => {

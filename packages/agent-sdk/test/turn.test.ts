@@ -677,6 +677,31 @@ describe('runAgentTurn', () => {
     })
   })
 
+  it('prepares accepted usage attribution once and records the snapshot with the model attempt', async () => {
+    const history = new MemoryHistory()
+    const registry = new ModelProviderRegistry()
+    registry.register(route, { providerId: 'fake', stream: () => stream(
+      { type: 'text-delta', text: 'answer' }, { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
+    ) })
+    const permits = new InMemorySafetyPermitStore()
+    const prepareUsageAttribution = vi.fn(() => ({ contentTokens: 7 }))
+    const recordProviderAttemptUsage = vi.fn()
+
+    await runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'usage-attribution-once', history,
+      request: { messages: [{ role: 'user', content: 'question' }], maxTokens: 32 },
+      safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })), maxModelTurns: 1,
+      observer: { prepareUsageAttribution }, recordProviderAttemptUsage
+    })
+
+    expect(prepareUsageAttribution).toHaveBeenCalledOnce()
+    expect(recordProviderAttemptUsage).toHaveBeenCalledOnce()
+    expect(recordProviderAttemptUsage).toHaveBeenCalledWith(expect.objectContaining({
+      disposition: 'completed', attributionInput: { contentTokens: 7 }
+    }))
+  })
+
   it('publishes provisional chunks from a failed provider attempt and reports turn failure for host rollback', async () => {
     const registry = new ModelProviderRegistry()
     registry.register(route, { providerId: 'fake', stream: async function* () {

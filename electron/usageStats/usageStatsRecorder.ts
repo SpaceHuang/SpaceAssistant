@@ -2,6 +2,7 @@ import { computeTotalRequestInputTokens } from '../../src/shared/contextUsageEst
 import { resolveUsageCacheSemanticsFromBaseUrl } from '../../src/shared/usageCacheSemantics'
 import type { SessionUsage } from '../../src/shared/sessionUsage'
 import { logAgentEvent } from '../agentLogger/agentLogger'
+import type { StepAttribution } from '../../src/shared/usageAttribution'
 import type { AppDatabase } from '../database'
 import { insertUsageStepFact, upsertUsageTurnFact } from '../database/operations'
 
@@ -30,6 +31,7 @@ export type UsageStepUsageInput = {
   model?: string | null
   llmServiceId?: string | null
   now?: number
+  attribution?: StepAttribution
 }
 
 export type UsageTurnToolCounts = {
@@ -49,6 +51,7 @@ export type TurnSummaryInput = {
   model?: string | null
   llmServiceId?: string | null
   now?: number
+  toolAttributionJson?: string | null
 }
 
 /**
@@ -92,6 +95,13 @@ export function recordStepUsage(db: AppDatabase | undefined, input: UsageStepUsa
       cacheReadTokens: usage.cache_read_input_tokens ?? 0,
       cacheCreationTokens: usage.cache_creation_input_tokens ?? 0,
       cacheSemantics,
+      ...(input.attribution ? {
+        systemTokens: input.attribution.threeSources.systemTokens,
+        toolsTokens: input.attribution.threeSources.toolsTokens,
+        messageTokens: input.attribution.threeSources.messageTokens,
+        estimatorVersion: input.attribution.threeSources.estimatorVersion,
+        attributionJson: (input.attribution as StepAttribution & { attributionJson?: string }).attributionJson ?? JSON.stringify((({ threeSources: _sources, ...snapshot }) => snapshot)(input.attribution))
+      } : {}),
       source: 'api'
     })
   })
@@ -113,7 +123,8 @@ export function recordTurnSummary(db: AppDatabase | undefined, input: TurnSummar
       toolCallCount: input.counts.toolCallCount,
       toolErrorCount: input.counts.toolErrorCount,
       toolSkippedCount: input.counts.toolSkippedCount,
-      outcome: input.outcome
+      outcome: input.outcome,
+      toolAttributionJson: input.toolAttributionJson ?? null
     })
   })
 }
