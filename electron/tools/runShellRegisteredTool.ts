@@ -10,8 +10,8 @@ export type RunShellRegisteredExecutionContext = RuntimeToolExecutionContext & {
 }
 
 export class RunShellExecutionUncertainError extends Error {
-  constructor() {
-    super('Shell 命令执行期间被中断，最终副作用状态未知')
+  constructor(message = 'Shell 命令执行期间被中断，最终副作用状态未知') {
+    super(message)
     this.name = 'RunShellExecutionUncertainError'
   }
 }
@@ -62,8 +62,22 @@ export const runShellRegisteredTool: RegisteredTool = definePlannedTool<
       'terminationReason' in result.data && result.data.terminationReason === 'user_cancel') {
       throw new RunShellExecutionUncertainError()
     }
-    if (result.error === 'SHELL_TIMEOUT' || result.error === 'OUTPUT_LIMIT_REACHED' || result.data && typeof result.data === 'object' &&
-      'terminationReason' in result.data && result.data.terminationReason === 'timeout') {
+    const resultData = result.data && typeof result.data === 'object' && !Array.isArray(result.data)
+      ? result.data as Record<string, unknown>
+      : undefined
+    const timedOut = result.error === 'SHELL_TIMEOUT' || resultData?.terminationReason === 'timeout'
+    if (timedOut || result.error === 'OUTPUT_LIMIT_REACHED') {
+      if (timedOut) {
+        const timeoutSec = typeof resultData?.timeoutSec === 'number' ? resultData.timeoutSec : prepared.timeoutMs / 1000
+        const terminationStatus = resultData?.treeKillVerified === true
+          ? '受管理进程树已确认终止'
+          : resultData?.terminationErrorCode === 'TERMINATION_UNCONFIRMED'
+            ? '无法确认受管理进程树是否全部终止'
+            : '执行器已尝试终止受管理进程树'
+        throw new RunShellExecutionUncertainError(
+          `Shell 命令运行至 ${timeoutSec} 秒超时；${terminationStatus}。命令已启动，可能已有部分副作用，完成状态未知。不要盲目重跑。先检查进程、目标文件、输出或 checkpoint；若任务支持恢复，优先使用恢复方式。若确认仍需执行，下一次调用前设置更长的 timeout（1～86400 秒）。nohup 或后台化不能延长受管理进程的执行时间。`
+        )
+      }
       throw new RunShellExecutionUncertainError()
     }
     if (result.data && typeof result.data === 'object' &&

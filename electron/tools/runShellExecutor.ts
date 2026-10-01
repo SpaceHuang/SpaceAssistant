@@ -433,7 +433,7 @@ export async function executePreparedShellExecution(
       const exitCode = code ?? (signal ? null : interrupted ? null : 1)
       const externalSignal = signal ?? undefined
       const cancelled = ctx.signal.aborted || (interrupted && !timedOut)
-      const success = !cancelled && code === 0
+      const success = !cancelled && !timedOut && !interrupted && !externalSignal && code === 0
       const failed = !success
       const contractConflict = stderrMeta.contractConflict ?? stdoutMeta.contractConflict
 
@@ -628,6 +628,7 @@ export async function executePreparedShellExecution(
           terminationReason: ctx.signal.aborted ? 'user_cancel' : timedOut ? 'timeout' : outputLimited ? 'output_limit' : externalSignal ? 'external_signal' : 'process_exit',
           signal: externalSignal ?? terminationResult?.signal,
           durationMs: totalMs,
+          timeoutSec,
           planMs,
           spawnToExitMs,
           shell: spec.shellId,

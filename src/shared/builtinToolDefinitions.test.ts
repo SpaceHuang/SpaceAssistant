@@ -55,4 +55,12 @@ describe('run_shell 能力拒绝话术边界', () => {
     expect(def.description).toContain('能力拒绝不等于安全策略拒绝')
     expect(def.description).toContain('不得通过换途径或绕过通道征求许可')
   })
+
+  it('说明长任务应显式设置 timeout，且后台化不能绕过进程管理', () => {
+    const def = BUILTIN_TOOL_DEFINITIONS.find((d) => d.name === 'run_shell')!
+    expect(def.description).toContain('启动前设置 timeout')
+    expect(def.description).toContain('不要用 nohup 或后台化绕过超时')
+    expect(def.description).not.toContain('可能产生了部分副作用')
+    expect(def.input_schema.properties.timeout).toMatchObject({ minimum: 1, maximum: 86400 })
+  })
 })

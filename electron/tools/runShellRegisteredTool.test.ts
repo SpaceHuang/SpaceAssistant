@@ -164,9 +164,9 @@ describe('runShellRegisteredTool', () => {
 
   it('shell 已启动后超时将结果归为不确定，避免把部分副作用作为可重试工具结果', async () => {
     const executor = vi.spyOn(runShellExecutor, 'executePreparedShellExecutionWithHostFallback')
-      .mockResolvedValue({ success: false, error: 'SHELL_TIMEOUT' } as never)
+      .mockResolvedValue({ success: false, error: 'SHELL_TIMEOUT', data: { timeoutSec: 17, terminationReason: 'timeout' } } as never)
     const handle = await runShellRegisteredTool.begin(
-      { command: process.platform === 'win32' ? 'Write-Output started' : 'printf started' },
+      { command: process.platform === 'win32' ? 'Write-Output started' : 'printf started', timeout: 17 },
       { requestId: 'r', toolUseId: 'shell-timeout-uncertain', signal: runtime.signal, executionContext: runtime }
     )
     handle.awaitConfirmation()
@@ -176,7 +176,10 @@ describe('runShellRegisteredTool', () => {
       await expect(handle.execute({
         requestId: 'r', toolUseId: 'shell-timeout-uncertain', signal: runtime.signal,
         toolName: 'run_shell', runtimeContext: runtime
-      } as never)).rejects.toBeInstanceOf(RunShellExecutionUncertainError)
+      } as never)).rejects.toMatchObject({
+        name: 'RunShellExecutionUncertainError',
+        message: expect.stringMatching(/运行至 17 秒超时[\s\S]*不要盲目重跑/)
+      })
       expect(executor).toHaveBeenCalledOnce()
     } finally {
       handle.release()

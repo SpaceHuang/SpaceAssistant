@@ -242,6 +242,9 @@ describe('runShellExecutor', () => {
     const result = await runShellExecutor.execute({ command: 'sleep 2', timeout: 1 }, baseCtx(workDir, userDataDir))
     expect(result.data?.status).toBe('timed_out')
     expect(result.data?.terminationReason).toBe('timeout')
+    expect(result.data?.timeoutSec).toBe(1)
+    const finish = vi.mocked(logShellAgentEvent).mock.calls.find(([, event]) => event === 'shell.exec.finish')
+    expect(finish?.[2]).toMatchObject({ success: false, timedOut: true })
   }, SPAWN_TEST_TIMEOUT_MS)
 
   it('正常结束时成对移除 AbortSignal 监听器', async () => {
@@ -328,6 +331,7 @@ describe('runShellExecutor', () => {
     expect(result.success).toBe(false)
     expect(result.error).toBe('TOOL_EXEC_FAILED')
     expect(result.userMessage).toMatch(/命令执行超时（1 秒）/)
+    expect(result.data?.timeoutSec).toBe(1)
     expect(result.data?.interrupted).toBe(true)
     expect(result.data?.terminationSignal).toBe(isWindows ? 'taskkill' : 'SIGTERM')
     expect(result.data?.treeKillVerified).toBe(true)
