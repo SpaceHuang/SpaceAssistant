@@ -1528,12 +1528,42 @@ export const grepExecutor: ToolExecutor = {
         code: 'grep-ripgrep',
         message: createGrepRipgrepDiagnostic(resolved)
       })
+      const executeFallback = async (): Promise<ToolExecutorResult> => {
+        const fallbackText = await grepFallbackJs(
+          ctx.workDir, absSearch, pattern, gargs, ctx.signal,
+          (message) => ctx.sendProgress('grep', message)
+        )
+        const authorizedIdentity = ctx.readExecutionPermit?.targets[0]?.identity
+        const currentStat = authorizedIdentity ? await fs.stat(absSearch).catch(() => null) : null
+        if (authorizedIdentity && (!currentStat || !readIdentityMatches(currentStat, authorizedIdentity))) {
+          return { success: false, error: '搜索期间文件身份或内容发生变化，已丢弃搜索结果。', diagnostic: { caseId: 'read-target-identity-changed-during-read', retryable: false, category: 'mechanism' as const, ...(ctx.readExecutionPermit?.targets[0]?.factId ? { factId: ctx.readExecutionPermit.targets[0].factId } : {}) }, duration: Date.now() - started }
+        }
+        if (ctx.signal.aborted) return { success: false, error: '搜索已取消。', duration: Date.now() - started }
+        const plan = planGrepInvocation({ workDir: ctx.workDir, searchPath: absSearch, args: gargs, engine: 'walk' })
+        const noMatch = fallbackText === 'No matches found'
+        if (fallbackText.startsWith('Error:')) {
+          return { success: false, error: fallbackText.slice('Error:'.length).trim(), duration: Date.now() - started }
+        }
+        const truncated = fallbackText.includes('已按 head_limit=')
+        const scope: GrepScope = { ...plan.scope, truncated, ...(truncated ? { limitReason: 'head_limit' as const } : {}) }
+        const output = noMatch ? formatGrepNoMatchOutput(scope) : fallbackText
+        return {
+          success: true,
+          data: {
+            output,
+            ...(noMatch ? { status: scope.skippedCount > 0 ? 'no_match_with_skips' : 'no_match' } : {}),
+            searchScope: scope,
+            ...(plan.explicitSensitiveHit ? { sensitivePathHit: true } : {})
+          },
+          duration: Date.now() - started
+        }
+      }
       if (!resolved.path) {
         void ctx.recordDiagnostic?.({
           code: 'grep-ripgrep-unavailable',
           message: createGrepRipgrepUnavailableDiagnostic(resolved, resolved.reason ?? 'unsupported')
         })
-        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, resolved.reason ?? 'unsupported'), duration: Date.now() - started }
+        return executeFallback()
       }
       const availability = await inspectRipgrepBinary(resolved)
       if (!availability.available) {
@@ -1541,7 +1571,7 @@ export const grepExecutor: ToolExecutor = {
           code: 'grep-ripgrep-unavailable',
           message: createGrepRipgrepUnavailableDiagnostic(resolved, availability.reason)
         })
-        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, availability.reason), duration: Date.now() - started }
+        return executeFallback()
       }
       const text = await grepWithRg(
         resolved.path,
@@ -1605,7 +1635,7 @@ export const grepExecutor: ToolExecutor = {
           code: 'grep-ripgrep-unavailable',
           message: createGrepRipgrepUnavailableDiagnostic(resolved, text.reason)
         })
-        return { success: false, error: grepRipgrepUnavailableUserMessage(resolved, text.reason), duration: Date.now() - started }
+        return executeFallback()
       }
       if (text.kind === 'cancelled') return { success: false, error: `${text.partialOutput}\n[已取消]`, duration: Date.now() - started }
       if (text.kind === 'timeout') return { success: false, error: `${text.partialOutput}\n[搜索超时，仅展示部分结果]`, duration: Date.now() - started }

@@ -262,7 +262,7 @@ describe('path field alias normalization', () => {
     expect(spawnProcess).not.toHaveBeenCalled()
   })
 
-  it('开发态 staging 缺失时明确失败，不返回假阴性或 degraded 结果', async () => {
+  it('仅 ripgrep 不可用时使用受 permit 约束的 JS fallback', async () => {
     ripgrep.resolve.mockReturnValue({ path: '/missing/rg', source: 'development', platform: 'darwin', arch: 'arm64' })
     ripgrep.inspect.mockResolvedValue({ available: false, reason: 'not_found' })
     const diagnostic = vi.fn()
@@ -273,17 +273,16 @@ describe('path field alias normalization', () => {
 
     const res = await grepExecutor.execute(input, ctx)
 
-    expect(res).toMatchObject({ success: false })
-    expect(res.error).toContain('npm run prepare:rg -- --target=darwin-arm64')
-    expect(JSON.stringify(res.data ?? {})).not.toContain('No matches found')
-    expect(JSON.stringify(res.data ?? {})).not.toContain('degraded')
+    expect(res).toMatchObject({ success: true, data: { searchScope: { engine: 'walk' } } })
+    expect(String(res.data?.output)).toContain('a.txt')
+    expect(String(res.data?.output)).toBe('Found 1 files\na.txt')
     expect(diagnostic).toHaveBeenCalledWith({
       code: 'grep-ripgrep-unavailable',
       message: 'source=development;platform=darwin;arch=arm64;status=unavailable;reason=not_found'
     })
   })
 
-  it('打包态内置 rg 不可用时返回安装完整性错误而非 fallback', async () => {
+  it('打包态 rg 缺失同样只在 unavailable 时降级并保留诊断', async () => {
     ripgrep.resolve.mockReturnValue({ path: '/missing/rg', source: 'bundled', platform: 'darwin', arch: 'arm64' })
     ripgrep.inspect.mockResolvedValue({ available: false, reason: 'not_found' })
     const diagnostic = vi.fn()
@@ -294,12 +293,28 @@ describe('path field alias normalization', () => {
 
     const res = await grepExecutor.execute(input, ctx)
 
-    expect(res).toMatchObject({ success: false, error: '内置 ripgrep 不可用（not_found）。请重新安装应用后重试。' })
-    expect(JSON.stringify(res.data ?? {})).not.toContain('degraded')
+    expect(res).toMatchObject({ success: true, data: { searchScope: { engine: 'walk' } } })
+    expect(String(res.data?.output)).toContain('a.txt')
     expect(diagnostic).toHaveBeenCalledWith({
       code: 'grep-ripgrep-unavailable',
       message: 'source=bundled;platform=darwin;arch=arm64;status=unavailable;reason=not_found'
     })
+  })
+
+  it('ripgrep 返回真实搜索错误时不切换到 JS fallback', async () => {
+    const file = path.join(tmpDir, 'search-error.txt')
+    await fs.writeFile(file, 'needle')
+    const fixture = path.join(tmpDir, 'rg-error.cjs')
+    await fs.writeFile(fixture, "process.stderr.write('invalid search'); process.exit(2)")
+    const input = { pattern: 'needle', path: file, output_mode: 'content' }
+    const ctx = {
+      ...makeCtx(tmpDir, cache),
+      grepSpawnProcess: (_binary: string, _args: string[], options: never) => spawn(process.execPath, [fixture], options)
+    }
+    await attachTestReadPermit('grep', input, ctx)
+    const res = await grepExecutor.execute(input, ctx)
+    expect(res.success).toBe(false)
+    expect(res.error).toContain('invalid search')
   })
 
   // -- 回归：原 path 字段仍可用 --
