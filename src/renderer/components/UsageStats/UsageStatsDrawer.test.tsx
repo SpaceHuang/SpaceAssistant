@@ -274,9 +274,9 @@ describe('UsageStatsDrawer', () => {
     const attribution = {
       exactInputTokens: 100,
       byEstimatorVersion: [{ estimatorVersion: 'block-v1', attributableInputTokens: 60, unattributedInputTokens: 40, coverageRatio: 0.6,
-        composition: { system: 10, tools: 20, messageBlocks: { 'user|text': 30 } } }],
+        composition: { system: 10, tools: 20, messageBlocks: { 'user|text': 20, 'assistant|thinking': 5, 'tool|text': 5 } } }],
       dailyByEstimatorVersion: [{ day: '2026-09-16', estimatorVersion: 'block-v1', inputTokens: 60,
-        composition: { system: 10, tools: 20, messageBlocks: { 'user|text': 30 } } }],
+        composition: { system: 10, tools: 20, messageBlocks: { 'user|text': 20, 'assistant|thinking': 5, 'tool|text': 5 } } }],
       toolDimensions: { tools: { grep: 50 }, toolSource: { builtin: 50 }, toolSources: { grep: 'builtin' as const }, toolResults: { grep: { calls: 2, chars: 90 } } }
     }
     const api = mockApi({ usageStatsAttribution: vi.fn(async () => attribution) })
@@ -287,6 +287,8 @@ describe('UsageStatsDrawer', () => {
     expect((await screen.findByTestId('attribution-coverage')).textContent).toContain('60.0%')
     expect(screen.getByText(/40 tokens/)).toBeDefined()
     expect(screen.getByTestId('usage-attribution-view')).toBeDefined()
+    expect(screen.getAllByText(/助手 · 思考/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/工具 · 文本/).length).toBeGreaterThan(0)
   })
 
   it('shows the 0% explanation without rendering any attribution composition', async () => {

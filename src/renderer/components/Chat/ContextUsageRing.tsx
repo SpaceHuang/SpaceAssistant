@@ -77,7 +77,7 @@ export function ContextUsageRing({
         .catch(() => { if (active) setLatestAttribution(null) })
     }
     return () => { active = false }
-  }, [sessionId])
+  }, [sessionId, lastUsage])
 
   const pendingImageTokens = useMemo(() => {
     if (!pendingImageAttachments?.length) return 0
@@ -181,7 +181,19 @@ export function ContextUsageRing({
       lines.push(`${t('tooltip.system')}: ${formatNum(latestAttribution.composition.system, locale)}`)
       lines.push(`${t('tooltip.tools')}: ${formatNum(latestAttribution.composition.tools, locale)}`)
       for (const [key, tokens] of Object.entries(latestAttribution.composition.messageBlocks)) {
-        lines.push(`${key}: ${formatNum(tokens, locale)}`)
+        const [role, type] = key.split('|')
+        const roleLabel = role === 'system' ? t('tooltip.roleSystem')
+          : role === 'user' ? t('tooltip.roleUser')
+            : role === 'assistant' ? t('tooltip.roleAssistant')
+              : role === 'tool' ? t('tooltip.roleTool') : role
+        const typeLabel = type === 'text' ? t('tooltip.blockText')
+          : type === 'thinking' ? t('tooltip.blockThinking')
+            : type === 'tool_use' ? t('tooltip.blockToolUse')
+              : type === 'tool_result' ? t('tooltip.blockToolResult')
+                : type === 'image' ? t('tooltip.blockImage')
+                  : type === 'document' ? t('tooltip.blockDocument')
+                    : type === 'audio' ? t('tooltip.blockAudio') : type
+        lines.push(`${role && type ? `${roleLabel} · ${typeLabel}` : key}: ${formatNum(tokens, locale)}`)
       }
     }
     lines.push(

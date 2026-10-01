@@ -12,6 +12,21 @@ type Props = { data: UsageAttributionSummary | null; loading: boolean; locale: s
 
 export function UsageAttributionView({ data, loading, locale }: Props) {
   const { t } = useTypedTranslation('usageStats')
+  const messageBlockLabel = (key: string): string => {
+    const [role, type] = key.split('|')
+    const roleLabel = role === 'system' ? t('attribution.roleSystem')
+      : role === 'user' ? t('attribution.roleUser')
+        : role === 'assistant' ? t('attribution.roleAssistant')
+          : role === 'tool' ? t('attribution.roleTool') : role
+    const typeLabel = type === 'text' ? t('attribution.blockText')
+      : type === 'thinking' ? t('attribution.blockThinking')
+        : type === 'tool_use' ? t('attribution.blockToolUse')
+          : type === 'tool_result' ? t('attribution.blockToolResult')
+            : type === 'image' ? t('attribution.blockImage')
+              : type === 'document' ? t('attribution.blockDocument')
+                : type === 'audio' ? t('attribution.blockAudio') : type
+    return role && type ? `${roleLabel} · ${typeLabel}` : key
+  }
   const [selectedVersion, setSelectedVersion] = useState<string>()
   const versions = data?.byEstimatorVersion ?? []
   const version = versions.find((item) => item.estimatorVersion === selectedVersion) ?? versions.at(-1)
@@ -21,7 +36,7 @@ export function UsageAttributionView({ data, loading, locale }: Props) {
       day: point.day,
       [t('attribution.system')]: point.composition.system,
       [t('attribution.tools')]: point.composition.tools,
-      ...Object.fromEntries(Object.entries(point.composition.messageBlocks).map(([key, value]) => [key, value]))
+      ...Object.fromEntries(Object.entries(point.composition.messageBlocks).map(([key, value]) => [messageBlockLabel(key), value]))
     }))
   }, [data, version, t])
 
@@ -30,7 +45,7 @@ export function UsageAttributionView({ data, loading, locale }: Props) {
   if (versions.length === 0 || !version) return <Typography.Paragraph type="secondary" data-testid="attribution-empty">{t('attribution.noAttribution')}</Typography.Paragraph>
 
   const messageKeys = Object.keys(version.composition.messageBlocks)
-  const categories = [t('attribution.system'), t('attribution.tools'), ...messageKeys]
+  const categories = [t('attribution.system'), t('attribution.tools'), ...messageKeys.map(messageBlockLabel)]
   const toolNames = [...new Set([...Object.keys(data.toolDimensions.tools), ...Object.keys(data.toolDimensions.toolResults)])].sort()
   const topResult = Object.entries(data.toolDimensions.toolResults).sort((a, b) => b[1].chars - a[1].chars)[0]
   const fixed = version.composition.system + version.composition.tools
@@ -66,14 +81,14 @@ export function UsageAttributionView({ data, loading, locale }: Props) {
         <Typography.Title level={5}>{t('attribution.snapshot')}</Typography.Title>
         <div className="usage-attribution__bar" role="img" aria-label={`${t('attribution.snapshot')} ${version.estimatorVersion}`}>
           {categories.map((category, index) => {
-            const value = index === 0 ? version.composition.system : index === 1 ? version.composition.tools : version.composition.messageBlocks[category] ?? 0
+            const value = index === 0 ? version.composition.system : index === 1 ? version.composition.tools : version.composition.messageBlocks[messageKeys[index - 2]!] ?? 0
             const width = version.attributableInputTokens > 0 ? value / version.attributableInputTokens * 100 : 0
             return width > 0 ? <span key={category} title={`${category}: ${number(value, locale)}`} style={{ width: `${width}%`, background: COLORS[index % COLORS.length] }} /> : null
           })}
         </div>
         <div className="usage-attribution__legend">
           {categories.map((category, index) => {
-            const value = index === 0 ? version.composition.system : index === 1 ? version.composition.tools : version.composition.messageBlocks[category] ?? 0
+            const value = index === 0 ? version.composition.system : index === 1 ? version.composition.tools : version.composition.messageBlocks[messageKeys[index - 2]!] ?? 0
             return <div key={category}><i style={{ background: COLORS[index % COLORS.length] }} />{category}: {number(value, locale)} · ≈ {version.estimatorVersion}</div>
           })}
         </div>

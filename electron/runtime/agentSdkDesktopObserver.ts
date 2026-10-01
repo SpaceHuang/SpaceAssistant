@@ -7,7 +7,7 @@ import type { SessionEventInput } from '../sessionEvents'
 import type { AgentNotifyEvent } from '../../src/shared/agent/invocation'
 import type { FileTreeChangeEvent } from '../../src/shared/fileTreeSync'
 import type { ExecutionLane } from '../../src/shared/confirmation/types'
-import { buildRequestContextPayload, buildRequestHeaderPayload } from '../../src/shared/requestContext'
+import { buildRequestContextPayload, buildRequestHeaderPayload, computeAnthropicCacheBreakpointPositions } from '../../src/shared/requestContext'
 import { projectRequestHeaderForWindow } from './requestHeaderProjection'
 import { computeContextPressure } from '../../src/shared/contextMeter'
 import { projectUsageAfterToolResults, type ContextUsageRaw } from '../../src/shared/contextUsageEstimate'
@@ -47,6 +47,7 @@ export function createAgentSdkDesktopObserver(input: {
   let hasPreview = false
   let recoveredOutput = false
   const turnToolDimension: TurnToolDimension = emptyTurnToolDimension()
+  const previousCacheBreakpointsByWindow = new Map<string, string[]>()
   let activeModelTurn = 0
   let lastAssistantActivityTimestamp = 0
   let newTextSegmentAfterTool = false
@@ -102,12 +103,25 @@ export function createAgentSdkDesktopObserver(input: {
       ...(tool.strictSchema === 'require' ? { strict: true } : {})
     }))
     const requestId = `${input.requestId}:round:${request.modelTurn}`
+    const cacheWindowId = request.windowId ?? input.windowId ?? input.requestId
+    const cacheControl = process.env.PI_CACHE_RETENTION !== 'none'
+    const cacheBreakpointPositions = computeAnthropicCacheBreakpointPositions({ system, messages, cacheControl })
+    const previousCacheBreakpoints = previousCacheBreakpointsByWindow.get(cacheWindowId) ?? null
+    const cacheBreakpoints = {
+      count: cacheBreakpointPositions.positions.length,
+      positions: cacheBreakpointPositions.positions,
+      tailIsString: cacheBreakpointPositions.tailIsString,
+      prevPositions: previousCacheBreakpoints,
+      moved: previousCacheBreakpoints !== null && JSON.stringify(previousCacheBreakpoints) !== JSON.stringify(cacheBreakpointPositions.positions)
+    }
+    previousCacheBreakpointsByWindow.set(cacheWindowId, [...cacheBreakpointPositions.positions])
     const header = buildRequestHeaderPayload({
       requestId,
       system,
       tools,
       messages: messages as unknown[],
       requiredSurfaceSet,
+      cacheBreakpoints,
       toolExecutionCheckpoint: {
         completedToolUseIds: messages.flatMap((message) => message.role === 'tool' ? [message.toolCallId] : []),
         replayForbidden: false

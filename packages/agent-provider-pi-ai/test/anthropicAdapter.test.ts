@@ -162,6 +162,8 @@ describe('PiAiAnthropicProvider', () => {
         system: [{ type: 'text', text: 'Follow the workspace safety policy.', cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }]
       })
+      const wireMessages = body.messages as Array<{ content: Array<Record<string, unknown>> }>
+      expect(wireMessages[0]?.content[0]).toMatchObject({ cache_control: { type: 'ephemeral' } })
       expect(JSON.stringify(body)).not.toContain('credential:anthropic:main')
     } finally {
       globalThis.fetch = originalFetch

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentTurnObserver } from '../../packages/agent-sdk/src/turn'
 import { createAgentSdkDesktopObserver } from './agentSdkDesktopObserver'
 import { buildRequestHeaderPayload } from '../../src/shared/requestContext'
@@ -9,6 +9,7 @@ import { buildAssistantActivityTimeline } from '../../src/shared/assistantActivi
 import type { Message } from '../../src/shared/domainTypes'
 
 describe('createAgentSdkDesktopObserver', () => {
+  afterEach(() => vi.unstubAllEnvs())
   it('accumulates each model request tool declaration into the persisted turn dimensions', async () => {
     let turnDimensions: unknown
     const observer = createAgentSdkDesktopObserver({
@@ -41,6 +42,7 @@ describe('createAgentSdkDesktopObserver', () => {
   })
 
   it('writes request headers for the first and follow-up Hosted model turns', async () => {
+    vi.stubEnv('PI_CACHE_RETENTION', 'short')
     const emitSessionEvent = vi.fn()
     const observer = createAgentSdkDesktopObserver({ requestId: 'r', sessionId: 's', turnId: 't', emitSessionEvent, model: 'claude-test', contextWindow: 1000, windowId: 'projection-window' })
     const request = {
@@ -57,7 +59,10 @@ describe('createAgentSdkDesktopObserver', () => {
     const requiredUserMessage = { id: 'user-1', message: { role: 'user' as const, content: 'hello' } }
     await observer.onModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request, currentUserMessageId: requiredUserMessage.id, requiredUserMessage })
     expect(emitSessionEvent.mock.calls.map(([event]) => event.type)).toEqual(['request_header', 'request_context'])
-    expect(emitSessionEvent.mock.calls[0]?.[0].payload).toMatchObject({ requestId: 'r:round:1', requiredSurfaceSet: ['user-1'] })
+    expect(emitSessionEvent.mock.calls[0]?.[0].payload).toMatchObject({
+      requestId: 'r:round:1', requiredSurfaceSet: ['user-1'],
+      cacheBreakpoints: { count: 2, positions: ['system', 'msg:2'], tailIsString: true, prevPositions: null, moved: false }
+    })
     await observer.onModelRequest?.({ modelTurn: 2, attempt: 1, routeId: 'route', request, currentUserMessageId: requiredUserMessage.id, requiredUserMessage })
 
     expect(emitSessionEvent).toHaveBeenCalledWith(expect.objectContaining({
@@ -68,8 +73,24 @@ describe('createAgentSdkDesktopObserver', () => {
         tools: undefined
       })
     }))
+    expect(emitSessionEvent.mock.calls[2]?.[0].payload).toMatchObject({
+      requestId: 'r:round:2',
+      cacheBreakpoints: { count: 2, positions: ['system', 'msg:2'], tailIsString: true, prevPositions: ['system', 'msg:2'], moved: false }
+    })
     expect(emitSessionEvent.mock.calls.map(([event]) => event.type)).toEqual(['request_header', 'request_context', 'request_header', 'request_context'])
     expect(emitSessionEvent.mock.calls[3]?.[0].payload).toMatchObject({ requestId: 'r:round:2', model: 'claude-test', contextWindow: { tokens: 1000, source: 'config' } })
+  })
+
+  it('records no cache breakpoints when the provider cache retention is disabled', async () => {
+    vi.stubEnv('PI_CACHE_RETENTION', 'none')
+    const emitSessionEvent = vi.fn()
+    const observer = createAgentSdkDesktopObserver({ requestId: 'cache-disabled', sessionId: 's', turnId: 't', emitSessionEvent })
+    await observer.onModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route', request: {
+      messages: [{ role: 'system', content: 'policy' }, { role: 'user', content: 'hello' }], maxTokens: 100, tools: []
+    } })
+    expect(emitSessionEvent.mock.calls[0]?.[0].payload).toMatchObject({
+      cacheBreakpoints: { count: 0, positions: [], tailIsString: true, prevPositions: null, moved: false }
+    })
   })
 
   it('shares header fingerprints with the legacy projection lane for the same window', async () => {

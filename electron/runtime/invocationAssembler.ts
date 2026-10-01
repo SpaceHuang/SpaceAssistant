@@ -171,7 +171,8 @@ function scriptContentMemoryKey(value: unknown): CacheKey | undefined {
   if (!value || typeof value !== 'object') return undefined
   const candidate = value as Partial<Extract<CacheKey, { kind: 'script-content' }>>
   return candidate.kind === 'script-content' && typeof candidate.sessionId === 'string' &&
-    typeof candidate.digest === 'string' && /^[a-f0-9]{64}$/.test(candidate.digest)
+    typeof candidate.digest === 'string' && /^[a-f0-9]{64}$/.test(candidate.digest) &&
+    typeof candidate.workdirDigest === 'string' && /^[a-f0-9]{64}$/.test(candidate.workdirDigest)
     ? candidate as Extract<CacheKey, { kind: 'script-content' }>
     : undefined
 }
@@ -868,6 +869,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
             ...(assessment.fillPreview?.length ? { fillPreview: assessment.fillPreview as never } : {})
           } } : {}),
           ...(precheck?.hints ? { shellSecurityHints: precheck.hints as never } : {}),
+          ...(typeof details.scriptPathHint === 'string' ? { scriptPathHint: details.scriptPathHint } : {}),
           ...(details.autoApproveFallback ? { autoApproveFallback: details.autoApproveFallback as never } : {}),
           ...(mcpEntry?.serverId && mcpEntry.serverName && mcpEntry.originalName ? { mcp: {
             serverId: mcpEntry.serverId, serverName: mcpEntry.serverName,

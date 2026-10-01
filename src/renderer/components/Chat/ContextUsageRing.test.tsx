@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { ComponentProps } from 'react'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { Provider } from 'react-redux'
@@ -188,10 +188,37 @@ describe('ContextUsageRing', () => {
       expect(text).toContain('75%')
       expect(text).toContain('另有 25 tokens 无可归因数据')
       expect(text).toContain('系统提示')
+      expect(text).toContain('用户 · 文本: 50')
       expect(text).toContain('75')
     })
     const used = Array.from(document.querySelectorAll('circle')).find((circle) => circle.getAttribute('stroke') === 'var(--sa-primary)')
     expect(used?.getAttribute('stroke-dasharray')).toBeTruthy()
+  })
+
+  it('refreshes the latest attribution snapshot when the same session receives new usage', async () => {
+    let requestCount = 0
+    window.api.usageStatsLatestAttribution = vi.fn(async () => {
+      requestCount += 1
+      return requestCount === 1 ? null : {
+        exactInputTokens: 120,
+        estimatorVersion: 'block-v1',
+        attributableInputTokens: 120,
+        unattributedInputTokens: 0,
+        coverageRatio: 1,
+        composition: { system: 20, tools: 10, messageBlocks: { 'assistant|thinking': 30, 'tool|text': 60 } }
+      }
+    })
+    const { store } = renderRing({ input_tokens: 100, output_tokens: 0 })
+    await waitFor(() => expect(requestCount).toBe(1))
+    store.dispatch(restoreLastUsage({ input_tokens: 120, output_tokens: 0 }))
+    await waitFor(() => expect(requestCount).toBe(2))
+    const svg = document.querySelector('svg')!
+    fireEvent.mouseEnter(svg)
+    await waitFor(() => {
+      const text = screen.getByRole('tooltip').textContent ?? ''
+      expect(text).toContain('助手 · 思考: 30')
+      expect(text).toContain('工具 · 文本: 60')
+    })
   })
 
   it('uses current session effective request maxTokens for output reserve', async () => {
