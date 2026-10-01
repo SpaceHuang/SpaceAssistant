@@ -18,9 +18,11 @@ export function finalizeReadConfirmation(input: { toolName: string; toolInput: R
     : input.readPathFact
   if (!fact) return undefined
   // 目录目标：list_directory（direct-entries）与 grep（subtree）均可经确认兑现；
-  // grep 目录允许 symlink→directory 归一（与 gate auto-allow 路径同口径）。read_file 保持不收目录（N8）。
+  // grep 目录允许 symlink→directory 归一（与 gate auto-allow 路径同口径）。
+  // read_file 显式拒绝目录/symlink→directory（N8：纵深一层，executor 侧 targetKind 拒绝为兜底）。
   const isResolvedDirectory = fact.targetKind === 'directory' || (fact.targetKind === 'symlink' && fact.resolvedKind === 'directory')
   const isResolvedFile = fact.targetKind === 'file' || (fact.targetKind === 'symlink' && fact.resolvedKind === 'file')
+  if (input.toolName === 'read_file' && isResolvedDirectory) return undefined
   if (input.toolName === 'list_directory' && !isResolvedDirectory) return undefined
   if (input.toolName === 'grep' && !(isResolvedDirectory || isResolvedFile || fact.targetKind === 'missing')) return undefined
   const mapping = input.approvedTargets

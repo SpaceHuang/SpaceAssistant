@@ -1585,3 +1585,15 @@ git init -q
 | 主仓库 `src/shared/builtinShellToolContract.test.ts` | 合并 0b25868d 后 ✓（该文件在旧 main 基线红，系 main 侧描述/测试漂移，非本分支） |
 
 **AC 证据订正**：AC-45 证据改「码点口径（评审 P1-2 实测订正）」；AC-47 证据补 P1-3 `--` 分隔符；AC-49 证据改「ripgrepExecutorProcess『Windows 固定句柄 grep 通过 stdin』4 断言（真实 stdin 泵送路径）」。
+
+### 18.5 二轮评审整改（不阻断项，报告同源追加）
+
+| # | 评审发现 | 整改 |
+|---|---|---|
+| P1 | walk 敏感豁免缺 workDir 内门控（rg 侧 explicitSensitiveHit 有 inside-workdir 判定，walk 侧无）——workDir 外敏感根走 fallback 时 walk 放行子树而 rg 排除，两引擎分叉且 sensitivePathHit 明示落空 | `explicitSensitiveRoot` 补同款 inside-workdir 判定（absSearch 相对 workDir 非逃逸）；新增两条用例：workDir 外敏感根（secrets 段）walk 仍排除子树条目（修复前红）；workDir 内敏感根豁免语义保持（P0-1 闭环不回退） |
+| P2-1 | 闭环用例残留 DBG-DECISION console.log | 已删除 |
+| P2-2 | symlink→directory 的 grep 确认闭环无用例锁定 | 新增 junction 形态闭环用例：gate require-confirm（symlink+resolvedKind=directory）→ finalize 兑现 subtree permit → executor 放行（Windows junction 无特权恒验证） |
+| P2-3 | finalize 层 read_file 拒目录的显式守卫被移除（纵深减一） | 恢复显式守卫（isResolvedDirectory → undefined；executor targetKind 拒绝为兜底），新增用例锁定 |
+| P2-4 | 「点名敏感根后子树内嵌 .env 一并放行」未向用户披露 | grep schema 敏感段两处补披露「指定目录会搜索其整个子树，含子树内其他敏感名条目」；设计意图（显式点名=整棵子树放行，gate 真人确认是控制点，两引擎一致）登记于本行 |
+
+二轮整改后门禁：grepFallback/readReadIntegration/Scope 系全绿（失败名单=基线 symlink 特权族）；builtinToolDefinitions.test 14 passed；electron tsc ✓。

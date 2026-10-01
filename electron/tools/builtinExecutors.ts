@@ -1698,7 +1698,11 @@ export async function grepFallbackJs(
   // rg 不能」的既有两引擎不一致；这是收紧，非放宽）。includeIgnored 解除名单与隐藏（不解除敏感）。
   // 显式点名敏感根（搜索根本身命中敏感前缀，经 zone 判定 + 真人确认/permit 放行）时，子树内不再逐条目
   // 敏感排除——与 rg 侧 explicitSensitiveHit → sensitiveExcludes=[] 同语义（§6.2「两条路径合起来无缺口」）。
-  const explicitSensitiveRoot = isSensitivePath(absSearch)
+  // 门控与 grepScope 同款：仅 workDir 内的敏感根豁免（rg 侧 explicitSensitiveHit 有 inside-workdir 判定，
+  // walk 侧若无此门控会对 workDir 外敏感根放行子树，两引擎口径分叉——评审二轮 P1）。
+  const absSearchRel = path.relative(workDir, absSearch)
+  const absSearchInsideWorkDir = Boolean(absSearchRel) && absSearchRel !== '.' && !absSearchRel.startsWith('..')
+  const explicitSensitiveRoot = absSearchInsideWorkDir && isSensitivePath(absSearch)
   async function walk(dir: string): Promise<void> {
     if (shouldStop()) return
     let entries: Dirent[]

@@ -332,6 +332,47 @@ describe('V1 confirmed read executor integration', () => {
     }
   })
 
+  it("symlink→directory 的 grep：确认注册→兑现 subtree permit→executor 放行（P0-1 闭环·junction 形态）", async () => {
+    if (process.platform !== 'win32') return
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-e2e-grep-linkdir-')))
+    try {
+      const realDir = path.join(root, 'secrets', 'sub')
+      await fs.mkdir(realDir, { recursive: true })
+      await fs.writeFile(path.join(realDir, 'inner.txt'), 'LINKED_DIR_NEEDLE\n')
+      const linkDir = path.join(root, 'slink')
+      await fs.symlink(realDir, linkDir, 'junction')
+      const registry = new ReadConfirmationRegistry()
+      const input = { pattern: 'LINKED_DIR_NEEDLE', path: linkDir, output_mode: 'content' }
+      const requestId = 'grep-linkdir-req'
+      const toolUseId = 'grep-linkdir-tool'
+      const gate = await evaluateToolCallGate(gateDeps(root, input, requestId, toolUseId, registry, 'grep'))
+      expect(gate.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', ruleId: 'path-sensitive-read-confirm' })
+      expect(gate.readPathFact?.targetKind).toBe('symlink')
+      expect(gate.readPathFact?.resolvedKind).toBe('directory')
+      const permit = finalizeReadConfirmation({ toolName: 'grep', toolInput: input, requestId, toolUseId, outcome: 'approved', answerer: 'user', readPathFact: gate.readPathFact, approvedTargets: gate.readTargetMapping }, registry)
+      expect(permit).toBeDefined()
+      expect(permit!.targets[0]).toMatchObject({ targetKind: 'directory', scope: 'subtree' })
+      const result = await grepExecutor.execute(input, executorContext(root, requestId, toolUseId, permit))
+      expect(result.success).toBe(true)
+      expect(result.data?.output).toContain('inner.txt')
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it("read_file 确认流显式拒绝目录事实（P2-3 纵深：finalize 层守卫）", async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-e2e-rf-dir-')))
+    try {
+      const registry = new ReadConfirmationRegistry()
+      const input = { path: root }
+      const gate = await evaluateToolCallGate(gateDeps(root, input, 'rf-dir-req', 'rf-dir-tool', registry))
+      expect(gate.readPathFact?.targetKind).toBe('directory')
+      const permit = finalizeReadConfirmation({ toolName: 'read_file', toolInput: input, requestId: 'rf-dir-req', toolUseId: 'rf-dir-tool', outcome: 'approved', answerer: 'user', readPathFact: gate.readPathFact, approvedTargets: gate.readTargetMapping }, registry)
+      expect(permit).toBeUndefined()
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
   it('系统目录路径在真人批准后可由生产 read_file executor 读取', async () => {
     const systemFile = process.platform === 'darwin' ? '/System/Library/CoreServices/SystemVersion.plist' : '/etc/hosts'
     try { await fs.access(systemFile) } catch { return }
@@ -358,7 +399,6 @@ describe('V1 confirmed read executor integration', () => {
       const requestId = 'grep-dir-confirm-req'
       const toolUseId = 'grep-dir-confirm-tool'
       const gate = await evaluateToolCallGate(gateDeps(root, input, requestId, toolUseId, registry, 'grep'))
-      console.log('DBG-DECISION:', JSON.stringify(gate.decision))
       expect(gate.decision).toMatchObject({ type: 'require-confirm', answerer: 'user', ruleId: 'path-sensitive-read-confirm' })
       expect(gate.readPathFact?.targetKind).toBe('directory')
       const permit = finalizeReadConfirmation({ toolName: 'grep', toolInput: input, requestId, toolUseId, outcome: 'approved', answerer: 'user', readPathFact: gate.readPathFact, approvedTargets: gate.readTargetMapping }, registry)

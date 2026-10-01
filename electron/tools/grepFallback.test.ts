@@ -265,3 +265,23 @@ describe('I3：clampLine 码点口径（§7.11 子项 2，AC-45 walk 侧；评�
     expect(out).toContain('[行被截断]')
   })
 })
+
+describe('P1：walk 敏感豁免的 workDir 内门控（与 rg explicitSensitiveHit 同口径）', () => {
+  it('workDir 外敏感根（路径含 secrets 段）走 walk 时子树条目仍被排除，不因「显式点名」放宽', async () => {
+    const inner = fixture({ 'in.txt': 'placeholder\n' })
+    const outside = fs.mkdtempSync(path.join(path.dirname(inner), 'sa-grep-out-sensitive-'))
+    roots.push(outside)
+    // 搜索根本身在 workDir 外且路径含 secrets 段（isSensitivePath 命中）
+    const sensitiveRoot = path.join(outside, 'secrets', 'sub')
+    fs.mkdirSync(sensitiveRoot, { recursive: true })
+    fs.writeFileSync(path.join(sensitiveRoot, 'id_rsa_like.txt'), 'NEEDLE-SECRET-CONTENT\n')
+    const out = await grepFallbackJs(inner, sensitiveRoot, 'NEEDLE-SECRET-CONTENT', args({ outputMode: 'files_with_matches' }), new AbortController().signal, () => {})
+    expect(out).not.toContain('id_rsa_like.txt')
+  })
+
+  it('workDir 内敏感根豁免不受影响（P0-1 闭环语义保持）', async () => {
+    const root = fixture({ 'secrets/sub/inner.txt': 'NEEDLE-IN\n' })
+    const out = await grepFallbackJs(root, path.join(root, 'secrets', 'sub'), 'NEEDLE-IN', args({ outputMode: 'files_with_matches' }), new AbortController().signal, () => {})
+    expect(out).toContain('inner.txt')
+  })
+})

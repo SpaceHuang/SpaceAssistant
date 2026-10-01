@@ -76,7 +76,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
     description:
       '按当前会话安全策略搜索文本内容，搜索根为文件或目录：普通桌面只读可按策略搜索工作目录外的路径，敏感或系统位置需真人确认；远程会话只允许工作目录内的普通路径。传入目录时递归搜索。不支持通配路径和多路径输入（文件名过滤请用 glob 参数）。pattern 使用 ripgrep 默认正则语法。使用 output_mode 选择返回匹配文件、匹配内容或每文件匹配行数，使用 head_limit 限制结果数量。搜索文件内容时使用本工具，无需调用 shell。' +
       '遍历搜索时的排除行为：默认不搜索以下目录（依赖安装 / 构建产物 / 缓存 / 版本库内部对象）：node_modules、.git、.svn、__pycache__、dist、dist-electron、.cursor；显式指定其内部路径即可搜索（隐藏目录会自动解除隐藏过滤），或传 include_ignored: true 一并解除。' +
-      '敏感文件 / 目录（.env、.env.*、secrets/）在遍历中始终排除，include_ignored: true 也不解除；如需搜索请直接指定该文件路径，该方式会执行并在结果中标注「命中敏感路径」。' +
+      '敏感文件 / 目录（.env、.env.*、secrets/）在遍历中始终排除，include_ignored: true 也不解除；如需搜索请直接指定该路径（文件或目录；指定目录会搜索其整个子树，含子树内其他敏感名条目），该方式会执行并在结果中标注「命中敏感路径」。' +
       '「无匹配」结果会附带实际搜索范围与跳过目录（searchScope），跳过目录中可能存在匹配内容。查版本库历史内容建议改用 run_shell 的 git log -S / git grep / git show（效率提示，非安全限制）。',
     input_schema: {
       type: 'object',
@@ -85,7 +85,7 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
         include_ignored: {
           type: 'boolean',
           description:
-            '解除默认忽略规则（node_modules、dist 等）与隐藏条目过滤（含 .git 等点目录），并解除 .gitignore 等 Git 忽略规则（等价 ripgrep --no-ignore-vcs；与设置项「搜索被 Git 忽略的文件」为 OR），默认 false。不解除 .ignore/.rgignore。注意：敏感文件（如 .env）仍不会被搜索，如需搜索请直接指定该文件路径'
+            '解除默认忽略规则（node_modules、dist 等）与隐藏条目过滤（含 .git 等点目录），并解除 .gitignore 等 Git 忽略规则（等价 ripgrep --no-ignore-vcs；与设置项「搜索被 Git 忽略的文件」为 OR），默认 false。不解除 .ignore/.rgignore。注意：敏感文件（如 .env）仍不会被搜索，如需搜索请直接指定该路径（指定敏感目录会搜索其整个子树）'
         },
         path: {
           type: 'string',
