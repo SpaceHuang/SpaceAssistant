@@ -91,7 +91,6 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 | `ToolExecutionAfterDispatchError` (`TOOL_EXECUTION_UNKNOWN_AFTER_DISPATCH`) | `toolExecutionPort.ts` | 已进入执行器，异常无法证明无副作用 |
 | `ChatCancelledError` (`CHAT_CANCELLED`) | `runtime/components.ts` | 聊天取消 |
 | `AgentTurnHistoryAppendError`（未导出，按 name 判定） | `turn.ts` | history 追加失败；`kinds` 含 `tool-call-finished` 视为结果持久化不确定 |
-| `AgentTurnApplicationAdmissionError`（未导出） / `APPLICATION_ADMISSION_RECOVERY_FAILED` | `turn.ts` | 宿主应用运行槽激活/恢复失败 |
 | `AgentTurnHostProjectionError` / `AgentTurnToolProjectionError` / `AgentTurnBoundaryProjectionError`（均未导出） | `turn.ts` | critical 投影提交失败，回合结算 `interrupted` |
 | `AgentTurnHistoryAlreadyTerminalError`（未导出） | `turn.ts` | history 已是终态，跳过重复终态写入 |
 | `ToolSchedulerReservationErrorReason` | `scheduler.ts` | 预留失败原因联合类型（`no-progress-subscription` / `progress-timeout`） |

@@ -43,7 +43,6 @@ export type AgentTurnPorts = Readonly<{
   toolResourceKeys?(call: CanonicalToolExecutionCall): readonly string[] | undefined
   /** Uses the host's existing tool metadata to preserve bounded approval-candidate scheduling. */
   isApprovalCandidate?(call: CanonicalToolExecutionCall): boolean
-  applicationAdmission?: ApplicationAdmissionPort
   sessionLedgerForToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult): Promise<Record<string, unknown>> | Record<string, unknown>
   /** Host product policy after a tool result is durably committed and before the next model request. */
   afterToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult, source?: Readonly<{ kind: 'execution' | 'safety-rejection'; reasonCode?: string }>): void | Promise<void>
@@ -166,11 +165,6 @@ export type CanonicalTurnMessage = CanonicalModelMessage
 
 type CanonicalToolExecutionCall = { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }
 type CanonicalToolExecutionResult = { output: unknown; replayContent?: unknown; isError?: boolean; auditRef?: string }
-export type ApplicationAdmissionPort = Readonly<{
-  park(checkpoint?: unknown): unknown
-  discard?(handle: unknown): void
-  resume(handle: unknown, options?: { signal?: AbortSignal }): boolean | { ok: true } | { ok: false; retryable: boolean; cause?: string } | Promise<boolean | { ok: true } | { ok: false; retryable: boolean; cause?: string }>
-}>
 export type ToolPreparationStage =
   | Readonly<{ kind: 'initial' }>
   | Readonly<{ kind: 'recheck'; confirmation?: Readonly<{ receipt: string }> }>
@@ -287,7 +281,6 @@ export type RunAgentTurnInput = {
   resourceLocks?: { acquire(keys: readonly string[], options?: { signal?: AbortSignal }): Promise<{ release(): void }> }
   toolResourceKeys?(call: CanonicalToolExecutionCall): readonly string[] | undefined
   isApprovalCandidate?(call: CanonicalToolExecutionCall): boolean
-  applicationAdmission?: ApplicationAdmissionPort
   sessionLedgerForToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult): Promise<Record<string, unknown>> | Record<string, unknown>
   afterToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult, source?: Readonly<{ kind: 'execution' | 'safety-rejection'; reasonCode?: string }>): void | Promise<void>
   sessionLedgerForNotDispatched?(call: CanonicalToolExecutionCall, reason: string, result: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>
@@ -1190,7 +1183,6 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
 
     const candidateSlots = new ApprovalCandidateSlots(2, Math.max(toolCalls.length, 1))
     const approvalSlots = new Semaphore(2)
-    const applicationAdmission = new TurnApplicationAdmission(input.applicationAdmission, input.request.signal, invocationId)
     const settledTools = await mapWithConcurrency(toolCalls, input.maxConcurrentTools ?? 2, async (tool) => {
       const executionCall = {
         invocationId, toolCallId: tool.toolCallId, toolName: tool.toolName,
@@ -1199,16 +1191,10 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       }
       const approvalCandidate = input.isApprovalCandidate?.(executionCall)
         ?? ['write_file', 'edit_file', 'run_shell', 'run_script', 'browser', 'browser_action'].includes(tool.toolName)
-      let queuedForCandidate = false
       let releaseCandidate: (() => void) | undefined
       let approvalPermitHeld = false
       try {
-      await applicationAdmission.activate(tool.toolCallId)
-      releaseCandidate = approvalCandidate ? await candidateSlots.acquire(invocationId, input.request.signal, async () => {
-        queuedForCandidate = true
-        await applicationAdmission.wait(tool.toolCallId, 'approval-wait-capacity')
-      }) : undefined
-      if (queuedForCandidate) await applicationAdmission.activate(tool.toolCallId)
+      releaseCandidate = approvalCandidate ? await candidateSlots.acquire(invocationId, input.request.signal) : undefined
       const initialBinding = await input.prepareTool(executionCall, { kind: 'initial' })
       await projectTool(input.observer, 'tool-started', () => input.observer?.onToolStarted?.(executionCall))
       throwIfAborted(input.request.signal)
@@ -1229,15 +1215,12 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           await markNotDispatched(tool, 'CONFIRMATION_REQUIRED')
           throw new ToolDeniedError('CONFIRMATION_REQUIRED')
         }
-        const approvalWasQueued = approvalSlots.pending > 0 || approvalSlots.activeCount >= approvalSlots.limit
         try {
-          if (approvalWasQueued) await applicationAdmission.wait(tool.toolCallId, 'approval-wait-capacity')
           await approvalSlots.acquire(input.request.signal ? { signal: input.request.signal } : {})
           approvalPermitHeld = true
-          if (approvalWasQueued) await applicationAdmission.activate(tool.toolCallId)
         }
         catch (error) {
-          await markNotDispatched(tool, input.request.signal?.aborted ? 'REQUEST_CANCELLED' : error instanceof AgentTurnApplicationAdmissionError ? 'APPLICATION_ADMISSION_RECOVERY_FAILED' : 'CONFIRMATION_CAPACITY_UNAVAILABLE')
+          await markNotDispatched(tool, input.request.signal?.aborted ? 'REQUEST_CANCELLED' : 'CONFIRMATION_CAPACITY_UNAVAILABLE')
           throw error
         }
         await appendHistory([{
@@ -1250,18 +1233,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             requestedAt: Date.now()
           }
         }])
-        try {
-          throwIfAborted(input.request.signal)
-          await applicationAdmission.wait(tool.toolCallId)
-        }
-        catch (error) {
-          if (approvalPermitHeld) { approvalSlots.release(); approvalPermitHeld = false }
-          const timedOut = error instanceof AgentTurnTimedOutError || isTurnTimeoutSignal(input.request.signal)
-          const cancelled = error instanceof AgentTurnCancelledError || (input.request.signal?.aborted === true && !timedOut)
-          await appendHistory([{ kind: 'approval-resolved', payload: { toolCallId: tool.toolCallId, approvalId: initialDecision.confirmationId, approved: false, outcome: timedOut ? 'timeout' : cancelled ? 'cancelled' : 'unavailable', settledAt: Date.now() } }])
-          await markNotDispatched(tool, timedOut ? 'REQUEST_TIMEOUT' : cancelled ? 'REQUEST_CANCELLED' : 'APPLICATION_ADMISSION_RECOVERY_FAILED')
-          throw timedOut ? abortErrorForSignal(input.request.signal) : cancelled && !(error instanceof AgentTurnCancelledError) ? abortErrorForSignal(input.request.signal) : error
-        }
+        throwIfAborted(input.request.signal)
         let result: ToolConfirmationResult
         try {
           result = await input.confirmation({
@@ -1298,13 +1270,6 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           const reason = `CONFIRMATION_${result.kind.toUpperCase()}`
           await markNotDispatched(tool, reason, result.userMessage)
           throw new ToolDeniedError(reason, result.userMessage)
-        }
-        try { await applicationAdmission.activate(tool.toolCallId) }
-        catch (error) {
-          const timedOut = error instanceof AgentTurnTimedOutError || isTurnTimeoutSignal(input.request.signal)
-          const cancelled = error instanceof AgentTurnCancelledError || (input.request.signal?.aborted === true && !timedOut)
-          await markNotDispatched(tool, timedOut ? 'REQUEST_TIMEOUT' : cancelled ? 'REQUEST_CANCELLED' : 'APPLICATION_ADMISSION_RECOVERY_FAILED')
-          throw timedOut && !(error instanceof AgentTurnTimedOutError) ? abortErrorForSignal(input.request.signal) : error
         }
         if (input.request.signal?.aborted) {
           await markNotDispatched(tool, isTurnTimeoutSignal(input.request.signal) ? 'REQUEST_TIMEOUT' : 'REQUEST_CANCELLED')
@@ -1408,7 +1373,6 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       } finally {
         if (approvalPermitHeld) approvalSlots.release()
         releaseCandidate?.()
-        await applicationAdmission.finish(tool.toolCallId)
       }
     })
     const deniedToolResults = new Map<string, CanonicalTurnMessage>()
@@ -1579,100 +1543,6 @@ class ApprovalCandidateSlots {
       })
     }
   }
-}
-
-class TurnApplicationAdmission {
-  private handle: unknown
-  private readonly active = new Set<string>()
-  private readonly waiting = new Set<string>()
-  private recovery: Promise<void> | undefined
-  private parkCheckpoint: Record<string, unknown>
-  constructor(private readonly port: ApplicationAdmissionPort | undefined, private readonly signal?: AbortSignal, private readonly requestId = '') {
-    this.parkCheckpoint = { reason: 'approval-wait', requestId }
-  }
-
-  async activate(id: string): Promise<void> {
-    this.waiting.delete(id)
-    this.active.add(id)
-    await this.resumeIfParked()
-  }
-
-  async wait(id: string, reason: 'approval-wait' | 'approval-wait-capacity' = 'approval-wait'): Promise<void> {
-    this.active.delete(id)
-    this.waiting.add(id)
-    this.parkCheckpoint = reason === 'approval-wait'
-      ? { reason, requestId: this.requestId, toolUseId: id }
-      : { reason, requestId: this.requestId }
-    await this.parkIfIdle()
-  }
-
-  async finish(id: string): Promise<void> {
-    this.active.delete(id)
-    this.waiting.delete(id)
-    if (this.active.size === 0 && this.waiting.size > 0) {
-      this.parkCheckpoint = { reason: 'approval-wait-repark', requestId: this.requestId }
-      await this.parkIfIdle()
-    }
-    else if (this.active.size === 0 && this.waiting.size === 0) this.discardParked()
-  }
-
-  private async parkIfIdle(): Promise<void> {
-    if (!this.port || this.active.size > 0 || this.waiting.size === 0 || this.handle !== undefined) return
-    const handle = this.port.park(this.parkCheckpoint)
-    if (handle === undefined) throw new AgentTurnApplicationAdmissionError('application admission park failed')
-    this.handle = handle
-  }
-
-  private async resumeIfParked(): Promise<void> {
-    if (!this.port || this.handle === undefined) return
-    if (this.recovery) return this.recovery
-    this.recovery = (async () => {
-      const delays = [50, 250] as const
-      for (let attempt = 0; attempt <= delays.length; attempt += 1) {
-        if (this.signal?.aborted) {
-          this.discardParked()
-          throw abortErrorForSignal(this.signal)
-        }
-        const handle = this.handle
-        if (handle === undefined) return
-        let raw: ReturnType<ApplicationAdmissionPort['resume']>
-        try {
-          // Admission resume owns its queue timeout. A turn may contain long-running tools,
-          // so its age must not shorten a later wait for an application slot.
-          raw = await this.port!.resume(handle, this.signal ? { signal: this.signal } : undefined)
-        } catch (error) {
-          if (this.signal?.aborted) {
-            this.discardParked()
-            throw abortErrorForSignal(this.signal)
-          }
-          throw error
-        }
-        if (this.signal?.aborted) {
-          this.discardParked()
-          throw abortErrorForSignal(this.signal)
-        }
-        const result = typeof raw === 'boolean' ? { ok: raw, retryable: false } : raw
-        if (result?.ok) { this.handle = undefined; return }
-        if (!result?.retryable || attempt === delays.length) {
-          this.discardParked()
-          throw new AgentTurnApplicationAdmissionError(`application admission resume failed${result && 'cause' in result && result.cause ? `: ${result.cause}` : ''}`)
-        }
-        await new Promise<void>((resolve) => setTimeout(resolve, delays[attempt]!))
-      }
-    })().finally(() => { this.recovery = undefined })
-    return this.recovery
-  }
-
-  private discardParked(): void {
-    const handle = this.handle
-    if (handle === undefined) return
-    this.handle = undefined
-    this.port?.discard?.(handle)
-  }
-}
-
-class AgentTurnApplicationAdmissionError extends Error {
-  readonly code = 'APPLICATION_ADMISSION_RECOVERY_FAILED'
 }
 
 function assistantHistoryContent(content: readonly CanonicalContentBlock[], text: string): string | readonly CanonicalContentBlock[] | undefined {

@@ -114,86 +114,7 @@ describe('runAgentTurn', () => {
     })
   })
 
-  it('parks the application admission while a tool awaits confirmation and resumes before dispatch', async () => {
-    const registry = new ModelProviderRegistry()
-    let modelTurn = 0
-    registry.register(route, { providerId: 'fake', stream: () => {
-      modelTurn += 1
-      return modelTurn === 1
-        ? stream({ type: 'tool-call', toolCallId: 'admission-write', toolName: 'write_file', input: { path: 'a.txt', content: 'x' } }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' })
-        : stream({ type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
-    } })
-    const capabilities = new CapabilityRegistry()
-    capabilities.define('inv', ['write_file'])
-    const permits = new InMemorySafetyPermitStore()
-    const events: string[] = []
-    let resumeCalls = 0
-    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => binding.phase === 'initial-compat'
-      ? { kind: 'ask', confirmationId: 'approval-1', answerer: 'user', reasonCode: 'write-confirm' }
-      : { kind: 'allow', authorizationVersion: binding.authorizationVersion } } })
-    const turnInput: Parameters<typeof runAgentTurn>[0] = {
-      registry, routeId: route.routeId, invocationId: 'inv', request: { messages: [], maxTokens: 20 }, safetyGate,
-      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
-      confirmation: async () => { events.push('confirmation'); return { kind: 'approved', receipt: 'receipt' } },
-      toolExecution: toolExecutionPort(permits, async () => { events.push('execute'); return { output: 'written' } }),
-      maxModelTurns: 2
-    }
-    Object.assign(turnInput, { deadlineAt: Date.now() - 1, applicationAdmission: {
-      park: () => { events.push('park'); return 'parked-ticket' },
-      resume: async (handle: unknown, options?: { signal?: AbortSignal; deadlineAt?: number }) => {
-        expect(handle).toBe('parked-ticket')
-        expect(options?.deadlineAt).toBeUndefined()
-        events.push('resume')
-        resumeCalls += 1
-        return resumeCalls === 1 ? { ok: false as const, retryable: true } : { ok: true as const }
-      },
-      discard: vi.fn()
-    } })
-
-    await runAgentTurn(turnInput)
-
-    expect(events).toEqual(['park', 'confirmation', 'resume', 'resume', 'execute'])
-  })
-
-  it('fails closed while preserving the completed approval outcome when application admission cannot resume', async () => {
-    const registry = new ModelProviderRegistry()
-    let modelTurn = 0
-    registry.register(route, { providerId: 'fake', stream: () => {
-      modelTurn += 1
-      return modelTurn === 1
-        ? stream({ type: 'tool-call', toolCallId: 'admission-fail', toolName: 'write_file', input: { path: 'a.txt', content: 'x' } }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' })
-        : stream({ type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
-    } })
-    const capabilities = new CapabilityRegistry()
-    capabilities.define('inv', ['write_file'])
-    const permits = new InMemorySafetyPermitStore()
-    const history = new MemoryHistory()
-    const execute = vi.fn(async (_call: unknown) => ({ output: 'must not dispatch' }))
-    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => binding.phase === 'initial-compat'
-      ? { kind: 'ask', confirmationId: 'approval-fail', answerer: 'user', reasonCode: 'write-confirm' }
-      : { kind: 'allow', authorizationVersion: binding.authorizationVersion } } })
-    const turnInput: Parameters<typeof runAgentTurn>[0] = {
-      registry, routeId: route.routeId, invocationId: 'inv', history, request: { messages: [], maxTokens: 20 }, safetyGate,
-      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
-      confirmation: async () => ({ kind: 'approved', receipt: 'receipt' }),
-      toolExecution: toolExecutionPort(permits, async (call) => execute(call)), maxModelTurns: 2
-    }
-    const discard = vi.fn()
-    Object.assign(turnInput, { applicationAdmission: {
-      park: () => 'parked-ticket', resume: async () => ({ ok: false as const, retryable: false, cause: 'terminal' }), discard
-    } })
-
-    await expect(runAgentTurn(turnInput)).rejects.toMatchObject({ code: 'APPLICATION_ADMISSION_RECOVERY_FAILED' })
-
-    expect(execute).not.toHaveBeenCalled()
-    expect(discard).toHaveBeenCalledWith('parked-ticket')
-    const snapshot = await history.read('inv')
-    expect(snapshot.events).toContainEqual(expect.objectContaining({ kind: 'approval-resolved', payload: expect.objectContaining({ toolCallId: 'admission-fail', approved: true, outcome: 'approved' }) }))
-    expect(snapshot.events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'admission-fail', reason: 'APPLICATION_ADMISSION_RECOVERY_FAILED' }) }))
-    expect(snapshot.events.at(-1)).toMatchObject({ kind: 'invocation-failed' })
-  })
-
-  it('returns a rejected confirmation to the model without recovering execution admission', async () => {
+  it('returns a rejected confirmation to the model without dispatching the tool', async () => {
     const registry = new ModelProviderRegistry()
     let modelTurn = 0
     registry.register(route, { providerId: 'fake', stream: () => {
@@ -210,23 +131,17 @@ describe('runAgentTurn', () => {
     const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => binding.phase === 'initial-compat'
       ? { kind: 'ask', confirmationId: 'approval-script', answerer: 'user', reasonCode: 'script-confirm' }
       : { kind: 'allow', authorizationVersion: binding.authorizationVersion } } })
-    const applicationAdmission = {
-      park: vi.fn(() => 'parked'),
-      resume: vi.fn(async () => ({ ok: false as const, retryable: false as const, cause: 'terminal' as const })),
-      discard: vi.fn()
-    }
 
     const result = await runAgentTurn({
       registry, routeId: route.routeId, invocationId: 'inv', history, request: { messages: [], maxTokens: 20 }, safetyGate,
       prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
       confirmation: async () => ({ kind: 'denied', cause: 'user-denied' }),
       toolExecution: toolExecutionPort(permits, async (call) => execute(call)), maxModelTurns: 2,
-      returnDeniedToolsToModel: true, applicationAdmission
+      returnDeniedToolsToModel: true
     })
 
     expect(result.text).toBe('understood')
     expect(result.messages).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'rejected-script', isError: true, content: expect.stringContaining('CONFIRMATION_DENIED') }))
-    expect(applicationAdmission.resume).not.toHaveBeenCalled()
     expect(execute).not.toHaveBeenCalled()
     const snapshot = await history.read('inv')
     expect(snapshot.events).toContainEqual(expect.objectContaining({ kind: 'approval-resolved', payload: expect.objectContaining({ toolCallId: 'rejected-script', approved: false, outcome: 'denied', cause: 'user-denied' }) }))
@@ -234,7 +149,7 @@ describe('runAgentTurn', () => {
     expect(snapshot.events.at(-1)).toMatchObject({ kind: 'invocation-completed' })
   })
 
-  it('limits active confirmation channels to two and records legacy admission checkpoints', async () => {
+  it('limits active confirmation channels to two while waiting for earlier approvals', async () => {
     const registry = new ModelProviderRegistry()
     const ids = ['read-1', 'read-2', 'read-3']
     let modelTurn = 0
@@ -252,19 +167,13 @@ describe('runAgentTurn', () => {
       : { kind: 'allow', authorizationVersion: binding.authorizationVersion } } })
     const confirmations = new Map<string, (value: { kind: 'approved'; receipt: string }) => void>()
     const started: string[] = []
-    const checkpoints: unknown[] = []
-    const appAdmission = {
-      park: vi.fn((checkpoint: unknown) => { checkpoints.push(checkpoint); return `park-${checkpoints.length}` }),
-      resume: vi.fn(async () => true),
-      discard: vi.fn()
-    }
     const execute = vi.fn(async (call: { toolCallId: string }) => ({ output: call.toolCallId }))
     const running = runAgentTurn({
       registry, routeId: route.routeId, invocationId: 'inv', request: { messages: [], maxTokens: 100 }, safetyGate,
       prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
       confirmation: ({ call }) => new Promise((resolve) => { started.push(call.toolCallId); confirmations.set(call.toolCallId, resolve) }),
       toolExecution: toolExecutionPort(permits, async (call) => execute(call)),
-      maxConcurrentTools: 3, maxModelTurns: 2, applicationAdmission: appAdmission,
+      maxConcurrentTools: 3, maxModelTurns: 2,
       toolResourceKeys: (call) => [call.toolCallId]
     })
     const waitFor = async (predicate: () => boolean) => {
@@ -273,8 +182,6 @@ describe('runAgentTurn', () => {
 
     await waitFor(() => started.length === 2)
     expect(started).toHaveLength(2)
-    expect(appAdmission.park).toHaveBeenCalledWith({ reason: 'approval-wait', requestId: 'inv', toolUseId: expect.any(String) })
-    expect(checkpoints).toContainEqual({ reason: 'approval-wait', requestId: 'inv', toolUseId: expect.any(String) })
     confirmations.get('read-1')?.({ kind: 'approved', receipt: 'receipt-1' })
     await waitFor(() => started.length === 3)
     expect(started).toHaveLength(3)
@@ -282,54 +189,6 @@ describe('runAgentTurn', () => {
     confirmations.get('read-3')?.({ kind: 'approved', receipt: 'receipt-3' })
     await expect(running).resolves.toMatchObject({ text: 'done' })
     expect(execute).toHaveBeenCalledTimes(3)
-  })
-
-  it('classifies cancellation during application admission recovery as cancelled and never dispatches', async () => {
-    const registry = new ModelProviderRegistry()
-    let modelTurn = 0
-    registry.register(route, { providerId: 'fake', stream: () => {
-      modelTurn += 1
-      return modelTurn === 1
-        ? stream({ type: 'tool-call', toolCallId: 'admission-cancel', toolName: 'write_file', input: { path: 'a.txt', content: 'x' } }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' })
-        : stream({ type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
-    } })
-    const capabilities = new CapabilityRegistry()
-    capabilities.define('inv', ['write_file'])
-    const permits = new InMemorySafetyPermitStore()
-    const controller = new AbortController()
-    const history = new MemoryHistory()
-    let resumeEntered!: () => void
-    const entered = new Promise<void>((resolve) => { resumeEntered = resolve })
-    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => binding.phase === 'initial-compat'
-      ? { kind: 'ask', confirmationId: 'approval-cancel', answerer: 'user', reasonCode: 'write-confirm' }
-      : { kind: 'allow', authorizationVersion: binding.authorizationVersion } } })
-    const execute = vi.fn(async (_call: unknown) => ({ output: 'must not dispatch' }))
-    const discard = vi.fn()
-    const running = runAgentTurn({
-      registry, routeId: route.routeId, invocationId: 'inv', history, request: { messages: [], maxTokens: 20, signal: controller.signal }, safetyGate,
-      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
-      confirmation: async () => ({ kind: 'approved', receipt: 'receipt' }),
-      toolExecution: toolExecutionPort(permits, async (call) => execute(call)), maxModelTurns: 2,
-      applicationAdmission: {
-        park: () => 'parked-cancel', discard,
-        resume: async (_handle, options) => {
-          expect(options?.signal).toBe(controller.signal)
-          resumeEntered()
-          await new Promise<void>((resolve) => options?.signal?.addEventListener('abort', () => resolve(), { once: true }))
-          return { ok: false as const, retryable: false, cause: 'cancelled' }
-        }
-      }
-    })
-
-    await entered
-    controller.abort()
-    await expect(running).rejects.toMatchObject({ code: 'TURN_CANCELLED' })
-    expect(execute).not.toHaveBeenCalled()
-    expect(discard).toHaveBeenCalledWith('parked-cancel')
-    const snapshot = await history.read('inv')
-    expect(snapshot.events).toContainEqual(expect.objectContaining({ kind: 'approval-resolved', payload: expect.objectContaining({ toolCallId: 'admission-cancel', approved: true, outcome: 'approved' }) }))
-    expect(snapshot.events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'admission-cancel', reason: 'REQUEST_CANCELLED' }) }))
-    expect(snapshot.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'cancelled' } })
   })
 
   it('settles active and capacity-queued approvals when the parent turn is cancelled', async () => {

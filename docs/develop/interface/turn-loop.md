@@ -73,7 +73,7 @@ confirmation?: ConfirmationPort
 
 **取消与额度**
 
-`request.signal`、`deadlineAt`、`applicationAdmission?`（park / resume 宿主应用运行槽）、`maxModelTurns`（必填正整数）、`maxToolRounds?`、`returnDeniedToolsToModel?`。
+`request.signal`、`deadlineAt`、`maxModelTurns`（必填正整数）、`maxToolRounds?`、`returnDeniedToolsToModel?`。
 
 ## Observer 与 critical 开关
 
@@ -130,23 +130,22 @@ type AgentTurnResult = Readonly<{
 
 并发由 `mapWithConcurrency(toolCalls, maxConcurrentTools ?? 2)` 控制，单工具顺序：
 
-1. **进入执行前的应用准入**：`TurnApplicationAdmission.activate(toolCallId)`；审批候选工具再申请候选槽 `candidateSlots.acquire(invocationId, signal, onWait)`，排队期间经 `onWait` 让出运行槽（`applicationAdmission.wait(toolCallId, 'approval-wait-capacity')`），拿到槽后重新 `activate`。此段失败 → `markNotDispatched`（`REQUEST_CANCELLED` / `APPLICATION_ADMISSION_RECOVERY_FAILED` / `CONFIRMATION_CAPACITY_UNAVAILABLE`）。
+1. **进入执行前的审批候选槽**：审批候选工具申请 `candidateSlots.acquire(invocationId, signal)`；候选槽等待不会释放父 turn 的应用级准入名额。取消时按请求取消语义结束。
 2. **初始准备**：`prepareTool(call, { kind: 'initial' })` → `onToolStarted` 投影；校验绑定为 `initial-compat` 且 `invocationId` / `toolCallId` / `capabilityId` 一致，否则 `markNotDispatched('PREPARED_CALL_MISMATCH')` 并抛 `ToolDeniedError`。
 3. **策略评估**：`safetyGate.evaluate` — `deny` → `markNotDispatched(reasonCode)` + `ToolDeniedError`；`ask` → 确认流程（候选槽 `ApprovalCandidateSlots(2, max(toolCalls.length, 1))`、审批槽 `Semaphore(2)` 均按工具轮新建）：
    - 未注入 `confirmation` 端口 → `markNotDispatched('CONFIRMATION_REQUIRED')` + `ToolDeniedError`；
-   - **审批槽**：`approvalSlots` 已有等待者或已占满时先 park 运行槽，再 `approvalSlots.acquire(signal)`，拿到槽后重新 `activate`；该段失败 → `markNotDispatched`（`REQUEST_CANCELLED` / `APPLICATION_ADMISSION_RECOVERY_FAILED` / `CONFIRMATION_CAPACITY_UNAVAILABLE`）；
+   - **审批槽**：调用 `approvalSlots.acquire(signal)` 等待本 turn 的审批处理容量；等待期间父 turn 继续持有应用级准入名额；
    - 追加 `approval-waiting`（含 `approvalId` / `answerer` / `reasonCode` / `requestedAt`）；
-   - `applicationAdmission.wait(toolCallId)` 真正让出运行槽；等待失败 → 释放审批槽、补写 `approval-resolved`（`outcome` = `timeout` / `cancelled` / `unavailable`）、`markNotDispatched`（`REQUEST_TIMEOUT` / `REQUEST_CANCELLED` / `APPLICATION_ADMISSION_RECOVERY_FAILED`），并抛超时或取消错误；
    - 调 `confirmation(...)`；抛错 → 补写 `approval-resolved(outcome: 'unavailable')` 后原样抛出；`finally` 释放审批槽；
    - 追加 `approval-resolved`（`approved` / `outcome` / `answerer` / `cause` / `settledAt`）；
    - signal abort 复检 → `markNotDispatched('REQUEST_TIMEOUT' | 'REQUEST_CANCELLED')`；
    - 未获批 → `markNotDispatched('CONFIRMATION_<KIND>')` + `ToolDeniedError`，`receipt` 为空也视为未获批；
-   - **获批之后**才 `applicationAdmission.activate(toolCallId)` 取回执行槽；失败 → `markNotDispatched`（`REQUEST_TIMEOUT` / `REQUEST_CANCELLED` / `APPLICATION_ADMISSION_RECOVERY_FAILED`），随后再做一次 abort 复检。
+   - 获批后进行 abort 复检，再进入工具终检和派发；审批前后不发生应用级准入恢复。
 4. **资源锁 → 终检 → 授权**：先 `resourceLocks.acquire(resourceKeys ?? ['unknown:<invocationId>'])`，再 `prepareTool(call, { kind: 'recheck', confirmation? })`（失败按 `^[A-Z0-9_]{1,64}$` 判定 reasonCode，否则 `PREPARED_RECHECK_FAILED`），`matchesRecheckBinding` 不匹配 → `STALE_AUTHORIZATION`，然后 `safetyGate.authorize`；非 `allow` → `markNotDispatched(reasonCode 或 'RECHECK_REQUIRES_CONFIRMATION')`；取消竞态下已签发 permit 用 `discardPermit` 回收。
 5. **执行**：`toolExecution.execute(call, permitId, onDispatchClaimed)`；`onDispatchClaimed` 内追加 `tool-call-started`（含 `inputHash`、`decisionRuleId`）并把派发状态记为 `started`。执行端口在 `onDispatchClaimed` 返回后、进入执行器之前还有**一次 abort 复检**（[safety-approval.md](./safety-approval.md) 第 5 节）：此刻若已取消 / 撤权 / 授权变更则抛 `ToolExecutionRejectedError`。循环收到该错误时把 `tool-call-started` 提案**回退为未派发**（派发状态回到 `pending`，可补写 `tool-call-not-dispatched`），再按原因转成 `AgentTurnCancelledError` / `AgentTurnTimedOutError` 或 `ToolDeniedError(reason)`；`ToolExecutionAfterDispatchError` 原样上抛。
 6. **结果提交**：追加 `tool-call-finished`，随后 `onToolFinished` 与 `afterToolResult`；返回的 canonical 结果以**已提交**的 history payload 为准。
 
-`markNotDispatched` 使用的原因码覆盖：准备 / 授权类（`PREPARED_CALL_MISMATCH`、`PREPARED_RECHECK_FAILED`、`STALE_AUTHORIZATION`、`RECHECK_REQUIRES_CONFIRMATION`）、策略与确认类（策略 `reasonCode`、`CONFIRMATION_REQUIRED`、`CONFIRMATION_<KIND>`、`CONFIRMATION_CAPACITY_UNAVAILABLE`）、请求生命周期类（`REQUEST_TIMEOUT`、`REQUEST_CANCELLED`、`APPLICATION_ADMISSION_RECOVERY_FAILED`、`TURN_FAILED_BEFORE_TOOL_DISPATCH`）与执行端口拒绝原因（`ToolExecutionRejectReason`）。
+`markNotDispatched` 使用的原因码覆盖：准备 / 授权类（`PREPARED_CALL_MISMATCH`、`PREPARED_RECHECK_FAILED`、`STALE_AUTHORIZATION`、`RECHECK_REQUIRES_CONFIRMATION`）、策略与确认类（策略 `reasonCode`、`CONFIRMATION_REQUIRED`、`CONFIRMATION_<KIND>`、`CONFIRMATION_CAPACITY_UNAVAILABLE`）、请求生命周期类（`REQUEST_TIMEOUT`、`REQUEST_CANCELLED`、`TURN_FAILED_BEFORE_TOOL_DISPATCH`）与执行端口拒绝原因（`ToolExecutionRejectReason`）。
 
 `returnDeniedToolsToModel = true` 时，被拒工具不会终止回合，而是生成 `role: 'tool'` 的拒绝结果回灌给模型，并 `afterToolResult(..., { kind: 'safety-rejection', reasonCode })`。
 
@@ -189,7 +188,6 @@ type AgentTurnResult = Readonly<{
 | 类（name） | code | 语义 |
 | --- | --- | --- |
 | `AgentTurnHistoryAppendError` | — | history 追加失败；携带 `kinds`（失败批次的事件 kind 列表）与 `originalError`。`kinds` 含 `tool-call-finished` 时回合按"结果持久化不确定"结算 |
-| `AgentTurnApplicationAdmissionError` | `APPLICATION_ADMISSION_RECOVERY_FAILED` | 宿主应用运行槽激活 / 恢复失败；未派发工具会以同名 reasonCode 落 `tool-call-not-dispatched` |
 | `AgentTurnHostProjectionError` | — | 宿主响应投影提交失败（critical 回调抛错），回合结算 `interrupted` |
 | `AgentTurnToolProjectionError` | — | 工具投影提交失败，同上 |
 | `AgentTurnBoundaryProjectionError` | — | turn boundary 投影失败，同上 |
@@ -221,13 +219,6 @@ type HostCommittedModelResponse = Readonly<{
   usage: Extract<StreamChunk, { type: 'usage' }>
   historyCommitted: true
   hostProjectionCommitted?: true
-}>
-
-type ApplicationAdmissionPort = Readonly<{
-  park(checkpoint?: unknown): unknown
-  discard?(handle: unknown): void
-  resume(handle: unknown, options?: { signal?: AbortSignal; deadlineAt?: number }):
-    boolean | { ok: true } | { ok: false; retryable: boolean; cause?: string } | Promise<...>
 }>
 
 type CanonicalTurnMessage = CanonicalModelMessage

@@ -347,8 +347,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', agentSdkHistory: new MemoryHistory(),
       emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
     })
-    const applicationAdmission = { park: vi.fn(() => 'parked'), resume: vi.fn(async () => true) }
-    const composed = agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['probe-tool']), applicationAdmission })
+    const composed = agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['probe-tool']) })
     const ports = await composed.host.createPorts({
       invocationId: turnId, turnId, routeId,
       request: { messages: [{ role: 'user', content: 'run probe' }], maxTokens: 10, tools: [{ name: 'probe-tool', description: 'probe', inputSchema: {} }] }
@@ -358,7 +357,6 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     expect(ports.prepareTool).toBe(composed.registeredTools.prepareTool)
     expect(ports.toolExecution).toBe(composed.registeredTools.toolExecution)
     expect(ports.isApprovalCandidate).toBe(composed.registeredTools.isApprovalCandidate)
-    expect(ports.applicationAdmission).toBe(applicationAdmission)
     expect(ports).not.toHaveProperty('deadlineAt')
     expect(ports.isApprovalCandidate?.({ invocationId: requestId, toolCallId: 'probe', toolName: 'probe-tool', input: {} })).toBe(false)
   })

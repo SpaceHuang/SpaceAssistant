@@ -126,7 +126,7 @@ class InvocationRuntime {
 ```
 
 - `generation` 单调递增；`release` 只在 generation 匹配时生效且幂等；释放后可重新 `acquireLease`（generation 继续递增）。
-- **park 家族已下线**（2026-09-30）：`park` / `resume` / `resumeLease` / `ParkHandle` / `maxParkedTurns` / `canParkInvocation` 在 SDK 内无生产调用者，已从 `scheduler.ts` 删除。真实的审批等待让出 / 恢复由 `turn.ts` 的 `TurnApplicationAdmission` + 宿主 `applicationAdmission` 端口承担，宿主装配只注入 `acquireLease`。残留形状：SDK 包契约 `AgentHostPorts.invocationRuntime` 仍声明 `park` / `resumeLease`，而宿主转发层 `src/shared/agent/invocation.ts` 已收窄删除（见 [host-ports.md](./host-ports.md)）；旧 History 的 `invocation-parked` 事件仍兼容读取。
+- **park 家族已下线**（2026-09-30）：`park` / `resume` / `resumeLease` / `ParkHandle` / `maxParkedTurns` / `canParkInvocation` 在 SDK 内无生产调用者，已从 `scheduler.ts` 删除。2026-10-02 起，审批等待也不再释放父 turn 的应用级准入名额；turn 持有准入票据直到整轮结束。旧 History 的 `invocation-parked` 事件仍兼容读取。
 
 ## 4. 资源互斥锁（resourceLock.ts）
 

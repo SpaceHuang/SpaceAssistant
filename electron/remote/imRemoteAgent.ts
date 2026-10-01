@@ -106,23 +106,6 @@ export async function runImRemoteAgent(args: {
     }
   }
 
-  let activeTicket: import('../runtime/callAdmissionGate').AdmissionTicket | undefined = admission.ticket
-  const applicationAdmission = {
-    park: (checkpoint?: unknown) => {
-      if (!activeTicket) return undefined
-      const parked = admissionGate.park(activeTicket)
-      if (parked) activeTicket = undefined
-      return parked ? { ...parked, checkpoint } : undefined
-    },
-    discard: (handle: unknown) => { if (handle) admissionGate.discard(handle as never) },
-    resume: async (handle: unknown, options?: { signal?: AbortSignal; deadlineAt?: number }) => {
-      if (!handle || activeTicket) return { ok: false as const, retryable: false, cause: 'invalid-park-handle' }
-      const resumed = await admissionGate.resume(handle as never, options)
-      if (!resumed.ok) return { ok: false as const, retryable: resumed.retryable, cause: resumed.cause }
-      activeTicket = resumed.ticket
-      return { ok: true as const }
-    }
-  }
 
   try {
     const getOutboundSessionId = () => resolveRemoteOutboundSessionId(args.remoteContext, args.sessionId)
@@ -131,7 +114,7 @@ export async function runImRemoteAgent(args: {
     startRemoteProgressSession(args.sessionId, adapter, args.progressConfig, args.progressDefaults)
     return await runAdmittedTurn()
   } finally {
-    activeTicket?.release()
+    admission.ticket.release()
   }
 
   async function runAdmittedTurn(): Promise<ImRemoteAgentResult> {
@@ -264,7 +247,6 @@ export async function runImRemoteAgent(args: {
       remoteContext: args.remoteContext,
       onRemoteTextActivity: (text) => onRemoteTextSegmentClosed(remoteProgressContext, text),
       locale: readAppLocale(args.db),
-      applicationAdmission,
       ...args.toolChatExtras
       ,emitFactEvent: args.emitFactEvent ?? (() => undefined)
       ,emitSessionEvent: async (event) => { await sessionEventSink?.appendCritical(event) }
