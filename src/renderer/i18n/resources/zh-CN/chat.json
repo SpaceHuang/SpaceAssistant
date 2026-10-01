@@ -67,7 +67,9 @@
       "mcpUnknownServer": "未知 MCP 服务",
       "mcpUnresolved": "外部 MCP 工具（来源未知）",
       "toolkitFind": "查询能力集合",
-      "toolkitCall": "能力调用 · {{id}}"
+      "toolkitCall": "能力调用 · {{id}}",
+      "toolSearch": "工具检索（MCP）",
+      "toolSearchWithQuery": "工具检索（MCP）· {query}"
     },
     "descriptions": {
       "grep": "在工作目录下搜索匹配的文件内容",

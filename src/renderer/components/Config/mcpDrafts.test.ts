@@ -105,6 +105,21 @@ describe('mcpDrafts', () => {
     expect(isMcpDraftDirty(makeProfile({ transport: 'streamable-http', stdio: undefined, http: { endpoint: 'https://example.com/mcp' } }), legacy)).toBe(false)
   })
 
+  it('round-trips alwaysLoad: init preserves, write carries, dirty tracks toggle (FR14/B5)', () => {
+    const on = initMcpServerDraft(makeProfile({ alwaysLoad: true }))
+    expect(on.alwaysLoad).toBe(true)
+    const writeInput = draftToWriteInput(on)
+    expect(writeInput.alwaysLoad).toBe(true)
+    // 关闭后与 profile(true) 形成脏检测
+    const off = { ...on, alwaysLoad: false }
+    expect(isMcpDraftDirty(makeProfile({ alwaysLoad: true }), off)).toBe(true)
+    // 未设置 = 跟随全局；写输入不带字段
+    const unset = initMcpServerDraft(makeProfile())
+    expect(unset.alwaysLoad).toBeUndefined()
+    expect(draftToWriteInput(unset).alwaysLoad).toBeUndefined()
+    expect(isMcpDraftDirty(makeProfile(), unset)).toBe(false)
+  })
+
   it('marks a draft dirty when secrets are entered or fields change', () => {
     const profile = makeProfile()
     const draft = initMcpServerDraft(profile)

@@ -67,7 +67,9 @@
       "mcpUnknownServer": "Unknown MCP service",
       "mcpUnresolved": "External MCP tool (unknown source)",
       "toolkitFind": "Query capability toolkit",
-      "toolkitCall": "Capability call · {{id}}"
+      "toolkitCall": "Capability call · {{id}}",
+      "toolSearch": "Tool search (MCP)",
+      "toolSearchWithQuery": "Tool search (MCP) · {query}"
     },
     "descriptions": {
       "grep": "Search file contents under the working directory",

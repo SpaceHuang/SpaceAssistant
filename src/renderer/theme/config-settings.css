@@ -1062,6 +1062,65 @@
   padding: var(--sa-config-gap-block) 0 0;
 }
 
+/* MCP 工具延迟加载（FR5/FR12①）：三档选择 + 预算裁剪诊断 */
+.mcp-deferred-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sa-config-gap-tight);
+  padding: var(--sa-config-gap-block) var(--sa-config-gap-inline);
+  margin-bottom: var(--sa-config-gap-stack);
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-sm);
+  background: var(--sa-bg-secondary, transparent);
+}
+
+.mcp-deferred-settings__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sa-config-gap-inline);
+}
+
+.mcp-deferred-settings__label {
+  font-size: var(--sa-config-font);
+  font-weight: 500;
+  color: var(--sa-text);
+}
+
+.mcp-deferred-settings__hint {
+  margin: 0;
+  font-size: var(--sa-config-font-sm);
+  line-height: var(--sa-config-line);
+  color: var(--sa-text-secondary);
+}
+
+.mcp-deferred-settings__budget {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sa-config-gap-inline);
+  flex-wrap: wrap;
+}
+
+.mcp-deferred-settings__budget-empty {
+  font-size: var(--sa-config-font-sm);
+  color: var(--sa-text-secondary);
+}
+
+.mcp-deferred-settings__budget-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sa-config-gap-tight);
+}
+
+.mcp-server-card__always-load {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--sa-config-font-sm);
+  color: var(--sa-text-secondary);
+  white-space: nowrap;
+}
+
 .mcp-settings-empty .ant-btn {
   height: 40px;
   padding-inline: var(--sa-config-gap-block);

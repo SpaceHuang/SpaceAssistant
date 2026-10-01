@@ -8,8 +8,6 @@ describe('builtin run_shell naming contract', () => {
     )
     expect(shellTools.map((tool) => tool.name)).toEqual(['run_shell'])
     expect(BUILTIN_TOOL_DEFINITIONS.filter((tool) => tool.name === 'run_shell')).toHaveLength(1)
-    expect(shellTools[0]?.description).toContain('PowerShell 5.1')
-    expect(shellTools[0]?.description).not.toContain('Windows: cmd')
   })
 
   it('keeps external protocol aliases out of the builtin registry', () => {

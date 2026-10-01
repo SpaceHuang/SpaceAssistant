@@ -91,6 +91,10 @@ export function filterBuiltinToolsForApi(
   if (remoteContext) {
     list = list.filter((t) => t.name !== 'toolkit.find' && t.name !== 'toolkit.call')
   }
+  // tool_search（MCP 延迟加载检索元工具）仅桌面 lane：远程 IM 不注入 MCP（偏差 21），检索元工具随之隔离
+  if (remoteContext) {
+    list = list.filter((t) => t.name !== 'tool_search')
+  }
   // exposure 规则（主进程唯一评估者）：remote 链路按 lane 评估（如 im-no-wechat-send）；
   // desktop 链路不受该 exposure 规则影响。
   const lane = remoteContext

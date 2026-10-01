@@ -54,6 +54,12 @@ export function formatToolLabel(
       const id = typeof input.id === 'string' && input.id ? input.id : ''
       return id ? t('tool.labels.toolkitCall', { id }) : t('tool.labels.toolkitCall', { id: '…' })
     }
+    // FR9：tool_search 显示名「工具检索（MCP）」，带 query 时附检索词
+    case 'tool_search': {
+      const query = typeof input.query === 'string' && input.query.trim() ? input.query.trim() : ''
+      const clipped = query.length > 40 ? `${query.slice(0, 40)}…` : query
+      return clipped ? t('tool.labels.toolSearchWithQuery', { query: clipped }) : t('tool.labels.toolSearch')
+    }
     default:
       return toolName
   }

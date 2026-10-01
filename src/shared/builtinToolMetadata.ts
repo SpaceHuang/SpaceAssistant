@@ -96,7 +96,9 @@ export const BUILTIN_TOOL_METADATA: Record<string, ToolActionDescriptor> = {
     actionClass: 'execute',
     riskLevel: 'high',
     extractors: ['toolkit-capability']
-  }
+  },
+  // MCP 延迟加载检索元工具（FR2）：只读自动放行，不进审批流
+  tool_search: { toolName: 'tool_search', actionClass: 'read', riskLevel: 'low', extractors: [] }
 }
 
 /** 查找内置工具的确认/风险元数据；未注册时返回 undefined（信息不足走默认策略）。 */
