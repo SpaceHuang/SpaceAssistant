@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { App as AntdApp, Button } from 'antd'
+import { App as AntdApp, Button, Modal } from 'antd'
 import { useAppDispatch, useTypedSelector } from './hooks'
 import { setSessions, upsertSession } from './store/sessionSlice'
 import { setSession, setScrollToMessageId } from './store/chatSlice'
@@ -88,9 +88,25 @@ function AppShellInner() {
   const currentSessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const [siderKey, setSiderKey] = useState<'sessions' | 'wiki' | 'search'>('sessions')
   const [wikiInitialized, setWikiInitialized] = useState<boolean | null>(null)
+  const [keyUpgradeNoticeDismissed, setKeyUpgradeNoticeDismissed] = useState(false)
+  const [keyUpgradeNoticeBusy, setKeyUpgradeNoticeBusy] = useState(false)
   const wikiPaneRef = useRef<WikiPaneHandle>(null)
   const { openFile } = useDetailPanel()
   const wikiEnabled = Boolean(config?.wiki?.enabled)
+  const keyUpgradeNoticeOpen = Boolean(config?.apiKeyAccessUpgradeNoticeRequired) && !keyUpgradeNoticeDismissed
+
+  const acknowledgeKeyUpgradeNotice = async (openModelSettings: boolean) => {
+    setKeyUpgradeNoticeBusy(true)
+    try {
+      await window.api.configAckKeyAccessUpgradeNotice()
+      setKeyUpgradeNoticeDismissed(true)
+      if (openModelSettings) dispatch(openSettings({ tab: 'models' }))
+    } catch {
+      message.error(t('appShell.keyAccessUpgradeSaveFailed'))
+    } finally {
+      setKeyUpgradeNoticeBusy(false)
+    }
+  }
 
   useEffect(() => { void refreshMcpToolCatalog() }, [])
 
@@ -309,6 +325,19 @@ function AppShellInner() {
       <ConfigSettingsPage />
       <AboutModal />
       <UsageStatsDrawer open={usageStatsOpen} onClose={() => dispatch(setUsageStatsOpen(false))} />
+      <Modal
+        open={keyUpgradeNoticeOpen}
+        title={t('appShell.keyAccessUpgradeTitle')}
+        okText={t('appShell.keyAccessUpgradeSettings')}
+        cancelText={t('appShell.keyAccessUpgradeLater')}
+        confirmLoading={keyUpgradeNoticeBusy}
+        cancelButtonProps={{ disabled: keyUpgradeNoticeBusy }}
+        onOk={() => void acknowledgeKeyUpgradeNotice(true)}
+        onCancel={() => void acknowledgeKeyUpgradeNotice(false)}
+        maskClosable={false}
+      >
+        <p>{t('appShell.keyAccessUpgradeBody')}</p>
+      </Modal>
       </div>
     </div>
   )

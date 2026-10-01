@@ -4,6 +4,36 @@ import { runMigrations } from './migrations'
 import { DB_SCHEMA_VERSION } from './schema'
 
 describe('agent canonical history migration', () => {
+  // 回归（真机打包反馈）：迁移编号重排把 usage attribution 从 v19 挪到 v28、agent_history 插在 v19–21。
+  // 被旧编号迁移到 version=19 的库（旧 v19 = usage attribution 列已加、无 agent_history 表）,
+  // 在新代码上会于 version===19 执行 V20 的 ALTER 而撞上「no such table: agent_history_streams」。
+  it('upgrades a renumber-boundary v19 database (old numbering: usage attribution applied, no agent history tables)', () => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec("CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")
+    conn.exec('CREATE TABLE usage_step_facts (step_id TEXT PRIMARY KEY NOT NULL, input_tokens INTEGER)')
+    conn.exec('CREATE TABLE usage_turn_facts (turn_id TEXT PRIMARY KEY NOT NULL)')
+    conn.exec('CREATE TABLE turns (request_id TEXT NOT NULL, session_id TEXT NOT NULL)')
+    // 旧 v19 = 用量归因列已加（与现行 V28 逐字相同）
+    conn.exec('ALTER TABLE usage_step_facts ADD COLUMN system_tokens INTEGER')
+    conn.exec('ALTER TABLE usage_step_facts ADD COLUMN tools_tokens INTEGER')
+    conn.exec('ALTER TABLE usage_step_facts ADD COLUMN message_tokens INTEGER')
+    conn.exec('ALTER TABLE usage_step_facts ADD COLUMN estimator_version TEXT')
+    conn.exec('ALTER TABLE usage_step_facts ADD COLUMN attribution_json TEXT')
+    conn.exec('ALTER TABLE usage_turn_facts ADD COLUMN tool_attribution_json TEXT')
+    conn.prepare('INSERT INTO schema_meta(key, value) VALUES(?, ?)').run('schema_version', '19')
+    conn.prepare('INSERT INTO turns(request_id, session_id) VALUES(?, ?)').run('owned', 'session-a')
+
+    expect(() => runMigrations(conn)).not.toThrow()
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get()).toEqual({ value: '28' })
+    // agent_history 基表被补建并带上 session_id 列与索引
+    expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_history_streams'").get()).toEqual({ name: 'agent_history_streams' })
+    expect((conn.prepare("PRAGMA table_info('agent_history_streams')").all() as Array<{ name: string }>).map(({ name }) => name)).toContain('session_id')
+    expect((conn.prepare("PRAGMA index_list('agent_history_streams')").all() as Array<{ name: string }>).map(({ name }) => name)).toContain('idx_agent_history_streams_session')
+    // 归因列不重复（重跑不抛错）
+    expect(() => runMigrations(conn)).not.toThrow()
+    conn.close()
+  })
+
   it('upgrades an existing v24 database with the durable queue, reconciliation audit, and AcceptedTurn ledger', () => {
     const conn = new DatabaseSync(':memory:')
     conn.exec("CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")

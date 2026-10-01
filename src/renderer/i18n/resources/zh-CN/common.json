@@ -15,7 +15,12 @@
     "createSessionFailed": "创建会话失败，请稍后重试",
     "loadSessionsFailed": "加载会话列表失败，请重启应用后重试",
     "selectSessionFirst": "请先选择或创建一个会话",
-    "sessionCreated": "已创建会话"
+    "sessionCreated": "已创建会话",
+    "keyAccessUpgradeTitle": "模型服务 Key 访问提示",
+    "keyAccessUpgradeBody": "应用更新后，macOS 可能会在 SpaceAssistant 首次读取已保存的模型服务 API Key 时再次请求钥匙串访问授权或登录密码。密码只由 macOS 系统对话框处理，SpaceAssistant 不会读取或保存。你可以先到模型服务设置验证 Key，再开始对话。",
+    "keyAccessUpgradeSettings": "前往模型服务设置",
+    "keyAccessUpgradeLater": "稍后",
+    "keyAccessUpgradeSaveFailed": "无法保存提示状态，请重试。"
   },
   "about": {
     "close": "关闭",

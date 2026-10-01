@@ -431,6 +431,32 @@ describe('createHostedTurnHandoff', () => {
     db.close()
   })
 
+  it('preserves the tool loop stop diagnostic committed in canonical History', async () => {
+    const failure = new Error('same tool error repeated 2 times; stopped: SHELL_DIALECT_MISMATCH')
+    const history = { read: vi.fn(async () => ({ events: [{ kind: 'invocation-failed', payload: { status: 'failed', reason: failure.message, errorCode: 'TOOL_LOOP_MAX_ROUNDS_EXCEEDED' } }] })) }
+    mockRunHostedAgentTurn.mockRejectedValue(failure)
+    const handoff = createHostedTurnHandoff({
+      agentSdk: { createHostedTurnRuntime: () => ({ host: {}, dispose: async () => undefined }) },
+      history: history as never, invocationId: 'tool-loop-stop', turnId: 'tool-loop-stop', routeId: 'route'
+    })
+
+    await expect(handoff({ request: { messages: [{ role: 'user', content: 'inspect this' }] } } as never))
+      .rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'failed', message: failure.message })
+  })
+
+  it('preserves SHELL_DIALECT_MISMATCH from the failed invocation terminal', async () => {
+    const reason = 'SHELL_DIALECT_MISMATCH: use POSIX Bash syntax'
+    const history = { read: vi.fn(async () => ({ events: [{ kind: 'invocation-failed', payload: { status: 'failed', reason, errorCode: 'SHELL_DIALECT_MISMATCH' } }] })) }
+    mockRunHostedAgentTurn.mockRejectedValue(Object.assign(new Error(reason), { code: 'SHELL_DIALECT_MISMATCH' }))
+    const handoff = createHostedTurnHandoff({
+      agentSdk: { createHostedTurnRuntime: () => ({ host: {}, dispose: async () => undefined }) },
+      history: history as never, invocationId: 'dialect-mismatch', turnId: 'dialect-mismatch', routeId: 'route'
+    })
+
+    await expect(handoff({ request: { messages: [{ role: 'user', content: 'check command' }] } } as never))
+      .rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'failed', message: reason })
+  })
+
   it.each([
     ['failed', { kind: 'invocation-failed', payload: { status: 'failed', reason: 'provider-error' } }, 'failed'],
     ['cancelled', { kind: 'invocation-interrupted', payload: { status: 'cancelled', reason: 'user-cancelled' } }, 'cancelled'],

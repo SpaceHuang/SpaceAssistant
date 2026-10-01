@@ -15,7 +15,12 @@
     "createSessionFailed": "Could not create session. Try again later.",
     "loadSessionsFailed": "Could not load sessions. Restart the app and try again.",
     "selectSessionFirst": "Select or create a session first",
-    "sessionCreated": "Session created"
+    "sessionCreated": "Session created",
+    "keyAccessUpgradeTitle": "Model service key access notice",
+    "keyAccessUpgradeBody": "After an app update, macOS may ask for Keychain access or your login password the first time SpaceAssistant reads a saved model service API key. The macOS system dialog handles the password; SpaceAssistant does not read or store it. You can verify your key in Model Service settings before starting a chat.",
+    "keyAccessUpgradeSettings": "Open Model Service settings",
+    "keyAccessUpgradeLater": "Later",
+    "keyAccessUpgradeSaveFailed": "Could not save this notice state. Please try again."
   },
   "about": {
     "close": "Close",

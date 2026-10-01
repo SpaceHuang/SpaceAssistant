@@ -299,6 +299,15 @@ export function createHostedTurnHandoff(input: {
       const terminal = [...(snapshot?.events ?? [])].reverse().find((event) => event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted')
       if (!terminal) throw new HostedTurnFinalizedError(new Error('Hosted invocation terminal is missing from canonical History'), 'failed')
       if (terminal.kind !== 'invocation-completed') {
+        const payload = terminal.payload && typeof terminal.payload === 'object' && !Array.isArray(terminal.payload)
+          ? terminal.payload as Record<string, unknown>
+          : undefined
+        if (payload?.errorCode === 'TOOL_LOOP_MAX_ROUNDS_EXCEEDED' && typeof payload.reason === 'string') {
+          throw new HostedTurnFinalizedError(new ToolLoopRoundLimitError(input.maxToolRounds ?? 0, payload.reason), hostedFailureOutcome(terminal), terminalUsage(terminal))
+        }
+        if (payload?.errorCode === 'SHELL_DIALECT_MISMATCH' && typeof payload.reason === 'string') {
+          throw new HostedTurnFinalizedError(new Error(payload.reason), hostedFailureOutcome(terminal), terminalUsage(terminal))
+        }
         throw new HostedTurnFinalizedError(new Error(`Hosted invocation ended as ${terminal.kind}`), hostedFailureOutcome(terminal))
       }
       if (ownership && checkpoint) {
@@ -448,6 +457,9 @@ export function createHostedTurnHandoff(input: {
         }
       }
       if (error instanceof HostedTurnFinalizedError && error.outcome === 'commit-uncertain') throw error
+      // A tool-loop limit is a deliberate, user-facing stop condition (for example,
+      // the shell dialect retry breaker). Preserve its diagnostic instead of
+      // replacing it with the terminal History event's bare error code.
       if (terminal && !(error instanceof ToolLoopRoundLimitError)) throw new HostedTurnFinalizedError(error, hostedFailureOutcome(terminal), terminalUsage(terminal))
       if (error instanceof ToolLoopRoundLimitError) throw error
       throw error

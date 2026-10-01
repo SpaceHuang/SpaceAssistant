@@ -113,6 +113,7 @@ export function ChatView() {
   const { t: tContextUsage } = useTypedTranslation('contextUsage')
   const { openFile } = useDetailPanel()
   const dispatch = useAppDispatch()
+  const openModelSettings = useCallback(() => dispatch(openSettings({ tab: 'models' })), [dispatch])
   const sessionId = useTypedSelector((s) => s.chat.currentSessionId)
   const messages = useTypedSelector((s) => s.chat.messages)
   const displayEntries = useTypedSelector((s) => s.chat.displayEntries)
@@ -966,6 +967,7 @@ export function ChatView() {
         canRetry={canRetryMessage}
         canCancelQueued={canCancelQueuedMessage}
         resolveFailureReason={resolveFailureReason}
+        onOpenModelSettings={openModelSettings}
         focusToolUseId={confirmFocusToolUseId}
         pendingConfirmItems={pendingConfirmItems}
         workDir={cfg?.workDir}
@@ -984,6 +986,7 @@ export function ChatView() {
       canRetryMessage,
       canCancelQueuedMessage,
       resolveFailureReason,
+      openModelSettings,
       confirmFocusToolUseId,
       sessionId,
       runningSessions,

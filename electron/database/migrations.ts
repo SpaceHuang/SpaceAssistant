@@ -177,7 +177,12 @@ export function runMigrations(conn: DatabaseSync): void {
       conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
     }
     if (version === 19) {
-      conn.exec(MIGRATION_V20_AGENT_HISTORY_SESSION_SQL)
+      // 兼容迁移编号重排（cloud-parity 恢复）前的 version=19 库：旧 v19 = usage attribution，
+      // 没有 agent_history 表。先幂等补建基表（CREATE IF NOT EXISTS），再加列仅当缺列，
+      // 否则 V20 的 ALTER 撞「no such table: agent_history_streams」（真机打包回归）。
+      conn.exec(MIGRATION_V19_AGENT_HISTORY_SQL)
+      const streamColumns = conn.prepare('PRAGMA table_info(agent_history_streams)').all() as Array<{ name: string }>
+      if (!streamColumns.some((column) => column.name === 'session_id')) conn.exec(MIGRATION_V20_AGENT_HISTORY_SESSION_SQL)
       version = 20
       conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
     }
@@ -227,7 +232,16 @@ export function runMigrations(conn: DatabaseSync): void {
       // Upgrade whichever optional usage fact tables exist; full v27 databases contain both.
       const hasUsageSteps = conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'usage_step_facts'").get() !== undefined
       const hasUsageTurns = conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'usage_turn_facts'").get() !== undefined
-      if (hasUsageSteps || hasUsageTurns) conn.exec(MIGRATION_V28_USAGE_ATTRIBUTION_SQL)
+      if (hasUsageSteps || hasUsageTurns) {
+        // 兼容迁移编号重排前的 version=19 库：旧 v19 = 本迁移，归因列已存在。
+        // 旧 v19 单事务原子加列、无部分应用态，故以 attribution_json 列为「已应用」标记整组跳过，
+        // 否则重复 ALTER 撞 duplicate column（真机打包回归）。
+        const stepColumns = hasUsageSteps
+          ? conn.prepare('PRAGMA table_info(usage_step_facts)').all() as Array<{ name: string }>
+          : []
+        const alreadyAppliedByLegacyV19 = stepColumns.some((column) => column.name === 'attribution_json')
+        if (!alreadyAppliedByLegacyV19) conn.exec(MIGRATION_V28_USAGE_ATTRIBUTION_SQL)
+      }
       version = 28
       conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
     }

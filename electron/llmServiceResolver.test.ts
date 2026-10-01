@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getConfigValue, setConfigValue, type AppDatabase } from './database'
+import { getConfigValue, getDbConnection, setConfigValue, type AppDatabase } from './database'
 import { createTempDatabase } from './database/testHelpers'
 import {
   DEFAULT_LLM_SERVICE_NAME,
+  getLlmServiceApiKey,
+  verifyLlmServiceApiKey,
   LLM_SERVICE_CONFIG_KEYS,
   LlmServiceValidationError,
   MAX_LLM_SERVICES,
@@ -19,11 +21,12 @@ import {
 } from './llmServiceResolver'
 import type { ModelEntry } from '../src/shared/domainTypes'
 import { normalizeModelEntry } from '../src/shared/llmModelConfig'
+import { decryptSecret, isSecretStorageAvailable } from './secureApiKey'
 
 vi.mock('./secureApiKey', () => ({
-  isSecretStorageAvailable: () => true,
+  isSecretStorageAvailable: vi.fn(() => true),
   encryptSecret: (plain: string) => `enc:${plain}`,
-  decryptSecret: (b64: string) => b64.replace(/^enc:/, '')
+  decryptSecret: vi.fn((b64: string) => b64.replace(/^enc:/, ''))
 }))
 
 function makeModels(): ModelEntry[] {
@@ -47,7 +50,66 @@ describe('llmServiceResolver', () => {
   })
 
   afterEach(() => {
+    vi.mocked(decryptSecret).mockReset().mockImplementation((b64) => b64.replace(/^enc:/, ''))
+    vi.mocked(isSecretStorageAvailable).mockReturnValue(true)
     cleanup()
+  })
+
+  it('verifies a replacement before changing the stored key', () => {
+    const id = 'service-1'
+    const services = [{ id, name: 'Service', baseUrl: '', apiKeyPresent: true, supportedModelIds: ['1'] }]
+    persistLlmServices(db, services, [id], { [id]: 'old-secret' })
+    vi.mocked(decryptSecret).mockImplementationOnce(() => { throw new Error('system detail: new-secret') })
+
+    let thrown: unknown
+    try { persistLlmServices(db, services, [id], { [id]: 'new-secret' }) } catch (error) { thrown = error }
+    expect(String(thrown)).toContain('LLM_KEY_ACCESS_DENIED')
+    expect(String(thrown)).not.toContain('system detail')
+    expect(String(thrown)).not.toContain('new-secret')
+    expect(readLlmServiceKeysMap(db)[id]).toBe('enc:old-secret')
+  })
+
+  it('rolls back service metadata if storing the verified key fails', () => {
+    const id = 'service-1'
+    const services = [{ id, name: 'Old name', baseUrl: '', apiKeyPresent: true, supportedModelIds: ['1'] }]
+    persistLlmServices(db, services, [id], { [id]: 'old-secret' })
+    getDbConnection(db).exec("CREATE TRIGGER fail_key_update BEFORE UPDATE ON configs WHEN NEW.key = 'secrets.llmServiceKeys' BEGIN SELECT RAISE(ABORT, 'write failed'); END")
+    expect(() => persistLlmServices(db, [{ ...services[0]!, name: 'New name' }], [id], { [id]: 'new-secret' })).toThrow()
+    expect(readLlmServices(db)[0]!.name).toBe('Old name')
+    expect(readLlmServiceKeysMap(db)[id]).toBe('enc:old-secret')
+  })
+
+  it('verifies each service before committing a multi-service save', () => {
+    const services = [
+      { id: 'one', name: 'First', baseUrl: '', apiKeyPresent: false, supportedModelIds: ['1'] },
+      { id: 'two', name: 'Second', baseUrl: '', apiKeyPresent: false, supportedModelIds: ['1'] }
+    ]
+    vi.mocked(decryptSecret).mockImplementationOnce((enc) => enc.replace(/^enc:/, '')).mockImplementationOnce(() => { throw new Error('denied') })
+    expect(() => persistLlmServices(db, services, ['one', 'two'], { one: 'first-key', two: 'second-key' })).toThrow('LLM_KEY_ACCESS_DENIED')
+    expect(readLlmServiceKeysMap(db)).toEqual({})
+  })
+
+  it('distinguishes unavailable storage and denied reads from an absent key', async () => {
+    const id = 'service-1'
+    const services = [{ id, name: 'Service', baseUrl: '', apiKeyPresent: true, supportedModelIds: ['1'] }]
+    persistLlmServices(db, services, [id], { [id]: 'secret' })
+    vi.mocked(isSecretStorageAvailable).mockReturnValue(false)
+    await expect(getLlmServiceApiKey(db, id)).rejects.toThrow('LLM_KEY_STORAGE_UNAVAILABLE')
+    vi.mocked(isSecretStorageAvailable).mockReturnValue(true)
+    vi.mocked(decryptSecret).mockImplementationOnce(() => { throw new Error('secret system detail') })
+    await expect(verifyLlmServiceApiKey(db, id)).rejects.toThrow('LLM_KEY_ACCESS_DENIED')
+    await expect(getLlmServiceApiKey(db, 'missing')).resolves.toBeNull()
+  })
+
+  it('does not repeat a denied system read until explicit verification', async () => {
+    const id = 'service-1'
+    persistLlmServices(db, [{ id, name: 'Service', baseUrl: '', apiKeyPresent: true, supportedModelIds: ['1'] }], [id], { [id]: 'secret' })
+    vi.mocked(decryptSecret).mockClear().mockImplementationOnce(() => { throw new Error('denied') })
+    await expect(getLlmServiceApiKey(db, id)).rejects.toThrow('LLM_KEY_ACCESS_DENIED')
+    await expect(getLlmServiceApiKey(db, id)).rejects.toThrow('LLM_KEY_ACCESS_DENIED')
+    expect(decryptSecret).toHaveBeenCalledTimes(1)
+    await expect(verifyLlmServiceApiKey(db, id)).resolves.toBe('secret')
+    await expect(getLlmServiceApiKey(db, id)).resolves.toBe('secret')
   })
 
   it('migrates legacy apiKeyEnc and baseUrl into default service', () => {

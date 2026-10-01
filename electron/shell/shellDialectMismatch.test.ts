@@ -15,6 +15,16 @@ describe('detectShellDialectMismatch', () => {
     expect(detectShellDialectMismatch('rm -rf dist', MACOS_BASH_PROFILE)).toBeUndefined()
   })
 
+  it('不把 Bash 参数展开中的花括号误判为 PowerShell script block', () => {
+    const command = 'printf "%s\\n" "$value" | tail -40; echo "=== EXIT:${PIPESTATUS[0]} ==="'
+    expect(detectShellDialectMismatch(command, MACOS_BASH_PROFILE)).toBeUndefined()
+  })
+
+  it('识别 PowerShell 管道中的 script block', () => {
+    expect(detectShellDialectMismatch('Get-Process | ForEach-Object { $_.Name }', MACOS_BASH_PROFILE)?.signals)
+      .toContain('powershell-script-block')
+  })
+
   // 评审观察项 3：cmd 候选的 hints 必须 cmd 语境，不得落到 POSIX Bash 文案
   it('cmd 候选宿主：PowerShell 命令报方言错配，hints 为 cmd 语法而非 POSIX Bash', () => {
     const result = detectShellDialectMismatch('Get-ChildItem . | Out-Null', WINDOWS_CMD_PROFILE)

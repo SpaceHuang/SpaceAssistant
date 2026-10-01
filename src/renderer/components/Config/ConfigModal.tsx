@@ -592,8 +592,10 @@ export function ConfigSettingsPage() {
     }
 
     const llmPayload = buildLlmServicesSavePayload(llmDrafts.state)
+    const verifyingNewKeys = Object.keys(llmPayload.llmServiceKeys).length > 0
 
     setSaving(true)
+    if (verifyingNewKeys) message.info(tConfig('llmService.verifyingKey'))
 
     try {
 
@@ -654,8 +656,15 @@ export function ConfigSettingsPage() {
       })
 
     } catch (e) {
-
-      message.error(e instanceof Error ? e.message : String(e))
+      llmDrafts.clearKeyDrafts()
+      const errorMessage = e instanceof Error ? e.message : ''
+      if (errorMessage.includes('LLM_KEY_')) {
+        message.error(errorMessage.includes('LLM_KEY_STORAGE_UNAVAILABLE')
+          ? tConfig('llmService.storageUnavailable')
+          : tConfig('llmService.keyAccessFailed'))
+      } else {
+        message.error(tConfig('messages.saveFailed'))
+      }
 
       return false
 
@@ -691,7 +700,7 @@ export function ConfigSettingsPage() {
 
     )
 
-    message.success(tConfig('messages.saved'))
+    message.success(verifyingNewKeys ? tConfig('llmService.keySavedVerified') : tConfig('messages.saved'))
 
     if (closeAfterSave) {
 

@@ -80,6 +80,7 @@ const api: SpaceAssistantApi = {
   chatReadStagedImage: (args) => ipcRenderer.invoke('chat:read-staged-image', args),
 
   configGet: () => ipcRenderer.invoke('config:get'),
+  configAckKeyAccessUpgradeNotice: () => ipcRenderer.invoke('config:ack-key-access-upgrade-notice'),
   getToolExposureList: (payload) => ipcRenderer.invoke('exposure:get-tools', payload),
 
   // ===== 「安全策略」设置页（§7 五区，P4）=====
@@ -99,6 +100,7 @@ const api: SpaceAssistantApi = {
     return () => ipcRenderer.removeListener('exposure:tools-changed', fn)
   },
   configSet: (payload) => ipcRenderer.invoke('config:set', payload),
+  configVerifyLlmKey: (serviceId: string) => ipcRenderer.invoke('config:verify-llm-key', serviceId),
   configTestConnection: (options?: {
     serviceId?: string
     apiKey?: string

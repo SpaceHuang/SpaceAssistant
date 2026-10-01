@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { AppDatabase } from './database'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
+import { LlmKeyAccessError } from './llmServiceResolver'
 
 /**
  * P1 Invocation 契约（形状测试）：AgentInvocation / AgentHostPorts / 装配器键位平移
@@ -430,6 +431,17 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
     await expect(failedHistory.read('turn-invocation-1')).resolves.toMatchObject({
       events: [expect.objectContaining({ kind: 'invocation-failed', payload: { status: 'failed' } })]
     })
+  })
+
+  it('stops before provider dispatch when secure storage refuses the key read', async () => {
+    const failed = assembleInvocation(baseMaterials({
+      getApiKey: async () => { throw new LlmKeyAccessError('LLM_KEY_ACCESS_DENIED', 'service-1', 'Service') }
+    }))
+    failed.ports.toolRevocations = undefined
+    const handoff = vi.fn()
+    await expect(runToolChatSession(failed.invocation, failed.ports, { onHostedTurnHandoff: handoff })).rejects.toThrow('LLM_KEY_ACCESS_DENIED')
+    expect(handoff).not.toHaveBeenCalled()
+    expect(mockCreateAnthropicClient).not.toHaveBeenCalled()
   })
 
   it('fails closed before provider dispatch when asked to reuse a terminal invocation History stream', async () => {

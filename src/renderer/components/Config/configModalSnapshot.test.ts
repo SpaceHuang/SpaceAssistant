@@ -62,6 +62,10 @@ describe('buildConfigModalSnapshot', () => {
     const a = buildConfigModalSnapshot(base)
     const b = buildConfigModalSnapshot({ ...base, toolUi: { ...base.toolUi, deniedTools: ['browser'] } })
     expect(configModalSnapshotsEqual(a, b)).toBe(true)
+    llmState.drafts.s1!.apiKeyDraft = 'sk-sensitive-draft'
+    const keySnapshot = buildConfigModalSnapshot(base)
+    expect(JSON.stringify(keySnapshot)).not.toContain('sk-sensitive-draft')
+    expect(configModalSnapshotsEqual(a, keySnapshot)).toBe(false)
     const changedInterpreter = buildConfigModalSnapshot({
       ...base,
       toolUi: { ...base.toolUi, scriptInterpreterPaths: { javascript: '/custom/node' } }
