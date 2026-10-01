@@ -1,5 +1,10 @@
 import type { ShellDialect, ShellProfile } from './shellProfiles'
 
+function hasPowerShellScriptBlock(command: string): boolean {
+  // Bash parameter expansion such as ${PIPESTATUS[0]} is not a PowerShell block.
+  return /\b(?:ForEach-Object|Where-Object|ForEach|Where)\s*\{/.test(command) || /\|\s*\{/.test(command)
+}
+
 export interface ShellDialectMismatch {
   code: 'SHELL_DIALECT_MISMATCH'
   detectedSyntax: ShellDialect
@@ -27,13 +32,14 @@ export function detectShellDialectMismatch(command: string, profile: ShellProfil
     }
   }
 
+  const hasScriptBlock = hasPowerShellScriptBlock(command)
   if (/(^|\s)\$env:[A-Za-z_][A-Za-z0-9_]*|\$null\b/.test(command) ||
       /\b(?:Remove-Item|Get-ChildItem|Write-Output)\b/.test(command) ||
-      /\{[^\n]*\}/.test(command)) {
+      hasScriptBlock) {
     if (command.includes('$env:')) signals.push('powershell-variable')
     if (command.includes('$null')) signals.push('powershell-null')
     if (/\b(?:Remove-Item|Get-ChildItem|Write-Output)\b/.test(command)) signals.push('powershell-cmdlet')
-    if (/\{[^\n]*\}/.test(command)) signals.push('powershell-script-block')
+    if (hasScriptBlock) signals.push('powershell-script-block')
     // 本分支同时覆盖 posix-bash 与 windows-cmd 两类非 PowerShell 目标；hints 按目标方言给出（评审观察项 3）
     const hints = profile.dialect === 'windows-cmd'
       ? ['使用 cmd 语法重写命令', '环境变量使用 %NAME%，目录列举用 dir，删除用 del /q']
