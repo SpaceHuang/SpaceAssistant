@@ -42,21 +42,23 @@ describe('settleExecutorUnhandledError（统一出口：漏网异常的结算决
     expect(isExecutionOutcomeUncertainError(new Error('plain'))).toBe(false)
   })
 
-  it('读类工具的 fs 瞬态/环境异常与编程错误 → 降级为工具级失败结果', () => {
-    for (const error of [
-      Object.assign(new Error('file closed'), { code: 'EBADF' }),
-      new TypeError('boom')
-    ]) {
-      const settlement = settleExecutorUnhandledError(error, 'read_file', 'read')
-      expect(settlement.rethrow).toBe(false)
-      if (!settlement.rethrow) {
-        expect(settlement.result).toMatchObject({
-          success: false,
-          diagnostic: { caseId: 'executor-unhandled-error', retryable: false, category: 'executor' }
-        })
-        expect(typeof settlement.result.error).toBe('string')
-        expect((settlement.result.error as string).length).toBeGreaterThan(0)
-      }
+  it('读类工具漏网异常 → 降级为工具级失败结果，retryable 与 executor 内降级同信号', () => {
+    const transient = settleExecutorUnhandledError(Object.assign(new Error('file closed'), { code: 'EBADF' }), 'read_file', 'read')
+    expect(transient.rethrow).toBe(false)
+    if (!transient.rethrow) {
+      expect(transient.result).toMatchObject({
+        success: false,
+        error: expect.stringContaining('EBADF'),
+        diagnostic: { caseId: 'executor-unhandled-error', retryable: true, category: 'executor' }
+      })
+    }
+    const programmingError = settleExecutorUnhandledError(new TypeError('boom'), 'read_file', 'read')
+    expect(programmingError.rethrow).toBe(false)
+    if (!programmingError.rethrow) {
+      expect(programmingError.result).toMatchObject({
+        success: false,
+        diagnostic: { caseId: 'executor-unhandled-error', retryable: false, category: 'executor' }
+      })
     }
   })
 
@@ -67,7 +69,10 @@ describe('settleExecutorUnhandledError（统一出口：漏网异常的结算决
       'read'
     )
     expect(settlement.rethrow).toBe(false)
-    if (!settlement.rethrow) expect(settlement.result.error as string).toContain('EACCES')
+    if (!settlement.rethrow) {
+      expect(settlement.result.error as string).toContain('EACCES')
+      expect(settlement.result).toMatchObject({ diagnostic: { retryable: false } })
+    }
   })
 })
 

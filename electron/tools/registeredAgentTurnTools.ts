@@ -11,7 +11,7 @@ import { isProcessToolName } from '../../src/shared/processResultProjection'
 import { compactOversizedToolResultContent } from '../../src/shared/oversizedToolResult'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { validateToolExecutorResultForTool, validateToolExecutorResultWithViolations } from './types'
-import { isExecutionOutcomeUncertainError, isUserAbortError } from './toolExecutionResource'
+import { classifyFileReadError, isExecutionOutcomeUncertainError, isUserAbortError } from './toolExecutionResource'
 import { toToolUserError } from './toolUserErrors'
 
 export type ExecutorUnhandledSettlement = { rethrow: true; error: unknown } | { rethrow: false; result: Record<string, unknown> }
@@ -30,12 +30,14 @@ export function settleExecutorUnhandledError(error: unknown, toolName: string, a
   // toToolUserError 对含绝对路径/超长的原始消息会退到通用文案，errno 码是对模型最有
   // 诊断价值的信号，单独补回（EBADF/EBUSY/ENOENT…），避免技术细节完全丢失。
   const code = (error as NodeJS.ErrnoException)?.code
+  // retryable 与 executor 内降级（degradedFsReadResult）保持同一信号：errno 瞬态类可重试。
+  const retryable = classifyFileReadError(error) === 'transient'
   return {
     rethrow: false,
     result: {
       success: false,
       error: code && !friendly.includes(code) ? `${friendly}（系统错误码 ${code}）` : friendly,
-      diagnostic: { caseId: 'executor-unhandled-error', retryable: false, category: 'executor' }
+      diagnostic: { caseId: 'executor-unhandled-error', retryable, category: 'executor' }
     }
   }
 }

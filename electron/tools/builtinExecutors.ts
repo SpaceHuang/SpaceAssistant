@@ -261,7 +261,7 @@ function fileToolAbortResult(
 }
 
 /** 读类工具 fs 异常的降级出口：转成工具级失败结果（模型可重试），而非冒泡成整轮 unknown-after-dispatch 中断。 */
-function degradedFsReadResult(e: unknown, action: '读取' | '搜索', target: string, started: number): ToolExecutorResult | null {
+function degradedFsReadResult(e: unknown, action: '读取' | '读取目录' | '搜索', target: string, started: number): ToolExecutorResult | null {
   const cls = classifyFileReadError(e)
   if (!cls) return null
   const code = (e as NodeJS.ErrnoException).code
@@ -561,11 +561,11 @@ export const listDirectoryExecutor: ToolExecutor = {
     const started = Date.now()
     ctx.sendProgress('listing', '正在读取目录...')
     const { signal: op, dispose } = combineUserAbortAndTimeout(ctx.signal)
+    const failedPath = typeof input.path === 'string' && input.path ? input.path : '.'
     try {
       const permitted = await resolveReadPermitTarget('list_directory', input, ctx)
       if (!permitted.ok) return { success: false, error: '目录读取许可校验失败', diagnostic: { caseId: permitted.caseId, retryable: false, category: permitted.failureClass, ...(permitted.factId ? { factId: permitted.factId } : {}) }, duration: Date.now() - started }
       // R8（融合）：结构化超时返回 + 前置 abort 检查；permit 通过后错误一律走五类分类出口
-      const failedPath = typeof input.path === 'string' && input.path ? input.path : '.'
       const dirTimeoutResult = (): ToolExecutorResult => ({
         success: false,
         error: 'DIRECTORY_READ_TIMEOUT',
@@ -590,6 +590,13 @@ export const listDirectoryExecutor: ToolExecutor = {
       })
       rows.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name))
       return { success: true, data: { entries: rows }, duration: Date.now() - started }
+    } catch (e) {
+      const ab = fileToolAbortResult(op, '目录读取超时，可稍后重试', started)
+      if (ab) return ab
+      // 兜底降级与 read/grep 同构：枚举类目错误已在上方转 caseId，此处接住漏网的 fs 异常。
+      const degraded = degradedFsReadResult(e, '读取目录', failedPath, started)
+      if (degraded) return degraded
+      throw e
     } finally {
       dispose()
     }
