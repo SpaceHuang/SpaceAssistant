@@ -122,12 +122,13 @@ export function createHostedAgentTurnHost<
       const authorized = [...new Set([...invocationAuthorized, ...deferredNames])]
       dependencies.capabilities.define(input.invocationId, known, authorized)
       // FR12②：对 UNKNOWN/UNAUTHORIZED 拒绝附加区分文案——预算裁剪名单内 =「预算未注入」，
-      // 其余（幻觉名/服务已移除）=「服务不可用」。包装仅叠加 userMessage，决策语义不变。
+      // 其余（幻觉名/服务已移除）=「服务不可用」。显式委托包装（评审 P3：不走原型链，避免
+      // SafetyGate 未来改用 #private 字段时静默破）；仅叠加 userMessage，决策语义不变。
       const safetyGate = dependencies.safetyGate
       const budgetDroppedNames = dependencies.budgetDroppedNames
-      const wrappedSafetyGate = budgetDroppedNames && budgetDroppedNames.size > 0
-        ? Object.assign(Object.create(safetyGate), {
-            evaluate: async (binding: Parameters<SafetyGate['evaluate']>[0], signal?: AbortSignal) => {
+      const wrappedSafetyGate: import('../../packages/agent-sdk/src/safetyGate').SafetyGatePort = budgetDroppedNames && budgetDroppedNames.size > 0
+        ? {
+            evaluate: async (binding, signal) => {
               const decision = await safetyGate.evaluate(binding, signal)
               if (decision.kind === 'deny' &&
                 (decision.reasonCode === 'UNKNOWN_CAPABILITY' || decision.reasonCode === 'UNAUTHORIZED_CAPABILITY')) {
@@ -139,8 +140,10 @@ export function createHostedAgentTurnHost<
                 }
               }
               return decision
-            }
-          })
+            },
+            authorize: (binding, signal) => safetyGate.authorize(binding, signal),
+            discardPermit: (permitId) => safetyGate.discardPermit(permitId)
+          }
         : safetyGate
       if (!input.request.messages.length && input.currentUserMessageId) throw new Error('HOSTED_CURRENT_USER_MESSAGE_MISSING')
       if (input.currentUserMessageId && input.requiredUserMessage?.id !== input.currentUserMessageId) throw new Error('HOSTED_REQUIRED_USER_ID_MISMATCH')

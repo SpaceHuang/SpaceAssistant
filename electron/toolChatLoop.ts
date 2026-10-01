@@ -1043,10 +1043,12 @@ async function runToolChatSessionInner(
   const systemWithTools = baseSystemWithRecovery ? `${baseSystemWithRecovery}\n\n${capabilityHint}` : capabilityHint
   // P2：locale 装配期定值（请求优先 / 库回退在装配器完成），循环内不再查库
   const locale = payloadLocale as AppLocale
-  // FR1/§6.2：延迟生效时构建「MCP 工具索引」区块（无延迟工具时为 null，不产生空区块）
-  const mcpCatalog = deferredToolNames.size > 0
+  // FR1/§6.2：延迟生效时构建「MCP 工具索引」区块（无延迟工具时为 null，不产生空区块）。
+  // §6.6/P7（评审 P2）：索引输入按 trim 后的 deferredToolNames 过滤——deny/allow 裁掉的
+  // 延迟工具与授权面一并剔除，不得再出现在索引里诱导模型调用被拒。
+  const mcpCatalog = deferredToolNames.size > 0 && deferredPlan.mode === 'deferred'
     ? buildMcpToolCatalogSection(
-        deferredPlan.mode === 'deferred' ? deferredPlan.deferredEntries : [],
+        deferredPlan.deferredEntries.filter((entry) => deferredToolNames.has(entry.mappedName)),
         args.contextWindow ?? 200_000
       )
     : null

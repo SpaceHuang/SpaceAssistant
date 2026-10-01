@@ -523,14 +523,21 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   }
   // 暴露面规则与门控同源同判（P3：带来源解析；嵌套交集同样适用）
   const exposure = db ? { rules: effectiveRules } : undefined
+  // FR11（评审 P1 修复）：装配器先读档位再建快照——auto/always 档按偏执上限（512/1 MiB）准入，
+  // off 档走现状路径（64/96 KiB 裁剪，10.1.1 逐字节兼容）。档位与 toolChatLoop 的 plan 计算同源
+  // （同一份 materials.toolsConfig），快照与 plan 天然一致。
+  const mcpDeferredMode = materials.toolsConfig.mcpDeferredLoading ?? 'off'
   const mcpSnapshotRaw: McpToolSnapshot = db
-    ? buildSnapshotFromDb(db, { remoteContext: materialsLane !== 'desktop' })
+    ? buildSnapshotFromDb(db, {
+        remoteContext: materialsLane !== 'desktop',
+        admission: mcpDeferredMode === 'off' ? 'standard' : 'deferred'
+      })
     : { entries: new Map(), budgetDropped: [] }
   const mcpResolveExecutor = db
-    ? (toolName: string, manager: McpConnectionManager) => {
+    ? (toolName: string, manager: McpConnectionManager, profilesById?: ReadonlyMap<string, import('../../src/shared/mcpTypes').McpServerProfile>) => {
         const entry = mcpSnapshotRaw.entries.get(toolName)
         if (!entry) return undefined
-        const profile = listProfiles(db).find((p) => p.id === entry.serverId)
+        const profile = (profilesById ?? new Map(listProfiles(db).map((p) => [p.id, p]))).get(entry.serverId)
         if (!profile) return undefined
         const oauthProvider =
           profile.auth.mode === 'oauth' ? createMcpOAuthClientProvider(db, profile) : undefined
@@ -546,9 +553,13 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   // FR13（评审 B6/R9）：建快照后、档位分支与 plan 计算前，逐条试解析 executor，
   // 失败条目快照层剔除（索引/deferredNames/授权面/注册表天然同步）+ warn 日志；invoke 降级继续。
   // 全档位一致；这是 off 档「现状逐字节一致」承诺的唯一有意偏离（现状坏条目使整 invoke throw）。
+  // 评审 P3：profiles 按 serverId 建 Map 一次读取——探针 O(N) 而非每条目一次 listProfiles 的 O(N²)。
+  const mcpProbeProfilesById: ReadonlyMap<string, import('../../src/shared/mcpTypes').McpServerProfile> | undefined = db && mcpSnapshotRaw.entries.size > 0
+    ? new Map(listProfiles(db).map((p) => [p.id, p]))
+    : undefined
   const mcpSnapshot: McpToolSnapshot = db && mcpSnapshotRaw.entries.size > 0
     ? sanitizeMcpSnapshotForExecutors(mcpSnapshotRaw, (entry) => {
-        const executor = mcpResolveExecutor?.(entry.mappedName, {} as McpConnectionManager)
+        const executor = mcpResolveExecutor?.(entry.mappedName, {} as McpConnectionManager, mcpProbeProfilesById)
         return Boolean(executor) && executor!.name === entry.mappedName
       }, (drop) => {
         logAgentEvent('warn', 'mcp.snapshot.executor_dropped', {

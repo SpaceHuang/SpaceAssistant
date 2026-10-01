@@ -1,6 +1,6 @@
 import { collectModelAttempt, InvalidModelStreamError, ModelRouteChangedError, snapshotPreparedModelCall, type CanonicalContentBlock, type CanonicalModelMessage, type CollectedModelStream, type ModelProvider, type ModelProviderRegistry, type PreparedModelCall, type StreamChunk } from './model'
 import type { PermitBinding } from './safetyPermit'
-import { SafetyGate, type SafetyDenyReason } from './safetyGate'
+import { type SafetyDenyReason, type SafetyGatePort } from './safetyGate'
 import { ToolExecutionAfterDispatchError, ToolExecutionRejectedError, type PermitBoundToolExecutionPort } from './toolExecutionPort'
 import { createHash } from 'node:crypto'
 import { InvocationHistoryWriter, type HistoryEvent, type HistoryPort } from './history'
@@ -10,7 +10,7 @@ import { Semaphore } from './runtime/semaphore'
 
 export type AgentTurnPorts = Readonly<{
   registry: ModelProviderRegistry
-  safetyGate: SafetyGate
+  safetyGate: SafetyGatePort
   prepareTool(call: CanonicalToolExecutionCall, stage: ToolPreparationStage): Promise<PermitBinding>
   /** Release host planning state when a proposal is deterministically stopped before dispatch. */
   discardPreparedTool?(call: CanonicalToolExecutionCall, reason: string): void | Promise<void>
@@ -265,7 +265,7 @@ export type RunAgentTurnInput = {
   routeId: string
   request: Omit<PreparedModelCall['request'], 'messages'> & { messages: readonly CanonicalTurnMessage[] }
   initialResponse?: HostCommittedModelResponse
-  safetyGate: SafetyGate
+  safetyGate: SafetyGatePort
   prepareTool(call: CanonicalToolExecutionCall, stage: ToolPreparationStage): Promise<PermitBinding>
   discardPreparedTool?(call: CanonicalToolExecutionCall, reason: string): void | Promise<void>
   recordProviderAttemptUsage?(input: Record<string, unknown>): void | Promise<void>

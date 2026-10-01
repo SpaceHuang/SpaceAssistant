@@ -147,6 +147,61 @@ describe('FR13 装配级：executor 不可解析条目使 invoke 降级继续（
     await composed.dispose()
   })
 
+  function assemble(toolsOverrides: Record<string, unknown> = {}): ReturnType<typeof assembleInvocation> {
+    return assembleInvocation({
+      requestId: 'req-fr13', sessionId: 'session-fr13', turnId: 'turn-fr13', model: 'test-model', providerRouteId: 'route-fr13',
+      locale: 'zh-CN', messages: [{ role: 'user', content: 'hi' }],
+      toolsConfig: { enabled: true, allowedTools: [], deniedTools: [], pythonPath: 'python', scriptTimeout: 300, fileCheckpointingEnabled: true, maxFileSnapshots: 100, grepTimeoutSec: 60, ...toolsOverrides },
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'k', appDb: db, agentSdkHistory: new MemoryHistory(),
+      emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+  }
+
+  function seedDbWith65Tools(): void {
+    const names = Array.from({ length: 65 }, (_, i) => `t${String(i).padStart(2, '0')}`)
+    setConfigValue(db, MCP_CONFIG_KEYS.profiles, JSON.stringify([
+      makeProfile({ id: 'srvBig', name: '大服务', enabledToolNames: names })
+    ]))
+    cacheTools(db, 'srvBig', {
+      tools: names.map((n) => ({
+        serverId: 'srvBig', originalName: n, mappedName: `mcp_srvbig_${n}_deadbeef`, description: `工具 ${n}`,
+        inputSchema: { type: 'object', properties: {} }, discoveredAt: '2026-01-01T00:00:00.000Z'
+      })),
+      protocolVersion: '2025-06-18', discoveredAt: '2026-01-01T00:00:00.000Z'
+    })
+  }
+
+  it('FR11/10.1.12：always 档 65 工具走真实快照路径——全部准入、快照层 budgetDropped 恒空', () => {
+    seedDbWith65Tools()
+    const { ports } = assemble({ mcpDeferredLoading: 'always' })
+    const snapshot = ports.mcp?.snapshot
+    expect(snapshot).toBeDefined()
+    // 偏执上限内（512）白名单全准入：65 个工具全部进快照
+    expect(snapshot!.entries.size).toBe(65)
+    // 恒空不变量：延迟模式下快照层不产生预算裁剪
+    expect(snapshot!.budgetDropped).toEqual([])
+    // 第 65 个工具可被检索（不静默丢失）
+    expect(snapshot!.entries.has('mcp_srvbig_t64_deadbeef')).toBe(true)
+  })
+
+  it('FR11：off 档 65 工具走现状路径——64 个准入、第 65 个落快照层 budgetDropped', () => {
+    seedDbWith65Tools()
+    const { ports } = assemble({ mcpDeferredLoading: 'off' })
+    const snapshot = ports.mcp?.snapshot
+    expect(snapshot).toBeDefined()
+    expect(snapshot!.entries.size).toBe(64)
+    expect(snapshot!.budgetDropped).toEqual([{ mappedName: 'mcp_srvbig_t64_deadbeef', reason: 'count' }])
+  })
+
+  it('FR11：auto 档快照准入同样放宽（eager/deferred 判定在 plan 层）', () => {
+    seedDbWith65Tools()
+    const { ports } = assemble({ mcpDeferredLoading: 'auto' })
+    const snapshot = ports.mcp?.snapshot
+    expect(snapshot).toBeDefined()
+    expect(snapshot!.entries.size).toBe(65)
+    expect(snapshot!.budgetDropped).toEqual([])
+  })
+
   it('剔除落 executor 源诊断（budgetDiagnostics 数据源），好条目不受影响', () => {
     seedDbWithOneGoodOneBad()
     const { ports } = assemble()

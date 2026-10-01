@@ -25,7 +25,7 @@ import { McpEndpointValidationError } from './endpointPolicy'
 import { computeBudgetDiagnostics, discoverToolsFromSession, getCachedTools } from './mcpToolRegistry'
 import { getConfigValue } from '../database'
 import { CONFIG_KEYS } from '../ipc/ipcShared'
-import { mergeToolsConfig, type ToolsConfig } from '../../src/shared/domainTypes'
+import { mergeToolsConfig, MCP_DEFERRED_SCHEMA_BUDGET_BYTES_DEFAULT, type ToolsConfig } from '../../src/shared/domainTypes'
 import type { McpBudgetDiagnostic } from '../../src/shared/mcpTypes'
 import {
   createMcpOAuthClientProvider,
@@ -150,7 +150,7 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       const toolsConfig = mergeToolsConfig(toolsRaw ? (JSON.parse(toolsRaw) as Partial<ToolsConfig>) : null)
       budgetDiagnostics = computeBudgetDiagnostics(ctx.db, {
         mode: toolsConfig.mcpDeferredLoading ?? 'off',
-        thresholdBytes: toolsConfig.mcpDeferredSchemaBudgetBytes ?? 16 * 1024
+        thresholdBytes: toolsConfig.mcpDeferredSchemaBudgetBytes ?? MCP_DEFERRED_SCHEMA_BUDGET_BYTES_DEFAULT
       })
     } catch {
       // 诊断失败不阻塞 mcp:list（设置页主功能优先）

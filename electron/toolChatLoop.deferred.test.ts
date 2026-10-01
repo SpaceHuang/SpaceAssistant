@@ -93,16 +93,27 @@ function makeSnapshot(): McpToolSnapshot {
   }
 }
 
+function makeTwoToolSnapshot(): McpToolSnapshot {
+  const second = 'mcp_docs_wiki_2'
+  return {
+    entries: new Map([
+      [MCP_TOOL, { serverId: 'srvDocs', serverName: 'Docs', originalName: 'search', mappedName: MCP_TOOL, description: 'Search docs', inputSchema: { type: 'object' } }],
+      [second, { serverId: 'srvDocs', serverName: 'Docs', originalName: 'wiki', mappedName: second, description: 'Wiki pages', inputSchema: { type: 'object' } }]
+    ]),
+    budgetDropped: []
+  }
+}
+
 function makeMcpPorts(snapshot: McpToolSnapshot) {
-  const executor: ToolExecutor = {
-    name: MCP_TOOL,
-    execute: vi.fn(async () => ({ success: true, data: { result: 'doc-hit' } }))
+  const executors = new Map<string, ToolExecutor>()
+  for (const name of snapshot.entries.keys()) {
+    executors.set(name, { name, execute: vi.fn(async () => ({ success: true, data: { result: 'doc-hit' } })) })
   }
   return {
-    executor,
+    executor: executors.get(MCP_TOOL)!,
     ports: {
       snapshot,
-      resolveExecutor: vi.fn((name: string, _manager: McpConnectionManager) => name === MCP_TOOL ? executor : undefined),
+      resolveExecutor: vi.fn((name: string, _manager: McpConnectionManager) => executors.get(name)),
       executorDatabase: createMemoryAppDb('zh-CN')
     }
   }
@@ -295,6 +306,24 @@ describe('MCP 工具延迟加载（Phase 1 装配接线）', () => {
     const tools = providerCalls[0]!.request.tools.map((t) => t.name)
     expect(tools).not.toContain(MCP_TOOL)
     expect(tools).toContain('tool_search')
+  })
+
+  it('P2-1（评审）：trim.deny 命中的延迟工具不出现在索引区块（头部计数同步为 1）', async () => {
+    const routeId = 'route-deferred-catalog-trim'
+    const { providerCalls } = registerProvider(routeId, [{ calls: [] }])
+    const { ports: mcpPorts } = makeMcpPorts(makeTwoToolSnapshot())
+    await runWith(baseMaterials({
+      providerRouteId: routeId,
+      toolsConfig: { ...DEFAULT_TOOLS_CONFIG, mcpDeferredLoading: 'always' },
+      toolsTrim: { deny: ['mcp_docs_wiki_2'] }
+    }), mcpPorts)
+
+    const system = systemOf(providerCalls[0]!)
+    expect(system).toContain('MCP 工具索引')
+    expect(system).toContain(MCP_TOOL)
+    // deny 命中者：不进索引、不进授权面（§6.6「从索引与授权面一并剔除」）
+    expect(system).not.toContain('mcp_docs_wiki_2')
+    expect(system).toContain('共 1 个工具')
   })
 
   it('被裁工具被拒：文案区分「预算未注入」而非「服务不可用」（FR12②/10.1.14）', async () => {

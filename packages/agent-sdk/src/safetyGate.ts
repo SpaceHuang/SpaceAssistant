@@ -58,3 +58,6 @@ export class SafetyGate {
     return this.issuePermit(binding, await this.evaluate(binding, signal))
   }
 }
+
+/** SDK turn 循环实际消费的公开面（评审 P3）：宿主可显式委托包装，实例赋值仍然兼容。 */
+export type SafetyGatePort = Pick<SafetyGate, 'evaluate' | 'authorize' | 'discardPermit'>

@@ -337,10 +337,14 @@ export function snapshotEntriesToAnthropicTools(
   }))
 }
 
-/** 从 DB 构建当前快照（toolChatLoop 用，仅桌面会话注入）。 */
+/**
+ * 从 DB 构建当前快照（toolChatLoop 用，仅桌面会话注入）。
+ * FR11：admission 'deferred'（auto/always 档）按偏执上限 512/1 MiB 准入（白名单为唯一门槛）；
+ * 'standard'（off 档/缺省）保持既有 64 个 / 96 KiB 裁剪（10.1.1 逐字节兼容）。
+ */
 export function buildSnapshotFromDb(
   db: AppDatabase,
-  options?: { remoteContext?: boolean }
+  options?: { remoteContext?: boolean; admission?: 'standard' | 'deferred' }
 ): McpToolSnapshot {
   const profiles = listProfiles(db)
   if (!mayBuildMcpToolSnapshot(profiles, options?.remoteContext)) {
@@ -351,7 +355,12 @@ export function buildSnapshotFromDb(
     const cache = getCachedTools(db, profile.id)
     if (cache) caches.set(profile.id, cache)
   }
-  return buildSnapshotTools(profiles, caches, { remoteContext: options?.remoteContext })
+  return buildSnapshotTools(profiles, caches, {
+    remoteContext: options?.remoteContext,
+    ...(options?.admission === 'deferred'
+      ? { maxCount: MCP_DEFERRED_PARANOID_MAX_COUNT, maxTotalBytes: MCP_DEFERRED_PARANOID_MAX_TOTAL_BYTES }
+      : {})
+  })
 }
 
 /** 延迟档快照准入的偏执上限（FR11/D6：防病态 server；白名单是唯一准入门槛）。 */
