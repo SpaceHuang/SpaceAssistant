@@ -43,6 +43,19 @@ import { setConfigValue } from './operations'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { openDatabase } from './index'
 
+describe('appendMessage stored count', () => {
+  it('keeps the stored session message counter equal to inserted rows across sequential appends', () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'incremental-message-count' })
+    appendMessage(db, { id: 'counter-a', sessionId: session.id, role: 'user', content: 'a', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'counter-b', sessionId: session.id, role: 'assistant', content: 'b', timestamp: 2, status: 'completed' })
+    const conn = getDbConnection(db)
+    expect(conn.prepare('SELECT message_count FROM sessions WHERE id=?').get(session.id)).toEqual({ message_count: 2 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM messages WHERE session_id=?').get(session.id)).toEqual({ count: 2 })
+    db.close()
+  })
+})
+
 describe('deleteSession persisted transcript cleanup', () => {
   it('deletes owned History and transcript records durably without touching another or ambiguous session data', () => {
     const { db, dbPath, cleanup } = createTempDatabase('sa-delete-session-transcript-')

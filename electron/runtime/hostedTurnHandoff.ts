@@ -28,7 +28,7 @@ function hostedFailureOutcome(terminal: Parameters<typeof decodeTerminalOutcome>
 }
 
 type HostedRuntimeFactory = Readonly<{
-  createHostedTurnRuntime(input: Readonly<{ confirmationAdapter?: unknown; authorizedToolNames: ReadonlySet<string>; /** FR3：延迟名集合（并入 capabilities known + authorized）。 */ deferredToolNames?: ReadonlySet<string>; /** FR8：延迟维度（turn 计量）。 */ deferredDimension?: import('../../src/shared/usageAttribution').DeferredToolDimension; /** FR8：延迟工具未浮现直调判定（sessionLedger 持久化投影用）。 */ deferredUnsurfacedCheck?: (toolName: string) => boolean; /** FR12②：广告面层被裁工具名。 */ eagerBudgetDroppedNames?: ReadonlySet<string>; resolveRegisteredToolName?: (providerToolName: string) => string; hostHistory?: HistoryPort; afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']; beforeToolDispatch?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']; recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']; refreshExecutionContext?(call: { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }, stage: Extract<import('../../packages/agent-sdk/src/turn').ToolPreparationStage, { kind: 'recheck' }>, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>> }>): Promise<Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>> | Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>
+  createHostedTurnRuntime(input: Readonly<{ confirmationAdapter?: unknown; authorizedToolNames: ReadonlySet<string>; /** FR3：延迟名集合（并入 capabilities known + authorized）。 */ deferredToolNames?: ReadonlySet<string>; /** FR8：延迟维度（turn 计量）。 */ deferredDimension?: import('../../src/shared/usageAttribution').DeferredToolDimension; /** FR8：延迟工具未浮现直调判定（sessionLedger 持久化投影用）。 */ deferredUnsurfacedCheck?: (toolName: string) => boolean; /** FR12②：广告面层被裁工具名。 */ eagerBudgetDroppedNames?: ReadonlySet<string>; resolveRegisteredToolName?: (providerToolName: string) => string; hostHistory?: HistoryPort; sessionTranscriptBaseVersion?: number; sessionTranscriptFailureMessages?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionTranscriptFailureMessages']; afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']; beforeToolDispatch?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']; recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']; refreshExecutionContext?(call: { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }, stage: Extract<import('../../packages/agent-sdk/src/turn').ToolPreparationStage, { kind: 'recheck' }>, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>> }>): Promise<Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>> | Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>
 }>
 
 type HandoffInput = Readonly<{
@@ -49,8 +49,23 @@ type HandoffInput = Readonly<{
   beforeToolDispatch?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']
   initialResponse?: HostCommittedModelResponse
   currentUserMessageId?: string
+  assistantMessageId?: string
   requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>
 }>
+
+function bindAssistantMessageIdentity(history: HistoryPort, assistantMessageId: string): HistoryPort {
+  return {
+    appendBatch: (events, expectedVersion, transcriptCommit) => history.appendBatch(events.map((event) => {
+      if (event.kind !== 'model-response-committed' || !event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) return event
+      const payload = event.payload as Record<string, unknown>
+      if (!payload.message || typeof payload.message !== 'object' || Array.isArray(payload.message)) return event
+      const message = payload.message as Record<string, unknown>
+      if (message.role !== 'assistant') return event
+      return { ...event, payload: { ...payload, message: { ...message, id: assistantMessageId } } }
+    }), expectedVersion, transcriptCommit),
+    read: (invocationId) => history.read(invocationId)
+  }
+}
 
 function logSessionHistoryShadowDiagnostic(input: {
   requestId: string; turnId: string; sessionId: string; stage: 'read-history' | 'select-snapshot' | 'match-current-message'
@@ -270,10 +285,24 @@ export function createHostedTurnHandoff(input: {
         }
       }
     }
+    const transcriptFailureMessages = ownership && checkpoint && handoff.requiredUserMessage
+      ? (() => {
+          const required = JSON.stringify(handoff.requiredUserMessage.message)
+          let acceptedIndex = -1
+          for (let index = request.messages.length - 1; index >= 0; index -= 1) {
+            if (JSON.stringify(request.messages[index]) === required) { acceptedIndex = index; break }
+          }
+          return acceptedIndex >= 0 ? committedTranscriptMessages(request.messages.slice(0, acceptedIndex + 1)) : undefined
+        })()
+      : undefined
     const historyFacade: HistoryPort = {
-      appendBatch: (events, expectedVersion) => input.history.appendBatch(events, expectedVersion),
+      appendBatch: (events, expectedVersion, transcriptCommit) => input.history.appendBatch(events, expectedVersion, transcriptCommit),
       read: (invocationId) => input.history.read(invocationId)
     }
+    const hostedHistory = handoff.hostHistory ?? input.hostHistory ?? historyFacade
+    const identityBoundHostHistory = handoff.assistantMessageId
+      ? bindAssistantMessageIdentity(hostedHistory, handoff.assistantMessageId)
+      : hostedHistory
     const runtime = await input.agentSdk.createHostedTurnRuntime({
       ...(input.confirmationAdapter ? { confirmationAdapter: input.confirmationAdapter } : {}),
       authorizedToolNames: handoff.authorizedToolNames,
@@ -282,7 +311,9 @@ export function createHostedTurnHandoff(input: {
       ...(handoff.deferredUnsurfacedCheck ? { deferredUnsurfacedCheck: handoff.deferredUnsurfacedCheck } : {}),
       ...(handoff.eagerBudgetDroppedNames ? { eagerBudgetDroppedNames: handoff.eagerBudgetDroppedNames } : {}),
       resolveRegisteredToolName: handoff.resolveRegisteredToolName,
-      hostHistory: handoff.hostHistory ?? input.hostHistory ?? historyFacade,
+      hostHistory: identityBoundHostHistory,
+      ...(ownership && checkpoint ? { sessionTranscriptBaseVersion: checkpoint.version } : {}),
+      ...(transcriptFailureMessages ? { sessionTranscriptFailureMessages: transcriptFailureMessages } : {}),
       ...(handoff.afterToolResult ? { afterToolResult: handoff.afterToolResult } : {}),
       ...(handoff.beforeToolDispatch ? { beforeToolDispatch: handoff.beforeToolDispatch } : {}),
       ...(input.maxToolRounds !== undefined ? { maxToolRounds: input.maxToolRounds } : {}),
@@ -299,9 +330,12 @@ export function createHostedTurnHandoff(input: {
         turnId: input.turnId,
         ...(handoff.windowId ? { windowId: handoff.windowId } : {}),
         currentUserMessageId: handoff.currentUserMessageId,
+        assistantMessageId: handoff.assistantMessageId,
         requiredUserMessage: handoff.requiredUserMessage,
         routeId: input.routeId,
         request,
+        ...(ownership && checkpoint ? { sessionTranscriptBaseVersion: checkpoint.version } : {}),
+        ...(transcriptFailureMessages ? { sessionTranscriptFailureMessages: transcriptFailureMessages } : {}),
         ...(input.maxToolRounds !== undefined ? { maxToolRounds: input.maxToolRounds } : {}),
         ...(handoff.initialResponse ? { initialResponse: handoff.initialResponse } : {})
       })

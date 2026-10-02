@@ -97,6 +97,7 @@ import { createMemoryAppDb } from './database/testHelpers'
 import { resetEffortMemoForTests } from './effortFallback'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { MemoryHistory } from '../packages/agent-sdk/src/history'
+import { rebuildClaudeMessagesFromHistory } from './runtime/canonicalHistory'
 import { getDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 import { createHostedTurnHandoff } from './runtime/hostedTurnHandoff'
 import { defineDirectTool, TypedToolRegistry } from './tools/plannedToolRegistry'
@@ -435,7 +436,6 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
       agentSdk: agentSdk as never, history: ports.history!, invocationId: invocation.trace.turnId,
       turnId: invocation.trace.turnId, routeId: providerRouteId, recoverProviderAttempt: assembled.agentSdk.recoverProviderAttempt
     })
-
     await expect(runToolChatSession(invocation, ports, { onHostedTurnHandoff: handoff })).resolves.toMatchObject({ ok: true })
     expect(providerCalls).toHaveLength(2)
     expect(mockCreateAnthropicClient).not.toHaveBeenCalled()
@@ -470,7 +470,10 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
         yield { type: 'finish', reason: 'stop' }
       }
     })
-    const assembled = assembleInvocation(baseMaterials({ providerRouteId }))
+    const assistantMessageId = 'stable-assistant-message'
+    const currentUserMessageId = 'stable-user-message'
+    const assembled = assembleInvocation(baseMaterials({ providerRouteId, assistantMessageId, currentUserMessageId,
+      messages: [{ role: 'user', id: currentUserMessageId, content: 'hello' }] as never }))
     const { invocation, ports } = assembled
     ports.toolRevocations = undefined
     const history = new MemoryHistory()
@@ -483,7 +486,12 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
     await expect(runToolChatSession(invocation, ports, { onHostedTurnHandoff: handoff })).resolves.toMatchObject({ ok: true })
     expect(mockCreateAnthropicClient).not.toHaveBeenCalled()
     expect(capturedFacts.some((event) => event.type === 'content-delta' && event.text === 'SDK route answer')).toBe(true)
-    const committed = (await history.read(invocation.trace.turnId)).events.find(({ kind }) => kind === 'model-response-committed')
+    const writtenEvents = (await history.read(invocation.trace.turnId)).events
+    const context = writtenEvents.find(({ kind }) => kind === 'invocation-context-committed')
+    expect((context?.payload as { messages?: Array<{ id?: string }> }).messages?.[0]?.id).toBe(currentUserMessageId)
+    const committed = writtenEvents.find(({ kind }) => kind === 'model-response-committed')
+    expect((committed?.payload as { message?: { id?: string } }).message?.id).toBe(assistantMessageId)
+    expect(rebuildClaudeMessagesFromHistory(writtenEvents).map(({ id }) => id)).toContain(assistantMessageId)
     expect(committed?.payload).toMatchObject({ requestSnapshot: { route: { routeId: providerRouteId, modelId: 'claude-sonnet-4-20250514' }, request: { maxTokens: expect.any(Number), messages: expect.any(Array) } } })
     expect(JSON.stringify(committed?.payload)).not.toContain('apiKey')
     const requestLog = vi.mocked(logAgentEvent).mock.calls.find((call) => call[1] === 'llm.request')

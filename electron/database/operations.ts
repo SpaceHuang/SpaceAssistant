@@ -48,6 +48,7 @@ type SessionRow = {
   metadata: string
   schema_version: number
   work_dir_profile_id: string | null
+  generation: string
   ownership: string | null
   visibility: string | null
   thinking_effort: string | null
@@ -94,6 +95,7 @@ function rowToSession(row: SessionRow): Session {
     skillsState: parseJsonObject(row.skills_state, { ...DEFAULT_SESSION_SKILLS_STATE }),
     metadata: parseJsonObject(row.metadata, {}),
     schemaVersion: row.schema_version,
+    generation: row.generation,
     ...(row.work_dir_profile_id ? { workDirProfileId: row.work_dir_profile_id } : {}),
     // 偏差 7：归属/可见性缺失或损坏时按谓词模块归一（历史行等价 user/primary）
     ...(row.ownership ? { ownership: normalizeOwnership(row.ownership) } : {}),
@@ -193,6 +195,7 @@ export function createSession(
   const visibility = normalizeVisibility(input.visibility)
   const session: Session = {
     id,
+    generation: randomUUID(),
     name: input.name,
     preview: '',
     model,
@@ -219,10 +222,11 @@ export function createSession(
           id, name, preview, model, llm_service_id, temperature, max_tokens,
           created_at, updated_at, message_count, skills_state, metadata, schema_version, work_dir_profile_id,
           ownership, visibility, thinking_effort
+          , generation
         ) VALUES (
           @id, @name, @preview, @model, @llmServiceId, @temperature, @maxTokens,
           @createdAt, @updatedAt, @messageCount, @skillsState, @metadata, @schemaVersion, @workDirProfileId,
-          @ownership, @visibility, @thinkingEffort
+          @ownership, @visibility, @thinkingEffort, @generation
         )`
       )
       .run({
@@ -243,7 +247,19 @@ export function createSession(
         ownership,
         visibility,
         thinkingEffort: session.thinkingEffort ?? null
+        , generation: session.generation
       })
+    try {
+      conn.prepare(`INSERT OR REPLACE INTO canonical_session_projection_cache(
+        session_id, cache_key, cache_version, session_generation, session_seq, commit_order,
+        watermark_event_id, watermark_invocation_id, event_count, value, updated_at
+      ) VALUES(?, 'transcript', 1, ?, -1, -1, NULL, NULL, 0, '[]', ?)`)
+        .run(session.id, session.generation, now)
+    } catch { /* Projection seed is disposable; session creation remains authoritative. */ }
+    try {
+      conn.prepare(`INSERT OR REPLACE INTO canonical_session_projection_eligibility(session_id, session_generation, validated_at)
+        VALUES(?, ?, ?)`).run(session.id, session.generation, now)
+    } catch { /* Eligibility is disposable; an unseeded cache must go through L2 before use. */ }
     // 偏差 11:会话列表版本在同一事务内递增
     bumpScopeVersionInTx(db, 'session-list')
   })
@@ -270,6 +286,8 @@ export function updateSession(
       | 'ownership'
       | 'visibility'
     > & {
+      /** Internal append fast path: apply a delta without recounting the full session. */
+      messageCountDelta?: number
       /** Thinking 强度覆盖；传 null = 清除覆盖（回到继承全局）。 */
       thinkingEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort | null
     }
@@ -279,10 +297,11 @@ export function updateSession(
   if (!cur) return undefined
   const metadata = patch.metadata ?? cur.metadata
   // thinkingEffort 单独处理：patch 允许 null（清除覆盖），Session 语义为「缺省 = 继承」
-  const { thinkingEffort: patchedEffort, ...restPatch } = patch
+  const { thinkingEffort: patchedEffort, messageCountDelta, ...restPatch } = patch
   const next: Session = {
     ...cur,
     ...restPatch,
+    messageCount: messageCountDelta === undefined ? (patch.messageCount ?? cur.messageCount) : cur.messageCount + messageCountDelta,
     metadata,
     skillsState: patch.skillsState ? normalizeSessionSkillsState(patch.skillsState) : cur.skillsState,
     updatedAt: Date.now(),
@@ -455,6 +474,14 @@ export function getMessages(db: AppDatabase, sessionId: string, limit = 500, off
        LIMIT ? OFFSET ?`
     )
     .all(sessionId, limit, offset) as MessageRow[]
+  return rows.map(rowToStoredMessage)
+}
+
+/** Read legacy UI/control metadata without materializing stored message bodies for a validated canonical L1 hit. */
+export function getMessageSkeletons(db: AppDatabase, sessionId: string): Message[] {
+  const rows = getDbConnection(db).prepare(`SELECT id, session_id, role, '' AS content, tool_use, tool_calls, thinking,
+    content_segments, skill_hints, attachments, images_delivered_to_api, status, schema_version, timestamp, sequence
+    FROM messages WHERE session_id=? ORDER BY sequence ASC`).all(sessionId) as MessageRow[]
   return rows.map(rowToStoredMessage)
 }
 
@@ -979,12 +1006,9 @@ export function appendMessage(
       sequence: maxSeq
     })
 
-  const countRow = conn
-    .prepare('SELECT COUNT(*) AS c FROM messages WHERE session_id = ?')
-    .get(full.sessionId) as { c: number }
   updateSession(db, full.sessionId, {
     preview: full.content.slice(0, 120),
-    messageCount: countRow.c
+    messageCountDelta: 1
   })
   // 偏差 11:消息列表版本同事务递增(嵌套事务为 SAVEPOINT,与外层兼容)
   bumpScopeVersionInTx(db, `session:${full.sessionId}:messages`)

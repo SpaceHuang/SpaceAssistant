@@ -1,5 +1,5 @@
 import path from 'path'
-import { mkdirSync } from 'fs'
+import { existsSync, mkdirSync } from 'fs'
 import http from 'http'
 import https from 'https'
 import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
@@ -43,9 +43,13 @@ import { signalChatCancel } from './chatCancelRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
 import { beginSessionEventShutdown, ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, ensureTurnStartEvent, flushAllSessionEventSinks, getSessionEventSink, reconcileSessionEventFilesDetailed } from './sessionEvents'
-import { runSessionEventRetentionMaintenance } from './storage/sessionEventRetention'
+import { createCanonicalSessionProjectionRetentionPreparer, createSessionLedgerCompactionDependencyGuard, runSessionEventRetentionMaintenance } from './storage/sessionEventRetention'
 import { pruneAgentLogs } from './storage/agentLogRetention'
 import { resolveRetentionPolicyFromDb } from './storage/retentionPolicy'
+import { createSpillStore, runSpillRetentionMaintenance } from './storage/spillStore'
+import { isSafeDbMaintenanceRequested, runSafeDbMaintenance } from './storage/safeDbMaintenance'
+import { schedulePeriodicSqliteMaintenance } from './storage/periodicSqliteMaintenance'
+import { archiveLegacyDatabaseJsonBackup } from './storage/legacyDatabaseBackup'
 import { cleanupUsageFactsByRetention, reconcileUsageTurnFacts } from './usageStats/usageStatsMaintenance'
 import { setUsageStatsAppVersion } from './usageStats/usageStatsRecorder'
 import { backfillUsageStats } from './usageStats/usageStatsBackfill'
@@ -65,6 +69,7 @@ import { setupAppMenu } from './menu'
 import { createHostTranslator } from './i18n/hostTranslate'
 import { readAppLocale } from './appIpc'
 import { getMainWindow, setMainWindow } from './windowRef'
+import { measureStartupPhase } from './startupTiming'
 import { getAgentLogDir, initAgentLogger, logAgentEvent, flushAgentLogger } from './agentLogger/agentLogger'
 import { setAgentLogDailyPrune } from './agentLogger/agentLogger'
 import { setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
@@ -108,6 +113,7 @@ setKnownHomeDir(homedir())
 
 let floatingManager: FloatingNotificationManager | null = null
 let butlerScheduler: ButlerTaskScheduler | null = null
+const safeDbMaintenanceRequested = isSafeDbMaintenanceRequested(process.argv)
 
 const API_KEY_CONFIG_KEY = 'secrets.apiKeyEnc'
 const TOOLS_CONFIG_KEY = 'config.tools'
@@ -178,6 +184,7 @@ installProcessSafetyNet((event, detail) => {
 })
 /** 用量统计启动维护（回填/补齐/清理）：whenReady 内注册，主窗口创建完成后执行（评审 P1-3）。 */
 let usageStatsStartupMaintenance: (() => void) | null = null
+let stopPeriodicSqliteMaintenance: (() => void) | null = null
 let isQuitting = false
 let quitCleanupDone = false
 const SHUTDOWN_TIMEOUT_MS = 12_000
@@ -310,7 +317,7 @@ app.whenReady().then(async () => {
   const dbPath = getDefaultDbPath(app.getPath('userData'))
   let db: ReturnType<typeof openDatabase>
   try {
-    db = openDatabase(dbPath)
+    db = await measureStartupPhase('database.open-and-migrations', () => openDatabase(dbPath))
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     dialog.showErrorBox(
@@ -325,8 +332,21 @@ app.whenReady().then(async () => {
   const recoveryWorkDirs = getSessionLedgerRecoveryRoots(recoveryWorkDir, getConfigValue(db, 'config.workDirProfiles'))
   let sessionHistoryRecoverySucceeded = false
   let sessionHistoryRepairFailureCount = 0
+  if (safeDbMaintenanceRequested) {
+    console.warn('[agentHistory] canonical full recovery skipped for --safe-db-maintenance; it will run on the next normal launch')
+  } else {
   try {
-    const interrupted = await new SqliteAgentHistory(getDbConnection(db)).recoverInterruptedInvocations({
+    const startupHistory = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, undefined, createSpillStore(path.join(app.getPath('userData'), 'spill')))
+    try {
+    const historyClassification = await measureStartupPhase('canonical-history.classification', () => startupHistory.classifyLegacyProjectionRepairs(100))
+      if (!historyClassification.complete) {
+        console.info('[agentHistory] legacy repair classification remains resumable', historyClassification)
+      }
+    } catch (error) {
+      // Classification failure must retain the old exhaustive recovery path until its cursor completes.
+      console.warn('[agentHistory] legacy repair classification failed; using exhaustive recovery', error instanceof Error ? error.message : String(error))
+    }
+    const interrupted = await measureStartupPhase('canonical-history.recovery', () => startupHistory.recoverInterruptedInvocations({
       resolveSessionLedgerLocation: (sessionId) => {
         const session = getSession(db, sessionId)
         if (!session) return undefined
@@ -439,11 +459,12 @@ app.whenReady().then(async () => {
         sessionHistoryRepairFailureCount += 1
         console.warn('[agentHistory] invocation terminal ledger repair degraded:', { invocationId, turnId, error: error instanceof Error ? error.message : String(error) })
       }
-    })
+    }))
     sessionHistoryRecoverySucceeded = sessionHistoryRepairFailureCount === 0
     if (interrupted.length > 0) console.warn('[agentHistory] interrupted invocations recovered:', interrupted.map(({ invocationId }) => invocationId))
   } catch (error) {
     console.warn('[agentHistory] startup recovery degraded:', error instanceof Error ? error.message : String(error))
+  }
   }
   // 进程重启 cleanup 必须先于 Runtime recovery：仅对带 owner token 的本机 run_shell 执行校验，
   // 无身份或不属于本应用的 PID 交给后续 turn recovery 收敛，绝不裸杀。
@@ -634,7 +655,7 @@ app.whenReady().then(async () => {
   // Runtime 已建立后再处理无 turn 的孤儿消息，随后由 appIpc 的同一 recovery 装配继续恢复持久化 turn。
   cleanupStreamingResiduesOnStartup(db)
   try {
-    const recovery = await reconcileSessionEventFilesDetailed(workDirState)
+    const recovery = await measureStartupPhase('session-ledger.reconcile', () => reconcileSessionEventFilesDetailed(workDirState))
     for (const session of recovery.sessions) {
       for (const issue of session.issues) {
         console.warn('[sessionEvents] startup event integrity issue:', {
@@ -657,13 +678,21 @@ app.whenReady().then(async () => {
         error: failure.error instanceof Error ? failure.error.message : String(failure.error)
       })
     }
-    // S3(偏差 24):保留上限由 Storage 统一保留策略持有(configs 可配、显式默认),启动流程只触发
-    const { policy: retentionPolicy, summary: retention } = await runSessionEventRetentionMaintenance(db, workDirState)
+    // S3(偏差 24):保留上限适用于全部 profile roots；仍有 canonical 或台账 compaction 重放依赖的会话先保留。
+    const shouldRetainCompactionLedger = createSessionLedgerCompactionDependencyGuard(db)
+    const { policy: retentionPolicy, summary: retention } = await runSessionEventRetentionMaintenance(db, recoveryWorkDirs, {
+      prepareProjectionForRetention: createCanonicalSessionProjectionRetentionPreparer(db),
+      shouldRetainSessionDir: shouldRetainCompactionLedger
+    })
+    await runSpillRetentionMaintenance(db, path.join(app.getPath('userData'), 'spill'))
     for (const failure of retention.failures) {
       console.warn('[sessionEvents] retention cleanup failed:', {
         sessionName: failure.sessionName,
         error: failure.error instanceof Error ? failure.error.message : String(failure.error)
       })
+    }
+    for (const retained of retention.retained) {
+      console.info('[sessionEvents] retention kept a ledger with compaction recovery dependencies:', retained)
     }
     // S3(偏差 14):Agent 日志超保留期清理挂同一保留策略(启动维护触发)
     await pruneAgentLogs({
@@ -1031,6 +1060,38 @@ app.whenReady().then(async () => {
   mainIpcReady = true
   void createMainWindow()
     .then(() => {
+      const userDataDir = app.getPath('userData')
+      const legacyBackupPath = path.join(userDataDir, 'bak-spaceassistant-data.json')
+      if (existsSync(legacyBackupPath)) {
+        void dialog.showMessageBox({
+          type: 'warning',
+          title: '旧数据库备份',
+          message: '发现迁移后遗留的旧 JSON 数据备份。是否将它归档到 session-archives？',
+          detail: '归档会移动该文件，不会删除备份内容。选择“暂不”会保留原文件。',
+          buttons: ['归档备份', '暂不'],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true
+        }).then(({ response }) => {
+          const result = archiveLegacyDatabaseJsonBackup(userDataDir, response === 0)
+          console.info('[storage] legacy JSON backup cleanup:', result.status)
+        }).catch((error) => {
+          console.warn('[storage] legacy JSON backup prompt failed:', error instanceof Error ? error.message : String(error))
+        })
+      }
+      if (safeDbMaintenanceRequested) {
+        void runSafeDbMaintenance(db, app.getPath('userData')).then(() => {
+          console.info('[storage] safe database maintenance completed')
+        }).catch((error) => {
+          console.error('[storage] safe database maintenance failed; app remains available:', error instanceof Error ? error.message : String(error))
+        })
+      } else {
+        stopPeriodicSqliteMaintenance = schedulePeriodicSqliteMaintenance(db, {
+          onResult: (result) => {
+            if (result !== 'checkpointed') console.info('[storage] periodic database maintenance skipped:', result)
+          }
+        })
+      }
       usageStatsStartupMaintenance?.()
       usageStatsStartupMaintenance = null
     })
@@ -1052,6 +1113,8 @@ app.on('before-quit', (event) => {
   // 必须在启动异步 cleanup 之前同步切断事件生产，否则 flush 与最后一批
   // chunk/关键事件并发，flush 返回后仍可能接受新事件并被 app.quit 丢弃。
   beginSessionEventShutdown()
+  stopPeriodicSqliteMaintenance?.()
+  stopPeriodicSqliteMaintenance = null
   butlerScheduler?.stop()
   destroyTray()
   floatingManager?.destroy()

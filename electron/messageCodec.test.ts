@@ -8,6 +8,18 @@ vi.mock('./agentLogger/agentLogger', () => ({
 import { logAgentEvent } from './agentLogger/agentLogger'
 
 describe('deserializeToolCallsFromDb', () => {
+  it('compacts oversized string tool results before persisting them and restores the truncation marker', () => {
+    const full = `head-${'x'.repeat(40_000)}-tail`
+    const raw = serializeToolCallsForDb([{
+      id: 'oversized-result', toolName: 'read_file', input: {}, status: 'completed', riskLevel: 'low',
+      result: { success: true, data: full }
+    }])!
+    expect(raw).not.toContain('x'.repeat(40_000))
+    const restored = deserializeToolCallsFromDb(raw)?.[0]?.result?.data
+    expect(restored).toContain('head-')
+    expect(restored).toContain('-tail')
+    expect(restored).toContain('tool_result truncated')
+  })
   it('round-trips MCP displayData for historical cards', () => {
     const raw = serializeToolCallsForDb([{
       id: 'mcp-1', toolName: 'mcp_x_y_abc', input: {}, status: 'completed', riskLevel: 'low',

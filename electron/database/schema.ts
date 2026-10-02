@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 30
+export const DB_SCHEMA_VERSION = 37
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (
@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   skills_state TEXT NOT NULL,
   metadata TEXT NOT NULL,
   schema_version INTEGER NOT NULL,
-  work_dir_profile_id TEXT
+  work_dir_profile_id TEXT,
+  generation TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -66,7 +67,6 @@ CREATE TABLE IF NOT EXISTS session_usages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, sequence);
-CREATE INDEX IF NOT EXISTS idx_messages_content ON messages(content);
 CREATE INDEX IF NOT EXISTS idx_sessions_work_dir_profile ON sessions(work_dir_profile_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC);
 
@@ -535,6 +535,173 @@ CREATE INDEX IF NOT EXISTS idx_agent_continuations_source ON agent_continuations
 /** v30: persist the target Turn credential so continuation retries retain one identity across restarts. */
 export const MIGRATION_V30_CONTINUATION_START_TOKEN_SQL = `
 ALTER TABLE agent_continuations ADD COLUMN target_start_token TEXT NOT NULL DEFAULT '';
+`
+
+/** v30 → v31: durable per-projection repair queue and resumable legacy classification cursor. */
+export const MIGRATION_V31_CANONICAL_PROJECTION_REPAIRS_SQL = `
+DROP INDEX IF EXISTS idx_messages_content;
+CREATE TABLE IF NOT EXISTS canonical_projection_repairs (
+  repair_id TEXT PRIMARY KEY NOT NULL,
+  session_id TEXT,
+  invocation_id TEXT NOT NULL,
+  repair_kind TEXT NOT NULL,
+  target_key TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending', 'completed')),
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+  last_error TEXT,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(invocation_id, repair_kind, target_key)
+);
+CREATE INDEX IF NOT EXISTS idx_canonical_projection_repairs_pending
+  ON canonical_projection_repairs(status, updated_at, repair_id);
+CREATE TABLE IF NOT EXISTS canonical_projection_repair_migration (
+  migration_key TEXT PRIMARY KEY NOT NULL,
+  after_invocation_id TEXT,
+  status TEXT NOT NULL CHECK(status IN ('pending', 'complete')),
+  updated_at INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO canonical_projection_repair_migration(migration_key, after_invocation_id, status, updated_at)
+VALUES('legacy-classification-v1', NULL, 'pending', 0);
+`
+
+/** v31 → v32 cursor tables; created even in minimal migration fixtures without History tables. */
+export const MIGRATION_V32_AGENT_HISTORY_CURSOR_TABLES_SQL = `
+CREATE TABLE IF NOT EXISTS agent_history_commit_cursor (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  allocated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_event_cursor (
+  session_id TEXT PRIMARY KEY NOT NULL,
+  next_seq INTEGER NOT NULL CHECK(next_seq >= 0)
+);
+CREATE TABLE IF NOT EXISTS canonical_session_projection_cache (
+  session_id TEXT NOT NULL,
+  cache_key TEXT NOT NULL,
+  cache_version INTEGER NOT NULL,
+  session_generation TEXT NOT NULL,
+  session_seq INTEGER NOT NULL,
+  commit_order INTEGER NOT NULL,
+  watermark_event_id TEXT,
+  watermark_invocation_id TEXT,
+  event_count INTEGER NOT NULL,
+  value TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(session_id, cache_key)
+);
+`
+
+/** v33 → v34: version projection cache records independently from DB schema. */
+export const MIGRATION_V34_CANONICAL_SESSION_CACHE_VERSION_SQL = `
+ALTER TABLE canonical_session_projection_cache ADD COLUMN cache_version INTEGER NOT NULL DEFAULT 0;
+DELETE FROM canonical_session_projection_cache WHERE cache_version <> 1;
+`
+
+/** v34 → v35：compact receipts make transcript snapshot retries auditable. */
+export const MIGRATION_V35_SESSION_TURN_COMMIT_RECEIPTS_SQL = `
+CREATE TABLE IF NOT EXISTS session_turn_commit_receipts (
+  session_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  payload_sha256 TEXT NOT NULL,
+  base_version INTEGER NOT NULL,
+  next_version INTEGER NOT NULL,
+  outcome TEXT NOT NULL,
+  event_start INTEGER,
+  event_end INTEGER,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(session_id, turn_id),
+  UNIQUE(session_id, next_version)
+);
+`
+
+/** v35 → v36：fence accepted turns while transcript projections are being settled/recovered. */
+export const MIGRATION_V36_SESSION_TRANSCRIPT_COMMIT_STATE_SQL = `
+DROP INDEX IF EXISTS idx_session_execution_queue_order;
+ALTER TABLE session_execution_claims RENAME TO session_execution_claims_v35;
+CREATE TABLE session_execution_claims (
+  session_id TEXT PRIMARY KEY NOT NULL,
+  turn_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  generation INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('queued','claimed','executing','transcript_committed','commit_uncertain')),
+  enqueued_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+INSERT INTO session_execution_claims SELECT * FROM session_execution_claims_v35;
+DROP TABLE session_execution_claims_v35;
+
+ALTER TABLE session_execution_queue RENAME TO session_execution_queue_v35;
+CREATE TABLE session_execution_queue (
+  session_id TEXT NOT NULL,
+  turn_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  generation INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL CHECK(status IN ('queued','claimed','executing','transcript_committed','commit_uncertain')),
+  enqueued_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(session_id, turn_id)
+);
+INSERT INTO session_execution_queue SELECT * FROM session_execution_queue_v35;
+DROP TABLE session_execution_queue_v35;
+CREATE INDEX idx_session_execution_queue_order ON session_execution_queue(session_id, status, enqueued_at, turn_id);
+`
+
+/** v36 → v37: exact L2 transcript validation grants a fast-page eligibility marker; any message mutation revokes it. */
+export const MIGRATION_V37_SESSION_PROJECTION_ELIGIBILITY_SQL = `
+CREATE TABLE IF NOT EXISTS canonical_session_projection_eligibility (
+  session_id TEXT PRIMARY KEY NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  session_generation TEXT NOT NULL,
+  validated_at INTEGER NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS invalidate_session_projection_after_message_insert
+AFTER INSERT ON messages BEGIN
+  DELETE FROM canonical_session_projection_eligibility WHERE session_id=NEW.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS invalidate_session_projection_after_message_update
+AFTER UPDATE ON messages BEGIN
+  DELETE FROM canonical_session_projection_eligibility WHERE session_id=OLD.session_id OR session_id=NEW.session_id;
+END;
+CREATE TRIGGER IF NOT EXISTS invalidate_session_projection_after_message_delete
+AFTER DELETE ON messages BEGIN
+  DELETE FROM canonical_session_projection_eligibility WHERE session_id=OLD.session_id;
+END;
+`
+
+/** v32 → v33: stable session incarnation identity for cache watermarks. */
+export const MIGRATION_V33_SESSION_GENERATION_SQL = `
+ALTER TABLE sessions ADD COLUMN generation TEXT NOT NULL DEFAULT '';
+UPDATE sessions SET generation = lower(hex(randomblob(16))) WHERE generation = '';
+`
+
+/** v31 → v32 deterministic backfill and indexes; invoked when both History tables exist. */
+export const MIGRATION_V32_AGENT_HISTORY_SESSION_ORDER_SQL = `
+WITH global_order AS (
+  SELECT invocation_id, sequence,
+    ROW_NUMBER() OVER (ORDER BY created_at, invocation_id, sequence) AS commit_order
+  FROM agent_history_events
+), session_order AS (
+  SELECT streams.session_id, events.invocation_id, events.sequence,
+    ROW_NUMBER() OVER (PARTITION BY streams.session_id ORDER BY events.created_at, events.invocation_id, events.sequence) AS session_seq
+  FROM agent_history_events events
+  JOIN agent_history_streams streams ON streams.invocation_id = events.invocation_id
+  WHERE streams.session_id IS NOT NULL
+)
+UPDATE agent_history_events
+SET session_id = (SELECT session_id FROM session_order WHERE session_order.invocation_id = agent_history_events.invocation_id AND session_order.sequence = agent_history_events.sequence),
+    commit_order = (SELECT commit_order FROM global_order WHERE global_order.invocation_id = agent_history_events.invocation_id AND global_order.sequence = agent_history_events.sequence),
+    session_seq = (SELECT session_seq FROM session_order WHERE session_order.invocation_id = agent_history_events.invocation_id AND session_order.sequence = agent_history_events.sequence)
+WHERE commit_order IS NULL;
+
+INSERT OR IGNORE INTO agent_history_commit_cursor(id, allocated_at)
+SELECT commit_order, created_at FROM agent_history_events ORDER BY commit_order;
+INSERT INTO session_event_cursor(session_id, next_seq)
+SELECT session_id, MAX(session_seq) FROM agent_history_events WHERE session_id IS NOT NULL GROUP BY session_id
+ON CONFLICT(session_id) DO UPDATE SET next_seq=MAX(next_seq, excluded.next_seq);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_history_events_commit_order ON agent_history_events(commit_order);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_history_events_session_seq ON agent_history_events(session_id, session_seq)
+  WHERE session_id IS NOT NULL AND session_seq IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_agent_history_events_session_commit_order ON agent_history_events(session_id, commit_order);
 `
 
 /**

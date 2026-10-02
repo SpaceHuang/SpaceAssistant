@@ -904,6 +904,28 @@
       "retentionSaved": "Saved"
     }
   },
+  "storage": {
+    "title": "Session storage",
+    "description": "Review session body, canonical history, and spill usage. The database and spill files are archived before compaction.",
+    "database": "Database file",
+    "databaseSidecars": "Database WAL / SHM",
+    "total": "Total storage",
+    "messages": "Session message bodies",
+    "canonicalHistory": "Canonical history events",
+    "transcriptSnapshots": "Transcript snapshots",
+    "sourceSpill": "Source of truth spill",
+    "degradableSpill": "Degradable spill",
+    "orphanSpill": "Orphan spill",
+    "refresh": "Refresh usage",
+    "clearCache": "Clear cache",
+    "compact": "Archive and compact",
+    "loadFailed": "Failed to load storage usage",
+    "operationFailed": "Storage maintenance failed. Try again later.",
+    "busy": "A session is still running. Wait for it to finish before compacting.",
+    "clearSuccess": "Cleared {{count}} cache records",
+    "compactSuccess": "Database compacted: {{before}} → {{after}}",
+    "phase": { "archive": "Archiving database and spill files…", "vacuum": "Compacting database…", "reclaim": "Reclaiming space…", "complete": "Maintenance complete" }
+  },
   "butler": {
     "create": "New task",
     "edit": "Edit",

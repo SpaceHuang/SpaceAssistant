@@ -1,5 +1,6 @@
 import type { HistorySnapshot } from '../../packages/agent-sdk/src/history'
-import { rebuildClaudeMessagesFromHistory, toCanonicalModelMessages } from './canonicalHistory'
+import { foldClaudeSessionSnapshots, rebuildClaudeMessagesFromHistory, toCanonicalModelMessages } from './canonicalHistory'
+import type { CanonicalSessionSnapshot } from './canonicalHistory'
 
 type HostMessage = import('../../src/shared/api').ClaudeChatMessageWithBlocks
 type CanonicalModelMessage = import('../../packages/agent-sdk/src/model').CanonicalModelMessage
@@ -123,11 +124,32 @@ export function resolveSessionHistoryCutover(input: {
     if (stable(canonicalHistory) !== stable(canonicalLegacy) || historyMessages.length !== legacyPrefix.length) {
       return { kind: 'transcript-mismatch' }
     }
-    const withLegacyIdentity = historyMessages.map((message, index) => ({
-      ...message,
-      ...(legacyPrefix[index]?.id ? { id: legacyPrefix[index]!.id } : {})
-    }))
-    return { kind: 'matched', messages: [...withLegacyIdentity, input.legacyMessages[currentIndex]!] }
+    return { kind: 'matched', messages: [...historyMessages, input.legacyMessages[currentIndex]!] }
+  } catch {
+    return { kind: 'history-unrebuildable' }
+  }
+}
+
+/** Rebuilds and verifies a multi-invocation session transcript; ambiguity keeps the legacy read path. */
+export function resolveCanonicalSessionSnapshotsCutover(input: {
+  snapshots: readonly CanonicalSessionSnapshot[]
+  legacyMessages: readonly HostMessage[]
+  currentUserMessageId: string
+}): SessionHistoryCutoverResult {
+  try {
+    const currentIndex = input.legacyMessages.findIndex((message) => message.id === input.currentUserMessageId)
+    if (currentIndex < 0) return { kind: 'current-user-missing' }
+    if (currentIndex !== input.legacyMessages.length - 1 || input.legacyMessages[currentIndex]?.role !== 'user') {
+      return { kind: 'current-user-not-last' }
+    }
+    const historyMessages = foldClaudeSessionSnapshots(input.snapshots)
+    const legacyPrefix = input.legacyMessages.slice(0, currentIndex)
+    const canonicalHistory = toCanonicalModelMessages(historyMessages).filter((message) => message.role !== 'system')
+    const canonicalLegacy = toCanonicalModelMessages(legacyPrefix).filter((message) => message.role !== 'system')
+    if (stable(canonicalHistory) !== stable(canonicalLegacy) || historyMessages.length !== legacyPrefix.length) {
+      return { kind: 'transcript-mismatch' }
+    }
+    return { kind: 'matched', messages: [...historyMessages, input.legacyMessages[currentIndex]!] }
   } catch {
     return { kind: 'history-unrebuildable' }
   }

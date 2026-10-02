@@ -23,7 +23,7 @@ describe('createHostedModelRequest', () => {
     expect(createHostedModelRequest(input)).toEqual({
       messages: [
         { role: 'system', content: 'system prompt' },
-        { role: 'user', content: '请读取文件' },
+        { role: 'user', id: 'current-user', content: '请读取文件' },
         { role: 'assistant', content: [
           { type: 'thinking', thinking: 'reason', thinkingSignature: 'sig' },
           { type: 'text', text: '我来读取' }

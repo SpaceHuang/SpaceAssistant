@@ -5,6 +5,7 @@ import { isProcessToolName, projectToolResultForSink } from '../../src/shared/pr
 import { projectShellAgentLogFields } from '../shell/shellLogFields'
 
 const TARGET_EVENTS = new Set<AgentLogEventName>([
+  'retention.spill.cleaned',
   'llm.silent_overflow',
   'tool.request', 'tool.error', 'tool.result', 'tool.result.contract-violation',
   'trust.remove',
@@ -20,7 +21,7 @@ const COMMON_KEYS = new Set([
   'planDigest', 'caseId', 'convergenceCaseId', 'errorCode', 'reasonCode', 'errorRedacted', 'reasonRedacted',
   'userAction', 'validatorId', 'denyType', 'violationCodes', 'requiresRiskAck', 'outsideWorkDirRisk',
   'warningsCount', 'scannedPathsCount', 'canTrust', 'skipConfirm', 'outcome', 'verdict', 'type', 'status', 'pid', 'shell',
-  'shellId', 'exitCode', 'signal', 'exitCodeHint', 'interrupted', 'timedOut', 'cancelled', 'truncated',
+  'shellId', 'exitCode', 'signal', 'exitCodeHint', 'interrupted', 'timedOut', 'cancelled', 'truncated', 'removed',
   'persistedOutput', 'artifactAvailable', 'outputArtifactBytes', 'outputArtifactSha256', 'stdoutBytes',
   'stderrBytes', 'stdoutSha256', 'stderrSha256', 'stdoutRedacted', 'stderrRedacted', 'outputPersistErrorCode',
   'terminationErrorCode', 'terminationSignal', 'treeKillVerified', 'outputLimitReached', 'captureCaseId',

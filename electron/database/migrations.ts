@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
-import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, MIGRATION_V4_TABLES_SQL, MIGRATION_V5_TURN_TABLE_SQL, MIGRATION_V6_TURN_CHECKPOINT_SQL, MIGRATION_V7_QUEUE_RECEIPT_SQL, MIGRATION_V8_TURN_START_TOKEN_SQL, MIGRATION_V9_TURN_RECOVERY_FIELDS_SQL, MIGRATION_V10_TURN_TERMINAL_USAGE_SQL, MIGRATION_V11_TURN_CONTEXT_SQL, MIGRATION_V12_TURN_EXECUTION_CONFIG_SQL, MIGRATION_V13_TURN_ROUTING_INDEXES_SQL, MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL, MIGRATION_V15_BUTLER_TABLES_SQL, MIGRATION_V16_USAGE_STATS_SQL, MIGRATION_V17_SESSION_THINKING_EFFORT_SQL, MIGRATION_V18_CONFIRMATION_COMMIT_IDENTITY_SQL, MIGRATION_V19_AGENT_HISTORY_SQL, MIGRATION_V20_AGENT_HISTORY_SESSION_SQL, MIGRATION_V21_AGENT_HISTORY_SESSION_BACKFILL_SQL, MIGRATION_V22_TURN_INPUT_HISTORY_VERSION_SQL, MIGRATION_V23_DRIVER_DELIVERY_SQL, MIGRATION_V24_SESSION_TRANSCRIPT_SQL, MIGRATION_V25_SESSION_EXECUTION_QUEUE_SQL, MIGRATION_V26_SESSION_TRANSCRIPT_RECONCILIATION_SQL, MIGRATION_V27_ACCEPTED_TURN_CONTEXT_SQL, MIGRATION_V28_USAGE_ATTRIBUTION_SQL, MIGRATION_V29_CONTINUATIONS_SQL, MIGRATION_V30_CONTINUATION_START_TOKEN_SQL, SCHEMA_META_KEYS } from './schema'
+import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, MIGRATION_V4_TABLES_SQL, MIGRATION_V5_TURN_TABLE_SQL, MIGRATION_V6_TURN_CHECKPOINT_SQL, MIGRATION_V7_QUEUE_RECEIPT_SQL, MIGRATION_V8_TURN_START_TOKEN_SQL, MIGRATION_V9_TURN_RECOVERY_FIELDS_SQL, MIGRATION_V10_TURN_TERMINAL_USAGE_SQL, MIGRATION_V11_TURN_CONTEXT_SQL, MIGRATION_V12_TURN_EXECUTION_CONFIG_SQL, MIGRATION_V13_TURN_ROUTING_INDEXES_SQL, MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL, MIGRATION_V15_BUTLER_TABLES_SQL, MIGRATION_V16_USAGE_STATS_SQL, MIGRATION_V17_SESSION_THINKING_EFFORT_SQL, MIGRATION_V18_CONFIRMATION_COMMIT_IDENTITY_SQL, MIGRATION_V19_AGENT_HISTORY_SQL, MIGRATION_V20_AGENT_HISTORY_SESSION_SQL, MIGRATION_V21_AGENT_HISTORY_SESSION_BACKFILL_SQL, MIGRATION_V22_TURN_INPUT_HISTORY_VERSION_SQL, MIGRATION_V23_DRIVER_DELIVERY_SQL, MIGRATION_V24_SESSION_TRANSCRIPT_SQL, MIGRATION_V25_SESSION_EXECUTION_QUEUE_SQL, MIGRATION_V26_SESSION_TRANSCRIPT_RECONCILIATION_SQL, MIGRATION_V27_ACCEPTED_TURN_CONTEXT_SQL, MIGRATION_V28_USAGE_ATTRIBUTION_SQL, MIGRATION_V29_CONTINUATIONS_SQL, MIGRATION_V30_CONTINUATION_START_TOKEN_SQL, MIGRATION_V31_CANONICAL_PROJECTION_REPAIRS_SQL, MIGRATION_V32_AGENT_HISTORY_CURSOR_TABLES_SQL, MIGRATION_V32_AGENT_HISTORY_SESSION_ORDER_SQL, MIGRATION_V33_SESSION_GENERATION_SQL, MIGRATION_V34_CANONICAL_SESSION_CACHE_VERSION_SQL, MIGRATION_V35_SESSION_TURN_COMMIT_RECEIPTS_SQL, MIGRATION_V36_SESSION_TRANSCRIPT_COMMIT_STATE_SQL, MIGRATION_V37_SESSION_PROJECTION_ELIGIBILITY_SQL, SCHEMA_META_KEYS } from './schema'
 import { runInTransaction } from './transaction'
 
 export class DatabaseUpgradeRequiredError extends Error {
@@ -23,248 +23,313 @@ function readSchemaVersion(conn: DatabaseSync): number | undefined {
 }
 
 export function runMigrations(conn: DatabaseSync): void {
-  runInTransaction(conn, () => {
-    let version = readSchemaVersion(conn)
-    if (version === undefined) {
-      version = 1
-      conn.prepare('INSERT INTO schema_meta (key, value) VALUES (?, ?)').run(SCHEMA_META_KEYS.schemaVersion, String(version))
+  let version = readSchemaVersion(conn)
+  if (version === undefined) {
+    runInTransaction(conn, () => {
+      conn.prepare('INSERT INTO schema_meta (key, value) VALUES (?, ?)').run(SCHEMA_META_KEYS.schemaVersion, '1')
+    })
+    version = 1
+  }
+  if (version > DB_SCHEMA_VERSION) {
+    throw new DatabaseUpgradeRequiredError(version)
+  }
+  if (version === 1) runInTransaction(conn, () => {
+    conn.exec(CREATE_TABLES_SQL)
+    version = 3
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 2) runInTransaction(conn, () => {
+    conn.exec('DROP TABLE IF EXISTS artifact_operations')
+    conn.exec('DROP TABLE IF EXISTS artifact_references')
+    conn.exec('DROP TABLE IF EXISTS session_artifacts')
+    version = 3
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 3) runInTransaction(conn, () => {
+    // 工具确认机制框架（P3）：决策缓存表 + 用户规则覆盖表
+    conn.exec(MIGRATION_V4_TABLES_SQL)
+    version = 4
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 4) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V5_TURN_TABLE_SQL)
+    version = 5
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 5) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V6_TURN_CHECKPOINT_SQL)
+    version = 6
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 6) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V7_QUEUE_RECEIPT_SQL)
+    version = 7
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 7) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V8_TURN_START_TOKEN_SQL)
+    version = 8
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 8) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V9_TURN_RECOVERY_FIELDS_SQL)
+    version = 9
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 9) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V10_TURN_TERMINAL_USAGE_SQL)
+    version = 10
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 10) runInTransaction(conn, () => {
+    const columns = conn.prepare('PRAGMA table_info(turns)').all() as Array<{ name: string }>
+    if (!columns.some((column) => column.name === 'exclude_message_ids_json')) {
+      conn.exec(MIGRATION_V11_TURN_CONTEXT_SQL)
     }
-    if (version > DB_SCHEMA_VERSION) {
-      throw new DatabaseUpgradeRequiredError(version)
+    version = 11
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 11) runInTransaction(conn, () => {
+    const columns = conn.prepare('PRAGMA table_info(turns)').all() as Array<{ name: string }>
+    if (!columns.some((column) => column.name === 'execution_config_json')) {
+      conn.exec(MIGRATION_V12_TURN_EXECUTION_CONFIG_SQL)
     }
-    if (version === 1) {
-      conn.exec(CREATE_TABLES_SQL)
-      version = 3
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    version = 12
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 12) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V13_TURN_ROUTING_INDEXES_SQL)
+    // 容忍早期开发库元数据与列定义不一致；正式 v12 库都具备该列。
+    const columns = conn.prepare('PRAGMA table_info(turns)').all() as Array<{ name: string }>
+    if (columns.some((column) => column.name === 'user_message_id')) {
+      conn.exec('CREATE INDEX IF NOT EXISTS idx_turns_session_user ON turns(session_id, user_message_id)')
     }
-    if (version === 2) {
-      conn.exec('DROP TABLE IF EXISTS artifact_operations')
-      conn.exec('DROP TABLE IF EXISTS artifact_references')
-      conn.exec('DROP TABLE IF EXISTS session_artifacts')
-      version = 3
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    version = 13
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 13) runInTransaction(conn, () => {
+    // 偏差 7：sessions 归属/可见性两列（带列存在性防护，容忍重复升级的库）。
+    // 无 sessions 表的开发库（部分迁移测试库）直接跳过，保持升级幂等。
+    const hasSessionsTable =
+      (conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sessions'").all() as unknown[]).length > 0
+    if (hasSessionsTable) {
+      const sessionColumns = conn.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>
+      if (!sessionColumns.some((column) => column.name === 'ownership')) {
+        conn.exec('ALTER TABLE sessions ADD COLUMN ownership TEXT NOT NULL DEFAULT \'user\'')
+      }
+      if (!sessionColumns.some((column) => column.name === 'visibility')) {
+        conn.exec('ALTER TABLE sessions ADD COLUMN visibility TEXT NOT NULL DEFAULT \'primary\'')
+      }
+      conn.exec(MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL)
     }
-    if (version === 3) {
-      // 工具确认机制框架（P3）：决策缓存表 + 用户规则覆盖表
-      conn.exec(MIGRATION_V4_TABLES_SQL)
-      version = 4
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    version = 14
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 14) runInTransaction(conn, () => {
+    // P4：管家任务表（CREATE TABLE IF NOT EXISTS，幂等）
+    conn.exec(MIGRATION_V15_BUTLER_TABLES_SQL)
+    version = 15
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 15) runInTransaction(conn, () => {
+    // Agent Token 用量统计事实表（CREATE TABLE IF NOT EXISTS，幂等）
+    conn.exec(MIGRATION_V16_USAGE_STATS_SQL)
+    version = 16
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 16) runInTransaction(conn, () => {
+    // Thinking 强度：sessions.thinking_effort 覆盖列（带列存在性防护，容忍重复升级的库；
+    // 无 sessions 表的开发库直接跳过，保持升级幂等）
+    const hasSessionsTable =
+      (conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sessions'").all() as unknown[]).length > 0
+    if (hasSessionsTable) {
+      const sessionColumns = conn.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>
+      if (!sessionColumns.some((column) => column.name === 'thinking_effort')) {
+        conn.exec(MIGRATION_V17_SESSION_THINKING_EFFORT_SQL)
+      }
     }
-    if (version === 4) {
-      conn.exec(MIGRATION_V5_TURN_TABLE_SQL)
-      version = 5
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    version = 17
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 17) runInTransaction(conn, () => {
+    const hasSubmissionsTable =
+      (conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'confirmation_submissions'").all() as unknown[]).length > 0
+    if (hasSubmissionsTable) {
+      const columns = conn.prepare('PRAGMA table_info(confirmation_submissions)').all() as Array<{ name: string }>
+      if (!columns.some((column) => column.name === 'session_id')) conn.exec('ALTER TABLE confirmation_submissions ADD COLUMN session_id TEXT NOT NULL DEFAULT \'\'')
+      if (!columns.some((column) => column.name === 'generation')) conn.exec('ALTER TABLE confirmation_submissions ADD COLUMN generation INTEGER NOT NULL DEFAULT 1')
+      if (!columns.some((column) => column.name === 'revision')) conn.exec('ALTER TABLE confirmation_submissions ADD COLUMN revision INTEGER NOT NULL DEFAULT 1')
+      const auditColumns = conn.prepare('PRAGMA table_info(confirmation_commit_audits)').all() as Array<{ name: string }>
+      if (!auditColumns.some((column) => column.name === 'session_id')) conn.exec('ALTER TABLE confirmation_commit_audits ADD COLUMN session_id TEXT NOT NULL DEFAULT \'\'')
+      if (!auditColumns.some((column) => column.name === 'generation')) conn.exec('ALTER TABLE confirmation_commit_audits ADD COLUMN generation INTEGER NOT NULL DEFAULT 1')
+      if (!auditColumns.some((column) => column.name === 'revision')) conn.exec('ALTER TABLE confirmation_commit_audits ADD COLUMN revision INTEGER NOT NULL DEFAULT 1')
+      conn.exec("UPDATE confirmation_submissions SET session_id = owner_id WHERE session_id = ''")
+      conn.exec('UPDATE confirmation_submissions SET revision = expected_revision WHERE revision = 1 AND expected_revision <> 1')
+      conn.exec("UPDATE confirmation_commit_audits SET session_id = (SELECT session_id FROM confirmation_submissions WHERE confirmation_submissions.submission_id = confirmation_commit_audits.submission_id) WHERE session_id = ''")
+      conn.exec('UPDATE confirmation_commit_audits SET generation = (SELECT generation FROM confirmation_submissions WHERE confirmation_submissions.submission_id = confirmation_commit_audits.submission_id)')
+      conn.exec('UPDATE confirmation_commit_audits SET revision = (SELECT revision FROM confirmation_submissions WHERE confirmation_submissions.submission_id = confirmation_commit_audits.submission_id)')
     }
-    if (version === 5) {
-      conn.exec(MIGRATION_V6_TURN_CHECKPOINT_SQL)
-      version = 6
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
-    }
-    if (version === 6) {
-      conn.exec(MIGRATION_V7_QUEUE_RECEIPT_SQL)
-      version = 7
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
-    }
-    if (version === 7) {
-      conn.exec(MIGRATION_V8_TURN_START_TOKEN_SQL)
-      version = 8
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
-    }
-    if (version === 8) {
-      conn.exec(MIGRATION_V9_TURN_RECOVERY_FIELDS_SQL)
-      version = 9
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
-    }
-    if (version === 9) {
-      conn.exec(MIGRATION_V10_TURN_TERMINAL_USAGE_SQL)
-      version = 10
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
-    }
-    if (version === 10) {
+    version = 18
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 18) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V19_AGENT_HISTORY_SQL)
+    version = 19
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 19) runInTransaction(conn, () => {
+    // 兼容迁移编号重排（cloud-parity 恢复）前的 version=19 库：旧 v19 = usage attribution，
+    // 没有 agent_history 表。先幂等补建基表（CREATE IF NOT EXISTS），再加列仅当缺列，
+    // 否则 V20 的 ALTER 撞「no such table: agent_history_streams」（真机打包回归）。
+    conn.exec(MIGRATION_V19_AGENT_HISTORY_SQL)
+    const streamColumns = conn.prepare('PRAGMA table_info(agent_history_streams)').all() as Array<{ name: string }>
+    if (!streamColumns.some((column) => column.name === 'session_id')) conn.exec(MIGRATION_V20_AGENT_HISTORY_SESSION_SQL)
+    version = 20
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 20) runInTransaction(conn, () => {
+    // Some lightweight migration fixtures omit turns; production databases always have it.
+    const hasTurnsTable = (conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'turns'").get() as unknown) !== undefined
+    if (hasTurnsTable) conn.exec(MIGRATION_V21_AGENT_HISTORY_SESSION_BACKFILL_SQL)
+    version = 21
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 21) runInTransaction(conn, () => {
+    const hasTurnsTable = (conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'turns'").get() as unknown) !== undefined
+    if (hasTurnsTable) {
       const columns = conn.prepare('PRAGMA table_info(turns)').all() as Array<{ name: string }>
-      if (!columns.some((column) => column.name === 'exclude_message_ids_json')) {
-        conn.exec(MIGRATION_V11_TURN_CONTEXT_SQL)
-      }
-      version = 11
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+      if (!columns.some((column) => column.name === 'accepted_input_history_version')) conn.exec(MIGRATION_V22_TURN_INPUT_HISTORY_VERSION_SQL)
     }
-    if (version === 11) {
-      const columns = conn.prepare('PRAGMA table_info(turns)').all() as Array<{ name: string }>
-      if (!columns.some((column) => column.name === 'execution_config_json')) {
-        conn.exec(MIGRATION_V12_TURN_EXECUTION_CONFIG_SQL)
-      }
-      version = 12
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    version = 22
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 22) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V23_DRIVER_DELIVERY_SQL)
+    version = 23
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 23) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V24_SESSION_TRANSCRIPT_SQL)
+    version = 24
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 24) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V25_SESSION_EXECUTION_QUEUE_SQL)
+    version = 25
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 25) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V26_SESSION_TRANSCRIPT_RECONCILIATION_SQL)
+    version = 26
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 26) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V27_ACCEPTED_TURN_CONTEXT_SQL)
+    version = 27
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 27) runInTransaction(conn, () => {
+    // Some focused migration fixtures intentionally contain only the tables owned by that test.
+    // Upgrade whichever optional usage fact tables exist; full v27 databases contain both.
+    const hasUsageSteps = conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'usage_step_facts'").get() !== undefined
+    const hasUsageTurns = conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'usage_turn_facts'").get() !== undefined
+    if (hasUsageSteps || hasUsageTurns) {
+      // 兼容迁移编号重排前的 version=19 库：旧 v19 = 本迁移，归因列已存在。
+      // 旧 v19 单事务原子加列、无部分应用态，故以 attribution_json 列为「已应用」标记整组跳过，
+      // 否则重复 ALTER 撞 duplicate column（真机打包回归）。
+      const stepColumns = hasUsageSteps
+        ? conn.prepare('PRAGMA table_info(usage_step_facts)').all() as Array<{ name: string }>
+        : []
+      const alreadyAppliedByLegacyV19 = stepColumns.some((column) => column.name === 'attribution_json')
+      if (!alreadyAppliedByLegacyV19) conn.exec(MIGRATION_V28_USAGE_ATTRIBUTION_SQL)
     }
-    if (version === 12) {
-      conn.exec(MIGRATION_V13_TURN_ROUTING_INDEXES_SQL)
-      // 容忍早期开发库元数据与列定义不一致；正式 v12 库都具备该列。
-      const columns = conn.prepare('PRAGMA table_info(turns)').all() as Array<{ name: string }>
-      if (columns.some((column) => column.name === 'user_message_id')) {
-        conn.exec('CREATE INDEX IF NOT EXISTS idx_turns_session_user ON turns(session_id, user_message_id)')
-      }
-      version = 13
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    version = 28
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 28) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V29_CONTINUATIONS_SQL)
+    version = 29
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 29) runInTransaction(conn, () => {
+    const continuationColumns = conn.prepare("PRAGMA table_info(agent_continuations)").all() as Array<{ name: string }>
+    if (!continuationColumns.some(({ name }) => name === 'target_start_token')) {
+      conn.exec(MIGRATION_V30_CONTINUATION_START_TOKEN_SQL)
     }
-    if (version === 13) {
-      // 偏差 7：sessions 归属/可见性两列（带列存在性防护，容忍重复升级的库）。
-      // 无 sessions 表的开发库（部分迁移测试库）直接跳过，保持升级幂等。
-      const hasSessionsTable =
-        (conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sessions'").all() as unknown[]).length > 0
-      if (hasSessionsTable) {
-        const sessionColumns = conn.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>
-        if (!sessionColumns.some((column) => column.name === 'ownership')) {
-          conn.exec('ALTER TABLE sessions ADD COLUMN ownership TEXT NOT NULL DEFAULT \'user\'')
-        }
-        if (!sessionColumns.some((column) => column.name === 'visibility')) {
-          conn.exec('ALTER TABLE sessions ADD COLUMN visibility TEXT NOT NULL DEFAULT \'primary\'')
-        }
-        conn.exec(MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL)
-      }
-      version = 14
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    const turnsExists = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='turns'").get() !== undefined
+    const turnColumns = turnsExists ? conn.prepare('PRAGMA table_info(turns)').all() as Array<{ name: string }> : []
+    if (turnColumns.some(({ name }) => name === 'start_token')) {
+      conn.exec(`UPDATE agent_continuations SET target_start_token = COALESCE(
+        (SELECT start_token FROM turns WHERE turns.turn_id = agent_continuations.target_turn_id), ''
+      ) WHERE target_start_token = ''`)
     }
-    if (version === 14) {
-      // P4：管家任务表（CREATE TABLE IF NOT EXISTS，幂等）
-      conn.exec(MIGRATION_V15_BUTLER_TABLES_SQL)
-      version = 15
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    conn.exec("UPDATE agent_continuations SET status = 'interrupted' WHERE target_start_token = '' AND status IN ('pending','running')")
+    version = 30
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 30) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V31_CANONICAL_PROJECTION_REPAIRS_SQL)
+    version = 31
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 31) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V32_AGENT_HISTORY_CURSOR_TABLES_SQL)
+    const historyEventsExists = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_history_events'").get() !== undefined
+    const historyStreamsExists = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_history_streams'").get() !== undefined
+    if (historyEventsExists && historyStreamsExists) {
+      const eventColumns = conn.prepare('PRAGMA table_info(agent_history_events)').all() as Array<{ name: string }>
+      if (!eventColumns.some(({ name }) => name === 'session_id')) conn.exec('ALTER TABLE agent_history_events ADD COLUMN session_id TEXT')
+      if (!eventColumns.some(({ name }) => name === 'commit_order')) conn.exec('ALTER TABLE agent_history_events ADD COLUMN commit_order INTEGER')
+      if (!eventColumns.some(({ name }) => name === 'session_seq')) conn.exec('ALTER TABLE agent_history_events ADD COLUMN session_seq INTEGER')
+      conn.exec(MIGRATION_V32_AGENT_HISTORY_SESSION_ORDER_SQL)
     }
-    if (version === 15) {
-      // Agent Token 用量统计事实表（CREATE TABLE IF NOT EXISTS，幂等）
-      conn.exec(MIGRATION_V16_USAGE_STATS_SQL)
-      version = 16
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    version = 32
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 32) runInTransaction(conn, () => {
+    const hasSessions = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'").get() !== undefined
+    if (hasSessions) {
+      const columns = conn.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>
+      if (!columns.some(({ name }) => name === 'generation')) conn.exec(MIGRATION_V33_SESSION_GENERATION_SQL)
+      else conn.exec("UPDATE sessions SET generation = lower(hex(randomblob(16))) WHERE generation = ''")
     }
-    if (version === 16) {
-      // Thinking 强度：sessions.thinking_effort 覆盖列（带列存在性防护，容忍重复升级的库；
-      // 无 sessions 表的开发库直接跳过，保持升级幂等）
-      const hasSessionsTable =
-        (conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sessions'").all() as unknown[]).length > 0
-      if (hasSessionsTable) {
-        const sessionColumns = conn.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>
-        if (!sessionColumns.some((column) => column.name === 'thinking_effort')) {
-          conn.exec(MIGRATION_V17_SESSION_THINKING_EFFORT_SQL)
-        }
-      }
-      version = 17
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    version = 33
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 33) runInTransaction(conn, () => {
+    const hasCache = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='canonical_session_projection_cache'").get() !== undefined
+    if (!hasCache) {
+      conn.exec(`CREATE TABLE canonical_session_projection_cache (
+        session_id TEXT NOT NULL, cache_key TEXT NOT NULL, cache_version INTEGER NOT NULL,
+        session_generation TEXT NOT NULL, session_seq INTEGER NOT NULL, commit_order INTEGER NOT NULL,
+        watermark_event_id TEXT, watermark_invocation_id TEXT, event_count INTEGER NOT NULL,
+        value TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(session_id, cache_key))`)
+    } else {
+      const columns = conn.prepare('PRAGMA table_info(canonical_session_projection_cache)').all() as Array<{ name: string }>
+      if (!columns.some(({ name }) => name === 'cache_version')) conn.exec(MIGRATION_V34_CANONICAL_SESSION_CACHE_VERSION_SQL)
+      else conn.prepare('DELETE FROM canonical_session_projection_cache WHERE cache_version <> 1').run()
     }
-    if (version === 17) {
-      const hasSubmissionsTable =
-        (conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'confirmation_submissions'").all() as unknown[]).length > 0
-      if (hasSubmissionsTable) {
-        const columns = conn.prepare('PRAGMA table_info(confirmation_submissions)').all() as Array<{ name: string }>
-        if (!columns.some((column) => column.name === 'session_id')) conn.exec('ALTER TABLE confirmation_submissions ADD COLUMN session_id TEXT NOT NULL DEFAULT \'\'')
-        if (!columns.some((column) => column.name === 'generation')) conn.exec('ALTER TABLE confirmation_submissions ADD COLUMN generation INTEGER NOT NULL DEFAULT 1')
-        if (!columns.some((column) => column.name === 'revision')) conn.exec('ALTER TABLE confirmation_submissions ADD COLUMN revision INTEGER NOT NULL DEFAULT 1')
-        const auditColumns = conn.prepare('PRAGMA table_info(confirmation_commit_audits)').all() as Array<{ name: string }>
-        if (!auditColumns.some((column) => column.name === 'session_id')) conn.exec('ALTER TABLE confirmation_commit_audits ADD COLUMN session_id TEXT NOT NULL DEFAULT \'\'')
-        if (!auditColumns.some((column) => column.name === 'generation')) conn.exec('ALTER TABLE confirmation_commit_audits ADD COLUMN generation INTEGER NOT NULL DEFAULT 1')
-        if (!auditColumns.some((column) => column.name === 'revision')) conn.exec('ALTER TABLE confirmation_commit_audits ADD COLUMN revision INTEGER NOT NULL DEFAULT 1')
-        conn.exec("UPDATE confirmation_submissions SET session_id = owner_id WHERE session_id = ''")
-        conn.exec('UPDATE confirmation_submissions SET revision = expected_revision WHERE revision = 1 AND expected_revision <> 1')
-        conn.exec("UPDATE confirmation_commit_audits SET session_id = (SELECT session_id FROM confirmation_submissions WHERE confirmation_submissions.submission_id = confirmation_commit_audits.submission_id) WHERE session_id = ''")
-        conn.exec('UPDATE confirmation_commit_audits SET generation = (SELECT generation FROM confirmation_submissions WHERE confirmation_submissions.submission_id = confirmation_commit_audits.submission_id)')
-        conn.exec('UPDATE confirmation_commit_audits SET revision = (SELECT revision FROM confirmation_submissions WHERE confirmation_submissions.submission_id = confirmation_commit_audits.submission_id)')
-      }
-      version = 18
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
-    }
-    if (version === 18) {
-      conn.exec(MIGRATION_V19_AGENT_HISTORY_SQL)
-      version = 19
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
-    }
-    if (version === 19) {
-      // 兼容迁移编号重排（cloud-parity 恢复）前的 version=19 库：旧 v19 = usage attribution，
-      // 没有 agent_history 表。先幂等补建基表（CREATE IF NOT EXISTS），再加列仅当缺列，
-      // 否则 V20 的 ALTER 撞「no such table: agent_history_streams」（真机打包回归）。
-      conn.exec(MIGRATION_V19_AGENT_HISTORY_SQL)
-      const streamColumns = conn.prepare('PRAGMA table_info(agent_history_streams)').all() as Array<{ name: string }>
-      if (!streamColumns.some((column) => column.name === 'session_id')) conn.exec(MIGRATION_V20_AGENT_HISTORY_SESSION_SQL)
-      version = 20
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
-    }
-    if (version === 20) {
-      // Some lightweight migration fixtures omit turns; production databases always have it.
-      const hasTurnsTable = (conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'turns'").get() as unknown) !== undefined
-      if (hasTurnsTable) conn.exec(MIGRATION_V21_AGENT_HISTORY_SESSION_BACKFILL_SQL)
-      version = 21
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
-    }
-    if (version === 21) {
-      const hasTurnsTable = (conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'turns'").get() as unknown) !== undefined
-      if (hasTurnsTable) {
-        const columns = conn.prepare('PRAGMA table_info(turns)').all() as Array<{ name: string }>
-        if (!columns.some((column) => column.name === 'accepted_input_history_version')) conn.exec(MIGRATION_V22_TURN_INPUT_HISTORY_VERSION_SQL)
-      }
-      version = 22
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
-    }
-    if (version === 22) {
-      conn.exec(MIGRATION_V23_DRIVER_DELIVERY_SQL)
-      version = 23
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
-    }
-    if (version === 23) {
-      conn.exec(MIGRATION_V24_SESSION_TRANSCRIPT_SQL)
-      version = 24
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
-    }
-    if (version === 24) {
-      conn.exec(MIGRATION_V25_SESSION_EXECUTION_QUEUE_SQL)
-      version = 25
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
-    }
-    if (version === 25) {
-      conn.exec(MIGRATION_V26_SESSION_TRANSCRIPT_RECONCILIATION_SQL)
-      version = 26
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
-    }
-    if (version === 26) {
-      conn.exec(MIGRATION_V27_ACCEPTED_TURN_CONTEXT_SQL)
-      version = 27
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
-    }
-    if (version === 27) {
-      // Some focused migration fixtures intentionally contain only the tables owned by that test.
-      // Upgrade whichever optional usage fact tables exist; full v27 databases contain both.
-      const hasUsageSteps = conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'usage_step_facts'").get() !== undefined
-      const hasUsageTurns = conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'usage_turn_facts'").get() !== undefined
-      if (hasUsageSteps || hasUsageTurns) {
-        // 兼容迁移编号重排前的 version=19 库：旧 v19 = 本迁移，归因列已存在。
-        // 旧 v19 单事务原子加列、无部分应用态，故以 attribution_json 列为「已应用」标记整组跳过，
-        // 否则重复 ALTER 撞 duplicate column（真机打包回归）。
-        const stepColumns = hasUsageSteps
-          ? conn.prepare('PRAGMA table_info(usage_step_facts)').all() as Array<{ name: string }>
-          : []
-        const alreadyAppliedByLegacyV19 = stepColumns.some((column) => column.name === 'attribution_json')
-        if (!alreadyAppliedByLegacyV19) conn.exec(MIGRATION_V28_USAGE_ATTRIBUTION_SQL)
-      }
-      version = 28
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
-    }
-    if (version === 28) {
-      conn.exec(MIGRATION_V29_CONTINUATIONS_SQL)
-      version = 29
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
-    }
-    if (version === 29) {
-      const continuationColumns = conn.prepare("PRAGMA table_info(agent_continuations)").all() as Array<{ name: string }>
-      if (!continuationColumns.some(({ name }) => name === 'target_start_token')) {
-        conn.exec(MIGRATION_V30_CONTINUATION_START_TOKEN_SQL)
-      }
-      const turnsExists = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='turns'").get() !== undefined
-      const turnColumns = turnsExists ? conn.prepare('PRAGMA table_info(turns)').all() as Array<{ name: string }> : []
-      if (turnColumns.some(({ name }) => name === 'start_token')) {
-        conn.exec(`UPDATE agent_continuations SET target_start_token = COALESCE(
-          (SELECT start_token FROM turns WHERE turns.turn_id = agent_continuations.target_turn_id), ''
-        ) WHERE target_start_token = ''`)
-      }
-      conn.exec("UPDATE agent_continuations SET status = 'interrupted' WHERE target_start_token = '' AND status IN ('pending','running')")
-      version = 30
-      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
-    }
+    version = 34
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 34) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V35_SESSION_TURN_COMMIT_RECEIPTS_SQL)
+    version = 35
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 35) runInTransaction(conn, () => {
+    const hasClaims = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_execution_claims'").get() !== undefined
+    const hasQueue = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_execution_queue'").get() !== undefined
+    // Sparse migration fixtures and older development databases may never have enabled hosted sessions.
+    if (hasClaims && hasQueue) conn.exec(MIGRATION_V36_SESSION_TRANSCRIPT_COMMIT_STATE_SQL)
+    version = 36
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 36) runInTransaction(conn, () => {
+    const hasSessions = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'").get() !== undefined
+    const hasMessages = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'").get() !== undefined
+    if (hasSessions && hasMessages) conn.exec(MIGRATION_V37_SESSION_PROJECTION_ELIGIBILITY_SQL)
+    version = 37
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
 }

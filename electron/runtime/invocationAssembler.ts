@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import path from 'node:path'
 import type {
   AgentEventSink,
   AgentHostPorts,
@@ -35,6 +36,7 @@ import { TypedToolRegistry } from '../tools/plannedToolRegistry'
 import { createWorkspaceSnapshotTracker } from '../workDirSnapshot'
 import { getDefaultAgentRuntime } from './agentRuntimeDefaults'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
+import { createSpillStore } from '../storage/spillStore'
 import { createAgentSdkProviderRecovery } from './agentSdkProviderRecovery'
 import { createAgentSdkOutputRecovery } from './agentSdkOutputRecovery'
 import { createAgentSdkUsageRecorder, createAgentSdkUsageSessionEvent } from './agentSdkUsageRecorder'
@@ -265,6 +267,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       policy: ReturnType<typeof createAgentSdkSafetyPolicy>
       confirmation?: ConfirmationPort
       hostHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
+      sessionTranscriptBaseVersion?: number
+      sessionTranscriptFailureMessages?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionTranscriptFailureMessages']
       sessionLedgerForInvocationTerminal?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionLedgerForInvocationTerminal']
       afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
       beforeToolDispatch?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']
@@ -1015,6 +1019,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       registry?: import('../tools/plannedToolRegistry').TypedToolRegistry
       authorizedToolNames: ReadonlySet<string>
       hostHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
+      sessionTranscriptBaseVersion?: number
+      sessionTranscriptFailureMessages?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionTranscriptFailureMessages']
       policy: ReturnType<typeof createAgentSdkSafetyPolicy>
       confirmation?: ConfirmationPort
       sessionLedgerForInvocationTerminal?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionLedgerForInvocationTerminal']
@@ -1062,6 +1068,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         admission: runtime.executionAdmission,
         safetyGate,
         history,
+        ...(input.sessionTranscriptBaseVersion !== undefined ? { sessionTranscriptBaseVersion: input.sessionTranscriptBaseVersion } : {}),
+        ...(input.sessionTranscriptFailureMessages ? { sessionTranscriptFailureMessages: input.sessionTranscriptFailureMessages } : {}),
         ...(input.sessionLedgerForInvocationTerminal ? { sessionLedgerForInvocationTerminal: input.sessionLedgerForInvocationTerminal } : {}),
         prepareTool: input.registeredTools.prepareTool,
         discardPreparedTool: input.registeredTools.discardPreparedTool,
@@ -1166,6 +1174,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       eagerBudgetDroppedNames?: ReadonlySet<string>
       resolveRegisteredToolName?: (providerToolName: string) => string
       hostHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
+      sessionTranscriptBaseVersion?: number
+      sessionTranscriptFailureMessages?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionTranscriptFailureMessages']
       afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
       beforeToolDispatch?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']
       createExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>): unknown
@@ -1290,7 +1300,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       try { return getDefaultAgentRuntime().safetyPermits } catch { return undefined }
     })(),
     ...((materials.agentSdkHistory || db) ? (() => {
-      const history = materials.agentSdkHistory ?? new SqliteAgentHistory(getDbConnection(db!), 1, Date.now, materials.sessionId)
+      const history = materials.agentSdkHistory ?? new SqliteAgentHistory(getDbConnection(db!), 1, Date.now, materials.sessionId, createSpillStore(path.join(materials.userDataDir, 'spill')))
       return { history }
       })() : {}),
     policy,

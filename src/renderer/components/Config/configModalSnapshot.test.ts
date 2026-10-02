@@ -25,6 +25,7 @@ describe('normalizeSettingsTabKey', () => {
     expect(normalizeSettingsTabKey('llm-defaults')).toBe('models')
     expect(normalizeSettingsTabKey('browser')).toBe('tools')
     expect(normalizeSettingsTabKey('general')).toBe('general')
+    expect(normalizeSettingsTabKey('storage')).toBe('storage')
   })
 })
 

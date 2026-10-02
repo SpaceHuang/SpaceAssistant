@@ -26,6 +26,11 @@ export function isTruncatedToolResultContent(content: string, maxChars: number =
   return content.includes(TRUNCATED_TOOL_RESULT_MARKER_PREFIX) && content.length <= maxChars + TRUNCATION_MARKER_BUDGET
 }
 
+/** Complete content can be moved to source-of-truth storage; omission markers cannot. */
+export function isCompleteToolResultSpillPayload(content: string, maxChars: number = MAX_TOOL_RESULT_CONTENT_CHARS): boolean {
+  return !isOversizedToolResultPlaceholder(content) && !isTruncatedToolResultContent(content, maxChars)
+}
+
 export interface CompactOversizedToolResultResult {
   content: string
   compacted: boolean
@@ -42,7 +47,7 @@ export function compactOversizedToolResultContent(
   maxChars: number = MAX_TOOL_RESULT_CONTENT_CHARS
 ): CompactOversizedToolResultResult {
   const originalLength = content.length
-  if (isOversizedToolResultPlaceholder(content) || isTruncatedToolResultContent(content, maxChars) || originalLength <= maxChars) {
+  if (!isCompleteToolResultSpillPayload(content, maxChars) || originalLength <= maxChars) {
     return { content, compacted: false, originalLength }
   }
   return { content: truncateMiddle(content, maxChars), compacted: true, originalLength }
