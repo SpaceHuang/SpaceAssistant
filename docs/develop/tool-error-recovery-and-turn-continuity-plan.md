@@ -1,0 +1,291 @@
+# 工具错误恢复与 Turn 连续性改进计划
+
+**状态：阶段 A–D 实现与验收完成（含隔离真实模型运行观察）**
+**日期：2026-10-02**
+**关联问题：** 会话 `c510dafc-42ea-4068-ab12-d53ef28d0da8` 因“同一工具错误已连续出现 3 次”结束。
+
+## 1. 目标
+
+解决两个相互关联、但需要分别处理的问题：
+
+1. 对 `read_file`、`edit_file`、`write_file` 等常用工具，避免把同一模型响应中针对不同文件的独立失败误认为 Agent 连续重试，并阻止这种误判直接终止整个 Turn。
+2. 工具错误或可恢复的执行问题出现时，优先在原 Turn 内把结果交回模型继续处理；若 Turn 确实无法继续，提供基于已提交历史的恢复路径，避免用户重试时丢失前序工具结果并从原始请求重新执行。
+
+本计划保留现有读后写安全约束、工具派发审计、全局模型轮次上限和明确的取消语义。目标不是让 Agent 忽略工具错误或无限重试。
+
+## 2. 本次故障与现有链路
+
+### 2.1 会话中的实际触发方式
+
+会话事件记录显示：
+
+- 失败 Turn `5472717b-6b78-47e4-a681-aceec90ee3c1` 已运行到第 18 个模型步骤。
+- 第 18 步的一次模型响应发出了 30 个 `edit_file` 调用，目标是不同的 Markdown 文件。
+- 这些文件并未逐个通过 `read_file` 读取，工具按现有安全规则返回“文件尚未在本会话中通过 read_file 读取”。
+- 相同错误结果在一批调用中连续返回，随后写入 `turn_end(reason: error)`，错误为“同一工具错误已连续出现 3 次，已停止”。
+
+错误结果包含 `autoApprovedWrite` 预览元数据，但外层结果为 `success: false`。该预览字段本身不能证明文件已写入；实现和恢复流程不得仅凭它推断副作用已经发生。
+
+### 2.2 故障发生时的代码路径
+
+- `electron/toolChatLoop.ts` 在 `afterToolResult` 中维护单个 `repeatedResultCount`，键由错误类别、工具名、错误文本和可选身份组成。
+- 一般工具错误达到 3 次后，`shouldStopToolRetry` 返回停止；`afterToolResult` 抛出 `ToolLoopRoundLimitError`。
+- `packages/agent-sdk/src/turn.ts` 在追加 `tool-call-finished` 并投影工具结果之后才调用 `afterToolResult`。因此错误结果已经进入规范 History，随后抛错却使当前模型循环退出。
+- `electron/toolChatLoop.ts` 捕获该错误后将本次调用结算为失败。失败结果没有机会作为后续模型输入，模型无法改读文件、缩小批次或向用户解释阻塞。
+- `src/renderer/components/Chat/ChatView.tsx` 的 `retryFailedAssistant` 复用原用户消息并排除失败 assistant 消息，重新提交一个 Turn。该操作不是从旧 Turn 检查点恢复；旧 Turn 的工具结果虽保存在历史中，却不会因此自动成为新 Turn 的继续执行上下文。
+
+### 2.3 故障发生时的设计缺口
+
+当前计数器表达的是“错误结果按完成顺序连续出现”，产品提示表达的却是“Agent 连续尝试同一错误操作”。二者语义不一致：
+
+- 并行调用的兄弟结果会相互计数，即使工具目标、参数和模型决策都不同。
+- 宿主回调抛错把一个可供模型修正的工具结果提升成 Turn 级失败。
+- 已持久化的前序结果没有接入 Turn 恢复路径，用户只能新开一次生成。
+
+## 3. 设计原则与决策
+
+### 3.1 工具错误首先是模型输入
+
+工具正常返回的失败（参数错误、文件尚未读取、目标不存在、命令非零退出等）仍作为该工具调用的结果提交并返回给模型。只有取消、超时、History 持久化不确定、派发后结果未知、宿主关键投影失败等真正破坏继续执行前提的故障，才结束或中断 Turn。
+
+### 3.2 不把同批并行结果当成重试
+
+如果仍保留重复失败检测，重复身份至少要绑定：
+
+- 工具名；
+- 规范化后的目标与关键参数（敏感字段先脱敏或摘要化）；
+- 规范化错误码，而不是仅用可变的自然语言错误文本；
+- 失败发生的模型轮次/模型响应边界。
+
+同一模型响应中的不同 `toolCallId` 不增加“模型重试次数”。来自不同文件的失败互不累计。失败结果只有在返回模型后，模型再次提出同一语义操作，才算一次重试。
+
+### 3.3 熔断不能代替恢复
+
+Turn 级模型轮次与工具轮次上限仍是防止无限循环的最终边界。重复失败检测只做较窄的诊断和单操作保护，不以抛出异常的方式抢先终止整个 Turn。
+
+### 3.4 恢复必须尊重副作用边界
+
+- 已有 `tool-call-finished` 的工具结果是已提交事实，恢复时直接重建对话上下文，不再次执行该工具。
+- 有 `tool-call-started` 但没有 `tool-call-finished` 的调用，其副作用可能未知；恢复不得自动重放，必须进入显式的未知结果处理路径。
+- 取消、用户停止和明确的安全拒绝不得被自动恢复逻辑绕过。
+
+## 4. 分阶段改进
+
+### 阶段 A：修正错误计数语义，解除批次误伤
+
+**改动范围**
+
+- 将 `electron/toolChatLoop.ts` 的单一连续计数器替换为按语义调用身份维护的状态；删除基于“相邻错误结果相同”的全局累计。
+- 为调用结果附带当前模型轮次/响应边界，确保同一批并行结果不会被认作模型重试。
+- 为文件工具构造身份时使用规范化目标路径和操作类型；避免将不同文件的错误折叠为一个键。
+- 将通用错误文本映射为稳定错误类别；保留面向模型和用户的原始诊断文本。
+- 让正常工具失败留在 canonical tool result 中，不允许重复错误观察器通过抛 `ToolLoopRoundLimitError` 结束 Turn。
+- 在 SDK 的工具派发路径增加明确的派发前准入接口（例如 `beforeToolDispatch`），由它决定执行、拒绝派发，或因运行时故障中止；仅在派发前准入通过后才调用工具执行器。
+- 对重复保护命中的调用，跳过执行器，提交规范的 `tool-call-not-dispatched` 事件（或等价事件，包含稳定原因与调用身份），并构造可回灌模型的拒绝结果。不得伪装成 `tool-call-finished`，也不得产生执行副作用。
+
+**派发前决策顺序**
+
+准入检查应位于 SDK 实际调用工具执行器之前，且处于以下次序：
+
+1. 解析并规范化工具调用及其语义身份；无效输入按工具参数错误结果处理，不进入执行器。
+2. 执行重复调用准入检查。若被拦截，记录 `tool-call-not-dispatched` 并回灌结构化结果，不申请执行许可、不取得资源锁、不调用执行器。
+3. 对未被拦截的调用，沿用既有的安全审批/策略检查与执行许可获取流程；拒绝或等待审批时，按各自规范事件结算，不视为工具已派发。
+4. 在执行许可有效后获取所需资源锁，再调用执行器；只有真正进入执行器时才记录为 dispatched。
+5. 释放资源锁和执行许可，并按现行顺序提交成功或失败结果。若派发后状态未知，走未知副作用路径，不将其改写为普通准入拒绝。
+
+上述顺序须与现有实现核对。如果安全策略要求在重复保护前先做授权/审批判断（例如避免向模型泄露策略外信息），应通过 SDK 接口分层表达该要求，并在设计与测试中固定先后关系；不得由各工具适配器自行决定。
+
+**重复调用保护的建议行为**
+
+- 同一语义调用失败后，先把真实失败结果交给模型。
+- 若模型在收到结果后的后续轮次仍原样提出同一调用，记录重复行为并返回可操作的结构化拒绝/停止结果；让模型生成总结或询问用户。
+- 达到重复阈值时，派发前准入必须阻止该次执行，避免再次产生危险或昂贵的副作用；仍将拒绝结果交回模型，不得仅因阈值命中而将已运行很久的整个 Turn 标记失败。
+- 安全策略拒绝计数、工具执行失败计数与基础设施故障熔断分别维护，避免共用一个“连续错误”概念。
+
+**保留现有硬边界**
+
+- `maxModelTurns`、`maxToolRounds` 仍限制整个 Turn 的最大工作量。
+- 进程无法启动、结果持久化不确定、派发后未知等基础设施故障仍可按现行分类立即中断或失败；需明确返回其已提交检查点，而非伪装成可重试的普通工具错误。
+
+### 阶段 B：让工具失败在原 Turn 内得到处理
+
+**执行流程调整**
+
+1. 工具执行器返回成功或失败结果。
+2. 先按现有规则提交 `tool-call-finished`，保证工具事实进入 canonical History。
+3. 结果投影、日志及指标回调不得把“策略建议/重复错误观察”异常向上冒泡成工具循环异常；关键投影若失败，仍按独立的持久化/投影故障分类处理。
+4. 将失败结果按 provider 要求回灌到当前 Turn 的模型消息中。
+5. 模型可选择补读文件、修正参数、拆分任务、停止尝试或解释需要用户处理的事项。
+
+重复调用拦截属于阶段 A 的派发前准入；阶段 B 负责保证它产生的 `tool-call-not-dispatched` 结果与普通工具失败一样能进入 canonical History 和 provider transcript。后处理回调（包括 `afterToolResult`）不得承担阻止副作用的职责，因为调用到达这些回调时执行器可能已经运行。
+
+**结果处理契约**
+
+区分三类结果：
+
+| 分类 | 示例 | Turn 行为 |
+|---|---|---|
+| 可恢复的工具失败 | 文件未读、参数错误、目标不存在、命令退出非零 | 结果交给模型，Turn 继续 |
+| 策略拒绝 | 读写越界、需要审批但未获批 | 按安全策略结果回灌或拒绝，不伪装成执行错误 |
+| 执行状态未知/关键运行时失败 | 派发后断连、History 提交失败、关键投影失败 | Turn 中断/失败；不自动重放可能已有副作用的调用 |
+
+**诊断**
+
+增加结构化字段记录 `errorClass`、`toolCallId`、`modelTurn`、`retryOf`/语义调用摘要、`dispatched`、`resultCommitted` 和终止原因。日志不记录密钥或完整敏感参数。可观察指标至少区分：同批失败数、后续模型重复调用数、模型修正后成功数、真正因轮次上限结束数。
+
+### 阶段 C：定义检查点恢复，而非“重试原问题”
+
+阶段 B 能解决常见工具错误，不需要开启新 Turn；本阶段处理模型服务中断、应用退出、可恢复宿主故障等确实无法在原进程继续的场景。
+
+**检查点内容**
+
+以已提交的 canonical History 为唯一恢复依据，恢复点至少包括：
+
+- 当前 Turn/Invocation 身份及冻结的执行配置；
+- 最后一个已提交的 `model-response-committed`；
+- 该响应对应的所有 `tool-call-finished` 或 `tool-call-not-dispatched` 结果；
+- 当前模型 transcript / context boundary 与压缩版本；
+- 尚未结算工具调用、审批和执行状态；
+- 终止/中断原因和恢复资格。
+
+检查点需要明确是“该响应的所有工具调用均已结算”还是“存在未知/未完成调用”。只有前者才能安全地继续向模型发起下一轮。
+
+**恢复语义**
+
+- 从已结算检查点恢复时，使用检查点重建 transcript，从下一次模型请求继续，不重跑此前模型轮次和工具。
+- 恢复作为显式 continuation 关联原 Turn/Invocation 与 checkpoint 序号/摘要，幂等键防止同一检查点被重复恢复。
+- 当前 History 约束禁止对已终态 Invocation 追加事件，且单个 History 流固定 `turnId`。因此不得简单在旧终态 History 后续写。设计阶段需在以下方案中选定并验证：新 continuation Invocation 引用旧检查点；或增加受控的 invocation generation/continuation 身份模型。
+- 有未完成 `tool-call-started` 的检查点不得默认为可恢复；展示“执行结果未知”，先做状态核对或要求用户决定后续操作。
+- 进程重启后默认不自动重放任何不确定副作用。只有明确证明未派发的工作才可以重新安排。
+
+**阶段 C 的实现准入门槛：先定稿 continuation 协议**
+
+阶段 C 在编码前必须通过独立设计评审，选定且只选定一种 Invocation 身份模型，并把协议写入本计划的正式决策记录或独立设计文档。不得把“新 continuation Invocation 引用旧检查点”与“增加 invocation generation”继续保留为未决二选一。评审记录至少明确：
+
+1. **身份与持久化记录：** continuation ID、原 turn/invocation ID、checkpoint 序号及摘要、状态、创建者/请求幂等键、冻结配置版本，以及这些字段在哪个持久化事务中创建和更新。
+2. **检查点完整性：** 摘要覆盖哪些 canonical History 事件、transcript/context boundary、已结算工具结果及工具调用顺序；校验失败、缺事件或摘要冲突时如何拒绝恢复。
+3. **原子幂等占用：** 如何以数据库约束或等价原子操作确保同一 checkpoint 至多有一个活跃 continuation；并发点击、客户端重试、进程崩溃后重试分别返回既有 continuation、接管可恢复占用，还是明确冲突。
+4. **Transcript 归属与重建：** 原工具结果在新 Invocation 中如何引用或复制，如何保持工具调用与结果配对、顺序和来源可审计；供应商请求 ID 是否重建，以及哪些原始模型请求内容不得重放。
+5. **配置冻结：** 模型、工具集、安全策略、工作目录、权限/审批上下文及上下文压缩版本哪些从原检查点冻结，哪些必须重新验证；续跑不得静默扩大原有权限。
+6. **状态映射：** 原 Turn 已终态、取消、审批等待/已解决、所有工具已结算、存在 `tool-call-started` 未完成、明确未派发等状态分别如何转换；未知副作用必须禁止自动重放。
+7. **生命周期与 UI 契约：** continuation 成功、失败、取消、再次中断时如何落终态；“继续上次执行”重复触发与普通“重新生成”在 API、存储和 UI 上如何区分。
+
+在该评审通过前，阶段 C 只允许补充观测、协议草案和不改变恢复行为的基础设施，不实现 continuation 写入、占用或恢复执行路径。阶段 A/B 不依赖该协议，可在各自派发与回灌契约评审通过后先行实施。
+
+**消息列表重试行为**
+
+- 将“重新生成”与“从检查点继续”区分为两种意图。
+- 对可恢复的失败 Turn，优先提供“继续上次执行”，它引用已提交检查点；普通“重新生成”仍表示从原用户消息重新回答。
+- continuation 不排除也不抹掉旧 Turn 的历史事实；旧失败 assistant 保留为诊断记录，UI 可折叠呈现其恢复状态。
+- 不可恢复 Turn 继续提供普通重试，但必须提示该操作会重新执行任务，已发生的外部副作用不会自动回滚。
+
+### 阶段 D：分批启用与移除旧策略
+
+1. 先启用阶段 A、B，确保同一批不同文件的失败不会终止 Turn，并且模型能消费失败结果继续工作。
+2. 观察指标一段时间，确认模型轮次上限仍能拦住真正循环、重复调用检测没有误伤不同目标。
+3. 再实现阶段 C 的 continuation 协议和 UI 操作；先覆盖同进程可恢复，再扩展到进程重启恢复。
+4. 删除旧的“相同自然语言错误连续 3 次即抛异常”行为及相应文档描述，保留必要的全局轮次上限和基础设施故障分类。
+
+## 5. 验收标准
+
+### 当前阶段进度（2026-10-02）
+
+- [x] 阶段 A：错误身份/类别策略、派发前阻止重复操作、普通工具失败继续回灌模型。
+- [x] 阶段 B：规范 History 与 provider transcript 的已提交失败结果保持一致；observer 回调失败不会覆盖已提交结果。
+- [x] 阶段 C 准入评审：选择新 continuation Invocation 引用不可变旧 checkpoint，详细协议见 §8。
+- [x] 阶段 C 安全基础设施：schema v30 continuation 表与目标 Turn startToken、checkpoint 校验、原子幂等创建/claim 原语和 transcript 重建验证；创建占用记录与目标 Invocation 首个 canonical History checkpoint 在同一 SQLite 事务提交。
+- [x] 阶段 C 安全快照记录：新桌面 Turn 在 prepare 时冻结工作目录 profile/hash、授权版本 hash、内置及 MCP 工具名/schema hash；快照不包含路径明文、凭据或 permit。缺少快照的旧 Turn 保持拒绝。
+- [x] 阶段 C 执行链实现：IPC 比较源 Turn 冻结安全快照与当前工作目录/授权/工具环境；按幂等键创建新 continuation Turn，使用固定身份进入统一 TurnRuntime/executor；provider 上下文从目标 Invocation canonical History 读取并校验 continuation/source Turn/checkpoint 摘要。
+- [x] 阶段 C 生命周期/UI 实现：Turn terminal 更新 continuation 终态；失败消息提供与“重试回复”分开的“继续上次执行”操作，继续时保留源失败消息，并以稳定幂等键请求恢复。
+- [x] 阶段 C continuation admission 集成验收：通过注册的 `chat:continue-from-checkpoint` handler shim 调用 admission 编排，以真实 SQLite 与 TurnRuntime 覆盖安全快照比较、固定身份 prepare、单 key 单次 dispatch；Hosted provider 集成验收另覆盖 checkpoint 工具结果进入 transcript 与真实隔离目录 `write_file` 只执行一次。另以隔离 Electron native main process、真实 preload/renderer IPC 调用生产 handler；stubbed executor 将目标 Turn 收敛为 terminal，continuation 状态 completed。
+- [x] 阶段 D 隔离目录受控会话验收：30 个不同未读文件的 `edit_file` 在同一响应中失败并全部回灌，Turn 正常完成且 30 个文件摘要保持不变；真实 `write_file` 成功后模拟 provider 断连再 continuation，工具结果被续跑模型消费且写入计数仍为 1。
+- [x] 阶段 D 结构化观测字段：每个已提交工具结果记录 `modelTurn`、语义调用摘要 SHA-256、`dispatched`、`resultCommitted`、成功状态与安全错误分类；受控验收核实 30 条失败结果均可计数，日志不含文件参数正文。
+- [x] 阶段 D 真实运行期观察：2026-10-02 在隔离 Electron staging 会话连接 DeepSeek `deepseek-flash`，观察 4 次模型请求与 9 个工具结果；三个不同目标的首轮未读 `edit_file` 均被拒绝并回灌，模型随后读取并逐一修正，最终 Turn `completed`。三个 fixture 均校验为 `[STATUS: READY]`；不同文件间未发生重复调用误拦截，轮次上限由阶段 A/B 的边界测试覆盖。
+- [x] 阶段 D 完成门槛：阶段 A/B/C 与 D 的受控及真实 staging 验收、结构化观测字段和真实模型修正观察均已完成。
+
+阶段 D 真实运行记录（2026-10-02）：测试期间发现隔离 profile 的 `config.tools.deniedTools` 仍含 `edit_file`，导致一次无效尝试改走 `write_file`；修正隔离配置并重置 disposable fixtures 后重跑。有效会话只启用 `read_file`、`edit_file`、`write_file`，真实 provider 请求轨迹为 3 次未读编辑拒绝 → 3 次读取 → 3 次成功重试；Turn 正常完成。该运行也暴露 `read_file` 的敏感路径确认没有通用确认卡、Turn 终态后消息残留 `confirming` 的 UI 缺陷，已补通用安全参数净化确认卡、终态清理和历史消息展示收敛，并通过回归测试。
+
+阶段 D 验收环境记录（2026-10-02）：早期 native Electron 探针 runner 将 `--user-data-dir` 与目录值作为两个 argv 传递，Electron 把目录误认作 app path 并显示 `Unable to find Electron app at ...`。新增参数构造回归，先 RED（helper 缺失），再改用 `--user-data-dir=<path>` 单参数后 GREEN；补齐生产 main 启动时装配的 AgentRuntime 后，native probe 成功通过真实隔离 Electron/preload/renderer IPC 到生产 continuation handler，返回 `accepted=true`、状态 `completed`。该探针使用 stubbed executor；真实 staging provider 观察结果见上方记录。
+
+### 阶段 A / B
+
+- 一次模型响应中对 30 个不同文件发起编辑，所有未读文件均返回拒绝结果；Turn 不因同批计数达到 3 而失败。
+- 模型收到读前写失败后，可以发起 `read_file` 并继续处理；若无法恢复，应生成解释，而不是直接出现泛化的 Turn 错误。
+- 连续失败的不同路径彼此不累计；同一路径相同操作在模型收到结果后再次提出才记为重复行为。
+- 重复调用保护命中后，不执行重复副作用，同时仍允许模型输出完成说明。
+- 重复调用保护在 SDK 派发前命中；测试验证执行器调用次数为零，并验证生成 `tool-call-not-dispatched`（或已定稿的等价事件）及可回灌结果。
+- 同批完全相同调用、跨模型轮次重复调用、不同目标调用分别覆盖；特别验证同批调用不因并发完成顺序触发误拦截，且后续轮次命中保护时阻止副作用。
+- 正常错误结果在 canonical History 与 provider transcript 中一致，且顺序与模型工具调用顺序稳定，不因并发完成顺序改变。
+- 用户取消和 Turn 超时仍能及时结束；安全审批和安全拒绝流程不被普通错误策略绕过。
+- History append 或关键投影失败时，不把不确定状态伪装为普通可恢复错误。
+
+### 阶段 C
+
+- 已完成工具有持久化结果时，恢复后模型收到该结果且工具执行次数不增加。
+- 已派发但无完成记录的工具不会自动重放；恢复状态清楚地标记为未知并进入人工/策略核对。
+- continuation 与原 Turn 有可追踪关联，重复点击恢复不会重复运行。
+- continuation 身份模型、持久化记录、checkpoint 摘要校验、原子幂等占用、transcript 重建、配置冻结与状态映射已有经评审的正式决策记录，且实现逐项符合该协议。
+- 上下文压缩、工具批次、审批终态、取消、超时、应用重启均有确定恢复规则。
+- 普通“重新生成”与“从检查点继续”在数据层和 UI 上语义明确，不互相冒充。
+
+## 6. 测试计划
+
+### 单元测试
+
+- 重复错误身份归一化：不同目标、不同参数、同批不同 `toolCallId` 不累计；同一语义调用跨模型轮次可识别。
+- 工具结果回灌：失败工具结果进入后续模型请求，模型可根据错误改变工具调用。
+- 重复保护：保护触发后阻止同一调用再次执行，但允许模型完成答复。
+- 错误分类：普通执行失败、安全拒绝、审批取消、基础设施错误、History 失败分别走正确终态。
+
+### 集成/回归测试
+
+- 用会话故障形状复现：在已有多个模型轮次和已提交工具结果后，让一个响应提交大量不同文件的 `edit_file` 失败；验证 Turn 保持运行并让模型处理结果。
+- 在工具批次中混合成功、普通失败和策略拒绝；验证所有结果均结算，不漏写、不重复写。
+- 在结果提交后模拟 provider 错误，验证可由 checkpoint 续跑且不重复执行已完成工具。
+- 在派发后、结果提交前模拟崩溃，验证恢复不自动重放。
+- 对取消、审批等待、History append 失败及模型轮次上限做负向回归。
+- UI 重试检查：continuation 保留旧历史并从 checkpoint 启动；普通重新生成按其定义重新构造上下文。
+
+### 会话级验收
+
+使用隔离测试目录运行与该会话相同的批量文件任务，记录模型轮次、工具调用、History 事件及文件摘要。确认错误提示不再造成整轮失败，并确认恢复操作不会重复先前已成功的写入。
+
+## 7. 风险与待决事项
+
+## 8. 阶段 C continuation 协议决策（2026-10-02）
+
+阶段 C 采用**新 continuation Invocation 引用不可变旧检查点**；不改变原 invocation 的 turnId 不变量，不在终态 History 后追加事件。该协议是本计划要求的阶段 C 编码准入评审记录，实施范围仅覆盖已结算 checkpoint 的显式恢复；进程重启场景不自动执行恢复，也不重放未知工具副作用。
+
+### 8.1 身份与持久化
+
+- 新增 continuation 记录，主键为随机 `continuation_id`；记录 `source_invocation_id`、`source_turn_id`、`checkpoint_sequence`、`checkpoint_sha256`、状态、请求幂等键、创建者、冻结配置 JSON/摘要、目标 continuation invocation ID、创建/更新时间。
+- 一个 SQLite 事务内校验源 checkpoint、插入 continuation 占用记录并创建目标 invocation 上下文。`UNIQUE(source_invocation_id, checkpoint_sequence)` 保证同一 checkpoint 至多创建一个 continuation；`UNIQUE(request_idempotency_key)` 保证客户端重试稳定返回既有记录。只能由 `pending` 原子转换为 `running`，事务提交后才允许模型请求。
+- 相同幂等键返回既有 continuation；不同幂等键竞争同 checkpoint 返回 `CONTINUATION_ALREADY_CLAIMED`。运行中进程崩溃后标记为 `interrupted/unknown`，不可自动接管执行；只有确认没有任何工具 dispatch start 才允许显式重新 claim。
+
+### 8.2 Checkpoint 完整性和可恢复状态
+
+- checkpoint 是源 invocation 的某个 `model-response-committed` 序号以及其后至下一 `model-request-started` 前的结算事件边界。摘要覆盖该前缀中的规范事件身份、序号、kind、payload、transcript compaction 输入/输出摘要、工具声明及对应的 `tool-call-finished` / `tool-call-not-dispatched` 配对和顺序。
+- 读取时重算摘要并校验 History transition、所有工具提案恰有一个完成或未派发结果、没有未解决审批。缺事件、重复/冲突身份、摘要不符均拒绝恢复，不尝试修补或执行。
+- 已存在 `tool-call-started` 而缺少最终结果的工具使 checkpoint 为 `unknown_side_effect`，禁止创建可执行 continuation。明确未派发的调用可作为原 transcript 中已有的拒绝结果继续提供给模型。
+- 取消、明确安全拒绝、审批等待/未解决审批不可由 continuation 绕过。已完成/失败 invocation 可从最终已结算的 model response 边界继续；不重跑源 invocation 中任何 provider request 或工具。
+
+### 8.3 Transcript 归属、配置与生命周期
+
+- 新 invocation 的首个 `invocation-context-committed` 记录来源 invocation、checkpoint 序号与摘要，并写入由 canonical History 重建的完整 provider transcript。已结算工具提案与结果按 toolCallId 原样配对、按原声明顺序复制；原请求 ID、供应商请求 ID、凭据、签名 header、AbortSignal 不复制或重放。
+- 模型/route、工具集快照、安全策略版本、工作目录、权限/审批上下文和 compaction 版本记录为配置快照摘要。恢复前重新验证工具仍注册、授权未扩大、工作目录和只读/写权限不变；任何策略差异要求新用户确认或拒绝续跑，不得静默扩大权限。
+- 成功、失败、取消、再次中断均只终结 continuation invocation 和 continuation 记录；源历史保持只读。UI/API 使用 `continue-from-checkpoint` 意图和原子幂等键，与普通 `regenerate` 明确区分。普通 regenerate 保持现有语义。
+- 上下文压缩以已提交的 `transcript-compacted` 输出为准；若 checkpoint 后还未提交压缩，使用它声明的完整输入 transcript。审批只允许从明确已解决且工具已结算的边界恢复。应用重启只展示可继续/未知状态，不自动恢复任何 continuation。
+
+### 8.4 阶段 C 限定
+
+本次已实现 continuation 数据记录、checkpoint 校验、同事务初始化目标 Invocation canonical History、固定身份目标 Turn、安全快照比较、provider 上下文读取、统一 TurnRuntime 投影、terminal 状态收敛及 renderer 显式续跑操作。目标 Turn startToken 持久化，允许同 key 在 prepare/claim 窗口重试时复用同一身份；源 checkpoint 必须携带匹配的 required user，显式策略拒绝与拒绝审批不可继续。应用重启接管、未知副作用核对 UI、运行中 continuation 崩溃后的自动接管继续关闭。注册 IPC handler、admission、Hosted provider、真实隔离目录工具及隔离 Electron native IPC 均有受控验收；真实 staging 模型运行期观察仍未完成。
+
+1. **供应商 transcript 对大批工具结果的限制：** 需要验证各 provider 对同轮大量失败结果的上下文和消息顺序约束；必要时先设置合理的单响应工具调用上限或分批回灌，但上限不能借错误计数器隐式实现。
+2. **文件读取安全状态的作用域（已核实）：** Hosted SDK 工具执行上下文由 `assembleInvocation` 为每次新 Invocation 创建新的 `FileStateCache`；旧工具循环的 session cache 不注入 continuation。文件写入器仍会复核磁盘内容与 read snapshot，外部变更时拒绝并失效缓存，因此 continuation 不能继承旧读证明。
+3. **失败策略的调用方差异：** 桌面、自动化、飞书和微信链路可能对最终失败消息与重试入口有不同投影；SDK 层结果语义应统一，宿主呈现可适配。
+4. **旧终态与新 continuation（已决策）：** §8 已选定新 continuation Invocation 引用只读旧 checkpoint，以独立记录和幂等键关联，不放宽终态 History 校验。
+5. **同批工具的派发边界：** 一批工具中某个结果触发真正的 Turn 取消/基础设施中断时，需要定义其余在途调用的结算和等待规则，避免“异常先到导致剩余调用状态未知”。
+
+## 8. 建议实施顺序
+
+本节为原始建议实施顺序记录；A/B 和 C 协议评审已完成，C 的选型和实现约束以 §8 的决策及上方验收状态为准。恢复仍限于已结算 checkpoint，不允许无条件重放历史工具调用。
