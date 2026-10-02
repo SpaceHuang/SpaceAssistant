@@ -25,6 +25,206 @@ function toolExecutionPort(permits: InMemorySafetyPermitStore, execute: (call: {
 }
 
 describe('runAgentTurn', () => {
+  it('派发前准入拒绝写入 not-dispatched 并回灌模型，且不触碰 executor', async () => {
+    const registry = new ModelProviderRegistry()
+    const requests: Array<readonly CanonicalModelMessage[]> = []
+    registry.register(route, { providerId: 'dispatch-admission', stream: async function* (call) {
+      requests.push(structuredClone(call.request.messages))
+      if (requests.length === 1) {
+        yield { type: 'tool-call', toolCallId: 'retry-write-1', toolName: 'edit_file', input: { path: '/tmp/a.md' } }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'tool-calls' }
+      } else {
+        yield { type: 'text-delta', text: '已停止重试并说明原因' }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'stop' }
+      }
+    } })
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('dispatch-admission', ['edit_file'])
+    const permits = new InMemorySafetyPermitStore()
+    const execute = vi.fn(async () => ({ output: 'must not execute' }))
+    const evaluate = vi.fn(async () => ({ kind: 'allow' as const, authorizationVersion: 'v1' }))
+    const prepareTool = vi.fn(async (call: { invocationId: string; toolCallId: string; toolName: string }, stage: { kind: 'initial' | 'recheck' }) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }))
+    const acquire = vi.fn(async () => ({ release: vi.fn() }))
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'dispatch-admission',
+      request: { messages: [{ role: 'user', content: 'edit safely' }], maxTokens: 20 }, history,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate } }),
+      prepareTool, resourceLocks: { acquire },
+      toolExecution: toolExecutionPort(permits, execute), maxModelTurns: 2,
+      beforeToolDispatch: () => ({ kind: 'reject', reasonCode: 'REPEATED_SEMANTIC_CALL', message: 'same edit already failed' })
+    })
+
+    expect(result.text).toBe('已停止重试并说明原因')
+    expect(execute).not.toHaveBeenCalled()
+    expect(prepareTool).not.toHaveBeenCalled()
+    expect(evaluate).not.toHaveBeenCalled()
+    expect(acquire).not.toHaveBeenCalled()
+    await expect(permits.consume('never-issued', toolBinding)).resolves.toEqual({ ok: false, reason: 'UNKNOWN' })
+    expect(requests[1]).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'retry-write-1', content: 'same edit already failed', isError: true }))
+    expect((await history.read('dispatch-admission')).events).toContainEqual(expect.objectContaining({
+      kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'retry-write-1', reason: 'REPEATED_SEMANTIC_CALL', replayContent: 'same edit already failed' })
+    }))
+    expect((await history.read('dispatch-admission')).events.some((event) => event.kind === 'tool-call-started')).toBe(false)
+  })
+
+  it('30 个同响应不同目标的普通执行失败全部提交并按提案顺序回灌', async () => {
+    const registry = new ModelProviderRegistry()
+    const nextRequests: CanonicalModelMessage[][] = []
+    registry.register(route, { providerId: 'thirty-failures', stream: async function* (call) {
+      if (call.request.messages.some((message) => message.role === 'tool')) {
+        nextRequests.push(structuredClone(call.request.messages) as CanonicalModelMessage[])
+        yield { type: 'text-delta', text: '这些文件需要先读取。' }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'stop' }
+        return
+      }
+      for (let index = 0; index < 30; index += 1) yield { type: 'tool-call', toolCallId: `edit-${index}`, toolName: 'edit_file', input: { path: `/docs/${index}.md` } }
+      yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish', reason: 'tool-calls' }
+    } })
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('thirty-failures', ['edit_file'])
+    const permits = new InMemorySafetyPermitStore()
+    const executed: string[] = []
+    const binding = { ...toolBinding, invocationId: 'thirty-failures', capabilityId: 'edit_file' }
+    const execution = toolExecutionPort(permits, async (call) => {
+      executed.push(call.toolCallId)
+      return { output: { error: '文件尚未在本会话中通过 read_file 读取' }, replayContent: 'READ_REQUIRED', isError: true }
+    })
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'thirty-failures', history,
+      request: { messages: [{ role: 'user', content: 'edit 30 files' }], maxTokens: 20 },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (current) => ({ kind: 'allow' as const, authorizationVersion: current.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => ({ ...binding, toolCallId: call.toolCallId, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: execution, maxModelTurns: 2, maxConcurrentTools: 6
+    })
+    expect(result.text).toBe('这些文件需要先读取。')
+    expect(executed).toHaveLength(30)
+    expect(nextRequests[0]?.filter((message) => message.role === 'tool').map((message) => message.toolCallId)).toEqual(Array.from({ length: 30 }, (_, index) => `edit-${index}`))
+    expect((await history.read('thirty-failures')).events.filter((event) => event.kind === 'tool-call-finished')).toHaveLength(30)
+    expect((await history.read('thirty-failures')).events.at(-1)?.kind).toBe('invocation-completed')
+  })
+
+  it('跨响应重复保护在 executor 前拦截，拒绝结果回灌后仍允许模型总结', async () => {
+    const registry = new ModelProviderRegistry()
+    const requests: Array<readonly CanonicalModelMessage[]> = []
+    registry.register(route, { providerId: 'semantic-retry-guard', stream: async function* (call) {
+      const round = requests.length + 1
+      requests.push(structuredClone(call.request.messages))
+      if (round <= 5) {
+        yield { type: 'tool-call', toolCallId: `same-${round}`, toolName: 'edit_file', input: { path: '/docs/a.md' } }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'tool-calls' }
+      } else {
+        yield { type: 'text-delta', text: '连续失败后已停止重复操作。' }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'stop' }
+      }
+    } })
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('semantic-retry-guard', ['edit_file'])
+    const permits = new InMemorySafetyPermitStore()
+    const execute = vi.fn(async () => ({ output: { error: 'read required' }, replayContent: 'READ_REQUIRED', isError: true }))
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (current) => ({ kind: 'allow' as const, authorizationVersion: current.authorizationVersion }) } })
+    const failures = new Map<string, number>()
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'semantic-retry-guard', history,
+      request: { messages: [{ role: 'user', content: 'edit the file' }], maxTokens: 20 }, safetyGate,
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, execute), maxModelTurns: 6,
+      afterToolResult: (call, toolResult, source) => {
+        if (toolResult.isError) failures.set(call.toolCallId, source?.modelTurn ?? 0)
+      },
+      beforeToolDispatch: (call) => failures.size >= 3
+        ? { kind: 'reject', reasonCode: 'REPEATED_SEMANTIC_CALL', message: 'Do not retry; explain the blocker.' }
+        : { kind: 'dispatch' }
+    })
+    expect(result.text).toBe('连续失败后已停止重复操作。')
+    expect(execute).toHaveBeenCalledTimes(3)
+    expect(requests[4]).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'same-4', content: 'Do not retry; explain the blocker.', isError: true }))
+    expect((await history.read('semantic-retry-guard')).events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ reason: 'REPEATED_SEMANTIC_CALL' }) }))
+  })
+
+  it('同一响应中完全相同的并行调用不会因完成顺序触发派发拦截', async () => {
+    const registry = new ModelProviderRegistry()
+    let requestCount = 0
+    registry.register(route, { providerId: 'same-batch-calls', stream: async function* () {
+      requestCount += 1
+      if (requestCount === 1) {
+        for (const toolCallId of ['same-a', 'same-b', 'same-c']) yield { type: 'tool-call', toolCallId, toolName: 'edit_file', input: { path: '/docs/a.md' } }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'tool-calls' }
+      } else {
+        yield { type: 'text-delta', text: '完成' }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'stop' }
+      }
+    } })
+    const permits = new InMemorySafetyPermitStore()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('same-batch-calls', ['edit_file'])
+    const execute = vi.fn(async (call: { toolCallId: string }) => {
+      await new Promise((resolve) => setTimeout(resolve, call.toolCallId === 'same-a' ? 15 : 1))
+      return { output: { error: 'same error' }, isError: true }
+    })
+    const admission = vi.fn(() => ({ kind: 'dispatch' as const }))
+    const history = new MemoryHistory()
+    await runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'same-batch-calls', history,
+      request: { messages: [{ role: 'user', content: 'edit once' }], maxTokens: 10 },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (current) => ({ kind: 'allow' as const, authorizationVersion: current.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, execute), maxModelTurns: 2, maxConcurrentTools: 3, beforeToolDispatch: admission
+    })
+    expect(execute).toHaveBeenCalledTimes(3)
+    expect(admission).toHaveBeenCalledTimes(3)
+    expect((await history.read('same-batch-calls')).events.filter((event) => event.kind === 'tool-call-finished')).toHaveLength(3)
+  })
+
+  it('普通失败已提交后 afterToolResult 观察异常只记诊断，失败结果仍回灌并完成 Turn', async () => {
+    const registry = new ModelProviderRegistry()
+    const requests: Array<readonly CanonicalModelMessage[]> = []
+    registry.register(route, { providerId: 'after-observation-failure', stream: async function* (call) {
+      requests.push(structuredClone(call.request.messages))
+      if (requests.length === 1) {
+        yield { type: 'tool-call', toolCallId: 'failing-read', toolName: 'read_file', input: { path: '/docs/a.md' } }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'tool-calls' }
+      } else {
+        yield { type: 'text-delta', text: '无法读取，已向用户说明。' }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'stop' }
+      }
+    } })
+    const history = new MemoryHistory()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('after-observation-failure', ['read_file'])
+    const permits = new InMemorySafetyPermitStore()
+    const observationError = vi.fn()
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'after-observation-failure', history,
+      request: { messages: [{ role: 'user', content: 'read it' }], maxTokens: 20 },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (current) => ({ kind: 'allow' as const, authorizationVersion: current.authorizationVersion }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, async () => ({ output: { errorCode: 'NOT_FOUND' }, replayContent: 'file not found', isError: true })),
+      maxModelTurns: 2, afterToolResult: async () => { throw new Error('strategy observer failed') },
+      observer: { onObservationError: observationError }
+    })
+    expect(result.text).toBe('无法读取，已向用户说明。')
+    expect(requests[1]).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'failing-read', content: 'file not found', isError: true }))
+    expect(observationError).toHaveBeenCalledWith(expect.objectContaining({ message: 'strategy observer failed' }), 'tool-finished')
+    expect((await history.read('after-observation-failure')).events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ toolCallId: 'failing-read', isError: true, replayContent: 'file not found' }) }))
+    const committedResult = (await history.read('after-observation-failure')).events.find((event) => event.kind === 'tool-call-finished')?.payload as { replayContent?: unknown; isError?: boolean }
+    const providerResult = requests[1]?.find((message) => message.role === 'tool')
+    expect(providerResult).toMatchObject({ content: committedResult.replayContent, isError: committedResult.isError })
+    expect((await history.read('after-observation-failure')).events.at(-1)?.kind).toBe('invocation-completed')
+  })
+
   it('在 tool-call-started 的异步 History 提交期间取消时不进入 executor', async () => {
     const registry = new ModelProviderRegistry()
     registry.register(route, { providerId: 'async-start-cancel', stream: () => stream(

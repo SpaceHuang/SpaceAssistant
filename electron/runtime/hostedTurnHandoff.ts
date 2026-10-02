@@ -28,7 +28,7 @@ function hostedFailureOutcome(terminal: Parameters<typeof decodeTerminalOutcome>
 }
 
 type HostedRuntimeFactory = Readonly<{
-  createHostedTurnRuntime(input: Readonly<{ confirmationAdapter?: unknown; authorizedToolNames: ReadonlySet<string>; /** FR3：延迟名集合（并入 capabilities known + authorized）。 */ deferredToolNames?: ReadonlySet<string>; /** FR8：延迟维度（turn 计量）。 */ deferredDimension?: import('../../src/shared/usageAttribution').DeferredToolDimension; /** FR8：延迟工具未浮现直调判定（sessionLedger 持久化投影用）。 */ deferredUnsurfacedCheck?: (toolName: string) => boolean; /** FR12②：广告面层被裁工具名。 */ eagerBudgetDroppedNames?: ReadonlySet<string>; resolveRegisteredToolName?: (providerToolName: string) => string; hostHistory?: HistoryPort; afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']; recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']; refreshExecutionContext?(call: { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }, stage: Extract<import('../../packages/agent-sdk/src/turn').ToolPreparationStage, { kind: 'recheck' }>, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>> }>): Promise<Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>> | Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>
+  createHostedTurnRuntime(input: Readonly<{ confirmationAdapter?: unknown; authorizedToolNames: ReadonlySet<string>; /** FR3：延迟名集合（并入 capabilities known + authorized）。 */ deferredToolNames?: ReadonlySet<string>; /** FR8：延迟维度（turn 计量）。 */ deferredDimension?: import('../../src/shared/usageAttribution').DeferredToolDimension; /** FR8：延迟工具未浮现直调判定（sessionLedger 持久化投影用）。 */ deferredUnsurfacedCheck?: (toolName: string) => boolean; /** FR12②：广告面层被裁工具名。 */ eagerBudgetDroppedNames?: ReadonlySet<string>; resolveRegisteredToolName?: (providerToolName: string) => string; hostHistory?: HistoryPort; afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']; beforeToolDispatch?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']; recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']; refreshExecutionContext?(call: { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }, stage: Extract<import('../../packages/agent-sdk/src/turn').ToolPreparationStage, { kind: 'recheck' }>, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>> }>): Promise<Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>> | Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>
 }>
 
 type HandoffInput = Readonly<{
@@ -46,6 +46,7 @@ type HandoffInput = Readonly<{
   windowId?: string
   hostHistory?: HistoryPort
   afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
+  beforeToolDispatch?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']
   initialResponse?: HostCommittedModelResponse
   currentUserMessageId?: string
   requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>
@@ -283,6 +284,7 @@ export function createHostedTurnHandoff(input: {
       resolveRegisteredToolName: handoff.resolveRegisteredToolName,
       hostHistory: handoff.hostHistory ?? input.hostHistory ?? historyFacade,
       ...(handoff.afterToolResult ? { afterToolResult: handoff.afterToolResult } : {}),
+      ...(handoff.beforeToolDispatch ? { beforeToolDispatch: handoff.beforeToolDispatch } : {}),
       ...(input.maxToolRounds !== undefined ? { maxToolRounds: input.maxToolRounds } : {}),
       ...(input.refreshExecutionContext ? { refreshExecutionContext: input.refreshExecutionContext } : {}),
       ...(input.recoverProviderAttempt ? { recoverProviderAttempt: input.recoverProviderAttempt } : {})

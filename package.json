@@ -44,6 +44,7 @@
     "probe:sqlite": "electron scripts/probe-node-sqlite.mjs",
     "probe:chat-ipc-transport": "electron scripts/probe-chat-ipc-transport.cjs",
     "probe:chat-business-ipc": "electron scripts/probe-chat-business-ipc.cjs",
+    "probe:agent-continuation-ipc": "npm run build:electron && node scripts/run-agent-continuation-ipc-probe.cjs",
     "probe:chat-renderer-dom": "node scripts/probe-chat-renderer-dom.cjs",
     "probe:chat-restart-recovery": "node scripts/probe-chat-restart-recovery.cjs",
     "probe:chat-orphan-cleanup": "node scripts/probe-chat-orphan-cleanup.cjs",

@@ -146,6 +146,17 @@ describe('ChatBubble streaming render', () => {
     expect(actions.retryAssistant).toHaveBeenCalledWith('a1')
   })
 
+  it('failed assistant exposes a distinct checkpoint continuation action', () => {
+    const actions = {
+      archiveToWiki: vi.fn(), retryAssistant: vi.fn(), continueAssistant: vi.fn(), cancelQueued: vi.fn(),
+      confirmTool: vi.fn(), cancelTool: vi.fn()
+    }
+    render(<ChatBubble message={assistantMessage({ status: 'failed' })} actions={actions} showRetry />)
+    fireEvent.click(screen.getByRole('button', { name: '继续上次执行' }))
+    expect(actions.continueAssistant).toHaveBeenCalledWith('a1')
+    expect(actions.retryAssistant).not.toHaveBeenCalled()
+  })
+
   it('失败气泡在拿到失败原因时展示真实原因，而不是只留通用提示', () => {
     render(
       <ChatBubble

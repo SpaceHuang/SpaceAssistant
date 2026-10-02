@@ -55,7 +55,9 @@ export function normalizeTurnExecutionConfig(config: TurnExecutionConfig): TurnE
     ...(config.enableThinking !== undefined ? { enableThinking: config.enableThinking } : {}),
     ...(config.locale?.trim() ? { locale: config.locale.trim() } : {}),
     ...(config.projectMemoryEnabled !== undefined ? { projectMemoryEnabled: config.projectMemoryEnabled } : {}),
-    ...(config.effectiveModelForUsage?.trim() ? { effectiveModelForUsage: config.effectiveModelForUsage.trim() } : {})
+    ...(config.effectiveModelForUsage?.trim() ? { effectiveModelForUsage: config.effectiveModelForUsage.trim() } : {}),
+    ...(config.continuationSafetySnapshot ? { continuationSafetySnapshot: { ...config.continuationSafetySnapshot } } : {}),
+    ...(config.continuationSource ? { continuationSource: { ...config.continuationSource } } : {})
   }
 }
 
@@ -73,9 +75,11 @@ export class TurnCoordinator {
   private readonly finishing = new Map<string, { outcome: 'cancelled' | 'timed-out'; timer: ReturnType<typeof setTimeout> }>()
   constructor(private readonly storage: TurnStorage, private readonly deps: CoordinatorDeps, private readonly checkpoint: Checkpoint = (turnId, version, message) => this.storage.checkpoint(turnId, version, message), private readonly cancelHook: CancelHook = () => {}) {}
 
-  prepare(intent: TurnIntent, initialState = 'prepared'): TurnStarted {
+  prepare(intent: TurnIntent, initialState = 'prepared', fixedIdentity?: { turnId: string; startToken: string }): TurnStarted {
+    if (fixedIdentity && intent.mode !== 'reuse-user') throw new Error('TURN_FIXED_IDENTITY_REQUIRES_REUSE_USER')
     const existing = this.storage.findByRequestId(intent.sessionId, intent.requestId) ?? [...this.turns.values()].find((turn) => turn.sessionId === intent.sessionId && turn.requestId === intent.requestId)
     if (existing) {
+      if (fixedIdentity && (existing.turnId !== fixedIdentity.turnId || existing.startToken !== fixedIdentity.startToken)) throw new Error('TURN_CONTINUATION_IDENTITY_MISMATCH')
       const fingerprint = this.intentFingerprint(intent)
       const matches = existing.executionConfig
         ? existing.intentFingerprint === fingerprint
@@ -94,6 +98,7 @@ export class TurnCoordinator {
       if (!userMessage || userMessage.sessionId !== intent.sessionId) throw new Error('TURN_REUSE_SESSION_MISMATCH')
       if (userMessage.role !== 'user' || (userMessage.status !== 'sent' && userMessage.status !== 'queued')) throw new Error('TURN_REUSE_TARGET_NOT_USER')
       if (userMessage.status === 'queued') {
+        if (fixedIdentity) throw new Error('CONTINUATION_USER_NOT_SENT')
         const turnId = this.deps.id()
         const assistantId = this.deps.id()
         const startToken = this.deps.id()
@@ -126,11 +131,38 @@ export class TurnCoordinator {
     }
     const assistant = this.storage.append({ id: this.deps.id(), sessionId: intent.sessionId, role: 'assistant', content: '', timestamp: this.deps.now(), status: 'streaming' })
     const started = this.makeStarted(intent, userMessage, assistant.message, {
+      ...(fixedIdentity ? { turnId: fixedIdentity.turnId, startToken: fixedIdentity.startToken } : {}),
       contextBoundarySequence: assistant.sequence - 1,
       state: initialState
     })
     this.turns.set(started.turnId, started)
     return started
+  }
+
+  /** Prepare a distinct assistant Turn bound to a committed continuation Invocation identity. */
+  prepareContinuation(input: {
+    requestId: string
+    sessionId: string
+    userMessageId: string
+    turnId: string
+    startToken: string
+    config: TurnExecutionConfig
+  }): TurnStarted {
+    const source = input.config.continuationSource
+    if (!source || !source.continuationId.trim() || !source.invocationId.trim() || !source.sourceTurnId.trim() ||
+      !Number.isSafeInteger(source.checkpointSequence) || source.checkpointSequence < 1 || !/^[a-f0-9]{64}$/.test(source.checkpointSha256)) {
+      throw new Error('CONTINUATION_SOURCE_REQUIRED')
+    }
+    if (!input.requestId.trim() || !input.sessionId.trim() || !input.turnId.trim() || !input.startToken.trim()) {
+      throw new Error('CONTINUATION_IDENTITY_REQUIRED')
+    }
+    const user = this.storage.getMessage(input.userMessageId)
+    if (!user || user.sessionId !== input.sessionId) throw new Error('TURN_REUSE_SESSION_MISMATCH')
+    if (user.role !== 'user' || user.status !== 'sent') throw new Error('CONTINUATION_USER_NOT_SENT')
+    return this.prepare({
+      mode: 'reuse-user', requestId: input.requestId, sessionId: input.sessionId,
+      userMessageId: input.userMessageId, excludeMessageIds: [], config: input.config
+    }, 'prepared', { turnId: input.turnId, startToken: input.startToken })
   }
 
   private validateExclusions(intent: TurnIntent): void {

@@ -47,6 +47,9 @@ import { createAcceptedTurn } from '../src/shared/acceptedTurn'
 import { acceptTurnContext } from './database/acceptedTurnStorage'
 import { readSessionTranscript } from './database/sessionTranscript'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from './runtime/hostedTurnFinalization'
+import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
+import { rebuildClaudeMessagesFromHistory } from './runtime/canonicalHistory'
+import { assertContinuationExecutionConfigUnchanged, fingerprintContinuationExecutionConfig } from './runtime/continuationSafetySnapshot'
 
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
@@ -83,7 +86,7 @@ type ClaudeChatMessageWithContentBlocks = {
   timestamp?: number
 }
 
-export function loadAuthoritativeTurnContext(db: AppDatabase, turnId: string, sessionId: string, requestId: string, startToken: string): { messages: Message[]; currentUserMessageId: string; assistantMessageId?: string; executionConfig?: TurnExecutionConfig } {
+export function loadAuthoritativeTurnContext(db: AppDatabase, turnId: string, sessionId: string, requestId: string, startToken: string): { messages: Message[]; currentUserMessageId: string; assistantMessageId?: string; executionConfig?: TurnExecutionConfig; continuationTranscript?: ClaudeChatMessageWithContentBlocks[] } {
   const persisted = getPersistedTurn(db, turnId)
   if (!persisted || persisted.sessionId !== sessionId || persisted.requestId !== requestId || persisted.startToken !== startToken) {
     throw new Error('TURN_EXECUTION_CREDENTIALS_INVALID')
@@ -91,7 +94,38 @@ export function loadAuthoritativeTurnContext(db: AppDatabase, turnId: string, se
   if (persisted.state === 'configuring') throw new Error('TURN_EXECUTION_CONFIGURING')
   if (!persisted.userMessageId) throw new Error('TURN_USER_MESSAGE_MISSING')
   const messages = loadAcceptedTurnMessages(db, persisted)
-  return { messages, currentUserMessageId: persisted.userMessageId, ...(persisted.assistantMessageId ? { assistantMessageId: persisted.assistantMessageId } : {}), ...(persisted.executionConfig ? { executionConfig: persisted.executionConfig } : {}) }
+  let continuationTranscript: ClaudeChatMessageWithContentBlocks[] | undefined
+  const continuationSource = persisted.executionConfig?.continuationSource
+  if (continuationSource) {
+    const history = new SqliteAgentHistory(getDbConnection(db)).readSync(requestId)
+    const contextMarkers = history.events.filter((event) => event.kind === 'invocation-context-committed')
+    const marker = contextMarkers[0]
+    const payload = marker?.payload && typeof marker.payload === 'object' ? marker.payload as Record<string, unknown> : undefined
+    const source = payload?.continuationSource && typeof payload.continuationSource === 'object'
+      ? payload.continuationSource as Record<string, unknown> : undefined
+    if (contextMarkers.length !== 1 || marker?.sequence !== 1 || marker.turnId !== turnId ||
+      source?.continuationId !== continuationSource.continuationId ||
+      source?.invocationId !== continuationSource.invocationId ||
+      source?.turnId !== continuationSource.sourceTurnId ||
+      source?.checkpointSequence !== continuationSource.checkpointSequence ||
+      source?.checkpointSha256 !== continuationSource.checkpointSha256) {
+      throw new Error('TURN_CONTINUATION_HISTORY_MISMATCH')
+    }
+    const requiredUser = payload?.requiredUserMessage && typeof payload.requiredUserMessage === 'object'
+      ? payload.requiredUserMessage as { id?: unknown; message?: unknown } : undefined
+    if (requiredUser?.id !== persisted.userMessageId || !requiredUser.message || typeof requiredUser.message !== 'object') {
+      throw new Error('TURN_CONTINUATION_REQUIRED_USER_MISSING')
+    }
+    continuationTranscript = rebuildClaudeMessagesFromHistory(history.events)
+    const requiredCanonical = JSON.stringify(requiredUser.message)
+    const requiredUserIndex = continuationTranscript.findIndex((message) => {
+      if (message.role !== 'user') return false
+      return JSON.stringify(toCanonicalModelMessages([message])[0]) === requiredCanonical
+    })
+    if (requiredUserIndex < 0) throw new Error('TURN_CONTINUATION_REQUIRED_USER_MISSING')
+    continuationTranscript[requiredUserIndex] = { ...continuationTranscript[requiredUserIndex]!, id: persisted.userMessageId }
+  }
+  return { messages, currentUserMessageId: persisted.userMessageId, ...(persisted.assistantMessageId ? { assistantMessageId: persisted.assistantMessageId } : {}), ...(persisted.executionConfig ? { executionConfig: persisted.executionConfig } : {}), ...(continuationTranscript ? { continuationTranscript } : {}) }
 }
 
 export type ClaudeChatCreateWithToolsPayload = {
@@ -372,13 +406,21 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         const userDataDir = deps.getUserDataPath()
         let builtMessages: ClaudeChatMessageWithContentBlocks[]
         const compactionReplay = eventWriter ? await readCompactionReplay(eventWriter.eventsPath) : { committed: [], rejected: [] }
-        const contextWindowId = currentCompactionWindowId(compactionReplay, sessionId)
+        const contextWindowId = authoritative.executionConfig?.continuationSource
+          ? `continuation:${authoritative.executionConfig.continuationSource.continuationId}`
+          : currentCompactionWindowId(compactionReplay, sessionId)
         const contextEventLedger = eventWriter
           ? (await readSessionEvents(eventWriter.eventsPath)).map((event) => ({ seq: event.seq, type: event.type, payload: event.payload }))
           : []
         const contextMeter = new ContextMeter(() => contextEventLedger)
         const replayFingerprint = (surface: readonly unknown[]) => computeReplaySurfaceFingerprint(frozen.system ?? '', surface)
-        const historyFacts = authoritative.messages.map((message) => {
+        const historyFacts = authoritative.continuationTranscript
+          ? authoritative.continuationTranscript.map((message, index) => {
+            const text = typeof message.content === 'string' ? message.content : JSON.stringify(message.content) ?? ''
+            const id = message.id ?? `continuation-history-${index}`
+            return { id, sessionId, windowId: contextWindowId, role: message.role, text, tokens: estimateTokensFromUtf8Text(text), details: {} }
+          })
+          : authoritative.messages.map((message) => {
           const rawContent = message.content ?? ''
           const details = { toolCalls: message.toolCalls, toolUse: message.toolUse, attachments: message.attachments }
           const serializedDetails = JSON.stringify(details)
@@ -386,8 +428,10 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           const detailText = message.toolCalls?.length || message.toolUse || message.attachments?.length ? `\n[结构化详情] ${boundedDetails}` : ''
           const text = `${typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent) ?? ''}${detailText}`
           return { id: message.id, sessionId, windowId: contextWindowId, role: message.role === 'assistant' ? 'assistant' as const : 'user' as const, text, tokens: estimateTokensFromUtf8Text(text), details }
-        })
-        builtMessages = await buildToolChatMessagesFromSource({
+          })
+        builtMessages = authoritative.continuationTranscript
+          ? structuredClone(authoritative.continuationTranscript)
+          : await buildToolChatMessagesFromSource({
           userDataDir,
           workDir: deps.getWorkDir(),
           sourceMessages: authoritative.messages,
@@ -409,7 +453,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           ...message,
           id: message.id ?? projectedIdentities[index]!
         }))
-        const replayedMessages = applyCommittedSurfaceShadow(
+        const replayedMessages = authoritative.continuationTranscript ? replaySurface : applyCommittedSurfaceShadow(
           replaySurface,
           compactionReplay,
           [authoritative.currentUserMessageId],
@@ -588,7 +632,17 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           }
         })
         const hostedHandoffOptions = {
-          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: turnId, turnId, acceptedTurn, sessionDb: db, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, refreshExecutionContext: (_call, stage, current) => ({ ...current, toolsConfig: deps.getToolsConfig(), shellConfig: deps.getShellConfig(), toolUserConfirmed: Boolean(stage.confirmation) }) })
+          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: turnId, turnId, acceptedTurn, sessionDb: db, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, refreshExecutionContext: (_call, stage, current) => {
+            const toolsConfig = deps.getToolsConfig()
+            const browserConfig = deps.getBrowserConfig()
+            const shellConfig = deps.getShellConfig()
+            if (frozen.continuationSource) {
+              const expected = frozen.continuationSafetySnapshot?.executionConfigSha256
+              const actual = fingerprintContinuationExecutionConfig({ toolsConfig, browserConfig, shellConfig, mcpBackends: listProfiles(db) })
+              assertContinuationExecutionConfigUnchanged(expected, actual)
+            }
+            return { ...current, toolsConfig, shellConfig, toolUserConfirmed: Boolean(stage.confirmation) }
+          } })
         }
         const res = await runToolChatSession(turnInvocation, turnPorts, hostedHandoffOptions)
 

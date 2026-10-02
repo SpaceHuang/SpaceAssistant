@@ -102,6 +102,18 @@ import { createHostedTurnHandoff } from './runtime/hostedTurnHandoff'
 import { defineDirectTool, TypedToolRegistry } from './tools/plannedToolRegistry'
 import { HostedTurnFinalizedError } from './runtime/hostedTurnFinalization'
 import { throwIfChatCancelled, ChatCancelledError } from './chatCancelRegistry'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
+import { createBuiltinToolRegistry } from './tools/builtinExecutors'
+import { editFileExecutor, writeFileExecutor } from './tools/builtinExecutors'
+import { createWriteFileRegisteredTools } from './tools/writeFileRegisteredTools'
+import { getDbConnection } from './database'
+import { createSession, appendMessage } from './database'
+import { createOrGetAgentContinuation } from './runtime/agentContinuation'
+import { createTurnCoordinatorStorage } from './turnCoordinatorStorage'
+import { TurnRuntime } from './turnRuntime'
 
 function makeDb(): AppDatabase {
   return createMemoryAppDb('zh-CN')
@@ -242,6 +254,146 @@ describe('assembleInvocation 键位平移（P1 契约形状）', () => {
 })
 
 describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
+  it('隔离目录批量验收：30 个不同未读文件编辑全部回灌，Turn 继续结束且零文件副作用', async () => {
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'sa-tool-recovery-batch-')))
+    try {
+      const paths = Array.from({ length: 30 }, (_, index) => `unread-${index}.txt`)
+      await Promise.all(paths.map((name) => fs.writeFile(path.join(dir, name), `original-${name}`, 'utf8')))
+      const providerRouteId = 'desktop-anthropic:tool-recovery-batch'
+      const runtime = getDefaultAgentRuntime()
+      const providerCalls: Array<{ request: { messages: Array<{ role: string; content?: unknown }> } }> = []
+      runtime.modelProviders.register({ routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId: 'tool-recovery-batch' }, {
+        providerId: 'isolated-tool-recovery-batch',
+        async *stream(call) {
+          providerCalls.push(call as typeof providerCalls[number])
+          if (providerCalls.length === 1) {
+            for (const [index, name] of paths.entries()) {
+              yield { type: 'tool-call', toolCallId: `unread-edit-${index}`, toolName: 'edit_file', input: { path: name, old_string: `original-${name}`, new_string: `changed-${name}` } }
+            }
+            yield { type: 'usage', inputTokens: 10, outputTokens: 20 }
+            yield { type: 'finish', reason: 'tool-calls' }
+            return
+          }
+          const results = call.request.messages.filter((message) => message.role === 'tool')
+          expect(results).toHaveLength(30)
+          expect(JSON.stringify(results)).toContain('尚未')
+          yield { type: 'text-delta', text: '30 个文件尚未读取；没有修改文件。' }
+          yield { type: 'usage', inputTokens: 20, outputTokens: 12 }
+          yield { type: 'finish', reason: 'stop' }
+        }
+      })
+      const assembled = assembleInvocation(baseMaterials({ requestId: 'batch-request', turnId: 'batch-turn', sessionId: 'batch-session', workDir: dir, providerRouteId, messages: [{ role: 'user', content: 'Edit all 30 files' }] as never }))
+      assembled.ports.toolRevocations = undefined
+      const registry = new TypedToolRegistry()
+      for (const registered of createWriteFileRegisteredTools({ writeFile: writeFileExecutor, editFile: editFileExecutor })) registry.register(registered)
+      const agentSdk = { ...assembled.agentSdk, createHostedTurnRuntime: (input: Parameters<typeof assembled.agentSdk.createHostedTurnRuntime>[0]) => assembled.agentSdk.createHostedTurnRuntime({ ...input, registry }) }
+      const handoff = createHostedTurnHandoff({ agentSdk: agentSdk as never, history: assembled.ports.history!, invocationId: 'batch-turn', turnId: 'batch-turn', routeId: providerRouteId })
+
+      await expect(runToolChatSession(assembled.invocation, assembled.ports, { onHostedTurnHandoff: handoff })).resolves.toMatchObject({ ok: true })
+
+      expect(providerCalls).toHaveLength(2)
+      expect(await Promise.all(paths.map((name) => fs.readFile(path.join(dir, name), 'utf8')))).toEqual(paths.map((name) => `original-${name}`))
+      const sourceHistory = await assembled.ports.history!.read('batch-turn')
+      expect(sourceHistory.events.filter((event) => event.kind === 'tool-call-finished' && (event.payload as { isError?: boolean }).isError)).toHaveLength(30)
+      expect(sourceHistory.events.some((event) => event.kind === 'invocation-completed')).toBe(true)
+      const outcomeMetrics = vi.mocked(logAgentEvent).mock.calls.filter(([, eventName]) => eventName === 'tool.result')
+      expect(outcomeMetrics).toHaveLength(30)
+      expect(outcomeMetrics.every(([, , fields]) => fields.success === false && fields.dispatched === true && fields.resultCommitted === true && fields.modelTurn === 1 && typeof fields.errorClass === 'string' && /^[a-f0-9]{64}$/.test(String(fields.semanticCallSha256)))).toBe(true)
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('从已结算 checkpoint 续跑时携带真实工具结果，且隔离目录中的写入不重放', async () => {
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'sa-continuation-e2e-')))
+    try {
+      const filePath = path.join(dir, 'result.txt')
+      const initial = assembleInvocation(baseMaterials({ workDir: dir, requestId: 'source-invocation', turnId: 'source-turn', sessionId: 'continuation-session', providerRouteId: 'desktop-anthropic:continuation-e2e', currentUserMessageId: 'source-user', messages: [{ role: 'user', id: 'source-user', content: 'write a file' }] as never }))
+      const history = new MemoryHistory()
+      initial.ports.history = history
+      const providerRouteId = 'desktop-anthropic:continuation-e2e'
+      const runtime = getDefaultAgentRuntime()
+      const sourceRegistry = new TypedToolRegistry()
+      let writeExecutions = 0
+      for (const registered of createWriteFileRegisteredTools({ writeFile: {
+        ...writeFileExecutor,
+        execute: async (input, context) => {
+          writeExecutions += 1
+          const result = await writeFileExecutor.execute(input, context)
+          if (result.success) result.data = 'written exactly once'
+          return result
+        }
+      }, editFile: editFileExecutor })) sourceRegistry.register(registered)
+      let sourceProviderTurns = 0
+      runtime.modelProviders.register({ routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId: 'continuation-e2e' }, {
+        providerId: 'continuation-source-provider',
+        async *stream() {
+          sourceProviderTurns += 1
+          if (sourceProviderTurns === 1) {
+            yield { type: 'tool-call', toolCallId: 'write-once', toolName: 'write_file', input: { path: filePath, content: 'persisted result' } }
+            yield { type: 'usage', inputTokens: 2, outputTokens: 1 }
+            yield { type: 'finish', reason: 'tool-calls' }
+          } else {
+            throw new Error('simulated provider disconnect after committed tool result')
+          }
+        }
+      })
+      const sourceSdk = { ...initial.agentSdk, createHostedTurnRuntime: (input: Parameters<typeof initial.agentSdk.createHostedTurnRuntime>[0]) => initial.agentSdk.createHostedTurnRuntime({ ...input, registry: sourceRegistry }) }
+      const sourceHandoff = createHostedTurnHandoff({ agentSdk: sourceSdk as never, history, invocationId: 'source-turn', turnId: 'source-turn', routeId: providerRouteId, sessionId: 'continuation-session' })
+      await expect(runToolChatSession(initial.invocation, initial.ports, { onHostedTurnHandoff: sourceHandoff })).rejects.toThrow('simulated provider disconnect')
+      expect(writeExecutions).toBe(1)
+      expect(await fs.readFile(filePath, 'utf8')).toBe('persisted result')
+
+      const source = await history.read('source-turn')
+      const appDb = createMemoryAppDb()
+      const session = createSession(appDb, { id: 'continuation-session', name: 'continuation-e2e' })
+      const user = appendMessage(appDb, { id: 'source-user', sessionId: session.id, role: 'user', content: 'write a file', timestamp: 1, status: 'sent' })
+      const continuation = createOrGetAgentContinuation({ conn: getDbConnection(appDb), snapshot: source, sessionId: session.id, requestIdempotencyKey: 'continue-e2e', createdBy: session.id, frozenConfig: { model: 'continuation-e2e' }, newId: (() => { let id = 0; return () => `e2e-${++id}` })() })
+      const targetHistory = new SqliteAgentHistory(getDbConnection(appDb), 1, Date.now, session.id)
+      const transcript = (await targetHistory.read(continuation.targetInvocationId)).events
+      expect(transcript.some((event) => JSON.stringify(event.payload).includes('written exactly once'))).toBe(true)
+
+      let continuationProviderTurns = 0
+      runtime.modelProviders.register({ routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId: 'continuation-e2e' }, {
+        providerId: 'continuation-resume-provider',
+        async *stream(call) {
+          continuationProviderTurns += 1
+          if (continuationProviderTurns === 1) {
+            expect(call.request.messages).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'write-once', content: 'written exactly once' }))
+            yield { type: 'text-delta', text: 'continued from committed result' }
+            yield { type: 'usage', inputTokens: 2, outputTokens: 1 }
+            yield { type: 'finish', reason: 'stop' }
+          }
+        }
+      })
+      const targetMaterials = baseMaterials({
+        workDir: dir, requestId: continuation.targetInvocationId, turnId: continuation.targetTurnId,
+        providerRouteId,
+        sessionId: session.id, messages: continuation.transcript as never,
+        currentUserMessageId: user.message.id, appDb
+      })
+      const target = assembleInvocation(targetMaterials)
+      target.ports.history = targetHistory
+      const turnRuntime = new TurnRuntime({ storage: createTurnCoordinatorStorage(appDb), deps: { now: () => 2, id: (() => { let id = 0; return () => `target-${++id}` })() } })
+      const prepared = turnRuntime.prepareContinuation({ turnId: continuation.targetTurnId, startToken: continuation.targetStartToken, requestId: continuation.targetInvocationId, sessionId: session.id, userMessageId: user.message.id, config: { lane: 'desktop', continuationSource: { continuationId: continuation.continuationId, invocationId: continuation.sourceInvocationId, sourceTurnId: continuation.sourceTurnId, checkpointSequence: continuation.checkpointSequence, checkpointSha256: continuation.checkpointSha256 } } })
+      expect(prepared).toMatchObject({ turnId: continuation.targetTurnId, requestId: continuation.targetInvocationId, startToken: continuation.targetStartToken })
+      const targetSdk = { ...target.agentSdk, createHostedTurnRuntime: (input: Parameters<typeof target.agentSdk.createHostedTurnRuntime>[0]) => target.agentSdk.createHostedTurnRuntime({ ...input, registry: createBuiltinToolRegistry() }) }
+      const handoffHistory = {
+        appendBatch: targetHistory.appendBatch.bind(targetHistory),
+        read: targetHistory.read.bind(targetHistory)
+      }
+      const targetHandoff = createHostedTurnHandoff({ agentSdk: targetSdk as never, history: handoffHistory, invocationId: continuation.targetTurnId, turnId: continuation.targetTurnId, routeId: providerRouteId, sessionId: session.id })
+
+      await expect(runToolChatSession(target.invocation, target.ports, { onHostedTurnHandoff: targetHandoff })).resolves.toMatchObject({ ok: true })
+      expect(continuationProviderTurns).toBe(1)
+      expect(writeExecutions).toBe(1)
+      expect(await fs.readFile(filePath, 'utf8')).toBe('persisted result')
+      appDb.close()
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('feeds SDK provider tool calls into the existing guarded tool scheduler and sends their result on the next turn', async () => {
     const providerRouteId = 'desktop-anthropic:test-tool-route'
     const runtime = getDefaultAgentRuntime()

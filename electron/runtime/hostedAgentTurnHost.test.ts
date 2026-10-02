@@ -149,6 +149,15 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
     expect(ports.recoverProviderAttempt).toBe(deps.recoverProviderAttempt)
   })
 
+  it('passes pure before-dispatch admission into SDK ports before tool preparation', async () => {
+    const deps = baseDependencies()
+    const beforeToolDispatch = vi.fn(() => ({ kind: 'reject' as const, reasonCode: 'REPEATED_SEMANTIC_CALL', message: 'do not dispatch' }))
+    const ports = await createHostedAgentTurnHost({ ...deps, beforeToolDispatch }).createPorts({
+      invocationId: deps.invocationId, routeId: route.routeId, request: { messages: [], maxTokens: 10 }
+    })
+    expect(ports.beforeToolDispatch).toBe(beforeToolDispatch)
+  })
+
   it('rejects identity drift between invocation, turn, or provider route before creating SDK ports', async () => {
     const deps = baseDependencies()
     const host = createHostedAgentTurnHost(deps)

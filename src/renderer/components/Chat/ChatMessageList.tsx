@@ -9,6 +9,7 @@ import { restorePendingConfirmToolCalls } from '../../services/resolveMessageToo
 import { useTurnDisplay } from '../../hooks/useTurnDisplay'
 import { buildAssistantActivityTimeline } from '../../../shared/assistantActivityTimeline'
 import type { ActivityDisplayItem } from '../../../shared/turnDisplayProtocol'
+import { settleTerminalToolCallsForDisplay } from '../../services/terminalToolCallDisplay'
 
 /** 空确认映射常量：保证无确认项时行内 props 引用稳定（ChatBubble.memo 浅比较依赖）。 */
 const EMPTY_CONFIRM_READY: Record<string, boolean | undefined> = {}
@@ -65,7 +66,7 @@ export function ChatMessageList({
   const activeTarget = useChatSearchActiveTarget()
   const activeDisplay = useTurnDisplay(turnId)
   const restoredMessages = useMemo(
-    () => restorePendingConfirmToolCalls(messages, pendingConfirmItems),
+    () => restorePendingConfirmToolCalls(messages, pendingConfirmItems).map(settleTerminalToolCallsForDisplay),
     [messages, pendingConfirmItems]
   )
 

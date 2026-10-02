@@ -104,11 +104,11 @@
 - [x] 运行 `npm run build:renderer`，类型检查通过。
 - [x] 行为变更排查 A（read_file 改必填）：`grep -rn "readFileExecutor.execute\|execute.*read_file" electron/ src/` 确认无内部调用方在无 path 下调用；检查 `builtinExecutors.*.test.ts`、`readFileRange.test.ts` 是否有 `{}` 入参的 read_file 调用，按需补 path。
 - [x] 行为变更排查 B（空串/纯空白路径）：`grep -rn "path: ''\|path: '   '" electron/ src/` 确认无内部夹具依赖「空串 = workDir」或「空白路径报错」的旧语义。
-- [x] 端到端回归：用 `deepseek-v4-pro` 复现「read_file 传 `filePath`」场景，确认 ① 正常读到文件（不再返回 `路径是目录而非文件: 。…`）② 不再触发「同一工具错误已连续出现 3 次」中止 ③ 用户不再看到「回复未能完成」。
-- [x] 查 `.agent/logs/Agent-{YYYYmmdd}.log`：`tool.error` 中 `路径是目录而非文件` 条目消失，`llm.error` 中 `同一工具错误已连续出现` 条目消失。
+- [x] 端到端回归：用 `deepseek-v4-pro` 复现「read_file 传 `filePath`」场景，确认 ① 正常读到文件（不再返回 `路径是目录而非文件: 。…`）② 不再触发旧的全局连续自然语言错误中止（该策略已由工具错误恢复计划阶段 A 取代）③ 用户不再看到「回复未能完成」。
+- [x] 查 `.agent/logs/Agent-{YYYYmmdd}.log`：`tool.error` 中 `路径是目录而非文件` 条目消失；旧 `llm.error` 全局连续错误中止条目已不适用。
 - [ ] PR 说明中点明两项行为变更：read_file 的 path 由可选改必填；空串/纯空白路径在 list_directory/grep 下走默认值而非报错。
 
-> 范围限定（A4）：上述「不再中止」仅针对**别名误用**场景。若模型**完全不用**任何 path 类字段，guard 缺参错误仍会走 `noteFailure` 连续 3 次 abort，该场景属修复项 3，不在本计划范围，验收时勿误判为回归。
+> 范围限定（A4）：上述路径验收针对**别名误用**场景。旧实现会按相同 `(toolName, userMsg)` 连续 3 次直接中止；该行为现已移除。普通工具错误回交模型，Turn 上限仍由模型/工具调用轮数限制。
 
 ---
 

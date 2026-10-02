@@ -2,6 +2,7 @@ import type { ToolCallRecord } from '../../../shared/domainTypes'
 import type { ToolConfirmHandler } from '../../../shared/toolConfirm'
 import { ConfirmCardDecision } from './ConfirmCardDecision'
 import { formatToolLabel } from './toolCallDisplay'
+import { sanitizeCapabilityParamsForDisplay } from '../../../shared/capabilityParamSanitize'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 
 type Props = {
@@ -21,7 +22,8 @@ export function GenericConfirmCard({ record, onConfirm }: Props) {
   const actionSummary = formatToolLabel(record.toolName, record.input, t, record.mcp)
   let paramsPreview = ''
   try {
-    paramsPreview = JSON.stringify(record.input, null, 2)
+    // 参数脱敏（吸收远端 93d133a5 的 sanitize 增强）：凭据类入参只出存在性布尔
+    paramsPreview = JSON.stringify(sanitizeCapabilityParamsForDisplay(record.input), null, 2)
     if (paramsPreview.length > PARAMS_PREVIEW_MAX) paramsPreview = paramsPreview.slice(0, PARAMS_PREVIEW_MAX) + '\n…'
   } catch {
     paramsPreview = ''

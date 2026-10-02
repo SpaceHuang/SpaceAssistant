@@ -122,6 +122,23 @@ describe('pendingConfirmStore', () => {
     expect(pendingConfirmStore.getItems()).toEqual([])
   })
 
+  it('收到 turn 终态投影时清除未完成的人工确认项', () => {
+    seedConfirm({ requestId: 'terminal-request', sessionId: 'terminal-session', toolUseId: 'terminal-tool', toolName: 'read_file', input: { path: 'a.md' }, riskLevel: 'low', turnId: 'terminal-turn' })
+    expect(pendingConfirmStore.getItems()).toHaveLength(1)
+
+    pendingConfirmStore.syncFromProjection({
+      sessionId: 'terminal-session', requestId: 'terminal-request', turnId: 'terminal-turn', turnVersion: 2, terminal: true,
+      message: {
+        id: 'assistant-terminal', sessionId: 'terminal-session', role: 'assistant', content: '', timestamp: 1,
+        status: 'cancelled', schemaVersion: 1,
+        toolCalls: [{ id: 'terminal-tool', toolName: 'read_file', input: { path: 'a.md' }, riskLevel: 'low', status: 'confirming' }]
+      }
+    })
+
+    expect(pendingConfirmStore.getItems()).toEqual([])
+    expect(window.api.chatGetPendingConfirmation).toBeUndefined()
+  })
+
   it('respond sends ipc and removes item', () => {
     registerRunRequest('sess-a', 'req-1')
     seedConfirm({

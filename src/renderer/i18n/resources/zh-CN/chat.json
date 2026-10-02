@@ -32,6 +32,7 @@
     "keyAccessFailedMessage": "模型服务凭据暂时无法读取。请先到设置验证 Key，再重试这条消息。",
     "failureReason": "失败原因",
     "retry": "重试回复",
+    "continueFromCheckpoint": "继续上次执行",
     "openModelSettings": "打开模型服务设置"
   },
   "scrollToLatest": {
@@ -262,7 +263,8 @@
       "cancelQueueFailed": "无法取消该排队消息，请刷新后重试",
       "maxParallel": "最多同时执行 {{max}} 个会话，请稍后再试",
       "apiKeyMissing": "请先在设置中配置 API Key",
-      "retryNoUserMessage": "找不到可重试的上一条用户消息"
+      "retryNoUserMessage": "找不到可重试的上一条用户消息",
+      "continuationUnavailable": "此失败没有可安全继续的检查点，请重试生成或检查失败原因"
     },
     "empty": {
       "noSessionTitle": "选择或创建一个会话",

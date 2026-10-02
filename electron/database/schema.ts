@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 28
+export const DB_SCHEMA_VERSION = 30
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (
@@ -508,6 +508,33 @@ ALTER TABLE usage_step_facts ADD COLUMN message_tokens INTEGER;
 ALTER TABLE usage_step_facts ADD COLUMN estimator_version TEXT;
 ALTER TABLE usage_step_facts ADD COLUMN attribution_json TEXT;
 ALTER TABLE usage_turn_facts ADD COLUMN tool_attribution_json TEXT;
+`
+
+/** v29: explicit, idempotently claimed continuation checkpoints. */
+export const MIGRATION_V29_CONTINUATIONS_SQL = `
+CREATE TABLE IF NOT EXISTS agent_continuations (
+  continuation_id TEXT PRIMARY KEY NOT NULL,
+  source_invocation_id TEXT NOT NULL,
+  source_turn_id TEXT NOT NULL,
+  checkpoint_sequence INTEGER NOT NULL CHECK(checkpoint_sequence > 0),
+  checkpoint_sha256 TEXT NOT NULL CHECK(length(checkpoint_sha256) = 64),
+  request_idempotency_key TEXT NOT NULL UNIQUE,
+  created_by TEXT NOT NULL,
+  frozen_config_json TEXT NOT NULL,
+  frozen_config_sha256 TEXT NOT NULL CHECK(length(frozen_config_sha256) = 64),
+  target_invocation_id TEXT NOT NULL UNIQUE,
+  target_turn_id TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL CHECK(status IN ('pending','running','completed','failed','cancelled','interrupted','unknown_side_effect')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(source_invocation_id, checkpoint_sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_continuations_source ON agent_continuations(source_invocation_id, checkpoint_sequence);
+`
+
+/** v30: persist the target Turn credential so continuation retries retain one identity across restarts. */
+export const MIGRATION_V30_CONTINUATION_START_TOKEN_SQL = `
+ALTER TABLE agent_continuations ADD COLUMN target_start_token TEXT NOT NULL DEFAULT '';
 `
 
 /**

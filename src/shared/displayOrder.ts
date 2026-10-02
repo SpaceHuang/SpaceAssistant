@@ -48,6 +48,7 @@ export type RetryContextTarget = {
   currentUser: { message: Message; sequence: number }
   /** Failed assistant attempts linked to currentUser and excluded from retry API history. */
   excludeMessageIds?: string[]
+  sourceInvocationId?: string
 }
 
 export type ApiContextRequest = {

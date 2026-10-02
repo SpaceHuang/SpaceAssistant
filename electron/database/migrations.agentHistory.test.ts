@@ -24,11 +24,12 @@ describe('agent canonical history migration', () => {
     conn.prepare('INSERT INTO turns(request_id, session_id) VALUES(?, ?)').run('owned', 'session-a')
 
     expect(() => runMigrations(conn)).not.toThrow()
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get()).toEqual({ value: '28' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get()).toEqual({ value: '30' })
     // agent_history 基表被补建并带上 session_id 列与索引
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_history_streams'").get()).toEqual({ name: 'agent_history_streams' })
     expect((conn.prepare("PRAGMA table_info('agent_history_streams')").all() as Array<{ name: string }>).map(({ name }) => name)).toContain('session_id')
     expect((conn.prepare("PRAGMA index_list('agent_history_streams')").all() as Array<{ name: string }>).map(({ name }) => name)).toContain('idx_agent_history_streams_session')
+    expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_continuations'").get()).toEqual({ name: 'agent_continuations' })
     // 归因列不重复（重跑不抛错）
     expect(() => runMigrations(conn)).not.toThrow()
     conn.close()
@@ -42,7 +43,7 @@ describe('agent canonical history migration', () => {
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_execution_queue'").get()).toEqual({ name: 'session_execution_queue' })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_transcript_reconciliations'").get()).toEqual({ name: 'session_transcript_reconciliations' })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='accepted_turn_contexts'").get()).toEqual({ name: 'accepted_turn_contexts' })
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '28' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '30' })
     conn.close()
   })
 
@@ -73,7 +74,7 @@ describe('agent canonical history migration', () => {
 
     runMigrations(conn)
 
-    expect(DB_SCHEMA_VERSION).toBe(28)
+    expect(DB_SCHEMA_VERSION).toBe(30)
     expect(conn.prepare('PRAGMA table_info(turns)').all()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'accepted_input_history_version', dflt_value: '0' })
     ]))
@@ -88,7 +89,7 @@ describe('agent canonical history migration', () => {
     conn.close()
   })
 
-  it('upgrades v19 streams while retaining unknown owner and creating the session index', () => {
+  it('upgrades v19 streams while retaining unknown owner and creating continuation storage', () => {
     const conn = new DatabaseSync(':memory:')
     conn.exec("CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")
     conn.exec('CREATE TABLE agent_history_streams (invocation_id TEXT PRIMARY KEY NOT NULL, version INTEGER NOT NULL DEFAULT 0, schema_version INTEGER NOT NULL)')
@@ -101,9 +102,10 @@ describe('agent canonical history migration', () => {
     conn.prepare('INSERT INTO agent_history_streams(invocation_id, version, schema_version) VALUES(?, 0, 1)').run('old-invocation')
     conn.prepare('INSERT INTO schema_meta(key, value) VALUES(?, ?)').run('schema_version', '19')
     runMigrations(conn)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get()).toEqual({ value: '28' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get()).toEqual({ value: '30' })
     expect(conn.prepare('SELECT session_id FROM agent_history_streams WHERE invocation_id = ?').get('old-invocation')).toEqual({ session_id: null })
     expect((conn.prepare("PRAGMA index_list('agent_history_streams')").all() as Array<{ name: string }>).map(({ name }) => name)).toContain('idx_agent_history_streams_session')
+    expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_continuations'").get()).toEqual({ name: 'agent_continuations' })
     conn.close()
   })
 
@@ -123,7 +125,31 @@ describe('agent canonical history migration', () => {
     expect(conn.prepare('PRAGMA table_info(turns)').all()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'accepted_input_history_version', dflt_value: '0' })
     ]))
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get()).toEqual({ value: '28' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get()).toEqual({ value: '30' })
+    expect(() => runMigrations(conn)).not.toThrow()
+    conn.close()
+  })
+
+  it('v30 recovers an existing target token from its Turn and fences pending rows without a token', () => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec("CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)")
+    conn.exec('CREATE TABLE turns (turn_id TEXT PRIMARY KEY NOT NULL, start_token TEXT)')
+    conn.exec(`CREATE TABLE agent_continuations (
+      continuation_id TEXT PRIMARY KEY, source_invocation_id TEXT, source_turn_id TEXT, checkpoint_sequence INTEGER, checkpoint_sha256 TEXT,
+      request_idempotency_key TEXT, created_by TEXT, frozen_config_json TEXT, frozen_config_sha256 TEXT,
+      target_invocation_id TEXT, target_turn_id TEXT, status TEXT, created_at INTEGER, updated_at INTEGER
+    )`)
+    conn.prepare('INSERT INTO schema_meta(key, value) VALUES(?, ?)').run('schema_version', '29')
+    conn.prepare('INSERT INTO turns(turn_id,start_token) VALUES(?,?)').run('turn-existing', 'persisted-token')
+    const insert = conn.prepare('INSERT INTO agent_continuations(continuation_id,target_turn_id,status) VALUES(?,?,?)')
+    insert.run('with-turn', 'turn-existing', 'running')
+    insert.run('without-turn', 'turn-missing', 'pending')
+    runMigrations(conn)
+    expect(conn.prepare('SELECT target_start_token,status FROM agent_continuations ORDER BY continuation_id').all()).toEqual([
+      { target_start_token: 'persisted-token', status: 'running' },
+      { target_start_token: '', status: 'interrupted' }
+    ])
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '30' })
     expect(() => runMigrations(conn)).not.toThrow()
     conn.close()
   })

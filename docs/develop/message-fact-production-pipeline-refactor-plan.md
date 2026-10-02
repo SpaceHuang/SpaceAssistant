@@ -237,7 +237,7 @@ completed/error/cancel/timeout/recovery 共用一个 finalize 函数，但区分
 
 DB 错误不能转换成一次“成功落库的 source-failed”广播。保留待提交快照，停止 source，以既有 busy_timeout 加少量有界重试处理暂态错误；仍失败返回结构化持久化错误并让 UI 进入不可继续发送的异常提示。数据库可用后重试同一事务，崩溃后从最后 checkpoint 恢复；不得新建 assistant 兜底。
 
-Shell 的 `result.data` 原样经规范化、codec、snapshot 传递：`status/exitCode/signal/terminationReason/treeKillVerified/durationMs/stdoutBytes/stderrBytes/outputArtifactBytes/outputArtifactSha256/persistedOutputPath/outputPersistErrorCode/terminationErrorCode/caseId/terminalScrollback` 均纳入测试，其他既有 result.data 字段同样不得因重建对象丢失。进程终止原因以执行器返回为准；工具本身 timed_out/output_limited 不自动等于整个 turn timeout，是否继续模型解释结果沿用现有 loop 和 `shouldStopToolRetry`。TurnCoordinator 的 terminal 幂等不会替换 `ExecutionLifecycle` 的工具级竞争规则。
+Shell 的 `result.data` 原样经规范化、codec、snapshot 传递：`status/exitCode/signal/terminationReason/treeKillVerified/durationMs/stdoutBytes/stderrBytes/outputArtifactBytes/outputArtifactSha256/persistedOutputPath/outputPersistErrorCode/terminationErrorCode/caseId/terminalScrollback` 均纳入测试，其他既有 result.data 字段同样不得因重建对象丢失。进程终止原因以执行器返回为准；工具本身 timed_out/output_limited 不自动等于整个 turn timeout。普通工具失败继续回灌模型；语义重复保护在派发前阻止相同操作，真正的 Turn/工具轮次上限仍负责终止循环。TurnCoordinator 的 terminal 幂等不会替换 `ExecutionLifecycle` 的工具级竞争规则。
 
 保留 `planRunShellExecution → executePreparedShellExecution` 及确认后 revalidation；source 不重新规划或绕过 `PLAN_STALE`。`toolInvocationCoordinator` 的 abort race 可能先结束外层 Promise，source 必须按实际执行句柄的清理完成确认结束，不能把 race 返回等同于进程已终止。只补必要的清理完成端口，不重做 registry/permit/policy 体系。
 
