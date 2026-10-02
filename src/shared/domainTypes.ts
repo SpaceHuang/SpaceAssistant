@@ -708,6 +708,8 @@ export interface ThinkingData {
 
 export interface Session {
   id: string
+  /** Stable identity for this incarnation of a session ID, used to invalidate session scoped caches. */
+  generation: string
   name: string
   preview: string
   model: string

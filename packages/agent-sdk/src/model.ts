@@ -14,10 +14,10 @@ export type CanonicalContentBlock =
 export type CanonicalToolCall = Readonly<{ id: string; name: string; input: Readonly<Record<string, unknown>>; thoughtSignature?: string }>
 
 export type CanonicalModelMessage =
-  | Readonly<{ role: 'system'; content: string; timestamp?: number }>
-  | Readonly<{ role: 'user'; content: string | readonly CanonicalContentBlock[]; timestamp?: number }>
-  | Readonly<{ role: 'assistant'; content: string | readonly CanonicalContentBlock[]; toolCalls?: readonly CanonicalToolCall[]; timestamp?: number }>
-  | Readonly<{ role: 'assistant'; content?: undefined; toolCalls: readonly CanonicalToolCall[]; timestamp?: number }>
+  | Readonly<{ role: 'system'; content: string; timestamp?: number; id?: string }>
+  | Readonly<{ role: 'user'; content: string | readonly CanonicalContentBlock[]; timestamp?: number; id?: string }>
+  | Readonly<{ role: 'assistant'; content: string | readonly CanonicalContentBlock[]; toolCalls?: readonly CanonicalToolCall[]; timestamp?: number; id?: string }>
+  | Readonly<{ role: 'assistant'; content?: undefined; toolCalls: readonly CanonicalToolCall[]; timestamp?: number; id?: string }>
   | Readonly<{ role: 'tool'; toolCallId: string; content: unknown; isError: boolean; timestamp?: number }>
 
 export class InvalidModelStreamError extends Error {

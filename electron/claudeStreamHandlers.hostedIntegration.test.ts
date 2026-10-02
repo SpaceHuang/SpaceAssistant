@@ -551,7 +551,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const transcript = getDbConnection(db).prepare('SELECT outcome,messages_json FROM session_transcript_entries WHERE session_id=? AND turn_id=?')
       .get(session.id, 'desktop-history-terminal-turn') as { outcome: string; messages_json: string }
     expect(transcript.outcome).toBe('failed')
-    expect(JSON.parse(transcript.messages_json)).toEqual([{ role: 'user', content: 'run once' }])
+    expect(JSON.parse(transcript.messages_json)).toEqual([{ role: 'user', id: 'desktop-history-terminal-user', content: 'run once' }])
   })
 
   it('preserves Desktop auto-approved write audit and result metadata through Hosted execution', async () => {

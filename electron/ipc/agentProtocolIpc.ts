@@ -17,7 +17,7 @@ import { TurnStarted } from '../../src/shared/turnCoordinator'
 import { getDbConnection } from '../database'
 import { WikiStatus } from '../../src/shared/domainTypes'
 import { app, shell } from 'electron'
-import { appendMessage, createSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getApiContextBaseline, getChatMessagePage, getContextHistorySummaryBaseline, getSearchCorpusPage, getConfigValue, getMessageSequence, getMessage, getMessages, getRecentTurnRoutingMessages, hasVisionInTurnRoutingContext, getNextQueuedMessage, reorderQueuedUserMessages, getSession, getTurnByRequestId, getPersistedTurn, setPersistedTurnExecutionConfig, failConfiguringTurn, listPersistedTurns, listTurnErrorsByAssistantMessageIds, resolveRetryContext, setConfigValue, updateMessageContent, updateQueuedUserMessageContent, updateSession } from '../database'
+import { appendMessage, createSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getApiContextBaseline, getContextHistorySummaryBaseline, getSearchCorpusPage, getConfigValue, getMessageSequence, getMessage, getMessages, getRecentTurnRoutingMessages, hasVisionInTurnRoutingContext, getNextQueuedMessage, reorderQueuedUserMessages, getSession, getTurnByRequestId, getPersistedTurn, setPersistedTurnExecutionConfig, failConfiguringTurn, listPersistedTurns, listTurnErrorsByAssistantMessageIds, resolveRetryContext, setConfigValue, updateMessageContent, updateQueuedUserMessageContent, updateSession } from '../database'
 import { canonicalQueueInput } from '../../src/shared/queueInputFingerprint'
 import { clampMaxParallelChatSessions } from '../../src/shared/chatParallelConfig'
 import { classifyWikiPath } from '../wiki/wikiPaths'
@@ -59,6 +59,7 @@ import { cancelClaudeAdmission } from '../claudeStreamHandlers'
 import { reserveConfirmationSubmission, commitConfirmationSubmissionWithWork, markConfirmationSubmissionReconciling, reconcileConfirmationSubmission, reconcileConfirmationSubmissions, ConfirmationCommitRolledBackError, ConfirmationCommitUnknownError } from '../confirmation/persistentConfirmationCommit'
 import { forgetMcpSessionTrust, isMcpSessionTrusted, rememberMcpSessionTrust } from '../mcp/mcpSessionTrust'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
+import { getProjectedChatMessagePage, readSessionTranscriptProjection } from '../runtime/sessionTranscriptProjection'
 import { startAgentContinuation, setAgentContinuationStatusForTurn, reconcileRunningAgentContinuations } from '../runtime/agentContinuation'
 import { createContinuationSafetySnapshot, fingerprintContinuationExecutionConfig } from '../runtime/continuationSafetySnapshot'
 import { resolveWorkDirForSession } from '../workDirManager'
@@ -546,8 +547,10 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
 
   ipcMain.handle(
     'chat:get-messages',
-    (_e, payload: { sessionId: string; limit?: number; offset?: number }): Message[] =>
-      getMessages(ctx.db, payload.sessionId, payload.limit ?? 500, payload.offset ?? 0)
+    (_e, payload: { sessionId: string; limit?: number; offset?: number }): Message[] => {
+      const projection = readSessionTranscriptProjection(ctx.db, payload.sessionId)
+      return projection.messages.slice(payload.offset ?? 0, (payload.offset ?? 0) + (payload.limit ?? 500)) as Message[]
+    }
   )
 
   ipcMain.handle(
@@ -561,11 +564,11 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       _e,
       payload: { sessionId: string; beforeSequence?: number; limit?: number }
     ) =>
-      getChatMessagePage(ctx.db, payload.sessionId, payload.beforeSequence, payload.limit)
+      getProjectedChatMessagePage(ctx.db, payload.sessionId, payload.beforeSequence, payload.limit)
   )
 
   ipcMain.handle('chat:get-display-message-page', (_e, payload: { sessionId: string; beforeSequence?: number; limit?: number }) => {
-    const page = getChatMessagePage(ctx.db, payload.sessionId, payload.beforeSequence, payload.limit)
+    const page = getProjectedChatMessagePage(ctx.db, payload.sessionId, payload.beforeSequence, payload.limit)
     return { ...page, entries: page.entries.filter(({ message }) => message.role === 'assistant').map(({ message, sequence }) => ({ display: turnToDisplay({ turnId: message.id, requestId: '', version: 0, assistantMessage: message }), sequence })) }
   })
 

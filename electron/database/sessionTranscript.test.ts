@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { createMemoryAppDb } from './testHelpers'
+import { createMemoryAppDb, createTempDatabase } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
+import { openDatabase } from './index'
 import { commitSessionTranscript, claimSessionExecution, releaseSessionExecution, readSessionTranscript, markSessionExecutionStarted, markSessionExecutionUncertain, reconcileCommittedSessionTranscripts, reconcileUncertainSessionTranscript } from './sessionTranscript'
 
 describe('session transcript checkpoint and execution claim', () => {
@@ -11,6 +12,138 @@ describe('session transcript checkpoint and execution claim', () => {
     expect(commitSessionTranscript(db, { sessionId: 's', turnId: 't1', baseVersion: 0, outcome: 'completed', messages: [{ role: 'user', content: 'a' }] })).toEqual(first)
     expect(commitSessionTranscript(db, { sessionId: 's', turnId: 't2', baseVersion: 0, outcome: 'completed', messages: [] })).toEqual({ committed: false, reason: 'version-conflict', version: 1 })
     expect(readSessionTranscript(db, 's')).toMatchObject({ version: 1, messages: [{ role: 'user', content: 'a' }] })
+    db.close()
+  })
+
+  it('preserves same-turn snapshot idempotency across a database reopen', () => {
+    const temp = createTempDatabase('transcript-idempotency-reopen-')
+    const messages = [{ role: 'user' as const, content: 'accepted exactly once' }]
+    const first = commitSessionTranscript(temp.db, {
+      sessionId: 'reopen-session', turnId: 'reopen-turn', baseVersion: 0, outcome: 'completed', messages
+    })
+    const persistedJson = getDbConnection(temp.db).prepare('SELECT messages_json FROM session_transcript_entries WHERE session_id=? AND turn_id=?').get('reopen-session', 'reopen-turn') as { messages_json: string }
+    temp.db.close()
+
+    const reopened = openDatabase(temp.dbPath)
+    expect(commitSessionTranscript(reopened, {
+      sessionId: 'reopen-session', turnId: 'reopen-turn', baseVersion: 0, outcome: 'completed', messages
+    })).toEqual(first)
+    expect(getDbConnection(reopened).prepare('SELECT payload_sha256,next_version FROM session_turn_commit_receipts WHERE session_id=? AND turn_id=?').get('reopen-session', 'reopen-turn'))
+      .toMatchObject({ next_version: 1, payload_sha256: expect.stringMatching(/^[a-f0-9]{64}$/) })
+    expect(commitSessionTranscript(reopened, {
+      sessionId: 'reopen-session', turnId: 'reopen-turn', baseVersion: 0, outcome: 'completed', messages: [{ role: 'user', content: 'changed after restart' }]
+    })).toEqual({ committed: false, reason: 'idempotency-conflict', version: 1 })
+    expect(getDbConnection(reopened).prepare('SELECT version, last_turn_id, status FROM session_transcript_checkpoints WHERE session_id=?').get('reopen-session'))
+      .toEqual({ version: 1, last_turn_id: 'reopen-turn', status: 'ready' })
+    expect(getDbConnection(reopened).prepare('SELECT messages_json FROM session_transcript_entries WHERE session_id=? AND turn_id=?').get('reopen-session', 'reopen-turn'))
+      .toEqual(persistedJson)
+
+    reopened.close()
+    temp.cleanup()
+  })
+
+  it('persists a compact commit receipt with the session CAS result', () => {
+    const db = createMemoryAppDb()
+    const messages = [{ role: 'user', content: 'receipt payload' }]
+    getDbConnection(db).prepare(`INSERT INTO agent_history_events(
+      invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at,session_id,commit_order,session_seq
+    ) VALUES('receipt-invocation',1,'receipt-event','receipt-event','receipt-turn',1,'invocation-completed','{}',1,'receipt-session',9,7)`).run()
+    expect(commitSessionTranscript(db, {
+      sessionId: 'receipt-session', turnId: 'receipt-turn', baseVersion: 0, outcome: 'completed', messages
+    })).toEqual({ committed: true, version: 1 })
+
+    const receipt = getDbConnection(db).prepare(`SELECT base_version,next_version,outcome,event_start,event_end,payload_sha256
+      FROM session_turn_commit_receipts WHERE session_id=? AND turn_id=?`).get('receipt-session', 'receipt-turn')
+    expect(receipt).toMatchObject({ base_version: 0, next_version: 1, outcome: 'completed' })
+    expect(receipt).toMatchObject({ event_start: 7, event_end: 7 })
+    expect(receipt.payload_sha256).toMatch(/^[a-f0-9]{64}$/)
+    db.close()
+  })
+
+  it('rolls back the transcript entry and checkpoint if receipt persistence fails', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    conn.exec(`CREATE TRIGGER fail_commit_receipt BEFORE INSERT ON session_turn_commit_receipts
+      WHEN NEW.session_id='receipt-atomic' BEGIN SELECT RAISE(ABORT, 'injected receipt failure'); END`)
+    expect(() => commitSessionTranscript(db, {
+      sessionId: 'receipt-atomic', turnId: 'turn-1', baseVersion: 0, outcome: 'completed', messages: [{ role: 'user', content: 'atomic' }]
+    })).toThrow('injected receipt failure')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get('receipt-atomic')).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_checkpoints WHERE session_id=?').get('receipt-atomic')).toEqual({ count: 0 })
+    conn.exec('DROP TRIGGER fail_commit_receipt')
+    expect(commitSessionTranscript(db, {
+      sessionId: 'receipt-atomic', turnId: 'turn-1', baseVersion: 0, outcome: 'completed', messages: [{ role: 'user', content: 'atomic' }]
+    })).toEqual({ committed: true, version: 1 })
+    db.close()
+  })
+
+  it('rolls back the entry and receipt if checkpoint persistence fails', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    conn.exec(`CREATE TRIGGER fail_transcript_checkpoint BEFORE INSERT ON session_transcript_checkpoints
+      WHEN NEW.session_id='checkpoint-atomic' BEGIN SELECT RAISE(ABORT, 'injected transcript checkpoint failure'); END`)
+    expect(() => commitSessionTranscript(db, {
+      sessionId: 'checkpoint-atomic', turnId: 'turn-1', baseVersion: 0, outcome: 'completed', messages: [{ role: 'user', content: 'atomic' }]
+    })).toThrow('injected transcript checkpoint failure')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get('checkpoint-atomic')).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_turn_commit_receipts WHERE session_id=?').get('checkpoint-atomic')).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_checkpoints WHERE session_id=?').get('checkpoint-atomic')).toEqual({ count: 0 })
+    conn.exec('DROP TRIGGER fail_transcript_checkpoint')
+    expect(commitSessionTranscript(db, {
+      sessionId: 'checkpoint-atomic', turnId: 'turn-1', baseVersion: 0, outcome: 'completed', messages: [{ role: 'user', content: 'atomic' }]
+    })).toEqual({ committed: true, version: 1 })
+    db.close()
+  })
+
+  it('uses the session checkpoint as the cross-turn CAS when distinct turns race on one base version', () => {
+    const db = createMemoryAppDb()
+    expect(commitSessionTranscript(db, {
+      sessionId: 'cas-session', turnId: 'turn-a', baseVersion: 0, outcome: 'completed', messages: [{ role: 'user', content: 'a' }]
+    })).toEqual({ committed: true, version: 1 })
+    expect(commitSessionTranscript(db, {
+      sessionId: 'cas-session', turnId: 'turn-b', baseVersion: 0, outcome: 'completed', messages: [{ role: 'user', content: 'b' }]
+    })).toEqual({ committed: false, reason: 'version-conflict', version: 1 })
+    expect(getDbConnection(db).prepare('SELECT turn_id FROM session_turn_commit_receipts WHERE session_id=?').all('cas-session'))
+      .toEqual([{ turn_id: 'turn-a' }])
+    expect(getDbConnection(db).prepare('SELECT version,status FROM session_transcript_checkpoints WHERE session_id=?').get('cas-session'))
+      .toEqual({ version: 1, status: 'commit_uncertain' })
+    db.close()
+  })
+
+  it('commits the transcript checkpoint and marks its claim and queue for projection recovery atomically', () => {
+    const db = createMemoryAppDb()
+    expect(claimSessionExecution(db, { sessionId: 'commit-owner', turnId: 'turn-1', ownerId: 'process-1' })).toMatchObject({ acquired: true })
+    expect(markSessionExecutionStarted(db, { sessionId: 'commit-owner', turnId: 'turn-1', ownerId: 'process-1', generation: 1 })).toBe(true)
+    expect(commitSessionTranscript(db, {
+      sessionId: 'commit-owner', turnId: 'turn-1', baseVersion: 0, outcome: 'completed', messages: [{ role: 'user', content: 'done' }]
+    })).toEqual({ committed: true, version: 1 })
+
+    const conn = getDbConnection(db)
+    expect(conn.prepare('SELECT turn_id,owner_id,status,generation FROM session_execution_claims WHERE session_id=?').get('commit-owner'))
+      .toEqual({ turn_id: 'turn-1', owner_id: 'process-1', status: 'transcript_committed', generation: 1 })
+    expect(conn.prepare('SELECT status FROM session_execution_queue WHERE session_id=? AND turn_id=?').get('commit-owner', 'turn-1'))
+      .toEqual({ status: 'transcript_committed' })
+    expect(claimSessionExecution(db, { sessionId: 'commit-owner', turnId: 'turn-2', ownerId: 'process-2' })).toMatchObject({ acquired: false, reason: 'owned' })
+    expect(releaseSessionExecution(db, { sessionId: 'commit-owner', turnId: 'turn-1', ownerId: 'process-1', generation: 1 })).toBe(true)
+    expect(claimSessionExecution(db, { sessionId: 'commit-owner', turnId: 'turn-2', ownerId: 'process-2' })).toMatchObject({ acquired: true, generation: 2 })
+    db.close()
+  })
+
+  it('rolls back transcript, receipt, checkpoint and claim state if queue transition fails', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    expect(claimSessionExecution(db, { sessionId: 'commit-owner-atomic', turnId: 'turn-1', ownerId: 'process-1' })).toMatchObject({ acquired: true })
+    expect(markSessionExecutionStarted(db, { sessionId: 'commit-owner-atomic', turnId: 'turn-1', ownerId: 'process-1', generation: 1 })).toBe(true)
+    conn.exec(`CREATE TRIGGER fail_commit_queue_transition BEFORE UPDATE ON session_execution_queue
+      WHEN OLD.session_id='commit-owner-atomic' AND NEW.status='transcript_committed' BEGIN SELECT RAISE(ABORT, 'injected queue transition failure'); END`)
+    expect(() => commitSessionTranscript(db, {
+      sessionId: 'commit-owner-atomic', turnId: 'turn-1', baseVersion: 0, outcome: 'completed', messages: [{ role: 'user', content: 'done' }]
+    })).toThrow('injected queue transition failure')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get('commit-owner-atomic')).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_turn_commit_receipts WHERE session_id=?').get('commit-owner-atomic')).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_checkpoints WHERE session_id=?').get('commit-owner-atomic')).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get('commit-owner-atomic')).toEqual({ status: 'executing' })
+    expect(conn.prepare('SELECT status FROM session_execution_queue WHERE session_id=? AND turn_id=?').get('commit-owner-atomic', 'turn-1')).toEqual({ status: 'executing' })
     db.close()
   })
 

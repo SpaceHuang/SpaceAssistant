@@ -13,9 +13,15 @@ export type HistorySnapshot = { invocationId: string; version: number; schemaVer
 export type RebuiltInvocationState = { invocationId: string; state: 'interrupted' | 'completed' | 'failed' | 'denied' | 'cancelled'; lastEventId: string }
 export type HistoryAppendResult = { version: number; duplicate: boolean }
 export type InvocationHistoryAppendResult = HistoryAppendResult & { events: readonly HistoryEvent[] }
+export type SessionTranscriptCommitIntent = Readonly<{
+  sessionId: string
+  baseVersion: number
+  outcome: 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'interrupted'
+  messages: readonly Readonly<Record<string, unknown>>[]
+}>
 
 export interface HistoryPort {
-  appendBatch(events: readonly HistoryEvent[], expectedVersion: number): Promise<HistoryAppendResult>
+  appendBatch(events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: SessionTranscriptCommitIntent): Promise<HistoryAppendResult>
   read(invocationId: string): Promise<HistorySnapshot>
 }
 
@@ -33,7 +39,7 @@ export class InvocationHistoryWriter {
     if (!identity.invocationId.trim() || !identity.turnId.trim()) throw new Error('history writer identity is required')
   }
 
-  append(events: readonly Readonly<{ kind: HistoryEvent['kind']; payload: unknown }>[]): Promise<InvocationHistoryAppendResult> {
+  append(events: readonly Readonly<{ kind: HistoryEvent['kind']; payload: unknown }>[], transcriptCommit?: SessionTranscriptCommitIntent): Promise<InvocationHistoryAppendResult> {
     if (!events.length) return Promise.reject(new HistoryBatchError('history append must not be empty'))
     const operation = this.tail.then(async () => {
       const snapshot = await this.history.read(this.identity.invocationId)
@@ -52,7 +58,7 @@ export class InvocationHistoryWriter {
           payload
         }
       })
-      const result = await this.history.appendBatch(batch, expectedVersion)
+      const result = await this.history.appendBatch(batch, expectedVersion, transcriptCommit)
       this.version = result.version
       return { ...result, events: batch }
     })

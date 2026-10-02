@@ -28,17 +28,20 @@ describe('retentionPolicy(S3 统一保留策略)', () => {
     expect(policy).toEqual(DEFAULT_RETENTION_POLICY)
     expect(policy.sessionEventMaxSessions).toBeGreaterThan(0)
     expect(policy.agentLogRetentionDays).toBeGreaterThan(0)
+    expect(policy.degradableSpillRetentionDays).toBeGreaterThan(0)
   })
 
   it('合法配置值生效', () => {
     const policy = resolveRetentionPolicy(
       readerWith({
         [RETENTION_POLICY_CONFIG_KEYS.sessionEventMaxSessions]: '5',
-        [RETENTION_POLICY_CONFIG_KEYS.agentLogRetentionDays]: '7'
+        [RETENTION_POLICY_CONFIG_KEYS.agentLogRetentionDays]: '7',
+        [RETENTION_POLICY_CONFIG_KEYS.degradableSpillRetentionDays]: '14'
       })
     )
     expect(policy.sessionEventMaxSessions).toBe(5)
     expect(policy.agentLogRetentionDays).toBe(7)
+    expect(policy.degradableSpillRetentionDays).toBe(14)
   })
 
   it.each(['0', '-3', 'abc', '1.5', ''])('非法配置 %j → 收敛显式默认(fail-closed)', (bad) => {

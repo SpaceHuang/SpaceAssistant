@@ -14,23 +14,28 @@ import { getConfigValue, type AppDatabase } from '../database'
 const SESSION_EVENT_MAX_SESSIONS_DEFAULT = 100
 /** Agent 日志:按日文件的保留天数,超期删除。 */
 const AGENT_LOG_RETENTION_DAYS_DEFAULT = 30
+/** Reconstructible spill copies only; source-of-truth spill files are never eligible. */
+const DEGRADABLE_SPILL_RETENTION_DAYS_DEFAULT = 30
 
 /** 策略键 → configs 表键的枚举(可配面)。 */
 export const RETENTION_POLICY_CONFIG_KEYS = {
   sessionEventMaxSessions: 'retention.sessionEvent.maxSessions',
-  agentLogRetentionDays: 'retention.agentLog.retentionDays'
+  agentLogRetentionDays: 'retention.agentLog.retentionDays',
+  degradableSpillRetentionDays: 'retention.spill.degradableDays'
 } as const
 
 /** 策略形状(整数,>=1)。 */
 export interface RetentionPolicy {
   sessionEventMaxSessions: number
   agentLogRetentionDays: number
+  degradableSpillRetentionDays: number
 }
 
 /** 显式默认值(缺配置即此值;集中声明、单测锁定)。 */
 export const DEFAULT_RETENTION_POLICY: RetentionPolicy = {
   sessionEventMaxSessions: SESSION_EVENT_MAX_SESSIONS_DEFAULT,
-  agentLogRetentionDays: AGENT_LOG_RETENTION_DAYS_DEFAULT
+  agentLogRetentionDays: AGENT_LOG_RETENTION_DAYS_DEFAULT,
+  degradableSpillRetentionDays: DEGRADABLE_SPILL_RETENTION_DAYS_DEFAULT
 }
 
 /** 配置读取端口(注入,避免本模块耦合具体数据库打开路径)。 */
@@ -54,6 +59,10 @@ export function resolveRetentionPolicy(reader: RetentionPolicyConfigReader): Ret
     agentLogRetentionDays: parsePositiveInt(
       reader.getConfigValue(RETENTION_POLICY_CONFIG_KEYS.agentLogRetentionDays),
       DEFAULT_RETENTION_POLICY.agentLogRetentionDays
+    ),
+    degradableSpillRetentionDays: parsePositiveInt(
+      reader.getConfigValue(RETENTION_POLICY_CONFIG_KEYS.degradableSpillRetentionDays),
+      DEFAULT_RETENTION_POLICY.degradableSpillRetentionDays
     )
   }
 }
@@ -62,4 +71,3 @@ export function resolveRetentionPolicy(reader: RetentionPolicyConfigReader): Ret
 export function resolveRetentionPolicyFromDb(db: AppDatabase): RetentionPolicy {
   return resolveRetentionPolicy({ getConfigValue: (key) => getConfigValue(db, key) })
 }
-

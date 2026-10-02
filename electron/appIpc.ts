@@ -15,6 +15,7 @@ import { registerMcpIpcHandlers } from './mcp/mcpIpc'
 import { registerSearchIpc } from './ipc/searchIpc'
 import { registerSecurityIpc } from './ipc/securityIpc'
 import { registerSessionIpc } from './ipc/sessionIpc'
+import { registerStorageMaintenanceIpc } from './ipc/storageMaintenanceIpc'
 
 // 兼容 re-export:既有外部消费方(butler/main/llmSystemPrompt)从本文件导入
 export { readAppLocale } from './ipc/ipcShared'
@@ -45,6 +46,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   registerDesktopIpc(ipcMain, ctx)
   registerAgentIpc(ipcMain, ctx)
   registerSessionIpc(ipcMain, ctx)
+  registerStorageMaintenanceIpc(ipcMain, ctx)
   registerFileIpc(ipcMain, ctx)
   registerSearchIpc(ipcMain, ctx)
   registerConfigIpc(ipcMain, ctx)

@@ -4,6 +4,14 @@ import type { SpaceAssistantApi } from '../src/shared/api'
 
 const api: SpaceAssistantApi = {
   ping: () => ipcRenderer.invoke('ping'),
+  storageGetProfile: () => ipcRenderer.invoke('storage:get-profile'),
+  storageClearCache: () => ipcRenderer.invoke('storage:clear-cache'),
+  storageCompact: () => ipcRenderer.invoke('storage:compact'),
+  storageOnMaintenanceProgress: (cb) => {
+    const fn = (_event: unknown, progress: import('../src/shared/storageTypes').StorageMaintenanceProgress) => cb(progress)
+    ipcRenderer.on('storage:maintenance-progress', fn)
+    return () => ipcRenderer.removeListener('storage:maintenance-progress', fn)
+  },
   appOpenExternal: (url) => ipcRenderer.invoke('app:open-external', url),
   appGetTrayEnabled: () => ipcRenderer.invoke('app:get-tray-enabled') as Promise<boolean>,
 

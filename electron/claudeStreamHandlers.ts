@@ -2,6 +2,7 @@ import type { IpcMain, WebContents } from 'electron'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
 import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidRequestId } from './claudeRequestGuards'
 import { logAgentEvent } from './agentLogger/agentLogger'
+import { refreshSessionTranscriptProjectionCache } from './runtime/sessionTranscriptProjection'
 import { serializeErrorCauseChain } from './agentLogger/errorCauseChain'
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import type { AgentLogFields } from './agentLogger/types'
@@ -117,10 +118,13 @@ export function loadAuthoritativeTurnContext(db: AppDatabase, turnId: string, se
       throw new Error('TURN_CONTINUATION_REQUIRED_USER_MISSING')
     }
     continuationTranscript = rebuildClaudeMessagesFromHistory(history.events)
-    const requiredCanonical = JSON.stringify(requiredUser.message)
     const requiredUserIndex = continuationTranscript.findIndex((message) => {
       if (message.role !== 'user') return false
-      return JSON.stringify(toCanonicalModelMessages([message])[0]) === requiredCanonical
+      const [candidate] = toCanonicalModelMessages([message])
+      if (!candidate || candidate.role !== 'user' || (candidate.id !== undefined && candidate.id !== persisted.userMessageId)) return false
+      const { id: _candidateId, ...candidateBody } = candidate
+      const { id: _requiredId, ...requiredBody } = requiredUser.message as Record<string, unknown>
+      return JSON.stringify(candidateBody) === JSON.stringify(requiredBody)
     })
     if (requiredUserIndex < 0) throw new Error('TURN_CONTINUATION_REQUIRED_USER_MISSING')
     continuationTranscript[requiredUserIndex] = { ...continuationTranscript[requiredUserIndex]!, id: persisted.userMessageId }
@@ -716,6 +720,18 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             : {})
         }
       } finally {
+        const refreshSessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
+        try {
+          if (refreshSessionId) refreshSessionTranscriptProjectionCache(deps.getAppDatabase(), refreshSessionId)
+        } catch (error) {
+          logAgentEvent('warn', 'history.cutover', {
+            requestId: requestId || undefined,
+            sessionId: refreshSessionId || undefined,
+            stage: 'projection-refresh',
+            reasonCode: error instanceof Error ? error.name : 'unknown',
+            outcome: 'legacy-fallback'
+          })
+        }
         releaseAdmission?.()
       }
   }

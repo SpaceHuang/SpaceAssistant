@@ -156,6 +156,7 @@ export type AgentLogEventName =
   | 'i18n.resource_load_failed'
   | 'i18n.missing_key'
   | 'retention.sessionEvents.cleaned'
+  | 'retention.spill.cleaned'
   | 'retention.agentLogs.cleaned'
   | 'retention.agentLogs.crossday_prune_failed'
   | 'usageStats.retention.cleaned'

@@ -72,6 +72,8 @@ export type HostedAgentTurnHostDependencies<TCall extends { invocationId: string
   sessionLedgerForModelResponse?(message: import('../../packages/agent-sdk/src/turn').CanonicalTurnMessage, modelTurn: number, attempt: number): Record<string, unknown> | Promise<Record<string, unknown>>
   sessionLedgerForAttemptUsage?(attempt: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
   sessionLedgerForInvocationTerminal?(terminal: { status: 'completed' | 'failed' | 'interrupted'; turnId: string; sessionEventReason?: 'completed' | 'failed' | 'interrupted' | 'cancelled' }): Record<string, unknown> | Promise<Record<string, unknown>>
+  sessionTranscriptBaseVersion?: number
+  sessionTranscriptFailureMessages?: AgentTurnPorts['sessionTranscriptFailureMessages']
 }>
 
 /**
@@ -150,11 +152,14 @@ export function createHostedAgentTurnHost<
 
       return {
         invocationId: input.invocationId,
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
         routeId: input.routeId,
         ...(input.turnId ? { turnId: input.turnId } : {}),
         ...(input.windowId ? { windowId: input.windowId } : {}),
         ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}),
         ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}),
+        ...(input.sessionTranscriptBaseVersion !== undefined ? { sessionTranscriptBaseVersion: input.sessionTranscriptBaseVersion } : {}),
+        ...(input.sessionTranscriptFailureMessages ? { sessionTranscriptFailureMessages: input.sessionTranscriptFailureMessages } : {}),
         registry: dependencies.providerRegistry,
         safetyGate: wrappedSafetyGate,
         prepareTool: dependencies.prepareTool as AgentTurnPorts['prepareTool'],
