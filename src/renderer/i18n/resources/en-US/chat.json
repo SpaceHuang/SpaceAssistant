@@ -180,6 +180,14 @@
       "writeFileFallback": "Write file",
       "editFileFallback": "Edit file"
     },
+    "read": {
+      "allow": "Allow read",
+      "deny": "Deny read",
+      "grepAction": "Search within \"{{path}}\" (entire subtree)",
+      "readAction": "Read \"{{path}}\"",
+      "fallback": "the given path",
+      "sensitiveNote": "This target is on a sensitive path and requires per-use confirmation. Approve to proceed; deny aborts this search/read."
+    },
     "shell": {
       "allow": "Confirm run",
       "allowWithRisk": "I understand the risk — run",

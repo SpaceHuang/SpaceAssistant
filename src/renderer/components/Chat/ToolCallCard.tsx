@@ -25,8 +25,13 @@ import {
   shellToolCompletedLabel
 } from './toolCallDisplay'
 import { formatBrowserToolLabel, formatBrowserToolLabelTitle } from './browserConfirmDisplay'
+
+/** 读取类工具的敏感路径确认（path-sensitive-read-confirm 等）走 ReadConfirmCard */
+const READ_CONFIRM_TOOLS = new Set(['grep', 'read_file', 'list_directory', 'read_feishu_attachment'])
+
 import { ToolRowIcon } from './ToolRowIcon'
 import { WriteConfirmCard } from './WriteConfirmCard'
+import { ReadConfirmCard } from './ReadConfirmCard'
 import { BrowserConfirmCard } from './BrowserConfirmCard'
 import { McpConfirmCard } from './McpConfirmCard'
 import { ToolkitConfirmCard } from './ToolkitConfirmCard'
@@ -262,6 +267,9 @@ export const ToolCallCard = memo(function ToolCallCard({
   const scriptConfirming = record.toolName === 'run_script' && record.status === 'confirming'
   const larkCliConfirming = record.toolName === 'run_lark_cli' && record.status === 'confirming'
   const writeConfirming = fileWriteTool && record.status === 'confirming'
+  // 读取类工具（grep/read_file/list_directory/read_feishu_attachment）的敏感路径确认：
+  // 此前无确认卡分支，桌面 lane 批准入口缺失（真机验证发现，评审二轮后追加修复）
+  const readConfirming = READ_CONFIRM_TOOLS.has(record.toolName) && record.status === 'confirming'
   const shellResultData = useMemo(
     () => (record.toolName === 'run_shell' ? parseShellResultData(record.result?.data) : undefined),
     [record.toolName, record.result?.data]
@@ -567,6 +575,16 @@ export const ToolCallCard = memo(function ToolCallCard({
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         {fallbackBannerNode}
         <WriteConfirmCard record={record} onConfirm={onConfirm} />
+        {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
+      </div>
+    )
+  }
+
+  if (readConfirming && onConfirm && confirmationReady !== false) {
+    return (
+      <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        {fallbackBannerNode}
+        <ReadConfirmCard record={record} onConfirm={onConfirm} />
         {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
     )
