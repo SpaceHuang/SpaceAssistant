@@ -113,6 +113,32 @@ describe('turn projection bridge', () => {
     off()
   })
 
+  it('终态投影结束未派发的确认工具，清除等待状态', () => {
+    let listener: ((data: any) => void) | undefined
+    vi.stubGlobal('window', { api: {
+      usageSet: vi.fn().mockResolvedValue(undefined),
+      chatListActiveTurns: vi.fn().mockResolvedValue([]),
+      chatOnTurnProjection: vi.fn((cb) => { listener = cb; return () => undefined })
+    } })
+    const off = initTurnProjectionBridge()
+    listener?.({
+      turn: {
+        turnId: 'cancelled-confirm-turn', requestId: 'cancelled-confirm-request', sessionId: 's1', version: 2,
+        assistantMessage: {
+          id: 'cancelled-confirm-assistant', sessionId: 's1', role: 'assistant', content: '', timestamp: 1,
+          status: 'cancelled', schemaVersion: 1,
+          toolCalls: [{ id: 'read-1', toolName: 'read_file', input: { path: 'a.md' }, riskLevel: 'low', status: 'confirming' }]
+        }
+      },
+      event: { type: 'source-cancelled' }
+    })
+    expect(patch).toHaveBeenCalledWith('s1', 'cancelled-confirm-assistant', expect.objectContaining({
+      toolCalls: [expect.objectContaining({ id: 'read-1', status: 'failed' })]
+    }))
+    expect(sync).toHaveBeenCalledWith(expect.objectContaining({ terminal: true }))
+    off()
+  })
+
   it('窗口销毁后，迟到的 active-turn snapshot 不得再投影', async () => {
     let resolveActiveTurns: ((turns: any[]) => void) | undefined
     vi.stubGlobal('window', { api: {

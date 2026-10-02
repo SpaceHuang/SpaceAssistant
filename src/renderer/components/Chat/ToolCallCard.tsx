@@ -41,6 +41,7 @@ import { ShellTerminalView } from './ShellTerminalView'
 import { ShellScrollbackView } from './ShellScrollbackView'
 import { ShellTuiFallbackHint } from './ShellTuiFallbackHint'
 import { McpToolResultView } from './McpToolResultView'
+import { ConfirmCardDecision } from './ConfirmCardDecision'
 
 function isMcpRecord(record: ToolCallRecord): boolean {
   return Boolean(record.mcp) || record.toolName.startsWith('mcp_')
@@ -607,6 +608,31 @@ export const ToolCallCard = memo(function ToolCallCard({
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         {fallbackBannerNode}
         <LarkCliConfirmCard record={record} onConfirm={onConfirm} />
+        {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
+      </div>
+    )
+  }
+
+  // Some approval reasons (for example sensitive read_file paths) apply to tools that
+  // have no specialized card. Keep those approvals actionable and show only sanitized args.
+  const specializedConfirm = mcpConfirming || toolkitConfirming || writeConfirming || browserConfirming || shellConfirming || scriptConfirming || larkCliConfirming
+  if (record.status === 'confirming' && !specializedConfirm && onConfirm && confirmationReady !== false) {
+    const safeInput = sanitizeCapabilityParamsForDisplay(record.input)
+    let inputSummary = '{}'
+    try { inputSummary = JSON.stringify(safeInput, null, 2) ?? '{}' } catch { /* keep the empty summary */ }
+    return (
+      <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        {fallbackBannerNode}
+        <div className="write-confirm-card">
+          <ConfirmCardDecision
+            actionSummary={label}
+            allowLabel={t('confirm.mcp.allow')}
+            denyLabel={t('confirm.mcp.deny')}
+            onConfirm={onConfirm}
+          >
+            <pre className="sa-chat-inset-code">{inputSummary}</pre>
+          </ConfirmCardDecision>
+        </div>
         {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
     )

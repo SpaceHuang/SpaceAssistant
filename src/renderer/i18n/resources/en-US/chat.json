@@ -32,6 +32,7 @@
     "keyAccessFailedMessage": "The model service key could not be read. Verify it in settings, then retry this message.",
     "failureReason": "Reason",
     "retry": "Retry reply",
+    "continueFromCheckpoint": "Continue previous run",
     "openModelSettings": "Open model service settings"
   },
   "scrollToLatest": {
@@ -248,7 +249,8 @@
       "cancelQueueFailed": "Could not remove this queued message. Refresh and try again.",
       "maxParallel": "At most {{max}} sessions can run at once. Try again later.",
       "apiKeyMissing": "Configure an API Key in Settings first",
-      "retryNoUserMessage": "Could not find a previous user message to retry"
+      "retryNoUserMessage": "Could not find a previous user message to retry",
+      "continuationUnavailable": "This failure has no checkpoint that can be safely continued. Retry generation or review the failure reason."
     },
     "empty": {
       "noSessionTitle": "Select or create a session",

@@ -88,11 +88,16 @@ export function initTurnProjectionBridge(onMetric?: (metric: TurnProjectionMetri
     const previous = versions.get(payload.turn.turnId) ?? -1
     if (payload.turn.version <= previous) return
     versions.set(payload.turn.turnId, payload.turn.version)
-    routePatchMessage(payload.turn.sessionId, payload.turn.assistantMessage.id, payload.turn.assistantMessage)
-    const hasConfirmation = (payload.turn.assistantMessage.toolCalls ?? []).some((tool) => tool.status === 'confirming')
     const isTerminal = payload.event.type === 'source-completed' || payload.event.type === 'source-failed' || payload.event.type === 'source-cancelled' || payload.event.type === 'source-timeout' || payload.event.type === 'source-uncertain'
+    const assistantMessage = isTerminal
+      ? { ...payload.turn.assistantMessage, toolCalls: payload.turn.assistantMessage.toolCalls?.map((tool) => tool.status === 'confirming'
+          ? { ...tool, status: 'failed' as const }
+          : tool) }
+      : payload.turn.assistantMessage
+    routePatchMessage(payload.turn.sessionId, assistantMessage.id, assistantMessage)
+    const hasConfirmation = (assistantMessage.toolCalls ?? []).some((tool) => tool.status === 'confirming')
     if (hasConfirmation || isTerminal) {
-      pendingConfirmStore.syncFromProjection({ sessionId: payload.turn.sessionId, requestId: payload.turn.requestId, turnId: payload.turn.turnId, turnVersion: payload.turn.version, message: payload.turn.assistantMessage })
+      pendingConfirmStore.syncFromProjection({ sessionId: payload.turn.sessionId, requestId: payload.turn.requestId, turnId: payload.turn.turnId, turnVersion: payload.turn.version, terminal: isTerminal, message: assistantMessage })
     }
     applyTerminalStatus(payload)
     if (payload.event.type === 'usage-updated') {
@@ -119,7 +124,7 @@ export function initTurnProjectionBridge(onMetric?: (metric: TurnProjectionMetri
     versions.set(display.turnId, display.version)
     // bounded display 只能进入 renderer 展示层；不能伪装成 Message 写入 Redux/API context。
     if (display.lifecycle === 'awaiting-confirmation' || display.lifecycle === 'completed' || display.lifecycle === 'failed') {
-      pendingConfirmStore.syncFromProjection({ sessionId: display.sessionId, requestId: display.requestId, turnId: display.turnId, turnVersion: display.version, message: turnDisplayToMessage(display) })
+      pendingConfirmStore.syncFromProjection({ sessionId: display.sessionId, requestId: display.requestId, turnId: display.turnId, turnVersion: display.version, terminal: display.lifecycle === 'completed' || display.lifecycle === 'failed', message: turnDisplayToMessage(display) })
     }
     if (display.lifecycle === 'running' || display.lifecycle === 'awaiting-confirmation') {
       const identity = `${display.requestId}:${display.lifecycle}`

@@ -183,6 +183,7 @@ export function ChatView() {
   editContextRef.current = { sessionId, messageId: editingMessageId, displayGeneration, editRound }
   const editSubmitting = Boolean(editSubmittingTarget && editSubmittingTarget.sessionId === sessionId && editSubmittingTarget.messageId === editingMessageId && editSubmittingTarget.displayGeneration === displayGeneration && editSubmittingTarget.editRound === editRound)
   const editOrigin = useRef<{ sessionId: string | null; displayGeneration: number; initialized: boolean }>({ sessionId, displayGeneration, initialized: false })
+  const continuationRequestKeysRef = useRef(new Map<string, string>())
   const sendInternalRef = useRef<
     (
       text: string,
@@ -655,6 +656,32 @@ export function ChatView() {
     [dispatch, message, submitOutbound, t, sessionId]
   )
 
+  const continueFailedAssistant = useCallback(async (assistantMessageId: string) => {
+    if (!sessionId) return
+    const target = await window.api.chatResolveRetryContext({ sessionId, failedAssistantMessageId: assistantMessageId })
+    if (!target?.sourceInvocationId) {
+      message.warning(t('chatView.warnings.continuationUnavailable'))
+      return
+    }
+    let requestIdempotencyKey = continuationRequestKeysRef.current.get(assistantMessageId)
+    if (!requestIdempotencyKey) {
+      requestIdempotencyKey = crypto.randomUUID()
+      continuationRequestKeysRef.current.set(assistantMessageId, requestIdempotencyKey)
+    }
+    try {
+      const result = await window.api.chatContinueFromCheckpoint({
+        sessionId, sourceInvocationId: target.sourceInvocationId, requestIdempotencyKey
+      })
+      if (!result.accepted) {
+        continuationRequestKeysRef.current.delete(assistantMessageId)
+        message.warning(t('chatView.warnings.continuationUnavailable'))
+      }
+    } catch {
+      // Keep the same idempotency key after a transport error so a retry resolves to the same continuation.
+      message.warning(t('chatView.warnings.continuationUnavailable'))
+    }
+  }, [message, sessionId, t])
+
   const launchIntentConsumedRef = useRef<string | null>(null)
 
   useEffect(() => {
@@ -857,13 +884,16 @@ export function ChatView() {
       retryAssistant: (messageId) => {
         void retryFailedAssistant(messageId)
       },
+      continueAssistant: (messageId) => {
+        void continueFailedAssistant(messageId)
+      },
       cancelQueued: (messageId) => {
         void cancelQueuedMessage(messageId)
       },
       confirmTool: onToolConfirm,
       cancelTool: onToolCancel
     }),
-    [handleArchiveToWiki, retryFailedAssistant, cancelQueuedMessage, onToolConfirm, onToolCancel]
+    [handleArchiveToWiki, retryFailedAssistant, continueFailedAssistant, cancelQueuedMessage, onToolConfirm, onToolCancel]
   )
 
   const resolveToolsInteractive = useCallback(
