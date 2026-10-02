@@ -245,7 +245,6 @@ export type RunToolChatSessionArgs = {
   /** 顶层父任务的绝对截止时间；缺省仅兼容旧入口，使用统一 10 分钟上限。 */
   toolExecutionConcurrency?: number
   resourceLocks?: AgentHostPorts['resourceLocks']
-  applicationAdmission?: AgentHostPorts['applicationAdmission']
   invocationRuntime?: import('./runtime/agentRuntime').InvocationRuntimeLike
   invocationLeaseState?: { current?: import('./runtime/agentRuntime').InvocationLeaseLike }
   approvalAdmission?: import('./runtime/agentRuntime').ApprovalAdmissionLike
@@ -512,7 +511,6 @@ function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): R
     requestId: invocation.trace.requestId,
     toolExecutionConcurrency: ports.toolExecutionConcurrency,
     resourceLocks: ports.resourceLocks,
-    applicationAdmission: ports.applicationAdmission,
     invocationRuntime: ports.invocationRuntime,
     approvalAdmission: ports.approvalAdmission,
     toolRevocations: ports.toolRevocations,
@@ -730,7 +728,6 @@ async function runToolChatSessionInner(
     locale: payloadLocale,
     projectMemoryEnabled,
     chatSignal,
-    applicationAdmission,
     resourceLocks,
     invocationRuntime,
     invocationLeaseState,
@@ -970,7 +967,7 @@ async function runToolChatSessionInner(
   /** 请求级 MCP 工具快照：仅桌面 lane 注入（装配期构建，仍为首循环前）。 */
   const mcpSnapshot: McpToolSnapshot = hostMcp?.snapshot ?? { entries: new Map(), budgetDropped: [] }
   // FR5/§6.5：延迟加载计划（off 档 = 现状路径；档位/阈值取自 ToolsConfig，缺省 off/16 KiB）
-  const deferredMode = toolsConfig.mcpDeferredLoading ?? 'off'
+  const deferredMode = toolsConfig.mcpDeferredLoading ?? 'always'
   const deferredThresholdBytes = toolsConfig.mcpDeferredSchemaBudgetBytes ?? MCP_DEFERRED_SCHEMA_BUDGET_BYTES_DEFAULT
   const mcpProfiles = hostMcp?.executorDatabase
     ? listProfiles(hostMcp.executorDatabase as Parameters<typeof listProfiles>[0])
@@ -1153,7 +1150,6 @@ async function runToolChatSessionInner(
             windowId: contextWindowId,
             ...(args.maxToolLoopRounds !== undefined ? { maxToolRounds: args.maxToolLoopRounds } : {}),
             ...(args.hostHistory ? { hostHistory: args.hostHistory } : {}),
-            ...(args.applicationAdmission ? { applicationAdmission: args.applicationAdmission } : {}),
             ...(args.currentUserMessageId ? { currentUserMessageId: args.currentUserMessageId } : {}),
             ...(requiredUserMessage ? { requiredUserMessage } : {})
           })

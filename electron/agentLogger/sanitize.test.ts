@@ -75,6 +75,22 @@ describe('sanitizeForLog', () => {
     expect(result.tokenLimit).toBe(4096)
   })
 
+  it('FR8 延迟加载节省量三字段为量化估算非凭据 → 保留（精确豁免）；变体与凭据键不受豁免', () => {
+    const result = sanitizeForLog({
+      eagerEquivalentTokens: 45_715,
+      indexTokens: 2_286,
+      savedTokens: 43_429,
+      // 变体不在精确豁免清单内，仍走宽匹配
+      mySavedTokens: 'leak-should-redact-marker',
+      refreshToken: 'secret-value'
+    }) as Record<string, unknown>
+    expect(result.eagerEquivalentTokens).toBe(45_715)
+    expect(result.indexTokens).toBe(2_286)
+    expect(result.savedTokens).toBe(43_429)
+    expect(result.mySavedTokens).toBe('[REDACTED]')
+    expect(result.refreshToken).toBe('[REDACTED]')
+  })
+
   it('redacts llmServiceKeys map values', () => {
     const result = sanitizeForLog({
       llmServiceKeys: {

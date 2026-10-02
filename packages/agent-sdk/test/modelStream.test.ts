@@ -135,3 +135,80 @@ describe('canonical model stream', () => {
     expect(call.request.thinking).toEqual({ enabled: true, budgetTokens: 500 })
   })
 })
+
+describe('provider stream idle timeout（provider 流挂起护栏）', () => {
+  it('流无进展超过 idleTimeoutMs → 抛 ModelStreamIdleTimeoutError（首字节挂起）', async () => {
+    async function* hungStream(): AsyncIterable<StreamChunk> {
+      await new Promise(() => {}) // 永不产出
+      yield { type: 'finish', reason: 'stop' }
+    }
+    await expect(collectModelAttempt(hungStream(), undefined, { idleTimeoutMs: 20 }))
+      .rejects.toMatchObject({ code: 'PROVIDER_STREAM_IDLE_TIMEOUT' })
+  })
+
+  it('流中途停顿超过 idleTimeoutMs → 同样抛错（chunk 间挂起）', async () => {
+    async function* stallsMidStream(): AsyncIterable<StreamChunk> {
+      yield { type: 'text-delta', text: 'partial' }
+      await new Promise(() => {})
+    }
+    await expect(collectModelAttempt(stallsMidStream(), undefined, { idleTimeoutMs: 20 }))
+      .rejects.toMatchObject({ code: 'PROVIDER_STREAM_IDLE_TIMEOUT' })
+  })
+
+  it('正常节奏的流不受影响；每个 chunk 重置计时器', async () => {
+    async function* slowButAlive(): AsyncIterable<StreamChunk> {
+      for (let i = 0; i < 3; i++) {
+        yield { type: 'text-delta', text: `chunk-${i}` }
+        await new Promise((resolve) => setTimeout(resolve, 8))
+      }
+      yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish', reason: 'stop' }
+    }
+    const collected = await collectModelAttempt(slowButAlive(), undefined, { idleTimeoutMs: 500 })
+    expect(collected.chunks).toHaveLength(4) // 3 text-delta + usage（finish 单独）
+    expect(collected.finish.reason).toBe('stop')
+  })
+
+  it('onStreamError 收到空闲超时错误（既有观测链路不受影响）', async () => {
+    const errors: unknown[] = []
+    async function* hungStream(): AsyncIterable<StreamChunk> {
+      await new Promise(() => {})
+      yield { type: 'finish', reason: 'stop' }
+    }
+    await expect(collectModelAttempt(hungStream(), { onStreamError: async (e) => { errors.push(e.error) } }, { idleTimeoutMs: 20 }))
+      .rejects.toMatchObject({ code: 'PROVIDER_STREAM_IDLE_TIMEOUT' })
+    expect(errors).toHaveLength(1)
+  })
+})
+
+describe('provider stream idle timeout 取消语义（评审 P2）', () => {
+  it('超时后 best-effort 调用底层 iterator.return() 取消挂起的流', async () => {
+    const returnSpy = vi.fn(() => Promise.resolve({ done: true as const, value: undefined }))
+    const hungIterable = {
+      [Symbol.asyncIterator]: () => ({
+        next: () => new Promise<IteratorResult<StreamChunk>>(() => {}), // 永不产出
+        return: returnSpy
+      })
+    }
+    await expect(collectModelAttempt(hungIterable as AsyncIterable<StreamChunk>, undefined, { idleTimeoutMs: 20 }))
+      .rejects.toMatchObject({ code: 'PROVIDER_STREAM_IDLE_TIMEOUT' })
+    expect(returnSpy).toHaveBeenCalledOnce()
+  })
+
+  it('超时赢得 race 后，悬挂的 next() 随后 reject 不产生 unhandledRejection', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason) }
+    process.on('unhandledRejection', onUnhandled)
+    async function* hungThenReject(): AsyncIterable<StreamChunk> {
+      yield { type: 'text-delta', text: 'first' }
+      await new Promise((_, reject) => setTimeout(() => reject(new Error('late socket error')), 60))
+      yield { type: 'finish', reason: 'stop' }
+    }
+    await expect(collectModelAttempt(hungThenReject(), undefined, { idleTimeoutMs: 20 }))
+      .rejects.toMatchObject({ code: 'PROVIDER_STREAM_IDLE_TIMEOUT' })
+    // 等待悬挂 promise 的最终落败窗口（晚于 idle 超时、早于底层 reject 之后的清理期）
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    process.off('unhandledRejection', onUnhandled)
+    expect(unhandled).toEqual([])
+  })
+})

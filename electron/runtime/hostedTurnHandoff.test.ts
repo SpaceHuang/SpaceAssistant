@@ -853,10 +853,9 @@ describe('createHostedTurnHandoff', () => {
     const handoff = createHostedTurnHandoff({ agentSdk, history: history as never, invocationId: 'req-1', turnId: 'turn-1', routeId: 'route-1' })
     const request = { messages: [{ role: 'user', content: 'hello' }], maxTokens: 100 }
     const initialResponse = { message: { role: 'assistant', content: 'first' }, finishReason: 'stop', usage: { type: 'usage', inputTokens: 3, outputTokens: 2 }, historyCommitted: true as const }
-    const applicationAdmission = { park: vi.fn(() => 'parked'), resume: vi.fn(async () => true) }
-    const result = await handoff({ request, initialResponse, applicationAdmission })
+    const result = await handoff({ request, initialResponse })
 
-    expect(agentSdk.createHostedTurnRuntime).toHaveBeenCalledWith(expect.objectContaining({ applicationAdmission }))
+    expect(agentSdk.createHostedTurnRuntime).not.toHaveBeenCalledWith(expect.objectContaining({ applicationAdmission: expect.anything() }))
     expect(agentSdk.createHostedTurnRuntime).not.toHaveBeenCalledWith(expect.objectContaining({ deadlineAt: expect.any(Number) }))
     expect(mockRunHostedAgentTurn).toHaveBeenCalledWith(expect.objectContaining({ host: runtime.host, invocationId: 'req-1', turnId: 'turn-1', routeId: 'route-1', request, initialResponse }))
     expect(result).toMatchObject({ result: { ok: true, content: [{ text: 'finished' }], usage: { input_tokens: 20, output_tokens: 9, cache_read_input_tokens: 4 } }, finalization: { outcome: 'completed', usage: { modelTurns: 2, initialMessageCount: 1, notDispatchedToolCallIds: ['denied-tool'] } } })

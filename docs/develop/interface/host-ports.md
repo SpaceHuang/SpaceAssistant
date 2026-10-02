@@ -225,13 +225,6 @@ interface AgentAnswererPorts { approvalDatabase?: unknown }
 toolExecutionConcurrency?: number
 resourceLocks?: { acquire(keys: readonly string[], options?: { signal?: AbortSignal }): Promise<{ release(): void }> }
 
-applicationAdmission?: {
-  park(checkpoint?: unknown): unknown
-  discard?(handle: unknown): void
-  resume(handle: unknown, options?: { signal?: AbortSignal; deadlineAt?: number }): ApplicationAdmissionResumeResult | Promise<ApplicationAdmissionResumeResult>
-}
-type ApplicationAdmissionResumeResult = { ok: true } | { ok: false; retryable: boolean; cause?: string }
-
 invocationRuntime?: {
   acquireLease(invocationId: string): { runtimeId: string; invocationId: string; generation: number; release(): void }
   park(invocationId: string, lease: {...}, checkpoint?: unknown): { runtimeId: string; invocationId: string; generation: number; checkpoint: unknown } | undefined
@@ -249,7 +242,7 @@ executionAdmission?: unknown        // Runtime 级 cancel/revoke 与 dispatch cl
 safetyPermits?: unknown             // Runtime 级 permit ledger，按 permit ID settle
 ```
 
-**关于 `invocationRuntime` 的 park 家族**：`park` / `resumeLease` 目前只存在于 **SDK 包内这一份契约**；宿主转发层（`src/shared/agent/invocation.ts`）已收窄为只保留 `acquireLease`，SDK 侧 `scheduler.ts` 的 `InvocationRuntime` 参考实现也删除了 park 家族（2026-09-30）。审批等待期间运行槽的让出 / 恢复由 `applicationAdmission`（`park` / `resume` / `discard`）承担，生产装配（`electron/runtime/desktopAgentRuntime.ts`）只注入 `acquireLease`。旧 History 的 `invocation-parked` 事件仍兼容读取。
+**关于 `invocationRuntime` 的 park 家族**：`park` / `resumeLease` 目前只存在于 **SDK 包内这一份契约**；宿主转发层（`src/shared/agent/invocation.ts`）已收窄为只保留 `acquireLease`，SDK 侧 `scheduler.ts` 的 `InvocationRuntime` 参考实现也删除了 park 家族（2026-09-30）。当前审批等待不释放父 turn 的应用级准入名额；运行中的 turn 持有其普通名额直到整个 turn 结束。旧 History 的 `invocation-parked` 事件仍兼容读取。
 
 **历史与模型生命周期钩子**
 

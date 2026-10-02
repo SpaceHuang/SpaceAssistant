@@ -150,7 +150,7 @@
 - **Safety 在 Core 的判定路径上，不可绕**；但它读的「生效规则」随 Invocation 传入，自己不去读库（§7.1）。
 - **Safety 只依赖端口，不依赖 Runtime**：确认回答者（`answerer`）的实现由 Runtime 在装配期注入。当回答者是「审批 Agent」时，该实现（块 2 方案的 `AgentChannel`）会在运行期发起一次**嵌套 Core 调用** —— 这是全文唯一一条「判定路径回到 Core」的边（§7.2 规则 5、`confirmation-answerer-and-auto-approval-design.md` §4.3）。
   它是**运行期递归，不是结构依赖**：Safety 看不到 Runtime、拿不到 Invocation，只看到一个 `ConfirmationChannel`，把人换成 Agent 它一行不改。递归有界靠两条：审批调用的工具集**封闭只读、在策略层显式免再审批**（否则会「审批套审批」）；轮数 / 深度 / 预算有上界（块 2 方案 §4.4）。**若豁免被配置破坏、深度上界触发，结论是 fail-closed 并落一条可区分审计**（`confirm.outcome` 的 `cause=recursion-blocked`）。它归**不可变集**而非 `locked` 底线集：`locked` 只拦放宽，拦不住收紧引发的停摆（§7.2）。
-- **准入在 Runtime、并发状态在 Storage**：普通 Agent turn 的跨调用并发约束由 Runtime 在装配前施加，状态落 Storage（§5）。SubAgent 走普通准入；安全审批走独立的 `ApprovalAdmission` 容量池。父 turn 等待审批时释放普通名额，审批结束后再申请恢复（当前策略见准入策略文档）。
+- **准入在 Runtime、并发状态在 Storage**：普通 Agent turn 的跨调用并发约束由 Runtime 在装配前施加，状态落 Storage（§5）。SubAgent 走普通准入；安全审批走独立的 `ApprovalAdmission` 容量池。父 turn 在审批等待期间继续持有普通名额，审批结束后继续当前 turn（当前策略见准入策略文档）。
 - **Storage 被 Core（经两个端口）、Safety、Runtime、Driver 共同使用**，它不反向依赖任何人（§8）。
 - **Utils 可以被任何一层使用**，但不得持有语义。
 
@@ -369,12 +369,12 @@ Runtime 回答**三个**问题，顺序也是它们发生的顺序：
 
 | 嵌套调用 | 例子 | 准入语义 |
 | --- | --- | --- |
-| **关键路径上的同步依赖** | 审批回答者（`invokeApproval`） | 使用独立审批池；父 turn 在等待期间 park 并释放普通名额。审批决策仍有自己的上界；审批通过后，父 turn 恢复资格持续排队，直到取得名额、普通队列已满或 turn 被取消 |
+| **关键路径上的同步依赖** | 审批回答者（`invokeApproval`） | 使用独立审批池；父 turn 保留普通名额并等待审批结果，不 park、不重新申请准入。审批决策仍有自己的容量、超时和取消边界 |
 | **可放弃的派生** | SubAgent、工具内派生调用 | 走普通 turn 准入。同权排队；被拒时把「资源不足」作为**工具结果**回灌父调用，让父自己换方案（缩范围 / 换工具 / 报告用户），而不是整条调用失败 |
 
 **普通 turn 准入拒绝永远不构成安全结论**（硬要求 1 的推论）。安全审批不使用普通 turn 准入；审批池容量不足或审批决策超时仍得到「**无法获得裁决**」，不是「裁决为否」。审计上两者必须可区分（`confirm.outcome` 的 `cause=unavailable` / `timeout` 对 `cause=agent-deny`），处置仍是 **fail-closed**（工具调用被拒），并落审计。
 
-**避免自锁**：审批等待期间父 turn 必须 park 并释放普通名额；审批使用独立容量池。不得依赖突破普通全局或 lane 上限的额外保留位。
+**避免自锁**：安全审批不申请普通 turn 名额，故不会与等待审批的父 turn 竞争普通准入。父 turn 保留其普通名额；不得依赖突破普通全局或 lane 上限的额外保留位。
 
 定制入口的原则是：
 
