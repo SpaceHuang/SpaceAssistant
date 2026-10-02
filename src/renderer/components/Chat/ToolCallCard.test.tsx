@@ -39,9 +39,10 @@ describe('ToolCallCard approval explanations', () => {
     render(<ToolCallCard record={writeRecord('confirming', {
       toolName: 'read_file', input: { path: 'recovery-a.md' }
     })} onConfirm={vi.fn()} />)
-    expect(screen.getByRole('button', { name: '允许' })).toBeDefined()
-    expect(screen.getByRole('button', { name: '拒绝' })).toBeDefined()
-    expect(screen.getByText(/"path": "recovery-a\.md"/)).toBeDefined()
+    // read_file 走 ReadConfirmCard（与远端内联兜底卡收敛后的专用卡）：按钮文案为 confirm.read.*
+    expect(screen.getByRole('button', { name: '允许读取' })).toBeDefined()
+    expect(screen.getByRole('button', { name: '拒绝读取' })).toBeDefined()
+    expect(screen.getByText(/recovery-a\.md/)).toBeDefined()
   })
 
   it('shows a localized reason when script analysis is incomplete', () => {
