@@ -818,7 +818,9 @@ describe('queued and retry queries', () => {
       turnId: 'b-turn', requestId: 'b-request', sessionId,
       assistantMessageId: 'b-assistant', userMessageId: 'b-user', state: 'terminal', outcome: 'failed'
     })
-    expect(resolveRetryContext(db, sessionId, 'b-assistant')?.currentUser.message.id).toBe('b-user')
+    expect(resolveRetryContext(db, sessionId, 'b-assistant')).toMatchObject({
+      currentUser: { message: { id: 'b-user' } }, sourceInvocationId: 'b-request'
+    })
   })
 
   it('重试同一用户输入时排除它之前所有失败的助手尝试', () => {

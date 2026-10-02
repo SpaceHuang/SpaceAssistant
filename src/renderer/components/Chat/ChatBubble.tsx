@@ -307,6 +307,7 @@ export const ChatBubble = memo(function ChatBubble({
     ? () => actions.archiveToWiki(message.content)
     : undefined
   const handleRetry = actions ? () => actions.retryAssistant(message.id) : undefined
+  const handleContinue = actions?.continueAssistant ? () => actions.continueAssistant!(message.id) : undefined
   const handleCancelQueued = actions ? () => actions.cancelQueued(message.id) : undefined
   const confirmTool =
     toolsInteractive?.onToolConfirm ?? (actions ? actions.confirmTool : undefined)
@@ -543,6 +544,11 @@ export const ChatBubble = memo(function ChatBubble({
             {showRetry && handleRetry ? (
               <button type="button" className="chat-message-error__retry" onClick={handleRetry}>
                 {t('bubble.retry')}
+              </button>
+            ) : null}
+            {showRetry && handleContinue ? (
+              <button type="button" className="chat-message-error__retry" onClick={handleContinue}>
+                {t('bubble.continueFromCheckpoint')}
               </button>
             ) : null}
           </div>

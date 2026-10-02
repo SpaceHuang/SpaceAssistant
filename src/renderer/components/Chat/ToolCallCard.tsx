@@ -43,6 +43,7 @@ import { ShellTerminalView } from './ShellTerminalView'
 import { ShellScrollbackView } from './ShellScrollbackView'
 import { ShellTuiFallbackHint } from './ShellTuiFallbackHint'
 import { McpToolResultView } from './McpToolResultView'
+import { ConfirmCardDecision } from './ConfirmCardDecision'
 
 function isMcpRecord(record: ToolCallRecord): boolean {
   return Boolean(record.mcp) || record.toolName.startsWith('mcp_')
@@ -632,7 +633,8 @@ export const ToolCallCard = memo(function ToolCallCard({
   }
 
   // 通用兜底：任何 confirming 工具都有批准入口（strict/custom 套餐可对任意工具设 ask，
-  // 白名单枚举制的结构性补位——toolkit.find/tool_search/管理类工具等无专用卡也不挂起）
+  // 白名单枚举制的结构性补位——toolkit.find/tool_search/管理类工具等无专用卡也不挂起）。
+  // 与远端 93d133a5 的内联实现收敛为一处：参数脱敏在 GenericConfirmCard 内部完成。
   if (record.status === 'confirming' && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>

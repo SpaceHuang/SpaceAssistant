@@ -34,6 +34,7 @@ const api: SpaceAssistantApi = {
   chatGetSearchCorpusPage: (payload) => ipcRenderer.invoke('chat:get-search-corpus-page', payload),
   chatEnqueueQueuedMessage: (payload) => ipcRenderer.invoke('chat:enqueue-queued-message', payload),
   chatResolveRetryContext: (payload) => ipcRenderer.invoke('chat:resolve-retry-context', payload),
+  chatContinueFromCheckpoint: (payload) => ipcRenderer.invoke('chat:continue-from-checkpoint', payload),
   chatGetMessageSequence: (payload) => ipcRenderer.invoke('chat:get-message-sequence', payload),
   messageAppendNonTurn: (msg) => ipcRenderer.invoke('message:append-non-turn', msg),
   messagePatchNonTurn: (payload) => ipcRenderer.invoke('message:patch-non-turn', payload),

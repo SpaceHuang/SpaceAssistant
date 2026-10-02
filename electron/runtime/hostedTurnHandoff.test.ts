@@ -94,6 +94,7 @@ describe('createHostedTurnHandoff', () => {
     const dispose = vi.fn(async () => undefined)
     const runtime = { host: {}, dispose }
     const agentSdk = { createHostedTurnRuntime: vi.fn(() => runtime) }
+    const beforeToolDispatch = vi.fn(() => ({ kind: 'dispatch' as const }))
     mockRunHostedAgentTurn.mockImplementation(async ({ invocationId }: { invocationId: string }) => {
       await history.appendBatch([
         { invocationId, turnId: 'new-turn', sequence: 1, schemaVersion: 1, eventId: 'new-context', idempotencyKey: 'new-context', kind: 'invocation-context-committed', payload: { messages: request.messages } },
@@ -103,13 +104,14 @@ describe('createHostedTurnHandoff', () => {
     })
     const handoff = createHostedTurnHandoff({ agentSdk, history, invocationId: 'current', turnId: 'new-turn', routeId: 'route', sessionId: 'session-shadow' })
 
-    await expect(handoff({ request, requiredUserMessage: { id: 'current-user', message: currentMessage } })).resolves.toMatchObject({ result: { ok: true } })
+    await expect(handoff({ request, requiredUserMessage: { id: 'current-user', message: currentMessage }, beforeToolDispatch })).resolves.toMatchObject({ result: { ok: true } })
 
     expect(mockLogAgentEvent).toHaveBeenCalledWith('info', 'history.cutover', expect.objectContaining({
       requestId: 'current', turnId: 'new-turn', sessionId: 'session-shadow', stage: 'match-current-message',
       reasonCode: 'matched', outcome: 'matched', historyStreamId: 'prior', previousTurnId: 'prior-turn', snapshotVersion: 2
     }))
     expect(mockRunHostedAgentTurn).toHaveBeenCalledOnce()
+    expect(agentSdk.createHostedTurnRuntime).toHaveBeenCalledWith(expect.objectContaining({ beforeToolDispatch }))
     expect(mockRunHostedAgentTurn.mock.calls[0]?.[0]).toMatchObject({
       request: { messages: [{ role: 'system', content: 'dynamic' }, ...priorMessages, currentMessage] }
     })

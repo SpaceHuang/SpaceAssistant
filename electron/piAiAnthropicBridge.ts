@@ -1,6 +1,6 @@
 import { PiAiAnthropicProvider, type AnthropicRouteProfile, type PiAnthropicBridge } from '@spaceassistant/agent-provider-pi-ai'
 import { createHash } from 'node:crypto'
-import type { ModelProviderRegistry } from '@spaceassistant/agent-sdk/model'
+import type { ModelProviderRegistry } from '../packages/agent-sdk/src/model'
 
 const importNativeModule = new Function('specifier', 'return import(specifier)') as (specifier: string) => Promise<Record<string, (...args: never[]) => unknown>>
 

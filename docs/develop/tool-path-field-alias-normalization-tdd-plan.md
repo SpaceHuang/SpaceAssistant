@@ -525,10 +525,10 @@ describe('toolErrMissingPath hint survives sanitizeToolErrorString', () => {
   - **空串 / 纯空白路径行为变更**（§4.2）：`grep -rn "path: ''\|path: '   '" electron/ src/` 确认无内部夹具依赖「空串 = workDir」或「空白路径报错」的旧语义；list_directory/grep 的默认值 `.` / `''` 行为已由 `??` 保留。
 - **端到端回归**（手工/日志验证）：用 `deepseek-v4-pro` 复现「read_file 传 `filePath`」场景，确认：
   1. 不再返回 `路径是目录而非文件: 。请使用 list_directory…`，而是正常读到文件；
-  2. 不再触发 `同一工具错误已连续出现 3 次` 中止；
+  2. 不再触发旧的全局连续自然语言错误中止；该保护已由《工具错误恢复与 Turn 连续性改进计划》阶段 A 的按工具身份及错误类别策略取代；
   3. 用户不再看到「回复未能完成」。
-  - 复现后查 `.agent/logs/Agent-{YYYYmmdd}.log`：`tool.error` 中 `路径是目录而非文件: 。` 条目应消失，`llm.error` 中 `同一工具错误已连续出现` 条目应消失。
-  - **范围限定（A4）**：上述「不再中止」针对的是**别名误用**场景（`filePath`/`file_path` 被归一化、缺参时拿到带 hint 的清晰错误，模型一次纠错即通过）。若模型**完全不用**任何 path 类字段，guard 抛出的缺参错误同样走 `noteFailure`（`toolChatLoop.ts:855-856`），连续 3 次相同 `(toolName, userMsg)` 仍会 `abortRepeatedToolError` -- 此属「模型完全缺参」的另一类问题，不在本修复范围（归修复项 3，见 §8）。验收时勿把该场景的偶发中止误判为本修复回归。
+  - 复现后查 `.agent/logs/Agent-{YYYYmmdd}.log`：`tool.error` 中 `路径是目录而非文件: 。` 条目应消失；旧的 `llm.error` 全局连续错误中止条目不再适用。
+  - **范围限定（A4）**：上述路径验收针对**别名误用**场景（`filePath`/`file_path` 被归一化，模型可以据错误提示纠正）。旧实现会按相同 `(toolName, userMsg)` 连续 3 次直接中止；该行为现已移除。普通工具错误回交模型，Turn 上限仍由模型/工具调用轮数限制。
 
 ## 8. 风险与取舍
 
@@ -537,6 +537,6 @@ describe('toolErrMissingPath hint survives sanitizeToolErrorString', () => {
 - **wechat `filePath` 撞名**：`filePath` 既是文件工具的 path 别名，又是 wechat_reply/wechat_send 的合法「待发送文件路径」字段。当前无串扰（执行器按 toolName 分发，wechat 不走 `readFileExecutor`；guard 对 wechat 走 `default` 不校验 path）。但 `extractPathField` 是通用函数，**严禁**用于 wechat 工具入参（已在 §4.1 JSDoc 限定）；若后续按下方「集中式归一化备选」把别名归一化下沉到 merge 层，必须在 `coalesceToolUseInputs` 内按 toolName 白名单处理，避免污染 wechat 的 `filePath`。系统提示 §4.4b 已穷举 5 个文件类工具、排除 wechat，不会让模型困惑。
 - **别名集合**：仅支持 `path`/`filePath`/`file_path`。如日志未来出现其它变体（如 `filepath`、`Path`），追加到 `PATH_FIELD_ALIASES` 即可，单点扩展。
 - **hint 文案 sanitize 透传（A1）**：修复项 2 的 hint 能否到达模型，依赖 `sanitizeToolErrorString` 的保留行为（详见 §4.3 行为变更说明 3）。当前文案 sanitize-safe（原样保留），但属隐性约束：若后续维护者给 hint 加路径示例（触发 `containsInternalDetails`）或拉长到 >240/400 字符，hint 会被 `defaultForTool` 静默吞噬、且不被 §5.2/§5.3 捕获。已由 §5.5 回归断言固化为测试守护；改动 hint 文案时须同步确认该断言仍绿。
-- **未做修复项 3**（放宽重复错误计数器）：本计划按用户要求只含 1+2+4。若 1+2 落地后仍偶发中止，再单独立项做 3（区分「输入型错误」与「执行型错误」、跨轮 `noteSuccess` 重置策略）。注意：guard 缺参错误亦走 `noteFailure`（`toolChatLoop.ts:855-856`），故修复项 1+2 消除的是「别名误用导致的中止」；模型**完全不用** path 类字段时仍可能因连续缺参 abort，该场景不在本修复范围（属修复项 3）。
+- **旧全局连续错误保护**：已由《工具错误恢复与 Turn 连续性改进计划》阶段 A 的身份与错误类别策略取代；普通错误不再因自然语言字符串重复而立即中止。
 - **系统提示长度**：`buildToolConventionHint` 仅两行，对 token 用量影响可忽略；无条件注入（不依赖 memory/image 等开关），保证始终生效。
 - **集中式归一化备选**：亦可把别名归一化下沉到 `coalesceToolUseInputs`（`toolUseInputMerge.ts:35-55`）单点完成——在其 `ensureString` 前先做 `path ← filePath/file_path` 归一化（按 toolName 白名单，仅对 5 个文件类工具），使 guard/执行器都只认 `path`。注意改造点是 `coalesceToolUseInputs`（按 toolName 合并字段），**不是** `normalizeToolUseInputRecord`（后者仅浅拷贝/JSON 解析，不按 toolName 处理）。本计划选择「显式 helper + 双侧调用」是为了让单测可分别覆盖校验层与执行层，且不依赖上游是否一定走 merge 路径。两种方案二选一即可，勿叠加。

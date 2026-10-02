@@ -4,6 +4,7 @@ import type { ToolConfirmOptions } from '../../../shared/toolConfirm'
 export type ChatMessageActions = {
   archiveToWiki: (content: string) => void
   retryAssistant: (messageId: string) => void
+  continueAssistant?: (messageId: string) => void
   cancelQueued: (messageId: string) => void
   confirmTool: (toolUseId: string, approved: boolean, options?: ToolConfirmOptions) => void
   cancelTool: (toolUseId: string) => void

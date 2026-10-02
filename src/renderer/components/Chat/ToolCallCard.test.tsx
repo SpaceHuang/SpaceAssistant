@@ -35,6 +35,15 @@ describe('MCP status mapping', () => {
 })
 
 describe('ToolCallCard approval explanations', () => {
+  it('shows an actionable confirmation card for generic tools such as sensitive reads', () => {
+    render(<ToolCallCard record={writeRecord('confirming', {
+      toolName: 'read_file', input: { path: 'recovery-a.md' }
+    })} onConfirm={vi.fn()} />)
+    expect(screen.getByRole('button', { name: '允许' })).toBeDefined()
+    expect(screen.getByRole('button', { name: '拒绝' })).toBeDefined()
+    expect(screen.getByText(/"path": "recovery-a\.md"/)).toBeDefined()
+  })
+
   it('shows a localized reason when script analysis is incomplete', () => {
     render(<ToolCallCard record={writeRecord('confirming', {
       toolName: 'run_script', input: { code: 'private script source' },

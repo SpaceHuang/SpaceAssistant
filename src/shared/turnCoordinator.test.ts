@@ -37,6 +37,52 @@ describe('TurnCoordinator', () => {
     expect(config).not.toHaveProperty('apiKey')
   })
 
+  it('冻结并保留续跑所需的非敏感安全快照', () => {
+    const snapshot = { workDirProfileId: 'profile-a', workDirSha256: 'a'.repeat(64), authorizationVersion: 'b'.repeat(64), toolSetSha256: 'c'.repeat(64), executionConfigSha256: 'd'.repeat(64) }
+    const config = normalizeTurnExecutionConfig({ lane: 'desktop', continuationSafetySnapshot: snapshot })
+    expect(config.continuationSafetySnapshot).toEqual(snapshot)
+    expect(JSON.stringify(config)).not.toContain('/Users/')
+    expect(JSON.stringify(config)).not.toContain('apiKey')
+  })
+
+  it('continuation prepare 复用原用户消息并固定目标 turn 身份', () => {
+    const db = storage()
+    const coordinator = new TurnCoordinator(db, { now: () => 2, id: (() => { let n = 0; return () => `generated-${++n}` })() })
+    const config = {
+      model: 'model-a',
+      continuationSource: { continuationId: 'continuation-1', invocationId: 'source-invocation', sourceTurnId: 'source-turn', checkpointSequence: 9, checkpointSha256: 'a'.repeat(64) }
+    }
+    const started = coordinator.prepareContinuation({
+      requestId: 'target-invocation', sessionId: 's1', userMessageId: user.id, turnId: 'target-turn', startToken: 'target-token', config
+    })
+
+    expect(started).toMatchObject({ turnId: 'target-turn', requestId: 'target-invocation', startToken: 'target-token', userMessage: user, executionConfig: config })
+    expect(db.append).toHaveBeenCalledTimes(1)
+    expect(db.append).toHaveBeenCalledWith(expect.objectContaining({ role: 'assistant', sessionId: 's1', status: 'streaming' }))
+    expect(db.saveTurn).toHaveBeenCalledWith(expect.objectContaining({
+      turnId: 'target-turn', requestId: 'target-invocation', sessionId: 's1', userMessageId: user.id,
+      startToken: 'target-token', executionConfig: config
+    }))
+    expect(db.prepareAtomic).not.toHaveBeenCalled()
+    expect(db.claimQueuedAtomic).not.toHaveBeenCalled()
+  })
+
+  it('continuation prepare fail closed on a missing/queued user or missing checkpoint identity', () => {
+    const missingStorage = storage()
+    vi.mocked(missingStorage.getMessage).mockImplementation((messageId) => messageId === user.id ? user : undefined)
+    const coordinator = new TurnCoordinator(missingStorage, { now: () => 2, id: () => 'generated' })
+    expect(() => coordinator.prepareContinuation({ requestId: 'r', sessionId: 's1', userMessageId: user.id, turnId: 't', startToken: 'token', config: {} }))
+      .toThrow('CONTINUATION_SOURCE_REQUIRED')
+    expect(() => coordinator.prepareContinuation({ requestId: 'r', sessionId: 's1', userMessageId: 'missing', turnId: 't', startToken: 'token', config: { continuationSource: { continuationId: 'c', invocationId: 'i', sourceTurnId: 'source-t', checkpointSequence: 1, checkpointSha256: 'a'.repeat(64) } } }))
+      .toThrow('TURN_REUSE_SESSION_MISMATCH')
+    const queuedStorage = storage()
+    vi.mocked(queuedStorage.getMessage).mockReturnValue({ ...user, status: 'queued' })
+    expect(() => new TurnCoordinator(queuedStorage, { now: () => 2, id: () => 'generated' }).prepareContinuation({
+      requestId: 'r', sessionId: 's1', userMessageId: user.id, turnId: 't', startToken: 'token',
+      config: { continuationSource: { continuationId: 'c', invocationId: 'i', sourceTurnId: 'source-t', checkpointSequence: 1, checkpointSha256: 'a'.repeat(64) } }
+    })).toThrow('CONTINUATION_USER_NOT_SENT')
+  })
+
   it('create-user prepare 原子追加 user 和 streaming assistant', () => {
     const db = storage()
     const started = new TurnCoordinator(db, { now: () => 1, id: (() => { let n = 0; return () => `id-${++n}` })() }).prepare({ mode: 'create-user', requestId: 'r1', sessionId: 's1', input: { text: 'hi' }, config: {} })
