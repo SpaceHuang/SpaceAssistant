@@ -44,6 +44,7 @@ export function createAgentSdkDesktopObserver(input: {
   deferredDimensionRef?: { current?: DeferredToolDimension }
   /** FR8：节省量按轮日志出口（assembler 落 agentLogger；事件面不进 wire 面与会话事件流）。 */
   onDeferredSavings?(input: { modelTurn: number; toolCount: number; eagerEquivalentTokens: number; indexTokens: number; savedTokens: number }): void
+  onDispatchDiagnostic?(event: Readonly<Record<string, unknown>>): void
 }): AgentTurnObserver {
   let pendingChunks: ObserverChunk[] = []
   let streamedText = ''
@@ -530,6 +531,21 @@ export function createAgentSdkDesktopObserver(input: {
         }
       }
       input.notify?.({ kind: 'tool-result', requestId: input.requestId, toolUseId: call.toolCallId })
+    },
+    async onDispatchStoppedWithPending(event) {
+      input.onDispatchDiagnostic?.({ type: 'tools.dispatch_stopped_with_pending', ...event })
+      await emitSessionEvent({ type: 'tool_result', payload: {
+        turnId: input.turnId, stepId: stepId(event.modelTurn), diagnosticType: 'tools.dispatch_stopped_with_pending',
+        reason: event.reason, attemptedCount: event.attemptedCount, undispatchedToolCallIds: [...event.undispatchedToolCallIds]
+      } })
+    },
+    async onUndispatchedToolsMaterialized(event) {
+      input.onDispatchDiagnostic?.({ type: 'tools.undispatched_slots_materialized', ...event })
+      await emitSessionEvent({ type: 'tool_result', payload: { turnId: input.turnId, stepId: stepId(event.modelTurn), diagnosticType: 'tools.undispatched_slots_materialized', count: event.count } })
+    },
+    async onToolDispatchFailureContext(event) {
+      input.onDispatchDiagnostic?.({ type: 'tools.dispatch_failure_context', ...event })
+      await emitSessionEvent({ type: 'tool_result', payload: { turnId: input.turnId, stepId: event.stepId, diagnosticType: 'tools.dispatch_failure_context', toolUseId: event.toolCallId, toolName: event.toolName, reasonCode: event.reasonCode } })
     },
     async onTurnOutputReady(result) {
       if (input.stageAssistantContentUntilTurnFinished || recoveredOutput) emitFact({ type: 'content-reconciled', text: result.text })

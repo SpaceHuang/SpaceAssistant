@@ -2,18 +2,19 @@
 
 > 文档日期：2026-10-02
 > 文档性质：问题分析与改进方案，本次不含代码实现
-> 状态：**评审修订完成（v2），可按 §6 动工**——评审报告：[`docs/review/2026-10-02-tool-dispatch-slot-abort-and-transcript-hole-plan-review.md`](../review/2026-10-02-tool-dispatch-slot-abort-and-transcript-hole-plan-review.md)（结论：无方向性阻断；P2-1…P2-4 与 P3-2/3/4 已落实，P3-1 经复核不成立，见修订记录）
+> 状态：**按 v3 阻断评审修订，待复审**——最新评审报告：[`2026-10-02-tool-dispatch-slot-abort-and-transcript-hole-plan-review-v3.md`](../review/2026-10-02-tool-dispatch-slot-abort-and-transcript-hole-plan-review-v3.md)；v3 修订前的 v2 评审依据见 [`2026-10-02-tool-dispatch-slot-abort-and-transcript-hole-plan-review.md`](../review/2026-10-02-tool-dispatch-slot-abort-and-transcript-hole-plan-review.md)。
 > 触发案例：会话 `f659b1db-51f7-4f75-82b2-5fb90afef9a3`（「会话 39」）Turn `d61501aa-830c-4fe7-be78-a9d2397450c5`，2026-10-02 12:03–12:04（本地，UTC+8）
 > 用户可见表现：「回复未能完成。你可以重试生成，或基于已有上下文继续对话。失败原因 Cannot read properties of undefined (reading 'role')」
 > 证据来源：
 > - 运行日志 `.agent/logs/Agent-20261002.log`（544 / 547 / 550–552 行）
 > - 会话事件流 `sessions/f659b1db-51f7-4f75-82b2-5fb90afef9a3-20261002/events.jsonl`（103740 条事件，末段为该 Turn）
 > - 代码：`packages/agent-sdk/src/turn.ts`、`electron/runtime/agentSdkDesktopObserver.ts`、`electron/runtime/hostedAgentTurnHost.ts`、`electron/confirmation/agentSdkSafetyPolicy.ts`、`electron/runtime/desktopAgentRuntime.ts`
-> 关联文档：[`tool-error-recovery-and-turn-continuity-plan.md`](tool-error-recovery-and-turn-continuity-plan.md)（设计原则同源——「工具错误首先是模型输入」；该方案处理宿主侧错误计数与 Turn 恢复，本方案处理 agent-sdk 同批并行派发层的两个缺陷，可视为该原则在并发维度上的落实）；评审报告见 `docs/review/2026-10-02-tool-dispatch-slot-abort-and-transcript-hole-plan-review.md`
+> 关联文档：[`tool-error-recovery-and-turn-continuity-plan.md`](tool-error-recovery-and-turn-continuity-plan.md)（设计原则同源——「工具错误首先是模型输入」；该方案处理宿主侧错误计数与 Turn 恢复，本方案处理 agent-sdk 同批并行派发层的两个缺陷，可视为该原则在并发维度上的落实）；最新评审报告见 `docs/review/2026-10-02-tool-dispatch-slot-abort-and-transcript-hole-plan-review-v3.md`
 >
 > 修订记录：
 > - **v2（2026-10-02）**：按评审报告落实 P2-1（§5.1 物化复用 `turn.ts:1442` 既有理由码判定，删除 `NOT_ATTEMPTED_AFTER_SIBLING_STOP`，修正「关键次序」论证）、P2-2（§7.1 不变量 3 改写为「至少一种 + 至多一条」）、P2-3（§5.2 补全 8 处抛出点清单 + 新增 §5.4 用户显式拒绝权衡与批次去重缓解）、P2-4（§4.1/§5.2 补充回注关闭路径执行面说明，§8 增加既有用例排查项）、P3-2/3/4（回归命令精简、P1-C 落点标注 SDK 投影来源、不变量测试改用内存 History）。P3-1（`turn.ts:599` 实为 600）经 `sed -n '598,601p'` 复核**不成立**——598 行为 `requestObservation` 赋值、599 行即 `prepareModelRequest` 调用——维持原文。
 > - v1（2026-10-02 初稿）
+> - **v3（2026-10-02）**：按阻断评审修订 P0-B 的并发语义。拒绝 worker 不再立即补领队列：批内仍有已领取调用未结算时进入 drain 状态，禁止启动新的工具；待所有在途结果确定后，若没有非拒绝类致命 rejection，再恢复派发未领取项。这样混合批中在途致命故障可先被观察到，后续排队工具保持未派发。更新 §4.1、§5.2、§6、§7、§8 的时序、边界及验收；修正错误地声称 `:2103-2138` 保持原行为的内容。
 
 ---
 
@@ -87,7 +88,7 @@ const worker = async () => {
 }
 ```
 
-问题不在并发上限本身（排队等补位是正常语义；上限 2 来自 `desktopAgentRuntime.ts:70` 硬编码，经 `invocationAssembler.ts:1078` 注入，是 Turn 内信号量，跨会话/跨 Turn 互不共享）。问题在于 `stopped` 对所有 rejection 一视同仁：
+问题不在并发上限本身（排队等补位是正常语义；上限 2 来自 `desktopAgentRuntime.ts:70` 硬编码，经 `invocationAssembler.ts:1078` 注入，是 Turn 内信号量，跨会话/跨 Turn 互不共享）。问题在于 `stopped` 对所有 rejection 一视同仁，同时缺少拒绝与在途调用之间的协调：
 
 - **审批拒绝（`ToolDeniedError`）**：`turn.ts` 内共 **8 处** `throw new ToolDeniedError`，覆盖安全网关 deny、确认必需/确认拒绝（含用户显式拒绝）、`PREPARED_CALL_MISMATCH`、`STALE_AUTHORIZATION`、recheck 失败、执行器拒收等（完整清单见 §5.2）。这些是**每调用级结果**——网关明确拒绝的是「这一个调用」，不是这一批；且桌面 lane 开启了 `returnDeniedToolsToModel: true`（`hostedAgentTurnHost.ts:171`），设计意图就是「拒绝是正常结果，回注给模型，Turn 继续」。用拒绝去作废兄弟队列，与该设计意图直接矛盾。
 - **Turn 级致命故障**（取消/超时、`AgentTurnHistoryAppendError`、`ToolExecutionAfterDispatchError` 等）：停止派发是合理的——Turn 已无法继续。
@@ -129,7 +130,7 @@ settledTools 结算后其实有两条出路（`turn.ts:1433-1450`）：
 
 - **必要条件**：同一模型轮返回 ≥2 个工具调用，且首个 rejection 落在队列非尾部（并发上限越高越难满足「非尾部」，上限 2 下第 3 个及以后的调用几乎必然是洞）；且该 rejection 为 `ToolDeniedError`（审批拒绝/确认缺失/授权失配），且 lane 开启 `returnDeniedToolsToModel`。
 - **波及 lane**：桌面 lane（`hostedAgentTurnHost.ts:171`），含经由该宿主的链路。`returnDeniedToolsToModel` 未开启的路径走 throw 分支，不触发空洞崩溃，但保留 §4.2 的行为问题。
-- **P0-B 对回注关闭路径的行为变化（评审 P2-4）**：该路径（SDK 直连/测试用例，已核实所有生产 lane 均经 `invocationAssembler` → `hostedAgentTurnHost` 开启回注）下，同批未被拒的兄弟调用从「作废不执行」变为「全部完成门控评估与落账后，Turn 仍以首个拒绝终止」——详见 §5.2，生产 lane 不受影响。
+- **P0-B 对回注关闭路径的行为变化（评审 P2-4）**：该路径（SDK 直连/测试用例，已核实所有生产 lane 均经 `invocationAssembler` → `hostedAgentTurnHost` 开启回注）下，拒绝后的补位延迟到当前在途调用全部结算；若无致命故障，未领取工具仍会继续派发，Turn 最终仍按既有规则以拒绝终止。若出现致命故障，则排队工具保持未派发。详见 §5.2。
 
 ### 4.2 后果分级
 
@@ -161,13 +162,15 @@ settledTools 结算后其实有两条出路（`turn.ts:1433-1450`）：
 
 **效果**：对外可观测行为（理由码、历史事件、既有测试断言）与现状完全一致，仅消灭「空洞」这一数据形态。单独落地即可消除崩溃。
 
-### 5.2 P0-B：失败分类——拒绝类不触发停止派发（语义修正）
+### 5.2 P0-B：失败分类与批内排空——拒绝不作废队列，也不越过未决在途调用补位
 
 **位置**：`turn.ts:1192` 的 `mapWithConcurrency` 调用与 `1539` 的实现（均为模块内私有，签名变更无外部影响）。
 
-**做法**：为 `mapWithConcurrency` 增加 `shouldStop?: (reason: unknown) => boolean` 选项；调用处传 `shouldStop: (reason) => !(reason instanceof ToolDeniedError)`。即：
+**做法**：为 `mapWithConcurrency` 增加 rejection 分类及批内 drain 协调。遇到 `ToolDeniedError` 时不将它视为致命停止，但也**不立即补领下一项**：置 `drainingAfterDenial`，暂缓领取尚未启动的工作，并等待所有已领取 worker 完成。排空期间若任一在途 worker 抛出非 `ToolDeniedError`，转为致命停止，所有仍未领取项保持未派发并按 P0-A 落账；若在途调用均成功、返回业务错误或拒绝，则清除 drain 状态并继续领取队列。其他 rejection 仍立即 `stopped = true`，后续不再派发。
 
-- `ToolDeniedError` → **不停止**，兄弟调用照常派发；每个被拒调用已有完整的 `markNotDispatched` + 回注链路（抛出前已落账），模型下一轮能看到全部拒绝结果并自行调整（改用串行小批、先读后写、或向用户说明）。
+该协调需要让 worker 在每个任务 settle 时同步更新批状态，并在共享游标前以同一临界状态判断是否允许领取。实现可使用 promise barrier / 批次调度器；不得以固定延迟或依赖工具执行耗时排序。状态至少区分 `running`、`draining-after-denial`、`stopped`，且多个拒绝、多个在途 worker 同时完成时不能丢失致命 rejection。
+
+- `ToolDeniedError` → **不作废队列，但进入 drain**；当前已领取调用可完成，drain 窗口中不启动新调用。无致命结果时恢复派发，确保一次拒绝不会永久作废整批；致命结果先于恢复派发时，未领取项保持未派发。每个被拒调用已有完整的 `markNotDispatched` + 回注链路（抛出前已落账）。
 - 其余 rejection（取消/超时、历史追加失败、派发后结果未知等）→ 维持 `stopped = true` 的 fail-fast，走既有 throw 分支。
 
 **影响的抛出点——`turn.ts` 全量 8 处 `throw new ToolDeniedError`（评审 P2-3；`shouldStop` 以 `instanceof` 判定，天然全覆盖，无实现风险）**：
@@ -185,15 +188,15 @@ settledTools 结算后其实有两条出路（`turn.ts:1433-1450`）：
 
 另有 prepareTool 的 catch 分支（`turn.ts:1215-1218`）先 `markNotDispatched` 再 re-throw 透传既有 `ToolDeniedError` 实例，分类同样成立。所有被拒调用都在**工具执行之前**被拦截，不产生工具副作用。
 
-**产品权衡：用户显式拒绝后的确认卡连弹（评审 P2-3）**。现状下首个拒绝即作废队列，同批 N 个审批候选用户最多被打扰 1 次；P0-B 后最坏情况是同批 6 个 `edit_file` 连续弹出最多 6 次确认卡，与「用户点拒绝 = 别这么干」的直觉有张力。本方案的处置分三层：
+**产品权衡：用户显式拒绝后的确认卡连弹（评审 P2-3）**。同批多个审批候选仍可能逐个走门控并连续弹出确认卡；drain 只处理在途结果未决期间的补位时序，不抑制之后恢复派发的确认请求。本方案的处置分三层：
 
 - **P0 阶段统一不停止**：实现最简、语义一致（每个调用独立门控）；且首个拒绝结果回注后，模型大概率自行停止重发同类调用；
 - **P1-D 缓解（§5.4）**：宿主确认层对「同批、同工具、同写目标」的后续 ask 以首个用户显式拒绝结果直接回注（去重），用户只需拒绝一次；
 - **不将用户显式拒绝单列为「停止信号」**：那会让 agent-sdk 派发层依赖宿主确认语义，破坏分层；若 P1-D 落地后仍有场景噪声，再评估单列。
 
-**回注关闭路径的执行面变化（评审 P2-4）**。`returnDeniedToolsToModel = false` 的路径（SDK 直连/测试用例）下，P0-B 后同批未被拒的兄弟调用从「作废不执行」变为「全部完成门控评估与落账后，Turn 仍以首个拒绝终止」——方向符合「每调用级结果」原则，且被拒调用本身不执行副作用，但门控评估与事件投影次数变多。实施时需排查 `turn.test.ts` 中依赖「首个拒绝即停止派发」时序的**纯拒绝批**用例（评审已确认 `:2103-2138` 为「拒绝 + 致命错误」混合批：致命错误仍停止派发，行为不变），需同步更新的用例列入 §8。
+**回注关闭路径的执行面变化（评审 P2-4）**。`returnDeniedToolsToModel = false` 的路径（SDK 直连/测试用例）下，拒绝后仍按 drain 规则协调在途任务：无致命错误时最终继续派发未领取兄弟，Turn 按既有行为终止；在途出现致命错误时队列保持未派发。实施时排查依赖拒绝立即补位或停止时序的用例并按新状态机更新。
 
-**与 P0-A 的关系**：P0-B 落地后，拒绝路径不再产生空洞（每个调用都会被尝试）；空洞只剩致命停止一种来源，而该来源下 Turn 即将抛错结束——P0-A 的物化保证即使未来出现新的「不 throw 就 push」路径，transcript 也不会被污染。二者是「堵源 + 兜底」关系，建议同一 PR 落地。
+**与 P0-A 的关系**：P0-B 落地后，纯拒绝且无致命错误的路径最终会尝试所有调用；致命错误发生在 drain 窗口时仍会留下未领取项，由 P0-A 物化落账与占位。二者是「协调派发 + 空洞兜底」关系，建议同一 PR 落地。
 
 ### 5.3 P1-C：可观测性与归因精度
 
@@ -224,10 +227,10 @@ P0-B 的已知代价是同批多个审批候选在用户显式拒绝后仍会逐
 
 | 阶段 | 内容 | 交付物 |
 |---|---|---|
-| 1 | P0-A + P0-B 同 PR 落地（堵源 + 兜底），含 §7.1/§7.2 测试；同步排查并更新依赖「首个拒绝即停止」时序的既有纯拒绝批用例（评审 P2-4） | `turn.ts` 改动 + `turn.test.ts` 用例（新增 + 同步更新） |
-| 2 | §7.3 回归：`packages/agent-sdk` 相关测试 + `electron/runtime` 宿主测试定向跑（含既有 `:2103-2138` 用例保持绿的验收） | 测试报告 |
-| 3 | P1-C 观测三项（SDK 投影来源 + 宿主侧透传）；P1-D 批次去重评估与（如采纳）确认层实现 | 事件/日志 + 评估结论 |
-| 4 | 真机复现验证：构造「同批多审批工具 + 单个拒绝」场景，确认 Turn 继续、全部调用有结果、无 pairing repair 压力、确认卡无连弹（若 P1-D 已落地） | 验证记录（追加本文档） |
+| 1 | **完成**：P0-A + P0-B 同批落地（拒绝 drain 协调 + 未派发槽位物化）；改写原混合批测试为 deferred 确定性时序，并新增纯拒绝恢复、多 worker 竞争、1000 轮不变量测试 | `packages/agent-sdk/src/turn.ts`、`packages/agent-sdk/test/turn.test.ts` |
+| 2 | **完成**：SDK Turn、Hosted AgentTurnHost、desktop observer 与 confirmation adapter 定向回归；覆盖 drain fatal / recover 路径 | 见本文末「实施验证记录」 |
+| 3 | **完成**：P1-C SDK observer 投影 + 会话事件/诊断日志，P1-D 同轮同工具同写目标拒绝去重（只记用户显式拒绝） | `agentSdkDesktopObserver.ts`、`invocationAssembler.ts`、`agentSdkConfirmationPort.ts` |
+| 4 | **代码级验收完成；真机运行未执行**：自动化确认拒绝后 Turn 恢复、同目标确认只发布一次、队列与 transcript 均有确定性覆盖。需启动桌面应用和真实确认 UI 才能验证视觉交互及新会话 pairing repair 指标 | 限制与记录见实施验证记录 |
 
 与关联方案 [`tool-error-recovery-and-turn-continuity-plan.md`](tool-error-recovery-and-turn-continuity-plan.md) 的阶段 B（让工具失败在原 Turn 内得到处理）同向，建议一并评审；本方案不依赖其落地，可独立实施。
 
@@ -242,23 +245,27 @@ P0-B 的已知代价是同批多个审批候选在用户显式拒绝后仍会逐
   1. `settledTools` 物化后**无空洞**（每个下标都有 settled 结果）；
   2. `messages` 中**不含 `undefined`**；
   3. **结局守恒（评审 P2-2 改写）**：每个 `tool_use` **至少有一种**结局记录——对应 `tool` 消息或 `tool-call-not-dispatched` 历史事件；且对应 `tool` 消息在 `messages` 中**至多一条**、not-dispatched 历史事件**至多一条**（不重复落账）。注意：物化路径与拒绝回注路径天然是「两者都有」（占位/回注消息 + 落账事件并存），这是既定设计，**不得**按「必居其一」判为违规；
-  4. **队列作废仅由致命条件引起**：出现未尝试调用时，当轮 rejection 中必存在非 `ToolDeniedError` 的致命项；
+  4. **队列作废仅由致命条件引起**：出现未尝试调用时，当轮 rejection 中必存在非 `ToolDeniedError` 的致命项；拒绝单独不能永久作废队列；
   5. 非致命拒绝不减少「已尝试」调用数（兄弟调用全部有结局）。
+  6. drain 状态期间（拒绝已发生、尚有在途 worker 未结算）派发启动数不增加；全部在途 settle 且无致命项后才恢复领取。
 
 随机序列测试使用内存 History（`MemoryHistory`）与假 observer，不落真实磁盘 IO，满足 electron 项目 forks 单 worker 与用例超时约束（评审 P3-4；与既有 `turn.test.ts` 用例同法）。
 
 ### 7.2 场景回归用例
 
-1. **本次事故最小复现**：6 个审批候选调用、槽位 0 被 `ToolDeniedError` 拒绝、槽位 1 成功 → 断言：Turn 不失败并发出下一轮请求；messages 无 `undefined`；call_02…05 全部实际执行（P0-B）或有显式 not-dispatched 记录（兜底路径）；每个 `tool_use` 均有结果。
-2. **致命失败路径**：批中一个调用抛 `AgentTurnHistoryAppendError` → 断言：Turn 以该原始错误结束（错误文本不被物化占位覆盖）；未尝试调用全部有 `tool-call-not-dispatched`；messages 无 `undefined`。
-3. **普通业务失败**：批中一个调用返回 isError 结果（非 throw）→ 断言：兄弟调用不受影响（对既有行为的回归保护）。
-4. **边界**：拒绝发生在最后一个槽位（无洞）→ 行为与现状一致（既有测试不回退）。
+1. **混合批时序（评审阻断复现）**：并发上限 2；`tc-denied` 立即拒绝，`tc-uncertain` 由可控 deferred promise 暂缓后抛派发结果未知，另有 `tc-queued`。断言：拒绝 settle 后、致命结果揭晓前 `tc-queued` 执行器调用次数仍为 0；致命结果揭晓后 Turn 以该原始错误结束，`tc-queued` 保持未派发并有 not-dispatched 事件，未产生其副作用；messages 无 `undefined`。
+2. **纯拒绝恢复路径**：拒绝后仍有在途调用，先令该调用成功结算，再断言排队调用才启动并最终都有结果；Turn 不因拒绝而丢弃整批，messages 无 `undefined`。
+3. **多 worker 竞争**：至少两个在途调用与多个拒绝交错完成，其中一个在途调用抛致命错误；断言 drain 屏障不会遗漏致命项，屏障打开前无新派发。
+4. **普通业务失败**：批中一个调用返回 isError 结果（非 throw）→ 断言：兄弟调用不受影响（对既有行为的回归保护）。
+5. **边界**：拒绝发生在最后一个槽位（无洞）→ 行为与新状态机一致，不产生多余等待或重复落账。
 
 ### 7.3 验收标准
 
 - §7.1 不变量测试在 ≥1000 轮随机序列下全绿；回退任一修复应能转红（红绿同步验证）。
-- §7.2 场景 1 中，模型下一轮收到的消息数 = 上轮 assistant + 批内调用数（无缺失、无 `undefined`）。
-- **既有用例 `turn.test.ts:2103-2138` 保持绿**（"stops queued tools after a failure…"，2136 行断言排队工具落 `TURN_STOPPED_BEFORE_DISPATCH`）——这是 P2-1 修正（物化复用既有理由码判定）的直接验收项。
+- §7.2 混合批时序中，排队工具在在途致命结果确定前执行次数为 0；最终记录为未派发，且其副作用边界未被越过。
+- §7.2 纯拒绝恢复路径中， drain 完成后排队工具会被派发；不能把“拒绝之后暂缓补位”实现成“拒绝后永久停止”。
+- 所有结局下 `messages` 不含 `undefined`，每个 `tool_use` 均有可追溯结局。
+- 既有用例 `turn.test.ts:2103-2138` 属于“拒绝 + 派发结果未知”混合批；必须按确定性门控更新断言，确保排队调用仍是 `TURN_STOPPED_BEFORE_DISPATCH`，不能要求旧的偶然时序“保持绿”而不校验实际执行时序。
 - 定向回归命令：`npm exec vitest run packages/agent-sdk/test/turn.test.ts electron/runtime/hostedAgentTurnHost.test.ts`（v2 按评审 P3-2 移除 `capacity.test.ts`——本次改动不涉及其签名）。
 - 真机验收（阶段 4）：触发场景下 UI 不再出现 `Cannot read properties of undefined (reading 'role')`；`tool.result.pairing.repaired` 的 `roleAlternationFixed` 在新会话中趋近 0（旁证，非硬性门槛）。
 
@@ -269,8 +276,21 @@ P0-B 的已知代价是同批多个审批候选在用户显式拒绝后仍会逐
 | `packages/agent-sdk/src/turn.ts` | :1192 | `mapWithConcurrency` 调用处传入 `shouldStop` 分类器（`!(reason instanceof ToolDeniedError)`） |
 | `packages/agent-sdk/src/turn.ts` | :1417 前 | 新增空洞物化步骤：`markNotDispatched`（**复用 `:1442` 既有理由码判定表达式**，不新增理由码）+ fulfilled isError 占位消息，置于 deniedToolResults 循环之前 |
 | `packages/agent-sdk/src/turn.ts` | :1539-1557 | `mapWithConcurrency` 签名增加 `shouldStop?` 选项，`stopped` 置位前先过分类器 |
-| `packages/agent-sdk/test/turn.test.ts` | 末尾追加 | §7.1 不变量测试 + §7.2 场景 1/2/4 |
-| `packages/agent-sdk/test/turn.test.ts` | 既有用例排查（评审 P2-4） | 依赖「首个拒绝即停止派发」时序的**纯拒绝批**用例按 P0-B 新行为同步更新（`:2103-2138` 为混合批，已确认不受影响）；`:2136` 的 `TURN_STOPPED_BEFORE_DISPATCH` 断言必须保持绿 |
+| `packages/agent-sdk/src/turn.ts` | `mapWithConcurrency` 调度器 | 加入拒绝后的 drain 状态与同步屏障；确保 drain 未结束时不领取新项，且在途致命 rejection 不会被遗漏 |
+| `packages/agent-sdk/test/turn.test.ts` | 末尾追加 | §7.1 不变量测试 + §7.2 混合批确定性时序、纯拒绝恢复、多 worker 竞争等场景 |
+| `packages/agent-sdk/test/turn.test.ts` | 既有用例排查 | `:2103-2138` 必须改为 deferred 控制的确定性测试，明确排队工具在 `tc-uncertain` 致命错误前不执行，且落 `TURN_STOPPED_BEFORE_DISPATCH`；移除旧的“混合批不受影响”断言 |
 | `electron/runtime/agentSdkSessionEventProjection.ts` 或 SDK observer（P1-C，评审 P3-3） | 投影来源 | `tools.dispatch_stopped_with_pending` 事件——**需 SDK 层新增投影来源**（observer 钩子）或复用 not-dispatched 事件投影；宿主侧无法直接观测 SDK 内部状态 |
 | `electron/runtime/`（P1-C） | — | 物化计数上报 + 错误上下文透传 |
 | `electron/confirmation/`（P1-D，可选） | 确认层 | 同批同工具同写目标的 ask 去重回注 |
+
+## 9. 实施验证记录（2026-10-03）
+
+- 使用独立 worktree：`.worktrees/tool-dispatch-slot-abort-tdd`，分支 `codex/tool-dispatch-slot-abort-tdd`。
+- TDD 场景：拒绝后 drain 窗口中 fatal 时 queued 不执行且有 not-dispatched 记录；无 fatal 时在途任务 settle 后恢复 queued；两个在途 worker 竞争 settle 时不会提前解 drain；confirmation 用户拒绝只对同轮同工具同规范写目标去重。
+- 随机不变量：固定 mulberry32 seed，1000 个 1–8 调用批次，采用 `MemoryHistory`；检查结局可追溯、消息无 `undefined`、消息与 not-dispatched 不重复、拒绝不单独作废队列。
+- P1-C：SDK 内部产生 `tools.dispatch_stopped_with_pending`、`tools.undispatched_slots_materialized`、`tools.dispatch_failure_context`；desktop observer 将其投影到现有 `tool_result` 会话事件流（使用 `diagnosticType` 字段）并由宿主 `logAgentEvent` 写结构化日志。
+- P1-D 采用。去重键包含 `modelTurn`、工具名与 `writePathFact.normalizedPath`，仅在同一模型轮内生效；下一轮即使目标路径相同也重新确认，允许模型调整内容后由用户重新审阅。不同工具/目标独立确认，策略性拒绝不进入用户拒绝缓存。
+- 定向验证命令：`npm exec -- vitest run --project electron packages/agent-sdk/test/turn.test.ts electron/runtime/hostedAgentTurnHost.test.ts electron/runtime/agentSdkDesktopObserver.test.ts electron/confirmation/agentSdkConfirmationPort.test.ts`；通过 4 个测试文件、184 个测试。
+- 随机不变量单独验证：`npm exec -- vitest run --project electron packages/agent-sdk/test/turn.test.ts -t '1000 deterministic randomized batches'`；1000 轮通过。
+- SDK 类型验证：`npm run typecheck:agent-sdk`；通过。
+- 真机验证未执行：当前运行环境没有启动桌面 Electron 与可交互审批 UI，亦没有可采集的新会话 pairing repair 指标；因此 §7.3 的 UI/线上旁证门槛保留为部署后验证项。

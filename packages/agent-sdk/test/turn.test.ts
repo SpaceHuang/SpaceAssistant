@@ -25,6 +25,79 @@ function toolExecutionPort(permits: InMemorySafetyPermitStore, execute: (call: {
 }
 
 describe('runAgentTurn', () => {
+  it('maintains dispatch and transcript invariants across 1000 deterministic randomized batches', async () => {
+    let seed = 0x5eed1234
+    const random = () => {
+      seed |= 0
+      seed = seed + 0x6d2b79f5 | 0
+      let value = Math.imul(seed ^ seed >>> 15, 1 | seed)
+      value = value + Math.imul(value ^ value >>> 7, 61 | value) ^ value
+      return ((value ^ value >>> 14) >>> 0) / 4294967296
+    }
+    const categories = ['success', 'business', 'deny', 'fatal', 'idle'] as const
+    for (let round = 0; round < 1000; round += 1) {
+      const count = 1 + Math.floor(random() * 8)
+      const outcomes = Array.from({ length: count }, () => categories[Math.floor(random() * categories.length)]!)
+      const registry = new ModelProviderRegistry()
+      registry.register(route, { providerId: `random-${round}`, stream: (call) => stream(
+        ...(call.request.messages.some((message) => message.role === 'tool')
+          ? [{ type: 'text-delta' as const, text: 'done' }, { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }, { type: 'finish' as const, reason: 'stop' as const }]
+          : [...outcomes.map((_, index) => ({ type: 'tool-call' as const, toolCallId: `tc-${round}-${index}`, toolName: 'lookup', input: { index } })), { type: 'usage' as const, inputTokens: 1, outputTokens: 1 }, { type: 'finish' as const, reason: 'tool-calls' as const }]
+        )
+      ) })
+      const invocationId = `random-${round}`
+      const capabilities = new CapabilityRegistry()
+      capabilities.define(invocationId, ['lookup'])
+      const permits = new InMemorySafetyPermitStore()
+      const history = new MemoryHistory()
+      const fatal = outcomes.some((outcome) => outcome === 'fatal')
+      const execution = toolExecutionPort(permits, async (call) => {
+        const index = Number(call.toolCallId.split('-')[2])
+        const outcome = outcomes[index]
+        if (outcome === 'fatal') throw new Error('random fatal')
+        return { output: outcome === 'business' ? { error: 'business' } : 'ok', isError: outcome === 'business' }
+      })
+      const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => {
+        const index = Number(binding.toolCallId.split('-')[2])
+        return outcomes[index] === 'deny'
+          ? { kind: 'deny', reasonCode: 'POLICY_DENY' }
+          : { kind: 'allow', authorizationVersion: binding.authorizationVersion }
+      } } })
+      const ports = {
+        registry, routeId: route.routeId, invocationId, history,
+        request: { messages: [], maxTokens: 100 }, safetyGate,
+        prepareTool: async (call: { invocationId: string; toolCallId: string; toolName: string }, stage: { kind: 'initial' | 'recheck' }) => ({
+          ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName,
+          phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const
+        }),
+        toolExecution: execution, maxModelTurns: 3, maxConcurrentTools: 2, toolResourceKeys: () => [], returnDeniedToolsToModel: true
+      }
+      let result: Awaited<ReturnType<typeof runAgentTurn>> | undefined
+      let failure: unknown
+      try { result = await runAgentTurn(ports) } catch (error) { failure = error }
+      if (Boolean(failure) !== fatal) throw new Error(`random batch ${round} outcomes=${outcomes.join(',')} failed=${String(failure)}`)
+      const snapshot = await history.read(invocationId)
+      const toolCalls = snapshot.events.find(({ kind }) => kind === 'model-response-committed')?.payload as { message?: { toolCalls?: Array<{ id: string }> } } | undefined
+      const proposedIds = toolCalls?.message?.toolCalls?.map(({ id }) => id) ?? []
+      const results = snapshot.events.filter(({ kind }) => kind === 'tool-call-finished' || kind === 'tool-call-not-dispatched')
+      const messages = result?.messages ?? []
+      expect(messages.every((message) => message !== undefined && typeof message.role === 'string')).toBe(true)
+      for (const id of proposedIds) {
+        const messageCount = messages.filter((message) => message.role === 'tool' && message.toolCallId === id).length
+        const eventCount = results.filter(({ payload }) => (payload as { toolCallId?: string }).toolCallId === id).length
+        const started = snapshot.events.some((event) => event.kind === 'tool-call-started' && (event.payload as { toolCallId?: string }).toolCallId === id)
+        const uncertain = snapshot.events.some((event) => event.kind === 'invocation-interrupted' && (event.payload as { reason?: string }).reason === 'unknown-after-dispatch')
+        if (messageCount + eventCount === 0 && !(started && uncertain)) throw new Error(`random batch ${round} missing outcome for ${id}; outcomes=${outcomes.join(',')} failure=${String(failure)}`)
+        expect(messageCount).toBeLessThanOrEqual(1)
+        const notDispatchedCount = results.filter((event) => event.kind === 'tool-call-not-dispatched' && (event.payload as { toolCallId?: string }).toolCallId === id).length
+        expect(notDispatchedCount).toBeLessThanOrEqual(1)
+        if (messageCount === 0 && eventCount === 0 && !started) expect(notDispatchedCount).toBe(1)
+      }
+      const notDispatchedIds = results.filter(({ kind }) => kind === 'tool-call-not-dispatched').map(({ payload }) => (payload as { toolCallId: string }).toolCallId)
+      if (notDispatchedIds.some((id) => !outcomes[Number(id.split('-')[2])] || outcomes[Number(id.split('-')[2])] !== 'deny')) expect(fatal).toBe(true)
+      if (!fatal) expect(proposedIds.every((id) => outcomes[Number(id.split('-')[2])] === 'deny' || results.some(({ kind, payload }) => kind === 'tool-call-finished' && (payload as { toolCallId?: string }).toolCallId === id))).toBe(true)
+    }
+  }, 30000)
   it('派发前准入拒绝写入 not-dispatched 并回灌模型，且不触碰 executor', async () => {
     const registry = new ModelProviderRegistry()
     const requests: Array<readonly CanonicalModelMessage[]> = []
@@ -342,6 +415,7 @@ describe('runAgentTurn', () => {
 
     expect(result.text).toBe('understood')
     expect(result.messages).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'rejected-script', isError: true, content: expect.stringContaining('CONFIRMATION_DENIED') }))
+    expect(result.messages.every((message) => message !== undefined && typeof message.role === 'string')).toBe(true)
     expect(execute).not.toHaveBeenCalled()
     const snapshot = await history.read('inv')
     expect(snapshot.events).toContainEqual(expect.objectContaining({ kind: 'approval-resolved', payload: expect.objectContaining({ toolCallId: 'rejected-script', approved: false, outcome: 'denied', cause: 'user-denied' }) }))
@@ -2100,7 +2174,7 @@ describe('runAgentTurn', () => {
     expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
   })
 
-  it('stops queued tools after a failure and prioritizes dispatch uncertainty from an in-flight sibling', async () => {
+  it('drains in-flight work after a denial and leaves queued tools undispatched on a fatal result', async () => {
     const registry = new ModelProviderRegistry()
     registry.register(route, { providerId: 'fake', stream: () => stream(
       { type: 'tool-call', toolCallId: 'tc-denied', toolName: 'lookup', input: { query: 'deny' } },
@@ -2112,29 +2186,146 @@ describe('runAgentTurn', () => {
     capabilities.define('inv', ['lookup'])
     const permits = new InMemorySafetyPermitStore()
     const history = new MemoryHistory()
+    let releaseUncertain!: () => void
+    const uncertainGate = new Promise<void>((resolve) => { releaseUncertain = resolve })
+    const started: string[] = []
+    const dispatchDiagnostics: Array<{ modelTurn: number; reason: string; attemptedCount: number; undispatchedToolCallIds: readonly string[] }> = []
     const execution = createPermitBoundToolExecutionPort<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }, { output: unknown }>({
       permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck',
       resolveExpected: async (call) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: 'recheck' }),
       execute: async (call) => {
+        started.push(call.toolCallId)
         if (call.input.query === 'uncertain') {
-          await new Promise((resolve) => setTimeout(resolve, 10))
+          await uncertainGate
           throw new Error('dispatch outcome unknown')
         }
         return { output: 'unexpected dispatch' }
       }
     })
-    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) =>
-      binding.toolCallId === 'tc-denied' ? { kind: 'deny', reasonCode: 'POLICY_DENY' } : { kind: 'allow', authorizationVersion: binding.authorizationVersion }
-    } })
-    await expect(runAgentTurn({
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => {
+      if (binding.toolCallId === 'tc-denied') {
+        await vi.waitFor(() => expect(started).toContain('tc-uncertain'))
+        return { kind: 'deny', reasonCode: 'POLICY_DENY' }
+      }
+      return { kind: 'allow', authorizationVersion: binding.authorizationVersion }
+    } } })
+    const turn = runAgentTurn({
       registry, routeId: route.routeId, invocationId: 'inv', history, request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 100 },
       safetyGate,
       prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
-      toolExecution: execution, maxModelTurns: 2, maxConcurrentTools: 2, toolResourceKeys: () => []
-    })).rejects.toThrow('dispatch outcome unknown')
+      toolExecution: execution, maxModelTurns: 2, maxConcurrentTools: 2, toolResourceKeys: () => [],
+      observer: { onDispatchStoppedWithPending: (event) => { dispatchDiagnostics.push(event) } }
+    })
+    await vi.waitFor(async () => expect((await history.read('inv')).events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'tc-denied' }) })))
+    expect(started).toEqual(['tc-uncertain'])
+    releaseUncertain()
+    await expect(turn).rejects.toThrow('dispatch outcome unknown')
+    expect(started).toEqual(['tc-uncertain'])
     const events = (await history.read('inv')).events
     expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'tc-queued', reason: 'TURN_STOPPED_BEFORE_DISPATCH' }) }))
     expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
+    expect(dispatchDiagnostics).toEqual([{ modelTurn: 1, reason: 'ToolExecutionAfterDispatchError', attemptedCount: 2, undispatchedToolCallIds: ['tc-queued'] }])
+  })
+
+  it('resumes queued dispatch after a denial once all in-flight work settles', async () => {
+    const registry = new ModelProviderRegistry()
+    let modelTurn = 0
+    registry.register(route, { providerId: 'fake', stream: () => {
+      modelTurn += 1
+      return modelTurn === 1
+        ? stream(
+          { type: 'tool-call', toolCallId: 'tc-denied', toolName: 'lookup', input: { query: 'deny' } },
+          { type: 'tool-call', toolCallId: 'tc-slow', toolName: 'lookup', input: { query: 'slow' } },
+          { type: 'tool-call', toolCallId: 'tc-queued', toolName: 'lookup', input: { query: 'queued' } },
+          { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+        )
+        : stream({ type: 'text-delta', text: 'recovered' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
+    } })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('resume', ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    let releaseSlow!: () => void
+    const slowGate = new Promise<void>((resolve) => { releaseSlow = resolve })
+    const started: string[] = []
+    const execution = createPermitBoundToolExecutionPort<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }, { output: unknown }>({
+      permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck',
+      resolveExpected: async (call) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: 'recheck' }),
+      execute: async (call) => {
+        started.push(call.toolCallId)
+        if (call.input.query === 'slow') await slowGate
+        return { output: call.toolCallId }
+      }
+    })
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => {
+      if (binding.toolCallId === 'tc-denied') {
+        await vi.waitFor(() => expect(started).toContain('tc-slow'))
+        return { kind: 'deny', reasonCode: 'POLICY_DENY' }
+      }
+      return { kind: 'allow', authorizationVersion: binding.authorizationVersion }
+    } } })
+    const turn = runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'resume', history, request: { messages: [], maxTokens: 100 }, safetyGate,
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
+      toolExecution: execution, maxModelTurns: 2, maxConcurrentTools: 2, toolResourceKeys: () => [], returnDeniedToolsToModel: true
+    })
+    await vi.waitFor(async () => expect((await history.read('resume')).events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'tc-denied' }) })))
+    expect(started).toEqual(['tc-slow'])
+    releaseSlow()
+    await expect(turn).resolves.toMatchObject({ text: 'recovered' })
+    expect(started).toEqual(['tc-slow', 'tc-queued'])
+    const snapshot = await history.read('resume')
+    expect(snapshot.events.filter(({ kind }) => kind === 'tool-call-finished')).toHaveLength(2)
+    expect(snapshot.events.filter(({ kind }) => kind === 'tool-call-not-dispatched').map(({ payload }) => (payload as { toolCallId: string }).toolCallId)).toEqual(['tc-denied'])
+  })
+
+  it('holds a multi-worker drain barrier until every claimed worker settles, then resumes without losing fatal errors', async () => {
+    const registry = new ModelProviderRegistry()
+    registry.register(route, { providerId: 'fake', stream: () => stream(
+      ...['deny', 'slow-a', 'slow-b', 'queued-a', 'queued-b'].map((query) => ({ type: 'tool-call' as const, toolCallId: `tc-${query}`, toolName: 'lookup', input: { query } })),
+      { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+    ) })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('barrier', ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    let releaseA!: () => void
+    let releaseB!: () => void
+    const gateA = new Promise<void>((resolve) => { releaseA = resolve })
+    const gateB = new Promise<void>((resolve) => { releaseB = resolve })
+    const started: string[] = []
+    const execution = createPermitBoundToolExecutionPort<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }, { output: unknown }>({
+      permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck',
+      resolveExpected: async (call) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: 'recheck' }),
+      execute: async (call) => {
+        started.push(call.toolCallId)
+        if (call.input.query === 'slow-a') { await gateA; return { output: 'a' } }
+        if (call.input.query === 'slow-b') { await gateB; throw new Error('fatal b') }
+        throw new Error(`unexpected execution: ${call.toolCallId}`)
+      }
+    })
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => {
+      if (binding.toolCallId === 'tc-deny') {
+        await vi.waitFor(() => expect(started).toContain('tc-slow-b'))
+        return { kind: 'deny', reasonCode: 'POLICY_DENY' }
+      }
+      return { kind: 'allow', authorizationVersion: binding.authorizationVersion }
+    } } })
+    const turn = runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'barrier', history, request: { messages: [], maxTokens: 100 }, safetyGate,
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
+      toolExecution: execution, maxModelTurns: 2, maxConcurrentTools: 3, toolResourceKeys: () => []
+    })
+    await vi.waitFor(async () => expect((await history.read('barrier')).events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'tc-deny' }) })))
+    expect(started).toEqual(['tc-slow-a', 'tc-slow-b'])
+    releaseA()
+    await Promise.resolve()
+    expect(started).toEqual(['tc-slow-a', 'tc-slow-b'])
+    releaseB()
+    await expect(turn).rejects.toThrow('fatal b')
+    expect(started).toEqual(['tc-slow-a', 'tc-slow-b'])
+    const events = (await history.read('barrier')).events
+    expect(events.filter(({ kind }) => kind === 'tool-call-not-dispatched').map(({ payload }) => (payload as { toolCallId: string }).toolCallId)).toEqual(['tc-deny', 'tc-queued-a', 'tc-queued-b'])
   })
 
   it('preserves the primary turn error when writing the failed terminal history also fails', async () => {

@@ -56,8 +56,21 @@ export function createAgentSdkConfirmationPort(input: {
     primaryOutcome: ConfirmOutcome
   ): Promise<Awaited<ReturnType<ConfirmationPort>> | undefined>
 }): ConfirmationPort {
+  const explicitDenials = new Map<string, Readonly<{ userMessage?: string }>>()
   return async (confirmation) => {
     if (!isGateContext(confirmation.context)) return { kind: 'unavailable', cause: 'unavailable' }
+    const target = confirmation.context.writePathFact && typeof confirmation.context.writePathFact === 'object'
+      ? (confirmation.context.writePathFact as { normalizedPath?: unknown }).normalizedPath
+      : undefined
+    const normalizedTarget = typeof target === 'string' ? target : undefined
+    if (normalizedTarget) {
+      const key = JSON.stringify([confirmation.modelTurn, confirmation.call.toolName, normalizedTarget])
+      const previous = explicitDenials.get(key)
+      if (previous) return {
+        kind: 'denied', cause: 'user-denied', answerer: 'user',
+        userMessage: previous.userMessage ?? '同批同目标的同类调用已由用户拒绝。'
+      }
+    }
     const request: ConfirmRequest = {
       facts: confirmation.context.facts,
       ...confirmation.context.decision
@@ -102,6 +115,11 @@ export function createAgentSdkConfirmationPort(input: {
         outcome = await input.fallback(confirmation.call, confirmation, confirmation.context as GateConfirmationContext, result.outcome) ?? outcome
       }
       if (outcome.kind === 'approved') input.onApproved?.(confirmation.call, outcome, confirmation, confirmation.context as GateConfirmationContext, outcome.selectedMemory)
+      if (outcome.kind === 'denied' && outcome.answerer === 'user' && normalizedTarget) {
+        explicitDenials.set(JSON.stringify([confirmation.modelTurn, confirmation.call.toolName, normalizedTarget]), {
+          ...(outcome.userMessage ? { userMessage: outcome.userMessage } : {})
+        })
+      }
       return outcome
     } finally {
       if (abort) confirmation.signal?.removeEventListener('abort', abort)

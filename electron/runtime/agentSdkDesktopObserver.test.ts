@@ -10,6 +10,27 @@ import type { Message } from '../../src/shared/domainTypes'
 
 describe('createAgentSdkDesktopObserver', () => {
   afterEach(() => vi.unstubAllEnvs())
+  it('projects dispatch-stop, slot materialization, and failure attribution diagnostics', async () => {
+    const events: unknown[] = []
+    const diagnostics = vi.fn()
+    const observer = createAgentSdkDesktopObserver({
+      requestId: 'dispatch-diagnostic', sessionId: 's', turnId: 't',
+      emitSessionEvent: (event) => { events.push(event) }, onDispatchDiagnostic: diagnostics
+    })
+    await (observer as AgentTurnObserver).onDispatchStoppedWithPending?.({
+      modelTurn: 3, reason: 'ToolExecutionAfterDispatchError', attemptedCount: 2, undispatchedToolCallIds: ['c3', 'c4']
+    })
+    await (observer as AgentTurnObserver).onUndispatchedToolsMaterialized?.({ modelTurn: 3, count: 2 })
+    await (observer as AgentTurnObserver).onToolDispatchFailureContext?.({
+      modelTurn: 3, stepId: 'inv:turn:3', toolCallId: 'c2', toolName: 'edit_file', reasonCode: 'ToolExecutionAfterDispatchError'
+    })
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'tool_result', payload: expect.objectContaining({ diagnosticType: 'tools.dispatch_stopped_with_pending', reason: 'ToolExecutionAfterDispatchError', attemptedCount: 2, undispatchedToolCallIds: ['c3', 'c4'] })
+    }))
+    expect(diagnostics.mock.calls.map(([event]) => event.type)).toEqual([
+      'tools.dispatch_stopped_with_pending', 'tools.undispatched_slots_materialized', 'tools.dispatch_failure_context'
+    ])
+  })
   it('accumulates each model request tool declaration into the persisted turn dimensions', async () => {
     let turnDimensions: unknown
     const observer = createAgentSdkDesktopObserver({

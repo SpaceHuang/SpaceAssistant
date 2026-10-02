@@ -82,10 +82,13 @@ export type AgentTurnObserver = Readonly<{
   onModelResponseCommitted?(response: Readonly<{ message: CanonicalTurnMessage; finishReason: Extract<import('./model').StreamChunk, { type: 'finish' }>['reason']; usage: Extract<StreamChunk, { type: 'usage' }>; modelTurn: number; alreadyProjected?: boolean; committedStepId?: string }>): void | Promise<void>
   onToolStarted?(call: CanonicalToolExecutionCall): void | Promise<void>
   onToolFinished?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult): void | Promise<void>
+  onDispatchStoppedWithPending?(event: Readonly<{ modelTurn: number; reason: string; attemptedCount: number; undispatchedToolCallIds: readonly string[] }>): void | Promise<void>
+  onUndispatchedToolsMaterialized?(event: Readonly<{ modelTurn: number; count: number }>): void | Promise<void>
+  onToolDispatchFailureContext?(event: Readonly<{ modelTurn: number; stepId: string; toolCallId: string; toolName: string; reasonCode: string }>): void | Promise<void>
   onTurnOutputReady?(result: AgentTurnResult): void | Promise<void>
   onTurnFinished?(result: AgentTurnResult): void | Promise<void>
   onTurnFailed?(failure: Readonly<{ error: unknown; status: 'cancelled' | 'interrupted' | 'denied' | 'failed' }>): void | Promise<void>
-  onObservationError?(error: unknown, stage: 'model-request' | 'model-chunk' | 'model-attempt-discarded' | 'model-response-committed' | 'model-attempt-usage' | 'tool-started' | 'tool-finished' | 'turn-output-ready' | 'turn-finished' | 'turn-failed' | 'history-terminal' | 'prepared-tool-discard'): void | Promise<void>
+  onObservationError?(error: unknown, stage: 'model-request' | 'model-chunk' | 'model-attempt-discarded' | 'model-response-committed' | 'model-attempt-usage' | 'tool-started' | 'tool-finished' | 'turn-output-ready' | 'turn-finished' | 'turn-failed' | 'history-terminal' | 'prepared-tool-discard' | 'dispatch-diagnostic'): void | Promise<void>
 }>
 
 export type HostCommittedModelResponse = Readonly<{
@@ -182,6 +185,8 @@ export type ToolConfirmationResult = Readonly<{
 )
 export type ConfirmationPort = (input: {
   call: CanonicalToolExecutionCall
+  /** Model response batch within the current turn; used for batch-scoped confirmation decisions. */
+  modelTurn: number
   confirmationId: string
   answerer: 'user' | 'agent'
   reasonCode: string
@@ -1276,6 +1281,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         try {
           result = await input.confirmation({
             call: executionCall,
+            modelTurn: modelTurns,
             confirmationId: initialDecision.confirmationId,
             answerer: initialDecision.answerer,
             reasonCode: initialDecision.reasonCode,
@@ -1413,7 +1419,49 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         if (approvalPermitHeld) approvalSlots.release()
         releaseCandidate?.()
       }
-    })
+    }, { shouldDrain: (reason) => reason instanceof ToolDeniedError })
+    const fatalRejection = settledTools.find((settled) => settled?.status === 'rejected' && !(settled.reason instanceof ToolDeniedError))
+    const pendingToolCallIds = toolCalls.flatMap((tool, index) => settledTools[index] === undefined ? [tool.toolCallId] : [])
+    if (fatalRejection?.status === 'rejected') {
+      const attemptedCount = settledTools.filter((settled) => settled !== undefined).length
+      if (pendingToolCallIds.length > 0) {
+        await observe(input.observer, 'dispatch-diagnostic', () => input.observer?.onDispatchStoppedWithPending?.({
+          modelTurn: modelTurns,
+          reason: fatalRejection.reason instanceof AgentTurnHistoryAppendError ? fatalRejection.reason.kinds.join(',') : fatalRejection.reason instanceof Error ? fatalRejection.reason.name : 'UNKNOWN',
+          attemptedCount,
+          undispatchedToolCallIds: pendingToolCallIds
+        }))
+      }
+      const failedIndex = settledTools.findIndex((settled) => settled?.status === 'rejected' && settled.reason === fatalRejection.reason)
+      const failedTool = toolCalls[failedIndex]
+      if (failedTool) {
+        await observe(input.observer, 'dispatch-diagnostic', () => input.observer?.onToolDispatchFailureContext?.({
+          modelTurn: modelTurns, stepId: `${invocationId}:turn:${modelTurns}`, toolCallId: failedTool.toolCallId,
+          toolName: failedTool.toolName,
+          reasonCode: fatalRejection.reason instanceof AgentTurnHistoryAppendError ? fatalRejection.reason.kinds.join(',') : fatalRejection.reason instanceof Error ? fatalRejection.reason.name : 'UNKNOWN'
+        }))
+      }
+    }
+    // A fatal stop can leave unclaimed slots in the scheduler. Materialize each
+    // one before any array iterator can turn a sparse hole into `undefined`.
+    let materializedCount = 0
+    for (const [index, settled] of settledTools.entries()) {
+      if (settled !== undefined) continue
+      const tool = toolCalls[index]
+      if (!tool) continue
+      if (toolDispatchStates.get(tool.toolCallId) !== 'pending') {
+        throw new Error(`tool dispatch slot ${tool.toolCallId} has no settled result after dispatch`)
+      }
+      const reason = input.request.signal?.aborted ? 'REQUEST_CANCELLED' : 'TURN_STOPPED_BEFORE_DISPATCH'
+      await markNotDispatched(tool, reason)
+      settledTools[index] = { status: 'fulfilled', value: {
+        role: 'tool', toolCallId: tool.toolCallId,
+        content: `Tool call was not dispatched (${reason}).`,
+        isError: true
+      } }
+      materializedCount += 1
+    }
+    if (materializedCount > 0) await observe(input.observer, 'dispatch-diagnostic', () => input.observer?.onUndispatchedToolsMaterialized?.({ modelTurn: modelTurns, count: materializedCount }))
     const deniedToolResults = new Map<string, CanonicalTurnMessage>()
     if (input.returnDeniedToolsToModel) {
       for (const [index, settled] of settledTools.entries()) {
@@ -1430,7 +1478,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         catch (error) { await observe(input.observer, 'tool-finished', () => input.observer?.onObservationError?.(error, 'tool-finished')) }
       }
     }
-    const rejectedTools = settledTools.filter((settled, index): settled is PromiseRejectedResult => settled.status === 'rejected' &&
+    const rejectedTools = settledTools.filter((settled, index): settled is PromiseRejectedResult => settled?.status === 'rejected' &&
       !(input.returnDeniedToolsToModel && deniedToolResults.has(toolCalls[index]?.toolCallId ?? '')))
     const rejectedTool = rejectedTools.find(({ reason }) => reason instanceof ToolExecutionAfterDispatchError)
       ?? rejectedTools.find(({ reason }) => reason instanceof AgentTurnHistoryAppendError && reason.kinds.includes('tool-call-finished'))
@@ -1445,9 +1493,9 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       throw rejectedTool.reason
     }
     // Keep transcript order tied to the provider's tool-call order, independent of dispatch completion order.
-    messages.push(...settledTools.map((settled) => settled.status === 'fulfilled'
-      ? settled.value
-      : deniedToolResults.get(toolCalls[settledTools.indexOf(settled)]?.toolCallId ?? '')!))
+    messages.push(...settledTools.map((settled) => settled!.status === 'fulfilled'
+      ? settled!.value
+      : deniedToolResults.get(toolCalls[settledTools.indexOf(settled!)]?.toolCallId ?? '')!))
     dispatchedToolRounds += 1
   }
 
@@ -1536,24 +1584,57 @@ function sameRouteIdentity(left: PreparedModelCall['route'], right: PreparedMode
   return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right))
 }
 
-async function mapWithConcurrency<T, R>(items: readonly T[], limit: number, run: (item: T, index: number) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
+async function mapWithConcurrency<T, R>(items: readonly T[], limit: number, run: (item: T, index: number) => Promise<R>, options: { shouldDrain?: (reason: unknown) => boolean } = {}): Promise<Array<PromiseSettledResult<R> | undefined>> {
   if (!Number.isInteger(limit) || limit < 1) throw new Error('maxConcurrentTools must be a positive integer')
   const results = new Array<PromiseSettledResult<R>>(items.length)
   let nextIndex = 0
-  let stopped = false
+  let state: 'running' | 'draining-after-denial' | 'stopped' = 'running'
+  let activeWorkers = 0
+  const claimed = new Set<number>()
+  let wakeWorkers: (() => void) | undefined
+  const notifyWorkers = () => { const wake = wakeWorkers; wakeWorkers = undefined; wake?.() }
+  const waitForWorkers = () => new Promise<void>((resolve) => {
+    const previous = wakeWorkers
+    wakeWorkers = () => { previous?.(); resolve() }
+  })
   const worker = async () => {
-    while (!stopped) {
+    while (true) {
+      if (state === 'stopped') return
+      if (state === 'draining-after-denial') {
+        if (activeWorkers === 0) {
+          state = 'running'
+          notifyWorkers()
+        } else {
+          await waitForWorkers()
+          continue
+        }
+      }
       const index = nextIndex++
       if (index >= items.length) return
+      claimed.add(index)
+      activeWorkers += 1
       try {
         results[index] = { status: 'fulfilled', value: await run(items[index]!, index) }
       } catch (reason) {
         results[index] = { status: 'rejected', reason }
-        stopped = true
+        if (options.shouldDrain?.(reason)) {
+          if (state === 'running') state = 'draining-after-denial'
+        } else {
+          state = 'stopped'
+        }
+      } finally {
+        activeWorkers -= 1
+        if (activeWorkers === 0 || state === 'stopped') notifyWorkers()
       }
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()))
+  // Keep the slot array dense for every claimed worker. Only indices beyond the
+  // scheduler cursor were never claimed and may be materialized by the caller.
+  for (const index of claimed) {
+    if (results[index] !== undefined) continue
+    results[index] = { status: 'rejected', reason: new Error('claimed tool worker ended without a settled result') }
+  }
   return results
 }
 

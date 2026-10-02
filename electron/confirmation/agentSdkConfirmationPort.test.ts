@@ -50,6 +50,25 @@ describe('createAgentSdkConfirmationPort', () => {
     }
   })
 
+  it('只在同一模型轮内对同工具同写目标去重，其他轮次、目标和工具仍走确认', async () => {
+    const request = vi.fn(async () => ({ kind: 'rejected' as const, cause: 'user-denied', answererKind: 'user' as const }))
+    const publish = vi.fn(async () => undefined)
+    const port = createAgentSdkConfirmationPort({ createChannel: () => ({ request, cancel: vi.fn() }), publish, cancel: vi.fn() })
+    const ask = (toolCallId: string, toolName: string, path: string, modelTurn = 1, content = 'same content') => port({
+      modelTurn,
+      call: { invocationId: 'inv', toolCallId, toolName, input: { path, content } }, confirmationId: toolCallId, answerer: 'user', reasonCode: 'write-confirm',
+      context: { ...context, facts: { ...facts, toolName, actionClass: 'write' }, writePathFact: { normalizedPath: path } }
+    })
+
+    await expect(ask('first', 'edit_file', '/workspace/a.txt')).resolves.toMatchObject({ kind: 'denied', cause: 'user-denied' })
+    await expect(ask('same', 'edit_file', '/workspace/a.txt')).resolves.toMatchObject({ kind: 'denied', cause: 'user-denied', userMessage: expect.stringContaining('同批同目标') })
+    await ask('next-turn-changed-content', 'edit_file', '/workspace/a.txt', 2, 'updated content')
+    await ask('other-path', 'edit_file', '/workspace/b.txt')
+    await ask('other-tool', 'write_file', '/workspace/a.txt')
+    expect(request).toHaveBeenCalledTimes(4)
+    expect(publish).toHaveBeenCalledTimes(4)
+  })
+
   it.each([
     ['rejected', 'denied'], ['timeout', 'timeout'], ['unavailable', 'unavailable'], ['cancelled', 'cancelled']
   ] as const)('将 channel %s 映射为 SDK %s', async (channelKind, expected) => {

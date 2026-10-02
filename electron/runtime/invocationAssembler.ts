@@ -1338,6 +1338,15 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       emitFactEvent: materials.emitFactEvent,
       onUsageAttribution: ({ modelTurn, attribution }) => attributionByModelTurn.set(modelTurn, attribution),
       onTurnToolAttribution: (dimension) => { turnToolAttribution = dimension },
+      onDispatchDiagnostic: (event) => {
+        const eventName = event.type === 'tools.dispatch_stopped_with_pending' || event.type === 'tools.undispatched_slots_materialized' || event.type === 'tools.dispatch_failure_context'
+          ? event.type
+          : 'tool.error'
+        logAgentEvent('warn', eventName, {
+          requestId: materials.requestId, sessionId: materials.sessionId, turnId: runtimeTurnId,
+          ...event
+        })
+      },
       deferredDimensionRef,
       onDeferredSavings: ({ modelTurn, toolCount, eagerEquivalentTokens, indexTokens, savedTokens }) => {
         logAgentEvent('info', 'mcp.deferred_savings', {
