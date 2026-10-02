@@ -180,7 +180,7 @@
       "writeFileFallback": "Write file",
       "editFileFallback": "Edit file"
     },
-        "generic": {
+    "generic": {
       "allow": "Allow",
       "deny": "Deny"
     },

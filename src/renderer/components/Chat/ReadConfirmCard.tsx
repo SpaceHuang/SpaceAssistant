@@ -9,7 +9,8 @@ type Props = {
 }
 
 function formatPath(record: ToolCallRecord): string {
-  const raw = record.input.path ?? record.input.filePath ?? record.input.file_path
+  // read_feishu_attachment 的 input 键是 attachmentId（非路径），也一并展示，避免摘要落到兜底文案（评审 P3-3）
+  const raw = record.input.path ?? record.input.filePath ?? record.input.file_path ?? record.input.attachmentId
   return typeof raw === 'string' && raw.length > 0 ? raw : ''
 }
 

@@ -25,10 +25,6 @@ import {
   shellToolCompletedLabel
 } from './toolCallDisplay'
 import { formatBrowserToolLabel, formatBrowserToolLabelTitle } from './browserConfirmDisplay'
-
-/** 读取类工具的敏感路径确认（path-sensitive-read-confirm 等）走 ReadConfirmCard */
-const READ_CONFIRM_TOOLS = new Set(['grep', 'read_file', 'list_directory', 'read_feishu_attachment'])
-
 import { ToolRowIcon } from './ToolRowIcon'
 import { WriteConfirmCard } from './WriteConfirmCard'
 import { ReadConfirmCard } from './ReadConfirmCard'
@@ -89,6 +85,10 @@ type Props = {
 // 默认浅比较恒失效 → 终态工具卡每帧空转重渲染。按展示影响字段做内容相等比较，
 // 内容相同的重建在 memo 边界被拦截；字段集必须覆盖 ToolCallRecord 的全部展示输入，
 // 新增展示字段时同步维护（漏字段 = 卡片静默不更新）。
+
+/** 读取类工具的敏感路径确认（path-sensitive-read-confirm 等）走 ReadConfirmCard */
+const READ_CONFIRM_TOOLS = new Set(['grep', 'read_file', 'list_directory', 'read_feishu_attachment'])
+
 const inputFingerprints = new WeakMap<object, string>()
 function inputFingerprint(input: Record<string, unknown>): string {
   let fp = inputFingerprints.get(input)
