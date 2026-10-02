@@ -123,6 +123,9 @@ describe('JavaScript grep fallback', () => {
     const out = await grepFallbackJs(root, root, 'needle', args(), new AbortController().signal, () => {}, 60_000, undefined, { now })
     expect(out).toContain('搜索超时')
     expect(out).toContain('[边界摘要]')
+    // 超时引导（产品增强）：明示可传 timeout 参数加大超时或收窄范围
+    expect(out).toContain('timeout 参数')
+    expect(out).toContain('600')
   })
 
   it('terminates catastrophic-backtracking regexes without blocking the main process', async () => {

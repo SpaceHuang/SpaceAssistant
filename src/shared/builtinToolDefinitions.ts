@@ -104,7 +104,8 @@ export const BUILTIN_TOOL_DEFINITIONS: Array<{
         show_line_number: { type: 'boolean', description: '显示行号（仅 content 模式），默认 true' },
         context: { type: 'integer', minimum: 0, maximum: 1000, description: '仅 content：匹配行前后各返回 N 行，整数 0～1000；其他模式返回参数错误' },
         multiline: { type: 'boolean', description: '仅 content：允许匹配跨行且 . 可匹配换行；其他模式返回参数错误' },
-        head_limit: { type: 'integer', minimum: 0, maximum: 1000000, description: '最多返回的非空输出行数，默认 100；0 不限制行数但仍受 400 KiB 总上限约束' }
+        head_limit: { type: 'integer', minimum: 0, maximum: 1000000, description: '最多返回的非空输出行数，默认 100；0 不限制行数但仍受 400 KiB 总上限约束' },
+        timeout: { type: 'number', minimum: 5, maximum: 600, description: '本次搜索的超时秒数（5～600）；省略时使用设置的 grep 超时（默认 60）。大目录或复杂正则建议加大此值。超时会终止搜索并返回已找到的部分结果' }
       },
       additionalProperties: false,
       required: ['pattern']

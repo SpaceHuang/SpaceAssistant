@@ -1049,6 +1049,8 @@ export type GrepExecArgs = {
   context?: number
   multiline: boolean
   headLimit: number
+  /** 调用级超时秒数（clamp 后 5～600）；缺省回落设置值 grepTimeoutSec（产品增强：超时可操作引导） */
+  timeoutSeconds?: number
   /**
    * R6：解除默认忽略名单（GREP_DEFAULT_IGNORES）与隐藏条目过滤（--hidden），
    * 并经 noIgnoreVcs（与设置项 grepSearchGitignored 的 OR，§7.9）追加 --no-ignore-vcs 解除 .gitignore 等
@@ -1134,6 +1136,25 @@ export function normalizeGrepArgs(input: Record<string, unknown>): GrepNormalize
       }
     }
   }
+  // 调用级超时（产品增强）：clamp 到 5～600 秒；缺省 undefined（回落设置值 grepTimeoutSec）
+  const GREP_TIMEOUT_MIN = 5
+  const GREP_TIMEOUT_MAX = 600
+  let timeoutSeconds: number | undefined
+  if (input.timeout !== undefined) {
+    if (typeof input.timeout !== 'number' || !Number.isFinite(input.timeout)) {
+      return {
+        ok: false,
+        error: {
+          code: 'param-conflict',
+          field: 'timeout',
+          mode: outputMode,
+          allowed: '5～600 的数字（秒）',
+          suggestedWrite: '去掉 timeout 或改为 5～600 的数字'
+        }
+      }
+    }
+    timeoutSeconds = Math.min(GREP_TIMEOUT_MAX, Math.max(GREP_TIMEOUT_MIN, input.timeout))
+  }
 
   // 判定依据：生效值（>0 / true），不是「字段是否出现」。show_line_number 不计入冲突
   // （评审 P2-1：它只在 content 模式有效果，而 content 正是它适用的模式）。
@@ -1165,6 +1186,7 @@ export function normalizeGrepArgs(input: Record<string, unknown>): GrepNormalize
       context: outputMode === 'content' ? contextRaw : undefined,
       multiline: outputMode === 'content' && Boolean(input.multiline),
       headLimit,
+      timeoutSeconds,
       includeIgnored: Boolean(input.include_ignored)
     }
   }
@@ -1744,7 +1766,7 @@ export async function grepFallbackJs(
   const boundary: string[] = []
   if (skippedTotal > 0) boundary.push(`已跳过 ${skippedTotal} 个超过 ${GREP_FILE_MAX / (1024 * 1024)} MiB 上限的文件，其中可能包含匹配${skippedSample.length ? `（如：${skippedSample.join('、')}）` : ''}`)
   if (readErrorCount > 0) boundary.push(`${readErrorCount} 个文件/目录读取失败，其中可能存在匹配${readErrorSample.length ? `（如：${readErrorSample.join('、')}）` : ''}`)
-  if (timedOut) boundary.push('搜索超时，结果可能不完整')
+  if (timedOut) boundary.push(`搜索超时（已返回部分结果）。可传 timeout 参数加大超时（当前 ${args.timeoutSeconds ?? 60} 秒，上限 600 秒）重试，或用 glob / 更精确的 path 收窄搜索范围；结果可能不完整`)
   if (aborted) boundary.push('搜索已被中止，结果可能不完整')
   const finishOutput = (body: string): string => boundary.length ? `${body}\n[边界摘要]\n- ${boundary.join('\n- ')}` : body
   if (args.outputMode === 'files_with_matches') {
@@ -1799,7 +1821,11 @@ export const grepExecutor: ToolExecutor = {
       permitFileHandle = permitted.targetKind === 'file' ? permitted.fileHandle : undefined
     } catch { return { success: false, error: '读取许可校验失败', diagnostic: { caseId: 'read-permit-validation-error', retryable: false, category: 'integration-violation' }, duration: Date.now() - started } }
     try {
-      const timeoutMs = (ctx.toolsConfig.grepTimeoutSec ?? 60) * 1000
+      // 调用级 timeout 优先（clamp 已由 normalize 完成 5～600）；缺省回落设置值
+      const effectiveTimeoutSec = gargs.timeoutSeconds ?? (ctx.toolsConfig.grepTimeoutSec ?? 60)
+      const timeoutMs = Math.min(600, Math.max(5, effectiveTimeoutSec)) * 1000
+      // 超时引导（产品增强）：超时不是失败，返回部分结果并明示可操作的重试路径
+      const timeoutHint = `[搜索超时：已返回部分结果。可传 timeout 参数加大超时（当前 ${Math.round(timeoutMs / 1000)} 秒，上限 600 秒）重试，或用 glob 参数 / 更精确的 path 收窄搜索范围]`
       const resolved = resolveRipgrepBinary({
         packaged: app?.isPackaged ?? false,
         resourcesPath: process.resourcesPath,
@@ -1969,7 +1995,7 @@ export const grepExecutor: ToolExecutor = {
         return await executeFallback()
       }
       if (text.kind === 'cancelled') return { success: false, error: `${text.partialOutput}\n[已取消]`, duration: Date.now() - started }
-      if (text.kind === 'timeout') return { success: false, error: `${text.partialOutput}\n[搜索超时，仅展示部分结果]`, duration: Date.now() - started }
+      if (text.kind === 'timeout') return { success: false, error: `${text.partialOutput}\n${timeoutHint}`, duration: Date.now() - started }
       return { success: false, error: text.message, duration: Date.now() - started }
     } catch (e) {
       if (ctx.signal?.aborted) return { success: false, error: '搜索已取消。', duration: Date.now() - started }
