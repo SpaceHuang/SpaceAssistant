@@ -161,7 +161,6 @@ export interface AgentInvocationMaterials {
   resolveAgentSdkGateSupplement?: (input: { binding: PermitBinding; toolName: string; toolInput: Record<string, unknown>; signal?: AbortSignal }) => Promise<Pick<ToolCallGateArgs, 'dangerAssessment' | 'currentPageUrl' | 'remoteBudgetState' | 'audit'> | undefined> | Pick<ToolCallGateArgs, 'dangerAssessment' | 'currentPageUrl' | 'remoteBudgetState' | 'audit'> | undefined
   approvalAdmission?: import('./agentRuntime').ApprovalAdmissionLike
   invocationRuntime?: import('./agentRuntime').InvocationRuntimeLike
-  applicationAdmission?: AgentHostPorts['applicationAdmission']
   resourceLocks?: import('./agentRuntime').ResourceLockRegistryLike
   toolExecutionConcurrency?: number
 }
@@ -267,7 +266,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       confirmation?: ConfirmationPort
       hostHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
       sessionLedgerForInvocationTerminal?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionLedgerForInvocationTerminal']
-      applicationAdmission?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['applicationAdmission']
       afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
       recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
       refreshExecutionContext?: (call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: import('../../packages/agent-sdk/src/turn').ToolPreparationStage & { kind: 'recheck' }, current: Record<string, unknown>) => Record<string, unknown> | Promise<Record<string, unknown>>
@@ -279,7 +277,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       createExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>): unknown
       refreshExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: import('../../packages/agent-sdk/src/turn').ToolPreparationStage & { kind: 'recheck' }, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
       maxToolRounds?: number
-      applicationAdmission?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['applicationAdmission']
       afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
       confirmationAdapter?: Omit<Parameters<typeof createAgentSdkConfirmationPort>[0], 'onApproved' | 'publish' | 'createChannel'> & Partial<Pick<Parameters<typeof createAgentSdkConfirmationPort>[0], 'publish' | 'createChannel'>> & { agentChannelFactory?: NonNullable<import('../confirmation/channels').ResolveConfirmChannelArgs['agentChannelFactory']> }
       recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
@@ -1019,7 +1016,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       policy: ReturnType<typeof createAgentSdkSafetyPolicy>
       confirmation?: ConfirmationPort
       sessionLedgerForInvocationTerminal?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionLedgerForInvocationTerminal']
-      applicationAdmission?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['applicationAdmission']
       afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
       recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
       /** FR3：延迟名集合（hostedAgentTurnHost 的 capabilities.define 并入 known + authorized）。 */
@@ -1064,7 +1060,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         safetyGate,
         history,
         ...(input.sessionLedgerForInvocationTerminal ? { sessionLedgerForInvocationTerminal: input.sessionLedgerForInvocationTerminal } : {}),
-        ...(input.applicationAdmission ? { applicationAdmission: input.applicationAdmission } : {}),
         prepareTool: input.registeredTools.prepareTool,
         discardPreparedTool: input.registeredTools.discardPreparedTool,
         ...(input.confirmation ? { confirmation: input.confirmation } : {}),
@@ -1171,7 +1166,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       createExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>): unknown
       refreshExecutionContext?(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: import('../../packages/agent-sdk/src/turn').ToolPreparationStage & { kind: 'recheck' }, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
       maxToolRounds?: number
-      applicationAdmission?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['applicationAdmission']
       confirmationAdapter?: Omit<Parameters<typeof createAgentSdkConfirmationPort>[0], 'onApproved' | 'publish' | 'createChannel'> & Partial<Pick<Parameters<typeof createAgentSdkConfirmationPort>[0], 'publish' | 'createChannel'>> & { agentChannelFactory?: NonNullable<import('../confirmation/channels').ResolveConfirmChannelArgs['agentChannelFactory']> }
       recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
     }) => {
@@ -1240,7 +1234,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(input.hostHistory ? { hostHistory: input.hostHistory } : {}),
         ...(input.afterToolResult ? { afterToolResult: input.afterToolResult } : {}),
         ...(input.maxToolRounds !== undefined ? { maxToolRounds: input.maxToolRounds } : {}),
-        ...(input.applicationAdmission ? { applicationAdmission: input.applicationAdmission } : {}),
         policy,
         confirmation,
         recoverProviderAttempt: input.recoverProviderAttempt,
@@ -1263,7 +1256,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     resourceLocks: materials.resourceLocks ?? (() => {
       try { return getDefaultAgentRuntime().resourceLocks } catch { return undefined }
     })(),
-    ...(materials.applicationAdmission ? { applicationAdmission: materials.applicationAdmission } : {}),
     invocationRuntime: materials.invocationRuntime ?? (() => {
       try { return getDefaultAgentRuntime().invocationRuntime } catch { return undefined }
     })(),
