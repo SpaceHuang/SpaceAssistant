@@ -1597,3 +1597,34 @@ git init -q
 | P2-4 | 「点名敏感根后子树内嵌 .env 一并放行」未向用户披露 | grep schema 敏感段两处补披露「指定目录会搜索其整个子树，含子树内其他敏感名条目」；设计意图（显式点名=整棵子树放行，gate 真人确认是控制点，两引擎一致）登记于本行 |
 
 二轮整改后门禁：grepFallback/readReadIntegration/Scope 系全绿（失败名单=基线 symlink 特权族）；builtinToolDefinitions.test 14 passed；electron tsc ✓。
+
+---
+
+## 19. 附录：真机验证记录（2026-10-02,安装包 `SpaceAssistant Setup 0.2.2.exe` @ main 合并后）
+
+> 验证环境:工作目录 `E:\Develop\grep-e2e-workdir`(中性夹具,git init,.gitignore/build-output/node_modules/.env/private-notes);全部由用户在真实应用内操作,Agent 对话执行。
+
+| # | 验证项 | 结果 |
+|---|---|---|
+| 1 | C1 省略 path 搜全目录;默认忽略/敏感排除;大小写敏感 | ✓ |
+| 2 | C2 目录递归(改动前被 read-v1-target-unsupported 拒绝) | ✓ |
+| 3 | C3 单文件回归 | ✓ |
+| 4 | C4 glob 过滤(*.ts 只留 app.ts) | ✓ |
+| 5 | C5 include_ignored 解除 node_modules/build-output | ✓ |
+| 6 | C6/AC-19 单文件无匹配 skipped 为空(§1.4 虚报修复) | ✓ |
+| 7 | **P0-1 确认闭环**:.env 点名 → 确认卡批准 → 执行命中 SAFE_TEST_ONLY=placeholder + `sensitivePathHit: true` | ✓(经确认卡缺失修复后) |
+| 8 | AC-40 敏感明示:遍历名单含 `.env (sensitive: true)` | ✓ |
+| 10 | AC-34/36/51 设置链路:关闭态 .gitignore 排除;开启态未传参也命中 ignored-demo.txt(OR 语义);脏检查/持久化 | ✓ |
+
+> **真机过程发现并已修复**:`ReadConfirmCard` 缺失(读取类确认无批准入口,预存 UI 缺陷)+ `GenericConfirmCard` 兜底(全工具批准入口,白名单制结构性补位)——见提交 7f4e611c / 3721f5ec。
+> **产品增强(用户提出并实现)**:grep 调用级 `timeout` 参数(5~600s)+ 超时可操作引导——超时返回体贴「可传 timeout 参数加大超时(当前 N 秒,上限 600 秒)重试,或用 glob/path 收窄范围」,提交 1362db38。
+> **E5/H5/I7 留待项就此闭环**:核心链路均经真机 GUI 操作确认。
+
+### 19.1 独立待办(非本方案范围,登记)
+
+| # | 项 | 说明 |
+|---|---|---|
+| 1 | **启动恢复阻塞窗口创建**(性能,用户可感) | 390MB 会话库上启动串行执行 turn 恢复 + V29/V30 迁移,主窗口延迟数分钟(取证:schema_version=28 停留数分钟、WAL 0 字节、MainWindowHandle=0)。建议:窗口先行 + 恢复/迁移异步化 + turns 查询索引评估 |
+| 2 | **sessions/ 加入默认忽略名单** | 会话事件日志在工作目录内,搜索自引用命中反复出现,污染结果 |
+| 3 | **git 仓库前提提示** | 工作目录非 git 仓库时 .gitignore 行为静默失效,可考虑在 searchScope 或设置 hint 中提示 |
+| 4 | 会话库体积治理 | 390MB 库加速了缺陷 1 的暴露;长期需归档/压缩策略 |
