@@ -280,6 +280,7 @@ describe('TurnCoordinator', () => {
     const queuedUser = { ...user, status: 'queued' as const }
     const excludedAssistant = { ...assistant, id: 'failed-a', status: 'failed' as const }
     db.getMessage = vi.fn((id) => id === 'u1' ? queuedUser : id === 'failed-a' ? excludedAssistant : undefined)
+    db.claimQueuedAtomic = vi.fn(() => ({ user: { message: user, sequence: 1 }, assistant: { message: assistant, sequence: 2 }, executionConfig: { continuationContext: { sourceInvocationId: 'failed-inv', sourceTurnId: 'failed-turn', historySequence: 9, summary: 'prior failure', state: 'known' } } }))
     const coordinator = new TurnCoordinator(db, { now: () => 1, id: (() => { let n = 0; return () => `queued-${++n}` })() })
 
     const result = coordinator.prepare({
@@ -288,6 +289,7 @@ describe('TurnCoordinator', () => {
     })
 
     expect(result.excludeMessageIds).toEqual(['failed-a'])
+    expect(result.executionConfig?.continuationContext).toMatchObject({ sourceInvocationId: 'failed-inv', summary: 'prior failure' })
     expect(db.claimQueuedAtomic).toHaveBeenCalledWith(expect.objectContaining({
       userMessageId: 'u1',
       excludeMessageIds: ['failed-a']

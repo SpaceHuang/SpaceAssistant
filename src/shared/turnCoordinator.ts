@@ -16,7 +16,7 @@ export type TurnStorage = {
     assistant: Omit<Message, 'schemaVersion'> & { schemaVersion?: number }
     turn: PersistedTurnRecord
   }) => { user: PersistedMessage; assistant: PersistedMessage }
-  claimQueuedAtomic: (input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig }) => { user: PersistedMessage; assistant: PersistedMessage }
+  claimQueuedAtomic: (input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig }) => { user: PersistedMessage; assistant: PersistedMessage; executionConfig?: TurnExecutionConfig }
   update: (messageId: string, patch: Partial<Message>) => PersistedMessage | null
   updateIfStreaming: (messageId: string, patch: Partial<Message>) => PersistedMessage | null
   checkpoint: (turnId: string, version: number, message: Message) => boolean
@@ -28,14 +28,14 @@ export type TurnStorage = {
   saveTurn: (turn: { turnId: string; requestId: string; sessionId: string; assistantMessageId: string; state: string; userMessageId?: string; contextBoundarySequence?: number; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig }) => void
   updateTurnState: (turnId: string, state: string, patch?: { version?: number; outcome?: string; usage?: unknown; error?: { code: string; message: string } }) => void
 }
-export type TurnStarted = { turnId: string; requestId: string; sessionId: string; userMessage?: Message; assistantMessage: Message; version: number; startToken: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; lastEventSeq?: number; persistedOutcome?: TurnOutcome; persistedUsage?: unknown; persistedError?: { code: string; message: string } }
+export type TurnStarted = { turnId: string; requestId: string; sessionId: string; userMessage?: Message; assistantMessage: Message; version: number; startToken: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; retryOfMessageId?: string; retryOfInvocationId?: string; lastEventSeq?: number; persistedOutcome?: TurnOutcome; persistedUsage?: unknown; persistedError?: { code: string; message: string } }
 export type TurnCoordinatorMetric =
   | { kind: 'event'; turnId: string; eventType: AssistantFactEvent['type']; durationMs: number; version: number }
   | { kind: 'checkpoint'; turnId: string; version: number; durationMs: number; accepted: boolean }
 export type CoordinatorDeps = { now: () => number; id: () => string; finishingWindowMs?: number; onMetric?: (metric: TurnCoordinatorMetric) => void }
 export type ModelResult = Pick<TurnTerminal, 'outcome'> & { error?: TurnTerminal['error']; usage?: unknown }
 export type ModelSource = (turn: TurnStarted, token: string) => Promise<ModelResult | void>
-export type PersistedTurnRecord = { turnId: string; requestId: string; sessionId: string; assistantMessageId: string; state: string; userMessageId?: string; contextBoundarySequence?: number; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; version?: number; outcome?: string; usage?: unknown; error?: { code: string; message: string }; intentFingerprint?: string; startToken?: string }
+export type PersistedTurnRecord = { turnId: string; requestId: string; sessionId: string; assistantMessageId: string; state: string; userMessageId?: string; contextBoundarySequence?: number; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; retryOfMessageId?: string; retryOfInvocationId?: string; continuationAcceptance?: { payloadSha256: string; rawText: string; kind: 'exact-continue' | 'follow-up'; route: string; sourceInvocationId?: string; sourceTurnId?: string; sourceSequence?: number }; version?: number; outcome?: string; usage?: unknown; error?: { code: string; message: string }; intentFingerprint?: string; startToken?: string }
 export type Checkpoint = (turnId: string, version: number, message: Message) => boolean | void | Promise<boolean | void>
 export type CancelHook = (turnId: string) => void
 const CHECKPOINT_INTERVAL_MS = 2_000
@@ -57,7 +57,10 @@ export function normalizeTurnExecutionConfig(config: TurnExecutionConfig): TurnE
     ...(config.projectMemoryEnabled !== undefined ? { projectMemoryEnabled: config.projectMemoryEnabled } : {}),
     ...(config.effectiveModelForUsage?.trim() ? { effectiveModelForUsage: config.effectiveModelForUsage.trim() } : {}),
     ...(config.continuationSafetySnapshot ? { continuationSafetySnapshot: { ...config.continuationSafetySnapshot } } : {}),
-    ...(config.continuationSource ? { continuationSource: { ...config.continuationSource } } : {})
+    ...(config.continuationSource ? { continuationSource: { ...config.continuationSource } } : {}),
+    ...(config.continuationContext ? { continuationContext: { ...config.continuationContext } } : {}),
+    ...(config.retryOfMessageId ? { retryOfMessageId: config.retryOfMessageId } : {}),
+    ...(config.retryOfInvocationId ? { retryOfInvocationId: config.retryOfInvocationId } : {})
   }
 }
 
@@ -115,6 +118,7 @@ export class TurnCoordinator {
           executionConfig: normalizeTurnExecutionConfig(intent.config)
         })
         const started = this.makeStarted(intent, claimed.user.message, claimed.assistant.message, { turnId, startToken, persist: false, state: initialState })
+        if (claimed.executionConfig) started.executionConfig = claimed.executionConfig
         this.turns.set(started.turnId, started)
         return started
       }
@@ -123,7 +127,7 @@ export class TurnCoordinator {
       const assistant = { id: this.deps.id(), sessionId: intent.sessionId, role: 'assistant' as const, content: '', timestamp: this.deps.now(), status: 'streaming' as const }
       const turnId = this.deps.id()
       const startToken = this.deps.id()
-      const appended = this.storage.prepareAtomic({ user, assistant, turn: { turnId, requestId: intent.requestId, sessionId: intent.sessionId, assistantMessageId: assistant.id, state: initialState, startToken, intentFingerprint: this.intentFingerprint(intent), excludeMessageIds: intent.excludeMessageIds, executionConfig: normalizeTurnExecutionConfig(intent.config) } })
+      const appended = this.storage.prepareAtomic({ user, assistant, turn: { turnId, requestId: intent.requestId, sessionId: intent.sessionId, assistantMessageId: assistant.id, state: initialState, startToken, intentFingerprint: this.intentFingerprint(intent), excludeMessageIds: intent.excludeMessageIds, retryOfMessageId: intent.mode === 'create-user' ? intent.retryOfMessageId : undefined, retryOfInvocationId: intent.mode === 'create-user' ? intent.retryOfInvocationId : undefined, continuationAcceptance: intent.mode === 'create-user' ? intent.continuationAcceptance : undefined, executionConfig: normalizeTurnExecutionConfig(intent.config) } })
       userMessage = appended.user.message
       const started = this.makeStarted(intent, userMessage, appended.assistant.message, { turnId, startToken, persist: false })
       this.turns.set(started.turnId, started)
@@ -201,7 +205,7 @@ export class TurnCoordinator {
     if (!userMessage || !assistantMessage) throw new Error('atomic prepare returned incomplete messages')
     const turnId = options.turnId ?? this.deps.id()
     const startToken = options.startToken ?? this.deps.id()
-    const started = { turnId, requestId: intent.requestId, sessionId: intent.sessionId, userMessage, assistantMessage, version: 0, startToken, intentFingerprint: this.intentFingerprint(intent), excludeMessageIds: intent.excludeMessageIds, executionConfig: normalizeTurnExecutionConfig(intent.config) }
+    const started = { turnId, requestId: intent.requestId, sessionId: intent.sessionId, userMessage, assistantMessage, version: 0, startToken, intentFingerprint: this.intentFingerprint(intent), excludeMessageIds: intent.excludeMessageIds, executionConfig: normalizeTurnExecutionConfig(intent.config), ...(intent.mode === 'create-user' && intent.retryOfMessageId ? { retryOfMessageId: intent.retryOfMessageId } : {}), ...(intent.mode === 'create-user' && intent.retryOfInvocationId ? { retryOfInvocationId: intent.retryOfInvocationId } : {}) }
     if (options.persist !== false) this.storage.saveTurn({
       turnId: started.turnId,
       requestId: started.requestId,

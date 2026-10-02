@@ -19,6 +19,9 @@ export type OutboundSessionPrefs = {
 }
 
 export type OutboundSubmitIntent = {
+  /** 客户端稳定幂等键；出站 continuation 路由及普通 Turn 共用此 ID。 */
+  requestId?: string
+  sourceSelection?: { sourceAssistantMessageId?: string; chooseLatest?: boolean; asOrdinaryTurn?: boolean }
   /** 无会话 = 请主进程创建（决定回主进程） */
   sessionId?: string
   text: string
@@ -31,6 +34,7 @@ export type OutboundSubmitIntent = {
 export type LocalCommandPayload =
   | { kind: 'test-pop-run' }
   | { kind: 'test-cards-run' }
+  | { kind: 'continuation-started'; messageId: string; sequence: number }
   | { kind: 'hint-only'; hint: string; /** 主进程已落库时携带，渲染端据此路由真实消息；无会话快路径（仅展示）缺省 */ messageId?: string; sequence?: number }
 
 export type OutboundSubmitResult =

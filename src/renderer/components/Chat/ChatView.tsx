@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { App } from 'antd'
+import { App, Modal } from 'antd'
 import { MessageSquare, MessagesSquare } from 'lucide-react'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
 import {
@@ -7,7 +7,6 @@ import {
   mergeTurnFailures,
   prependDisplayPage,
   patchDisplayMessage,
-  removeMessage,
   restoreLastUsage,
   setChatStatus,
   setConfirmFocusToolUseId,
@@ -66,7 +65,7 @@ import { activateRecoverySkillInState, BROWSER_SETUP_RECOVERY_SKILL } from '../.
 import { clearChatLaunchIntent } from '../../store/chatLaunchSlice'
 import { filterBuiltinToolsForRenderer } from '../../../shared/toolsConfigFilter'
 import { getCachedToolExposure, subscribeToolExposure } from '../../services/toolExposureService'
-import { appendSkillHintRecord, createSkillHintRecord, createSkillHintSystemMessage } from '../../../shared/skillHintRecords'
+import { appendSkillHintRecord, createContinuationStartedSystemMessage, createSkillHintRecord, createSkillHintSystemMessage } from '../../../shared/skillHintRecords'
 import type { ChatImageAttachment, Message } from '../../../shared/domainTypes'
 import { DEFAULT_WIKI_CONFIG, type SessionSkillsState } from '../../../shared/domainTypes'
 import { useDetailPanel } from '../DetailPanel/DetailPanelContext'
@@ -96,6 +95,8 @@ type SendInternalOptions = {
   contextIntent?: OutboundContextIntent
   /** 无会话时的代建偏好（B2）：model / llmServiceId / thinkingEffort 草稿 */
   sessionPrefs?: import('../../../shared/outboundProtocol').OutboundSessionPrefs
+  requestId?: string
+  sourceSelection?: import('../../../shared/outboundProtocol').OutboundSubmitIntent['sourceSelection']
 }
 
 function buildClaudePayload(history: Message[]) {
@@ -466,13 +467,12 @@ export function ChatView() {
     if (sessionId) abortSessionRun(sessionId)
   }, [sessionId])
 
-  const { t: tChat } = useTypedTranslation('chat')
-
   const persistSkillHintSystemMessage = useCallback(
     async (targetSessionId: string, text: string, shownAt = Date.now()) => {
       const msg = createSkillHintSystemMessage(targetSessionId, text, shownAt)
       routeAddMessage(targetSessionId, msg)
-      await window.api.messageAppendNonTurn(msg)
+      const persisted = await window.api.messageAppendNonTurn(msg)
+      if (persisted) dispatch(ackDisplayMessagePersisted({ messageId: persisted.messageId, sequence: persisted.sequence }))
       scrollBottom(true)
     },
     [dispatch, scrollBottom]
@@ -523,7 +523,10 @@ export function ChatView() {
       try {
         result = await window.api.chatSubmitOutbound({
           ...(runSessionId ? { sessionId: runSessionId } : {}),
+          ...(options?.requestId ? { requestId: options.requestId } : {}),
+          ...(options?.sourceSelection ? { sourceSelection: options.sourceSelection } : {}),
           text,
+          ...(options?.contextIntent?.kind === 'create-user' && options.contextIntent.attachments?.length ? { attachments: options.contextIntent.attachments } : {}),
           ...(options?.contextIntent ? { contextIntent: options.contextIntent } : {}),
           ...(options?.sessionPrefs ? { sessionPrefs: options.sessionPrefs } : {})
         })
@@ -536,6 +539,20 @@ export function ChatView() {
         for (const w of result.rejected.warnings ?? []) message.warning(formatUserFacingError(w))
         message.error(formatUserFacingError(result.rejected.reason))
         // main 基线语义:缺 API Key 时引导用户打开设置页
+        if (result.rejected.reason === 'CONTINUATION_SOURCE_SELECTION_REQUIRED') {
+          const requestId = options?.requestId ?? crypto.randomUUID()
+          const answer = await new Promise<'ordinary' | 'source' | null>((resolve) => {
+            Modal.confirm({
+              title: t('chatView.warnings.continuationSourceSelectionTitle'),
+              content: t('chatView.warnings.continuationSourceSelectionBody'),
+              okText: t('chatView.warnings.continuationContinueLatest'),
+              cancelText: t('chatView.warnings.continuationAsOrdinary'),
+              onOk: () => resolve('source'),
+              onCancel: () => resolve('ordinary')
+            })
+          })
+          if (answer) await submitOutbound(text, undefined, { ...options, requestId, sourceSelection: answer === 'ordinary' ? { asOrdinaryTurn: true } : { chooseLatest: true } })
+        }
         if (result.rejected.reason === 'OUTBOUND_API_KEY_MISSING') {
           dispatch(openSettings({ tab: 'models' }))
         }
@@ -564,6 +581,15 @@ export function ChatView() {
             },
             persistSystemHint: (hint) => persistSkillHintSystemMessage(effectiveSessionId, hint)
           })
+          return result
+        }
+        if (cmd.kind === 'continuation-started') {
+          if (effectiveSessionId) {
+            const statusMessage = createContinuationStartedSystemMessage(effectiveSessionId, cmd.messageId)
+            routeAddMessage(effectiveSessionId, statusMessage)
+            dispatch(ackDisplayMessagePersisted({ messageId: cmd.messageId, sequence: cmd.sequence }))
+            scrollBottom(true)
+          }
           return result
         }
         showSkillHint(
@@ -610,6 +636,7 @@ export function ChatView() {
       // 无会话 → 主进程创建（附带 composer 草稿偏好，B2）；运行中 → 主进程分类立即命令/排队；决定全部回主进程（偏差 9）
       const result = await submitOutbound(text, undefined, {
         targetSessionId: sessionId ?? undefined,
+        ...(/^(继续|继续执行|接着做|接着刚才的修改|继续上次的任务|接着|刚才|上次)/u.test(text.trim()) ? { requestId: crypto.randomUUID() } : {}),
         contextIntent: { kind: 'create-user', text, attachments },
         ...(sessionId
           ? {}
@@ -641,7 +668,6 @@ export function ChatView() {
         return
       }
 
-      dispatch(removeMessage(assistantMessageId))
       await submitOutbound(target.currentUser.message.content, undefined, {
         contextIntent: {
           kind: 'reuse-user',
@@ -977,6 +1003,19 @@ export function ChatView() {
     [turnFailures]
   )
 
+  const retryOfMessageIdByAssistant = useMemo(() => {
+    const result: Record<string, string> = {}
+    for (const candidate of messages) {
+      if (candidate.role !== 'assistant' || candidate.status !== 'failed') continue
+      const originalUser = messages.filter((item) => item.role === 'user' && item.timestamp <= candidate.timestamp).at(-1)
+      if (!originalUser) continue
+      const retryUser = messages.find((item) => item.role === 'user' && item.timestamp > candidate.timestamp && /^继续/u.test(item.content))
+      const retryAssistant = retryUser && messages.find((item) => item.role === 'assistant' && item.timestamp > retryUser.timestamp)
+      if (retryAssistant) result[retryAssistant.id] = candidate.id
+    }
+    return result
+  }, [messages])
+
   const runningLabels = useMemo(
     () => resolveChatRunningLabels(streamingAssistant, t),
     [streamingAssistant, t]
@@ -999,6 +1038,7 @@ export function ChatView() {
         canRetry={canRetryMessage}
         canCancelQueued={canCancelQueuedMessage}
         resolveFailureReason={resolveFailureReason}
+        retryOfMessageIdByAssistant={retryOfMessageIdByAssistant}
         onOpenModelSettings={openModelSettings}
         focusToolUseId={confirmFocusToolUseId}
         pendingConfirmItems={pendingConfirmItems}
@@ -1018,6 +1058,7 @@ export function ChatView() {
       canRetryMessage,
       canCancelQueuedMessage,
       resolveFailureReason,
+      retryOfMessageIdByAssistant,
       openModelSettings,
       confirmFocusToolUseId,
       sessionId,

@@ -1,6 +1,6 @@
 # 工具错误恢复与 Turn 连续性改进计划
 
-**状态：待评审**  
+**状态：阶段 A/B 与 continuation 协议已落地；工具恢复后续观察项保留**
 **日期：2026-10-02**  
 **关联问题：** 会话 `c510dafc-42ea-4068-ab12-d53ef28d0da8` 因“同一工具错误已连续出现 3 次”结束。
 
@@ -134,6 +134,8 @@ Turn 级模型轮次与工具轮次上限仍是防止无限循环的最终边界
 增加结构化字段记录 `errorClass`、`toolCallId`、`modelTurn`、`retryOf`/语义调用摘要、`dispatched`、`resultCommitted` 和终止原因。日志不记录密钥或完整敏感参数。可观察指标至少区分：同批失败数、后续模型重复调用数、模型修正后成功数、真正因轮次上限结束数。
 
 ### 阶段 C：定义检查点恢复，而非“重试原问题”
+
+**实现核对（2026-10-02）**：本仓库已采用“新 continuation Invocation 引用旧已提交检查点”的身份模型。`agent_continuations` 持久化 continuation ID、来源 Invocation/Turn、checkpoint 序号与 SHA-256、请求幂等键、创建者、冻结安全配置、目标 Invocation/Turn/start token 与状态；事务内唯一约束按来源 checkpoint 防重复占用。`validateContinuationCheckpoint` 从 canonical History 检查来源身份、工具调用结算/审批/安全拒绝，并重建已提交 transcript；目标 Invocation 以新的上下文提交事件记录来源引用。按钮与出站“继续”入口均调用同一 `startAgentContinuation`/占用路径。阶段 C 的协议设计门槛已满足，不再作为尚待设计事项。过程摘要与 checkpoint 恢复仍是不同路径：摘要 Turn 不复用工具调用队列。
 
 阶段 B 能解决常见工具错误，不需要开启新 Turn；本阶段处理模型服务中断、应用退出、可恢复宿主故障等确实无法在原进程继续的场景。
 

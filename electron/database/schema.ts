@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 30
+export const DB_SCHEMA_VERSION = 32
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (
@@ -295,6 +295,33 @@ CREATE TABLE IF NOT EXISTS accepted_turn_contexts (
   UNIQUE(session_id, request_id)
 );
 CREATE INDEX IF NOT EXISTS idx_accepted_turn_contexts_request ON accepted_turn_contexts(request_id, session_id);
+`
+
+/** v27 → v28: durable idempotent user continuation-intent acceptance. */
+export const MIGRATION_V28_CONTINUATION_INTENTS_SQL = `
+CREATE TABLE IF NOT EXISTS continuation_intents (
+  request_id TEXT PRIMARY KEY NOT NULL,
+  session_id TEXT NOT NULL,
+  payload_sha256 TEXT NOT NULL,
+  raw_text TEXT NOT NULL,
+  attachments_json TEXT NOT NULL,
+  intent_kind TEXT NOT NULL,
+  route TEXT NOT NULL,
+  source_invocation_id TEXT,
+  source_turn_id TEXT,
+  source_sequence INTEGER,
+  target_id TEXT,
+  status TEXT NOT NULL,
+  rejection_reason TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_continuation_intents_session ON continuation_intents(session_id, created_at);
+`
+
+/** v31 → v32: queued continuation carries its authoritative source context into turn claim. */
+export const MIGRATION_V32_CONTINUATION_QUEUE_CONTEXT_SQL = `
+ALTER TABLE continuation_intents ADD COLUMN continuation_context_json TEXT;
 `
 
 

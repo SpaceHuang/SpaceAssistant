@@ -47,6 +47,8 @@ export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
         ...(persisted.intentFingerprint ? { intentFingerprint: persisted.intentFingerprint } : {}),
         ...(persisted.excludeMessageIds ? { excludeMessageIds: persisted.excludeMessageIds } : {}),
         ...(persisted.executionConfig ? { executionConfig: persisted.executionConfig } : {}),
+        ...(persisted.retryOfMessageId ? { retryOfMessageId: persisted.retryOfMessageId } : {}),
+        ...(persisted.retryOfInvocationId ? { retryOfInvocationId: persisted.retryOfInvocationId } : {}),
         ...(persisted.outcome ? { persistedOutcome: persisted.outcome as TurnStarted['persistedOutcome'] } : {}),
         ...(persisted.usage !== undefined ? { persistedUsage: persisted.usage } : {}),
         ...(persisted.error ? { persistedError: persisted.error } : {})

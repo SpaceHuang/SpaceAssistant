@@ -11,7 +11,7 @@ export function SkillHintBubble({ hints }: Props) {
   return (
     <div className="chat-system-track">
       {sorted.map((hint) => (
-        <SkillHintRow key={hint.id} text={hint.text} />
+        <SkillHintRow key={hint.id} text={hint.text} category={hint.category} status={hint.status} />
       ))}
     </div>
   )

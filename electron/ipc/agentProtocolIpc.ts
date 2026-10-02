@@ -832,7 +832,38 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         turnStartToken: started.startToken,
         sessionId: started.sessionId
       })
+      if (turnIntent.mode === 'create-user' && turnIntent.continuationIntent?.kind === 'exact-continue' && turnIntent.continuationIntent.requestId) {
+        getDbConnection(ctx.db).prepare("UPDATE continuation_intents SET route='continuation',status='accepted_continuation',target_id=?,updated_at=? WHERE request_id=?")
+          .run(started.turnId, Date.now(), turnIntent.continuationIntent.requestId)
+      }
       return { turnId: started.turnId, assistantMessage: started.assistantMessage }
+    },
+    findRetrySource: async ({ sessionId, text, attachments }) => {
+      if (attachments?.length || !['继续', '继续执行', '接着做', '接着刚才的修改', '继续上次的任务'].includes(text.trim())) return undefined
+      const failed = getMessages(ctx.db, sessionId).filter((item) => item.role === 'assistant' && item.status === 'failed')
+      if (failed.length > 1) return undefined
+      const message = failed.at(-1)
+      if (!message) return undefined
+      const source = getDbConnection(ctx.db).prepare('SELECT request_id AS requestId FROM turns WHERE session_id=? AND assistant_message_id=?').get(sessionId, message.id) as { requestId?: string } | undefined
+      return source?.requestId ? { assistantMessageId: message.id, sourceInvocationId: source.requestId } : undefined
+    },
+    startContinuation: async ({ sessionId, sourceInvocationId, requestId, continuationAcceptance }) => {
+      const sourceTurn = getTurnByRequestId(ctx.db, sessionId, sourceInvocationId)
+      const safety = sourceTurn?.executionConfig?.continuationSafetySnapshot
+      if (!sourceTurn || !safety || !sourceTurn.userMessageId || !ctx.executeTurn) throw new Error('CONTINUATION_ORIGINAL_SAFETY_SNAPSHOT_MISSING')
+      const current = resolveContinuationSafetySnapshot(ctx, sessionId, 'desktop')
+      if (JSON.stringify(current) !== JSON.stringify(safety)) throw new Error('CONTINUATION_SAFETY_SNAPSHOT_CHANGED')
+      const history = new SqliteAgentHistory(getDbConnection(ctx.db), 1, Date.now, sessionId)
+      const snapshot = history.readSync(sourceInvocationId)
+      const started = await startAgentContinuation({
+        conn: getDbConnection(ctx.db), snapshot, sessionId, userMessageId: sourceTurn.userMessageId,
+        requestIdempotencyKey: requestId, createdBy: sessionId, frozenConfig: current,
+        executionConfig: { ...sourceTurn.executionConfig, continuationSafetySnapshot: current }, continuationAcceptance, runtime: turnRuntime
+      })
+      if (started.started && started.turn) {
+        void executeTurnInternal(null, { requestId: started.turn.requestId, turnId: started.turn.turnId, turnStartToken: started.turn.startToken, sessionId: started.turn.sessionId }, started.continuation.continuationId)
+      }
+      return { continuationId: started.continuation.continuationId, targetTurnId: started.continuation.targetTurnId, status: started.continuation.status }
     },
     ensureSessionWorkDir: async (sessionId) => {
       // B2(v2 评审):main ensureWorkDirForSession 语义回收——turn 执行用 active profile 目录,

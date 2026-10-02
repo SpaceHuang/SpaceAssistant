@@ -31,8 +31,9 @@
     "retryFailedMessage": "回复未能完成。你可以重试生成，或基于已有上下文继续对话。",
     "keyAccessFailedMessage": "模型服务凭据暂时无法读取。请先到设置验证 Key，再重试这条消息。",
     "failureReason": "失败原因",
-    "retry": "重试回复",
+    "retry": "从头重试",
     "continueFromCheckpoint": "继续上次执行",
+    "retrySourceLabel": "重试来源",
     "openModelSettings": "打开模型服务设置"
   },
   "scrollToLatest": {
@@ -256,6 +257,8 @@
     }
   },
   "chatView": {
+    "continuationStarted": "正在继续上次执行",
+    "statusLabel": "状态",
     "warnings": {
       "selectSession": "请先选择会话并等待配置加载",
       "sessionRunning": "当前会话已有任务在执行",
@@ -264,7 +267,11 @@
       "maxParallel": "最多同时执行 {{max}} 个会话，请稍后再试",
       "apiKeyMissing": "请先在设置中配置 API Key",
       "retryNoUserMessage": "找不到可重试的上一条用户消息",
-      "continuationUnavailable": "此失败没有可安全继续的检查点，请重试生成或检查失败原因"
+      "continuationUnavailable": "此失败没有可安全继续的检查点，请重试生成或检查失败原因",
+      "continuationSourceSelectionTitle": "选择要承接的失败执行",
+      "continuationSourceSelectionBody": "当前会话有多个失败任务。选择继续最近一次失败执行，或将原输入作为普通新任务发送。",
+      "continuationContinueLatest": "继续最近一次",
+      "continuationAsOrdinary": "作为普通新任务"
     },
     "empty": {
       "noSessionTitle": "选择或创建一个会话",

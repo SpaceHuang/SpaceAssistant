@@ -65,8 +65,8 @@ function turnFact(overrides: Partial<UsageTurnFactInput> = {}): UsageTurnFactInp
 }
 
 describe('v16 用量统计表迁移', () => {
-  it('当前 schema version 包含后续迁移并为 30', () => {
-    expect(DB_SCHEMA_VERSION).toBe(30)
+  it('当前 schema version 包含后续迁移并为 32', () => {
+    expect(DB_SCHEMA_VERSION).toBe(32)
   })
 
   it('v15 库升级到 v16 后两张统计表与索引存在，且重复迁移幂等', () => {

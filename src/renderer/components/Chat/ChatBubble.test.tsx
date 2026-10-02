@@ -122,7 +122,7 @@ describe('ChatBubble streaming render', () => {
     expect(region?.getAttribute('aria-busy')).toBeNull()
   })
 
-  it('shows retry action on failed assistant message', () => {
+  it('labels a fresh-generation action explicitly as retry from the beginning', () => {
     const actions = {
       archiveToWiki: vi.fn(),
       retryAssistant: vi.fn(),
@@ -142,7 +142,7 @@ describe('ChatBubble streaming render', () => {
         showRetry
       />
     )
-    fireEvent.click(screen.getByRole('button', { name: '重试回复' }))
+    fireEvent.click(screen.getByRole('button', { name: '从头重试' }))
     expect(actions.retryAssistant).toHaveBeenCalledWith('a1')
   })
 
@@ -155,6 +155,13 @@ describe('ChatBubble streaming render', () => {
     fireEvent.click(screen.getByRole('button', { name: '继续上次执行' }))
     expect(actions.continueAssistant).toHaveBeenCalledWith('a1')
     expect(actions.retryAssistant).not.toHaveBeenCalled()
+  })
+
+  it('places safe checkpoint continuation before retry from the beginning', () => {
+    const actions = { archiveToWiki: vi.fn(), retryAssistant: vi.fn(), continueAssistant: vi.fn(), cancelQueued: vi.fn(), confirmTool: vi.fn(), cancelTool: vi.fn() }
+    const { container } = render(<ChatBubble message={assistantMessage({ status: 'failed' })} actions={actions} showRetry />)
+    const buttons = [...container.querySelectorAll('.chat-message-error__retry')].map((button) => button.textContent)
+    expect(buttons).toEqual(['继续上次执行', '从头重试'])
   })
 
   it('失败气泡在拿到失败原因时展示真实原因，而不是只留通用提示', () => {
@@ -424,5 +431,21 @@ describe('ChatBubble activity batch', () => {
       name: m.attributeName ?? undefined
     }))
     expect(summary).toEqual([])
+  })
+
+  it('renders persisted continuation status with a localized status label', () => {
+    render(<ChatBubble message={{
+      id: 'continuation-status-1',
+      sessionId: 's1',
+      role: 'system',
+      content: '',
+      timestamp: 1,
+      status: 'completed',
+      schemaVersion: 1,
+      skillHints: [{ id: 'status-1', text: '', shownAt: 1, category: 'status', status: 'continuation-started' }]
+    }} />)
+
+    expect(screen.getByText('正在继续上次执行')).toBeTruthy()
+    expect(screen.getByText('状态')).toBeTruthy()
   })
 })

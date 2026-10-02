@@ -70,6 +70,7 @@ type Props = {
   /** 主进程 turn 终态的真实失败原因（仅失败消息传入） */
   failureReason?: string
   onOpenModelSettings?: () => void
+  retryOfMessageId?: string
 }
 
 /** 活动条目身份 key：基于内容而非位置索引——时间线 segment 顺序漂移时
@@ -246,6 +247,7 @@ export const ChatBubble = memo(function ChatBubble({
   activeSearchTarget = null,
   failureReason,
   onOpenModelSettings
+  ,retryOfMessageId
 }: Props) {
   onRenderProbe?.(message.id)
   const { t } = useTypedTranslation('chat')
@@ -541,16 +543,22 @@ export const ChatBubble = memo(function ChatBubble({
                 {t('bubble.openModelSettings')}
               </button>
             ) : null}
-            {showRetry && handleRetry ? (
-              <button type="button" className="chat-message-error__retry" onClick={handleRetry}>
-                {t('bubble.retry')}
-              </button>
-            ) : null}
             {showRetry && handleContinue ? (
               <button type="button" className="chat-message-error__retry" onClick={handleContinue}>
                 {t('bubble.continueFromCheckpoint')}
               </button>
             ) : null}
+            {showRetry && handleRetry ? (
+              <button type="button" className="chat-message-error__retry" onClick={handleRetry}>
+                {t('bubble.retry')}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {retryOfMessageId ? (
+          <div className="chat-message-error__reason" data-retry-source={retryOfMessageId}>
+            {t('bubble.retrySourceLabel')}: <button type="button" onClick={() => document.querySelector(`[data-message-id="${CSS.escape(retryOfMessageId)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}>{retryOfMessageId}</button>
           </div>
         ) : null}
 

@@ -193,7 +193,7 @@ describe('ChatMessageList memo isolation', () => {
       />
     )
 
-    fireEvent.click(screen.getByRole('button', { name: '重试回复' }))
+    fireEvent.click(screen.getByRole('button', { name: '从头重试' }))
     expect(retryAssistant).toHaveBeenCalledWith('fail-1')
 
     fireEvent.click(screen.getByRole('button', { name: '取消排队' }))
@@ -221,7 +221,7 @@ describe('ChatBubble actions binding', () => {
         showRetry
       />
     )
-    fireEvent.click(screen.getByRole('button', { name: '重试回复' }))
+    fireEvent.click(screen.getByRole('button', { name: '从头重试' }))
     expect(actions.retryAssistant).toHaveBeenCalledWith('fail-9')
   })
 

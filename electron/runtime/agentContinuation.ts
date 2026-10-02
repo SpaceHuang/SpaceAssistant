@@ -262,29 +262,52 @@ export function reconcileRunningAgentContinuations(conn: DatabaseSync, historyRe
 export async function startAgentContinuation(input: {
   conn: DatabaseSync; snapshot: HistorySnapshot; sessionId: string; userMessageId: string; requestIdempotencyKey: string
   createdBy: string; frozenConfig: Record<string, unknown>; executionConfig: import('../../src/shared/assistantFactAggregator').TurnExecutionConfig
+  continuationAcceptance?: { payloadSha256: string; rawText: string; attachments?: unknown[]; intentKind: 'exact-continue' | 'follow-up'; route: string }
   runtime: import('../turnRuntime').TurnRuntime; now?: () => number; newId?: () => string
 }): Promise<{ accepted: true; started: boolean; continuation: AgentContinuationRecord; turn?: import('../../src/shared/turnCoordinator').TurnStarted }> {
-  const checkpoint = validateContinuationCheckpoint(input.snapshot)
-  if (checkpoint.requiredUserMessage.id !== input.userMessageId) throw new AgentContinuationRejectedError('CONTINUATION_SOURCE_USER_MISMATCH')
-  const continuation = createOrGetAgentContinuation({
-    conn: input.conn, snapshot: input.snapshot, sessionId: input.sessionId,
-    requestIdempotencyKey: input.requestIdempotencyKey, createdBy: input.createdBy,
-    frozenConfig: input.frozenConfig, ...(input.newId ? { newId: input.newId } : {}), ...(input.now ? { now: input.now } : {})
+  return runInTransaction(input.conn, () => {
+    const checkpoint = validateContinuationCheckpoint(input.snapshot)
+    if (checkpoint.requiredUserMessage.id !== input.userMessageId) throw new AgentContinuationRejectedError('CONTINUATION_SOURCE_USER_MISMATCH')
+    const sourceTurnId = input.snapshot.events.at(-1)?.turnId
+    const sourceAssistant = sourceTurnId ? input.conn.prepare('SELECT m.sequence FROM turns t JOIN messages m ON m.id=t.assistant_message_id WHERE t.session_id=? AND t.turn_id=?').get(input.sessionId, sourceTurnId) as { sequence?: number } | undefined : undefined
+    if (sourceAssistant?.sequence == null) throw new AgentContinuationRejectedError('CONTINUATION_SOURCE_STALE')
+    const newerAcceptedInput = input.conn.prepare("SELECT id FROM messages WHERE session_id=? AND role='user' AND sequence>? AND status IN ('sent','queued') ORDER BY sequence ASC LIMIT 1").get(input.sessionId, sourceAssistant.sequence)
+    if (newerAcceptedInput) throw new AgentContinuationRejectedError('CONTINUATION_SOURCE_STALE')
+    const continuation = createOrGetAgentContinuation({
+      conn: input.conn, snapshot: input.snapshot, sessionId: input.sessionId,
+      requestIdempotencyKey: input.requestIdempotencyKey, createdBy: input.createdBy,
+      frozenConfig: input.frozenConfig, ...(input.newId ? { newId: input.newId } : {}), ...(input.now ? { now: input.now } : {})
+    })
+    if (input.continuationAcceptance) {
+      const accepted = input.continuationAcceptance
+      input.conn.prepare(`INSERT INTO continuation_intents(request_id,session_id,payload_sha256,raw_text,attachments_json,intent_kind,route,source_invocation_id,source_turn_id,source_sequence,target_id,status,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(request_id) DO UPDATE SET route=excluded.route,source_invocation_id=excluded.source_invocation_id,source_turn_id=excluded.source_turn_id,source_sequence=excluded.source_sequence,target_id=excluded.target_id,status=excluded.status,updated_at=excluded.updated_at`)
+        .run(input.requestIdempotencyKey, input.sessionId, accepted.payloadSha256, accepted.rawText, JSON.stringify(accepted.attachments ?? []), accepted.intentKind, accepted.route, continuation.sourceInvocationId, continuation.sourceTurnId, continuation.checkpointSequence, continuation.continuationId, 'starting_continuation', (input.now ?? Date.now)(), (input.now ?? Date.now)())
+    }
+    let turn: import('../../src/shared/turnCoordinator').TurnStarted | undefined
+    let started = false
+    let finalRecord = continuation
+    if (continuation.status === 'pending') {
+      const source = {
+        continuationId: continuation.continuationId, invocationId: continuation.sourceInvocationId, sourceTurnId: continuation.sourceTurnId,
+        checkpointSequence: continuation.checkpointSequence, checkpointSha256: continuation.checkpointSha256
+      }
+      const config = { ...input.executionConfig, continuationSource: source }
+      turn = input.runtime.prepareContinuation({
+        requestId: continuation.targetInvocationId, sessionId: input.sessionId, userMessageId: input.userMessageId,
+        turnId: continuation.targetTurnId, startToken: continuation.targetStartToken, config
+      })
+      if (claimAgentContinuation(input.conn, continuation.continuationId, input.frozenConfig, (input.now ?? Date.now)())) {
+        started = true
+        finalRecord = { ...continuation, status: 'running' }
+      } else {
+        const status = input.conn.prepare('SELECT status FROM agent_continuations WHERE continuation_id=?').get(continuation.continuationId) as { status: AgentContinuationRecord['status'] } | undefined
+        if (!status) throw new AgentContinuationRejectedError('CONTINUATION_RECORD_MISSING')
+        finalRecord = { ...continuation, status: status.status }
+      }
+    }
+    if (input.continuationAcceptance) input.conn.prepare("UPDATE continuation_intents SET status='accepted_continuation',target_id=?,updated_at=? WHERE request_id=?")
+      .run(finalRecord.continuationId, (input.now ?? Date.now)(), input.requestIdempotencyKey)
+    return { accepted: true as const, started, continuation: finalRecord, ...(turn ? { turn } : {}) }
   })
-  if (continuation.status !== 'pending') return { accepted: true, started: false, continuation }
-  const source = {
-    continuationId: continuation.continuationId, invocationId: continuation.sourceInvocationId, sourceTurnId: continuation.sourceTurnId,
-    checkpointSequence: continuation.checkpointSequence, checkpointSha256: continuation.checkpointSha256
-  }
-  const config = { ...input.executionConfig, continuationSource: source }
-  const turn = input.runtime.prepareContinuation({
-    requestId: continuation.targetInvocationId, sessionId: input.sessionId, userMessageId: input.userMessageId,
-    turnId: continuation.targetTurnId, startToken: continuation.targetStartToken, config
-  })
-  if (!claimAgentContinuation(input.conn, continuation.continuationId, input.frozenConfig, (input.now ?? Date.now)())) {
-    const status = input.conn.prepare('SELECT status FROM agent_continuations WHERE continuation_id=?').get(continuation.continuationId) as { status: AgentContinuationRecord['status'] } | undefined
-    if (!status) throw new AgentContinuationRejectedError('CONTINUATION_RECORD_MISSING')
-    return { accepted: true, started: false, continuation: { ...continuation, status: status.status } }
-  }
-  return { accepted: true, started: true, continuation: { ...continuation, status: 'running' }, turn }
 }

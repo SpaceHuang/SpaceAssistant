@@ -1,11 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
-import { deserializeToolCallsFromDb, serializeToolCallsForDb } from './messageCodec'
+import { deserializeSkillHintsFromDb, deserializeToolCallsFromDb, serializeSkillHintsForDb, serializeToolCallsForDb } from './messageCodec'
 
 vi.mock('./agentLogger/agentLogger', () => ({
   logAgentEvent: vi.fn()
 }))
 
 import { logAgentEvent } from './agentLogger/agentLogger'
+
+describe('persisted operation status hints', () => {
+  it('round-trips the typed continuation status needed for localized rendering after reload', () => {
+    const hints = [{ id: 'stable-status-hint', text: '', shownAt: 10, category: 'status' as const, status: 'continuation-started' as const }]
+    expect(deserializeSkillHintsFromDb(serializeSkillHintsForDb(hints))).toEqual(hints)
+  })
+})
 
 describe('deserializeToolCallsFromDb', () => {
   it('round-trips MCP displayData for historical cards', () => {
