@@ -24,7 +24,7 @@ function createV10Database(): DatabaseSync {
 
 describe('schema v11-v16 turn context, execution config, and routing index migrations', () => {
   it('当前 schema version 与最新 DDL 保持一致', () => {
-    expect(DB_SCHEMA_VERSION).toBe(30)
+    expect(DB_SCHEMA_VERSION).toBe(32)
   })
 
   it('将 v10 的 turn context 字段升级到 v11 并更新 metadata', () => {

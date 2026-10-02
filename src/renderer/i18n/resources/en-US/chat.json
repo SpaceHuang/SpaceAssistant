@@ -31,8 +31,9 @@
     "retryFailedMessage": "The reply could not be completed. You can retry or continue from the existing context.",
     "keyAccessFailedMessage": "The model service key could not be read. Verify it in settings, then retry this message.",
     "failureReason": "Reason",
-    "retry": "Retry reply",
+    "retry": "Retry from the beginning",
     "continueFromCheckpoint": "Continue previous run",
+    "retrySourceLabel": "Retry source",
     "openModelSettings": "Open model service settings"
   },
   "scrollToLatest": {
@@ -256,6 +257,8 @@
     }
   },
   "chatView": {
+    "continuationStarted": "Continuing the previous run",
+    "statusLabel": "Status",
     "warnings": {
       "selectSession": "Select a session and wait for settings to load",
       "sessionRunning": "This session already has a task running",
@@ -264,7 +267,11 @@
       "maxParallel": "At most {{max}} sessions can run at once. Try again later.",
       "apiKeyMissing": "Configure an API Key in Settings first",
       "retryNoUserMessage": "Could not find a previous user message to retry",
-      "continuationUnavailable": "This failure has no checkpoint that can be safely continued. Retry generation or review the failure reason."
+      "continuationUnavailable": "This failure has no checkpoint that can be safely continued. Retry generation or review the failure reason.",
+      "continuationSourceSelectionTitle": "Choose a failed run to continue",
+      "continuationSourceSelectionBody": "This conversation has multiple failed tasks. Continue the latest failed run or send the original input as a normal new task.",
+      "continuationContinueLatest": "Continue latest",
+      "continuationAsOrdinary": "Send as new task"
     },
     "empty": {
       "noSessionTitle": "Select or create a session",

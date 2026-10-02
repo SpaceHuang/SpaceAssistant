@@ -689,6 +689,9 @@ export interface SkillHintRecord {
   id: string
   text: string
   shownAt: number
+  /** `status` 用于与 Skill 无关、但需留存在对话记录中的操作状态。旧记录缺省为 skill。 */
+  category?: 'skill' | 'status'
+  status?: 'continuation-started'
 }
 
 export type ContentSegment = TimelineSegment

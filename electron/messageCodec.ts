@@ -181,7 +181,13 @@ export function deserializeSkillHintsFromDb(raw: string | null | undefined): Ski
     if (!Array.isArray(arr)) return undefined
     return arr
       .filter((h) => h && typeof h.id === 'string' && typeof h.text === 'string' && typeof h.shownAt === 'number')
-      .map((h) => ({ id: h.id, text: h.text, shownAt: h.shownAt }))
+      .map((h) => ({
+        id: h.id,
+        text: h.text,
+        shownAt: h.shownAt,
+        ...(h.category === 'status' ? { category: 'status' as const } : {}),
+        ...(h.status === 'continuation-started' ? { status: 'continuation-started' as const } : {})
+      }))
   } catch {
     return undefined
   }

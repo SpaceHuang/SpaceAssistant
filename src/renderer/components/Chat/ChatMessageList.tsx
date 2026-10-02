@@ -26,6 +26,7 @@ export type ChatMessageListProps = {
   confirmationReadyBySession: Record<string, Record<string, boolean | undefined>>
   /** 解析该消息对应的真实失败原因（无则返回 undefined） */
   resolveFailureReason?: (message: Message) => string | undefined
+  retryOfMessageIdByAssistant?: Record<string, string>
   onOpenModelSettings?: () => void
   focusToolUseId?: string | null
   pendingConfirmItems?: PendingConfirmItem[]
@@ -52,6 +53,7 @@ export function ChatMessageList({
   canRetry,
   canCancelQueued,
   resolveFailureReason,
+  retryOfMessageIdByAssistant,
   onOpenModelSettings,
   focusToolUseId,
   pendingConfirmItems = [],
@@ -147,6 +149,7 @@ export function ChatMessageList({
             showRetry={canRetry(m)}
             showCancelQueued={canCancelQueued(m)}
             {...(resolveFailureReason ? { failureReason: resolveFailureReason(m) } : {})}
+            {...(retryOfMessageIdByAssistant?.[m.id] ? { retryOfMessageId: retryOfMessageIdByAssistant[m.id] } : {})}
             onOpenModelSettings={onOpenModelSettings}
             onRenderProbe={onBubbleRender}
             activeSearchTarget={activeTarget?.messageId === m.id ? activeTarget : null}

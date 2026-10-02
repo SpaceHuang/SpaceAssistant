@@ -438,6 +438,14 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           currentUserMessageId: authoritative.currentUserMessageId,
           sessionId
         })
+        const continuationContext = authoritative.executionConfig?.continuationContext
+        if (continuationContext) {
+          builtMessages.push({
+            role: 'user',
+            id: `continuation-context:${continuationContext.sourceInvocationId}:${continuationContext.historySequence}`,
+            content: `\n[结构化历史事实：失败执行摘要；来源 ${continuationContext.sourceInvocationId}，History 序号 ${continuationContext.historySequence}；状态 ${continuationContext.state}]\n${continuationContext.summary}`
+          })
+        }
         // 压缩提交端记录的是已展开的 API surface；回放必须在同一层执行，
         // 否则数据库的一条 assistant(toolCalls) 与 API 的 assistant/tool_result
         // 多条消息无法共享 boundary、range 和 fingerprint。

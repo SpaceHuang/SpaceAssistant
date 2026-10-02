@@ -16,8 +16,14 @@ import {
   estimateTokensFromImageAttachments,
   resolveEffectiveMaximumContext
 } from '../../src/shared/contextUsageEstimate'
-import { getMessages, getSession, getSessionUsage, enqueueQueuedUserMessage, type AppDatabase } from '../database'
+import { appendMessage, getMessages, getSession, getSessionUsage, getTurnByRequestId, enqueueQueuedUserMessage, type AppDatabase } from '../database'
 import { readStoredModels } from '../llmServiceResolver'
+import { createHash } from 'node:crypto'
+import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
+import { getDbConnection } from '../database'
+import { runInTransaction, TransactionCommitUnknownError } from '../database/transaction'
+import { AgentContinuationRejectedError, startAgentContinuation } from '../runtime/agentContinuation'
+import { createContinuationStartedSystemMessage } from '../../src/shared/skillHintRecords'
 
 /** 出站受理时的主进程状态快照（全部由主进程权威源构建，渲染端不再提供其中任何一项） */
 export type OutboundSnapshot = {
@@ -45,6 +51,7 @@ export type OutboundDecision =
       wikiModeActive?: boolean
       /** B3:wiki run 等「先提示后发起」的用户反馈,随发起落库(main 语义保持) */
       hint?: string
+      continuationIntent?: { kind: 'exact-continue' | 'follow-up' }
     }
 
 /** 出站分类所需的 IO 端口（主进程直连实现由接线层注入；测试注入 fake） */
@@ -72,6 +79,12 @@ export async function decideOutbound(
   io: OutboundClassifierIo
 ): Promise<OutboundDecision> {
   const trimmed = intent.text.trim()
+  const exactContinue = ['继续', '继续执行', '接着做', '接着刚才的修改', '继续上次的任务'].includes(trimmed)
+  const continuationIntent = exactContinue
+    ? { kind: 'exact-continue' as const }
+    : /^(继续|接着|刚才|上次)/u.test(trimmed)
+      ? { kind: 'follow-up' as const }
+      : undefined
 
   // ① test-pop：无需 API key、会话或配置（渲染端同序）
   const testPopCmd = parseTestPopCommand(trimmed, { isDev: snapshot.isDev })
@@ -150,6 +163,7 @@ export async function decideOutbound(
   return {
     action: 'start-turn',
     text: chatText,
+    ...(continuationIntent ? { continuationIntent } : {}),
     ...(skillsState !== snapshot.sessionSkillsState ? { skillsState } : {}),
     ...(wikiModeActive ? { wikiModeActive: true } : {}),
     ...(pendingHint ? { hint: pendingHint } : {})
@@ -191,6 +205,8 @@ export type OutboundAcceptorDeps = {
   /** B3(v2 评审):enqueue 落库后通知(受理端口不持有排水器,由接线层把 drain 接进来),闭环 snapshot→enqueue 窗口竞态 */
   notifyEnqueued?: (sessionId: string) => void
   startTurn: OutboundTurnStarter
+  startContinuation?: (input: { sessionId: string; sourceInvocationId: string; requestId: string; continuationAcceptance: { payloadSha256: string; rawText: string; attachments?: NonNullable<Message['attachments']>; intentKind: 'exact-continue' | 'follow-up'; route: string } }) => Promise<{ continuationId: string; targetTurnId: string; status: string }>
+  findRetrySource?: (input: { sessionId: string; text: string; attachments?: Message['attachments']; requestId: string }) => Promise<{ assistantMessageId: string; sourceInvocationId: string } | undefined>
   /** 占用 ≥80% 通过型警告（P2-2）：返回错误码数组，随 turn-started.warnings 透出 */
   contextUsageWarn?: (input: { sessionId: string; model: string; attachments?: Message['attachments'] }) => Promise<string[]>
   newRequestId: () => string
@@ -205,7 +221,57 @@ type Session_Requested = { id: string }
 /** 准入门最小面(偏差 23):便于测试注入;与 CallAdmissionGate.acquire 同形。 */
 export type AdmissionGate = Pick<CallAdmissionGate, 'acquire'>
 
+/** Only structured canonical History events can produce claims about completed side effects. */
+export function summarizeFailedInvocation(snapshot: ReturnType<SqliteAgentHistory['readSync']>, invocationId: string, turnId: string) {
+  const events = snapshot.events
+  const committed = events.filter((event) => event.kind === 'tool-call-finished')
+  const proposals = new Map<string, { toolName?: string; input?: Record<string, unknown> }>()
+  for (const event of events.filter((candidate) => candidate.kind === 'model-response-committed')) {
+    const payload = event.payload as { message?: { toolCalls?: Array<{ id?: string; name?: string; toolName?: string; input?: Record<string, unknown> }> }; toolCalls?: Array<{ id?: string; name?: string; toolName?: string; input?: Record<string, unknown> }> }
+    for (const call of payload.message?.toolCalls ?? payload.toolCalls ?? []) {
+      const id = call.id
+      if (id) proposals.set(id, { toolName: call.toolName ?? call.name, input: call.input })
+    }
+  }
+  const started = new Map(events.filter((event) => event.kind === 'tool-call-started').map((event) => {
+    const payload = event.payload as { toolCallId?: unknown; toolName?: string }
+    const id = String(payload.toolCallId ?? '')
+    return [id, { toolName: payload.toolName, ...proposals.get(id) }] as const
+  }))
+  const settled = new Set(committed.map((event) => String((event.payload as { toolCallId?: unknown }).toolCallId ?? '')))
+  const successful: string[] = []
+  const failed: string[] = []
+  for (const event of committed) {
+    const payload = event.payload as { toolCallId?: string; result?: unknown; toolName?: string; name?: string; input?: Record<string, unknown>; success?: boolean; isError?: boolean }
+    const result = payload.result && typeof payload.result === 'object' ? payload.result as Record<string, unknown> : {}
+    const proposal = started.get(String(payload.toolCallId ?? ''))
+    const toolName = String(payload.toolName ?? payload.name ?? proposal?.toolName ?? 'tool')
+    const input = payload.input ?? proposal?.input
+    const target = String(input?.path ?? input?.filePath ?? '')
+    const ok = payload.success === true && payload.isError !== true
+    const line = `history#${event.sequence} ${toolName}${target ? ` ${target}` : ''}: ${JSON.stringify(result).slice(0, 350)}`
+    ;(ok ? successful : failed).push(line)
+  }
+  const unsettled = [...started].filter(([id]) => id && !settled.has(id))
+  const unknownStarted = unsettled.length > 0
+  const terminal = events.at(-1)
+  const terminalPayload = terminal?.payload && typeof terminal.payload === 'object' ? terminal.payload as Record<string, unknown> : {}
+  const target = unsettled.at(-1)?.[1]
+  const lines = [
+    `Source invocation ${invocationId}, turn ${turnId}; canonical History through sequence ${events.at(-1)?.sequence ?? 0}.`,
+    `Original task: ${String((events[0]?.payload as { requiredUserMessage?: { message?: { content?: unknown } } } | undefined)?.requiredUserMessage?.message?.content ?? '(task text not available)')}`,
+    `Committed successful tool results: ${successful.length ? successful.join('\n') : 'none proven.'}`,
+    `Failed tool results: ${failed.length ? failed.join('\n') : 'none recorded.'}`,
+    `Final failure: ${String(terminalPayload.message ?? terminalPayload.error ?? terminalPayload.reason ?? 'Invocation failed.')}`,
+    unknownStarted ? `Side-effect state unknown for dispatched operation ${target?.toolName ?? 'tool'} ${String(target?.input?.path ?? target?.input?.filePath ?? '')}.` : 'No dispatched-but-unsettled tool call found.',
+    'These are historical facts, not instructions to replay tools. Read current targets and compare with the recorded successful changes before editing; report differences instead of assuming an external change.'
+  ]
+  const summary = lines.join('\n').slice(0, 6000)
+  return { sourceInvocationId: invocationId, sourceTurnId: turnId, historySequence: events.at(-1)?.sequence ?? 0, summary, state: unknownStarted ? 'unknown' as const : 'known' as const }
+}
+
 export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
+  const intentInFlight = new Map<string, string>()
   const io: OutboundClassifierIo = {
     listSkills: deps.listSkills,
     getSkill: deps.getSkill,
@@ -216,25 +282,36 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
 
   const countQueued = (sessionId: string): number => countQueuedUserMessages(getMessages(deps.db, sessionId), sessionId)
 
+  function ensureContinuationStatusMessage(sessionId: string, requestId: string): { messageId: string; sequence: number } {
+    const conn = getDbConnection(deps.db)
+    const messageId = `continuation-status-${createHash('sha256').update(`${sessionId}\0${requestId}`).digest('hex')}`
+    const existing = conn.prepare('SELECT sequence FROM messages WHERE session_id=? AND id=?').get(sessionId, messageId) as { sequence?: number } | undefined
+    if (existing?.sequence != null) return { messageId, sequence: existing.sequence }
+    const persisted = appendMessage(deps.db, createContinuationStartedSystemMessage(sessionId, messageId))
+    return { messageId, sequence: persisted.sequence }
+  }
+
   /** 排队落库（v2-B4 降级与 enqueue 决定共用）：幂等凭证、附件兜底、落库后补触发（v2-B3） */
-  async function enqueueDecision(
+  function enqueueDecision(
     sessionId: string,
     text: string,
-    intent: OutboundSubmitIntent
-  ): Promise<Extract<OutboundSubmitResult, { accepted: 'queued' }>> {
+    intent: OutboundSubmitIntent,
+    notify = true
+  ): Extract<OutboundSubmitResult, { accepted: 'queued' }> {
     // 幂等凭证：reuse-user（排水）透传原 requestId，否则新生成
-    const requestId =
+    const generatedRequestId =
       intent.contextIntent?.kind === 'reuse-user' && intent.contextIntent.requestId
         ? intent.contextIntent.requestId
         : deps.newRequestId()
-    const enqueued = await enqueueQueuedUserMessage(deps.db, {
+    const requestId = intent.requestId ?? generatedRequestId
+    const enqueued = enqueueQueuedUserMessage(deps.db, {
       sessionId,
       requestId,
       content: text,
       // 附件兜底：渲染端把附件放在 contextIntent.create-user.attachments，排队路径同样带上
       attachments: intent.attachments ?? (intent.contextIntent?.kind === 'create-user' ? intent.contextIntent.attachments : undefined)
     })
-    deps.notifyEnqueued?.(sessionId)
+    if (notify) deps.notifyEnqueued?.(sessionId)
     return {
       accepted: 'queued',
       sessionId,
@@ -242,7 +319,189 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
     }
   }
 
-  async function submitOutbound(intent: OutboundSubmitIntent): Promise<OutboundSubmitResult> {
+  async function submitOutbound(rawIntent: OutboundSubmitIntent): Promise<OutboundSubmitResult> {
+    const intent: OutboundSubmitIntent = {
+      ...rawIntent,
+      attachments: rawIntent.attachments?.length ? rawIntent.attachments : (rawIntent.contextIntent?.kind === 'create-user' ? rawIntent.contextIntent.attachments : undefined)
+    }
+    let routedContinuationSource: { invocationId: string; turnId: string; sequence: number; summary: string; state: 'known' | 'unknown' } | undefined
+    let continuationRouting = false
+    const queueContinuation = (sessionId: string, text: string) => {
+      const conn = getDbConnection(deps.db)
+      return runInTransaction(conn, () => {
+        const accepted = enqueueDecision(sessionId, text, intent, false)
+        const context = routedContinuationSource ? { sourceInvocationId: routedContinuationSource.invocationId, sourceTurnId: routedContinuationSource.turnId, historySequence: routedContinuationSource.sequence, summary: routedContinuationSource.summary, state: routedContinuationSource.state } : undefined
+        conn.prepare(`INSERT INTO continuation_intents(request_id,session_id,payload_sha256,raw_text,attachments_json,intent_kind,route,source_invocation_id,source_turn_id,source_sequence,target_id,status,continuation_context_json,created_at,updated_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(request_id) DO UPDATE SET route=excluded.route,source_invocation_id=excluded.source_invocation_id,source_turn_id=excluded.source_turn_id,source_sequence=excluded.source_sequence,target_id=excluded.target_id,status=excluded.status,continuation_context_json=excluded.continuation_context_json,updated_at=excluded.updated_at`)
+          .run(intent.requestId!, sessionId, createHash('sha256').update(JSON.stringify({ sessionId, text: intent.text, attachments: intent.attachments ?? null })).digest('hex'), intent.text, JSON.stringify(intent.attachments ?? []), ['继续', '继续执行', '接着做', '接着刚才的修改', '继续上次的任务'].includes(intent.text.trim()) && !intent.attachments?.length ? 'exact-continue' : 'follow-up', routedContinuationSource ? 'context-queue' : 'ordinary-queue', routedContinuationSource?.invocationId ?? null, routedContinuationSource?.turnId ?? null, routedContinuationSource?.sequence ?? null, accepted.queued.messageId, 'queued', context ? JSON.stringify(context) : null, Date.now(), Date.now())
+        return accepted
+      })
+    }
+    if (intent.requestId && intent.sessionId && /^(继续|继续执行|接着做|接着刚才的修改|继续上次的任务|接着|刚才|上次)/u.test(intent.text.trim())) {
+      continuationRouting = true
+      const fingerprint = createHash('sha256').update(JSON.stringify({ sessionId: intent.sessionId, text: intent.text, attachments: intent.attachments ?? null })).digest('hex')
+      const prior = getDbConnection(deps.db).prepare('SELECT * FROM continuation_intents WHERE request_id=?').get(intent.requestId) as Record<string, unknown> | undefined
+      if (prior) {
+        if (prior.payload_sha256 !== fingerprint) return { rejected: { reason: 'CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT' } }
+        const status = String(prior.status)
+        const target = prior.target_id ? String(prior.target_id) : undefined
+        if (status === 'needs_source_selection' && !intent.sourceSelection) return { rejected: { reason: 'CONTINUATION_SOURCE_SELECTION_REQUIRED' } }
+        if (status === 'needs_source_selection' && intent.sourceSelection?.asOrdinaryTurn) {
+          // Explicit ordinary fallback is finalized under this request ID below.
+          getDbConnection(deps.db).prepare('UPDATE continuation_intents SET status=?,route=?,updated_at=? WHERE request_id=?')
+            .run('ordinary_fallback_pending', 'ordinary-selected', Date.now(), intent.requestId)
+        }
+        if (status === 'accepted_continuation' && target) {
+          const statusReceipt = runInTransaction(getDbConnection(deps.db), () => ensureContinuationStatusMessage(intent.sessionId!, intent.requestId!))
+          return { accepted: 'local-command', sessionId: intent.sessionId, command: { kind: 'continuation-started', ...statusReceipt } }
+        }
+        if (status === 'queued' && target) {
+          const message = getMessages(deps.db, intent.sessionId).find((candidate) => candidate.id === target)
+          const sequence = message && getDbConnection(deps.db).prepare('SELECT sequence FROM messages WHERE session_id=? AND id=?').get(intent.sessionId, target) as { sequence?: number } | undefined
+          if (!message || sequence?.sequence == null || message.status !== 'queued') return { rejected: { reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' } }
+          return { accepted: 'queued', sessionId: intent.sessionId, queued: { requestId: intent.requestId, messageId: target, sequence: sequence.sequence } }
+        }
+          if (status === 'accepted_turn' && target) {
+            const turn = getTurnByRequestId(deps.db, intent.sessionId, intent.requestId)
+            if (turn) return { accepted: 'turn-started', sessionId: turn.sessionId, turnId: turn.turnId, assistantMessage: getMessages(deps.db, turn.sessionId).find((message) => message.id === turn.assistantMessageId)! }
+            return { rejected: { reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' } }
+          }
+        if (status === 'rejected_retryable' || status === 'commit_uncertain') return { rejected: { reason: String(prior.rejection_reason ?? status) } }
+      }
+      const locked = intentInFlight.get(intent.requestId)
+      if (locked && locked !== fingerprint) return { rejected: { reason: 'CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT' } }
+      if (locked) return { rejected: { reason: 'CONTINUATION_INTENT_IN_PROGRESS' } }
+      intentInFlight.set(intent.requestId, fingerprint)
+      try {
+        const conn = getDbConnection(deps.db)
+        const now = Date.now()
+        const exact = ['继续', '继续执行', '接着做', '接着刚才的修改', '继续上次的任务'].includes(intent.text.trim()) && !intent.attachments?.length
+        const history = new SqliteAgentHistory(conn, 1, Date.now, intent.sessionId)
+        const activeTurnIds = new Set(deps.turnRuntime.listActive(intent.sessionId).map((turn) => turn.turnId))
+        const allInvocationIds = history.listInvocationIdsForSession(intent.sessionId)
+        const latestInvocation = allInvocationIds.length ? history.readSync(allInvocationIds.at(-1)!) : undefined
+        const latestEvent = latestInvocation?.events.at(-1)
+        // 最新非终态 History 与活动 Turn 相对应，说明较新的任务已越过旧失败边界。
+        // 输入应先进入排队判断，并作为普通新输入处理，不能要求该 History 已终结。
+        const supersededByRunningTurn = Boolean(latestEvent && !['invocation-completed', 'invocation-failed'].includes(latestEvent.kind) && activeTurnIds.has(latestEvent.turnId))
+        const invocationIds = supersededByRunningTurn ? [] : allInvocationIds
+        if (latestEvent && !supersededByRunningTurn && !['invocation-completed', 'invocation-failed'].includes(latestEvent.kind)) {
+          const latest = history.readSync(invocationIds.at(-1)!)
+          if (!['invocation-completed', 'invocation-failed'].includes(latest.events.at(-1)?.kind ?? '')) {
+            throw new Error('CONTINUATION_INTENT_HISTORY_UNAVAILABLE')
+          }
+        }
+        let source: { invocationId: string; turnId: string; snapshot: ReturnType<SqliteAgentHistory['readSync']> } | undefined
+        const failedCandidates: Array<{ invocationId: string; turnId: string; snapshot: ReturnType<SqliteAgentHistory['readSync']> }> = []
+        for (const invocationId of invocationIds.reverse()) {
+          const snapshot = history.readSync(invocationId)
+          const terminal = snapshot.events.at(-1)
+          if (terminal?.kind === 'invocation-failed') {
+            const sourceMessage = conn.prepare(`SELECT m.sequence FROM turns t JOIN messages m ON m.id=t.assistant_message_id WHERE t.session_id=? AND t.turn_id=?`).get(intent.sessionId, terminal.turnId) as { sequence?: number } | undefined
+            const newerAcceptedInput = sourceMessage?.sequence == null ? undefined : conn.prepare(`SELECT id FROM messages WHERE session_id=? AND role='user' AND sequence>? AND status IN ('sent','queued') ORDER BY sequence ASC LIMIT 1`).get(intent.sessionId, sourceMessage.sequence)
+            if (newerAcceptedInput) break
+            failedCandidates.push({ invocationId, turnId: terminal.turnId, snapshot })
+            continue
+          }
+          if (terminal?.kind === 'invocation-completed') break
+        }
+        if (failedCandidates.length === 1) source = failedCandidates[0]
+        if (failedCandidates.length > 1 && intent.sourceSelection?.chooseLatest) source = failedCandidates[0]
+        if (failedCandidates.length > 1 && !intent.sourceSelection && !prior) {
+          const dbNow = Date.now()
+          runInTransaction(conn, () => conn.prepare(`INSERT INTO continuation_intents(request_id,session_id,payload_sha256,raw_text,attachments_json,intent_kind,route,status,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?)`).run(intent.requestId!, intent.sessionId!, fingerprint, intent.text, JSON.stringify(intent.attachments ?? []), exact ? 'exact-continue' : 'follow-up', 'needs-source-selection', 'needs_source_selection', dbNow, dbNow))
+          return { rejected: { reason: 'CONTINUATION_SOURCE_SELECTION_REQUIRED' } }
+        }
+        const insertIntent = (route: string, status: string, sourceInvocationId?: string, sourceTurnId?: string, sourceSequence?: number, targetId?: string, rejectionReason?: string) => runInTransaction(conn, () => {
+          const exists = conn.prepare('SELECT payload_sha256 FROM continuation_intents WHERE request_id=?').get(intent.requestId!) as { payload_sha256: string } | undefined
+          if (exists && exists.payload_sha256 !== fingerprint) throw new Error('CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT')
+          conn.prepare(`INSERT INTO continuation_intents(request_id,session_id,payload_sha256,raw_text,attachments_json,intent_kind,route,source_invocation_id,source_turn_id,source_sequence,target_id,status,rejection_reason,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(request_id) DO UPDATE SET route=excluded.route,status=excluded.status,target_id=excluded.target_id,rejection_reason=excluded.rejection_reason,updated_at=excluded.updated_at`)
+            .run(intent.requestId!, intent.sessionId!, fingerprint, intent.text, JSON.stringify(intent.attachments ?? []), exact ? 'exact-continue' : 'follow-up', route, sourceInvocationId ?? null, sourceTurnId ?? null, sourceSequence ?? null, targetId ?? null, status, rejectionReason ?? null, now, now)
+        })
+        if (!source && failedCandidates.length > 1 && !intent.sourceSelection && !prior) {
+          insertIntent('needs-source-selection', 'needs_source_selection')
+          return { rejected: { reason: 'CONTINUATION_SOURCE_SELECTION_REQUIRED' } }
+        }
+        const ordinarySourceOverride = !source && failedCandidates.length > 1 && intent.sourceSelection?.asOrdinaryTurn === true
+        if (!source && intent.sourceSelection?.sourceAssistantMessageId) {
+          const chosen = getMessages(deps.db, intent.sessionId).find((item) => item.id === intent.sourceSelection!.sourceAssistantMessageId)
+          const chosenTurn = chosen && (conn.prepare('SELECT request_id AS requestId,turn_id AS turnId FROM turns WHERE session_id=? AND assistant_message_id=?').get(intent.sessionId, chosen.id) as { requestId?: string; turnId?: string } | undefined)
+          const selected = chosenTurn && failedCandidates.find((candidate) => candidate.invocationId === chosenTurn.requestId || candidate.turnId === chosenTurn.turnId)
+          if (!selected) return { rejected: { reason: 'CONTINUATION_SOURCE_NOT_FOUND' } }
+          source = selected
+        }
+        if (!source && !ordinarySourceOverride && failedCandidates.length === 0) {
+          if (intent.sourceSelection?.asOrdinaryTurn) {
+            insertIntent('ordinary-selected', 'accepted_turn')
+          } else if (intent.sourceSelection?.sourceAssistantMessageId) {
+            const chosen = getMessages(deps.db, intent.sessionId).find((item) => item.id === intent.sourceSelection!.sourceAssistantMessageId)
+            const chosenTurn = chosen && (conn.prepare('SELECT request_id AS requestId FROM turns WHERE session_id=? AND assistant_message_id=?').get(intent.sessionId, chosen.id) as { requestId?: string } | undefined)
+            if (!chosen || !chosenTurn?.requestId) return { rejected: { reason: 'CONTINUATION_SOURCE_NOT_FOUND' } }
+            const snapshot = history.readSync(chosenTurn.requestId)
+            const terminal = snapshot.events.at(-1)
+            if (terminal?.kind !== 'invocation-failed') return { rejected: { reason: 'CONTINUATION_SOURCE_NOT_RECOVERABLE' } }
+            source = { invocationId: chosenTurn.requestId, turnId: terminal.turnId, snapshot }
+          }
+        }
+        if (!source && failedCandidates.length === 0) {
+          const recentUserRow = conn.prepare("SELECT id,sequence FROM messages WHERE session_id=? AND role='user' ORDER BY sequence DESC LIMIT 1").get(intent.sessionId) as { id: string; sequence: number } | undefined
+          const relationCue = /^(继续|接着|刚才|上次)/u.test(intent.text.trim())
+          if (recentUserRow && relationCue) {
+            const intentRows = getMessages(deps.db, intent.sessionId).filter((message) => message.role === 'assistant' && message.status === 'failed')
+            if (intentRows.length === 1) {
+              const failedAssistantRow = conn.prepare('SELECT sequence FROM messages WHERE id=?').get(intentRows[0]!.id) as { sequence?: number } | undefined
+              const failedTurn = getDbConnection(deps.db).prepare('SELECT request_id FROM turns WHERE assistant_message_id=?').get(intentRows[0]!.id) as { request_id?: string } | undefined
+              // A newer accepted user message owns the latest task boundary. Never attach an older failure to it.
+              if (failedTurn?.request_id && failedAssistantRow?.sequence != null && recentUserRow.sequence < failedAssistantRow.sequence) {
+                const snapshot = history.readSync(failedTurn.request_id)
+                const terminal = snapshot.events.at(-1)
+                if (terminal?.kind === 'invocation-failed') {
+                  const summary = summarizeFailedInvocation(snapshot, snapshot.invocationId, terminal.turnId)
+                  routedContinuationSource = { invocationId: summary.sourceInvocationId, turnId: summary.sourceTurnId, sequence: summary.historySequence, summary: summary.summary, state: summary.state }
+                }
+              }
+            }
+          }
+        }
+        if (source && exact && !intent.attachments?.length && deps.startContinuation) {
+          // Start the already validated source checkpoint from this same stable input request.
+          let continuationStarted = false
+          try {
+            insertIntent('continuation', 'starting_continuation', source.invocationId, source.turnId, source.snapshot.events.at(-1)?.sequence)
+            const started = await deps.startContinuation({ sessionId: intent.sessionId, sourceInvocationId: source.invocationId, requestId: intent.requestId, continuationAcceptance: { payloadSha256: fingerprint, rawText: intent.text, attachments: intent.attachments, intentKind: 'exact-continue', route: 'continuation' } })
+            continuationStarted = true
+            const statusReceipt = runInTransaction(conn, () => {
+              insertIntent('continuation', 'accepted_continuation', source.invocationId, source.turnId, source.snapshot.events.at(-1)?.sequence, started.continuationId)
+              return ensureContinuationStatusMessage(intent.sessionId!, intent.requestId!)
+            })
+            return { accepted: 'local-command', sessionId: intent.sessionId, command: { kind: 'continuation-started', ...statusReceipt } }
+          } catch (error) {
+            // Unsafe checkpoints become a context-only new Turn with the original text and attachments.
+            if (error instanceof Error && error.message === 'CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT') throw error
+            if (continuationStarted || error instanceof TransactionCommitUnknownError) return { rejected: { reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' } }
+            if (error instanceof Error && error.message === 'CONTINUATION_SOURCE_STALE') {
+              // Keep the input as an ordinary new Turn without inheriting an out-of-date failure.
+            } else {
+            const summary = summarizeFailedInvocation(source.snapshot, source.invocationId, source.turnId)
+            routedContinuationSource = { invocationId: summary.sourceInvocationId, turnId: summary.sourceTurnId, sequence: summary.historySequence, summary: summary.summary, state: summary.state }
+            }
+          }
+        } else if (source && !(exact && !intent.attachments?.length && deps.startContinuation)) {
+          const summary = summarizeFailedInvocation(source.snapshot, source.invocationId, source.turnId)
+          routedContinuationSource = { invocationId: summary.sourceInvocationId, turnId: summary.sourceTurnId, sequence: summary.historySequence, summary: summary.summary, state: summary.state }
+        }
+      } catch (error) {
+        if (error instanceof TransactionCommitUnknownError) {
+          return { rejected: { reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' } }
+        }
+        if (error instanceof Error && error.message === 'CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT') return { rejected: { reason: error.message } }
+        return { rejected: { reason: error instanceof Error ? error.message : 'CONTINUATION_INTENT_REJECTED' } }
+      } finally {
+        intentInFlight.delete(intent.requestId)
+      }
+    }
     // 前置快路径：test-pop 不依赖会话 / apiKey（渲染端 sendInternal 同序）
     const testPopCmd = parseTestPopCommand(intent.text.trim(), { isDev: deps.isDev() })
     if (testPopCmd.type === 'run') {
@@ -259,12 +518,12 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
     // B1(偏差 23):调用级准入——桌面受理端口(普通 Agent turn 入口之一)。
     // 受理级票据(瞬时)+ 全局速率约束;queue 语义由既有会话级出站排队承载,故此处声明 reject。
     const admissionGate = deps.admissionGate ?? getCallAdmissionGate()
-    const admission = await admissionGate.acquire({
+      const admission = await admissionGate.acquire({
       lane: 'desktop',
       priority: 'interactive',
       role: 'top-level',
       disposition: 'reject',
-      requestId: deps.newRequestId()
+      requestId: intent.requestId ?? deps.newRequestId()
     })
     if (!admission.ok) {
       if (admission.verdict === 'rejected') {
@@ -325,6 +584,11 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
         return { rejected: { reason: decision.reason } }
       }
       case 'enqueue': {
+        if (continuationRouting && intent.requestId) {
+          const queued = queueContinuation(sessionId, decision.text)
+          deps.notifyEnqueued?.(sessionId)
+          return queued
+        }
         return enqueueDecision(sessionId, decision.text, intent)
       }
       case 'start-turn': {
@@ -347,6 +611,36 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
           })
         }
         const contextIntent = intent.contextIntent
+        const retrySource = continuationRouting && intent.requestId
+          ? await deps.findRetrySource?.({ sessionId, text: intent.text, attachments: intent.attachments, requestId: intent.requestId })
+          : undefined
+        if (continuationRouting && intent.requestId) {
+          const conn = getDbConnection(deps.db)
+          const target = await deps.startTurn({ turnIntent: contextIntent?.kind === 'reuse-user' ? {
+            mode: 'reuse-user', requestId: intent.requestId, sessionId, userMessageId: contextIntent.currentUser.message.id,
+            excludeMessageIds: contextIntent.excludeMessageIds ?? [], config: routedContinuationSource ? { continuationContext: { sourceInvocationId: routedContinuationSource.invocationId, sourceTurnId: routedContinuationSource.turnId, historySequence: routedContinuationSource.sequence, summary: routedContinuationSource.summary, state: routedContinuationSource.state } } : {}
+          } : {
+            mode: 'create-user', requestId: intent.requestId, sessionId,
+            input: { text: decision.text, attachments: intent.attachments ?? (contextIntent?.kind === 'create-user' ? contextIntent.attachments : undefined) },
+            config: routedContinuationSource ? { continuationContext: { sourceInvocationId: routedContinuationSource.invocationId, sourceTurnId: routedContinuationSource.turnId, historySequence: routedContinuationSource.sequence, summary: routedContinuationSource.summary, state: routedContinuationSource.state } } : {},
+            continuationAcceptance: {
+              payloadSha256: createHash('sha256').update(JSON.stringify({ sessionId, text: intent.text, attachments: intent.attachments ?? null })).digest('hex'),
+              rawText: intent.text,
+              kind: ['继续', '继续执行', '接着做', '接着刚才的修改', '继续上次的任务'].includes(intent.text.trim()) && !intent.attachments?.length ? 'exact-continue' : 'follow-up',
+              route: routedContinuationSource ? 'context-turn' : 'ordinary',
+              ...(routedContinuationSource ? { sourceInvocationId: routedContinuationSource.invocationId, sourceTurnId: routedContinuationSource.turnId, sourceSequence: routedContinuationSource.sequence } : {})
+            },
+            ...(retrySource ? { retryOfMessageId: retrySource.assistantMessageId, retryOfInvocationId: retrySource.sourceInvocationId } : {})
+          } })
+          // Real TurnCoordinator commits this receipt atomically with prepareAtomic. The idempotent
+          // upsert also repairs adapters that return an already persisted Turn without that hook.
+          conn.prepare(`INSERT INTO continuation_intents(request_id,session_id,payload_sha256,raw_text,attachments_json,intent_kind,route,source_invocation_id,source_turn_id,source_sequence,target_id,status,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(request_id) DO UPDATE SET target_id=excluded.target_id,status=excluded.status,updated_at=excluded.updated_at`)
+            .run(intent.requestId, sessionId, createHash('sha256').update(JSON.stringify({ sessionId, text: intent.text, attachments: intent.attachments ?? null })).digest('hex'), intent.text, JSON.stringify(intent.attachments ?? []), ['继续', '继续执行', '接着做', '接着刚才的修改', '继续上次的任务'].includes(intent.text.trim()) && !intent.attachments?.length ? 'exact-continue' : 'follow-up', routedContinuationSource ? 'context-turn' : 'ordinary', routedContinuationSource?.invocationId ?? null, routedContinuationSource?.turnId ?? null, routedContinuationSource?.sequence ?? null, target.turnId, 'accepted_turn', Date.now(), Date.now())
+          if (retrySource) conn.prepare('UPDATE turns SET retry_of_message_id=?,retry_of_invocation_id=? WHERE turn_id=?')
+            .run(retrySource.assistantMessageId, retrySource.sourceInvocationId, target.turnId)
+          return { accepted: 'turn-started', sessionId, turnId: target.turnId, assistantMessage: target.assistantMessage }
+        }
         const turnIntent: TurnIntent =
           contextIntent?.kind === 'reuse-user'
             ? {
@@ -357,18 +651,23 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
                 excludeMessageIds: contextIntent.excludeMessageIds ?? [],
                 config: {}
               }
-            : {
+              : {
                 mode: 'create-user',
-                requestId: deps.newRequestId(),
+                requestId: intent.requestId ?? deps.newRequestId(),
                 sessionId,
                 input: {
                   text: decision.text,
                   attachments: intent.attachments ?? (contextIntent?.kind === 'create-user' ? contextIntent.attachments : undefined)
                 },
-                config: {}
+                config: routedContinuationSource ? { continuationContext: { sourceInvocationId: routedContinuationSource.invocationId, sourceTurnId: routedContinuationSource.turnId, historySequence: routedContinuationSource.sequence, summary: routedContinuationSource.summary, state: routedContinuationSource.state } } : {},
+                ...(decision.continuationIntent ? { continuationIntent: { ...decision.continuationIntent, ...(intent.requestId ? { requestId: intent.requestId } : {}) } } : {})
               }
         try {
-          const started = await deps.startTurn({ turnIntent })
+        const started = await deps.startTurn({ turnIntent })
+        if (continuationRouting && intent.requestId) {
+          getDbConnection(deps.db).prepare("UPDATE continuation_intents SET target_id=?,status='accepted_turn',updated_at=? WHERE request_id=?")
+            .run(started.turnId, Date.now(), intent.requestId)
+        }
           const warnings = session
             ? (await deps.contextUsageWarn?.({
                 sessionId,
@@ -390,7 +689,7 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
           // B4(v2 评审):快照过期竞态（snapshot 未运行 → prepare 时已被占）——降级排队，消息不丢
           if (msg.includes('SESSION_TURN_BUSY')) {
             deps.audit('outbound.submit.degraded_to_queue', { sessionId, requestId: turnIntent.requestId })
-            return enqueueDecision(sessionId, decision.text, intent)
+            return continuationRouting && intent.requestId ? queueContinuation(sessionId, decision.text) : enqueueDecision(sessionId, decision.text, intent)
           }
           // 准入/配置拒绝（如 TURN_VISION_MODEL_NOT_CONFIGURED 的中文消息）→ 渲染端仅翻译展示
           deps.audit('outbound.submit.rejected', { sessionId, reason: msg, requestId: turnIntent.requestId })

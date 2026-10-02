@@ -8,7 +8,7 @@ import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { rebuildClaudeMessagesFromHistory } from './canonicalHistory'
 import { createTurnCoordinatorStorage } from '../turnCoordinatorStorage'
 import { TurnRuntime } from '../turnRuntime'
-import { createSession, appendMessage, openDatabase, getDbConnection } from '../database'
+import { createSession, appendMessage, createPersistedTurn, openDatabase, getDbConnection } from '../database'
 
 function event(sequence: number, kind: HistoryEvent['kind'], payload: unknown): HistoryEvent {
   return { invocationId: 'source-invocation', turnId: 'source-turn', sequence, schemaVersion: 1,
@@ -221,6 +221,8 @@ describe('agent continuation checkpoint', () => {
     const appDb = openDatabase(':memory:')
     const session = createSession(appDb, { name: 'continuation-service' })
     const user = appendMessage(appDb, { id: 'continued-user', sessionId: session.id, role: 'user', content: 'start', timestamp: 1, status: 'sent' })
+    appendMessage(appDb, { id: 'source-assistant', sessionId: session.id, role: 'assistant', content: 'failed', timestamp: 2, status: 'failed' })
+    createPersistedTurn(appDb, { turnId: 'source-turn', requestId: 'source-invocation', sessionId: session.id, assistantMessageId: 'source-assistant', state: 'terminal', outcome: 'failed' })
     const snapshotValue = snapshot()
     ;((snapshotValue.events[0]!.payload as { requiredUserMessage: { id: string } }).requiredUserMessage).id = user.message.id
     const safety = { workDirProfileId: 'profile', workDirSha256: 'a'.repeat(64), authorizationVersion: 'auth', toolSetSha256: 'tools', executionConfigSha256: 'd'.repeat(64) }
@@ -229,7 +231,8 @@ describe('agent continuation checkpoint', () => {
     const { startAgentContinuation } = await import('./agentContinuation')
     const started = await startAgentContinuation({
       conn: getDbConnection(appDb), snapshot: snapshotValue, sessionId: session.id, userMessageId: user.message.id,
-      requestIdempotencyKey: 'start-once', createdBy: session.id, frozenConfig: config, runtime, executionConfig: config
+      requestIdempotencyKey: 'start-once', createdBy: session.id, frozenConfig: config, runtime, executionConfig: config,
+      continuationAcceptance: { payloadSha256: 'f'.repeat(64), rawText: '继续', intentKind: 'exact-continue', route: 'continuation' }
     })
     expect(started).toMatchObject({ accepted: true, turn: { requestId: started.continuation.targetInvocationId, turnId: started.continuation.targetTurnId } })
     expect(started.turn?.startToken).toBe(started.continuation.targetStartToken)
@@ -237,12 +240,53 @@ describe('agent continuation checkpoint', () => {
       continuationId: started.continuation.continuationId, invocationId: started.continuation.sourceInvocationId, sourceTurnId: started.continuation.sourceTurnId,
       checkpointSequence: started.continuation.checkpointSequence, checkpointSha256: started.continuation.checkpointSha256
     })
+    expect(getDbConnection(appDb).prepare('SELECT target_id,status,source_invocation_id FROM continuation_intents WHERE request_id=?').get('start-once')).toEqual({ target_id: started.continuation.continuationId, status: 'accepted_continuation', source_invocation_id: started.continuation.sourceInvocationId })
     const duplicate = await startAgentContinuation({
       conn: getDbConnection(appDb), snapshot: snapshotValue, sessionId: session.id, userMessageId: user.message.id,
       requestIdempotencyKey: 'start-once', createdBy: session.id, frozenConfig: config, runtime, executionConfig: config
     })
     expect(duplicate.started).toBe(false)
     expect(duplicate.continuation.targetTurnId).toBe(started.continuation.targetTurnId)
+    appDb.close()
+  })
+
+  it('rolls back continuation, target Turn, and intent mapping together when acceptance commit fails', async () => {
+    const appDb = openDatabase(':memory:')
+    const session = createSession(appDb, { name: 'continuation-atomic' })
+    const user = appendMessage(appDb, { id: 'atomic-user', sessionId: session.id, role: 'user', content: 'start', timestamp: 1, status: 'sent' })
+    appendMessage(appDb, { id: 'atomic-assistant', sessionId: session.id, role: 'assistant', content: 'failed', timestamp: 2, status: 'failed' })
+    createPersistedTurn(appDb, { turnId: 'source-turn', requestId: 'source-invocation', sessionId: session.id, assistantMessageId: 'atomic-assistant', state: 'terminal', outcome: 'failed' })
+    const snapshotValue = snapshot()
+    ;((snapshotValue.events[0]!.payload as { requiredUserMessage: { id: string } }).requiredUserMessage).id = user.message.id
+    const config = { lane: 'desktop' as const, model: 'm', continuationSafetySnapshot: { workDirProfileId: 'p', workDirSha256: 'a'.repeat(64), authorizationVersion: 'auth', toolSetSha256: 'tools', executionConfigSha256: 'd'.repeat(64) } }
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(appDb), deps: { now: () => 10, id: (() => { let i = 0; return () => `atomic-runtime-${++i}` })() } })
+    const { startAgentContinuation } = await import('./agentContinuation')
+    getDbConnection(appDb).exec(`CREATE TRIGGER reject_continuation_acceptance BEFORE INSERT ON continuation_intents BEGIN SELECT RAISE(ABORT, 'injected acceptance failure'); END`)
+    const acceptance = { payloadSha256: 'e'.repeat(64), rawText: '继续', intentKind: 'exact-continue' as const, route: 'continuation' }
+    await expect(startAgentContinuation({ conn: getDbConnection(appDb), snapshot: snapshotValue, sessionId: session.id, userMessageId: user.message.id, requestIdempotencyKey: 'atomic-start', createdBy: session.id, frozenConfig: config, runtime, executionConfig: config, continuationAcceptance: acceptance })).rejects.toThrow('injected acceptance failure')
+    expect(getDbConnection(appDb).prepare('SELECT 1 FROM agent_continuations WHERE request_idempotency_key=?').get('atomic-start')).toBeUndefined()
+    expect(getDbConnection(appDb).prepare('SELECT 1 FROM turns WHERE request_id=?').get('atomic-start')).toBeUndefined()
+    getDbConnection(appDb).exec('DROP TRIGGER reject_continuation_acceptance')
+    const retried = await startAgentContinuation({ conn: getDbConnection(appDb), snapshot: snapshotValue, sessionId: session.id, userMessageId: user.message.id, requestIdempotencyKey: 'atomic-start', createdBy: session.id, frozenConfig: config, runtime, executionConfig: config, continuationAcceptance: acceptance })
+    expect(retried.started).toBe(true)
+    expect(getDbConnection(appDb).prepare('SELECT target_id,status FROM continuation_intents WHERE request_id=?').get('atomic-start')).toEqual({ target_id: retried.continuation.continuationId, status: 'accepted_continuation' })
+    appDb.close()
+  })
+
+  it('rejects a checkpoint if a newer sent or queued user input arrived during continuation preparation', async () => {
+    const appDb = openDatabase(':memory:')
+    const session = createSession(appDb, { name: 'continuation-stale' })
+    const user = appendMessage(appDb, { id: 'source-user', sessionId: session.id, role: 'user', content: 'start', timestamp: 1, status: 'sent' })
+    appendMessage(appDb, { id: 'source-assistant', sessionId: session.id, role: 'assistant', content: 'failed', timestamp: 2, status: 'failed' })
+    createPersistedTurn(appDb, { turnId: 'source-turn', requestId: 'source-invocation', sessionId: session.id, assistantMessageId: 'source-assistant', state: 'terminal', outcome: 'failed' })
+    appendMessage(appDb, { id: 'newer-user', sessionId: session.id, role: 'user', content: 'new task', timestamp: 3, status: 'queued' })
+    const snapshotValue = snapshot([event(7, 'invocation-failed', { status: 'failed', message: 'failed' })])
+    const config = { lane: 'desktop' as const, model: 'm', continuationSafetySnapshot: { workDirProfileId: 'p', workDirSha256: 'a'.repeat(64), authorizationVersion: 'auth', toolSetSha256: 'tools', executionConfigSha256: 'd'.repeat(64) } }
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(appDb), deps: { now: () => 10, id: (() => { let i = 0; return () => `stale-runtime-${++i}` })() } })
+    const { startAgentContinuation } = await import('./agentContinuation')
+    await expect(startAgentContinuation({ conn: getDbConnection(appDb), snapshot: snapshotValue, sessionId: session.id, userMessageId: user.message.id, requestIdempotencyKey: 'stale-source-request', createdBy: session.id, frozenConfig: config, runtime, executionConfig: config })).rejects.toThrow('CONTINUATION_SOURCE_STALE')
+    expect(getDbConnection(appDb).prepare('SELECT 1 FROM agent_continuations WHERE request_idempotency_key=?').get('stale-source-request')).toBeUndefined()
+    expect(getDbConnection(appDb).prepare("SELECT COUNT(*) AS count FROM turns WHERE session_id=? AND turn_id LIKE 'stale-runtime-%'").get(session.id)).toEqual({ count: 0 })
     appDb.close()
   })
 })

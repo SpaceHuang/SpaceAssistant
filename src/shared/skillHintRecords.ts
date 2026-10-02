@@ -26,3 +26,17 @@ export function createSkillHintSystemMessage(sessionId: string, text: string, sh
     schemaVersion: CURRENT_SCHEMA_VERSION
   }
 }
+
+/** 主进程与渲染端共用的稳定续接状态消息；本地化文案在界面层按 status 生成。 */
+export function createContinuationStartedSystemMessage(sessionId: string, messageId: string, shownAt = Date.now()): Message {
+  return {
+    id: messageId,
+    sessionId,
+    role: 'system',
+    content: '',
+    skillHints: [{ id: `${messageId}:status`, text: '', shownAt, category: 'status', status: 'continuation-started' }],
+    timestamp: shownAt,
+    status: 'completed',
+    schemaVersion: CURRENT_SCHEMA_VERSION
+  }
+}

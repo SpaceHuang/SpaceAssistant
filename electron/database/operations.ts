@@ -652,7 +652,7 @@ export function enqueueQueuedUserMessage(
 export function claimQueuedTurnAtomically(
   db: AppDatabase,
   input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig }
-): { user: PersistedMessageEntry; assistant: PersistedMessageEntry } {
+): { user: PersistedMessageEntry; assistant: PersistedMessageEntry; executionConfig?: TurnExecutionConfig } {
   const conn = getDbConnection(db)
   return runInTransaction(conn, () => {
     const active = conn.prepare("SELECT 1 FROM turns WHERE session_id = ? AND state IN ('configuring', 'prepared', 'executing', 'waiting-confirm') LIMIT 1").get(input.sessionId)
@@ -663,17 +663,25 @@ export function claimQueuedTurnAtomically(
     const userResult = updateMessageContent(db, input.userMessageId, { status: 'sent' })
     if (!userResult) throw new Error('QUEUE_MESSAGE_NOT_CLAIMABLE')
     const assistant = appendMessage(db, { id: input.assistantMessageId, sessionId: input.sessionId, role: 'assistant', content: '', timestamp: Date.now(), status: 'streaming' })
-    createPersistedTurn(db, { turnId: input.turnId, requestId: input.requestId, sessionId: input.sessionId, assistantMessageId: input.assistantMessageId, userMessageId: input.userMessageId, contextBoundarySequence: boundary, state: input.state ?? 'prepared', startToken: input.startToken, intentFingerprint: input.intentFingerprint, excludeMessageIds: input.excludeMessageIds, executionConfig: input.executionConfig })
+    let executionConfig = input.executionConfig
+    const continuationIntent = conn.prepare('SELECT continuation_context_json FROM continuation_intents WHERE session_id=? AND request_id=?').get(input.sessionId, input.requestId) as { continuation_context_json?: string | null } | undefined
+    if (continuationIntent?.continuation_context_json) {
+      const continuationContext = JSON.parse(continuationIntent.continuation_context_json) as NonNullable<TurnExecutionConfig['continuationContext']>
+      executionConfig = { ...executionConfig, continuationContext }
+    }
+    createPersistedTurn(db, { turnId: input.turnId, requestId: input.requestId, sessionId: input.sessionId, assistantMessageId: input.assistantMessageId, userMessageId: input.userMessageId, contextBoundarySequence: boundary, state: input.state ?? 'prepared', startToken: input.startToken, intentFingerprint: input.intentFingerprint, excludeMessageIds: input.excludeMessageIds, executionConfig })
+    if (continuationIntent) conn.prepare("UPDATE continuation_intents SET status='accepted_turn',target_id=?,updated_at=? WHERE session_id=? AND request_id=? AND status='queued'")
+      .run(input.turnId, Date.now(), input.sessionId, input.requestId)
     appendSessionInputHistoryInTransaction(conn, { requestId: input.requestId, turnId: input.turnId, sessionId: input.sessionId, user: userResult.message })
     const receipt = conn.prepare('UPDATE queue_input_requests SET turn_id = ?, state = ?, updated_at = ? WHERE session_id = ? AND request_id = ? AND state = ?').run(input.turnId, 'claimed', Date.now(), input.sessionId, input.requestId, 'queued')
     if (changesToNumber(receipt.changes) !== 1) throw new Error('QUEUE_RECEIPT_NOT_CLAIMABLE')
-    return { user: userResult, assistant }
+    return { user: userResult, assistant, ...(executionConfig ? { executionConfig } : {}) }
   })
 }
 
 export type PersistedTurn = {
   turnId: string; requestId: string; sessionId: string; assistantMessageId: string; state: string
-  userMessageId?: string; contextBoundarySequence?: number; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; version: number; acceptedInputHistoryVersion?: number; outcome?: string; usage?: unknown; error?: { code: string; message: string }; intentFingerprint?: string; startToken?: string
+  userMessageId?: string; contextBoundarySequence?: number; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; retryOfMessageId?: string; retryOfInvocationId?: string; version: number; acceptedInputHistoryVersion?: number; outcome?: string; usage?: unknown; error?: { code: string; message: string }; intentFingerprint?: string; startToken?: string
 }
 
 type PersistedTurnRow = Omit<PersistedTurn, 'usage' | 'error'> & {
@@ -690,7 +698,7 @@ function decodePersistedTurnRow(row: PersistedTurnRow): PersistedTurn {
   return turn
 }
 
-const TURN_SELECT = 'turn_id AS turnId, request_id AS requestId, session_id AS sessionId, assistant_message_id AS assistantMessageId, user_message_id AS userMessageId, context_boundary_sequence AS contextBoundarySequence, exclude_message_ids_json AS excludeMessageIdsJson, execution_config_json AS executionConfigJson, state, version, accepted_input_history_version AS acceptedInputHistoryVersion, outcome, COALESCE(terminal_usage_json, usage_json) AS usageJson, error_json AS errorJson, intent_fingerprint AS intentFingerprint, start_token AS startToken'
+const TURN_SELECT = 'turn_id AS turnId, request_id AS requestId, session_id AS sessionId, assistant_message_id AS assistantMessageId, user_message_id AS userMessageId, context_boundary_sequence AS contextBoundarySequence, exclude_message_ids_json AS excludeMessageIdsJson, execution_config_json AS executionConfigJson, retry_of_message_id AS retryOfMessageId, retry_of_invocation_id AS retryOfInvocationId, state, version, accepted_input_history_version AS acceptedInputHistoryVersion, outcome, COALESCE(terminal_usage_json, usage_json) AS usageJson, error_json AS errorJson, intent_fingerprint AS intentFingerprint, start_token AS startToken'
 
 function decodeTurnContextRow(row: PersistedTurnRow & { excludeMessageIdsJson?: string; executionConfigJson?: string }): PersistedTurn {
   const { excludeMessageIdsJson, executionConfigJson, ...persistedRow } = row
@@ -777,7 +785,7 @@ export function hasActiveTurn(db: AppDatabase, sessionId: string): boolean {
 export function createPersistedTurn(db: AppDatabase, turn: Omit<PersistedTurn, 'version'> & { version?: number }): PersistedTurn {
   const now = Date.now()
   const startToken = turn.startToken ?? randomUUID()
-  getDbConnection(db).prepare('INSERT INTO turns (turn_id, request_id, session_id, assistant_message_id, user_message_id, context_boundary_sequence, exclude_message_ids_json, execution_config_json, state, version, outcome, usage_json, terminal_usage_json, error_json, intent_fingerprint, start_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(turn.turnId, turn.requestId, turn.sessionId, turn.assistantMessageId, turn.userMessageId ?? null, turn.contextBoundarySequence ?? null, JSON.stringify(turn.excludeMessageIds ?? []), turn.executionConfig == null ? null : JSON.stringify(turn.executionConfig), turn.state, turn.version ?? 0, turn.outcome ?? null, null, turn.usage == null ? null : JSON.stringify(turn.usage), turn.error == null ? null : JSON.stringify(turn.error), turn.intentFingerprint ?? null, startToken, now, now)
+  getDbConnection(db).prepare('INSERT INTO turns (turn_id, request_id, session_id, assistant_message_id, user_message_id, context_boundary_sequence, exclude_message_ids_json, execution_config_json, retry_of_message_id, retry_of_invocation_id, state, version, outcome, usage_json, terminal_usage_json, error_json, intent_fingerprint, start_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(turn.turnId, turn.requestId, turn.sessionId, turn.assistantMessageId, turn.userMessageId ?? null, turn.contextBoundarySequence ?? null, JSON.stringify(turn.excludeMessageIds ?? []), turn.executionConfig == null ? null : JSON.stringify(turn.executionConfig), turn.retryOfMessageId ?? turn.executionConfig?.retryOfMessageId ?? null, turn.retryOfInvocationId ?? turn.executionConfig?.retryOfInvocationId ?? null, turn.state, turn.version ?? 0, turn.outcome ?? null, null, turn.usage == null ? null : JSON.stringify(turn.usage), turn.error == null ? null : JSON.stringify(turn.error), turn.intentFingerprint ?? null, startToken, now, now)
   db.save()
   return { ...turn, version: turn.version ?? 0, startToken }
 }
@@ -1008,7 +1016,7 @@ export function prepareTurnAtomically(
   input: {
     user: Omit<Message, 'schemaVersion'> & { schemaVersion?: number }
     assistant: Omit<Message, 'schemaVersion'> & { schemaVersion?: number }
-    turn: { turnId: string; requestId: string; sessionId: string; assistantMessageId: string; state: string; contextBoundarySequence?: number; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[] }
+    turn: { turnId: string; requestId: string; sessionId: string; assistantMessageId: string; state: string; contextBoundarySequence?: number; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; retryOfMessageId?: string; retryOfInvocationId?: string; continuationAcceptance?: { payloadSha256: string; rawText: string; kind: 'exact-continue' | 'follow-up'; route: string; sourceInvocationId?: string; sourceTurnId?: string; sourceSequence?: number } }
   }
 ): { user: PersistedMessageEntry; assistant: PersistedMessageEntry } {
   const conn = getDbConnection(db)
@@ -1018,11 +1026,17 @@ export function prepareTurnAtomically(
     const boundary = (conn.prepare('SELECT MAX(sequence) AS sequence FROM messages WHERE session_id = ?').get(input.turn.sessionId) as { sequence?: number | null }).sequence ?? -1
     const user = appendMessage(db, input.user)
     const assistant = appendMessage(db, input.assistant)
+    const acceptance = input.turn.continuationAcceptance
     createPersistedTurn(db, {
       ...input.turn,
       userMessageId: user.message.id,
       contextBoundarySequence: input.turn.contextBoundarySequence ?? boundary
     })
+    if (acceptance) {
+      conn.prepare(`INSERT INTO continuation_intents(request_id,session_id,payload_sha256,raw_text,attachments_json,intent_kind,route,source_invocation_id,source_turn_id,source_sequence,target_id,status,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(request_id) DO UPDATE SET route=excluded.route,source_invocation_id=excluded.source_invocation_id,source_turn_id=excluded.source_turn_id,source_sequence=excluded.source_sequence,target_id=excluded.target_id,status=excluded.status,updated_at=excluded.updated_at`)
+        .run(input.turn.requestId, input.turn.sessionId, acceptance.payloadSha256, acceptance.rawText, JSON.stringify(input.user.attachments ?? []), acceptance.kind, acceptance.route, acceptance.sourceInvocationId ?? null, acceptance.sourceTurnId ?? null, acceptance.sourceSequence ?? null, input.turn.turnId, 'accepted_turn', Date.now(), Date.now())
+    }
     appendSessionInputHistoryInTransaction(conn, { requestId: input.turn.requestId, turnId: input.turn.turnId, sessionId: input.turn.sessionId, user: user.message })
     return { user, assistant }
   })

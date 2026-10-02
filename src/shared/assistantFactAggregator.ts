@@ -43,10 +43,21 @@ export type TurnExecutionConfig = {
   effectiveModelForUsage?: string
   continuationSafetySnapshot?: ContinuationSafetySnapshot
   continuationSource?: ContinuationSource
+  /** 仅由主进程从 canonical History 派生的最近失败执行摘要。 */
+  continuationContext?: {
+    sourceInvocationId: string
+    sourceTurnId: string
+    historySequence: number
+    summary: string
+    state: 'known' | 'unknown'
+  }
+  /** 重试关系锚点；原失败 Turn 和消息保持不变。 */
+  retryOfMessageId?: string
+  retryOfInvocationId?: string
 }
 
 export type TurnIntent =
-  | { mode: 'create-user'; requestId: string; sessionId: string; input: { text: string; attachments?: ChatImageAttachment[] }; excludeMessageIds?: string[]; config: TurnExecutionConfig }
+  | { mode: 'create-user'; requestId: string; sessionId: string; input: { text: string; attachments?: ChatImageAttachment[] }; excludeMessageIds?: string[]; continuationIntent?: { kind: 'exact-continue' | 'follow-up'; requestId?: string; payloadSha256?: string; rawText?: string; route?: string; sourceInvocationId?: string; sourceTurnId?: string; sourceSequence?: number }; continuationAcceptance?: { payloadSha256: string; rawText: string; kind: 'exact-continue' | 'follow-up'; route: string; sourceInvocationId?: string; sourceTurnId?: string; sourceSequence?: number }; retryOfMessageId?: string; retryOfInvocationId?: string; config: TurnExecutionConfig }
   | { mode: 'reuse-user'; requestId: string; sessionId: string; userMessageId: string; excludeMessageIds: string[]; config: TurnExecutionConfig }
 
 export type TurnTerminal = {
