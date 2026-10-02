@@ -9,7 +9,7 @@ import type { AppIpcContext } from '../appIpc'
 
 const safetySnapshot = {
   workDirProfileId: 'profile-a', workDirSha256: 'a'.repeat(64),
-  authorizationVersion: 'b'.repeat(64), toolSetSha256: 'c'.repeat(64)
+  authorizationVersion: 'b'.repeat(64), toolSetSha256: 'c'.repeat(64), executionConfigSha256: 'd'.repeat(64)
 }
 
 describe('chat:continue-from-checkpoint IPC orchestration', () => {
@@ -76,6 +76,21 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
       payload: { sessionId: session.id, sourceInvocationId: 'source-invocation', requestIdempotencyKey: 'changed-safety' },
       dispatch,
       resolveCurrentSafetySnapshot: () => ({ ...safetySnapshot, authorizationVersion: 'd'.repeat(64) })
+    })
+
+    expect(result).toEqual({ accepted: false, reason: 'CONTINUATION_SAFETY_SNAPSHOT_CHANGED' })
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(getDbConnection(db!).prepare('SELECT COUNT(*) AS count FROM agent_continuations').get()).toEqual({ count: 0 })
+  })
+
+  it('工具 schema 不变但实际 execution config 指纹变化时拒绝续跑', async () => {
+    const { session, runtime, ctx } = await setup()
+    const dispatch = vi.fn()
+    const result = await continueAgentFromCheckpoint({
+      ctx, turnRuntime: runtime,
+      payload: { sessionId: session.id, sourceInvocationId: 'source-invocation', requestIdempotencyKey: 'changed-backend' },
+      dispatch,
+      resolveCurrentSafetySnapshot: () => ({ ...safetySnapshot, executionConfigSha256: 'e'.repeat(64) })
     })
 
     expect(result).toEqual({ accepted: false, reason: 'CONTINUATION_SAFETY_SNAPSHOT_CHANGED' })

@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 import { CREATE_TABLES_SQL } from '../database/schema'
 import { runMigrations } from '../database/migrations'
-import { createOrGetAgentContinuation, validateContinuationCheckpoint, claimAgentContinuation, setAgentContinuationStatus, setAgentContinuationStatusForTurn } from './agentContinuation'
+import { createOrGetAgentContinuation, validateContinuationCheckpoint, claimAgentContinuation, setAgentContinuationStatus, setAgentContinuationStatusForTurn, reconcileRunningAgentContinuations } from './agentContinuation'
 import type { HistoryEvent, HistorySnapshot } from '../../packages/agent-sdk/src/history'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { rebuildClaudeMessagesFromHistory } from './canonicalHistory'
@@ -190,13 +190,40 @@ describe('agent continuation checkpoint', () => {
     conn.close()
   })
 
+  it('重启后将无工具派发的 running 收敛为 interrupted，后续显式点击以新身份重试', () => {
+    const conn = db()
+    const record = createOrGetAgentContinuation({ conn, snapshot: snapshot(), sessionId: 'session-1', requestIdempotencyKey: 'crash-before-tool', createdBy: 'u', frozenConfig: {} })
+    expect(claimAgentContinuation(conn, record.continuationId, {})).toBe(true)
+    expect(reconcileRunningAgentContinuations(conn, true, 20)).toEqual({ interrupted: 1, unknownSideEffect: 0, settled: 0 })
+    expect(conn.prepare('SELECT status FROM agent_continuations WHERE continuation_id=?').get(record.continuationId)).toEqual({ status: 'interrupted' })
+    expect(claimAgentContinuation(conn, record.continuationId, {})).toBe(false)
+    const retry = createOrGetAgentContinuation({ conn, snapshot: snapshot(), sessionId: 'session-1', requestIdempotencyKey: 'explicit-retry', createdBy: 'u', frozenConfig: {}, newId: (() => { let id = 0; return () => `retry-${++id}` })(), now: () => 21 })
+    expect(retry).toMatchObject({ continuationId: record.continuationId, status: 'pending', targetInvocationId: 'retry-1', targetTurnId: 'retry-2' })
+    expect(retry.targetInvocationId).not.toBe(record.targetInvocationId)
+    expect(claimAgentContinuation(conn, retry.continuationId, {}, 22)).toBe(true)
+    conn.close()
+  })
+
+  it('重启时存在未结算的工具派发记录则标记 unknown_side_effect，不自动重放', () => {
+    const conn = db()
+    const record = createOrGetAgentContinuation({ conn, snapshot: snapshot(), sessionId: 'session-1', requestIdempotencyKey: 'crash-after-tool-dispatch', createdBy: 'u', frozenConfig: {} })
+    expect(claimAgentContinuation(conn, record.continuationId, {})).toBe(true)
+    conn.prepare(`INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)`)
+      .run(record.targetInvocationId, 2, 'tool-started', 'tool-started', record.targetTurnId, 1, 'tool-call-started', JSON.stringify({ toolCallId: 'external-write' }), 11)
+    expect(reconcileRunningAgentContinuations(conn, true, 20)).toEqual({ interrupted: 0, unknownSideEffect: 1, settled: 0 })
+    expect(conn.prepare('SELECT status FROM agent_continuations WHERE continuation_id=?').get(record.continuationId)).toEqual({ status: 'unknown_side_effect' })
+    expect(claimAgentContinuation(conn, record.continuationId, {})).toBe(false)
+    expect(() => createOrGetAgentContinuation({ conn, snapshot: snapshot(), sessionId: 'session-1', requestIdempotencyKey: 'unsafe-explicit-retry', createdBy: 'u', frozenConfig: {} })).toThrow('CONTINUATION_ALREADY_CLAIMED')
+    conn.close()
+  })
+
   it('creates the continuation Turn with the claimed checkpoint identity and runs once per idempotency key', async () => {
     const appDb = openDatabase(':memory:')
     const session = createSession(appDb, { name: 'continuation-service' })
     const user = appendMessage(appDb, { id: 'continued-user', sessionId: session.id, role: 'user', content: 'start', timestamp: 1, status: 'sent' })
     const snapshotValue = snapshot()
     ;((snapshotValue.events[0]!.payload as { requiredUserMessage: { id: string } }).requiredUserMessage).id = user.message.id
-    const safety = { workDirProfileId: 'profile', workDirSha256: 'a'.repeat(64), authorizationVersion: 'auth', toolSetSha256: 'tools' }
+    const safety = { workDirProfileId: 'profile', workDirSha256: 'a'.repeat(64), authorizationVersion: 'auth', toolSetSha256: 'tools', executionConfigSha256: 'd'.repeat(64) }
     const config = { lane: 'desktop' as const, model: 'm', continuationSafetySnapshot: safety }
     const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(appDb), deps: { now: () => 10, id: (() => { let i = 0; return () => `runtime-${++i}` })() } })
     const { startAgentContinuation } = await import('./agentContinuation')

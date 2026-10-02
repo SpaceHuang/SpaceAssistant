@@ -49,6 +49,7 @@ import { readSessionTranscript } from './database/sessionTranscript'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from './runtime/hostedTurnFinalization'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { rebuildClaudeMessagesFromHistory } from './runtime/canonicalHistory'
+import { assertContinuationExecutionConfigUnchanged, fingerprintContinuationExecutionConfig } from './runtime/continuationSafetySnapshot'
 
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
@@ -631,7 +632,17 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           }
         })
         const hostedHandoffOptions = {
-          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: turnId, turnId, acceptedTurn, sessionDb: db, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, refreshExecutionContext: (_call, stage, current) => ({ ...current, toolsConfig: deps.getToolsConfig(), shellConfig: deps.getShellConfig(), toolUserConfirmed: Boolean(stage.confirmation) }) })
+          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: turnId, turnId, acceptedTurn, sessionDb: db, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, refreshExecutionContext: (_call, stage, current) => {
+            const toolsConfig = deps.getToolsConfig()
+            const browserConfig = deps.getBrowserConfig()
+            const shellConfig = deps.getShellConfig()
+            if (frozen.continuationSource) {
+              const expected = frozen.continuationSafetySnapshot?.executionConfigSha256
+              const actual = fingerprintContinuationExecutionConfig({ toolsConfig, browserConfig, shellConfig, mcpBackends: listProfiles(db) })
+              assertContinuationExecutionConfigUnchanged(expected, actual)
+            }
+            return { ...current, toolsConfig, shellConfig, toolUserConfirmed: Boolean(stage.confirmation) }
+          } })
         }
         const res = await runToolChatSession(turnInvocation, turnPorts, hostedHandoffOptions)
 

@@ -134,7 +134,35 @@ export function createOrGetAgentContinuation(input: {
       return rowToRecord(byKey, checkpoint.transcript)
     }
     const byCheckpoint = input.conn.prepare('SELECT * FROM agent_continuations WHERE source_invocation_id=? AND checkpoint_sequence=?').get(input.snapshot.invocationId, checkpoint.checkpointSequence) as ContinuationRow | undefined
-    if (byCheckpoint) throw new AgentContinuationRejectedError('CONTINUATION_ALREADY_CLAIMED')
+    if (byCheckpoint) {
+      if (byCheckpoint.status !== 'interrupted' || byCheckpoint.frozen_config_sha256 !== sha256(input.frozenConfig)) throw new AgentContinuationRejectedError('CONTINUATION_ALREADY_CLAIMED')
+      const priorEvents = input.conn.prepare("SELECT kind FROM agent_history_events WHERE invocation_id=? AND kind='tool-call-started' LIMIT 1").get(byCheckpoint.target_invocation_id)
+      if (priorEvents) throw new AgentContinuationRejectedError('CONTINUATION_ALREADY_CLAIMED')
+      // Explicit user retry after startup recovery: rotate the target identity so a terminal Turn
+      // and provider history from the interrupted attempt can never be resumed or replayed.
+      const retry = {
+        ...byCheckpoint,
+        request_idempotency_key: key,
+        target_invocation_id: newId(),
+        target_turn_id: newId(),
+        target_start_token: newId(),
+        status: 'pending' as const
+      }
+      input.conn.prepare("UPDATE agent_continuations SET request_idempotency_key=?,target_invocation_id=?,target_turn_id=?,target_start_token=?,status='pending',updated_at=? WHERE continuation_id=? AND status='interrupted'")
+        .run(key, retry.target_invocation_id, retry.target_turn_id, retry.target_start_token, now, retry.continuation_id)
+      const contextEvent = {
+        invocationId: retry.target_invocation_id, turnId: retry.target_turn_id, sequence: 1, schemaVersion: input.snapshot.schemaVersion,
+        eventId: `${retry.continuation_id}:context:${retry.target_invocation_id}`, idempotencyKey: `${retry.continuation_id}:context:${retry.target_invocation_id}`,
+        kind: 'invocation-context-committed' as const,
+        payload: {
+          messages: toCanonicalModelMessages(checkpoint.transcript),
+          continuationSource: { continuationId: retry.continuation_id, invocationId: retry.source_invocation_id, turnId: retry.source_turn_id, checkpointSequence: retry.checkpoint_sequence, checkpointSha256: retry.checkpoint_sha256 },
+          requiredUserMessage: structuredClone(checkpoint.requiredUserMessage)
+        }
+      }
+      appendSqliteAgentHistoryBatchInTransaction(input.conn, [contextEvent], 0, { schemaVersion: input.snapshot.schemaVersion, sessionId: input.sessionId, now: () => now })
+      return rowToRecord(retry as ContinuationRow, checkpoint.transcript)
+    }
     const record = { continuation_id: newId(), source_invocation_id: input.snapshot.invocationId, source_turn_id: input.snapshot.events[0]?.turnId ?? input.snapshot.invocationId,
       checkpoint_sequence: checkpoint.checkpointSequence, checkpoint_sha256: checkpoint.checkpointSha256, request_idempotency_key: key, created_by: input.createdBy,
       frozen_config_json: frozenConfigJson, frozen_config_sha256: sha256(input.frozenConfig), target_invocation_id: newId(), target_turn_id: newId(), target_start_token: newId(), status: 'pending' as const }
@@ -186,6 +214,49 @@ export function setAgentContinuationStatus(conn: DatabaseSync, continuationId: s
 export function setAgentContinuationStatusForTurn(conn: DatabaseSync, targetTurnId: string, status: Extract<AgentContinuationRecord['status'], 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'unknown_side_effect'>, now = Date.now()): boolean {
   return conn.prepare("UPDATE agent_continuations SET status=?,updated_at=? WHERE target_turn_id=? AND status='running'")
     .run(status, now, targetTurnId).changes === 1
+}
+
+/** Startup reconciliation is deliberately terminal: an interrupted continuation is never replayed automatically. */
+export function reconcileRunningAgentContinuations(conn: DatabaseSync, historyRecoverySucceeded: boolean, now = Date.now()): Readonly<{ interrupted: number; unknownSideEffect: number; settled: number }> {
+  return runInTransaction(conn, () => {
+    const rows = conn.prepare("SELECT continuation_id, target_invocation_id FROM agent_continuations WHERE status='running'").all() as Array<{ continuation_id: string; target_invocation_id: string }>
+    let interrupted = 0
+    let unknownSideEffect = 0
+    let settled = 0
+    const eventsQuery = conn.prepare('SELECT kind, payload_json FROM agent_history_events WHERE invocation_id=? ORDER BY sequence ASC')
+    const update = conn.prepare("UPDATE agent_continuations SET status=?, updated_at=? WHERE continuation_id=? AND status='running'")
+    for (const row of rows) {
+      let status: Extract<AgentContinuationRecord['status'], 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'unknown_side_effect'> = 'interrupted'
+      if (!historyRecoverySucceeded) status = 'unknown_side_effect'
+      else {
+        const events = eventsQuery.all(row.target_invocation_id) as Array<{ kind: string; payload_json: string }>
+        const started = new Set<string>()
+        const finished = new Set<string>()
+        for (const event of events) {
+          let payload: Record<string, unknown> = {}
+          try { payload = JSON.parse(event.payload_json) as Record<string, unknown> } catch { status = 'unknown_side_effect'; break }
+          if (event.kind === 'tool-call-started' && typeof payload.toolCallId === 'string') started.add(payload.toolCallId)
+          if ((event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') && typeof payload.toolCallId === 'string') finished.add(payload.toolCallId)
+        }
+        if (status !== 'unknown_side_effect' && [...started].some((id) => !finished.has(id))) status = 'unknown_side_effect'
+        const terminal = events.at(-1)
+        if (status !== 'unknown_side_effect' && terminal) {
+          let payload: Record<string, unknown> = {}
+          try { payload = JSON.parse(terminal.payload_json) as Record<string, unknown> } catch { status = 'unknown_side_effect' }
+          if (status !== 'unknown_side_effect') {
+            if (terminal.kind === 'invocation-completed') status = 'completed'
+            else if (terminal.kind === 'invocation-failed') status = 'failed'
+            else if (terminal.kind === 'invocation-interrupted') status = payload.status === 'cancelled' ? 'cancelled' : 'interrupted'
+          }
+        }
+      }
+      if (update.run(status, now, row.continuation_id).changes !== 1) continue
+      if (status === 'interrupted') interrupted++
+      else if (status === 'unknown_side_effect') unknownSideEffect++
+      else settled++
+    }
+    return { interrupted, unknownSideEffect, settled }
+  })
 }
 
 export async function startAgentContinuation(input: {

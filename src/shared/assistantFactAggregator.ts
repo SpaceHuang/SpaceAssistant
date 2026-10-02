@@ -8,6 +8,7 @@ export type ContinuationSafetySnapshot = Readonly<{
   workDirSha256: string
   authorizationVersion: string
   toolSetSha256: string
+  executionConfigSha256: string
 }>
 
 export type ContinuationSource = Readonly<{

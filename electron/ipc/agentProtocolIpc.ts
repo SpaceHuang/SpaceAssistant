@@ -5,7 +5,7 @@ import type { AppIpcContext } from '../appIpc'
 import type { IpcMain } from 'electron'
 import { AUTO_CONTRACT } from '../processOutput/contracts'
 import { AgentLogEventName, AgentLogFields } from '../agentLogger/types'
-import { CONFIG_KEYS, readSkillsConfig, readWikiConfig, scheduleBackup, flushBackup, backupAfterMessagePatch, readExposureInputsFromDb } from './ipcShared'
+import { CONFIG_KEYS, readSkillsConfig, readWikiConfig, readToolsConfig, scheduleBackup, flushBackup, backupAfterMessagePatch, readExposureInputsFromDb } from './ipcShared'
 import { ChatImageAttachment } from '../../src/shared/domainTypes'
 import { ErrorCodes } from '../../src/shared/errorCodes'
 import { Message, ModelEntry, SessionSkillsState, SkillDefinition, SkippedCandidate, SkillRouteRecentMessage, SkillRouteResult } from '../../src/shared/domainTypes'
@@ -59,12 +59,14 @@ import { cancelClaudeAdmission } from '../claudeStreamHandlers'
 import { reserveConfirmationSubmission, commitConfirmationSubmissionWithWork, markConfirmationSubmissionReconciling, reconcileConfirmationSubmission, reconcileConfirmationSubmissions, ConfirmationCommitRolledBackError, ConfirmationCommitUnknownError } from '../confirmation/persistentConfirmationCommit'
 import { forgetMcpSessionTrust, isMcpSessionTrusted, rememberMcpSessionTrust } from '../mcp/mcpSessionTrust'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
-import { startAgentContinuation, setAgentContinuationStatusForTurn } from '../runtime/agentContinuation'
-import { createContinuationSafetySnapshot } from '../runtime/continuationSafetySnapshot'
+import { startAgentContinuation, setAgentContinuationStatusForTurn, reconcileRunningAgentContinuations } from '../runtime/agentContinuation'
+import { createContinuationSafetySnapshot, fingerprintContinuationExecutionConfig } from '../runtime/continuationSafetySnapshot'
 import { resolveWorkDirForSession } from '../workDirManager'
 import { exposedToolNamesForLane } from '../toolsConfigRuntime'
 import { BUILTIN_TOOL_DEFINITIONS } from '../../src/shared/builtinToolDefinitions'
 import { buildSnapshotFromDb } from '../mcp/mcpToolRegistry'
+import { listProfiles } from '../mcp/mcpConfigStore'
+import { readShellConfigFromDb } from '../shell/shellConfigDb'
 import { loadEffectivePolicyRules, readPolicyPackages, resolveEffectivePolicyRulesWithOrigin } from '../confirmation/policyRulesRuntime'
 
 export function resolveContinuationSafetySnapshot(ctx: AppIpcContext, sessionId: string, lane: 'desktop' | 'wechat' | 'feishu' | 'automation') {
@@ -90,7 +92,11 @@ export function resolveContinuationSafetySnapshot(ctx: AppIpcContext, sessionId:
     workDirProfileId: workDir.profileId,
     workDir: workDir.workDir,
     authorizationVersion,
-    tools: [...builtins, ...mcpTools]
+    tools: [...builtins, ...mcpTools],
+    executionConfigFingerprint: fingerprintContinuationExecutionConfig({
+      toolsConfig: readToolsConfig(ctx.db), browserConfig: readBrowserConfigFromDb(ctx.db), shellConfig: readShellConfigFromDb(ctx.db),
+      mcpBackends: listProfiles(ctx.db)
+    })
   })
 }
 
@@ -190,6 +196,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   try { reconcileConfirmationSubmissions(ctx.db, settleReconciledDesktopConfirm) } catch { /* 下次启动继续对账 */ }
 
   const turnRuntime = ctx.turnRuntime ?? new TurnRuntimeImpl({ storage: createTurnCoordinatorStorage(ctx.db), deps: { now: Date.now, id: randomUUID } })
+  let turnStartupRecoverySucceeded = false
 
   const turnCoordinator = turnRuntime.coordinator
 
@@ -205,6 +212,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       }
       turnCoordinator.recover()
     })
+    turnStartupRecoverySucceeded = turnCoordinatorRecovery.succeeded
     if (!turnCoordinatorRecovery.succeeded) {
       const error = turnCoordinatorRecovery.error
       console.warn('[turnCoordinator] startup recovery degraded:', error instanceof Error ? error.message : String(error))
@@ -225,6 +233,15 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       console.warn('[sessionTranscript] startup reconciliation degraded:', error instanceof Error ? error.message : String(error))
       logAgentEvent('error', 'session.transcript.reconciliation', { outcome: 'startup-failed', reasonCode: 'checkpoint-reconciliation-failed' })
     }
+  }
+
+  try {
+    const recovery = reconcileRunningAgentContinuations(getDbConnection(ctx.db), ctx.sessionHistoryRecoverySucceeded === true && turnStartupRecoverySucceeded)
+    if (recovery.interrupted || recovery.unknownSideEffect || recovery.settled) {
+      logAgentEvent('info', 'session.transcript.reconciliation', { outcome: 'continuation-startup-recovery', ...recovery })
+    }
+  } catch (error) {
+    console.warn('[agentContinuation] startup recovery degraded:', error instanceof Error ? error.message : String(error))
   }
 
   const skillManager = createSkillManager({

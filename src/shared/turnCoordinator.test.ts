@@ -38,7 +38,7 @@ describe('TurnCoordinator', () => {
   })
 
   it('冻结并保留续跑所需的非敏感安全快照', () => {
-    const snapshot = { workDirProfileId: 'profile-a', workDirSha256: 'a'.repeat(64), authorizationVersion: 'b'.repeat(64), toolSetSha256: 'c'.repeat(64) }
+    const snapshot = { workDirProfileId: 'profile-a', workDirSha256: 'a'.repeat(64), authorizationVersion: 'b'.repeat(64), toolSetSha256: 'c'.repeat(64), executionConfigSha256: 'd'.repeat(64) }
     const config = normalizeTurnExecutionConfig({ lane: 'desktop', continuationSafetySnapshot: snapshot })
     expect(config.continuationSafetySnapshot).toEqual(snapshot)
     expect(JSON.stringify(config)).not.toContain('/Users/')

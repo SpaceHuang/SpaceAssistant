@@ -672,8 +672,10 @@ export function ChatView() {
       const result = await window.api.chatContinueFromCheckpoint({
         sessionId, sourceInvocationId: target.sourceInvocationId, requestIdempotencyKey
       })
-      if (!result.accepted) {
+      if (!result.accepted || result.status === 'interrupted') {
         continuationRequestKeysRef.current.delete(assistantMessageId)
+      }
+      if (!result.accepted) {
         message.warning(t('chatView.warnings.continuationUnavailable'))
       }
     } catch {
