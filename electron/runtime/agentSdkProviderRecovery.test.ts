@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createAgentSdkProviderRecovery } from './agentSdkProviderRecovery'
 import { isEffortUnsupportedByUpstream, resetEffortMemoForTests } from '../effortFallback'
+import { ModelStreamIdleTimeoutError } from '../../packages/agent-sdk/src/model'
 
 describe('createAgentSdkProviderRecovery', () => {
   it('retries output_config rejection without effort and remembers the model compatibility', async () => {
@@ -104,5 +105,23 @@ describe('createAgentSdkProviderRecovery', () => {
       currentUserMessageId: 'missing',
       requiredUserMessage: { id: 'missing', message: { role: 'user', content: 'not in request' } }
     })).rejects.toThrow('required user message')
+  })
+
+  it('provider 流空闲超时：attempt 1 原样重发重试（不压缩转录），attempt 2 拒绝', async () => {
+    const recover = createAgentSdkProviderRecovery({ contextWindow: 100, contextWindowTrusted: true })
+    const idleError = new ModelStreamIdleTimeoutError(120_000)
+    const retry = await recover({
+      error: idleError, attempt: 1, modelTurn: 2, routeId: 'deepseek-main', messages,
+      currentUserMessageId: 'user-current', requiredUserMessage: { id: 'user-current', message: messages[2]! }
+    })
+    // 挂起的请求体本身没有问题：原样重发（工具结果已在消息里，重试幂等），不触发转录压缩
+    expect(retry).toEqual({
+      kind: 'retry', reasonCode: 'PROVIDER_STREAM_IDLE_TIMEOUT', messages,
+      retryEvent: { attempt: 1, code: 'provider_stream_idle_timeout' }, recordTranscriptCompaction: false
+    })
+    const second = await recover({
+      error: idleError, attempt: 2, modelTurn: 2, routeId: 'deepseek-main', messages
+    })
+    expect(second).toEqual({ kind: 'reject', reasonCode: 'PROVIDER_STREAM_IDLE_TIMEOUT_RETRY_LIMIT' })
   })
 })

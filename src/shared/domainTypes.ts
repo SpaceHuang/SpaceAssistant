@@ -29,7 +29,14 @@ export interface ToolsConfig {
   autoApproveMaxEditChars?: number
   /** 云端兼容开关：允许经交叉校验的 workdir-readonly 脚本声明免确认。默认关闭。 */
   allowDeclaredPathScopeScripts?: boolean
+  /** MCP 工具延迟加载档位（FR5）。灰度计划：交付构建默认 'off'（= 现状全量注入），真机验收通过后单独提交切 'auto'（§9）。 */
+  mcpDeferredLoading?: 'auto' | 'always' | 'off'
+  /** auto 档 eager/deferred 判定的 schema 字节总量阈值（D4），默认 16 KiB；与既有单工具 schema 上限（MCP_TOOL_SCHEMA_MAX_BYTES）数值撞车但含义无关。 */
+  mcpDeferredSchemaBudgetBytes?: number
 }
+
+/** MCP 延迟加载的默认判定阈值（FR5：16 KiB，见 mcpTypes.ts 单工具上限的消歧说明 §6.7）。 */
+export const MCP_DEFERRED_SCHEMA_BUDGET_BYTES_DEFAULT = 16 * 1024
 
 export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
   enabled: true,
@@ -42,7 +49,10 @@ export const DEFAULT_TOOLS_CONFIG: ToolsConfig = {
   maxFileSnapshots: 100,
   grepTimeoutSec: 60,
   autoApproveMaxBytes: 256 * 1024,
-  autoApproveMaxEditChars: 64 * 1024
+  autoApproveMaxEditChars: 64 * 1024,
+  // 应用决策（2026-10-02，真机验收遵循度 100% 后用户拍板）：默认恒定始终延迟（always 语义），
+  // 设置页不提供三档选择；'off' 保留为配置级回退路径（mergeToolsConfig 可覆盖），auto 档机制保留但不暴露 UI
+  mcpDeferredLoading: 'always'
 }
 
 export function mergeToolsConfig(partial?: Partial<ToolsConfig> | null): ToolsConfig {
@@ -564,6 +574,9 @@ export interface ToolCallResultPersisted {
   displayData?: import('./mcpToolResultDisplay').McpResultDisplay
   /** 工具未进入执行流程（被授权 / 确认 / 策略 / 预算拦下，或调用整体被放弃），区别于「执行了但失败」（需求 §7.6）。 */
   notExecuted?: true
+  /** MCP 延迟加载观测（AD10）：模型未检索（tool_search 未下发 schema）而直接调用的延迟工具标记。
+   *  仅落持久化/事件面，不进 wire 面工具结果块（B4）。 */
+  deferredUnsurfaced?: true
   /** 未执行的原因码，便于聚合与今后回填区分「未执行」与「执行失败」。
    *  agent_denied：安全审批 Agent 机审拒绝（P1-D，区别于 user_rejected 的真人拒绝）。
    *  agent_undetermined：审批 Agent 有效裁决「判不了」（R5；区别于 agent_denied 的判定拒绝，

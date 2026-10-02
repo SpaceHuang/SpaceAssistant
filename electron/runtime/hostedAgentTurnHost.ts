@@ -29,6 +29,15 @@ export type HostedAgentTurnHostDependencies<TCall extends { invocationId: string
   toolRegistry: { get(name: string): unknown; entries?(): readonly Readonly<{ name: string }>[] }
   /** Product-filtered capability set for this invocation; model-visible tools alone never grant authorization. */
   authorizedToolNames: ReadonlySet<string>
+  /** FR3：延迟工具名集合（不在 request.tools 广告面、在授权面）。
+   *  capabilities.define 时同时并入 known 与 authorized（门禁簿记，零上下文成本；
+   *  SDK 约束 authorized ⊆ known 由「两栏都填」满足）。 */
+  deferredToolNames?: ReadonlySet<string>
+  /** FR8：延迟工具未浮现直调判定（sessionLedgerForToolResult 持久化投影查询）。 */
+  deferredUnsurfacedCheck?: (toolName: string) => boolean
+  /** FR12②：本轮因预算被裁的工具名（快照层 budgetDropped ∪ 广告面层 eagerBudgetDropped）；
+   *  被拒文案据此区分「预算未注入」与「服务不可用」。 */
+  budgetDroppedNames?: ReadonlySet<string>
   resolveRegisteredToolName?(providerToolName: string): string
   capabilities: CapabilityRegistry
   permits: SafetyPermitStore
@@ -102,7 +111,39 @@ export function createHostedAgentTurnHost<
       const invocationAuthorized = registeredTools.filter((name) => dependencies.authorizedToolNames.has(
           dependencies.resolveRegisteredToolName?.(name) ?? resolveRegisteredToolName(name, dependencies.toolRegistry)
         ))
-      dependencies.capabilities.define(input.invocationId, visibleTools, invocationAuthorized)
+      // FR3（A 方案）：延迟名并入 known 与 authorized 两栏——模型直调延迟工具经 capability
+      // 检查（known-authorized）走正常分发路径执行（透明兜底 D2），tool loop 不中断。
+      // known 语义 = 广告面 ∪ 索引面（模型在索引区块中确实见过这些名字）。
+      const deferredNames = [...(dependencies.deferredToolNames ?? [])].filter((name) => dependencies.toolRegistry.get(
+        dependencies.resolveRegisteredToolName?.(name) ?? resolveRegisteredToolName(name, dependencies.toolRegistry)
+      ) !== undefined)
+      const known = [...new Set([...visibleTools, ...deferredNames])]
+      const authorized = [...new Set([...invocationAuthorized, ...deferredNames])]
+      dependencies.capabilities.define(input.invocationId, known, authorized)
+      // FR12②：对 UNKNOWN/UNAUTHORIZED 拒绝附加区分文案——预算裁剪名单内 =「预算未注入」，
+      // 其余（幻觉名/服务已移除）=「服务不可用」。显式委托包装（评审 P3：不走原型链，避免
+      // SafetyGate 未来改用 #private 字段时静默破）；仅叠加 userMessage，决策语义不变。
+      const safetyGate = dependencies.safetyGate
+      const budgetDroppedNames = dependencies.budgetDroppedNames
+      const wrappedSafetyGate: import('../../packages/agent-sdk/src/safetyGate').SafetyGatePort = budgetDroppedNames && budgetDroppedNames.size > 0
+        ? {
+            evaluate: async (binding, signal) => {
+              const decision = await safetyGate.evaluate(binding, signal)
+              if (decision.kind === 'deny' &&
+                (decision.reasonCode === 'UNKNOWN_CAPABILITY' || decision.reasonCode === 'UNAUTHORIZED_CAPABILITY')) {
+                return {
+                  ...decision,
+                  userMessage: budgetDroppedNames.has(binding.capabilityId)
+                    ? `工具 ${binding.capabilityId} 因本轮上下文预算未注入（已被裁剪），本轮无法调用。请减少同时启用的 MCP 工具，或在设置页查看工具预算裁剪记录。`
+                    : `工具 ${binding.capabilityId} 当前不可用：MCP 工具可能已变更或服务不可用。请确认服务连接，并在设置页刷新工具列表后重试。`
+                }
+              }
+              return decision
+            },
+            authorize: (binding, signal) => safetyGate.authorize(binding, signal),
+            discardPermit: (permitId) => safetyGate.discardPermit(permitId)
+          }
+        : safetyGate
       if (!input.request.messages.length && input.currentUserMessageId) throw new Error('HOSTED_CURRENT_USER_MESSAGE_MISSING')
       if (input.currentUserMessageId && input.requiredUserMessage?.id !== input.currentUserMessageId) throw new Error('HOSTED_REQUIRED_USER_ID_MISMATCH')
       if (input.requiredUserMessage && !input.request.messages.some((message) => sameMessage(message, input.requiredUserMessage!.message))) throw new Error('HOSTED_REQUIRED_USER_MESSAGE_MISSING')
@@ -115,7 +156,7 @@ export function createHostedAgentTurnHost<
         ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}),
         ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}),
         registry: dependencies.providerRegistry,
-        safetyGate: dependencies.safetyGate,
+        safetyGate: wrappedSafetyGate,
         prepareTool: dependencies.prepareTool as AgentTurnPorts['prepareTool'],
         ...(dependencies.refreshExecutionContext ? { refreshExecutionContext: dependencies.refreshExecutionContext } : {}),
         ...(dependencies.discardPreparedTool ? { discardPreparedTool: dependencies.discardPreparedTool as AgentTurnPorts['discardPreparedTool'] } : {}),

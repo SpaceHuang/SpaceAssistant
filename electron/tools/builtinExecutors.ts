@@ -63,6 +63,7 @@ import { createRunLarkCliRegisteredTool } from './runLarkCliRegisteredTool'
 import { createListWorkDirsRegisteredTool } from './listWorkDirsRegisteredTool'
 import { skillsReadTool } from './skillsReadTool'
 import { historyReadTool } from './historyTool'
+import { toolSearchTool } from './toolSearchTool'
 import { toolkitFindTool, toolkitCallTool } from '../capabilities/toolkitTool'
 import '../capabilities/registerBuiltinCapabilities'
 import { listWorkDirsExecutor, switchWorkDirExecutor } from './workDirExecutors'
@@ -2126,6 +2127,8 @@ export function createBuiltinToolRegistry(): TypedToolRegistry {
   registry.register(createListWorkDirsRegisteredTool(listWorkDirsExecutor))
   registry.register(skillsReadTool)
   registry.register(historyReadTool)
+  // MCP 延迟加载检索元工具（只读自动放行；广告面注入由 toolsConfigRuntime 桌面 lane 门控）
+  registry.register(toolSearchTool)
   // toolkit 网关：能力集合的两个稳定工具（browser_detect 已收编为 env.browserDetect 能力）
   registry.register(toolkitFindTool)
   registry.register(toolkitCallTool)

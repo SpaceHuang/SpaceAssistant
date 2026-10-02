@@ -81,7 +81,9 @@ vi.mock('./mcp/mcpToolRegistry', () => ({
       description: `外部 MCP 服务「${e.serverName}」提供的工具`,
       input_schema: e.inputSchema
     }))
-  )
+  ),
+  // FR13：测试快照条目均可解析（保持透传语义）
+  sanitizeMcpSnapshotForExecutors: vi.fn((snapshot: unknown) => snapshot)
 }))
 
 vi.mock('./mcp/mcpConfigStore', () => ({
@@ -167,7 +169,7 @@ describe('runToolChatSession lane 穿透（偏差 21：MCP 仅 desktop lane 注�
         requestId, sessionId, turnId: `turn-${requestId}`, lane,
         model: 'claude-sonnet-4-20250514', providerRouteId,
         messages: [{ id: 'input-user', role: 'user', content: 'persist me' }], currentUserMessageId: 'input-user',
-        toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key',
+        toolsConfig: { ...DEFAULT_TOOLS_CONFIG, mcpDeferredLoading: 'off' }, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key',
         appDb: createMemoryAppDb('zh-CN') as unknown as AppDatabase,
         emitFactEvent: () => undefined, emitSessionEvent: async () => undefined
       } as never)

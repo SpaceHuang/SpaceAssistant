@@ -81,6 +81,7 @@ export function McpSettingsTab({ active = true, open = true }: McpSettingsTabPro
     dirtyRef.current = true
   }, [])
 
+
   /** 启用服务时自动把已发现工具全部加入白名单，降低逐个勾选负担。 */
   const toggleServerEnabled = useCallback((id: string, checked: boolean, toolNames: string[]) => {
     setDrafts((current) =>

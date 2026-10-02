@@ -7,7 +7,8 @@ const ALL_TOOLS = BUILTIN_TOOL_DEFINITIONS.map((d) => d.name)
 
 describe('builtin tool metadata（P0 概念收敛）', () => {
   it('每个内置工具都注册了 actionClass / riskLevel / extractors 元数据', () => {
-    expect(ALL_TOOLS).toHaveLength(19)
+    // 19 个 P0 内置工具 + tool_search（MCP 延迟加载检索元工具，FR2）
+    expect(ALL_TOOLS).toHaveLength(20)
     for (const name of ALL_TOOLS) {
       const meta = getBuiltinToolMetadata(name)
       expect(meta, `${name} 缺元数据`).toBeDefined()
@@ -15,6 +16,11 @@ describe('builtin tool metadata（P0 概念收敛）', () => {
       expect(['low', 'medium', 'high']).toContain(meta!.riskLevel)
       expect(Array.isArray(meta!.extractors)).toBe(true)
     }
+  })
+
+  it('tool_search 只读低风险（自动放行，不进审批流——FR2）', () => {
+    expect(getBuiltinToolMetadata('tool_search')).toMatchObject({ actionClass: 'read', riskLevel: 'low' })
+    expect(builtinToolNeedsConfirmation('tool_search')).toBe(false)
   })
 
   it('未注册元数据的工具返回 undefined（信息不足走默认策略）', () => {

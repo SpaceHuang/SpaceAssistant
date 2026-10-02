@@ -345,6 +345,11 @@
         "displayName": "Capability toolkit call",
         "summary": "Invoke a specific capability from the product capability toolkit (act-class requires confirmation)",
         "disabledHint": "Disabling removes the agent’s entry point to product capabilities"
+      },
+      "toolSearch": {
+        "displayName": "Tool search (MCP)",
+        "summary": "Search deferred MCP tools by keyword and return full schemas. Empty query lists all pages in snapshot order.",
+        "disabledHint": "When disabled, deferred MCP tools cannot be searched; MCP tools will be injected in full context."
       }
     },
     "nav": {

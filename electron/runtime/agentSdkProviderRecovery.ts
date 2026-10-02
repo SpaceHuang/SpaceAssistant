@@ -1,5 +1,6 @@
 import { decideOverflowRecovery, detectSilentContextOverflow, selectRecoveryMessages } from '../../src/shared/overflowRecovery'
 import type { CanonicalModelMessage, PreparedModelCall } from '../../packages/agent-sdk/src/model'
+import { ModelStreamIdleTimeoutError } from '../../packages/agent-sdk/src/model'
 import { isOutputConfigRejectedError, memoizeEffortUnsupported } from '../effortFallback'
 
 type RecoveryInput = Readonly<{
@@ -33,6 +34,19 @@ export function createAgentSdkProviderRecovery(input: {
         requestPatch: { thinking: { enabled: request.request.thinking.enabled } },
         recordTranscriptCompaction: false,
         retryEvent: { attempt: 1, code: 'effort_unsupported' }
+      }
+    }
+    // Provider 流空闲超时（评审后真机回归：DeepSeek /anthropic 对 tool_result 回传请求偶发挂起，
+    // 15 分钟静默后 MODEL_PROVIDER_ERROR）。挂起的请求体本身无害：原样重发幂等（工具结果已在
+    // 消息里，不会重复执行工具），不触发转录压缩；attempt 2 仍超时则拒绝（避免无限循环）。
+    if (request.error instanceof ModelStreamIdleTimeoutError) {
+      if (request.attempt > 1) return { kind: 'reject', reasonCode: 'PROVIDER_STREAM_IDLE_TIMEOUT_RETRY_LIMIT' }
+      return {
+        kind: 'retry',
+        reasonCode: 'PROVIDER_STREAM_IDLE_TIMEOUT',
+        messages: request.messages,
+        retryEvent: { attempt: 1, code: 'provider_stream_idle_timeout' },
+        recordTranscriptCompaction: false
       }
     }
     const silentOverflow = request.response ? detectSilentContextOverflow({

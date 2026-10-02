@@ -19,8 +19,17 @@ const SENSITIVE_KEY_EXACT_PATTERN =
 const NON_CREDENTIAL_KEY_PATTERN =
   /^(?:max|min|total|remaining|used|limit|budget)(?:[_-]|[A-Z])|[_-](?:max|min|total|remaining|used|limit|budget|count)$|[a-z](?:Max|Min|Total|Remaining|Used|Limit|Budget)$|[A-Z_-](?:max|min|total|remaining|used|limit|budget|count)$/i
 
+/**
+ * 精确豁免清单：量化估算字段名含 token 词但为纯数字计数（非凭据）。
+ * `mcp.deferred_savings` 的节省量三字段（FR8，MCP 延迟加载 §10.2.2 验收读数）——
+ * 不加豁免会被宽匹配打成 [REDACTED]，验收数据在日志通道不可读。
+ * 精确锚定（非宽匹配）保证 `xSavedTokens` / `accessTokenS` 等变体不受豁免。
+ */
+const NON_CREDENTIAL_EXACT_KEYS = /^(?:eagerEquivalent|index|saved)Tokens$/i
+
 function isSensitiveKey(key: string): boolean {
   if (SENSITIVE_KEY_EXACT_PATTERN.test(key)) return true
+  if (NON_CREDENTIAL_EXACT_KEYS.test(key)) return false
   // env 键值表的载体键（toolkit.call 入参 env: { KEY: value }）与其 secret-map 变体
   if (isEnvCarrierKey(key) || isEnvSecretMapKey(key)) return true
   if (NON_CREDENTIAL_KEY_PATTERN.test(key)) return false

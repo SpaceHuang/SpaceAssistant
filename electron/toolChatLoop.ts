@@ -49,6 +49,8 @@ import { computeDiffLineStats } from '../src/shared/writeDiffStats'
 import { sessionDisplayNameRaw } from '../src/shared/sessionDisplay'
 import { evaluateFileToolAutoApproval } from './tools/writeFileAutoApproval'
 import { buildToolCapabilityConventionHint } from '../src/shared/skillPrompt'
+import { buildMcpToolCatalogSection } from '../src/shared/toolCatalogPrompt'
+import { MCP_DEFERRED_SCHEMA_BUDGET_BYTES_DEFAULT } from '../src/shared/domainTypes'
 import { getSkillByName } from './skills/skillScanner'
 import { getCachedSkills } from './skills/skillCache'
 import { recordStepUsage, recordTurnSummary, type UsageTurnOutcome } from './usageStats/usageStatsRecorder'
@@ -170,7 +172,7 @@ import {
   releaseWritePath,
   releaseAllWritePathsForSession
 } from './toolWriteConflict'
-import { computeEffectiveTools, authorizeToolCall } from './effectiveTools'
+import { computeDeferredPlan, computeEffectiveTools, authorizeToolCall } from './effectiveTools'
 import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from './toolRevocationRegistry'
 import { buildCommandRetryKey, normalizeFileToolIdentity, normalizeToolErrorClass, SemanticToolRetryTracker } from './toolErrorRetryPolicy'
 import type { ContextMeter } from '../src/shared/contextMeterService'
@@ -224,6 +226,12 @@ export type RunToolChatSessionArgs = {
   onHostedTurnHandoff?: (input: Readonly<{
     request: PreparedModelCall['request']
     authorizedToolNames: ReadonlySet<string>
+    /** FR3：延迟名集合（并入 capabilities known + authorized，门禁簿记零上下文成本）。 */
+    deferredToolNames?: ReadonlySet<string>
+    /** FR8：延迟工具未浮现直调判定（sessionLedger 持久化投影查询用）。 */
+    deferredUnsurfacedCheck?: (toolName: string) => boolean
+    /** FR12②：广告面层被裁工具名（被拒文案区分用）。 */
+    eagerBudgetDroppedNames?: ReadonlySet<string>
     resolveRegisteredToolName: (providerToolName: string) => string
     windowId?: string
     maxToolRounds?: number
@@ -801,6 +809,39 @@ async function runToolChatSessionInner(
     const processData = output?.data && typeof output.data === 'object' && !Array.isArray(output.data)
       ? output.data as Record<string, unknown>
       : undefined
+    // FR8/§6.4：tool_search 成功后并入命中名（surfacedNames）；延迟工具未浮现直调 → deferredUnsurfaced 观测
+    if (call.toolName === 'tool_search' && !(result.isError ?? output?.success === false)) {
+      const data = output?.data && typeof output.data === 'object' && !Array.isArray(output.data)
+        ? output.data as { matches?: Array<{ name?: unknown }>; totalMatches?: unknown; truncated?: unknown }
+        : undefined
+      const matches = Array.isArray(data?.matches) ? data!.matches : []
+      for (const match of matches) {
+        if (match && typeof match.name === 'string') surfacedNames.add(match.name)
+      }
+      // §6.3/10.2.6：检索返回体校准埋点（truncated 触发率、命中量分布）
+      logAgentEvent('info', 'mcp.tool_search_result', {
+        requestId: args.requestId,
+        sessionId: args.sessionId,
+        toolUseId: call.toolCallId,
+        matchCount: matches.length,
+        totalMatches: typeof data?.totalMatches === 'number' ? data.totalMatches : undefined,
+        truncated: data?.truncated === true
+      })
+    }
+    if (deferredUnsurfacedCheck(call.toolName) && !(result.isError ?? output?.success === false)) {
+      surfacedNames.add(call.toolName)
+      // R1 校准：未检索直调（兜底触发）观测
+      calledDeferredNames.add(call.toolName)
+      logAgentEvent('info', 'tool.deferred_unsurfaced', {
+        requestId: args.requestId,
+        sessionId: args.sessionId,
+        toolUseId: call.toolCallId,
+        toolName: call.toolName
+      })
+    } else if (deferredToolNames.has(call.toolName) && !(result.isError ?? output?.success === false)) {
+      // §6.3/10.2.6：surface 后未调用条目占比的分母侧——浮现后实际调用的延迟工具
+      calledDeferredNames.add(call.toolName)
+    }
     if (isProcessToolName(call.toolName)) {
       let serialized = 'null'
       try {
@@ -924,6 +965,18 @@ async function runToolChatSessionInner(
   const exposureRules = hostExposureRules as import('../src/shared/confirmation/types').PolicyRule[] | undefined
   /** 请求级 MCP 工具快照：仅桌面 lane 注入（装配期构建，仍为首循环前）。 */
   const mcpSnapshot: McpToolSnapshot = hostMcp?.snapshot ?? { entries: new Map(), budgetDropped: [] }
+  // FR5/§6.5：延迟加载计划（off 档 = 现状路径；档位/阈值取自 ToolsConfig，缺省 off/16 KiB）
+  const deferredMode = toolsConfig.mcpDeferredLoading ?? 'always'
+  const deferredThresholdBytes = toolsConfig.mcpDeferredSchemaBudgetBytes ?? MCP_DEFERRED_SCHEMA_BUDGET_BYTES_DEFAULT
+  const mcpProfiles = hostMcp?.executorDatabase
+    ? listProfiles(hostMcp.executorDatabase as Parameters<typeof listProfiles>[0])
+    : []
+  const deferredPlan = computeDeferredPlan({
+    mcpSnapshot,
+    profiles: mcpProfiles,
+    mode: deferredMode,
+    thresholdBytes: deferredThresholdBytes
+  })
   const effectiveTools = computeEffectiveTools({
     builtinConfig: toolsConfig,
     feishuConfig,
@@ -933,9 +986,25 @@ async function runToolChatSessionInner(
     remoteContext,
     exposureRules,
     mcpSnapshot,
-    trim: toolsTrim
+    trim: toolsTrim,
+    deferredPlan
   })
-  const { tools, toolNames, authorizedToolNames, compatToInternal } = effectiveTools
+  const { tools, toolNames, authorizedToolNames, compatToInternal, deferredToolNames } = effectiveTools
+  if (effectiveTools.deferredDegradedToEager && deferredPlan.mode === 'deferred') {
+    // O4（边界 11）：tool_search 被裁出广告面，延迟计划整体失效回退 eager（agentLogger warn，不进 wire 面与会话事件流）
+    logAgentEvent('warn', 'mcp.deferredDegradedToEager', {
+      requestId,
+      sessionId,
+      lane: effectiveLane,
+      deferredNames: [...deferredPlan.deferredNames]
+    })
+  }
+  // FR8/D2 观测：本 invoke 内 tool_search 成功下发的延迟工具名；延迟工具执行时不在集合内 → deferredUnsurfaced
+  const surfacedNames = new Set<string>()
+  // §6.3/10.2.6 校准：浮现后实际调用的延迟工具名（surface 后未调用占比的分母侧）
+  const calledDeferredNames = new Set<string>()
+  const deferredUnsurfacedCheck = (toolName: string): boolean =>
+    deferredToolNames.has(toolName) && !surfacedNames.has(toolName)
   if (toolNames.includes('browser')) {
     stagehandService.resetInferenceCount(sessionId)
   }
@@ -963,10 +1032,20 @@ async function runToolChatSessionInner(
   }
   const memoryContent = getCachedMemoryContent()
   const baseSystemWithRecovery = typeof system === 'string' && system.trim().length > 0 ? system : undefined
-  const capabilityHint = buildToolCapabilityConventionHint(toolNames)
+  const mcpDeferredCount = deferredToolNames.size
+  const capabilityHint = buildToolCapabilityConventionHint(toolNames, { mcpDeferredCount })
   const systemWithTools = baseSystemWithRecovery ? `${baseSystemWithRecovery}\n\n${capabilityHint}` : capabilityHint
   // P2：locale 装配期定值（请求优先 / 库回退在装配器完成），循环内不再查库
   const locale = payloadLocale as AppLocale
+  // FR1/§6.2：延迟生效时构建「MCP 工具索引」区块（无延迟工具时为 null，不产生空区块）。
+  // §6.6/P7（评审 P2）：索引输入按 trim 后的 deferredToolNames 过滤——deny/allow 裁掉的
+  // 延迟工具与授权面一并剔除，不得再出现在索引里诱导模型调用被拒。
+  const mcpCatalog = deferredToolNames.size > 0 && deferredPlan.mode === 'deferred'
+    ? buildMcpToolCatalogSection(
+        deferredPlan.deferredEntries.filter((entry) => deferredToolNames.has(entry.mappedName)),
+        args.contextWindow ?? 200_000
+      )
+    : null
   const systemPrompt = buildFinalSystemPrompt({
     system: systemWithTools,
     memoryContent,
@@ -974,7 +1053,8 @@ async function runToolChatSessionInner(
     locale,
     hasImageAttachments: hasImageAttachments ?? false,
     skillCatalog: getCachedSkills(userDataDir, resolveWorkDir?.() ?? initialWorkDir),
-    contextWindow: args.contextWindow
+    contextWindow: args.contextWindow,
+    ...(mcpCatalog ? { mcpCatalog } : {})
   })
   // requestId 按一次 provider 请求尝试定义；同一轮的 header/context/usage 必须共享它。
   const messagesStripped = stripThinking(messagesForApi)
@@ -1047,6 +1127,26 @@ async function runToolChatSessionInner(
             resolveRegisteredToolName: (providerToolName) => compatToInternal.get(providerToolName) ?? providerToolName,
             afterToolResult,
             beforeToolDispatch,
+            // FR3/A 方案：延迟名随依赖传入，capabilities.define 并入 known + authorized（门禁簿记，零上下文成本）
+            deferredToolNames,
+            deferredUnsurfacedCheck,
+            // FR8：延迟维度（turn 计量；索引每轮重发，节省量按轮落日志）
+            ...(deferredToolNames.size > 0 && mcpCatalog && deferredPlan.mode === 'deferred'
+              ? {
+                  deferredDimension: {
+                    toolCount: deferredToolNames.size,
+                    indexChars: mcpCatalog.text.length,
+                    eagerEquivalentChars: deferredPlan.deferredEntries.reduce(
+                      (sum, entry) => sum + JSON.stringify(entry).length,
+                      0
+                    )
+                  }
+                }
+              : {}),
+            // FR12②：广告面层被裁名（eagerBudgetDropped）传给拒绝文案区分
+            ...(effectiveTools.eagerBudgetDropped.length > 0
+              ? { eagerBudgetDroppedNames: new Set(effectiveTools.eagerBudgetDropped.map((drop) => drop.mappedName)) }
+              : {}),
             windowId: contextWindowId,
             ...(args.maxToolLoopRounds !== undefined ? { maxToolRounds: args.maxToolLoopRounds } : {}),
             ...(args.hostHistory ? { hostHistory: args.hostHistory } : {}),
@@ -1054,6 +1154,17 @@ async function runToolChatSessionInner(
             ...(requiredUserMessage ? { requiredUserMessage } : {})
           })
           if (!handoff) throw new Error('HOSTED_TURN_HANDOFF_MISSING_RESULT')
+          // §6.3/10.2.6 校准：surface 后未调用条目占比（surfacedNames − calledDeferredNames）
+          if (surfacedNames.size > 0) {
+            const unusedSurfaced = [...surfacedNames].filter((name) => !calledDeferredNames.has(name))
+            logAgentEvent('info', 'mcp.deferred_unused_surfaced', {
+              requestId,
+              sessionId,
+              surfacedCount: surfacedNames.size,
+              calledCount: calledDeferredNames.size,
+              unusedSurfacedCount: unusedSurfaced.length
+            })
+          }
           return markHostedTurnFinalization(handoff.result, handoff.finalization)
         } catch (error) {
           if (error instanceof HostedTurnFinalizedError || error instanceof ToolLoopRoundLimitError) throw error

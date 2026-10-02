@@ -42,6 +42,8 @@ export type McpServerDraft = {
   }
   http?: { endpoint: string; allowPrivateNetwork?: boolean }
   enabledToolNames: string[]
+  /** FR6：始终全量加载（跳过延迟与索引）；undefined = 跟随全局档位。 */
+  alwaysLoad?: boolean
   createdAt?: string
   updatedAt?: string
   clearSecretKinds?: string[]
@@ -104,6 +106,7 @@ export function initMcpServerDraft(profile: McpServerProfile): McpServerDraft {
       ? { http: { endpoint: profile.http.endpoint, allowPrivateNetwork: profile.http.allowPrivateNetwork === true } }
       : {}),
     enabledToolNames: profile.enabledToolNames,
+    ...(profile.alwaysLoad !== undefined ? { alwaysLoad: profile.alwaysLoad } : {}),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt
   }
@@ -155,6 +158,7 @@ export function draftToWriteInput(draft: McpServerDraft): McpServerWriteInput {
     ...(stdio ? { stdio } : {}),
     ...(http ? { http } : {}),
     enabledToolNames: draft.enabledToolNames,
+    ...(draft.alwaysLoad !== undefined ? { alwaysLoad: draft.alwaysLoad } : {}),
     ...(draft.createdAt ? { createdAt: draft.createdAt } : {}),
     ...(draft.updatedAt ? { updatedAt: draft.updatedAt } : {}),
     ...(clearSecretKinds.length ? { clearSecretKinds } : {})
@@ -192,6 +196,7 @@ export function isMcpDraftDirty(
     (profile.http?.endpoint ?? '') !== (draft.http?.endpoint ?? '') ||
     (profile.http?.allowPrivateNetwork === true) !== (draft.http?.allowPrivateNetwork === true) ||
     !jsonEqual(profile.enabledToolNames, draft.enabledToolNames) ||
+    (profile.alwaysLoad === true) !== (draft.alwaysLoad === true) ||
     (draft.clearSecretKinds?.length ?? 0) > 0 ||
     (draft.stdio?.env.some((e) => e.clear) ?? false)
   )
