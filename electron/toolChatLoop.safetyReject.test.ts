@@ -1,7 +1,7 @@
 /**
  * P1-2 / P1-3 验收（管家链路现行伤害修复）：
  *  - 拒绝理由回传：ConfirmOutcome.reason.summary 渲染进模型可见工具结果；
- *  - 计数口径分离：连续 3 次同类安全拒绝不再中止 Turn（安全拒绝桶阈值 5，执行失败桶不变）。
+ *  - 计数口径分离：安全拒绝仍按既有阈值处理，普通执行失败交回模型且不按自然语言文本中止。
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { AppDatabase } from './database'
@@ -314,9 +314,13 @@ describe('P1 安全拒绝理由回传与计数口径分离', () => {
       adapterVersion: 'pi-ai@0.87.1', modelId: 'claude-sonnet-4-20250514'
     }, { providerId: 'safety-reject-threshold', async *stream() {
       providerCalls += 1
-      yield { type: 'tool-call', toolCallId: `toolu-safety-${providerCalls}`, toolName: 'write_file', input: { path: 'out.txt', content: 'x' } }
+      if (providerCalls <= 5) {
+        yield { type: 'tool-call', toolCallId: `toolu-safety-${providerCalls}`, toolName: 'write_file', input: { path: 'out.txt', content: 'x' } }
+      } else {
+        yield { type: 'text-delta', text: 'blocked' }
+      }
       yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
-      yield { type: 'finish', reason: 'tool-calls' }
+      yield { type: 'finish', reason: providerCalls <= 5 ? 'tool-calls' : 'stop' }
     } })
     const assembled = assembleInvocation({ ...baseArgs(makeDb()), providerRouteId } as never)
     assembled.ports.toolRevocations = undefined
@@ -332,8 +336,8 @@ describe('P1 安全拒绝理由回传与计数口径分离', () => {
       routeId: providerRouteId
     })
     const result = await runToolChatSession(assembled.invocation, assembled.ports, { onHostedTurnHandoff: handoff })
-    expect(providerCalls).toBe(5)
-    expect(result).toMatchObject({ ok: false, error: expect.stringContaining('安全拒绝已连续出现 5 次') })
+    expect(providerCalls).toBe(6)
+    expect(result.ok).toBe(true)
     expect(execute).not.toHaveBeenCalled()
   })
 
@@ -400,7 +404,7 @@ describe('P1 安全拒绝理由回传与计数口径分离', () => {
     }
   })
 
-  it('执行失败桶阈值不变：同一执行错误连续 3 次仍中止 Turn（既有行为回归）', async () => {
+  it('普通同文执行错误交回模型，由模型轮次上限而非文本重复立即终止', async () => {
     mockChannelOutcome.mockImplementation(() => ({ kind: 'approved', cause: 'user-approved' }) satisfies ConfirmOutcome)
     const { defineDirectTool, TypedToolRegistry } = await import('./tools/plannedToolRegistry')
     const providerRouteId = 'desktop-anthropic:execution-error-threshold'
@@ -441,13 +445,12 @@ describe('P1 安全拒绝理由回传与计数口径分离', () => {
       routeId: providerRouteId
     })
     const result = await runToolChatSession(assembled.invocation, assembled.ports, { onHostedTurnHandoff: handoff })
-    // 三次相同执行错误后停止；不得请求模型第四次或执行第四个 proposal。
-    expect(providerCalls).toHaveLength(3)
+    expect(providerCalls).toHaveLength(5)
     expect(execute).toHaveBeenCalledTimes(3)
-    expect(result.ok).toBe(false)
+    expect(result.ok).toBe(true)
   })
 
-  it('同一模型回合达到错误阈值后，不执行后续工具节点', async () => {
+  it('同一模型回合不同路径的错误均结算，Turn 不因第三个结果提前终止', async () => {
     mockChannelOutcome.mockImplementation(() => ({ kind: 'approved', cause: 'user-approved' }) satisfies ConfirmOutcome)
     const { defineDirectTool, TypedToolRegistry } = await import('./tools/plannedToolRegistry')
     const executions: string[] = []
@@ -470,11 +473,12 @@ describe('P1 安全拒绝理由回传与计数口径分离', () => {
       adapterVersion: 'pi-ai@0.87.1', modelId: 'claude-sonnet-4-20250514'
     }, { providerId: 'same-turn-error-threshold', async *stream() {
       providerCalls += 1
-      for (let index = 0; index < 4; index += 1) {
+      for (let index = 0; providerCalls === 1 && index < 4; index += 1) {
         yield { type: 'tool-call', toolCallId: `toolu-stop-${index}`, toolName: 'write_file', input: { path: `out-${index}.txt`, content: 'x' } }
       }
       yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
-      yield { type: 'finish', reason: 'tool-calls' }
+      if (providerCalls > 1) yield { type: 'text-delta', text: 'done' }
+      yield { type: 'finish', reason: providerCalls === 1 ? 'tool-calls' : 'stop' }
     } })
     try {
       const materials = { ...baseArgs(makeDb()), providerRouteId, toolExecutionConcurrency: 1 }
@@ -486,9 +490,9 @@ describe('P1 安全拒绝理由回传与计数口径分离', () => {
         turnId: invocation.trace.turnId, routeId: providerRouteId
       })
       const result = await runToolChatSession(invocation, ports, { onHostedTurnHandoff: handoff })
-      expect(providerCalls).toBe(1)
-      expect(executions).toHaveLength(3)
-      expect(result.ok).toBe(false)
+      expect(providerCalls).toBe(2)
+      expect(executions).toHaveLength(4)
+      expect(result.ok).toBe(true)
     } finally {
       setDefaultAgentRuntime(previousRuntime)
     }

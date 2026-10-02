@@ -14,6 +14,8 @@ export type AgentTurnPorts = Readonly<{
   prepareTool(call: CanonicalToolExecutionCall, stage: ToolPreparationStage): Promise<PermitBinding>
   /** Release host planning state when a proposal is deterministically stopped before dispatch. */
   discardPreparedTool?(call: CanonicalToolExecutionCall, reason: string): void | Promise<void>
+  /** Pure dispatch admission. Rejections are committed as not-dispatched and returned to the model. */
+  beforeToolDispatch?(call: CanonicalToolExecutionCall, context: Readonly<{ modelTurn: number; toolCallIndex: number; responseToolCallCount: number }>): Promise<Readonly<{ kind: 'dispatch' }> | Readonly<{ kind: 'reject'; reasonCode: string; message: string }>> | Readonly<{ kind: 'dispatch' }> | Readonly<{ kind: 'reject'; reasonCode: string; message: string }>
   /** Persist actual provider usage once, including complete responses discarded during recovery. */
   recordProviderAttemptUsage?(input: Record<string, unknown>): void | Promise<void>
   /** Recover one provider attempt that failed before an assistant response was accepted. */
@@ -45,7 +47,7 @@ export type AgentTurnPorts = Readonly<{
   isApprovalCandidate?(call: CanonicalToolExecutionCall): boolean
   sessionLedgerForToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult): Promise<Record<string, unknown>> | Record<string, unknown>
   /** Host product policy after a tool result is durably committed and before the next model request. */
-  afterToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult, source?: Readonly<{ kind: 'execution' | 'safety-rejection'; reasonCode?: string }>): void | Promise<void>
+  afterToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult, source?: Readonly<{ kind: 'execution' | 'safety-rejection'; reasonCode?: string; modelTurn?: number }>): void | Promise<void>
   /** Compact or otherwise recover a request before its canonical request event and provider dispatch. */
   preflightModelRequest?(input: Readonly<{ invocationId: string; modelTurn: number; windowId?: string; request: PreparedModelCall['request']; messages: readonly CanonicalTurnMessage[]; requestProjection?: unknown; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): Promise<Readonly<{ messages: readonly CanonicalTurnMessage[]; windowId?: string; historyPayload?: Record<string, unknown>; commitProjection?(): void | Promise<void> } | { rejected: 'OVER_BUDGET' }> | void>
   sessionLedgerForNotDispatched?(call: CanonicalToolExecutionCall, reason: string, result: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>
@@ -261,6 +263,7 @@ export type RunAgentTurnInput = {
   safetyGate: SafetyGate
   prepareTool(call: CanonicalToolExecutionCall, stage: ToolPreparationStage): Promise<PermitBinding>
   discardPreparedTool?(call: CanonicalToolExecutionCall, reason: string): void | Promise<void>
+  beforeToolDispatch?(call: CanonicalToolExecutionCall, context: Readonly<{ modelTurn: number; toolCallIndex: number; responseToolCallCount: number }>): ReturnType<NonNullable<AgentTurnPorts['beforeToolDispatch']>>
   recordProviderAttemptUsage?(input: Record<string, unknown>): void | Promise<void>
   confirmation?: ConfirmationPort
   /** Only the SDK's permit-bound factory can produce this port; host resolver must use its private prepared record. */
@@ -282,7 +285,7 @@ export type RunAgentTurnInput = {
   toolResourceKeys?(call: CanonicalToolExecutionCall): readonly string[] | undefined
   isApprovalCandidate?(call: CanonicalToolExecutionCall): boolean
   sessionLedgerForToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult): Promise<Record<string, unknown>> | Record<string, unknown>
-  afterToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult, source?: Readonly<{ kind: 'execution' | 'safety-rejection'; reasonCode?: string }>): void | Promise<void>
+  afterToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult, source?: Readonly<{ kind: 'execution' | 'safety-rejection'; reasonCode?: string; modelTurn?: number }>): void | Promise<void>
   sessionLedgerForNotDispatched?(call: CanonicalToolExecutionCall, reason: string, result: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>
   sessionLedgerForModelResponse?(message: CanonicalTurnMessage, modelTurn: number, attempt: number, committedSessionLedger?: unknown): Promise<Record<string, unknown>> | Record<string, unknown>
   sessionLedgerForAttemptUsage?(attempt: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>
@@ -1194,6 +1197,11 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       let releaseCandidate: (() => void) | undefined
       let approvalPermitHeld = false
       try {
+      const dispatchAdmission = await input.beforeToolDispatch?.(executionCall, { modelTurn: modelTurns, toolCallIndex: toolCalls.findIndex(({ toolCallId }) => toolCallId === tool.toolCallId), responseToolCallCount: toolCalls.length })
+      if (dispatchAdmission?.kind === 'reject') {
+        await markNotDispatched(tool, dispatchAdmission.reasonCode, dispatchAdmission.message)
+        return { role: 'tool', toolCallId: tool.toolCallId, content: dispatchAdmission.message, isError: true } satisfies CanonicalTurnMessage
+      }
       releaseCandidate = approvalCandidate ? await candidateSlots.acquire(invocationId, input.request.signal) : undefined
       const initialBinding = await input.prepareTool(executionCall, { kind: 'initial' })
       await projectTool(input.observer, 'tool-started', () => input.observer?.onToolStarted?.(executionCall))
@@ -1383,7 +1391,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         isError: committedPayload ? committedPayload.isError ?? committedPayload.success === false : executionResult.isError ?? false
       }
       await projectTool(input.observer, 'tool-finished', () => input.observer?.onToolFinished?.(executionCall, executionResult))
-      await input.afterToolResult?.(executionCall, executionResult, { kind: 'execution' })
+      try { await input.afterToolResult?.(executionCall, executionResult, { kind: 'execution', modelTurn: modelTurns }) }
+      catch (error) { await observe(input.observer, 'tool-finished', () => input.observer?.onObservationError?.(error, 'tool-finished')) }
       return canonicalResult
       } finally {
         if (approvalPermitHeld) approvalSlots.release()
@@ -1391,7 +1400,6 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       }
     })
     const deniedToolResults = new Map<string, CanonicalTurnMessage>()
-    let stopAfterDenied: unknown
     if (input.returnDeniedToolsToModel) {
       for (const [index, settled] of settledTools.entries()) {
         if (!settled) continue
@@ -1404,7 +1412,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         deniedToolResults.set(matchingTool.toolCallId, { role: 'tool', toolCallId: matchingTool.toolCallId, content, isError: true })
         await projectTool(input.observer, 'tool-finished', () => input.observer?.onToolFinished?.(executionCall, result))
         try { await input.afterToolResult?.(executionCall, result, { kind: 'safety-rejection', reasonCode: settled.reason.reasonCode }) }
-        catch (error) { stopAfterDenied ??= error }
+        catch (error) { await observe(input.observer, 'tool-finished', () => input.observer?.onObservationError?.(error, 'tool-finished')) }
       }
     }
     const rejectedTools = settledTools.filter((settled, index): settled is PromiseRejectedResult => settled.status === 'rejected' &&
@@ -1413,13 +1421,13 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       ?? rejectedTools.find(({ reason }) => reason instanceof AgentTurnHistoryAppendError && reason.kinds.includes('tool-call-finished'))
       ?? rejectedTools.find(({ reason }) => reason instanceof AgentTurnCancelledError || reason instanceof AgentTurnTimedOutError)
       ?? rejectedTools[0]
-    if (rejectedTool || stopAfterDenied) {
+    if (rejectedTool) {
       for (const tool of toolCalls) {
         if (toolDispatchStates.get(tool.toolCallId) === 'pending') {
           await markNotDispatched(tool, input.request.signal?.aborted ? 'REQUEST_CANCELLED' : 'TURN_STOPPED_BEFORE_DISPATCH')
         }
       }
-      throw rejectedTool?.reason ?? stopAfterDenied
+      throw rejectedTool.reason
     }
     // Keep transcript order tied to the provider's tool-call order, independent of dispatch completion order.
     messages.push(...settledTools.map((settled) => settled.status === 'fulfilled'

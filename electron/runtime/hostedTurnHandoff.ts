@@ -28,7 +28,7 @@ function hostedFailureOutcome(terminal: Parameters<typeof decodeTerminalOutcome>
 }
 
 type HostedRuntimeFactory = Readonly<{
-  createHostedTurnRuntime(input: Readonly<{ confirmationAdapter?: unknown; authorizedToolNames: ReadonlySet<string>; resolveRegisteredToolName?: (providerToolName: string) => string; hostHistory?: HistoryPort; afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']; recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']; refreshExecutionContext?(call: { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }, stage: Extract<import('../../packages/agent-sdk/src/turn').ToolPreparationStage, { kind: 'recheck' }>, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>> }>): Promise<Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>> | Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>
+  createHostedTurnRuntime(input: Readonly<{ confirmationAdapter?: unknown; authorizedToolNames: ReadonlySet<string>; resolveRegisteredToolName?: (providerToolName: string) => string; hostHistory?: HistoryPort; afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']; beforeToolDispatch?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']; recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']; refreshExecutionContext?(call: { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }, stage: Extract<import('../../packages/agent-sdk/src/turn').ToolPreparationStage, { kind: 'recheck' }>, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>> }>): Promise<Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>> | Readonly<{ host: Parameters<typeof runHostedAgentTurn>[0]['host']; dispose(): Promise<void> }>
 }>
 
 type HandoffInput = Readonly<{
@@ -38,6 +38,7 @@ type HandoffInput = Readonly<{
   windowId?: string
   hostHistory?: HistoryPort
   afterToolResult?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
+  beforeToolDispatch?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']
   initialResponse?: HostCommittedModelResponse
   currentUserMessageId?: string
   requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>
@@ -271,6 +272,7 @@ export function createHostedTurnHandoff(input: {
       resolveRegisteredToolName: handoff.resolveRegisteredToolName,
       hostHistory: handoff.hostHistory ?? input.hostHistory ?? historyFacade,
       ...(handoff.afterToolResult ? { afterToolResult: handoff.afterToolResult } : {}),
+      ...(handoff.beforeToolDispatch ? { beforeToolDispatch: handoff.beforeToolDispatch } : {}),
       ...(input.maxToolRounds !== undefined ? { maxToolRounds: input.maxToolRounds } : {}),
       ...(input.refreshExecutionContext ? { refreshExecutionContext: input.refreshExecutionContext } : {}),
       ...(input.recoverProviderAttempt ? { recoverProviderAttempt: input.recoverProviderAttempt } : {})

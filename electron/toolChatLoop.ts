@@ -172,7 +172,7 @@ import {
 } from './toolWriteConflict'
 import { computeEffectiveTools, authorizeToolCall } from './effectiveTools'
 import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from './toolRevocationRegistry'
-import { buildCommandRetryKey, shouldStopToolRetry } from './toolErrorRetryPolicy'
+import { buildCommandRetryKey, normalizeFileToolIdentity, normalizeToolErrorClass, SemanticToolRetryTracker } from './toolErrorRetryPolicy'
 import type { ContextMeter } from '../src/shared/contextMeterService'
 import { buildRequestHeaderPayload } from '../src/shared/requestContext'
 import { sanitizeThinkingForReplay } from '../src/shared/sanitizeThinkingForReplay'
@@ -229,6 +229,7 @@ export type RunToolChatSessionArgs = {
     maxToolRounds?: number
     hostHistory?: import('../packages/agent-sdk/src/history').HistoryPort
     afterToolResult?: import('../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']
+    beforeToolDispatch?: import('../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']
     initialResponse?: HostCommittedModelResponse
     currentUserMessageId?: string
     requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>
@@ -769,22 +770,34 @@ async function runToolChatSessionInner(
   // 上游拒绝 output_config 时的去强度降级与进程内记忆见 effortFallback（§7.4）。
   const { thinking, outputConfig: requestedOutputConfig } = buildThinkingWireParams(reasoningEffort ?? 'off')
   const maxConsecutiveToolErrors = 3
-  const maxConsecutiveSafetyRejects = 5
-  let lastRepeatedResultKey: string | undefined
-  let repeatedResultCount = 0
-  const noteRepeatedResult = (bucket: 'execution' | 'safety', toolName: string, message: string, identity?: string) => {
-    const key = `${bucket}\0${toolName}\0${message}\0${identity ?? ''}`
-    repeatedResultCount = key === lastRepeatedResultKey ? repeatedResultCount + 1 : 1
-    lastRepeatedResultKey = key
-    return repeatedResultCount
-  }
+  const retryTracker = new SemanticToolRetryTracker(maxConsecutiveToolErrors)
   const afterToolResult: NonNullable<import('../packages/agent-sdk/src/turn').AgentTurnPorts['afterToolResult']> = async (call, result, source) => {
     const output = result.output && typeof result.output === 'object' && !Array.isArray(result.output)
       ? result.output as Record<string, unknown>
       : undefined
     const errorText = typeof output?.error === 'string'
       ? output.error
+      : typeof output?.errorCode === 'string' ? output.errorCode
       : typeof result.output === 'string' ? result.output : '执行失败'
+    const semanticIdentity = ['read_file', 'edit_file', 'write_file'].includes(call.toolName)
+      ? normalizeFileToolIdentity(call.toolName, call.input)
+      : call.toolName === 'run_shell'
+        ? buildCommandRetryKey({ toolName: call.toolName, errorCode: 'SEMANTIC_CALL', command: typeof call.input.command === 'string' ? call.input.command : '', cwd: typeof call.input.cwd === 'string' ? call.input.cwd : '' })
+        : `${call.toolName}:${createHash('sha256').update(JSON.stringify(call.input)).digest('hex')}`
+    const resultIsError = result.isError ?? output?.success === false
+    logAgentEvent(resultIsError ? 'warn' : 'info', 'tool.result', {
+      requestId: args.requestId,
+      sessionId: args.sessionId,
+      toolUseId: call.toolCallId,
+      toolName: call.toolName,
+      modelTurn: source?.modelTurn,
+      semanticCallSha256: createHash('sha256').update(semanticIdentity).digest('hex'),
+      dispatched: source?.kind !== 'safety-rejection',
+      resultCommitted: true,
+      success: !resultIsError,
+      ...(resultIsError ? { errorClass: normalizeToolErrorClass(errorText, output) } : {}),
+      ...(source?.reasonCode ? { reasonCode: source.reasonCode } : {})
+    })
     const processData = output?.data && typeof output.data === 'object' && !Array.isArray(output.data)
       ? output.data as Record<string, unknown>
       : undefined
@@ -810,38 +823,24 @@ async function runToolChatSessionInner(
         outputRedacted: Boolean(processData && ('stdoutRedaction' in processData || 'stderrRedaction' in processData))
       })
     }
-    if (source?.kind === 'safety-rejection') {
-      if (noteRepeatedResult('safety', call.toolName, errorText) >= maxConsecutiveSafetyRejects) {
-        throw new ToolLoopRoundLimitError(args.maxToolLoopRounds ?? maxConsecutiveSafetyRejects,
-          `安全拒绝已连续出现 ${maxConsecutiveSafetyRejects} 次，已停止：${errorText}`)
-      }
+    if (source?.kind === 'safety-rejection') return
+    if (resultIsError) {
+      retryTracker.recordFailure({ response: source?.modelTurn ?? 1, toolCallId: call.toolCallId, identity: semanticIdentity, errorClass: normalizeToolErrorClass(errorText, output) })
       return
     }
-    if (result.isError ?? output?.success === false) {
-      const data = output?.data
-      const processData = data && typeof data === 'object' && !Array.isArray(data) ? data as Record<string, unknown> : undefined
-      const retryIdentity = call.toolName === 'run_shell' && processData
-        ? buildCommandRetryKey({
-          toolName: call.toolName,
-          errorCode: errorText,
-          status: typeof processData.status === 'string' ? processData.status : undefined,
-          exitCode: typeof processData.exitCode === 'number' || processData.exitCode === null ? processData.exitCode : undefined,
-          signal: typeof processData.signal === 'string' ? processData.signal : undefined,
-          shellProfile: typeof processData.shell === 'string' ? processData.shell : undefined,
-          planDigest: typeof processData.planDigest === 'string' ? processData.planDigest : undefined
-        })
-        : undefined
-      const repeated = noteRepeatedResult('execution', call.toolName, errorText, retryIdentity) >= maxConsecutiveToolErrors
-      if (shouldStopToolRetry(call.toolName, errorText, data, repeated)) {
-        throw new ToolLoopRoundLimitError(args.maxToolLoopRounds ?? maxConsecutiveToolErrors,
-          `同一工具错误已连续出现 ${maxConsecutiveToolErrors} 次，已停止：${errorText}`)
-      }
-      return
-    }
-    if (lastRepeatedResultKey?.includes(`\0${call.toolName}\0`)) {
-      lastRepeatedResultKey = undefined
-      repeatedResultCount = 0
-    }
+    retryTracker.clearIdentity(semanticIdentity)
+  }
+  const beforeToolDispatch: NonNullable<import('../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']> = (call, context) => {
+    const output = call.input
+    const semanticIdentity = ['read_file', 'edit_file', 'write_file'].includes(call.toolName)
+      ? normalizeFileToolIdentity(call.toolName, output)
+      : call.toolName === 'run_shell'
+        ? buildCommandRetryKey({ toolName: call.toolName, errorCode: 'SEMANTIC_CALL', command: typeof output.command === 'string' ? output.command : '', cwd: typeof output.cwd === 'string' ? output.cwd : '' })
+        : `${call.toolName}:${createHash('sha256').update(JSON.stringify(output)).digest('hex')}`
+    const priorResponseFailures = retryTracker.errorClasses(semanticIdentity).some((errorClass) =>
+      retryTracker.observe({ response: context.modelTurn, toolCallId: call.toolCallId, identity: semanticIdentity, errorClass }))
+    if (!priorResponseFailures) return { kind: 'dispatch' }
+    return { kind: 'reject', reasonCode: 'REPEATED_SEMANTIC_CALL', message: 'The same semantic tool operation has failed repeatedly. Do not execute it again; explain the blocker or ask the user for guidance.' }
   }
   let effortOutputConfig = requestedOutputConfig
   let effortRetryUsed = false
@@ -1047,6 +1046,7 @@ async function runToolChatSessionInner(
             authorizedToolNames,
             resolveRegisteredToolName: (providerToolName) => compatToInternal.get(providerToolName) ?? providerToolName,
             afterToolResult,
+            beforeToolDispatch,
             windowId: contextWindowId,
             ...(args.maxToolLoopRounds !== undefined ? { maxToolRounds: args.maxToolLoopRounds } : {}),
             ...(args.hostHistory ? { hostHistory: args.hostHistory } : {}),
