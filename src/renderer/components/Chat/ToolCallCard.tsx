@@ -32,6 +32,7 @@ const READ_CONFIRM_TOOLS = new Set(['grep', 'read_file', 'list_directory', 'read
 import { ToolRowIcon } from './ToolRowIcon'
 import { WriteConfirmCard } from './WriteConfirmCard'
 import { ReadConfirmCard } from './ReadConfirmCard'
+import { GenericConfirmCard } from './GenericConfirmCard'
 import { BrowserConfirmCard } from './BrowserConfirmCard'
 import { McpConfirmCard } from './McpConfirmCard'
 import { ToolkitConfirmCard } from './ToolkitConfirmCard'
@@ -625,6 +626,18 @@ export const ToolCallCard = memo(function ToolCallCard({
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         {fallbackBannerNode}
         <LarkCliConfirmCard record={record} onConfirm={onConfirm} />
+        {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
+      </div>
+    )
+  }
+
+  // 通用兜底：任何 confirming 工具都有批准入口（strict/custom 套餐可对任意工具设 ask，
+  // 白名单枚举制的结构性补位——toolkit.find/tool_search/管理类工具等无专用卡也不挂起）
+  if (record.status === 'confirming' && onConfirm && confirmationReady !== false) {
+    return (
+      <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        {fallbackBannerNode}
+        <GenericConfirmCard record={record} onConfirm={onConfirm} />
         {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>
     )

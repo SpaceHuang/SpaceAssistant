@@ -180,6 +180,10 @@
       "writeFileFallback": "写入文件",
       "editFileFallback": "编辑文件"
     },
+        "generic": {
+      "allow": "允许执行",
+      "deny": "拒绝执行"
+    },
     "read": {
       "allow": "允许读取",
       "deny": "拒绝读取",
