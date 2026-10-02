@@ -4,8 +4,50 @@ import { loadAuthoritativeTurnContext, normalizeAndValidateClaudeMessagesWithCon
 import { buildToolChatMessagesFromSource } from './chatMessageBuild'
 import { selectRecoveryMessages } from '../src/shared/overflowRecovery'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
+import { appendSqliteAgentHistoryBatchInTransaction } from './database/agentHistoryStorage'
+import { toCanonicalModelMessages } from './runtime/canonicalHistory'
 
 describe('loadAuthoritativeTurnContext', () => {
+  it('continuation turn 从目标 Invocation 的 checkpoint transcript 取上下文，并校验 continuation 引用', async () => {
+    const db = openDatabase(':memory:')
+    const session = createSession(db, { name: 'continuation-authoritative-context' })
+    const user = appendMessage(db, { id: 'continuation-user', sessionId: session.id, role: 'user', content: 'original request', timestamp: 1, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'continuation-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    const config = {
+      lane: 'desktop' as const, model: 'claude-test', continuationSource: {
+        continuationId: 'continuation-1', invocationId: 'source-invocation', sourceTurnId: 'source-turn', checkpointSequence: 4, checkpointSha256: 'a'.repeat(64)
+      }
+    }
+    createPersistedTurn(db, { turnId: 'target-turn', requestId: 'target-invocation', sessionId: session.id,
+      userMessageId: user.message.id, assistantMessageId: assistant.message.id, contextBoundarySequence: user.sequence - 1,
+      state: 'prepared', startToken: 'target-token', executionConfig: config })
+    const conn = getDbConnection(db)
+    const transcript = toCanonicalModelMessages([
+      { role: 'user', content: 'checkpoint user history' },
+      { role: 'assistant', content: 'checkpoint response before failure' }
+    ])
+    appendSqliteAgentHistoryBatchInTransaction(conn, [{
+      invocationId: 'target-invocation', turnId: 'target-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'continuation-context', idempotencyKey: 'continuation-context', kind: 'invocation-context-committed',
+      payload: { messages: transcript, continuationSource: { continuationId: 'continuation-1', invocationId: 'source-invocation', turnId: 'source-turn', checkpointSequence: 4, checkpointSha256: 'a'.repeat(64) }, requiredUserMessage: { id: user.message.id, message: transcript[0] } }
+    }], 0, { schemaVersion: 1, sessionId: session.id })
+
+    const context = loadAuthoritativeTurnContext(db, 'target-turn', session.id, 'target-invocation', 'target-token')
+    expect(context.continuationTranscript).toEqual([
+      { role: 'user', content: 'checkpoint user history', id: 'continuation-user' },
+      { role: 'assistant', content: 'checkpoint response before failure' }
+    ])
+    conn.prepare("UPDATE agent_history_events SET payload_json = json_set(payload_json, '$.continuationSource.checkpointSha256', ?) WHERE invocation_id = ?")
+      .run('b'.repeat(64), 'target-invocation')
+    expect(() => loadAuthoritativeTurnContext(db, 'target-turn', session.id, 'target-invocation', 'target-token'))
+      .toThrow('TURN_CONTINUATION_HISTORY_MISMATCH')
+    conn.prepare("UPDATE agent_history_events SET payload_json = json_set(json_set(payload_json, '$.continuationSource.checkpointSha256', ?), '$.continuationSource.turnId', ?) WHERE invocation_id = ?")
+      .run('a'.repeat(64), 'another-source-turn', 'target-invocation')
+    expect(() => loadAuthoritativeTurnContext(db, 'target-turn', session.id, 'target-invocation', 'target-token'))
+      .toThrow('TURN_CONTINUATION_HISTORY_MISMATCH')
+    db.close()
+  })
+
   it('超窗恢复会从真实归一化的混合 user 中移除历史 tool_result 并保留当前问题', () => {
     const normalized = normalizeAndValidateClaudeMessagesWithContentBlocks([
       { id: 'old-user', role: 'user', content: 'old question' },

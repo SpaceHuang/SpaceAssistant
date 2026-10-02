@@ -1281,6 +1281,7 @@ export type RetryContextTarget = {
   failedAssistant: { message: Message; sequence: number }
   currentUser: { message: Message; sequence: number }
   excludeMessageIds: string[]
+  sourceInvocationId?: string
 }
 
 export function resolveRetryContext(
@@ -1295,6 +1296,8 @@ export function resolveRetryContext(
   if (!failedRow) return null
   const failedMessage = rowToStoredMessage(failedRow)
   if (failedMessage.role !== 'assistant' || failedMessage.status !== 'failed') return null
+  const sourceTurn = conn.prepare('SELECT request_id AS requestId FROM turns WHERE session_id=? AND assistant_message_id=?')
+    .get(sessionId, failedAssistantMessageId) as { requestId: string } | undefined
 
   const excludeFailedAttempts = (userMessageId: string): string[] => {
     const rows = conn.prepare(`
@@ -1325,7 +1328,8 @@ export function resolveRetryContext(
       return {
         failedAssistant: { message: failedMessage, sequence: failedRow.sequence },
         currentUser: { message: linkedMessage, sequence: linkedSequence },
-        excludeMessageIds: excludeFailedAttempts(linkedMessage.id)
+        excludeMessageIds: excludeFailedAttempts(linkedMessage.id),
+        ...(sourceTurn ? { sourceInvocationId: sourceTurn.requestId } : {})
       }
     }
   }
@@ -1346,7 +1350,8 @@ export function resolveRetryContext(
     return {
       failedAssistant: { message: failedMessage, sequence: failedRow.sequence },
       currentUser: { message, sequence: row.sequence },
-      excludeMessageIds: excludeFailedAttempts(message.id)
+      excludeMessageIds: excludeFailedAttempts(message.id),
+      ...(sourceTurn ? { sourceInvocationId: sourceTurn.requestId } : {})
     }
   }
   return null

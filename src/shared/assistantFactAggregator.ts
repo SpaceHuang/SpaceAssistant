@@ -3,6 +3,21 @@ import { appendProgressOutputRaw } from './terminalScrollback'
 
 export type TurnOutcome = 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'recovered' | 'commit-uncertain'
 
+export type ContinuationSafetySnapshot = Readonly<{
+  workDirProfileId: string
+  workDirSha256: string
+  authorizationVersion: string
+  toolSetSha256: string
+}>
+
+export type ContinuationSource = Readonly<{
+  continuationId: string
+  invocationId: string
+  sourceTurnId: string
+  checkpointSequence: number
+  checkpointSha256: string
+}>
+
 /** prepare 时冻结的非敏感执行快照；API key、授权凭据和工具 permit 禁止进入该结构。 */
 export type TurnExecutionConfig = {
   lane?: 'desktop' | 'feishu' | 'wechat' | 'automation'
@@ -25,6 +40,8 @@ export type TurnExecutionConfig = {
   locale?: string
   projectMemoryEnabled?: boolean
   effectiveModelForUsage?: string
+  continuationSafetySnapshot?: ContinuationSafetySnapshot
+  continuationSource?: ContinuationSource
 }
 
 export type TurnIntent =

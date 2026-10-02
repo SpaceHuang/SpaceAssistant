@@ -128,6 +128,28 @@ describe('TurnRuntime', () => {
     expect(runtime.consumeForRequest('prepared-request', { type: 'source-completed' }).assistantMessage.status).toBe('completed')
   })
 
+  it('continuation turn 进入统一 runtime projection 生命周期并使用预定身份', async () => {
+    const onEvent = vi.fn()
+    const runtime = new TurnRuntime({ storage: storage(), deps: { now: () => 1, id: () => 'generated' }, onEvent })
+    const turn = runtime.prepareContinuation({
+      requestId: 'target-invocation', sessionId: 's1', userMessageId: 'u1', turnId: 'target-turn', startToken: 'target-token',
+      config: {
+        continuationSource: { continuationId: 'continuation-1', invocationId: 'source-invocation', sourceTurnId: 'source-turn', checkpointSequence: 9, checkpointSha256: 'a'.repeat(64) }
+      }
+    })
+    await runtime.executeWithSource(turn.turnId, turn.startToken, async () => {
+      runtime.bindRequest(turn.requestId, turn.turnId)
+      runtime.consumeForRequest(turn.requestId, { type: 'content-delta', text: 'continued' }, turn.turnId)
+      runtime.consumeForRequest(turn.requestId, { type: 'source-completed' }, turn.turnId)
+      return { outcome: 'completed' as const }
+    })
+
+    expect(turn).toMatchObject({ requestId: 'target-invocation', turnId: 'target-turn', startToken: 'target-token' })
+    expect(onEvent.mock.calls.map(([, event]) => event.type)).toEqual(['content-delta', 'source-completed'])
+    expect(runtime.listActive('s1')).toEqual([])
+    expect(runtime.terminal('target-turn')?.outcome).toBe('completed')
+  })
+
   it('允许每次请求注入已装配的 model source，但仍复用同一 Coordinator', async () => {
     const runtime = new TurnRuntime({ storage: storage(), deps: { now: () => 1, id: () => 'id' }, source: vi.fn() as never })
     const turn = runtime.prepare({ mode: 'create-user', requestId: 'request-source', sessionId: 's1', input: { text: 'hi' }, config: {} })

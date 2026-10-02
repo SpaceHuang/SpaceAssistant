@@ -41,7 +41,7 @@ import { makeRecordTrustToCache } from './ipcShared'
 import { normalizeSessionSkillsState } from '../../src/shared/domainTypes'
 import { normalizeTurnExecutionConfig } from '../../src/shared/turnCoordinator'
 import { notifyFileTreeChanged } from '../fileTreeSyncNotify'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { readActiveLlmServiceId, readLlmServices, resolveFastPreferredModelName, resolveLanguagePreferredModelName, resolveLlmCredentialsForModel } from '../llmServiceResolver'
 import { readBrowserConfigFromDb, persistBrowserConfig } from '../browser/browserConfigDb'
 import { recordUserAnswerFromMemoryTiers, clearSystemManagedCacheEntry, readSystemManagedCacheEntry, restoreSystemManagedCacheEntry } from '../confirmation/decisionCacheWriter'
@@ -58,6 +58,107 @@ import { getCallAdmissionGate } from '../runtime/callAdmissionGate'
 import { cancelClaudeAdmission } from '../claudeStreamHandlers'
 import { reserveConfirmationSubmission, commitConfirmationSubmissionWithWork, markConfirmationSubmissionReconciling, reconcileConfirmationSubmission, reconcileConfirmationSubmissions, ConfirmationCommitRolledBackError, ConfirmationCommitUnknownError } from '../confirmation/persistentConfirmationCommit'
 import { forgetMcpSessionTrust, isMcpSessionTrusted, rememberMcpSessionTrust } from '../mcp/mcpSessionTrust'
+import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
+import { startAgentContinuation, setAgentContinuationStatusForTurn } from '../runtime/agentContinuation'
+import { createContinuationSafetySnapshot } from '../runtime/continuationSafetySnapshot'
+import { resolveWorkDirForSession } from '../workDirManager'
+import { exposedToolNamesForLane } from '../toolsConfigRuntime'
+import { BUILTIN_TOOL_DEFINITIONS } from '../../src/shared/builtinToolDefinitions'
+import { buildSnapshotFromDb } from '../mcp/mcpToolRegistry'
+import { loadEffectivePolicyRules, readPolicyPackages, resolveEffectivePolicyRulesWithOrigin } from '../confirmation/policyRulesRuntime'
+
+export function resolveContinuationSafetySnapshot(ctx: AppIpcContext, sessionId: string, lane: 'desktop' | 'wechat' | 'feishu' | 'automation') {
+  const workDir = resolveWorkDirForSession(ctx.db, sessionId,
+    () => ctx.workDirManager.listProfiles(),
+    () => ctx.workDirManager.getActiveProfileId(),
+    () => ctx.workDirManager.getActiveWorkDir())
+  if (!workDir) throw new Error('CONTINUATION_WORKDIR_UNAVAILABLE')
+  const inputs = readExposureInputsFromDb(ctx.db)
+  const rules = loadEffectivePolicyRules(ctx.db, lane)
+  const exposed = exposedToolNamesForLane(lane, ...inputs, undefined, rules)
+  const builtins = BUILTIN_TOOL_DEFINITIONS.filter((tool) => exposed.includes(tool.name))
+    .map((tool) => ({ name: tool.name, inputSchema: tool.input_schema }))
+  const mcp = buildSnapshotFromDb(ctx.db, { remoteContext: lane !== 'desktop' })
+  const mcpTools = [...mcp.entries.values()].map((tool) => ({ name: tool.mappedName, inputSchema: tool.inputSchema }))
+  const authorization = resolveEffectivePolicyRulesWithOrigin(ctx.db, lane)
+  const authorizationVersion = createHash('sha256').update(JSON.stringify({
+    effectiveRules: authorization.rules,
+    lanePackage: readPolicyPackages(ctx.db)[lane],
+    policyOrigins: authorization.origins
+  })).digest('hex')
+  return createContinuationSafetySnapshot({
+    workDirProfileId: workDir.profileId,
+    workDir: workDir.workDir,
+    authorizationVersion,
+    tools: [...builtins, ...mcpTools]
+  })
+}
+
+/** IPC-owned continuation admission. Kept separate so the safety and fixed-identity dispatch contract can be exercised end to end. */
+export async function continueAgentFromCheckpoint(input: {
+  ctx: AppIpcContext
+  turnRuntime: TurnRuntimeImpl
+  payload: { sessionId: string; sourceInvocationId: string; requestIdempotencyKey: string }
+  dispatch: (sender: null, payload: TurnExecutePayload, continuationId?: string) => unknown
+  resolveCurrentSafetySnapshot?: (sessionId: string) => ReturnType<typeof createContinuationSafetySnapshot>
+}): Promise<{ accepted: false; reason: string } | {
+  accepted: true; continuationId: string; targetInvocationId: string; targetTurnId: string; status: string
+}> {
+  const { ctx, turnRuntime, payload } = input
+  if (!payload.sessionId?.trim() || !payload.sourceInvocationId?.trim() || !payload.requestIdempotencyKey?.trim()) {
+    return { accepted: false, reason: 'CONTINUATION_IDENTITY_REQUIRED' }
+  }
+  try {
+    const sourceTurn = getTurnByRequestId(ctx.db, payload.sessionId, payload.sourceInvocationId)
+    const frozenSnapshot = sourceTurn?.executionConfig?.continuationSafetySnapshot
+    if (!sourceTurn || sourceTurn.executionConfig?.lane !== 'desktop' || !frozenSnapshot) {
+      return { accepted: false, reason: 'CONTINUATION_ORIGINAL_SAFETY_SNAPSHOT_MISSING' }
+    }
+    if (!sourceTurn.userMessageId || !ctx.executeTurn) {
+      return { accepted: false, reason: !sourceTurn.userMessageId ? 'TURN_USER_MESSAGE_MISSING' : 'TURN_EXECUTOR_NOT_CONFIGURED' }
+    }
+    const currentSnapshot = (input.resolveCurrentSafetySnapshot ?? ((sessionId) => resolveContinuationSafetySnapshot(ctx, sessionId, 'desktop')))(payload.sessionId)
+    if (JSON.stringify(currentSnapshot) !== JSON.stringify(frozenSnapshot)) {
+      return { accepted: false, reason: 'CONTINUATION_SAFETY_SNAPSHOT_CHANGED' }
+    }
+    const history = new SqliteAgentHistory(getDbConnection(ctx.db), 1, Date.now, payload.sessionId)
+    const snapshot = history.readSync(payload.sourceInvocationId)
+    if (snapshot.invocationId !== payload.sourceInvocationId) return { accepted: false, reason: 'CONTINUATION_SOURCE_IDENTITY_MISMATCH' }
+    const started = await startAgentContinuation({
+      conn: getDbConnection(ctx.db), snapshot, sessionId: payload.sessionId, userMessageId: sourceTurn.userMessageId,
+      requestIdempotencyKey: payload.requestIdempotencyKey, createdBy: payload.sessionId,
+      frozenConfig: currentSnapshot,
+      executionConfig: { ...sourceTurn.executionConfig, continuationSafetySnapshot: currentSnapshot },
+      runtime: turnRuntime
+    })
+    if (started.started && started.turn) {
+      void input.dispatch(null, {
+        requestId: started.turn.requestId,
+        turnId: started.turn.turnId,
+        turnStartToken: started.turn.startToken,
+        sessionId: started.turn.sessionId
+      }, started.continuation.continuationId)
+    }
+    return {
+      accepted: true,
+      continuationId: started.continuation.continuationId,
+      targetInvocationId: started.continuation.targetInvocationId,
+      targetTurnId: started.continuation.targetTurnId,
+      status: started.continuation.status
+    }
+  } catch (error) {
+    return { accepted: false, reason: error instanceof Error ? error.message : 'CONTINUATION_UNAVAILABLE' }
+  }
+}
+
+export function registerAgentContinuationIpc(
+  ipcMain: Pick<IpcMain, 'handle'>,
+  dependencies: Omit<Parameters<typeof continueAgentFromCheckpoint>[0], 'payload'>
+): void {
+  ipcMain.handle('chat:continue-from-checkpoint', (_event, payload: { sessionId: string; sourceInvocationId: string; requestIdempotencyKey: string }) =>
+    continueAgentFromCheckpoint({ ...dependencies, payload })
+  )
+}
 
 /** 将持久 receipt 对账结果回接到仍在主进程等待的桌面确认项。 */
 function settleReconciledDesktopConfirm(result: { submissionId: string; outcome: 'committed' | 'rolled_back' }): void {
@@ -479,6 +580,11 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       resolveRetryContext(ctx.db, payload.sessionId, payload.failedAssistantMessageId)
   )
 
+  registerAgentContinuationIpc(ipcMain, {
+    ctx, turnRuntime,
+    dispatch: (sender, executionPayload, continuationId) => executeTurnInternal(sender, executionPayload, continuationId)
+  })
+
   ipcMain.handle(
     'chat:get-message-sequence',
     (_e, payload: { sessionId: string; messageId: string }) =>
@@ -565,7 +671,12 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
           const schema = readWikiSchema(ctx.getWorkDir(), readWikiConfig(ctx.db))?.trim()
           if (schema) system = system ? `${system}\n\n## Wiki Schema（项目规范）\n\n${schema}` : `## Wiki Schema（项目规范）\n\n${schema}`
         }
-        const config = { ...baseConfig, ...(system ? { system } : {}), ...(skillFragments.length ? { skillFragments } : {}) }
+        const config = {
+          ...baseConfig,
+          continuationSafetySnapshot: resolveContinuationSafetySnapshot(ctx, intent.sessionId, 'desktop'),
+          ...(system ? { system } : {}),
+          ...(skillFragments.length ? { skillFragments } : {})
+        }
         const intentFingerprint = JSON.stringify({
           mode: intent.mode,
           userMessageId: intent.mode === 'reuse-user' ? intent.userMessageId : undefined,
@@ -613,7 +724,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   // Phase 1b：execute 编排抽为内部函数——chat:execute-turn 与出站受理端口共用。
   // sender 为 null 表示主进程内部驱动源（排水器/受理端口）发起，事件出口不依赖 sender。
 
-  const executeTurnInternal = async (sender: Electron.WebContents | null, payload: TurnExecutePayload) => {
+  const executeTurnInternal = async (sender: Electron.WebContents | null, payload: TurnExecutePayload, continuationId?: string) => {
     if (!ctx.executeTurn) throw new Error('TURN_EXECUTOR_NOT_CONFIGURED')
     if (!payload || typeof payload !== 'object' || typeof payload.turnId !== 'string' || typeof payload.turnStartToken !== 'string') {
       throw new Error('INVALID_TURN_EXECUTION_PAYLOAD')
@@ -627,8 +738,16 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       try {
         if (configuring) await configuring
         await ctx.executeTurn!(sender, executionPayload)
+        if (continuationId) {
+          const persistedAfterExecution = getPersistedTurn(ctx.db, payload.turnId)
+          const status = persistedAfterExecution?.outcome === 'completed' ? 'completed'
+            : persistedAfterExecution?.outcome === 'cancelled' || persistedAfterExecution?.outcome === 'timed-out' ? 'cancelled'
+              : persistedAfterExecution?.outcome === 'commit-uncertain' ? 'unknown_side_effect' : 'failed'
+          setAgentContinuationStatusForTurn(getDbConnection(ctx.db), payload.turnId, status)
+        }
       } catch {
         // 配置失败/取消已由 configuring 路径写入 terminal，不能把它伪装成 legacy config 错误。
+        if (continuationId) setAgentContinuationStatusForTurn(getDbConnection(ctx.db), payload.turnId, 'failed')
       }
     })()
     return { ok: true as const, accepted: true as const, turnId: payload.turnId }

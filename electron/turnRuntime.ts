@@ -31,6 +31,10 @@ export class TurnRuntime {
 
   prepare(intent: TurnIntent): TurnStarted { return this.coordinator.prepare(intent) }
 
+  prepareContinuation(input: Parameters<TurnCoordinator['prepareContinuation']>[0]): TurnStarted {
+    return this.coordinator.prepareContinuation(input)
+  }
+
   bindRequest(requestId: string, turnId: string): void {
     const turn = this.coordinator.getTurn(turnId)
     if (!turn || turn.requestId !== requestId) throw new Error('turn request mismatch')
