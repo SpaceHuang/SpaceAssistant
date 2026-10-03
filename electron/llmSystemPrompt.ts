@@ -35,12 +35,16 @@ export function buildToolConventionHint(locale: AppLocale): string {
   if (locale === 'en-US') {
     return [
       '## Tool call conventions',
-      'For file tools (read_file / edit_file / write_file / list_directory / grep), the path argument is named `path`. Do not use `filePath` or `file_path`.'
+      'For file tools (read_file / edit_file / write_file / list_directory / grep), the path argument is named `path`. Do not use `filePath` or `file_path`.',
+      'Every tool call you issue is your own action, including sibling calls issued together. Never describe your own writes as another agent or person’s writes. Claim that another writer changed a file only when tool output or correlated execution records explicitly establish a distinct writer; a stale-edit rejection or changed file alone does not identify who changed it.',
+      'When editing several documents whose meaning or cross-references depend on each other, edit them in sequence: read the current file immediately before editing it, avoid overlapping edits to the same file, then reread the affected documents and check consistency before claiming another writer caused a conflict.'
     ].join('\n')
   }
   return [
     '## 工具调用约定',
-    '文件类工具（read_file / edit_file / write_file / list_directory / grep）的路径参数字段名为 `path`，请勿使用 `filePath` 或 `file_path`。'
+    '文件类工具（read_file / edit_file / write_file / list_directory / grep）的路径参数字段名为 `path`，请勿使用 `filePath` 或 `file_path`。',
+    '你发出的每个工具调用都属于你自己的操作，包括同一批一起发出的调用。不得把自己的写入描述成其他 Agent 或其他人的写入。只有工具结果或可关联的执行记录明确证明写入者不同，才能断言有其他写入者；旧内容保护拒绝编辑或文件内容发生变化，本身不能证明是谁改的。',
+    '修改多篇语义或交叉引用互相依赖的文档时，按顺序逐篇处理：每次编辑前重新读取当前文件，不要对同一文件发起重叠编辑；完成后复读受影响文档并检查一致性，再判断是否存在其他写入者造成的冲突。'
   ].join('\n')
 }
 
