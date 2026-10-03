@@ -3,20 +3,25 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
+    // 默认 reporter 会等串行项目中的测试文件结束才输出，长测试期间看起来像挂起；
+    // dot reporter 持续给出用例进度，同时保持完整失败详情。
+    reporter: 'dot',
+    // 大量通过用例会打印重复的 runtime 警告；仅失败用例输出 console，减少终端 IO。
+    silent: 'passed-only',
     projects: [
       {
-        // 主进程测试：Windows 上 threads 池易出现 worker 启动超时，保持 forks + 单 worker
+        // 主进程测试：macOS threads 池并行实测更快；Windows 上 threads 易启动超时，保留 forks + 单 worker。
         test: {
           name: 'electron',
-          // SDK 包级测试(A3):纯 node,随 electron 项目 forks 单 worker 跑
+          // SDK 包级测试(A3)：纯 Node，与 Electron 项目共用 worker 配置。
           include: ['electron/**/*.test.ts', 'packages/agent-sdk/**/*.test.ts', 'packages/agent-provider-testing/**/*.test.ts', 'packages/agent-provider-pi-ai/**/*.test.ts'],
           environment: 'node',
           // Windows 慢机满载下 5s 默认值会误杀重 IO 用例（如 1000 并发台账写盘）；断言本身不受影响
           testTimeout: 15_000,
           globals: true,
-          pool: 'forks',
-          maxWorkers: 1,
-          fileParallelism: false,
+          pool: process.platform === 'darwin' ? 'threads' : 'forks',
+          maxWorkers: process.platform === 'darwin' ? 4 : 1,
+          fileParallelism: process.platform === 'darwin',
           // electron 项目专属第二 setup:脚本安全解析服务初始化(§2.3 归属约束)+ 默认 runtime 装配(batch3)
           setupFiles: ['./src/test/setup.ts', './src/test/setup-electron-parser.ts', './electron/testSetup.ts']
         }
