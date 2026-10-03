@@ -1024,12 +1024,11 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
         name: 'canonical transcript cutover', schedule: { kind: 'interval', intervalMinutes: 30 },
         prompt: 'current automation prompt', deliveryPref: 'none'
       })
-      mockCreateAnthropicClient.mockReturnValue({
-        messages: { stream: vi.fn(() => ({
-          async *[Symbol.asyncIterator]() {},
-          finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'provider should not run' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
-        })) }
-      })
+      const providerStream = vi.fn(() => ({
+        async *[Symbol.asyncIterator]() {},
+        finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'provider should not run' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }))
+      }))
+      mockCreateAnthropicClient.mockReturnValue({ messages: { stream: providerStream } })
       let seededSessionId = ''
       const result = await runButlerTask(makeDeps({
         getWorkDir: () => workDir,
@@ -1049,6 +1048,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       expect(seededSessionId).toBeTruthy()
       expect(result).toMatchObject({ ok: false, error: expect.stringContaining('Canonical session History could not safely provide the Hosted transcript') })
       expect(mockCreateAnthropicClient).not.toHaveBeenCalled()
+      expect(providerStream).not.toHaveBeenCalled()
     } finally {
       ripgrepFixture.path = ''
       await fs.rm(workDir, { recursive: true, force: true })

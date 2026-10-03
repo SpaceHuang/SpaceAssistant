@@ -947,19 +947,11 @@ async function runToolChatSessionInner(
 
   // 标题生成与主请求解耦：user + assistant 消息累计达到 3 条时仅调度一次。
   // invocation 输入已包含本轮 user 消息；历史与当前消息都由同一快照计数。
-  if (hostStorage?.persist?.scheduleTitleSuggestion
+  const shouldScheduleTitleSuggestion = Boolean(hostStorage?.persist?.scheduleTitleSuggestion
     && reachedCumulativeMessagesForTitleSuggest(
       0,
       countVisibleTitleMessagesForSuggest(conversationMessagesForTitle)
-    )) {
-    hostStorage.persist.scheduleTitleSuggestion({
-      sessionId,
-      model,
-      baseUrl,
-      messagesForApi: conversationMessagesForTitle,
-      getApiKey
-    })
-  }
+    ))
 
 
   const stripThinking = (msgs: Anthropic.MessageParam[]): Anthropic.MessageParam[] => {
@@ -1169,6 +1161,15 @@ async function runToolChatSessionInner(
             ...(requiredUserMessage ? { requiredUserMessage } : {})
           })
           if (!handoff) throw new Error('HOSTED_TURN_HANDOFF_MISSING_RESULT')
+          if (handoff.result.ok && shouldScheduleTitleSuggestion) {
+            hostStorage?.persist?.scheduleTitleSuggestion?.({
+              sessionId,
+              model,
+              baseUrl,
+              messagesForApi: conversationMessagesForTitle,
+              getApiKey
+            })
+          }
           // §6.3/10.2.6 校准：surface 后未调用条目占比（surfacedNames − calledDeferredNames）
           if (surfacedNames.size > 0) {
             const unusedSurfaced = [...surfacedNames].filter((name) => !calledDeferredNames.has(name))
