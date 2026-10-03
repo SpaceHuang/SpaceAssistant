@@ -25,6 +25,10 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
   const butlerUpdateTask = vi.fn()
   const butlerDeleteTask = vi.fn()
   const butlerRunTask = vi.fn()
+  const butlerGetTaskDefaults = vi.fn()
+  const butlerGetModelCandidates = vi.fn()
+  const butlerChooseWorkDir = vi.fn()
+  const butlerListTaskRuns = vi.fn()
   const appGetTrayEnabled = vi.fn()
 
   beforeEach(async () => {
@@ -36,6 +40,10 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     butlerUpdateTask.mockResolvedValue({ ok: true })
     butlerDeleteTask.mockResolvedValue({ ok: true })
     butlerRunTask.mockResolvedValue({ ok: true, runId: 'r1', summary: '完成' })
+    butlerGetTaskDefaults.mockResolvedValue({ workDir: '/tmp/seed', modelId: 'model-1', modelServiceId: 'service-1', modelOverride: 'model-name', reasoningEffort: 'medium' })
+    butlerGetModelCandidates.mockResolvedValue([{ modelId: 'model-1', providerModelName: 'model-name', serviceId: 'service-1', serviceName: 'Service', supportsThinking: true }])
+    butlerChooseWorkDir.mockResolvedValue({ cancelled: false, path: '/tmp/chosen' })
+    butlerListTaskRuns.mockResolvedValue([])
     window.api = {
       ...window.api,
       butlerListTasks,
@@ -43,6 +51,10 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
       butlerUpdateTask,
       butlerDeleteTask,
       butlerRunTask,
+      butlerGetTaskDefaults,
+      butlerGetModelCandidates,
+      butlerChooseWorkDir,
+      butlerListTaskRuns,
       appGetTrayEnabled
     } as typeof window.api
   })
@@ -88,7 +100,57 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     expect(payload.name).toBe('周报汇总')
     expect(payload.prompt).toBe('汇总本周会话')
     expect(payload.schedule).toEqual({ kind: 'interval', intervalMinutes: 30 })
+    expect(payload).toMatchObject({ workDir: '/tmp/seed', modelId: 'model-1', modelServiceId: 'service-1', modelOverride: 'model-name', reasoningEffort: 'medium' })
     await waitFor(() => expect(butlerListTasks).toHaveBeenCalledTimes(2))
+  })
+
+  it('旧任务编辑显示未设置目录，加载时不触发保存或自动填值', async () => {
+    butlerListTasks.mockResolvedValue([task()])
+    renderTab()
+    await waitFor(() => expect(screen.getByText('每日巡检')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /编\s*辑/ }))
+    expect(await screen.findByText('旧任务会继续使用兼容配置；如需固定独立目录或模型，可在此选择后保存')).toBeTruthy()
+    expect(butlerUpdateTask).not.toHaveBeenCalled()
+  })
+
+  it('旧任务可以只编辑名称、提示词和排程并保留兼容配置', async () => {
+    butlerListTasks.mockResolvedValue([task({ modelOverride: 'legacy-provider-model' })])
+    renderTab()
+    await waitFor(() => expect(screen.getByText('每日巡检')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /编\s*辑/ }))
+    fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '改名后的任务' } })
+    fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '改后的提示词' } })
+    fireEvent.click(await screen.findByRole('button', { name: /保\s*存/ }))
+    await waitFor(() => expect(butlerUpdateTask).toHaveBeenCalledTimes(1))
+    const payload = butlerUpdateTask.mock.calls[0]![0] as { patch: Record<string, unknown> }
+    expect(payload.patch).toMatchObject({ name: '改名后的任务', prompt: '改后的提示词' })
+    expect(payload.patch).not.toHaveProperty('workDir')
+    expect(payload.patch).not.toHaveProperty('modelId')
+    expect(payload.patch).not.toHaveProperty('modelServiceId')
+    expect(payload.patch).not.toHaveProperty('reasoningEffort')
+  })
+
+  it('目录选择器提交明确路径，用户取消不写入表单', async () => {
+    renderTab()
+    await waitFor(() => expect(butlerListTasks).toHaveBeenCalled())
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
+    const browse = await screen.findByRole('button', { name: '浏览目录' })
+    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: true })
+    fireEvent.click(browse)
+    expect(await screen.findByDisplayValue('/tmp/seed')).toBeTruthy()
+    butlerChooseWorkDir.mockResolvedValueOnce({ cancelled: false, path: '/tmp/chosen' })
+    fireEvent.click(browse)
+    expect(await screen.findByDisplayValue('/tmp/chosen')).toBeTruthy()
+  })
+
+  it('历史详情读取 run 快照而不采用任务当前配置', async () => {
+    butlerListTasks.mockResolvedValue([task({ workDir: '/new/task/path' })])
+    butlerListTaskRuns.mockResolvedValue([{ id: 'run-1', taskId: 'task-1', clientId: 'c', trigger: 'manual', scheduledFor: 1, status: 'completed', deliveryStatus: 'none', createdAt: 1, updatedAt: 1, configSnapshot: { resolutionStatus: 'resolved', workDir: '/old/run/path', modelId: 'm1', providerModelName: 'provider-name', serviceId: 'svc-1', routeIdentity: 'route-1', requestedEffort: 'high', effectiveEffort: 'off', reasoningDegraded: true } }])
+    renderTab()
+    await waitFor(() => expect(screen.getByText('每日巡检')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: '运行历史' }))
+    expect(await screen.findByText('/old/run/path')).toBeTruthy()
+    expect(screen.getByText('provider-name · svc-1 · high → off')).toBeTruthy()
   })
 
   it('启停开关：切换调用 butlerUpdateTask', async () => {

@@ -577,6 +577,25 @@ export function resolveLlmCredentialsForModel(
   })
 }
 
+/** Automation 专用：按稳定 catalog ID + 显式 service ID 精确解析，禁止按名称或顺序改绑。 */
+export async function resolveLlmCredentialsForPair(
+  db: AppDatabase,
+  modelId: string,
+  serviceId: string
+): Promise<{ model: ModelEntry; serviceId: string; providerModelName: string; baseUrl: string; getApiKey: () => Promise<string | null> } | { error: string }> {
+  const model = readStoredModels(db).find((entry) => entry.id === modelId)
+  if (!model || !model.enabled) return { error: '任务模型已不存在或已停用' }
+  const activeIds = readActiveLlmServiceIds(db)
+  const service = readLlmServices(db).find((entry) => entry.id === serviceId)
+  if (!service || !activeIds.includes(serviceId) || !(service.supportedModelIds ?? []).includes(modelId)) {
+    return { error: '任务指定的模型服务已停用或不再支持该模型' }
+  }
+  const getApiKey = () => getLlmServiceApiKey(db, serviceId)
+  const key = await getApiKey()
+  if (!key) return { error: '任务指定的模型服务缺少 API 凭据' }
+  return { model, serviceId, providerModelName: model.name, baseUrl: assertValidOptionalAnthropicBaseUrl(service.baseUrl) ?? '', getApiKey }
+}
+
 export function resolveLanguagePreferredModelName(db: AppDatabase, models: ModelEntry[]): string {
   const services = readLlmServices(db)
   const activeIds = readActiveLlmServiceIds(db)

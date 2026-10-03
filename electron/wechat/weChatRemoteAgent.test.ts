@@ -558,7 +558,7 @@ describe('runWeChatRemoteAgent', () => {
       try {
         const projected = await readSessionEvents(sink.eventsPath)
         expect(projected.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: toolCallId, name: 'wechat_reply' })
-        expect(projected.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId)).toBe(false)
+        expect(projected.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
         expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'interrupted' })
       } finally { await sink.close() }
       expect(runtime.executionAdmission.activeLeaseCount(requestId)).toBe(0)
@@ -923,7 +923,7 @@ describe('runWeChatRemoteAgent', () => {
       const sink = getSessionEventSink(currentDir, session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
-        expect(events.some((event) => event.type === 'tool_result')).toBe(false)
+        expect(events.some((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload))).toBe(false)
         expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ reason: 'interrupted' })
       } finally { await sink.close() }
     } finally {
@@ -1511,7 +1511,7 @@ describe('runWeChatRemoteAgent', () => {
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: toolCallId, name: 'switch_session' })
-        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId)).toBe(false)
+        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
         expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'interrupted' })
       } finally { await sink.close() }
     } finally {
@@ -1725,7 +1725,7 @@ describe('runWeChatRemoteAgent', () => {
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
-        expect(events.some((event) => event.type === 'tool_call' || event.type === 'tool_result')).toBe(false)
+        expect(events.some((event) => event.type === 'tool_call' || event.type === 'tool_result' && !('diagnosticType' in event.payload))).toBe(false)
         expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ reason: 'failed' })
       } finally { await sink.close() }
     } finally {
@@ -1939,7 +1939,7 @@ describe('runWeChatRemoteAgent', () => {
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
-        expect(events.some((event) => event.type === 'tool_result')).toBe(false)
+        expect(events.some((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload))).toBe(false)
         expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ reason: 'interrupted' })
       } finally { await sink.close() }
     } finally {

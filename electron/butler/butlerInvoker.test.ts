@@ -5,6 +5,7 @@ import path from 'node:path'
 
 const mockCreateAnthropicClient = vi.fn()
 const mockResolveLlmCredentials = vi.fn()
+const mockResolveLlmCredentialsForPair = vi.fn()
 const sessionEventFailure = vi.hoisted(() => ({ nextType: undefined as string | undefined }))
 const hostedRuntimeFailureInjection = vi.hoisted(() => ({ requestId: '', composeCalls: 0 }))
 const ripgrepFixture = vi.hoisted(() => ({ path: '' }))
@@ -80,7 +81,8 @@ vi.mock('../llmServiceResolver', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../llmServiceResolver')>()
   return {
     ...actual,
-    resolveLlmCredentialsForModel: (...args: unknown[]) => mockResolveLlmCredentials(...args)
+    resolveLlmCredentialsForModel: (...args: unknown[]) => mockResolveLlmCredentials(...args),
+    resolveLlmCredentialsForPair: (...args: unknown[]) => mockResolveLlmCredentialsForPair(...args)
   }
 })
 
@@ -125,7 +127,7 @@ import { evaluateToolCallGate } from '../confirmation/toolCallGate'
 import { TurnRuntime } from '../turnRuntime'
 import { createTurnCoordinatorStorage } from '../turnCoordinatorStorage'
 import { runButlerTask } from './butlerInvoker'
-import { createAutomationTask, getLatestRunForTask } from './taskStore'
+import { createAutomationTask, getLatestRunForTask, updateAutomationTask } from './taskStore'
 import { getSession } from '../database'
 import { getDbConnection } from '../database'
 import { getUsageStepFactsForTurn, getUsageTurnFact } from '../database/operations'
@@ -154,18 +156,26 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockCreateAnthropicClient.mockReset()
+    mockResolveLlmCredentialsForPair.mockReset()
     sessionEventFailure.nextType = undefined
     hostedRuntimeFailureInjection.requestId = ''
     hostedRuntimeFailureInjection.composeCalls = 0
     ripgrepFixture.path = ''
     setDefaultAgentRuntime(createDesktopAgentRuntime())
     db = openDatabase(':memory:')
-    setConfigValue(db, 'config.defaultModel', Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0])
+    const initialModelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    setConfigValue(db, 'config.defaultModel', initialModelId)
+    setConfigValue(db, 'config.models', JSON.stringify([{ id: initialModelId, name: initialModelId, enabled: true, supportsThinking: true, maximumContext: 200000, maxTokens: 8192 }]))
     mockResolveLlmCredentials.mockResolvedValue({
       error: undefined,
       serviceId: 'svc-1',
       baseUrl: 'https://mock.local',
       getApiKey: async () => 'test-key'
+    })
+    mockResolveLlmCredentialsForPair.mockImplementation(async (_db: unknown, modelId: string, serviceId: string) => {
+      const found = Object.entries(MODEL_BASELINE).find(([id]) => id === modelId)
+      if (!found) return { error: 'model missing' }
+      return { model: { id: modelId, name: found[0], supportsThinking: true }, serviceId, providerModelName: found[0], baseUrl: 'https://mock.local', getApiKey: async () => 'test-key' }
     })
   })
 
@@ -175,6 +185,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       turnRuntime: makeRuntime(db),
       admissionGate: new CallAdmissionGate(),
       getWorkDir: () => '/tmp/wd',
+      getActiveWorkDirProfilePath: () => String((overrides.getWorkDir as (() => string) | undefined)?.() ?? '/tmp/wd'),
       getUserDataPath: () => '/tmp/ud',
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG as const }),
       resolveWorkDirForSession: () => '/tmp/wd',
@@ -199,6 +210,73 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     })
     return handlers.get('security:set-rule-enabled')!
   }
+
+  it('显式任务工作区在桌面 Profile 改变后固定绑定到 run snapshot 和 session', async () => {
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-task-root-'))
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    const model = { ...MODEL_BASELINE[modelId]!, id: modelId, name: modelId, enabled: true, supportsThinking: true }
+    setConfigValue(db, 'config.models', JSON.stringify([model]))
+    mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({ async *[Symbol.asyncIterator]() {}, finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 2 } })) })) } })
+    const task = createAutomationTask(db, { name: 'pinned', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none', workDir, modelId, modelServiceId: 'svc-pinned', modelOverride: model.name, reasoningEffort: 'high' })
+    const deps = makeDeps({ getWorkDir: () => '/tmp/wd', getActiveWorkDirProfilePath: () => '/tmp/wd' })
+    const result = await runButlerTask(deps, task.id, { trigger: 'manual', requestId: 'req-task-root-pinned' })
+    expect(result.ok, JSON.stringify(result)).toBe(true)
+    const run = getLatestRunForTask(db, task.id)!
+    expect(run.configSnapshot).toMatchObject({ workDir: await fs.realpath(workDir), workDirSource: 'task', modelId, serviceId: 'svc-pinned', requestedEffort: 'high', effectiveEffort: 'high' })
+    expect(run.configSnapshot?.routeIdentity).toBeTruthy()
+    expect(getSession(db, run.sessionId!)?.fixedWorkDir).toBe(await fs.realpath(workDir))
+    await fs.rm(workDir, { recursive: true, force: true })
+  })
+
+  it('admission 排队期间更新的 task config 会在准入后重新读取并冻结', async () => {
+    const initialDir = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-admission-old-'))
+    const queuedDir = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-admission-new-'))
+    const modelIds = Object.entries(MODEL_BASELINE).filter(([, baseline]) => baseline.sourceProvider === 'anthropic').slice(0, 2).map(([id]) => id)
+    setConfigValue(db, 'config.models', JSON.stringify(modelIds.map((id) => ({ ...MODEL_BASELINE[id]!, id, name: id, enabled: true, supportsThinking: true }))))
+    const task = createAutomationTask(db, { name: 'queued config', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none', workDir: initialDir, modelId: modelIds[0], modelServiceId: 'svc-pinned', modelOverride: modelIds[0], reasoningEffort: 'low' })
+    let admit!: (value: { ok: true; ticket: { request: never; release: () => boolean } }) => void
+    const admissionGate = { acquire: () => new Promise<{ ok: true; ticket: { request: never; release: () => boolean } }>((resolve) => { admit = resolve }) }
+    const runPromise = runButlerTask(makeDeps({ admissionGate }), task.id, { trigger: 'manual', requestId: 'req-admission-refresh' })
+    await Promise.resolve()
+    updateAutomationTask(db, task.id, { workDir: queuedDir, modelId: modelIds[1], modelServiceId: 'svc-pinned', modelOverride: modelIds[1], reasoningEffort: 'high' })
+    admit({ ok: true, ticket: { request: {} as never, release: () => true } })
+    const result = await runPromise
+    const run = getLatestRunForTask(db, task.id)!
+    expect(run.configSnapshot, JSON.stringify({ result, run })).toMatchObject({ workDir: await fs.realpath(queuedDir), modelId: modelIds[1], providerModelName: modelIds[1], requestedEffort: 'high' })
+    await fs.rm(initialDir, { recursive: true, force: true })
+    await fs.rm(queuedDir, { recursive: true, force: true })
+  })
+
+  it('legacy task without an active Profile path fails before creating a session and records a failed snapshot', async () => {
+    const task = createAutomationTask(db, { name: 'legacy no profile', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none' })
+    const result = await runButlerTask(makeDeps({ getActiveWorkDirProfilePath: () => undefined }), task.id, { trigger: 'manual', requestId: 'req-legacy-no-profile' })
+    expect(result).toMatchObject({ ok: false, error: '任务工作目录不能为空' })
+    const run = getLatestRunForTask(db, task.id)!
+    expect(run).toMatchObject({ status: 'failed', configSnapshot: { resolutionStatus: 'failed', error: '任务工作目录不能为空' } })
+    expect(run.sessionId).toBeUndefined()
+  })
+
+  it('database closes during failure handling but still returns a structured task failure', async () => {
+    const task = createAutomationTask(db, { name: 'db close race', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none' })
+    const result = await runButlerTask(makeDeps({ onSessionCreated: () => { db.close(); throw new Error('injected execution failure') } }), task.id, { trigger: 'manual', requestId: 'req-db-close-race' })
+    expect(result).toMatchObject({ ok: false, runId: expect.any(String), error: 'injected execution failure' })
+  })
+
+  it('explicit pair revoked after config resolution fails before accepted turn or provider request', async () => {
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-revoked-root-'))
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    const model = { ...MODEL_BASELINE[modelId]!, id: modelId, name: modelId, enabled: true, supportsThinking: true }
+    setConfigValue(db, 'config.models', JSON.stringify([model]))
+    const resolved = { model, serviceId: 'svc-pinned', providerModelName: modelId, baseUrl: 'https://mock.local', getApiKey: async () => 'test-key' }
+    mockResolveLlmCredentialsForPair.mockResolvedValueOnce(resolved).mockResolvedValueOnce({ error: 'service disabled' })
+    const task = createAutomationTask(db, { name: 'revoked', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none', workDir, modelId, modelServiceId: 'svc-pinned', modelOverride: modelId, reasoningEffort: 'high' })
+    const result = await runButlerTask(makeDeps(), task.id, { trigger: 'manual', requestId: 'req-task-pair-revoked' })
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining('service disabled') })
+    expect(mockCreateAnthropicClient).not.toHaveBeenCalled()
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS n FROM turns WHERE request_id = ?').get('req-task-pair-revoked')).toEqual({ n: 0 })
+    expect(getLatestRunForTask(db, task.id)?.configSnapshot).toMatchObject({ resolutionStatus: 'resolved', modelId, serviceId: 'svc-pinned' })
+    await fs.rm(workDir, { recursive: true, force: true })
+  })
 
   it('手动触发：会话创建归属正确，回合完成，run 记录 completed + usage + summary', async () => {
     const task = createAutomationTask(db, {
@@ -229,6 +307,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     expect(run?.resultSummary).toContain('磁盘')
     expect(run?.usageJson).toContain('input_tokens')
     expect(run?.trigger).toBe('manual')
+    expect(run?.configSnapshot).toMatchObject({ resolutionStatus: 'resolved', workDir: await fs.realpath('/tmp/wd'), workDirSource: 'legacy-profile', providerModelName: expect.any(String), serviceId: 'svc-1' })
 
     const session = run?.sessionId ? getSession(db, run.sessionId) : undefined
     expect(session?.ownership).toBe('automation')
@@ -238,11 +317,11 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     expect(turn.turnId).toBeTruthy()
     const stepFacts = getUsageStepFactsForTurn(db, session!.id, turn.turnId!)
     expect(stepFacts).toHaveLength(1)
-    expect(stepFacts[0]).toMatchObject({ sessionId: session!.id, turnId: turn.turnId, stepId: 'req-butler-1:model:1:attempt:1' })
+    expect(stepFacts[0]).toMatchObject({ sessionId: session!.id, turnId: turn.turnId, stepId: 'req-butler-1:model:1:attempt:1', modelId: run?.configSnapshot?.modelId, providerModelName: run?.configSnapshot?.providerModelName, routeIdentity: run?.configSnapshot?.routeIdentity })
     expect(stepFacts[0]?.attributionJson).not.toBeNull()
     expect(stepFacts[0]?.estimatorVersion).not.toBeNull()
     const turnFact = getUsageTurnFact(db, turn.turnId!)
-    expect(turnFact).toMatchObject({ sessionId: session!.id, turnId: turn.turnId })
+    expect(turnFact).toMatchObject({ sessionId: session!.id, turnId: turn.turnId, modelId: run?.configSnapshot?.modelId, providerModelName: run?.configSnapshot?.providerModelName, routeIdentity: run?.configSnapshot?.routeIdentity })
     expect(turnFact?.toolAttributionJson).not.toBeNull()
     expect(JSON.parse(turnFact!.toolAttributionJson!)).toMatchObject({
       tools: expect.any(Object), toolSource: expect.any(Object), toolResults: expect.any(Object)
@@ -332,7 +411,9 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     try {
       db.close()
       db = openDatabase(dbPath)
-      setConfigValue(db, 'config.defaultModel', Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0])
+      const defaultModelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+      setConfigValue(db, 'config.defaultModel', defaultModelId)
+      setConfigValue(db, 'config.models', JSON.stringify([{ id: defaultModelId, name: defaultModelId, enabled: true, supportsThinking: true, maximumContext: 200000, maxTokens: 8192 }]))
       const notePath = path.join(workDir, 'note.txt')
       await fs.writeFile(notePath, 'canonical tool side effect')
       const task = createAutomationTask(db, {
@@ -616,7 +697,9 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     try {
       db.close()
       db = openDatabase(dbPath)
-      setConfigValue(db, 'config.defaultModel', Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0])
+      const defaultModelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+      setConfigValue(db, 'config.defaultModel', defaultModelId)
+      setConfigValue(db, 'config.models', JSON.stringify([{ id: defaultModelId, name: defaultModelId, enabled: true, supportsThinking: true, maximumContext: 200000, maxTokens: 8192 }]))
       const task = createAutomationTask(db, {
         name: 'terminal projection recovery', schedule: { kind: 'interval', intervalMinutes: 30 },
         prompt: 'respond', deliveryPref: 'none'
@@ -723,14 +806,14 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       let beforeRecovery: Awaited<ReturnType<typeof readSessionEvents>>
       try { beforeRecovery = await readSessionEvents(beforeRecoverySink.eventsPath) }
       finally { await beforeRecoverySink.close() }
-      expect(beforeRecovery.some((event) => event.type === 'tool_result')).toBe(false)
+      expect(beforeRecovery.some((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload))).toBe(false)
 
       const history = new SqliteAgentHistory(getDbConnection(db))
       const canonicalEvents = (await history.read('req-butler-result-recovery')).events
       const canonicalResult = canonicalEvents.find((event) => event.kind === 'tool-call-finished')
       const resultTurnId = canonicalResult!.turnId
       expect(canonicalResult?.payload).toMatchObject({ toolCallId: 'butler-result-recovery-read', sessionLedger: {
-        location: { workDir, sessionId: session.id, createdAt: session.createdAt }, result: expect.any(Object)
+        location: { workDir: await fs.realpath(workDir), sessionId: session.id, createdAt: session.createdAt }, result: expect.any(Object)
       } })
       expect(canonicalEvents.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'tool-projection-failed' } })
       const resultLedger = canonicalResult!.payload.sessionLedger as { result: Record<string, unknown>; stepId: string }
@@ -749,7 +832,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
         const recovered = await readSessionEvents(recoveredSink.eventsPath)
         expect(recoveryErrors).toEqual([])
         expect(executor).toHaveBeenCalledOnce()
-        expect(recovered.filter((event) => event.type === 'tool_result')).toMatchObject([
+        expect(recovered.filter((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload))).toMatchObject([
           expect.objectContaining({ type: 'tool_result', payload: {
             invocationRequestId: 'req-butler-result-recovery',
             requestId: 'req-butler-result-recovery',
@@ -775,7 +858,9 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     try {
       db.close()
       db = openDatabase(dbPath)
-      setConfigValue(db, 'config.defaultModel', Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0])
+      const defaultModelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+      setConfigValue(db, 'config.defaultModel', defaultModelId)
+      setConfigValue(db, 'config.models', JSON.stringify([{ id: defaultModelId, name: defaultModelId, enabled: true, supportsThinking: true, maximumContext: 200000, maxTokens: 8192 }]))
       await fs.writeFile(path.join(workDir, 'note.txt'), 'automation canonical read')
       if (toolName === 'grep') {
         const fixtureRg = path.join(workDir, 'fixture-rg')
@@ -826,7 +911,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       for (const request of canonicalRequests) {
         const ledger = request.payload.sessionLedger as { location?: unknown; requestHeader?: { requestId?: unknown }; requestContext?: { requestId?: unknown } } | undefined
         expect(ledger).toMatchObject({
-          location: { workDir, sessionId: session.id, createdAt: session.createdAt },
+          location: { workDir: await fs.realpath(workDir), sessionId: session.id, createdAt: session.createdAt },
           requestHeader: { requestId: expect.any(String) },
           requestContext: { requestId: expect.any(String) }
         })
@@ -1277,7 +1362,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
         const sink = getSessionEventSink(workDir, session!.id, session!.createdAt)
         try {
           const events = await readSessionEvents(sink.eventsPath)
-          expect(events.some((event) => event.type === 'tool_result')).toBe(false)
+          expect(events.some((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload)), JSON.stringify(events)).toBe(false)
           expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ reason: 'interrupted' })
           expect(JSON.stringify(events)).not.toContain('late-secret')
         } finally { await sink.close() }
@@ -1783,13 +1868,16 @@ describe('管家会话创建推送（渲染端列表即时可见）', () => {
     let db: AppDatabase
     const { openDatabase: openDb2, setConfigValue: setCfg } = await import('../database')
     db = openDb2(':memory:')
-    setCfg(db, 'config.defaultModel', 'claude-sonnet-4-20250514')
+    const supportedModelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    setCfg(db, 'config.defaultModel', supportedModelId)
+    setCfg(db, 'config.models', JSON.stringify([{ id: supportedModelId, name: supportedModelId, enabled: true, supportsThinking: true, maximumContext: 200000, maxTokens: 8192 }]))
     mockResolveLlmCredentials.mockResolvedValue({
       error: undefined,
       serviceId: 'svc-1',
       baseUrl: 'https://mock.local',
       getApiKey: async () => 'test-key'
     })
+    mockResolveLlmCredentialsForPair.mockResolvedValue({ model: { id: supportedModelId, name: supportedModelId, enabled: true, supportsThinking: true }, serviceId: 'svc-1', providerModelName: supportedModelId, baseUrl: 'https://mock.local', getApiKey: async () => 'test-key' })
     mockCreateAnthropicClient.mockReturnValue({
       messages: {
         stream: vi.fn(() => ({
@@ -1809,11 +1897,12 @@ describe('管家会话创建推送（渲染端列表即时可见）', () => {
       deliveryPref: 'none'
     })
     const onSessionCreated = vi.fn()
-    await runButlerTask(
+    const pushedResult = await runButlerTask(
       {
         db,
         turnRuntime: makeRuntime(db),
         getWorkDir: () => '/tmp/wd',
+        getActiveWorkDirProfilePath: () => '/tmp/wd',
         getUserDataPath: () => '/tmp/ud',
         getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG as const }),
         resolveWorkDirForSession: () => '/tmp/wd',
@@ -1822,6 +1911,7 @@ describe('管家会话创建推送（渲染端列表即时可见）', () => {
       task.id,
       { trigger: 'manual', requestId: 'req-push-1' }
     )
+    expect(pushedResult.ok, JSON.stringify(pushedResult)).toBe(true)
     expect(onSessionCreated).toHaveBeenCalledTimes(1)
     const pushed = onSessionCreated.mock.calls[0]![0] as { id: string; ownership: string; visibility: string }
     expect(pushed.ownership).toBe('automation')

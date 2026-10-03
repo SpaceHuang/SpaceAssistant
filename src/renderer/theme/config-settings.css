@@ -2621,6 +2621,16 @@
   font-variant-numeric: tabular-nums;
 }
 
+.butler-task-card__workdir {
+  flex: 0 1 36%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--sa-config-font-meta);
+  color: var(--sa-text-tertiary);
+}
+
 .butler-task-card__footer {
   display: flex;
   align-items: center;

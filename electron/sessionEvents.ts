@@ -113,7 +113,9 @@ export async function ensureToolResultEvent(
     throw new Error('tool result ledger identity is invalid')
   }
   const events = await readSessionEvents(sink.eventsPath)
-  const matching = events.filter((event) => event.type === 'tool_result' && event.payload.toolUseId === input.toolUseId)
+  // Dispatch-failure context is deliberately stored as a tool_result-shaped diagnostic
+  // for safe recovery, but it is not the canonical result projection.
+  const matching = events.filter((event) => event.type === 'tool_result' && event.payload.toolUseId === input.toolUseId && !('diagnosticType' in event.payload))
   if (matching.length > 1) throw new Error(`duplicate tool result ledger event: ${input.toolUseId}`)
   const existing = matching[0]
   const payload = {

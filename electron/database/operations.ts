@@ -51,6 +51,7 @@ type SessionRow = {
   ownership: string | null
   visibility: string | null
   thinking_effort: string | null
+  fixed_work_dir: string | null
 }
 
 type MessageRow = {
@@ -95,6 +96,7 @@ function rowToSession(row: SessionRow): Session {
     metadata: parseJsonObject(row.metadata, {}),
     schemaVersion: row.schema_version,
     ...(row.work_dir_profile_id ? { workDirProfileId: row.work_dir_profile_id } : {}),
+    ...(row.fixed_work_dir ? { fixedWorkDir: row.fixed_work_dir } : {}),
     // 偏差 7：归属/可见性缺失或损坏时按谓词模块归一（历史行等价 user/primary）
     ...(row.ownership ? { ownership: normalizeOwnership(row.ownership) } : {}),
     ...(row.visibility ? { visibility: normalizeVisibility(row.visibility) } : {}),
@@ -176,6 +178,7 @@ export function createSession(
     maxTokens?: number
     metadata?: Record<string, unknown>
     workDirProfileId?: string
+    fixedWorkDir?: string
     /** 偏差 7：创建强制声明归属；缺省 user（历史调用方行为不变）。 */
     ownership?: SessionOwnership
     /** 偏差 7：创建强制声明可见性；缺省 primary。 */
@@ -206,6 +209,7 @@ export function createSession(
     metadata: input.metadata ? { ...input.metadata } : {},
     schemaVersion: CURRENT_SCHEMA_VERSION,
     workDirProfileId: input.workDirProfileId,
+    fixedWorkDir: input.fixedWorkDir,
     ownership,
     visibility,
     ...(isThinkingEffort(input.thinkingEffort) ? { thinkingEffort: input.thinkingEffort } : {})
@@ -218,11 +222,11 @@ export function createSession(
         `INSERT INTO sessions (
           id, name, preview, model, llm_service_id, temperature, max_tokens,
           created_at, updated_at, message_count, skills_state, metadata, schema_version, work_dir_profile_id,
-          ownership, visibility, thinking_effort
+          ownership, visibility, thinking_effort, fixed_work_dir
         ) VALUES (
           @id, @name, @preview, @model, @llmServiceId, @temperature, @maxTokens,
           @createdAt, @updatedAt, @messageCount, @skillsState, @metadata, @schemaVersion, @workDirProfileId,
-          @ownership, @visibility, @thinkingEffort
+          @ownership, @visibility, @thinkingEffort, @fixedWorkDir
         )`
       )
       .run({
@@ -242,7 +246,8 @@ export function createSession(
         workDirProfileId: session.workDirProfileId ?? null,
         ownership,
         visibility,
-        thinkingEffort: session.thinkingEffort ?? null
+        thinkingEffort: session.thinkingEffort ?? null,
+        fixedWorkDir: session.fixedWorkDir ?? null
       })
     // 偏差 11:会话列表版本在同一事务内递增
     bumpScopeVersionInTx(db, 'session-list')
@@ -1655,6 +1660,9 @@ export type UsageStepFactInput = {
   day: string
   model?: string | null
   llmServiceId?: string | null
+  modelId?: string | null
+  providerModelName?: string | null
+  routeIdentity?: string | null
   appVersion?: string | null
   inputTokens: number
   outputTokens: number
@@ -1678,6 +1686,9 @@ export type UsageStepFactRow = {
   day: string
   model: string | null
   llmServiceId: string | null
+  modelId: string | null
+  providerModelName: string | null
+  routeIdentity: string | null
   appVersion: string | null
   inputTokens: number
   outputTokens: number
@@ -1701,6 +1712,9 @@ type UsageStepFactSqlRow = {
   day: string
   model: string | null
   llm_service_id: string | null
+  model_id: string | null
+  provider_model_name: string | null
+  route_identity: string | null
   app_version: string | null
   input_tokens: number
   output_tokens: number
@@ -1725,6 +1739,9 @@ function rowToUsageStepFact(row: UsageStepFactSqlRow): UsageStepFactRow {
     day: row.day,
     model: row.model,
     llmServiceId: row.llm_service_id,
+    modelId: row.model_id,
+    providerModelName: row.provider_model_name,
+    routeIdentity: row.route_identity,
     appVersion: row.app_version,
     inputTokens: row.input_tokens,
     outputTokens: row.output_tokens,
@@ -1746,11 +1763,11 @@ export function insertUsageStepFact(db: AppDatabase, fact: UsageStepFactInput): 
   conn
     .prepare(
       `INSERT INTO usage_step_facts (
-        session_id, turn_id, step_id, created_at, day, model, llm_service_id, app_version,
+        session_id, turn_id, step_id, created_at, day, model, llm_service_id, model_id, provider_model_name, route_identity, app_version,
         input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cache_semantics,
         system_tokens, tools_tokens, message_tokens, estimator_version, attribution_json, source
       ) VALUES (
-        @sessionId, @turnId, @stepId, @createdAt, @day, @model, @llmServiceId, @appVersion,
+        @sessionId, @turnId, @stepId, @createdAt, @day, @model, @llmServiceId, @modelId, @providerModelName, @routeIdentity, @appVersion,
         @inputTokens, @outputTokens, @cacheReadTokens, @cacheCreationTokens, @cacheSemantics,
         @systemTokens, @toolsTokens, @messageTokens, @estimatorVersion, @attributionJson, @source
       )
@@ -1759,6 +1776,9 @@ export function insertUsageStepFact(db: AppDatabase, fact: UsageStepFactInput): 
         day = excluded.day,
         model = excluded.model,
         llm_service_id = excluded.llm_service_id,
+        model_id = excluded.model_id,
+        provider_model_name = excluded.provider_model_name,
+        route_identity = excluded.route_identity,
         app_version = excluded.app_version,
         input_tokens = excluded.input_tokens,
         output_tokens = excluded.output_tokens,
@@ -1780,6 +1800,9 @@ export function insertUsageStepFact(db: AppDatabase, fact: UsageStepFactInput): 
       day: fact.day,
       model: fact.model ?? null,
       llmServiceId: fact.llmServiceId ?? null,
+      modelId: fact.modelId ?? null,
+      providerModelName: fact.providerModelName ?? null,
+      routeIdentity: fact.routeIdentity ?? null,
       appVersion: fact.appVersion ?? null,
       inputTokens: fact.inputTokens,
       outputTokens: fact.outputTokens,
@@ -1811,6 +1834,9 @@ export type UsageTurnFactInput = {
   day: string
   model?: string | null
   llmServiceId?: string | null
+  modelId?: string | null
+  providerModelName?: string | null
+  routeIdentity?: string | null
   appVersion?: string | null
   stepCount: number
   toolCallCount: number
@@ -1828,6 +1854,9 @@ export type UsageTurnFactRow = {
   day: string
   model: string | null
   llmServiceId: string | null
+  modelId: string | null
+  providerModelName: string | null
+  routeIdentity: string | null
   appVersion: string | null
   stepCount: number
   toolCallCount: number
@@ -1844,6 +1873,9 @@ type UsageTurnFactSqlRow = {
   day: string
   model: string | null
   llm_service_id: string | null
+  model_id: string | null
+  provider_model_name: string | null
+  route_identity: string | null
   app_version: string | null
   step_count: number
   tool_call_count: number
@@ -1861,6 +1893,9 @@ function rowToUsageTurnFact(row: UsageTurnFactSqlRow): UsageTurnFactRow {
     day: row.day,
     model: row.model,
     llmServiceId: row.llm_service_id,
+    modelId: row.model_id,
+    providerModelName: row.provider_model_name,
+    routeIdentity: row.route_identity,
     appVersion: row.app_version,
     stepCount: row.step_count,
     toolCallCount: row.tool_call_count,
@@ -1877,10 +1912,10 @@ export function upsertUsageTurnFact(db: AppDatabase, fact: UsageTurnFactInput): 
   conn
     .prepare(
       `INSERT INTO usage_turn_facts (
-        turn_id, session_id, created_at, day, model, llm_service_id, app_version,
+        turn_id, session_id, created_at, day, model, llm_service_id, model_id, provider_model_name, route_identity, app_version,
         step_count, tool_call_count, tool_error_count, tool_skipped_count, outcome, tool_attribution_json
       ) VALUES (
-        @turnId, @sessionId, @createdAt, @day, @model, @llmServiceId, @appVersion,
+        @turnId, @sessionId, @createdAt, @day, @model, @llmServiceId, @modelId, @providerModelName, @routeIdentity, @appVersion,
         @stepCount, @toolCallCount, @toolErrorCount, @toolSkippedCount, @outcome, @toolAttributionJson
       )
       ON CONFLICT(turn_id) DO UPDATE SET
@@ -1889,6 +1924,9 @@ export function upsertUsageTurnFact(db: AppDatabase, fact: UsageTurnFactInput): 
         day = excluded.day,
         model = excluded.model,
         llm_service_id = excluded.llm_service_id,
+        model_id = excluded.model_id,
+        provider_model_name = excluded.provider_model_name,
+        route_identity = excluded.route_identity,
         app_version = excluded.app_version,
         step_count = excluded.step_count,
         tool_call_count = excluded.tool_call_count,
@@ -1904,6 +1942,9 @@ export function upsertUsageTurnFact(db: AppDatabase, fact: UsageTurnFactInput): 
       day: fact.day,
       model: fact.model ?? null,
       llmServiceId: fact.llmServiceId ?? null,
+      modelId: fact.modelId ?? null,
+      providerModelName: fact.providerModelName ?? null,
+      routeIdentity: fact.routeIdentity ?? null,
       appVersion: fact.appVersion ?? null,
       stepCount: fact.stepCount,
       toolCallCount: fact.toolCallCount,
@@ -1946,6 +1987,9 @@ export function listOrphanUsageTurns(db: AppDatabase): OrphanUsageTurn[] {
               MIN(s.day) AS day,
               (SELECT m.model FROM usage_step_facts m WHERE m.session_id = s.session_id AND m.turn_id = s.turn_id AND m.model IS NOT NULL ORDER BY m.created_at, m.id LIMIT 1) AS model,
               (SELECT m.llm_service_id FROM usage_step_facts m WHERE m.session_id = s.session_id AND m.turn_id = s.turn_id AND m.llm_service_id IS NOT NULL ORDER BY m.created_at, m.id LIMIT 1) AS llm_service_id,
+              (SELECT m.model_id FROM usage_step_facts m WHERE m.session_id = s.session_id AND m.turn_id = s.turn_id AND m.model_id IS NOT NULL ORDER BY m.created_at, m.id LIMIT 1) AS model_id,
+              (SELECT m.provider_model_name FROM usage_step_facts m WHERE m.session_id = s.session_id AND m.turn_id = s.turn_id AND m.provider_model_name IS NOT NULL ORDER BY m.created_at, m.id LIMIT 1) AS provider_model_name,
+              (SELECT m.route_identity FROM usage_step_facts m WHERE m.session_id = s.session_id AND m.turn_id = s.turn_id AND m.route_identity IS NOT NULL ORDER BY m.created_at, m.id LIMIT 1) AS route_identity,
               (SELECT m.app_version FROM usage_step_facts m WHERE m.session_id = s.session_id AND m.turn_id = s.turn_id AND m.app_version IS NOT NULL ORDER BY m.created_at, m.id LIMIT 1) AS app_version
        FROM usage_step_facts s
        LEFT JOIN usage_turn_facts t ON t.turn_id = s.turn_id
@@ -1961,6 +2005,9 @@ export function listOrphanUsageTurns(db: AppDatabase): OrphanUsageTurn[] {
     day: string
     model: string | null
     llm_service_id: string | null
+    model_id: string | null
+    provider_model_name: string | null
+    route_identity: string | null
     app_version: string | null
   }>
   return rows.map((row) => ({
@@ -1971,6 +2018,9 @@ export function listOrphanUsageTurns(db: AppDatabase): OrphanUsageTurn[] {
     day: row.day,
     model: row.model,
     llmServiceId: row.llm_service_id,
+    modelId: row.model_id,
+    providerModelName: row.provider_model_name,
+    routeIdentity: row.route_identity,
     appVersion: row.app_version
   }))
 }

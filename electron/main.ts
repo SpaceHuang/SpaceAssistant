@@ -873,6 +873,7 @@ app.whenReady().then(async () => {
       return resolved?.workDir ?? workDirState
     },
     getActiveWorkDirProfileId: () => workDirManager!.getActiveProfileId(),
+    getActiveWorkDirProfilePath: () => workDirManager!.getActiveProfile()?.path,
     admissionGate: getCallAdmissionGate(),
     onSessionCreated: (session) => getMainWindow()?.webContents.send('session:created', { session }),
     // P6（偏差 8 机制面）：驱动源层唯一投递入口——桌面 sink（系统通知）注册进共享 hub；

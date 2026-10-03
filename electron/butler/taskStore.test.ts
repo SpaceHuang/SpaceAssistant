@@ -137,6 +137,32 @@ describe('automation_tasks / automation_task_runs（P4 任务表）', () => {
     expect(getAutomationTask(d, task.id)).toBeUndefined()
   })
 
+  it('任务配置字段新建、更新、清除并保留 provider model name 语义', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput({
+      workDir: '/tmp/automation', modelId: 'catalog-a', modelServiceId: 'service-a',
+      modelOverride: 'same-provider-name', reasoningEffort: 'high'
+    }))
+    expect(task).toMatchObject({ workDir: '/tmp/automation', modelId: 'catalog-a', modelServiceId: 'service-a', modelOverride: 'same-provider-name', reasoningEffort: 'high' })
+    expect(listAutomationTasks(d)[0]).toMatchObject({ modelId: 'catalog-a', modelServiceId: 'service-a' })
+    const updated = updateAutomationTask(d, task.id, { clearConfig: ['workDir', 'modelId', 'modelServiceId', 'reasoningEffort'] })
+    expect(updated).not.toHaveProperty('workDir')
+    expect(updated).not.toHaveProperty('modelId')
+    expect(updated?.modelOverride).toBe('same-provider-name')
+  })
+
+  it('运行配置快照初始为空、可更新读取，损坏 JSON 安全降级', () => {
+    const d = db()
+    const task = createAutomationTask(d, taskInput())
+    const run = insertAutomationTaskRun(d, { taskId: task.id, clientId: 'snapshot-run', trigger: 'manual', scheduledFor: 1 })
+    expect(getRunById(d, run.runId!)?.configSnapshot).toBeUndefined()
+    const snapshot = { resolutionStatus: 'resolved' as const, workDir: '/task', modelId: 'm1', providerModelName: 'provider-name', serviceId: 's1', requestedEffort: 'high' as const, effectiveEffort: 'off' as const, reasoningDegraded: true }
+    updateAutomationTaskRun(d, run.runId!, { configSnapshot: snapshot })
+    expect(getRunById(d, run.runId!)?.configSnapshot).toEqual(snapshot)
+    getDbConnection(d).prepare('UPDATE automation_task_runs SET config_snapshot_json = ? WHERE id = ?').run('{broken', run.runId!)
+    expect(getRunById(d, run.runId!)?.configSnapshot).toBeUndefined()
+  })
+
   it('client_id 唯一幂等：同键重复插入被忽略（防 tick 重入 / 双投递）', () => {
     const d = db()
     const task = createAutomationTask(d, taskInput())

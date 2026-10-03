@@ -1011,7 +1011,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-completed' })
       expect(JSON.stringify(history.events)).not.toContain('Original secret body.')
       expect(JSON.stringify(history.events)).not.toContain('Replacement secret body.')
-      expect(sessionEvents.some((event) => event.type === 'tool_result' && event.payload.toolCallId === toolCallId)).toBe(false)
+      expect(sessionEvents.some((event) => event.type === 'tool_result' && event.payload.toolCallId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
     } finally {
       tool.beginPlanning = beginPlanning
       capabilityRegistry.list = originalCapabilityList
@@ -1119,7 +1119,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.some((event) => event.type === 'tool_call' && event.payload.toolUseId === toolCallId)).toBe(true)
-        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId)).toBe(false)
+        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
         expect(JSON.stringify(events)).not.toContain('SNAPSHOT_PRIVATE_BODY')
       } finally { await sink.close() }
     } finally {
@@ -1400,7 +1400,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     try {
       const events = await readSessionEvents(beforeSink.eventsPath)
       expect(events.some((event) => event.type === 'tool_call' && event.payload.toolUseId === 'hosted-recovery-read')).toBe(true)
-      expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === 'hosted-recovery-read')).toBe(false)
+      expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === 'hosted-recovery-read' && !('diagnosticType' in event.payload))).toBe(false)
     } finally { await beforeSink.close() }
 
     db.flushSave()
@@ -1435,10 +1435,10 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     try {
       const events = await readSessionEvents(afterSink.eventsPath)
       expect(events.filter((event) => event.type === 'tool_call' && event.payload.toolUseId === 'hosted-recovery-read')).toHaveLength(1)
-      expect(events.filter((event) => event.type === 'tool_result' && event.payload.toolUseId === 'hosted-recovery-read')).toHaveLength(1)
+      expect(events.filter((event) => event.type === 'tool_result' && event.payload.toolUseId === 'hosted-recovery-read' && !('diagnosticType' in event.payload))).toHaveLength(1)
       expect(events.filter((event) => event.type === 'turn_end' && event.payload.turnId === 'hosted-tool-recovery-turn')).toHaveLength(1)
       expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ name: 'read_file', args: { path: 'note.txt' } })
-      expect(events.find((event) => event.type === 'tool_result')?.payload.result).toMatchObject({ success: true, data: { content: 'canonical tool result' } })
+      expect(events.find((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload))?.payload.result).toMatchObject({ success: true, data: { content: 'canonical tool result' } })
     } finally { await afterSink.close() }
   })
 
@@ -1578,7 +1578,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       })
       if (invalidation === 'cancel') {
         expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'cancelled' } })
-        expect(sessionEvents.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId)).toBe(false)
+        expect(sessionEvents.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
       } else {
         expect(sessionEvents.find((event) => event.type === 'tool_result')?.payload.result)
           .toEqual((notDispatched.payload.sessionLedger as { result: unknown }).result)
@@ -2130,7 +2130,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       expect(history.events.some((event) => event.kind === 'tool-call-started' && event.payload.toolCallId === toolCallId)).toBe(true)
       expect(history.events.some((event) => event.kind === 'tool-call-finished' && event.payload.toolCallId === toolCallId)).toBe(false)
       expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
-      expect(sessionEvents.some((event) => event.type === 'tool_result' && event.payload.toolCallId === toolCallId)).toBe(false)
+      expect(sessionEvents.some((event) => event.type === 'tool_result' && event.payload.toolCallId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
     } finally {
       runtime.chatCancels.signalChatCancel(turnId)
       returnToolResult?.({ content: [{ type: 'text', text: 'cleanup acknowledgement' }] })
@@ -2428,7 +2428,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       expect(history.events.some((event) => event.kind === 'tool-call-started' && event.payload.toolCallId === toolCallId)).toBe(true)
       expect(history.events.some((event) => event.kind === 'tool-call-finished' && event.payload.toolCallId === toolCallId)).toBe(false)
       expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
-      expect(sessionEvents.some((event) => event.type === 'tool_result' && event.payload.toolCallId === toolCallId)).toBe(false)
+      expect(sessionEvents.some((event) => event.type === 'tool_result' && event.payload.toolCallId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
       releaseHandler()
       await vi.waitFor(() => expect(sideEffectCompleted).toBe(true))
       expect((await new SqliteAgentHistory(getDbConnection(db)).read(requestId)).events.some((event) => event.kind === 'tool-call-finished' && event.payload.toolCallId === toolCallId)).toBe(false)
@@ -2559,7 +2559,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: toolCallId, name: 'run_script' })
-        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId)).toBe(false)
+        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
         expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId, reason: 'interrupted' })
       } finally { await sink.close() }
     } finally {
@@ -2674,7 +2674,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: toolCallId, name: 'run_shell' })
-        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId)).toBe(false)
+        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
         expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId, reason: 'interrupted' })
       } finally { await sink.close() }
     } finally {
@@ -3197,7 +3197,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId, reason: 'cancelled' })
-        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId)).toBe(false)
+        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
         expect(JSON.stringify(events)).not.toContain('SECRET=must-remain-private')
       } finally { await sink.close() }
     } finally {
@@ -3305,7 +3305,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.some((event) => event.type === 'tool_call' && event.payload.toolUseId === toolCallId)).toBe(true)
-        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId)).toBe(false)
+        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
         expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId, reason: 'interrupted' })
         expect(JSON.stringify(events)).not.toContain('SECRET=late-private-result')
       } finally { await sink.close() }
@@ -3428,7 +3428,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
-        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId)).toBe(false)
+        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
         expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId, reason: 'interrupted' })
       } finally { await sink.close() }
     } finally {
@@ -3776,7 +3776,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
-        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId)).toBe(false)
+        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
         expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId, reason: 'interrupted' })
         expect(JSON.stringify(events)).not.toContain(`browser ${action} completed after invalidation`)
       } finally { await sink.close() }
@@ -3977,7 +3977,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId, reason: 'cancelled' })
-        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId)).toBe(false)
+        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
       } finally { await sink.close() }
     } finally {
       if (!cancellationSent) runtime.chatCancels.signalChatCancel(turnId)

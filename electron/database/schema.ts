@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 32
+export const DB_SCHEMA_VERSION = 33
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (
@@ -322,6 +322,20 @@ CREATE INDEX IF NOT EXISTS idx_continuation_intents_session ON continuation_inte
 /** v31 → v32: queued continuation carries its authoritative source context into turn claim. */
 export const MIGRATION_V32_CONTINUATION_QUEUE_CONTEXT_SQL = `
 ALTER TABLE continuation_intents ADD COLUMN continuation_context_json TEXT;
+`
+
+export const MIGRATION_V33_AUTOMATION_TASK_CONFIG_SQL = `
+ALTER TABLE automation_tasks ADD COLUMN work_dir TEXT;
+ALTER TABLE automation_tasks ADD COLUMN model_id TEXT;
+ALTER TABLE automation_tasks ADD COLUMN model_service_id TEXT;
+ALTER TABLE automation_tasks ADD COLUMN reasoning_effort TEXT;
+ALTER TABLE automation_task_runs ADD COLUMN config_snapshot_json TEXT;
+ALTER TABLE usage_step_facts ADD COLUMN model_id TEXT;
+ALTER TABLE usage_step_facts ADD COLUMN provider_model_name TEXT;
+ALTER TABLE usage_step_facts ADD COLUMN route_identity TEXT;
+ALTER TABLE usage_turn_facts ADD COLUMN model_id TEXT;
+ALTER TABLE usage_turn_facts ADD COLUMN provider_model_name TEXT;
+ALTER TABLE usage_turn_facts ADD COLUMN route_identity TEXT;
 `
 
 

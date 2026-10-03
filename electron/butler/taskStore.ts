@@ -18,6 +18,10 @@ type TaskRow = {
   delivery_pref: string
   delivery_target: string | null
   model_override: string | null
+  work_dir: string | null
+  model_id: string | null
+  model_service_id: string | null
+  reasoning_effort: string | null
   enabled: number
   created_at: number
   updated_at: number
@@ -40,6 +44,7 @@ type RunRow = {
   delivered_at: number | null
   created_at: number
   updated_at: number
+  config_snapshot_json: string | null
 }
 
 function parseSchedule(raw: string): AutomationTaskSchedule {
@@ -65,12 +70,25 @@ function rowToTask(row: TaskRow): AutomationTask {
     deliveryPref: normalizeDeliveryPref(row.delivery_pref),
     ...(row.delivery_target ? { deliveryTarget: row.delivery_target } : {}),
     ...(row.model_override ? { modelOverride: row.model_override } : {}),
+    ...(row.work_dir != null ? { workDir: row.work_dir } : {}),
+    ...(row.model_id != null ? { modelId: row.model_id } : {}),
+    ...(row.model_service_id != null ? { modelServiceId: row.model_service_id } : {}),
+    ...(row.reasoning_effort != null ? { reasoningEffort: row.reasoning_effort as AutomationTask['reasoningEffort'] } : {}),
     enabled: row.enabled === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.last_run_at != null ? { lastRunAt: row.last_run_at } : {}),
     ...(row.next_run_at != null ? { nextRunAt: row.next_run_at } : {})
   }
+}
+
+function parseSnapshot(raw: string | null): AutomationTaskRun['configSnapshot'] | undefined {
+  if (!raw) return undefined
+  try {
+    const value = JSON.parse(raw)
+    if (value && (value.resolutionStatus === 'resolved' || value.resolutionStatus === 'failed')) return value
+  } catch { /* corrupted historical snapshot is ignored */ }
+  return undefined
 }
 
 function rowToRun(row: RunRow): AutomationTaskRun {
@@ -87,6 +105,7 @@ function rowToRun(row: RunRow): AutomationTaskRun {
     ...(row.session_id ? { sessionId: row.session_id } : {}),
     ...(row.result_summary ? { resultSummary: row.result_summary } : {}),
     ...(row.usage_json ? { usageJson: row.usage_json } : {}),
+    ...(parseSnapshot(row.config_snapshot_json) ? { configSnapshot: parseSnapshot(row.config_snapshot_json)! } : {}),
     deliveryStatus: row.delivery_status === 'delivered' || row.delivery_status === 'failed-degraded' || row.delivery_status === 'delivery-uncertain' || row.delivery_status === 'none'
       ? row.delivery_status
       : 'pending',
@@ -108,8 +127,9 @@ export function createAutomationTask(db: AppDatabase, input: AutomationTaskInput
     .prepare(
       `INSERT INTO automation_tasks (
         id, name, schedule_json, prompt, delivery_pref, delivery_target, model_override,
+        work_dir, model_id, model_service_id, reasoning_effort,
         enabled, created_at, updated_at, next_run_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
@@ -119,6 +139,10 @@ export function createAutomationTask(db: AppDatabase, input: AutomationTaskInput
       input.deliveryPref,
       input.deliveryTarget ?? null,
       input.modelOverride ?? null,
+      input.workDir ?? null,
+      input.modelId ?? null,
+      input.modelServiceId ?? null,
+      input.reasoningEffort ?? null,
       enabled ? 1 : 0,
       now,
       now,
@@ -172,15 +196,17 @@ export function listEnabledAutomationTasksDue(db: AppDatabase, now: number): Aut
 export function updateAutomationTask(
   db: AppDatabase,
   taskId: string,
-  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'enabled' | 'lastRunAt' | 'nextRunAt'>>
+  patch: Partial<Pick<AutomationTask, 'name' | 'prompt' | 'schedule' | 'deliveryPref' | 'deliveryTarget' | 'modelOverride' | 'workDir' | 'modelId' | 'modelServiceId' | 'reasoningEffort' | 'enabled' | 'lastRunAt' | 'nextRunAt'>> & { clearConfig?: readonly ('workDir' | 'modelId' | 'modelServiceId' | 'reasoningEffort')[] }
 ): AutomationTask | undefined {
   const cur = getAutomationTask(db, taskId)
   if (!cur) return undefined
+  const { clearConfig, ...fields } = patch
   const next: AutomationTask = {
     ...cur,
-    ...patch,
+    ...fields,
     updatedAt: Date.now()
   }
+  for (const key of clearConfig ?? []) delete (next as unknown as Record<string, unknown>)[key]
   // 评审 P0-1：排程语义随状态推导——停用置空（未排程）；schedule 变更 / 重新启用 /
   // 启用但从未武装（历史 NULL 行）时按 schedule 重算；仅改名/提示词等不动既有排程。
   if (!next.enabled) {
@@ -197,7 +223,8 @@ export function updateAutomationTask(
     .prepare(
       `UPDATE automation_tasks SET
         name = ?, schedule_json = ?, prompt = ?, delivery_pref = ?, delivery_target = ?,
-        model_override = ?, enabled = ?, updated_at = ?, last_run_at = ?, next_run_at = ?
+        model_override = ?, work_dir = ?, model_id = ?, model_service_id = ?, reasoning_effort = ?,
+        enabled = ?, updated_at = ?, last_run_at = ?, next_run_at = ?
       WHERE id = ?`
     )
     .run(
@@ -207,6 +234,10 @@ export function updateAutomationTask(
       next.deliveryPref,
       next.deliveryTarget ?? null,
       next.modelOverride ?? null,
+      clearConfig?.includes('workDir') ? null : next.workDir ?? null,
+      clearConfig?.includes('modelId') ? null : next.modelId ?? null,
+      clearConfig?.includes('modelServiceId') ? null : next.modelServiceId ?? null,
+      clearConfig?.includes('reasoningEffort') ? null : next.reasoningEffort ?? null,
       next.enabled ? 1 : 0,
       next.updatedAt,
       next.lastRunAt ?? null,
@@ -261,7 +292,7 @@ export function insertAutomationTaskRun(
 export function updateAutomationTaskRun(
   db: AppDatabase,
   runId: string,
-  patch: Partial<Pick<AutomationTaskRun, 'status' | 'error' | 'sessionId' | 'resultSummary' | 'usageJson' | 'deliveryStatus' | 'deliveredAt'>>
+  patch: Partial<Pick<AutomationTaskRun, 'status' | 'error' | 'sessionId' | 'resultSummary' | 'usageJson' | 'configSnapshot' | 'deliveryStatus' | 'deliveredAt'>>
 ): void {
   const conn = getDbConnection(db)
   const sets: string[] = []
@@ -271,6 +302,8 @@ export function updateAutomationTaskRun(
   if (patch.sessionId !== undefined) { sets.push('session_id = @sessionId'); params.sessionId = patch.sessionId }
   if (patch.resultSummary !== undefined) { sets.push('result_summary = @resultSummary'); params.resultSummary = patch.resultSummary }
   if (patch.usageJson !== undefined) { sets.push('usage_json = @usageJson'); params.usageJson = patch.usageJson }
+  if (patch.configSnapshot !== undefined) { sets.push('config_snapshot_json = @configSnapshot'); params.configSnapshot = JSON.stringify(patch.configSnapshot) }
+  else if (Object.prototype.hasOwnProperty.call(patch, 'configSnapshot')) sets.push('config_snapshot_json = NULL')
   if (patch.deliveryStatus !== undefined) { sets.push('delivery_status = @deliveryStatus'); params.deliveryStatus = patch.deliveryStatus }
   if (patch.deliveredAt !== undefined) { sets.push('delivered_at = @deliveredAt'); params.deliveredAt = patch.deliveredAt }
   sets.push('updated_at = @updatedAt')

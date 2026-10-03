@@ -8,6 +8,10 @@ const api: SpaceAssistantApi = {
   appGetTrayEnabled: () => ipcRenderer.invoke('app:get-tray-enabled') as Promise<boolean>,
 
   butlerListTasks: () => ipcRenderer.invoke('butler:list') as Promise<import('../src/shared/automationTaskTypes').AutomationTask[]>,
+  butlerListTaskRuns: (payload) => ipcRenderer.invoke('butler:list-runs', payload) as Promise<import('../src/shared/automationTaskTypes').AutomationTaskRun[]>,
+  butlerChooseWorkDir: () => ipcRenderer.invoke('butler:choose-workdir'),
+  butlerGetTaskDefaults: () => ipcRenderer.invoke('butler:get-defaults'),
+  butlerGetModelCandidates: () => ipcRenderer.invoke('butler:model-candidates'),
   butlerCreateTask: (payload) => ipcRenderer.invoke('butler:create', payload) as Promise<import('../src/shared/automationTaskTypes').ButlerTaskWriteResult>,
   butlerUpdateTask: (payload) => ipcRenderer.invoke('butler:update', payload) as Promise<{ ok: boolean; error?: string }>,
   butlerDeleteTask: (payload) => ipcRenderer.invoke('butler:delete', payload) as Promise<{ ok: boolean; error?: string }>,
