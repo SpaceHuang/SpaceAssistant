@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { realpath } from 'node:fs/promises'
+import os from 'node:os'
 import { openDatabase, type AppDatabase } from '../database'
 import { setConfigValue } from '../database'
 import { createAutomationTask, getAutomationTask } from './taskStore'
@@ -7,7 +8,7 @@ import { registerButlerIpcHandlers } from './butlerIpc'
 
 const electronMock = vi.hoisted(() => ({
   canceled: false,
-  filePaths: ['/tmp/chosen-task-root']
+  filePaths: [] as string[]
 }))
 vi.mock('electron', () => ({
   dialog: { showOpenDialog: vi.fn(async () => ({ canceled: electronMock.canceled, filePaths: electronMock.filePaths })) },
@@ -24,8 +25,8 @@ describe('butler IPC workdir/config fields', () => {
     const map = new Map<string, (...args: unknown[]) => unknown>()
     registerButlerIpcHandlers({ handle: (channel: string, handler: (...args: unknown[]) => unknown) => map.set(channel, handler) } as never, {
       db,
-      getWorkDir: () => '/tmp',
-      getUserDataPath: () => '/tmp',
+      getWorkDir: () => os.tmpdir(),
+      getUserDataPath: () => os.tmpdir(),
       getToolsConfig: () => ({}) as never
     } as never)
     return map
@@ -36,8 +37,8 @@ describe('butler IPC workdir/config fields', () => {
     electronMock.canceled = true
     await expect(map.get('butler:choose-workdir')!()).resolves.toEqual({ cancelled: true })
     electronMock.canceled = false
-    electronMock.filePaths = ['/tmp']
-    await expect(map.get('butler:choose-workdir')!()).resolves.toMatchObject({ cancelled: false, path: await realpath('/tmp') })
+    electronMock.filePaths = [os.tmpdir()]
+    await expect(map.get('butler:choose-workdir')!()).resolves.toMatchObject({ cancelled: false, path: await realpath(os.tmpdir()) })
   })
 
   it('defaults reasoning effort to off when the configured default model does not support Thinking', async () => {
@@ -62,9 +63,9 @@ describe('butler IPC workdir/config fields', () => {
   it('legacy directory-only edit sets its explicit path while leaving legacy model and effort NULL', async () => {
     const map = handlers()
     const legacy = createAutomationTask(db!, { name: 'legacy', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', modelOverride: 'old-provider-name' })
-    const response = await map.get('butler:update')!(null, { id: legacy.id, patch: { workDir: '/tmp' } }) as { ok: boolean; error?: string }
+    const response = await map.get('butler:update')!(null, { id: legacy.id, patch: { workDir: os.tmpdir() } }) as { ok: boolean; error?: string }
     expect(response).toEqual({ ok: true })
-    expect(getAutomationTask(db!, legacy.id)).toMatchObject({ workDir: await realpath('/tmp'), modelOverride: 'old-provider-name' })
+    expect(getAutomationTask(db!, legacy.id)).toMatchObject({ workDir: await realpath(os.tmpdir()), modelOverride: 'old-provider-name' })
     expect(getAutomationTask(db!, legacy.id)).not.toHaveProperty('modelId')
     expect(getAutomationTask(db!, legacy.id)).not.toHaveProperty('reasoningEffort')
   })

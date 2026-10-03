@@ -6,6 +6,7 @@
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const mockRunToolChatSession = vi.fn()
 const mockResolveLlmCredentials = vi.fn()
@@ -81,7 +82,7 @@ describe('butlerInvoker 任务声明装配（D）', () => {
       db,
       turnRuntime: makeRuntime(db),
       getWorkDir: () => tmpdir(),
-      getUserDataPath: () => '/tmp/ud',
+      getUserDataPath: () => join(tmpdir(), 'spaceassistant-test-user-data'),
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG as const }),
       getActiveWorkDirProfilePath: () => tmpdir(),
       resolveWorkDirForSession: () => tmpdir()

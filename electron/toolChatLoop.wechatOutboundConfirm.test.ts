@@ -1,5 +1,7 @@
 import { DEFAULT_POLICY_RULES } from '../src/shared/policy/defaultRules'
 import { describe, expect, it } from 'vitest'
+import os from 'node:os'
+import path from 'node:path'
 import { evaluateToolCallGate, type ToolCallGateArgs } from './confirmation/toolCallGate'
 import { DEFAULT_WECHAT_CONFIG, type WeChatConfig } from '../src/shared/wechatTypes'
 import { DEFAULT_TOOLS_CONFIG, type ToolsConfig } from '../src/shared/domainTypes'
@@ -28,8 +30,8 @@ function gate(
     toolName,
     toolInput,
     sessionId: 's1',
-    workDir: '/tmp/wd',
-    userDataDir: '/tmp/ud',
+    workDir: os.tmpdir(),
+    userDataDir: path.join(os.tmpdir(), 'spaceassistant-test-user-data'),
     toolsConfig,
     audit: { record: () => undefined },
     ...gateDefaultMaterials(),

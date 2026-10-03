@@ -67,13 +67,17 @@ function base(overrides: Partial<ToolCallGateArgs> = {}): ToolCallGateArgs {
     toolName: 'read_file',
     toolInput: { path: 'a.txt' },
     sessionId: 's-auto-1',
-    workDir: '/tmp/wd',
-    userDataDir: '/tmp/ud',
+    workDir: os.tmpdir(),
+    userDataDir: path.join(os.tmpdir(), 'spaceassistant-test-user-data'),
     toolsConfig: toolsConfig(),
     audit: { record: () => undefined },
     ...gateMaterialsFor(legacyDb, lane),
     ...rest
   }
+}
+
+async function createWorkDir() {
+  return fs.mkdtemp(path.join(os.tmpdir(), 'automation-lane-'))
 }
 
 function auditSink(): { record: (e: SecurityAuditEvent) => void; events: SecurityAuditEvent[] } {
@@ -98,33 +102,27 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
   })
   it('write_file：automation lane 在 locked 规则终局拒绝', async () => {
     const audit = auditSink()
-    const r = await evaluateToolCallGate(
-      base({
-        lane: 'automation',
-        toolName: 'write_file',
-        toolInput: { path: 'a.txt', content: 'x' },
-        appDb: openDb(),
-        audit
-      })
-    )
-    expect(r.decision.type).toBe('deny')
-    expect(r.decision.ruleId).toBe('automation-write-deny')
-    const ev = audit.events.find((e) => e.event === 'policy.decision')
-    expect(ev?.lane).toBe('automation')
+    const workDir = await createWorkDir()
+    try {
+      const r = await evaluateToolCallGate(
+        base({ lane: 'automation', workDir, toolName: 'write_file', toolInput: { path: 'a.txt', content: 'x' }, appDb: openDb(), audit })
+      )
+      expect(r.decision.type).toBe('deny')
+      expect(r.decision.ruleId).toBe('automation-write-deny')
+      const ev = audit.events.find((e) => e.event === 'policy.decision')
+      expect(ev?.lane).toBe('automation')
+    } finally { await fs.rm(workDir, { recursive: true, force: true }) }
   })
 
   it('automation 的 write_file 不消费桌面快通道（lane 隔离），恒落 locked deny', async () => {
-    const r = await evaluateToolCallGate(
-      base({
-        lane: 'automation',
-        toolName: 'write_file',
-        toolInput: { path: 'a.txt', content: 'x' },
-        fileAutoApproval: async () => ({ approve: true }),
-        appDb: openDb()
-      })
-    )
-    expect(r.decision.type).toBe('deny')
-    expect(r.decision.ruleId).toBe('automation-write-deny')
+    const workDir = await createWorkDir()
+    try {
+      const r = await evaluateToolCallGate(
+        base({ lane: 'automation', workDir, toolName: 'write_file', toolInput: { path: 'a.txt', content: 'x' }, fileAutoApproval: async () => ({ approve: true }), appDb: openDb() })
+      )
+      expect(r.decision.type).toBe('deny')
+      expect(r.decision.ruleId).toBe('automation-write-deny')
+    } finally { await fs.rm(workDir, { recursive: true, force: true }) }
   })
 
   it('只读工具命中 automation-readonly-allow 放行', async () => {
@@ -157,32 +155,35 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
   it('decision cache 隔离：desktop lane 预写的信任条目，automation 同签名不命中', async () => {
     const db = openDb()
     const cache = new SqliteDecisionCache(getDbConnection(db))
-    const fact = await probeWritePathFact({ rawPath: 'a.txt', workDir: '/tmp/wd', userDataDir: '/tmp/ud', homeDir: os.homedir(), customSensitivePrefixes: [] })
-    const key = { kind: 'path' as const, path: fact.normalizedPath, level: 'file' as const }
-    cache.record({
-      id: 'seed-1',
-      key,
-      decision: 'allow',
-      lane: 'desktop',
-      scope: 'persistent',
-      createdAt: Date.now(),
-      lastHitAt: Date.now(),
-      hitCount: 0,
-      source: 'user-confirm'
-    })
+    const workDir = await createWorkDir()
+    try {
+      const fact = await probeWritePathFact({ rawPath: 'a.txt', workDir, userDataDir: path.join(os.tmpdir(), 'spaceassistant-test-user-data'), homeDir: os.homedir(), customSensitivePrefixes: [] })
+      const key = { kind: 'path' as const, path: fact.normalizedPath, level: 'file' as const }
+      cache.record({
+        id: 'seed-1',
+        key,
+        decision: 'allow',
+        lane: 'desktop',
+        scope: 'persistent',
+        createdAt: Date.now(),
+        lastHitAt: Date.now(),
+        hitCount: 0,
+        source: 'user-confirm'
+      })
 
-    const desktopHit = await evaluateToolCallGate(
-      base({ lane: 'desktop', toolName: 'write_file', toolInput: { path: 'a.txt', content: 'x' }, appDb: db })
-    )
-    expect(desktopHit.decision.type).toBe('auto-allow')
-    expect(desktopHit.decision.ruleId).toBe('cache-hit')
+      const desktopHit = await evaluateToolCallGate(
+        base({ lane: 'desktop', workDir, toolName: 'write_file', toolInput: { path: 'a.txt', content: 'x' }, appDb: db })
+      )
+      expect(desktopHit.decision.type).toBe('auto-allow')
+      expect(desktopHit.decision.ruleId).toBe('cache-hit')
 
-    const automationMiss = await evaluateToolCallGate(
-      base({ lane: 'automation', toolName: 'write_file', toolInput: { path: 'a.txt', content: 'x' }, appDb: db })
-    )
-    expect(automationMiss.decision.type).toBe('deny')
-    expect(automationMiss.decision.ruleId).toBe('automation-write-deny')
-    expect(canonicalKeyJson(key)).toBeTruthy()
+      const automationMiss = await evaluateToolCallGate(
+        base({ lane: 'automation', workDir, toolName: 'write_file', toolInput: { path: 'a.txt', content: 'x' }, appDb: db })
+      )
+      expect(automationMiss.decision.type).toBe('deny')
+      expect(automationMiss.decision.ruleId).toBe('automation-write-deny')
+      expect(canonicalKeyJson(key)).toBeTruthy()
+    } finally { await fs.rm(workDir, { recursive: true, force: true }) }
   })
 
   it('MCP 工具（mcp-tool 信号）在 automation lane 下落确认而非放行', async () => {

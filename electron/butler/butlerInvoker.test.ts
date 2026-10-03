@@ -186,7 +186,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       admissionGate: new CallAdmissionGate(),
       getWorkDir: () => os.tmpdir(),
       getActiveWorkDirProfilePath: () => String((overrides.getWorkDir as (() => string) | undefined)?.() ?? os.tmpdir()),
-      getUserDataPath: () => '/tmp/ud',
+      getUserDataPath: () => path.join(os.tmpdir(), 'spaceassistant-test-user-data'),
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG as const }),
       resolveWorkDirForSession: () => os.tmpdir(),
       ...overrides
@@ -204,9 +204,9 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       db,
       backup: {} as AppIpcContext['backup'],
       workDirManager: {} as AppIpcContext['workDirManager'],
-      getWorkDir: () => '/tmp/wd', setWorkDir: () => undefined, getUserDataPath: () => '/tmp/ud',
+      getWorkDir: () => os.tmpdir(), setWorkDir: () => undefined, getUserDataPath: () => path.join(os.tmpdir(), 'spaceassistant-test-user-data'),
       getApiKey: async () => null, setApiKey: async () => undefined,
-      getBrowserDetectContext: () => ({ isPackaged: false, appPath: '/tmp', devRoot: '/tmp' })
+      getBrowserDetectContext: () => ({ isPackaged: false, appPath: os.tmpdir(), devRoot: os.tmpdir() })
     })
     return handlers.get('security:set-rule-enabled')!
   }
@@ -218,7 +218,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     setConfigValue(db, 'config.models', JSON.stringify([model]))
     mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({ async *[Symbol.asyncIterator]() {}, finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 2 } })) })) } })
     const task = createAutomationTask(db, { name: 'pinned', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none', workDir, modelId, modelServiceId: 'svc-pinned', modelOverride: model.name, reasoningEffort: 'high' })
-    const deps = makeDeps({ getWorkDir: () => '/tmp/wd', getActiveWorkDirProfilePath: () => '/tmp/wd' })
+    const deps = makeDeps({ getWorkDir: () => os.tmpdir(), getActiveWorkDirProfilePath: () => os.tmpdir() })
     const result = await runButlerTask(deps, task.id, { trigger: 'manual', requestId: 'req-task-root-pinned' })
     expect(result.ok, JSON.stringify(result)).toBe(true)
     const run = getLatestRunForTask(db, task.id)!
@@ -1390,7 +1390,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       await fs.writeFile(path.join(workDir, '.env'), 'sensitive value')
       const initialGate = await evaluateToolCallGate({
         toolName: 'read_file', toolInput: { path: '.env' }, sessionId: 'probe', workDir,
-        userDataDir: '/tmp/butler-policy-probe', lane: 'automation', toolsConfig: DEFAULT_TOOLS_CONFIG,
+        userDataDir: os.tmpdir(), lane: 'automation', toolsConfig: DEFAULT_TOOLS_CONFIG,
         effectiveRules: resolveEffectivePolicyRulesWithOrigin(db, 'automation').rules,
         disabledPolicyRuleIds: readDisabledPolicyRuleIds(db),
         decisionCache: { lookup: () => null } as never, shellPrecheck: { touchTrustedCommand: () => undefined }
@@ -1865,57 +1865,62 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
 
 describe('管家会话创建推送（渲染端列表即时可见）', () => {
   it('onSessionCreated 在会话创建即回调（调度与手动触发共用），字段含归属与可见性', async () => {
-    let db: AppDatabase
-    const { openDatabase: openDb2, setConfigValue: setCfg } = await import('../database')
-    db = openDb2(':memory:')
-    const supportedModelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
-    setCfg(db, 'config.defaultModel', supportedModelId)
-    setCfg(db, 'config.models', JSON.stringify([{ id: supportedModelId, name: supportedModelId, enabled: true, supportsThinking: true, maximumContext: 200000, maxTokens: 8192 }]))
-    mockResolveLlmCredentials.mockResolvedValue({
-      error: undefined,
-      serviceId: 'svc-1',
-      baseUrl: 'https://mock.local',
-      getApiKey: async () => 'test-key'
-    })
-    mockResolveLlmCredentialsForPair.mockResolvedValue({ model: { id: supportedModelId, name: supportedModelId, enabled: true, supportsThinking: true }, serviceId: 'svc-1', providerModelName: supportedModelId, baseUrl: 'https://mock.local', getApiKey: async () => 'test-key' })
-    mockCreateAnthropicClient.mockReturnValue({
-      messages: {
-        stream: vi.fn(() => ({
-          async *[Symbol.asyncIterator]() {},
-          finalMessage: vi.fn(async () => ({
-            content: [{ type: 'text', text: '完成' }],
-            stop_reason: 'end_turn',
-            usage: { input_tokens: 1, output_tokens: 1 }
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-session-push-'))
+    let db!: AppDatabase
+    try {
+      const { openDatabase: openDb2, setConfigValue: setCfg } = await import('../database')
+      db = openDb2(':memory:')
+      const supportedModelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+      setCfg(db, 'config.defaultModel', supportedModelId)
+      setCfg(db, 'config.models', JSON.stringify([{ id: supportedModelId, name: supportedModelId, enabled: true, supportsThinking: true, maximumContext: 200000, maxTokens: 8192 }]))
+      mockResolveLlmCredentials.mockResolvedValue({
+        error: undefined,
+        serviceId: 'svc-1',
+        baseUrl: 'https://mock.local',
+        getApiKey: async () => 'test-key'
+      })
+      mockResolveLlmCredentialsForPair.mockResolvedValue({ model: { id: supportedModelId, name: supportedModelId, enabled: true, supportsThinking: true }, serviceId: 'svc-1', providerModelName: supportedModelId, baseUrl: 'https://mock.local', getApiKey: async () => 'test-key' })
+      mockCreateAnthropicClient.mockReturnValue({
+        messages: {
+          stream: vi.fn(() => ({
+            async *[Symbol.asyncIterator]() {},
+            finalMessage: vi.fn(async () => ({
+              content: [{ type: 'text', text: '完成' }],
+              stop_reason: 'end_turn',
+              usage: { input_tokens: 1, output_tokens: 1 }
+            }))
           }))
-        }))
-      }
-    })
-    const task = createAutomationTask(db, {
-      name: '推送任务',
-      schedule: { kind: 'interval', intervalMinutes: 30 },
-      prompt: '检查',
-      deliveryPref: 'none'
-    })
-    const onSessionCreated = vi.fn()
-    const pushedResult = await runButlerTask(
-      {
-        db,
-        turnRuntime: makeRuntime(db),
-        getWorkDir: () => '/tmp/wd',
-        getActiveWorkDirProfilePath: () => '/tmp/wd',
-        getUserDataPath: () => '/tmp/ud',
-        getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG as const }),
-        resolveWorkDirForSession: () => '/tmp/wd',
-        onSessionCreated
-      },
-      task.id,
-      { trigger: 'manual', requestId: 'req-push-1' }
-    )
-    expect(pushedResult.ok, JSON.stringify(pushedResult)).toBe(true)
-    expect(onSessionCreated).toHaveBeenCalledTimes(1)
-    const pushed = onSessionCreated.mock.calls[0]![0] as { id: string; ownership: string; visibility: string }
-    expect(pushed.ownership).toBe('automation')
-    expect(pushed.visibility).toBe('section')
-    db.close()
+        }
+      })
+      const task = createAutomationTask(db, {
+        name: '推送任务',
+        schedule: { kind: 'interval', intervalMinutes: 30 },
+        prompt: '检查',
+        deliveryPref: 'none'
+      })
+      const onSessionCreated = vi.fn()
+      const pushedResult = await runButlerTask(
+        {
+          db,
+          turnRuntime: makeRuntime(db),
+          getWorkDir: () => workDir,
+          getActiveWorkDirProfilePath: () => workDir,
+          getUserDataPath: () => path.join(os.tmpdir(), 'spaceassistant-test-user-data'),
+          getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG as const }),
+          resolveWorkDirForSession: () => workDir,
+          onSessionCreated
+        },
+        task.id,
+        { trigger: 'manual', requestId: 'req-push-1' }
+      )
+      expect(pushedResult.ok, JSON.stringify(pushedResult)).toBe(true)
+      expect(onSessionCreated).toHaveBeenCalledTimes(1)
+      const pushed = onSessionCreated.mock.calls[0]![0] as { id: string; ownership: string; visibility: string }
+      expect(pushed.ownership).toBe('automation')
+      expect(pushed.visibility).toBe('section')
+    } finally {
+      db?.close()
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
   })
 })

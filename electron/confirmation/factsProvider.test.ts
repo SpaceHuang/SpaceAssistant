@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import os from 'node:os'
+import path from 'node:path'
 import { evaluateToolCallGate, type ToolCallGateArgs } from './toolCallGate'
 import { openSqliteDatabase, getDbConnection, type AppDatabase } from '../database'
 import { SqliteDecisionCache } from './sqliteDecisionCache'
@@ -45,8 +47,8 @@ function base(db: AppDatabase, overrides: Partial<ToolCallGateArgs> = {}): ToolC
     toolName: 'read_file',
     toolInput: { path: 'a.txt' },
     sessionId: 's1',
-    workDir: '/tmp/wd',
-    userDataDir: '/tmp/ud',
+    workDir: os.tmpdir(),
+    userDataDir: path.join(os.tmpdir(), 'spaceassistant-test-user-data'),
     toolsConfig: toolsConfig(),
     audit,
     effectiveRules: loadEffectivePolicyRules(db, 'desktop'),
