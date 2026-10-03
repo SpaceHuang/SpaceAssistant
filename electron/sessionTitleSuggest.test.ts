@@ -6,7 +6,7 @@ import {
   buildTitleSuggestDialogueText,
   formatTitleDialogueLabel,
   getTitleSystemPrompt,
-  reachedCumulativeAssistantTurnsForTitleSuggest,
+  reachedCumulativeMessagesForTitleSuggest,
   countCompletedAssistantMessagesForTitleSuggest
 } from './sessionTitleSuggest'
 
@@ -35,13 +35,13 @@ describe('buildTitleSuggestDialogueText locale labels', () => {
   ]
 
   it('T3: en-US uses User: / Assistant: prefixes', () => {
-    const out = buildTitleSuggestDialogueText(messages, 1, 'en-US')
+    const out = buildTitleSuggestDialogueText(messages, 2, 'en-US')
     expect(out).toContain('User: hello')
     expect(out).toContain('Assistant: hi there')
   })
 
   it('T4: zh-CN uses 用户： / 助手： prefixes', () => {
-    const out = buildTitleSuggestDialogueText(messages, 1, 'zh-CN')
+    const out = buildTitleSuggestDialogueText(messages, 2, 'zh-CN')
     expect(out).toContain('用户：hello')
     expect(out).toContain('助手：hi there')
   })
@@ -57,7 +57,7 @@ describe('formatTitleDialogueLabel', () => {
 })
 
 describe('buildTitleSuggestDialogueText', () => {
-  it('strips tool blocks and stops after N assistant turns', () => {
+  it('strips tool blocks and stops after N visible user/assistant messages', () => {
     const messages: MessageParam[] = [
       msg('user', '你好'),
       msg('assistant', [{ type: 'text', text: '你好，需要什么？' }]),
@@ -78,24 +78,24 @@ describe('buildTitleSuggestDialogueText', () => {
     const out = buildTitleSuggestDialogueText(messages, 3)
     expect(out).toContain('用户：你好')
     expect(out).toContain('助手：你好，需要什么？')
-    expect(out).toContain('助手：第三段')
+    expect(out).toContain('助手：你好，需要什么？')
+    expect(out).toContain('用户：你好')
+    expect(out).not.toContain('第三段')
     expect(out).not.toContain('第四段')
-    expect(out).not.toContain('第五段')
-    expect(out).not.toContain('第六轮用户')
     expect(out).not.toContain('不应出现')
     expect(out).not.toContain('ignored body')
   })
 })
 
-describe('reachedCumulativeAssistantTurnsForTitleSuggest', () => {
-  it('口径 B：历史 + 本次 loopRound 累计 ≥3 即认为达标', () => {
-    expect(reachedCumulativeAssistantTurnsForTitleSuggest(0, 3)).toBe(true)
-    expect(reachedCumulativeAssistantTurnsForTitleSuggest(2, 1)).toBe(true)
-    expect(reachedCumulativeAssistantTurnsForTitleSuggest(1, 2)).toBe(true)
-    expect(reachedCumulativeAssistantTurnsForTitleSuggest(3, 1)).toBe(true)
-    expect(reachedCumulativeAssistantTurnsForTitleSuggest(10, 1)).toBe(true)
-    expect(reachedCumulativeAssistantTurnsForTitleSuggest(1, 1)).toBe(false)
-    expect(reachedCumulativeAssistantTurnsForTitleSuggest(0, 2)).toBe(false)
+describe('reachedCumulativeMessagesForTitleSuggest', () => {
+  it('user + assistant 消息总数达到 3 条即达标', () => {
+    expect(reachedCumulativeMessagesForTitleSuggest(0, 3)).toBe(true)
+    expect(reachedCumulativeMessagesForTitleSuggest(2, 1)).toBe(true)
+    expect(reachedCumulativeMessagesForTitleSuggest(1, 1)).toBe(false)
+    expect(reachedCumulativeMessagesForTitleSuggest(3, 0)).toBe(true)
+    expect(reachedCumulativeMessagesForTitleSuggest(10, 1)).toBe(true)
+    expect(reachedCumulativeMessagesForTitleSuggest(0, 1)).toBe(false)
+    expect(reachedCumulativeMessagesForTitleSuggest(1, 1)).toBe(false)
   })
 })
 

@@ -15,6 +15,7 @@ import {
 import { resolveThinkingAvailability } from '../src/shared/thinkingAvailability'
 import type { NormalizedStopReason } from './stopReason'
 import { resolveToolLoopModelOptions } from './toolLoopModelOptions'
+import { reachedCumulativeMessagesForTitleSuggest } from './sessionTitleSuggest'
 import type { WorkDirManager } from './workDirManager'
 import { FileStateCache } from './fileStateCache'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
@@ -943,9 +944,22 @@ async function runToolChatSessionInner(
   }
   const invocationBaseMessages = structuredClone(messagesForApi)
 
+  // 标题生成与主请求解耦：user + assistant 消息累计达到 3 条时仅调度一次。
+  // invocation 输入已包含本轮 user 消息；历史与当前消息都由同一快照计数。
+  if (hostStorage?.persist?.scheduleTitleSuggestion
+    && reachedCumulativeMessagesForTitleSuggest(
+      0,
+      initialMessages.filter((message) => message.role === 'user' || message.role === 'assistant').length
+    )) {
+    hostStorage.persist.scheduleTitleSuggestion({
+      sessionId,
+      model,
+      baseUrl,
+      messagesForApi: invocationBaseMessages,
+      getApiKey
+    })
+  }
 
-  /** 口径 B：本次 invoke 传入的上下文中，已有多少条 API `assistant`（不含本轮 while 将追加的） */
-  const historicalAssistantApiMessageCount = initialMessages.filter((m) => m.role === 'assistant').length
 
   const stripThinking = (msgs: Anthropic.MessageParam[]): Anthropic.MessageParam[] => {
     // thinking 开启时须保留 assistant 消息中的 thinking/redacted_thinking（含 signature），

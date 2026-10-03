@@ -141,4 +141,28 @@ describe('scheduleSessionTitleSuggestion manual title mutex', () => {
     )
     expect(onTitleGenerated).toHaveBeenCalledWith(updated)
   })
+
+  it('打开补全摘要失败时不留下阻断标记，后续可再次触发', async () => {
+    const session = stubSession()
+    const db = makeDb(session)
+    vi.mocked(getSession).mockReturnValue(session)
+    mockCreateAnthropicClient.mockReturnValue({ messages: { create: vi.fn().mockRejectedValueOnce(new Error('network')).mockResolvedValueOnce({ content: [{ type: 'text', text: '自动标题' }] }) } })
+    const { scheduleSessionTitleOpenBackfillIfNeeded } = await import('./sessionTitleSuggest')
+    const { getMessages } = await import('./database')
+    vi.mocked(getMessages).mockReturnValue([
+      { id: 'u1', sessionId: session.id, role: 'user', content: '第一条', timestamp: 1, status: 'completed', schemaVersion: CURRENT_SCHEMA_VERSION },
+      { id: 'a1', sessionId: session.id, role: 'assistant', content: '第二条', timestamp: 2, status: 'completed', schemaVersion: CURRENT_SCHEMA_VERSION },
+      { id: 'u2', sessionId: session.id, role: 'user', content: '第三条', timestamp: 3, status: 'completed', schemaVersion: CURRENT_SCHEMA_VERSION }
+    ] as never)
+    mockUpdateSession.mockClear()
+    scheduleSessionTitleOpenBackfillIfNeeded({ db, sessionId: session.id, getApiKey: async () => 'key' })
+    vi.mocked(getSession).mockReturnValue(stubSession({ metadata: { titleOpenBackfillAttempted: true } }))
+    await vi.waitFor(() => expect(mockCreateAnthropicClient).toHaveBeenCalled())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mockUpdateSession.mock.calls.at(-1)?.[2]).toEqual({ metadata: {} })
+    const fresh = stubSession({ metadata: {} })
+    vi.mocked(getSession).mockReturnValue(fresh)
+    scheduleSessionTitleOpenBackfillIfNeeded({ db, sessionId: session.id, getApiKey: async () => 'key' })
+    await vi.waitFor(() => expect(mockCreateAnthropicClient).toHaveBeenCalledTimes(2))
+  })
 })

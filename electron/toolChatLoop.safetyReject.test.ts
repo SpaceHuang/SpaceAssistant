@@ -35,7 +35,7 @@ vi.mock('./chatCancelRegistry', () => ({
 
 vi.mock('./sessionTitleSuggest', () => ({
   scheduleSessionTitleSuggestion: vi.fn(),
-  reachedCumulativeAssistantTurnsForTitleSuggest: vi.fn(() => false)
+  reachedCumulativeMessagesForTitleSuggest: vi.fn(() => false)
 }))
 
 vi.mock('./toolConfirmRegistry', () => ({

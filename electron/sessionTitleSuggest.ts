@@ -11,13 +11,13 @@ import { logHistoryOversizedToolResult } from './oversizedToolResultLog'
 
 export const SESSION_META_TITLE_GENERATED = 'titleGenerated'
 export const SESSION_META_TITLE_USER_CUSTOM = 'titleUserCustom'
-/** 老会话「打开补标题」已尝试过（成功或放弃），避免反复调度 */
+/** 老会话「打开补标题」成功完成；失败时移除以便后续重试。 */
 export const SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED = 'titleOpenBackfillAttempted'
 
-/** 会话维度：累计第几条 API assistant 消息（历史 + 本次循环）后尝试生成标题 */
-export const TITLE_SUGGEST_TRIGGER_AT_ASSISTANT_TURN = 3
+/** user + assistant 可见消息累计达到该数量后尝试生成标题。 */
+export const TITLE_SUGGEST_TRIGGER_AT_MESSAGE_COUNT = 3
 
-const TITLE_SUGGEST_MAX_ASSISTANT_TURNS = TITLE_SUGGEST_TRIGGER_AT_ASSISTANT_TURN
+const TITLE_SUGGEST_MAX_MESSAGES = TITLE_SUGGEST_TRIGGER_AT_MESSAGE_COUNT
 const TITLE_SUGGEST_LLM_TIMEOUT_MS = 45_000
 const TITLE_MAX_CHARS = SESSION_TITLE_MAX_LENGTH
 
@@ -54,38 +54,35 @@ function extractTextFromMessageContent(content: Anthropic.MessageParam['content'
   return parts.join('\n').trim()
 }
 
-/** 仅 user/assistant 的可见文本，跳过 tool 块；从头累计直到包含前 N 条 assistant 文本 */
+/** 仅 user/assistant 的可见文本，跳过 tool 块；从头累计 N 条 user/assistant 消息 */
 export function buildTitleSuggestDialogueText(
   messages: Anthropic.MessageParam[],
-  maxAssistantTurns: number,
+  maxMessages: number,
   locale: AppLocale = 'zh-CN'
 ): string {
-  let assistantSeen = 0
+  let messageCount = 0
   const lines: string[] = []
   outer: for (const msg of messages) {
     if (msg.role !== 'user' && msg.role !== 'assistant') continue
+    if (msg.role === 'user' && Array.isArray(msg.content) && msg.content.length > 0
+      && msg.content.every((block) => block && typeof block === 'object' && (block as { type?: string }).type === 'tool_result')) continue
     const text = extractTextFromMessageContent(msg.content)
     const label = formatTitleDialogueLabel(msg.role, locale)
     if (text.length > 0) {
       lines.push(`${label}${text}`)
     }
-    if (msg.role === 'assistant') {
-      assistantSeen += 1
-      if (assistantSeen >= maxAssistantTurns) break outer
-    }
+    messageCount += 1
+    if (messageCount >= maxMessages) break outer
   }
   return lines.join('\n')
 }
 
-/**
- * 口径 B：历史 API `assistant` 条数 + 本次 `loopRound` 是否已达「至少第 N 条」（N 见 `TITLE_SUGGEST_TRIGGER_AT_ASSISTANT_TURN`）。
- * 单次 invoke 内应配合「至多调度一次」标志，避免工具多轮时重复调用摘要接口。
- */
-export function reachedCumulativeAssistantTurnsForTitleSuggest(
-  historicalAssistantApiMessageCount: number,
-  loopRound: number
+/** 历史 user/assistant 数 + 本轮新 user/assistant 数达到阈值。 */
+export function reachedCumulativeMessagesForTitleSuggest(
+  historicalMessageCount: number,
+  currentMessageCount: number
 ): boolean {
-  return historicalAssistantApiMessageCount + loopRound >= TITLE_SUGGEST_TRIGGER_AT_ASSISTANT_TURN
+  return historicalMessageCount + currentMessageCount >= TITLE_SUGGEST_TRIGGER_AT_MESSAGE_COUNT
 }
 
 /** 与 `buildClaudeToolChatMessages` 对齐：每条已完成 assistant 气泡计 1 */
@@ -110,30 +107,30 @@ export function scheduleSessionTitleSuggestion(args: {
   baseUrl?: string
   messagesForApi: Anthropic.MessageParam[]
   getApiKey: () => Promise<string | null>
-}): void {
+}): Promise<boolean> {
   const { db, onTitleGenerated, sessionId, model, baseUrl, messagesForApi, getApiKey } = args
   const locale = readAppLocale(db)
 
   const cur = getSession(db, sessionId)
-  if (!cur) return
-  if (cur.metadata?.[SESSION_META_TITLE_GENERATED] === true) return
-  if (cur.metadata?.[SESSION_META_TITLE_USER_CUSTOM] === true) return
-  if (inFlightSessionIds.has(sessionId)) return
+  if (!cur) return Promise.resolve(false)
+  if (cur.metadata?.[SESSION_META_TITLE_GENERATED] === true) return Promise.resolve(false)
+  if (cur.metadata?.[SESSION_META_TITLE_USER_CUSTOM] === true) return Promise.resolve(false)
+  if (inFlightSessionIds.has(sessionId)) return Promise.resolve(false)
 
-  const dialogue = buildTitleSuggestDialogueText(messagesForApi, TITLE_SUGGEST_MAX_ASSISTANT_TURNS, locale)
-  if (!dialogue.trim()) return
+const dialogue = buildTitleSuggestDialogueText(messagesForApi, TITLE_SUGGEST_MAX_MESSAGES, locale)
+  if (!dialogue.trim()) return Promise.resolve(false)
 
   inFlightSessionIds.add(sessionId)
 
-  void (async () => {
+  return (async () => {
     try {
       const apiKey = await getApiKey()
-      if (!apiKey) return
+      if (!apiKey) return false
 
       const fresh = getSession(db, sessionId)
-      if (!fresh) return
-      if (fresh.metadata?.[SESSION_META_TITLE_GENERATED] === true) return
-      if (fresh.metadata?.[SESSION_META_TITLE_USER_CUSTOM] === true) return
+      if (!fresh) return false
+      if (fresh.metadata?.[SESSION_META_TITLE_GENERATED] === true) return false
+      if (fresh.metadata?.[SESSION_META_TITLE_USER_CUSTOM] === true) return false
 
       const client = createAnthropicClient(apiKey, baseUrl)
       const userContent =
@@ -163,12 +160,12 @@ export function scheduleSessionTitleSuggestion(args: {
         clearTimeout(timer)
       }
 
-      if (!title) return
+      if (!title) return false
 
       const again = getSession(db, sessionId)
-      if (!again) return
-      if (again.metadata?.[SESSION_META_TITLE_GENERATED] === true) return
-      if (again.metadata?.[SESSION_META_TITLE_USER_CUSTOM] === true) return
+      if (!again) return false
+      if (again.metadata?.[SESSION_META_TITLE_GENERATED] === true) return false
+      if (again.metadata?.[SESSION_META_TITLE_USER_CUSTOM] === true) return false
 
       const updated = updateSession(db, sessionId, {
         name: title,
@@ -176,9 +173,12 @@ export function scheduleSessionTitleSuggestion(args: {
       })
       if (updated) {
         onTitleGenerated?.(updated)
+        return true
       }
+      return false
     } catch {
-      // 静默忽略
+      // 静默忽略；打开补全标记由调用方在失败时撤销，使下次打开可重试。
+      return false
     } finally {
       inFlightSessionIds.delete(sessionId)
     }
@@ -186,9 +186,9 @@ export function scheduleSessionTitleSuggestion(args: {
 }
 
 /**
- * 老会话首次打开：若从未自动生成标题、未标用户自定义、已有足够 assistant，
- * 则从 DB 拉消息并异步摘要一次；写入 `titleOpenBackfillAttempted` 防止重复。
- * @returns 若写入了 metadata（含仅标记 attempted），返回更新后的 Session 供渲染进程合并
+ * 老会话首次打开：若从未自动生成标题、未标用户自定义、已有足够 user/assistant 消息，
+ * 则从 DB 拉消息并异步摘要；失败时清除 `titleOpenBackfillAttempted`，使后续打开可重试。
+ * @returns 若写入了 metadata，返回更新后的 Session 供渲染进程合并
  */
 export function scheduleSessionTitleOpenBackfillIfNeeded(args: {
   db: AppDatabase
@@ -208,7 +208,7 @@ export function scheduleSessionTitleOpenBackfillIfNeeded(args: {
   if (inFlightSessionIds.has(sessionId)) return undefined
 
   const rowMessages = getMessages(db, sessionId, 10_000, 0)
-  if (countCompletedAssistantMessagesForTitleSuggest(rowMessages) < TITLE_SUGGEST_TRIGGER_AT_ASSISTANT_TURN) {
+  if (rowMessages.filter((m) => (m.role === 'user' || m.role === 'assistant') && m.status !== 'streaming').length < TITLE_SUGGEST_MAX_MESSAGES) {
     return undefined
   }
 
@@ -228,16 +228,15 @@ export function scheduleSessionTitleOpenBackfillIfNeeded(args: {
     content: m.content as Anthropic.MessageParam['content']
   }))
 
-  const dialogue = buildTitleSuggestDialogueText(messagesForApi, TITLE_SUGGEST_MAX_ASSISTANT_TURNS, locale)
+  const dialogue = buildTitleSuggestDialogueText(messagesForApi, TITLE_SUGGEST_MAX_MESSAGES, locale)
+  if (!dialogue.trim()) return undefined
+
   const metaNext: Record<string, unknown> = { ...session.metadata, [SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED]: true }
-  if (!dialogue.trim()) {
-    return updateSession(db, sessionId, { metadata: metaNext })
-  }
 
   const marked = updateSession(db, sessionId, { metadata: metaNext })
   if (!marked) return undefined
 
-  scheduleSessionTitleSuggestion({
+  void scheduleSessionTitleSuggestion({
     db,
     onTitleGenerated,
     sessionId,
@@ -245,6 +244,13 @@ export function scheduleSessionTitleOpenBackfillIfNeeded(args: {
     baseUrl,
     messagesForApi,
     getApiKey
+  }).then((succeeded) => {
+    if (succeeded) return
+    const latest = getSession(db, sessionId)
+    if (!latest || latest.metadata?.[SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED] !== true) return
+    const metadata = { ...latest.metadata }
+    delete metadata[SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED]
+    updateSession(db, sessionId, { metadata })
   })
 
   return getSession(db, sessionId)

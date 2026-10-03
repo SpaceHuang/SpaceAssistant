@@ -227,7 +227,7 @@
 | `name` | `string` | 持久化标题；可为空字符串 |
 | `metadata.titleUserCustom` | `boolean` | 用户手动改过标题 |
 | `metadata.titleGenerated` | `boolean` | 是否曾自动生成（见关联文档） |
-| `metadata.titleOpenBackfillAttempted` | `boolean` | 打开补全是否已尝试（见关联文档） |
+| `metadata.titleOpenBackfillAttempted` | `boolean` | 老会话打开补全成功完成；失败时清除并允许重试（见关联文档） |
 
 ### 7.2 IPC 约定（复用，不新增 channel）
 
