@@ -71,7 +71,9 @@ export function registerButlerIpcHandlers(ipcMain: Electron.IpcMain, deps: Butle
     const profiles = JSON.parse(getConfigValue(db, 'config.workDirProfiles') ?? '[]') as Array<{ id: string; path: string }>
     const activeId = getConfigValue(db, 'config.activeWorkDirProfileId')
     const workDir = profiles.find((profile) => profile.id === activeId)?.path ?? getConfigValue(db, 'config.workDir') ?? ''
-    return { workDir, ...(model && service ? { modelId: model.id, modelOverride: model.name, modelServiceId: service.id } : {}), reasoningEffort: getConfigValue(db, 'config.thinkingEffort') ?? 'off' }
+    const configuredEffort = getConfigValue(db, 'config.thinkingEffort') ?? 'off'
+    const reasoningEffort = model?.supportsThinking === false ? 'off' : configuredEffort
+    return { workDir, ...(model && service ? { modelId: model.id, modelOverride: model.name, modelServiceId: service.id } : {}), reasoningEffort }
   })
 
   ipcMain.handle('butler:model-candidates', () => {

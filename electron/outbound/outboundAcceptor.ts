@@ -328,7 +328,7 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
     let continuationRouting = false
     const queueContinuation = (sessionId: string, text: string) => {
       const conn = getDbConnection(deps.db)
-      return runInTransaction(conn, () => {
+      const queued = runInTransaction(conn, () => {
         const accepted = enqueueDecision(sessionId, text, intent, false)
         const context = routedContinuationSource ? { sourceInvocationId: routedContinuationSource.invocationId, sourceTurnId: routedContinuationSource.turnId, historySequence: routedContinuationSource.sequence, summary: routedContinuationSource.summary, state: routedContinuationSource.state } : undefined
         conn.prepare(`INSERT INTO continuation_intents(request_id,session_id,payload_sha256,raw_text,attachments_json,intent_kind,route,source_invocation_id,source_turn_id,source_sequence,target_id,status,continuation_context_json,created_at,updated_at)
@@ -336,6 +336,8 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
           .run(intent.requestId!, sessionId, createHash('sha256').update(JSON.stringify({ sessionId, text: intent.text, attachments: intent.attachments ?? null })).digest('hex'), intent.text, JSON.stringify(intent.attachments ?? []), ['继续', '继续执行', '接着做', '接着刚才的修改', '继续上次的任务'].includes(intent.text.trim()) && !intent.attachments?.length ? 'exact-continue' : 'follow-up', routedContinuationSource ? 'context-queue' : 'ordinary-queue', routedContinuationSource?.invocationId ?? null, routedContinuationSource?.turnId ?? null, routedContinuationSource?.sequence ?? null, accepted.queued.messageId, 'queued', context ? JSON.stringify(context) : null, Date.now(), Date.now())
         return accepted
       })
+      deps.notifyEnqueued?.(sessionId)
+      return queued
     }
     if (intent.requestId && intent.sessionId && /^(继续|继续执行|接着做|接着刚才的修改|继续上次的任务|接着|刚才|上次)/u.test(intent.text.trim())) {
       continuationRouting = true
@@ -585,9 +587,7 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
       }
       case 'enqueue': {
         if (continuationRouting && intent.requestId) {
-          const queued = queueContinuation(sessionId, decision.text)
-          deps.notifyEnqueued?.(sessionId)
-          return queued
+          return queueContinuation(sessionId, decision.text)
         }
         return enqueueDecision(sessionId, decision.text, intent)
       }
@@ -616,7 +616,9 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
           : undefined
         if (continuationRouting && intent.requestId) {
           const conn = getDbConnection(deps.db)
-          const target = await deps.startTurn({ turnIntent: contextIntent?.kind === 'reuse-user' ? {
+          let target: Awaited<ReturnType<typeof deps.startTurn>>
+          try {
+          target = await deps.startTurn({ turnIntent: contextIntent?.kind === 'reuse-user' ? {
             mode: 'reuse-user', requestId: intent.requestId, sessionId, userMessageId: contextIntent.currentUser.message.id,
             excludeMessageIds: contextIntent.excludeMessageIds ?? [], config: routedContinuationSource ? { continuationContext: { sourceInvocationId: routedContinuationSource.invocationId, sourceTurnId: routedContinuationSource.turnId, historySequence: routedContinuationSource.sequence, summary: routedContinuationSource.summary, state: routedContinuationSource.state } } : {}
           } : {
@@ -632,6 +634,15 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
             },
             ...(retrySource ? { retryOfMessageId: retrySource.assistantMessageId, retryOfInvocationId: retrySource.sourceInvocationId } : {})
           } })
+          } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error)
+            if (msg.includes('SESSION_TURN_BUSY')) {
+              deps.audit('outbound.submit.degraded_to_queue', { sessionId, requestId: intent.requestId })
+              return queueContinuation(sessionId, decision.text)
+            }
+            deps.audit('outbound.submit.rejected', { sessionId, reason: msg, requestId: intent.requestId })
+            return { rejected: { reason: msg } }
+          }
           // Real TurnCoordinator commits this receipt atomically with prepareAtomic. The idempotent
           // upsert also repairs adapters that return an already persisted Turn without that hook.
           conn.prepare(`INSERT INTO continuation_intents(request_id,session_id,payload_sha256,raw_text,attachments_json,intent_kind,route,source_invocation_id,source_turn_id,source_sequence,target_id,status,created_at,updated_at)

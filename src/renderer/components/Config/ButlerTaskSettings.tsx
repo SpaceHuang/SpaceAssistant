@@ -144,7 +144,9 @@ export function ButlerTaskSettings() {
       modelServiceId: defaults.modelServiceId,
       modelOverride: defaults.modelOverride,
       modelPair: defaults.modelId && defaults.modelServiceId ? `${defaults.modelId}::${defaults.modelServiceId}` : undefined,
-      reasoningEffort: defaults.reasoningEffort ?? 'off'
+      reasoningEffort: candidates.find((candidate) => candidate.modelId === defaults.modelId && candidate.serviceId === defaults.modelServiceId)?.supportsThinking === false
+        ? 'off'
+        : defaults.reasoningEffort ?? 'off'
     })
     setEditorOpen(true)
   }

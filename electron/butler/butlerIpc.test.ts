@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { openDatabase, type AppDatabase } from '../database'
+import { setConfigValue } from '../database'
 import { createAutomationTask, getAutomationTask } from './taskStore'
 import { registerButlerIpcHandlers } from './butlerIpc'
 
@@ -36,6 +37,17 @@ describe('butler IPC workdir/config fields', () => {
     electronMock.canceled = false
     electronMock.filePaths = ['/tmp']
     await expect(map.get('butler:choose-workdir')!()).resolves.toMatchObject({ cancelled: false, path: '/private/tmp' })
+  })
+
+  it('defaults reasoning effort to off when the configured default model does not support Thinking', async () => {
+    const map = handlers()
+    setConfigValue(db!, 'config.models', JSON.stringify([{ id: 'model-1', name: 'provider-model', enabled: true, supportsThinking: false }]))
+    setConfigValue(db!, 'config.defaultModel', 'provider-model')
+    setConfigValue(db!, 'config.thinkingEffort', 'high')
+    setConfigValue(db!, 'config.llmServices', JSON.stringify([{ id: 'service-1', name: 'Service', provider: 'openai', supportedModelIds: ['model-1'] }]))
+    setConfigValue(db!, 'config.activeLlmServiceIds', JSON.stringify(['service-1']))
+    setConfigValue(db!, 'secrets.llmServiceKeys', JSON.stringify({ 'service-1': 'present' }))
+    expect(map.get('butler:get-defaults')!()).toMatchObject({ modelId: 'model-1', modelServiceId: 'service-1', reasoningEffort: 'off' })
   })
 
   it('cannot create without explicit validated workdir and stable model/service pair', async () => {

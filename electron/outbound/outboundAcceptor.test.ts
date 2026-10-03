@@ -452,6 +452,47 @@ describe('continuation intent acceptance persistence', () => {
     } finally { temp.cleanup() }
   })
 
+  it('queues continuation with stable request id and attachments when the session becomes busy during start', async () => {
+    const { createTempDatabase } = await import('../database/testHelpers')
+    const { createSession, appendMessage, createPersistedTurn, getDbConnection, getNextQueuedMessage } = await import('../database')
+    const { SqliteAgentHistory } = await import('../runtime/sqliteAgentHistory')
+    const temp = createTempDatabase('sa-continuation-start-race-')
+    try {
+      const session = createSession(temp.db, { name: 'start-race' })
+      appendMessage(temp.db, { id: 'race-source-assistant', sessionId: session.id, role: 'assistant', content: 'failed source', timestamp: 1, status: 'failed' })
+      createPersistedTurn(temp.db, { turnId: 'race-source-turn', requestId: 'race-source-invocation', sessionId: session.id, assistantMessageId: 'race-source-assistant', state: 'terminal', outcome: 'failed' })
+      const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, Date.now, session.id)
+      await history.appendBatch([
+        { invocationId: 'race-source-invocation', turnId: 'race-source-turn', sequence: 1, schemaVersion: 1, eventId: 'race-source-1', idempotencyKey: 'race-source-i1', kind: 'invocation-context-committed', payload: { messages: [], requiredUserMessage: { id: 'race-prior-user', message: { role: 'user', content: 'check the files' } } } },
+        { invocationId: 'race-source-invocation', turnId: 'race-source-turn', sequence: 2, schemaVersion: 1, eventId: 'race-source-2', idempotencyKey: 'race-source-i2', kind: 'invocation-failed', payload: { status: 'failed', message: 'failed after partial work' } }
+      ], 0)
+      const startTurn = vi.fn(async () => {
+        throw new Error('SESSION_TURN_BUSY')
+      })
+      const notifyEnqueued = vi.fn()
+      const acceptor = createOutboundAcceptor({
+        db: temp.db, turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
+        readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
+        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ enabled: true, rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
+        wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }), appendHintMessage: () => undefined, updateSessionState: () => undefined,
+        createSession: () => session, ensureSessionWorkDir: async () => ({ ok: true as const }), startTurn, notifyEnqueued, newRequestId: () => 'generated', audit: () => undefined
+      })
+      const requestId = 'race-continuation-request'
+      const attachments = [{ id: 'race-image', name: 'proof.png', mimeType: 'image/png' } as never]
+      const accepted = await acceptor.submitOutbound({ sessionId: session.id, text: '继续检查', requestId, contextIntent: { kind: 'create-user', text: '继续检查', attachments } })
+      expect(accepted).toMatchObject({ accepted: 'queued', queued: { requestId } })
+      expect(startTurn).toHaveBeenCalledTimes(1)
+      expect(notifyEnqueued).toHaveBeenCalledWith(session.id)
+      const queued = getNextQueuedMessage(temp.db, session.id)!
+      expect(queued.message.content).toBe('继续检查')
+      expect(queued.message.attachments).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'race-image' })]))
+      expect(getDbConnection(temp.db).prepare('SELECT route,status,source_invocation_id,source_turn_id,continuation_context_json FROM continuation_intents WHERE request_id=?').get(requestId)).toMatchObject({
+        route: 'context-queue', status: 'queued', source_invocation_id: 'race-source-invocation', source_turn_id: 'race-source-turn'
+      })
+      expect(history.listInvocationIdsForSession(session.id)).toContain('race-source-invocation')
+    } finally { temp.cleanup() }
+  })
+
   it('does not start a fallback Turn when checkpoint acceptance commit is uncertain', async () => {
     const { createTempDatabase } = await import('../database/testHelpers')
     const { createSession, appendMessage, createPersistedTurn, getDbConnection } = await import('../database')

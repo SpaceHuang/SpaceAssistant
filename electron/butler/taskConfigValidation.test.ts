@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, rm, realpath } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, rm, realpath, chmod } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -25,5 +25,17 @@ describe('task work directory validation', () => {
     await writeFile(file, 'x')
     expect(await validateTaskWorkDir(file)).toMatchObject({ ok: false, error: '任务工作目录必须是目录' })
     expect(await validateTaskWorkDir(join(root, 'missing'))).toMatchObject({ ok: false, error: '任务工作目录不存在或不可访问' })
+  })
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('rejects a directory without read permission', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'automation-no-read-'))
+    dirs.push(root)
+    const inaccessible = join(root, 'private')
+    await mkdir(inaccessible)
+    await chmod(inaccessible, 0o300)
+    try {
+      expect(await validateTaskWorkDir(inaccessible)).toMatchObject({ ok: false, error: '任务工作目录不存在或不可访问' })
+    } finally {
+      await chmod(inaccessible, 0o700)
+    }
   })
 })

@@ -104,6 +104,19 @@ describe('ButlerTaskSettings（P6 定时任务 Tab）', () => {
     await waitFor(() => expect(butlerListTasks).toHaveBeenCalledTimes(2))
   })
 
+  it('默认模型不支持 Thinking 时以 off 创建任务', async () => {
+    butlerGetTaskDefaults.mockResolvedValueOnce({ workDir: '/tmp/seed', modelId: 'model-1', modelServiceId: 'service-1', modelOverride: 'model-name', reasoningEffort: 'high' })
+    butlerGetModelCandidates.mockResolvedValueOnce([{ modelId: 'model-1', providerModelName: 'model-name', serviceId: 'service-1', serviceName: 'Service', supportsThinking: false }])
+    renderTab()
+    await waitFor(() => expect(butlerListTasks).toHaveBeenCalled())
+    fireEvent.click(screen.getAllByRole('button', { name: '新建任务' })[0]!)
+    fireEvent.change(await screen.findByLabelText('任务名称'), { target: { value: '无 Thinking 模型任务' } })
+    fireEvent.change(screen.getByLabelText('任务提示词'), { target: { value: '执行检查' } })
+    fireEvent.click(await screen.findByRole('button', { name: /保\s*存/ }))
+    await waitFor(() => expect(butlerCreateTask).toHaveBeenCalledTimes(1))
+    expect(butlerCreateTask.mock.calls[0]![0]).toMatchObject({ reasoningEffort: 'off' })
+  })
+
   it('旧任务编辑显示未设置目录，加载时不触发保存或自动填值', async () => {
     butlerListTasks.mockResolvedValue([task()])
     renderTab()

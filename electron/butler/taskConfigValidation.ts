@@ -1,3 +1,4 @@
+import { constants } from 'node:fs'
 import { access, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import type { AgentReasoningEffort } from '../../src/shared/agent/invocation'
@@ -13,7 +14,7 @@ export async function validateTaskWorkDir(value: unknown): Promise<{ ok: true; w
     const canonical = await realpath(resolve(value))
     const info = await stat(canonical)
     if (!info.isDirectory()) return { ok: false, error: '任务工作目录必须是目录' }
-    await access(canonical)
+    await access(canonical, constants.R_OK | constants.X_OK)
     return { ok: true, workDir: canonical }
   } catch {
     return { ok: false, error: '任务工作目录不存在或不可访问' }
