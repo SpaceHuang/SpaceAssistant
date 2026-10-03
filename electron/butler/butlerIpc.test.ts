@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { realpath } from 'node:fs/promises'
 import { openDatabase, type AppDatabase } from '../database'
 import { setConfigValue } from '../database'
 import { createAutomationTask, getAutomationTask } from './taskStore'
@@ -36,7 +37,7 @@ describe('butler IPC workdir/config fields', () => {
     await expect(map.get('butler:choose-workdir')!()).resolves.toEqual({ cancelled: true })
     electronMock.canceled = false
     electronMock.filePaths = ['/tmp']
-    await expect(map.get('butler:choose-workdir')!()).resolves.toMatchObject({ cancelled: false, path: '/private/tmp' })
+    await expect(map.get('butler:choose-workdir')!()).resolves.toMatchObject({ cancelled: false, path: await realpath('/tmp') })
   })
 
   it('defaults reasoning effort to off when the configured default model does not support Thinking', async () => {
@@ -63,7 +64,7 @@ describe('butler IPC workdir/config fields', () => {
     const legacy = createAutomationTask(db!, { name: 'legacy', prompt: 'report', schedule: { kind: 'interval', intervalMinutes: 30 }, deliveryPref: 'desktop', modelOverride: 'old-provider-name' })
     const response = await map.get('butler:update')!(null, { id: legacy.id, patch: { workDir: '/tmp' } }) as { ok: boolean; error?: string }
     expect(response).toEqual({ ok: true })
-    expect(getAutomationTask(db!, legacy.id)).toMatchObject({ workDir: '/private/tmp', modelOverride: 'old-provider-name' })
+    expect(getAutomationTask(db!, legacy.id)).toMatchObject({ workDir: await realpath('/tmp'), modelOverride: 'old-provider-name' })
     expect(getAutomationTask(db!, legacy.id)).not.toHaveProperty('modelId')
     expect(getAutomationTask(db!, legacy.id)).not.toHaveProperty('reasoningEffort')
   })

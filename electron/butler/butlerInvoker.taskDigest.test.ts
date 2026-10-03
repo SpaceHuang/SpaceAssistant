@@ -5,6 +5,7 @@
  * 本文件 mock toolChatLoop 只为观测装配参数；其余（准入 / 会话 / turnRuntime / 任务存储）走真实链路。
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { tmpdir } from 'node:os'
 
 const mockRunToolChatSession = vi.fn()
 const mockResolveLlmCredentials = vi.fn()
@@ -79,11 +80,11 @@ describe('butlerInvoker 任务声明装配（D）', () => {
     return {
       db,
       turnRuntime: makeRuntime(db),
-      getWorkDir: () => '/tmp/wd',
+      getWorkDir: () => tmpdir(),
       getUserDataPath: () => '/tmp/ud',
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG as const }),
-      getActiveWorkDirProfilePath: () => '/tmp/wd',
-      resolveWorkDirForSession: () => '/tmp/wd'
+      getActiveWorkDirProfilePath: () => tmpdir(),
+      resolveWorkDirForSession: () => tmpdir()
     }
   }
 

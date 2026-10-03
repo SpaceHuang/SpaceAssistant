@@ -184,11 +184,11 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       db,
       turnRuntime: makeRuntime(db),
       admissionGate: new CallAdmissionGate(),
-      getWorkDir: () => '/tmp/wd',
-      getActiveWorkDirProfilePath: () => String((overrides.getWorkDir as (() => string) | undefined)?.() ?? '/tmp/wd'),
+      getWorkDir: () => os.tmpdir(),
+      getActiveWorkDirProfilePath: () => String((overrides.getWorkDir as (() => string) | undefined)?.() ?? os.tmpdir()),
       getUserDataPath: () => '/tmp/ud',
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG as const }),
-      resolveWorkDirForSession: () => '/tmp/wd',
+      resolveWorkDirForSession: () => os.tmpdir(),
       ...overrides
     }
   }
@@ -307,7 +307,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     expect(run?.resultSummary).toContain('磁盘')
     expect(run?.usageJson).toContain('input_tokens')
     expect(run?.trigger).toBe('manual')
-    expect(run?.configSnapshot).toMatchObject({ resolutionStatus: 'resolved', workDir: await fs.realpath('/tmp/wd'), workDirSource: 'legacy-profile', providerModelName: expect.any(String), serviceId: 'svc-1' })
+    expect(run?.configSnapshot).toMatchObject({ resolutionStatus: 'resolved', workDir: await fs.realpath(os.tmpdir()), workDirSource: 'legacy-profile', providerModelName: expect.any(String), serviceId: 'svc-1' })
 
     const session = run?.sessionId ? getSession(db, run.sessionId) : undefined
     expect(session?.ownership).toBe('automation')

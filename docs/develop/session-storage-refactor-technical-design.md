@@ -2,10 +2,10 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 文档状态 | **v4 · 评审修改中**（v1/v2/v3 已评审；B1 回请裁定确认，B6 + F-1…F-4 已处置，**B7 水位线模型错位已修复**，见 §12） |
-| 版本 | v1（初稿）→ v2（B1–B5 处置）→ v3（B6 + F-1…F-4 修正）→ **v4（B7 折叠序修复）** |
-| 评审记录 | [v1](../review/2026-10-02-session-storage-refactor-technical-design-review.md) · [v2](../review/2026-10-02-session-storage-refactor-technical-design-review-v2.md) · [v3](../review/2026-10-02-session-storage-refactor-technical-design-review-v3.md) |
-| 当前门控 | **Phase 0/1 放行；Phase 2/3 维持 P-1…P-5 门控**（F-3 并入 P-4、F-4 并入 P-3、B6 并入 P-5、**B7 折叠序并入 P-2 第一节**） |
+| 文档状态 | **v5 · 评审修改中**（B1 回请裁定确认，B6 + F-1…F-4、B7、B8、B9 已处置，见 §12） |
+| 版本 | v1（初稿）→ v2（B1–B5 处置）→ v3（B6 + F-1…F-4 修正）→ v4（B7 折叠序修复）→ **v5（B8 恢复义务拆分 + B9 水位身份校验）** |
+| 评审记录 | [v1](../review/2026-10-02-session-storage-refactor-technical-design-review.md) · [v2](../review/2026-10-02-session-storage-refactor-technical-design-review-v2.md) · [v3](../review/2026-10-02-session-storage-refactor-technical-design-review-v3.md) · [v4](../review/2026-10-02-session-storage-refactor-technical-design-review-v4.md) · [v5](../review/2026-10-02-session-storage-refactor-technical-design-review-v5.md) |
+| 当前门控 | **Phase 0 放行；Phase 1 仅在持久化修复待办队列、历史初次分类与定向恢复实现后放行；Phase 2/3 维持 P-1…P-5 门控**（B7 折叠序并入 P-2 第一节；B8/B9/B10 已纳入方案与验收） |
 | 适用范围 | `electron/database/*`、`electron/sessionEvents.ts`、`electron/runtime/*`、`electron/toolChatLoop.ts`、`packages/agent-sdk/src/history.ts`、`electron/storage/*`、`main.ts` 启动链 |
 | 触发问题 | 主库膨胀至 402 MB；启动恢复持续数分钟；窗口迟迟不出 |
 | 上游约束 | 不推翻[会话记录事件流持久化重设计方案](./session-record-eventflow-persistence-redesign-plan.md)（已落地）与[消息列表渲染进程性能优化技术方案](./chat-message-list-renderer-performance-optimization-design.md)（已落地） |
@@ -17,13 +17,13 @@
 | v1 | 初稿：主张把 `events.jsonl` 收敛为唯一真相源，`messages` 降级为可丢弃投影 |
 | v2 | **修正真相源定位**：`events.jsonl` 是审计台账而非消息载体（B1 成立），真相源改为 DB 内的 canonical history；并入 B2–B5 处置 |
 | v3 | ① **B1 回请裁定为"确认"**——v1 的强判断撤回，"无需扩展事件模型"成立（评审补齐 `toolChatLoop.ts` 写入链实锤，见 §12）；② 处置 **B6**（spill 可丢弃性与保留期的规范级矛盾）；③ 修正 **F-1**（P-1 判据 SQL 用错事件）；④ 修正 **F-2**（台账 `text_delta` 结论错误）；⑤ **F-3** 并入 P-4、**F-4** 并入 P-3 |
-| **v4（本版）** | **处置 B7（水位线模型错位）**：v1–v3 的 `seq` 水位线 / `restoreFloor` / one-below anchor / 撕裂尾截断全部默认"每会话一条物理追加日志"，而真相源 `agent_history_events` 是 **per-invocation 分流**（`PRIMARY KEY(invocation_id, sequence)`，流上连 `created_at` 都没有）。本版新增 **§5.12 会话级折叠序**，据此重定义投影水位线（§5.2）、L1 取后缀的形态（§5.3）、并逐行标注 §5.7 崩溃恢复机制的**适用对象**（DB canonical 无撕裂尾）；折叠序并入 **P-2 第一节** |
+| **v5（本版）** | 处置 **B8**：把未终态 invocation 收口与已终态 canonical 投影补偿拆开，终态投影义务未完成时仍可重试；处置 **B9**：L1 核验水位事件自身的不可复用身份，移除 one-below 空尾作为缩短证明的说法，并补足空会话、边界删除及 session ID 重建判据；处置 **B10**：Phase 1 性能门禁要求持久化待办队列与历史流初次分类，启动复杂度按非终态流 + 未完成待办衡量 |
 
 > **v2 → v3 的定性变化**：v2 的两处"核心事实"证据有误——附录 A 的 P-1 判据用了身份指纹事件（`session-input-committed`）而非上下文提交事件（`invocation-context-committed`），§1.2 又声称台账"未见 `text_delta`"。两处均已更正；**结论方向不变**（台账不作真相源、无需扩展事件模型），但证据链必须在进入 P-1 go/no-go 前是干净的。
 
 ---
 
-## 0. TL;DR（v4）
+## 0. TL;DR（v5）
 
 1. **真相源 = canonical history（`agent_history_events`，在 DB/userData 内）**。消息级事件与写入链：
    - `invocation-context-committed`：`payload.messages`（完整 canonical 上下文数组）+ 可选 `requiredUserMessage`（**hosted 主聊天路径每轮提交**，`electron/toolChatLoop.ts:1063-1078`）；
@@ -139,7 +139,7 @@ assistant 正文经 `updateMessageContent` 进 `messages`，同一份内容又�
 
 ### 2.5 启动恢复全量重放
 
-`runtime/sqliteAgentHistory.ts:322-326`：每次启动 `SELECT ... FROM agent_history_streams`（全表），对**每个** invocation `await this.read(id)`（读全部事件 + `JSON.parse`）再 `rebuildInvocationStates`，**不区分是否需要恢复**。这一条**与是否投影化无关，可独立先行**（Phase 1）。
+`runtime/sqliteAgentHistory.ts:322-326`：每次启动 `SELECT ... FROM agent_history_streams`（全表），对**每个** invocation `await this.read(id)`（读全部事件 + `JSON.parse`）再 `rebuildInvocationStates`，**不区分是否需要恢复**。消除这项瓶颈要求启动只读取非终态流与持久化修复队列中未完成的义务；因此 Phase 1 必须同时实现修复义务登记、历史数据初次分类和失败重试，不能仅用非终态过滤替代全量恢复。
 
 ---
 
@@ -215,6 +215,8 @@ assistant 正文经 `updateMessageContent` 进 `messages`，同一份内容又�
 | --- | --- |
 | `session_projection_cache` | per-record 投影缓存：`session_id`、`key`、`ver`、`session_seq`、`commit_order`、`event_count`、`val`、`updated_at`；PK `(session_id, key)`（B7 双水位） |
 | `session_storage_index` | 列表零 I/O：`session_id`、`revision`、`size_bytes`、`event_count`、`format_version` |
+| `canonical_projection_repairs` | 持久化逐项修复义务：session/invocation、repair kind、目标范围、状态、尝试次数、最近错误、更新时间、幂等键；启动按未完成项定向处理 |
+| `canonical_projection_repair_migration` | 升级前历史流初次分类游标与状态；支持分批迁移、中断续跑，迁移完成后不进入常规启动扫描 |
 | `spill_index` | `locator`、`session_id`、`tool_use_id`、`bytes`、`sha256`、`created_at`、**`class`（source-of-truth / degradable）**（B6） |
 | `agent_history_commit_cursor` | 全局单调序分配器：`id INTEGER PRIMARY KEY AUTOINCREMENT`、`allocated_at`（B7） |
 | `session_event_cursor` | 会话内连续序分配器：`session_id` PK、`next_seq`（B7） |
@@ -247,16 +249,19 @@ CREATE TABLE IF NOT EXISTS session_projection_cache (
   session_id   TEXT NOT NULL,
   key          TEXT NOT NULL,   -- 'messages' | 'title' | 'context-summary'
   ver          INTEGER NOT NULL,-- 单元 stateVersion
-  session_seq  INTEGER NOT NULL,-- 会话内连续水位线（-1 = 空）：L1 取后缀的依据
-  commit_order INTEGER NOT NULL,-- 全局单调水位线（-1 = 空）：跨 stream 合并排序的依据
-  event_count  INTEGER NOT NULL,-- 该水位处本会话已折叠事件数：缩短检测（备选方案用）
+  session_seq       INTEGER NOT NULL,-- 会话内连续水位线（-1 = 空）：L1 取后缀的依据
+  commit_order      INTEGER NOT NULL,-- 全局单调水位线（-1 = 空）：跨 stream 合并排序的依据
+  watermark_event_id TEXT,            -- 水位事件身份；空水位为 NULL
+  watermark_invocation_id TEXT,       -- 水位事件所属 invocation；空水位为 NULL
+  session_generation TEXT NOT NULL,   -- 防止同 session_id 删除重建后复用旧缓存
+  event_count       INTEGER NOT NULL,-- 附加一致性检查，不替代水位事件身份核验
   val          TEXT NOT NULL,   -- 纯 JSON
   updated_at   INTEGER NOT NULL,
   PRIMARY KEY (session_id, key)
 );
 ```
 
-规则：**per-record**、**fail-soft**（写失败只 warn，下次自愈）、**`ver` 门控**（失配即丢弃，绝不前向应用）、**水位线必须成对记录**（`session_seq` + `commit_order` + `event_count`，任一缺失即视为水位不可用并升级 L2）、**`val` 为 detached 副本**。
+规则：**per-record**、**fail-soft**（写失败只 warn，下次自愈）、**`ver` 门控**（失配即丢弃，绝不前向应用）、**水位信息必须完整**（`session_seq` + `commit_order` + 水位事件身份 + `session_generation`；空水位使用 `session_seq = -1` 且身份为 NULL），任何身份缺失或核验失败均升级 L2；`event_count` 仅作附加检查；**`val` 为 detached 副本**。
 
 > **B7**：v1–v3 的 `seq` 直接借用了 per-invocation 的 `sequence`，而真相源是 per-invocation 分流表、不存在会话级全序键，该字段在实现上无法定义。水位线的来源与语义见 **§5.12**。
 
@@ -268,9 +273,11 @@ CREATE TABLE IF NOT EXISTS session_projection_cache (
 | L1 | 打开会话、resume | 取 `ver` 匹配且水位可用的行作 seed；取 `session_seq > 缓存水位` 的**会话内后缀**，跨 stream 按 `commit_order` **合并排序**后折叠 | O(增量) |
 | L2 | 缓存缺失 / `ver` 失配 / 水位不可用 / 缩短检出 | 从 `session_seq = 0` 折叠该会话全量 canonical | O(全量) |
 
-**one-below anchor（前提修正）**：该机制原本依赖"每会话一条物理追加日志、会话内序号连续"，因此**仅在会话级序号连续时成立**。双序方案下读取起点取 `session_seq = 水位 - 1`，"空尾读"即可证明会话日志已缩短到水位以下（崩溃修复截断 / 归档），从而拒绝陈旧行并升级 L2。
+**水位身份校验（取代 one-below anchor）**：每条缓存行除 `session_seq`、`commit_order` 外，必须保存水位事件的 `event_id`（必要时同时保存 `invocation_id`）；`session_seq = -1` 表示空水位，`event_id` 为空。L1 在应用缓存 seed 前，必须按 `(session_id, session_seq)` 读取水位事件，并确认该行存在且其 `event_id`、`commit_order` 与缓存记录完全一致。水位事件缺失、身份不符、generation 不符或读取失败时，缓存不可用，必须升级 L2。仅检查 `session_seq = 水位 - 1` 是否存在、或检查其后缀为空，**不能**证明水位事件仍存在，禁止据此接受缓存。
 
-**备选方案（不引入 `session_seq`）**：只以 `commit_order` 为水位时号段稀疏（被其它会话占用），"空尾读"不再能证明缩短，须退化为**计数校验**——比对 `event_count` 与 `COUNT(*) WHERE session_id = ? AND commit_order <= 水位`，不等即升级 L2（检测能力由"结构性证明"降级为"计数比对"）。
+会话级 `generation` 在会话创建时分配，删除后重建同一 `session_id` 必须产生新 generation；缓存及水位事件均绑定该 generation。空会话只在缓存标记为空水位且当前会话 generation 匹配、canonical 事件数为零时命中；若水位为 `-1` 但当前会话已有事件，升级 L2。若实现选择不保留 generation，则删除会话必须在同一事务中失效其缓存、cursor 与索引，且重建同一 ID 前确保旧缓存不可见；此原子性须由测试证明。
+
+**备选方案（不引入 `session_seq`）**：只以 `commit_order` 定位水位事件并核验 `event_id`、`invocation_id` 与 generation；`event_count` 可额外用于发现不一致，但计数相同也不能替代水位事件身份核验。
 
 ### 5.4 为什么本方案不需要"扩展事件模型"（B1 裁定后）
 
@@ -312,7 +319,9 @@ CREATE TABLE IF NOT EXISTS session_projection_cache (
 | 撕裂物理尾 / 部分写入 | **仅文件**：审计台账 `events.jsonl`、两类 spill、导出备份。**不适用 DB canonical**（无部分提交） | 文件侧由写路径在第一次新写入前截断或丢弃不完整帧；读方永不返回撕裂内容 |
 | 中途崩溃的轮次（有 start 无 end） | canonical（**事件级语义中断**，与物理撕裂无关） | **不截断**；resume 计算 closers 作为普通批次追加，不执行任何副作用 |
 | 只读观察方（列表/搜索） | 全部（canonical + 台账） | **仅内存配平，不回写** |
-| `recoverInterruptedInvocations` | canonical | **改为按需**：一条 SQL 找出"非终态"流，只对这些流做尾部读取与收口（**Phase 1 可先行**） |
+| 未终态 invocation 收口 | canonical | 按需扫描缺少终态事件的流，只计算并追加 closers；不得据此判定终态流的投影修复已完成 |
+| 终态 canonical 投影补偿 | canonical → 台账/usage/tool 等派生投影 | **Phase 1 必须有可靠、持久化的逐项修复待办表**（session/invocation、repair kind、目标事件/范围、状态、尝试次数、最近错误、更新时间、幂等键）。canonical 提交与待办登记必须在同一 DB 事务；每项修复成功后才标完成，失败保留待办供后续启动重试。启动只读取未完成待办，不枚举已完成终态流 |
+| 升级前历史流分类 | 已有 canonical streams | Phase 1 启用按需恢复前执行一次可中断、可续跑的初始分类：按批检查既有流并为仍缺投影义务的终态流登记待办；分类游标持久化，完成前维持旧恢复路径，不宣称性能门禁通过。后续启动仅处理分类游标剩余批次、非终态流及未完成待办，不重复全表读取 |
 | `append` 尽力而为 / `flush` 为持久性屏障 | **仅文件**（台账 sink、spill）。**不适用 DB canonical** | DB 侧事务提交即持久（WAL + 现有 `synchronous=NORMAL`）；`flush` 语义退化为 WAL checkpoint。见 §5.1 |
 
 > 台账侧的撕裂尾修复沿用[已落地方案](./session-record-eventflow-persistence-redesign-plan.md)（fail-stop、丢失量诊断）；本方案不改其语义。
@@ -345,7 +354,7 @@ CREATE TABLE IF NOT EXISTS session_projection_cache (
 
 ### 5.12 会话级折叠序（B7 修复）
 
-**问题**：水位线、L1 取后缀、one-below anchor 三者的共同前提是"每会话一条物理追加日志、会话内序号连续"。真相源 `agent_history_events` 是 **per-invocation 分流表**，不满足该前提。逐键核验：
+**问题**：水位线与 L1 取后缀需要明确会话级序；one-below anchor 还被错误地当作缓存边界存在性证明。真相源 `agent_history_events` 是 **per-invocation 分流表**，不满足每会话一条物理追加日志的前提。逐键核验：
 
 | 候选键 | 可否作会话级全序 | 原因 |
 | --- | --- | --- |
@@ -361,10 +370,14 @@ CREATE TABLE IF NOT EXISTS session_projection_cache (
    - 作用：跨 stream 的**确定性全序**（多 stream 折叠顺序、恢复重放顺序）。
    - 注意：SQLite 无法给既有表添加 `AUTOINCREMENT` 列，故采用"分配器表 + 普通列"，**不依赖 rowid**。
 2. **`session_seq`（会话内连续）**——表 `session_event_cursor(session_id TEXT PRIMARY KEY, next_seq INTEGER NOT NULL)`；同一事务内 `INSERT … ON CONFLICT(session_id) DO UPDATE SET next_seq = next_seq + ?` 分配，写入事件行 `session_seq`。
-   - 作用：会话内**连续**序号，使 one-below anchor 的"空尾读 → 证明缩短"重新成立。
+   - 作用：会话内**连续**序号，用于定位增量后缀；它本身不证明缓存水位事件仍存在。
    - 争用：同会话写入本已由 FIFO 准入串行（`session_execution_queue`），无额外竞争。
 
-**备选方案**（若评审认为新增 cursor 表成本偏高）：只用 `commit_order` + **计数校验**（§5.2 的 `event_count`），放弃空尾证明；代价是每次 L1 多一次 `COUNT(*)`，缩短检测由结构性证明降级为计数比对。
+缓存水位身份：缓存行保存水位事件的 `event_id`、`invocation_id`、`commit_order` 及会话 `generation`。L1 必须查询 `session_id + session_seq` 对应事件，并逐项比对身份；缺行或不匹配即 L2。`event_count` 可作为额外一致性检查，但计数相同也不能替代身份核验（删一条再插一条会保持计数）。空水位以 `session_seq = -1`、空身份表示，并核验当前 generation 的 canonical 事件数为零。
+
+删除重建策略必须二选一并落实到事务边界：① generation 随 session 身份变化，缓存、水位与索引绑定 generation；② 删除时同一 DB 事务失效缓存、cursor、索引，重建前保证旧缓存不可见。不得仅凭 `session_id` 相同复用旧投影。
+
+**备选方案**（若不新增 `session_seq`）：使用 `commit_order` 定位并核验水位事件身份；可用 `event_count` 作附加校验，但不得把 one-below 空尾或单纯计数当成水位事件存在证明。
 
 **历史回填**：既有行按 `(created_at, invocation_id, sequence)` 排序一次性回填两个序号。该顺序为**近似值**（受毫秒碰撞影响），因此：
 
@@ -398,6 +411,8 @@ CREATE TABLE IF NOT EXISTS session_projection_cache (
 
 ## 7. 兼容与迁移
 
+具体新旧版本迁移时机、旧会话首次访问与后台补迁策略、每项任务的完成判据见[会话存储重构迁移计划](./session-storage-refactor-migration-plan.md)。本节中的“旧会话按需迁移”特指：Phase 2 双读上线后，canonical 覆盖充分的旧会话在首次打开/resume/API context 时全量折叠生成新投影缓存；未访问且 eligible 的会话由 M3 后台分批补迁；不 eligible 的会话继续使用 legacy 读路径，直到有经过验收的替代方案。
+
 | 原则 | 做法 |
 | --- | --- |
 | 双读兼容 | 有 `ver` 匹配的投影缓存行 → L1/L0；否则 L2 全量折叠。旧肥行无需一次性迁移 |
@@ -416,9 +431,9 @@ CREATE TABLE IF NOT EXISTS session_projection_cache (
 | 阶段 | 状态 | 说明 |
 | --- | --- | --- |
 | Phase 0 可观测 | **放行** | 不改行为 |
-| Phase 1 写侧止血 | **放行** | 低风险、即时收益 |
+| Phase 1 写侧止血 | **门控：实现修复队列后放行** | 必须实现事务性待办登记、升级前历史流初次分类/续跑及失败重试；运行时启动只能读取非终态流与未完成待办，禁止全量终态检查 |
 | Phase 2 投影化 | **门控** | 待 P-1…P-5 全部满足，且与 retention 改造同一提交边界（B2） |
-| Phase 3 spill + 恢复按需 | **部分放行** | 仅"恢复按需化"归入 Phase 1；两类 spill 定稿（B6）后另行推进 |
+| Phase 3 spill + 恢复按需 | **部分放行** | 启动恢复按需化（含终态投影待办队列）归入 Phase 1 门控；两类 spill 定稿（B6）后另行推进 |
 | Phase 4 回收与保留 | **部分前移** | retention 联动（B2/P-4）前移至 Phase 2 边界 |
 | Phase 5 messages 纯投影化 | **暂停** | 高风险，需单独评审 |
 
@@ -441,18 +456,19 @@ CREATE TABLE IF NOT EXISTS session_projection_cache (
 - 一次性清理：userData 的 `bak-spaceassistant-data.json`（63 MB）走显式确认后删除或归档。
 - 验收：一次冷启动产出分段耗时表 + 体积画像 + 覆盖率初查。
 
-### 8.4 Phase 1：写侧止血（放行）
+### 8.4 Phase 1：写侧止血（待修复队列实现后放行）
 
 - 删除 `idx_messages_content`；`searchMessages` 改 FTS5 或降级全扫（行为不变）。
 - `appendMessage` 去掉 `COUNT(*)`，改增量计数。
 - 落库前对工具结果套用与出站一致的压缩（复用 `compactOversizedToolResultContent`）。
-- **`recoverInterruptedInvocations` 改为按需**（只处理非终态流）——启动可用性收益最大且独立于投影化。
+- 将启动恢复拆为两类独立义务：① 未终态 invocation 按需扫描并收口；② 已终态 canonical 的台账、model request、usage、tool call/result 等跨存储投影补偿。必须实现持久化逐项待办队列，且 canonical 写入与待办登记处于同一事务。启动只扫描非终态流和待办队列中的未完成项；修复失败保留待办，成功后按幂等键标记完成。
+- 对升级前历史流执行一次分批初始分类，为缺失投影登记待办；使用持久化游标支持中断续跑。初始分类未完成时不得切换到按需恢复，也不得宣称 Phase 1 性能验收通过。分类完成后，常规启动不得再枚举所有已终态 streams。
 - 迁移事务拆分（§5.11）与启动分段打点合流。
-- 测试：索引删除后搜索等价；`message_count` 与 `COUNT(*)` 一致；截断往返可还原标记；按需恢复结果与全量重放等价。
+- 测试：索引删除后搜索等价；`message_count` 与 `COUNT(*)` 一致；截断往返可还原标记；非终态收口与修复待办结果和全量重放等价；投影修复失败后重启可重试；升级前分类可中断续跑且不遗漏待修复义务。
 
 ### 8.5 Phase 2（门控，待 P-1…P-5）
 
-投影缓存 + 读阶梯 + `ver` + **会话级双水位（`session_seq` / `commit_order`）** + one-below anchor + 三强制点 + fail-soft 边界；**同提交边界内**完成 retention 联动（P-4）。
+投影缓存 + 读阶梯 + `ver` + **会话级双水位（`session_seq` / `commit_order`）** + 水位事件身份/generation 校验 + 三强制点 + fail-soft 边界；**同提交边界内**完成 retention 联动（P-4）。
 
 ### 8.6 验证命令
 
@@ -470,7 +486,7 @@ git diff --check
 
 ## 9. 验收标准
 
-1. 冷启动窗口可见时间不随库体积线性增长；`recoverInterruptedInvocations` 耗时与非终态流数量成正比。
+1. 分类完成后的冷启动恢复耗时与非终态流数量及未完成修复待办数量成正比，不随已完成终态流数量或其事件总量增长。复杂度对拍：固定非终态流和待办数，逐步增加已完成终态流及其事件数，验证恢复扫描的行数/解析事件数保持稳定；再增加非终态流或待办数，验证工作量相应增长。
 2. 体积：新会话连续 20 轮 grep 验证后，主库增长 ≤ 该会话 canonical 事件的 10%。
 3. 读阶梯：L0 零文件读；L1 只读后缀；L2 仅缓存不可用时触发（以读取字节数断言）。
 4. 渲染：首屏 60 / 翻页 60 / API 上下文（500）三项 p95 不劣于改造前（复用 batch1/batch2 门禁方法）。
@@ -481,8 +497,11 @@ git diff --check
 9. **B3 专项**：删除 workDir / 切 profile / `git clean` 后，历史会话正文仍可读。
 10. **B6 专项**：真相源 spill 在任何保留期清理后仍存在；可降级 spill 清理不影响读模型等价性。
 11. **F-3 专项**：台账缺失时 compaction 重放路径行为明确（可用或有例外清单），且不静默降级。
-12. **B7 专项**：新写入的 canonical 事件同时具备 `commit_order`（全局单调）与 `session_seq`（会话内连续）；水位任一字段缺失时必走 L2；会话内序号连续性可被 one-below anchor 的空尾读验证。
-13. 全程测试通过、增量构建通过、`git diff --check` 无输出。
+12. **B7 专项**：新写入的 canonical 事件同时具备 `commit_order`（全局单调）与 `session_seq`（会话内连续）；水位任一字段缺失时必走 L2。
+13. **B8 专项**：canonical 终态已提交但台账/usage/tool 等投影写入失败后，重启仍会修复；首次修复失败后再次重启会重试；只有修复义务全部完成的终态流才可跳过扫描。
+14. **B9 专项**：删除恰好位于缓存水位的事件会触发 L2；空会话水位与首次事件可区分；删除后以同一 `session_id` 重建会话不会命中旧缓存；删水位事件后即使前一事件仍存在、后缀为空也不得接受旧 `val`。
+15. **B10 专项**：固定非终态流与待办数、递增已完成终态流和事件数，常规冷启动恢复扫描/解析工作量不增长；升级前初始分类可续跑，分类失败时仍保留旧恢复路径。
+16. 全程测试通过、增量构建通过、`git diff --check` 无输出。
 
 ---
 
@@ -495,7 +514,7 @@ git diff --check
 | 投影折叠语义漂移（顺序/工具配对/thinking 候选/图片标记） | P-2 逐字段语义表 + 真实会话回放对拍（硬验收） |
 | P-1 判据失真导致错误 go/no-go（F-1 教训） | 判据以"含正文的事件"为准；单列指纹-only 与压缩类别；报告给出统计口径 |
 | 历史 canonical 覆盖不全，投影化后老会话退化为空 | P-1 先行；覆盖不足的老会话保留旧读路径（不做一刀切） |
-| 缓存与真相源不一致被当作最新 | `ver` 门控 + **会话级双水位（`session_seq` / `commit_order`）** + one-below anchor，缺一不可 |
+| 缓存水位事件已删除或会话 ID 被复用 | `ver` 门控 + **会话级双水位** + 水位事件 `event_id`/`commit_order`/generation 身份核验；one-below 空尾不作为存在性证明 |
 | API 上下文构建变慢 | 活跃会话驻留 + 顺序读 + p95 门禁（不达标不上线） |
 | 台账被删导致用户可见历史消失 | P-4 retention 联动 + B2 同提交边界 + 归档优先 |
 | compaction 重放因台账清理而失效（F-3） | 并入 P-4 设计；给出替代来源或例外清单 |
@@ -562,9 +581,22 @@ git diff --check
 | 事实核验 | **成立**。`agent_history_streams` 列仅 `invocation_id`/`version`/`schema_version`/`session_id`（**无时间或序信息**）；`PRIMARY KEY(invocation_id, sequence)` 仅 invocation 内有序；`created_at` 毫秒碰撞；隐式 `rowid` 在 VACUUM/删除后可重排复用 |
 | 处置 | ① 新增 **§5.12 会话级折叠序**：主方案**双序**（`commit_order` 全局单调 + `session_seq` 会话内连续，各自配分配器表），备选方案为 `commit_order` + 计数校验；② 据 §5.12 重定义投影水位（§5.2：三个水位字段成对记录）与 L1 形态（§5.3：会话内后缀 + 跨 stream 合并排序），并修正 one-below anchor 的**前提**；③ §5.7 **逐行标注适用对象**（DB canonical 无撕裂尾、无 `append`/`flush` 屏障语义）；④ §5.1 持久性语义按介质区分；⑤ 折叠序定为 **P-2 第一节**；⑥ 新增验收 12（B7 专项） |
 | 附带发现 | 同一"模型错位"还波及 §5.1 的 `append`/`flush` 语义（文件日志概念被移植到 DB），已一并修正 |
-| 未决 | 主方案与备选方案的取舍待评审裁定（差异：是否引入 `session_seq` 以保住空尾证明；成本：2 张分配器表 + 3 列 + 1 索引 + `DB_SCHEMA_VERSION` +1） |
+| 未决 | 主方案与备选方案的取舍待评审裁定（差异：是否引入 `session_seq` 作为增量定位键；成本：2 张分配器表 + 3 列 + 1 索引 + `DB_SCHEMA_VERSION` +1） |
 
-**未决回请**：无。B1 回请已裁定确认；v3 四项修正已落实；**v4 的 B7 修复已落地正文**（§5.12 + §5.1/§5.2/§5.3/§5.7/§4.3/§8.2/§9 同步修订）。下一步触发物为 **P-1 报告、P-2 语义表（第一节＝折叠序）、P-3/P-5 设计稿**，以及本节"未决"项的裁定。
+### 12.4 v5 处置（B8 终态修复义务 + B9 水位身份）
+
+| 编号 | 评审结论 | 处置 |
+| --- | --- | --- |
+| **B8** | 只扫描非终态流会漏掉终态 canonical 已提交、但台账/usage/tool 等跨存储投影尚未完成或上次修复失败的流；现有恢复逻辑在判断 invocation 状态前也会修复这些义务 | 将未终态收口与终态投影补偿拆开：未终态按需扫描、追加 closers；终态补偿必须独立跟踪每项待办并允许失败后重试。修复全部完成前不能从启动恢复中排除该流；若无可靠队列，仍须扫描并检查终态流。新增终态写入失败后重启修复及连续失败后再次重启重试用例（§5.7/§8.4/§9） |
+| **B9** | `session_seq = 水位 - 1` 的 anchor 存在、且后缀为空，不能证明缓存水位事件本身仍存在；删除水位事件而保留前一事件时，陈旧投影会被接受 | 移除 one-below 空尾的存在性证明。缓存记录水位事件 `event_id`、`invocation_id`、`commit_order` 与会话 generation；L1 必须读取并核验水位事件身份，不存在或不匹配即 L2。定义空水位判据与同 session ID 删除重建策略，增加删除水位事件、空会话、session ID 重建用例（§5.3/§5.12/§9） |
+
+### 12.5 v6 重审处置（B10 Phase 1 复杂度矛盾）
+
+| 编号 | 评审结论 | 处置 |
+| --- | --- | --- |
+| **B10** | 允许在无可靠待办队列时每次启动检查全部终态流，与“恢复耗时只随非终态流增长”的性能验收矛盾；事件越多，旧式逐流读取/解析仍按全库规模增长 | 将持久化逐项修复待办、canonical 写入与待办同事务登记、升级前历史流初次分类/续跑列为 Phase 1 必需；分类完成前保留旧恢复路径。分类完成后，常规启动仅读取非终态流与未完成待办，不得枚举已完成终态流。性能验收改为固定非终态/待办数量并递增已完成终态流的对照测试（§5.7/§8.1/§8.4/§9） |
+
+**当前状态**：Phase 1 不再无条件放行。待办队列、事务登记、历史初次分类/续跑与 B8/B10 对拍用例均完成后，方可宣告该阶段通过性能与正确性门禁。
 
 ---
 
@@ -612,13 +644,19 @@ FROM (
   GROUP BY s.invocation_id
 );
 
--- 非终态流数量（按需恢复的收益基线）
-SELECT COUNT(*) FROM agent_history_streams s
-WHERE NOT EXISTS (
-  SELECT 1 FROM agent_history_events e
-  WHERE e.invocation_id = s.invocation_id
-    AND e.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
-);
+-- 恢复基线：统计未终态收口流与持久化队列中的未完成逐项义务。
+-- 队列表名/字段为设计占位，Phase 1 实现时固定 schema；常规启动不得靠枚举已完成终态流判断投影状态。
+SELECT
+  (SELECT COUNT(*) FROM agent_history_streams s
+   WHERE NOT EXISTS (
+    SELECT 1 FROM agent_history_events e
+    WHERE e.invocation_id = s.invocation_id
+      AND e.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+  )) AS nonterminal_streams_to_close,
+  (SELECT COUNT(*) FROM canonical_projection_repairs WHERE status <> 'completed') AS pending_projection_repairs;
+
+-- 一次性迁移基线可按状态分类；迁移完成后，此查询不进入每次启动路径：
+-- SELECT status, repair_kind, COUNT(*) FROM canonical_projection_repairs GROUP BY status, repair_kind;
 ```
 
 **注意**：本会话环境对落盘脚本与任意 SQL 执行有安全限制，上述 SQL 需由人工或有权限的会话执行；执行请在**只读**模式（`mode=ro`）下进行。
@@ -630,9 +668,8 @@ WHERE NOT EXISTS (
 | canonical history | DB 内的消息级事件流（`agent_history_events`），本方案的真相源 |
 | 审计台账 | workDir 下的 `events.jsonl`，turn/tool/request/chunk 级**增量流**，可清理 |
 | 投影（projection） | 从 canonical 事件纯折叠出的读模型 |
-| 水位线（`session_seq` / `commit_order`） | 会话级折叠水位：`session_seq` 会话内连续（L1 取后缀与 one-below anchor 的依据），`commit_order` 全局单调（跨 stream 合并排序） |
+| 水位线（`session_seq` / `commit_order`） | 会话级折叠水位：`session_seq` 会话内连续（定位 L1 后缀）；L1 另核验水位事件的 `event_id`、`commit_order` 与 generation；`commit_order` 全局单调（跨 stream 合并排序） |
 | 读阶梯（L0/L1/L2） | 零 I/O → 缓存 seed + 尾重放 → 全量折叠 |
-| one-below anchor | 读取起点取"最低可用水位之下一格"，使日志缩短可被检测 |
 | `stateVersion`（`ver`） | 折叠语义/序列化结构的代际；失配即丢弃缓存 |
 | 真相源 spill | 承载 canonical 正文的外置存储；**不可丢弃、无保留期** |
 | 可降级 spill | 冗余可读副本；可丢弃、可按保留期删除；不参与逐字节一致验收 |
