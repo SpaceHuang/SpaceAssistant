@@ -8,6 +8,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 
 const mockRunToolChatSession = vi.fn()
 const mockResolveLlmCredentials = vi.fn()
+const mockResolveLlmCredentialsForPair = vi.fn()
 
 vi.mock('electron', () => ({
   app: { getLocale: vi.fn(() => 'zh-CN') }
@@ -26,7 +27,8 @@ vi.mock('../llmServiceResolver', async (importOriginal) => {
   return {
     ...actual,
     resolveLlmCredentialsForModel: (...args: unknown[]) =>
-      mockResolveLlmCredentials(...(args as [unknown]))
+      mockResolveLlmCredentials(...(args as [unknown])),
+    resolveLlmCredentialsForPair: (...args: unknown[]) => mockResolveLlmCredentialsForPair(...(args as [unknown]))
   }
 })
 
@@ -56,12 +58,15 @@ describe('butlerInvoker 任务声明装配（D）', () => {
     vi.clearAllMocks()
     db = openDatabase(':memory:')
     setConfigValue(db, 'config.defaultModel', Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0])
+    const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    setConfigValue(db, 'config.models', JSON.stringify([{ ...MODEL_BASELINE[modelId]!, id: modelId, name: modelId, enabled: true, supportsThinking: true }]))
     mockResolveLlmCredentials.mockResolvedValue({
       error: undefined,
       serviceId: 'svc-1',
       baseUrl: 'https://mock.local',
       getApiKey: async () => 'test-key'
     })
+    mockResolveLlmCredentialsForPair.mockResolvedValue({ model: { ...MODEL_BASELINE[modelId]!, id: modelId, name: modelId, enabled: true }, serviceId: 'svc-1', providerModelName: modelId, baseUrl: 'https://mock.local', getApiKey: async () => 'test-key' })
     mockRunToolChatSession.mockResolvedValue({
       ok: true,
       content: [{ type: 'text', text: '任务完成。' }],
@@ -77,6 +82,7 @@ describe('butlerInvoker 任务声明装配（D）', () => {
       getWorkDir: () => '/tmp/wd',
       getUserDataPath: () => '/tmp/ud',
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG as const }),
+      getActiveWorkDirProfilePath: () => '/tmp/wd',
       resolveWorkDirForSession: () => '/tmp/wd'
     }
   }
@@ -89,7 +95,7 @@ describe('butlerInvoker 任务声明装配（D）', () => {
       deliveryPref: 'none'
     })
     const result = await runButlerTask(makeDeps(), task.id, { trigger: 'manual', requestId: 'req-digest-1' })
-    expect(result.ok).toBe(true)
+    expect(result.ok, JSON.stringify(result)).toBe(true)
     expect(mockRunToolChatSession).toHaveBeenCalled()
     const inv = mockRunToolChatSession.mock.calls[0]![0] as { additionalContext: Record<string, unknown> }
     expect(inv.additionalContext['approval.taskDigest']).toBe('检查磁盘空间')

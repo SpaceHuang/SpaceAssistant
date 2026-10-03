@@ -9,8 +9,38 @@ import { resolveVisionRouteForImageSend } from '../src/shared/visionModelRouting
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { getConfigValue, getSession, updateSession, type AppDatabase } from './database'
 import { readActiveLlmServiceIds, readLlmServices, readStoredModels, resolveLlmCredentialsForModel } from './llmServiceResolver'
+import { resolveLlmCredentialsForPair } from './llmServiceResolver'
+import type { AutomationTaskRunConfigSnapshot } from '../src/shared/automationTaskTypes'
 
 export type TurnExecutionLane = NonNullable<TurnExecutionConfig['lane']>
+
+/** Automation 专用固定 pair 校验；失败时绝不重绑桌面优选模型，也不更新 session。 */
+export async function resolvePinnedAutomationTurnExecutionConfig(
+  db: AppDatabase,
+  sessionId: string,
+  snapshot: AutomationTaskRunConfigSnapshot
+): Promise<TurnExecutionConfig> {
+  if (snapshot.resolutionStatus !== 'resolved' || !snapshot.modelId || !snapshot.serviceId || !snapshot.providerModelName) {
+    throw new Error('AUTOMATION_CONFIG_SNAPSHOT_INVALID')
+  }
+  const session = getSession(db, sessionId)
+  if (!session || session.model !== snapshot.providerModelName || session.llmServiceId !== snapshot.serviceId || session.thinkingEffort !== snapshot.effectiveEffort) {
+    throw new Error('AUTOMATION_SESSION_CONFIG_MISMATCH')
+  }
+  const models = readStoredModels(db)
+  const model = models.find((entry) => entry.id === snapshot.modelId)
+  if (!model || model.name !== snapshot.providerModelName) throw new Error('AUTOMATION_MODEL_CONFIG_INVALID')
+  const credentials = await resolveLlmCredentialsForPair(db, snapshot.modelId, snapshot.serviceId)
+  if ('error' in credentials) throw new Error(`AUTOMATION_SERVICE_CONFIG_INVALID: ${credentials.error}`)
+  const requested = snapshot.requestedEffort ?? 'off'
+  const effective = model.supportsThinking === false ? 'off' : requested
+  if (effective !== snapshot.effectiveEffort) throw new Error('AUTOMATION_REASONING_SNAPSHOT_INVALID')
+  return {
+    lane: 'automation', model: model.name, llmServiceId: snapshot.serviceId,
+    thinkingEffort: effective, requestedThinkingEffort: requested,
+    effectiveModelForUsage: model.name
+  }
+}
 
 /**
  * Thinking 强度最终解析（需求 §7.1）：

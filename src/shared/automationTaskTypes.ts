@@ -1,3 +1,5 @@
+import type { AgentReasoningEffort } from './agent/invocation'
+
 /**
  * 管家任务共享类型（P6 IPC 面）：主进程 taskStore 与渲染端设置页共用。
  */
@@ -17,6 +19,12 @@ export type AutomationTask = {
   prompt: string
   deliveryPref: AutomationDeliveryPref
   deliveryTarget?: string
+  /** 兼容旧任务：缺省表示准入后捕获活动 Profile。 */
+  workDir?: string
+  modelId?: string
+  modelServiceId?: string
+  reasoningEffort?: AgentReasoningEffort
+  /** provider-facing 模型名称；不是 ModelEntry.id。 */
   modelOverride?: string
   enabled: boolean
   createdAt: number
@@ -31,6 +39,11 @@ export type AutomationTaskInput = {
   prompt: string
   deliveryPref: AutomationDeliveryPref
   deliveryTarget?: string
+  workDir?: string
+  modelId?: string
+  modelServiceId?: string
+  reasoningEffort?: AgentReasoningEffort
+  /** provider-facing 模型名称；不是 ModelEntry.id。 */
   modelOverride?: string
   enabled?: boolean
   nextRunAt?: number
@@ -57,10 +70,25 @@ export type AutomationTaskRun = {
   sessionId?: string
   resultSummary?: string
   usageJson?: string
+  configSnapshot?: AutomationTaskRunConfigSnapshot
   deliveryStatus: 'pending' | 'delivered' | 'failed-degraded' | 'delivery-uncertain' | 'none'
   deliveredAt?: number
   createdAt: number
   updatedAt: number
+}
+
+export type AutomationTaskRunConfigSnapshot = {
+  resolutionStatus: 'resolved' | 'failed'
+  workDir?: string
+  workDirSource?: 'task' | 'legacy-profile'
+  modelId?: string
+  providerModelName?: string
+  serviceId?: string
+  routeIdentity?: string
+  requestedEffort?: AgentReasoningEffort
+  effectiveEffort?: AgentReasoningEffort
+  reasoningDegraded?: boolean
+  error?: string
 }
 
 export type ButlerTaskWriteResult = { ok: boolean; id?: string; error?: string }

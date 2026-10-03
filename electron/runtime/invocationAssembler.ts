@@ -98,6 +98,9 @@ export interface AgentInvocationMaterials {
   llmServiceId?: string
   windowId?: string
   model: string
+  /** Trusted catalog identity supplied by the main-process automation pair resolver. */
+  modelId?: string
+  supportsThinking?: boolean
   providerRouteId?: string
   contextWindow?: number
   contextWindowTrusted?: boolean
@@ -352,7 +355,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   let reasoningEffort = requestedEffort
   let reasoningDegraded: import('../../src/shared/agent/invocation').AgentReasoningProfile['degraded']
   if (db && reasoningEffort !== 'off') {
-    const entry = readStoredModels(db).find((m) => m.name === materials.model)
+    const entry = materials.modelId
+      ? readStoredModels(db).find((m) => m.id === materials.modelId)
+      : readStoredModels(db).find((m) => m.name === materials.model)
     if (entry?.supportsThinking === false) {
       reasoningDegraded = { from: requestedEffort, to: 'off' }
       reasoningEffort = 'off'
@@ -591,6 +596,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           ? () => undefined
           : (input: Record<string, unknown>) => recordTurnSummary(db, {
               ...input,
+              ...(materials.modelId !== undefined ? { modelId: materials.modelId } : {}),
+              providerModelName: materials.model,
+              ...(materials.providerRouteId !== undefined ? { routeIdentity: materials.providerRouteId } : {}),
               ...(turnToolAttribution ? { toolAttributionJson: JSON.stringify(turnToolAttribution) } : {})
             } as never)
       }
@@ -1303,7 +1311,10 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       sessionId: materials.sessionId,
       turnId: runtimeTurnId,
       model: materials.model,
+      modelId: materials.modelId,
+      providerModelName: materials.model,
       llmServiceId: materials.llmServiceId,
+      routeIdentity: materials.providerRouteId,
       baseUrl: materials.baseUrl,
       recordStepUsage: usage?.recordStepUsage,
       attributionForModelTurn: (modelTurn) => attributionByModelTurn.get(modelTurn),

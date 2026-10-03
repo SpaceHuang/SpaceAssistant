@@ -16,6 +16,7 @@ import {
   readActiveLlmServiceIds,
   resolveLanguagePreferredModelName,
   resolveLlmCredentialsForModel,
+  resolveLlmCredentialsForPair,
   resolveTestConnectionModel,
   validateLlmServices
 } from './llmServiceResolver'
@@ -385,6 +386,24 @@ describe('llmServiceResolver', () => {
     const creds = await resolveLlmCredentialsForModel(db, 'deepseek-v4-pro', { models })
     expect(creds.serviceId).toBe(s.id)
     expect(await creds.getApiKey()).toBe('sk-test')
+  })
+
+  it('automation credentials resolve exact catalog ID and service regardless of order or duplicate provider names', async () => {
+    migrateLegacyLlmServicesIfNeeded(db)
+    const original = makeModels()[0]!
+    const models = [
+      { ...original, id: 'model-a', supportsThinking: true },
+      { ...original, id: 'model-b', supportsThinking: false }
+    ]
+    setConfigValue(db, 'config.models', JSON.stringify(models))
+    const first = { id: 'service-a', name: 'A', baseUrl: 'https://a.example', apiKeyPresent: true, supportedModelIds: ['model-a', 'model-b'] }
+    const second = { id: 'service-b', name: 'B', baseUrl: 'https://b.example', apiKeyPresent: true, supportedModelIds: ['model-a', 'model-b'] }
+    persistLlmServices(db, [second, first], ['service-a', 'service-b'], { 'service-a': 'key-a', 'service-b': 'key-b' })
+
+    const resolved = await resolveLlmCredentialsForPair(db, 'model-b', 'service-a')
+    expect(resolved).toMatchObject({ model: { id: 'model-b', name: original.name, supportsThinking: false }, serviceId: 'service-a', providerModelName: original.name, baseUrl: 'https://a.example' })
+    if (!('error' in resolved)) await expect(resolved.getApiKey()).resolves.toBe('key-a')
+    await expect(resolveLlmCredentialsForPair(db, 'model-b', 'missing')).resolves.toMatchObject({ error: expect.any(String) })
   })
 
   it('resolveLanguagePreferredModelName returns deepseek-v4-pro by default', () => {

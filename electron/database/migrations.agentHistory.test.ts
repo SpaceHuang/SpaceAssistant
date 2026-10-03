@@ -24,7 +24,7 @@ describe('agent canonical history migration', () => {
     conn.prepare('INSERT INTO turns(request_id, session_id) VALUES(?, ?)').run('owned', 'session-a')
 
     expect(() => runMigrations(conn)).not.toThrow()
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get()).toEqual({ value: '32' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get()).toEqual({ value: '33' })
     // agent_history 基表被补建并带上 session_id 列与索引
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_history_streams'").get()).toEqual({ name: 'agent_history_streams' })
     expect((conn.prepare("PRAGMA table_info('agent_history_streams')").all() as Array<{ name: string }>).map(({ name }) => name)).toContain('session_id')
@@ -43,7 +43,7 @@ describe('agent canonical history migration', () => {
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_execution_queue'").get()).toEqual({ name: 'session_execution_queue' })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_transcript_reconciliations'").get()).toEqual({ name: 'session_transcript_reconciliations' })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='accepted_turn_contexts'").get()).toEqual({ name: 'accepted_turn_contexts' })
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '32' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '33' })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='continuation_intents'").get()).toEqual({ name: 'continuation_intents' })
     conn.close()
   })
@@ -75,7 +75,7 @@ describe('agent canonical history migration', () => {
 
     runMigrations(conn)
 
-    expect(DB_SCHEMA_VERSION).toBe(32)
+    expect(DB_SCHEMA_VERSION).toBe(33)
     expect(conn.prepare('PRAGMA table_info(turns)').all()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'accepted_input_history_version', dflt_value: '0' })
     ]))
@@ -103,7 +103,7 @@ describe('agent canonical history migration', () => {
     conn.prepare('INSERT INTO agent_history_streams(invocation_id, version, schema_version) VALUES(?, 0, 1)').run('old-invocation')
     conn.prepare('INSERT INTO schema_meta(key, value) VALUES(?, ?)').run('schema_version', '19')
     runMigrations(conn)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get()).toEqual({ value: '32' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get()).toEqual({ value: '33' })
     expect(conn.prepare('SELECT session_id FROM agent_history_streams WHERE invocation_id = ?').get('old-invocation')).toEqual({ session_id: null })
     expect((conn.prepare("PRAGMA index_list('agent_history_streams')").all() as Array<{ name: string }>).map(({ name }) => name)).toContain('idx_agent_history_streams_session')
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_continuations'").get()).toEqual({ name: 'agent_continuations' })
@@ -126,7 +126,7 @@ describe('agent canonical history migration', () => {
     expect(conn.prepare('PRAGMA table_info(turns)').all()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'accepted_input_history_version', dflt_value: '0' })
     ]))
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get()).toEqual({ value: '32' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key = 'schema_version'").get()).toEqual({ value: '33' })
     expect(() => runMigrations(conn)).not.toThrow()
     conn.close()
   })
@@ -150,7 +150,7 @@ describe('agent canonical history migration', () => {
       { target_start_token: 'persisted-token', status: 'running' },
       { target_start_token: '', status: 'interrupted' }
     ])
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '32' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '33' })
     expect(() => runMigrations(conn)).not.toThrow()
     conn.close()
   })

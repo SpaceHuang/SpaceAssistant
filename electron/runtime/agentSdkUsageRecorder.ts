@@ -50,6 +50,9 @@ export function createAgentSdkUsageRecorder(input: {
   turnId: string
   model?: string
   llmServiceId?: string
+  modelId?: string
+  providerModelName?: string
+  routeIdentity?: string
   baseUrl?: string
   recordStepUsage?(fact: Record<string, unknown>): void
   attribution?: StepAttribution
@@ -100,7 +103,10 @@ export function createAgentSdkUsageRecorder(input: {
       ...(attribution ? { attribution: { ...attributionSnapshot, threeSources: attribution.threeSources, ...(attributionSnapshot ? { attributionJson: JSON.stringify(attributionSnapshot) } : {}) } } : {}),
       ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
-      ...(input.llmServiceId !== undefined ? { llmServiceId: input.llmServiceId } : {})
+      ...(input.llmServiceId !== undefined ? { llmServiceId: input.llmServiceId } : {}),
+      ...(input.modelId !== undefined ? { modelId: input.modelId } : {}),
+      ...(input.providerModelName !== undefined ? { providerModelName: input.providerModelName } : {}),
+      ...(input.routeIdentity !== undefined ? { routeIdentity: input.routeIdentity } : {})
     })
     input.emitFactEvent?.({ type: 'usage-updated', usage })
     await input.emitSessionEvent?.(sessionEvent)

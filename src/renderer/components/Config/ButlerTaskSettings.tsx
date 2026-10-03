@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Alert, App, Button, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Select, Switch, Tag, TimePicker } from 'antd'
+import { Alert, App, Button, DatePicker, Form, Input, InputNumber, Modal, Popconfirm, Select, Switch, Tag, TimePicker, Space, Typography } from 'antd'
 import { Pencil, Plus, SquarePlay, Trash2 } from 'lucide-react'
 import dayjs from 'dayjs'
 import customParseFormat from 'dayjs/plugin/customParseFormat'
-import type { AutomationTask, AutomationDeliveryPref } from '../../../shared/automationTaskTypes'
+import type { AutomationTask, AutomationDeliveryPref, AutomationTaskRun } from '../../../shared/automationTaskTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { buildOnceDisabledConstraints, onceAtInFuture } from './onceAtConstraints'
 
@@ -24,6 +24,7 @@ type TaskActions = {
   onEdit: (task: AutomationTask) => void
   onDelete: (task: AutomationTask) => void
   onToggle: (task: AutomationTask, enabled: boolean) => void
+  onHistory: (task: AutomationTask) => void
   running: boolean
 }
 
@@ -61,6 +62,7 @@ function ButlerTaskCard({ task, actions }: { task: AutomationTask; actions: Task
         <span className="butler-task-card__summary-text" title={task.prompt}>
           {task.prompt}
         </span>
+        {task.workDir ? <span className="butler-task-card__workdir" title={task.workDir}>{t('butler.form.workDir')}: {task.workDir}</span> : null}
         {task.lastRunAt ? (
           <span className="butler-task-card__summary-meta">
             {t('butler.lastRun', { time: dayjs(task.lastRunAt).format('YYYY-MM-DD HH:mm') })}
@@ -71,6 +73,7 @@ function ButlerTaskCard({ task, actions }: { task: AutomationTask; actions: Task
         <Button size="small" type="primary" loading={running} disabled={!task.enabled} onClick={() => onRun(task)}>
           {t('butler.run')}
         </Button>
+        <Button size="small" onClick={() => actions.onHistory(task)}>{t('butler.history')}</Button>
         <Button size="small" icon={<Pencil size={13} aria-hidden />} onClick={() => onEdit(task)}>
           {t('butler.edit')}
         </Button>
@@ -96,8 +99,14 @@ export function ButlerTaskSettings() {
   const [editing, setEditing] = useState<AutomationTask | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set())
+  const [historyTask, setHistoryTask] = useState<AutomationTask | null>(null)
+  const [historyRuns, setHistoryRuns] = useState<AutomationTaskRun[]>([])
   const [form] = Form.useForm()
   const scheduleKind = Form.useWatch('scheduleKind', form)
+  const [modelCandidates, setModelCandidates] = useState<Array<{ modelId: string; providerModelName: string; serviceId: string; serviceName: string; supportsThinking: boolean }>>([])
+  const selectedModelId = Form.useWatch('modelId', form)
+  const selectedServiceId = Form.useWatch('modelServiceId', form)
+  const selectedCandidate = modelCandidates.find((candidate) => candidate.modelId === selectedModelId && candidate.serviceId === selectedServiceId)
   const onceConstraints = buildOnceDisabledConstraints()
 
   const refresh = useCallback(async () => {
@@ -118,8 +127,10 @@ export function ButlerTaskSettings() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const openCreate = () => {
+  const openCreate = async () => {
     setEditing(null)
+    const [defaults, candidates] = await Promise.all([window.api.butlerGetTaskDefaults(), window.api.butlerGetModelCandidates()])
+    setModelCandidates(candidates)
     form.setFieldsValue({
       name: '',
       prompt: '',
@@ -127,13 +138,20 @@ export function ButlerTaskSettings() {
       intervalMinutes: 30,
       dailyTime: dayjs('09:00', 'HH:mm'),
       onceAt: dayjs().add(1, 'hour'),
-      deliveryPref: 'desktop'
+      deliveryPref: 'desktop',
+      workDir: defaults.workDir,
+      modelId: defaults.modelId,
+      modelServiceId: defaults.modelServiceId,
+      modelOverride: defaults.modelOverride,
+      modelPair: defaults.modelId && defaults.modelServiceId ? `${defaults.modelId}::${defaults.modelServiceId}` : undefined,
+      reasoningEffort: defaults.reasoningEffort ?? 'off'
     })
     setEditorOpen(true)
   }
 
   const openEdit = (task: AutomationTask) => {
     setEditing(task)
+    void window.api.butlerGetModelCandidates().then(setModelCandidates)
     form.setFieldsValue({
       name: task.name,
       prompt: task.prompt,
@@ -141,7 +159,13 @@ export function ButlerTaskSettings() {
       intervalMinutes: task.schedule.kind === 'interval' ? task.schedule.intervalMinutes : 30,
       dailyTime: dayjs(task.schedule.kind === 'daily' ? task.schedule.time : '09:00', 'HH:mm'),
       onceAt: dayjs(task.schedule.kind === 'once' ? task.schedule.at : Date.now() + 3_600_000),
-      deliveryPref: task.deliveryPref
+      deliveryPref: task.deliveryPref,
+      workDir: task.workDir,
+      modelId: task.modelId,
+      modelServiceId: task.modelServiceId,
+      modelOverride: task.modelOverride,
+      modelPair: task.modelId && task.modelServiceId ? `${task.modelId}::${task.modelServiceId}` : undefined,
+      reasoningEffort: task.reasoningEffort ?? 'off'
     })
     setEditorOpen(true)
   }
@@ -158,18 +182,31 @@ export function ButlerTaskSettings() {
           : values.scheduleKind === 'once'
             ? { kind: 'once' as const, at: (values.onceAt as dayjs.Dayjs).valueOf() }
             : { kind: 'interval' as const, intervalMinutes: Number(values.intervalMinutes) }
+      const chosen = modelCandidates.find((candidate) => candidate.modelId === values.modelId && candidate.serviceId === values.modelServiceId)
       // 评审 P1-2：主进程校验失败返回 {ok:false}（resolve 而非 reject）——不检查会假成功。
       // 失败时保留弹窗与已填内容，展示主进程给出的原因。
       const res = editing
         ? await window.api.butlerUpdateTask({
             id: editing.id,
-            patch: { name: values.name, prompt: values.prompt, schedule, deliveryPref: values.deliveryPref }
+            patch: {
+              name: values.name, prompt: values.prompt, schedule, deliveryPref: values.deliveryPref,
+              ...(typeof values.workDir === 'string' && values.workDir.trim() ? { workDir: values.workDir } : {}),
+              ...(chosen ? {
+                modelId: chosen.modelId, modelServiceId: chosen.serviceId,
+                modelOverride: chosen.providerModelName, reasoningEffort: values.reasoningEffort
+              } : {})
+            }
           })
         : await window.api.butlerCreateTask({
             name: values.name,
             prompt: values.prompt,
             schedule,
-            deliveryPref: values.deliveryPref
+            deliveryPref: values.deliveryPref,
+            workDir: values.workDir,
+            modelId: values.modelId,
+            modelServiceId: values.modelServiceId,
+            modelOverride: chosen?.providerModelName,
+            reasoningEffort: values.reasoningEffort
           })
       if (!res.ok) {
         message.error(t('butler.form.saveFailedWithError', { error: res.error ?? '' }))
@@ -221,12 +258,19 @@ export function ButlerTaskSettings() {
     }
   }
 
+  const showHistory = async (task: AutomationTask) => {
+    setHistoryTask(task)
+    try { setHistoryRuns(await window.api.butlerListTaskRuns({ taskId: task.id })) }
+    catch { message.error(t('butler.loadFailed')) }
+  }
+
   const actions: TaskActions = {
     t,
     onRun: (task) => void runNow(task),
     onEdit: openEdit,
     onDelete: (task) => void remove(task),
     onToggle: (task, enabled) => void toggleEnabled(task, enabled),
+    onHistory: (task) => void showHistory(task),
     running: false
   }
 
@@ -269,11 +313,26 @@ export function ButlerTaskSettings() {
         ]}
       >
         <Form form={form} layout="vertical">
+          {editing && !editing.workDir ? <Alert type="info" showIcon message={t('butler.form.workDirLegacy')} /> : null}
           <Form.Item name="name" label={t('butler.form.name')} rules={[{ required: true, message: t('butler.form.nameRequired') }]}>
             <Input />
           </Form.Item>
           <Form.Item name="prompt" label={t('butler.form.prompt')} rules={[{ required: true, message: t('butler.form.promptRequired') }]}>
             <Input.TextArea rows={4} />
+          </Form.Item>
+          <Form.Item label={t('butler.form.workDir')} required>
+            <Space.Compact style={{ width: '100%' }}>
+              <Form.Item name="workDir" noStyle rules={!editing ? [{ required: true, message: t('butler.form.workDirRequired') }] : []}><Input readOnly /></Form.Item>
+              <Button onClick={async () => { const result = await window.api.butlerChooseWorkDir(); if (!result.cancelled && result.path) form.setFieldValue('workDir', result.path) }}>{t('butler.form.browseWorkDir')}</Button>
+            </Space.Compact>
+          </Form.Item>
+          <Form.Item name="modelPair" label={t('butler.form.model')} rules={!editing ? [{ required: true, message: t('butler.form.modelRequired') }] : []}>
+            <Select options={modelCandidates.map((candidate) => ({ value: `${candidate.modelId}::${candidate.serviceId}`, label: `${candidate.providerModelName} · ${candidate.serviceName}` }))} onChange={(pair: string) => { const candidate = modelCandidates.find((item) => `${item.modelId}::${item.serviceId}` === pair); if (candidate) { form.setFieldsValue({ modelId: candidate.modelId, modelServiceId: candidate.serviceId, modelOverride: candidate.providerModelName }); if (!candidate.supportsThinking) form.setFieldValue('reasoningEffort', 'off') } }} />
+          </Form.Item>
+          <Form.Item name="modelServiceId" hidden><Input /></Form.Item>
+          <Form.Item name="modelId" hidden><Input /></Form.Item>
+          <Form.Item name="reasoningEffort" label={t('butler.form.reasoningEffort')}>
+            <Select disabled={selectedCandidate?.supportsThinking === false} options={(['off', 'low', 'medium', 'high', 'max'] as const).map((effort) => ({ value: effort, label: t(`butler.form.reasoning${effort[0]!.toUpperCase()}${effort.slice(1)}` as 'butler.form.reasoningOff') }))} />
           </Form.Item>
           <Form.Item name="scheduleKind" label={t('butler.form.scheduleKind')}>
             <Select
@@ -320,6 +379,19 @@ export function ButlerTaskSettings() {
             />
           </Form.Item>
         </Form>
+      </Modal>
+      <Modal title={t('butler.historyTitle')} open={Boolean(historyTask)} onCancel={() => setHistoryTask(null)} footer={null}>
+        {historyRuns.length === 0 ? <Typography.Text type="secondary">{t('butler.historyEmpty')}</Typography.Text> : historyRuns.map((run) => (
+          <div key={run.id} style={{ borderBottom: '1px solid var(--color-border-secondary, #eee)', padding: '10px 0' }}>
+            <Typography.Text>{dayjs(run.createdAt).format('YYYY-MM-DD HH:mm:ss')} · {run.status}</Typography.Text>
+            {run.configSnapshot ? <div>
+              <Typography.Text strong>{t('butler.runConfig')}</Typography.Text>
+              <Typography.Paragraph copyable={{ text: run.configSnapshot.workDir ?? '' }} style={{ marginBottom: 4 }}>{run.configSnapshot.workDir}</Typography.Paragraph>
+              <Typography.Text>{run.configSnapshot.providerModelName} · {run.configSnapshot.serviceId} · {run.configSnapshot.requestedEffort} → {run.configSnapshot.effectiveEffort}</Typography.Text>
+            </div> : <Typography.Text type="secondary">{t('butler.legacyNoSnapshot')}</Typography.Text>}
+            {run.error ? <Typography.Paragraph type="danger"><Typography.Text strong>{t('butler.runError')}</Typography.Text> {run.error}</Typography.Paragraph> : null}
+          </div>
+        ))}
       </Modal>
     </div>
   )

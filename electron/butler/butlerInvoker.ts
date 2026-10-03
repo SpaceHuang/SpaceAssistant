@@ -2,31 +2,34 @@ import type { AppDatabase } from '../database'
 import { getMessages, getConfigValue, getSession, createSession, getPersistedTurn } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
 import { assembleInvocation } from '../runtime/invocationAssembler'
-import { buildResolveWorkDirCallback } from '../workDirManager'
 import type { BrowserConfig, ShellConfig, ToolsConfig, ModelEntry } from '../../src/shared/domainTypes'
 import { resolveModelContextWindow } from '../../src/shared/llmModelConfig'
 import { buildClaudeToolChatMessages, trimClaudeToolChatMessages } from '../../src/shared/claudeToolHistory'
 import { MAX_CHAT_API_MESSAGES } from '../../src/shared/chatApiMessageLimits'
 import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
 import { readAppLocale } from '../appIpc'
-import { resolveLlmCredentialsForModel } from '../llmServiceResolver'
+import { resolveLlmCredentialsForPair, resolveLlmCredentialsForModel, readActiveLlmServiceIds, readLlmServices, readStoredModels } from '../llmServiceResolver'
 import { logHistoryOversizedToolResult } from '../oversizedToolResultLog'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { buildFinalSystemPrompt } from '../llmSystemPrompt'
-import { resolveTrustedTurnExecutionConfig } from '../turnExecutionConfig'
+import { resolvePinnedAutomationTurnExecutionConfig } from '../turnExecutionConfig'
 import type { WorkDirManager } from '../workDirManager'
 import type { TurnRuntime } from '../turnRuntime'
 import { executeRemoteTurn } from '../remote/turnExecutionAdapter'
 import { createButlerSessionEvents } from './butlerSessionEvents'
 import { getCallAdmissionGate } from '../runtime/callAdmissionGate'
 import { deliverTaskResult, type ButlerDeliveryPorts } from './butlerDelivery'
-import { getAutomationTask, insertAutomationTaskRun, updateAutomationTaskRun } from './taskStore'
+import { getAutomationTask, getRunById, insertAutomationTaskRun, updateAutomationTaskRun } from './taskStore'
 import { requireInvocationAnthropicRoute } from '../runtime/invocationProviderRoute'
 import { createHostedTurnHandoff } from '../runtime/hostedTurnHandoff'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from '../runtime/hostedTurnFinalization'
 import { loadAcceptedTurnMessages } from '../runtime/acceptedTurnContext'
 import { createAcceptedTurnFromPrepared } from '../runtime/acceptedTurnContext'
+import { validateTaskWorkDir } from './taskConfigValidation'
+import { resolveGlobalThinkingEffort } from '../../src/shared/thinkingEffort'
+import { getConfigValue as readConfigValue, getSession as readSession } from '../database'
+import type { AutomationTaskRunConfigSnapshot } from '../../src/shared/automationTaskTypes'
 
 /**
  * 管家执行链（P4）：定时 / 手动触发的 automation 任务 → 准入取票 → 会话创建（ownership=automation、
@@ -60,6 +63,7 @@ export type ButlerInvokerDeps = {
   resolveWorkDirForSession?: (sessionId: string) => string
   /** 活动工作目录 profile id（会话创建时绑定）。 */
   getActiveWorkDirProfileId?: () => string | undefined
+  getActiveWorkDirProfilePath?: () => string | undefined
   /** B1(偏差 23):统一调用级准入门(automation lane 配置数据化,ButlerAdmission 退役)。 */
   admissionGate?: import('../runtime/callAdmissionGate').CallAdmissionGate
   /** 投递端口（主进程装配注入；缺省 = IM 未接线走显式降级路径）。 */
@@ -101,7 +105,7 @@ function extractTextFromContent(content: unknown[]): string {
 /** 执行一次管家任务（手动触发入口；调度器复用同一函数）。run 行先抢占（幂等），再准入，再执行。 */
 export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, request: ButlerRunRequest): Promise<ButlerRunOutcome> {
   const db = deps.db
-  const task = getAutomationTask(db, taskId)
+  let task = getAutomationTask(db, taskId)
   if (!task) return { ok: false, error: `任务不存在：${taskId}` }
   if (!deps.turnRuntime) return { ok: false, error: 'BUTLER_TURN_RUNTIME_REQUIRED' }
 
@@ -134,17 +138,82 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
   const ticket = admission.ticket
 
   try {
+    const admittedTask = getAutomationTask(db, taskId)
+    if (!admittedTask) throw new Error('任务在准入后已删除')
+    task = admittedTask
+    const activeTask = admittedTask
+    const legacyProfilePath = deps.getActiveWorkDirProfilePath?.()
+    const workDirResult = admittedTask.workDir
+      ? await validateTaskWorkDir(admittedTask.workDir)
+      : await validateTaskWorkDir(legacyProfilePath)
+    if (!workDirResult.ok) throw new Error(workDirResult.error)
+    let modelId = admittedTask.modelId
+    let serviceId = admittedTask.modelServiceId
+    let providerModelName = admittedTask.modelOverride
+    let model: ModelEntry | undefined
+    let legacyCredentials: Awaited<ReturnType<typeof resolveLlmCredentialsForModel>> | undefined
+    if (modelId && serviceId) {
+      model = readStoredModels(db).find((entry) => entry.id === modelId)
+      if (!model || !providerModelName || model.name !== providerModelName) throw new Error('任务模型目录项已失效，请编辑任务重新选择')
+    } else {
+      const models = readStoredModels(db)
+      if (admittedTask.modelOverride) {
+        const matches = models.filter((entry) => entry.name === admittedTask.modelOverride)
+        if (matches.length !== 1) throw new Error(matches.length ? '旧任务模型名称存在歧义，请编辑任务选择具体模型' : '旧任务模型已不存在，请编辑任务选择模型')
+        model = matches[0]
+        const candidates = readLlmServices(db).filter((service) => readActiveLlmServiceIds(db).includes(service.id) && (service.supportedModelIds ?? []).includes(model!.id) && service.apiKeyPresent)
+        const service = candidates[0]
+        legacyCredentials = service ? await resolveLlmCredentialsForModel(db, model.name, { serviceId: service.id, models }) : await resolveLlmCredentialsForModel(db, model.name, { models })
+        if (legacyCredentials.error) throw new Error(`旧任务模型当前没有可用服务：${legacyCredentials.error}`)
+        modelId = model.id; serviceId = legacyCredentials.serviceId; providerModelName = model.name
+      } else {
+        const name = readConfigValue(db, 'config.defaultModel') ?? readConfigValue(db, 'config.model') ?? ''
+        model = models.find((entry) => entry.name === name)
+        if (!model) throw new Error('当前桌面模型配置无效，无法解析旧任务')
+        const service = readLlmServices(db).find((entry) => readActiveLlmServiceIds(db).includes(entry.id) && (entry.supportedModelIds ?? []).includes(model!.id) && entry.apiKeyPresent)
+        legacyCredentials = service
+          ? await resolveLlmCredentialsForModel(db, model.name, { serviceId: service.id, models })
+          : await resolveLlmCredentialsForModel(db, model.name, { models })
+        if (legacyCredentials.error) throw new Error(`当前桌面模型配置无效：${legacyCredentials.error}`)
+        modelId = model.id; serviceId = legacyCredentials.serviceId; providerModelName = model.name
+      }
+    }
+    if (!modelId || !serviceId || !model || !providerModelName) throw new Error('任务模型配置不完整')
+    const validatedPair = await resolveLlmCredentialsForPair(db, modelId, serviceId)
+    if ('error' in validatedPair) throw new Error(validatedPair.error)
+    if (validatedPair.providerModelName !== providerModelName) throw new Error('任务模型目录已变化，请编辑任务重新选择')
+    // Register the exact catalog pair before session creation so the run snapshot captures
+    // the actual provider route ID, and unsupported routes fail before a turn is accepted.
+    const routeIdentity = requireInvocationAnthropicRoute({
+      modelId: providerModelName,
+      endpoint: validatedPair.baseUrl,
+      credentialRef: `llm-service:${serviceId}`
+    }, getDefaultAgentRuntime().modelProviders)
+    const effort = admittedTask.reasoningEffort ?? resolveGlobalThinkingEffort(readConfigValue(db, 'config.thinkingEffort'), readConfigValue(db, 'config.thinkingEnabled'))
+    const effectiveEffort = model.supportsThinking === false ? 'off' : effort
+    const configSnapshot: AutomationTaskRunConfigSnapshot = {
+      resolutionStatus: 'resolved', workDir: workDirResult.workDir,
+      workDirSource: admittedTask.workDir ? 'task' : 'legacy-profile', modelId,
+      providerModelName, serviceId, routeIdentity,
+      requestedEffort: effort, effectiveEffort, reasoningDegraded: effort !== effectiveEffort
+    }
+    updateAutomationTaskRun(db, runId, { configSnapshot })
     updateAutomationTaskRun(db, runId, { status: 'running' })
 
     // 会话创建（归属强制声明）+ 受信执行配置 + turn prepare
     const session = createSession(db, {
       name: `管家 · ${task.prompt.slice(0, 24)}`,
-      ...(deps.getActiveWorkDirProfileId ? { workDirProfileId: deps.getActiveWorkDirProfileId() } : {}),
-      ...(task.modelOverride ? { model: task.modelOverride } : {}),
+      model: providerModelName,
+      llmServiceId: serviceId,
+      fixedWorkDir: workDirResult.workDir,
+      thinkingEffort: effectiveEffort,
     ownership: 'automation',
     visibility: 'section'
-  })
-  const sessionId = session.id
+    })
+    const sessionId = session.id
+    if (effectiveEffort !== effort) logAgentEvent('info', 'agent.profile.reasoning_degraded', {
+      requestId, sessionId, modelId, model: providerModelName, from: effort, to: 'off', reason: 'model-not-support-thinking'
+    })
   // 会话创建即通知装配方（渲染端列表即时可见；依赖 P1 出口契约，Core 不接触窗口）
   deps.onSessionCreated?.({
     id: session.id,
@@ -152,8 +221,8 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
     ownership: 'automation',
     visibility: 'section',
     ...(session.workDirProfileId ? { workDirProfileId: session.workDirProfileId } : {})
-  })
-    const executionConfig = await resolveTrustedTurnExecutionConfig(db, sessionId, 'automation')
+    })
+    const executionConfig = await resolvePinnedAutomationTurnExecutionConfig(db, sessionId, configSnapshot)
     const prepared = deps.turnRuntime.prepare({
       mode: 'create-user',
       requestId,
@@ -175,9 +244,10 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
           turnId: prepared.turnId,
           acceptedTurn,
           llmServiceId: executionConfig?.llmServiceId,
-          taskPrompt: task.prompt,
+          taskPrompt: activeTask.prompt,
           currentUserMessageId: prepared.userMessage?.id,
-          assistantMessageId: prepared.assistantMessage.id
+          assistantMessageId: prepared.assistantMessage.id,
+          runConfig: { ...configSnapshot, model }
         })
     })
 
@@ -187,14 +257,14 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
     }
     // P5 投递薄分发：run 终态按任务配置送达；只有 completed 才投递（skipped 由调度侧守卫）。
     const delivery =
-      task.deliveryPref === 'none'
+      activeTask.deliveryPref === 'none'
         ? ({ status: 'none' as const } as const)
         : await deliverTaskResult({
             task: {
-              id: task.id,
-              name: task.name,
-              deliveryPref: task.deliveryPref,
-              ...(task.deliveryTarget ? { deliveryTarget: task.deliveryTarget } : {})
+              id: activeTask.id,
+              name: activeTask.name,
+              deliveryPref: activeTask.deliveryPref,
+              ...(activeTask.deliveryTarget ? { deliveryTarget: activeTask.deliveryTarget } : {})
             },
             run: { runId, status: 'completed', sessionId: turn.sessionId, resultSummary: turn.summary },
             ports: deps.deliveryPorts ?? {},
@@ -214,6 +284,9 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
     // 评审 P1-1：catch 块内的失败落库本身可能再抛（退出竞态下 db 已关闭），
     // 再抛会逃逸成 unhandled rejection——吞噬并记日志，保证向上返回结构化失败。
     try {
+      if (!getRunById(db, runId)?.configSnapshot) {
+        updateAutomationTaskRun(db, runId, { configSnapshot: { resolutionStatus: 'failed', error: message } })
+      }
       updateAutomationTaskRun(db, runId, { status: 'failed', error: message })
     } catch {
       // 落库失败时 run 行保持 running；下一次启动恢复会标 interrupted
@@ -226,7 +299,7 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
 
 async function runButlerModelTurn(
   deps: ButlerInvokerDeps,
-  args: { sessionId: string; requestId: string; turnId?: string; acceptedTurn: import('../../src/shared/acceptedTurn').AcceptedTurn; llmServiceId?: string; taskPrompt: string; currentUserMessageId?: string; assistantMessageId?: string }
+  args: { sessionId: string; requestId: string; turnId?: string; acceptedTurn: import('../../src/shared/acceptedTurn').AcceptedTurn; llmServiceId?: string; taskPrompt: string; currentUserMessageId?: string; assistantMessageId?: string; runConfig: AutomationTaskRunConfigSnapshot & { model: ModelEntry } }
 ): Promise<ButlerTurnResult> {
   const db = deps.db
   const session = getSession(db, args.sessionId)
@@ -246,7 +319,7 @@ async function runButlerModelTurn(
     rawMessages = getMessages(db, args.sessionId)
   }
   const built = buildClaudeToolChatMessages(rawMessages, {
-    workspaceRoot: deps.getWorkDir(),
+    workspaceRoot: args.runConfig.workDir!,
     onOversizedToolResult: (info) => {
       logHistoryOversizedToolResult({
         sessionId: args.sessionId,
@@ -269,10 +342,11 @@ async function runButlerModelTurn(
     contextWindowTrusted = modelWindow.trusted
   } catch { /* 无模型表时回退 undefined */ }
 
-  const creds = await resolveLlmCredentialsForModel(db, session.model, {})
-  if (creds.error) return { ok: false, error: `模型「${session.model}」不可用：${creds.error}` }
+  const pair = await resolveLlmCredentialsForPair(db, args.runConfig.modelId!, args.runConfig.serviceId!)
+  if (pair && 'error' in pair) return { ok: false, error: pair.error }
+  const creds = { ...pair!, serviceId: pair!.serviceId, baseUrl: pair!.baseUrl, providerModelName: pair!.providerModelName }
   const providerRouteId = requireInvocationAnthropicRoute({
-    modelId: session.model,
+    modelId: args.runConfig.providerModelName!,
     endpoint: creds.baseUrl,
     credentialRef: `llm-service:${creds.serviceId || args.llmServiceId || 'default'}`
   }, getDefaultAgentRuntime().modelProviders)
@@ -285,7 +359,7 @@ async function runButlerModelTurn(
   })
 
   const butlerEvents = createButlerSessionEvents({
-    workDir: deps.getWorkDir(),
+    workDir: args.runConfig.workDir!,
     sessionId: args.sessionId,
     sessionCreatedAt: session.createdAt,
     failClosedCriticalEvents: true
@@ -293,7 +367,7 @@ async function runButlerModelTurn(
   const hostedTurnId = args.acceptedTurn.turnId
   await butlerEvents.sink.appendCritical({ type: 'turn_start', payload: { turnId: hostedTurnId } })
   await butlerEvents.sink.appendCritical({ type: 'step_start', payload: { turnId: hostedTurnId, stepId: args.requestId } })
-  const workDir = deps.resolveWorkDirForSession ? deps.resolveWorkDirForSession(args.sessionId) : deps.getWorkDir()
+  const workDir = args.runConfig.workDir!
 
   const { invocation, ports, agentSdk } = assembleInvocation({
     requestId: args.requestId,
@@ -305,14 +379,17 @@ async function runButlerModelTurn(
     lane: 'automation',
     // D 任务声明（可信证据）：随执行链进入审批线索包，供任务相关性判断
     approvalTaskDigest: buildApprovalTaskDigest(args.taskPrompt),
-    model: session.model,
-    providerRouteId,
+    model: args.runConfig.providerModelName!,
+    modelId: args.runConfig.modelId,
+    supportsThinking: args.runConfig.model.supportsThinking !== false,
+    providerRouteId: args.runConfig.routeIdentity ?? providerRouteId,
     contextWindow,
     contextWindowTrusted,
     baseUrl: creds.baseUrl,
     messages,
     system,
     options: { maxTokens: 8192 },
+    effort: args.runConfig.effectiveEffort ?? 'off',
     currentUserMessageId: args.currentUserMessageId,
     toolsConfig,
     resolveToolsConfig: deps.getToolsConfig,
@@ -323,14 +400,14 @@ async function runButlerModelTurn(
     workDir,
     workDirManager: deps.workDirManager,
     resolveWorkDir: deps.workDirManager
-      ? buildResolveWorkDirCallback(db, args.sessionId, deps.workDirManager, deps.getWorkDir())
+      ? () => args.runConfig.workDir!
       : undefined,
     userDataDir: deps.getUserDataPath(),
     getApiKey: creds.getApiKey,
     appDb: db,
     locale: readAppLocale(db),
     assistantMessageId: args.assistantMessageId,
-    sessionEventLocation: { workDir: deps.getWorkDir(), sessionId: args.sessionId, createdAt: session.createdAt },
+    sessionEventLocation: { workDir: args.runConfig.workDir!, sessionId: args.sessionId, createdAt: session.createdAt },
     emitFactEvent: butlerEvents.emitFactEvent,
     emitSessionEvent: butlerEvents.emitSessionEvent,
     onFileTreeChanged: butlerEvents.onFileTreeChanged

@@ -83,6 +83,19 @@ describe('session events', () => {
     }
   })
 
+  it('repairs a canonical tool result when the session ledger has only an aborted-dispatch diagnostic', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-tool-result-diagnostic-'))
+    const sink = getSessionEventSink(root, 'tool-result-diagnostic', 1000)
+    try {
+      await sink.appendCritical({ type: 'tool_result', payload: { toolUseId: 'tool-diagnostic', stepId: 'step-1', diagnosticType: 'tools.dispatch_failure_context', reasonCode: 'ToolExecutionAfterDispatchError' } })
+      await expect(ensureToolResultEvent(sink, { toolUseId: 'tool-diagnostic', stepId: 'step-1', result: { content: [{ type: 'text', text: 'recovered' }] } }))
+        .resolves.toMatchObject({ type: 'tool_result', payload: { toolUseId: 'tool-diagnostic', result: { content: [{ text: 'recovered', type: 'text' }] } } })
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it.each([
     {
       type: 'tool_call' as const,

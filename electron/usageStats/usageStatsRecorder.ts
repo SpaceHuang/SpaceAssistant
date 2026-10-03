@@ -30,6 +30,9 @@ export type UsageStepUsageInput = {
   baseUrl?: string
   model?: string | null
   llmServiceId?: string | null
+  modelId?: string | null
+  providerModelName?: string | null
+  routeIdentity?: string | null
   now?: number
   attribution?: StepAttribution
 }
@@ -50,6 +53,9 @@ export type TurnSummaryInput = {
   counts: UsageTurnToolCounts
   model?: string | null
   llmServiceId?: string | null
+  modelId?: string | null
+  providerModelName?: string | null
+  routeIdentity?: string | null
   now?: number
   toolAttributionJson?: string | null
 }
@@ -89,6 +95,9 @@ export function recordStepUsage(db: AppDatabase | undefined, input: UsageStepUsa
       day: localDayString(now),
       model: input.model ?? null,
       llmServiceId: input.llmServiceId ?? null,
+      modelId: input.modelId ?? null,
+      providerModelName: input.providerModelName ?? null,
+      routeIdentity: input.routeIdentity ?? null,
       appVersion: cachedAppVersion ?? null,
       inputTokens,
       outputTokens: usage.output_tokens ?? 0,
@@ -118,6 +127,9 @@ export function recordTurnSummary(db: AppDatabase | undefined, input: TurnSummar
       day: localDayString(now),
       model: input.model ?? null,
       llmServiceId: input.llmServiceId ?? null,
+      modelId: input.modelId ?? null,
+      providerModelName: input.providerModelName ?? null,
+      routeIdentity: input.routeIdentity ?? null,
       appVersion: cachedAppVersion ?? null,
       stepCount: input.counts.stepCount,
       toolCallCount: input.counts.toolCallCount,

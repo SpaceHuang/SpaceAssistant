@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from './database/testHelpers'
-import { createSession, setConfigValue, type AppDatabase } from './database'
-import { resolveThinkingEffort, resolveTrustedTurnExecutionConfig } from './turnExecutionConfig'
+import { createSession, setConfigValue, updateSession, type AppDatabase } from './database'
+import { resolvePinnedAutomationTurnExecutionConfig, resolveThinkingEffort, resolveTrustedTurnExecutionConfig } from './turnExecutionConfig'
 import type { ModelEntry } from '../src/shared/domainTypes'
 
 vi.mock('./agentLogger/agentLogger', () => ({ logAgentEvent: vi.fn() }))
+vi.mock('./secureApiKey', () => ({ isSecretStorageAvailable: vi.fn(() => true), decryptSecret: vi.fn((value: string) => value.replace(/^enc:/, '')) }))
 
 const SERVICE_ID = 'svc-deepseek'
 
@@ -186,5 +187,30 @@ describe('resolveTrustedTurnExecutionConfig 产出档位', () => {
       { projectMemoryEnabled: true },
       { requiresVision: true }
     )).resolves.toMatchObject({ model: 'kimi-k2.7-code', thinkingEffort: 'off' })
+  })
+})
+
+describe('resolvePinnedAutomationTurnExecutionConfig', () => {
+  it('固定 model ID/service/effort，不受桌面默认值变化影响', async () => {
+    const db = createMemoryAppDb()
+    const model = makeModel({ id: 'catalog-a', name: 'same-provider-name', supportsThinking: true })
+    seedLlmConfig(db, [model])
+    const session = createSession(db, { name: 'automation', model: model.name, llmServiceId: SERVICE_ID, thinkingEffort: 'high', ownership: 'automation' })
+    setConfigValue(db, 'config.defaultModel', 'desktop-other')
+    setConfigValue(db, 'config.thinkingEffort', 'low')
+    const snapshot = { resolutionStatus: 'resolved' as const, modelId: model.id, providerModelName: model.name, serviceId: SERVICE_ID, requestedEffort: 'high' as const, effectiveEffort: 'high' as const }
+    await expect(resolvePinnedAutomationTurnExecutionConfig(db, session.id, snapshot)).resolves.toMatchObject({ lane: 'automation', model: model.name, llmServiceId: SERVICE_ID, thinkingEffort: 'high', requestedThinkingEffort: 'high' })
+    db.close()
+  })
+
+  it('pair 被撤销后 fail-closed，不改 session', async () => {
+    const db = createMemoryAppDb()
+    const model = makeModel({ id: 'catalog-a', name: 'same-provider-name', supportsThinking: true })
+    seedLlmConfig(db, [model])
+    const session = createSession(db, { name: 'automation', model: model.name, llmServiceId: SERVICE_ID, thinkingEffort: 'high', ownership: 'automation' })
+    setConfigValue(db, 'config.activeLlmServiceIds', '[]')
+    await expect(resolvePinnedAutomationTurnExecutionConfig(db, session.id, { resolutionStatus: 'resolved', modelId: model.id, providerModelName: model.name, serviceId: SERVICE_ID, requestedEffort: 'high', effectiveEffort: 'high' })).rejects.toThrow(/AUTOMATION_SERVICE_CONFIG_INVALID/)
+    expect((await import('./database')).getSession(db, session.id)).toMatchObject({ model: model.name, llmServiceId: SERVICE_ID, thinkingEffort: 'high' })
+    db.close()
   })
 })

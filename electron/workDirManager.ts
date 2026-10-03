@@ -102,6 +102,10 @@ export function resolveWorkDirForSession(
   const session = getSession(db, sessionId)
   if (!session) return null
 
+  if (session.fixedWorkDir) {
+    return { profileId: session.workDirProfileId ?? '', workDir: session.fixedWorkDir, isSensitive: false }
+  }
+
   if (session.workDirProfileId) {
     const profile = listProfiles().find((p) => p.id === session.workDirProfileId)
     if (profile?.path) {

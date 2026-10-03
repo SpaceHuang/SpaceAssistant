@@ -9,7 +9,10 @@ import { SqliteDecisionCache, canonicalKeyJson } from './sqliteDecisionCache'
 import { DEFAULT_TOOLS_CONFIG, type ToolsConfig } from '../../src/shared/domainTypes'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
 import os from 'os'
+import fs from 'node:fs/promises'
+import path from 'node:path'
 import { probeWritePathFact } from './extractors/writePathFacts'
+import { probeReadPathFact } from './extractors/readPathFacts'
 
 const shells: AppDatabase[] = []
 function openDb(): AppDatabase {
@@ -79,6 +82,20 @@ function auditSink(): { record: (e: SecurityAuditEvent) => void; events: Securit
 }
 
 describe('automation lane 门控运行时行为（评审 B1 核心验收）', () => {
+  it('task root 决定相对路径归属，桌面 Profile 路径仍属于任务工作区之外', async () => {
+    const taskRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'automation-task-root-')))
+    const desktopProfile = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'automation-desktop-root-')))
+    try {
+      const common = { workDir: taskRoot, userDataDir: path.join(taskRoot, '.userdata'), homeDir: os.homedir(), customSensitivePrefixes: [] as string[] }
+      const relative = await probeReadPathFact({ ...common, rawPath: 'reports/today.txt' })
+      const desktop = await probeReadPathFact({ ...common, rawPath: path.join(desktopProfile, 'private.txt') })
+      expect(relative).toMatchObject({ normalizedPath: path.join(taskRoot, 'reports/today.txt'), zone: 'workdir-normal' })
+      expect(desktop).toMatchObject({ normalizedPath: path.join(desktopProfile, 'private.txt'), zone: 'outside-workdir' })
+    } finally {
+      await fs.rm(taskRoot, { recursive: true, force: true })
+      await fs.rm(desktopProfile, { recursive: true, force: true })
+    }
+  })
   it('write_file：automation lane 在 locked 规则终局拒绝', async () => {
     const audit = auditSink()
     const r = await evaluateToolCallGate(

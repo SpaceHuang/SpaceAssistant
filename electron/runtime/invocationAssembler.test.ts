@@ -17,11 +17,30 @@ import { TypedToolRegistry, definePlannedTool } from '../tools/plannedToolRegist
 import type { McpConnectionManager } from '../mcp/mcpConnectionManager'
 import { cancelToolConfirm, isPendingConfirm, submitToolConfirmResponse } from '../toolConfirmRegistry'
 import { createMemoryAppDb } from '../database/testHelpers'
-import { getDbConnection } from '../database'
+import { getDbConnection, setConfigValue } from '../database'
 import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import { isBrowserSessionTrustedHost, resetBrowserSessionTrustForTests } from '../browser/browserSessionTrust'
 
 describe('AcceptedTurn propagation', () => {
+  it('selects thinking capability by automation catalog ID even when provider names duplicate and catalog order changes', () => {
+    const db = createMemoryAppDb()
+    const entries = [
+      { id: 'thinking-on', name: 'same-provider-name', supportsThinking: true },
+      { id: 'thinking-off', name: 'same-provider-name', supportsThinking: false }
+    ]
+    setConfigValue(db, 'config.models', JSON.stringify(entries))
+    const assemble = (modelId: string) => assembleInvocation({
+      requestId: `req-${modelId}`, sessionId: 'automation-session', model: 'same-provider-name', modelId, effort: 'high', lane: 'automation',
+      appDb: db, locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'key',
+      emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    }).invocation.profile.reasoning
+    const on = assemble('thinking-on')
+    const off = assemble('thinking-off')
+    setConfigValue(db, 'config.models', JSON.stringify(entries.reverse()))
+    expect(assemble('thinking-off')).toEqual(off)
+    expect(on).toMatchObject({ effort: 'high' })
+    expect(off).toMatchObject({ effort: 'off', degraded: { from: 'high', to: 'off' } })
+  })
   it('carries the immutable accepted-turn snapshot into the runtime invocation', () => {
     const acceptedTurn = Object.freeze({
       turnId: 'accepted-turn', requestId: 'accepted-request', sessionId: 'accepted-session', lane: 'desktop' as const,

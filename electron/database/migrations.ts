@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
-import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, MIGRATION_V4_TABLES_SQL, MIGRATION_V5_TURN_TABLE_SQL, MIGRATION_V6_TURN_CHECKPOINT_SQL, MIGRATION_V7_QUEUE_RECEIPT_SQL, MIGRATION_V8_TURN_START_TOKEN_SQL, MIGRATION_V9_TURN_RECOVERY_FIELDS_SQL, MIGRATION_V10_TURN_TERMINAL_USAGE_SQL, MIGRATION_V11_TURN_CONTEXT_SQL, MIGRATION_V12_TURN_EXECUTION_CONFIG_SQL, MIGRATION_V13_TURN_ROUTING_INDEXES_SQL, MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL, MIGRATION_V15_BUTLER_TABLES_SQL, MIGRATION_V16_USAGE_STATS_SQL, MIGRATION_V17_SESSION_THINKING_EFFORT_SQL, MIGRATION_V18_CONFIRMATION_COMMIT_IDENTITY_SQL, MIGRATION_V19_AGENT_HISTORY_SQL, MIGRATION_V20_AGENT_HISTORY_SESSION_SQL, MIGRATION_V21_AGENT_HISTORY_SESSION_BACKFILL_SQL, MIGRATION_V22_TURN_INPUT_HISTORY_VERSION_SQL, MIGRATION_V23_DRIVER_DELIVERY_SQL, MIGRATION_V24_SESSION_TRANSCRIPT_SQL, MIGRATION_V25_SESSION_EXECUTION_QUEUE_SQL, MIGRATION_V26_SESSION_TRANSCRIPT_RECONCILIATION_SQL, MIGRATION_V27_ACCEPTED_TURN_CONTEXT_SQL, MIGRATION_V28_USAGE_ATTRIBUTION_SQL, MIGRATION_V29_CONTINUATIONS_SQL, MIGRATION_V30_CONTINUATION_START_TOKEN_SQL, MIGRATION_V28_CONTINUATION_INTENTS_SQL, MIGRATION_V32_CONTINUATION_QUEUE_CONTEXT_SQL, SCHEMA_META_KEYS } from './schema'
+import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, MIGRATION_V4_TABLES_SQL, MIGRATION_V5_TURN_TABLE_SQL, MIGRATION_V6_TURN_CHECKPOINT_SQL, MIGRATION_V7_QUEUE_RECEIPT_SQL, MIGRATION_V8_TURN_START_TOKEN_SQL, MIGRATION_V9_TURN_RECOVERY_FIELDS_SQL, MIGRATION_V10_TURN_TERMINAL_USAGE_SQL, MIGRATION_V11_TURN_CONTEXT_SQL, MIGRATION_V12_TURN_EXECUTION_CONFIG_SQL, MIGRATION_V13_TURN_ROUTING_INDEXES_SQL, MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL, MIGRATION_V15_BUTLER_TABLES_SQL, MIGRATION_V16_USAGE_STATS_SQL, MIGRATION_V17_SESSION_THINKING_EFFORT_SQL, MIGRATION_V18_CONFIRMATION_COMMIT_IDENTITY_SQL, MIGRATION_V19_AGENT_HISTORY_SQL, MIGRATION_V20_AGENT_HISTORY_SESSION_SQL, MIGRATION_V21_AGENT_HISTORY_SESSION_BACKFILL_SQL, MIGRATION_V22_TURN_INPUT_HISTORY_VERSION_SQL, MIGRATION_V23_DRIVER_DELIVERY_SQL, MIGRATION_V24_SESSION_TRANSCRIPT_SQL, MIGRATION_V25_SESSION_EXECUTION_QUEUE_SQL, MIGRATION_V26_SESSION_TRANSCRIPT_RECONCILIATION_SQL, MIGRATION_V27_ACCEPTED_TURN_CONTEXT_SQL, MIGRATION_V28_USAGE_ATTRIBUTION_SQL, MIGRATION_V29_CONTINUATIONS_SQL, MIGRATION_V30_CONTINUATION_START_TOKEN_SQL, MIGRATION_V28_CONTINUATION_INTENTS_SQL, MIGRATION_V32_CONTINUATION_QUEUE_CONTEXT_SQL, MIGRATION_V33_AUTOMATION_TASK_CONFIG_SQL, SCHEMA_META_KEYS } from './schema'
 import { runInTransaction } from './transaction'
 
 export class DatabaseUpgradeRequiredError extends Error {
@@ -279,6 +279,32 @@ export function runMigrations(conn: DatabaseSync): void {
       const columns = conn.prepare("PRAGMA table_info(continuation_intents)").all() as Array<{ name: string }>
       if (!columns.some(({ name }) => name === 'continuation_context_json')) conn.exec(MIGRATION_V32_CONTINUATION_QUEUE_CONTEXT_SQL)
       version = 32
+      conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+    }
+    if (version === 32) {
+      const taskColumns = conn.prepare('PRAGMA table_info(automation_tasks)').all() as Array<{ name: string }>
+      const runColumns = conn.prepare('PRAGMA table_info(automation_task_runs)').all() as Array<{ name: string }>
+      if (taskColumns.length && runColumns.length) {
+        const existing = new Set(taskColumns.map(({ name }) => name))
+        for (const [name, type] of [['work_dir', 'TEXT'], ['model_id', 'TEXT'], ['model_service_id', 'TEXT'], ['reasoning_effort', 'TEXT']] as const) {
+          if (!existing.has(name)) conn.exec(`ALTER TABLE automation_tasks ADD COLUMN ${name} ${type}`)
+        }
+        if (!runColumns.some(({ name }) => name === 'config_snapshot_json')) conn.exec('ALTER TABLE automation_task_runs ADD COLUMN config_snapshot_json TEXT')
+      }
+      const sessionsExists = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'").get() !== undefined
+      if (sessionsExists) {
+        const sessionColumns = conn.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>
+        if (!sessionColumns.some(({ name }) => name === 'fixed_work_dir')) conn.exec('ALTER TABLE sessions ADD COLUMN fixed_work_dir TEXT')
+      }
+      for (const table of ['usage_step_facts', 'usage_turn_facts']) {
+        const exists = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
+        if (!exists) continue
+        const columns = conn.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+        for (const name of ['model_id', 'provider_model_name', 'route_identity']) {
+          if (!columns.some((column) => column.name === name)) conn.exec(`ALTER TABLE ${table} ADD COLUMN ${name} TEXT`)
+        }
+      }
+      version = 33
       conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
     }
   })

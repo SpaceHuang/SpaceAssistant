@@ -267,7 +267,7 @@ describe('runImRemoteAgent', () => {
       const sink = getSessionEventSink(workDir, session.id, session.createdAt)
       try {
         const events = await readSessionEvents(sink.eventsPath)
-        expect(events.some((event) => event.type === 'tool_call' || event.type === 'tool_result')).toBe(false)
+        expect(events.some((event) => event.type === 'tool_call' || event.type === 'tool_result' && !('diagnosticType' in event.payload))).toBe(false)
         expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ reason: 'failed' })
       } finally { await sink.close() }
     } finally {
@@ -1235,7 +1235,7 @@ describe('runImRemoteAgent', () => {
       try {
         const events = await readSessionEvents(ledger.eventsPath)
         expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: `feishu-${termination}-cli`, name: 'run_lark_cli' })
-        expect(events.some((event) => event.type === 'tool_result')).toBe(false)
+        expect(events.some((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload))).toBe(false)
         expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: requestId, reason: 'interrupted' })
       } finally { await ledger.close() }
     } finally {
@@ -2519,7 +2519,7 @@ describe('runImRemoteAgent', () => {
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: requestId, name: 'run_script' })
-        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === requestId)).toBe(false)
+        expect(events.some((event) => event.type === 'tool_result' && event.payload.toolUseId === requestId && !('diagnosticType' in event.payload))).toBe(false)
         expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ reason: 'interrupted' })
       } finally { await sink.close() }
       expect(runtime.executionAdmission.activeLeaseCount(requestId)).toBe(0)
@@ -2944,7 +2944,7 @@ describe('runImRemoteAgent', () => {
       expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
       const sink = getSessionEventSink(currentDir, session.id, session.createdAt)
       const projected = await readSessionEvents(sink.eventsPath)
-      expect(projected.some((event) => event.type === 'tool_result')).toBe(false)
+      expect(projected.some((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload))).toBe(false)
       expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ reason: 'interrupted' })
       await sink.close()
     } finally {
@@ -3761,7 +3761,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
       try {
         const events = await readSessionEvents(sink.eventsPath)
         expect(events.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: `attachment-${termination}-postclaim`, name: 'read_feishu_attachment' })
-        expect(events.some((event) => event.type === 'tool_result')).toBe(false)
+        expect(events.some((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload))).toBe(false)
         expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'interrupted' })
       } finally { await sink.close() }
     } finally {
@@ -4222,7 +4222,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
       try {
         const projected = await readSessionEvents(sink.eventsPath)
         expect(projected.find((event) => event.type === 'tool_call')?.payload).toMatchObject({ toolUseId: toolCallId, name: 'switch_session' })
-        expect(projected.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId)).toBe(false)
+        expect(projected.some((event) => event.type === 'tool_result' && event.payload.toolUseId === toolCallId && !('diagnosticType' in event.payload))).toBe(false)
         expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: requestId, reason: 'interrupted' })
       } finally { await sink.close() }
     } finally {

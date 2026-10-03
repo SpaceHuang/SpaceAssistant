@@ -723,6 +723,8 @@ export interface Session {
   schemaVersion: number
   /** 所属工作目录 profile；缺省时视为当前激活目录（向后兼容） */
   workDirProfileId?: string
+  /** 固定任务工作目录；automation session 使用它避免活动 Profile 漂移。 */
+  fixedWorkDir?: string
   /** 会话归属（偏差 7）；缺省等价 user（历史会话向后兼容） */
   ownership?: import('./sessionOwnership').SessionOwnership
   /** 可见性（偏差 7）；缺省等价 primary */
