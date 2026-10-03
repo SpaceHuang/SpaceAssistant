@@ -11,6 +11,7 @@ import {
   setChatStatus,
   setConfirmFocusToolUseId,
   setDisplayPage,
+  addCompactionMarker,
   setLoadingBefore,
   setMessages,
   setScrollToMessageId,
@@ -213,6 +214,15 @@ export function ChatView() {
     stickToBottomRef.current = true
     setShowScrollToLatest(false)
   }, [sessionId])
+
+  useEffect(() => {
+    if (!sessionId || typeof window.api.chatGetSessionCompactionMarkers !== 'function') return
+    let current = true
+    void window.api.chatGetSessionCompactionMarkers(sessionId).then((markers) => {
+      if (current) markers.forEach((marker) => dispatch(addCompactionMarker(marker)))
+    }).catch(() => {})
+    return () => { current = false }
+  }, [sessionId, dispatch])
 
   const handleStickToBottomChange = useCallback((nearBottom: boolean) => {
     stickToBottomRef.current = nearBottom

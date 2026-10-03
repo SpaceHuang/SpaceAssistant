@@ -53,6 +53,10 @@ import type { ToolCallGateArgs } from '../confirmation/toolCallGate'
 import { createRegisteredAgentTurnTools } from '../tools/registeredAgentTurnTools'
 import { classifyWorkDirProfileTarget } from '../workDirBinding'
 import { sessionDisplayNameRaw } from '../../src/shared/sessionDisplay'
+import { buildSessionDirectoryContextBlock } from '../../src/shared/sessionDirectoryGrant'
+import type { SessionDirectoryGrantRecord } from '../../src/shared/sessionDirectoryGrant'
+import { listValidSessionDirectoryGrantsSync } from '../sessionDirectoryGrants'
+import { normalizeDirectoryGrantPath } from '../../src/shared/sessionDirectoryGrant'
 import { channelFor, type ResolveConfirmChannelArgs } from '../confirmation/channels'
 import { AgentChannel } from '../confirmation/agentChannel'
 import { toolIdToOpenAiCompatibleApiToolName } from '../../src/shared/anthropicToolSanitize'
@@ -308,6 +312,13 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   const acceptedTurnId = materials.acceptedTurn?.turnId ?? materials.turnId
   const runtimeTurnId = acceptedTurnId ?? materials.requestId
   const db = materials.appDb as AppDatabase | undefined
+  const materialsLane = materials.lane
+    ?? (materials.remoteContext
+      ? materials.remoteContext.source === 'feishu' ? 'feishu' : 'wechat'
+      : 'desktop')
+  const sessionDirectoryGrants = materialsLane === 'desktop' && db
+    ? listValidSessionDirectoryGrantsSync(getSession(db, materials.sessionId) ?? { id: materials.sessionId, metadata: {} })
+    : []
   const additionalContext: Record<string, unknown> = {}
   if (materials.approvalTaskDigest !== undefined) {
     additionalContext[AGENT_ADDITIONAL_CONTEXT_KEYS.approvalTaskDigest] = materials.approvalTaskDigest
@@ -318,6 +329,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
 
   // locale 定值（请求优先、库回退在装配期完成；循环内不再查库）
   const resolvedLocale = resolveRequestLocale(materials.locale, db as never)
+  const directoryContext = buildSessionDirectoryContextBlock(sessionDirectoryGrants, resolvedLocale === 'en-US' ? 'en-US' : 'zh-CN')
+  const systemPrompt = [materials.system, directoryContext].filter((part): part is string => Boolean(part)).join('')
 
   // P7（偏差 16）：工具裁剪——嵌套调用相对父调用取交集（只能收窄不能加宽），违规装配期拒绝并落日志
   const parentTrim = materials.parentToolsTrim
@@ -388,7 +401,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       ...(materials.llmServiceId !== undefined ? { llmServiceId: materials.llmServiceId } : {}),
       ...(materials.contextWindow !== undefined ? { contextWindow: materials.contextWindow } : {}),
       ...(materials.contextWindowTrusted !== undefined ? { contextWindowTrusted: materials.contextWindowTrusted } : {}),
-      ...(materials.system !== undefined ? { system: materials.system } : {}),
+      ...(systemPrompt ? { system: systemPrompt } : {}),
       ...(materials.options !== undefined ? { options: materials.options } : {}),
       ...(resolvedLocale !== undefined ? { locale: resolvedLocale } : {}),
       ...(materials.projectMemoryEnabled !== undefined ? { projectMemoryEnabled: materials.projectMemoryEnabled } : {}),
@@ -425,12 +438,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
 
   // ===== P2（B1）：门控端口材料装配期解析 =====
   // lane 推导与 Core 外壳同一规则（显式 lane → remoteContext 推导 → desktop）
-  const materialsLane = materials.lane
-    ?? (materials.remoteContext
-      ? materials.remoteContext.source === 'feishu'
-        ? 'feishu'
-        : 'wechat'
-      : 'desktop')
   // P3：带来源解析 + 嵌套交集（floor 上界由调用方声明；放行集合只收窄）
   const withOrigin = db
     ? resolveEffectivePolicyRulesWithOrigin(db, materialsLane)
@@ -648,6 +655,9 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     const supplement = { ...browserFacts, ...(callerSupplement ?? {}) }
     const currentShellConfig = binding.phase === 'recheck' ? materials.resolveShellConfig?.() ?? materials.shellConfig : materials.shellConfig
     const currentWikiConfig = binding.phase === 'recheck' ? materials.resolveWikiConfig?.() ?? materials.wikiConfig : materials.wikiConfig
+    const sessionDirectoryGrants = materialsLane === 'desktop' && db
+      ? (getSession(db, materials.sessionId)?.metadata?.sessionDirectoryGrants as import('../../src/shared/sessionDirectoryGrant').SessionDirectoryGrantRecord[] | undefined) ?? []
+      : []
     return {
       toolName,
       toolInput: structuredClone(call.input),
@@ -658,6 +668,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       userDataDir: materials.userDataDir,
       lane: materialsLane,
       remoteContext: materials.remoteContext,
+      ...(sessionDirectoryGrants.length ? { sessionDirectoryGrants } : {}),
       toolsConfig: binding.phase === 'recheck' ? materials.resolveToolsConfig?.() ?? materials.toolsConfig : materials.toolsConfig,
       ...(currentShellConfig !== undefined ? { shellConfig: currentShellConfig } : {}),
       ...(currentBrowserConfig !== undefined ? { browserConfig: currentBrowserConfig } : {}),
@@ -799,6 +810,15 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         policyRevision: authorizationVersion,
         shellOutputMode: resolveEffectiveShellOutputMode(materials.shellConfig ?? undefined, undefined, materials.remoteContext?.source),
         ...(db ? { appDatabase: db } : {}),
+        isSessionDirectoryGrantActive: (grant: Pick<SessionDirectoryGrantRecord, 'grantId' | 'sessionId' | 'realPath' | 'identity'>) => {
+          const currentSession = db ? getSession(db, grant.sessionId) : undefined
+          if (!currentSession || currentSession.id !== materials.sessionId) return false
+          return listValidSessionDirectoryGrantsSync(currentSession).some((current) =>
+            current.grantId === grant.grantId && current.sessionId === grant.sessionId &&
+            normalizeDirectoryGrantPath(current.realPath) === normalizeDirectoryGrantPath(grant.realPath) &&
+            current.identity.dev === grant.identity.dev && current.identity.ino === grant.identity.ino && current.identity.mode === grant.identity.mode
+          )
+        },
         toolUserConfirmed: false,
         ...(materials.getBrowserDetectContext ? { getBrowserDetectContext: materials.getBrowserDetectContext } : {}),
         ...(resolvedLocale ? { requestLocale: resolvedLocale } : {}),

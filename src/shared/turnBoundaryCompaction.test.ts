@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { planTurnBoundarySurfaceCompaction } from './turnBoundaryCompaction'
+import { planTurnBoundarySurfaceCompaction, planUserCompactionSurface } from './turnBoundaryCompaction'
 
 describe('turn boundary surface compaction', () => {
   it('keeps required current input and preserves facts while summarizing', () => {
@@ -25,5 +25,20 @@ describe('turn boundary surface compaction', () => {
     })
     expect(result.actions[0]?.action).toBe('reset')
     expect(result.items.map((item) => item.id)).toEqual(['checkpoint-reset', 'current', 'tail'])
+  })
+})
+
+describe('user requested surface compaction', () => {
+  it('uses the user_compact summarize rule and preserves the newest required messages', () => {
+    const items = [
+      { id: 'old-1', tokens: 100, required: false },
+      { id: 'old-2', tokens: 100, required: false },
+      { id: 'latest-user', tokens: 80, required: true },
+      { id: 'latest-assistant', tokens: 100, required: true }
+    ]
+    const result = planUserCompactionSurface({ items, checkpointId: 'manual-checkpoint', checkpointTokens: 20, totalInputBudget: 1000 })
+    expect(result.actions).toMatchObject([{ ruleId: 'user-summary', action: 'summarize', status: 'applied' }])
+    expect(result.items.map((item) => item.id)).toEqual(['manual-checkpoint', 'old-2', 'latest-user', 'latest-assistant'])
+    expect(result.record?.shadowedRanges).toEqual([{ start: 'old-1', end: 'old-1' }])
   })
 })

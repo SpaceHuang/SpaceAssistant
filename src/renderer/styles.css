@@ -63,6 +63,79 @@
   color: var(--sa-warning, #d48806);
 }
 
+.composer-directory-grants {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0 8px;
+}
+
+.composer-directory-grant {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: min(100%, 320px);
+  padding: 3px 5px 3px 9px;
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-sm);
+  background: var(--sa-bg-subtle);
+  color: var(--sa-text-secondary);
+  font-size: 13px;
+}
+
+.composer-directory-grant__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-directory-grant__state {
+  color: var(--sa-danger, #cf1322);
+  flex: 0 0 auto;
+}
+
+.composer-directory-grant button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: var(--sa-radius-xs);
+  background: transparent;
+  color: var(--sa-icon);
+  cursor: pointer;
+}
+
+.composer-directory-grant button:hover:not(:disabled) {
+  background: var(--sa-bg-muted);
+  color: var(--sa-text);
+}
+
+.composer-directory-grant button:focus-visible {
+  outline: 2px solid var(--sa-primary);
+  outline-offset: 1px;
+}
+
+.composer-directory-grant button:disabled {
+  cursor: not-allowed;
+  opacity: .5;
+}
+
+.composer-directory-grant--invalid {
+  border-color: color-mix(in srgb, var(--sa-danger, #cf1322) 45%, var(--sa-border));
+}
+
+.composer-directory-status {
+  padding: 0 0 6px;
+  color: var(--sa-text-secondary);
+  font-size: 13px;
+}
+
 .composer-attachment-chip {
   position: relative;
   display: inline-flex;
@@ -80,7 +153,7 @@
 }
 
 .composer-attachment-chip--error {
-  border-color: var(--sa-danger, #e5484d);
+  border-color: var(--sa-danger, #cf1322);
 }
 
 .composer-attachment-chip__thumb {

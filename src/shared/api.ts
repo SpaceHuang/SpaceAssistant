@@ -122,6 +122,11 @@ export type {
 
 export type FileViewerUrlResult = { ok: true; url: string } | { ok: false; error: string }
 
+export type SessionDirectoryGrantListItem = import('./sessionDirectoryGrant').SessionDirectoryGrantView & { status: 'valid' | 'invalid' }
+export type SessionDirectoryGrantAddResult =
+  | { status: 'added' | 'already-granted'; grant: import('./sessionDirectoryGrant').SessionDirectoryGrantView }
+  | { status: 'canceled' | 'invalid-directory' | 'sensitive-directory' | 'session-not-found' | 'forbidden' | 'error' }
+
 export type FileReadResult =
   | { kind: 'text'; content: string; encoding: 'utf8' }
   | { kind: 'image'; content: string; encoding: 'base64'; mimeType: string }
@@ -215,6 +220,8 @@ export type SpaceAssistantApi = {
   usageDelete: (sessionId: string) => Promise<void>
 
   chatGetMessages: (payload: { sessionId: string; limit?: number; offset?: number }) => Promise<Message[]>
+  chatCompactSessionContext: (payload: { sessionId: string; requestId: string }) => Promise<({ status: 'committed' } & import('./compactionEvents').CompactionMarker) | { status: 'no-op' | 'uncompressible' | 'busy' | 'failed' | 'stale' | 'forbidden' | 'session-not-found' }>
+  chatGetSessionCompactionMarkers: (sessionId: string) => Promise<import('./compactionEvents').CompactionMarker[]>
   chatGetApiContextBaseline: (payload: {
     sessionId: string
   }) => Promise<import('./displayOrder').ApiContextBaseline>
@@ -402,6 +409,9 @@ export type SpaceAssistantApi = {
   }) => Promise<import('./llmModelConfig').FetchServiceModelsResult>
 
   dialogSelectDirectory: () => Promise<{ path: string } | { canceled: true } | { error: string }>
+  sessionDirectoryGrantsList: (sessionId: string) => Promise<SessionDirectoryGrantListItem[]>
+  sessionDirectoryGrantsAdd: (sessionId: string) => Promise<SessionDirectoryGrantAddResult>
+  sessionDirectoryGrantsRemove: (input: { sessionId: string; grantId: string }) => Promise<{ removed: boolean } | { error: string }>
   configCheckWorkdirWritable: (dir: string) => Promise<{ writable: boolean; error?: string }>
 
   fileListDirectory: (relPath: string) => Promise<FileInfo[]>

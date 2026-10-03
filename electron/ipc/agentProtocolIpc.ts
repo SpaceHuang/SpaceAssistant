@@ -68,6 +68,7 @@ import { buildSnapshotFromDb } from '../mcp/mcpToolRegistry'
 import { listProfiles } from '../mcp/mcpConfigStore'
 import { readShellConfigFromDb } from '../shell/shellConfigDb'
 import { loadEffectivePolicyRules, readPolicyPackages, resolveEffectivePolicyRulesWithOrigin } from '../confirmation/policyRulesRuntime'
+import { isActiveTurnAdmissionBlocked, isSessionContextCompactionLocked, isSessionTurnAdmissionBlocked, withSessionTurnAdmission } from '../sessionCompactionLock'
 
 export function resolveContinuationSafetySnapshot(ctx: AppIpcContext, sessionId: string, lane: 'desktop' | 'wechat' | 'feishu' | 'automation') {
   const workDir = resolveWorkDirForSession(ctx.db, sessionId,
@@ -623,6 +624,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   type PreparedTurn = Omit<TurnStarted, 'executionConfig'>
 
   const prepareTurnInternal = async (intent: TurnIntent): Promise<PreparedTurn> => {
+    if (isSessionTurnAdmissionBlocked(intent.sessionId)) throw new Error('SESSION_CONTEXT_COMPACTION_BUSY')
     const configuringKey = JSON.stringify([intent.sessionId, intent.requestId])
     const existing = getTurnByRequestId(ctx.db, intent.sessionId, intent.requestId)
     if (existing) {
@@ -637,7 +639,10 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       return prepared
     }
     // 先原子占有 session 并写入 H。立即交还 turnId，使配置/路由阶段可被 cancel-turn 打断。
-    const started = turnCoordinator.prepare({ ...intent, config: {} }, 'configuring')
+    const started = await withSessionTurnAdmission(intent.sessionId, async () => {
+      if (isSessionContextCompactionLocked(intent.sessionId) || isActiveTurnAdmissionBlocked(intent.sessionId)) throw new Error('SESSION_CONTEXT_COMPACTION_BUSY')
+      return turnCoordinator.prepare({ ...intent, config: {} }, 'configuring')
+    })
     const controller = new AbortController()
     const configuring = (async () => {
       try {

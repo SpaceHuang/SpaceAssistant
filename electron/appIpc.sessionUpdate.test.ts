@@ -224,6 +224,20 @@ describe('session:update IPC', () => {
     expect((patch.metadata as Record<string, unknown>)[SESSION_META_TITLE_USER_CUSTOM]).toBeUndefined()
   })
 
+  it('does not allow generic session metadata updates to replace directory grants', async () => {
+    const canonical = [{ grantId: 'real-grant', sessionId: 'session-1', source: 'user-selected-directory' }]
+    const cur = stubSession({ metadata: { sessionDirectoryGrants: canonical } })
+    mockGetSession.mockReturnValue(cur)
+    mockUpdateSession.mockImplementation((_db, _id, patch) => ({ ...cur, ...patch }))
+
+    await ipc.getHandler('session:update')!({}, {
+      sessionId: 'session-1',
+      metadata: { sessionDirectoryGrants: [{ grantId: 'forged', sessionId: 'session-1', source: 'user-selected-directory' }] }
+    })
+
+    expect((mockUpdateSession.mock.calls[0]?.[2] as { metadata: Record<string, unknown> }).metadata.sessionDirectoryGrants).toEqual(canonical)
+  })
+
   it('does not write name or titleUserCustom for whitespace-only name', async () => {
     const cur = stubSession({ name: '会话 1' })
     mockGetSession.mockReturnValue(cur)
@@ -317,5 +331,19 @@ describe('session:delete IPC busy guard', () => {
     expect(mockDeleteSession).toHaveBeenCalledWith(ctx.db, 'session-1', { flush: false })
     expect(ctx.backup.deleteBackupWithRetry).toHaveBeenCalledWith(session, 3, expect.any(Function))
     release()
+  })
+
+  it('does not persist renderer-supplied directory grants when creating a session', async () => {
+    const session = stubSession()
+    mockCreateSession.mockReturnValue(session)
+    ctx.backup.backupWithRetry = vi.fn().mockResolvedValue(undefined)
+
+    await ipc.getHandler('session:create')!({}, {
+      name: '新会话',
+      metadata: { sessionDirectoryGrants: [{ grantId: 'forged', sessionId: 'session-1', source: 'user-selected-directory' }] }
+    })
+
+    expect(mockCreateSession.mock.calls[0]?.[1]).toMatchObject({ metadata: {} })
+    expect(mockCreateSession.mock.calls[0]?.[1]).not.toHaveProperty('metadata.sessionDirectoryGrants')
   })
 })

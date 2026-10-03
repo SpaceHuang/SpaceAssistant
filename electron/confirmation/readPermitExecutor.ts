@@ -8,6 +8,7 @@ import type { ReadExecutionPermit } from './readExecutionPermit'
 import { recordPolicyExecutionVeto } from './audit'
 import type { ExecutionLane } from '../../src/shared/confirmation/types'
 import { findRegisteredFeishuAttachment, MAX_FEISHU_ATTACHMENT_BYTES } from '../feishu/feishuAttachmentRegistry'
+import { isPathWithinGrantedDirectory, normalizeDirectoryGrantPath } from '../../src/shared/sessionDirectoryGrant'
 
 type PermitResolveFailure = { ok: false; caseId: string; failureClass: 'input' | 'mechanism' | 'environment' | 'integration-violation'; factId?: string }
 type FilePermitResolveSuccess = { ok: true; path: string; targetKind: 'file'; fileHandle: FileHandle }
@@ -35,6 +36,22 @@ export async function resolveReadPermitTarget(toolName: 'read_file' | 'grep' | '
   if (!validation.ok) return deny(validation.caseId, validation.caseId === 'input-digest-mismatch' ? 'input' : 'integration-violation')
   if (permit.targets.length !== 1) return deny('permit-target-count-mismatch', 'integration-violation')
   const target = permit.targets[0]!
+  if (target.directoryGrant) {
+    const grant = target.directoryGrant
+    if ((ctx.lane as ExecutionLane | undefined) !== 'desktop' || ctx.sessionId !== grant.sessionId || !grant.grantId) return deny('read-directory-grant-binding-mismatch', 'integration-violation')
+    if (!ctx.isSessionDirectoryGrantActive?.(grant)) return deny('read-directory-grant-revoked', 'mechanism')
+    try {
+      const realRoot = await fs.realpath(grant.realPath)
+      const stat = await fs.stat(realRoot)
+      if (normalizeDirectoryGrantPath(realRoot) !== normalizeDirectoryGrantPath(grant.realPath) || !stat.isDirectory() ||
+        stat.dev !== grant.identity.dev || stat.ino !== grant.identity.ino || stat.mode !== grant.identity.mode) {
+        return deny('read-directory-grant-identity-changed', 'mechanism')
+      }
+      if (!isPathWithinGrantedDirectory(target.normalizedPath, realRoot)) return deny('read-directory-grant-scope-mismatch', 'mechanism')
+    } catch {
+      return deny('read-directory-grant-unavailable', 'environment')
+    }
+  }
   if (toolName === 'list_directory') {
     if (target.targetKind !== 'directory' || target.scope !== 'direct-entries' || !target.identity) return deny('permit-target-kind-not-enumerable', 'mechanism')
     try {

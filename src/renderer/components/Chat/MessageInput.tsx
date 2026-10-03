@@ -1,11 +1,13 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
-import { Input, Tooltip } from 'antd'
+import { Dropdown, Input, Tooltip, type MenuProps } from 'antd'
 import { Plus, Send, Square, X } from 'lucide-react'
 import { ContextUsageRing } from './ContextUsageRing'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import type { ChatImageAttachment } from '../../../shared/domainTypes'
 import { MAX_CHAT_IMAGE_ATTACHMENTS } from '../../../shared/chatAttachmentLimits'
 import { getFileExtension, getImageMimeType } from '../../../shared/fileTypes'
+import { useAppDispatch } from '../../hooks'
+import { addCompactionMarker, setContextProjection } from '../../store/chatSlice'
 
 export type MessageInputHandle = {
   focus: () => void
@@ -33,6 +35,8 @@ type Props = {
   historyImageTokens?: number
   thinkingTokensToExclude?: number
   onSend: (text: string, attachments?: ChatImageAttachment[]) => void
+  onSelectDirectory?: () => void
+  onCompactContext?: () => void
   onAbort?: () => void
 }
 
@@ -77,6 +81,8 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
     historyImageTokens = 0,
     thinkingTokensToExclude = 0,
     onSend,
+    onSelectDirectory,
+    onCompactContext,
     onAbort
   },
   ref
@@ -92,6 +98,13 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
   const prefsChipRef = useRef<HTMLSpanElement>(null)
   const attachButtonRef = useRef<HTMLButtonElement>(null)
   const [statusCollapsed, setStatusCollapsed] = useState(false)
+  const [plusMenuOpen, setPlusMenuOpen] = useState(false)
+  const [compactionBusy, setCompactionBusy] = useState(false)
+  const [directoryGrants, setDirectoryGrants] = useState<import('../../../shared/api').SessionDirectoryGrantListItem[]>([])
+  const [grantBusy, setGrantBusy] = useState(false)
+  const [directoryStatus, setDirectoryStatus] = useState('')
+  const sessionIdRef = useRef(sessionId)
+  sessionIdRef.current = sessionId
 
   const readyAttachments = useMemo(
     () => pendingAttachments.filter((a) => a.status === 'ready').map(toChatAttachment),
@@ -356,6 +369,97 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
   }, [prefsSlot, running, canQueueSend, footerStatusLabel, pendingAttachments.length, checkOverflow])
 
   useEffect(() => {
+    if (!plusMenuOpen) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setPlusMenuOpen(false)
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [plusMenuOpen])
+
+  useEffect(() => {
+    let current = true
+    setDirectoryGrants([])
+    setDirectoryStatus('')
+    if (sessionId && window.api.sessionDirectoryGrantsList) {
+      void window.api.sessionDirectoryGrantsList(sessionId).then((items) => {
+        if (current) setDirectoryGrants(items)
+      }).catch(() => {
+        if (current) setDirectoryStatus(t('input.directoryLoadFailed'))
+      })
+    }
+    return () => { current = false }
+  // The typed translator may be a new function per render; sessionId is the load boundary.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId])
+
+  const refreshDirectoryGrants = useCallback(async (targetSessionId: string) => {
+    const items = await window.api.sessionDirectoryGrantsList(targetSessionId)
+    if (targetSessionId === sessionIdRef.current) setDirectoryGrants(items)
+  }, [])
+
+  const addDirectoryGrant = useCallback(async () => {
+    if (!sessionId || grantBusy) return
+    setGrantBusy(true)
+    setDirectoryStatus('')
+    try {
+      const result = await window.api.sessionDirectoryGrantsAdd(sessionId)
+      if (sessionIdRef.current !== sessionId) return
+      if (result.status === 'canceled') return
+      if (result.status === 'added' || result.status === 'already-granted') {
+        await refreshDirectoryGrants(sessionId)
+        setDirectoryStatus(result.status === 'added' ? t('input.directoryAdded') : t('input.directoryAlreadyAdded'))
+      } else if (result.status === 'sensitive-directory') setDirectoryStatus(t('input.directorySensitive'))
+      else if (result.status === 'invalid-directory') setDirectoryStatus(t('input.directoryInvalid'))
+      else setDirectoryStatus(t('input.directoryAddFailed'))
+    } catch {
+      if (sessionIdRef.current === sessionId) setDirectoryStatus(t('input.directoryAddFailed'))
+    } finally {
+      setGrantBusy(false)
+    }
+  }, [sessionId, grantBusy, refreshDirectoryGrants, t])
+
+  const removeDirectoryGrant = useCallback(async (grantId: string) => {
+    if (!sessionId || grantBusy) return
+    setGrantBusy(true)
+    try {
+      const result = await window.api.sessionDirectoryGrantsRemove({ sessionId, grantId })
+      if ('error' in result) throw new Error(result.error)
+      await refreshDirectoryGrants(sessionId)
+      if (sessionIdRef.current !== sessionId) return
+      setDirectoryStatus(result.removed ? t('input.directoryRemoved') : t('input.directoryRemoveFailed'))
+    } catch {
+      if (sessionIdRef.current === sessionId) setDirectoryStatus(t('input.directoryRemoveFailed'))
+    } finally {
+      setGrantBusy(false)
+    }
+  }, [sessionId, grantBusy, refreshDirectoryGrants, t])
+
+  const dispatch = useAppDispatch()
+  const compactContext = useCallback(async () => {
+    if (!sessionId || compactionBusy || disabled || running) return
+    const requestSessionId = sessionId
+    setCompactionBusy(true)
+    setDirectoryStatus('')
+    try {
+      const result = await window.api.chatCompactSessionContext({ sessionId, requestId: crypto.randomUUID() })
+      if (sessionIdRef.current !== requestSessionId) return
+      if (result.status === 'committed') {
+        dispatch(addCompactionMarker(result))
+        dispatch(setContextProjection(null))
+        setDirectoryStatus(t('input.compactionCommitted'))
+      } else if (result.status === 'no-op') setDirectoryStatus(t('input.compactionNoop'))
+      else if (result.status === 'uncompressible') setDirectoryStatus(t('input.compactionUncompressible'))
+      else if (result.status === 'busy') setDirectoryStatus(t('input.compactionBusy'))
+      else setDirectoryStatus(t('input.compactionFailed'))
+    } catch {
+      setDirectoryStatus(t('input.compactionFailed'))
+    } finally {
+      setCompactionBusy(false)
+    }
+  }, [sessionId, compactionBusy, disabled, running, dispatch, t])
+
+  useEffect(() => {
     if (!tooManyHint) return
     const timer = window.setTimeout(() => setTooManyHint(false), 4000)
     return () => window.clearTimeout(timer)
@@ -372,6 +476,18 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
   const sendLabel = running ? t('input.queueSend') : t('input.send')
   const stopLabel = t('input.abort')
   const hasStaging = pendingAttachments.some((a) => a.status === 'staging')
+  const imageLimitReached = pendingAttachments.filter((a) => a.status !== 'error').length >= MAX_CHAT_IMAGE_ATTACHMENTS
+  const plusMenuItems: MenuProps['items'] = [
+    { key: 'image', label: t('input.menuImage'), disabled: !sessionId || disabled || hasStaging || imageLimitReached, title: imageLimitReached ? t('input.tooManyImages', { max: MAX_CHAT_IMAGE_ATTACHMENTS }) : undefined },
+    { key: 'directory', label: t('input.menuDirectory'), disabled: !sessionId || disabled || grantBusy },
+    { key: 'compact', label: t('input.menuCompact'), disabled: !sessionId || disabled || running || compactionBusy }
+  ]
+  const handlePlusMenuClick: MenuProps['onClick'] = ({ key }) => {
+    setPlusMenuOpen(false)
+    if (key === 'image') fileInputRef.current?.click()
+    if (key === 'directory') onSelectDirectory ? onSelectDirectory() : void addDirectoryGrant()
+    if (key === 'compact') onCompactContext ? onCompactContext() : void compactContext()
+  }
 
   return (
     <div className="composer">
@@ -435,6 +551,24 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
             <span className="composer-attachments__hint">{t('input.tooManyImages', { max: MAX_CHAT_IMAGE_ATTACHMENTS })}</span>
           </div>
         ) : null}
+        {directoryGrants.length > 0 ? (
+          <div className="composer-directory-grants" aria-label={t('input.directoryContextLabel')}>
+            {directoryGrants.map((grant) => {
+              const name = grant.path.split(/[\\/]/).filter(Boolean).at(-1) ?? grant.path
+              const invalid = grant.status === 'invalid'
+              return (
+                <div key={grant.grantId} className={`composer-directory-grant${invalid ? ' composer-directory-grant--invalid' : ''}`} title={grant.path}>
+                  <span className="composer-directory-grant__name">{name}</span>
+                  {invalid ? <span className="composer-directory-grant__state">{t('input.directoryInvalidState')}</span> : null}
+                  <button type="button" onClick={() => void removeDirectoryGrant(grant.grantId)} disabled={grantBusy} aria-label={t('input.directoryRemoveAria', { name })}>
+                    <X size={12} aria-hidden />
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        ) : null}
+        {directoryStatus ? <div className="composer-directory-status" role="status" aria-live="polite">{directoryStatus}</div> : null}
         <Input.TextArea
           ref={textareaRef}
           value={text}
@@ -452,16 +586,25 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
         <div className="composer-footer">
           <div ref={leftRowRef} className="composer-footer__start">
             <Tooltip title={tooManyHint ? t('input.tooManyImages', { max: MAX_CHAT_IMAGE_ATTACHMENTS }) : undefined}>
-              <button
-                ref={attachButtonRef}
-                type="button"
-                className="composer-add-attachment"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={disabled || !sessionId || hasStaging}
-                aria-label={t('input.addImage')}
+              <Dropdown
+                trigger={['click']}
+                open={plusMenuOpen}
+                onOpenChange={setPlusMenuOpen}
+                placement="topLeft"
+                menu={{ items: plusMenuItems, onClick: handlePlusMenuClick }}
               >
-                <Plus size={16} strokeWidth={1.75} aria-hidden />
-              </button>
+                <button
+                  ref={attachButtonRef}
+                  type="button"
+                  className="composer-add-attachment"
+                  disabled={disabled || !sessionId}
+                  aria-label={t('input.addImage')}
+                  aria-haspopup="menu"
+                  aria-expanded={plusMenuOpen}
+                >
+                  <Plus size={16} strokeWidth={1.75} aria-hidden />
+                </button>
+              </Dropdown>
             </Tooltip>
             {prefsSlot ? <span ref={prefsChipRef}>{prefsSlot}</span> : null}
             {/* §5.2.1（OQ-9）：idle 态唯一内容是 hintIdle，移除后整块不渲染（腾位给强度控件）；

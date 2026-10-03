@@ -78,16 +78,17 @@ function registerReadTool(name: ReadToolName, executor: ToolExecutor): Registere
     },
     facts: (prepared) => ({
       inputDigest: prepared.permit?.inputDigest ?? null,
-      targets: (prepared.permit?.targets ?? []).map(({ factId, decisionRuleId, normalizedPath, zone, targetKind, resolvedKind, scope, identity }) => ({
+      targets: (prepared.permit?.targets ?? []).map(({ factId, decisionRuleId, normalizedPath, zone, targetKind, resolvedKind, scope, identity, directoryGrant }) => ({
         factId, decisionRuleId, normalizedPath, zone, targetKind,
         ...(resolvedKind ? { resolvedKind } : {}),
         ...(scope ? { scope } : {}),
-        ...(identity ? { identity } : {})
+        ...(identity ? { identity } : {}),
+        ...(directoryGrant ? { directoryGrantId: directoryGrant.grantId, directoryGrantSessionId: directoryGrant.sessionId, authorizationSource: 'user-selected-directory' } : {})
       }))
     }),
     display: (prepared) => ({
       toolName: name,
-      targets: (prepared.permit?.targets ?? []).map(({ factId, zone, targetKind }) => ({ factId, zone, targetKind }))
+      targets: (prepared.permit?.targets ?? []).map(({ factId, zone, targetKind, directoryGrant }) => ({ factId, zone, targetKind, ...(directoryGrant ? { authorizationSource: 'user-selected-directory', directoryGrantId: directoryGrant.grantId } : {}) }))
     })
   })
 }

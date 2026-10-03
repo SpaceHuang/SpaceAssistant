@@ -1,11 +1,12 @@
 import { createHash } from 'crypto'
 import path from 'path'
 import type { PathZone } from '../../src/shared/confirmation/types'
+import type { SessionDirectoryGrantRecord } from '../../src/shared/sessionDirectoryGrant'
 
 export type ReadPermitIdentity = { dev: number; ino: number; mode: number; size: number; mtimeMs: number }
 // subtree：grep 目录递归 permit——绑定根目录 identity 并递归读取其子树（§5.2）
 export type ReadPermitScope = 'single-target' | 'direct-entries' | 'subtree'
-export type ReadPermitTarget = { factId: string; decisionRuleId: string; normalizedPath: string; zone: PathZone; targetKind: 'file' | 'directory' | 'missing' | 'symlink' | 'special' | 'unknown'; resolvedKind?: 'file' | 'directory' | 'special'; scope?: ReadPermitScope; identity?: ReadPermitIdentity }
+export type ReadPermitTarget = { factId: string; decisionRuleId: string; normalizedPath: string; zone: PathZone; targetKind: 'file' | 'directory' | 'missing' | 'symlink' | 'special' | 'unknown'; resolvedKind?: 'file' | 'directory' | 'special'; scope?: ReadPermitScope; identity?: ReadPermitIdentity; directoryGrant?: Pick<SessionDirectoryGrantRecord, 'grantId' | 'sessionId' | 'realPath' | 'identity'> }
 export type ReadPermitInput = { decisionRuleId?: string; requestId: string; toolUseId: string; toolName: 'read_file' | 'grep' | 'list_directory' | 'read_feishu_attachment'; input: Record<string, unknown>; facts: ReadPermitTarget[] }
 export type ReadExecutionPermit = ReadPermitInput & { inputDigest: string; targets: ReadPermitTarget[] }
 

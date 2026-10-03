@@ -1511,6 +1511,25 @@ describe('evaluateToolCallGate', () => {
     }
   })
 
+  it('selected-directory read permit records its source while retaining the outside-workdir zone', async () => {
+    const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-gate-grant-work-')))
+    const selected = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-gate-grant-selected-')))
+    try {
+      const target = path.join(selected, 'note.txt')
+      await fs.writeFile(target, 'selected context')
+      const rootStat = await fs.stat(selected)
+      const grant = { grantId: 'grant-test', sessionId: 'grant-session', path: selected, realPath: selected, identity: { dev: rootStat.dev, ino: rootStat.ino, mode: rootStat.mode }, createdAt: 1, source: 'user-selected-directory' as const }
+      const gate = await evaluateToolCallGate(base({ sessionId: 'grant-session', workDir, userDataDir: path.join(workDir, '.userdata'), toolInput: { path: target }, sessionDirectoryGrants: [grant] }))
+      expect(gate.decision.type).toBe('auto-allow')
+      expect(gate.readExecutionPermit?.targets[0]).toMatchObject({ zone: 'outside-workdir', directoryGrant: { grantId: 'grant-test', sessionId: 'grant-session', realPath: selected } })
+      const otherSession = await evaluateToolCallGate(base({ sessionId: 'other-session', workDir, userDataDir: path.join(workDir, '.userdata'), toolInput: { path: target }, sessionDirectoryGrants: [grant] }))
+      expect(otherSession.readExecutionPermit?.targets[0]?.directoryGrant).toBeUndefined()
+    } finally {
+      await fs.rm(workDir, { recursive: true, force: true })
+      await fs.rm(selected, { recursive: true, force: true })
+    }
+  })
+
   it('敏感读取先登记 pending，只有批准后才生成一次性 permit', async () => {
     const registry = new ReadConfirmationRegistry()
     const toolInput = { path: '.env' }

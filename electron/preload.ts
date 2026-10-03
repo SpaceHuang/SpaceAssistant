@@ -30,6 +30,8 @@ const api: SpaceAssistantApi = {
   usageDelete: (sessionId) => ipcRenderer.invoke('usage:delete', sessionId),
 
   chatGetMessages: (payload) => ipcRenderer.invoke('chat:get-messages', payload),
+  chatCompactSessionContext: (payload) => ipcRenderer.invoke('chat:compact-session-context', payload),
+  chatGetSessionCompactionMarkers: (sessionId) => ipcRenderer.invoke('chat:get-session-compaction-markers', sessionId),
   chatGetApiContextBaseline: (payload) => ipcRenderer.invoke('chat:get-api-context-baseline', payload),
   chatGetMessagePage: (payload) => ipcRenderer.invoke('chat:get-message-page', payload),
   chatGetDisplayMessagePage: (payload) => ipcRenderer.invoke('chat:get-display-message-page', payload),
@@ -118,6 +120,9 @@ const api: SpaceAssistantApi = {
     ipcRenderer.invoke('llm:fetch-service-models', options),
 
   dialogSelectDirectory: () => ipcRenderer.invoke('dialog:select-directory'),
+  sessionDirectoryGrantsList: (sessionId: string) => ipcRenderer.invoke('session-directory-grants:list', sessionId),
+  sessionDirectoryGrantsAdd: (sessionId: string) => ipcRenderer.invoke('session-directory-grants:add', sessionId),
+  sessionDirectoryGrantsRemove: (input: { sessionId: string; grantId: string }) => ipcRenderer.invoke('session-directory-grants:remove', input),
   configCheckWorkdirWritable: (dir) => ipcRenderer.invoke('config:check-workdir-writable', dir),
 
   fileListDirectory: (relPath) => ipcRenderer.invoke('file:list-directory', relPath),

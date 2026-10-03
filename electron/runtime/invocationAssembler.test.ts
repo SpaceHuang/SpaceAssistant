@@ -17,7 +17,7 @@ import { TypedToolRegistry, definePlannedTool } from '../tools/plannedToolRegist
 import type { McpConnectionManager } from '../mcp/mcpConnectionManager'
 import { cancelToolConfirm, isPendingConfirm, submitToolConfirmResponse } from '../toolConfirmRegistry'
 import { createMemoryAppDb } from '../database/testHelpers'
-import { getDbConnection, setConfigValue } from '../database'
+import { createSession, getDbConnection, setConfigValue, updateSession } from '../database'
 import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import { isBrowserSessionTrustedHost, resetBrowserSessionTrustForTests } from '../browser/browserSessionTrust'
 
@@ -71,6 +71,37 @@ describe('AcceptedTurn propagation', () => {
       workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key',
       emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
     })).toThrow('ACCEPTED_TURN_USER_MESSAGE_ID_MISMATCH')
+  })
+})
+
+describe('selected directory prompt context', () => {
+  it('adds only current, valid desktop session grants to the system prompt', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'invocation-session-grant-')))
+    try {
+      const db = createMemoryAppDb('zh-CN')
+      const session = createSession(db, { name: 'directory context' })
+      const stat = await fs.stat(root)
+      const grant = { grantId: 'grant-prompt', sessionId: session.id, path: root, realPath: root, identity: { dev: stat.dev, ino: stat.ino, mode: stat.mode }, createdAt: 1, source: 'user-selected-directory' as const }
+      updateSession(db, session.id, { metadata: { ...session.metadata, sessionDirectoryGrants: [grant] } })
+      const desktop = assembleInvocation({ requestId: 'prompt-desktop', sessionId: session.id, model: 'test', locale: 'zh-CN', lane: 'desktop', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, system: 'base system', workDir: '/tmp', userDataDir: '/tmp', appDb: db, getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+      expect(desktop.invocation.profile.system).toContain(root)
+      expect(desktop.invocation.profile.system).toContain('不表示要求立即扫描全部内容')
+      let runtimeContext: Record<string, unknown> | undefined
+      const registry = new TypedToolRegistry()
+      registry.register(definePlannedTool({
+        name: 'grant-probe', parseInput: (raw) => raw as Record<string, unknown>,
+        plan: async (input, planning) => { runtimeContext = planning.executionContext as Record<string, unknown>; return input },
+        execute: async () => ({ success: true })
+      }))
+      const registered = desktop.agentSdk.createRegisteredTools({ registry })
+      await registered.prepareTool({ invocationId: 'prompt-desktop', toolCallId: 'grant-probe-1', toolName: 'grant-probe', input: {} }, { kind: 'initial' })
+      const isGrantActive = runtimeContext?.isSessionDirectoryGrantActive as (value: typeof grant) => boolean
+      expect(isGrantActive(grant)).toBe(true)
+      updateSession(db, session.id, { metadata: { ...session.metadata, sessionDirectoryGrants: [] } })
+      expect(isGrantActive(grant)).toBe(false)
+      const remote = assembleInvocation({ requestId: 'prompt-remote', sessionId: session.id, model: 'test', locale: 'zh-CN', lane: 'feishu', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, system: 'base system', workDir: '/tmp', userDataDir: '/tmp', appDb: db, getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+      expect(remote.invocation.profile.system).toBe('base system')
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 })
 

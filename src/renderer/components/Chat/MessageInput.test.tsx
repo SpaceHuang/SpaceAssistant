@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 
 vi.mock('./ContextUsageRing', () => ({
   ContextUsageRing: () => null
@@ -64,6 +64,7 @@ function renderInput(props: Partial<React.ComponentProps<typeof MessageInput>> =
   store.dispatch(setConfig(makeConfig()))
   const onSend = vi.fn()
   return {
+    store,
     onSend,
     ...render(
       <Provider store={store}>
@@ -127,5 +128,111 @@ describe('MessageInput', () => {
     const prefsChip = screen.getByRole('button', { name: 'deepseek-v4-pro · 中' })
     const status = container.querySelector('.composer-status--running')!
     expect(prefsChip.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
+describe('MessageInput plus menu', () => {
+  it('opens an accessible menu with image, directory and compaction actions in order', async () => {
+    renderInput()
+    fireEvent.click(screen.getByRole('button', { name: '添加图片' }))
+    const items = await screen.findAllByRole('menuitem')
+    expect(items.map((item) => item.textContent)).toEqual(['选择图片', '选择目录', '压缩上下文'])
+    expect(items[2]?.getAttribute('aria-disabled')).toBe('false')
+  })
+
+  it('commits manual compaction and displays its marker feedback', async () => {
+    const original = window.api.chatCompactSessionContext
+    window.api.chatCompactSessionContext = vi.fn(async () => ({ status: 'committed' as const, compactionId: 'c1', windowId: 'w1', outputSurfaceFingerprint: 'fp1' }))
+    try {
+      const { container } = renderInput()
+      fireEvent.click(screen.getByRole('button', { name: '添加图片' }))
+      fireEvent.click(await screen.findByRole('menuitem', { name: '压缩上下文' }))
+      expect(await screen.findByText('上下文压缩已完成')).toBeTruthy()
+      expect(window.api.chatCompactSessionContext).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess-1' }))
+      expect(container.querySelector('[aria-expanded="false"]')).toBeTruthy()
+    } finally {
+      window.api.chatCompactSessionContext = original
+    }
+  })
+
+  it.each([
+    ['no-op', '当前上下文无需压缩'],
+    ['uncompressible', '当前上下文无法安全压缩'],
+    ['busy', '会话正在运行，请稍后再试'],
+    ['failed', '上下文压缩失败，请重试']
+  ] as const)('shows %s compaction feedback', async (status, expected) => {
+    const original = window.api.chatCompactSessionContext
+    window.api.chatCompactSessionContext = vi.fn(async () => ({ status } as { status: typeof status }))
+    try {
+      renderInput()
+      fireEvent.click(screen.getByRole('button', { name: '添加图片' }))
+      fireEvent.click(await screen.findByRole('menuitem', { name: '压缩上下文' }))
+      expect(await screen.findByText(expected)).toBeTruthy()
+    } finally {
+      window.api.chatCompactSessionContext = original
+    }
+  })
+
+  it('does not project a completed compaction into a different session', async () => {
+    const original = window.api.chatCompactSessionContext
+    let resolveResult!: (result: { status: 'committed'; compactionId: string; windowId: string; outputSurfaceFingerprint: string }) => void
+    window.api.chatCompactSessionContext = vi.fn(() => new Promise((resolve) => { resolveResult = resolve }))
+    try {
+      const { store, rerender, onSend } = renderInput()
+      fireEvent.click(screen.getByRole('button', { name: '添加图片' }))
+      fireEvent.click(await screen.findByRole('menuitem', { name: '压缩上下文' }))
+      await waitFor(() => expect(resolveResult).toBeTypeOf('function'))
+      rerender(<Provider store={store}><MessageInput sessionId="sess-2" onSend={onSend} /></Provider>)
+      await act(async () => {
+        resolveResult({ status: 'committed', compactionId: 'old-session-compaction', windowId: 'w1', outputSurfaceFingerprint: 'fp1' })
+      })
+      expect(store.getState().chat.compactionMarkers).toEqual([])
+    } finally {
+      window.api.chatCompactSessionContext = original
+    }
+  })
+
+  it('opens the existing file input only after choosing the image menu item', async () => {
+    renderInput()
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    const click = vi.spyOn(input, 'click')
+    fireEvent.click(screen.getByRole('button', { name: '添加图片' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: '选择图片' }))
+    expect(click).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
+  it('closes the menu with Escape', async () => {
+    renderInput()
+    fireEvent.click(screen.getByRole('button', { name: '添加图片' }))
+    await screen.findByRole('menu')
+    fireEvent.keyDown(screen.getByRole('menuitem', { name: '选择图片' }), { key: 'Escape' })
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
+  it('adds a session directory through the main API and allows revocation', async () => {
+    const grant = { grantId: 'grant-1', sessionId: 'sess-1', path: '/tmp/Project Notes', createdAt: 1, source: 'user-selected-directory' as const, status: 'valid' as const }
+    let items = [grant]
+    const originalList = window.api.sessionDirectoryGrantsList
+    const originalAdd = window.api.sessionDirectoryGrantsAdd
+    const originalRemove = window.api.sessionDirectoryGrantsRemove
+    window.api.sessionDirectoryGrantsList = vi.fn(async () => items)
+    window.api.sessionDirectoryGrantsAdd = vi.fn(async () => ({ status: 'added', grant }))
+    window.api.sessionDirectoryGrantsRemove = vi.fn(async () => { items = []; return { removed: true } })
+    try {
+      renderInput()
+      fireEvent.click(screen.getByRole('button', { name: '添加图片' }))
+      fireEvent.click(await screen.findByRole('menuitem', { name: '选择目录' }))
+      expect(await screen.findByText('Project Notes')).toBeTruthy()
+      expect((await screen.findByRole('status')).textContent).toContain('目录已加入当前会话')
+      fireEvent.click(screen.getByRole('button', { name: '移除目录 Project Notes' }))
+      expect((await screen.findByRole('status')).textContent).toContain('已移除会话目录')
+      expect(window.api.sessionDirectoryGrantsRemove).toHaveBeenCalledWith({ sessionId: 'sess-1', grantId: 'grant-1' })
+      expect(screen.queryByText('Project Notes')).toBeNull()
+    } finally {
+      window.api.sessionDirectoryGrantsList = originalList
+      window.api.sessionDirectoryGrantsAdd = originalAdd
+      window.api.sessionDirectoryGrantsRemove = originalRemove
+    }
   })
 })

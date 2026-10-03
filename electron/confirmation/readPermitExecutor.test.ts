@@ -80,6 +80,40 @@ describe('resolveReadPermitTarget', () => {
     } finally { await fs.rm(dir, { recursive: true, force: true }) }
   })
 
+  it('selected-directory permit rechecks the session, root identity and target containment in the executor', async () => {
+    const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'read-selected-grant-')))
+    const root = path.join(parent, 'selected')
+    const outside = path.join(parent, 'outside.txt')
+    await fs.mkdir(root)
+    const target = path.join(root, 'note.txt')
+    await fs.writeFile(target, 'ok'); await fs.writeFile(outside, 'no')
+    try {
+      const realRoot = await fs.realpath(root)
+      const rootStat = await fs.stat(realRoot)
+      const targetStat = await fs.stat(target)
+      const input = { path: target }
+      const makePermit = (normalizedPath: string, identity: ReadPermitIdentity) => buildReadExecutionPermit({
+        requestId: 'grant-req', toolUseId: 'grant-use', toolName: 'read_file', input,
+        facts: [{ factId: 'grant-fact', decisionRuleId: 'path-outside-readonly-allow', normalizedPath, zone: 'outside-workdir', targetKind: 'file', identity, directoryGrant: { grantId: 'g1', sessionId: 's1', realPath: realRoot, identity: { dev: rootStat.dev, ino: rootStat.ino, mode: rootStat.mode } } }]
+      })
+      const valid = makePermit(await fs.realpath(target), dirIdentity(targetStat))
+      const context = { requestId: 'grant-req', toolUseId: 'grant-use', sessionId: 's1', lane: 'desktop', readExecutionPermit: valid, isSessionDirectoryGrantActive: () => true }
+      const result = await resolveReadPermitTarget('read_file', input, context as never)
+      expect(result).toMatchObject({ ok: true, path: await fs.realpath(target) })
+      if (result.ok && 'fileHandle' in result) await result.fileHandle.close()
+      await expect(resolveReadPermitTarget('read_file', input, {
+        ...context,
+        isSessionDirectoryGrantActive: () => false
+      } as never)).resolves.toMatchObject({ ok: false, caseId: 'read-directory-grant-revoked' })
+      await expect(resolveReadPermitTarget('read_file', input, { ...context, sessionId: 's2' } as never)).resolves.toMatchObject({ ok: false, caseId: 'read-directory-grant-binding-mismatch' })
+      const outOfScope = makePermit(outside, dirIdentity(await fs.stat(outside)))
+      await expect(resolveReadPermitTarget('read_file', input, { ...context, readExecutionPermit: outOfScope } as never)).resolves.toMatchObject({ ok: false, caseId: 'read-directory-grant-scope-mismatch' })
+      const moved = `${root}-moved`
+      await fs.rename(root, moved); await fs.mkdir(root)
+      await expect(resolveReadPermitTarget('read_file', input, { ...context, readExecutionPermit: valid } as never)).resolves.toMatchObject({ ok: false, caseId: 'read-directory-grant-identity-changed' })
+    } finally { await fs.rm(parent, { recursive: true, force: true }) }
+  })
+
   it('grep 目录 permit：identity（dev/ino/mode）变化 → read-directory-identity-changed（AC-05/AC-21）', async () => {
     const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'grep-subtree-identity-')))
     try {

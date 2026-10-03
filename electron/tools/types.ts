@@ -113,6 +113,8 @@ export interface ToolExecutionContext {
   /** 本次请求的执行 lane；toolkit 能力的 lane 校验用（评审 S2） */
   lane?: string
   readExecutionPermit?: import('../confirmation/readExecutionPermit').ReadExecutionPermit
+  /** 主进程从当前 session 元数据复核用户目录授权，执行时不可只信任 permit 快照。 */
+  isSessionDirectoryGrantActive?: (grant: NonNullable<NonNullable<ToolExecutionContext['readExecutionPermit']>['targets'][number]['directoryGrant']>) => boolean
   writeExecutionPermit?: import('../confirmation/writeExecutionPermit').WriteExecutionPermit
 }
 

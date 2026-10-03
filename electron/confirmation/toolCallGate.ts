@@ -37,6 +37,8 @@ import { buildReadExecutionPermit, readInputDigest, type ReadExecutionPermit, ty
 import type { WriteExecutionPermit } from './writeExecutionPermit'
 import { readConfirmationRegistry, type ReadConfirmationRegistry } from './readConfirmationRegistry'
 import { validateDesktopReadV1 } from '../../src/shared/policy/readPolicyV1'
+import type { SessionDirectoryGrantRecord } from '../../src/shared/sessionDirectoryGrant'
+import { matchSessionDirectoryGrant } from './sessionDirectoryGrantMatcher'
 import { DEFAULT_USER_CONFIRMATION_TIMEOUT_MS } from './confirmationTimeout'
 import { extractScriptSignals } from './extractors/scriptAnalysisExtractor'
 import { analyzeScriptContent, parsePythonModule, type ScriptAnalysisResult } from '../shell/scriptContentSecurity'
@@ -95,6 +97,8 @@ export interface ToolCallGateArgs {
   /** 显式 lane（偏差 21：由驱动源层解析后随调用传入）；缺省回退 remoteContext 推导，最终 desktop。 */
   lane?: ExecutionLane
   remoteContext?: RemoteContext
+  /** Only loaded from the canonical desktop session record by the invocation assembler. */
+  sessionDirectoryGrants?: readonly SessionDirectoryGrantRecord[]
   toolsConfig: ToolsConfig
   shellConfig?: ShellConfig | null
   browserConfig?: BrowserConfig | null
@@ -896,6 +900,10 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
   const readPatternValidation = readHasUnsupportedPattern
     ? { type: 'deny' as const, ruleId: 'read-path-pattern-unsupported', reason: 'path 只接受文件或目录路径；文件名过滤请改用 glob 参数（如 glob:"*.ts"），通配路径与多路径不受支持' }
     : undefined
+  const selectedDirectoryGrant = readPathFact && lane === 'desktop' && args.sessionDirectoryGrants &&
+    readPathFact.zone === 'outside-workdir' && isPermitReadTool
+    ? await matchSessionDirectoryGrant({ grants: args.sessionDirectoryGrants, sessionId: args.sessionId, lane, targetPath: readPathFact.normalizedPath })
+    : undefined
   let decision = writePathInputFailure
     ? { type: 'deny' as const, ruleId: 'write-path-input-invalid', reason: '缺少有效的路径参数，已阻止写入' }
     : wikiRawTargetFailure
@@ -964,7 +972,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       toolName: args.toolName as 'read_file' | 'grep' | 'list_directory',
       decisionRuleId: decision.ruleId,
       input: args.toolInput,
-      facts: [{ factId: `fact-${readPathFact.normalizedPath}`, decisionRuleId: decision.ruleId, normalizedPath: readPathFact.normalizedPath, zone: readPathFact.zone, targetKind: permitTargetKind, ...(permitScope ? { scope: permitScope } : {}), ...(readPathFact.resolvedKind ? { resolvedKind: readPathFact.resolvedKind } : {}), ...(readPathFact.identity ? { identity: readPathFact.identity } : {}) }]
+      facts: [{ factId: `fact-${readPathFact.normalizedPath}`, decisionRuleId: decision.ruleId, normalizedPath: readPathFact.normalizedPath, zone: readPathFact.zone, targetKind: permitTargetKind, ...(permitScope ? { scope: permitScope } : {}), ...(readPathFact.resolvedKind ? { resolvedKind: readPathFact.resolvedKind } : {}), ...(readPathFact.identity ? { identity: readPathFact.identity } : {}), ...(selectedDirectoryGrant ? { directoryGrant: { grantId: selectedDirectoryGrant.grantId, sessionId: selectedDirectoryGrant.sessionId, realPath: selectedDirectoryGrant.realPath, identity: selectedDirectoryGrant.identity } } : {}) }]
     })
   } else if (args.phase !== 'recheck' && readPathFact && decision.type === 'require-confirm' && decision.answerer === 'user' && (readPathFact.targetKind !== 'directory' || directoryPermittable)) {
     const registry = args.readConfirmationRegistry ?? readConfirmationRegistry
@@ -1065,6 +1073,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     riskLevel: facts.baseRiskLevel,
     factsSummary: args.toolName === 'run_shell' ? 'run_shell 路径及命令影响事实已检查' : facts.summary.text,
     signals: facts.signals.map((s) => s.kind),
+    ...(selectedDirectoryGrant ? { directoryGrantId: selectedDirectoryGrant.grantId, directoryGrantSource: selectedDirectoryGrant.source } : {}),
     pathZones: [...new Set(facts.signals.flatMap((s) => s.kind === 'path-target' ? [s.zone] : s.kind === 'wechat-media-target' && s.zone ? [s.zone] : []))],
     decision: decision.type,
     ruleId: decision.ruleId,
