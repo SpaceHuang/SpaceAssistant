@@ -4,6 +4,7 @@ import type { Message } from '../src/shared/domainTypes'
 import { CURRENT_SCHEMA_VERSION } from '../src/shared/domainTypes'
 import {
   buildTitleSuggestDialogueText,
+  countVisibleTitleMessagesForSuggest,
   formatTitleDialogueLabel,
   getTitleSystemPrompt,
   reachedCumulativeMessagesForTitleSuggest,
@@ -57,6 +58,20 @@ describe('formatTitleDialogueLabel', () => {
 })
 
 describe('buildTitleSuggestDialogueText', () => {
+  it('工具调用与工具回执不占配额，摘要保留第三条可见消息', () => {
+    const messages: MessageParam[] = [
+      msg('user', '问题 A'),
+      msg('assistant', [{ type: 'tool_use', id: 'tool-1', name: 'read_file', input: {} }]),
+      msg('user', [{ type: 'tool_result', tool_use_id: 'tool-1', content: '文件内容' }]),
+      msg('assistant', [{ type: 'text', text: '回答 A' }]),
+      msg('user', '问题 B')
+    ]
+    const out = buildTitleSuggestDialogueText(messages, 3)
+    expect(countVisibleTitleMessagesForSuggest(messages)).toBe(3)
+    expect(out).toContain('问题 B')
+    expect(out).not.toContain('文件内容')
+  })
+
   it('strips tool blocks and stops after N visible user/assistant messages', () => {
     const messages: MessageParam[] = [
       msg('user', '你好'),

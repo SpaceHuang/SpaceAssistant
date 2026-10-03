@@ -15,7 +15,7 @@ import {
 import { resolveThinkingAvailability } from '../src/shared/thinkingAvailability'
 import type { NormalizedStopReason } from './stopReason'
 import { resolveToolLoopModelOptions } from './toolLoopModelOptions'
-import { reachedCumulativeMessagesForTitleSuggest } from './sessionTitleSuggest'
+import { countVisibleTitleMessagesForSuggest, reachedCumulativeMessagesForTitleSuggest } from './sessionTitleSuggest'
 import type { WorkDirManager } from './workDirManager'
 import { FileStateCache } from './fileStateCache'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
@@ -934,6 +934,7 @@ async function runToolChatSessionInner(
     role: m.role,
     content: m.content as Anthropic.MessageParam['content']
   })) as Anthropic.MessageParam[]
+  const conversationMessagesForTitle = structuredClone(messagesForApi)
   if (args.skillFragments?.length) {
     const fragmentMessage: Anthropic.MessageParam = { role: 'user', content: args.skillFragments.join('\n\n') }
     // fragment 必须固定注入在第一条 user 消息之前：它不落 DB，次轮 round:1 的重建历史不含
@@ -949,13 +950,13 @@ async function runToolChatSessionInner(
   if (hostStorage?.persist?.scheduleTitleSuggestion
     && reachedCumulativeMessagesForTitleSuggest(
       0,
-      initialMessages.filter((message) => message.role === 'user' || message.role === 'assistant').length
+      countVisibleTitleMessagesForSuggest(conversationMessagesForTitle)
     )) {
     hostStorage.persist.scheduleTitleSuggestion({
       sessionId,
       model,
       baseUrl,
-      messagesForApi: invocationBaseMessages,
+      messagesForApi: conversationMessagesForTitle,
       getApiKey
     })
   }

@@ -54,6 +54,15 @@ function extractTextFromMessageContent(content: Anthropic.MessageParam['content'
   return parts.join('\n').trim()
 }
 
+function isVisibleTitleMessage(msg: Anthropic.MessageParam): boolean {
+  return (msg.role === 'user' || msg.role === 'assistant') && extractTextFromMessageContent(msg.content).length > 0
+}
+
+/** 标题使用的可见消息口径：排除纯 tool_use / tool_result 消息。 */
+export function countVisibleTitleMessagesForSuggest(messages: Anthropic.MessageParam[]): number {
+  return messages.filter(isVisibleTitleMessage).length
+}
+
 /** 仅 user/assistant 的可见文本，跳过 tool 块；从头累计 N 条 user/assistant 消息 */
 export function buildTitleSuggestDialogueText(
   messages: Anthropic.MessageParam[],
@@ -64,9 +73,8 @@ export function buildTitleSuggestDialogueText(
   const lines: string[] = []
   outer: for (const msg of messages) {
     if (msg.role !== 'user' && msg.role !== 'assistant') continue
-    if (msg.role === 'user' && Array.isArray(msg.content) && msg.content.length > 0
-      && msg.content.every((block) => block && typeof block === 'object' && (block as { type?: string }).type === 'tool_result')) continue
     const text = extractTextFromMessageContent(msg.content)
+    if (!text) continue
     const label = formatTitleDialogueLabel(msg.role, locale)
     if (text.length > 0) {
       lines.push(`${label}${text}`)
@@ -208,11 +216,7 @@ export function scheduleSessionTitleOpenBackfillIfNeeded(args: {
   if (inFlightSessionIds.has(sessionId)) return undefined
 
   const rowMessages = getMessages(db, sessionId, 10_000, 0)
-  if (rowMessages.filter((m) => (m.role === 'user' || m.role === 'assistant') && m.status !== 'streaming').length < TITLE_SUGGEST_MAX_MESSAGES) {
-    return undefined
-  }
-
-  const convo = buildClaudeToolChatMessages(rowMessages, {
+  const convo = buildClaudeToolChatMessages(rowMessages.filter((message) => message.status !== 'streaming'), {
     onOversizedToolResult: (info) => {
       logHistoryOversizedToolResult({
         sessionId,
@@ -227,6 +231,8 @@ export function scheduleSessionTitleOpenBackfillIfNeeded(args: {
     role: m.role as Anthropic.MessageParam['role'],
     content: m.content as Anthropic.MessageParam['content']
   }))
+
+  if (countVisibleTitleMessagesForSuggest(messagesForApi) < TITLE_SUGGEST_MAX_MESSAGES) return undefined
 
   const dialogue = buildTitleSuggestDialogueText(messagesForApi, TITLE_SUGGEST_MAX_MESSAGES, locale)
   if (!dialogue.trim()) return undefined
