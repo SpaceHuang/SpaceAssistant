@@ -163,6 +163,72 @@ export function toCanonicalModelMessages(messages: readonly ClaudeChatMessageWit
   return canonical
 }
 
+export type CanonicalSessionSnapshot = Readonly<{
+  sessionId: string
+  invocationId: string
+  sessionSeq: number
+  commitOrder: number
+  messages: readonly ClaudeChatMessageWithBlocks[]
+}>
+
+/**
+ * Folds provider-context snapshots across invocations only when stable IDs prove
+ * an append/replacement chain. Context snapshots may omit old messages, so an
+ * omitted ID never means deletion. Any ambiguous ordering falls back to legacy.
+ */
+export function foldClaudeSessionSnapshots(snapshots: readonly CanonicalSessionSnapshot[]): ClaudeChatMessageWithBlocks[] {
+  if (snapshots.length === 0) return []
+  const ordered = [...snapshots].sort((left, right) => left.sessionSeq - right.sessionSeq || left.commitOrder - right.commitOrder)
+  const sessionId = ordered[0]!.sessionId
+  let previousSessionSeq = 0
+  let previousCommitOrder = 0
+  const folded: ClaudeChatMessageWithBlocks[] = []
+  const indexById = new Map<string, number>()
+
+  for (const snapshot of ordered) {
+    if (!snapshot.sessionId || snapshot.sessionId !== sessionId || !snapshot.invocationId ||
+      !Number.isSafeInteger(snapshot.sessionSeq) || snapshot.sessionSeq <= previousSessionSeq ||
+      !Number.isSafeInteger(snapshot.commitOrder) || snapshot.commitOrder <= previousCommitOrder) {
+      throw new Error('canonical session snapshot order or ownership is invalid')
+    }
+    previousSessionSeq = snapshot.sessionSeq
+    previousCommitOrder = snapshot.commitOrder
+
+    const ids = snapshot.messages.map((message) => {
+      if (!message.id?.trim()) throw new Error('canonical session snapshot is missing stable message identity')
+      return message.id
+    })
+    if (new Set(ids).size !== ids.length) throw new Error('canonical session snapshot contains duplicate stable message identity')
+
+    const currentIds = folded.map((message) => message.id!)
+    const commonIds = ids.filter((id) => indexById.has(id))
+    if (folded.length > 0) {
+      const currentSuffix = currentIds.slice(-commonIds.length)
+      if (commonIds.length === 0 || currentSuffix.join('\0') !== commonIds.join('\0')) {
+        throw new Error('canonical session snapshot order conflicts with prior snapshots')
+      }
+      const firstNewIndex = ids.findIndex((id) => !indexById.has(id))
+      const lastCommonIndex = ids.reduce((last, id, index) => indexById.has(id) ? index : last, -1)
+      if (firstNewIndex >= 0 && firstNewIndex < lastCommonIndex) {
+        throw new Error('canonical session snapshot inserts messages before an established suffix')
+      }
+    }
+
+    for (const [messageIndex, message] of snapshot.messages.entries()) {
+      const id = ids[messageIndex]!
+      const existingIndex = indexById.get(id)
+      if (existingIndex === undefined) {
+        indexById.set(id, folded.length)
+        folded.push(structuredClone(message))
+        continue
+      }
+      if (folded[existingIndex]?.role !== message.role) throw new Error(`canonical message identity changed role: ${id}`)
+      folded[existingIndex] = structuredClone(message)
+    }
+  }
+  return folded
+}
+
 /** Rebuilds the accepted model/tool suffix from committed History events; incomplete dispatches fail closed. */
 export function rebuildClaudeMessagesFromHistory(events: readonly HistoryEvent[]): ClaudeChatMessageWithBlocks[] {
   const messages: ClaudeChatMessageWithBlocks[] = []
