@@ -20,7 +20,13 @@ import {
  * Bump the validator revision when a persisted event payload/transition contract changes.
  * All other values are imported from the implementation constants used by their writers/readers.
  */
-export const SESSION_STORAGE_DATA_CONTRACT = Object.freeze({
+function deepFreeze<T>(value: T): T {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value
+  for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child)
+  return Object.freeze(value)
+}
+
+export const SESSION_STORAGE_DATA_CONTRACT = deepFreeze({
   contract: 'spaceassistant.session-storage',
   revision: 1,
   databaseSchemaVersion: DB_SCHEMA_VERSION,

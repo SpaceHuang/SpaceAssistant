@@ -1,8 +1,8 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
 export const DB_SCHEMA_VERSION = 49
 
-export const MESSAGE_CONTENT_STORAGE_STATES = ['legacy', 'canonical-backed-dual-write', 'canonical-backed-only'] as const
-export const SESSION_CONTENT_CLEANUP_STATES = ['retained', 'write-stopped', 'pending', 'complete'] as const
+export const MESSAGE_CONTENT_STORAGE_STATES = Object.freeze(['legacy', 'canonical-backed-dual-write', 'canonical-backed-only'] as const)
+export const SESSION_CONTENT_CLEANUP_STATES = Object.freeze(['retained', 'write-stopped', 'pending', 'complete'] as const)
 
 function sqlTextEnum(values: readonly string[]): string {
   return values.map((value) => `'${value.replaceAll("'", "''")}'`).join(',')

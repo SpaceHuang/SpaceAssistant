@@ -2,14 +2,14 @@ export const AGENT_HISTORY_SCHEMA_VERSION = 1 as const
 /** Increment when a persisted History event payload's accepted shape or transition semantics change. */
 export const HISTORY_PAYLOAD_VALIDATOR_REVISION = 1 as const
 
-export const HISTORY_EVENT_KINDS = [
+export const HISTORY_EVENT_KINDS = Object.freeze([
   'session-input-committed', 'invocation-context-committed', 'transcript-compacted',
   'model-request-started', 'provider-retry-scheduled', 'model-attempt-discarded',
   'model-response-committed', 'replay-message-committed', 'tool-call-started',
   'tool-call-finished', 'tool-call-not-dispatched', 'approval-waiting', 'approval-resolved',
   'approval-updated', 'invocation-parked', 'invocation-interrupted',
   'invocation-completed', 'invocation-failed'
-] as const
+] as const)
 
 export type HistoryEventKind = (typeof HISTORY_EVENT_KINDS)[number]
 

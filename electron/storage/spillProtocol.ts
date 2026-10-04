@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto'
 export const SPILL_DESCRIPTOR_VERSION = 1 as const
 export const SOURCE_TRUTH_SPILL_MARKER = '__spaceassistant_spill_v1' as const
 export const SESSION_TRANSCRIPT_SPILL_MARKER = '__spaceassistant_session_transcript_spill_v1' as const
-export const SPILL_MARKER_KEYS = [SOURCE_TRUTH_SPILL_MARKER, SESSION_TRANSCRIPT_SPILL_MARKER] as const
+export const SPILL_MARKER_KEYS = Object.freeze([SOURCE_TRUTH_SPILL_MARKER, SESSION_TRANSCRIPT_SPILL_MARKER] as const)
 
 export type SpillDescriptor = Readonly<{
   version: typeof SPILL_DESCRIPTOR_VERSION

@@ -13,7 +13,7 @@ import {
   SESSION_STORAGE_DATA_CONTRACT_CANONICAL_JSON,
   SESSION_STORAGE_DATA_CONTRACT_SHA256,
 } from './sessionStorageDataContract'
-import { SESSION_TRANSCRIPT_SPILL_MARKER, SOURCE_TRUTH_SPILL_MARKER, SPILL_DESCRIPTOR_VERSION } from './spillProtocol'
+import { SESSION_TRANSCRIPT_SPILL_MARKER, SOURCE_TRUTH_SPILL_MARKER, SPILL_DESCRIPTOR_VERSION, SPILL_MARKER_KEYS } from './spillProtocol'
 
 describe('session storage compatibility contract', () => {
   it('derives its format values from the current schema, History, cache, and spill definitions', () => {
@@ -38,6 +38,17 @@ describe('session storage compatibility contract', () => {
   it('produces canonical JSON and a SHA-256 digest suitable for the reviewed release record', () => {
     expect(SESSION_STORAGE_DATA_CONTRACT_CANONICAL_JSON).toContain('spaceassistant.session-storage')
     expect(SESSION_STORAGE_DATA_CONTRACT_SHA256).toBe('4d718a5e06fcf0cf38adff60b4b8dde2c27d56d33ddfd5723dde28df74da5830')
+  })
+
+  it('keeps the persisted-format constants and nested manifest immutable at runtime', () => {
+    expect(Object.isFrozen(HISTORY_EVENT_KINDS)).toBe(true)
+    expect(Object.isFrozen(MESSAGE_CONTENT_STORAGE_STATES)).toBe(true)
+    expect(Object.isFrozen(SESSION_CONTENT_CLEANUP_STATES)).toBe(true)
+    expect(Object.isFrozen(SPILL_MARKER_KEYS)).toBe(true)
+    expect(Object.isFrozen(SESSION_STORAGE_DATA_CONTRACT)).toBe(true)
+    expect(Object.isFrozen(SESSION_STORAGE_DATA_CONTRACT.history)).toBe(true)
+    expect(Object.isFrozen(SESSION_STORAGE_DATA_CONTRACT.history.eventKinds)).toBe(true)
+    expect(Object.isFrozen(SESSION_STORAGE_DATA_CONTRACT.sourceSpill.markerKeys)).toBe(true)
   })
 
   it('keeps body and cleanup state constraints in the SQLite DDL aligned with the hashed contract', () => {
