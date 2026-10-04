@@ -20,6 +20,7 @@ import { isRemoteAgentRunning } from '../remote/remoteAgentRegistry'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { normalizeSessionSkillsState } from '../../src/shared/domainTypes'
 import { queryLatestUsageAttribution, queryUsageAttribution, queryUsageDaily, queryUsageDimensions, queryUsageSummary } from '../usageStats/usageStatsQueries'
+import { createSpillStore } from '../storage/spillStore'
 
 export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   ipcMain.handle('session:list', (): Session[] => {
@@ -146,7 +147,11 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       throw new Error(`${ErrorCodes.REMOTE_SESSION_BUSY}: ${REMOTE_SESSION_BUSY_MESSAGE}`)
     }
     clearSessionToolResources(sessionId)
-    deleteSession(ctx.db, sessionId, { flush: false })
+    await fs.mkdir(ctx.getUserDataPath(), { recursive: true })
+    await createSpillStore(`${ctx.getUserDataPath()}/spill`).withSpillRootFence(async () => {
+      deleteSession(ctx.db, sessionId, { flush: false })
+    })
+    ctx.wakeSourceTruthSpillGc?.()
     // §5.3：会话删除时清空会话级 decision_cache 条目；清理失败不阻塞删除流程
     try {
       clearDecisionCacheOnSessionDelete(ctx.db, sessionId)

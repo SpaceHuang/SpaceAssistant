@@ -26,6 +26,7 @@ import { createHostedTurnHandoff } from '../runtime/hostedTurnHandoff'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from '../runtime/hostedTurnFinalization'
 import { loadAcceptedTurnMessages } from '../runtime/acceptedTurnContext'
+import { getProjectedMessages } from '../runtime/sessionTranscriptProjection'
 import { createAcceptedTurnFromPrepared } from '../runtime/acceptedTurnContext'
 
 /**
@@ -243,7 +244,7 @@ async function runButlerModelTurn(
     if (persisted.state === 'configuring') throw new Error('TURN_EXECUTION_CONFIGURING')
     rawMessages = loadAcceptedTurnMessages(db, persisted)
   } else {
-    rawMessages = getMessages(db, args.sessionId)
+    rawMessages = getProjectedMessages(db, args.sessionId)
   }
   const built = buildClaudeToolChatMessages(rawMessages, {
     workspaceRoot: deps.getWorkDir(),

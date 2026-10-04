@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { listSessions, getMessagesPageWithSequence, getSession } from '../../database/operations'
+import { listSessions, getSession } from '../../database/operations'
+import { getProjectedMessagesPageWithSequence } from '../../runtime/sessionTranscriptProjection'
 import type { AppDatabase } from '../../database'
 import type { CapabilityDescriptor, CapabilityContext } from '../types'
 import { isSessionActiveStream } from '../../chatActiveStreams'
@@ -104,7 +105,7 @@ const readCapability: CapabilityDescriptor = {
     }
     const limit = Math.min(params.limit ?? 20, 50)
     const cursor = params.cursor ?? 0
-    const page = getMessagesPageWithSequence(db, params.sessionId, cursor, limit)
+    const page = getProjectedMessagesPageWithSequence(db, params.sessionId, cursor, limit)
     return {
       messages: page.rows.map(({ message: m, sequence }) => {
         if (m.content.length > MESSAGE_MAX_CHARS) {

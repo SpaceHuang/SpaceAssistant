@@ -50,6 +50,33 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
         return { root: path.join(path.dirname(dbPath), 'spill'), files: 0, totalBytes: 0, sourceOfTruthBytes: 0, degradableBytes: 0, orphanBytes: 0 }
       }
     })()
+    const sourceTruthGc = (() => {
+      const root = path.join(path.dirname(dbPath), 'spill')
+      try {
+        const pending = tables.has('source_truth_spill_gc_queue')
+          ? conn.prepare("SELECT locator,session_id FROM source_truth_spill_gc_queue WHERE status='pending'").all() as Array<{ locator: string; session_id: string }>
+          : []
+        const scan = tables.has('source_truth_spill_gc_scan_state')
+          ? conn.prepare("SELECT status,after_name,attempts,last_error FROM source_truth_spill_gc_scan_state WHERE root_key='user-data-spill'").get() as
+            { status: string; after_name: string | null; attempts: number; last_error: string | null } | undefined
+          : undefined
+        let pendingBytes = 0
+        let orphanBytes = 0
+        for (const item of pending) {
+          try {
+            const stat = fs.lstatSync(path.join(root, item.locator))
+            if (!stat.isFile() || stat.isSymbolicLink()) continue
+            pendingBytes += stat.size
+            if (!item.session_id) orphanBytes += stat.size
+          } catch { /* absent pending files are idempotent work and carry no bytes */ }
+        }
+        return { pendingFiles: pending.length, pendingBytes, orphanBytes,
+          scanStatus: scan?.status ?? 'unavailable', scanCursor: scan?.after_name ?? null,
+          attempts: scan?.attempts ?? 0, lastError: scan?.last_error ?? null }
+      } catch {
+        return { pendingFiles: 0, pendingBytes: 0, orphanBytes: 0, scanStatus: 'unavailable', scanCursor: null, attempts: 0, lastError: 'profile-unavailable' }
+      }
+    })()
     const spillDegraded = (() => {
       const root = path.join(path.dirname(dbPath), 'spill-degraded')
       try {
@@ -159,6 +186,7 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
       autoVacuum: conn.prepare('PRAGMA auto_vacuum').get(),
       dbstat,
       spillFiles,
+      sourceTruthGc,
       tables: {
         messages: metric('messages', "length(content)+length(COALESCE(tool_calls,''))+length(COALESCE(thinking,''))+length(COALESCE(attachments,''))+length(COALESCE(content_segments,''))"),
         canonicalHistory: metric('agent_history_events', 'length(payload_json)'),

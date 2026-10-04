@@ -9,12 +9,17 @@ describe('agent canonical history migration', () => {
     conn.exec(`CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
       INSERT INTO schema_meta(key,value) VALUES('schema_version','36');
       CREATE TABLE sessions(id TEXT PRIMARY KEY, generation TEXT NOT NULL);
-      CREATE TABLE messages(id TEXT PRIMARY KEY, session_id TEXT NOT NULL, content TEXT NOT NULL);
+      CREATE TABLE messages(id TEXT PRIMARY KEY, session_id TEXT NOT NULL, role TEXT, content TEXT NOT NULL,
+        tool_use TEXT, tool_calls TEXT, thinking TEXT, content_segments TEXT, skill_hints TEXT,
+        attachments TEXT, images_delivered_to_api INTEGER, status TEXT, schema_version INTEGER,
+        timestamp INTEGER, sequence INTEGER);
+      CREATE TABLE agent_history_streams(invocation_id TEXT PRIMARY KEY NOT NULL, session_id TEXT);
+      CREATE TABLE agent_history_events(invocation_id TEXT NOT NULL, event_id TEXT NOT NULL, session_id TEXT, payload_json TEXT NOT NULL);
       INSERT INTO sessions(id,generation) VALUES('s','generation-1');
       INSERT INTO messages(id,session_id,content) VALUES('m','s','body');`)
 
     runMigrations(conn)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '37' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '46' })
     const markEligible = conn.prepare('INSERT OR REPLACE INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at) VALUES(?,?,?)')
     expect(conn.prepare('SELECT name FROM sqlite_master WHERE type=\'trigger\' AND name LIKE \'invalidate_session_projection_%\'').all()).toHaveLength(3)
 
@@ -27,6 +32,55 @@ describe('agent canonical history migration', () => {
     markEligible.run('s', 'generation-1', 3)
     conn.prepare("DELETE FROM messages WHERE id='m2'").run()
     expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility').all()).toEqual([])
+    conn.close()
+  })
+
+  it('v41 invalidates detached transcript cache on direct History event or stream mutation', () => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec(`CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+      INSERT INTO schema_meta(key,value) VALUES('schema_version','41');
+      CREATE TABLE agent_history_streams (invocation_id TEXT PRIMARY KEY NOT NULL, session_id TEXT);
+      CREATE TABLE agent_history_events (invocation_id TEXT NOT NULL, event_id TEXT NOT NULL, session_id TEXT, payload_json TEXT NOT NULL);
+      CREATE TABLE canonical_session_projection_cache (session_id TEXT NOT NULL, cache_key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(session_id,cache_key));
+      INSERT INTO agent_history_streams(invocation_id,session_id) VALUES('inv','session-a');
+      INSERT INTO agent_history_events(invocation_id,event_id,session_id,payload_json) VALUES('inv','event','session-a','{}');
+      INSERT INTO canonical_session_projection_cache(session_id,cache_key,value) VALUES('session-a','transcript','[]');`)
+
+    runMigrations(conn)
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '46' })
+    expect(conn.prepare('SELECT value FROM canonical_session_projection_cache').all()).toEqual([])
+
+    conn.prepare("UPDATE agent_history_events SET payload_json='{}' WHERE event_id='event'").run()
+    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_cache').all()).toEqual([])
+    conn.prepare("INSERT INTO canonical_session_projection_cache(session_id,cache_key,value) VALUES('session-a','transcript','[]')").run()
+    conn.prepare("DELETE FROM agent_history_events WHERE event_id='event'").run()
+    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_cache').all()).toEqual([])
+    conn.prepare("INSERT INTO agent_history_events(invocation_id,event_id,session_id,payload_json) VALUES('inv','event-2','session-a','{}')").run()
+    conn.prepare("INSERT INTO canonical_session_projection_cache(session_id,cache_key,value) VALUES('session-a','transcript','[]')").run()
+    conn.prepare("UPDATE agent_history_streams SET session_id='session-b' WHERE invocation_id='inv'").run()
+    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_cache').all()).toEqual([])
+
+    conn.prepare("INSERT INTO canonical_session_projection_cache(session_id,cache_key,value) VALUES('session-b','transcript','[]')").run()
+    conn.prepare("DELETE FROM agent_history_streams WHERE invocation_id='inv'").run()
+    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_cache').all()).toEqual([])
+    expect(() => runMigrations(conn)).not.toThrow()
+    conn.close()
+  })
+
+  it('v42 adds transcript cache checksums and discards cache rows created before checksums existed', () => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec(`CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+      INSERT INTO schema_meta(key,value) VALUES('schema_version','42');
+      CREATE TABLE canonical_session_projection_cache (session_id TEXT NOT NULL, cache_key TEXT NOT NULL, value TEXT NOT NULL,
+        PRIMARY KEY(session_id,cache_key));
+      INSERT INTO canonical_session_projection_cache(session_id,cache_key,value) VALUES('session-a','transcript','[]');`)
+
+    runMigrations(conn)
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '46' })
+    expect(conn.prepare('PRAGMA table_info(canonical_session_projection_cache)').all())
+      .toEqual(expect.arrayContaining([expect.objectContaining({ name: 'value_sha256', dflt_value: "''" })]))
+    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_cache').all()).toEqual([])
+    expect(() => runMigrations(conn)).not.toThrow()
     conn.close()
   })
 
@@ -241,7 +295,7 @@ describe('agent canonical history migration', () => {
 
     runMigrations(conn)
 
-    expect(DB_SCHEMA_VERSION).toBe(37)
+    expect(DB_SCHEMA_VERSION).toBe(46)
     expect(conn.prepare('PRAGMA table_info(turns)').all()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'accepted_input_history_version', dflt_value: '0' })
     ]))

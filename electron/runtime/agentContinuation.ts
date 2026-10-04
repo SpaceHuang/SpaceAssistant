@@ -5,6 +5,7 @@ import { rebuildClaudeMessagesFromHistory } from './canonicalHistory'
 import { runInTransaction } from '../database/transaction'
 import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHistoryStorage'
 import { toCanonicalModelMessages } from './canonicalHistory'
+import { mirrorCanonicalContextMessages } from './sqliteAgentHistory'
 
 export type AgentContinuationRecord = Readonly<{
   continuationId: string
@@ -97,9 +98,29 @@ export function validateContinuationCheckpoint(snapshot: HistorySnapshot): Reado
   if (unsettledProposals.size) throw new AgentContinuationRejectedError('CHECKPOINT_HAS_UNSETTLED_TOOL_CALL')
   if (latestResponse < 0) throw new AgentContinuationRejectedError('CHECKPOINT_RESPONSE_MISSING')
   const checkpointEvents = events.filter((event) => event.kind !== 'invocation-completed' && event.kind !== 'invocation-failed')
-  const transcript = rebuildClaudeMessagesFromHistory(checkpointEvents)
-  if (!transcript.some((message) => message.role === 'user' && message.id === requiredUser.id)) {
+  let transcript: ReturnType<typeof rebuildClaudeMessagesFromHistory>
+  try {
+    transcript = rebuildClaudeMessagesFromHistory(checkpointEvents)
+  } catch (error) {
+    if (contextPayload?.requiredUserMessage) throw new AgentContinuationRejectedError('CHECKPOINT_REQUIRED_USER_MISMATCH')
+    throw error
+  }
+  const transcriptRequiredUser = transcript.find((message) => message.role === 'user' && message.id === requiredUser.id)
+  if (!transcriptRequiredUser) {
     throw new AgentContinuationRejectedError('CHECKPOINT_REQUIRED_USER_MISSING')
+  }
+  try {
+    const [transcriptCanonical] = toCanonicalModelMessages([transcriptRequiredUser])
+    const requiredCanonical = {
+      ...(requiredUser.message as Record<string, unknown>),
+      id: requiredUser.id
+    }
+    if (stableJson(transcriptCanonical) !== stableJson(requiredCanonical)) {
+      throw new AgentContinuationRejectedError('CHECKPOINT_REQUIRED_USER_MISMATCH')
+    }
+  } catch (error) {
+    if (error instanceof AgentContinuationRejectedError) throw error
+    throw new AgentContinuationRejectedError('CHECKPOINT_REQUIRED_USER_MISMATCH')
   }
   return { checkpointSequence: checkpointEvents.at(-1)?.sequence ?? latestResponse, checkpointSha256: sha256(checkpointEvents), transcript, requiredUserMessage: requiredUser as { id: string; message: Record<string, unknown> } }
 }
@@ -161,6 +182,7 @@ export function createOrGetAgentContinuation(input: {
         }
       }
       appendSqliteAgentHistoryBatchInTransaction(input.conn, [contextEvent], 0, { schemaVersion: input.snapshot.schemaVersion, sessionId: input.sessionId, now: () => now })
+      mirrorCanonicalContextMessages(input.conn, input.sessionId, contextEvent.payload.messages)
       return rowToRecord(retry as ContinuationRow, checkpoint.transcript)
     }
     const record = { continuation_id: newId(), source_invocation_id: input.snapshot.invocationId, source_turn_id: input.snapshot.events[0]?.turnId ?? input.snapshot.invocationId,
@@ -194,6 +216,7 @@ export function createOrGetAgentContinuation(input: {
       sessionId: input.sessionId,
       now: () => now
     })
+    mirrorCanonicalContextMessages(input.conn, input.sessionId, contextEvent.payload.messages)
     return rowToRecord(record as ContinuationRow, checkpoint.transcript)
   })
 }

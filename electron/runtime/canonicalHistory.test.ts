@@ -102,6 +102,19 @@ describe('rebuildClaudeMessagesFromHistory', () => {
     expect(rebuildClaudeMessagesFromHistory(events)).toEqual([{ role: 'user', content: 'compacted context' }])
   })
 
+  it('keeps anonymous output-recovery replay for invocation replay but omits it from session transcript projection', () => {
+    const events = [{
+      invocationId: 'output-replay', turnId: 'turn-1', sequence: 1, schemaVersion: 1,
+      eventId: 'output-replay-event', idempotencyKey: 'output-replay-event', kind: 'replay-message-committed',
+      payload: { message: { role: 'user', content: '[runtime output recovery] continue' } }
+    }] as HistoryEvent[]
+
+    expect(rebuildClaudeMessagesFromHistory(events)).toEqual([
+      { role: 'user', content: '[runtime output recovery] continue' }
+    ])
+    expect(rebuildClaudeMessagesFromHistory(events, { omitAnonymousReplayFromSessionTranscript: true })).toEqual([])
+  })
+
   it('preserves canonical message timestamps when rebuilding a transcript for session cutover', () => {
     const events = [{
       eventId: 'timestamp-context', idempotencyKey: 'timestamp-context', invocationId: 'timestamp-invocation', turnId: 'timestamp-turn',
@@ -306,12 +319,18 @@ describe('rebuildClaudeMessagesFromHistory', () => {
     ])
   })
 
-  it('rejects an unfinished tool pair so an interrupted dispatch cannot be replayed', () => {
+  it('rejects unfinished tools for replay but allows transcript reconstruction after interruption', () => {
     const events = [{
       eventId: 'e1', idempotencyKey: 'i1', invocationId: 'inv', turnId: 'turn', sequence: 1, schemaVersion: 1,
       kind: 'model-response-committed', payload: { message: { role: 'assistant', toolCalls: [{ id: 'tool-pending', name: 'write_file', input: {} }] } }
+    }, {
+      eventId: 'e2', idempotencyKey: 'i2', invocationId: 'inv', turnId: 'turn', sequence: 2, schemaVersion: 1,
+      kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'process-restart' }
     }] as HistoryEvent[]
     expect(() => rebuildClaudeMessagesFromHistory(events)).toThrow('history contains unresolved tool calls: tool-pending')
+    expect(rebuildClaudeMessagesFromHistory(events, { allowPendingToolCalls: true })).toEqual([{
+      role: 'assistant', content: [{ type: 'tool_use', id: 'tool-pending', name: 'write_file', input: {} }]
+    }])
   })
 
   it('uses the committed compacted transcript as the new replay base', () => {

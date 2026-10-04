@@ -403,7 +403,7 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
           const terminal = [...snapshot.events].reverse().find((event) =>
             event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted'
           )
-          if (terminal?.kind === kind && terminal.invocationId === input.invocationId &&
+          if (!transcriptCommit && terminal?.kind === kind && terminal.invocationId === input.invocationId &&
             terminal.turnId === (input.turnId ?? input.invocationId) &&
             JSON.stringify(terminal.payload) === JSON.stringify(persistedPayload)) return
         } catch { /* The append error remains authoritative when its outcome cannot be read. */ }
@@ -421,7 +421,8 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
       : undefined
     const transcriptCommit = input.sessionId && input.sessionTranscriptBaseVersion !== undefined
       ? { sessionId: input.sessionId, baseVersion: input.sessionTranscriptBaseVersion, outcome: 'completed' as const,
-          messages: result.messages.filter((message) => message.role !== 'system') as readonly Readonly<Record<string, unknown>>[] }
+          messages: result.messages.filter((message) => message.role !== 'system') as readonly Readonly<Record<string, unknown>>[],
+          ...(input.assistantMessageId ? { messageMirror: { messageId: input.assistantMessageId, status: 'completed' as const, content: result.text } } : {}) }
       : undefined
     await appendTerminalHistory('invocation-completed', terminalPayload, sessionLedger, transcriptCommit)
     await observe(input.observer, 'turn-finished', () => input.observer?.onTurnFinished?.(result))
@@ -518,9 +519,18 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
           : error instanceof AgentTurnTimedOutError ? 'timed_out'
           : status === 'interrupted' ? 'interrupted' : 'failed'
         const failureMessages = await sessionTranscriptMessagesForFailure(input)
+        const mirroredFailureMessage = input.assistantMessageId
+          ? failureMessages?.find((message) => message.role === 'assistant' && message.id === input.assistantMessageId)
+          : undefined
+        const mirroredFailureContent = mirroredFailureMessage ? assistantTextForLegacyProjection(mirroredFailureMessage.content) : undefined
         const transcriptCommit = input.sessionId && input.sessionTranscriptBaseVersion !== undefined && failureMessages
           ? { sessionId: input.sessionId, baseVersion: input.sessionTranscriptBaseVersion, outcome: transcriptOutcome,
-              messages: failureMessages.filter((message) => message.role !== 'system') as readonly Readonly<Record<string, unknown>>[] }
+              messages: failureMessages.filter((message) => message.role !== 'system') as readonly Readonly<Record<string, unknown>>[],
+              ...(input.assistantMessageId ? { messageMirror: {
+                messageId: input.assistantMessageId,
+                status: error instanceof AgentTurnCancelledError ? 'cancelled' as const : 'failed' as const,
+                ...(mirroredFailureContent !== undefined ? { content: mirroredFailureContent } : {})
+              } } : {}) }
           : undefined
         await appendTerminalHistory(terminalKind, terminalPayload, sessionLedger, transcriptCommit)
       } catch { /* Preserve the original turn failure when terminal persistence also fails. */ }
@@ -1641,6 +1651,16 @@ class ApprovalCandidateSlots {
 function assistantHistoryContent(content: readonly CanonicalContentBlock[], text: string): string | readonly CanonicalContentBlock[] | undefined {
   if (content.some((block) => block.type === 'thinking')) return content
   return text || (content.length ? content.map((block) => block.type === 'text' ? block.text : '').join('') : undefined)
+}
+
+function assistantTextForLegacyProjection(content: unknown): string | undefined {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content) || !content.every((block) => block && typeof block === 'object' && !Array.isArray(block) &&
+    (((block as Record<string, unknown>).type === 'text' && typeof (block as Record<string, unknown>).text === 'string') ||
+      ((block as Record<string, unknown>).type === 'thinking' && typeof (block as Record<string, unknown>).thinking === 'string') ||
+      ((block as Record<string, unknown>).type === 'image' && typeof (block as Record<string, unknown>).data === 'string')))) return undefined
+  return content.filter((block) => (block as Record<string, unknown>).type === 'text')
+    .map((block) => (block as Record<string, unknown>).text as string).join('')
 }
 
 async function observe(observer: AgentTurnObserver | undefined, stage: Parameters<NonNullable<AgentTurnObserver['onObservationError']>>[1], callback: () => void | Promise<void> | undefined): Promise<void> {

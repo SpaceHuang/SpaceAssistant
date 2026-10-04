@@ -4,6 +4,7 @@ import {
   appendMessage,
   appendMessagesAtomically,
   updateMessageContentIfStreaming,
+  updateMessageContent,
   checkpointTurnAtomically,
   createSession,
   deleteSession,
@@ -26,13 +27,16 @@ import {
   createQueueInputReceipt,
   getQueueInputReceipt,
   enqueueQueuedUserMessage,
+  deleteQueuedUserMessage,
   claimQueuedTurnAtomically,
   recoverPersistedTurn,
   updateQueueInputReceiptState,
   getNextQueuedMessage,
   getSearchCorpusPage,
+  reorderQueuedUserMessages,
   updateQueuedUserMessageContent,
   resolveRetryContext,
+  getSessionMessageRevisionSnapshot,
   setPersistedTurnExecutionConfig,
   updatePersistedTurnState,
   listTurnErrorsByAssistantMessageIds
@@ -57,6 +61,18 @@ describe('appendMessage stored count', () => {
 })
 
 describe('deleteSession persisted transcript cleanup', () => {
+  it('keeps an active session and its records intact when deletion is requested', () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'active-session-delete' })
+    const assistant = appendMessage(db, { id: 'active-delete-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'active-delete-turn', requestId: 'active-delete-request', sessionId: session.id,
+      assistantMessageId: assistant.message.id, state: 'executing' })
+    expect(() => deleteSession(db, session.id, { flush: false })).toThrow('cannot delete a session with an active turn')
+    expect(getSession(db, session.id)?.id).toBe(session.id)
+    expect(getDbConnection(db).prepare('SELECT turn_id FROM turns WHERE turn_id=?').get('active-delete-turn')).toEqual({ turn_id: 'active-delete-turn' })
+    db.close()
+  })
+
   it('deletes owned History and transcript records durably without touching another or ambiguous session data', () => {
     const { db, dbPath, cleanup } = createTempDatabase('sa-delete-session-transcript-')
     const conn = getDbConnection(db)
@@ -300,6 +316,48 @@ describe('turn routing context queries', () => {
     expect(hasVisionInTurnRoutingContext(db, sessionId)).toBe(true)
     expect(hasVisionInTurnRoutingContext(db, sessionId, undefined, ['history-50050'])).toBe(false)
   })
+
+  it('路由窗口 oracle 会拒绝先取尾部 50 条再过滤空白正文的实现', () => {
+    // 方案 §8.8.2.1 要求严格正文解析和 TRIM 判空发生在 limit 之前；否则
+    // 窗口尾部的空白消息会挤掉更早、仍应进入路由上下文的有效消息。
+    insertLongHistory(52)
+    getDbConnection(db).prepare("UPDATE messages SET content = '   ' WHERE id IN (?, ?)")
+      .run('history-50', 'history-51')
+
+    const expected = Array.from({ length: 50 }, (_, offset) => ({ role: 'user' as const, content: `message-${offset}` }))
+    const actual = getRecentTurnRoutingMessages(db, sessionId)
+    const intentionallyWrongLimitBeforeFilter = Array.from({ length: 50 }, (_, offset) => ({
+      role: 'user' as const,
+      content: offset < 48 ? `message-${offset + 2}` : '   '
+    })).filter((message) => message.content.trim() !== '')
+
+    expect(actual).toEqual(expected)
+    expect(intentionallyWrongLimitBeforeFilter).not.toEqual(expected)
+  })
+
+
+  it('路由基线保留正文原字节、turn 锚点顺序、boundary/exclude 与 vision 附件语义', () => {
+    const firstUser = appendMessage(db, { id: 'route-user', sessionId, role: 'user', content: '  exact user  ', timestamp: 1, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'route-assistant', sessionId, role: 'assistant', content: 'assistant', timestamp: 2, status: 'completed' })
+    const outside = appendMessage(db, { id: 'route-outside', sessionId, role: 'user', content: 'outside', timestamp: 3, status: 'sent' })
+    getDbConnection(db).prepare('UPDATE messages SET attachments = ? WHERE id = ?')
+      .run(JSON.stringify([{ id: 'image', type: 'image' }]), firstUser.message.id)
+    createPersistedTurn(db, {
+      turnId: 'route-turn', requestId: 'route-request', sessionId,
+      userMessageId: firstUser.message.id, assistantMessageId: assistant.message.id,
+      state: 'terminal', outcome: 'completed'
+    })
+
+    expect(getRecentTurnRoutingMessages(db, sessionId, 50, outside.sequence))
+      .toEqual([
+        { role: 'user', content: '  exact user  ' },
+        { role: 'assistant', content: 'assistant' },
+        { role: 'user', content: 'outside' }
+      ])
+    expect(getRecentTurnRoutingMessages(db, sessionId, 50, firstUser.sequence, [firstUser.message.id])).toEqual([])
+    expect(hasVisionInTurnRoutingContext(db, sessionId, outside.sequence)).toBe(true)
+    expect(hasVisionInTurnRoutingContext(db, sessionId, outside.sequence, [firstUser.message.id])).toBe(false)
+  })
 })
 
 describe('getTurnContext', () => {
@@ -427,6 +485,33 @@ describe('updateMessageContentIfStreaming', () => {
     expect(getMessage(db, 'checkpoint-a')?.content).toBe('coalesced')
     expect(getPersistedTurn(db, 'checkpoint-t')?.version).toBe(10_000)
   })
+
+  it('streaming checkpoint 保留 legacy 正文状态并撤销旧 canonical 资格', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const session = createSession(db, { name: 'checkpoint-content-cutover' })
+    appendMessage(db, { id: 'checkpoint-cutover-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'checkpoint-cutover-turn', requestId: 'checkpoint-cutover-request', sessionId: session.id,
+      assistantMessageId: 'checkpoint-cutover-assistant', state: 'executing' })
+    const generation = conn.prepare('SELECT generation FROM sessions WHERE id=?').get(session.id) as { generation: string }
+    conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical',write_mode='dual-write'
+      WHERE session_id=?`).run(session.id)
+    conn.prepare('INSERT INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at) VALUES(?,?,1)')
+      .run(session.id, generation.generation)
+    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
+      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version) VALUES(?,?,1,1,1,'watermark','invocation',1,1)`)
+      .run(session.id, generation.generation)
+
+    expect(checkpointTurnAtomically(db, 'checkpoint-cutover-turn', 1, 'checkpoint-cutover-assistant', { content: 'partial checkpoint' })).toBe(true)
+
+    expect(conn.prepare('SELECT content,content_storage_state,status FROM messages WHERE id=?').get('checkpoint-cutover-assistant'))
+      .toEqual({ content: 'partial checkpoint', content_storage_state: 'legacy', status: 'streaming' })
+    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)).toBeUndefined()
+    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').get(session.id)).toBeUndefined()
+    expect(conn.prepare('SELECT api_read_mode,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?').get(session.id))
+      .toEqual({ api_read_mode: 'revalidation-required', write_mode: 'dual-write', cleanup_state: 'retained' })
+    db.close()
+  })
 })
 
 describe('listStreamingAssistantMessages', () => {
@@ -478,7 +563,103 @@ describe('queue input receipts', () => {
     const second = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'enqueue-r', content: 'hello' })
     expect(second.duplicate).toBe(true)
     expect(second.persisted.message.id).toBe(first.persisted.message.id)
+    expect(getDbConnection(db).prepare('SELECT content,content_storage_state,status FROM messages WHERE id=?').get(first.persisted.message.id))
+      .toEqual({ content: 'hello', content_storage_state: 'legacy', status: 'queued' })
     expect(() => enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'enqueue-r', content: 'different' })).toThrow(/FINGERPRINT/)
+  })
+
+  it('queued enqueue 撤销会话既有 canonical eligibility 并保留 legacy 正文', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const session = createSession(db, { name: 'queued-content-cutover' })
+    appendMessage(db, { id: 'queued-cutover-existing-user', sessionId: session.id, role: 'user', content: 'existing', timestamp: 1, status: 'sent' })
+    const generation = conn.prepare('SELECT generation FROM sessions WHERE id=?').get(session.id) as { generation: string }
+    conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical',write_mode='dual-write'
+      WHERE session_id=?`).run(session.id)
+    conn.prepare('INSERT INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at) VALUES(?,?,1)')
+      .run(session.id, generation.generation)
+    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
+      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version) VALUES(?,?,1,1,1,'watermark','invocation',1,1)`)
+      .run(session.id, generation.generation)
+
+    const queued = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'queued-cutover-request', content: 'queued payload' })
+
+    expect(queued.persisted.message).toMatchObject({ content: 'queued payload', status: 'queued' })
+    expect(conn.prepare('SELECT content,content_storage_state,status FROM messages WHERE id=?').get(queued.persisted.message.id))
+      .toEqual({ content: 'queued payload', content_storage_state: 'legacy', status: 'queued' })
+    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)).toBeUndefined()
+    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').get(session.id)).toBeUndefined()
+    expect(conn.prepare('SELECT api_read_mode,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?').get(session.id))
+      .toEqual({ api_read_mode: 'revalidation-required', write_mode: 'dual-write', cleanup_state: 'retained' })
+    db.close()
+  })
+
+  it('队列 no-op 移序保留 eligibility，实际移序通过 message trigger 撤销两类资格', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const session = createSession(db, { name: 'queued-reorder-content-fence' })
+    const first = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'reorder-first', content: 'first' })
+    const second = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'reorder-second', content: 'second' })
+    const generation = conn.prepare('SELECT generation FROM sessions WHERE id=?').get(session.id) as { generation: string }
+    const revision = conn.prepare('SELECT message_revision FROM session_message_content_cutover WHERE session_id=?').get(session.id) as { message_revision: number }
+    conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare('INSERT INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at) VALUES(?,?,1)')
+      .run(session.id, generation.generation)
+    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
+      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version)
+      VALUES(?,?,?,1,1,'reorder-watermark','reorder-invocation',1,1)`).run(session.id, generation.generation, revision.message_revision)
+
+    expect(reorderQueuedUserMessages(db, { sessionId: session.id, messageIds: [first.persisted.message.id, second.persisted.message.id] }).ok).toBe(true)
+    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)).toBeDefined()
+    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').get(session.id)).toBeDefined()
+    expect(conn.prepare('SELECT message_revision,api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
+      .toEqual({ message_revision: revision.message_revision, api_read_mode: 'canonical' })
+
+    expect(reorderQueuedUserMessages(db, { sessionId: session.id, messageIds: [second.persisted.message.id, first.persisted.message.id] }).ok).toBe(true)
+    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)).toBeUndefined()
+    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').get(session.id)).toBeUndefined()
+    const invalidated = conn.prepare('SELECT message_revision,api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id) as
+      { message_revision: number; api_read_mode: string }
+    expect(invalidated.api_read_mode).toBe('revalidation-required')
+    expect(invalidated.message_revision).toBeGreaterThan(revision.message_revision)
+    expect(conn.prepare('SELECT id,sequence,status,content_storage_state FROM messages WHERE session_id=? ORDER BY sequence').all(session.id))
+      .toEqual([
+        { id: second.persisted.message.id, sequence: first.persisted.sequence, status: 'queued', content_storage_state: 'legacy' },
+        { id: first.persisted.message.id, sequence: second.persisted.sequence, status: 'queued', content_storage_state: 'legacy' }
+      ])
+    db.close()
+  })
+
+  it('队列移序后的 preview 写入失败时回滚 sequence、receipt 和 eligibility fence', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const session = createSession(db, { name: 'queued reorder rollback' })
+    const first = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'reorder-rollback-first', content: 'first' })
+    const second = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'reorder-rollback-second', content: 'second' })
+    const generation = conn.prepare('SELECT generation FROM sessions WHERE id=?').get(session.id) as { generation: string }
+    const revision = conn.prepare('SELECT message_revision FROM session_message_content_cutover WHERE session_id=?').get(session.id) as { message_revision: number }
+    conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare('INSERT INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at) VALUES(?,?,1)')
+      .run(session.id, generation.generation)
+    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
+      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version)
+      VALUES(?,?,?,1,1,'reorder-rollback-watermark','reorder-rollback-invocation',1,1)`).run(session.id, generation.generation, revision.message_revision)
+    const before = conn.prepare('SELECT id,sequence FROM messages WHERE session_id=? ORDER BY sequence').all(session.id)
+    const preview = getSession(db, session.id)?.preview
+    conn.exec(`CREATE TRIGGER reject_reorder_preview BEFORE UPDATE OF preview ON sessions
+      WHEN NEW.id='${session.id}' BEGIN SELECT RAISE(ABORT,'injected preview failure'); END`)
+
+    expect(() => reorderQueuedUserMessages(db, { sessionId: session.id, messageIds: [second.persisted.message.id, first.persisted.message.id] }))
+      .toThrow('injected preview failure')
+
+    expect(conn.prepare('SELECT id,sequence FROM messages WHERE session_id=? ORDER BY sequence').all(session.id)).toEqual(before)
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM messages WHERE session_id=?').get(session.id)).toEqual({ count: 2 })
+    expect(getSession(db, session.id)?.preview).toBe(preview)
+    expect(getQueueInputReceipt(db, session.id, 'reorder-rollback-first')?.state).toBe('queued')
+    expect(getQueueInputReceipt(db, session.id, 'reorder-rollback-second')?.state).toBe('queued')
+    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)).toBeDefined()
+    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').get(session.id)).toBeDefined()
+    db.close()
   })
 
   it('receipt 状态可标记 cancelled，保留请求去重记录', () => {
@@ -510,6 +691,77 @@ describe('queue input receipts', () => {
     expect(getPersistedTurn(db, 'recover-t')).toMatchObject({ state: 'terminal', outcome: 'recovered', version: 1 })
     expect(getQueueInputReceipt(db, session.id, 'recover-r')?.state).toBe('recovered')
   })
+
+  it('turn recovery preserves the legacy body and revokes API and projection eligibility', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const session = createSession(db, { name: 'recover-content-fence' })
+    const queued = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'recover-content-fence-request', content: 'accepted question' })
+    claimQueuedTurnAtomically(db, { sessionId: session.id, userMessageId: queued.persisted.message.id, turnId: 'recover-content-fence-turn', assistantMessageId: 'recover-content-fence-assistant', requestId: 'recover-content-fence-request' })
+    updateMessageContentIfStreaming(db, 'recover-content-fence-assistant', { content: 'partial answer' })
+    const generation = conn.prepare('SELECT generation FROM sessions WHERE id=?').get(session.id) as { generation: string }
+    conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare('INSERT INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at) VALUES(?,?,1)')
+      .run(session.id, generation.generation)
+    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
+      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version)
+      VALUES(?,?,1,1,1,'watermark','invocation',1,1)`).run(session.id, generation.generation)
+
+    expect(recoverPersistedTurn(db, 'recover-content-fence-turn', 'recover-content-fence-assistant')).toBe(true)
+
+    expect(getMessage(db, 'recover-content-fence-assistant')).toMatchObject({ content: 'partial answer', status: 'failed' })
+    expect(getPersistedTurn(db, 'recover-content-fence-turn')).toMatchObject({ state: 'terminal', outcome: 'recovered' })
+    expect(getQueueInputReceipt(db, session.id, 'recover-content-fence-request')?.state).toBe('recovered')
+    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)).toBeUndefined()
+    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').get(session.id)).toBeUndefined()
+    expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
+      .toEqual({ api_read_mode: 'revalidation-required' })
+    db.close()
+  })
+
+  it.each(['completed', 'failed', 'cancelled', 'timed-out', 'recovered', 'commit-uncertain'] as const)(
+    'canonical-only recovery preserves History body while converging %s outcome metadata', async (outcome) => {
+      const db = createMemoryAppDb()
+      const session = createSession(db, { name: `canonical recovery ${outcome}` })
+      appendMessage(db, { id: `canonical-recovery-user-${outcome}`, sessionId: session.id, role: 'user', content: 'accepted input', timestamp: 1, status: 'sent' })
+      appendMessage(db, {
+        id: `canonical-recovery-assistant-${outcome}`, sessionId: session.id, role: 'assistant', content: 'canonical answer',
+        timestamp: 2, status: 'failed', toolCalls: [{ id: 'tool-done', toolName: 'read_file', input: {}, status: 'completed', riskLevel: 'low' }]
+      })
+      createPersistedTurn(db, {
+        turnId: `canonical-recovery-turn-${outcome}`, requestId: `canonical-recovery-request-${outcome}`, sessionId: session.id,
+        userMessageId: `canonical-recovery-user-${outcome}`, assistantMessageId: `canonical-recovery-assistant-${outcome}`, state: 'executing'
+      })
+      const conn = getDbConnection(db)
+      const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+      await history.appendBatch([{
+        invocationId: `canonical-recovery-invocation-${outcome}`, turnId: `canonical-recovery-turn-${outcome}`, sequence: 1, schemaVersion: 1,
+        eventId: `canonical-recovery-context-${outcome}`, idempotencyKey: `canonical-recovery-context-${outcome}`,
+        kind: 'invocation-context-committed',
+        payload: { messages: [
+          { id: `canonical-recovery-user-${outcome}`, role: 'user', content: 'accepted input', timestamp: 1 },
+          { id: `canonical-recovery-assistant-${outcome}`, role: 'assistant', content: 'canonical answer', timestamp: 2 }
+        ] }
+      }], 0)
+      conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
+
+      expect(recoverPersistedTurn(db, `canonical-recovery-turn-${outcome}`, `canonical-recovery-assistant-${outcome}`, {
+        outcome, ...(outcome === 'completed' ? { completed: true } : {})
+      })).toBe(true)
+
+      expect(getMessage(db, `canonical-recovery-assistant-${outcome}`)).toMatchObject({
+        content: '', status: outcome === 'completed' ? 'completed' : outcome === 'cancelled' ? 'cancelled' : 'failed',
+        toolCalls: [{ id: 'tool-done', status: 'completed' }]
+      })
+      expect(getPersistedTurn(db, `canonical-recovery-turn-${outcome}`)).toMatchObject({ state: 'terminal', outcome })
+      expect(history.readCanonicalSessionTranscriptForShadow(session.id)).toMatchObject({ kind: 'matched', messages: [
+        { id: `canonical-recovery-user-${outcome}`, content: 'accepted input' },
+        { id: `canonical-recovery-assistant-${outcome}`, content: 'canonical answer' }
+      ] })
+      db.close()
+    }
+  )
 
   it.each(['calling', 'confirming', 'executing'] as const)('completed recovery refuses pending %s tool calls without partial writes', (status) => {
     const db = createMemoryAppDb()
@@ -575,6 +827,31 @@ describe('queue input receipts', () => {
 })
 
 describe('turn prepare and canonical History atomicity', () => {
+  it('rejects configuring a turn when the session generation or message revision changes during preparation', () => {
+    const db = createMemoryAppDb()
+    const sessionId = createSession(db, { name: 'turn-config-session-fence' }).id
+    appendMessage(db, { id: 'turn-config-fence-user', sessionId, role: 'user', content: 'before route', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'turn-config-fence-assistant', sessionId, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'turn-config-fence-turn', requestId: 'turn-config-fence-request', sessionId,
+      userMessageId: 'turn-config-fence-user', assistantMessageId: 'turn-config-fence-assistant', state: 'configuring' })
+    const snapshot = getSessionMessageRevisionSnapshot(db, sessionId)!
+    updateMessageContent(db, 'turn-config-fence-user', { content: 'edited while route awaited' })
+
+    expect(setPersistedTurnExecutionConfig(db, 'turn-config-fence-turn', { lane: 'desktop', model: 'deepseek-chat' }, '{}', {
+      ...snapshot
+    })).toBe(false)
+    expect(getPersistedTurn(db, 'turn-config-fence-turn')).toMatchObject({ state: 'configuring' })
+    expect(getPersistedTurn(db, 'turn-config-fence-turn')?.executionConfig).toBeUndefined()
+
+    createPersistedTurn(db, { turnId: 'turn-config-generation-fence', requestId: 'turn-config-generation-request', sessionId,
+      userMessageId: 'turn-config-fence-user', assistantMessageId: 'turn-config-fence-assistant', state: 'configuring' })
+    const generationSnapshot = getSessionMessageRevisionSnapshot(db, sessionId)!
+    getDbConnection(db).prepare('UPDATE sessions SET generation=? WHERE id=?').run('recreated-generation', sessionId)
+    expect(setPersistedTurnExecutionConfig(db, 'turn-config-generation-fence', { lane: 'desktop', model: 'deepseek-chat' }, '{}', generationSnapshot)).toBe(false)
+    expect(getPersistedTurn(db, 'turn-config-generation-fence')).toMatchObject({ state: 'configuring' })
+    db.close()
+  })
+
   it('commits the user input identity to the session-bound invocation History in the prepare transaction', async () => {
     const db = createMemoryAppDb()
     const sessionId = createSession(db, { name: 'atomic-history-success' }).id
@@ -775,13 +1052,14 @@ describe('queued and retry queries', () => {
     })
 
     expect(hasActiveTurn(db, sessionId)).toBe(true)
-    expect(setPersistedTurnExecutionConfig(db, 'configuring-turn', { lane: 'desktop', model: 'deepseek-chat' }, '{"frozen":true}')).toBe(true)
+    const snapshot = getSessionMessageRevisionSnapshot(db, sessionId)!
+    expect(setPersistedTurnExecutionConfig(db, 'configuring-turn', { lane: 'desktop', model: 'deepseek-chat' }, '{"frozen":true}', snapshot)).toBe(true)
     expect(getPersistedTurn(db, 'configuring-turn')).toMatchObject({
       state: 'prepared',
       intentFingerprint: '{"frozen":true}',
       executionConfig: { lane: 'desktop', model: 'deepseek-chat' }
     })
-    expect(setPersistedTurnExecutionConfig(db, 'configuring-turn', { lane: 'desktop', model: 'other' }, '{}')).toBe(false)
+    expect(setPersistedTurnExecutionConfig(db, 'configuring-turn', { lane: 'desktop', model: 'other' }, '{}', snapshot)).toBe(false)
   })
 
   it('配置失败只终结仍处于 configuring 的 turn，不能覆盖已完成的取消', () => {
@@ -919,6 +1197,9 @@ describe('getContextHistorySummaryBaseline', () => {
       true
     )
   })
+
+
+
 })
 
 describe('getSearchCorpusPage', () => {
@@ -1000,6 +1281,35 @@ describe('updateQueuedUserMessageContent', () => {
     expect(getSession(db, sessionId)?.preview).toBe('latest')
   })
 
+  it('queued 正文编辑后 preview 写入失败时回滚正文、fingerprint、revision 与资格 fence', () => {
+    const conn = getDbConnection(db)
+    const queued = enqueueQueuedUserMessage(db, { sessionId, requestId: 'edit-rollback-request', content: 'before' })
+    const generation = conn.prepare('SELECT generation FROM sessions WHERE id=?').get(sessionId) as { generation: string }
+    const beforeCutover = conn.prepare('SELECT message_revision FROM session_message_content_cutover WHERE session_id=?').get(sessionId) as { message_revision: number }
+    conn.prepare("UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?").run(sessionId)
+    conn.prepare('INSERT INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at) VALUES(?,?,1)')
+      .run(sessionId, generation.generation)
+    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
+      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version)
+      VALUES(?,?,?,1,1,'edit-rollback-watermark','edit-rollback-invocation',1,1)`).run(sessionId, generation.generation, beforeCutover.message_revision)
+    const originalFingerprint = getQueueInputReceipt(db, sessionId, 'edit-rollback-request')!.fingerprint
+    const originalPreview = getSession(db, sessionId)?.preview
+    const originalRevision = conn.prepare('SELECT message_revision FROM session_message_content_cutover WHERE session_id=?').get(sessionId) as { message_revision: number }
+    conn.exec(`CREATE TRIGGER reject_edit_preview BEFORE UPDATE OF preview ON sessions
+      WHEN NEW.id='${sessionId}' BEGIN SELECT RAISE(ABORT,'injected queued edit preview failure'); END`)
+
+    expect(() => updateQueuedUserMessageContent(db, { sessionId, messageId: queued.persisted.message.id, content: 'after' }))
+      .toThrow('injected queued edit preview failure')
+
+    expect(getMessage(db, queued.persisted.message.id)).toMatchObject({ content: 'before', status: 'queued' })
+    expect(getQueueInputReceipt(db, sessionId, 'edit-rollback-request')).toMatchObject({ fingerprint: originalFingerprint, state: 'queued' })
+    expect(getSession(db, sessionId)?.preview).toBe(originalPreview)
+    expect(conn.prepare('SELECT message_revision,api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(sessionId))
+      .toEqual({ message_revision: originalRevision.message_revision, api_read_mode: 'canonical' })
+    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility WHERE session_id=?').get(sessionId)).toBeDefined()
+    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').get(sessionId)).toBeDefined()
+  })
+
   it('编辑已 claim 的消息返回 message_not_queued 且内容不变', () => {
     const queued = enqueueQueuedUserMessage(db, { sessionId, requestId: 'edit-claimed', content: 'before' })
     claimQueuedTurnAtomically(db, { sessionId, userMessageId: queued.persisted.message.id, turnId: 'edit-turn', assistantMessageId: 'edit-assistant', requestId: 'edit-claimed' })
@@ -1074,5 +1384,91 @@ describe('listTurnErrorsByAssistantMessageIds', () => {
     expect(listTurnErrorsByAssistantMessageIds(db, [blank, real, real])).toEqual([
       { assistantMessageId: real, message: '真实原因' }
     ])
+  })
+})
+
+describe('canonical-backed session preview', () => {
+  it('recomputes preview through canonical History when queued messages move and the last assistant row is canonical-only', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'canonical preview reorder' })
+    appendMessage(db, { id: 'preview-reorder-user', sessionId: session.id, role: 'user', content: 'canonical question', timestamp: 1, status: 'sent' })
+    const first = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'preview-reorder-first', content: 'first queued' })
+    const second = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'preview-reorder-second', content: 'second queued' })
+    appendMessage(db, { id: 'preview-reorder-assistant', sessionId: session.id, role: 'assistant', content: 'canonical final answer', timestamp: 4, status: 'completed' })
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+    await history.appendBatch([{
+      invocationId: 'preview-reorder-invocation', turnId: 'preview-reorder-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'preview-reorder-context', idempotencyKey: 'preview-reorder-context', kind: 'invocation-context-committed',
+      payload: { messages: [
+        { id: 'preview-reorder-user', role: 'user', content: 'canonical question', timestamp: 1 },
+        { id: 'preview-reorder-assistant', role: 'assistant', content: 'canonical final answer', timestamp: 4 }
+      ] }
+    }], 0)
+    const conn = getDbConnection(db)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id IN ('preview-reorder-user','preview-reorder-assistant')").run()
+
+    expect(getSession(db, session.id)?.preview).toBe('canonical final answer')
+    expect(reorderQueuedUserMessages(db, { sessionId: session.id, messageIds: [second.persisted.message.id, first.persisted.message.id] })).toMatchObject({ ok: true })
+
+    expect(getSession(db, session.id)?.preview).toBe('canonical final answer')
+    db.close()
+  })
+
+  it('recomputes preview from canonical body after deleting the trailing queued message', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'canonical preview delete' })
+    appendMessage(db, { id: 'preview-canonical-user', sessionId: session.id, role: 'user', content: 'canonical question', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'preview-canonical-assistant', sessionId: session.id, role: 'assistant', content: 'canonical answer', timestamp: 2, status: 'completed' })
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+    await history.appendBatch([{
+      invocationId: 'preview-canonical-invocation', turnId: 'preview-canonical-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'preview-canonical-context', idempotencyKey: 'preview-canonical-context', kind: 'invocation-context-committed',
+      payload: { messages: [
+        { id: 'preview-canonical-user', role: 'user', content: 'canonical question', timestamp: 1 },
+        { id: 'preview-canonical-assistant', role: 'assistant', content: 'canonical answer', timestamp: 2 }
+      ] }
+    }], 0)
+    const conn = getDbConnection(db)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
+    const queued = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'preview-queued-request', content: 'queued preview' })
+
+    expect(deleteQueuedUserMessage(db, queued.persisted.message.id)).toEqual({ ok: true, sessionId: session.id })
+    expect(getSession(db, session.id)?.preview).toBe('canonical answer')
+    db.close()
+  })
+
+  it('canonical preview 解析失败时回滚队列删除、receipt 和 preview', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'canonical preview rollback' })
+    appendMessage(db, { id: 'preview-rollback-user', sessionId: session.id, role: 'user', content: 'canonical question', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'preview-rollback-assistant', sessionId: session.id, role: 'assistant', content: 'canonical answer', timestamp: 2, status: 'completed' })
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+    await history.appendBatch([
+      { invocationId: 'preview-rollback-invocation', turnId: 'preview-rollback-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'preview-rollback-context', idempotencyKey: 'preview-rollback-context', kind: 'invocation-context-committed',
+        payload: { messages: [
+          { id: 'preview-rollback-user', role: 'user', content: 'canonical question', timestamp: 1 },
+          { id: 'preview-rollback-assistant', role: 'assistant', content: 'canonical answer', timestamp: 2 }
+        ] } },
+      { invocationId: 'preview-rollback-invocation', turnId: 'preview-rollback-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'preview-rollback-terminal', idempotencyKey: 'preview-rollback-terminal', kind: 'invocation-completed', payload: { status: 'completed' } }
+    ], 0)
+    const conn = getDbConnection(db)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
+    const queued = enqueueQueuedUserMessage(db, { sessionId: session.id, requestId: 'preview-rollback-request', content: 'queued preview' })
+    conn.prepare('UPDATE agent_history_events SET payload_json=? WHERE event_id=?').run('{broken', 'preview-rollback-context')
+    const beforePreview = getSession(db, session.id)?.preview
+
+    expect(() => deleteQueuedUserMessage(db, queued.persisted.message.id)).toThrow()
+
+    expect(getMessage(db, queued.persisted.message.id)).toMatchObject({ content: 'queued preview', status: 'queued' })
+    expect(getQueueInputReceipt(db, session.id, 'preview-rollback-request')).toMatchObject({ state: 'queued', queuedMessageId: queued.persisted.message.id })
+    expect(getSession(db, session.id)?.preview).toBe(beforePreview)
+    expect(conn.prepare('SELECT id FROM messages WHERE session_id=? ORDER BY sequence').all(session.id).map(({ id }) => id))
+      .toEqual(['preview-rollback-user', 'preview-rollback-assistant', queued.persisted.message.id])
+    db.close()
   })
 })

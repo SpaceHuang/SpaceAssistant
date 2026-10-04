@@ -17,16 +17,18 @@ import { TurnStarted } from '../../src/shared/turnCoordinator'
 import { getDbConnection } from '../database'
 import { WikiStatus } from '../../src/shared/domainTypes'
 import { app, shell } from 'electron'
-import { appendMessage, createSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getApiContextBaseline, getContextHistorySummaryBaseline, getSearchCorpusPage, getConfigValue, getMessageSequence, getMessage, getMessages, getRecentTurnRoutingMessages, hasVisionInTurnRoutingContext, getNextQueuedMessage, reorderQueuedUserMessages, getSession, getTurnByRequestId, getPersistedTurn, setPersistedTurnExecutionConfig, failConfiguringTurn, listPersistedTurns, listTurnErrorsByAssistantMessageIds, resolveRetryContext, setConfigValue, updateMessageContent, updateQueuedUserMessageContent, updateSession } from '../database'
+import { appendMessage, createSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getContextHistorySummaryBaseline, getConfigValue, getMessageSequence, getMessage, getMessages, hasVisionInTurnRoutingContext, getNextQueuedMessage, reorderQueuedUserMessages, getSession, getSessionMessageRevisionSnapshot, getTurnByRequestId, getPersistedTurn, setPersistedTurnExecutionConfig, failConfiguringTurn, listPersistedTurns, listTurnErrorsByAssistantMessageIds, setConfigValue, updateMessageContent, updateQueuedUserMessageContent, updateSession } from '../database'
 import { canonicalQueueInput } from '../../src/shared/queueInputFingerprint'
 import { clampMaxParallelChatSessions } from '../../src/shared/chatParallelConfig'
 import { classifyWikiPath } from '../wiki/wikiPaths'
 import { createAnthropicClient } from '../anthropicClientFactory'
+import { writeCanonicalBackedMessageContent } from '../runtime/sessionContentWriteAuthority'
+import { getProjectedApiContextBaseline, getProjectedMessage, getProjectedRecentTurnRoutingMessages, getProjectedSearchCorpusPage, resolveProjectedRetryContext } from '../runtime/sessionTranscriptProjection'
 import { createOutboundAcceptor, createOutboundDrainer, computeContextPressureWarnings } from '../outbound/outboundAcceptor'
 import { createSkillHintSystemMessage } from '../../src/shared/skillHintRecords'
 import { createSkillManager } from '../skills/skillManager'
 import { createTurnCoordinatorStorage } from '../turnCoordinatorStorage'
-import { reconcileStartupSessionTranscripts, recoverTurnCoordinatorForStartup } from '../runtime/sessionTranscriptStartup'
+import { reconcileStartupSessionTranscripts, recoverTurnCoordinatorForStartup, restorePersistedTurnSnapshotsForStartup } from '../runtime/sessionTranscriptStartup'
 import { decodeChildOutput } from '../processOutput/decodeChildOutput'
 import { discardStagedImage, readStagedImage, stageChatImage } from '../chatAttachmentManager'
 import { ensureSkillsDirs, getProjectSkillsDir, getUserSkillsDir } from '../skills/skillPaths'
@@ -40,6 +42,8 @@ import { logAgentEvent } from '../agentLogger/agentLogger'
 import { makeRecordTrustToCache } from './ipcShared'
 import { normalizeSessionSkillsState } from '../../src/shared/domainTypes'
 import { normalizeTurnExecutionConfig } from '../../src/shared/turnCoordinator'
+import { shadowTurnRoutingInput } from '../runtime/sessionStorageShadow'
+import { isCanonicalApiReadFenceCurrent, readCanonicalTurnRoutingInputWithFenceIfEligible, type CanonicalApiReadFence } from '../runtime/sessionStorageCutover'
 import { notifyFileTreeChanged } from '../fileTreeSyncNotify'
 import { createHash, randomUUID } from 'node:crypto'
 import { readActiveLlmServiceId, readLlmServices, resolveFastPreferredModelName, resolveLanguagePreferredModelName, resolveLlmCredentialsForModel } from '../llmServiceResolver'
@@ -203,14 +207,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
 
   if (ctx.turnRuntime) {
     const turnCoordinatorRecovery = recoverTurnCoordinatorForStartup(ctx.db, () => {
-      if (typeof listPersistedTurns === 'function') {
-        for (const state of ['configuring', 'prepared', 'executing', 'waiting-confirm']) {
-          for (const persisted of listPersistedTurns(ctx.db, state)) {
-            const assistant = getMessage(ctx.db, persisted.assistantMessageId)
-            if (assistant) turnCoordinator.restoreTurn(persisted, assistant)
-          }
-        }
-      }
+      restorePersistedTurnSnapshotsForStartup(ctx.db, (persisted, assistant) => turnCoordinator.restoreTurn(persisted, assistant))
       turnCoordinator.recover()
     })
     turnStartupRecoverySucceeded = turnCoordinatorRecovery.succeeded
@@ -554,7 +551,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
 
   ipcMain.handle(
     'chat:get-api-context-baseline',
-    (_e, payload: { sessionId: string }) => getApiContextBaseline(ctx.db, payload.sessionId)
+    (_e, payload: { sessionId: string }) => getProjectedApiContextBaseline(ctx.db, payload.sessionId)
   )
 
   ipcMain.handle(
@@ -583,7 +580,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       _e,
       payload: { sessionId: string; fromSequence?: number; limit?: number }
     ) =>
-      getSearchCorpusPage(ctx.db, payload.sessionId, payload.fromSequence ?? 0, payload.limit)
+      getProjectedSearchCorpusPage(ctx.db, payload.sessionId, payload.fromSequence ?? 0, payload.limit)
   )
 
   ipcMain.handle('chat:get-next-queued-message', (_e, payload: { sessionId: string }) =>
@@ -597,7 +594,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   ipcMain.handle(
     'chat:resolve-retry-context',
     (_e, payload: { sessionId: string; failedAssistantMessageId: string }) =>
-      resolveRetryContext(ctx.db, payload.sessionId, payload.failedAssistantMessageId)
+      resolveProjectedRetryContext(ctx.db, payload.sessionId, payload.failedAssistantMessageId)
   )
 
   registerAgentContinuationIpc(ipcMain, {
@@ -648,8 +645,10 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         if (!persisted?.userMessageId) throw new Error('TURN_PREPARE_PERSISTENCE_MISSING')
         const session = getSession(ctx.db, intent.sessionId)
         if (!session) throw new Error('TURN_SESSION_NOT_FOUND')
+        const sessionMessageSnapshot = getSessionMessageRevisionSnapshot(ctx.db, intent.sessionId)
+        if (!sessionMessageSnapshot) throw new Error('TURN_SESSION_NOT_FOUND')
         const reusedUserMessage = intent.mode === 'reuse-user'
-          ? getMessage(ctx.db, intent.userMessageId)
+          ? getProjectedMessage(ctx.db, intent.userMessageId)
           : undefined
         const userInput = intent.mode === 'create-user' ? intent.input.text : reusedUserMessage?.content
         if (userInput == null) throw new Error('TURN_USER_MESSAGE_MISSING')
@@ -667,14 +666,14 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
           { requiresVision }
         )
         const credentials = await resolveLlmCredentialsForModel(ctx.db, baseConfig.model!, { serviceId: baseConfig.llmServiceId })
-        const recentMessages: SkillRouteRecentMessage[] = getRecentTurnRoutingMessages(
+        const recentMessages: SkillRouteRecentMessage[] = getProjectedRecentTurnRoutingMessages(
           ctx.db,
           intent.sessionId,
           50,
           persisted.contextBoundarySequence,
           excludeMessageIds
         )
-        const route = await skillManager.route({
+        const routeInput = {
           userInput,
           sessionState: normalizeSessionSkillsState(session.skillsState),
           sessionMetadata: session.metadata,
@@ -684,7 +683,39 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
           getApiKey: credentials.getApiKey,
           sessionId: intent.sessionId,
           signal: controller.signal
-        })
+        }
+        try {
+          shadowTurnRoutingInput(ctx.db, {
+            sessionId: intent.sessionId,
+            mode: intent.mode,
+            ...(intent.mode === 'reuse-user' ? { reuseUserMessageId: intent.userMessageId } : {}),
+            routeInput,
+            boundarySequence: persisted.contextBoundarySequence,
+            excludeMessageIds,
+            limit: 50
+          })
+        } catch { /* Canonical side reads never control the live turn route. */ }
+        let effectiveRouteInput = routeInput
+        let canonicalRouteFence: CanonicalApiReadFence | undefined
+        try {
+          const canonicalRouteRead = readCanonicalTurnRoutingInputWithFenceIfEligible(ctx.db, {
+            sessionId: intent.sessionId,
+            mode: intent.mode,
+            ...(intent.mode === 'reuse-user' ? { reuseUserMessageId: intent.userMessageId } : {}),
+            routeInput,
+            boundarySequence: persisted.contextBoundarySequence,
+            excludeMessageIds,
+            limit: 50
+          })
+          if (canonicalRouteRead) {
+            effectiveRouteInput = canonicalRouteRead.routeInput
+            canonicalRouteFence = canonicalRouteRead.fence
+          }
+        } catch { /* A still complete legacy input remains the rollback path in Phase 5.3. */ }
+        const route = await skillManager.route(effectiveRouteInput)
+        if (canonicalRouteFence && !isCanonicalApiReadFenceCurrent(ctx.db, intent.sessionId, canonicalRouteFence)) {
+          throw new Error('TURN_CONTEXT_CHANGED_DURING_PREPARATION')
+        }
         const skillFragments = route.skills.map((skill) => `## Skill: ${skill.meta.name}\n\n${skill.content.trim()}`)
         let system: string | undefined
         if (route.skills.some((skill) => skill.meta.name === 'llm-wiki')) {
@@ -704,7 +735,9 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
           excludeMessageIds: [...excludeMessageIds].sort(),
           config: normalizeTurnExecutionConfig(config)
         })
-        if (!setPersistedTurnExecutionConfig(ctx.db, started.turnId, config, intentFingerprint)) throw new Error('TURN_EXECUTION_CONFIG_NOT_PREPARED')
+        if (!setPersistedTurnExecutionConfig(ctx.db, started.turnId, config, intentFingerprint, sessionMessageSnapshot)) {
+          throw new Error('TURN_CONTEXT_CHANGED_DURING_PREPARATION')
+        }
         const { executionConfig: _executionConfig, ...prepared } = started
         return prepared
       } catch (error) {
@@ -971,7 +1004,22 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         >
       >
     } & { sessionId: string }): Promise<{ message: Message; sequence: number } | null> => {
-      const entry = updateMessageContent(ctx.db, payload.messageId, payload.patch)
+      const conn = getDbConnection(ctx.db)
+      const storage = conn.prepare('SELECT content_storage_state FROM messages WHERE id=? AND session_id=?')
+        .get(payload.messageId, payload.sessionId) as { content_storage_state: string } | undefined
+      let entry
+      if (storage?.content_storage_state === 'canonical-backed-dual-write' && payload.patch.content !== undefined) {
+        if (Object.keys(payload.patch).some((key) => key !== 'content')) {
+          throw new Error('canonical-backed message content must be edited as a content-only patch')
+        }
+        const committed = await writeCanonicalBackedMessageContent(ctx.db, payload.messageId, payload.patch.content)
+        if (!committed) throw new Error('canonical-backed message edit could not be committed')
+        const message = getProjectedMessage(ctx.db, payload.messageId)
+        const sequence = getMessageSequence(ctx.db, payload.sessionId, payload.messageId)
+        if (message && sequence !== null) entry = { message, sequence }
+      } else {
+        entry = updateMessageContent(ctx.db, payload.messageId, payload.patch)
+      }
       if (!entry) return null
       await backupAfterMessagePatch(ctx, payload.sessionId, payload.patch)
       return entry

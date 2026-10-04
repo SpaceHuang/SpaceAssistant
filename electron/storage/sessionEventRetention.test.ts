@@ -227,6 +227,8 @@ describe('sessionEventRetention(归位 Storage,偏差 24)', () => {
       invocationId: 'retention-invocation', turnId: 'retention-turn', sequence: 1, schemaVersion: 1,
       eventId: 'retention-context', idempotencyKey: 'retention-context', kind: 'invocation-context-committed', payload: { messages }
     }], 0)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id='old'").run()
+    conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id='retention-user'").run()
     let prepareProjection = createCanonicalSessionProjectionRetentionPreparer(db)
     let simulateCrashAfterProjectionCommit = true
     const interrupted = await runSessionEventRetentionMaintenance(db, [root], {

@@ -16,7 +16,8 @@ import {
   estimateTokensFromImageAttachments,
   resolveEffectiveMaximumContext
 } from '../../src/shared/contextUsageEstimate'
-import { getMessages, getSession, getSessionUsage, enqueueQueuedUserMessage, type AppDatabase } from '../database'
+import { getSession, getSessionUsage, enqueueQueuedUserMessage, type AppDatabase } from '../database'
+import { getMessageSkeletons } from '../database/operations'
 import { readStoredModels } from '../llmServiceResolver'
 
 /** 出站受理时的主进程状态快照（全部由主进程权威源构建，渲染端不再提供其中任何一项） */
@@ -214,7 +215,7 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
     wikiImportRaw: deps.wikiImportRaw
   }
 
-  const countQueued = (sessionId: string): number => countQueuedUserMessages(getMessages(deps.db, sessionId), sessionId)
+  const countQueued = (sessionId: string): number => countQueuedUserMessages(getMessageSkeletons(deps.db, sessionId), sessionId)
 
   /** 排队落库（v2-B4 降级与 enqueue 决定共用）：幂等凭证、附件兜底、落库后补触发（v2-B3） */
   async function enqueueDecision(
@@ -419,7 +420,7 @@ export function computeContextPressureWarnings(
 ): string[] {
   const session = getSession(db, sessionId)
   if (!session) return []
-  const messages = getMessages(db, sessionId)
+  const messages = getMessageSkeletons(db, sessionId)
   const usage = getSessionUsage(db, sessionId)
   const lastAssistantThinking = [...messages]
     .reverse()

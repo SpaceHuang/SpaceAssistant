@@ -5,8 +5,8 @@ import { readSessionEvents, type SessionRecoveryFailure } from '../sessionEvents
 import { resolveRetentionPolicyFromDb, type RetentionPolicy } from './retentionPolicy'
 import type { AppDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
-import { getMessages } from '../database/operations'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
+import { getProjectedMessages } from '../runtime/sessionTranscriptProjection'
 
 /**
  * 会话事件台账保留期(S3,偏差 24):自 sessionEvents.ts(Core 文件)归位 Storage。
@@ -34,7 +34,7 @@ export function createCanonicalSessionProjectionRetentionPreparer(db: AppDatabas
   return async (sessionName) => {
     const sessionId = /^(.*)-\d{8}$/.exec(sessionName)?.[1]
     if (!sessionId) return
-    const messages = getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
+    const messages = getProjectedMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
     if (messages.length === 0 || messages.some(({ role }) => role !== 'user' && role !== 'assistant')) return
     const legacyMessages = messages.map(({ id, role, content, timestamp, thinking, contentSegments, toolCalls, toolUse, attachments,
       imagesDeliveredToApi, skillHints }) => ({

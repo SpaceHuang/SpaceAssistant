@@ -14,7 +14,8 @@ import { WikiConfig, FeishuConfig } from '../../src/shared/domainTypes'
 import { WorkDirManager } from '../workDirManager'
 import { app, shell } from 'electron'
 import { detectLocaleFromSystem, isAppLocale } from '../../src/shared/locale'
-import { getConfigValue, getMessagesPage, getSession, listSessions, setConfigValue, deleteConfigValue, updateSession } from '../database'
+import { getConfigValue, getSession, listSessions, setConfigValue, deleteConfigValue, updateSession } from '../database'
+import { getProjectedMessagesPageWithSequence } from '../runtime/sessionTranscriptProjection'
 import { getMainWindow } from '../windowRef'
 import { getSecurityAuditLog } from '../confirmation/audit'
 import { hasPlanMetadataKeys, stripPlanFieldsFromSessionMetadata } from '../../src/shared/planTypes'
@@ -209,7 +210,10 @@ export function readWikiConfig(db: AppDatabase): WikiConfig {
 /** 按 sequence 游标分页读取，不受固定条数上限约束，避免大会话导出被静默截断 */
 
 export function backupPageReader(ctx: AppIpcContext, sessionId: string): MessagePageReader {
-  return (afterSequence, pageSize) => getMessagesPage(ctx.db, sessionId, afterSequence, pageSize)
+  return (afterSequence, pageSize) => {
+    const page = getProjectedMessagesPageWithSequence(ctx.db, sessionId, afterSequence, pageSize)
+    return { messages: page.rows.map(({ message }) => message), nextSequence: page.nextSequence }
+  }
 }
 
 export function loadBackupPayload(ctx: AppIpcContext, sessionId: string) {

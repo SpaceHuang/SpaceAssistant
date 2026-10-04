@@ -8,6 +8,7 @@ import type { AppLocale } from '../src/shared/locale'
 import { SESSION_TITLE_MAX_LENGTH } from '../src/shared/sessionDisplay'
 import { updateSession, getSession, getMessages, type AppDatabase } from './database'
 import { logHistoryOversizedToolResult } from './oversizedToolResultLog'
+import { getProjectedMessages } from './runtime/sessionTranscriptProjection'
 
 export const SESSION_META_TITLE_GENERATED = 'titleGenerated'
 export const SESSION_META_TITLE_USER_CUSTOM = 'titleUserCustom'
@@ -207,7 +208,7 @@ export function scheduleSessionTitleOpenBackfillIfNeeded(args: {
   if (session.metadata?.[SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED] === true) return undefined
   if (inFlightSessionIds.has(sessionId)) return undefined
 
-  const rowMessages = getMessages(db, sessionId, 10_000, 0)
+  const rowMessages = getProjectedMessages(db, sessionId, 10_000, 0)
   if (countCompletedAssistantMessagesForTitleSuggest(rowMessages) < TITLE_SUGGEST_TRIGGER_AT_ASSISTANT_TURN) {
     return undefined
   }

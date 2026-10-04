@@ -1,5 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
-import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, MIGRATION_V4_TABLES_SQL, MIGRATION_V5_TURN_TABLE_SQL, MIGRATION_V6_TURN_CHECKPOINT_SQL, MIGRATION_V7_QUEUE_RECEIPT_SQL, MIGRATION_V8_TURN_START_TOKEN_SQL, MIGRATION_V9_TURN_RECOVERY_FIELDS_SQL, MIGRATION_V10_TURN_TERMINAL_USAGE_SQL, MIGRATION_V11_TURN_CONTEXT_SQL, MIGRATION_V12_TURN_EXECUTION_CONFIG_SQL, MIGRATION_V13_TURN_ROUTING_INDEXES_SQL, MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL, MIGRATION_V15_BUTLER_TABLES_SQL, MIGRATION_V16_USAGE_STATS_SQL, MIGRATION_V17_SESSION_THINKING_EFFORT_SQL, MIGRATION_V18_CONFIRMATION_COMMIT_IDENTITY_SQL, MIGRATION_V19_AGENT_HISTORY_SQL, MIGRATION_V20_AGENT_HISTORY_SESSION_SQL, MIGRATION_V21_AGENT_HISTORY_SESSION_BACKFILL_SQL, MIGRATION_V22_TURN_INPUT_HISTORY_VERSION_SQL, MIGRATION_V23_DRIVER_DELIVERY_SQL, MIGRATION_V24_SESSION_TRANSCRIPT_SQL, MIGRATION_V25_SESSION_EXECUTION_QUEUE_SQL, MIGRATION_V26_SESSION_TRANSCRIPT_RECONCILIATION_SQL, MIGRATION_V27_ACCEPTED_TURN_CONTEXT_SQL, MIGRATION_V28_USAGE_ATTRIBUTION_SQL, MIGRATION_V29_CONTINUATIONS_SQL, MIGRATION_V30_CONTINUATION_START_TOKEN_SQL, MIGRATION_V31_CANONICAL_PROJECTION_REPAIRS_SQL, MIGRATION_V32_AGENT_HISTORY_CURSOR_TABLES_SQL, MIGRATION_V32_AGENT_HISTORY_SESSION_ORDER_SQL, MIGRATION_V33_SESSION_GENERATION_SQL, MIGRATION_V34_CANONICAL_SESSION_CACHE_VERSION_SQL, MIGRATION_V35_SESSION_TURN_COMMIT_RECEIPTS_SQL, MIGRATION_V36_SESSION_TRANSCRIPT_COMMIT_STATE_SQL, MIGRATION_V37_SESSION_PROJECTION_ELIGIBILITY_SQL, SCHEMA_META_KEYS } from './schema'
+import { CREATE_TABLES_SQL, DB_SCHEMA_VERSION, MIGRATION_V4_TABLES_SQL, MIGRATION_V5_TURN_TABLE_SQL, MIGRATION_V6_TURN_CHECKPOINT_SQL, MIGRATION_V7_QUEUE_RECEIPT_SQL, MIGRATION_V8_TURN_START_TOKEN_SQL, MIGRATION_V9_TURN_RECOVERY_FIELDS_SQL, MIGRATION_V10_TURN_TERMINAL_USAGE_SQL, MIGRATION_V11_TURN_CONTEXT_SQL, MIGRATION_V12_TURN_EXECUTION_CONFIG_SQL, MIGRATION_V13_TURN_ROUTING_INDEXES_SQL, MIGRATION_V14_SESSION_OWNERSHIP_BACKFILL_SQL, MIGRATION_V15_BUTLER_TABLES_SQL, MIGRATION_V16_USAGE_STATS_SQL, MIGRATION_V17_SESSION_THINKING_EFFORT_SQL, MIGRATION_V18_CONFIRMATION_COMMIT_IDENTITY_SQL, MIGRATION_V19_AGENT_HISTORY_SQL, MIGRATION_V20_AGENT_HISTORY_SESSION_SQL, MIGRATION_V21_AGENT_HISTORY_SESSION_BACKFILL_SQL, MIGRATION_V22_TURN_INPUT_HISTORY_VERSION_SQL, MIGRATION_V23_DRIVER_DELIVERY_SQL, MIGRATION_V24_SESSION_TRANSCRIPT_SQL, MIGRATION_V25_SESSION_EXECUTION_QUEUE_SQL, MIGRATION_V26_SESSION_TRANSCRIPT_RECONCILIATION_SQL, MIGRATION_V27_ACCEPTED_TURN_CONTEXT_SQL, MIGRATION_V28_USAGE_ATTRIBUTION_SQL, MIGRATION_V29_CONTINUATIONS_SQL, MIGRATION_V30_CONTINUATION_START_TOKEN_SQL, MIGRATION_V31_CANONICAL_PROJECTION_REPAIRS_SQL, MIGRATION_V32_AGENT_HISTORY_CURSOR_TABLES_SQL, MIGRATION_V32_AGENT_HISTORY_SESSION_ORDER_SQL, MIGRATION_V33_SESSION_GENERATION_SQL, MIGRATION_V34_CANONICAL_SESSION_CACHE_VERSION_SQL, MIGRATION_V35_SESSION_TURN_COMMIT_RECEIPTS_SQL, MIGRATION_V36_SESSION_TRANSCRIPT_COMMIT_STATE_SQL, MIGRATION_V37_SESSION_PROJECTION_ELIGIBILITY_SQL, MIGRATION_V38_SESSION_CONTENT_CUTOVER_SQL, MIGRATION_V39_SOURCE_TRUTH_SPILL_GC_SQL, MIGRATION_V40_SOURCE_TRUTH_SPILL_GC_SCAN_SQL, MIGRATION_V41_CANONICAL_HISTORY_API_ELIGIBILITY_SQL, MIGRATION_V42_CANONICAL_TRANSCRIPT_CACHE_INVALIDATION_SQL, MIGRATION_V43_CANONICAL_TRANSCRIPT_CACHE_CHECKSUM_SQL, MIGRATION_V44_SESSION_CONTENT_WRITE_STOPPED_STATE_SQL, MIGRATION_V45_SESSION_CONTENT_COMPLETE_LEDGER_SQL, MIGRATION_V46_CANONICAL_ONLY_MESSAGE_CONTENT_IMMUTABLE_SQL, MIGRATION_V46_HISTORY_CURSOR_INVALIDATION_SQL, MIGRATION_V46_HISTORY_CURSOR_INVALIDATION_TRIGGERS_SQL, SCHEMA_META_KEYS } from './schema'
 import { runInTransaction } from './transaction'
 
 export class DatabaseUpgradeRequiredError extends Error {
@@ -33,6 +33,19 @@ export function runMigrations(conn: DatabaseSync): void {
   if (version > DB_SCHEMA_VERSION) {
     throw new DatabaseUpgradeRequiredError(version)
   }
+  const replayedV46Triggers = version < 46
+    ? (conn.prepare(`SELECT name FROM sqlite_master WHERE type='trigger' AND name IN (
+        'track_pending_history_cursor_allocation','settle_pending_history_cursor_allocation',
+        'invalidate_session_projections_after_history_cursor_update','invalidate_session_projections_after_history_cursor_delete'
+      )`).all() as Array<{ name: string }>).map(({ name }) => name)
+    : []
+  if (replayedV46Triggers.length > 0) {
+    conn.exec(`DROP TRIGGER IF EXISTS track_pending_history_cursor_allocation;
+      DROP TRIGGER IF EXISTS settle_pending_history_cursor_allocation;
+      DROP TRIGGER IF EXISTS invalidate_session_projections_after_history_cursor_update;
+      DROP TRIGGER IF EXISTS invalidate_session_projections_after_history_cursor_delete;`)
+  }
+  try {
   if (version === 1) runInTransaction(conn, () => {
     conn.exec(CREATE_TABLES_SQL)
     version = 3
@@ -332,4 +345,91 @@ export function runMigrations(conn: DatabaseSync): void {
     version = 37
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
+  if (version === 37) runInTransaction(conn, () => {
+    const hasSessions = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'").get() !== undefined
+    const hasMessages = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'").get() !== undefined
+    if (hasSessions && hasMessages) {
+      const messageColumns = conn.prepare('PRAGMA table_info(messages)').all() as Array<{ name: string }>
+      if (!messageColumns.some((column) => column.name === 'content_storage_state')) {
+        conn.exec("ALTER TABLE messages ADD COLUMN content_storage_state TEXT NOT NULL DEFAULT 'legacy' CHECK(content_storage_state IN ('legacy','canonical-backed-dual-write','canonical-backed-only'))")
+      }
+      conn.exec(MIGRATION_V38_SESSION_CONTENT_CUTOVER_SQL)
+    }
+    version = 38
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 38) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V39_SOURCE_TRUTH_SPILL_GC_SQL)
+    version = 39
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 39) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V40_SOURCE_TRUTH_SPILL_GC_SCAN_SQL)
+    version = 40
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 40) runInTransaction(conn, () => {
+    const hasHistory = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_history_events'").get() !== undefined
+    const hasCutover = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_message_content_cutover'").get() !== undefined
+    if (hasHistory && hasCutover) conn.exec(MIGRATION_V41_CANONICAL_HISTORY_API_ELIGIBILITY_SQL)
+    version = 41
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 41) runInTransaction(conn, () => {
+    const hasHistory = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_history_events'").get() !== undefined
+    const hasCache = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='canonical_session_projection_cache'").get() !== undefined
+    if (hasHistory && hasCache) conn.exec(MIGRATION_V42_CANONICAL_TRANSCRIPT_CACHE_INVALIDATION_SQL)
+    version = 42
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 42) runInTransaction(conn, () => {
+    const hasCache = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='canonical_session_projection_cache'").get() !== undefined
+    if (hasCache) {
+      const columns = conn.prepare('PRAGMA table_info(canonical_session_projection_cache)').all() as Array<{ name: string }>
+      if (!columns.some(({ name }) => name === 'value_sha256')) conn.exec(MIGRATION_V43_CANONICAL_TRANSCRIPT_CACHE_CHECKSUM_SQL)
+      conn.exec('DELETE FROM canonical_session_projection_cache')
+    }
+    version = 43
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 43) runInTransaction(conn, () => {
+    const hasCutover = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_message_content_cutover'").get() !== undefined
+    const hasMessages = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'").get() !== undefined
+    const hasHistory = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_history_events'").get() !== undefined
+    const hasCache = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='canonical_session_projection_cache'").get() !== undefined
+    if (hasCutover && hasMessages && hasHistory && hasCache) conn.exec(MIGRATION_V44_SESSION_CONTENT_WRITE_STOPPED_STATE_SQL)
+    version = 44
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 44) runInTransaction(conn, () => {
+    const hasCutover = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_message_content_cutover'").get() !== undefined
+    const hasProgress = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_message_content_cleanup_progress'").get() !== undefined
+    if (hasCutover && hasProgress) conn.exec(MIGRATION_V45_SESSION_CONTENT_COMPLETE_LEDGER_SQL)
+    version = 45
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 45) runInTransaction(conn, () => {
+    const hasMessages = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'").get() !== undefined
+    if (hasMessages) conn.exec(MIGRATION_V46_CANONICAL_ONLY_MESSAGE_CONTENT_IMMUTABLE_SQL)
+    const hasHistoryCursor = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_history_commit_cursor'").get() !== undefined
+    const hasProjectionCache = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='canonical_session_projection_cache'").get() !== undefined
+    const hasProjectionEligibility = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='canonical_session_projection_eligibility'").get() !== undefined
+    const hasApiEligibility = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='canonical_session_api_context_eligibility'").get() !== undefined
+    const hasCutover = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_message_content_cutover'").get() !== undefined
+    if (hasHistoryCursor && hasProjectionCache && hasProjectionEligibility && hasApiEligibility && hasCutover) {
+      conn.exec(MIGRATION_V46_HISTORY_CURSOR_INVALIDATION_SQL)
+    }
+    version = 46
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  } catch (migrationError) {
+    if (replayedV46Triggers.length > 0) {
+      try {
+        conn.exec(MIGRATION_V46_HISTORY_CURSOR_INVALIDATION_TRIGGERS_SQL)
+      } catch (restoreError) {
+        throw new AggregateError([migrationError, restoreError], 'Migration replay failed and v46 History cursor triggers could not be restored')
+      }
+    }
+    throw migrationError
+  }
 }

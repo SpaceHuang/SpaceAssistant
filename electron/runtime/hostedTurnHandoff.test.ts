@@ -17,6 +17,7 @@ import { appendMessage, createSession, getDbConnection, openDatabase } from '../
 import { claimSessionExecution, commitSessionTranscript, readSessionTranscript, releaseSessionExecution } from '../database/sessionTranscript'
 import { reconcileStartupSessionTranscripts } from './sessionTranscriptStartup'
 import { queueInputFingerprint } from '../queueInputFingerprint'
+import { getProjectedMessage, readSessionTranscriptProjection } from './sessionTranscriptProjection'
 
 describe('createHostedTurnHandoff', () => {
   beforeEach(() => { mockRunHostedAgentTurn.mockReset(); mockLogAgentEvent.mockReset() })
@@ -222,7 +223,8 @@ describe('createHostedTurnHandoff', () => {
   })
 
   it('从纯 session-input + process-restart History 安全恢复已接受用户消息', async () => {
-    const db = createMemoryAppDb()
+    const temp = createTempDatabase('hosted-restart-canonical-only-')
+    let db = temp.db
     const session = createSession(db, { name: 'restart-recovery', model: 'model' })
     const earlierUser = appendMessage(db, {
       id: 'restart-earlier-user', sessionId: session.id, role: 'user', content: 'earlier completed request',
@@ -236,16 +238,19 @@ describe('createHostedTurnHandoff', () => {
       id: 'restart-accepted-user', sessionId: session.id, role: 'user', content: 'previous accepted request',
       timestamp: 10, status: 'sent'
     }).message
-    const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 1, session.id)
+    let history = new SqliteAgentHistory(getDbConnection(db), 1, () => 1, session.id)
     const acceptedTurnId = 'restart-interrupted-turn'
     const earlierTranscript = [
-      { role: 'user' as const, content: earlierUser.content, timestamp: earlierUser.timestamp },
-      { role: 'assistant' as const, content: earlierAssistant.content, timestamp: earlierAssistant.timestamp }
+      { id: earlierUser.id, role: 'user' as const, content: earlierUser.content, timestamp: earlierUser.timestamp },
+      { id: earlierAssistant.id, role: 'assistant' as const, content: earlierAssistant.content, timestamp: earlierAssistant.timestamp }
     ]
     await history.appendBatch([
       { invocationId: 'restart-earlier-history', turnId: 'restart-earlier-turn', sequence: 1, schemaVersion: 1,
         eventId: 'earlier-context', idempotencyKey: 'earlier-context', kind: 'invocation-context-committed',
-        payload: { messages: earlierTranscript } },
+        payload: { messages: [
+          ...earlierTranscript,
+          { id: prior.id, role: 'user', content: prior.content, timestamp: prior.timestamp }
+        ] } },
       { invocationId: 'restart-earlier-history', turnId: 'restart-earlier-turn', sequence: 2, schemaVersion: 1,
         eventId: 'earlier-completed', idempotencyKey: 'earlier-completed', kind: 'invocation-completed', payload: { status: 'completed' } }
     ], 0)
@@ -257,9 +262,29 @@ describe('createHostedTurnHandoff', () => {
         eventId: 'restart-terminal', idempotencyKey: 'restart-terminal', kind: 'invocation-interrupted',
         payload: { status: 'interrupted', reason: 'process-restart' } }
     ], 0)
+    let conn = getDbConnection(db)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
+    conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
+    expect(conn.prepare('SELECT content FROM messages WHERE id=?').get(prior.id)).toEqual({ content: '' })
+    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({
+      source: 'canonical:L2', messages: [
+        { id: earlierUser.id, content: earlierUser.content },
+        { id: earlierAssistant.id, content: earlierAssistant.content },
+        { id: prior.id, content: prior.content }
+      ]
+    })
+    expect(getProjectedMessage(db, prior.id)?.content).toBe(prior.content)
+    db.close()
+    db = openDatabase(temp.dbPath)
+    conn = getDbConnection(db)
+    history = new SqliteAgentHistory(conn, 1, () => 1, session.id)
+    expect(conn.prepare('SELECT content,content_storage_state FROM messages WHERE id=?').get(prior.id))
+      .toEqual({ content: '', content_storage_state: 'canonical-backed-only' })
+    expect(getProjectedMessage(db, prior.id)?.content).toBe(prior.content)
     const current = { role: 'user' as const, content: 'continue after restart' }
     const request = { messages: [{ role: 'system' as const, content: 'dynamic' }, ...earlierTranscript,
-      { role: 'user' as const, content: prior.content, timestamp: prior.timestamp }, current], maxTokens: 100 }
+      { id: prior.id, role: 'user' as const, content: prior.content, timestamp: prior.timestamp }, current], maxTokens: 100 }
     mockRunHostedAgentTurn.mockImplementationOnce(async ({ invocationId, request: hostedRequest }: {
       invocationId: string; request: { messages: unknown[] }
     }) => {
@@ -288,7 +313,40 @@ describe('createHostedTurnHandoff', () => {
     expect(readSessionTranscript(db, session.id)).toMatchObject({ version: 1, status: 'ready', messages: [
       ...earlierTranscript, { role: 'user', content: prior.content }, current, { role: 'assistant', content: 'done' }
     ] })
+    expect(conn.prepare('SELECT content FROM messages WHERE id=?').get(prior.id)).toEqual({ content: '' })
+
+    const nextUser = { role: 'user' as const, content: 'request ending in provider failure' }
+    const nextUserSkeleton = appendMessage(db, { id: 'restart-next-user', sessionId: session.id, role: 'user',
+      content: nextUser.content, timestamp: 20, status: 'sent' }).message
+    mockRunHostedAgentTurn.mockImplementationOnce(async ({ invocationId, request: hostedRequest }: {
+      invocationId: string; request: { messages: unknown[] }
+    }) => {
+      await history.appendBatch([
+        { invocationId, turnId: 'restart-failed-turn', sequence: 1, schemaVersion: 1,
+          eventId: 'restart-failed-context', idempotencyKey: 'restart-failed-context', kind: 'invocation-context-committed',
+          payload: { messages: hostedRequest.messages } },
+        { invocationId, turnId: 'restart-failed-turn', sequence: 2, schemaVersion: 1,
+          eventId: 'restart-failed-terminal', idempotencyKey: 'restart-failed-terminal', kind: 'invocation-failed',
+          payload: { status: 'failed', reason: 'provider-error' } }
+      ], 0)
+      throw new Error('provider failed')
+    })
+    const failedHandoff = createHostedTurnHandoff({
+      agentSdk: { createHostedTurnRuntime: vi.fn(() => ({ host: {}, dispose: async () => undefined })) },
+      history, invocationId: 'restart-failed-invocation', turnId: 'restart-failed-turn', routeId: 'route',
+      sessionId: session.id, sessionDb: db
+    })
+    await expect(failedHandoff({ request: { messages: [nextUser], maxTokens: 100 },
+      requiredUserMessage: { id: nextUserSkeleton.id, message: nextUser } }))
+      .rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'failed' })
+    expect(readSessionTranscript(db, session.id)).toMatchObject({ version: 2, status: 'ready', messages: [
+      ...earlierTranscript, { role: 'user', content: prior.content }, current,
+      { role: 'assistant', content: 'done' }, nextUser
+    ] })
+    expect(conn.prepare('SELECT content,content_storage_state FROM messages WHERE id=?').get(prior.id))
+      .toEqual({ content: '', content_storage_state: 'canonical-backed-only' })
     db.close()
+    temp.cleanup()
   })
 
   it('恢复旧 accepted input 时匹配重复文本的正确出现位置且不要求 API 消息带数据库时间戳', async () => {
@@ -490,6 +548,100 @@ describe('createHostedTurnHandoff', () => {
       .get(`matrix-session-${label}`)).toEqual({ outcome: expectedOutcome, messages_json: JSON.stringify([user]) })
     expect(readSessionTranscript(db, `matrix-session-${label}`)).toMatchObject({ version: 1, status: 'ready', messages: [user] })
     db.close()
+  })
+
+  it.each([
+    ['cancelled', { kind: 'invocation-interrupted', payload: { status: 'cancelled', reason: 'user-cancelled' } }, 'cancelled'],
+    ['timed_out', { kind: 'invocation-failed', payload: { status: 'failed', reason: 'timeout' } }, 'timed_out'],
+    ['interrupted', { kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'process-restart' } }, 'interrupted']
+  ] as const)('canonical-only reopen preserves Hosted %s terminal outcome and transcript', async (label, terminal, expectedOutcome) => {
+    const temp = createTempDatabase(`hosted-${label}-canonical-only-`)
+    let db = temp.db
+    const session = createSession(db, { name: `hosted ${label}`, model: 'model' })
+    const priorUserRow = appendMessage(db, { id: `hosted-${label}-prior-user`, sessionId: session.id, role: 'user',
+      content: 'prior canonical user', timestamp: 1, status: 'sent' }).message
+    const priorAssistantRow = appendMessage(db, { id: `hosted-${label}-prior-assistant`, sessionId: session.id, role: 'assistant',
+      content: 'prior canonical assistant', timestamp: 2, status: 'completed' }).message
+    const currentRow = appendMessage(db, { id: `hosted-${label}-current-user`, sessionId: session.id, role: 'user',
+      content: `current ${label}`, timestamp: 3, status: 'sent' }).message
+    const priorUser = { id: priorUserRow.id, role: 'user' as const, content: priorUserRow.content, timestamp: priorUserRow.timestamp }
+    const priorAssistant = { id: priorAssistantRow.id, role: 'assistant' as const, content: priorAssistantRow.content, timestamp: priorAssistantRow.timestamp }
+    const currentUser = { id: currentRow.id, role: 'user' as const, content: currentRow.content, timestamp: currentRow.timestamp }
+    let conn = getDbConnection(db)
+    let history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+    await history.appendBatch([
+      { invocationId: `hosted-${label}-prior`, turnId: `hosted-${label}-prior-turn`, sequence: 1, schemaVersion: 1,
+        eventId: `hosted-${label}-prior-context`, idempotencyKey: `hosted-${label}-prior-context`, kind: 'invocation-context-committed',
+        payload: { messages: [priorUser, priorAssistant] } },
+      { invocationId: `hosted-${label}-prior`, turnId: `hosted-${label}-prior-turn`, sequence: 2, schemaVersion: 1,
+        eventId: `hosted-${label}-prior-terminal`, idempotencyKey: `hosted-${label}-prior-terminal`, kind: 'invocation-completed',
+        payload: { status: 'completed' } }
+    ], 0)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id IN (?,?)").run(priorUserRow.id, priorAssistantRow.id)
+    conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
+    db.close()
+
+    db = openDatabase(temp.dbPath)
+    conn = getDbConnection(db)
+    history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+    const invocationId = `hosted-${label}-current`
+    const turnId = `hosted-${label}-current-turn`
+    const currentContext = { invocationId, turnId, sequence: 1, schemaVersion: 1,
+      eventId: `hosted-${label}-current-context`, idempotencyKey: `hosted-${label}-current-context`,
+      kind: 'invocation-context-committed', payload: { messages: [priorUser, priorAssistant, currentUser] } }
+    const currentTerminal = { invocationId, turnId, sequence: 2, schemaVersion: 1,
+      eventId: `hosted-${label}-current-terminal`, idempotencyKey: `hosted-${label}-current-terminal`,
+      kind: terminal.kind, payload: terminal.payload }
+    mockRunHostedAgentTurn.mockImplementationOnce(async () => {
+      await history.appendBatch([currentContext as never, currentTerminal as never], 0)
+      throw new Error(`${label} terminal`)
+    })
+    const handoff = createHostedTurnHandoff({
+      agentSdk: { createHostedTurnRuntime: () => ({ host: {}, dispose: async () => undefined }) },
+      history, invocationId, turnId, routeId: 'route', sessionId: session.id, sessionDb: db
+    })
+
+    await expect(handoff({ request: { messages: [priorUser, priorAssistant, currentUser] },
+      requiredUserMessage: { id: currentUser.id, message: currentUser } } as never))
+      .rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: expectedOutcome === 'timed_out' ? 'timed-out' : expectedOutcome })
+    expect(readSessionTranscript(db, session.id)).toMatchObject({ version: 1, status: 'ready', messages: [priorUser, priorAssistant, currentUser] })
+    expect(conn.prepare('SELECT content,content_storage_state FROM messages WHERE id=?').get(priorUserRow.id))
+      .toEqual({ content: '', content_storage_state: 'canonical-backed-only' })
+    expect(conn.prepare('SELECT content,content_storage_state FROM messages WHERE id=?').get(priorAssistantRow.id))
+      .toEqual({ content: '', content_storage_state: 'canonical-backed-only' })
+    db.close()
+    temp.cleanup()
+  })
+
+  it('fails closed when a canonical prior event is detached from its owning session', async () => {
+    const temp = createTempDatabase('hosted-detached-event-owner-')
+    const db = temp.db
+    const session = createSession(db, { name: 'detached event owner', model: 'model' })
+    const priorUser = { id: 'detached-prior-user', role: 'user' as const, content: 'prior canonical user', timestamp: 1 }
+    const priorAssistant = { id: 'detached-prior-assistant', role: 'assistant' as const, content: 'prior canonical assistant', timestamp: 2 }
+    const currentUser = { id: 'detached-current-user', role: 'user' as const, content: 'current user', timestamp: 3 }
+    const conn = getDbConnection(db)
+    const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+    await history.appendBatch([
+      { invocationId: 'detached-prior', turnId: 'detached-prior-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'detached-context', idempotencyKey: 'detached-context', kind: 'invocation-context-committed',
+        payload: { messages: [priorUser, priorAssistant] } },
+      { invocationId: 'detached-prior', turnId: 'detached-prior-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'detached-terminal', idempotencyKey: 'detached-terminal', kind: 'invocation-completed', payload: { status: 'completed' } }
+    ], 0)
+    conn.prepare("UPDATE agent_history_events SET session_id='foreign-session',session_seq=NULL,commit_order=NULL WHERE invocation_id='detached-prior' AND sequence=2").run()
+    const handoff = createHostedTurnHandoff({
+      agentSdk: { createHostedTurnRuntime: vi.fn(() => ({ host: {}, dispose: async () => undefined })) },
+      history, invocationId: 'detached-current', turnId: 'detached-current-turn', routeId: 'route', sessionId: session.id, sessionDb: db
+    })
+
+    await expect(handoff({ request: { messages: [priorUser, priorAssistant, currentUser] },
+      requiredUserMessage: { id: currentUser.id, message: currentUser } } as never))
+      .rejects.toThrow('Canonical session History could not safely provide the Hosted transcript')
+    expect(mockRunHostedAgentTurn).not.toHaveBeenCalled()
+    db.close()
+    temp.cleanup()
   })
 
   it.each([

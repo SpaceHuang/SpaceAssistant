@@ -527,6 +527,72 @@ describe('createTurnCoordinatorStorage', () => {
     })
   })
 
+  it('拒绝 owner 不匹配的 completed History terminal，避免恢复串 session 成功', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'history-session-owner-mismatch' })
+    const otherSession = createSession(db, { name: 'other-history-session-owner' })
+    const storage = createTurnCoordinatorStorage(db)
+    storage.prepareAtomic?.({
+      user: { id: 'session-owner-mismatch-user', sessionId: session.id, role: 'user', content: 'request', timestamp: 1, status: 'sent' },
+      assistant: { id: 'session-owner-mismatch-assistant', sessionId: session.id, role: 'assistant', content: 'partial', timestamp: 2, status: 'streaming' },
+      turn: { turnId: 'session-owner-mismatch-turn', requestId: 'session-owner-mismatch-request', sessionId: session.id,
+        userMessageId: 'session-owner-mismatch-user', assistantMessageId: 'session-owner-mismatch-assistant', state: 'executing' }
+    })
+    await new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id).appendBatch([
+      { invocationId: 'session-owner-mismatch-turn', turnId: 'session-owner-mismatch-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'session-owner-context', idempotencyKey: 'session-owner-context', kind: 'invocation-context-committed',
+        payload: { messages: [{ role: 'user', content: 'request' }], requiredUserMessage: { id: 'session-owner-mismatch-user', message: { role: 'user', content: 'request' } } } },
+      { invocationId: 'session-owner-mismatch-turn', turnId: 'session-owner-mismatch-turn', sequence: 3, schemaVersion: 1,
+        eventId: 'session-owner-completed', idempotencyKey: 'session-owner-completed', kind: 'invocation-completed',
+        payload: { status: 'completed', outputText: 'belongs to another session' } }
+    ], 1)
+    getDbConnection(db).prepare('UPDATE agent_history_events SET session_id=? WHERE event_id=?')
+      .run(otherSession.id, 'session-owner-completed')
+    const runtime = new TurnRuntime({ storage, deps: { now: () => 4, id: () => 'session-owner-mismatch-recovery' } })
+    const turn = listPersistedTurns(db, 'executing')[0]!
+    runtime.coordinator.restoreTurn(turn, storage.getMessage(turn.assistantMessageId)!)
+
+    expect(runtime.recover()).toBe(1)
+    expect(storage.findByRequestId(session.id, 'session-owner-mismatch-request')).toMatchObject({
+      persistedOutcome: 'recovered',
+      assistantMessage: { content: 'partial', status: 'failed' }
+    })
+    db.close()
+  })
+
+  it('canonical-only assistant 的 History 投影损坏时仍隔离当前 turn 并完成 startup recovery', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'canonical-only recovery projection corruption' })
+    const storage = createTurnCoordinatorStorage(db)
+    storage.appendMany?.([
+      { id: 'projection-corrupt-user', sessionId: session.id, role: 'user', content: 'request', timestamp: 1, status: 'sent' },
+      { id: 'projection-corrupt-assistant', sessionId: session.id, role: 'assistant', content: 'partial answer', timestamp: 2, status: 'streaming' }
+    ])
+    storage.saveTurn?.({
+      turnId: 'projection-corrupt-turn', requestId: 'projection-corrupt-request', sessionId: session.id,
+      userMessageId: 'projection-corrupt-user', assistantMessageId: 'projection-corrupt-assistant', state: 'executing'
+    })
+    await new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id).appendBatch([{
+      invocationId: 'projection-corrupt-turn', turnId: 'projection-corrupt-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'projection-corrupt-context', idempotencyKey: 'projection-corrupt-context', kind: 'invocation-context-committed',
+      payload: { messages: [
+        { id: 'projection-corrupt-user', role: 'user', content: 'request', timestamp: 1 },
+        { id: 'projection-corrupt-assistant', role: 'assistant', content: 'partial answer', timestamp: 2 }
+      ] }
+    }], 0)
+    const conn = getDbConnection(db)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
+    conn.prepare('UPDATE agent_history_events SET session_id=? WHERE event_id=?').run('foreign-session', 'projection-corrupt-context')
+
+    expect(storage.recoverTurn?.('projection-corrupt-turn', 'projection-corrupt-assistant')).toBe(true)
+    expect(getPersistedTurn(db, 'projection-corrupt-turn')).toMatchObject({ state: 'terminal', outcome: 'recovered' })
+    expect(getMessagesPage(db, session.id, 0, 10).messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'projection-corrupt-assistant', content: '', status: 'failed' })
+    ]))
+    db.close()
+  })
+
   it('malformed canonical tool proposal 不得被误判为无工具的 completed turn', async () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'history-malformed-tool-proposal' })
