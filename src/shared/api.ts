@@ -173,6 +173,11 @@ export type TurnExecutePayload = {
 export type SpaceAssistantApi = {
   ping: () => Promise<string>
 
+  storageGetProfile: () => Promise<Record<string, unknown>>
+  storageClearCache: () => Promise<{ cacheRows: number; eligibilityRows: number }>
+  storageCompact: () => Promise<{ archivePath: string; bytesBefore: number; bytesAfter: number; reclaimedPages: number }>
+  storageOnMaintenanceProgress: (cb: (progress: import('./storageTypes').StorageMaintenanceProgress) => void) => () => void
+
   appOpenExternal: (url: string) => Promise<{ ok: true } | { ok: false; error: string }>
 
   /** P0 托盘常驻前提：管家定时任务依赖「关窗进程存活」，设置页据此提示。 */

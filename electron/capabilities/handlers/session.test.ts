@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { randomUUID } from 'crypto'
 import { createMemoryAppDb } from '../../database/testHelpers'
 import { appendMessage, createSession, listSessions, getMessagesPage } from '../../database/operations'
+import { getDbConnection } from '../../database'
+import { SqliteAgentHistory } from '../../runtime/sqliteAgentHistory'
 import type { AppDatabase } from '../../database'
 import { createSessionCapabilities } from './session'
 import {
@@ -141,6 +143,39 @@ describe('action.session.read', () => {
     expect(page2.messages).toHaveLength(1)
     expect(page2.messages[0]!.content).toBe('消息 2')
     expect(page2.hasMore).toBe(false)
+  })
+
+  it('canonical-only 正文清空并丢失 cache 后仍按 sequence 游标跨页读取', async () => {
+    const id = await seedSession('canonical-only 分页导出', ['canonical page 0', 'canonical page 1', 'canonical page 2'])
+    const conn = getDbConnection(db)
+    const rows = conn.prepare('SELECT id,role,content,timestamp FROM messages WHERE session_id=? ORDER BY sequence')
+      .all(id) as Array<{ id: string; role: 'user' | 'assistant'; content: string; timestamp: number }>
+    const history = new SqliteAgentHistory(conn, 1, Date.now, id)
+    await history.appendBatch([{
+      invocationId: 'capability-canonical-page-invocation', turnId: 'capability-canonical-page-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'capability-canonical-page-context', idempotencyKey: 'capability-canonical-page-context',
+      kind: 'invocation-context-committed',
+      payload: { messages: rows.map(({ id: messageId, role, content, timestamp }) => ({ id: messageId, role, content, timestamp })) }
+    }], 0)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(id)
+    conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(id)
+    conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(id)
+
+    const read = findCap('action.session.read')
+    const page1 = await read.handler({ sessionId: id, limit: 2 }, ctx()) as {
+      messages: Array<{ sequence: number; content: string }>; nextSequence: number; hasMore: boolean
+    }
+    expect(page1).toMatchObject({
+      messages: [{ sequence: 0, content: 'canonical page 0' }, { sequence: 1, content: 'canonical page 1' }],
+      nextSequence: 2, hasMore: true
+    })
+    const page2 = await read.handler({ sessionId: id, cursor: page1.nextSequence, limit: 2 }, ctx()) as {
+      messages: Array<{ sequence: number; content: string }>; nextSequence: number; hasMore: boolean
+    }
+    expect(page2).toMatchObject({ messages: [{ sequence: 2, content: 'canonical page 2' }], nextSequence: 3, hasMore: false })
+    expect(page2.messages).toHaveLength(1)
+    expect(conn.prepare("SELECT cache_key FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(id))
+      .toEqual({ cache_key: 'transcript' })
   })
 
   it('单条大消息截断为摘要 + 提示', async () => {

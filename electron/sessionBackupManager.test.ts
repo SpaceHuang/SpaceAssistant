@@ -4,6 +4,12 @@ import path from 'path'
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { SessionBackupManager, arrayMessagePageReader, parseSessionBackupDirName, type MessagePageReader, type MessagesPage } from './sessionBackupManager'
 import type { Message, Session } from '../src/shared/domainTypes'
+import { createMemoryAppDb } from './database/testHelpers'
+import { appendMessage, createSession, getDbConnection } from './database'
+import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
+import { backupPageReader } from './ipc/ipcShared'
+import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
+import type { AppIpcContext } from './appIpc'
 
 function makeSession(over: Partial<Session> = {}): Session {
   return {
@@ -124,6 +130,46 @@ describe('SessionBackupManager', () => {
     expect(parsed.sessionId).toBe(session.id)
     expect(parsed.messages).toHaveLength(total)
     expect(parsed.messages.map((m) => m.id)).toEqual(messages.map((m) => m.id))
+  })
+
+  it('exports and restores canonical-only message bodies through the sequence reader across pages', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const session = createSession(db, { name: 'canonical backup', model: 'test' })
+      const bodies = ['canonical export 0', 'canonical export 1', 'canonical export 2']
+      const messages = bodies.map((content, index) => appendMessage(db, {
+        id: `canonical-backup-${index}`, sessionId: session.id, role: 'user' as const, content,
+        timestamp: index + 1, status: 'sent' as const
+      }).message)
+      const conn = getDbConnection(db)
+      const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+      await history.appendBatch([{
+        invocationId: 'canonical-backup-invocation', turnId: 'canonical-backup-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'canonical-backup-context', idempotencyKey: 'canonical-backup-context', kind: 'invocation-context-committed',
+        payload: { messages: messages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })) }
+      }], 0)
+      conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
+      conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
+
+      const readPage = backupPageReader({ db } as AppIpcContext, session.id)
+      const manager = new SessionBackupManager(workDir)
+      const backupOnce = manager.backupSession.bind(manager)
+      const backupSpy = vi.spyOn(manager, 'backupSession')
+        .mockRejectedValueOnce(new Error('injected shutdown backup write failure'))
+        .mockImplementation(backupOnce)
+      const debounced = new DebouncedSessionBackupManager(manager)
+      debounced.schedule(session.id, async () => ({ session, readPage }))
+      await debounced.flushAllWithRetry(debounced.getPendingSessionIds(), async () => ({ session, readPage }), 2)
+      expect(backupSpy).toHaveBeenCalledTimes(2)
+
+      const restored = await manager.restoreSession(session.id)
+      expect(restored?.messages.map(({ id, content }) => [id, content])).toEqual([
+        ['canonical-backup-0', bodies[0]], ['canonical-backup-1', bodies[1]], ['canonical-backup-2', bodies[2]]
+      ])
+    } finally {
+      db.close()
+    }
   })
 
   it('streams >10001 messages page-by-page without the manager retaining the full array', async () => {

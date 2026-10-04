@@ -24,7 +24,8 @@ function createV10Database(): DatabaseSync {
 
 describe('schema v11-v16 turn context, execution config, and routing index migrations', () => {
   it('当前 schema version 与最新 DDL 保持一致', () => {
-    expect(DB_SCHEMA_VERSION).toBe(33)
+    expect(DB_SCHEMA_VERSION).toBe(49)
+    expect(DB_SCHEMA_VERSION).toBe(49)
   })
 
   it('将 v10 的 turn context 字段升级到 v11 并更新 metadata', () => {
@@ -98,7 +99,7 @@ describe('schema v11-v16 turn context, execution config, and routing index migra
       CREATE TABLE automation_task_runs (id TEXT PRIMARY KEY);
       INSERT INTO automation_tasks VALUES ('legacy-task', 'provider-model-name');`)
     runMigrations(conn)
-    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('33')
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe(String(DB_SCHEMA_VERSION))
     expect(conn.prepare('SELECT model_override, work_dir, model_id, model_service_id, reasoning_effort FROM automation_tasks WHERE id = ?').get('legacy-task'))
       .toEqual({ model_override: 'provider-model-name', work_dir: null, model_id: null, model_service_id: null, reasoning_effort: null })
     expect(() => runMigrations(conn)).not.toThrow()

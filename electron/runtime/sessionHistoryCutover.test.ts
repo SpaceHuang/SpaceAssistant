@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { HistorySnapshot } from '../../packages/agent-sdk/src/history'
 import type { CanonicalModelMessage } from '../../packages/agent-sdk/src/model'
 import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
-import { resolveCanonicalRequestCutover, resolveSessionHistoryCutover } from './sessionHistoryCutover'
+import { resolveCanonicalRequestCutover, resolveCanonicalSessionSnapshotsCutover, resolveSessionHistoryCutover } from './sessionHistoryCutover'
+import type { CanonicalSessionSnapshot } from './canonicalHistory'
 
 const prior: CanonicalModelMessage[] = [
   { role: 'user', content: 'read a.txt' },
@@ -20,7 +21,7 @@ const snapshot: HistorySnapshot = {
 }
 
 describe('resolveSessionHistoryCutover', () => {
-  it('uses canonical History for matched prior transcript and preserves persisted IDs/current attachment message', () => {
+  it('keeps legacy reads when matching canonical history has no stable message IDs', () => {
     const current: ClaudeChatMessageWithBlocks = {
       id: 'user-current', role: 'user', timestamp: 10,
       content: [{ type: 'text', text: 'look at this' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aW1n' } }]
@@ -36,9 +37,38 @@ describe('resolveSessionHistoryCutover', () => {
 
     const result = resolveSessionHistoryCutover({ snapshot, legacyMessages, currentUserMessageId: 'user-current' })
 
+    expect(result).toEqual({ kind: 'transcript-mismatch' })
+  })
+
+  it('uses canonical history when stable IDs, role, body, and order match legacy messages', () => {
+    const identifiedPrior: CanonicalModelMessage[] = [
+      { ...prior[0]!, id: 'user-old' },
+      { ...prior[1]!, id: 'assistant-tool' },
+      prior[2]!,
+      { ...prior[3]!, id: 'assistant-final' }
+    ]
+    const identifiedSnapshot: HistorySnapshot = {
+      ...snapshot,
+      events: [{ ...snapshot.events[0]!, payload: { messages: identifiedPrior } }]
+    }
+    const current: ClaudeChatMessageWithBlocks = {
+      id: 'user-current', role: 'user', timestamp: 10,
+      content: [{ type: 'text', text: 'look at this' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aW1n' } }]
+    }
+    const legacyMessages: ClaudeChatMessageWithBlocks[] = [
+      { id: 'user-old', role: 'user', content: 'read a.txt' },
+      { id: 'assistant-tool', role: 'assistant', content: [
+        { type: 'text', text: 'I will read it.' }, { type: 'tool_use', id: 'call-1', name: 'read_file', input: { path: 'a.txt' } }
+      ] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-1', content: 'file body', is_error: false }] },
+      { id: 'assistant-final', role: 'assistant', content: 'Here is the file.' }, current
+    ]
+
+    const result = resolveSessionHistoryCutover({ snapshot: identifiedSnapshot, legacyMessages, currentUserMessageId: 'user-current' })
+
     expect(result).toMatchObject({ kind: 'matched', messages: [
       { id: 'user-old', role: 'user', content: 'read a.txt' },
-      { id: 'assistant-tool', role: 'assistant' }, { id: 'tool-result', role: 'user' },
+      { id: 'assistant-tool', role: 'assistant' }, { role: 'user' },
       { id: 'assistant-final', role: 'assistant', content: 'Here is the file.' }, current
     ] })
     if (result.kind === 'matched') expect(result.messages.at(-1)).toBe(current)
@@ -52,6 +82,33 @@ describe('resolveSessionHistoryCutover', () => {
     expect(resolveSessionHistoryCutover({ snapshot, legacyMessages: [
       { id: 'current', role: 'user', content: 'next' }, { role: 'assistant', content: 'extra' }
     ], currentUserMessageId: 'current' })).toEqual({ kind: 'current-user-not-last' })
+  })
+})
+
+describe('resolveCanonicalSessionSnapshotsCutover', () => {
+  it('compares a cross-invocation stable-ID fold against legacy messages field by field and in order', () => {
+    const snapshots: CanonicalSessionSnapshot[] = [
+      { sessionId: 'session-1', invocationId: 'inv-2', sessionSeq: 8, commitOrder: 12, messages: [
+        { id: 'm-2', role: 'assistant', content: 'answer' }, { id: 'm-3', role: 'user', content: 'next' }
+      ] },
+      { sessionId: 'session-1', invocationId: 'inv-1', sessionSeq: 2, commitOrder: 3, messages: [
+        { id: 'm-1', role: 'user', content: 'question' }, { id: 'm-2', role: 'assistant', content: 'answer' }
+      ] }
+    ]
+    const current = { id: 'current', role: 'user' as const, content: 'current request' }
+    const legacyMessages = [
+      { id: 'm-1', role: 'user' as const, content: 'question' },
+      { id: 'm-2', role: 'assistant' as const, content: 'answer' },
+      { id: 'm-3', role: 'user' as const, content: 'next' }, current
+    ]
+
+    expect(resolveCanonicalSessionSnapshotsCutover({ snapshots, legacyMessages, currentUserMessageId: 'current' }))
+      .toEqual({ kind: 'matched', messages: legacyMessages })
+    expect(resolveCanonicalSessionSnapshotsCutover({
+      snapshots,
+      legacyMessages: [{ ...legacyMessages[0]!, id: 'different-id' }, ...legacyMessages.slice(1)],
+      currentUserMessageId: 'current'
+    })).toEqual({ kind: 'transcript-mismatch' })
   })
 })
 

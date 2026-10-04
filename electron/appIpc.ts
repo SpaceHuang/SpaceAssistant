@@ -15,6 +15,7 @@ import { registerMcpIpcHandlers } from './mcp/mcpIpc'
 import { registerSearchIpc } from './ipc/searchIpc'
 import { registerSecurityIpc } from './ipc/securityIpc'
 import { registerSessionIpc } from './ipc/sessionIpc'
+import { registerStorageMaintenanceIpc } from './ipc/storageMaintenanceIpc'
 
 // 兼容 re-export:既有外部消费方(butler/main/llmSystemPrompt)从本文件导入
 export { readAppLocale } from './ipc/ipcShared'
@@ -33,6 +34,8 @@ export type AppIpcContext = {
   turnRuntime?: TurnRuntime
   /** Whether canonical History and its session sidecar startup repair completed without errors. */
   sessionHistoryRecoverySucceeded?: boolean
+  /** Wake the durable source-truth spill collection queue after its owning session is deleted. */
+  wakeSourceTruthSpillGc?: () => void
   executeTurn?: ClaudeTurnExecution
   /** P0 托盘常驻前提：管家定时任务依赖「关窗进程存活」，设置页据此提示。 */
   isTrayEnabled?: () => boolean
@@ -45,6 +48,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   registerDesktopIpc(ipcMain, ctx)
   registerAgentIpc(ipcMain, ctx)
   registerSessionIpc(ipcMain, ctx)
+  registerStorageMaintenanceIpc(ipcMain, ctx)
   registerFileIpc(ipcMain, ctx)
   registerSearchIpc(ipcMain, ctx)
   registerConfigIpc(ipcMain, ctx)

@@ -111,7 +111,7 @@ function makeCtx(): AppIpcContext {
     workDirManager: makeWorkDirManager(),
     getWorkDir: () => WORK_DIR,
     setWorkDir: vi.fn(),
-    getUserDataPath: () => '/fake/userdata',
+    getUserDataPath: () => '/tmp',
     getApiKey: vi.fn().mockResolvedValue(null),
     setApiKey: vi.fn(),
     getBrowserDetectContext: () => ({
@@ -345,5 +345,17 @@ describe('session:delete IPC busy guard', () => {
 
     expect(mockCreateSession.mock.calls[0]?.[1]).toMatchObject({ metadata: {} })
     expect(mockCreateSession.mock.calls[0]?.[1]).not.toHaveProperty('metadata.sessionDirectoryGrants')
+  })
+
+  it('wakes source-truth spill collection only after the database deletion commits', async () => {
+    const wake = vi.fn()
+    ctx.wakeSourceTruthSpillGc = wake
+    const handler = ipc.getHandler('session:delete')!
+    mockDeleteSession.mockImplementationOnce(() => { throw new Error('database delete rolled back') })
+    await expect(handler({}, 'session-1')).rejects.toThrow('database delete rolled back')
+    expect(wake).not.toHaveBeenCalled()
+    await handler({}, 'session-1')
+    expect(mockDeleteSession).toHaveBeenCalledWith(ctx.db, 'session-1', { flush: false })
+    expect(wake).toHaveBeenCalledTimes(1)
   })
 })

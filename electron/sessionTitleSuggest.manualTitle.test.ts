@@ -11,12 +11,17 @@ import type { AppDatabase } from './database'
 const mockUpdateSession = vi.fn()
 const mockCreateAnthropicClient = vi.fn()
 const mockGetApiKey = vi.fn()
+const { mockGetMessages } = vi.hoisted(() => ({ mockGetMessages: vi.fn(() => []) }))
 
 vi.mock('./database', () => ({
   updateSession: (...args: unknown[]) => mockUpdateSession(...args),
   getSession: vi.fn(),
-  getMessages: vi.fn(() => []),
+  getMessages: mockGetMessages,
   getDbConnection: vi.fn(() => ({})),
+}))
+
+vi.mock('./runtime/sessionTranscriptProjection', () => ({
+  getProjectedMessages: () => mockGetMessages()
 }))
 
 import { getSession } from './database'

@@ -34,6 +34,7 @@ import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { getSessionEventSink } from '../sessionEvents'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from '../runtime/hostedTurnFinalization'
 import { loadAcceptedTurnMessages } from '../runtime/acceptedTurnContext'
+import { getProjectedMessages } from '../runtime/sessionTranscriptProjection'
 import { buildRemoteProgressHookContext } from './buildRemoteProgressContext'
 import { onRemoteTextSegmentClosed } from './remoteProgressHooks'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
@@ -162,7 +163,7 @@ export async function runImRemoteAgent(args: {
       rawMessages = loadAcceptedTurnMessages(args.db, persisted)
       acceptedUserMessageId = persisted.userMessageId
     } else {
-      rawMessages = getMessages(args.db, args.sessionId)
+      rawMessages = getProjectedMessages(args.db, args.sessionId)
     }
     const built = buildClaudeToolChatMessages(rawMessages, {
       workspaceRoot: resolved?.workDir,

@@ -35,6 +35,10 @@ import { buildWriteExecutionPermit } from '../confirmation/writeExecutionPermit'
 import * as directoryHandleWriterModule from '../confirmation/directoryHandleWriter'
 import { cancelActiveAgentTool } from '../activeAgentToolCancellation'
 import { registerActiveAgentToolCancellation } from '../activeAgentToolCancellation'
+import { createMemoryAppDb } from '../database/testHelpers'
+import { getDbConnection } from '../database/sqliteStore'
+import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
+import { createSpillStore } from '../storage/spillStore'
 
 const route = { routeId: 'registered-tools', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }
 const requestId = 'req-sdk-host'
@@ -44,6 +48,54 @@ const invocationId = 'inv-sdk-host'
 async function* stream(...chunks: StreamChunk[]) { yield* chunks }
 
 describe('createRegisteredAgentTurnTools', () => {
+  it('spills the complete production tool result while keeping SDK replay content bounded', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'registered-tool-spill-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'spill-generation')`).run(sessionId)
+    const spillRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'registered-tool-spill-'))
+    const fullOutput = 'complete registered tool result '.repeat(8_000)
+    const registry = new TypedToolRegistry()
+    registry.register(defineDirectTool({ name: 'large_read', actionClass: 'read', parseInput: (raw) => raw, execute: async () => ({ success: true, data: fullOutput }) }))
+    const permits = new InMemorySafetyPermitStore()
+    const registeredTools = createRegisteredAgentTurnTools({
+      requestId, turnId, registry, permits, admission: new InMemoryExecutionAdmissionCoordinator(),
+      createExecutionContext: () => ({ sessionId, workDir: '/workspace' }), resolveAuthorizationVersion: () => 'policy-v1'
+    })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['large_read'])
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits,
+      policy: { evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion }) } })
+    const providers = new ModelProviderRegistry()
+    const responses = [
+      stream({ type: 'tool-call', toolCallId: 'large-read-call', toolName: 'large_read', input: {} },
+        { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }),
+      stream({ type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
+    ]
+    providers.register(route, { providerId: 'large-tool-spill-provider', stream: () => responses.shift()! })
+    const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId, createSpillStore(spillRoot))
+
+    try {
+      await runAgentTurn({
+        registry: providers, routeId: route.routeId, invocationId, turnId,
+        request: { messages: [{ role: 'user', content: 'read large data' }], maxTokens: 50,
+          tools: [{ name: 'large_read', description: 'read large data', inputSchema: { type: 'object' } }] },
+        safetyGate, prepareTool: registeredTools.prepareTool, toolExecution: registeredTools.toolExecution, history, maxModelTurns: 2
+      })
+      const stored = JSON.parse(conn.prepare(`SELECT payload_json FROM agent_history_events WHERE kind='tool-call-finished'`).get()!.payload_json as string) as {
+        result: { data: { __spaceassistant_spill_v1: { kind: string; byteLength: number } } }; replayContent: string
+      }
+      expect(stored.result.data.__spaceassistant_spill_v1).toMatchObject({ kind: 'source-of-truth', byteLength: Buffer.byteLength(fullOutput) })
+      expect(stored.replayContent.length).toBeLessThan(fullOutput.length)
+      const restored = await history.read(invocationId)
+      expect(restored.events.find(({ kind }) => kind === 'tool-call-finished')?.payload).toMatchObject({ result: { data: fullOutput } })
+    } finally {
+      db.close()
+      await fs.rm(spillRoot, { recursive: true, force: true })
+    }
+  })
+
   it('preserves legacy approval-candidate classification from RegisteredTool action metadata', () => {
     const registry = new TypedToolRegistry()
     registry.register(defineDirectTool({ name: 'custom-write', actionClass: 'write', parseInput: (raw) => raw, execute: async () => 'ok' }))

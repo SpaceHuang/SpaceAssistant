@@ -4,7 +4,7 @@ import { cleanupOrphanProcess, type OrphanCleanupResult } from './orphanProcessC
 
 export type StartupOrphanCleanupDeps = {
   listTurns: () => ReturnType<typeof listPersistedTurns>
-  getMessage: (id: string) => Message | undefined
+  getMessageSkeleton: (id: string) => Message | undefined
   cleanup?: (identity: { pid: number; processGroupId?: number; ownerToken: string }) => Promise<OrphanCleanupResult>
   audit?: (entry: { turnId: string; toolUseId: string; result: OrphanCleanupResult }) => void
 }
@@ -14,7 +14,7 @@ export async function cleanupPersistedOrphansOnStartup(deps: StartupOrphanCleanu
   let count = 0
   for (const persisted of deps.listTurns()) {
     if (!['prepared', 'executing', 'waiting-confirm'].includes(persisted.state)) continue
-    const assistant = deps.getMessage(persisted.assistantMessageId)
+    const assistant = deps.getMessageSkeleton(persisted.assistantMessageId)
     for (const tool of assistant?.toolCalls ?? []) {
       if (tool.toolName !== 'run_shell' || tool.status !== 'executing' || !tool.processPid || !tool.processOwnerToken) continue
       const result = await cleanup({ pid: tool.processPid, processGroupId: tool.processGroupId, ownerToken: tool.processOwnerToken })

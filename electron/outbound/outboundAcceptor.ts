@@ -16,7 +16,9 @@ import {
   estimateTokensFromImageAttachments,
   resolveEffectiveMaximumContext
 } from '../../src/shared/contextUsageEstimate'
-import { appendMessage, getMessages, getSession, getSessionUsage, getTurnByRequestId, enqueueQueuedUserMessage, type AppDatabase } from '../database'
+import { getSession, getSessionUsage, enqueueQueuedUserMessage, type AppDatabase } from '../database'
+import { appendMessage, getMessages, getTurnByRequestId } from '../database'
+import { getMessageSkeletons } from '../database/operations'
 import { readStoredModels } from '../llmServiceResolver'
 import { createHash } from 'node:crypto'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
@@ -280,7 +282,7 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
     wikiImportRaw: deps.wikiImportRaw
   }
 
-  const countQueued = (sessionId: string): number => countQueuedUserMessages(getMessages(deps.db, sessionId), sessionId)
+  const countQueued = (sessionId: string): number => countQueuedUserMessages(getMessageSkeletons(deps.db, sessionId), sessionId)
 
   function ensureContinuationStatusMessage(sessionId: string, requestId: string): { messageId: string; sequence: number } {
     const conn = getDbConnection(deps.db)
@@ -729,7 +731,7 @@ export function computeContextPressureWarnings(
 ): string[] {
   const session = getSession(db, sessionId)
   if (!session) return []
-  const messages = getMessages(db, sessionId)
+  const messages = getMessageSkeletons(db, sessionId)
   const usage = getSessionUsage(db, sessionId)
   const lastAssistantThinking = [...messages]
     .reverse()

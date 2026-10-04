@@ -3,6 +3,7 @@ import type { ContentSegment, ChatImageAttachment, Message, SkillHintRecord, Thi
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { createCorruptedToolCallPlaceholder } from './database/streamingCleanup'
 import type { McpResultDisplay } from '../src/shared/mcpToolResultDisplay'
+import { compactOversizedToolResultContent } from '../src/shared/oversizedToolResult'
 
 /** SQLite / JSON 列用的序列化（复杂字段 JSON.stringify） */
 export function serializeToolUseForDb(tool: ToolUseData | undefined): string | null {
@@ -108,7 +109,9 @@ export function serializeToolCallsForDb(calls: ToolCallRecord[] | undefined): st
       result: c.result
         ? {
             ...c.result,
-            data: c.result.data !== undefined ? JSON.stringify(c.result.data) : undefined
+            data: c.result.data !== undefined
+              ? JSON.stringify(typeof c.result.data === 'string' ? compactOversizedToolResultContent(c.result.data).content : c.result.data)
+              : undefined
           }
         : undefined
     }))

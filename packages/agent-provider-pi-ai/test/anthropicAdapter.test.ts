@@ -144,7 +144,7 @@ describe('PiAiAnthropicProvider', () => {
       const chunks = []
       for await (const chunk of provider.stream(prepared({ messages: [
         { role: 'system', content: 'Follow the workspace safety policy.', timestamp: 0 },
-        { role: 'user', content: 'hello', timestamp: 1 }
+        { role: 'user', id: 'internal-message-id', content: 'hello', timestamp: 1 }
       ] }))) chunks.push(chunk)
       expect(chunks).toEqual([
         { type: 'text-delta', text: 'golden' },
@@ -165,6 +165,7 @@ describe('PiAiAnthropicProvider', () => {
       const wireMessages = body.messages as Array<{ content: Array<Record<string, unknown>> }>
       expect(wireMessages[0]?.content[0]).toMatchObject({ cache_control: { type: 'ephemeral' } })
       expect(JSON.stringify(body)).not.toContain('credential:anthropic:main')
+      expect(JSON.stringify(body)).not.toContain('internal-message-id')
     } finally {
       globalThis.fetch = originalFetch
     }

@@ -20,6 +20,27 @@ describe('projectAgentLogFields', () => {
     })).toEqual({ outcome: 'startup-scan', releasedUnstarted: 2, markedUncertain: 1, repairedCheckpoints: 1, reconciledCount: 1 })
   })
 
+  it('retains only the accepted input fingerprint comparison outcome in storage shadow diagnostics', () => {
+    expect(projectAgentLogFields('session.storage.shadow', {
+      sessionId: 'session-1', consumer: 'api-context', source: 'canonical:L2', status: 'matched',
+      differenceCount: 0, fieldNames: [], acceptedInputFingerprint: 'matched', fingerprint: 'private digest',
+      content: 'private accepted input'
+    })).toEqual({
+      sessionId: 'session-1', consumer: 'api-context', source: 'canonical:L2', status: 'matched',
+      differenceCount: 0, fieldNames: [], acceptedInputFingerprint: 'matched'
+    })
+  })
+
+  it('keeps source-truth spill collection diagnostics structural and free of file paths or content', () => {
+    expect(projectAgentLogFields('storage.spill.source_truth_gc', {
+      phase: 'reference-scan', pending: 3, completed: 1, sharedReference: 1, failed: 1,
+      locator: '01234567-89ab-cdef-0123-456789abcdef.spill', payload: 'private transcript body', path: '/private/userData/spill'
+    })).toEqual({ phase: 'reference-scan', pending: 3, completed: 1, sharedReference: 1, failed: 1 })
+    expect(projectAgentLogFields('storage.spill.source_truth_gc_failed', {
+      phase: 'reference-scan', pending: 2, reason: 'SyntaxError', payload: 'private transcript body'
+    })).toEqual({ phase: 'reference-scan', pending: 2, reason: 'SyntaxError' })
+  })
+
   it('retains the structured facts needed to audit silent context overflow', () => {
     expect(projectAgentLogFields('llm.silent_overflow', {
       requestId: 'req:round:1',

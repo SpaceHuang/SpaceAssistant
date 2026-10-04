@@ -1,5 +1,5 @@
 import path from 'path'
-import { mkdirSync } from 'fs'
+import { existsSync, mkdirSync } from 'fs'
 import http from 'http'
 import https from 'https'
 import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
@@ -33,7 +33,8 @@ import {
   registerWeChatIpcHandlers,
   shutdownWeChatServices
 } from './wechat/weChatIpc'
-import { getConfigValue, getDefaultDbPath, getMessage, getMessagesPage, getSession, listPersistedTurns, listSessions, openDatabase, setConfigValue } from './database'
+import { getConfigValue, getDefaultDbPath, getMessageSkeleton, getSession, listPersistedTurns, listSessions, openDatabase, setConfigValue } from './database'
+import { getProjectedMessagesPageWithSequence } from './runtime/sessionTranscriptProjection'
 import { randomUUID } from 'node:crypto'
 import { createTurnCoordinatorStorage } from './turnCoordinatorStorage'
 import { setInvalidationBroadcaster } from './database/scopeVersion'
@@ -43,9 +44,13 @@ import { signalChatCancel } from './chatCancelRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
 import { beginSessionEventShutdown, ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, ensureTurnStartEvent, flushAllSessionEventSinks, getSessionEventSink, reconcileSessionEventFilesDetailed } from './sessionEvents'
-import { runSessionEventRetentionMaintenance } from './storage/sessionEventRetention'
+import { createCanonicalSessionProjectionRetentionPreparer, createSessionLedgerCompactionDependencyGuard, runSessionEventRetentionMaintenance } from './storage/sessionEventRetention'
 import { pruneAgentLogs } from './storage/agentLogRetention'
 import { resolveRetentionPolicyFromDb } from './storage/retentionPolicy'
+import { createSpillStore, runSourceTruthSpillGcMaintenance, runSpillRetentionMaintenance, scheduleSourceTruthSpillGcMaintenance } from './storage/spillStore'
+import { isSafeDbMaintenanceRequested, runSafeDbMaintenance } from './storage/safeDbMaintenance'
+import { schedulePeriodicSqliteMaintenance } from './storage/periodicSqliteMaintenance'
+import { archiveLegacyDatabaseJsonBackup } from './storage/legacyDatabaseBackup'
 import { cleanupUsageFactsByRetention, reconcileUsageTurnFacts } from './usageStats/usageStatsMaintenance'
 import { setUsageStatsAppVersion } from './usageStats/usageStatsRecorder'
 import { backfillUsageStats } from './usageStats/usageStatsBackfill'
@@ -65,6 +70,7 @@ import { setupAppMenu } from './menu'
 import { createHostTranslator } from './i18n/hostTranslate'
 import { readAppLocale } from './appIpc'
 import { getMainWindow, setMainWindow } from './windowRef'
+import { measureStartupPhase } from './startupTiming'
 import { getAgentLogDir, initAgentLogger, logAgentEvent, flushAgentLogger } from './agentLogger/agentLogger'
 import { setAgentLogDailyPrune } from './agentLogger/agentLogger'
 import { setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
@@ -108,6 +114,7 @@ setKnownHomeDir(homedir())
 
 let floatingManager: FloatingNotificationManager | null = null
 let butlerScheduler: ButlerTaskScheduler | null = null
+const safeDbMaintenanceRequested = isSafeDbMaintenanceRequested(process.argv)
 
 const API_KEY_CONFIG_KEY = 'secrets.apiKeyEnc'
 const TOOLS_CONFIG_KEY = 'config.tools'
@@ -178,6 +185,8 @@ installProcessSafetyNet((event, detail) => {
 })
 /** 用量统计启动维护（回填/补齐/清理）：whenReady 内注册，主窗口创建完成后执行（评审 P1-3）。 */
 let usageStatsStartupMaintenance: (() => void) | null = null
+let stopPeriodicSqliteMaintenance: (() => void) | null = null
+let stopPeriodicSourceTruthSpillGc: (() => void) | null = null
 let isQuitting = false
 let quitCleanupDone = false
 const SHUTDOWN_TIMEOUT_MS = 12_000
@@ -189,17 +198,20 @@ export async function runShutdownCleanup(pendingTasks?: Set<string>): Promise<Sh
   const tasks: Array<[string, () => Promise<unknown>]> = [
     ['session-event-flush', flushAllSessionEventSinks],
     ['session-backup-flush', async () => {
-      // 评审 2.2：退出前把 3s 防抖窗口内挂起的备份 flush 掉——否则 cleanup 期间定时器触发时
-      // DB 已关闭，loadBackupPayload 抛错汇入备份失败链；flush 自身失败只记日志不阻塞退出。
+      // 评审 2.2：退出前 flush 3s 防抖窗口内挂起的备份，并在数据库关闭前为临时写盘故障重试。
+      // 有界重试耗尽后记录失败，不让辅助备份阻止应用退出。
       const mgr = sessionBackupManager
       const db = appDb
       if (!mgr || !db) return
       const ids = mgr.getPendingSessionIds()
       if (!ids.length) return
-      await mgr.flushAll(ids, async (id) => {
+      await mgr.flushAllWithRetry(ids, async (id) => {
         const session = getSession(db, id)
         if (!session) return null
-        return { session, readPage: (afterSequence: number, pageSize: number) => getMessagesPage(db, id, afterSequence, pageSize) }
+        return { session, readPage: (afterSequence: number, pageSize: number) => {
+          const page = getProjectedMessagesPageWithSequence(db, id, afterSequence, pageSize)
+          return { messages: page.rows.map((row) => row.message), nextSequence: page.nextSequence }
+        } }
       }).catch((error) => {
         console.warn('[sessionBackup] flush on quit failed:', error instanceof Error ? error.message : String(error))
       })
@@ -310,7 +322,7 @@ app.whenReady().then(async () => {
   const dbPath = getDefaultDbPath(app.getPath('userData'))
   let db: ReturnType<typeof openDatabase>
   try {
-    db = openDatabase(dbPath)
+    db = await measureStartupPhase('database.open-and-migrations', () => openDatabase(dbPath))
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     dialog.showErrorBox(
@@ -325,8 +337,21 @@ app.whenReady().then(async () => {
   const recoveryWorkDirs = getSessionLedgerRecoveryRoots(recoveryWorkDir, getConfigValue(db, 'config.workDirProfiles'))
   let sessionHistoryRecoverySucceeded = false
   let sessionHistoryRepairFailureCount = 0
+  if (safeDbMaintenanceRequested) {
+    console.warn('[agentHistory] canonical full recovery skipped for --safe-db-maintenance; it will run on the next normal launch')
+  } else {
   try {
-    const interrupted = await new SqliteAgentHistory(getDbConnection(db)).recoverInterruptedInvocations({
+    const startupHistory = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, undefined, createSpillStore(path.join(app.getPath('userData'), 'spill')))
+    try {
+    const historyClassification = await measureStartupPhase('canonical-history.classification', () => startupHistory.classifyLegacyProjectionRepairs(100))
+      if (!historyClassification.complete) {
+        console.info('[agentHistory] legacy repair classification remains resumable', historyClassification)
+      }
+    } catch (error) {
+      // Classification failure must retain the old exhaustive recovery path until its cursor completes.
+      console.warn('[agentHistory] legacy repair classification failed; using exhaustive recovery', error instanceof Error ? error.message : String(error))
+    }
+    const interrupted = await measureStartupPhase('canonical-history.recovery', () => startupHistory.recoverInterruptedInvocations({
       resolveSessionLedgerLocation: (sessionId) => {
         const session = getSession(db, sessionId)
         if (!session) return undefined
@@ -439,17 +464,20 @@ app.whenReady().then(async () => {
         sessionHistoryRepairFailureCount += 1
         console.warn('[agentHistory] invocation terminal ledger repair degraded:', { invocationId, turnId, error: error instanceof Error ? error.message : String(error) })
       }
-    })
+    }))
     sessionHistoryRecoverySucceeded = sessionHistoryRepairFailureCount === 0
     if (interrupted.length > 0) console.warn('[agentHistory] interrupted invocations recovered:', interrupted.map(({ invocationId }) => invocationId))
   } catch (error) {
     console.warn('[agentHistory] startup recovery degraded:', error instanceof Error ? error.message : String(error))
   }
+  }
   // 进程重启 cleanup 必须先于 Runtime recovery：仅对带 owner token 的本机 run_shell 执行校验，
   // 无身份或不属于本应用的 PID 交给后续 turn recovery 收敛，绝不裸杀。
   await cleanupPersistedOrphansOnStartup({
     listTurns: () => listPersistedTurns(db),
-    getMessage: (id) => getMessage(db, id),
+    // This recovery consumer reads only shell process identity from the authoritative message skeleton;
+    // the assistant body may still be streaming and is deliberately not resolved from canonical History.
+    getMessageSkeleton: (id) => getMessageSkeleton(db, id),
     cleanup: cleanupOrphanProcess,
     audit: ({ turnId, toolUseId, result }) => logAgentEvent('info', 'shell.orphan_cleanup', { turnId, toolUseId, result })
   })
@@ -634,7 +662,7 @@ app.whenReady().then(async () => {
   // Runtime 已建立后再处理无 turn 的孤儿消息，随后由 appIpc 的同一 recovery 装配继续恢复持久化 turn。
   cleanupStreamingResiduesOnStartup(db)
   try {
-    const recovery = await reconcileSessionEventFilesDetailed(workDirState)
+    const recovery = await measureStartupPhase('session-ledger.reconcile', () => reconcileSessionEventFilesDetailed(workDirState))
     for (const session of recovery.sessions) {
       for (const issue of session.issues) {
         console.warn('[sessionEvents] startup event integrity issue:', {
@@ -657,13 +685,23 @@ app.whenReady().then(async () => {
         error: failure.error instanceof Error ? failure.error.message : String(failure.error)
       })
     }
-    // S3(偏差 24):保留上限由 Storage 统一保留策略持有(configs 可配、显式默认),启动流程只触发
-    const { policy: retentionPolicy, summary: retention } = await runSessionEventRetentionMaintenance(db, workDirState)
+    // S3(偏差 24):保留上限适用于全部 profile roots；仍有 canonical 或台账 compaction 重放依赖的会话先保留。
+    const shouldRetainCompactionLedger = createSessionLedgerCompactionDependencyGuard(db)
+    const { policy: retentionPolicy, summary: retention } = await runSessionEventRetentionMaintenance(db, recoveryWorkDirs, {
+      prepareProjectionForRetention: createCanonicalSessionProjectionRetentionPreparer(db),
+      shouldRetainSessionDir: shouldRetainCompactionLedger
+    })
+    const spillRoot = path.join(app.getPath('userData'), 'spill')
+    await runSpillRetentionMaintenance(db, spillRoot)
+    await runSourceTruthSpillGcMaintenance(db, spillRoot)
     for (const failure of retention.failures) {
       console.warn('[sessionEvents] retention cleanup failed:', {
         sessionName: failure.sessionName,
         error: failure.error instanceof Error ? failure.error.message : String(failure.error)
       })
+    }
+    for (const retained of retention.retained) {
+      console.info('[sessionEvents] retention kept a ledger with compaction recovery dependencies:', retained)
     }
     // S3(偏差 14):Agent 日志超保留期清理挂同一保留策略(启动维护触发)
     await pruneAgentLogs({
@@ -822,6 +860,14 @@ app.whenReady().then(async () => {
     isTrayEnabled,
     turnRuntime,
     sessionHistoryRecoverySucceeded,
+    wakeSourceTruthSpillGc: () => {
+      const spillRoot = path.join(app.getPath('userData'), 'spill')
+      void runSourceTruthSpillGcMaintenance(db, spillRoot).catch((error) => {
+        logAgentEvent('warn', 'storage.spill.source_truth_gc_failed', {
+          phase: 'delete-wakeup', reason: error instanceof Error ? error.name : 'unknown'
+        })
+      })
+    },
     executeTurn
   })
 
@@ -1032,6 +1078,44 @@ app.whenReady().then(async () => {
   mainIpcReady = true
   void createMainWindow()
     .then(() => {
+      const userDataDir = app.getPath('userData')
+      const legacyBackupPath = path.join(userDataDir, 'bak-spaceassistant-data.json')
+      if (existsSync(legacyBackupPath)) {
+        void dialog.showMessageBox({
+          type: 'warning',
+          title: '旧数据库备份',
+          message: '发现迁移后遗留的旧 JSON 数据备份。是否将它归档到 session-archives？',
+          detail: '归档会移动该文件，不会删除备份内容。选择“暂不”会保留原文件。',
+          buttons: ['归档备份', '暂不'],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true
+        }).then(({ response }) => {
+          const result = archiveLegacyDatabaseJsonBackup(userDataDir, response === 0)
+          console.info('[storage] legacy JSON backup cleanup:', result.status)
+        }).catch((error) => {
+          console.warn('[storage] legacy JSON backup prompt failed:', error instanceof Error ? error.message : String(error))
+        })
+      }
+      if (safeDbMaintenanceRequested) {
+        const spillRoot = path.join(userDataDir, 'spill')
+        void createSpillStore(spillRoot).withSpillRootFence(() => runSafeDbMaintenance(db, userDataDir)).then(() => {
+          console.info('[storage] safe database maintenance completed')
+        }).catch((error) => {
+          console.error('[storage] safe database maintenance failed; app remains available:', error instanceof Error ? error.message : String(error))
+        })
+      } else {
+        stopPeriodicSqliteMaintenance = schedulePeriodicSqliteMaintenance(db, {
+          onResult: (result) => {
+            if (result !== 'checkpointed') console.info('[storage] periodic database maintenance skipped:', result)
+          }
+        })
+      }
+      stopPeriodicSourceTruthSpillGc = scheduleSourceTruthSpillGcMaintenance(db, path.join(userDataDir, 'spill'), {
+        onResult: (summary) => {
+          if (summary === 'failed' || summary.failed > 0) console.warn('[storage] source-truth spill collection remains pending', summary)
+        }
+      })
       usageStatsStartupMaintenance?.()
       usageStatsStartupMaintenance = null
     })
@@ -1053,6 +1137,10 @@ app.on('before-quit', (event) => {
   // 必须在启动异步 cleanup 之前同步切断事件生产，否则 flush 与最后一批
   // chunk/关键事件并发，flush 返回后仍可能接受新事件并被 app.quit 丢弃。
   beginSessionEventShutdown()
+  stopPeriodicSqliteMaintenance?.()
+  stopPeriodicSqliteMaintenance = null
+  stopPeriodicSourceTruthSpillGc?.()
+  stopPeriodicSourceTruthSpillGc = null
   butlerScheduler?.stop()
   destroyTray()
   floatingManager?.destroy()

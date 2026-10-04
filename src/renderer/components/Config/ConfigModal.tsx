@@ -96,8 +96,9 @@ import { WorkDirList, validateWorkDirProfiles } from './WorkDirList'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { changeAppLocale, persistLocaleToBackend } from '../../i18n/localeSync'
 import { resolveWorkDirProfileForSave } from '../../services/workDirSessionSync'
+import { StorageSettingsTab } from './StorageSettingsTab'
 
-const SETTINGS_SECTION_KEYS = ['general', 'models', 'skills', 'wiki', 'remoteIm', 'feishu', 'wechat', 'butler'] as const
+const SETTINGS_SECTION_KEYS = ['general', 'models', 'skills', 'wiki', 'remoteIm', 'feishu', 'wechat', 'butler', 'storage'] as const
 
 type SettingsSectionKey = (typeof SETTINGS_SECTION_KEYS)[number]
 
@@ -245,7 +246,8 @@ export function ConfigSettingsPage() {
       remoteIm: tCommon('settings.remoteIm'),
       feishu: tCommon('settings.feishu'),
       wechat: tCommon('settings.wechat'),
-      butler: tCommon('settings.butler')
+      butler: tCommon('settings.butler'),
+      storage: tCommon('settings.storage')
     }
     return SETTINGS_SECTION_KEYS.map((key) => ({ key, label: labels[key] }))
   }, [tCommon])
@@ -1014,6 +1016,10 @@ export function ConfigSettingsPage() {
       case 'butler':
 
         return <ButlerTaskSettings />
+
+      case 'storage':
+
+        return <StorageSettingsTab />
 
       default:
 

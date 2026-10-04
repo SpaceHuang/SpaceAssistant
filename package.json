@@ -11,6 +11,7 @@
   },
   "scripts": {
     "test": "vitest run --project electron --project renderer",
+    "pretest": "npm run build:agent-provider-pi-ai",
     "test:watch": "vitest",
     "test:related": "vitest related --run",
     "test:electron": "vitest run --project electron",
@@ -83,6 +84,7 @@
     "lucide-react": "^0.468.0",
     "micromark-util-subtokenize": "^2.1.0",
     "playwright": "^1.52.0",
+    "proper-lockfile": "^4.1.2",
     "qrcode.react": "^4.2.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -110,6 +112,7 @@
     "@testing-library/dom": "^10.4.0",
     "@testing-library/react": "^16.3.0",
     "@types/node": "^24.13.3",
+    "@types/proper-lockfile": "^4.1.4",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@types/react-syntax-highlighter": "^15.5.13",

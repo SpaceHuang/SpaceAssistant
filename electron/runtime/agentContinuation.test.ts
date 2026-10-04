@@ -38,6 +38,52 @@ function db(): DatabaseSync {
 }
 
 describe('agent continuation checkpoint', () => {
+  it('atomically mirrors the stable-ID accepted user when a continuation context is created', () => {
+    const conn = db()
+    const sessionId = 'continuation-context-mirror-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('source-user',?,'user','stale accepted body','sent',1,1,0)`).run(sessionId)
+
+    const continuation = createOrGetAgentContinuation({ conn, snapshot: snapshot(), sessionId, requestIdempotencyKey: 'mirror-context', createdBy: 'u', frozenConfig: {} })
+
+    expect(continuation.status).toBe('pending')
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('source-user'))
+      .toEqual({ content: 'start', status: 'sent' })
+    expect(conn.prepare('SELECT kind FROM agent_history_events WHERE invocation_id=?').get(continuation.targetInvocationId))
+      .toEqual({ kind: 'invocation-context-committed' })
+    conn.close()
+  })
+
+  it('显式 retry 的 context 镜像失败时回滚 retry 身份、History 与旧正文', () => {
+    const conn = db()
+    const sessionId = 'continuation-retry-mirror-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('source-user',?,'user','legacy-before-retry','sent',1,1,0)`).run(sessionId)
+    const initial = createOrGetAgentContinuation({ conn, snapshot: snapshot(), sessionId, requestIdempotencyKey: 'initial', createdBy: 'u', frozenConfig: {}, newId: (() => { let id = 0; return () => `first-${++id}` })() })
+    claimAgentContinuation(conn, initial.continuationId, {})
+    expect(reconcileRunningAgentContinuations(conn, true, 10)).toEqual({ interrupted: 1, unknownSideEffect: 0, settled: 0 })
+    conn.exec(`CREATE TRIGGER reject_retry_context_mirror BEFORE UPDATE OF content ON messages
+      WHEN NEW.id='source-user' BEGIN SELECT RAISE(ABORT, 'injected retry mirror failure'); END`)
+
+    expect(() => createOrGetAgentContinuation({ conn, snapshot: snapshot(), sessionId, requestIdempotencyKey: 'retry', createdBy: 'u', frozenConfig: {}, newId: (() => { let id = 0; return () => `retry-${++id}` })() }))
+      .toThrow('injected retry mirror failure')
+    expect(conn.prepare('SELECT target_invocation_id,status FROM agent_continuations WHERE continuation_id=?').get(initial.continuationId))
+      .toEqual({ target_invocation_id: initial.targetInvocationId, status: 'interrupted' })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE invocation_id LIKE \'retry-%\'').get()).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT content FROM messages WHERE id=\'source-user\'').get()).toEqual({ content: 'start' })
+    conn.close()
+  })
+
+  it('拒绝 required-user 与折叠 transcript 正文不一致的 checkpoint', () => {
+    const source = snapshot()
+    ;(source.events[0]!.payload as { requiredUserMessage: { message: { content: string } } }).requiredUserMessage.message.content = 'different accepted body'
+    expect(() => validateContinuationCheckpoint(source)).toThrow('CHECKPOINT_REQUIRED_USER_MISMATCH')
+  })
+
   it('重建已提交工具结果，校验 checkpoint 摘要並原子幂等占用', () => {
     const conn = db()
     const source = snapshot()

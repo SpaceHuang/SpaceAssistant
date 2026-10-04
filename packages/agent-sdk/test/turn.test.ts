@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { runAgentTurn, runHostedAgentTurn, type AgentTurnHost } from '../src/turn'
+import { AgentTurnCancelledError, runAgentTurn, runHostedAgentTurn, type AgentTurnHost } from '../src/turn'
 import { ModelProviderRegistry, type CanonicalModelMessage, type StreamChunk } from '../src/model'
 import { CapabilityRegistry } from '../src/capability'
 import { InMemorySafetyPermitStore, type PermitBinding } from '../src/safetyPermit'
@@ -363,28 +363,47 @@ describe('runAgentTurn', () => {
       yield { type: 'usage', inputTokens: 1, outputTokens: 0 } as const
       yield { type: 'finish', reason: 'cancelled' } as const
     } })
-    const history = new MemoryHistory()
+    const backing = new MemoryHistory()
+    const transcriptCommits: import('../src/history').SessionTranscriptCommitIntent[] = []
+    const history = {
+      appendBatch: async (events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: import('../src/history').SessionTranscriptCommitIntent) => {
+        if (transcriptCommit) transcriptCommits.push(transcriptCommit)
+        return backing.appendBatch(events, expectedVersion)
+      },
+      read: (invocationId: string) => backing.read(invocationId)
+    }
     const capabilities = new CapabilityRegistry()
     capabilities.define('hosted-timeout', [])
     const permits = new InMemorySafetyPermitStore()
     const controller = new AbortController()
-    const host: AgentTurnHost = { createPorts: async ({ invocationId, turnId, routeId, request }) => ({
+    const host: AgentTurnHost = { createPorts: async ({ invocationId, turnId, routeId, request, sessionTranscriptBaseVersion, sessionTranscriptFailureMessages }) => ({
       registry, routeId, invocationId, ...(turnId ? { turnId } : {}), request, history,
+      ...(sessionTranscriptBaseVersion !== undefined ? { sessionTranscriptBaseVersion } : {}),
+      ...(sessionTranscriptFailureMessages ? { sessionTranscriptFailureMessages } : {}),
       safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'allow' as const, authorizationVersion: 'v1' }) } }),
       prepareTool: async () => toolBinding,
       toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
       maxModelTurns: 1
     }) }
     const running = runHostedAgentTurn({
-      host, invocationId: 'hosted-timeout', turnId: 'hosted-timeout-turn', routeId: route.routeId,
+      host, invocationId: 'hosted-timeout', turnId: 'hosted-timeout-turn', sessionId: 'hosted-timeout-session',
+      assistantMessageId: 'hosted-timeout-assistant', sessionTranscriptBaseVersion: 0,
+      sessionTranscriptFailureMessages: [
+        { role: 'user', content: 'timeout this turn' },
+        { role: 'assistant', id: 'hosted-timeout-assistant', content: 'timeout partial answer' }
+      ], routeId: route.routeId,
       request: { messages: [{ role: 'user', content: 'timeout this turn' }], maxTokens: 10, signal: controller.signal }
     })
     setTimeout(() => controller.abort('agent-turn-timeout'), 0)
 
     await expect(running).rejects.toMatchObject({ code: 'TURN_TIMED_OUT' })
-    expect((await history.read('hosted-timeout')).events.at(-1)).toMatchObject({
+    expect((await backing.read('hosted-timeout')).events.at(-1)).toMatchObject({
       kind: 'invocation-failed', payload: { status: 'failed', reason: 'timeout' }
     })
+    expect(transcriptCommits).toHaveLength(1)
+    expect(transcriptCommits[0]).toMatchObject({ outcome: 'timed_out', messageMirror: {
+      messageId: 'hosted-timeout-assistant', status: 'failed', content: 'timeout partial answer'
+    } })
   })
 
   it('returns a rejected confirmation to the model without dispatching the tool', async () => {
@@ -703,6 +722,138 @@ describe('runAgentTurn', () => {
       'session-input-committed', 'invocation-context-committed', 'model-request-started', 'model-response-committed', 'invocation-completed'
     ])
     expect(events[1]).toMatchObject({ sequence: 2, payload: { messages: [userMessage], requiredUserMessage: { id: 'user-a', message: userMessage } } })
+  })
+
+  it('does not report success when terminal History was preserved but transcript and message mirror commit failed', async () => {
+    const backing = new MemoryHistory()
+    const history = {
+      appendBatch: (events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: import('../src/history').SessionTranscriptCommitIntent) => {
+        if (transcriptCommit && events.some((event) => event.kind === 'invocation-completed')) return Promise.reject(new Error('injected message mirror failure'))
+        return backing.appendBatch(events, expectedVersion)
+      },
+      read: (invocationId: string) => backing.read(invocationId)
+    }
+    const registry = new ModelProviderRegistry()
+    registry.register(route, { providerId: 'terminal-mirror-failure', stream: () => stream(
+      { type: 'text-delta', text: 'answer' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
+    ) })
+    const permits = new InMemorySafetyPermitStore()
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'mirror-failure-invocation', turnId: 'mirror-failure-turn',
+      sessionId: 'mirror-failure-session', sessionTranscriptBaseVersion: 0, assistantMessageId: 'mirror-failure-assistant',
+      request: { messages: [{ role: 'user', content: 'question' }], maxTokens: 32 },
+      safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn()), history, maxModelTurns: 1
+    })).rejects.toThrow('injected message mirror failure')
+    expect((await backing.read('mirror-failure-invocation')).events.map(({ kind }) => kind)).toContain('invocation-completed')
+  })
+
+  it('projects canonical assistant text blocks into the failed terminal message mirror', async () => {
+    const backing = new MemoryHistory()
+    const terminalCommits: import('../src/history').SessionTranscriptCommitIntent[] = []
+    const history = {
+      appendBatch: async (events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: import('../src/history').SessionTranscriptCommitIntent) => {
+        if (transcriptCommit) terminalCommits.push(transcriptCommit)
+        return backing.appendBatch(events, expectedVersion)
+      },
+      read: (invocationId: string) => backing.read(invocationId)
+    }
+    const registry = new ModelProviderRegistry()
+    registry.register(route, { providerId: 'failed-block-message-mirror', stream: async function* () {
+      yield { type: 'text-delta', text: 'partial provider answer' } as const
+      throw new Error('provider disconnected')
+    } })
+    const permits = new InMemorySafetyPermitStore()
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'failed-block-message-mirror', turnId: 'failed-block-message-turn',
+      sessionId: 'failed-block-message-session', sessionTranscriptBaseVersion: 0, assistantMessageId: 'failed-block-message-assistant',
+      sessionTranscriptFailureMessages: [
+        { role: 'user', content: 'question' },
+        { role: 'assistant', id: 'failed-block-message-assistant', content: [
+          { type: 'text', text: 'partial canonical answer' }, { type: 'thinking', thinking: 'private reasoning' }
+        ] }
+      ],
+      history,
+      request: { messages: [{ role: 'user', content: 'question' }], maxTokens: 32 },
+      safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: undefined }))), maxModelTurns: 1
+    })).rejects.toThrow('provider disconnected')
+
+    expect(terminalCommits).toHaveLength(1)
+    expect(terminalCommits[0]).toMatchObject({ outcome: 'failed', messageMirror: {
+      messageId: 'failed-block-message-assistant', status: 'failed', content: 'partial canonical answer'
+    } })
+  })
+
+  it('uses cancelled outcome and status for a cancelled Hosted terminal mirror', async () => {
+    const backing = new MemoryHistory()
+    const transcriptCommits: import('../src/history').SessionTranscriptCommitIntent[] = []
+    const history = {
+      appendBatch: async (events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: import('../src/history').SessionTranscriptCommitIntent) => {
+        if (transcriptCommit) transcriptCommits.push(transcriptCommit)
+        return backing.appendBatch(events, expectedVersion)
+      },
+      read: (invocationId: string) => backing.read(invocationId)
+    }
+    const registry = new ModelProviderRegistry()
+    registry.register(route, { providerId: 'cancelled-message-mirror', stream: async function* () {
+      throw new AgentTurnCancelledError()
+    } })
+    const permits = new InMemorySafetyPermitStore()
+
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'cancelled-message-mirror', turnId: 'cancelled-message-turn',
+      sessionId: 'cancelled-message-session', sessionTranscriptBaseVersion: 0, assistantMessageId: 'cancelled-message-assistant',
+      sessionTranscriptFailureMessages: [
+        { role: 'user', content: 'question' },
+        { role: 'assistant', id: 'cancelled-message-assistant', content: [
+          { type: 'text', text: 'cancelled answer' }, { type: 'thinking', thinking: 'private reasoning' }
+        ] }
+      ], history, request: { messages: [{ role: 'user', content: 'question' }], maxTokens: 32 }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: undefined })))
+    })).rejects.toMatchObject({ code: 'TURN_CANCELLED' })
+
+    expect(transcriptCommits).toHaveLength(1)
+    expect(transcriptCommits[0]).toMatchObject({ outcome: 'cancelled', messageMirror: {
+      messageId: 'cancelled-message-assistant', status: 'cancelled', content: 'cancelled answer'
+    } })
+  })
+
+  it('maps a critical response projection failure to interrupted outcome and failed message status', async () => {
+    const backing = new MemoryHistory()
+    const transcriptCommits: import('../src/history').SessionTranscriptCommitIntent[] = []
+    const history = {
+      appendBatch: async (events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: import('../src/history').SessionTranscriptCommitIntent) => {
+        if (transcriptCommit) transcriptCommits.push(transcriptCommit)
+        return backing.appendBatch(events, expectedVersion)
+      },
+      read: (invocationId: string) => backing.read(invocationId)
+    }
+    const registry = new ModelProviderRegistry()
+    registry.register(route, { providerId: 'interrupted-message-mirror', stream: () => stream(
+      { type: 'text-delta', text: 'provider answer' }, { type: 'usage', inputTokens: 1, outputTokens: 2 }, { type: 'finish', reason: 'stop' }
+    ) })
+    const permits = new InMemorySafetyPermitStore()
+
+    await expect(runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'interrupted-message-mirror', turnId: 'interrupted-message-turn',
+      sessionId: 'interrupted-message-session', sessionTranscriptBaseVersion: 0, assistantMessageId: 'interrupted-message-assistant',
+      sessionTranscriptFailureMessages: [
+        { role: 'user', content: 'question' },
+        { role: 'assistant', id: 'interrupted-message-assistant', content: [
+          { type: 'text', text: 'canonical interrupted answer' }, { type: 'thinking', thinking: 'private reasoning' }
+        ] }
+      ], history, request: { messages: [{ role: 'user', content: 'question' }], maxTokens: 32 }, maxModelTurns: 1,
+      observer: { criticalModelResponseProjection: true, onModelResponseCommitted: () => { throw new Error('projection participant failed') } },
+      safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: undefined })))
+    })).rejects.toMatchObject({ name: 'AgentTurnHostProjectionError' })
+
+    expect(transcriptCommits).toHaveLength(1)
+    expect(transcriptCommits[0]).toMatchObject({ outcome: 'interrupted', messageMirror: {
+      messageId: 'interrupted-message-assistant', status: 'failed', content: 'canonical interrupted answer'
+    } })
   })
 
   it('rejects a session input marker owned by another session before provider dispatch', async () => {

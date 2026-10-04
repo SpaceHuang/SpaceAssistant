@@ -124,6 +124,7 @@
     "wiki": "项目 Wiki",
     "remoteIm": "IM 远程通用",
     "butler": "定时任务"
+    ,"storage": "存储占用"
   },
   "titleBar": {
     "close": "关闭",

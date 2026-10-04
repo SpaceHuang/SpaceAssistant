@@ -1,5 +1,6 @@
 import fs from 'fs'
 import path from 'path'
+import { randomUUID } from 'crypto'
 import type { Session } from '../../src/shared/domainTypes'
 import {
   DEFAULT_SESSION_SKILLS_STATE,
@@ -67,6 +68,7 @@ export function prepareSnapshotForMigration(snapshot: DbSnapshot): PreparedMigra
     const ts = related.reduce((min, m) => Math.min(min, m.timestamp), Date.now())
     sessionsById.set(sessionId, {
       id: sessionId,
+      generation: randomUUID(),
       name: '(迁移恢复)',
       preview: related[0]?.content?.slice(0, 80) ?? '',
       model: defaultModel,

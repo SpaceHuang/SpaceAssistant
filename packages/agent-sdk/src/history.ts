@@ -13,9 +13,17 @@ export type HistorySnapshot = { invocationId: string; version: number; schemaVer
 export type RebuiltInvocationState = { invocationId: string; state: 'interrupted' | 'completed' | 'failed' | 'denied' | 'cancelled'; lastEventId: string }
 export type HistoryAppendResult = { version: number; duplicate: boolean }
 export type InvocationHistoryAppendResult = HistoryAppendResult & { events: readonly HistoryEvent[] }
+export type SessionTranscriptCommitIntent = Readonly<{
+  sessionId: string
+  baseVersion: number
+  outcome: 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'interrupted'
+  messages: readonly Readonly<Record<string, unknown>>[]
+  /** Atomic mirror into the authoritative desktop message skeleton, when this turn owns one. */
+  messageMirror?: Readonly<{ messageId: string; status: 'completed' | 'failed' | 'cancelled'; content?: string }>
+}>
 
 export interface HistoryPort {
-  appendBatch(events: readonly HistoryEvent[], expectedVersion: number): Promise<HistoryAppendResult>
+  appendBatch(events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: SessionTranscriptCommitIntent): Promise<HistoryAppendResult>
   read(invocationId: string): Promise<HistorySnapshot>
 }
 
@@ -33,7 +41,7 @@ export class InvocationHistoryWriter {
     if (!identity.invocationId.trim() || !identity.turnId.trim()) throw new Error('history writer identity is required')
   }
 
-  append(events: readonly Readonly<{ kind: HistoryEvent['kind']; payload: unknown }>[]): Promise<InvocationHistoryAppendResult> {
+  append(events: readonly Readonly<{ kind: HistoryEvent['kind']; payload: unknown }>[], transcriptCommit?: SessionTranscriptCommitIntent): Promise<InvocationHistoryAppendResult> {
     if (!events.length) return Promise.reject(new HistoryBatchError('history append must not be empty'))
     const operation = this.tail.then(async () => {
       const snapshot = await this.history.read(this.identity.invocationId)
@@ -52,7 +60,7 @@ export class InvocationHistoryWriter {
           payload
         }
       })
-      const result = await this.history.appendBatch(batch, expectedVersion)
+      const result = await this.history.appendBatch(batch, expectedVersion, transcriptCommit)
       this.version = result.version
       return { ...result, events: batch }
     })
@@ -177,10 +185,10 @@ export function validateHistoryBatch(events: readonly HistoryEvent[]): void {
 }
 
 const TERMINAL_INVOCATION_EVENTS = new Set<HistoryEvent['kind']>([
-  'invocation-interrupted', 'invocation-completed', 'invocation-failed'
+  'invocation-parked', 'invocation-interrupted', 'invocation-completed', 'invocation-failed'
 ])
 
-/** A persisted terminal event closes an invocation stream permanently. */
+/** A persisted terminal or parked event closes an invocation stream permanently. */
 export function validateHistoryTransition(previous: readonly HistoryEvent[], incoming: readonly HistoryEvent[]): void {
   const invocationTurnId = previous[0]?.turnId ?? incoming[0]?.turnId
   if (invocationTurnId && (previous.some((event) => event.turnId !== invocationTurnId) || incoming.some((event) => event.turnId !== invocationTurnId))) {

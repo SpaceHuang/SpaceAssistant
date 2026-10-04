@@ -6,8 +6,9 @@ import { buildClaudeToolChatMessages } from '../src/shared/claudeToolHistory'
 import type { Message, Session } from '../src/shared/domainTypes'
 import type { AppLocale } from '../src/shared/locale'
 import { SESSION_TITLE_MAX_LENGTH } from '../src/shared/sessionDisplay'
-import { updateSession, getSession, getMessages, type AppDatabase } from './database'
+import { updateSession, getSession, type AppDatabase } from './database'
 import { logHistoryOversizedToolResult } from './oversizedToolResultLog'
+import { getProjectedMessages } from './runtime/sessionTranscriptProjection'
 
 export const SESSION_META_TITLE_GENERATED = 'titleGenerated'
 export const SESSION_META_TITLE_USER_CUSTOM = 'titleUserCustom'
@@ -16,6 +17,7 @@ export const SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED = 'titleOpenBackfillAtte
 
 /** user + assistant 可见消息累计达到该数量后尝试生成标题。 */
 export const TITLE_SUGGEST_TRIGGER_AT_MESSAGE_COUNT = 3
+/** Projection path uses completed assistant turns as a stable proxy for a three-message conversation. */
 
 const TITLE_SUGGEST_MAX_MESSAGES = TITLE_SUGGEST_TRIGGER_AT_MESSAGE_COUNT
 const TITLE_SUGGEST_LLM_TIMEOUT_MS = 45_000
@@ -215,8 +217,8 @@ export function scheduleSessionTitleOpenBackfillIfNeeded(args: {
   if (session.metadata?.[SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED] === true) return undefined
   if (inFlightSessionIds.has(sessionId)) return undefined
 
-  const rowMessages = getMessages(db, sessionId, 10_000, 0)
-  const convo = buildClaudeToolChatMessages(rowMessages.filter((message) => message.status !== 'streaming'), {
+  const rowMessages = getProjectedMessages(db, sessionId, 10_000, 0)
+  const convo = buildClaudeToolChatMessages(rowMessages, {
     onOversizedToolResult: (info) => {
       logHistoryOversizedToolResult({
         sessionId,

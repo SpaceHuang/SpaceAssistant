@@ -58,7 +58,8 @@ function canonicalMessagesToClaudeMessages(canonicalMessages: readonly Canonical
     messages.push({
       role: message.role,
       content: typeof message.content === 'string' ? message.content : blocks,
-      ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {})
+      ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {}),
+      ...(message.id ? { id: message.id } : {})
     })
   }
   flushToolResults()
@@ -95,12 +96,13 @@ export function toCanonicalModelMessages(messages: readonly ClaudeChatMessageWit
   const canonical: CanonicalModelMessage[] = []
   for (const message of messages) {
     if (typeof message.content === 'string') {
-      canonical.push({ role: message.role, content: message.content, ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {}) })
+      canonical.push({ role: message.role, content: message.content, ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {}), ...(message.id ? { id: message.id } : {}) })
       continue
     }
     if (!Array.isArray(message.content)) throw new Error('unsupported host message content')
     if (message.role === 'user') {
       let userBlocks: CanonicalContentBlock[] = []
+      const userStart = canonical.length
       const flushUser = () => {
         if (userBlocks.length) canonical.push({ role: 'user', content: userBlocks, ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {}) })
         userBlocks = []
@@ -121,6 +123,10 @@ export function toCanonicalModelMessages(messages: readonly ClaudeChatMessageWit
         } else throw new Error(`unsupported host content block: ${String(block.type)}`)
       }
       flushUser()
+      if (message.id && canonical.length - userStart === 1) {
+        const only = canonical[userStart]
+        if (only?.role === 'user') canonical[userStart] = { ...only, id: message.id }
+      }
       continue
     }
     const content: CanonicalContentBlock[] = []
@@ -154,13 +160,61 @@ export function toCanonicalModelMessages(messages: readonly ClaudeChatMessageWit
       }
     }
     if (message.role === 'assistant') {
-      const timestamp = message.timestamp !== undefined ? { timestamp: message.timestamp } : {}
+      const timestamp = { ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {}), ...(message.id ? { id: message.id } : {}) }
       if (content.length && toolCalls.length) canonical.push({ role: 'assistant', content, toolCalls, ...timestamp })
       else if (content.length) canonical.push({ role: 'assistant', content, ...timestamp })
       else canonical.push({ role: 'assistant', toolCalls, ...timestamp })
     }
   }
   return canonical
+}
+
+export type CanonicalProjectionWatermark = Readonly<{
+  sessionId: string
+  sessionGeneration: string
+  sessionSeq: number
+  commitOrder: number
+  watermarkEventId: string | null
+  watermarkInvocationId: string | null
+  eventCount: number
+}>
+
+export type CanonicalWatermarkEvent = Readonly<{
+  sessionId: string
+  sessionGeneration: string
+  sessionSeq: number
+  commitOrder: number
+  eventId: string
+  invocationId: string
+}>
+
+/** Validates cache watermarks against the live session incarnation and anchor event. */
+export function isCanonicalProjectionWatermarkValid(input: {
+  watermark: CanonicalProjectionWatermark
+  currentSessionId: string
+  currentGeneration: string
+  canonicalEventCount: number
+  anchor?: CanonicalWatermarkEvent
+}): boolean {
+  const { watermark } = input
+  if (!watermark.sessionId || watermark.sessionId !== input.currentSessionId || !watermark.sessionGeneration ||
+    watermark.sessionGeneration !== input.currentGeneration || !Number.isSafeInteger(watermark.eventCount) ||
+    watermark.eventCount < 0 || watermark.eventCount !== input.canonicalEventCount ||
+    !Number.isSafeInteger(input.canonicalEventCount) || input.canonicalEventCount < 0) return false
+
+  if (watermark.sessionSeq === -1) {
+    return watermark.commitOrder === -1 && watermark.watermarkEventId === null &&
+      watermark.watermarkInvocationId === null && watermark.eventCount === 0 && input.anchor === undefined
+  }
+
+  const anchor = input.anchor
+  return Number.isSafeInteger(watermark.sessionSeq) && watermark.sessionSeq >= 1 &&
+    Number.isSafeInteger(watermark.commitOrder) && watermark.commitOrder >= 1 &&
+    typeof watermark.watermarkEventId === 'string' && watermark.watermarkEventId.length > 0 &&
+    typeof watermark.watermarkInvocationId === 'string' && watermark.watermarkInvocationId.length > 0 &&
+    Boolean(anchor && anchor.sessionId === watermark.sessionId && anchor.sessionGeneration === watermark.sessionGeneration &&
+      anchor.sessionSeq === watermark.sessionSeq && anchor.commitOrder === watermark.commitOrder &&
+      anchor.eventId === watermark.watermarkEventId && anchor.invocationId === watermark.watermarkInvocationId)
 }
 
 export type CanonicalSessionSnapshot = Readonly<{
@@ -170,6 +224,49 @@ export type CanonicalSessionSnapshot = Readonly<{
   commitOrder: number
   messages: readonly ClaudeChatMessageWithBlocks[]
 }>
+
+/**
+ * Reduce an invocation stream to stable UI message bodies for the session projection.
+ * Tool declarations/results remain authoritative in the message skeleton and History
+ * transition validator; they are provider-context state, not independent UI messages.
+ */
+export function canonicalSessionTranscriptEvents(events: readonly HistoryEvent[]): HistoryEvent[] {
+  const transcriptEvents: HistoryEvent[] = []
+  for (const event of events) {
+    if (event.kind === 'tool-call-started' || event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') continue
+    if (event.kind === 'model-response-committed') {
+      const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+        ? event.payload as Record<string, unknown> : undefined
+      const rawMessage = payload?.message
+      const message = rawMessage && typeof rawMessage === 'object' && !Array.isArray(rawMessage)
+        ? rawMessage as Record<string, unknown> : undefined
+      if (payload && message && Object.hasOwn(message, 'toolCalls')) {
+        const { toolCalls: _toolCalls, ...bodyMessage } = message
+        transcriptEvents.push({ ...event, payload: { ...payload, message: bodyMessage } })
+      } else transcriptEvents.push(event)
+      continue
+    }
+    if (event.kind === 'invocation-context-committed' || event.kind === 'transcript-compacted') {
+      const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+        ? event.payload as Record<string, unknown> : undefined
+      const messages = payload?.messages
+      if (payload && Array.isArray(messages)) {
+        const transcriptMessages = messages.flatMap((rawMessage) => {
+          if (!rawMessage || typeof rawMessage !== 'object' || Array.isArray(rawMessage)) return [rawMessage]
+          const message = rawMessage as Record<string, unknown>
+          if (message.role === 'tool') return []
+          if (message.role !== 'assistant' || !Object.hasOwn(message, 'toolCalls')) return [rawMessage]
+          const { toolCalls: _toolCalls, ...bodyMessage } = message
+          return [bodyMessage]
+        })
+        transcriptEvents.push({ ...event, payload: { ...payload, messages: transcriptMessages } })
+      } else transcriptEvents.push(event)
+      continue
+    }
+    transcriptEvents.push(event)
+  }
+  return transcriptEvents
+}
 
 /**
  * Folds provider-context snapshots across invocations only when stable IDs prove
@@ -194,7 +291,8 @@ export function foldClaudeSessionSnapshots(snapshots: readonly CanonicalSessionS
     previousSessionSeq = snapshot.sessionSeq
     previousCommitOrder = snapshot.commitOrder
 
-    const ids = snapshot.messages.map((message) => {
+    const sessionMessages = snapshot.messages
+    const ids = sessionMessages.map((message) => {
       if (!message.id?.trim()) throw new Error('canonical session snapshot is missing stable message identity')
       return message.id
     })
@@ -214,7 +312,7 @@ export function foldClaudeSessionSnapshots(snapshots: readonly CanonicalSessionS
       }
     }
 
-    for (const [messageIndex, message] of snapshot.messages.entries()) {
+    for (const [messageIndex, message] of sessionMessages.entries()) {
       const id = ids[messageIndex]!
       const existingIndex = indexById.get(id)
       if (existingIndex === undefined) {
@@ -230,7 +328,10 @@ export function foldClaudeSessionSnapshots(snapshots: readonly CanonicalSessionS
 }
 
 /** Rebuilds the accepted model/tool suffix from committed History events; incomplete dispatches fail closed. */
-export function rebuildClaudeMessagesFromHistory(events: readonly HistoryEvent[]): ClaudeChatMessageWithBlocks[] {
+export function rebuildClaudeMessagesFromHistory(
+  events: readonly HistoryEvent[],
+  options: Readonly<{ omitAnonymousReplayFromSessionTranscript?: boolean; allowPendingToolCalls?: boolean }> = {}
+): ClaudeChatMessageWithBlocks[] {
   const messages: ClaudeChatMessageWithBlocks[] = []
   const pendingToolCalls = new Set<string>()
   const toolCallOrder: string[] = []
@@ -252,7 +353,7 @@ export function rebuildClaudeMessagesFromHistory(events: readonly HistoryEvent[]
       const canonicalMessages = payload.messages as CanonicalModelMessage[]
       const replacement = canonicalMessagesToClaudeMessages(canonicalMessages)
       const required = payload.requiredUserMessage
-      if (typeof required?.id === 'string' && required.message && typeof required.message === 'object') {
+      if (typeof required?.id === 'string' && required.message && typeof required.message === 'object' && !canonicalMessages.some((message) => 'id' in message && message.id === required.id)) {
         const target = JSON.stringify(required.message)
         let match = -1
         for (let index = replacement.length - 1; index >= 0; index -= 1) {
@@ -280,11 +381,12 @@ export function rebuildClaudeMessagesFromHistory(events: readonly HistoryEvent[]
       const message = payload?.message as CanonicalModelMessage | undefined
       if (!message || (message.role !== 'user' && message.role !== 'assistant')) throw new Error(`invalid canonical replay message: ${event.eventId}`)
       if (message.role === 'assistant') throw new Error('assistant replay messages must use model-response-committed')
-      if (typeof message.content === 'string') messages.push({ role: 'user', content: message.content })
+      if (!message.id?.trim() && options.omitAnonymousReplayFromSessionTranscript) continue
+      if (typeof message.content === 'string') messages.push({ role: 'user', content: message.content, ...(message.id ? { id: message.id } : {}) })
       else if (Array.isArray(message.content)) messages.push({ role: 'user', content: message.content.map((block) => {
         if (block.type === 'text') return { type: 'text', text: block.text }
         return { type: 'image', source: { type: 'base64', media_type: block.mimeType, data: block.data } }
-      }) })
+      }), ...(message.id ? { id: message.id } : {}) })
       else throw new Error(`invalid canonical user replay content: ${event.eventId}`)
       continue
     }
@@ -307,7 +409,8 @@ export function rebuildClaudeMessagesFromHistory(events: readonly HistoryEvent[]
         toolCallOrder.push(tool.id)
         blocks.push({ type: 'tool_use', id: tool.id, name: tool.name, input: tool.input, ...(tool.thoughtSignature ? { thought_signature: tool.thoughtSignature } : {}) })
       }
-      messages.push({ role: 'assistant', content: typeof message.content === 'string' ? message.content : blocks })
+      messages.push({ role: 'assistant', content: typeof message.content === 'string' ? message.content : blocks,
+        ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {}), ...(message.id ? { id: message.id } : {}) })
       continue
     }
     if (event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') {
@@ -325,7 +428,9 @@ export function rebuildClaudeMessagesFromHistory(events: readonly HistoryEvent[]
     }
   }
   flushResults()
-  if (pendingToolCalls.size) throw new Error(`history contains unresolved tool calls: ${[...pendingToolCalls].join(',')}`)
+  if (pendingToolCalls.size && !options.allowPendingToolCalls) {
+    throw new Error(`history contains unresolved tool calls: ${[...pendingToolCalls].join(',')}`)
+  }
   return messages
 }
 

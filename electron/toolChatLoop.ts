@@ -213,10 +213,10 @@ function createHostedInvocationHistory(
   history: NonNullable<AgentHostPorts['history']>
 ): import('../packages/agent-sdk/src/history').HistoryPort {
   return {
-    appendBatch: async (events, expectedVersion) => {
+    appendBatch: async (events, expectedVersion, transcriptCommit) => {
       const currentVersion = await writer.currentOrPersistedVersion()
       if (currentVersion !== expectedVersion) throw new Error(`history version ${currentVersion} does not match ${expectedVersion}`)
-      const appended = await writer.append(events)
+      const appended = await writer.append(events, transcriptCommit)
       return { version: appended.version, duplicate: appended.duplicate }
     },
     read: (invocationId) => history.read(invocationId)
@@ -241,6 +241,7 @@ export type RunToolChatSessionArgs = {
     beforeToolDispatch?: import('../packages/agent-sdk/src/turn').AgentTurnPorts['beforeToolDispatch']
     initialResponse?: HostCommittedModelResponse
     currentUserMessageId?: string
+    assistantMessageId?: string
     requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>
   }>) => Promise<Readonly<{ result: RunToolChatSessionResult; finalization: HostedTurnFinalization }> | undefined>
   requestId: string
@@ -585,7 +586,17 @@ export async function runToolChatSession(invocation: AgentInvocation, ports: Run
   const historyWriter = args.history ? new InvocationHistoryWriter(args.history as never, { invocationId: executionId, turnId: executionId }) : undefined
   const appendHistoryEvents = async (events: readonly Readonly<{ kind: HistoryEvent['kind']; payload: unknown }>[]): Promise<void> => {
     if (!historyWriter) return
-    await historyWriter.append(events)
+    const identityBoundEvents = args.assistantMessageId
+      ? events.map((event) => {
+          if (event.kind !== 'model-response-committed' || !event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) return event
+          const payload = event.payload as Record<string, unknown>
+          if (!payload.message || typeof payload.message !== 'object' || Array.isArray(payload.message)) return event
+          const message = payload.message as Record<string, unknown>
+          if (message.role !== 'assistant') return event
+          return { ...event, payload: { ...payload, message: { ...message, id: args.assistantMessageId } } }
+        })
+      : events
+    await historyWriter.append(identityBoundEvents)
   }
   if (historyWriter && args.history) args.hostHistory = createHostedInvocationHistory(historyWriter, args.history)
   const invocationLeaseState = ports.invocationRuntime
@@ -1158,6 +1169,7 @@ async function runToolChatSessionInner(
             ...(args.maxToolLoopRounds !== undefined ? { maxToolRounds: args.maxToolLoopRounds } : {}),
             ...(args.hostHistory ? { hostHistory: args.hostHistory } : {}),
             ...(args.currentUserMessageId ? { currentUserMessageId: args.currentUserMessageId } : {}),
+            ...(args.assistantMessageId ? { assistantMessageId: args.assistantMessageId } : {}),
             ...(requiredUserMessage ? { requiredUserMessage } : {})
           })
           if (!handoff) throw new Error('HOSTED_TURN_HANDOFF_MISSING_RESULT')

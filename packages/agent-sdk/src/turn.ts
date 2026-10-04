@@ -3,7 +3,7 @@ import type { PermitBinding } from './safetyPermit'
 import { type SafetyDenyReason, type SafetyGatePort } from './safetyGate'
 import { ToolExecutionAfterDispatchError, ToolExecutionRejectedError, type PermitBoundToolExecutionPort } from './toolExecutionPort'
 import { createHash } from 'node:crypto'
-import { InvocationHistoryWriter, type HistoryEvent, type HistoryPort } from './history'
+import { InvocationHistoryWriter, type HistoryEvent, type HistoryPort, type HistorySnapshot } from './history'
 import { ResourceLockRegistry } from './resourceLock'
 import { CapacityLedger, type CapacityReservation } from './capacity'
 import { Semaphore } from './runtime/semaphore'
@@ -28,6 +28,7 @@ export type AgentTurnPorts = Readonly<{
   observer?: AgentTurnObserver
   routeId: string
   invocationId: string
+  sessionId?: string
   turnId?: string
   windowId?: string
   currentUserMessageId?: string
@@ -54,12 +55,14 @@ export type AgentTurnPorts = Readonly<{
   sessionLedgerForModelResponse?(message: CanonicalTurnMessage, modelTurn: number, attempt: number, committedSessionLedger?: unknown): Promise<Record<string, unknown>> | Record<string, unknown>
   sessionLedgerForAttemptUsage?(attempt: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>
   sessionLedgerForInvocationTerminal?(terminal: { status: 'completed' | 'failed' | 'interrupted'; turnId: string; sessionEventReason?: 'completed' | 'failed' | 'interrupted' | 'cancelled' }): Promise<Record<string, unknown>> | Record<string, unknown>
+  sessionTranscriptBaseVersion?: number
+  sessionTranscriptFailureMessages?: readonly CanonicalTurnMessage[]
   /** Host planning/compaction after an accepted response and before its tools or next model request. */
   turnBoundary?(input: Readonly<{ invocationId: string; modelTurn: number; windowId?: string; response: CanonicalTurnMessage; messages: readonly CanonicalTurnMessage[]; toolCalls: readonly CanonicalToolExecutionCall[]; usage: AgentTurnResult['usage']; requestProjection?: unknown; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }> }>): Promise<Readonly<{ messages: readonly CanonicalTurnMessage[]; windowId?: string; historyPayload?: Record<string, unknown>; commitProjection?(): void | Promise<void> }> | void>
 }>
 
 export type AgentTurnHost = Readonly<{
-  createPorts(invocation: { invocationId: string; turnId?: string; windowId?: string; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>; routeId: string; request: PreparedModelCall['request'] }): Promise<AgentTurnPorts>
+  createPorts(invocation: { invocationId: string; sessionId?: string; turnId?: string; windowId?: string; currentUserMessageId?: string; requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>; sessionTranscriptBaseVersion?: number; sessionTranscriptFailureMessages?: readonly CanonicalTurnMessage[]; routeId: string; request: PreparedModelCall['request'] }): Promise<AgentTurnPorts>
 }>
 
 export type AgentTurnObserver = Readonly<{
@@ -138,11 +141,14 @@ export async function runHostedAgentTurn(input: {
   turnId?: string
   windowId?: string
   currentUserMessageId?: string
+  assistantMessageId?: string
   requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>
   routeId: string
   request: PreparedModelCall['request']
   /** Optional already-collected first response; requires an exact matching committed History event. */
   initialResponse?: HostCommittedModelResponse
+  sessionTranscriptBaseVersion?: number
+  sessionTranscriptFailureMessages?: readonly CanonicalTurnMessage[]
   observer?: AgentTurnObserver
 }): Promise<AgentTurnResult> {
   if (!input.routeId.trim()) throw new Error('hosted turn routeId is required')
@@ -158,11 +164,11 @@ export async function runHostedAgentTurn(input: {
   }
   const request = snapshotHostedRequest(input.request)
   const requiredUserMessage = input.requiredUserMessage ? freezeRequestSnapshot(structuredClone(input.requiredUserMessage)) : undefined
-  const ports = await input.host.createPorts({ invocationId: input.invocationId, ...(input.turnId ? { turnId: input.turnId } : {}), ...(input.windowId ? { windowId: input.windowId } : {}), ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(requiredUserMessage ? { requiredUserMessage } : {}), routeId: input.routeId, request })
+  const ports = await input.host.createPorts({ invocationId: input.invocationId, ...(input.sessionId ? { sessionId: input.sessionId } : {}), ...(input.turnId ? { turnId: input.turnId } : {}), ...(input.windowId ? { windowId: input.windowId } : {}), ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(requiredUserMessage ? { requiredUserMessage } : {}), ...(input.sessionTranscriptBaseVersion !== undefined ? { sessionTranscriptBaseVersion: input.sessionTranscriptBaseVersion } : {}), ...(input.sessionTranscriptFailureMessages ? { sessionTranscriptFailureMessages: input.sessionTranscriptFailureMessages } : {}), routeId: input.routeId, request })
   if (ports.invocationId !== input.invocationId) throw new Error('host returned ports for a different invocation')
   if (input.turnId && ports.turnId !== input.turnId) throw new Error('host returned ports for a different turn')
   if (ports.routeId !== input.routeId) throw new Error('host returned ports for a different route')
-  return runAgentTurn({ ...ports, request, sessionId: input.sessionId, windowId: input.windowId ?? ports.windowId, currentUserMessageId: input.currentUserMessageId, ...(requiredUserMessage ? { requiredUserMessage } : {}), ...(input.initialResponse ? { initialResponse: input.initialResponse } : {}), maxToolRounds: ports.maxToolRounds, observer: input.observer ?? ports.observer })
+  return runAgentTurn({ ...ports, request, sessionId: input.sessionId, windowId: input.windowId ?? ports.windowId, currentUserMessageId: input.currentUserMessageId, assistantMessageId: input.assistantMessageId, ...(requiredUserMessage ? { requiredUserMessage } : {}), ...(input.initialResponse ? { initialResponse: input.initialResponse } : {}), maxToolRounds: ports.maxToolRounds, observer: input.observer ?? ports.observer })
 }
 
 export type { CanonicalContentBlock, CanonicalToolCall } from './model'
@@ -235,6 +241,26 @@ function isTurnTimeoutSignal(signal?: AbortSignal): boolean {
   return signal?.aborted === true && signal.reason === AGENT_TURN_TIMEOUT_ABORT_REASON
 }
 
+async function sessionTranscriptMessagesForFailure(input: RunAgentTurnInput): Promise<readonly CanonicalTurnMessage[] | undefined> {
+  const baseline = input.sessionTranscriptFailureMessages
+  if (!baseline || !input.history) return baseline
+  let snapshot: HistorySnapshot
+  try { snapshot = await input.history.read(input.invocationId) }
+  catch { return undefined }
+  const compacted = [...snapshot.events].reverse().find((event) => event.kind === 'transcript-compacted')
+  if (!compacted) return baseline
+  const payload = compacted.payload && typeof compacted.payload === 'object' ? compacted.payload as { messages?: unknown } : undefined
+  if (!Array.isArray(payload?.messages) || !payload.messages.every((message) => message && typeof message === 'object' && !Array.isArray(message))) return undefined
+  const messages = payload.messages as CanonicalTurnMessage[]
+  if (!input.requiredUserMessage) return undefined
+  const required = JSON.stringify(input.requiredUserMessage.message)
+  let acceptedIndex = -1
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (JSON.stringify(messages[index]) === required) { acceptedIndex = index; break }
+  }
+  return acceptedIndex >= 0 ? messages.slice(0, acceptedIndex + 1) : undefined
+}
+
 function abortErrorForSignal(signal?: AbortSignal): AgentTurnCancelledError | AgentTurnTimedOutError {
   return isTurnTimeoutSignal(signal) ? new AgentTurnTimedOutError() : new AgentTurnCancelledError()
 }
@@ -283,6 +309,7 @@ export type RunAgentTurnInput = {
   observer?: AgentTurnObserver
   turnId?: string
   currentUserMessageId?: string
+  assistantMessageId?: string
   requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>
   history?: HistoryPort
   maxConcurrentTools?: number
@@ -295,6 +322,8 @@ export type RunAgentTurnInput = {
   sessionLedgerForModelResponse?(message: CanonicalTurnMessage, modelTurn: number, attempt: number, committedSessionLedger?: unknown): Promise<Record<string, unknown>> | Record<string, unknown>
   sessionLedgerForAttemptUsage?(attempt: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>
   sessionLedgerForInvocationTerminal?(terminal: { status: 'completed' | 'failed' | 'interrupted'; turnId: string; sessionEventReason?: 'completed' | 'failed' | 'interrupted' | 'cancelled' }): Promise<Record<string, unknown>> | Record<string, unknown>
+  sessionTranscriptBaseVersion?: number
+  sessionTranscriptFailureMessages?: readonly CanonicalTurnMessage[]
   preflightModelRequest?(input: Parameters<NonNullable<AgentTurnPorts['preflightModelRequest']>>[0]): ReturnType<NonNullable<AgentTurnPorts['preflightModelRequest']>>
   turnBoundary?(input: Parameters<NonNullable<AgentTurnPorts['turnBoundary']>>[0]): ReturnType<NonNullable<AgentTurnPorts['turnBoundary']>>
   recoverProviderAttempt?(input: Parameters<NonNullable<AgentTurnPorts['recoverProviderAttempt']>>[0]): ReturnType<NonNullable<AgentTurnPorts['recoverProviderAttempt']>>
@@ -304,7 +333,7 @@ export type RunAgentTurnInput = {
   providerStreamIdleTimeoutMs?: number
 }
 
-type AppendTurnHistory = (events: readonly Readonly<{ kind: HistoryEvent['kind']; payload: unknown }>[]) => Promise<readonly HistoryEvent[]>
+type AppendTurnHistory = (events: readonly Readonly<{ kind: HistoryEvent['kind']; payload: unknown }>[], transcriptCommit?: import('./history').SessionTranscriptCommitIntent) => Promise<readonly HistoryEvent[]>
 
 class AgentTurnHistoryAppendError extends Error {
   constructor(readonly kinds: readonly HistoryEvent['kind'][], readonly originalError: unknown) {
@@ -351,20 +380,27 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
   const writer = input.history
     ? new InvocationHistoryWriter(input.history, { invocationId: input.invocationId, turnId: input.turnId ?? input.invocationId })
     : undefined
-  const appendHistory: AppendTurnHistory = async (events) => {
+  const appendHistory: AppendTurnHistory = async (events, transcriptCommit) => {
     if (!writer) return []
     try {
-      const result = await writer.append(events)
+      const result = await writer.append(events, transcriptCommit)
       return result.events
     } catch (error) {
       throw new AgentTurnHistoryAppendError(events.map(({ kind }) => kind), error)
     }
   }
-  const appendTerminalHistory = async (kind: HistoryEvent['kind'], payload: unknown, sessionLedger?: Record<string, unknown>): Promise<void> => {
+  const appendTerminalHistory = async (kind: HistoryEvent['kind'], payload: unknown, sessionLedger?: Record<string, unknown>, transcriptCommit?: import('./history').SessionTranscriptCommitIntent): Promise<void> => {
     const persistedPayload = sessionLedger ? { ...(payload as Record<string, unknown>), sessionLedger } : payload
     try {
-      await appendHistory([{ kind, payload: persistedPayload }])
+      await appendHistory([{ kind, payload: persistedPayload }], transcriptCommit)
     } catch (error) {
+      // Preserve the terminal fact when the transcript participant itself fails. The host then
+      // observes the original commit error and can fence/reconcile the session instead of
+      // misclassifying a rolled-back terminal as a missing History event.
+      if (transcriptCommit) {
+        try { await appendHistory([{ kind, payload: persistedPayload }]) }
+        catch { /* The original atomic append error remains authoritative. */ }
+      }
       await observe(input.observer, 'history-terminal', () => input.observer?.onObservationError?.(error, 'history-terminal'))
       if (input.history) {
         try {
@@ -372,7 +408,7 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
           const terminal = [...snapshot.events].reverse().find((event) =>
             event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted'
           )
-          if (terminal?.kind === kind && terminal.invocationId === input.invocationId &&
+          if (!transcriptCommit && terminal?.kind === kind && terminal.invocationId === input.invocationId &&
             terminal.turnId === (input.turnId ?? input.invocationId) &&
             JSON.stringify(terminal.payload) === JSON.stringify(persistedPayload)) return
         } catch { /* The append error remains authoritative when its outcome cannot be read. */ }
@@ -388,7 +424,12 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
     const sessionLedger = input.sessionLedgerForInvocationTerminal
       ? await input.sessionLedgerForInvocationTerminal({ ...terminalPayload, turnId: input.turnId ?? input.invocationId })
       : undefined
-    await appendTerminalHistory('invocation-completed', terminalPayload, sessionLedger)
+    const transcriptCommit = input.sessionId && input.sessionTranscriptBaseVersion !== undefined
+      ? { sessionId: input.sessionId, baseVersion: input.sessionTranscriptBaseVersion, outcome: 'completed' as const,
+          messages: result.messages.filter((message) => message.role !== 'system') as readonly Readonly<Record<string, unknown>>[],
+          ...(input.assistantMessageId ? { messageMirror: { messageId: input.assistantMessageId, status: 'completed' as const, content: result.text } } : {}) }
+      : undefined
+    await appendTerminalHistory('invocation-completed', terminalPayload, sessionLedger, transcriptCommit)
     await observe(input.observer, 'turn-finished', () => input.observer?.onTurnFinished?.(result))
     return result
   } catch (error) {
@@ -479,7 +520,24 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
         const sessionLedger = input.sessionLedgerForInvocationTerminal
           ? await input.sessionLedgerForInvocationTerminal({ status, turnId: input.turnId ?? input.invocationId, ...(error instanceof AgentTurnCancelledError ? { sessionEventReason: 'cancelled' } : {}) })
           : undefined
-        await appendTerminalHistory(terminalKind, terminalPayload, sessionLedger)
+        const transcriptOutcome: import('./history').SessionTranscriptCommitIntent['outcome'] = error instanceof AgentTurnCancelledError ? 'cancelled'
+          : error instanceof AgentTurnTimedOutError ? 'timed_out'
+          : status === 'interrupted' ? 'interrupted' : 'failed'
+        const failureMessages = await sessionTranscriptMessagesForFailure(input)
+        const mirroredFailureMessage = input.assistantMessageId
+          ? failureMessages?.find((message) => message.role === 'assistant' && message.id === input.assistantMessageId)
+          : undefined
+        const mirroredFailureContent = mirroredFailureMessage ? assistantTextForLegacyProjection(mirroredFailureMessage.content) : undefined
+        const transcriptCommit = input.sessionId && input.sessionTranscriptBaseVersion !== undefined && failureMessages
+          ? { sessionId: input.sessionId, baseVersion: input.sessionTranscriptBaseVersion, outcome: transcriptOutcome,
+              messages: failureMessages.filter((message) => message.role !== 'system') as readonly Readonly<Record<string, unknown>>[],
+              ...(input.assistantMessageId ? { messageMirror: {
+                messageId: input.assistantMessageId,
+                status: error instanceof AgentTurnCancelledError ? 'cancelled' as const : 'failed' as const,
+                ...(mirroredFailureContent !== undefined ? { content: mirroredFailureContent } : {})
+              } } : {}) }
+          : undefined
+        await appendTerminalHistory(terminalKind, terminalPayload, sessionLedger, transcriptCommit)
       } catch { /* Preserve the original turn failure when terminal persistence also fails. */ }
     }
     await observe(input.observer, 'turn-failed', () => input.observer?.onTurnFailed?.({ error, status }))
@@ -962,7 +1020,14 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           toolCalls: toolCalls.map((tool) => ({ id: tool.toolCallId, name: tool.toolName, input: structuredClone(tool.input), ...(tool.thoughtSignature ? { thoughtSignature: tool.thoughtSignature } : {}) }))
       }
       : { role: 'assistant', content: assistantContentValue ?? '' }
-    const assistantMessage: CanonicalTurnMessage = initialResponse?.message ?? reducedAssistantMessage
+    const unboundAssistantMessage: CanonicalTurnMessage = initialResponse?.message ?? reducedAssistantMessage
+    if (unboundAssistantMessage.role !== 'assistant') throw new Error('canonical model response must be an assistant message')
+    if (input.assistantMessageId && unboundAssistantMessage.id && unboundAssistantMessage.id !== input.assistantMessageId) {
+      throw new Error('canonical assistant response message id does not match the assigned turn message')
+    }
+    const assistantMessage: CanonicalTurnMessage = input.assistantMessageId
+      ? { ...unboundAssistantMessage, id: input.assistantMessageId }
+      : unboundAssistantMessage
     const toolDispatchStates = new Map(toolCalls.map((tool) => [tool.toolCallId, 'pending' as 'pending' | 'not-dispatched' | 'started' | 'finished']))
     const markNotDispatched = async (tool: (typeof toolCalls)[number], reason: string, userMessage?: string): Promise<void> => {
       if (toolDispatchStates.get(tool.toolCallId) !== 'pending') return
@@ -1667,6 +1732,16 @@ class ApprovalCandidateSlots {
 function assistantHistoryContent(content: readonly CanonicalContentBlock[], text: string): string | readonly CanonicalContentBlock[] | undefined {
   if (content.some((block) => block.type === 'thinking')) return content
   return text || (content.length ? content.map((block) => block.type === 'text' ? block.text : '').join('') : undefined)
+}
+
+function assistantTextForLegacyProjection(content: unknown): string | undefined {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content) || !content.every((block) => block && typeof block === 'object' && !Array.isArray(block) &&
+    (((block as Record<string, unknown>).type === 'text' && typeof (block as Record<string, unknown>).text === 'string') ||
+      ((block as Record<string, unknown>).type === 'thinking' && typeof (block as Record<string, unknown>).thinking === 'string') ||
+      ((block as Record<string, unknown>).type === 'image' && typeof (block as Record<string, unknown>).data === 'string')))) return undefined
+  return content.filter((block) => (block as Record<string, unknown>).type === 'text')
+    .map((block) => (block as Record<string, unknown>).text as string).join('')
 }
 
 async function observe(observer: AgentTurnObserver | undefined, stage: Parameters<NonNullable<AgentTurnObserver['onObservationError']>>[1], callback: () => void | Promise<void> | undefined): Promise<void> {
