@@ -11,6 +11,7 @@
   },
   "scripts": {
     "test": "vitest run --project electron --project renderer",
+    "pretest": "npm run build:agent-provider-pi-ai",
     "test:watch": "vitest",
     "test:related": "vitest related --run",
     "test:electron": "vitest run --project electron",
