@@ -167,3 +167,9 @@ This follow-up resolves the local package version collision recorded in the prio
 - Created another isolated copy of the schema-v46 canonical-only fixture and set `agent_history_cursor_integrity.invalid=1` in that copy. Initial SQLite integrity check was `ok`; FK check was empty; the message body stayed empty and `canonical-backed-only`.
 - On the v0.2.4 arm64 package, API-context baseline, message page, search corpus and global search all failed through actual IPC with `CANONICAL_SESSION_CONTENT_UNAVAILABLE`.
 - After app exit, DB integrity remained `ok`, FK check empty, invalid marker remained set, and no legacy body was written back. This validates the persisted allocator invalid-marker read gate. Owner/watermark mutation cases and the remaining R→C technical installation sequence remain open.
+
+## v0.2.4 History session-owner drift package fault smoke (2026-10-04)
+
+- Created a separate canonical-only profile copy and, only there, dropped the write-stop UPDATE guard and changed the context event's `session_id` to `foreign-session`, leaving stream ownership and canonical message identity unchanged. SQLite integrity remained `ok`; FK check was empty because the event owner is not a foreign key.
+- On the v0.2.4 arm64 package, actual API-context, message-page, search-corpus and global-search IPCs all rejected with `CANONICAL_SESSION_CONTENT_UNAVAILABLE`.
+- After app exit the mismatched event remained, the canonical-only message body was still empty, and no successful partial projection was returned. This covers one event-owner drift case; stream-owner/cursor watermark mutation variants remain to be exercised through the candidate package.
