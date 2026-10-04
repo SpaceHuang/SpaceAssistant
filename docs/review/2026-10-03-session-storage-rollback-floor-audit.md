@@ -161,3 +161,9 @@ This follow-up resolves the local package version collision recorded in the prio
 - Copied the healthy schema-v46 canonical-only fixture to `/Users/space/Library/Application Support/SpaceAssistant-v024-allocator-pending`. Inserted one row into `agent_history_commit_cursor` through its production trigger, which registered the cursor in `agent_history_pending_commit_cursor` without a corresponding event. Before app launch, the integrity marker remained `invalid=0`; this represents a pending/unpaired allocation rather than direct table corruption.
 - On the v0.2.4 arm64 package, the actual API-context, message-page, search-corpus and global-search IPCs each failed with `CANONICAL_SESSION_CONTENT_UNAVAILABLE`. They did not return the warm L1 body or a successful empty result.
 - After app exit the pending cursor remained visible, integrity check was `ok`, FK check empty, and the canonical-only message body remained empty. This package-level case validates unpaired allocator handling. Direct allocator UPDATE/DELETE integrity-marker corruption and broader owner/watermark variants remain outstanding.
+
+## v0.2.4 allocator integrity-marker package fault smoke (2026-10-04)
+
+- Created another isolated copy of the schema-v46 canonical-only fixture and set `agent_history_cursor_integrity.invalid=1` in that copy. Initial SQLite integrity check was `ok`; FK check was empty; the message body stayed empty and `canonical-backed-only`.
+- On the v0.2.4 arm64 package, API-context baseline, message page, search corpus and global search all failed through actual IPC with `CANONICAL_SESSION_CONTENT_UNAVAILABLE`.
+- After app exit, DB integrity remained `ok`, FK check empty, invalid marker remained set, and no legacy body was written back. This validates the persisted allocator invalid-marker read gate. Owner/watermark mutation cases and the remaining R→C technical installation sequence remain open.
