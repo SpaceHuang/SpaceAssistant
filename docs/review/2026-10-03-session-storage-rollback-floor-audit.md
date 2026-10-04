@@ -1,0 +1,83 @@
+# Phase 5.5 rollback floor audit
+
+## Decision
+
+**No-go for stopping legacy body writes or clearing `messages.content`.** The currently published `v0.2.2` tag is not a compatible rollback target. A compatible rollback release has not been built or published, and physical cleanup must remain locked until that release is verified.
+
+This is a compatibility audit package, not approval to perform cleanup.
+
+## Evidence
+
+- Published tag `v0.2.2` declares database schema version 19 (`electron/database/schema.ts`). The current worktree declares schema version 46 and includes additive session-content state, eligibility, spill-GC, History invalidation, transcript-cache checksum, persisted write-stopped cleanup-state, completed-cleanup-ledger immutability, canonical-only body immutability, and global History allocator integrity migrations.
+- `v0.2.2` has no `electron/runtime/sessionTranscriptProjection.ts` or `electron/runtime/sessionContentWriteAuthority.ts`. Its user-facing message reads in `electron/database/operations.ts` select `messages.content` directly, including `getMessages`, `getTurnContext`, sequence paging, and route-window reads.
+- Current `electron/database/migrations.ts` rejects a database whose schema version is newer than the binary supports. A v0.2.2 rollback against the current schema-46 profile therefore fails before opening the application. If that version guard were bypassed, the old readers would still return empty bodies for rows already cleared by Phase 5.5.
+- Current Phase 5.4 retains legacy bodies and dual writes. That keeps the present database content readable by a compatible older build only while those copies remain intact; it does not make v0.2.2 a rollback target after a future clear.
+
+## Minimum compatible rollback release
+
+Before any legacy body is cleared, publish and preserve a rollback build that:
+
+1. Opens the exact schema version written by the cleanup release without downgrading or rewriting the database schema.
+2. Understands `content_storage_state='canonical-backed-only'` and reads each such body through the canonical History projection with spill checksum validation and fail-closed behavior.
+3. Covers every production body consumer needed after rollback, including transcript/chat, API context, turn routing and `reuse-user`, search, export/backup, retry, and recovery.
+4. Does not repopulate cleared legacy bodies from stale mirrors, and preserves all control metadata, queue/turn state, attachment references, and preview invariants.
+5. Has a kill switch or documented recovery path that returns to the preserved legacy copies before cleanup begins; after cleanup, rollback is limited to the compatible release floor.
+
+## Required release-floor verification
+
+Use a disposable copy of a real file-backed database at the exact cleanup-release schema (currently schema 46) with representative canonical-backed-only rows, multi-spill bodies, cache hit/miss states, queued messages, active/terminal turns, and backup/restore artifacts. Include a paired and an unpaired global History allocator cursor so the rollback floor verifies v46 cursor-integrity handling as well as transcript reads. Verify that the proposed floor build opens it, reads the canonical bodies after process restart, rejects missing/corrupt History or spill without returning empty content, and leaves the original profile untouched. Record the exact release identifier, schema version, test fixture, and result. The release must be published and retained before the first cleanup batch; a worktree, unmerged branch, or local build is not a release floor.
+
+## Gate status
+
+| Gate | Status |
+| --- | --- |
+| Current published rollback target compatibility | **Failed** (`v0.2.2`, schema 19; canonical-only reader absent) |
+| Compatible rollback build | **Local v46 candidate DMGs built and smoke-tested; no uniquely versioned R release published** |
+| Cleanup authorization | **Locked** |
+
+This gate is separate from the search-budget review and from the completed source-truth spill GC lifecycle. Neither of those changes makes the current published binary compatible with cleared `messages.content`.
+
+## Local R candidate package preflight (2026-10-04)
+
+This is local artifact evidence for the candidate commit below. It does not change the No-go decision or establish a published rollback floor.
+
+- Candidate commit: `9f9faa1d4cec0848f1ee7f507e1f67e80add0b21` (`fix(test): build local provider package before test suite`). The commit is present on `codex/session-storage-refactor-tdd`, not merged or tagged.
+- Clean detached checkout: `/tmp/session-storage-refactor-r-candidate2`; `npm ci` completed. Initial clean-checkout `npm test` exposed that the local provider package `dist/index.js` was missing. Added `pretest` to build that workspace package. A second fresh checkout from the candidate commit then passed focused storage tests (349/349) and the full suite (858 files passed, 1 skipped; 8,110 passed, 106 skipped).
+- Clean-checkout checks passed: renderer/shared/agent-sdk typecheck, normal and strict i18n checks, `git diff --check`, and `npm run build`.
+- `npm run pack:mac` produced local x64 and arm64 DMGs. Packaging logs show both app bundles passed the repository afterPack resource checks (ripgrep and seven tree-sitter assets) and ad-hoc signing verification. The arm64 bundle also passed `scripts/verify-macos-app-signature.mjs`; the sequential pack script removes the x64 app bundle after its DMG is built. Both disk images passed `hdiutil verify`.
+- Local DMG SHA-256: x64 `fe3672d354bf64ff83990766630a3080f08952b5498ce18eb008c9e61b7d4a56`; arm64 `3e00cb5bd56df88197c8d69cf9145a033f48de08421f994ff6eef146a1301d64`.
+- The machine has no Developer ID Application identity; these are ad-hoc signed local artifacts, not distribution-signed releases. No release/tag/publication was performed. The required disposable-profile upgrade and actual R→C→R installed-package drill is still outstanding; C is not yet a separate release artifact. Cleanup remains locked.
+
+## Integrated R candidate preflight (2026-10-04, integration commit `76555a46`)
+
+This addendum supersedes the earlier branch-only package preflight for current schema numbering. It remains local development evidence and does not change the No-go decision.
+
+- The isolated integration branch is `codex/session-storage-refactor-integration`; implementation commit `76555a46ebb8f58a2f3d591d9e0cf5d0b02b6ccc` is based on main `78909882`. Main and the original feature branch were not modified. Main's migrations v31–v33 are retained; the refactor migrations continue through schema v49 (cleanup state v48; History cursor integrity v49).
+- A detached clean checkout of `76555a46` completed `npm ci`, the full suite (866 files passed/1 skipped; 8,223 passed/106 skipped), shared/renderer/agent-sdk typechecks, normal and strict i18n checks, and `npm run build`. `pretest` built `agent-provider-pi-ai` from the clean checkout.
+- `npm run pack:mac` built the x64 app bundle and passed ripgrep/tree-sitter resource checks. The initial afterPack signing attempt failed while disk space was low; after space was freed, the app bundle was ad-hoc signed and `codesign --verify --deep --strict` passed. Electron Builder could not create the DMG: `hdiutil resize` failed with `ENOSPC` (requested temporary image size about 861 MB). No arm64 DMG was produced.
+- The machine reports zero valid Developer ID Application identities. The ad-hoc signed `.app` is not a distribution-signed installer. `npm cache clean --force` was attempted to free space but stopped on an EACCES error for a root-owned cache entry; it removed some cache data before stopping.
+- No installation, disposable-profile upgrade, R→C→R drill, release, or tag was performed. Current installed rollback floor remains unavailable; cleanup stays locked.
+
+## Local profile migration smoke (2026-10-04, schema 33 → 49)
+
+This is an isolated app-bundle smoke test. The DMG was made directly with `hdiutil` from the ad-hoc signed x64 `.app` because the repository electron-builder DMG step could not allocate its temporary image. It is not the prescribed or distribution-ready R installer.
+
+- The local test image `SpaceAssistant-0.2.2-local-test.dmg` passed `hdiutil verify`; SHA-256: `b1d42c2b3f943759ff21adad05158ada0391b6a5b3ea8cc5c7bccd0c5a10fdd7`.
+- Built a disposable file-backed profile with main's schema-v33 database code and one user message (`legacy-body-survives-r-migration`). Started the app from the mounted image twice with `--user-data-dir=/tmp/sa-r-legacy-profile-76555`, never using the installed app's profile.
+- After startup and again after restart, schema version was 49; the session/message IDs, sequence 0, status, and legacy body remained intact. The v48 `content_storage_state` column was present. No stop-write or cleanup API was invoked.
+- The Mac was locked during the run, so no window-level check was possible. Database evidence proves startup migration and retained-body integrity only; it does not prove a polished install flow, graceful UI shutdown, canonical-only rollback reads, or C→R compatibility.
+- The repository `npm run pack:mac`/electron-builder DMG flow remains failed for disk space; no Developer ID exists. No C artifact, release, or tag exists. Gate remains No-go; cleanup remains locked.
+
+
+## Local v46 clean-checkout candidate package smoke (2026-10-04)
+
+This is stronger local candidate evidence on the TDD branch, but it does not establish a supported rollback floor.
+
+- Fixed source: commit `9f9faa1d4cec0848f1ee7f507e1f67e80add0b21`. Created a new detached clean checkout at `.worktrees/session-storage-r-clean-9f9faa1d`; `npm ci` completed (1,086 packages added; npm audit reported 32 vulnerabilities: 1 low, 10 moderate, 20 high, 1 critical).
+- Clean-checkout validation passed: full `npm test -- --reporter=dot` (858 files passed/1 skipped; 8,110 passed/106 skipped), renderer/shared/agent-sdk typechecks, normal and strict i18n (1,154 hardcoded Chinese occurrences, all in tests; 0 in source), and `npm run build`.
+- `npm run pack:mac` produced `release/SpaceAssistant-0.2.2.dmg` (198 MiB, SHA-256 `acf3419b9a2300008df476ebc60e7d4286e257ccf57ad7732e2e8a9a0e0f3ea2`) and `release/SpaceAssistant-0.2.2-arm64.dmg` (191 MiB, SHA-256 `d1f301f40dbb979039c35c5bbeac8501ee839723687a757ba50d4e0d0bd6ec88`). Both passed `hdiutil verify`; both app bundles passed ripgrep/tree-sitter resource checks and local ad-hoc signing verification. The machine has no valid Developer ID Application identity. The package metadata still says `0.2.2`, colliding with the already published incompatible `v0.2.2` (schema 19); these files must not be represented as R or distributed.
+- Built a disposable file-backed schema-v46 profile with one completed canonical History message, passed the explicit cleanup protocol to `complete`, then closed/reopened. The DB had `content=''`, `content_storage_state='canonical-backed-only'`, `cleanup_state='complete'`, `write_mode='canonical'`, `api_read_mode='legacy'`, `integrity_check=ok`, and no FK violations. Fixture path: `/var/folders/ty/_cyp42ys5m19qj_4_qhvst4m0000gn/T/sa-m2-6-candidate-F5O3p7`; session `e2f15c7a-4e04-4175-b51f-fbec5159da8b`.
+- Mounted and launched the arm64 DMG read-only against this disposable profile. Startup migration, History classification/recovery, and session-ledger reconcile all logged `ok`. Actual renderer→preload→IPC calls to `chatGetApiContextBaseline`, `chatGetMessagePage`, `chatGetSearchCorpusPage`, and global `searchExecute` returned or hit `canonical body survives restart`. Deleted only the disposable profile's transcript projection L1 row after clean app exit, relaunched the package, and all four reads still returned the same body through History reconstruction.
+- Launched the x64 DMG through Rosetta against a second disposable copy. Startup stages logged `ok`; the same four actual packaged IPC consumers returned/hit the canonical body. After exit, both healthy profiles retained an empty legacy body and complete cleanup ledger; integrity checks were `ok`, FK checks empty.
+- Fault injection used a separate copy at `/tmp/sa-m2-6-v46-corrupt-history`: after dropping the write-stop delete guard solely in that disposable copy, removed the invocation context event while leaving its terminal event. The mounted arm64 package started and its page, API-context baseline, and search-corpus IPCs each rejected with `CANONICAL_SESSION_CONTENT_UNAVAILABLE`; they did not return empty content. After exit, DB integrity remained `ok`, FK check empty, legacy body stayed empty, cleanup stayed complete/canonical, and no transcript cache was rebuilt.
+- Limits: no failed-assistant retry IPC, full model dispatch (write-fenced complete session must not resume), export/JSON restore package round-trip, multi-spill package fixture, damaged-spill package fixture, paired/unpaired allocator corruption matrix, or actual C→R→C installed release drill was run here. Candidate package version collision and absent C/final R artifact prevent release-floor sign-off; production cleanup stays locked.

@@ -166,7 +166,8 @@ M4 要分别回答两个问题：**启动是否变快**与**数据库文件是�
 
 | 任务 ID | 状态 | 证据链接/路径 | 备注 |
 | --- | --- | --- | --- |
-| M0-1…M4-9（各 ID 单独建行） | 未开始 | — | 汇总占位；执行时按 ID 拆成独立记录，不可整体标完成 |
+| 其余任务 ID | 待逐项核验 | — | 此占位行不代表各任务状态；执行时必须按 ID 补充独立记录 |
+| M2-6 | 进行中 | [回滚地板审计 §Local v46 clean-checkout package smoke](../review/2026-10-03-session-storage-rollback-floor-audit.md#local-v46-clean-checkout-candidate-package-smoke-2026-10-04)；固定代码 `9f9faa1d4cec0848f1ee7f507e1f67e80add0b21`；临时 clean checkout `.worktrees/session-storage-r-clean-9f9faa1d` | clean checkout 的 `npm ci`、858 文件全量 suite（8,110 passed/106 skipped）、renderer/shared/agent-sdk typecheck、i18n/strict i18n、build 与 x64/arm64 DMG 构建通过；两个包均在本机临时 schema-v46 canonical-only/cleanup-complete profile 实际启动，renderer→preload→IPC 的 API baseline/page/search corpus/global search 读出正文；删除 L1 cache 后 arm64 重启仍读出正文，损坏 History context 后三个 IPC fail closed。DMG 通过 hdiutil verify，SHA 与签名状态见审计。产物版本字段仍为 `0.2.2`，且无 Developer ID、无正式 tag/release；不是兼容 R。M2-6 仍待分配唯一 R 版本、retry/其余消费者矩阵，以及正式 R/C 安装包演练 |
 
 ## 6. 与技术方案的同步要求
 
