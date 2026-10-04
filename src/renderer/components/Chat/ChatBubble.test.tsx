@@ -58,6 +58,35 @@ describe('ChatBubble streaming render', () => {
     expect(chatMarkdownRenderCount).toHaveBeenCalled()
   })
 
+  it('keeps assistant text in timeline order alongside runtime activity', () => {
+    const now = Date.now()
+    render(
+      <ChatBubble
+        message={assistantMessage({
+          status: 'completed',
+          content: 'Final answer',
+          thinking: {
+            content: 'Thinking details',
+            isVisible: true,
+            startTime: now,
+            segments: [{ content: 'Thinking details', startTime: now }]
+          },
+          contentSegments: [{ content: 'Final answer', startTime: now + 1, endTime: now + 2 }]
+        })}
+      />
+    )
+
+    const region = document.querySelector('.chat-bubble-col--assistant')
+    const activityTrack = region?.querySelector('.chat-activity-track')
+    const thinking = activityTrack?.querySelector('.chat-thinking')
+    const response = activityTrack?.querySelector('.chat-bubble--assistant')
+    expect(activityTrack).not.toBeNull()
+    expect(thinking).not.toBeNull()
+    expect(response).not.toBeNull()
+    expect(Boolean(thinking!.compareDocumentPosition(response!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
+    expect(region?.querySelector('.chat-response-track')).toBeNull()
+  })
+
   it('skips re-render when memo props are unchanged', () => {
     chatMarkdownRenderCount.mockClear()
     const msg = assistantMessage({

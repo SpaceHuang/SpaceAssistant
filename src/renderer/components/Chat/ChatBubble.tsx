@@ -361,7 +361,8 @@ export const ChatBubble = memo(function ChatBubble({
     )
   }
 
-  const renderActivityItem = (item: AssistantActivityItem, key: string): ReactNode => {    if (item.kind === 'thinking') {
+  const renderActivityItem = (item: AssistantActivityItem, key: string): ReactNode => {
+    if (item.kind === 'thinking') {
       const seg = thinkingSegments[item.segmentIndex]
       if (!seg) return null
       return (
@@ -446,6 +447,8 @@ export const ChatBubble = memo(function ChatBubble({
       return renderActivityItem(segment.item, `${message.id}-act-${activityItemKey(segment.item)}`)
     }
 
+    if (!segment.items.some((item) => item.kind !== 'text')) return null
+
     const isLastBatch = segmentIndex === lastBatchSegmentIndex
     const batchInProgress = isActivityBatchInProgress(segment.items, batchProgressCtx)
     const isActive = isLastBatch && batchInProgress
@@ -470,7 +473,7 @@ export const ChatBubble = memo(function ChatBubble({
         isActive={isActive}
         keepExpanded={keepExpanded}
         searchReveal={searchReveal}
-        summary={buildBatchSummary(segment.items, { toolById, thinkingSegments, t })}
+        summary={buildBatchSummary(segment.items.filter((item) => item.kind !== 'text'), { toolById, thinkingSegments, t })}
         renderItem={(item, itemIndex) =>
           renderActivityItem(item, `${message.id}-batch-${activityItemKey(item)}`)
         }
