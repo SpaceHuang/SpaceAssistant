@@ -28,8 +28,8 @@
     "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
     "build:renderer": "vite build",
     "build:tray-icons": "node scripts/build-tray-icons.mjs",
-    "build:electron": "rimraf dist-electron && npm run check:pi-ai-runtime-closure && npm run build:agent-provider-pi-ai && tsc -p tsconfig.electron.json",
-    "build:electron:incremental": "npm run check:pi-ai-runtime-closure && npm run build:agent-provider-pi-ai && tsc -p tsconfig.electron.json",
+    "build:electron": "rimraf dist-electron && npm run check:session-storage-r-boundary && npm run check:pi-ai-runtime-closure && npm run build:agent-provider-pi-ai && tsc -p tsconfig.electron.json",
+    "build:electron:incremental": "npm run check:session-storage-r-boundary && npm run check:pi-ai-runtime-closure && npm run build:agent-provider-pi-ai && tsc -p tsconfig.electron.json",
     "build": "npm run build:tray-icons && npm run build:renderer && npm run build:electron",
     "typecheck:renderer": "tsc -p tsconfig.renderer.json --noEmit",
     "typecheck:agent-sdk": "tsc -p packages/agent-sdk/tsconfig.json",
@@ -63,7 +63,8 @@
     "build:agent-provider-pi-ai": "tsc -p packages/agent-provider-pi-ai/tsconfig.build.json",
     "check:tool-result-invariants": "node scripts/scan-tool-result-invariants.mjs",
     "test:tool-reliability": "npm run test:electron && npm run check:tool-result-invariants",
-    "check:pi-ai-runtime-closure": "node scripts/check-pi-ai-runtime-closure.mjs"
+    "check:pi-ai-runtime-closure": "node scripts/check-pi-ai-runtime-closure.mjs",
+    "check:session-storage-r-boundary": "tsx scripts/check-session-storage-r-boundary.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.79.0",
