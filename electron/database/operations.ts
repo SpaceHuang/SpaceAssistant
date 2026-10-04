@@ -28,7 +28,7 @@ import { isThinkingEffort } from '../../src/shared/thinkingEffort'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import { collectSourceTruthSpillLocators } from '../storage/spillProtocol'
 import { appendSqliteAgentHistoryBatchInTransaction } from './agentHistoryStorage'
-import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
+import { CANONICAL_SESSION_CACHE_VERSION, SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
 import {
   estimateThinkingTokensFromMessage,
@@ -288,8 +288,8 @@ export function createSession(
       conn.prepare(`INSERT OR REPLACE INTO canonical_session_projection_cache(
         session_id, cache_key, cache_version, session_generation, session_seq, commit_order,
         watermark_event_id, watermark_invocation_id, event_count, value, value_sha256, updated_at
-      ) VALUES(?, 'transcript', 1, ?, -1, -1, NULL, NULL, 0, ?, ?, ?)`)
-        .run(session.id, session.generation, emptyProjection, emptyProjectionSha256, now)
+      ) VALUES(?, 'transcript', ?, ?, -1, -1, NULL, NULL, 0, ?, ?, ?)`)
+        .run(session.id, CANONICAL_SESSION_CACHE_VERSION, session.generation, emptyProjection, emptyProjectionSha256, now)
     } catch { /* Projection seed is disposable; session creation remains authoritative. */ }
     try {
       conn.prepare(`INSERT OR REPLACE INTO canonical_session_projection_eligibility(session_id, session_generation, validated_at)

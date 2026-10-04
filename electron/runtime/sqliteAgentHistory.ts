@@ -27,7 +27,7 @@ import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
 import { createSpillStoreForDatabase, type SpillDescriptor, type SpillStore } from '../storage/spillStore'
 import { collectSpillDescriptorsStrict } from '../storage/spillProtocol'
 
-const CANONICAL_SESSION_CACHE_VERSION = 1
+export const CANONICAL_SESSION_CACHE_VERSION = 2
 
 function stableCanonicalValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableCanonicalValue)

@@ -1519,7 +1519,7 @@ describe('SqliteAgentHistory', () => {
       { id: 'user-2', role: 'user', content: 'second', timestamp: 3 }
     ])).toMatchObject({ kind: 'matched', source: 'L2' })
     expect(conn.prepare("SELECT cache_version FROM canonical_session_projection_cache WHERE session_id='session-fold' AND cache_key='assistant-content'").get())
-      .toEqual({ cache_version: 1 })
+      .toEqual({ cache_version: 2 })
     conn.exec('DROP TABLE canonical_session_projection_cache')
     expect(history.readCanonicalSessionTranscriptWithCache('session-fold', 'assistant-content', [
       { id: 'user-1', role: 'user', content: 'first', timestamp: 1 },
@@ -1579,6 +1579,34 @@ describe('SqliteAgentHistory', () => {
       { role: 'user', content: 'question', id: 'response-user', timestamp: 1 },
       { role: 'assistant', content: 'answer', id: 'response-assistant', timestamp: 2 }
     ], sessionId: 'session-response-fold', sessionGeneration: 'generation-response', sessionSeq: 3, commitOrder: 3, watermarkEventId: 'response-terminal', watermarkInvocationId: 'response-inv', eventCount: 3 })
+    conn.close()
+  })
+
+  it('rebuilds old transcript cache rows after stable assistant identity folding changes', async () => {
+    const conn = createDb()
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES('session-stable-cache-version','s','m',0.7,1,1,1,'{}','{}',1,'generation-stable-cache')`).run()
+    const history = new SqliteAgentHistory(conn, 1, () => 100, 'session-stable-cache-version')
+    const legacyMessages = [
+      { role: 'user' as const, content: 'question', id: 'stable-cache-user', timestamp: 1 },
+      { role: 'assistant' as const, content: 'final answer', id: 'stable-cache-assistant', timestamp: 2 }
+    ]
+    await history.appendBatch([{ ...event('stable-cache-context', 1), invocationId: 'stable-cache-inv', kind: 'invocation-context-committed', payload: {
+      messages: legacyMessages
+    } }], 0)
+    const canonical = history.readCanonicalSessionTranscript('session-stable-cache-version', legacyMessages)
+    if (canonical.kind !== 'matched') throw new Error('expected a valid stable-identity transcript')
+    const oldFoldMessages = [
+      { role: 'user', content: 'question', id: 'stable-cache-user', timestamp: 1 },
+      { role: 'assistant', content: 'checking', id: 'stable-cache-assistant', timestamp: 2 },
+      { role: 'assistant', content: 'final answer', id: 'stable-cache-assistant', timestamp: 2 }
+    ]
+    expect(history.writeCanonicalSessionCache({ ...canonical, cacheKey: 'transcript', value: JSON.stringify(oldFoldMessages) })).toBe(true)
+    conn.prepare(`UPDATE canonical_session_projection_cache SET cache_version=1
+      WHERE session_id='session-stable-cache-version' AND cache_key='transcript'`).run()
+
+    expect(history.readCanonicalSessionTranscriptWithCache('session-stable-cache-version', 'transcript', legacyMessages))
+      .toMatchObject({ kind: 'matched', source: 'L2', messages: canonical.messages })
     conn.close()
   })
 

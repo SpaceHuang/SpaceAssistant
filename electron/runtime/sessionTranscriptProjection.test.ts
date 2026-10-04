@@ -28,8 +28,8 @@ describe('session transcript projection P2 read path', () => {
     const conn = getDbConnection(db)
     const persisted = conn.prepare('SELECT generation FROM sessions WHERE id=?').get(session.id) as { generation: string }
     expect(session.generation).toBe(persisted.generation)
-    expect(conn.prepare("SELECT session_generation,session_seq,commit_order,event_count,value FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
-      .toEqual({ session_generation: persisted.generation, session_seq: -1, commit_order: -1, event_count: 0, value: '[]' })
+    expect(conn.prepare("SELECT cache_version,session_generation,session_seq,commit_order,event_count,value FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
+      .toEqual({ cache_version: 2, session_generation: persisted.generation, session_seq: -1, commit_order: -1, event_count: 0, value: '[]' })
     expect(conn.prepare('SELECT session_generation FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id))
       .toEqual({ session_generation: persisted.generation })
     expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L1', messages: [] })
@@ -1130,7 +1130,7 @@ describe('session transcript projection P2 read path', () => {
     }
   })
 
-  it.each(['generation', 'watermark-event', 'watermark-commit-order', 'watermark-session-seq', 'watermark-event-count', 'cursor-behind', 'cursor-missing'] as const)(
+  it.each(['cache-version', 'generation', 'watermark-event', 'watermark-commit-order', 'watermark-session-seq', 'watermark-event-count', 'cursor-behind', 'cursor-missing'] as const)(
     'rebuilds canonical-only transcript after persisted cache %s drift', async (drift) => {
     const temp = createTempDatabase(`canonical-cache-${drift}-drift-`)
     let reopened: ReturnType<typeof openDatabase> | undefined
@@ -1152,7 +1152,10 @@ describe('session transcript projection P2 read path', () => {
 
       reopened = openDatabase(temp.dbPath)
       const reopenedConn = getDbConnection(reopened)
-      if (drift === 'generation') {
+      if (drift === 'cache-version') {
+        reopenedConn.prepare("UPDATE canonical_session_projection_cache SET cache_version=1 WHERE session_id=? AND cache_key='transcript'")
+          .run(session.id)
+      } else if (drift === 'generation') {
         reopenedConn.prepare("UPDATE canonical_session_projection_cache SET session_generation='stale-generation' WHERE session_id=? AND cache_key='transcript'")
           .run(session.id)
       } else if (drift === 'watermark-event') {
