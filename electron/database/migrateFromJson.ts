@@ -28,6 +28,10 @@ export type MigrationResult = {
 const DEFAULT_RECOVERED_MODEL = 'claude-sonnet-4-20250514'
 const WORKSPACE_LAYOUT_CONFIG_KEY = 'config.workspaceLayout'
 
+function normalizeSessionGeneration(value: unknown): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : randomUUID()
+}
+
 export type PreparedMigrationSnapshot = {
   snapshot: DbSnapshot
   recoveredSessionIds: string[]
@@ -39,7 +43,7 @@ export function prepareSnapshotForMigration(snapshot: DbSnapshot): PreparedMigra
   const sessionsById = new Map<string, Session>()
   for (const session of snapshot.sessions) {
     if (session?.id && typeof session.id === 'string' && !sessionsById.has(session.id)) {
-      sessionsById.set(session.id, { ...session, generation: session.generation?.trim() || randomUUID() })
+      sessionsById.set(session.id, { ...session, generation: normalizeSessionGeneration(session.generation) })
     }
   }
 
@@ -132,7 +136,7 @@ function insertSession(conn: ReturnType<typeof getDbConnection>, session: Sessio
       metadata: JSON.stringify(session.metadata ?? {}),
       schemaVersion: session.schemaVersion,
       workDirProfileId: session.workDirProfileId ?? null,
-      generation: session.generation?.trim() || randomUUID()
+      generation: normalizeSessionGeneration(session.generation)
     })
 }
 

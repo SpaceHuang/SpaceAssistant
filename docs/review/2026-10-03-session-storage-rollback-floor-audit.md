@@ -86,3 +86,13 @@ This is code-level preflight evidence after the integrated candidate's assistant
 - Renderer/shared/agent-sdk/Electron typechecks, full `npm run build`, strict i18n (0 source occurrences; 1,214 test occurrences), and `git diff --check` passed.
 - This checkout's `node_modules` was not self-contained. Validation resolved dependencies from the existing local dependency store and added ignored links for TypeScript 5.9.3 and `@earendil-works/pi-ai@0.87.1`. `npm ci` has not been rerun at this exact commit; the result is fixed-commit code/build evidence, not fresh-install evidence.
 - No distribution installer, installation/rollback drill, R publication, or C artifact exists. Disk space is approximately 375 MiB and the machine has zero valid Developer ID identities. Gate remains No-go; stop-write/cleanup remains locked.
+
+
+## Post-review fixes (2026-10-04, v261 working tree)
+
+OCR re-review of `a285443a` found two issues; the current working tree fixes them, but this is not yet a fixed candidate commit.
+
+- High: continuation context can intentionally remove the stable ID from an intermediate assistant response. The raw History event remains intact for provider context, while `canonicalSessionTranscriptEvents` now omits only id-less assistant messages from UI transcript snapshots. A file-backed session History regression failed before the fix and passes after it; other malformed roles/IDs remain fail-closed.
+- Low: legacy JSON `generation` is untrusted. A non-string previously caused `.trim is not a function` before migration error handling. Both preparation and insertion now share a type-safe UUID normalizer; migration regression reproduced and passes.
+- Focused cross-area suite: 5 files / 337 tests passed. Full suite: 866 files passed / 1 skipped; 8,235 tests passed / 106 skipped. Renderer/shared/agent-sdk/Electron typechecks, full build, strict i18n, and `git diff --check` passed. Strict i18n reports 0 source occurrences and 1,214 test occurrences.
+- OCR review of the fixes returned 0 findings. No schema migration or cleanup protocol changed. The fix still needs a fixed commit and clean checkout validation. The distribution R, published rollback drill, and cleanup authorization remain absent; local disk space is about 373 MiB and no Developer ID identity is available.

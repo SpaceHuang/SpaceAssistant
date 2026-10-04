@@ -310,6 +310,26 @@ describe('migrateFromJson', () => {
     db.close()
   })
 
+  it('replaces a malformed legacy session generation instead of aborting JSON migration', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-migrate-invalid-generation-'))
+    dirs.push(dir)
+    const jsonPath = path.join(dir, 'spaceassistant-data.json')
+    const dbPath = path.join(dir, 'spaceassistant-data.db')
+    fs.writeFileSync(jsonPath, JSON.stringify({
+      sessions: [{
+        id: 'sess-invalid-generation', name: 'legacy', preview: '', model: 'test-model', temperature: 0.7,
+        maxTokens: 4096, createdAt: 1, updatedAt: 1, messageCount: 0, skillsState: {}, metadata: {},
+        schemaVersion: 1, generation: { malformed: true }
+      }],
+      messages: [], configs: {}, searchHistory: [], sessionUsages: {}
+    }), 'utf8')
+
+    const db = openSqliteDatabase(dbPath)
+    expect(migrateFromJsonIfNeeded(db, jsonPath)?.sessions).toBe(1)
+    expect(getSession(db, 'sess-invalid-generation')?.generation).toMatch(/^[0-9a-f-]{36}$/i)
+    db.close()
+  })
+
   it('does not migrate when SQLite already has data', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-migrate-skip-'))
     dirs.push(dir)
@@ -428,4 +448,3 @@ describe('searchMessages', () => {
     fs.rmSync(dir, { recursive: true, force: true })
   })
 })
-

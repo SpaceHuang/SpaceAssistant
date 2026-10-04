@@ -266,6 +266,7 @@ export function canonicalSessionTranscriptEvents(events: readonly HistoryEvent[]
           if (!rawMessage || typeof rawMessage !== 'object' || Array.isArray(rawMessage)) return [rawMessage]
           const message = rawMessage as Record<string, unknown>
           if (message.role === 'tool') return []
+          if (message.role === 'assistant' && (typeof message.id !== 'string' || !message.id.trim())) return []
           if (message.role !== 'assistant' || !Object.hasOwn(message, 'toolCalls')) return [rawMessage]
           const { toolCalls: _toolCalls, ...bodyMessage } = message
           return [bodyMessage]

@@ -420,6 +420,34 @@ describe('SqliteAgentHistory', () => {
     db.close()
   })
 
+  it('projects an id-less intermediate assistant response as the final stable assistant message', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'anonymous-continuation-assistant-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    await history.appendBatch([{
+      invocationId: 'anonymous-continuation-assistant-invocation', turnId: 'anonymous-continuation-assistant-turn',
+      sequence: 1, schemaVersion: 1, eventId: 'anonymous-continuation-assistant-context',
+      idempotencyKey: 'anonymous-continuation-assistant-context', kind: 'invocation-context-committed',
+      payload: { messages: [
+        { id: 'continuation-user', role: 'user', content: 'question', timestamp: 1 },
+        { role: 'assistant', content: 'intermediate response', timestamp: 2 },
+        { id: 'continuation-assistant', role: 'assistant', content: 'final response', timestamp: 3 }
+      ] }
+    }], 0)
+
+    expect(history.readCanonicalSessionTranscript(sessionId, [
+      { id: 'continuation-user', role: 'user', content: 'question', timestamp: 1 },
+      { id: 'continuation-assistant', role: 'assistant', content: 'final response', timestamp: 3 }
+    ])).toMatchObject({ kind: 'matched', messages: [
+      { id: 'continuation-user', role: 'user', content: 'question', timestamp: 1 },
+      { id: 'continuation-assistant', role: 'assistant', content: 'final response', timestamp: 3 }
+    ] })
+    db.close()
+  })
+
   it('rejects a malformed canonical compaction snapshot before persisting it', async () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)
