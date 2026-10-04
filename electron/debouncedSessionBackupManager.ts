@@ -107,6 +107,30 @@ export class DebouncedSessionBackupManager {
     await Promise.all(sessionIds.map((id) => this.flush(id, () => loadSessionAndMessages(id))))
   }
 
+  /** Shutdown keeps the database open while retrying each pending session independently. */
+  async flushAllWithRetry(
+    sessionIds: readonly string[],
+    loadSessionAndMessages: (sessionId: string) => Promise<SessionBackupSource | null>,
+    attempts = 3
+  ): Promise<void> {
+    if (!Number.isInteger(attempts) || attempts < 1) throw new RangeError('backup flush attempts must be a positive integer')
+    const outcomes = await Promise.allSettled([...new Set(sessionIds)].map(async (sessionId) => {
+      let lastError: unknown
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        try {
+          await this.flush(sessionId, () => loadSessionAndMessages(sessionId))
+          return
+        } catch (error) {
+          lastError = error
+          if (attempt + 1 < attempts) await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)))
+        }
+      }
+      throw lastError
+    }))
+    const errors = outcomes.flatMap((outcome) => outcome.status === 'rejected' ? [outcome.reason] : [])
+    if (errors.length) throw new AggregateError(errors, 'one or more session backups failed during shutdown flush')
+  }
+
   cancel(sessionId: string): void {
     this.generations.set(sessionId, (this.generations.get(sessionId) ?? 0) + 1)
     const timer = this.timers.get(sessionId)

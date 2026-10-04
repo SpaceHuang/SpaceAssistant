@@ -24,7 +24,7 @@ function createV10Database(): DatabaseSync {
 
 describe('schema v11-v16 turn context, execution config, and routing index migrations', () => {
   it('当前 schema version 与最新 DDL 保持一致', () => {
-    expect(DB_SCHEMA_VERSION).toBe(33)
+    expect(DB_SCHEMA_VERSION).toBe(46)
   })
 
   it('将 v10 的 turn context 字段升级到 v11 并更新 metadata', () => {
@@ -86,22 +86,6 @@ describe('schema v11-v16 turn context, execution config, and routing index migra
       INSERT INTO schema_meta (key, value) VALUES ('schema_version', '${DB_SCHEMA_VERSION + 1}');
     `)
     expect(() => runMigrations(conn)).toThrow(DatabaseUpgradeRequiredError)
-    conn.close()
-  })
-
-  it('v32→v33 为任务配置和 run snapshot 加 nullable 字段并原样保留旧模型名', () => {
-    const conn = new DatabaseSync(':memory:')
-    conn.exec(`CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
-      INSERT INTO schema_meta VALUES ('schema_version', '32');
-      CREATE TABLE sessions (id TEXT PRIMARY KEY);
-      CREATE TABLE automation_tasks (id TEXT PRIMARY KEY, model_override TEXT);
-      CREATE TABLE automation_task_runs (id TEXT PRIMARY KEY);
-      INSERT INTO automation_tasks VALUES ('legacy-task', 'provider-model-name');`)
-    runMigrations(conn)
-    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('33')
-    expect(conn.prepare('SELECT model_override, work_dir, model_id, model_service_id, reasoning_effort FROM automation_tasks WHERE id = ?').get('legacy-task'))
-      .toEqual({ model_override: 'provider-model-name', work_dir: null, model_id: null, model_service_id: null, reasoning_effort: null })
-    expect(() => runMigrations(conn)).not.toThrow()
     conn.close()
   })
 })

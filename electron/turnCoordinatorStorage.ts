@@ -7,7 +7,6 @@ import {
   getTurnByRequestId,
   getPersistedTurn,
   updatePersistedTurnState,
-  getMessage,
   listStreamingAssistantMessages,
   listRecoverableResidues,
   finalizeResidueMessageKeepingOutcome,
@@ -25,6 +24,7 @@ import { getDbConnection } from './database'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { HistoryCorruptionError } from '../packages/agent-sdk/src/history'
 import { decodeTerminalOutcome } from './runtime/terminalOutcome'
+import { getProjectedMessage } from './runtime/sessionTranscriptProjection'
 
 /** 将 coordinator 的持久化端口绑定到 SQLite；requestId 幂等必须跨进程重启由 turns 表保证。 */
 export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
@@ -33,9 +33,9 @@ export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
     findByRequestId: (sessionId, requestId) => {
       const persisted = getTurnByRequestId(db, sessionId, requestId)
       if (!persisted) return undefined
-      const assistantMessage = getMessage(db, persisted.assistantMessageId)
+      const assistantMessage = getProjectedMessage(db, persisted.assistantMessageId)
       if (!assistantMessage) return undefined
-      const userMessage = persisted.userMessageId ? getMessage(db, persisted.userMessageId) : undefined
+      const userMessage = persisted.userMessageId ? getProjectedMessage(db, persisted.userMessageId) : undefined
       return {
         turnId: persisted.turnId,
         requestId: persisted.requestId,
@@ -55,7 +55,7 @@ export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
       }
     },
     hasActiveTurn: (sessionId) => hasActiveTurn(db, sessionId),
-    getMessage: (messageId) => getMessage(db, messageId),
+    getMessage: (messageId) => getProjectedMessage(db, messageId),
     append: (message) => appendMessage(db, message),
     appendMany: (messages) => appendMessagesAtomically(db, messages),
     prepareAtomic: (input) => prepareTurnAtomically(db, input),
@@ -68,19 +68,20 @@ export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
     finalizeResidueMessage: (messageId, targetStatus) => finalizeResidueMessageKeepingOutcome(db, messageId, targetStatus),
     listUnfinishedTurns: () => listPersistedTurns(db)
       .filter((turn) => turn.state === 'configuring' || turn.state === 'prepared' || turn.state === 'executing' || turn.state === 'waiting-confirm')
-      .map((turn) => ({ turnId: turn.turnId, assistantMessageId: turn.assistantMessageId })),
+    .map((turn) => ({ turnId: turn.turnId, assistantMessageId: turn.assistantMessageId })),
     recoverTurn: (turnId, assistantMessageId) => {
       const turn = getPersistedTurn(db, turnId)
-      const assistant = getMessage(db, assistantMessageId)
-      const sessionInvocationIds = turn ? history.listInvocationIdsForSession(turn.sessionId) : []
-      // Newly accepted turns own a canonical stream keyed by turnId. Read the
-      // requestId stream only as a compatibility fallback for pre-cutover data.
-      const historyInvocationId = turn && sessionInvocationIds.includes(turn.turnId)
-        ? turn.turnId
-        : turn?.requestId
+      let sessionInvocationIds: string[] = []
+      let historyInvocationId: string | undefined
       let completedHistory: ReturnType<SqliteAgentHistory['readCompletedInvocationForSession']>
       let completedToolCalls: ReturnType<SqliteAgentHistory['readCompletedToolCallsForSession']>
       try {
+        sessionInvocationIds = turn ? history.listInvocationIdsForSession(turn.sessionId) : []
+        // Newly accepted turns own a canonical stream keyed by turnId. Read the
+        // requestId stream only as a compatibility fallback for pre-cutover data.
+        historyInvocationId = turn && sessionInvocationIds.includes(turn.turnId)
+          ? turn.turnId
+          : turn?.requestId
         completedHistory = turn?.sessionId && historyInvocationId ? history.readCompletedInvocationForSession(historyInvocationId, turn.sessionId, turn.turnId) : undefined
         completedToolCalls = turn?.sessionId && historyInvocationId ? history.readCompletedToolCallsForSession(historyInvocationId, turn.sessionId, turn.turnId) : undefined
       } catch (error) {
@@ -90,7 +91,7 @@ export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
         return recoverPersistedTurn(db, turnId, assistantMessageId)
       }
       const canonicalCompleted = Boolean(turn && turn.assistantMessageId === assistantMessageId &&
-        turn.sessionId && assistant &&
+        turn.sessionId &&
         completedHistory && completedToolCalls)
       if (canonicalCompleted && recoverPersistedTurn(db, turnId, assistantMessageId, {
         completed: true,

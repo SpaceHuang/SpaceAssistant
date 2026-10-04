@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
+import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import {
   HistoryBatchError,
@@ -20,12 +21,144 @@ import { sanitizeCapabilityParamsForDisplay } from '../../src/shared/capabilityP
 import { toolIdToOpenAiCompatibleApiToolName } from '../../src/shared/anthropicToolSanitize'
 import { normalizeExternalToolName } from '../../src/shared/toolNameCompatibility'
 import { decodeTerminalOutcome } from './terminalOutcome'
-import { foldClaudeSessionSnapshots, rebuildClaudeMessagesFromHistory, toCanonicalModelMessages, type CanonicalSessionSnapshot } from './canonicalHistory'
+import { canonicalSessionTranscriptEvents, foldClaudeSessionSnapshots, rebuildClaudeMessagesFromHistory, toCanonicalModelMessages, type CanonicalSessionSnapshot } from './canonicalHistory'
 import { isCanonicalProjectionWatermarkValid } from './canonicalHistory'
 import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
 import { createSpillStoreForDatabase, type SpillDescriptor, type SpillStore } from '../storage/spillStore'
+import { collectSpillDescriptorsStrict } from '../storage/spillProtocol'
 
 const CANONICAL_SESSION_CACHE_VERSION = 1
+
+function stableCanonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableCanonicalValue)
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, item]) => [key, stableCanonicalValue(item)]))
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function validateCanonicalInvocationMessages(value: unknown): value is unknown[] {
+  if (!Array.isArray(value)) return false
+  const pendingToolCalls = new Set<string>()
+  for (const rawMessage of value) {
+    if (!isRecord(rawMessage)) return false
+    const role = rawMessage.role
+    if ((rawMessage.id !== undefined && (typeof rawMessage.id !== 'string' || !rawMessage.id.trim())) ||
+      (rawMessage.timestamp !== undefined && (typeof rawMessage.timestamp !== 'number' || !Number.isFinite(rawMessage.timestamp)))) return false
+    if (role === 'system' || role === 'user' || role === 'assistant') {
+      const content = rawMessage.content
+      const toolCalls = rawMessage.toolCalls
+      if (role === 'system' && (typeof content !== 'string' || toolCalls !== undefined)) return false
+      if (role === 'user' && toolCalls !== undefined) return false
+      if (role === 'assistant' && content === undefined && (!Array.isArray(toolCalls) || toolCalls.length === 0)) return false
+      if (content !== undefined && typeof content !== 'string' && !Array.isArray(content)) return false
+      if (Array.isArray(content)) {
+        for (const rawBlock of content) {
+          if (!isRecord(rawBlock)) return false
+          if (rawBlock.type === 'text' && typeof rawBlock.text === 'string') continue
+          if (rawBlock.type === 'thinking' && typeof rawBlock.thinking === 'string' &&
+            (rawBlock.thinkingSignature === undefined || typeof rawBlock.thinkingSignature === 'string') &&
+            (rawBlock.redacted === undefined || typeof rawBlock.redacted === 'boolean')) continue
+          if (rawBlock.type === 'image' && typeof rawBlock.data === 'string' &&
+            ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(String(rawBlock.mimeType))) continue
+          return false
+        }
+      }
+      if (role === 'assistant' && toolCalls !== undefined) {
+        if (!Array.isArray(toolCalls)) return false
+        for (const rawTool of toolCalls) {
+          if (!isRecord(rawTool) || typeof rawTool.id !== 'string' || !rawTool.id.trim() ||
+            typeof rawTool.name !== 'string' || !rawTool.name.trim() || !isRecord(rawTool.input) ||
+            (rawTool.thoughtSignature !== undefined && typeof rawTool.thoughtSignature !== 'string') ||
+            pendingToolCalls.has(rawTool.id)) return false
+          pendingToolCalls.add(rawTool.id)
+        }
+      } else if (rawMessage.toolCalls !== undefined) return false
+      continue
+    }
+    if (role === 'tool' && typeof rawMessage.toolCallId === 'string' && rawMessage.toolCallId.trim() &&
+      typeof rawMessage.isError === 'boolean' && Object.hasOwn(rawMessage, 'content') && pendingToolCalls.delete(rawMessage.toolCallId)) continue
+    return false
+  }
+  return true
+}
+
+function assistantLegacyTextProjection(content: unknown): string | undefined {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content) || !content.every((block) => block && typeof block === 'object' && !Array.isArray(block) &&
+    (((block as Record<string, unknown>).type === 'text' && typeof (block as Record<string, unknown>).text === 'string') ||
+      ((block as Record<string, unknown>).type === 'thinking' && typeof (block as Record<string, unknown>).thinking === 'string') ||
+      ((block as Record<string, unknown>).type === 'image' && typeof (block as Record<string, unknown>).data === 'string')))) return undefined
+  return content.filter((block) => (block as Record<string, unknown>).type === 'text')
+    .map((block) => (block as Record<string, unknown>).text as string).join('')
+}
+
+function requiredUserLegacyTextProjection(content: unknown): string | undefined {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content) || !content.every((block) => block && typeof block === 'object' && !Array.isArray(block) &&
+    (((block as Record<string, unknown>).type === 'text' && typeof (block as Record<string, unknown>).text === 'string') ||
+      ((block as Record<string, unknown>).type === 'image' && typeof (block as Record<string, unknown>).data === 'string')))) return undefined
+  return content.filter((block) => (block as Record<string, unknown>).type === 'text')
+    .map((block) => (block as Record<string, unknown>).text as string).join('')
+}
+
+export function mirrorCanonicalContextMessages(
+  conn: DatabaseSync,
+  sessionId: string,
+  messages: readonly unknown[],
+  skipMessageId?: string
+): void {
+  if (!conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'").get()) return
+  const hasTurnsTable = Boolean(conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='turns'").get())
+  const findTarget = conn.prepare(hasTurnsTable
+    ? `SELECT messages.session_id,messages.role,messages.status,messages.sequence,
+        (SELECT state FROM turns WHERE session_id=messages.session_id AND assistant_message_id=messages.id LIMIT 1) AS turn_state
+      FROM messages WHERE messages.id=?`
+    : 'SELECT session_id,role,status,sequence,NULL AS turn_state FROM messages WHERE id=?')
+  const update = conn.prepare(`UPDATE messages SET content=CASE
+    WHEN content_storage_state='canonical-backed-only' THEN content ELSE ? END,
+    content_storage_state=CASE
+    WHEN content_storage_state='canonical-backed-only' THEN content_storage_state
+    WHEN (SELECT write_mode FROM session_message_content_cutover WHERE session_id=?)='canonical'
+      THEN 'canonical-backed-dual-write' ELSE content_storage_state END
+    WHERE id=? AND session_id=? AND role=? AND status=?`)
+  const lastSequence = conn.prepare('SELECT sequence FROM messages WHERE session_id=? ORDER BY sequence DESC LIMIT 1')
+  const updatePreview = conn.prepare('UPDATE sessions SET preview=?,updated_at=? WHERE id=?')
+  const seenMessageIds = new Set<string>()
+  for (const rawMessage of messages) {
+    if (!isRecord(rawMessage) || typeof rawMessage.id !== 'string' || rawMessage.id === skipMessageId ||
+      (rawMessage.role !== 'user' && rawMessage.role !== 'assistant') || rawMessage.content === undefined) continue
+    if (seenMessageIds.has(rawMessage.id)) {
+      throw new HistoryBatchError('canonical context message identity is duplicated or conflicts with its legacy row')
+    }
+    seenMessageIds.add(rawMessage.id)
+    const target = findTarget.get(rawMessage.id) as { session_id: string; role: string; status: string; sequence: number; turn_state: string | null } | undefined
+    // Canonical History also serves standalone/remote invocations that have no desktop message row.
+    if (!target) continue
+    if (target.session_id !== sessionId || target.role !== rawMessage.role) {
+      throw new HistoryBatchError('canonical context message identity is duplicated or conflicts with its legacy row')
+    }
+    const eligibleStatuses = rawMessage.role === 'user'
+      ? ['sent']
+      : ['sent', 'completed', 'failed', 'cancelled']
+    if (!eligibleStatuses.includes(target.status)) continue
+    // Preserve pending/streaming/open-turn legacy state. The appended canonical context remains
+    // shadow-only until the normal session identity/body audit can certify the mixed session.
+    if (target.role === 'assistant' && target.turn_state !== null && target.turn_state !== 'terminal') continue
+    const content = rawMessage.role === 'user'
+      ? requiredUserLegacyTextProjection(rawMessage.content)
+      : assistantLegacyTextProjection(rawMessage.content)
+    if (content === undefined) throw new HistoryBatchError('canonical context message content cannot be mirrored exactly')
+    const result = update.run(content, sessionId, rawMessage.id, sessionId, rawMessage.role, target.status)
+    if (Number(result.changes) !== 1) throw new HistoryBatchError('canonical context message mirror target changed during append')
+    const last = lastSequence.get(sessionId) as { sequence: number } | undefined
+    if (last?.sequence === target.sequence) updatePreview.run(content.slice(0, 120), Date.now(), sessionId)
+  }
+}
 
 type StreamRow = { invocation_id: string; version: number; schema_version: number; session_id: string | null }
 type EventRow = {
@@ -37,8 +170,19 @@ type EventRow = {
   schema_version: number
   kind: HistoryEvent['kind']
   payload_json: string
+  session_id?: string | null
 }
 type OrderedSessionEventRow = EventRow & { session_seq: number; commit_order: number; session_id: string; created_at: number }
+
+function isAnonymousReplayOnlyStream(rows: readonly OrderedSessionEventRow[]): boolean {
+  return rows.length > 0 && rows.every((row) => {
+    if (row.kind !== 'replay-message-committed') return false
+    try {
+      const payload = JSON.parse(row.payload_json) as { message?: { id?: unknown; role?: unknown } }
+      return payload.message?.role === 'user' && (typeof payload.message.id !== 'string' || !payload.message.id.trim())
+    } catch { return false }
+  })
+}
 
 export type CanonicalSessionTranscriptRead =
   | Readonly<{ kind: 'matched'; messages: ClaudeChatMessageWithBlocks[]; sessionId: string; sessionGeneration: string; sessionSeq: number; commitOrder: number; watermarkEventId: string | null; watermarkInvocationId: string | null; eventCount: number }>
@@ -53,6 +197,10 @@ type LegacyTranscriptMessage = Readonly<{
 export type CanonicalSessionCacheRead =
   | Readonly<{ kind: 'hit'; value: string; sessionSeq: number; commitOrder: number }>
   | Readonly<{ kind: 'miss'; reason: 'cache-missing' | 'watermark-invalid' | 'schema-invalid' }>
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex')
+}
 
 export type CanonicalSessionTranscriptWithCacheRead =
   | Readonly<{ kind: 'matched'; source: 'L1' | 'L2'; messages: ClaudeChatMessageWithBlocks[]; replayedEvents: number; watermark: Extract<CanonicalSessionTranscriptRead, { kind: 'matched' }> }>
@@ -71,13 +219,33 @@ export class SqliteAgentHistory implements HistoryPort {
   }
 
   async appendBatch(events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: SessionTranscriptCommitIntent): Promise<HistoryAppendResult> {
+    const withFence = this.spillStore?.withSpillRootFence
+    if (typeof withFence !== 'function') return this.appendBatchUnderSpillFence(events, expectedVersion, transcriptCommit)
+    let entered = false
+    try {
+      return await withFence(() => {
+        entered = true
+        return this.appendBatchUnderSpillFence(events, expectedVersion, transcriptCommit)
+      })
+    } catch (error) {
+      if (entered) throw error
+      // Fence/root failures prevent file preparation, but inline canonical payloads remain safe.
+      return this.appendBatchUnderSpillFence(events, expectedVersion, transcriptCommit)
+    }
+  }
+
+  private async appendBatchUnderSpillFence(events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: SessionTranscriptCommitIntent): Promise<HistoryAppendResult> {
+    const hasSessionsTable = Boolean(this.conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'").get())
+    const expectedSessionGeneration = this.sessionId && hasSessionsTable
+      ? (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as { generation: string } | undefined)?.generation
+      : undefined
     const storedEvents = this.spillStore ? await Promise.all(events.map((event) => this.spillLargeCanonicalPayload(event))) : events
     let storedTranscriptJson: string | undefined
     if (this.spillStore && transcriptCommit) {
       const transcriptJson = JSON.stringify(transcriptCommit.messages)
       if (Buffer.byteLength(transcriptJson, 'utf8') > 64 * 1024) {
         try {
-          const descriptor = await this.spillStore.commitSourceTruth(transcriptJson, () => undefined)
+          const descriptor = await this.spillStore.commitSourceTruthUnderFence(transcriptJson)
           storedTranscriptJson = JSON.stringify({ __spaceassistant_session_transcript_spill_v1: descriptor })
         } catch {
           // Preserve the complete transcript snapshot inline when durable spill preparation fails.
@@ -85,14 +253,172 @@ export class SqliteAgentHistory implements HistoryPort {
       }
     }
     return runInTransaction(this.conn, () => {
+      if (this.sessionId && expectedSessionGeneration) {
+        const liveGeneration = (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as { generation: string } | undefined)?.generation
+        if (!liveGeneration || liveGeneration !== expectedSessionGeneration) {
+          throw new HistoryBatchError('history session generation changed during spill preparation')
+        }
+        const cleanup = this.conn.prepare(`SELECT cleanup_state FROM session_message_content_cutover WHERE session_id=?`)
+          .get(this.sessionId) as { cleanup_state: string } | undefined
+        if (cleanup && ['write-stopped', 'pending', 'complete'].includes(cleanup.cleanup_state)) {
+          throw new HistoryBatchError('session message content writes are stopped for cleanup')
+        }
+      }
+      const writeFence = events.map((event) => event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+        ? (event.payload as Record<string, unknown>).canonicalWriteFence : undefined).find(Boolean) as {
+          sessionGeneration?: unknown; sessionSeq?: unknown; commitOrder?: unknown
+          watermarkEventId?: unknown; watermarkInvocationId?: unknown
+        } | undefined
+      if (writeFence) {
+        if (!this.sessionId || writeFence.sessionGeneration !== expectedSessionGeneration ||
+          !Number.isSafeInteger(writeFence.sessionSeq) || !Number.isSafeInteger(writeFence.commitOrder) ||
+          !(writeFence.watermarkEventId === null || typeof writeFence.watermarkEventId === 'string') ||
+          !(writeFence.watermarkInvocationId === null || typeof writeFence.watermarkInvocationId === 'string')) {
+          throw new HistoryBatchError('canonical write fence identity is invalid')
+        }
+        const current = this.conn.prepare(`SELECT session_seq,commit_order,event_id,invocation_id FROM agent_history_events
+          WHERE session_id=? ORDER BY session_seq DESC LIMIT 1`).get(this.sessionId) as {
+            session_seq: number; commit_order: number; event_id: string; invocation_id: string
+          } | undefined
+        const matches = current
+          ? writeFence.sessionSeq === current.session_seq && writeFence.commitOrder === current.commit_order &&
+            writeFence.watermarkEventId === current.event_id && writeFence.watermarkInvocationId === current.invocation_id
+          : writeFence.sessionSeq === -1 && writeFence.commitOrder === -1 &&
+            writeFence.watermarkEventId === null && writeFence.watermarkInvocationId === null
+        if (!matches) throw new HistoryBatchError('canonical write fence no longer matches the session watermark')
+      }
       const appended = appendSqliteAgentHistoryBatchInTransaction(this.conn, storedEvents, expectedVersion, {
         schemaVersion: this.schemaVersion, now: this.now, ...(this.sessionId ? { sessionId: this.sessionId } : {})
       })
+      if (this.sessionId) {
+        for (const event of events) {
+          if (event.kind === 'replay-message-committed') {
+            const payload = isRecord(event.payload) ? event.payload : undefined
+            const message = payload?.message
+            if (!isRecord(message) || message.role !== 'user' || !validateCanonicalInvocationMessages([message])) {
+              throw new HistoryBatchError('canonical replay message is invalid')
+            }
+            continue
+          }
+          if (!['invocation-context-committed', 'transcript-compacted', 'model-response-committed'].includes(event.kind)) continue
+          if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) {
+            if (event.kind === 'model-response-committed') throw new HistoryBatchError('canonical assistant response payload is invalid')
+            throw new HistoryBatchError(event.kind === 'transcript-compacted'
+              ? 'canonical transcript snapshot payload is invalid'
+              : 'canonical invocation context payload is invalid')
+          }
+          const payload = event.payload as Record<string, unknown>
+          if (event.kind === 'invocation-context-committed' || event.kind === 'transcript-compacted') {
+            if (!validateCanonicalInvocationMessages(payload.messages)) {
+              throw new HistoryBatchError(event.kind === 'transcript-compacted'
+                ? 'canonical transcript snapshot payload is invalid'
+                : 'canonical invocation context payload is invalid')
+            }
+            if (event.kind === 'transcript-compacted') continue
+            if (!('requiredUserMessage' in payload)) {
+              mirrorCanonicalContextMessages(this.conn, this.sessionId, payload.messages as unknown[])
+              continue
+            }
+            if (!payload.requiredUserMessage || typeof payload.requiredUserMessage !== 'object' || Array.isArray(payload.requiredUserMessage)) {
+              throw new HistoryBatchError('required user message does not match canonical context identity')
+            }
+            const required = payload.requiredUserMessage as Record<string, unknown>
+            if (typeof required.id !== 'string' || !required.message || typeof required.message !== 'object' || Array.isArray(required.message)) {
+              throw new HistoryBatchError('required user message does not match canonical context identity')
+            }
+            const message = required.message as Record<string, unknown>
+            if (message.role !== 'user') throw new HistoryBatchError('required user message does not match canonical context identity')
+            const contextMessages = payload.messages as unknown[]
+            const canonicalRequiredMatches = contextMessages.filter((candidate) => candidate && typeof candidate === 'object' && !Array.isArray(candidate) &&
+              (candidate as Record<string, unknown>).id === required.id) as Array<Record<string, unknown>>
+            const requiredContentKey = JSON.stringify(stableCanonicalValue(message.content))
+            const fallbackMatches = canonicalRequiredMatches.length === 0 ? contextMessages.filter((candidate) => candidate && typeof candidate === 'object' &&
+              !Array.isArray(candidate) && (candidate as Record<string, unknown>).role === 'user' &&
+              JSON.stringify(stableCanonicalValue((candidate as Record<string, unknown>).content)) === requiredContentKey) as Array<Record<string, unknown>> : []
+            const canonicalRequired = canonicalRequiredMatches.length === 1 ? canonicalRequiredMatches[0]
+              : canonicalRequiredMatches.length === 0 && fallbackMatches.length === 1 ? fallbackMatches[0] : undefined
+            const canonicalRequiredText = canonicalRequired ? requiredUserLegacyTextProjection(canonicalRequired.content) : undefined
+            const requiredMessageText = requiredUserLegacyTextProjection(message.content)
+            if (!canonicalRequired || canonicalRequired.role !== 'user' || canonicalRequiredText === undefined ||
+              requiredMessageText === undefined || canonicalRequiredText !== requiredMessageText ||
+              JSON.stringify(stableCanonicalValue(canonicalRequired.content)) !== JSON.stringify(stableCanonicalValue(message.content))) {
+              throw new HistoryBatchError('required user message does not match canonical context identity')
+            }
+            const content = requiredMessageText
+            if (content !== undefined) {
+              const target = this.conn.prepare('SELECT session_id,role,status FROM messages WHERE id=?').get(required.id) as
+                { session_id: string; role: string; status: string } | undefined
+              // Hosted/SDK history may be recorded without a legacy UI skeleton (for example
+              // standalone invocations and replay-only streams). In that case there is no row
+              // to mirror. An existing ID, however, must belong to this accepted sent user.
+              if (!target) continue
+              if (target.session_id !== this.sessionId || target.role !== 'user' || target.status !== 'sent') {
+                throw new HistoryBatchError('accepted user message mirror target is missing or not sent')
+              }
+              const result = this.conn.prepare(`UPDATE messages SET content=CASE
+                WHEN content_storage_state='canonical-backed-only' THEN content ELSE ? END
+                WHERE id=? AND session_id=? AND role='user' AND status='sent'`)
+                .run(content, required.id, this.sessionId)
+              if (Number(result.changes) !== 1) throw new HistoryBatchError('accepted user message mirror target is missing or not sent')
+            }
+            mirrorCanonicalContextMessages(this.conn, this.sessionId, contextMessages, required.id)
+            continue
+          }
+          if (!payload.message || typeof payload.message !== 'object' || Array.isArray(payload.message)) {
+            throw new HistoryBatchError('canonical assistant response payload is invalid')
+          }
+          const message = payload.message as Record<string, unknown>
+          if (message.role !== 'assistant') throw new HistoryBatchError('canonical assistant response payload is invalid')
+          const content = assistantLegacyTextProjection(message.content)
+          if (message.content !== undefined && content === undefined) {
+            throw new HistoryBatchError('canonical assistant response content cannot be mirrored exactly')
+          }
+          const hasTurnOwnership = Boolean(this.conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='turns'").get())
+          const turn = hasTurnOwnership
+            ? this.conn.prepare('SELECT session_id,assistant_message_id FROM turns WHERE turn_id=?').get(event.turnId) as
+              { session_id: string; assistant_message_id: string } | undefined
+            : undefined
+          if (turn && (turn.session_id !== this.sessionId || (typeof message.id === 'string' && turn.assistant_message_id !== message.id))) {
+            throw new HistoryBatchError('canonical assistant response identity does not belong to the turn')
+          }
+          if (typeof message.id !== 'string') continue
+          if (content === undefined && !turn) continue
+          const target = this.conn.prepare(`SELECT status FROM messages WHERE id=? AND session_id=? AND role='assistant'`)
+            .get(message.id, this.sessionId)
+          if (!target) {
+            if (!turn) continue
+            throw new HistoryBatchError('canonical assistant response mirror target is missing or not streaming')
+          }
+          if ((target as { status: string }).status !== 'streaming') {
+            throw new HistoryBatchError('canonical assistant response mirror target is missing or not streaming')
+          }
+          if (!turn) {
+            throw new HistoryBatchError('canonical assistant response identity does not belong to the turn')
+          }
+          if (content === undefined) continue
+          const mirrored = this.conn.prepare(`UPDATE messages SET content=CASE
+            WHEN content_storage_state='canonical-backed-only' THEN content ELSE ? END
+            WHERE id=? AND session_id=? AND role='assistant' AND status='streaming'`)
+            .run(content, message.id, this.sessionId)
+          if (Number(mirrored.changes) !== 1) throw new HistoryBatchError('canonical assistant response mirror target is missing or not streaming')
+        }
+      }
       if (!transcriptCommit) return appended
       if (!this.sessionId || transcriptCommit.sessionId !== this.sessionId) throw new HistoryBatchError('terminal transcript commit session identity mismatch')
       const terminal = events.length === 1 ? events[0] : undefined
       if (!terminal || !['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(terminal.kind)) {
         throw new HistoryBatchError('session transcript commit intent requires one terminal History event')
+      }
+      const outcomeMatchesTerminal = terminal.kind === 'invocation-completed' ? transcriptCommit.outcome === 'completed'
+        : terminal.kind === 'invocation-failed' ? transcriptCommit.outcome === 'failed' || transcriptCommit.outcome === 'timed_out'
+        : transcriptCommit.outcome === 'cancelled' || transcriptCommit.outcome === 'interrupted'
+      if (!outcomeMatchesTerminal) throw new HistoryBatchError('terminal History kind does not match the transcript outcome')
+      if (transcriptCommit.messageMirror) {
+        const expectedStatus = transcriptCommit.outcome === 'completed' ? 'completed'
+          : transcriptCommit.outcome === 'cancelled' ? 'cancelled' : 'failed'
+        if (transcriptCommit.messageMirror.status !== expectedStatus) {
+          throw new HistoryBatchError('terminal message mirror status does not match its outcome')
+        }
       }
       const committed = commitSessionTranscriptInTransaction(this.conn, {
         sessionId: transcriptCommit.sessionId, turnId: terminal.turnId, baseVersion: transcriptCommit.baseVersion,
@@ -100,6 +426,24 @@ export class SqliteAgentHistory implements HistoryPort {
         ...(storedTranscriptJson ? { storedMessagesJson: storedTranscriptJson } : {}), now: this.now()
       })
       if (!committed.committed) throw new HistoryBatchError(`session transcript commit rejected: ${committed.reason}`)
+      if (transcriptCommit.messageMirror) {
+        const mirror = transcriptCommit.messageMirror
+        const turn = this.conn.prepare('SELECT session_id,assistant_message_id FROM turns WHERE turn_id=?').get(terminal.turnId) as
+          { session_id: string; assistant_message_id: string } | undefined
+        if (!turn || turn.session_id !== transcriptCommit.sessionId || turn.assistant_message_id !== mirror.messageId) {
+          throw new HistoryBatchError('terminal message mirror target does not belong to the committed turn')
+        }
+        const result = this.conn.prepare(`UPDATE messages SET
+          content=CASE WHEN content_storage_state='canonical-backed-only' THEN content ELSE COALESCE(?,content) END,
+          status=?,
+          content_storage_state=CASE WHEN content_storage_state='canonical-backed-only' THEN content_storage_state
+            WHEN (SELECT write_mode FROM session_message_content_cutover WHERE session_id=?)='canonical'
+              THEN 'canonical-backed-dual-write' ELSE content_storage_state END
+          WHERE id=? AND session_id=? AND role='assistant'`).run(
+          mirror.content ?? null, mirror.status, transcriptCommit.sessionId, mirror.messageId, transcriptCommit.sessionId
+        )
+        if (Number(result.changes) !== 1) throw new HistoryBatchError('terminal message mirror target is missing or not an assistant message')
+      }
       return appended
     })
   }
@@ -118,6 +462,9 @@ export class SqliteAgentHistory implements HistoryPort {
       WHERE streams.session_id = ? AND events.session_id = ?
       ORDER BY events.session_seq ASC, events.commit_order ASC
     `).all(sessionId, sessionId) as OrderedSessionEventRow[]
+    if (!this.isGlobalCommitCursorContiguous()) return { kind: 'unavailable', reason: 'order-invalid' }
+    const cursor = this.conn.prepare('SELECT next_seq FROM session_event_cursor WHERE session_id=?').get(sessionId) as { next_seq: number } | undefined
+    if ((cursor?.next_seq ?? 0) !== rows.length) return { kind: 'unavailable', reason: 'order-invalid' }
     if (rows.length === 0) return legacyMessages.length === 0
       ? { kind: 'matched', messages: [], sessionId, sessionGeneration: session.generation, sessionSeq: -1,
           commitOrder: -1, watermarkEventId: null, watermarkInvocationId: null, eventCount: 0 }
@@ -135,8 +482,12 @@ export class SqliteAgentHistory implements HistoryPort {
         byInvocation.set(row.invocation_id, streamRows)
       }
       for (const [invocationId, streamRows] of byInvocation) {
+        if (!this.isCanonicalSessionInvocationRowsValid(sessionId, invocationId, streamRows)) {
+          return { kind: 'unavailable', reason: 'order-invalid' }
+        }
         const hasBase = streamRows.some((row) => row.kind === 'invocation-context-committed' || row.kind === 'transcript-compacted')
         if (!hasBase) {
+          if (isAnonymousReplayOnlyStream(streamRows)) continue
           if (streamRows.some((row) => ['model-response-committed', 'replay-message-committed', 'tool-call-finished', 'tool-call-not-dispatched'].includes(row.kind))) {
             return { kind: 'unavailable', reason: 'snapshot-invalid' }
           }
@@ -145,8 +496,11 @@ export class SqliteAgentHistory implements HistoryPort {
         const events = streamRows.map((row) => ({ invocationId, sequence: row.sequence, eventId: row.event_id,
           idempotencyKey: row.idempotency_key, turnId: row.turn_id, schemaVersion: row.schema_version,
           kind: row.kind, payload: JSON.parse(row.payload_json) as unknown })) as HistoryEvent[]
+        this.validateCanonicalSessionToolTransitions(events)
         const hydratedEvents = this.spillStore ? events.map((event) => this.hydrateLargeToolResultSync(event)) : events
-        const messages = rebuildClaudeMessagesFromHistory(hydratedEvents)
+        validateHistoryTransition([], hydratedEvents)
+        const messages = rebuildClaudeMessagesFromHistory(canonicalSessionTranscriptEvents(hydratedEvents), { omitAnonymousReplayFromSessionTranscript: true,
+          allowPendingToolCalls: streamRows.at(-1)?.kind === 'invocation-interrupted' })
         const last = streamRows.at(-1)!
         snapshots.push({ sessionId, invocationId, sessionSeq: last.session_seq, commitOrder: last.commit_order, messages })
       }
@@ -182,14 +536,226 @@ export class SqliteAgentHistory implements HistoryPort {
     }
   }
 
+  /** Read and fold canonical transcript state without comparing to legacy or granting reader eligibility. */
+  readCanonicalSessionTranscriptForShadow(sessionId: string): CanonicalSessionTranscriptRead {
+    if (!sessionId.trim() || (this.sessionId && this.sessionId !== sessionId)) return { kind: 'unavailable', reason: 'session-missing' }
+    const session = this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(sessionId) as { generation: string } | undefined
+    if (!session?.generation) return { kind: 'unavailable', reason: 'session-missing' }
+    const rows = this.conn.prepare(`SELECT events.invocation_id, events.sequence, events.event_id, events.idempotency_key, events.turn_id,
+      events.schema_version, events.kind, events.payload_json, events.session_seq, events.commit_order, events.session_id, events.created_at
+      FROM agent_history_events events JOIN agent_history_streams streams ON streams.invocation_id=events.invocation_id
+      WHERE streams.session_id=? AND events.session_id=? ORDER BY events.session_seq, events.commit_order`).all(sessionId, sessionId) as OrderedSessionEventRow[]
+    if (!this.isGlobalCommitCursorContiguous()) return { kind: 'unavailable', reason: 'order-invalid' }
+    const cursor = this.conn.prepare('SELECT next_seq FROM session_event_cursor WHERE session_id=?').get(sessionId) as { next_seq: number } | undefined
+    if ((cursor?.next_seq ?? 0) !== rows.length) return { kind: 'unavailable', reason: 'order-invalid' }
+    if (rows.length === 0) return { kind: 'matched', messages: [], sessionId, sessionGeneration: session.generation,
+      sessionSeq: -1, commitOrder: -1, watermarkEventId: null, watermarkInvocationId: null, eventCount: 0 }
+    if (rows.some((row, index) => !Number.isSafeInteger(row.session_seq) || row.session_seq !== index + 1 ||
+      !Number.isSafeInteger(row.commit_order) || row.commit_order < 1 || row.session_id !== sessionId ||
+      (index > 0 && row.commit_order <= rows[index - 1]!.commit_order))) return { kind: 'unavailable', reason: 'order-invalid' }
+    try {
+      const byInvocation = new Map<string, OrderedSessionEventRow[]>()
+      for (const row of rows) byInvocation.set(row.invocation_id, [...(byInvocation.get(row.invocation_id) ?? []), row])
+      const snapshots: CanonicalSessionSnapshot[] = []
+      for (const [invocationId, streamRows] of byInvocation) {
+        if (!this.isCanonicalSessionInvocationRowsValid(sessionId, invocationId, streamRows)) {
+          return { kind: 'unavailable', reason: 'order-invalid' }
+        }
+        const hasBase = streamRows.some((row) => row.kind === 'invocation-context-committed' || row.kind === 'transcript-compacted')
+        if (!hasBase) {
+          if (isAnonymousReplayOnlyStream(streamRows)) continue
+          if (streamRows.some((row) => ['model-response-committed', 'replay-message-committed', 'tool-call-finished', 'tool-call-not-dispatched'].includes(row.kind))) {
+            return { kind: 'unavailable', reason: 'snapshot-invalid' }
+          }
+          continue
+        }
+        const events = streamRows.map((row) => ({ invocationId, sequence: row.sequence, eventId: row.event_id,
+          idempotencyKey: row.idempotency_key, turnId: row.turn_id, schemaVersion: row.schema_version, kind: row.kind,
+          payload: JSON.parse(row.payload_json) as unknown })) as HistoryEvent[]
+        this.validateCanonicalSessionToolTransitions(events)
+        const hydrated = this.spillStore ? events.map((event) => this.hydrateLargeToolResultSync(event)) : events
+        validateHistoryTransition([], hydrated)
+        const messages = rebuildClaudeMessagesFromHistory(canonicalSessionTranscriptEvents(hydrated), { omitAnonymousReplayFromSessionTranscript: true,
+          allowPendingToolCalls: streamRows.at(-1)?.kind === 'invocation-interrupted' })
+        const last = streamRows.at(-1)!
+        snapshots.push({ sessionId, invocationId, sessionSeq: last.session_seq, commitOrder: last.commit_order, messages })
+      }
+      const folded = foldClaudeSessionSnapshots(snapshots)
+      const watermark = rows.at(-1)!
+      const anchor = this.conn.prepare(`SELECT session_id, session_seq, commit_order, event_id, invocation_id FROM agent_history_events
+        WHERE session_id=? AND session_seq=?`).get(sessionId, watermark.session_seq) as
+        { session_id: string; session_seq: number; commit_order: number; event_id: string; invocation_id: string } | undefined
+      if (!anchor || anchor.session_id !== sessionId || anchor.commit_order !== watermark.commit_order ||
+        anchor.event_id !== watermark.event_id || anchor.invocation_id !== watermark.invocation_id) return { kind: 'unavailable', reason: 'order-invalid' }
+      return { kind: 'matched', messages: folded, sessionId, sessionGeneration: session.generation, sessionSeq: watermark.session_seq,
+        commitOrder: watermark.commit_order, watermarkEventId: watermark.event_id, watermarkInvocationId: watermark.invocation_id, eventCount: rows.length }
+    } catch { return { kind: 'unavailable', reason: 'snapshot-invalid' } }
+  }
+
+  private isCanonicalSessionInvocationRowsValid(sessionId: string, invocationId: string, rows: readonly OrderedSessionEventRow[]): boolean {
+    const stream = this.conn.prepare(`SELECT version, schema_version, session_id FROM agent_history_streams WHERE invocation_id=?`)
+      .get(invocationId) as { version: number; schema_version: number; session_id: string | null } | undefined
+    if (!stream || stream.session_id !== sessionId || !Number.isSafeInteger(stream.version) || stream.version !== rows.length ||
+      !Number.isSafeInteger(stream.schema_version) || !rows.every((row, index) => row.invocation_id === invocationId &&
+        row.session_id === sessionId && row.sequence === index + 1 && row.schema_version === stream.schema_version)) return false
+    try {
+      validateHistoryBatch(rows.map((row) => ({ invocationId, sequence: row.sequence, eventId: row.event_id,
+        idempotencyKey: row.idempotency_key, turnId: row.turn_id, schemaVersion: row.schema_version,
+        kind: row.kind as HistoryEvent['kind'], payload: JSON.parse(row.payload_json) as unknown })))
+      return true
+    } catch { return false }
+  }
+
+  /** Check that the global allocator cursor has no gap or unpersisted allocation. */
+  isGlobalCommitCursorContiguous(): boolean {
+    const aggregate = this.conn.prepare(`SELECT COUNT(*) AS count, MIN(commit_order) AS minimum, MAX(commit_order) AS maximum
+      FROM agent_history_events`).get() as { count: number; minimum: number | null; maximum: number | null }
+    const cursor = this.conn.prepare('SELECT COALESCE(MAX(id), 0) AS maximum FROM agent_history_commit_cursor').get() as { maximum: number }
+    const integrity = this.conn.prepare(`SELECT invalid, EXISTS(SELECT 1 FROM agent_history_pending_commit_cursor) AS has_pending
+      FROM agent_history_cursor_integrity WHERE singleton_id=1`).get() as { invalid: number; has_pending: number } | undefined
+    return integrity?.invalid === 0 && integrity.has_pending === 0 && Number.isSafeInteger(aggregate.count) && aggregate.count === cursor.maximum &&
+      (aggregate.count === 0 ? aggregate.minimum === null && aggregate.maximum === null : aggregate.minimum === 1 && aggregate.maximum === aggregate.count)
+  }
+
+  /** Check full stream sequence/schema integrity without reading historical event payloads. */
+  private isCanonicalSessionInvocationTailValid(sessionId: string, invocationId: string, rows: readonly OrderedSessionEventRow[]): boolean {
+    const stream = this.conn.prepare(`SELECT version, schema_version, session_id FROM agent_history_streams WHERE invocation_id=?`)
+      .get(invocationId) as { version: number; schema_version: number; session_id: string | null } | undefined
+    if (!stream || stream.session_id !== sessionId || !Number.isSafeInteger(stream.version) || stream.version < 1 ||
+      !Number.isSafeInteger(stream.schema_version) || rows.length === 0) return false
+    const aggregate = this.conn.prepare(`SELECT COUNT(*) AS count, MIN(sequence) AS minimum, MAX(sequence) AS maximum,
+      COUNT(DISTINCT turn_id) AS turn_identity_count,
+      SUM(CASE WHEN sequence < ? THEN 1 ELSE 0 END) AS prefix_count,
+      SUM(CASE WHEN schema_version != ? THEN 1 ELSE 0 END) AS schema_mismatch_count
+      FROM agent_history_events WHERE invocation_id=? AND session_id=?`).get(rows[0]!.sequence, stream.schema_version, invocationId, sessionId) as
+      { count: number; minimum: number | null; maximum: number | null; turn_identity_count: number; prefix_count: number; schema_mismatch_count: number }
+    return aggregate.count === stream.version && aggregate.minimum === 1 && aggregate.maximum === stream.version && aggregate.turn_identity_count === 1 &&
+      aggregate.prefix_count === rows[0]!.sequence - 1 && aggregate.schema_mismatch_count === 0 &&
+      rows.every((row, index) => row.invocation_id === invocationId && row.session_id === sessionId &&
+        row.schema_version === stream.schema_version && row.sequence === rows[0]!.sequence + index) &&
+      rows.at(-1)!.sequence === stream.version && rows.every((row) => this.isCanonicalSessionEventRowStructurallyValid(row))
+  }
+
+  /** Reject ambiguous tool proposals or results without a matching pending canonical proposal. */
+  private validateCanonicalSessionToolTransitions(events: readonly HistoryEvent[]): void {
+    const pending = new Map<string, 'proposed' | 'started'>()
+    const toolApproval = new Map<string, { approvalId: string; approved?: boolean }>()
+    const unboundApprovalIds = new Set<string>()
+    const seenApprovalIds = new Set<string>()
+    for (const event of events) {
+      const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+        ? event.payload as { message?: { toolCalls?: readonly { id?: unknown }[] }; toolCallId?: unknown; approvalId?: unknown;
+          approved?: unknown; success?: unknown; result?: unknown; answerer?: unknown; reasonCode?: unknown; requestedAt?: unknown }
+        : undefined
+      if (event.kind === 'model-response-committed') {
+        const responseIds = new Set<string>()
+        for (const call of payload?.message?.toolCalls ?? []) {
+          if (unboundApprovalIds.size > 0) {
+            throw new HistoryCorruptionError(event.invocationId, `canonical tool proposal follows an approval without tool identity: ${event.eventId}`)
+          }
+          if (typeof call.id !== 'string' || !call.id.trim() || responseIds.has(call.id) || pending.has(call.id)) {
+            throw new HistoryCorruptionError(event.invocationId, `canonical model response has an empty or duplicate tool-call id: ${event.eventId}`)
+          }
+          responseIds.add(call.id)
+          pending.set(call.id, 'proposed')
+        }
+      } else if (event.kind === 'tool-call-started') {
+        if (typeof payload?.toolCallId !== 'string' || !payload.toolCallId.trim()) {
+          throw new HistoryCorruptionError(event.invocationId, `canonical tool-call-started has no toolCallId: ${event.eventId}`)
+        }
+        if (pending.get(payload.toolCallId) !== 'proposed') {
+          throw new HistoryCorruptionError(event.invocationId, `canonical tool-call-started has no unique pending proposal: ${event.eventId}`)
+        }
+        const approval = toolApproval.get(payload.toolCallId)
+        if (approval && approval.approved !== true) {
+          throw new HistoryCorruptionError(event.invocationId, `canonical tool-call-started has no approved matching approval: ${event.eventId}`)
+        }
+        pending.set(payload.toolCallId, 'started')
+      } else if (event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') {
+        if (typeof payload?.toolCallId !== 'string' || !payload.toolCallId.trim() || !pending.has(payload.toolCallId)) {
+          throw new HistoryCorruptionError(event.invocationId, `canonical tool result has no matching pending call: ${event.eventId}`)
+        }
+        if (event.kind === 'tool-call-finished' && pending.get(payload.toolCallId) !== 'started') {
+          throw new HistoryCorruptionError(event.invocationId, `canonical tool result has no matching dispatch start: ${event.eventId}`)
+        }
+        const approval = toolApproval.get(payload.toolCallId)
+        if (event.kind === 'tool-call-finished' && approval && approval.approved !== true) {
+          throw new HistoryCorruptionError(event.invocationId, `canonical tool result has no approved matching approval: ${event.eventId}`)
+        }
+        if (event.kind === 'tool-call-finished') {
+          const result = payload.result && typeof payload.result === 'object' && !Array.isArray(payload.result)
+            ? payload.result as Record<string, unknown> : undefined
+          if (typeof payload.success !== 'boolean' || (result && 'success' in result &&
+            (typeof result.success !== 'boolean' || result.success !== payload.success))) {
+            throw new HistoryCorruptionError(event.invocationId, `canonical tool result success facts conflict: ${event.eventId}`)
+          }
+        }
+        toolApproval.delete(payload.toolCallId)
+        pending.delete(payload.toolCallId)
+      } else if (event.kind === 'approval-waiting') {
+        const hasApprovalMetadata = ['answerer', 'reasonCode', 'requestedAt'].some((key) => key in (payload ?? {}))
+        if (hasApprovalMetadata && (typeof payload?.toolCallId !== 'string' || !payload.toolCallId.trim())) {
+          if (typeof payload?.approvalId !== 'string' || !payload.approvalId.trim() || pending.size > 0 || seenApprovalIds.has(payload.approvalId)) {
+            throw new HistoryCorruptionError(event.invocationId, `canonical approval metadata has no unambiguous tool identity: ${event.eventId}`)
+          }
+          seenApprovalIds.add(payload.approvalId)
+          unboundApprovalIds.add(payload.approvalId)
+        }
+        if (typeof payload?.toolCallId === 'string' && payload.toolCallId.trim()) {
+          if (pending.get(payload.toolCallId) !== 'proposed' || typeof payload.approvalId !== 'string' || !payload.approvalId.trim() ||
+            toolApproval.has(payload.toolCallId) || seenApprovalIds.has(payload.approvalId)) {
+            throw new HistoryCorruptionError(event.invocationId, `canonical approval has no unique tool identity: ${event.eventId}`)
+          }
+          seenApprovalIds.add(payload.approvalId)
+          toolApproval.set(payload.toolCallId, { approvalId: payload.approvalId })
+        }
+      } else if (event.kind === 'approval-resolved' && typeof payload?.toolCallId === 'string' && toolApproval.has(payload.toolCallId)) {
+        const approval = toolApproval.get(payload.toolCallId)!
+        if (payload.approvalId !== approval.approvalId || typeof payload.approved !== 'boolean') {
+          throw new HistoryCorruptionError(event.invocationId, `canonical approval resolution identity or outcome is invalid: ${event.eventId}`)
+        }
+        approval.approved = payload.approved
+      }
+    }
+  }
+
+  private isCanonicalSessionEventRowStructurallyValid(row: OrderedSessionEventRow): boolean {
+    try {
+      const payload = JSON.parse(row.payload_json) as unknown
+      validateHistoryBatch([{ invocationId: row.invocation_id, sequence: row.sequence, eventId: row.event_id,
+        idempotencyKey: row.idempotency_key, turnId: row.turn_id, schemaVersion: row.schema_version,
+        kind: row.kind as HistoryEvent['kind'], payload }])
+      if (['tool-call-started', 'tool-call-finished', 'tool-call-not-dispatched'].includes(row.kind)) {
+        const toolCallId = payload && typeof payload === 'object' ? (payload as { toolCallId?: unknown }).toolCallId : undefined
+        if (typeof toolCallId !== 'string' || !toolCallId.trim()) return false
+      }
+      return true
+    } catch { return false }
+  }
+
+  /** Verify every source-of-truth spill referenced by this session before trusting a cached transcript. */
+  validateCanonicalSessionSourceTruthSpills(sessionId: string): void {
+    const rows = this.conn.prepare(`SELECT events.payload_json
+      FROM agent_history_events events
+      JOIN agent_history_streams streams ON streams.invocation_id=events.invocation_id
+      WHERE events.session_id=? AND streams.session_id=? AND events.payload_json LIKE '%spill%'`).all(sessionId, sessionId) as Array<{ payload_json: string }>
+    for (const row of rows) {
+      const descriptors = collectSpillDescriptorsStrict(JSON.parse(row.payload_json) as unknown)
+      for (const descriptor of descriptors) {
+        if (descriptor.kind === 'source-of-truth') this.readSourceTruthSync(descriptor)
+      }
+    }
+  }
+
   /** Reads a detached per-key cache record only when its live session incarnation and exact anchor still match. */
   readCanonicalSessionCache(input: Extract<CanonicalSessionTranscriptRead, { kind: 'matched' }> & { cacheKey: string }): CanonicalSessionCacheRead {
     const row = this.conn.prepare(`SELECT session_id, cache_version, session_generation, session_seq, commit_order, watermark_event_id,
-      watermark_invocation_id, event_count, value FROM canonical_session_projection_cache WHERE session_id=? AND cache_key=?`)
+      watermark_invocation_id, event_count, value, value_sha256 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key=?`)
       .get(input.sessionId, input.cacheKey) as { session_id: string; cache_version: number; session_generation: string; session_seq: number; commit_order: number;
-        watermark_event_id: string | null; watermark_invocation_id: string | null; event_count: number; value: string } | undefined
+        watermark_event_id: string | null; watermark_invocation_id: string | null; event_count: number; value: string; value_sha256: string } | undefined
     if (!row) return { kind: 'miss', reason: 'cache-missing' }
     if (row.cache_version !== CANONICAL_SESSION_CACHE_VERSION) return { kind: 'miss', reason: 'schema-invalid' }
+    if (row.value_sha256 !== sha256(row.value)) return { kind: 'miss', reason: 'schema-invalid' }
     const liveSession = this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(input.sessionId) as { generation: string } | undefined
     const anchor = row.session_seq === -1 ? undefined : this.conn.prepare(`SELECT session_id, session_seq, commit_order, event_id, invocation_id
       FROM agent_history_events WHERE session_id=? AND session_seq=?`).get(input.sessionId, row.session_seq) as
@@ -215,15 +781,16 @@ export class SqliteAgentHistory implements HistoryPort {
   writeCanonicalSessionCache(input: Extract<CanonicalSessionTranscriptRead, { kind: 'matched' }> & { cacheKey: string; value: string }): boolean {
     try {
       JSON.parse(input.value)
+      const valueSha256 = sha256(input.value)
       const result = this.conn.prepare(`INSERT INTO canonical_session_projection_cache(
         session_id, cache_key, cache_version, session_generation, session_seq, commit_order, watermark_event_id, watermark_invocation_id,
-        event_count, value, updated_at
-      ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(session_id, cache_key) DO UPDATE SET
+        event_count, value, value_sha256, updated_at
+      ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(session_id, cache_key) DO UPDATE SET
         cache_version=excluded.cache_version, session_generation=excluded.session_generation, session_seq=excluded.session_seq, commit_order=excluded.commit_order,
         watermark_event_id=excluded.watermark_event_id, watermark_invocation_id=excluded.watermark_invocation_id,
-        event_count=excluded.event_count, value=excluded.value, updated_at=excluded.updated_at`).run(
+        event_count=excluded.event_count, value=excluded.value, value_sha256=excluded.value_sha256, updated_at=excluded.updated_at`).run(
         input.sessionId, input.cacheKey, CANONICAL_SESSION_CACHE_VERSION, input.sessionGeneration, input.sessionSeq, input.commitOrder,
-        input.watermarkEventId, input.watermarkInvocationId, input.eventCount, input.value, Date.now()
+        input.watermarkEventId, input.watermarkInvocationId, input.eventCount, input.value, valueSha256, Date.now()
       )
       return Number(result.changes) > 0
     } catch { return false }
@@ -232,13 +799,13 @@ export class SqliteAgentHistory implements HistoryPort {
   /** L1 reads a validated detached seed and folds only later snapshot facts; any ambiguity runs the L2 full fold. */
   readCanonicalSessionTranscriptWithCache(sessionId: string, cacheKey: string, legacyMessages?: readonly LegacyTranscriptMessage[]): CanonicalSessionTranscriptWithCacheRead {
     let cacheRow: { session_id: string; cache_version: number; session_generation: string; session_seq: number; commit_order: number;
-      watermark_event_id: string | null; watermark_invocation_id: string | null; event_count: number; value: string } | undefined
+      watermark_event_id: string | null; watermark_invocation_id: string | null; event_count: number; value: string; value_sha256: string } | undefined
     try {
       cacheRow = this.conn.prepare(`SELECT session_id, cache_version, session_generation, session_seq, commit_order, watermark_event_id,
-        watermark_invocation_id, event_count, value FROM canonical_session_projection_cache WHERE session_id=? AND cache_key=?`)
+        watermark_invocation_id, event_count, value, value_sha256 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key=?`)
         .get(sessionId, cacheKey) as typeof cacheRow
     } catch { cacheRow = undefined }
-    if (cacheRow && cacheRow.cache_version === CANONICAL_SESSION_CACHE_VERSION) {
+    if (cacheRow && cacheRow.cache_version === CANONICAL_SESSION_CACHE_VERSION && cacheRow.value_sha256 === sha256(cacheRow.value)) {
       const liveSession = this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(sessionId) as { generation: string } | undefined
       const cursorRow = this.conn.prepare('SELECT next_seq FROM session_event_cursor WHERE session_id=?').get(sessionId) as { next_seq: number } | undefined
       const cursor = cursorRow ?? { next_seq: 0 }
@@ -246,7 +813,9 @@ export class SqliteAgentHistory implements HistoryPort {
       const anchor = cacheRow.session_seq === -1 ? undefined : this.conn.prepare(`SELECT session_id, session_seq, commit_order, event_id, invocation_id
         FROM agent_history_events WHERE session_id=? AND session_seq=?`).get(sessionId, cacheRow.session_seq) as
         { session_id: string; session_seq: number; commit_order: number; event_id: string; invocation_id: string } | undefined
-      const valid = isCanonicalProjectionWatermarkValid({
+      const cursorIntegrity = this.conn.prepare(`SELECT invalid, EXISTS(SELECT 1 FROM agent_history_pending_commit_cursor) AS has_pending
+        FROM agent_history_cursor_integrity WHERE singleton_id=1`).get() as { invalid: number; has_pending: number } | undefined
+      const valid = cursorIntegrity?.invalid === 0 && cursorIntegrity.has_pending === 0 && isCanonicalProjectionWatermarkValid({
         watermark: { sessionId: cacheRow.session_id, sessionGeneration: cacheRow.session_generation, sessionSeq: cacheRow.session_seq,
           commitOrder: cacheRow.commit_order, watermarkEventId: cacheRow.watermark_event_id,
           watermarkInvocationId: cacheRow.watermark_invocation_id, eventCount: cacheRow.event_count },
@@ -271,6 +840,22 @@ export class SqliteAgentHistory implements HistoryPort {
             const tailSnapshots: CanonicalSessionSnapshot[] = []
             let usedSeedAsBase = false
             for (const [invocationId, invocationRows] of rowsByInvocation) {
+              const firstTailSequence = invocationRows[0]!.sequence
+              if (!this.isCanonicalSessionInvocationTailValid(sessionId, invocationId, invocationRows)) {
+                throw new Error('canonical History tail sequence or stream metadata is invalid')
+              }
+              const terminalBeforeTail = this.conn.prepare(`SELECT 1 FROM agent_history_events
+                WHERE invocation_id=? AND sequence<? AND kind IN ('invocation-parked','invocation-completed','invocation-failed','invocation-interrupted') LIMIT 1`)
+                .get(invocationId, firstTailSequence)
+              if (terminalBeforeTail) throw new Error('canonical History tail follows an invocation terminal')
+              if (invocationRows.some((row) => ['model-response-committed', 'tool-call-started', 'tool-call-finished',
+                'tool-call-not-dispatched', 'approval-waiting', 'approval-resolved', 'invocation-completed',
+                'invocation-failed', 'invocation-interrupted', 'invocation-parked'].includes(row.kind))) {
+                // A session cache stores transcript state, not the invocation's pending tool/approval state.
+                // State-bearing deltas validate the complete stream so proposals and dispatch facts before
+                // the cache watermark cannot be hidden by the seed.
+                this.validateCanonicalSessionToolTransitions(this.readSync(invocationId).events)
+              }
               const hasBase = invocationRows.some((row) => row.kind === 'invocation-context-committed' || row.kind === 'transcript-compacted')
               if (!hasBase && !invocationRows.some((row) => ['model-response-committed', 'replay-message-committed', 'tool-call-finished', 'tool-call-not-dispatched'].includes(row.kind))) continue
               const events = invocationRows.map((row) => ({ invocationId, sequence: row.sequence + (hasBase ? 0 : 1),
@@ -285,7 +870,10 @@ export class SqliteAgentHistory implements HistoryPort {
                   schemaVersion: events[0]!.schemaVersion, kind: 'invocation-context-committed', payload: { messages: seed } }
                 hydratedEvents.unshift(seedEvent)
               }
-              const messages = rebuildClaudeMessagesFromHistory(hydratedEvents)
+              const transcriptEvents = canonicalSessionTranscriptEvents(hydratedEvents)
+              validateHistoryTransition([], transcriptEvents)
+              const messages = rebuildClaudeMessagesFromHistory(transcriptEvents, { omitAnonymousReplayFromSessionTranscript: true,
+                allowPendingToolCalls: invocationRows.at(-1)?.kind === 'invocation-interrupted' })
               const last = invocationRows.at(-1)!
               tailSnapshots.push({ sessionId, invocationId, sessionSeq: last.session_seq,
                 commitOrder: last.commit_order, messages })
@@ -303,7 +891,8 @@ export class SqliteAgentHistory implements HistoryPort {
               ...(message.skillHints !== undefined ? { skillHints: message.skillHints } : {}) }))
             const stable = (value: unknown): unknown => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object'
               ? Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, stable(item)])) : value
-            if (legacyCanonical === undefined || JSON.stringify(stable(canonical)) === JSON.stringify(stable(legacyCanonical))) {
+            const transcriptLegacy = legacyCanonical?.map(({ toolCalls: _toolCalls, toolUse: _toolUse, ...message }) => message)
+            if (legacyCanonical === undefined || JSON.stringify(stable(canonical)) === JSON.stringify(stable(transcriptLegacy))) {
               const lastTail = tailRows.at(-1)
               const watermarkEventId = lastTail?.event_id ?? cacheRow.watermark_event_id
               const watermarkInvocationId = lastTail?.invocation_id ?? cacheRow.watermark_invocation_id
@@ -391,6 +980,11 @@ export class SqliteAgentHistory implements HistoryPort {
   /** Lists canonical invocation streams owned by a session in their first-commit order. */
   listInvocationIdsForSession(sessionId: string): string[] {
     if (!sessionId.trim()) throw new HistoryBatchError('sessionId is required')
+    const corrupt = this.conn.prepare(`SELECT streams.invocation_id FROM agent_history_streams AS streams
+      JOIN agent_history_events AS events ON events.invocation_id=streams.invocation_id
+      WHERE streams.session_id=? AND (events.session_id IS NULL OR events.session_id<>streams.session_id)
+      LIMIT 1`).get(sessionId) as { invocation_id: string } | undefined
+    if (corrupt) throw new HistoryCorruptionError(corrupt.invocation_id, 'event session ownership differs from its invocation stream')
     return (this.conn.prepare(`
       SELECT streams.invocation_id
       FROM agent_history_streams AS streams
@@ -484,10 +1078,13 @@ export class SqliteAgentHistory implements HistoryPort {
     const resolvedInvocationId = exactStream ? invocationId : mappedInvocationId ?? invocationId
     const stream = exactStream ?? this.conn.prepare('SELECT invocation_id, version, schema_version, session_id FROM agent_history_streams WHERE invocation_id = ?').get(resolvedInvocationId) as StreamRow | undefined
     const rows = this.conn.prepare(`
-      SELECT invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json
+      SELECT invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json, session_id
       FROM agent_history_events WHERE invocation_id = ? ORDER BY sequence ASC
     `).all(resolvedInvocationId) as EventRow[]
     if (!stream && rows.length > 0) throw new HistoryCorruptionError(invocationId, 'events exist without a stream record')
+    if (stream && rows.some((row) => row.session_id !== stream.session_id)) {
+      throw new HistoryCorruptionError(invocationId, 'event session ownership differs from its invocation stream')
+    }
     if (stream && stream.schema_version !== this.schemaVersion) {
       throw new HistoryCorruptionError(invocationId, `unsupported schema version ${stream.schema_version} (adapter supports ${this.schemaVersion})`)
     }
@@ -517,7 +1114,7 @@ export class SqliteAgentHistory implements HistoryPort {
     try {
       const spillText = async (value: unknown): Promise<unknown> => {
         if (typeof value === 'string' && Buffer.byteLength(value, 'utf8') > 64 * 1024) {
-          const descriptor = await this.spillStore!.commitSourceTruth(value, () => undefined)
+          const descriptor = await this.spillStore!.commitSourceTruthUnderFence(value)
           return { __spaceassistant_spill_v1: descriptor }
         }
         return value

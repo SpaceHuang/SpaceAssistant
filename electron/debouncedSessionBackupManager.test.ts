@@ -109,4 +109,37 @@ describe('DebouncedSessionBackupManager', () => {
     await mgr.flushAll(['s1', 's2'], async (id) => ({ session: { id } as Session, readPage }))
     expect(mgr.getPendingSessionIds()).toEqual([])
   })
+
+  it('shutdown flush 对每个挂起会话重试失败项并等待全部会话 settled', async () => {
+    const backupSession = vi.fn().mockRejectedValueOnce(new Error('temporary disk error')).mockResolvedValue(undefined)
+    const inner = { backupSession, deleteBackup: vi.fn() } as unknown as SessionBackupManager
+    const mgr = new DebouncedSessionBackupManager(inner)
+    const readPage = arrayMessagePageReader([])
+    mgr.schedule('s1', async () => ({ session: { id: 's1' } as Session, readPage }))
+    mgr.schedule('s2', async () => ({ session: { id: 's2' } as Session, readPage }))
+
+    const flush = mgr.flushAllWithRetry(['s1', 's2'], async (id) => ({ session: { id } as Session, readPage }))
+    await vi.advanceTimersByTimeAsync(250)
+    await expect(flush).resolves.toBeUndefined()
+
+    expect(backupSession).toHaveBeenCalledTimes(3)
+    expect(mgr.getPendingSessionIds()).toEqual([])
+  })
+
+  it('shutdown flush 在重试耗尽时等待其它 session 完成后统一失败', async () => {
+    const backupSession = vi.fn().mockRejectedValue(new Error('permanent disk error'))
+    const inner = { backupSession, deleteBackup: vi.fn() } as unknown as SessionBackupManager
+    const mgr = new DebouncedSessionBackupManager(inner)
+    const readPage = arrayMessagePageReader([])
+    mgr.schedule('s1', async () => ({ session: { id: 's1' } as Session, readPage }))
+    mgr.schedule('s2', async () => ({ session: { id: 's2' } as Session, readPage }))
+
+    const flush = mgr.flushAllWithRetry(['s1', 's2'], async (id) => ({ session: { id } as Session, readPage }))
+    const rejected = expect(flush).rejects.toBeInstanceOf(AggregateError)
+    await vi.advanceTimersByTimeAsync(750)
+    await rejected
+
+    expect(backupSession).toHaveBeenCalledTimes(6)
+    expect(mgr.getPendingSessionIds()).toEqual([])
+  })
 })

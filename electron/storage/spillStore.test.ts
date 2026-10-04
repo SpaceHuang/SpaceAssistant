@@ -1,12 +1,13 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as agentLoggerModule from '../agentLogger/agentLogger'
-import { SpillContentUnavailableError, createSpillStore, createSpillStoreForDatabase, reconcileSpillOrphansAgainstCanonicalHistory, runSpillRetentionMaintenance } from './spillStore'
+import { SpillContentUnavailableError, SpillRootFenceBusyError, createSpillStore, createSpillStoreForDatabase, reconcileSpillOrphansAgainstCanonicalHistory, runSourceTruthSpillGcMaintenance, runSpillRetentionMaintenance } from './spillStore'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { openDatabase } from '../database'
-import { setConfigValue } from '../database/operations'
+import { createSession, deleteSession, setConfigValue } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { readSessionTranscript } from '../database/sessionTranscript'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
@@ -25,6 +26,332 @@ async function createStore() {
 }
 
 describe('spillStore P-5 protocol', () => {
+  it('serializes independent spill-store instances through the shared file fence', async () => {
+    const { root } = await createStore()
+    const writer = createSpillStore(root)
+    const collector = createSpillStore(root)
+    let releaseWriter!: () => void
+    let writerEntered!: () => void
+    const entered = new Promise<void>((resolve) => { writerEntered = resolve })
+    const gate = new Promise<void>((resolve) => { releaseWriter = resolve })
+    const activeWrite = writer.withSpillRootFence(async () => { writerEntered(); await gate })
+    await entered
+    await expect(collector.withSpillRootFence(async () => undefined, false)).rejects.toBeInstanceOf(SpillRootFenceBusyError)
+    let serialized = false
+    const waitingWriter = collector.withSpillRootFence(async () => { serialized = true })
+    releaseWriter()
+    await Promise.all([activeWrite, waitingWriter])
+    expect(serialized).toBe(true)
+  })
+
+  it('uses a cross-process spill-root lock that blocks a competing process', async () => {
+    const { root } = await createStore()
+    const child = spawn(process.execPath, ['-e', `const lock=require('proper-lockfile').lock; lock(process.argv[1], { realpath:false }).then(release => { process.stdout.write('LOCKED\\n'); setTimeout(() => release().then(() => process.exit(0)), 10000) }).catch(error => { console.error(error); process.exit(2) })`, root], { stdio: ['ignore', 'pipe', 'pipe'] })
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('child lock acquisition timed out')), 5_000)
+        child.stdout.on('data', (chunk: Buffer) => {
+          if (chunk.toString().includes('LOCKED')) { clearTimeout(timer); resolve() }
+        })
+        child.once('error', (error) => { clearTimeout(timer); reject(error) })
+        child.once('exit', (code) => { clearTimeout(timer); reject(new Error(`lock child exited before acquiring lock: ${code}`)) })
+      })
+      await expect(createSpillStore(root).withSpillRootFence(async () => undefined, false))
+        .rejects.toBeInstanceOf(SpillRootFenceBusyError)
+    } finally {
+      child.kill('SIGTERM')
+      await new Promise<void>((resolve) => child.once('exit', () => resolve()))
+    }
+  })
+
+  it('records source-truth locators for post-commit collection when deleting a session', async () => {
+    const temp = createTempDatabase('spill-session-delete-queue-')
+    const session = createSession(temp.db, { name: 'spill deletion queue' })
+    const otherSession = createSession(temp.db, { name: 'shared spill reference' })
+    const body = 'session-owned canonical source '.repeat(3_000)
+    const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, Date.now, session.id)
+    await history.appendBatch([{
+      invocationId: 'spill-delete-invocation', turnId: 'spill-delete-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'spill-delete-context', idempotencyKey: 'spill-delete-context', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'spill-delete-user', role: 'user', content: body, timestamp: 1 }] }
+    }], 0)
+    const stored = getDbConnection(temp.db).prepare("SELECT payload_json FROM agent_history_events WHERE event_id='spill-delete-context'").get() as { payload_json: string }
+    const payload = JSON.parse(stored.payload_json) as { messages: Array<{ content: { __spaceassistant_spill_v1: Record<string, unknown> } }> }
+    const descriptor = payload.messages[0]!.content.__spaceassistant_spill_v1
+    const locator = String(descriptor.locator)
+    const transcriptSpill = JSON.stringify({ __spaceassistant_session_transcript_spill_v1: descriptor })
+    getDbConnection(temp.db).prepare(`INSERT INTO session_transcript_entries(session_id,turn_id,base_version,version,outcome,messages_json,created_at)
+      VALUES(?, 'spill-delete-transcript-turn',0,1,'completed',?,1)`).run(session.id, transcriptSpill)
+    const spillFile = path.join(path.dirname(temp.dbPath), 'spill', locator)
+    await expect(fs.access(spillFile)).resolves.toBeUndefined()
+    await new SqliteAgentHistory(getDbConnection(temp.db), 1, Date.now, otherSession.id).appendBatch([{
+      invocationId: 'spill-delete-shared-invocation', turnId: 'spill-delete-shared-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'spill-delete-shared-event', idempotencyKey: 'spill-delete-shared-event', kind: 'invocation-context-committed',
+      payload: { messages: [], sharedSpill: descriptor }
+    }], 0)
+
+    deleteSession(temp.db, session.id, { flush: false })
+
+    expect(getDbConnection(temp.db).prepare('SELECT session_id,generation,locator,status,attempts FROM source_truth_spill_gc_queue').all())
+      .toEqual([expect.objectContaining({ session_id: session.id, locator, status: 'pending', attempts: 0 })])
+    expect(getDbConnection(temp.db).prepare('SELECT 1 FROM agent_history_events WHERE event_id=?').get('spill-delete-context')).toBeUndefined()
+    expect(getDbConnection(temp.db).prepare('SELECT 1 FROM session_transcript_entries WHERE session_id=?').get(session.id)).toBeUndefined()
+    await expect(fs.access(spillFile)).resolves.toBeUndefined()
+    await expect(runSourceTruthSpillGcMaintenance(temp.db, path.join(path.dirname(temp.dbPath), 'spill')))
+      .resolves.toMatchObject({ pending: 1, shared: 1, completed: 0 })
+    await expect(fs.access(spillFile)).resolves.toBeUndefined()
+    deleteSession(temp.db, otherSession.id, { flush: false })
+    await expect(runSourceTruthSpillGcMaintenance(temp.db, path.join(path.dirname(temp.dbPath), 'spill')))
+      .resolves.toMatchObject({ pending: 0, completed: 1 })
+    await expect(fs.access(spillFile)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(getDbConnection(temp.db).prepare('SELECT status,attempts,last_error FROM source_truth_spill_gc_queue WHERE locator=?').get(locator))
+      .toEqual({ status: 'completed', attempts: 2, last_error: null })
+    temp.cleanup()
+  })
+
+  it('rejects a source-truth append whose session generation disappeared during spill preparation', async () => {
+    const temp = createTempDatabase('spill-session-generation-fence-')
+    const session = createSession(temp.db, { name: 'generation race' })
+    const spillRoot = path.join(path.dirname(temp.dbPath), 'spill')
+    const store = createSpillStore(spillRoot)
+    const commitUnderFence = store.commitSourceTruthUnderFence.bind(store)
+    let prepared!: () => void
+    let release!: () => void
+    const filePrepared = new Promise<void>((resolve) => { prepared = resolve })
+    const allowAppend = new Promise<void>((resolve) => { release = resolve })
+    vi.spyOn(store, 'commitSourceTruthUnderFence').mockImplementation(async (payload, commit) => {
+      const descriptor = await commitUnderFence(payload, commit)
+      prepared()
+      await allowAppend
+      return descriptor
+    })
+    const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, Date.now, session.id, store)
+    const append = history.appendBatch([{
+      invocationId: 'spill-generation-race-invocation', turnId: 'spill-generation-race-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'spill-generation-race-event', idempotencyKey: 'spill-generation-race-event', kind: 'tool-call-finished',
+      payload: { result: { success: true, data: 'generation race body '.repeat(8_000) } }
+    }], 0)
+    await filePrepared
+    deleteSession(temp.db, session.id, { flush: false })
+    release()
+
+    await expect(append).rejects.toThrow('history session generation changed during spill preparation')
+    expect(getDbConnection(temp.db).prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?')
+      .get('spill-generation-race-event')).toEqual({ count: 0 })
+    await expect(runSourceTruthSpillGcMaintenance(temp.db, spillRoot, Date.now(), { batchSize: 1 }))
+      .resolves.toMatchObject({ completed: 1, classified: 1 })
+    temp.cleanup()
+  })
+
+  it('keeps pending spill files when the full cross-session reference scan is malformed, then retries after repair', async () => {
+    const temp = createTempDatabase('spill-gc-reference-scan-failure-')
+    const deletedSession = createSession(temp.db, { name: 'queued delete' })
+    const remainingSession = createSession(temp.db, { name: 'malformed unrelated history' })
+    const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, Date.now, deletedSession.id)
+    await history.appendBatch([{
+      invocationId: 'spill-gc-pending-invocation', turnId: 'spill-gc-pending-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'spill-gc-pending-event', idempotencyKey: 'spill-gc-pending-event', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'spill-gc-pending-user', role: 'user', content: 'q'.repeat(70 * 1024), timestamp: 1 }] }
+    }], 0)
+    const pendingPayload = JSON.parse((getDbConnection(temp.db).prepare('SELECT payload_json FROM agent_history_events WHERE event_id=?')
+      .get('spill-gc-pending-event') as { payload_json: string }).payload_json) as { messages: Array<{ content: { __spaceassistant_spill_v1: { locator: string } } }> }
+    const locator = pendingPayload.messages[0]!.content.__spaceassistant_spill_v1.locator
+    const spillFile = path.join(path.dirname(temp.dbPath), 'spill', locator)
+    const conn = getDbConnection(temp.db)
+    conn.prepare('INSERT INTO agent_history_streams(invocation_id,version,schema_version,session_id) VALUES(\'bad-reference-owner\',1,1,?)').run(remainingSession.id)
+    conn.prepare(`INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at)
+      VALUES('bad-reference-owner',1,'bad-reference-event','bad-reference-key','bad-reference-turn',1,'invocation-context-committed','{broken',1)`).run()
+    deleteSession(temp.db, deletedSession.id, { flush: false })
+
+    await expect(runSourceTruthSpillGcMaintenance(temp.db, path.join(path.dirname(temp.dbPath), 'spill')))
+      .resolves.toMatchObject({ pending: 1, failed: 1, completed: 0 })
+    await expect(fs.access(spillFile)).resolves.toBeUndefined()
+    expect(conn.prepare('SELECT status,attempts,last_error FROM source_truth_spill_gc_queue WHERE locator=?').get(locator))
+      .toEqual({ status: 'pending', attempts: 1, last_error: 'canonical-reference-scan-failed' })
+
+    conn.prepare('DELETE FROM agent_history_events WHERE event_id=?').run('bad-reference-event')
+    conn.prepare('DELETE FROM agent_history_streams WHERE invocation_id=?').run('bad-reference-owner')
+    await expect(runSourceTruthSpillGcMaintenance(temp.db, path.join(path.dirname(temp.dbPath), 'spill')))
+      .resolves.toMatchObject({ pending: 0, completed: 1 })
+    await expect(fs.access(spillFile)).rejects.toMatchObject({ code: 'ENOENT' })
+    temp.cleanup()
+  })
+
+  it('fails closed on an unknown spill marker instead of deleting its referenced file', async () => {
+    const temp = createTempDatabase('spill-gc-unknown-marker-')
+    const spillRoot = path.join(path.dirname(temp.dbPath), 'spill')
+    await fs.mkdir(spillRoot, { recursive: true })
+    const locator = '00000000-0000-4000-8000-000000000099.spill'
+    const spillFile = path.join(spillRoot, locator)
+    await fs.writeFile(spillFile, 'unknown marker source')
+    const conn = getDbConnection(temp.db)
+    conn.prepare(`INSERT INTO agent_history_streams(invocation_id,version,schema_version,session_id) VALUES('unknown-marker-owner',1,1,'unknown-owner')`).run()
+    conn.prepare(`INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at)
+      VALUES('unknown-marker-owner',1,'unknown-marker-event','unknown-marker-key','unknown-marker-turn',1,'tool-call-finished',?,1)`)
+      .run(JSON.stringify({ source: { __spaceassistant_spill_v2: { version: 2, kind: 'source-of-truth', locator } } }))
+    conn.prepare(`INSERT INTO source_truth_spill_gc_queue(locator,session_id,generation,created_at,updated_at)
+      VALUES(?,'deleted-session','old-generation',1,1)`).run(locator)
+
+    await expect(runSourceTruthSpillGcMaintenance(temp.db, spillRoot))
+      .resolves.toMatchObject({ pending: 1, failed: 1, completed: 0 })
+    await expect(fs.access(spillFile)).resolves.toBeUndefined()
+    expect(conn.prepare('SELECT status,last_error FROM source_truth_spill_gc_queue WHERE locator=?').get(locator))
+      .toEqual({ status: 'pending', last_error: 'canonical-reference-scan-failed' })
+    temp.cleanup()
+  })
+
+  it('leaves a pending GC obligation after unlink failure and completes it on retry', async () => {
+    const temp = createTempDatabase('spill-gc-unlink-failure-')
+    const session = createSession(temp.db, { name: 'unlink retry' })
+    const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, Date.now, session.id)
+    await history.appendBatch([{
+      invocationId: 'spill-gc-unlink-invocation', turnId: 'spill-gc-unlink-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'spill-gc-unlink-event', idempotencyKey: 'spill-gc-unlink-event', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'spill-gc-unlink-user', role: 'user', content: 'u'.repeat(70 * 1024), timestamp: 1 }] }
+    }], 0)
+    const payload = JSON.parse((getDbConnection(temp.db).prepare('SELECT payload_json FROM agent_history_events WHERE event_id=?')
+      .get('spill-gc-unlink-event') as { payload_json: string }).payload_json) as { messages: Array<{ content: { __spaceassistant_spill_v1: { locator: string } } }> }
+    const locator = payload.messages[0]!.content.__spaceassistant_spill_v1.locator
+    const spillRoot = path.join(path.dirname(temp.dbPath), 'spill')
+    const spillFile = path.join(spillRoot, locator)
+    deleteSession(temp.db, session.id, { flush: false })
+    const unlink = vi.spyOn(fs, 'unlink').mockRejectedValueOnce(Object.assign(new Error('disk busy'), { code: 'EBUSY' }))
+
+    await expect(runSourceTruthSpillGcMaintenance(temp.db, spillRoot)).resolves.toMatchObject({ pending: 1, failed: 1 })
+    await expect(fs.access(spillFile)).resolves.toBeUndefined()
+    expect(getDbConnection(temp.db).prepare('SELECT status,attempts,last_error FROM source_truth_spill_gc_queue WHERE locator=?').get(locator))
+      .toEqual({ status: 'pending', attempts: 1, last_error: 'file-EBUSY' })
+
+    unlink.mockRestore()
+    temp.db.close()
+    const reopened = openDatabase(temp.dbPath)
+    await expect(runSourceTruthSpillGcMaintenance(reopened, spillRoot)).resolves.toMatchObject({ pending: 0, completed: 1 })
+    reopened.close()
+    await expect(fs.access(spillFile)).rejects.toMatchObject({ code: 'ENOENT' })
+    temp.cleanup()
+  })
+
+  it('keeps a pending obligation when directory fsync fails after unlink and retries idempotently', async () => {
+    const temp = createTempDatabase('spill-gc-fsync-failure-')
+    const session = createSession(temp.db, { name: 'fsync retry' })
+    const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, Date.now, session.id)
+    await history.appendBatch([{
+      invocationId: 'spill-gc-fsync-invocation', turnId: 'spill-gc-fsync-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'spill-gc-fsync-event', idempotencyKey: 'spill-gc-fsync-event', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'spill-gc-fsync-user', role: 'user', content: 'f'.repeat(70 * 1024), timestamp: 1 }] }
+    }], 0)
+    const payload = JSON.parse((getDbConnection(temp.db).prepare('SELECT payload_json FROM agent_history_events WHERE event_id=?')
+      .get('spill-gc-fsync-event') as { payload_json: string }).payload_json) as { messages: Array<{ content: { __spaceassistant_spill_v1: { locator: string } } }> }
+    const locator = payload.messages[0]!.content.__spaceassistant_spill_v1.locator
+    const spillRoot = path.join(path.dirname(temp.dbPath), 'spill')
+    const spillFile = path.join(spillRoot, locator)
+    deleteSession(temp.db, session.id, { flush: false })
+    const originalOpen = fs.open.bind(fs)
+    const open = vi.spyOn(fs, 'open').mockImplementation(async (filePath, ...args) => {
+      if (filePath === spillRoot) throw Object.assign(new Error('directory fsync failed'), { code: 'EIO' })
+      return await originalOpen(filePath, ...args)
+    })
+
+    await expect(runSourceTruthSpillGcMaintenance(temp.db, spillRoot)).resolves.toMatchObject({ pending: 1, failed: 1 })
+    await expect(fs.access(spillFile)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(getDbConnection(temp.db).prepare('SELECT status,last_error FROM source_truth_spill_gc_queue WHERE locator=?').get(locator))
+      .toEqual({ status: 'pending', last_error: 'file-EIO' })
+    open.mockRestore()
+    await expect(runSourceTruthSpillGcMaintenance(temp.db, spillRoot)).resolves.toMatchObject({ pending: 0, completed: 1 })
+    temp.cleanup()
+  })
+
+  it('retries when unlink succeeds but durable completion marking fails', async () => {
+    const temp = createTempDatabase('spill-gc-completion-mark-failure-')
+    const session = createSession(temp.db, { name: 'completion marker retry' })
+    const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, Date.now, session.id)
+    await history.appendBatch([{
+      invocationId: 'spill-gc-mark-invocation', turnId: 'spill-gc-mark-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'spill-gc-mark-event', idempotencyKey: 'spill-gc-mark-event', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'spill-gc-mark-user', role: 'user', content: 'm'.repeat(70 * 1024), timestamp: 1 }] }
+    }], 0)
+    const payload = JSON.parse((getDbConnection(temp.db).prepare('SELECT payload_json FROM agent_history_events WHERE event_id=?')
+      .get('spill-gc-mark-event') as { payload_json: string }).payload_json) as { messages: Array<{ content: { __spaceassistant_spill_v1: { locator: string } } }> }
+    const locator = payload.messages[0]!.content.__spaceassistant_spill_v1.locator
+    const spillRoot = path.join(path.dirname(temp.dbPath), 'spill')
+    const spillFile = path.join(spillRoot, locator)
+    deleteSession(temp.db, session.id, { flush: false })
+    const conn = getDbConnection(temp.db)
+    conn.exec(`CREATE TRIGGER reject_spill_gc_completion BEFORE UPDATE OF status ON source_truth_spill_gc_queue
+      WHEN NEW.status='completed' BEGIN SELECT RAISE(ABORT, 'injected completion mark failure'); END`)
+
+    await expect(runSourceTruthSpillGcMaintenance(temp.db, spillRoot)).resolves.toMatchObject({ pending: 1, failed: 1 })
+    await expect(fs.access(spillFile)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(conn.prepare('SELECT status FROM source_truth_spill_gc_queue WHERE locator=?').get(locator)).toEqual({ status: 'pending' })
+    conn.exec('DROP TRIGGER reject_spill_gc_completion')
+    await expect(runSourceTruthSpillGcMaintenance(temp.db, spillRoot)).resolves.toMatchObject({ pending: 0, completed: 1 })
+    temp.cleanup()
+  })
+
+  it('classifies spill directory orphans in resumable pages before unlinking them', async () => {
+    const temp = createTempDatabase('spill-gc-directory-scan-')
+    const spillRoot = path.join(path.dirname(temp.dbPath), 'spill')
+    await fs.mkdir(spillRoot, { recursive: true })
+    const first = '00000000-0000-4000-8000-000000000001.spill'
+    const second = '00000000-0000-4000-8000-000000000002.spill'
+    await fs.writeFile(path.join(spillRoot, first), 'orphan-one')
+    await fs.writeFile(path.join(spillRoot, second), 'orphan-two')
+    await fs.writeFile(path.join(spillRoot, 'temporary-upload.tmp'), 'leave alone')
+
+    await expect(runSourceTruthSpillGcMaintenance(temp.db, spillRoot, Date.now(), { batchSize: 1 }))
+      .resolves.toMatchObject({ pending: 0, completed: 1, classified: 1, scanStatus: 'pending' })
+    expect(getDbConnection(temp.db).prepare('SELECT status,after_name FROM source_truth_spill_gc_scan_state').get())
+      .toEqual({ status: 'pending', after_name: first })
+    await expect(fs.access(path.join(spillRoot, first))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(fs.access(path.join(spillRoot, second))).resolves.toBeUndefined()
+
+    await expect(runSourceTruthSpillGcMaintenance(temp.db, spillRoot, Date.now(), { batchSize: 1 }))
+      .resolves.toMatchObject({ pending: 0, completed: 1, classified: 1, scanStatus: 'pending' })
+    await expect(runSourceTruthSpillGcMaintenance(temp.db, spillRoot, Date.now(), { batchSize: 1 }))
+      .resolves.toMatchObject({ pending: 0, completed: 0, classified: 0, scanStatus: 'complete' })
+    expect(getDbConnection(temp.db).prepare('SELECT status,after_name FROM source_truth_spill_gc_scan_state').get())
+      .toEqual({ status: 'complete', after_name: null })
+    await expect(fs.access(path.join(spillRoot, second))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(fs.readFile(path.join(spillRoot, 'temporary-upload.tmp'), 'utf8')).resolves.toBe('leave alone')
+    temp.cleanup()
+  })
+
+  it('rolls back session and History deletion if a source-truth payload cannot be classified', () => {
+    const temp = createTempDatabase('spill-session-delete-malformed-')
+    const session = createSession(temp.db, { name: 'malformed source locator' })
+    const conn = getDbConnection(temp.db)
+    conn.prepare('INSERT INTO agent_history_streams(invocation_id,version,schema_version,session_id) VALUES(\'malformed-spill-owner\',1,1,?)').run(session.id)
+    conn.prepare(`INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at)
+      VALUES('malformed-spill-owner',1,'malformed-spill-event','malformed-spill-key','malformed-spill-turn',1,'invocation-context-committed','{broken',1)`).run()
+
+    expect(() => deleteSession(temp.db, session.id, { flush: false })).toThrow()
+    expect(conn.prepare('SELECT id FROM sessions WHERE id=?').get(session.id)).toEqual({ id: session.id })
+    expect(conn.prepare('SELECT event_id FROM agent_history_events WHERE event_id=?').get('malformed-spill-event')).toEqual({ event_id: 'malformed-spill-event' })
+    expect(conn.prepare('SELECT locator FROM source_truth_spill_gc_queue').all()).toEqual([])
+    temp.cleanup()
+  })
+
+  it('rolls back session deletion when durable spill-GC todo registration fails', async () => {
+    const temp = createTempDatabase('spill-session-delete-queue-failure-')
+    const session = createSession(temp.db, { name: 'queue registration failure' })
+    const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, Date.now, session.id)
+    await history.appendBatch([{
+      invocationId: 'spill-delete-queue-failure-invocation', turnId: 'spill-delete-queue-failure-turn', sequence: 1, schemaVersion: 1,
+      eventId: 'spill-delete-queue-failure-event', idempotencyKey: 'spill-delete-queue-failure-event', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'spill-delete-queue-failure-user', role: 'user', content: 'f'.repeat(70 * 1024), timestamp: 1 }] }
+    }], 0)
+    const conn = getDbConnection(temp.db)
+    conn.exec(`CREATE TRIGGER fail_spill_gc_enqueue BEFORE INSERT ON source_truth_spill_gc_queue
+      BEGIN SELECT RAISE(ABORT, 'injected spill GC todo failure'); END`)
+
+    expect(() => deleteSession(temp.db, session.id, { flush: false })).toThrow('injected spill GC todo failure')
+    expect(conn.prepare('SELECT id FROM sessions WHERE id=?').get(session.id)).toEqual({ id: session.id })
+    expect(conn.prepare('SELECT event_id FROM agent_history_events WHERE event_id=?').get('spill-delete-queue-failure-event'))
+      .toEqual({ event_id: 'spill-delete-queue-failure-event' })
+    expect(conn.prepare('SELECT locator FROM source_truth_spill_gc_queue').all()).toEqual([])
+    temp.cleanup()
+  })
+
   it('keeps spill disabled for in-memory and mocked database connections', () => {
     expect(createSpillStoreForDatabase({} as never)).toBeUndefined()
   })
@@ -403,12 +730,12 @@ describe('spillStore P-5 protocol', () => {
       await history.appendBatch([{
         invocationId: 'spill-invocation', turnId: 'spill-turn', sequence: 1, schemaVersion: 1,
         eventId: 'spill-locator-event', idempotencyKey: 'spill-locator-event', kind: 'invocation-context-committed',
-        payload: { spill }
+        payload: { messages: [], spill }
       }], 0)
     })
 
     const committed = await history.read('spill-invocation')
-    expect(committed.events[0]?.payload).toEqual({ spill: descriptor })
+    expect(committed.events[0]?.payload).toEqual({ messages: [], spill: descriptor })
     await expect(store.readSourceTruth(descriptor)).resolves.toBe('authoritative spill text')
     const orphan = await store.commitSourceTruth('not referenced by canonical history', async () => undefined)
     await expect(reconcileSpillOrphansAgainstCanonicalHistory(store, conn)).resolves.toEqual([orphan.locator])
@@ -430,7 +757,7 @@ describe('spillStore P-5 protocol', () => {
       attemptedLocator = spill.locator
       await history.appendBatch([{
         invocationId: 'spill-failed-invocation', turnId: 'spill-failed-turn', sequence: 1, schemaVersion: 1,
-        eventId: 'spill-failed-event', idempotencyKey: 'spill-failed-event', kind: 'invocation-context-committed', payload: { spill }
+        eventId: 'spill-failed-event', idempotencyKey: 'spill-failed-event', kind: 'invocation-context-committed', payload: { messages: [], spill }
       }], 0)
     })).rejects.toThrow('locator rejected')
 
@@ -452,13 +779,13 @@ describe('spillStore P-5 protocol', () => {
       descriptor = spill
       await history.appendBatch([{
         invocationId: 'spill-uncertain-invocation', turnId: 'spill-uncertain-turn', sequence: 1, schemaVersion: 1,
-        eventId: 'spill-uncertain-event', idempotencyKey: 'spill-uncertain-event', kind: 'invocation-context-committed', payload: { spill }
+        eventId: 'spill-uncertain-event', idempotencyKey: 'spill-uncertain-event', kind: 'invocation-context-committed', payload: { messages: [], spill }
       }], 0)
       throw new Error('commit acknowledgement lost')
     })).rejects.toThrow('commit acknowledgement lost')
 
     const references = await history.read('spill-uncertain-invocation')
-    expect(references.events[0]?.payload).toEqual({ spill: descriptor })
+    expect(references.events[0]?.payload).toEqual({ messages: [], spill: descriptor })
     await expect(reconcileSpillOrphansAgainstCanonicalHistory(store, conn)).resolves.toEqual([])
     await expect(store.readSourceTruth(descriptor!)).resolves.toBe('committed despite lost acknowledgement')
     db.close()
@@ -525,13 +852,13 @@ describe('spillStore P-5 protocol', () => {
     const source = await store.commitSourceTruth('must survive retention', async (spill) => {
       await history.appendBatch([{
         invocationId: 'spill-retention-source', turnId: 'spill-retention-source-turn', sequence: 1, schemaVersion: 1,
-        eventId: 'spill-retention-source-event', idempotencyKey: 'spill-retention-source-event', kind: 'invocation-context-committed', payload: { spill }
+        eventId: 'spill-retention-source-event', idempotencyKey: 'spill-retention-source-event', kind: 'invocation-context-committed', payload: { messages: [], spill }
       }], 0)
     })
     const degradable = await store.writeDegradable('reconstructible copy', { canonicalEquivalent: true })
     await history.appendBatch([{
       invocationId: 'spill-retention-degradable', turnId: 'spill-retention-degradable-turn', sequence: 1, schemaVersion: 1,
-      eventId: 'spill-retention-degradable-event', idempotencyKey: 'spill-retention-degradable-event', kind: 'invocation-context-committed', payload: { spill: degradable }
+      eventId: 'spill-retention-degradable-event', idempotencyKey: 'spill-retention-degradable-event', kind: 'invocation-context-committed', payload: { messages: [], spill: degradable }
     }], 0)
     setConfigValue(db, 'retention.spill.degradableDays', '1')
 

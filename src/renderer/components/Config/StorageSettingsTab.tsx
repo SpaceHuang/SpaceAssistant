@@ -9,6 +9,7 @@ type StorageProfile = {
   databaseFiles?: { walBytes?: number; shmBytes?: number; totalBytes?: number }
   spillDegraded?: { totalBytes?: number }
   spillFiles?: { totalBytes?: number; sourceOfTruthBytes?: number; degradableBytes?: number; orphanBytes?: number }
+  sourceTruthGc?: { pendingFiles?: number; pendingBytes?: number; orphanBytes?: number; scanStatus?: string }
   tables?: Record<string, { textBytes?: number } | null>
 }
 
@@ -68,6 +69,7 @@ export function StorageSettingsTab() {
       <Descriptions.Item label={t('storage.canonicalHistory')}>{formatBytes(bytes('canonicalHistory'))}</Descriptions.Item>
       <Descriptions.Item label={t('storage.transcriptSnapshots')}>{formatBytes(bytes('transcriptSnapshots'))}</Descriptions.Item>
       <Descriptions.Item label={t('storage.sourceSpill')}>{formatBytes(profile?.spillFiles?.sourceOfTruthBytes)}</Descriptions.Item>
+      <Descriptions.Item label={t('storage.pendingSourceSpill')}>{formatBytes(profile?.sourceTruthGc?.pendingBytes)}</Descriptions.Item>
       <Descriptions.Item label={t('storage.degradableSpill')}>{formatBytes(profile?.spillDegraded?.totalBytes ?? profile?.spillFiles?.degradableBytes)}</Descriptions.Item>
       <Descriptions.Item label={t('storage.orphanSpill')}>{formatBytes(profile?.spillFiles?.orphanBytes)}</Descriptions.Item>
     </Descriptions>

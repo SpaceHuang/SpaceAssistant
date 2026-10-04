@@ -2,7 +2,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import path from 'path'
 import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
-import { appendSearchHistory, searchMessages } from './database'
+import { appendSearchHistory } from './database'
+import * as sessionTranscriptProjection from './runtime/sessionTranscriptProjection'
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
@@ -114,6 +115,7 @@ describe('search:execute IPC handler', () => {
     vi.clearAllMocks()
     mockFs.readdir.mockResolvedValue([])
     mockFs.readFile.mockResolvedValue('')
+    vi.spyOn(sessionTranscriptProjection, 'searchProjectedMessages').mockReturnValue([])
     ipc = mockIpcMain()
   })
 
@@ -127,7 +129,7 @@ describe('search:execute IPC handler', () => {
   })
 
   it('returns session results with sessionId and messageId', async () => {
-    vi.mocked(searchMessages).mockReturnValue([
+    vi.spyOn(sessionTranscriptProjection, 'searchProjectedMessages').mockReturnValue([
       {
         messageId: 'm1',
         sessionId: 's1',
@@ -140,6 +142,7 @@ describe('search:execute IPC handler', () => {
     const handler = ipc.getHandler('search:execute')!
     const results = await handler({}, 'React')
     expect(appendSearchHistory).toHaveBeenCalledWith(ctx.db, 'React')
+    expect(sessionTranscriptProjection.searchProjectedMessages).toHaveBeenCalledWith(ctx.db, 'React', 'default', 50)
     expect(results).toHaveLength(1)
     expect(results[0]).toMatchObject({
       id: 'msg:m1',

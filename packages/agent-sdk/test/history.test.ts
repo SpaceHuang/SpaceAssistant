@@ -142,6 +142,14 @@ describe('History Port semantics', () => {
       event('resolve-conflict', 2, 'approval-resolved', { toolCallId: 'call-conflict', approvalId: 'approval-conflict', approved: false, outcome: 'approved', settledAt: 2 })
     ], 0)).rejects.toThrow(/approval outcome.*approved/i)
     await expect(conflictingOutcome.read('inv-1')).resolves.toMatchObject({ version: 0, events: [] })
+
+    const duplicateResolution = new MemoryHistory()
+    await expect(duplicateResolution.appendBatch([
+      event('wait-for-duplicate-resolution', 1, 'approval-waiting', { toolCallId: 'call-duplicate-resolution', approvalId: 'approval-duplicate-resolution', answerer: 'user', reasonCode: 'confirm', requestedAt: 1 }),
+      event('first-resolution', 2, 'approval-resolved', { toolCallId: 'call-duplicate-resolution', approvalId: 'approval-duplicate-resolution', approved: false, outcome: 'denied', settledAt: 2 }),
+      event('second-resolution', 3, 'approval-resolved', { toolCallId: 'call-duplicate-resolution', approvalId: 'approval-duplicate-resolution', approved: true, outcome: 'approved', settledAt: 3 })
+    ], 0)).rejects.toThrow(/approval.*not pending/i)
+    await expect(duplicateResolution.read('inv-1')).resolves.toMatchObject({ version: 0, events: [] })
   })
 
   it('allows a terminal after the pending tool call has a result', async () => {
@@ -202,6 +210,8 @@ describe('History Port semantics', () => {
   it('isolates sequence/version by invocation and rebuilds parked invocations as interrupted', async () => {
     const history = new MemoryHistory()
     await history.appendBatch([event('park-1', 1, 'invocation-parked', { invocationId: 'inv-1' })], 0)
+    await expect(history.appendBatch([event('after-park', 2, 'approval-updated', { late: true })], 1))
+      .rejects.toThrow(/terminal invocation event/i)
     const other = { ...event('other-1', 1), invocationId: 'inv-2', turnId: 'turn-2' }
     await history.appendBatch([other], 0)
     expect(await history.read('inv-2')).toMatchObject({ version: 1, events: [other] })
@@ -219,6 +229,24 @@ describe('History Port semantics', () => {
     expect(rebuildInvocationStates(snapshot('invocation-failed', { status: 'denied', reason: 'POLICY_DENY' })).get('inv-terminal')).toMatchObject({ state: 'denied' })
     expect(rebuildInvocationStates(snapshot('invocation-interrupted', { status: 'cancelled' })).get('inv-terminal')).toMatchObject({ state: 'cancelled' })
     expect(rebuildInvocationStates(snapshot('invocation-interrupted', { status: 'interrupted' })).get('inv-terminal')).toMatchObject({ state: 'interrupted' })
+  })
+
+  it.each([
+    ['approval', 'approval-waiting', { approvalId: 'approval-before-interrupt' }, 'interrupted'],
+    ['approval', 'approval-waiting', { approvalId: 'approval-before-cancel' }, 'cancelled'],
+    ['tool proposal', 'model-response-committed', { message: { role: 'assistant', toolCalls: [{ id: 'proposal-before-interrupt' }] } }, 'interrupted'],
+    ['tool proposal', 'model-response-committed', { message: { role: 'assistant', toolCalls: [{ id: 'proposal-before-cancel' }] } }, 'cancelled'],
+    ['dispatch', 'tool-call-started', { toolCallId: 'dispatch-before-interrupt' }, 'interrupted'],
+    ['dispatch', 'tool-call-started', { toolCallId: 'dispatch-before-cancel' }, 'cancelled']
+  ] as const)('keeps unresolved %s interrupted for either terminal status', (_label, pendingKind, pendingPayload, terminalStatus) => {
+    const events = [
+      event('pending-before-interrupt', 1, pendingKind, pendingPayload),
+      event('interrupted-with-pending-work', 2, 'invocation-interrupted', {
+        status: terminalStatus, reason: terminalStatus === 'cancelled' ? 'user-cancelled' : 'process-restart'
+      })
+    ]
+    expect(rebuildInvocationStates({ invocationId: 'inv-1', version: 2, schemaVersion: 1, events }).get('inv-1'))
+      .toMatchObject({ state: 'interrupted', lastEventId: 'pending-before-interrupt' })
   })
 
   it.each(['invocation-completed', 'invocation-failed', 'invocation-interrupted'] as const)(

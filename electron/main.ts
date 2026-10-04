@@ -33,7 +33,8 @@ import {
   registerWeChatIpcHandlers,
   shutdownWeChatServices
 } from './wechat/weChatIpc'
-import { getConfigValue, getDefaultDbPath, getMessage, getMessagesPage, getSession, listPersistedTurns, listSessions, openDatabase, setConfigValue } from './database'
+import { getConfigValue, getDefaultDbPath, getMessageSkeleton, getSession, listPersistedTurns, listSessions, openDatabase, setConfigValue } from './database'
+import { getProjectedMessagesPageWithSequence } from './runtime/sessionTranscriptProjection'
 import { randomUUID } from 'node:crypto'
 import { createTurnCoordinatorStorage } from './turnCoordinatorStorage'
 import { setInvalidationBroadcaster } from './database/scopeVersion'
@@ -46,7 +47,7 @@ import { beginSessionEventShutdown, ensureCompactionTransaction, ensureFinalRequ
 import { createCanonicalSessionProjectionRetentionPreparer, createSessionLedgerCompactionDependencyGuard, runSessionEventRetentionMaintenance } from './storage/sessionEventRetention'
 import { pruneAgentLogs } from './storage/agentLogRetention'
 import { resolveRetentionPolicyFromDb } from './storage/retentionPolicy'
-import { createSpillStore, runSpillRetentionMaintenance } from './storage/spillStore'
+import { createSpillStore, runSourceTruthSpillGcMaintenance, runSpillRetentionMaintenance, scheduleSourceTruthSpillGcMaintenance } from './storage/spillStore'
 import { isSafeDbMaintenanceRequested, runSafeDbMaintenance } from './storage/safeDbMaintenance'
 import { schedulePeriodicSqliteMaintenance } from './storage/periodicSqliteMaintenance'
 import { archiveLegacyDatabaseJsonBackup } from './storage/legacyDatabaseBackup'
@@ -185,6 +186,7 @@ installProcessSafetyNet((event, detail) => {
 /** 用量统计启动维护（回填/补齐/清理）：whenReady 内注册，主窗口创建完成后执行（评审 P1-3）。 */
 let usageStatsStartupMaintenance: (() => void) | null = null
 let stopPeriodicSqliteMaintenance: (() => void) | null = null
+let stopPeriodicSourceTruthSpillGc: (() => void) | null = null
 let isQuitting = false
 let quitCleanupDone = false
 const SHUTDOWN_TIMEOUT_MS = 12_000
@@ -196,17 +198,20 @@ export async function runShutdownCleanup(pendingTasks?: Set<string>): Promise<Sh
   const tasks: Array<[string, () => Promise<unknown>]> = [
     ['session-event-flush', flushAllSessionEventSinks],
     ['session-backup-flush', async () => {
-      // 评审 2.2：退出前把 3s 防抖窗口内挂起的备份 flush 掉——否则 cleanup 期间定时器触发时
-      // DB 已关闭，loadBackupPayload 抛错汇入备份失败链；flush 自身失败只记日志不阻塞退出。
+      // 评审 2.2：退出前 flush 3s 防抖窗口内挂起的备份，并在数据库关闭前为临时写盘故障重试。
+      // 有界重试耗尽后记录失败，不让辅助备份阻止应用退出。
       const mgr = sessionBackupManager
       const db = appDb
       if (!mgr || !db) return
       const ids = mgr.getPendingSessionIds()
       if (!ids.length) return
-      await mgr.flushAll(ids, async (id) => {
+      await mgr.flushAllWithRetry(ids, async (id) => {
         const session = getSession(db, id)
         if (!session) return null
-        return { session, readPage: (afterSequence: number, pageSize: number) => getMessagesPage(db, id, afterSequence, pageSize) }
+        return { session, readPage: (afterSequence: number, pageSize: number) => {
+          const page = getProjectedMessagesPageWithSequence(db, id, afterSequence, pageSize)
+          return { messages: page.rows.map((row) => row.message), nextSequence: page.nextSequence }
+        } }
       }).catch((error) => {
         console.warn('[sessionBackup] flush on quit failed:', error instanceof Error ? error.message : String(error))
       })
@@ -470,7 +475,9 @@ app.whenReady().then(async () => {
   // 无身份或不属于本应用的 PID 交给后续 turn recovery 收敛，绝不裸杀。
   await cleanupPersistedOrphansOnStartup({
     listTurns: () => listPersistedTurns(db),
-    getMessage: (id) => getMessage(db, id),
+    // This recovery consumer reads only shell process identity from the authoritative message skeleton;
+    // the assistant body may still be streaming and is deliberately not resolved from canonical History.
+    getMessageSkeleton: (id) => getMessageSkeleton(db, id),
     cleanup: cleanupOrphanProcess,
     audit: ({ turnId, toolUseId, result }) => logAgentEvent('info', 'shell.orphan_cleanup', { turnId, toolUseId, result })
   })
@@ -684,7 +691,9 @@ app.whenReady().then(async () => {
       prepareProjectionForRetention: createCanonicalSessionProjectionRetentionPreparer(db),
       shouldRetainSessionDir: shouldRetainCompactionLedger
     })
-    await runSpillRetentionMaintenance(db, path.join(app.getPath('userData'), 'spill'))
+    const spillRoot = path.join(app.getPath('userData'), 'spill')
+    await runSpillRetentionMaintenance(db, spillRoot)
+    await runSourceTruthSpillGcMaintenance(db, spillRoot)
     for (const failure of retention.failures) {
       console.warn('[sessionEvents] retention cleanup failed:', {
         sessionName: failure.sessionName,
@@ -851,6 +860,14 @@ app.whenReady().then(async () => {
     isTrayEnabled,
     turnRuntime,
     sessionHistoryRecoverySucceeded,
+    wakeSourceTruthSpillGc: () => {
+      const spillRoot = path.join(app.getPath('userData'), 'spill')
+      void runSourceTruthSpillGcMaintenance(db, spillRoot).catch((error) => {
+        logAgentEvent('warn', 'storage.spill.source_truth_gc_failed', {
+          phase: 'delete-wakeup', reason: error instanceof Error ? error.name : 'unknown'
+        })
+      })
+    },
     executeTurn
   })
 
@@ -1081,7 +1098,8 @@ app.whenReady().then(async () => {
         })
       }
       if (safeDbMaintenanceRequested) {
-        void runSafeDbMaintenance(db, app.getPath('userData')).then(() => {
+        const spillRoot = path.join(userDataDir, 'spill')
+        void createSpillStore(spillRoot).withSpillRootFence(() => runSafeDbMaintenance(db, userDataDir)).then(() => {
           console.info('[storage] safe database maintenance completed')
         }).catch((error) => {
           console.error('[storage] safe database maintenance failed; app remains available:', error instanceof Error ? error.message : String(error))
@@ -1093,6 +1111,11 @@ app.whenReady().then(async () => {
           }
         })
       }
+      stopPeriodicSourceTruthSpillGc = scheduleSourceTruthSpillGcMaintenance(db, path.join(userDataDir, 'spill'), {
+        onResult: (summary) => {
+          if (summary === 'failed' || summary.failed > 0) console.warn('[storage] source-truth spill collection remains pending', summary)
+        }
+      })
       usageStatsStartupMaintenance?.()
       usageStatsStartupMaintenance = null
     })
@@ -1116,6 +1139,8 @@ app.on('before-quit', (event) => {
   beginSessionEventShutdown()
   stopPeriodicSqliteMaintenance?.()
   stopPeriodicSqliteMaintenance = null
+  stopPeriodicSourceTruthSpillGc?.()
+  stopPeriodicSourceTruthSpillGc = null
   butlerScheduler?.stop()
   destroyTray()
   floatingManager?.destroy()

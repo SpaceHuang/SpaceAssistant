@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { appendMessage, claimQueuedTurnAtomically, createPersistedTurn, createSession, enqueueQueuedUserMessage, getDbConnection, openDatabase, prepareTurnAtomically } from './database'
 import { loadAuthoritativeTurnContext, normalizeAndValidateClaudeMessagesWithContentBlocks } from './claudeStreamHandlers'
 import { buildToolChatMessagesFromSource } from './chatMessageBuild'
@@ -6,6 +6,7 @@ import { selectRecoveryMessages } from '../src/shared/overflowRecovery'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { appendSqliteAgentHistoryBatchInTransaction } from './database/agentHistoryStorage'
 import { toCanonicalModelMessages } from './runtime/canonicalHistory'
+import * as sessionStorageShadow from './runtime/sessionStorageShadow'
 
 describe('loadAuthoritativeTurnContext', () => {
   it('continuation turn 从目标 Invocation 的 checkpoint transcript 取上下文，并校验 continuation 引用', async () => {
@@ -96,6 +97,26 @@ describe('loadAuthoritativeTurnContext', () => {
       .run('accepted question', JSON.stringify([{ ...acceptedAttachment, stagingKey: `chat-attachments/${session.id}/replaced.png` }]), 'accepted-user')
     expect(() => loadAuthoritativeTurnContext(db, 'accepted-turn', session.id, 'accepted-request', 'accepted-token'))
       .toThrow('TURN_USER_INPUT_FINGERPRINT_MISMATCH')
+    db.close()
+  })
+
+  it('accepted-turn canonical shadow failure leaves the legacy context and fingerprint path unchanged', () => {
+    const db = openDatabase(':memory:')
+    const session = createSession(db, { name: 'accepted-shadow-failure' })
+    prepareTurnAtomically(db, {
+      user: { id: 'shadow-user', sessionId: session.id, role: 'user', content: 'legacy accepted text', timestamp: 1, status: 'sent' },
+      assistant: { id: 'shadow-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
+      turn: { turnId: 'shadow-turn', requestId: 'shadow-request', sessionId: session.id, assistantMessageId: 'shadow-assistant', state: 'prepared', startToken: 'shadow-token' }
+    })
+    const shadow = vi.spyOn(sessionStorageShadow, 'shadowAcceptedTurnContext').mockImplementationOnce(() => {
+      throw new Error('injected shadow-only API failure')
+    })
+
+    const context = loadAuthoritativeTurnContext(db, 'shadow-turn', session.id, 'shadow-request', 'shadow-token')
+
+    expect(context.messages).toContainEqual(expect.objectContaining({ id: 'shadow-user', content: 'legacy accepted text' }))
+    expect(shadow).toHaveBeenCalledTimes(1)
+    shadow.mockRestore()
     db.close()
   })
 

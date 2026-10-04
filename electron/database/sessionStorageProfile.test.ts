@@ -42,19 +42,26 @@ describe('collectSessionStorageProfile', () => {
     const dbPath = path.join(root, 'spaceassistant.db')
     const spillRoot = path.join(root, 'spill')
     fs.mkdirSync(spillRoot)
-    const descriptor = (locator: string, kind: string) => ({ version: 1, kind, locator, byteLength: 4, sha256: 'hash', createdAt: 1, head: '', tail: '' })
-    fs.writeFileSync(path.join(spillRoot, 'source.spill'), '1234')
-    fs.writeFileSync(path.join(spillRoot, 'degradable.spill'), '12345')
-    fs.writeFileSync(path.join(spillRoot, 'orphan.spill'), '12')
+    const descriptor = (locator: string, kind: string) => ({ version: 1, kind, locator, byteLength: 4, sha256: '0'.repeat(64), createdAt: 1, head: '', tail: '' })
+    const sourceLocator = '00000000-0000-4000-8000-000000000011.spill'
+    const degradableLocator = '00000000-0000-4000-8000-000000000012.spill'
+    const orphanLocator = '00000000-0000-4000-8000-000000000013.spill'
+    fs.writeFileSync(path.join(spillRoot, sourceLocator), '1234')
+    fs.writeFileSync(path.join(spillRoot, degradableLocator), '12345')
+    fs.writeFileSync(path.join(spillRoot, orphanLocator), '12')
     const db = new DatabaseSync(dbPath)
     db.exec(`CREATE TABLE agent_history_events(payload_json TEXT NOT NULL);
-      CREATE TABLE session_transcript_entries(messages_json TEXT NOT NULL);`)
-    db.prepare('INSERT INTO agent_history_events(payload_json) VALUES(?)').run(JSON.stringify({ source: descriptor('source.spill', 'source-of-truth'), view: descriptor('degradable.spill', 'degradable') }))
+      CREATE TABLE session_transcript_entries(messages_json TEXT NOT NULL);
+      CREATE TABLE source_truth_spill_gc_queue(locator TEXT, session_id TEXT, status TEXT);
+      CREATE TABLE source_truth_spill_gc_scan_state(root_key TEXT,status TEXT,after_name TEXT,attempts INTEGER,last_error TEXT);`)
+    db.prepare('INSERT INTO agent_history_events(payload_json) VALUES(?)').run(JSON.stringify({ source: descriptor(sourceLocator, 'source-of-truth'), view: descriptor(degradableLocator, 'degradable') }))
+    db.prepare("INSERT INTO source_truth_spill_gc_queue VALUES(?, '', 'pending')").run(orphanLocator)
+    db.prepare("INSERT INTO source_truth_spill_gc_scan_state VALUES('user-data-spill','pending',NULL,2,'retry')").run()
     db.close()
 
     expect(collectSessionStorageProfile(dbPath)).toMatchObject({ spillFiles: {
       files: 3, totalBytes: 11, sourceOfTruthBytes: 4, degradableBytes: 5, orphanBytes: 2
-    } })
+    }, sourceTruthGc: { pendingFiles: 1, pendingBytes: 2, orphanBytes: 2, scanStatus: 'pending', attempts: 2, lastError: 'retry' } })
   })
 
   it('includes WAL and degradable spill in total storage usage', () => {

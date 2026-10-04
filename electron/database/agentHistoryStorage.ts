@@ -131,5 +131,18 @@ export function appendSqliteAgentHistoryBatchInTransaction(
   }
   const version = actualVersion + events.length
   conn.prepare('UPDATE agent_history_streams SET version = ? WHERE invocation_id = ?').run(version, invocationId)
+  if (sessionId) {
+    // Canonical writes may advance the session watermark without changing a legacy message row
+    // (for example a compaction snapshot or continuation context). Keep the API eligibility
+    // fence coupled to every append path, including callers of this low-level transaction API.
+    const hasApiEligibilityFence = Boolean(conn.prepare(`SELECT 1 FROM sqlite_master WHERE type='table'
+      AND name='session_message_content_cutover'`).get())
+    if (hasApiEligibilityFence) {
+      conn.prepare(`UPDATE session_message_content_cutover
+        SET api_read_mode=CASE WHEN api_read_mode='canonical' THEN 'revalidation-required' ELSE api_read_mode END,
+            updated_at=? WHERE session_id=?`).run(now(), sessionId)
+      conn.prepare('DELETE FROM canonical_session_api_context_eligibility WHERE session_id=?').run(sessionId)
+    }
+  }
   return { version, duplicate: false }
 }

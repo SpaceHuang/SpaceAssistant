@@ -7,6 +7,19 @@
 | 目标 | 明确新旧版本数据库、canonical 数据、修复待办、消息投影、台账与 spill 的迁移顺序，并让每项工作都能凭证据判定完成 |
 | 执行原则 | 不在单次升级中重写所有历史消息；迁移可中断、可续跑；任何旧会话始终有明确可读路径；只有门禁通过才切换读写 owner；回滚前先将 canonical 前向桥接到 legacy 读模型并核验 |
 
+## 正式发布执行入口与适用边界
+
+本计划作为[技术方案 §8.8.5](./session-storage-refactor-technical-design.md#885-兼容回滚版本的制作与发布流程待实施)的正式发布迁移清单使用：上线前准备和演练，上线时随应用升级执行 schema 迁移，上线后按需/分批构建合格会话的投影。开发期已有测试证据可以关联到任务台账，但不等于真实用户 profile 已迁移；任务状态须按具体版本、样本与执行证据填写。
+
+本计划保留早期 M0–M4 任务编号，以下边界按当前技术方案执行：
+
+- R 是保留正文、不开启真实停写/清列的兼容发布；C 才接入受控清理。上线 R 不要求 M3 全量补迁或 M4 全部完成；缺 canonical 覆盖的历史会话继续保留 legacy。
+- M2-6…M2-9 的 canonical→legacy 桥接仅在选定目标确实依赖 legacy reader 时适用，不代表已有可用实现。当前发布方案选兼容 R 安装包回滚，应按 §8.8.5.B 完成 R→C→R 实际安装包演练；不得把这项演练虚记为 canonical→legacy 桥接完成。清列后禁止回填正文或重置 cleanup 状态，回滚目标必须支持 canonical-only。
+- M4 中旧 transcript 删除、旧读路径退役与 `messages.content` 清理是不同范围。Phase 5.5 只允许逐 session 清理通过认证的正文副本，保留消息骨架、流程状态和协议表；不能据 M4 的早期清理描述扩大删除范围，也不要求先删除所有 legacy reader 才清理获批 session。旧 transcript/协议表删除仍需独立方案与验收。
+- 正文停写/清列按 `retained → write-stopped → pending → complete` 协议及兼容发布门禁执行；SQLite 物理空间回收另行安排，不能和首次 schema 升级绑定成一次启动任务。
+
+本计划与当前技术方案存在历史表述差异时，以上边界及技术方案 §8.8.3–§8.8.5 优先；未实现的桥接、批迁或门禁保留待办，不能以文档引用代替实现和发布证据。
+
 ## 1. 迁移决策（直接回答迁不迁）
 
 **迁移，但分对象、分阶段迁。**
@@ -17,14 +30,15 @@
 4. **后台补迁未访问会话。** 在线切换稳定后，按会话分批处理仍未迁的且 canonical 覆盖充分的会话；可暂停/续跑，不能阻塞主窗口和活跃 turn。旧会话覆盖不足的保留旧路径，直到有独立补齐方案或经产品决策归档。
 5. **退役旧读路径。** 只有所有仍需支持的会话已迁移或明确进入受支持的 legacy 路径，且回滚观察期与门禁满足后，才删除旧读路径。旧表数据删除是更晚的独立变更，不与切读路径同批执行。
 
-因此，“旧会话迁移”指从该会话的 canonical history 构建新消息投影缓存；不改写 canonical 历史事件。旧 transcript 在切换新写入 owner 后**不再被当作自动保持最新的回滚来源**。回滚必须先从 canonical 重建并核验 legacy 读模型，再切回 legacy reader；若无法重建，必须继续使用 canonical reader，不能只关闭读开关。
+因此，“旧会话迁移”指从该会话的 canonical history 构建新消息投影缓存；不改写 canonical 历史事件。旧 transcript 在切换新写入 owner 后**不再被当作自动保持最新的回滚来源**。本计划当前采用 §8.8.5 的兼容版本 R 回滚：保留 canonical reader，由 R 直接读取 canonical-only；只有目标确实是 legacy-reader 版本时才需先重建并核验 legacy 读模型。任何路线都不能只关闭读开关或读取陈旧 transcript。
 
 ### 1.1 回滚目标与桥接策略
 
-- **目标语义**：回滚是应用代码/读路径回退，不回滚 canonical 数据库，不丢弃新投影，也不假设旧 transcript 已被新写路径持续更新。
-- **桥接路径**：停止或栅栏化该会话的新写入 → 从 canonical history 构建 legacy reader 实际依赖的完整数据（包括 `session_transcript_entries` 及必要的 `messages` 投影）→ 核验 transcript version、消息数/顺序/字段摘要和 API context → 事务提交桥接结果 → 才允许 legacy reader 接管。
-- **新安装会话**：旧 transcript 可以从空基线补建；必须通过创建后连续多轮新消息、工具结果和 API context 回滚测试。若 legacy reader 不能从 canonical 构建，则该版本不提供 legacy-reader 回滚，只能回滚到仍支持 canonical reader 的兼容应用版本。
-- **写入切换期间**：不要求新 owner 持续双写旧 transcript。这样避免两套权威写入和双写事务不原子的风险；需要旧路径时，由显式、幂等、可验证的回滚桥接任务重建。桥接失败则保持 canonical reader，不得降级到陈旧 transcript。
+- **目标语义**：回滚是应用版本回退，不回滚 canonical 数据库，不丢弃新投影，也不假设旧 transcript 已被新写路径持续更新。当前发布方案选用 §8.8.5 的兼容版本 R：它继续使用 canonical reader，并必须能打开 C 写出的 schema 与格式。
+- **安装包回滚路径（当前方案）**：停止清理并等待在途事务结束 → 完整退出 C → 使用已发布且保留的 R 安装包打开同一 profile → 核验 canonical 正文、账本、骨架、preview/count 和 FK/turn/queue 不变量。R 不得回写 schema、回填已清正文或自动续跑清理；complete 会话仍遵守写围栏。
+- **legacy-reader 桥接路径（可选替代）**：只有明确要回滚到依赖旧 reader 的版本时，才栅栏写入，从 canonical history 重建 `session_transcript_entries` 及必要的 `messages` 投影，核验版本、水位、消息顺序/字段和 API context，提交后才切换 reader。桥接失败时继续 canonical reader。
+- **新安装会话**：旧 transcript 不作为前置条件。R 必须能读取 C 生成的新 schema/History/spill 格式，覆盖无升级前 transcript 的新会话；C→R 安装包演练按 §8.8.5.B 记录。
+- **写入切换期间**：不要求新 owner 持续双写旧 transcript，避免两套权威写入和双写事务不原子的风险。legacy-reader 桥接失败时不得降级到陈旧 transcript；R 路线保持 canonical reader 和已清会话的写围栏。
 
 ## 2. 状态定义与完成证据
 
@@ -80,12 +94,12 @@
 | M2-3 | 接入双读路径 | feature flag 可按会话选择 legacy/new；eligible 会话缺新缓存时 L2 重建；ineligible 会话走旧读路径；新旧两路错误都可观测且不返回静默空历史 |
 | M2-4 | 首次访问懒迁移 | 对 eligible legacy 会话，首次打开/resume/API context 触发一次完整折叠；事务写缓存及 watermark；并发首次访问只产生一份有效缓存；失败回滚/下次重试；迁移后立即从新路径读回并通过对拍 |
 | M2-5 | 新会话使用新写入 owner | 新会话自创建起由 canonical 驱动投影；所有 message mutation 都通过统一投影更新；禁止 legacy writer 与新 projector 同时成为权威；关键写路径有唯一 owner 测试 |
-| M2-6 | 实现 canonical → legacy 回滚桥接 | 停止/栅栏写入后，从 canonical 重建 legacy reader 所需 transcript/messages；桥接幂等、事务化、可续跑；失败时状态保持 `rollback_bridge_pending` 且继续 canonical reader；成功须核验版本、水位、消息数/顺序/字段摘要与 API context |
-| M2-7 | 回滚演练：旧会话切换后新增消息 | 选取已迁移旧会话，在新 owner 下产生至少两轮消息（含工具结果）；执行桥接再切 legacy reader；逐条对比会话 UI 历史和 API context，结果与切换前后 canonical 完整历史一致 |
-| M2-8 | 回滚演练：新安装会话 | 从空库创建新会话，在新 owner 下产生多轮消息、工具调用/结果及终态；执行桥接再切 legacy reader；逐条核对 UI/API context；不得依赖升级前存在 transcript |
-| M2-9 | 桥接失败与中断恢复 | 注入 canonical 读取失败、旧模型写入失败、进程在提交前退出；不得切 legacy reader；重启后按游标续跑，桥接完整并核验后才切换 |
+| M2-6 | 确定并验证回滚路线 | 若目标旧版必须使用 legacy reader，才实现 canonical → legacy 桥接；若采用 §8.8.5 的兼容版本 R，则用实际 R 安装包验证 canonical-only 读取及受控写围栏，不回填 legacy 正文。选定路线、支持版本和不支持能力须记录 |
+| M2-7 | 回滚演练：已迁移旧会话 | 若采用桥接路线，按 canonical→legacy 后切 reader 演练；若采用 R 路线，按 §8.8.5.B 的 R→C→R 安装包演练覆盖已清与未清状态、正文展示及 API context |
+| M2-8 | 回滚演练：新安装会话 | 只有实现 legacy 桥接时才要求桥接后切 reader；R 路线验证 R 能打开 C 创建的新 schema/History/spill 格式，并按计划保留 canonical 读取，不假定存在升级前 transcript |
+| M2-9 | 回滚路线故障与中断恢复 | 桥接路线覆盖读取/写入失败和中断续跑；R 路线覆盖 §8.8.5.B 的损坏 History/spill、缓存冷/热重启及 C→R 后不回填、不续跑清理。不得以关闭 read flag 代替验证 |
 
-**M2 退出门禁：** 双读线上观察期间，新路径错误率/耗时达到技术方案门槛；代表性 fixture 逐字节/结构化对拍通过；M2-6…M2-9 回滚桥接与演练全部通过。任何仅关闭新读 flag、未完成桥接的操作都不算回滚。M2 完成只表示新路径可用，不代表 legacy 可删除。
+**M2 退出门禁：** 双读线上观察期间，新路径错误率/耗时达到技术方案门槛；代表性 fixture 逐字节/结构化对拍通过；M2-6…M2-9 选择并完成一条受支持的回滚路线。若采用 §8.8.5 的 R 路线，必须以实际安装包完成对应 C→R 演练；不得把仅关闭新读 flag 当成回滚。M2 完成只表示新路径可用，不代表 legacy 可删除。
 
 ### M3：旧会话批量补迁
 
@@ -133,7 +147,7 @@ M4 要分别回答两个问题：**启动是否变快**与**数据库文件是�
 | eligible 旧会话首次访问 | 使用旧路径不作为最终返回；全量折叠 canonical，校验后写新缓存，再由新路径返回 | `projection_migrated` 且缓存 watermark/generation 有效 |
 | ineligible 旧会话访问 | 走 legacy 读路径，标明 eligibility 原因；不伪造/写入不完整新缓存 | `legacy_required` 保持可查询，旧数据未清理 |
 | 迁移中升级中断 | 已提交批次保留；未提交批次回滚；重启按 cursor/待办幂等续跑 | 无重复义务、无漏项，游标与已完成批次一致 |
-| 新版本需要回滚 | 保持 canonical reader；停止/栅栏写入；执行 canonical → legacy 桥接并核验；成功后才关闭新读 flag 切换 legacy reader。若目标旧版本不支持读取 canonical 且桥接失败，则禁止降到该版本 | `rollback_bridge_complete`，会话 UI 与 API context 对拍通过；否则继续 canonical reader |
+| 新版本需要回滚 | 按已验证的发布路线执行：若目标版本使用 legacy reader，先停止/栅栏写入并完成 canonical → legacy 桥接、核验后再切换；若采用 §8.8.5 的兼容版本 R，则停止清理并结束在途事务，完整退出后安装 R，保留同一 schema/profile，由 R 读取 canonical-only 正文并遵守写围栏。任何路线未通过演练时禁止降级 | 桥接路线要求 `rollback_bridge_complete` 和 UI/API 对拍；R 路线要求实际安装包回滚演练通过、schema/History/spill 不回写且正文可读 |
 
 ## 5. 发布门禁与执行记录
 
@@ -156,6 +170,6 @@ M4 要分别回答两个问题：**启动是否变快**与**数据库文件是�
 
 ## 6. 与技术方案的同步要求
 
-本计划确定迁移时机后，技术方案 §7 的“老会话按需懒迁移”应解释为：**Phase 2 双读上线后，eligible 旧会话在首次打开/resume/API context 时从 canonical 全量折叠并建立新缓存；其余 eligible 会话在 M3 后台分批补迁；ineligible 会话保留 legacy 路径；M4 满足门禁后才退役旧读路径。回滚不是直接关闭新读 flag，而是先由 canonical 重建、核验 legacy 读模型，再切换 reader。**
+本计划确定迁移时机后，技术方案 §7 的“老会话按需懒迁移”应解释为：**Phase 2 双读上线后，eligible 旧会话在首次打开/resume/API context 时从 canonical 全量折叠并建立新缓存；其余 eligible 会话在 M3 后台分批补迁；ineligible 会话保留 legacy 路径；M4 满足门禁后才退役旧读路径。回滚必须使用已演练的路线：需要 legacy reader 的目标版本先执行并核验 canonical→legacy 桥接；采用 §8.8.5 兼容版本 R 时则安装 R 并原样读取 canonical-only，不能只关新读 flag，也不能回填已清正文。**
 
 任何会改变 eligibility、投影语义版本、回滚能力或 legacy 例外策略的设计修改，必须同时更新本计划对应任务与完成判据。

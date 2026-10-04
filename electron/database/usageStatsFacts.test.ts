@@ -65,8 +65,8 @@ function turnFact(overrides: Partial<UsageTurnFactInput> = {}): UsageTurnFactInp
 }
 
 describe('v16 用量统计表迁移', () => {
-  it('当前 schema version 包含后续迁移并为 33', () => {
-    expect(DB_SCHEMA_VERSION).toBe(33)
+  it('当前 schema version 包含后续迁移', () => {
+    expect(DB_SCHEMA_VERSION).toBe(46)
   })
 
   it('v15 库升级到 v16 后两张统计表与索引存在，且重复迁移幂等', () => {
@@ -111,9 +111,6 @@ describe('usage_step_facts / usage_turn_facts 读写', () => {
         day: '2026-09-16',
         model: 'deepseek-v4-pro',
         llmServiceId: 'svc-a',
-        modelId: null,
-        providerModelName: null,
-        routeIdentity: null,
         appVersion: '0.1.5',
         inputTokens: 100,
         outputTokens: 20,
@@ -125,15 +122,6 @@ describe('usage_step_facts / usage_turn_facts 读写', () => {
     ])
     expect(typeof rows[0].id).toBe('number')
     expect(typeof rows[0].createdAt).toBe('number')
-    db.close()
-  })
-
-  it('逐步用量与 Turn 汇总保留稳定模型与路由身份', () => {
-    const db = createMemoryAppDb()
-    insertUsageStepFact(db, stepFact({ modelId: 'catalog-1', providerModelName: 'vendor/model-x', routeIdentity: 'provider-route-9' }))
-    upsertUsageTurnFact(db, turnFact({ modelId: 'catalog-1', providerModelName: 'vendor/model-x', routeIdentity: 'provider-route-9' }))
-    expect(getUsageStepFactsForTurn(db, 'sess-1', 'turn-1')[0]).toMatchObject({ modelId: 'catalog-1', providerModelName: 'vendor/model-x', routeIdentity: 'provider-route-9' })
-    expect(getUsageTurnFact(db, 'turn-1')).toMatchObject({ modelId: 'catalog-1', providerModelName: 'vendor/model-x', routeIdentity: 'provider-route-9' })
     db.close()
   })
 

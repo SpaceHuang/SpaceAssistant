@@ -18,6 +18,8 @@ export type SessionTranscriptCommitIntent = Readonly<{
   baseVersion: number
   outcome: 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'interrupted'
   messages: readonly Readonly<Record<string, unknown>>[]
+  /** Atomic mirror into the authoritative desktop message skeleton, when this turn owns one. */
+  messageMirror?: Readonly<{ messageId: string; status: 'completed' | 'failed' | 'cancelled'; content?: string }>
 }>
 
 export interface HistoryPort {
@@ -183,10 +185,10 @@ export function validateHistoryBatch(events: readonly HistoryEvent[]): void {
 }
 
 const TERMINAL_INVOCATION_EVENTS = new Set<HistoryEvent['kind']>([
-  'invocation-interrupted', 'invocation-completed', 'invocation-failed'
+  'invocation-parked', 'invocation-interrupted', 'invocation-completed', 'invocation-failed'
 ])
 
-/** A persisted terminal event closes an invocation stream permanently. */
+/** A persisted terminal or parked event closes an invocation stream permanently. */
 export function validateHistoryTransition(previous: readonly HistoryEvent[], incoming: readonly HistoryEvent[]): void {
   const invocationTurnId = previous[0]?.turnId ?? incoming[0]?.turnId
   if (invocationTurnId && (previous.some((event) => event.turnId !== invocationTurnId) || incoming.some((event) => event.turnId !== invocationTurnId))) {

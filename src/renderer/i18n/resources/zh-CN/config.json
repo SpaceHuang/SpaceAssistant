@@ -914,6 +914,7 @@
     "canonicalHistory": "规范历史事件",
     "transcriptSnapshots": "转录快照",
     "sourceSpill": "来源正文 spill",
+    "pendingSourceSpill": "待回收来源 spill",
     "degradableSpill": "可降级 spill",
     "orphanSpill": "孤儿 spill",
     "refresh": "刷新用量",

@@ -914,6 +914,7 @@
     "canonicalHistory": "Canonical history events",
     "transcriptSnapshots": "Transcript snapshots",
     "sourceSpill": "Source of truth spill",
+    "pendingSourceSpill": "Pending source spill collection",
     "degradableSpill": "Degradable spill",
     "orphanSpill": "Orphan spill",
     "refresh": "Refresh usage",

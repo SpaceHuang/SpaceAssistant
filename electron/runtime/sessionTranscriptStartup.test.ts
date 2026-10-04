@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
-import { appendMessage, createSession } from '../database'
+import { appendMessage, createSession, getMessage } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
 import { claimSessionExecution, commitSessionTranscript, markSessionExecutionStarted, markSessionExecutionUncertain, readSessionTranscript } from '../database/sessionTranscript'
 import { getPersistedTurn, listPersistedTurns } from '../database/operations'
 import { openDatabase } from '../database'
 import { createTurnCoordinatorStorage } from '../turnCoordinatorStorage'
 import { TurnRuntime } from '../turnRuntime'
-import { hasUnfinishedStartupProjections, reconcileStartupSessionTranscripts, recoverTurnCoordinatorForStartup } from './sessionTranscriptStartup'
+import { hasUnfinishedStartupProjections, reconcileStartupSessionTranscripts, recoverTurnCoordinatorForStartup, restorePersistedTurnSnapshotsForStartup } from './sessionTranscriptStartup'
+import { SqliteAgentHistory } from './sqliteAgentHistory'
 
 function createUncertainCommittedSession() {
   const db = createMemoryAppDb()
@@ -270,6 +271,73 @@ describe('startup transcript reconciliation ordering', () => {
     expect(readSessionTranscript(db, sessionId).status).toBe('commit_uncertain')
     expect(getDbConnection(db).prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(sessionId))
       .toEqual({ status: 'commit_uncertain' })
+    db.close()
+  })
+
+  it('continues coordinator recovery when canonical-only turn projection cannot be restored in memory', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'startup canonical projection corruption' })
+    const storage = createTurnCoordinatorStorage(db)
+    storage.prepareAtomic?.({
+      user: { id: 'startup-corrupt-user', sessionId: session.id, role: 'user', content: 'accepted', timestamp: 1, status: 'sent' },
+      assistant: { id: 'startup-corrupt-assistant', sessionId: session.id, role: 'assistant', content: 'partial answer', timestamp: 2, status: 'streaming' },
+      turn: { turnId: 'startup-corrupt-turn', requestId: 'startup-corrupt-request', sessionId: session.id,
+        userMessageId: 'startup-corrupt-user', assistantMessageId: 'startup-corrupt-assistant', state: 'executing' }
+    })
+    await new SqliteAgentHistory(getDbConnection(db), 1, () => 3, session.id).appendBatch([{
+      invocationId: 'startup-corrupt-turn', turnId: 'startup-corrupt-turn', sequence: 2, schemaVersion: 1,
+      eventId: 'startup-corrupt-context', idempotencyKey: 'startup-corrupt-context', kind: 'invocation-context-committed',
+      payload: { messages: [
+        { id: 'startup-corrupt-user', role: 'user', content: 'accepted', timestamp: 1 },
+        { id: 'startup-corrupt-assistant', role: 'assistant', content: 'partial answer', timestamp: 2 }
+      ] }
+    }], 1)
+    const conn = getDbConnection(db)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
+    conn.prepare('UPDATE agent_history_events SET session_id=? WHERE event_id=?').run('foreign-session', 'startup-corrupt-context')
+
+    const healthySession = createSession(db, { name: 'startup healthy projection after corruption' })
+    storage.prepareAtomic?.({
+      user: { id: 'startup-healthy-user', sessionId: healthySession.id, role: 'user', content: 'healthy input', timestamp: 1, status: 'sent' },
+      assistant: { id: 'startup-healthy-assistant', sessionId: healthySession.id, role: 'assistant', content: 'healthy partial', timestamp: 2, status: 'streaming' },
+      turn: { turnId: 'startup-healthy-turn', requestId: 'startup-healthy-request', sessionId: healthySession.id,
+        userMessageId: 'startup-healthy-user', assistantMessageId: 'startup-healthy-assistant', state: 'executing' }
+    })
+    conn.prepare('UPDATE turns SET created_at=1 WHERE turn_id=?').run('startup-corrupt-turn')
+    conn.prepare('UPDATE turns SET created_at=2 WHERE turn_id=?').run('startup-healthy-turn')
+    const runtime = new TurnRuntime({ storage, deps: { now: () => 4, id: () => 'startup-recovery-id' } })
+    const restoredAssistantIds: string[] = []
+
+    const result = recoverTurnCoordinatorForStartup(db, () => {
+      expect(restorePersistedTurnSnapshotsForStartup(db, (turn, assistant) => {
+        restoredAssistantIds.push(assistant.id)
+        runtime.coordinator.restoreTurn(turn, assistant)
+      })).toBe(1)
+      runtime.recover()
+    })
+
+    expect(result.succeeded).toBe(true)
+    expect(restoredAssistantIds).toEqual(['startup-healthy-assistant'])
+    expect(getPersistedTurn(db, 'startup-corrupt-turn')).toMatchObject({ state: 'terminal', outcome: 'recovered' })
+    expect(getPersistedTurn(db, 'startup-healthy-turn')).toMatchObject({ state: 'terminal', outcome: 'recovered' })
+    expect(getMessage(db, 'startup-corrupt-assistant')).toMatchObject({ content: '', status: 'failed' })
+    db.close()
+  })
+
+  it('propagates turn snapshot restoration failures instead of treating them as projection failures', () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'startup restore callback failure' })
+    createTurnCoordinatorStorage(db).prepareAtomic?.({
+      user: { id: 'callback-failure-user', sessionId: session.id, role: 'user', content: 'accepted', timestamp: 1, status: 'sent' },
+      assistant: { id: 'callback-failure-assistant', sessionId: session.id, role: 'assistant', content: 'partial', timestamp: 2, status: 'streaming' },
+      turn: { turnId: 'callback-failure-turn', requestId: 'callback-failure-request', sessionId: session.id,
+        userMessageId: 'callback-failure-user', assistantMessageId: 'callback-failure-assistant', state: 'executing' }
+    })
+
+    expect(() => restorePersistedTurnSnapshotsForStartup(db, () => {
+      throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+    })).toThrow('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
     db.close()
   })
 

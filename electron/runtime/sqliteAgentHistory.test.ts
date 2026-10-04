@@ -12,6 +12,8 @@ import { InMemorySafetyPermitStore } from '../../packages/agent-sdk/src/safetyPe
 import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
 import { createPermitBoundToolExecutionPort } from '../../packages/agent-sdk/src/toolExecutionPort'
 import { runMigrations } from '../database/migrations'
+import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHistoryStorage'
+import { runInTransaction } from '../database/transaction'
 import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { CREATE_TABLES_SQL } from '../database/schema'
@@ -19,8 +21,9 @@ import { ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequ
 import { claimSessionExecution, markSessionExecutionStarted } from '../database/sessionTranscript'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { createTempDatabase } from '../database/testHelpers'
+import { openDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
-import { createSpillStore } from '../storage/spillStore'
+import { createSpillStore, reconcileSpillOrphansAgainstCanonicalHistory, type SpillStore } from '../storage/spillStore'
 
 function createDb(dbPath = ':memory:'): DatabaseSync {
   const conn = new DatabaseSync(dbPath)
@@ -45,14 +48,15 @@ describe('SqliteAgentHistory', () => {
     const root = path.join(path.dirname(temp.dbPath), 'spill')
     const store = createSpillStore(root)
     const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId, store)
-    let descriptor: Awaited<ReturnType<typeof store.commitSourceTruth>> | undefined
-    await store.commitSourceTruth('provider and recovery source body', async (value) => { descriptor = value })
+    const sourceBody = 'provider and recovery source body '.repeat(3_000)
     await history.appendBatch([{
       invocationId: 'spill-recovery-invocation', turnId: 'spill-recovery-turn', sequence: 1, schemaVersion: 1,
       eventId: 'spill-recovery-context', idempotencyKey: 'spill-recovery-context', kind: 'invocation-context-committed',
-      payload: { messages: [{ id: 'u', role: 'user', content: { __spaceassistant_spill_v1: descriptor! } }] }
+      payload: { messages: [{ id: 'u', role: 'user', content: sourceBody }] }
     }], 0)
-    await fs.rm(path.join(root, descriptor!.locator))
+    const stored = JSON.parse(conn.prepare('SELECT payload_json FROM agent_history_events WHERE event_id=?')
+      .get('spill-recovery-context')!.payload_json as string) as { messages: Array<{ content: { __spaceassistant_spill_v1: { locator: string } } }> }
+    await fs.rm(path.join(root, stored.messages[0]!.content.__spaceassistant_spill_v1.locator))
     expect(() => history.readSync('spill-recovery-invocation')).toThrowError(expect.objectContaining({ code: 'SPILL_CONTENT_UNAVAILABLE' }))
     await expect(history.recoverInterruptedInvocations()).rejects.toThrowError(expect.objectContaining({ code: 'SPILL_CONTENT_UNAVAILABLE' }))
     temp.cleanup()
@@ -141,9 +145,21 @@ describe('SqliteAgentHistory', () => {
     if (!owner.acquired) throw new Error('test setup could not claim session')
     expect(markSessionExecutionStarted(db, { sessionId: 'atomic-terminal-session', turnId: 'atomic-terminal-turn', ownerId: 'process', generation: owner.generation })).toBe(true)
     const history = new SqliteAgentHistory(conn, 1, () => 100, 'atomic-terminal-session')
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('atomic-terminal-assistant','atomic-terminal-session','assistant','streaming copy','streaming',1,10,0)`).run()
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES('atomic-terminal-turn','atomic-terminal-request','atomic-terminal-session','atomic-terminal-assistant','executing',1,1,0)`).run()
+    conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical',write_mode='dual-write'
+      WHERE session_id='atomic-terminal-session'`).run()
+    conn.prepare(`INSERT INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at) VALUES(?,?,1)`)
+      .run('atomic-terminal-session', 'generation')
+    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
+      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version) VALUES(?,?,1,0,1,'seed-event','seed-invocation',1,1)`)
+      .run('atomic-terminal-session', 'generation')
     const terminal: HistoryEvent = { ...event('atomic-terminal', 1), invocationId: 'atomic-terminal-invocation', turnId: 'atomic-terminal-turn', kind: 'invocation-completed', payload: { status: 'completed' } }
     const intent = { sessionId: 'atomic-terminal-session', baseVersion: 0, outcome: 'completed' as const,
-      messages: [{ role: 'user', content: 'accepted' }] }
+      messages: [{ role: 'user', content: 'accepted' }, { id: 'atomic-terminal-assistant', role: 'assistant', content: 'canonical answer' }],
+      messageMirror: { messageId: 'atomic-terminal-assistant', status: 'completed' as const, content: 'canonical answer' } }
 
     await history.appendBatch([terminal], 0, intent)
 
@@ -155,7 +171,1035 @@ describe('SqliteAgentHistory', () => {
       .toEqual({ version: 1, last_turn_id: 'atomic-terminal-turn', status: 'ready' })
     expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get('atomic-terminal-session'))
       .toEqual({ status: 'transcript_committed' })
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('atomic-terminal-assistant'))
+      .toEqual({ content: 'canonical answer', status: 'completed' })
+    expect(conn.prepare(`SELECT message_revision,api_read_mode,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?`)
+      .get('atomic-terminal-session')).toEqual({ message_revision: 2, api_read_mode: 'revalidation-required', write_mode: 'dual-write', cleanup_state: 'retained' })
+    expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility WHERE session_id=?').get('atomic-terminal-session')).toBeUndefined()
+    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').get('atomic-terminal-session')).toBeUndefined()
     db.close()
+  })
+
+  it('does not restore cleared legacy content when committing a canonical-backed-only terminal mirror', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'canonical-only-terminal-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const owner = claimSessionExecution(db, { sessionId, turnId: 'canonical-only-terminal-turn', ownerId: 'process' })
+    if (!owner.acquired) throw new Error('test setup could not claim session')
+    expect(markSessionExecutionStarted(db, { sessionId, turnId: 'canonical-only-terminal-turn', ownerId: 'process', generation: owner.generation })).toBe(true)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence,content_storage_state)
+      VALUES('canonical-only-terminal-assistant',?,'assistant','','streaming',1,10,0,'canonical-backed-only')`).run(sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES('canonical-only-terminal-turn','canonical-only-terminal-request',?,'canonical-only-terminal-assistant','executing',1,1,0)`).run(sessionId)
+    conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical',write_mode='canonical'
+      WHERE session_id=?`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    const terminal: HistoryEvent = { ...event('canonical-only-terminal-event', 1), invocationId: 'canonical-only-terminal-invocation', turnId: 'canonical-only-terminal-turn', kind: 'invocation-completed', payload: { status: 'completed' } }
+    const intent = { sessionId, baseVersion: 0, outcome: 'completed' as const,
+      messages: [{ role: 'user', content: 'accepted' }, { id: 'canonical-only-terminal-assistant', role: 'assistant', content: 'canonical answer' }],
+      messageMirror: { messageId: 'canonical-only-terminal-assistant', status: 'completed' as const, content: 'canonical answer' } }
+
+    await history.appendBatch([terminal], 0, intent)
+
+    expect(conn.prepare('SELECT content,status,content_storage_state FROM messages WHERE id=?').get('canonical-only-terminal-assistant'))
+      .toEqual({ content: '', status: 'completed', content_storage_state: 'canonical-backed-only' })
+    db.close()
+  })
+
+  it('atomically mirrors a stable assistant response into its streaming legacy row', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'atomic-response-mirror-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('atomic-response-assistant',?,'assistant','initial checkpoint','streaming',1,10,0)`).run(sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES('atomic-response-turn','atomic-response-request',?,'atomic-response-assistant','executing',1,1,0)`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    await history.appendBatch([{ ...event('atomic-response-event', 1), invocationId: 'atomic-response-invocation', turnId: 'atomic-response-turn', kind: 'model-response-committed',
+      payload: { message: { id: 'atomic-response-assistant', role: 'assistant', content: [
+        { type: 'text', text: 'provider response' }, { type: 'thinking', thinking: 'private reasoning' }
+      ] } } }], 0)
+
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('atomic-response-assistant'))
+      .toEqual({ content: 'provider response', status: 'streaming' })
+    expect(conn.prepare('SELECT kind FROM agent_history_events WHERE event_id=?').get('atomic-response-event'))
+      .toEqual({ kind: 'model-response-committed' })
+    db.close()
+  })
+
+  it('does not restore cleared legacy content when mirroring a canonical-backed-only streaming response', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'canonical-only-streaming-response-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence,content_storage_state)
+      VALUES('canonical-only-streaming-assistant',?,'assistant','','streaming',1,10,0,'canonical-backed-only')`).run(sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES('canonical-only-streaming-turn','canonical-only-streaming-request',?,'canonical-only-streaming-assistant','executing',1,1,0)`).run(sessionId)
+    conn.prepare(`UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await history.appendBatch([{ ...event('canonical-only-streaming-event', 1), invocationId: 'canonical-only-streaming-invocation',
+      turnId: 'canonical-only-streaming-turn', kind: 'model-response-committed',
+      payload: { message: { id: 'canonical-only-streaming-assistant', role: 'assistant', content: 'provider response' } } }], 0)
+
+    expect(conn.prepare('SELECT content,status,content_storage_state FROM messages WHERE id=?').get('canonical-only-streaming-assistant'))
+      .toEqual({ content: '', status: 'streaming', content_storage_state: 'canonical-backed-only' })
+    expect(conn.prepare('SELECT kind FROM agent_history_events WHERE event_id=?').get('canonical-only-streaming-event'))
+      .toEqual({ kind: 'model-response-committed' })
+    db.close()
+  })
+
+  it('preserves UI bodies during compaction while atomically mirroring a distinct committed assistant response', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'compaction-response-mirror-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence) VALUES
+      ('compaction-response-user',?,'user','full UI prompt','sent',1,10,0),
+      ('compaction-response-assistant',?,'assistant','assistant checkpoint','streaming',1,11,1)`).run(sessionId, sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES('compaction-response-turn','compaction-response-request',?,'compaction-response-assistant','executing',1,1,0)`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([
+      { ...event('compaction-response-snapshot-event', 1), invocationId: 'compaction-response-invocation', turnId: 'compaction-response-turn', kind: 'transcript-compacted',
+        payload: { messages: [{ id: 'compaction-response-user', role: 'user', content: 'provider summary', timestamp: 10 }] } },
+      { ...event('compaction-response-model-event', 2), invocationId: 'compaction-response-invocation', turnId: 'compaction-response-turn', kind: 'model-response-committed',
+        payload: { message: { id: 'compaction-response-assistant', role: 'assistant', content: 'committed answer' } } }
+    ], 0)).resolves.toMatchObject({ version: 2, duplicate: false })
+
+    expect(conn.prepare('SELECT id,content,status FROM messages WHERE id IN (?,?) ORDER BY id').all(
+      'compaction-response-user', 'compaction-response-assistant'
+    )).toEqual([
+      { id: 'compaction-response-assistant', content: 'committed answer', status: 'streaming' },
+      { id: 'compaction-response-user', content: 'full UI prompt', status: 'sent' }
+    ])
+    expect((await history.read('compaction-response-invocation')).events.map(({ kind }) => kind))
+      .toEqual(['transcript-compacted', 'model-response-committed'])
+    db.close()
+  })
+
+  it('revokes stale API eligibility when a canonical compaction changes the transcript without changing the message skeleton', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'compaction-invalidates-api-eligibility-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('compaction-eligibility-user',?,'user','full UI prompt','sent',1,10,0)`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    await history.appendBatch([{ ...event('compaction-eligibility-context-event', 1), invocationId: 'compaction-eligibility-invocation', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'compaction-eligibility-user', role: 'user', content: 'full UI prompt', timestamp: 10 }] } }], 0)
+    const watermark = conn.prepare(`SELECT session_seq,commit_order,event_id,invocation_id FROM agent_history_events WHERE event_id=?`)
+      .get('compaction-eligibility-context-event') as { session_seq: number; commit_order: number; event_id: string; invocation_id: string }
+    conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?`).run(sessionId)
+    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
+      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version) VALUES(?,?,1,?,?,?,?,?,1)`)
+      .run(sessionId, 'generation', watermark.session_seq, watermark.commit_order, watermark.event_id, watermark.invocation_id, 1)
+
+    await history.appendBatch([{ ...event('compaction-eligibility-snapshot-event', 2), invocationId: 'compaction-eligibility-invocation', kind: 'transcript-compacted',
+      payload: { messages: [{ id: 'compaction-eligibility-user', role: 'user', content: 'provider summary', timestamp: 10 }] } }], 1)
+
+    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').all(sessionId)).toEqual([])
+    expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(sessionId))
+      .toEqual({ api_read_mode: 'revalidation-required' })
+    expect(conn.prepare('SELECT content FROM messages WHERE id=?').get('compaction-eligibility-user'))
+      .toEqual({ content: 'full UI prompt' })
+    db.close()
+  })
+
+  it('preserves API eligibility when an already committed History event is replayed idempotently', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'idempotent-history-eligibility-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    const committed: HistoryEvent = { ...event('idempotent-eligibility-event', 1), invocationId: 'idempotent-eligibility-invocation',
+      kind: 'transcript-compacted', payload: { messages: [{ role: 'user', content: 'same provider snapshot' }] } }
+    await history.appendBatch([committed], 0)
+    const watermark = conn.prepare(`SELECT session_seq,commit_order,event_id,invocation_id FROM agent_history_events WHERE event_id=?`)
+      .get(committed.eventId) as { session_seq: number; commit_order: number; event_id: string; invocation_id: string }
+    conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?`).run(sessionId)
+    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
+      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version) VALUES(?,?,0,?,?,?,?,?,1)`)
+      .run(sessionId, 'generation', watermark.session_seq, watermark.commit_order, watermark.event_id, watermark.invocation_id, 1)
+
+    await expect(history.appendBatch([committed], 0)).resolves.toMatchObject({ version: 1, duplicate: true })
+    expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(sessionId))
+      .toEqual({ api_read_mode: 'canonical' })
+    expect(conn.prepare('SELECT session_id,canonical_session_seq,watermark_event_id FROM canonical_session_api_context_eligibility WHERE session_id=?')
+      .get(sessionId)).toEqual({ session_id: sessionId, canonical_session_seq: watermark.session_seq, watermark_event_id: watermark.event_id })
+    db.close()
+  })
+
+  it('invalidates API eligibility when a caller appends directly through the shared History transaction primitive', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'direct-history-eligibility-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?`).run(sessionId)
+    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
+      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version) VALUES(?,?,0,0,0,NULL,NULL,1,1)`)
+      .run(sessionId, 'generation')
+    const directEvent: HistoryEvent = { ...event('direct-append-compaction', 1), invocationId: 'direct-append-invocation',
+      kind: 'transcript-compacted', payload: { messages: [{ role: 'user', content: 'provider summary' }] } }
+
+    runInTransaction(conn, () => appendSqliteAgentHistoryBatchInTransaction(conn, [directEvent], 0,
+      { schemaVersion: 1, sessionId, now: () => 2 }))
+
+    expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(sessionId))
+      .toEqual({ api_read_mode: 'revalidation-required' })
+    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').all(sessionId)).toEqual([])
+    db.close()
+  })
+
+  it('rejects a malformed canonical assistant response before persisting it', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'malformed-response-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{
+      ...event('malformed-response-event', 1), invocationId: 'malformed-response-invocation',
+      kind: 'model-response-committed', payload: { finishReason: 'stop' }
+    }], 0)).rejects.toThrow('canonical assistant response payload is invalid')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('malformed-response-event'))
+      .toEqual({ count: 0 })
+    db.close()
+  })
+
+  it.each([
+    ['payload null', null],
+    ['messages missing', {}],
+    ['messages not an array', { messages: 'not-a-message-list' }],
+    ['message is not an object', { messages: [null] }],
+    ['message role is unsupported', { messages: [{ role: 'developer', content: 'invalid' }] }],
+    ['message content block is unsupported', { messages: [{ role: 'user', content: [{ type: 'audio', data: 'invalid' }] }] }],
+    ['tool result has no proposal', { messages: [{ role: 'tool', toolCallId: 'missing-call', content: 'result', isError: false }] }]
+  ] as const)('rejects a malformed canonical invocation context (%s) before persisting it', async (_caseName, payload) => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = `malformed-context-${_caseName.replaceAll(' ', '-')}-session`
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{
+      ...event(`malformed-context-${_caseName.replaceAll(' ', '-')}-event`, 1),
+      invocationId: `malformed-context-${_caseName.replaceAll(' ', '-')}-invocation`,
+      kind: 'invocation-context-committed', payload
+    }], 0)).rejects.toThrow('canonical invocation context payload is invalid')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE invocation_id=?').get(`malformed-context-${_caseName.replaceAll(' ', '-')}-invocation`))
+      .toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('accepts a canonical invocation snapshot ending in an unresolved assistant tool proposal', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'pending-context-tool-proposal-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('pending-context-tool-proposal-event', 1), invocationId: 'pending-context-tool-proposal-invocation',
+      kind: 'invocation-context-committed', payload: { messages: [
+        { role: 'assistant', toolCalls: [{ id: 'pending-proposal', name: 'lookup', input: { query: 'q' } }] }
+      ] } }], 0)).resolves.toMatchObject({ version: 1, duplicate: false })
+    db.close()
+  })
+
+  it('rejects a malformed canonical compaction snapshot before persisting it', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'malformed-compaction-snapshot-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('malformed-compaction-snapshot-event', 1), invocationId: 'malformed-compaction-snapshot-invocation',
+      kind: 'transcript-compacted', payload: { messages: [{ role: 'user', content: [{ type: 'audio', data: 'unsupported' }] }] } }], 0))
+      .rejects.toThrow('canonical transcript snapshot payload is invalid')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('malformed-compaction-snapshot-event'))
+      .toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('rejects a malformed canonical replay message before persisting it', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'malformed-replay-message-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('malformed-replay-message-event', 1), invocationId: 'malformed-replay-message-invocation',
+      kind: 'replay-message-committed', payload: { message: { role: 'user', content: [{ type: 'audio', data: 'unsupported' }] } } }], 0))
+      .rejects.toThrow('canonical replay message is invalid')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('malformed-replay-message-event'))
+      .toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('rejects a canonical replay message with an empty stable ID before persisting it', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'empty-id-replay-message-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('empty-id-replay-message-event', 1), invocationId: 'empty-id-replay-message-invocation',
+      kind: 'replay-message-committed', payload: { message: { id: '', role: 'user', content: 'continue' } } }], 0))
+      .rejects.toThrow('canonical replay message is invalid')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('empty-id-replay-message-event'))
+      .toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('persists an output-recovery replay message without a UI message ID as canonical-only history', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'canonical-only-replay-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    const replay = { role: 'user', content: '[runtime output recovery] continue the original request' } as const
+
+    await expect(history.appendBatch([{ ...event('canonical-only-replay-event', 1), invocationId: 'canonical-only-replay-invocation',
+      kind: 'replay-message-committed', payload: { message: replay } }], 0)).resolves.toMatchObject({ version: 1, duplicate: false })
+    const read = history.readCanonicalSessionTranscriptForShadow(sessionId)
+    expect(read).toMatchObject({ kind: 'matched', messages: [] })
+    if (read.kind !== 'matched') throw new Error(`unexpected canonical transcript read: ${read.reason}`)
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM messages WHERE session_id=?').get(sessionId)).toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('keeps an anonymous output-recovery replay in the watermark while session transcript matches the UI row', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'session-replay-with-ui-base'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('replay-ui-user',?,'user','original request','sent',1,10,0)`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    await history.appendBatch([
+      { ...event('replay-ui-context-event', 1), invocationId: 'replay-ui-invocation', kind: 'invocation-context-committed', payload: {
+        messages: [{ id: 'replay-ui-user', role: 'user', content: 'original request', timestamp: 10 }]
+      } }
+    ], 0)
+    const baseline = history.readCanonicalSessionTranscriptForShadow(sessionId)
+    expect(baseline.kind).toBe('matched')
+    if (baseline.kind !== 'matched') throw new Error(`unexpected baseline read: ${baseline.reason}`)
+    expect(history.writeCanonicalSessionCache({ ...baseline, cacheKey: 'replay-transcript', value: JSON.stringify(baseline.messages) })).toBe(true)
+
+    await history.appendBatch([{ ...event('replay-ui-anonymous-replay-event', 1), invocationId: 'replay-ui-replay-invocation', kind: 'replay-message-committed', payload: {
+        message: { role: 'user', content: '[runtime output recovery] continue the original request' }
+      } }], 0)
+
+    expect(history.readCanonicalSessionTranscriptWithCache(sessionId, 'replay-transcript', [
+      { id: 'replay-ui-user', role: 'user', content: 'original request', timestamp: 10 }
+    ])).toMatchObject({ kind: 'matched', source: 'L1', replayedEvents: 1, messages: [{ id: 'replay-ui-user' }], watermark: {
+      watermarkEventId: 'replay-ui-anonymous-replay-event', eventCount: 2
+    } })
+    expect((await history.read('replay-ui-replay-invocation')).events.map((entry) => entry.kind)).toEqual(['replay-message-committed'])
+    db.close()
+  })
+
+  it('rejects an assistant response block that has no exact legacy content projection', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'unprojectable-response-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('unprojectable-response-assistant',?,'assistant','legacy checkpoint','streaming',1,1,0)`).run(sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at)
+      VALUES('unprojectable-response-turn','unprojectable-response-request',?,'unprojectable-response-assistant','executing',1,1)`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{
+      ...event('unprojectable-response-event', 1), invocationId: 'unprojectable-response-invocation', turnId: 'unprojectable-response-turn',
+      kind: 'model-response-committed', payload: { message: { id: 'unprojectable-response-assistant', role: 'assistant', content: [
+        { type: 'audio', data: 'no legacy text projection' }
+      ] } }
+    }], 0)).rejects.toThrow('canonical assistant response content cannot be mirrored exactly')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('unprojectable-response-event'))
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('unprojectable-response-assistant'))
+      .toEqual({ content: 'legacy checkpoint', status: 'streaming' })
+    db.close()
+  })
+
+  it('rejects a canonical assistant response ID owned by another turn', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'atomic-response-cross-turn-session'
+    const turnId = 'atomic-response-current-turn'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence) VALUES
+      ('current-response-assistant',?,'assistant','current checkpoint','streaming',1,10,0),
+      ('other-response-assistant',?,'assistant','other checkpoint','streaming',1,11,1)`).run(sessionId, sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES(?, 'current-response-request',?,'current-response-assistant','executing',1,1,0)`).run(turnId, sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('cross-turn-response-event', 1), invocationId: 'cross-turn-response-invocation', turnId,
+      kind: 'model-response-committed', payload: { message: { id: 'other-response-assistant', role: 'assistant', content: 'forged response' } } }], 0))
+      .rejects.toThrow('canonical assistant response identity does not belong to the turn')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('cross-turn-response-event')).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('other-response-assistant'))
+      .toEqual({ content: 'other checkpoint', status: 'streaming' })
+    db.close()
+  })
+
+  it('rejects a tool-call-only assistant response ID owned by another turn', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'tool-only-cross-turn-session'
+    const turnId = 'tool-only-current-turn'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence) VALUES
+      ('tool-only-current-assistant',?,'assistant','checkpoint','streaming',1,10,0),
+      ('tool-only-other-assistant',?,'assistant','other checkpoint','streaming',1,11,1)`).run(sessionId, sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at)
+      VALUES(?, 'tool-only-current-request',?,'tool-only-current-assistant','executing',1,1)`).run(turnId, sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('tool-only-cross-turn-event', 1), invocationId: 'tool-only-cross-turn-invocation', turnId,
+      kind: 'model-response-committed', payload: { message: { id: 'tool-only-other-assistant', role: 'assistant',
+        toolCalls: [{ id: 'tool-only-call', name: 'lookup', input: { query: 'q' } }] } } }], 0))
+      .rejects.toThrow('canonical assistant response identity does not belong to the turn')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('tool-only-cross-turn-event'))
+      .toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('rejects a stable assistant response ID when its legacy skeleton is not streaming', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'atomic-response-missing-skeleton-session'
+    const turnId = 'atomic-response-missing-skeleton-turn'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('missing-skeleton-assistant',?,'assistant','existing final body','completed',1,1,0)`).run(sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES(?, 'missing-skeleton-request',?,'missing-skeleton-assistant','executing',1,1,0)`).run(turnId, sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('missing-skeleton-response-event', 1), invocationId: 'missing-skeleton-response-invocation', turnId,
+      kind: 'model-response-committed', payload: { message: { id: 'missing-skeleton-assistant', role: 'assistant', content: 'canonical response' } } }], 0))
+      .rejects.toThrow('canonical assistant response mirror target is missing or not streaming')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('missing-skeleton-response-event'))
+      .toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('allows a turn-owned canonical assistant response without a legacy mirror ID', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'missing-response-id-session'
+    const turnId = 'missing-response-id-turn'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('assigned-response-assistant',?,'assistant','legacy checkpoint','streaming',1,1,0)`).run(sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES(?, 'missing-response-id-request',?,'assigned-response-assistant','executing',1,1,0)`).run(turnId, sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('missing-response-id-event', 1), invocationId: 'missing-response-id-invocation', turnId,
+      kind: 'model-response-committed', payload: { message: { role: 'assistant', content: 'response without identity' } } }], 0))
+      .resolves.toMatchObject({ version: 1, duplicate: false })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('missing-response-id-event'))
+      .toEqual({ count: 1 })
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('assigned-response-assistant'))
+      .toEqual({ content: 'legacy checkpoint', status: 'streaming' })
+    db.close()
+  })
+
+  it('atomically mirrors the accepted required user message with its canonical base context', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'atomic-user-context-mirror-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,attachments,status,schema_version,timestamp,sequence)
+      VALUES('atomic-required-user',?,'user','stale accepted body','[{"id":"attachment-a","fileName":"photo.png"}]','sent',1,10,0)`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    await history.appendBatch([{ ...event('atomic-user-context-event', 1), invocationId: 'atomic-user-context-invocation', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'atomic-required-user', role: 'user', content: [
+        { type: 'text', text: 'accepted canonical body' }, { type: 'image', mimeType: 'image/png', data: 'base64-image-data' }
+      ] }], requiredUserMessage: { id: 'atomic-required-user', message: { role: 'user', content: [
+        { type: 'text', text: 'accepted canonical body' }, { type: 'image', mimeType: 'image/png', data: 'base64-image-data' }
+      ] } } } }], 0)
+
+    expect(conn.prepare('SELECT content,attachments,status FROM messages WHERE id=?').get('atomic-required-user'))
+      .toEqual({ content: 'accepted canonical body', attachments: '[{"id":"attachment-a","fileName":"photo.png"}]', status: 'sent' })
+    expect(conn.prepare('SELECT kind FROM agent_history_events WHERE event_id=?').get('atomic-user-context-event'))
+      .toEqual({ kind: 'invocation-context-committed' })
+    db.close()
+  })
+
+  it('atomically mirrors stable-ID assistant bodies present in a new provider base context', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'atomic-context-assistant-mirror-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('context-assistant',?,'assistant','stale assistant body','sent',1,10,0)`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await history.appendBatch([{ ...event('context-assistant-mirror-event', 1), invocationId: 'context-assistant-mirror-invocation',
+      kind: 'invocation-context-committed', payload: { messages: [
+        { id: 'context-assistant', role: 'assistant', content: 'canonical assistant body', timestamp: 10 }
+      ] } }], 0)
+
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('context-assistant'))
+      .toEqual({ content: 'canonical assistant body', status: 'sent' })
+    expect(conn.prepare('SELECT kind FROM agent_history_events WHERE event_id=?').get('context-assistant-mirror-event'))
+      .toEqual({ kind: 'invocation-context-committed' })
+    db.close()
+  })
+
+  it('rejects duplicate or cross-role stable IDs in a canonical context that targets desktop skeleton rows', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'context-mirror-duplicate-identity-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('context-shared-id',?,'user','stale body','sent',1,10,0)`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('context-duplicate-identity-event', 1), invocationId: 'context-duplicate-identity-invocation',
+      kind: 'invocation-context-committed', payload: { messages: [
+        { id: 'context-shared-id', role: 'user', content: 'first body' },
+        { id: 'context-shared-id', role: 'assistant', content: 'conflicting role body' }
+      ] } }], 0)).rejects.toThrow('canonical context message identity is duplicated or conflicts with its legacy row')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('context-duplicate-identity-event'))
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT content,role FROM messages WHERE id=?').get('context-shared-id'))
+      .toEqual({ content: 'stale body', role: 'user' })
+    db.close()
+  })
+
+  it('rejects duplicate required-user IDs inside the context before mirroring the required-user field', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'context-required-user-duplicate-identity-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('context-required-user-shared-id',?,'user','legacy body','sent',1,10,0)`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('context-required-user-duplicate-event', 1), invocationId: 'context-required-user-duplicate-invocation',
+      kind: 'invocation-context-committed', payload: {
+        messages: [
+          { id: 'context-required-user-shared-id', role: 'user', content: 'accepted body' },
+          { id: 'context-required-user-shared-id', role: 'user', content: 'accepted body' }
+        ],
+        requiredUserMessage: { id: 'context-required-user-shared-id', message: { role: 'user', content: 'accepted body' } }
+      } }], 0)).rejects.toThrow('required user message does not match canonical context identity')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('context-required-user-duplicate-event'))
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT content FROM messages WHERE id=?').get('context-required-user-shared-id'))
+      .toEqual({ content: 'legacy body' })
+    db.close()
+  })
+
+  it('mirrors the accepted user while preserving another stable-ID streaming assistant row', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'context-mirror-intermediate-state-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence) VALUES
+      ('context-current-user',?,'user','stale accepted user','sent',1,10,0),
+      ('context-streaming-assistant',?,'assistant','partial assistant','streaming',1,11,1)`).run(sessionId, sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('context-mirror-intermediate-event', 1), invocationId: 'context-mirror-intermediate-invocation',
+      kind: 'invocation-context-committed', payload: {
+        messages: [
+          { id: 'context-streaming-assistant', role: 'assistant', content: 'unsafe partial', timestamp: 11 },
+          { id: 'context-current-user', role: 'user', content: 'accepted user', timestamp: 10 }
+        ],
+        requiredUserMessage: { id: 'context-current-user', message: { role: 'user', content: 'accepted user' } }
+      } }], 0)).resolves.toMatchObject({ version: 1, duplicate: false })
+
+    expect(conn.prepare('SELECT id,content,status FROM messages WHERE id IN (?,?) ORDER BY id')
+      .all('context-current-user', 'context-streaming-assistant')).toEqual([
+      { id: 'context-current-user', content: 'accepted user', status: 'sent' },
+      { id: 'context-streaming-assistant', content: 'partial assistant', status: 'streaming' }
+    ])
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('context-mirror-intermediate-event'))
+      .toEqual({ count: 1 })
+    db.close()
+  })
+
+  it('preserves a failed assistant checkpoint while its owning turn is still executing', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'context-mirror-open-failed-turn-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('open-failed-assistant',?,'assistant','failure checkpoint','failed',1,10,0)`).run(sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at)
+      VALUES('open-failed-turn','open-failed-request',?,'open-failed-assistant','executing',1,1)`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('open-failed-context-event', 1), invocationId: 'open-failed-context-invocation',
+      kind: 'invocation-context-committed', payload: { messages: [
+        { id: 'open-failed-assistant', role: 'assistant', content: 'canonical final answer', timestamp: 10 }
+      ] } }], 0)).resolves.toMatchObject({ version: 1, duplicate: false })
+
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('open-failed-assistant'))
+      .toEqual({ content: 'failure checkpoint', status: 'failed' })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('open-failed-context-event'))
+      .toEqual({ count: 1 })
+    db.close()
+  })
+
+  it('rolls back all context mirrors when a later legacy body update fails', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'context-mirror-update-failure-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence) VALUES
+      ('context-failure-user',?,'user','stale user','sent',1,10,0),
+      ('context-failure-assistant',?,'assistant','stale assistant','sent',1,11,1)`).run(sessionId, sessionId)
+    conn.exec(`CREATE TRIGGER fail_context_assistant_mirror BEFORE UPDATE OF content ON messages
+      WHEN OLD.id='context-failure-assistant' BEGIN SELECT RAISE(ABORT, 'injected context mirror failure'); END`)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('context-mirror-failure-event', 1), invocationId: 'context-mirror-failure-invocation',
+      kind: 'invocation-context-committed', payload: { messages: [
+        { id: 'context-failure-user', role: 'user', content: 'canonical user', timestamp: 10 },
+        { id: 'context-failure-assistant', role: 'assistant', content: 'canonical assistant', timestamp: 11 }
+      ] } }], 0)).rejects.toThrow('injected context mirror failure')
+
+    expect(conn.prepare('SELECT id,content FROM messages WHERE id IN (?,?) ORDER BY id')
+      .all('context-failure-user', 'context-failure-assistant')).toEqual([
+      { id: 'context-failure-assistant', content: 'stale assistant' },
+      { id: 'context-failure-user', content: 'stale user' }
+    ])
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('context-mirror-failure-event'))
+      .toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('commits canonical required-user context without a legacy mirror when no UI skeleton exists', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'canonical-only-required-user-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('canonical-only-required-user-event', 1), invocationId: 'canonical-only-required-user-invocation', kind: 'invocation-context-committed',
+      payload: { messages: [{ role: 'user', content: 'standalone accepted body' }],
+        requiredUserMessage: { id: 'external-user-id', message: { role: 'user', content: 'standalone accepted body' } } } }], 0))
+      .resolves.toMatchObject({ version: 1, duplicate: false })
+    expect(conn.prepare('SELECT kind FROM agent_history_events WHERE event_id=?').get('canonical-only-required-user-event'))
+      .toEqual({ kind: 'invocation-context-committed' })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM messages WHERE id=?').get('external-user-id')).toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('rejects a required user mirror that conflicts with its canonical context identity or body', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'atomic-user-context-conflict-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('atomic-required-user-conflict',?,'user','original body','sent',1,10,0)`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('atomic-user-context-conflict-event', 1), invocationId: 'atomic-user-context-conflict-invocation', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'atomic-required-user-conflict', role: 'user', content: 'canonical context body' }],
+        requiredUserMessage: { id: 'atomic-required-user-conflict', message: { role: 'user', content: 'different accepted body' } } } }], 0))
+      .rejects.toThrow('required user message does not match canonical context identity')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('atomic-user-context-conflict-event'))
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('atomic-required-user-conflict'))
+      .toEqual({ content: 'original body', status: 'sent' })
+    db.close()
+  })
+
+  it('rejects required user mirror content when either canonical projection contains unsupported blocks', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'atomic-user-context-unsupported-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('atomic-required-user-unsupported',?,'user','original body','sent',1,10,0)`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('atomic-user-context-unsupported-event', 1), invocationId: 'atomic-user-context-unsupported-invocation', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'atomic-required-user-unsupported', role: 'user', content: [
+        { type: 'text', text: 'same visible text' }, { type: 'audio', data: 'not supported by the legacy mirror' }
+      ] }], requiredUserMessage: { id: 'atomic-required-user-unsupported', message: { role: 'user', content: [
+        { type: 'text', text: 'same visible text' }, { type: 'audio', data: 'different unsupported payload' }
+      ] } } } }], 0))
+      .rejects.toThrow('canonical invocation context payload is invalid')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('atomic-user-context-unsupported-event'))
+      .toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('rejects a required user whose canonical image blocks differ from the context snapshot', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'atomic-user-context-image-conflict-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('atomic-required-user-image-conflict',?,'user','same text','sent',1,10,0)`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('atomic-user-context-image-conflict-event', 1), invocationId: 'atomic-user-context-image-conflict-invocation', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'atomic-required-user-image-conflict', role: 'user', content: [
+        { type: 'text', text: 'same text' }, { type: 'image', mimeType: 'image/png', data: 'canonical-image' }
+      ] }], requiredUserMessage: { id: 'atomic-required-user-image-conflict', message: { role: 'user', content: [
+        { type: 'text', text: 'same text' }, { type: 'image', mimeType: 'image/png', data: 'different-image' }
+      ] } } } }], 0))
+      .rejects.toThrow('required user message does not match canonical context identity')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('atomic-user-context-image-conflict-event'))
+      .toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('rejects duplicate canonical context identities for the required user', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'atomic-user-context-duplicate-id-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('atomic-required-user-duplicate-id',?,'user','original body','sent',1,10,0)`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('atomic-user-context-duplicate-id-event', 1), invocationId: 'atomic-user-context-duplicate-id-invocation', kind: 'invocation-context-committed',
+      payload: { messages: [
+        { id: 'atomic-required-user-duplicate-id', role: 'user', content: 'same body' },
+        { id: 'atomic-required-user-duplicate-id', role: 'user', content: 'same body' }
+      ], requiredUserMessage: { id: 'atomic-required-user-duplicate-id', message: { role: 'user', content: 'same body' } } } }], 0))
+      .rejects.toThrow('required user message does not match canonical context identity')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('atomic-user-context-duplicate-id-event'))
+      .toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('rejects required user content that is accepted by the assistant projector but cannot be mirrored', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'atomic-user-context-thinking-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('atomic-required-user-thinking',?,'user','original body','sent',1,10,0)`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('atomic-user-context-thinking-event', 1), invocationId: 'atomic-user-context-thinking-invocation', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'atomic-required-user-thinking', role: 'user', content: [
+        { type: 'text', text: 'visible body' }, { type: 'thinking', thinking: 'unexpected private block' }
+      ] }], requiredUserMessage: { id: 'atomic-required-user-thinking', message: { role: 'user', content: [
+        { type: 'text', text: 'visible body' }, { type: 'thinking', thinking: 'unexpected private block' }
+      ] } } } }], 0))
+      .rejects.toThrow('required user message does not match canonical context identity')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('atomic-user-context-thinking-event'))
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT content FROM messages WHERE id=?').get('atomic-required-user-thinking')).toEqual({ content: 'original body' })
+    db.close()
+  })
+
+  it('rejects a malformed explicit required-user identity instead of committing context without its mirror', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'atomic-user-context-malformed-required-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('atomic-required-user-malformed',?,'user','original body','sent',1,10,0)`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('atomic-user-context-malformed-required-event', 1), invocationId: 'atomic-user-context-malformed-required-invocation', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'atomic-required-user-malformed', role: 'user', content: 'accepted body' }],
+        requiredUserMessage: { id: 'atomic-required-user-malformed', message: { role: 'assistant', content: 'wrong role' } } } }], 0))
+      .rejects.toThrow('required user message does not match canonical context identity')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('atomic-user-context-malformed-required-event'))
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT content FROM messages WHERE id=?').get('atomic-required-user-malformed'))
+      .toEqual({ content: 'original body' })
+    db.close()
+  })
+
+  it('rolls back a canonical base context when its required user message mirror fails', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'atomic-user-context-mirror-failure-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('atomic-required-user-failure',?,'user','original body','sent',1,10,0)`).run(sessionId)
+    conn.exec(`CREATE TRIGGER fail_required_user_mirror BEFORE UPDATE OF content ON messages
+      WHEN OLD.id='atomic-required-user-failure' BEGIN SELECT RAISE(ABORT, 'injected required user mirror failure'); END`)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('atomic-user-context-failure-event', 1), invocationId: 'atomic-user-context-failure-invocation', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'atomic-required-user-failure', role: 'user', content: 'canonical body' }],
+        requiredUserMessage: { id: 'atomic-required-user-failure', message: { role: 'user', content: 'canonical body' } } } }], 0))
+      .rejects.toThrow('injected required user mirror failure')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('atomic-user-context-failure-event'))
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('atomic-required-user-failure'))
+      .toEqual({ content: 'original body', status: 'sent' })
+    db.close()
+  })
+
+  it('rolls back message revision and preserves API eligibility when a later event fails after context mirroring', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'atomic-context-later-event-failure-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('atomic-context-later-failure-user',?,'user','original body','sent',1,10,0)`).run(sessionId)
+    conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical' WHERE session_id=?`).run(sessionId)
+    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
+      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version)
+      VALUES(?,?,0,0,0,'seed-event','seed-invocation',1,1)`).run(sessionId, 'generation')
+    conn.exec(`CREATE TRIGGER fail_later_history_event BEFORE INSERT ON agent_history_events
+      WHEN NEW.event_id='atomic-context-later-failure-event' BEGIN SELECT RAISE(ABORT, 'injected later History failure'); END`)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([
+      { ...event('atomic-context-before-failure-event', 1), invocationId: 'atomic-context-later-failure-invocation', kind: 'invocation-context-committed',
+        payload: { messages: [{ id: 'atomic-context-later-failure-user', role: 'user', content: 'canonical body' }] } },
+      { ...event('atomic-context-later-failure-event', 2), invocationId: 'atomic-context-later-failure-invocation' }
+    ], 0)).rejects.toThrow('injected later History failure')
+
+    expect(conn.prepare('SELECT content FROM messages WHERE id=?').get('atomic-context-later-failure-user'))
+      .toEqual({ content: 'original body' })
+    expect(conn.prepare('SELECT message_revision,api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(sessionId))
+      .toEqual({ message_revision: 1, api_read_mode: 'canonical' })
+    expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').get(sessionId))
+      .toEqual({ session_id: sessionId })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE invocation_id=?').get('atomic-context-later-failure-invocation'))
+      .toEqual({ count: 0 })
+    db.close()
+  })
+
+  it('rolls back a canonical response when its streaming message mirror fails', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'atomic-response-mirror-failure-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('atomic-response-failure-assistant',?,'assistant','initial checkpoint','streaming',1,10,0)`).run(sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES('atomic-response-failure-turn','atomic-response-failure-request',?,'atomic-response-failure-assistant','executing',1,1,0)`).run(sessionId)
+    conn.exec(`CREATE TRIGGER fail_streaming_response_mirror BEFORE UPDATE OF content ON messages
+      WHEN OLD.id='atomic-response-failure-assistant' BEGIN SELECT RAISE(ABORT, 'injected streaming mirror failure'); END`)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('atomic-response-failure-event', 1), invocationId: 'atomic-response-failure-invocation', turnId: 'atomic-response-failure-turn', kind: 'model-response-committed',
+      payload: { message: { id: 'atomic-response-failure-assistant', role: 'assistant', content: 'provider response' } } }], 0))
+      .rejects.toThrow('injected streaming mirror failure')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('atomic-response-failure-event'))
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('atomic-response-failure-assistant'))
+      .toEqual({ content: 'initial checkpoint', status: 'streaming' })
+    db.close()
+  })
+
+  it('keeps large canonical response inline and mirrored when source spill preparation fails', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'inline-response-spill-failure-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('inline-response-assistant',?,'assistant','checkpoint','streaming',1,10,0)`).run(sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES('inline-response-turn','inline-response-request',?,'inline-response-assistant','executing',1,1,0)`).run(sessionId)
+    const body = 'large response content '.repeat(4000)
+    const spillStore = { commitSourceTruthUnderFence: vi.fn(async () => { throw new Error('injected source spill preparation failure') }) } as unknown as SpillStore
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId, spillStore)
+
+    await history.appendBatch([{ ...event('inline-response-event', 1), invocationId: 'inline-response-invocation', turnId: 'inline-response-turn', kind: 'model-response-committed',
+      payload: { message: { id: 'inline-response-assistant', role: 'assistant', content: body } } }], 0)
+
+    const stored = conn.prepare('SELECT payload_json FROM agent_history_events WHERE event_id=?').get('inline-response-event') as { payload_json: string }
+    expect(JSON.parse(stored.payload_json)).toMatchObject({ message: { id: 'inline-response-assistant', content: body } })
+    expect(conn.prepare('SELECT content,status,content_storage_state FROM messages WHERE id=?').get('inline-response-assistant'))
+      .toEqual({ content: body, status: 'streaming', content_storage_state: 'legacy' })
+    expect(spillStore.commitSourceTruthUnderFence).toHaveBeenCalledOnce()
+    db.close()
+  })
+
+  it('keeps large required user context inline and mirrored when source spill preparation fails', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'inline-user-context-spill-failure-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const body = 'large accepted user context '.repeat(4000)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('inline-user-context-user',?,'user','old accepted body','sent',1,10,0)`).run(sessionId)
+    const spillStore = { commitSourceTruthUnderFence: vi.fn(async () => { throw new Error('injected source spill preparation failure') }) } as unknown as SpillStore
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId, spillStore)
+
+    await history.appendBatch([{ ...event('inline-user-context-event', 1), invocationId: 'inline-user-context-invocation', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'inline-user-context-user', role: 'user', content: body }],
+        requiredUserMessage: { id: 'inline-user-context-user', message: { role: 'user', content: body } } } }], 0)
+
+    const stored = conn.prepare('SELECT payload_json FROM agent_history_events WHERE event_id=?').get('inline-user-context-event') as { payload_json: string }
+    expect(JSON.parse(stored.payload_json)).toMatchObject({
+      messages: [{ id: 'inline-user-context-user', content: body }],
+      requiredUserMessage: { id: 'inline-user-context-user', message: { role: 'user', content: body } }
+    })
+    expect(conn.prepare('SELECT content,status,content_storage_state FROM messages WHERE id=?').get('inline-user-context-user'))
+      .toEqual({ content: body, status: 'sent', content_storage_state: 'legacy' })
+    expect(spillStore.commitSourceTruthUnderFence).toHaveBeenCalledOnce()
+    db.close()
+  })
+
+  it('rolls back a spilled required-user context on mirror failure and reclaims its unreferenced source file', async () => {
+    const temp = createTempDatabase('history-required-user-spill-mirror-failure-')
+    const conn = getDbConnection(temp.db)
+    const sessionId = 'spilled-user-context-mirror-failure-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const body = 'large accepted user context '.repeat(4000)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('spilled-user-context-failure-user',?,'user','old accepted body','sent',1,10,0)`).run(sessionId)
+    conn.exec(`CREATE TRIGGER fail_large_user_context_mirror BEFORE UPDATE OF content ON messages
+      WHEN OLD.id='spilled-user-context-failure-user' BEGIN SELECT RAISE(ABORT, 'injected large user mirror failure'); END`)
+    const spillRoot = path.join(path.dirname(temp.dbPath), 'spill')
+    const spillStore = createSpillStore(spillRoot)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId, spillStore)
+
+    await expect(history.appendBatch([{ ...event('spilled-user-context-failure-event', 1), invocationId: 'spilled-user-context-failure-invocation', kind: 'invocation-context-committed',
+      payload: { messages: [{ id: 'spilled-user-context-failure-user', role: 'user', content: body }],
+        requiredUserMessage: { id: 'spilled-user-context-failure-user', message: { role: 'user', content: body } } } }], 0))
+      .rejects.toThrow('injected large user mirror failure')
+
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('spilled-user-context-failure-event'))
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT next_seq FROM session_event_cursor WHERE session_id=?').get(sessionId)).toBeUndefined()
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('spilled-user-context-failure-user'))
+      .toEqual({ content: 'old accepted body', status: 'sent' })
+    const spillFiles = await fs.readdir(spillRoot)
+    expect(spillFiles).toHaveLength(1)
+    await expect(reconcileSpillOrphansAgainstCanonicalHistory(spillStore, conn)).resolves.toEqual(spillFiles)
+    await expect(fs.readdir(spillRoot)).resolves.toEqual([])
+    temp.cleanup()
+  })
+
+  it('rolls back a spilled assistant response on mirror failure and reclaims its unreferenced source file', async () => {
+    const temp = createTempDatabase('history-assistant-spill-mirror-failure-')
+    const conn = getDbConnection(temp.db)
+    const sessionId = 'spilled-assistant-mirror-failure-session'
+    const turnId = 'spilled-assistant-mirror-failure-turn'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('spilled-assistant-failure-message',?,'assistant','old streaming checkpoint','streaming',1,10,0)`).run(sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES(?, 'spilled-assistant-failure-request',?,'spilled-assistant-failure-message','executing',1,1,0)`).run(turnId, sessionId)
+    conn.exec(`CREATE TRIGGER fail_spilled_assistant_mirror BEFORE UPDATE OF content ON messages
+      WHEN OLD.id='spilled-assistant-failure-message' BEGIN SELECT RAISE(ABORT, 'injected spilled assistant mirror failure'); END`)
+    const spillRoot = path.join(path.dirname(temp.dbPath), 'spill')
+    const spillStore = createSpillStore(spillRoot)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId, spillStore)
+    const body = 'large assistant response '.repeat(4000)
+
+    await expect(history.appendBatch([{ ...event('spilled-assistant-failure-event', 1), invocationId: 'spilled-assistant-failure-invocation', turnId,
+      kind: 'model-response-committed', payload: { message: { id: 'spilled-assistant-failure-message', role: 'assistant', content: body } } }], 0))
+      .rejects.toThrow('injected spilled assistant mirror failure')
+
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('spilled-assistant-failure-event'))
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT next_seq FROM session_event_cursor WHERE session_id=?').get(sessionId)).toBeUndefined()
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('spilled-assistant-failure-message'))
+      .toEqual({ content: 'old streaming checkpoint', status: 'streaming' })
+    const spillFiles = await fs.readdir(spillRoot)
+    expect(spillFiles).toHaveLength(1)
+    await expect(reconcileSpillOrphansAgainstCanonicalHistory(spillStore, conn)).resolves.toEqual(spillFiles)
+    await expect(fs.readdir(spillRoot)).resolves.toEqual([])
+    temp.cleanup()
+  })
+
+  it('rolls back spilled terminal output, transcript, receipt and execution fence on mirror failure', async () => {
+    const temp = createTempDatabase('history-terminal-spill-mirror-failure-')
+    const conn = getDbConnection(temp.db)
+    const sessionId = 'spilled-terminal-mirror-failure-session'
+    const turnId = 'spilled-terminal-mirror-failure-turn'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const owner = claimSessionExecution(temp.db, { sessionId, turnId, ownerId: 'spill-mirror-failure-owner' })
+    if (!owner.acquired) throw new Error('test setup could not claim session')
+    markSessionExecutionStarted(temp.db, { sessionId, turnId, ownerId: 'spill-mirror-failure-owner', generation: owner.generation })
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('spilled-terminal-failure-message',?,'assistant','old streaming checkpoint','streaming',1,10,0)`).run(sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES(?, 'spilled-terminal-failure-request',?,'spilled-terminal-failure-message','executing',1,1,0)`).run(turnId, sessionId)
+    conn.exec(`CREATE TRIGGER fail_spilled_terminal_mirror BEFORE UPDATE OF content ON messages
+      WHEN OLD.id='spilled-terminal-failure-message' BEGIN SELECT RAISE(ABORT, 'injected spilled terminal mirror failure'); END`)
+    const spillRoot = path.join(path.dirname(temp.dbPath), 'spill')
+    const spillStore = createSpillStore(spillRoot)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId, spillStore)
+    const largeOutput = 'large terminal output '.repeat(4000)
+
+    await expect(history.appendBatch([{ ...event('spilled-terminal-failure-event', 1), invocationId: turnId, turnId,
+      kind: 'invocation-completed', payload: { status: 'completed', outputText: largeOutput } }], 0, {
+      sessionId, baseVersion: 0, outcome: 'completed',
+      messages: [{ id: 'spilled-terminal-failure-message', role: 'assistant', content: largeOutput }],
+      messageMirror: { messageId: 'spilled-terminal-failure-message', status: 'completed', content: largeOutput }
+    })).rejects.toThrow('injected spilled terminal mirror failure')
+
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('spilled-terminal-failure-event'))
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get(sessionId))
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_turn_commit_receipts WHERE session_id=?').get(sessionId))
+      .toEqual({ count: 0 })
+    expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(sessionId))
+      .toEqual({ status: 'executing' })
+    expect(conn.prepare('SELECT status FROM session_execution_queue WHERE session_id=?').get(sessionId))
+      .toEqual({ status: 'executing' })
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('spilled-terminal-failure-message'))
+      .toEqual({ content: 'old streaming checkpoint', status: 'streaming' })
+    expect(conn.prepare('SELECT next_seq FROM session_event_cursor WHERE session_id=?').get(sessionId)).toBeUndefined()
+    const spillFiles = await fs.readdir(spillRoot)
+    expect(spillFiles).toHaveLength(2)
+    await expect(reconcileSpillOrphansAgainstCanonicalHistory(spillStore, conn)).resolves.toEqual(expect.arrayContaining(spillFiles))
+    await expect(fs.readdir(spillRoot)).resolves.toEqual([])
+    temp.cleanup()
   })
 
   it('rolls back the canonical terminal event if its atomic transcript receipt fails', async () => {
@@ -169,12 +1213,189 @@ describe('SqliteAgentHistory', () => {
     conn.exec(`CREATE TRIGGER fail_terminal_transcript_receipt BEFORE INSERT ON session_turn_commit_receipts
       WHEN NEW.session_id='atomic-terminal-failure' BEGIN SELECT RAISE(ABORT, 'injected terminal receipt failure'); END`)
     const history = new SqliteAgentHistory(conn, 1, () => 100, 'atomic-terminal-failure')
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('atomic-terminal-failure-assistant','atomic-terminal-failure','assistant','legacy checkpoint','streaming',1,10,0)`).run()
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES('atomic-terminal-turn','atomic-terminal-failure-request','atomic-terminal-failure','atomic-terminal-failure-assistant','executing',1,1,0)`).run()
     const terminal: HistoryEvent = { ...event('atomic-terminal-failure-event', 1), invocationId: 'atomic-terminal-failure-invocation', turnId: 'atomic-terminal-turn', kind: 'invocation-completed', payload: { status: 'completed' } }
     await expect(history.appendBatch([terminal], 0, { sessionId: 'atomic-terminal-failure', baseVersion: 0, outcome: 'completed',
-      messages: [{ role: 'user', content: 'accepted' }] })).rejects.toThrow('injected terminal receipt failure')
+      messages: [{ role: 'user', content: 'accepted' }, { id: 'atomic-terminal-failure-assistant', role: 'assistant', content: 'canonical answer' }],
+      messageMirror: { messageId: 'atomic-terminal-failure-assistant', status: 'completed', content: 'canonical answer' } })).rejects.toThrow('injected terminal receipt failure')
     expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('atomic-terminal-failure-event')).toEqual({ count: 0 })
     expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get('atomic-terminal-failure')).toEqual({ count: 0 })
     expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get('atomic-terminal-failure')).toEqual({ status: 'executing' })
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('atomic-terminal-failure-assistant'))
+      .toEqual({ content: 'legacy checkpoint', status: 'streaming' })
+    db.close()
+  })
+
+  it('rolls back terminal History and transcript when the required message mirror target is absent', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'atomic-terminal-mirror-missing'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const owner = claimSessionExecution(db, { sessionId, turnId: 'atomic-terminal-mirror-turn', ownerId: 'process' })
+    if (!owner.acquired) throw new Error('test setup could not claim session')
+    markSessionExecutionStarted(db, { sessionId, turnId: 'atomic-terminal-mirror-turn', ownerId: 'process', generation: owner.generation })
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('existing-terminal-assistant',?,'assistant','existing','streaming',1,10,0)`).run(sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES('atomic-terminal-mirror-turn','atomic-terminal-mirror-request',?,'existing-terminal-assistant','executing',1,1,0)`).run(sessionId)
+    const terminal: HistoryEvent = { ...event('atomic-terminal-mirror-event', 1), invocationId: 'atomic-terminal-mirror-invocation',
+      turnId: 'atomic-terminal-mirror-turn', kind: 'invocation-completed', payload: { status: 'completed' } }
+    await expect(history.appendBatch([terminal], 0, { sessionId, baseVersion: 0, outcome: 'completed', messages: [{ id: 'missing-assistant', role: 'assistant', content: 'done' }],
+      messageMirror: { messageId: 'missing-assistant', status: 'completed', content: 'done' } }))
+      .rejects.toThrow('terminal message mirror target does not belong to the committed turn')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('atomic-terminal-mirror-event')).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get(sessionId)).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(sessionId)).toEqual({ status: 'executing' })
+    db.close()
+  })
+
+  it('rejects a terminal assistant mirror whose stable ID belongs to a different turn', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'atomic-terminal-cross-turn-session'
+    const turnId = 'atomic-terminal-current-turn'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    claimSessionExecution(db, { sessionId, turnId, ownerId: 'process' })
+    markSessionExecutionStarted(db, { sessionId, turnId, ownerId: 'process', generation: 1 })
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence) VALUES
+      ('current-turn-assistant',?,'assistant','current','streaming',1,10,0),
+      ('other-turn-assistant',?,'assistant','other','completed',1,11,1)`).run(sessionId, sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES(?, 'current-request',?,'current-turn-assistant','executing',1,1,0)`).run(turnId, sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    const terminal: HistoryEvent = { ...event('cross-turn-terminal-event', 1), invocationId: 'cross-turn-terminal-invocation',
+      turnId, kind: 'invocation-completed', payload: { status: 'completed' } }
+
+    await expect(history.appendBatch([terminal], 0, { sessionId, baseVersion: 0, outcome: 'completed', messages: [{ id: 'other-turn-assistant', role: 'assistant', content: 'forged cross-turn body' }],
+      messageMirror: { messageId: 'other-turn-assistant', status: 'completed', content: 'forged cross-turn body' } }))
+      .rejects.toThrow('terminal message mirror target does not belong to the committed turn')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('cross-turn-terminal-event')).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM session_transcript_entries WHERE session_id=?').get(sessionId)).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('other-turn-assistant'))
+      .toEqual({ content: 'other', status: 'completed' })
+    db.close()
+  })
+
+  it('rejects terminal outcome and assistant status that disagree', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'terminal-outcome-mismatch-session'
+    const turnId = 'terminal-outcome-mismatch-turn'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const owner = claimSessionExecution(db, { sessionId, turnId, ownerId: 'process' })
+    if (!owner.acquired) throw new Error('test setup could not claim session')
+    markSessionExecutionStarted(db, { sessionId, turnId, ownerId: 'process', generation: owner.generation })
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('outcome-mismatch-assistant',?,'assistant','answer','streaming',1,10,0)`).run(sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES(?, 'outcome-mismatch-request',?,'outcome-mismatch-assistant','executing',1,1,0)`).run(turnId, sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    const terminal: HistoryEvent = { ...event('outcome-mismatch-terminal', 1), invocationId: 'outcome-mismatch-invocation', turnId,
+      kind: 'invocation-completed', payload: { status: 'completed' } }
+
+    await expect(history.appendBatch([terminal], 0, { sessionId, baseVersion: 0, outcome: 'completed', messages: [{ role: 'assistant', content: 'answer' }],
+      messageMirror: { messageId: 'outcome-mismatch-assistant', status: 'failed', content: 'answer' } }))
+      .rejects.toThrow('terminal message mirror status does not match its outcome')
+    await expect(history.appendBatch([terminal], 0, { sessionId, baseVersion: 0, outcome: 'failed', messages: [{ role: 'assistant', content: 'answer' }],
+      messageMirror: { messageId: 'outcome-mismatch-assistant', status: 'failed', content: 'answer' } }))
+      .rejects.toThrow('terminal History kind does not match the transcript outcome')
+    expect(conn.prepare('SELECT COUNT(*) AS count FROM agent_history_events WHERE event_id=?').get('outcome-mismatch-terminal')).toEqual({ count: 0 })
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('outcome-mismatch-assistant'))
+      .toEqual({ content: 'answer', status: 'streaming' })
+    db.close()
+  })
+
+  it.each([
+    ['failed', 'invocation-failed', 'failed', 'failed'],
+    ['timed-out', 'invocation-failed', 'timed_out', 'failed'],
+    ['cancelled', 'invocation-interrupted', 'cancelled', 'cancelled'],
+    ['interrupted', 'invocation-interrupted', 'interrupted', 'failed']
+  ] as const)('accepts the %s terminal outcome/message status pair', async (caseName, kind, outcome, messageStatus) => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = `terminal-matrix-${caseName}-session`
+    const turnId = `terminal-matrix-${caseName}-turn`
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const owner = claimSessionExecution(db, { sessionId, turnId, ownerId: 'process' })
+    if (!owner.acquired) throw new Error('test setup could not claim session')
+    markSessionExecutionStarted(db, { sessionId, turnId, ownerId: 'process', generation: owner.generation })
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES(?,?, 'assistant','partial','streaming',1,10,0)`).run(`${caseName}-assistant`, sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES(?,?,?,?,'executing',1,1,0)`).run(turnId, `${caseName}-request`, sessionId, `${caseName}-assistant`)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    const terminal: HistoryEvent = { ...event(`${caseName}-terminal-event`, 1), invocationId: `${caseName}-invocation`, turnId,
+      kind, payload: { status: caseName === 'timed-out' ? 'failed' : caseName } }
+
+    await expect(history.appendBatch([terminal], 0, { sessionId, baseVersion: 0, outcome, messages: [{ role: 'assistant', content: 'partial' }],
+      messageMirror: { messageId: `${caseName}-assistant`, status: messageStatus } })).resolves.toMatchObject({ duplicate: false })
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get(`${caseName}-assistant`))
+      .toEqual({ content: 'partial', status: messageStatus })
+    expect(conn.prepare('SELECT outcome FROM session_turn_commit_receipts WHERE session_id=?').get(sessionId)).toEqual({ outcome })
+    db.close()
+  })
+
+  it('commits the SDK failed outcome and block-text message mirror through SQLite atomically', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'sdk-failed-block-mirror-session'
+    const turnId = 'sdk-failed-block-mirror-turn'
+    const invocationId = 'sdk-failed-block-mirror-invocation'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const owner = claimSessionExecution(db, { sessionId, turnId, ownerId: 'process' })
+    if (!owner.acquired) throw new Error('test setup could not claim session')
+    markSessionExecutionStarted(db, { sessionId, turnId, ownerId: 'process', generation: owner.generation })
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('sdk-failed-block-assistant',?,'assistant','legacy partial','streaming',1,10,0)`).run(sessionId)
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES(?,?,?,'sdk-failed-block-assistant','executing',1,1,0)`).run(turnId, `${turnId}-request`, sessionId)
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+    const registry = new ModelProviderRegistry()
+    registry.register({ routeId: 'sqlite-sdk-failure', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test' }, {
+      providerId: 'sqlite-sdk-failure-provider', stream: async function* () {
+        yield { type: 'text-delta', text: 'partial answer' }
+        throw new Error('provider disconnected')
+      }
+    })
+    const permits = new InMemorySafetyPermitStore()
+
+    await expect(runAgentTurn({
+      registry, routeId: 'sqlite-sdk-failure', invocationId, turnId, sessionId,
+      sessionTranscriptBaseVersion: 0, assistantMessageId: 'sdk-failed-block-assistant', history,
+      sessionTranscriptFailureMessages: [
+        { role: 'user', content: 'question' },
+        { role: 'assistant', id: 'sdk-failed-block-assistant', content: [
+          { type: 'text', text: 'partial canonical answer' }, { type: 'thinking', thinking: 'private reasoning' }
+        ] }
+      ], request: { messages: [{ role: 'user', content: 'question' }], maxTokens: 32 }, maxModelTurns: 1,
+      safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits,
+        policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
+      prepareTool: vi.fn(), toolExecution: createPermitBoundToolExecutionPort({ permits,
+        admission: new InMemoryExecutionAdmissionCoordinator(), resolveExpected: async () => { throw new Error('tool execution is not expected') },
+        execute: async () => ({ output: undefined }) })
+    })).rejects.toThrow('provider disconnected')
+
+    expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('sdk-failed-block-assistant'))
+      .toEqual({ content: 'partial canonical answer', status: 'failed' })
+    expect(conn.prepare('SELECT outcome FROM session_turn_commit_receipts WHERE session_id=?').get(sessionId)).toEqual({ outcome: 'failed' })
+    expect(conn.prepare('SELECT version,status FROM session_transcript_checkpoints WHERE session_id=?').get(sessionId))
+      .toMatchObject({ version: 1, status: 'ready' })
+    expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(sessionId)).toEqual({ status: 'transcript_committed' })
+    const transcript = conn.prepare('SELECT messages_json FROM session_transcript_entries WHERE session_id=?').get(sessionId) as { messages_json: string }
+    expect(JSON.parse(transcript.messages_json)).toContainEqual(expect.objectContaining({
+      role: 'assistant', id: 'sdk-failed-block-assistant', content: [
+        { type: 'text', text: 'partial canonical answer' }, { type: 'thinking', thinking: 'private reasoning' }
+      ]
+    }))
     db.close()
   })
 
@@ -284,7 +1505,7 @@ describe('SqliteAgentHistory', () => {
     expect(history.readCanonicalSessionCache({ ...matched, cacheKey: 'assistant-content' })).toMatchObject({ kind: 'hit', value: JSON.stringify(matched.messages), sessionSeq: 2 })
     expect(history.readCanonicalSessionCache({ ...matched, cacheKey: 'assistant-content', sessionGeneration: 'stale-generation' })).toEqual({ kind: 'miss', reason: 'watermark-invalid' })
     conn.prepare("UPDATE agent_history_events SET event_id='replaced-anchor' WHERE event_id='snapshot-b'").run()
-    expect(history.readCanonicalSessionCache({ ...matched, cacheKey: 'assistant-content' })).toEqual({ kind: 'miss', reason: 'watermark-invalid' })
+    expect(history.readCanonicalSessionCache({ ...matched, cacheKey: 'assistant-content' })).toEqual({ kind: 'miss', reason: 'cache-missing' })
     expect(history.readCanonicalSessionTranscriptWithCache('session-fold', 'assistant-content', [
       { id: 'user-1', role: 'user', content: 'first', timestamp: 1 },
       { id: 'assistant-1', role: 'assistant', content: 'answer revised', timestamp: 2 },
@@ -412,6 +1633,39 @@ describe('SqliteAgentHistory', () => {
     ])).toMatchObject({ kind: 'matched', source: 'L1', replayedEvents: 1 })
     conn.close()
   })
+
+  it.each([['cursor-ahead', 2], ['cursor-behind', 0]] as const)(
+    'rejects a stale cached transcript after reopen when the session cursor is %s', async (_label, corruptedCursor) => {
+      const temp = createTempDatabase('history-cache-cursor-drift-')
+      let db = temp.db
+      let conn = getDbConnection(db)
+      conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+        VALUES('cursor-drift-session','s','m',0.7,1,1,1,'{}','{}',1,'cursor-drift-generation')`).run()
+      let history = new SqliteAgentHistory(conn, 1, Date.now, 'cursor-drift-session')
+      await history.appendBatch([{ ...event('cursor-drift-context', 1), invocationId: 'cursor-drift-inv',
+        kind: 'invocation-context-committed', payload: { messages: [
+          { role: 'user', content: 'canonical user', id: 'cursor-drift-user', timestamp: 1 }
+        ] } }], 0)
+      const canonical = history.readCanonicalSessionTranscript('cursor-drift-session', [
+        { id: 'cursor-drift-user', role: 'user', content: 'canonical user', timestamp: 1 }
+      ])
+      if (canonical.kind !== 'matched') throw new Error('expected canonical transcript')
+      expect(history.writeCanonicalSessionCache({ ...canonical, cacheKey: 'transcript', value: JSON.stringify(canonical.messages) })).toBe(true)
+      db.close()
+
+      db = openDatabase(temp.dbPath)
+      conn = getDbConnection(db)
+      history = new SqliteAgentHistory(conn, 1, Date.now, 'cursor-drift-session')
+      conn.prepare('UPDATE session_event_cursor SET next_seq=? WHERE session_id=?').run(corruptedCursor, 'cursor-drift-session')
+      const result = history.readCanonicalSessionTranscriptWithCache('cursor-drift-session', 'transcript', [
+        { id: 'cursor-drift-user', role: 'user', content: 'canonical user', timestamp: 1 }
+      ])
+      expect(result).toEqual({ kind: 'unavailable', reason: 'order-invalid' })
+      expect(conn.prepare('SELECT content,content_storage_state FROM messages WHERE id=?').get('cursor-drift-user')).toBeUndefined()
+      db.close()
+      temp.cleanup()
+    }
+  )
 
   it('uses the latest context or compaction snapshot within one invocation', async () => {
     const conn = createDb()
@@ -541,8 +1795,8 @@ describe('SqliteAgentHistory', () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn)
     conn.prepare('INSERT INTO agent_history_streams(invocation_id, version, schema_version, session_id) VALUES(?, 1, 1, ?)').run('legacy-terminal', 'session-legacy')
-    conn.prepare(`INSERT INTO agent_history_events(invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json, created_at)
-      VALUES('legacy-terminal', 1, 'legacy-end', 'legacy-end-key', 'legacy-turn', 1, 'invocation-completed', ?, 1)`).run(JSON.stringify({ status: 'completed', sessionLedger: {
+    conn.prepare(`INSERT INTO agent_history_events(invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json, created_at, session_id)
+      VALUES('legacy-terminal', 1, 'legacy-end', 'legacy-end-key', 'legacy-turn', 1, 'invocation-completed', ?, 1, 'session-legacy')`).run(JSON.stringify({ status: 'completed', sessionLedger: {
         location: { workDir: '/workspace', sessionId: 'session-legacy', createdAt: 1 }, turnId: 'legacy-turn', reason: 'completed'
       } }))
     await history.classifyLegacyProjectionRepairs(10)
@@ -574,8 +1828,8 @@ describe('SqliteAgentHistory', () => {
       } }
     }
     conn.prepare('INSERT INTO agent_history_streams(invocation_id, version, schema_version, session_id) VALUES(?, 1, 1, ?)').run('legacy-nonterminal', location.sessionId)
-    conn.prepare(`INSERT INTO agent_history_events(invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json, created_at)
-      VALUES(?, 1, ?, ?, ?, 1, ?, ?, 1)`).run(requestEvent.invocationId, requestEvent.eventId, requestEvent.idempotencyKey, requestEvent.turnId, requestEvent.kind, JSON.stringify(requestEvent.payload))
+    conn.prepare(`INSERT INTO agent_history_events(invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json, created_at, session_id)
+      VALUES(?, 1, ?, ?, ?, 1, ?, ?, 1, ?)`).run(requestEvent.invocationId, requestEvent.eventId, requestEvent.idempotencyKey, requestEvent.turnId, requestEvent.kind, JSON.stringify(requestEvent.payload), location.sessionId)
 
     await history.classifyLegacyProjectionRepairs(10)
     expect(conn.prepare('SELECT repair_id, target_key, status FROM canonical_projection_repairs WHERE invocation_id=?').all('legacy-nonterminal')).toEqual([{
@@ -595,12 +1849,12 @@ describe('SqliteAgentHistory', () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn)
     const insertStream = conn.prepare('INSERT INTO agent_history_streams(invocation_id, version, schema_version, session_id) VALUES(?, 1, 1, ?)')
-    const insertEvent = conn.prepare(`INSERT INTO agent_history_events(invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json, created_at)
-      VALUES(?, 1, ?, ?, ?, 1, 'invocation-completed', '{"status":"completed"}', 1)`)
+    const insertEvent = conn.prepare(`INSERT INTO agent_history_events(invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json, created_at, session_id)
+      VALUES(?, 1, ?, ?, ?, 1, 'invocation-completed', '{"status":"completed"}', 1, ?)`)
     for (let index = 0; index < 64; index += 1) {
       const id = `stable-final-${index.toString().padStart(3, '0')}`
       insertStream.run(id, `session-${id}`)
-      insertEvent.run(id, `${id}:event`, `${id}:key`, `${id}:turn`)
+      insertEvent.run(id, `${id}:event`, `${id}:key`, `${id}:turn`, `session-${id}`)
     }
     await history.classifyLegacyProjectionRepairs(10)
     await history.classifyLegacyProjectionRepairs(100)
@@ -617,12 +1871,12 @@ describe('SqliteAgentHistory', () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn)
     const insertStream = conn.prepare('INSERT INTO agent_history_streams(invocation_id, version, schema_version, session_id) VALUES(?, ?, 1, ?)')
-    const insertEvent = conn.prepare(`INSERT INTO agent_history_events(invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json, created_at)
-      VALUES(?, ?, ?, ?, ?, 1, ?, ?, 1)`)
+    const insertEvent = conn.prepare(`INSERT INTO agent_history_events(invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json, created_at, session_id)
+      VALUES(?, ?, ?, ?, ?, 1, ?, ?, 1, ?)`)
     for (let index = 0; index < 128; index += 1) {
       const id = `finished-${index.toString().padStart(3, '0')}`
       insertStream.run(id, 1, `session-${id}`)
-      insertEvent.run(id, 1, `${id}:terminal`, `${id}:terminal-key`, `${id}:turn`, 'invocation-completed', '{"status":"completed"}')
+      insertEvent.run(id, 1, `${id}:terminal`, `${id}:terminal-key`, `${id}:turn`, 'invocation-completed', '{"status":"completed"}', `session-${id}`)
     }
     const location = { workDir: '/workspace', sessionId: 'session-open-pending', createdAt: 1 }
     const requestId = 'open-pending:round:1'
@@ -630,7 +1884,7 @@ describe('SqliteAgentHistory', () => {
     insertEvent.run('open-pending', 1, 'open-request', 'open-request-key', 'open-turn', 'model-request-started', JSON.stringify({
       requestId, modelTurn: 1, attempt: 1,
       sessionLedger: { location, requestHeader: { requestId, attempt: 1, turnId: 'open-turn' }, requestContext: { requestId, attempt: 1, turnId: 'open-turn' } }
-    }))
+    }), location.sessionId)
     await history.classifyLegacyProjectionRepairs(200)
     const reads = vi.spyOn(history, 'read')
 
@@ -1066,6 +2320,19 @@ describe('SqliteAgentHistory', () => {
       invocationId: 'inv-latest', version: 2,
       events: [expect.objectContaining({ eventId: 'inv-latest-1' }), expect.objectContaining({ kind: 'invocation-completed' })]
     })
+    conn.close()
+  })
+
+  it('rejects a History event whose session owner drifts from its invocation stream', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn, 1, Date.now, 'event-owner-session')
+    await history.appendBatch([{
+      ...event('event-owner-context', 1), invocationId: 'event-owner-invocation', turnId: 'event-owner-turn',
+      kind: 'invocation-context-committed', payload: { messages: [{ id: 'event-owner-user', role: 'user', content: 'body', timestamp: 1 }] }
+    }], 0)
+    conn.prepare('UPDATE agent_history_events SET session_id=? WHERE event_id=?').run('foreign-session', 'event-owner-context')
+
+    expect(() => history.readSync('event-owner-invocation')).toThrow(/event session ownership differs from its invocation stream/)
     conn.close()
   })
 

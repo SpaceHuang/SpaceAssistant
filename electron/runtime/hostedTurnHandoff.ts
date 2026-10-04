@@ -15,7 +15,7 @@ import { decodeTerminalOutcome } from './terminalOutcome'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
 import type { AppDatabase } from '../database/sqliteStore'
 import { cancelQueuedSessionExecution, claimSessionExecution, commitSessionTranscript, markSessionExecutionStarted, markSessionExecutionUncertain, readSessionTranscript, releaseSessionExecution } from '../database/sessionTranscript'
-import { getMessage } from '../database/operations'
+import { getProjectedMessage } from './sessionTranscriptProjection'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import { ensureApiTextContent } from '../../src/shared/claudeToolHistory'
 import { randomUUID } from 'node:crypto'
@@ -112,7 +112,7 @@ function recoverAcceptedRestartInput(input: {
   const marker = accepted.payload && typeof accepted.payload === 'object' ? accepted.payload as Record<string, unknown> : undefined
   if (marker?.sessionId !== input.sessionId || marker.role !== 'user' || typeof marker.messageId !== 'string' ||
     typeof marker.inputFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(marker.inputFingerprint)) return undefined
-  const stored = getMessage(input.db, marker.messageId)
+  const stored = getProjectedMessage(input.db, marker.messageId)
   if (!stored || stored.sessionId !== input.sessionId || stored.role !== 'user' || stored.attachments?.length ||
     queueInputFingerprint({ text: stored.content, attachments: stored.attachments }) !== marker.inputFingerprint) return undefined
   const content = ensureApiTextContent(stored.content)
@@ -440,6 +440,20 @@ export function createHostedTurnHandoff(input: {
           outcome: 'commit_uncertain', reasonCode: 'history-terminal-missing', transcriptVersion: checkpoint.version
         })
         throw new HostedTurnFinalizedError(new Error('SESSION_TRANSCRIPT_COMMIT_UNCERTAIN:history-terminal-missing', { cause: error }), 'commit-uncertain')
+      }
+      if (terminal?.kind === 'invocation-completed' && ownership && checkpoint && executionStarted) {
+        // A completed terminal fact without its transcript/message mirror participant is not a
+        // successful commit. Preserve the claim and require reconciliation before any retry.
+        keepClaimedForReconciliation = true
+        try { markSessionExecutionUncertain(input.sessionDb!, ownership) }
+        catch (reconciliationError) {
+          throw new HostedTurnFinalizedError(new AggregateError([error, reconciliationError], 'Terminal participant and uncertainty marker both failed'), 'commit-uncertain', terminalUsage(terminal))
+        }
+        logAgentEvent('error', 'session.transcript.reconciliation', {
+          requestId: input.invocationId, turnId: ownership.turnId, sessionId: ownership.sessionId,
+          outcome: 'commit_uncertain', reasonCode: 'terminal-participant-incomplete', transcriptVersion: checkpoint.version
+        })
+        throw new HostedTurnFinalizedError(error, 'commit-uncertain', terminalUsage(terminal))
       }
       if (terminal && terminal.kind !== 'invocation-completed' && ownership && checkpoint && handoff.requiredUserMessage) {
         const decoded = decodeTerminalOutcome(terminal)

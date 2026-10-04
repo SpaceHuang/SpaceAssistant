@@ -78,8 +78,8 @@ function sessionColumns(db: AppDatabase): string[] {
 }
 
 describe('V17 schema migration (sessions.thinking_effort)', () => {
-  it('declares current schema version 33 after later migrations', () => {
-    expect(DB_SCHEMA_VERSION).toBe(33)
+  it('declares the current schema version after later migrations', () => {
+    expect(DB_SCHEMA_VERSION).toBe(46)
   })
 
   it('adds a nullable thinking_effort column when upgrading a v16 database', () => {

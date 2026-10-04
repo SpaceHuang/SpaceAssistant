@@ -19,6 +19,7 @@ export type {
   RetryContextTarget,
   PersistedMessageEntry,
   PersistedTurn,
+  SessionMessageRevisionSnapshot,
   ContextHistoryDbBaseline,
   SearchCorpusPage
 } from './operations'
@@ -40,8 +41,10 @@ export {
   getConfigValue,
   getMessageSequence,
   getMessage,
+  getMessageSkeleton,
   getTurnByRequestId,
   getPersistedTurn,
+  getSessionMessageRevisionSnapshot,
   setPersistedTurnExecutionConfig,
   failConfiguringTurn,
   listPersistedTurns,

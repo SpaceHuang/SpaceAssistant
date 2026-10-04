@@ -723,7 +723,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
           credentials: { apiKey: 'approval-key' }
         },
         currentUserMessageId: 'req-approval-revoke:approval-user',
-        requiredUserMessage: { id: 'req-approval-revoke:approval-user', message: { role: 'user', content: 'nested approval evidence' } },
+        requiredUserMessage: { id: 'req-approval-revoke:approval-user', message: { role: 'user', id: 'req-approval-revoke:approval-user', content: 'nested approval evidence' } },
         windowId: invocationRecord.trace.windowId
       }).then((outcome) => ({ ok: true, content: outcome.result.content, stopReason: 'end_turn' }))
     })
@@ -802,7 +802,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
           signal: runtime.chatCancels.register(invocationRecord.trace.requestId)
         },
         currentUserMessageId: `${invocationRecord.trace.requestId}:approval-user`,
-        requiredUserMessage: { id: `${invocationRecord.trace.requestId}:approval-user`, message: { role: 'user', content: 'nested approval evidence' } },
+        requiredUserMessage: { id: `${invocationRecord.trace.requestId}:approval-user`, message: { role: 'user', id: `${invocationRecord.trace.requestId}:approval-user`, content: 'nested approval evidence' } },
         windowId: invocationRecord.trace.windowId
       })
     })
@@ -900,7 +900,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
           credentials: { apiKey: 'approval-key' }
         },
         currentUserMessageId: 'req-approval-policy-version-change:approval-user',
-        requiredUserMessage: { id: 'req-approval-policy-version-change:approval-user', message: { role: 'user', content: 'nested approval evidence' } },
+        requiredUserMessage: { id: 'req-approval-policy-version-change:approval-user', message: { role: 'user', id: 'req-approval-policy-version-change:approval-user', content: 'nested approval evidence' } },
         windowId: invocationRecord.trace.windowId
       }).then((outcome) => ({ ok: true, content: outcome.result.content, stopReason: 'end_turn' }))
     })

@@ -34,6 +34,8 @@ export type AppIpcContext = {
   turnRuntime?: TurnRuntime
   /** Whether canonical History and its session sidecar startup repair completed without errors. */
   sessionHistoryRecoverySucceeded?: boolean
+  /** Wake the durable source-truth spill collection queue after its owning session is deleted. */
+  wakeSourceTruthSpillGc?: () => void
   executeTurn?: ClaudeTurnExecution
   /** P0 托盘常驻前提：管家定时任务依赖「关窗进程存活」，设置页据此提示。 */
   isTrayEnabled?: () => boolean
