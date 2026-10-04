@@ -173,3 +173,9 @@ This follow-up resolves the local package version collision recorded in the prio
 - Created a separate canonical-only profile copy and, only there, dropped the write-stop UPDATE guard and changed the context event's `session_id` to `foreign-session`, leaving stream ownership and canonical message identity unchanged. SQLite integrity remained `ok`; FK check was empty because the event owner is not a foreign key.
 - On the v0.2.4 arm64 package, actual API-context, message-page, search-corpus and global-search IPCs all rejected with `CANONICAL_SESSION_CONTENT_UNAVAILABLE`.
 - After app exit the mismatched event remained, the canonical-only message body was still empty, and no successful partial projection was returned. This covers one event-owner drift case; stream-owner/cursor watermark mutation variants remain to be exercised through the candidate package.
+
+## v0.2.4 allocator cursor UPDATE/DELETE package fault cases (2026-10-04)
+
+- Two separate copies of the schema-v46 canonical-only fixture were used. In one, `UPDATE agent_history_commit_cursor SET allocated_at=allocated_at+1 WHERE id=1` invoked the production invalidation trigger; in the other, `DELETE FROM agent_history_commit_cursor WHERE id=1` invoked the delete invalidation trigger. Both left `agent_history_cursor_integrity.invalid=1` before package startup, while SQLite integrity check was `ok`, FK check was empty, and canonical message content remained empty.
+- On the actual v0.2.4 arm64 package, API-context, message-page, search-corpus and global-search IPCs all returned `CANONICAL_SESSION_CONTENT_UNAVAILABLE` in both cases.
+- After package exit, both profiles still had the invalid marker and empty canonical-only message body. Together with the prior pending-allocation and direct invalid-marker cases, this covers the allocator marker gates for pending, explicit invalidation, cursor UPDATE, and cursor DELETE. Stream owner and cursor-watermark package mutations remain to be tested.
