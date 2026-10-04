@@ -7,7 +7,7 @@ import { logAgentEvent } from '../agentLogger/agentLogger'
 import type { AppDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
 import { resolveRetentionPolicyFromDb } from './retentionPolicy'
-import { collectSpillDescriptorsStrict, SpillContentUnavailableError, readSourceTruthSpillSync, type SpillDescriptor } from './spillProtocol'
+import { collectSpillDescriptorsStrict, SpillContentUnavailableError, readSourceTruthSpillSync, SPILL_DESCRIPTOR_VERSION, type SpillDescriptor } from './spillProtocol'
 
 export { SpillContentUnavailableError } from './spillProtocol'
 export type { SpillDescriptor } from './spillProtocol'
@@ -84,7 +84,7 @@ export function createSpillStore(root: string) {
         throw new Error('spill verification failed')
       }
       return {
-        version: 1,
+        version: SPILL_DESCRIPTOR_VERSION,
         kind,
         locator,
         byteLength: bytes.byteLength,

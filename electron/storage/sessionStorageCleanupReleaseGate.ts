@@ -1,3 +1,5 @@
+import { SESSION_STORAGE_DATA_CONTRACT, SESSION_STORAGE_DATA_CONTRACT_SHA256 } from './sessionStorageDataContract'
+
 export type SessionStorageCleanupReleaseGateResult = Readonly<
   | { allowed: true; reason: 'accepted' }
   | {
@@ -17,14 +19,20 @@ export type SessionStorageCleanupReleaseGateInput = Readonly<{
   deploymentAllowsCleanup: boolean
   runningRelease: unknown
   deploymentTarget: string
-  dataContractSha256: string
   compatibilityRecord: unknown
 }>
 
 type ReleaseIdentity = Readonly<{ version: string; tag: string; commit: string }>
 type PublishedRollbackFloor = ReleaseIdentity & Readonly<{
   releaseUrl: string
-  verifiedArtifacts: readonly Readonly<{ target: string; downloadUrl: string; sha256: string; verifiedAt: string }>[]
+  verifiedArtifacts: readonly Readonly<{
+    target: string
+    downloadUrl: string
+    sha256: string
+    verifiedAt: string
+    drillEvidenceUrl: string
+    drillEvidenceSha256: string
+  }>[]
 }>
 type RuntimeReleaseIdentity = ReleaseIdentity & Readonly<{ schemaVersion: number }>
 type AcceptedCompatibilityRecord = Readonly<{
@@ -72,10 +80,15 @@ function isPublishedRollbackFloor(value: unknown): value is PublishedRollbackFlo
     !verifiedArtifacts.every((artifact) => {
       if (!isRecord(artifact) || typeof artifact.target !== 'string' || !artifact.target.trim() ||
         typeof artifact.downloadUrl !== 'string' || typeof artifact.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(artifact.sha256) ||
-        typeof artifact.verifiedAt !== 'string' || !Number.isFinite(Date.parse(artifact.verifiedAt))) return false
+        typeof artifact.verifiedAt !== 'string' || !Number.isFinite(Date.parse(artifact.verifiedAt)) ||
+        typeof artifact.drillEvidenceUrl !== 'string' || typeof artifact.drillEvidenceSha256 !== 'string' ||
+        !/^[a-f0-9]{64}$/i.test(artifact.drillEvidenceSha256)) return false
       try {
         const downloadUrl = new URL(artifact.downloadUrl)
+        const drillEvidenceUrl = new URL(artifact.drillEvidenceUrl)
         return downloadUrl.protocol === 'https:' && downloadUrl.hostname === 'github.com' &&
+          drillEvidenceUrl.protocol === 'https:' && drillEvidenceUrl.hostname === 'github.com' &&
+          drillEvidenceUrl.pathname.startsWith('/SpaceHuang/SpaceAssistant/') &&
           downloadUrl.pathname.startsWith(`/SpaceHuang/SpaceAssistant/releases/download/${value.tag}/`)
       } catch {
         return false
@@ -133,9 +146,9 @@ export function evaluateSessionStorageCleanupReleaseGate(
     current.commit !== record.candidate.commit) {
     return { allowed: false, reason: 'candidate-release-mismatch' }
   }
-  if (!/^[a-f0-9]{64}$/i.test(input.dataContractSha256) ||
-    input.dataContractSha256.toLowerCase() !== record.contract.sha256.toLowerCase() ||
-    current.schemaVersion !== record.contract.schemaVersion) {
+  if (record.contract.sha256.toLowerCase() !== SESSION_STORAGE_DATA_CONTRACT_SHA256.toLowerCase() ||
+    record.contract.schemaVersion !== SESSION_STORAGE_DATA_CONTRACT.databaseSchemaVersion ||
+    current.schemaVersion !== SESSION_STORAGE_DATA_CONTRACT.databaseSchemaVersion) {
     return { allowed: false, reason: 'contract-mismatch' }
   }
   if (typeof input.deploymentTarget !== 'string' || !input.deploymentTarget.trim() ||

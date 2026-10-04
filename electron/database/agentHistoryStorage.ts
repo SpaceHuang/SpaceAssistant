@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import {
+  AGENT_HISTORY_SCHEMA_VERSION,
   HistoryBatchError,
   HistoryIdempotencyConflict,
   HistorySequenceConflict,
@@ -32,7 +33,7 @@ export function appendSqliteAgentHistoryBatchInTransaction(
   expectedVersion: number,
   options: { schemaVersion?: number; sessionId?: string; now?: () => number } = {}
 ): HistoryAppendResult {
-  const schemaVersion = options.schemaVersion ?? 1
+  const schemaVersion = options.schemaVersion ?? AGENT_HISTORY_SCHEMA_VERSION
   const now = options.now ?? Date.now
   validateHistoryBatch(events)
   if (!Number.isInteger(expectedVersion) || expectedVersion < 0) throw new HistoryBatchError('expectedVersion must be a non-negative integer')

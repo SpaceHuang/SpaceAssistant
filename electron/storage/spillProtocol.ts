@@ -2,8 +2,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 
+export const SPILL_DESCRIPTOR_VERSION = 1 as const
+export const SOURCE_TRUTH_SPILL_MARKER = '__spaceassistant_spill_v1' as const
+export const SESSION_TRANSCRIPT_SPILL_MARKER = '__spaceassistant_session_transcript_spill_v1' as const
+export const SPILL_MARKER_KEYS = [SOURCE_TRUTH_SPILL_MARKER, SESSION_TRANSCRIPT_SPILL_MARKER] as const
+
 export type SpillDescriptor = Readonly<{
-  version: 1
+  version: typeof SPILL_DESCRIPTOR_VERSION
   kind: 'source-of-truth' | 'degradable'
   locator: string
   byteLength: number
@@ -22,19 +27,19 @@ export function collectSpillDescriptorsStrict(value: unknown, output: SpillDescr
   }
   const object = value as Record<string, unknown>
   const markerKeys = Object.keys(object).filter((key) => key.startsWith('__spaceassistant_') && key.toLowerCase().includes('spill'))
-  if (markerKeys.some((key) => key !== '__spaceassistant_spill_v1' && key !== '__spaceassistant_session_transcript_spill_v1')) {
+  if (markerKeys.some((key) => !(SPILL_MARKER_KEYS as readonly string[]).includes(key))) {
     throw new Error('source-truth spill marker is unsupported')
   }
-  const descriptorKey = Object.hasOwn(object, '__spaceassistant_spill_v1') ? '__spaceassistant_spill_v1'
-    : Object.hasOwn(object, '__spaceassistant_session_transcript_spill_v1') ? '__spaceassistant_session_transcript_spill_v1' : undefined
+  const descriptorKey = Object.hasOwn(object, SOURCE_TRUTH_SPILL_MARKER) ? SOURCE_TRUTH_SPILL_MARKER
+    : Object.hasOwn(object, SESSION_TRANSCRIPT_SPILL_MARKER) ? SESSION_TRANSCRIPT_SPILL_MARKER : undefined
   const descriptorLike = typeof object.locator === 'string' && object.locator.endsWith('.spill') &&
     ('version' in object || 'kind' in object || 'sha256' in object || 'byteLength' in object)
-  const isInlineDescriptor = descriptorLike || object.version === 1 && (object.kind === 'source-of-truth' || object.kind === 'degradable')
+  const isInlineDescriptor = descriptorLike || object.version === SPILL_DESCRIPTOR_VERSION && (object.kind === 'source-of-truth' || object.kind === 'degradable')
   if (descriptorKey || isInlineDescriptor) {
     const descriptor = descriptorKey ? object[descriptorKey] : object
     if (!descriptor || typeof descriptor !== 'object' || Array.isArray(descriptor)) throw new Error('source-truth spill descriptor is malformed')
     const candidate = descriptor as Record<string, unknown>
-    if (candidate.version !== 1 || (candidate.kind !== 'source-of-truth' && candidate.kind !== 'degradable') ||
+    if (candidate.version !== SPILL_DESCRIPTOR_VERSION || (candidate.kind !== 'source-of-truth' && candidate.kind !== 'degradable') ||
       typeof candidate.locator !== 'string' || !/^[0-9a-f-]+\.spill$/.test(candidate.locator) ||
       path.basename(candidate.locator) !== candidate.locator || !Number.isSafeInteger(candidate.byteLength) || Number(candidate.byteLength) < 0 ||
       typeof candidate.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(candidate.sha256) ||

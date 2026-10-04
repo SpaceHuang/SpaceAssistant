@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import {
+  AGENT_HISTORY_SCHEMA_VERSION,
   HistoryBatchError,
   HistoryCorruptionError,
   rebuildInvocationStates,
@@ -25,9 +26,10 @@ import { canonicalSessionTranscriptEvents, foldClaudeSessionSnapshots, rebuildCl
 import { isCanonicalProjectionWatermarkValid } from './canonicalHistory'
 import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
 import { createSpillStoreForDatabase, type SpillDescriptor, type SpillStore } from '../storage/spillStore'
-import { collectSpillDescriptorsStrict } from '../storage/spillProtocol'
+import { collectSpillDescriptorsStrict, SESSION_TRANSCRIPT_SPILL_MARKER, SOURCE_TRUTH_SPILL_MARKER } from '../storage/spillProtocol'
+import { CANONICAL_SESSION_CACHE_VERSION } from './sessionTranscriptCacheFormat'
 
-export const CANONICAL_SESSION_CACHE_VERSION = 2
+export { CANONICAL_SESSION_CACHE_VERSION } from './sessionTranscriptCacheFormat'
 
 function stableCanonicalValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableCanonicalValue)
@@ -214,7 +216,7 @@ type CanonicalToolCallLedger = { location: CompactionLedgerLocation; stepId?: st
 export class SqliteAgentHistory implements HistoryPort {
   private readonly spillStore?: SpillStore
 
-  constructor(private readonly conn: DatabaseSync, private readonly schemaVersion = 1, private readonly now: () => number = Date.now, private readonly sessionId?: string, spillStore?: SpillStore) {
+  constructor(private readonly conn: DatabaseSync, private readonly schemaVersion = AGENT_HISTORY_SCHEMA_VERSION, private readonly now: () => number = Date.now, private readonly sessionId?: string, spillStore?: SpillStore) {
     this.spillStore = spillStore ?? createSpillStoreForDatabase(conn)
   }
 
@@ -246,7 +248,7 @@ export class SqliteAgentHistory implements HistoryPort {
       if (Buffer.byteLength(transcriptJson, 'utf8') > 64 * 1024) {
         try {
           const descriptor = await this.spillStore.commitSourceTruthUnderFence(transcriptJson)
-          storedTranscriptJson = JSON.stringify({ __spaceassistant_session_transcript_spill_v1: descriptor })
+          storedTranscriptJson = JSON.stringify({ [SESSION_TRANSCRIPT_SPILL_MARKER]: descriptor })
         } catch {
           // Preserve the complete transcript snapshot inline when durable spill preparation fails.
         }
@@ -1112,7 +1114,7 @@ export class SqliteAgentHistory implements HistoryPort {
       const spillText = async (value: unknown): Promise<unknown> => {
         if (typeof value === 'string' && Buffer.byteLength(value, 'utf8') > 64 * 1024) {
           const descriptor = await this.spillStore!.commitSourceTruthUnderFence(value)
-          return { __spaceassistant_spill_v1: descriptor }
+          return { [SOURCE_TRUTH_SPILL_MARKER]: descriptor }
         }
         return value
       }
@@ -1208,8 +1210,8 @@ export class SqliteAgentHistory implements HistoryPort {
     if (!event.payload || typeof event.payload !== 'object') return event
     const payload = event.payload as Record<string, unknown>
     const hydrateTaggedText = (tagged: unknown): unknown => {
-      if (!tagged || typeof tagged !== 'object' || !('__spaceassistant_spill_v1' in tagged)) return tagged
-      const descriptor = (tagged as { __spaceassistant_spill_v1: SpillDescriptor }).__spaceassistant_spill_v1
+      if (!tagged || typeof tagged !== 'object' || !Object.hasOwn(tagged, SOURCE_TRUTH_SPILL_MARKER)) return tagged
+      const descriptor = (tagged as Record<typeof SOURCE_TRUTH_SPILL_MARKER, SpillDescriptor>)[SOURCE_TRUTH_SPILL_MARKER]
       if (descriptor.kind !== 'source-of-truth') throw new Error('canonical tool result references a non-source spill')
       return this.readSourceTruthSync(descriptor)
     }

@@ -4,6 +4,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { toCanonicalModelMessages } from './canonicalHistory'
+import { AGENT_HISTORY_SCHEMA_VERSION } from '../../packages/agent-sdk/src/history'
 
 export type CanonicalWriteAuthorityResult = Readonly<{
   status: 'enabled' | 'ineligible'
@@ -97,7 +98,7 @@ export async function writeCanonicalBackedMessageContent(db: AppDatabase, messag
     } | undefined
   if (!row || row.write_mode !== 'canonical' || row.content_storage_state !== 'canonical-backed-dual-write' ||
     (row.role !== 'user' && row.role !== 'assistant') || !['sent','completed','failed','cancelled'].includes(row.status)) return false
-  const history = new SqliteAgentHistory(conn, 1, Date.now, row.session_id)
+  const history = new SqliteAgentHistory(conn, AGENT_HISTORY_SCHEMA_VERSION, Date.now, row.session_id)
   const transcript = history.readCanonicalSessionTranscriptForShadow(row.session_id)
   if (transcript.kind !== 'matched') return false
   const targetIndex = transcript.messages.findIndex((message) => message.id === messageId && message.role === row.role)
@@ -110,12 +111,12 @@ export async function writeCanonicalBackedMessageContent(db: AppDatabase, messag
     .get(row.session_id, messageId) as { turn_id: string } | undefined)?.turn_id ?? `message-edit-${invocationId}`
   const now = Date.now()
   await history.appendBatch([
-    { invocationId, turnId, sequence: 1, schemaVersion: 1, eventId: randomUUID(), idempotencyKey: randomUUID(),
+    { invocationId, turnId, sequence: 1, schemaVersion: AGENT_HISTORY_SCHEMA_VERSION, eventId: randomUUID(), idempotencyKey: randomUUID(),
       kind: 'invocation-context-committed', payload: { messages: canonicalMessages, canonicalWriteFence: {
         sessionGeneration: transcript.sessionGeneration, sessionSeq: transcript.sessionSeq, commitOrder: transcript.commitOrder,
         watermarkEventId: transcript.watermarkEventId, watermarkInvocationId: transcript.watermarkInvocationId
       } } },
-    { invocationId, turnId, sequence: 2, schemaVersion: 1, eventId: randomUUID(), idempotencyKey: randomUUID(),
+    { invocationId, turnId, sequence: 2, schemaVersion: AGENT_HISTORY_SCHEMA_VERSION, eventId: randomUUID(), idempotencyKey: randomUUID(),
       kind: 'invocation-completed', payload: { status: 'completed', completedAt: now } }
   ], 0)
   return true

@@ -1,3 +1,18 @@
+export const AGENT_HISTORY_SCHEMA_VERSION = 1 as const
+/** Increment when a persisted History event payload's accepted shape or transition semantics change. */
+export const HISTORY_PAYLOAD_VALIDATOR_REVISION = 1 as const
+
+export const HISTORY_EVENT_KINDS = [
+  'session-input-committed', 'invocation-context-committed', 'transcript-compacted',
+  'model-request-started', 'provider-retry-scheduled', 'model-attempt-discarded',
+  'model-response-committed', 'replay-message-committed', 'tool-call-started',
+  'tool-call-finished', 'tool-call-not-dispatched', 'approval-waiting', 'approval-resolved',
+  'approval-updated', 'invocation-parked', 'invocation-interrupted',
+  'invocation-completed', 'invocation-failed'
+] as const
+
+export type HistoryEventKind = (typeof HISTORY_EVENT_KINDS)[number]
+
 export type HistoryEvent = {
   eventId: string
   idempotencyKey: string
@@ -5,7 +20,7 @@ export type HistoryEvent = {
   turnId: string
   sequence: number
   schemaVersion: number
-  kind: 'session-input-committed' | 'invocation-context-committed' | 'transcript-compacted' | 'model-request-started' | 'provider-retry-scheduled' | 'model-attempt-discarded' | 'model-response-committed' | 'replay-message-committed' | 'tool-call-started' | 'tool-call-finished' | 'tool-call-not-dispatched' | 'approval-waiting' | 'approval-resolved' | 'approval-updated' | 'invocation-parked' | 'invocation-interrupted' | 'invocation-completed' | 'invocation-failed'
+  kind: HistoryEventKind
   payload: unknown
 }
 
@@ -142,14 +157,7 @@ export function historyEventsEqual(left: HistoryEvent, right: HistoryEvent): boo
   return stable(left) === stable(right)
 }
 
-const HISTORY_EVENT_KINDS = new Set<string>([
-  'session-input-committed', 'invocation-context-committed', 'transcript-compacted',
-  'model-request-started', 'provider-retry-scheduled', 'model-attempt-discarded',
-  'model-response-committed', 'replay-message-committed', 'tool-call-started',
-  'tool-call-finished', 'tool-call-not-dispatched', 'approval-waiting', 'approval-resolved',
-  'approval-updated', 'invocation-parked', 'invocation-interrupted',
-  'invocation-completed', 'invocation-failed'
-])
+const HISTORY_EVENT_KIND_SET = new Set<string>(HISTORY_EVENT_KINDS)
 
 export function validateHistoryBatch(events: readonly HistoryEvent[]): void {
   if (events.length === 0) throw new HistoryBatchError('history batch must not be empty')
@@ -157,7 +165,7 @@ export function validateHistoryBatch(events: readonly HistoryEvent[]): void {
   const eventIds = new Set<string>()
   const idempotencyKeys = new Set<string>()
   for (const event of events) {
-    if (!HISTORY_EVENT_KINDS.has(event.kind)) throw new HistoryBatchError(`unsupported history event kind ${String(event.kind)}`)
+    if (!HISTORY_EVENT_KIND_SET.has(event.kind)) throw new HistoryBatchError(`unsupported history event kind ${String(event.kind)}`)
     if (!event.eventId.trim() || !event.idempotencyKey.trim() || !event.invocationId.trim() || !event.turnId.trim()) {
       throw new HistoryBatchError('history event identity fields are required')
     }
@@ -326,7 +334,7 @@ export function rebuildInvocationStates(snapshot: HistorySnapshot): Map<string, 
 export class MemoryHistory implements HistoryPort {
   private readonly streams = new Map<string, { schemaVersion: number; events: HistoryEvent[] }>()
 
-  constructor(private readonly schemaVersion = 1) {}
+  constructor(private readonly schemaVersion = AGENT_HISTORY_SCHEMA_VERSION) {}
 
   async appendBatch(events: readonly HistoryEvent[], expectedVersion: number): Promise<HistoryAppendResult> {
     validateHistoryBatch(events)

@@ -1,6 +1,13 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
 export const DB_SCHEMA_VERSION = 49
 
+export const MESSAGE_CONTENT_STORAGE_STATES = ['legacy', 'canonical-backed-dual-write', 'canonical-backed-only'] as const
+export const SESSION_CONTENT_CLEANUP_STATES = ['retained', 'write-stopped', 'pending', 'complete'] as const
+
+function sqlTextEnum(values: readonly string[]): string {
+  return values.map((value) => `'${value.replaceAll("'", "''")}'`).join(',')
+}
+
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (
   scope TEXT PRIMARY KEY NOT NULL,
@@ -43,7 +50,7 @@ CREATE TABLE IF NOT EXISTS messages (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   role TEXT NOT NULL,
   content TEXT NOT NULL,
-  content_storage_state TEXT NOT NULL DEFAULT 'legacy' CHECK(content_storage_state IN ('legacy','canonical-backed-dual-write','canonical-backed-only')),
+  content_storage_state TEXT NOT NULL DEFAULT 'legacy' CHECK(content_storage_state IN (${sqlTextEnum(MESSAGE_CONTENT_STORAGE_STATES)})),
   tool_use TEXT,
   tool_calls TEXT,
   thinking TEXT,
@@ -1147,7 +1154,7 @@ CREATE TABLE session_message_content_cutover_v44 (
   message_revision INTEGER NOT NULL DEFAULT 0,
   api_read_mode TEXT NOT NULL DEFAULT 'legacy' CHECK(api_read_mode IN ('legacy','canonical','revalidation-required')),
   write_mode TEXT NOT NULL DEFAULT 'legacy' CHECK(write_mode IN ('legacy','dual-write','canonical')),
-  cleanup_state TEXT NOT NULL DEFAULT 'retained' CHECK(cleanup_state IN ('retained','write-stopped','pending','complete')),
+  cleanup_state TEXT NOT NULL DEFAULT 'retained' CHECK(cleanup_state IN (${sqlTextEnum(SESSION_CONTENT_CLEANUP_STATES)})),
   updated_at INTEGER NOT NULL DEFAULT 0
 );
 INSERT INTO session_message_content_cutover_v44(

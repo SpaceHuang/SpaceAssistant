@@ -29,7 +29,7 @@ import { queueInputFingerprint } from '../queueInputFingerprint'
 import { collectSourceTruthSpillLocators } from '../storage/spillProtocol'
 import { appendSqliteAgentHistoryBatchInTransaction } from './agentHistoryStorage'
 import { CANONICAL_SESSION_CACHE_VERSION, SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
-import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
+import { AGENT_HISTORY_SCHEMA_VERSION, type HistoryEvent } from '../../packages/agent-sdk/src/history'
 import {
   estimateThinkingTokensFromMessage,
   estimateTokensFromHistoryImages
@@ -1276,7 +1276,7 @@ function appendSessionInputHistoryInTransaction(
     invocationId: input.turnId,
     turnId: input.turnId,
     sequence: 1,
-    schemaVersion: 1,
+    schemaVersion: AGENT_HISTORY_SCHEMA_VERSION,
     eventId: `${input.turnId}:session-input`,
     idempotencyKey: `${input.turnId}:session-input`,
     kind: 'session-input-committed',
@@ -1287,7 +1287,7 @@ function appendSessionInputHistoryInTransaction(
       inputFingerprint: queueInputFingerprint({ text: input.user.content, attachments: input.user.attachments })
     }
   }
-  appendSqliteAgentHistoryBatchInTransaction(conn, [event], 0, { schemaVersion: 1, sessionId: input.sessionId })
+  appendSqliteAgentHistoryBatchInTransaction(conn, [event], 0, { schemaVersion: AGENT_HISTORY_SCHEMA_VERSION, sessionId: input.sessionId })
   const marked = conn.prepare('UPDATE turns SET accepted_input_history_version = 1 WHERE turn_id = ? AND request_id = ? AND session_id = ?')
     .run(input.turnId, input.requestId, input.sessionId)
   if (changesToNumber(marked.changes) !== 1) throw new Error('TURN_ACCEPTED_INPUT_RECEIPT_MISSING')
