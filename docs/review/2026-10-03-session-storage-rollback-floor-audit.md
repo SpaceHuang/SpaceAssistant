@@ -155,3 +155,9 @@ This follow-up resolves the local package version collision recorded in the prio
 - Mounted `release/SpaceAssistant-0.2.4.dmg` read-only and ran its x64 app under Rosetta against a fresh copy of the schema-v46 canonical-only fixture. First startup took about 70 seconds before DevTools/page readiness; no test timeout or app error was observed after it became ready.
 - Actual packaged renderer→preload→IPC calls to API-context baseline, message page, search corpus, and global search returned/matched `canonical body survives restart`, matching arm64 results.
 - After app exit, the copied profile remained `integrity_check=ok`, FK check empty, legacy body empty, `canonical-backed-only`, `write_mode=canonical`, `cleanup_state=complete`. The original fixture and other profiles were untouched.
+
+## v0.2.4 allocator pending-cursor package fault smoke (2026-10-04)
+
+- Copied the healthy schema-v46 canonical-only fixture to `/Users/space/Library/Application Support/SpaceAssistant-v024-allocator-pending`. Inserted one row into `agent_history_commit_cursor` through its production trigger, which registered the cursor in `agent_history_pending_commit_cursor` without a corresponding event. Before app launch, the integrity marker remained `invalid=0`; this represents a pending/unpaired allocation rather than direct table corruption.
+- On the v0.2.4 arm64 package, the actual API-context, message-page, search-corpus and global-search IPCs each failed with `CANONICAL_SESSION_CONTENT_UNAVAILABLE`. They did not return the warm L1 body or a successful empty result.
+- After app exit the pending cursor remained visible, integrity check was `ok`, FK check empty, and the canonical-only message body remained empty. This package-level case validates unpaired allocator handling. Direct allocator UPDATE/DELETE integrity-marker corruption and broader owner/watermark variants remain outstanding.
