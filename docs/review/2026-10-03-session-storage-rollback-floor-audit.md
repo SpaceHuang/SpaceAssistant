@@ -68,7 +68,7 @@ This is an isolated app-bundle smoke test. The DMG was made directly with `hdiut
 - The Mac was locked during the run, so no window-level check was possible. Database evidence proves startup migration and retained-body integrity only; it does not prove a polished install flow, graceful UI shutdown, canonical-only rollback reads, or C→R compatibility.
 - The repository `npm run pack:mac`/electron-builder DMG flow remains failed for disk space; no Developer ID exists. No C artifact, release, or tag exists. Gate remains No-go; cleanup remains locked.
 
-## Cache-version follow-up (2026-10-04, v259 working tree)
+## Cache-version follow-up (2026-10-04, commit `d3fd9727`)
 
 This is code-level preflight evidence after the integrated candidate's assistant stable-ID projection was corrected. It does not establish an R release or alter the No-go gate.
 
@@ -77,3 +77,12 @@ This is code-level preflight evidence after the integrated candidate's assistant
 - Focused suite: 6 files / 406 tests passed. Full suite: 866 files passed / 1 skipped; 8,233 tests passed / 106 skipped. Renderer/shared/agent-sdk/Electron typechecks, `npm run build`, strict i18n, and `git diff --check` passed.
 - The worktree build needed a local ignored `node_modules/@earendil-works/pi-ai` link to the already installed lockfile version 0.87.1; no dependency manifest or lockfile changed.
 - Schema remains v49. No signed installer or R→C→R installation drill exists. Current disk has about 400 MiB free and the machine has zero valid Developer ID identities. Gate remains No-go; production stop-write/cleanup stays locked.
+
+
+## Fixed-commit code checkout (2026-10-04, `d3fd972722420fc5aff0b6f83afc6b37cfdba72e`)
+
+- Detached the existing clean-code checkout at the exact cache-version commit. The worktree was clean before and after validation.
+- Full suite passed: 866 files passed / 1 skipped; 8,233 tests passed / 106 skipped. Shadow p95 was 11.12 ms and canonical API p95 was 10.75 ms.
+- Renderer/shared/agent-sdk/Electron typechecks, full `npm run build`, strict i18n (0 source occurrences; 1,214 test occurrences), and `git diff --check` passed.
+- This checkout's `node_modules` was not self-contained. Validation resolved dependencies from the existing local dependency store and added ignored links for TypeScript 5.9.3 and `@earendil-works/pi-ai@0.87.1`. `npm ci` has not been rerun at this exact commit; the result is fixed-commit code/build evidence, not fresh-install evidence.
+- No distribution installer, installation/rollback drill, R publication, or C artifact exists. Disk space is approximately 375 MiB and the machine has zero valid Developer ID identities. Gate remains No-go; stop-write/cleanup remains locked.
