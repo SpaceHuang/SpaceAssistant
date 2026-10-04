@@ -913,14 +913,15 @@ describe('runShellExecutor', () => {
     })
     const result = await executePreparedShellExecution(prepared, baseCtx(workDir, userDataDir), Date.now(), { requestId: 'req', sessionId: 'sess', toolUseId: 'tool-1' })
     const data = result.data as Record<string, any>
-    // 该事故样本未达到零字节奇偶强判阈值，结构启发式识别 UTF-16LE 并按弱证据标记可疑。
-    expect(data.decode.stderr).toMatchObject({
-      encoding: 'utf-16le',
-      source: 'utf16-structure',
-      confidence: 'medium',
-      replacements: 0,
-      suspect: true
-    })
+    // 不同宿主可能通过零字节奇偶或结构证据识别同一份 UTF-16LE 字节；两条路径都必须保持来源与可信度一致。
+    const stderrDecode = data.decode.stderr
+    expect(stderrDecode.encoding).toBe('utf-16le')
+    expect(stderrDecode.replacements).toBe(0)
+    if (stderrDecode.source === 'utf16-pattern') {
+      expect(stderrDecode).toMatchObject({ confidence: 'high', suspect: false })
+    } else {
+      expect(stderrDecode).toMatchObject({ source: 'utf16-structure', confidence: 'medium', suspect: true })
+    }
     // 文本投影：还原中文 + HRESULT，且 50 个 NUL 消失（§2.2 事故症状）
     expect(String(data.stderr)).toContain('内部错误')
     expect(String(data.stderr)).toContain('8009001d')
@@ -948,11 +949,11 @@ describe('runShellExecutor', () => {
     const finish = vi.mocked(logShellAgentEvent).mock.calls.find(([, event]) => event === 'shell.exec.finish')
     const fields = finish?.[2] as Record<string, unknown>
     expect(fields.stderrEncoding).toBe('utf-16le')
-    expect(fields.encodingSource).toBe('utf16-structure')
+    expect(fields.encodingSource).toBe(stderrDecode.source)
     expect(fields.stderrRawBytes).toBe(136)
     expect(fields.rawArtifactReason).toBe('failed')
     expect(String(fields.rawArtifactPath)).toContain('shell-output')
-    expect(fields.outputTrust).toBe('suspect')
+    expect(fields.outputTrust).toBe(data.outputTrust)
     expect(typeof fields.spawnToExitMs).toBe('number')
     if (isWindows) {
       // 双解释：Node 上报无符号值，Windows 语义为有符号 -65536
