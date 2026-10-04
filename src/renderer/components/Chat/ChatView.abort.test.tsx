@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Provider } from 'react-redux'
 import { App, ConfigProvider } from 'antd'
 import { ChatView } from './ChatView'
@@ -66,5 +66,29 @@ describe('ChatView stop action', () => {
     expect(window.api.chatCancelTurn).toHaveBeenCalledOnce()
     expect(window.api.chatCancelTurn).toHaveBeenCalledWith('turn-a')
     await waitFor(() => expect(store.getState().chat.runningSessions[session.id]).toBeUndefined())
+  })
+
+  it('turn 已结束但 renderer 仍残留 streaming assistant 时从持久消息页接管终态', async () => {
+    const streaming = {
+      id: 'assistant-orphaned-stream', sessionId: session.id, role: 'assistant' as const,
+      content: 'partial', timestamp: 2, status: 'streaming' as const, schemaVersion: 1
+    }
+    const completed = { ...streaming, content: 'final answer', status: 'completed' as const }
+    render(<Provider store={store}><ConfigProvider><App><ChatView /></App></ConfigProvider></Provider>)
+    await waitFor(() => expect(window.api.chatGetMessagePage).toHaveBeenCalled())
+
+    vi.mocked(window.api.chatGetMessagePage).mockResolvedValue({
+      entries: [{ message: completed, sequence: 2 }], oldestSequence: 2, hasMoreBefore: false
+    })
+    act(() => {
+      store.dispatch(setMessages([streaming]))
+      store.dispatch(setChatStatus({ status: 'completed', requestId: null, sessionId: session.id, turnId: 'turn-a' }))
+    })
+
+    await waitFor(() => {
+      expect(store.getState().chat.messages.find((message) => message.id === streaming.id)).toMatchObject({
+        content: 'final answer', status: 'completed'
+      })
+    })
   })
 })

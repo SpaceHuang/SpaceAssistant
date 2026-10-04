@@ -450,6 +450,23 @@ export function ChatView() {
 
   const sessionRunning = Boolean(sessionId && runningSessions[sessionId])
 
+  // A terminal turn event normally patches the assistant before clearing runningSessions.
+  // If that transient display event is missed, the persisted turn is still authoritative;
+  // reconcile a leftover streaming row so the UI cannot remain stuck until app restart.
+  useEffect(() => {
+    if (sessionRunning || !sessionId || !streamingAssistant) return
+    let active = true
+    void window.api.chatGetMessagePage({ sessionId, limit: 60 }).then((page) => {
+      if (!active) return
+      const persisted = page.entries.find(({ message }) => message.id === streamingAssistant.id)?.message
+      if (!persisted || persisted.status === 'streaming') return
+      dispatch(patchDisplayMessage({ id: persisted.id, patch: persisted }))
+    }).catch(() => {
+      // Message reconciliation is best effort; the next session reload remains authoritative.
+    })
+    return () => { active = false }
+  }, [dispatch, sessionId, sessionRunning, streamingAssistant?.id])
+
   const onToolConfirm = useCallback(
     (toolUseId: string, approved: boolean, options?: ToolConfirmOptions) => {
       const pending = sessionId ? pendingConfirmStore.find(sessionId, toolUseId) : undefined
