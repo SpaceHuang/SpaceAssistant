@@ -371,6 +371,43 @@ describe('session content cutover schema', () => {
     conn.close()
   })
 
+  it.each([
+    { name: 'an internal commit-order gap', eventOrders: [1, 3], cursorIds: [1, 2, 3] },
+    { name: 'an unpaired trailing allocator cursor', eventOrders: [1, 2], cursorIds: [1, 2, 3] }
+  ])('v46 marks existing $name as invalid during upgrade', ({ eventOrders, cursorIds }) => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec(`
+      CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);
+      INSERT INTO schema_meta VALUES('schema_version','45');
+      CREATE TABLE agent_history_commit_cursor (id INTEGER PRIMARY KEY AUTOINCREMENT, allocated_at INTEGER NOT NULL);
+      CREATE TABLE agent_history_events (
+        invocation_id TEXT NOT NULL, sequence INTEGER NOT NULL, event_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL, turn_id TEXT NOT NULL, schema_version INTEGER NOT NULL,
+        kind TEXT NOT NULL, payload_json TEXT NOT NULL, created_at INTEGER NOT NULL,
+        session_id TEXT, session_seq INTEGER, commit_order INTEGER,
+        PRIMARY KEY(invocation_id,sequence), UNIQUE(commit_order)
+      );
+      CREATE TABLE canonical_session_projection_cache (session_id TEXT NOT NULL,cache_key TEXT NOT NULL,PRIMARY KEY(session_id,cache_key));
+      CREATE TABLE canonical_session_projection_eligibility (session_id TEXT PRIMARY KEY);
+      CREATE TABLE canonical_session_api_context_eligibility (session_id TEXT PRIMARY KEY);
+      CREATE TABLE session_message_content_cutover (session_id TEXT PRIMARY KEY,api_read_mode TEXT NOT NULL,write_mode TEXT NOT NULL,updated_at INTEGER NOT NULL);
+    `)
+    const insertCursor = conn.prepare('INSERT INTO agent_history_commit_cursor(id,allocated_at) VALUES(?,?)')
+    for (const id of cursorIds) insertCursor.run(id, id)
+    const insertEvent = conn.prepare(`INSERT INTO agent_history_events(
+      invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at,commit_order
+    ) VALUES(?,?,?,?,?,1,'test-event','{}',?,?)`)
+    for (const order of eventOrders) insertEvent.run(`inv-${order}`, 1, `event-${order}`, `key-${order}`, `turn-${order}`, order, order)
+
+    runMigrations(conn)
+
+    expect(conn.prepare('SELECT invalid FROM agent_history_cursor_integrity WHERE singleton_id=1').get()).toEqual({ invalid: 1 })
+    const pendingCursorIds = cursorIds.filter((id) => !eventOrders.includes(id)).map((cursor_id) => ({ cursor_id }))
+    expect(conn.prepare('SELECT cursor_id FROM agent_history_pending_commit_cursor ORDER BY cursor_id').all())
+      .toEqual(pendingCursorIds)
+    conn.close()
+  })
+
   it('preserves current allocator triggers when a replay migration fails before v46 is reapplied', () => {
     const conn = new DatabaseSync(':memory:')
     conn.exec(CREATE_TABLES_SQL)
