@@ -8,9 +8,9 @@ This is a compatibility audit package, not approval to perform cleanup.
 
 ## Evidence
 
-- Published tag `v0.2.2` declares database schema version 19 (`electron/database/schema.ts`). The current worktree declares schema version 46 and includes additive session-content state, eligibility, spill-GC, History invalidation, transcript-cache checksum, persisted write-stopped cleanup-state, completed-cleanup-ledger immutability, canonical-only body immutability, and global History allocator integrity migrations.
+- Published tag `v0.2.2` declares database schema version 19 (`electron/database/schema.ts`). The current integration candidate declares schema version 49 and includes additive session-content state, eligibility, spill-GC, History invalidation, transcript-cache checksum, persisted write-stopped cleanup-state, completed-cleanup-ledger immutability, canonical-only body immutability, and global History allocator integrity migrations.
 - `v0.2.2` has no `electron/runtime/sessionTranscriptProjection.ts` or `electron/runtime/sessionContentWriteAuthority.ts`. Its user-facing message reads in `electron/database/operations.ts` select `messages.content` directly, including `getMessages`, `getTurnContext`, sequence paging, and route-window reads.
-- Current `electron/database/migrations.ts` rejects a database whose schema version is newer than the binary supports. A v0.2.2 rollback against the current schema-46 profile therefore fails before opening the application. If that version guard were bypassed, the old readers would still return empty bodies for rows already cleared by Phase 5.5.
+- Current `electron/database/migrations.ts` rejects a database whose schema version is newer than the binary supports. A v0.2.2 rollback against the current schema-49 profile therefore fails before opening the application. If that version guard were bypassed, the old readers would still return empty bodies for rows already cleared by Phase 5.5.
 - Current Phase 5.4 retains legacy bodies and dual writes. That keeps the present database content readable by a compatible older build only while those copies remain intact; it does not make v0.2.2 a rollback target after a future clear.
 
 ## Minimum compatible rollback release
@@ -25,14 +25,14 @@ Before any legacy body is cleared, publish and preserve a rollback build that:
 
 ## Required release-floor verification
 
-Use a disposable copy of a real file-backed database at the exact cleanup-release schema (currently schema 46) with representative canonical-backed-only rows, multi-spill bodies, cache hit/miss states, queued messages, active/terminal turns, and backup/restore artifacts. Include a paired and an unpaired global History allocator cursor so the rollback floor verifies v46 cursor-integrity handling as well as transcript reads. Verify that the proposed floor build opens it, reads the canonical bodies after process restart, rejects missing/corrupt History or spill without returning empty content, and leaves the original profile untouched. Record the exact release identifier, schema version, test fixture, and result. The release must be published and retained before the first cleanup batch; a worktree, unmerged branch, or local build is not a release floor.
+Use a disposable copy of a real file-backed database at the exact cleanup-release schema (currently schema 49) with representative canonical-backed-only rows, multi-spill bodies, cache hit/miss states, queued messages, active/terminal turns, and backup/restore artifacts. Include a paired and an unpaired global History allocator cursor so the rollback floor verifies v49 cursor-integrity handling as well as transcript reads. Verify that the proposed floor build opens it, reads the canonical bodies after process restart, rejects missing/corrupt History or spill without returning empty content, and leaves the original profile untouched. Record the exact release identifier, schema version, test fixture, and result. The release must be published and retained before the first cleanup batch; a worktree, unmerged branch, or local build is not a release floor.
 
 ## Gate status
 
 | Gate | Status |
 | --- | --- |
 | Current published rollback target compatibility | **Failed** (`v0.2.2`, schema 19; canonical-only reader absent) |
-| Compatible rollback build | **Not built or published** |
+| Compatible rollback build | **Local candidate package built; formal tag release not published** |
 | Cleanup authorization | **Locked** |
 
 This gate is separate from the search-budget review and from the completed source-truth spill GC lifecycle. Neither of those changes makes the current published binary compatible with cleared `messages.content`.
@@ -96,3 +96,14 @@ OCR re-review of `a285443a` found two issues; the current working tree fixes the
 - Low: legacy JSON `generation` is untrusted. A non-string previously caused `.trim is not a function` before migration error handling. Both preparation and insertion now share a type-safe UUID normalizer; migration regression reproduced and passes.
 - Focused cross-area suite: 5 files / 337 tests passed. Full suite: 866 files passed / 1 skipped; 8,235 tests passed / 106 skipped. Renderer/shared/agent-sdk/Electron typechecks, full build, strict i18n, and `git diff --check` passed. Strict i18n reports 0 source occurrences and 1,214 test occurrences.
 - OCR review of the fixes returned 0 findings. No schema migration or cleanup protocol changed. The fix still needs a fixed commit and clean checkout validation. The distribution R, published rollback drill, and cleanup authorization remain absent; local disk space is about 373 MiB and no Developer ID identity is available.
+
+
+## Fresh-install R package preflight (2026-10-04, commit `67ec4549`)
+
+This addendum supersedes earlier local-space/Developer-ID blocker statements. The repository's [`release.yml`](../../.github/workflows/release.yml) uses the normal afterPack ad-hoc signature and verifies the app bundle; [`release-appendix.md`](../../.github/release-appendix.md) explicitly documents that published packages are not Apple-signed. A Developer ID is therefore not required by the current repository release workflow.
+
+- `origin/main` is `6b2ba5a7`, and is an ancestor of the candidate branch. The candidate code commit is `67ec4549fc39f2b16f526417e00b54fd8f4422ee`.
+- A fresh detached checkout ran `npm ci` successfully. The prescribed focused migration/cutover/projection tests passed (354); the full suite passed (866 files / 1 skipped; 8,235 tests / 106 skipped). Renderer/shared/agent-sdk/Electron checks, normal and strict i18n, full build, and `git diff --check` passed. npm reported 32 dependency advisories (1 critical, 20 high, 10 moderate, 1 low); the production-only audit reports 3 high and no critical. No automatic dependency upgrades were applied.
+- `npm run pack:mac` produced `release/SpaceAssistant-0.2.2.dmg` (x64, SHA-256 `d7e0f91e1495fbb20c2e28d52a52c6a52599ef8b2458b08c99af41cee38e0692`) and `release/SpaceAssistant-0.2.2-arm64.dmg` (SHA-256 `d1f2c5edd8781bdf5aed3eab1b395b9db931e4c4d6782f84ca4735998334ced0`). Both passed `hdiutil verify`; app resources and ad-hoc signature verification passed. These local package filenames use 0.2.2, an already-published version, so they are preflight artifacts only and must not be distributed as R.
+- A disposable profile created with main's schema-v33 DB API and a legacy user message was started from the x64 DMG, closed, restarted, and launched again from a temporary copy of the packaged app. Schema advanced to 49; the same message ID/body/status/sequence remained; `PRAGMA integrity_check` returned `ok`. No stop-write/cleanup API was called. UI was not verified.
+- The package metadata is being advanced to `0.2.3` for the next R candidate; this version bump and the matching fixed commit still require clean `npm ci` verification and CI packaging. No R tag/release or C exists. Production stop-write/cleanup remains locked.
