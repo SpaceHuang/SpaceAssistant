@@ -63,7 +63,7 @@ import { cancelClaudeAdmission } from '../claudeStreamHandlers'
 import { reserveConfirmationSubmission, commitConfirmationSubmissionWithWork, markConfirmationSubmissionReconciling, reconcileConfirmationSubmission, reconcileConfirmationSubmissions, ConfirmationCommitRolledBackError, ConfirmationCommitUnknownError } from '../confirmation/persistentConfirmationCommit'
 import { forgetMcpSessionTrust, isMcpSessionTrusted, rememberMcpSessionTrust } from '../mcp/mcpSessionTrust'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
-import { getProjectedChatMessagePage, readSessionTranscriptProjection } from '../runtime/sessionTranscriptProjection'
+import { getProjectedChatMessagePage, getProjectedMessages } from '../runtime/sessionTranscriptProjection'
 import { startAgentContinuation, setAgentContinuationStatusForTurn, reconcileRunningAgentContinuations } from '../runtime/agentContinuation'
 import { createContinuationSafetySnapshot, fingerprintContinuationExecutionConfig } from '../runtime/continuationSafetySnapshot'
 import { resolveWorkDirForSession } from '../workDirManager'
@@ -545,8 +545,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   ipcMain.handle(
     'chat:get-messages',
     (_e, payload: { sessionId: string; limit?: number; offset?: number }): Message[] => {
-      const projection = readSessionTranscriptProjection(ctx.db, payload.sessionId)
-      return projection.messages.slice(payload.offset ?? 0, (payload.offset ?? 0) + (payload.limit ?? 500)) as Message[]
+      return getProjectedMessages(ctx.db, payload.sessionId, payload.limit ?? 500, payload.offset ?? 0)
     }
   )
 

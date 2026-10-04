@@ -79,6 +79,8 @@ describe('migrateFromJson', () => {
 
     const db = openDatabase(dbPath)
     expect(getSession(db, 'sess-1')?.name).toBe('hello')
+    expect(getSession(db, 'sess-1')?.generation).toBeTruthy()
+    expect(getDbConnection(db).prepare('SELECT generation FROM sessions WHERE id=?').get('sess-1')).toEqual({ generation: getSession(db, 'sess-1')?.generation })
     expect(getMessages(db, 'sess-1')).toHaveLength(1)
     expect(getConfigValue(db, 'config.locale')).toBe('zh-CN')
     expect(getSchemaMeta(getDbConnection(db), SCHEMA_META_KEYS.migratedFromJsonAt)).toBeTruthy()

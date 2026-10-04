@@ -104,7 +104,7 @@ function cleanupProgressCursorIsConsistent(
   if (!Number.isSafeInteger(progress.cleaned_message_count) || progress.cleaned_message_count < 0 ||
     !Number.isSafeInteger(progress.next_sequence) || progress.next_sequence < 0 ||
     (progress.scan_complete !== 0 && progress.scan_complete !== 1)) return false
-  const counts = conn.prepare(`SELECT COUNT(*) AS total,
+  const counts = conn.prepare(`SELECT COUNT(*) AS total, MIN(sequence) AS first_sequence,
       SUM(CASE WHEN content_storage_state='canonical-backed-only' THEN 1 ELSE 0 END) AS cleared,
       SUM(CASE WHEN content_storage_state='canonical-backed-only' AND content!='' THEN 1 ELSE 0 END) AS nonempty_cleared,
       SUM(CASE WHEN content_storage_state NOT IN ('canonical-backed-only','canonical-backed-dual-write') THEN 1 ELSE 0 END) AS unknown_state,
@@ -115,7 +115,7 @@ function cleanupProgressCursorIsConsistent(
     FROM messages WHERE session_id=?`).get(
       progress.next_sequence, progress.next_sequence, progress.after_message_id, progress.after_message_id ?? '',
       progress.next_sequence, progress.next_sequence, progress.after_message_id, progress.after_message_id, sessionId
-    ) as { total: number; cleared: number | null; nonempty_cleared: number | null; unknown_state: number | null;
+    ) as { total: number; first_sequence: number | null; cleared: number | null; nonempty_cleared: number | null; unknown_state: number | null;
       cleared_after_cursor: number | null; uncleared_before_cursor: number | null }
   const total = Number(counts.total)
   const cleared = Number(counts.cleared ?? 0)
@@ -124,7 +124,7 @@ function cleanupProgressCursorIsConsistent(
     Number(counts.cleared_after_cursor ?? 0) !== 0 || Number(counts.uncleared_before_cursor ?? 0) !== 0 ||
     (progress.scan_complete === 1 && cleared !== total) ||
     (progress.scan_complete === 0 && total > 0 && cleared === total)) return false
-  if (cleared === 0) return progress.next_sequence === 0 && progress.after_message_id === null
+  if (cleared === 0) return progress.next_sequence === Number(counts.first_sequence ?? 0) && progress.after_message_id === null
   if (!progress.after_message_id) return false
   const anchor = conn.prepare(`SELECT content,content_storage_state FROM messages
     WHERE session_id=? AND sequence=? AND id=?`).get(sessionId, progress.next_sequence, progress.after_message_id) as
@@ -147,9 +147,11 @@ function canonicalApiReadFeatureEnabled(db: AppDatabase): boolean {
 /** The global kill switch forces all per-session API reads back to the retained legacy copy. */
 function disableCanonicalReadForSession(db: AppDatabase, sessionId: string): void {
   const conn = getDbConnection(db)
+  if (!conn.prepare(`SELECT 1 FROM canonical_session_api_context_eligibility WHERE session_id=? UNION ALL
+      SELECT 1 FROM session_message_content_cutover WHERE session_id=? AND api_read_mode!='legacy' LIMIT 1`).get(sessionId, sessionId)) return
   conn.prepare('DELETE FROM canonical_session_api_context_eligibility WHERE session_id=?').run(sessionId)
   conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='legacy',updated_at=?
-    WHERE session_id=?`).run(Date.now(), sessionId)
+    WHERE session_id=? AND api_read_mode!='legacy'`).run(Date.now(), sessionId)
 }
 
 /** Enter the persisted write-stop fence only after checking that no queued or active turn can still write bodies. */

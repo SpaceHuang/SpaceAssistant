@@ -3,7 +3,7 @@ const os = require('node:os')
 const path = require('node:path')
 const { spawn } = require('node:child_process')
 const { randomUUID } = require('node:crypto')
-const { openDatabase, createSession, getMessage, listPersistedTurns } = require('../dist-electron/electron/database/index.js')
+const { openDatabase, createSession, getMessageSkeleton, listPersistedTurns } = require('../dist-electron/electron/database/index.js')
 const { createTurnCoordinatorStorage } = require('../dist-electron/electron/turnCoordinatorStorage.js')
 const { TurnRuntime } = require('../dist-electron/electron/turnRuntime.js')
 const { cleanupPersistedOrphansOnStartup } = require('../dist-electron/electron/shell/startupOrphanCleanup.js')
@@ -28,7 +28,7 @@ try {
   const storage = createTurnCoordinatorStorage(db)
   if (!storage.checkpoint(prepared.turnId, current.version, current.assistantMessage)) throw new Error('formal checkpoint rejected startup probe snapshot')
   const audited = []
-  const count = cleanupPersistedOrphansOnStartup({ listTurns: () => listPersistedTurns(db), getMessage: (id) => getMessage(db, id), cleanup: cleanupOrphanProcess, audit: (entry) => audited.push(entry) })
+  const count = cleanupPersistedOrphansOnStartup({ listTurns: () => listPersistedTurns(db), getMessageSkeleton: (id) => getMessageSkeleton(db, id), cleanup: cleanupOrphanProcess, audit: (entry) => audited.push(entry) })
   Promise.resolve(count).then((cleaned) => {
     let exited = false
     try { process.kill(child.pid, 0) } catch { exited = true }

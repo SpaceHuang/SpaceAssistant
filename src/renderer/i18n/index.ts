@@ -87,7 +87,7 @@ void i18n
     lng: initialLocale,
     fallbackLng: 'zh-CN',
     defaultNS: 'common',
-    ns: ['common', 'config', 'chat', 'errors', 'runtime', 'fileTree', 'search', 'feishu', 'wechat', 'wiki', 'detailPanel', 'contextUsage', 'notification', 'mcp', 'usageStats'],
+    ns: ['common', 'config', 'chat', 'errors', 'runtime', 'fileTree', 'search', 'feishu', 'wechat', 'wiki', 'detailPanel', 'contextUsage', 'notification', 'mcp', 'usageStats', 'toolReliability'],
     interpolation: { escapeValue: false },
     debug: import.meta.env.DEV && !import.meta.env.VITEST,
     detection: {

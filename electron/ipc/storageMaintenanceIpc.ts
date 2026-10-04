@@ -8,7 +8,7 @@ export function registerStorageMaintenanceIpc(ipcMain: IpcMain, ctx: AppIpcConte
   ipcMain.handle('storage:get-profile', () => collectSessionStorageProfile(ctx.db.filePath))
   ipcMain.handle('storage:clear-cache', () => clearSessionProjectionCaches(ctx.db))
   ipcMain.handle('storage:compact', (event) => compactSessionDatabase(ctx.db, ctx.getUserDataPath(), (progress) => {
-    event.sender.send('storage:maintenance-progress', progress)
+    if (!event.sender.isDestroyed()) event.sender.send('storage:maintenance-progress', progress)
   }))
 }
 

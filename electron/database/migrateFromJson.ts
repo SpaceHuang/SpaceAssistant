@@ -39,7 +39,7 @@ export function prepareSnapshotForMigration(snapshot: DbSnapshot): PreparedMigra
   const sessionsById = new Map<string, Session>()
   for (const session of snapshot.sessions) {
     if (session?.id && typeof session.id === 'string' && !sessionsById.has(session.id)) {
-      sessionsById.set(session.id, session)
+      sessionsById.set(session.id, { ...session, generation: session.generation?.trim() || randomUUID() })
     }
   }
 
@@ -111,10 +111,10 @@ function insertSession(conn: ReturnType<typeof getDbConnection>, session: Sessio
     .prepare(
       `INSERT INTO sessions (
         id, name, preview, model, llm_service_id, temperature, max_tokens,
-        created_at, updated_at, message_count, skills_state, metadata, schema_version, work_dir_profile_id
+        created_at, updated_at, message_count, skills_state, metadata, schema_version, work_dir_profile_id, generation
       ) VALUES (
         @id, @name, @preview, @model, @llmServiceId, @temperature, @maxTokens,
-        @createdAt, @updatedAt, @messageCount, @skillsState, @metadata, @schemaVersion, @workDirProfileId
+        @createdAt, @updatedAt, @messageCount, @skillsState, @metadata, @schemaVersion, @workDirProfileId, @generation
       )`
     )
     .run({
@@ -131,7 +131,8 @@ function insertSession(conn: ReturnType<typeof getDbConnection>, session: Sessio
       skillsState: JSON.stringify(skillsState),
       metadata: JSON.stringify(session.metadata ?? {}),
       schemaVersion: session.schemaVersion,
-      workDirProfileId: session.workDirProfileId ?? null
+      workDirProfileId: session.workDirProfileId ?? null,
+      generation: session.generation?.trim() || randomUUID()
     })
 }
 

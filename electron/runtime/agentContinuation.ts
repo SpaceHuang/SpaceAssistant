@@ -138,6 +138,15 @@ function rowToRecord(row: ContinuationRow, transcript: AgentContinuationRecord['
     targetTurnId: row.target_turn_id, targetStartToken: row.target_start_token, status: row.status, transcript }
 }
 
+function continuationContextMessages(transcript: ReturnType<typeof rebuildClaudeMessagesFromHistory>) {
+  const messages = toCanonicalModelMessages(transcript)
+  const lastIndexById = new Map<string, number>()
+  messages.forEach((message, index) => { if (message.role === 'assistant' && message.id) lastIndexById.set(message.id, index) })
+  return messages.map((message, index) => message.role === 'assistant' && message.id && lastIndexById.get(message.id) !== index
+    ? (({ id: _id, ...withoutId }) => withoutId)(message)
+    : message)
+}
+
 export function createOrGetAgentContinuation(input: {
   conn: DatabaseSync; snapshot: HistorySnapshot; sessionId: string; requestIdempotencyKey: string; createdBy: string
   frozenConfig: Record<string, unknown>; newId?: () => string; now?: () => number
@@ -176,7 +185,7 @@ export function createOrGetAgentContinuation(input: {
         eventId: `${retry.continuation_id}:context:${retry.target_invocation_id}`, idempotencyKey: `${retry.continuation_id}:context:${retry.target_invocation_id}`,
         kind: 'invocation-context-committed' as const,
         payload: {
-          messages: toCanonicalModelMessages(checkpoint.transcript),
+          messages: continuationContextMessages(checkpoint.transcript),
           continuationSource: { continuationId: retry.continuation_id, invocationId: retry.source_invocation_id, turnId: retry.source_turn_id, checkpointSequence: retry.checkpoint_sequence, checkpointSha256: retry.checkpoint_sha256 },
           requiredUserMessage: structuredClone(checkpoint.requiredUserMessage)
         }
@@ -200,7 +209,7 @@ export function createOrGetAgentContinuation(input: {
       idempotencyKey: `${record.continuation_id}:context`,
       kind: 'invocation-context-committed' as const,
       payload: {
-        messages: toCanonicalModelMessages(checkpoint.transcript),
+        messages: continuationContextMessages(checkpoint.transcript),
         continuationSource: {
           continuationId: record.continuation_id,
           invocationId: record.source_invocation_id,

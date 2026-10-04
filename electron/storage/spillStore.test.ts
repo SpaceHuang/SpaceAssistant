@@ -4,7 +4,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as agentLoggerModule from '../agentLogger/agentLogger'
-import { SpillContentUnavailableError, SpillRootFenceBusyError, createSpillStore, createSpillStoreForDatabase, reconcileSpillOrphansAgainstCanonicalHistory, runSourceTruthSpillGcMaintenance, runSpillRetentionMaintenance } from './spillStore'
+import { SpillContentUnavailableError, SpillRootFenceBusyError, createSpillStore, createSpillStoreForDatabase, readCanonicalSpillReferences, reconcileSpillOrphansAgainstCanonicalHistory, runSourceTruthSpillGcMaintenance, runSpillRetentionMaintenance } from './spillStore'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { openDatabase } from '../database'
 import { createSession, deleteSession, setConfigValue } from '../database/operations'
@@ -24,6 +24,49 @@ async function createStore() {
   roots.push(root)
   return { root, store: createSpillStore(root) }
 }
+
+describe('spill reference scan', () => {
+  it('reads event and transcript rows in bounded batches while collecting every descriptor', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const descriptor = { version: 1, kind: 'source-of-truth', locator: '00000000-0000-4000-8000-000000000010.spill', byteLength: 1,
+      sha256: 'a'.repeat(64), createdAt: 1, head: 'x', tail: 'x' }
+    conn.exec(`CREATE TABLE IF NOT EXISTS session_transcript_entries(
+      session_id TEXT NOT NULL,turn_id TEXT NOT NULL,base_version INTEGER NOT NULL,version INTEGER NOT NULL,outcome TEXT NOT NULL,
+      messages_json TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(session_id,turn_id),UNIQUE(session_id,version))`)
+    for (let index = 1; index <= 5; index += 1) {
+      conn.prepare(`INSERT INTO agent_history_streams(invocation_id,version,schema_version) VALUES(?,?,1)`).run(`scan-${index}`, 1)
+      conn.prepare(`INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at)
+        VALUES(?,1,?,?,?,1,'invocation-context-committed',?,?)`).run(`scan-${index}`, `e-${index}`, `i-${index}`, `t-${index}`, JSON.stringify({ descriptor }), index)
+    }
+    conn.prepare(`INSERT INTO session_transcript_entries(session_id,turn_id,base_version,version,outcome,messages_json,created_at)
+      VALUES('session','turn',0,1,'completed',?,1)`).run(JSON.stringify({ descriptor }))
+
+    const query = conn.prepare.bind(conn)
+    const batchSizes: number[] = []
+    conn.prepare = ((sql: string) => {
+      const statement = query(sql)
+      if (!sql.includes('payload_json AS value')) return statement
+      return { iterate: (...args: unknown[]) => {
+        const source = statement.iterate(...args)
+        return (function* () {
+          while (true) {
+            const batch = source.next()
+            if (batch.done) return
+            batchSizes.push(1)
+            yield batch.value
+          }
+        })()
+      } }
+    }) as typeof conn.prepare
+
+    const result = readCanonicalSpillReferences(conn)
+    expect(result.descriptors).toHaveLength(6)
+    expect(result.referencedLocators).toEqual(new Set([descriptor.locator]))
+    expect(batchSizes).toEqual(Array(5).fill(1))
+    db.close()
+  })
+})
 
 describe('spillStore P-5 protocol', () => {
   it('serializes independent spill-store instances through the shared file fence', async () => {

@@ -29,7 +29,7 @@ function activeSessionTurnCount(db: AppDatabase): number {
 }
 
 function maintenanceBusyError(): Error & { code: string } {
-  return Object.assign(new Error('database maintenance requires all session turns to be idle'), { code: 'STORAGE_MAINTENANCE_BUSY' })
+  return Object.assign(new Error('STORAGE_MAINTENANCE_BUSY: database maintenance requires all session turns to be idle'), { code: 'STORAGE_MAINTENANCE_BUSY' })
 }
 
 export async function compactSessionDatabase(
@@ -64,6 +64,7 @@ export async function compactSessionDatabase(
     const originalFreelist = Number((conn.prepare('PRAGMA freelist_count').get() as { freelist_count: number }).freelist_count)
     await yieldToEventLoop()
     onProgress?.({ phase: 'vacuum' })
+    if (activeSessionTurnCount(db) > 0) throw maintenanceBusyError()
     conn.exec('PRAGMA optimize')
     conn.exec('PRAGMA auto_vacuum=INCREMENTAL')
     conn.exec('VACUUM')

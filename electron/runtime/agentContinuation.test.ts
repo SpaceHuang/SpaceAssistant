@@ -56,6 +56,31 @@ describe('agent continuation checkpoint', () => {
     conn.close()
   })
 
+  it('多轮工具调用保留模型上下文，并按稳定 assistant ID 只镜像最终正文', () => {
+    const conn = db()
+    const sessionId = 'continuation-tool-loop-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('assistant-turn',?,'assistant','stale assistant body','completed',1,1,1)`).run(sessionId)
+    const source = snapshot()
+    for (const item of source.events) {
+      if (item.kind === 'model-response-committed') {
+        ;(item.payload as { message: { id: string } }).message.id = 'assistant-turn'
+      }
+    }
+
+    const continuation = createOrGetAgentContinuation({ conn, snapshot: source, sessionId, requestIdempotencyKey: 'tool-loop-context', createdBy: 'u', frozenConfig: {} })
+    const context = new SqliteAgentHistory(conn, 1, Date.now, sessionId).readSync(continuation.targetInvocationId).events[0]
+    const messages = (context?.payload as { messages: Array<{ role: string; id?: string; content?: unknown; toolCalls?: unknown[] }> }).messages
+
+    expect(messages.filter((message) => message.role === 'assistant')).toHaveLength(2)
+    expect(messages.filter((message) => message.role === 'assistant').map((message) => message.id)).toEqual([undefined, 'assistant-turn'])
+    expect(messages).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'tool', toolCallId: 'tool-1', content: 'found' })]))
+    expect(conn.prepare("SELECT content FROM messages WHERE id='assistant-turn'").get()).toEqual({ content: 'done' })
+    conn.close()
+  })
+
   it('显式 retry 的 context 镜像失败时回滚 retry 身份、History 与旧正文', () => {
     const conn = db()
     const sessionId = 'continuation-retry-mirror-session'

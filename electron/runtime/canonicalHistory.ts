@@ -232,6 +232,16 @@ export type CanonicalSessionSnapshot = Readonly<{
  */
 export function canonicalSessionTranscriptEvents(events: readonly HistoryEvent[]): HistoryEvent[] {
   const transcriptEvents: HistoryEvent[] = []
+  const latestResponseByStableId = new Map<string, number>()
+  for (const event of events) {
+    if (event.kind === 'model-response-committed') {
+      const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
+        ? event.payload as Record<string, unknown> : undefined
+      const message = payload?.message && typeof payload.message === 'object' && !Array.isArray(payload.message)
+        ? payload.message as Record<string, unknown> : undefined
+      if (typeof message?.id === 'string' && message.id.trim()) latestResponseByStableId.set(message.id, event.sequence)
+    }
+  }
   for (const event of events) {
     if (event.kind === 'tool-call-started' || event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') continue
     if (event.kind === 'model-response-committed') {
@@ -240,6 +250,7 @@ export function canonicalSessionTranscriptEvents(events: readonly HistoryEvent[]
       const rawMessage = payload?.message
       const message = rawMessage && typeof rawMessage === 'object' && !Array.isArray(rawMessage)
         ? rawMessage as Record<string, unknown> : undefined
+      if (message && typeof message.id === 'string' && message.id.trim() && latestResponseByStableId.get(message.id) !== event.sequence) continue
       if (payload && message && Object.hasOwn(message, 'toolCalls')) {
         const { toolCalls: _toolCalls, ...bodyMessage } = message
         transcriptEvents.push({ ...event, payload: { ...payload, message: bodyMessage } })

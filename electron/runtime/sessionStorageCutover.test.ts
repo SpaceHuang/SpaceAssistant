@@ -385,6 +385,29 @@ describe('Phase 5.3 per-session canonical API read cutover', () => {
     db.close()
   })
 
+  it('starts cleanup at the first persisted sequence when earlier sequence values are absent', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'cleanup sequence gap', model: 'test' })
+    const conn = getDbConnection(db)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence,content_storage_state)
+      VALUES(?,?,?,?,?,?,?,?,?)`).run('cleanup-gap-user', session.id, 'user', 'question', 'sent', 1, 1, 7, 'legacy')
+    await writeCanonicalMessages(db, session.id, [
+      { id: 'cleanup-gap-user', role: 'user', content: 'question', timestamp: 1 }
+    ])
+    expect(certifyCanonicalSessionApiRead(db, session.id).status).toBe('eligible')
+    const { enableCanonicalSessionWriteAuthority } = await import('./sessionContentWriteAuthority')
+    expect(enableCanonicalSessionWriteAuthority(db, session.id).status).toBe('enabled')
+
+    expect(markSessionMessageContentWriteStopped(db, session.id)).toBe(true)
+    expect(conn.prepare('SELECT next_sequence,after_message_id FROM session_message_content_cleanup_progress WHERE session_id=?')
+      .get(session.id)).toEqual({ next_sequence: 7, after_message_id: null })
+    expect(beginSessionMessageContentCleanup(db, session.id)).toBe(true)
+    expect(clearNextSessionMessageContentBatch(db, session.id, 1)).toMatchObject({
+      status: 'complete', cleanedMessageCount: 1, nextSequence: 7, afterMessageId: 'cleanup-gap-user'
+    })
+    db.close()
+  })
+
   it('refuses write-stop when any message is unsealed or the full canonical transcript has drifted', async () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'write-stop integrity fence', model: 'test' })

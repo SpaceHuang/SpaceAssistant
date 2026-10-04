@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { commitCompactionAcrossStores, foldClaudeSessionSnapshots, isCanonicalProjectionWatermarkValid, toCanonicalModelMessages } from './canonicalHistory'
+import { canonicalSessionTranscriptEvents, commitCompactionAcrossStores, foldClaudeSessionSnapshots, isCanonicalProjectionWatermarkValid, toCanonicalModelMessages } from './canonicalHistory'
 import { rebuildClaudeMessagesFromHistory } from './canonicalHistory'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
 import { buildClaudeToolChatMessages } from '../../src/shared/claudeToolHistory'
@@ -370,6 +370,20 @@ describe('rebuildClaudeMessagesFromHistory', () => {
 
     expect(canonical.map(({ id }) => id)).toEqual(['user-stable-id', 'assistant-stable-id'])
     expect(rebuilt.map(({ id }) => id)).toEqual(['user-stable-id', 'assistant-stable-id'])
+  })
+})
+
+describe('canonicalSessionTranscriptEvents', () => {
+  it('folds same-turn assistant responses with one stable UI identity to the final body', () => {
+    const base = { invocationId: 'inv-1', turnId: 'turn-1', schemaVersion: 1, idempotencyKey: 'i', payload: {} }
+    const projected = canonicalSessionTranscriptEvents([
+      { ...base, sequence: 1, eventId: 'e1', kind: 'model-response-committed', payload: { message: { role: 'assistant', id: 'a1', content: 'checking', toolCalls: [{ id: 'tool-1', name: 'lookup', input: {} }] } } },
+      { ...base, sequence: 2, eventId: 'e2', kind: 'tool-call-started', payload: { toolCallId: 'tool-1' } },
+      { ...base, sequence: 3, eventId: 'e3', kind: 'tool-call-finished', payload: { toolCallId: 'tool-1', replayContent: 'found' } },
+      { ...base, sequence: 4, eventId: 'e4', kind: 'model-response-committed', payload: { message: { role: 'assistant', id: 'a1', content: 'done' } } }
+    ] as HistoryEvent[])
+
+    expect(rebuildClaudeMessagesFromHistory(projected)).toEqual([{ role: 'assistant', id: 'a1', content: 'done' }])
   })
 })
 

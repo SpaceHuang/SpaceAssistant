@@ -923,7 +923,7 @@
     "loadFailed": "存储用量读取失败",
     "operationFailed": "存储维护失败，请稍后重试",
     "busy": "仍有会话运行中，请等待会话结束后再压缩",
-    "clearSuccess": "已清理 {{count}} 条缓存记录",
+    "clearSuccess": "已清除 {{count}} 条缓存记录",
     "compactSuccess": "数据库已压缩：{{before}} → {{after}}",
     "phase": { "archive": "正在归档数据库与 spill 文件…", "vacuum": "正在整理数据库…", "reclaim": "正在回收空间…", "complete": "维护完成" }
   },

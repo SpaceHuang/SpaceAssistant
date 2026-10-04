@@ -10,6 +10,18 @@ import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { getProjectedApiContextBaseline, getProjectedChatMessagePage, getProjectedMessage, getProjectedMessages, getProjectedMessagesPageWithSequence, getProjectedRecentTurnRoutingMessages, getProjectedSearchCorpusPage, readSessionTranscriptProjection, refreshSessionTranscriptProjectionCache, resolveProjectedRetryContext, searchProjectedMessages } from './sessionTranscriptProjection'
 
 describe('session transcript projection P2 read path', () => {
+  it('projects only the requested legacy message window', () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'paged projection', model: 'test' })
+    appendMessage(db, { id: 'page-0', sessionId: session.id, role: 'user', content: 'zero', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'page-1', sessionId: session.id, role: 'assistant', content: 'one', timestamp: 2, status: 'completed' })
+    appendMessage(db, { id: 'page-2', sessionId: session.id, role: 'user', content: 'two', timestamp: 3, status: 'sent' })
+
+    expect(getProjectedMessages(db, session.id, 1, 1).map(({ id, content }) => ({ id, content })))
+      .toEqual([{ id: 'page-1', content: 'one' }])
+    db.close()
+  })
+
   it('seeds the canonical empty-session projection at creation with the persisted generation', () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'empty projection seed', model: 'test' })

@@ -63,7 +63,23 @@ describe('session storage maintenance', () => {
     const conn = getDbConnection(temp.db)
     conn.prepare(`INSERT INTO session_execution_claims(session_id,turn_id,owner_id,generation,status,enqueued_at,updated_at)
       VALUES('s','t','owner',1,'executing',1,1)`).run()
-    await expect(compactSessionDatabase(temp.db, path.dirname(temp.dbPath))).rejects.toMatchObject({ code: 'STORAGE_MAINTENANCE_BUSY' })
+    await expect(compactSessionDatabase(temp.db, path.dirname(temp.dbPath))).rejects.toMatchObject({ code: 'STORAGE_MAINTENANCE_BUSY', message: expect.stringContaining('STORAGE_MAINTENANCE_BUSY') })
+    temp.cleanup()
+  })
+
+  it('rechecks the turn fence after yielding and before VACUUM starts', async () => {
+    const temp = createTempDatabase('storage-maintenance-start-race-')
+    const conn = getDbConnection(temp.db)
+    let startedTurn = false
+
+    await expect(compactSessionDatabase(temp.db, path.dirname(temp.dbPath), (step) => {
+      if (step.phase !== 'vacuum' || startedTurn) return
+      startedTurn = true
+      conn.prepare(`INSERT INTO session_execution_claims(session_id,turn_id,owner_id,generation,status,enqueued_at,updated_at)
+        VALUES('s','late-turn','owner',1,'executing',1,1)`).run()
+    })).rejects.toMatchObject({ code: 'STORAGE_MAINTENANCE_BUSY' })
+
+    expect(startedTurn).toBe(true)
     temp.cleanup()
   })
 })

@@ -202,10 +202,11 @@ async function syncDirectory(root: string): Promise<void> {
 
 /** Scan every canonical History payload before orphan deletion; malformed rows fail closed. */
 export function readCanonicalSpillReferences(conn: DatabaseSync): { descriptors: SpillDescriptor[]; referencedLocators: Set<string> } {
-  const rows = conn.prepare(`SELECT payload_json AS value FROM agent_history_events
-    UNION ALL SELECT messages_json AS value FROM session_transcript_entries`).all() as Array<{ value: string }>
+  const events = conn.prepare('SELECT payload_json AS value FROM agent_history_events').iterate() as Iterable<{ value: string }>
+  const transcriptEntries = conn.prepare('SELECT messages_json AS value FROM session_transcript_entries').iterate() as Iterable<{ value: string }>
   const descriptors: SpillDescriptor[] = []
-  for (const row of rows) collectSpillDescriptorsStrict(JSON.parse(row.value) as unknown, descriptors)
+  for (const row of events) collectSpillDescriptorsStrict(JSON.parse(row.value) as unknown, descriptors)
+  for (const row of transcriptEntries) collectSpillDescriptorsStrict(JSON.parse(row.value) as unknown, descriptors)
   return { descriptors, referencedLocators: new Set(descriptors.map(({ locator }) => locator)) }
 }
 

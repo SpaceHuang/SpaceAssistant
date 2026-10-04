@@ -52,6 +52,7 @@ export function StorageSettingsTab() {
       message.success(t('storage.compactSuccess', { before: formatBytes(result.bytesBefore), after: formatBytes(result.bytesAfter) }))
       await refresh()
     } catch (reason) {
+      setProgress(null)
       setError(reason instanceof Error && reason.message.includes('STORAGE_MAINTENANCE_BUSY') ? t('storage.busy') : t('storage.operationFailed'))
     }
   }
