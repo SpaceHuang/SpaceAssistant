@@ -784,6 +784,31 @@ describe('ToolCallCard toolkit 凭据净化（v2 评审 R1 / v3 建议 5 回归�
     expect(container.textContent).toContain('scys')
   })
 })
+
+it('renders MCP request before execution timing and result', async () => {
+  const { container } = render(
+    <ToolCallCard
+      record={{
+        id: 'mcp-order',
+        toolName: 'mcp_analytics_query',
+        input: { sql_command: 'SELECT * FROM events' },
+        status: 'completed',
+        riskLevel: 'low',
+        startedAt: 1,
+        completedAt: 2,
+        result: { success: true, data: { content: [{ type: 'text', text: '{"ok":true}' }] } }
+      }}
+      messageId="mcp-order-message"
+    />
+  )
+  fireEvent.click(container.querySelector('.tool-row__main')!)
+  const detail = container.querySelector('.tool-row-detail__inner')!
+  const request = detail.querySelector('[data-search-fragment-id*="tool-input"]')
+  const result = detail.querySelector('[data-search-fragment-id*="tool-result"]')
+  expect(request).toBeTruthy()
+  expect(result).toBeTruthy()
+  expect(detail.textContent!.indexOf('SELECT * FROM events')).toBeLessThan(detail.textContent!.indexOf('复制结果'))
+})
 it('completed 展开态的 paramPreview 凭据不落 DOM（v2 评审 R1 主路径回归）', async () => {
     const scrollIntoView = vi.fn()
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView })

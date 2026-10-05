@@ -242,6 +242,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   const toolCallsRef = useRef(toolCalls)
   toolCallsRef.current = toolCalls
   const [executingHint, setExecutingHint] = useState(false)
+  const [mcpRequestExpanded, setMcpRequestExpanded] = useState(false)
   const [terminalFallbackPlain, setTerminalFallbackPlain] = useState(false)
   const scrollbackPatchedRef = useRef(false)
   const shellOutputMode = resolveEffectiveShellOutputMode(shellConfig, sessionMetadata)
@@ -735,6 +736,15 @@ export const ToolCallCard = memo(function ToolCallCard({
         >
           <div className="tool-row-detail__inner">
           {approvalReasonLabel ? <div className="tool-row-detail__message">{approvalReasonLabel}</div> : null}
+          {mcp && showDetail && Object.keys(record.input).length > 0 ? (
+            <div className="tool-row-request">
+              <div className="tool-row-request__heading">{t('mcp.request')}</div>
+              <pre className="sa-chat-inset-code sa-command-inset" data-search-fragment-id={inputFragmentId}>
+                {searchInputOwnsFragment || mcpRequestExpanded ? paramPreview : truncate(paramPreview, 1600)}
+              </pre>
+              {paramPreview.length > 1600 ? <Button size="small" type="text" className="tool-row-detail__action" onClick={() => setMcpRequestExpanded((value) => !value)}>{mcpRequestExpanded ? t('mcp.collapseRequest') : t('mcp.expandRequest')}</Button> : null}
+            </div>
+          ) : null}
           {mcp && showDetail && durationPhases.totalMs !== undefined ? (
             <div className="tool-row-detail__message tool-row__duration-phases">
               {durationPhases.waitingMs !== undefined ? `${t('mcp.waitingConfirm', { value: formatToolDuration(durationPhases.waitingMs) })} · ` : ''}
@@ -857,13 +867,13 @@ export const ToolCallCard = memo(function ToolCallCard({
             </pre>
           ) : null}
 
-          {(record.status === 'completed' &&
+          {!mcp && ((record.status === 'completed' &&
             !resultStr &&
             !fileTool &&
             !showShellCompletedOutput &&
             record.toolName !== 'run_script' &&
             Object.keys(record.input).length > 0) ||
-          showSearchInput ? (
+          showSearchInput) ? (
             <pre
               className="sa-chat-inset-code sa-command-inset"
               data-search-fragment-id={inputFragmentId}

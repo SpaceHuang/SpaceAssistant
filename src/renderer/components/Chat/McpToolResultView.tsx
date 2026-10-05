@@ -27,6 +27,47 @@ function parseJsonResult(text: string): string | undefined {
   }
 }
 
+function parseJsonValue(text: string): unknown | undefined {
+  try {
+    const value = JSON.parse(text)
+    return value !== null && typeof value === 'object' ? value : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function formatJsonCell(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value === null) return 'null'
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return maskSensitiveText(JSON.stringify(value, null, 2))
+}
+
+function JsonValueRows({ value, depth = 0 }: { value: unknown; depth?: number }) {
+  const canExpand = depth < 1
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span className="mcp-json-table__empty">[]</span>
+    if (canExpand && value.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
+      return <div className="mcp-json-table__array">{value.map((item, index) => <section className="mcp-json-table__item" key={index}><div className="mcp-json-table__item-label">[{index}]</div><JsonValueRows value={item} depth={depth + 1} /></section>)}</div>
+    }
+    if (canExpand && value.every((item) => item === null || typeof item !== 'object')) {
+      return <span>{value.map(formatJsonCell).join(', ')}</span>
+    }
+    return <pre className="mcp-json-table__compact">{formatJsonCell(value)}</pre>
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+    if (entries.length === 0) return <span className="mcp-json-table__empty">{'{}'}</span>
+    return <table className="mcp-json-table"><tbody>{entries.map(([key, child]) => (
+      <tr key={key}>
+        <th scope="row">{maskSensitiveText(key)}</th>
+        <td>{canExpand && child && typeof child === 'object' ? <JsonValueRows value={child} depth={depth + 1} /> : formatJsonCell(child)}</td>
+      </tr>
+    ))}</tbody></table>
+  }
+  return <span>{formatJsonCell(value)}</span>
+}
+
 
 function highlight(text: string, target: ChatSearchActiveTarget | null, fragmentId?: string): ReactNode {
   if (!target || target.fragmentId !== fragmentId || target.end <= target.start) return text
@@ -57,6 +98,8 @@ export function McpToolResultView({ display, fragmentId, messageId, toolUseId, a
   const visibleText = needsExpand && !expanded ? lines.slice(0, 20).join('\n') : display.text
   const searchableText = [display.text, display.structuredText].filter(Boolean).join('\n\n')
   const jsonText = !needsExpand || expanded ? parseJsonResult(visibleText) : undefined
+  const parsedTextJson = !needsExpand || expanded ? parseJsonValue(visibleText) : undefined
+  const structuredJson = display.structured ?? parsedTextJson
   if (display.isEmpty) return <span className="tool-row-detail__message">{t('mcp.resultEmpty')}</span>
   return (
     <div className="mcp-tool-result">
@@ -64,7 +107,8 @@ export function McpToolResultView({ display, fragmentId, messageId, toolUseId, a
       {display.artifactId && display.artifactOwner ? <Button size="small" type="text" onClick={() => void openArtifact()}>{t('mcp.openArtifact')}</Button> : null}
       {openFailed ? <span className="tool-row-detail__message">{t('mcp.openFailed')}</span> : null}
       {huge ? <span className="tool-row-detail__message">{t('mcp.resultTooLarge')}</span> : null}
-      {!huge && (activeSearchTarget ? searchableText : display.text) ? (activeSearchTarget ? <pre className="sa-chat-inset-code sa-command-inset" data-search-fragment-id={fragmentId}>{highlight(searchableText, activeSearchTarget, fragmentId)}</pre> : display.displayMode === 'long' ? <pre className="sa-chat-inset-code sa-command-inset" data-search-fragment-id={fragmentId}>{visibleText}</pre> : jsonText ? <ChatMarkdown content={`\`\`\`json\n${jsonText}\n\`\`\``} messageId={messageId} toolUseId={toolUseId} fragmentKindPrefix="tool-result" allowLocalFileLinks={false} enableMath={false} sanitizeText={maskSensitiveText} /> : isMarkdownLike(visibleText) ? <ChatMarkdown content={visibleText} messageId={messageId} toolUseId={toolUseId} fragmentKindPrefix="tool-result" allowLocalFileLinks={false} enableMath={false} sanitizeText={maskSensitiveText} /> : <pre className="sa-chat-inset-code sa-command-inset" data-search-fragment-id={fragmentId}>{visibleText}</pre>) : null}
+      {!huge && structuredJson !== undefined && !activeSearchTarget ? <div data-search-fragment-id={fragmentId}><JsonValueRows value={structuredJson} /></div> : null}
+      {!huge && structuredJson === undefined && (activeSearchTarget ? searchableText : display.text) ? (activeSearchTarget ? <pre className="sa-chat-inset-code sa-command-inset" data-search-fragment-id={fragmentId}>{highlight(searchableText, activeSearchTarget, fragmentId)}</pre> : display.displayMode === 'long' ? <pre className="sa-chat-inset-code sa-command-inset" data-search-fragment-id={fragmentId}>{visibleText}</pre> : jsonText ? <ChatMarkdown content={`\`\`\`json\n${jsonText}\n\`\`\``} messageId={messageId} toolUseId={toolUseId} fragmentKindPrefix="tool-result" allowLocalFileLinks={false} enableMath={false} sanitizeText={maskSensitiveText} /> : isMarkdownLike(visibleText) ? <ChatMarkdown content={visibleText} messageId={messageId} toolUseId={toolUseId} fragmentKindPrefix="tool-result" allowLocalFileLinks={false} enableMath={false} sanitizeText={maskSensitiveText} /> : <pre className="sa-chat-inset-code sa-command-inset" data-search-fragment-id={fragmentId}>{visibleText}</pre>) : null}
       {!huge && needsExpand && !expanded ? <Button size="small" type="text" onClick={() => setExpanded(true)}>{t('mcp.expandAll', { count: lines.length })}</Button> : null}
       {display.blocks.filter((block) => block.kind !== 'text').map((block, index) => (
         <div key={index} className="tool-row-detail__message">
@@ -76,7 +120,7 @@ export function McpToolResultView({ display, fragmentId, messageId, toolUseId, a
           {block.kind === 'unknown' ? block.raw : null}
         </div>
       ))}
-      {!huge && (display.structuredText ?? display.structured !== undefined) ? <pre className="sa-chat-inset-code sa-command-inset">{display.structuredText ?? maskSensitiveText(JSON.stringify(display.structured, null, 2))}</pre> : null}
+      {!huge && display.structuredText && !display.structured && !parsedTextJson ? <pre className="sa-chat-inset-code sa-command-inset">{display.structuredText}</pre> : null}
     </div>
   )
 }

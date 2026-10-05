@@ -87,6 +87,9 @@
     }
   },
   "mcp": {
+    "request": "请求",
+    "expandRequest": "查看完整请求",
+    "collapseRequest": "收起请求",
     "copyResult": "复制结果",
     "openArtifact": "打开完整内容",
     "openFailed": "无法打开完整内容",

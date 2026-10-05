@@ -87,6 +87,9 @@
     }
   },
   "mcp": {
+    "request": "Request",
+    "expandRequest": "View full request",
+    "collapseRequest": "Collapse request",
     "copyResult": "Copy result",
     "openArtifact": "Open full result",
     "openFailed": "Failed to open full content",

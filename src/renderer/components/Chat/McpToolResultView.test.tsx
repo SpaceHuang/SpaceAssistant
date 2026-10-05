@@ -25,10 +25,29 @@ describe('McpToolResultView', () => {
     expect(container.querySelector('[data-search-fragment-id="message-1|tool-result-markdown-text:tool-1:0:0"]')).toBeTruthy()
   })
 
-  it('renders JSON text through the JSON code block path', () => {
+  it('renders JSON text as a field table', () => {
     const { container } = render(<McpToolResultView display={{ isEmpty: false, text: '{"hot":{"title":"x"}}', displayMode: 'short', blocks: [{ kind: 'text', text: '{"hot":{"title":"x"}}' }] }} messageId="message-json" toolUseId="tool-json" />)
-    expect(container.querySelector('[data-search-fragment-id*="tool-result-code:tool-json"]')).toBeTruthy()
-    expect(screen.getByText(/title/)).toBeTruthy()
+    expect(container.querySelector('.mcp-json-table')?.textContent).toContain('title')
+    expect(container.querySelector('.mcp-json-table')?.textContent).toContain('x')
+  })
+
+  it('renders structured JSON as a field table with deeper values kept compact', () => {
+    const { container } = render(<McpToolResultView display={{ isEmpty: false, text: '', structured: { ok: true, meta: { queryId: '42', nested: { hidden: true } }, rows: [{ id: 1, name: 'Ada' }, { id: 2, name: 'Lin' }] }, structuredText: '{...}', displayMode: 'short', blocks: [] }} />)
+    const table = container.querySelector('.mcp-json-table')
+    expect(table).toBeTruthy()
+    expect(table?.textContent).toContain('meta')
+    expect(table?.textContent).toContain('queryId')
+    expect(table?.textContent).toContain('rows')
+    expect(table?.textContent).toContain('Ada')
+    expect(table?.textContent).toContain('"hidden": true')
+    expect(screen.queryByRole('button', { name: '查看 JSON 详情' })).toBeNull()
+  })
+
+  it('renders a JSON object returned as text in the same table view', () => {
+    const { container } = render(<McpToolResultView display={{ isEmpty: false, text: '{"ok":true,"ids":{"queueId":"q-1"}}', displayMode: 'short', blocks: [] }} />)
+    expect(container.querySelector('.mcp-json-table')?.textContent).toContain('queueId')
+    expect(container.querySelector('.mcp-json-table')?.textContent).toContain('q-1')
+    expect(container.querySelector('.sa-shiki-block')).toBeNull()
   })
 
   it('shows a 20-line preview before expanding medium results', async () => {

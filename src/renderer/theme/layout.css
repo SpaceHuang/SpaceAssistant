@@ -1958,6 +1958,75 @@
   word-break: break-word;
 }
 
+.tool-row-request {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tool-row-request__heading {
+  color: var(--sa-text-secondary);
+  font-size: var(--sa-chat-font-meta);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.mcp-json-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--sa-text);
+  font-size: var(--sa-chat-font-body);
+  line-height: var(--sa-chat-line-body);
+}
+
+.mcp-json-table th,
+.mcp-json-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--sa-border);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.mcp-json-table th {
+  width: 1%;
+  color: var(--sa-text-secondary);
+  font-family: var(--sa-font-mono);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.mcp-json-table__array,
+.mcp-json-table__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mcp-json-table__item + .mcp-json-table__item {
+  padding-top: 5px;
+  border-top: 1px solid var(--sa-border);
+}
+
+.mcp-json-table__item-label,
+.mcp-json-table__empty {
+  color: var(--sa-text-tertiary);
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-chat-font-meta);
+}
+
+.mcp-json-table__compact {
+  max-height: 160px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--sa-font-mono);
+  font-size: var(--sa-chat-font-meta);
+}
+
 /* 详情浅底已承担容器层级，内部代码和输出不再叠加边框。 */
 .tool-row--expanded .tool-row-detail__inner > .sa-command-inset,
 .tool-row--expanded .tool-row-detail__inner > .sa-chat-inset-code,
