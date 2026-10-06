@@ -652,7 +652,9 @@ export function projectToolResultForSink(
   const safeUserMessage = typeof result.userMessage === 'string' ? sanitizeAgentText(result.userMessage).text : undefined
   return {
     success: result.success,
-    ...(safeError && (!processData || STABLE_CODE_RE.test(safeError)) ? { error: safeError } : processData ? { error: 'TOOL_EXECUTION_FAILED' } : {}),
+    ...(safeError && (!processData || STABLE_CODE_RE.test(safeError))
+      ? { error: safeError }
+      : processData && safeError ? { error: 'TOOL_EXECUTION_FAILED' } : {}),
     ...(safeUserMessage ? { userMessage: safeUserMessage } : {}),
     ...(result.decisionRuleId ? { decisionRuleId: result.decisionRuleId } : {}),
     ...(result.autoApprovedWrite ? { autoApprovedWrite: result.autoApprovedWrite } : {}),

@@ -171,6 +171,30 @@ describe('process result projections', () => {
     }, { processTool: true })
 
     expect(projected.data).toEqual({ status: 'succeeded', exitCode: 0 })
+    expect(projected).not.toHaveProperty('error')
+  })
+
+  it('只在进程结果实际有错误时才保留或生成错误码', () => {
+    const failedWithStableCode = projectAgentToolResultForSink({
+      success: false,
+      error: 'SHELL_PROCESS_EXIT',
+      data: { status: 'failed', exitCode: 1 }
+    }, { processTool: true })
+    expect(failedWithStableCode.error).toBe('SHELL_PROCESS_EXIT')
+
+    const failedWithUnstableText = projectAgentToolResultForSink({
+      success: false,
+      error: 'permission denied by the shell',
+      data: { status: 'failed', exitCode: 1 }
+    }, { processTool: true })
+    expect(failedWithUnstableText.error).toBe('TOOL_EXECUTION_FAILED')
+
+    const succeededWithoutError = projectAgentToolResultForSink({
+      success: true,
+      data: { status: 'succeeded', exitCode: 0 }
+    }, { processTool: true })
+    expect(succeededWithoutError.success).toBe(true)
+    expect(succeededWithoutError).not.toHaveProperty('error')
   })
 
   it('普通工具和 MCP 结果不触发进程终态校验，也不丢弃业务字段', () => {
