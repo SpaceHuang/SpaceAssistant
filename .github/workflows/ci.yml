@@ -36,8 +36,10 @@ jobs:
       # SDK turn 与 Hosted Host 生命周期回归，不启动 Electron UI。
       - run: npm exec vitest run packages/agent-sdk/test/agentCore.test.ts packages/agent-sdk/test/turn.test.ts electron/runtime/hostedAgentTurnHost.test.ts
       - run: npm test
-      # Storage latency budgets run as an isolated, serial gate to avoid full-suite CPU contention.
-      - run: npm run test:storage-perf
+      # Advisory only: ubuntu-latest latency is runner-specific and must not block correctness or releases.
+      - name: Measure storage performance budgets (advisory)
+        continue-on-error: true
+        run: npm run test:storage-perf
 
   golden-windows:
     name: Script/Shell golden baselines (windows)

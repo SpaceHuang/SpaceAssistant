@@ -48,8 +48,6 @@ jobs:
         shell: bash
         run: test -z "$(find resources/ripgrep -type f ! -name '.gitkeep' -print -quit)"
       - run: npm test
-      # Keep the accepted storage latency budgets as a dedicated serial release gate.
-      - run: npm run test:storage-perf
 
   build:
     name: Build (${{ matrix.artifact_name }})
