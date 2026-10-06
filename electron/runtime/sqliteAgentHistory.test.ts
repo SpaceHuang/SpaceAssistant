@@ -1957,6 +1957,23 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
+  it('limits an incomplete recovery census to streams without a terminal event', () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    const insertStream = conn.prepare('INSERT INTO agent_history_streams(invocation_id,version,schema_version,session_id) VALUES(?,1,1,?)')
+    const insertEvent = conn.prepare(`INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at)
+      VALUES(?,1,?,?,?,1,?,'{}',1)`)
+    insertStream.run('already-complete', 'complete-session')
+    insertEvent.run('already-complete', 'already-complete:terminal', 'already-complete:terminal-key', 'complete-turn', 'invocation-completed')
+    insertStream.run('still-running', 'running-session')
+    insertEvent.run('still-running', 'still-running:start', 'still-running:start-key', 'running-turn', 'turn-started')
+
+    expect(conn.prepare(`SELECT status FROM canonical_history_recovery_work_migration
+      WHERE migration_key='active-invocations-v1'`).get()).toEqual({ status: 'pending' })
+    expect(history.listStartupRecoveryWorkset()).toEqual([{ invocationId: 'still-running', sessionId: 'running-session' }])
+    conn.close()
+  })
+
   it('resumes the bounded recovery-work census after reopen and keeps streams inserted behind its cursor', async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'history-recovery-work-resume-'))
     const dbPath = path.join(directory, 'history.db')
@@ -2013,6 +2030,12 @@ describe('SqliteAgentHistory', () => {
     expect(conn.prepare("SELECT status, attempts FROM canonical_projection_repairs WHERE invocation_id='terminal-retry-invocation'").get())
       .toEqual({ status: 'pending', attempts: 1 })
 
+    const skippedDuringBackoff = vi.fn(async () => undefined)
+    await new SqliteAgentHistory(conn).recoverInterruptedInvocations({ repairInvocationTerminal: skippedDuringBackoff })
+    expect(skippedDuringBackoff).not.toHaveBeenCalled()
+    conn.prepare("UPDATE canonical_projection_repairs SET updated_at=? WHERE invocation_id='terminal-retry-invocation'")
+      .run(Date.now() - 60 * 60 * 1000)
+
     const succeeding = vi.fn(async () => undefined)
     await new SqliteAgentHistory(conn).recoverInterruptedInvocations({ repairInvocationTerminal: succeeding })
     expect(succeeding).toHaveBeenCalledWith(location, { status: 'completed', turnId: 'terminal-retry-turn', reason: 'completed' })
@@ -2035,6 +2058,12 @@ describe('SqliteAgentHistory', () => {
     expect(fail).toHaveBeenCalledOnce()
     expect(conn.prepare("SELECT status, attempts FROM canonical_projection_repairs WHERE invocation_id='terminal-failed-invocation'").get())
       .toEqual({ status: 'pending', attempts: 1 })
+
+    const skippedDuringBackoff = vi.fn(async () => undefined)
+    await new SqliteAgentHistory(conn).recoverInterruptedInvocations({ repairInvocationTerminal: skippedDuringBackoff })
+    expect(skippedDuringBackoff).not.toHaveBeenCalled()
+    conn.prepare("UPDATE canonical_projection_repairs SET updated_at=? WHERE invocation_id='terminal-failed-invocation'")
+      .run(Date.now() - 60 * 60 * 1000)
 
     const retry = vi.fn(async () => undefined)
     await new SqliteAgentHistory(conn).recoverInterruptedInvocations({ repairInvocationTerminal: retry })

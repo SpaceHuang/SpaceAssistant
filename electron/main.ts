@@ -181,8 +181,49 @@ let workDirManager: WorkDirManager | null = null
 let appDb: AppDatabase | null = null
 let sessionProjectionMigrationApplication: SessionProjectionMigrationApplication | null = null
 let mainIpcReady = false
+let startupStatusWindow: BrowserWindow | null = null
 const processStartupStartedAt = performance.now()
 let initialRendererLoadReported = false
+
+async function showStartupStatus(message: string): Promise<void> {
+  try {
+    if (!startupStatusWindow || startupStatusWindow.isDestroyed()) {
+      const win = new BrowserWindow({
+        width: 440,
+        height: 220,
+        frame: false,
+        resizable: false,
+        minimizable: false,
+        maximizable: false,
+        movable: true,
+        show: false,
+        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
+      })
+      startupStatusWindow = win
+      win.on('closed', () => {
+        if (startupStatusWindow === win) startupStatusWindow = null
+      })
+      const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceAssistant</title>
+        <style>html,body{height:100%;margin:0}body{font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:CanvasText;background:Canvas;display:grid;place-items:center}.card{text-align:center;padding:30px}.mark{width:30px;height:30px;margin:0 auto 16px;border:3px solid ButtonBorder;border-top-color:Highlight;border-radius:50%;animation:spin 1s linear infinite}h1{font-size:14px;font-weight:600;margin:0 0 9px}p{font-size:13px;color:GrayText;margin:0}small{display:block;color:GrayText;margin-top:12px}@keyframes spin{to{transform:rotate(360deg)}}</style></head>
+        <body><main class="card"><div class="mark" aria-hidden="true"></div><h1>SpaceAssistant</h1><p id="status">正在准备本地数据，请稍候…</p><small>应用正在启动，请保持此窗口开启。</small></main></body></html>`
+      await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+      if (win.isDestroyed()) return
+      win.show()
+    }
+    const win = startupStatusWindow
+    if (win && !win.isDestroyed()) {
+      await win.webContents.executeJavaScript(`document.getElementById('status').textContent=${JSON.stringify(message)}`)
+    }
+  } catch (error) {
+    console.warn('[startup] status window unavailable:', error instanceof Error ? error.message : String(error))
+  }
+}
+
+function closeStartupStatus(): void {
+  const win = startupStatusWindow
+  startupStatusWindow = null
+  if (win && !win.isDestroyed()) win.close()
+}
 
 function getTelemetryAppVersion(): string {
   if (app.isPackaged) return app.getVersion()
@@ -336,6 +377,7 @@ export async function createMainWindow(): Promise<void> {
       nodeVersion: process.versions.node, sqliteVersion
     }))
   }
+  closeStartupStatus()
 
   win.on('closed', () => {
     setMainWindow(null)
@@ -358,10 +400,13 @@ app.whenReady().then(async () => {
     return
   }
 
+  await showStartupStatus('正在准备本地数据，请稍候…')
+
   app.on('second-instance', () => {
     void showMainWindow()
   })
 
+  await showStartupStatus('正在清理上次启动留下的临时文件…')
   await cleanupMcpArtifactsOnStartup(app.getPath('userData')).catch((error) => {
     console.warn('[mcp] startup artifact cleanup failed:', error instanceof Error ? error.message : String(error))
   })
@@ -369,9 +414,11 @@ app.whenReady().then(async () => {
   const dbPath = getDefaultDbPath(app.getPath('userData'))
   let db: ReturnType<typeof openDatabase>
   try {
+    await showStartupStatus('正在检查或升级本地数据库，请稍候…')
     db = await measureStartupPhase('database.open-and-migrations', () => openDatabase(dbPath))
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
+    closeStartupStatus()
     dialog.showErrorBox(
       '数据库初始化失败',
       `无法打开本地数据库，应用即将退出。\n\n路径：${dbPath}\n错误：${msg}`
@@ -395,10 +442,12 @@ app.whenReady().then(async () => {
   const sessionHistoryRecoveryStartedAt = performance.now()
   let sessionHistoryRecoverySucceeded = false
   let sessionHistoryRepairFailureCount = 0
+  let pendingSessionHistoryRepairs = 0
   let recoveredInvocationCount = 0
   if (safeDbMaintenanceRequested) {
     console.warn('[agentHistory] canonical full recovery skipped for --safe-db-maintenance; it will run on the next normal launch')
   } else {
+  await showStartupStatus('正在整理历史会话数据，请稍候…')
   try {
     const startupHistory = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, undefined, createSpillStore(path.join(app.getPath('userData'), 'spill')))
     try {
@@ -525,7 +574,12 @@ app.whenReady().then(async () => {
       }
     }))
     recoveredInvocationCount = interrupted.length
-    sessionHistoryRecoverySucceeded = sessionHistoryRepairFailureCount === 0
+    pendingSessionHistoryRepairs = (getDbConnection(db).prepare(`SELECT COUNT(*) AS count
+      FROM canonical_projection_repairs repairs
+      LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=repairs.session_id
+      WHERE repairs.status='pending' AND (cutover.cleanup_state IS NULL OR
+        cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))`).get() as { count: number }).count
+    sessionHistoryRecoverySucceeded = sessionHistoryRepairFailureCount === 0 && pendingSessionHistoryRepairs === 0
     if (interrupted.length > 0) console.warn('[agentHistory] interrupted invocations recovered:', interrupted.map(({ invocationId }) => invocationId))
   } catch (error) {
     sessionHistoryRepairFailureCount += 1
@@ -537,6 +591,7 @@ app.whenReady().then(async () => {
       outcome: sessionHistoryRecoverySucceeded ? 'completed' : 'degraded',
       reconciledCount: recoveredInvocationCount,
       failed: sessionHistoryRepairFailureCount,
+      pendingRepairs: pendingSessionHistoryRepairs,
       durationMs: Math.max(0, Math.round(performance.now() - sessionHistoryRecoveryStartedAt))
     })
   }
@@ -1140,6 +1195,7 @@ app.whenReady().then(async () => {
 
   setupWindowIconThemeListener(__dirname)
   mainIpcReady = true
+  await showStartupStatus('正在准备应用窗口…')
   void createMainWindow()
     .then(() => {
       const userDataDir = app.getPath('userData')
