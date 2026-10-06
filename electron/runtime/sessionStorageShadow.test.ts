@@ -12,6 +12,8 @@ import * as agentLogger from '../agentLogger/agentLogger'
 import { createSpillStore } from '../storage/spillStore'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 
+const runStoragePerf = process.env.SPACEASSISTANT_RUN_STORAGE_PERF === '1'
+
 describe('Phase 5.2 canonical shadow reads', () => {
   it('keeps canonical API fold, watermark and cache validation in one SQLite snapshot', async () => {
     const db = createMemoryAppDb()
@@ -709,7 +711,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
     temp.cleanup()
   })
 
-  it('keeps paired warm API shadow p95 within the Phase 2 regression ceiling', async () => {
+  it.skipIf(!runStoragePerf)('keeps paired warm API shadow p95 within the Phase 2 regression ceiling', async () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'shadow performance', model: 'test' })
     const canonicalMessages: Array<{ id: string; role: 'user' | 'assistant'; content: string; timestamp: number }> = []
@@ -755,7 +757,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
     db.close()
   })
 
-  it('measures the canonical API selector and ID-body candidate against getTurnContext', async () => {
+  it.skipIf(!runStoragePerf)('measures the canonical API selector and ID-body candidate against getTurnContext', async () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'canonical API candidate performance', model: 'test' })
     const canonicalMessages: Array<{ id: string; role: 'user' | 'assistant'; content: string; timestamp: number }> = []

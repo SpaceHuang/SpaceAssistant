@@ -1,4 +1,5 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -153,6 +154,7 @@ function makeRuntime(db: AppDatabase): TurnRuntime {
 
 describe('butlerInvoker 管家执行链（P4 集成）', () => {
   let db: AppDatabase
+  let testWorkDir: string
   beforeEach(() => {
     vi.clearAllMocks()
     mockCreateAnthropicClient.mockReset()
@@ -161,6 +163,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     hostedRuntimeFailureInjection.requestId = ''
     hostedRuntimeFailureInjection.composeCalls = 0
     ripgrepFixture.path = ''
+    testWorkDir = fsSync.mkdtempSync(path.join(os.tmpdir(), 'butler-workdir-'))
     setDefaultAgentRuntime(createDesktopAgentRuntime())
     db = openDatabase(':memory:')
     const initialModelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
@@ -179,16 +182,20 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     })
   })
 
+  afterEach(async () => {
+    await fs.rm(testWorkDir, { recursive: true, force: true })
+  })
+
   function makeDeps(overrides: Record<string, unknown> = {}) {
     return {
       db,
       turnRuntime: makeRuntime(db),
       admissionGate: new CallAdmissionGate(),
-      getWorkDir: () => '/tmp/wd',
-      getActiveWorkDirProfilePath: () => String((overrides.getWorkDir as (() => string) | undefined)?.() ?? '/tmp/wd'),
+      getWorkDir: () => testWorkDir,
+      getActiveWorkDirProfilePath: () => String((overrides.getWorkDir as (() => string) | undefined)?.() ?? testWorkDir),
       getUserDataPath: () => '/tmp/ud',
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG as const }),
-      resolveWorkDirForSession: () => '/tmp/wd',
+      resolveWorkDirForSession: () => testWorkDir,
       ...overrides
     }
   }
@@ -204,7 +211,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       db,
       backup: {} as AppIpcContext['backup'],
       workDirManager: {} as AppIpcContext['workDirManager'],
-      getWorkDir: () => '/tmp/wd', setWorkDir: () => undefined, getUserDataPath: () => '/tmp/ud',
+      getWorkDir: () => testWorkDir, setWorkDir: () => undefined, getUserDataPath: () => '/tmp/ud',
       getApiKey: async () => null, setApiKey: async () => undefined,
       getBrowserDetectContext: () => ({ isPackaged: false, appPath: '/tmp', devRoot: '/tmp' })
     })
@@ -218,7 +225,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     setConfigValue(db, 'config.models', JSON.stringify([model]))
     mockCreateAnthropicClient.mockReturnValue({ messages: { stream: vi.fn(() => ({ async *[Symbol.asyncIterator]() {}, finalMessage: vi.fn(async () => ({ content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 2 } })) })) } })
     const task = createAutomationTask(db, { name: 'pinned', schedule: { kind: 'interval', intervalMinutes: 30 }, prompt: 'report', deliveryPref: 'none', workDir, modelId, modelServiceId: 'svc-pinned', modelOverride: model.name, reasoningEffort: 'high' })
-    const deps = makeDeps({ getWorkDir: () => '/tmp/wd', getActiveWorkDirProfilePath: () => '/tmp/wd' })
+    const deps = makeDeps({ getWorkDir: () => testWorkDir, getActiveWorkDirProfilePath: () => testWorkDir })
     const result = await runButlerTask(deps, task.id, { trigger: 'manual', requestId: 'req-task-root-pinned' })
     expect(result.ok, JSON.stringify(result)).toBe(true)
     const run = getLatestRunForTask(db, task.id)!
@@ -307,7 +314,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
     expect(run?.resultSummary).toContain('磁盘')
     expect(run?.usageJson).toContain('input_tokens')
     expect(run?.trigger).toBe('manual')
-    expect(run?.configSnapshot).toMatchObject({ resolutionStatus: 'resolved', workDir: await fs.realpath('/tmp/wd'), workDirSource: 'legacy-profile', providerModelName: expect.any(String), serviceId: 'svc-1' })
+    expect(run?.configSnapshot).toMatchObject({ resolutionStatus: 'resolved', workDir: await fs.realpath(testWorkDir), workDirSource: 'legacy-profile', providerModelName: expect.any(String), serviceId: 'svc-1' })
 
     const session = run?.sessionId ? getSession(db, run.sessionId) : undefined
     expect(session?.ownership).toBe('automation')
@@ -1864,8 +1871,16 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
 })
 
 describe('管家会话创建推送（渲染端列表即时可见）', () => {
+  let pushWorkDir: string | undefined
+  afterEach(async () => {
+    if (pushWorkDir) await fs.rm(pushWorkDir, { recursive: true, force: true })
+    pushWorkDir = undefined
+  })
+
   it('onSessionCreated 在会话创建即回调（调度与手动触发共用），字段含归属与可见性', async () => {
     let db: AppDatabase
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-push-workdir-'))
+    pushWorkDir = workDir
     const { openDatabase: openDb2, setConfigValue: setCfg } = await import('../database')
     db = openDb2(':memory:')
     const supportedModelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
@@ -1901,11 +1916,11 @@ describe('管家会话创建推送（渲染端列表即时可见）', () => {
       {
         db,
         turnRuntime: makeRuntime(db),
-        getWorkDir: () => '/tmp/wd',
-        getActiveWorkDirProfilePath: () => '/tmp/wd',
+        getWorkDir: () => workDir,
+        getActiveWorkDirProfilePath: () => workDir,
         getUserDataPath: () => '/tmp/ud',
         getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG as const }),
-        resolveWorkDirForSession: () => '/tmp/wd',
+        resolveWorkDirForSession: () => workDir,
         onSessionCreated
       },
       task.id,

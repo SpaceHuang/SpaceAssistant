@@ -17,6 +17,7 @@
     "test:electron": "vitest run --project electron",
     "test:shell-lifecycle": "vitest run electron/shell electron/tools/runShellExecutor.test.ts electron/tools/plannedToolRegistry.test.ts electron/tools/toolInvocationCoordinator.test.ts electron/spawnUtil.test.ts",
     "test:renderer": "vitest run --project renderer",
+    "test:storage-perf": "cross-env SPACEASSISTANT_RUN_STORAGE_PERF=1 vitest run --project electron --pool=threads --maxWorkers=1 --no-file-parallelism electron/runtime/sessionStorageShadow.test.ts electron/runtime/sessionTranscriptProjection.test.ts -t \"keeps paired warm API shadow p95|measures the canonical API selector and ID-body candidate|keeps warm L1 projection latency|keeps 20-round canonical-only|measures cold-L1 canonical global search\"",
     "perf:chat-list": "vitest run --project renderer-perf",
     "i18n:generate-types": "tsx scripts/generate-i18n-types.ts",
     "i18n:check": "tsx scripts/i18n-check.ts",

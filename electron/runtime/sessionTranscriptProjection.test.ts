@@ -10,6 +10,8 @@ import { SqliteAgentHistory } from './sqliteAgentHistory'
 import * as agentLogger from '../agentLogger/agentLogger'
 import { getProjectedApiContextBaseline, getProjectedChatMessagePage, getProjectedMessage, getProjectedMessages, getProjectedMessagesPageWithSequence, getProjectedRecentTurnRoutingMessages, getProjectedSearchCorpusPage, readSessionTranscriptProjection, refreshSessionTranscriptProjectionCache, resolveProjectedRetryContext, searchProjectedMessages } from './sessionTranscriptProjection'
 
+const runStoragePerf = process.env.SPACEASSISTANT_RUN_STORAGE_PERF === '1'
+
 describe('session transcript projection P2 read path', () => {
   it('records canonical read owner and elapsed time without changing the returned transcript', () => {
     const db = createMemoryAppDb()
@@ -41,7 +43,7 @@ describe('session transcript projection P2 read path', () => {
     db.close()
   })
 
-  it('keeps warm L1 projection latency within the P2 database-read budget on a large transcript', async () => {
+  it.skipIf(!runStoragePerf)('keeps warm L1 projection latency within the P2 database-read budget on a large transcript', async () => {
     const { db, cleanup } = createTempDatabase('session-projection-perf-')
     try {
       const session = createSession(db, { name: 'projection performance', model: 'test' })
@@ -1714,7 +1716,7 @@ describe('session transcript projection P2 read path', () => {
     }
   })
 
-  it('keeps 20-round canonical-only multi-spill L1 and search reads within the response budget', async () => {
+  it.skipIf(!runStoragePerf)('keeps 20-round canonical-only multi-spill L1 and search reads within the response budget', async () => {
     const temp = createTempDatabase('canonical-multi-spill-perf-')
     try {
       const session = createSession(temp.db, { name: '20 round multi spill', model: 'test' })
@@ -1765,7 +1767,7 @@ describe('session transcript projection P2 read path', () => {
     }
   })
 
-  it('measures cold-L1 canonical global search across multiple sessions and a large match set', async () => {
+  it.skipIf(!runStoragePerf)('measures cold-L1 canonical global search across multiple sessions and a large match set', async () => {
     const temp = createTempDatabase('canonical-global-search-multisession-perf-')
     try {
       const conn = getDbConnection(temp.db)
