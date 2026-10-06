@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest'
+import { describe, expect, it, beforeEach, vi } from 'vitest'
 import { createMemoryAppDb, createTempDatabase } from './testHelpers'
 import {
   appendMessage,
@@ -57,6 +57,83 @@ describe('appendMessage stored count', () => {
     expect(conn.prepare('SELECT message_count FROM sessions WHERE id=?').get(session.id)).toEqual({ message_count: 2 })
     expect(conn.prepare('SELECT COUNT(*) AS count FROM messages WHERE session_id=?').get(session.id)).toEqual({ count: 2 })
     db.close()
+  })
+})
+
+describe('atomic turn continuation acceptance', () => {
+  it('persists continuation acceptance and retry lineage with the accepted turn', () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'atomic-continuation' })
+    prepareTurnAtomically(db, {
+      user: { id: 'continuation-user', sessionId: session.id, role: 'user', content: '继续修复', timestamp: 1, status: 'sent' },
+      assistant: { id: 'continuation-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
+      turn: {
+        turnId: 'continuation-turn', requestId: 'continuation-request', sessionId: session.id,
+        assistantMessageId: 'continuation-assistant', state: 'prepared', retryOfMessageId: 'failed-assistant',
+        retryOfInvocationId: 'failed-invocation', continuationAcceptance: {
+          payloadSha256: 'a'.repeat(64), rawText: '继续修复', kind: 'follow-up', route: 'context-turn',
+          sourceInvocationId: 'failed-invocation', sourceTurnId: 'failed-turn', sourceSequence: 9
+        }
+      }
+    })
+
+    expect(getPersistedTurn(db, 'continuation-turn')).toMatchObject({
+      retryOfMessageId: 'failed-assistant', retryOfInvocationId: 'failed-invocation'
+    })
+    expect(getDbConnection(db).prepare(`SELECT route,status,source_invocation_id,source_turn_id,source_sequence,target_id
+      FROM continuation_intents WHERE request_id=?`).get('continuation-request')).toEqual({
+      route: 'context-turn', status: 'accepted_turn', source_invocation_id: 'failed-invocation',
+      source_turn_id: 'failed-turn', source_sequence: 9, target_id: 'continuation-turn'
+    })
+    expect(new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id).readSync('continuation-turn').events[0]?.kind)
+      .toBe('session-input-committed')
+    db.close()
+  })
+
+  it('file-backed reopen preserves main session config, retry lineage, and atomic continuation acceptance', () => {
+    const file = createTempDatabase('main-storage-operations-reopen-')
+    try {
+      const session = createSession(file.db, {
+        name: 'operations-reopen', fixedWorkDir: '/workspace/project', thinkingEffort: 'high',
+        ownership: 'user', visibility: 'primary'
+      })
+      prepareTurnAtomically(file.db, {
+        user: { id: 'reopen-user', sessionId: session.id, role: 'user', content: 'continue', timestamp: 1, status: 'sent' },
+        assistant: { id: 'reopen-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
+        turn: {
+          turnId: 'reopen-turn', requestId: 'reopen-request', sessionId: session.id,
+          assistantMessageId: 'reopen-assistant', state: 'prepared', retryOfMessageId: 'failed-message',
+          retryOfInvocationId: 'failed-invocation', continuationAcceptance: {
+            payloadSha256: 'b'.repeat(64), rawText: 'continue', kind: 'follow-up', route: 'context-turn',
+            sourceInvocationId: 'failed-invocation', sourceTurnId: 'failed-turn', sourceSequence: 4
+          }
+        }
+      })
+      const expectedGeneration = session.generation
+      file.db.close()
+
+      const reopened = openDatabase(file.dbPath)
+      try {
+        expect(getSession(reopened, session.id)).toMatchObject({
+          fixedWorkDir: '/workspace/project', thinkingEffort: 'high', ownership: 'user', visibility: 'primary',
+          generation: expectedGeneration
+        })
+        expect(getPersistedTurn(reopened, 'reopen-turn')).toMatchObject({
+          retryOfMessageId: 'failed-message', retryOfInvocationId: 'failed-invocation'
+        })
+        expect(getDbConnection(reopened).prepare(`SELECT route,status,source_invocation_id,source_turn_id,source_sequence,target_id
+          FROM continuation_intents WHERE request_id='reopen-request'`).get()).toEqual({
+          route: 'context-turn', status: 'accepted_turn', source_invocation_id: 'failed-invocation',
+          source_turn_id: 'failed-turn', source_sequence: 4, target_id: 'reopen-turn'
+        })
+        expect(getDbConnection(reopened).prepare('PRAGMA integrity_check').all()).toEqual([{ integrity_check: 'ok' }])
+        expect(getDbConnection(reopened).prepare('PRAGMA foreign_key_check').all()).toEqual([])
+      } finally {
+        reopened.close()
+      }
+    } finally {
+      file.cleanup()
+    }
   })
 })
 
@@ -183,6 +260,17 @@ describe('createSession 默认模型', () => {
   it('配置缺失时不写入任何历史模型名', () => {
     const db = createMemoryAppDb()
     expect(createSession(db, { name: 'empty-config' }).model).toBe('')
+  })
+})
+
+describe('createSession fixed work directory', () => {
+  it('persists and returns the session-specific fixed work directory', () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'fixed-work-dir', fixedWorkDir: '/workspace/project' })
+    expect(getDbConnection(db).prepare('SELECT fixed_work_dir FROM sessions WHERE id=?').get(session.id))
+      .toEqual({ fixed_work_dir: '/workspace/project' })
+    expect(getSession(db, session.id)?.fixedWorkDir).toBe('/workspace/project')
+    db.close()
   })
 })
 
@@ -534,6 +622,33 @@ describe('persisted turns', () => {
     expect(finalizeResidueMessageKeepingOutcome(db, 'residue-a', 'cancelled')).toBe(true)
     expect(getMessage(db, 'residue-a')).toMatchObject({ status: 'cancelled', toolCalls: [{ status: 'failed', interrupted: true }] })
     expect(getPersistedTurn(db, 'residue-turn')).toMatchObject({ outcome: 'cancelled', state: 'terminal' })
+  })
+  it('补偿已完成终态残留时保留工具调用状态并写入 completed', () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'completed-residue-compensation' })
+    appendMessage(db, { id: 'completed-residue-assistant', sessionId: session.id, role: 'assistant', content: 'canonical final', timestamp: 1, status: 'streaming', toolCalls: [{ id: 'tool-1', toolName: 'run_shell', input: {}, status: 'completed', result: { success: true, output: 'ok' } }] })
+    createPersistedTurn(db, { turnId: 'completed-residue-turn', requestId: 'completed-residue-request', sessionId: session.id, assistantMessageId: 'completed-residue-assistant', state: 'terminal', version: 2, outcome: 'completed' })
+
+    expect(finalizeResidueMessageKeepingOutcome(db, 'completed-residue-assistant', 'completed')).toBe(true)
+    expect(getMessage(db, 'completed-residue-assistant')).toMatchObject({
+      status: 'completed', content: 'canonical final',
+      toolCalls: [{ id: 'tool-1', status: 'completed', result: { success: true } }]
+    })
+    expect(getPersistedTurn(db, 'completed-residue-turn')).toMatchObject({ outcome: 'completed', state: 'terminal' })
+  })
+  it('canonical-only 下补偿 terminal/failed 残留仅更新骨架状态并保留 canonical 正文', () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'canonical-terminal-residue' })
+    appendMessage(db, { id: 'canonical-terminal-residue-assistant', sessionId: session.id, role: 'assistant', content: 'canonical final', timestamp: 1, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'canonical-terminal-residue-turn', requestId: 'canonical-terminal-residue-request', sessionId: session.id, assistantMessageId: 'canonical-terminal-residue-assistant', state: 'terminal', version: 2, outcome: 'failed' })
+    const conn = getDbConnection(db)
+    conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+    conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE id=?").run('canonical-terminal-residue-assistant')
+
+    expect(finalizeResidueMessageKeepingOutcome(db, 'canonical-terminal-residue-assistant', 'failed')).toBe(true)
+    expect(conn.prepare('SELECT content,status,content_storage_state FROM messages WHERE id=?').get('canonical-terminal-residue-assistant'))
+      .toEqual({ content: '', status: 'failed', content_storage_state: 'canonical-backed-only' })
+    expect(getPersistedTurn(db, 'canonical-terminal-residue-turn')).toMatchObject({ outcome: 'failed', state: 'terminal' })
   })
   it('can read turns by id and list by lifecycle state', () => {
     const db = createMemoryAppDb()
@@ -1062,7 +1177,7 @@ describe('queued and retry queries', () => {
     expect(setPersistedTurnExecutionConfig(db, 'configuring-turn', { lane: 'desktop', model: 'other' }, '{}', snapshot)).toBe(false)
   })
 
-  it('配置失败只终结仍处于 configuring 的 turn，不能覆盖已完成的取消', () => {
+  it('配置失败原子终结 turn 与 assistant streaming 状态，不能覆盖已完成的取消', () => {
     appendMessage(db, { id: 'failure-user', sessionId, role: 'user', content: 'hello', timestamp: 1, status: 'sent' })
     appendMessage(db, { id: 'failure-assistant', sessionId, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
     createPersistedTurn(db, {
@@ -1072,6 +1187,7 @@ describe('queued and retry queries', () => {
 
     expect(failConfiguringTurn(db, 'failure-turn', 1, { code: 'configuration-failed', message: 'route rejected' })).toBe(true)
     expect(getPersistedTurn(db, 'failure-turn')).toMatchObject({ state: 'terminal', outcome: 'failed', version: 1 })
+    expect(getMessage(db, 'failure-assistant')).toMatchObject({ status: 'failed' })
     expect(failConfiguringTurn(db, 'failure-turn', 2, { code: 'configuration-failed', message: 'late failure' })).toBe(false)
     expect(getPersistedTurn(db, 'failure-turn')).toMatchObject({ outcome: 'failed', version: 1 })
   })
@@ -1198,7 +1314,36 @@ describe('getContextHistorySummaryBaseline', () => {
     )
   })
 
+  it('reads only image/thinking metadata instead of loading message bodies', () => {
+    appendMessage(db, {
+      id: 'summary-large-body',
+      sessionId,
+      role: 'user',
+      content: 'large historical body that this metadata summary must not load',
+      timestamp: 10,
+      status: 'sent',
+      attachments: [{
+        id: 'summary-image', stagingKey: 'chat-attachments/s/image.png', fileName: 'image.png',
+        mimeType: 'image/png', byteLength: 4096, width: 512, height: 512
+      }]
+    })
+    const conn = getDbConnection(db)
+    const preparedSql: string[] = []
+    const prepare = conn.prepare.bind(conn)
+    vi.spyOn(conn, 'prepare').mockImplementation(((sql: string) => {
+      preparedSql.push(sql)
+      return prepare(sql)
+    }) as typeof conn.prepare)
 
+    const summary = getContextHistorySummaryBaseline(db, sessionId)
+
+    const messageRead = preparedSql.find((sql) => /FROM\s+messages/i.test(sql))
+    expect(messageRead).toMatch(/SELECT\s+id\s*,\s*role\s*,\s*thinking\s*,\s*attachments\s*,\s*sequence\s+FROM\s+messages/i)
+    expect(messageRead).not.toMatch(/\bcontent\b/i)
+    expect(summary.entries).toEqual([expect.objectContaining({
+      messageId: 'summary-large-body', role: 'user', imageTokens: 400, thinkingTokens: 0
+    })])
+  })
 
 })
 
@@ -1384,6 +1529,91 @@ describe('listTurnErrorsByAssistantMessageIds', () => {
     expect(listTurnErrorsByAssistantMessageIds(db, [blank, real, real])).toEqual([
       { assistantMessageId: real, message: '真实原因' }
     ])
+  })
+})
+
+describe('updatePersistedTurnState terminal message projection', () => {
+  it.each([
+    ['completed', 'completed'],
+    ['failed', 'failed'],
+    ['cancelled', 'cancelled'],
+    ['timed-out', 'failed'],
+    ['recovered', 'failed'],
+    ['commit-uncertain', 'failed']
+  ])('将终态 outcome %s 原子投影到仍在 streaming 的 assistant 消息', (outcome, expectedStatus) => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: `terminal-${outcome}` })
+    appendMessage(db, {
+      id: `terminal-assistant-${outcome}`,
+      sessionId: session.id,
+      role: 'assistant',
+      content: '',
+      timestamp: 1,
+      status: 'streaming',
+      toolCalls: [{ id: 'tool-1', toolName: 'probe', input: {}, status: 'completed', riskLevel: 'low' }]
+    })
+    createPersistedTurn(db, {
+      turnId: `terminal-turn-${outcome}`,
+      requestId: `terminal-request-${outcome}`,
+      sessionId: session.id,
+      assistantMessageId: `terminal-assistant-${outcome}`,
+      state: 'executing'
+    })
+
+    expect(updatePersistedTurnState(db, `terminal-turn-${outcome}`, 'terminal', { outcome })).toBe(true)
+
+    expect(getPersistedTurn(db, `terminal-turn-${outcome}`)).toMatchObject({ state: 'terminal', outcome })
+    expect(getMessage(db, `terminal-assistant-${outcome}`)).toMatchObject({ status: expectedStatus, content: '' })
+    expect(getMessage(db, `terminal-assistant-${outcome}`)?.toolCalls).toMatchObject([{ id: 'tool-1', status: 'completed' }])
+    db.close()
+  })
+
+  it('终态同步不覆盖已经完成的消息', () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'terminal-keeps-completed' })
+    appendMessage(db, { id: 'terminal-completed-assistant', sessionId: session.id, role: 'assistant', content: 'canonical output', timestamp: 1, status: 'completed' })
+    createPersistedTurn(db, { turnId: 'terminal-completed-turn', requestId: 'terminal-completed-request', sessionId: session.id, assistantMessageId: 'terminal-completed-assistant', state: 'executing' })
+
+    updatePersistedTurnState(db, 'terminal-completed-turn', 'terminal', { outcome: 'failed' })
+
+    expect(getMessage(db, 'terminal-completed-assistant')).toMatchObject({ status: 'completed', content: 'canonical output' })
+    db.close()
+  })
+
+  it('assistant 状态镜像失败时回滚 turn 终态', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const session = createSession(db, { name: 'terminal-atomic-rollback' })
+    appendMessage(db, { id: 'terminal-rollback-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'terminal-rollback-turn', requestId: 'terminal-rollback-request', sessionId: session.id, assistantMessageId: 'terminal-rollback-assistant', state: 'executing' })
+    conn.exec(`CREATE TRIGGER fail_terminal_message_projection BEFORE UPDATE OF status ON messages
+      WHEN NEW.id='terminal-rollback-assistant' BEGIN SELECT RAISE(ABORT,'forced terminal projection failure'); END`)
+
+    expect(() => updatePersistedTurnState(db, 'terminal-rollback-turn', 'terminal', { outcome: 'failed' })).toThrow('forced terminal projection failure')
+
+    expect(getPersistedTurn(db, 'terminal-rollback-turn')).toMatchObject({ state: 'executing', outcome: null })
+    expect(getMessage(db, 'terminal-rollback-assistant')).toMatchObject({ status: 'streaming' })
+    db.close()
+  })
+
+  it('文件数据库重开后保留终态，迟到 checkpoint 不能恢复 streaming', () => {
+    const file = createTempDatabase('terminal-turn-message-projection-')
+    try {
+      const session = createSession(file.db, { name: 'terminal-reopen' })
+      appendMessage(file.db, { id: 'terminal-reopen-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
+      createPersistedTurn(file.db, { turnId: 'terminal-reopen-turn', requestId: 'terminal-reopen-request', sessionId: session.id, assistantMessageId: 'terminal-reopen-assistant', state: 'executing' })
+      expect(updatePersistedTurnState(file.db, 'terminal-reopen-turn', 'terminal', { version: 1, outcome: 'failed' })).toBe(true)
+      file.db.close()
+
+      const reopened = openDatabase(file.dbPath)
+      expect(getPersistedTurn(reopened, 'terminal-reopen-turn')).toMatchObject({ state: 'terminal', outcome: 'failed', version: 1 })
+      expect(getMessage(reopened, 'terminal-reopen-assistant')).toMatchObject({ status: 'failed', content: '' })
+      expect(checkpointTurnAtomically(reopened, 'terminal-reopen-turn', 2, 'terminal-reopen-assistant', { status: 'streaming', content: 'late checkpoint' })).toBe(false)
+      expect(getMessage(reopened, 'terminal-reopen-assistant')).toMatchObject({ status: 'failed', content: '' })
+      reopened.close()
+    } finally {
+      file.cleanup()
+    }
   })
 })
 

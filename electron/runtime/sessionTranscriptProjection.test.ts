@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Message } from '../../src/shared/domainTypes'
@@ -7,9 +7,26 @@ import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { openDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
+import * as agentLogger from '../agentLogger/agentLogger'
 import { getProjectedApiContextBaseline, getProjectedChatMessagePage, getProjectedMessage, getProjectedMessages, getProjectedMessagesPageWithSequence, getProjectedRecentTurnRoutingMessages, getProjectedSearchCorpusPage, readSessionTranscriptProjection, refreshSessionTranscriptProjectionCache, resolveProjectedRetryContext, searchProjectedMessages } from './sessionTranscriptProjection'
 
 describe('session transcript projection P2 read path', () => {
+  it('records canonical read owner and elapsed time without changing the returned transcript', () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'observed transcript read', model: 'test' })
+    const logSpy = vi.spyOn(agentLogger, 'logAgentEvent').mockImplementation(() => undefined)
+
+    const result = readSessionTranscriptProjection(db, session.id)
+
+    expect(result).toMatchObject({ source: 'canonical:L1', messages: [] })
+    expect(logSpy).toHaveBeenCalledWith('info', 'session.transcript.read', expect.objectContaining({
+      sessionId: session.id, consumer: 'transcript', source: 'canonical:L1', outcome: 'canonical', durationMs: expect.any(Number)
+    }))
+    expect(logSpy.mock.calls[0]?.[2]).not.toHaveProperty('content')
+    logSpy.mockRestore()
+    db.close()
+  })
+
   it('seeds the canonical empty-session projection at creation with the persisted generation', () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'empty projection seed', model: 'test' })
@@ -1999,7 +2016,7 @@ describe('session transcript projection P2 read path', () => {
     const session = createSession(db, { name: 'legacy fallback', model: 'test' })
     appendMessage(db, { id: 'legacy-message', sessionId: session.id, role: 'user', content: 'legacy source', timestamp: 1, status: 'sent' })
 
-    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'legacy', reason: 'legacy-mismatch' })
+    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'legacy', reason: 'history-absent' })
     const conn = getDbConnection(db)
     const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
     await history.appendBatch([{
@@ -2026,7 +2043,7 @@ describe('session transcript projection P2 read path', () => {
 
     expect(readSessionTranscriptProjection(db, eligible.id).source).toBe('canonical:L2')
     expect(readSessionTranscriptProjection(db, eligible.id).source).toBe('canonical:L1')
-    expect(readSessionTranscriptProjection(db, legacy.id)).toMatchObject({ source: 'legacy', reason: 'legacy-mismatch' })
+    expect(readSessionTranscriptProjection(db, legacy.id)).toMatchObject({ source: 'legacy', reason: 'history-absent' })
     expect(getProjectedChatMessagePage(db, eligible.id, null, 20).entries[0]?.message.content).toBe('same content')
     expect(getProjectedChatMessagePage(db, legacy.id, null, 20).entries[0]?.message.content).toBe('same content')
     db.close()

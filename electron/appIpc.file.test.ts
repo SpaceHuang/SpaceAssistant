@@ -1050,6 +1050,7 @@ describe('file IPC handlers', () => {
     expect(preparedTurn?.state).toBe('prepared')
 
     mockSkillManager.route.mockClear()
+    coordinator.consume(preparedTurn!.turnId, { type: 'source-completed' })
     real.updatePersistedTurnState(reopened, preparedTurn!.turnId, 'terminal', { outcome: 'completed' })
     const canonicalEvent = getActualDbConnection(reopened).prepare('SELECT payload_json FROM agent_history_events WHERE event_id=?')
       .get('prepare-canonical-context') as { payload_json: string }

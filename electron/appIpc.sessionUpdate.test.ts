@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import path from 'path'
 import { registerAppIpcHandlers } from './appIpc'
+import { getMainWindow } from './windowRef'
 import type { AppIpcContext } from './appIpc'
 import { SESSION_META_TITLE_USER_CUSTOM } from './sessionTitleSuggest'
 import type { Session } from '../src/shared/domainTypes'
@@ -12,6 +13,7 @@ import {
 } from './remote/remoteSessionGuardMessages'
 
 const mockIsRemoteAgentRunning = vi.fn(() => false)
+const mockWithSpillRootFence = vi.hoisted(() => vi.fn(async (work: () => Promise<void>) => work()))
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
@@ -67,6 +69,11 @@ vi.mock('./remote/remoteAgentRegistry', () => ({
 
 vi.mock('./windowRef', () => ({
   getMainWindow: vi.fn()
+}))
+
+vi.mock('./storage/spillStore', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./storage/spillStore')>(),
+  createSpillStore: vi.fn(() => ({ withSpillRootFence: mockWithSpillRootFence }))
 }))
 
 const mockIpcMain = () => {
@@ -224,18 +231,30 @@ describe('session:update IPC', () => {
     expect((patch.metadata as Record<string, unknown>)[SESSION_META_TITLE_USER_CUSTOM]).toBeUndefined()
   })
 
-  it('does not allow generic session metadata updates to replace directory grants', async () => {
-    const canonical = [{ grantId: 'real-grant', sessionId: 'session-1', source: 'user-selected-directory' }]
-    const cur = stubSession({ metadata: { sessionDirectoryGrants: canonical } })
+  it('does not allow session:create to inject directory grants through metadata', async () => {
+    const session = stubSession()
+    mockCreateSession.mockImplementation((_db, input) => ({ ...session, metadata: input.metadata }))
+    ctx.backup.backupWithRetry = vi.fn().mockResolvedValue(undefined)
+    const handler = ipc.getHandler('session:create')!
+
+    await handler({}, { name: '新会话', metadata: { foo: 1, sessionDirectoryGrants: [{ id: 'forged' }] } })
+
+    expect(mockCreateSession).toHaveBeenCalledWith(ctx.db, expect.objectContaining({
+      metadata: { foo: 1 },
+    }))
+  })
+
+  it('does not allow session:update to replace directory grants through metadata', async () => {
+    const cur = stubSession({ metadata: { sessionDirectoryGrants: [{ id: 'trusted', path: '/allowed' }] } })
     mockGetSession.mockReturnValue(cur)
     mockUpdateSession.mockImplementation((_db, _id, patch) => ({ ...cur, ...patch }))
+    const handler = ipc.getHandler('session:update')!
 
-    await ipc.getHandler('session:update')!({}, {
-      sessionId: 'session-1',
-      metadata: { sessionDirectoryGrants: [{ grantId: 'forged', sessionId: 'session-1', source: 'user-selected-directory' }] }
-    })
+    await handler({}, { sessionId: 'session-1', metadata: { foo: 1, sessionDirectoryGrants: [{ id: 'forged' }] } })
 
-    expect((mockUpdateSession.mock.calls[0]?.[2] as { metadata: Record<string, unknown> }).metadata.sessionDirectoryGrants).toEqual(canonical)
+    expect(mockUpdateSession).toHaveBeenCalledWith(ctx.db, 'session-1', expect.objectContaining({
+      metadata: { foo: 1, sessionDirectoryGrants: [{ id: 'trusted', path: '/allowed' }] },
+    }))
   })
 
   it('does not write name or titleUserCustom for whitespace-only name', async () => {
@@ -278,6 +297,35 @@ describe('session:update IPC', () => {
       'session-1',
       expect.objectContaining({ workDirProfileId: 'p2' })
     )
+  })
+})
+
+describe('session-scoped privileged IPC trust boundary', () => {
+  let ipc: ReturnType<typeof mockIpcMain>
+  let ctx: AppIpcContext
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ipc = mockIpcMain()
+    ctx = makeCtx()
+    vi.mocked(getMainWindow).mockReturnValue({
+      isDestroyed: () => false,
+      webContents: { id: 1 }
+    } as unknown as ReturnType<typeof getMainWindow>)
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+  })
+
+  it('rejects directory grant mutation from a sender other than the main renderer', async () => {
+    const handler = ipc.getHandler('session-directory-grants:add')!
+    await expect(handler({ sender: { id: 2 } }, 'session-1')).resolves.toEqual({ status: 'forbidden' })
+    expect(mockGetSession).not.toHaveBeenCalled()
+  })
+
+  it('rejects context compaction from a sender other than the main renderer before reading session state', async () => {
+    const handler = ipc.getHandler('chat:compact-session-context')!
+    await expect(handler({ sender: { id: 2 } }, { sessionId: 'session-1', requestId: 'compact-1' }))
+      .resolves.toEqual({ status: 'forbidden' })
+    expect(mockGetSession).not.toHaveBeenCalled()
   })
 })
 
@@ -333,17 +381,17 @@ describe('session:delete IPC busy guard', () => {
     release()
   })
 
-  it('does not persist renderer-supplied directory grants when creating a session', async () => {
-    const session = stubSession()
-    mockCreateSession.mockReturnValue(session)
-    ctx.backup.backupWithRetry = vi.fn().mockResolvedValue(undefined)
-
-    await ipc.getHandler('session:create')!({}, {
-      name: '新会话',
-      metadata: { sessionDirectoryGrants: [{ grantId: 'forged', sessionId: 'session-1', source: 'user-selected-directory' }] }
-    })
-
-    expect(mockCreateSession.mock.calls[0]?.[1]).toMatchObject({ metadata: {} })
-    expect(mockCreateSession.mock.calls[0]?.[1]).not.toHaveProperty('metadata.sessionDirectoryGrants')
+  it('wakes source-truth spill collection only after the database deletion commits', async () => {
+    const wake = vi.fn()
+    ctx.wakeSourceTruthSpillGc = wake
+    const handler = ipc.getHandler('session:delete')!
+    const priorDeleteCalls = mockDeleteSession.mock.calls.length
+    mockDeleteSession.mockImplementationOnce(() => { throw new Error('database delete rolled back') })
+    await expect(handler({}, 'session-1')).rejects.toThrow('database delete rolled back')
+    expect(wake).not.toHaveBeenCalled()
+    expect(mockDeleteSession).toHaveBeenCalledTimes(priorDeleteCalls + 1)
+    await handler({}, 'session-1')
+    expect(mockDeleteSession).toHaveBeenCalledWith(ctx.db, 'session-1', { flush: false })
+    expect(wake).toHaveBeenCalledTimes(1)
   })
 })

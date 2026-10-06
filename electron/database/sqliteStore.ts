@@ -78,6 +78,22 @@ export function openSqliteDatabase(dbPath: string, options?: OpenSqliteDatabaseO
   return db
 }
 
+/** Open an existing database without schema initialization, migration, WAL configuration, or write capability. */
+export function openSqliteDatabaseReadOnly(dbPath: string): AppDatabase {
+  const conn = new DatabaseSync(dbPath, { readOnly: true })
+  const db: AppDatabase = {
+    filePath: dbPath,
+    save: () => undefined,
+    flushSave: () => undefined,
+    close: () => {
+      conn.close()
+      connMap.delete(db)
+    }
+  }
+  connMap.set(db, conn)
+  return db
+}
+
 export function isDatabaseEmpty(conn: DatabaseSync): boolean {
   const sessionCount = (conn.prepare('SELECT COUNT(*) AS c FROM sessions').get() as { c: number }).c
   const configCount = (conn.prepare('SELECT COUNT(*) AS c FROM configs').get() as { c: number }).c

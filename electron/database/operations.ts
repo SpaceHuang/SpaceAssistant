@@ -11,6 +11,8 @@ import {
   normalizeSessionSkillsState
 } from '../../src/shared/domainTypes'
 import {
+  deserializeAttachmentsFromDb,
+  deserializeThinkingFromDb,
   rowToMessage,
   serializeAttachmentsForDb,
   serializeContentSegmentsForDb,
@@ -32,7 +34,7 @@ import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
 import {
   estimateThinkingTokensFromMessage,
-  estimateTokensFromHistoryImages
+  estimateTokensFromImageAttachments
 } from '../../src/shared/contextUsageEstimate'
 
 type SessionRow = {
@@ -50,6 +52,7 @@ type SessionRow = {
   metadata: string
   schema_version: number
   work_dir_profile_id: string | null
+  fixed_work_dir: string | null
   generation: string
   ownership: string | null
   visibility: string | null
@@ -99,6 +102,7 @@ function rowToSession(row: SessionRow): Session {
     schemaVersion: row.schema_version,
     generation: row.generation,
     ...(row.work_dir_profile_id ? { workDirProfileId: row.work_dir_profile_id } : {}),
+    ...(row.fixed_work_dir ? { fixedWorkDir: row.fixed_work_dir } : {}),
     // 偏差 7：归属/可见性缺失或损坏时按谓词模块归一（历史行等价 user/primary）
     ...(row.ownership ? { ownership: normalizeOwnership(row.ownership) } : {}),
     ...(row.visibility ? { visibility: normalizeVisibility(row.visibility) } : {}),
@@ -207,6 +211,7 @@ export function createSession(
     maxTokens?: number
     metadata?: Record<string, unknown>
     workDirProfileId?: string
+    fixedWorkDir?: string
     /** 偏差 7：创建强制声明归属；缺省 user（历史调用方行为不变）。 */
     ownership?: SessionOwnership
     /** 偏差 7：创建强制声明可见性；缺省 primary。 */
@@ -238,6 +243,7 @@ export function createSession(
     metadata: input.metadata ? { ...input.metadata } : {},
     schemaVersion: CURRENT_SCHEMA_VERSION,
     workDirProfileId: input.workDirProfileId,
+    fixedWorkDir: input.fixedWorkDir,
     ownership,
     visibility,
     ...(isThinkingEffort(input.thinkingEffort) ? { thinkingEffort: input.thinkingEffort } : {})
@@ -250,12 +256,11 @@ export function createSession(
         `INSERT INTO sessions (
           id, name, preview, model, llm_service_id, temperature, max_tokens,
           created_at, updated_at, message_count, skills_state, metadata, schema_version, work_dir_profile_id,
-          ownership, visibility, thinking_effort
-          , generation
+          ownership, visibility, thinking_effort, generation, fixed_work_dir
         ) VALUES (
           @id, @name, @preview, @model, @llmServiceId, @temperature, @maxTokens,
           @createdAt, @updatedAt, @messageCount, @skillsState, @metadata, @schemaVersion, @workDirProfileId,
-          @ownership, @visibility, @thinkingEffort, @generation
+          @ownership, @visibility, @thinkingEffort, @generation, @fixedWorkDir
         )`
       )
       .run({
@@ -275,8 +280,9 @@ export function createSession(
         workDirProfileId: session.workDirProfileId ?? null,
         ownership,
         visibility,
-        thinkingEffort: session.thinkingEffort ?? null
-        , generation: session.generation
+        thinkingEffort: session.thinkingEffort ?? null,
+        generation: session.generation,
+        fixedWorkDir: session.fixedWorkDir ?? null
       })
     try {
       const emptyProjection = '[]'
@@ -854,7 +860,7 @@ export function enqueueQueuedUserMessage(
 export function claimQueuedTurnAtomically(
   db: AppDatabase,
   input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig }
-): { user: PersistedMessageEntry; assistant: PersistedMessageEntry } {
+): { user: PersistedMessageEntry; assistant: PersistedMessageEntry; executionConfig?: TurnExecutionConfig } {
   const conn = getDbConnection(db)
   return runInTransaction(conn, () => {
     const active = conn.prepare("SELECT 1 FROM turns WHERE session_id = ? AND state IN ('configuring', 'prepared', 'executing', 'waiting-confirm') LIMIT 1").get(input.sessionId)
@@ -865,16 +871,24 @@ export function claimQueuedTurnAtomically(
     const userResult = updateMessageContent(db, input.userMessageId, { status: 'sent' })
     if (!userResult) throw new Error('QUEUE_MESSAGE_NOT_CLAIMABLE')
     const assistant = appendMessage(db, { id: input.assistantMessageId, sessionId: input.sessionId, role: 'assistant', content: '', timestamp: Date.now(), status: 'streaming' })
-    createPersistedTurn(db, { turnId: input.turnId, requestId: input.requestId, sessionId: input.sessionId, assistantMessageId: input.assistantMessageId, userMessageId: input.userMessageId, contextBoundarySequence: boundary, state: input.state ?? 'prepared', startToken: input.startToken, intentFingerprint: input.intentFingerprint, excludeMessageIds: input.excludeMessageIds, executionConfig: input.executionConfig })
+    let executionConfig = input.executionConfig
+    const continuationIntent = conn.prepare('SELECT continuation_context_json FROM continuation_intents WHERE session_id=? AND request_id=?').get(input.sessionId, input.requestId) as { continuation_context_json?: string | null } | undefined
+    if (continuationIntent?.continuation_context_json) {
+      const continuationContext = JSON.parse(continuationIntent.continuation_context_json) as NonNullable<TurnExecutionConfig['continuationContext']>
+      executionConfig = { ...executionConfig, continuationContext }
+    }
+    createPersistedTurn(db, { turnId: input.turnId, requestId: input.requestId, sessionId: input.sessionId, assistantMessageId: input.assistantMessageId, userMessageId: input.userMessageId, contextBoundarySequence: boundary, state: input.state ?? 'prepared', startToken: input.startToken, intentFingerprint: input.intentFingerprint, excludeMessageIds: input.excludeMessageIds, executionConfig })
+    if (continuationIntent) conn.prepare("UPDATE continuation_intents SET status='accepted_turn',target_id=?,updated_at=? WHERE session_id=? AND request_id=? AND status='queued'")
+      .run(input.turnId, Date.now(), input.sessionId, input.requestId)
     appendSessionInputHistoryInTransaction(conn, { requestId: input.requestId, turnId: input.turnId, sessionId: input.sessionId, user: userResult.message })
     const receipt = conn.prepare('UPDATE queue_input_requests SET turn_id = ?, state = ?, updated_at = ? WHERE session_id = ? AND request_id = ? AND state = ?').run(input.turnId, 'claimed', Date.now(), input.sessionId, input.requestId, 'queued')
     if (changesToNumber(receipt.changes) !== 1) throw new Error('QUEUE_RECEIPT_NOT_CLAIMABLE')
-    return { user: userResult, assistant }
+    return { user: userResult, assistant, ...(executionConfig ? { executionConfig } : {}) }
   })
 }
 
 export type PersistedTurn = {
-  turnId: string; requestId: string; sessionId: string; assistantMessageId: string; state: string
+  turnId: string; requestId: string; sessionId: string; assistantMessageId: string; retryOfMessageId?: string; retryOfInvocationId?: string; state: string
   userMessageId?: string; contextBoundarySequence?: number; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; version: number; acceptedInputHistoryVersion?: number; outcome?: string; usage?: unknown; error?: { code: string; message: string }; intentFingerprint?: string; startToken?: string
 }
 
@@ -892,7 +906,7 @@ function decodePersistedTurnRow(row: PersistedTurnRow): PersistedTurn {
   return turn
 }
 
-const TURN_SELECT = 'turn_id AS turnId, request_id AS requestId, session_id AS sessionId, assistant_message_id AS assistantMessageId, user_message_id AS userMessageId, context_boundary_sequence AS contextBoundarySequence, exclude_message_ids_json AS excludeMessageIdsJson, execution_config_json AS executionConfigJson, state, version, accepted_input_history_version AS acceptedInputHistoryVersion, outcome, COALESCE(terminal_usage_json, usage_json) AS usageJson, error_json AS errorJson, intent_fingerprint AS intentFingerprint, start_token AS startToken'
+const TURN_SELECT = 'turn_id AS turnId, request_id AS requestId, session_id AS sessionId, assistant_message_id AS assistantMessageId, user_message_id AS userMessageId, context_boundary_sequence AS contextBoundarySequence, exclude_message_ids_json AS excludeMessageIdsJson, execution_config_json AS executionConfigJson, retry_of_message_id AS retryOfMessageId, retry_of_invocation_id AS retryOfInvocationId, state, version, accepted_input_history_version AS acceptedInputHistoryVersion, outcome, COALESCE(terminal_usage_json, usage_json) AS usageJson, error_json AS errorJson, intent_fingerprint AS intentFingerprint, start_token AS startToken'
 
 function decodeTurnContextRow(row: PersistedTurnRow & { excludeMessageIdsJson?: string; executionConfigJson?: string }): PersistedTurn {
   const { excludeMessageIdsJson, executionConfigJson, ...persistedRow } = row
@@ -945,10 +959,16 @@ export function setPersistedTurnExecutionConfig(
 
 /** 配置阶段失败只可终结仍未冻结的 turn，不能覆盖并发取消等已写入的终态。 */
 export function failConfiguringTurn(db: AppDatabase, turnId: string, version: number, error: { code: string; message: string }): boolean {
-  const result = getDbConnection(db)
-    .prepare("UPDATE turns SET state = 'terminal', version = ?, outcome = 'failed', error_json = ?, updated_at = ? WHERE turn_id = ? AND state = 'configuring'")
-    .run(version, JSON.stringify(error), Date.now(), turnId)
-  const changed = changesToNumber(result.changes) === 1
+  const conn = getDbConnection(db)
+  const changed = runInTransaction(conn, () => {
+    const result = conn
+      .prepare("UPDATE turns SET state = 'terminal', version = ?, outcome = 'failed', error_json = ?, updated_at = ? WHERE turn_id = ? AND state = 'configuring'")
+      .run(version, JSON.stringify(error), Date.now(), turnId)
+    if (changesToNumber(result.changes) !== 1) return false
+    conn.prepare(`UPDATE messages SET status='failed'
+      WHERE id=(SELECT assistant_message_id FROM turns WHERE turn_id=?) AND role='assistant' AND status='streaming'`).run(turnId)
+    return true
+  })
   if (changed) db.save()
   return changed
 }
@@ -1002,14 +1022,31 @@ export function hasActiveTurn(db: AppDatabase, sessionId: string): boolean {
 export function createPersistedTurn(db: AppDatabase, turn: Omit<PersistedTurn, 'version'> & { version?: number }): PersistedTurn {
   const now = Date.now()
   const startToken = turn.startToken ?? randomUUID()
-  getDbConnection(db).prepare('INSERT INTO turns (turn_id, request_id, session_id, assistant_message_id, user_message_id, context_boundary_sequence, exclude_message_ids_json, execution_config_json, state, version, outcome, usage_json, terminal_usage_json, error_json, intent_fingerprint, start_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(turn.turnId, turn.requestId, turn.sessionId, turn.assistantMessageId, turn.userMessageId ?? null, turn.contextBoundarySequence ?? null, JSON.stringify(turn.excludeMessageIds ?? []), turn.executionConfig == null ? null : JSON.stringify(turn.executionConfig), turn.state, turn.version ?? 0, turn.outcome ?? null, null, turn.usage == null ? null : JSON.stringify(turn.usage), turn.error == null ? null : JSON.stringify(turn.error), turn.intentFingerprint ?? null, startToken, now, now)
+  getDbConnection(db).prepare('INSERT INTO turns (turn_id, request_id, session_id, assistant_message_id, user_message_id, context_boundary_sequence, exclude_message_ids_json, execution_config_json, retry_of_message_id, retry_of_invocation_id, state, version, outcome, usage_json, terminal_usage_json, error_json, intent_fingerprint, start_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(turn.turnId, turn.requestId, turn.sessionId, turn.assistantMessageId, turn.userMessageId ?? null, turn.contextBoundarySequence ?? null, JSON.stringify(turn.excludeMessageIds ?? []), turn.executionConfig == null ? null : JSON.stringify(turn.executionConfig), turn.retryOfMessageId ?? turn.executionConfig?.retryOfMessageId ?? null, turn.retryOfInvocationId ?? turn.executionConfig?.retryOfInvocationId ?? null, turn.state, turn.version ?? 0, turn.outcome ?? null, null, turn.usage == null ? null : JSON.stringify(turn.usage), turn.error == null ? null : JSON.stringify(turn.error), turn.intentFingerprint ?? null, startToken, now, now)
   db.save()
   return { ...turn, version: turn.version ?? 0, startToken }
 }
 
 export function updatePersistedTurnState(db: AppDatabase, turnId: string, state: string, patch: { version?: number; outcome?: string; usage?: unknown; error?: { code: string; message: string } } = {}): boolean {
-  const result = getDbConnection(db).prepare('UPDATE turns SET state = ?, version = COALESCE(?, version), outcome = COALESCE(?, outcome), terminal_usage_json = COALESCE(?, terminal_usage_json), error_json = COALESCE(?, error_json), updated_at = ? WHERE turn_id = ?').run(state, patch.version ?? null, patch.outcome ?? null, patch.usage === undefined ? null : JSON.stringify(patch.usage), patch.error === undefined ? null : JSON.stringify(patch.error), Date.now(), turnId)
-  const changed = changesToNumber(result.changes) > 0
+  const conn = getDbConnection(db)
+  const terminalMessageStatus = state === 'terminal'
+    ? patch.outcome === 'completed' ? 'completed'
+      : patch.outcome === 'cancelled' ? 'cancelled'
+        : ['failed', 'timed-out', 'recovered', 'commit-uncertain'].includes(patch.outcome ?? '') ? 'failed' : undefined
+    : undefined
+  const changed = runInTransaction(conn, () => {
+    const result = conn.prepare('UPDATE turns SET state = ?, version = COALESCE(?, version), outcome = COALESCE(?, outcome), terminal_usage_json = COALESCE(?, terminal_usage_json), error_json = COALESCE(?, error_json), updated_at = ? WHERE turn_id = ?').run(state, patch.version ?? null, patch.outcome ?? null, patch.usage === undefined ? null : JSON.stringify(patch.usage), patch.error === undefined ? null : JSON.stringify(patch.error), Date.now(), turnId)
+    if (changesToNumber(result.changes) === 0) return false
+    if (terminalMessageStatus) {
+      // The in-memory terminal projection can be ahead of its debounced checkpoint.
+      // Persist the terminal lifecycle with the turn so a crash cannot strand a
+      // streaming assistant row after startup has stopped recovering that turn.
+      conn.prepare(`UPDATE messages SET status = ?
+        WHERE id = (SELECT assistant_message_id FROM turns WHERE turn_id = ?)
+          AND role = 'assistant' AND status = 'streaming'`).run(terminalMessageStatus, turnId)
+    }
+    return true
+  })
   if (changed) db.save()
   return changed
 }
@@ -1091,12 +1128,19 @@ export function listRecoverableResidues(db: AppDatabase): Array<{ message: Messa
 }
 
 /** 收敛残留消息状态，但保留 turns.outcome；用于 checkpoint 已记录终态的恢复补偿。 */
-export function finalizeResidueMessageKeepingOutcome(db: AppDatabase, messageId: string, targetStatus: 'cancelled' | 'failed'): boolean {
+export function finalizeResidueMessageKeepingOutcome(db: AppDatabase, messageId: string, targetStatus: 'completed' | 'cancelled' | 'failed'): boolean {
   const message = getMessage(db, messageId)
   if (!message || message.role !== 'assistant' || message.status !== 'streaming') return false
-  const toolCalls = message.toolCalls?.map((tool) => tool.status === 'completed' || tool.status === 'failed' || tool.status === 'rejected'
+  const toolCalls = targetStatus === 'completed' ? message.toolCalls : message.toolCalls?.map((tool) => tool.status === 'completed' || tool.status === 'failed' || tool.status === 'rejected'
     ? tool
     : { ...tool, status: 'failed' as const, interrupted: true, completedAt: tool.completedAt ?? Date.now(), result: tool.result ?? { success: false, error: '工具调用因应用退出中断' } })
+  const linkedTurn = getDbConnection(db).prepare('SELECT turn_id,state,outcome FROM turns WHERE assistant_message_id=?')
+    .get(messageId) as { turn_id: string; state: string; outcome: string | null } | undefined
+  if (linkedTurn?.state === 'terminal') {
+    const updated = getDbConnection(db).prepare(`UPDATE messages SET status=?,tool_calls=? WHERE id=? AND role='assistant' AND status='streaming'`)
+      .run(targetStatus, toolCalls === undefined ? null : serializeToolCallsForDb(toolCalls), messageId)
+    return changesToNumber(updated.changes) === 1
+  }
   return updateMessageContent(db, messageId, { status: targetStatus, ...(toolCalls ? { toolCalls } : {}) }) !== null
 }
 
@@ -1230,7 +1274,7 @@ export function prepareTurnAtomically(
   input: {
     user: Omit<Message, 'schemaVersion'> & { schemaVersion?: number }
     assistant: Omit<Message, 'schemaVersion'> & { schemaVersion?: number }
-    turn: { turnId: string; requestId: string; sessionId: string; assistantMessageId: string; state: string; contextBoundarySequence?: number; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[] }
+    turn: { turnId: string; requestId: string; sessionId: string; assistantMessageId: string; state: string; contextBoundarySequence?: number; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; retryOfMessageId?: string; retryOfInvocationId?: string; continuationAcceptance?: { payloadSha256: string; rawText: string; kind: 'exact-continue' | 'follow-up'; route: string; sourceInvocationId?: string; sourceTurnId?: string; sourceSequence?: number } }
   }
 ): { user: PersistedMessageEntry; assistant: PersistedMessageEntry } {
   const conn = getDbConnection(db)
@@ -1240,11 +1284,17 @@ export function prepareTurnAtomically(
     const boundary = (conn.prepare('SELECT MAX(sequence) AS sequence FROM messages WHERE session_id = ?').get(input.turn.sessionId) as { sequence?: number | null }).sequence ?? -1
     const user = appendMessage(db, input.user)
     const assistant = appendMessage(db, input.assistant)
+    const acceptance = input.turn.continuationAcceptance
     createPersistedTurn(db, {
       ...input.turn,
       userMessageId: user.message.id,
       contextBoundarySequence: input.turn.contextBoundarySequence ?? boundary
     })
+    if (acceptance) {
+      conn.prepare(`INSERT INTO continuation_intents(request_id,session_id,payload_sha256,raw_text,attachments_json,intent_kind,route,source_invocation_id,source_turn_id,source_sequence,target_id,status,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(request_id) DO UPDATE SET route=excluded.route,source_invocation_id=excluded.source_invocation_id,source_turn_id=excluded.source_turn_id,source_sequence=excluded.source_sequence,target_id=excluded.target_id,status=excluded.status,updated_at=excluded.updated_at`)
+        .run(input.turn.requestId, input.turn.sessionId, acceptance.payloadSha256, acceptance.rawText, JSON.stringify(user.message.attachments ?? []), acceptance.kind, acceptance.route, acceptance.sourceInvocationId ?? null, acceptance.sourceTurnId ?? null, acceptance.sourceSequence ?? null, input.turn.turnId, 'accepted_turn', Date.now(), Date.now())
+    }
     appendSessionInputHistoryInTransaction(conn, { requestId: input.turn.requestId, turnId: input.turn.turnId, sessionId: input.turn.sessionId, user: user.message })
     return { user, assistant }
   })
@@ -1385,21 +1435,24 @@ export function getContextHistorySummaryBaseline(
   const conn = getDbConnection(db)
   const rows = conn
     .prepare(
-      `SELECT * FROM messages
+      `SELECT id, role, thinking, attachments, sequence
+       FROM messages
        WHERE session_id = ?
        ORDER BY sequence ASC`
     )
-    .all(sessionId) as MessageRow[]
+    .all(sessionId) as Array<Pick<MessageRow, 'id' | 'role' | 'thinking' | 'attachments' | 'sequence'>>
 
   const entries: ContextHistoryDbRow[] = []
   for (const row of rows) {
-    const message = rowToStoredMessage(row)
-    const imageTokens = estimateTokensFromHistoryImages([message])
-    const thinkingTokens = estimateThinkingTokensFromMessage(message.thinking)
+    const attachments = deserializeAttachmentsFromDb(row.attachments)
+    const imageTokens = row.role === 'user' && attachments?.length
+      ? estimateTokensFromImageAttachments(attachments)
+      : 0
+    const thinkingTokens = estimateThinkingTokensFromMessage(deserializeThinkingFromDb(row.thinking))
     if (imageTokens <= 0 && thinkingTokens <= 0) continue
     entries.push({
-      messageId: message.id,
-      role: message.role,
+      messageId: row.id,
+      role: row.role as Message['role'],
       imageTokens,
       thinkingTokens,
       sequence: row.sequence
@@ -1873,6 +1926,9 @@ export type UsageStepFactInput = {
   day: string
   model?: string | null
   llmServiceId?: string | null
+  modelId?: string | null
+  providerModelName?: string | null
+  routeIdentity?: string | null
   appVersion?: string | null
   inputTokens: number
   outputTokens: number
@@ -1896,6 +1952,9 @@ export type UsageStepFactRow = {
   day: string
   model: string | null
   llmServiceId: string | null
+  modelId: string | null
+  providerModelName: string | null
+  routeIdentity: string | null
   appVersion: string | null
   inputTokens: number
   outputTokens: number
@@ -1919,6 +1978,9 @@ type UsageStepFactSqlRow = {
   day: string
   model: string | null
   llm_service_id: string | null
+  model_id: string | null
+  provider_model_name: string | null
+  route_identity: string | null
   app_version: string | null
   input_tokens: number
   output_tokens: number
@@ -1943,6 +2005,9 @@ function rowToUsageStepFact(row: UsageStepFactSqlRow): UsageStepFactRow {
     day: row.day,
     model: row.model,
     llmServiceId: row.llm_service_id,
+    modelId: row.model_id,
+    providerModelName: row.provider_model_name,
+    routeIdentity: row.route_identity,
     appVersion: row.app_version,
     inputTokens: row.input_tokens,
     outputTokens: row.output_tokens,
@@ -1964,11 +2029,11 @@ export function insertUsageStepFact(db: AppDatabase, fact: UsageStepFactInput): 
   conn
     .prepare(
       `INSERT INTO usage_step_facts (
-        session_id, turn_id, step_id, created_at, day, model, llm_service_id, app_version,
+        session_id, turn_id, step_id, created_at, day, model, llm_service_id, model_id, provider_model_name, route_identity, app_version,
         input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, cache_semantics,
         system_tokens, tools_tokens, message_tokens, estimator_version, attribution_json, source
       ) VALUES (
-        @sessionId, @turnId, @stepId, @createdAt, @day, @model, @llmServiceId, @appVersion,
+        @sessionId, @turnId, @stepId, @createdAt, @day, @model, @llmServiceId, @modelId, @providerModelName, @routeIdentity, @appVersion,
         @inputTokens, @outputTokens, @cacheReadTokens, @cacheCreationTokens, @cacheSemantics,
         @systemTokens, @toolsTokens, @messageTokens, @estimatorVersion, @attributionJson, @source
       )
@@ -1977,6 +2042,9 @@ export function insertUsageStepFact(db: AppDatabase, fact: UsageStepFactInput): 
         day = excluded.day,
         model = excluded.model,
         llm_service_id = excluded.llm_service_id,
+        model_id = excluded.model_id,
+        provider_model_name = excluded.provider_model_name,
+        route_identity = excluded.route_identity,
         app_version = excluded.app_version,
         input_tokens = excluded.input_tokens,
         output_tokens = excluded.output_tokens,
@@ -1998,6 +2066,9 @@ export function insertUsageStepFact(db: AppDatabase, fact: UsageStepFactInput): 
       day: fact.day,
       model: fact.model ?? null,
       llmServiceId: fact.llmServiceId ?? null,
+      modelId: fact.modelId ?? null,
+      providerModelName: fact.providerModelName ?? null,
+      routeIdentity: fact.routeIdentity ?? null,
       appVersion: fact.appVersion ?? null,
       inputTokens: fact.inputTokens,
       outputTokens: fact.outputTokens,
@@ -2029,6 +2100,9 @@ export type UsageTurnFactInput = {
   day: string
   model?: string | null
   llmServiceId?: string | null
+  modelId?: string | null
+  providerModelName?: string | null
+  routeIdentity?: string | null
   appVersion?: string | null
   stepCount: number
   toolCallCount: number
@@ -2046,6 +2120,9 @@ export type UsageTurnFactRow = {
   day: string
   model: string | null
   llmServiceId: string | null
+  modelId: string | null
+  providerModelName: string | null
+  routeIdentity: string | null
   appVersion: string | null
   stepCount: number
   toolCallCount: number
@@ -2062,6 +2139,9 @@ type UsageTurnFactSqlRow = {
   day: string
   model: string | null
   llm_service_id: string | null
+  model_id: string | null
+  provider_model_name: string | null
+  route_identity: string | null
   app_version: string | null
   step_count: number
   tool_call_count: number
@@ -2079,6 +2159,9 @@ function rowToUsageTurnFact(row: UsageTurnFactSqlRow): UsageTurnFactRow {
     day: row.day,
     model: row.model,
     llmServiceId: row.llm_service_id,
+    modelId: row.model_id,
+    providerModelName: row.provider_model_name,
+    routeIdentity: row.route_identity,
     appVersion: row.app_version,
     stepCount: row.step_count,
     toolCallCount: row.tool_call_count,
@@ -2095,10 +2178,10 @@ export function upsertUsageTurnFact(db: AppDatabase, fact: UsageTurnFactInput): 
   conn
     .prepare(
       `INSERT INTO usage_turn_facts (
-        turn_id, session_id, created_at, day, model, llm_service_id, app_version,
+        turn_id, session_id, created_at, day, model, llm_service_id, model_id, provider_model_name, route_identity, app_version,
         step_count, tool_call_count, tool_error_count, tool_skipped_count, outcome, tool_attribution_json
       ) VALUES (
-        @turnId, @sessionId, @createdAt, @day, @model, @llmServiceId, @appVersion,
+        @turnId, @sessionId, @createdAt, @day, @model, @llmServiceId, @modelId, @providerModelName, @routeIdentity, @appVersion,
         @stepCount, @toolCallCount, @toolErrorCount, @toolSkippedCount, @outcome, @toolAttributionJson
       )
       ON CONFLICT(turn_id) DO UPDATE SET
@@ -2107,6 +2190,9 @@ export function upsertUsageTurnFact(db: AppDatabase, fact: UsageTurnFactInput): 
         day = excluded.day,
         model = excluded.model,
         llm_service_id = excluded.llm_service_id,
+        model_id = excluded.model_id,
+        provider_model_name = excluded.provider_model_name,
+        route_identity = excluded.route_identity,
         app_version = excluded.app_version,
         step_count = excluded.step_count,
         tool_call_count = excluded.tool_call_count,
@@ -2122,6 +2208,9 @@ export function upsertUsageTurnFact(db: AppDatabase, fact: UsageTurnFactInput): 
       day: fact.day,
       model: fact.model ?? null,
       llmServiceId: fact.llmServiceId ?? null,
+      modelId: fact.modelId ?? null,
+      providerModelName: fact.providerModelName ?? null,
+      routeIdentity: fact.routeIdentity ?? null,
       appVersion: fact.appVersion ?? null,
       stepCount: fact.stepCount,
       toolCallCount: fact.toolCallCount,
@@ -2149,6 +2238,9 @@ export type OrphanUsageTurn = {
   day: string
   model: string | null
   llmServiceId: string | null
+  modelId: string | null
+  providerModelName: string | null
+  routeIdentity: string | null
   appVersion: string | null
 }
 
@@ -2164,6 +2256,9 @@ export function listOrphanUsageTurns(db: AppDatabase): OrphanUsageTurn[] {
               MIN(s.day) AS day,
               (SELECT m.model FROM usage_step_facts m WHERE m.session_id = s.session_id AND m.turn_id = s.turn_id AND m.model IS NOT NULL ORDER BY m.created_at, m.id LIMIT 1) AS model,
               (SELECT m.llm_service_id FROM usage_step_facts m WHERE m.session_id = s.session_id AND m.turn_id = s.turn_id AND m.llm_service_id IS NOT NULL ORDER BY m.created_at, m.id LIMIT 1) AS llm_service_id,
+              (SELECT m.model_id FROM usage_step_facts m WHERE m.session_id = s.session_id AND m.turn_id = s.turn_id AND m.model_id IS NOT NULL ORDER BY m.created_at, m.id LIMIT 1) AS model_id,
+              (SELECT m.provider_model_name FROM usage_step_facts m WHERE m.session_id = s.session_id AND m.turn_id = s.turn_id AND m.provider_model_name IS NOT NULL ORDER BY m.created_at, m.id LIMIT 1) AS provider_model_name,
+              (SELECT m.route_identity FROM usage_step_facts m WHERE m.session_id = s.session_id AND m.turn_id = s.turn_id AND m.route_identity IS NOT NULL ORDER BY m.created_at, m.id LIMIT 1) AS route_identity,
               (SELECT m.app_version FROM usage_step_facts m WHERE m.session_id = s.session_id AND m.turn_id = s.turn_id AND m.app_version IS NOT NULL ORDER BY m.created_at, m.id LIMIT 1) AS app_version
        FROM usage_step_facts s
        LEFT JOIN usage_turn_facts t ON t.turn_id = s.turn_id
@@ -2179,6 +2274,9 @@ export function listOrphanUsageTurns(db: AppDatabase): OrphanUsageTurn[] {
     day: string
     model: string | null
     llm_service_id: string | null
+    model_id: string | null
+    provider_model_name: string | null
+    route_identity: string | null
     app_version: string | null
   }>
   return rows.map((row) => ({
@@ -2189,6 +2287,9 @@ export function listOrphanUsageTurns(db: AppDatabase): OrphanUsageTurn[] {
     day: row.day,
     model: row.model,
     llmServiceId: row.llm_service_id,
+    modelId: row.model_id,
+    providerModelName: row.provider_model_name,
+    routeIdentity: row.route_identity,
     appVersion: row.app_version
   }))
 }

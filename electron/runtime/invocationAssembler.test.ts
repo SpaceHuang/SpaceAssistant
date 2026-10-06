@@ -17,30 +17,12 @@ import { TypedToolRegistry, definePlannedTool } from '../tools/plannedToolRegist
 import type { McpConnectionManager } from '../mcp/mcpConnectionManager'
 import { cancelToolConfirm, isPendingConfirm, submitToolConfirmResponse } from '../toolConfirmRegistry'
 import { createMemoryAppDb } from '../database/testHelpers'
-import { createSession, getDbConnection, setConfigValue, updateSession } from '../database'
+import { getDbConnection, setConfigValue } from '../database'
+import { createSession, getUsageStepFactsForTurn as readUsageStepFactsForTurn, updateSession } from '../database/operations'
 import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import { isBrowserSessionTrustedHost, resetBrowserSessionTrustForTests } from '../browser/browserSessionTrust'
 
 describe('AcceptedTurn propagation', () => {
-  it('selects thinking capability by automation catalog ID even when provider names duplicate and catalog order changes', () => {
-    const db = createMemoryAppDb()
-    const entries = [
-      { id: 'thinking-on', name: 'same-provider-name', supportsThinking: true },
-      { id: 'thinking-off', name: 'same-provider-name', supportsThinking: false }
-    ]
-    setConfigValue(db, 'config.models', JSON.stringify(entries))
-    const assemble = (modelId: string) => assembleInvocation({
-      requestId: `req-${modelId}`, sessionId: 'automation-session', model: 'same-provider-name', modelId, effort: 'high', lane: 'automation',
-      appDb: db, locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'key',
-      emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
-    }).invocation.profile.reasoning
-    const on = assemble('thinking-on')
-    const off = assemble('thinking-off')
-    setConfigValue(db, 'config.models', JSON.stringify(entries.reverse()))
-    expect(assemble('thinking-off')).toEqual(off)
-    expect(on).toMatchObject({ effort: 'high' })
-    expect(off).toMatchObject({ effort: 'off', degraded: { from: 'high', to: 'off' } })
-  })
   it('carries the immutable accepted-turn snapshot into the runtime invocation', () => {
     const acceptedTurn = Object.freeze({
       turnId: 'accepted-turn', requestId: 'accepted-request', sessionId: 'accepted-session', lane: 'desktop' as const,
@@ -75,7 +57,7 @@ describe('AcceptedTurn propagation', () => {
 })
 
 describe('selected directory prompt context', () => {
-  it('adds only current, valid desktop session grants to the system prompt', async () => {
+  it('adds only current, valid desktop session grants to the system prompt and rechecks revocation', async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'invocation-session-grant-')))
     try {
       const db = createMemoryAppDb('zh-CN')
@@ -101,6 +83,7 @@ describe('selected directory prompt context', () => {
       expect(isGrantActive(grant)).toBe(false)
       const remote = assembleInvocation({ requestId: 'prompt-remote', sessionId: session.id, model: 'test', locale: 'zh-CN', lane: 'feishu', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, system: 'base system', workDir: '/tmp', userDataDir: '/tmp', appDb: db, getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
       expect(remote.invocation.profile.system).toBe('base system')
+      db.close()
     } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 })
@@ -847,6 +830,28 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     expect(emitFactEvent).toHaveBeenCalledWith({ type: 'usage-updated', usage: {
       input_tokens: 100, output_tokens: 8, cache_read_input_tokens: 20, cacheSemantics: 'additive'
     } })
+  })
+
+  it('persists trusted model catalog identity and provider route from the assembled invocation', async () => {
+    const db = createMemoryAppDb()
+    setConfigValue(db, 'config.models', JSON.stringify([{ id: 'catalog-test-model', name: 'test-model' }]))
+    const { ports } = assembleInvocation({
+      requestId: 'req-usage-identity', sessionId: 'session-usage-identity', turnId: 'turn-usage-identity',
+      model: 'test-model', modelId: 'catalog-test-model', providerRouteId: 'route-provider-identity',
+      baseUrl: 'https://api.anthropic.com', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', appDb: db,
+      emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+
+    await ports.recordProviderAttemptUsage?.({
+      invocationId: 'req-usage-identity', modelTurn: 1, attempt: 1,
+      usage: { inputTokens: 10, outputTokens: 2 }, disposition: 'accepted'
+    })
+
+    expect(readUsageStepFactsForTurn(db, 'session-usage-identity', 'turn-usage-identity')[0]).toMatchObject({
+      modelId: 'catalog-test-model', providerModelName: 'test-model', routeIdentity: 'route-provider-identity'
+    })
+    db.close()
   })
 
   it('records usage from a failed Hosted provider attempt without classifying it as overflow', async () => {

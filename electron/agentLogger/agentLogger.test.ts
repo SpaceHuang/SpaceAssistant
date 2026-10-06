@@ -35,6 +35,23 @@ describe('agentLogger', () => {
     expect(line.workDir).toBe(tempDir)
   })
 
+  it('attaches the running app version to transcript observation events without allowing raw content', async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-log-session-observation-'))
+    initAgentLogger({ getWorkDir: () => tempDir, isPackaged: true, mainDirname: tempDir, appVersion: '0.2.4', artifactBuildId: 'build-42' })
+
+    logAgentEvent('info', 'session.transcript.read', {
+      sessionId: 'session-1', consumer: 'transcript', source: 'canonical:L1', outcome: 'canonical', durationMs: 2,
+      content: 'private transcript'
+    })
+    await flushAgentLogger()
+
+    const logFile = path.join(tempDir, '.agent', 'logs', formatAgentLogFileName(new Date()))
+    const content = await fs.readFile(logFile, 'utf8')
+    const line = JSON.parse(content.trim()) as Record<string, unknown>
+    expect(line).toMatchObject({ event: 'session.transcript.read', appVersion: '0.2.4', artifactBuildId: 'build-42', source: 'canonical:L1', outcome: 'canonical', durationMs: 2 })
+    expect(content).not.toContain('private transcript')
+  })
+
   it('target tool events drop raw process input and output', async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-log-safe-'))
     initAgentLogger({ getWorkDir: () => tempDir, isPackaged: true, mainDirname: tempDir })

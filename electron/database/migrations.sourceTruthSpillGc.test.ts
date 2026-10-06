@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { runMigrations } from './migrations'
 import { DB_SCHEMA_VERSION } from './schema'
 
-describe('source-truth spill GC migrations v39-v46', () => {
+describe('source-truth spill GC migrations v39-v48', () => {
   it('upgrades v38 with a durable queue and resumable directory scan state', () => {
     const conn = new DatabaseSync(':memory:')
     conn.exec(`CREATE TABLE schema_meta(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);
@@ -11,8 +11,8 @@ describe('source-truth spill GC migrations v39-v46', () => {
 
     runMigrations(conn)
 
-    expect(DB_SCHEMA_VERSION).toBe(46)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '46' })
+    expect(DB_SCHEMA_VERSION).toBe(52)
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '52' })
     expect(conn.prepare('PRAGMA table_info(source_truth_spill_gc_queue)').all()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'locator', pk: 1 }),
       expect.objectContaining({ name: 'session_id' }),

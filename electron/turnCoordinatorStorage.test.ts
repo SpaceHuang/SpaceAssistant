@@ -3,6 +3,7 @@ import { createMemoryAppDb, createTempDatabase } from './database/testHelpers'
 import {
   appendMessage,
   createSession,
+  createPersistedTurn,
   enqueueQueuedUserMessage,
   getQueueInputReceipt,
   getMessagesPage,
@@ -234,6 +235,32 @@ describe('createTurnCoordinatorStorage', () => {
       version: 6, startToken: 'restart-token', intentFingerprint: 'intent:restart',
       persistedOutcome: 'failed', persistedUsage: { input_tokens: 8 }, persistedError: { code: 'REMOTE_FAILED', message: 'remote failed' }
     })
+    reopened.close()
+    temp.cleanup()
+  })
+
+  it('重开后将 terminal/failed turn 关联的 streaming assistant 收敛为 failed 并保留终态', () => {
+    const temp = createTempDatabase('sa-terminal-streaming-residue-')
+    const session = createSession(temp.db, { name: 'terminal-streaming-residue' })
+    appendMessage(temp.db, { id: 'terminal-streaming-residue-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
+    createPersistedTurn(temp.db, {
+      turnId: 'terminal-streaming-residue-turn', requestId: 'terminal-streaming-residue-request', sessionId: session.id,
+      assistantMessageId: 'terminal-streaming-residue-assistant', state: 'terminal', version: 2, outcome: 'failed',
+      error: { code: 'PROVIDER_FAILED', message: 'provider failed before checkpoint flush' }
+    })
+    temp.db.flushSave()
+    temp.db.close()
+
+    const reopened = openDatabase(temp.dbPath)
+    const storage = createTurnCoordinatorStorage(reopened)
+    const runtime = new TurnRuntime({ storage, deps: { now: () => 3, id: () => 'terminal-streaming-recovery' } })
+
+    expect(runtime.recover()).toBe(1)
+    expect(getPersistedTurn(reopened, 'terminal-streaming-residue-turn')).toMatchObject({ state: 'terminal', outcome: 'failed' })
+    expect(storage.findByRequestId(session.id, 'terminal-streaming-residue-request')?.assistantMessage).toMatchObject({
+      id: 'terminal-streaming-residue-assistant', status: 'failed', content: ''
+    })
+    expect(runtime.coordinator.listActive()).toEqual([])
     reopened.close()
     temp.cleanup()
   })

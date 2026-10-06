@@ -966,6 +966,46 @@ describe('createHostedTurnHandoff', () => {
     db.close()
   })
 
+  it('completed History terminal 缺少 transcript participant 时标记 uncertain 并阻止重试', async () => {
+    const db = createMemoryAppDb()
+    const history = new SqliteAgentHistory(db)
+    const session = createSession(db, { name: 'incomplete-terminal', model: 'model' })
+    commitSessionTranscript(db, {
+      sessionId: session.id, turnId: 'prior-turn', baseVersion: 0, outcome: 'completed',
+      messages: [{ id: 'prior-user', role: 'user', content: 'prior instruction' }, { id: 'prior-assistant', role: 'assistant', content: 'prior response' }]
+    })
+    const toolSideEffect = vi.fn()
+    const runInvocation = vi.fn(async () => {
+      toolSideEffect()
+      await history.append('incomplete-terminal-invocation', 'invocation-context-committed', {
+        messages: [{ id: 'incomplete-terminal-user', role: 'user', content: 'accepted instruction' }]
+      }, { turnId: 'incomplete-terminal-turn', sessionId: session.id })
+      await history.append('incomplete-terminal-invocation', 'invocation-completed', { status: 'completed' }, {
+        turnId: 'incomplete-terminal-turn', sessionId: session.id
+      })
+      throw new Error('SDK failed after terminal append')
+    })
+    mockRunHostedAgentTurn.mockImplementationOnce(runInvocation)
+    const handoff = createHostedTurnHandoff({
+      agentSdk: { createHostedTurnRuntime: () => ({ host: {}, dispose: async () => undefined }) },
+      history, invocationId: 'incomplete-terminal-invocation', turnId: 'incomplete-terminal-turn',
+      routeId: 'route', sessionId: session.id, sessionDb: db
+    })
+
+    await expect(handoff({
+      request: { messages: [{ role: 'user', content: 'accepted instruction' }] },
+      requiredUserMessage: { id: 'incomplete-terminal-user', message: { role: 'user', content: 'accepted instruction' } }
+    })).rejects.toMatchObject({ name: 'HostedTurnFinalizedError', outcome: 'commit-uncertain' })
+    expect(toolSideEffect).toHaveBeenCalledOnce()
+    expect(readSessionTranscript(db, session.id)).toMatchObject({ version: 1, status: 'commit_uncertain' })
+    expect(getDbConnection(db).prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(session.id))
+      .toMatchObject({ status: 'commit_uncertain' })
+    expect(claimSessionExecution(db, { sessionId: session.id, turnId: 'retry-turn', ownerId: 'retry-owner' }))
+      .toMatchObject({ acquired: false, reason: 'blocked' })
+    expect(mockRunHostedAgentTurn).toHaveBeenCalledOnce()
+    db.close()
+  })
+
   it('Hosted 执行后无法读取 canonical History 时保留 uncertain claim', async () => {
     const db = createMemoryAppDb()
     const toolSideEffect = vi.fn()

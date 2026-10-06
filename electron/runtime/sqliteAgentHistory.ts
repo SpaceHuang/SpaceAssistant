@@ -186,7 +186,10 @@ function isAnonymousReplayOnlyStream(rows: readonly OrderedSessionEventRow[]): b
 
 export type CanonicalSessionTranscriptRead =
   | Readonly<{ kind: 'matched'; messages: ClaudeChatMessageWithBlocks[]; sessionId: string; sessionGeneration: string; sessionSeq: number; commitOrder: number; watermarkEventId: string | null; watermarkInvocationId: string | null; eventCount: number }>
-  | Readonly<{ kind: 'unavailable'; reason: 'session-missing' | 'order-invalid' | 'snapshot-invalid' | 'legacy-mismatch' }>
+  | Readonly<{ kind: 'unavailable'; reason: 'session-missing' | 'history-absent' | 'order-invalid' | 'snapshot-invalid' | 'legacy-mismatch' }>
+
+/** Bulk readers may skip the global scan only after validating it in the same stable SQLite snapshot. */
+type CanonicalSessionTranscriptReadOptions = Readonly<{ globalCommitCursorAlreadyValidated?: boolean }>
 
 type LegacyTranscriptMessage = Readonly<{
   id: string; role: 'user' | 'assistant'; content: string; timestamp: number
@@ -267,7 +270,8 @@ export class SqliteAgentHistory implements HistoryPort {
       const writeFence = events.map((event) => event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
         ? (event.payload as Record<string, unknown>).canonicalWriteFence : undefined).find(Boolean) as {
           sessionGeneration?: unknown; sessionSeq?: unknown; commitOrder?: unknown
-          watermarkEventId?: unknown; watermarkInvocationId?: unknown
+          watermarkEventId?: unknown; watermarkInvocationId?: unknown; skeletonRevision?: unknown
+          sessionOwnership?: unknown; sessionVisibility?: unknown
         } | undefined
       if (writeFence) {
         if (!this.sessionId || writeFence.sessionGeneration !== expectedSessionGeneration ||
@@ -286,6 +290,20 @@ export class SqliteAgentHistory implements HistoryPort {
           : writeFence.sessionSeq === -1 && writeFence.commitOrder === -1 &&
             writeFence.watermarkEventId === null && writeFence.watermarkInvocationId === null
         if (!matches) throw new HistoryBatchError('canonical write fence no longer matches the session watermark')
+        if (writeFence.skeletonRevision !== undefined) {
+          const revision = this.conn.prepare('SELECT message_revision FROM session_message_content_cutover WHERE session_id=?')
+            .get(this.sessionId) as { message_revision: number } | undefined
+          if (!revision || !Number.isSafeInteger(writeFence.skeletonRevision) || revision.message_revision !== writeFence.skeletonRevision) {
+            throw new HistoryBatchError('canonical write fence no longer matches the message skeleton revision')
+          }
+        }
+        if (writeFence.sessionOwnership !== undefined || writeFence.sessionVisibility !== undefined) {
+          const scope = this.conn.prepare('SELECT ownership,visibility FROM sessions WHERE id=?').get(this.sessionId) as
+            { ownership: string | null; visibility: string | null } | undefined
+          if (!scope || scope.ownership !== writeFence.sessionOwnership || scope.visibility !== writeFence.sessionVisibility) {
+            throw new HistoryBatchError('canonical write fence no longer matches the session scope')
+          }
+        }
       }
       const appended = appendSqliteAgentHistoryBatchInTransaction(this.conn, storedEvents, expectedVersion, {
         schemaVersion: this.schemaVersion, now: this.now, ...(this.sessionId ? { sessionId: this.sessionId } : {})
@@ -449,7 +467,8 @@ export class SqliteAgentHistory implements HistoryPort {
   }
 
   /** Fold session-owned canonical snapshots and require exact equality for every legacy field this API can represent. */
-  readCanonicalSessionTranscript(sessionId: string, legacyMessages: readonly LegacyTranscriptMessage[]): CanonicalSessionTranscriptRead {
+  readCanonicalSessionTranscript(sessionId: string, legacyMessages: readonly LegacyTranscriptMessage[],
+    options?: CanonicalSessionTranscriptReadOptions): CanonicalSessionTranscriptRead {
     if (!sessionId.trim() || (this.sessionId && this.sessionId !== sessionId)) return { kind: 'unavailable', reason: 'session-missing' }
     const session = this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(sessionId) as { generation: string } | undefined
     if (!session?.generation) return { kind: 'unavailable', reason: 'session-missing' }
@@ -462,13 +481,13 @@ export class SqliteAgentHistory implements HistoryPort {
       WHERE streams.session_id = ? AND events.session_id = ?
       ORDER BY events.session_seq ASC, events.commit_order ASC
     `).all(sessionId, sessionId) as OrderedSessionEventRow[]
-    if (!this.isGlobalCommitCursorContiguous()) return { kind: 'unavailable', reason: 'order-invalid' }
+    if (!options?.globalCommitCursorAlreadyValidated && !this.isGlobalCommitCursorContiguous()) return { kind: 'unavailable', reason: 'order-invalid' }
     const cursor = this.conn.prepare('SELECT next_seq FROM session_event_cursor WHERE session_id=?').get(sessionId) as { next_seq: number } | undefined
     if ((cursor?.next_seq ?? 0) !== rows.length) return { kind: 'unavailable', reason: 'order-invalid' }
     if (rows.length === 0) return legacyMessages.length === 0
       ? { kind: 'matched', messages: [], sessionId, sessionGeneration: session.generation, sessionSeq: -1,
           commitOrder: -1, watermarkEventId: null, watermarkInvocationId: null, eventCount: 0 }
-      : { kind: 'unavailable', reason: 'legacy-mismatch' }
+      : { kind: 'unavailable', reason: 'history-absent' }
     if (rows.some((row, index) => !Number.isSafeInteger(row.session_seq) || row.session_seq !== index + 1 ||
       !Number.isSafeInteger(row.commit_order) || row.commit_order < 1 || row.session_id !== sessionId ||
       (index > 0 && row.commit_order <= rows[index - 1]!.commit_order))) return { kind: 'unavailable', reason: 'order-invalid' }
@@ -537,7 +556,7 @@ export class SqliteAgentHistory implements HistoryPort {
   }
 
   /** Read and fold canonical transcript state without comparing to legacy or granting reader eligibility. */
-  readCanonicalSessionTranscriptForShadow(sessionId: string): CanonicalSessionTranscriptRead {
+  readCanonicalSessionTranscriptForShadow(sessionId: string, options?: CanonicalSessionTranscriptReadOptions): CanonicalSessionTranscriptRead {
     if (!sessionId.trim() || (this.sessionId && this.sessionId !== sessionId)) return { kind: 'unavailable', reason: 'session-missing' }
     const session = this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(sessionId) as { generation: string } | undefined
     if (!session?.generation) return { kind: 'unavailable', reason: 'session-missing' }
@@ -545,7 +564,7 @@ export class SqliteAgentHistory implements HistoryPort {
       events.schema_version, events.kind, events.payload_json, events.session_seq, events.commit_order, events.session_id, events.created_at
       FROM agent_history_events events JOIN agent_history_streams streams ON streams.invocation_id=events.invocation_id
       WHERE streams.session_id=? AND events.session_id=? ORDER BY events.session_seq, events.commit_order`).all(sessionId, sessionId) as OrderedSessionEventRow[]
-    if (!this.isGlobalCommitCursorContiguous()) return { kind: 'unavailable', reason: 'order-invalid' }
+    if (!options?.globalCommitCursorAlreadyValidated && !this.isGlobalCommitCursorContiguous()) return { kind: 'unavailable', reason: 'order-invalid' }
     const cursor = this.conn.prepare('SELECT next_seq FROM session_event_cursor WHERE session_id=?').get(sessionId) as { next_seq: number } | undefined
     if ((cursor?.next_seq ?? 0) !== rows.length) return { kind: 'unavailable', reason: 'order-invalid' }
     if (rows.length === 0) return { kind: 'matched', messages: [], sessionId, sessionGeneration: session.generation,
@@ -923,44 +942,83 @@ export class SqliteAgentHistory implements HistoryPort {
   }
 
   /** Classifies pre-queue canonical projection obligations in bounded, resumable transactions. */
-  async classifyLegacyProjectionRepairs(batchSize = 100): Promise<{ classified: number; complete: boolean }> {
+  async classifyLegacyProjectionRepairs(batchSize = 100): Promise<{ classified: number; recoveryClassified: number; complete: boolean }> {
     if (!Number.isInteger(batchSize) || batchSize < 1) throw new HistoryBatchError('batchSize must be a positive integer')
     return runInTransaction(this.conn, () => {
       const migration = this.conn.prepare(`SELECT after_invocation_id, status FROM canonical_projection_repair_migration
         WHERE migration_key = 'legacy-classification-v1'`).get() as { after_invocation_id: string | null; status: string } | undefined
-      if (!migration || migration.status === 'complete') return { classified: 0, complete: true }
-      const streams = this.conn.prepare(`
-        SELECT streams.invocation_id, streams.session_id, streams.version
-        FROM agent_history_streams streams
-        WHERE (? IS NULL OR streams.invocation_id > ?)
-        ORDER BY streams.invocation_id LIMIT ?
-      `).all(migration.after_invocation_id, migration.after_invocation_id, batchSize + 1) as Array<{ invocation_id: string; session_id: string | null; version: number }>
-      const hasMore = streams.length > batchSize
-      const batch = hasMore ? streams.slice(0, batchSize) : streams
-      const register = this.conn.prepare(`INSERT OR IGNORE INTO canonical_projection_repairs(
-        repair_id, session_id, invocation_id, repair_kind, target_key, status, attempts, idempotency_key, updated_at
-      ) VALUES(?, ?, ?, 'invocation-projections', ?, 'pending', 0, ?, ?)`)
-      for (const stream of batch) {
-        if (stream.version <= 0) continue
-        const events = this.conn.prepare(`SELECT event_id, payload_json FROM agent_history_events
-          WHERE invocation_id = ? ORDER BY sequence`).all(stream.invocation_id) as Array<{ event_id: string; payload_json: string }>
-        for (const event of events) {
-          let payload: { sessionLedger?: { location?: { workDir?: unknown; sessionId?: unknown; createdAt?: unknown } } }
-          try { payload = JSON.parse(event.payload_json) }
-          catch {
-            throw new HistoryCorruptionError(stream.invocation_id, `cannot classify projection repair obligations: corrupt event payload ${event.event_id}`)
+      const recoveryMigration = this.conn.prepare(`SELECT after_invocation_id, status FROM canonical_history_recovery_work_migration
+        WHERE migration_key='active-invocations-v1'`).get() as { after_invocation_id: string | null; status: string } | undefined
+      const classifyRepairs = Boolean(migration && migration.status !== 'complete')
+      const classifyRecovery = Boolean(recoveryMigration && recoveryMigration.status !== 'complete')
+      let classified = 0
+      let recoveryClassified = 0
+
+      if (classifyRepairs) {
+        const streams = this.conn.prepare(`
+          SELECT streams.invocation_id, streams.session_id, streams.version
+          FROM agent_history_streams streams
+          WHERE (? IS NULL OR streams.invocation_id > ?)
+          ORDER BY streams.invocation_id LIMIT ?
+        `).all(migration!.after_invocation_id, migration!.after_invocation_id, batchSize + 1) as Array<{ invocation_id: string; session_id: string | null; version: number }>
+        const hasMore = streams.length > batchSize
+        const batch = hasMore ? streams.slice(0, batchSize) : streams
+        const register = this.conn.prepare(`INSERT OR IGNORE INTO canonical_projection_repairs(
+          repair_id, session_id, invocation_id, repair_kind, target_key, status, attempts, idempotency_key, updated_at
+        ) VALUES(?, ?, ?, 'invocation-projections', ?, 'pending', 0, ?, ?)`)
+        for (const stream of batch) {
+          if (stream.version <= 0) continue
+          const events = this.conn.prepare(`SELECT event_id, payload_json FROM agent_history_events
+            WHERE invocation_id = ? ORDER BY sequence`).all(stream.invocation_id) as Array<{ event_id: string; payload_json: string }>
+          for (const event of events) {
+            let payload: { sessionLedger?: { location?: { workDir?: unknown; sessionId?: unknown; createdAt?: unknown } } }
+            try { payload = JSON.parse(event.payload_json) }
+            catch {
+              throw new HistoryCorruptionError(stream.invocation_id, `cannot classify projection repair obligations: corrupt event payload ${event.event_id}`)
+            }
+            const location = payload.sessionLedger?.location
+            if (!location || typeof location.workDir !== 'string' || typeof location.sessionId !== 'string' || !Number.isFinite(location.createdAt)) continue
+            register.run(`${stream.invocation_id}:invocation-projections:${event.event_id}`, stream.session_id, stream.invocation_id,
+              event.event_id, `${stream.invocation_id}:repair:invocation-projections:${event.event_id}`, Date.now())
           }
-          const location = payload.sessionLedger?.location
-          if (!location || typeof location.workDir !== 'string' || typeof location.sessionId !== 'string' || !Number.isFinite(location.createdAt)) continue
-          register.run(`${stream.invocation_id}:invocation-projections:${event.event_id}`, stream.session_id, stream.invocation_id,
-            event.event_id, `${stream.invocation_id}:repair:invocation-projections:${event.event_id}`, Date.now())
         }
+        const after = batch.at(-1)?.invocation_id ?? migration!.after_invocation_id
+        this.conn.prepare(`UPDATE canonical_projection_repair_migration SET after_invocation_id = ?, status = ?, updated_at = ?
+          WHERE migration_key = 'legacy-classification-v1'`).run(after, hasMore ? 'pending' : 'complete', Date.now())
+        classified = batch.length
       }
-      const after = batch.at(-1)?.invocation_id ?? migration.after_invocation_id
-      const complete = !hasMore
-      this.conn.prepare(`UPDATE canonical_projection_repair_migration SET after_invocation_id = ?, status = ?, updated_at = ?
-        WHERE migration_key = 'legacy-classification-v1'`).run(after, complete ? 'complete' : 'pending', Date.now())
-      return { classified: batch.length, complete }
+
+      if (classifyRecovery) {
+        const streams = this.conn.prepare(`
+          SELECT invocation_id, session_id, version FROM agent_history_streams
+          WHERE (? IS NULL OR invocation_id > ?)
+          ORDER BY invocation_id LIMIT ?
+        `).all(recoveryMigration!.after_invocation_id, recoveryMigration!.after_invocation_id, batchSize + 1) as
+          Array<{ invocation_id: string; session_id: string | null; version: number }>
+        const hasMore = streams.length > batchSize
+        const batch = hasMore ? streams.slice(0, batchSize) : streams
+        const hasTerminal = this.conn.prepare(`SELECT 1 FROM agent_history_events
+          WHERE invocation_id=? AND sequence=? AND kind IN ('invocation-completed','invocation-failed','invocation-interrupted') LIMIT 1`)
+        const addWork = this.conn.prepare(`INSERT INTO canonical_history_recovery_work(invocation_id,session_id,updated_at)
+          VALUES(?,?,?) ON CONFLICT(invocation_id) DO UPDATE SET session_id=excluded.session_id,updated_at=excluded.updated_at`)
+        const removeWork = this.conn.prepare('DELETE FROM canonical_history_recovery_work WHERE invocation_id=?')
+        for (const stream of batch) {
+          if (hasTerminal.get(stream.invocation_id, stream.version)) removeWork.run(stream.invocation_id)
+          else addWork.run(stream.invocation_id, stream.session_id, Date.now())
+        }
+        const after = batch.at(-1)?.invocation_id ?? recoveryMigration!.after_invocation_id
+        this.conn.prepare(`UPDATE canonical_history_recovery_work_migration SET after_invocation_id=?,status=?,updated_at=?
+          WHERE migration_key='active-invocations-v1'`).run(after, hasMore ? 'pending' : 'complete', Date.now())
+        recoveryClassified = batch.length
+      }
+
+      const currentRepairStatus = this.conn.prepare(`SELECT status FROM canonical_projection_repair_migration
+        WHERE migration_key='legacy-classification-v1'`).get() as { status: string } | undefined
+      const currentRecoveryStatus = this.conn.prepare(`SELECT status FROM canonical_history_recovery_work_migration
+        WHERE migration_key='active-invocations-v1'`).get() as { status: string } | undefined
+      const repairsComplete = !currentRepairStatus || currentRepairStatus.status === 'complete'
+      const recoveryComplete = !currentRecoveryStatus || currentRecoveryStatus.status === 'complete'
+      return { classified, recoveryClassified, complete: repairsComplete && recoveryComplete }
     })
   }
 
@@ -975,6 +1033,29 @@ export class SqliteAgentHistory implements HistoryPort {
       this.conn.prepare(`UPDATE canonical_projection_repairs SET status = 'pending', attempts = attempts + 1,
         last_error = ?, updated_at = ? WHERE repair_id = ?`).run(message, now, repairId)
     }
+  }
+
+  /** Returns only durable unfinished work after backfill; exhaustive enumeration is temporary during backfill. */
+  listStartupRecoveryWorkset(): Array<{ invocationId: string; sessionId: string | null }> {
+    const migration = this.conn.prepare(`SELECT status FROM canonical_history_recovery_work_migration
+      WHERE migration_key='active-invocations-v1'`).get() as { status: string } | undefined
+    if (migration?.status === 'complete') {
+      return this.conn.prepare(`SELECT work.invocation_id,work.session_id FROM canonical_history_recovery_work work
+        LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=work.session_id
+        WHERE cutover.cleanup_state IS NULL OR cutover.cleanup_state NOT IN ('write-stopped','pending','complete')
+        ORDER BY work.invocation_id`).all()
+        .map((row) => {
+          const value = row as { invocation_id: string; session_id: string | null }
+          return { invocationId: value.invocation_id, sessionId: value.session_id }
+        })
+    }
+    return (this.conn.prepare(`SELECT streams.invocation_id,streams.session_id FROM agent_history_streams streams
+      LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=streams.session_id
+      WHERE cutover.cleanup_state IS NULL OR cutover.cleanup_state NOT IN ('write-stopped','pending','complete')
+      ORDER BY streams.invocation_id`).all() as
+      Array<{ invocation_id: string; session_id: string | null }>).map(({ invocation_id, session_id }) => ({
+      invocationId: invocation_id, sessionId: session_id
+    }))
   }
 
   /** Lists canonical invocation streams owned by a session in their first-commit order. */
@@ -1439,22 +1520,16 @@ export class SqliteAgentHistory implements HistoryPort {
     onFinalRequestContextLedgerRepairError?: (error: unknown, invocationId: string, requestId: string) => void
     onInvocationTerminalRepairError?: (error: unknown, invocationId: string, turnId: string) => void
   } = {}): Promise<RebuiltInvocationState[]> {
-    const migration = this.conn.prepare(`SELECT status FROM canonical_projection_repair_migration WHERE migration_key='legacy-classification-v1'`).get() as { status: string } | undefined
-    const classificationComplete = migration?.status === 'complete'
-    const streams = classificationComplete
-      ? this.conn.prepare(`SELECT streams.invocation_id, streams.session_id
-          FROM agent_history_streams streams
-          WHERE EXISTS (
-            SELECT 1 FROM agent_history_events terminal
-            WHERE terminal.invocation_id = streams.invocation_id
-              AND terminal.sequence = streams.version
-              AND terminal.kind NOT IN ('invocation-completed', 'invocation-failed', 'invocation-interrupted')
-          )
-          ORDER BY streams.invocation_id`).all() as Array<{ invocation_id: string; session_id: string | null }>
-      : this.conn.prepare('SELECT invocation_id, session_id FROM agent_history_streams ORDER BY invocation_id').all() as Array<{ invocation_id: string; session_id: string | null }>
+    const streams = this.listStartupRecoveryWorkset().map(({ invocationId, sessionId }) => ({
+      invocation_id: invocationId, session_id: sessionId
+    }))
     const recovered: RebuiltInvocationState[] = []
-      const repairRows = this.conn.prepare(`SELECT repair_id, invocation_id, repair_kind, target_key
-          FROM canonical_projection_repairs WHERE status='pending' ORDER BY updated_at, repair_id`).all() as Array<{ repair_id: string; invocation_id: string; repair_kind: string; target_key: string }>
+      const repairRows = this.conn.prepare(`SELECT repairs.repair_id,repairs.invocation_id,repairs.repair_kind,repairs.target_key
+          FROM canonical_projection_repairs repairs
+          LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=repairs.session_id
+          WHERE repairs.status='pending' AND (cutover.cleanup_state IS NULL OR
+            cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))
+          ORDER BY repairs.updated_at,repairs.repair_id`).all() as Array<{ repair_id: string; invocation_id: string; repair_kind: string; target_key: string }>
       const work = new Map<string, { sessionId: string | null; repairIds: string[] }>()
     for (const row of streams) work.set(row.invocation_id, { sessionId: row.session_id, repairIds: [] })
     for (const row of repairRows) {

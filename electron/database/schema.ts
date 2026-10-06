@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 46
+export const DB_SCHEMA_VERSION = 52
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (
@@ -536,6 +536,33 @@ CREATE INDEX IF NOT EXISTS idx_agent_continuations_source ON agent_continuations
 /** v30: persist the target Turn credential so continuation retries retain one identity across restarts. */
 export const MIGRATION_V30_CONTINUATION_START_TOKEN_SQL = `
 ALTER TABLE agent_continuations ADD COLUMN target_start_token TEXT NOT NULL DEFAULT '';
+`
+
+/** Product-main v30→v31 continuation-intent schema, combined with storage v30→v31. */
+export const MIGRATION_MAIN_V31_CONTINUATION_INTENTS_SQL = `
+CREATE TABLE IF NOT EXISTS continuation_intents (
+  request_id TEXT PRIMARY KEY NOT NULL,
+  session_id TEXT NOT NULL,
+  payload_sha256 TEXT NOT NULL,
+  raw_text TEXT NOT NULL,
+  attachments_json TEXT NOT NULL,
+  intent_kind TEXT NOT NULL,
+  route TEXT NOT NULL,
+  source_invocation_id TEXT,
+  source_turn_id TEXT,
+  source_sequence INTEGER,
+  target_id TEXT,
+  status TEXT NOT NULL,
+  rejection_reason TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_continuation_intents_session ON continuation_intents(session_id, created_at);
+`
+
+/** Product-main v31→v32 continuation context field, combined with storage v31→v32. */
+export const MIGRATION_MAIN_V32_CONTINUATION_CONTEXT_SQL = `
+ALTER TABLE continuation_intents ADD COLUMN continuation_context_json TEXT;
 `
 
 /** v30 → v31: durable per-projection repair queue and resumable legacy classification cursor. */
@@ -1522,4 +1549,168 @@ END;
 export const MIGRATION_V46_HISTORY_CURSOR_INVALIDATION_SQL = `
 ${MIGRATION_V46_HISTORY_CURSOR_INVALIDATION_TABLES_SQL}
 ${MIGRATION_V46_HISTORY_CURSOR_INVALIDATION_TRIGGERS_SQL}
+`
+
+/** v46 → v47: durable session transcript projection migration runs and per-session outcomes. */
+export const MIGRATION_V47_SESSION_PROJECTION_MIGRATION_SQL = `
+CREATE TABLE IF NOT EXISTS session_projection_migration_runs (
+  run_id TEXT PRIMARY KEY NOT NULL,
+  inventory_sha256 TEXT NOT NULL,
+  inventory_data_version INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('running','paused','needs_retry','needs_attention','completed')),
+  after_session_id TEXT,
+  total_count INTEGER NOT NULL,
+  migrated_count INTEGER NOT NULL DEFAULT 0,
+  legacy_required_count INTEGER NOT NULL DEFAULT 0,
+  deleted_count INTEGER NOT NULL DEFAULT 0,
+  deferred_count INTEGER NOT NULL DEFAULT 0,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_session_projection_migration_single_active
+  ON session_projection_migration_runs(status) WHERE status IN ('running','paused','needs_retry');
+CREATE TABLE IF NOT EXISTS session_projection_migration_items (
+  run_id TEXT NOT NULL REFERENCES session_projection_migration_runs(run_id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL,
+  session_generation TEXT,
+  source_disposition TEXT NOT NULL CHECK(source_disposition IN ('projection_migrated','projection_eligible','legacy_required','deleted')),
+  status TEXT NOT NULL CHECK(status IN ('pending','processing','migrated','legacy_required','deleted','deferred_active','retry')),
+  reason TEXT,
+  error TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  lease_owner TEXT,
+  lease_until INTEGER,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(run_id,session_id)
+);
+CREATE INDEX IF NOT EXISTS idx_session_projection_migration_items_work
+  ON session_projection_migration_items(run_id,status,session_id);
+`
+
+/** v47 → v48: backfill durable policy metadata; columns are added idempotently by runMigrations. */
+export const MIGRATION_V48_SESSION_PROJECTION_LEGACY_POLICY_SQL = `
+UPDATE session_projection_migration_items SET legacy_owner='session-storage-refactor-maintainers', legacy_decision='retain-legacy',
+  legacy_user_behavior='legacy-reader-retain-source',
+  legacy_user_message_zh='此会话继续使用兼容读取路径；原有消息数据会保留。',
+  legacy_user_message_en='This session continues using the compatible reader; its existing message data is retained.',
+  legacy_decided_at=updated_at WHERE status='legacy_required';
+`
+
+/** v48 → v49: persist migration scope and the privacy-safe internal History health digest. */
+export const MIGRATION_V49_SESSION_PROJECTION_SCOPE_SQL = `
+ALTER TABLE session_projection_migration_runs ADD COLUMN database_session_count INTEGER NOT NULL DEFAULT -1;
+ALTER TABLE session_projection_migration_runs ADD COLUMN migration_session_count INTEGER NOT NULL DEFAULT -1;
+ALTER TABLE session_projection_migration_runs ADD COLUMN excluded_internal_hidden_session_count INTEGER NOT NULL DEFAULT -1;
+ALTER TABLE session_projection_migration_runs ADD COLUMN internal_history_session_count INTEGER NOT NULL DEFAULT -1;
+ALTER TABLE session_projection_migration_runs ADD COLUMN internal_history_with_events_count INTEGER NOT NULL DEFAULT -1;
+ALTER TABLE session_projection_migration_runs ADD COLUMN internal_history_healthy_count INTEGER NOT NULL DEFAULT -1;
+ALTER TABLE session_projection_migration_runs ADD COLUMN internal_history_sha256 TEXT NOT NULL DEFAULT '';
+`
+
+/** v49 → v50: durable bounded startup workset for unfinished invocation recovery. */
+export const MIGRATION_V50_HISTORY_RECOVERY_WORK_SQL = `
+CREATE TABLE IF NOT EXISTS canonical_history_recovery_work (
+  invocation_id TEXT PRIMARY KEY NOT NULL,
+  session_id TEXT,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_canonical_history_recovery_work_session
+  ON canonical_history_recovery_work(session_id, invocation_id);
+CREATE TABLE IF NOT EXISTS canonical_history_recovery_work_migration (
+  migration_key TEXT PRIMARY KEY NOT NULL,
+  after_invocation_id TEXT,
+  status TEXT NOT NULL CHECK(status IN ('pending','complete')),
+  updated_at INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO canonical_history_recovery_work_migration(migration_key,after_invocation_id,status,updated_at)
+VALUES('active-invocations-v1',NULL,'pending',0);
+`
+
+/** Keep the active recovery set in the same SQLite transaction as direct History mutations. */
+export const MIGRATION_V50_HISTORY_RECOVERY_WORK_TRIGGERS_SQL = `
+CREATE TRIGGER IF NOT EXISTS add_history_recovery_work_for_new_stream
+AFTER INSERT ON agent_history_streams BEGIN
+  DELETE FROM canonical_history_recovery_work WHERE invocation_id=NEW.invocation_id;
+  INSERT OR IGNORE INTO canonical_history_recovery_work(invocation_id,session_id,updated_at)
+  SELECT stream.invocation_id,stream.session_id,unixepoch()*1000 FROM agent_history_streams stream
+  WHERE stream.invocation_id=NEW.invocation_id AND NOT EXISTS (
+    SELECT 1 FROM agent_history_events event
+    WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+  );
+END;
+CREATE TRIGGER IF NOT EXISTS refresh_history_recovery_work_for_stream_update
+AFTER UPDATE ON agent_history_streams BEGIN
+  DELETE FROM canonical_history_recovery_work WHERE invocation_id=OLD.invocation_id OR invocation_id=NEW.invocation_id;
+  INSERT OR IGNORE INTO canonical_history_recovery_work(invocation_id,session_id,updated_at)
+  SELECT stream.invocation_id,stream.session_id,unixepoch()*1000 FROM agent_history_streams stream
+  WHERE stream.invocation_id=OLD.invocation_id AND NOT EXISTS (
+    SELECT 1 FROM agent_history_events event
+    WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+  );
+  INSERT OR IGNORE INTO canonical_history_recovery_work(invocation_id,session_id,updated_at)
+  SELECT stream.invocation_id,stream.session_id,unixepoch()*1000 FROM agent_history_streams stream
+  WHERE stream.invocation_id=NEW.invocation_id AND NOT EXISTS (
+    SELECT 1 FROM agent_history_events event
+    WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+  );
+END;
+CREATE TRIGGER IF NOT EXISTS remove_history_recovery_work_for_stream_delete
+AFTER DELETE ON agent_history_streams BEGIN
+  DELETE FROM canonical_history_recovery_work WHERE invocation_id=OLD.invocation_id;
+END;
+CREATE TRIGGER IF NOT EXISTS refresh_history_recovery_work_for_event_insert
+AFTER INSERT ON agent_history_events BEGIN
+  DELETE FROM canonical_history_recovery_work WHERE invocation_id=NEW.invocation_id;
+  INSERT OR IGNORE INTO canonical_history_recovery_work(invocation_id,session_id,updated_at)
+  SELECT stream.invocation_id,stream.session_id,unixepoch()*1000 FROM agent_history_streams stream
+  WHERE stream.invocation_id=NEW.invocation_id AND NOT EXISTS (
+    SELECT 1 FROM agent_history_events event
+    WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+  );
+END;
+CREATE TRIGGER IF NOT EXISTS refresh_history_recovery_work_for_event_update
+AFTER UPDATE ON agent_history_events BEGIN
+  DELETE FROM canonical_history_recovery_work WHERE invocation_id=OLD.invocation_id OR invocation_id=NEW.invocation_id;
+  INSERT OR IGNORE INTO canonical_history_recovery_work(invocation_id,session_id,updated_at)
+  SELECT stream.invocation_id,stream.session_id,unixepoch()*1000 FROM agent_history_streams stream
+  WHERE stream.invocation_id=OLD.invocation_id AND NOT EXISTS (
+    SELECT 1 FROM agent_history_events event
+    WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+  );
+  INSERT OR IGNORE INTO canonical_history_recovery_work(invocation_id,session_id,updated_at)
+  SELECT stream.invocation_id,stream.session_id,unixepoch()*1000 FROM agent_history_streams stream
+  WHERE stream.invocation_id=NEW.invocation_id AND NOT EXISTS (
+    SELECT 1 FROM agent_history_events event
+    WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+  );
+END;
+CREATE TRIGGER IF NOT EXISTS refresh_history_recovery_work_for_event_delete
+AFTER DELETE ON agent_history_events BEGIN
+  DELETE FROM canonical_history_recovery_work WHERE invocation_id=OLD.invocation_id;
+  INSERT OR IGNORE INTO canonical_history_recovery_work(invocation_id,session_id,updated_at)
+  SELECT stream.invocation_id,stream.session_id,unixepoch()*1000 FROM agent_history_streams stream
+  WHERE stream.invocation_id=OLD.invocation_id AND NOT EXISTS (
+    SELECT 1 FROM agent_history_events event
+    WHERE event.invocation_id=stream.invocation_id AND event.sequence=stream.version
+      AND event.kind IN ('invocation-completed','invocation-failed','invocation-interrupted')
+  );
+END;
+`
+
+/** v51: preserve stable catalog/provider/route identity on usage facts. */
+export const MIGRATION_V51_USAGE_MODEL_IDENTITY_COLUMNS = [
+  ['usage_step_facts', 'model_id'], ['usage_step_facts', 'provider_model_name'], ['usage_step_facts', 'route_identity'],
+  ['usage_turn_facts', 'model_id'], ['usage_turn_facts', 'provider_model_name'], ['usage_turn_facts', 'route_identity']
+] as const
+
+/** v51 → v52: record durable operator cancellation without rewriting run or item evidence. */
+export const MIGRATION_V52_SESSION_PROJECTION_MIGRATION_CANCEL_SQL = `
+ALTER TABLE session_projection_migration_runs ADD COLUMN cancelled_at INTEGER;
 `

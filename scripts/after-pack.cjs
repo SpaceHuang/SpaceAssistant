@@ -6,6 +6,8 @@ const crypto = require('crypto')
 /** @param {import('app-builder-lib').AfterPackContext} context */
 module.exports = async function afterPack(context) {
   const platform = context.electronPlatformName
+  const buildIdentity = writeSessionStorageBuildIdentity(context)
+  writeSessionStorageCleanupReleaseMetadata(context, buildIdentity)
   if (platform === 'win32' || platform === 'darwin') copyBundledRipgrep(context)
   verifyTreeSitterAssets(context)
   if (platform === 'win32') {
@@ -15,6 +17,132 @@ module.exports = async function afterPack(context) {
     return adHocSignMacApp(context)
   }
 }
+
+function writeSessionStorageBuildIdentity(context, runGit = execFileSync) {
+  const projectDir = context.packager.info.projectDir
+  const packageJson = JSON.parse(fs.readFileSync(path.join(projectDir, 'package.json'), 'utf8'))
+  const sourceTreeClean = runGit('git', ['status', '--porcelain', '--untracked-files=all'], {
+    cwd: projectDir,
+    encoding: 'utf8',
+  }).trim().length === 0
+  const commitSha = runGit('git', ['rev-parse', 'HEAD'], { cwd: projectDir, encoding: 'utf8' }).trim()
+  const resourceDir = context.electronPlatformName === 'darwin'
+    ? path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources')
+    : path.join(context.appOutDir, 'resources')
+  fs.mkdirSync(resourceDir, { recursive: true })
+  const identity = {
+    formatVersion: 2,
+    version: packageJson.version,
+    commitSha: /^[a-f0-9]{40}$/i.test(commitSha) ? commitSha : null,
+    sourceTreeClean,
+    buildId: crypto.randomUUID(),
+    target: {
+      platform: context.electronPlatformName === 'darwin' ? 'mac'
+        : context.electronPlatformName === 'win32' ? 'win' : context.electronPlatformName,
+      arch: getReleaseTargetKey(context).split('-').at(-1),
+    },
+  }
+  fs.writeFileSync(path.join(resourceDir, 'session-storage-build-identity.json'), `${JSON.stringify(identity, null, 2)}\n`)
+  console.log(`[afterPack] 已写入会话存储构建身份（${sourceTreeClean ? '工作树干净' : '工作树有改动'}）`)
+  return identity
+}
+
+module.exports.writeSessionStorageBuildIdentity = writeSessionStorageBuildIdentity
+
+const CLEANUP_RELEASE_INPUT_FILES = Object.freeze({
+  deployment: 'session-storage-cleanup-deployment.json',
+  compatibility: 'session-storage-cleanup-compatibility.json',
+})
+
+function stableJson(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null'
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  const entries = Object.entries(value)
+    .filter(([, item]) => item !== undefined)
+    .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(',')}}`
+}
+
+function readReleaseInputFile(inputDir, fileName) {
+  const filePath = path.join(inputDir, fileName)
+  const stat = fs.lstatSync(filePath)
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`[afterPack] release metadata must be a regular file: ${fileName}`)
+  return JSON.parse(fs.readFileSync(filePath, 'utf8'))
+}
+
+function getReleaseTargetKey(context) {
+  const archNames = { 0: 'ia32', 1: 'x64', 2: 'armv7l', 3: 'arm64', 4: 'universal' }
+  const arch = typeof context.arch === 'string' ? context.arch : archNames[context.arch]
+  const platform = context.electronPlatformName === 'darwin' ? 'mac'
+    : context.electronPlatformName === 'win32' ? 'win' : context.electronPlatformName
+  return `${platform}-${arch}`
+}
+
+/**
+ * Inject post-commit rollback metadata from the ignored release-input directory.
+ * This keeps the C commit SHA out of its own tracked tree while packaging the
+ * exact record into the app's read-only resources. Missing input always writes
+ * the default-off configuration.
+ */
+function writeSessionStorageCleanupReleaseMetadata(context, buildIdentity) {
+  const projectDir = context.packager.info.projectDir
+  const inputDir = path.join(projectDir, 'release-input')
+  const deploymentPath = path.join(inputDir, CLEANUP_RELEASE_INPUT_FILES.deployment)
+  const compatibilityPath = path.join(inputDir, CLEANUP_RELEASE_INPUT_FILES.compatibility)
+  const deploymentExists = fs.existsSync(deploymentPath)
+  const compatibilityExists = fs.existsSync(compatibilityPath)
+  if (deploymentExists !== compatibilityExists) {
+    throw new Error('[afterPack] release-input must contain both cleanup deployment and compatibility files')
+  }
+
+  let deployment = { formatVersion: 1, allowContentCleanup: false, compatibilityRecordSha256: null }
+  let compatibility = null
+  if (deploymentExists) {
+    deployment = readReleaseInputFile(inputDir, CLEANUP_RELEASE_INPUT_FILES.deployment)
+    compatibility = readReleaseInputFile(inputDir, CLEANUP_RELEASE_INPUT_FILES.compatibility)
+  }
+
+  if (!deployment || deployment.formatVersion !== 1 || typeof deployment.allowContentCleanup !== 'boolean') {
+    throw new Error('[afterPack] invalid cleanup deployment release metadata')
+  }
+  if (deployment.allowContentCleanup) {
+    if (!buildIdentity || buildIdentity.sourceTreeClean !== true || !/^[a-f0-9]{40}$/.test(buildIdentity.commitSha || '')) {
+      throw new Error('[afterPack] cleanup release metadata requires a clean, fixed source commit')
+    }
+    if (!compatibility || compatibility.formatVersion !== 1 || compatibility.decision !== 'accepted' ||
+      typeof compatibility.review?.reference !== 'string' || !compatibility.review.reference.trim() ||
+      typeof compatibility.review?.reviewedAt !== 'string' || !compatibility.review.reviewedAt.trim()) {
+      throw new Error('[afterPack] enabled cleanup requires an accepted compatibility record')
+    }
+    if (compatibility.candidate?.version !== buildIdentity.version ||
+      compatibility.candidate?.commitSha !== buildIdentity.commitSha) {
+      throw new Error('[afterPack] candidate commit does not match packaged source HEAD')
+    }
+    const expectedDigest = deployment.compatibilityRecordSha256
+    const actualDigest = crypto.createHash('sha256').update(stableJson(compatibility)).digest('hex')
+    if (typeof expectedDigest !== 'string' || !/^[a-f0-9]{64}$/.test(expectedDigest) || expectedDigest !== actualDigest) {
+      throw new Error('[afterPack] cleanup compatibility record digest mismatch')
+    }
+    const targetKey = getReleaseTargetKey(context)
+    const artifact = compatibility.rollback?.artifacts?.[targetKey]
+    if (!artifact || typeof artifact.downloadUrl !== 'string' || !artifact.downloadUrl.trim() ||
+      typeof artifact.sha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(artifact.sha256)) {
+      throw new Error(`[afterPack] rollback artifact missing for ${targetKey}`)
+    }
+  } else if (deployment.compatibilityRecordSha256 !== null || compatibility !== null) {
+    throw new Error('[afterPack] disabled cleanup must not bundle an authorization record')
+  }
+
+  const resourceDir = context.electronPlatformName === 'darwin'
+    ? path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources')
+    : path.join(context.appOutDir, 'resources')
+  fs.mkdirSync(resourceDir, { recursive: true })
+  fs.writeFileSync(path.join(resourceDir, CLEANUP_RELEASE_INPUT_FILES.deployment), `${JSON.stringify(deployment, null, 2)}\n`)
+  fs.writeFileSync(path.join(resourceDir, CLEANUP_RELEASE_INPUT_FILES.compatibility), `${JSON.stringify(compatibility, null, 2)}\n`)
+  console.log(`[afterPack] 已写入会话存储清理发布元数据（${deployment.allowContentCleanup ? '门禁已配置' : '默认关闭'}）`)
+}
+
+module.exports.writeSessionStorageCleanupReleaseMetadata = writeSessionStorageCleanupReleaseMetadata
 
 // P0-T6：打包产物内 tree-sitter 受控资产（4 wasm + 3 node-types.json）必须存在
 // 且哈希与 resources/tree-sitter/SHA256SUMS.txt 一致，不符即打包失败。

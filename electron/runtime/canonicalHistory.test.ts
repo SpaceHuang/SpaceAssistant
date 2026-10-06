@@ -416,6 +416,21 @@ describe('foldClaudeSessionSnapshots', () => {
       ] }
     ])).toThrow(/duplicate stable message identity/)
   })
+
+  it('does not let message IDs containing the comparison separator hide a reordered overlap', () => {
+    expect(() => foldClaudeSessionSnapshots([
+      { sessionId: 'session-1', invocationId: 'inv-1', sessionSeq: 1, commitOrder: 1, messages: [
+        { id: 'a\\0b', role: 'user', content: 'first' },
+        { id: 'c', role: 'assistant', content: 'second' },
+        { id: 'a', role: 'user', content: 'third' },
+        { id: 'b\\0c', role: 'assistant', content: 'fourth' }
+      ] },
+      { sessionId: 'session-1', invocationId: 'inv-2', sessionSeq: 2, commitOrder: 2, messages: [
+        { id: 'a\\0b', role: 'user', content: 'first' },
+        { id: 'c', role: 'assistant', content: 'second' }
+      ] }
+    ])).toThrow(/snapshot order conflicts/)
+  })
 })
 
 

@@ -14,7 +14,7 @@ import {
 } from '../../../shared/domainTypes'
 import { changeAppLocale } from '../../i18n/localeSync'
 import { store } from '../../store'
-import { setMessages, setSession } from '../../store/chatSlice'
+import { setChatStatus, setMessages, setSession } from '../../store/chatSlice'
 import { setConfig } from '../../store/configSlice'
 import { setSessions } from '../../store/sessionSlice'
 import { createContinuationStartedSystemMessage } from '../../../shared/skillHintRecords'
@@ -300,6 +300,32 @@ describe('ChatView auto-create session', () => {
     })
     expect(window.api.messageAppendNonTurn).not.toHaveBeenCalled()
     expect(store.getState().chat.currentSessionId).toBeNull()
+  })
+
+  it('shows persisted continuation status once and acknowledges its durable sequence', async () => {
+    type Page = Awaited<ReturnType<typeof window.api.chatGetMessagePage>>
+    let resolvePendingPage: ((page: Page) => void) | undefined
+    store.dispatch(setChatStatus({ status: 'idle' }))
+    vi.mocked(window.api.chatGetMessagePage).mockImplementation(() => new Promise((resolve) => { resolvePendingPage = resolve }))
+    renderChatView({ currentSessionId: newSession.id, sessions: [newSession] })
+    const statusMessage = createContinuationStartedSystemMessage(newSession.id, 'continuation-status-stable')
+    vi.mocked(window.api.chatSubmitOutbound).mockResolvedValueOnce({
+      accepted: 'local-command',
+      sessionId: newSession.id,
+      command: { kind: 'continuation-started', messageId: statusMessage.id, sequence: 17 }
+    })
+
+    fireEvent.change(getTextarea(), { target: { value: '继续' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送消息' }))
+
+    await waitFor(() => expect(store.getState().chat.messages).toEqual(expect.arrayContaining([expect.objectContaining({ id: statusMessage.id })])))
+    expect(window.api.messageAppendNonTurn).not.toHaveBeenCalled()
+    expect(store.getState().chat.displayEntries.find((entry) => entry.message.id === statusMessage.id)?.order).toEqual({ kind: 'persisted', sequence: 17 })
+    expect(store.getState().chat.chatStatus).toBe('idle')
+    expect((getTextarea() as HTMLTextAreaElement).value).toBe('')
+    resolvePendingPage?.({ entries: [{ message: statusMessage, sequence: 17 }], oldestSequence: 17, hasMoreBefore: false })
+    await waitFor(() => expect(store.getState().chat.messages.filter((entry) => entry.id === statusMessage.id)).toHaveLength(1))
+    expect(store.getState().chat.messages.find((entry) => entry.id === statusMessage.id)?.skillHints?.[0]?.status).toBe('continuation-started')
   })
 
   it('does not call sessionCreate when a session is already selected (AC6)', async () => {

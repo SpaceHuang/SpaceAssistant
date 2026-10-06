@@ -1,0 +1,112 @@
+{
+  "manifestVersion": 1,
+  "task": "SC-01A",
+  "status": "complete",
+  "createdAt": "2026-10-06",
+  "purpose": "在 disposable file-backed profiles 生成代表性清理状态，确认 R 候选可读、C-off 候选 gate closed",
+  "candidateInputs": {
+    "rollbackReader": {
+      "task": "R-02",
+      "sourceCommit": "837a9c713d6f9c463749e63956f19db35de2cdf3",
+      "note": "本机已验证候选，非正式发布或生产 rollback floor",
+      "artifact": {
+        "target": "mac-arm64",
+        "path": "/Users/space/Documents/Develop/SpaceAssistant/release/session-storage-r/SpaceAssistant-0.2.4-arm64.dmg",
+        "sha256": "0fdc0bf2152cf677b9abb8d966d11f4838b677cee16bc84d2c2831f53652ef46",
+        "appAsarSha256": "f3d6ce76cde9f94cda05c4b275ec9d5e5def5265b1aa20843fe560a9d8d83b15",
+        "allowContentCleanup": false,
+        "compatibilityRecord": null
+      }
+    },
+    "cleanupDisabledCandidate": {
+      "task": "SC-00",
+      "sourceCommit": "3bd50b224c5abf95821525e57985fad0c11051c0",
+      "treeSha": "9c766b629ffafe8cf29a51c46ef1faecfea07b4f",
+      "artifact": {
+        "target": "mac-arm64",
+        "path": "/Users/space/Documents/Develop/SpaceAssistant/release/session-storage-c-off-candidate/SpaceAssistant-0.2.4-c-off-arm64.dmg",
+        "sha256": "f680d1d309322d33edfdfccc2124a4b205e96960638e537b906613406a403e35",
+        "buildId": "4782c26c-580d-4a96-9d56-a26e16a3cbc3",
+        "appAsarSha256": "5f3c5d3cf3b5a1a90b7721050ae6cb703001ee9e5a714266a8e6d5c67ebedb6e",
+        "deploymentResourceSha256": "267584e31e2360a8c311fcd82b927029b02ad1539f7d64a7d4f919192444428d",
+        "compatibilityResourceSha256": "38e0b9de817f645c4bec37c0d4a3e58baecccb040f5718dc069a72c7385a0bed",
+        "allowContentCleanup": false,
+        "compatibilityRecord": null
+      }
+    }
+  },
+  "fixture": {
+    "name": "sc01a-disposable-cleanup-state-v1",
+    "containsUserData": false,
+    "root": "/tmp/spaceassistant-session-storage-sc01a-20261006-1791238458725",
+    "schemaVersion": 52,
+    "canonicalHistory": 1,
+    "sourceTruthSpill": 1,
+    "projectionCache": 1,
+    "profiles": [
+      {
+        "state": "write-stopped",
+        "sessionId": "dba9ea96-4735-4f70-9044-455c1007a5c0",
+        "database": "/tmp/spaceassistant-session-storage-sc01a-20261006-1791238458725/write-stopped/userData/spaceassistant-data.db",
+        "databaseBytes": 634880,
+        "databaseSha256": "c7ac7abe5eb16725474ac22ff62e4fbcd61df431124a3880636fa879e98ff5fa",
+        "legacyMessages": [
+          { "id": "sc01a-write-stopped-user", "contentBytes": 39, "sha256": "0537939700b16f32b0be419337350ab6567ecb59732e2dd3721a666457f4f2d2", "storageState": "canonical-backed-dual-write" },
+          { "id": "sc01a-write-stopped-assistant", "contentBytes": 37, "sha256": "ec1378fd2af52db77216f670f985054328a8306cf22d5dd7937bb968f7a58c7d", "storageState": "canonical-backed-dual-write" }
+        ],
+        "cleanupProgress": { "nextSequence": 0, "afterMessageId": null, "cleanedMessageCount": 0, "scanComplete": false, "verifiedAt": null },
+        "spillFiles": []
+      },
+      {
+        "state": "pending",
+        "sessionId": "faf181a6-456d-418e-a792-08dfc5db157a",
+        "database": "/tmp/spaceassistant-session-storage-sc01a-20261006-1791238458725/pending/userData/spaceassistant-data.db",
+        "databaseBytes": 634880,
+        "databaseSha256": "95fe0389c11fa1982761587d570f7c7f1eab451d165aa9156d2392255e6e7843",
+        "legacyMessages": [
+          { "id": "sc01a-pending-user", "contentBytes": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "storageState": "canonical-backed-only" },
+          { "id": "sc01a-pending-assistant", "contentBytes": 31, "sha256": "e2c8e860697beaf44be5eec796718735ad3b1f77fc8732acadd9590433641241", "storageState": "canonical-backed-dual-write" }
+        ],
+        "cleanupProgress": { "nextSequence": 0, "afterMessageId": "sc01a-pending-user", "cleanedMessageCount": 1, "scanComplete": false, "verifiedAt": null },
+        "spillFiles": []
+      },
+      {
+        "state": "complete",
+        "sessionId": "fd24eac4-9c7f-46b9-a491-f76004e4fad0",
+        "database": "/tmp/spaceassistant-session-storage-sc01a-20261006-1791238458725/complete/userData/spaceassistant-data.db",
+        "databaseBytes": 634880,
+        "databaseSha256": "d1dfb7c42c0209e1b33d562b319ba2098cfed48051b8c49af1030b29a4a79493",
+        "legacyMessages": [
+          { "id": "sc01a-complete-user", "contentBytes": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "storageState": "canonical-backed-only" },
+          { "id": "sc01a-complete-assistant", "contentBytes": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "storageState": "canonical-backed-only" }
+        ],
+        "cleanupProgress": { "nextSequence": 1, "afterMessageId": "sc01a-complete-assistant", "cleanedMessageCount": 2, "scanComplete": true, "verifiedAt": 1791238458871 },
+        "spillFiles": []
+      }
+    ]
+  },
+  "execution": {
+    "host": "macOS arm64; no model provider or model invocation",
+    "stateGeneration": "Directly invoked the tested cutover primitives on synthetic file-backed SQLite databases; did not call packaged release metadata or production boundary. Complete state was finalized after close/reopen.",
+    "packageSmoke": {
+      "method": "Actual packaged renderer window.api.chatGetMessagePage through renderer → preload → IPC",
+      "results": "R-02 arm64 candidate and SC-00 C-off arm64 candidate each read both canonical bodies exactly in write-stopped, pending, and complete profiles (6/6 reads matched).",
+      "cOffBoundary": "The C-off bundle contains allowContentCleanup=false and null compatibility record; packaged startup was exercised on all three states and no cleanup state/progress/body advanced. electron/main.ts only schedules the packaged cleanup worker after cleanupBoundary.checkGate() and checkAuthorizationScope() both allow it.",
+      "databaseWriteFence": "For each post-smoke disposable profile, attempted an UPDATE of an assistant legacy body in a transaction; the database trigger rejected it and rollback preserved all rows. integrity_check=ok; foreign_key_check empty."
+    },
+    "focusedTest": {
+      "command": "npx vitest run electron/tools/afterPackCleanupReleaseMetadata.test.ts",
+      "result": "passed",
+      "tests": 6
+    },
+    "dmgVerification": "R-02 source manifest and SC-00 manifest record matching verified SHA-256; both candidates were mounted read-only for metadata inspection.",
+    "realProfilesAccessed": false,
+    "cleanupWorkerModifiedFixtures": false,
+    "productionBoundaryBypassedForStateGeneration": true
+  },
+  "scopeLimits": [
+    "SC-01A state profiles use inline synthetic bodies; source-truth spill fault cases remain in the later package matrix and were not repeated here.",
+    "Runtime package smoke was native macOS arm64; macOS x64 package identity and gate-closed metadata were separately fixed in SC-00, with x64 runtime matrix retained for later package audit.",
+    "R-02 is a verified local candidate, not a public release or production rollback floor."
+  ]
+}

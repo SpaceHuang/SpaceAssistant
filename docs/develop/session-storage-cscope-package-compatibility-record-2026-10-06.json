@@ -1,0 +1,52 @@
+{
+  "formatVersion": 1,
+  "decision": "accepted",
+  "review": {
+    "reference": "docs/develop/session-storage-cscope-package-compatibility-review-2026-10-06.md",
+    "reviewedAt": "2026-10-06T10:18:22+08:00"
+  },
+  "candidate": {
+    "version": "0.2.4",
+    "commitSha": "3bd50b224c5abf95821525e57985fad0c11051c0",
+    "schemaVersion": 52,
+    "historyFormatVersion": 1,
+    "spillFormatVersion": 1
+  },
+  "rollback": {
+    "version": "0.2.4",
+    "commitSha": "837a9c713d6f9c463749e63956f19db35de2cdf3",
+    "maxReadableSchemaVersion": 52,
+    "historyFormatVersions": [
+      1
+    ],
+    "spillFormatVersions": [
+      1
+    ],
+    "canonicalOnlyReader": true,
+    "cleanupStates": [
+      "write-stopped",
+      "pending",
+      "complete"
+    ],
+    "artifacts": {
+      "mac-arm64": {
+        "downloadUrl": "file:///Users/space/Documents/Develop/SpaceAssistant/release/session-storage-r/SpaceAssistant-0.2.4-arm64.dmg",
+        "sha256": "0fdc0bf2152cf677b9abb8d966d11f4838b677cee16bc84d2c2831f53652ef46"
+      },
+      "mac-x64": {
+        "downloadUrl": "file:///Users/space/Documents/Develop/SpaceAssistant/release/session-storage-r/SpaceAssistant-0.2.4.dmg",
+        "sha256": "8bfb24cf056a6dd1d41e4d28e250978812d93d1d40dc37cf1632cc0bf11cdfbc"
+      }
+    }
+  },
+  "technicalAcceptance": {
+    "authorizedUses": [
+      "SC-01C",
+      "SC-SCOPE-PKG"
+    ],
+    "scope": "synthetic disposable profiles only",
+    "realProfileAccess": false,
+    "formalRelease": false,
+    "productionCleanup": false
+  }
+}

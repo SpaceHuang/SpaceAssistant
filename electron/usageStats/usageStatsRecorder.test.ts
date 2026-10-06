@@ -83,6 +83,20 @@ describe('recordStepUsage', () => {
     db.close()
   })
 
+  it('将模型目录身份和实际 provider 路由写入 step 事实', () => {
+    const db = createMemoryAppDb()
+    recordStepUsage(db, {
+      sessionId: 'sess-1', turnId: 'turn-identity', stepId: 'request:1',
+      usage: { input_tokens: 10, output_tokens: 2 },
+      model: 'provider/model-x', llmServiceId: 'service-x',
+      modelId: 'catalog-x', providerModelName: 'provider/model-x', routeIdentity: 'route-x'
+    })
+    expect(getUsageStepFactsForTurn(db, 'sess-1', 'turn-identity')[0]).toMatchObject({
+      modelId: 'catalog-x', providerModelName: 'provider/model-x', routeIdentity: 'route-x'
+    })
+    db.close()
+  })
+
   it('provider 未带 cacheSemantics 时按 baseUrl 推断并落库', () => {
     const db = createMemoryAppDb()
     recordStepUsage(db, {
@@ -157,6 +171,20 @@ describe('recordTurnSummary', () => {
     const toolAttributionJson = JSON.stringify({ tools: { grep: 30 }, toolSource: { builtin: 30 }, toolSources: { grep: 'builtin' }, toolResults: { grep: { calls: 1, chars: 12 } } })
     recordTurnSummary(db, { turnId: 'turn-attribution', sessionId: 'session-attribution', outcome: 'completed', counts: { stepCount: 1, toolCallCount: 1, toolErrorCount: 0, toolSkippedCount: 0 }, toolAttributionJson })
     expect(getUsageTurnFact(db, 'turn-attribution')?.toolAttributionJson).toBe(toolAttributionJson)
+    db.close()
+  })
+
+  it('将模型目录身份和 provider 路由写入 turn 汇总', () => {
+    const db = createMemoryAppDb()
+    recordTurnSummary(db, {
+      turnId: 'turn-identity', sessionId: 'session-identity', outcome: 'completed',
+      counts: { stepCount: 1, toolCallCount: 0, toolErrorCount: 0, toolSkippedCount: 0 },
+      model: 'provider/model-x', llmServiceId: 'service-x', modelId: 'catalog-x',
+      providerModelName: 'provider/model-x', routeIdentity: 'route-x'
+    })
+    expect(getUsageTurnFact(db, 'turn-identity')).toMatchObject({
+      modelId: 'catalog-x', providerModelName: 'provider/model-x', routeIdentity: 'route-x'
+    })
     db.close()
   })
 

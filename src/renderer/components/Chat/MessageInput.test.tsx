@@ -85,6 +85,34 @@ describe('MessageInput', () => {
     30_000
   )
 
+  it('adds and revokes directory context through the composer menu', async () => {
+    type Grant = { grantId: string; sessionId: string; path: string; createdAt: number; source: 'user-selected-directory'; status: 'valid' | 'invalid' }
+    const api = window.api as unknown as {
+      sessionDirectoryGrantsList: (sessionId: string) => Promise<Grant[]>
+      sessionDirectoryGrantsAdd: (sessionId: string) => Promise<{ status: 'added'; grant: Omit<Grant, 'status'> }>
+      sessionDirectoryGrantsRemove: (input: { sessionId: string; grantId: string }) => Promise<{ removed: boolean }>
+    }
+    const grant = { grantId: 'grant-ui-1', sessionId: 'sess-1', path: '/tmp/Project Notes', createdAt: 1, source: 'user-selected-directory' as const, status: 'valid' as const }
+    let grants: Grant[] = []
+    api.sessionDirectoryGrantsList = vi.fn(async () => grants)
+    api.sessionDirectoryGrantsAdd = vi.fn(async () => {
+      grants = [grant]
+      return { status: 'added' as const, grant: { grantId: grant.grantId, sessionId: grant.sessionId, path: grant.path, createdAt: grant.createdAt, source: grant.source } }
+    })
+    api.sessionDirectoryGrantsRemove = vi.fn(async () => { grants = []; return { removed: true } })
+
+    renderInput()
+    fireEvent.click(screen.getByRole('button', { name: '添加图片' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: '选择目录' }))
+
+    expect(await screen.findByText('Project Notes')).toBeTruthy()
+    expect((await screen.findByRole('status')).textContent).toContain('目录已加入当前会话')
+    fireEvent.click(screen.getByRole('button', { name: '移除目录 Project Notes' }))
+    expect((await screen.findByRole('status')).textContent).toContain('已移除会话目录')
+    expect(api.sessionDirectoryGrantsRemove).toHaveBeenCalledWith({ sessionId: 'sess-1', grantId: 'grant-ui-1' })
+    expect(screen.queryByText('Project Notes')).toBeNull()
+  })
+
   it('disables send when text is empty', () => {
     renderInput()
     const sendBtn = screen.getByRole('button', { name: '发送消息' })

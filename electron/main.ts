@@ -1,5 +1,5 @@
 import path from 'path'
-import { existsSync, mkdirSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync } from 'fs'
 import http from 'http'
 import https from 'https'
 import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
@@ -56,6 +56,11 @@ import { setUsageStatsAppVersion } from './usageStats/usageStatsRecorder'
 import { backfillUsageStats } from './usageStats/usageStatsBackfill'
 import { getDbConnection } from './database/sqliteStore'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
+import { SessionProjectionMigrationApplication } from './runtime/sessionProjectionMigrationApplication'
+import { DB_SCHEMA_VERSION } from './database/schema'
+import { createSessionStorageCleanupProductionBoundary } from './runtime/sessionStorageCleanupProduction'
+import { SESSION_STORAGE_HISTORY_FORMAT_VERSION, SESSION_STORAGE_SPILL_FORMAT_VERSION } from './runtime/sessionStorageCleanupReleaseConfig'
+import { scheduleSessionMessageContentCleanupMaintenance } from './storage/sessionMessageContentCleanupMaintenance'
 import { getSessionLedgerRecoveryRoots, isSessionLedgerLocationAllowed, resolveSessionLedgerLocation as resolveAcceptedInputLedgerLocation, toSessionLedgerToolCallProjection, toSessionLedgerToolResultProjection } from './runtime/sessionLedgerRecovery'
 import { SCHEMA_META_KEYS } from './database/schema'
 import { getSchemaMeta, setSchemaMeta } from './database/sqliteStore'
@@ -174,7 +179,35 @@ function getRendererIndexPath(): string {
 let workDirState = ''
 let workDirManager: WorkDirManager | null = null
 let appDb: AppDatabase | null = null
+let sessionProjectionMigrationApplication: SessionProjectionMigrationApplication | null = null
 let mainIpcReady = false
+const processStartupStartedAt = performance.now()
+let initialRendererLoadReported = false
+
+function getTelemetryAppVersion(): string {
+  if (app.isPackaged) return app.getVersion()
+  try {
+    const packageJson = JSON.parse(readFileSync(path.join(process.cwd(), 'package.json'), 'utf8')) as { version?: unknown }
+    if (typeof packageJson.version === 'string' && packageJson.version.trim()) return packageJson.version
+  } catch { /* Keep Electron's fallback version if development metadata is unavailable. */ }
+  return app.getVersion()
+}
+
+function getTelemetryArtifactBuildId(): string | undefined {
+  if (!app.isPackaged) return undefined
+  try {
+    const identity = JSON.parse(readFileSync(path.join(process.resourcesPath, 'session-storage-build-identity.json'), 'utf8')) as {
+      formatVersion?: unknown; version?: unknown; buildId?: unknown; target?: { platform?: unknown; arch?: unknown }
+    }
+    const platform = process.platform === 'darwin' ? 'mac' : process.platform === 'win32' ? 'win' : process.platform
+    if (identity.formatVersion !== 2 || identity.version !== app.getVersion() ||
+      typeof identity.buildId !== 'string' || !/^[0-9a-f-]{36}$/i.test(identity.buildId) ||
+      identity.target?.platform !== platform || identity.target?.arch !== process.arch) return undefined
+    return identity.buildId
+  } catch {
+    return undefined
+  }
+}
 /** 模块级持有防抖备份管理器：退出流程 flush 挂起备份用（评审 2.2）。 */
 let sessionBackupManager: DebouncedSessionBackupManager | null = null
 
@@ -187,6 +220,7 @@ installProcessSafetyNet((event, detail) => {
 let usageStatsStartupMaintenance: (() => void) | null = null
 let stopPeriodicSqliteMaintenance: (() => void) | null = null
 let stopPeriodicSourceTruthSpillGc: (() => void) | null = null
+let stopPeriodicSessionContentCleanup: (() => void) | null = null
 let isQuitting = false
 let quitCleanupDone = false
 const SHUTDOWN_TIMEOUT_MS = 12_000
@@ -263,6 +297,7 @@ export async function createMainWindow(): Promise<void> {
   win.setMenuBarVisibility(false)
   attachWindowMaximizeEvents(win)
 
+  let rendererLoadOutcome: 'ok' | 'degraded' = 'ok'
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) {
       void openExternalLink(url)
@@ -280,6 +315,7 @@ export async function createMainWindow(): Promise<void> {
       await waitForUrlOk(url, 90_000)
       await win.loadURL(url)
     } catch {
+      rendererLoadOutcome = 'degraded'
       await dialog.showMessageBox(win, {
         type: 'error',
         title: '开发服务器未就绪',
@@ -288,6 +324,17 @@ export async function createMainWindow(): Promise<void> {
       const dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(getDevServerMissingHtml(url))
       await win.loadURL(dataUrl)
     }
+  }
+  if (!initialRendererLoadReported) {
+    initialRendererLoadReported = true
+    const sqliteVersion = appDb
+      ? (getDbConnection(appDb).prepare('SELECT sqlite_version() AS version').get() as { version: string }).version
+      : null
+    console.info('[startup]', JSON.stringify({
+      phase: 'app.start-to-renderer-loaded', durationMs: Math.max(0, Math.round(performance.now() - processStartupStartedAt)),
+      outcome: rendererLoadOutcome, appVersion: getTelemetryAppVersion(), electronVersion: process.versions.electron,
+      nodeVersion: process.versions.node, sqliteVersion
+    }))
   }
 
   win.on('closed', () => {
@@ -333,10 +380,22 @@ app.whenReady().then(async () => {
     return
   }
   appDb = db
+  // Main-process owner only. Execution remains closed until a separately authorized cohort is started.
+  sessionProjectionMigrationApplication = new SessionProjectionMigrationApplication(db)
+  sessionProjectionMigrationApplication.initialize()
   const recoveryWorkDir = getConfigValue(db, 'config.workDir') ?? path.join(app.getPath('userData'), 'workspace')
+  initAgentLogger({
+    getWorkDir: () => workDirManager?.getActiveWorkDir() ?? (workDirState || recoveryWorkDir),
+    isPackaged: app.isPackaged,
+    appVersion: getTelemetryAppVersion(),
+    artifactBuildId: getTelemetryArtifactBuildId(),
+    mainDirname: __dirname
+  })
   const recoveryWorkDirs = getSessionLedgerRecoveryRoots(recoveryWorkDir, getConfigValue(db, 'config.workDirProfiles'))
+  const sessionHistoryRecoveryStartedAt = performance.now()
   let sessionHistoryRecoverySucceeded = false
   let sessionHistoryRepairFailureCount = 0
+  let recoveredInvocationCount = 0
   if (safeDbMaintenanceRequested) {
     console.warn('[agentHistory] canonical full recovery skipped for --safe-db-maintenance; it will run on the next normal launch')
   } else {
@@ -465,11 +524,21 @@ app.whenReady().then(async () => {
         console.warn('[agentHistory] invocation terminal ledger repair degraded:', { invocationId, turnId, error: error instanceof Error ? error.message : String(error) })
       }
     }))
+    recoveredInvocationCount = interrupted.length
     sessionHistoryRecoverySucceeded = sessionHistoryRepairFailureCount === 0
     if (interrupted.length > 0) console.warn('[agentHistory] interrupted invocations recovered:', interrupted.map(({ invocationId }) => invocationId))
   } catch (error) {
+    sessionHistoryRepairFailureCount += 1
     console.warn('[agentHistory] startup recovery degraded:', error instanceof Error ? error.message : String(error))
   }
+  }
+  if (!safeDbMaintenanceRequested) {
+    logAgentEvent(sessionHistoryRecoverySucceeded ? 'info' : 'warn', 'session.history.recovery', {
+      outcome: sessionHistoryRecoverySucceeded ? 'completed' : 'degraded',
+      reconciledCount: recoveredInvocationCount,
+      failed: sessionHistoryRepairFailureCount,
+      durationMs: Math.max(0, Math.round(performance.now() - sessionHistoryRecoveryStartedAt))
+    })
   }
   // 进程重启 cleanup 必须先于 Runtime recovery：仅对带 owner token 的本机 run_shell 执行校验，
   // 无身份或不属于本应用的 PID 交给后续 turn recovery 收敛，绝不裸杀。
@@ -546,11 +615,6 @@ app.whenReady().then(async () => {
     }
   })
 
-  initAgentLogger({
-    getWorkDir: () => workDirManager?.getActiveWorkDir() ?? workDirState,
-    isPackaged: app.isPackaged,
-    mainDirname: __dirname
-  })
   // A2(偏差 18):宿主装配单例 runtime——必须经 createDesktopAgentRuntime 注入完整组件集
   // (空参 createAgentRuntime 全组件 no-op 桩:内置工具/取消/撤销/confirmId/MCP 限流/审计静默失效,
   //  评审 batch3-runtime-admission-sdk-review P0-1);旧全局注册函数经兼容转发落到本实例
@@ -745,7 +809,7 @@ app.whenReady().then(async () => {
   // 版本快照必须同步注入（仅缓存字符串、无 IO）：飞书/微信 autoStart 与 butler 调度器
   // 都在窗口创建之前启动，启动窗口期内触发的回合若拿到 undefined 会把 app_version 落成
   // null，且版本枚举查询（WHERE app_version IS NOT NULL）会漏掉这些行（评审跟进项）。
-  setUsageStatsAppVersion(app.getVersion())
+  setUsageStatsAppVersion(getTelemetryAppVersion())
   // 注册维护任务；实际执行时机在下方 createMainWindow 完成之后（评审 P1-3）。
   usageStatsStartupMaintenance = runUsageStatsStartupMaintenance
 
@@ -1035,7 +1099,7 @@ app.whenReady().then(async () => {
         return mergeToolsConfig(null)
       }
     },
-    appVersion: app.getVersion(),
+    appVersion: getTelemetryAppVersion(),
     onReachabilityChange: (reachable) => { wechatDeliveryReachable = reachable; if (reachable) flushDeliveries('wechat') }
   })
   registerWeChatIpcHandlers(ipcMain, {
@@ -1059,7 +1123,7 @@ app.whenReady().then(async () => {
         return mergeToolsConfig(null)
       }
     },
-    appVersion: app.getVersion()
+    appVersion: getTelemetryAppVersion()
   })
   void autoStartFeishuEventIfNeeded(db)
 
@@ -1116,6 +1180,41 @@ app.whenReady().then(async () => {
           if (summary === 'failed' || summary.failed > 0) console.warn('[storage] source-truth spill collection remains pending', summary)
         }
       })
+      if (!safeDbMaintenanceRequested && app.isPackaged) {
+        const cleanupBoundary = createSessionStorageCleanupProductionBoundary({
+          resourcesPath: process.resourcesPath,
+          appVersion: app.getVersion(),
+          schemaVersion: DB_SCHEMA_VERSION,
+          historyFormatVersion: SESSION_STORAGE_HISTORY_FORMAT_VERSION,
+          spillFormatVersion: SESSION_STORAGE_SPILL_FORMAT_VERSION,
+          platform: process.platform,
+          arch: process.arch,
+        })
+        const cleanupGate = cleanupBoundary.checkGate()
+        if (cleanupGate.allowed) {
+          const cleanupScope = cleanupBoundary.checkAuthorizationScope(db)
+          if (cleanupScope.allowed) {
+            stopPeriodicSessionContentCleanup = scheduleSessionMessageContentCleanupMaintenance(db, cleanupBoundary, {
+              initialDelayMs: 60_000,
+              intervalMs: 15 * 60_000,
+              batchSize: 100,
+              maxSessionsPerRun: 2,
+              maxBatchesPerSession: 1,
+              onResult: (summary) => {
+                if (summary === 'failed') console.warn('[storage] session content cleanup maintenance failed; pending sessions remain resumable')
+                else if (summary.status === 'blocked') console.warn('[storage] session content cleanup gate closed:', summary.gateReason)
+                else if (summary.completed || summary.batches || summary.writeStopped || summary.ineligible) {
+                  console.info('[storage] session content cleanup maintenance progress:', summary)
+                }
+              },
+            })
+          } else {
+            console.info('[storage] session content cleanup worker not registered:', cleanupScope.reason)
+          }
+        } else if (cleanupGate.reason !== 'deployment-disabled') {
+          console.warn('[storage] session content cleanup remains disabled:', cleanupGate.reason)
+        }
+      }
       usageStatsStartupMaintenance?.()
       usageStatsStartupMaintenance = null
     })
@@ -1141,6 +1240,10 @@ app.on('before-quit', (event) => {
   stopPeriodicSqliteMaintenance = null
   stopPeriodicSourceTruthSpillGc?.()
   stopPeriodicSourceTruthSpillGc = null
+  stopPeriodicSessionContentCleanup?.()
+  stopPeriodicSessionContentCleanup = null
+  const sessionProjectionMigrationShutdown = sessionProjectionMigrationApplication?.shutdown() ?? Promise.resolve()
+  sessionProjectionMigrationApplication = null
   butlerScheduler?.stop()
   destroyTray()
   floatingManager?.destroy()
@@ -1160,7 +1263,10 @@ app.on('before-quit', (event) => {
       }, SHUTDOWN_TIMEOUT_MS)
     })
     try {
-      const result = await Promise.race([runShutdownCleanup(pendingTasks), timeout])
+      const result = await Promise.race([
+        Promise.all([runShutdownCleanup(pendingTasks), sessionProjectionMigrationShutdown]).then(([cleanupResult]) => cleanupResult),
+        timeout
+      ])
       if (result && result.failures.length > 0) {
         console.warn('[shutdown] cleanup completed with failures:', result.failures.map(({ task, error }) => ({
           task,

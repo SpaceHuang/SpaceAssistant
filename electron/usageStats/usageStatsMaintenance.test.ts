@@ -86,7 +86,7 @@ describe('cleanupUsageFactsByRetention（按天清理 + 留痕）', () => {
 describe('reconcileUsageTurnFacts（崩溃补齐）', () => {
   it('为「有 step 无 turn」的孤儿补 interrupted 行（工具计数按 0）', () => {
     const db = createMemoryAppDb()
-    insertUsageStepFact(db, step({ turnId: 'orphan-1', stepId: 'r1', day: '2026-09-15', createdAt: new Date(2026, 8, 15, 10).getTime() }))
+    insertUsageStepFact(db, step({ turnId: 'orphan-1', stepId: 'r1', day: '2026-09-15', createdAt: new Date(2026, 8, 15, 10).getTime(), modelId: 'catalog-1', providerModelName: 'provider/model-1', routeIdentity: 'route-1' }))
     insertUsageStepFact(db, step({ turnId: 'orphan-1', stepId: 'r2', day: '2026-09-15', createdAt: new Date(2026, 8, 15, 11).getTime() }))
     insertUsageStepFact(db, step({ turnId: 'done-1', stepId: 'r3' }))
     upsertUsageTurnFact(db, { turnId: 'done-1', sessionId: 'sess-1', createdAt: NOW, day: '2026-09-16', stepCount: 1, toolCallCount: 0, toolErrorCount: 0, toolSkippedCount: 0, outcome: 'completed' })
@@ -101,7 +101,8 @@ describe('reconcileUsageTurnFacts（崩溃补齐）', () => {
       toolErrorCount: 0,
       toolSkippedCount: 0,
       outcome: 'interrupted',
-      day: '2026-09-15'
+      day: '2026-09-15',
+      modelId: 'catalog-1', providerModelName: 'provider/model-1', routeIdentity: 'route-1'
     })
     // 已收口的 Turn 不补
     expect(listOrphanUsageTurns(db)).toHaveLength(0)

@@ -20,6 +20,7 @@ import { appendMessage, getMessages, getSession, getSessionUsage, getTurnByReque
 import { readStoredModels } from '../llmServiceResolver'
 import { createHash } from 'node:crypto'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
+import { getProjectedMessage } from '../runtime/sessionTranscriptProjection'
 import { getDbConnection } from '../database'
 import { runInTransaction, TransactionCommitUnknownError } from '../database/transaction'
 import { AgentContinuationRejectedError, startAgentContinuation } from '../runtime/agentContinuation'
@@ -365,7 +366,11 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
         }
           if (status === 'accepted_turn' && target) {
             const turn = getTurnByRequestId(deps.db, intent.sessionId, intent.requestId)
-            if (turn) return { accepted: 'turn-started', sessionId: turn.sessionId, turnId: turn.turnId, assistantMessage: getMessages(deps.db, turn.sessionId).find((message) => message.id === turn.assistantMessageId)! }
+            if (turn) {
+              const assistantMessage = getProjectedMessage(deps.db, turn.assistantMessageId)
+              if (!assistantMessage) return { rejected: { reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' } }
+              return { accepted: 'turn-started', sessionId: turn.sessionId, turnId: turn.turnId, assistantMessage }
+            }
             return { rejected: { reason: 'CONTINUATION_INTENT_COMMIT_UNCERTAIN' } }
           }
         if (status === 'rejected_retryable' || status === 'commit_uncertain') return { rejected: { reason: String(prior.rejection_reason ?? status) } }

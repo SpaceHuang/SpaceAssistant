@@ -31,6 +31,23 @@ describe('projectAgentLogFields', () => {
     })
   })
 
+  it('retains transcript read outcome and timing while discarding transcript or arbitrary error fields', () => {
+    expect(projectAgentLogFields('session.transcript.read', {
+      sessionId: 'session-1', consumer: 'transcript', source: 'canonical:L2', outcome: 'canonical', durationMs: 14,
+      errorCode: 'CANONICAL_SESSION_CONTENT_UNAVAILABLE', content: 'private transcript', message: 'sensitive error detail'
+    })).toEqual({
+      sessionId: 'session-1', consumer: 'transcript', source: 'canonical:L2', outcome: 'canonical', durationMs: 14,
+      errorCode: 'CANONICAL_SESSION_CONTENT_UNAVAILABLE'
+    })
+  })
+
+  it('retains only structured startup history recovery facts', () => {
+    expect(projectAgentLogFields('session.history.recovery', {
+      outcome: 'degraded', reconciledCount: 2, failed: 1, durationMs: 43, errorCode: 'HISTORY_RECOVERY_FAILED',
+      message: 'private recovery detail'
+    })).toEqual({ outcome: 'degraded', reconciledCount: 2, failed: 1, durationMs: 43, errorCode: 'HISTORY_RECOVERY_FAILED' })
+  })
+
   it('keeps source-truth spill collection diagnostics structural and free of file paths or content', () => {
     expect(projectAgentLogFields('storage.spill.source_truth_gc', {
       phase: 'reference-scan', pending: 3, completed: 1, sharedReference: 1, failed: 1,

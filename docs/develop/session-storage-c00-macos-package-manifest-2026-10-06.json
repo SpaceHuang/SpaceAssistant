@@ -1,0 +1,79 @@
+{
+  "manifestVersion": 1,
+  "task": "SC-00",
+  "status": "complete",
+  "createdAt": "2026-10-06",
+  "purpose": "本机 disposable-profile 后续技术演练用 clean C-off 候选；非正式发布或真实清理授权",
+  "source": {
+    "parentHead": "87794f0c69b5bee1ac77698f9b4844be9f7d2912",
+    "snapshotCommit": "3bd50b224c5abf95821525e57985fad0c11051c0",
+    "treeSha": "9c766b629ffafe8cf29a51c46ef1faecfea07b4f",
+    "author": "Codex Local Candidate Snapshot <codex-candidate@invalid>",
+    "worktree": "/tmp/spaceassistant-session-storage-sc00-c-off-20261006",
+    "cleanAtPackaging": true,
+    "packageVersion": "0.2.4",
+    "schemaVersion": 52,
+    "canonicalHistoryFormat": 1,
+    "sourceTruthSpillFormat": 1,
+    "canonicalProjectionCacheFormat": 1
+  },
+  "host": {
+    "os": "Darwin 25.5.0",
+    "platform": "darwin",
+    "architecture": "arm64",
+    "x64Execution": "Rosetta 2"
+  },
+  "validation": {
+    "focusedTest": {
+      "command": "npx vitest run electron/tools/afterPackCleanupReleaseMetadata.test.ts",
+      "result": "passed",
+      "files": 1,
+      "tests": 6
+    },
+    "packageCommand": "npm run pack:mac",
+    "afterPack": {
+      "sourceTreeClean": true,
+      "allowContentCleanup": false,
+      "compatibilityRecord": null,
+      "deploymentResourceSha256": "267584e31e2360a8c311fcd82b927029b02ad1539f7d64a7d4f919192444428d",
+      "compatibilityResourceSha256": "38e0b9de817f645c4bec37c0d4a3e58baecccb040f5718dc069a72c7385a0bed"
+    },
+    "targets": [
+      {
+        "target": "mac-x64",
+        "buildId": "df6442b8-0e41-472b-be1d-ba4dccf2d82e",
+        "artifactPath": "/Users/space/Documents/Develop/SpaceAssistant/release/session-storage-c-off-candidate/SpaceAssistant-0.2.4-c-off-x64.dmg",
+        "artifactBytes": 207543373,
+        "artifactSha256": "dbfce0ee838dcee42b32a8b1c96518413a0cda0bdff47e4386486239d2f64bb1",
+        "appAsarSha256": "5f3c5d3cf3b5a1a90b7721050ae6cb703001ee9e5a714266a8e6d5c67ebedb6e",
+        "buildIdentityResourceSha256": "31814742d4b602675f3529257a607c06b780ad07639b3ef539b86e82e0653100",
+        "hdiutilVerify": "passed",
+        "bundleMetadataInspected": true
+      },
+      {
+        "target": "mac-arm64",
+        "buildId": "4782c26c-580d-4a96-9d56-a26e16a3cbc3",
+        "artifactPath": "/Users/space/Documents/Develop/SpaceAssistant/release/session-storage-c-off-candidate/SpaceAssistant-0.2.4-c-off-arm64.dmg",
+        "artifactBytes": 200726310,
+        "artifactSha256": "f680d1d309322d33edfdfccc2124a4b205e96960638e537b906613406a403e35",
+        "appAsarSha256": "5f3c5d3cf3b5a1a90b7721050ae6cb703001ee9e5a714266a8e6d5c67ebedb6e",
+        "buildIdentityResourceSha256": "8d75047506e759bed813f2333ce1e701cdde80e5a9535e5c67386846c9b55109",
+        "hdiutilVerify": "passed",
+        "bundleMetadataInspected": true
+      }
+    ],
+    "isolation": {
+      "realProfilesAccessed": false,
+      "modelCalls": 0,
+      "cleanupStateChangedByPackagedWorker": false,
+      "notes": "本项只固定 clean C-off 候选及包内 gate-closed 资源。C-off disposable-profile 状态演练属于 SC-01A。"
+    }
+  },
+  "retention": {
+    "directory": "/Users/space/Documents/Develop/SpaceAssistant/release/session-storage-c-off-candidate",
+    "gitIgnored": true,
+    "checksumsVerifiedAfterCopy": true,
+    "formalRelease": false,
+    "developerIdSigningOrNotarization": false
+  }
+}

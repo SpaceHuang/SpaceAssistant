@@ -1,9 +1,213 @@
 import { DatabaseSync } from 'node:sqlite'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { runMigrations } from './migrations'
 import { DB_SCHEMA_VERSION } from './schema'
 
 describe('agent canonical history migration', () => {
+  it('v51 adds a durable cancellation marker to migration runs without changing existing run or item data', () => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec(`CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+      INSERT INTO schema_meta(key,value) VALUES('schema_version','51');
+      CREATE TABLE session_projection_migration_runs (
+        run_id TEXT PRIMARY KEY NOT NULL, inventory_sha256 TEXT NOT NULL, inventory_data_version INTEGER NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('running','paused','needs_retry','needs_attention','completed')),
+        after_session_id TEXT,total_count INTEGER NOT NULL,migrated_count INTEGER NOT NULL DEFAULT 0,
+        legacy_required_count INTEGER NOT NULL DEFAULT 0,deleted_count INTEGER NOT NULL DEFAULT 0,
+        deferred_count INTEGER NOT NULL DEFAULT 0,retry_count INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,database_session_count INTEGER NOT NULL DEFAULT 0,
+        migration_session_count INTEGER NOT NULL DEFAULT 0,excluded_internal_hidden_session_count INTEGER NOT NULL DEFAULT 0,
+        internal_history_session_count INTEGER NOT NULL DEFAULT 0,internal_history_with_events_count INTEGER NOT NULL DEFAULT 0,
+        internal_history_healthy_count INTEGER NOT NULL DEFAULT 0,internal_history_sha256 TEXT NOT NULL DEFAULT '');
+      CREATE UNIQUE INDEX idx_session_projection_migration_single_active
+        ON session_projection_migration_runs(status) WHERE status IN ('running','paused','needs_retry');
+      CREATE TABLE session_projection_migration_items(run_id TEXT NOT NULL,session_id TEXT NOT NULL,status TEXT NOT NULL,
+        PRIMARY KEY(run_id,session_id));
+      INSERT INTO session_projection_migration_runs(run_id,inventory_sha256,inventory_data_version,status,total_count,created_at,updated_at)
+        VALUES('existing-run','abc',1,'paused',1,2,3);
+      INSERT INTO session_projection_migration_items(run_id,session_id,status) VALUES('existing-run','s1','pending');`)
+
+    runMigrations(conn)
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get())
+      .toEqual({ value: String(DB_SCHEMA_VERSION) })
+    expect(conn.prepare('SELECT run_id,status,cancelled_at FROM session_projection_migration_runs').get())
+      .toEqual({ run_id: 'existing-run', status: 'paused', cancelled_at: null })
+    expect(conn.prepare('SELECT run_id,session_id,status FROM session_projection_migration_items').get())
+      .toEqual({ run_id: 'existing-run', session_id: 's1', status: 'pending' })
+    expect(() => runMigrations(conn)).not.toThrow()
+    conn.close()
+  })
+
+  it('v46-v50 add durable session projection storage, scope summary, and recovery work tables idempotently', () => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec("CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL); INSERT INTO schema_meta(key,value) VALUES('schema_version','46');")
+    runMigrations(conn)
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
+    expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_projection_migration_runs'").get()).toEqual({ name: 'session_projection_migration_runs' })
+    expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='canonical_history_recovery_work'").get())
+      .toEqual({ name: 'canonical_history_recovery_work' })
+    expect(conn.prepare("SELECT status FROM canonical_history_recovery_work_migration WHERE migration_key='active-invocations-v1'").get())
+      .toEqual({ status: 'pending' })
+    expect(conn.prepare('PRAGMA table_info(session_projection_migration_runs)').all()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'database_session_count' }),
+      expect.objectContaining({ name: 'migration_session_count' }),
+      expect.objectContaining({ name: 'excluded_internal_hidden_session_count' }),
+      expect.objectContaining({ name: 'internal_history_session_count' }),
+      expect.objectContaining({ name: 'internal_history_with_events_count' }),
+      expect.objectContaining({ name: 'internal_history_healthy_count' }),
+      expect.objectContaining({ name: 'internal_history_sha256' })
+    ]))
+    expect(() => runMigrations(conn)).not.toThrow()
+    conn.close()
+  })
+
+  it('v50 adds optional usage model identity columns without rewriting existing facts', () => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec(`CREATE TABLE schema_meta(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);
+      INSERT INTO schema_meta(key,value) VALUES('schema_version','50');
+      CREATE TABLE usage_step_facts(id INTEGER PRIMARY KEY,session_id TEXT,turn_id TEXT,step_id TEXT,created_at INTEGER,day TEXT,model TEXT,llm_service_id TEXT,app_version TEXT);
+      CREATE TABLE usage_turn_facts(turn_id TEXT PRIMARY KEY,session_id TEXT,created_at INTEGER,day TEXT,model TEXT,llm_service_id TEXT,app_version TEXT);
+      INSERT INTO usage_step_facts(id,session_id,turn_id,step_id,created_at,day,model,llm_service_id,app_version)
+        VALUES(1,'s','t','step',1,'2026-10-05','model-name','service','0.2.3');
+      INSERT INTO usage_turn_facts(turn_id,session_id,created_at,day,model,llm_service_id,app_version)
+        VALUES('t','s',1,'2026-10-05','model-name','service','0.2.3');`)
+    runMigrations(conn)
+    const stepColumns = new Set((conn.prepare('PRAGMA table_info(usage_step_facts)').all() as Array<{ name: string }>).map(({ name }) => name))
+    const turnColumns = new Set((conn.prepare('PRAGMA table_info(usage_turn_facts)').all() as Array<{ name: string }>).map(({ name }) => name))
+    for (const name of ['model_id', 'provider_model_name', 'route_identity']) {
+      expect(stepColumns.has(name)).toBe(true)
+      expect(turnColumns.has(name)).toBe(true)
+    }
+    expect(conn.prepare('SELECT model,llm_service_id,app_version,model_id FROM usage_step_facts').get())
+      .toEqual({ model: 'model-name', llm_service_id: 'service', app_version: '0.2.3', model_id: null })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
+    expect(() => runMigrations(conn)).not.toThrow()
+    conn.close()
+  })
+
+  it('upgrades a file-backed storage v46 profile through v52 and preserves existing usage facts after reopen', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'spaceassistant-storage-v46-migration-'))
+    const databasePath = path.join(root, 'session.sqlite')
+    try {
+      const conn = new DatabaseSync(databasePath)
+      conn.exec(`CREATE TABLE schema_meta(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);
+        INSERT INTO schema_meta(key,value) VALUES('schema_version','46');
+        CREATE TABLE usage_step_facts(id INTEGER PRIMARY KEY,session_id TEXT,turn_id TEXT,step_id TEXT,created_at INTEGER,day TEXT,model TEXT,llm_service_id TEXT,app_version TEXT);
+        CREATE TABLE usage_turn_facts(turn_id TEXT PRIMARY KEY,session_id TEXT,created_at INTEGER,day TEXT,model TEXT,llm_service_id TEXT,app_version TEXT);
+        INSERT INTO usage_step_facts(id,session_id,turn_id,step_id,created_at,day,model,llm_service_id,app_version)
+          VALUES(1,'s','t','step',1,'2026-10-05','model-name','service','0.2.3');
+        INSERT INTO usage_turn_facts(turn_id,session_id,created_at,day,model,llm_service_id,app_version)
+          VALUES('t','s',1,'2026-10-05','model-name','service','0.2.3');`)
+      expect(() => runMigrations(conn)).not.toThrow()
+      conn.close()
+
+      const reopened = new DatabaseSync(databasePath)
+      try {
+        expect(reopened.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get())
+          .toEqual({ value: String(DB_SCHEMA_VERSION) })
+        expect(reopened.prepare('SELECT model,llm_service_id,app_version,model_id,provider_model_name,route_identity FROM usage_step_facts').get())
+          .toEqual({ model: 'model-name', llm_service_id: 'service', app_version: '0.2.3', model_id: null, provider_model_name: null, route_identity: null })
+        expect(reopened.prepare('SELECT model,llm_service_id,app_version,model_id,provider_model_name,route_identity FROM usage_turn_facts').get())
+          .toEqual({ model: 'model-name', llm_service_id: 'service', app_version: '0.2.3', model_id: null, provider_model_name: null, route_identity: null })
+        expect(reopened.prepare('PRAGMA integrity_check').all()).toEqual([{ integrity_check: 'ok' }])
+        expect(reopened.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+        expect(() => runMigrations(reopened)).not.toThrow()
+      } finally {
+        reopened.close()
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('v49 installs recovery work triggers without scanning existing history during schema migration', () => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec(`CREATE TABLE schema_meta(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);
+      INSERT INTO schema_meta(key,value) VALUES('schema_version','49');
+      CREATE TABLE agent_history_streams(invocation_id TEXT PRIMARY KEY NOT NULL,version INTEGER NOT NULL,schema_version INTEGER NOT NULL,session_id TEXT);
+      CREATE TABLE agent_history_events(invocation_id TEXT NOT NULL,sequence INTEGER NOT NULL,event_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,turn_id TEXT NOT NULL,schema_version INTEGER NOT NULL,kind TEXT NOT NULL,
+        payload_json TEXT NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(invocation_id,sequence));
+      INSERT INTO agent_history_streams VALUES('existing-terminal',1,1,'session-terminal');
+      INSERT INTO agent_history_events VALUES('existing-terminal',1,'terminal','terminal-key','turn',1,'invocation-completed','{"status":"completed"}',1);`)
+
+    runMigrations(conn)
+
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
+    expect(conn.prepare('SELECT invocation_id FROM canonical_history_recovery_work').all()).toEqual([])
+    expect(conn.prepare("SELECT status FROM canonical_history_recovery_work_migration WHERE migration_key='active-invocations-v1'").get())
+      .toEqual({ status: 'pending' })
+    const triggerNames = (conn.prepare(`SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE '%history_recovery_work%'`).all() as Array<{ name: string }>)
+      .map(({ name }) => name)
+    expect(triggerNames).toEqual(expect.arrayContaining([
+      'add_history_recovery_work_for_new_stream', 'refresh_history_recovery_work_for_stream_update',
+      'remove_history_recovery_work_for_stream_delete', 'refresh_history_recovery_work_for_event_insert',
+      'refresh_history_recovery_work_for_event_update', 'refresh_history_recovery_work_for_event_delete'
+    ]))
+
+    conn.prepare('INSERT INTO agent_history_streams VALUES(?,?,?,?)').run('new-invocation', 1, 1, 'new-session')
+    conn.prepare('INSERT INTO agent_history_events VALUES(?,?,?,?,?,?,?,?,?)')
+      .run('new-invocation', 1, 'start', 'start-key', 'new-turn', 1, 'tool-call-started', '{}', 1)
+    expect(conn.prepare('SELECT invocation_id FROM canonical_history_recovery_work').all()).toEqual([{ invocation_id: 'new-invocation' }])
+
+    conn.prepare('INSERT INTO agent_history_events VALUES(?,?,?,?,?,?,?,?,?)')
+      .run('new-invocation', 2, 'terminal', 'terminal-key', 'new-turn', 1, 'invocation-completed', '{"status":"completed"}', 2)
+    expect(conn.prepare('SELECT invocation_id FROM canonical_history_recovery_work').all()).toEqual([{ invocation_id: 'new-invocation' }])
+    conn.prepare('UPDATE agent_history_streams SET version=2 WHERE invocation_id=?').run('new-invocation')
+    expect(conn.prepare('SELECT invocation_id FROM canonical_history_recovery_work').all()).toEqual([])
+
+    conn.prepare("UPDATE agent_history_events SET kind='tool-call-started' WHERE invocation_id='new-invocation' AND sequence=2").run()
+    expect(conn.prepare('SELECT invocation_id FROM canonical_history_recovery_work').all()).toEqual([{ invocation_id: 'new-invocation' }])
+    conn.prepare("UPDATE agent_history_streams SET session_id='renamed-session' WHERE invocation_id='new-invocation'").run()
+    expect(conn.prepare('SELECT session_id FROM canonical_history_recovery_work WHERE invocation_id=?').get('new-invocation'))
+      .toEqual({ session_id: 'renamed-session' })
+    conn.prepare("DELETE FROM agent_history_events WHERE invocation_id='new-invocation' AND sequence=2").run()
+    expect(conn.prepare('SELECT invocation_id FROM canonical_history_recovery_work').all()).toEqual([{ invocation_id: 'new-invocation' }])
+    conn.prepare('DELETE FROM agent_history_streams WHERE invocation_id=?').run('new-invocation')
+    expect(conn.prepare('SELECT invocation_id FROM canonical_history_recovery_work').all()).toEqual([])
+    expect(() => runMigrations(conn)).not.toThrow()
+    conn.close()
+  })
+
+  it('v47 assigns safe legacy policy metadata to existing queue rows', () => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec(`CREATE TABLE schema_meta(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);
+      INSERT INTO schema_meta(key,value) VALUES('schema_version','47');
+      CREATE TABLE session_projection_migration_items(
+        run_id TEXT NOT NULL,session_id TEXT NOT NULL,source_disposition TEXT NOT NULL,status TEXT NOT NULL,reason TEXT,updated_at INTEGER NOT NULL,
+        PRIMARY KEY(run_id,session_id));
+      INSERT INTO session_projection_migration_items VALUES('run','legacy-session','legacy_required','legacy_required','legacy-mismatch',123);`)
+    runMigrations(conn)
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
+    expect(conn.prepare(`SELECT legacy_owner,legacy_decision,legacy_user_behavior,legacy_decided_at
+      FROM session_projection_migration_items WHERE session_id='legacy-session'`).get()).toEqual({
+      legacy_owner: 'session-storage-refactor-maintainers', legacy_decision: 'retain-legacy',
+      legacy_user_behavior: 'legacy-reader-retain-source', legacy_decided_at: 123
+    })
+    conn.close()
+  })
+
+  it('v49 fences active pre-scope inventories instead of resuming an unauditable cohort', () => {
+    const conn = new DatabaseSync(':memory:')
+    conn.exec(`CREATE TABLE schema_meta(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);
+      INSERT INTO schema_meta(key,value) VALUES('schema_version','48');
+      CREATE TABLE session_projection_migration_runs(
+        run_id TEXT PRIMARY KEY, inventory_sha256 TEXT NOT NULL, inventory_data_version INTEGER NOT NULL,
+        status TEXT NOT NULL, after_session_id TEXT, total_count INTEGER NOT NULL,
+        migrated_count INTEGER NOT NULL DEFAULT 0, legacy_required_count INTEGER NOT NULL DEFAULT 0,
+        deleted_count INTEGER NOT NULL DEFAULT 0, deferred_count INTEGER NOT NULL DEFAULT 0,
+        retry_count INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+      INSERT INTO session_projection_migration_runs(run_id,inventory_sha256,inventory_data_version,status,total_count,created_at,updated_at)
+        VALUES('old-active','old-hash',1,'running',4,1,1);`)
+
+    runMigrations(conn)
+    expect(conn.prepare('SELECT status,database_session_count,internal_history_sha256 FROM session_projection_migration_runs WHERE run_id=?')
+      .get('old-active')).toEqual({ status: 'needs_attention', database_session_count: -1, internal_history_sha256: '' })
+    conn.close()
+  })
+
   it('v36 installs fail-closed transcript eligibility invalidation triggers', () => {
     const conn = new DatabaseSync(':memory:')
     conn.exec(`CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
@@ -19,7 +223,7 @@ describe('agent canonical history migration', () => {
       INSERT INTO messages(id,session_id,content) VALUES('m','s','body');`)
 
     runMigrations(conn)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '46' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
     const markEligible = conn.prepare('INSERT OR REPLACE INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at) VALUES(?,?,?)')
     expect(conn.prepare('SELECT name FROM sqlite_master WHERE type=\'trigger\' AND name LIKE \'invalidate_session_projection_%\'').all()).toHaveLength(3)
 
@@ -47,7 +251,7 @@ describe('agent canonical history migration', () => {
       INSERT INTO canonical_session_projection_cache(session_id,cache_key,value) VALUES('session-a','transcript','[]');`)
 
     runMigrations(conn)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '46' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
     expect(conn.prepare('SELECT value FROM canonical_session_projection_cache').all()).toEqual([])
 
     conn.prepare("UPDATE agent_history_events SET payload_json='{}' WHERE event_id='event'").run()
@@ -76,7 +280,7 @@ describe('agent canonical history migration', () => {
       INSERT INTO canonical_session_projection_cache(session_id,cache_key,value) VALUES('session-a','transcript','[]');`)
 
     runMigrations(conn)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '46' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
     expect(conn.prepare('PRAGMA table_info(canonical_session_projection_cache)').all())
       .toEqual(expect.arrayContaining([expect.objectContaining({ name: 'value_sha256', dflt_value: "''" })]))
     expect(conn.prepare('SELECT session_id FROM canonical_session_projection_cache').all()).toEqual([])
@@ -295,7 +499,7 @@ describe('agent canonical history migration', () => {
 
     runMigrations(conn)
 
-    expect(DB_SCHEMA_VERSION).toBe(46)
+    expect(DB_SCHEMA_VERSION).toBe(52)
     expect(conn.prepare('PRAGMA table_info(turns)').all()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'accepted_input_history_version', dflt_value: '0' })
     ]))

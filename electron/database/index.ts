@@ -1,13 +1,13 @@
 import path from 'path'
 import { resolveDbPath, resolveJsonPathForDb } from './jsonSnapshot'
 import { migrateFromJsonIfNeeded } from './migrateFromJson'
-import { openSqliteDatabase, type AppDatabase } from './sqliteStore'
+import { openSqliteDatabase, openSqliteDatabaseReadOnly, type AppDatabase } from './sqliteStore'
 import { migrateThinkingEffortConfig } from './thinkingEffortMigration'
 
 export type { AppDatabase } from './sqliteStore'
 export type { StoredMessage } from './types'
 // 事务入口与 changes 转换 helper 的对外桶导出；实现位于 ./transaction（canonical 路径）。
-export { openSqliteDatabase, getDbConnection } from './sqliteStore'
+export { openSqliteDatabase, openSqliteDatabaseReadOnly, getDbConnection } from './sqliteStore'
 export { changesToNumber, runInTransaction } from './transaction'
 
 export type {

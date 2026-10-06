@@ -91,6 +91,22 @@ describe('TurnCoordinator', () => {
     expect(started).toMatchObject({ requestId: 'r1', sessionId: 's1', userMessage: user, assistantMessage: assistant, version: 0 })
   })
 
+  it('create-user prepare 原子传递 continuation acceptance 与 retry lineage', () => {
+    const db = storage()
+    const intent = {
+      mode: 'create-user' as const, requestId: 'continue-r', sessionId: 's1', input: { text: '继续检查' },
+      continuationAcceptance: { payloadSha256: 'a'.repeat(64), rawText: '继续检查', kind: 'follow-up' as const, route: 'context-turn', sourceInvocationId: 'failed-inv', sourceTurnId: 'failed-turn', sourceSequence: 8 },
+      retryOfMessageId: 'failed-message', retryOfInvocationId: 'failed-inv',
+      config: { continuationContext: { sourceInvocationId: 'failed-inv', sourceTurnId: 'failed-turn', historySequence: 8, summary: 'known summary', state: 'known' as const } }
+    }
+    const started = new TurnCoordinator(db, { now: () => 1, id: (() => { let n = 0; return () => `id-${++n}` })() }).prepare(intent)
+    expect(db.prepareAtomic).toHaveBeenCalledWith(expect.objectContaining({ turn: expect.objectContaining({
+      continuationAcceptance: intent.continuationAcceptance,
+      retryOfMessageId: 'failed-message', retryOfInvocationId: 'failed-inv'
+    }) }))
+    expect(started).toMatchObject({ retryOfMessageId: 'failed-message', retryOfInvocationId: 'failed-inv', executionConfig: intent.config })
+  })
+
   it('create-user 将图片附件作为受信输入一起原子持久化', () => {
     const db = storage()
     db.prepareAtomic = vi.fn((input) => ({ user: { message: { ...input.user, schemaVersion: 1 } as Message, sequence: 1 }, assistant: { message: { ...input.assistant, schemaVersion: 1 } as Message, sequence: 2 } }))
@@ -535,6 +551,22 @@ describe('TurnCoordinator', () => {
     expect(coordinator.listActive()).toEqual([])
     expect(coordinator.cancel('residue-turn')).toBe(false)
     expect(db.recoverTurn).not.toHaveBeenCalled()
+  })
+
+  it('recover 补偿已持久为 terminal/failed 但 assistant 仍 streaming 的残留', () => {
+    const db = storage()
+    db.listRecoverableResidues = vi.fn(() => [{ message: assistant, turnId: 'terminal-failed-residue-turn', turnOutcome: 'failed' }])
+    db.finalizeResidueMessage = vi.fn(() => true)
+    const coordinator = new TurnCoordinator(db, { now: () => 1, id: () => 'id' })
+    coordinator.restoreTurn({
+      turnId: 'terminal-failed-residue-turn', requestId: 'terminal-failed-residue-request', sessionId: 's1',
+      assistantMessageId: assistant.id, state: 'terminal', outcome: 'failed', version: 2
+    }, assistant)
+
+    expect(coordinator.recover()).toBe(1)
+    expect(db.finalizeResidueMessage).toHaveBeenCalledWith(assistant.id, 'failed')
+    expect(db.recoverTurn).not.toHaveBeenCalled()
+    expect(coordinator.listActive()).toEqual([])
   })
 
   it('旧 storage 未提供 recoverable residues 时回退 listStreaming', () => {

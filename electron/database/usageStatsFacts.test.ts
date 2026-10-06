@@ -66,7 +66,7 @@ function turnFact(overrides: Partial<UsageTurnFactInput> = {}): UsageTurnFactInp
 
 describe('v16 用量统计表迁移', () => {
   it('当前 schema version 包含后续迁移', () => {
-    expect(DB_SCHEMA_VERSION).toBe(46)
+    expect(DB_SCHEMA_VERSION).toBe(52)
   })
 
   it('v15 库升级到 v16 后两张统计表与索引存在，且重复迁移幂等', () => {
@@ -125,6 +125,15 @@ describe('usage_step_facts / usage_turn_facts 读写', () => {
     db.close()
   })
 
+  it('逐步事实保留稳定模型 ID、provider 模型名和路由身份', () => {
+    const db = createMemoryAppDb()
+    insertUsageStepFact(db, stepFact({ modelId: 'catalog-1', providerModelName: 'vendor/model-x', routeIdentity: 'provider-route-9' }))
+    expect(getUsageStepFactsForTurn(db, 'sess-1', 'turn-1')[0]).toMatchObject({
+      modelId: 'catalog-1', providerModelName: 'vendor/model-x', routeIdentity: 'provider-route-9'
+    })
+    db.close()
+  })
+
   it('可选维度字段允许缺省（读回为 null）', () => {
     const db = createMemoryAppDb()
     insertUsageStepFact(db, stepFact({ model: undefined, llmServiceId: undefined, appVersion: undefined, cacheSemantics: undefined }))
@@ -156,6 +165,15 @@ describe('usage_step_facts / usage_turn_facts 读写', () => {
     db.close()
   })
 
+  it('Turn 汇总保留稳定模型 ID、provider 模型名和路由身份', () => {
+    const db = createMemoryAppDb()
+    upsertUsageTurnFact(db, turnFact({ modelId: 'catalog-1', providerModelName: 'vendor/model-x', routeIdentity: 'provider-route-9' }))
+    expect(getUsageTurnFact(db, 'turn-1')).toMatchObject({
+      modelId: 'catalog-1', providerModelName: 'vendor/model-x', routeIdentity: 'provider-route-9'
+    })
+    db.close()
+  })
+
   it('两张统计表均不对 sessions 建外键（会话删除后统计行保留）', () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)
@@ -170,7 +188,7 @@ describe('崩溃补齐：孤儿 Turn 查询', () => {
     const db = createMemoryAppDb()
     insertUsageStepFact(db, stepFact())
     insertUsageStepFact(db, stepFact({ stepId: 'req-1:round:2', createdAt: 1758000001000 }))
-    insertUsageStepFact(db, stepFact({ sessionId: 'sess-2', turnId: 'turn-2', stepId: 'req-2:round:1' }))
+    insertUsageStepFact(db, stepFact({ sessionId: 'sess-2', turnId: 'turn-2', stepId: 'req-2:round:1', modelId: 'catalog-2', providerModelName: 'provider/model-2', routeIdentity: 'route-2' }))
     upsertUsageTurnFact(db, turnFact()) // turn-1 已收口
 
     const orphans = listOrphanUsageTurns(db)
@@ -178,7 +196,8 @@ describe('崩溃补齐：孤儿 Turn 查询', () => {
       expect.objectContaining({
         sessionId: 'sess-2',
         turnId: 'turn-2',
-        stepCount: 1
+        stepCount: 1,
+        modelId: 'catalog-2', providerModelName: 'provider/model-2', routeIdentity: 'route-2'
       })
     ])
     db.close()

@@ -201,9 +201,18 @@ async function syncDirectory(root: string): Promise<void> {
 }
 
 /** Scan every canonical History payload before orphan deletion; malformed rows fail closed. */
-export function readCanonicalSpillReferences(conn: DatabaseSync): { descriptors: SpillDescriptor[]; referencedLocators: Set<string> } {
-  const rows = conn.prepare(`SELECT payload_json AS value FROM agent_history_events
-    UNION ALL SELECT messages_json AS value FROM session_transcript_entries`).all() as Array<{ value: string }>
+export function readCanonicalSpillReferences(conn: DatabaseSync, options: { allowMissingTables?: boolean } = {}): { descriptors: SpillDescriptor[]; referencedLocators: Set<string> } {
+  const tables = new Set((conn.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(({ name }) => name))
+  if (!options.allowMissingTables && (!tables.has('agent_history_events') || !tables.has('session_transcript_entries'))) {
+    throw new Error('canonical spill reference tables are unavailable')
+  }
+  const rows: Array<{ value: string }> = []
+  if (tables.has('agent_history_events')) {
+    rows.push(...conn.prepare('SELECT payload_json AS value FROM agent_history_events').all() as Array<{ value: string }>)
+  }
+  if (tables.has('session_transcript_entries')) {
+    rows.push(...conn.prepare('SELECT messages_json AS value FROM session_transcript_entries').all() as Array<{ value: string }>)
+  }
   const descriptors: SpillDescriptor[] = []
   for (const row of rows) collectSpillDescriptorsStrict(JSON.parse(row.value) as unknown, descriptors)
   return { descriptors, referencedLocators: new Set(descriptors.map(({ locator }) => locator)) }

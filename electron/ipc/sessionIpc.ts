@@ -305,6 +305,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     }
     clearSessionToolResources(sessionId)
     deleteSession(ctx.db, sessionId, { flush: false })
+    ctx.wakeSourceTruthSpillGc?.()
     // §5.3：会话删除时清空会话级 decision_cache 条目；清理失败不阻塞删除流程
     try {
       clearDecisionCacheOnSessionDelete(ctx.db, sessionId)

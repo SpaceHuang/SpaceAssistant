@@ -4,12 +4,15 @@ import path from 'path'
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { SessionBackupManager, arrayMessagePageReader, parseSessionBackupDirName, type MessagePageReader, type MessagesPage } from './sessionBackupManager'
 import type { Message, Session } from '../src/shared/domainTypes'
-import { createMemoryAppDb } from './database/testHelpers'
-import { appendMessage, createSession, getDbConnection } from './database'
+import { createMemoryAppDb, createTempDatabase } from './database/testHelpers'
+import { appendMessage, createSession, getDbConnection, openDatabase } from './database'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { backupPageReader } from './ipc/ipcShared'
 import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import type { AppIpcContext } from './appIpc'
+import { certifyCanonicalSessionApiRead, beginSessionMessageContentCleanup, clearNextSessionMessageContentBatch,
+  markSessionMessageContentWriteStopped, setCanonicalApiReadFeatureEnabled, verifyAndCompleteSessionMessageContentCleanup } from './runtime/sessionStorageCutover'
+import { enableCanonicalSessionWriteAuthority } from './runtime/sessionContentWriteAuthority'
 
 function makeSession(over: Partial<Session> = {}): Session {
   return {
@@ -169,6 +172,49 @@ describe('SessionBackupManager', () => {
       ])
     } finally {
       db.close()
+    }
+  })
+
+  it('restores full canonical content from backup after an isolated bounded cleanup and database reopen', async () => {
+    const temp = createTempDatabase('cleanup-backup-restore-')
+    let db = temp.db
+    try {
+      const session = createSession(db, { name: 'cleanup backup restore', model: 'test' })
+      const bodies = ['cleanup backup user', 'cleanup backup assistant']
+      const messages = bodies.map((content, index) => appendMessage(db, {
+        id: `cleanup-backup-${index}`, sessionId: session.id, role: index ? 'assistant' as const : 'user' as const,
+        content, timestamp: index + 1, status: index ? 'completed' as const : 'sent' as const
+      }).message)
+      const conn = getDbConnection(db)
+      const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+      await history.appendBatch([{
+        invocationId: 'cleanup-backup-invocation', turnId: 'cleanup-backup-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'cleanup-backup-context', idempotencyKey: 'cleanup-backup-context', kind: 'invocation-context-committed',
+        payload: { messages: messages.map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })) }
+      }], 0)
+
+      setCanonicalApiReadFeatureEnabled(db, true)
+      expect(certifyCanonicalSessionApiRead(db, session.id).status).toBe('eligible')
+      expect(enableCanonicalSessionWriteAuthority(db, session.id).status).toBe('enabled')
+      expect(markSessionMessageContentWriteStopped(db, session.id)).toBe(true)
+      expect(beginSessionMessageContentCleanup(db, session.id)).toBe(true)
+      expect(clearNextSessionMessageContentBatch(db, session.id, 1)).toMatchObject({ status: 'advanced', cleanedMessageCount: 1 })
+      expect(clearNextSessionMessageContentBatch(db, session.id, 1)).toMatchObject({ status: 'complete', cleanedMessageCount: 1 })
+      db.close()
+      db = openDatabase(temp.dbPath)
+      expect(verifyAndCompleteSessionMessageContentCleanup(db, session.id)).toBe(true)
+      expect(getDbConnection(db).prepare('SELECT content,content_storage_state FROM messages WHERE session_id=? ORDER BY sequence').all(session.id))
+        .toEqual(messages.map(({ id }) => ({ content: '', content_storage_state: 'canonical-backed-only' })))
+
+      const manager = new SessionBackupManager(workDir)
+      await manager.backupSession(session, backupPageReader({ db } as AppIpcContext, session.id))
+      const restored = await manager.restoreSession(session.id)
+      expect(restored?.messages.map(({ id, content }) => [id, content])).toEqual([
+        ['cleanup-backup-0', bodies[0]], ['cleanup-backup-1', bodies[1]]
+      ])
+    } finally {
+      try { db.close() } catch { /* cleanup closes the current handle */ }
+      temp.cleanup()
     }
   })
 

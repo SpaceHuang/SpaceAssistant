@@ -201,8 +201,12 @@ export async function runImRemoteAgent(args: {
     const creds = await resolveLlmCredentialsForModel(args.db, routeModelName, {})
     const baseUrl = creds.baseUrl ?? args.getBaseUrl()
     const getApiKey = creds.error ? args.getApiKey : creds.getApiKey
+    const modelEntry = (() => {
+      try { return (JSON.parse(getConfigValue(args.db, 'config.models') ?? '[]') as ModelEntry[]).find((entry) => entry.name === routeModelName) }
+      catch { return undefined }
+    })()
     const providerRouteId = requireInvocationAnthropicRoute({
-      modelId: routeModelName,
+      modelId: modelEntry?.id ?? routeModelName,
       endpoint: baseUrl,
       credentialRef: `llm-service:${creds.serviceId || args.llmServiceId || 'default'}`
     }, getDefaultAgentRuntime().modelProviders)
@@ -217,6 +221,7 @@ export async function runImRemoteAgent(args: {
       // 会话冻结配置（args.llmServiceId）仅作 resolver 失败时的兜底（评审 P1-2）。
       llmServiceId: creds.serviceId || args.llmServiceId,
       model: routeModelName,
+      ...(modelEntry?.id ? { modelId: modelEntry.id } : {}),
       providerRouteId,
       contextWindow,
       contextWindowTrusted,

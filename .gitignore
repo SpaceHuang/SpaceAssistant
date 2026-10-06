@@ -73,6 +73,9 @@ llm-wiki/
 # Codex 本地配置
 .codex/
 
+# 仅由受控发布作业注入的会话清理兼容记录；不属于源码提交
+/release-input/
+
 # Impeccable hook 本地配置
 .github/hooks/
 dbg-rel.txt

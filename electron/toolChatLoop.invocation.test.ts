@@ -55,8 +55,8 @@ vi.mock('./chatCancelRegistry', () => ({
 
 vi.mock('./sessionTitleSuggest', () => ({
   scheduleSessionTitleSuggestion: vi.fn(),
-  reachedCumulativeMessagesForTitleSuggest: vi.fn((_historical: number, current: number) => current >= 3),
-  countVisibleTitleMessagesForSuggest: vi.fn((messages: unknown[]) => messages.length)
+  countVisibleTitleMessagesForSuggest: vi.fn((messages: unknown[]) => messages.length),
+  reachedCumulativeMessagesForTitleSuggest: vi.fn((historical: number, current: number) => historical + current >= 3)
 }))
 
 vi.mock('./tools/builtinExecutors', async (importOriginal) => {
@@ -257,29 +257,89 @@ describe('assembleInvocation 键位平移（P1 契约形状）', () => {
 })
 
 describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
-  it('累计 user + assistant 达到 3 条时接线调度在线标题生成', async () => {
-    const providerRouteId = 'desktop-anthropic:title-trigger'
+  it('Hosted turn 成功且调用前可见 user/assistant 消息达到 3 条时按主线快照调度标题', async () => {
+    const providerRouteId = `desktop-anthropic:title-trigger-${Date.now()}`
     const runtime = getDefaultAgentRuntime()
-    runtime.modelProviders.register({ routeId: providerRouteId, protocol: 'anthropic-messages', dialect: 'anthropic-messages-2023-06-01', adapterVersion: 'pi-ai@0.87.1', modelId: 'title-trigger' }, {
-      providerId: 'title-trigger-provider',
+    runtime.modelProviders.register({
+      routeId: providerRouteId,
+      protocol: 'anthropic-messages',
+      dialect: 'anthropic-messages-2023-06-01',
+      adapterVersion: 'pi-ai@0.87.1',
+      modelId: 'claude-sonnet-4-20250514'
+    }, {
+      providerId: 'hosted-title-trigger-provider',
       async *stream() {
-        yield { type: 'text-delta', text: 'answer' }
-        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'text-delta', text: 'final title-trigger answer' }
+        yield { type: 'usage', inputTokens: 3, outputTokens: 2 }
         yield { type: 'finish', reason: 'stop' }
       }
     })
     const assembled = assembleInvocation(baseMaterials({
       providerRouteId,
-      messages: [{ role: 'user', content: 'u1' }, { role: 'assistant', content: 'a1' }, { role: 'user', content: 'u2' }] as never
+      messages: [
+        { role: 'user', content: 'first question' },
+        { role: 'assistant', content: 'first answer' },
+        { role: 'user', content: 'second question' },
+        { role: 'assistant', content: 'second answer' },
+        { role: 'user', content: 'third question' }
+      ] as never
     }))
     assembled.ports.toolRevocations = undefined
     const history = new MemoryHistory()
     assembled.ports.history = history
-    const handoff = createHostedTurnHandoff({ agentSdk: assembled.agentSdk as never, history, invocationId: assembled.invocation.trace.turnId, turnId: assembled.invocation.trace.turnId, routeId: providerRouteId, recoverProviderAttempt: assembled.agentSdk.recoverProviderAttempt })
+    const handoff = createHostedTurnHandoff({
+      agentSdk: assembled.agentSdk as never,
+      history,
+      invocationId: assembled.invocation.trace.turnId,
+      turnId: assembled.invocation.trace.turnId,
+      routeId: providerRouteId,
+      recoverProviderAttempt: assembled.agentSdk.recoverProviderAttempt
+    })
 
-    await expect(runToolChatSession(assembled.invocation, assembled.ports, { onHostedTurnHandoff: handoff })).resolves.toMatchObject({ ok: true })
+    await expect(runToolChatSession(assembled.invocation, assembled.ports, { onHostedTurnHandoff: handoff }))
+      .resolves.toMatchObject({ ok: true })
+
     expect(scheduleSessionTitleSuggestion).toHaveBeenCalledTimes(1)
-    expect(scheduleSessionTitleSuggestion).toHaveBeenCalledWith(expect.objectContaining({ sessionId: assembled.invocation.session.sessionId, messagesForApi: expect.arrayContaining([expect.objectContaining({ role: 'user' }), expect.objectContaining({ role: 'assistant' })]) }))
+    expect(scheduleSessionTitleSuggestion).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: assembled.invocation.session.sessionId,
+      model: assembled.invocation.profile.model,
+      messagesForApi: expect.arrayContaining([
+        expect.objectContaining({ role: 'user', content: 'third question' })
+      ])
+    }))
+    expect(scheduleSessionTitleSuggestion.mock.calls[0]?.[0].messagesForApi).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: 'final title-trigger answer' })])
+    )
+  })
+
+  it('Hosted turn 未成功时不触发在线标题生成', async () => {
+    const assembled = assembleInvocation(baseMaterials({
+      messages: [
+        { role: 'user', content: 'first question' },
+        { role: 'assistant', content: 'first answer' },
+        { role: 'user', content: 'second question' },
+        { role: 'assistant', content: 'second answer' },
+        { role: 'user', content: 'third question' }
+      ] as never
+    }))
+    assembled.ports.toolRevocations = undefined
+    const failedHandoff = async () => ({
+      result: { ok: false as const, error: 'provider failed' },
+      finalization: {
+        outcome: 'failed' as const,
+        usage: {
+          modelTurns: 1,
+          initialMessageCount: 5,
+          messages: [{ role: 'assistant' as const, content: [{ type: 'text' as const, text: 'rejected answer' }] }]
+        }
+      }
+    })
+
+    await expect(runToolChatSession(assembled.invocation, assembled.ports, {
+      onHostedTurnHandoff: failedHandoff as never
+    })).resolves.toMatchObject({ ok: false, error: 'provider failed' })
+
+    expect(scheduleSessionTitleSuggestion).not.toHaveBeenCalled()
   })
 
   it('隔离目录批量验收：30 个不同未读文件编辑全部回灌，Turn 继续结束且零文件副作用', async () => {

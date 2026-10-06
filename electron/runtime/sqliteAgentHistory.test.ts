@@ -23,6 +23,9 @@ import { createMemoryAppDb } from '../database/testHelpers'
 import { createTempDatabase } from '../database/testHelpers'
 import { openDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
+import { appendMessage, createSession } from '../database/operations'
+import { certifyCanonicalSessionApiRead, markSessionMessageContentWriteStopped, setCanonicalApiReadFeatureEnabled } from './sessionStorageCutover'
+import { enableCanonicalSessionWriteAuthority } from './sessionContentWriteAuthority'
 import { createSpillStore, reconcileSpillOrphansAgainstCanonicalHistory, type SpillStore } from '../storage/spillStore'
 
 function createDb(dbPath = ':memory:'): DatabaseSync {
@@ -1893,6 +1896,105 @@ describe('SqliteAgentHistory', () => {
     expect(reads).toHaveBeenCalledTimes(2)
     expect(conn.prepare("SELECT status FROM canonical_projection_repairs WHERE repair_id='open-pending:invocation-projections:open-request'").get()).toEqual({ status: 'completed' })
     conn.close()
+  })
+
+  it('skips interrupted-invocation writes for a persisted write-stopped session', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'write-stopped recovery fence', model: 'test' })
+    setCanonicalApiReadFeatureEnabled(db, true)
+    appendMessage(db, { id: 'write-stopped-recovery-user', sessionId: session.id, role: 'user', content: 'question', timestamp: 1, status: 'sent' })
+    const conn = getDbConnection(db)
+    const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+    await history.appendBatch([{
+      invocationId: 'write-stopped-recovery-invocation', turnId: 'write-stopped-recovery-turn', sequence: 1,
+      schemaVersion: 1, eventId: 'write-stopped-recovery-context', idempotencyKey: 'write-stopped-recovery-context',
+      kind: 'invocation-context-committed', payload: { messages: [{ id: 'write-stopped-recovery-user', role: 'user', content: 'question', timestamp: 1 }] }
+    }], 0)
+    expect(certifyCanonicalSessionApiRead(db, session.id).status).toBe('eligible')
+    expect(enableCanonicalSessionWriteAuthority(db, session.id).status).toBe('enabled')
+    expect(markSessionMessageContentWriteStopped(db, session.id)).toBe(true)
+
+    const recovered = await new SqliteAgentHistory(conn).recoverInterruptedInvocations()
+
+    expect(recovered).toEqual([])
+    expect(conn.prepare('SELECT kind FROM agent_history_events WHERE invocation_id=? ORDER BY sequence')
+      .all('write-stopped-recovery-invocation')).toEqual([{ kind: 'invocation-context-committed' }])
+    db.close()
+  })
+
+  it('keeps completed history outside the indexed startup recovery workset as terminal history grows', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    const insertStream = conn.prepare('INSERT INTO agent_history_streams(invocation_id, version, schema_version, session_id) VALUES(?, ?, 1, ?)')
+    const insertEvent = conn.prepare(`INSERT INTO agent_history_events(invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json, created_at)
+      VALUES(?, 1, ?, ?, ?, 1, ?, ?, 1)`)
+    const insertTerminal = (invocationId: string) => {
+      insertStream.run(invocationId, 1, `session-${invocationId}`)
+      insertEvent.run(invocationId, `${invocationId}:terminal`, `${invocationId}:terminal-key`, `${invocationId}:turn`,
+        'invocation-completed', '{"status":"completed"}')
+    }
+
+    for (let index = 0; index < 128; index += 1) insertTerminal(`terminal-${index.toString().padStart(4, '0')}`)
+    insertStream.run('active-work', 0, 'session-active-work')
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if ((await history.classifyLegacyProjectionRepairs(100)).complete) break
+    }
+
+    const workBefore = history.listStartupRecoveryWorkset()
+    for (let index = 128; index < 640; index += 1) insertTerminal(`terminal-${index.toString().padStart(4, '0')}`)
+    const workAfter = history.listStartupRecoveryWorkset()
+    const plan = conn.prepare(`EXPLAIN QUERY PLAN SELECT invocation_id, session_id
+      FROM canonical_history_recovery_work ORDER BY invocation_id`).all() as Array<{ detail: string }>
+
+    expect(workBefore).toEqual([{ invocationId: 'active-work', sessionId: 'session-active-work' }])
+    expect(workAfter).toEqual(workBefore)
+    expect(plan.map(({ detail }) => detail).join(' ')).not.toMatch(/agent_history_(?:streams|events)/)
+    expect(conn.prepare(`SELECT status FROM canonical_history_recovery_work_migration
+      WHERE migration_key='active-invocations-v1'`).get()).toEqual({ status: 'complete' })
+    const reads = vi.spyOn(history, 'read')
+    await history.recoverInterruptedInvocations()
+    expect(reads).toHaveBeenCalledTimes(1)
+    conn.close()
+  })
+
+  it('resumes the bounded recovery-work census after reopen and keeps streams inserted behind its cursor', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'history-recovery-work-resume-'))
+    const dbPath = path.join(directory, 'history.db')
+    let conn = createDb(dbPath)
+    const insertStream = conn.prepare('INSERT INTO agent_history_streams(invocation_id,version,schema_version,session_id) VALUES(?,?,1,?)')
+    const insertEvent = conn.prepare(`INSERT INTO agent_history_events(invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at)
+      VALUES(?,1,?,?,?,1,?,?,1)`)
+    const addTerminal = (invocationId: string) => {
+      insertStream.run(invocationId, 1, `session-${invocationId}`)
+      insertEvent.run(invocationId, `${invocationId}:terminal`, `${invocationId}:terminal-key`, `${invocationId}:turn`,
+        'invocation-completed', '{"status":"completed"}')
+    }
+    try {
+      addTerminal('100-terminal')
+      insertStream.run('200-open', 0, 'session-200-open')
+      insertStream.run('300-open', 0, 'session-300-open')
+      const firstPass = await new SqliteAgentHistory(conn).classifyLegacyProjectionRepairs(1)
+      expect(firstPass).toMatchObject({ complete: false, recoveryClassified: 1 })
+      insertStream.run('050-late-open', 0, 'session-050-late-open')
+      conn.close()
+
+      conn = createDb(dbPath)
+      const history = new SqliteAgentHistory(conn)
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if ((await history.classifyLegacyProjectionRepairs(1)).complete) break
+      }
+
+      expect(conn.prepare(`SELECT status FROM canonical_history_recovery_work_migration
+        WHERE migration_key='active-invocations-v1'`).get()).toEqual({ status: 'complete' })
+      expect(history.listStartupRecoveryWorkset()).toEqual([
+        { invocationId: '050-late-open', sessionId: 'session-050-late-open' },
+        { invocationId: '200-open', sessionId: 'session-200-open' },
+        { invocationId: '300-open', sessionId: 'session-300-open' }
+      ])
+    } finally {
+      conn.close()
+      await fs.rm(directory, { recursive: true, force: true })
+    }
   })
 
   it('retries terminal projection repair on a later recovery pass without rescanning completed streams', async () => {

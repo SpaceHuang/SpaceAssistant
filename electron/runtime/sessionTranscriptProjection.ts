@@ -3,6 +3,7 @@ import type { AppDatabase } from '../database'
 import { getApiContextBaseline as getStoredApiContextBaseline, getChatMessagePage, getMessage as getStoredMessage, getMessageSkeletons, getMessages, getMessagesPageWithSequence as getStoredMessagesPageWithSequence, getSearchCorpusPage as getStoredSearchCorpusPage, getTurnContext as getStoredTurnContext, iterateRecentTurnRoutingMessageCandidates, resolveRetryContext as resolveStoredRetryContext, type ApiContextBaselineResult, type ChatMessagePage, type MessageSearchHit, type MessagesPageWithSequence, type RetryContextTarget, type SearchCorpusPage } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
+import { logAgentEvent } from '../agentLogger/agentLogger'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 
 export type SessionTranscriptProjectionRead =
@@ -52,7 +53,7 @@ function markSessionProjectionEligible(db: AppDatabase, sessionId: string, gener
 }
 
 /** Read the complete transcript through the cache staircase, falling back per session on any ambiguity. */
-export function readSessionTranscriptProjection(db: AppDatabase, sessionId: string): SessionTranscriptProjectionRead {
+function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string): SessionTranscriptProjectionRead {
   const cutover = getDbConnection(db).prepare(`SELECT write_mode FROM session_message_content_cutover WHERE session_id=?`)
     .get(sessionId) as { write_mode: string } | undefined
   const hasCanonicalBackedRows = getDbConnection(db).prepare(`SELECT 1 FROM messages
@@ -129,6 +130,32 @@ export function readSessionTranscriptProjection(db: AppDatabase, sessionId: stri
     : { source: 'legacy', messages: legacyMessages, reason: 'message-identity-mismatch' }
 }
 
+/** Record the selected read owner and latency without retaining transcript content or arbitrary errors. */
+export function readSessionTranscriptProjection(db: AppDatabase, sessionId: string): SessionTranscriptProjectionRead {
+  const startedAt = performance.now()
+  try {
+    const result = readSessionTranscriptProjectionImpl(db, sessionId)
+    try {
+      logAgentEvent('info', 'session.transcript.read', {
+        sessionId, consumer: 'transcript', source: result.source,
+        outcome: result.source.startsWith('canonical:') ? 'canonical' : 'legacy',
+        durationMs: Math.max(0, Math.round(performance.now() - startedAt))
+      })
+    } catch { /* Observation logging cannot change a transcript read. */ }
+    return result
+  } catch (error) {
+    const message = error instanceof Error ? error.message : ''
+    try {
+      logAgentEvent('error', 'session.transcript.read', {
+        sessionId, consumer: 'transcript', source: 'unavailable', outcome: 'failed',
+        errorCode: message === 'CANONICAL_SESSION_CONTENT_UNAVAILABLE' ? message : 'TRANSCRIPT_READ_FAILED',
+        durationMs: Math.max(0, Math.round(performance.now() - startedAt))
+      })
+    } catch { /* Observation logging cannot change a transcript read. */ }
+    throw error
+  }
+}
+
 /**
  * Canonical write authority plus each row's explicit storage state authorizes reconstruction after
  * its legacy copy is cleared. Dual-write rows still require an exact body match; only rows explicitly
@@ -171,6 +198,15 @@ function mergeCanonicalBackedBodies(
     projected.push({ ...stored, content: canonical.content, timestamp: canonical.timestamp })
   }
   return projected
+}
+
+/** Read-only inventory check for a canonical-owned session; it never seeds projection caches. */
+export function canonicalBackedSessionProjectionMatches(
+  db: AppDatabase,
+  sessionId: string,
+  canonicalMessages: readonly import('../../src/shared/api').ClaudeChatMessageWithBlocks[]
+): boolean {
+  return mergeCanonicalBackedBodies(db, sessionId, canonicalMessages) !== undefined
 }
 
 /** Resolve one persisted message body from the canonical session projection when its row is canonical-backed. */

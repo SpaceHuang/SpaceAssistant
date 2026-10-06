@@ -19,6 +19,8 @@ export { isAgentLogProductionMode } from './agentLogPaths'
 export type AgentLoggerDeps = {
   getWorkDir: () => string
   isPackaged: boolean
+  appVersion?: string
+  artifactBuildId?: string
   mainDirname?: string
 }
 
@@ -97,6 +99,10 @@ export function logAgentEvent(level: AgentLogLevel, event: AgentLogEventName, fi
   if (!deps) return
 
   const projectedFields = projectAgentLogFields(event, fields)
+  if (event === 'history.cutover' || event === 'session.history.recovery' || event === 'session.transcript.read' || event === 'session.storage.shadow' || event === 'session.transcript.reconciliation') {
+    if (deps.appVersion) projectedFields.appVersion = deps.appVersion
+    if (deps.artifactBuildId) projectedFields.artifactBuildId = deps.artifactBuildId
+  }
   const payload = sanitizeForLog({
     ts: new Date().toISOString(),
     level,

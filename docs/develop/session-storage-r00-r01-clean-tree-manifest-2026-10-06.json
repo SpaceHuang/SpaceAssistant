@@ -1,0 +1,56 @@
+{
+  "manifestVersion": 1,
+  "purpose": "R-00 clean source snapshot and R-01 local macOS source validation",
+  "createdAt": "2026-10-06",
+  "source": {
+    "branchContext": "codex/session-storage-refactor-tdd",
+    "parentHead": "87794f0c69b5bee1ac77698f9b4844be9f7d2912",
+    "snapshotCommit": "837a9c713d6f9c463749e63956f19db35de2cdf3",
+    "treeSha": "03d9c8a4e0c7621241df1d10428f021e64463067",
+    "worktree": "/tmp/spaceassistant-session-storage-r00-20261005",
+    "cleanAtValidation": true,
+    "packageVersion": "0.2.4",
+    "packageLockSha256": "fb0bfbb5c26c9ebf06e0cfbe0bdb4904b46e3f6051e221dd66ba2cce44f2ca80"
+  },
+  "formats": {
+    "databaseSchema": 52,
+    "canonicalHistory": 1,
+    "sourceTruthSpill": 1,
+    "canonicalProjectionCache": 1,
+    "cleanupDeployment": {
+      "formatVersion": 1,
+      "allowContentCleanup": false,
+      "compatibilityRecordSha256": null,
+      "resourceSha256": "267584e31e2360a8c311fcd82b927029b02ad1539f7d64a7d4f919192444428d"
+    },
+    "cleanupCompatibilityRecord": {
+      "value": null,
+      "resourceSha256": "38e0b9de817f645c4bec37c0d4a3e58baecccb040f5718dc069a72c7385a0bed"
+    }
+  },
+  "host": {
+    "os": "Darwin 25.5.0",
+    "platform": "darwin",
+    "arch": "arm64"
+  },
+  "r01": {
+    "commands": {
+      "npm ci": { "exitCode": 0, "summary": "1086 packages installed; npm audit reported 32 lockfile dependency vulnerabilities (1 critical); no dependency changes made." },
+      "npm test": { "exitCode": 0, "summary": "884 test files passed, 1 skipped; 8403 tests passed, 106 skipped." },
+      "npm run typecheck:renderer": { "exitCode": 0 },
+      "npm run typecheck:shared": { "exitCode": 0 },
+      "npm run typecheck:agent-sdk": { "exitCode": 0 },
+      "npm run i18n:check": { "exitCode": 0, "summary": "1218 hardcoded Chinese occurrences in test files; 0 in source." },
+      "npm run i18n:check:strict": { "exitCode": 0, "summary": "Same 1218 test-only occurrences are warnings allowed by current script policy; 0 in source." },
+      "npm run build:electron": { "exitCode": 0, "summary": "Runtime closure check, cleanup boundary check, agent provider build, Electron TypeScript build passed." },
+      "npm run build": { "exitCode": 0, "summary": "Tray assets, renderer and Electron builds passed; Vite emitted ineffective dynamic import and >500 kB chunk warnings." },
+      "git diff --check": { "exitCode": 0 },
+      "git status --short": { "exitCode": 0, "summary": "Clean after source build; generated build outputs are ignored." }
+    },
+    "notPerformed": [
+      "Windows packaging/install tests are not executable on this macOS host.",
+      "Developer ID signing and notarization are publication policy and are intentionally outside this functional source gate.",
+      "No installer artifact or real-profile migration was produced or run in R-01."
+    ]
+  }
+}

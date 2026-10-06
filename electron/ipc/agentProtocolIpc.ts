@@ -624,7 +624,6 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   type PreparedTurn = Omit<TurnStarted, 'executionConfig'>
 
   const prepareTurnInternal = async (intent: TurnIntent): Promise<PreparedTurn> => {
-    if (isSessionTurnAdmissionBlocked(intent.sessionId)) throw new Error('SESSION_CONTEXT_COMPACTION_BUSY')
     const configuringKey = JSON.stringify([intent.sessionId, intent.requestId])
     const existing = getTurnByRequestId(ctx.db, intent.sessionId, intent.requestId)
     if (existing) {
@@ -638,6 +637,15 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       const { executionConfig: _executionConfig, ...prepared } = turnCoordinator.prepare({ ...intent, config: existing.executionConfig ?? {} })
       return prepared
     }
+    // A retry must fail closed on a missing canonical body before reporting an unrelated
+    // admission conflict. This read is side-effect free and does not claim the session.
+    if (intent.mode === 'reuse-user') getProjectedMessage(ctx.db, intent.userMessageId)
+    const inFlightConfiguration = configuringTurns.get(configuringKey)
+    if (inFlightConfiguration) {
+      turnCoordinator.prepare({ ...intent, config: {} })
+      return (await inFlightConfiguration) as PreparedTurn
+    }
+    if (isSessionTurnAdmissionBlocked(intent.sessionId)) throw new Error('SESSION_CONTEXT_COMPACTION_BUSY')
     // 先原子占有 session 并写入 H。立即交还 turnId，使配置/路由阶段可被 cancel-turn 打断。
     const started = await withSessionTurnAdmission(intent.sessionId, async () => {
       if (isSessionContextCompactionLocked(intent.sessionId) || isActiveTurnAdmissionBlocked(intent.sessionId)) throw new Error('SESSION_CONTEXT_COMPACTION_BUSY')

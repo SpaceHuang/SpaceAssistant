@@ -1,0 +1,2495 @@
+{
+  "formatVersion": 1,
+  "observedAt": "2026-10-04T22:54:15.912Z",
+  "sample": {
+    "type": "synthetic",
+    "marker": "synthetic-session-storage-cleanup-v1",
+    "containsUserData": false,
+    "sqliteSchema": 50,
+    "osFilesystemCacheControlled": false,
+    "sampleCount": 5,
+    "sampleDesign": "paired-interleaved-alternating-order",
+    "pairOrder": [
+      [
+        "before",
+        "after"
+      ],
+      [
+        "after",
+        "before"
+      ],
+      [
+        "before",
+        "after"
+      ],
+      [
+        "after",
+        "before"
+      ],
+      [
+        "before",
+        "after"
+      ]
+    ],
+    "inputDbSha256Before": "e0a47708727c087bc6311942a3429e1c141d7857c2a9fb1bf7377c8d9e1cfbd8",
+    "inputDbSha256After": "e0a47708727c087bc6311942a3429e1c141d7857c2a9fb1bf7377c8d9e1cfbd8",
+    "directoriesAndSpillsClonedToEachIsolatedStartup": true
+  },
+  "initial": {
+    "databaseProfile": {
+      "schemaVersion": 50,
+      "dbBytes": 201437184,
+      "databaseFiles": {
+        "dbBytes": 201437184,
+        "walBytes": 0,
+        "shmBytes": 32768,
+        "totalBytes": 201469952
+      },
+      "pageSize": 4096,
+      "pageCount": 49179,
+      "freelistCount": 0,
+      "autoVacuum": 0,
+      "dbstatObjects": [
+        {
+          "name": "agent_history_events",
+          "pages": 41795,
+          "bytes": 171192320
+        },
+        {
+          "name": "messages",
+          "pages": 4472,
+          "bytes": 18317312
+        },
+        {
+          "name": "session_transcript_entries",
+          "pages": 2657,
+          "bytes": 10883072
+        },
+        {
+          "name": "sqlite_schema",
+          "pages": 17,
+          "bytes": 69632
+        },
+        {
+          "name": "sqlite_autoindex_agent_history_events_3",
+          "pages": 11,
+          "bytes": 45056
+        },
+        {
+          "name": "sqlite_autoindex_agent_history_events_2",
+          "pages": 11,
+          "bytes": 45056
+        },
+        {
+          "name": "sessions",
+          "pages": 9,
+          "bytes": 36864
+        },
+        {
+          "name": "idx_agent_history_events_turn",
+          "pages": 9,
+          "bytes": 36864
+        },
+        {
+          "name": "idx_agent_history_events_session_seq",
+          "pages": 8,
+          "bytes": 32768
+        },
+        {
+          "name": "idx_agent_history_events_session_commit_order",
+          "pages": 8,
+          "bytes": 32768
+        },
+        {
+          "name": "canonical_session_projection_cache",
+          "pages": 8,
+          "bytes": 32768
+        },
+        {
+          "name": "sqlite_autoindex_agent_history_events_1",
+          "pages": 7,
+          "bytes": 28672
+        },
+        {
+          "name": "session_message_content_cutover",
+          "pages": 6,
+          "bytes": 24576
+        },
+        {
+          "name": "idx_messages_session_seq",
+          "pages": 6,
+          "bytes": 24576
+        },
+        {
+          "name": "sqlite_autoindex_session_transcript_entries_1",
+          "pages": 5,
+          "bytes": 20480
+        },
+        {
+          "name": "idx_agent_history_streams_session",
+          "pages": 5,
+          "bytes": 20480
+        },
+        {
+          "name": "agent_history_streams",
+          "pages": 5,
+          "bytes": 20480
+        },
+        {
+          "name": "sqlite_autoindex_messages_1",
+          "pages": 4,
+          "bytes": 16384
+        },
+        {
+          "name": "sqlite_autoindex_sessions_1",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "sqlite_autoindex_session_transcript_entries_2",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "sqlite_autoindex_session_message_content_cutover_1",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "sqlite_autoindex_session_event_cursor_1",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "sqlite_autoindex_canonical_session_projection_cache_1",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "sqlite_autoindex_agent_history_streams_1",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "session_event_cursor",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "idx_agent_history_events_commit_order",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "agent_history_commit_cursor",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "usage_turn_facts",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "usage_step_facts",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "turns",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_sequence",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_usage_turn_facts_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_usage_step_facts_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_turns_2",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_turns_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_source_truth_spill_gc_scan_state_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_source_truth_spill_gc_queue_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_usages_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_turn_commit_receipts_2",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_turn_commit_receipts_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_transcript_reconciliations_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_transcript_checkpoints_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_projection_migration_runs_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_projection_migration_items_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_message_content_cleanup_progress_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_execution_queue_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_execution_claims_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_search_history_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_scope_versions_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_schema_meta_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_queue_input_requests_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_policy_rules_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_driver_deliveries_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_decision_cache_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_confirmation_submissions_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_confirmation_commit_audits_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_configs_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_session_projection_eligibility_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_session_api_context_eligibility_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_projection_repairs_3",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_projection_repairs_2",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_projection_repairs_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_projection_repair_migration_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_history_recovery_work_migration_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_history_recovery_work_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_automation_tasks_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_automation_task_runs_2",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_automation_task_runs_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_agent_continuations_5",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_agent_continuations_4",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_agent_continuations_3",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_agent_continuations_2",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_agent_continuations_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_accepted_turn_contexts_2",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_accepted_turn_contexts_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "source_truth_spill_gc_scan_state",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "source_truth_spill_gc_queue",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_usages",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_turn_commit_receipts",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_transcript_reconciliations",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_transcript_checkpoints",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_projection_migration_runs",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_projection_migration_items",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_message_content_cleanup_progress",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_execution_queue",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_execution_claims",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "search_history",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "scope_versions",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "schema_meta",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "queue_input_requests",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "policy_rules",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_turn_session_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_turn_model_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_turn_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_turn_app_version_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_step_session_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_step_model_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_step_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_step_app_version_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_turns_session_user",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_turns_session_state",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_turns_session_assistant_state",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_source_truth_spill_gc_pending",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_sessions_work_dir_profile",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_sessions_updated_at",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_session_transcript_reconciliations_session",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_session_projection_migration_single_active",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_session_projection_migration_items_work",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_session_execution_queue_order",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_queue_input_requests_message",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_driver_delivery_events_intent",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_driver_deliveries_status_created",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_decision_cache_key",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_canonical_projection_repairs_pending",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_canonical_history_recovery_work_session",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_automation_runs_task",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_agent_continuations_source",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_accepted_turn_contexts_request",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "driver_delivery_events",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "driver_deliveries",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "decision_cache",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "confirmation_submissions",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "confirmation_commit_audits",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "configs",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "canonical_session_projection_eligibility",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "canonical_session_api_context_eligibility",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "canonical_projection_repairs",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "canonical_projection_repair_migration",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "canonical_history_recovery_work_migration",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "canonical_history_recovery_work",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "automation_tasks",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "automation_task_runs",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "agent_history_pending_commit_cursor",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "agent_history_cursor_integrity",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "agent_continuations",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "accepted_turn_contexts",
+          "pages": 1,
+          "bytes": 4096
+        }
+      ],
+      "messages": {
+        "rows": 336,
+        "textBytes": 17885900
+      },
+      "canonicalHistory": {
+        "rows": 547,
+        "textBytes": 170630555
+      },
+      "transcriptSnapshots": {
+        "rows": 178,
+        "textBytes": 10732981
+      },
+      "canonicalRequiredData": {
+        "eventRows": 547,
+        "eventPayloadBytes": 170630555,
+        "streamRows": 183,
+        "streamTableBytes": 20480
+      },
+      "spillBytes": {
+        "total": 93,
+        "sourceOfTruth": 31,
+        "degradable": 34,
+        "orphan": 28
+      },
+      "messageBodyCoverage": {
+        "messages": 336,
+        "exactIdentityCandidates": 1,
+        "exactIdentityCandidateBytes": 472600
+      }
+    }
+  },
+  "cleanup": {
+    "certified": true,
+    "writeAuthorityEnabled": true,
+    "batches": [
+      {
+        "status": "complete",
+        "cleanedMessageCount": 1
+      }
+    ],
+    "reopenedVerification": true
+  },
+  "compaction": {
+    "dbBytesBefore": 202379264,
+    "dbBytesAfter": 201670656,
+    "bytesReclaimed": 708608,
+    "pageCountBefore": 49409,
+    "pageCountAfter": 49236,
+    "freelistCountBefore": 230,
+    "freelistCountAfter": 0,
+    "durationMs": 836.6907919999999,
+    "archiveBytes": 202379357,
+    "availableBytesBefore": 13674074112,
+    "peakSpaceEstimateBytes": 607170653,
+    "walBytesBefore": 0,
+    "walBytesAfter": 0,
+    "shmBytesBefore": 32768,
+    "shmBytesAfter": 425984,
+    "manifest": {
+      "formatVersion": 1,
+      "recordedAt": "2026-10-04T22:54:01.650Z",
+      "status": "complete",
+      "bytesBefore": 202379264,
+      "bytesAfter": 201670656,
+      "reclaimedPages": 173,
+      "durationMs": 836.6907919999999,
+      "pageCountBefore": 49409,
+      "pageCountAfter": 49236,
+      "freelistCountBefore": 230,
+      "freelistCountAfter": 0,
+      "walBytesBefore": 0,
+      "walBytesAfter": 0,
+      "shmBytesBefore": 32768,
+      "shmBytesAfter": 425984,
+      "archiveBytes": 202379357,
+      "availableBytesBefore": 13674074112,
+      "peakSpaceEstimateBytes": 607170653,
+      "note": "peakSpaceEstimateBytes is a conservative bound for the source DB, archived DB/spills and one VACUUM working copy; it is not an observed instantaneous peak."
+    }
+  },
+  "before": {
+    "databaseProfile": {
+      "schemaVersion": 50,
+      "dbBytes": 202379264,
+      "databaseFiles": {
+        "dbBytes": 202379264,
+        "walBytes": 0,
+        "shmBytes": 0,
+        "totalBytes": 202379264
+      },
+      "pageSize": 4096,
+      "pageCount": 49409,
+      "freelistCount": 115,
+      "autoVacuum": 0,
+      "dbstatObjects": [
+        {
+          "name": "agent_history_events",
+          "pages": 41795,
+          "bytes": 171192320
+        },
+        {
+          "name": "messages",
+          "pages": 4472,
+          "bytes": 18317312
+        },
+        {
+          "name": "session_transcript_entries",
+          "pages": 2657,
+          "bytes": 10883072
+        },
+        {
+          "name": "canonical_session_projection_cache",
+          "pages": 123,
+          "bytes": 503808
+        },
+        {
+          "name": "sqlite_schema",
+          "pages": 17,
+          "bytes": 69632
+        },
+        {
+          "name": "sqlite_autoindex_agent_history_events_3",
+          "pages": 11,
+          "bytes": 45056
+        },
+        {
+          "name": "sqlite_autoindex_agent_history_events_2",
+          "pages": 11,
+          "bytes": 45056
+        },
+        {
+          "name": "sessions",
+          "pages": 9,
+          "bytes": 36864
+        },
+        {
+          "name": "idx_agent_history_events_turn",
+          "pages": 9,
+          "bytes": 36864
+        },
+        {
+          "name": "idx_agent_history_events_session_seq",
+          "pages": 8,
+          "bytes": 32768
+        },
+        {
+          "name": "idx_agent_history_events_session_commit_order",
+          "pages": 8,
+          "bytes": 32768
+        },
+        {
+          "name": "sqlite_autoindex_agent_history_events_1",
+          "pages": 7,
+          "bytes": 28672
+        },
+        {
+          "name": "session_message_content_cutover",
+          "pages": 6,
+          "bytes": 24576
+        },
+        {
+          "name": "idx_messages_session_seq",
+          "pages": 6,
+          "bytes": 24576
+        },
+        {
+          "name": "sqlite_autoindex_session_transcript_entries_1",
+          "pages": 5,
+          "bytes": 20480
+        },
+        {
+          "name": "idx_agent_history_streams_session",
+          "pages": 5,
+          "bytes": 20480
+        },
+        {
+          "name": "agent_history_streams",
+          "pages": 5,
+          "bytes": 20480
+        },
+        {
+          "name": "sqlite_autoindex_messages_1",
+          "pages": 4,
+          "bytes": 16384
+        },
+        {
+          "name": "sqlite_autoindex_sessions_1",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "sqlite_autoindex_session_transcript_entries_2",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "sqlite_autoindex_session_message_content_cutover_1",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "sqlite_autoindex_session_event_cursor_1",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "sqlite_autoindex_canonical_session_projection_cache_1",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "sqlite_autoindex_agent_history_streams_1",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "session_event_cursor",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "idx_agent_history_events_commit_order",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "agent_history_commit_cursor",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "usage_turn_facts",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "usage_step_facts",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "turns",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_sequence",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_usage_turn_facts_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_usage_step_facts_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_turns_2",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_turns_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_source_truth_spill_gc_scan_state_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_source_truth_spill_gc_queue_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_usages_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_turn_commit_receipts_2",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_turn_commit_receipts_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_transcript_reconciliations_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_transcript_checkpoints_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_projection_migration_runs_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_projection_migration_items_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_message_content_cleanup_progress_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_execution_queue_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_execution_claims_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_search_history_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_scope_versions_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_schema_meta_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_queue_input_requests_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_policy_rules_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_driver_deliveries_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_decision_cache_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_confirmation_submissions_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_confirmation_commit_audits_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_configs_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_session_projection_eligibility_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_session_api_context_eligibility_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_projection_repairs_3",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_projection_repairs_2",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_projection_repairs_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_projection_repair_migration_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_history_recovery_work_migration_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_history_recovery_work_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_automation_tasks_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_automation_task_runs_2",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_automation_task_runs_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_agent_continuations_5",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_agent_continuations_4",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_agent_continuations_3",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_agent_continuations_2",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_agent_continuations_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_accepted_turn_contexts_2",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_accepted_turn_contexts_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "source_truth_spill_gc_scan_state",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "source_truth_spill_gc_queue",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_usages",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_turn_commit_receipts",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_transcript_reconciliations",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_transcript_checkpoints",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_projection_migration_runs",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_projection_migration_items",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_message_content_cleanup_progress",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_execution_queue",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_execution_claims",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "search_history",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "scope_versions",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "schema_meta",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "queue_input_requests",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "policy_rules",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_turn_session_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_turn_model_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_turn_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_turn_app_version_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_step_session_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_step_model_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_step_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_step_app_version_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_turns_session_user",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_turns_session_state",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_turns_session_assistant_state",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_source_truth_spill_gc_pending",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_sessions_work_dir_profile",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_sessions_updated_at",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_session_transcript_reconciliations_session",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_session_projection_migration_single_active",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_session_projection_migration_items_work",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_session_execution_queue_order",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_queue_input_requests_message",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_driver_delivery_events_intent",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_driver_deliveries_status_created",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_decision_cache_key",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_canonical_projection_repairs_pending",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_canonical_history_recovery_work_session",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_automation_runs_task",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_agent_continuations_source",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_accepted_turn_contexts_request",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "driver_delivery_events",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "driver_deliveries",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "decision_cache",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "confirmation_submissions",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "confirmation_commit_audits",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "configs",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "canonical_session_projection_eligibility",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "canonical_session_api_context_eligibility",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "canonical_projection_repairs",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "canonical_projection_repair_migration",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "canonical_history_recovery_work_migration",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "canonical_history_recovery_work",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "automation_tasks",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "automation_task_runs",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "agent_history_pending_commit_cursor",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "agent_history_cursor_integrity",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "agent_continuations",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "accepted_turn_contexts",
+          "pages": 1,
+          "bytes": 4096
+        }
+      ],
+      "messages": {
+        "rows": 336,
+        "textBytes": 17885900
+      },
+      "canonicalHistory": {
+        "rows": 547,
+        "textBytes": 170630555
+      },
+      "transcriptSnapshots": {
+        "rows": 178,
+        "textBytes": 10732981
+      },
+      "canonicalRequiredData": {
+        "eventRows": 547,
+        "eventPayloadBytes": 170630555,
+        "streamRows": 183,
+        "streamTableBytes": 20480
+      },
+      "spillBytes": {
+        "total": 93,
+        "sourceOfTruth": 31,
+        "degradable": 34,
+        "orphan": 28
+      },
+      "messageBodyCoverage": {
+        "messages": 336,
+        "exactIdentityCandidates": 1,
+        "exactIdentityCandidateBytes": 472600
+      }
+    },
+    "startup": {
+      "coldStartWallMs": {
+        "samples": [
+          1983,
+          905,
+          922,
+          860,
+          854
+        ],
+        "p50Ms": 905,
+        "p95Ms": 1770.7999999999997
+      },
+      "phases": {
+        "database.open-and-migrations": {
+          "samples": [
+            7,
+            2,
+            2,
+            2,
+            2
+          ],
+          "p50Ms": 2,
+          "p95Ms": 5.999999999999999
+        },
+        "canonical-history.classification": {
+          "samples": [
+            40,
+            33,
+            33,
+            33,
+            33
+          ],
+          "p50Ms": 33,
+          "p95Ms": 38.6
+        },
+        "canonical-history.recovery": {
+          "samples": [
+            9,
+            5,
+            5,
+            5,
+            4
+          ],
+          "p50Ms": 5,
+          "p95Ms": 8.2
+        },
+        "session-ledger.reconcile": {
+          "samples": [
+            10,
+            6,
+            6,
+            6,
+            6
+          ],
+          "p50Ms": 6,
+          "p95Ms": 9.2
+        },
+        "app.start-to-renderer-loaded": {
+          "samples": [
+            783,
+            517,
+            533,
+            494,
+            487
+          ],
+          "p50Ms": 517,
+          "p95Ms": 733
+        }
+      }
+    }
+  },
+  "after": {
+    "databaseProfile": {
+      "schemaVersion": 50,
+      "dbBytes": 201670656,
+      "databaseFiles": {
+        "dbBytes": 201670656,
+        "walBytes": 0,
+        "shmBytes": 0,
+        "totalBytes": 201670656
+      },
+      "pageSize": 4096,
+      "pageCount": 49236,
+      "freelistCount": 0,
+      "autoVacuum": 2,
+      "dbstatObjects": [
+        {
+          "name": "agent_history_events",
+          "pages": 41795,
+          "bytes": 171192320
+        },
+        {
+          "name": "messages",
+          "pages": 4356,
+          "bytes": 17842176
+        },
+        {
+          "name": "session_transcript_entries",
+          "pages": 2657,
+          "bytes": 10883072
+        },
+        {
+          "name": "canonical_session_projection_cache",
+          "pages": 123,
+          "bytes": 503808
+        },
+        {
+          "name": "sqlite_schema",
+          "pages": 17,
+          "bytes": 69632
+        },
+        {
+          "name": "sqlite_autoindex_agent_history_events_3",
+          "pages": 10,
+          "bytes": 40960
+        },
+        {
+          "name": "sqlite_autoindex_agent_history_events_2",
+          "pages": 10,
+          "bytes": 40960
+        },
+        {
+          "name": "sessions",
+          "pages": 9,
+          "bytes": 36864
+        },
+        {
+          "name": "idx_agent_history_events_turn",
+          "pages": 8,
+          "bytes": 32768
+        },
+        {
+          "name": "idx_agent_history_events_session_seq",
+          "pages": 8,
+          "bytes": 32768
+        },
+        {
+          "name": "idx_agent_history_events_session_commit_order",
+          "pages": 8,
+          "bytes": 32768
+        },
+        {
+          "name": "sqlite_autoindex_agent_history_events_1",
+          "pages": 6,
+          "bytes": 24576
+        },
+        {
+          "name": "session_message_content_cutover",
+          "pages": 6,
+          "bytes": 24576
+        },
+        {
+          "name": "sqlite_autoindex_session_transcript_entries_1",
+          "pages": 5,
+          "bytes": 20480
+        },
+        {
+          "name": "idx_messages_session_seq",
+          "pages": 5,
+          "bytes": 20480
+        },
+        {
+          "name": "idx_agent_history_streams_session",
+          "pages": 5,
+          "bytes": 20480
+        },
+        {
+          "name": "agent_history_streams",
+          "pages": 5,
+          "bytes": 20480
+        },
+        {
+          "name": "sqlite_autoindex_messages_1",
+          "pages": 4,
+          "bytes": 16384
+        },
+        {
+          "name": "sqlite_autoindex_sessions_1",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "sqlite_autoindex_session_transcript_entries_2",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "sqlite_autoindex_session_message_content_cutover_1",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "sqlite_autoindex_session_event_cursor_1",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "sqlite_autoindex_canonical_session_projection_cache_1",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "sqlite_autoindex_agent_history_streams_1",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "session_event_cursor",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "idx_agent_history_events_commit_order",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "agent_history_commit_cursor",
+          "pages": 3,
+          "bytes": 12288
+        },
+        {
+          "name": "usage_turn_facts",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "usage_step_facts",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "turns",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_stat4",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_stat1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_sequence",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_usage_turn_facts_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_usage_step_facts_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_turns_2",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_turns_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_source_truth_spill_gc_scan_state_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_source_truth_spill_gc_queue_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_usages_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_turn_commit_receipts_2",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_turn_commit_receipts_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_transcript_reconciliations_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_transcript_checkpoints_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_projection_migration_runs_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_projection_migration_items_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_message_content_cleanup_progress_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_execution_queue_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_session_execution_claims_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_search_history_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_scope_versions_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_schema_meta_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_queue_input_requests_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_policy_rules_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_driver_deliveries_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_decision_cache_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_confirmation_submissions_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_confirmation_commit_audits_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_configs_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_session_projection_eligibility_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_session_api_context_eligibility_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_projection_repairs_3",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_projection_repairs_2",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_projection_repairs_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_projection_repair_migration_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_history_recovery_work_migration_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_canonical_history_recovery_work_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_automation_tasks_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_automation_task_runs_2",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_automation_task_runs_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_agent_continuations_5",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_agent_continuations_4",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_agent_continuations_3",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_agent_continuations_2",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_agent_continuations_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_accepted_turn_contexts_2",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "sqlite_autoindex_accepted_turn_contexts_1",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "source_truth_spill_gc_scan_state",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "source_truth_spill_gc_queue",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_usages",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_turn_commit_receipts",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_transcript_reconciliations",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_transcript_checkpoints",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_projection_migration_runs",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_projection_migration_items",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_message_content_cleanup_progress",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_execution_queue",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "session_execution_claims",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "search_history",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "scope_versions",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "schema_meta",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "queue_input_requests",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "policy_rules",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_turn_session_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_turn_model_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_turn_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_turn_app_version_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_step_session_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_step_model_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_step_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_usage_step_app_version_day",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_turns_session_user",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_turns_session_state",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_turns_session_assistant_state",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_source_truth_spill_gc_pending",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_sessions_work_dir_profile",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_sessions_updated_at",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_session_transcript_reconciliations_session",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_session_projection_migration_single_active",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_session_projection_migration_items_work",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_session_execution_queue_order",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_queue_input_requests_message",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_driver_delivery_events_intent",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_driver_deliveries_status_created",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_decision_cache_key",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_canonical_projection_repairs_pending",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_canonical_history_recovery_work_session",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_automation_runs_task",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_agent_continuations_source",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "idx_accepted_turn_contexts_request",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "driver_delivery_events",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "driver_deliveries",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "decision_cache",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "confirmation_submissions",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "confirmation_commit_audits",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "configs",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "canonical_session_projection_eligibility",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "canonical_session_api_context_eligibility",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "canonical_projection_repairs",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "canonical_projection_repair_migration",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "canonical_history_recovery_work_migration",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "canonical_history_recovery_work",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "automation_tasks",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "automation_task_runs",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "agent_history_pending_commit_cursor",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "agent_history_cursor_integrity",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "agent_continuations",
+          "pages": 1,
+          "bytes": 4096
+        },
+        {
+          "name": "accepted_turn_contexts",
+          "pages": 1,
+          "bytes": 4096
+        }
+      ],
+      "messages": {
+        "rows": 336,
+        "textBytes": 17413300
+      },
+      "canonicalHistory": {
+        "rows": 547,
+        "textBytes": 170630555
+      },
+      "transcriptSnapshots": {
+        "rows": 178,
+        "textBytes": 10732981
+      },
+      "canonicalRequiredData": {
+        "eventRows": 547,
+        "eventPayloadBytes": 170630555,
+        "streamRows": 183,
+        "streamTableBytes": 20480
+      },
+      "spillBytes": {
+        "total": 93,
+        "sourceOfTruth": 31,
+        "degradable": 34,
+        "orphan": 28
+      },
+      "messageBodyCoverage": {
+        "messages": 336,
+        "exactIdentityCandidates": 0,
+        "exactIdentityCandidateBytes": 0
+      }
+    },
+    "startup": {
+      "coldStartWallMs": {
+        "samples": [
+          866,
+          850,
+          954,
+          858,
+          892
+        ],
+        "p50Ms": 866,
+        "p95Ms": 941.6
+      },
+      "phases": {
+        "database.open-and-migrations": {
+          "samples": [
+            2,
+            2,
+            2,
+            2,
+            2
+          ],
+          "p50Ms": 2,
+          "p95Ms": 2
+        },
+        "canonical-history.classification": {
+          "samples": [
+            33,
+            32,
+            32,
+            32,
+            32
+          ],
+          "p50Ms": 32,
+          "p95Ms": 32.8
+        },
+        "canonical-history.recovery": {
+          "samples": [
+            4,
+            5,
+            6,
+            5,
+            5
+          ],
+          "p50Ms": 5,
+          "p95Ms": 5.8
+        },
+        "session-ledger.reconcile": {
+          "samples": [
+            6,
+            6,
+            6,
+            6,
+            6
+          ],
+          "p50Ms": 6,
+          "p95Ms": 6
+        },
+        "app.start-to-renderer-loaded": {
+          "samples": [
+            501,
+            485,
+            540,
+            492,
+            519
+          ],
+          "p50Ms": 501,
+          "p95Ms": 535.8
+        }
+      }
+    }
+  },
+  "pairedStartup": [
+    {
+      "pair": 1,
+      "order": [
+        "before",
+        "after"
+      ],
+      "beforeTotalMs": 1983,
+      "afterTotalMs": 866,
+      "deltaAfterMinusBeforeMs": -1117
+    },
+    {
+      "pair": 2,
+      "order": [
+        "after",
+        "before"
+      ],
+      "beforeTotalMs": 905,
+      "afterTotalMs": 850,
+      "deltaAfterMinusBeforeMs": -55
+    },
+    {
+      "pair": 3,
+      "order": [
+        "before",
+        "after"
+      ],
+      "beforeTotalMs": 922,
+      "afterTotalMs": 954,
+      "deltaAfterMinusBeforeMs": 32
+    },
+    {
+      "pair": 4,
+      "order": [
+        "after",
+        "before"
+      ],
+      "beforeTotalMs": 860,
+      "afterTotalMs": 858,
+      "deltaAfterMinusBeforeMs": -2
+    },
+    {
+      "pair": 5,
+      "order": [
+        "before",
+        "after"
+      ],
+      "beforeTotalMs": 854,
+      "afterTotalMs": 892,
+      "deltaAfterMinusBeforeMs": 38
+    }
+  ],
+  "attribution": {
+    "safetyPreparationDatabaseGrowthBytes": 942080,
+    "logicalCleanupAndVacuumDatabaseShrinkBytes": 708608,
+    "databaseBytesAtVacuumStart": 202379264,
+    "databaseBytesAfterVacuum": 201670656,
+    "messagesTableBytesBefore": 18317312,
+    "messagesTableBytesAfter": 17842176,
+    "canonicalEventPayloadBytesBefore": 170630555,
+    "canonicalEventPayloadBytesAfter": 170630555,
+    "transcriptSnapshotBytesBefore": 10732981,
+    "transcriptSnapshotBytesAfter": 10732981,
+    "spillBytesBefore": {
+      "total": 93,
+      "sourceOfTruth": 31,
+      "degradable": 34,
+      "orphan": 28
+    },
+    "spillBytesAfter": {
+      "total": 93,
+      "sourceOfTruth": 31,
+      "degradable": 34,
+      "orphan": 28
+    },
+    "note": "The only intentional content change is the exact-identity eligible messages.content row. VACUUM accounts for physical file shrink. Startup phase deltas are single-machine synthetic observations with uncontrolled OS filesystem cache; they do not prove production p95 or cold-cache behavior."
+  }
+}

@@ -55,10 +55,8 @@ import type { ToolCallGateArgs } from '../confirmation/toolCallGate'
 import { createRegisteredAgentTurnTools } from '../tools/registeredAgentTurnTools'
 import { classifyWorkDirProfileTarget } from '../workDirBinding'
 import { sessionDisplayNameRaw } from '../../src/shared/sessionDisplay'
-import { buildSessionDirectoryContextBlock } from '../../src/shared/sessionDirectoryGrant'
-import type { SessionDirectoryGrantRecord } from '../../src/shared/sessionDirectoryGrant'
+import { buildSessionDirectoryContextBlock, normalizeDirectoryGrantPath, type SessionDirectoryGrantRecord } from '../../src/shared/sessionDirectoryGrant'
 import { listValidSessionDirectoryGrantsSync } from '../sessionDirectoryGrants'
-import { normalizeDirectoryGrantPath } from '../../src/shared/sessionDirectoryGrant'
 import { channelFor, type ResolveConfirmChannelArgs } from '../confirmation/channels'
 import { AgentChannel } from '../confirmation/agentChannel'
 import { toolIdToOpenAiCompatibleApiToolName } from '../../src/shared/anthropicToolSanitize'
@@ -102,11 +100,11 @@ export interface AgentInvocationMaterials {
   sessionId: string
   turnId?: string
   llmServiceId?: string
-  windowId?: string
-  model: string
-  /** Trusted catalog identity supplied by the main-process automation pair resolver. */
+  /** Trusted model catalog identity, when the request originated from a catalog entry. */
   modelId?: string
   supportsThinking?: boolean
+  windowId?: string
+  model: string
   providerRouteId?: string
   contextWindow?: number
   contextWindowTrusted?: boolean
@@ -316,6 +314,10 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   const acceptedTurnId = materials.acceptedTurn?.turnId ?? materials.turnId
   const runtimeTurnId = acceptedTurnId ?? materials.requestId
   const db = materials.appDb as AppDatabase | undefined
+  // Model identity must come from the trusted resolver at the call site. Looking it up
+  // by display name here would make unrelated Hosted/remote invocations depend on a
+  // second catalog read and can select the wrong entry when names are not unique.
+  const modelId = materials.modelId
   const materialsLane = materials.lane
     ?? (materials.remoteContext
       ? materials.remoteContext.source === 'feishu' ? 'feishu' : 'wechat'
@@ -607,7 +609,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           ? () => undefined
           : (input: Record<string, unknown>) => recordTurnSummary(db, {
               ...input,
-              ...(materials.modelId !== undefined ? { modelId: materials.modelId } : {}),
+              ...(modelId !== undefined ? { modelId } : {}),
               providerModelName: materials.model,
               ...(materials.providerRouteId !== undefined ? { routeIdentity: materials.providerRouteId } : {}),
               ...(turnToolAttribution ? { toolAttributionJson: JSON.stringify(turnToolAttribution) } : {})
@@ -659,8 +661,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     const supplement = { ...browserFacts, ...(callerSupplement ?? {}) }
     const currentShellConfig = binding.phase === 'recheck' ? materials.resolveShellConfig?.() ?? materials.shellConfig : materials.shellConfig
     const currentWikiConfig = binding.phase === 'recheck' ? materials.resolveWikiConfig?.() ?? materials.wikiConfig : materials.wikiConfig
-    const sessionDirectoryGrants = materialsLane === 'desktop' && db
-      ? (getSession(db, materials.sessionId)?.metadata?.sessionDirectoryGrants as import('../../src/shared/sessionDirectoryGrant').SessionDirectoryGrantRecord[] | undefined) ?? []
+    const currentSessionDirectoryGrants = materialsLane === 'desktop' && db
+      ? (getSession(db, materials.sessionId)?.metadata?.sessionDirectoryGrants as SessionDirectoryGrantRecord[] | undefined) ?? []
       : []
     return {
       toolName,
@@ -672,7 +674,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       userDataDir: materials.userDataDir,
       lane: materialsLane,
       remoteContext: materials.remoteContext,
-      ...(sessionDirectoryGrants.length ? { sessionDirectoryGrants } : {}),
+      ...(currentSessionDirectoryGrants.length ? { sessionDirectoryGrants: currentSessionDirectoryGrants } : {}),
       toolsConfig: binding.phase === 'recheck' ? materials.resolveToolsConfig?.() ?? materials.toolsConfig : materials.toolsConfig,
       ...(currentShellConfig !== undefined ? { shellConfig: currentShellConfig } : {}),
       ...(currentBrowserConfig !== undefined ? { browserConfig: currentBrowserConfig } : {}),
@@ -1341,10 +1343,10 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       sessionId: materials.sessionId,
       turnId: runtimeTurnId,
       model: materials.model,
-      modelId: materials.modelId,
+      modelId,
       providerModelName: materials.model,
-      llmServiceId: materials.llmServiceId,
       routeIdentity: materials.providerRouteId,
+      llmServiceId: materials.llmServiceId,
       baseUrl: materials.baseUrl,
       recordStepUsage: usage?.recordStepUsage,
       attributionForModelTurn: (modelTurn) => attributionByModelTurn.get(modelTurn),

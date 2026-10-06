@@ -8,6 +8,8 @@ export type AgentLogEventName =
   | 'driver.delivery.record'
   | 'history.cutover'
   | 'session.storage.shadow'
+  | 'session.history.recovery'
+  | 'session.transcript.read'
   | 'session.transcript.reconciliation'
   | 'storage.spill.source_truth_gc'
   | 'storage.spill.source_truth_gc_failed'

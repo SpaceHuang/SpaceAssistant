@@ -1,0 +1,209 @@
+{
+  "date": "2026-10-06",
+  "task": "R-02",
+  "status": "complete",
+  "source": {
+    "treeOid": "03d9c8a4e0c7621241df1d10428f021e64463067",
+    "snapshotCommit": "837a9c713d6f9c463749e63956f19db35de2cdf3",
+    "clean": true,
+    "appVersion": "0.2.4",
+    "schemaVersion": 52
+  },
+  "artifacts": [
+    {
+      "target": "mac-arm64",
+      "artifactPath": "/Users/space/Documents/Develop/SpaceAssistant/release/session-storage-r/SpaceAssistant-0.2.4-arm64.dmg",
+      "sha256": "0fdc0bf2152cf677b9abb8d966d11f4838b677cee16bc84d2c2831f53652ef46",
+      "buildId": "2cbc329b-89bb-487c-883b-048667103377",
+      "appAsarSha256": "f3d6ce76cde9f94cda05c4b275ec9d5e5def5265b1aa20843fe560a9d8d83b15",
+      "cleanupDeploymentSha256": "267584e31e2360a8c311fcd82b927029b02ad1539f7d64a7d4f919192444428d",
+      "allowContentCleanup": false,
+      "compatibilityRecordSha256": null,
+      "originalBuildPath": "/tmp/spaceassistant-session-storage-r00-20261005/release/SpaceAssistant-0.2.4-arm64.dmg"
+    },
+    {
+      "target": "mac-x64",
+      "artifactPath": "/Users/space/Documents/Develop/SpaceAssistant/release/session-storage-r/SpaceAssistant-0.2.4.dmg",
+      "sha256": "8bfb24cf056a6dd1d41e4d28e250978812d93d1d40dc37cf1632cc0bf11cdfbc",
+      "buildId": "7935c74c-efb3-4962-9f2d-41c00272756f",
+      "appAsarSha256": "f3d6ce76cde9f94cda05c4b275ec9d5e5def5265b1aa20843fe560a9d8d83b15",
+      "cleanupDeploymentSha256": "267584e31e2360a8c311fcd82b927029b02ad1539f7d64a7d4f919192444428d",
+      "allowContentCleanup": false,
+      "compatibilityRecordSha256": null,
+      "originalBuildPath": "/tmp/spaceassistant-session-storage-r00-20261005/release/SpaceAssistant-0.2.4.dmg"
+    }
+  ],
+  "host": {
+    "platform": "darwin",
+    "architecture": "arm64",
+    "runtime": "Darwin 25.5.0",
+    "x64Execution": "Rosetta 2 available and used with /usr/bin/arch -x86_64"
+  },
+  "validation": {
+    "arm64DmgMountedAndChecksumVerified": true,
+    "arm64DmgHdiutilVerified": true,
+    "x64DmgMountedAndChecksumVerified": true,
+    "x64DmgHdiutilVerified": true,
+    "arm64AppSignature": "ad-hoc; codesign --verify --deep --strict passed",
+    "windowsPackage": "not run; unavailable on this host and excluded from local blocking targets",
+    "developerIdSigningAndNotarization": "not run; release policy, separate from functional iteration",
+    "outerSandboxAttempt": {
+      "result": "rejected as an invalid harness: Electron child-process sandbox initialization was blocked by nested macOS sandboxing; GPU/renderer exited. The same app build passed when launched with Electron userData isolation without the outer sandbox."
+    },
+    "isolatedPackageLaunch": {
+      "target": "mac-arm64",
+      "fixture": "/private/tmp/spaceassistant-r02-profile4/user-data/spaceassistant-data.db",
+      "initialSchemaVersion": 51,
+      "resultingSchemaVersion": 52,
+      "fixtureMessageBodiesPreserved": true,
+      "integrityCheck": "ok",
+      "foreignKeyCheck": [],
+      "userDataArgument": "/private/tmp/spaceassistant-r02-profile4/user-data",
+      "electronRendererLoaded": true,
+      "rendererLoadDurationMs": 796,
+      "userModelList": [],
+      "preferredModelId": "",
+      "backgroundNetworkingDisabled": true,
+      "modelInvocation": "none",
+      "launchObservedSeconds": 20,
+      "result": "passed"
+    },
+    "x64AppSignature": "ad-hoc; codesign --verify --deep --strict passed",
+    "arm64MountedBundle": "/tmp/spaceassistant-r02-arm64/SpaceAssistant.app",
+    "x64MountedBundle": "/tmp/spaceassistant-r02-x64/SpaceAssistant.app",
+    "packageRuntime": "Electron 44.1.1, Node 24.19.0, SQLite 3.53.3",
+    "rendererHarness": "actual packaged renderer window.api calls through renderer → preload → IPC, controlled via local CDP",
+    "modelCalls": "none; no turn submit/generation was issued, synthetic profiles had no usable model route",
+    "cleanupExecution": "none; packaged allowContentCleanup=false, compatibility record absent; no profile entered write-stopped/pending/complete due to package startup",
+    "excludedFixture": {
+      "path": "/tmp/session-storage-v50-full-consumers-retry-20261005/userData/spaceassistant-data.db",
+      "reason": "stale synthetic schema-version label: metadata says v50 but integrated main v31-v33 objects/columns are missing (continuation_intents, turns.retry_of_message_id/retry_of_invocation_id, plus other main fields); excluded and not altered"
+    },
+    "profileEvidence": [
+      {
+        "case": "arm64 legacy schema 19 → 52",
+        "profile": "/private/tmp/spaceassistant-r02-v19/user-data",
+        "result": "renderer loaded; two original message IDs/bodies preserved; page/API/search corpus/global search/preview returned; integrity ok; FK 0"
+      },
+      {
+        "case": "arm64 legacy schema 51 → 52",
+        "profile": "/private/tmp/spaceassistant-r02-profile4/user-data",
+        "result": "renderer loaded in 796 ms; two original legacy bodies preserved; integrity ok; FK 0"
+      },
+      {
+        "case": "x64 legacy schema 19 → 52",
+        "profile": "/private/tmp/spaceassistant-r02-x64-v19b/user-data",
+        "result": "Rosetta renderer loaded in 9637 ms; page/API/search corpus/global search returned both original messages; preview preserved; integrity ok; FK 0"
+      },
+      {
+        "case": "arm64 canonical-only consumer + retry",
+        "profile": "/private/tmp/spaceassistant-r02-canonical-profile/user-data",
+        "result": "page 12; display page 6; API context 12; search corpus 12; global search hit r02-canonical-12; preview equals latest canonical message; canonical retry returned user + failed assistant, sequence and exclude ID; all bodies non-empty at read and stored canonical-only bodies remain 0 bytes; integrity ok; FK 0"
+      },
+      {
+        "case": "x64 canonical-only consumer + retry",
+        "profile": "/private/tmp/spaceassistant-r02-x64-consumer/user-data",
+        "result": "Rosetta page 12; display page 6; API context 12; search corpus 12; global search hit r02-canonical-12; preview equals latest canonical message; canonical retry returned user + failed assistant; integrity ok; FK 0"
+      },
+      {
+        "case": "arm64 packaged backup writer + production restore",
+        "profile": "/private/tmp/spaceassistant-r02-backup-profile/user-data",
+        "result": "session:update triggered package backup; extracted restore module from exact packaged app.asar returned 12/12 ordered messages; restored messages exactly equal backup JSON; all bodies present; backup SHA-256 fb9fbd187736e4d5262e60c010bac1090ade909edad74d459e8063a94d6b9666; integrity ok; FK 0"
+      },
+      {
+        "case": "x64 packaged backup writer + production restore",
+        "profile": "/private/tmp/spaceassistant-r02-x64-backup/user-data",
+        "result": "session:update triggered x64 package backup; production restore module from identical app.asar returned 12/12 ordered messages; restored messages exactly equal backup JSON; all bodies present; backup SHA-256 9c03c388889375378354764705f1712d4334183cc2a7b15ab710ad9285e48299; integrity ok; FK 0"
+      },
+      {
+        "case": "arm64 History payload corruption",
+        "profile": "/private/tmp/spaceassistant-r02-faults/history-payload/user-data",
+        "result": "page/API/search corpus/global search failed with CANONICAL_SESSION_CONTENT_UNAVAILABLE; healthy session read 2 messages; integrity ok; FK 0"
+      },
+      {
+        "case": "arm64 stream owner drift",
+        "profile": "/private/tmp/spaceassistant-r02-faults/owner-drift/user-data",
+        "result": "page/API/search corpus/global search failed with CANONICAL_SESSION_CONTENT_UNAVAILABLE; healthy session read 2 messages; integrity ok; FK 0"
+      },
+      {
+        "case": "arm64 event owner drift",
+        "profile": "/private/tmp/spaceassistant-r02-faults/event-owner-drift/user-data",
+        "result": "target page failed with CANONICAL_SESSION_CONTENT_UNAVAILABLE; healthy session read 2 messages; integrity ok; FK 0"
+      },
+      {
+        "case": "arm64 missing source spill",
+        "profile": "/private/tmp/spaceassistant-r02-faults/spill-missing/user-data",
+        "result": "page/API/search corpus/global search failed with CANONICAL_SESSION_CONTENT_UNAVAILABLE; healthy session read 2 messages; integrity ok; FK 0"
+      },
+      {
+        "case": "arm64 bad watermark anchor",
+        "profile": "/private/tmp/spaceassistant-r02-faults/watermark-anchor/user-data",
+        "result": "page/API/search corpus returned all 12 canonical messages; global search hit r02-canonical-12; cache anchor repaired to r02-normal-terminal/r02-normal-invocation; integrity ok; FK 0"
+      },
+      {
+        "case": "arm64 allocator cursor UPDATE",
+        "profile": "/private/tmp/spaceassistant-r02-faults/allocator-update/user-data",
+        "result": "cursor integrity marker persisted invalid=1; target and healthy page/API/search corpus/global search all failed closed; integrity ok; FK 0"
+      },
+      {
+        "case": "arm64 allocator cursor DELETE",
+        "profile": "/private/tmp/spaceassistant-r02-faults/allocator-delete/user-data",
+        "result": "cursor integrity marker persisted invalid=1; target and healthy page/API/search corpus/global search all failed closed; integrity ok; FK 0"
+      },
+      {
+        "case": "x64 History payload corruption",
+        "profile": "/private/tmp/spaceassistant-r02-x64-faults/history-payload/user-data",
+        "result": "target page failed with CANONICAL_SESSION_CONTENT_UNAVAILABLE; healthy session read 2 messages; integrity ok; FK 0"
+      },
+      {
+        "case": "x64 stream owner drift",
+        "profile": "/private/tmp/spaceassistant-r02-x64-faults/stream-owner/user-data",
+        "result": "target page failed with CANONICAL_SESSION_CONTENT_UNAVAILABLE; healthy session read 2 messages; integrity ok; FK 0"
+      },
+      {
+        "case": "x64 event owner drift",
+        "profile": "/private/tmp/spaceassistant-r02-x64-faults/event-owner/user-data",
+        "result": "target page failed with CANONICAL_SESSION_CONTENT_UNAVAILABLE; healthy session read 2 messages; integrity ok; FK 0"
+      },
+      {
+        "case": "x64 missing source spill",
+        "profile": "/private/tmp/spaceassistant-r02-x64-faults/spill-missing/user-data",
+        "result": "target page failed with CANONICAL_SESSION_CONTENT_UNAVAILABLE; healthy session read 2 messages; integrity ok; FK 0"
+      },
+      {
+        "case": "x64 bad watermark anchor",
+        "profile": "/private/tmp/spaceassistant-r02-x64-faults/watermark-anchor/user-data",
+        "result": "page returned all 12 canonical messages; global search hit r02-canonical-12; integrity ok; FK 0"
+      },
+      {
+        "case": "x64 allocator cursor UPDATE",
+        "profile": "/private/tmp/spaceassistant-r02-x64-faults/allocator-update/user-data",
+        "result": "cursor integrity marker persisted invalid=1; target and healthy page failed closed; integrity ok; FK 0"
+      },
+      {
+        "case": "x64 allocator cursor DELETE",
+        "profile": "/private/tmp/spaceassistant-r02-x64-faults/allocator-delete/user-data",
+        "result": "cursor integrity marker persisted invalid=1; target and healthy page failed closed; integrity ok; FK 0"
+      }
+    ],
+    "reopenEvidence": "each case launched the packaged app against its own disposable userData; the canonical consumer profile was closed and launched again before the separate backup profile run; all inspected databases remained schema 52 with integrity_check=ok and foreign_key_check empty",
+    "platformBoundaries": {
+      "arm64": "run on native Apple Silicon",
+      "x64": "run under Rosetta 2",
+      "windows": "not run; unavailable on this host and excluded from local blocking targets",
+      "developerIdAndNotarization": "not run; release policy, separate from functional iteration",
+      "formalReleaseOrTag": "not performed"
+    }
+  },
+  "remainingR02Coverage": [],
+  "retention": {
+    "status": "locally archived; formal R publication is pending",
+    "directory": "/Users/space/Documents/Develop/SpaceAssistant/release/session-storage-r",
+    "gitIgnored": true,
+    "checksumsReverifiedAfterCopy": true,
+    "formalReleaseUrl": null,
+    "releaseTag": null,
+    "releaseOwner": null,
+    "sourceCommitStatus": "local snapshot commit 837a9c713d6f9c463749e63956f19db35de2cdf3 has author/committer email codex-local-snapshot@invalid and is not referenced by a local branch/tag; rebuild against a release-quality clean commit before formal publication"
+  }
+}

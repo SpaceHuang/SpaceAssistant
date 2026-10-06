@@ -1,0 +1,283 @@
+{
+  "manifestVersion": 1,
+  "task": "SC-01C",
+  "status": "complete",
+  "createdAt": "2026-10-06",
+  "scope": {
+    "realProfilesAccessed": false,
+    "modelCalls": 0,
+    "externalPublicationPerformed": false,
+    "productionCleanupAuthorized": false,
+    "profileRoot": "/tmp/spaceassistant-session-storage-sc01c-fixtures-20261006",
+    "fixturePurpose": "synthetic disposable profiles only; exact owner-approved runtime cleanup scope is synthetic and profile-local"
+  },
+  "candidate": {
+    "version": "0.2.4",
+    "commitSha": "3bd50b224c5abf95821525e57985fad0c11051c0",
+    "treeOid": "9c766b629ffafe8cf29a51c46ef1faecfea07b4f",
+    "schemaVersion": 52,
+    "historyFormatVersion": 1,
+    "spillFormatVersion": 1,
+    "compatibilityRecordSha256": "d8c11fc170dfac4b5c43b2ed58f49f1873f802427d5db67848dc8aaf4aed3803",
+    "deploymentAllowContentCleanup": true,
+    "appAsarSha256": "5f3c5d3cf3b5a1a90b7721050ae6cb703001ee9e5a714266a8e6d5c67ebedb6e",
+    "artifacts": {
+      "mac-arm64": {
+        "path": "/Users/space/Documents/Develop/SpaceAssistant/release/session-storage-c-on-candidate-sc01c/SpaceAssistant-0.2.4-c-on-arm64.dmg",
+        "sha256": "0632d865659aa00317194af66503c75b005cd0dc384ce51cb8724807fcc04d51",
+        "sizeBytes": 200727000,
+        "buildId": "4c862b5f-e1d5-4c04-bd15-2329db7f1114",
+        "buildIdentityResourceSha256": "646bbd8c2bbe6c160506223d67c44e7be7e33d8cb083bc9b76cb7f6cf30b7f04",
+        "deploymentResourceSha256": "4b9eb2148396dce17038bc45485d1b67db41e2107b181cbb98d999c492bb01a1",
+        "compatibilityResourceSha256": "6f5c86dd15fef28ad3e0a9905b0311d62fade0edf8111aa83d0bb98b1d09cda5",
+        "hdiutilVerify": "VALID"
+      },
+      "mac-x64": {
+        "path": "/Users/space/Documents/Develop/SpaceAssistant/release/session-storage-c-on-candidate-sc01c/SpaceAssistant-0.2.4-c-on-x64.dmg",
+        "sha256": "9b3a0f1cbba028e884aa84899f19932177f55e274504b3dab2c524685fa7a139",
+        "sizeBytes": 207544735,
+        "buildId": "56225027-6cd9-4627-b496-855c139cb54e",
+        "buildIdentityResourceSha256": "f3835598310f4fa2afdf4ce8df787ce3b1335231dab02c59af93b090c719219c",
+        "deploymentResourceSha256": "4b9eb2148396dce17038bc45485d1b67db41e2107b181cbb98d999c492bb01a1",
+        "compatibilityResourceSha256": "6f5c86dd15fef28ad3e0a9905b0311d62fade0edf8111aa83d0bb98b1d09cda5",
+        "hdiutilVerify": "VALID"
+      }
+    }
+  },
+  "rollback": {
+    "version": "0.2.4",
+    "commitSha": "837a9c713d6f9c463749e63956f19db35de2cdf3",
+    "artifacts": {
+      "mac-arm64": "0fdc0bf2152cf677b9abb8d966d11f4838b677cee16bc84d2c2831f53652ef46",
+      "mac-x64": "8bfb24cf056a6dd1d41e4d28e250978812d93d1d40dc37cf1632cc0bf11cdfbc"
+    },
+    "canonicalOnlyReader": true,
+    "readCleanupStates": [
+      "write-stopped",
+      "pending",
+      "complete"
+    ]
+  },
+  "profiles": [
+    {
+      "state": "write-stopped",
+      "sessionId": "14789dd4-fb42-4eee-bf5a-44e6d08428cf",
+      "sourceDatabaseSha256": "3a1f7a590006f40b266ba424122ea9493ceb2b88ed148228c1a01d704b2e7d37",
+      "ownerApprovalReference": "SC-01C synthetic approval write-stopped",
+      "ownerApprovedScopeSha256": "a95d2444672af26a3f83f1763c0634ac9a66cc4f97de5fc7983c9899b12df0bf",
+      "syntheticBeginPauseTrigger": true,
+      "messages": 2,
+      "sourceSpill": {
+        "locator": "575c9fcd-bbab-4b71-ac04-6476749176e9.spill",
+        "byteLength": 90043,
+        "sha256": "a00b385d3ff193459399469e50aec343eb3f8f37cf548d2851aa21219e47a3ed"
+      },
+      "cWorker": {
+        "mac-arm64": {
+          "state": "write-stopped",
+          "legacyBodiesPresent": 2,
+          "cleanedCount": 0,
+          "integrity": "ok",
+          "foreignKeys": 0,
+          "databaseSha256": "7214452bc873f4aa4e0450a50ef4e556f018d4ef01ffe4f639968e1946d4fe43"
+        },
+        "mac-x64": {
+          "state": "write-stopped",
+          "legacyBodiesPresent": 2,
+          "cleanedCount": 0,
+          "integrity": "ok",
+          "foreignKeys": 0,
+          "databaseSha256": "4f6c538c65f2ee9bde9e9c876680f592a52fe7dd41d75a4f47ab3ec77b7be096"
+        }
+      },
+      "rReader": {
+        "mac-arm64": {
+          "messagesRead": 2,
+          "canonicalMatch": true,
+          "sourceSpillExpanded": true,
+          "stateAndCursorUnchanged": true,
+          "integrity": "ok",
+          "foreignKeys": 0
+        },
+        "mac-x64": {
+          "messagesRead": 2,
+          "canonicalMatch": true,
+          "sourceSpillExpanded": true,
+          "stateAndCursorUnchanged": true,
+          "integrity": "ok",
+          "foreignKeys": 0
+        }
+      }
+    },
+    {
+      "state": "pending",
+      "sessionId": "e236551c-6c7d-41d5-8a5f-8403989c3a4d",
+      "sourceDatabaseSha256": "2c3706ca944cdd8a9deb8addabdde8987fd5c7f85eaeedce609e08f26b9de0da",
+      "ownerApprovalReference": "SC-01C synthetic approval pending",
+      "ownerApprovedScopeSha256": "7795816ac0792241324cffbaa8b1a5a028288855da2627ae533ef7b001368d6b",
+      "syntheticBeginPauseTrigger": false,
+      "messages": 102,
+      "sourceSpill": {
+        "locator": "37022885-3de1-47bd-bbcc-a43bdee19ebe.spill",
+        "byteLength": 90037,
+        "sha256": "36fda04cce8bec1bbb0a975af67d6f04bce4b774835b3b5cee1f73af605380dd"
+      },
+      "cWorker": {
+        "mac-arm64": {
+          "state": "pending",
+          "cleanedCount": 100,
+          "nextSequence": 99,
+          "afterMessageId": "sc01c-pending-99",
+          "remainingDualWriteBodies": 2,
+          "integrity": "ok",
+          "foreignKeys": 0,
+          "databaseSha256": "f116ef7572a893778ced3a27582b9b5d556633764555a815e68e73478532fe56"
+        },
+        "mac-x64": {
+          "state": "pending",
+          "cleanedCount": 100,
+          "nextSequence": 99,
+          "afterMessageId": "sc01c-pending-99",
+          "remainingDualWriteBodies": 2,
+          "integrity": "ok",
+          "foreignKeys": 0,
+          "databaseSha256": "ed546033240dbe0b94ccc8e273d1e11da0c4ba0c8c97a805e6df366baa7f8cb3"
+        }
+      },
+      "rReader": {
+        "mac-arm64": {
+          "messagesRead": 102,
+          "canonicalMatch": true,
+          "sourceSpillExpanded": true,
+          "stateAndCursorUnchanged": true,
+          "integrity": "ok",
+          "foreignKeys": 0
+        },
+        "mac-x64": {
+          "messagesRead": 102,
+          "canonicalMatch": true,
+          "sourceSpillExpanded": true,
+          "stateAndCursorUnchanged": true,
+          "integrity": "ok",
+          "foreignKeys": 0
+        }
+      }
+    },
+    {
+      "state": "complete",
+      "sessionId": "bef75713-b328-43d4-8343-75ba91a4bd14",
+      "sourceDatabaseSha256": "daf27911127af8d03094a8a9aac354c216ae9dc0c39e5b88097a9419c4355a3c",
+      "ownerApprovalReference": "SC-01C synthetic approval complete",
+      "ownerApprovedScopeSha256": "91b516b7b665453977eebf24c8b1e64ba2adef4952856508fd91110e35d7cc37",
+      "syntheticBeginPauseTrigger": false,
+      "messages": 2,
+      "sourceSpill": {
+        "locator": "e20c80ca-98af-42d2-832a-bd1467b4613d.spill",
+        "byteLength": 90038,
+        "sha256": "ed9690aeaa0172c8f7418e95635799a04b98a6bd53230d85464ea37aafcb2a8d"
+      },
+      "cWorker": {
+        "mac-arm64": {
+          "state": "complete",
+          "cleanedCount": 2,
+          "scanComplete": true,
+          "legacyBodiesPresent": 0,
+          "integrity": "ok",
+          "foreignKeys": 0,
+          "databaseSha256": "8a2d76f8c625ac5d63e338cc319b67736f9b5d57b409b13823f352f6fc0e04b9"
+        },
+        "mac-x64": {
+          "state": "complete",
+          "cleanedCount": 2,
+          "scanComplete": true,
+          "legacyBodiesPresent": 0,
+          "integrity": "ok",
+          "foreignKeys": 0,
+          "databaseSha256": "0d07ee5784036e539ec30ee459b6c61e82d5e9231297f5d681d7d6b67df065ff"
+        }
+      },
+      "rReader": {
+        "mac-arm64": {
+          "messagesRead": 2,
+          "canonicalMatch": true,
+          "sourceSpillExpanded": true,
+          "stateAndCursorUnchanged": true,
+          "integrity": "ok",
+          "foreignKeys": 0
+        },
+        "mac-x64": {
+          "messagesRead": 2,
+          "canonicalMatch": true,
+          "sourceSpillExpanded": true,
+          "stateAndCursorUnchanged": true,
+          "integrity": "ok",
+          "foreignKeys": 0
+        }
+      }
+    }
+  ],
+  "faultMatrix": {
+    "reader": "R-02 macOS package renderer → preload → chat:get-message-page IPC",
+    "sourceProfiles": "SC-01C synthetic write-stopped profile copies; each fault isolated in a fresh userData copy",
+    "spillMissing": {
+      "mac-arm64": {
+        "ipc": "CANONICAL_SESSION_CONTENT_UNAVAILABLE",
+        "databaseSemanticStateUnchanged": true,
+        "integrity": "ok",
+        "foreignKeys": 0
+      },
+      "mac-x64": {
+        "ipc": "CANONICAL_SESSION_CONTENT_UNAVAILABLE",
+        "databaseSemanticStateUnchanged": true,
+        "integrity": "ok",
+        "foreignKeys": 0
+      }
+    },
+    "spillTampered": {
+      "mac-arm64": {
+        "ipc": "CANONICAL_SESSION_CONTENT_UNAVAILABLE",
+        "databaseSemanticStateUnchanged": true,
+        "integrity": "ok",
+        "foreignKeys": 0
+      },
+      "mac-x64": {
+        "ipc": "CANONICAL_SESSION_CONTENT_UNAVAILABLE",
+        "databaseSemanticStateUnchanged": true,
+        "integrity": "ok",
+        "foreignKeys": 0
+      }
+    },
+    "historyKindCorrupted": {
+      "injection": "invocation-context-committed event kind changed to invalid-history-event on disposable copy",
+      "mac-arm64": {
+        "ipc": "CANONICAL_SESSION_CONTENT_UNAVAILABLE",
+        "databaseSemanticStateUnchanged": true,
+        "integrity": "ok",
+        "foreignKeys": 0
+      },
+      "mac-x64": {
+        "ipc": "CANONICAL_SESSION_CONTENT_UNAVAILABLE",
+        "databaseSemanticStateUnchanged": true,
+        "integrity": "ok",
+        "foreignKeys": 0
+      }
+    },
+    "realProfilesAccessed": false,
+    "modelCalls": 0
+  },
+  "validation": {
+    "candidateAndRollbackDmgReverified": true,
+    "allFourDmgHdiutilVerify": "VALID",
+    "CWorkerRuns": "actual packaged app startup and production main-process cleanup maintenance boundary; no standalone worker call",
+    "RReads": "actual packaged renderer window.api → preload → IPC; closed app, then reopened database for semantic/integrity/FK verification",
+    "scopeAuthorization": "persistent exact profile identity/session IDs/snapshot hashes/validity/synthetic owner approval",
+    "developerIdSigningOrNotarization": "not applicable to local technical acceptance; not performed",
+    "formalRelease": "not performed",
+    "rReadProfileRoot": "/tmp/spaceassistant-session-storage-sc01c-r-read-20261006",
+    "faultProfileRoots": {
+      "spill": "/tmp/spaceassistant-session-storage-sc01c-r-faults-20261006",
+      "history": "/tmp/spaceassistant-session-storage-sc01c-history-faults-20261006"
+    },
+    "x64Execution": "Rosetta 2 via /usr/bin/arch -x86_64"
+  }
+}

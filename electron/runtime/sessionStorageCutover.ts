@@ -96,6 +96,14 @@ function cleanupManifestSha256(db: AppDatabase, sessionId: string): string | und
   return createHash('sha256').update(value, 'utf8').digest('hex')
 }
 
+/** Stable owner-authorization fence for the lifetime of a cleanup run; excludes body copies erased by cleanup. */
+export function getSessionMessageContentCleanupAuthorizationSnapshotSha256(
+  db: AppDatabase,
+  sessionId: string,
+): string | undefined {
+  return cleanupManifestSha256(db, sessionId)
+}
+
 function cleanupProgressCursorIsConsistent(
   conn: ReturnType<typeof getDbConnection>,
   sessionId: string,

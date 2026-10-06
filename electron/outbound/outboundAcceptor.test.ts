@@ -4,6 +4,7 @@ import type { OutboundSubmitIntent } from '../../src/shared/outboundProtocol'
 import { DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
 import { summarizeFailedInvocation } from './outboundAcceptor'
 import { TransactionCommitUnknownError } from '../database/transaction'
+import { createHash } from 'node:crypto'
 
 function makeSnapshot(overrides: Partial<OutboundSnapshot> = {}): OutboundSnapshot {
   return {
@@ -197,7 +198,7 @@ describe('canonical History failure summary', () => {
       appendMessage(temp.db, { id: 'prior-user', sessionId: session.id, role: 'user', content: 'old task', timestamp: 1, status: 'sent' })
       const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, Date.now, session.id)
       await history.appendBatch([
-        { invocationId: 'old-inv', turnId: 'old-turn', sequence: 1, schemaVersion: 1, eventId: '1', idempotencyKey: '1', kind: 'invocation-context-committed', payload: { messages: [], requiredUserMessage: { id: 'prior-user', message: { role: 'user', content: 'old task' } } } },
+        { invocationId: 'old-inv', turnId: 'old-turn', sequence: 1, schemaVersion: 1, eventId: '1', idempotencyKey: '1', kind: 'invocation-context-committed', payload: { messages: [{ id: 'prior-user', role: 'user', content: 'old task', timestamp: 1 }], requiredUserMessage: { id: 'prior-user', message: { role: 'user', content: 'old task' } } } },
         { invocationId: 'old-inv', turnId: 'old-turn', sequence: 2, schemaVersion: 1, eventId: '2', idempotencyKey: '2', kind: 'invocation-failed', payload: { status: 'failed', message: 'old failure' } }
       ], 0)
       await history.appendBatch([
@@ -210,6 +211,47 @@ describe('canonical History failure summary', () => {
 })
 
 describe('continuation intent acceptance persistence', () => {
+  it('canonical-only accepted-turn 重试返回投影后的 assistant 正文', async () => {
+    const { createTempDatabase } = await import('../database/testHelpers')
+    const { createSession, appendMessage, createPersistedTurn, getDbConnection } = await import('../database')
+    const { SqliteAgentHistory } = await import('../runtime/sqliteAgentHistory')
+    const temp = createTempDatabase('sa-continuation-accepted-canonical-only-')
+    try {
+      const session = createSession(temp.db, { name: 'accepted canonical retry' })
+      const user = appendMessage(temp.db, { id: 'accepted-canonical-user', sessionId: session.id, role: 'user', content: '继续修复', timestamp: 1, status: 'sent' }).message
+      const assistant = appendMessage(temp.db, { id: 'accepted-canonical-assistant', sessionId: session.id, role: 'assistant', content: '已经完成修复', timestamp: 2, status: 'completed' }).message
+      createPersistedTurn(temp.db, {
+        turnId: 'accepted-canonical-turn', requestId: 'accepted-canonical-request', sessionId: session.id,
+        userMessageId: user.id, assistantMessageId: assistant.id, state: 'terminal', outcome: 'completed'
+      })
+      const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, Date.now, session.id)
+      await history.appendBatch([
+        { invocationId: 'accepted-canonical-request', turnId: 'accepted-canonical-turn', sequence: 1, schemaVersion: 1,
+          eventId: 'accepted-canonical-context', idempotencyKey: 'accepted-canonical-context', kind: 'invocation-context-committed',
+          payload: { messages: [user, assistant].map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })) } },
+        { invocationId: 'accepted-canonical-request', turnId: 'accepted-canonical-turn', sequence: 2, schemaVersion: 1,
+          eventId: 'accepted-canonical-terminal', idempotencyKey: 'accepted-canonical-terminal', kind: 'invocation-completed', payload: { status: 'completed' } }
+      ], 0)
+      const intentHash = createHash('sha256').update(JSON.stringify({ sessionId: session.id, text: '继续', attachments: null })).digest('hex')
+      getDbConnection(temp.db).prepare(`INSERT INTO continuation_intents(request_id,session_id,payload_sha256,raw_text,attachments_json,intent_kind,route,target_id,status,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run('accepted-canonical-request', session.id, intentHash, '继续', '[]', 'exact-continue', 'context-turn', 'accepted-canonical-turn', 'accepted_turn', 1, 1)
+      getDbConnection(temp.db).prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      getDbConnection(temp.db).prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
+
+      const acceptor = createOutboundAcceptor({
+        db: temp.db, turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
+        readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
+        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ enabled: true, rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
+        wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }),
+        appendHintMessage: () => undefined, updateSessionState: () => undefined, createSession: () => session,
+        ensureSessionWorkDir: async () => ({ ok: true as const }), startTurn: vi.fn(), newRequestId: () => 'generated', audit: () => undefined
+      })
+
+      const result = await acceptor.submitOutbound({ sessionId: session.id, text: '继续', requestId: 'accepted-canonical-request' })
+      expect(result).toMatchObject({ accepted: 'turn-started', turnId: 'accepted-canonical-turn', assistantMessage: { content: '已经完成修复', status: 'completed' } })
+    } finally { temp.cleanup() }
+  })
+
   it('returns a typed checkpoint-started status and hides the internal continuation ID on retries', async () => {
     const { createTempDatabase } = await import('../database/testHelpers')
     const { createSession, appendMessage, createPersistedTurn, getDbConnection, getMessages } = await import('../database')
@@ -359,7 +401,7 @@ describe('continuation intent acceptance persistence', () => {
       appendMessage(temp.db, { id: 'new-user', sessionId: session.id, role: 'user', content: 'new task already accepted', timestamp: 3, status: 'sent' })
       const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, Date.now, session.id)
       await history.appendBatch([
-        { invocationId: 'old-turn', turnId: 'old-turn', sequence: 1, schemaVersion: 1, eventId: 'stale-1', idempotencyKey: 'stale-i1', kind: 'invocation-context-committed', payload: { messages: [], requiredUserMessage: { id: 'old-user', message: { role: 'user', content: 'old task' } } } },
+        { invocationId: 'old-turn', turnId: 'old-turn', sequence: 1, schemaVersion: 1, eventId: 'stale-1', idempotencyKey: 'stale-i1', kind: 'invocation-context-committed', payload: { messages: [{ id: 'old-user', role: 'user', content: 'old task', timestamp: 1 }], requiredUserMessage: { id: 'old-user', message: { role: 'user', content: 'old task' } } } },
         { invocationId: 'old-turn', turnId: 'old-turn', sequence: 2, schemaVersion: 1, eventId: 'stale-2', idempotencyKey: 'stale-i2', kind: 'invocation-failed', payload: { status: 'failed', message: 'old failure' } }
       ], 0)
       const started = vi.fn(async ({ turnIntent }: { turnIntent: { requestId: string; sessionId: string; config?: { continuationContext?: unknown }; continuationAcceptance?: { route: string } } }) => ({ turnId: `turn-${turnIntent.requestId}`, assistantMessage: { id: 'new-assistant', sessionId: turnIntent.sessionId, role: 'assistant', content: '', timestamp: 4, status: 'streaming' } as never }))
@@ -377,17 +419,29 @@ describe('continuation intent acceptance persistence', () => {
 
   it('keeps the failure summary and stable request id through queue claim into Turn config', async () => {
     const { createTempDatabase } = await import('../database/testHelpers')
-    const { createSession, appendMessage, getDbConnection, getNextQueuedMessage, claimQueuedTurnAtomically, getPersistedTurn } = await import('../database')
+    const { createSession, appendMessage, getDbConnection, getNextQueuedMessage, claimQueuedTurnAtomically, getPersistedTurn, openDatabase } = await import('../database')
     const { SqliteAgentHistory } = await import('../runtime/sqliteAgentHistory')
     const temp = createTempDatabase('sa-continuation-queued-context-')
     try {
       const session = createSession(temp.db, { name: 'queued-context' })
+      appendMessage(temp.db, { id: 'prior-user', sessionId: session.id, role: 'user', content: 'edit the files', timestamp: 0, status: 'sent' })
       appendMessage(temp.db, { id: 'queue-source-assistant', sessionId: session.id, role: 'assistant', content: 'failed source', timestamp: 1, status: 'failed' })
       const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, Date.now, session.id)
       await history.appendBatch([
-        { invocationId: 'queue-source', turnId: 'queue-source-turn', sequence: 1, schemaVersion: 1, eventId: 'queue-src-1', idempotencyKey: 'queue-src-i1', kind: 'invocation-context-committed', payload: { messages: [], requiredUserMessage: { id: 'prior-user', message: { role: 'user', content: 'edit the files' } } } },
+        { invocationId: 'queue-source', turnId: 'queue-source-turn', sequence: 1, schemaVersion: 1, eventId: 'queue-src-1', idempotencyKey: 'queue-src-i1', kind: 'invocation-context-committed', payload: { messages: [
+          { id: 'prior-user', role: 'user', content: 'edit the files', timestamp: 0 },
+          { id: 'queue-source-assistant', role: 'assistant', content: 'failed source', timestamp: 1 }
+        ], requiredUserMessage: { id: 'prior-user', message: { role: 'user', content: 'edit the files' } } } },
         { invocationId: 'queue-source', turnId: 'queue-source-turn', sequence: 2, schemaVersion: 1, eventId: 'queue-src-2', idempotencyKey: 'queue-src-i2', kind: 'invocation-failed', payload: { status: 'failed', message: 'stopped after first write' } }
       ], 0)
+      const conn = getDbConnection(temp.db)
+      conn.prepare("UPDATE session_message_content_cutover SET write_mode='canonical' WHERE session_id=?").run(session.id)
+      conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
+      expect(conn.prepare('SELECT id,content,content_storage_state FROM messages WHERE session_id=? ORDER BY sequence')
+        .all(session.id)).toMatchObject([
+          { id: 'prior-user', content: '', content_storage_state: 'canonical-backed-only' },
+          { id: 'queue-source-assistant', content: '', content_storage_state: 'canonical-backed-only' }
+        ])
       const acceptor = createOutboundAcceptor({
         db: temp.db, turnRuntime: { listActive: () => [{ turnId: 'busy-turn', sessionId: session.id }] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
         readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
@@ -398,12 +452,18 @@ describe('continuation intent acceptance persistence', () => {
       const requestId = 'queued-continuation-stable'
       const accepted = await acceptor.submitOutbound({ sessionId: session.id, text: '继续检查', requestId, contextIntent: { kind: 'create-user', text: '继续检查', attachments: [{ id: 'image-1', name: 'image.png', mimeType: 'image/png' } as never] } })
       expect(accepted).toMatchObject({ accepted: 'queued', queued: { requestId } })
-      const queued = getNextQueuedMessage(temp.db, session.id)!
-      claimQueuedTurnAtomically(temp.db, { sessionId: session.id, userMessageId: queued.message.id, turnId: 'queued-continuation-turn', assistantMessageId: 'queued-continuation-assistant', requestId })
-      expect(getPersistedTurn(temp.db, 'queued-continuation-turn')?.executionConfig?.continuationContext).toMatchObject({ sourceInvocationId: 'queue-source', sourceTurnId: 'queue-source-turn', state: 'known' })
-      expect(getPersistedTurn(temp.db, 'queued-continuation-turn')?.executionConfig?.continuationContext?.summary).toContain('stopped after first write')
-      expect(getDbConnection(temp.db).prepare('SELECT status,target_id FROM continuation_intents WHERE request_id=?').get(requestId)).toMatchObject({ status: 'accepted_turn', target_id: 'queued-continuation-turn' })
-      expect(await acceptor.submitOutbound({ sessionId: session.id, text: '继续检查', requestId, contextIntent: { kind: 'create-user', text: '继续检查', attachments: [{ id: 'image-1', name: 'image.png', mimeType: 'image/png' } as never] } })).toMatchObject({ accepted: 'turn-started', turnId: 'queued-continuation-turn' })
+      temp.db.close()
+      const reopened = openDatabase(temp.dbPath)
+      try {
+        const queued = getNextQueuedMessage(reopened, session.id)!
+        expect(getDbConnection(reopened).prepare('SELECT route,status FROM continuation_intents WHERE request_id=?').get(requestId)).toMatchObject({ route: 'context-queue', status: 'queued' })
+        claimQueuedTurnAtomically(reopened, { sessionId: session.id, userMessageId: queued.message.id, turnId: 'queued-continuation-turn', assistantMessageId: 'queued-continuation-assistant', requestId })
+        expect(getPersistedTurn(reopened, 'queued-continuation-turn')?.executionConfig?.continuationContext).toMatchObject({ sourceInvocationId: 'queue-source', sourceTurnId: 'queue-source-turn', state: 'known' })
+        expect(getPersistedTurn(reopened, 'queued-continuation-turn')?.executionConfig?.continuationContext?.summary).toContain('stopped after first write')
+        expect(getDbConnection(reopened).prepare('SELECT status,target_id FROM continuation_intents WHERE request_id=?').get(requestId)).toMatchObject({ status: 'accepted_turn', target_id: 'queued-continuation-turn' })
+      } finally {
+        reopened.close()
+      }
     } finally { temp.cleanup() }
   })
 
@@ -459,11 +519,53 @@ describe('continuation intent acceptance persistence', () => {
     const temp = createTempDatabase('sa-continuation-start-race-')
     try {
       const session = createSession(temp.db, { name: 'start-race' })
+      appendMessage(temp.db, { id: 'race-prior-user', sessionId: session.id, role: 'user', content: 'check the files', timestamp: 0, status: 'sent' })
       appendMessage(temp.db, { id: 'race-source-assistant', sessionId: session.id, role: 'assistant', content: 'failed source', timestamp: 1, status: 'failed' })
       createPersistedTurn(temp.db, { turnId: 'race-source-turn', requestId: 'race-source-invocation', sessionId: session.id, assistantMessageId: 'race-source-assistant', state: 'terminal', outcome: 'failed' })
       const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, Date.now, session.id)
       await history.appendBatch([
-        { invocationId: 'race-source-invocation', turnId: 'race-source-turn', sequence: 1, schemaVersion: 1, eventId: 'race-source-1', idempotencyKey: 'race-source-i1', kind: 'invocation-context-committed', payload: { messages: [], requiredUserMessage: { id: 'race-prior-user', message: { role: 'user', content: 'check the files' } } } },
+        { invocationId: 'race-source-invocation', turnId: 'race-source-turn', sequence: 1, schemaVersion: 1, eventId: 'race-source-1', idempotencyKey: 'race-source-i1', kind: 'invocation-context-committed', payload: { messages: [{ id: 'race-prior-user', role: 'user', content: 'check the files', timestamp: 0 }], requiredUserMessage: { id: 'race-prior-user', message: { role: 'user', content: 'check the files' } } } },
+        { invocationId: 'race-source-invocation', turnId: 'race-source-turn', sequence: 2, schemaVersion: 1, eventId: 'race-source-2', idempotencyKey: 'race-source-i2', kind: 'invocation-failed', payload: { status: 'failed', message: 'failed after partial work' } }
+      ], 0)
+      const startTurn = vi.fn(async () => {
+        throw new Error('SESSION_TURN_BUSY')
+      })
+      const notifyEnqueued = vi.fn()
+      const acceptor = createOutboundAcceptor({
+        db: temp.db, turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
+        readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
+        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ enabled: true, rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
+        wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }), appendHintMessage: () => undefined, updateSessionState: () => undefined,
+        createSession: () => session, ensureSessionWorkDir: async () => ({ ok: true as const }), startTurn, notifyEnqueued, newRequestId: () => 'generated', audit: () => undefined
+      })
+      const requestId = 'race-continuation-request'
+      const attachments = [{ id: 'race-image', name: 'proof.png', mimeType: 'image/png' } as never]
+      const accepted = await acceptor.submitOutbound({ sessionId: session.id, text: '继续检查', requestId, contextIntent: { kind: 'create-user', text: '继续检查', attachments } })
+      expect(accepted).toMatchObject({ accepted: 'queued', queued: { requestId } })
+      expect(startTurn).toHaveBeenCalledTimes(1)
+      expect(notifyEnqueued).toHaveBeenCalledWith(session.id)
+      const queued = getNextQueuedMessage(temp.db, session.id)!
+      expect(queued.message.content).toBe('继续检查')
+      expect(queued.message.attachments).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'race-image' })]))
+      expect(getDbConnection(temp.db).prepare('SELECT route,status,source_invocation_id,source_turn_id,continuation_context_json FROM continuation_intents WHERE request_id=?').get(requestId)).toMatchObject({
+        route: 'context-queue', status: 'queued', source_invocation_id: 'race-source-invocation', source_turn_id: 'race-source-turn'
+      })
+      expect(history.listInvocationIdsForSession(session.id)).toContain('race-source-invocation')
+    } finally { temp.cleanup() }
+  })
+
+  it('queues continuation with stable request id and attachments when the session becomes busy during start', async () => {
+    const { createTempDatabase } = await import('../database/testHelpers')
+    const { createSession, appendMessage, createPersistedTurn, getDbConnection, getNextQueuedMessage } = await import('../database')
+    const { SqliteAgentHistory } = await import('../runtime/sqliteAgentHistory')
+    const temp = createTempDatabase('sa-continuation-start-race-')
+    try {
+      const session = createSession(temp.db, { name: 'start-race' })
+      appendMessage(temp.db, { id: 'race-source-assistant', sessionId: session.id, role: 'assistant', content: 'failed source', timestamp: 1, status: 'failed' })
+      createPersistedTurn(temp.db, { turnId: 'race-source-turn', requestId: 'race-source-invocation', sessionId: session.id, assistantMessageId: 'race-source-assistant', state: 'terminal', outcome: 'failed' })
+      const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, Date.now, session.id)
+      await history.appendBatch([
+        { invocationId: 'race-source-invocation', turnId: 'race-source-turn', sequence: 1, schemaVersion: 1, eventId: 'race-source-1', idempotencyKey: 'race-source-i1', kind: 'invocation-context-committed', payload: { messages: [{ id: 'race-prior-user', role: 'user', content: 'check the files', timestamp: 0 }], requiredUserMessage: { id: 'race-prior-user', message: { role: 'user', content: 'check the files' } } } },
         { invocationId: 'race-source-invocation', turnId: 'race-source-turn', sequence: 2, schemaVersion: 1, eventId: 'race-source-2', idempotencyKey: 'race-source-i2', kind: 'invocation-failed', payload: { status: 'failed', message: 'failed after partial work' } }
       ], 0)
       const startTurn = vi.fn(async () => {

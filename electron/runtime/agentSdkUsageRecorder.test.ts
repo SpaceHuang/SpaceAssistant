@@ -6,17 +6,20 @@ describe('createAgentSdkUsageRecorder', () => {
   it('maps accepted and discarded attempt usage to distinct existing usage-step facts', () => {
     const recordStepUsage = vi.fn()
     const record = createAgentSdkUsageRecorder({
-      requestId: 'req-1', sessionId: 'session-1', turnId: 'turn-1', model: 'claude-test', llmServiceId: 'service-1', baseUrl: 'https://gateway.test', recordStepUsage
+      requestId: 'req-1', sessionId: 'session-1', turnId: 'turn-1', model: 'claude-test', llmServiceId: 'service-1',
+      modelId: 'catalog-1', providerModelName: 'vendor/model-x', routeIdentity: 'route-1', baseUrl: 'https://gateway.test', recordStepUsage
     })
     record({ invocationId: 'inv-1', modelTurn: 2, attempt: 1, routeId: 'route-1', usage: { inputTokens: 100, outputTokens: 4, cacheReadInputTokens: 11, cacheCreationInputTokens: 5 }, finishReason: 'stop', disposition: 'discarded' })
     record({ invocationId: 'inv-1', modelTurn: 2, attempt: 2, routeId: 'route-1', usage: { inputTokens: 70, outputTokens: 3 }, finishReason: 'stop', disposition: 'accepted' })
     expect(recordStepUsage).toHaveBeenNthCalledWith(1, {
       sessionId: 'session-1', turnId: 'turn-1', stepId: 'req-1:model:2:attempt:1',
-      usage: { input_tokens: 100, output_tokens: 4, cache_read_input_tokens: 11, cache_creation_input_tokens: 5 }, baseUrl: 'https://gateway.test', model: 'claude-test', llmServiceId: 'service-1'
+      usage: { input_tokens: 100, output_tokens: 4, cache_read_input_tokens: 11, cache_creation_input_tokens: 5 }, baseUrl: 'https://gateway.test', model: 'claude-test', llmServiceId: 'service-1',
+      modelId: 'catalog-1', providerModelName: 'vendor/model-x', routeIdentity: 'route-1'
     })
     expect(recordStepUsage).toHaveBeenNthCalledWith(2, {
       sessionId: 'session-1', turnId: 'turn-1', stepId: 'req-1:model:2:attempt:2',
-      usage: { input_tokens: 70, output_tokens: 3 }, baseUrl: 'https://gateway.test', model: 'claude-test', llmServiceId: 'service-1'
+      usage: { input_tokens: 70, output_tokens: 3 }, baseUrl: 'https://gateway.test', model: 'claude-test', llmServiceId: 'service-1',
+      modelId: 'catalog-1', providerModelName: 'vendor/model-x', routeIdentity: 'route-1'
     })
   })
 

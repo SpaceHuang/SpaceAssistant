@@ -1,0 +1,71 @@
+{
+  "manifestVersion": 1,
+  "task": "SC-01B supplemental compatibility evidence",
+  "status": "complete",
+  "createdAt": "2026-10-06",
+  "target": {
+    "package": "R-02 macOS x64 under Rosetta",
+    "sourceCommit": "837a9c713d6f9c463749e63956f19db35de2cdf3",
+    "sourceTree": "03d9c8a4e0c7621241df1d10428f021e64463067",
+    "artifact": "/Users/space/Documents/Develop/SpaceAssistant/release/session-storage-r/SpaceAssistant-0.2.4.dmg",
+    "artifactSha256": "8bfb24cf056a6dd1d41e4d28e250978812d93d1d40dc37cf1632cc0bf11cdfbc",
+    "appAsarSha256": "f3d6ce76cde9f94cda05c4b275ec9d5e5def5265b1aa20843fe560a9d8d83b15"
+  },
+  "fixture": {
+    "sourceManifest": "./session-storage-c01a-candidate-smoke-manifest-2026-10-06.json",
+    "root": "/tmp/spaceassistant-session-storage-sc01a-20261006-1791238458725",
+    "sourceDatabasesCopiedToNewDisposableUserData": true,
+    "realProfileAccessed": false,
+    "modelCalls": 0,
+    "profiles": [
+      {
+        "state": "write-stopped",
+        "sessionId": "dba9ea96-4735-4f70-9044-455c1007a5c0",
+        "sourceDatabaseSha256": "c7ac7abe5eb16725474ac22ff62e4fbcd61df431124a3880636fa879e98ff5fa",
+        "rendererRead": "2/2 canonical History bodies matched; IDs matched",
+        "cleanupStateAndCursorUnchanged": true,
+        "legacyBodiesAndStorageStatesUnchanged": true,
+        "integrityCheck": "ok",
+        "foreignKeyViolations": 0,
+        "launchedCopyDatabaseSha256AfterStartup": "85eb3a29ffcb4e520338e98f57b24cdaecbe3b72fedd6cd44d5a505397b7ca54"
+      },
+      {
+        "state": "pending",
+        "sessionId": "faf181a6-456d-418e-a792-08dfc5db157a",
+        "sourceDatabaseSha256": "95fe0389c11fa1982761587d570f7c7f1eab451d165aa9156d2392255e6e7843",
+        "rendererRead": "2/2 canonical History bodies matched; IDs matched",
+        "cleanupStateAndCursorUnchanged": true,
+        "legacyBodiesAndStorageStatesUnchanged": true,
+        "integrityCheck": "ok",
+        "foreignKeyViolations": 0,
+        "launchedCopyDatabaseSha256AfterStartup": "239209cffe1e56f5637b9efdef48fa634ff4a55bd957dc6ae3487dcfafc5ee69"
+      },
+      {
+        "state": "complete",
+        "sessionId": "fd24eac4-9c7f-46b9-a491-f76004e4fad0",
+        "sourceDatabaseSha256": "d1dfb7c42c0209e1b33d562b319ba2098cfed48051b8c49af1030b29a4a79493",
+        "rendererRead": "2/2 canonical History bodies matched; IDs matched",
+        "cleanupStateAndCursorUnchanged": true,
+        "legacyBodiesAndStorageStatesUnchanged": true,
+        "integrityCheck": "ok",
+        "foreignKeyViolations": 0,
+        "launchedCopyDatabaseSha256AfterStartup": "0d89a96ac9f9a1565cf912eccd26f95ad17a34fc252c8b43f1b39bb1279d1145"
+      }
+    ],
+    "sourceFixtureDatabaseHashesAfterRun": [
+      "c7ac7abe5eb16725474ac22ff62e4fbcd61df431124a3880636fa879e98ff5fa",
+      "95fe0389c11fa1982761587d570f7c7f1eab451d165aa9156d2392255e6e7843",
+      "d1dfb7c42c0209e1b33d562b319ba2098cfed48051b8c49af1030b29a4a79493"
+    ]
+  },
+  "method": {
+    "entryPoint": "Actual packaged renderer window.api.chatGetMessagePage through renderer → preload → IPC",
+    "launch": "R-02 x64 app executable under /usr/bin/arch -x86_64; each state used a fresh disposable userData directory",
+    "oracle": "Canonical messages were read from the fixture's invocation-context-committed History payload; R-returned IDs and content were compared exactly",
+    "packageStartupWrites": "The launched copies acquired normal app startup/cache metadata, so their whole-file hashes changed. Cleanup state, write mode, cursor/count/scan flag, message IDs/content/storage states were compared separately and remained identical. Original source fixture hashes remained unchanged."
+  },
+  "scopeLimits": [
+    "This adds x64 evidence only for inline synthetic bodies across cleanup states; source-truth spill success-path rollback remains an explicit SC-01C package-matrix case.",
+    "The result is technical evidence for this exact local R-02 candidate, not a formal release or production rollback floor."
+  ]
+}

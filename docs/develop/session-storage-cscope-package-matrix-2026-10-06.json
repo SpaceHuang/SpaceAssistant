@@ -1,0 +1,190 @@
+{
+  "manifestVersion": 1,
+  "task": "SC-SCOPE-PKG",
+  "status": "complete",
+  "createdAt": "2026-10-06",
+  "scope": {
+    "realProfilesAccessed": false,
+    "modelCalls": 0,
+    "externalPublicationPerformed": false,
+    "productionCleanupAuthorized": false,
+    "profileRoot": "/tmp/spaceassistant-session-storage-cscope-worker-20261006",
+    "fixturePurpose": "synthetic disposable profiles only"
+  },
+  "candidate": {
+    "version": "0.2.4",
+    "commitSha": "3bd50b224c5abf95821525e57985fad0c11051c0",
+    "treeOid": "9c766b629ffafe8cf29a51c46ef1faecfea07b4f",
+    "schemaVersion": 52,
+    "historyFormatVersion": 1,
+    "spillFormatVersion": 1,
+    "compatibilityRecord": {
+      "path": "./session-storage-cscope-package-compatibility-record-2026-10-06.json",
+      "authorizedUses": [
+        "SC-01C",
+        "SC-SCOPE-PKG"
+      ],
+      "scope": "synthetic disposable profiles only",
+      "stableJsonDigestSha256": "80792d0762c1c6b9889d49f298520eaf41e66607e075dff0e35d3fb4e43e21a5",
+      "sourceFileSha256": "9e63c2ecf998aec991ab0e1e73c1c459cdd13508c09fd5e68a335455c2aeb46a"
+    },
+    "appAsarSha256": "5f3c5d3cf3b5a1a90b7721050ae6cb703001ee9e5a714266a8e6d5c67ebedb6e",
+    "deploymentAllowContentCleanup": true,
+    "sourceParity": {
+      "checkedFiles": [
+        "electron/runtime/sessionStorageCleanupAuthorization.ts",
+        "electron/runtime/sessionStorageCleanupProduction.ts",
+        "electron/storage/sessionMessageContentCleanupMaintenance.ts",
+        "electron/runtime/sessionStorageCleanupAuthorization.test.ts",
+        "electron/runtime/sessionStorageCleanupProduction.test.ts",
+        "electron/storage/sessionMessageContentCleanupMaintenance.test.ts",
+        "electron/main.ts cleanup registration block"
+      ],
+      "matchesFixedCandidateByteForByte": true,
+      "productImplementationRecreated": false
+    },
+    "artifacts": {
+      "mac-arm64": {
+        "path": "/Users/space/Documents/Develop/SpaceAssistant/release/session-storage-cscope-final-20261006/SpaceAssistant-0.2.4-cscope-arm64.dmg",
+        "sha256": "ab43ea5428669e2e056d3982296166ac3c192aad475ed0c0aaf7cffaa4f2ce36",
+        "sizeBytes": 200727105,
+        "buildId": "082f45e2-b8f3-42cd-bf64-bf79ad0b4771",
+        "buildIdentityResourceSha256": "e1e91fdc697f1433bee7f7a1d84404efd0c0bf773cce8b1efc15c5182c2f6f96",
+        "deploymentResourceSha256": "12a0523735b18a9ea41bc594fd13e821e2a0605757955fa12aa0c919e3edaff5",
+        "compatibilityResourceSha256": "9e63c2ecf998aec991ab0e1e73c1c459cdd13508c09fd5e68a335455c2aeb46a",
+        "hdiutilVerify": "VALID"
+      },
+      "mac-x64": {
+        "path": "/Users/space/Documents/Develop/SpaceAssistant/release/session-storage-cscope-final-20261006/SpaceAssistant-0.2.4-cscope-x64.dmg",
+        "sha256": "174fe1cdf1e64bc078a9a243b01b4e9076027d5a577cde453585b362d2baee68",
+        "sizeBytes": 207530068,
+        "buildId": "c27bdc2f-9bb4-4ce9-81dd-e86bb7e91eca",
+        "buildIdentityResourceSha256": "3d5acd745c5512796ff9c63cb536eb7f92e7c1f71929a937069a9d5be1cccfe4",
+        "deploymentResourceSha256": "12a0523735b18a9ea41bc594fd13e821e2a0605757955fa12aa0c919e3edaff5",
+        "compatibilityResourceSha256": "9e63c2ecf998aec991ab0e1e73c1c459cdd13508c09fd5e68a335455c2aeb46a",
+        "hdiutilVerify": "VALID"
+      }
+    }
+  },
+  "reusedSC01CEvidence": {
+    "manifest": "./session-storage-c01c-package-matrix-2026-10-06.json",
+    "rAndCleanupStateAndReadFaultMatrixReused": true,
+    "basis": "R candidate, canonical/history/spill data contract, schema, and generic cleanup state behavior did not change; new SC-SCOPE-specific worker and boundary execution was tested against the final package hashes below"
+  },
+  "packageWorkerMatrix": {
+    "execution": "actual packaged app startup and production main-process cleanup maintenance worker",
+    "x64Execution": "Rosetta 2 via /usr/bin/arch -x86_64",
+    "cohort": {
+      "mac-arm64": {
+        "authorizedSessions": [
+          "46ca6d93-b539-40dc-a809-49f8ee6f3c62",
+          "951dbe33-3abe-4301-ae4e-ba8085f8d3f7"
+        ],
+        "expectedMapping": {
+          "A": "46ca6d93-b539-40dc-a809-49f8ee6f3c62",
+          "B": "efbc081e-ed3c-45db-8464-c13880bd4e1f",
+          "C": "951dbe33-3abe-4301-ae4e-ba8085f8d3f7"
+        },
+        "AAndCComplete": true,
+        "BRetainedWithoutProgressOrBodyClear": true,
+        "integrity": "ok",
+        "foreignKeys": 0,
+        "elapsedMs": 67442
+      },
+      "mac-x64": {
+        "authorizedSessions": [
+          "46ca6d93-b539-40dc-a809-49f8ee6f3c62",
+          "951dbe33-3abe-4301-ae4e-ba8085f8d3f7"
+        ],
+        "expectedMapping": {
+          "A": "46ca6d93-b539-40dc-a809-49f8ee6f3c62",
+          "B": "efbc081e-ed3c-45db-8464-c13880bd4e1f",
+          "C": "951dbe33-3abe-4301-ae4e-ba8085f8d3f7"
+        },
+        "AAndCComplete": true,
+        "BRetainedWithoutProgressOrBodyClear": true,
+        "integrity": "ok",
+        "foreignKeys": 0,
+        "elapsedMs": 130964
+      }
+    },
+    "wrongProfileIdentity": {
+      "testedOn": "mac-arm64",
+      "runtimeMs": 121716,
+      "workerRegistrationLog": "profile-identity-mismatch",
+      "allSessionsRetainedWithoutProgress": true,
+      "integrity": "ok",
+      "foreignKeys": 0
+    },
+    "pendingRevocationAndResume": {
+      "testedOn": "mac-arm64",
+      "initialBatch": {
+        "state": "pending",
+        "messages": 102,
+        "cleanedCount": 100,
+        "nextSequence": 99,
+        "afterMessageId": "pending-revoke-99",
+        "remainingDualWriteBodies": 2,
+        "integrity": "ok",
+        "foreignKeys": 0,
+        "elapsedMs": 62428
+      },
+      "revokedAcrossRestart": {
+        "state": "pending",
+        "cleanedCount": 100,
+        "nextSequence": 99,
+        "afterMessageId": "pending-revoke-99",
+        "runtimeMs": 121737,
+        "noProgress": true,
+        "integrity": "ok",
+        "foreignKeys": 0
+      },
+      "reauthorizedResume": {
+        "state": "complete",
+        "cleanedCount": 102,
+        "nextSequence": 101,
+        "afterMessageId": "pending-revoke-101",
+        "runtimeMs": 62477,
+        "integrity": "ok",
+        "foreignKeys": 0
+      }
+    },
+    "expiredScope": {
+      "testedOn": "mac-x64",
+      "runtimeMs": 125545,
+      "workerRegistrationLog": "authorization-expired",
+      "sessionRetainedWithoutProgress": true,
+      "integrity": "ok",
+      "foreignKeys": 0
+    }
+  },
+  "directProductionBoundary": {
+    "execution": "production boundary module extracted from final packaged app.asar with final package Resources",
+    "authorizedSession": "scope-A advanced through certify/write-stop/begin/batch/verify-complete",
+    "unlistedSession": "scope-B and scope-C blocked at every phase with session-not-authorized and retained state",
+    "invalidCases": [
+      "revoked scope",
+      "expired scope",
+      "wrong profile identity"
+    ],
+    "phases": [
+      "certify",
+      "write-stop",
+      "begin",
+      "batch 1",
+      "batch 100",
+      "verify-complete"
+    ],
+    "allInvalidCasesBlockedEveryPhase": true,
+    "sessionSemanticStateUnchangedOnDenial": true,
+    "integrity": "ok",
+    "foreignKeys": 0
+  },
+  "validation": {
+    "actualPackagedWorkers": true,
+    "actualFinalPackageResourcesReadByBoundary": true,
+    "formalRelease": false,
+    "realProfileAccessed": false,
+    "modelCalls": 0
+  }
+}

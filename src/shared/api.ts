@@ -175,7 +175,25 @@ export type SpaceAssistantApi = {
 
   storageGetProfile: () => Promise<Record<string, unknown>>
   storageClearCache: () => Promise<{ cacheRows: number; eligibilityRows: number }>
-  storageCompact: () => Promise<{ archivePath: string; bytesBefore: number; bytesAfter: number; reclaimedPages: number }>
+  storageCompact: () => Promise<{
+    archivePath: string
+    bytesBefore: number
+    bytesAfter: number
+    reclaimedPages: number
+    durationMs: number
+    pageCountBefore: number
+    pageCountAfter: number
+    freelistCountBefore: number
+    freelistCountAfter: number
+    walBytesBefore: number
+    walBytesAfter: number
+    shmBytesBefore: number
+    shmBytesAfter: number
+    archiveBytes: number
+    availableBytesBefore: number
+    peakSpaceEstimateBytes: number
+    manifestPath: string
+  }>
   storageOnMaintenanceProgress: (cb: (progress: import('./storageTypes').StorageMaintenanceProgress) => void) => () => void
 
   appOpenExternal: (url: string) => Promise<{ ok: true } | { ok: false; error: string }>

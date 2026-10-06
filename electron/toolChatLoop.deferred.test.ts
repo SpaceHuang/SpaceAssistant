@@ -48,8 +48,8 @@ vi.mock('./chatCancelRegistry', () => ({
 
 vi.mock('./sessionTitleSuggest', () => ({
   scheduleSessionTitleSuggestion: vi.fn(),
-  reachedCumulativeMessagesForTitleSuggest: vi.fn(() => false),
-  countVisibleTitleMessagesForSuggest: vi.fn((messages: unknown[]) => messages.length)
+  countVisibleTitleMessagesForSuggest: vi.fn(() => 0),
+  reachedCumulativeMessagesForTitleSuggest: vi.fn(() => false)
 }))
 
 vi.mock('./toolConfirmRegistry', () => ({

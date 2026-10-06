@@ -1,12 +1,34 @@
 import fs from 'node:fs'
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
+import os from 'node:os'
 import path from 'node:path'
 import { readCanonicalSpillReferences } from '../storage/spillStore'
 
 type TableMetric = { rows: number; textBytes: number }
 
-/** Collects storage sizes and canonical coverage counts without reading message bodies or writing to the DB. */
+function scanSpillDirectory(root: string): { files: Array<{ locator: string; bytes: number }>; complete: boolean; errorCodes: string[] } {
+  try {
+    const rootStat = fs.lstatSync(root)
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) return { files: [], complete: false, errorCodes: ['SPILL_ROOT_NOT_DIRECTORY'] }
+    const files: Array<{ locator: string; bytes: number }> = []
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.name.endsWith('.spill')) continue
+      const filePath = path.join(root, entry.name)
+      const stat = fs.lstatSync(filePath)
+      if (stat.isSymbolicLink() || !stat.isFile()) return { files, complete: false, errorCodes: ['SPILL_ENTRY_NOT_REGULAR_FILE'] }
+      files.push({ locator: entry.name, bytes: stat.size })
+    }
+    return { files, complete: true, errorCodes: [] }
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : ''
+    if (code === 'ENOENT') return { files: [], complete: true, errorCodes: [] }
+    const errorCode = error instanceof Error ? error.name : 'UNKNOWN_ERROR'
+    return { files: [], complete: false, errorCodes: [code || errorCode] }
+  }
+}
+
+/** Collects storage sizes and canonical coverage by inspecting content in memory, without returning bodies or writing to the DB. */
 export function collectSessionStorageProfile(dbPath: string): Record<string, unknown> {
   const file = fs.statSync(dbPath)
   const databaseFiles = (() => {
@@ -25,29 +47,33 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
     }
     const dbstat = (() => {
       try {
-        return conn.prepare('SELECT name, COUNT(*) AS pages, SUM(pgsize) AS bytes FROM dbstat GROUP BY name ORDER BY bytes DESC LIMIT 30').all()
+        return conn.prepare('SELECT name, COUNT(*) AS pages, SUM(pgsize) AS bytes FROM dbstat GROUP BY name ORDER BY bytes DESC').all()
       } catch { return null }
     })()
+    const schemaVersion = tables.has('schema_meta')
+      ? conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get() as { value: string } | undefined ?? null
+      : null
+    const sqliteVersion = (conn.prepare('SELECT sqlite_version() AS version').get() as { version: string }).version
     const spillFiles = (() => {
+      const spillRoot = path.join(path.dirname(dbPath), 'spill')
+      const scan = scanSpillDirectory(spillRoot)
+      let references: ReturnType<typeof readCanonicalSpillReferences> | undefined
       try {
-        const spillRoot = path.join(path.dirname(dbPath), 'spill')
-        const references = readCanonicalSpillReferences(conn)
-        const kindByLocator = new Map(references.descriptors.map(({ locator, kind }) => [locator, kind]))
-        const files = fs.readdirSync(spillRoot).filter((name) => name.endsWith('.spill')).map((name) => {
-          const bytes = fs.statSync(path.join(spillRoot, name)).size
-          const kind = kindByLocator.get(name)
-          return { locator: name, bytes, kind: kind ?? 'orphan' }
-        })
-        return {
-          root: spillRoot,
-          files: files.length,
-          totalBytes: files.reduce((sum, file) => sum + file.bytes, 0),
-          sourceOfTruthBytes: files.filter(({ kind }) => kind === 'source-of-truth').reduce((sum, file) => sum + file.bytes, 0),
-          degradableBytes: files.filter(({ kind }) => kind === 'degradable').reduce((sum, file) => sum + file.bytes, 0),
-          orphanBytes: files.filter(({ kind }) => kind === 'orphan').reduce((sum, file) => sum + file.bytes, 0)
-        }
-      } catch {
-        return { root: path.join(path.dirname(dbPath), 'spill'), files: 0, totalBytes: 0, sourceOfTruthBytes: 0, degradableBytes: 0, orphanBytes: 0 }
+        references = readCanonicalSpillReferences(conn, { allowMissingTables: true })
+      } catch { /* Report unknown reference classes below; do not turn an unreadable source into zero bytes. */ }
+      const kindByLocator = new Map(references?.descriptors.map(({ locator, kind }) => [locator, kind]) ?? [])
+      const files = scan.files.map(({ locator, bytes }) => ({ locator, bytes, kind: kindByLocator.get(locator) ?? 'orphan' }))
+      const referenceScanComplete = references !== undefined
+      return {
+        root: spillRoot,
+        files: files.length,
+        observedBytes: files.reduce((sum, file) => sum + file.bytes, 0),
+        totalBytes: scan.complete ? files.reduce((sum, file) => sum + file.bytes, 0) : null,
+        sourceOfTruthBytes: referenceScanComplete ? files.filter(({ kind }) => kind === 'source-of-truth').reduce((sum, file) => sum + file.bytes, 0) : null,
+        degradableBytes: referenceScanComplete ? files.filter(({ kind }) => kind === 'degradable').reduce((sum, file) => sum + file.bytes, 0) : null,
+        orphanBytes: referenceScanComplete ? files.filter(({ kind }) => kind === 'orphan').reduce((sum, file) => sum + file.bytes, 0) : null,
+        complete: scan.complete && referenceScanComplete,
+        errorCodes: [...scan.errorCodes, ...(!referenceScanComplete ? ['CANONICAL_SPILL_REFERENCE_SCAN_FAILED'] : [])]
       }
     })()
     const sourceTruthGc = (() => {
@@ -79,10 +105,10 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
     })()
     const spillDegraded = (() => {
       const root = path.join(path.dirname(dbPath), 'spill-degraded')
-      try {
-        const files = fs.readdirSync(root).filter((name) => name.endsWith('.spill')).map((name) => ({ locator: name, bytes: fs.statSync(path.join(root, name)).size }))
-        return { root, files: files.length, totalBytes: files.reduce((sum, item) => sum + item.bytes, 0) }
-      } catch { return { root, files: 0, totalBytes: 0 } }
+      const scan = scanSpillDirectory(root)
+      const observedBytes = scan.files.reduce((sum, item) => sum + item.bytes, 0)
+      return { root, files: scan.files.length, observedBytes, totalBytes: scan.complete ? observedBytes : null,
+        complete: scan.complete, errorCodes: scan.errorCodes }
     })()
     const canonicalCoverage = tables.has('agent_history_streams') && tables.has('agent_history_events')
       ? conn.prepare(`SELECT COUNT(*) AS streams,
@@ -113,6 +139,18 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
           FROM agent_history_streams s LEFT JOIN agent_history_events e ON e.invocation_id=s.invocation_id
           WHERE s.session_id IS NOT NULL GROUP BY s.session_id)`).get()
       : null
+    const canonicalRequiredData = (() => {
+      const eventPayload = tables.has('agent_history_events')
+        ? conn.prepare('SELECT COUNT(*) AS rows, COALESCE(SUM(length(payload_json)),0) AS payloadBytes FROM agent_history_events').get()
+        : { rows: 0, payloadBytes: 0 }
+      const streamRows = tables.has('agent_history_streams')
+        ? conn.prepare('SELECT COUNT(*) AS rows FROM agent_history_streams').get() as { rows: number }
+        : { rows: 0 }
+      const pages = Array.isArray(dbstat) ? dbstat as Array<{ name: string; bytes: number }> : []
+      const streamTableBytes = pages.find(({ name }) => name === 'agent_history_streams')?.bytes ?? null
+      return { eventRows: Number((eventPayload as { rows: number }).rows), eventPayloadBytes: Number((eventPayload as { payloadBytes: number }).payloadBytes),
+        streamRows: streamRows.rows, streamTableBytes }
+    })()
     const canonicalBodies = new Set<string>()
     const canonicalIdentities = new Set<string>()
     const identityDigest = (sessionId: string, id: string, role: string, content: string) => createHash('sha256')
@@ -154,14 +192,15 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
           let messages = 0
           let bodyMatched = 0
           let identityBodyCandidateCount = 0
+          let identityBodyCandidateBytes = 0
           const byRole: Record<string, { messages: number; bodyMatched: number }> = {}
-          const identityBodyCandidatesByRole: Record<string, { messages: number; candidateMatches: number }> = {}
+          const identityBodyCandidatesByRole: Record<string, { messages: number; candidateMatches: number; candidateContentBytes: number }> = {}
           const rows = conn.prepare('SELECT id, session_id, role, content FROM messages').iterate() as Iterable<{ id: string; session_id: string; role: string; content: string }>
           for (const row of rows) {
             messages += 1
             const roleCoverage = byRole[row.role] ??= { messages: 0, bodyMatched: 0 }
             roleCoverage.messages += 1
-            const roleIdentityCoverage = identityBodyCandidatesByRole[row.role] ??= { messages: 0, candidateMatches: 0 }
+            const roleIdentityCoverage = identityBodyCandidatesByRole[row.role] ??= { messages: 0, candidateMatches: 0, candidateContentBytes: 0 }
             roleIdentityCoverage.messages += 1
             if (canonicalBodies.has(createHash('sha256').update(row.role).update('\0').update(row.content).digest('hex'))) {
               bodyMatched += 1
@@ -169,17 +208,25 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
             }
             if (canonicalIdentities.has(identityDigest(row.session_id, row.id, row.role, row.content))) {
               identityBodyCandidateCount += 1
+              const contentBytes = Buffer.byteLength(row.content, 'utf8')
+              identityBodyCandidateBytes += contentBytes
               roleIdentityCoverage.candidateMatches += 1
+              roleIdentityCoverage.candidateContentBytes += contentBytes
             }
           }
-          return { messages, bodyMatched, byRole, identityBodyCandidateCount, identityBodyCandidatesByRole, canonicalIdentityCount: canonicalIdentities.size, canonicalUniqueBodies: canonicalBodies.size, malformedPayloads }
+          return { messages, bodyMatched, byRole, identityBodyCandidateCount, identityBodyCandidateBytes, identityBodyCandidatesByRole, canonicalIdentityCount: canonicalIdentities.size, canonicalUniqueBodies: canonicalBodies.size, malformedPayloads }
         })()
       : null
     return {
+      collectedAt: new Date().toISOString(),
+      runtime: { platform: process.platform, arch: process.arch, osRelease: os.release(), nodeVersion: process.versions.node, sqliteVersion },
+      schemaVersion: schemaVersion ? Number(schemaVersion.value) : null,
       dbBytes: file.size,
       databaseFiles,
       spillDegraded,
-      totalBytes: databaseFiles.totalBytes + Number((spillFiles as { totalBytes: number }).totalBytes) + spillDegraded.totalBytes,
+      totalBytes: spillFiles.complete && spillDegraded.complete
+        ? databaseFiles.totalBytes + Number((spillFiles as { totalBytes: number }).totalBytes) + Number(spillDegraded.totalBytes)
+        : null,
       pageSize: conn.prepare('PRAGMA page_size').get(),
       pageCount: conn.prepare('PRAGMA page_count').get(),
       freelistCount: conn.prepare('PRAGMA freelist_count').get(),
@@ -194,6 +241,7 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
       },
       canonicalCoverage,
       canonicalSessionCoverage,
+      canonicalRequiredData,
       messageBodyCoverage
     }
   } finally {

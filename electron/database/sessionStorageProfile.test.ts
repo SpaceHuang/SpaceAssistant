@@ -9,6 +9,45 @@ const tempPaths: string[] = []
 afterEach(() => { for (const file of tempPaths.splice(0)) { try { fs.rmSync(file, { force: true, recursive: true }) } catch { /* best effort */ } } })
 
 describe('collectSessionStorageProfile', () => {
+  it('captures the schema/runtime context and byte volume of retained canonical history', () => {
+    const dbPath = path.join(os.tmpdir(), `storage-profile-required-${process.pid}.db`)
+    tempPaths.push(dbPath)
+    const db = new DatabaseSync(dbPath)
+    db.exec(`CREATE TABLE schema_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+      INSERT INTO schema_meta VALUES('schema_version','48');
+      CREATE TABLE agent_history_streams(invocation_id TEXT PRIMARY KEY,version INTEGER,schema_version INTEGER,session_id TEXT);
+      CREATE TABLE agent_history_events(invocation_id TEXT,kind TEXT,payload_json TEXT);
+      INSERT INTO agent_history_streams VALUES('invocation-a',3,1,'session-a');
+      INSERT INTO agent_history_events VALUES('invocation-a','invocation-context-committed','{"private":"canonical body"}');`)
+    db.close()
+
+    const profile = collectSessionStorageProfile(dbPath) as any
+
+    expect(profile).toMatchObject({ schemaVersion: 48, runtime: {
+      platform: process.platform, arch: process.arch, nodeVersion: process.versions.node, sqliteVersion: expect.any(String)
+    }, canonicalRequiredData: {
+      eventRows: 1, eventPayloadBytes: Buffer.byteLength('{"private":"canonical body"}'), streamRows: 1, streamTableBytes: expect.any(Number)
+    } })
+    expect(profile.collectedAt).toEqual(expect.any(String))
+    expect(JSON.stringify(profile)).not.toContain('canonical body')
+  })
+
+  it('includes every table and index in dbstat, including objects below the former top-30 cutoff', () => {
+    const dbPath = path.join(os.tmpdir(), `storage-profile-dbstat-${process.pid}.db`)
+    tempPaths.push(dbPath)
+    const db = new DatabaseSync(dbPath)
+    for (let index = 0; index < 35; index += 1) {
+      db.exec(`CREATE TABLE profile_object_${index}(value TEXT); CREATE INDEX profile_index_${index} ON profile_object_${index}(value);`)
+    }
+    db.close()
+
+    const profile = collectSessionStorageProfile(dbPath) as { dbstat: Array<{ name: string }> | null }
+
+    expect(profile.dbstat).not.toBeNull()
+    expect(profile.dbstat!.filter(({ name }) => name.startsWith('profile_object_'))).toHaveLength(35)
+    expect(profile.dbstat!.filter(({ name }) => name.startsWith('profile_index_'))).toHaveLength(35)
+  })
+
   it('reports byte/count metadata without changing the database or exposing message text', () => {
     const dbPath = path.join(os.tmpdir(), `storage-profile-${process.pid}.db`)
     tempPaths.push(dbPath)
@@ -28,7 +67,12 @@ describe('collectSessionStorageProfile', () => {
       tables: { messages: { rows: 2 }, canonicalHistory: { rows: 3 } },
       canonicalCoverage: { streams: 3, withResponse: 1, fingerprintOnly: 1, compactedWithoutContext: 1 },
       canonicalSessionCoverage: { sessions: 3, sessionsWithResponse: 1, fingerprintOnlySessions: 1, compactedWithoutContextSessions: 1 },
-      messageBodyCoverage: { messages: 2, bodyMatched: 2, byRole: { assistant: { messages: 2, bodyMatched: 2 } }, identityBodyCandidateCount: 1, identityBodyCandidatesByRole: { assistant: { messages: 2, candidateMatches: 1 } } }
+      schemaVersion: null,
+      runtime: { platform: process.platform, arch: process.arch, nodeVersion: process.versions.node, sqliteVersion: expect.any(String) },
+      canonicalRequiredData: { eventRows: 3, eventPayloadBytes: expect.any(Number), streamRows: 3, streamTableBytes: expect.any(Number) },
+      messageBodyCoverage: { messages: 2, bodyMatched: 2, byRole: { assistant: { messages: 2, bodyMatched: 2 } }, identityBodyCandidateCount: 1,
+        identityBodyCandidateBytes: Buffer.byteLength('private body'),
+        identityBodyCandidatesByRole: { assistant: { messages: 2, candidateMatches: 1, candidateContentBytes: Buffer.byteLength('private body') } } }
     })
     expect(JSON.stringify(profile)).not.toContain('private body')
     const verify = new DatabaseSync(dbPath, { readOnly: true })
@@ -80,5 +124,27 @@ describe('collectSessionStorageProfile', () => {
     expect(profile.spillDegraded.totalBytes).toBe(2048)
     expect(profile.totalBytes).toBeGreaterThanOrEqual(profile.databaseFiles.totalBytes + 2048)
     db.close()
+  })
+
+  it('marks spill measurements incomplete when canonical reference scanning fails', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'storage-profile-spill-error-'))
+    tempPaths.push(root)
+    const dbPath = path.join(root, 'spaceassistant.db')
+    const spillRoot = path.join(root, 'spill')
+    fs.mkdirSync(spillRoot)
+    fs.writeFileSync(path.join(spillRoot, 'body.spill'), 'known bytes')
+    fs.writeFileSync(path.join(root, 'spill-degraded'), 'not a directory')
+    const db = new DatabaseSync(dbPath)
+    db.exec(`CREATE TABLE agent_history_events(payload_json TEXT NOT NULL);
+      CREATE TABLE session_transcript_entries(messages_json TEXT NOT NULL);
+      INSERT INTO agent_history_events VALUES('{broken-json');`)
+    db.close()
+
+    const profile = collectSessionStorageProfile(dbPath) as any
+
+    expect(profile.spillFiles).toMatchObject({ totalBytes: Buffer.byteLength('known bytes'), sourceOfTruthBytes: null,
+      complete: false, errorCodes: ['CANONICAL_SPILL_REFERENCE_SCAN_FAILED'] })
+    expect(profile.spillDegraded).toMatchObject({ totalBytes: null, complete: false, errorCodes: ['SPILL_ROOT_NOT_DIRECTORY'] })
+    expect(profile.totalBytes).toBeNull()
   })
 })
