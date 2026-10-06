@@ -27,6 +27,7 @@ import { appendMessage, createSession } from '../database/operations'
 import { certifyCanonicalSessionApiRead, markSessionMessageContentWriteStopped, setCanonicalApiReadFeatureEnabled } from './sessionStorageCutover'
 import { enableCanonicalSessionWriteAuthority } from './sessionContentWriteAuthority'
 import { createSpillStore, reconcileSpillOrphansAgainstCanonicalHistory, type SpillStore } from '../storage/spillStore'
+import { projectCanonicalToolResultForSessionLedger } from './sessionLedgerRecovery'
 
 function createDb(dbPath = ':memory:'): DatabaseSync {
   const conn = new DatabaseSync(dbPath)
@@ -2011,6 +2012,30 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
+  it('reports no startup recovery work while a large failed repair queue is in backoff', () => {
+    const conn = createDb()
+    const now = 10_000_000
+    const history = new SqliteAgentHistory(conn, 1, () => now)
+    const insertRepair = conn.prepare(`INSERT INTO canonical_projection_repairs(
+      repair_id,session_id,invocation_id,repair_kind,target_key,status,attempts,idempotency_key,updated_at
+    ) VALUES(?,?,'backed-off-startup-invocation','test-large-queue',?,'pending',3,?,?)`)
+    for (let index = 0; index < 10; index += 1) {
+      const target = `backed-off-target-${index}`
+      insertRepair.run(`backed-off-repair-${index}`, 'backed-off-session', target, `backed-off-key-${index}`, now)
+    }
+
+    expect(history.getStartupRecoveryWorkSummary()).toEqual({
+      unfinishedInvocationCount: 0, dueProjectionRepairCount: 0, hasWork: false
+    })
+
+    conn.prepare('UPDATE canonical_projection_repairs SET updated_at=?')
+      .run(now - 2 * 60 * 60 * 1000)
+    expect(history.getStartupRecoveryWorkSummary()).toEqual({
+      unfinishedInvocationCount: 0, dueProjectionRepairCount: 10, hasWork: true
+    })
+    conn.close()
+  })
+
   it('resumes the bounded recovery-work census after reopen and keeps streams inserted behind its cursor', async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'history-recovery-work-resume-'))
     const dbPath = path.join(directory, 'history.db')
@@ -2870,6 +2895,42 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
+  it('repairs a tool result sidecar that matches the safe projection of the canonical result', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    const location = { workDir: '/tmp/projected-tool-result', sessionId: 'session-projected-result', createdAt: 1000 }
+    const rawResult = { success: true, data: 'file contents', diagnostic: { internal: 'omitted from session projection' } }
+    const projectedResult = projectCanonicalToolResultForSessionLedger({
+      rawResult, isError: false, toolName: 'read_file', workspaceRoot: location.workDir
+    })
+    const repairToolLedger = vi.fn(async () => undefined)
+    const onRepairError = vi.fn()
+    await history.appendBatch([
+      {
+        ...event('proposal-projected-result', 1), kind: 'model-response-committed',
+        payload: { message: { role: 'assistant', toolCalls: [{ id: 'call-projected-result', name: 'read_file', input: { path: 'a.txt' } }] },
+          sessionLedger: { location, stepId: 'projected-result-step', toolCalls: [{ toolUseId: 'call-projected-result', name: 'read_file', args: { path: 'a.txt' } }] } }
+      },
+      {
+        ...event('finished-projected-result', 2), kind: 'tool-call-finished',
+        payload: {
+          toolCallId: 'call-projected-result', toolName: 'read_file', isError: false, result: rawResult,
+          sessionLedger: { location, stepId: 'projected-result-step', result: projectedResult }
+        }
+      }
+    ], 0)
+
+    await history.recoverInterruptedInvocations({ repairToolLedger, onToolLedgerRepairError: onRepairError })
+
+    expect(onRepairError).not.toHaveBeenCalled()
+    expect(repairToolLedger).toHaveBeenCalledWith(location, expect.objectContaining({
+      toolUseId: 'call-projected-result', result: projectedResult
+    }))
+    expect(conn.prepare("SELECT status FROM canonical_projection_repairs WHERE target_key LIKE '%finished-projected-result%'").get())
+      .toEqual({ status: 'completed' })
+    conn.close()
+  })
+
   it('rejects an orphan tool result when canonical model responses declare no tool calls', async () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn)
@@ -3707,19 +3768,19 @@ describe('SqliteAgentHistory', () => {
     })
     const result = (id: string, location: typeof badLocation, sidecarResult: unknown, sequence: number) => ({
       ...event(`${id}-result`, sequence), kind: 'tool-call-finished' as const,
-      payload: { toolCallId: `${id}-tool`, result: sidecarResult, sessionLedger: { location, stepId: id, result: sidecarResult } }
+      payload: { toolCallId: `${id}-tool`, isError: false, result: sidecarResult, sessionLedger: { location, stepId: id, result: sidecarResult } }
     })
     await history.appendBatch([proposal('bad', badLocation)], 0)
     await history.appendBatch([result('bad', badLocation, [], 2)], 1)
     await history.appendBatch([{ ...proposal('good', goodLocation), sequence: 3 }], 2)
-    await history.appendBatch([result('good', goodLocation, { success: true }, 4)], 3)
+    await history.appendBatch([result('good', goodLocation, { success: true, data: null }, 4)], 3)
     const repairToolLedger = vi.fn(async () => undefined)
     const onToolLedgerRepairError = vi.fn()
 
     await history.recoverInterruptedInvocations({ repairToolLedger, onToolLedgerRepairError })
 
     expect(repairToolLedger).toHaveBeenCalledTimes(1)
-    expect(repairToolLedger).toHaveBeenCalledWith(goodLocation, { toolUseId: 'good-tool', turnId: 'turn-1', stepId: 'good', result: { success: true } })
+    expect(repairToolLedger).toHaveBeenCalledWith(goodLocation, { toolUseId: 'good-tool', turnId: 'turn-1', stepId: 'good', result: { success: true, data: null } })
     expect(onToolLedgerRepairError).toHaveBeenCalledWith(expect.any(Error), 'inv-1', 'bad-tool')
     conn.close()
   })

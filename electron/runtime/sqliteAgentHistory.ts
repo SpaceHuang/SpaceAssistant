@@ -26,6 +26,7 @@ import { isCanonicalProjectionWatermarkValid } from './canonicalHistory'
 import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
 import { createSpillStoreForDatabase, type SpillDescriptor, type SpillStore } from '../storage/spillStore'
 import { collectSpillDescriptorsStrict } from '../storage/spillProtocol'
+import { projectCanonicalToolResultForSessionLedger } from './sessionLedgerRecovery'
 
 const CANONICAL_SESSION_CACHE_VERSION = 1
 
@@ -1066,6 +1067,28 @@ export class SqliteAgentHistory implements HistoryPort {
     }))
   }
 
+  /** Reports only recovery work that startup will actually attempt now; backed-off repairs stay out of this count. */
+  getStartupRecoveryWorkSummary(): { unfinishedInvocationCount: number; dueProjectionRepairCount: number; hasWork: boolean } {
+    const unfinishedInvocationCount = this.listStartupRecoveryWorkset().length
+    const repairRows = this.conn.prepare(`SELECT repairs.attempts,repairs.updated_at,
+        COUNT(*) OVER (PARTITION BY repairs.invocation_id) AS invocation_repair_count
+        FROM canonical_projection_repairs repairs
+        LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=repairs.session_id
+        WHERE repairs.status='pending' AND (cutover.cleanup_state IS NULL OR
+          cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))`).all() as Array<{
+            attempts: number; updated_at: number; invocation_repair_count: number
+          }>
+    const now = this.now()
+    const dueProjectionRepairCount = repairRows.filter((row) =>
+      now - row.updated_at >= projectionRepairRetryDelayMs(row.attempts, row.invocation_repair_count)
+    ).length
+    return {
+      unfinishedInvocationCount,
+      dueProjectionRepairCount,
+      hasWork: unfinishedInvocationCount > 0 || dueProjectionRepairCount > 0
+    }
+  }
+
   /** Lists canonical invocation streams owned by a session in their first-commit order. */
   listInvocationIdsForSession(sessionId: string): string[] {
     if (!sessionId.trim()) throw new HistoryBatchError('sessionId is required')
@@ -1892,7 +1915,7 @@ export class SqliteAgentHistory implements HistoryPort {
             }
           }
         } else if ((event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') && options.repairToolLedger) {
-          const payload = event.payload as { toolCallId?: unknown; reason?: unknown; result?: unknown; sessionLedger?: unknown }
+          const payload = event.payload as { toolCallId?: unknown; reason?: unknown; result?: unknown; isError?: unknown; auditRef?: unknown; sessionLedger?: unknown }
           const ledger = payload.sessionLedger as Partial<CanonicalToolLedger> | undefined
           const location = ledger?.location
           if (typeof payload.toolCallId === 'string' && location && typeof location.workDir === 'string' && typeof location.sessionId === 'string' && Number.isFinite(location.createdAt) &&
@@ -1917,7 +1940,18 @@ export class SqliteAgentHistory implements HistoryPort {
               catch { /* Diagnostics must not discard the canonical repair envelope. */ }
               continue
             }
-            if (event.kind === 'tool-call-finished' && !isDeepStrictEqual(payload.result, ledger.result)) {
+            const canonicalProposal = canonicalProposalById.get(payload.toolCallId)
+            const toolName = canonicalProposal?.name
+            const expectedResult = event.kind === 'tool-call-finished' && isRecord(payload.result)
+              ? projectCanonicalToolResultForSessionLedger({
+                rawResult: payload.result,
+                isError: payload.isError === true,
+                ...(toolName ? { toolName } : {}),
+                ...(typeof payload.auditRef === 'string' ? { auditRef: payload.auditRef } : {}),
+                deferredUnsurfaced: ledger.result.deferredUnsurfaced === true
+              })
+              : undefined
+            if (event.kind === 'tool-call-finished' && (!expectedResult || !isDeepStrictEqual(expectedResult, ledger.result))) {
               blockedSessionLedgers.add(key)
               try { options.onToolLedgerRepairError?.(new Error('canonical tool result sidecar does not match the committed completion result'), invocationId, payload.toolCallId) }
               catch { /* Diagnostics must not discard the canonical repair envelope. */ }

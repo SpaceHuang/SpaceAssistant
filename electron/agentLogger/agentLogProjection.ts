@@ -10,7 +10,7 @@ const TARGET_EVENTS = new Set<AgentLogEventName>([
   'llm.silent_overflow',
   'tool.request', 'tool.error', 'tool.result', 'tool.result.contract-violation',
   'trust.remove',
-  'history.cutover', 'session.storage.shadow', 'session.history.recovery', 'session.transcript.read', 'session.transcript.reconciliation',
+  'history.cutover', 'session.storage.shadow', 'session.history.recovery', 'session.history.repair.failed', 'session.transcript.read', 'session.transcript.reconciliation',
   'shell.security.deny', 'shell.trust.command', 'shell.path.confirm', 'shell.path.reject', 'shell.precheck', 'shell.confirm',
   'shell.exec.start', 'shell.exec.plan_failed', 'shell.exec.spawned', 'shell.exec.auto_background',
   'shell.exec.background', 'shell.exec.finish', 'shell.exec.error', 'grep.terminate'
@@ -27,7 +27,7 @@ const COMMON_KEYS = new Set([
   'stderrBytes', 'stdoutSha256', 'stderrSha256', 'stdoutRedacted', 'stderrRedacted', 'outputPersistErrorCode',
   'terminationErrorCode', 'terminationSignal', 'treeKillVerified', 'outputLimitReached', 'captureCaseId',
   'progressCaseId', 'terminationCaseId', 'retryCount', 'retryExhausted', 'terminationReason', 'redacted',
-  'reason', 'terminated', 'elapsedMs', 'terminationState',
+  'reason', 'terminated', 'elapsedMs', 'terminationState', 'pendingRepairs',
   'dataBytes', 'dataSha256', 'outputTruncated', 'outputRedacted', 'invariants', 'violationCount',
   'turnId', 'stage', 'historyStreamId', 'previousTurnId', 'snapshotVersion', 'transcriptVersion', 'reconciledCount',
   'consumer', 'source', 'differenceCount', 'fieldNames', 'legacyHash', 'canonicalHash', 'acceptedInputFingerprint',

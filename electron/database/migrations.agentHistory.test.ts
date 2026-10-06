@@ -148,11 +148,15 @@ describe('agent canonical history migration', () => {
     ]))
 
     conn.prepare('INSERT INTO agent_history_streams VALUES(?,?,?,?)').run('new-invocation', 1, 1, 'new-session')
-    conn.prepare('INSERT INTO agent_history_events VALUES(?,?,?,?,?,?,?,?,?)')
+    conn.prepare(`INSERT INTO agent_history_events(
+      invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at
+    ) VALUES(?,?,?,?,?,?,?,?,?)`)
       .run('new-invocation', 1, 'start', 'start-key', 'new-turn', 1, 'tool-call-started', '{}', 1)
     expect(conn.prepare('SELECT invocation_id FROM canonical_history_recovery_work').all()).toEqual([{ invocation_id: 'new-invocation' }])
 
-    conn.prepare('INSERT INTO agent_history_events VALUES(?,?,?,?,?,?,?,?,?)')
+    conn.prepare(`INSERT INTO agent_history_events(
+      invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at
+    ) VALUES(?,?,?,?,?,?,?,?,?)`)
       .run('new-invocation', 2, 'terminal', 'terminal-key', 'new-turn', 1, 'invocation-completed', '{"status":"completed"}', 2)
     expect(conn.prepare('SELECT invocation_id FROM canonical_history_recovery_work').all()).toEqual([{ invocation_id: 'new-invocation' }])
     conn.prepare('UPDATE agent_history_streams SET version=2 WHERE invocation_id=?').run('new-invocation')
@@ -225,7 +229,7 @@ describe('agent canonical history migration', () => {
     runMigrations(conn)
     expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
     const markEligible = conn.prepare('INSERT OR REPLACE INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at) VALUES(?,?,?)')
-    expect(conn.prepare('SELECT name FROM sqlite_master WHERE type=\'trigger\' AND name LIKE \'invalidate_session_projection_%\'').all()).toHaveLength(3)
+    expect(conn.prepare(`SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'invalidate_session_projection_after_message_%'`).all()).toHaveLength(3)
 
     markEligible.run('s', 'generation-1', 1)
     conn.prepare("UPDATE messages SET content='changed' WHERE id='m'").run()
@@ -243,8 +247,8 @@ describe('agent canonical history migration', () => {
     const conn = new DatabaseSync(':memory:')
     conn.exec(`CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
       INSERT INTO schema_meta(key,value) VALUES('schema_version','41');
-      CREATE TABLE agent_history_streams (invocation_id TEXT PRIMARY KEY NOT NULL, session_id TEXT);
-      CREATE TABLE agent_history_events (invocation_id TEXT NOT NULL, event_id TEXT NOT NULL, session_id TEXT, payload_json TEXT NOT NULL);
+      CREATE TABLE agent_history_streams (invocation_id TEXT PRIMARY KEY NOT NULL, session_id TEXT, version INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE agent_history_events (invocation_id TEXT NOT NULL, sequence INTEGER NOT NULL DEFAULT 1, event_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'input', session_id TEXT, payload_json TEXT NOT NULL);
       CREATE TABLE canonical_session_projection_cache (session_id TEXT NOT NULL, cache_key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(session_id,cache_key));
       INSERT INTO agent_history_streams(invocation_id,session_id) VALUES('inv','session-a');
       INSERT INTO agent_history_events(invocation_id,event_id,session_id,payload_json) VALUES('inv','event','session-a','{}');
@@ -499,7 +503,7 @@ describe('agent canonical history migration', () => {
 
     runMigrations(conn)
 
-    expect(DB_SCHEMA_VERSION).toBe(52)
+    expect(DB_SCHEMA_VERSION).toBe(53)
     expect(conn.prepare('PRAGMA table_info(turns)').all()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'accepted_input_history_version', dflt_value: '0' })
     ]))

@@ -56,6 +56,7 @@ import { setUsageStatsAppVersion } from './usageStats/usageStatsRecorder'
 import { backfillUsageStats } from './usageStats/usageStatsBackfill'
 import { getDbConnection } from './database/sqliteStore'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
+import { classifySessionHistoryRepairFailure } from './runtime/sessionHistoryRecoveryDiagnostics'
 import { SessionProjectionMigrationApplication } from './runtime/sessionProjectionMigrationApplication'
 import { DB_SCHEMA_VERSION } from './database/schema'
 import { createSessionStorageCleanupProductionBoundary } from './runtime/sessionStorageCleanupProduction'
@@ -448,20 +449,33 @@ app.whenReady().then(async () => {
   let sessionHistoryRepairFailureCount = 0
   let pendingSessionHistoryRepairs = 0
   let recoveredInvocationCount = 0
+  const reportSessionHistoryRepairFailure = (kind: string, error: unknown) => {
+    sessionHistoryRepairFailureCount += 1
+    logAgentEvent('warn', 'session.history.repair.failed', {
+      kind,
+      reasonCode: classifySessionHistoryRepairFailure(error)
+    })
+  }
   if (safeDbMaintenanceRequested) {
     console.warn('[agentHistory] canonical full recovery skipped for --safe-db-maintenance; it will run on the next normal launch')
   } else {
-  await showStartupStatus('正在整理历史会话数据，请稍候…')
+  await showStartupStatus('正在加载，请稍候…')
   try {
     const startupHistory = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, undefined, createSpillStore(path.join(app.getPath('userData'), 'spill')))
+    let recoveryStatusRequired = false
     try {
     const historyClassification = await measureStartupPhase('canonical-history.classification', () => startupHistory.classifyLegacyProjectionRepairs(100))
       if (!historyClassification.complete) {
         console.info('[agentHistory] legacy repair classification remains resumable', historyClassification)
+        recoveryStatusRequired = true
       }
     } catch (error) {
       // Classification failure must retain the old exhaustive recovery path until its cursor completes.
       console.warn('[agentHistory] legacy repair classification failed; using exhaustive recovery', error instanceof Error ? error.message : String(error))
+      recoveryStatusRequired = true
+    }
+    if (recoveryStatusRequired || startupHistory.getStartupRecoveryWorkSummary().hasWork) {
+      await showStartupStatus('正在整理历史会话数据，请稍候…')
     }
     const interrupted = await measureStartupPhase('canonical-history.recovery', () => startupHistory.recoverInterruptedInvocations({
       resolveSessionLedgerLocation: (sessionId) => {
@@ -549,32 +563,39 @@ app.whenReady().then(async () => {
         finally { await sink.close() }
       },
       onCompactionRepairError: (error, invocationId, compactionId) => {
-        sessionHistoryRepairFailureCount += 1
-        console.warn('[agentHistory] compaction ledger repair degraded:', { invocationId, compactionId, error: error instanceof Error ? error.message : String(error) })
+        void invocationId
+        void compactionId
+        reportSessionHistoryRepairFailure('compaction', error)
       },
       onToolLedgerRepairError: (error, invocationId, toolCallId) => {
-        sessionHistoryRepairFailureCount += 1
-        console.warn('[agentHistory] tool result ledger repair degraded:', { invocationId, toolCallId, error: error instanceof Error ? error.message : String(error) })
+        void invocationId
+        void toolCallId
+        reportSessionHistoryRepairFailure('tool-ledger', error)
       },
       onModelRequestLedgerRepairError: (error, invocationId, requestId) => {
-        sessionHistoryRepairFailureCount += 1
-        console.warn('[agentHistory] model request ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
+        void invocationId
+        void requestId
+        reportSessionHistoryRepairFailure('model-request', error)
       },
       onProviderRetryLedgerRepairError: (error, invocationId, requestId) => {
-        sessionHistoryRepairFailureCount += 1
-        console.warn('[agentHistory] provider retry ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
+        void invocationId
+        void requestId
+        reportSessionHistoryRepairFailure('provider-retry', error)
       },
       onUsageLedgerRepairError: (error, invocationId, requestId) => {
-        sessionHistoryRepairFailureCount += 1
-        console.warn('[agentHistory] usage ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
+        void invocationId
+        void requestId
+        reportSessionHistoryRepairFailure('usage', error)
       },
       onFinalRequestContextLedgerRepairError: (error, invocationId, requestId) => {
-        sessionHistoryRepairFailureCount += 1
-        console.warn('[agentHistory] final request context ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
+        void invocationId
+        void requestId
+        reportSessionHistoryRepairFailure('final-request-context', error)
       },
       onInvocationTerminalRepairError: (error, invocationId, turnId) => {
-        sessionHistoryRepairFailureCount += 1
-        console.warn('[agentHistory] invocation terminal ledger repair degraded:', { invocationId, turnId, error: error instanceof Error ? error.message : String(error) })
+        void invocationId
+        void turnId
+        reportSessionHistoryRepairFailure('invocation-terminal', error)
       }
     }))
     recoveredInvocationCount = interrupted.length
