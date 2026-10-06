@@ -79,3 +79,6 @@ llm-wiki/
 # Impeccable hook 本地配置
 .github/hooks/
 dbg-rel.txt
+
+# 本地 Users 备份文档，不纳入版本控制
+/Users/
