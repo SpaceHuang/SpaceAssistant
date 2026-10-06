@@ -674,3 +674,5 @@ SELECT
 | 真相源 spill | 承载 canonical 正文的外置存储；**不可丢弃、无保留期** |
 | 可降级 spill | 冗余可读副本；可丢弃、可按保留期删除；不参与逐字节一致验收 |
 | fail-soft | 失败只留痕不阻塞（**仅限派生数据**） |
+
+| **v287（M2-2 持久化会话投影分类）** | 增加 schema v51 `canonical_session_projection_classifications`，持久化 eligible/legacy-required 与 fallback 原因；消息变更触发分类失效。读取路径在逐字段成功验证后写 eligible，失败回退记录明确原因。契约 manifest 摘要更新为 `26d3798fbe55956a9ed200b4a29919ce09dbc7ac1bd82573a36dff8f3de3dc1c`；计划 M2-2 单列完成。聚焦迁移、投影读取和契约测试通过。
