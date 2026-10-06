@@ -1,0 +1,117 @@
+{
+  "manifestVersion": 1,
+  "task": "R-03",
+  "status": "complete",
+  "date": "2026-10-06",
+  "purpose": "将正式发布的 SpaceAssistant v0.2.5 固定为清理版本的 C-off rollback floor，并验证官方 macOS 安装包能读取 C-on 的三个持久状态。",
+  "release": {
+    "tag": "v0.2.5",
+    "commit": "f5f95bf4a52930a2feb5e661b12b5b1e23d3de6a",
+    "releaseRun": "https://github.com/SpaceHuang/SpaceAssistant/actions/runs/37486347926",
+    "releaseUrl": "https://github.com/SpaceHuang/SpaceAssistant/releases/tag/v0.2.5",
+    "sourceTreeClean": true
+  },
+  "rollbackPackages": [
+    {
+      "target": "mac-arm64",
+      "asset": "SpaceAssistant-0.2.5-arm64.dmg",
+      "assetUrl": "https://github.com/SpaceHuang/SpaceAssistant/releases/download/v0.2.5/SpaceAssistant-0.2.5-arm64.dmg",
+      "sha256": "8153def5f47199dca17d4bc5893768d5a4ea1946dbab71fb0cf4494c10bccbd6",
+      "sizeBytes": 200685357,
+      "buildId": "8b73103f-996a-485e-8c91-5e79fa18a644",
+      "appAsarSha256": "b72be73efe3ae121141bfd0d1aa93353e9df2bee7be8892f706d907e8b8cc7e6",
+      "hdiutilVerify": "VALID",
+      "codesignVerify": "passed"
+    },
+    {
+      "target": "mac-x64",
+      "asset": "SpaceAssistant-0.2.5.dmg",
+      "assetUrl": "https://github.com/SpaceHuang/SpaceAssistant/releases/download/v0.2.5/SpaceAssistant-0.2.5.dmg",
+      "sha256": "337bf50f9c97b95c297a461896ebc98b4b5e5f6f9a863c2520cc7b9bfb4fc09f",
+      "sizeBytes": 207531375,
+      "buildId": "76e02e43-b185-4211-a0fc-68e15bf5368d",
+      "appAsarSha256": "b72be73efe3ae121141bfd0d1aa93353e9df2bee7be8892f706d907e8b8cc7e6",
+      "hdiutilVerify": "VALID",
+      "codesignVerify": "passed"
+    }
+  ],
+  "packagedCleanupBoundary": {
+    "allowContentCleanup": false,
+    "compatibilityRecord": null,
+    "deploymentResourceSha256": "267584e31e2360a8c311fcd82b927029b02ad1539f7d64a7d4f919192444428d",
+    "compatibilityResourceSha256": "38e0b9de817f645c4bec37c0d4a3e58baecccb040f5718dc069a72c7385a0bed",
+    "identityVersion": "0.2.5",
+    "identityCommit": "f5f95bf4a52930a2feb5e661b12b5b1e23d3de6a",
+    "identitySourceTreeClean": true
+  },
+  "inputStates": {
+    "sourceTask": "SC-01C",
+    "sourcePackageCommit": "3bd50b224c5abf95821525e57985fad0c11051c0",
+    "sourceSchemaVersion": 52,
+    "states": ["write-stopped", "pending", "complete"],
+    "actualCOnOutputDbHashes": {
+      "mac-arm64": {
+        "write-stopped": "7214452bc873f4aa4e0450a50ef4e556f018d4ef01ffe4f639968e1946d4fe43",
+        "pending": "f116ef7572a893778ced3a27582b9b5d556633764555a815e68e73478532fe56",
+        "complete": "8a2d76f8c625ac5d63e338cc319b67736f9b5d57b409b13823f352f6fc0e04b9"
+      },
+      "mac-x64": {
+        "write-stopped": "4f6c538c65f2ee9bde9e9c876680f592a52fe7dd41d75a4f47ab3ec77b7be096",
+        "pending": "ed546033240dbe0b94ccc8e273d1e11da0c4ba0c8c97a805e6df366baa7f8cb3",
+        "complete": "0d07ee5784036e539ec30ee459b6c61e82d5e9231297f5d681d7d6b67df065ff"
+      }
+    },
+    "profileCopiesUsed": "SC-01C R-reader output profiles were copied to new disposable HOME/userData roots. Before launch, all cleanup/cursor/message/spill state and 12 History/transcript-related table hashes were compared with the corresponding actual C-on output profile; every comparison matched.",
+    "realProfilesAccessed": false
+  },
+  "runtimeMatrix": {
+    "entryPoint": "Official packaged app renderer window.api.chatGetMessagePage through renderer → preload → IPC → canonical projection",
+    "modelCalls": 0,
+    "cleanupWorkerAdvanced": false,
+    "schemaUpgrade": "52 → 53",
+    "postRunIntegrity": "ok",
+    "postRunForeignKeyViolations": 0,
+    "allStatesPreserved": {
+      "cutoverRow": true,
+      "cleanupProgressAndCursor": true,
+      "messageRowsAndBodies": true,
+      "sourceTruthSpillFilesAndHashes": true
+    },
+    "historyTranscriptTableHashesMatchedCOnInput": true,
+    "results": [
+      {
+        "state": "write-stopped",
+        "mac-arm64": { "messages": 2, "pages": 1, "contentBytes": 90082, "allBodiesNonempty": true, "sequencesContiguous": true },
+        "mac-x64": { "messages": 2, "pages": 1, "contentBytes": 90082, "allBodiesNonempty": true, "sequencesContiguous": true }
+      },
+      {
+        "state": "pending",
+        "mac-arm64": { "messages": 102, "pages": 2, "contentBytes": 93464, "allBodiesNonempty": true, "sequencesContiguous": true },
+        "mac-x64": { "messages": 102, "pages": 2, "contentBytes": 93464, "allBodiesNonempty": true, "sequencesContiguous": true }
+      },
+      {
+        "state": "complete",
+        "mac-arm64": { "messages": 2, "pages": 1, "contentBytes": 90072, "allBodiesNonempty": true, "sequencesContiguous": true },
+        "mac-x64": { "messages": 2, "pages": 1, "contentBytes": 90072, "allBodiesNonempty": true, "sequencesContiguous": true }
+      }
+    ],
+    "sourceTruthSpillFiles": {
+      "write-stopped": { "bytes": 90043, "sha256": "a00b385d3ff193459399469e50aec343eb3f8f37cf548d2851aa21219e47a3ed" },
+      "pending": { "bytes": 90037, "sha256": "36fda04cce8bec1bbb0a975af67d6f04bce4b774835b3b5cee1f73af605380dd" },
+      "complete": { "bytes": 90038, "sha256": "ed9690aeaa0172c8f7418e95635799a04b98a6bd53230d85464ea37aafcb2a8d" }
+    },
+    "x64Execution": "Rosetta 2 via /usr/bin/arch -x86_64; isolated HOME avoids collision with the user's running installed app",
+    "profileRoots": {
+      "mac-arm64": "/tmp/spaceassistant-r03-v025",
+      "mac-x64": "/tmp/spaceassistant-r03-v025-x64-retry"
+    }
+  },
+  "qualification": {
+    "result": "v0.2.5 qualifies as the published C-off rollback floor for the currently defined schema-52/History-1/spill-1 cleanup states; its package identity is fixed to commit f5f95bf4.",
+    "limits": [
+      "This record does not authorize real-profile cleanup.",
+      "A future cleanup release that changes schema, History/spill format, or the R/C embedded resource contract must re-run compatibility review and update the artifact pin before C-on deployment.",
+      "Developer ID signing/notarization and Windows runtime installation remain outside this local rollback verification."
+    ]
+  }
+}
