@@ -278,11 +278,15 @@ describe('main v33 schema compatibility', () => {
     }
   })
 
-  it('repairs a v0.2.4 profile whose main schema v33 was stamped as storage v46', () => {
+  it('repairs a v0.2.4 profile without rewriting legacy History payloads', () => {
     const db = createMainV33Database()
     // The 0.2.4 candidate treated product-main schema 33 as its own storage
     // migration 33 and advanced the version without applying the skipped DDL.
-    db.exec("ALTER TABLE sessions DROP COLUMN fixed_work_dir; UPDATE schema_meta SET value='46' WHERE key='schema_version'")
+    db.exec(`ALTER TABLE sessions DROP COLUMN fixed_work_dir;
+      ALTER TABLE agent_history_events DROP COLUMN session_id;
+      UPDATE schema_meta SET value='46' WHERE key='schema_version';
+      CREATE TRIGGER reject_legacy_history_rewrite BEFORE UPDATE ON agent_history_events
+      BEGIN SELECT RAISE(ABORT,'legacy History payloads must not be rewritten during startup'); END;`)
 
     expect(() => runMigrations(db)).not.toThrow()
 
@@ -294,9 +298,13 @@ describe('main v33 schema compatibility', () => {
     const eventColumns = new Set((db.prepare('PRAGMA table_info(agent_history_events)').all() as Array<{ name: string }>).map(({ name }) => name))
     expect(eventColumns.has('commit_order')).toBe(true)
     expect(eventColumns.has('session_seq')).toBe(true)
+    expect(db.prepare('SELECT event_id,payload_json,session_id,commit_order,session_seq FROM agent_history_events').all())
+      .toEqual([{ event_id: 'main-v33-event', payload_json: '{}', session_id: null, commit_order: null, session_seq: null }])
     expect(db.prepare('SELECT session_id,next_seq FROM session_event_cursor').all())
-      .toEqual([{ session_id: 'main-v33-session', next_seq: 1 }])
-    expect(db.prepare('SELECT id FROM agent_history_commit_cursor').all()).toEqual([{ id: 1 }])
+      .toEqual([])
+    expect(db.prepare('SELECT id FROM agent_history_commit_cursor').all()).toEqual([])
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('canonical_projection_repair_migration','canonical_history_recovery_work_migration') ORDER BY name").all())
+      .toEqual([{ name: 'canonical_history_recovery_work_migration' }, { name: 'canonical_projection_repair_migration' }])
 
     db.close()
   })

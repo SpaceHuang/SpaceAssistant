@@ -592,6 +592,7 @@ export function runMigrations(conn: DatabaseSync): void {
     }
 
     conn.exec(MIGRATION_MAIN_V31_CONTINUATION_INTENTS_SQL)
+    conn.exec(MIGRATION_V31_CANONICAL_PROJECTION_REPAIRS_SQL)
     ensureColumns('turns', [['retry_of_message_id', 'TEXT'], ['retry_of_invocation_id', 'TEXT']])
     ensureColumns('continuation_intents', [['continuation_context_json', 'TEXT']])
     ensureColumns('sessions', [['fixed_work_dir', 'TEXT']])
@@ -606,10 +607,24 @@ export function runMigrations(conn: DatabaseSync): void {
     ensureColumns('usage_turn_facts', [['model_id', 'TEXT'], ['provider_model_name', 'TEXT'], ['route_identity', 'TEXT']])
 
     conn.exec(MIGRATION_V32_AGENT_HISTORY_CURSOR_TABLES_SQL)
+    conn.exec(MIGRATION_V50_HISTORY_RECOVERY_WORK_SQL)
     ensureColumns('agent_history_streams', [['session_id', 'TEXT']])
     ensureColumns('agent_history_events', [['session_id', 'TEXT'], ['commit_order', 'INTEGER'], ['session_seq', 'INTEGER']])
     if (tableExists('agent_history_streams') && tableExists('agent_history_events')) {
-      conn.exec(MIGRATION_V32_AGENT_HISTORY_SESSION_ORDER_SQL)
+      conn.exec(MIGRATION_V50_HISTORY_RECOVERY_WORK_TRIGGERS_SQL)
+    }
+    if (tableExists('agent_history_streams') && tableExists('agent_history_events')) {
+      // Existing History payload_json values can be very large. Do not rewrite
+      // every legacy event during startup just to populate optional ordering
+      // metadata; the append path assigns these fields for new events. Legacy
+      // rows remain intact and readable by invocation id.
+      conn.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_history_events_commit_order
+        ON agent_history_events(commit_order);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_history_events_session_seq
+        ON agent_history_events(session_id, session_seq)
+        WHERE session_id IS NOT NULL AND session_seq IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_agent_history_events_session_commit_order
+        ON agent_history_events(session_id, commit_order);`)
     }
     const hasHistoryCursor = tableExists('agent_history_commit_cursor')
     const hasProjectionCache = tableExists('canonical_session_projection_cache')
