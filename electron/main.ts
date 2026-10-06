@@ -197,6 +197,7 @@ async function showStartupStatus(message: string): Promise<void> {
         maximizable: false,
         movable: true,
         show: false,
+        backgroundColor: '#faf9f6',
         webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
       })
       startupStatusWindow = win
@@ -204,8 +205,8 @@ async function showStartupStatus(message: string): Promise<void> {
         if (startupStatusWindow === win) startupStatusWindow = null
       })
       const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceAssistant</title>
-        <style>html,body{height:100%;margin:0}body{font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:CanvasText;background:Canvas;display:grid;place-items:center}.card{text-align:center;padding:30px}.mark{width:30px;height:30px;margin:0 auto 16px;border:3px solid ButtonBorder;border-top-color:Highlight;border-radius:50%;animation:spin 1s linear infinite}h1{font-size:14px;font-weight:600;margin:0 0 9px}p{font-size:13px;color:GrayText;margin:0}small{display:block;color:GrayText;margin-top:12px}@keyframes spin{to{transform:rotate(360deg)}}</style></head>
-        <body><main class="card"><div class="mark" aria-hidden="true"></div><h1>SpaceAssistant</h1><p id="status">正在准备本地数据，请稍候…</p><small>应用正在启动，请保持此窗口开启。</small></main></body></html>`
+        <style>html,body{height:100%;margin:0}body{font:13px/1.55 'Segoe UI','PingFang SC','Microsoft YaHei',system-ui,sans-serif;color:#2d2a26;background:#faf9f6;display:grid;place-items:center}.card{text-align:center;padding:28px}.mark{width:26px;height:26px;margin:0 auto 14px;border:3px solid #e5e0d8;border-top-color:#f06529;border-radius:50%;animation:spin 1s linear infinite}h1{font-size:13px;font-weight:600;margin:0 0 8px}p{font-size:13px;color:#6b655e;margin:0}small{display:block;color:#6b655e;margin-top:10px}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.mark{animation:none}}</style></head>
+        <body><main class="card"><div class="mark" aria-hidden="true"></div><h1>SpaceAssistant</h1><p id="status" role="status" aria-live="polite">正在准备本地数据，请稍候…</p><small>应用正在启动，请保持此窗口开启。</small></main></body></html>`
       await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
       if (win.isDestroyed()) return
       win.show()
@@ -325,6 +326,7 @@ export async function createMainWindow(): Promise<void> {
     width: 1200,
     height: 800,
     ...getMainWindowFrameOptions(),
+    show: false,
     // backgroundThrottling 默认为 true；隐藏窗口后 renderer 自动节流（NFR-10）
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -377,6 +379,8 @@ export async function createMainWindow(): Promise<void> {
       nodeVersion: process.versions.node, sqliteVersion
     }))
   }
+  win.show()
+  win.focus()
   closeStartupStatus()
 
   win.on('closed', () => {
