@@ -1974,6 +1974,43 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
+  it('backs off failed repairs for a large invocation while keeping them retryable', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn)
+    const invocationId = 'large-repair-backoff-invocation'
+    const location = { workDir: '/workspace', sessionId: 'large-repair-backoff-session', createdAt: 1 }
+    await history.appendBatch([{
+      ...event('large-repair-backoff-terminal', 1), invocationId, kind: 'invocation-completed',
+      payload: { status: 'completed', sessionLedger: { location, turnId: 'large-repair-backoff-turn', reason: 'completed' } }
+    }], 0)
+    const insertPendingRepair = conn.prepare(`INSERT INTO canonical_projection_repairs(
+      repair_id,session_id,invocation_id,repair_kind,target_key,status,attempts,idempotency_key,updated_at
+    ) VALUES(?,?,?,'test-large-queue',?,'pending',0,?,?)`)
+    for (let index = 0; index < 9; index += 1) {
+      const targetKey = `large-repair-backoff-extra-${index}`
+      insertPendingRepair.run(`${invocationId}:${targetKey}`, location.sessionId, invocationId, targetKey, `${invocationId}:${targetKey}`, Date.now())
+    }
+    await history.classifyLegacyProjectionRepairs(10)
+
+    const fail = vi.fn(async () => { throw new Error('projection unavailable') })
+    await history.recoverInterruptedInvocations({ repairInvocationTerminal: fail })
+    expect(fail).toHaveBeenCalledOnce()
+
+    const skippedDuringBackoff = vi.fn(async () => undefined)
+    await history.recoverInterruptedInvocations({ repairInvocationTerminal: skippedDuringBackoff })
+    expect(skippedDuringBackoff).not.toHaveBeenCalled()
+    conn.prepare('UPDATE canonical_projection_repairs SET updated_at=? WHERE invocation_id=?')
+      .run(Date.now() - 60 * 60 * 1000, invocationId)
+
+    const succeed = vi.fn(async () => undefined)
+    await history.recoverInterruptedInvocations({ repairInvocationTerminal: succeed })
+    expect(succeed).toHaveBeenCalledOnce()
+    expect(conn.prepare(`SELECT status,attempts FROM canonical_projection_repairs
+      WHERE repair_id=?`).get(`${invocationId}:invocation-projections:large-repair-backoff-terminal`))
+      .toEqual({ status: 'completed', attempts: 2 })
+    conn.close()
+  })
+
   it('resumes the bounded recovery-work census after reopen and keeps streams inserted behind its cursor', async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'history-recovery-work-resume-'))
     const dbPath = path.join(directory, 'history.db')
@@ -2030,12 +2067,6 @@ describe('SqliteAgentHistory', () => {
     expect(conn.prepare("SELECT status, attempts FROM canonical_projection_repairs WHERE invocation_id='terminal-retry-invocation'").get())
       .toEqual({ status: 'pending', attempts: 1 })
 
-    const skippedDuringBackoff = vi.fn(async () => undefined)
-    await new SqliteAgentHistory(conn).recoverInterruptedInvocations({ repairInvocationTerminal: skippedDuringBackoff })
-    expect(skippedDuringBackoff).not.toHaveBeenCalled()
-    conn.prepare("UPDATE canonical_projection_repairs SET updated_at=? WHERE invocation_id='terminal-retry-invocation'")
-      .run(Date.now() - 60 * 60 * 1000)
-
     const succeeding = vi.fn(async () => undefined)
     await new SqliteAgentHistory(conn).recoverInterruptedInvocations({ repairInvocationTerminal: succeeding })
     expect(succeeding).toHaveBeenCalledWith(location, { status: 'completed', turnId: 'terminal-retry-turn', reason: 'completed' })
@@ -2058,12 +2089,6 @@ describe('SqliteAgentHistory', () => {
     expect(fail).toHaveBeenCalledOnce()
     expect(conn.prepare("SELECT status, attempts FROM canonical_projection_repairs WHERE invocation_id='terminal-failed-invocation'").get())
       .toEqual({ status: 'pending', attempts: 1 })
-
-    const skippedDuringBackoff = vi.fn(async () => undefined)
-    await new SqliteAgentHistory(conn).recoverInterruptedInvocations({ repairInvocationTerminal: skippedDuringBackoff })
-    expect(skippedDuringBackoff).not.toHaveBeenCalled()
-    conn.prepare("UPDATE canonical_projection_repairs SET updated_at=? WHERE invocation_id='terminal-failed-invocation'")
-      .run(Date.now() - 60 * 60 * 1000)
 
     const retry = vi.fn(async () => undefined)
     await new SqliteAgentHistory(conn).recoverInterruptedInvocations({ repairInvocationTerminal: retry })

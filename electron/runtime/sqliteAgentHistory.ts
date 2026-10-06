@@ -173,8 +173,8 @@ type EventRow = {
   session_id?: string | null
 }
 
-function projectionRepairRetryDelayMs(attempts: number): number {
-  if (attempts <= 0) return 0
+function projectionRepairRetryDelayMs(attempts: number, invocationRepairCount: number): number {
+  if (attempts <= 0 || invocationRepairCount < 10) return 0
   return Math.min(24 * 60 * 60 * 1000, 30 * 60 * 1000 * 2 ** Math.min(attempts - 1, 5))
 }
 type OrderedSessionEventRow = EventRow & { session_seq: number; commit_order: number; session_id: string; created_at: number }
@@ -1058,7 +1058,7 @@ export class SqliteAgentHistory implements HistoryPort {
       LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=streams.session_id
       WHERE NOT EXISTS (SELECT 1 FROM agent_history_events terminal
           WHERE terminal.invocation_id=streams.invocation_id
-            AND terminal.kind IN ('invocation-completed','invocation-failed','invocation-interrupted'))
+            AND terminal.kind IN ('invocation-completed','invocation-failed'))
         AND (cutover.cleanup_state IS NULL OR cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))
       ORDER BY streams.invocation_id`).all() as
       Array<{ invocation_id: string; session_id: string | null }>).map(({ invocation_id, session_id }) => ({
@@ -1533,17 +1533,18 @@ export class SqliteAgentHistory implements HistoryPort {
     }))
     const recovered: RebuiltInvocationState[] = []
       const repairRows = this.conn.prepare(`SELECT repairs.repair_id,repairs.invocation_id,repairs.repair_kind,repairs.target_key,
-          repairs.attempts,repairs.updated_at
+          repairs.attempts,repairs.updated_at,COUNT(*) OVER (PARTITION BY repairs.invocation_id) AS invocation_repair_count
           FROM canonical_projection_repairs repairs
           LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=repairs.session_id
           WHERE repairs.status='pending' AND (cutover.cleanup_state IS NULL OR
             cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))
           ORDER BY repairs.updated_at,repairs.repair_id`).all() as Array<{
-            repair_id: string; invocation_id: string; repair_kind: string; target_key: string; attempts: number; updated_at: number
+            repair_id: string; invocation_id: string; repair_kind: string; target_key: string; attempts: number; updated_at: number;
+            invocation_repair_count: number
           }>
       const retryTime = Date.now()
       const dueRepairRows = repairRows.filter((row) =>
-        retryTime - row.updated_at >= projectionRepairRetryDelayMs(row.attempts)
+        retryTime - row.updated_at >= projectionRepairRetryDelayMs(row.attempts, row.invocation_repair_count)
       )
       const work = new Map<string, { sessionId: string | null; repairIds: string[] }>()
     for (const row of streams) work.set(row.invocation_id, { sessionId: row.session_id, repairIds: [] })
