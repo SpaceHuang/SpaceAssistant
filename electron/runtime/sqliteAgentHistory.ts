@@ -1063,7 +1063,7 @@ export class SqliteAgentHistory implements HistoryPort {
     if (!sessionId.trim()) throw new HistoryBatchError('sessionId is required')
     const corrupt = this.conn.prepare(`SELECT streams.invocation_id FROM agent_history_streams AS streams
       JOIN agent_history_events AS events ON events.invocation_id=streams.invocation_id
-      WHERE streams.session_id=? AND (events.session_id IS NULL OR events.session_id<>streams.session_id)
+      WHERE streams.session_id=? AND events.session_id IS NOT NULL AND events.session_id<>streams.session_id
       LIMIT 1`).get(sessionId) as { invocation_id: string } | undefined
     if (corrupt) throw new HistoryCorruptionError(corrupt.invocation_id, 'event session ownership differs from its invocation stream')
     return (this.conn.prepare(`
@@ -1163,7 +1163,7 @@ export class SqliteAgentHistory implements HistoryPort {
       FROM agent_history_events WHERE invocation_id = ? ORDER BY sequence ASC
     `).all(resolvedInvocationId) as EventRow[]
     if (!stream && rows.length > 0) throw new HistoryCorruptionError(invocationId, 'events exist without a stream record')
-    if (stream && rows.some((row) => row.session_id !== stream.session_id)) {
+    if (stream && rows.some((row) => row.session_id !== null && row.session_id !== stream.session_id)) {
       throw new HistoryCorruptionError(invocationId, 'event session ownership differs from its invocation stream')
     }
     if (stream && stream.schema_version !== this.schemaVersion) {

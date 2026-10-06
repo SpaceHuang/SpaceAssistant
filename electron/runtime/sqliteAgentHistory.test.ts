@@ -2439,6 +2439,29 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
+  it('reads legacy History events whose session owner is inherited from the stream', () => {
+    const conn = createDb()
+    const invocationId = 'legacy-null-owner-invocation'
+    const sessionId = 'legacy-null-owner-session'
+    const legacyEvent = {
+      ...event('legacy-null-owner-event', 1), invocationId, turnId: 'legacy-null-owner-turn',
+      kind: 'tool-call-started' as const
+    }
+    conn.prepare(`INSERT INTO agent_history_streams(invocation_id,version,schema_version,session_id)
+      VALUES(?,1,1,?)`).run(invocationId, sessionId)
+    conn.prepare(`INSERT INTO agent_history_events(
+      invocation_id,sequence,event_id,idempotency_key,turn_id,schema_version,kind,payload_json,created_at,session_id,commit_order,session_seq
+    ) VALUES(?,1,?,?,?,?,?,?,1,NULL,NULL,NULL)`).run(
+      invocationId, legacyEvent.eventId, legacyEvent.idempotencyKey, legacyEvent.turnId, 1,
+      legacyEvent.kind, JSON.stringify(legacyEvent.payload)
+    )
+
+    const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
+    expect(history.listInvocationIdsForSession(sessionId)).toEqual([invocationId])
+    expect(history.readSync(invocationId).events).toMatchObject([{ eventId: legacyEvent.eventId, kind: legacyEvent.kind }])
+    conn.close()
+  })
+
   it('distinguishes a session without History from a latest open canonical stream', async () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn, 1, () => 100, 'session-latest-state')
