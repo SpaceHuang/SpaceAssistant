@@ -277,4 +277,27 @@ describe('main v33 schema compatibility', () => {
       fs.rmSync(root, { recursive: true, force: true })
     }
   })
+
+  it('repairs a v0.2.4 profile whose main schema v33 was stamped as storage v46', () => {
+    const db = createMainV33Database()
+    // The 0.2.4 candidate treated product-main schema 33 as its own storage
+    // migration 33 and advanced the version without applying the skipped DDL.
+    db.exec("ALTER TABLE sessions DROP COLUMN fixed_work_dir; UPDATE schema_meta SET value='46' WHERE key='schema_version'")
+
+    expect(() => runMigrations(db)).not.toThrow()
+
+    expect(db.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get())
+      .toEqual({ value: String(DB_SCHEMA_VERSION) })
+    const sessionColumns = new Set((db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>).map(({ name }) => name))
+    expect(sessionColumns.has('fixed_work_dir')).toBe(true)
+    expect(sessionColumns.has('generation')).toBe(true)
+    const eventColumns = new Set((db.prepare('PRAGMA table_info(agent_history_events)').all() as Array<{ name: string }>).map(({ name }) => name))
+    expect(eventColumns.has('commit_order')).toBe(true)
+    expect(eventColumns.has('session_seq')).toBe(true)
+    expect(db.prepare('SELECT session_id,next_seq FROM session_event_cursor').all())
+      .toEqual([{ session_id: 'main-v33-session', next_seq: 1 }])
+    expect(db.prepare('SELECT id FROM agent_history_commit_cursor').all()).toEqual([{ id: 1 }])
+
+    db.close()
+  })
 })

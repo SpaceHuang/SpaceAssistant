@@ -578,6 +578,51 @@ export function runMigrations(conn: DatabaseSync): void {
     version = 52
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
+  if (version === 52) runInTransaction(conn, () => {
+    // 0.2.4 stamped some product-main schema-v33 profiles as storage-v46 after
+    // skipping the colliding main migrations. Repair missing additive DDL by
+    // shape so those already-upgraded profiles remain usable on 0.2.5+.
+    const tableExists = (table: string) => conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
+    const ensureColumns = (table: string, definitions: Array<[string, string]>) => {
+      if (!tableExists(table)) return
+      const columns = new Set((conn.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(({ name }) => name))
+      for (const [name, type] of definitions) {
+        if (!columns.has(name)) conn.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`)
+      }
+    }
+
+    conn.exec(MIGRATION_MAIN_V31_CONTINUATION_INTENTS_SQL)
+    ensureColumns('turns', [['retry_of_message_id', 'TEXT'], ['retry_of_invocation_id', 'TEXT']])
+    ensureColumns('continuation_intents', [['continuation_context_json', 'TEXT']])
+    ensureColumns('sessions', [['fixed_work_dir', 'TEXT']])
+    if (tableExists('sessions')) {
+      const columns = new Set((conn.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>).map(({ name }) => name))
+      if (!columns.has('generation')) conn.exec(MIGRATION_V33_SESSION_GENERATION_SQL)
+      else conn.exec("UPDATE sessions SET generation = lower(hex(randomblob(16))) WHERE generation = ''")
+    }
+    ensureColumns('automation_tasks', [['work_dir', 'TEXT'], ['model_id', 'TEXT'], ['model_service_id', 'TEXT'], ['reasoning_effort', 'TEXT']])
+    ensureColumns('automation_task_runs', [['config_snapshot_json', 'TEXT']])
+    ensureColumns('usage_step_facts', [['model_id', 'TEXT'], ['provider_model_name', 'TEXT'], ['route_identity', 'TEXT']])
+    ensureColumns('usage_turn_facts', [['model_id', 'TEXT'], ['provider_model_name', 'TEXT'], ['route_identity', 'TEXT']])
+
+    conn.exec(MIGRATION_V32_AGENT_HISTORY_CURSOR_TABLES_SQL)
+    ensureColumns('agent_history_streams', [['session_id', 'TEXT']])
+    ensureColumns('agent_history_events', [['session_id', 'TEXT'], ['commit_order', 'INTEGER'], ['session_seq', 'INTEGER']])
+    if (tableExists('agent_history_streams') && tableExists('agent_history_events')) {
+      conn.exec(MIGRATION_V32_AGENT_HISTORY_SESSION_ORDER_SQL)
+    }
+    const hasHistoryCursor = tableExists('agent_history_commit_cursor')
+    const hasProjectionCache = tableExists('canonical_session_projection_cache')
+    const hasProjectionEligibility = tableExists('canonical_session_projection_eligibility')
+    const hasApiEligibility = tableExists('canonical_session_api_context_eligibility')
+    const hasCutover = tableExists('session_message_content_cutover')
+    if (hasHistoryCursor && hasProjectionCache && hasProjectionEligibility && hasApiEligibility && hasCutover) {
+      conn.exec(MIGRATION_V46_HISTORY_CURSOR_INVALIDATION_SQL)
+    }
+
+    version = 53
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
   } catch (migrationError) {
     if (replayedV46Triggers.length > 0) {
       try {

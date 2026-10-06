@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 52
+export const DB_SCHEMA_VERSION = 53
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (
@@ -1446,7 +1446,7 @@ UPDATE agent_history_events
 SET session_id = (SELECT session_id FROM session_order WHERE session_order.invocation_id = agent_history_events.invocation_id AND session_order.sequence = agent_history_events.sequence),
     commit_order = (SELECT commit_order FROM global_order WHERE global_order.invocation_id = agent_history_events.invocation_id AND global_order.sequence = agent_history_events.sequence),
     session_seq = (SELECT session_seq FROM session_order WHERE session_order.invocation_id = agent_history_events.invocation_id AND session_order.sequence = agent_history_events.sequence)
-WHERE commit_order IS NULL;
+WHERE session_id IS NULL OR commit_order IS NULL OR session_seq IS NULL;
 
 INSERT OR IGNORE INTO agent_history_commit_cursor(id, allocated_at)
 SELECT commit_order, created_at FROM agent_history_events ORDER BY commit_order;
