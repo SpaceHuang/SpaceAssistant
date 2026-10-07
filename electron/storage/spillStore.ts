@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID, createHash } from 'node:crypto'
+import { performance } from 'node:perf_hooks'
 import { lock as acquireFileLock } from 'proper-lockfile'
 import type { DatabaseSync } from 'node:sqlite'
 import { logAgentEvent } from '../agentLogger/agentLogger'
@@ -200,22 +201,58 @@ async function syncDirectory(root: string): Promise<void> {
   try { await directory.sync() } finally { await directory.close() }
 }
 
+export type SpillReferenceScanStats = Readonly<{
+  eventHistoryRows: number
+  transcriptRows: number
+  payloadBytes: number
+  descriptorCount: number
+  uniqueLocatorCount: number
+  eventHistoryDurationMs: number
+  transcriptDurationMs: number
+  durationMs: number
+}>
+
 /** Scan every canonical History payload before orphan deletion; malformed rows fail closed. */
-export function readCanonicalSpillReferences(conn: DatabaseSync, options: { allowMissingTables?: boolean } = {}): { descriptors: SpillDescriptor[]; referencedLocators: Set<string> } {
+export function readCanonicalSpillReferences(conn: DatabaseSync, options: { allowMissingTables?: boolean } = {}): { descriptors: SpillDescriptor[]; referencedLocators: Set<string>; stats: SpillReferenceScanStats } {
+  const startedAt = performance.now()
   const tables = new Set((conn.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(({ name }) => name))
   if (!options.allowMissingTables && (!tables.has('agent_history_events') || !tables.has('session_transcript_entries'))) {
     throw new Error('canonical spill reference tables are unavailable')
   }
-  const rows: Array<{ value: string }> = []
-  if (tables.has('agent_history_events')) {
-    rows.push(...conn.prepare('SELECT payload_json AS value FROM agent_history_events').all() as Array<{ value: string }>)
-  }
-  if (tables.has('session_transcript_entries')) {
-    rows.push(...conn.prepare('SELECT messages_json AS value FROM session_transcript_entries').all() as Array<{ value: string }>)
-  }
   const descriptors: SpillDescriptor[] = []
-  for (const row of rows) collectSpillDescriptorsStrict(JSON.parse(row.value) as unknown, descriptors)
-  return { descriptors, referencedLocators: new Set(descriptors.map(({ locator }) => locator)) }
+  let payloadBytes = 0
+  let eventHistoryRows = 0
+  let transcriptRows = 0
+  let eventHistoryDurationMs = 0
+  let transcriptDurationMs = 0
+  const scanTable = (table: 'agent_history_events' | 'session_transcript_entries', column: 'payload_json' | 'messages_json'): number => {
+    const started = performance.now()
+    const rows = conn.prepare(`SELECT ${column} AS value FROM ${table}`).iterate() as Iterable<{ value: string }>
+    for (const row of rows) {
+      payloadBytes += Buffer.byteLength(row.value, 'utf8')
+      collectSpillDescriptorsStrict(JSON.parse(row.value) as unknown, descriptors)
+      if (table === 'agent_history_events') eventHistoryRows += 1
+      else transcriptRows += 1
+    }
+    return performance.now() - started
+  }
+  if (tables.has('agent_history_events')) eventHistoryDurationMs = scanTable('agent_history_events', 'payload_json')
+  if (tables.has('session_transcript_entries')) transcriptDurationMs = scanTable('session_transcript_entries', 'messages_json')
+  const referencedLocators = new Set(descriptors.map(({ locator }) => locator))
+  return {
+    descriptors,
+    referencedLocators,
+    stats: {
+      eventHistoryRows,
+      transcriptRows,
+      payloadBytes,
+      descriptorCount: descriptors.length,
+      uniqueLocatorCount: referencedLocators.size,
+      eventHistoryDurationMs,
+      transcriptDurationMs,
+      durationMs: performance.now() - startedAt
+    }
+  }
 }
 
 export async function reconcileSpillOrphansAgainstCanonicalHistory(store: SpillStore, conn: DatabaseSync): Promise<string[]> {
@@ -368,10 +405,16 @@ export function scheduleSourceTruthSpillGcMaintenance(
 }
 
 /** Retain only canonical-referenced degradable copies; source-of-truth objects are excluded by class. */
-export async function runSpillRetentionMaintenance(db: AppDatabase, root: string, now = Date.now()): Promise<string[]> {
+export async function runSpillRetentionMaintenance(
+  db: AppDatabase,
+  root: string,
+  now = Date.now(),
+  options: { onReferenceScan?: (stats: SpillReferenceScanStats) => void } = {}
+): Promise<string[]> {
   const store = createSpillStore(root)
   return store.withSpillRootFence(async () => {
     const references = readCanonicalSpillReferences(getDbConnection(db))
+    options.onReferenceScan?.(references.stats)
     const policy = resolveRetentionPolicyFromDb(db)
     const degradable = references.descriptors.filter(({ kind }) => kind === 'degradable')
     return store.pruneDegradableUnderFence(degradable, { retentionDays: policy.degradableSpillRetentionDays, now })

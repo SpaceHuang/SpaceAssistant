@@ -49,6 +49,33 @@ const searchLineSvg = patchSvg(searchLineRaw)
 const searchFillSvg = patchSvg(searchFillRaw)
 const settingsSvg = patchSvg(settingsRaw)
 
+const startupRequestsReported = new Set<string>()
+
+function measureStartupRequest<T>(phase: string, work: () => Promise<T>): Promise<T> {
+  const startedAt = performance.now()
+  return work().then((value) => {
+    if (!startupRequestsReported.has(phase)) {
+      startupRequestsReported.add(phase)
+      console.info('[startup]', JSON.stringify({
+        phase,
+        durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+        outcome: 'ok'
+      }))
+    }
+    return value
+  }, (error: unknown) => {
+    if (!startupRequestsReported.has(phase)) {
+      startupRequestsReported.add(phase)
+      console.info('[startup]', JSON.stringify({
+        phase,
+        durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+        outcome: 'failed'
+      }))
+    }
+    throw error
+  })
+}
+
 function IconTab({
   lineSvg,
   fillSvg,
@@ -108,7 +135,7 @@ function AppShellInner() {
     }
   }
 
-  useEffect(() => { void refreshMcpToolCatalog() }, [])
+  useEffect(() => { void measureStartupRequest('renderer.mcp-tool-catalog', refreshMcpToolCatalog) }, [])
 
   // 偏差 11:失效通知服务(通知驱动重取,真相只从 Storage 取)
   useEffect(() => startInvalidationService(), [])
@@ -185,8 +212,7 @@ function AppShellInner() {
   useEffect(() => {
     initConfirmStores()
     const offToolExposure = initToolExposure()
-    void window.api
-      .sessionList()
+    void measureStartupRequest('renderer.session-list', () => window.api.sessionList())
       .then((list) => {
         dispatch(setSessions(list))
         if (list[0]) dispatch(setSession(list[0].id))
@@ -194,7 +220,7 @@ function AppShellInner() {
       .catch((e) => {
         message.error(formatUserFacingError(e instanceof Error ? e.message : t('appShell.loadSessionsFailed')))
       })
-    void window.api.configGet().then((c) => {
+    void measureStartupRequest('renderer.config-get', () => window.api.configGet()).then((c) => {
       dispatch(setConfig(c))
       syncLocaleFromConfig(c.locale)
     })

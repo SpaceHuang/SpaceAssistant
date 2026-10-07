@@ -307,6 +307,33 @@ export async function createMainWindow(): Promise<void> {
 
   setupWindowCloseHandler(win, getIsQuitting, isTrayEnabled)
 
+  if (!initialRendererLoadReported) {
+    win.webContents.on('console-message', (details) => {
+      if (details.message.startsWith('[startup]')) console.info(details.message)
+    })
+    win.once('ready-to-show', () => {
+      console.info('[startup]', JSON.stringify({
+        phase: 'app.start-to-window-ready-to-show',
+        durationMs: Math.max(0, Math.round(performance.now() - processStartupStartedAt)),
+        outcome: rendererLoadOutcome
+      }))
+    })
+    win.webContents.once('did-finish-load', () => {
+      console.info('[startup]', JSON.stringify({
+        phase: 'app.start-to-renderer-did-finish-load',
+        durationMs: Math.max(0, Math.round(performance.now() - processStartupStartedAt)),
+        outcome: rendererLoadOutcome
+      }))
+    })
+    win.webContents.once('dom-ready', () => {
+      console.info('[startup]', JSON.stringify({
+        phase: 'app.start-to-renderer-dom-ready',
+        durationMs: Math.max(0, Math.round(performance.now() - processStartupStartedAt)),
+        outcome: rendererLoadOutcome
+      }))
+    })
+  }
+
   if (app.isPackaged) {
     await win.loadFile(getRendererIndexPath())
   } else {
@@ -362,7 +389,7 @@ app.whenReady().then(async () => {
     void showMainWindow()
   })
 
-  await cleanupMcpArtifactsOnStartup(app.getPath('userData')).catch((error) => {
+  await measureStartupPhase('mcp-artifact-cleanup', () => cleanupMcpArtifactsOnStartup(app.getPath('userData'))).catch((error) => {
     console.warn('[mcp] startup artifact cleanup failed:', error instanceof Error ? error.message : String(error))
   })
 
@@ -532,6 +559,13 @@ app.whenReady().then(async () => {
     console.warn('[agentHistory] startup recovery degraded:', error instanceof Error ? error.message : String(error))
   }
   }
+  console.info('[startup]', JSON.stringify({
+    phase: 'canonical-history.total',
+    durationMs: Math.max(0, Math.round(performance.now() - sessionHistoryRecoveryStartedAt)),
+    outcome: sessionHistoryRepairFailureCount === 0 ? 'ok' : 'failed',
+    recoveredInvocationCount,
+    repairFailureCount: sessionHistoryRepairFailureCount
+  }))
   if (!safeDbMaintenanceRequested) {
     logAgentEvent(sessionHistoryRecoverySucceeded ? 'info' : 'warn', 'session.history.recovery', {
       outcome: sessionHistoryRecoverySucceeded ? 'completed' : 'degraded',
@@ -542,14 +576,14 @@ app.whenReady().then(async () => {
   }
   // 进程重启 cleanup 必须先于 Runtime recovery：仅对带 owner token 的本机 run_shell 执行校验，
   // 无身份或不属于本应用的 PID 交给后续 turn recovery 收敛，绝不裸杀。
-  await cleanupPersistedOrphansOnStartup({
+  await measureStartupPhase('persisted-orphan-process-cleanup', () => cleanupPersistedOrphansOnStartup({
     listTurns: () => listPersistedTurns(db),
     // This recovery consumer reads only shell process identity from the authoritative message skeleton;
     // the assistant body may still be streaming and is deliberately not resolved from canonical History.
     getMessageSkeleton: (id) => getMessageSkeleton(db, id),
     cleanup: cleanupOrphanProcess,
     audit: ({ turnId, toolUseId, result }) => logAgentEvent('info', 'shell.orphan_cleanup', { turnId, toolUseId, result })
-  })
+  }))
   try {
     cleanupLegacyWorkspaceLayoutOnStartup(db)
   } catch (err) {
@@ -751,13 +785,15 @@ app.whenReady().then(async () => {
     }
     // S3(偏差 24):保留上限适用于全部 profile roots；仍有 canonical 或台账 compaction 重放依赖的会话先保留。
     const shouldRetainCompactionLedger = createSessionLedgerCompactionDependencyGuard(db)
-    const { policy: retentionPolicy, summary: retention } = await runSessionEventRetentionMaintenance(db, recoveryWorkDirs, {
+    const { policy: retentionPolicy, summary: retention } = await measureStartupPhase('session-event-retention', () => runSessionEventRetentionMaintenance(db, recoveryWorkDirs, {
       prepareProjectionForRetention: createCanonicalSessionProjectionRetentionPreparer(db),
       shouldRetainSessionDir: shouldRetainCompactionLedger
-    })
+    }))
     const spillRoot = path.join(app.getPath('userData'), 'spill')
-    await runSpillRetentionMaintenance(db, spillRoot)
-    await runSourceTruthSpillGcMaintenance(db, spillRoot)
+    await measureStartupPhase('spill-retention', () => runSpillRetentionMaintenance(db, spillRoot, Date.now(), {
+      onReferenceScan: (stats) => console.info('[startup]', JSON.stringify({ phase: 'spill-reference-scan', ...stats }))
+    }))
+    await measureStartupPhase('spill-source-truth-gc', () => runSourceTruthSpillGcMaintenance(db, spillRoot))
     for (const failure of retention.failures) {
       console.warn('[sessionEvents] retention cleanup failed:', {
         sessionName: failure.sessionName,
@@ -768,10 +804,10 @@ app.whenReady().then(async () => {
       console.info('[sessionEvents] retention kept a ledger with compaction recovery dependencies:', retained)
     }
     // S3(偏差 14):Agent 日志超保留期清理挂同一保留策略(启动维护触发)
-    await pruneAgentLogs({
+    await measureStartupPhase('agent-log-retention', () => pruneAgentLogs({
       logDir: getAgentLogDir() ?? '',
       retentionDays: retentionPolicy.agentLogRetentionDays
-    })
+    }))
   } catch (error) {
     // 目录级扫描失败也不能阻断 IPC 注册和窗口创建；下一次启动继续重试。
     console.warn('[sessionEvents] startup maintenance failed:', error instanceof Error ? error.message : String(error))
@@ -1125,7 +1161,7 @@ app.whenReady().then(async () => {
     },
     appVersion: getTelemetryAppVersion()
   })
-  void autoStartFeishuEventIfNeeded(db)
+  void measureStartupPhase('feishu-auto-start', () => autoStartFeishuEventIfNeeded(db))
 
   initTray({
     createMainWindow,
@@ -1136,7 +1172,7 @@ app.whenReady().then(async () => {
   // 早于 initTray 会在托盘实际启用的情况下被误判为未启用（disabled-no-tray）而永不启动。
   butlerScheduler?.start()
 
-  void autoStartWeChatPollIfNeeded(db)
+  void measureStartupPhase('wechat-auto-start', () => autoStartWeChatPollIfNeeded(db))
 
   setupWindowIconThemeListener(__dirname)
   mainIpcReady = true
@@ -1163,7 +1199,7 @@ app.whenReady().then(async () => {
       }
       if (safeDbMaintenanceRequested) {
         const spillRoot = path.join(userDataDir, 'spill')
-        void createSpillStore(spillRoot).withSpillRootFence(() => runSafeDbMaintenance(db, userDataDir)).then(() => {
+        void measureStartupPhase('safe-db-maintenance', () => createSpillStore(spillRoot).withSpillRootFence(() => runSafeDbMaintenance(db, userDataDir))).then(() => {
           console.info('[storage] safe database maintenance completed')
         }).catch((error) => {
           console.error('[storage] safe database maintenance failed; app remains available:', error instanceof Error ? error.message : String(error))
@@ -1215,13 +1251,13 @@ app.whenReady().then(async () => {
           console.warn('[storage] session content cleanup remains disabled:', cleanupGate.reason)
         }
       }
-      usageStatsStartupMaintenance?.()
+      void measureStartupPhase('usage-stats-startup-maintenance', () => usageStatsStartupMaintenance?.())
       usageStatsStartupMaintenance = null
     })
     .catch((error) => {
       // 窗口创建失败也要跑维护：统计链路不依赖窗口；失败仅记日志，下次启动重试。
       console.warn('[usageStats] main window creation failed, running maintenance anyway:', error instanceof Error ? error.message : String(error))
-      usageStatsStartupMaintenance?.()
+      void measureStartupPhase('usage-stats-startup-maintenance', () => usageStatsStartupMaintenance?.())
       usageStatsStartupMaintenance = null
     })
   setupAppMenu(createHostTranslator({ locale: readAppLocale(db) }))

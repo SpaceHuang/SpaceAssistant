@@ -4,7 +4,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import * as agentLoggerModule from '../agentLogger/agentLogger'
-import { SpillContentUnavailableError, SpillRootFenceBusyError, createSpillStore, createSpillStoreForDatabase, reconcileSpillOrphansAgainstCanonicalHistory, runSourceTruthSpillGcMaintenance, runSpillRetentionMaintenance } from './spillStore'
+import { SpillContentUnavailableError, SpillRootFenceBusyError, createSpillStore, createSpillStoreForDatabase, readCanonicalSpillReferences, reconcileSpillOrphansAgainstCanonicalHistory, runSourceTruthSpillGcMaintenance, runSpillRetentionMaintenance } from './spillStore'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { openDatabase } from '../database'
 import { createSession, deleteSession, setConfigValue } from '../database/operations'
@@ -26,6 +26,44 @@ async function createStore() {
 }
 
 describe('spillStore P-5 protocol', () => {
+  it('streams canonical spill references and reports scan counts, bytes, and timings', async () => {
+    const { store } = await createStore()
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'spill-reference-scan-stats'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'spill-generation')`).run(sessionId)
+    const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId, store)
+    const descriptor = await store.commitSourceTruth('payload represented by locator', async (spill) => {
+      await history.appendBatch([{
+        invocationId: 'spill-reference-scan', turnId: 'spill-reference-scan', sequence: 1, schemaVersion: 1,
+        eventId: 'spill-reference-scan-event', idempotencyKey: 'spill-reference-scan-event', kind: 'invocation-context-committed',
+        payload: { messages: [], spill }
+      }], 0)
+    })
+    conn.prepare(`INSERT INTO session_transcript_entries(session_id,turn_id,base_version,version,outcome,messages_json,created_at)
+      VALUES(?, 'scan-turn',0,1,'completed',?,1)`)
+      .run(sessionId, JSON.stringify({ sharedSpill: descriptor }))
+
+    const result = readCanonicalSpillReferences(conn)
+
+    expect(result.descriptors).toHaveLength(2)
+    expect(result.referencedLocators).toEqual(new Set([descriptor.locator]))
+    expect(result.stats).toMatchObject({
+      eventHistoryRows: 1,
+      transcriptRows: 1,
+      descriptorCount: 2,
+      uniqueLocatorCount: 1,
+      payloadBytes: expect.any(Number),
+      eventHistoryDurationMs: expect.any(Number),
+      transcriptDurationMs: expect.any(Number),
+      durationMs: expect.any(Number)
+    })
+    expect(result.stats.payloadBytes).toBeGreaterThan(0)
+    expect(result.stats.durationMs).toBeGreaterThanOrEqual(0)
+    db.close()
+  })
+
   it('serializes independent spill-store instances through the shared file fence', async () => {
     const { root } = await createStore()
     const writer = createSpillStore(root)
@@ -862,9 +900,13 @@ describe('spillStore P-5 protocol', () => {
     }], 0)
     setConfigValue(db, 'retention.spill.degradableDays', '1')
 
-    const removed = await runSpillRetentionMaintenance(db, root, Math.max(source.createdAt, degradable.createdAt) + 2 * 24 * 60 * 60 * 1000)
+    let scanStats: { descriptorCount: number; uniqueLocatorCount: number } | undefined
+    const removed = await runSpillRetentionMaintenance(db, root, Math.max(source.createdAt, degradable.createdAt) + 2 * 24 * 60 * 60 * 1000, {
+      onReferenceScan: (stats) => { scanStats = stats }
+    })
 
     expect(removed).toEqual([degradable.locator])
+    expect(scanStats).toMatchObject({ descriptorCount: 2, uniqueLocatorCount: 2 })
     await expect(fs.readFile(path.join(root, source.locator), 'utf8')).resolves.toBe('must survive retention')
     await expect(fs.stat(path.join(root, degradable.locator))).rejects.toThrow()
     db.close()
