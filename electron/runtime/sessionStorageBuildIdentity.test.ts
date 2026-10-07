@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const { writeSessionStorageBuildIdentity } = require('../../scripts/after-pack.cjs') as {
   writeSessionStorageBuildIdentity: (context: unknown, runGit?: (...args: unknown[]) => string) => void
 }
+const packageVersion = (require('../../package.json') as { version: string }).version
 
 const tempDirectories: string[] = []
 
@@ -33,7 +34,7 @@ describe('packaged session storage build identity', () => {
     const identityPath = path.join(appOutDir, 'SpaceAssistant.app', 'Contents', 'Resources', 'session-storage-build-identity.json')
     expect(JSON.parse(fs.readFileSync(identityPath, 'utf8'))).toMatchObject({
       formatVersion: 2,
-      version: '0.2.4',
+      version: packageVersion,
       commitSha: 'c'.repeat(40),
       sourceTreeClean: true,
       buildId: expect.stringMatching(/^[0-9a-f-]{36}$/),
