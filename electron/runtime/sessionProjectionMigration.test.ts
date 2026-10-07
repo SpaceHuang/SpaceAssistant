@@ -8,6 +8,7 @@ import { auditSessionProjectionMigration } from './sessionProjectionConsistencyA
 import * as projectionModule from './sessionTranscriptProjection'
 import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
 import { resolveImSession } from '../remote/imSessionResolver'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import {
   getSessionProjectionMigrationRun,
   listLegacyRequiredSessionProjections,
@@ -244,7 +245,7 @@ describe('session projection migration worker', () => {
         .get(session.id)).toMatchObject({ session_generation: session.generation })
     }
     const resolver = await resolveImSession({
-      db, config: { remoteSessionIdleMinutes: 10 }, defaultModel: 'test', channel: 'feishu', identityKey: 'chat-worker',
+      sessionQueries: createSqliteSessionStorage(db).queries, config: { remoteSessionIdleMinutes: 10 }, defaultModel: 'test', channel: 'feishu', identityKey: 'chat-worker',
       getIdentityFromSession: (session) => (session.metadata as { feishuChatId?: string }).feishuChatId,
       createNew: async () => { throw new Error('expected the existing IM session to be reused') },
       onReuse: () => undefined

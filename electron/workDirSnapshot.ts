@@ -3,7 +3,7 @@ import fs from 'fs'
 import type { WorkspaceSnapshot } from '../src/shared/agent/workspace'
 import { normalizeWorkspaceRoot, workspacePathKey } from '../src/shared/agent/workspace'
 import type { AppDatabase } from './database'
-import { getSession } from './database'
+import type { SessionQueries } from './sessionStorage/contracts'
 import type { WorkDirManager } from './workDirManager'
 import { resolveWorkDirForSession } from './workDirManager'
 
@@ -38,15 +38,15 @@ function buildSnapshot(input: {
  * 包装既有 resolveWorkDirForSession：不新增读库路径之外的事实来源。
  */
 export function resolveWorkspaceSnapshot(
-  db: AppDatabase | undefined,
+  sessionQueries: SessionQueries | undefined,
   sessionId: string,
   workDirManager: WorkDirManager | undefined,
   fallbackWorkDir: string
 ): WorkspaceSnapshot | null {
-  if (!workDirManager || !db) return null
-  const session = getSession(db, sessionId)
+  if (!workDirManager || !sessionQueries) return null
+  const session = sessionQueries.readSession(sessionId)
   const resolved = resolveWorkDirForSession(
-    db,
+    sessionQueries,
     sessionId,
     () => workDirManager.listProfiles(),
     () => workDirManager.getActiveProfileId(),
@@ -82,14 +82,14 @@ export interface WorkspaceSnapshotTracker {
  * 未变（workspacePathKey 相同）→ 返回原快照对象，不递增 revision、不落审计。
  */
 export function createWorkspaceSnapshotTracker(opts: {
-  db: AppDatabase | undefined
+  sessionQueries: SessionQueries | undefined
   sessionId: string
   workDirManager: WorkDirManager | undefined
   fallbackWorkDir: string
   onRebound?: (e: WorkspaceReboundEvent) => void
 }): WorkspaceSnapshotTracker {
   let current: WorkspaceSnapshot = fallbackSnapshot(opts.fallbackWorkDir)
-  const resolved = resolveWorkspaceSnapshot(opts.db, opts.sessionId, opts.workDirManager, opts.fallbackWorkDir)
+  const resolved = resolveWorkspaceSnapshot(opts.sessionQueries, opts.sessionId, opts.workDirManager, opts.fallbackWorkDir)
   if (resolved) current = resolved
 
   function fallbackSnapshot(workDir: string): WorkspaceSnapshot {
@@ -106,7 +106,7 @@ export function createWorkspaceSnapshotTracker(opts: {
     snapshot: () => current,
     refresh: () => {
       const next =
-        resolveWorkspaceSnapshot(opts.db, opts.sessionId, opts.workDirManager, opts.fallbackWorkDir) ??
+        resolveWorkspaceSnapshot(opts.sessionQueries, opts.sessionId, opts.workDirManager, opts.fallbackWorkDir) ??
         fallbackSnapshot(opts.fallbackWorkDir)
       if (next.key === current.key) {
         return current

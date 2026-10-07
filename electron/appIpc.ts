@@ -16,12 +16,16 @@ import { registerSearchIpc } from './ipc/searchIpc'
 import { registerSecurityIpc } from './ipc/securityIpc'
 import { registerSessionIpc } from './ipc/sessionIpc'
 import { registerStorageMaintenanceIpc } from './ipc/storageMaintenanceIpc'
+import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
+import type { SessionStorage } from './sessionStorage/contracts'
 
 // 兼容 re-export:既有外部消费方(butler/main/llmSystemPrompt)从本文件导入
 export { readAppLocale } from './ipc/ipcShared'
 
 export type AppIpcContext = {
   db: AppDatabase
+  /** Bound session capabilities created once at this composition root. */
+  sessionStorage?: SessionStorage
   backup: DebouncedSessionBackupManager
   workDirManager: WorkDirManager
   getWorkDir: () => string
@@ -32,8 +36,6 @@ export type AppIpcContext = {
   getBrowserDetectContext: () => BrowserDetectContext
   floatingNotificationManager?: import('./floatingNotificationManager').FloatingNotificationManager
   turnRuntime?: TurnRuntime
-  /** Whether canonical History and its session sidecar startup repair completed without errors. */
-  sessionHistoryRecoverySucceeded?: boolean
   /** Wake the durable source-truth spill collection queue after its owning session is deleted. */
   wakeSourceTruthSpillGc?: () => void
   executeTurn?: ClaudeTurnExecution
@@ -45,13 +47,14 @@ export type AppIpcContext = {
  * 组合器:按域注册全部 IPC handler。保留既有导出名以兼容装配方与测试。
  */
 export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): void {
-  registerDesktopIpc(ipcMain, ctx)
-  registerAgentIpc(ipcMain, ctx)
-  registerSessionIpc(ipcMain, ctx)
-  registerStorageMaintenanceIpc(ipcMain, ctx)
-  registerFileIpc(ipcMain, ctx)
-  registerSearchIpc(ipcMain, ctx)
-  registerConfigIpc(ipcMain, ctx)
-  registerSecurityIpc(ipcMain, ctx)
-  registerMcpIpcHandlers(ipcMain, ctx)
+  const context = { ...ctx, sessionStorage: ctx.sessionStorage ?? createSqliteSessionStorage(ctx.db) }
+  registerDesktopIpc(ipcMain, context)
+  registerAgentIpc(ipcMain, context)
+  registerSessionIpc(ipcMain, context)
+  registerStorageMaintenanceIpc(ipcMain, context)
+  registerFileIpc(ipcMain, context)
+  registerSearchIpc(ipcMain, context)
+  registerConfigIpc(ipcMain, context)
+  registerSecurityIpc(ipcMain, context)
+  registerMcpIpcHandlers(ipcMain, context)
 }

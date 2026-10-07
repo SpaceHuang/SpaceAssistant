@@ -1,5 +1,5 @@
 import type { AppDatabase } from '../database'
-import { getMessages, getConfigValue, getSession, getPersistedTurn } from '../database'
+import { getConfigValue } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
 import { assembleInvocation, type AgentInvocationMaterials } from '../runtime/invocationAssembler'
 import { buildResolveWorkDirCallback, resolveWorkDirForSession, type WorkDirManager } from '../workDirManager'
@@ -33,11 +33,10 @@ import { createHostedTurnHandoff } from '../runtime/hostedTurnHandoff'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { getSessionEventSink } from '../sessionEvents'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from '../runtime/hostedTurnFinalization'
-import { loadAcceptedTurnMessages } from '../runtime/acceptedTurnContext'
-import { getProjectedMessages } from '../runtime/sessionTranscriptProjection'
 import { buildRemoteProgressHookContext } from './buildRemoteProgressContext'
 import { onRemoteTextSegmentClosed } from './remoteProgressHooks'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
+import type { SessionStorage } from '../sessionStorage/contracts'
 
 export function extractTextFromContent(content: unknown[]): string {
   let s = ''
@@ -56,6 +55,7 @@ export async function runImRemoteAgent(args: {
   /** B1(偏差 23):准入门注入(测试);缺省全局默认门。 */
   admissionGate?: import('../runtime/callAdmissionGate').CallAdmissionGate
   db: AppDatabase
+  sessionStorage?: SessionStorage
   sessionId: string
   requestId: string
   /** 本回合真实 Turn ID（C17）：由 router 的 prepared.turnId 下传，供用量统计落库。 */
@@ -88,6 +88,9 @@ export async function runImRemoteAgent(args: {
   emitFactEvent?: (event: AssistantFactEvent) => void
 }): Promise<ImRemoteAgentResult> {
   const requestId = args.requestId
+  const injectedStorage = args.sessionStorage
+  if (!injectedStorage) return { summary: '会话存储不可用。', pendingConfirm: false, ok: false }
+  const storage: SessionStorage = injectedStorage
 
   // B1(偏差 23):调用级准入——远端发起入口(四处之一)。票据覆盖整回合,拒绝即答复「资源忙」。
   const admissionGate = args.admissionGate ?? getCallAdmissionGate()
@@ -127,7 +130,7 @@ export async function runImRemoteAgent(args: {
   let sessionEventSink: ReturnType<typeof getSessionEventSink> | undefined
   try {
     const resolved = resolveWorkDirForSession(
-      args.db,
+      storage.queries,
       args.sessionId,
       () => args.workDirManager.listProfiles(),
       () => args.workDirManager.getActiveProfileId(),
@@ -138,7 +141,7 @@ export async function runImRemoteAgent(args: {
       return { summary: SENSITIVE_WORKDIR_ERROR, pendingConfirm: false, ok: false }
     }
 
-    const persistedSession = getSession(args.db, args.sessionId)
+    const persistedSession = storage.queries.readSession(args.sessionId)
     sessionEventLocation = persistedSession && resolved?.workDir
       ? { workDir: resolved.workDir, sessionId: args.sessionId, createdAt: persistedSession.createdAt }
       : undefined
@@ -152,18 +155,18 @@ export async function runImRemoteAgent(args: {
     }
 
     const toolsConfig = args.getToolsConfig()
-    let rawMessages: ReturnType<typeof getMessages>
+    let rawMessages: import('../../src/shared/domainTypes').Message[]
     let acceptedUserMessageId: string | undefined
     if (args.turnId) {
-      const persisted = getPersistedTurn(args.db, args.turnId)
+      const persisted = storage.execution.readTurn({ sessionId: args.sessionId, turnId: args.turnId })
       if (!persisted || persisted.sessionId !== args.sessionId || persisted.requestId !== requestId) {
         throw new Error('TURN_EXECUTION_CREDENTIALS_INVALID')
       }
       if (persisted.state === 'configuring') throw new Error('TURN_EXECUTION_CONFIGURING')
-      rawMessages = loadAcceptedTurnMessages(args.db, persisted)
+      rawMessages = storage.execution.loadAcceptedMessages({ sessionId: args.sessionId, turnId: args.turnId })
       acceptedUserMessageId = persisted.userMessageId
     } else {
-      rawMessages = getProjectedMessages(args.db, args.sessionId)
+      rawMessages = storage.queries.readMessages({ sessionId: args.sessionId })
     }
     const built = buildClaudeToolChatMessages(rawMessages, {
       workspaceRoot: resolved?.workDir,
@@ -241,7 +244,7 @@ export async function runImRemoteAgent(args: {
       workDir: args.workDir,
       workDirManager: args.workDirManager,
       resolveWorkDir: buildResolveWorkDirCallback(
-        args.db,
+        storage.queries,
         args.sessionId,
         args.workDirManager,
         args.workDir
@@ -249,6 +252,8 @@ export async function runImRemoteAgent(args: {
       userDataDir: args.userDataDir,
       getApiKey,
       appDb: args.db,
+      sessionStorage: storage,
+      historyForSession: (sessionId: string) => storage.execution.historyFor({ sessionId }),
       ...(sessionEventLocation ? { sessionEventLocation } : {}),
       remoteContext: args.remoteContext,
       onRemoteTextActivity: (text) => onRemoteTextSegmentClosed(remoteProgressContext, text),
@@ -260,7 +265,7 @@ export async function runImRemoteAgent(args: {
     const res = await runToolChatSession(invocation, ports, {
       onHostedTurnHandoff: createHostedTurnHandoff({
         agentSdk, history: ports.history!, invocationId: args.acceptedTurn?.turnId ?? args.turnId ?? requestId, turnId: args.acceptedTurn?.turnId ?? args.turnId ?? requestId, acceptedTurn: args.acceptedTurn,
-        sessionDb: args.db, routeId: providerRouteId, sessionId: args.sessionId, maxToolRounds: invocation.limits.maxToolRounds,
+        sessionQueries: storage.queries, sessionExecution: storage.execution, routeId: providerRouteId, sessionId: args.sessionId, maxToolRounds: invocation.limits.maxToolRounds,
       })
     })
 

@@ -24,7 +24,7 @@ describe('sendWeChatRemoteOutbound', () => {
       inbound,
       body: '任务完成',
       sessionId: SESSION_ID,
-      touch: { db: {} as never, sessionId: SESSION_ID }
+      touch: { sessionCommands: {} as never, sessionId: SESSION_ID }
     })
     const sent = reply.mock.calls[0]![1] as string
     expect(sent).toContain('完整过程请查看 SpaceAssistant 桌面会话')
@@ -39,7 +39,7 @@ describe('sendWeChatRemoteOutbound', () => {
       inbound,
       body: longBody,
       sessionId: SESSION_ID,
-      touch: { db: {} as never, sessionId: SESSION_ID }
+      touch: { sessionCommands: {} as never, sessionId: SESSION_ID }
     })
     const sent = reply.mock.calls[0]![1] as string
     expect(sent.length).toBeLessThanOrEqual(2000)

@@ -13,7 +13,7 @@ import { createBuiltinToolRegistry, writeFileExecutor } from './tools/builtinExe
 import { createDesktopAnthropicRouteProfile } from './piAiAnthropicBridge'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { getDbConnection } from './database'
-import { registerClaudeStreamHandlers } from './claudeStreamHandlers'
+import { registerClaudeStreamHandlers } from './testSupport/claudeStreamHandlers'
 import { ipcMain } from 'electron'
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>()

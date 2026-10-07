@@ -21,7 +21,8 @@ export type {
   PersistedTurn,
   SessionMessageRevisionSnapshot,
   ContextHistoryDbBaseline,
-  SearchCorpusPage
+  SearchCorpusPage,
+  StoredMessageSkeleton
 } from './operations'
 export {
   appendMessage,

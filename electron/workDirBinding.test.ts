@@ -18,6 +18,7 @@ import {
   releaseRemoteSession
 } from './remote/remoteAgentRegistry'
 import { REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE } from './remote/remoteSessionGuardMessages'
+import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sa-wdb-'))
@@ -51,7 +52,8 @@ describe('workDirBinding', () => {
         workDir = d
       }
     })
-    return { db, manager }
+    const sessionStorage = createSqliteSessionStorage(db)
+    return { db, manager, queries: sessionStorage.queries, commands: sessionStorage.commands }
   }
 
   describe('normalizeWorkDirHint', () => {
@@ -123,16 +125,37 @@ describe('workDirBinding', () => {
       confirmPolicy: 'always'
     }
 
+    it('从注入的 SessionQueries 读取绑定目标会话', async () => {
+      const dirA = tempDir()
+      dirs.push(dirA)
+      const { db, manager, queries, commands } = setup()
+      const added = manager.addProfile({ name: 'A', path: dirA })
+      const session = createSession(db, { name: 'S1' })
+      const readSession = vi.fn(queries.readSession)
+      const injectedQueries = { ...queries, readSession }
+
+      const updateSettings = vi.fn(commands.updateSettings)
+      await bindSessionWorkDir(injectedQueries, { ...commands, updateSettings }, manager, {
+        sessionId: session.id,
+        profileId: added.profile!.id,
+        remoteContext: feishuRemoteContext,
+        source: 'inbound'
+      })
+
+      expect(readSession).toHaveBeenCalledWith(session.id)
+      expect(updateSettings).toHaveBeenCalledWith({ sessionId: session.id, workDirProfileId: added.profile!.id })
+    })
+
     it('binds profile and writes audit when changed', async () => {
       const dirA = tempDir()
       dirs.push(dirA)
-      const { db, manager } = setup()
+      const { db, manager, queries, commands } = setup()
       const added = manager.addProfile({ name: 'A', path: dirA })
       const session = createSession(db, { name: 'S1' })
       const appendAudit = vi.fn()
 
       tryClaimRemoteSession(session.id, 'req-owner', 3)
-      const result = await bindSessionWorkDir(db, manager, {
+      const result = await bindSessionWorkDir(queries, commands, manager, {
         sessionId: session.id,
         profileId: added.profile!.id,
         remoteContext: feishuRemoteContext,
@@ -150,12 +173,12 @@ describe('workDirBinding', () => {
     it('skips audit when binding unchanged', async () => {
       const dirA = tempDir()
       dirs.push(dirA)
-      const { db, manager } = setup()
+      const { db, manager, queries, commands } = setup()
       const added = manager.addProfile({ name: 'A', path: dirA })
       const session = createSession(db, { name: 'S1', workDirProfileId: added.profile!.id })
       const appendAudit = vi.fn()
 
-      const result = await bindSessionWorkDir(db, manager, {
+      const result = await bindSessionWorkDir(queries, commands, manager, {
         sessionId: session.id,
         profileId: added.profile!.id,
         remoteContext: feishuRemoteContext,
@@ -171,12 +194,12 @@ describe('workDirBinding', () => {
     it('rejects sensitive profile', async () => {
       const dirA = tempDir()
       dirs.push(dirA)
-      const { db, manager } = setup()
+      const { db, manager, queries, commands } = setup()
       const added = manager.addProfile({ name: 'Secret', path: dirA, sensitive: true })
       const session = createSession(db, { name: 'S1' })
 
       tryClaimRemoteSession(session.id, 'req-owner', 3)
-      const result = await bindSessionWorkDir(db, manager, {
+      const result = await bindSessionWorkDir(queries, commands, manager, {
         sessionId: session.id,
         profileId: added.profile!.id,
         remoteContext: feishuRemoteContext,
@@ -193,7 +216,7 @@ describe('workDirBinding', () => {
       if (process.platform === 'win32') {
         ctx.skip()
       }
-      const { db, manager } = setup()
+      const { db, manager, queries, commands } = setup()
       const added = manager.addProfile({ name: 'Bad', path: path.join(tempDir(), 'missing-nested', 'deep') })
       dirs.push(path.dirname(added.profile!.path))
       const session = createSession(db, { name: 'S1' })
@@ -206,7 +229,7 @@ describe('workDirBinding', () => {
       fs.chmodSync(readOnlyDir, 0o444)
 
       tryClaimRemoteSession(session.id, 'req-owner', 3)
-      const result = await bindSessionWorkDir(db, manager, {
+      const result = await bindSessionWorkDir(queries, commands, manager, {
         sessionId: session.id,
         profileId: added.profile!.id,
         remoteContext: feishuRemoteContext,
@@ -224,12 +247,12 @@ describe('workDirBinding', () => {
       const dirA = tempDir()
       const dirB = tempDir()
       dirs.push(dirA, dirB)
-      const { db, manager } = setup()
+      const { db, manager, queries, commands } = setup()
       const a = manager.addProfile({ name: 'A', path: dirA })
       const b = manager.addProfile({ name: 'B', path: dirB })
       const session = createSession(db, { name: 'S1', workDirProfileId: a.profile!.id })
 
-      const result = await bindSessionWorkDir(db, manager, {
+      const result = await bindSessionWorkDir(queries, commands, manager, {
         sessionId: session.id,
         profileId: b.profile!.id,
         remoteContext: feishuRemoteContext,
@@ -245,13 +268,13 @@ describe('workDirBinding', () => {
       const dirA = tempDir()
       const dirB = tempDir()
       dirs.push(dirA, dirB)
-      const { db, manager } = setup()
+      const { db, manager, queries, commands } = setup()
       const a = manager.addProfile({ name: 'A', path: dirA })
       const b = manager.addProfile({ name: 'B', path: dirB })
       const session = createSession(db, { name: 'S1', workDirProfileId: a.profile!.id })
 
       tryClaimRemoteSession(session.id, 'req-owner', 3)
-      const result = await bindSessionWorkDir(db, manager, {
+      const result = await bindSessionWorkDir(queries, commands, manager, {
         sessionId: session.id,
         profileId: b.profile!.id,
         remoteContext: feishuRemoteContext,
@@ -268,13 +291,13 @@ describe('workDirBinding', () => {
       const dirA = tempDir()
       const dirB = tempDir()
       dirs.push(dirA, dirB)
-      const { db, manager } = setup()
+      const { db, manager, queries, commands } = setup()
       const a = manager.addProfile({ name: 'A', path: dirA })
       const b = manager.addProfile({ name: 'B', path: dirB })
       const session = createSession(db, { name: 'S1', workDirProfileId: a.profile!.id })
 
       tryClaimRemoteSession(session.id, 'req-owner', 3)
-      const result = await bindSessionWorkDir(db, manager, {
+      const result = await bindSessionWorkDir(queries, commands, manager, {
         sessionId: session.id,
         profileId: b.profile!.id,
         remoteContext: feishuRemoteContext,
@@ -291,13 +314,13 @@ describe('workDirBinding', () => {
       const dirA = tempDir()
       const dirB = tempDir()
       dirs.push(dirA, dirB)
-      const { db, manager } = setup()
+      const { db, manager, queries, commands } = setup()
       const a = manager.addProfile({ name: 'A', path: dirA })
       const b = manager.addProfile({ name: 'B', path: dirB })
       const session = createSession(db, { name: 'S1', workDirProfileId: a.profile!.id })
 
       tryClaimRemoteSession(session.id, 'req-owner', 3)
-      const result = await bindSessionWorkDir(db, manager, {
+      const result = await bindSessionWorkDir(queries, commands, manager, {
         sessionId: session.id,
         profileId: b.profile!.id,
         remoteContext: feishuRemoteContext,
@@ -313,13 +336,13 @@ describe('workDirBinding', () => {
       const dirA = tempDir()
       const dirB = tempDir()
       dirs.push(dirA, dirB)
-      const { db, manager } = setup()
+      const { db, manager, queries, commands } = setup()
       const a = manager.addProfile({ name: 'A', path: dirA })
       const b = manager.addProfile({ name: 'B', path: dirB })
       const session = createSession(db, { name: 'S1', workDirProfileId: a.profile!.id })
 
       tryClaimRemoteSession(session.id, 'req-owner', 3)
-      const result = await bindSessionWorkDir(db, manager, {
+      const result = await bindSessionWorkDir(queries, commands, manager, {
         sessionId: session.id,
         profileId: b.profile!.id,
         remoteContext: feishuRemoteContext,

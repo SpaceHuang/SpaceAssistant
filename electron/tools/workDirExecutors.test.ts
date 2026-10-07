@@ -18,6 +18,7 @@ import {
 } from '../remote/remoteAgentRegistry'
 import { REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE } from '../remote/remoteSessionGuardMessages'
 import { remoteWriteGrantRegistry } from '../remote/remoteWriteGrantRegistry'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sa-wde-'))
@@ -146,6 +147,8 @@ describe('workDirExecutors', () => {
       fileStateCache: {} as ToolExecutionContext['fileStateCache'],
       toolsConfig: { enabled: true, allowedTools: [], deniedTools: [] },
       appDatabase: db,
+      sessionQueries: createSqliteSessionStorage(db).queries,
+      sessionCommands: createSqliteSessionStorage(db).commands,
       workDirManager: manager,
       remoteContext: {
         source: 'feishu' as const,

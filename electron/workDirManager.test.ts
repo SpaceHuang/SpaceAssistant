@@ -1,10 +1,11 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { openDatabase, setConfigValue } from './database'
 import { createSession } from './database'
-import { createWorkDirManager, resolveWorkDirForSession } from './workDirManager'
+import { createWorkDirManager, listSessionsForProfile, resolveWorkDirForSession } from './workDirManager'
+import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sa-workdir-'))
@@ -30,17 +31,31 @@ describe('WorkDirManager', () => {
     const db = openDatabase(dbPath)
     openDbs.push(db)
     let workDir = '/default'
+    const queries = createSqliteSessionStorage(db).queries
     const manager = createWorkDirManager({
       db,
+      sessionQueries: queries,
       getWorkDir: () => workDir,
       setWorkDir: (d) => {
         workDir = d
       }
     })
-    return { db, manager, getWorkDir: () => workDir, close: () => db.close() }
+    return { db, manager, queries, getWorkDir: () => workDir, close: () => db.close() }
   }
 
   describe('addProfile', () => {
+    it('按 profile 读取关联会话时调用注入的 SessionQueries', () => {
+      const { db, queries } = setupManager()
+      const session = createSession(db, { name: 'S1', workDirProfileId: 'profile-a' })
+      const listSessions = vi.fn(queries.listSessions)
+      const injectedQueries = { ...queries, listSessions }
+
+      const sessions = listSessionsForProfile(injectedQueries as never, 'profile-a')
+
+      expect(sessions.map((item) => item.id)).toEqual([session.id])
+      expect(listSessions).toHaveBeenCalledWith()
+    })
+
     it('第一个添加的目录自动设为默认', () => {
       const dirA = tempDir()
       dirs.push(dirA)
@@ -115,7 +130,7 @@ describe('WorkDirManager', () => {
       const dirA = tempDir()
       const dirB = tempDir()
       dirs.push(dirA, dirB)
-      const { db, manager } = setupManager()
+      const { db, manager, queries } = setupManager()
       manager.addProfile({ name: 'A', path: dirA })
       const b = manager.addProfile({ name: 'B', path: dirB }).profile!
       const aId = manager.getActiveProfileId()
@@ -132,13 +147,13 @@ describe('WorkDirManager', () => {
       const dirA = tempDir()
       const dirB = tempDir()
       dirs.push(dirA, dirB)
-      const { db, manager } = setupManager()
+      const { db, manager, queries } = setupManager()
       manager.addProfile({ name: 'A', path: dirA })
       const b = manager.addProfile({ name: 'B', path: dirB }).profile!
       const session = createSession(db, { name: 'S1', workDirProfileId: b.id })
 
       const resolved = resolveWorkDirForSession(
-        db,
+        queries,
         session.id,
         () => manager.listProfiles(),
         () => manager.getActiveProfileId(),
@@ -151,12 +166,12 @@ describe('WorkDirManager', () => {
     it('falls back to active profile when session has no profile id', () => {
       const dirA = tempDir()
       dirs.push(dirA)
-      const { db, manager, getWorkDir } = setupManager()
+      const { db, manager, queries, getWorkDir } = setupManager()
       manager.addProfile({ name: 'A', path: dirA })
       const session = createSession(db, { name: 'S1' })
 
       const resolved = resolveWorkDirForSession(
-        db,
+        queries,
         session.id,
         () => manager.listProfiles(),
         () => manager.getActiveProfileId(),
@@ -170,12 +185,12 @@ describe('WorkDirManager', () => {
     it('returns isSensitive when bound profile is sensitive', () => {
       const dirA = tempDir()
       dirs.push(dirA)
-      const { db, manager } = setupManager()
+      const { db, manager, queries } = setupManager()
       const a = manager.addProfile({ name: 'Secret', path: dirA, sensitive: true }).profile!
       const session = createSession(db, { name: 'S1', workDirProfileId: a.id })
 
       const resolved = resolveWorkDirForSession(
-        db,
+        queries,
         session.id,
         () => manager.listProfiles(),
         () => manager.getActiveProfileId(),
@@ -245,6 +260,30 @@ describe('WorkDirManager', () => {
   })
 
   describe('migrateFromLegacy', () => {
+    it('通过注入的 SessionCommands 回填缺失的工作目录绑定', () => {
+      const legacyDir = tempDir()
+      dirs.push(legacyDir)
+      const dbPath = path.join(tempDir(), 'db-migrate-command.db')
+      dirs.push(path.dirname(dbPath))
+      const db = openDatabase(dbPath)
+      openDbs.push(db)
+      setConfigValue(db, 'config.workDir', legacyDir)
+      const session = createSession(db, { name: 'Legacy session' })
+      const storage = createSqliteSessionStorage(db)
+      const updateSettings = vi.fn(storage.commands.updateSettings)
+      const manager = createWorkDirManager({
+        db,
+        sessionQueries: storage.queries,
+        sessionCommands: { ...storage.commands, updateSettings },
+        getWorkDir: () => legacyDir,
+        setWorkDir: () => undefined
+      })
+
+      manager.migrateFromLegacy()
+
+      expect(updateSettings).toHaveBeenCalledWith({ sessionId: session.id, workDirProfileId: 'default' })
+    })
+
     it('仅有 workDir 时自动生成默认 profile', () => {
       const legacyDir = tempDir()
       dirs.push(legacyDir)

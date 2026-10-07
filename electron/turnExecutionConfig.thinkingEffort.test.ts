@@ -1,13 +1,23 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from './database/testHelpers'
 import { createSession, setConfigValue, updateSession, type AppDatabase } from './database'
-import { resolvePinnedAutomationTurnExecutionConfig, resolveThinkingEffort, resolveTrustedTurnExecutionConfig } from './turnExecutionConfig'
+import { resolvePinnedAutomationTurnExecutionConfig as resolvePinnedAutomationTurnExecutionConfigWithQueries, resolveThinkingEffort, resolveTrustedTurnExecutionConfig as resolveTrustedTurnExecutionConfigWithQueries } from './turnExecutionConfig'
 import type { ModelEntry } from '../src/shared/domainTypes'
+import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 
 vi.mock('./agentLogger/agentLogger', () => ({ logAgentEvent: vi.fn() }))
 vi.mock('./secureApiKey', () => ({ isSecretStorageAvailable: vi.fn(() => true), decryptSecret: vi.fn((value: string) => value.replace(/^enc:/, '')) }))
 
 const SERVICE_ID = 'svc-deepseek'
+
+function resolveTrustedTurnExecutionConfig(db: AppDatabase, sessionId: string, lane: Parameters<typeof resolveTrustedTurnExecutionConfigWithQueries>[4], derived?: Parameters<typeof resolveTrustedTurnExecutionConfigWithQueries>[5], options?: Parameters<typeof resolveTrustedTurnExecutionConfigWithQueries>[6]) {
+  const storage = createSqliteSessionStorage(db)
+  return resolveTrustedTurnExecutionConfigWithQueries(db, storage.queries, storage.commands, sessionId, lane, derived, options)
+}
+
+function resolvePinnedAutomationTurnExecutionConfig(db: AppDatabase, sessionId: string, snapshot: Parameters<typeof resolvePinnedAutomationTurnExecutionConfigWithQueries>[3]) {
+  return resolvePinnedAutomationTurnExecutionConfigWithQueries(db, createSqliteSessionStorage(db).queries, sessionId, snapshot)
+}
 
 function makeModel(overrides: Partial<ModelEntry> & Pick<ModelEntry, 'id' | 'name'>): ModelEntry {
   return {
@@ -148,6 +158,7 @@ describe('resolveTrustedTurnExecutionConfig 产出档位', () => {
       userDataDir: '/tmp',
       getApiKey: async () => 'k',
       appDb: db,
+      sessionStorage: createSqliteSessionStorage(db),
       emitFactEvent: () => undefined,
       emitSessionEvent: () => undefined
     } as never)

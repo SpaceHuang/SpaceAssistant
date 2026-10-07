@@ -5,6 +5,7 @@ import type { SafetyGate } from '../../packages/agent-sdk/src/safetyGate'
 import type { SafetyPermitStore } from '../../packages/agent-sdk/src/safetyPermit'
 import type { ExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
 import type { HistoryPort } from '../../packages/agent-sdk/src/history'
+import type { ContextProjectionCommitter } from '../../packages/agent-sdk/src/context'
 import type { PermitBoundToolExecutionPort } from '../../packages/agent-sdk/src/toolExecutionPort'
 import type { CanonicalTurnMessage, ToolPreparationStage } from '../../packages/agent-sdk/src/turn'
 import type { PermitBinding } from '../../packages/agent-sdk/src/safetyPermit'
@@ -44,6 +45,7 @@ export type HostedAgentTurnHostDependencies<TCall extends { invocationId: string
   admission: ExecutionAdmissionCoordinator
   safetyGate: SafetyGate
   history: HistoryPort
+  contextProjectionCommitter?: ContextProjectionCommitter
   sdkHistory?: HistoryPort
   hostHistory?: HistoryPort
   appendHistoryEvents?(events: readonly Readonly<{ kind: import('../../packages/agent-sdk/src/history').HistoryEvent['kind']; payload: unknown }>[]): Promise<void>
@@ -57,8 +59,7 @@ export type HostedAgentTurnHostDependencies<TCall extends { invocationId: string
   recoverProviderAttempt?(input: Parameters<NonNullable<AgentTurnPorts['recoverProviderAttempt']>>[0]): ReturnType<NonNullable<AgentTurnPorts['recoverProviderAttempt']>>
   refreshExecutionContext?(call: TCall, stage: Extract<ToolPreparationStage, { kind: 'recheck' }>, current: Record<string, unknown>): Record<string, unknown> | Promise<Record<string, unknown>>
   recoverOutputLimit?(input: Parameters<NonNullable<AgentTurnPorts['recoverOutputLimit']>>[0]): ReturnType<NonNullable<AgentTurnPorts['recoverOutputLimit']>>
-  preflightModelRequest?(input: Parameters<NonNullable<AgentTurnPorts['preflightModelRequest']>>[0]): ReturnType<NonNullable<AgentTurnPorts['preflightModelRequest']>>
-  turnBoundary?(input: Parameters<NonNullable<AgentTurnPorts['turnBoundary']>>[0]): ReturnType<NonNullable<AgentTurnPorts['turnBoundary']>>
+  planContextReplacement?(input: Parameters<NonNullable<AgentTurnPorts['planContextReplacement']>>[0]): ReturnType<NonNullable<AgentTurnPorts['planContextReplacement']>>
   maxConcurrentTools: number
   maxModelTurns: number
   maxToolRounds?: number
@@ -171,6 +172,7 @@ export function createHostedAgentTurnHost<
         request: input.request,
         ...(dependencies.observer ? { observer: dependencies.observer } : {}),
         history: dependencies.hostHistory ?? dependencies.sdkHistory ?? dependencies.history,
+        ...(dependencies.contextProjectionCommitter ? { contextProjectionCommitter: dependencies.contextProjectionCommitter } : {}),
         maxModelTurns: dependencies.maxModelTurns,
         ...(dependencies.maxToolRounds !== undefined ? { maxToolRounds: dependencies.maxToolRounds } : {}),
         returnDeniedToolsToModel: true,
@@ -185,8 +187,7 @@ export function createHostedAgentTurnHost<
         ...(dependencies.sessionLedgerForModelResponse ? { sessionLedgerForModelResponse: dependencies.sessionLedgerForModelResponse } : {}),
         ...(dependencies.sessionLedgerForAttemptUsage ? { sessionLedgerForAttemptUsage: dependencies.sessionLedgerForAttemptUsage } : {}),
         ...(dependencies.sessionLedgerForInvocationTerminal ? { sessionLedgerForInvocationTerminal: dependencies.sessionLedgerForInvocationTerminal } : {}),
-        ...(dependencies.preflightModelRequest ? { preflightModelRequest: dependencies.preflightModelRequest as AgentTurnPorts['preflightModelRequest'] } : {}),
-        ...(dependencies.turnBoundary ? { turnBoundary: dependencies.turnBoundary as AgentTurnPorts['turnBoundary'] } : {}),
+        ...(dependencies.planContextReplacement ? { planContextReplacement: dependencies.planContextReplacement as AgentTurnPorts['planContextReplacement'] } : {}),
         ...(dependencies.recoverProviderAttempt ? { recoverProviderAttempt: dependencies.recoverProviderAttempt as AgentTurnPorts['recoverProviderAttempt'] } : {}),
         ...(dependencies.recoverOutputLimit ? { recoverOutputLimit: dependencies.recoverOutputLimit as AgentTurnPorts['recoverOutputLimit'] } : {})
       }

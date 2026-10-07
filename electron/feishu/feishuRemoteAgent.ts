@@ -12,9 +12,11 @@ import { runImRemoteAgent } from '../remote/imRemoteAgent'
 import type { WorkDirManager } from '../workDirManager'
 import type { AssistantFactEvent } from '../../src/shared/assistantFactAggregator'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
+import type { SessionStorage } from '../sessionStorage/contracts'
 
 export async function runFeishuRemoteAgent(ctx: {
   db: AppDatabase
+  sessionStorage: SessionStorage
   sessionId: string
   userMessage: string
   replyMessageId: string
@@ -49,6 +51,7 @@ export async function runFeishuRemoteAgent(ctx: {
 
   return runImRemoteAgent({
     db: ctx.db,
+    sessionStorage: ctx.sessionStorage,
     sessionId: ctx.sessionId,
     requestId: ctx.requestId,
     turnId: ctx.turnId,
@@ -71,7 +74,7 @@ export async function runFeishuRemoteAgent(ctx: {
         messageId: ctx.replyMessageId,
         getSessionId,
         config: ctx.feishuConfig,
-        db: ctx.db
+        sessionCommands: ctx.sessionStorage.commands
       }),
     buildSystemAppendix: ({ browserRemoteHint }) =>
       buildFeishuRemoteSystemAppendix({

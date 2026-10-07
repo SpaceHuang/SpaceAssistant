@@ -11,6 +11,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { createSession, getDbConnection, getSession } from '../database'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, getSessionEventSink, readSessionEvents, SessionEventWriter } from '../sessionEvents'
 import { ImChannel } from '../confirmation/imChannel'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
@@ -125,6 +126,7 @@ function makeWorkDirManager() {
 function baseCtx(getMainWebContents: () => WebContents | null, db: AppDatabase = makeDb()) {
   return {
     db,
+    sessionStorage: createSqliteSessionStorage(db),
     sessionId: 'sess-1',
     userMessage: 'hello',
     replyMessageId: 'msg-1',

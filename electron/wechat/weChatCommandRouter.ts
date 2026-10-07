@@ -28,6 +28,7 @@ import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
 import { createRateLimiter } from '../remote/imRateLimit'
 import { WECHAT_REMOTE_CONFIRM_TIMEOUT_MESSAGE } from '../remote/remoteConfirmPolicy'
 import type { TurnRuntime } from '../turnRuntime'
+import type { SessionStorage } from '../sessionStorage/contracts'
 import { executeRemoteTurn } from '../remote/turnExecutionAdapter'
 import { resolveTrustedTurnExecutionConfig } from '../turnExecutionConfig'
 import { createAcceptedTurnFromPrepared } from '../runtime/acceptedTurnContext'
@@ -37,6 +38,7 @@ const rateLimiter = createRateLimiter()
 
 export type WeChatCommandRouterDeps = {
   db: AppDatabase
+  sessionStorage?: SessionStorage
   botService: WeChatBotService
   processedStore: WeChatProcessedStore
   imChannel: WeChatImChannel
@@ -258,7 +260,7 @@ export class WeChatCommandRouter {
       const bot = this.deps.botService.getBot()
 
       const { sessionId, isNew } = await resolveWeChatSession(
-        this.deps.db,
+        this.deps.sessionStorage!,
         msg,
         config,
         this.deps.getModel(),
@@ -289,7 +291,7 @@ export class WeChatCommandRouter {
             inbound: inboundRaw,
             body: claim.message,
             sessionId,
-            touch: { db: this.deps.db, sessionId }
+            touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
           })
         }
         await claimFinalizer.complete(claim.reason)
@@ -298,7 +300,7 @@ export class WeChatCommandRouter {
 
       try {
         const resolvedWorkDir = resolveWorkDirForSession(
-          this.deps.db,
+          this.deps.sessionStorage!.queries,
           sessionId,
           () => this.deps.workDirManager.listProfiles(),
           () => this.deps.workDirManager.getActiveProfileId(),
@@ -318,7 +320,7 @@ export class WeChatCommandRouter {
           }
         }
 
-        touchRemoteSessionActivity(this.deps.db, sessionId)
+        touchRemoteSessionActivity(this.deps.sessionStorage!.commands, sessionId)
 
         if (config.remoteAckOnReceive && (isNew || config.remoteNotifyOnReceive) && bot) {
           await sendWeChatRemoteOutbound({
@@ -326,7 +328,7 @@ export class WeChatCommandRouter {
             inbound: inboundRaw,
             body: '已收到，正在处理…',
             sessionId,
-            touch: { db: this.deps.db, sessionId }
+            touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
           })
           const re = revalidateImInboundGuard(authSnapshot, { getConfig: getGuardConfig, isLoggedIn })
           if (!re.ok) {
@@ -376,7 +378,7 @@ export class WeChatCommandRouter {
           }
         }
 
-        const executionConfig = await resolveTrustedTurnExecutionConfig(this.deps.db, sessionId, 'wechat')
+        const executionConfig = await resolveTrustedTurnExecutionConfig(this.deps.db, this.deps.sessionStorage!.queries, this.deps.sessionStorage!.commands, sessionId, 'wechat')
         const prepared = this.deps.turnRuntime?.prepare({
           mode: 'create-user',
           requestId,
@@ -414,7 +416,7 @@ export class WeChatCommandRouter {
 
         let result: { summary: string; pendingConfirm: boolean; ok: boolean }
         const acceptedTurn = prepared
-          ? createAcceptedTurnFromPrepared(this.deps.db, prepared, 'wechat', executionConfig ?? { lane: 'wechat' })
+          ? createAcceptedTurnFromPrepared(prepared, 'wechat', executionConfig ?? { lane: 'wechat' }, this.deps.sessionStorage!.execution)
           : undefined
         try {
           result = await executeRemoteTurn({
@@ -423,6 +425,7 @@ export class WeChatCommandRouter {
             requestId,
             run: () => runWeChatRemoteAgent({
             db: this.deps.db,
+            sessionStorage: this.deps.sessionStorage!,
             sessionId,
             userMessage: content,
             replyMessageId: msg.messageId,
@@ -465,12 +468,12 @@ export class WeChatCommandRouter {
 
         const outboundSessionId = resolveRemoteOutboundSessionId(remoteContext, sessionId)
 
-        touchRemoteSessionActivity(this.deps.db, outboundSessionId)
+        touchRemoteSessionActivity(this.deps.sessionStorage!.commands, outboundSessionId)
 
         if (bot && !result.pendingConfirm) {
           await replyWeChatSummary(bot, inboundRaw, result.summary, {
             sessionId: outboundSessionId,
-            touch: { db: this.deps.db, sessionId: outboundSessionId }
+            touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId: outboundSessionId }
           })
           await this.deps.auditLogger.append({
             type: 'reply',

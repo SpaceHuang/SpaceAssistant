@@ -13,9 +13,11 @@ import { runImRemoteAgent } from '../remote/imRemoteAgent'
 import type { WorkDirManager } from '../workDirManager'
 import type { AssistantFactEvent } from '../../src/shared/assistantFactAggregator'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
+import type { SessionStorage } from '../sessionStorage/contracts'
 
 export async function runWeChatRemoteAgent(ctx: {
   db: AppDatabase
+  sessionStorage: SessionStorage
   sessionId: string
   userMessage: string
   replyMessageId: string
@@ -51,6 +53,7 @@ export async function runWeChatRemoteAgent(ctx: {
 
   return runImRemoteAgent({
     db: ctx.db,
+    sessionStorage: ctx.sessionStorage,
     sessionId: ctx.sessionId,
     requestId: ctx.requestId,
     turnId: ctx.turnId,
@@ -74,7 +77,7 @@ export async function runWeChatRemoteAgent(ctx: {
         inboundRaw: ctx.inboundRaw,
         getSessionId,
         config: ctx.wechatConfig,
-        db: ctx.db
+        sessionCommands: ctx.sessionStorage.commands
       }),
     buildSystemAppendix: ({ browserRemoteHint }) =>
       buildWeChatRemoteSystemAppendix({

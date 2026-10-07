@@ -1,4 +1,3 @@
-import { getSession } from '../database'
 import { resolveWorkDirForSession } from '../workDirManager'
 import { getMainWindow } from '../windowRef'
 import { requestRendererSessionSwitch } from '../remote/requestRendererSessionSwitch'
@@ -14,6 +13,7 @@ import { adoptRemoteSessionAfterSwitch } from '../remote/remoteSessionSwitchFoll
 import { remoteWriteGrantRegistry } from '../remote/remoteWriteGrantRegistry'
 import type { RemoteContext } from './types'
 import type { ToolExecutionContext, ToolExecutor } from './types'
+import type { Session } from '../../src/shared/domainTypes'
 
 const REMOTE_ONLY_ERROR = '该工具仅在远程会话中可用'
 const MISSING_CONTEXT_ERROR = '缺少必要的上下文信息'
@@ -28,7 +28,7 @@ export interface SwitchSessionResult {
   viewChanged: boolean
 }
 
-function sessionIdentityMatches(target: ReturnType<typeof getSession>, remoteContext: RemoteContext): boolean {
+function sessionIdentityMatches(target: Session | undefined, remoteContext: RemoteContext): boolean {
   if (!target) return false
   const meta = target.metadata as Record<string, unknown>
   if (meta?.source !== remoteContext.source) return false
@@ -63,7 +63,7 @@ export const switchSessionExecutor: ToolExecutor = {
     }
 
     const { appDatabase, workDirManager, sessionId, remoteContext, requestId } = ctx
-    if (!appDatabase || !workDirManager) {
+    if (!appDatabase || !workDirManager || !ctx.sessionQueries || !ctx.sessionCommands) {
       return { success: false, error: MISSING_CONTEXT_ERROR }
     }
 
@@ -72,7 +72,7 @@ export const switchSessionExecutor: ToolExecutor = {
       return { success: false, error: '缺少 session_id' }
     }
 
-    const target = getSession(appDatabase, targetSessionId)
+    const target = ctx.sessionQueries.readSession(targetSessionId)
     if (!sessionIdentityMatches(target, remoteContext)) {
       recordSessionSwitchDenied(remoteContext, {
         callerSessionId: sessionId,
@@ -124,7 +124,7 @@ export const switchSessionExecutor: ToolExecutor = {
       }
 
       const resolved = resolveWorkDirForSession(
-        appDatabase,
+        ctx.sessionQueries!,
         targetSessionId,
         () => workDirManager.listProfiles(),
         () => workDirManager.getActiveProfileId(),
@@ -167,7 +167,7 @@ export const switchSessionExecutor: ToolExecutor = {
 
       adoptRemoteSessionAfterSwitch({
         remoteContext,
-        appDatabase,
+        sessionCommands: ctx.sessionCommands,
         targetSessionId
       })
 

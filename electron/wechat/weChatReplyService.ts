@@ -1,5 +1,5 @@
 import type { IncomingMessage, WeChatBot } from '@wechatbot/wechatbot'
-import type { AppDatabase } from '../database'
+import type { SessionCommands } from '../sessionStorage/contracts'
 import { sendWeChatRemoteOutbound } from './weChatRemoteOutbound'
 
 const SUMMARY_MAX = 2000
@@ -46,7 +46,7 @@ export async function replyWeChatSummary(
   bot: WeChatReplyBot,
   inboundMsg: IncomingMessage,
   summary: string,
-  opts?: { sessionId?: string; touch?: { db: AppDatabase; sessionId: string } }
+  opts?: { sessionId?: string; touch?: { sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>; sessionId: string } }
 ): Promise<{ chunksSent: number }> {
   await sendWeChatRemoteOutbound({
     bot,

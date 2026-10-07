@@ -34,6 +34,7 @@ export class InvocationHistoryWriter {
 
   get currentVersion(): number | undefined { return this.version }
   async currentOrPersistedVersion(): Promise<number> {
+    await this.tail
     return this.version ?? (await this.history.read(this.identity.invocationId)).version
   }
 
@@ -42,11 +43,34 @@ export class InvocationHistoryWriter {
   }
 
   append(events: readonly Readonly<{ kind: HistoryEvent['kind']; payload: unknown }>[], transcriptCommit?: SessionTranscriptCommitIntent): Promise<InvocationHistoryAppendResult> {
+    return this.enqueue(events, undefined, transcriptCommit)
+  }
+
+  /** SDK-internal replacement hook: version validation and append share the normal writer queue. */
+  appendAtVersion(
+    events: readonly Readonly<{ kind: HistoryEvent['kind']; payload: unknown }>[],
+    expectedVersion: number,
+    transcriptCommit?: SessionTranscriptCommitIntent,
+    beforeAppend?: () => void
+  ): Promise<InvocationHistoryAppendResult> {
+    if (!Number.isInteger(expectedVersion) || expectedVersion < 0) return Promise.reject(new HistoryBatchError('expected history version must be a non-negative integer'))
+    return this.enqueue(events, expectedVersion, transcriptCommit, beforeAppend)
+  }
+
+  private enqueue(
+    events: readonly Readonly<{ kind: HistoryEvent['kind']; payload: unknown }>[],
+    requiredVersion: number | undefined,
+    transcriptCommit?: SessionTranscriptCommitIntent,
+    beforeAppend?: () => void
+  ): Promise<InvocationHistoryAppendResult> {
     if (!events.length) return Promise.reject(new HistoryBatchError('history append must not be empty'))
     const operation = this.tail.then(async () => {
       const snapshot = await this.history.read(this.identity.invocationId)
-      const expectedVersion = this.version ?? snapshot.version
+      const writerVersion = this.version ?? snapshot.version
+      if (requiredVersion !== undefined && writerVersion !== requiredVersion) throw new HistoryVersionConflict(requiredVersion, writerVersion)
+      const expectedVersion = requiredVersion ?? writerVersion
       if (snapshot.version !== expectedVersion) throw new HistoryVersionConflict(expectedVersion, snapshot.version)
+      beforeAppend?.()
       const batch = events.map(({ kind, payload }, index): HistoryEvent => {
         const sequence = expectedVersion + index + 1
         return {

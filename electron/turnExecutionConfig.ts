@@ -7,23 +7,25 @@ import { resolveGlobalThinkingEffort } from '../src/shared/thinkingEffort'
 import { getAvailableModels, migrateBuiltinModelName, resolveModelContextWindow, resolvePreferredModelEntry } from '../src/shared/llmModelConfig'
 import { resolveVisionRouteForImageSend } from '../src/shared/visionModelRouting'
 import { logAgentEvent } from './agentLogger/agentLogger'
-import { getConfigValue, getSession, updateSession, type AppDatabase } from './database'
+import { getConfigValue, type AppDatabase } from './database'
 import { readActiveLlmServiceIds, readLlmServices, readStoredModels, resolveLlmCredentialsForModel } from './llmServiceResolver'
 import { resolveLlmCredentialsForPair } from './llmServiceResolver'
 import type { AutomationTaskRunConfigSnapshot } from '../src/shared/automationTaskTypes'
+import type { SessionCommands, SessionQueries } from './sessionStorage/contracts'
 
 export type TurnExecutionLane = NonNullable<TurnExecutionConfig['lane']>
 
 /** Automation 专用固定 pair 校验；失败时绝不重绑桌面优选模型，也不更新 session。 */
 export async function resolvePinnedAutomationTurnExecutionConfig(
   db: AppDatabase,
+  sessionQueries: SessionQueries,
   sessionId: string,
   snapshot: AutomationTaskRunConfigSnapshot
 ): Promise<TurnExecutionConfig> {
   if (snapshot.resolutionStatus !== 'resolved' || !snapshot.modelId || !snapshot.serviceId || !snapshot.providerModelName) {
     throw new Error('AUTOMATION_CONFIG_SNAPSHOT_INVALID')
   }
-  const session = getSession(db, sessionId)
+  const session = sessionQueries.readSession(sessionId)
   if (!session || session.model !== snapshot.providerModelName || session.llmServiceId !== snapshot.serviceId || session.thinkingEffort !== snapshot.effectiveEffort) {
     throw new Error('AUTOMATION_SESSION_CONFIG_MISMATCH')
   }
@@ -61,12 +63,14 @@ export function resolveThinkingEffort(
  */
 export async function resolveTrustedTurnExecutionConfig(
   db: AppDatabase,
+  sessionQueries: SessionQueries,
+  sessionCommands: Pick<SessionCommands, 'updateSettings'>,
   sessionId: string,
   lane: TurnExecutionLane,
   derived: Pick<TurnExecutionConfig, 'system' | 'projectMemoryEnabled' | 'effectiveModelForUsage'> = {},
   options: { requiresVision?: boolean } = {}
 ): Promise<TurnExecutionConfig> {
-  const session = getSession(db, sessionId)
+  const session = sessionQueries.readSession(sessionId)
   if (!session) throw new Error('TURN_SESSION_NOT_FOUND')
   const storedModel = session.model.trim()
   if (!storedModel) throw new Error('TURN_MODEL_NOT_CONFIGURED')
@@ -81,7 +85,7 @@ export async function resolveTrustedTurnExecutionConfig(
   const migratedName = migrateBuiltinModelName(storedModel)
   if (migratedName !== storedModel) {
     model = migratedName
-    updateSession(db, sessionId, { model: migratedName })
+    sessionCommands.updateSettings({ sessionId, model: migratedName })
     logAgentEvent('info', 'session.model.migrated', { sessionId, lane, from: storedModel, to: migratedName })
   }
 
@@ -130,7 +134,7 @@ export async function resolveTrustedTurnExecutionConfig(
         credentials = rebound
         // 解析成功时必带 serviceId（只有失败才是空串）：显式覆盖旧绑定，
         // 避免下一轮继续拿过期 serviceId 解析失败再重绑一次。
-        updateSession(db, sessionId, { model, llmServiceId: rebound.serviceId })
+        sessionCommands.updateSettings({ sessionId, model, llmServiceId: rebound.serviceId })
       }
     }
   }

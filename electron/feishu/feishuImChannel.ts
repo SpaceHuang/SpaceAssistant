@@ -16,12 +16,14 @@ import { addTrustedCommand } from '../shell/shellCommandTrust'
 import { ImChannel, type ImCommitResult, type ImPendingConfirm } from '../confirmation/imChannel'
 import { getSecurityAuditLog } from '../confirmation/audit'
 import { recordUserAnswerFromMemoryTiers } from '../confirmation/decisionCacheWriter'
+import type { SessionStorage } from '../sessionStorage/contracts'
 import { reserveConfirmationSubmission, commitConfirmationSubmissionWithWork, reconcileConfirmationSubmission, ConfirmationCommitRolledBackError, ConfirmationCommitUnknownError } from '../confirmation/persistentConfirmationCommit'
 
 export interface FeishuImChannelDeps {
   auditLogger?: FeishuAuditLogger
   runner?: LarkCliRunner
   db?: AppDatabase
+  sessionStorage?: SessionStorage
   getGeneration?: (channel: 'feishu' | 'wechat') => number
 }
 
@@ -166,7 +168,7 @@ function tryAddFeishuShellTrust(db: AppDatabase | undefined, pending: ImPendingC
 }
 
 function notifyFeishuConfirmPrompt(deps: FeishuImChannelDeps, entry: ImPendingConfirm): Promise<void> {
-  const { runner, db } = deps
+  const { runner, db, sessionStorage } = deps
   if (!runner) return Promise.reject(new Error('feishu-runner-unavailable'))
   const text = buildFeishuConfirmPromptText(entry)
   const send = db
@@ -176,7 +178,7 @@ function notifyFeishuConfirmPrompt(deps: FeishuImChannelDeps, entry: ImPendingCo
           messageId: entry.messageId,
           body: text,
           sessionId: entry.sessionId,
-          touch: { db, sessionId: entry.sessionId }
+          ...(sessionStorage ? { touch: { sessionCommands: sessionStorage.commands, sessionId: entry.sessionId } } : {})
         })
     : () => replyFeishuText(runner, entry.messageId, text)
   return send().catch((e) => {

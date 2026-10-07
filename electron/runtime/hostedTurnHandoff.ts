@@ -6,19 +6,20 @@ import type { HistoryPort } from '../../packages/agent-sdk/src/history'
 import { InvocationHistoryWriter } from '../../packages/agent-sdk/src/history'
 import type { RunToolChatSessionArgs, RunToolChatSessionResult } from '../toolChatLoop'
 import type { AgentInvocationMaterials } from './invocationAssembler'
+import type { SessionExecutionStore, SessionHistoryPort, SessionQueries } from '../sessionStorage/contracts'
 import type { createAgentSdkConfirmationPort } from '../confirmation/agentSdkConfirmationPort'
 import { HostedTurnFinalizedError, type HostedTurnFinalization } from './hostedTurnFinalization'
 import { logAgentEvent } from '../agentLogger/agentLogger'
-import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { resolveCanonicalRequestCutover } from './sessionHistoryCutover'
 import { decodeTerminalOutcome } from './terminalOutcome'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
-import type { AppDatabase } from '../database/sqliteStore'
-import { cancelQueuedSessionExecution, claimSessionExecution, commitSessionTranscript, markSessionExecutionStarted, markSessionExecutionUncertain, readSessionTranscript, releaseSessionExecution } from '../database/sessionTranscript'
-import { getProjectedMessage } from './sessionTranscriptProjection'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import { ensureApiTextContent } from '../../src/shared/claudeToolHistory'
 import { randomUUID } from 'node:crypto'
+
+function hasSessionHistoryQueries(history: HistoryPort): history is SessionHistoryPort {
+  return history != null && typeof (history as Partial<SessionHistoryPort>).readLatestInvocationForSession === 'function'
+}
 
 function hostedFailureOutcome(terminal: Parameters<typeof decodeTerminalOutcome>[0]): 'failed' | 'interrupted' | 'cancelled' | 'timed-out' | 'commit-uncertain' {
   const outcome = decodeTerminalOutcome(terminal)
@@ -98,7 +99,7 @@ function committedTranscriptMessages(messages: readonly CanonicalModelMessage[])
 
 function recoverAcceptedRestartInput(input: {
   snapshot: Awaited<ReturnType<HistoryPort['read']>>
-  db: AppDatabase
+  sessionQueries?: SessionQueries
   sessionId: string
   requestMessages: readonly CanonicalModelMessage[]
   requiredUserMessage: CanonicalModelMessage
@@ -112,7 +113,7 @@ function recoverAcceptedRestartInput(input: {
   const marker = accepted.payload && typeof accepted.payload === 'object' ? accepted.payload as Record<string, unknown> : undefined
   if (marker?.sessionId !== input.sessionId || marker.role !== 'user' || typeof marker.messageId !== 'string' ||
     typeof marker.inputFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(marker.inputFingerprint)) return undefined
-  const stored = getProjectedMessage(input.db, marker.messageId)
+  const stored = input.sessionQueries?.readMessage({ sessionId: input.sessionId, messageId: marker.messageId })
   if (!stored || stored.sessionId !== input.sessionId || stored.role !== 'user' || stored.attachments?.length ||
     queueInputFingerprint({ text: stored.content, attachments: stored.attachments }) !== marker.inputFingerprint) return undefined
   const content = ensureApiTextContent(stored.content)
@@ -139,22 +140,6 @@ function recoverAcceptedRestartInput(input: {
   return { id: stored.id, message: requestMessage }
 }
 
-function latestCompactedTranscript(snapshot: Awaited<ReturnType<HistoryPort['read']>>): CanonicalModelMessage[] | undefined {
-  for (let index = snapshot.events.length - 1; index >= 0; index -= 1) {
-    const event = snapshot.events[index]
-    if (event.kind !== 'transcript-compacted') continue
-    const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
-      ? event.payload as Record<string, unknown>
-      : undefined
-    if (!payload || !Array.isArray(payload.messages) || !payload.messages.every((message) =>
-      Boolean(message) && typeof message === 'object' && !Array.isArray(message) &&
-      typeof (message as { role?: unknown }).role === 'string'
-    )) throw new Error('Canonical compacted transcript is invalid')
-    return payload.messages as CanonicalModelMessage[]
-  }
-  return undefined
-}
-
 export function createHostedTurnHandoff(input: {
   agentSdk: HostedRuntimeFactory
   history: HistoryPort
@@ -163,13 +148,15 @@ export function createHostedTurnHandoff(input: {
   routeId: string
   sessionId?: string
   acceptedTurn?: AcceptedTurn
-  sessionDb?: AppDatabase
+  sessionQueries?: SessionQueries
+  sessionExecution?: SessionExecutionStore
   maxToolRounds?: number
   hostHistory?: HistoryPort
   recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
   refreshExecutionContext?: NonNullable<Parameters<HostedRuntimeFactory['createHostedTurnRuntime']>[0]['refreshExecutionContext']>
   confirmationAdapter?: Partial<Parameters<typeof createAgentSdkConfirmationPort>[0]>
 }): NonNullable<RunToolChatSessionArgs['onHostedTurnHandoff']> {
+  if (input.sessionExecution && !input.sessionQueries) throw new Error('SESSION_QUERIES_REQUIRED')
   if (input.acceptedTurn && (input.acceptedTurn.turnId !== input.turnId || input.acceptedTurn.sessionId !== input.sessionId ||
     input.acceptedTurn.requestId.length === 0)) throw new Error('ACCEPTED_TURN_HANDOFF_IDENTITY_MISMATCH')
   return async (handoff: HandoffInput): Promise<Readonly<{ result: RunToolChatSessionResult; finalization: HostedTurnFinalization }>> => {
@@ -182,14 +169,14 @@ export function createHostedTurnHandoff(input: {
     let keepClaimedForReconciliation = false
     let executionStarted = false
     try {
-    let checkpoint: ReturnType<typeof readSessionTranscript> | undefined
-    if (input.sessionDb && input.sessionId) {
+    let checkpoint: import('../sessionStorage/contracts').HostedTranscriptSnapshot | undefined
+    if (input.sessionExecution && input.sessionId) {
       const ownerId = `runtime:${process.pid}:${randomUUID()}`
       queuedOwnership = { sessionId: input.sessionId, turnId: input.turnId, ownerId }
       // Session ownership has its own queue budget, independent of the parent turn deadline.
       const waitUntil = Date.now() + 30_000
       for (;;) {
-        const claim = claimSessionExecution(input.sessionDb, { sessionId: input.sessionId, turnId: input.turnId, ownerId })
+        const claim = input.sessionExecution!.claimExecution({ sessionId: input.sessionId, turnId: input.turnId, ownerId })
         if (claim.acquired) {
           ownership = { sessionId: input.sessionId, turnId: input.turnId, ownerId, generation: claim.generation }
           break
@@ -197,7 +184,7 @@ export function createHostedTurnHandoff(input: {
         if (claim.reason === 'blocked' || Date.now() >= waitUntil) throw new Error(claim.reason === 'blocked' ? 'SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED' : 'SESSION_EXECUTION_QUEUE_TIMEOUT')
         await new Promise((resolve) => setTimeout(resolve, 50))
       }
-      checkpoint = readSessionTranscript(input.sessionDb, input.sessionId)
+      checkpoint = input.sessionExecution.readHostedTranscript(input.sessionId)
       if (checkpoint.status !== 'ready') throw new Error('SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED')
       if (checkpoint.version > 0) {
         logAgentEvent('info', 'history.cutover', {
@@ -210,11 +197,12 @@ export function createHostedTurnHandoff(input: {
     if (checkpoint && checkpoint.version > 0 && handoff.requiredUserMessage) {
       const systemMessages = handoff.request.messages.filter((message) => message.role === 'system')
       request = { ...handoff.request, messages: [...systemMessages, ...committedTranscriptMessages(checkpoint.messages as CanonicalModelMessage[]), handoff.requiredUserMessage.message] }
-    } else if (input.sessionId && handoff.requiredUserMessage && input.history instanceof SqliteAgentHistory) {
+    } else if (input.sessionId && handoff.requiredUserMessage && hasSessionHistoryQueries(input.history)) {
       // Existing streams must never silently fall back to legacy session messages.
-      let latest: Awaited<ReturnType<SqliteAgentHistory['readLatestInvocationForSession']>>
+      const sessionHistory = input.history
+      let latest: Awaited<ReturnType<SessionHistoryPort['readLatestInvocationForSession']>>
       try {
-        latest = await input.history.readLatestInvocationForSession(input.sessionId, { excludeInvocationId: input.invocationId })
+        latest = await sessionHistory.readLatestInvocationForSession(input.sessionId, { excludeInvocationId: input.invocationId })
       } catch {
         logSessionHistoryShadowDiagnostic({ requestId: input.invocationId, turnId: input.turnId, sessionId: input.sessionId, stage: 'read-history', reasonCode: 'history-read-failed' })
         throw new Error('Canonical session History could not safely provide the Hosted transcript')
@@ -227,15 +215,15 @@ export function createHostedTurnHandoff(input: {
         let snapshotVersion: number | undefined
         let recoveredRestartInput = false
         try {
-          const snapshot = await input.history.read(latest.invocationId)
+          const snapshot = await sessionHistory.read(latest.invocationId)
           snapshotVersion = snapshot.version
           previousTurnId = snapshot.events.at(-1)?.turnId
-          const acceptedInput = input.sessionDb && handoff.requiredUserMessage
-            ? recoverAcceptedRestartInput({ snapshot, db: input.sessionDb, sessionId: input.sessionId, requestMessages: handoff.request.messages,
-                requiredUserMessage: handoff.requiredUserMessage.message })
+          const acceptedInput = input.sessionExecution && handoff.requiredUserMessage
+            ? recoverAcceptedRestartInput({ snapshot, sessionId: input.sessionId, requestMessages: handoff.request.messages,
+                requiredUserMessage: handoff.requiredUserMessage.message, sessionQueries: input.sessionQueries })
             : undefined
           if (acceptedInput && handoff.requiredUserMessage) {
-            const prior = await input.history.readLatestInvocationForSession(input.sessionId, {
+            const prior = await sessionHistory.readLatestInvocationForSession(input.sessionId, {
               excludeInvocationIds: [input.invocationId, latest.invocationId]
             })
             if (prior.kind !== 'unavailable') {
@@ -299,6 +287,12 @@ export function createHostedTurnHandoff(input: {
       appendBatch: (events, expectedVersion, transcriptCommit) => input.history.appendBatch(events, expectedVersion, transcriptCommit),
       read: (invocationId) => input.history.read(invocationId)
     }
+    // The terminal participant may mirror an assistant message only when the accepted turn
+    // owner has a matching persisted target. Session-only Hosted requests still commit their
+    // transcript and terminal atomically, without inventing a turn message mirror.
+    const terminalAssistantMessageId = handoff.assistantMessageId && (!ownership || !input.sessionExecution || !input.sessionId ||
+      input.sessionExecution.readTurn({ sessionId: input.sessionId, turnId: input.turnId })?.assistantMessageId === handoff.assistantMessageId)
+      ? handoff.assistantMessageId : undefined
     const hostedHistory = handoff.hostHistory ?? input.hostHistory ?? historyFacade
     const identityBoundHostHistory = handoff.assistantMessageId
       ? bindAssistantMessageIdentity(hostedHistory, handoff.assistantMessageId)
@@ -321,7 +315,7 @@ export function createHostedTurnHandoff(input: {
       ...(input.recoverProviderAttempt ? { recoverProviderAttempt: input.recoverProviderAttempt } : {})
     })
     try {
-      if (ownership && !markSessionExecutionStarted(input.sessionDb!, ownership)) throw new Error('SESSION_EXECUTION_CLAIM_FENCED')
+      if (ownership && !input.sessionExecution!.markExecutionStarted(ownership)) throw new Error('SESSION_EXECUTION_CLAIM_FENCED')
       executionStarted = true
       const hosted = await runHostedAgentTurn({
         host: runtime.host,
@@ -330,7 +324,7 @@ export function createHostedTurnHandoff(input: {
         turnId: input.turnId,
         ...(handoff.windowId ? { windowId: handoff.windowId } : {}),
         currentUserMessageId: handoff.currentUserMessageId,
-        assistantMessageId: handoff.assistantMessageId,
+        ...(terminalAssistantMessageId ? { assistantMessageId: terminalAssistantMessageId } : {}),
         requiredUserMessage: handoff.requiredUserMessage,
         routeId: input.routeId,
         request,
@@ -355,36 +349,15 @@ export function createHostedTurnHandoff(input: {
         throw new HostedTurnFinalizedError(new Error(`Hosted invocation ended as ${terminal.kind}`), hostedFailureOutcome(terminal))
       }
       if (ownership && checkpoint) {
-        let committed: ReturnType<typeof commitSessionTranscript>
-        try {
-          committed = commitSessionTranscript(input.sessionDb!, {
-            sessionId: ownership.sessionId, turnId: ownership.turnId, baseVersion: checkpoint.version,
-            outcome: 'completed', messages: committedTranscriptMessages(hosted.messages as CanonicalModelMessage[]) as unknown as readonly Record<string, unknown>[]
-          })
-        } catch (error) {
-          keepClaimedForReconciliation = true
-          try { markSessionExecutionUncertain(input.sessionDb!, ownership) }
-          catch (reconciliationError) {
-            logAgentEvent('error', 'session.transcript.reconciliation', {
-              requestId: input.invocationId, turnId: ownership.turnId, sessionId: ownership.sessionId,
-              outcome: 'commit_uncertain', reasonCode: 'checkpoint-write-and-uncertain-mark-failed', transcriptVersion: checkpoint.version
-            })
-            throw new HostedTurnFinalizedError(new AggregateError([error, reconciliationError], 'Transcript checkpoint and uncertainty marker both failed'), 'commit-uncertain')
-          }
-          logAgentEvent('error', 'session.transcript.reconciliation', {
-            requestId: input.invocationId, turnId: ownership.turnId, sessionId: ownership.sessionId,
-            outcome: 'commit_uncertain', reasonCode: 'checkpoint-write-failed', transcriptVersion: checkpoint.version
-          })
-          throw new HostedTurnFinalizedError(error, 'commit-uncertain')
-        }
-        if (!committed.committed) {
-          markSessionExecutionUncertain(input.sessionDb!, ownership)
+        const committed = input.sessionExecution!.readHostedTranscript(ownership.sessionId)
+        if (committed.status !== 'ready' || committed.version !== checkpoint.version + 1 || committed.lastTurnId !== ownership.turnId) {
+          input.sessionExecution!.markExecutionUncertain(ownership)
           keepClaimedForReconciliation = true
           logAgentEvent('error', 'session.transcript.reconciliation', {
             requestId: input.invocationId, turnId: ownership.turnId, sessionId: ownership.sessionId,
-            outcome: 'commit_uncertain', reasonCode: committed.reason, transcriptVersion: checkpoint.version
+            outcome: 'commit_uncertain', reasonCode: 'terminal-participant-incomplete', transcriptVersion: checkpoint.version
           })
-          throw new HostedTurnFinalizedError(new Error(`SESSION_TRANSCRIPT_COMMIT_UNCERTAIN:${committed.reason}`), 'commit-uncertain')
+          throw new HostedTurnFinalizedError(new Error('SESSION_TRANSCRIPT_COMMIT_UNCERTAIN:terminal-participant-incomplete'), 'commit-uncertain')
         }
       }
       return {
@@ -422,7 +395,7 @@ export function createHostedTurnHandoff(input: {
       catch (historyError) {
         if (ownership && executionStarted) {
           keepClaimedForReconciliation = true
-          markSessionExecutionUncertain(input.sessionDb!, ownership)
+          input.sessionExecution!.markExecutionUncertain(ownership)
           logAgentEvent('error', 'session.transcript.reconciliation', {
             requestId: input.invocationId, turnId: ownership.turnId, sessionId: ownership.sessionId,
             outcome: 'commit_uncertain', reasonCode: 'history-terminal-read-failed', transcriptVersion: checkpoint?.version ?? 0
@@ -434,7 +407,7 @@ export function createHostedTurnHandoff(input: {
       const terminal = [...snapshot.events].reverse().find((event) => event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted')
       if (!terminal && ownership && checkpoint && executionStarted) {
         keepClaimedForReconciliation = true
-        markSessionExecutionUncertain(input.sessionDb!, ownership)
+        input.sessionExecution!.markExecutionUncertain(ownership)
         logAgentEvent('error', 'session.transcript.reconciliation', {
           requestId: input.invocationId, turnId: ownership.turnId, sessionId: ownership.sessionId,
           outcome: 'commit_uncertain', reasonCode: 'history-terminal-missing', transcriptVersion: checkpoint.version
@@ -445,7 +418,7 @@ export function createHostedTurnHandoff(input: {
         // A completed terminal fact without its transcript/message mirror participant is not a
         // successful commit. Preserve the claim and require reconciliation before any retry.
         keepClaimedForReconciliation = true
-        try { markSessionExecutionUncertain(input.sessionDb!, ownership) }
+        try { input.sessionExecution!.markExecutionUncertain(ownership) }
         catch (reconciliationError) {
           throw new HostedTurnFinalizedError(new AggregateError([error, reconciliationError], 'Terminal participant and uncertainty marker both failed'), 'commit-uncertain', terminalUsage(terminal))
         }
@@ -455,63 +428,16 @@ export function createHostedTurnHandoff(input: {
         })
         throw new HostedTurnFinalizedError(error, 'commit-uncertain', terminalUsage(terminal))
       }
-      if (terminal && terminal.kind !== 'invocation-completed' && ownership && checkpoint && handoff.requiredUserMessage) {
-        const decoded = decodeTerminalOutcome(terminal)
-        const outcome = decoded === 'cancelled' ? 'cancelled' : decoded === 'timed_out' ? 'timed_out' : decoded === 'interrupted' ? 'interrupted' : 'failed'
-        // The request was assembled from the committed checkpoint or from a validated legacy History cutover.
-        // On a first cutover the checkpoint is still empty, so using it here would discard the prior transcript.
-        let canonicalCompaction: CanonicalModelMessage[] | undefined
-        try { canonicalCompaction = latestCompactedTranscript(snapshot) }
-        catch (projectionError) {
-          keepClaimedForReconciliation = true
-          markSessionExecutionUncertain(input.sessionDb!, ownership)
-          throw new HostedTurnFinalizedError(new AggregateError([error, projectionError], 'Canonical compacted transcript could not be read safely'), 'commit-uncertain', terminalUsage(terminal))
-        }
-        const acceptedRequestMessages = canonicalCompaction ?? request.messages
-        let acceptedUserIndex = -1
-        const requiredMessage = JSON.stringify(handoff.requiredUserMessage.message)
-        for (let index = acceptedRequestMessages.length - 1; index >= 0; index -= 1) {
-          if (JSON.stringify(acceptedRequestMessages[index]) === requiredMessage) { acceptedUserIndex = index; break }
-        }
-        if (acceptedUserIndex < 0) {
-          if (canonicalCompaction) {
-            keepClaimedForReconciliation = true
-            markSessionExecutionUncertain(input.sessionDb!, ownership)
-            throw new HostedTurnFinalizedError(new Error('Canonical compacted transcript omitted its accepted user message'), 'commit-uncertain', terminalUsage(terminal))
-          }
-          throw new HostedTurnFinalizedError(new Error('Hosted request omitted its accepted user message'), 'failed')
-        }
-        const acceptedTranscript = committedTranscriptMessages(acceptedRequestMessages.slice(0, acceptedUserIndex + 1))
-        let committed: ReturnType<typeof commitSessionTranscript>
-        try {
-          committed = commitSessionTranscript(input.sessionDb!, {
-            sessionId: ownership.sessionId, turnId: ownership.turnId, baseVersion: checkpoint.version, outcome,
-            messages: acceptedTranscript as unknown as readonly Record<string, unknown>[]
-          })
-        } catch (commitError) {
-          keepClaimedForReconciliation = true
-          try { markSessionExecutionUncertain(input.sessionDb!, ownership) }
-          catch (reconciliationError) {
-            logAgentEvent('error', 'session.transcript.reconciliation', {
-              requestId: input.invocationId, turnId: ownership.turnId, sessionId: ownership.sessionId,
-              outcome: 'commit_uncertain', reasonCode: 'checkpoint-write-and-uncertain-mark-failed', transcriptVersion: checkpoint.version
-            })
-            throw new HostedTurnFinalizedError(new AggregateError([commitError, reconciliationError], 'Transcript checkpoint and uncertainty marker both failed'), 'commit-uncertain', terminalUsage(terminal))
-          }
-          logAgentEvent('error', 'session.transcript.reconciliation', {
-            requestId: input.invocationId, turnId: ownership.turnId, sessionId: ownership.sessionId,
-            outcome: 'commit_uncertain', reasonCode: 'checkpoint-write-failed', transcriptVersion: checkpoint.version
-          })
-          throw new HostedTurnFinalizedError(commitError, 'commit-uncertain', terminalUsage(terminal))
-        }
-        if (!committed.committed) {
-          markSessionExecutionUncertain(input.sessionDb!, ownership)
+      if (terminal && terminal.kind !== 'invocation-completed' && ownership && checkpoint && transcriptFailureMessages) {
+        const committed = input.sessionExecution!.readHostedTranscript(ownership.sessionId)
+        if (committed.status !== 'ready' || committed.version !== checkpoint.version + 1 || committed.lastTurnId !== ownership.turnId) {
+          input.sessionExecution!.markExecutionUncertain(ownership)
           keepClaimedForReconciliation = true
           logAgentEvent('error', 'session.transcript.reconciliation', {
             requestId: input.invocationId, turnId: ownership.turnId, sessionId: ownership.sessionId,
-            outcome: 'commit_uncertain', reasonCode: committed.reason, transcriptVersion: checkpoint.version
+            outcome: 'commit_uncertain', reasonCode: 'terminal-participant-incomplete', transcriptVersion: checkpoint.version
           })
-          throw new HostedTurnFinalizedError(new Error(`SESSION_TRANSCRIPT_COMMIT_UNCERTAIN:${committed.reason}`, { cause: error }), 'commit-uncertain', terminalUsage(terminal))
+          throw new HostedTurnFinalizedError(new Error('SESSION_TRANSCRIPT_COMMIT_UNCERTAIN:terminal-participant-incomplete', { cause: error }), 'commit-uncertain', terminalUsage(terminal))
         }
       }
       if (error instanceof HostedTurnFinalizedError && error.outcome === 'commit-uncertain') throw error
@@ -529,8 +455,8 @@ export function createHostedTurnHandoff(input: {
     }
     } finally {
       if (ownership && !keepClaimedForReconciliation) {
-        releaseSessionExecution(input.sessionDb!, ownership)
-      } else if (!ownership && queuedOwnership) cancelQueuedSessionExecution(input.sessionDb!, queuedOwnership)
+        input.sessionExecution!.releaseExecution(ownership)
+      } else if (!ownership && queuedOwnership) input.sessionExecution!.cancelQueuedExecution(queuedOwnership)
     }
   }
 }

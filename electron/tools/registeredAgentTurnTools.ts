@@ -3,7 +3,7 @@ import { createPermitBoundToolExecutionPort } from '../../packages/agent-sdk/src
 import type { ExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
 import type { PermitBinding, SafetyPermitStore } from '../../packages/agent-sdk/src/safetyPermit'
 import type { ToolPreparationStage } from '../../packages/agent-sdk/src/turn'
-import type { AgentToolRevocationPort } from '../../src/shared/agent/invocation'
+import type { AgentToolRevocationPort } from '../../packages/agent-sdk/src/invocation'
 import type { RegisteredTool, ToolExecutionContext } from './plannedToolRegistry'
 import { resolveRegisteredToolName } from './registeredToolName'
 import { projectAgentToolResult, serializeAgentToolResult } from '../../src/shared/agentToolResult'

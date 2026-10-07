@@ -6,7 +6,7 @@ import { refreshSessionTranscriptProjectionCache } from './runtime/sessionTransc
 import { serializeErrorCauseChain } from './agentLogger/errorCauseChain'
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import type { AgentLogFields } from './agentLogger/types'
-import { getDbConnection, getPersistedTurn, getSession, type AppDatabase } from './database'
+import { getDbConnection, type AppDatabase } from './database'
 import { LlmKeyAccessError, resolveLlmCredentialsForModel } from './llmServiceResolver'
 import { MODEL_BASELINE } from '../src/shared/modelBaseline'
 import { requireInvocationAnthropicRoute } from './runtime/invocationProviderRoute'
@@ -43,14 +43,10 @@ import { extractToolPairIds, validateSurfaceForSend } from '../src/shared/surfac
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
 import { toCanonicalModelMessages } from './runtime/canonicalHistory'
 import { createHostedTurnHandoff } from './runtime/hostedTurnHandoff'
-import { loadAcceptedTurnMessages } from './runtime/acceptedTurnContext'
-import { createAcceptedTurn } from '../src/shared/acceptedTurn'
-import { acceptTurnContext } from './database/acceptedTurnStorage'
-import { readSessionTranscript } from './database/sessionTranscript'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from './runtime/hostedTurnFinalization'
-import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { rebuildClaudeMessagesFromHistory } from './runtime/canonicalHistory'
 import { assertContinuationExecutionConfigUnchanged, fingerprintContinuationExecutionConfig } from './runtime/continuationSafetySnapshot'
+import type { SessionStorage } from './sessionStorage/contracts'
 
 export type ClaudeStreamDeps = {
   getApiKey: () => Promise<string | null>
@@ -71,6 +67,7 @@ export type ClaudeStreamDeps = {
   /** 绑定主窗口的出站通道：Core 出口事件（标题生成、文件树失效）经此投递渲染层。 */
   notifyMainWindow?: (channel: string, payload: unknown) => void
   turnRuntime?: TurnRuntime
+  sessionStorage?: SessionStorage
 }
 
 const admissionCancelControllers = new Map<string, AbortController>()
@@ -87,47 +84,18 @@ type ClaudeChatMessageWithContentBlocks = {
   timestamp?: number
 }
 
-export function loadAuthoritativeTurnContext(db: AppDatabase, turnId: string, sessionId: string, requestId: string, startToken: string): { messages: Message[]; currentUserMessageId: string; assistantMessageId?: string; executionConfig?: TurnExecutionConfig; continuationTranscript?: ClaudeChatMessageWithContentBlocks[] } {
-  const persisted = getPersistedTurn(db, turnId)
+export function loadAuthoritativeTurnContext(db: AppDatabase, turnId: string, sessionId: string, requestId: string, startToken: string, sessionStorage: SessionStorage): { messages: Message[]; currentUserMessageId: string; assistantMessageId?: string; executionConfig?: TurnExecutionConfig; continuationTranscript?: ClaudeChatMessageWithContentBlocks[] } {
+  const persisted = sessionStorage.execution.readTurn({ sessionId, turnId })
   if (!persisted || persisted.sessionId !== sessionId || persisted.requestId !== requestId || persisted.startToken !== startToken) {
     throw new Error('TURN_EXECUTION_CREDENTIALS_INVALID')
   }
   if (persisted.state === 'configuring') throw new Error('TURN_EXECUTION_CONFIGURING')
   if (!persisted.userMessageId) throw new Error('TURN_USER_MESSAGE_MISSING')
-  const messages = loadAcceptedTurnMessages(db, persisted)
+  const messages = sessionStorage.execution.loadAcceptedMessages({ sessionId, turnId })
   let continuationTranscript: ClaudeChatMessageWithContentBlocks[] | undefined
-  const continuationSource = persisted.executionConfig?.continuationSource
-  if (continuationSource) {
-    const history = new SqliteAgentHistory(getDbConnection(db)).readSync(requestId)
-    const contextMarkers = history.events.filter((event) => event.kind === 'invocation-context-committed')
-    const marker = contextMarkers[0]
-    const payload = marker?.payload && typeof marker.payload === 'object' ? marker.payload as Record<string, unknown> : undefined
-    const source = payload?.continuationSource && typeof payload.continuationSource === 'object'
-      ? payload.continuationSource as Record<string, unknown> : undefined
-    if (contextMarkers.length !== 1 || marker?.sequence !== 1 || marker.turnId !== turnId ||
-      source?.continuationId !== continuationSource.continuationId ||
-      source?.invocationId !== continuationSource.invocationId ||
-      source?.turnId !== continuationSource.sourceTurnId ||
-      source?.checkpointSequence !== continuationSource.checkpointSequence ||
-      source?.checkpointSha256 !== continuationSource.checkpointSha256) {
-      throw new Error('TURN_CONTINUATION_HISTORY_MISMATCH')
-    }
-    const requiredUser = payload?.requiredUserMessage && typeof payload.requiredUserMessage === 'object'
-      ? payload.requiredUserMessage as { id?: unknown; message?: unknown } : undefined
-    if (requiredUser?.id !== persisted.userMessageId || !requiredUser.message || typeof requiredUser.message !== 'object') {
-      throw new Error('TURN_CONTINUATION_REQUIRED_USER_MISSING')
-    }
-    continuationTranscript = rebuildClaudeMessagesFromHistory(history.events)
-    const requiredUserIndex = continuationTranscript.findIndex((message) => {
-      if (message.role !== 'user') return false
-      const [candidate] = toCanonicalModelMessages([message])
-      if (!candidate || candidate.role !== 'user' || (candidate.id !== undefined && candidate.id !== persisted.userMessageId)) return false
-      const { id: _candidateId, ...candidateBody } = candidate
-      const { id: _requiredId, ...requiredBody } = requiredUser.message as Record<string, unknown>
-      return JSON.stringify(candidateBody) === JSON.stringify(requiredBody)
-    })
-    if (requiredUserIndex < 0) throw new Error('TURN_CONTINUATION_REQUIRED_USER_MISSING')
-    continuationTranscript[requiredUserIndex] = { ...continuationTranscript[requiredUserIndex]!, id: persisted.userMessageId }
+  if (persisted.executionConfig?.continuationSource) {
+    continuationTranscript = sessionStorage.execution.loadAcceptedContinuationTranscript({ sessionId, turnId })
+    if (!continuationTranscript) throw new Error('TURN_CONTINUATION_HISTORY_MISMATCH')
   }
   return { messages, currentUserMessageId: persisted.userMessageId, ...(persisted.assistantMessageId ? { assistantMessageId: persisted.assistantMessageId } : {}), ...(persisted.executionConfig ? { executionConfig: persisted.executionConfig } : {}), ...(continuationTranscript ? { continuationTranscript } : {}) }
 }
@@ -305,6 +273,9 @@ function toEventPersistenceFailure(error: unknown): EventPersistenceFailure {
 }
 
 export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStreamDeps): ClaudeTurnExecution {
+  const injectedStorage = deps.sessionStorage
+  if (!injectedStorage) throw new Error('SESSION_STORAGE_REQUIRED')
+  const sessionStorage: SessionStorage = injectedStorage
   const executeClaudeRequest: ClaudeTurnExecution = async (sender, payload) => {
       let requestId = ''
       let eventWriter: SessionEventSink | undefined
@@ -370,9 +341,9 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         if (!sessionId) throw new Error('Invalid sessionId')
         const db = deps.getAppDatabase()
         if (!deps.turnRuntime || !turnId || !turnStartToken) throw new Error('TURN_EXECUTION_CREDENTIALS_REQUIRED')
-        const authoritative = loadAuthoritativeTurnContext(db, turnId, sessionId, requestId, turnStartToken)
+        const authoritative = loadAuthoritativeTurnContext(db, turnId, sessionId, requestId, turnStartToken, sessionStorage)
         eventTurnId = turnId
-        const session = getSession(db, sessionId)
+        const session = sessionStorage.queries.readSession(sessionId)
         if (session) {
           eventWriter = getSessionEventSink(deps.getWorkDir(), sessionId, session.createdAt)
           await eventWriter.appendCritical({ type: 'turn_start', payload: { turnId } })
@@ -382,12 +353,17 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         }
         const frozen = authoritative.executionConfig
         if (!frozen) throw new Error('TURN_LEGACY_EXECUTION_CONFIG_UNAVAILABLE')
-        const acceptedTranscript = readSessionTranscript(db, sessionId)
-        if (acceptedTranscript.status !== 'ready') throw new Error('SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED')
-        const acceptedTurn = acceptTurnContext(db, createAcceptedTurn({
-          turnId, requestId, sessionId, lane: frozen.lane ?? 'desktop', startToken: turnStartToken,
-          currentUserMessageId: authoritative.currentUserMessageId, transcriptVersion: acceptedTranscript.version, config: frozen
-        }))
+        const acceptedTurn = sessionStorage.execution.acceptPrepared({
+          prepared: {
+            turnId,
+            requestId,
+            sessionId,
+            startToken: turnStartToken,
+            userMessage: { id: authoritative.currentUserMessageId }
+          },
+          lane: frozen.lane ?? 'desktop',
+          config: frozen
+        })
         const model = assertValidModel(frozen.model ?? '')
         await eventWriter?.appendCritical({ type: 'step_start', payload: { turnId, stepId: requestId } })
 
@@ -535,6 +511,8 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           userDataDir,
           getApiKey,
           appDb: deps.getAppDatabase(),
+          sessionStorage,
+          historyForSession: (scopeSessionId: string) => sessionStorage.execution.historyFor({ sessionId: scopeSessionId }),
           ...(session ? { sessionEventLocation: { workDir: deps.getWorkDir(), sessionId, createdAt: session.createdAt } } : {}),
           currentUserMessageId: authoritative.currentUserMessageId,
           historyFacts,
@@ -555,7 +533,18 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             onChunkDropped: () => { droppedChunkEvents += 1 },
             onCriticalFailure: (error) => eventAppendFailures.push(toEventPersistenceFailure(error))
           }),
-          onTurnBoundary: async ({ phase = 'turn-boundary', requestId: boundaryRequestId, windowId, system, tools, surfaceSnapshot, messages, budget, contextUsage, toolExecutionCheckpoint, requiredSurfaceSet }) => {
+          contextProjectionCommitter: async ({ historyPayload }) => {
+            const ledger = historyPayload?.sessionLedger
+            if (!ledger || typeof ledger !== 'object' || Array.isArray(ledger)) return
+            const transaction = ledger as { start?: unknown; summary?: unknown }
+            if (!transaction.start || typeof transaction.start !== 'object' || Array.isArray(transaction.start) ||
+              !transaction.summary || typeof transaction.summary !== 'object' || Array.isArray(transaction.summary)) {
+              throw new Error('HOSTED_CONTEXT_COMPACTION_TRANSACTION_INVALID')
+            }
+            if (!eventWriter) throw new Error('HOSTED_CONTEXT_COMPACTION_EVENT_WRITER_REQUIRED')
+            await appendCompactionTransaction(eventWriter, transaction.start as Record<string, unknown>, transaction.summary as Record<string, unknown>)
+          },
+          onContextReplacementPlan: async ({ phase = 'turn-boundary', requestId: boundaryRequestId, windowId, system, tools, surfaceSnapshot, messages, budget, contextUsage, toolExecutionCheckpoint, requiredSurfaceSet }) => {
             const projection = contextUsage && {
               ...contextUsage,
               anchorStatus: contextUsage.projectedTokens == null ? 'missing' as const : 'matched' as const,
@@ -624,8 +613,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             return {
               messages: toCanonicalModelMessages(outputMessages as import('../src/shared/api').ClaudeChatMessageWithBlocks[]),
               ...(outputWindowId ? { windowId: outputWindowId } : {}),
-              historyPayload: { sessionLedger: { location, start, summary } },
-              commitProjection: async () => { await appendCompactionTransaction(boundaryEventWriter, start, summary) }
+              historyPayload: { checkpoint: { compactionId, replayIdentity: outputIdentities[0] }, sessionLedger: { location, start, summary } }
             }
           }
           ,emitFactEvent: (fact) => {
@@ -644,7 +632,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
           }
         })
         const hostedHandoffOptions = {
-          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: turnId, turnId, acceptedTurn, sessionDb: db, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, refreshExecutionContext: (_call, stage, current) => {
+          onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: turnPorts.history!, invocationId: turnId, turnId, acceptedTurn, sessionQueries: sessionStorage.queries, sessionExecution: sessionStorage.execution, routeId: providerRouteId, sessionId, maxToolRounds: turnInvocation.limits.maxToolRounds, recoverProviderAttempt: agentSdk.recoverProviderAttempt, refreshExecutionContext: (_call, stage, current) => {
             const toolsConfig = deps.getToolsConfig()
             const browserConfig = deps.getBrowserConfig()
             const shellConfig = deps.getShellConfig()

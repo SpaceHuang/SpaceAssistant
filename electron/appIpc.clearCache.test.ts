@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import path from 'path'
 import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
+import { updateQueuedUserMessageContent } from './database'
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
@@ -105,7 +106,7 @@ function makeWorkDirManager(): AppIpcContext['workDirManager'] {
 }
 
 function makeCtx(): AppIpcContext {
-  return {
+  const ctx: AppIpcContext = {
     db: { save: vi.fn(), flushSave: vi.fn() } as unknown as AppIpcContext['db'],
     backup: {
       schedule: vi.fn(),
@@ -125,6 +126,14 @@ function makeCtx(): AppIpcContext {
       devRoot: '/fake/project'
     })
   }
+  ctx.sessionStorage = {
+    queries: {} as never,
+    commands: {
+      editQueuedMessage: (input) => updateQueuedUserMessageContent(ctx.db, input)
+    } as never,
+    execution: {} as never
+  }
+  return ctx
 }
 
 describe('security:clear-cache 联动撤销旧信任存储（B6/B7）', () => {

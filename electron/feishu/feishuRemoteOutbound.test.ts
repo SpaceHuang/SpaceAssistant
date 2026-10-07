@@ -25,7 +25,7 @@ describe('sendFeishuRemoteOutbound', () => {
       messageId: 'm1',
       body: longBody,
       sessionId: SESSION_ID,
-      touch: { db: {} as never, sessionId: SESSION_ID }
+      touch: { sessionCommands: {} as never, sessionId: SESSION_ID }
     })
     const sent = vi.mocked(replyFeishuTextRaw).mock.calls[0]![2] as string
     expect(sent.length).toBeLessThanOrEqual(4000)

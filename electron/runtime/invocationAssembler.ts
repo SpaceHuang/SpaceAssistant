@@ -2,10 +2,10 @@ import { createHash } from 'node:crypto'
 import path from 'node:path'
 import type {
   AgentEventSink,
-  AgentHostPorts,
   AgentInvocation,
   AgentNotifyEvent
 } from '../../src/shared/agent/invocation'
+import type { AgentHostPorts } from '../../packages/agent-sdk/src/invocation'
 import { AGENT_ADDITIONAL_CONTEXT_KEYS } from '../../src/shared/agent/invocation'
 import type { FloatingNotificationManager } from '../floatingNotificationManager'
 import { readPolicyPackages, resolveEffectivePolicyRulesWithOrigin } from '../confirmation/policyRulesRuntime'
@@ -18,8 +18,9 @@ import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import type { AppDatabase } from '../database'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { recordStepUsage, recordTurnSummary } from '../usageStats/usageStatsRecorder'
-import { safeAppendDiagnostic } from '../mcp/mcpDiagnostics'
 import { scheduleSessionTitleSuggestion } from '../sessionTitleSuggest'
+import type { SessionStorage } from '../sessionStorage/contracts'
+import { safeAppendDiagnostic } from '../mcp/mcpDiagnostics'
 import { recordUserAnswerFromDecision } from '../confirmation/decisionCacheWriter'
 import { evaluateToolCallGate } from '../confirmation/toolCallGate'
 import { buildSnapshotFromDb, sanitizeMcpSnapshotForExecutors, type McpToolSnapshot } from '../mcp/mcpToolRegistry'
@@ -35,14 +36,12 @@ import { createHostedMcpToolRegistry } from '../mcp/hostedMcpRegistry'
 import { TypedToolRegistry } from '../tools/plannedToolRegistry'
 import { createWorkspaceSnapshotTracker } from '../workDirSnapshot'
 import { getDefaultAgentRuntime } from './agentRuntimeDefaults'
-import { SqliteAgentHistory } from './sqliteAgentHistory'
-import { createSpillStore } from '../storage/spillStore'
 import { createAgentSdkProviderRecovery } from './agentSdkProviderRecovery'
 import { createAgentSdkOutputRecovery } from './agentSdkOutputRecovery'
 import { createAgentSdkUsageRecorder, createAgentSdkUsageSessionEvent } from './agentSdkUsageRecorder'
 import type { StepAttribution } from '../../src/shared/usageAttribution'
 import { createAgentSdkDesktopObserver } from './agentSdkDesktopObserver'
-import { createAgentSdkPreflightAdapter, createAgentSdkTurnBoundaryAdapter } from './agentSdkTurnBoundary'
+import { createAgentSdkContextReplacementPlanner, createAgentSdkPreflightAdapter, createAgentSdkBoundaryReplacementAdapter } from './agentSdkContextReplacement'
 import { projectAgentToolResult } from '../../src/shared/agentToolResult'
 import { isProcessToolName } from '../../src/shared/processResultProjection'
 import { resolveRegisteredToolName } from '../tools/registeredToolName'
@@ -74,7 +73,7 @@ import { resolveHostedBrowserGateFacts } from './hostedBrowserGateFacts'
 import { shouldFallbackToUser } from '../confirmation/fallbackToUser'
 import { approvalFallbackReasonFor } from '../confirmation/fallbackReason'
 import type { ConfirmOutcome } from '../../src/shared/confirmation/types'
-import type { CacheKey } from '../../src/shared/confirmation/types'
+import type { CacheKey, Decision } from '../../src/shared/confirmation/types'
 import { cancelToolConfirm } from '../toolConfirmRegistry'
 import { buildConfirmationDiff } from '../confirmation/confirmDiff'
 import { extractHostname } from '../browser/urlSecurity'
@@ -139,8 +138,12 @@ export interface AgentInvocationMaterials {
   userDataDir: string
   getApiKey: () => Promise<string | null>
   appDb?: unknown
+  /** Public session ports composed by the application root. */
+  sessionStorage?: SessionStorage
   /** Optional canonical History adapter override for isolated host composition and non-SQLite lanes. */
   agentSdkHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
+  /** Scoped SDK History capability supplied by the session-storage composition root. */
+  historyForSession?: (sessionId: string) => import('../../packages/agent-sdk/src/history').HistoryPort
   locale?: import('../../src/shared/domainTypes').AppLocale
   projectMemoryEnabled?: boolean
   skillFragments?: string[]
@@ -163,7 +166,8 @@ export interface AgentInvocationMaterials {
   onTitleGenerated?: (session: import('../../src/shared/domainTypes').Session) => void
   sessionEventLocation?: { workDir: string; sessionId: string; createdAt: number }
   contextMeter?: import('../toolChatLoop').RunToolChatSessionArgs['contextMeter']
-  onTurnBoundary?: import('../toolChatLoop').HostedTurnBoundaryCallback
+  onContextReplacementPlan?: import('../toolChatLoop').HostedContextReplacementPlanner
+  contextProjectionCommitter?: import('../../packages/agent-sdk/src/context').ContextProjectionCommitter
   /** Runtime facts needed by Hosted SDK gate evaluation that are resolved at tool-call time. */
   resolveAgentSdkGateSupplement?: (input: { binding: PermitBinding; toolName: string; toolInput: Record<string, unknown>; signal?: AbortSignal }) => Promise<Pick<ToolCallGateArgs, 'dangerAssessment' | 'currentPageUrl' | 'remoteBudgetState' | 'audit'> | undefined> | Pick<ToolCallGateArgs, 'dangerAssessment' | 'currentPageUrl' | 'remoteBudgetState' | 'audit'> | undefined
   approvalAdmission?: import('./agentRuntime').ApprovalAdmissionLike
@@ -183,9 +187,9 @@ function scriptContentMemoryKey(value: unknown): CacheKey | undefined {
 }
 
 /** R1：会话工作目录单一事实源——装配期解析快照，调用边界经 refresh() 跟随绑定变更。 */
-function buildWorkspacePorts(materials: AgentInvocationMaterials, db: AppDatabase | undefined): AgentHostPorts['workspace'] {
+function buildWorkspacePorts(materials: AgentInvocationMaterials, sessionQueries: import('../sessionStorage/contracts').SessionQueries | undefined): AgentHostPorts['workspace'] {
   const tracker = createWorkspaceSnapshotTracker({
-    db,
+    sessionQueries,
     sessionId: materials.sessionId,
     workDirManager: materials.workDirManager as import('../workDirManager').WorkDirManager | undefined,
     fallbackWorkDir: materials.workDir,
@@ -272,6 +276,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       policy: ReturnType<typeof createAgentSdkSafetyPolicy>
       confirmation?: ConfirmationPort
       hostHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
+      contextProjectionCommitter?: import('../../packages/agent-sdk/src/context').ContextProjectionCommitter
       sessionTranscriptBaseVersion?: number
       sessionTranscriptFailureMessages?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionTranscriptFailureMessages']
       sessionLedgerForInvocationTerminal?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionLedgerForInvocationTerminal']
@@ -314,6 +319,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   const acceptedTurnId = materials.acceptedTurn?.turnId ?? materials.turnId
   const runtimeTurnId = acceptedTurnId ?? materials.requestId
   const db = materials.appDb as AppDatabase | undefined
+  const sessionStorage = materials.sessionStorage
+  if (db && !sessionStorage) throw new Error('SESSION_STORAGE_REQUIRED')
   // Model identity must come from the trusted resolver at the call site. Looking it up
   // by display name here would make unrelated Hosted/remote invocations depend on a
   // second catalog read and can select the wrong entry when names are not unique.
@@ -323,7 +330,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       ? materials.remoteContext.source === 'feishu' ? 'feishu' : 'wechat'
       : 'desktop')
   const sessionDirectoryGrants = materialsLane === 'desktop' && db
-    ? listValidSessionDirectoryGrantsSync(getSession(db, materials.sessionId) ?? { id: materials.sessionId, metadata: {} })
+    ? listValidSessionDirectoryGrantsSync(sessionStorage?.queries.readSession(materials.sessionId) ?? { id: materials.sessionId, metadata: {} })
     : []
   const additionalContext: Record<string, unknown> = {}
   if (materials.approvalTaskDigest !== undefined) {
@@ -518,23 +525,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       throw e
     }
   }
-  const storage = {
-    ...(materials.sessionEventLocation ? { sessionEventLocation: materials.sessionEventLocation } : {}),
-    ...(db
-      ? {
-          loaded: { metadata: getSession(db, materials.sessionId)?.metadata },
-          readSession: (sessionId: string) => getSession(db, sessionId),
-          persist: {
-            updateSessionMetadata: (sessionId: string, patch: Record<string, unknown>) =>
-              persistObservable('updateSessionMetadata', () => updateSession(db, sessionId, patch as never)),
-            scheduleTitleSuggestion: (input: Record<string, unknown>) =>
-              persistObservable('scheduleTitleSuggestion', () => scheduleSessionTitleSuggestion({ ...input, db } as never)),
-            recordUserAnswerFromDecision: (input: Record<string, unknown>) =>
-              persistObservable('recordUserAnswerFromDecision', () => recordUserAnswerFromDecision({ ...input, db, audit: getSecurityAuditLog() } as never))
-          }
-        }
-      : {})
-  }
   // 暴露面规则与门控同源同判（P3：带来源解析；嵌套交集同样适用）
   const exposure = db ? { rules: effectiveRules } : undefined
   // FR11（评审 P1 修复）：装配器先读档位再建快照——auto/always 档按偏执上限（512/1 MiB）准入，
@@ -596,7 +586,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   // 直接短路（toolChatLoop 只见端口，豁免判定留在有 db 的装配侧）
   const usageExempt = db
     ? (() => {
-        const s = getSession(db, materials.sessionId)
+        const s = sessionStorage?.queries.readSession(materials.sessionId)
         return s?.ownership === 'internal' || s?.visibility === 'hidden'
       })()
     : false
@@ -662,7 +652,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     const currentShellConfig = binding.phase === 'recheck' ? materials.resolveShellConfig?.() ?? materials.shellConfig : materials.shellConfig
     const currentWikiConfig = binding.phase === 'recheck' ? materials.resolveWikiConfig?.() ?? materials.wikiConfig : materials.wikiConfig
     const currentSessionDirectoryGrants = materialsLane === 'desktop' && db
-      ? (getSession(db, materials.sessionId)?.metadata?.sessionDirectoryGrants as SessionDirectoryGrantRecord[] | undefined) ?? []
+      ? (sessionStorage?.queries.readSession(materials.sessionId)?.metadata?.sessionDirectoryGrants as SessionDirectoryGrantRecord[] | undefined) ?? []
       : []
     return {
       toolName,
@@ -729,14 +719,16 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           permitHandoff.onConfirmed?.(binding, result, args, answerer)
           if (answerer !== 'user' || result.decision.type !== 'require-confirm') return
           if (args.toolName === 'run_script' && selectedMemory?.kind === 'script-content' && db) {
-            storage.persist?.recordUserAnswerFromDecision({
+            persistObservable('recordUserAnswerFromDecision', () => recordUserAnswerFromDecision({
               lane: materialsLane,
               sessionId: materials.sessionId,
               key: selectedMemory,
-              decision: result.decision,
+              decision: result.decision as Extract<Decision, { type: 'require-confirm' }>,
               answererKind: 'user',
-              source: 'user-confirm'
-            })
+              source: 'user-confirm',
+              db: db!,
+              audit: getSecurityAuditLog()
+            }))
             return
           }
           if (args.toolName !== 'browser') return
@@ -759,14 +751,16 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
             }
           }
           if (db && cacheKey) {
-            storage.persist?.recordUserAnswerFromDecision({
+            persistObservable('recordUserAnswerFromDecision', () => recordUserAnswerFromDecision({
               lane: materialsLane,
               sessionId: materials.sessionId,
-              key: cacheKey,
-              decision: result.decision,
+              key: cacheKey!,
+              decision: result.decision as Extract<Decision, { type: 'require-confirm' }>,
               answererKind: 'user',
-              source: 'user-confirm'
-            })
+              source: 'user-confirm',
+              db: db!,
+              audit: getSecurityAuditLog()
+            }))
           }
         }
       })
@@ -816,8 +810,10 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         policyRevision: authorizationVersion,
         shellOutputMode: resolveEffectiveShellOutputMode(materials.shellConfig ?? undefined, undefined, materials.remoteContext?.source),
         ...(db ? { appDatabase: db } : {}),
+        ...(sessionStorage ? { sessionQueries: sessionStorage.queries } : {}),
+        ...(sessionStorage ? { sessionCommands: sessionStorage.commands } : {}),
         isSessionDirectoryGrantActive: (grant: Pick<SessionDirectoryGrantRecord, 'grantId' | 'sessionId' | 'realPath' | 'identity'>) => {
-          const currentSession = db ? getSession(db, grant.sessionId) : undefined
+          const currentSession = sessionStorage?.queries.readSession(grant.sessionId)
           if (!currentSession || currentSession.id !== materials.sessionId) return false
           return listValidSessionDirectoryGrantsSync(currentSession).some((current) =>
             current.grantId === grant.grantId && current.sessionId === grant.sessionId &&
@@ -891,6 +887,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           if (!db) return Promise.resolve({ ok: false as const, cause: 'unavailable' as const })
           return import('../confirmation/approvalAgent').then(({ runApprovalAgent }) => runApprovalAgent({
             db,
+            sessionStorage: sessionStorage!,
+            ...(materials.historyForSession ? { historyForSession: materials.historyForSession } : {}),
             policyRuleFloor: materials.policyRuleFloor ?? effectiveRules,
             workDir: materials.resolveWorkDir?.() ?? materials.workDir,
             userDataDir: materials.userDataDir,
@@ -947,7 +945,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         if (confirmationDecision.answerer !== 'agent' && materialsLane === 'desktop') {
           buildEventSink(materials).notify?.({
             kind: 'confirm-request', requestId: materials.requestId, sessionId: materials.sessionId,
-            sessionName: sessionDisplayNameRaw((db ? getSession(db, materials.sessionId) : undefined)?.name, materials.sessionId),
+            sessionName: sessionDisplayNameRaw(sessionStorage?.queries.readSession(materials.sessionId)?.name, materials.sessionId),
             toolUseId: call.toolCallId, toolName: call.toolName, input: call.input
           })
         }
@@ -1049,6 +1047,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       registry?: import('../tools/plannedToolRegistry').TypedToolRegistry
       authorizedToolNames: ReadonlySet<string>
       hostHistory?: import('../../packages/agent-sdk/src/history').HistoryPort
+      contextProjectionCommitter?: import('../../packages/agent-sdk/src/context').ContextProjectionCommitter
       sessionTranscriptBaseVersion?: number
       sessionTranscriptFailureMessages?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['sessionTranscriptFailureMessages']
       policy: ReturnType<typeof createAgentSdkSafetyPolicy>
@@ -1098,6 +1097,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         admission: runtime.executionAdmission,
         safetyGate,
         history,
+        ...(input.contextProjectionCommitter ?? materials.contextProjectionCommitter ? { contextProjectionCommitter: input.contextProjectionCommitter ?? materials.contextProjectionCommitter } : {}),
         ...(input.sessionTranscriptBaseVersion !== undefined ? { sessionTranscriptBaseVersion: input.sessionTranscriptBaseVersion } : {}),
         ...(input.sessionTranscriptFailureMessages ? { sessionTranscriptFailureMessages: input.sessionTranscriptFailureMessages } : {}),
         ...(input.sessionLedgerForInvocationTerminal ? { sessionLedgerForInvocationTerminal: input.sessionLedgerForInvocationTerminal } : {}),
@@ -1111,8 +1111,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         recordProviderAttemptUsage: ports.recordProviderAttemptUsage,
         recoverProviderAttempt: input.recoverProviderAttempt,
         recoverOutputLimit: createAgentSdkOutputRecovery({ location: materials.sessionEventLocation, turnId: runtimeTurnId, stepId: materials.requestId }),
-        ...(ports.preflightModelRequest ? { preflightModelRequest: ports.preflightModelRequest as never } : {}),
-        ...(ports.turnBoundary ? { turnBoundary: ports.turnBoundary as never } : {}),
+        ...(ports.planContextReplacement ? { planContextReplacement: ports.planContextReplacement as never } : {}),
         maxConcurrentTools: materials.toolExecutionConcurrency ?? runtime.toolExecutionConcurrency,
         maxModelTurns: Math.max(12, (materials.maxToolLoopRounds ?? 0) + 1),
         ...(materials.maxToolLoopRounds !== undefined ? { maxToolRounds: materials.maxToolLoopRounds } : {}),
@@ -1329,12 +1328,18 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     safetyPermits: (() => {
       try { return getDefaultAgentRuntime().safetyPermits } catch { return undefined }
     })(),
-    ...((materials.agentSdkHistory || db) ? (() => {
-      const history = materials.agentSdkHistory ?? new SqliteAgentHistory(getDbConnection(db!), 1, Date.now, materials.sessionId, createSpillStore(path.join(materials.userDataDir, 'spill')))
+    ...((materials.agentSdkHistory || materials.historyForSession) ? (() => {
+      const history = materials.agentSdkHistory ?? materials.historyForSession!(materials.sessionId)
       return { history }
-      })() : {}),
+    })() : {}),
     policy,
-    storage,
+    ...(db ? {
+      sessionMetadata: sessionStorage?.queries.readSession(materials.sessionId)?.metadata,
+      titleSuggestions: {
+        schedule: (input: Record<string, unknown>) =>
+          persistObservable('scheduleTitleSuggestion', () => scheduleSessionTitleSuggestion({ ...input, db, sessionStorage } as never))
+      }
+    } : {}),
     exposure,
     mcp,
     usage,
@@ -1425,7 +1430,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     }),
     diagnostics,
     answerer,
-    workspace: buildWorkspacePorts(materials, db),
+    workspace: buildWorkspacePorts(materials, sessionStorage?.queries),
     credentials: {
       resolveApiKey: () => materials.getApiKey(),
       ...(materials.baseUrl !== undefined ? { networkTarget: { baseUrl: materials.baseUrl } } : {})
@@ -1435,22 +1440,24 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       ? { hostFacts: { getBrowserDetectContext: () => materials.getBrowserDetectContext!() } }
       : {}),
     ...(materials.contextMeter !== undefined ? { contextMeter: materials.contextMeter } : {}),
-    ...(materials.onTurnBoundary !== undefined ? { preflightModelRequest: createAgentSdkPreflightAdapter({
-      compact: async (input) => materials.onTurnBoundary!({ ...input, phase: 'preflight', messages: input.messages as never })
-    }) } : {}),
-    ...(materials.onTurnBoundary !== undefined ? { turnBoundary: createAgentSdkTurnBoundaryAdapter({
+    ...(materials.onContextReplacementPlan !== undefined ? { planContextReplacement: createAgentSdkContextReplacementPlanner({
+      preflight: createAgentSdkPreflightAdapter({
+      compact: async (input) => materials.onContextReplacementPlan!({ ...input, phase: 'preflight', messages: input.messages as never })
+      }),
+      boundary: createAgentSdkBoundaryReplacementAdapter({
       compact: async (input) => {
         const projection = input.plannerInputs
         if (!projection) return undefined
         const system = projection.system
         const messages = input.legacyMessages
-        return materials.onTurnBoundary!({
+        return materials.onContextReplacementPlan!({
           requestId: projection.requestId, windowId: projection.windowId, system, tools: projection.tools,
           surfaceSnapshot: projection.surfaceSnapshot, messages: messages as never, budget: projection.budget,
           contextUsage: projection.contextUsage,
           toolExecutionCheckpoint: projection.toolExecutionCheckpoint, requiredSurfaceSet: projection.requiredSurfaceSet
         })
       }
+      })
     }) } : {}),
     recoverProviderAttempt: createAgentSdkProviderRecovery({
       contextWindow: materials.contextWindow,

@@ -104,9 +104,36 @@ function makeWorkDirManager(): AppIpcContext['workDirManager'] {
   }
 }
 
+function mockSessionUpdatePreferences(db: AppIpcContext['db'], input: { sessionId: string; name?: string; metadataPatch?: Record<string, unknown>; [key: string]: unknown }): Session | undefined {
+  const current = mockGetSession(input.sessionId) as Session | undefined
+  if (!current) return undefined
+  const name = input.name?.trim()
+  const changed = name !== undefined && name !== '' && name !== current.name.trim()
+  const { sessionId: _sessionId, name: _name, metadataPatch, ...settings } = input
+  return mockUpdateSession(db, input.sessionId, {
+    ...settings,
+    ...(changed ? { name } : {}),
+    ...(metadataPatch || changed ? { metadata: { ...current.metadata, ...metadataPatch, ...(changed ? { [SESSION_META_TITLE_USER_CUSTOM]: true } : {}) } } : {})
+  }) as Session | undefined
+}
+
 function makeCtx(): AppIpcContext {
   return {
     db: {} as AppIpcContext['db'],
+    sessionStorage: {
+      queries: { readSession: (sessionId: string) => mockGetSession(sessionId) } as AppIpcContext['sessionStorage'] extends infer T ? T extends { queries: infer Q } ? Q : never : never,
+      commands: {
+        createSession: (input) => mockCreateSession({} as AppIpcContext['db'], input) as Session,
+        renameSession: (sessionId: string, name: string) => mockSessionUpdatePreferences({} as AppIpcContext['db'], { sessionId, name }),
+        updateSettings: (input: Parameters<NonNullable<AppIpcContext['sessionStorage']>['commands']['updateSettings']>[0]) => mockSessionUpdatePreferences({} as AppIpcContext['db'], input),
+        updateUserMetadata: (sessionId, metadataPatch) => mockSessionUpdatePreferences({} as AppIpcContext['db'], { sessionId, metadataPatch }),
+        updateDirectoryGrants: vi.fn(),
+        deleteQueuedMessage: vi.fn(), editQueuedMessage: vi.fn(), reorderQueuedMessages: vi.fn(),
+        deleteSession: (sessionId: string) => { mockDeleteSession({} as AppIpcContext['db'], sessionId, { flush: false }) },
+        enqueue: vi.fn()
+      },
+      execution: {} as NonNullable<AppIpcContext['sessionStorage']>['execution']
+    } as NonNullable<AppIpcContext['sessionStorage']>,
     backup: {
       schedule: vi.fn(),
       flush: vi.fn(),
@@ -384,6 +411,7 @@ describe('session:delete IPC busy guard', () => {
   it('wakes source-truth spill collection only after the database deletion commits', async () => {
     const wake = vi.fn()
     ctx.wakeSourceTruthSpillGc = wake
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
     const handler = ipc.getHandler('session:delete')!
     const priorDeleteCalls = mockDeleteSession.mock.calls.length
     mockDeleteSession.mockImplementationOnce(() => { throw new Error('database delete rolled back') })

@@ -1,14 +1,34 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { appendMessage, createSession, getDbConnection, openDatabase } from '../database'
-import { createAcceptedTurnFromPrepared, loadAcceptedTurnMessages } from './acceptedTurnContext'
+import { createAcceptedTurnFromPrepared as createAcceptedTurnFromPreparedWithPort, loadAcceptedTurnMessages as loadAcceptedTurnMessagesWithPort } from './acceptedTurnContext'
 import { commitSessionTranscript } from '../database/sessionTranscript'
 import { readAcceptedTurn } from '../database/acceptedTurnStorage'
 import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import * as sessionStorageShadow from './sessionStorageShadow'
-import * as sessionStorageCutover from './sessionStorageCutover'
+import * as sessionStorageMaintenance from '../sessionStorage/maintenance'
+import * as sessionStorageCertification from '../sessionStorage/certification'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+import { createSessionExecutionStore, loadAcceptedMessagesForTurn } from '../sessionStorage/execution'
+
+function createAcceptedTurnFromPrepared(
+  db: Parameters<typeof createSqliteSessionStorage>[0],
+  prepared: Parameters<typeof createAcceptedTurnFromPreparedWithPort>[0],
+  lane: Parameters<typeof createAcceptedTurnFromPreparedWithPort>[1],
+  config: Parameters<typeof createAcceptedTurnFromPreparedWithPort>[2]
+) {
+  return createAcceptedTurnFromPreparedWithPort(prepared, lane, config, createSqliteSessionStorage(db).execution)
+}
+
+function loadAcceptedTurnMessages(db: Parameters<typeof createSqliteSessionStorage>[0], turn: Parameters<typeof loadAcceptedTurnMessagesWithPort>[0]) {
+  const storage = createSqliteSessionStorage(db)
+  const execution = storage.execution
+  return execution.readTurn({ sessionId: turn.sessionId, turnId: turn.turnId })
+    ? loadAcceptedTurnMessagesWithPort(turn, execution)
+    : loadAcceptedMessagesForTurn(db, turn, storage.queries)
+}
 
 describe('createAcceptedTurnFromPrepared', () => {
   let db: ReturnType<typeof createMemoryAppDb>
@@ -55,6 +75,29 @@ describe('loadAcceptedTurnMessages Phase 5.2 shadow ordering', () => {
   beforeEach(() => { db = createMemoryAppDb('zh-CN'); vi.restoreAllMocks() })
   afterEach(() => db.close())
 
+  it('通过注入的 SessionQueries 读取 accepted turn context', async () => {
+    const session = createSession(db, { name: 'accepted-query-port' })
+    const user = appendMessage(db, { id: 'accepted-query-user', sessionId: session.id, role: 'user', content: 'from query port', timestamp: 1, status: 'sent' })
+    const assistant = appendMessage(db, { id: 'accepted-query-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+    const accepted = createAcceptedTurnFromPrepared(db, {
+      turnId: 'accepted-query-turn', requestId: 'accepted-query-request', sessionId: session.id,
+      startToken: 'accepted-query-start', userMessage: { id: user.message.id }
+    }, 'desktop', { lane: 'desktop' })
+    getDbConnection(db).prepare(`INSERT INTO turns (turn_id,request_id,session_id,assistant_message_id,user_message_id,state,version,start_token,created_at,updated_at)
+      VALUES(?,?,?,?,?,'prepared',0,?,1,1)`).run(accepted.turnId, accepted.requestId, session.id, assistant.message.id, user.message.id, accepted.startToken)
+    const storage = createSqliteSessionStorage(db)
+    const readTurnContext = vi.fn(storage.queries.readTurnContext)
+    const queries = Object.freeze({ ...storage.queries, readTurnContext })
+    const executionStore = createSessionExecutionStore(db, queries)
+    const turn = { turnId: accepted.turnId, requestId: accepted.requestId, sessionId: session.id, userMessageId: user.message.id,
+      acceptedInputHistoryVersion: 0, excludeMessageIds: [] } as never
+
+    expect(executionStore.loadAcceptedMessages({ sessionId: session.id, turnId: turn.turnId })).toEqual([user.message])
+    expect(readTurnContext).toHaveBeenCalledWith({
+      sessionId: session.id, boundarySequence: null, requiredUserMessageId: user.message.id, excludeMessageIds: []
+    })
+  })
+
   async function seedAcceptedTurn(fingerprint: string) {
     const session = createSession(db, { name: 'accepted-shadow' })
     const user = appendMessage(db, { id: 'accepted-shadow-user', sessionId: session.id, role: 'user', content: 'accepted body', timestamp: 1, status: 'sent' })
@@ -99,11 +142,11 @@ describe('loadAcceptedTurnMessages Phase 5.2 shadow ordering', () => {
       eventId: 'accepted-cutover-context', idempotencyKey: 'accepted-cutover-context', kind: 'invocation-context-committed',
       payload: { messages: [{ id: user.message.id, role: 'user', content: 'accepted body', timestamp: 1 }] }
     }], 1)
-    sessionStorageCutover.setCanonicalApiReadFeatureEnabled(db, true)
-    expect(sessionStorageCutover.certifyCanonicalSessionApiRead(db, session.id)).toMatchObject({
+    sessionStorageCertification.setCanonicalApiReadFeatureEnabled(db, true)
+    expect(sessionStorageCertification.certifyCanonicalSessionApiRead(db, session.id)).toMatchObject({
       status: 'eligible', apiReadMode: 'canonical', apiDifferenceCount: 0, routeDifferenceCount: 0
     })
-    const canonicalRead = vi.spyOn(sessionStorageCutover, 'readCanonicalApiContextIfEligible')
+    const canonicalRead = vi.spyOn(sessionStorageCertification, 'readCanonicalApiContextIfEligible')
     const duplicateShadow = vi.spyOn(sessionStorageShadow, 'shadowAcceptedTurnContext')
     const turn = { turnId: accepted.turnId, requestId: accepted.requestId, sessionId: session.id, userMessageId: user.message.id,
       acceptedInputHistoryVersion: 1, excludeMessageIds: [] } as never
@@ -144,18 +187,18 @@ describe('loadAcceptedTurnMessages Phase 5.2 shadow ordering', () => {
       eventId: 'accepted-cleanup-context', idempotencyKey: 'accepted-cleanup-context', kind: 'invocation-context-committed',
       payload: { messages: [{ id: user.message.id, role: 'user', content: 'accepted body', timestamp: user.message.timestamp }] }
     }], 1)
-    sessionStorageCutover.setCanonicalApiReadFeatureEnabled(db, true)
-    expect(sessionStorageCutover.certifyCanonicalSessionApiRead(db, session.id).status).toBe('eligible')
+    sessionStorageCertification.setCanonicalApiReadFeatureEnabled(db, true)
+    expect(sessionStorageCertification.certifyCanonicalSessionApiRead(db, session.id).status).toBe('eligible')
     const { enableCanonicalSessionWriteAuthority } = await import('./sessionContentWriteAuthority')
     expect(enableCanonicalSessionWriteAuthority(db, session.id).status).toBe('enabled')
-    expect(sessionStorageCutover.markSessionMessageContentWriteStopped(db, session.id)).toBe(true)
-    expect(sessionStorageCutover.beginSessionMessageContentCleanup(db, session.id)).toBe(true)
-    expect(sessionStorageCutover.clearNextSessionMessageContentBatch(db, session.id, 10))
+    expect(sessionStorageMaintenance.markSessionMessageContentWriteStopped(db, session.id)).toBe(true)
+    expect(sessionStorageMaintenance.beginSessionMessageContentCleanup(db, session.id)).toBe(true)
+    expect(sessionStorageMaintenance.clearNextSessionMessageContentBatch(db, session.id, 10))
       .toMatchObject({ status: 'complete', cleanedMessageCount: 1 })
     expect(getDbConnection(db).prepare('SELECT content,content_storage_state FROM messages WHERE id=?').get(user.message.id))
       .toEqual({ content: '', content_storage_state: 'canonical-backed-only' })
 
-    sessionStorageCutover.setCanonicalApiReadFeatureEnabled(db, false)
+    sessionStorageCertification.setCanonicalApiReadFeatureEnabled(db, false)
     const turn = { turnId: accepted.turnId, requestId: accepted.requestId, sessionId: session.id, userMessageId: user.message.id,
       acceptedInputHistoryVersion: 1, excludeMessageIds: [] } as never
 

@@ -112,7 +112,7 @@ function makeWorkDirManager(): AppIpcContext['workDirManager'] {
 }
 
 function makeCtx(): AppIpcContext {
-  return {
+  const ctx: AppIpcContext = {
     db: { flushSave: vi.fn(), save: vi.fn() } as unknown as AppIpcContext['db'],
     backup: {
       schedule: vi.fn(),
@@ -134,6 +134,15 @@ function makeCtx(): AppIpcContext {
       devRoot: '/fake/project'
     })
   }
+  ctx.sessionStorage = {
+    queries: { readSession: (sessionId: string) => mockGetSession(ctx.db, sessionId) } as never,
+    commands: {
+      updateSettings: ({ sessionId, ...patch }) => mockUpdateSession(ctx.db, sessionId, patch),
+      updateUserMetadata: (sessionId, patch) => mockUpdateSession(ctx.db, sessionId, { metadata: patch })
+    } as never,
+    execution: {} as never
+  }
+  return ctx
 }
 
 function stubSession(overrides: Partial<Session> = {}): Session {

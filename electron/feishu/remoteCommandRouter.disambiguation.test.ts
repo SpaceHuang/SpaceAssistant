@@ -9,6 +9,7 @@ import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { CLAIM_LEASE_MS, ImProcessedStore } from '../remote/imProcessedStore'
 import { getSession, openDatabase, createSession } from '../database'
 import { createWorkDirManager } from '../workDirManager'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 
 const mockReplyFeishuText = vi.fn().mockResolvedValue(undefined)
 const mockRunFeishuRemoteAgent = vi.fn()
@@ -88,8 +89,10 @@ describe('RemoteCommandRouter workdir disambiguation identity', () => {
   })
 
   function makeRouter(overrides?: { processedStore?: Record<string, unknown> }) {
+    const db = openDatabase(':memory:')
     const router = new RemoteCommandRouter({
-      db: {} as never,
+      db,
+      sessionStorage: createSqliteSessionStorage(db),
       runner: { run: vi.fn() } as never,
       processedStore: (overrides?.processedStore ?? {
         has: vi.fn().mockResolvedValue(false),
@@ -328,6 +331,7 @@ describe('RemoteCommandRouter markExecuting gate', () => {
     const markCompleted = vi.fn().mockResolvedValue(true)
     const router = new RemoteCommandRouter({
       db,
+      sessionStorage: createSqliteSessionStorage(db),
       runner: { run: vi.fn() } as never,
       processedStore: {
         has: vi.fn().mockResolvedValue(false),

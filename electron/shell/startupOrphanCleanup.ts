@@ -1,10 +1,9 @@
-import type { Message } from '../../src/shared/domainTypes'
-import { listPersistedTurns } from '../database'
+import { listPersistedTurns, type StoredMessageSkeleton } from '../database'
 import { cleanupOrphanProcess, type OrphanCleanupResult } from './orphanProcessCleanup'
 
 export type StartupOrphanCleanupDeps = {
   listTurns: () => ReturnType<typeof listPersistedTurns>
-  getMessageSkeleton: (id: string) => Message | undefined
+  getMessageSkeleton: (id: string) => StoredMessageSkeleton | undefined
   cleanup?: (identity: { pid: number; processGroupId?: number; ownerToken: string }) => Promise<OrphanCleanupResult>
   audit?: (entry: { turnId: string; toolUseId: string; result: OrphanCleanupResult }) => void
 }

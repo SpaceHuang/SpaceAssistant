@@ -396,12 +396,16 @@ export function scheduleSourceTruthSpillGcMaintenance(
   db: AppDatabase,
   root: string,
   options: { intervalMs?: number; onResult?: (summary: SourceTruthSpillGcSummary | 'failed') => void } = {}
-): () => void {
+): (() => void) & { quiesce(): Promise<void> } {
+  let running: Promise<void> | undefined
   const timer = setInterval(() => {
-    void runSourceTruthSpillGcMaintenance(db, root).then((summary) => options.onResult?.(summary)).catch(() => options.onResult?.('failed'))
+    if (running) return
+    running = runSourceTruthSpillGcMaintenance(db, root).then((summary) => options.onResult?.(summary)).catch(() => options.onResult?.('failed')).then(() => { running = undefined })
   }, options.intervalMs ?? 5 * 60 * 1000)
   timer.unref?.()
-  return () => clearInterval(timer)
+  const stop = (() => clearInterval(timer)) as (() => void) & { quiesce(): Promise<void> }
+  stop.quiesce = async () => { await running }
+  return stop
 }
 
 /** Retain only canonical-referenced degradable copies; source-of-truth objects are excluded by class. */

@@ -6,6 +6,9 @@ import { performance } from 'node:perf_hooks'
 import type { AppDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
+import { clearSessionProjectionCaches } from './sessionProjectionCacheMaintenance'
+
+export { clearSessionProjectionCaches } from './sessionProjectionCacheMaintenance'
 
 export type StorageMaintenanceProgress = Readonly<{ phase: 'archive' | 'vacuum' | 'reclaim' | 'complete'; completedPages?: number; remainingPages?: number }>
 
@@ -97,17 +100,6 @@ function writeMaintenanceReport(archivePath: string, report: Record<string, unkn
   fs.writeFileSync(temporaryPath, `${JSON.stringify(report, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
   fs.renameSync(temporaryPath, reportPath)
   return reportPath
-}
-
-export function clearSessionProjectionCaches(db: AppDatabase): { cacheRows: number; eligibilityRows: number } {
-  const conn = getDbConnection(db)
-  const cleared = runInTransaction(conn, () => {
-    const cacheRows = Number(conn.prepare('DELETE FROM canonical_session_projection_cache').run().changes)
-    const eligibilityRows = Number(conn.prepare('DELETE FROM canonical_session_projection_eligibility').run().changes)
-    return { cacheRows, eligibilityRows }
-  })
-  db.save()
-  return cleared
 }
 
 function activeSessionTurnCount(db: AppDatabase): number {

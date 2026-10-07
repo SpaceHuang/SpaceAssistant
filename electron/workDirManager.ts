@@ -4,7 +4,8 @@ import { randomUUID } from 'crypto'
 import type { Session } from '../src/shared/domainTypes'
 import type { WorkDirProfile } from '../src/shared/feishuTypes'
 import type { AppDatabase } from './database'
-import { getConfigValue, getSession, listSessions, listSessionsMissingWorkDirProfile, setConfigValue, updateSession } from './database'
+import { getConfigValue, getSession, setConfigValue } from './database'
+import type { SessionCommands, SessionQueries } from './sessionStorage/contracts'
 
 const PROFILES_KEY = 'config.workDirProfiles'
 const ACTIVE_KEY = 'config.activeWorkDirProfileId'
@@ -78,8 +79,8 @@ function normalizePath(p: string): string {
   return path.normalize(p.trim())
 }
 
-export function listSessionsForProfile(db: AppDatabase, profileId: string): Session[] {
-  return listSessions(db).filter((s) => {
+export function listSessionsForProfile(sessionQueries: SessionQueries, profileId: string): Session[] {
+  return sessionQueries.listSessions().filter((s) => {
     if (!s.workDirProfileId) return false
     return s.workDirProfileId === profileId
   })
@@ -93,13 +94,13 @@ export type ResolvedSessionWorkDir = {
 
 /** 按会话绑定的 Profile 解析 workDir；缺失时回退到当前 active profile */
 export function resolveWorkDirForSession(
-  db: AppDatabase,
+  sessionQueries: SessionQueries,
   sessionId: string,
   listProfiles: () => WorkDirProfile[],
   getActiveProfileId: () => string,
   getActiveWorkDir: () => string
 ): ResolvedSessionWorkDir | null {
-  const session = getSession(db, sessionId)
+  const session = sessionQueries.readSession(sessionId)
   if (!session) return null
 
   if (session.fixedWorkDir) {
@@ -127,14 +128,14 @@ export function resolveWorkDirForSession(
 }
 
 export function buildResolveWorkDirCallback(
-  db: AppDatabase,
+  sessionQueries: SessionQueries,
   sessionId: string,
   workDirManager: WorkDirManager,
   fallbackWorkDir: string
 ): () => string {
   return () => {
     const resolved = resolveWorkDirForSession(
-      db,
+      sessionQueries,
       sessionId,
       () => workDirManager.listProfiles(),
       () => workDirManager.getActiveProfileId(),
@@ -146,6 +147,8 @@ export function buildResolveWorkDirCallback(
 
 export function createWorkDirManager(ctx: {
   db: AppDatabase
+  sessionQueries?: SessionQueries
+  sessionCommands?: Pick<SessionCommands, 'updateSettings'>
   getWorkDir: () => string
   setWorkDir: (dir: string) => void
   onBeforeSwitch?: () => Promise<void>
@@ -346,7 +349,7 @@ export function createWorkDirManager(ctx: {
 
     const fromId = getActiveProfileId()
     if (fromId === profileId) {
-      return { success: true, sessions: listSessionsForProfile(ctx.db, profileId) }
+      return { success: true, sessions: ctx.sessionQueries ? listSessionsForProfile(ctx.sessionQueries, profileId) : [] }
     }
 
     switchLock = true
@@ -356,7 +359,7 @@ export function createWorkDirManager(ctx: {
       setConfigValue(ctx.db, WORK_DIR_KEY, profile.path)
       ctx.setWorkDir(profile.path)
       ctx.onAfterSwitch?.(fromId, profileId)
-      return { success: true, sessions: listSessionsForProfile(ctx.db, profileId) }
+      return { success: true, sessions: ctx.sessionQueries ? listSessionsForProfile(ctx.sessionQueries, profileId) : [] }
     } catch (err) {
       return { success: false, error: (err as Error).message, sessions: [] }
     } finally {
@@ -382,9 +385,12 @@ export function createWorkDirManager(ctx: {
     setConfigValue(ctx.db, WORK_DIR_KEY, legacyWorkDir)
 
     let changed = false
-    for (const s of listSessionsMissingWorkDirProfile(ctx.db)) {
-      updateSession(ctx.db, s.id, { workDirProfileId: defaultProfile.id })
-      changed = true
+    if (ctx.sessionQueries && ctx.sessionCommands) {
+      for (const session of ctx.sessionQueries.listSessions()) {
+        if (session.workDirProfileId) continue
+        ctx.sessionCommands.updateSettings({ sessionId: session.id, workDirProfileId: defaultProfile.id })
+        changed = true
+      }
     }
     if (changed) ctx.db.flushSave()
   }

@@ -590,10 +590,12 @@ describe('runAgentTurn', () => {
     const permits = new InMemorySafetyPermitStore()
     const oldMessage = { role: 'user' as const, content: 'old context' }
     const currentMessage = { role: 'user' as const, content: 'current question' }
-    const preflightModelRequest = vi.fn(async () => ({
-      messages: [currentMessage],
-      windowId: 'window-reset'
-    }))
+    const planContextReplacement = vi.fn(async (input: import('../src/turn').ContextReplacementPlanInput) => input.phase === 'preflight' ? ({
+      messages: [currentMessage], windowId: 'window-reset'
+    }) : undefined)
+    const contextProjectionCommitter = vi.fn(async () => {
+      expect((await history.read('preflight-request')).events.at(-1)?.kind).toBe('transcript-compacted')
+    })
 
     await runAgentTurn({
       registry, routeId: route.routeId, invocationId: 'preflight-request', history,
@@ -601,10 +603,11 @@ describe('runAgentTurn', () => {
       request: { messages: [oldMessage, currentMessage], maxTokens: 32 },
       safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' }) } }),
       prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })), maxModelTurns: 1,
-      preflightModelRequest
+      planContextReplacement, contextProjectionCommitter
     })
 
-    expect(preflightModelRequest).toHaveBeenCalledOnce()
+    expect(planContextReplacement.mock.calls.map(([call]) => call.phase)).toEqual(['preflight', 'turn-boundary'])
+    expect(contextProjectionCommitter).toHaveBeenCalledOnce()
     expect(providerRequests).toEqual([[currentMessage]])
     expect((await history.read('preflight-request')).events.map(({ kind }) => kind)).toEqual([
       'invocation-context-committed', 'transcript-compacted', 'model-request-started', 'model-response-committed', 'invocation-completed'
@@ -612,6 +615,30 @@ describe('runAgentTurn', () => {
     expect((await history.read('preflight-request')).events[1]).toMatchObject({ payload: {
       messages: [currentMessage], requiredUserMessage: { id: 'user-current', message: currentMessage }
     } })
+  })
+
+  it('does not execute a projection callback returned by an untrusted context planner', async () => {
+    const history = new MemoryHistory()
+    const registry = new ModelProviderRegistry()
+    registry.register(route, { providerId: 'fake', stream: () => stream(
+      { type: 'text-delta', text: 'answer' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
+    ) })
+    const permits = new InMemorySafetyPermitStore()
+    const plannerProjection = vi.fn()
+
+    await runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'untrusted-context-plan', history,
+      request: { messages: [{ role: 'user', content: 'question' }], maxTokens: 32 },
+      safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' }) } }),
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn()), maxModelTurns: 1,
+      planContextReplacement: async ({ phase, messages }) => phase === 'turn-boundary' ? ({
+        messages, windowId: 'planner-window',
+        commitProjection: plannerProjection
+      } as never) : undefined
+    })
+
+    expect((await history.read('untrusted-context-plan')).events.map(({ kind }) => kind)).toContain('transcript-compacted')
+    expect(plannerProjection).not.toHaveBeenCalled()
   })
 
   it('fails closed when the preflight planner leaves the request over budget', async () => {
@@ -633,7 +660,7 @@ describe('runAgentTurn', () => {
       observer: { prepareModelRequest: async () => ({ requestProjection: {
         budget: { totalInputBudget: 10 }, surfaceSnapshot: { surfaceTokens: 11 }, contextUsage: { projectedTokens: 11 }
       } }) },
-      preflightModelRequest: vi.fn(async () => undefined)
+      planContextReplacement: vi.fn(async () => undefined)
     })).rejects.toMatchObject({ code: 'MODEL_PREFLIGHT_REJECTED', reason: 'OVER_BUDGET' })
 
     expect(providerStream).not.toHaveBeenCalled()
@@ -656,7 +683,7 @@ describe('runAgentTurn', () => {
       request: { messages: [userMessage], maxTokens: 32 },
       safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' }) } }),
       prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })), maxModelTurns: 1,
-      preflightModelRequest: vi.fn(async () => ({ rejected: 'OVER_BUDGET' as const }))
+      planContextReplacement: vi.fn(async () => ({ rejected: 'OVER_BUDGET' as const }))
     })).rejects.toMatchObject({ code: 'MODEL_PREFLIGHT_REJECTED', reason: 'OVER_BUDGET' })
 
     expect(providerStream).not.toHaveBeenCalled()
@@ -942,7 +969,7 @@ describe('runAgentTurn', () => {
       { type: 'text-delta', text: 'answer' }, { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
     ) })
     const permits = new InMemorySafetyPermitStore()
-    const prepareModelResponseProjection = vi.fn(async () => ({ sessionLedger: {
+    const prepareContextBoundaryEvidence = vi.fn(async () => ({ sessionLedger: {
       location: { workDir: '/workspace', sessionId: 'response-projection', createdAt: 123 },
       requestContext: { requestId: 'response-projection:round:1', attempt: 1, contextUsage: { pressureTokens: 3 } }
     } }))
@@ -952,10 +979,10 @@ describe('runAgentTurn', () => {
       request: { messages: [{ role: 'user', content: 'question' }], maxTokens: 32 },
       safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' }) } }),
       prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })), maxModelTurns: 1,
-      observer: { prepareModelResponseProjection }
+      observer: { prepareContextBoundaryEvidence }
     })
 
-    expect(prepareModelResponseProjection).toHaveBeenCalledOnce()
+    expect(prepareContextBoundaryEvidence).toHaveBeenCalledOnce()
     expect((await history.read('response-projection')).events.find((event) => event.kind === 'model-response-committed')?.payload).toMatchObject({
       sessionLedger: { requestContext: { requestId: 'response-projection:round:1', contextUsage: { pressureTokens: 3 } } }
     })
@@ -1076,13 +1103,13 @@ describe('runAgentTurn', () => {
       }),
       maxModelTurns: 2,
       observer: { onModelRequest: ({ windowId }) => { windows.push(windowId ?? '') } },
-      turnBoundary: async ({ messages, modelTurn }) => modelTurn === 1 ? ({
+      contextProjectionCommitter: async () => {
+        const snapshot = await history.read('inv-window-reset')
+        boundaryCommitOrder.push(snapshot.events.at(-1)?.kind ?? 'missing')
+      },
+      planContextReplacement: async ({ phase, messages, modelTurn }) => phase === 'turn-boundary' && modelTurn === 1 ? ({
         messages, windowId: 'window-after-reset',
-        historyPayload: { sessionLedger: { location: { workDir: '/workspace', sessionId: 'session', createdAt: 1 }, start: { compactionId: 'compaction' }, summary: { compactionId: 'compaction' } } },
-        commitProjection: async () => {
-          const snapshot = await history.read('inv-window-reset')
-          boundaryCommitOrder.push(snapshot.events.at(-1)?.kind ?? 'missing')
-        }
+        historyPayload: { sessionLedger: { location: { workDir: '/workspace', sessionId: 'session', createdAt: 1 }, start: { compactionId: 'compaction' }, summary: { compactionId: 'compaction' } } }
       }) : undefined
     })
 
@@ -1105,23 +1132,32 @@ describe('runAgentTurn', () => {
     const execute = vi.fn(async () => ({ output: 'must not dispatch' }))
     const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }) } })
     const prepared = { ...toolBinding, requestId: 'inv-boundary-ledger', turnId: 'turn', invocationId: 'inv-boundary-ledger', toolCallId: 'tc-boundary-ledger', capabilityId: 'lookup' }
+    let preparedBinding: PermitBinding | undefined
+    const contextProjectionCommitter = vi.fn(async (_candidate: import('../src/context').ContextReplacement) => {
+      expect((await history.read('inv-boundary-ledger')).events.at(-1)?.kind).toBe('transcript-compacted')
+      throw new Error('session JSONL write failed')
+    })
 
     await expect(runAgentTurn({
       registry, routeId: route.routeId, invocationId: 'inv-boundary-ledger', turnId: 'turn',
       request: { messages: [{ role: 'user', content: 'hello' }], maxTokens: 20 }, safetyGate,
-      prepareTool: async (_call, stage) => ({ ...prepared, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
-      toolExecution: toolExecutionPort(permits, async () => execute()), maxModelTurns: 2, history,
-      turnBoundary: async ({ messages }) => ({
+      prepareTool: async (call, stage) => {
+        const binding = { ...prepared, requestId: call.invocationId, turnId: 'turn', invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }
+        preparedBinding = binding
+        return binding
+      },
+      toolExecution: createPermitBoundToolExecutionPort({ permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck', resolveExpected: async () => ({ ...preparedBinding!, phase: 'recheck' }), execute: async () => execute() }), maxModelTurns: 2, history, contextProjectionCommitter,
+      planContextReplacement: async ({ phase, messages }) => phase === 'turn-boundary' ? ({
         messages,
-        historyPayload: { sessionLedger: { location: { workDir: '/workspace', sessionId: 'session', createdAt: 1 }, start: { compactionId: 'compaction' }, summary: { compactionId: 'compaction' } } },
-        commitProjection: async () => { throw new Error('session JSONL write failed') }
-      })
+        historyPayload: { checkpoint: { compactionId: 'compaction' }, sessionLedger: { location: { workDir: '/workspace', sessionId: 'session', createdAt: 1 }, start: { compactionId: 'compaction' }, summary: { compactionId: 'compaction' } } }
+      }) : undefined
     })).rejects.toThrow('turn boundary ledger projection failed: session JSONL write failed')
 
     const events = (await history.read('inv-boundary-ledger')).events
     expect(events.find((event) => event.kind === 'transcript-compacted')?.payload).toMatchObject({ sessionLedger: { location: { sessionId: 'session' } } })
     expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'turn-boundary-ledger-projection-failed' } })
     expect(execute).not.toHaveBeenCalled()
+    expect(contextProjectionCommitter).toHaveBeenCalledOnce()
   })
 
   it('rolls back provisional chunks when the canonical response cannot be committed to History', async () => {
@@ -1236,6 +1272,7 @@ describe('runAgentTurn', () => {
       ? { reasonCode: 'CONTEXT_OVERFLOW', messages, retryEvent: { attempt: 1, code: 'provider_context_overflow' } }
       : undefined)
     const onModelRequest = vi.fn(({ attempt }: { attempt: number; modelTurn: number }) => { order.push(`request:${attempt}`) })
+    const contextProjectionCommitter = vi.fn(async () => { order.push('context-projection') })
     const onProviderRetry = vi.fn(async () => {
       const events = (await history.read('inv')).events
       expect(events.some((event) => event.kind === 'transcript-compacted')).toBe(true)
@@ -1248,7 +1285,7 @@ describe('runAgentTurn', () => {
       safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' as const }) } }),
       prepareTool: async () => { throw new Error('unused') },
       toolExecution: toolExecutionPort(permits, async () => ({ output: 'unused' })),
-      history, maxModelTurns: 1, recoverProviderAttempt, observer: {
+      history, contextProjectionCommitter, maxModelTurns: 1, recoverProviderAttempt, observer: {
         onModelRequest, onProviderRetry, criticalModelRequestProjection: true,
         onModelAttemptDiscarded: () => { order.push('attempt-discarded') }
       }
@@ -1261,7 +1298,8 @@ describe('runAgentTurn', () => {
       { modelTurn: 1, attempt: 2 }
     ])
     expect(onProviderRetry).toHaveBeenCalledWith({ attempt: 1, modelTurn: 1, routeId: route.routeId, requestId: 'inv:round:1', code: 'provider_context_overflow' })
-    expect(order).toEqual(['request:1', 'attempt-discarded', 'retry-event', 'request:2'])
+    expect(order).toEqual(['request:1', 'context-projection', 'attempt-discarded', 'retry-event', 'request:2'])
+    expect(contextProjectionCommitter).toHaveBeenCalledOnce()
     expect(result.text).toBe('recovered')
     const events = (await history.read('inv')).events
     expect(events.filter((event) => event.kind === 'transcript-compacted')).toHaveLength(1)
@@ -1946,7 +1984,7 @@ describe('runAgentTurn', () => {
       safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion }) } }),
       prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
       toolExecution: toolExecutionPort(permits, async () => ({ output: 'result' })), maxModelTurns: 2,
-      turnBoundary: async () => undefined
+      planContextReplacement: async () => undefined
     })
     expect(secondRequest).toContainEqual({ role: 'assistant', toolCalls: [{ id: 'tc-boundary-noop', name: 'lookup', input: { query: 'q' } }] })
     expect(result.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'done' })
@@ -1974,22 +2012,26 @@ describe('runAgentTurn', () => {
       prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
       toolExecution: toolExecutionPort(permits, async () => { order.push('tool'); return { output: 'result' } }),
       maxModelTurns: 2,
-      turnBoundary: async () => {
+      planContextReplacement: async ({ phase }) => {
+        if (phase !== 'turn-boundary') return
         boundaryCount += 1
         if (boundaryCount > 1) return
         order.push('boundary')
         const state = await history.read('inv')
         expect(state.events.at(-1)?.kind).toBe('model-response-committed')
-        return { messages: [
-          { role: 'user' as const, content: 'compacted input' },
-          { role: 'assistant' as const, content: 'compacted response' },
-          { role: 'assistant' as const, toolCalls: [{ id: 'tc-boundary', name: 'lookup', input: { query: 'q' } }] }
-        ] }
+        const checkpointMessage = { id: 'boundary-checkpoint', role: 'user' as const, content: 'compacted input' }
+        return {
+          historyPayload: {
+            checkpoint: { compactionId: 'test-compaction', replayIdentity: 'boundary-checkpoint-identity' },
+            sessionLedger: { summary: { candidate: { checkpointMessage, checkpointReplayIdentity: 'boundary-checkpoint-identity' } } }
+          },
+          messages: [checkpointMessage, { role: 'assistant' as const, toolCalls: [{ id: 'tc-boundary', name: 'lookup', input: { query: 'q' } }] }]
+        }
       }
     })
     expect(order.slice(0, 2)).toEqual(['boundary', 'tool'])
     expect(requestMessages[1]).toEqual([
-      { role: 'user', content: 'compacted input' }, { role: 'assistant', content: 'compacted response' },
+      { role: 'user', id: 'boundary-checkpoint', content: 'compacted input' },
       { role: 'assistant', toolCalls: [{ id: 'tc-boundary', name: 'lookup', input: { query: 'q' } }] },
       { role: 'tool', toolCallId: 'tc-boundary', content: 'result', isError: false }
     ])
@@ -2002,16 +2044,16 @@ describe('runAgentTurn', () => {
       { type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' }
     ) })
     const requiredUserMessage = { id: 'user-current', message: { role: 'user' as const, content: 'current request' } }
-    const turnBoundary = vi.fn(async () => undefined)
+    const planner = vi.fn(async () => undefined)
     const permits = new InMemorySafetyPermitStore()
     await runAgentTurn({
       registry, routeId: route.routeId, invocationId: 'inv', currentUserMessageId: requiredUserMessage.id, requiredUserMessage,
       request: { messages: [{ role: 'user', content: 'current request' }], maxTokens: 100 },
       safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' }) } }),
-      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn()), maxModelTurns: 1, turnBoundary
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn()), maxModelTurns: 1, planContextReplacement: planner
     })
-    expect(turnBoundary).toHaveBeenCalledWith(expect.objectContaining({
-      currentUserMessageId: 'user-current', requiredUserMessage
+    expect(planner).toHaveBeenCalledWith(expect.objectContaining({
+      phase: 'turn-boundary', currentUserMessageId: 'user-current', requiredUserMessage
     }))
   })
 
@@ -2030,7 +2072,7 @@ describe('runAgentTurn', () => {
       safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion }) } }),
       prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
       toolExecution: toolExecutionPort(permits, execute), maxModelTurns: 2,
-      turnBoundary: async () => ({ messages: [{ role: 'user', content: 'compacted without the tool call' }] })
+      planContextReplacement: async ({ phase }) => phase === 'turn-boundary' ? ({ messages: [{ role: 'user', content: 'compacted without the tool call' }] }) : undefined
     })).rejects.toThrow(/pending tool proposal/i)
     expect(execute).not.toHaveBeenCalled()
   })
@@ -2058,10 +2100,17 @@ describe('runAgentTurn', () => {
       safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion }) } }),
       prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' : 'recheck' }),
       toolExecution: toolExecutionPort(permits, execute), maxModelTurns: 2,
-      turnBoundary: async () => ({ messages: [
-        { role: 'user', content: 'compacted' },
-        { role: 'assistant', toolCalls: [{ id: 'tc-compact-fail', name: 'lookup', input: { query: 'q' } }] }
-      ] })
+      planContextReplacement: async ({ phase }) => {
+        if (phase !== 'turn-boundary') return
+        const checkpointMessage = { id: 'compact-fail-checkpoint', role: 'user' as const, content: 'compacted' }
+        return {
+          historyPayload: {
+            checkpoint: { compactionId: 'test-compaction', replayIdentity: 'compact-fail-checkpoint-identity' },
+            sessionLedger: { summary: { candidate: { checkpointMessage, checkpointReplayIdentity: 'compact-fail-checkpoint-identity' } } }
+          },
+          messages: [checkpointMessage, { role: 'assistant', toolCalls: [{ id: 'tc-compact-fail', name: 'lookup', input: { query: 'q' } }] }]
+        }
+      }
     })).rejects.toThrow('injected compaction history failure')
     expect(execute).not.toHaveBeenCalled()
   })
@@ -3204,11 +3253,11 @@ describe('runAgentTurn', () => {
       return stream({ type: 'text-delta', text: 'done' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
     } })
     const permits = new InMemorySafetyPermitStore()
-    const turnBoundary = vi.fn(async () => undefined)
+    const planner = vi.fn(async ({ phase }: import('../src/turn').ContextReplacementPlanInput) => phase === 'turn-boundary' ? undefined : undefined)
     const ports = {
       registry, routeId: route.routeId, invocationId: 'inv', request: { maxTokens: 100 },
       safetyGate: new SafetyGate({ capabilities: new CapabilityRegistry(), permitStore: permits, policy: { evaluate: async () => ({ kind: 'deny' as const, reasonCode: 'POLICY_DENY' }) } }),
-      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn()), maxModelTurns: 1, turnBoundary
+      prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, vi.fn()), maxModelTurns: 1, planContextReplacement: planner
     }
     const original = { messages: [{ role: 'user' as const, content: 'original prompt' }], maxTokens: 100 }
     const requiredUserMessage = { id: 'user-current', message: { role: 'user' as const, content: 'original prompt' } }
@@ -3224,8 +3273,8 @@ describe('runAgentTurn', () => {
     await runHostedAgentTurn({ host: { createPorts }, invocationId: 'inv', currentUserMessageId: requiredUserMessage.id, requiredUserMessage, routeId: route.routeId, request: original })
     expect(original.messages[0]?.content).toBe('original prompt')
     expect(requestMessages[0]?.[0]).toEqual({ role: 'user', content: 'original prompt' })
-    expect(turnBoundary).toHaveBeenCalledWith(expect.objectContaining({
-      currentUserMessageId: 'user-current', requiredUserMessage: { id: 'user-current', message: { role: 'user', content: 'original prompt' } }
+    expect(planner).toHaveBeenCalledWith(expect.objectContaining({
+      phase: 'turn-boundary', currentUserMessageId: 'user-current', requiredUserMessage: { id: 'user-current', message: { role: 'user', content: 'original prompt' } }
     }))
   })
 
@@ -3713,7 +3762,7 @@ describe('runAgentTurn', () => {
 
     await expect(runAgentTurn({ registry, routeId: route.routeId, invocationId: 'inv-boundary-error', request: { messages: [], maxTokens: 10 }, safetyGate,
       prepareTool: vi.fn(), toolExecution: toolExecutionPort(permits, executeTool), maxModelTurns: 2, history,
-      turnBoundary: async () => { throw new Error('boundary failed') } })).rejects.toThrow('boundary failed')
+      planContextReplacement: async ({ phase }) => { if (phase === 'turn-boundary') throw new Error('boundary failed') } })).rejects.toThrow('boundary failed')
 
     expect(executeTool).not.toHaveBeenCalled()
     const events = (await history.read('inv-boundary-error')).events

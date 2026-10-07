@@ -75,10 +75,10 @@ import type { LarkCliRunner } from './feishu/larkCliRunner'
 import type { RemoteContext } from './tools/types'
 import type {
   AgentEventSink,
-  AgentHostPorts,
   AgentInvocation,
   AgentInvocationResult
 } from '../src/shared/agent/invocation'
+import type { AgentHostPorts } from '../packages/agent-sdk/src/invocation'
 import { AGENT_ADDITIONAL_CONTEXT_KEYS } from '../src/shared/agent/invocation'
 import type { WeChatConfig } from '../src/shared/wechatTypes'
 import type {
@@ -348,16 +348,8 @@ export type RunToolChatSessionArgs = {
     recordStepUsage?(input: Record<string, unknown>): void
     recordTurnSummary?(input: Record<string, unknown>): void
   }
-  hostStorage?: {
-    sessionMeta?: Record<string, unknown> | undefined
-    sessionEventLocation?: { workDir: string; sessionId: string; createdAt: number }
-    readSession?(sessionId: string): unknown
-    persist?: {
-      updateSessionMetadata?(sessionId: string, patch: Record<string, unknown>): void
-      scheduleTitleSuggestion?(input: Record<string, unknown>): void
-      recordUserAnswerFromDecision?(input: Record<string, unknown>): void
-    }
-  }
+  hostSessionMetadata?: Readonly<Record<string, unknown>>
+  hostTitleSuggestions?: { schedule(input: Record<string, unknown>): void }
   hostExposureRules?: readonly import('../src/shared/confirmation/types').PolicyRule[]
   hostMcp?: {
     snapshot: McpToolSnapshot
@@ -376,7 +368,7 @@ export type RunToolChatSessionArgs = {
 export type RunToolChatSessionPorts = AgentHostPorts & { hostHistory?: HistoryPort }
 
 /** Adapter input used only to preserve Desktop's existing compaction planner at the Hosted SDK boundary. */
-export type HostedTurnBoundaryCallback = (input: {
+export type HostedContextReplacementPlanner = (input: {
   phase?: 'turn-boundary' | 'preflight'
   requestId: string
   windowId: string
@@ -388,12 +380,7 @@ export type HostedTurnBoundaryCallback = (input: {
   contextUsage?: ReturnType<typeof import('../src/shared/requestContext').buildRequestContextPayload>['contextUsage']
   toolExecutionCheckpoint: ReturnType<typeof buildRequestHeaderPayload>['toolExecutionCheckpoint']
   requiredSurfaceSet: string[]
-}) => Promise<void | Readonly<{
-  messages: readonly CanonicalModelMessage[]
-  windowId?: string
-  historyPayload?: Record<string, unknown>
-  commitProjection?(): void | Promise<void>
-}>>
+}) => Promise<void | Readonly<{ messages: readonly CanonicalModelMessage[]; windowId?: string }>>
 
 
 class HostedTurnHandoffError extends Error {
@@ -567,12 +554,8 @@ function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): R
     gatePolicy: ports.policy as RunToolChatSessionArgs['gatePolicy'],
     hostDiagnostics: ports.diagnostics as RunToolChatSessionArgs['hostDiagnostics'],
     hostUsage: ports.usage,
-    hostStorage: {
-      sessionMeta: ports.storage?.loaded?.metadata as Record<string, unknown> | undefined,
-      sessionEventLocation: ports.storage?.sessionEventLocation,
-      readSession: ports.storage?.readSession as RunToolChatSessionArgs['hostStorage'] extends { readSession?: infer F } ? F : never,
-      persist: ports.storage?.persist as RunToolChatSessionArgs['hostStorage'] extends { persist?: infer P } ? P : never
-    },
+    hostSessionMetadata: ports.sessionMetadata,
+    hostTitleSuggestions: ports.titleSuggestions,
     hostExposureRules: ports.exposure?.rules,
     hostMcp: ports.mcp as RunToolChatSessionArgs['hostMcp'],
     hostAnswerer: ports.answerer as RunToolChatSessionArgs['hostAnswerer'],
@@ -732,7 +715,8 @@ async function runToolChatSessionInner(
     getApiKey,
     hostDiagnostics,
     hostUsage,
-    hostStorage,
+    hostSessionMetadata,
+    hostTitleSuggestions,
     hostExposureRules,
     hostMcp,
     hostAnswerer,
@@ -764,7 +748,7 @@ async function runToolChatSessionInner(
     return { ok: false, error: 'API key not configured' }
   }
 
-  const sessionMeta = hostStorage?.sessionMeta
+  const sessionMeta = hostSessionMetadata
   const remoteBudgetState: RemoteTaskBudgetState | null = remoteContext
     ? createRemoteTaskBudgetState(
         requestId,
@@ -958,7 +942,7 @@ async function runToolChatSessionInner(
 
   // 标题生成与主请求解耦：user + assistant 消息累计达到 3 条时仅调度一次。
   // invocation 输入已包含本轮 user 消息；历史与当前消息都由同一快照计数。
-  const shouldScheduleTitleSuggestion = Boolean(hostStorage?.persist?.scheduleTitleSuggestion
+  const shouldScheduleTitleSuggestion = Boolean(hostTitleSuggestions?.schedule
     && reachedCumulativeMessagesForTitleSuggest(
       0,
       countVisibleTitleMessagesForSuggest(conversationMessagesForTitle)
@@ -1174,7 +1158,7 @@ async function runToolChatSessionInner(
           })
           if (!handoff) throw new Error('HOSTED_TURN_HANDOFF_MISSING_RESULT')
           if (handoff.result.ok && shouldScheduleTitleSuggestion) {
-            hostStorage?.persist?.scheduleTitleSuggestion?.({
+            hostTitleSuggestions?.schedule({
               sessionId,
               model,
               baseUrl,

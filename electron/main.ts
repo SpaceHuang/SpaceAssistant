@@ -33,13 +33,13 @@ import {
   registerWeChatIpcHandlers,
   shutdownWeChatServices
 } from './wechat/weChatIpc'
-import { getConfigValue, getDefaultDbPath, getMessageSkeleton, getSession, listPersistedTurns, listSessions, openDatabase, setConfigValue } from './database'
-import { getProjectedMessagesPageWithSequence } from './runtime/sessionTranscriptProjection'
+import { getConfigValue, getDefaultDbPath, getMessageSkeleton, listPersistedTurns, openDatabase, setConfigValue } from './database'
 import { randomUUID } from 'node:crypto'
-import { createTurnCoordinatorStorage } from './turnCoordinatorStorage'
 import { setInvalidationBroadcaster } from './database/scopeVersion'
 import { TurnRuntime } from './turnRuntime'
 import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
+import { createSqliteSessionStorageHost } from './sessionStorage/sqliteSessionStorage'
+import { createLifecycleTaskHandle } from './sessionStorage/lifecycle'
 import { signalChatCancel } from './chatCancelRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
@@ -218,9 +218,8 @@ installProcessSafetyNet((event, detail) => {
 })
 /** 用量统计启动维护（回填/补齐/清理）：whenReady 内注册，主窗口创建完成后执行（评审 P1-3）。 */
 let usageStatsStartupMaintenance: (() => void) | null = null
-let stopPeriodicSqliteMaintenance: (() => void) | null = null
-let stopPeriodicSourceTruthSpillGc: (() => void) | null = null
-let stopPeriodicSessionContentCleanup: (() => void) | null = null
+let storageLifecycleStop: ((deadlineMs: number) => Promise<{ status: 'quiescent' | 'deadline-exceeded' }>) | null = null
+let safeDatabaseMaintenanceInFlight: Promise<void> | undefined
 let isQuitting = false
 let quitCleanupDone = false
 const SHUTDOWN_TIMEOUT_MS = 12_000
@@ -240,11 +239,11 @@ export async function runShutdownCleanup(pendingTasks?: Set<string>): Promise<Sh
       const ids = mgr.getPendingSessionIds()
       if (!ids.length) return
       await mgr.flushAllWithRetry(ids, async (id) => {
-        const session = getSession(db, id)
+        const session = sessionStorage.queries.readSession(id)
         if (!session) return null
         return { session, readPage: (afterSequence: number, pageSize: number) => {
-          const page = getProjectedMessagesPageWithSequence(db, id, afterSequence, pageSize)
-          return { messages: page.rows.map((row) => row.message), nextSequence: page.nextSequence }
+          const page = sessionStorage.queries.readExportPage({ sessionId: id, fromSequence: afterSequence, pageSize })
+          return { messages: page.rows.map((entry: { message: import('../src/shared/domainTypes').Message }) => entry.message), nextSequence: page.nextSequence }
         } }
       }).catch((error) => {
         console.warn('[sessionBackup] flush on quit failed:', error instanceof Error ? error.message : String(error))
@@ -407,6 +406,97 @@ app.whenReady().then(async () => {
     return
   }
   appDb = db
+  let turnRuntime!: TurnRuntime
+  let sessionHistoryRepairFailureCount = 0
+  let recoveredInvocationCount = 0
+  let sessionLedgerRepairFailureCount = 0
+  let sessionHistoryRecoverySucceeded = false
+  const sessionStorageHost = createSqliteSessionStorageHost(db, {
+    storage: {
+    getTurnRuntime: () => turnRuntime,
+    getUserDataDir: () => app.getPath('userData'),
+    getWorkDirForSession: (sessionId) => {
+      if (!workDirManager) return recoveryWorkDir
+      return resolveWorkDirForSession(
+        sessionStorage.queries, sessionId,
+        () => workDirManager!.listProfiles(),
+        () => workDirManager!.getActiveProfileId(),
+        () => workDirManager!.getActiveWorkDir()
+      )?.workDir
+    }
+    },
+    startup: {
+      recoverHistory: async () => ({ interruptedCount: recoveredInvocationCount, repairFailureCount: sessionHistoryRepairFailureCount + (safeDbMaintenanceRequested ? 1 : 0) }),
+      recoverSessionLedgers: async () => ({ repairFailureCount: sessionLedgerRepairFailureCount })
+    },
+    maintenanceTasks: [
+      {
+        taskId: 'sqlite-upkeep', category: 'derived-index',
+        start: () => safeDbMaintenanceRequested ? undefined : (() => {
+          const task = schedulePeriodicSqliteMaintenance(db, {
+            onResult: (result) => {
+              if (result !== 'checkpointed') console.info('[storage] periodic database maintenance skipped:', result)
+            }
+          })
+          return createLifecycleTaskHandle(task, task.quiesce)
+        })()
+      },
+      {
+        taskId: 'source-truth-spill-gc', category: 'pending-reclamation',
+        start: () => {
+          const task = scheduleSourceTruthSpillGcMaintenance(db, path.join(app.getPath('userData'), 'spill'), {
+          onResult: (summary) => {
+            if (summary === 'failed' || summary.failed > 0) console.warn('[storage] source-truth spill collection remains pending', summary)
+          }
+          })
+          return createLifecycleTaskHandle(task, task.quiesce)
+        }
+      },
+      {
+        taskId: 'session-content-cleanup', category: 'retention',
+        start: () => {
+          if (safeDbMaintenanceRequested || !app.isPackaged) return undefined
+          const cleanupBoundary = createSessionStorageCleanupProductionBoundary({
+            resourcesPath: process.resourcesPath,
+            appVersion: app.getVersion(),
+            schemaVersion: DB_SCHEMA_VERSION,
+            historyFormatVersion: SESSION_STORAGE_HISTORY_FORMAT_VERSION,
+            spillFormatVersion: SESSION_STORAGE_SPILL_FORMAT_VERSION,
+            platform: process.platform,
+            arch: process.arch,
+          })
+          const cleanupGate = cleanupBoundary.checkGate()
+          if (!cleanupGate.allowed) {
+            if (cleanupGate.reason !== 'deployment-disabled') console.warn('[storage] session content cleanup remains disabled:', cleanupGate.reason)
+            return undefined
+          }
+          const cleanupScope = cleanupBoundary.checkAuthorizationScope(db)
+          if (!cleanupScope.allowed) {
+            console.info('[storage] session content cleanup worker not registered:', cleanupScope.reason)
+            return undefined
+          }
+          const task = scheduleSessionMessageContentCleanupMaintenance(db, cleanupBoundary, {
+            initialDelayMs: 60_000,
+            intervalMs: 15 * 60_000,
+            batchSize: 100,
+            maxSessionsPerRun: 2,
+            maxBatchesPerSession: 1,
+            onResult: (summary) => {
+              if (summary === 'failed') console.warn('[storage] session content cleanup maintenance failed; pending sessions remain resumable')
+              else if (summary.status === 'blocked') console.warn('[storage] session content cleanup gate closed:', summary.gateReason)
+              else if (summary.completed || summary.batches || summary.writeStopped || summary.ineligible) {
+                console.info('[storage] session content cleanup maintenance progress:', summary)
+              }
+            },
+          })
+          return createLifecycleTaskHandle(task, task.quiesce)
+        }
+      }
+    ],
+    quiesceMaintenance: async () => { await safeDatabaseMaintenanceInFlight }
+  })
+  const sessionStorage = sessionStorageHost.storage
+  storageLifecycleStop = (deadlineMs) => sessionStorageHost.lifecycle.stop({ deadlineMs })
   // Main-process owner only. Execution remains closed until a separately authorized cohort is started.
   sessionProjectionMigrationApplication = new SessionProjectionMigrationApplication(db)
   sessionProjectionMigrationApplication.initialize()
@@ -420,9 +510,6 @@ app.whenReady().then(async () => {
   })
   const recoveryWorkDirs = getSessionLedgerRecoveryRoots(recoveryWorkDir, getConfigValue(db, 'config.workDirProfiles'))
   const sessionHistoryRecoveryStartedAt = performance.now()
-  let sessionHistoryRecoverySucceeded = false
-  let sessionHistoryRepairFailureCount = 0
-  let recoveredInvocationCount = 0
   if (safeDbMaintenanceRequested) {
     console.warn('[agentHistory] canonical full recovery skipped for --safe-db-maintenance; it will run on the next normal launch')
   } else {
@@ -439,7 +526,7 @@ app.whenReady().then(async () => {
     }
     const interrupted = await measureStartupPhase('canonical-history.recovery', () => startupHistory.recoverInterruptedInvocations({
       resolveSessionLedgerLocation: (sessionId) => {
-        const session = getSession(db, sessionId)
+        const session = sessionStorage.queries.readSession(sessionId)
         if (!session) return undefined
         const location = resolveAcceptedInputLedgerLocation({
           sessionId,
@@ -620,6 +707,8 @@ app.whenReady().then(async () => {
 
   workDirManager = createWorkDirManager({
     db,
+    sessionQueries: sessionStorage.queries,
+    sessionCommands: sessionStorage.commands,
     getWorkDir: () => workDirState,
     setWorkDir: applyWorkDirSideEffects,
     onBeforeSwitch: () => flushAgentLogger(),
@@ -726,10 +815,10 @@ app.whenReady().then(async () => {
     console.warn(`[sessionBackup] scheduled backup failed for ${sessionId}:`, error instanceof Error ? error.message : String(error))
   })
   sessionBackupManager = backup
-  const activeSessionIds = new Set(listSessions(db).map((session) => session.id))
+  const activeSessionIds = new Set(sessionStorage.queries.listSessions().map((session) => session.id))
   // 删除任务可能在切换 profile 前启动；启动恢复必须覆盖所有仍配置的根目录。
   const cleanupRoots = Array.from(new Set(workDirManager.listProfiles().map((profile) => profile.path)))
-  const isSessionActive = (sessionId: string) => Boolean(getSession(db, sessionId))
+  const isSessionActive = (sessionId: string) => Boolean(sessionStorage.queries.readSession(sessionId))
   void Promise.all(cleanupRoots.map((root) => new SessionBackupManager(root).cleanupOrphanedBackups(activeSessionIds, isSessionActive))).catch((error) => {
     console.warn('[sessionBackup] orphan cleanup failed:', error instanceof Error ? error.message : String(error))
   })
@@ -740,8 +829,8 @@ app.whenReady().then(async () => {
   setInvalidationBroadcaster((scope, version) => {
     getMainWindow()?.webContents.send('scope:invalidated', { scope, version })
   })
-  const turnRuntime = new TurnRuntime({
-    storage: createTurnCoordinatorStorage(db),
+  turnRuntime = new TurnRuntime({
+    storage: sessionStorage.execution.coordinator,
     deps: { now: Date.now, id: randomUUID },
     onCancel: (turn) => signalChatCancel(turn.turnId),
     onEvent: (turn, event) => {
@@ -761,6 +850,7 @@ app.whenReady().then(async () => {
   cleanupStreamingResiduesOnStartup(db)
   try {
     const recovery = await measureStartupPhase('session-ledger.reconcile', () => reconcileSessionEventFilesDetailed(workDirState))
+    sessionLedgerRepairFailureCount += recovery.failures.length
     for (const session of recovery.sessions) {
       for (const issue of session.issues) {
         console.warn('[sessionEvents] startup event integrity issue:', {
@@ -812,6 +902,16 @@ app.whenReady().then(async () => {
     // 目录级扫描失败也不能阻断 IPC 注册和窗口创建；下一次启动继续重试。
     console.warn('[sessionEvents] startup maintenance failed:', error instanceof Error ? error.message : String(error))
   }
+  const sessionRecoveryReport = await measureStartupPhase('session-storage.recovery', () => sessionStorage.recovery.recover())
+  console.info('[sessionStorage] startup recovery report:', {
+    status: sessionRecoveryReport.status,
+    history: sessionRecoveryReport.history,
+    snapshots: sessionRecoveryReport.snapshots,
+    coordinator: sessionRecoveryReport.coordinator,
+    reconciliation: sessionRecoveryReport.reconciliation,
+    continuations: sessionRecoveryReport.continuations,
+    failures: sessionRecoveryReport.failures.map(({ stage, error }) => ({ stage, error: error.message }))
+  })
 
   // 用量统计启动维护（需求 §7.3.1 / §7.4 / §7.5）：
   // 一次性历史台账回填（机会不可逆，schema_meta 标记保证只跑一次）→ 崩溃 Turn 补齐 → 保留期清理（删除留痕）。
@@ -871,7 +971,7 @@ app.whenReady().then(async () => {
   floatingManager = new FloatingNotificationManager(
     () => getMainWindow(),
     __dirname,
-    db
+    sessionStorage.queries
   )
 
   const executeClaudeRequest = registerClaudeStreamHandlers(ipcMain, {
@@ -880,7 +980,7 @@ app.whenReady().then(async () => {
     getWorkDirManager: () => workDirManager ?? undefined,
     resolveWorkDirForSession: (sessionId) => {
       const resolved = resolveWorkDirForSession(
-        db,
+        sessionStorage.queries,
         sessionId,
         () => workDirManager!.listProfiles(),
         () => workDirManager!.getActiveProfileId(),
@@ -918,7 +1018,8 @@ app.whenReady().then(async () => {
     }),
     floatingNotificationManager: floatingManager,
     notifyMainWindow: (channel, payload) => getMainWindow()?.webContents.send(channel, payload),
-    turnRuntime
+    turnRuntime,
+    sessionStorage
   })
 
   const executeTurn = async (sender: Electron.WebContents | null, payload: ClaudeChatCreateWithToolsPayload) => {
@@ -944,6 +1045,7 @@ app.whenReady().then(async () => {
 
   registerAppIpcHandlers(ipcMain, {
     db,
+    sessionStorage,
     backup,
     workDirManager: workDirManager!,
     getWorkDir: () => workDirState,
@@ -959,7 +1061,6 @@ app.whenReady().then(async () => {
     floatingNotificationManager: floatingManager,
     isTrayEnabled,
     turnRuntime,
-    sessionHistoryRecoverySucceeded,
     wakeSourceTruthSpillGc: () => {
       const spillRoot = path.join(app.getPath('userData'), 'spill')
       void runSourceTruthSpillGcMaintenance(db, spillRoot).catch((error) => {
@@ -993,6 +1094,7 @@ app.whenReady().then(async () => {
   let wechatDeliveryReachable = false
   const butlerInvokerDeps: ButlerInvokerDeps = {
     db,
+    sessionStorage,
     turnRuntime,
     getWorkDir: () => workDirState,
     getUserDataPath: () => app.getPath('userData'),
@@ -1010,7 +1112,7 @@ app.whenReady().then(async () => {
     workDirManager: workDirManager!,
     resolveWorkDirForSession: (sessionId) => {
       const resolved = resolveWorkDirForSession(
-        db,
+        sessionStorage.queries,
         sessionId,
         () => workDirManager!.listProfiles(),
         () => workDirManager!.getActiveProfileId(),
@@ -1073,6 +1175,7 @@ app.whenReady().then(async () => {
     getUserDataPath: () => app.getPath('userData'),
     getWorkDir: () => workDirState,
     workDirManager: workDirManager!,
+    sessionStorage,
     getApiKey,
     getBaseUrl: () => getConfigValue(db, 'config.baseUrl') ?? '',
     getModel: modelName,
@@ -1093,6 +1196,7 @@ app.whenReady().then(async () => {
   })
   registerFeishuIpcHandlers(ipcMain, {
     db,
+    sessionStorage,
     getUserDataPath: () => app.getPath('userData'),
     getWorkDir: () => workDirState,
     workDirManager: workDirManager!,
@@ -1115,6 +1219,7 @@ app.whenReady().then(async () => {
   })
   createWeChatBundle({
     db,
+    sessionStorage,
     turnRuntime,
     getUserDataPath: () => app.getPath('userData'),
     getWorkDir: () => workDirState,
@@ -1140,6 +1245,7 @@ app.whenReady().then(async () => {
   })
   registerWeChatIpcHandlers(ipcMain, {
     db,
+    sessionStorage,
     getUserDataPath: () => app.getPath('userData'),
     getWorkDir: () => workDirState,
     workDirManager: workDirManager!,
@@ -1199,58 +1305,13 @@ app.whenReady().then(async () => {
       }
       if (safeDbMaintenanceRequested) {
         const spillRoot = path.join(userDataDir, 'spill')
-        void measureStartupPhase('safe-db-maintenance', () => createSpillStore(spillRoot).withSpillRootFence(() => runSafeDbMaintenance(db, userDataDir))).then(() => {
+        safeDatabaseMaintenanceInFlight = measureStartupPhase('safe-db-maintenance', () => createSpillStore(spillRoot).withSpillRootFence(() => runSafeDbMaintenance(db, userDataDir))).then(() => {
           console.info('[storage] safe database maintenance completed')
         }).catch((error) => {
           console.error('[storage] safe database maintenance failed; app remains available:', error instanceof Error ? error.message : String(error))
-        })
-      } else {
-        stopPeriodicSqliteMaintenance = schedulePeriodicSqliteMaintenance(db, {
-          onResult: (result) => {
-            if (result !== 'checkpointed') console.info('[storage] periodic database maintenance skipped:', result)
-          }
-        })
+        }).finally(() => { safeDatabaseMaintenanceInFlight = undefined })
       }
-      stopPeriodicSourceTruthSpillGc = scheduleSourceTruthSpillGcMaintenance(db, path.join(userDataDir, 'spill'), {
-        onResult: (summary) => {
-          if (summary === 'failed' || summary.failed > 0) console.warn('[storage] source-truth spill collection remains pending', summary)
-        }
-      })
-      if (!safeDbMaintenanceRequested && app.isPackaged) {
-        const cleanupBoundary = createSessionStorageCleanupProductionBoundary({
-          resourcesPath: process.resourcesPath,
-          appVersion: app.getVersion(),
-          schemaVersion: DB_SCHEMA_VERSION,
-          historyFormatVersion: SESSION_STORAGE_HISTORY_FORMAT_VERSION,
-          spillFormatVersion: SESSION_STORAGE_SPILL_FORMAT_VERSION,
-          platform: process.platform,
-          arch: process.arch,
-        })
-        const cleanupGate = cleanupBoundary.checkGate()
-        if (cleanupGate.allowed) {
-          const cleanupScope = cleanupBoundary.checkAuthorizationScope(db)
-          if (cleanupScope.allowed) {
-            stopPeriodicSessionContentCleanup = scheduleSessionMessageContentCleanupMaintenance(db, cleanupBoundary, {
-              initialDelayMs: 60_000,
-              intervalMs: 15 * 60_000,
-              batchSize: 100,
-              maxSessionsPerRun: 2,
-              maxBatchesPerSession: 1,
-              onResult: (summary) => {
-                if (summary === 'failed') console.warn('[storage] session content cleanup maintenance failed; pending sessions remain resumable')
-                else if (summary.status === 'blocked') console.warn('[storage] session content cleanup gate closed:', summary.gateReason)
-                else if (summary.completed || summary.batches || summary.writeStopped || summary.ineligible) {
-                  console.info('[storage] session content cleanup maintenance progress:', summary)
-                }
-              },
-            })
-          } else {
-            console.info('[storage] session content cleanup worker not registered:', cleanupScope.reason)
-          }
-        } else if (cleanupGate.reason !== 'deployment-disabled') {
-          console.warn('[storage] session content cleanup remains disabled:', cleanupGate.reason)
-        }
-      }
+      sessionStorageHost.lifecycle.allowBackgroundWork()
       void measureStartupPhase('usage-stats-startup-maintenance', () => usageStatsStartupMaintenance?.())
       usageStatsStartupMaintenance = null
     })
@@ -1272,12 +1333,12 @@ app.on('before-quit', (event) => {
   // 必须在启动异步 cleanup 之前同步切断事件生产，否则 flush 与最后一批
   // chunk/关键事件并发，flush 返回后仍可能接受新事件并被 app.quit 丢弃。
   beginSessionEventShutdown()
-  stopPeriodicSqliteMaintenance?.()
-  stopPeriodicSqliteMaintenance = null
-  stopPeriodicSourceTruthSpillGc?.()
-  stopPeriodicSourceTruthSpillGc = null
-  stopPeriodicSessionContentCleanup?.()
-  stopPeriodicSessionContentCleanup = null
+  const lifecycleStop = storageLifecycleStop
+  storageLifecycleStop = null
+  const storageQuiescence = lifecycleStop?.(SHUTDOWN_TIMEOUT_MS) ?? Promise.resolve({ status: 'quiescent' as const })
+  void storageQuiescence.then((result) => {
+    if (result.status === 'deadline-exceeded') console.warn('[shutdown] storage maintenance did not become quiescent before deadline')
+  })
   const sessionProjectionMigrationShutdown = sessionProjectionMigrationApplication?.shutdown() ?? Promise.resolve()
   sessionProjectionMigrationApplication = null
   butlerScheduler?.stop()
@@ -1289,6 +1350,7 @@ app.on('before-quit', (event) => {
   }
   void (async () => {
     let timedOut = false
+    let storageQuiescent = false
     const pendingTasks = new Set<string>()
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<undefined>((resolve) => {
@@ -1300,7 +1362,10 @@ app.on('before-quit', (event) => {
     })
     try {
       const result = await Promise.race([
-        Promise.all([runShutdownCleanup(pendingTasks), sessionProjectionMigrationShutdown]).then(([cleanupResult]) => cleanupResult),
+        Promise.all([runShutdownCleanup(pendingTasks), sessionProjectionMigrationShutdown, storageQuiescence]).then(([cleanupResult, _migration, storageResult]) => {
+          storageQuiescent = storageResult.status === 'quiescent'
+          return cleanupResult
+        }),
         timeout
       ])
       if (result && result.failures.length > 0) {
@@ -1314,8 +1379,12 @@ app.on('before-quit', (event) => {
       if (timedOut) {
         console.warn('[shutdown] resources not settled before timeout:', Array.from(pendingTasks))
       }
-      appDb?.flushSave()
-      appDb?.close()
+      if (storageQuiescent && !timedOut) {
+        appDb?.flushSave()
+        appDb?.close()
+      } else {
+        console.warn('[shutdown] database flush/close skipped because storage work did not become quiescent')
+      }
       quitCleanupDone = true
       app.quit()
     }

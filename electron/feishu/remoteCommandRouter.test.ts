@@ -3,13 +3,14 @@ import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getSession, openDatabase, createSession, setConfigValue, getPersistedTurn } from '../database'
-import { createTurnCoordinatorStorage } from '../turnCoordinatorStorage'
+import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
 import { TurnRuntime } from '../turnRuntime'
 import { createWorkDirManager } from '../workDirManager'
 import { RemoteCommandRouter } from './remoteCommandRouter'
 import type { FeishuInboundMessage } from '../../src/shared/feishuTypes'
 import { mergeFeishuConfig } from '../../src/shared/feishuTypes'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import {
   REMOTE_PARALLEL_FULL_MESSAGE,
   REMOTE_SESSION_BUSY_MESSAGE
@@ -167,6 +168,7 @@ describe('RemoteCommandRouter workdir binding', () => {
     const router = new RemoteCommandRouter({
       turnRuntime: options?.turnRuntime ?? testTurnRuntime,
       db,
+      sessionStorage: createSqliteSessionStorage(db),
       runner: { run: vi.fn() } as never,
       processedStore: processedStore as never,
       imChannel: {
@@ -344,6 +346,7 @@ describe('RemoteCommandRouter busy guard', () => {
     const router = new RemoteCommandRouter({
       turnRuntime: options?.turnRuntime ?? testTurnRuntime,
       db,
+      sessionStorage: createSqliteSessionStorage(db),
       runner: { run: vi.fn() } as never,
       processedStore: processedStore as never,
       imChannel: {

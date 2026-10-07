@@ -77,6 +77,14 @@ type MessageRow = {
   sequence: number
 }
 
+/** Persisted control and display metadata without the message body. */
+export type StoredMessageSkeleton = Omit<Message, 'content'>
+
+function withoutMessageBody(message: Message): StoredMessageSkeleton {
+  const { content: _content, ...skeleton } = message
+  return skeleton
+}
+
 function parseJsonObject<T>(raw: string, fallback: T): T {
   try {
     return JSON.parse(raw) as T
@@ -542,11 +550,11 @@ export function getMessages(db: AppDatabase, sessionId: string, limit = 500, off
 }
 
 /** Read legacy UI/control metadata without materializing stored message bodies for a validated canonical L1 hit. */
-export function getMessageSkeletons(db: AppDatabase, sessionId: string): Message[] {
+export function getMessageSkeletons(db: AppDatabase, sessionId: string): StoredMessageSkeleton[] {
   const rows = getDbConnection(db).prepare(`SELECT id, session_id, role, '' AS content, tool_use, tool_calls, thinking,
     content_segments, skill_hints, attachments, images_delivered_to_api, status, schema_version, timestamp, sequence
     FROM messages WHERE session_id=? ORDER BY sequence ASC`).all(sessionId) as MessageRow[]
-  return rows.map(rowToStoredMessage)
+  return rows.map((row) => withoutMessageBody(rowToStoredMessage(row)))
 }
 
 /**
@@ -792,8 +800,9 @@ export function getTurnContext(db: AppDatabase, sessionId: string, boundarySeque
 }
 
 /** API-context skeleton with the legacy body omitted; canonical readers resolve content by stable ID. */
-export function getTurnContextSkeleton(db: AppDatabase, sessionId: string, boundarySequence: number | undefined, requiredUserMessageId: string | undefined, excludeMessageIds: string[]): Message[] {
-  return selectTurnContextRows(db, sessionId, boundarySequence, requiredUserMessageId, excludeMessageIds, false).map(rowToStoredMessage)
+export function getTurnContextSkeleton(db: AppDatabase, sessionId: string, boundarySequence: number | undefined, requiredUserMessageId: string | undefined, excludeMessageIds: string[]): StoredMessageSkeleton[] {
+  return selectTurnContextRows(db, sessionId, boundarySequence, requiredUserMessageId, excludeMessageIds, false)
+    .map(rowToStoredMessage).map(withoutMessageBody)
 }
 
 export function getMessage(db: AppDatabase, messageId: string): Message | undefined {
@@ -803,11 +812,11 @@ export function getMessage(db: AppDatabase, messageId: string): Message | undefi
 }
 
 /** Read recovery/control metadata without selecting the potentially large message body. */
-export function getMessageSkeleton(db: AppDatabase, messageId: string): Message | undefined {
+export function getMessageSkeleton(db: AppDatabase, messageId: string): StoredMessageSkeleton | undefined {
   const row = getDbConnection(db).prepare(`SELECT id, session_id, role, '' AS content, tool_use, tool_calls, thinking,
     content_segments, skill_hints, attachments, images_delivered_to_api, status, schema_version, timestamp, sequence
     FROM messages WHERE id=?`).get(messageId) as MessageRow | undefined
-  return row ? rowToStoredMessage(row) : undefined
+  return row ? withoutMessageBody(rowToStoredMessage(row)) : undefined
 }
 
 export type QueueInputReceipt = {
@@ -1275,6 +1284,7 @@ export function prepareTurnAtomically(
     user: Omit<Message, 'schemaVersion'> & { schemaVersion?: number }
     assistant: Omit<Message, 'schemaVersion'> & { schemaVersion?: number }
     turn: { turnId: string; requestId: string; sessionId: string; assistantMessageId: string; state: string; contextBoundarySequence?: number; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; retryOfMessageId?: string; retryOfInvocationId?: string; continuationAcceptance?: { payloadSha256: string; rawText: string; kind: 'exact-continue' | 'follow-up'; route: string; sourceInvocationId?: string; sourceTurnId?: string; sourceSequence?: number } }
+    acceptance?: { payloadSha256: string; rawText: string; kind: 'exact-continue' | 'follow-up'; route: string; sourceInvocationId?: string; sourceTurnId?: string; sourceSequence?: number }
   }
 ): { user: PersistedMessageEntry; assistant: PersistedMessageEntry } {
   const conn = getDbConnection(db)
@@ -1284,7 +1294,7 @@ export function prepareTurnAtomically(
     const boundary = (conn.prepare('SELECT MAX(sequence) AS sequence FROM messages WHERE session_id = ?').get(input.turn.sessionId) as { sequence?: number | null }).sequence ?? -1
     const user = appendMessage(db, input.user)
     const assistant = appendMessage(db, input.assistant)
-    const acceptance = input.turn.continuationAcceptance
+    const acceptance = input.acceptance ?? input.turn.continuationAcceptance
     createPersistedTurn(db, {
       ...input.turn,
       userMessageId: user.message.id,

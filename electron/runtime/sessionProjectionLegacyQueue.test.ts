@@ -5,7 +5,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { buildSessionProjectionMigrationInventory } from './sessionProjectionMigrationInventory'
 import { listLegacyRequiredSessionProjections, runSessionProjectionMigrationBatch, startSessionProjectionMigration } from './sessionProjectionMigration'
 import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
-import { clearNextSessionMessageContentBatch } from './sessionStorageCutover'
+import { clearNextSessionMessageContentBatch } from '../sessionStorage/maintenance'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import * as projectionModule from './sessionTranscriptProjection'
 

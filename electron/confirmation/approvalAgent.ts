@@ -14,7 +14,7 @@ import {
 } from '../../src/shared/confirmation/approvalVerdict'
 import type { BrowserConfig, ShellConfig, ToolsConfig } from '../../src/shared/domainTypes'
 import type { AppDatabase } from '../database'
-import { createSession } from '../database'
+import type { SessionStorage } from '../sessionStorage/contracts'
 import { runToolChatSession } from '../toolChatLoop'
 import { assembleInvocation } from '../runtime/invocationAssembler'
 import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
@@ -26,9 +26,6 @@ import { getBundledSecurityApprovalSkill } from '../skills/bundled/securityAppro
 import { requireInvocationAnthropicRoute } from '../runtime/invocationProviderRoute'
 import { createHostedTurnHandoff } from '../runtime/hostedTurnHandoff'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
-import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
-import { readSessionTranscript } from '../database/sessionTranscript'
-import { acceptTurnContext } from '../database/acceptedTurnStorage'
 import { AGENT_TURN_TIMEOUT_ABORT_REASON } from '../../packages/agent-sdk/src/turn'
 
 /**
@@ -53,6 +50,8 @@ export interface ApprovalAgentDeps {
   /** P3：父调用规则集上界（嵌套交集；缺省 = 无上界约束）。 */
   policyRuleFloor?: import('../../src/shared/confirmation/types').PolicyRule[]
   db: AppDatabase
+  sessionStorage: SessionStorage
+  historyForSession?: (sessionId: string) => import('../../packages/agent-sdk/src/history').HistoryPort
   workDir: string
   userDataDir: string
   getToolsConfig: () => ToolsConfig
@@ -292,7 +291,7 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
   let runSettled = false
   try {
     const skill = getBundledSecurityApprovalSkill()
-    const session = createSession(db, {
+    const session = deps.sessionStorage.commands.createSession({
       name: `安全审批 · ${inv.clue.summary.slice(0, 24)}`,
       ownership: 'internal',
       visibility: 'hidden'
@@ -323,18 +322,17 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
     })
 
     const model = deps.model ?? DEFAULT_APPROVAL_MODEL
-    const acceptedTranscript = readSessionTranscript(db, sessionId)
-    if (acceptedTranscript.status !== 'ready') throw new Error('SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED')
-    const acceptedTurn = acceptTurnContext(db, createAcceptedTurn({
-      turnId: inv.requestId,
-      requestId: inv.requestId,
-      sessionId,
+    const acceptedTurn = deps.sessionStorage.execution.acceptPrepared({
+      prepared: {
+        turnId: inv.requestId,
+        requestId: inv.requestId,
+        sessionId,
+        startToken: inv.requestId,
+        userMessage: { id: currentUserMessageId }
+      },
       lane: 'automation',
-      startToken: inv.requestId,
-      currentUserMessageId,
-      transcriptVersion: acceptedTranscript.version,
       config: { lane: 'automation', model }
-    }))
+    })
     const providerRouteId = requireInvocationAnthropicRoute({
       modelId: model,
       endpoint: deps.baseUrl,
@@ -371,12 +369,14 @@ export async function runApprovalAgent(deps: ApprovalAgentDeps, inv: ApprovalInv
       userDataDir: deps.userDataDir,
       getApiKey: deps.getApiKey,
       appDb: db,
+      sessionStorage: deps.sessionStorage,
+      ...(deps.historyForSession ? { historyForSession: deps.historyForSession } : {}),
       ...(deps.locale ? { locale: deps.locale } : {}),
       emitFactEvent: () => undefined,
       emitSessionEvent: () => undefined
     })
     const runPromise = runToolChatSession(invocation, ports, {
-      onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: ports.history!, invocationId: acceptedTurn.turnId, turnId: acceptedTurn.turnId, acceptedTurn, sessionDb: deps.db, routeId: providerRouteId, sessionId })
+      onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: ports.history!, invocationId: acceptedTurn.turnId, turnId: acceptedTurn.turnId, acceptedTurn, sessionQueries: deps.sessionStorage.queries, sessionExecution: deps.sessionStorage.execution, routeId: providerRouteId, sessionId })
     })
     runCreated = true
     // P1-4：run 收敛时置位（孤儿 run 存续期窗口由 finally 判断保持开启）；拒绝已被 race 派生分支处理

@@ -1,5 +1,5 @@
 import type { IncomingMessage } from '@wechatbot/wechatbot'
-import type { AppDatabase } from '../database'
+import type { SessionCommands } from '../sessionStorage/contracts'
 import { formatRemoteOutboundMessage, sessionSuffixLength } from '../../src/shared/remoteOutboundFormat'
 import { maybeTouchOutboundActivity } from '../remote/imRemoteOutbound'
 import { formatWeChatSummary, type WeChatReplyBot } from './weChatReplyService'
@@ -12,7 +12,7 @@ export async function sendWeChatRemoteOutbound(args: {
   inbound: IncomingMessage
   body: string
   sessionId?: string
-  touch?: { db: AppDatabase; sessionId: string }
+  touch?: { sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>; sessionId: string }
 }): Promise<void> {
   const { bot, inbound, body, sessionId, touch } = args
   const base = formatWeChatSummary(body)

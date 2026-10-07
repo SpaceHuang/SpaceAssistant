@@ -1,7 +1,4 @@
 import { z } from 'zod'
-import { listSessions, getSession } from '../../database/operations'
-import { getProjectedMessagesPageWithSequence } from '../../runtime/sessionTranscriptProjection'
-import type { AppDatabase } from '../../database'
 import type { CapabilityDescriptor, CapabilityContext } from '../types'
 import { isSessionActiveStream } from '../../chatActiveStreams'
 
@@ -11,8 +8,8 @@ import { isSessionActiveStream } from '../../chatActiveStreams'
  * 运行中标志来自 chatActiveStreams 的 sessionId→活跃流登记。
  */
 
-function getDb(ctx: CapabilityContext): AppDatabase | undefined {
-  return ctx.appDatabase as AppDatabase | undefined
+function getSessionQueries(ctx: CapabilityContext) {
+  return ctx.sessionQueries
 }
 
 /** 单条消息内容截断阈值（超出截断为摘要 + 提示） */
@@ -40,11 +37,11 @@ const listCapability: CapabilityDescriptor = {
   notes: ['按更新时间倒序；不含内部/隐藏会话'],
   handler: async (rawParams, ctx) => {
     const params = rawParams as SessionListParams
-    const db = getDb(ctx)
-    if (!db) throw new Error('会话数据不可用：缺少数据库上下文')
+    const queries = getSessionQueries(ctx)
+    if (!queries) throw new Error('会话数据不可用：缺少数据库上下文')
     const limit = Math.min(params.limit ?? 20, 50)
     const offset = params.offset ?? 0
-    const all = listSessions(db, { view: 'user-visible' })
+    const all = queries.listSessions({ view: 'user-visible' })
     const page = all.slice(offset, offset + limit)
     return {
       sessions: page.map((s) => ({
@@ -95,17 +92,17 @@ const readCapability: CapabilityDescriptor = {
   notes: ['调用记录经策略决策审计（policy.decision）留存'],
   handler: async (rawParams, ctx) => {
     const params = rawParams as SessionReadParams
-    const db = getDb(ctx)
-    if (!db) throw new Error('会话数据不可用：缺少数据库上下文')
+    const queries = getSessionQueries(ctx)
+    if (!queries) throw new Error('会话数据不可用：缺少数据库上下文')
     // 中5（评审）：与同族 list（view: 'user-visible'）口径对齐——内部会话（审批 Agent /
     // automation internal）与 hidden 会话正文不可被 read 直读，防内部会话内容外泄到模型上下文
-    const target = getSession(db, params.sessionId)
+    const target = queries.readSession(params.sessionId)
     if (!target || target.ownership === 'internal' || target.visibility === 'hidden') {
       return { error: 'session not found or not user-visible' }
     }
     const limit = Math.min(params.limit ?? 20, 50)
     const cursor = params.cursor ?? 0
-    const page = getProjectedMessagesPageWithSequence(db, params.sessionId, cursor, limit)
+    const page = queries.readExportPage({ sessionId: params.sessionId, fromSequence: cursor, pageSize: limit })
     return {
       messages: page.rows.map(({ message: m, sequence }) => {
         if (m.content.length > MESSAGE_MAX_CHARS) {

@@ -78,7 +78,7 @@ vi.mock('./chatCancelRegistry', () => ({
 }))
 
 import { ipcMain } from 'electron'
-import { registerClaudeStreamHandlers } from './claudeStreamHandlers'
+import { registerClaudeStreamHandlers } from './testSupport/claudeStreamHandlers'
 import { safeWebContentsSend } from './safeWebContentsSend'
 
 function makeSender(): WebContents {

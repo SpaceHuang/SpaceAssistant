@@ -34,6 +34,19 @@ export * from './scheduler'
 export * from './resourceLock'
 export * from './confirmationCommit'
 export * from './history'
+export type {
+  JsonValue,
+  ContextScope,
+  ContextItem,
+  ContextFrame,
+  ContextFence,
+  ContextSnapshot,
+  ContextTransformationEvidence,
+  ContextCandidate,
+  ContextCommitReceipt,
+  ContextCommitResult,
+  ContextPort
+} from './context'
 export * from './provider'
 export * from './lifecycle'
 export * from './model'

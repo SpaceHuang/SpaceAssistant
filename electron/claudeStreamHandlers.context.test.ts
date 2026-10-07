@@ -1,12 +1,24 @@
 import { describe, expect, it, vi } from 'vitest'
 import { appendMessage, claimQueuedTurnAtomically, createPersistedTurn, createSession, enqueueQueuedUserMessage, getDbConnection, openDatabase, prepareTurnAtomically } from './database'
-import { loadAuthoritativeTurnContext, normalizeAndValidateClaudeMessagesWithContentBlocks } from './claudeStreamHandlers'
+import { loadAuthoritativeTurnContext as loadAuthoritativeTurnContextWithStorage, normalizeAndValidateClaudeMessagesWithContentBlocks } from './claudeStreamHandlers'
 import { buildToolChatMessagesFromSource } from './chatMessageBuild'
 import { selectRecoveryMessages } from '../src/shared/overflowRecovery'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { appendSqliteAgentHistoryBatchInTransaction } from './database/agentHistoryStorage'
 import { toCanonicalModelMessages } from './runtime/canonicalHistory'
 import * as sessionStorageShadow from './runtime/sessionStorageShadow'
+import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
+
+function loadAuthoritativeTurnContext(
+  db: Parameters<typeof loadAuthoritativeTurnContextWithStorage>[0],
+  turnId: string,
+  sessionId: string,
+  requestId: string,
+  startToken: string,
+  storage = createSqliteSessionStorage(db)
+) {
+  return loadAuthoritativeTurnContextWithStorage(db, turnId, sessionId, requestId, startToken, storage)
+}
 
 describe('loadAuthoritativeTurnContext', () => {
   it('continuation turn 从目标 Invocation 的 checkpoint transcript 取上下文，并校验 continuation 引用', async () => {
@@ -33,7 +45,11 @@ describe('loadAuthoritativeTurnContext', () => {
       payload: { messages: transcript, continuationSource: { continuationId: 'continuation-1', invocationId: 'source-invocation', turnId: 'source-turn', checkpointSequence: 4, checkpointSha256: 'a'.repeat(64) }, requiredUserMessage: { id: user.message.id, message: transcript[0] } }
     }], 0, { schemaVersion: 1, sessionId: session.id })
 
-    const context = loadAuthoritativeTurnContext(db, 'target-turn', session.id, 'target-invocation', 'target-token')
+    const storage = createSqliteSessionStorage(db)
+    const loadContinuationTranscript = vi.fn(storage.execution.loadAcceptedContinuationTranscript)
+    const injectedStorage = { ...storage, execution: { ...storage.execution, loadAcceptedContinuationTranscript: loadContinuationTranscript } }
+    const context = loadAuthoritativeTurnContext(db, 'target-turn', session.id, 'target-invocation', 'target-token', injectedStorage)
+    expect(loadContinuationTranscript).toHaveBeenCalledWith({ sessionId: session.id, turnId: 'target-turn' })
     expect(context.continuationTranscript).toEqual([
       { role: 'user', content: 'checkpoint user history', id: 'continuation-user' },
       { role: 'assistant', content: 'checkpoint response before failure' }
@@ -68,8 +84,12 @@ describe('loadAuthoritativeTurnContext', () => {
     appendMessage(db, { id: 'assistant-a', sessionId: session.id, role: 'assistant', content: '', timestamp: 3, status: 'streaming' })
     appendMessage(db, { id: 'after-boundary', sessionId: session.id, role: 'user', content: 'must not enter', timestamp: 4, status: 'sent' })
     createPersistedTurn(db, { turnId: 'turn-a', requestId: 'request-a', sessionId: session.id, userMessageId: user.message.id, assistantMessageId: 'assistant-a', contextBoundarySequence: user.sequence - 1, state: 'prepared', version: 0, startToken: 'token-a' })
+    const storage = createSqliteSessionStorage(db)
+    const readTurn = vi.fn(storage.execution.readTurn)
+    const injectedStorage = { ...storage, execution: { ...storage.execution, readTurn } }
 
-    const context = loadAuthoritativeTurnContext(db, 'turn-a', session.id, 'request-a', 'token-a')
+    const context = loadAuthoritativeTurnContext(db, 'turn-a', session.id, 'request-a', 'token-a', injectedStorage)
+    expect(readTurn).toHaveBeenCalledWith({ sessionId: session.id, turnId: 'turn-a' })
     expect(context.currentUserMessageId).toBe('user-a')
     expect(context.messages.map((message) => message.id)).toEqual(['old', 'user-a'])
     expect(context.messages.some((message) => message.content === 'must not enter')).toBe(false)

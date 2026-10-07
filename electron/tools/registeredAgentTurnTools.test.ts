@@ -22,7 +22,7 @@ import { createAgentSdkSafetyPolicy, createAgentSdkStructuralPermitHandoff } fro
 import { ReadConfirmationRegistry } from '../confirmation/readConfirmationRegistry'
 import { evaluateToolCallGate } from '../confirmation/toolCallGate'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
-import type { AgentToolRevocationPort } from '../../src/shared/agent/invocation'
+import type { AgentToolRevocationPort } from '../../packages/agent-sdk/src/invocation'
 import { createWeChatOutboundRegisteredTools } from './wechatOutboundRegisteredTools'
 import { DEFAULT_WECHAT_CONFIG } from '../../src/shared/wechatTypes'
 import { ToolRevocationRegistry } from '../toolRevocationRegistry'

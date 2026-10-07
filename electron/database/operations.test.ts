@@ -10,6 +10,9 @@ import {
   deleteSession,
   getApiContextBaseline,
   getTurnContext,
+  getTurnContextSkeleton,
+  getMessageSkeleton,
+  getMessageSkeletons,
   getMessage,
   getSession,
   getChatMessagePage,
@@ -449,6 +452,22 @@ describe('turn routing context queries', () => {
 })
 
 describe('getTurnContext', () => {
+  it('returns context and single-message skeletons without a synthetic content field', () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'typed skeleton', model: 'test' })
+    appendMessage(db, { id: 'typed-skeleton-user', sessionId: session.id, role: 'user', content: 'body', timestamp: 1, status: 'sent' })
+
+    const context = getTurnContextSkeleton(db, session.id, undefined, undefined, [])
+    const single = getMessageSkeleton(db, 'typed-skeleton-user')
+    const all = getMessageSkeletons(db, session.id)
+
+    expect(context).toHaveLength(1)
+    expect(single).toBeDefined()
+    expect(all).toHaveLength(1)
+    expect([...context, single!, ...all].every((message) => !Object.hasOwn(message, 'content'))).toBe(true)
+    db.close()
+  })
+
   it('无论 timestamp 如何逆序或相同都严格按 sequence 构建权威上下文', () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'turn-sequence' })

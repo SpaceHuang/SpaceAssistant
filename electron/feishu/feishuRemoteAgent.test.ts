@@ -4,6 +4,7 @@ import { AppDatabase, openDatabase, setConfigValue } from '../database'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { buildFeishuRemoteSystemAppendix } from '../../src/shared/feishuPrompts'
 import { MODEL_BASELINE } from '../../src/shared/modelBaseline'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 
 const SUPPORTED_ANTHROPIC_MODEL = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
 
@@ -75,8 +76,10 @@ function makeWorkDirManager() {
 }
 
 function baseCtx(getMainWebContents: () => WebContents | null) {
+  const db = makeDb()
   return {
-    db: makeDb(),
+    db,
+    sessionStorage: createSqliteSessionStorage(db),
     sessionId: 'sess-1',
     userMessage: 'hello',
     replyMessageId: 'msg-1',

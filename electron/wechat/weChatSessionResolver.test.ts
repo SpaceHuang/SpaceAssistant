@@ -1,12 +1,13 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSession, getSession, openDatabase } from '../database'
 import { createWorkDirManager } from '../workDirManager'
 import { mergeWeChatConfig } from '../../src/shared/wechatTypes'
 import type { WeChatInboundMessage } from '../../src/shared/wechatTypes'
 import { resolveWeChatSession } from './weChatSessionResolver'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sa-wcsr-'))
@@ -57,7 +58,7 @@ describe('resolveWeChatSession workDirProfileId', () => {
     const { db, activeProfileId } = setup()
     const config = mergeWeChatConfig({ remoteSessionIdleMinutes: 0 })
     const { sessionId } = await resolveWeChatSession(
-      db,
+      createSqliteSessionStorage(db),
       makeMsg(),
       config,
       'claude-sonnet-4-20250514',
@@ -83,7 +84,7 @@ describe('resolveWeChatSession workDirProfileId', () => {
     })
 
     const { sessionId, isNew } = await resolveWeChatSession(
-      db,
+      createSqliteSessionStorage(db),
       makeMsg({ messageId: 'm2' }),
       config,
       'claude-sonnet-4-20250514',
@@ -109,7 +110,7 @@ describe('resolveWeChatSession workDirProfileId', () => {
       }
     })
     const { isNew } = await resolveWeChatSession(
-      db,
+      createSqliteSessionStorage(db),
       makeMsg({ messageId: 'm3' }),
       config,
       'claude-sonnet-4-20250514',
@@ -117,5 +118,31 @@ describe('resolveWeChatSession workDirProfileId', () => {
       () => activeProfileId
     )
     expect(isNew).toBe(true)
+  })
+
+  it('uses injected commands when creating a new remote session', async () => {
+    const { db, activeProfileId } = setup()
+    const storage = createSqliteSessionStorage(db)
+    const createStoredSession = vi.fn(storage.commands.createSession)
+    const injected = {
+      ...storage,
+      commands: { ...storage.commands, createSession: createStoredSession }
+    }
+
+    const result = await resolveWeChatSession(
+      injected,
+      makeMsg({ messageId: 'm-injected' }),
+      mergeWeChatConfig({ remoteSessionIdleMinutes: 0 }),
+      'claude-sonnet-4-20250514',
+      undefined,
+      () => activeProfileId
+    )
+
+    expect(result.isNew).toBe(true)
+    expect(createStoredSession).toHaveBeenCalledWith(expect.objectContaining({
+      name: expect.stringContaining('[微信]'),
+      workDirProfileId: activeProfileId,
+      metadata: expect.objectContaining({ wechatMessageId: 'm-injected' })
+    }))
   })
 })

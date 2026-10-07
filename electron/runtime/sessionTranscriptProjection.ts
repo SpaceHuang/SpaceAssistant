@@ -1,10 +1,12 @@
 import type { Message } from '../../src/shared/domainTypes'
 import type { AppDatabase } from '../database'
-import { getApiContextBaseline as getStoredApiContextBaseline, getChatMessagePage, getMessage as getStoredMessage, getMessageSkeletons, getMessages, getMessagesPageWithSequence as getStoredMessagesPageWithSequence, getSearchCorpusPage as getStoredSearchCorpusPage, getTurnContext as getStoredTurnContext, iterateRecentTurnRoutingMessageCandidates, resolveRetryContext as resolveStoredRetryContext, type ApiContextBaselineResult, type ChatMessagePage, type MessageSearchHit, type MessagesPageWithSequence, type RetryContextTarget, type SearchCorpusPage } from '../database/operations'
+import { getApiContextBaseline as getStoredApiContextBaseline, getChatMessagePage, getMessage as getStoredMessage, getMessageSkeletons, getMessages, getMessagesPageWithSequence as getStoredMessagesPageWithSequence, getSearchCorpusPage as getStoredSearchCorpusPage, resolveRetryContext as resolveStoredRetryContext, type ApiContextBaselineResult, type ChatMessagePage, type MessageSearchHit, type MessagesPageWithSequence, type RetryContextTarget, type SearchCorpusPage } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
+import { resolveSelectedMessageBodies } from '../sessionStorage/internal/messageBodyResolver'
+import { selectRecentTurnRoutingMessages, selectTurnContext } from './sessionTranscriptSelector'
 
 export type SessionTranscriptProjectionRead =
   | Readonly<{ source: 'canonical:L1' | 'canonical:L2'; messages: readonly Message[]; replayedEvents: number }>
@@ -213,7 +215,7 @@ export function canonicalBackedSessionProjectionMatches(
 export function getProjectedMessage(db: AppDatabase, messageId: string): Message | undefined {
   const stored = getStoredMessage(db, messageId)
   if (!stored) return undefined
-  return projectSelectedMessages(db, [stored])[0]
+  return resolveSelectedMessageBodies(db, [stored], (id) => readSessionTranscriptProjection(db, id))[0]
 }
 
 /** Resolve a sequence-selected context in one transcript read, retaining selection/order from SQLite. */
@@ -224,19 +226,19 @@ export function getProjectedTurnContext(
   requiredUserMessageId: string | undefined,
   excludeMessageIds: string[]
 ): Message[] {
-  const selected = getStoredTurnContext(db, sessionId, boundarySequence, requiredUserMessageId, excludeMessageIds)
-  return projectSelectedMessages(db, selected)
+  const selected = selectTurnContext(db, sessionId, boundarySequence, requiredUserMessageId, excludeMessageIds)
+  return resolveSelectedMessageBodies(db, selected, (id) => readSessionTranscriptProjection(db, id))
 }
 
 /** Preserve the legacy ascending sequence/limit/offset contract for whole-session consumers. */
 export function getProjectedMessages(db: AppDatabase, sessionId: string, limit = 500, offset = 0): Message[] {
-  return projectSelectedMessages(db, getMessages(db, sessionId, limit, offset))
+  return resolveSelectedMessageBodies(db, getMessages(db, sessionId, limit, offset), (id) => readSessionTranscriptProjection(db, id))
 }
 
 /** Preserve the API context baseline's latest-N window and sequence ordering for renderer readers. */
 export function getProjectedApiContextBaseline(db: AppDatabase, sessionId: string, limit = 500): ApiContextBaselineResult {
   const baseline = getStoredApiContextBaseline(db, sessionId, limit)
-  const projected = projectSelectedMessages(db, baseline.entries.map(({ message }) => message))
+  const projected = resolveSelectedMessageBodies(db, baseline.entries.map(({ message }) => message), (id) => readSessionTranscriptProjection(db, id))
   const projectedById = new Map(projected.map((message) => [message.id, message]))
   return {
     ...baseline,
@@ -256,13 +258,10 @@ export function getProjectedRecentTurnRoutingMessages(
   boundarySequence?: number,
   excludeMessageIds: string[] = []
 ): Array<{ role: 'user' | 'assistant'; content: string }> {
-  if (limit === 0) return []
-  const conn = getDbConnection(db)
-  return runInTransaction(conn, () => {
-    const selectedDescending: Array<{ role: 'user' | 'assistant'; content: string }> = []
-    let canonicalById: Map<string, Message> | undefined
-    for (const candidate of iterateRecentTurnRoutingMessageCandidates(db, sessionId, boundarySequence, excludeMessageIds)) {
-      let content = candidate.message.content
+  let canonicalById: Map<string, Message> | undefined
+  return selectRecentTurnRoutingMessages(db, {
+    sessionId, limit, boundarySequence, excludeMessageIds,
+    resolveBody: (candidate) => {
       if (candidate.contentStorageState === 'canonical-backed-dual-write' || candidate.contentStorageState === 'canonical-backed-only') {
         if (candidate.writeMode !== 'canonical') throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
         if (!canonicalById) {
@@ -272,52 +271,11 @@ export function getProjectedRecentTurnRoutingMessages(
         }
         const resolved = canonicalById.get(candidate.message.id)
         if (!resolved) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-        content = resolved.content
-      } else if (candidate.contentStorageState !== 'legacy') {
-        throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+        return resolved.content
       }
-      if (!content.trim()) continue
-      selectedDescending.push({ role: candidate.message.role as 'user' | 'assistant', content })
-      if (limit > 0 && selectedDescending.length >= limit) break
+      if (candidate.contentStorageState !== 'legacy') throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
+      return candidate.message.content
     }
-    return selectedDescending.reverse()
-  })
-}
-
-function projectSelectedMessages(db: AppDatabase, selected: readonly Message[]): Message[] {
-  if (selected.length === 0) return []
-  const conn = getDbConnection(db)
-  // Lightweight IPC test ports can omit SQLite; production AppDatabase always supplies prepare().
-  if (typeof conn.prepare !== 'function') return [...selected]
-  const sessionIds = new Set(selected.map(({ sessionId }) => sessionId))
-  if (sessionIds.size !== 1) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-  const sessionId = selected[0]!.sessionId
-  const ids = selected.map(({ id }) => id)
-  const states = conn.prepare(`SELECT messages.id,messages.content_storage_state,cutover.write_mode
-    FROM messages LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=messages.session_id
-    WHERE messages.session_id=? AND messages.id IN (${ids.map(() => '?').join(',')})`)
-    .all(sessionId, ...ids) as Array<{ id: string; content_storage_state: string; write_mode: string | null }>
-  const stateById = new Map(states.map((row) => [row.id, row]))
-  for (const message of selected) {
-    const state = stateById.get(message.id)
-    if (!state || (state.content_storage_state !== 'legacy' &&
-      !['canonical-backed-dual-write', 'canonical-backed-only'].includes(state.content_storage_state))) {
-      throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-    }
-    if (state.content_storage_state !== 'legacy' && state.write_mode !== 'canonical') {
-      throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-    }
-  }
-  const backedIds = new Set(states.filter((row) => row.content_storage_state !== 'legacy').map(({ id }) => id))
-  if (backedIds.size === 0) return [...selected]
-  const transcript = readSessionTranscriptProjection(db, sessionId)
-  if (transcript.source === 'legacy') throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-  const canonicalById = new Map(transcript.messages.map((message) => [message.id, message]))
-  return selected.map((message) => {
-    if (!backedIds.has(message.id)) return message
-    const resolved = canonicalById.get(message.id)
-    if (!resolved) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
-    return resolved
   })
 }
 
@@ -329,7 +287,7 @@ export function resolveProjectedRetryContext(
 ): RetryContextTarget | null {
   const selected = resolveStoredRetryContext(db, sessionId, failedAssistantMessageId, { allowEmptyContent: true })
   if (!selected) return null
-  const [failedAssistant, currentUser] = projectSelectedMessages(db, [selected.failedAssistant.message, selected.currentUser.message])
+  const [failedAssistant, currentUser] = resolveSelectedMessageBodies(db, [selected.failedAssistant.message, selected.currentUser.message], (id) => readSessionTranscriptProjection(db, id))
   if (!failedAssistant || failedAssistant.sessionId !== sessionId || failedAssistant.role !== 'assistant' || failedAssistant.status !== 'failed' ||
     !currentUser || currentUser.sessionId !== sessionId || currentUser.role !== 'user' || !currentUser.content.trim()) return null
   return {
@@ -460,7 +418,7 @@ export function searchProjectedMessages(db: AppDatabase, query: string, activePr
 }
 
 function mergeCanonicalBodies(canonicalMessages: readonly import('../../src/shared/api').ClaudeChatMessageWithBlocks[],
-  skeletons: readonly Message[]): Message[] | undefined {
+  skeletons: ReadonlyArray<Omit<Message, 'content'>>): Message[] | undefined {
   if (canonicalMessages.length !== skeletons.length) return undefined
   const canonicalById = new Map(canonicalMessages.map((message) => [message.id, message]))
   const projected: Message[] = []

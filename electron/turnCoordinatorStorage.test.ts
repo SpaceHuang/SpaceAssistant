@@ -13,7 +13,7 @@ import {
   openDatabase,
   setConfigValue
 } from './database'
-import { createTurnCoordinatorStorage } from './turnCoordinatorStorage'
+import { createTurnCoordinatorStorage } from './sessionStorage/coordinator'
 import { TurnCoordinator } from '../src/shared/turnCoordinator'
 import { TurnRuntime } from './turnRuntime'
 import { getDbConnection } from './database'

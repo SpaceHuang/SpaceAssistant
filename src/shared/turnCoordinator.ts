@@ -14,7 +14,10 @@ export type TurnStorage = {
   prepareAtomic: (input: {
     user: Omit<Message, 'schemaVersion'> & { schemaVersion?: number }
     assistant: Omit<Message, 'schemaVersion'> & { schemaVersion?: number }
-    turn: PersistedTurnRecord
+    turn: PersistedTurnRecord & {
+      continuationAcceptance?: PersistedTurnRecord['continuationAcceptance']
+    },
+    acceptance?: PersistedTurnRecord['continuationAcceptance']
   }) => { user: PersistedMessage; assistant: PersistedMessage }
   claimQueuedAtomic: (input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig }) => { user: PersistedMessage; assistant: PersistedMessage; executionConfig?: TurnExecutionConfig }
   update: (messageId: string, patch: Partial<Message>) => PersistedMessage | null

@@ -1517,7 +1517,9 @@ describe('session transcript projection P2 read path', () => {
       { id: 'projection-assistant', content: 'answer', status: 'sent' }
     ] })
     expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'canonical:L1' })
-    expect(getMessageSkeletons(db, session.id).map(({ content }) => content)).toEqual(['', ''])
+    const skeletons = getMessageSkeletons(db, session.id)
+    expect(skeletons).toHaveLength(2)
+    expect(skeletons.every((message) => !Object.hasOwn(message, 'content'))).toBe(true)
     getDbConnection(db).prepare("UPDATE messages SET content='stale projection copy' WHERE id='projection-user'").run()
     const authoritative = readSessionTranscriptProjection(db, session.id)
     expect(authoritative).toMatchObject({ source: 'legacy', reason: 'legacy-mismatch' })

@@ -1,4 +1,4 @@
-import type { AppDatabase } from '../database'
+import type { SessionCommands } from '../sessionStorage/contracts'
 import {
   formatRemoteOutboundMessage,
   sessionSuffixLength as defaultSessionSuffixLength
@@ -7,10 +7,10 @@ import { touchRemoteSessionActivity } from './remoteSessionActivity'
 
 export function maybeTouchOutboundActivity(
   sessionId: string | undefined,
-  touch?: { db: AppDatabase; sessionId: string }
+  touch?: { sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>; sessionId: string }
 ): void {
   if (sessionId && touch) {
-    touchRemoteSessionActivity(touch.db, touch.sessionId)
+    touchRemoteSessionActivity(touch.sessionCommands, touch.sessionId)
   }
 }
 
@@ -59,7 +59,7 @@ export async function sendImOutbound(args: {
   formatSummary?: (raw: string) => string
   formatWithSession?: (body: string, sessionId: string) => string
   sessionSuffixLength?: (sessionId: string) => number
-  touch?: { db: AppDatabase; sessionId: string }
+  touch?: { sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>; sessionId: string }
 }): Promise<void> {
   const text = buildSimpleOutboundText(args)
   await args.reply(text)

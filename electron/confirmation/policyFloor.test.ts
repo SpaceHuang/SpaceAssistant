@@ -15,7 +15,7 @@ import { touchTrustedCommand } from '../shell/shellCommandTrust'
 import { DEFAULT_TOOLS_CONFIG, type ToolsConfig } from '../../src/shared/domainTypes'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
-import { assembleInvocation } from '../runtime/invocationAssembler'
+import { assembleInvocation } from '../testSupport/invocationAssembler'
 
 /**
  * P3（偏差 3 语义收口）：

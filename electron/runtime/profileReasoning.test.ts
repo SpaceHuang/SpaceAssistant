@@ -13,7 +13,8 @@ vi.mock('../agentLogger/agentLogger', () => ({
 }))
 
 import { openDatabase, setConfigValue } from '../database'
-import { assembleInvocation, type AgentInvocationMaterials } from './invocationAssembler'
+import { assembleInvocation } from '../testSupport/invocationAssembler'
+import type { AgentInvocationMaterials } from './invocationAssembler'
 import { writePolicyPackages } from '../confirmation/policyRulesRuntime'
 
 const shells: AppDatabase[] = []

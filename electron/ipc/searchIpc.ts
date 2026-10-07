@@ -3,7 +3,6 @@ import type { AppIpcContext } from '../appIpc'
 import type { IpcMain } from 'electron'
 import { SearchResult } from '../../src/shared/domainTypes'
 import { appendSearchHistory, listSearchHistory } from '../database'
-import { searchProjectedMessages } from '../runtime/sessionTranscriptProjection'
 import { searchFilesUnder } from './ipcShared'
 
 export function registerSearchIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
@@ -15,7 +14,7 @@ export function registerSearchIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     appendSearchHistory(ctx.db, q)
     const results: SearchResult[] = []
     const activeProfileId = ctx.workDirManager.getActiveProfileId()
-    for (const hit of searchProjectedMessages(ctx.db, q, activeProfileId, 50)) {
+    for (const hit of ctx.sessionStorage!.queries.searchMessages({ query: q, activeProfileId, limit: 50 })) {
       results.push({
         id: `msg:${hit.messageId}`,
         type: 'session',

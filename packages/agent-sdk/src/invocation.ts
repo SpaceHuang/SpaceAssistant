@@ -1,5 +1,6 @@
 // Host-owned values stay opaque at the SDK boundary. The host narrows them in
 // its adapters; this package must not import implementation types from src/shared.
+import type { HistoryPort } from './history'
 type AssistantFactEvent = any
 type BrowserDetectContext = any
 type FileTreeChangeEvent = any
@@ -184,34 +185,6 @@ export interface AgentCredentialsPorts {
   networkTarget?: { baseUrl?: string }
 }
 
-/** loadContext 装载的会话原始材料（只装载不装配；裁剪与注入留在 Core）。 */
-export interface AgentLoadedSessionContext {
-  /** electron 侧为 Session['metadata']。 */
-  metadata?: unknown
-}
-
-/** 真相类持久化端口：失败 = 调用显式失败 + 可区分错误码 + 审计，不允许静默 no-op。 */
-export interface AgentPersistPorts {
-  /** 会话元数据写（recovery skill 激活等）。 */
-  updateSessionMetadata?(sessionId: string, patch: Record<string, unknown>): void
-  /** 标题建议生成与落库。 */
-  scheduleTitleSuggestion?(input: Record<string, unknown>): void
-  /** 人类确认后的会话级信任双写 decision_cache（browser navigate / act）。 */
-  recordUserAnswerFromDecision?(input: Record<string, unknown>): void
-}
-
-/** 宿主存储端口（P2）：loadContext 材料 + 真相类写 + 压缩事务。 */
-export interface AgentStoragePorts {
-  /** 装配期 loadContext 装载的会话材料。 */
-  loaded?: AgentLoadedSessionContext
-  /** Stable session-event ledger location used to reconcile canonical compaction commits after restart. */
-  sessionEventLocation?: { workDir: string; sessionId: string; createdAt: number }
-  /** 现读通道（循环内消费点需要最新值，如浮动通知的会话名）。 */
-  readSession?(sessionId: string): unknown
-  persist?: AgentPersistPorts
-  appendCompactionTransaction?(start: Record<string, unknown>, summary: Record<string, unknown>): Promise<unknown>
-}
-
 /** 暴露面规则（装配期解析；与门控 effectiveRules 同机制）。 */
 export interface AgentExposurePorts {
   rules?: readonly PolicyRule[]
@@ -309,21 +282,14 @@ export interface AgentHostPorts {
   executionAdmission?: unknown
   /** Runtime 级 permit ledger；调用完成后按 permit ID settle。 */
   safetyPermits?: unknown
-  /** Canonical HistoryPort 装配端口；逐 lane 真源切换前只做可重放事件影子写入。 */
-  history?: {
-    appendBatch(events: readonly {
-      eventId: string; idempotencyKey: string; invocationId: string; turnId: string; sequence: number;
-      schemaVersion: number; kind: 'session-input-committed' | 'invocation-context-committed' | 'transcript-compacted' | 'model-request-started' | 'provider-retry-scheduled' | 'model-attempt-discarded' | 'model-response-committed' | 'replay-message-committed' | 'tool-call-started' | 'tool-call-finished' | 'tool-call-not-dispatched' | 'approval-waiting' | 'approval-resolved' | 'approval-updated' | 'invocation-parked' | 'invocation-interrupted' | 'invocation-completed' | 'invocation-failed'; payload: unknown
-    }[], expectedVersion: number): Promise<{ version: number; duplicate: boolean }>
-    read(invocationId: string): Promise<{ invocationId: string; version: number; schemaVersion: number; events: Array<{
-      eventId: string; idempotencyKey: string; invocationId: string; turnId: string; sequence: number;
-      schemaVersion: number; kind: 'session-input-committed' | 'invocation-context-committed' | 'transcript-compacted' | 'model-request-started' | 'provider-retry-scheduled' | 'model-attempt-discarded' | 'model-response-committed' | 'replay-message-committed' | 'tool-call-started' | 'tool-call-finished' | 'tool-call-not-dispatched' | 'approval-waiting' | 'approval-resolved' | 'approval-updated' | 'invocation-parked' | 'invocation-interrupted' | 'invocation-completed' | 'invocation-failed'; payload: unknown
-    }> }>
-  }
+  /** SDK-owned event persistence contract; the host supplies its adapter. */
+  history?: HistoryPort
+  /** Frozen session metadata needed to build this invocation's product context. */
+  sessionMetadata?: Readonly<Record<string, unknown>>
+  /** Product title suggestion capability, kept separate from storage and History. */
+  titleSuggestions?: { schedule(input: Record<string, unknown>): void }
   /** P2（B1）：门控与暴露面规则的装配期材料。 */
   policy?: AgentPolicyPorts
-  /** P2：loadContext / persist（真相类）。 */
-  storage?: AgentStoragePorts
   /** P2：暴露面规则（装配期解析）。 */
   exposure?: AgentExposurePorts
   /** P2：MCP 快照与执行器（装配期构建）。 */
@@ -352,10 +318,8 @@ export interface AgentHostPorts {
   translate?(message: LocalizedMessage): string
   /** electron 侧为 ContextMeter（Core 以 session event ledger 提供的测量适配器）。 */
   contextMeter?: unknown
-  /** 成功完成 provider 请求后，在下一轮发送前执行 turn-boundary 规划。 */
-  turnBoundary?(input: unknown): Promise<unknown>
-  /** 初始及后续 provider dispatch 前按冻结预算恢复 transcript。 */
-  preflightModelRequest?(input: unknown): Promise<unknown>
+  /** 使用同一ContextPort规划preflight及accepted-response上下文替换。 */
+  planContextReplacement?(input: import('./turn').ContextReplacementPlanInput): Promise<import('./turn').ContextReplacementPlanResult | void>
   /** Provider 响应未被接受时，由宿主决定是否恢复 transcript 并安全重试一次。 */
   recoverProviderAttempt?(input: unknown): Promise<unknown>
 }

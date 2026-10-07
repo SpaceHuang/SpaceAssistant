@@ -1,4 +1,5 @@
 import type { ZodType } from 'zod'
+import type { SessionQueries } from '../sessionStorage/contracts'
 
 /** 能力家族：env=自我知觉（只读探测），action=产品功能执行 */
 export type CapabilityFamily = 'env' | 'action'
@@ -41,6 +42,8 @@ export interface CapabilityContext {
   detectBrowserDependencies?: (force: boolean) => Promise<unknown>
   /** Phase 2 功能执行系列所需的主进程服务 */
   appDatabase?: unknown
+  /** Session reads are supplied by the invocation composition root. */
+  sessionQueries?: SessionQueries
   workDirManager?: unknown
   /** R1：装配期解析的工作目录快照（单一事实源）；env.workspace 等能力消费，不读全局 active。 */
   workspaceSnapshot?: import('../../src/shared/agent/workspace').WorkspaceSnapshot

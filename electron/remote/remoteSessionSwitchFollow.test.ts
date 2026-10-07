@@ -36,7 +36,7 @@ describe('remoteSessionSwitchFollow', () => {
     }
     adoptRemoteSessionAfterSwitch({
       remoteContext: ctx,
-      appDatabase: {} as never,
+      sessionCommands: {} as never,
       targetSessionId: 'target-id'
     })
     expect(ctx.outboundSessionId).toBe('target-id')

@@ -1,12 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from './database/testHelpers'
 import { createSession, getSession, setConfigValue, type AppDatabase } from './database'
-import { resolveTrustedTurnExecutionConfig, resolveThinkingEffort } from './turnExecutionConfig'
+import { resolveTrustedTurnExecutionConfig as resolveTrustedTurnExecutionConfigWithQueries, resolveThinkingEffort } from './turnExecutionConfig'
+import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import type { ModelEntry } from '../src/shared/domainTypes'
 
 vi.mock('./agentLogger/agentLogger', () => ({ logAgentEvent: vi.fn() }))
 
 const SERVICE_ID = 'svc-deepseek'
+
+function resolveTrustedTurnExecutionConfig(db: AppDatabase, sessionId: string, lane: Parameters<typeof resolveTrustedTurnExecutionConfigWithQueries>[4], derived?: Parameters<typeof resolveTrustedTurnExecutionConfigWithQueries>[5], options?: Parameters<typeof resolveTrustedTurnExecutionConfigWithQueries>[6]) {
+  const storage = createSqliteSessionStorage(db)
+  return resolveTrustedTurnExecutionConfigWithQueries(db, storage.queries, storage.commands, sessionId, lane, derived, options)
+}
 
 function makeModel(overrides: Partial<ModelEntry> & Pick<ModelEntry, 'id' | 'name'>): ModelEntry {
   return {
@@ -46,6 +52,19 @@ function seedLlmConfig(
 }
 
 describe('resolveTrustedTurnExecutionConfig', () => {
+  it('通过注入的 SessionQueries 读取可信会话配置', async () => {
+    const db = createMemoryAppDb()
+    seedLlmConfig(db, [makeModel({ id: 'text', name: 'deepseek-chat' })])
+    const session = createSession(db, { name: 'query-port', model: 'deepseek-chat' })
+    const queries = createSqliteSessionStorage(db).queries
+    const readSession = vi.fn(queries.readSession)
+
+    const commands = createSqliteSessionStorage(db).commands
+    await resolveTrustedTurnExecutionConfigWithQueries(db, { ...queries, readSession }, commands, session.id, 'desktop')
+
+    expect(readSession).toHaveBeenCalledWith(session.id)
+  })
+
   it.each(['desktop', 'feishu', 'wechat'] as const)('%s 从同一可信 session 配置生成规范化快照', async (lane) => {
     const db = createMemoryAppDb()
     seedLlmConfig(db, [makeModel({ id: 'text', name: 'deepseek-chat' })])
@@ -95,6 +114,24 @@ describe('resolveTrustedTurnExecutionConfig', () => {
       llmServiceId: SERVICE_ID
     })
     expect(getSession(db, session.id)?.model).toBe('deepseek-flash')
+  })
+
+  it('模型名迁移通过注入的 SessionCommands 回写', async () => {
+    const db = createMemoryAppDb()
+    seedLlmConfig(db, [makeModel({ id: '5', name: 'deepseek-flash', isFast: true })])
+    const session = createSession(db, { name: 'legacy-name-port', model: 'deepseek-v4-flash' })
+    const storage = createSqliteSessionStorage(db)
+    const updateSettings = vi.fn(storage.commands.updateSettings)
+
+    await resolveTrustedTurnExecutionConfigWithQueries(
+      db,
+      storage.queries,
+      { ...storage.commands, updateSettings },
+      session.id,
+      'desktop'
+    )
+
+    expect(updateSettings).toHaveBeenCalledWith({ sessionId: session.id, model: 'deepseek-flash' })
   })
 
   it('装配时保留显式 supportsThinking false 并将请求档位降为 off', async () => {

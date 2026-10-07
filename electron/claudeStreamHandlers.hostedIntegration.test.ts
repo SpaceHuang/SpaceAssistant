@@ -27,7 +27,7 @@ import { getDbConnection } from './database'
 import { runApprovalAgent } from './confirmation/approvalAgent'
 import { PolicyAuthorizationChangeRegistry } from './runtime/policyAuthorizationChangeRegistry'
 import { readPolicyPackages, writePolicyPackages } from './confirmation/policyRulesRuntime'
-import { ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, getSessionEventSink, readSessionEvents } from './sessionEvents'
+import { appendCompactionTransaction, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, getSessionEventSink, readSessionEvents } from './sessionEvents'
 import { prepareToolConfirm, waitForToolConfirm } from './toolConfirmRegistry'
 import { MCP_CONFIG_KEYS } from './mcp/mcpConfigStore'
 import { McpConnectionManager } from './mcp/mcpConnectionManager'
@@ -40,6 +40,9 @@ import { getUsageStepFactsForTurn, getUsageTurnFact } from './database/operation
 import { queryUsageAttribution } from './usageStats/usageStatsQueries'
 import type { AssistantFactEvent } from '../src/shared/assistantFactAggregator'
 import { logAgentEvent } from './agentLogger/agentLogger'
+import { foldCompactionEvents } from '../src/shared/compactionEvents'
+import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
+import { createBoundSessionContextAdapter } from './sessionStorage/contextPortRegistry'
 
 const hostedTestUserDataDir = path.join(os.tmpdir(), 'spaceassistant-hosted-test-user-data')
 
@@ -139,7 +142,7 @@ vi.mock('./runtime/invocationAssembler', async (importOriginal) => {
 })
 
 import { ipcMain } from 'electron'
-import { registerClaudeStreamHandlers } from './claudeStreamHandlers'
+import { registerClaudeStreamHandlers } from './testSupport/claudeStreamHandlers'
 
 function makeSender(): WebContents {
   return { send: vi.fn(), isDestroyed: vi.fn(() => false) } as unknown as WebContents
@@ -736,6 +739,34 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     expect(sessionEventsModule.appendCompactionTransaction).toHaveBeenCalledWith(
       expect.anything(), expect.objectContaining({ windowId: session.id }), expect.objectContaining({ windowId: session.id, candidate: expect.objectContaining({ kind: 'summary' }) })
     )
+
+    const ledgerCall = vi.mocked(appendCompactionTransaction).mock.calls[0]
+    expect(ledgerCall).toBeDefined()
+    const [, start, summary] = ledgerCall!
+    const committedReplay = foldCompactionEvents([
+      { seq: 1, type: 'compaction_start', payload: start },
+      { seq: 2, type: 'compaction_summary', payload: summary },
+      { seq: 3, type: 'compaction_end', payload: {
+        compactionId: summary.compactionId, windowId: summary.windowId, status: 'committed', startSeq: 1, summarySeq: 2,
+        inputSurfaceFingerprint: start.inputSurfaceFingerprint, outputSurfaceFingerprint: summary.outputSurfaceFingerprint, summaryHash: summary.summaryHash
+      } }
+    ])
+    expect(committedReplay.committed).toHaveLength(1)
+    const storage = createSqliteSessionStorage(db, {
+      getWorkDirForSession: () => '/tmp', getUserDataDir: () => hostedTestUserDataDir,
+      getSessionEventSink: () => ({ eventsPath: '/unused-hosted-ledger', indexPath: '/unused-hosted-index' } as never),
+      readCompactionReplay: async () => committedReplay
+    })
+    const restored = await createBoundSessionContextAdapter(storage.contexts, { sessionId: session.id, isBusy: () => false })
+    const restoredSnapshot = await restored.adapter.port.readCurrent({ kind: 'session', sessionId: session.id })
+    const hostedCandidate = summary.candidate as { checkpointMessage: { id: string }; checkpointReplayIdentity: string }
+    expect(restored.messages.map((message) => message.id)).not.toContain('boundary-prior-user')
+    expect(restored.messages.map((message) => message.id)).not.toContain('boundary-prior-assistant')
+    expect(restoredSnapshot.frame.items[0]).toMatchObject({
+      replayIdentity: hostedCandidate.checkpointReplayIdentity,
+      sourceMessageIds: [],
+      message: { id: hostedCandidate.checkpointMessage.id }
+    })
   })
 
   it('compacts an over-budget initial Desktop request in Hosted SDK before provider dispatch', async () => {

@@ -114,12 +114,13 @@ vi.mock('./anthropicClientFactory', () => ({
 
 import { runToolChatSession } from './toolChatLoop'
 import { registerChatCancel } from './chatCancelRegistry'
-import { assembleInvocation } from './runtime/invocationAssembler'
+import { assembleInvocation } from './testSupport/invocationAssembler'
 import { createAgentRuntime } from './runtime/agentRuntime'
 import { getDefaultAgentRuntime, setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 import { ToolRevocationRegistry } from './toolRevocationRegistry'
 import { createHostedTurnHandoff } from './runtime/hostedTurnHandoff'
 import { InvocationRuntime } from '../packages/agent-sdk/src/scheduler'
+import { MemoryHistory } from '../packages/agent-sdk/src/history'
 
 /** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
 function runAssembledSession(materials: unknown) {
@@ -183,6 +184,7 @@ function baseArgs(db: AppDatabase) {
     userDataDir: '/tmp',
     getApiKey: async () => 'test-key',
     appDb: db,
+    historyForSession: () => new MemoryHistory(),
     emitFactEvent: () => undefined,
     emitSessionEvent: () => undefined
   } as Parameters<typeof runToolChatSession>[0]

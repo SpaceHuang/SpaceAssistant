@@ -10,7 +10,7 @@ import { DEFAULT_BROWSER_CONFIG, DEFAULT_TOOLS_CONFIG } from '../../src/shared/d
 import { ToolRevocationRegistry } from '../toolRevocationRegistry'
 import { createAgentRuntime } from './agentRuntime'
 import { resetDefaultAgentRuntimeForTests, setDefaultAgentRuntime } from './agentRuntimeDefaults'
-import { assembleInvocation } from './invocationAssembler'
+import { assembleInvocation } from '../testSupport/invocationAssembler'
 import { MemoryHistory } from '../../packages/agent-sdk/src/history'
 import type { ModelProviderRegistry } from '../../packages/agent-sdk/src/model'
 import { TypedToolRegistry, definePlannedTool } from '../tools/plannedToolRegistry'
@@ -21,6 +21,7 @@ import { getDbConnection, setConfigValue } from '../database'
 import { createSession, getUsageStepFactsForTurn as readUsageStepFactsForTurn, updateSession } from '../database/operations'
 import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import { isBrowserSessionTrustedHost, resetBrowserSessionTrustForTests } from '../browser/browserSessionTrust'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 
 describe('AcceptedTurn propagation', () => {
   it('carries the immutable accepted-turn snapshot into the runtime invocation', () => {
@@ -57,6 +58,19 @@ describe('AcceptedTurn propagation', () => {
 })
 
 describe('selected directory prompt context', () => {
+  it('通过组合根注入的 SessionStorage 查询会话授权资料', () => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: 'query-port' })
+    const storage = createSqliteSessionStorage(db)
+    const readSession = vi.fn(storage.queries.readSession)
+    const sessionStorage = { ...storage, queries: { ...storage.queries, readSession } }
+
+    assembleInvocation({ requestId: 'query-port', sessionId: session.id, model: 'test', locale: 'zh-CN', lane: 'desktop', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, system: 'base', workDir: '/tmp', userDataDir: '/tmp', appDb: db, sessionStorage, getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+
+    expect(readSession).toHaveBeenCalledWith(session.id)
+    db.close()
+  })
+
   it('adds only current, valid desktop session grants to the system prompt and rechecks revocation', async () => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'invocation-session-grant-')))
     try {
@@ -65,7 +79,7 @@ describe('selected directory prompt context', () => {
       const stat = await fs.stat(root)
       const grant = { grantId: 'grant-prompt', sessionId: session.id, path: root, realPath: root, identity: { dev: stat.dev, ino: stat.ino, mode: stat.mode }, createdAt: 1, source: 'user-selected-directory' as const }
       updateSession(db, session.id, { metadata: { ...session.metadata, sessionDirectoryGrants: [grant] } })
-      const desktop = assembleInvocation({ requestId: 'prompt-desktop', sessionId: session.id, model: 'test', locale: 'zh-CN', lane: 'desktop', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, system: 'base system', workDir: '/tmp', userDataDir: '/tmp', appDb: db, getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+      const desktop = assembleInvocation({ requestId: 'prompt-desktop', sessionId: session.id, model: 'test', locale: 'zh-CN', lane: 'desktop', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, system: 'base system', workDir: '/tmp', userDataDir: '/tmp', appDb: db, sessionStorage: createSqliteSessionStorage(db), getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
       expect(desktop.invocation.profile.system).toContain(root)
       expect(desktop.invocation.profile.system).toContain('不表示要求立即扫描全部内容')
       let runtimeContext: Record<string, unknown> | undefined
@@ -914,31 +928,32 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
   })
 
   it('projects the SDK turn boundary into the existing Desktop compaction planner contract', async () => {
-    const onTurnBoundary = vi.fn(async () => undefined)
+    const onContextReplacementPlan = vi.fn(async () => undefined)
     const { ports } = assembleInvocation({
       requestId: 'req-boundary-return', sessionId: 'session-boundary-return', turnId: 'turn-boundary-return',
       model: 'test-model', providerRouteId: 'test-route', contextWindow: 128, locale: 'zh-CN', messages: [],
       toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key',
-      emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(), onTurnBoundary
+      emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(), onContextReplacementPlan
     })
     const required = { id: 'required-user', message: { role: 'user' as const, content: 'current request' } }
     await ports.observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'test-route', request: {
       messages: [{ role: 'system', content: 'real system prompt' }, required.message], maxTokens: 64,
       tools: [{ name: 'read_file', description: 'read', inputSchema: { type: 'object' } }]
     }, currentUserMessageId: required.id, requiredUserMessage: required })
-    const responseProjection = await ports.observer.prepareModelResponseProjection?.({
+    const responseProjection = await ports.observer.prepareContextBoundaryEvidence?.({
       modelTurn: 1, finishReason: 'stop', usage: { type: 'usage', inputTokens: 100, outputTokens: 4 },
       message: { role: 'assistant', content: 'answer' }
     })
-    await expect(ports.turnBoundary?.({
+    await expect(ports.planContextReplacement?.({
+      phase: 'turn-boundary',
       invocationId: 'req-boundary-return', modelTurn: 1,
       response: { role: 'assistant', content: 'answer' },
       messages: [required.message, { role: 'assistant', content: 'answer' }], toolCalls: [],
-      usage: { inputTokens: 100, outputTokens: 4 }, requestProjection: responseProjection?.turnBoundaryProjection,
+      usage: { inputTokens: 100, outputTokens: 4 }, requestProjection: responseProjection?.contextBoundaryEvidence,
       currentUserMessageId: required.id, requiredUserMessage: required
     })).resolves.toBeUndefined()
-    expect(onTurnBoundary).toHaveBeenCalledOnce()
-    expect(onTurnBoundary).toHaveBeenCalledWith(expect.objectContaining({
+    expect(onContextReplacementPlan).toHaveBeenCalledOnce()
+    expect(onContextReplacementPlan).toHaveBeenCalledWith(expect.objectContaining({
       requestId: 'req-boundary-return:round:1', windowId: 'session-boundary-return', system: 'real system prompt',
       tools: [{ name: 'read_file', description: 'read', input_schema: { type: 'object' } }],
       messages: expect.arrayContaining([expect.objectContaining({ id: 'required-user', content: 'current request' })]),
@@ -973,7 +988,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     })
   })
 
-  it('preserves the stable session-event location needed by startup compaction recovery', () => {
+  it('keeps session-event ledger location out of the generic SDK storage port', () => {
     const location = { workDir: '/work/agent', sessionId: 'session-1', createdAt: 1234 }
     const { ports } = assembleInvocation({
       requestId: 'req-compaction-location', sessionId: 'session-1', model: 'test-model', locale: 'zh-CN', messages: [],
@@ -981,6 +996,6 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       sessionEventLocation: location, emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
     })
 
-    expect(ports.storage?.sessionEventLocation).toEqual(location)
+    expect(ports).not.toHaveProperty('storage')
   })
 })

@@ -14,6 +14,7 @@ import { runImRemoteAgent } from './imRemoteAgent'
 import type { WorkDirManager } from '../workDirManager'
 import { acceptTurnContext } from '../database/acceptedTurnStorage'
 import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 
 vi.mock('../appIpc', () => ({ readAppLocale: () => 'zh-CN' }))
 
@@ -65,7 +66,7 @@ describe('Feishu production entry usage attribution SQLite integration', () => {
       checkDirectoryWritable: () => ({ ok: true })
     } as unknown as WorkDirManager
     const result = await runImRemoteAgent({
-      db, sessionId: session.id, requestId: 'feishu-usage-request', turnId: 'feishu-usage-turn', acceptedTurn, workDir, workDirManager,
+      db, sessionStorage: createSqliteSessionStorage(db), sessionId: session.id, requestId: 'feishu-usage-request', turnId: 'feishu-usage-turn', acceptedTurn, workDir, workDirManager,
       userDataDir: path.join(workDir, 'userdata'), getApiKey: async () => 'test-key',
       getBaseUrl: () => 'https://api.anthropic.com', getModel: () => model,
       remoteContext: { source: 'feishu', messageId: 'feishu-message-1', confirmPolicy: 'always' },

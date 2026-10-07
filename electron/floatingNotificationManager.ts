@@ -6,8 +6,7 @@ import {
   pushDataToFloatingWindow,
   sendCloseToFloatingWindow
 } from './floatingNotification'
-import type { AppDatabase } from './database'
-import { getSession } from './database'
+import type { SessionQueries } from './sessionStorage/contracts'
 import { sessionDisplayNameRaw } from '../src/shared/sessionDisplay'
 
 export type PendingConfirmEntry = {
@@ -24,8 +23,8 @@ function makeKey(requestId: string, toolUseId: string): string {
   return `${requestId}\0${toolUseId}`
 }
 
-function resolveSessionName(db: AppDatabase, sessionId: string, hint?: string): string {
-  const fromDb = getSession(db, sessionId)?.name
+function resolveSessionName(sessionQueries: SessionQueries, sessionId: string, hint?: string): string {
+  const fromDb = sessionQueries.readSession(sessionId)?.name
   return sessionDisplayNameRaw(fromDb ?? hint, sessionId)
 }
 
@@ -51,21 +50,21 @@ export class FloatingNotificationManager {
   private testMode = false
   private mainWindowGetter: () => BrowserWindow | null
   private mainDirname: string
-  private db: AppDatabase
+  private sessionQueries: SessionQueries
 
   constructor(
     mainWindowGetter: () => BrowserWindow | null,
     mainDirname: string,
-    db: AppDatabase
+    sessionQueries: SessionQueries
   ) {
     this.mainWindowGetter = mainWindowGetter
     this.mainDirname = mainDirname
-    this.db = db
+    this.sessionQueries = sessionQueries
   }
 
   onConfirmRequest(entry: PendingConfirmEntry): void {
     const key = makeKey(entry.requestId, entry.toolUseId)
-    entry.sessionName = resolveSessionName(this.db, entry.sessionId, entry.sessionName)
+    entry.sessionName = resolveSessionName(this.sessionQueries, entry.sessionId, entry.sessionName)
     this.pendingItems.set(key, entry)
     this.dismissed = false
     this.testMode = false
@@ -176,7 +175,7 @@ export class FloatingNotificationManager {
       latestItem: latest
         ? {
             sessionId: latest.sessionId,
-            sessionName: resolveSessionName(this.db, latest.sessionId, latest.sessionName),
+            sessionName: resolveSessionName(this.sessionQueries, latest.sessionId, latest.sessionName),
             toolUseId: latest.toolUseId,
             toolName: latest.toolName,
             input: (latest.input ?? {}) as Record<string, unknown>,

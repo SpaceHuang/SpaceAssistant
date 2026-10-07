@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { Message } from '../../src/shared/domainTypes'
 import type { AppDatabase } from '../database'
-import { getMessages, getTurnContext, getTurnContextSkeleton, iterateRecentTurnRoutingSkeletons } from '../database/operations'
+import { getMessages, getTurnContext, getTurnContextSkeleton, iterateRecentTurnRoutingSkeletons, type StoredMessageSkeleton } from '../database/operations'
 import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
 import { logAgentEvent } from '../agentLogger/agentLogger'
@@ -125,7 +125,7 @@ export function readCanonicalTurnContextCandidate(
 ): CanonicalTurnContextCandidate {
   try {
     return runInTransaction(getDbConnection(db), () => {
-      let legacySkeleton: Message[]
+      let legacySkeleton: StoredMessageSkeleton[]
       try {
         legacySkeleton = getTurnContextSkeleton(db, sessionId, boundarySequence, requiredUserMessageId, excludeMessageIds)
       } catch (error) {

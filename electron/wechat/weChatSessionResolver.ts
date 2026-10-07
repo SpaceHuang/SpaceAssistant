@@ -1,16 +1,15 @@
-import type { AppDatabase } from '../database'
-import { createSession, updateSession } from '../database'
+import type { SessionStorage } from '../sessionStorage/contracts'
 import type { WeChatConfig, WeChatInboundMessage } from '../../src/shared/wechatTypes'
 import { resolveImSession, truncateTitle } from '../remote/imSessionResolver'
 
 export async function createNewWeChatSession(
-  db: AppDatabase,
+  sessionStorage: SessionStorage,
   msg: WeChatInboundMessage,
   model: string,
   activeWorkDirProfileId?: string
 ): Promise<string> {
   const title = `[微信] ${truncateTitle(msg.text)}`
-  const session = createSession(db, {
+  const session = sessionStorage.commands.createSession({
     name: title,
     model,
     ...(activeWorkDirProfileId ? { workDirProfileId: activeWorkDirProfileId } : {}),
@@ -31,7 +30,7 @@ export async function createNewWeChatSession(
 }
 
 export async function resolveWeChatSession(
-  db: AppDatabase,
+  sessionStorage: SessionStorage,
   msg: WeChatInboundMessage,
   config: WeChatConfig,
   defaultModel: string,
@@ -40,7 +39,7 @@ export async function resolveWeChatSession(
 ): Promise<{ sessionId: string; isNew: boolean }> {
   const activeProfileId = getActiveWorkDirProfileId?.()
   return resolveImSession({
-    db,
+    sessionQueries: sessionStorage.queries,
     config,
     defaultModel,
     availableModelNames,
@@ -51,24 +50,7 @@ export async function resolveWeChatSession(
       const meta = m?.wechatMeta as { userId?: string } | undefined
       return meta?.userId
     },
-    createNew: (model) => createNewWeChatSession(db, msg, model, activeProfileId),
-    onReuse: (existing) => {
-      const patch: Parameters<typeof updateSession>[2] = {
-        metadata: {
-          ...existing.metadata,
-          wechatMessageId: msg.messageId,
-          wechatMeta: {
-            ...(existing.metadata as { wechatMeta?: Record<string, unknown> })?.wechatMeta,
-            userId: msg.userId,
-            lastMessageId: msg.messageId,
-            lastContextToken: msg.contextToken
-          }
-        }
-      }
-      if (!existing.workDirProfileId && activeProfileId) {
-        patch.workDirProfileId = activeProfileId
-      }
-      updateSession(db, existing.id, patch)
-    }
+    createNew: (model) => createNewWeChatSession(sessionStorage, msg, model, activeProfileId),
+    onReuse: (existing) => { sessionStorage.commands.recordRemoteSessionIdentity(existing.id, { channel: 'wechat', userId: msg.userId, messageId: msg.messageId, contextToken: msg.contextToken, ...(activeProfileId ? { workDirProfileId: activeProfileId } : {}) }) }
   })
 }

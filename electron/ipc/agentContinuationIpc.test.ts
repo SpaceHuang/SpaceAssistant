@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { appendMessage, createPersistedTurn, createSession, getDbConnection, getPersistedTurn } from '../database'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
-import { createTurnCoordinatorStorage } from '../turnCoordinatorStorage'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { TurnRuntime } from '../turnRuntime'
 import { continueAgentFromCheckpoint, registerAgentContinuationIpc } from './agentProtocolIpc'
 import type { AppIpcContext } from '../appIpc'
@@ -34,11 +34,13 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
       { invocationId: 'source-invocation', turnId: 'source-turn', sequence: 2, schemaVersion: 1, eventId: 'source-response', idempotencyKey: 'source-response', kind: 'model-response-committed', payload: { message: { role: 'assistant', content: 'provider failed' } } },
       { invocationId: 'source-invocation', turnId: 'source-turn', sequence: 3, schemaVersion: 1, eventId: 'source-failed', idempotencyKey: 'source-failed', kind: 'invocation-failed', payload: { status: 'failed' } }
     ], 0)
-    const runtime = new TurnRuntime({
-      storage: createTurnCoordinatorStorage(db),
+    let runtime: TurnRuntime | undefined
+    const sessionStorage = createSqliteSessionStorage(db, { getTurnRuntime: () => runtime! })
+    runtime = new TurnRuntime({
+      storage: sessionStorage.execution.coordinator,
       deps: { now: () => 20, id: (() => { let id = 0; return () => `ipc-target-${++id}` })() }
     })
-    const ctx = { db, executeTurn: vi.fn(async () => undefined) } as unknown as AppIpcContext
+    const ctx = { db, sessionStorage, executeTurn: vi.fn(async () => undefined) } as unknown as AppIpcContext
     return { session, user, history, runtime, ctx }
   }
 

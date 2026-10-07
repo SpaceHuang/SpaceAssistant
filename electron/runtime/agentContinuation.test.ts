@@ -6,7 +6,7 @@ import { createOrGetAgentContinuation, validateContinuationCheckpoint, claimAgen
 import type { HistoryEvent, HistorySnapshot } from '../../packages/agent-sdk/src/history'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { rebuildClaudeMessagesFromHistory } from './canonicalHistory'
-import { createTurnCoordinatorStorage } from '../turnCoordinatorStorage'
+import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
 import { TurnRuntime } from '../turnRuntime'
 import { createSession, appendMessage, createPersistedTurn, openDatabase, getDbConnection } from '../database'
 

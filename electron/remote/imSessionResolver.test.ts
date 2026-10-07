@@ -1,9 +1,17 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSession, openDatabase } from '../database'
-import { resolveImSession, truncateTitle } from './imSessionResolver'
+import { resolveImSession as resolveWithQueries, truncateTitle } from './imSessionResolver'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+import type { AppDatabase } from '../database'
+
+type ResolverInput = Parameters<typeof resolveWithQueries>[0]
+function resolveImSession(input: Omit<ResolverInput, 'sessionQueries'> & { db: AppDatabase; sessionQueries?: ResolverInput['sessionQueries'] }) {
+  const { db, sessionQueries, ...rest } = input
+  return resolveWithQueries({ ...rest, sessionQueries: sessionQueries ?? createSqliteSessionStorage(db).queries })
+}
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sa-imsr-'))
@@ -91,6 +99,25 @@ describe('resolveImSession', () => {
     expect(result.isNew).toBe(false)
     expect(result.sessionId).toBe(existing.id)
     expect(reused).toBe(true)
+  })
+
+  it('resolves candidates through the injected SessionQueries port', async () => {
+    const db = setupDb()
+    const existing = createSession(db, { name: 'port-owned-session', metadata: { source: 'feishu', feishuChatId: 'port-chat' } })
+    const baseQueries = createSqliteSessionStorage(db).queries
+    const listSessions = vi.fn(baseQueries.listSessions)
+    const sessionQueries = Object.freeze({ ...baseQueries, listSessions })
+
+    const result = await resolveImSession({
+      db, sessionQueries, config: { remoteSessionIdleMinutes: 10 }, defaultModel: 'm1',
+      channel: 'feishu', identityKey: 'port-chat',
+      getIdentityFromSession: (session) => (session.metadata as { feishuChatId?: string }).feishuChatId,
+      createNew: async () => { throw new Error('should reuse') },
+      onReuse: (session) => expect(session.id).toBe(existing.id)
+    })
+
+    expect(listSessions).toHaveBeenCalledOnce()
+    expect(result).toEqual({ sessionId: existing.id, isNew: false })
   })
 
   it('creates new session after idle timeout', async () => {

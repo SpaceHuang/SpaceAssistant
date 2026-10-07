@@ -1,8 +1,7 @@
 import fs from 'fs/promises'
 import path from 'path'
 import type { IncomingMessage } from '@wechatbot/wechatbot'
-import type { AppDatabase } from '../database'
-import { listSessions } from '../database'
+import type { SessionQueries } from '../sessionStorage/contracts'
 import { resolveSafeWorkDirPath } from '../pathSecurity'
 import type { WeChatBotService } from '../wechat/weChatBotService'
 import type { WeChatConfig } from '../../src/shared/wechatTypes'
@@ -98,7 +97,7 @@ export async function executeWeChatReply(
   ctx: {
     workDir: string
     botService: WeChatBotService
-    db: AppDatabase
+    sessionQueries: SessionQueries
     sessionId?: string
     expectedMessageId?: string
     signal?: AbortSignal
@@ -111,7 +110,7 @@ export async function executeWeChatReply(
   if (ctx.sessionId) {
     inboundRaw = getWeChatBundle()?.router?.getInboundForSession(ctx.sessionId)
     if (!inboundRaw) {
-      const session = listSessions(ctx.db).find((s) => s.id === ctx.sessionId)
+      const session = ctx.sessionQueries.readSession(ctx.sessionId)
       const meta = session?.metadata as { source?: string } | undefined
       if (meta?.source !== 'wechat') {
         return { success: false, error: '当前会话无有效微信上下文，无法回复' }

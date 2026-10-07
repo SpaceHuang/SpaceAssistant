@@ -1,7 +1,6 @@
-import type { AppDatabase } from '../database'
-import { listSessions } from '../database'
 import type { Session } from '../../src/shared/domainTypes'
 import type { RemoteImCommonConfig } from '../../src/shared/imTypes'
+import type { SessionQueries } from '../sessionStorage/contracts'
 import {
   pickRemoteSessionCandidate,
   readRemoteSessionIdleMinutes,
@@ -19,7 +18,7 @@ export type ImSessionResolveConfig = Pick<
 >
 
 export async function resolveImSession(args: {
-  db: AppDatabase
+  sessionQueries: SessionQueries
   config: ImSessionResolveConfig
   defaultModel: string
   availableModelNames?: string[]
@@ -44,7 +43,7 @@ export async function resolveImSession(args: {
   }
 
   const existing = pickRemoteSessionCandidate(
-    listSessions(args.db),
+    args.sessionQueries.listSessions(),
     args.channel,
     args.identityKey,
     args.getIdentityFromSession

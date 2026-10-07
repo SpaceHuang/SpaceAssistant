@@ -1,10 +1,45 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createOutboundAcceptor, decideOutbound, type OutboundSnapshot } from './outboundAcceptor'
+import { createOutboundAcceptor as createSessionStorageOutboundAcceptor, decideOutbound, type OutboundAcceptorDeps, type OutboundSnapshot } from './outboundAcceptor'
 import type { OutboundSubmitIntent } from '../../src/shared/outboundProtocol'
 import { DEFAULT_WIKI_CONFIG } from '../../src/shared/domainTypes'
 import { summarizeFailedInvocation } from './outboundAcceptor'
 import { TransactionCommitUnknownError } from '../database/transaction'
 import { createHash } from 'node:crypto'
+import type { SessionQueries } from '../sessionStorage/contracts'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+import type { AppDatabase } from '../database'
+
+type TestOutboundDeps = Omit<OutboundAcceptorDeps, 'sessionQueries' | 'sessionCommands' | 'sessionExecution'> & {
+  sessionQueries?: SessionQueries
+  sessionCommands?: OutboundAcceptorDeps['sessionCommands']
+  sessionExecution?: OutboundAcceptorDeps['sessionExecution']
+}
+function createOutboundAcceptor(deps: TestOutboundDeps) {
+  const storage = createSqliteSessionStorage(deps.db)
+  return createSessionStorageOutboundAcceptor({
+    ...deps,
+    sessionQueries: deps.sessionQueries ?? storage.queries,
+    sessionCommands: deps.sessionCommands ?? storage.commands,
+    sessionExecution: deps.sessionExecution ?? storage.execution
+  })
+}
+
+function createPersistedTurnStarter(db: AppDatabase, getTurnId: (requestId: string) => string): OutboundAcceptorDeps['startTurn'] {
+  const execution = createSqliteSessionStorage(db).execution
+  return async ({ turnIntent }) => {
+    if (turnIntent.mode !== 'create-user') throw new Error('test starter expects create-user intent')
+    const turnId = getTurnId(turnIntent.requestId)
+    const userId = `test-user-${turnIntent.requestId}`
+    const assistantId = `test-assistant-${turnIntent.requestId}`
+    const prepared = execution.prepareTurn({
+      user: { id: userId, sessionId: turnIntent.sessionId, role: 'user', content: turnIntent.input.text, attachments: turnIntent.input.attachments, timestamp: Date.now(), status: 'sent' },
+      assistant: { id: assistantId, sessionId: turnIntent.sessionId, role: 'assistant', content: '', timestamp: Date.now() + 1, status: 'streaming' },
+      turn: { turnId, requestId: turnIntent.requestId, sessionId: turnIntent.sessionId, assistantMessageId: assistantId, state: 'prepared', executionConfig: turnIntent.config },
+      ...(turnIntent.continuationAcceptance ? { acceptance: turnIntent.continuationAcceptance } : {})
+    })
+    return { turnId, assistantMessage: prepared.assistant.message }
+  }
+}
 
 function makeSnapshot(overrides: Partial<OutboundSnapshot> = {}): OutboundSnapshot {
   return {
@@ -267,7 +302,11 @@ describe('continuation intent acceptance persistence', () => {
         { invocationId: 'status-source-invocation', turnId: 'status-source-turn', sequence: 2, schemaVersion: 1, eventId: 'status-source-2', idempotencyKey: 'status-source-i2', kind: 'invocation-failed', payload: { status: 'failed', message: 'failed' } }
       ], 0)
       const appendHintMessage = vi.fn()
-      const startContinuation = vi.fn(async () => ({ continuationId: 'private-continuation-id', targetTurnId: 'continued-turn', status: 'running' }))
+      const startContinuation = vi.fn(async ({ sessionId, sourceInvocationId }: { sessionId: string; sourceInvocationId: string }) => {
+        getDbConnection(temp.db).prepare(`INSERT INTO agent_continuations(continuation_id,source_invocation_id,source_turn_id,checkpoint_sequence,checkpoint_sha256,request_idempotency_key,created_by,frozen_config_json,frozen_config_sha256,target_invocation_id,target_turn_id,target_start_token,status,created_at,updated_at)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run('private-continuation-id', sourceInvocationId, 'status-source-turn', 1, 'a'.repeat(64), 'stable-checkpoint-continue', sessionId, '{}', 'b'.repeat(64), 'target-invocation', 'continued-turn', 'start-token', 'running', 1, 1)
+        return { continuationId: 'private-continuation-id', targetTurnId: 'continued-turn', status: 'running' }
+      })
       const acceptor = createOutboundAcceptor({
         db: temp.db, turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
         readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
@@ -300,10 +339,7 @@ describe('continuation intent acceptance persistence', () => {
     const temp = createTempDatabase('sa-continuation-intent-')
     try {
       const session = createSession(temp.db, { name: 'intent' })
-      const started = vi.fn(async ({ turnIntent }: { turnIntent: { requestId: string; sessionId: string } }) => ({
-        turnId: `target-${turnIntent.requestId}`,
-        assistantMessage: { id: 'assistant', sessionId: turnIntent.sessionId, role: 'assistant', content: '', timestamp: 1, status: 'streaming' } as never
-      }))
+      const started = vi.fn(createPersistedTurnStarter(temp.db, (requestId) => `target-${requestId}`))
       const acceptor = createOutboundAcceptor({
         db: temp.db,
         turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3,
@@ -318,7 +354,7 @@ describe('continuation intent acceptance persistence', () => {
         requestId: 'stable-input-1', input: expect.objectContaining({ text: '继续检查第二个文件', attachments: expect.arrayContaining([expect.objectContaining({ id: 'asset-1' })]) })
       }) }))
       expect(getDbConnection(temp.db).prepare('SELECT route,status,raw_text,attachments_json FROM continuation_intents WHERE request_id=?').get('stable-input-1')).toMatchObject({ route: 'ordinary', status: 'accepted_turn', raw_text: '继续检查第二个文件' })
-      expect(getPersistedTurn(temp.db, 'target-stable-input-1')).toBeUndefined() // adapter owns actual Turn persistence in production
+      expect(getPersistedTurn(temp.db, 'target-stable-input-1')).toMatchObject({ requestId: 'stable-input-1', sessionId: session.id })
       const conflict = await acceptor.submitOutbound({ sessionId: session.id, text: '继续检查第二个文件', requestId: 'stable-input-1', attachments: [] })
       expect(conflict).toMatchObject({ rejected: { reason: 'CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT' } })
       expect(started).toHaveBeenCalledTimes(1)
@@ -342,7 +378,7 @@ describe('continuation intent acceptance persistence', () => {
           { invocationId: `inv-${index}`, turnId: `turn-${index}`, sequence: 2, schemaVersion: 1, eventId: `e-${index}-2`, idempotencyKey: `i-${index}-2`, kind: 'invocation-failed', payload: { status: 'failed', message: `failed ${index}` } }
         ], 0)
       }
-      const started = vi.fn(async ({ turnIntent }: { turnIntent: { requestId: string; sessionId: string } }) => ({ turnId: `turn-${turnIntent.requestId}`, assistantMessage: { id: 'assistant', sessionId: turnIntent.sessionId, role: 'assistant', content: '', timestamp: 3, status: 'streaming' } as never }))
+      const started = vi.fn(createPersistedTurnStarter(temp.db, (requestId) => `turn-${requestId}`))
       const acceptor = createOutboundAcceptor({
         db: temp.db, turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
         readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
@@ -373,7 +409,7 @@ describe('continuation intent acceptance persistence', () => {
           { invocationId: `latest-inv-${index}`, turnId: `latest-turn-${index}`, sequence: 2, schemaVersion: 1, eventId: `latest-${index}-2`, idempotencyKey: `latest-i-${index}-2`, kind: 'invocation-failed', payload: { status: 'failed', message: `failed ${index}` } }
         ], 0)
       }
-      const started = vi.fn(async ({ turnIntent }: { turnIntent: { requestId: string; sessionId: string; config?: { continuationContext?: { sourceInvocationId?: string } } } }) => ({ turnId: `turn-${turnIntent.requestId}`, assistantMessage: { id: 'assistant', sessionId: turnIntent.sessionId, role: 'assistant', content: '', timestamp: 3, status: 'streaming' } as never }))
+      const started = vi.fn(createPersistedTurnStarter(temp.db, (requestId) => `turn-${requestId}`))
       const acceptor = createOutboundAcceptor({
         db: temp.db, turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
         readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
@@ -404,7 +440,7 @@ describe('continuation intent acceptance persistence', () => {
         { invocationId: 'old-turn', turnId: 'old-turn', sequence: 1, schemaVersion: 1, eventId: 'stale-1', idempotencyKey: 'stale-i1', kind: 'invocation-context-committed', payload: { messages: [{ id: 'old-user', role: 'user', content: 'old task', timestamp: 1 }], requiredUserMessage: { id: 'old-user', message: { role: 'user', content: 'old task' } } } },
         { invocationId: 'old-turn', turnId: 'old-turn', sequence: 2, schemaVersion: 1, eventId: 'stale-2', idempotencyKey: 'stale-i2', kind: 'invocation-failed', payload: { status: 'failed', message: 'old failure' } }
       ], 0)
-      const started = vi.fn(async ({ turnIntent }: { turnIntent: { requestId: string; sessionId: string; config?: { continuationContext?: unknown }; continuationAcceptance?: { route: string } } }) => ({ turnId: `turn-${turnIntent.requestId}`, assistantMessage: { id: 'new-assistant', sessionId: turnIntent.sessionId, role: 'assistant', content: '', timestamp: 4, status: 'streaming' } as never }))
+      const started = vi.fn(createPersistedTurnStarter(temp.db, (requestId) => `turn-${requestId}`))
       const acceptor = createOutboundAcceptor({
         db: temp.db, turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
         readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,

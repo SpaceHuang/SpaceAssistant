@@ -1,15 +1,14 @@
-import type { AppDatabase } from '../database'
-import { createSession, updateSession } from '../database'
+import type { SessionStorage } from '../sessionStorage/contracts'
 import type { FeishuConfig, FeishuInboundMessage } from '../../src/shared/feishuTypes'
 import { resolveImSession, truncateTitle } from '../remote/imSessionResolver'
 
 export async function createNewFeishuSession(
-  db: AppDatabase,
+  sessionStorage: SessionStorage,
   msg: FeishuInboundMessage,
   model: string
 ): Promise<string> {
   const title = `[飞书] ${truncateTitle(msg.content)}`
-  const session = createSession(db, {
+  const session = sessionStorage.commands.createSession({
     name: title,
     model,
     metadata: {
@@ -23,25 +22,21 @@ export async function createNewFeishuSession(
 }
 
 export async function resolveFeishuSession(
-  db: AppDatabase,
+  sessionStorage: SessionStorage,
   msg: FeishuInboundMessage,
   config: FeishuConfig,
   defaultModel: string,
   availableModelNames?: string[]
 ): Promise<{ sessionId: string; isNew: boolean }> {
   return resolveImSession({
-    db,
+    sessionQueries: sessionStorage.queries,
     config,
     defaultModel,
     availableModelNames,
     channel: 'feishu',
     identityKey: msg.chatId,
     getIdentityFromSession: (s) => (s.metadata as { feishuChatId?: string }).feishuChatId,
-    createNew: (model) => createNewFeishuSession(db, msg, model),
-    onReuse: (existing) => {
-      updateSession(db, existing.id, {
-        metadata: { ...existing.metadata, feishuMessageId: msg.messageId }
-      })
-    }
+    createNew: (model) => createNewFeishuSession(sessionStorage, msg, model),
+    onReuse: (existing) => { sessionStorage.commands.recordRemoteSessionIdentity(existing.id, { channel: 'feishu', messageId: msg.messageId }) }
   })
 }

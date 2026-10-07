@@ -58,14 +58,14 @@ describe('buildSimpleOutboundText / sendImOutbound', () => {
       sessionId: SESSION_ID,
       maxLen: 4000,
       truncationSuffix: SUFFIX,
-      touch: { db: {} as never, sessionId: SESSION_ID }
+      touch: { sessionCommands: {} as never, sessionId: SESSION_ID }
     })
     expect(reply).toHaveBeenCalledWith(expect.stringContaining(` 会话$${SESSION_ID}$`))
     expect(touchRemoteSessionActivity).toHaveBeenCalledOnce()
   })
 
   it('maybeTouchOutboundActivity no-ops without sessionId or touch', () => {
-    maybeTouchOutboundActivity(undefined, { db: {} as never, sessionId: SESSION_ID })
+    maybeTouchOutboundActivity(undefined, { sessionCommands: {} as never, sessionId: SESSION_ID })
     maybeTouchOutboundActivity(SESSION_ID, undefined)
     expect(touchRemoteSessionActivity).not.toHaveBeenCalled()
   })

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { compactSessionContext } from './sessionContextCompaction'
-import type { SessionEventSink } from './sessionEvents'
-import { computeReplaySurfaceFingerprint, projectReplaySurface } from '../src/shared/surfaceReplay'
+import { appendCompactionTransaction, type SessionEventSink } from './sessionEvents'
+import { computeReplaySurfaceFingerprint, projectReplaySurface, surfaceItemIdentities } from '../src/shared/surfaceReplay'
+import { createContextRegistrar, createSessionContextAdapter, type ContextPort } from '../packages/agent-sdk/src/context'
 
 function makeSink() {
   const events: Array<{ type: string; payload: Record<string, unknown> }> = []
@@ -26,15 +27,52 @@ const messages = [
 ]
 const fingerprint = computeReplaySurfaceFingerprint('', projectReplaySurface(messages))
 const summarizeFixture = async () => ({ task: 'Prior task', decisions: 'Prior decision', pending: 'Next step' })
+function makeAdapter(sink: SessionEventSink, inputMessages: typeof messages, fp: () => Promise<string> = async () => computeReplaySurfaceFingerprint('', projectReplaySurface(inputMessages)), busy: () => boolean = () => false) {
+  const registrar = createContextRegistrar()
+  const surfaceMessages = projectReplaySurface(inputMessages)
+  const identities = surfaceItemIdentities(surfaceMessages)
+  const items = surfaceMessages.map((message, index) => ({ replayIdentity: identities[index]!, sourceMessageIds: [inputMessages[index]!.id!], message, sourceData: {} }))
+  const frame = { items, system: '', windowId: 'window-1', pendingTools: [] }
+  return createSessionContextAdapter({
+    scope: { kind: 'session', sessionId: 's1' }, registrar,
+    capture: async () => ({ frame, surfaceFingerprint: await fp() }),
+    persist: async ({ historyPayload }) => {
+      if (busy()) return { status: 'busy' as const }
+      const tx = historyPayload as { start: Record<string, unknown>; summary: Record<string, unknown> }
+      await appendCompactionTransaction(sink, tx.start, tx.summary)
+      return { status: 'committed' as const }
+    }
+  })
+}
 
 describe('manual session context compaction', () => {
+  it('submits a registered candidate through ContextPort instead of owning a sink', async () => {
+    const commits: unknown[] = []
+    const registrar = createContextRegistrar()
+    const surfaceMessages = projectReplaySurface(messages)
+    const identities = surfaceItemIdentities(surfaceMessages)
+    const base = registrar.captureFrame({ scope: { kind: 'session', sessionId: 's1' }, frame: { items: surfaceMessages.map((message, index) => ({ replayIdentity: identities[index]!, sourceMessageIds: [messages[index]!.id!], message, sourceData: {} })), system: '', windowId: 'window-1', pendingTools: [] }, binding: { kind: 'session', surfaceFingerprint: fingerprint } })
+    const contextPort = {
+      readCurrent: vi.fn(async () => base),
+      registerTransformation: vi.fn(({ base: candidateBase, output }) => ({ base: candidateBase, output, evidence: { token: 'proof' } })),
+      commitReplacement: vi.fn(async (input) => { commits.push(input); return { status: 'committed' as const, snapshot: {} as never, receipt: { operationId: input.operationId, windowId: 'window-1', inputFingerprint: fingerprint, outputFingerprint: 'out' } } })
+    }
+    const result = await compactSessionContext({
+      sessionId: 's1', requestId: 'port-1', windowId: 'window-1', messages,
+      totalInputBudget: 10_000, locale: 'en-US', contextAdapter: { port: contextPort, registerTransformation: (input) => registrar.registerTransformation(input) },
+      summarize: summarizeFixture
+    })
+    expect(result.status).toBe('committed')
+    expect(contextPort.commitReplacement).toHaveBeenCalledOnce()
+    expect(commits[0]).toMatchObject({ reason: 'manual-compact', candidate: { output: { items: expect.any(Array) } } })
+  })
+
   it('commits one user_compact transaction without creating a message, turn, or tool event', async () => {
     const { sink, events } = makeSink()
     const result = await compactSessionContext({
       sessionId: 's1', requestId: 'compact-1', windowId: 'window-1', messages,
-      totalInputBudget: 10_000, locale: 'zh-CN', sink,
+      totalInputBudget: 10_000, locale: 'zh-CN', contextAdapter: makeAdapter(sink, messages),
       summarize: summarizeFixture,
-      currentFingerprint: async () => fingerprint, isBusy: () => false
     })
     expect(result.status).toBe('committed')
     expect(events.map((event) => event.type)).toEqual(['compaction_start', 'compaction_summary', 'compaction_end'])
@@ -46,15 +84,16 @@ describe('manual session context compaction', () => {
 
   it('returns busy, no-op, stale and failed without reporting a commit', async () => {
     const busy = makeSink()
-    await expect(compactSessionContext({ sessionId: 's', requestId: 'r', windowId: 'w', messages, totalInputBudget: 10_000, locale: 'en-US', sink: busy.sink, summarize: summarizeFixture, currentFingerprint: async () => fingerprint, isBusy: () => true })).resolves.toMatchObject({ status: 'busy' })
+    await expect(compactSessionContext({ sessionId: 's1', requestId: 'r', windowId: 'window-1', messages, totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(busy.sink, messages, async () => fingerprint, () => true), summarize: summarizeFixture })).resolves.toMatchObject({ status: 'busy' })
     const short = makeSink()
-    await expect(compactSessionContext({ sessionId: 's', requestId: 'r', windowId: 'w', messages: messages.slice(-2), totalInputBudget: 10_000, locale: 'en-US', sink: short.sink, summarize: summarizeFixture, currentFingerprint: async () => fingerprint, isBusy: () => false })).resolves.toMatchObject({ status: 'no-op' })
+    await expect(compactSessionContext({ sessionId: 's1', requestId: 'r', windowId: 'window-1', messages: messages.slice(-2), totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(short.sink, messages.slice(-2)), summarize: summarizeFixture })).resolves.toMatchObject({ status: 'no-op' })
     const stale = makeSink()
-    await expect(compactSessionContext({ sessionId: 's', requestId: 'r', windowId: 'w', messages, totalInputBudget: 10_000, locale: 'en-US', sink: stale.sink, summarize: summarizeFixture, currentFingerprint: async () => 'changed', isBusy: () => false })).resolves.toMatchObject({ status: 'stale' })
+    const changedSurface = [...messages.slice(0, 3), { id: 'u3', role: 'user' as const, content: 'arrived' }]
+    await expect(compactSessionContext({ sessionId: 's1', requestId: 'r', windowId: 'window-1', messages, totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(stale.sink, changedSurface), summarize: summarizeFixture })).resolves.toMatchObject({ status: 'stale' })
     expect(stale.events).toHaveLength(0)
     const failedSink = makeSink()
     failedSink.sink.appendCritical = vi.fn(async () => { throw new Error('disk failed') }) as never
-    await expect(compactSessionContext({ sessionId: 's', requestId: 'r', windowId: 'w', messages, totalInputBudget: 10_000, locale: 'en-US', sink: failedSink.sink, summarize: summarizeFixture, currentFingerprint: async () => fingerprint, isBusy: () => false })).resolves.toMatchObject({ status: 'failed' })
+    await expect(compactSessionContext({ sessionId: 's1', requestId: 'r', windowId: 'window-1', messages, totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(failedSink.sink, messages), summarize: summarizeFixture })).resolves.toMatchObject({ status: 'failed' })
   })
 
   it('binds the prepared fingerprint to the complete current surface, including a new tail message', async () => {
@@ -62,12 +101,11 @@ describe('manual session context compaction', () => {
     const changedSurface = [messages[0]!, messages[1]!, messages[2]!, { id: 'u3', role: 'user' as const, content: 'arrived during compaction' }]
     const result = await compactSessionContext({
       sessionId: 's1', requestId: 'changed-tail', windowId: 'window-1', messages,
-      totalInputBudget: 10_000, locale: 'en-US', sink,
+      totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(sink, changedSurface),
       summarize: async (source) => {
         const ending = source.map((message) => message.content).join('\n').slice(-120)
         return { task: 'Earlier task', decisions: ending, pending: 'Continue the current task' }
       },
-      currentFingerprint: async () => computeReplaySurfaceFingerprint('', projectReplaySurface(changedSurface)), isBusy: () => false
     })
     expect(result).toEqual({ status: 'stale' })
     expect(events).toHaveLength(0)
@@ -82,7 +120,7 @@ describe('manual session context compaction', () => {
     ]
     const result = await compactSessionContext({
       sessionId: 's1', requestId: 'late-decision', windowId: 'window-1', messages: longMessages,
-      totalInputBudget: 10_000, locale: 'en-US', sink,
+      totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(sink, longMessages),
       summarize: async (source) => ({
         task: source.map((message) => message.content).join('\n').includes('LATE_DECISION_KEEP_THIS') ? 'LATE_DECISION_KEEP_THIS' : 'Prior task',
         decisions: 'Prior decision', pending: 'Next step'
@@ -104,7 +142,7 @@ describe('manual session context compaction', () => {
     ]
     const result = await compactSessionContext({
       sessionId: 's1', requestId: 'no-savings', windowId: 'window-1', messages: shortHistory,
-      totalInputBudget: 10_000, locale: 'en-US', sink,
+      totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(sink, shortHistory),
       summarize,
       currentFingerprint: async () => computeReplaySurfaceFingerprint('', projectReplaySurface(shortHistory)), isBusy: () => false
     })
@@ -127,7 +165,7 @@ describe('manual session context compaction', () => {
     })
     const result = await compactSessionContext({
       sessionId: 's1', requestId: 'middle-decision', windowId: 'window-1', messages: middleMessages,
-      totalInputBudget: 10_000, locale: 'en-US', sink, summarize,
+      totalInputBudget: 10_000, locale: 'en-US', contextAdapter: makeAdapter(sink, middleMessages), summarize,
       currentFingerprint: async () => computeReplaySurfaceFingerprint('', projectReplaySurface(middleMessages)), isBusy: () => false
     })
     expect(summarize).toHaveBeenCalledOnce()

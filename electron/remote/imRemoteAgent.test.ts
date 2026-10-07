@@ -7,6 +7,7 @@ import { createSession, getDbConnection, getSession, openDatabase, prepareTurnAt
 import { DEFAULT_BROWSER_CONFIG, DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { DEFAULT_REMOTE_PROGRESS_CONFIG } from '../../src/shared/remoteProgressTypes'
 import { SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
+import { reconcileStartupSessionTranscripts } from '../sessionStorage/recovery'
 
 const mockRunToolChatSession = vi.fn()
 const mockResolveLlmCredentialsForModel = vi.fn()
@@ -107,8 +108,9 @@ import { readPolicyPackages, writePolicyPackages } from '../confirmation/policyR
 import { invalidateSkillsCache } from '../skills/skillCache'
 import { setCallAdmissionGate } from '../runtime/callAdmissionGate'
 import { HostedTurnFinalizedError } from '../runtime/hostedTurnFinalization'
-import { reconcileStartupSessionTranscripts, recoverTurnCoordinatorForStartup } from '../runtime/sessionTranscriptStartup'
-import { createTurnCoordinatorStorage } from '../turnCoordinatorStorage'
+import { recoverTurnCoordinatorForStartup } from '../sessionStorage/recoveryHelpers'
+import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { TurnRuntime } from '../turnRuntime'
 import { listPersistedTurns } from '../database/operations'
 import { claimSessionExecution, readSessionTranscript } from '../database/sessionTranscript'
@@ -130,8 +132,10 @@ function makeWorkDirManager() {
 
 function baseArgs(overrides: Record<string, unknown> = {}) {
   const adapter = { channel: 'feishu' as const, reply: vi.fn() }
+  const db = overrides.db as AppDatabase | undefined ?? makeDb()
   return {
-    db: makeDb(),
+    db,
+    sessionStorage: createSqliteSessionStorage(db),
     sessionId: 'sess-1',
     requestId: '00000000-0000-4000-8000-000000000001',
     workDir: '/tmp',
@@ -529,6 +533,7 @@ describe('runImRemoteAgent', () => {
       const recoveredAccepted = readAcceptedTurn(db, session.id, requestId)
       expect(recoveredAccepted).toMatchObject({ turnId, requestId, sessionId: session.id })
       context.db = db
+      context.sessionStorage = createSqliteSessionStorage(db)
       context.acceptedTurn = recoveredAccepted!
       const restartedRuntime = createDesktopAgentRuntime()
       setDefaultAgentRuntime(restartedRuntime)

@@ -27,6 +27,7 @@ import { flushFeishuCliLogger, logFeishuCliEvent } from './feishuCliLogger'
 import { authUrlHostOnly, FEISHU_CLI_LINE_PREVIEW_MAX, previewText } from './feishuCliLogFields'
 import { parseLarkCliError } from './larkCliErrors'
 import type { TurnRuntime } from '../turnRuntime'
+import type { SessionStorage } from '../sessionStorage/contracts'
 import {
   FeishuOwnerBindController,
   ownerAllowlistFromOpenId,
@@ -95,6 +96,7 @@ function readWorkDirProfiles(db: AppDatabase): AppConfig['workDirProfiles'] {
 
 export function createFeishuBundle(deps: {
   db: AppDatabase
+  sessionStorage?: SessionStorage
   getUserDataPath: () => string
   getWorkDir: () => string
   workDirManager: WorkDirManager
@@ -111,7 +113,7 @@ export function createFeishuBundle(deps: {
   const runner = new LarkCliRunner(() => readCfg().cliPath ?? '')
   const processedStore = new FeishuProcessedStore(userData)
   const auditLogger = new FeishuAuditLogger(userData)
-  const imChannel = new FeishuImChannel({ auditLogger, runner, db: deps.db, getGeneration: (channel) => remoteAuthorizationRegistry.getGeneration(channel) })
+  const imChannel = new FeishuImChannel({ auditLogger, runner, db: deps.db, sessionStorage: deps.sessionStorage, getGeneration: (channel) => remoteAuthorizationRegistry.getGeneration(channel) })
   remoteAuthorizationRegistry.registerPendingCancel({
     cancelByChannel: (ch) => imChannel.cancelByChannel(ch)
   })
@@ -153,6 +155,7 @@ export function createFeishuBundle(deps: {
 
   const routerDeps: RemoteCommandRouterDeps = {
     db: deps.db,
+    sessionStorage: deps.sessionStorage,
     runner,
     processedStore,
     imChannel,
@@ -247,6 +250,7 @@ export function registerFeishuIpcHandlers(
   ipcMain: IpcMain,
   deps: {
     db: AppDatabase
+    sessionStorage?: SessionStorage
     getUserDataPath: () => string
     getWorkDir: () => string
     workDirManager: WorkDirManager

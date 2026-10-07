@@ -1,5 +1,5 @@
 import type { IncomingMessage } from '@wechatbot/wechatbot'
-import type { AppDatabase } from '../database'
+import type { SessionCommands } from '../sessionStorage/contracts'
 import {
   DEFAULT_REMOTE_PROGRESS_CONFIG,
   mergeRemoteProgressConfig,
@@ -18,7 +18,7 @@ export function createWeChatProgressAdapter(args: {
   inboundRaw: IncomingMessage
   getSessionId: () => string
   config: WeChatConfig
-  db: AppDatabase
+  sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>
 }): RemoteProgressAdapter {
   const progressConfig = mergeRemoteProgressConfig(
     pickWeChatProgressConfig(args.config),
@@ -47,7 +47,7 @@ export function createWeChatProgressAdapter(args: {
         inbound: args.inboundRaw,
         body: text,
         sessionId,
-        touch: { db: args.db, sessionId }
+        touch: { sessionCommands: args.sessionCommands, sessionId }
       }).catch(() => undefined)
     },
     logProgress: ({ textLen, textHash }) => {

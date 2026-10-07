@@ -8,14 +8,14 @@ import { dialog } from 'electron'
 import { CONFIG_KEYS, stripSessionMetadataAndPersist, stripAllSessionsAndPersist, scheduleBackup } from './ipcShared'
 import { ErrorCodes } from '../../src/shared/errorCodes'
 import { REMOTE_SESSION_BUSY_MESSAGE, REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE } from '../remote/remoteSessionGuardMessages'
-import { SESSION_META_TITLE_USER_CUSTOM, scheduleSessionTitleOpenBackfillIfNeeded } from '../sessionTitleSuggest'
+import { scheduleSessionTitleOpenBackfillIfNeeded } from '../sessionTitleSuggest'
 import { Session, SessionSkillsState } from '../../src/shared/domainTypes'
 import { UsageAttributionSummary, UsageDailyPoint, UsageDimensions, UsageStatsRangeArgs, UsageSummary } from '../../src/shared/usageStatsTypes'
 import { arrayMessagePageReader } from '../sessionBackupManager'
 import { assertValidOptionalAnthropicBaseUrl } from '../claudeRequestGuards'
 import { clearDecisionCacheOnSessionDelete } from '../confirmation/cacheMaintenanceHooks'
 import { clearSessionToolResources } from '../toolChatLoop'
-import { createSession, deleteSession, deleteSessionUsage, getConfigValue, getSession, getSessionUsage, setSessionUsage, updateSession } from '../database'
+import { deleteSessionUsage, getConfigValue, getSessionUsage, setSessionUsage } from '../database'
 import { deleteSessionChatAttachmentsWithRetry } from '../chatAttachmentManager'
 import { isRemoteAgentRunning } from '../remote/remoteAgentRegistry'
 import { logAgentEvent } from '../agentLogger/agentLogger'
@@ -27,7 +27,7 @@ import { probeReadPathFact } from '../confirmation/extractors/readPathFacts'
 import os from 'node:os'
 import { withSessionContextCompactionLock, registerSessionCompactionAdmissionBlocker } from '../sessionCompactionLock'
 import { compactSessionContext } from '../sessionContextCompaction'
-import { getApiContextBaseline, hasActiveTurn } from '../database'
+import { hasActiveTurn } from '../database'
 import { resolveWorkDirForSession } from '../workDirManager'
 import { readStoredModels } from '../llmServiceResolver'
 import { resolveLlmCredentialsForModel } from '../llmServiceResolver'
@@ -36,11 +36,14 @@ import { summarizeSessionContext } from '../sessionContextSummary'
 import { resolveModelContextWindow } from '../../src/shared/llmModelConfig'
 import { readAppLocale } from './ipcShared'
 import { getSessionEventSink, readCompactionReplay } from '../sessionEvents'
-import { currentCompactionWindowId } from '../../src/shared/compactionEvents'
-import { projectReplaySurfaceWithSources, surfaceItemIdentitiesForProjectionSubset, applyCommittedSurfaceShadow, computeReplaySurfaceFingerprint } from '../../src/shared/surfaceReplay'
-import { buildToolChatMessagesFromSource } from '../chatMessageBuild'
+import { bindSessionStorageContextPort } from '../sessionStorage/contextPortRegistry'
+import { createBoundSessionContextAdapter } from '../sessionStorage/contextPortRegistry'
 
 export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
+  const sessionStorage = ctx.sessionStorage
+  if (!sessionStorage) throw new Error('SESSION_STORAGE_REQUIRED')
+  const sessionCommands = sessionStorage.commands
+  const sessionQueries = sessionStorage.queries
   registerSessionCompactionAdmissionBlocker(ctx.getUserDataPath(), (sessionId) => Boolean(ctx.turnRuntime?.coordinator?.listActive?.(sessionId).length))
   const trustedRenderer = (event: Electron.IpcMainInvokeEvent) => {
     const window = getMainWindow()
@@ -52,9 +55,9 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
 
   ipcMain.handle('chat:get-session-compaction-markers', async (event, sessionId: unknown) => {
     if (!trustedRenderer(event) || !validSessionId(sessionId)) return []
-    const session = getSession(ctx.db, sessionId)
+    const session = sessionQueries.readSession(sessionId)
     if (!session || !isDesktopSession(session)) return []
-    const workDir = resolveWorkDirForSession(ctx.db, sessionId,
+    const workDir = resolveWorkDirForSession(sessionQueries, sessionId,
       () => ctx.workDirManager.listProfiles(), () => ctx.workDirManager.getActiveProfileId(), () => ctx.workDirManager.getActiveWorkDir())
     if (!workDir) return []
     const sink = getSessionEventSink(workDir.workDir, session.id, session.createdAt)
@@ -70,43 +73,27 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     if (!trustedRenderer(event) || !payload || typeof payload !== 'object') return { status: 'forbidden' as const }
     const { sessionId, requestId } = payload as { sessionId?: unknown; requestId?: unknown }
     if (!validSessionId(sessionId) || typeof requestId !== 'string' || !requestId.trim() || requestId.length > 200) return { status: 'forbidden' as const }
-    const session = getSession(ctx.db, sessionId)
+    const session = sessionQueries.readSession(sessionId)
     if (!session) return { status: 'session-not-found' as const }
     if (!isDesktopSession(session)) return { status: 'forbidden' as const }
     const locked = await withSessionContextCompactionLock(sessionId, async () => {
       const busy = () => hasActiveTurn(ctx.db, sessionId) || Boolean(ctx.turnRuntime?.coordinator.listActive(sessionId).length) || isRemoteAgentRunning(sessionId)
       if (busy()) return { status: 'busy' as const }
-      const workDir = resolveWorkDirForSession(ctx.db, sessionId,
-        () => ctx.workDirManager.listProfiles(), () => ctx.workDirManager.getActiveProfileId(), () => ctx.workDirManager.getActiveWorkDir())
-      if (!workDir) return { status: 'failed' as const }
-      const baseline = getApiContextBaseline(ctx.db, sessionId, 500)
+      const baseline = sessionQueries.readApiBaseline({ sessionId, limit: 500 })
       const initialMessages = baseline.entries.map((entry) => entry.message)
       if (initialMessages.length < 3) return { status: 'no-op' as const }
       const initialCurrentUser = [...initialMessages].reverse().find((message) => message.role === 'user')
       if (!initialCurrentUser) return { status: 'no-op' as const }
-      const sink = getSessionEventSink(workDir.workDir, session.id, session.createdAt)
-      const replay = await readCompactionReplay(sink.eventsPath)
-      const windowId = currentCompactionWindowId(replay, `session:${sessionId}`)
-      const makeSurface = async (sourceMessages: typeof initialMessages) => {
-        const latestUser = [...sourceMessages].reverse().find((message) => message.role === 'user')
-        if (!latestUser) return []
-        const built = await buildToolChatMessagesFromSource({ userDataDir: ctx.getUserDataPath(), workDir: workDir.workDir, sourceMessages, currentUserMessageId: latestUser.id, sessionId })
-        const projection = projectReplaySurfaceWithSources(built)
-        const identities = surfaceItemIdentitiesForProjectionSubset(projection, projection)
-        const surface = projection.messages.map((message, index) => ({ ...message, id: message.id ?? identities[index]! }))
-        return applyCommittedSurfaceShadow(surface, replay, [latestUser.id], windowId, (items) => computeReplaySurfaceFingerprint('', items))
-      }
-      const messages = await makeSurface(initialMessages)
+      const { adapter: sessionContextAdapter, messages, windowId } = await createBoundSessionContextAdapter(sessionStorage.contexts, { sessionId, isBusy: busy })
       const modelWindow = resolveModelContextWindow(session.model, readStoredModels(ctx.db))
       const trustedContextWindow = modelWindow.trusted ? modelWindow.contextWindow : undefined
       const totalInputBudget = Math.max(1, (trustedContextWindow ?? 100_000) - session.maxTokens)
-      const latestFingerprint = async () => {
-        const latest = getApiContextBaseline(ctx.db, sessionId, 500).entries.map((entry) => entry.message)
-        return computeReplaySurfaceFingerprint('', await makeSurface(latest))
-      }
-      const result = await compactSessionContext({
+      const unbindContext = bindSessionStorageContextPort(sessionStorage.contexts, { kind: 'session', sessionId }, sessionContextAdapter.port)
+      let result: Awaited<ReturnType<typeof compactSessionContext>>
+      try {
+      result = await compactSessionContext({
         sessionId, requestId, windowId, messages, totalInputBudget,
-        locale: readAppLocale(ctx.db) === 'en-US' ? 'en-US' : 'zh-CN', sink,
+        locale: readAppLocale(ctx.db) === 'en-US' ? 'en-US' : 'zh-CN', contextAdapter: { ...sessionContextAdapter, port: sessionStorage.contexts },
         summarize: async (summaryMessages, locale) => {
           const credentials = await resolveLlmCredentialsForModel(ctx.db, session.model, {
             serviceId: session.llmServiceId,
@@ -125,9 +112,11 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
           } finally {
             clearTimeout(timeout)
           }
-        },
-        currentFingerprint: latestFingerprint, isBusy: busy
+        }
       })
+      } finally {
+        unbindContext()
+      }
       return result.status === 'committed' ? { ...result, status: 'committed' as const } : result
     })
     return locked.status === 'busy' ? { status: 'busy' as const } : locked.value
@@ -136,14 +125,14 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
 
   ipcMain.handle('session-directory-grants:list', async (event, sessionId: unknown) => {
     if (!trustedRenderer(event) || !validSessionId(sessionId)) return []
-    const session = getSession(ctx.db, sessionId)
+    const session = sessionQueries.readSession(sessionId)
     if (!session || !isDesktopSession(session)) return []
     return listSessionDirectoryGrants(session)
   })
 
   ipcMain.handle('session-directory-grants:add', async (event, sessionId: unknown) => {
     if (!trustedRenderer(event) || !validSessionId(sessionId)) return { status: 'forbidden' as const }
-    const session = getSession(ctx.db, sessionId)
+    const session = sessionQueries.readSession(sessionId)
     const window = getMainWindow()
     if (!session) return { status: 'session-not-found' as const }
     if (!isDesktopSession(session) || !window) return { status: 'forbidden' as const }
@@ -154,7 +143,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
           const selected = await dialog.showOpenDialog(window, { properties: ['openDirectory'] })
           return selected.canceled ? undefined : selected.filePaths[0]
         },
-        updateSession: (next) => { updateSession(ctx.db, next.id, { metadata: next.metadata }) },
+        updateSession: (next) => { sessionCommands.updateDirectoryGrants(next.id, Array.isArray(next.metadata?.[directoryGrantMetadataKey]) ? next.metadata[directoryGrantMetadataKey] as import('../../src/shared/sessionDirectoryGrant').SessionDirectoryGrantRecord[] : []) },
         isSensitivePath: async (realPath) => {
           const facts = await probeReadPathFact({ rawPath: realPath, workDir: ctx.getWorkDir(), userDataDir: ctx.getUserDataPath(), homeDir: os.homedir(), customSensitivePrefixes: [] })
           return facts.zone === 'sensitive-file' || facts.zone === 'system-dir'
@@ -170,15 +159,15 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     if (!trustedRenderer(event) || !payload || typeof payload !== 'object') return { error: 'forbidden' }
     const { sessionId, grantId } = payload as { sessionId?: unknown; grantId?: unknown }
     if (!validSessionId(sessionId) || typeof grantId !== 'string' || !grantId || grantId.length > 128) return { error: 'invalid-input' }
-    const session = getSession(ctx.db, sessionId)
+    const session = sessionQueries.readSession(sessionId)
     if (!session || !isDesktopSession(session)) return { error: 'session-not-found' }
-    return { removed: removeSessionDirectoryGrant({ session, grantId, updateSession: (next) => { updateSession(ctx.db, next.id, { metadata: next.metadata }) } }) }
+    return { removed: removeSessionDirectoryGrant({ session, grantId, updateSession: (next) => { sessionCommands.updateDirectoryGrants(next.id, Array.isArray(next.metadata?.[directoryGrantMetadataKey]) ? next.metadata[directoryGrantMetadataKey] as import('../../src/shared/sessionDirectoryGrant').SessionDirectoryGrantRecord[] : []) } }) }
   })
 
   ipcMain.handle('session:list', (): Session[] => {
     const profileId = ctx.workDirManager.getActiveProfileId()
     // 偏差 7：用户可见视图（排除 internal/hidden；section 分区行透传给渲染端分组）
-    return stripAllSessionsAndPersist(ctx.db, { view: 'user-visible' }).filter((s) => {
+    return stripAllSessionsAndPersist(ctx.db, sessionQueries, { view: 'user-visible' }).filter((s) => {
       if (!s.workDirProfileId) return false
       return s.workDirProfileId === profileId
     })
@@ -196,7 +185,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       }
       const metadata = { ...payload.metadata }
       delete metadata[directoryGrantMetadataKey]
-      const s = createSession(ctx.db, {
+      const s = sessionCommands.createSession({
         ...payload,
         metadata,
         workDirProfileId: ctx.workDirManager.getActiveProfileId()
@@ -213,7 +202,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   )
 
   ipcMain.handle('session:get', (_e, sessionId: string): Session | undefined => {
-    const session = getSession(ctx.db, sessionId)
+    const session = sessionQueries.readSession(sessionId)
     if (!session) return undefined
     return stripSessionMetadataAndPersist(ctx.db, session)
   })
@@ -227,6 +216,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       const baseUrl = assertValidOptionalAnthropicBaseUrl(baseUrlRaw)
       const next = scheduleSessionTitleOpenBackfillIfNeeded({
         db: ctx.db,
+        sessionStorage,
         onTitleGenerated: (session) => event.sender.send('session:title-generated', { session }),
         sessionId,
         baseUrl,
@@ -258,7 +248,7 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
         && !isThinkingEffort(payload.thinkingEffort)) {
         throw new Error(`无效的 Thinking 强度档位:${String(payload.thinkingEffort)}(允许 ${THINKING_EFFORT_LEVELS.join(' / ')} 或 null 清除覆盖)`)
       }
-      const cur = getSession(ctx.db, payload.sessionId)
+      const cur = sessionQueries.readSession(payload.sessionId)
       if (!cur) return undefined
       if (
         payload.workDirProfileId !== undefined &&
@@ -267,44 +257,37 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       ) {
         throw new Error(`${ErrorCodes.REMOTE_WORKDIR_SWITCH_BUSY}: ${REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE}`)
       }
-      const mergedMetadata: Record<string, unknown> = { ...cur.metadata }
+      const metadataPatch: Record<string, unknown> = {}
       if (payload.metadata !== undefined) {
         const rendererMetadata = { ...payload.metadata }
         delete rendererMetadata[directoryGrantMetadataKey]
-        Object.assign(mergedMetadata, rendererMetadata)
+        Object.assign(metadataPatch, rendererMetadata)
       }
-      const trimmedName = payload.name !== undefined ? payload.name.trim() : undefined
-      const nameChanged =
-        payload.name !== undefined &&
-        trimmedName !== '' &&
-        trimmedName !== (cur.name ?? '').trim()
-      if (nameChanged) {
-        mergedMetadata[SESSION_META_TITLE_USER_CUSTOM] = true
-      }
-      const hasMetaChange = payload.metadata !== undefined || nameChanged
-      const next = updateSession(ctx.db, payload.sessionId, {
-        ...(nameChanged && trimmedName !== undefined ? { name: trimmedName } : {}),
+      if (payload.name !== undefined) sessionCommands.renameSession(payload.sessionId, payload.name)
+      const settings = {
         ...(payload.model !== undefined ? { model: payload.model } : {}),
         ...(payload.llmServiceId !== undefined ? { llmServiceId: payload.llmServiceId } : {}),
         ...(payload.temperature !== undefined ? { temperature: payload.temperature } : {}),
         ...(payload.maxTokens !== undefined ? { maxTokens: payload.maxTokens } : {}),
         ...(payload.skillsState !== undefined ? { skillsState: normalizeSessionSkillsState(payload.skillsState) } : {}),
         ...(payload.workDirProfileId !== undefined ? { workDirProfileId: payload.workDirProfileId } : {}),
-        ...(payload.thinkingEffort !== undefined ? { thinkingEffort: payload.thinkingEffort } : {}),
-        ...(hasMetaChange ? { metadata: mergedMetadata } : {})
-      })
+        ...(payload.thinkingEffort !== undefined ? { thinkingEffort: payload.thinkingEffort } : {})
+      }
+      if (Object.keys(settings).length > 0) sessionCommands.updateSettings({ sessionId: payload.sessionId, ...settings })
+      if (payload.metadata !== undefined) sessionCommands.updateUserMetadata(payload.sessionId, metadataPatch)
+      const next = sessionQueries.readSession(payload.sessionId) ?? cur
       if (next) scheduleBackup(ctx, next.id)
       return next
     }
   )
 
   ipcMain.handle('session:delete', async (_e, sessionId: string): Promise<void> => {
-    const s = getSession(ctx.db, sessionId)
+    const s = sessionQueries.readSession(sessionId)
     if (isRemoteAgentRunning(sessionId)) {
       throw new Error(`${ErrorCodes.REMOTE_SESSION_BUSY}: ${REMOTE_SESSION_BUSY_MESSAGE}`)
     }
     clearSessionToolResources(sessionId)
-    deleteSession(ctx.db, sessionId, { flush: false })
+    sessionCommands.deleteSession(sessionId)
     ctx.wakeSourceTruthSpillGc?.()
     // §5.3：会话删除时清空会话级 decision_cache 条目；清理失败不阻塞删除流程
     try {

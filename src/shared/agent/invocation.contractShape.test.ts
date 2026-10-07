@@ -48,7 +48,7 @@ describe('契约形状断言(A1,偏差 17)', () => {
       'resolveApiKey(): Promise<string | null>',
       'resolveWorkDir?(): string',
       'getBrowserDetectContext?(): BrowserDetectContext',
-      'turnBoundary?(input: unknown): Promise<unknown>',
+      "planContextReplacement?(input: import('./turn').ContextReplacementPlanInput): Promise<import('./turn').ContextReplacementPlanResult | void>",
       'recoverProviderAttempt?(input: unknown): Promise<unknown>',
       'translate?(message: LocalizedMessage): string',
       'touchTrustedCommand(command: string): void'

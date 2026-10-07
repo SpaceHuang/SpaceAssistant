@@ -1,22 +1,27 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import path from 'path'
 import { registerAppIpcHandlers } from './appIpc'
 import type { AppIpcContext } from './appIpc'
 import { waitForToolConfirm } from './toolConfirmRegistry'
 import * as database from './database'
+import * as databaseOperations from './database/operations'
 import { getMainWindow } from './windowRef'
 import { BrowserWindow } from 'electron'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
 import * as turnExecutionConfig from './turnExecutionConfig'
 import * as sessionStorageShadow from './runtime/sessionStorageShadow'
-import * as sessionStorageCutover from './runtime/sessionStorageCutover'
+import * as sessionStorageCutover from './sessionStorage/certification'
 import * as sessionTranscriptProjection from './runtime/sessionTranscriptProjection'
 import * as sessionContentWriteAuthority from './runtime/sessionContentWriteAuthority'
-import { backupPageReader } from './ipc/ipcShared'
-import { createTempDatabase } from './database/testHelpers'
+import { backupPageReader, loadBackupPayload } from './ipc/ipcShared'
+import { createMemoryAppDb, createTempDatabase } from './database/testHelpers'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { getDbConnection as getActualDbConnection } from './database/sqliteStore'
 import { TurnCoordinator } from '../src/shared/turnCoordinator'
+import type { SessionQueries, SessionStorage } from './sessionStorage/contracts'
+import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
+import { createSessionCommands } from './sessionStorage/commands'
+import { createSessionExecutionStore } from './sessionStorage/execution'
 
 const WORK_DIR = path.resolve('/fake/workdir')
 
@@ -135,8 +140,8 @@ function makeWorkDirManager(): AppIpcContext['workDirManager'] {
 }
 
 function makeCtx(): AppIpcContext {
-  return {
-    db: {} as AppIpcContext['db'],
+  const ctx: AppIpcContext = {
+    db: createMemoryAppDb(),
     backup: {
       schedule: vi.fn(),
       flush: vi.fn(),
@@ -155,12 +160,120 @@ function makeCtx(): AppIpcContext {
       devRoot: '/fake/project'
     })
   }
+  const issuedFences = new WeakMap<object, {
+    sessionId: string
+    snapshot: ReturnType<typeof database.getSessionMessageRevisionSnapshot>
+    boundarySequence?: number
+    excludeMessageIds: string[]
+    limit?: number
+    reuseUserMessageId?: string
+    canonical?: sessionStorageCutover.CanonicalApiReadFence
+  }>()
+  const queries: SessionQueries = {
+    readSession: (sessionId) => database.getSession(ctx.db, sessionId),
+    listSessions: (options) => database.listSessions(ctx.db, options),
+    readMessage: ({ sessionId, messageId }) => {
+      const message = sessionTranscriptProjection.getProjectedMessage(ctx.db, messageId)
+      return message?.sessionId === sessionId ? message : undefined
+    },
+    readMessages: ({ sessionId, limit, offset }) => sessionTranscriptProjection.getProjectedMessages(ctx.db, sessionId, limit, offset),
+    readChatPage: ({ sessionId, beforeSequence, limit }) => sessionTranscriptProjection.getProjectedChatMessagePage(ctx.db, sessionId, beforeSequence, limit),
+    readTurnContext: ({ sessionId, boundarySequence, requiredUserMessageId, excludeMessageIds = [] }) =>
+      sessionTranscriptProjection.getProjectedTurnContext(ctx.db, sessionId, boundarySequence, requiredUserMessageId, excludeMessageIds),
+    readApiBaseline: ({ sessionId, limit }) => limit === undefined
+      ? sessionTranscriptProjection.getProjectedApiContextBaseline(ctx.db, sessionId)
+      : sessionTranscriptProjection.getProjectedApiContextBaseline(ctx.db, sessionId, limit),
+    readContextHistorySummaryBaseline: (sessionId) => ({ sessionId, entries: [] }),
+    readRoutingInput: (input) => {
+      const snapshot = database.getSessionMessageRevisionSnapshot(ctx.db, input.sessionId)
+      if (!snapshot) throw new Error('TURN_SESSION_NOT_FOUND')
+      const userMessageId = input.reuseUserMessageId ?? input.requiredUserMessageId
+      const userMessage = userMessageId ? sessionTranscriptProjection.getProjectedMessage(ctx.db, userMessageId) : undefined
+      const userInput = input.reuseUserMessageId ? userMessage?.content : input.userInput ?? userMessage?.content
+      if ((input.reuseUserMessageId || input.requiredUserMessageId) && userInput === undefined) throw new Error('TURN_USER_MESSAGE_MISSING')
+      const fence = Object.freeze({})
+      issuedFences.set(fence, {
+        sessionId: input.sessionId, snapshot, boundarySequence: input.boundarySequence,
+        excludeMessageIds: input.excludeMessageIds ?? [], limit: input.limit,
+        ...(input.reuseUserMessageId ? { reuseUserMessageId: input.reuseUserMessageId } : {})
+      })
+      return {
+        recentMessages: sessionTranscriptProjection.getProjectedRecentTurnRoutingMessages(
+          ctx.db, input.sessionId, input.limit, input.boundarySequence, input.excludeMessageIds
+        ),
+        ...(userInput !== undefined ? { userInput } : {}),
+        hasVision: database.hasVisionInTurnRoutingContext(ctx.db, input.sessionId, input.boundarySequence, input.excludeMessageIds ?? []),
+        fence: fence as import('./sessionStorage/contracts').SelectionFence
+      }
+    },
+    resolveRoutingInput: ({ sessionId, selection, routeInput }) => {
+      const issued = issuedFences.get(selection as object)
+      if (!issued || issued.sessionId !== sessionId) throw new Error('TURN_CONTEXT_CHANGED_DURING_PREPARATION')
+      try {
+        sessionStorageShadow.shadowTurnRoutingInput(ctx.db, {
+          sessionId,
+          mode: issued.reuseUserMessageId ? 'reuse-user' : 'create-user',
+          ...(issued.reuseUserMessageId ? { reuseUserMessageId: issued.reuseUserMessageId } : {}),
+          routeInput,
+          boundarySequence: issued.boundarySequence,
+          excludeMessageIds: issued.excludeMessageIds,
+          limit: issued.limit
+        })
+      } catch { /* test adapter keeps shadow failures observational */ }
+      const canonical = sessionStorageCutover.readCanonicalTurnRoutingInputWithFenceIfEligible(ctx.db, {
+        sessionId,
+        mode: issued.reuseUserMessageId ? 'reuse-user' : 'create-user',
+        ...(issued.reuseUserMessageId ? { reuseUserMessageId: issued.reuseUserMessageId } : {}),
+        routeInput,
+        boundarySequence: issued.boundarySequence,
+        excludeMessageIds: issued.excludeMessageIds,
+        limit: issued.limit
+      })
+      const fence = Object.freeze({})
+      issuedFences.set(fence, { ...issued, ...(canonical ? { canonical: canonical.fence } : {}) })
+      return { routeInput: canonical?.routeInput ?? routeInput, fence: fence as import('./sessionStorage/contracts').SelectionFence }
+    },
+    readSelectionSnapshot: (sessionId, fence) => {
+      const issued = issuedFences.get(fence as object)
+      if (!issued || issued.sessionId !== sessionId) return undefined
+      const current = database.getSessionMessageRevisionSnapshot(ctx.db, sessionId)
+      return current && issued.snapshot && current.generation === issued.snapshot.generation &&
+        current.messageRevision === issued.snapshot.messageRevision ? issued.snapshot : undefined
+    },
+    isSelectionCurrent: (sessionId, token) => {
+      const issued = issuedFences.get(token as object)
+      if (!issued || issued.sessionId !== sessionId) return false
+      if (issued.canonical && !sessionStorageCutover.isCanonicalApiReadFenceCurrent(ctx.db, sessionId, issued.canonical)) return false
+      const current = database.getSessionMessageRevisionSnapshot(ctx.db, sessionId)
+      return Boolean(current && issued.snapshot && current.generation === issued.snapshot.generation &&
+        current.messageRevision === issued.snapshot.messageRevision)
+    },
+    readExportPage: ({ sessionId, fromSequence, pageSize }) =>
+      sessionTranscriptProjection.getProjectedMessagesPageWithSequence(ctx.db, sessionId, fromSequence, pageSize),
+    readSearchCorpusPage: ({ sessionId, fromSequence, pageSize }) =>
+      sessionTranscriptProjection.getProjectedSearchCorpusPage(ctx.db, sessionId, fromSequence, pageSize),
+    searchMessages: ({ query, activeProfileId, limit }) => sessionTranscriptProjection.searchProjectedMessages(ctx.db, query, activeProfileId, limit),
+    readRetryTarget: ({ sessionId, failedAssistantMessageId }) =>
+      sessionTranscriptProjection.resolveProjectedRetryContext(ctx.db, sessionId, failedAssistantMessageId),
+    readMessageSequence: ({ sessionId, messageId }) => database.getMessageSequence(ctx.db, sessionId, messageId)
+  }
+  const execution = createSessionExecutionStore(ctx.db, queries)
+  ctx.sessionStorage = {
+    queries,
+    commands: { ...createSessionCommands(ctx.db), renameSession: (sessionId: string, name: string) => database.updateSession(ctx.db, sessionId, { name }) },
+    execution
+  } satisfies SessionStorage
+  return ctx
 }
 
 describe('file IPC handlers', () => {
   let ipc: ReturnType<typeof mockIpcMain>
   let ctx: AppIpcContext
   let resetRealDbForwarding: (() => void) | undefined
+
+  afterEach(() => {
+    try { ctx?.db.close() } catch { /* real reopen tests close their database explicitly */ }
+  })
 
   beforeEach(() => {
     resetRealDbForwarding?.()
@@ -200,6 +313,15 @@ describe('file IPC handlers', () => {
     expect(page).toEqual({ messages: [message], nextSequence: 8 })
   })
 
+  it('backup payload trusts the injected query result and does not fall back to a database reader', () => {
+    const queries = Object.freeze({ ...ctx.sessionStorage!.queries, readSession: vi.fn(() => undefined) })
+    ctx.sessionStorage = { ...ctx.sessionStorage!, queries } as SessionStorage
+
+    expect(loadBackupPayload(ctx, 'missing-backup-session')).toBeNull()
+    expect(database.getSession).not.toHaveBeenCalled()
+    expect(queries.readSession).toHaveBeenCalledWith('missing-backup-session')
+  })
+
   it('API context baseline IPC resolves the latest-window rows through canonical bodies', async () => {
     const message = { id: 'api-baseline-user', sessionId: 'api-baseline-session', role: 'user' as const,
       content: 'canonical api baseline', timestamp: 1, status: 'sent' as const, schemaVersion: 1 }
@@ -210,6 +332,11 @@ describe('file IPC handlers', () => {
     expect(ipc.getHandler('chat:get-api-context-baseline')!({}, { sessionId: 'api-baseline-session' }))
       .toEqual({ sessionId: 'api-baseline-session', entries: [{ message, sequence: 9 }] })
     expect(readBaseline).toHaveBeenCalledWith(ctx.db, 'api-baseline-session')
+  })
+
+  it('context token summary IPC delegates to the injected session query port', () => {
+    expect(ipc.getHandler('chat:get-context-history-summary-baseline')!({}, { sessionId: 'summary-session' }))
+      .toEqual({ sessionId: 'summary-session', entries: [] })
   })
 
   it('canonical-backed message edits go through the canonical append-and-mirror writer', async () => {
@@ -228,6 +355,21 @@ describe('file IPC handlers', () => {
     expect(sessionContentWriteAuthority.writeCanonicalBackedMessageContent).toHaveBeenCalledWith(ctx.db, message.id, 'edited')
     expect(database.updateMessageContent).not.toHaveBeenCalled()
     expect(result).toEqual({ message, sequence: 4 })
+  })
+
+  it('routes toolCalls metadata through its dedicated command and rejects mixed patches', async () => {
+    const beforeCalls = [{ id: 'shell-call', toolName: 'run_shell', input: {}, status: 'completed', riskLevel: 'medium', result: { success: true, data: { output: 'ok' } } }] as never
+    const message = { id: 'ipc-tool-call-patch', sessionId: 'ipc-edit-session', role: 'assistant', content: 'kept body', timestamp: 1, toolCalls: beforeCalls } as import('../src/shared/domainTypes').Message
+    const toolCalls = [{ ...beforeCalls[0], result: { ...beforeCalls[0].result, data: { ...beforeCalls[0].result.data, terminalScrollback: { cols: 80, rows: 24 } } } }] as never
+    vi.spyOn(sessionTranscriptProjection, 'getProjectedMessage').mockReturnValue(message)
+    vi.spyOn(databaseOperations, 'updateMessageContent').mockReturnValue({ message: { ...message, toolCalls }, sequence: 5 })
+
+    const handler = ipc.getHandler('message:patch-non-turn')!
+    await expect(handler({}, { sessionId: message.sessionId, messageId: message.id, patch: { toolCalls } }))
+      .resolves.toEqual({ message: { ...message, toolCalls }, sequence: 5 })
+    expect(databaseOperations.updateMessageContent).toHaveBeenCalledWith(ctx.db, message.id, { toolCalls })
+    await expect(handler({}, { sessionId: message.sessionId, messageId: message.id, patch: { content: 'body', toolCalls } }))
+      .rejects.toThrow('MESSAGE_PATCH_OPERATION_REQUIRED')
   })
 
   it('统一 Markdown 导出接口拒绝非法参数且不弹保存框', async () => {
@@ -348,6 +490,13 @@ describe('file IPC handlers', () => {
         ? { id: 'user-1', sessionId: 'session-1', role: 'user', content: 'hello', timestamp: 1, status: 'sent', schemaVersion: 1 }
         : { id: 'assistant-1', sessionId: 'session-1', role: 'assistant', content: '', timestamp: 2, status: 'streaming', schemaVersion: 1 })
 
+    const coordinator = new TurnCoordinator({
+      findByRequestId: (sessionId, requestId) => database.getTurnByRequestId(ctx.db, sessionId, requestId)
+    } as never, { now: Date.now, id: () => 'unused-turn-id' })
+    ctx.turnRuntime = { coordinator, cancel: vi.fn(), listActive: vi.fn(() => []), subscribe: vi.fn(() => () => undefined) } as unknown as AppIpcContext['turnRuntime']
+    ipc = mockIpcMain()
+    registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, ctx)
+
     const handler = ipc.getHandler('chat:prepare-turn')!
     await expect(handler({}, {
       mode: 'create-user', requestId: 'stable-request', sessionId: 'session-1', input: { text: 'hello' }, config: {}
@@ -432,6 +581,8 @@ describe('file IPC handlers', () => {
     })
     expect(turnExecutionConfig.resolveTrustedTurnExecutionConfig).toHaveBeenCalledWith(
       ctx.db,
+      expect.objectContaining({ readSession: expect.any(Function) }),
+      expect.objectContaining({ updateSettings: expect.any(Function) }),
       'session-1',
       'desktop',
       { projectMemoryEnabled: true },
@@ -458,6 +609,7 @@ describe('file IPC handlers', () => {
     }
     ctx.turnRuntime = {
       coordinator,
+      consume: vi.fn(() => ({ ...started, version: 1 })),
       cancel: vi.fn(),
       listActive: vi.fn(() => []),
       subscribe: vi.fn(() => () => undefined)
@@ -989,7 +1141,7 @@ describe('file IPC handlers', () => {
     for (const name of forwardingNames) forward(name)
     vi.mocked(database.getDbConnection).mockImplementation(() => getActualDbConnection(reopened))
     ctx.db = reopened
-    ctx.sessionHistoryRecoverySucceeded = true
+    ctx.sessionStorage = createSqliteSessionStorage(reopened)
 
     let coordinatorId = 0
     const storage = {
@@ -1042,7 +1194,9 @@ describe('file IPC handlers', () => {
       sessionId: session.id
     }))
     expect(turnExecutionConfig.resolveTrustedTurnExecutionConfig).toHaveBeenCalledWith(
-      reopened, session.id, 'desktop', { projectMemoryEnabled: true }, { requiresVision: true }
+      reopened, expect.objectContaining({ readSession: expect.any(Function) }),
+      expect.objectContaining({ updateSettings: expect.any(Function) }),
+      session.id, 'desktop', { projectMemoryEnabled: true }, { requiresVision: true }
     )
     expect(getActualDbConnection(reopened).prepare('SELECT content,content_storage_state FROM messages WHERE id=?').get(reused.id))
       .toEqual({ content: '', content_storage_state: 'canonical-backed-only' })

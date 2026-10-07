@@ -13,7 +13,7 @@ describe('cleanupPersistedOrphansOnStartup', () => {
         { turnId: 't1', requestId: 'r1', sessionId: 's1', userMessageId: 'u1', assistantMessageId: 'a1', state: 'executing', version: 1 } as never,
         { turnId: 't2', requestId: 'r2', sessionId: 's1', userMessageId: 'u2', assistantMessageId: 'a2', state: 'terminal', version: 1 } as never
       ],
-      getMessageSkeleton: (id) => id === 'a1' ? { id, sessionId: 's1', role: 'assistant', content: '', timestamp: 1, status: 'streaming', schemaVersion: 1, toolCalls: [
+      getMessageSkeleton: (id) => id === 'a1' ? { id, sessionId: 's1', role: 'assistant', timestamp: 1, status: 'streaming', schemaVersion: 1, toolCalls: [
         { id: 'tool-1', toolName: 'run_shell', input: {}, status: 'executing', riskLevel: 'high', processPid: 42, processGroupId: 42, processOwnerToken: 'owner' },
         { id: 'tool-2', toolName: 'run_shell', input: {}, status: 'executing', riskLevel: 'high', processPid: 43 }
       ] } : undefined,
@@ -34,7 +34,7 @@ describe('cleanupPersistedOrphansOnStartup', () => {
       const assistant = appendMessage(temp.db, { id: 'orphan-assistant', sessionId: session.id, role: 'assistant', content: 'running', timestamp: 2,
         status: 'streaming', toolCalls: [{ id: 'orphan-tool', toolName: 'run_shell', input: {}, status: 'executing', riskLevel: 'high',
           processPid: 42, processGroupId: 43, processOwnerToken: 'owned-process-token' }] }).message
-      expect(getMessageSkeleton(temp.db, assistant.id)?.content).toBe('')
+      expect(getMessageSkeleton(temp.db, assistant.id)).not.toHaveProperty('content')
       expect(getDbConnection(temp.db).prepare('SELECT content FROM messages WHERE id=?').get(assistant.id)).toEqual({ content: 'running' })
       createPersistedTurn(temp.db, { turnId: 'orphan-turn', requestId: 'orphan-request', sessionId: session.id,
         assistantMessageId: assistant.id, userMessageId: user.id, state: 'executing' })

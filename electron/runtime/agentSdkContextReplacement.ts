@@ -1,8 +1,9 @@
 import type { CanonicalModelMessage } from '../../packages/agent-sdk/src/model'
+import type { ContextReplacementPlanInput, ContextReplacementPlanResult } from '../../packages/agent-sdk/src/turn'
 import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
 import { toLegacyBoundaryMessages } from './canonicalHistory'
 
-export type AgentSdkTurnBoundaryInput = Readonly<{
+export type AgentSdkBoundaryReplacementInput = Readonly<{
   invocationId: string
   modelTurn: number
   response: CanonicalModelMessage
@@ -24,8 +25,8 @@ export type AgentSdkTurnBoundaryInput = Readonly<{
   requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>
 }>
 
-export type AgentSdkTurnBoundaryContext = Readonly<{
-  compact(input: AgentSdkTurnBoundaryInput & Readonly<{ legacyMessages: readonly ClaudeChatMessageWithBlocks[]; plannerInputs?: AgentSdkTurnBoundaryInput['requestProjection'] }>): Promise<Readonly<{ messages: readonly CanonicalModelMessage[] }> | void>
+export type AgentSdkBoundaryReplacementContext = Readonly<{
+  compact(input: AgentSdkBoundaryReplacementInput & Readonly<{ legacyMessages: readonly ClaudeChatMessageWithBlocks[]; plannerInputs?: AgentSdkBoundaryReplacementInput['requestProjection'] }>): Promise<Readonly<{ messages: readonly CanonicalModelMessage[]; windowId?: string }> | void>
   hasLegacyPlannerInputs?: boolean
 }>
 
@@ -33,7 +34,7 @@ export type AgentSdkPreflightRequestInput = Readonly<{
   invocationId: string
   modelTurn: number
   messages: readonly CanonicalModelMessage[]
-  requestProjection?: AgentSdkTurnBoundaryInput['requestProjection']
+  requestProjection?: AgentSdkBoundaryReplacementInput['requestProjection']
   currentUserMessageId?: string
   requiredUserMessage?: Readonly<{ id: string; message: CanonicalModelMessage }>
 }>
@@ -51,9 +52,9 @@ export function createAgentSdkPreflightAdapter(context: Readonly<{
     contextUsage?: NonNullable<AgentSdkPreflightRequestInput['requestProjection']>['contextUsage']
     toolExecutionCheckpoint: NonNullable<AgentSdkPreflightRequestInput['requestProjection']>['toolExecutionCheckpoint']
     requiredSurfaceSet: string[]
-  }>): Promise<Readonly<{ messages: readonly CanonicalModelMessage[]; windowId?: string; historyPayload?: Record<string, unknown>; commitProjection?(): void | Promise<void> }> | void>
+  }>): Promise<Readonly<{ messages: readonly CanonicalModelMessage[]; windowId?: string }> | void>
 }>) {
-  return async (input: AgentSdkPreflightRequestInput): Promise<Readonly<{ messages: readonly CanonicalModelMessage[]; windowId?: string; historyPayload?: Record<string, unknown>; commitProjection?(): void | Promise<void> } | { rejected: 'OVER_BUDGET' }> | void> => {
+  return async (input: AgentSdkPreflightRequestInput): Promise<Readonly<{ messages: readonly CanonicalModelMessage[]; windowId?: string } | { rejected: 'OVER_BUDGET' }> | void> => {
     const projection = input.requestProjection
     if (!projection) return undefined
     if (input.currentUserMessageId && (!input.requiredUserMessage || input.requiredUserMessage.id !== input.currentUserMessageId)) return undefined
@@ -76,8 +77,8 @@ export function createAgentSdkPreflightAdapter(context: Readonly<{
 }
 
 /** Host adapter for planning transcript compaction; SDK revalidates proposals before history commit. */
-export function createAgentSdkTurnBoundaryAdapter(context: AgentSdkTurnBoundaryContext) {
-  return async (input: AgentSdkTurnBoundaryInput): Promise<Readonly<{ messages: readonly CanonicalModelMessage[] }> | void> => {
+export function createAgentSdkBoundaryReplacementAdapter(context: AgentSdkBoundaryReplacementContext) {
+  return async (input: AgentSdkBoundaryReplacementInput): Promise<Readonly<{ messages: readonly CanonicalModelMessage[]; windowId?: string; historyPayload?: Record<string, unknown> }> | void> => {
     if (input.toolCalls.length > 0 || context.hasLegacyPlannerInputs === false) return
     if (input.currentUserMessageId && (!input.requiredUserMessage || input.requiredUserMessage.id !== input.currentUserMessageId)) return
     let legacyMessages: ClaudeChatMessageWithBlocks[]
@@ -88,5 +89,16 @@ export function createAgentSdkTurnBoundaryAdapter(context: AgentSdkTurnBoundaryC
     const requiredId = input.currentUserMessageId ?? input.requiredUserMessage?.id
     if (requiredId && input.requiredUserMessage && !result.messages.some((message) => message.role === 'user' && JSON.stringify(message) === JSON.stringify(input.requiredUserMessage!.message))) return
     return result
+  }
+}
+
+/** One SDK port dispatches both phases through the same context replacement contract. */
+export function createAgentSdkContextReplacementPlanner(input: Readonly<{
+  preflight: ReturnType<typeof createAgentSdkPreflightAdapter>
+  boundary: ReturnType<typeof createAgentSdkBoundaryReplacementAdapter>
+}>) {
+  return (plan: ContextReplacementPlanInput): Promise<ContextReplacementPlanResult | void> => {
+    if (plan.phase === 'preflight') return input.preflight(plan as never)
+    return input.boundary(plan as never)
   }
 }

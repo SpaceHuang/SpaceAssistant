@@ -276,7 +276,7 @@ export function createAgentSdkDesktopObserver(input: {
     responseContextProjections.set(response.modelTurn, { payload: finalPayload, projection })
     return {
       ...finalPayload,
-      turnBoundaryProjection: {
+      contextBoundaryEvidence: {
         requestId: requestContext.requestId,
         windowId: requestContext.context.windowId,
         system: requestContext.header.system ?? '',
@@ -345,13 +345,13 @@ export function createAgentSdkDesktopObserver(input: {
       newTextSegmentAfterTool = false
       hasPreview = false
     },
-    async prepareModelResponseProjection(response) {
+    async prepareContextBoundaryEvidence(response) {
       const payload = prepareResponseContextProjection(response)
       if (!payload) return undefined
-      const { turnBoundaryProjection, ...requestContextPayload } = payload
+      const { contextBoundaryEvidence, ...requestContextPayload } = payload
       return {
         ...(input.sessionEventLocation ? { sessionLedger: { location: input.sessionEventLocation, requestContext: requestContextPayload } } : {}),
-        ...(turnBoundaryProjection ? { turnBoundaryProjection } : {})
+        ...(contextBoundaryEvidence ? { contextBoundaryEvidence } : {})
       }
     },
     prepareModelRequest(request) { return prepareRequestProjection(request) },

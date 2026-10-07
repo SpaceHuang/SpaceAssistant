@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { estimateTokensFromUtf8Text } from '../src/shared/contextUsageEstimate'
-import { computeReplaySurfaceFingerprint, computeShadowedRanges, excludeReplayOnlyMessages, projectReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForSubset } from '../src/shared/surfaceReplay'
+import { computeReplaySurfaceFingerprint, excludeReplayOnlyMessages, projectReplaySurface, surfaceItemIdentities, surfaceItemIdentitiesForSubset } from '../src/shared/surfaceReplay'
 import { computeCompactionSummaryHash } from '../src/shared/compactionEvents'
 import { planUserCompactionSurface } from '../src/shared/turnBoundaryCompaction'
-import { appendCompactionTransaction, type SessionEventSink } from './sessionEvents'
+import type { ContextFrame, ContextTransformationProof, JsonValue, SessionContextAdapter } from '../packages/agent-sdk/src/context'
 
-type SurfaceMessage = { id?: string; role: 'user' | 'assistant'; content: unknown; [key: string]: unknown }
+export type SessionContextSurfaceMessage = { id?: string; role: 'user' | 'assistant'; content: unknown; [key: string]: unknown }
+type SurfaceMessage = SessionContextSurfaceMessage
 export type SessionContextCompactionResult =
   | { status: 'committed'; compactionId: string; windowId: string; outputSurfaceFingerprint: string }
   | { status: 'no-op' | 'uncompressible' | 'busy' | 'failed' | 'stale' }
@@ -38,14 +39,13 @@ export async function compactSessionContext(input: {
   messages: readonly SurfaceMessage[]
   totalInputBudget: number
   locale: 'zh-CN' | 'en-US'
-  sink: SessionEventSink
+  contextAdapter: SessionContextAdapter
   summarize: (messages: SessionContextSummaryInput, locale: 'zh-CN' | 'en-US') => Promise<SessionContextSummary>
-  currentFingerprint: () => Promise<string>
-  isBusy: () => boolean
 }): Promise<SessionContextCompactionResult> {
   try {
-    if (input.isBusy()) return { status: 'busy' }
+    const contextBase = await input.contextAdapter.port.readCurrent({ kind: 'session', sessionId: input.sessionId })
     const replayMessages = projectReplaySurface(excludeReplayOnlyMessages(input.messages, [])) as SurfaceMessage[]
+    if (computeReplaySurfaceFingerprint('', contextBase.frame.items.map((item) => item.message)) !== computeReplaySurfaceFingerprint('', replayMessages)) return { status: 'stale' }
     if (replayMessages.length < 3) return { status: 'no-op' }
     const identities = surfaceItemIdentities(replayMessages)
     const newestUser = [...replayMessages].reverse().find((message) => message.role === 'user')
@@ -87,14 +87,35 @@ export async function compactSessionContext(input: {
     const outputIdentities = surfaceItemIdentitiesForSubset(replayMessages, outputMessages)
     const outputSurfaceFingerprint = computeReplaySurfaceFingerprint('', outputMessages)
     const inputSurfaceFingerprint = computeReplaySurfaceFingerprint('', replayMessages)
-    if (input.isBusy()) return { status: 'busy' }
-    if (await input.currentFingerprint() !== inputSurfaceFingerprint) return { status: 'stale' }
-
     const compactionId = `user-compact:${input.sessionId}:${input.requestId}:${randomUUID()}`
     const candidate = { kind: 'summary' as const, checkpointMessage, checkpointReplayIdentity: outputIdentities[0], shadowedRanges: record.shadowedRanges }
     const start = { compactionId, windowId: input.windowId, inputSurfaceFingerprint, surfaceBoundaryId: identities.at(-1), targetTokens: 0, reason: 'user_compact', sourceRequestId: input.requestId }
     const summary = { compactionId, windowId: input.windowId, summaryHash: computeCompactionSummaryHash(candidate), outputSurfaceFingerprint, shadowedRanges: record.shadowedRanges, candidate }
-    await appendCompactionTransaction(input.sink, start, summary)
+    {
+      const base = contextBase
+      const baseByIdentity = new Map(base.frame.items.map((item) => [item.replayIdentity, item]))
+      const checkpointIdentity = outputIdentities[0]!
+      const outputItems = outputMessages.map((message, index) => {
+        const identity = outputIdentities[index]!
+        const prior = baseByIdentity.get(identity)
+        return prior ?? { replayIdentity: identity, sourceMessageIds: [], message: message as import('../packages/agent-sdk/src/model').CanonicalModelMessage, sourceData: {} }
+      })
+      const output: ContextFrame = { ...base.frame, windowId: input.windowId, items: outputItems }
+      const sourceBindings = outputItems.map((item) => ({
+        outputIdentity: item.replayIdentity,
+        inputIdentities: item.sourceMessageIds.length ? [item.replayIdentity] : []
+      }))
+      const proof: ContextTransformationProof = {
+        historyPayload: { compactionId, windowId: input.windowId, inputSurfaceFingerprint, outputSurfaceFingerprint, summaryHash: summary.summaryHash, candidate, start: JSON.parse(JSON.stringify(start)) as JsonValue, summary },
+        sourceBindings,
+        checkpoint: { identity: checkpointIdentity, checkpointMessage },
+        shadowedRanges: record.shadowedRanges
+      }
+      const registered = input.contextAdapter.registerTransformation({ base, output, proof })
+      const committed = await input.contextAdapter.port.commitReplacement({ operationId: compactionId, reason: 'manual-compact', candidate: registered })
+      if (committed.status === 'stale' || committed.status === 'busy' || committed.status === 'no-op' || committed.status === 'uncompressible') return { status: committed.status }
+      if (committed.status === 'commit-uncertain') return { status: 'failed' }
+    }
     return { status: 'committed', compactionId, windowId: input.windowId, outputSurfaceFingerprint }
   } catch {
     return { status: 'failed' }

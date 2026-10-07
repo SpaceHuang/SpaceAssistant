@@ -24,7 +24,8 @@ import { createTempDatabase } from '../database/testHelpers'
 import { openDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
 import { appendMessage, createSession } from '../database/operations'
-import { certifyCanonicalSessionApiRead, markSessionMessageContentWriteStopped, setCanonicalApiReadFeatureEnabled } from './sessionStorageCutover'
+import { certifyCanonicalSessionApiRead, setCanonicalApiReadFeatureEnabled } from '../sessionStorage/certification'
+import { markSessionMessageContentWriteStopped } from '../sessionStorage/maintenance'
 import { enableCanonicalSessionWriteAuthority } from './sessionContentWriteAuthority'
 import { createSpillStore, reconcileSpillOrphansAgainstCanonicalHistory, type SpillStore } from '../storage/spillStore'
 
@@ -4174,10 +4175,10 @@ describe('SqliteAgentHistory', () => {
         execute: async () => ({ output: undefined })
       }),
       maxModelTurns: 1, history,
-      turnBoundary: async ({ messages }) => ({
+      contextProjectionCommitter: async () => { throw new Error('simulated JSONL outage') },
+      planContextReplacement: async ({ messages }) => ({
         messages,
-        historyPayload: { sessionLedger: { location: { workDir, sessionId, createdAt }, start, summary } },
-        commitProjection: async () => { throw new Error('simulated JSONL outage') }
+        historyPayload: { sessionLedger: { location: { workDir, sessionId, createdAt }, start, summary } }
       })
     })).rejects.toThrow('turn boundary ledger projection failed: simulated JSONL outage')
 

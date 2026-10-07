@@ -17,18 +17,14 @@ import { TurnStarted } from '../../src/shared/turnCoordinator'
 import { getDbConnection } from '../database'
 import { WikiStatus } from '../../src/shared/domainTypes'
 import { app, shell } from 'electron'
-import { appendMessage, createSession, deleteQueuedUserMessage, enqueueQueuedUserMessage, getContextHistorySummaryBaseline, getConfigValue, getMessageSequence, getMessage, getMessages, hasVisionInTurnRoutingContext, getNextQueuedMessage, reorderQueuedUserMessages, getSession, getSessionMessageRevisionSnapshot, getTurnByRequestId, getPersistedTurn, setPersistedTurnExecutionConfig, failConfiguringTurn, listPersistedTurns, listTurnErrorsByAssistantMessageIds, setConfigValue, updateMessageContent, updateQueuedUserMessageContent, updateSession } from '../database'
+import { getConfigValue, getNextQueuedMessage, getTurnByRequestId, listPersistedTurns, listTurnErrorsByAssistantMessageIds, setConfigValue } from '../database'
 import { canonicalQueueInput } from '../../src/shared/queueInputFingerprint'
 import { clampMaxParallelChatSessions } from '../../src/shared/chatParallelConfig'
 import { classifyWikiPath } from '../wiki/wikiPaths'
 import { createAnthropicClient } from '../anthropicClientFactory'
-import { writeCanonicalBackedMessageContent } from '../runtime/sessionContentWriteAuthority'
-import { getProjectedApiContextBaseline, getProjectedMessage, getProjectedRecentTurnRoutingMessages, getProjectedSearchCorpusPage, resolveProjectedRetryContext } from '../runtime/sessionTranscriptProjection'
 import { createOutboundAcceptor, createOutboundDrainer, computeContextPressureWarnings } from '../outbound/outboundAcceptor'
 import { createSkillHintSystemMessage } from '../../src/shared/skillHintRecords'
 import { createSkillManager } from '../skills/skillManager'
-import { createTurnCoordinatorStorage } from '../turnCoordinatorStorage'
-import { reconcileStartupSessionTranscripts, recoverTurnCoordinatorForStartup, restorePersistedTurnSnapshotsForStartup } from '../runtime/sessionTranscriptStartup'
 import { decodeChildOutput } from '../processOutput/decodeChildOutput'
 import { discardStagedImage, readStagedImage, stageChatImage } from '../chatAttachmentManager'
 import { ensureSkillsDirs, getProjectSkillsDir, getUserSkillsDir } from '../skills/skillPaths'
@@ -42,8 +38,6 @@ import { logAgentEvent } from '../agentLogger/agentLogger'
 import { makeRecordTrustToCache } from './ipcShared'
 import { normalizeSessionSkillsState } from '../../src/shared/domainTypes'
 import { normalizeTurnExecutionConfig } from '../../src/shared/turnCoordinator'
-import { shadowTurnRoutingInput } from '../runtime/sessionStorageShadow'
-import { isCanonicalApiReadFenceCurrent, readCanonicalTurnRoutingInputWithFenceIfEligible, type CanonicalApiReadFence } from '../runtime/sessionStorageCutover'
 import { notifyFileTreeChanged } from '../fileTreeSyncNotify'
 import { createHash, randomUUID } from 'node:crypto'
 import { readActiveLlmServiceId, readLlmServices, resolveFastPreferredModelName, resolveLanguagePreferredModelName, resolveLlmCredentialsForModel } from '../llmServiceResolver'
@@ -62,9 +56,6 @@ import { getCallAdmissionGate } from '../runtime/callAdmissionGate'
 import { cancelClaudeAdmission } from '../claudeStreamHandlers'
 import { reserveConfirmationSubmission, commitConfirmationSubmissionWithWork, markConfirmationSubmissionReconciling, reconcileConfirmationSubmission, reconcileConfirmationSubmissions, ConfirmationCommitRolledBackError, ConfirmationCommitUnknownError } from '../confirmation/persistentConfirmationCommit'
 import { forgetMcpSessionTrust, isMcpSessionTrusted, rememberMcpSessionTrust } from '../mcp/mcpSessionTrust'
-import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
-import { getProjectedChatMessagePage, readSessionTranscriptProjection } from '../runtime/sessionTranscriptProjection'
-import { startAgentContinuation, setAgentContinuationStatusForTurn, reconcileRunningAgentContinuations } from '../runtime/agentContinuation'
 import { createContinuationSafetySnapshot, fingerprintContinuationExecutionConfig } from '../runtime/continuationSafetySnapshot'
 import { resolveWorkDirForSession } from '../workDirManager'
 import { exposedToolNamesForLane } from '../toolsConfigRuntime'
@@ -76,10 +67,10 @@ import { loadEffectivePolicyRules, readPolicyPackages, resolveEffectivePolicyRul
 import { isActiveTurnAdmissionBlocked, isSessionContextCompactionLocked, isSessionTurnAdmissionBlocked, withSessionTurnAdmission } from '../sessionCompactionLock'
 
 export function resolveContinuationSafetySnapshot(ctx: AppIpcContext, sessionId: string, lane: 'desktop' | 'wechat' | 'feishu' | 'automation') {
-  const workDir = resolveWorkDirForSession(ctx.db, sessionId,
+  const workDir = ctx.sessionStorage ? resolveWorkDirForSession(ctx.sessionStorage.queries, sessionId,
     () => ctx.workDirManager.listProfiles(),
     () => ctx.workDirManager.getActiveProfileId(),
-    () => ctx.workDirManager.getActiveWorkDir())
+    () => ctx.workDirManager.getActiveWorkDir()) : null
   if (!workDir) throw new Error('CONTINUATION_WORKDIR_UNAVAILABLE')
   const inputs = readExposureInputsFromDb(ctx.db)
   const rules = loadEffectivePolicyRules(ctx.db, lane)
@@ -121,7 +112,9 @@ export async function continueAgentFromCheckpoint(input: {
     return { accepted: false, reason: 'CONTINUATION_IDENTITY_REQUIRED' }
   }
   try {
-    const sourceTurn = getTurnByRequestId(ctx.db, payload.sessionId, payload.sourceInvocationId)
+    const storage = ctx.sessionStorage
+    if (!storage) return { accepted: false, reason: 'SESSION_STORAGE_NOT_CONFIGURED' }
+    const sourceTurn = storage.execution.readTurnByRequest({ sessionId: payload.sessionId, requestId: payload.sourceInvocationId })
     const frozenSnapshot = sourceTurn?.executionConfig?.continuationSafetySnapshot
     if (!sourceTurn || sourceTurn.executionConfig?.lane !== 'desktop' || !frozenSnapshot) {
       return { accepted: false, reason: 'CONTINUATION_ORIGINAL_SAFETY_SNAPSHOT_MISSING' }
@@ -133,15 +126,20 @@ export async function continueAgentFromCheckpoint(input: {
     if (JSON.stringify(currentSnapshot) !== JSON.stringify(frozenSnapshot)) {
       return { accepted: false, reason: 'CONTINUATION_SAFETY_SNAPSHOT_CHANGED' }
     }
-    const history = new SqliteAgentHistory(getDbConnection(ctx.db), 1, Date.now, payload.sessionId)
-    const snapshot = history.readSync(payload.sourceInvocationId)
-    if (snapshot.invocationId !== payload.sourceInvocationId) return { accepted: false, reason: 'CONTINUATION_SOURCE_IDENTITY_MISMATCH' }
-    const started = await startAgentContinuation({
-      conn: getDbConnection(ctx.db), snapshot, sessionId: payload.sessionId, userMessageId: sourceTurn.userMessageId,
-      requestIdempotencyKey: payload.requestIdempotencyKey, createdBy: payload.sessionId,
-      frozenConfig: currentSnapshot,
+    const inspection = storage.queries.continuationSources.inspect({ sessionId: payload.sessionId, activeTurnIds: turnRuntime.listActive(payload.sessionId).map((turn) => turn.turnId), selectedAssistantMessageId: sourceTurn.assistantMessageId })
+    if (inspection.kind !== 'available' || inspection.selected.kind !== 'found' || inspection.selected.candidate.source.invocationId !== payload.sourceInvocationId) {
+      return { accepted: false, reason: 'CONTINUATION_SOURCE_IDENTITY_MISMATCH' }
+    }
+    const candidate = inspection.selected.candidate
+    const contextEvent = candidate.snapshot.events.find((event) => event.kind === 'invocation-context-committed') as { payload?: { requiredUserMessage?: { message?: { content?: string } } } } | undefined
+    const started = await storage.execution.continuationLaunch.prepareAndClaim({
+      payload: { requestId: payload.requestIdempotencyKey, sessionId: payload.sessionId, text: contextEvent?.payload?.requiredUserMessage?.message?.content ?? '' },
+      source: candidate.source, createdBy: payload.sessionId, frozenConfig: currentSnapshot,
       executionConfig: { ...sourceTurn.executionConfig, continuationSafetySnapshot: currentSnapshot },
-      runtime: turnRuntime
+      acceptance: {
+        payloadSha256: createHash('sha256').update(JSON.stringify({ sessionId: payload.sessionId, sourceInvocationId: payload.sourceInvocationId, requestIdempotencyKey: payload.requestIdempotencyKey })).digest('hex'),
+        rawText: '继续', intentKind: 'exact-continue', route: 'continuation'
+      }
     })
     if (started.started && started.turn) {
       void input.dispatch(null, {
@@ -196,52 +194,17 @@ function settleReconciledDesktopConfirm(result: { submissionId: string; outcome:
 
 export function registerAgentIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
 const recordTrustToCache = makeRecordTrustToCache(ctx)
+  const sessionStorage = ctx.sessionStorage
+  if (!sessionStorage) throw new Error('SESSION_STORAGE_REQUIRED')
+  const sessionQueries = sessionStorage.queries
+  const sessionCommands = sessionStorage.commands
 
   // 启动恢复器：进程崩溃/重启后仍能收敛上次 COMMIT 未知的 receipt，
   // 且不会把已确认的 waiter 永久留在 committing。
   try { reconcileConfirmationSubmissions(ctx.db, settleReconciledDesktopConfirm) } catch { /* 下次启动继续对账 */ }
 
-  const turnRuntime = ctx.turnRuntime ?? new TurnRuntimeImpl({ storage: createTurnCoordinatorStorage(ctx.db), deps: { now: Date.now, id: randomUUID } })
-  let turnStartupRecoverySucceeded = false
-
+  const turnRuntime = ctx.turnRuntime ?? new TurnRuntimeImpl({ storage: sessionStorage.execution.coordinator, deps: { now: Date.now, id: randomUUID } })
   const turnCoordinator = turnRuntime.coordinator
-
-  if (ctx.turnRuntime) {
-    const turnCoordinatorRecovery = recoverTurnCoordinatorForStartup(ctx.db, () => {
-      restorePersistedTurnSnapshotsForStartup(ctx.db, (persisted, assistant) => turnCoordinator.restoreTurn(persisted, assistant))
-      turnCoordinator.recover()
-    })
-    turnStartupRecoverySucceeded = turnCoordinatorRecovery.succeeded
-    if (!turnCoordinatorRecovery.succeeded) {
-      const error = turnCoordinatorRecovery.error
-      console.warn('[turnCoordinator] startup recovery degraded:', error instanceof Error ? error.message : String(error))
-      logAgentEvent('error', 'session.transcript.reconciliation', { outcome: 'startup-failed', reasonCode: 'turn-projection-recovery-failed' })
-    }
-    try {
-      const recovery = reconcileStartupSessionTranscripts(ctx.db, {
-        historyRecoverySucceeded: ctx.sessionHistoryRecoverySucceeded === true,
-        turnCoordinatorRecoverySucceeded: turnCoordinatorRecovery.succeeded
-      })
-      logAgentEvent('info', 'session.transcript.reconciliation', {
-        outcome: 'skippedReason' in recovery ? 'startup-blocked' : 'startup-scan',
-        reconciledCount: recovery.reconciled,
-        ...('releasedUnstarted' in recovery ? { releasedUnstarted: recovery.releasedUnstarted, markedUncertain: recovery.markedUncertain, repairedCheckpoints: recovery.repairedCheckpoints } : {}),
-        ...('skippedReason' in recovery ? { reasonCode: recovery.skippedReason } : {})
-      })
-    } catch (error) {
-      console.warn('[sessionTranscript] startup reconciliation degraded:', error instanceof Error ? error.message : String(error))
-      logAgentEvent('error', 'session.transcript.reconciliation', { outcome: 'startup-failed', reasonCode: 'checkpoint-reconciliation-failed' })
-    }
-  }
-
-  try {
-    const recovery = reconcileRunningAgentContinuations(getDbConnection(ctx.db), ctx.sessionHistoryRecoverySucceeded === true && turnStartupRecoverySucceeded)
-    if (recovery.interrupted || recovery.unknownSideEffect || recovery.settled) {
-      logAgentEvent('info', 'session.transcript.reconciliation', { outcome: 'continuation-startup-recovery', ...recovery })
-    }
-  } catch (error) {
-    console.warn('[agentContinuation] startup recovery degraded:', error instanceof Error ? error.message : String(error))
-  }
 
   const skillManager = createSkillManager({
     getUserDataPath: ctx.getUserDataPath,
@@ -545,14 +508,13 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   ipcMain.handle(
     'chat:get-messages',
     (_e, payload: { sessionId: string; limit?: number; offset?: number }): Message[] => {
-      const projection = readSessionTranscriptProjection(ctx.db, payload.sessionId)
-      return projection.messages.slice(payload.offset ?? 0, (payload.offset ?? 0) + (payload.limit ?? 500)) as Message[]
+      return sessionQueries.readMessages(payload)
     }
   )
 
   ipcMain.handle(
     'chat:get-api-context-baseline',
-    (_e, payload: { sessionId: string }) => getProjectedApiContextBaseline(ctx.db, payload.sessionId)
+    (_e, payload: { sessionId: string }) => sessionQueries.readApiBaseline(payload)
   )
 
   ipcMain.handle(
@@ -560,19 +522,17 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     (
       _e,
       payload: { sessionId: string; beforeSequence?: number; limit?: number }
-    ) =>
-      getProjectedChatMessagePage(ctx.db, payload.sessionId, payload.beforeSequence, payload.limit)
+    ) => sessionQueries.readChatPage(payload)
   )
 
   ipcMain.handle('chat:get-display-message-page', (_e, payload: { sessionId: string; beforeSequence?: number; limit?: number }) => {
-    const page = getProjectedChatMessagePage(ctx.db, payload.sessionId, payload.beforeSequence, payload.limit)
+    const page = sessionQueries.readChatPage(payload)
     return { ...page, entries: page.entries.filter(({ message }) => message.role === 'assistant').map(({ message, sequence }) => ({ display: turnToDisplay({ turnId: message.id, requestId: '', version: 0, assistantMessage: message }), sequence })) }
   })
 
   ipcMain.handle(
     'chat:get-context-history-summary-baseline',
-    (_e, payload: { sessionId: string }) =>
-      getContextHistorySummaryBaseline(ctx.db, payload.sessionId)
+    (_e, payload: { sessionId: string }) => sessionQueries.readContextHistorySummaryBaseline(payload.sessionId)
   )
 
   ipcMain.handle(
@@ -580,8 +540,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     (
       _e,
       payload: { sessionId: string; fromSequence?: number; limit?: number }
-    ) =>
-      getProjectedSearchCorpusPage(ctx.db, payload.sessionId, payload.fromSequence ?? 0, payload.limit)
+    ) => sessionQueries.readSearchCorpusPage({ sessionId: payload.sessionId, fromSequence: payload.fromSequence ?? 0, pageSize: payload.limit })
   )
 
   ipcMain.handle('chat:get-next-queued-message', (_e, payload: { sessionId: string }) =>
@@ -589,13 +548,13 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   )
 
   ipcMain.handle('chat:enqueue-queued-message', (_e, payload: { sessionId: string; requestId: string; content: string; attachments?: Message['attachments'] }) =>
-    enqueueQueuedUserMessage(ctx.db, payload)
+    sessionCommands.enqueue(payload)
   )
 
   ipcMain.handle(
     'chat:resolve-retry-context',
     (_e, payload: { sessionId: string; failedAssistantMessageId: string }) =>
-      resolveProjectedRetryContext(ctx.db, payload.sessionId, payload.failedAssistantMessageId)
+      sessionQueries.readRetryTarget(payload)
   )
 
   registerAgentContinuationIpc(ipcMain, {
@@ -606,13 +565,13 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   ipcMain.handle(
     'chat:get-message-sequence',
     (_e, payload: { sessionId: string; messageId: string }) =>
-      getMessageSequence(ctx.db, payload.sessionId, payload.messageId)
+      sessionQueries.readMessageSequence(payload)
   )
 
   ipcMain.handle(
     'message:append-non-turn',
     async (_e, msg: Message): Promise<{ messageId: string; sequence: number }> => {
-      const { message, sequence } = appendMessage(ctx.db, msg)
+      const { message, sequence } = sessionCommands.appendNonTurnMessage(msg)
       scheduleBackup(ctx, message.sessionId)
       return { messageId: message.id, sequence }
     }
@@ -625,7 +584,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
 
   const prepareTurnInternal = async (intent: TurnIntent): Promise<PreparedTurn> => {
     const configuringKey = JSON.stringify([intent.sessionId, intent.requestId])
-    const existing = getTurnByRequestId(ctx.db, intent.sessionId, intent.requestId)
+    const existing = sessionStorage.execution.readTurnByRequest({ sessionId: intent.sessionId, requestId: intent.requestId })
     if (existing) {
       if (existing.state === 'configuring') {
         // 即使同进程单飞，也要先复用 Coordinator 的消息意图校验，拒绝同 requestId 的变形重试。
@@ -639,7 +598,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     }
     // A retry must fail closed on a missing canonical body before reporting an unrelated
     // admission conflict. This read is side-effect free and does not claim the session.
-    if (intent.mode === 'reuse-user') getProjectedMessage(ctx.db, intent.userMessageId)
+    if (intent.mode === 'reuse-user') sessionQueries.readMessage({ sessionId: intent.sessionId, messageId: intent.userMessageId })
     const inFlightConfiguration = configuringTurns.get(configuringKey)
     if (inFlightConfiguration) {
       turnCoordinator.prepare({ ...intent, config: {} })
@@ -654,38 +613,41 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     const controller = new AbortController()
     const configuring = (async () => {
       try {
-        const persisted = getPersistedTurn(ctx.db, started.turnId)
+        const persisted = sessionStorage.execution.readTurn({ sessionId: intent.sessionId, turnId: started.turnId })
         if (!persisted?.userMessageId) throw new Error('TURN_PREPARE_PERSISTENCE_MISSING')
-        const session = getSession(ctx.db, intent.sessionId)
+        const session = sessionQueries.readSession(intent.sessionId)
         if (!session) throw new Error('TURN_SESSION_NOT_FOUND')
-        const sessionMessageSnapshot = getSessionMessageRevisionSnapshot(ctx.db, intent.sessionId)
-        if (!sessionMessageSnapshot) throw new Error('TURN_SESSION_NOT_FOUND')
-        const reusedUserMessage = intent.mode === 'reuse-user'
-          ? getProjectedMessage(ctx.db, intent.userMessageId)
-          : undefined
-        const userInput = intent.mode === 'create-user' ? intent.input.text : reusedUserMessage?.content
-        if (userInput == null) throw new Error('TURN_USER_MESSAGE_MISSING')
         const excludeMessageIds = intent.excludeMessageIds ?? []
+        const routeRead = sessionQueries.readRoutingInput({
+          sessionId: intent.sessionId,
+          boundarySequence: persisted.contextBoundarySequence,
+          requiredUserMessageId: persisted.userMessageId,
+          excludeMessageIds,
+          limit: 50,
+          ...(intent.mode === 'create-user' ? { userInput: intent.input.text } : {}),
+          ...(intent.mode === 'reuse-user' ? { reuseUserMessageId: intent.userMessageId } : {})
+        })
+        const reusedUserMessage = intent.mode === 'reuse-user'
+          ? sessionQueries.readMessage({ sessionId: intent.sessionId, messageId: intent.userMessageId })
+          : undefined
+        const userInput = routeRead.userInput
+        if (userInput == null) throw new Error('TURN_USER_MESSAGE_MISSING')
         const requiresVision = Boolean(
           (intent.mode === 'create-user' && intent.input.attachments?.length) ||
           (intent.mode === 'reuse-user' && reusedUserMessage?.attachments?.length) ||
-          hasVisionInTurnRoutingContext(ctx.db, intent.sessionId, persisted.contextBoundarySequence, excludeMessageIds)
+          routeRead.hasVision
         )
         const baseConfig = await resolveTrustedTurnExecutionConfig(
           ctx.db,
+          sessionQueries,
+          sessionCommands,
           intent.sessionId,
           'desktop',
           { projectMemoryEnabled: true },
           { requiresVision }
         )
         const credentials = await resolveLlmCredentialsForModel(ctx.db, baseConfig.model!, { serviceId: baseConfig.llmServiceId })
-        const recentMessages: SkillRouteRecentMessage[] = getProjectedRecentTurnRoutingMessages(
-          ctx.db,
-          intent.sessionId,
-          50,
-          persisted.contextBoundarySequence,
-          excludeMessageIds
-        )
+        const recentMessages: SkillRouteRecentMessage[] = routeRead.recentMessages
         const routeInput = {
           userInput,
           sessionState: normalizeSessionSkillsState(session.skillsState),
@@ -697,36 +659,17 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
           sessionId: intent.sessionId,
           signal: controller.signal
         }
-        try {
-          shadowTurnRoutingInput(ctx.db, {
-            sessionId: intent.sessionId,
-            mode: intent.mode,
-            ...(intent.mode === 'reuse-user' ? { reuseUserMessageId: intent.userMessageId } : {}),
-            routeInput,
-            boundarySequence: persisted.contextBoundarySequence,
-            excludeMessageIds,
-            limit: 50
-          })
-        } catch { /* Canonical side reads never control the live turn route. */ }
-        let effectiveRouteInput = routeInput
-        let canonicalRouteFence: CanonicalApiReadFence | undefined
-        try {
-          const canonicalRouteRead = readCanonicalTurnRoutingInputWithFenceIfEligible(ctx.db, {
-            sessionId: intent.sessionId,
-            mode: intent.mode,
-            ...(intent.mode === 'reuse-user' ? { reuseUserMessageId: intent.userMessageId } : {}),
-            routeInput,
-            boundarySequence: persisted.contextBoundarySequence,
-            excludeMessageIds,
-            limit: 50
-          })
-          if (canonicalRouteRead) {
-            effectiveRouteInput = canonicalRouteRead.routeInput
-            canonicalRouteFence = canonicalRouteRead.fence
+        const { routeInput: effectiveRouteInput, fence: routeFence } = sessionQueries.resolveRoutingInput({
+          sessionId: intent.sessionId,
+          selection: routeRead.fence,
+          routeInput: {
+            ...routeInput,
+            userInput: routeRead.userInput ?? userInput,
+            recentMessages: routeRead.recentMessages
           }
-        } catch { /* A still complete legacy input remains the rollback path in Phase 5.3. */ }
+        })
         const route = await skillManager.route(effectiveRouteInput)
-        if (canonicalRouteFence && !isCanonicalApiReadFenceCurrent(ctx.db, intent.sessionId, canonicalRouteFence)) {
+        if (!sessionQueries.isSelectionCurrent(intent.sessionId, routeFence)) {
           throw new Error('TURN_CONTEXT_CHANGED_DURING_PREPARATION')
         }
         const skillFragments = route.skills.map((skill) => `## Skill: ${skill.meta.name}\n\n${skill.content.trim()}`)
@@ -748,7 +691,12 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
           excludeMessageIds: [...excludeMessageIds].sort(),
           config: normalizeTurnExecutionConfig(config)
         })
-        if (!setPersistedTurnExecutionConfig(ctx.db, started.turnId, config, intentFingerprint, sessionMessageSnapshot)) {
+        if (!sessionStorage.execution.commitExecutionConfig({
+          ref: { sessionId: intent.sessionId, turnId: started.turnId },
+          config,
+          intentFingerprint,
+          fence: routeFence
+        })) {
           throw new Error('TURN_CONTEXT_CHANGED_DURING_PREPARATION')
         }
         const { executionConfig: _executionConfig, ...prepared } = started
@@ -760,10 +708,10 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         // 否则渲染层收不到终态事实，消息会一直停在「生成中」，用户也看不到失败原因。
         const failureMessage = error instanceof Error ? error.message : String(error)
         const failed = turnRuntime.consume(started.turnId, { type: 'source-failed', message: failureMessage })
-        failConfiguringTurn(ctx.db, started.turnId, failed.version, {
+        sessionStorage.execution.failConfiguring({ ref: { sessionId: intent.sessionId, turnId: started.turnId }, version: failed.version, error: {
           code: 'configuration-failed',
           message: failureMessage
-        })
+        } })
         throw error
       }
     })()
@@ -797,7 +745,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     }
     const executionPayload = { requestId: payload.requestId, turnId: payload.turnId, turnStartToken: payload.turnStartToken, sessionId: payload.sessionId }
     const configuring = configuringTurnsById.get(payload.turnId)
-    const persisted = getPersistedTurn(ctx.db, payload.turnId)
+    const persisted = sessionStorage.execution.readTurn({ sessionId: payload.sessionId, turnId: payload.turnId })
     if (persisted?.state === 'terminal') return { ok: true as const, accepted: false as const, turnId: payload.turnId }
     if (persisted?.state === 'configuring' && !configuring) throw new Error('TURN_CONFIGURATION_INCOMPLETE')
     void (async () => {
@@ -805,15 +753,15 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         if (configuring) await configuring
         await ctx.executeTurn!(sender, executionPayload)
         if (continuationId) {
-          const persistedAfterExecution = getPersistedTurn(ctx.db, payload.turnId)
+          const persistedAfterExecution = sessionStorage.execution.readTurn({ sessionId: payload.sessionId, turnId: payload.turnId })
           const status = persistedAfterExecution?.outcome === 'completed' ? 'completed'
             : persistedAfterExecution?.outcome === 'cancelled' || persistedAfterExecution?.outcome === 'timed-out' ? 'cancelled'
               : persistedAfterExecution?.outcome === 'commit-uncertain' ? 'unknown_side_effect' : 'failed'
-          setAgentContinuationStatusForTurn(getDbConnection(ctx.db), payload.turnId, status)
+          sessionStorage.execution.continuations.settleForTurn({ targetTurnId: payload.turnId, status })
         }
       } catch {
         // 配置失败/取消已由 configuring 路径写入 terminal，不能把它伪装成 legacy config 错误。
-        if (continuationId) setAgentContinuationStatusForTurn(getDbConnection(ctx.db), payload.turnId, 'failed')
+        if (continuationId) sessionStorage.execution.continuations.settleForTurn({ targetTurnId: payload.turnId, status: 'failed' })
       }
     })()
     return { ok: true as const, accepted: true as const, turnId: payload.turnId }
@@ -825,6 +773,9 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
 
   const outboundAcceptor = createOutboundAcceptor({
     db: ctx.db,
+    sessionQueries,
+    sessionCommands: sessionStorage.commands,
+    sessionExecution: sessionStorage.execution,
     turnRuntime,
     isDev: () => !app.isPackaged,
     apiKeyPresent: () => {
@@ -849,20 +800,18 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     wikiImportRaw: (payload) => importRawFromWorkDir(ctx.getWorkDir(), readWikiConfig(ctx.db), payload.srcRelPath),
     appendHintMessage: async (sessionId, hint) => {
       const msg = createSkillHintSystemMessage(sessionId, hint)
-      const { sequence } = appendMessage(ctx.db, msg)
+      const { sequence } = sessionCommands.appendNonTurnMessage(msg)
       scheduleBackup(ctx, sessionId)
       return { messageId: msg.id, sequence }
     },
     updateSessionState: async (sessionId, patch) => {
-      if (!getSession(ctx.db, sessionId)) return
-      updateSession(ctx.db, sessionId, {
-        ...(patch.skillsState ? { skillsState: patch.skillsState } : {}),
-        ...(patch.metadataPatch ? { metadata: patch.metadataPatch } : {})
-      })
+      if (!sessionQueries.readSession(sessionId)) return
+      if (patch.skillsState) sessionCommands.updateSettings({ sessionId, skillsState: patch.skillsState })
+      if (patch.metadataPatch) sessionCommands.updateUserMetadata(sessionId, patch.metadataPatch)
     },
     createSession: async (prefs) => {
       // B2:无会话首条消息的 composer 草稿偏好随代建落库（thinkingEffort 校验在 operations 层）
-      const s = createSession(ctx.db, {
+      const s = sessionCommands.createSession({
         name: '',
         workDirProfileId: ctx.workDirManager.getActiveProfileId(),
         ...(prefs?.model ? { model: prefs.model } : {}),
@@ -882,32 +831,32 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         sessionId: started.sessionId
       })
       if (turnIntent.mode === 'create-user' && turnIntent.continuationIntent?.kind === 'exact-continue' && turnIntent.continuationIntent.requestId) {
-        getDbConnection(ctx.db).prepare("UPDATE continuation_intents SET route='continuation',status='accepted_continuation',target_id=?,updated_at=? WHERE request_id=?")
-          .run(started.turnId, Date.now(), turnIntent.continuationIntent.requestId)
+        sessionStorage.execution.bindExactContinueTurn({
+          requestId: turnIntent.continuationIntent.requestId,
+          sessionId: turnIntent.sessionId,
+          text: turnIntent.continuationAcceptance?.rawText ?? turnIntent.input.text,
+          attachments: turnIntent.input.attachments,
+          payloadSha256: turnIntent.continuationAcceptance?.payloadSha256 ?? createHash('sha256').update(JSON.stringify({ sessionId: turnIntent.sessionId, text: turnIntent.input.text, attachments: turnIntent.input.attachments ?? null })).digest('hex'),
+          turnId: started.turnId
+        })
       }
       return { turnId: started.turnId, assistantMessage: started.assistantMessage }
     },
     findRetrySource: async ({ sessionId, text, attachments }) => {
       if (attachments?.length || !['继续', '继续执行', '接着做', '接着刚才的修改', '继续上次的任务'].includes(text.trim())) return undefined
-      const failed = getMessages(ctx.db, sessionId).filter((item) => item.role === 'assistant' && item.status === 'failed')
-      if (failed.length > 1) return undefined
-      const message = failed.at(-1)
-      if (!message) return undefined
-      const source = getDbConnection(ctx.db).prepare('SELECT request_id AS requestId FROM turns WHERE session_id=? AND assistant_message_id=?').get(sessionId, message.id) as { requestId?: string } | undefined
-      return source?.requestId ? { assistantMessageId: message.id, sourceInvocationId: source.requestId } : undefined
+      const target = sessionQueries.readLatestRetryTarget(sessionId)
+      return target ? { assistantMessageId: target.failedAssistant.message.id, sourceInvocationId: target.sourceInvocationId ?? '' } : undefined
     },
-    startContinuation: async ({ sessionId, sourceInvocationId, requestId, continuationAcceptance }) => {
-      const sourceTurn = getTurnByRequestId(ctx.db, sessionId, sourceInvocationId)
+    startContinuation: async ({ sessionId, sourceInvocationId, source, requestId, continuationAcceptance }) => {
+      const sourceTurn = sessionStorage.execution.readTurnByRequest({ sessionId, requestId: sourceInvocationId })
       const safety = sourceTurn?.executionConfig?.continuationSafetySnapshot
       if (!sourceTurn || !safety || !sourceTurn.userMessageId || !ctx.executeTurn) throw new Error('CONTINUATION_ORIGINAL_SAFETY_SNAPSHOT_MISSING')
       const current = resolveContinuationSafetySnapshot(ctx, sessionId, 'desktop')
       if (JSON.stringify(current) !== JSON.stringify(safety)) throw new Error('CONTINUATION_SAFETY_SNAPSHOT_CHANGED')
-      const history = new SqliteAgentHistory(getDbConnection(ctx.db), 1, Date.now, sessionId)
-      const snapshot = history.readSync(sourceInvocationId)
-      const started = await startAgentContinuation({
-        conn: getDbConnection(ctx.db), snapshot, sessionId, userMessageId: sourceTurn.userMessageId,
-        requestIdempotencyKey: requestId, createdBy: sessionId, frozenConfig: current,
-        executionConfig: { ...sourceTurn.executionConfig, continuationSafetySnapshot: current }, continuationAcceptance, runtime: turnRuntime
+      const started = await sessionStorage.execution.continuationLaunch.prepareAndClaim({
+        payload: { requestId, sessionId, text: continuationAcceptance.rawText, attachments: continuationAcceptance.attachments },
+        source, createdBy: sessionId, frozenConfig: current,
+        executionConfig: { ...sourceTurn.executionConfig, continuationSafetySnapshot: current }, acceptance: continuationAcceptance
       })
       if (started.started && started.turn) {
         void executeTurnInternal(null, { requestId: started.turn.requestId, turnId: started.turn.turnId, turnStartToken: started.turn.startToken, sessionId: started.turn.sessionId }, started.continuation.continuationId)
@@ -917,7 +866,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     ensureSessionWorkDir: async (sessionId) => {
       // B2(v2 评审):main ensureWorkDirForSession 语义回收——turn 执行用 active profile 目录,
       // 会话绑定 profile 与 active 不一致时切过去,失败即拒绝(不写错目录)
-      const session = getSession(ctx.db, sessionId)
+      const session = sessionQueries.readSession(sessionId)
       const target = session?.workDirProfileId
       if (!target || target === ctx.workDirManager.getActiveProfileId()) return { ok: true as const }
       const result = await ctx.workDirManager.switchProfile(target)
@@ -927,7 +876,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       // B3(v2 评审):enqueue 落库后若无 active turn,补一次排水(闭环 snapshot→enqueue 窗口竞态)
       if (turnRuntime.listActive(sessionId).length === 0) void outboundDrainer.drain(sessionId)
     },
-    contextUsageWarn: async ({ sessionId, attachments }) => computeContextPressureWarnings(ctx.db, sessionId, attachments),
+    contextUsageWarn: async ({ sessionId, attachments }) => computeContextPressureWarnings(ctx.db, sessionId, attachments, sessionQueries),
     newRequestId: () => randomUUID(),
     audit: (event, data) => logAgentEvent('warn', event as AgentLogEventName, data as AgentLogFields)
   })
@@ -943,7 +892,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     getNextQueued: (sessionId) => getNextQueuedMessage(ctx.db, sessionId),
     consumeQueued: (_sessionId, messageId) => {
       // B5:排队的渲染端本地命令(如 /test-cards)主进程无法执行,消费落库避免卡队
-      deleteQueuedUserMessage(ctx.db, messageId)
+      sessionCommands.deleteQueuedMessage(messageId)
     },
     audit: (event, data) => logAgentEvent('warn', event as AgentLogEventName, data as AgentLogFields)
   })
@@ -1048,21 +997,19 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         >
       >
     } & { sessionId: string }): Promise<{ message: Message; sequence: number } | null> => {
-      const conn = getDbConnection(ctx.db)
-      const storage = conn.prepare('SELECT content_storage_state FROM messages WHERE id=? AND session_id=?')
-        .get(payload.messageId, payload.sessionId) as { content_storage_state: string } | undefined
-      let entry
-      if (storage?.content_storage_state === 'canonical-backed-dual-write' && payload.patch.content !== undefined) {
-        if (Object.keys(payload.patch).some((key) => key !== 'content')) {
-          throw new Error('canonical-backed message content must be edited as a content-only patch')
-        }
-        const committed = await writeCanonicalBackedMessageContent(ctx.db, payload.messageId, payload.patch.content)
-        if (!committed) throw new Error('canonical-backed message edit could not be committed')
-        const message = getProjectedMessage(ctx.db, payload.messageId)
-        const sequence = getMessageSequence(ctx.db, payload.sessionId, payload.messageId)
-        if (message && sequence !== null) entry = { message, sequence }
+      const keys = Object.keys(payload.patch)
+      if (keys.length !== 1) throw new Error('MESSAGE_PATCH_OPERATION_REQUIRED')
+      let entry: { message: Message; sequence: number } | null
+      if ('content' in payload.patch && typeof payload.patch.content === 'string') {
+        const edited = await sessionCommands.editMessage({ sessionId: payload.sessionId, messageId: payload.messageId, content: payload.patch.content })
+        if (!edited) return null
+        const message = sessionQueries.readMessage({ sessionId: payload.sessionId, messageId: payload.messageId })
+        const sequence = sessionQueries.readMessageSequence({ sessionId: payload.sessionId, messageId: payload.messageId })
+        entry = message && sequence !== null ? { message, sequence } : null
+      } else if ('toolCalls' in payload.patch && Array.isArray(payload.patch.toolCalls)) {
+        entry = sessionCommands.updateToolCallScrollback({ sessionId: payload.sessionId, messageId: payload.messageId, toolCalls: payload.patch.toolCalls })
       } else {
-        entry = updateMessageContent(ctx.db, payload.messageId, payload.patch)
+        throw new Error('MESSAGE_PATCH_OPERATION_UNSUPPORTED')
       }
       if (!entry) return null
       await backupAfterMessagePatch(ctx, payload.sessionId, payload.patch)
@@ -1106,7 +1053,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   ipcMain.handle(
     'chat:delete-queued-message',
     async (_e, payload: { messageId: string; sessionId: string }) => {
-      const result = deleteQueuedUserMessage(ctx.db, payload.messageId)
+      const result = sessionCommands.deleteQueuedMessage(payload.messageId)
       if (result.ok) {
         await flushBackup(ctx, result.sessionId)
       }
@@ -1115,13 +1062,13 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   )
 
   ipcMain.handle('chat:update-queued-message', async (_e, payload: { sessionId: string; messageId: string; content: string }) => {
-    const result = updateQueuedUserMessageContent(ctx.db, payload)
+    const result = sessionCommands.editQueuedMessage(payload)
     if (result.ok) await flushBackup(ctx, payload.sessionId)
     return result
   })
 
   ipcMain.handle('chat:reorder-queued-messages', async (_e, payload: { sessionId: string; messageIds: string[] }) => {
-    const result = reorderQueuedUserMessages(ctx.db, payload)
+    const result = sessionCommands.reorderQueuedMessages(payload)
     if (result.ok) await flushBackup(ctx, payload.sessionId)
     return result
   })
@@ -1190,7 +1137,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       }
     ): Promise<SkillRouteResult> => {
       const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId.trim() : undefined
-      const session = sessionId ? getSession(ctx.db, sessionId) : undefined
+      const session = sessionId ? sessionQueries.readSession(sessionId) : undefined
 
       let models: ModelEntry[] = []
       const rawModels = getConfigValue(ctx.db, CONFIG_KEYS.models)

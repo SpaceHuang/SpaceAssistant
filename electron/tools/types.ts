@@ -12,6 +12,7 @@ import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit
 import type { HistoryFact } from '../../src/shared/historyReader'
 import type { RegisteredFeishuAttachment } from '../feishu/feishuAttachmentRegistry'
 import type { ChildProcess, spawn as nodeSpawn } from 'child_process'
+import type { SessionCommands, SessionQueries } from '../sessionStorage/contracts'
 
 export interface RemoteContext {
   source: 'feishu' | 'wechat'
@@ -96,6 +97,8 @@ export interface ToolExecutionContext {
   /** gate/policy snapshot used to detect stale prepared shell plans. */
   policyRevision?: string
   appDatabase?: AppDatabase
+  sessionQueries?: SessionQueries
+  sessionCommands?: Pick<SessionCommands, 'recordRemoteSessionActivity' | 'updateSettings'>
   workDirManager?: WorkDirManager
   /** R1：本次工具调用边界解析的工作目录快照（env.workspace 等能力消费单一事实源） */
   workspaceSnapshot?: import('../../src/shared/agent/workspace').WorkspaceSnapshot

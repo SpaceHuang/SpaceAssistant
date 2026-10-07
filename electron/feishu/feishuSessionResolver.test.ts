@@ -1,11 +1,12 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSession, getSession, openDatabase } from '../database'
 import { mergeFeishuConfig } from '../../src/shared/feishuTypes'
 import type { FeishuInboundMessage } from '../../src/shared/feishuTypes'
 import { resolveFeishuSession } from './feishuSessionResolver'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sa-fsr-'))
@@ -57,10 +58,33 @@ describe('resolveFeishuSession idle resume', () => {
         remoteSessionLastActivityAt: Date.now() - 3 * 60_000
       }
     })
-    const result = await resolveFeishuSession(db, makeMsg({ messageId: 'msg-2' }), config, 'model')
+    const result = await resolveFeishuSession(createSqliteSessionStorage(db), makeMsg({ messageId: 'msg-2' }), config, 'model')
     expect(result.isNew).toBe(false)
     expect(result.sessionId).toBe(existing.id)
     expect((getSession(db, existing.id)?.metadata as { feishuMessageId?: string }).feishuMessageId).toBe('msg-2')
+  })
+
+  it('uses the injected query and command ports when reusing a session', async () => {
+    const db = setupDb()
+    const config = mergeFeishuConfig({ remoteSessionIdleMinutes: 10 })
+    const existing = createSession(db, {
+      name: 'old',
+      metadata: { source: 'feishu', feishuChatId: 'chat-1', remoteSessionLastActivityAt: Date.now() }
+    })
+    const storage = createSqliteSessionStorage(db)
+    const listSessions = vi.fn(storage.queries.listSessions)
+    const recordIdentity = vi.fn(storage.commands.recordRemoteSessionIdentity)
+    const injected = {
+      ...storage,
+      queries: { ...storage.queries, listSessions },
+      commands: { ...storage.commands, recordRemoteSessionIdentity: recordIdentity }
+    }
+
+    const result = await resolveFeishuSession(injected, makeMsg({ messageId: 'msg-injected' }), config, 'model')
+
+    expect(result).toEqual({ sessionId: existing.id, isNew: false })
+    expect(listSessions).toHaveBeenCalledOnce()
+    expect(recordIdentity).toHaveBeenCalledWith(existing.id, { channel: 'feishu', messageId: 'msg-injected' })
   })
 
   it('creates new session after idle timeout', async () => {
@@ -74,7 +98,7 @@ describe('resolveFeishuSession idle resume', () => {
         remoteSessionLastActivityAt: Date.now() - 11 * 60_000
       }
     })
-    const result = await resolveFeishuSession(db, makeMsg(), config, 'model')
+    const result = await resolveFeishuSession(createSqliteSessionStorage(db), makeMsg(), config, 'model')
     expect(result.isNew).toBe(true)
   })
 
@@ -89,7 +113,7 @@ describe('resolveFeishuSession idle resume', () => {
         remoteSessionLastActivityAt: Date.now()
       }
     })
-    const result = await resolveFeishuSession(db, makeMsg(), config, 'model')
+    const result = await resolveFeishuSession(createSqliteSessionStorage(db), makeMsg(), config, 'model')
     expect(result.isNew).toBe(true)
   })
 })

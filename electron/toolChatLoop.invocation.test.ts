@@ -93,7 +93,8 @@ vi.mock('./database', async (importOriginal) => {
 })
 
 import { runToolChatSession } from './toolChatLoop'
-import { assembleInvocation, type AgentInvocationMaterials } from './runtime/invocationAssembler'
+import { assembleInvocation } from './testSupport/invocationAssembler'
+import type { AgentInvocationMaterials } from './runtime/invocationAssembler'
 import { createMemoryAppDb } from './database/testHelpers'
 import { resetEffortMemoForTests } from './effortFallback'
 import { logAgentEvent } from './agentLogger/agentLogger'
@@ -114,7 +115,7 @@ import { createWriteFileRegisteredTools } from './tools/writeFileRegisteredTools
 import { getDbConnection } from './database'
 import { createSession, appendMessage } from './database'
 import { createOrGetAgentContinuation } from './runtime/agentContinuation'
-import { createTurnCoordinatorStorage } from './turnCoordinatorStorage'
+import { createTurnCoordinatorStorage } from './sessionStorage/coordinator'
 import { TurnRuntime } from './turnRuntime'
 import { scheduleSessionTitleSuggestion } from './sessionTitleSuggest'
 
@@ -151,6 +152,7 @@ function baseMaterials(overrides: Partial<AgentInvocationMaterials> = {}): Agent
     userDataDir: '/tmp',
     getApiKey: async () => 'test-key',
     appDb: makeDb(),
+    historyForSession: () => new MemoryHistory(),
     emitFactEvent: (event: Record<string, unknown>) => capturedFacts.push(event),
     emitSessionEvent: async (event: Record<string, unknown>) => {
       capturedSessionEvents.push(event)
@@ -371,11 +373,13 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
         }
       })
       const assembled = assembleInvocation(baseMaterials({ requestId: 'batch-request', turnId: 'batch-turn', sessionId: 'batch-session', workDir: dir, providerRouteId, messages: [{ role: 'user', content: 'Edit all 30 files' }] as never }))
+      const history = new MemoryHistory()
+      assembled.ports.history = history
       assembled.ports.toolRevocations = undefined
       const registry = new TypedToolRegistry()
       for (const registered of createWriteFileRegisteredTools({ writeFile: writeFileExecutor, editFile: editFileExecutor })) registry.register(registered)
       const agentSdk = { ...assembled.agentSdk, createHostedTurnRuntime: (input: Parameters<typeof assembled.agentSdk.createHostedTurnRuntime>[0]) => assembled.agentSdk.createHostedTurnRuntime({ ...input, registry }) }
-      const handoff = createHostedTurnHandoff({ agentSdk: agentSdk as never, history: assembled.ports.history!, invocationId: 'batch-turn', turnId: 'batch-turn', routeId: providerRouteId })
+      const handoff = createHostedTurnHandoff({ agentSdk: agentSdk as never, history, invocationId: 'batch-turn', turnId: 'batch-turn', routeId: providerRouteId })
 
       await expect(runToolChatSession(assembled.invocation, assembled.ports, { onHostedTurnHandoff: handoff })).resolves.toMatchObject({ ok: true })
 

@@ -8,10 +8,11 @@ import { createMemoryAppDb, createTempDatabase } from './database/testHelpers'
 import { appendMessage, createSession, getDbConnection, openDatabase } from './database'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
 import { backupPageReader } from './ipc/ipcShared'
+import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { DebouncedSessionBackupManager } from './debouncedSessionBackupManager'
 import type { AppIpcContext } from './appIpc'
-import { certifyCanonicalSessionApiRead, beginSessionMessageContentCleanup, clearNextSessionMessageContentBatch,
-  markSessionMessageContentWriteStopped, setCanonicalApiReadFeatureEnabled, verifyAndCompleteSessionMessageContentCleanup } from './runtime/sessionStorageCutover'
+import { certifyCanonicalSessionApiRead, setCanonicalApiReadFeatureEnabled } from './sessionStorage/certification'
+import { beginSessionMessageContentCleanup, clearNextSessionMessageContentBatch, markSessionMessageContentWriteStopped, verifyAndCompleteSessionMessageContentCleanup } from './sessionStorage/maintenance'
 import { enableCanonicalSessionWriteAuthority } from './runtime/sessionContentWriteAuthority'
 
 function makeSession(over: Partial<Session> = {}): Session {
@@ -155,7 +156,7 @@ describe('SessionBackupManager', () => {
       conn.prepare("UPDATE messages SET content='',content_storage_state='canonical-backed-only' WHERE session_id=?").run(session.id)
       conn.prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(session.id)
 
-      const readPage = backupPageReader({ db } as AppIpcContext, session.id)
+      const readPage = backupPageReader({ db, sessionStorage: createSqliteSessionStorage(db) } as AppIpcContext, session.id)
       const manager = new SessionBackupManager(workDir)
       const backupOnce = manager.backupSession.bind(manager)
       const backupSpy = vi.spyOn(manager, 'backupSession')
@@ -207,7 +208,7 @@ describe('SessionBackupManager', () => {
         .toEqual(messages.map(({ id }) => ({ content: '', content_storage_state: 'canonical-backed-only' })))
 
       const manager = new SessionBackupManager(workDir)
-      await manager.backupSession(session, backupPageReader({ db } as AppIpcContext, session.id))
+      await manager.backupSession(session, backupPageReader({ db, sessionStorage: createSqliteSessionStorage(db) } as AppIpcContext, session.id))
       const restored = await manager.restoreSession(session.id)
       expect(restored?.messages.map(({ id, content }) => [id, content])).toEqual([
         ['cleanup-backup-0', bodies[0]], ['cleanup-backup-1', bodies[1]]

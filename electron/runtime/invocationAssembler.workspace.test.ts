@@ -4,7 +4,7 @@ import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createSession, openDatabase, updateSession } from '../database'
 import { createWorkDirManager } from '../workDirManager'
-import { assembleInvocation } from './invocationAssembler'
+import { assembleInvocation } from '../testSupport/invocationAssembler'
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sa-asm-ws-'))

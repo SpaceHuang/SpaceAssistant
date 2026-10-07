@@ -45,6 +45,7 @@ vi.mock('../database', async (importOriginal) => {
 import { getDbConnection, openDatabase } from '../database'
 import { readAcceptedTurn } from '../database/acceptedTurnStorage'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { decodeTerminalOutcome } from '../runtime/terminalOutcome'
 import { APPROVAL_MAX_AUTHORIZATION, parseApprovalVerdict, runApprovalAgent } from './approvalAgent'
 import type { ApprovalCluePack, ApprovalInvocation } from '../../src/shared/confirmation/types'
@@ -83,8 +84,23 @@ function invocation(overrides: Partial<ApprovalInvocation> = {}): ApprovalInvoca
   }
 }
 
+const approvalDb = openDatabase(':memory:')
+function createApprovalStorage(db: Parameters<typeof createSqliteSessionStorage>[0]) {
+  const storage = createSqliteSessionStorage(db)
+  return {
+    ...storage,
+    commands: {
+      ...storage.commands,
+      createSession: (input: Parameters<typeof storage.commands.createSession>[0]) =>
+        mockCreateSession(db, input) as ReturnType<typeof storage.commands.createSession>
+    }
+  }
+}
+
 const deps = {
-  db: openDatabase(':memory:') as never,
+  db: approvalDb as never,
+  sessionStorage: createApprovalStorage(approvalDb),
+  historyForSession: (sessionId: string) => createSqliteSessionStorage(approvalDb).execution.historyFor({ sessionId }),
   credentialRef: 'llm-service:approval-test',
   workDir: '/tmp/wd',
   userDataDir: '/tmp/ud',
@@ -321,7 +337,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
     setDefaultAgentRuntime(runtime)
     let providerCalls = 0
     let hostedInvocationId = ''
-    let hostedHistory: { read(id: string): Promise<{ invocationId: string; version: number; events: Array<{ kind: string; invocationId: string; turnId: string; sequence: number }> }>; listInvocationIdsForSession(sessionId: string): string[] } | undefined
+    let hostedHistory: { read(id: string): Promise<{ invocationId: string; version: number; events: Array<{ kind: string; invocationId: string; turnId: string; sequence: number }> }> } | undefined
     mockRunToolChatSession.mockImplementation(async (agentInvocation: never, ports: never, runOptions: never) => {
       const invocationRecord = agentInvocation as unknown as { profile: { providerRouteId?: string }; trace: { requestId: string; turnId: string; windowId?: string } }
       hostedInvocationId = invocationRecord.trace.requestId
@@ -352,7 +368,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
     })
 
     try {
-      const result = await runApprovalAgent({ ...deps, db: fileDb as never, model: modelId, baseUrl: 'https://relay.example.com', credentialRef: 'llm-service:svc-parent' }, invocation({
+      const result = await runApprovalAgent({ ...deps, db: fileDb as never, sessionStorage: createApprovalStorage(fileDb as never), historyForSession: (sessionId: string) => createSqliteSessionStorage(fileDb as never).execution.historyFor({ sessionId }), model: modelId, baseUrl: 'https://relay.example.com', credentialRef: 'llm-service:svc-parent' }, invocation({
         requestId: childRequestId, invocationId: childInvocationId, sessionId: 'sess-outer'
       }))
       expect(result).toMatchObject({ ok: true, verdict: { kind: 'approve', reason: { summary: 'hosted approval' } } })
@@ -361,8 +377,9 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
       expect(snapshot.invocationId).toBe(hostedInvocationId)
       expect(hostedInvocationId).toBe(childRequestId)
       expect(hostedInvocationId).not.toBe('req-outer')
-      expect(hostedHistory!.listInvocationIdsForSession('sess-approval-1')).toEqual([childRequestId])
-      expect(hostedHistory!.listInvocationIdsForSession('sess-outer')).toEqual([])
+      const persistedHistorySessions = getDbConnection(fileDb).prepare('SELECT DISTINCT session_id FROM agent_history_streams WHERE invocation_id=?').all(childRequestId)
+      expect(persistedHistorySessions).toEqual([{ session_id: 'sess-approval-1' }])
+      expect(getDbConnection(fileDb).prepare('SELECT 1 FROM agent_history_streams WHERE invocation_id=? AND session_id=?').get(childRequestId, 'sess-outer')).toBeUndefined()
       expect(snapshot.version).toBe(snapshot.events.length)
       expect(snapshot.events.map((event) => [event.invocationId, event.turnId])).toEqual(
         snapshot.events.map(() => [hostedInvocationId, hostedInvocationId])
@@ -429,7 +446,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
     })
 
     try {
-      const result = await runApprovalAgent({ ...deps, db: testDb as never, model: modelId, baseUrl: 'https://relay.example.com', credentialRef: 'llm-service:svc-parent' }, invocation({ requestId }))
+      const result = await runApprovalAgent({ ...deps, db: testDb as never, sessionStorage: createApprovalStorage(testDb as never), historyForSession: (sessionId: string) => createSqliteSessionStorage(testDb as never).execution.historyFor({ sessionId }), model: modelId, baseUrl: 'https://relay.example.com', credentialRef: 'llm-service:svc-parent' }, invocation({ requestId }))
       expect(result).toMatchObject({ ok: false, cause: 'unavailable' })
       expect(providerCalls).toBe(1)
       const accepted = readAcceptedTurn(testDb, 'sess-approval-1', requestId)!
@@ -514,7 +531,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
     })
 
     try {
-      const approvalDeps = { ...deps, db: testDb as never, workDir, getWorkDir: () => workDir,
+      const approvalDeps = { ...deps, db: testDb as never, sessionStorage: createApprovalStorage(testDb as never), workDir, getWorkDir: () => workDir,
         resolveWorkDirForSession: () => workDir, model: modelId, baseUrl: 'https://approval-checkpoint.example.com',
         credentialRef: 'llm-service:svc-approval-checkpoint' }
       const first = await runApprovalAgent(approvalDeps, invocation({ requestId }))
@@ -533,7 +550,7 @@ describe('runApprovalAgent（P2-2 审批执行链）', () => {
       testDb = openDatabase(dbPath)
       runtime = createDesktopAgentRuntime()
       setDefaultAgentRuntime(runtime)
-      const retry = await runApprovalAgent({ ...approvalDeps, db: testDb as never }, invocation({ requestId }))
+      const retry = await runApprovalAgent({ ...approvalDeps, db: testDb as never, historyForSession: (sessionId: string) => createSqliteSessionStorage(testDb as never).execution.historyFor({ sessionId }) }, invocation({ requestId }))
       expect(retry).toMatchObject({ ok: false, cause: 'unavailable' })
       expect(providerCalls).toBe(2)
       expect(readExecutor).toHaveBeenCalledOnce()

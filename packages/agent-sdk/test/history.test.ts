@@ -25,6 +25,43 @@ describe('History Port semantics', () => {
     })
   })
 
+  it('checks an exact expected version inside the shared writer queue', async () => {
+    const history = new MemoryHistory()
+    const writer = new InvocationHistoryWriter(history, { invocationId: 'inv-1', turnId: 'turn-1' })
+    const first = writer.appendAtVersion([{ kind: 'transcript-compacted', payload: { messages: [] } }], 0)
+    const second = writer.appendAtVersion([{ kind: 'transcript-compacted', payload: { messages: [] } }], 0)
+
+    await expect(first).resolves.toMatchObject({ version: 1 })
+    await expect(second).rejects.toMatchObject({ code: 'version-conflict', expected: 0, actual: 1 })
+    await expect(writer.appendAtVersion([{ kind: 'transcript-compacted', payload: { messages: [] } }], 1)).resolves.toMatchObject({ version: 2 })
+    await expect(history.read('inv-1')).resolves.toMatchObject({ version: 2, events: [
+      expect.objectContaining({ sequence: 1, kind: 'transcript-compacted' }),
+      expect.objectContaining({ sequence: 2, kind: 'transcript-compacted' })
+    ] })
+  })
+
+  it('waits for queued history writes before capturing the current version', async () => {
+    const backing = new MemoryHistory()
+    let releaseAppend!: () => void
+    const appendGate = new Promise<void>((resolve) => { releaseAppend = resolve })
+    const history = {
+      read: (invocationId: string) => backing.read(invocationId),
+      appendBatch: async (...args: Parameters<MemoryHistory['appendBatch']>) => {
+        await appendGate
+        return backing.appendBatch(...args)
+      }
+    }
+    const writer = new InvocationHistoryWriter(history, { invocationId: 'inv-1', turnId: 'turn-1' })
+    const queued = writer.append([{ kind: 'tool-call-started', payload: { toolCallId: 'queued' } }])
+    let captured = false
+    const current = writer.currentOrPersistedVersion().then((version) => { captured = true; return version })
+    await Promise.resolve()
+    expect(captured).toBe(false)
+    releaseAppend()
+    await queued
+    await expect(current).resolves.toBe(1)
+  })
+
   it('atomically appends one step batch with invocation sequence and schema version', async () => {
     const history = new MemoryHistory()
     const events = [event('e1', 1, 'tool-call-started'), event('e2', 2, 'tool-call-finished')]

@@ -20,7 +20,7 @@ export const wechatReplyExecutor: ToolExecutor = {
         {
           workDir: ctx.workDir,
           botService: bundle.botService,
-          db: ctx.appDatabase!,
+          sessionQueries: ctx.sessionQueries!,
           sessionId: ctx.sessionId,
           expectedMessageId: ctx.remoteContext?.source === 'wechat' ? ctx.remoteContext.messageId : undefined,
           signal: ctx.signal

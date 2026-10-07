@@ -44,7 +44,8 @@ import { openDatabase, setConfigValue, type AppDatabase } from '../database'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { MODEL_BASELINE } from '../../src/shared/modelBaseline'
 import { TurnRuntime } from '../turnRuntime'
-import { createTurnCoordinatorStorage } from '../turnCoordinatorStorage'
+import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { runButlerTask, buildApprovalTaskDigest } from './butlerInvoker'
 import { createAutomationTask } from './taskStore'
 
@@ -87,6 +88,7 @@ describe('butlerInvoker 任务声明装配（D）', () => {
   function makeDeps() {
     return {
       db,
+      sessionStorage: createSqliteSessionStorage(db),
       turnRuntime: makeRuntime(db),
       getWorkDir: () => testWorkDir,
       getUserDataPath: () => '/tmp/ud',

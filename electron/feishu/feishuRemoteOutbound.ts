@@ -1,4 +1,4 @@
-import type { AppDatabase } from '../database'
+import type { SessionCommands } from '../sessionStorage/contracts'
 import type { LarkCliRunner } from './larkCliRunner'
 import { replyFeishuTextRaw } from './feishuReply'
 import { sendImOutbound } from '../remote/imRemoteOutbound'
@@ -11,7 +11,7 @@ export async function sendFeishuRemoteOutbound(args: {
   messageId: string
   body: string
   sessionId?: string
-  touch?: { db: AppDatabase; sessionId: string }
+  touch?: { sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>; sessionId: string }
 }): Promise<void> {
   const { runner, messageId, body, sessionId, touch } = args
   await sendImOutbound({

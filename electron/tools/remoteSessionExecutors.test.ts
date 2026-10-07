@@ -35,6 +35,7 @@ import {
   resetRemoteSessionSwitchStateForTests
 } from '../remote/remoteSessionSwitchState'
 import { remoteWriteGrantRegistry } from '../remote/remoteWriteGrantRegistry'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 
 vi.mock('../remote/requestRendererSessionSwitch', () => ({
   requestRendererSessionSwitch: vi.fn().mockResolvedValue({ desktopSwitched: true, viewChanged: true })
@@ -107,6 +108,8 @@ describe('switchSessionExecutor', () => {
       fileStateCache: {} as ToolExecutionContext['fileStateCache'],
       toolsConfig: { enabled: true, allowedTools: [], deniedTools: [] },
       appDatabase: db,
+      sessionQueries: createSqliteSessionStorage(db).queries,
+      sessionCommands: createSqliteSessionStorage(db).commands,
       workDirManager: manager,
       remoteContext
     } satisfies ToolExecutionContext
@@ -172,6 +175,8 @@ describe('switchSessionExecutor', () => {
       chatId: 'chat-1'
     }
     const ctx = makeCtx(db, manager, caller.id, remoteContext)
+    const readSession = vi.fn(ctx.sessionQueries!.readSession)
+    ctx.sessionQueries = { ...ctx.sessionQueries!, readSession }
     const tool = createSwitchSessionRegisteredTool(switchSessionExecutor)
     const executor = vi.spyOn(switchSessionExecutor, 'execute')
     let dispatched = false
@@ -192,6 +197,7 @@ describe('switchSessionExecutor', () => {
 
     expect(dispatched).toBe(false)
     expect(executor).not.toHaveBeenCalled()
+    expect(readSession).toHaveBeenCalledWith(target.id)
     executor.mockRestore()
   })
 

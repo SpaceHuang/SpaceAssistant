@@ -19,14 +19,14 @@ export const listWorkDirsExecutor: ToolExecutor = {
     }
 
     const { workDirManager, sessionId, appDatabase } = ctx
-    if (!workDirManager || !appDatabase) {
+    if (!workDirManager || !appDatabase || !ctx.sessionQueries || !ctx.sessionCommands) {
       return { success: false, error: MISSING_CONTEXT_ERROR }
     }
 
     const profiles = workDirManager.listProfiles()
     const activeProfileId = workDirManager.getActiveProfileId()
     const resolved = resolveWorkDirForSession(
-      appDatabase,
+      ctx.sessionQueries,
       sessionId,
       () => profiles,
       () => activeProfileId,
@@ -62,7 +62,7 @@ export const switchWorkDirExecutor: ToolExecutor = {
     }
 
     const { workDirManager, sessionId, appDatabase, remoteContext, requestId } = ctx
-    if (!workDirManager || !appDatabase) {
+    if (!workDirManager || !appDatabase || !ctx.sessionQueries || !ctx.sessionCommands) {
       return { success: false, error: MISSING_CONTEXT_ERROR }
     }
 
@@ -106,7 +106,7 @@ export const switchWorkDirExecutor: ToolExecutor = {
       }
     }
 
-    const bindResult = await bindSessionWorkDir(appDatabase, workDirManager, {
+    const bindResult = await bindSessionWorkDir(ctx.sessionQueries, ctx.sessionCommands, workDirManager, {
       sessionId,
       profileId: targetProfile.id,
       remoteContext,

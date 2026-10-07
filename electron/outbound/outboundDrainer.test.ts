@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createOutboundAcceptor, createOutboundDrainer, type OutboundAcceptorDeps } from './outboundAcceptor'
+import { createOutboundAcceptor as createSessionStorageOutboundAcceptor, createOutboundDrainer, type OutboundAcceptorDeps } from './outboundAcceptor'
 import type { OutboundSubmitIntent, OutboundSubmitResult } from '../../src/shared/outboundProtocol'
 import { DEFAULT_WIKI_CONFIG, type Message } from '../../src/shared/domainTypes'
 import {
@@ -12,6 +12,17 @@ import {
   type AppDatabase
 } from '../database'
 import { createTempDatabase } from '../database/testHelpers'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+
+function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
+  const storage = createSqliteSessionStorage(deps.db)
+  return createSessionStorageOutboundAcceptor({
+    ...deps,
+    sessionQueries: deps.sessionQueries ?? storage.queries,
+    sessionCommands: deps.sessionCommands ?? storage.commands,
+    sessionExecution: deps.sessionExecution ?? storage.execution
+  })
+}
 
 function mulberry32(seed: number) {
   let a = seed >>> 0
@@ -53,6 +64,7 @@ function makeDeps(
   })
   return {
     db,
+    sessionQueries: createSqliteSessionStorage(db).queries,
     turnRuntime: {
       listActive: (sessionId?: string) =>
         [...active].map(([turnId, sid]) => ({ turnId, sessionId: sid })).filter((t) => !sessionId || t.sessionId === sessionId)

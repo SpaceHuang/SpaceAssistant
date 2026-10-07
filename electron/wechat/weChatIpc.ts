@@ -61,6 +61,7 @@ export function readWeChatConfigFromDb(db: AppDatabase): WeChatConfig {
 
 export function createWeChatBundle(deps: {
   db: AppDatabase
+  sessionStorage?: import('../sessionStorage/contracts').SessionStorage
   getUserDataPath: () => string
   getWorkDir: () => string
   workDirManager: WorkDirManager
@@ -114,6 +115,7 @@ export function createWeChatBundle(deps: {
 
   const router = new WeChatCommandRouter({
     db: deps.db,
+    sessionStorage: deps.sessionStorage,
     botService,
     processedStore,
     imChannel,
@@ -198,6 +200,7 @@ export function registerWeChatIpcHandlers(
   ipcMain: IpcMain,
   deps: {
     db: AppDatabase
+    sessionStorage?: import('../sessionStorage/contracts').SessionStorage
     getUserDataPath: () => string
     getWorkDir: () => string
     workDirManager: WorkDirManager
@@ -336,7 +339,7 @@ export function registerWeChatIpcHandlers(
       return executeWeChatReply(payload, {
         workDir: deps.getWorkDir(),
         botService: b.botService,
-        db: deps.db,
+        sessionQueries: deps.sessionStorage!.queries,
         sessionId: payload.sessionId
       })
     }

@@ -4,11 +4,11 @@ import { runInTransaction } from '../database/transaction'
 import {
   beginSessionMessageContentCleanup,
   clearNextSessionMessageContentBatch,
-  certifyCanonicalSessionApiRead,
   markSessionMessageContentWriteStopped,
   verifyAndCompleteSessionMessageContentCleanup,
   type SessionMessageContentCleanupBatchResult,
-} from './sessionStorageCutover'
+} from '../sessionStorage/maintenance'
+import { certifyCanonicalSessionApiRead } from '../sessionStorage/certification'
 import {
   evaluateSessionStorageCleanupReleaseGate,
   type SessionStorageCleanupReleaseGateResult,

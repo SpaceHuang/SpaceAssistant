@@ -203,7 +203,7 @@ export function scheduleSessionMessageContentCleanupMaintenance(
   db: AppDatabase,
   boundary: SessionStorageCleanupProductionBoundary,
   options: ScheduleSessionMessageContentCleanupOptions = {},
-): () => void {
+): (() => void) & { quiesce(): Promise<void> } {
   let stopped = false
   let running = false
   let interval: ReturnType<typeof setInterval> | undefined
@@ -229,9 +229,11 @@ export function scheduleSessionMessageContentCleanupMaintenance(
   interval = setInterval(run, options.intervalMs ?? 15 * 60_000)
   initial.unref?.()
   interval.unref?.()
-  return () => {
+  const stop = (() => {
     stopped = true
     clearTimeout(initial)
     clearInterval(interval)
-  }
+  }) as (() => void) & { quiesce(): Promise<void> }
+  stop.quiesce = async () => { while (running) await new Promise((resolve) => setTimeout(resolve, 0)) }
+  return stop
 }

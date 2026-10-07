@@ -186,7 +186,7 @@ describe('executeWeChatSend', () => {
       {
         workDir,
         botService: { getRawBot: () => mockBot } as never,
-        db: {} as never,
+        sessionQueries: { readSession: vi.fn() } as never,
         sessionId: 'session-current',
         expectedMessageId: 'message-approved'
       }
@@ -194,6 +194,25 @@ describe('executeWeChatSend', () => {
 
     expect(result).toMatchObject({ success: false, error: '微信入站消息已变化，请重新授权回复' })
     expect(mockBot.reply).not.toHaveBeenCalled()
+  })
+
+  it('入站上下文缺失时通过 SessionQueries 校验微信会话身份', async () => {
+    getBundle.mockReturnValue({ router: { getInboundForSession: () => undefined } })
+    const readSession = vi.fn(() => ({ id: 'session-current', metadata: { source: 'wechat' } }))
+    const sessionQueries = { readSession } as never
+
+    const result = await executeWeChatReply(
+      { text: 'reply text' },
+      {
+        workDir,
+        botService: { getRawBot: () => mockBot } as never,
+        sessionQueries,
+        sessionId: 'session-current'
+      }
+    )
+
+    expect(readSession).toHaveBeenCalledWith('session-current')
+    expect(result).toMatchObject({ success: false, error: '微信入站上下文已过期，请重新发送指令' })
   })
 
   it('WeChat reply API 已进入后连接断开时拒绝并保留结果未知语义', async () => {
@@ -210,7 +229,7 @@ describe('executeWeChatSend', () => {
       {
         workDir,
         botService: { getRawBot: () => mockBot } as never,
-        db: {} as never,
+        sessionQueries: { readSession: vi.fn() } as never,
         sessionId: 'session-current',
         expectedMessageId: 'message-approved'
       }
@@ -242,6 +261,7 @@ describe('executeWeChatSend', () => {
       fileStateCache: {} as never,
       toolsConfig: {} as never,
       appDatabase: {} as never,
+      sessionQueries: { readSession: vi.fn() } as never,
       remoteContext: {
         source: 'wechat',
         messageId: 'message-approved',
@@ -278,6 +298,7 @@ describe('executeWeChatSend', () => {
       fileStateCache: {} as never,
       toolsConfig: {} as never,
       appDatabase: {} as never,
+      sessionQueries: { readSession: vi.fn() } as never,
       remoteContext: { source: 'wechat', messageId: 'message-approved', userId: 'wx-user', confirmPolicy: 'always' }
     })
 

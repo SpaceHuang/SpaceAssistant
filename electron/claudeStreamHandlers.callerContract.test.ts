@@ -94,7 +94,7 @@ vi.mock('./chatCancelRegistry', () => ({
 }))
 
 import { ipcMain } from 'electron'
-import { registerClaudeStreamHandlers } from './claudeStreamHandlers'
+import { registerClaudeStreamHandlers } from './testSupport/claudeStreamHandlers'
 
 function makeSender(): WebContents {
   return { send: vi.fn(), isDestroyed: vi.fn(() => false) } as unknown as WebContents

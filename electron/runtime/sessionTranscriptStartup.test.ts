@@ -5,9 +5,10 @@ import { getDbConnection } from '../database/sqliteStore'
 import { claimSessionExecution, commitSessionTranscript, markSessionExecutionStarted, markSessionExecutionUncertain, readSessionTranscript } from '../database/sessionTranscript'
 import { getPersistedTurn, listPersistedTurns } from '../database/operations'
 import { openDatabase } from '../database'
-import { createTurnCoordinatorStorage } from '../turnCoordinatorStorage'
+import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
 import { TurnRuntime } from '../turnRuntime'
-import { hasUnfinishedStartupProjections, reconcileStartupSessionTranscripts, recoverTurnCoordinatorForStartup, restorePersistedTurnSnapshotsForStartup } from './sessionTranscriptStartup'
+import { hasUnfinishedStartupProjections, recoverTurnCoordinatorForStartup, restorePersistedTurnSnapshotsForStartup } from '../sessionStorage/recoveryHelpers'
+import { reconcileStartupSessionTranscripts } from '../sessionStorage/recovery'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 
 function createUncertainCommittedSession() {

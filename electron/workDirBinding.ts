@@ -1,6 +1,5 @@
 import type { WorkDirProfile } from '../src/shared/feishuTypes'
-import type { AppDatabase } from './database'
-import { getSession, updateSession } from './database'
+import type { SessionCommands, SessionQueries } from './sessionStorage/contracts'
 import { isRequestLeaseOwner } from './remote/remoteAgentRegistry'
 import { REMOTE_WORKDIR_SWITCH_BUSY_MESSAGE } from './remote/remoteSessionGuardMessages'
 import type { WorkDirManager } from './workDirManager'
@@ -91,7 +90,7 @@ export async function writeWorkDirSwitchAudit(
 }
 
 export function canBindSessionWorkDir(
-  db: AppDatabase,
+  sessionQueries: SessionQueries,
   sessionId: string,
   profileId: string,
   source: 'inbound' | 'tool',
@@ -101,7 +100,7 @@ export function canBindSessionWorkDir(
     return { allowed: true }
   }
 
-  const session = getSession(db, sessionId)
+  const session = sessionQueries.readSession(sessionId)
   if (!session) {
     return { allowed: false, error: '会话不存在' }
   }
@@ -120,16 +119,17 @@ export function canBindSessionWorkDir(
 }
 
 export async function bindSessionWorkDir(
-  db: AppDatabase,
+  sessionQueries: SessionQueries,
+  sessionCommands: Pick<SessionCommands, 'updateSettings'>,
   workDirManager: WorkDirManager,
   params: BindSessionWorkDirParams
 ): Promise<BindSessionWorkDirResult> {
-  const session = getSession(db, params.sessionId)
+  const session = sessionQueries.readSession(params.sessionId)
   if (!session) {
     return { success: false, error: '会话不存在' }
   }
 
-  const guard = canBindSessionWorkDir(db, params.sessionId, params.profileId, params.source, params.requestId)
+  const guard = canBindSessionWorkDir(sessionQueries, params.sessionId, params.profileId, params.source, params.requestId)
   if (!guard.allowed) {
     return { success: false, error: guard.error }
   }
@@ -153,7 +153,7 @@ export async function bindSessionWorkDir(
     return { success: true, changed: false }
   }
 
-  updateSession(db, params.sessionId, { workDirProfileId: params.profileId })
+  sessionCommands.updateSettings({ sessionId: params.sessionId, workDirProfileId: params.profileId })
 
   const auditWriter = params.appendAudit ?? params.remoteContext.appendWorkDirSwitchAudit
   if (auditWriter) {

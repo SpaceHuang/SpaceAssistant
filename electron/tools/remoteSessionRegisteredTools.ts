@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto'
-import { getSession } from '../database'
 import { definePlannedTool, type RegisteredTool, type ToolExecutionContext } from './plannedToolRegistry'
 import type { ToolExecutionContext as RuntimeExecutionContext, ToolExecutor, ToolExecutorResult } from './types'
 
@@ -28,7 +27,7 @@ function sessionSwitchSnapshot(input: Record<string, unknown>, runtime: RuntimeE
     originSessionId: remote?.originSessionId
   }
   const targetId = typeof input.session_id === 'string' ? input.session_id.trim() : ''
-  const targetSession = targetId && runtime.appDatabase ? getSession(runtime.appDatabase, targetId) : undefined
+  const targetSession = targetId && runtime.sessionQueries ? runtime.sessionQueries.readSession(targetId) : undefined
   if (!targetSession) return { caller, target: null }
   const metadata = targetSession.metadata as Record<string, unknown>
   const wechatMeta = metadata?.wechatMeta as Record<string, unknown> | undefined

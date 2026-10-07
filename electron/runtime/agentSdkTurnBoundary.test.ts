@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createAgentSdkPreflightAdapter, createAgentSdkTurnBoundaryAdapter } from './agentSdkTurnBoundary'
+import { createAgentSdkPreflightAdapter, createAgentSdkBoundaryReplacementAdapter } from './agentSdkContextReplacement'
 
 const required = { id: 'user-current', message: { role: 'user' as const, content: 'current question' } }
 const base = {
@@ -27,7 +27,7 @@ describe('Agent SDK turn boundary host adapter', () => {
 
   it('passes only a complete SDK boundary envelope to the legacy compaction adapter', async () => {
     const compact = vi.fn(async () => undefined)
-    const boundary = createAgentSdkTurnBoundaryAdapter({ compact })
+    const boundary = createAgentSdkBoundaryReplacementAdapter({ compact })
     const requestProjection = {
       requestId: 'inv:round:1', windowId: 'window-1', system: 'system', tools: [],
       surfaceSnapshot: { schemaVersion: 1, fingerprint: 'surface', systemFingerprint: 'system', toolsFingerprint: 'tools', surfaceTokens: 9, systemTokens: 2, toolsTokens: 1, messageTokens: 6 },
@@ -45,7 +45,7 @@ describe('Agent SDK turn boundary host adapter', () => {
 
   it('does not ask legacy compaction to rewrite a transcript with pending tool proposals', async () => {
     const compact = vi.fn(async () => ({ messages: [{ role: 'user' as const, content: 'summary' }] }))
-    const boundary = createAgentSdkTurnBoundaryAdapter({ compact })
+    const boundary = createAgentSdkBoundaryReplacementAdapter({ compact })
     const result = await boundary({ ...base, toolCalls: [{ invocationId: 'inv', toolCallId: 'tc1', toolName: 'write', input: { path: 'a' } }] })
     expect(result).toBeUndefined()
     expect(compact).not.toHaveBeenCalled()
@@ -53,14 +53,14 @@ describe('Agent SDK turn boundary host adapter', () => {
 
   it('refuses a compaction result that omits the exact required current user message', async () => {
     const compact = vi.fn(async () => ({ messages: [{ role: 'user' as const, content: 'summary' }] }))
-    const boundary = createAgentSdkTurnBoundaryAdapter({ compact })
+    const boundary = createAgentSdkBoundaryReplacementAdapter({ compact })
     await expect(boundary(base)).resolves.toBeUndefined()
     expect(compact).toHaveBeenCalledOnce()
   })
 
   it('fails closed when current-user identity is supplied without its canonical message binding', async () => {
     const compact = vi.fn(async () => ({ messages: [{ role: 'assistant' as const, content: 'summary' }] }))
-    const boundary = createAgentSdkTurnBoundaryAdapter({ compact })
+    const boundary = createAgentSdkBoundaryReplacementAdapter({ compact })
     const result = await boundary({ ...base, requiredUserMessage: undefined })
     expect(result).toBeUndefined()
     expect(compact).not.toHaveBeenCalled()
@@ -68,7 +68,16 @@ describe('Agent SDK turn boundary host adapter', () => {
 
   it('returns a safe compacted transcript when the current user message is retained exactly', async () => {
     const compacted = { messages: [required.message, { role: 'assistant' as const, content: 'summary' }] }
-    const boundary = createAgentSdkTurnBoundaryAdapter({ compact: async () => compacted })
+    const boundary = createAgentSdkBoundaryReplacementAdapter({ compact: async () => compacted })
     await expect(boundary(base)).resolves.toEqual(compacted)
+  })
+
+  it('exposes only a calculation result from the planner and leaves persistence to ContextPort', async () => {
+    const compacted = { messages: [required.message, { role: 'assistant' as const, content: 'summary' }] }
+    const boundary = createAgentSdkBoundaryReplacementAdapter({ compact: async () => compacted })
+    const result = await boundary(base)
+    expect(result).toEqual(compacted)
+    expect(result).not.toHaveProperty('commitProjection')
+    expect(result).not.toHaveProperty('historyPayload')
   })
 })

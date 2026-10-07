@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { computeEffectiveTools } from './effectiveTools'
-import { assembleInvocation } from './runtime/invocationAssembler'
+import { assembleInvocation } from './testSupport/invocationAssembler'
 import { DEFAULT_TOOLS_CONFIG } from '../src/shared/domainTypes'
 
 /**

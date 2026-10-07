@@ -14,6 +14,7 @@ vi.mock('./anthropicClientFactory', () => ({
 import { SESSION_META_TITLE_GENERATED, scheduleSessionTitleSuggestion } from './sessionTitleSuggest'
 import { createMemoryAppDb } from './database/testHelpers'
 import { createSession } from './database'
+import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 
 describe('sessionTitleSuggest 出口化（偏差 1 评审 N1）', () => {
   beforeEach(() => {
@@ -36,6 +37,7 @@ describe('sessionTitleSuggest 出口化（偏差 1 评审 N1）', () => {
     const onTitleGenerated = vi.fn()
     scheduleSessionTitleSuggestion({
       db,
+      sessionStorage: createSqliteSessionStorage(db),
       sessionId,
       model: 'claude-sonnet-4-20250514',
       messagesForApi: [
@@ -65,6 +67,7 @@ describe('sessionTitleSuggest 出口化（偏差 1 评审 N1）', () => {
     expect(() =>
       scheduleSessionTitleSuggestion({
         db,
+        sessionStorage: createSqliteSessionStorage(db),
         sessionId,
         model: 'claude-sonnet-4-20250514',
         messagesForApi: [

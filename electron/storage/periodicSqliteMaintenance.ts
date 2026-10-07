@@ -19,11 +19,18 @@ export function runPeriodicSqliteMaintenance(db: AppDatabase): PeriodicSqliteMai
 export function schedulePeriodicSqliteMaintenance(
   db: AppDatabase,
   options: { intervalMs?: number; onResult?: (result: PeriodicSqliteMaintenanceResult | 'failed') => void } = {}
-): () => void {
+): (() => void) & { quiesce(): Promise<void> } {
+  let running = false
+  let resolveIdle: (() => void) | undefined
   const timer = setInterval(() => {
+    if (running) return
+    running = true
     try { options.onResult?.(runPeriodicSqliteMaintenance(db)) }
     catch { options.onResult?.('failed') }
+    finally { running = false; resolveIdle?.(); resolveIdle = undefined }
   }, options.intervalMs ?? 15 * 60 * 1000)
   timer.unref?.()
-  return () => clearInterval(timer)
+  const stop = (() => clearInterval(timer)) as (() => void) & { quiesce(): Promise<void> }
+  stop.quiesce = async () => { if (running) await new Promise<void>((resolve) => { resolveIdle = resolve }) }
+  return stop
 }

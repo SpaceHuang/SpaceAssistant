@@ -4,6 +4,7 @@ import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createSession, openDatabase, updateSession } from './database'
 import { buildResolveWorkDirCallback, createWorkDirManager } from './workDirManager'
+import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 
 function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sa-tcl-wd-'))
@@ -44,7 +45,12 @@ describe('toolChatLoop dynamic workDir contract', () => {
     const b = manager.addProfile({ name: 'B', path: dirB })
     const session = createSession(db, { name: 'S1', workDirProfileId: a.profile!.id })
 
-    const resolveWorkDir = buildResolveWorkDirCallback(db, session.id, manager, dirA)
+    const resolveWorkDir = buildResolveWorkDirCallback(
+      createSqliteSessionStorage(db).queries,
+      session.id,
+      manager,
+      dirA
+    )
     expect(resolveWorkDir()).toBe(dirA)
 
     // Simulates switch_work_dir updating binding before next tool iteration

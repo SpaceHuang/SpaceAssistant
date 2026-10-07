@@ -6,13 +6,12 @@ import { buildClaudeToolChatMessages } from '../src/shared/claudeToolHistory'
 import type { Message, Session } from '../src/shared/domainTypes'
 import type { AppLocale } from '../src/shared/locale'
 import { SESSION_TITLE_MAX_LENGTH } from '../src/shared/sessionDisplay'
-import { updateSession, getSession, getMessages, type AppDatabase } from './database'
+import { type AppDatabase } from './database'
+import type { SessionQueries, SessionCommands } from './sessionStorage/contracts'
 import { logHistoryOversizedToolResult } from './oversizedToolResultLog'
 
-export const SESSION_META_TITLE_GENERATED = 'titleGenerated'
-export const SESSION_META_TITLE_USER_CUSTOM = 'titleUserCustom'
-/** 老会话「打开补标题」成功完成；失败时移除以便后续重试。 */
-export const SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED = 'titleOpenBackfillAttempted'
+export { SESSION_META_TITLE_GENERATED, SESSION_META_TITLE_USER_CUSTOM, SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED } from './sessionMetadataKeys'
+import { SESSION_META_TITLE_GENERATED, SESSION_META_TITLE_USER_CUSTOM, SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED } from './sessionMetadataKeys'
 
 /** user + assistant 可见消息累计达到该数量后尝试生成标题。 */
 export const TITLE_SUGGEST_TRIGGER_AT_MESSAGE_COUNT = 3
@@ -108,6 +107,7 @@ function normalizeSuggestedTitle(raw: string): string {
 
 export function scheduleSessionTitleSuggestion(args: {
   db: AppDatabase
+  sessionStorage: Pick<import('./sessionStorage/contracts').SessionStorage, 'queries' | 'commands'>
   /** 标题落库完成后的界面通知出口；不传即 no-op（落库照常）。 */
   onTitleGenerated?: (session: Session) => void
   sessionId: string
@@ -117,9 +117,12 @@ export function scheduleSessionTitleSuggestion(args: {
   getApiKey: () => Promise<string | null>
 }): Promise<boolean> {
   const { db, onTitleGenerated, sessionId, model, baseUrl, messagesForApi, getApiKey } = args
+  const storage = args.sessionStorage
+  const sessionQueries: SessionQueries = storage.queries
+  const sessionCommands: SessionCommands = storage.commands
   const locale = readAppLocale(db)
 
-  const cur = getSession(db, sessionId)
+  const cur = sessionQueries.readSession(sessionId)
   if (!cur) return Promise.resolve(false)
   if (cur.metadata?.[SESSION_META_TITLE_GENERATED] === true) return Promise.resolve(false)
   if (cur.metadata?.[SESSION_META_TITLE_USER_CUSTOM] === true) return Promise.resolve(false)
@@ -135,7 +138,7 @@ const dialogue = buildTitleSuggestDialogueText(messagesForApi, TITLE_SUGGEST_MAX
       const apiKey = await getApiKey()
       if (!apiKey) return false
 
-      const fresh = getSession(db, sessionId)
+      const fresh = sessionQueries.readSession(sessionId)
       if (!fresh) return false
       if (fresh.metadata?.[SESSION_META_TITLE_GENERATED] === true) return false
       if (fresh.metadata?.[SESSION_META_TITLE_USER_CUSTOM] === true) return false
@@ -170,15 +173,12 @@ const dialogue = buildTitleSuggestDialogueText(messagesForApi, TITLE_SUGGEST_MAX
 
       if (!title) return false
 
-      const again = getSession(db, sessionId)
+      const again = sessionQueries.readSession(sessionId)
       if (!again) return false
       if (again.metadata?.[SESSION_META_TITLE_GENERATED] === true) return false
       if (again.metadata?.[SESSION_META_TITLE_USER_CUSTOM] === true) return false
 
-      const updated = updateSession(db, sessionId, {
-        name: title,
-        metadata: { ...again.metadata, [SESSION_META_TITLE_GENERATED]: true }
-      })
+      const updated = sessionCommands.applyGeneratedTitle(sessionId, title)
       if (updated) {
         onTitleGenerated?.(updated)
         return true
@@ -200,22 +200,26 @@ const dialogue = buildTitleSuggestDialogueText(messagesForApi, TITLE_SUGGEST_MAX
  */
 export function scheduleSessionTitleOpenBackfillIfNeeded(args: {
   db: AppDatabase
+  sessionStorage: Pick<import('./sessionStorage/contracts').SessionStorage, 'queries' | 'commands'>
   onTitleGenerated?: (session: Session) => void
   sessionId: string
   baseUrl?: string
   getApiKey: () => Promise<string | null>
 }): Session | undefined {
   const { db, onTitleGenerated, sessionId, baseUrl, getApiKey } = args
+  const storage = args.sessionStorage
+  const sessionQueries = storage.queries
+  const sessionCommands = storage.commands
   const locale = readAppLocale(db)
 
-  const session = getSession(db, sessionId)
+  const session = sessionQueries.readSession(sessionId)
   if (!session) return undefined
   if (session.metadata?.[SESSION_META_TITLE_GENERATED] === true) return undefined
   if (session.metadata?.[SESSION_META_TITLE_USER_CUSTOM] === true) return undefined
   if (session.metadata?.[SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED] === true) return undefined
   if (inFlightSessionIds.has(sessionId)) return undefined
 
-  const rowMessages = getMessages(db, sessionId, 10_000, 0)
+  const rowMessages = sessionQueries.readMessages({ sessionId, limit: 10_000, offset: 0 })
   const convo = buildClaudeToolChatMessages(rowMessages.filter((message) => message.status !== 'streaming'), {
     onOversizedToolResult: (info) => {
       logHistoryOversizedToolResult({
@@ -237,13 +241,12 @@ export function scheduleSessionTitleOpenBackfillIfNeeded(args: {
   const dialogue = buildTitleSuggestDialogueText(messagesForApi, TITLE_SUGGEST_MAX_MESSAGES, locale)
   if (!dialogue.trim()) return undefined
 
-  const metaNext: Record<string, unknown> = { ...session.metadata, [SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED]: true }
-
-  const marked = updateSession(db, sessionId, { metadata: metaNext })
+  const marked = sessionCommands.updateTitleSuggestionState(sessionId, { backfillAttempted: true })
   if (!marked) return undefined
 
   void scheduleSessionTitleSuggestion({
     db,
+    sessionStorage: storage,
     onTitleGenerated,
     sessionId,
     model: session.model,
@@ -252,12 +255,10 @@ export function scheduleSessionTitleOpenBackfillIfNeeded(args: {
     getApiKey
   }).then((succeeded) => {
     if (succeeded) return
-    const latest = getSession(db, sessionId)
+    const latest = sessionQueries.readSession(sessionId)
     if (!latest || latest.metadata?.[SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED] !== true) return
-    const metadata = { ...latest.metadata }
-    delete metadata[SESSION_META_TITLE_OPEN_BACKFILL_ATTEMPTED]
-    updateSession(db, sessionId, { metadata })
+    sessionCommands.updateTitleSuggestionState(sessionId, { backfillAttempted: false })
   })
 
-  return getSession(db, sessionId)
+  return sessionQueries.readSession(sessionId)
 }

@@ -62,7 +62,7 @@ describe('feishuProgressAdapter', () => {
       messageId: 'm1',
       sessionId: 's1',
       config: { enabled: true } as never,
-      db: {} as never
+      sessionCommands: {} as never
     })
     expect(adapter.channel).toBe('feishu')
     expect(adapter.sendTyping).toBeUndefined()
@@ -79,7 +79,7 @@ describe('weChatProgressAdapter', () => {
       inboundRaw: {} as never,
       getSessionId: () => 's1',
       config: { enabled: true } as never,
-      db: {} as never
+      sessionCommands: {} as never
     })
     expect(adapter.channel).toBe('wechat')
     expect(adapter.sendTyping).toEqual(expect.any(Function))

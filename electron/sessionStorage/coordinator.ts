@@ -1,5 +1,5 @@
-import type { Message } from '../src/shared/domainTypes'
-import type { PersistedMessage, TurnStorage, TurnStarted } from '../src/shared/turnCoordinator'
+import type { Message } from '../../src/shared/domainTypes'
+import type { PersistedMessage, TurnStorage, TurnStarted } from '../../src/shared/turnCoordinator'
 import {
   appendMessage,
   appendMessagesAtomically,
@@ -18,13 +18,13 @@ import {
   ,checkpointTurnAtomically
   ,claimQueuedTurnAtomically
   ,recoverPersistedTurn
-} from './database'
-import type { AppDatabase } from './database'
-import { getDbConnection } from './database'
-import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
-import { HistoryCorruptionError } from '../packages/agent-sdk/src/history'
-import { decodeTerminalOutcome } from './runtime/terminalOutcome'
-import { getProjectedMessage } from './runtime/sessionTranscriptProjection'
+} from '../database'
+import type { AppDatabase } from '../database'
+import { getDbConnection } from '../database'
+import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
+import { HistoryCorruptionError } from '../../packages/agent-sdk/src/history'
+import { decodeTerminalOutcome } from '../runtime/terminalOutcome'
+import { getProjectedMessage } from '../runtime/sessionTranscriptProjection'
 
 /** 将 coordinator 的持久化端口绑定到 SQLite；requestId 幂等必须跨进程重启由 turns 表保证。 */
 export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
@@ -58,7 +58,13 @@ export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
     getMessage: (messageId) => getProjectedMessage(db, messageId),
     append: (message) => appendMessage(db, message),
     appendMany: (messages) => appendMessagesAtomically(db, messages),
-    prepareAtomic: (input) => prepareTurnAtomically(db, input),
+  prepareAtomic: (input) => {
+    const { acceptance, ...prepareInput } = input
+    return prepareTurnAtomically(db, {
+      ...prepareInput,
+      ...(acceptance ? { acceptance } : {})
+    })
+  },
     claimQueuedAtomic: (input) => claimQueuedTurnAtomically(db, input),
     update: (messageId, patch) => updateMessageContent(db, messageId, patch),
     updateIfStreaming: (messageId, patch) => updateMessageContentIfStreaming(db, messageId, patch),

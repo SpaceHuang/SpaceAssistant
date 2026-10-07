@@ -56,11 +56,11 @@ function createMockMainWindow(overrides: Partial<{
   } as any
 }
 
-function createManager(mainWin: any = createMockMainWindow()) {
+function createManager(mainWin: any = createMockMainWindow(), sessionQueries: { readSession: ReturnType<typeof vi.fn> } = { readSession: vi.fn(() => ({ id: 's1', name: '测试会话' })) }) {
   return new FloatingNotificationManager(
     () => mainWin,
     '/fake/mainDirname',
-    {} as any
+    sessionQueries as any
   )
 }
 
@@ -85,6 +85,15 @@ describe('FloatingNotificationManager', () => {
   })
 
   describe('evaluate - show notification', () => {
+    it('通过注入的 SessionQueries 解析展示用会话名', () => {
+      const readSession = vi.fn(() => ({ id: 'session-1', name: '查询端口会话' }))
+      const manager = createManager(createMockMainWindow(), { readSession })
+
+      manager.onConfirmRequest(TEST_ENTRY)
+
+      expect(readSession).toHaveBeenCalledWith('session-1')
+    })
+
     it('should show notification when window is hidden and pending items exist', () => {
       const mainWin = createMockMainWindow({ isVisible: false })
       const manager = createManager(mainWin)

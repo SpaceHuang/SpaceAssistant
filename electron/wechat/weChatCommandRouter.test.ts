@@ -11,7 +11,8 @@ import fsSync from 'fs'
 import os from 'os'
 import path from 'path'
 import { openDatabase, createSession, setConfigValue, getPersistedTurn } from '../database'
-import { createTurnCoordinatorStorage } from '../turnCoordinatorStorage'
+import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { TurnRuntime } from '../turnRuntime'
 import {
   resetRunningRemoteAgentRegistryForTests,
@@ -136,6 +137,7 @@ describe('WeChatCommandRouter', () => {
 
     router = new WeChatCommandRouter({
       db,
+      sessionStorage: createSqliteSessionStorage(db),
       turnRuntime: testTurnRuntime,
       botService: {
         getBot: () => ({ reply, sendTyping: vi.fn(), stopTyping: vi.fn() }),
@@ -209,7 +211,8 @@ describe('WeChatCommandRouter', () => {
     let turnSequence = 0
     const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `wechat-chain-${++turnSequence}` } })
     router = new WeChatCommandRouter({
-      db, turnRuntime: runtime,
+      db,
+      sessionStorage: createSqliteSessionStorage(db), turnRuntime: runtime,
       botService: {
         getBot: () => ({ reply, sendTyping: vi.fn(), stopTyping: vi.fn() }),
         getRawBot: () => null
@@ -269,6 +272,7 @@ describe('WeChatCommandRouter', () => {
     const raw = makeIncomingMessage({ userId: 'blocked@test' })
     const r2 = new WeChatCommandRouter({
       db,
+      sessionStorage: createSqliteSessionStorage(db),
       turnRuntime: testTurnRuntime,
       botService: {
         getBot: () => ({ reply, sendTyping: vi.fn(), stopTyping: vi.fn() }),
@@ -308,6 +312,7 @@ describe('WeChatCommandRouter', () => {
     const raw = makeIncomingMessage({ userId: 'anyone@test' })
     const r2 = new WeChatCommandRouter({
       db,
+      sessionStorage: createSqliteSessionStorage(db),
       turnRuntime: testTurnRuntime,
       botService: {
         getBot: () => ({ reply, sendTyping: vi.fn(), stopTyping: vi.fn() }),
@@ -378,6 +383,7 @@ describe('WeChatCommandRouter', () => {
 
     const r2 = new WeChatCommandRouter({
       db,
+      sessionStorage: createSqliteSessionStorage(db),
       turnRuntime: testTurnRuntime,
       botService: {
         getBot: () => ({ reply, sendTyping: vi.fn(), stopTyping: vi.fn() }),
@@ -434,6 +440,7 @@ describe('WeChatCommandRouter', () => {
     // 途被 audit 拦住的场景即可，audit 即 :135 的 append。
     const r2 = new WeChatCommandRouter({
       db,
+      sessionStorage: createSqliteSessionStorage(db),
       turnRuntime: testTurnRuntime,
       botService: {
         getBot: () => ({ reply: vi.fn(async () => undefined), sendTyping: vi.fn(), stopTyping: vi.fn() }),

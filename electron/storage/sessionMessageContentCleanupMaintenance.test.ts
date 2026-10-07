@@ -5,7 +5,7 @@ import { openDatabase } from '../database'
 import { DB_SCHEMA_VERSION } from '../database/schema'
 import { getDbConnection } from '../database/sqliteStore'
 import { enableCanonicalSessionWriteAuthority } from '../runtime/sessionContentWriteAuthority'
-import { certifyCanonicalSessionApiRead } from '../runtime/sessionStorageCutover'
+import { certifyCanonicalSessionApiRead } from '../sessionStorage/certification'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { createSessionStorageCleanupProductionBoundary } from '../runtime/sessionStorageCleanupProduction'
 import {

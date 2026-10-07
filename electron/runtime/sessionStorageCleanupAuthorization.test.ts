@@ -4,7 +4,7 @@ import { createTempDatabase } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { enableCanonicalSessionWriteAuthority } from './sessionContentWriteAuthority'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
-import { certifyCanonicalSessionApiRead } from './sessionStorageCutover'
+import { certifyCanonicalSessionApiRead } from '../sessionStorage/certification'
 import {
   approveSessionStorageCleanupScope,
   createSessionStorageCleanupScopeProposal,

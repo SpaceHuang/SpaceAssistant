@@ -13,7 +13,7 @@ import { createAgentSdkSafetyPolicy } from '../confirmation/agentSdkSafetyPolicy
 import { createAgentSdkConfirmationPort } from '../confirmation/agentSdkConfirmationPort'
 import type { ToolCallGateResult } from '../confirmation/toolCallGate'
 import { createHostedAgentTurnHost } from './hostedAgentTurnHost'
-import { assembleInvocation } from './invocationAssembler'
+import { assembleInvocation } from '../testSupport/invocationAssembler'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { createAgentSdkOutputRecovery } from './agentSdkOutputRecovery'
 import { createAgentSdkUsageRecorder, createAgentSdkUsageSessionEvent } from './agentSdkUsageRecorder'
@@ -60,7 +60,7 @@ function baseDependencies() {
     toolExecution: { execute: vi.fn() },
     recordProviderAttemptUsage: vi.fn(),
     recoverProviderAttempt: vi.fn(async () => undefined),
-    turnBoundary: vi.fn(async () => undefined),
+    planContextReplacement: vi.fn(async () => undefined),
     resourceLocks: { acquire: vi.fn(async () => ({ release: vi.fn() })) },
     toolResourceKeys: vi.fn(() => [] as readonly string[]),
     isApprovalCandidate: vi.fn(() => true),
@@ -83,7 +83,7 @@ describe('Desktop Hosted AgentTurnHost composition', () => {
     expect(ports.toolExecution).toBe(deps.toolExecution)
     expect(ports.recordProviderAttemptUsage).toBe(deps.recordProviderAttemptUsage)
     expect(ports.recoverProviderAttempt).toBe(deps.recoverProviderAttempt)
-    expect(ports.turnBoundary).toBe(deps.turnBoundary)
+    expect(ports.planContextReplacement).toBe(deps.planContextReplacement)
     expect(ports.resourceLocks).toBe(deps.resourceLocks)
     expect(ports.toolResourceKeys).toBe(deps.toolResourceKeys)
     expect(ports.isApprovalCandidate).toBe(deps.isApprovalCandidate)

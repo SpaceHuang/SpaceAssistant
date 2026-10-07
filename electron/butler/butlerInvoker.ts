@@ -1,5 +1,5 @@
 import type { AppDatabase } from '../database'
-import { getMessages, getConfigValue, getSession, createSession, getPersistedTurn } from '../database'
+import { getConfigValue } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
 import { assembleInvocation } from '../runtime/invocationAssembler'
 import type { BrowserConfig, ShellConfig, ToolsConfig, ModelEntry } from '../../src/shared/domainTypes'
@@ -24,12 +24,10 @@ import { requireInvocationAnthropicRoute } from '../runtime/invocationProviderRo
 import { createHostedTurnHandoff } from '../runtime/hostedTurnHandoff'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { HostedTurnFinalizedError, hostedTerminalSessionEventReason } from '../runtime/hostedTurnFinalization'
-import { loadAcceptedTurnMessages } from '../runtime/acceptedTurnContext'
-import { getProjectedMessages } from '../runtime/sessionTranscriptProjection'
 import { createAcceptedTurnFromPrepared } from '../runtime/acceptedTurnContext'
 import { validateTaskWorkDir } from './taskConfigValidation'
 import { resolveGlobalThinkingEffort } from '../../src/shared/thinkingEffort'
-import { getConfigValue as readConfigValue, getSession as readSession } from '../database'
+import { getConfigValue as readConfigValue } from '../database'
 import type { AutomationTaskRunConfigSnapshot } from '../../src/shared/automationTaskTypes'
 
 /**
@@ -53,6 +51,7 @@ export { APPROVAL_TASK_DIGEST_MAX_CHARS, buildApprovalTaskDigest }
 
 export type ButlerInvokerDeps = {
   db: AppDatabase
+  sessionStorage?: import('../sessionStorage/contracts').SessionStorage
   turnRuntime?: TurnRuntime
   getWorkDir: () => string
   getUserDataPath: () => string
@@ -106,6 +105,8 @@ function extractTextFromContent(content: unknown[]): string {
 /** 执行一次管家任务（手动触发入口；调度器复用同一函数）。run 行先抢占（幂等），再准入，再执行。 */
 export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, request: ButlerRunRequest): Promise<ButlerRunOutcome> {
   const db = deps.db
+  const sessionStorage = deps.sessionStorage
+  if (!sessionStorage) return { ok: false, error: 'SESSION_STORAGE_REQUIRED' }
   let task = getAutomationTask(db, taskId)
   if (!task) return { ok: false, error: `任务不存在：${taskId}` }
   if (!deps.turnRuntime) return { ok: false, error: 'BUTLER_TURN_RUNTIME_REQUIRED' }
@@ -202,7 +203,7 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
     updateAutomationTaskRun(db, runId, { status: 'running' })
 
     // 会话创建（归属强制声明）+ 受信执行配置 + turn prepare
-    const session = createSession(db, {
+    const session = sessionStorage.commands.createSession({
       name: `管家 · ${task.prompt.slice(0, 24)}`,
       model: providerModelName,
       llmServiceId: serviceId,
@@ -223,7 +224,7 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
     visibility: 'section',
     ...(session.workDirProfileId ? { workDirProfileId: session.workDirProfileId } : {})
     })
-    const executionConfig = await resolvePinnedAutomationTurnExecutionConfig(db, sessionId, configSnapshot)
+    const executionConfig = await resolvePinnedAutomationTurnExecutionConfig(db, sessionStorage.queries, sessionId, configSnapshot)
     const prepared = deps.turnRuntime.prepare({
       mode: 'create-user',
       requestId,
@@ -231,7 +232,7 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
       input: { text: task.prompt },
       config: executionConfig
     })
-    const acceptedTurn = createAcceptedTurnFromPrepared(db, prepared, 'automation', executionConfig ?? { lane: 'automation' })
+    const acceptedTurn = createAcceptedTurnFromPrepared(prepared, 'automation', executionConfig ?? { lane: 'automation' }, sessionStorage.execution)
     deps.turnRuntime.bindRequest(requestId, prepared.turnId)
 
     const turn = await executeRemoteTurn({
@@ -240,6 +241,7 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
       requestId,
       run: () =>
         runButlerModelTurn(deps, {
+          sessionStorage,
           sessionId,
           requestId,
           turnId: prepared.turnId,
@@ -300,24 +302,25 @@ export async function runButlerTask(deps: ButlerInvokerDeps, taskId: string, req
 
 async function runButlerModelTurn(
   deps: ButlerInvokerDeps,
-  args: { sessionId: string; requestId: string; turnId?: string; acceptedTurn: import('../../src/shared/acceptedTurn').AcceptedTurn; llmServiceId?: string; taskPrompt: string; currentUserMessageId?: string; assistantMessageId?: string; runConfig: AutomationTaskRunConfigSnapshot & { model: ModelEntry } }
+  args: { sessionStorage: import('../sessionStorage/contracts').SessionStorage; sessionId: string; requestId: string; turnId?: string; acceptedTurn: import('../../src/shared/acceptedTurn').AcceptedTurn; llmServiceId?: string; taskPrompt: string; currentUserMessageId?: string; assistantMessageId?: string; runConfig: AutomationTaskRunConfigSnapshot & { model: ModelEntry } }
 ): Promise<ButlerTurnResult> {
   const db = deps.db
-  const session = getSession(db, args.sessionId)
+  const sessionStorage = args.sessionStorage
+  const session = sessionStorage.queries.readSession(args.sessionId)
   if (!session) return { ok: false, error: 'BUTLER_SESSION_MISSING' }
 
   const toolsConfig = deps.getToolsConfig()
-  let rawMessages: ReturnType<typeof getMessages>
+  let rawMessages: import('../../src/shared/domainTypes').Message[]
   if (args.turnId) {
-    const persisted = getPersistedTurn(db, args.turnId)
+    const persisted = sessionStorage.execution.readTurn({ sessionId: args.sessionId, turnId: args.turnId })
     if (!persisted || persisted.sessionId !== args.sessionId || persisted.requestId !== args.requestId ||
       !persisted.userMessageId || persisted.userMessageId !== args.currentUserMessageId) {
       throw new Error('TURN_EXECUTION_CREDENTIALS_INVALID')
     }
     if (persisted.state === 'configuring') throw new Error('TURN_EXECUTION_CONFIGURING')
-    rawMessages = loadAcceptedTurnMessages(db, persisted)
+    rawMessages = sessionStorage.execution.loadAcceptedMessages({ sessionId: args.sessionId, turnId: args.turnId })
   } else {
-    rawMessages = getProjectedMessages(db, args.sessionId)
+    rawMessages = sessionStorage.queries.readMessages({ sessionId: args.sessionId })
   }
   const built = buildClaudeToolChatMessages(rawMessages, {
     workspaceRoot: args.runConfig.workDir!,
@@ -406,6 +409,8 @@ async function runButlerModelTurn(
     userDataDir: deps.getUserDataPath(),
     getApiKey: creds.getApiKey,
     appDb: db,
+    sessionStorage,
+    historyForSession: (sessionId: string) => sessionStorage.execution.historyFor({ sessionId }),
     locale: readAppLocale(db),
     assistantMessageId: args.assistantMessageId,
     sessionEventLocation: { workDir: args.runConfig.workDir!, sessionId: args.sessionId, createdAt: session.createdAt },
@@ -418,7 +423,7 @@ async function runButlerModelTurn(
   let res: Awaited<ReturnType<typeof runToolChatSession>> | undefined
   try {
     res = await runToolChatSession(invocation, ports, {
-      onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: ports.history!, invocationId: hostedTurnId, turnId: hostedTurnId, acceptedTurn: args.acceptedTurn, sessionDb: db, routeId: providerRouteId, sessionId: args.sessionId, maxToolRounds: invocation.limits.maxToolRounds })
+      onHostedTurnHandoff: createHostedTurnHandoff({ agentSdk, history: ports.history!, invocationId: hostedTurnId, turnId: hostedTurnId, acceptedTurn: args.acceptedTurn, sessionQueries: sessionStorage.queries, sessionExecution: sessionStorage.execution, routeId: providerRouteId, sessionId: args.sessionId, maxToolRounds: invocation.limits.maxToolRounds })
     })
     reason = res.ok ? 'completed' : res.cancelled ? 'cancelled' : 'failed'
   } catch (error) {

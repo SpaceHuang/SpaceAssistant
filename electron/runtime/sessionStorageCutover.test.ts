@@ -8,9 +8,9 @@ import { getDbConnection } from '../database/sqliteStore'
 import { runSourceTruthSpillGcMaintenance } from '../storage/spillStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { certifyCanonicalSessionApiRead, isCanonicalApiReadFenceCurrent, readCanonicalApiContextIfEligible,
-  beginSessionMessageContentCleanup, clearNextSessionMessageContentBatch, markSessionMessageContentWriteStopped,
-  verifyAndCompleteSessionMessageContentCleanup, readCanonicalTurnRoutingInputIfEligible,
-  readCanonicalTurnRoutingInputWithFenceIfEligible, setCanonicalApiReadFeatureEnabled } from './sessionStorageCutover'
+  readCanonicalTurnRoutingInputIfEligible, readCanonicalTurnRoutingInputWithFenceIfEligible, setCanonicalApiReadFeatureEnabled } from '../sessionStorage/certification'
+import { beginSessionMessageContentCleanup, clearNextSessionMessageContentBatch, markSessionMessageContentWriteStopped,
+  verifyAndCompleteSessionMessageContentCleanup } from '../sessionStorage/maintenance'
 
 async function writeCanonicalMessages(db: ReturnType<typeof createMemoryAppDb>, sessionId: string,
   messages: Array<{ id: string; role: 'user' | 'assistant'; content: string; timestamp: number }>): Promise<void> {

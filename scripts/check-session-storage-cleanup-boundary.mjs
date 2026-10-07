@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const sourceRoot = path.join(root, 'electron')
 const allowedFiles = new Set([
-  path.join(sourceRoot, 'runtime', 'sessionStorageCutover.ts'),
+  path.join(sourceRoot, 'sessionStorage', 'internal', 'sqliteCleanup.ts'),
+  path.join(sourceRoot, 'sessionStorage', 'maintenance.ts'),
   path.join(sourceRoot, 'runtime', 'sessionStorageCleanupProduction.ts'),
 ])
 const guardedNames = [

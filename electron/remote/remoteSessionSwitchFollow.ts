@@ -1,4 +1,4 @@
-import type { AppDatabase } from '../database'
+import type { SessionCommands } from '../sessionStorage/contracts'
 import type { RemoteContext } from '../tools/types'
 import { touchRemoteSessionActivity } from './remoteSessionActivity'
 
@@ -18,9 +18,9 @@ export function resolveRemoteOutboundSessionId(
  */
 export function adoptRemoteSessionAfterSwitch(args: {
   remoteContext: RemoteContext
-  appDatabase: AppDatabase
+  sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>
   targetSessionId: string
 }): void {
   args.remoteContext.outboundSessionId = args.targetSessionId
-  touchRemoteSessionActivity(args.appDatabase, args.targetSessionId)
+  touchRemoteSessionActivity(args.sessionCommands, args.targetSessionId)
 }

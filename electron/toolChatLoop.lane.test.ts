@@ -98,12 +98,13 @@ vi.mock('./database', async (importOriginal) => {
 
 import { runToolChatSession } from './toolChatLoop'
 import { registerChatCancel } from './chatCancelRegistry'
-import { assembleInvocation } from './runtime/invocationAssembler'
+import { assembleInvocation } from './testSupport/invocationAssembler'
 import { getDefaultAgentRuntime, setDefaultAgentRuntime } from './runtime/agentRuntimeDefaults'
 import { createAgentRuntime } from './runtime/agentRuntime'
 import { ToolRevocationRegistry } from './toolRevocationRegistry'
 import { TypedToolRegistry } from './tools/plannedToolRegistry'
 import { createHostedTurnHandoff } from './runtime/hostedTurnHandoff'
+import { MemoryHistory } from '../packages/agent-sdk/src/history'
 
 /** P1：直调 Core 的测试适配——材料经装配器构造 Invocation + ports（断言不动，仅调用方式平移）。 */
 function runAssembledSession(materials: unknown) {
@@ -174,6 +175,7 @@ describe('runToolChatSession lane 穿透（偏差 21：MCP 仅 desktop lane 注�
         appDb: createMemoryAppDb('zh-CN') as unknown as AppDatabase,
         emitFactEvent: () => undefined, emitSessionEvent: async () => undefined
       } as never)
+      ports.history = new MemoryHistory()
       ports.toolRevocations = undefined
       vi.mocked(registerChatCancel).mockReturnValue(new AbortController().signal as never)
       const hostedAgentSdk = {

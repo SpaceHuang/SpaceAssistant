@@ -126,7 +126,8 @@ import { appendMessage, openDatabase, setConfigValue, type AppDatabase } from '.
 import { DEFAULT_SHELL_CONFIG, DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { evaluateToolCallGate } from '../confirmation/toolCallGate'
 import { TurnRuntime } from '../turnRuntime'
-import { createTurnCoordinatorStorage } from '../turnCoordinatorStorage'
+import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
+import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { runButlerTask } from './butlerInvoker'
 import { createAutomationTask, getLatestRunForTask, updateAutomationTask } from './taskStore'
 import { getSession } from '../database'
@@ -189,6 +190,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
   function makeDeps(overrides: Record<string, unknown> = {}) {
     return {
       db,
+      sessionStorage: createSqliteSessionStorage(db),
       turnRuntime: makeRuntime(db),
       admissionGate: new CallAdmissionGate(),
       getWorkDir: () => testWorkDir,
@@ -856,7 +858,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
 
   it.each([
     { caseName: 'read_file', toolName: 'read_file', callId: 'butler-read-parity', toolInput: { path: 'note.txt' } },
-    { caseName: 'list_directory', toolName: 'list_directory', callId: 'butler-directory-parity', toolInput: { path: '.' } },
+    { caseName: 'list_directory', toolName: 'list_directory', callId: 'butler-directory-parity', toolInput: { path: 'listing-target' } },
     { caseName: 'grep', toolName: 'grep', callId: 'butler-grep-parity', toolInput: { pattern: 'canonical', path: 'note.txt', output_mode: 'content' } }
   ])('Automation Hosted $caseName projections recover exactly from canonical History', async ({ toolName, callId, toolInput }) => {
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'butler-hosted-history-parity-'))
@@ -868,7 +870,9 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       const defaultModelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
       setConfigValue(db, 'config.defaultModel', defaultModelId)
       setConfigValue(db, 'config.models', JSON.stringify([{ id: defaultModelId, name: defaultModelId, enabled: true, supportsThinking: true, maximumContext: 200000, maxTokens: 8192 }]))
-      await fs.writeFile(path.join(workDir, 'note.txt'), 'automation canonical read')
+      const listingTarget = path.join(workDir, 'listing-target')
+      if (toolName === 'list_directory') await fs.mkdir(listingTarget)
+      await fs.writeFile(path.join(toolName === 'list_directory' ? listingTarget : workDir, 'note.txt'), 'automation canonical read')
       if (toolName === 'grep') {
         const fixtureRg = path.join(workDir, 'fixture-rg')
         await fs.writeFile(fixtureRg, "#!/bin/sh\nprintf '%s\\n' 'note.txt:1:automation canonical read'\n")
@@ -1915,6 +1919,7 @@ describe('管家会话创建推送（渲染端列表即时可见）', () => {
     const pushedResult = await runButlerTask(
       {
         db,
+        sessionStorage: createSqliteSessionStorage(db),
         turnRuntime: makeRuntime(db),
         getWorkDir: () => workDir,
         getActiveWorkDirProfilePath: () => workDir,

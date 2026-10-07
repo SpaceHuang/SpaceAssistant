@@ -14,8 +14,8 @@ import { WikiConfig, FeishuConfig } from '../../src/shared/domainTypes'
 import { WorkDirManager } from '../workDirManager'
 import { app, shell } from 'electron'
 import { detectLocaleFromSystem, isAppLocale } from '../../src/shared/locale'
-import { getConfigValue, getSession, listSessions, setConfigValue, deleteConfigValue, updateSession } from '../database'
-import { getProjectedMessagesPageWithSequence } from '../runtime/sessionTranscriptProjection'
+import { getConfigValue, setConfigValue, deleteConfigValue, updateSession } from '../database'
+
 import { getMainWindow } from '../windowRef'
 import { getSecurityAuditLog } from '../confirmation/audit'
 import { hasPlanMetadataKeys, stripPlanFieldsFromSessionMetadata } from '../../src/shared/planTypes'
@@ -30,6 +30,7 @@ import { recordSystemManagedCacheEntry } from '../confirmation/decisionCacheWrit
 import { type Dirent } from 'fs'
 import { type MessagePageReader } from '../sessionBackupManager'
 import type { AuditSink } from '../confirmation/channels'
+import type { SessionQueries } from '../sessionStorage/contracts'
 
 export async function searchFilesUnder(
   absRoot: string,
@@ -148,8 +149,8 @@ export function stripSessionMetadataAndPersist(db: AppDatabase, session: Session
   return updateSession(db, session.id, { metadata }) ?? session
 }
 
-export function stripAllSessionsAndPersist(db: AppDatabase, options?: { view?: 'all' | 'user-visible' }): Session[] {
-  const sessions = listSessions(db, options)
+export function stripAllSessionsAndPersist(db: AppDatabase, queries: SessionQueries, options?: { view?: 'all' | 'user-visible' }): Session[] {
+  const sessions = queries.listSessions(options)
   let changed = false
   const result = sessions.map((s) => {
     if (!hasPlanMetadataKeys(s.metadata)) return s
@@ -211,13 +212,16 @@ export function readWikiConfig(db: AppDatabase): WikiConfig {
 
 export function backupPageReader(ctx: AppIpcContext, sessionId: string): MessagePageReader {
   return (afterSequence, pageSize) => {
-    const page = getProjectedMessagesPageWithSequence(ctx.db, sessionId, afterSequence, pageSize)
+    if (!ctx.sessionStorage) throw new Error('SESSION_STORAGE_NOT_COMPOSED')
+    const page = ctx.sessionStorage.queries.readExportPage({ sessionId, fromSequence: afterSequence, pageSize })
     return { messages: page.rows.map(({ message }) => message), nextSequence: page.nextSequence }
   }
 }
 
 export function loadBackupPayload(ctx: AppIpcContext, sessionId: string) {
-  const s = getSession(ctx.db, sessionId)
+  const queries = ctx.sessionStorage?.queries
+  if (!queries) throw new Error('SESSION_STORAGE_NOT_COMPOSED')
+  const s = queries.readSession(sessionId)
   if (!s) return null
   return { session: s, readPage: backupPageReader(ctx, sessionId) }
 }

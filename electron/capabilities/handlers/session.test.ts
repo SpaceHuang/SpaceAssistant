@@ -12,6 +12,7 @@ import {
   clearAllSessionActiveStreamsForTest
 } from '../../chatActiveStreams'
 import type { CapabilityContext } from '../types'
+import { createSqliteSessionStorage } from '../../sessionStorage/sqliteSessionStorage'
 
 let db: AppDatabase
 
@@ -23,6 +24,7 @@ function ctx(overrides?: Partial<CapabilityContext>): CapabilityContext {
     requestId: 'r1',
     signal: new AbortController().signal,
     appDatabase: db,
+    sessionQueries: createSqliteSessionStorage(db).queries,
     ...overrides
   }
 }
@@ -54,6 +56,13 @@ async function seedSession(name: string, messageTexts: string[] = []): Promise<s
 }
 
 describe('action.session.list', () => {
+  it('从注入的查询port读取会话，无需向handler暴露数据库', async () => {
+    const session = createSession(db, { name: 'injected-query-session' })
+    const queries = createSqliteSessionStorage(db).queries
+    const result = await findCap('action.session.list').handler({}, ctx({ appDatabase: undefined, sessionQueries: queries })) as { sessions: Array<{ id: string }> }
+    expect(result.sessions.map(({ id }) => id)).toContain(session.id)
+  })
+
   it('分页枚举：默认 20 条、limit 上限 50、返回紧凑字段与 nextOffset', async () => {
     for (let i = 0; i < 60; i++) {
       await seedSession(`会话 ${i}`)

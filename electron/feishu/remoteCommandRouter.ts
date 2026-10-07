@@ -17,6 +17,7 @@ import { auditEntryToLoggerPayload } from '../remote/remoteSessionSwitchAudit'
 import type { SessionSwitchAuditEntry } from '../remote/remoteSessionSwitchAudit'
 import { resolveRemoteOutboundSessionId } from '../remote/remoteSessionSwitchFollow'
 import type { TurnRuntime } from '../turnRuntime'
+import type { SessionStorage } from '../sessionStorage/contracts'
 import { resolveFeishuSession } from './feishuSessionResolver'
 import { tryClaimOrRelease, createProcessedClaimFinalizer } from '../remote/imCommandRouterHelpers'
 import { bindRemoteSessionExecutionId } from '../remote/remoteAgentRegistry'
@@ -73,6 +74,7 @@ type PendingDisambiguation = {
 
 export type RemoteCommandRouterDeps = {
   db: AppDatabase
+  sessionStorage?: SessionStorage
   runner: LarkCliRunner
   processedStore: FeishuProcessedStore
   imChannel: FeishuImChannel
@@ -509,7 +511,7 @@ export class RemoteCommandRouter {
       const appCfg = this.deps.getAppConfig()
       const content = userMessage ?? msg.content.trim()
       const { sessionId, isNew } = await resolveFeishuSession(
-        this.deps.db,
+        this.deps.sessionStorage!,
         msg,
         config,
         this.deps.getModel()
@@ -535,7 +537,7 @@ export class RemoteCommandRouter {
           messageId: msg.messageId,
           body: '该项目为敏感项目，不允许远程访问',
           sessionId,
-          touch: { db: this.deps.db, sessionId }
+          touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
         })
         await claimFinalizer.complete('sensitive_blocked')
         return
@@ -555,7 +557,7 @@ export class RemoteCommandRouter {
           messageId: msg.messageId,
           body: claim.message,
           sessionId,
-          touch: { db: this.deps.db, sessionId }
+          touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
         })
         await claimFinalizer.complete(claim.reason)
         return
@@ -563,7 +565,8 @@ export class RemoteCommandRouter {
 
       try {
         if (profile) {
-          const bindResult = await bindSessionWorkDir(this.deps.db, this.deps.workDirManager, {
+          const bindResult = this.deps.sessionStorage
+            ? await bindSessionWorkDir(this.deps.sessionStorage.queries, this.deps.sessionStorage.commands, this.deps.workDirManager, {
             sessionId,
             profileId: profile.id,
             remoteContext: {
@@ -574,7 +577,8 @@ export class RemoteCommandRouter {
             source: 'inbound',
             appendAudit: (profileId, profileName) =>
               this.deps.auditLogger.append({ type: 'workdir_switch', profileId, profileName })
-          })
+            })
+            : { success: false, error: '会话存储查询不可用' }
           {
             const re = revalidateImInboundGuard(authSnapshot, { getConfig: getGuardConfig })
             if (!re.ok) {
@@ -588,7 +592,7 @@ export class RemoteCommandRouter {
               messageId: msg.messageId,
               body: bindResult.error ?? SENSITIVE_WORKDIR_ERROR,
               sessionId,
-              touch: { db: this.deps.db, sessionId }
+              touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
             })
             await claimFinalizer.complete('workdir_bind_failed')
             return
@@ -603,7 +607,7 @@ export class RemoteCommandRouter {
           }
         }
 
-        touchRemoteSessionActivity(this.deps.db, sessionId)
+        touchRemoteSessionActivity(this.deps.sessionStorage!.commands, sessionId)
 
         if (isNew || config.remoteNotifyOnReceive) {
           await sendFeishuRemoteOutbound({
@@ -611,7 +615,7 @@ export class RemoteCommandRouter {
             messageId: msg.messageId,
             body: '已收到，正在处理…',
             sessionId,
-            touch: { db: this.deps.db, sessionId }
+            touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
           })
           const re = revalidateImInboundGuard(authSnapshot, { getConfig: getGuardConfig })
           if (!re.ok) {
@@ -661,7 +665,7 @@ export class RemoteCommandRouter {
           }
         }
 
-        const executionConfig = await resolveTrustedTurnExecutionConfig(this.deps.db, sessionId, 'feishu')
+        const executionConfig = await resolveTrustedTurnExecutionConfig(this.deps.db, this.deps.sessionStorage!.queries, this.deps.sessionStorage!.commands, sessionId, 'feishu')
         const prepared = this.deps.turnRuntime?.prepare({
           mode: 'create-user',
           requestId,
@@ -700,7 +704,7 @@ export class RemoteCommandRouter {
 
         let result: Awaited<ReturnType<typeof runFeishuRemoteAgent>>
         const acceptedTurn = prepared
-          ? createAcceptedTurnFromPrepared(this.deps.db, prepared, 'feishu', executionConfig ?? { lane: 'feishu' })
+          ? createAcceptedTurnFromPrepared(prepared, 'feishu', executionConfig ?? { lane: 'feishu' }, this.deps.sessionStorage!.execution)
           : undefined
         try {
           result = await executeRemoteTurn({
@@ -709,6 +713,7 @@ export class RemoteCommandRouter {
             requestId,
             run: () => runFeishuRemoteAgent({
             db: this.deps.db,
+            sessionStorage: this.deps.sessionStorage!,
             sessionId,
             userMessage: content,
             replyMessageId: msg.messageId,
@@ -750,14 +755,14 @@ export class RemoteCommandRouter {
         // Completion and tool state are owned by TurnRuntime; only IM continuation follows
         // `outboundSessionId`, which may have moved via switch_session.
         const outboundSessionId = resolveRemoteOutboundSessionId(remoteContext, sessionId)
-        touchRemoteSessionActivity(this.deps.db, outboundSessionId)
+        touchRemoteSessionActivity(this.deps.sessionStorage!.commands, outboundSessionId)
 
         await sendFeishuRemoteOutbound({
           runner: this.deps.runner,
           messageId: msg.messageId,
           body: result.summary,
           sessionId: outboundSessionId,
-          touch: { db: this.deps.db, sessionId: outboundSessionId }
+          touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId: outboundSessionId }
         })
         this.lastReplyAt = Date.now()
         clearRemoteProgressSession(sessionId)

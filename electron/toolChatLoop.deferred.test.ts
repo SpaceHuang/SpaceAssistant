@@ -66,7 +66,8 @@ vi.mock('./database', async (importOriginal) => {
 })
 
 import { runToolChatSession } from './toolChatLoop'
-import { assembleInvocation, type AgentInvocationMaterials } from './runtime/invocationAssembler'
+import { assembleInvocation } from './testSupport/invocationAssembler'
+import type { AgentInvocationMaterials } from './runtime/invocationAssembler'
 import { createMemoryAppDb } from './database/testHelpers'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { MemoryHistory } from '../packages/agent-sdk/src/history'
@@ -133,6 +134,7 @@ function baseMaterials(overrides: Partial<AgentInvocationMaterials> = {}): Agent
     userDataDir: '/tmp',
     getApiKey: async () => 'test-key',
     appDb: createMemoryAppDb('zh-CN'),
+    historyForSession: () => new MemoryHistory(),
     sessionEventLocation: { workDir: '/tmp', sessionId: 'sess-deferred-1', createdAt: 1234 },
     emitFactEvent: (event: Record<string, unknown>) => capturedFacts.push(event),
     emitSessionEvent: async (event: Record<string, unknown>) => { capturedSessionEvents.push(event) },
