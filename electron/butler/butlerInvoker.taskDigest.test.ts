@@ -4,7 +4,10 @@
  * clue.taskDigest，供裁决模型判断「动作是否服务于任务」。
  * 本文件 mock toolChatLoop 只为观测装配参数；其余（准入 / 会话 / turnRuntime / 任务存储）走真实链路。
  */
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 const mockRunToolChatSession = vi.fn()
 const mockResolveLlmCredentials = vi.fn()
@@ -54,8 +57,10 @@ function makeRuntime(db: AppDatabase): TurnRuntime {
 
 describe('butlerInvoker 任务声明装配（D）', () => {
   let db: AppDatabase
+  let testWorkDir: string
   beforeEach(() => {
     vi.clearAllMocks()
+    testWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'butler-digest-workdir-'))
     db = openDatabase(':memory:')
     setConfigValue(db, 'config.defaultModel', Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0])
     const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
@@ -75,15 +80,19 @@ describe('butlerInvoker 任务声明装配（D）', () => {
     })
   })
 
+  afterEach(() => {
+    fs.rmSync(testWorkDir, { recursive: true, force: true })
+  })
+
   function makeDeps() {
     return {
       db,
       turnRuntime: makeRuntime(db),
-      getWorkDir: () => '/tmp/wd',
+      getWorkDir: () => testWorkDir,
       getUserDataPath: () => '/tmp/ud',
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG as const }),
-      getActiveWorkDirProfilePath: () => '/tmp/wd',
-      resolveWorkDirForSession: () => '/tmp/wd'
+      getActiveWorkDirProfilePath: () => testWorkDir,
+      resolveWorkDirForSession: () => testWorkDir
     }
   }
 
