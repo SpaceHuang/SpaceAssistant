@@ -2,10 +2,10 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 状态 | v7 · 生命周期/异步维护接口已补充；continuation两项P1已补充，待复评；ContextPort/recovery主要契约缺口经v2复评已补齐，其他门禁保留 |
+| 状态 | v23 · 设计门槛及S0–S4全部完成 |
 | 日期 | 2026-10-07 |
 | 上层方案 | [会话存储代码结构与接口优化方案](./session-storage-refactorability-improvement-plan.md) |
-| 基线 | 当前 main HEAD 419df9ee 的SDK/outbound/启动代码；旧worktree已不存在，不以其作为可核对基线 |
+| 基线 | worktree起点 main HEAD f2cec895；S0盘点以隔离worktree实码核对，既有改动不代表阶段验收 |
 | 范围 | 无数据库类型的接口、数据契约、调用顺序、原子性及错误映射；不改持久格式，不实现第二后端 |
 
 本文接口为目标定义。代码块使用项目现有 domain/SDK 类型和下文定义的契约；SDK执行所需端口落在 `packages/agent-sdk`，宿主业务接口落在 `electron/sessionStorage/contracts.ts`，按 §0 划分；不从 database/operations 或 runtime 具体实现导入公共类型。旧 DTO 可原样迁出或由共享 domain 类型复用，不顺带改变 IPC。
@@ -65,6 +65,18 @@ SDK移植要求新宿主实现HistoryPort、ContextPort和它实际使用的host
 
 未接入的SDKContextPort不能只导出类型就标完成：自动压缩必须真正经端口提交，原History writer仍只写一次；手动入口使用同端口类型。旧AgentStoragePorts字段在全部consumer改造后删除，期间具名标注兼容adapter。
 
+### 0.6 接口接入与旧端口退出顺序
+
+设计门槛关闭后按上层计划S1→S2→S3→S4接入，不并行搬动跨阶段consumer：
+
+1. S1先稳定Electron SessionQueries/Commands/Execution宿主契约及factory注入；SDK包公共入口由`packages/agent-sdk/src/index.ts`导出SDK consumer需要的HistoryPort、ContextPort及其DTO/错误类型，ContextRegistrar与内部binding不作为包consumer API；`src/shared/agent/invocation.ts`保留renderer需要的无宿主Reasoning类型，不导入SDK。Electron assembler负责两侧DTO转换。
+2. S1/S2先迁移只读查询、accepted context读入口、route/reuse-user、chat分页/搜索/capability/backup等consumer；History继续单一SDK `HistoryPort`，scope专属查询走SessionQueries，不把SQLite扩展塞进HistoryPort。
+3. S3先接入ContextPort/ContextRegistrar和History writer队列，在manual、preflight、boundary、provider recovery四条路径通过失败/并发用例后，才退出`ContextProjectionPort`及`preflightModelRequest`/`turnBoundary`旧contract。当前投影提交只允许作为SDK内部注册evidence的受控提交后hook，不再以第二个port暴露。
+4. Agent SDK中`legacy.appDb`、`sessionEventLocation`、sessionLedger投影回调/压缩participant按真实consumer逐项迁到Electron宿主adapter；只有所有consumer/测试都不再引用后才删字段。Session event的业务事实与History event语义不因移出路径而删减。
+5. S4接入Recovery/Lifecycle宿主组合根后，移除已迁移启动阶段的旧跨模块协调；每个保留的无History内存boundary、同库其他域adapter及安全维护owner单独具名，不以宽泛runtime例外绕过护栏。
+
+以上次序是兼容接入方案，不改变现有IPC、持久事件或cleanup gate。旧字段在各自consumer迁移及回归通过前保留。
+
 ## 1. 资源、实例与权限
 
 ```ts
@@ -106,6 +118,10 @@ type TurnContextSelection = {
 type ApiBaseline = {
   sessionId: string
   entries: Array<{ message: Message; sequence: number }>
+}
+type ContextHistorySummaryBaseline = {
+  sessionId: string
+  entries: Array<{ messageId: string; role: Message['role']; imageTokens: number; thinkingTokens: number; sequence: number }>
 }
 type SearchHit = {
   messageId: string; sessionId: string; content: string; sessionName: string
@@ -160,6 +176,7 @@ interface SessionQueries {
   }): ExportPage
   readTurnContext(input: TurnContextSelection): Message[]
   readApiBaseline(input: { sessionId: string; limit?: number }): ApiBaseline
+  readContextHistorySummaryBaseline(sessionId: string): ContextHistorySummaryBaseline
   readRoutingInput(input: TurnContextSelection & {
     limit?: number; reuseUserMessageId?: string
   }): RoutingRead
@@ -197,6 +214,7 @@ type RoutingRead = {
 | readExportPage | from 含边界；沿原 pageSize 校验 | nextSequence 来自真实序号，空页回填输入；非快照导出保证 | getProjectedMessagesPageWithSequence |
 | readTurnContext | boundary/required-user/exclude/order 完全沿原筛选 | 不静默省略必要正文；不等于最新UI页 | getProjectedTurnContext |
 | readApiBaseline | 默认500；用于已有compact/观测 | 保留全部原DTO，不授予执行资格 | getProjectedApiContextBaseline |
+| readContextHistorySummaryBaseline | 全会话扫描，不受API context前500条限制 | 只返回有image/thinking token的轻量行，不读取正文 | getContextHistorySummaryBaseline |
 | readRoutingInput | 单快照取原窗口与reuse输入/vision；默认50 | fence 封装已有 generation/revision及路由资格校验，不新增规则 | readCanonicalTurnRoutingInputWithFenceIfEligible及既有fallback/selector |
 | isSelectionCurrent | fence必须模块签发且属于session | false后不得提交旧路由配置；此检查本身不是原子写CAS | isCanonicalApiReadFenceCurrent/既有revision检查 |
 | readRetryTarget | failed assistant归属及原错误/重试边界 | 保留现有null/错误语义 | resolveProjectedRetryContext |
@@ -223,10 +241,12 @@ type SessionSettings = Partial<Pick<Session,
 >> & { thinkingEffort?: AgentReasoningEffort | null }
 interface SessionCommands {
   createSession(input: CreateSessionInput): Session
+  appendNonTurnMessage(message: Message): MessageEntry
   renameSession(sessionId: string, name: string): Session | undefined
   updateSettings(sessionId: string, patch: SessionSettings): Session | undefined
   updateUserMetadata(sessionId: string, metadata: Record<string, unknown>): Session | undefined
   editMessage(input: MessageRef & { content: string }): Promise<boolean>
+  updateToolCallScrollback(input: MessageRef & { toolCalls: NonNullable<Message['toolCalls']> }): MessageEntry | null
   enqueue(input: {
     sessionId: string; requestId: string
     content: string; attachments?: Message['attachments']
@@ -256,20 +276,24 @@ type QueueDeleteResult =
 
 QueueReceipt 保留当前完整业务字段与可选性。metadata入口只供旧IPC兼容，原merge语义保持；不得修改generation、preview/count、cleanup或accepted identity。识别保留键依据当前实际读取方建立清单，不添加用户可操纵的内部控制字段。
 
+兼容metadata merge当前需保留的存储owner字段为`titleGenerated`、`titleUserCustom`、`titleOpenBackfillAttempted`、`sessionDirectoryGrants`、`remoteSessionLastActivityAt`、`feishuMessageId`、`wechatMessageId`和`wechatMeta`。它们继续分别由标题、目录授权和远程session commands维护；用户metadata提交不得伪造或清除这些字段。
+
 | 方法 | 修改范围/前置条件 | 原子性与重试 |
 | --- | --- | --- |
 | createSession | 原默认模型、ownership/visibility与初始状态 | 非request幂等；失败结果未知时不能盲重试创建 |
 | renameSession | 原trim/空值行为与用户自定义标题标记，缺session undefined | 名称+关联标记一起写；不写任意metadata；重复设置不承诺时间戳不变 |
 | updateSettings | 仅原配置字段；远程workdir等外部busy约束原位置保留 | 不修改执行中固定配置，不引入新锁/校验 |
-| updateUserMetadata | 原IPC允许的业务metadata merge | 内部键受保护；所需现有业务专用键逐项列为具名方法后替换 |
+| updateUserMetadata | 原IPC允许的兼容metadata merge | 与updateSettings分开；只保护本模块拥有的完整性/授权/幂等字段。其他产品领域metadata沿原merge语义保留，不为逐键迁移新增命令 |
 | editMessage | session归属；canonical与legacy选择内部完成；允许状态沿原writer | canonical append+镜像+preview保持原事务；false仅代表既有不满足条件，异常不吞；无新幂等键 |
+| appendNonTurnMessage | session及Message身份沿现有append owner校验 | 保留原append/canonical镜像和返回sequence；不接收任意事务callback |
+| updateToolCallScrollback | 仅允许toolCalls.terminalScrollback变化，session/message归属需匹配 | 继续由既有消息内容owner提交；不能借此改变tool状态、正文或其他元数据 |
 | enqueue | session存在；requestId正文/附件指纹 | 消息+receipt一起写；同key同指纹返回duplicate，不同指纹冲突；适合已知回执查询后重试 |
 | editQueued | user且queued、trim后非空 | 正文+receipt指纹+preview/revision一起提交；已经认领则拒绝 |
 | reorderQueued | IDs恰为当前完整queued集合，无重复 | 序号/preview/fence一起提交；集合变化返回queue_changed |
 | deleteQueued | 消息归属、user/queued | 删除+receipt cancelled+count/preview/fence一起提交；重复调用沿原not-found结果 |
 | deleteSession | 原归属/用户删除许可由adapter检查 | 整会话既有事务与GC待办；文件回收不放进外部回调，重复删除沿原语义 |
 
-editMessage 的legacy分支复用 updateMessageContent 的正文子集，canonical分支复用 writeCanonicalBackedMessageContent，不向普通业务开放status/toolCalls patch。streaming/checkpoint使用下面的coordinator专用协议。
+editMessage 的legacy分支复用 updateMessageContent 的正文子集，canonical分支复用 writeCanonicalBackedMessageContent，不向普通业务开放status/toolCalls patch。`updateToolCallScrollback`只接受terminal滚屏字段；其余tool metadata仍由execution/coordinator协议更新。streaming/checkpoint使用下面的coordinator专用协议。
 
 ## 5. SessionExecutionStore：执行状态与原子业务操作
 
@@ -537,6 +561,7 @@ type ContinuationSourceInspection =
         | { kind: 'found'; candidate: FailedSourceCandidate }
         | { kind: 'not-found' | 'not-recoverable' }
       fallback?: FailedSourceCandidate
+      selectedFallback?: FailedSourceCandidate
     }
 ```
 
@@ -551,7 +576,7 @@ SessionQueries.continuationSources提供此窄接口。snapshot用于现有summa
 
 无源返回available+空候选，无需抛错；多源仍显式保留。候选内缺assistant sequence时保持当前原边界行为，不凭空把unknown当eligible；真正续跑启动会按现有SOURCE_STALE拒绝。显式选择的fallback与一般fallback分别字段表达，避免误用为同一种候选。History所有权/结构损坏沿原异常传播或unavailable拒绝，不返回假空候选。
 
-调用映射：outbound所有SqliteAgentHistory/list/read与assistant→turn/sequence SQL替换为一次inspect；active集合仍由runtime取得，sourceSelection/原exact/relationCue逻辑保持；源码摘要可复用SDK/宿主纯函数，不能再访问数据库。inspect期间不await模型；任何选择到启动间变化由prepareAndClaim的source复核拒绝，不新增长期锁。
+调用映射：outbound所有SqliteAgentHistory/list/read与assistant→turn/sequence SQL替换为一次inspect；active集合仍由runtime取得，sourceSelection/原exact/relationCue逻辑保持；源码摘要使用存储/SDK均不依赖的纯函数模块（当前`continuationSummary.ts`），不得由SessionQueries反向import outbound。inspect期间不await模型；任何选择到启动间变化由prepareAndClaim的source复核拒绝，不新增长期锁。
 
 ## 6. SDK ContextPort：无损材料与单一writer提交
 
@@ -857,7 +882,7 @@ bootstrap选择存储实现→initialize
 
 ## 9. 实施前收口项与设计完成条件
 
-**本节是接口接入实施的前置条件，不是可以留到实现过程中补齐的待办。** v2复评已确认ContextPort/recovery主要契约缺口补齐；新增识别的两项continuation覆盖缺口由§5.6/§5.7补充，尚待复评；其余项未关闭。当前签名、DTO和调用链不能认定为已获实施放行的最终契约。关闭并复核全部收口项前，不启动以本文契约为依据的接口接入；允许继续只读盘点、设计细化与证据核对。
+**本节是接口接入实施的前置条件，不是可以留到实现过程中补齐的待办。**S0已完成；Context、continuation/source query、metadata边界、DTO、recovery和lifecycle已按当前worktree逐项复评，具体调用映射/失败边界及兼容退出顺序见§0.6、§5–§7。本节设计门槛已关闭，不代表实现完成；S1–S3已验收，S4按计划顺序完成子项并进行最终门禁。
 
 优先定稿三项：ContextPort的无损DTO与提交hook、continuation接受事务、恢复回调。关闭要求是把具体类型/签名、调用顺序、原子范围、失败与重试规则，以及现有代码映射写入本文；不能仅把台账状态改成“完成”。若选择改变原行为或持久协议，应另立变更，不在结构整理中隐式实施。
 
@@ -876,7 +901,7 @@ bootstrap选择存储实现→initialize
 
 0. SDK/宿主契约拆分：ContextPort实际接入、HistoryPort去重、台账路径与压缩事务细节移出SDK；port DTO无Message/Session/CompactionMarker/TurnCoordinator依赖。
 1. continuation接受操作已补充至§5.5，需按当前outbound/IPC实码复评，验证每条原事务/后置操作映射。
-2. 各业务metadata key的使用清单：将需内部一致性的字段迁入具名命令；兼容入口受限且有退出列表。
+2. metadata/body边界：只盘点本模块拥有、影响持久完整性/授权/幂等的metadata字段并保护其写入口；settings与兼容metadata merge分开，其他产品领域metadata保留原merge语义，不扩展为逐键迁移。
 3. DTO迁出实施时进行typecheck，保持本文已核对的SearchCorpusPage/RetryTarget/QueueReceipt/ApiBaseline字段，不能因组织代码删除字段。
 4. Context DTO/签发/hook已补充至§6，需复评并补充实现时的无损映射和队列负例测试清单；单纯facade改名不算完成。
 5. recovery回调/报告已补充至§7，需复评真实启动分支与字段来源，不把数量伪造为session列表。
@@ -885,15 +910,19 @@ bootstrap选择存储实现→initialize
 
 | 项目 | 状态 | 关闭证据 |
 | --- | --- | --- |
-| SDK/宿主契约归属与旧端口退出 | 未关闭 | 实际消费点、类型依赖与兼容接入顺序明确 |
-| ContextPort无损DTO及提交hook | v2复评确认主要契约缺口已补齐；实现未验证 | §6.1无损映射/注册；§6.2同writer队列hook；§6.3三调用图与旧append退出；§6.4部分提交 |
-| continuation接受事务及源查询 | v2两项P1修订已补充，待复评 | §5.6真实启动事务/接受+消息/target；§5.7源候选/任务边界/显式fallback查询；§5.5普通接受操作 |
-| metadata业务键与受限入口 | 未关闭 | 使用清单、保留键、具名命令和旧入口退出条件明确 |
-| 生命周期与异步维护 | 已补充，待复评 | §7.4轻量加载/恢复/后台调度/暂停停止；专项索引与清理不变量、其他数据域归属 |
-| 公共DTO完整性 | 未关闭 | 与当前真实类型逐字段对照，签名无缩略占位或数据库依赖 |
-| 恢复回调与结果 | v2复评确认主要契约缺口已补齐；实现未验证 | §7.1工厂绑定restore/recover与字段来源；§7.2阶段gate；§7.3异常范围 |
+| SDK/宿主契约归属与旧端口退出 | 设计已收口；S1/S3退出待实现 | §0及§0.6明确shared/SDK所有权、DTO转换点、公共导出及旧端口按consumer迁移后的退出条件；实现仍需移除真实旧引用。 |
+| ContextPort无损DTO及提交hook | S3已验收 | §6.1–§6.4的SDK invocation与session-scope ContextPort已接入；SDK忽略planner额外返回的`commitProjection`，Hosted ledger投影由宿主注入的可信ContextProjectionCommitter在History replacement之后执行；失败保持fail closed。SDK/Hosted统一为强类型`planContextReplacement(phase)`，observer响应证据回调与Hosted planner命名按ContextReplacement职责收敛。新改动后的全量`npm test` 895文件通过、1个跳过，8508项通过、111项跳过；renderer/shared/Electron/SDK类型检查、storage boundary（15条既有例外、无新增）、旧contract扫描和diff check通过。 |
+| continuation接受事务及源查询 | 设计已收口；S3该子项已接入，阶段验收待完成 | §5.5–§5.7普通接受、真实launch/finalize、selectedFallback与source boundary已按TDD接入具名query/execution操作；outbound无History/DB旁路，summary为runtime纯函数，IPC retry source经`readLatestRetryTarget`。定向82项、Electron类型检查、storage边界护栏（18条既有例外、无新增）及`git diff --check`通过；S3其他门槛仍开放。 |
+| metadata/body边界及受限入口 | 设计已收口；S3接口已拆分、阶段验收待完成 | `editMessage`仅提交正文；tool scrollback使用受限命令；settings与兼容metadata merge分为`updateSettings`和`updateUserMetadata`，保护标题状态、目录授权与远程身份字段。需随S3全阶段验收复核现有merge行为。 |
+| 生命周期与异步维护 | S4子项复核完成；阶段验收待最终门禁 | host-only `StorageLifecycleControl` 按具名task/category创建SQLite upkeep、spill GC和session-content cleanup scheduler；启动前请求返回not-needed，按类别pause/resume并提供维护状态快照。原有ready时机、safe-db分支、门禁和参数保持；退出先停任务再等待quiescent，受12秒deadline约束。类别TDD及维护/退出定向16项、Electron类型检查通过。 |
+| 公共DTO完整性 | S1–S3已验收；S4阶段门禁待完成 | Electron SessionStorage contracts及SDK公共导出已接入；consumer迁移后Electron、SDK、renderer/shared typecheck通过，DTO字段已随实际consumer逐项编译核验。 |
+| 恢复回调与结果 | S4子项复核完成；阶段验收待最终门禁 | SessionStorageHost将main现有History与session-ledger恢复结果注入recovery port；阶段顺序为History→ledger→snapshot→coordinator→transcript reconciliation→continuation，报告基于实际计数/失败，safe-db-maintenance继续fail closed。SQLite adapter readiness经真实SQLite测试确认：recover前返回pending，成功恢复后按session读取与transcript fence返回readable/executable；实际执行仍由现有claim/CAS围栏兜底。恢复/启动定向303项及新增readiness 4项通过，Electron类型检查与边界护栏通过。 |
 
-这些是设计收口项，不是已完成的实现。全部关闭后需复核文档内部一致性，再决定进入接口接入阶段；关闭设计项本身不代表代码边界已经收敛，更不涉及数据迁移或发布放行。
+设计门槛已逐项复评并收口；S1、S2、S3均已按各阶段全量测试、类型检查和边界证据验收。S4此前阶段级门禁通过记录见下段，但本轮复核又发现lifecycle启动接线及认证/清理物理拆分缺口，已按序修复，并补充真实SQLite readiness验证。当前S4已完成recovery、lifecycle、maintenance/certification/cache拆分子项；旧contract/import与完整阶段门禁仍待最终复核，故暂不标记S4完成。
+
+### S4进度（2026-10-07）
+
+S4旧adapter审计曾通过；后续复核重新打开lifecycle及职责拆分子项，现已按TDD修复并补足按类别pause/resume与状态检查，且将cleanup/certification实现物理分离。真实SQLite readiness回归、旧contract/import扫描及最终全量门禁均通过。S0–S4全部验收完成，执行证据见上层计划§S4收口记录。
 
 ## 10. 接口级验收
 
