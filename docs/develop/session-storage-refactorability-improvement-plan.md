@@ -2,11 +2,11 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 状态 | v11 · 方案稿；详细设计收口项未关闭，接口接入尚不可实施 |
-| 日期 | 2026-10-04 |
+| 状态 | v15 · 生命周期与异步维护接口已补充；continuation真实接受事务与源查询已补充，待复评；收口门禁维持 |
+| 日期 | 2026-10-07 |
 | 目标 | 在现有实现上整理模块职责、明确读写接口与依赖方向，降低后续代码重构的影响范围 |
-| 实现基线 | `.worktrees/session-storage-refactor-tdd` 中的 Phase 5 实现；主工作区尚未包含全部新增模块 |
-| 关联设计 | [技术方案](./session-storage-refactor-technical-design.md)、[迁移计划](./session-storage-refactor-migration-plan.md)；最新实现约束以重构 worktree 对应技术方案为准 |
+| 实现基线 | 当前main HEAD 419df9ee；原session-storage-refactor-tdd worktree已不存在，旧基线说明不作为当前实现证据 |
+| 关联设计 | [技术方案](./session-storage-refactor-technical-design.md)、[迁移计划](./session-storage-refactor-migration-plan.md)；当前实码核对及评审基线见详细设计；旧worktree说明仅为历史上下文 |
 | 本次范围 | 建立可替换的会话存储模块契约、调用方式与依赖注入；仅调整代码结构，保持现有行为 |
 | 排除范围 | 数据迁移、schema/事件/spill/cache 格式变更、生产清理接入、发布门禁、安装包升级/回滚验收 |
 
@@ -66,7 +66,7 @@
 
 ### 2.2 当前需要封装的调用面
 
-以下来自当前 main 的实码调用面；worktree 已更换部分正文读取，但本轮仍须逐项核实并收敛，不能以 main 问题清单代替 worktree 完成证据。
+以下调用面按当前main核对；本轮须逐项收敛，历史worktree与旧版行号不能作为已完成证据。
 
 | 位置 | 越界/耦合证据 | 应提供的边界 |
 | --- | --- | --- |
@@ -85,7 +85,7 @@
 
 ### 3.1 接口实例与能力划分
 
-SDK执行所需契约（HistoryPort、ContextPort与其DTO/错误）由 `packages/agent-sdk` 定义；宿主会话查询/修改/执行协调/启动接口集中于 `electron/sessionStorage/contracts.ts` 并组合SDK端口。具体归属见[详细设计 §0](./session-storage-public-interface-design.md)。工厂绑定底层资源一次，业务方法不接收 db。拆成窄 ports，consumer 按实际需要注入，避免所有模块获得全部维护/写入权限。接口命名以业务语义统一：readMessage/readChatPage/readTurnContext/readRoutingInput/searchMessages 等；既有 getProjected* 仅列为内部映射起点。
+SDK执行所需契约（HistoryPort、ContextPort与其DTO/错误）由 `packages/agent-sdk` 定义；宿主会话查询/修改/执行协调/启动接口集中于 `electron/sessionStorage/contracts.ts` 并组合SDK端口。具体归属见[详细设计 §0](./session-storage-public-interface-design.md)。组合根通过所选实现工厂绑定资源并创建实例；公共契约不指定后端。业务方法不接收 db。拆成窄 ports，consumer 按实际需要注入，避免所有模块获得全部维护/写入权限。接口命名以业务语义统一：readMessage/readChatPage/readTurnContext/readRoutingInput/searchMessages 等；既有 getProjected* 仅列为内部映射起点。
 
 ```ts
 // 示意：方法参数与返回值复用现有业务类型/同步异步语义
@@ -96,8 +96,9 @@ interface SessionStorage {
   readonly contexts: ContextPort
   readonly recovery: SessionRecoveryPort
 }
-// 仅组合根调用具体工厂；内部绑定 db、History 与 spill/ledger 依赖
-// createSqliteSessionStorage(resources): SessionStorage
+// 架构：组合根调用所选实现工厂，得到SessionStorage并注入窄ports。
+// 本轮装配示例：createSqliteSessionStorage(resources): SessionStorage
+// db、History与spill/ledger仅在当前适配器内部绑定，不是公共契约。
 // historyFor(scope): SDK HistoryPort / 确需使用的窄扩展协议
 ```
 
@@ -297,34 +298,8 @@ SessionQueries.readChatPage(
 
 ContextPort 契约归SDK context.ts，Electron contracts引用并由存储工厂实现和提供；`electron/runtime/sessionContextService.ts` 只协调触发条件、planner/摘要与结果使用，不实现或选择读写后端。port 内部使用存储 query、SDK 的纯折叠能力与既有持久提交适配器。接口以下为设计示意；内部类型不新增 IPC DTO 或持久格式。
 
-```ts
-type ContextScope =
-  | { kind: 'session'; sessionId: string }
-  | { kind: 'invocation'; sessionId: string; invocationId: string }
+接口具体类型不再在总方案重复定义；以[详细设计 §6](./session-storage-public-interface-design.md)的ContextFrame/Item、可信注册接口、InvocationContextBinding及单writer提交hook为准。preflight与boundary的冻结运行帧不同，boundary必须含本轮已提交response。
 
-interface ContextSnapshot {
-  readonly scope: ContextScope
-  readonly messages: readonly CanonicalModelMessage[]
-  readonly windowId: string
-  readonly fence: ContextFence // 内部不透明 token，复用既有指纹/版本约束
-}
-
-interface ContextReplacement {
-  readonly messages: readonly CanonicalModelMessage[]
-  readonly windowId: string
-  readonly evidence: ContextTransformationEvidence
-}
-
-interface ContextPort {
-  readCurrent(scope: ContextScope): Promise<ContextSnapshot>
-  commitReplacement(input: {
-    base: ContextSnapshot
-    operationId: string
-    reason: 'manual-compact' | 'auto-compact' | 'window-transition'
-    replacement: ContextReplacement
-  }): Promise<ContextCommitResult>
-}
-```
 
 `CanonicalModelMessage` 复用 SDK 现有模型类型；统一 envelope 内保留现有 checkpoint/shadow、required-user、指纹及 projection 所需证据，必要时使用内部判别联合，不能只保留文本而丢工具/附件或压缩来源身份。若现有 surface 与 canonical model 的转换无法无损表达某字段，应在接口设计阶段保留相应结构，禁止有损转换后宣称行为等价。
 
@@ -436,7 +411,13 @@ selector 负责选出正确骨架；resolver 负责按身份和 storage state �
 
 完整性校验尽量保留单一实现；不同消费者可以调用同一 validator，但不把展示折叠替代 execution recovery 校验。不得为了减少调用次数缓存一个无限期有效的“已验证”布尔值。
 
-### 6.5 依赖护栏
+### 6.5 加载、后台维护与退出
+
+参考[Spill索引与回填方案](./spill-reference-index-and-backfill-plan.md)，维护封装不能只隐藏函数，也必须提供宿主启动、ready触发、暂停续跑和停止协作。具体StorageLifecycleControl契约见[详细设计 §7.4](./session-storage-public-interface-design.md)：只给资源宿主，不注入普通业务；分离执行恢复、durable待办回收、策略retention和派生索引回填。
+
+引用索引双写/游标及GC安全判据保持内部；deleteSession逻辑提交不等于物理文件已删除。MCP/日志/usage维护由各自模块负责。此处只补接口适配，不实施索引migration、worker、每日策略或新的生产清理调度；生命周期接线仍需复评收口。
+
+### 6.6 依赖护栏
 
 新增 `scripts/check-session-storage-boundary.mjs`（待实现），检查外部业务模块不得依赖会话存储内部实现、会话 raw reader/writer、SQLite History 具体类或会话连接操作。覆盖正文、执行状态、accepted context、continuation 和 recovery，不能只扫描 messages.content。其他数据域的 SQLite adapter 使用按所有权记录的例外，不一律禁止整个应用的数据库访问。优先使用 TypeScript AST，识别 import、re-export、require、可静态解析的 dynamic import 与路径别名，防止通过 `database/index.ts` barrel 绕过。
 
@@ -446,7 +427,7 @@ selector 负责选出正确骨架；resolver 负责按身份和 storage state �
 
 ## 7. 分步实施
 
-实施前先关闭[详细设计 §9](./session-storage-public-interface-design.md)全部收口项，尤其是ContextPort无损DTO/提交hook、continuation接受事务和恢复回调。当前只可进行S0只读盘点与设计细化；S1–S4接口接入暂不启动。当前文档中的签名是候选设计，不能作为已定稿实现契约，也不能据此认定模块边界已完整收敛。
+实施前先关闭[详细设计 §9](./session-storage-public-interface-design.md)全部收口项，尤其是ContextPort无损DTO/提交hook、continuation接受事务和恢复回调。v2复评确认ContextPort/recovery主要契约缺口已补齐；真实续跑接受事务与源任务读取两项P1已补至详细设计§5.6/§5.7，待复评，未自动关闭。当前只可进行S0只读盘点与设计细化；S1–S4接口接入暂不启动。当前文档中的签名是候选设计，不能作为已定稿实现契约，也不能据此认定模块边界已完整收敛。
 
 | 阶段 | 改动 | 完成条件 |
 | --- | --- | --- |

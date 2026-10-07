@@ -2,10 +2,10 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 状态 | v3 · 接口设计未定稿；§9 收口项未关闭，不具备接口接入实施条件 |
-| 日期 | 2026-10-04 |
+| 状态 | v7 · 生命周期/异步维护接口已补充；continuation两项P1已补充，待复评；ContextPort/recovery主要契约缺口经v2复评已补齐，其他门禁保留 |
+| 日期 | 2026-10-07 |
 | 上层方案 | [会话存储代码结构与接口优化方案](./session-storage-refactorability-improvement-plan.md) |
-| 基线 | session-storage-refactor-tdd worktree 的 Phase 5 实现；main 的调用者一并盘点 |
+| 基线 | 当前 main HEAD 419df9ee 的SDK/outbound/启动代码；旧worktree已不存在，不以其作为可核对基线 |
 | 范围 | 无数据库类型的接口、数据契约、调用顺序、原子性及错误映射；不改持久格式，不实现第二后端 |
 
 本文接口为目标定义。代码块使用项目现有 domain/SDK 类型和下文定义的契约；SDK执行所需端口落在 `packages/agent-sdk`，宿主业务接口落在 `electron/sessionStorage/contracts.ts`，按 §0 划分；不从 database/operations 或 runtime 具体实现导入公共类型。旧 DTO 可原样迁出或由共享 domain 类型复用，不顺带改变 IPC。
@@ -14,7 +14,7 @@
 
 **SDK 自己定义运行所需的持久化契约，宿主实现这些契约。** 不能让SDK导入electron/sessionStorage/contracts，也不能仅把接口文件挪入SDK而让接口继续使用宿主Message/Session/TurnCoordinator。
 
-整个会话存储对宿主是独立模块；对SDK则是注入的窄能力。两层接口可以由同一个SQLite实现提供，但所有权和数据类型不同。
+整个会话存储对宿主是独立模块；对SDK则是注入的窄能力。两层接口可以由同一个存储实现提供，但所有权和数据类型不同；具体后端不是契约的一部分。
 
 ### 0.1 实际基线与需修正的依赖
 
@@ -77,7 +77,9 @@ interface SessionStorage {
 }
 ```
 
-组合根调用具体 SQLite 工厂一次，把所需 port 注入 IPC、Agent、outbound 等对象。工厂参数、AppDatabase、关闭/flush、文件根目录和内部维护入口只在资源宿主/adapter 出现。consumer 不调用工厂，不通过 service locator 在全局拿全部权限。
+**架构要求**：组合根通过所选存储实现的工厂创建会话存储实例，并将所需 port 注入 IPC、Agent、outbound 等对象。具体实现选择、底层资源配置及关闭/flush由组合根和资源适配层负责；公共接口不要求数据库连接、文件目录或某种存储后端。consumer不调用具体工厂，不通过service locator获取全部权限，也不能访问内部维护入口。
+
+**本轮实现**：使用现有SQLite适配器，将AppDatabase、History、spill/ledger依赖绑定在内部，不新增后端或运行时选择机制。SQLite工厂只是本轮装配示例，不是SessionStorage或SDK port的接口前提。未来选择其他实现时，调整实现工厂及组合根装配；业务consumer仍通过原公共契约调用。该替换方向仅用于接口设计，本轮不要求实现或验证另一后端。
 
 SessionId/MessageId/TurnId/RequestId 在本轮保留 string，不全库强制改 branded ID。调用者的身份权限由现有 IPC/capability 层校验；存储方法始终检查传入 session 和消息/turn 的真实归属。查询结果不授予写权限。
 
@@ -143,6 +145,7 @@ sequence 是已有消息顺序，不是 rowid，允许删除造成空洞。消�
 
 ```ts
 interface SessionQueries {
+  continuationSources: ContinuationSourceQueries
   readSession(sessionId: string): Session | undefined
   listSessions(options?: { view?: 'all' | 'user-visible' }): Session[]
   readMessage(ref: MessageRef): Message | undefined
@@ -302,6 +305,8 @@ interface SessionExecutionStore {
   markExecutionUncertain(input: ExecutionLease): boolean
   historyFor(scope: { sessionId: string; invocationId: string }): HistoryPort
   continuations: ContinuationStore
+  continuationIntents: ContinuationIntentStore
+  continuationLaunch: ContinuationLaunchStore
 }
 type PreparedIdentity = {
   turnId: string; requestId: string; sessionId: string; startToken: string
@@ -376,32 +381,220 @@ type ContinuationTerminal =
 
 ContinuationRecord无损迁出现有业务record（source/target身份、checkpoint、frozenConfig、status与transcript）。checkpoint序号是执行事件顺序，checksum是业务冻结证据，不是调用者可改的DB字段。createOrGet内部读取source History并validateContinuationCheckpoint，不接受caller随意提供未经验证的snapshot。
 
-映射createOrGetAgentContinuation/claimAgentContinuation/setAgentContinuationStatus/ForTurn；保留request key、createdBy、checkpoint和冻结配置冲突规则。外部startAgentContinuation负责路由重验与运行启动，不向port传conn。continuation_intents（接受入口路由回执）与agent_continuations（执行续跑）不同；前者也必须由具名操作封装，见§9缺口清单，不能用本接口假装已覆盖全部outbound事务。
+映射createOrGetAgentContinuation/claimAgentContinuation/setAgentContinuationStatus/ForTurn；保留request key、createdBy、checkpoint和冻结配置冲突规则。外部startAgentContinuation负责路由重验与运行启动，不向port传conn。continuation_intents（接受入口路由回执）与agent_continuations（执行续跑）不同；前者由§5.5公共接受操作与prepare hook封装，不用本接口代替。
 
-## 6. SDK ContextPort：手动/自动共用的上下文接口
+### 5.5 ContinuationIntentStore：接受入口的公共操作
 
-此节类型归SDK context.ts；宿主实现端口，UI marker由宿主单独映射。ContextCommitReceipt为SDK最小提交证据类型，字段以实际通用业务证据为准，不携带台账路径。
+本接口处理continuation_intents，和§5.4执行续跑记录分开；由Electron execution port提供。原payload指纹算法保持`JSON.stringify({sessionId,text,attachments: attachments ?? null})`，不与queue fingerprint合并。
 
 ```ts
-type ContextScope =
-  | { kind: 'session'; sessionId: string }
-  | { kind: 'invocation'; sessionId: string; invocationId: string }
-type ContextSnapshot = {
-  scope: ContextScope
-  messages: readonly CanonicalModelMessage[]
-  windowId: string
-  fence: ContextFence
+type IntentKey = { requestId: string; sessionId: string }
+type IntentPayload = IntentKey & { text: string; attachments?: Message['attachments'] }
+type ContinuationSource = {
+  invocationId: string; turnId: string; sequence: number
+  summary: string; state: 'known' | 'unknown'
 }
-type ContextCandidate = {
-  base: ContextSnapshot
-  messages: readonly CanonicalModelMessage[]
-  windowId: string
-  evidence: ContextTransformationEvidence // planner签发的不透明内部证据
+type IntentRoute = 'ordinary' | 'ordinary-selected' | 'context-turn' |
+  'ordinary-queue' | 'context-queue' | 'continuation' | 'needs-source-selection'
+type IntentReceipt = IntentKey & {
+  route: IntentRoute; target?: IntentTarget
+  status: 'needs_source_selection' | 'ordinary_fallback_pending' | 'starting_continuation' | 'queued' |
+    'accepted_turn' | 'accepted_continuation' | 'rejected_retryable' | 'commit_uncertain'
+  rejectionReason?: string
 }
-type ContextCommitResult =
-  | { status: 'committed'; snapshot: ContextSnapshot; receipt?: ContextCommitReceipt }
-  | { status: 'stale' | 'busy' | 'no-op' | 'uncompressible' }
-  | { status: 'commit-uncertain'; error: Error }
+interface ContinuationIntentStore {
+  beginContinuation(input: IntentPayload & {
+    source: ContinuationSourceRef
+  }): IntentReceipt
+  finalizeContinuationAcceptance(input: IntentPayload & {
+    continuationId: string
+  }): { receipt: IntentReceipt; statusMessage: MessageEntry }
+  readReceipt(input: IntentPayload): IntentReceipt | undefined
+  requireSourceSelection(input: IntentPayload): IntentReceipt
+  selectOrdinary(input: IntentPayload): IntentReceipt
+  reject(input: IntentPayload & {
+    reason: string; status: 'rejected_retryable' | 'commit_uncertain'
+  }): IntentReceipt
+  enqueueAndRecord(input: IntentPayload & {
+    queuedText: string; source?: ContinuationSource
+  }): { receipt: IntentReceipt; queued: EnqueueResult }
+  repairPreparedAcceptance(input: IntentPayload & {
+    turnId: string; source?: ContinuationSource
+    retrySource?: { assistantMessageId: string; invocationId?: string }
+  }): IntentReceipt
+  bindStartedTurn(input: IntentPayload & { turnId: string }): IntentReceipt
+  bindExactContinueTurn(input: IntentPayload & { turnId: string }): IntentReceipt
+  ensureStatusMessage(key: IntentKey): { messageId: string; sequence: number }
+  resolveAcceptance(input: IntentPayload): IntentAcceptance
+}
+type IntentAcceptance =
+  | { kind: 'absent' }
+  | { kind: 'selection-required'; receipt: IntentReceipt }
+  | { kind: 'queued'; receipt: IntentReceipt; message: MessageEntry }
+  | { kind: 'turn'; receipt: IntentReceipt; turn: TurnRecord; assistant: Message }
+  | { kind: 'continuation'; receipt: IntentReceipt; target: IntentTarget; message: MessageEntry }
+  | { kind: 'starting'; receipt: IntentReceipt; continuation?: ContinuationRecord }
+  | { kind: 'unresolved'; receipt?: IntentReceipt; reason: string }
+```
+
+readReceipt和所有写方法先核验requestId已有payload_sha256及session，冲突抛CONTINUATION_INTENT_IDEMPOTENCY_CONFLICT。receipt仅反映已持久接受状态，不证明外部运行已开始或成功。source必须由当前既有选择/校验路径产生，模块核对source归属，不重选历史源。
+
+| 路径/方法 | 原子范围与现有码映射 | 重试/失败 |
+| --- | --- | --- |
+| requireSourceSelection/selectOrdinary/reject | outbound登记needs-source-selection、显式ordinary_fallback、失败记录，分别短事务 | 相同payload允许原有状态操作；不同payload拒绝；不重置已有accepted target |
+| enqueueAndRecord | queued消息+queue receipt+continuation intent/source/target同事务，映射queueContinuation | 内部通知移到提交后；不接收外部enqueue callback；失败整批回滚 |
+| prepareTurn内部acceptance | PrepareTurnInput新增可选acceptance={payload,route,source,retrySource}，coordinator把原continuationIntent传给内部prepareAtomic | 原user/assistant/turn/History/intent target同事务；这是正式prepare hook，不另开port事务 |
+| repairPreparedAcceptance | outbound原653行upsert/重试source更新；验证已有turn/request身份后短事务封装 | 仅修复返回已有persisted turn的兼容adapter；不重新prepare、不启动执行 |
+| bindStartedTurn | outbound原684行await startTurn后的独立target/status更新 | 保持独立提交，不把startTurn外部动作塞事务；receipt缺失/target冲突返回原未决错误，不自动补造接受 |
+| bindExactContinueTurn | IPC原885行route/status/target更新 | 在原execute调度后的原位置调用，不擅自把调度搬到提交后；接收已知turn身份，不启动第二次执行 |
+| ensureStatusMessage | 原确定状态消息ID及sequence查询/追加的一笔事务；request关联由确定ID表达，不新增receipt表 | 保留确定身份复用，不能为同request重复追加显示消息 |
+| resolveAcceptance | 原prior分支：核验queued状态/sequence、turn/request及projected assistant；continuation通过ensureStatusMessage得到原回执 | 结果缺失/部分提交返回unresolved，不视作absent再发起外部动作 |
+
+对于accepted_turn和accepted_continuation当前可能存在的后置更新覆盖顺序，适配保持现有调用顺序与结果，不新增全局优先级。映射冲突处理须区分当前路径合法转换和target身份冲突；不能直接提供任意patchReceipt。
+
+unknown提交：先调用resolveAcceptance。确认queued/turn/continuation则返回原接受结果；存在receipt却缺target/消息/turn则unresolved，沿CONTINUATION_INTENT_COMMIT_UNCERTAIN处理，不发送、不startTurn、不调用createOrGet新续跑。确认absent也不能证明外部startTurn未发生，必须查既有request对应turn并由原接受恢复策略决定；本接口不承诺外部exactly-once。
+
+consumer映射：outbound prior SQL→readReceipt/resolveAcceptance；source选择insert/update→requireSourceSelection/selectOrdinary/reject；queueContinuation→enqueueAndRecord；真实prepare→携带acceptance的prepare hook；prepare兼容upsert→repairPreparedAcceptance；await startTurn后update→bindStartedTurn；IPC exact-continue update→bindExactContinueTurn。普通retry/turn查询经execution/query，不持conn。
+
+### 5.6 真正续跑：开始登记、启动事务、最终接受
+
+不能把真正续跑的continuationId与IPC exact-continue普通turnId混为同一种target。公共receipt新增判别target，原target_id存储字段不变，内部根据route及关联记录映射，不凭字符串外形猜类型：
+
+```ts
+type IntentTarget =
+  | { kind: 'queued-message'; messageId: string }
+  | { kind: 'turn'; turnId: string }
+  | { kind: 'continuation'; continuationId: string }
+type ContinuationSourceRef = {
+  sessionId: string; invocationId: string; turnId: string
+  checkpointSequence: number; expectedHistoryVersion: number
+}
+// IntentReceipt.target?: IntentTarget；删除公共targetId字段。
+interface ContinuationLaunchStore {
+  prepareAndClaim(input: {
+    payload: IntentPayload; source: ContinuationSourceRef
+    userMessageId: string; createdBy: string
+    frozenConfig: Record<string, unknown>; executionConfig: TurnExecutionConfig
+  }): Promise<{
+    accepted: true; started: boolean
+    continuation: ContinuationRecord; turn?: TurnStarted
+  }>
+}
+```
+
+ContinuationLaunchStore作为execution.continuationLaunch提供，只注入可信启动adapter。模块工厂绑定现有runtime的prepareContinuation业务协作，不对consumer传conn或开放任意事务callback；内部沿现有startAgentContinuation事务，外部模型执行调度仍沿原adapter时机。
+
+| 操作 | 提交范围与顺序 | 状态/target |
+| --- | --- | --- |
+| beginContinuation | 原outbound479行insertIntent短事务：验证payload、source身份/版本，保存源信息；提交后才await宿主startContinuation | starting_continuation；首次暂无target；不得清除已接受target |
+| continuationLaunch.prepareAndClaim | 内部重读并验证source checkpoint、required-user、新任务边界；createOrGet续跑记录、intent关联、runtime.prepareContinuation、claim、原事务末intent更新同事务 | intent关联时starting+continuationId，原事务末accepted+continuationId；失败整批回滚 |
+| finalizeContinuationAcceptance | 原outbound482行外层事务：接受状态/源target核验或幂等更新 + ensureContinuationStatusMessage确定ID查询/追加共同提交 | accepted_continuation + continuationId；返回完整statusMessage，不拆两次port调用 |
+| bindExactContinueTurn | 原IPC885行普通turn路径，独立更新，不代表上述真实续跑 | accepted_continuation + turnId，公共target.kind=turn |
+
+当前startAgentContinuation末尾本身还写accepted状态（agentContinuation.ts约330行），不是始终停留starting；本设计明确保留它。外层finalize仍不可省略：它负责同事务保证状态消息。事务期间的starting可回滚，崩溃后可见的starting通常来自第一笔登记或未知提交，不能直接据此重启执行。
+
+finalize先核验continuation记录的request/source/session及原starting或已accepted身份，相同target允许重读；不同target/payload拒绝。已接受但缺状态消息时同一finalize事务补齐确定ID消息；事务失败不应留下此次新消息而未接受。ensureStatusMessage只保留历史重复读取兼容用途，真实成功路径必须用finalize，不能拆开调用。
+
+resolveAcceptance对route=continuation通过agent_continuations关联识别target.kind，不通过turn lookup误判。starting返回starting/unresolved及实际关联record，不返回absent；accepted时返回既有/确定ID状态消息。未知prepare/finalize提交先查询request idempotencyKey和intent：已知已接受则恢复同一结果；关联缺失/状态不确定沿COMMIT_UNCERTAIN拒绝，不重复prepare、claim或外部发送。原未提交且安全拒绝的checkpoint可按原策略降级context-only turn；已经started或TransactionCommitUnknownError不走安全降级。
+
+完整调用图：
+
+```text
+outbound查询/选择source→beginContinuation
+  →await宿主startContinuation（权限/路由配置重验）
+    →execution.continuationLaunch.prepareAndClaim（内部原事务）
+    →原模型执行调度，不在新DB事务内
+  →finalizeContinuationAcceptance（接受+状态消息同事务）
+  →返回local-command回执
+```
+
+### 5.7 源任务查询：封装枚举、边界证据与显式选择
+
+源选择产品策略继续留outbound；所有SQL与具体History枚举读取收回宿主query。不能要求consumer通过HistoryPort增加SQLite特有方法。
+
+```ts
+interface ContinuationSourceQueries {
+  inspect(input: {
+    sessionId: string
+    activeTurnIds: readonly string[] // 当前runtime真实活动集合，不猜持久turn等于活动
+    selectedAssistantMessageId?: string
+  }): ContinuationSourceInspection
+}
+type FailedSourceCandidate = {
+  source: ContinuationSourceRef
+  assistantMessageId?: string; assistantSequence?: number
+  snapshot: HistorySnapshot // SDK公开事件DTO，不是SQLite adapter
+  summary: ContinuationSource
+}
+type ContinuationSourceInspection =
+  | { kind: 'unavailable'; reason: 'CONTINUATION_INTENT_HISTORY_UNAVAILABLE' }
+  | {
+      kind: 'available'
+      boundary: 'running-turn-superseded' | 'newer-input' | 'completed-invocation' | 'history-start'
+      failedCandidates: readonly FailedSourceCandidate[] // 原最新到最旧次序
+      selected:
+        | { kind: 'not-requested' }
+        | { kind: 'found'; candidate: FailedSourceCandidate }
+        | { kind: 'not-found' | 'not-recoverable' }
+      fallback?: FailedSourceCandidate
+    }
+```
+
+SessionQueries.continuationSources提供此窄接口。snapshot用于现有summarize/策略校验；不提供修改源状态权力，实际prepareAndClaim必须再次读History验证expected版本及较新输入。public DTO不泄漏workDir、stream SQL或spill位置；读取全程沿当前owner完整性校验。
+
+| 原outbound分支 | query内部行为 | outbound仍负责 |
+| --- | --- | --- |
+| 386–405最新invocation/活动turn | 枚举session streams，读最新事件；非终态且对应activeTurnIds则running-turn-superseded，否则非终态返回unavailable | superseded走原新输入/队列决策；unavailable拒绝 |
+| 405–413失败候选与边界 | 最新向前枚举，failed加入；完成终态停止；source assistant sequence之后存在sent/queued user则停止，不加该过期源 | 单候选选它，多候选chooseLatest/要求用户选择；不改顺序 |
+| 436–452显式assistant | session内assistant→turn/request；有候选时只从候选中匹配；候选为空时保留原requestId History fallback并校验failed终态 | not-found/not-recoverable映射原错误，不新增隐式选择 |
+| 455–469历史fallback | 仅候选为空：读取最新user、失败assistant数量与turn request；唯一失败且最新user.sequence < assistant.sequence时读failed History | 仅原relationCue且未选普通路径时消费fallback；不把fallback自动当可续跑source |
+
+无源返回available+空候选，无需抛错；多源仍显式保留。候选内缺assistant sequence时保持当前原边界行为，不凭空把unknown当eligible；真正续跑启动会按现有SOURCE_STALE拒绝。显式选择的fallback与一般fallback分别字段表达，避免误用为同一种候选。History所有权/结构损坏沿原异常传播或unavailable拒绝，不返回假空候选。
+
+调用映射：outbound所有SqliteAgentHistory/list/read与assistant→turn/sequence SQL替换为一次inspect；active集合仍由runtime取得，sourceSelection/原exact/relationCue逻辑保持；源码摘要可复用SDK/宿主纯函数，不能再访问数据库。inspect期间不await模型；任何选择到启动间变化由prepareAndClaim的source复核拒绝，不新增长期锁。
+
+## 6. SDK ContextPort：无损材料与单一writer提交
+
+本节替换原缩略契约。类型由SDK定义，Electron实现session读取/投影适配；不迁移任何台账或History格式。CanonicalTurnMessage复用turn.ts现有带稳定身份的类型，不用仅有role/content的模型消息替代。
+
+### 6.1 无损DTO及签发入口
+
+```ts
+type JsonValue = null | boolean | number | string | JsonValue[] |
+  { [key: string]: JsonValue }
+type ContextItem = Readonly<{
+  // 同一surface上的稳定身份，不按本次数组index重新生成
+  replayIdentity: string
+  sourceMessageIds: readonly string[]
+  message: CanonicalTurnMessage
+  // builder已有source/block关联资料的无损副本；不含路径/连接
+  sourceData: Readonly<Record<string, JsonValue>>
+}>
+type ContextFrame = Readonly<{
+  items: readonly ContextItem[]
+  system: string
+  windowId: string
+  requiredUser?: Readonly<{ id: string; message: CanonicalModelMessage }>
+  pendingTools: readonly CanonicalToolCall[]
+}>
+type ContextFence = Readonly<{
+  token: string // 模块签发的运行期handle，外部不可构造/解码
+}>
+type ContextSnapshot = Readonly<{
+  scope: ContextScope; frame: ContextFrame; fence: ContextFence
+}>
+type ContextTransformationEvidence = Readonly<{
+  token: string // 共用planner注册候选证据的handle
+}>
+type ContextCandidate = Readonly<{
+  base: ContextSnapshot; output: ContextFrame
+  evidence: ContextTransformationEvidence
+}>
+type ContextCommitReceipt = Readonly<{
+  operationId: string; windowId: string
+  inputFingerprint: string; outputFingerprint: string
+  historyVersion?: number // session台账路径没有invocation版本
+}>
 interface ContextPort {
   readCurrent(scope: ContextScope): Promise<ContextSnapshot>
   commitReplacement(input: {
@@ -410,37 +603,125 @@ interface ContextPort {
     candidate: ContextCandidate
   }): Promise<ContextCommitResult>
 }
+type ContextScope =
+  | { kind: 'session'; sessionId: string }
+  | { kind: 'invocation'; sessionId: string; invocationId: string }
+type ContextCommitResult =
+  | { status: 'committed'; snapshot: ContextSnapshot; receipt: ContextCommitReceipt }
+  | { status: 'stale' | 'busy' | 'no-op' | 'uncompressible' }
+  | { status: 'commit-uncertain'; receipt?: ContextCommitReceipt; error: Error }
 ```
 
-ContextTransformationEvidence的值仅来自共用planner；保留shadow/checkpoint、source身份、required-user及现有projection payload。落实时先做现有surface→canonical类型的无损检查；不能用上述messages数组丢弃附件或工具状态。实际字段不适合CanonicalModelMessage时使用无损内部surface DTO并更新两个入口，不强行序列化截断。
+frame输出模型请求时仅提取items.message；身份、sourceData和系统文本留在上下文契约，不写入供应商messages。输入/输出指纹分别使用各原路径已有算法；不因DTO增加字段改变历史fingerprint。
 
-### 6.1 readCurrent
+| 现有材料 | 新DTO/证据映射 | 保全要求 |
+| --- | --- | --- |
+| stable message ID、surfaceItemIdentities | replayIdentity/sourceMessageIds、message现有id | 不按刷新顺序重编号；checkpoint无来源时sourceMessageIds为空 |
+| 文本/图片/thinking/toolCalls/role=tool | 完整CanonicalTurnMessage及block源映射sourceData | JSON无损拷贝；禁止textOf压平作为持久输出 |
+| requiredUserMessage、待dispatch工具 | requiredUser、pendingTools | 保留原JSON相等与tool id/name/input校验 |
+| checkpointMessage、checkpointReplayIdentity、shadowedRanges | planner注册证据的私有条目 | 原candidate逐字段保存，不省略或重算身份 |
+| historyPayload、commitProjection | 私有证据条目的payload副本及受控投影函数 | payload保持既有字段；禁止覆盖messages/fingerprint/required-user保留键 |
+| windowId、outputSurfaceFingerprint | frame、receipt及私有指纹记录 | marker由Electron根据receipt+原记录映射，不传入SDK类型 |
 
-session scope：原API baseline query→surface builder→compaction replay/shadow；invocation scope：当前SDK context与持久History/compaction折叠。没有scope归属、缺正文或执行History损坏时抛现有完整性错误。
+sourceData只容纳已确认JSON可表达的源关联，不容纳任意对象。builder输出遇到非JSON资料时由Electron adapter保留在私有注册条目中，ContextItem使用运行期关联handle；不进行有损JSON stringify。注册条目按operation生命周期释放，不承诺跨进程token有效。
 
-invocation内尚未持久化的模型/工具结果不能伪装成已提交snapshot；按原安全边界调用。读结果已经包含压缩，不追加完整原历史来“补齐”。
-
-### 6.2 commitReplacement
-
-| 阶段 | 规则 |
-| --- | --- |
-| 输入校验 | base/evidence均由模块或受控planner签发；scope、required-user、工具顺序及预算符合原规则 |
-| 提交前 | 重验原session busy/fingerprint或invocation version；stale/busy不提交 |
-| 持久提交 | session adapter沿appendCompactionTransaction；invocation adapter沿SDK transcript-compacted及commitProjection；caller不选后端 |
-| 生效 | 仅committed更新运行内context/window或通知marker；snapshot是已提交结果，不能以不相关最新状态覆盖 |
-| 部分失败 | History已提交但projection失败返回commit-uncertain或保持原类型化异常；禁止caller继续旧context |
-
-no-op/uncompressible不提交。普通未写入storage错误继续抛出；不能统一吞成failed。operationId沿原request/compaction身份：不引入新全局去重表，不能承诺两种adapter已具备一致的持久幂等。未知提交结果先恢复，不能凭operationId盲重试。
-
-SDK通过受控提交协调hook调用同一port，adapter使用原writer，不能从adapter再次调用boundary形成递归；需绑定原prepared candidate/expected writer version，确保一次replacement只写一次事件。宿主planner仍负责摘要调用，port不调用LLM。
-
-## 7. SessionRecoveryPort：领域恢复，不暴露修复步骤
+内部可信签发接口的完整边界如下；实现closure由SDK/context模块构造，只有受控planner adapter持有，业务caller仅拿ContextPort：
 
 ```ts
+interface ContextRegistrar {
+  captureFrame(input: {
+    scope: ContextScope; frame: ContextFrame
+    binding: { kind: 'session'; surfaceFingerprint: string } |
+      { kind: 'invocation'; phase: ContextPhase; epoch: number; expectedHistoryVersion: number }
+  }): ContextSnapshot
+  registerTransformation(input: {
+    base: ContextSnapshot; output: ContextFrame
+    proof: {
+      historyPayload: Readonly<Record<string, JsonValue>>
+      sourceBindings: readonly { outputIdentity: string; inputIdentities: readonly string[] }[]
+      checkpoint?: Readonly<Record<string, JsonValue>>
+      shadowedRanges: readonly { start: string; end: string }[]
+      commitProjection?: () => void | Promise<void>
+    }
+  }): ContextCandidate
+}
+```
+
+sourceBindings覆盖保留、合并与checkpoint输出；无来源输出必须是现有允许的checkpoint/replay形态，不允许任意新消息。proof保存原payload不增加持久字段；commitProjection仅可信宿主adapter提供，不向普通caller开放。session surface fingerprint和invocation version由工厂/SDK绑定校验，不能通过公开captureFrame自行伪造。
+
+`captureFrame(frame, scope, binding)`由SDK/宿主可信装配点注册输入快照并签发fence；`registerTransformation(base, output, proof)`由共用planner适配器签发evidence。它们是内部接口，不给IPC/业务consumer签发权限。校验以注册条目为准，比较base/输出完整内容、scope、输入指纹及运行帧epoch，不以TypeScript品牌或随机token本身代替验证。
+
+### 6.2 invocation读取与writer绑定hook
+
+SDK在创建InvocationHistoryWriter后创建一次以下内部binding，并交给ContextPort工厂；没有另一个writer。此hook由SDK定义，不把writer对象或通用transaction callback交给consumer。
+
+```ts
+type ContextPhase = 'preflight' | 'boundary'
+interface InvocationContextBinding {
+  scope: Extract<ContextScope, { kind: 'invocation' }>
+  capture(): Promise<Readonly<{
+    frame: ContextFrame; phase: ContextPhase
+    epoch: number; expectedHistoryVersion: number
+  }>>
+  appendReplacement(input: {
+    epoch: number; expectedHistoryVersion: number
+    payload: Readonly<Record<string, JsonValue>>
+  }): Promise<HistoryAppendResult>
+}
+// SDK内部新增writer受限方法；不是公开替换HistoryPort
+// writer.appendAtVersion(events, expectedVersion): Promise<InvocationHistoryAppendResult>
+```
+
+`capture`读取SDK当前阶段的冻结frame，不从数据库重新拼凑运行状态。preflight frame是当前messages；boundary frame是`[...messages, committedMessage]`。本轮response在boundary前已按原路径写入model-response-committed；frame即使尚未splice到messages，也属于可信阶段输入。禁止混入尚未提交的provider chunk/tool结果；先验证response提交结果，再开放boundary捕获。
+
+SDK设置阶段frame时递增epoch；摘要await后epoch变化则stale。capture在原writer队列完成后取得currentOrPersistedVersion；appendReplacement在同一writer的队列中先核验epoch、writer版本及持久版本，再调用原HistoryPort.appendBatch，成功才推进writer.version。`appendAtVersion`需重构现有append的排队内部实现，不能在已排队callback中再调用append并等待造成死锁。expected version检查必须在队列内，不是队列外check后无条件append。
+
+appendReplacement只能追加单条transcript-compacted，其messages/指纹/required-user来自注册候选；adapter不持有任意append能力。其他事件也沿同一writer，不能另建序列队列竞争版本。
+
+### 6.3 三条调用图与旧写入口退出
+
+```text
+手动：compact IPC → session ContextPort.readCurrent
+  → API baseline+surface+已提交shadow（内部）
+  → planner/摘要 →注册候选→commitReplacement
+  →重验session busy/fingerprint→原appendCompactionTransaction
+  →committed→UI marker；下一请求重放新surface
+
+preflight：SDK设置phase frame=messages→ContextPort.readCurrent
+  →原preflight planner（只返回候选，不持久写）→注册候选
+  →commitReplacement→binding.appendReplacement（原writer）
+  →原commitProjection→committed→SDK splice/messages/window→重prepare请求
+
+boundary：先完成原response History提交
+  →SDK设置phase frame=[...messages, committedMessage]
+  →readCurrent→原boundary planner→注册候选→commitReplacement
+  →同writer appendReplacement→原commitProjection
+  →committed→SDK替换messages/window，boundaryReplacedTranscript=true
+```
+
+`turn.ts` preflight原698行与boundary原1227行的transcript-compacted append块、随后的commitProjection块全部由ContextPort内部提交路径接管，旧位置仅保留结果处理和内存生效，不能保留第二次append。planner的commitProjection从返回给consumer的候选中移入可信evidence注册条目。对其他provider recovery中直接追加replacement的路径同样盘点接入，不允许形成旁路。
+
+无History但只替换内存的旧boundary兼容行为不得凭本接口强制写History：明确归入legacy adapter，保持原仅内存结果并不称作持久committed；完整ContextPort接入以有History路径为本轮目标。legacy路径的调用者不得得到可恢复提交receipt，兼容分支退出另记，不暗中改变产品行为。
+
+### 6.4 提交结果和部分失败
+
+port校验无损输出、required-user和pendingTools，再重验fence。no-op/uncompressible/stale/busy不写。History成功后才调用原宿主projection；成功返回receipt和由候选构成的新snapshot，不重新读取无关最新frame。
+
+History成功而projection失败时返回commit-uncertain并带已知historyVersion/指纹。SDK将其映射为原AgentTurnBoundaryProjectionError停止执行；不splice、不请求模型、不追加第二次压缩。恢复读取已提交History及现有补偿事实。History提交结果未知同样停止；已知事务回滚的普通错误仍抛出，不伪造receipt。手动台账部分失败沿原结果/重放语义，不宣称跨后端exactly-once。
+
+## 7. SessionRecoveryPort：完整协作与结果来源
+
+### 7.1 工厂绑定回调
+
+bootstrap在构造端口时绑定下面能力；recover不接受外部succeeded布尔值。restoreTurn与recover均是同步业务回调，与当前TurnCoordinator实际签名一致。
+
+```ts
+interface TurnRecoveryCallbacks {
+  restoreTurn(turn: TurnRecord, assistant: Message): void
+  recover(): number
+}
 interface SessionRecoveryPort {
-  recover(input: {
-    coordinator: { recover(): number }
-  }): Promise<RecoveryReport>
+  recover(): Promise<RecoveryReport>
   inspectReadiness(sessionId: string): Readiness
 }
 type Readiness = {
@@ -449,18 +730,114 @@ type Readiness = {
 }
 type RecoveryReport = {
   status: 'ready' | 'degraded' | 'blocked'
-  recoveredInvocationCount: number
-  recoveredTurnCount: number
-  skippedSessionIds: string[]
-  failures: Array<{ scope: 'session' | 'global'; sessionId?: string; error: Error }>
+  history: { succeeded: boolean; interruptedCount: number; repairFailureCount: number }
+  snapshots: { restoredCount: number; skippedCanonicalUnavailableCount: number; missingAssistantCount: number }
+  coordinator: { succeeded: boolean; recoveredCount: number }
+  reconciliation:
+    | { status: 'skipped'; reason: 'history-recovery-incomplete' | 'turn-projection-recovery-incomplete' }
+    | { status: 'completed'; releasedUnstarted: number; markedUncertain: number; repairedCheckpoints: number; reconciled: number }
+  continuations: { interrupted: number; unknownSideEffect: number; settled: number }
+  failures: Array<{ stage: 'history' | 'snapshots' | 'coordinator' | 'reconciliation' | 'continuations'; error: Error }>
 }
 ```
 
-recover仅bootstrap调用，其他consumer拿不到。coordinator能力是执行业务协作，不是任意数据库回调；落地以现有recover实际签名绑定窄函数，recover返回数值作为实际恢复turn计数，模块核验未完成投影后才允许reconciliation，不能相信caller提供succeeded:true。
+不再暴露skippedSessionIds：原快照恢复只计算跳过快照数量，不可伪造为session列表。新增restored/missingAssistant计数只在实际for-loop分支计数，不改变处理行为；callback返回非void的原值忽略。History回调与台账补偿能力也由工厂绑定当前main已有实现，不能让bootstrap伪造结果。
 
-内部保持当前History恢复、persisted snapshot/turn恢复及transcript reconcile的真实启动顺序；根据现有启动代码逐步骤封装，不按名称猜顺序。坏session允许隔离的catch仍按原范围，callback自身异常必须传播/计入阻断，不能被误判为可跳过正文。
+### 7.2 真实阶段顺序与门禁
 
-report计数来自实际结果，不把skipped当成功。inspectReadiness仅暴露领域许可，不允许caller据此绕过实际操作fence；是否允许再次recover及并发调用由bootstrap单次编排控制，不新增运行中重置协议。
+1. 资源宿主先完成原DB初始化及必要安全/confirmation恢复；confirmation reconcile和其他安全域仍各自owner管理，不因封装省略。原startup orphan/台账修复按现有main时序绑定，不凭名称重排。
+2. 模块运行当前main的canonical History恢复及所有既有projection修复，repairFailureCount包含catch及participant故障；succeeded仅当实际失败数为0。
+3. 有现有turnRuntime时，按configuring/prepared/executing/waiting-confirm枚举快照。只在getProjectedMessage的局部catch跳过CANONICAL_SESSION_CONTENT_UNAVAILABLE；assistant不存在不restore并计missing。restoreTurn在catch外调用，异常中断该阶段。
+4. 快照恢复没有callback错误才调用coordinator.recover，使用实际number计数；随后hasUnfinishedStartupProjections核验。仍有残留或recover抛错时coordinator.succeeded=false，不能继续释放执行围栏。
+5. reconciliation首先要求history.succeeded，再要求coordinator.succeeded及再次无未完成projection；通过后才recoverStaleSessionExecutionClaims和reconcileCommittedSessionTranscripts。失败保持原claim/checkpoint保护，记录stage错误。
+6. continuation reconciliation沿原`history.succeeded && coordinator.succeeded`输入运行，保留unknownSideEffect语义；它不是无条件重新执行外部动作。
+
+现有无ctx.turnRuntime分支仍通过原runtime创建/恢复路径处理，不强制套用上述显式快照恢复分支。工厂记录绑定模式`existing-runtime | legacy-created-runtime`，按原分支生成报告；没有实际coordinator成功证据的模式不得宣称通过gate。
+
+### 7.3 readiness和异常范围
+
+recover运行中返回recovery-pending；报告blocked表示History/协调器/投影门禁未满足，或恢复callback/reconcile失败，执行不开放。degraded用于快照正文被跳过但持久恢复/门禁已完成，不能把跳过当成History健康。
+
+inspectReadiness内部查询现有session状态/持久执行fence与已知正文故障；不存在session返回readable=false/executable=false，不新增新的成功语义。readable仅表示当前允许进入读路径，实际读取仍可能遇到未发现的损坏；不是完整性认证。executable是当前存储准入条件，不能替代执行claim/CAS。快照跳过不永久写坏session清单或放宽gate。
+
+原异常边界保持：projection读取局部不可用可跳过，restore callback抛相同错误文本也必须失败；unexpected History/SQL异常不自动隔离为某session；report收集原启动能捕获的失败，不吞用户操作的异常。port并发recover合并同一在途Promise；完成后bootstrap不重复调用，重试沿原重启协议，不新增在线释放流程。
+
+## 7.4 宿主生命周期与后台维护契约
+
+参考[Spill引用索引与可续跑回填方案](./spill-reference-index-and-backfill-plan.md)。原接口仅封装恢复与删除，尚不足以表达启动后的后台工作。本节定义宿主调度边界，不实施索引migration、回填worker或每日清理策略；具体实现和放行仍属于该专项方案。
+
+### 7.4.1 宿主独享接口
+
+工厂返回业务SessionStorage与单独的StorageLifecycleControl，只有bootstrap/资源宿主持有后者；不把维护能力默认注入IPC/Agent/renderer。SDK只需执行端口，不拥有桌面窗口、保留策略或索引回填接口。
+
+```ts
+type MaintenanceReason = 'startup' | 'window-ready' | 'policy-changed' |
+  'scope-changed' | 'capacity-pressure' | 'retry'
+type MaintenanceClass = 'pending-reclamation' | 'retention' | 'derived-index'
+type MaintenanceState = {
+  taskId: string // opaque业务任务身份，不是表名/locator/文件路径
+  category: MaintenanceClass
+  status: 'idle' | 'scheduled' | 'running' | 'paused' | 'failed' | 'completed'
+  scannedCount: number; processedCount: number
+  lastErrorCode?: string; lastSuccessAt?: number
+}
+interface StorageLifecycleControl {
+  initialize(input: { signal?: AbortSignal }): Promise<void>
+  requestMaintenance(input: {
+    reason: MaintenanceReason; category?: MaintenanceClass
+  }): { status: 'scheduled' | 'coalesced' | 'not-needed' }
+  allowBackgroundWork(): void
+  pauseMaintenance(input: { category?: MaintenanceClass }): Promise<void>
+  resumeMaintenance(input: { category?: MaintenanceClass }): void
+  inspectMaintenance(): readonly MaintenanceState[]
+  stop(input: { deadlineMs: number }): Promise<{
+    status: 'quiescent' | 'deadline-exceeded'
+  }>
+}
+```
+
+initialize仅初始化本实现资源和轻量恢复/待办检查，不在首屏等待大目录扫描或全量回填；不能与SessionRecoveryPort.recover混用。recover仍负责执行事实恢复与准入门禁，后台维护失败不伪造恢复成功，也不因retention失败阻断所有健康会话。
+
+requestMaintenance仅安排/合并工作，不返回“已经清完”；消费者不得据scheduled删除文件。allowBackgroundWork在窗口可用或非UI宿主对应ready时调用，使策略型sweep/回填可运行。pending-reclamation沿已有崩溃回收策略尽早恢复，不强制等待窗口ready；真正耗时工作仍有有界批次/让出机制，不能以“异步”名字掩盖同步全扫描。
+
+pause在安全批次边界停止，已提交游标保留，未提交批次回滚或原协议处理；不强制中断unlink与引用校验临界区。resume仅允许既有任务续跑，不授权跳过验证。stop拒绝新维护、请求安全暂停并等待在途写入/维护退出；只有quiescent才由资源宿主flush/close。deadline-exceeded时不能立即关闭仍被worker使用的连接，宿主沿已有进程退出策略处理；下次由持久待办恢复，不承诺后台清理全部完成。
+
+方法sync/async按生命周期需求定义；维护状态为诊断快照，不是恢复/删除许可。signal/暂停不改业务deleteSession与History写入的事务规则。
+
+### 7.4.2 三类工作及模块归属
+
+| 工作 | 接口及触发 | 安全责任 |
+| --- | --- | --- |
+| 加载执行状态/崩溃事实恢复 | initialize→recovery.recover | 原History/turn/claim门禁，不因窗口ready后调度而延迟必要恢复 |
+| session删除后source spill回收 | deleteSession内部同事务登记durable待办；内部唤醒pending-reclamation | delete成功表示逻辑删除和待办已提交，不表示文件已unlink；共享引用/严格校验由模块负责 |
+| spill引用索引回填/对账 | derived-index低优先级后台任务 | 双写先行、keyset/字节预算、持久游标、owner revision复核、失败完整回滚，不向宿主暴露canonical表 |
+| spill degradable/会话台账retention | retention，window-ready/策略或scope变化触发 | 原root fence、source/degradable分类、投影与compaction依赖保护，不缓存删除许可 |
+| MCP artifacts/Agent日志/usage facts | 各自模块生命周期接口，由宿主调度器协作 | 不收进会话存储；usage crash reconcile与usage retention仍分开 |
+
+公共调度器只能协调priority/取消/运行观测，不能直接删除会话spill或重建引用索引。原spill root/workDir集合在adapter里解析；scope-changed事件不向公共port传物理路径。政策字段沿已有配置类型/入口传递；指纹、时区日界和算法版本计算在任务owner内，不让宿主改写last-success。
+
+### 7.4.3 索引与异步清理必须封装的不变量
+
+- canonical写入与引用索引维护必须位于原写事务，含History、transcript、修复/删除所有写点；禁止公共caller另外调用“更新索引”。
+- 回填未complete且未核验前，索引只供影子诊断。GC继续原严格canonical扫描，索引无记录不代表无引用。source unlink的额外定向复核按专项方案保留。
+- worker每批更新索引及游标同事务，核验owner revision/hash；并发写/删不能被旧批次覆盖。损坏/未知descriptor拒绝删除，不把坏行当空。
+- policy/root变化使内部成功水位失效；只在完整sweep成功后推进，失败不前进。本地日与任务原口径保持，不由SDK统一UTC。
+- 重启从最后已提交cursor/待办恢复；taskId状态及观测不能替代持久进度。complete是内部完整性证明，不接受host设置。
+- profile/restore/旧writer版本导致索引失效时，内部回退安全读法并安排重验，普通queries/commands契约不变。
+
+### 7.4.4 宿主调用与验收
+
+```text
+bootstrap选择存储实现→initialize
+  →必要recovery（原执行门禁）→开放可用业务能力
+  →window ready→allowBackgroundWork/requestMaintenance
+运行：内部删除/写入唤醒待办；宿主通知policy/scope/容量变化
+退出：pause/stop→quiescent→原flush/close
+```
+
+原retention全扫描/回填切后台和水位持久化会改变时序或schema，不能因本节定义自动实施。本轮可先封装当前维护入口与资源访问；专项实现接入时验证取消/批次故障、重启续跑、单root互斥、共享locator不误删、失败不推进水位，以及UI业务接口无新增raw访问。
+
+该接口属于新增设计收口项，待生命周期owner/当前启动调用点映射复评；不将已有continuation等P1或其他门禁视为关闭。
 
 ## 8. 调用顺序与现有IPC映射
 
@@ -480,7 +857,7 @@ report计数来自实际结果，不把skipped当成功。inspectReadiness仅暴
 
 ## 9. 实施前收口项与设计完成条件
 
-**本节是接口接入实施的前置条件，不是可以留到实现过程中补齐的待办。** 以下各项尚未定稿，当前签名、DTO和调用链均不能认定为可直接实现的最终契约。关闭并复核全部收口项前，不启动以本文契约为依据的接口接入；允许继续只读盘点、设计细化与证据核对。
+**本节是接口接入实施的前置条件，不是可以留到实现过程中补齐的待办。** v2复评已确认ContextPort/recovery主要契约缺口补齐；新增识别的两项continuation覆盖缺口由§5.6/§5.7补充，尚待复评；其余项未关闭。当前签名、DTO和调用链不能认定为已获实施放行的最终契约。关闭并复核全部收口项前，不启动以本文契约为依据的接口接入；允许继续只读盘点、设计细化与证据核对。
 
 优先定稿三项：ContextPort的无损DTO与提交hook、continuation接受事务、恢复回调。关闭要求是把具体类型/签名、调用顺序、原子范围、失败与重试规则，以及现有代码映射写入本文；不能仅把台账状态改成“完成”。若选择改变原行为或持久协议，应另立变更，不在结构整理中隐式实施。
 
@@ -498,22 +875,23 @@ report计数来自实际结果，不把skipped当成功。inspectReadiness仅暴
 以下不能只写“包装已有函数”就标完成，实施前须补齐签名/映射并追加本设计：
 
 0. SDK/宿主契约拆分：ContextPort实际接入、HistoryPort去重、台账路径与压缩事务细节移出SDK；port DTO无Message/Session/CompactionMarker/TurnCoordinator依赖。
-1. outbound中continuation_intents的登记、路由选择、target绑定与状态消息/receipt关联：按现有每个事务边界定义具名业务操作，明确与agent_continuations区别，不做跨所有状态的大事务。
+1. continuation接受操作已补充至§5.5，需按当前outbound/IPC实码复评，验证每条原事务/后置操作映射。
 2. 各业务metadata key的使用清单：将需内部一致性的字段迁入具名命令；兼容入口受限且有退出列表。
 3. DTO迁出实施时进行typecheck，保持本文已核对的SearchCorpusPage/RetryTarget/QueueReceipt/ApiBaseline字段，不能因组织代码删除字段。
-4. Context evidence与SDK提交hook：确定无损surface DTO、writer绑定和不递归调用方式；单纯facade改名不算完成。
-5. recovery与coordinator的精确callback签名/计数：从启动代码固定真实顺序与可跳过范围，不伪造并不存在的report数据。
+4. Context DTO/签发/hook已补充至§6，需复评并补充实现时的无损映射和队列负例测试清单；单纯facade改名不算完成。
+5. recovery回调/报告已补充至§7，需复评真实启动分支与字段来源，不把数量伪造为session列表。
 
 ### 9.1 收口台账
 
 | 项目 | 状态 | 关闭证据 |
 | --- | --- | --- |
 | SDK/宿主契约归属与旧端口退出 | 未关闭 | 实际消费点、类型依赖与兼容接入顺序明确 |
-| ContextPort无损DTO及提交hook | 未关闭 | 字段完整映射；writer/version绑定、单次提交、不递归与部分失败语义定稿 |
-| continuation接受事务 | 未关闭 | 区分两类continuation记录；每个接受/绑定/状态操作的签名、原子范围和幂等冲突规则定稿 |
+| ContextPort无损DTO及提交hook | v2复评确认主要契约缺口已补齐；实现未验证 | §6.1无损映射/注册；§6.2同writer队列hook；§6.3三调用图与旧append退出；§6.4部分提交 |
+| continuation接受事务及源查询 | v2两项P1修订已补充，待复评 | §5.6真实启动事务/接受+消息/target；§5.7源候选/任务边界/显式fallback查询；§5.5普通接受操作 |
 | metadata业务键与受限入口 | 未关闭 | 使用清单、保留键、具名命令和旧入口退出条件明确 |
+| 生命周期与异步维护 | 已补充，待复评 | §7.4轻量加载/恢复/后台调度/暂停停止；专项索引与清理不变量、其他数据域归属 |
 | 公共DTO完整性 | 未关闭 | 与当前真实类型逐字段对照，签名无缩略占位或数据库依赖 |
-| 恢复回调与结果 | 未关闭 | 精确回调签名、真实启动顺序、计数来源及可跳过/阻断边界定稿 |
+| 恢复回调与结果 | v2复评确认主要契约缺口已补齐；实现未验证 | §7.1工厂绑定restore/recover与字段来源；§7.2阶段gate；§7.3异常范围 |
 
 这些是设计收口项，不是已完成的实现。全部关闭后需复核文档内部一致性，再决定进入接口接入阶段；关闭设计项本身不代表代码边界已经收敛，更不涉及数据迁移或发布放行。
 
