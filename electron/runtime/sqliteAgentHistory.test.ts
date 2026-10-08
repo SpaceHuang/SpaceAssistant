@@ -15,7 +15,7 @@ import { runMigrations } from '../database/migrations'
 import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHistoryStorage'
 import { runInTransaction } from '../database/transaction'
 import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
-import { SqliteAgentHistory } from './sqliteAgentHistory'
+import { reconcileTerminalContentSegments, SqliteAgentHistory } from './sqliteAgentHistory'
 import { CREATE_TABLES_SQL } from '../database/schema'
 import { ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, getSessionEventSink, readSessionEvents } from '../sessionEvents'
 import { claimSessionExecution, markSessionExecutionStarted } from '../database/sessionTranscript'
@@ -28,6 +28,7 @@ import { certifyCanonicalSessionApiRead, setCanonicalApiReadFeatureEnabled } fro
 import { markSessionMessageContentWriteStopped } from '../sessionStorage/maintenance'
 import { enableCanonicalSessionWriteAuthority } from './sessionContentWriteAuthority'
 import { createSpillStore, reconcileSpillOrphansAgainstCanonicalHistory, type SpillStore } from '../storage/spillStore'
+import { buildAssistantActivityTimeline } from '../../src/shared/assistantActivityTimeline'
 
 function createDb(dbPath = ':memory:'): DatabaseSync {
   const conn = new DatabaseSync(dbPath)
@@ -150,7 +151,9 @@ describe('SqliteAgentHistory', () => {
     expect(markSessionExecutionStarted(db, { sessionId: 'atomic-terminal-session', turnId: 'atomic-terminal-turn', ownerId: 'process', generation: owner.generation })).toBe(true)
     const history = new SqliteAgentHistory(conn, 1, () => 100, 'atomic-terminal-session')
     conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
-      VALUES('atomic-terminal-assistant','atomic-terminal-session','assistant','streaming copy','streaming',1,10,0)`).run()
+      VALUES('atomic-terminal-assistant','atomic-terminal-session','assistant','beforeafter','streaming',1,10,0)`).run()
+    conn.prepare('UPDATE messages SET content_segments=? WHERE id=?')
+      .run(JSON.stringify([{ content: 'before', startTime: 1, endTime: 2 }, { content: 'after', startTime: 4, endTime: 5 }]), 'atomic-terminal-assistant')
     conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
       VALUES('atomic-terminal-turn','atomic-terminal-request','atomic-terminal-session','atomic-terminal-assistant','executing',1,1,0)`).run()
     conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical',write_mode='dual-write'
@@ -162,8 +165,8 @@ describe('SqliteAgentHistory', () => {
       .run('atomic-terminal-session', 'generation')
     const terminal: HistoryEvent = { ...event('atomic-terminal', 1), invocationId: 'atomic-terminal-invocation', turnId: 'atomic-terminal-turn', kind: 'invocation-completed', payload: { status: 'completed' } }
     const intent = { sessionId: 'atomic-terminal-session', baseVersion: 0, outcome: 'completed' as const,
-      messages: [{ role: 'user', content: 'accepted' }, { id: 'atomic-terminal-assistant', role: 'assistant', content: 'canonical answer' }],
-      messageMirror: { messageId: 'atomic-terminal-assistant', status: 'completed' as const, content: 'canonical answer' } }
+      messages: [{ role: 'user', content: 'accepted' }, { id: 'atomic-terminal-assistant', role: 'assistant', content: 'beforeafter' }],
+      messageMirror: { messageId: 'atomic-terminal-assistant', status: 'completed' as const, content: 'beforeafter' } }
 
     await history.appendBatch([terminal], 0, intent)
 
@@ -176,11 +179,67 @@ describe('SqliteAgentHistory', () => {
     expect(conn.prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get('atomic-terminal-session'))
       .toEqual({ status: 'transcript_committed' })
     expect(conn.prepare('SELECT content,status FROM messages WHERE id=?').get('atomic-terminal-assistant'))
-      .toEqual({ content: 'canonical answer', status: 'completed' })
+      .toEqual({ content: 'beforeafter', status: 'completed' })
+    const persistedSegments = JSON.parse(conn.prepare('SELECT content_segments FROM messages WHERE id=?').get('atomic-terminal-assistant')!.content_segments as string)
+    expect(persistedSegments).toEqual([{ content: 'before', startTime: 1, endTime: 2 }, { content: 'after', startTime: 4, endTime: 5 }])
+    expect(buildAssistantActivityTimeline({ content: 'beforeafter', contentSegments: persistedSegments,
+      toolCalls: [{ id: 'tool-1', toolName: 'lookup', input: {}, status: 'completed', startedAt: 3 }], timestamp: 0 })
+      .map((item) => item.kind)).toEqual(['text', 'tool', 'text'])
     expect(conn.prepare(`SELECT message_revision,api_read_mode,write_mode,cleanup_state FROM session_message_content_cutover WHERE session_id=?`)
-      .get('atomic-terminal-session')).toEqual({ message_revision: 2, api_read_mode: 'revalidation-required', write_mode: 'dual-write', cleanup_state: 'retained' })
+      .get('atomic-terminal-session')).toEqual({ message_revision: 3, api_read_mode: 'revalidation-required', write_mode: 'dual-write', cleanup_state: 'retained' })
     expect(conn.prepare('SELECT session_id FROM canonical_session_projection_eligibility WHERE session_id=?').get('atomic-terminal-session')).toBeUndefined()
     expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').get('atomic-terminal-session')).toBeUndefined()
+    db.close()
+  })
+
+  it('reconciles a stale partial checkpoint to the final body when it cannot preserve its text segments', () => {
+    expect(reconcileTerminalContentSegments(JSON.stringify([
+      { content: 'short checkpoint', startTime: 20, endTime: 21 }
+    ]), 'canonical answer', 30)).toEqual([{ content: 'canonical answer', startTime: 30, endTime: 30 }])
+  })
+
+  it('corrects stale segments after a real response mirror has already replaced the checkpoint body', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'stale-terminal-segments-session'
+    const turnId = 'stale-terminal-segments-turn'
+    const messageId = 'stale-terminal-segments-assistant'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    const owner = claimSessionExecution(db, { sessionId, turnId, ownerId: 'process' })
+    if (!owner.acquired) throw new Error('test setup could not claim session')
+    expect(markSessionExecutionStarted(db, { sessionId, turnId, ownerId: 'process', generation: owner.generation })).toBe(true)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,content_segments,schema_version,timestamp,sequence)
+      VALUES(?,?, 'assistant','short checkpoint','streaming',?,1,10,0)`).run(messageId, sessionId,
+      JSON.stringify([{ content: 'short checkpoint', startTime: 20, endTime: 21 }]))
+    conn.prepare(`INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at,version)
+      VALUES(?,?,?,?,'executing',1,1,0)`).run(turnId, `${turnId}-request`, sessionId, messageId)
+    conn.prepare(`UPDATE session_message_content_cutover SET api_read_mode='canonical',write_mode='dual-write' WHERE session_id=?`).run(sessionId)
+    conn.prepare(`INSERT INTO canonical_session_projection_eligibility(session_id,session_generation,validated_at) VALUES(?,?,1)`)
+      .run(sessionId, 'generation')
+    conn.prepare(`INSERT INTO canonical_session_api_context_eligibility(session_id,session_generation,skeleton_revision,canonical_session_seq,
+      canonical_commit_order,watermark_event_id,watermark_invocation_id,validated_at,protocol_version) VALUES(?,?,1,0,1,'seed-event','seed-invocation',1,1)`)
+      .run(sessionId, 'generation')
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await history.appendBatch([{ ...event('stale-response-event', 1), invocationId: 'stale-invocation', turnId,
+      kind: 'model-response-committed', payload: { message: { id: messageId, role: 'assistant', content: [
+        { type: 'text', text: 'canonical answer' }
+      ] } } }], 0)
+    expect(conn.prepare('SELECT content,content_segments FROM messages WHERE id=?').get(messageId)).toEqual({
+      content: 'canonical answer', content_segments: JSON.stringify([{ content: 'short checkpoint', startTime: 20, endTime: 21 }])
+    })
+
+    const terminal: HistoryEvent = { ...event('stale-terminal-event', 2), invocationId: 'stale-invocation', turnId,
+      kind: 'invocation-completed', payload: { status: 'completed' } }
+    await history.appendBatch([terminal], 1, { sessionId, baseVersion: 0, outcome: 'completed',
+      messages: [{ role: 'user', content: 'accepted' }, { id: messageId, role: 'assistant', content: 'canonical answer' }],
+      messageMirror: { messageId, status: 'completed', content: 'canonical answer' } })
+
+    const completed = conn.prepare('SELECT content,status,content_segments FROM messages WHERE id=?').get(messageId) as
+      { content: string; status: string; content_segments: string }
+    expect(completed).toMatchObject({ content: 'canonical answer', status: 'completed' })
+    expect(JSON.parse(completed.content_segments)).toEqual([{ content: 'canonical answer', startTime: 100, endTime: 100 }])
     db.close()
   })
 

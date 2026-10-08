@@ -19,7 +19,11 @@ export type SessionTranscriptCommitIntent = Readonly<{
   outcome: 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'interrupted'
   messages: readonly Readonly<Record<string, unknown>>[]
   /** Atomic mirror into the authoritative desktop message skeleton, when this turn owns one. */
-  messageMirror?: Readonly<{ messageId: string; status: 'completed' | 'failed' | 'cancelled'; content?: string }>
+  messageMirror?: Readonly<{
+    messageId: string
+    status: 'completed' | 'failed' | 'cancelled'
+    content?: string
+  }>
 }>
 
 export interface HistoryPort {

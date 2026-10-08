@@ -213,6 +213,44 @@ type CanonicalCompactionLedger = { location: CompactionLedgerLocation; start: Re
 type CanonicalToolLedger = { location: CompactionLedgerLocation; stepId: string; result: Record<string, unknown>; requestId?: string; invocationRequestId?: string; lane?: string; turnId?: string }
 type CanonicalToolCallLedger = { location: CompactionLedgerLocation; stepId?: string; toolCalls?: Array<Record<string, unknown>>; requestUsage?: Record<string, unknown> }
 
+type MirroredContentSegment = { content: string; startTime: number; endTime?: number }
+
+export function reconcileTerminalContentSegments(serializedSegments: string | null, finalContent: string, now: number): MirroredContentSegment[] {
+  let existing: MirroredContentSegment[] = []
+  if (serializedSegments) {
+    try {
+      const parsed: unknown = JSON.parse(serializedSegments)
+      if (Array.isArray(parsed)) existing = parsed.filter((segment): segment is MirroredContentSegment =>
+        Boolean(segment && typeof segment === 'object' && typeof segment.content === 'string' && Number.isFinite(segment.startTime) &&
+          (segment.endTime === undefined || Number.isFinite(segment.endTime)))
+      )
+    } catch { /* A malformed checkpoint cannot be used to order the final answer. */ }
+  }
+  const existingContent = existing.map((segment) => segment.content).join('')
+  if (existingContent === finalContent) return existing
+  if (!finalContent) return []
+
+  let commonPrefixLength = 0
+  const limit = Math.min(existingContent.length, finalContent.length)
+  while (commonPrefixLength < limit && existingContent[commonPrefixLength] === finalContent[commonPrefixLength]) commonPrefixLength += 1
+  if (commonPrefixLength > 0 && existing.length > 0) {
+    let remaining = commonPrefixLength
+    const reconciled: MirroredContentSegment[] = []
+    for (const segment of existing) {
+      if (remaining <= 0) break
+      const content = segment.content.slice(0, remaining)
+      if (content) reconciled.push({ ...segment, content })
+      remaining -= content.length
+    }
+    if (remaining === 0) {
+      const suffix = finalContent.slice(commonPrefixLength)
+      if (suffix) reconciled.push({ content: suffix, startTime: now, endTime: now })
+      return reconciled
+    }
+  }
+  return [{ content: finalContent, startTime: now, endTime: now }]
+}
+
 /** SQLite adapter for canonical SDK history. Callers must run the current migrations first. */
 export class SqliteAgentHistory implements HistoryPort {
   private readonly spillStore?: SpillStore
@@ -446,6 +484,8 @@ export class SqliteAgentHistory implements HistoryPort {
       if (!committed.committed) throw new HistoryBatchError(`session transcript commit rejected: ${committed.reason}`)
       if (transcriptCommit.messageMirror) {
         const mirror = transcriptCommit.messageMirror
+        const currentMessage = this.conn.prepare('SELECT content_segments FROM messages WHERE id=? AND session_id=? AND role=\'assistant\'')
+          .get(mirror.messageId, transcriptCommit.sessionId) as { content_segments: string | null } | undefined
         const turn = this.conn.prepare('SELECT session_id,assistant_message_id FROM turns WHERE turn_id=?').get(terminal.turnId) as
           { session_id: string; assistant_message_id: string } | undefined
         if (!turn || turn.session_id !== transcriptCommit.sessionId || turn.assistant_message_id !== mirror.messageId) {
@@ -453,12 +493,17 @@ export class SqliteAgentHistory implements HistoryPort {
         }
         const result = this.conn.prepare(`UPDATE messages SET
           content=CASE WHEN content_storage_state='canonical-backed-only' THEN content ELSE COALESCE(?,content) END,
+          content_segments=COALESCE(?,content_segments),
           status=?,
           content_storage_state=CASE WHEN content_storage_state='canonical-backed-only' THEN content_storage_state
             WHEN (SELECT write_mode FROM session_message_content_cutover WHERE session_id=?)='canonical'
               THEN 'canonical-backed-dual-write' ELSE content_storage_state END
           WHERE id=? AND session_id=? AND role='assistant'`).run(
-          mirror.content ?? null, mirror.status, transcriptCommit.sessionId, mirror.messageId, transcriptCommit.sessionId
+          mirror.content ?? null,
+          mirror.content === undefined || !currentMessage ? null : JSON.stringify(reconcileTerminalContentSegments(
+            currentMessage.content_segments, mirror.content, this.now()
+          )),
+          mirror.status, transcriptCommit.sessionId, mirror.messageId, transcriptCommit.sessionId
         )
         if (Number(result.changes) !== 1) throw new HistoryBatchError('terminal message mirror target is missing or not an assistant message')
       }
