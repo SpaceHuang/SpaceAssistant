@@ -104,6 +104,19 @@ describe('invocation ContextPort', () => {
     expect(state.current()).toMatchObject({ frame: state.candidate.output, expectedHistoryVersion: 1, epoch: 5 })
   })
 
+  it('rejects a substituted candidate output before writing History or applying runtime state', async () => {
+    const state = setup()
+    const substituted = {
+      ...state.candidate,
+      output: { ...state.candidate.output, items: [], requiredUser: undefined }
+    }
+
+    await expect(state.port.commitReplacement({ operationId: 'substituted-output', reason: 'window-transition', candidate: substituted }))
+      .rejects.toThrow('CONTEXT_EVIDENCE_CANDIDATE_MISMATCH')
+    expect(state.applied).toHaveLength(0)
+    await expect(state.history.read('inv-context')).resolves.toMatchObject({ version: 0, events: [] })
+  })
+
   it('returns stale without appending when the captured epoch changed during planning', async () => {
     const state = setup()
     state.binding.capture = async () => ({ ...state.current(), epoch: 5 })

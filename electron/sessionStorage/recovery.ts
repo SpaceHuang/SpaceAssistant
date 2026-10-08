@@ -69,7 +69,7 @@ export function createSessionRecoveryPort(dependencies: SessionRecoveryDependenc
           ledgerRepairFailureCount = 1
         }
         history = { ...history, repairFailureCount: history.repairFailureCount + ledgerRepairFailureCount }
-        history = { ...history, succeeded: history.repairFailureCount === 0 }
+        history = { ...history, succeeded: history.succeeded && ledgerRepairFailureCount === 0 }
       }
 
       let snapshotsSucceeded = true
@@ -169,6 +169,7 @@ export function createSqliteSessionRecoveryPort(input: Readonly<{
     hasUnfinishedProjections: hasUnfinishedProjectionsForDb,
     reconcile: input.stages?.reconcile ?? defaultReconcile,
     continuations: input.stages?.continuations ?? defaultContinuations,
+    ledgerRepairs: input.stages?.ledgerRepairs,
     inspectReadiness
   })
 }

@@ -30,6 +30,21 @@ describe('session ContextPort', () => {
     expect(fingerprint).toBe('surface-v1')
   })
 
+  it('rejects an output substituted after evidence registration before session persistence', async () => {
+    const persist = vi.fn(async () => ({ status: 'committed' as const }))
+    const registrar = createContextRegistrar()
+    const port = createSessionContextPort({ registrar, scope, capture: async () => ({ frame, surfaceFingerprint: 'surface-v1' }), persist })
+    const base = await port.readCurrent(scope)
+    const candidate = registrar.registerTransformation({ base, output: { ...frame, windowId: 'window-2' }, proof: {
+      historyPayload: {}, sourceBindings: [{ outputIdentity: 'message-1', inputIdentities: ['message-1'] }], shadowedRanges: []
+    } })
+    const substituted = { ...candidate, output: { ...candidate.output, items: [], requiredUser: undefined } }
+
+    await expect(port.commitReplacement({ operationId: 'forged-session-candidate', reason: 'window-transition', candidate: substituted }))
+      .rejects.toThrow('CONTEXT_EVIDENCE_CANDIDATE_MISMATCH')
+    expect(persist).not.toHaveBeenCalled()
+  })
+
   it('does not persist when the captured session surface became stale', async () => {
     let fingerprint = 'surface-v1'
     const persist = vi.fn(async () => ({ status: 'committed' as const }))

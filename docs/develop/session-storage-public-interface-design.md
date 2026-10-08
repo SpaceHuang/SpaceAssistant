@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 状态 | v23 · 设计门槛及S0–S4全部完成 |
+| 状态 | v26 · 原S0–S4验收通过；评审4项P1修复及最终门禁通过 |
 | 日期 | 2026-10-07 |
 | 上层方案 | [会话存储代码结构与接口优化方案](./session-storage-refactorability-improvement-plan.md) |
 | 基线 | worktree起点 main HEAD f2cec895；S0盘点以隔离worktree实码核对，既有改动不代表阶段验收 |

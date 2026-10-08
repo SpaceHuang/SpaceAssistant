@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createSessionRecoveryPort } from './recovery'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { appendMessage, createSession } from '../database/operations'
-import { createSqliteSessionStorage } from './sqliteSessionStorage'
+import { createSqliteSessionStorage, createSqliteSessionStorageHost } from './sqliteSessionStorage'
 
 describe('SessionRecoveryPort', () => {
   it('exposes SQLite readiness as pending before recovery and actual session readiness afterward', async () => {
@@ -21,6 +21,55 @@ describe('SessionRecoveryPort', () => {
       expect(storage.recovery.inspectReadiness(session.id)).toEqual({ readable: false, executable: false, reason: 'recovery-pending' })
       await storage.recovery.recover()
       expect(storage.recovery.inspectReadiness(session.id)).toEqual({ readable: true, executable: true })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('propagates host ledger repair failures through the SQLite recovery gate', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const session = createSession(db, { name: 'host ledger recovery', model: 'test' })
+      const reconcile = vi.fn(() => ({ releasedUnstarted: 0, markedUncertain: 0, repairedCheckpoints: 0, reconciled: 0 }))
+      const continuations = vi.fn(() => ({ interrupted: 0, unknownSideEffect: 1, settled: 0 }))
+      let ledgerCalls = 0
+      const host = createSqliteSessionStorageHost(db, {
+        storage: { recoveryStages: {
+          snapshots: () => ({ restoredCount: 0, skippedCanonicalUnavailableCount: 0, missingAssistantCount: 0 }),
+          coordinator: () => ({ recoveredCount: 0, succeeded: true }), reconcile, continuations
+        } },
+        startup: {
+          recoverHistory: async () => ({ interruptedCount: 0, repairFailureCount: 0 }),
+          recoverSessionLedgers: async () => { ledgerCalls += 1; return { repairFailureCount: 1 } }
+        }
+      })
+
+      const report = await host.storage.recovery.recover()
+
+      expect({ ledgerCalls, status: report.status }).toEqual({ ledgerCalls: 1, status: 'blocked' })
+      expect(report.history.succeeded).toBe(false)
+      expect(report.reconciliation).toEqual({ status: 'skipped', reason: 'history-recovery-incomplete' })
+      expect(reconcile).not.toHaveBeenCalled()
+      expect(continuations).toHaveBeenCalledWith(false)
+      expect(host.storage.queries.readSession(session.id)).toBeTruthy()
+    } finally {
+      db.close()
+    }
+  })
+
+  it('does not let a successful ledger callback erase a History recovery exception', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const host = createSqliteSessionStorageHost(db, {
+        storage: { recoveryStages: { coordinator: () => ({ recoveredCount: 0, succeeded: true }) } },
+        startup: {
+          recoverHistory: async () => { throw new Error('history recovery failed') },
+          recoverSessionLedgers: async () => ({ repairFailureCount: 0 })
+        }
+      })
+      const report = await host.storage.recovery.recover()
+      expect(report.status).toBe('blocked')
+      expect(report.history.succeeded).toBe(false)
     } finally {
       db.close()
     }

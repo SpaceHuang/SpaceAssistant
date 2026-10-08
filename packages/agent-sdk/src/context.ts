@@ -100,7 +100,7 @@ export interface ContextRegistrar {
   captureFrame(input: Readonly<{ scope: ContextScope; frame: ContextFrame; binding: ContextRegistrationBinding }>): ContextSnapshot
   registerTransformation(input: Readonly<{ base: ContextSnapshot; output: ContextFrame; proof: ContextTransformationProof }>): ContextCandidate
   readBinding(snapshot: ContextSnapshot): ContextRegistrationBinding
-  readEvidence(evidence: ContextTransformationEvidence): ContextTransformationProof
+  readEvidence(candidate: ContextCandidate): ContextTransformationProof
   release(candidate: ContextCandidate): void
   releaseSnapshot(snapshot: ContextSnapshot): void
 }
@@ -109,7 +109,7 @@ export function createContextRegistrar(): ContextRegistrar {
   let nextFence = 0
   let nextEvidence = 0
   const snapshots = new Map<string, Readonly<{ snapshot: ContextSnapshot; binding: ContextRegistrationBinding }>>()
-  const evidence = new Map<string, ContextTransformationProof>()
+  const evidence = new Map<string, Readonly<{ base: ContextSnapshot; output: ContextFrame; proof: ContextTransformationProof }>>()
   const cloneFreeze = <T>(value: T): T => deepFreeze(structuredClone(value))
   const assertJson: (value: unknown, seen?: Set<object>) => asserts value is JsonValue = (value, seen = new Set<object>()) => {
     if (value === null || typeof value === 'string' || typeof value === 'boolean') return
@@ -183,21 +183,25 @@ export function createContextRegistrar(): ContextRegistrar {
       }
       if (proof.sourceBindings.some((binding) => !outputIdentities.has(binding.outputIdentity))) throw new Error('CONTEXT_SOURCE_BINDING_MISMATCH')
       const candidate = cloneFreeze({ base: registeredBase, output, evidence: { token: `context-evidence-${++nextEvidence}` } })
-      evidence.set(candidate.evidence.token, Object.freeze({
+      const proofSnapshot = Object.freeze({
         historyPayload: cloneFreeze(proof.historyPayload), sourceBindings: cloneFreeze(proof.sourceBindings),
         ...(proof.checkpoint ? { checkpoint: cloneFreeze(proof.checkpoint) } : {}), shadowedRanges: cloneFreeze(proof.shadowedRanges),
         ...(proof.commitProjection ? { commitProjection: proof.commitProjection } : {})
-      }))
+      })
+      evidence.set(candidate.evidence.token, Object.freeze({ base: candidate.base, output: candidate.output, proof: proofSnapshot }))
       return candidate
     },
     readBinding: (snapshot) => {
       registeredSnapshot(snapshot)
       return snapshots.get(snapshot.fence.token)!.binding
     },
-    readEvidence: (handle) => {
-      const registered = evidence.get(handle.token)
+    readEvidence: (candidate) => {
+      const registered = evidence.get(candidate.evidence.token)
       if (!registered) throw new Error('CONTEXT_EVIDENCE_NOT_REGISTERED')
-      return registered
+      if (!same(registered.base, candidate.base) || !same(registered.output, candidate.output)) {
+        throw new Error('CONTEXT_EVIDENCE_CANDIDATE_MISMATCH')
+      }
+      return registered.proof
     },
     release: (candidate) => {
       evidence.delete(candidate.evidence.token)
@@ -247,7 +251,7 @@ export function createSessionContextPort(input: Readonly<{
     commitReplacement: async ({ operationId, reason, candidate }) => {
       if (!operationId.trim()) throw new Error('CONTEXT_OPERATION_ID_REQUIRED')
       if (!same(candidate.base.scope, scope)) throw new Error('CONTEXT_SCOPE_MISMATCH')
-      const evidence = registrar.readEvidence(candidate.evidence)
+      const evidence = registrar.readEvidence(candidate)
       const baseBinding = registrar.readBinding(candidate.base)
       if (baseBinding.kind !== 'session') throw new Error('CONTEXT_BINDING_MISMATCH')
       const current = await input.capture()
@@ -334,7 +338,7 @@ export function createInvocationContextPort(input: Readonly<{ binding: Invocatio
     commitReplacement: async ({ operationId, candidate }) => {
       if (!operationId.trim()) throw new Error('CONTEXT_OPERATION_ID_REQUIRED')
       if (!same(candidate.base.scope, binding.scope)) throw new Error('CONTEXT_SCOPE_MISMATCH')
-      const evidence = registrar.readEvidence(candidate.evidence)
+      const evidence = registrar.readEvidence(candidate)
       const baseBinding = registrar.readBinding(candidate.base)
       if (baseBinding.kind !== 'invocation') throw new Error('CONTEXT_BINDING_MISMATCH')
       const current = await binding.capture()

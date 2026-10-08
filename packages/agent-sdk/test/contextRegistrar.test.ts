@@ -75,7 +75,7 @@ describe('ContextRegistrar', () => {
       identity: 'checkpoint-output', checkpointMessage: { role: 'user', content: 'checkpoint' }
     } } })
     registrar.release(candidate)
-    expect(() => registrar.readEvidence(candidate.evidence)).toThrow('CONTEXT_EVIDENCE_NOT_REGISTERED')
+    expect(() => registrar.readEvidence(candidate)).toThrow('CONTEXT_EVIDENCE_NOT_REGISTERED')
     expect(() => registrar.readBinding(base)).toThrow('CONTEXT_BASE_NOT_REGISTERED')
   })
 

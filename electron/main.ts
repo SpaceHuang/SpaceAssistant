@@ -40,6 +40,8 @@ import { TurnRuntime } from './turnRuntime'
 import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { createSqliteSessionStorageHost } from './sessionStorage/sqliteSessionStorage'
 import { createLifecycleTaskHandle } from './sessionStorage/lifecycle'
+import { flushPendingSessionBackups } from './sessionBackupShutdown'
+import type { SessionQueries } from './sessionStorage/contracts'
 import { signalChatCancel } from './chatCancelRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
@@ -210,6 +212,8 @@ function getTelemetryArtifactBuildId(): string | undefined {
 }
 /** 模块级持有防抖备份管理器：退出流程 flush 挂起备份用（评审 2.2）。 */
 let sessionBackupManager: DebouncedSessionBackupManager | null = null
+/** Explicit process-level host reference used by shutdown tasks; cleared after shutdown settles. */
+let appSessionQueries: SessionQueries | null = null
 
 // 进程级 unhandledRejection 安全网（评审 1.1/1.2 防御纵深）：逐点 .catch 是正解，
 // 本网兜住漏网点——只丢一条日志，不崩整个主进程。必须在任何业务代码执行前安装。
@@ -235,17 +239,9 @@ export async function runShutdownCleanup(pendingTasks?: Set<string>): Promise<Sh
       // 有界重试耗尽后记录失败，不让辅助备份阻止应用退出。
       const mgr = sessionBackupManager
       const db = appDb
-      if (!mgr || !db) return
-      const ids = mgr.getPendingSessionIds()
-      if (!ids.length) return
-      await mgr.flushAllWithRetry(ids, async (id) => {
-        const session = sessionStorage.queries.readSession(id)
-        if (!session) return null
-        return { session, readPage: (afterSequence: number, pageSize: number) => {
-          const page = sessionStorage.queries.readExportPage({ sessionId: id, fromSequence: afterSequence, pageSize })
-          return { messages: page.rows.map((entry: { message: import('../src/shared/domainTypes').Message }) => entry.message), nextSequence: page.nextSequence }
-        } }
-      }).catch((error) => {
+      const queries = appSessionQueries
+      if (!mgr || !db || !queries) return
+      await flushPendingSessionBackups(mgr, queries).catch((error) => {
         console.warn('[sessionBackup] flush on quit failed:', error instanceof Error ? error.message : String(error))
       })
     }],
@@ -496,6 +492,7 @@ app.whenReady().then(async () => {
     quiesceMaintenance: async () => { await safeDatabaseMaintenanceInFlight }
   })
   const sessionStorage = sessionStorageHost.storage
+  appSessionQueries = sessionStorage.queries
   storageLifecycleStop = (deadlineMs) => sessionStorageHost.lifecycle.stop({ deadlineMs })
   // Main-process owner only. Execution remains closed until a separately authorized cohort is started.
   sessionProjectionMigrationApplication = new SessionProjectionMigrationApplication(db)
@@ -1385,6 +1382,7 @@ app.on('before-quit', (event) => {
       } else {
         console.warn('[shutdown] database flush/close skipped because storage work did not become quiescent')
       }
+      appSessionQueries = null
       quitCleanupDone = true
       app.quit()
     }

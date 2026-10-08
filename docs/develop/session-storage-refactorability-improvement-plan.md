@@ -2,7 +2,7 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 状态 | v31 · S0、设计门槛及S1–S4全部完成 |
+| 状态 | v34 · 原S0–S4验收通过；评审4项P1修复及最终门禁通过 |
 | 日期 | 2026-10-07 |
 | 目标 | 在现有实现上整理模块职责、明确读写接口与依赖方向，降低后续代码重构的影响范围 |
 | 实现基线 | worktree起点 main HEAD f2cec895；当前代码改动需按S0盘点后逐阶段复核，不视作阶段验收 |
@@ -22,7 +22,7 @@
 
 ## 当前执行状态（2026-10-07）
 
-S0与设计门槛、S1、S2、S3、S4均已完成并验收。S4依次完成Recovery（含真实SQLite readiness）、Lifecycle（由授权生命周期实际创建现有scheduler，并按类别暂停/续跑、返回维护状态）、认证/清理/cache物理职责拆分、旧contract/import清理与例外边界复核。历史基线表已明确标为S0快照；阶段最终门禁通过，详见文末S4收口记录。
+原S0与设计门槛、S1、S2、S3、S4验收均通过。2026-10-08评审指出的4项P1均已按TDD修复：evidence/candidate绑定、shutdown备份查询生命周期、SQLite ledger失败门禁、SDK纯identity实现与包闭包隔离。全量测试、类型检查、SDK boundary/closure、i18n、build及最终diff检查均通过，详见本节收口记录。
 
 ## 1. 目标与现状
 
@@ -560,6 +560,15 @@ S3最终事务participant/owner矩阵复核：
 2026-10-07复核更正：上条“职责拆分完成”仅完成了能力 façade 分层，`internal/sqliteCutover.ts`仍混合认证与清理实现，故不满足物理职责拆分验收。现已按TDD/阶段顺序将清理算法移至`internal/sqliteCleanup.ts`、认证算法移至`internal/sqliteCertification.ts`并删除旧混合实现；cleanup boundary allowlist同步收窄至清理实现。另补足lifecycle类别行为：具名任务按category暂停/续跑，inspect返回对应状态快照；类别测试先红后绿。Electron typecheck与维护/退出定向测试16项通过；真实SQLite recovery readiness测试4项通过（含恢复前pending及恢复后readable/executable）。旧ContextPort contract、cutover/startup/coordinator旧production import扫描无命中；cleanup和session-storage boundary均通过（15条有名既有例外、无新增），`git diff --check`通过。当前重新运行完整阶段门禁。
 
 S4最终收口（2026-10-07）：按计划顺序完成Recovery、Lifecycle、职责拆分和旧adapter/import清理。最终`npm test`通过895个文件、1个跳过；8512项通过、111项跳过。renderer/shared/Electron/Agent SDK类型检查通过；`npm run i18n:check`通过（source 0条硬编码中文）；`npm run build`通过，Electron build内cleanup boundary与session-storage boundary均通过；边界保留15条具名既有例外、无新增。旧ContextPort contract及旧cutover/startup/coordinator production import扫描无命中；`git diff --check`通过。S0至S4及设计门槛全部关闭。build生成物位于忽略目录；没有更改schema、持久格式或维护策略。
+
+### 2026-10-08 评审P1修复进度
+
+1. Context candidate evidence：新增 invocation/session 两侧 output 替换回归，先红后绿（2个用例复现绕过）；registrar现记录不可变base/output并在读取proof时比较完整candidate，拒绝跨base/evidence拼接。`contextPort`与`sessionContextPort`定向14项通过。
+2. Shutdown backup：新增真实内存SQLite会话及待flush防抖任务回归；原测试因缺少shutdown loader模块失败，新增`flushPendingSessionBackups(manager, queries)`并由main使用模块级`appSessionQueries`明确传入，退出收尾后清空引用。真实备份文件含消息且pending队列清空；测试通过。
+3. SQLite recovery ledger gate：真实host factory回归先红（ledger调用0次、status ready），现factory转发ledgerRepair callback；聚合时保持History已失败状态，ledger无故障不能重置History异常。recovery与备份定向共7项及Electron类型检查通过。
+4. SDK闭包隔离：`turn.ts`改用SDK自有`contextIdentity.ts`，实现与宿主surface identity纯规则等价；新增host/SDK identity契约测试。`npm run check:agent-sdk`通过（SDK入口闭包23个模块，零electron/shared/Renderer/node:sqlite），SDK typecheck通过；Context/identity/turn定向5文件146项通过。四项阻断均修复。
+
+评审修复最终验收（2026-10-08）：`npm test`通过897个测试文件、1个跳过；8518项通过、111项跳过。renderer/shared/Electron/Agent SDK typecheck、`npm run check:agent-sdk`、`npm run i18n:check`和`npm run build`全部通过；build执行的cleanup与session-storage boundary均通过，保留15条具名既有例外、无新增。新增真实SQLite shutdown backup flush及host recovery-ledger门禁回归、两类ContextPort candidate替换拒绝回归、SDK/host identity等价回归均通过。`git diff --check`通过。四项P1已关闭。
 
 S4旧adapter审计发现S3遗漏：SDK observer仍有`prepareModelResponseProjection`，Hosted组合点仍以`turnBoundary`命名。已依S3 ContextPort顺序先移除旧响应projection回调命名，改为`prepareContextBoundaryEvidence`；Hosted compaction planner回调改为`onContextReplacementPlan`，boundary adapter/context/type及装配属性改为ContextReplacement命名。统一`planContextReplacement(phase)`继续负责preflight与turn-boundary replacement。Agent SDK/Electron typecheck及定向4文件290项通过；随后全量门禁全部通过（895文件、8508项），S3重新验收完成并回到S4。旧contract扫描无旧projection contract或旧cutover/startup/coordinator import命中。
 
