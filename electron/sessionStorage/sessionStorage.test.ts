@@ -83,6 +83,8 @@ describe('SQLite session storage public queries', () => {
       sourceInvocationId: 'retry-invocation',
       sourceTurnId: 'retry-turn'
     })
+    expect(storage.queries.readRetryTarget({ sessionId: session.id, failedAssistantMessageId: 'retry-assistant' }))
+      .toMatchObject({ sourceInvocationId: 'retry-invocation', sourceTurnId: 'retry-turn' })
     appendMessage(db, { id: 'retry-assistant-2', sessionId: session.id, role: 'assistant', content: 'another failure', timestamp: 3, status: 'failed' })
     expect(storage.queries.readLatestRetryTarget(session.id)).toBeNull()
   })

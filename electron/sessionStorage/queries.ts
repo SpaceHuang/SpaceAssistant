@@ -25,6 +25,11 @@ function getTurnByAssistant(db: AppDatabase, sessionId: string, assistantMessage
   return getDbConnection(db).prepare('SELECT request_id AS requestId, turn_id AS turnId FROM turns WHERE session_id=? AND assistant_message_id=?').get(sessionId, assistantMessageId) as { requestId: string; turnId: string } | undefined
 }
 
+function attachTurnIdentity<T extends { failedAssistant: { message: { id: string } } }>(db: AppDatabase, sessionId: string, target: T): T & { sourceInvocationId?: string; sourceTurnId?: string } {
+  const turn = getTurnByAssistant(db, sessionId, target.failedAssistant.message.id)
+  return { ...target, ...(turn ? { sourceInvocationId: turn.requestId, sourceTurnId: turn.turnId } : {}) }
+}
+
 export function createSessionQueries(db: AppDatabase): SessionQueries {
   const queries: SessionQueries = {
     continuationSources: inspectContinuationSources(db),
@@ -50,15 +55,14 @@ export function createSessionQueries(db: AppDatabase): SessionQueries {
     searchMessages: ({ query, activeProfileId, limit }) => searchProjectedMessages(db, query, activeProfileId, limit),
     readRetryTarget: ({ sessionId, failedAssistantMessageId }) => {
       const target = resolveProjectedRetryContext(db, sessionId, failedAssistantMessageId)
-      return target as ReturnType<SessionQueries['readRetryTarget']>
+      return target ? attachTurnIdentity(db, sessionId, target) as ReturnType<SessionQueries['readRetryTarget']> : null
     },
     readLatestRetryTarget: (sessionId) => {
       const failed = getProjectedMessages(db, sessionId).filter((item) => item.role === 'assistant' && item.status === 'failed')
       if (failed.length > 1) return null
       const message = failed.at(-1)
       const target = message ? resolveProjectedRetryContext(db, sessionId, message.id) : null
-      const turn = target ? getTurnByAssistant(db, sessionId, target.failedAssistant.message.id) : undefined
-      return target ? { ...target, ...(turn ? { sourceInvocationId: turn.requestId, sourceTurnId: turn.turnId } : {}) } : null
+      return target ? attachTurnIdentity(db, sessionId, target) : null
     },
     readMessageSequence: ({ sessionId, messageId }) => getMessageSequence(db, sessionId, messageId)
   }

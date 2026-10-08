@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Provider } from 'react-redux'
 import { App, ConfigProvider } from 'antd'
 import React from 'react'
@@ -204,6 +204,7 @@ describe('ChatView 失败原因回溯', () => {
       chatGetMessageSequence: vi.fn().mockResolvedValue(null),
       chatGetNextQueuedMessage: vi.fn().mockResolvedValue(null),
       chatResolveRetryContext: vi.fn().mockResolvedValue(null),
+      chatContinueFromCheckpoint: vi.fn().mockResolvedValue({ accepted: true, status: 'running' }),
       messageAppendNonTurn: vi.fn().mockResolvedValue(null),
       messagePatchNonTurn: vi.fn().mockResolvedValue(null),
       sessionGet: vi.fn().mockResolvedValue(null),
@@ -244,5 +245,25 @@ describe('ChatView 失败原因回溯', () => {
       expect(window.api.chatGetTurnErrors).toHaveBeenCalled()
     })
     expect(screen.queryByText('失败原因')).toBeNull()
+  })
+
+  it('失败消息继续按钮将查询返回的 sourceTurnId 传给 checkpoint continuation IPC', async () => {
+    vi.mocked(window.api.chatResolveRetryContext).mockResolvedValue({
+      failedAssistant: { message: failedAssistant, sequence: 2 },
+      currentUser: { message: userMessage, sequence: 1 },
+      excludeMessageIds: ['a-failed'],
+      sourceInvocationId: 'request-1',
+      sourceTurnId: 'turn-1'
+    })
+    renderChatView()
+
+    fireEvent.click(await screen.findByRole('button', { name: '继续上次执行' }))
+
+    await waitFor(() => expect(window.api.chatResolveRetryContext).toHaveBeenCalledWith({
+      sessionId: testSession.id, failedAssistantMessageId: 'a-failed'
+    }))
+    await waitFor(() => expect(window.api.chatContinueFromCheckpoint).toHaveBeenCalledWith({
+      sessionId: testSession.id, sourceTurnId: 'turn-1', requestIdempotencyKey: expect.any(String)
+    }))
   })
 })
