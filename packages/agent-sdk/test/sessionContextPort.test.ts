@@ -45,6 +45,57 @@ describe('session ContextPort', () => {
     expect(persist).not.toHaveBeenCalled()
   })
 
+  it('uses the registered output if the caller mutates its candidate while capture is pending', async () => {
+    let releaseCapture!: () => void
+    let captureStarted!: () => void
+    const started = new Promise<void>((resolve) => { captureStarted = resolve })
+    const gate = new Promise<void>((resolve) => { releaseCapture = resolve })
+    let captures = 0
+    const persist = vi.fn(async () => ({ status: 'committed' as const }))
+    const registrar = createContextRegistrar()
+    const port = createSessionContextPort({
+      registrar, scope,
+      capture: async () => {
+        if (++captures === 2) { captureStarted(); await gate }
+        return { frame, surfaceFingerprint: 'surface-v1' }
+      },
+      persist
+    })
+    const base = await port.readCurrent(scope)
+    const candidate = registrar.registerTransformation({ base, output: { ...frame, windowId: 'window-2' }, proof: {
+      historyPayload: {}, sourceBindings: [{ outputIdentity: 'message-1', inputIdentities: ['message-1'] }], shadowedRanges: []
+    } })
+    const submitted = structuredClone(candidate)
+    const committing = port.commitReplacement({ operationId: 'mutated-during-capture', reason: 'window-transition', candidate: submitted })
+    await started
+    Object.assign(submitted.output, { items: [], requiredUser: undefined })
+    releaseCapture()
+
+    await expect(committing).resolves.toMatchObject({ status: 'committed', snapshot: { frame: { windowId: 'window-2' } } })
+    expect(persist).toHaveBeenCalledWith(expect.objectContaining({ output: expect.objectContaining({ windowId: 'window-2', items: frame.items }) }))
+  })
+
+  it('keeps the registered output when the caller mutates its candidate while persistence is pending', async () => {
+    let releasePersist!: () => void
+    let persistStarted!: () => void
+    const started = new Promise<void>((resolve) => { persistStarted = resolve })
+    const gate = new Promise<void>((resolve) => { releasePersist = resolve })
+    const persist = vi.fn(async () => { persistStarted(); await gate; return { status: 'committed' as const } })
+    const registrar = createContextRegistrar()
+    const port = createSessionContextPort({ registrar, scope, capture: async () => ({ frame, surfaceFingerprint: 'surface-v1' }), persist })
+    const base = await port.readCurrent(scope)
+    const candidate = registrar.registerTransformation({ base, output: { ...frame, windowId: 'window-2' }, proof: {
+      historyPayload: {}, sourceBindings: [{ outputIdentity: 'message-1', inputIdentities: ['message-1'] }], shadowedRanges: []
+    } })
+    const submitted = structuredClone(candidate)
+    const committing = port.commitReplacement({ operationId: 'mutated-during-persist', reason: 'window-transition', candidate: submitted })
+    await started
+    Object.assign(submitted.output, { items: [], requiredUser: undefined })
+    releasePersist()
+
+    await expect(committing).resolves.toMatchObject({ status: 'committed', snapshot: { frame: { items: frame.items } } })
+  })
+
   it('does not persist when the captured session surface became stale', async () => {
     let fingerprint = 'surface-v1'
     const persist = vi.fn(async () => ({ status: 'committed' as const }))

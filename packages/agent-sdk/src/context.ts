@@ -100,6 +100,7 @@ export interface ContextRegistrar {
   captureFrame(input: Readonly<{ scope: ContextScope; frame: ContextFrame; binding: ContextRegistrationBinding }>): ContextSnapshot
   registerTransformation(input: Readonly<{ base: ContextSnapshot; output: ContextFrame; proof: ContextTransformationProof }>): ContextCandidate
   readBinding(snapshot: ContextSnapshot): ContextRegistrationBinding
+  resolveCandidate(candidate: ContextCandidate): Readonly<{ candidate: ContextCandidate; proof: ContextTransformationProof }>
   readEvidence(candidate: ContextCandidate): ContextTransformationProof
   release(candidate: ContextCandidate): void
   releaseSnapshot(snapshot: ContextSnapshot): void
@@ -109,7 +110,7 @@ export function createContextRegistrar(): ContextRegistrar {
   let nextFence = 0
   let nextEvidence = 0
   const snapshots = new Map<string, Readonly<{ snapshot: ContextSnapshot; binding: ContextRegistrationBinding }>>()
-  const evidence = new Map<string, Readonly<{ base: ContextSnapshot; output: ContextFrame; proof: ContextTransformationProof }>>()
+  const evidence = new Map<string, Readonly<{ candidate: ContextCandidate; proof: ContextTransformationProof }>>()
   const cloneFreeze = <T>(value: T): T => deepFreeze(structuredClone(value))
   const assertJson: (value: unknown, seen?: Set<object>) => asserts value is JsonValue = (value, seen = new Set<object>()) => {
     if (value === null || typeof value === 'string' || typeof value === 'boolean') return
@@ -188,7 +189,7 @@ export function createContextRegistrar(): ContextRegistrar {
         ...(proof.checkpoint ? { checkpoint: cloneFreeze(proof.checkpoint) } : {}), shadowedRanges: cloneFreeze(proof.shadowedRanges),
         ...(proof.commitProjection ? { commitProjection: proof.commitProjection } : {})
       })
-      evidence.set(candidate.evidence.token, Object.freeze({ base: candidate.base, output: candidate.output, proof: proofSnapshot }))
+      evidence.set(candidate.evidence.token, Object.freeze({ candidate, proof: proofSnapshot }))
       return candidate
     },
     readBinding: (snapshot) => {
@@ -196,12 +197,15 @@ export function createContextRegistrar(): ContextRegistrar {
       return snapshots.get(snapshot.fence.token)!.binding
     },
     readEvidence: (candidate) => {
+      return registrar.resolveCandidate(candidate).proof
+    },
+    resolveCandidate: (candidate) => {
       const registered = evidence.get(candidate.evidence.token)
       if (!registered) throw new Error('CONTEXT_EVIDENCE_NOT_REGISTERED')
-      if (!same(registered.base, candidate.base) || !same(registered.output, candidate.output)) {
+      if (!same(registered.candidate.base, candidate.base) || !same(registered.candidate.output, candidate.output)) {
         throw new Error('CONTEXT_EVIDENCE_CANDIDATE_MISMATCH')
       }
-      return registered.proof
+      return Object.freeze({ candidate: registered.candidate, proof: registered.proof })
     },
     release: (candidate) => {
       evidence.delete(candidate.evidence.token)
@@ -250,39 +254,41 @@ export function createSessionContextPort(input: Readonly<{
     },
     commitReplacement: async ({ operationId, reason, candidate }) => {
       if (!operationId.trim()) throw new Error('CONTEXT_OPERATION_ID_REQUIRED')
-      if (!same(candidate.base.scope, scope)) throw new Error('CONTEXT_SCOPE_MISMATCH')
-      const evidence = registrar.readEvidence(candidate)
-      const baseBinding = registrar.readBinding(candidate.base)
+      const resolved = registrar.resolveCandidate(candidate)
+      const trustedCandidate = resolved.candidate
+      const evidence = resolved.proof
+      if (!same(trustedCandidate.base.scope, scope)) throw new Error('CONTEXT_SCOPE_MISMATCH')
+      const baseBinding = registrar.readBinding(trustedCandidate.base)
       if (baseBinding.kind !== 'session') throw new Error('CONTEXT_BINDING_MISMATCH')
       const current = await input.capture()
-      if (current.surfaceFingerprint !== baseBinding.surfaceFingerprint || !same(current.frame, candidate.base.frame)) {
-        registrar.release(candidate)
+      if (current.surfaceFingerprint !== baseBinding.surfaceFingerprint || !same(current.frame, trustedCandidate.base.frame)) {
+        registrar.release(trustedCandidate)
         return { status: 'stale' }
       }
       const inputFingerprint = baseBinding.surfaceFingerprint
-      const outputFingerprint = fingerprint(candidate.output)
+      const outputFingerprint = fingerprint(trustedCandidate.output)
       let persisted: SessionContextPersistResult
       try {
         persisted = await input.persist({
           operationId, reason, expectedSurfaceFingerprint: inputFingerprint, inputFingerprint, outputFingerprint,
-          output: candidate.output, historyPayload: evidence.historyPayload
+          output: trustedCandidate.output, historyPayload: evidence.historyPayload
         })
       } catch (error) {
-        registrar.release(candidate)
+        registrar.release(trustedCandidate)
         return { status: 'commit-uncertain', error: error instanceof Error ? error : new Error(String(error)) }
       }
       if (persisted.status !== 'committed') {
-        registrar.release(candidate)
+        registrar.release(trustedCandidate)
         return { status: persisted.status }
       }
-      const receipt: ContextCommitReceipt = { operationId, windowId: candidate.output.windowId, inputFingerprint, outputFingerprint, ...(persisted.historyVersion !== undefined ? { historyVersion: persisted.historyVersion } : {}) }
+      const receipt: ContextCommitReceipt = { operationId, windowId: trustedCandidate.output.windowId, inputFingerprint, outputFingerprint, ...(persisted.historyVersion !== undefined ? { historyVersion: persisted.historyVersion } : {}) }
       try {
         await evidence.commitProjection?.()
-        const snapshot = registrar.captureFrame({ scope, frame: candidate.output, binding: { kind: 'session', surfaceFingerprint: outputFingerprint } })
-        registrar.release(candidate)
+        const snapshot = registrar.captureFrame({ scope, frame: trustedCandidate.output, binding: { kind: 'session', surfaceFingerprint: outputFingerprint } })
+        registrar.release(trustedCandidate)
         return { status: 'committed', snapshot, receipt }
       } catch (error) {
-        registrar.release(candidate)
+        registrar.release(trustedCandidate)
         return { status: 'commit-uncertain', receipt, error: error instanceof Error ? error : new Error(String(error)) }
       }
     }
@@ -337,32 +343,34 @@ export function createInvocationContextPort(input: Readonly<{ binding: Invocatio
     },
     commitReplacement: async ({ operationId, candidate }) => {
       if (!operationId.trim()) throw new Error('CONTEXT_OPERATION_ID_REQUIRED')
-      if (!same(candidate.base.scope, binding.scope)) throw new Error('CONTEXT_SCOPE_MISMATCH')
-      const evidence = registrar.readEvidence(candidate)
-      const baseBinding = registrar.readBinding(candidate.base)
+      const resolved = registrar.resolveCandidate(candidate)
+      const trustedCandidate = resolved.candidate
+      const evidence = resolved.proof
+      if (!same(trustedCandidate.base.scope, binding.scope)) throw new Error('CONTEXT_SCOPE_MISMATCH')
+      const baseBinding = registrar.readBinding(trustedCandidate.base)
       if (baseBinding.kind !== 'invocation') throw new Error('CONTEXT_BINDING_MISMATCH')
       const current = await binding.capture()
-      if (current.phase !== baseBinding.phase || current.epoch !== baseBinding.epoch || current.expectedHistoryVersion !== baseBinding.expectedHistoryVersion || !same(current.frame, candidate.base.frame)) {
-        registrar.release(candidate)
+      if (current.phase !== baseBinding.phase || current.epoch !== baseBinding.epoch || current.expectedHistoryVersion !== baseBinding.expectedHistoryVersion || !same(current.frame, trustedCandidate.base.frame)) {
+        registrar.release(trustedCandidate)
         return { status: 'stale' }
       }
-      if (same(candidate.base.frame, candidate.output) && !evidence.commitProjection) {
-        registrar.release(candidate)
+      if (same(trustedCandidate.base.frame, trustedCandidate.output) && !evidence.commitProjection) {
+        registrar.release(trustedCandidate)
         return { status: 'no-op' }
       }
-      const inputMessages = candidate.base.frame.items.map(({ message }) => message)
-      const outputMessages = candidate.output.items.map(({ message }) => message)
+      const inputMessages = trustedCandidate.base.frame.items.map(({ message }) => message)
+      const outputMessages = trustedCandidate.output.items.map(({ message }) => message)
       const inputFingerprint = hash(inputMessages)
       const outputFingerprint = hash(outputMessages)
       const reserved: Record<string, unknown> = {
         messages: outputMessages,
         inputFingerprint,
         outputFingerprint,
-        ...(candidate.output.requiredUser ? { requiredUserMessage: candidate.output.requiredUser } : {})
+        ...(trustedCandidate.output.requiredUser ? { requiredUserMessage: trustedCandidate.output.requiredUser } : {})
       }
       for (const [key, value] of Object.entries(reserved)) {
         if (key in evidence.historyPayload && !same(evidence.historyPayload[key], value)) {
-          registrar.release(candidate)
+          registrar.release(trustedCandidate)
           throw new Error(`CONTEXT_HISTORY_PAYLOAD_CONFLICT:${key}`)
         }
       }
@@ -371,29 +379,29 @@ export function createInvocationContextPort(input: Readonly<{ binding: Invocatio
       try {
         appended = await binding.appendReplacement({ epoch: current.epoch, expectedHistoryVersion: current.expectedHistoryVersion, payload })
       } catch (error) {
-        registrar.release(candidate)
+        registrar.release(trustedCandidate)
         if (error instanceof Error && ((error as Error & { code?: string }).code === 'version-conflict' || error.message === 'CONTEXT_EPOCH_STALE')) return { status: 'stale' }
         if (isUnknownCommit(error)) return { status: 'commit-uncertain', error }
         throw error
       }
       if ('status' in appended && appended.status === 'uncompressible') {
-        registrar.release(candidate)
+        registrar.release(trustedCandidate)
         return { status: 'uncompressible' }
       }
       if ('status' in appended) throw new Error('CONTEXT_APPEND_RESULT_INVALID')
       const receipt: ContextCommitReceipt = {
-        operationId, windowId: candidate.output.windowId, inputFingerprint, outputFingerprint, historyVersion: appended.version
+        operationId, windowId: trustedCandidate.output.windowId, inputFingerprint, outputFingerprint, historyVersion: appended.version
       }
       try {
         await evidence.commitProjection?.()
-        const snapshot = registrar.captureFrame({ scope: binding.scope, frame: candidate.output, binding: {
+        const snapshot = registrar.captureFrame({ scope: binding.scope, frame: trustedCandidate.output, binding: {
           kind: 'invocation', phase: current.phase, epoch: current.epoch + 1, expectedHistoryVersion: appended.version
         } })
-        binding.applyCommitted({ frame: candidate.output, epoch: current.epoch + 1, historyVersion: appended.version })
-        registrar.release(candidate)
+        binding.applyCommitted({ frame: trustedCandidate.output, epoch: current.epoch + 1, historyVersion: appended.version })
+        registrar.release(trustedCandidate)
         return { status: 'committed', snapshot, receipt }
       } catch (error) {
-        registrar.release(candidate)
+        registrar.release(trustedCandidate)
         return { status: 'commit-uncertain', receipt, error: error instanceof Error ? error : new Error(String(error)) }
       }
     }

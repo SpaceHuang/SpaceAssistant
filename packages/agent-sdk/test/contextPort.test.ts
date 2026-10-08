@@ -117,6 +117,51 @@ describe('invocation ContextPort', () => {
     await expect(state.history.read('inv-context')).resolves.toMatchObject({ version: 0, events: [] })
   })
 
+  it('uses the registered output if the caller mutates its candidate while capture is pending', async () => {
+    const state = setup()
+    let releaseCapture!: () => void
+    let captureStarted!: () => void
+    const started = new Promise<void>((resolve) => { captureStarted = resolve })
+    const gate = new Promise<void>((resolve) => { releaseCapture = resolve })
+    state.binding.capture = async () => { captureStarted(); await gate; return state.current() }
+    const submitted = structuredClone(state.candidate)
+    const expectedOutput = structuredClone(state.candidate.output)
+    const committing = state.port.commitReplacement({ operationId: 'mutated-during-capture', reason: 'auto-compact', candidate: submitted })
+    await started
+    Object.assign(submitted.output, { items: [], requiredUser: undefined })
+    releaseCapture()
+
+    await expect(committing).resolves.toMatchObject({ status: 'committed', snapshot: { frame: expectedOutput } })
+    expect(state.applied).toEqual([expect.objectContaining({ frame: expectedOutput })])
+    await expect(state.history.read('inv-context')).resolves.toMatchObject({
+      version: 1,
+      events: [{ kind: 'transcript-compacted', payload: { messages: expectedOutput.items.map((item) => item.message), requiredUserMessage: expectedOutput.requiredUser } }]
+    })
+  })
+
+  it('keeps History and runtime output stable when the caller mutates its candidate while append is pending', async () => {
+    const state = setup()
+    let releaseAppend!: () => void
+    let appendStarted!: () => void
+    const started = new Promise<void>((resolve) => { appendStarted = resolve })
+    const gate = new Promise<void>((resolve) => { releaseAppend = resolve })
+    const append = state.binding.appendReplacement
+    state.binding.appendReplacement = async (input) => { appendStarted(); await gate; return append(input) }
+    const submitted = structuredClone(state.candidate)
+    const expectedOutput = structuredClone(state.candidate.output)
+    const committing = state.port.commitReplacement({ operationId: 'mutated-during-append', reason: 'auto-compact', candidate: submitted })
+    await started
+    Object.assign(submitted.output, { items: [], requiredUser: undefined })
+    releaseAppend()
+
+    await expect(committing).resolves.toMatchObject({ status: 'committed', snapshot: { frame: expectedOutput } })
+    expect(state.applied).toEqual([expect.objectContaining({ frame: expectedOutput })])
+    await expect(state.history.read('inv-context')).resolves.toMatchObject({
+      version: 1,
+      events: [{ kind: 'transcript-compacted', payload: { messages: expectedOutput.items.map((item) => item.message), requiredUserMessage: expectedOutput.requiredUser } }]
+    })
+  })
+
   it('returns stale without appending when the captured epoch changed during planning', async () => {
     const state = setup()
     state.binding.capture = async () => ({ ...state.current(), epoch: 5 })
