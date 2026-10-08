@@ -39,7 +39,10 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
     return { dbBytes: file.size, walBytes, shmBytes, totalBytes: file.size + walBytes + shmBytes }
   })()
   const conn = new DatabaseSync(dbPath, { readOnly: true })
+  let snapshotOpen = false
   try {
+    conn.exec('BEGIN DEFERRED')
+    snapshotOpen = true
     const tables = new Set((conn.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(({ name }) => name))
     const metric = (table: string, expression: string): TableMetric | null => {
       if (!tables.has(table)) return null
@@ -59,7 +62,30 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
       const scan = scanSpillDirectory(spillRoot)
       let references: ReturnType<typeof readCanonicalSpillReferences> | undefined
       try {
-        references = readCanonicalSpillReferences(conn, { allowMissingTables: true })
+        const indexTables = tables.has('spill_reference_backfill_state') && tables.has('spill_reference_meta') && tables.has('spill_reference_index')
+        let trusted = false
+        if (indexTables) {
+          try {
+            const state = conn.prepare(`SELECT owner_table,status,protocol_version,verified_generation FROM spill_reference_backfill_state
+              WHERE owner_table IN ('agent_history_events','session_transcript_entries') ORDER BY owner_table`).all() as Array<{
+              owner_table: string; status: string; protocol_version: number; verified_generation: number | null
+            }>
+            const generation = conn.prepare("SELECT meta_value FROM spill_reference_meta WHERE meta_key='canonical_change_generation'").get() as { meta_value: number } | undefined
+            if (state.length === 2 && state.every((item) => item.status === 'complete' && item.protocol_version === 1 &&
+              generation && item.verified_generation === generation.meta_value)) {
+              const rows = conn.prepare(`SELECT locator,kind FROM spill_reference_index
+                ORDER BY owner_table,owner_key,descriptor_path`).all() as Array<{ locator: string; kind: 'source-of-truth' | 'degradable' }>
+              const descriptors = rows.map(({ locator, kind }) => ({ locator, kind } as ReturnType<typeof readCanonicalSpillReferences>['descriptors'][number]))
+              references = { descriptors, referencedLocators: new Set(rows.map(({ locator }) => locator)), stats: {
+                eventHistoryRows: 0, transcriptRows: 0, payloadBytes: 0, descriptorCount: descriptors.length,
+                uniqueLocatorCount: new Set(rows.map(({ locator }) => locator)).size,
+                eventHistoryDurationMs: 0, transcriptDurationMs: 0, durationMs: 0
+              } }
+              trusted = true
+            }
+          } catch { /* A failed or malformed index read falls back to the strict canonical scan. */ }
+        }
+        if (!trusted) references = readCanonicalSpillReferences(conn, { allowMissingTables: true })
       } catch { /* Report unknown reference classes below; do not turn an unreadable source into zero bytes. */ }
       const kindByLocator = new Map(references?.descriptors.map(({ locator, kind }) => [locator, kind]) ?? [])
       const files = scan.files.map(({ locator, bytes }) => ({ locator, bytes, kind: kindByLocator.get(locator) ?? 'orphan' }))
@@ -217,7 +243,7 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
           return { messages, bodyMatched, byRole, identityBodyCandidateCount, identityBodyCandidateBytes, identityBodyCandidatesByRole, canonicalIdentityCount: canonicalIdentities.size, canonicalUniqueBodies: canonicalBodies.size, malformedPayloads }
         })()
       : null
-    return {
+    const profile = {
       collectedAt: new Date().toISOString(),
       runtime: { platform: process.platform, arch: process.arch, osRelease: os.release(), nodeVersion: process.versions.node, sqliteVersion },
       schemaVersion: schemaVersion ? Number(schemaVersion.value) : null,
@@ -244,7 +270,11 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
       canonicalRequiredData,
       messageBodyCoverage
     }
+    conn.exec('COMMIT')
+    snapshotOpen = false
+    return profile
   } finally {
+    if (snapshotOpen) { try { conn.exec('ROLLBACK') } catch { /* connection close will discard a failed snapshot */ } }
     conn.close()
   }
 }

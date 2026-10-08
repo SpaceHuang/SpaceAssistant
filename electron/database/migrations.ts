@@ -22,7 +22,8 @@ import {
   MIGRATION_V46_HISTORY_CURSOR_INVALIDATION_TRIGGERS_SQL, MIGRATION_V47_SESSION_PROJECTION_MIGRATION_SQL,
   MIGRATION_V48_SESSION_PROJECTION_LEGACY_POLICY_SQL, MIGRATION_V49_SESSION_PROJECTION_SCOPE_SQL,
   MIGRATION_V50_HISTORY_RECOVERY_WORK_SQL, MIGRATION_V50_HISTORY_RECOVERY_WORK_TRIGGERS_SQL,
-  MIGRATION_V51_USAGE_MODEL_IDENTITY_COLUMNS, MIGRATION_V52_SESSION_PROJECTION_MIGRATION_CANCEL_SQL, SCHEMA_META_KEYS
+  MIGRATION_V51_USAGE_MODEL_IDENTITY_COLUMNS, MIGRATION_V52_SESSION_PROJECTION_MIGRATION_CANCEL_SQL,
+  MIGRATION_V54_SPILL_REFERENCE_INDEX_SQL, SCHEMA_META_KEYS
 } from './schema'
 import { runInTransaction } from './transaction'
 
@@ -636,6 +637,35 @@ export function runMigrations(conn: DatabaseSync): void {
     }
 
     version = 53
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 53) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V54_SPILL_REFERENCE_INDEX_SQL)
+    const tableExists = (name: string) => conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name) !== undefined
+    const ensureRevisionColumn = (table: string) => {
+      if (!tableExists(table)) return
+      const columns = new Set((conn.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(({ name }) => name))
+      if (!columns.has('spill_reference_revision')) conn.exec(`ALTER TABLE ${table} ADD COLUMN spill_reference_revision INTEGER NOT NULL DEFAULT 0`)
+    }
+    ensureRevisionColumn('agent_history_events')
+    ensureRevisionColumn('session_transcript_entries')
+    if (tableExists('agent_history_events')) conn.exec(`
+      CREATE TRIGGER IF NOT EXISTS spill_reference_generation_history_insert AFTER INSERT ON agent_history_events BEGIN
+        UPDATE spill_reference_meta SET meta_value=meta_value+1 WHERE meta_key='canonical_change_generation'; END;
+      CREATE TRIGGER IF NOT EXISTS spill_reference_generation_history_update AFTER UPDATE OF payload_json ON agent_history_events BEGIN
+        UPDATE agent_history_events SET spill_reference_revision=spill_reference_revision+1 WHERE invocation_id=NEW.invocation_id AND sequence=NEW.sequence;
+        UPDATE spill_reference_meta SET meta_value=meta_value+1 WHERE meta_key='canonical_change_generation'; END;
+      CREATE TRIGGER IF NOT EXISTS spill_reference_generation_history_delete AFTER DELETE ON agent_history_events BEGIN
+        UPDATE spill_reference_meta SET meta_value=meta_value+1 WHERE meta_key='canonical_change_generation'; END;`)
+    if (tableExists('session_transcript_entries')) conn.exec(`
+      CREATE TRIGGER IF NOT EXISTS spill_reference_generation_transcript_insert AFTER INSERT ON session_transcript_entries BEGIN
+        UPDATE spill_reference_meta SET meta_value=meta_value+1 WHERE meta_key='canonical_change_generation'; END;
+      CREATE TRIGGER IF NOT EXISTS spill_reference_generation_transcript_update AFTER UPDATE OF messages_json ON session_transcript_entries BEGIN
+        UPDATE session_transcript_entries SET spill_reference_revision=spill_reference_revision+1 WHERE session_id=NEW.session_id AND version=NEW.version;
+        UPDATE spill_reference_meta SET meta_value=meta_value+1 WHERE meta_key='canonical_change_generation'; END;
+      CREATE TRIGGER IF NOT EXISTS spill_reference_generation_transcript_delete AFTER DELETE ON session_transcript_entries BEGIN
+        UPDATE spill_reference_meta SET meta_value=meta_value+1 WHERE meta_key='canonical_change_generation'; END;`)
+    version = 54
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   } catch (migrationError) {

@@ -15,6 +15,7 @@ const AGENT_LOG_FILE_PATTERN = /^Agent-(\d{8})\.log$/
 export interface AgentLogPruneResult {
   removed: number
   removedFiles: string[]
+  failed: number
 }
 
 function isBeforeRetentionCutoff(fileName: string, cutoffDayKey: string): boolean {
@@ -30,14 +31,20 @@ export async function pruneAgentLogs(options: {
 }): Promise<AgentLogPruneResult> {
   const { logDir, retentionDays, now = new Date() } = options
   if (!Number.isInteger(retentionDays) || retentionDays < 1) {
-    return { removed: 0, removedFiles: [] }
+    return { removed: 0, removedFiles: [], failed: 0 }
   }
   const cutoff = new Date(now)
   cutoff.setDate(cutoff.getDate() - (retentionDays - 1))
   const cutoffDayKey = formatAgentLogDateKey(cutoff)
 
-  const entries = await fs.readdir(logDir).catch(() => [])
+  let entries: string[]
+  try { entries = await fs.readdir(logDir) }
+  catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return { removed: 0, removedFiles: [], failed: 0 }
+    throw error
+  }
   const removedFiles: string[] = []
+  let failed = 0
   for (const fileName of entries) {
     if (!isBeforeRetentionCutoff(fileName, cutoffDayKey)) continue
     try {
@@ -45,6 +52,7 @@ export async function pruneAgentLogs(options: {
       removedFiles.push(fileName)
     } catch {
       // 单文件删除失败不阻断清理;下次触发重试
+      failed += 1
     }
   }
   if (removedFiles.length > 0) {
@@ -56,5 +64,5 @@ export async function pruneAgentLogs(options: {
       removedFiles
     })
   }
-  return { removed: removedFiles.length, removedFiles }
+  return { removed: removedFiles.length, removedFiles, failed }
 }

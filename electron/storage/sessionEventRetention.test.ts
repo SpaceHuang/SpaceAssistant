@@ -70,6 +70,38 @@ describe('sessionEventRetention(归位 Storage,偏差 24)', () => {
     rmSpy.mockRestore()
   })
 
+  it('propagates session-directory scan failures so the watermark is not advanced', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-retention-scan-failure-'))
+    const failure = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    const readdir = vi.spyOn(fs, 'readdir').mockRejectedValueOnce(failure)
+    await expect(enforceSessionEventRetentionDetailed(root, 1)).rejects.toMatchObject({ code: 'EACCES' })
+    readdir.mockRestore()
+  })
+
+  it('continues processing other workspace roots after one root scan fails', async () => {
+    const db = createMemoryAppDb()
+    const failedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'session-retention-root-failed-'))
+    const healthyRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'session-retention-root-healthy-'))
+    setConfigValue(db, 'retention.sessionEvent.maxSessions', '1')
+    for (const [name, lastAt] of [['old-19700101', 1], ['new-19700101', 2]] as const) {
+      const sessionDir = path.join(healthyRoot, 'sessions', name)
+      await fs.mkdir(sessionDir, { recursive: true })
+      await fs.writeFile(path.join(sessionDir, 'events.index.json'), JSON.stringify({ lastAt }))
+    }
+    const originalReaddir = fs.readdir
+    const failedPath = path.join(failedRoot, 'sessions')
+    const readdir = vi.spyOn(fs, 'readdir').mockImplementation((target, options) => {
+      if (target === failedPath) return Promise.reject(Object.assign(new Error('permission denied'), { code: 'EACCES' })) as never
+      return originalReaddir(target as string, options as never) as never
+    })
+    const result = await runSessionEventRetentionMaintenance(db, [failedRoot, healthyRoot])
+    readdir.mockRestore()
+    expect(result.summary.failures).toMatchObject([{ sessionName: failedRoot, phase: 'retention-delete' }])
+    await expect(fs.stat(path.join(healthyRoot, 'sessions', 'old-19700101'))).rejects.toThrow()
+    expect(await fs.stat(path.join(healthyRoot, 'sessions', 'new-19700101'))).toBeTruthy()
+    db.close()
+  })
+
   it('删除留痕:removed > 0 时落 retention.sessionEvents.cleaned(策略 + 名单 + 数量)', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-retention-audit-'))
     for (const [id, time] of [['old', 1], ['new', 2]] as const) {

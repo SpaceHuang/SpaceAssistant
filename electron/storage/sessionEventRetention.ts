@@ -85,7 +85,12 @@ export async function enforceSessionEventRetention(workDir: string, maxSessions:
 export async function enforceSessionEventRetentionDetailed(workDir: string, maxSessions: number, options: SessionRetentionOptions = {}): Promise<SessionRetentionSummary> {
   if (!Number.isInteger(maxSessions) || maxSessions < 1) throw new Error('maxSessions must be positive')
   const root = path.join(workDir, 'sessions')
-  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => [])
+  let entries: Array<{ name: string; isDirectory(): boolean }>
+  try { entries = await fs.readdir(root, { withFileTypes: true }) }
+  catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') entries = []
+    else throw error
+  }
   const candidates: Array<{ name: string; lastAt: number }> = []
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
@@ -139,10 +144,14 @@ export async function runSessionEventRetentionMaintenance(db: AppDatabase, workD
   const roots = typeof workDirs === 'string' ? [workDirs] : workDirs
   const summary: SessionRetentionSummary = { removed: 0, failures: [], retained: [] }
   for (const workDir of new Set(roots)) {
-    const rootSummary = await enforceSessionEventRetentionDetailed(workDir, policy.sessionEventMaxSessions, options)
-    summary.removed += rootSummary.removed
-    summary.failures.push(...rootSummary.failures)
-    summary.retained.push(...rootSummary.retained)
+    try {
+      const rootSummary = await enforceSessionEventRetentionDetailed(workDir, policy.sessionEventMaxSessions, options)
+      summary.removed += rootSummary.removed
+      summary.failures.push(...rootSummary.failures)
+      summary.retained.push(...rootSummary.retained)
+    } catch (error) {
+      summary.failures.push({ sessionName: workDir, phase: 'retention-delete', error, jsonlCommitted: false })
+    }
   }
   return { policy, summary }
 }
