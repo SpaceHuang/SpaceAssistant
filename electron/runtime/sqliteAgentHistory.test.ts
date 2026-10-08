@@ -2487,6 +2487,22 @@ describe('SqliteAgentHistory', () => {
     conn.close()
   })
 
+  it('orders the latest invocation by durable commit order when the wall clock moves backward', async () => {
+    const conn = createDb()
+    const history = new SqliteAgentHistory(conn, 1, Date.now, 'session-clock-rollback')
+    await history.appendBatch([{
+      ...event('clock-first', 1), invocationId: 'clock-first', turnId: 'turn-first'
+    }], 0)
+    await history.appendBatch([{
+      ...event('clock-second', 1), invocationId: 'clock-second', turnId: 'turn-second'
+    }], 0)
+    conn.prepare("UPDATE agent_history_events SET created_at=2000 WHERE invocation_id='clock-first'").run()
+    conn.prepare("UPDATE agent_history_events SET created_at=1000 WHERE invocation_id='clock-second'").run()
+
+    expect(history.listInvocationIdsForSession('session-clock-rollback')).toEqual(['clock-first', 'clock-second'])
+    conn.close()
+  })
+
   it('returns only the latest completed invocation snapshot for a session', async () => {
     const conn = createDb()
     const history = new SqliteAgentHistory(conn, 1, () => 100, 'session-reader')

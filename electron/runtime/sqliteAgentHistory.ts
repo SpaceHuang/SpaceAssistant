@@ -1103,7 +1103,7 @@ export class SqliteAgentHistory implements HistoryPort {
     }))
   }
 
-  /** Lists canonical invocation streams owned by a session in their first-commit order. */
+  /** Lists canonical invocation streams owned by a session in their first durable commit order. */
   listInvocationIdsForSession(sessionId: string): string[] {
     if (!sessionId.trim()) throw new HistoryBatchError('sessionId is required')
     const corrupt = this.conn.prepare(`SELECT streams.invocation_id FROM agent_history_streams AS streams
@@ -1117,7 +1117,9 @@ export class SqliteAgentHistory implements HistoryPort {
       JOIN agent_history_events AS events ON events.invocation_id = streams.invocation_id
       WHERE streams.session_id = ?
       GROUP BY streams.invocation_id
-      ORDER BY MIN(events.created_at) ASC, MIN(events.rowid) ASC, streams.invocation_id ASC
+      ORDER BY MIN(events.commit_order) IS NULL ASC, MIN(events.commit_order) ASC,
+        MIN(events.session_seq) IS NULL ASC, MIN(events.session_seq) ASC,
+        MIN(events.created_at) ASC, MIN(events.rowid) ASC, streams.invocation_id ASC
     `).all(sessionId) as Array<{ invocation_id: string }>).map(({ invocation_id }) => invocation_id)
   }
 
