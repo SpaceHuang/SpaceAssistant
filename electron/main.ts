@@ -59,6 +59,7 @@ import { setUsageStatsAppVersion } from './usageStats/usageStatsRecorder'
 import { backfillUsageStats } from './usageStats/usageStatsBackfill'
 import { getDbConnection } from './database/sqliteStore'
 import { SqliteAgentHistory } from './runtime/sqliteAgentHistory'
+import { classifySessionHistoryRepairFailure } from './runtime/sessionHistoryRecoveryDiagnostics'
 import { SessionProjectionMigrationApplication } from './runtime/sessionProjectionMigrationApplication'
 import { DB_SCHEMA_VERSION } from './database/schema'
 import { createSessionStorageCleanupProductionBoundary } from './runtime/sessionStorageCleanupProduction'
@@ -186,8 +187,50 @@ let workDirManager: WorkDirManager | null = null
 let appDb: AppDatabase | null = null
 let sessionProjectionMigrationApplication: SessionProjectionMigrationApplication | null = null
 let mainIpcReady = false
+let startupStatusWindow: BrowserWindow | null = null
 const processStartupStartedAt = performance.now()
 let initialRendererLoadReported = false
+
+async function showStartupStatus(message: string): Promise<void> {
+  try {
+    if (!startupStatusWindow || startupStatusWindow.isDestroyed()) {
+      const win = new BrowserWindow({
+        width: 440,
+        height: 220,
+        frame: false,
+        resizable: false,
+        minimizable: false,
+        maximizable: false,
+        movable: true,
+        show: false,
+        backgroundColor: '#faf9f6',
+        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
+      })
+      startupStatusWindow = win
+      win.on('closed', () => {
+        if (startupStatusWindow === win) startupStatusWindow = null
+      })
+      const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SpaceAssistant</title>
+        <style>html,body{height:100%;margin:0}body{font:13px/1.55 'Segoe UI','PingFang SC','Microsoft YaHei',system-ui,sans-serif;color:#2d2a26;background:#faf9f6;display:grid;place-items:center}.card{text-align:center;padding:28px}.mark{width:26px;height:26px;margin:0 auto 14px;border:3px solid #e5e0d8;border-top-color:#f06529;border-radius:50%;animation:spin 1s linear infinite}h1{font-size:13px;font-weight:600;margin:0 0 8px}p{font-size:13px;color:#6b655e;margin:0}small{display:block;color:#6b655e;margin-top:10px}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.mark{animation:none}}</style></head>
+        <body><main class="card"><div class="mark" aria-hidden="true"></div><h1>SpaceAssistant</h1><p id="status" role="status" aria-live="polite">正在准备本地数据，请稍候…</p><small>应用正在启动，请保持此窗口开启。</small></main></body></html>`
+      await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+      if (win.isDestroyed()) return
+      win.show()
+    }
+    const win = startupStatusWindow
+    if (win && !win.isDestroyed()) {
+      await win.webContents.executeJavaScript(`document.getElementById('status').textContent=${JSON.stringify(message)}`)
+    }
+  } catch (error) {
+    console.warn('[startup] status window unavailable:', error instanceof Error ? error.message : String(error))
+  }
+}
+
+function closeStartupStatus(): void {
+  const win = startupStatusWindow
+  startupStatusWindow = null
+  if (win && !win.isDestroyed()) win.close()
+}
 
 function getTelemetryAppVersion(): string {
   if (app.isPackaged) return app.getVersion()
@@ -284,6 +327,7 @@ export async function createMainWindow(): Promise<void> {
     width: 1200,
     height: 800,
     ...getMainWindowFrameOptions(),
+    show: false,
     // backgroundThrottling 默认为 true；隐藏窗口后 renderer 自动节流（NFR-10）
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -364,6 +408,9 @@ export async function createMainWindow(): Promise<void> {
       nodeVersion: process.versions.node, sqliteVersion
     }))
   }
+  win.show()
+  win.focus()
+  closeStartupStatus()
 
   win.on('closed', () => {
     setMainWindow(null)
@@ -386,16 +433,25 @@ app.whenReady().then(async () => {
     return
   }
 
+  await showStartupStatus('正在准备本地数据，请稍候…')
+
   app.on('second-instance', () => {
     void showMainWindow()
+  })
+
+  await showStartupStatus('正在清理上次启动留下的临时文件…')
+  await cleanupMcpArtifactsOnStartup(app.getPath('userData')).catch((error) => {
+    console.warn('[mcp] startup artifact cleanup failed:', error instanceof Error ? error.message : String(error))
   })
 
   const dbPath = getDefaultDbPath(app.getPath('userData'))
   let db: ReturnType<typeof openDatabase>
   try {
+    await showStartupStatus('正在检查或升级本地数据库，请稍候…')
     db = await measureStartupPhase('database.open-and-migrations', () => openDatabase(dbPath))
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
+    closeStartupStatus()
     dialog.showErrorBox(
       '数据库初始化失败',
       `无法打开本地数据库，应用即将退出。\n\n路径：${dbPath}\n错误：${msg}`
@@ -573,19 +629,34 @@ app.whenReady().then(async () => {
     mainDirname: __dirname
   })
   const sessionHistoryRecoveryStartedAt = performance.now()
+  let pendingSessionHistoryRepairs = 0
+  const reportSessionHistoryRepairFailure = (kind: string, error: unknown) => {
+    sessionHistoryRepairFailureCount += 1
+    logAgentEvent('warn', 'session.history.repair.failed', {
+      kind,
+      reasonCode: classifySessionHistoryRepairFailure(error)
+    })
+  }
   if (safeDbMaintenanceRequested) {
     console.warn('[agentHistory] canonical full recovery skipped for --safe-db-maintenance; it will run on the next normal launch')
   } else {
+  await showStartupStatus('正在加载，请稍候…')
   try {
     const startupHistory = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, undefined, createSpillStore(path.join(app.getPath('userData'), 'spill')))
+    let recoveryStatusRequired = false
     try {
     const historyClassification = await measureStartupPhase('canonical-history.classification', () => startupHistory.classifyLegacyProjectionRepairs(100))
       if (!historyClassification.complete) {
         console.info('[agentHistory] legacy repair classification remains resumable', historyClassification)
+        recoveryStatusRequired = true
       }
     } catch (error) {
       // Classification failure must retain the old exhaustive recovery path until its cursor completes.
       console.warn('[agentHistory] legacy repair classification failed; using exhaustive recovery', error instanceof Error ? error.message : String(error))
+      recoveryStatusRequired = true
+    }
+    if (recoveryStatusRequired || startupHistory.getStartupRecoveryWorkSummary().hasWork) {
+      await showStartupStatus('正在整理历史会话数据，请稍候…')
     }
     const interrupted = await measureStartupPhase('canonical-history.recovery', () => startupHistory.recoverInterruptedInvocations({
       resolveSessionLedgerLocation: (sessionId) => {
@@ -673,36 +744,48 @@ app.whenReady().then(async () => {
         finally { await sink.close() }
       },
       onCompactionRepairError: (error, invocationId, compactionId) => {
-        sessionHistoryRepairFailureCount += 1
-        console.warn('[agentHistory] compaction ledger repair degraded:', { invocationId, compactionId, error: error instanceof Error ? error.message : String(error) })
+        void invocationId
+        void compactionId
+        reportSessionHistoryRepairFailure('compaction', error)
       },
       onToolLedgerRepairError: (error, invocationId, toolCallId) => {
-        sessionHistoryRepairFailureCount += 1
-        console.warn('[agentHistory] tool result ledger repair degraded:', { invocationId, toolCallId, error: error instanceof Error ? error.message : String(error) })
+        void invocationId
+        void toolCallId
+        reportSessionHistoryRepairFailure('tool-ledger', error)
       },
       onModelRequestLedgerRepairError: (error, invocationId, requestId) => {
-        sessionHistoryRepairFailureCount += 1
-        console.warn('[agentHistory] model request ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
+        void invocationId
+        void requestId
+        reportSessionHistoryRepairFailure('model-request', error)
       },
       onProviderRetryLedgerRepairError: (error, invocationId, requestId) => {
-        sessionHistoryRepairFailureCount += 1
-        console.warn('[agentHistory] provider retry ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
+        void invocationId
+        void requestId
+        reportSessionHistoryRepairFailure('provider-retry', error)
       },
       onUsageLedgerRepairError: (error, invocationId, requestId) => {
-        sessionHistoryRepairFailureCount += 1
-        console.warn('[agentHistory] usage ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
+        void invocationId
+        void requestId
+        reportSessionHistoryRepairFailure('usage', error)
       },
       onFinalRequestContextLedgerRepairError: (error, invocationId, requestId) => {
-        sessionHistoryRepairFailureCount += 1
-        console.warn('[agentHistory] final request context ledger repair degraded:', { invocationId, requestId, error: error instanceof Error ? error.message : String(error) })
+        void invocationId
+        void requestId
+        reportSessionHistoryRepairFailure('final-request-context', error)
       },
       onInvocationTerminalRepairError: (error, invocationId, turnId) => {
-        sessionHistoryRepairFailureCount += 1
-        console.warn('[agentHistory] invocation terminal ledger repair degraded:', { invocationId, turnId, error: error instanceof Error ? error.message : String(error) })
+        void invocationId
+        void turnId
+        reportSessionHistoryRepairFailure('invocation-terminal', error)
       }
     }))
     recoveredInvocationCount = interrupted.length
-    sessionHistoryRecoverySucceeded = sessionHistoryRepairFailureCount === 0
+    pendingSessionHistoryRepairs = (getDbConnection(db).prepare(`SELECT COUNT(*) AS count
+      FROM canonical_projection_repairs repairs
+      LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=repairs.session_id
+      WHERE repairs.status='pending' AND (cutover.cleanup_state IS NULL OR
+        cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))`).get() as { count: number }).count
+    sessionHistoryRecoverySucceeded = sessionHistoryRepairFailureCount === 0 && pendingSessionHistoryRepairs === 0
     if (interrupted.length > 0) console.warn('[agentHistory] interrupted invocations recovered:', interrupted.map(({ invocationId }) => invocationId))
   } catch (error) {
     sessionHistoryRepairFailureCount += 1
@@ -721,6 +804,7 @@ app.whenReady().then(async () => {
       outcome: sessionHistoryRecoverySucceeded ? 'completed' : 'degraded',
       reconciledCount: recoveredInvocationCount,
       failed: sessionHistoryRepairFailureCount,
+      pendingRepairs: pendingSessionHistoryRepairs,
       durationMs: Math.max(0, Math.round(performance.now() - sessionHistoryRecoveryStartedAt))
     })
   }
@@ -1316,6 +1400,7 @@ app.whenReady().then(async () => {
 
   setupWindowIconThemeListener(__dirname)
   mainIpcReady = true
+  await showStartupStatus('正在准备应用窗口…')
   void createMainWindow()
     .then(() => {
       const userDataDir = app.getPath('userData')

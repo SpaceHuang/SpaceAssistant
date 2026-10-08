@@ -26,6 +26,7 @@ import { isCanonicalProjectionWatermarkValid } from './canonicalHistory'
 import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
 import { createSpillStoreForDatabase, type SpillDescriptor, type SpillStore } from '../storage/spillStore'
 import { collectSpillDescriptorsStrict } from '../storage/spillProtocol'
+import { projectCanonicalToolResultForSessionLedger } from './sessionLedgerRecovery'
 
 const CANONICAL_SESSION_CACHE_VERSION = 1
 
@@ -171,6 +172,11 @@ type EventRow = {
   kind: HistoryEvent['kind']
   payload_json: string
   session_id?: string | null
+}
+
+function projectionRepairRetryDelayMs(attempts: number, invocationRepairCount: number): number {
+  if (attempts <= 0 || invocationRepairCount < 10) return 0
+  return Math.min(24 * 60 * 60 * 1000, 30 * 60 * 1000 * 2 ** Math.min(attempts - 1, 5))
 }
 type OrderedSessionEventRow = EventRow & { session_seq: number; commit_order: number; session_id: string; created_at: number }
 
@@ -1096,11 +1102,36 @@ export class SqliteAgentHistory implements HistoryPort {
     }
     return (this.conn.prepare(`SELECT streams.invocation_id,streams.session_id FROM agent_history_streams streams
       LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=streams.session_id
-      WHERE cutover.cleanup_state IS NULL OR cutover.cleanup_state NOT IN ('write-stopped','pending','complete')
+      WHERE NOT EXISTS (SELECT 1 FROM agent_history_events terminal
+          WHERE terminal.invocation_id=streams.invocation_id
+            AND terminal.kind IN ('invocation-completed','invocation-failed'))
+        AND (cutover.cleanup_state IS NULL OR cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))
       ORDER BY streams.invocation_id`).all() as
       Array<{ invocation_id: string; session_id: string | null }>).map(({ invocation_id, session_id }) => ({
       invocationId: invocation_id, sessionId: session_id
     }))
+  }
+
+  /** Reports only recovery work that startup will actually attempt now; backed-off repairs stay out of this count. */
+  getStartupRecoveryWorkSummary(): { unfinishedInvocationCount: number; dueProjectionRepairCount: number; hasWork: boolean } {
+    const unfinishedInvocationCount = this.listStartupRecoveryWorkset().length
+    const repairRows = this.conn.prepare(`SELECT repairs.attempts,repairs.updated_at,
+        COUNT(*) OVER (PARTITION BY repairs.invocation_id) AS invocation_repair_count
+        FROM canonical_projection_repairs repairs
+        LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=repairs.session_id
+        WHERE repairs.status='pending' AND (cutover.cleanup_state IS NULL OR
+          cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))`).all() as Array<{
+            attempts: number; updated_at: number; invocation_repair_count: number
+          }>
+    const now = this.now()
+    const dueProjectionRepairCount = repairRows.filter((row) =>
+      now - row.updated_at >= projectionRepairRetryDelayMs(row.attempts, row.invocation_repair_count)
+    ).length
+    return {
+      unfinishedInvocationCount,
+      dueProjectionRepairCount,
+      hasWork: unfinishedInvocationCount > 0 || dueProjectionRepairCount > 0
+    }
   }
 
   /** Lists canonical invocation streams owned by a session in their first durable commit order. */
@@ -1571,15 +1602,23 @@ export class SqliteAgentHistory implements HistoryPort {
       invocation_id: invocationId, session_id: sessionId
     }))
     const recovered: RebuiltInvocationState[] = []
-      const repairRows = this.conn.prepare(`SELECT repairs.repair_id,repairs.invocation_id,repairs.repair_kind,repairs.target_key
+      const repairRows = this.conn.prepare(`SELECT repairs.repair_id,repairs.invocation_id,repairs.repair_kind,repairs.target_key,
+          repairs.attempts,repairs.updated_at,COUNT(*) OVER (PARTITION BY repairs.invocation_id) AS invocation_repair_count
           FROM canonical_projection_repairs repairs
           LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=repairs.session_id
           WHERE repairs.status='pending' AND (cutover.cleanup_state IS NULL OR
             cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))
-          ORDER BY repairs.updated_at,repairs.repair_id`).all() as Array<{ repair_id: string; invocation_id: string; repair_kind: string; target_key: string }>
+          ORDER BY repairs.updated_at,repairs.repair_id`).all() as Array<{
+            repair_id: string; invocation_id: string; repair_kind: string; target_key: string; attempts: number; updated_at: number;
+            invocation_repair_count: number
+          }>
+      const retryTime = Date.now()
+      const dueRepairRows = repairRows.filter((row) =>
+        retryTime - row.updated_at >= projectionRepairRetryDelayMs(row.attempts, row.invocation_repair_count)
+      )
       const work = new Map<string, { sessionId: string | null; repairIds: string[] }>()
     for (const row of streams) work.set(row.invocation_id, { sessionId: row.session_id, repairIds: [] })
-    for (const row of repairRows) {
+    for (const row of dueRepairRows) {
       const current = work.get(row.invocation_id) ?? {
         sessionId: (this.conn.prepare('SELECT session_id FROM agent_history_streams WHERE invocation_id=?').get(row.invocation_id) as { session_id: string | null } | undefined)?.session_id ?? null,
         repairIds: []
@@ -1587,7 +1626,7 @@ export class SqliteAgentHistory implements HistoryPort {
       current.repairIds.push(row.repair_id)
       work.set(row.invocation_id, current)
     }
-    const repairTargetById = new Map(repairRows.map(({ repair_id, target_key }) => [repair_id, target_key]))
+    const repairTargetById = new Map(dueRepairRows.map(({ repair_id, target_key }) => [repair_id, target_key]))
     for (const [invocationId, { sessionId: streamSessionId, repairIds }] of work) {
       let snapshot = await this.read(invocationId)
       let state = rebuildInvocationStates(snapshot).get(invocationId)
@@ -1923,7 +1962,7 @@ export class SqliteAgentHistory implements HistoryPort {
             }
           }
         } else if ((event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') && options.repairToolLedger) {
-          const payload = event.payload as { toolCallId?: unknown; reason?: unknown; result?: unknown; sessionLedger?: unknown }
+          const payload = event.payload as { toolCallId?: unknown; reason?: unknown; result?: unknown; isError?: unknown; auditRef?: unknown; sessionLedger?: unknown }
           const ledger = payload.sessionLedger as Partial<CanonicalToolLedger> | undefined
           const location = ledger?.location
           if (typeof payload.toolCallId === 'string' && location && typeof location.workDir === 'string' && typeof location.sessionId === 'string' && Number.isFinite(location.createdAt) &&
@@ -1948,7 +1987,18 @@ export class SqliteAgentHistory implements HistoryPort {
               catch { /* Diagnostics must not discard the canonical repair envelope. */ }
               continue
             }
-            if (event.kind === 'tool-call-finished' && !isDeepStrictEqual(payload.result, ledger.result)) {
+            const canonicalProposal = canonicalProposalById.get(payload.toolCallId)
+            const toolName = canonicalProposal?.name
+            const expectedResult = event.kind === 'tool-call-finished' && isRecord(payload.result)
+              ? projectCanonicalToolResultForSessionLedger({
+                rawResult: payload.result,
+                isError: payload.isError === true,
+                ...(toolName ? { toolName } : {}),
+                ...(typeof payload.auditRef === 'string' ? { auditRef: payload.auditRef } : {}),
+                deferredUnsurfaced: ledger.result.deferredUnsurfaced === true
+              })
+              : undefined
+            if (event.kind === 'tool-call-finished' && (!expectedResult || !isDeepStrictEqual(expectedResult, ledger.result))) {
               blockedSessionLedgers.add(key)
               try { options.onToolLedgerRepairError?.(new Error('canonical tool result sidecar does not match the committed completion result'), invocationId, payload.toolCallId) }
               catch { /* Diagnostics must not discard the canonical repair envelope. */ }

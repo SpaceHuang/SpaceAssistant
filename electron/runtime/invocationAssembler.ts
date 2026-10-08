@@ -44,6 +44,7 @@ import { createAgentSdkDesktopObserver } from './agentSdkDesktopObserver'
 import { createAgentSdkContextReplacementPlanner, createAgentSdkPreflightAdapter, createAgentSdkBoundaryReplacementAdapter } from './agentSdkContextReplacement'
 import { projectAgentToolResult } from '../../src/shared/agentToolResult'
 import { isProcessToolName } from '../../src/shared/processResultProjection'
+import { projectCanonicalToolResultForSessionLedger } from './sessionLedgerRecovery'
 import { resolveRegisteredToolName } from '../tools/registeredToolName'
 import { createAgentSdkSafetyPolicy, createAgentSdkStructuralPermitHandoff, markAgentSdkSafetyDecisionConfirmed } from '../confirmation/agentSdkSafetyPolicy'
 import { createAgentSdkConfirmationPort, mapAgentSdkConfirmationOutcome } from '../confirmation/agentSdkConfirmationPort'
@@ -1119,20 +1120,14 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         toolResourceKeys: input.registeredTools.toolResourceKeys,
         isApprovalCandidate: input.registeredTools.isApprovalCandidate,
         ...(materials.sessionEventLocation ? { sessionLedgerForToolResult: (call: { toolCallId: string; toolName: string; input: Record<string, unknown> }, execution: { output: unknown; isError?: boolean; auditRef?: string }) => {
-          const record = execution.output && typeof execution.output === 'object' && !Array.isArray(execution.output) ? execution.output as Record<string, unknown> : undefined
-          const result = projectAgentToolResult({
-            success: typeof record?.success === 'boolean' ? record.success : !(execution.isError ?? false),
-            ...('data' in (record ?? {}) ? { data: record!.data } : { data: execution.output }),
-            ...(typeof record?.error === 'string' ? { error: record.error } : {}),
-            ...(typeof record?.userMessage === 'string' ? { userMessage: record.userMessage } : {}),
-            ...(typeof record?.decisionRuleId === 'string' ? { decisionRuleId: record.decisionRuleId } : {}),
-            ...(record?.autoApprovedWrite && typeof record.autoApprovedWrite === 'object' ? { autoApprovedWrite: record.autoApprovedWrite as import('../../src/shared/domainTypes').AutoApprovedWriteMeta } : {})
-          }, { workspaceRoot: materials.workDir, processTool: isProcessToolName(call.toolName) })
-          if (execution.auditRef) result.auditRef = execution.auditRef
+          const isError = execution.isError ?? false
+          const result = projectCanonicalToolResultForSessionLedger({
+            rawResult: execution.output, isError, toolName: call.toolName, workspaceRoot: materials.resolveWorkDir?.() ?? materials.workDir,
+            ...(execution.auditRef ? { auditRef: execution.auditRef } : {})
+          })
           // FR8/AD10：延迟工具未浮现直调 → 持久化面标记（不进 wire 面工具结果块，B4）
-          if (!(execution.isError ?? record?.success === false) && input.deferredUnsurfacedCheck?.(call.toolName)) {
-            result.deferredUnsurfaced = true
-          }
+          const record = execution.output && typeof execution.output === 'object' && !Array.isArray(execution.output) ? execution.output as Record<string, unknown> : undefined
+          if (!(isError || record?.success === false) && input.deferredUnsurfacedCheck?.(call.toolName)) result.deferredUnsurfaced = true
           return {
             location: materials.sessionEventLocation, stepId: toolStepId(call.toolCallId), result,
             requestId: materials.requestId, invocationRequestId: materials.requestId,

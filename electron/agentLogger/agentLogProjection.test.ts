@@ -43,9 +43,17 @@ describe('projectAgentLogFields', () => {
 
   it('retains only structured startup history recovery facts', () => {
     expect(projectAgentLogFields('session.history.recovery', {
-      outcome: 'degraded', reconciledCount: 2, failed: 1, durationMs: 43, errorCode: 'HISTORY_RECOVERY_FAILED',
+      outcome: 'degraded', reconciledCount: 2, failed: 1, pendingRepairs: 173, durationMs: 43, errorCode: 'HISTORY_RECOVERY_FAILED',
       message: 'private recovery detail'
-    })).toEqual({ outcome: 'degraded', reconciledCount: 2, failed: 1, durationMs: 43, errorCode: 'HISTORY_RECOVERY_FAILED' })
+    })).toEqual({ outcome: 'degraded', reconciledCount: 2, failed: 1, pendingRepairs: 173, durationMs: 43, errorCode: 'HISTORY_RECOVERY_FAILED' })
+  })
+
+  it('keeps per-stage history repair diagnostics while discarding error messages and identifiers', () => {
+    expect(projectAgentLogFields('session.history.repair.failed', {
+      kind: 'tool-result', reasonCode: 'canonical-projection-rejected',
+      invocationId: 'private-invocation', toolCallId: 'private-tool',
+      error: 'private-session transcript and /Users/private/path'
+    })).toEqual({ kind: 'tool-result', reasonCode: 'canonical-projection-rejected', errorRedacted: true })
   })
 
   it('keeps source-truth spill collection diagnostics structural and free of file paths or content', () => {

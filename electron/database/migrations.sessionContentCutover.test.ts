@@ -302,6 +302,10 @@ describe('session content cutover schema', () => {
       DROP TRIGGER IF EXISTS invalidate_session_projections_after_history_cursor_delete;
       DROP TRIGGER IF EXISTS guard_session_content_cleanup_state_transition;
       DROP TRIGGER IF EXISTS invalidate_session_content_eligibility_after_cleanup_state_update;
+      DROP TRIGGER IF EXISTS track_pending_history_cursor_allocation;
+      DROP TRIGGER IF EXISTS settle_pending_history_cursor_allocation;
+      DROP TRIGGER IF EXISTS invalidate_session_projections_after_history_cursor_update;
+      DROP TRIGGER IF EXISTS invalidate_session_projections_after_history_cursor_delete;
       CREATE TABLE session_message_content_cutover_v43 (
         session_id TEXT PRIMARY KEY NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
         session_generation TEXT NOT NULL,message_revision INTEGER NOT NULL DEFAULT 0,

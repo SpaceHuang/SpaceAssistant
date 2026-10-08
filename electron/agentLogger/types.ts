@@ -9,6 +9,7 @@ export type AgentLogEventName =
   | 'history.cutover'
   | 'session.storage.shadow'
   | 'session.history.recovery'
+  | 'session.history.repair.failed'
   | 'session.transcript.read'
   | 'session.transcript.reconciliation'
   | 'storage.spill.source_truth_gc'
