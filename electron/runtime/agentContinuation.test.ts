@@ -124,10 +124,22 @@ describe('agent continuation checkpoint', () => {
     expect(() => validateContinuationCheckpoint(unresolved)).toThrow('UNRESOLVED_APPROVAL')
   })
 
-  it('拒绝取消/中断 invocation 与已变更的 checkpoint 摘要', () => {
+  it('允许安全取消的 invocation 从有效 checkpoint 继续，且拒绝已变更的 checkpoint 摘要', () => {
     const cancelled = snapshot()
     cancelled.events[cancelled.events.length - 1] = event(6, 'invocation-interrupted', { status: 'cancelled' })
-    expect(() => validateContinuationCheckpoint(cancelled)).toThrow('SOURCE_INVOCATION_NOT_RECOVERABLE')
+    expect(validateContinuationCheckpoint(cancelled)).toMatchObject({ checkpointSequence: 5 })
+
+    const interruptedWithUnknownSideEffect = snapshot()
+    interruptedWithUnknownSideEffect.events.splice(3, 1)
+    interruptedWithUnknownSideEffect.events[interruptedWithUnknownSideEffect.events.length - 1] = event(5, 'invocation-interrupted', { status: 'interrupted', reason: 'process-restart' })
+    interruptedWithUnknownSideEffect.events.forEach((item, index) => { item.sequence = index + 1 })
+    expect(() => validateContinuationCheckpoint(interruptedWithUnknownSideEffect)).toThrow('UNKNOWN_SIDE_EFFECT')
+
+    const multipleTerminals = snapshot()
+    multipleTerminals.events[5] = event(6, 'invocation-interrupted', { status: 'interrupted' })
+    multipleTerminals.events.push(event(7, 'invocation-failed', { status: 'failed' }))
+    multipleTerminals.version = multipleTerminals.events.length
+    expect(() => validateContinuationCheckpoint(multipleTerminals)).toThrow('CHECKPOINT_TERMINAL_CONFLICT')
 
     const conn = db()
     const source = snapshot()
@@ -326,7 +338,8 @@ describe('agent continuation checkpoint', () => {
     appendMessage(appDb, { id: 'source-assistant', sessionId: session.id, role: 'assistant', content: 'failed', timestamp: 2, status: 'failed' })
     createPersistedTurn(appDb, { turnId: 'source-turn', requestId: 'source-invocation', sessionId: session.id, assistantMessageId: 'source-assistant', state: 'terminal', outcome: 'failed' })
     appendMessage(appDb, { id: 'newer-user', sessionId: session.id, role: 'user', content: 'new task', timestamp: 3, status: 'queued' })
-    const snapshotValue = snapshot([event(7, 'invocation-failed', { status: 'failed', message: 'failed' })])
+    const snapshotValue = snapshot()
+    snapshotValue.events[5] = event(6, 'invocation-failed', { status: 'failed', message: 'failed' })
     const config = { lane: 'desktop' as const, model: 'm', continuationSafetySnapshot: { workDirProfileId: 'p', workDirSha256: 'a'.repeat(64), authorizationVersion: 'auth', toolSetSha256: 'tools', executionConfigSha256: 'd'.repeat(64) } }
     const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(appDb), deps: { now: () => 10, id: (() => { let i = 0; return () => `stale-runtime-${++i}` })() } })
     const { startAgentContinuation } = await import('./agentContinuation')

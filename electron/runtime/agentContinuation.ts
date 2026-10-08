@@ -37,9 +37,10 @@ function sha256(value: unknown): string { return createHash('sha256').update(sta
 
 export function validateContinuationCheckpoint(snapshot: HistorySnapshot): Readonly<{ checkpointSequence: number; checkpointSha256: string; transcript: ReturnType<typeof rebuildClaudeMessagesFromHistory>; requiredUserMessage: Readonly<{ id: string; message: Record<string, unknown> }> }> {
   const events = snapshot.events
+  const terminalKinds = new Set(['invocation-completed', 'invocation-failed', 'invocation-interrupted'])
   const terminal = events.at(-1)
-  if (!terminal || !['invocation-completed', 'invocation-failed'].includes(terminal.kind)) throw new AgentContinuationRejectedError('SOURCE_INVOCATION_NOT_RECOVERABLE')
-  if (events.some(({ kind }) => kind === 'invocation-interrupted')) throw new AgentContinuationRejectedError('CANCELLED_OR_INTERRUPTED_NOT_RECOVERABLE')
+  if (!terminal || !terminalKinds.has(terminal.kind)) throw new AgentContinuationRejectedError('SOURCE_INVOCATION_NOT_RECOVERABLE')
+  if (events.slice(0, -1).some(({ kind }) => terminalKinds.has(kind))) throw new AgentContinuationRejectedError('CHECKPOINT_TERMINAL_CONFLICT')
   const identity = events[0]
   if (!identity || events.some((event) => event.invocationId !== snapshot.invocationId || event.turnId !== identity.turnId || event.schemaVersion !== snapshot.schemaVersion)) throw new AgentContinuationRejectedError('CHECKPOINT_IDENTITY_MISMATCH')
   const contextMarkers = events.filter((event) => event.kind === 'invocation-context-committed')
@@ -97,7 +98,7 @@ export function validateContinuationCheckpoint(snapshot: HistorySnapshot): Reado
   if (approvals.size) throw new AgentContinuationRejectedError('UNRESOLVED_APPROVAL')
   if (unsettledProposals.size) throw new AgentContinuationRejectedError('CHECKPOINT_HAS_UNSETTLED_TOOL_CALL')
   if (latestResponse < 0) throw new AgentContinuationRejectedError('CHECKPOINT_RESPONSE_MISSING')
-  const checkpointEvents = events.filter((event) => event.kind !== 'invocation-completed' && event.kind !== 'invocation-failed')
+  const checkpointEvents = events.slice(0, -1)
   let transcript: ReturnType<typeof rebuildClaudeMessagesFromHistory>
   try {
     transcript = rebuildClaudeMessagesFromHistory(checkpointEvents)
