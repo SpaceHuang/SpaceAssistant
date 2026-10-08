@@ -77,6 +77,20 @@ describe('schema v4 migrations (确认框架表)', () => {
     db.close()
   })
 
+  it('打开已由 schema 53 写入版本标记的数据库不会误报为未来版本', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-schema-53-'))
+    dirs.push(dir)
+    const dbPath = path.join(dir, 'test.db')
+    const existing = new DatabaseSync(dbPath)
+    existing.exec(`CREATE TABLE schema_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+      INSERT INTO schema_meta (key, value) VALUES ('schema_version', '53');`)
+    existing.close()
+
+    const reopened = openSqliteDatabase(dbPath)
+    expect(getSchemaMeta(getDbConnection(reopened), SCHEMA_META_KEYS.schemaVersion)).toBe('53')
+    reopened.close()
+  })
+
   it('高版本库即使包含当前应用依赖的表也必须拒绝打开', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-future-version-'))
     dirs.push(dir)
