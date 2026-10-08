@@ -712,7 +712,7 @@ export function ChatView() {
   const continueFailedAssistant = useCallback(async (assistantMessageId: string) => {
     if (!sessionId) return
     const target = await window.api.chatResolveRetryContext({ sessionId, failedAssistantMessageId: assistantMessageId })
-    if (!target?.sourceInvocationId) {
+    if (!target?.sourceTurnId) {
       message.warning(t('chatView.warnings.continuationUnavailable'))
       return
     }
@@ -723,7 +723,7 @@ export function ChatView() {
     }
     try {
       const result = await window.api.chatContinueFromCheckpoint({
-        sessionId, sourceInvocationId: target.sourceInvocationId, requestIdempotencyKey
+        sessionId, sourceTurnId: target.sourceTurnId, requestIdempotencyKey
       })
       if (!result.accepted || result.status === 'interrupted') {
         continuationRequestKeysRef.current.delete(assistantMessageId)

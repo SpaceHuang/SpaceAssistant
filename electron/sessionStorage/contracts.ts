@@ -25,6 +25,7 @@ export type RetryContextTarget = Readonly<{
   currentUser: MessageEntry
   excludeMessageIds: readonly string[]
   sourceInvocationId?: string
+  sourceTurnId?: string
 }>
 export type HostedTranscriptSnapshot = Readonly<{
   sessionId: string

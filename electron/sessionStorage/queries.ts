@@ -21,8 +21,8 @@ import { inspectContinuationSources } from './continuationSources'
 import { createRoutingQueries } from './routingQueries'
 import { getDbConnection } from '../database'
 
-function getTurnByAssistant(db: AppDatabase, sessionId: string, assistantMessageId: string): string | undefined {
-  return (getDbConnection(db).prepare('SELECT request_id AS requestId FROM turns WHERE session_id=? AND assistant_message_id=?').get(sessionId, assistantMessageId) as { requestId?: string } | undefined)?.requestId
+function getTurnByAssistant(db: AppDatabase, sessionId: string, assistantMessageId: string): { requestId: string; turnId: string } | undefined {
+  return getDbConnection(db).prepare('SELECT request_id AS requestId, turn_id AS turnId FROM turns WHERE session_id=? AND assistant_message_id=?').get(sessionId, assistantMessageId) as { requestId: string; turnId: string } | undefined
 }
 
 export function createSessionQueries(db: AppDatabase): SessionQueries {
@@ -57,7 +57,8 @@ export function createSessionQueries(db: AppDatabase): SessionQueries {
       if (failed.length > 1) return null
       const message = failed.at(-1)
       const target = message ? resolveProjectedRetryContext(db, sessionId, message.id) : null
-      return target ? { ...target, sourceInvocationId: getTurnByAssistant(db, sessionId, target.failedAssistant.message.id) } : null
+      const turn = target ? getTurnByAssistant(db, sessionId, target.failedAssistant.message.id) : undefined
+      return target ? { ...target, ...(turn ? { sourceInvocationId: turn.requestId, sourceTurnId: turn.turnId } : {}) } : null
     },
     readMessageSequence: ({ sessionId, messageId }) => getMessageSequence(db, sessionId, messageId)
   }

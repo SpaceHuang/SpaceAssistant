@@ -65,6 +65,7 @@ import { listProfiles } from '../mcp/mcpConfigStore'
 import { readShellConfigFromDb } from '../shell/shellConfigDb'
 import { loadEffectivePolicyRules, readPolicyPackages, resolveEffectivePolicyRulesWithOrigin } from '../confirmation/policyRulesRuntime'
 import { isActiveTurnAdmissionBlocked, isSessionContextCompactionLocked, isSessionTurnAdmissionBlocked, withSessionTurnAdmission } from '../sessionCompactionLock'
+import type { ContinuationIntentAcceptance, ContinuationSourceRef } from '../sessionStorage/contracts'
 
 export function resolveContinuationSafetySnapshot(ctx: AppIpcContext, sessionId: string, lane: 'desktop' | 'wechat' | 'feishu' | 'automation') {
   const workDir = ctx.sessionStorage ? resolveWorkDirForSession(ctx.sessionStorage.queries, sessionId,
@@ -101,20 +102,20 @@ export function resolveContinuationSafetySnapshot(ctx: AppIpcContext, sessionId:
 export async function continueAgentFromCheckpoint(input: {
   ctx: AppIpcContext
   turnRuntime: TurnRuntimeImpl
-  payload: { sessionId: string; sourceInvocationId: string; requestIdempotencyKey: string }
+  payload: { sessionId: string; sourceTurnId: string; requestIdempotencyKey: string }
   dispatch: (sender: null, payload: TurnExecutePayload, continuationId?: string) => unknown
   resolveCurrentSafetySnapshot?: (sessionId: string) => ReturnType<typeof createContinuationSafetySnapshot>
 }): Promise<{ accepted: false; reason: string } | {
   accepted: true; continuationId: string; targetInvocationId: string; targetTurnId: string; status: string
 }> {
   const { ctx, turnRuntime, payload } = input
-  if (!payload.sessionId?.trim() || !payload.sourceInvocationId?.trim() || !payload.requestIdempotencyKey?.trim()) {
+  if (!payload.sessionId?.trim() || !payload.sourceTurnId?.trim() || !payload.requestIdempotencyKey?.trim()) {
     return { accepted: false, reason: 'CONTINUATION_IDENTITY_REQUIRED' }
   }
   try {
     const storage = ctx.sessionStorage
     if (!storage) return { accepted: false, reason: 'SESSION_STORAGE_NOT_CONFIGURED' }
-    const sourceTurn = storage.execution.readTurnByRequest({ sessionId: payload.sessionId, requestId: payload.sourceInvocationId })
+    const sourceTurn = storage.execution.readTurn({ sessionId: payload.sessionId, turnId: payload.sourceTurnId })
     const frozenSnapshot = sourceTurn?.executionConfig?.continuationSafetySnapshot
     if (!sourceTurn || sourceTurn.executionConfig?.lane !== 'desktop' || !frozenSnapshot) {
       return { accepted: false, reason: 'CONTINUATION_ORIGINAL_SAFETY_SNAPSHOT_MISSING' }
@@ -127,7 +128,7 @@ export async function continueAgentFromCheckpoint(input: {
       return { accepted: false, reason: 'CONTINUATION_SAFETY_SNAPSHOT_CHANGED' }
     }
     const inspection = storage.queries.continuationSources.inspect({ sessionId: payload.sessionId, activeTurnIds: turnRuntime.listActive(payload.sessionId).map((turn) => turn.turnId), selectedAssistantMessageId: sourceTurn.assistantMessageId })
-    if (inspection.kind !== 'available' || inspection.selected.kind !== 'found' || inspection.selected.candidate.source.invocationId !== payload.sourceInvocationId) {
+    if (inspection.kind !== 'available' || inspection.selected.kind !== 'found' || inspection.selected.candidate.source.turnId !== payload.sourceTurnId) {
       return { accepted: false, reason: 'CONTINUATION_SOURCE_IDENTITY_MISMATCH' }
     }
     const candidate = inspection.selected.candidate
@@ -137,7 +138,7 @@ export async function continueAgentFromCheckpoint(input: {
       source: candidate.source, createdBy: payload.sessionId, frozenConfig: currentSnapshot,
       executionConfig: { ...sourceTurn.executionConfig, continuationSafetySnapshot: currentSnapshot },
       acceptance: {
-        payloadSha256: createHash('sha256').update(JSON.stringify({ sessionId: payload.sessionId, sourceInvocationId: payload.sourceInvocationId, requestIdempotencyKey: payload.requestIdempotencyKey })).digest('hex'),
+        payloadSha256: createHash('sha256').update(JSON.stringify({ sessionId: payload.sessionId, sourceTurnId: payload.sourceTurnId, requestIdempotencyKey: payload.requestIdempotencyKey })).digest('hex'),
         rawText: '继续', intentKind: 'exact-continue', route: 'continuation'
       }
     })
@@ -161,11 +162,54 @@ export async function continueAgentFromCheckpoint(input: {
   }
 }
 
+/** Typed continuation resolves the persisted Turn by turnId and the checkpoint by its History invocationId. */
+export async function startAgentContinuationFromSource(input: {
+  ctx: AppIpcContext
+  sessionId: string
+  source: ContinuationSourceRef
+  requestId: string
+  continuationAcceptance: Pick<ContinuationIntentAcceptance, 'payloadSha256' | 'rawText' | 'attachments' | 'intentKind' | 'route'>
+  dispatch: (sender: null, payload: TurnExecutePayload, continuationId?: string) => unknown
+  resolveCurrentSafetySnapshot?: (sessionId: string) => ReturnType<typeof createContinuationSafetySnapshot>
+}): Promise<{ continuationId: string; targetInvocationId: string; targetTurnId: string; status: string }> {
+  const { ctx, sessionId, source, requestId, continuationAcceptance } = input
+  if (source.sessionId !== sessionId) throw new Error('CONTINUATION_SOURCE_IDENTITY_MISMATCH')
+  const storage = ctx.sessionStorage
+  if (!storage) throw new Error('SESSION_STORAGE_NOT_CONFIGURED')
+  const sourceTurn = storage.execution.readTurn({ sessionId, turnId: source.turnId })
+  const frozenSnapshot = sourceTurn?.executionConfig?.continuationSafetySnapshot
+  if (!sourceTurn || sourceTurn.turnId !== source.turnId || sourceTurn.executionConfig?.lane !== 'desktop' || !frozenSnapshot) {
+    throw new Error('CONTINUATION_ORIGINAL_SAFETY_SNAPSHOT_MISSING')
+  }
+  if (!sourceTurn.userMessageId || !ctx.executeTurn) throw new Error(!sourceTurn.userMessageId ? 'TURN_USER_MESSAGE_MISSING' : 'TURN_EXECUTOR_NOT_CONFIGURED')
+  const currentSnapshot = (input.resolveCurrentSafetySnapshot ?? ((id) => resolveContinuationSafetySnapshot(ctx, id, 'desktop')))(sessionId)
+  if (JSON.stringify(currentSnapshot) !== JSON.stringify(frozenSnapshot)) throw new Error('CONTINUATION_SAFETY_SNAPSHOT_CHANGED')
+  const started = await storage.execution.continuationLaunch.prepareAndClaim({
+    payload: { requestId, sessionId, text: continuationAcceptance.rawText, attachments: continuationAcceptance.attachments },
+    source, createdBy: sessionId, frozenConfig: currentSnapshot,
+    executionConfig: { ...sourceTurn.executionConfig, continuationSafetySnapshot: currentSnapshot }, acceptance: continuationAcceptance
+  })
+  if (started.started && started.turn) {
+    void input.dispatch(null, {
+      requestId: started.turn.requestId,
+      turnId: started.turn.turnId,
+      turnStartToken: started.turn.startToken,
+      sessionId: started.turn.sessionId
+    }, started.continuation.continuationId)
+  }
+  return {
+    continuationId: started.continuation.continuationId,
+    targetInvocationId: started.continuation.targetInvocationId,
+    targetTurnId: started.continuation.targetTurnId,
+    status: started.continuation.status
+  }
+}
+
 export function registerAgentContinuationIpc(
   ipcMain: Pick<IpcMain, 'handle'>,
   dependencies: Omit<Parameters<typeof continueAgentFromCheckpoint>[0], 'payload'>
 ): void {
-  ipcMain.handle('chat:continue-from-checkpoint', (_event, payload: { sessionId: string; sourceInvocationId: string; requestIdempotencyKey: string }) =>
+  ipcMain.handle('chat:continue-from-checkpoint', (_event, payload: { sessionId: string; sourceTurnId: string; requestIdempotencyKey: string }) =>
     continueAgentFromCheckpoint({ ...dependencies, payload })
   )
 }
@@ -847,22 +891,10 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       const target = sessionQueries.readLatestRetryTarget(sessionId)
       return target ? { assistantMessageId: target.failedAssistant.message.id, sourceInvocationId: target.sourceInvocationId ?? '' } : undefined
     },
-    startContinuation: async ({ sessionId, sourceInvocationId, source, requestId, continuationAcceptance }) => {
-      const sourceTurn = sessionStorage.execution.readTurnByRequest({ sessionId, requestId: sourceInvocationId })
-      const safety = sourceTurn?.executionConfig?.continuationSafetySnapshot
-      if (!sourceTurn || !safety || !sourceTurn.userMessageId || !ctx.executeTurn) throw new Error('CONTINUATION_ORIGINAL_SAFETY_SNAPSHOT_MISSING')
-      const current = resolveContinuationSafetySnapshot(ctx, sessionId, 'desktop')
-      if (JSON.stringify(current) !== JSON.stringify(safety)) throw new Error('CONTINUATION_SAFETY_SNAPSHOT_CHANGED')
-      const started = await sessionStorage.execution.continuationLaunch.prepareAndClaim({
-        payload: { requestId, sessionId, text: continuationAcceptance.rawText, attachments: continuationAcceptance.attachments },
-        source, createdBy: sessionId, frozenConfig: current,
-        executionConfig: { ...sourceTurn.executionConfig, continuationSafetySnapshot: current }, acceptance: continuationAcceptance
-      })
-      if (started.started && started.turn) {
-        void executeTurnInternal(null, { requestId: started.turn.requestId, turnId: started.turn.turnId, turnStartToken: started.turn.startToken, sessionId: started.turn.sessionId }, started.continuation.continuationId)
-      }
-      return { continuationId: started.continuation.continuationId, targetTurnId: started.continuation.targetTurnId, status: started.continuation.status }
-    },
+    startContinuation: async ({ sessionId, source, requestId, continuationAcceptance }) => startAgentContinuationFromSource({
+      ctx, sessionId, source, requestId, continuationAcceptance,
+      dispatch: (_sender, payload, continuationId) => executeTurnInternal(null, payload, continuationId)
+    }),
     ensureSessionWorkDir: async (sessionId) => {
       // B2(v2 评审):main ensureWorkDirForSession 语义回收——turn 执行用 active profile 目录,
       // 会话绑定 profile 与 active 不一致时切过去,失败即拒绝(不写错目录)

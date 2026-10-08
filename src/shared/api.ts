@@ -280,7 +280,7 @@ export type SpaceAssistantApi = {
     sessionId: string
     failedAssistantMessageId: string
   }) => Promise<import('./displayOrder').RetryContextTarget | null>
-  chatContinueFromCheckpoint: (payload: { sessionId: string; sourceInvocationId: string; requestIdempotencyKey: string }) => Promise<{ accepted: boolean; reason?: string; continuationId?: string; targetInvocationId?: string; targetTurnId?: string; status?: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'unknown_side_effect' }>
+  chatContinueFromCheckpoint: (payload: { sessionId: string; sourceTurnId: string; requestIdempotencyKey: string }) => Promise<{ accepted: boolean; reason?: string; continuationId?: string; targetInvocationId?: string; targetTurnId?: string; status?: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'unknown_side_effect' }>
   chatGetMessageSequence: (payload: {
     sessionId: string
     messageId: string

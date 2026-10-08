@@ -4,7 +4,7 @@ import { appendMessage, createPersistedTurn, createSession, getDbConnection, get
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { TurnRuntime } from '../turnRuntime'
-import { continueAgentFromCheckpoint, registerAgentContinuationIpc } from './agentProtocolIpc'
+import { continueAgentFromCheckpoint, registerAgentContinuationIpc, startAgentContinuationFromSource } from './agentProtocolIpc'
 import type { AppIpcContext } from '../appIpc'
 
 const safetySnapshot = {
@@ -22,7 +22,7 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
     const user = appendMessage(db, { id: 'ipc-user', sessionId: session.id, role: 'user', content: 'continue the task', timestamp: 1, status: 'sent' })
     const assistant = appendMessage(db, { id: 'ipc-assistant', sessionId: session.id, role: 'assistant', content: 'provider failed', timestamp: 2, status: 'failed' })
     createPersistedTurn(db, {
-      turnId: 'source-turn', requestId: 'source-invocation', sessionId: session.id,
+      turnId: 'source-turn', requestId: 'source-request', sessionId: session.id,
       userMessageId: user.message.id, assistantMessageId: assistant.message.id,
       contextBoundarySequence: user.sequence - 1, state: 'terminal', outcome: 'failed', startToken: 'source-start',
       executionConfig: { lane: 'desktop', model: 'test-model', continuationSafetySnapshot: safetySnapshot }
@@ -30,9 +30,9 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
     const history = new SqliteAgentHistory(getDbConnection(db), 1, () => 10, session.id)
     const requiredUser = { id: user.message.id, message: { role: 'user' as const, content: 'continue the task' } }
     await history.appendBatch([
-      { invocationId: 'source-invocation', turnId: 'source-turn', sequence: 1, schemaVersion: 1, eventId: 'source-context', idempotencyKey: 'source-context', kind: 'invocation-context-committed', payload: { messages: [requiredUser.message], requiredUserMessage: requiredUser } },
-      { invocationId: 'source-invocation', turnId: 'source-turn', sequence: 2, schemaVersion: 1, eventId: 'source-response', idempotencyKey: 'source-response', kind: 'model-response-committed', payload: { message: { role: 'assistant', content: 'provider failed' } } },
-      { invocationId: 'source-invocation', turnId: 'source-turn', sequence: 3, schemaVersion: 1, eventId: 'source-failed', idempotencyKey: 'source-failed', kind: 'invocation-failed', payload: { status: 'failed' } }
+      { invocationId: 'source-turn', turnId: 'source-turn', sequence: 1, schemaVersion: 1, eventId: 'source-context', idempotencyKey: 'source-context', kind: 'invocation-context-committed', payload: { messages: [requiredUser.message], requiredUserMessage: requiredUser } },
+      { invocationId: 'source-turn', turnId: 'source-turn', sequence: 2, schemaVersion: 1, eventId: 'source-response', idempotencyKey: 'source-response', kind: 'model-response-committed', payload: { message: { role: 'assistant', content: 'provider failed' } } },
+      { invocationId: 'source-turn', turnId: 'source-turn', sequence: 3, schemaVersion: 1, eventId: 'source-failed', idempotencyKey: 'source-failed', kind: 'invocation-failed', payload: { status: 'failed' } }
     ], 0)
     let runtime: TurnRuntime | undefined
     const sessionStorage = createSqliteSessionStorage(db, { getTurnRuntime: () => runtime! })
@@ -47,7 +47,7 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
   it('uses the frozen safety snapshot, prepares one fixed target Turn, and dispatches it only once per idempotency key', async () => {
     const { session, user, runtime, ctx } = await setup()
     const dispatch = vi.fn()
-    const payload = { sessionId: session.id, sourceInvocationId: 'source-invocation', requestIdempotencyKey: 'ipc-idempotency' }
+    const payload = { sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: 'ipc-idempotency' }
     const options = { ctx, turnRuntime: runtime, payload, dispatch, resolveCurrentSafetySnapshot: () => safetySnapshot }
 
     const accepted = await continueAgentFromCheckpoint(options)
@@ -62,7 +62,7 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
     }, accepted.continuationId)
     expect(getPersistedTurn(db!, accepted.targetTurnId)).toMatchObject({
       requestId: accepted.targetInvocationId, userMessageId: user.message.id, state: 'prepared',
-      executionConfig: { lane: 'desktop', continuationSource: { continuationId: accepted.continuationId, invocationId: 'source-invocation', sourceTurnId: 'source-turn' } }
+      executionConfig: { lane: 'desktop', continuationSource: { continuationId: accepted.continuationId, invocationId: 'source-turn', sourceTurnId: 'source-turn' } }
     })
 
     const duplicate = await continueAgentFromCheckpoint(options)
@@ -75,7 +75,7 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
     const dispatch = vi.fn()
     const result = await continueAgentFromCheckpoint({
       ctx, turnRuntime: runtime,
-      payload: { sessionId: session.id, sourceInvocationId: 'source-invocation', requestIdempotencyKey: 'changed-safety' },
+      payload: { sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: 'changed-safety' },
       dispatch,
       resolveCurrentSafetySnapshot: () => ({ ...safetySnapshot, authorizationVersion: 'd'.repeat(64) })
     })
@@ -90,7 +90,7 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
     const dispatch = vi.fn()
     const result = await continueAgentFromCheckpoint({
       ctx, turnRuntime: runtime,
-      payload: { sessionId: session.id, sourceInvocationId: 'source-invocation', requestIdempotencyKey: 'changed-backend' },
+      payload: { sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: 'changed-backend' },
       dispatch,
       resolveCurrentSafetySnapshot: () => ({ ...safetySnapshot, executionConfigSha256: 'e'.repeat(64) })
     })
@@ -100,10 +100,34 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
     expect(getDbConnection(db!).prepare('SELECT COUNT(*) AS count FROM agent_continuations').get()).toEqual({ count: 0 })
   })
 
+  it('typed 继续按 History source 的 turnId 读取原始 Turn，即使 requestId 与 History invocationId 不同', async () => {
+    const { session, runtime, ctx } = await setup()
+    const storage = (ctx as AppIpcContext).sessionStorage!
+    const inspection = storage.queries.continuationSources.inspect({
+      sessionId: session.id, activeTurnIds: runtime.listActive(session.id).map((turn) => turn.turnId), selectedAssistantMessageId: 'ipc-assistant'
+    })
+    if (inspection.kind !== 'available' || inspection.selected.kind !== 'found') throw new Error('source checkpoint was not found')
+    const dispatch = vi.fn()
+
+    const started = await startAgentContinuationFromSource({
+      ctx, sessionId: session.id, source: inspection.selected.candidate.source, requestId: 'typed-route-request',
+      continuationAcceptance: { payloadSha256: 'e'.repeat(64), rawText: '继续', intentKind: 'exact-continue', route: 'continuation' },
+      dispatch, resolveCurrentSafetySnapshot: () => safetySnapshot
+    })
+
+    expect(started).toMatchObject({ status: 'running' })
+    expect(dispatch).toHaveBeenCalledOnce()
+    expect(dispatch).toHaveBeenCalledWith(null, expect.objectContaining({
+      requestId: started.targetInvocationId, turnId: started.targetTurnId, sessionId: session.id
+    }), started.continuationId)
+    expect(getPersistedTurn(db!, started.targetTurnId)?.executionConfig?.continuationSource)
+      .toMatchObject({ invocationId: 'source-turn', sourceTurnId: 'source-turn' })
+  })
+
   it('注册的 chat:continue-from-checkpoint handler 真实落到 admission 编排并返回 IPC response', async () => {
     const { session, runtime, ctx } = await setup()
     const dispatch = vi.fn()
-    let handler: ((event: unknown, payload: { sessionId: string; sourceInvocationId: string; requestIdempotencyKey: string }) => unknown) | undefined
+    let handler: ((event: unknown, payload: { sessionId: string; sourceTurnId: string; requestIdempotencyKey: string }) => unknown) | undefined
     const ipc = {
       handle: vi.fn((channel: string, callback: typeof handler) => {
         if (channel === 'chat:continue-from-checkpoint') handler = callback
@@ -116,7 +140,7 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
 
     expect(ipc.handle).toHaveBeenCalledWith('chat:continue-from-checkpoint', expect.any(Function))
     const response = await handler?.({}, {
-      sessionId: session.id, sourceInvocationId: 'source-invocation', requestIdempotencyKey: 'registered-channel'
+      sessionId: session.id, sourceTurnId: 'source-turn', requestIdempotencyKey: 'registered-channel'
     })
     expect(response).toMatchObject({ accepted: true, status: 'running' })
     expect(dispatch).toHaveBeenCalledOnce()
