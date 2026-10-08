@@ -65,6 +65,18 @@ describe('toCanonicalModelMessages', () => {
     ] as never)).toThrow('unsupported canonical image MIME type: image/bmp')
   })
 
+  it('keeps the stable user ID on the final user segment after tool results', () => {
+    expect(toCanonicalModelMessages([{
+      role: 'user', id: 'accepted-user', content: [
+        { type: 'tool_result', tool_use_id: 'old-tool', content: 'old result' },
+        { type: 'text', text: 'continue' }
+      ]
+    }] as never)).toEqual([
+      { role: 'tool', toolCallId: 'old-tool', content: 'old result', isError: false },
+      { role: 'user', id: 'accepted-user', content: [{ type: 'text', text: 'continue' }] }
+    ])
+  })
+
   it('projects the real persisted-message rebuild output without changing tool pairing', () => {
     const source: Message[] = [
       { id: 'user-1', sessionId: 's', role: 'user', content: 'read a.txt', timestamp: 1, status: 'completed' },

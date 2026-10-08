@@ -102,9 +102,12 @@ export function toCanonicalModelMessages(messages: readonly ClaudeChatMessageWit
     if (!Array.isArray(message.content)) throw new Error('unsupported host message content')
     if (message.role === 'user') {
       let userBlocks: CanonicalContentBlock[] = []
-      const userStart = canonical.length
+      let lastUserMessageIndex: number | undefined
       const flushUser = () => {
-        if (userBlocks.length) canonical.push({ role: 'user', content: userBlocks, ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {}) })
+        if (userBlocks.length) {
+          lastUserMessageIndex = canonical.length
+          canonical.push({ role: 'user', content: userBlocks, ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {}) })
+        }
         userBlocks = []
       }
       for (const raw of message.content) {
@@ -123,9 +126,12 @@ export function toCanonicalModelMessages(messages: readonly ClaudeChatMessageWit
         } else throw new Error(`unsupported host content block: ${String(block.type)}`)
       }
       flushUser()
-      if (message.id && canonical.length - userStart === 1) {
-        const only = canonical[userStart]
-        if (only?.role === 'user') canonical[userStart] = { ...only, id: message.id }
+      // A host user message can contain tool results followed by the actual user
+      // input. Bind its stable identity to the last user segment, which is also
+      // the segment selected by canonicalHostedRequiredUserMessage.
+      if (message.id && lastUserMessageIndex !== undefined) {
+        const lastUser = canonical[lastUserMessageIndex]
+        if (lastUser?.role === 'user') canonical[lastUserMessageIndex] = { ...lastUser, id: message.id }
       }
       continue
     }

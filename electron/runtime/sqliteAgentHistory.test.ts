@@ -16,6 +16,7 @@ import { appendSqliteAgentHistoryBatchInTransaction } from '../database/agentHis
 import { runInTransaction } from '../database/transaction'
 import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
 import { reconcileTerminalContentSegments, SqliteAgentHistory } from './sqliteAgentHistory'
+import { toCanonicalModelMessages } from './canonicalHistory'
 import { CREATE_TABLES_SQL } from '../database/schema'
 import { ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, getSessionEventSink, readSessionEvents } from '../sessionEvents'
 import { claimSessionExecution, markSessionExecutionStarted } from '../database/sessionTranscript'
@@ -715,6 +716,33 @@ describe('SqliteAgentHistory', () => {
     expect(conn.prepare('SELECT content,attachments,status FROM messages WHERE id=?').get('atomic-required-user'))
       .toEqual({ content: 'accepted canonical body', attachments: '[{"id":"attachment-a","fileName":"photo.png"}]', status: 'sent' })
     expect(conn.prepare('SELECT kind FROM agent_history_events WHERE event_id=?').get('atomic-user-context-event'))
+      .toEqual({ kind: 'invocation-context-committed' })
+    db.close()
+  })
+
+  it('commits required user identity when a repeated message follows a tool result in a mixed user message', async () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    const sessionId = 'atomic-required-user-after-tool-result-session'
+    conn.prepare(`INSERT INTO sessions (id,name,model,temperature,max_tokens,created_at,updated_at,skills_state,metadata,schema_version,generation)
+      VALUES(?, 's','m',0.7,1,1,1,'{}','{}',1,'generation')`).run(sessionId)
+    conn.prepare(`INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence)
+      VALUES('accepted-user-after-tool-result',?,'user','continue','sent',1,30,2)`).run(sessionId)
+    const messages = toCanonicalModelMessages([
+      { role: 'user', id: 'prior-user', content: [{ type: 'text', text: 'continue' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'prior-tool', name: 'read_file', input: { path: 'a.txt' } }] },
+      { role: 'user', id: 'accepted-user-after-tool-result', content: [
+        { type: 'tool_result', tool_use_id: 'prior-tool', content: 'done' },
+        { type: 'text', text: 'continue' }
+      ] }
+    ] as never)
+    const requiredUserMessage = { id: 'accepted-user-after-tool-result', message: { role: 'user' as const, content: [{ type: 'text' as const, text: 'continue' }] } }
+    const history = new SqliteAgentHistory(conn, 1, () => 100, sessionId)
+
+    await expect(history.appendBatch([{ ...event('required-user-after-tool-result-event', 1), invocationId: 'required-user-after-tool-result-invocation',
+      kind: 'invocation-context-committed', payload: { messages, requiredUserMessage } }], 0))
+      .resolves.toMatchObject({ version: 1, duplicate: false })
+    expect(conn.prepare('SELECT kind FROM agent_history_events WHERE event_id=?').get('required-user-after-tool-result-event'))
       .toEqual({ kind: 'invocation-context-committed' })
     db.close()
   })
