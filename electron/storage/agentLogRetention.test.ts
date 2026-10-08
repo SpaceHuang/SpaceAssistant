@@ -80,4 +80,21 @@ describe('agentLogRetention(偏差 14:日志保留期归位 Storage)', () => {
     })
     expect(result.removed).toBe(0)
   })
+
+  it('报告删除失败,使调度器保留可重试状态', async () => {
+    const stale = formatAgentLogFileName(new Date('2026-01-01T00:00:00Z'))
+    const dir = await makeLogDir({ [stale]: 'old' })
+    const failure = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    const rm = vi.spyOn(fs, 'rm').mockRejectedValueOnce(failure)
+    await expect(pruneAgentLogs({ logDir: dir, retentionDays: 30, now: new Date('2026-09-20T12:00:00+08:00') }))
+      .resolves.toMatchObject({ removed: 0, failed: 1 })
+    rm.mockRestore()
+  })
+
+  it('只将缺失日志目录当作空目录,其他扫描错误向调度器传播', async () => {
+    const failure = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    const readdir = vi.spyOn(fs, 'readdir').mockRejectedValueOnce(failure)
+    await expect(pruneAgentLogs({ logDir: '/denied-agent-logs', retentionDays: 30 })).rejects.toMatchObject({ code: 'EACCES' })
+    readdir.mockRestore()
+  })
 })

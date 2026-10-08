@@ -12,7 +12,7 @@ import { randomBytes } from 'crypto'
 import path from 'path'
 import fs from 'fs/promises'
 import { OutputArtifactWriter } from '../shell/outputArtifactWriter'
-import { cleanupMcpArtifacts } from './mcpArtifactCleanup'
+import { beginMcpArtifactPublish, completeMcpArtifactPublish } from './mcpArtifactCapacity'
 import type { ToolExecutionContext, ToolExecutor, ToolExecutorResult } from '../tools/types'
 import type { McpSession } from './mcpConnectionManager'
 import { Semaphore, withSemaphore } from './semaphore'
@@ -189,10 +189,7 @@ export function createMcpToolExecutor(
             const displayText = [artifactData.text, artifactData.structuredText, blockSummary].filter(Boolean).join('\n\n')
             if (shouldPersistMcpArtifact(displayText)) {
               try {
-                void cleanupMcpArtifacts(path.join(ctx.userDataDir, 'shell-output', 'mcp'))
                 const artifactId = `artifact-mcp-${randomBytes(32).toString('hex')}` as `artifact-mcp-${string}`
-                const writer = new OutputArtifactWriter(path.join(ctx.userDataDir, 'shell-output', 'mcp', `${artifactId}.log`), 16 * 1024 * 1024)
-                await writer.open()
                 const sourceBytes = new TextEncoder().encode(displayText).byteLength
                 const artifactLimit = 16 * 1024 * 1024
                 const marker = '\n\n[内容已截断：artifact 超过 16 MiB]\n'
@@ -203,12 +200,17 @@ export function createMcpToolExecutor(
                   const prefix = bytes.slice(0, Math.max(0, artifactLimit - markerBytes))
                   artifactText = `${new TextDecoder().decode(prefix)}${marker}`
                 }
+                const artifactDirectory = path.join(ctx.userDataDir, 'shell-output', 'mcp')
+                await beginMcpArtifactPublish(artifactDirectory, artifactId, new TextEncoder().encode(artifactText).byteLength)
+                const writer = new OutputArtifactWriter(path.join(artifactDirectory, `${artifactId}.log`), 16 * 1024 * 1024)
+                await writer.open()
                 writer.append(artifactText)
                 const artifact = await writer.close()
                 const artifactOwner = { sessionId: ctx.sessionId, assistantMessageId: ctx.assistantMessageId ?? ctx.requestId, toolUseId: ctx.toolUseId }
                 const ownerPath = resolveMcpArtifactOwnerPath(ctx.userDataDir, artifactId)
                 if (!ownerPath) throw new Error('invalid artifact owner path')
                 await fs.writeFile(ownerPath, JSON.stringify(artifactOwner), 'utf8')
+                await completeMcpArtifactPublish(artifactDirectory, artifactId, artifact.bytes)
                 displayData.artifactId = artifactId
                 displayData.artifactTruncated = sourceBytes > artifactLimit
                 displayData.artifactOwner = artifactOwner

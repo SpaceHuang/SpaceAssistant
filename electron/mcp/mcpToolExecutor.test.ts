@@ -1,13 +1,15 @@
 import fs from 'fs'
+import fsPromises from 'node:fs/promises'
 import os from 'os'
 import path from 'path'
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import type { McpServerProfile } from '../../src/shared/mcpTypes'
 import type { ToolExecutionContext } from '../tools/types'
 import { McpConnectionManager } from './mcpConnectionManager'
 import { createMcpToolExecutor, shouldPersistMcpArtifact } from './mcpToolExecutor'
 
 const tempDirs: string[] = []
+afterEach(() => vi.restoreAllMocks())
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sa-mcp-exec-'))
   tempDirs.push(dir)
@@ -142,6 +144,38 @@ describe('mcpToolExecutor', () => {
     expect(result.success).toBe(true)
     if (result.success) {
       expect(result.data).toEqual({ echoed: 'hi' })
+    }
+  })
+
+  it('returns a readable full-text artifact when directory sync is unsupported', async () => {
+    const userDataDir = makeTempDir()
+    const directory = path.join(userDataDir, 'shell-output', 'mcp')
+    const originalOpen = fsPromises.open.bind(fsPromises)
+    vi.spyOn(fsPromises, 'open').mockImplementation((async (filePath: fs.PathLike, ...args: unknown[]) => {
+      if (filePath === directory) throw Object.assign(new Error('directory sync unsupported'), { code: 'EISDIR' })
+      return (originalOpen as (...input: unknown[]) => Promise<Awaited<ReturnType<typeof fsPromises.open>>>)(filePath, ...args)
+    }) as typeof fsPromises.open)
+    const fullText = `FULL-ATTACHMENT-BEGIN\n${'MCP attachment body '.repeat(40_000)}\nFULL-ATTACHMENT-END`
+    const session = {
+      serverId: 'server-1',
+      client: { callTool: async () => ({ content: [{ type: 'text', text: fullText }] }) },
+      info: { name: 'Echo' }, protocolVersion: '', capabilities: {}, close: async () => undefined
+    }
+    const executor = createMcpToolExecutor({
+      serverId: 'server-1', serverName: 'Echo', originalName: 'echo', mappedName: 'mcp_echo_echo_12345678', description: '', inputSchema: { type: 'object' }
+    }, {
+      getSession: async () => session as never,
+      getProfile: () => makeProfile('server-1', 'unused'),
+      invalidateSession: async () => undefined
+    })
+    const result = await executor.execute({ text: 'large' }, makeContext({ userDataDir }))
+    vi.restoreAllMocks()
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.displayData.artifactId).toMatch(/^artifact-mcp-/)
+      const artifact = fs.readFileSync(path.join(directory, `${result.displayData.artifactId}.log`), 'utf8')
+      expect(artifact).toContain('FULL-ATTACHMENT-BEGIN')
+      expect(artifact).toContain('FULL-ATTACHMENT-END')
     }
   })
 

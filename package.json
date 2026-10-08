@@ -66,7 +66,10 @@
     "check:tool-result-invariants": "node scripts/scan-tool-result-invariants.mjs",
     "test:tool-reliability": "npm run test:electron && npm run check:tool-result-invariants",
     "check:pi-ai-runtime-closure": "node scripts/check-pi-ai-runtime-closure.mjs",
-    "check:session-storage-boundary": "node scripts/check-session-storage-boundary.mjs"
+    "check:session-storage-boundary": "node scripts/check-session-storage-boundary.mjs",
+    "check:spill-reference-boundary": "node scripts/check-spill-reference-boundary.mjs",
+    "bench:spill-reference-index": "node --import tsx scripts/bench-spill-reference-index.mjs",
+    "bench:startup-maintenance": "node --import tsx scripts/bench-startup-maintenance.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.79.0",

@@ -15,7 +15,7 @@ describe('cleanupExpiredOutputArtifacts', () => {
     const now = Date.now()
     await fs.utimes(oldFile, new Date(now - 10_000), new Date(now - 10_000))
     const result = await cleanupExpiredOutputArtifacts(dir, 5_000, now)
-    expect(result).toEqual({ removed: 1, failed: 0 })
+    expect(result).toEqual({ success: true, scanned: 2, removed: 1, failed: 0 })
     await expect(fs.access(oldFile)).rejects.toThrow()
     await expect(fs.access(newFile)).resolves.toBeUndefined()
     await expect(fs.access(path.join(dir, 'nested'))).resolves.toBeUndefined()
@@ -23,6 +23,6 @@ describe('cleanupExpiredOutputArtifacts', () => {
 
   it('目录不存在时安全返回空结果', async () => {
     const result = await cleanupExpiredOutputArtifacts(path.join(os.tmpdir(), 'missing-shell-output'), 1)
-    expect(result).toEqual({ removed: 0, failed: 0 })
+    expect(result).toEqual({ success: true, scanned: 0, removed: 0, failed: 0 })
   })
 })

@@ -5,6 +5,7 @@ import { getDbConnection } from './sqliteStore'
 import { runInTransaction } from './transaction'
 import path from 'node:path'
 import { readSourceTruthSpillSync, type SpillDescriptor } from '../storage/spillProtocol'
+import { assertSpillReferencePayloadStrict, replaceSpillReferenceOwnerInTransaction, spillTranscriptOwnerKey } from '../storage/spillReferenceIndex'
 
 export type TranscriptMessage = Readonly<Record<string, unknown>>
 export type SessionTranscript = Readonly<{ sessionId: string; version: number; lastTurnId?: string; status: 'ready' | 'commit_uncertain' | 'blocked'; messages: readonly TranscriptMessage[] }>
@@ -38,6 +39,7 @@ export function commitSessionTranscriptInTransaction(conn: DatabaseSync, input: 
   const now = input.now ?? Date.now()
   const messagesJson = JSON.stringify(input.messages)
   const storedMessagesJson = input.storedMessagesJson ?? messagesJson
+  assertSpillReferencePayloadStrict(storedMessagesJson)
   const payloadSha256 = transcriptPayloadHash(input.outcome, messagesJson)
   return runInTransaction(conn, () => {
     const receipt = conn.prepare('SELECT payload_sha256,next_version FROM session_turn_commit_receipts WHERE session_id=? AND turn_id=?').get(input.sessionId, input.turnId) as { payload_sha256: string; next_version: number } | undefined
@@ -66,6 +68,7 @@ export function commitSessionTranscriptInTransaction(conn: DatabaseSync, input: 
     const eventRange = conn.prepare(`SELECT MIN(session_seq) AS event_start, MAX(session_seq) AS event_end
       FROM agent_history_events WHERE session_id=? AND turn_id=? AND session_seq IS NOT NULL`).get(input.sessionId, input.turnId) as { event_start: number | null; event_end: number | null } | undefined
     conn.prepare('INSERT INTO session_transcript_entries(session_id,turn_id,base_version,version,outcome,messages_json,created_at) VALUES(?,?,?,?,?,?,?)').run(input.sessionId, input.turnId, input.baseVersion, nextVersion, input.outcome, storedMessagesJson, now)
+    replaceSpillReferenceOwnerInTransaction(conn, 'session_transcript_entries', spillTranscriptOwnerKey(input.sessionId, nextVersion), storedMessagesJson, now)
     conn.prepare(`INSERT INTO session_turn_commit_receipts(session_id,turn_id,payload_sha256,base_version,next_version,outcome,event_start,event_end,created_at)
       VALUES(?,?,?,?,?,?,?,?,?)`).run(input.sessionId, input.turnId, payloadSha256, input.baseVersion, nextVersion, input.outcome, eventRange?.event_start ?? null, eventRange?.event_end ?? null, now)
     conn.prepare(`INSERT INTO session_transcript_checkpoints(session_id,version,last_turn_id,status,updated_at) VALUES(?,?,?,'ready',?)
@@ -268,6 +271,7 @@ export function reconcileUncertainSessionTranscript(db: AppDatabase, input: {
   const now = input.now ?? Date.now()
   const resolutionId = input.resolutionId ?? `${input.sessionId}:${input.turnId}:${now}`
   const messagesJson = JSON.stringify(input.messages)
+  assertSpillReferencePayloadStrict(messagesJson)
   const result = runInTransaction(conn, () => {
     const checkpoint = conn.prepare('SELECT version,last_turn_id,status FROM session_transcript_checkpoints WHERE session_id=?').get(input.sessionId) as { version: number; last_turn_id: string | null; status: string } | undefined
     if (!checkpoint || checkpoint.status !== 'commit_uncertain') return { reconciled: false as const, reason: 'not-uncertain' as const }
@@ -278,6 +282,7 @@ export function reconcileUncertainSessionTranscript(db: AppDatabase, input: {
     const nextVersion = checkpoint.version + 1
     conn.prepare('INSERT INTO session_transcript_entries(session_id,turn_id,base_version,version,outcome,messages_json,created_at) VALUES(?,?,?,?,?,?,?)')
       .run(input.sessionId, input.turnId, checkpoint.version, nextVersion, input.outcome, messagesJson, now)
+    replaceSpillReferenceOwnerInTransaction(conn, 'session_transcript_entries', spillTranscriptOwnerKey(input.sessionId, nextVersion), messagesJson, now)
     conn.prepare(`UPDATE session_transcript_checkpoints SET version=?,status='ready',updated_at=? WHERE session_id=? AND version=? AND last_turn_id=? AND status='commit_uncertain'`)
       .run(nextVersion, now, input.sessionId, checkpoint.version, input.turnId)
     conn.prepare(`UPDATE session_execution_claims SET turn_id='',owner_id='',status='queued',updated_at=? WHERE session_id=? AND turn_id=? AND status='commit_uncertain'`)

@@ -34,12 +34,13 @@ import {
   shutdownWeChatServices
 } from './wechat/weChatIpc'
 import { getConfigValue, getDefaultDbPath, getMessageSkeleton, listPersistedTurns, openDatabase, setConfigValue } from './database'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { setInvalidationBroadcaster } from './database/scopeVersion'
 import { TurnRuntime } from './turnRuntime'
 import { turnToDisplay } from '../src/shared/turnDisplayProtocol'
 import { createSqliteSessionStorageHost } from './sessionStorage/sqliteSessionStorage'
 import { createLifecycleTaskHandle } from './sessionStorage/lifecycle'
+import { createMaintenanceScheduler } from './storage/maintenanceScheduler'
 import { flushPendingSessionBackups } from './sessionBackupShutdown'
 import type { SessionQueries } from './sessionStorage/contracts'
 import { signalChatCancel } from './chatCancelRegistry'
@@ -63,6 +64,7 @@ import { DB_SCHEMA_VERSION } from './database/schema'
 import { createSessionStorageCleanupProductionBoundary } from './runtime/sessionStorageCleanupProduction'
 import { SESSION_STORAGE_HISTORY_FORMAT_VERSION, SESSION_STORAGE_SPILL_FORMAT_VERSION } from './runtime/sessionStorageCleanupReleaseConfig'
 import { scheduleSessionMessageContentCleanupMaintenance } from './storage/sessionMessageContentCleanupMaintenance'
+import { scheduleSpillReferenceBackfill } from './storage/spillReferenceBackfillScheduler'
 import { getSessionLedgerRecoveryRoots, isSessionLedgerLocationAllowed, resolveSessionLedgerLocation as resolveAcceptedInputLedgerLocation, toSessionLedgerToolCallProjection, toSessionLedgerToolResultProjection } from './runtime/sessionLedgerRecovery'
 import { SCHEMA_META_KEYS } from './database/schema'
 import { getSchemaMeta, setSchemaMeta } from './database/sqliteStore'
@@ -113,6 +115,7 @@ import { cleanupOrphanedChatAttachments } from './chatAttachmentManager'
 import { getRendererURL, isSpaceAssistantDev } from './devEnvironment'
 import { runAllShutdownCleanupTasks, type ShutdownCleanupResult } from './shutdownCleanup'
 import { cleanupMcpArtifactsOnStartup } from './mcp/mcpArtifactCleanup'
+import { readMcpArtifactCapacity, setMcpArtifactCapacityRequest } from './mcp/mcpArtifactCapacity'
 import { setKnownHomeDir } from '../src/shared/agentSafeText'
 import { homedir } from 'node:os'
 
@@ -222,6 +225,7 @@ installProcessSafetyNet((event, detail) => {
 })
 /** 用量统计启动维护（回填/补齐/清理）：whenReady 内注册，主窗口创建完成后执行（评审 P1-3）。 */
 let usageStatsStartupMaintenance: (() => void) | null = null
+let startWindowReadyMaintenance: (() => void) | null = null
 let storageLifecycleStop: ((deadlineMs: number) => Promise<{ status: 'quiescent' | 'deadline-exceeded' }>) | null = null
 let safeDatabaseMaintenanceInFlight: Promise<void> | undefined
 let isQuitting = false
@@ -272,6 +276,7 @@ export async function createMainWindow(): Promise<void> {
   if (existing && !existing.isDestroyed()) {
     existing.show()
     existing.focus()
+    startWindowReadyMaintenance?.()
     return
   }
 
@@ -312,6 +317,7 @@ export async function createMainWindow(): Promise<void> {
         durationMs: Math.max(0, Math.round(performance.now() - processStartupStartedAt)),
         outcome: rendererLoadOutcome
       }))
+      startWindowReadyMaintenance?.()
     })
     win.webContents.once('did-finish-load', () => {
       console.info('[startup]', JSON.stringify({
@@ -384,10 +390,6 @@ app.whenReady().then(async () => {
     void showMainWindow()
   })
 
-  await measureStartupPhase('mcp-artifact-cleanup', () => cleanupMcpArtifactsOnStartup(app.getPath('userData'))).catch((error) => {
-    console.warn('[mcp] startup artifact cleanup failed:', error instanceof Error ? error.message : String(error))
-  })
-
   const dbPath = getDefaultDbPath(app.getPath('userData'))
   let db: ReturnType<typeof openDatabase>
   try {
@@ -407,6 +409,27 @@ app.whenReady().then(async () => {
   let recoveredInvocationCount = 0
   let sessionLedgerRepairFailureCount = 0
   let sessionHistoryRecoverySucceeded = false
+  const recoveryWorkDir = getConfigValue(db, 'config.workDir') ?? path.join(app.getPath('userData'), 'workspace')
+  const recoveryWorkDirs = getSessionLedgerRecoveryRoots(recoveryWorkDir, getConfigValue(db, 'config.workDirProfiles'))
+  let requestMcpArtifactCapacitySweep: (() => void) | undefined
+  let requestAgentLogRetention: (() => void) | undefined
+  const dailyRetentionTask = (taskId: string, policyFingerprint: () => string | Promise<string>, rootFingerprint: () => string | undefined,
+    run: (signal: AbortSignal) => Promise<number>, onStarted?: (handle: { request?(reason: import('./sessionStorage/contracts').MaintenanceReason): void }) => void) => {
+    const scheduler = createMaintenanceScheduler({
+      watermarkPath: path.join(app.getPath('userData'), 'maintenance', `${taskId}.json`),
+      policyFingerprint, rootFingerprint, algorithmVersion: 1,
+      run: async ({ signal }) => {
+        const processedCount = await run(signal)
+        return { success: true, scannedCount: processedCount, processedCount }
+      },
+      onResult: (result) => { if (!result.success) console.warn(`[maintenance] ${taskId} failed`, result.errorCode) }
+    })
+    return { taskId, category: 'retention' as const, start: () => {
+      const handle = scheduler.start()
+      onStarted?.(handle)
+      return handle
+    } }
+  }
   const sessionStorageHost = createSqliteSessionStorageHost(db, {
     storage: {
     getTurnRuntime: () => turnRuntime,
@@ -426,6 +449,45 @@ app.whenReady().then(async () => {
       recoverSessionLedgers: async () => ({ repairFailureCount: sessionLedgerRepairFailureCount })
     },
     maintenanceTasks: [
+      {
+        taskId: 'spill-reference-index-backfill', category: 'derived-index',
+        start: () => scheduleSpillReferenceBackfill(db, {
+          onResult: (result) => {
+            if (result.status === 'failed') console.warn(`[storage] spill reference index ${result.task} paused:`, result.error)
+            else if (result.processed > 0) console.info(`[storage] spill reference index ${result.task} progress:`, result)
+          }
+        })
+      },
+      dailyRetentionTask('mcp-artifact-cleanup', async () => {
+        const capacity = await readMcpArtifactCapacity(path.join(app.getPath('userData'), 'shell-output', 'mcp'))
+        return `ttl=7d;quota=256MiB;v1;generation=${capacity.generation};dirty=${capacity.dirty}`
+      }, () => path.join(app.getPath('userData'), 'shell-output', 'mcp'), async () => {
+        const result = await cleanupMcpArtifactsOnStartup(app.getPath('userData'))
+        return result.scanned
+      }, (handle) => { requestMcpArtifactCapacitySweep = () => handle.request?.('capacity-pressure') }),
+      ...recoveryWorkDirs.map((workDir) => dailyRetentionTask(`session-event-retention-${createHash('sha256').update(workDir).digest('hex').slice(0, 12)}`,
+        () => JSON.stringify(resolveRetentionPolicyFromDb(db).sessionEventMaxSessions), () => workDir, async () => {
+        const shouldRetain = createSessionLedgerCompactionDependencyGuard(db)
+        const result = await runSessionEventRetentionMaintenance(db, workDir, {
+          prepareProjectionForRetention: createCanonicalSessionProjectionRetentionPreparer(db), shouldRetainSessionDir: shouldRetain
+        })
+        for (const failure of result.summary.failures) console.warn('[sessionEvents] retention cleanup failed:', failure.sessionName, failure.error)
+        if (result.summary.failures.length) throw new Error('session-event-retention-incomplete')
+        return result.summary.removed + result.summary.retained.length
+      })),
+      dailyRetentionTask('spill-degradable-retention', () => String(resolveRetentionPolicyFromDb(db).degradableSpillRetentionDays), () => path.join(app.getPath('userData'), 'spill'), async () => {
+        const removed = await runSpillRetentionMaintenance(db, path.join(app.getPath('userData'), 'spill'), Date.now())
+        return removed.length
+      }),
+      dailyRetentionTask('agent-log-retention', () => String(resolveRetentionPolicyFromDb(db).agentLogRetentionDays), () => getAgentLogDir() ?? '', async () => {
+        const result = await pruneAgentLogs({ logDir: getAgentLogDir() ?? '', retentionDays: resolveRetentionPolicyFromDb(db).agentLogRetentionDays })
+        if (result.failed) throw new Error(`agent-log-retention-delete-failed:${result.failed}`)
+        return result.removed
+      }, (handle) => { requestAgentLogRetention = () => handle.request?.('startup') }),
+      dailyRetentionTask('usage-facts-retention', () => String(getConfigValue(db, 'config.usageStatsRetentionDays') ?? 'default'), () => undefined, async () => {
+        const result = cleanupUsageFactsByRetention(db)
+        return result ? result.deletedStepRows + result.deletedTurnRows : 0
+      }),
       {
         taskId: 'sqlite-upkeep', category: 'derived-index',
         start: () => safeDbMaintenanceRequested ? undefined : (() => {
@@ -492,12 +554,17 @@ app.whenReady().then(async () => {
     quiesceMaintenance: async () => { await safeDatabaseMaintenanceInFlight }
   })
   const sessionStorage = sessionStorageHost.storage
+  setMcpArtifactCapacityRequest(() => requestMcpArtifactCapacitySweep?.())
+  startWindowReadyMaintenance = () => {
+    sessionStorageHost.lifecycle.allowBackgroundWork()
+    void measureStartupPhase('usage-stats-startup-maintenance', () => usageStatsStartupMaintenance?.())
+    usageStatsStartupMaintenance = null
+  }
   appSessionQueries = sessionStorage.queries
   storageLifecycleStop = (deadlineMs) => sessionStorageHost.lifecycle.stop({ deadlineMs })
   // Main-process owner only. Execution remains closed until a separately authorized cohort is started.
   sessionProjectionMigrationApplication = new SessionProjectionMigrationApplication(db)
   sessionProjectionMigrationApplication.initialize()
-  const recoveryWorkDir = getConfigValue(db, 'config.workDir') ?? path.join(app.getPath('userData'), 'workspace')
   initAgentLogger({
     getWorkDir: () => workDirManager?.getActiveWorkDir() ?? (workDirState || recoveryWorkDir),
     isPackaged: app.isPackaged,
@@ -505,7 +572,6 @@ app.whenReady().then(async () => {
     artifactBuildId: getTelemetryArtifactBuildId(),
     mainDirname: __dirname
   })
-  const recoveryWorkDirs = getSessionLedgerRecoveryRoots(recoveryWorkDir, getConfigValue(db, 'config.workDirProfiles'))
   const sessionHistoryRecoveryStartedAt = performance.now()
   if (safeDbMaintenanceRequested) {
     console.warn('[agentHistory] canonical full recovery skipped for --safe-db-maintenance; it will run on the next normal launch')
@@ -741,10 +807,7 @@ app.whenReady().then(async () => {
   setDefaultAgentRuntime(createDesktopAgentRuntime())
   // S3(偏差 14):跨天节流清理——新日志文件开启时读统一保留策略并删除超期日志(每日至多一次)
   setAgentLogDailyPrune(() => {
-    void pruneAgentLogs({
-      logDir: getAgentLogDir() ?? '',
-      retentionDays: resolveRetentionPolicyFromDb(db).agentLogRetentionDays
-    }).catch(() => undefined)
+    requestAgentLogRetention?.()
   })
   const agentLogDir = getAgentLogDir()
   logAgentEvent('info', 'agent.startup', {
@@ -871,30 +934,8 @@ app.whenReady().then(async () => {
       })
     }
     // S3(偏差 24):保留上限适用于全部 profile roots；仍有 canonical 或台账 compaction 重放依赖的会话先保留。
-    const shouldRetainCompactionLedger = createSessionLedgerCompactionDependencyGuard(db)
-    const { policy: retentionPolicy, summary: retention } = await measureStartupPhase('session-event-retention', () => runSessionEventRetentionMaintenance(db, recoveryWorkDirs, {
-      prepareProjectionForRetention: createCanonicalSessionProjectionRetentionPreparer(db),
-      shouldRetainSessionDir: shouldRetainCompactionLedger
-    }))
     const spillRoot = path.join(app.getPath('userData'), 'spill')
-    await measureStartupPhase('spill-retention', () => runSpillRetentionMaintenance(db, spillRoot, Date.now(), {
-      onReferenceScan: (stats) => console.info('[startup]', JSON.stringify({ phase: 'spill-reference-scan', ...stats }))
-    }))
     await measureStartupPhase('spill-source-truth-gc', () => runSourceTruthSpillGcMaintenance(db, spillRoot))
-    for (const failure of retention.failures) {
-      console.warn('[sessionEvents] retention cleanup failed:', {
-        sessionName: failure.sessionName,
-        error: failure.error instanceof Error ? failure.error.message : String(failure.error)
-      })
-    }
-    for (const retained of retention.retained) {
-      console.info('[sessionEvents] retention kept a ledger with compaction recovery dependencies:', retained)
-    }
-    // S3(偏差 14):Agent 日志超保留期清理挂同一保留策略(启动维护触发)
-    await measureStartupPhase('agent-log-retention', () => pruneAgentLogs({
-      logDir: getAgentLogDir() ?? '',
-      retentionDays: retentionPolicy.agentLogRetentionDays
-    }))
   } catch (error) {
     // 目录级扫描失败也不能阻断 IPC 注册和窗口创建；下一次启动继续重试。
     console.warn('[sessionEvents] startup maintenance failed:', error instanceof Error ? error.message : String(error))
@@ -930,10 +971,6 @@ app.whenReady().then(async () => {
       const patched = reconcileUsageTurnFacts(db)
       if (patched > 0) {
         console.log(`[usageStats] reconciled ${patched} interrupted turn(s) after crash`)
-      }
-      const usageRetention = cleanupUsageFactsByRetention(db)
-      if (usageRetention && (usageRetention.deletedStepRows > 0 || usageRetention.deletedTurnRows > 0)) {
-        console.log('[usageStats] retention cleanup:', JSON.stringify(usageRetention))
       }
     } catch (error) {
       console.warn('[usageStats] startup maintenance failed:', error instanceof Error ? error.message : String(error))
@@ -1308,15 +1345,9 @@ app.whenReady().then(async () => {
           console.error('[storage] safe database maintenance failed; app remains available:', error instanceof Error ? error.message : String(error))
         }).finally(() => { safeDatabaseMaintenanceInFlight = undefined })
       }
-      sessionStorageHost.lifecycle.allowBackgroundWork()
-      void measureStartupPhase('usage-stats-startup-maintenance', () => usageStatsStartupMaintenance?.())
-      usageStatsStartupMaintenance = null
     })
     .catch((error) => {
-      // 窗口创建失败也要跑维护：统计链路不依赖窗口；失败仅记日志，下次启动重试。
-      console.warn('[usageStats] main window creation failed, running maintenance anyway:', error instanceof Error ? error.message : String(error))
-      void measureStartupPhase('usage-stats-startup-maintenance', () => usageStatsStartupMaintenance?.())
-      usageStatsStartupMaintenance = null
+      console.warn('[main] main window creation failed; post-window maintenance remains deferred:', error instanceof Error ? error.message : String(error))
     })
   setupAppMenu(createHostTranslator({ locale: readAppLocale(db) }))
 }).catch((err) => {

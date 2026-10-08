@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
+import { assertSpillReferencePayloadStrict, replaceSpillReferenceOwnerInTransaction, spillHistoryOwnerKey } from '../storage/spillReferenceIndex'
 import {
   HistoryBatchError,
   HistoryIdempotencyConflict,
@@ -46,6 +47,7 @@ export function appendSqliteAgentHistoryBatchInTransaction(
     }
   })
   const invocationId = events[0].invocationId
+  for (const payloadJson of serialized) assertSpillReferencePayloadStrict(payloadJson)
   const stream = conn.prepare('SELECT invocation_id, version, schema_version, session_id FROM agent_history_streams WHERE invocation_id = ?').get(invocationId) as StreamRow | undefined
   if (stream?.session_id && options.sessionId && stream.session_id !== options.sessionId) {
     throw new HistoryBatchError(`history invocation ${invocationId} belongs to ${stream.session_id}, not ${options.sessionId}`)
@@ -107,8 +109,11 @@ export function appendSqliteAgentHistoryBatchInTransaction(
     INSERT INTO agent_history_events(invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json, created_at, session_id, commit_order, session_seq)
     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
-  events.forEach((event, index) => insert.run(invocationId, event.sequence, event.eventId, event.idempotencyKey, event.turnId, event.schemaVersion,
-    event.kind, serialized[index], now(), sessionId, commitOrders[index], sessionSequences[index]))
+  events.forEach((event, index) => {
+    insert.run(invocationId, event.sequence, event.eventId, event.idempotencyKey, event.turnId, event.schemaVersion,
+      event.kind, serialized[index], now(), sessionId, commitOrders[index], sessionSequences[index])
+    replaceSpillReferenceOwnerInTransaction(conn, 'agent_history_events', spillHistoryOwnerKey(invocationId, event.eventId), serialized[index], now())
+  })
   const registerRepair = conn.prepare(`
     INSERT OR IGNORE INTO canonical_projection_repairs(
       repair_id, session_id, invocation_id, repair_kind, target_key, status,

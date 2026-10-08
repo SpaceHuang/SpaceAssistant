@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 53
+export const DB_SCHEMA_VERSION = 54
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (
@@ -1713,4 +1713,66 @@ export const MIGRATION_V51_USAGE_MODEL_IDENTITY_COLUMNS = [
 /** v51 → v52: record durable operator cancellation without rewriting run or item evidence. */
 export const MIGRATION_V52_SESSION_PROJECTION_MIGRATION_CANCEL_SQL = `
 ALTER TABLE session_projection_migration_runs ADD COLUMN cancelled_at INTEGER;
+`
+
+/** v53 → v54: private spill descriptor index, resumable maintenance state, staging, lease and generation. */
+export const MIGRATION_V54_SPILL_REFERENCE_INDEX_SQL = `
+CREATE TABLE IF NOT EXISTS spill_reference_index (
+  owner_table TEXT NOT NULL CHECK(owner_table IN ('agent_history_events','session_transcript_entries')),
+  owner_key TEXT NOT NULL,
+  descriptor_path TEXT NOT NULL,
+  owner_revision TEXT NOT NULL,
+  locator TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('source-of-truth','degradable')),
+  descriptor_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(owner_table,owner_key,descriptor_path)
+);
+CREATE INDEX IF NOT EXISTS idx_spill_reference_index_locator ON spill_reference_index(locator);
+CREATE TABLE IF NOT EXISTS spill_reference_staging (
+  task_token TEXT NOT NULL,
+  fencing_token INTEGER NOT NULL,
+  owner_table TEXT NOT NULL CHECK(owner_table IN ('agent_history_events','session_transcript_entries')),
+  owner_key TEXT NOT NULL,
+  owner_revision TEXT NOT NULL,
+  descriptor_path TEXT NOT NULL,
+  locator TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('source-of-truth','degradable')),
+  descriptor_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(task_token,owner_table,owner_key,descriptor_path)
+);
+CREATE TABLE IF NOT EXISTS spill_reference_backfill_state (
+  owner_table TEXT PRIMARY KEY NOT NULL CHECK(owner_table IN ('agent_history_events','session_transcript_entries')),
+  status TEXT NOT NULL CHECK(status IN ('pending','running','paused','complete','failed','untrusted')),
+  source_table TEXT NOT NULL,
+  cursor_json TEXT,
+  reconcile_cursor_json TEXT,
+  reconcile_generation INTEGER,
+  restart_count INTEGER NOT NULL DEFAULT 0,
+  next_retry_at INTEGER,
+  scanned_rows INTEGER NOT NULL DEFAULT 0,
+  indexed_rows INTEGER NOT NULL DEFAULT 0,
+  error_summary TEXT,
+  started_at INTEGER,
+  updated_at INTEGER NOT NULL,
+  protocol_version INTEGER NOT NULL,
+  verified_generation INTEGER,
+  verified_at INTEGER
+);
+INSERT OR IGNORE INTO spill_reference_backfill_state(owner_table,status,source_table,updated_at,protocol_version)
+VALUES('agent_history_events','pending','agent_history_events',unixepoch()*1000,1),
+      ('session_transcript_entries','pending','session_transcript_entries',unixepoch()*1000,1);
+CREATE TABLE IF NOT EXISTS spill_reference_maintenance_lease (
+  lease_name TEXT PRIMARY KEY NOT NULL CHECK(lease_name='spill-reference-index'),
+  owner_token TEXT NOT NULL,
+  fencing_token INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS spill_reference_meta (
+  meta_key TEXT PRIMARY KEY NOT NULL CHECK(meta_key='canonical_change_generation'),
+  meta_value INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO spill_reference_meta(meta_key,meta_value) VALUES('canonical_change_generation',0);
 `

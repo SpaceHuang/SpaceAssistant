@@ -29,6 +29,7 @@ import { migrateBuiltinModelName } from '../../src/shared/llmModelConfig'
 import { isThinkingEffort } from '../../src/shared/thinkingEffort'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import { collectSourceTruthSpillLocators } from '../storage/spillProtocol'
+import { deleteSpillReferenceOwnerInTransaction, spillHistoryOwnerKey, spillTranscriptOwnerKey } from '../storage/spillReferenceIndex'
 import { appendSqliteAgentHistoryBatchInTransaction } from './agentHistoryStorage'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
@@ -484,11 +485,15 @@ export function deleteSession(db: AppDatabase, sessionId: string, options?: { fl
     const deleteHistoryEvents = conn.prepare('DELETE FROM agent_history_events WHERE invocation_id = ?')
     const deleteHistoryStream = conn.prepare('DELETE FROM agent_history_streams WHERE invocation_id = ?')
     for (const { invocation_id } of legacyHistoryOwners) {
+      const events = conn.prepare('SELECT event_id FROM agent_history_events WHERE invocation_id=?').all(invocation_id) as Array<{ event_id: string }>
+      for (const { event_id } of events) deleteSpillReferenceOwnerInTransaction(conn, 'agent_history_events', spillHistoryOwnerKey(invocation_id, event_id))
       deleteHistoryEvents.run(invocation_id)
       deleteHistoryStream.run(invocation_id)
     }
 
     conn.prepare('DELETE FROM session_transcript_reconciliations WHERE session_id = ?').run(sessionId)
+    const transcriptOwners = conn.prepare('SELECT version FROM session_transcript_entries WHERE session_id=?').all(sessionId) as Array<{ version: number }>
+    for (const { version } of transcriptOwners) deleteSpillReferenceOwnerInTransaction(conn, 'session_transcript_entries', spillTranscriptOwnerKey(sessionId, version))
     conn.prepare('DELETE FROM session_transcript_entries WHERE session_id = ?').run(sessionId)
     conn.prepare('DELETE FROM session_transcript_checkpoints WHERE session_id = ?').run(sessionId)
     conn.prepare('DELETE FROM accepted_turn_contexts WHERE session_id = ?').run(sessionId)

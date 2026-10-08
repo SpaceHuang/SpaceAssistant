@@ -59,4 +59,33 @@ describe('host-only storage lifecycle control', () => {
     lifecycle.allowBackgroundWork()
     await expect(lifecycle.stop({ deadlineMs: 1 })).resolves.toEqual({ status: 'deadline-exceeded' })
   })
+
+  it('forwards coalesced policy and capacity wakeups to an active task handle', () => {
+    const request = vi.fn()
+    const lifecycle = createStorageLifecycleControl({ tasks: [{ taskId: 'wakeable', category: 'retention', start: () => ({ stop() {}, quiesce: async () => undefined, request }) }] })
+    lifecycle.allowBackgroundWork()
+    expect(lifecycle.requestMaintenance({ reason: 'capacity-pressure', category: 'retention' })).toEqual({ status: 'coalesced' })
+    expect(request).toHaveBeenCalledWith('capacity-pressure')
+  })
+
+  it('isolates synchronous start failures and retries only the failed task', async () => {
+    vi.useFakeTimers()
+    try {
+      const handle = { stop: vi.fn(), quiesce: async () => undefined }
+      const first = vi.fn().mockImplementationOnce(() => { throw new Error('startup failure') }).mockReturnValue(handle)
+      const second = vi.fn(() => ({ stop: vi.fn(), quiesce: async () => undefined }))
+      const lifecycle = createStorageLifecycleControl({ tasks: [
+        { taskId: 'first', category: 'derived-index', start: first },
+        { taskId: 'second', category: 'retention', start: second }
+      ] })
+      lifecycle.allowBackgroundWork()
+      expect(first).toHaveBeenCalledTimes(1)
+      expect(second).toHaveBeenCalledTimes(1)
+      expect(lifecycle.inspectMaintenance()[0]).toMatchObject({ status: 'failed', lastErrorCode: 'Error' })
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(first).toHaveBeenCalledTimes(2)
+      expect(lifecycle.inspectMaintenance()[0]?.status).toBe('scheduled')
+      await lifecycle.stop({ deadlineMs: 10 })
+    } finally { vi.useRealTimers() }
+  })
 })
