@@ -14,8 +14,9 @@ export function inspectContinuationSources(db: AppDatabase): ContinuationSourceQ
       const active = new Set(activeTurnIds)
       const latest = ids.length ? history.readSync(ids.at(-1)!) : undefined
       const latestEvent = latest?.events.at(-1)
-      const superseded = Boolean(latestEvent && !['invocation-completed', 'invocation-failed'].includes(latestEvent.kind) && active.has(latestEvent.turnId))
-      if (latestEvent && !superseded && !['invocation-completed', 'invocation-failed'].includes(latestEvent.kind)) {
+      const terminalKinds = ['invocation-completed', 'invocation-failed', 'invocation-interrupted']
+      const superseded = Boolean(latestEvent && !terminalKinds.includes(latestEvent.kind) && active.has(latestEvent.turnId))
+      if (latestEvent && !superseded && !terminalKinds.includes(latestEvent.kind)) {
         return { kind: 'unavailable', reason: 'CONTINUATION_INTENT_HISTORY_UNAVAILABLE' }
       }
       const sourceMessage = (turnId: string) => conn.prepare('SELECT turns.request_id AS requestId, turns.assistant_message_id AS assistantMessageId, messages.sequence AS assistantSequence FROM turns LEFT JOIN messages ON messages.id=turns.assistant_message_id AND messages.session_id=turns.session_id WHERE turns.session_id=? AND turns.turn_id=?').get(sessionId, turnId) as { requestId?: string; assistantMessageId?: string; assistantSequence?: number } | undefined
@@ -39,7 +40,7 @@ export function inspectContinuationSources(db: AppDatabase): ContinuationSourceQ
         for (const invocationId of [...ids].reverse()) {
           const snapshot = history.readSync(invocationId)
           const terminal = snapshot.events.at(-1)
-          if (terminal?.kind === 'invocation-failed') {
+          if (terminal?.kind === 'invocation-failed' || terminal?.kind === 'invocation-interrupted') {
             const row = sourceMessage(terminal.turnId)
             if (row?.assistantSequence != null && newerUserExists(row.assistantSequence)) { boundary = 'newer-input'; break }
             failedCandidates.push(makeCandidate(snapshot, row?.assistantMessageId, row?.assistantSequence))

@@ -632,6 +632,22 @@ describe('SQLite session storage public queries', () => {
     expect(createSqliteSessionStorage(db).queries.continuationSources.inspect({ sessionId: session.id, activeTurnIds: [] }))
       .toEqual({ kind: 'unavailable', reason: 'CONTINUATION_INTENT_HISTORY_UNAVAILABLE' })
   })
+
+  it('treats a recovered interrupted invocation as a usable continuation source', async () => {
+    db = createMemoryAppDb()
+    const session = createSession(db, { name: 'interrupted continuation source', model: 'test' })
+    appendMessage(db, { id: 'interrupted-assistant', sessionId: session.id, role: 'assistant', content: 'interrupted', timestamp: 1, status: 'failed' })
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+    await history.appendBatch([
+      { invocationId: 'interrupted-invocation', turnId: 'interrupted-turn', sequence: 1, schemaVersion: 1, eventId: 'interrupted-context', idempotencyKey: 'interrupted-context', kind: 'invocation-context-committed', payload: { messages: [] } },
+      { invocationId: 'interrupted-invocation', turnId: 'interrupted-turn', sequence: 2, schemaVersion: 1, eventId: 'interrupted-terminal', idempotencyKey: 'interrupted-terminal', kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'process-restart' } }
+    ], 0)
+    getDbConnection(db).prepare('INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?)')
+      .run('interrupted-turn', 'interrupted-invocation', session.id, 'interrupted-assistant', 'terminal', 1, 1)
+
+    expect(createSqliteSessionStorage(db).queries.continuationSources.inspect({ sessionId: session.id, activeTurnIds: [] }))
+      .toMatchObject({ kind: 'available', failedCandidates: [{ source: { invocationId: 'interrupted-invocation', turnId: 'interrupted-turn', checkpointSequence: 1 } }] })
+  })
 })
 
 describe('SQLite session storage execution boundary', () => {
