@@ -570,6 +570,10 @@ S4最终收口（2026-10-07）：按计划顺序完成Recovery、Lifecycle、职
 
 评审修复最终验收（2026-10-08）：`npm test`通过897个测试文件、1个跳过；8518项通过、111项跳过。renderer/shared/Electron/Agent SDK typecheck、`npm run check:agent-sdk`、`npm run i18n:check`和`npm run build`全部通过；build执行的cleanup与session-storage boundary均通过，保留15条具名既有例外、无新增。新增真实SQLite shutdown backup flush及host recovery-ledger门禁回归、两类ContextPort candidate替换拒绝回归、SDK/host identity等价回归均通过。`git diff --check`通过。四项P1已关闭。
 
+### 2026-10-08 第二轮评审P1修复进度
+
+第二轮评审复现：candidate通过evidence深比较后，session `capture()`及invocation `capture()`等待期间，调用方可修改可变clone；原提交代码随后仍从clone读取output并写入存储。按TDD新增两类端口的capture等待篡改回归，初始实现均复现错误提交（预期拒绝/不写，实际committed/已写）。修复为registrar新增同步`resolveCandidate`，验证调用方candidate后返回registrar持有的冻结candidate与proof；session和invocation提交从scope/fence校验到fingerprint、持久化/History append、receipt、projection及内存应用全程只读该内部candidate。另增加session persist等待和invocation append等待篡改回归，验证History与运行态采用同一份注册输出。定向2文件18项通过，`npm run typecheck:agent-sdk`及`npm run check:agent-sdk`通过；全量`npm test`通过897个文件、1个跳过，8522项通过、111项跳过；`git diff --check`通过。第二轮P1已关闭。
+
 S4旧adapter审计发现S3遗漏：SDK observer仍有`prepareModelResponseProjection`，Hosted组合点仍以`turnBoundary`命名。已依S3 ContextPort顺序先移除旧响应projection回调命名，改为`prepareContextBoundaryEvidence`；Hosted compaction planner回调改为`onContextReplacementPlan`，boundary adapter/context/type及装配属性改为ContextReplacement命名。统一`planContextReplacement(phase)`继续负责preflight与turn-boundary replacement。Agent SDK/Electron typecheck及定向4文件290项通过；随后全量门禁全部通过（895文件、8508项），S3重新验收完成并回到S4。旧contract扫描无旧projection contract或旧cutover/startup/coordinator import命中。
 
 S4阶段最终验收记录（2026-10-07）为本轮复核前状态，不能视为当前完成标记。本轮按TDD修复lifecycle启动接线及requestMaintenance未授权状态；生命周期4项、维护/恢复组合53项和Electron类型检查通过。S4其余逐项审计、文档状态统一及阶段级最终门禁仍在进行，S0–S4暂不全部关闭。

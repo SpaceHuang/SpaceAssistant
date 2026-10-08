@@ -676,6 +676,8 @@ sourceBindings覆盖保留、合并与checkpoint输出；无来源输出必须�
 
 `captureFrame(frame, scope, binding)`由SDK/宿主可信装配点注册输入快照并签发fence；`registerTransformation(base, output, proof)`由共用planner适配器签发evidence。它们是内部接口，不给IPC/业务consumer签发权限。校验以注册条目为准，比较base/输出完整内容、scope、输入指纹及运行帧epoch，不以TypeScript品牌或随机token本身代替验证。
 
+提交入口必须在首次`await`前同步解析并验证完整candidate，取得registrar持有的冻结candidate与proof；scope/fence比较、stale判断、fingerprint、持久化/History append、receipt、projection及运行态应用必须始终使用该解析结果，不能在异步等待后再次读取调用方传入的对象。此约束覆盖对candidate的可变clone。回归需在session与invocation两种端口分别暂停capture及持久化/append，等待期间篡改调用方output，并确认持久化、History、projection和运行态仍采用注册时输出。
+
 ### 6.2 invocation读取与writer绑定hook
 
 SDK在创建InvocationHistoryWriter后创建一次以下内部binding，并交给ContextPort工厂；没有另一个writer。此hook由SDK定义，不把writer对象或通用transaction callback交给consumer。
