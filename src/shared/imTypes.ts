@@ -1,4 +1,5 @@
 import type { RemoteProgressConfig } from './remoteProgressTypes'
+import type { AgentReasoningEffort } from './agent/invocation'
 import {
   DEFAULT_REMOTE_PROGRESS_CONFIG,
   mergeRemoteProgressConfig
@@ -20,6 +21,8 @@ export type LegacyImConfirmPolicy =
 
 /** Current remote-security config schema version. Advanced only after the user confirms summary. */
 export const CURRENT_REMOTE_SECURITY_CONFIG_VERSION = 1
+/** Independent schema marker for the shared remote model/thinking migration. */
+export const CURRENT_REMOTE_MODEL_CONFIG_VERSION = 1
 
 /** Provenance of the remote security preset the user last confirmed. */
 export type RemoteSecurityPresetSource =
@@ -79,6 +82,10 @@ export interface RemoteImCommonConfig extends RemoteProgressConfig {
   remoteSessionMergeMinutes?: number
   remoteRateLimitPerMinute: number
   remoteDefaultModelId?: string
+  /** Whether remote turns follow the global language default or use an explicit model. */
+  remoteModelSelectionMode?: 'inherit' | 'explicit'
+  /** Requested remote reasoning effort; defaults to low. */
+  remoteThinkingEffort?: AgentReasoningEffort
   /** Bound owner id(s); when remote is enabled, empty list rejects inbound. */
   remoteSenderAllowlist?: string[]
   /**
@@ -107,6 +114,8 @@ export const DEFAULT_REMOTE_IM_COMMON_CONFIG: RemoteImCommonConfig = {
   remoteBrowserRequiresConfirm: false,
   remoteSessionIdleMinutes: 10,
   remoteRateLimitPerMinute: 60,
+  remoteModelSelectionMode: 'inherit',
+  remoteThinkingEffort: 'low',
   remoteOwnerBindWindowMinutes: 5,
   remoteProgressMode: DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressMode,
   remoteProgressHeartbeatSec: DEFAULT_REMOTE_PROGRESS_CONFIG.remoteProgressHeartbeatSec,
@@ -228,6 +237,8 @@ export function mergeRemoteImCommonConfig(
     remoteRateLimitPerMinute:
       partial.remoteRateLimitPerMinute ?? defaults.remoteRateLimitPerMinute,
     remoteDefaultModelId: partial.remoteDefaultModelId ?? defaults.remoteDefaultModelId,
+    remoteModelSelectionMode: partial.remoteModelSelectionMode ?? defaults.remoteModelSelectionMode,
+    remoteThinkingEffort: partial.remoteThinkingEffort ?? defaults.remoteThinkingEffort,
     remoteSenderAllowlist: Array.isArray(partial.remoteSenderAllowlist)
       ? [...partial.remoteSenderAllowlist]
       : defaults.remoteSenderAllowlist

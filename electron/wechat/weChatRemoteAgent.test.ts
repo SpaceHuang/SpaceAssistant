@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
-import { AppDatabase, openDatabase, setConfigValue } from '../database'
+import { AppDatabase, appendMessage, createPersistedTurn, getConfigValue, openDatabase, setConfigValue, updateMessageContent } from '../database'
 import { DEFAULT_BROWSER_CONFIG, DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { DEFAULT_WECHAT_CONFIG } from '../../src/shared/wechatTypes'
 import { makeIncomingMessage } from './__mocks__/wechatBotMock'
@@ -11,6 +11,9 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { createSession, getDbConnection, getSession } from '../database'
+import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
+import { acceptTurnContext, readAcceptedTurn } from '../database/acceptedTurnStorage'
+import { listPersistedTurns } from '../database/operations'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, getSessionEventSink, readSessionEvents, SessionEventWriter } from '../sessionEvents'
 import { ImChannel } from '../confirmation/imChannel'
@@ -30,6 +33,8 @@ import { invalidateSkillsCache } from '../skills/skillCache'
 const mockGetWeChatBundle = vi.hoisted(() => vi.fn())
 const hostedRuntimeFailureInjection = vi.hoisted(() => ({ requestId: '', composeCalls: 0 }))
 const mockRequestRendererSessionSwitch = vi.hoisted(() => vi.fn())
+const mockResolveLlmCredentialsForPair = vi.fn()
+const acceptedTurnFixtures = new Map<string, { db: AppDatabase; acceptedTurn: import('../../src/shared/acceptedTurn').AcceptedTurn }>()
 vi.mock('./weChatIpc', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./weChatIpc')>()
   return { ...actual, getWeChatBundle: (...args: unknown[]) => mockGetWeChatBundle(...args) }
@@ -61,7 +66,32 @@ const mockGetMessages = vi.fn(() => [])
 const mockResolveLlmCredentialsForModel = vi.fn()
 
 vi.mock('../toolChatLoop', () => ({
-  runToolChatSession: (...args: unknown[]) => mockRunToolChatSession(...args)
+  runToolChatSession: (...args: unknown[]) => {
+    const [invocation, ports, options] = args as [
+      { acceptedTurn?: import('../../src/shared/acceptedTurn').AcceptedTurn; messages?: { currentUserMessageId?: string }; trace?: { requestId?: string } },
+      unknown,
+      { onHostedTurnHandoff?: (input: Record<string, unknown>) => unknown }
+    ]
+    const originalHandoff = options?.onHostedTurnHandoff
+    const wrappedOptions = originalHandoff ? {
+      ...options,
+      onHostedTurnHandoff: (input: Record<string, unknown>) => {
+        const accepted = invocation.acceptedTurn
+        const fixture = invocation.trace?.requestId ? acceptedTurnFixtures.get(invocation.trace.requestId) : undefined
+        const request = input.request as { messages?: Array<{ role?: string; content?: unknown }> } | undefined
+        const lastUser = [...(request?.messages ?? [])].reverse().find((message) => message.role === 'user')
+        const currentUserMessageId = input.currentUserMessageId ?? accepted?.currentUserMessageId ?? invocation.messages?.currentUserMessageId
+        let requiredUserMessage = input.requiredUserMessage as { id?: string; message?: { role?: string; content?: unknown } } | undefined
+        if (!requiredUserMessage && currentUserMessageId && lastUser && fixture) {
+          const content = typeof lastUser.content === 'string' ? lastUser.content : JSON.stringify(lastUser.content)
+          updateMessageContent(fixture.db, currentUserMessageId, { content })
+          requiredUserMessage = { id: currentUserMessageId, message: { role: 'user', content } }
+        }
+        return originalHandoff({ ...input, ...(currentUserMessageId ? { currentUserMessageId } : {}), ...(requiredUserMessage ? { requiredUserMessage } : {}) })
+      }
+    } : options
+    return mockRunToolChatSession(invocation, ports, wrappedOptions)
+  }
 }))
 
 vi.mock('../database', async (importOriginal) => {
@@ -76,8 +106,10 @@ vi.mock('../appIpc', () => ({
   readAppLocale: () => 'zh-CN'
 }))
 
-vi.mock('../llmServiceResolver', () => ({
+vi.mock('../llmServiceResolver', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../llmServiceResolver')>(),
   resolveLlmCredentialsForModel: (...args: unknown[]) => mockResolveLlmCredentialsForModel(...args),
+  resolveLlmCredentialsForPair: (...args: unknown[]) => mockResolveLlmCredentialsForPair(...args),
   readActiveLlmServiceId: () => undefined
 }))
 
@@ -106,7 +138,7 @@ vi.mock('../workDirManager', async (importOriginal) => {
   }
 })
 
-import { runWeChatRemoteAgent } from './weChatRemoteAgent'
+import { runWeChatRemoteAgent as runWeChatRemoteAgentImpl } from './weChatRemoteAgent'
 
 function makeDb(): AppDatabase {
   const db = openDatabase(':memory:')
@@ -155,6 +187,47 @@ function baseCtx(getMainWebContents: () => WebContents | null, db: AppDatabase =
   }
 }
 
+async function runWeChatRemoteAgent(ctx: Parameters<typeof runWeChatRemoteAgentImpl>[0]) {
+  if (ctx.acceptedTurn) {
+    acceptedTurnFixtures.set(ctx.requestId, { db: ctx.db, acceptedTurn: ctx.acceptedTurn })
+    return runWeChatRemoteAgentImpl(ctx).finally(() => { acceptedTurnFixtures.delete(ctx.requestId) })
+  }
+  const session = ctx.sessionStorage.queries.readSession(ctx.sessionId)
+  const model = session?.model ?? (ctx as typeof ctx & { getModel?: () => string }).getModel?.() ?? SUPPORTED_ANTHROPIC_MODEL
+  const models = JSON.parse(getConfigValue(ctx.db, 'config.models') ?? '[]') as Array<Record<string, unknown>>
+  if (!models.some((entry) => entry.name === model)) {
+    models.push({ id: `wechat-test-${ctx.requestId}`, name: model, enabled: true, isVision: false, supportsThinking: true })
+    setConfigValue(ctx.db, 'config.models', JSON.stringify(models))
+  }
+  const existing = session
+    ? listPersistedTurns(ctx.db).find((turn) => turn.requestId === ctx.requestId && turn.sessionId === ctx.sessionId)
+    : undefined
+  const storedAccepted = session ? readAcceptedTurn(ctx.db, ctx.sessionId, ctx.requestId) : undefined
+  if (storedAccepted) {
+    acceptedTurnFixtures.set(ctx.requestId, { db: ctx.db, acceptedTurn: storedAccepted })
+    return runWeChatRemoteAgentImpl({ ...ctx, turnId: storedAccepted.turnId, acceptedTurn: storedAccepted }).finally(() => { acceptedTurnFixtures.delete(ctx.requestId) })
+  }
+  const turnId = existing?.turnId ?? ctx.turnId ?? ctx.requestId
+  const startToken = existing?.startToken ?? `wechat-test-start-${turnId}`
+  let userMessageId = existing?.userMessageId
+  if (session && !existing) {
+    const latestUser = getDbConnection(ctx.db).prepare("SELECT id FROM messages WHERE session_id=? AND role='user' ORDER BY sequence DESC LIMIT 1").get(ctx.sessionId) as { id: string } | undefined
+    userMessageId = latestUser?.id ?? `wechat-test-user-${turnId}`
+    if (!latestUser) appendMessage(ctx.db, { id: userMessageId, sessionId: ctx.sessionId, role: 'user', content: ctx.userMessage, timestamp: Date.now(), status: 'sent' })
+    const assistantMessageId = `wechat-test-assistant-${turnId}`
+    appendMessage(ctx.db, { id: assistantMessageId, sessionId: ctx.sessionId, role: 'assistant', content: '', timestamp: Date.now() + 1, status: 'streaming' })
+    createPersistedTurn(ctx.db, { turnId, requestId: ctx.requestId, sessionId: ctx.sessionId, userMessageId, assistantMessageId, state: 'prepared', startToken })
+  }
+  const acceptedTurn = createAcceptedTurn({
+    turnId, requestId: ctx.requestId, sessionId: ctx.sessionId, lane: 'wechat', startToken,
+    currentUserMessageId: userMessageId ?? `wechat-test-user-${turnId}`, transcriptVersion: 0,
+    config: { lane: 'wechat', model, llmServiceId: 'svc-1', thinkingEffort: 'low' }
+  })
+  if (session) acceptTurnContext(ctx.db, acceptedTurn)
+  acceptedTurnFixtures.set(ctx.requestId, { db: ctx.db, acceptedTurn })
+  return runWeChatRemoteAgentImpl({ ...ctx, ...(session ? { turnId } : {}), acceptedTurn }).finally(() => { acceptedTurnFixtures.delete(ctx.requestId) })
+}
+
 describe('runWeChatRemoteAgent', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -166,6 +239,13 @@ describe('runWeChatRemoteAgent', () => {
       serviceId: 'svc-1',
       baseUrl: 'https://api.example.com',
       getApiKey: async () => 'key'
+    })
+    mockResolveLlmCredentialsForPair.mockImplementation(async (db: AppDatabase, modelId: string, serviceId: string) => {
+      const models = JSON.parse(getConfigValue(db, 'config.models') ?? '[]') as Array<Record<string, unknown>>
+      const model = models.find((entry) => entry.id === modelId)
+      return model
+        ? { model, serviceId, providerModelName: model.name, baseUrl: 'https://api.example.com', getApiKey: async () => 'key' }
+        : { error: 'frozen model missing' }
     })
     mockRunToolChatSession.mockResolvedValue({
       ok: true,
@@ -1705,7 +1785,14 @@ describe('runWeChatRemoteAgent', () => {
         yield { type: 'text-delta', text: 'provider must not start' } as const
         yield { type: 'finish', reason: 'stop' } as const
       } })
-      const handoff = (options as unknown as { onHostedTurnHandoff: (input: unknown) => Promise<unknown> }).onHostedTurnHandoff
+      const rawHandoff = (options as unknown as { onHostedTurnHandoff: (input: unknown) => Promise<unknown> }).onHostedTurnHandoff
+      const handoff = async (input: Record<string, unknown>) => {
+        const acceptedTurn = (invocation as unknown as { acceptedTurn?: { currentUserMessageId?: string } }).acceptedTurn
+        return rawHandoff({
+          ...input,
+          ...(acceptedTurn?.currentUserMessageId ? { requiredUserMessage: { id: acceptedTurn.currentUserMessageId, message: { role: 'user', content: '读取当前目录下的文件' } } } : {})
+        })
+      }
       return handoff({
         authorizedToolNames: new Set(['read_file']),
         request: {
@@ -2042,8 +2129,15 @@ describe('runWeChatRemoteAgent', () => {
       { invocationId: 'prior-wechat', turnId: 'prior-wechat-turn', sequence: 2, schemaVersion: 1, eventId: 'prior-wechat-done', idempotencyKey: 'prior-wechat-done', kind: 'invocation-completed', payload: { status: 'completed' } }
     ], 0)
     let handoffError: unknown
-    mockRunToolChatSession.mockImplementation(async (_invocation: never, _ports: never, options: never) => {
-      const callback = (options as unknown as { onHostedTurnHandoff: (input: unknown) => Promise<unknown> }).onHostedTurnHandoff
+    mockRunToolChatSession.mockImplementation(async (invocation: never, _ports: never, options: never) => {
+      const accepted = (invocation as unknown as { acceptedTurn: ReturnType<typeof createAcceptedTurn> }).acceptedTurn
+      updateMessageContent(ctx.db, accepted.currentUserMessageId, { content: 'current WeChat question' })
+      const rawCallback = (options as unknown as { onHostedTurnHandoff: (input: unknown) => Promise<unknown> }).onHostedTurnHandoff
+      const callback = (input: Record<string, unknown>) => rawCallback({
+        ...input,
+        currentUserMessageId: accepted.currentUserMessageId,
+        requiredUserMessage: { id: accepted.currentUserMessageId, message: { role: 'user', content: 'current WeChat question' } }
+      })
       try {
         await callback({
           authorizedToolNames: new Set(),

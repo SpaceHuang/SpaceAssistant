@@ -33,7 +33,7 @@ export type TurnDisplay = {
   requestId: string
   version: number
   lifecycle: 'running' | 'awaiting-confirmation' | 'completed' | 'failed'
-  outcome?: 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'interrupted' | 'commit-uncertain'
+  outcome?: 'completed' | 'parked' | 'failed' | 'cancelled' | 'timed-out' | 'interrupted' | 'commit-uncertain'
   message: Pick<Message, 'id' | 'content' | 'thinking' | 'skillHints'> & {
     contentSegments: Array<{ segmentIndex: number; start: number; end: number }>
     toolCalls: Array<Pick<ToolCallRecord, 'id' | 'toolName' | 'status' | 'startedAt' | 'completedAt' | 'duration'> & { display: ToolCallDisplaySummary }>

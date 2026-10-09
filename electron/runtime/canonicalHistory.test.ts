@@ -97,6 +97,19 @@ describe('toCanonicalModelMessages', () => {
 })
 
 describe('rebuildClaudeMessagesFromHistory', () => {
+  it('settles a deferred approval without inventing a tool execution result in provider history', () => {
+    const events: HistoryEvent[] = [
+      { invocationId: 'deferred-replay', turnId: 'turn-1', sequence: 1, schemaVersion: 1, eventId: 'deferred-response', idempotencyKey: 'deferred-response', kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'write a file' }] } },
+      { invocationId: 'deferred-replay', turnId: 'turn-1', sequence: 2, schemaVersion: 1, eventId: 'deferred-model-response', idempotencyKey: 'deferred-model-response', kind: 'model-response-committed', payload: { message: { role: 'assistant', toolCalls: [{ id: 'deferred-call', name: 'write_file', input: { path: 'a.txt' } }] } } },
+      { invocationId: 'deferred-replay', turnId: 'turn-1', sequence: 3, schemaVersion: 1, eventId: 'deferred-approval-wait', idempotencyKey: 'deferred-approval-wait', kind: 'approval-waiting', payload: { toolCallId: 'deferred-call', approvalId: 'deferred-approval', answerer: 'agent', reasonCode: 'policy', requestedAt: 1 } },
+      { invocationId: 'deferred-replay', turnId: 'turn-1', sequence: 4, schemaVersion: 1, eventId: 'deferred-approval-settled', idempotencyKey: 'deferred-approval-settled', kind: 'approval-deferred', payload: { toolCallId: 'deferred-call', approvalId: 'deferred-approval', todoId: 'deferred-todo', invocationId: 'deferred-replay', checkpointId: 'deferred-checkpoint', workflowRevision: 2 } }
+    ]
+    expect(rebuildClaudeMessagesFromHistory(events)).toEqual([
+      { role: 'user', content: 'write a file' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'deferred-call', name: 'write_file', input: { path: 'a.txt' } }] }
+    ])
+  })
+
   it('treats context and compaction snapshots as replacements within one stream, not appended messages', () => {
     const events = [
       {

@@ -13,6 +13,30 @@ const context = {
 }
 
 describe('createAgentSdkConfirmationPort', () => {
+  it('returns a durable deferred confirmation from the explicit IM deferral callback', async () => {
+    const channel = { request: vi.fn(async () => ({ kind: 'rejected', cause: 'agent-deny', answererKind: 'agent' })), cancel: vi.fn() }
+    const defer = vi.fn(async () => ({ kind: 'deferred' as const, todoId: 'todo-1', invocationId: 'inv-1',
+      checkpointRef: { checkpointId: 'checkpoint-1', workflowRevision: 2 } }))
+    const port = createAgentSdkConfirmationPort({ createChannel: () => channel, publish: vi.fn(), cancel: vi.fn(), defer })
+    const result = await port({ call: { invocationId: 'inv-1', toolCallId: 'call-1', toolName: 'write_file', input: {} },
+      modelTurn: 1, confirmationId: 'confirm-1', answerer: 'agent', reasonCode: 'policy',
+      context: { facts: { actionClass: 'write' }, decision: { riskLevel: 'high', memoryTiers: [], timeoutMs: null } } })
+    expect(result).toMatchObject({ kind: 'deferred', todoId: 'todo-1', invocationId: 'inv-1' })
+    expect(defer).toHaveBeenCalledOnce()
+  })
+
+  it('offers agent-approved outcomes to policy so insufficient direct delegation can still defer', async () => {
+    const channel = { request: vi.fn(async () => ({ kind: 'approved', cause: 'agent-approved', answererKind: 'agent' })), cancel: vi.fn() }
+    const defer = vi.fn(async () => ({ kind: 'deferred' as const, todoId: 'todo-low-evidence', invocationId: 'inv-2',
+      checkpointRef: { checkpointId: 'checkpoint-2', workflowRevision: 3 } }))
+    const port = createAgentSdkConfirmationPort({ createChannel: () => channel, publish: vi.fn(), cancel: vi.fn(), defer })
+    const result = await port({ call: { invocationId: 'inv-2', toolCallId: 'call-2', toolName: 'write_file', input: {} },
+      modelTurn: 1, confirmationId: 'confirm-2', answerer: 'agent', reasonCode: 'policy',
+      context: { facts: { actionClass: 'write' }, decision: { riskLevel: 'high', memoryTiers: [], timeoutMs: null } } })
+    expect(result).toMatchObject({ kind: 'deferred', todoId: 'todo-low-evidence' })
+    expect(defer).toHaveBeenCalledOnce()
+  })
+
   it('将人工选择的记忆键交给宿主确认提交回调', async () => {
     const memory = { kind: 'script-content' as const, digest: 'a'.repeat(64), sessionId: 'session-1' }
     const onApproved = vi.fn()
@@ -22,6 +46,42 @@ describe('createAgentSdkConfirmationPort', () => {
     })
     await port({ call: { invocationId: 'inv', toolCallId: 'tool-memory', toolName: 'run_script', input: { code: 'custom_api()' } }, confirmationId: 'tool-memory', answerer: 'user', reasonCode: 'script-unmodeled-path-ask', context })
     expect(onApproved).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'approved' }), expect.anything(), context, memory)
+  })
+
+  it('通过真实 channel 与 SDK port 保留 Agent 裁决和 fail-closed fallback 语义', async () => {
+    const { AgentChannel } = await import('./agentChannel')
+    const { resolveConfirmChannel } = await import('./channels')
+    const invokeApproval = vi.fn(async () => ({ ok: true as const, verdict: { kind: 'undetermined' as const, reason: { summary: '缺少影响范围证据' } } }))
+    const channel = resolveConfirmChannel({
+      lane: 'wechat', requestId: 'deferred-contract-undetermined', sessionId: 'session-contract', toolName: 'write_file',
+      remoteAsyncApprovalEnabled: true, answererPolicy: { kind: 'agent' },
+      agentChannelFactory: (deps) => new AgentChannel({ ...deps, policy: deps.policy, invokeApproval }),
+      imChannel: { send: vi.fn() } as never,
+      buildImPending: () => ({}) as never
+    })
+    const fallback = vi.fn(async () => undefined)
+    const port = createAgentSdkConfirmationPort({
+      createChannel: () => channel,
+      publish: async () => undefined,
+      cancel: vi.fn(),
+      fallback
+    })
+    const result = await port({ call: { invocationId: 'inv', toolCallId: 'tool-contract', toolName: 'write_file', input: {} }, confirmationId: 'tool-contract', answerer: 'agent', reasonCode: 'agent-approval', context })
+
+    expect(invokeApproval).toHaveBeenCalledOnce()
+    expect(result).toMatchObject({ kind: 'denied', answerer: 'agent', cause: 'agent-undetermined', userMessage: '缺少影响范围证据' })
+    expect(fallback).not.toHaveBeenCalled()
+  })
+
+  it('Agent cannot turn an IM outbound action into agent-approved', async () => {
+    const channel: ConfirmationChannel = { request: async () => ({ kind: 'approved', answererKind: 'agent', cause: 'agent-approved' }), cancel: vi.fn() }
+    const onApproved = vi.fn()
+    const port = createAgentSdkConfirmationPort({ createChannel: () => channel, publish: async () => undefined, cancel: vi.fn(), onApproved })
+    await expect(port({ call: { invocationId: 'inv', toolCallId: 'outbound-agent', toolName: 'send_message', input: {} },
+      confirmationId: 'outbound-agent', answerer: 'agent', reasonCode: 'agent-approval',
+      context: { ...context, facts: { ...facts, toolName: 'send_message', actionClass: 'outbound' } } }))
+      .resolves.toMatchObject({ kind: 'denied', answerer: 'agent', cause: 'rules-violated' })
+    expect(onApproved).not.toHaveBeenCalled()
   })
 
   it('从 policy context 还原 ConfirmRequest，并在发布卡片前登记 channel waiter', async () => {

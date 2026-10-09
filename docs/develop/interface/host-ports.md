@@ -30,7 +30,7 @@ interface AgentTraceContext { requestId: string; turnId?: string; windowId?: str
 
 `turnId` 缺省回退 `sessionId` 占位；`windowId` 为宿主 UI 簿记。
 
-**messages**（只传本次新增输入，历史经 `loadContext` 装载，不经此传入）：
+**messages**（只传本次新增输入，历史不经此传入——由 `HistoryPort` / 上下文端口装载）：
 
 ```ts
 type AgentMessageLike = { role: 'user' | 'assistant'; content: unknown; id?: string }
@@ -151,27 +151,18 @@ interface AgentCredentialsPorts {
 }
 ```
 
-**存储（storage）与真相类持久化**
+**会话元数据与标题建议**
 
 ```ts
-interface AgentLoadedSessionContext { metadata?: unknown }
-
-interface AgentPersistPorts {
-  updateSessionMetadata?(sessionId: string, patch: Record<string, unknown>): void
-  scheduleTitleSuggestion?(input: Record<string, unknown>): void
-  recordUserAnswerFromDecision?(input: Record<string, unknown>): void
-}
-
-interface AgentStoragePorts {
-  loaded?: AgentLoadedSessionContext
-  sessionEventLocation?: { workDir: string; sessionId: string; createdAt: number }   // 重启后对账压缩提交
-  readSession?(sessionId: string): unknown
-  persist?: AgentPersistPorts
-  appendCompactionTransaction?(start: Record<string, unknown>, summary: Record<string, unknown>): Promise<unknown>
-}
+/** 冻结的会话元数据，用于构建本次调用的产品上下文。 */
+sessionMetadata?: Readonly<Record<string, unknown>>
+/** 产品级标题建议能力，与存储 / History 解耦。 */
+titleSuggestions?: { schedule(input: Record<string, unknown>): void }
 ```
 
-真相类端口失败 = 调用显式失败 + 可区分错误码 + 审计，不允许静默 no-op。
+- 旧的 `AgentStoragePorts`（`loaded` / `sessionEventLocation` / `readSession` / `persist.updateSessionMetadata` / `persist.scheduleTitleSuggestion` / `persist.recordUserAnswerFromDecision` / `appendCompactionTransaction`）与 `AgentLoadedSessionContext`、`AgentPersistPorts` **已随会话存储重构整体下线**，本契约不再声明存储端口：会话材料的读写统一走 SDK 定义的 `HistoryPort`（[history.md](./history.md)）与上下文端口（[context.md](./context.md)）。
+- `sessionMetadata` 是装配期冻结的快照（不再是 `loadContext` 装载的活对象）。
+- `titleSuggestions.schedule` 承接原 `persist.scheduleTitleSuggestion`；`AgentEventSink.onTitleGenerated` 仍是落库后的界面通知出口。
 
 **门控与暴露面（policy / exposure）**
 
@@ -242,25 +233,24 @@ executionAdmission?: unknown        // Runtime 级 cancel/revoke 与 dispatch cl
 safetyPermits?: unknown             // Runtime 级 permit ledger，按 permit ID settle
 ```
 
-**关于 `invocationRuntime` 的 park 家族**：`park` / `resumeLease` 目前只存在于 **SDK 包内这一份契约**；宿主转发层（`src/shared/agent/invocation.ts`）已收窄为只保留 `acquireLease`，SDK 侧 `scheduler.ts` 的 `InvocationRuntime` 参考实现也删除了 park 家族（2026-09-30）。当前审批等待不释放父 turn 的应用级准入名额；运行中的 turn 持有其普通名额直到整个 turn 结束。旧 History 的 `invocation-parked` 事件仍兼容读取。
+**关于 `invocationRuntime` 的 park 家族**：`park` / `resumeLease` 只存在于 **SDK 包内这一份契约**（宿主转发层已不再声明 `AgentHostPorts`）；SDK 侧 `scheduler.ts` 的 `InvocationRuntime` 参考实现也删除了 park 家族（2026-09-30），turn 循环没有任何调用点。当前审批等待不释放父 turn 的应用级准入名额；运行中的 turn 持有其普通名额直到整个 turn 结束。旧 History 的 `invocation-parked` 事件仍兼容读取，但自存储重构起它已是**闭合事件**：出现后同一调用不可再追加事件，重启重建直接判 `interrupted`（见 [history.md](./history.md)）。
 
 **历史与模型生命周期钩子**
 
 ```ts
-history?: {
-  appendBatch(events: readonly <HistoryEvent 同形结构>[], expectedVersion: number): Promise<{ version: number; duplicate: boolean }>
-  read(invocationId: string): Promise<{ invocationId: string; version: number; schemaVersion: number; events: Array<...> }>
-}
+history?: HistoryPort                                   // SDK 拥有的事件持久化契约（见 history.md）
 recordProviderAttemptUsage?(input: Record<string, unknown>): void
-turnBoundary?(input: unknown): Promise<unknown>          // 成功响应后、下一轮发送前的边界规划
-preflightModelRequest?(input: unknown): Promise<unknown> // 各次 dispatch 前按冻结预算恢复 transcript
-recoverProviderAttempt?(input: unknown): Promise<unknown>// 响应未被接受时由宿主决定是否恢复并安全重试一次
+planContextReplacement?(input: import('./turn').ContextReplacementPlanInput):
+  Promise<import('./turn').ContextReplacementPlanResult | void>
+recoverProviderAttempt?(input: unknown): Promise<unknown>   // 响应未被接受时由宿主决定是否恢复并安全重试一次
 hostFacts?: { getBrowserDetectContext?(): BrowserDetectContext }
-translate?(message: LocalizedMessage): string             // 主进程只产「键 + 参数」，显示处经此解析
+translate?(message: LocalizedMessage): string               // 主进程只产「键 + 参数」，显示处经此解析
 contextMeter?: unknown
 ```
 
-`history` 目前用于逐 lane 真源切换前的**可重放事件影子写入**；其事件 kind 与形状须与 `src/history.ts` 的 `HistoryEvent` 同形。
+- `history` 已是 SDK 定义的 **`HistoryPort`**（不再是"同形影子写入"）：宿主提供适配器，事件 kind、形状与不变量以 `packages/agent-sdk/src/history.ts` 为唯一真源；终态追加会带 `transcriptCommit`，适配器需把会话 transcript 提交与终态事件放进同一事务。
+- `planContextReplacement` **取代**了原先的 `turnBoundary` 与 `preflightModelRequest` 两个钩子：同一个规划器按 `phase: 'preflight'` / `phase: 'turn-boundary'` 调用，返回 `{ messages, windowId?, historyPayload? }` 表示替换、返回 `{ rejected: 'OVER_BUDGET' }` 表示预算拒绝、返回 `void` 表示不处理（见 [turn-loop.md](./turn-loop.md)）。
+- `recordProviderAttemptUsage` 与 `usage` 端口分开声明：它记录**每一次** provider 尝试（接受或丢弃）的用量。
 
 **过渡豁免（已标记废弃）**
 
@@ -273,19 +263,20 @@ legacy?: { appDb?: unknown }
 
 ## 4. 与宿主转发层的差异（src/shared/agent/invocation.ts）
 
-SDK 包内这份契约是 SDK 循环实际依赖的最小面；宿主另有转发层 `src/shared/agent/invocation.ts`（供 electron / renderer 直接 import），两者定义并不逐字相同：
+SDK 包内这份契约是 SDK 循环实际依赖的**全部面**（调用入参 + 宿主端口）；宿主另有转发层 `src/shared/agent/invocation.ts`（供 electron / renderer 直接 import）。会话存储重构后，转发层**只保留调用入参面**：
 
 | 差异点 | SDK 包（`packages/agent-sdk/src/invocation.ts`） | 宿主转发层（`src/shared/agent/invocation.ts`） |
 | --- | --- | --- |
+| 宿主端口 | 定义 `AgentHostPorts` 及 `AgentWorkspacePorts` / `AgentCredentialsPorts` / `AgentPolicyPorts` / `AgentExposurePorts` / `AgentMcpPorts` / `AgentUsagePorts` / `AgentDiagnosticsPorts` / `AgentAnswererPorts` / `AgentToolRevocationPort` | **已全部移除**（端口面的唯一来源是 SDK 包） |
 | 宿主类型引用 | 一律以 `any` 占位，不 import `src/shared`（`invocation.contractShape.test.ts` 守护） | 引用真实类型（`WorkspaceSnapshot`、`AcceptedTurn`、`BrowserDetectContext` 等） |
 | `AgentInvocation.acceptedTurn` | 无此字段 | `acceptedTurn?: AcceptedTurn`（迁移期字段） |
 | `AgentTraceContext.turnId` 注释 | 「缺省回退 sessionId 占位」 | 「本回合规范执行身份；迁移期旧调用可省略，不能使用 sessionId 代替」 |
-| `AgentWorkspacePorts.snapshot()` / `refresh()` | 返回 `unknown` | 返回 `WorkspaceSnapshot` |
-| `AgentHostPorts.invocationRuntime` | 保留 `park` / `resumeLease` | 已收窄，仅 `acquireLease` |
+| `AgentReasoningEffort` | `'off' \| 'low' \| 'medium' \| 'high'` | 追加 `'max'`（composer-model-thinking-entry FR11） |
 
-装配方在 electron 侧一般 import 转发层，此时以转发层为准（`acceptedTurn` 可用、`invocationRuntime` 无 `park`）；SDK 内部只按包内面读取端口。
+装配方在 electron 侧一般 import 转发层拿**调用入参类型**（`acceptedTurn` 只在转发层可用），**端口类型一律从 SDK 包取**；`invocation.contractShape.test.ts` 会锁住转发层仍暴露的方法签名形状（例如 `planContextReplacement?(input: ContextReplacementPlanInput): Promise<ContextReplacementPlanResult | void>`）。
 
 ## 5. 装配注意
 
 - 所有以 `unknown` 声明的字段都是 electron 专属类型的占位，收窄动作应集中在宿主的装配器（如 `invocationAssembler`）与 Core 展开层。
 - 契约层位于 shared，**不得**引用 electron 侧类型；SDK 决策硬约束"契约禁函数句柄"与"端口一律接口"即是此文件的设计规则。
+- 存储侧已无 `ports.storage` 一族：会话材料与投影经 `ports.history`（`HistoryPort`）与上下文端口（`planContextReplacement` + `turn` 的 `contextProjectionCommitter`）流转；`sessionMetadata` / `titleSuggestions` 分别取代原 `storage.loaded` 与 `storage.persist.scheduleTitleSuggestion`。装配顺序见 [README.md](./README.md)「典型装配顺序」。

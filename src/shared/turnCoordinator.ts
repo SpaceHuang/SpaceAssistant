@@ -1,6 +1,7 @@
 import type { Message } from './domainTypes'
 import { acceptedAssistantCheckpoint, reduceAssistantFact, type AssistantFactEvent, type TurnExecutionConfig, type TurnIntent, type TurnTerminal, type TurnOutcome } from './assistantFactAggregator'
 import { canonicalQueueInput } from './queueInputFingerprint'
+import type { QueueScope } from './queueScope'
 import { CheckpointQueue } from './checkpointQueue'
 import { isTerminalMessageStatus } from './messageStatus'
 
@@ -19,15 +20,16 @@ export type TurnStorage = {
     },
     acceptance?: PersistedTurnRecord['continuationAcceptance']
   }) => { user: PersistedMessage; assistant: PersistedMessage }
-  claimQueuedAtomic: (input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig }) => { user: PersistedMessage; assistant: PersistedMessage; executionConfig?: TurnExecutionConfig }
+  claimQueuedAtomic: (input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; queueScope?: QueueScope }) => { user: PersistedMessage; assistant: PersistedMessage; executionConfig?: TurnExecutionConfig }
   update: (messageId: string, patch: Partial<Message>) => PersistedMessage | null
   updateIfStreaming: (messageId: string, patch: Partial<Message>) => PersistedMessage | null
   checkpoint: (turnId: string, version: number, message: Message) => boolean
   listStreaming?: () => Message[]
   listRecoverableResidues?: () => Array<{ message: Message; turnId?: string; turnOutcome?: string }>
   finalizeResidueMessage?: (messageId: string, targetStatus: 'completed' | 'cancelled' | 'failed') => boolean
+  finalizeParkedResidueMessage?: (messageId: string) => boolean
   listUnfinishedTurns: () => Array<{ turnId: string; assistantMessageId: string }>
-  recoverTurn: (turnId: string, assistantMessageId: string) => boolean | Extract<TurnOutcome, 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'recovered' | 'commit-uncertain'>
+  recoverTurn: (turnId: string, assistantMessageId: string) => boolean | Extract<TurnOutcome, 'completed' | 'parked' | 'failed' | 'cancelled' | 'timed-out' | 'recovered' | 'commit-uncertain'>
   saveTurn: (turn: { turnId: string; requestId: string; sessionId: string; assistantMessageId: string; state: string; userMessageId?: string; contextBoundarySequence?: number; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig }) => void
   updateTurnState: (turnId: string, state: string, patch?: { version?: number; outcome?: string; usage?: unknown; error?: { code: string; message: string } }) => void
 }
@@ -102,8 +104,10 @@ export class TurnCoordinator {
     if (intent.mode === 'reuse-user') {
       userMessage = this.storage.getMessage(intent.userMessageId)
       if (!userMessage || userMessage.sessionId !== intent.sessionId) throw new Error('TURN_REUSE_SESSION_MISMATCH')
-      if (userMessage.role !== 'user' || (userMessage.status !== 'sent' && userMessage.status !== 'queued')) throw new Error('TURN_REUSE_TARGET_NOT_USER')
-      if (userMessage.status === 'queued') {
+      const persistedUserStatus: string = userMessage.status
+      const queuedForReuse = persistedUserStatus === 'queued' || (intent.queueScope?.kind === 'im' && persistedUserStatus === 'im-inbox-claimed')
+      if (userMessage.role !== 'user' || (userMessage.status !== 'sent' && !queuedForReuse)) throw new Error('TURN_REUSE_TARGET_NOT_USER')
+      if (queuedForReuse) {
         if (fixedIdentity) throw new Error('CONTINUATION_USER_NOT_SENT')
         const turnId = this.deps.id()
         const assistantId = this.deps.id()
@@ -119,6 +123,7 @@ export class TurnCoordinator {
           intentFingerprint: this.intentFingerprint(intent),
           excludeMessageIds: intent.excludeMessageIds,
           executionConfig: normalizeTurnExecutionConfig(intent.config)
+          ,...(intent.queueScope ? { queueScope: intent.queueScope } : {})
         })
         const started = this.makeStarted(intent, claimed.user.message, claimed.assistant.message, { turnId, startToken, persist: false, state: initialState })
         if (claimed.executionConfig) started.executionConfig = claimed.executionConfig
@@ -243,7 +248,7 @@ export class TurnCoordinator {
       if (!terminal) return terminal
       const latest = this.turns.get(turnId) ?? current
       const alreadyTerminal = isTerminalMessageStatus(latest.assistantMessage.status)
-      const status = terminal.outcome === 'completed' ? 'completed' : terminal.outcome === 'cancelled' ? 'cancelled' : 'failed'
+      const status = terminal.outcome === 'completed' ? 'completed' : terminal.outcome === 'parked' ? 'sent' : terminal.outcome === 'cancelled' ? 'cancelled' : 'failed'
       // source 只能报告 outcome/usage/error；权威 Message 必须来自 consume/reducer。
       const message = latest.assistantMessage
       const finalMessage: Message = alreadyTerminal
@@ -436,7 +441,7 @@ export class TurnCoordinator {
         const inMemory = this.turns.get(turn.turnId)
         if (inMemory) {
           const outcome = recovery === true ? 'recovered' : recovery
-          const terminalStatus = outcome === 'completed' ? 'completed' as const : outcome === 'cancelled' ? 'cancelled' as const : 'failed' as const
+          const terminalStatus = outcome === 'completed' ? 'completed' as const : outcome === 'parked' ? 'sent' as const : outcome === 'cancelled' ? 'cancelled' as const : 'failed' as const
           const terminalMessage = { ...acceptedAssistantCheckpoint(inMemory.assistantMessage), status: terminalStatus }
           const recoveredRecord = this.storage.findByRequestId(inMemory.sessionId, inMemory.requestId)
           const recoveredTurn = {
@@ -460,11 +465,14 @@ export class TurnCoordinator {
       const cancelled = residue.turnOutcome === 'cancelled' || owned?.persistedOutcome === 'cancelled'
       const terminalOutcome = residue.turnOutcome ?? owned?.persistedOutcome
       const terminalStatus = terminalOutcome === 'completed' ? 'completed'
+        : terminalOutcome === 'parked' ? 'sent'
         : terminalOutcome === 'cancelled' ? 'cancelled'
           : terminalOutcome && ['failed', 'timed-out', 'recovered', 'commit-uncertain'].includes(terminalOutcome) ? 'failed'
             : undefined
-      const result = terminalStatus
-        ? (this.storage.finalizeResidueMessage?.(m.id, terminalStatus) ?? this.storage.updateIfStreaming(m.id, { ...m, status: terminalStatus }))
+      const result = terminalStatus === 'sent'
+        ? (this.storage.finalizeParkedResidueMessage?.(m.id) ?? this.storage.updateIfStreaming(m.id, { ...m, status: 'sent' }))
+        : terminalStatus
+          ? (this.storage.finalizeResidueMessage?.(m.id, terminalStatus) ?? this.storage.updateIfStreaming(m.id, { ...m, status: terminalStatus }))
         : residue.turnId
         ? (this.storage.recoverTurn(residue.turnId, m.id) ? { message: { ...m, status: 'failed' as const }, sequence: 0 } : null)
         : owned?.turnId

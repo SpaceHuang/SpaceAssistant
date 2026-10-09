@@ -126,7 +126,7 @@ class InvocationRuntime {
 ```
 
 - `generation` 单调递增；`release` 只在 generation 匹配时生效且幂等；释放后可重新 `acquireLease`（generation 继续递增）。
-- **park 家族已下线**（2026-09-30）：`park` / `resume` / `resumeLease` / `ParkHandle` / `maxParkedTurns` / `canParkInvocation` 在 SDK 内无生产调用者，已从 `scheduler.ts` 删除。2026-10-02 起，审批等待也不再释放父 turn 的应用级准入名额；turn 持有准入票据直到整轮结束。旧 History 的 `invocation-parked` 事件仍兼容读取。
+- **park 家族已下线**（2026-09-30）：`park` / `resume` / `resumeLease` / `ParkHandle` / `maxParkedTurns` / `canParkInvocation` 在 SDK 内无生产调用者，已从 `scheduler.ts` 删除。2026-10-02 起，审批等待也不再释放父 turn 的应用级准入名额；turn 持有准入票据直到整轮结束。旧 History 的 `invocation-parked` 事件仍兼容读取，但自会话存储重构起它是**闭合事件**（出现后不可再追加、重启重建判 `interrupted`，见 [history.md](./history.md)）。
 
 ## 4. 资源互斥锁（resourceLock.ts）
 

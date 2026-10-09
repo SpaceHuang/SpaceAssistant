@@ -21,6 +21,7 @@ const mockGetSession = vi.fn()
 const mockUpdateSession = vi.fn()
 const mockCreateSession = vi.fn()
 const mockDeleteSession = vi.fn()
+const mockAuthorizationInvalidate = vi.hoisted(() => vi.fn())
 
 vi.mock('fs/promises', () => ({
   default: { mkdir: vi.fn().mockResolvedValue(undefined) },
@@ -65,6 +66,13 @@ vi.mock('./claudeRequestGuards', () => ({
 
 vi.mock('./remote/remoteAgentRegistry', () => ({
   isRemoteAgentRunning: (...args: unknown[]) => mockIsRemoteAgentRunning(...args)
+}))
+
+vi.mock('./remote/remoteAuthorizationRegistry', () => ({
+  remoteAuthorizationRegistry: {
+    invalidate: (...args: unknown[]) => mockAuthorizationInvalidate(...args),
+    invalidateSession: (...args: unknown[]) => mockAuthorizationInvalidate(...args)
+  }
 }))
 
 vi.mock('./windowRef', () => ({
@@ -394,6 +402,7 @@ describe('session:delete IPC busy guard', () => {
   })
 
   it('returns before backup deletion finishes', async () => {
+    mockAuthorizationInvalidate.mockClear()
     const session = stubSession()
     mockGetSession.mockReturnValue(session)
     let release!: () => void
@@ -403,6 +412,8 @@ describe('session:delete IPC busy guard', () => {
 
     await handler({}, 'session-1')
 
+    expect(mockAuthorizationInvalidate).toHaveBeenCalledWith('feishu', 'session-1')
+    expect(mockAuthorizationInvalidate).toHaveBeenCalledWith('wechat', 'session-1')
     expect(mockDeleteSession).toHaveBeenCalledWith(ctx.db, 'session-1', { flush: false })
     expect(ctx.backup.deleteBackupWithRetry).toHaveBeenCalledWith(session, 3, expect.any(Function))
     release()

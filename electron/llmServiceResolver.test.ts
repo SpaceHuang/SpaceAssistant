@@ -406,6 +406,20 @@ describe('llmServiceResolver', () => {
     await expect(resolveLlmCredentialsForPair(db, 'model-b', 'missing')).resolves.toMatchObject({ error: expect.any(String) })
   })
 
+  it('does not replace an unavailable frozen service with another active service', async () => {
+    migrateLegacyLlmServicesIfNeeded(db)
+    const model = { ...makeModels()[0]!, id: 'frozen-model' }
+    setConfigValue(db, 'config.models', JSON.stringify([model]))
+    persistLlmServices(db, [
+      { id: 'frozen-service', name: 'Frozen', baseUrl: 'https://frozen.example', apiKeyPresent: true, supportedModelIds: [model.id] },
+      { id: 'available-service', name: 'Available', baseUrl: 'https://available.example', apiKeyPresent: true, supportedModelIds: [model.id] }
+    ], ['available-service'], { 'frozen-service': 'frozen-key', 'available-service': 'available-key' })
+
+    await expect(resolveLlmCredentialsForPair(db, model.id, 'frozen-service')).resolves.toMatchObject({
+      error: expect.stringContaining('已停用或不再支持')
+    })
+  })
+
   it('resolveLanguagePreferredModelName returns deepseek-v4-pro by default', () => {
     migrateLegacyLlmServicesIfNeeded(db)
     const models = makeModels()

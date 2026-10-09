@@ -5,15 +5,37 @@ import type { ModelEntry } from '../src/shared/domainTypes'
 import type { AgentReasoningEffort } from '../src/shared/agent/invocation'
 import { resolveGlobalThinkingEffort } from '../src/shared/thinkingEffort'
 import { getAvailableModels, migrateBuiltinModelName, resolveModelContextWindow, resolvePreferredModelEntry } from '../src/shared/llmModelConfig'
+import { mergeFeishuConfig } from '../src/shared/feishuTypes'
+import { mergeWeChatConfig } from '../src/shared/wechatTypes'
+import { resolveThinkingAvailability } from '../src/shared/thinkingAvailability'
+import { THINKING_EFFORT_LEVELS } from '../src/shared/thinkingEffort'
 import { resolveVisionRouteForImageSend } from '../src/shared/visionModelRouting'
 import { logAgentEvent } from './agentLogger/agentLogger'
 import { getConfigValue, type AppDatabase } from './database'
-import { readActiveLlmServiceIds, readLlmServices, readStoredModels, resolveLlmCredentialsForModel } from './llmServiceResolver'
-import { resolveLlmCredentialsForPair } from './llmServiceResolver'
+import { readActiveLlmServiceIds, readLlmServices, readStoredModels, resolveLlmCredentialsForModel, resolveLlmCredentialsForPair } from './llmServiceResolver'
+import { ensureRemoteImModelConfigMigrated, remoteImModelConfigDbKeys } from './remote/remoteImModelConfigDb'
 import type { AutomationTaskRunConfigSnapshot } from '../src/shared/automationTaskTypes'
 import type { SessionCommands, SessionQueries } from './sessionStorage/contracts'
 
 export type TurnExecutionLane = NonNullable<TurnExecutionConfig['lane']>
+
+/** Revalidate a persisted IM turn snapshot without consulting mutable defaults or rebinding its service. */
+export async function resolveFrozenImTurnExecutionConfig(
+  db: AppDatabase,
+  lane: Extract<TurnExecutionLane, 'feishu' | 'wechat'>,
+  frozen: Readonly<TurnExecutionConfig>
+): Promise<TurnExecutionConfig> {
+  if (frozen.lane !== lane || !frozen.model?.trim() || !frozen.llmServiceId?.trim() || !frozen.thinkingEffort) {
+    throw new Error('IM_FROZEN_EXECUTION_CONFIG_INVALID')
+  }
+  const model = readStoredModels(db).find((entry) => entry.name === frozen.model && entry.enabled)
+  if (!model) throw new Error('IM_FROZEN_MODEL_SERVICE_UNAVAILABLE: 原回合模型已不存在或停用，请恢复模型后重试。')
+  const credentials = await resolveLlmCredentialsForPair(db, model.id, frozen.llmServiceId)
+  if ('error' in credentials) {
+    throw new Error(`IM_FROZEN_MODEL_SERVICE_UNAVAILABLE: 原回合绑定的模型服务不可用（${credentials.error}）。请恢复原服务后重试。`)
+  }
+  return { ...frozen, lane }
+}
 
 /** Automation 专用固定 pair 校验；失败时绝不重绑桌面优选模型，也不更新 session。 */
 export async function resolvePinnedAutomationTurnExecutionConfig(
@@ -80,13 +102,33 @@ export async function resolveTrustedTurnExecutionConfig(
 
   const models: ModelEntry[] = readStoredModels(db)
 
-  // ① 旧内置名（kimi-k2.6 / glm-5.1 / deepseek-v4-flash…）先归一到当前名并回写：
-  //    否则请求会带着已不存在的模型名发出，凭据解析也会直接失败。
-  const migratedName = migrateBuiltinModelName(storedModel)
-  if (migratedName !== storedModel) {
+  let remoteThinkingEffort: AgentReasoningEffort | undefined
+  let explicitRemoteModel = false
+  if (lane === 'feishu' || lane === 'wechat') {
+    ensureRemoteImModelConfigMigrated(db)
+    const raw = getConfigValue(db, lane === 'feishu' ? remoteImModelConfigDbKeys.feishu : remoteImModelConfigDbKeys.wechat)
+    const stored = (() => { try { return raw ? JSON.parse(raw) as Record<string, unknown> : {} } catch { return {} } })()
+    const config = lane === 'feishu' ? mergeFeishuConfig(stored) : mergeWeChatConfig(stored)
+    remoteThinkingEffort = config.remoteThinkingEffort ?? 'low'
+    explicitRemoteModel = config.remoteModelSelectionMode === 'explicit'
+    const available = getAvailableModels(models, readLlmServices(db), readActiveLlmServiceIds(db))
+    const remoteModel = explicitRemoteModel
+      ? models.find((entry) => entry.id === config.remoteDefaultModelId)
+      : resolvePreferredModelEntry('language', models, available, getConfigValue(db, 'config.preferredLanguageModelId') ?? '')
+    if (!remoteModel || !available.some((entry) => entry.id === remoteModel.id)) {
+      if (explicitRemoteModel) throw new Error('REMOTE_EXPLICIT_MODEL_UNAVAILABLE')
+      throw new Error('REMOTE_DEFAULT_LANGUAGE_MODEL_UNAVAILABLE')
+    }
+    model = remoteModel.name
+  }
+
+  // ① 将本回合最终选定的模型名归一到目录当前名称；远程显式选择必须优先于旧会话绑定。
+  const migratedName = migrateBuiltinModelName(model)
+  if (migratedName !== model) {
+    const previousModel = model
     model = migratedName
     sessionCommands.updateSettings({ sessionId, model: migratedName })
-    logAgentEvent('info', 'session.model.migrated', { sessionId, lane, from: storedModel, to: migratedName })
+    logAgentEvent('info', 'session.model.migrated', { sessionId, lane, from: previousModel, to: migratedName })
   }
 
   if (options.requiresVision) {
@@ -111,7 +153,7 @@ export async function resolveTrustedTurnExecutionConfig(
   //    带图 turn 例外：此时的 model 是 per-turn 派生的视觉模型（见上），与用户会话绑定无关。
   //    从 language 组重绑会把图片发给非视觉模型，还会把「视觉服务缺 Key」的配置事故静默记到
   //    会话绑定上（effectiveModelForUsage 也仍停在视觉模型名），所以只允许 fail-fast。
-  if (credentials.error && !options.requiresVision) {
+  if (credentials.error && !options.requiresVision && !explicitRemoteModel) {
     const available = getAvailableModels(models, readLlmServices(db), readActiveLlmServiceIds(db))
     const preferred = resolvePreferredModelEntry(
       'language',
@@ -159,22 +201,23 @@ export async function resolveTrustedTurnExecutionConfig(
   // enableThinking 由最终档位派生（过渡期兼容字段，保留一个发布周期）。
   // 评审 B1：能力降级时额外携带降级前档位（requestedThinkingEffort），主链路把它传给装配器，
   // 由装配层照旧落 agent.profile.reasoning_degraded 审计——降级不能在装配前「静默」发生。
-  const requestedThinkingEffort = resolveThinkingEffort(
-    resolveGlobalThinkingEffort(
-      getConfigValue(db, 'config.thinkingEffort'),
-      getConfigValue(db, 'config.thinkingEnabled')
-    ),
-    session.thinkingEffort,
-    undefined
+  const globalThinkingEffort = resolveGlobalThinkingEffort(
+    getConfigValue(db, 'config.thinkingEffort'),
+    getConfigValue(db, 'config.thinkingEnabled')
   )
-  const thinkingEffort = resolveThinkingEffort(
-    resolveGlobalThinkingEffort(
-      getConfigValue(db, 'config.thinkingEffort'),
-      getConfigValue(db, 'config.thinkingEnabled')
-    ),
-    session.thinkingEffort,
-    modelEntry
-  )
+  const requestedThinkingEffort = remoteThinkingEffort ?? resolveThinkingEffort(globalThinkingEffort, session.thinkingEffort, undefined)
+  const unsupported = resolveThinkingAvailability(model, { effortUnsupportedByMemo: false }).unsupported
+  const requestedIndex = THINKING_EFFORT_LEVELS.indexOf(requestedThinkingEffort)
+  const thinkingEffort = modelEntry?.supportsThinking === false
+    ? 'off'
+    : unsupported.includes(requestedThinkingEffort)
+      ? [...THINKING_EFFORT_LEVELS.slice(0, Math.max(1, requestedIndex))].reverse().find((effort) => !unsupported.includes(effort)) ?? 'off'
+      : remoteThinkingEffort ?? resolveThinkingEffort(globalThinkingEffort, session.thinkingEffort, modelEntry)
+
+  if ((lane === 'feishu' || lane === 'wechat') && !credentials.error) {
+    const changed = session.model !== model || session.llmServiceId !== credentials.serviceId
+    if (changed) sessionCommands.updateSettings({ sessionId, model, llmServiceId: credentials.serviceId })
+  }
   return normalizeTurnExecutionConfig({
     lane,
     model,

@@ -32,6 +32,14 @@ describe('remoteAgentRegistry', () => {
     expect(countRunningRemoteAgents()).toBe(1)
   })
 
+  it('uses one session claim key for a normal Loop and a safety exact dispatch', () => {
+    expect(tryClaimRemoteSession('im-session-1', 'loop:run-1', 3)).toBe('ok')
+    expect(tryClaimRemoteSession('im-session-1', 'safety:todo-1:invocation-1', 3)).toBe('session_busy')
+    expect(countRunningRemoteAgents()).toBe(1)
+    expect(isRequestLeaseOwner('im-session-1', 'loop:run-1')).toBe(true)
+    expect(isRequestLeaseOwner('im-session-1', 'safety:todo-1:invocation-1')).toBe(false)
+  })
+
   it('is idempotent when the same (originSessionId, requestId) reclaims', () => {
     expect(tryClaimRemoteSession('s1', 'req-1', 3)).toBe('ok')
     expect(tryClaimRemoteSession('s1', 'req-1', 3)).toBe('ok')
@@ -43,6 +51,15 @@ describe('remoteAgentRegistry', () => {
     expect(tryClaimRemoteSession('s2', 'req-2', 2)).toBe('ok')
     expect(tryClaimRemoteSession('s3', 'req-3', 2)).toBe('parallel_full')
     expect(countRunningRemoteAgents()).toBe(2)
+  })
+
+  it('counts safety recovery dispatches and normal Loops against the same application cap', () => {
+    expect(tryClaimRemoteSession('desktop-session', 'loop:desktop-1', 1)).toBe('ok')
+    expect(tryClaimRemoteSession('im-session', 'safety:todo-2:invocation-2', 1)).toBe('parallel_full')
+    expect(countRunningRemoteAgents()).toBe(1)
+    releaseRemoteSession('desktop-session', 'loop:desktop-1')
+    expect(tryClaimRemoteSession('im-session', 'safety:todo-2:invocation-2', 1)).toBe('ok')
+    expect(countRunningRemoteAgents()).toBe(1)
   })
 
   it('release only succeeds for the owning requestId; is idempotent and allows re-claim', () => {

@@ -22,6 +22,7 @@ import { createSession, getUsageStepFactsForTurn as readUsageStepFactsForTurn, u
 import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import { isBrowserSessionTrustedHost, resetBrowserSessionTrustForTests } from '../browser/browserSessionTrust'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+import { createImOrchestrationToolRegistry } from '../remote/imOrchestrationTools'
 
 describe('AcceptedTurn propagation', () => {
   it('carries the immutable accepted-turn snapshot into the runtime invocation', () => {
@@ -39,6 +40,27 @@ describe('AcceptedTurn propagation', () => {
     expect(invocation.acceptedTurn).toBe(acceptedTurn)
     expect(invocation.trace.turnId).toBe(acceptedTurn.turnId)
     expect(invocation.messages.currentUserMessageId).toBe(acceptedTurn.currentUserMessageId)
+  })
+
+  it('uses frozen IM effective effort without recomputing model capability in the assembler', () => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: 'frozen-reasoning' })
+    setConfigValue(db, 'config.models', JSON.stringify([{ id: 'model-id', name: 'test-model', enabled: true, supportsThinking: false }]))
+    const acceptedTurn = Object.freeze({
+      turnId: 'frozen-reasoning-turn', requestId: 'frozen-reasoning-request', sessionId: session.id,
+      lane: 'feishu' as const, startToken: 'frozen-reasoning-start', currentUserMessageId: 'frozen-reasoning-user',
+      transcriptVersion: 1,
+      config: Object.freeze({ lane: 'feishu' as const, model: 'test-model', llmServiceId: 'service-id', thinkingEffort: 'medium' as const, requestedThinkingEffort: 'low' as const })
+    })
+    const { invocation } = assembleInvocation({
+      requestId: acceptedTurn.requestId, sessionId: session.id, lane: 'feishu', acceptedTurn,
+      model: 'test-model', modelId: 'model-id', effort: 'medium', requestedThinkingEffort: 'low',
+      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, getApiKey: async () => 'key',
+      workDir: '/tmp', userDataDir: '/tmp', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+
+    expect(invocation.profile.reasoning).toEqual({ effort: 'medium', degraded: { from: 'low', to: 'medium' } })
+    db.close()
   })
 
   it('rejects an invocation whose current user message id conflicts with the accepted turn', () => {
@@ -99,6 +121,64 @@ describe('selected directory prompt context', () => {
       expect(remote.invocation.profile.system).toBe('base system')
       db.close()
     } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+})
+
+describe('IM task orchestration invocation contract', () => {
+  it('injects the dedicated orchestration skill and Inbox/workflow tools only for IM lanes', async () => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: 'im-orchestration-assembler' })
+    const storage = createSqliteSessionStorage(db)
+    const productionRegistry = createImOrchestrationToolRegistry(db)
+    const im = assembleInvocation({
+      requestId: 'im-orchestration', sessionId: session.id, model: 'test', locale: 'zh-CN', lane: 'feishu',
+      remoteContext: { source: 'feishu' } as never, messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
+      imOrchestrationToolRegistry: productionRegistry,
+      workDir: '/tmp', userDataDir: '/tmp', appDb: db, sessionStorage: storage, getApiKey: async () => 'key',
+      emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+    const desktop = assembleInvocation({
+      requestId: 'desktop-orchestration', sessionId: session.id, model: 'test', locale: 'zh-CN', lane: 'desktop',
+      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', appDb: db,
+      sessionStorage: storage, getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+    const imSkillFragments = im.invocation.profile.skillFragments ?? []
+    expect(imSkillFragments.filter((fragment) => fragment.includes('im-task-orchestration'))).toHaveLength(1)
+    expect((desktop.invocation.profile.skillFragments ?? []).some((fragment) => fragment.includes('im-task-orchestration'))).toBe(false)
+
+    const names = productionRegistry.entries().map(({ name }) => name)
+    expect(names).toEqual(expect.arrayContaining(['im_inbox_list', 'im_inbox_claim', 'im_inbox_ack', 'im_inbox_release', 'im_inbox_renew', 'im_workflow_state_get', 'im_workflow_state_put']))
+    const { bindImInboxToolContext } = await import('../remote/imInboxToolContext')
+    const bound = bindImInboxToolContext({
+      sessionId: 'model-session', ownerId: 'model-owner', channel: 'wechat',
+      queueScope: { kind: 'desktop' }
+    }, {
+      sessionId: 'authenticated-session', lane: 'feishu',
+      remoteContext: { source: 'feishu', authOwner: 'authenticated-owner' }
+    } as never)
+    expect(bound).toEqual({
+      input: {}, sessionId: 'authenticated-session', ownerId: 'authenticated-owner',
+      queueScope: { kind: 'im', channel: 'feishu', sessionId: 'authenticated-session' }
+    })
+    db.close()
+  })
+
+  it('rejects forged or missing authenticated Inbox context', async () => {
+    const { bindImInboxToolContext } = await import('../remote/imInboxToolContext')
+    expect(bindImInboxToolContext({ sessionId: 'forged' }, {
+      sessionId: 'trusted-session', lane: 'wechat',
+      remoteContext: { source: 'wechat', authOwner: 'trusted-owner' } as never
+    })).toMatchObject({
+      input: {}, sessionId: 'trusted-session', ownerId: 'trusted-owner',
+      queueScope: { kind: 'im', channel: 'wechat', sessionId: 'trusted-session' }
+    })
+    expect(() => bindImInboxToolContext({ ownerId: 'model-owner' }, {
+      sessionId: 'trusted-session', lane: 'wechat', remoteContext: { source: 'wechat' } as never
+    })).toThrow('IM_TOOL_CONTEXT_OWNER_REQUIRED')
+    expect(() => bindImInboxToolContext({}, {
+      sessionId: 'trusted-session', lane: 'wechat',
+      remoteContext: { source: 'feishu', authOwner: 'trusted-owner' } as never
+    })).toThrow('IM_TOOL_CONTEXT_LANE_MISMATCH')
   })
 })
 
@@ -409,6 +489,54 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     expect(ports.isApprovalCandidate).toBe(composed.registeredTools.isApprovalCandidate)
     expect(ports).not.toHaveProperty('deadlineAt')
     expect(ports.isApprovalCandidate?.({ invocationId: requestId, toolCallId: 'probe', toolName: 'probe-tool', input: {} })).toBe(false)
+  })
+
+  it('executes an approved deferred RegisteredTool through the composed Hosted SafetyGate without calling a model provider', async () => {
+    const requestId = 'req-deferred-execute'
+    const turnId = 'turn-deferred-execute'
+    const routeId = 'route-deferred-execute'
+    const providerStream = vi.fn(async function* () { yield { type: 'finish' as const, reason: 'stop' as const } })
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }, {
+      providerId: 'deferred-execute-provider', stream: providerStream
+    })
+    const execute = vi.fn(async () => ({ success: true, data: 'executed without a model' }))
+    const registry = new TypedToolRegistry()
+    registry.register(definePlannedTool({ name: 'write_file', actionClass: 'write',
+      parseInput: (raw) => raw as { path: string; content: string }, plan: async (input) => input, execute }))
+    const { agentSdk } = assembleInvocation({ requestId, turnId, sessionId: 'session-deferred-execute', model: 'test-model', providerRouteId: routeId,
+      lane: 'wechat', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key',
+      agentSdkHistory: new MemoryHistory(), emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    const composed = agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['write_file']) })
+    try {
+      await expect(composed.executeDeferred({ invocationId: turnId, toolCallId: 'persisted-tool-call', toolName: 'write_file',
+        input: { path: 'deferred.txt', content: 'approved' } }, 'approval:reply-1')).resolves.toMatchObject({
+        output: { success: true, data: 'executed without a model' }, isError: false
+      })
+      expect(execute).toHaveBeenCalledOnce()
+      expect(providerStream).not.toHaveBeenCalled()
+    } finally {
+      await composed.dispose()
+    }
+  })
+
+  it('executes a deferred call with distinct persisted invocation and turn identities', async () => {
+    const routeId = 'route-deferred-distinct-identity'
+    runtime.modelProviders.register({ routeId, protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }, {
+      providerId: 'deferred-distinct-provider', stream: async function* () { yield { type: 'finish' as const, reason: 'stop' as const } }
+    })
+    const execute = vi.fn(async () => ({ success: true }))
+    const registry = new TypedToolRegistry()
+    registry.register(definePlannedTool({ name: 'write_file', actionClass: 'write', parseInput: (raw) => raw as { path: string; content: string },
+      plan: async (input) => input, execute }))
+    const { agentSdk } = assembleInvocation({ requestId: 'request-origin', turnId: 'turn-origin', sessionId: 'session-origin', model: 'test-model',
+      providerRouteId: routeId, lane: 'wechat', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', agentSdkHistory: new MemoryHistory(), emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    const composed = agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['write_file']) })
+    try {
+      await expect(composed.executeDeferred({ invocationId: 'request-origin', toolCallId: 'persisted-tool-call', toolName: 'write_file',
+        input: { path: 'deferred.txt', content: 'approved' } }, 'approval:reply-2')).resolves.toMatchObject({ isError: false })
+    } finally { await composed.dispose() }
+    expect(execute).toHaveBeenCalledOnce()
   })
 
   it('binds the assembler MCP snapshot into the Hosted RegisteredTool registry', async () => {

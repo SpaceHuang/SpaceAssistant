@@ -141,7 +141,13 @@ export type AgentTurnResult = Readonly<{
   finishReason: Extract<StreamChunk, { type: 'finish' }>['reason']
   /** Aggregate provider usage across every model request in this turn. */
   usage: Readonly<{ inputTokens: number; outputTokens: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number }>
+  parked?: true
+  parkedTodoId?: string
 }>
+
+class DeferredTurnParkedError extends Error {
+  constructor() { super('INVOCATION_PARKED_FOR_DEFERRED_APPROVAL'); this.name = 'DeferredTurnParkedError' }
+}
 
 function freezeRequestSnapshot<T>(value: T): T {
   if (!value || typeof value !== 'object') return value
@@ -219,6 +225,7 @@ export type ToolConfirmationResult = Readonly<{
   selectedMemory?: unknown
 }> & (
   | Readonly<{ kind: 'approved'; receipt: string }>
+  | Readonly<{ kind: 'deferred'; todoId: string; invocationId: string; checkpointRef: Readonly<{ checkpointId: string; workflowRevision: number }> }>
   | Readonly<{ kind: 'denied' | 'timeout' | 'unavailable' | 'cancelled' }>
 )
 export type ConfirmationPort = (input: {
@@ -438,7 +445,7 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
         try {
           const snapshot = await input.history.read(input.invocationId)
           const terminal = [...snapshot.events].reverse().find((event) =>
-            event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted'
+            event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted' || event.kind === 'invocation-parked'
           )
           if (!transcriptCommit && terminal?.kind === kind && terminal.invocationId === input.invocationId &&
             terminal.turnId === (input.turnId ?? input.invocationId) &&
@@ -451,6 +458,15 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
   let lastValidUsage: Extract<StreamChunk, { type: 'usage' }> | undefined
   try {
     const result = await runAgentTurnLoop(input, appendHistory, writer, (usage) => { lastValidUsage = usage })
+    if (result.parked) {
+      const terminalPayload = { status: 'parked' as const, reason: 'deferred-approval', todoId: result.parkedTodoId, outputText: result.text, usage: result.usage }
+      const transcriptCommit = input.sessionId && input.sessionTranscriptBaseVersion !== undefined && input.sessionTranscriptFailureMessages
+        ? { sessionId: input.sessionId, baseVersion: input.sessionTranscriptBaseVersion, outcome: 'interrupted' as const,
+            messages: input.sessionTranscriptFailureMessages.filter((message) => message.role !== 'system') as readonly Readonly<Record<string, unknown>>[] }
+        : undefined
+      await appendTerminalHistory('invocation-parked', terminalPayload, undefined, transcriptCommit)
+      return result
+    }
     await projectTurnOutput(input.observer, result)
     const terminalPayload = { status: 'completed' as const, outputText: result.text, usage: result.usage }
     const sessionLedger = input.sessionLedgerForInvocationTerminal
@@ -469,7 +485,7 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
     if (input.history && !(error instanceof AgentTurnHistoryAlreadyTerminalError)) {
       try {
         const snapshot = await input.history.read(input.invocationId)
-        const terminalExists = snapshot.events.some((event) => event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted')
+        const terminalExists = snapshot.events.some((event) => event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted' || event.kind === 'invocation-parked')
         if (!terminalExists) {
           const pending = new Map<string, { id: string; name: string; input: Record<string, unknown> }>()
           const started = new Set<string>()
@@ -487,7 +503,7 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
               }
             }
             if (event.kind === 'tool-call-started' && typeof payload?.toolCallId === 'string' && pending.has(payload.toolCallId)) started.add(payload.toolCallId)
-            if ((event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') && typeof payload?.toolCallId === 'string') {
+            if ((event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched' || event.kind === 'tool-call-deferred') && typeof payload?.toolCallId === 'string') {
               pending.delete(payload.toolCallId)
               started.delete(payload.toolCallId)
             }
@@ -1507,7 +1523,10 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
 
     const candidateSlots = new ApprovalCandidateSlots(2, Math.max(toolCalls.length, 1))
     const approvalSlots = new Semaphore(2)
+    let parkRequested = false
+    let parkedTodoId: string | undefined
     const settledTools = await mapWithConcurrency(toolCalls, input.maxConcurrentTools ?? 2, async (tool) => {
+      if (parkRequested) throw new DeferredTurnParkedError()
       const executionCall = {
         invocationId, toolCallId: tool.toolCallId, toolName: tool.toolName,
         input: structuredClone(tool.input),
@@ -1606,6 +1625,21 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           throw error
         } finally {
           if (approvalPermitHeld) { approvalSlots.release(); approvalPermitHeld = false }
+        }
+        if (result.kind === 'deferred') {
+          if (!result.todoId.trim() || result.invocationId !== input.invocationId || !result.checkpointRef.checkpointId.trim() ||
+            !Number.isInteger(result.checkpointRef.workflowRevision) || result.checkpointRef.workflowRevision <= 0) {
+            await markNotDispatched(tool, 'DEFERRED_CHECKPOINT_INVALID')
+            throw new ToolDeniedError('DEFERRED_CHECKPOINT_INVALID')
+          }
+          await appendHistory([{ kind: 'approval-deferred', payload: {
+            toolCallId: tool.toolCallId, approvalId: initialDecision.confirmationId, todoId: result.todoId, invocationId: result.invocationId,
+            checkpointId: result.checkpointRef.checkpointId, workflowRevision: result.checkpointRef.workflowRevision
+          } }])
+          toolDispatchStates.set(tool.toolCallId, 'finished')
+          parkRequested = true
+          parkedTodoId = result.todoId
+          throw new DeferredTurnParkedError()
         }
         const approved = result.kind === 'approved' && Boolean(result.receipt.trim())
         const approvalOutcome = approved ? 'approved' : result.kind === 'approved' ? 'denied' : result.kind
@@ -1765,7 +1799,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       if (toolDispatchStates.get(tool.toolCallId) !== 'pending') {
         throw new Error(`tool dispatch slot ${tool.toolCallId} has no settled result after dispatch`)
       }
-      const reason = input.request.signal?.aborted ? 'REQUEST_CANCELLED' : 'TURN_STOPPED_BEFORE_DISPATCH'
+      const reason = parkRequested ? 'DEFERRED_APPROVAL_PARKED' : input.request.signal?.aborted ? 'REQUEST_CANCELLED' : 'TURN_STOPPED_BEFORE_DISPATCH'
       await markNotDispatched(tool, reason)
       settledTools[index] = { status: 'fulfilled', value: {
         role: 'tool', toolCallId: tool.toolCallId,
@@ -1798,6 +1832,14 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       ?? rejectedTools.find(({ reason }) => reason instanceof AgentTurnCancelledError || reason instanceof AgentTurnTimedOutError)
       ?? rejectedTools[0]
     if (rejectedTool) {
+      if (rejectedTool.reason instanceof DeferredTurnParkedError) {
+        for (const tool of toolCalls) {
+          if (toolDispatchStates.get(tool.toolCallId) === 'pending') await markNotDispatched(tool, 'DEFERRED_APPROVAL_PARKED')
+        }
+        return { text, messages, modelTurns, finishReason: collected.finish.reason,
+          usage: { inputTokens, outputTokens, ...(cacheReadInputTokens ? { cacheReadInputTokens } : {}), ...(cacheCreationInputTokens ? { cacheCreationInputTokens } : {}) }, parked: true,
+          ...(parkedTodoId ? { parkedTodoId } : {}) }
+      }
       for (const tool of toolCalls) {
         if (toolDispatchStates.get(tool.toolCallId) === 'pending') {
           await markNotDispatched(tool, input.request.signal?.aborted ? 'REQUEST_CANCELLED' : 'TURN_STOPPED_BEFORE_DISPATCH')

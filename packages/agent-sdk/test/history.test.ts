@@ -256,6 +256,19 @@ describe('History Port semantics', () => {
     expect(rebuilt.get('inv-1')).toMatchObject({ state: 'interrupted', invocationId: 'inv-1' })
   })
 
+  it('requires a deferred approval to be settled before a typed parked terminal is committed', async () => {
+    const history = new MemoryHistory()
+    await expect(history.appendBatch([event('bad-park-terminal', 1, 'invocation-parked', { status: 'parked', reason: 'deferred-approval' })], 0))
+      .rejects.toThrow(/parked invocation payload/i)
+    await history.appendBatch([
+      event('park-response', 1, 'model-response-committed', { message: { role: 'assistant', toolCalls: [{ id: 'park-call', name: 'write_file', input: {} }] } }),
+      event('park-wait', 2, 'approval-waiting', { toolCallId: 'park-call', approvalId: 'park-approval', answerer: 'agent', reasonCode: 'policy', requestedAt: 10 }),
+      event('park-deferred', 3, 'approval-deferred', { toolCallId: 'park-call', approvalId: 'park-approval', todoId: 'park-todo', invocationId: 'inv-1', checkpointId: 'checkpoint-1', workflowRevision: 2 })
+    ], 0)
+    await expect(history.appendBatch([event('park-terminal', 4, 'invocation-parked', { status: 'parked', reason: 'deferred-approval', todoId: 'park-todo' })], 3))
+      .resolves.toMatchObject({ version: 4 })
+  })
+
   it('rebuilds every invocation terminal status, including denied and cancelled payloads', () => {
     const snapshot = (kind: HistoryEvent['kind'], payload: unknown) => ({
       invocationId: 'inv-terminal', version: 1, schemaVersion: 1,

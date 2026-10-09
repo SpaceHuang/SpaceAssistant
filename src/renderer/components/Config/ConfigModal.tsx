@@ -22,7 +22,7 @@ import { DEFAULT_FEISHU_CONFIG, type FeishuConfig, type WorkDirProfile } from '.
 
 import { DEFAULT_WECHAT_CONFIG, type WeChatConfig } from '../../../shared/wechatTypes'
 
-import { getModelIds } from '../../../shared/llmModelConfig'
+import { getAvailableModels, getModelIds, resolvePreferredModelEntry } from '../../../shared/llmModelConfig'
 
 import {
 
@@ -97,6 +97,7 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { changeAppLocale, persistLocaleToBackend } from '../../i18n/localeSync'
 import { resolveWorkDirProfileForSave } from '../../services/workDirSessionSync'
 import { StorageSettingsTab } from './StorageSettingsTab'
+import { isRemoteSettingsKey, REMOTE_SETTINGS_KEYS } from './remoteSettingsNav'
 
 const SETTINGS_SECTION_KEYS = ['general', 'models', 'skills', 'wiki', 'remoteIm', 'feishu', 'wechat', 'butler', 'storage'] as const
 
@@ -160,6 +161,16 @@ export function ConfigSettingsPage() {
   const [models, setModels] = useState<ModelEntry[]>([])
   const modelIds = useMemo(() => getModelIds(models), [models])
   const llmDrafts = useLlmServiceDrafts(open, cfg, modelIds)
+  const remoteAvailableModels = useMemo(() => {
+    const services = Object.values(llmDrafts.state.drafts).map((draft) => ({
+      id: draft.id,
+      name: draft.name,
+      baseUrl: draft.baseUrl,
+      apiKeyPresent: draft.apiKeyPresent,
+      supportedModelIds: draft.supportedModelIds
+    }))
+    return getAvailableModels(models, services, llmDrafts.state.activeIds)
+  }, [llmDrafts.state.activeIds, llmDrafts.state.drafts, models])
 
   const [preferredLanguageModelId, setPreferredLanguageModelId] = useState('')
   const [preferredFastLanguageModelId, setPreferredFastLanguageModelId] = useState('')
@@ -914,7 +925,15 @@ export function ConfigSettingsPage() {
             preferredFastLanguageModelId={preferredFastLanguageModelId}
             preferredVisionModelId={preferredVisionModelId}
             onPreferredChange={(patch) => {
-              if (patch.preferredLanguageModelId !== undefined) setPreferredLanguageModelId(patch.preferredLanguageModelId)
+              if (patch.preferredLanguageModelId !== undefined) {
+                setPreferredLanguageModelId(patch.preferredLanguageModelId)
+                setFeishuUi((prev) => prev.remoteModelSelectionMode === 'explicit'
+                  ? prev
+                  : { ...prev, remoteDefaultModelId: patch.preferredLanguageModelId })
+                setWechatUi((prev) => prev.remoteModelSelectionMode === 'explicit'
+                  ? prev
+                  : { ...prev, remoteDefaultModelId: patch.preferredLanguageModelId })
+              }
               if (patch.preferredFastLanguageModelId !== undefined) {
                 setPreferredFastLanguageModelId(patch.preferredFastLanguageModelId)
               }
@@ -997,7 +1016,10 @@ export function ConfigSettingsPage() {
           <RemoteImCommonSettings
             value={feishuUi}
             onChange={applyRemoteImCommonLocal}
-            models={models}
+            models={remoteAvailableModels}
+            preferredLanguageModelId={resolvePreferredModelEntry(
+              'language', models, remoteAvailableModels, preferredLanguageModelId
+            )?.id ?? ''}
             allowRemoteBrowserSessions={browserUi.allowRemoteSessions}
             onAllowRemoteBrowserSessionsChange={(allowRemoteSessions) =>
               setBrowserUi((prev) => ({ ...prev, allowRemoteSessions }))
@@ -1127,7 +1149,7 @@ export function ConfigSettingsPage() {
 
             </div>
 
-            {settingsSections.slice(2).map((section) => (
+            {settingsSections.filter((section) => !isRemoteSettingsKey(section.key)).slice(2).map((section) => (
 
               <button
 
@@ -1148,6 +1170,24 @@ export function ConfigSettingsPage() {
               </button>
 
             ))}
+
+            <div className="config-settings-page__nav-group" role="group" aria-label={tCommon('settings.remoteOperations')}>
+              <div className="config-settings-page__nav-group-label">{tCommon('settings.remoteOperations')}</div>
+              {REMOTE_SETTINGS_KEYS.map((key) => {
+                const section = settingsSections.find((item) => item.key === key)!
+                return (
+                  <button
+                    key={section.key}
+                    type="button"
+                    className={`config-settings-page__nav-item config-settings-page__nav-item--sub${settingsTabKey === section.key ? ' config-settings-page__nav-item--active' : ''}`}
+                    aria-current={settingsTabKey === section.key ? 'page' : undefined}
+                    onClick={() => dispatch(setSettingsActiveTab(section.key))}
+                  >
+                    {section.label}
+                  </button>
+                )
+              })}
+            </div>
 
           </nav>
 

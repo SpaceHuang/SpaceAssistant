@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { ConfirmationPort } from '../../packages/agent-sdk/src/turn'
+import type { ConfirmationPort, ToolConfirmationResult } from '../../packages/agent-sdk/src/turn'
 import type { ConfirmOutcome, ConfirmRequest, ConfirmationChannel } from '../../src/shared/confirmation/types'
 
 export type GateConfirmationContext = Readonly<{
@@ -49,6 +49,13 @@ export function createAgentSdkConfirmationPort(input: {
     context: GateConfirmationContext,
     selectedMemory?: unknown
   ): void
+  defer?(
+    call: Parameters<ConfirmationPort>[0]['call'],
+    outcome: ToolConfirmationResult,
+    confirmation: Parameters<ConfirmationPort>[0],
+    context: GateConfirmationContext,
+    primaryOutcome: ConfirmOutcome
+  ): Promise<Extract<ToolConfirmationResult, { kind: 'deferred' }> | undefined>
   fallback?(
     call: Parameters<ConfirmationPort>[0]['call'],
     confirmation: Parameters<ConfirmationPort>[0],
@@ -113,6 +120,15 @@ export function createAgentSdkConfirmationPort(input: {
         (result.outcome.cause === 'unavailable' || result.outcome.cause === 'timeout') &&
         result.outcome.answererKind === 'agent' && !confirmation.signal?.aborted && input.fallback) {
         outcome = await input.fallback(confirmation.call, confirmation, confirmation.context as GateConfirmationContext, result.outcome) ?? outcome
+      }
+      if (outcome.kind === 'approved' && outcome.answerer === 'agent' && confirmation.context.facts.actionClass === 'outbound') {
+        outcome = { kind: 'denied', answerer: 'agent', cause: 'rules-violated', userMessage: '外发动作必须由真人逐次确认。' }
+      }
+      if ('outcome' in result && (outcome as { answerer?: unknown }).answerer === 'agent' &&
+        !confirmation.signal?.aborted && input.defer) {
+        const deferred = await input.defer(confirmation.call, outcome, confirmation,
+          confirmation.context as GateConfirmationContext, result.outcome)
+        if (deferred) return deferred
       }
       if (outcome.kind === 'approved') input.onApproved?.(confirmation.call, outcome, confirmation, confirmation.context as GateConfirmationContext, outcome.selectedMemory)
       if (outcome.kind === 'denied' && outcome.answerer === 'user' && normalizedTarget) {

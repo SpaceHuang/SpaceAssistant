@@ -503,7 +503,7 @@ describe('agent canonical history migration', () => {
 
     runMigrations(conn)
 
-    expect(DB_SCHEMA_VERSION).toBe(54)
+    expect(DB_SCHEMA_VERSION).toBe(82)
     expect(conn.prepare('PRAGMA table_info(turns)').all()).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'accepted_input_history_version', dflt_value: '0' })
     ]))

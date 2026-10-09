@@ -31,6 +31,7 @@ import { createHostTranslator } from '../i18n/hostTranslate'
 import { APP_VERSION } from '../../src/shared/appMeta'
 import { rejectPendingConfirmsForToolAcrossLanes } from '../toolConfirmRegistry'
 import { revokeToolForAllLanes } from '../toolRevocationRegistry'
+import { remoteAuthorizationRegistry } from '../remote/remoteAuthorizationRegistry'
 
 export function registerConfigIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
 const recordSettings = makeRecordSettings(ctx)
@@ -198,6 +199,9 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       const atomicKeySave = payload.llmServices !== undefined &&
         Object.values(payload.llmServiceKeys ?? {}).some((key) => typeof key === 'string' && key.trim().length > 0)
       const previousWorkDir = ctx.getWorkDir()
+      const previousWorkDirProfiles = getConfigValue(ctx.db, CONFIG_KEYS.workDirProfiles) ?? '[]'
+      const previousActiveProfileId = getConfigValue(ctx.db, CONFIG_KEYS.activeWorkDirProfileId) ?? ''
+      let workDirAuthorizationChanged = false
       const toolsToRevoke = new Set<string>()
       let localeToRebuild: AppConfig['locale'] | undefined
       let legacyApiKeyToSet: string | undefined
@@ -302,6 +306,7 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       if (payload.thinkingEffort !== undefined) setConfigValue(ctx.db, CONFIG_KEYS.thinkingEffort, payload.thinkingEffort)
       if (payload.workDir !== undefined && payload.workDirProfiles === undefined) {
         setConfigValue(ctx.db, CONFIG_KEYS.workDir, payload.workDir)
+        if (path.resolve(payload.workDir) !== path.resolve(previousWorkDir)) workDirAuthorizationChanged = true
       }
       if (payload.apiKey !== undefined && payload.apiKey.trim() && payload.llmServices === undefined) {
         /* legacy apiKey without llmServices handled above */
@@ -373,6 +378,9 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       if (payload.feishu !== undefined) {
         // §5.6-6：链路硬约束/确认开关变更落 settings.policy-change（含新旧值）
         const prevFeishu = readFeishuConfigFromDb(ctx.db)
+        const feishuAuthorizationChanged = (payload.feishu.enabled === false && prevFeishu.enabled)
+          || (payload.feishu.remoteEnabled === false && prevFeishu.remoteEnabled)
+          || (payload.feishu.remoteSenderAllowlist !== undefined && JSON.stringify(payload.feishu.remoteSenderAllowlist ?? []) !== JSON.stringify(prevFeishu.remoteSenderAllowlist ?? []))
         for (const key of [
           'remoteAllowLocalWrite',
           'remoteDenyOutbound',
@@ -389,6 +397,10 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       }
       if (payload.wechat !== undefined) {
         const prevWechat = readWeChatConfigFromDb(ctx.db)
+        const wechatAuthorizationChanged = (payload.wechat.enabled === false && prevWechat.enabled)
+          || (payload.wechat.remoteEnabled === false && prevWechat.remoteEnabled)
+          || (payload.wechat.loggedIn === false && prevWechat.loggedIn)
+          || (payload.wechat.remoteSenderAllowlist !== undefined && JSON.stringify(payload.wechat.remoteSenderAllowlist ?? []) !== JSON.stringify(prevWechat.remoteSenderAllowlist ?? []))
         for (const key of [
           'remoteAllowLocalWrite',
           'remoteDenyOutbound',
@@ -413,9 +425,16 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
           payload.workDirProfiles.find((p) => p.isDefault)?.id ??
           payload.workDirProfiles[0]?.id ??
           ''
+        const previousProfiles = (() => { try { return JSON.parse(previousWorkDirProfiles) as AppConfig['workDirProfiles'] } catch { return [] } })()
+        workDirAuthorizationChanged = payload.activeWorkDirProfileId !== undefined && activeId !== previousActiveProfileId
+          || payload.workDirProfiles.some((profile) => {
+            const previous = previousProfiles.find((item) => item.id === profile.id)
+            return previous !== undefined && (path.resolve(profile.path) !== path.resolve(previous.path) || Boolean(profile.sensitive) !== Boolean(previous.sensitive))
+          })
         ctx.workDirManager.persistProfiles(payload.workDirProfiles, activeId)
       }
       if (payload.activeWorkDirProfileId !== undefined && payload.workDirProfiles === undefined) {
+        if (payload.activeWorkDirProfileId !== previousActiveProfileId) workDirAuthorizationChanged = true
         setConfigValue(ctx.db, CONFIG_KEYS.activeWorkDirProfileId, payload.activeWorkDirProfileId)
       }
       if (payload.maxParallelChatSessions !== undefined) {
@@ -507,6 +526,10 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
       for (const toolName of toolsToRevoke) {
         revokeToolForAllLanes(toolName)
         rejectPendingConfirmsForToolAcrossLanes(toolName)
+      }
+      if (workDirAuthorizationChanged) {
+        remoteAuthorizationRegistry.invalidate('feishu', 'workdir_changed')
+        remoteAuthorizationRegistry.invalidate('wechat', 'workdir_changed')
       }
       if (localeToRebuild !== undefined) rebuildAppMenu(createHostTranslator({ locale: localeToRebuild }))
       ctx.db.flushSave()

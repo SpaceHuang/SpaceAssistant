@@ -26,6 +26,14 @@ describe('feishuInboundParser', () => {
     expect(msg?.messageId).toBe('m1')
   })
 
+  it('retains the platform parent message id for approval receipt binding', () => {
+    const msg = parseCompactInboundEvent({
+      message_id: 'reply-1', parent_id: 'approval-notice-1', chat_id: 'c1', chat_type: 'p2p',
+      sender_open_id: 'u1', content: JSON.stringify({ text: '批准 07' })
+    })
+    expect(msg?.replyToMessageId).toBe('approval-notice-1')
+  })
+
   it('retains previously supported compact field aliases', () => {
     const msg = parseCompactInboundEvent({
       messageId: 'm-legacy', chatId: 'c-legacy', chatType: 'p2p', sender_open_id: 'ou_legacy',

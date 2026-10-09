@@ -147,6 +147,7 @@ export interface WeChatInboundMessage {
   type: 'text' | 'image' | 'voice' | 'file' | 'video'
   timestamp: string
   contextToken: string
+  quotedMessageId?: string
   images?: WeChatMediaRef[]
   files?: WeChatMediaRef[]
   voices?: WeChatMediaRef[]

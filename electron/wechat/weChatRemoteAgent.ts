@@ -25,15 +25,10 @@ export async function runWeChatRemoteAgent(ctx: {
   /** 本回合真实 Turn ID（C17）：供用量统计落库。 */
   turnId?: string
   acceptedTurn?: AcceptedTurn
-  /** 冻结执行配置里的 LLM 服务 ID（DIM3）。 */
-  llmServiceId?: string
   wechatConfig: WeChatConfig
   workDir: string
   workDirManager: WorkDirManager
   userDataDir: string
-  getApiKey: () => Promise<string | null>
-  getBaseUrl: () => string
-  getModel: () => string
   botService: WeChatBotService
   imChannel: WeChatImChannel
   getToolsConfig: () => ToolsConfig
@@ -42,9 +37,11 @@ export async function runWeChatRemoteAgent(ctx: {
   getShellConfig?: () => ShellConfig
   remoteContext: WeChatRemoteContext
   emitFactEvent?: (event: AssistantFactEvent) => void
+  confirmationAdapter?: NonNullable<Parameters<typeof runImRemoteAgent>[0]['confirmationAdapter']>
+  taskControlSafetyPort?: Parameters<typeof runImRemoteAgent>[0]['taskControlSafetyPort']
   inboundRaw: IncomingMessage
   userId: string
-}): Promise<{ summary: string; pendingConfirm: boolean; ok: boolean }> {
+}): Promise<{ summary: string; pendingConfirm: boolean; ok: boolean; parked?: true }> {
   logWeChatCliEvent('info', 'wechat.agent.remote.start', {
     sessionId: ctx.sessionId,
     messageId: ctx.replyMessageId,
@@ -58,13 +55,9 @@ export async function runWeChatRemoteAgent(ctx: {
     requestId: ctx.requestId,
     turnId: ctx.turnId,
     acceptedTurn: ctx.acceptedTurn,
-    llmServiceId: ctx.llmServiceId,
     workDir: ctx.workDir,
     workDirManager: ctx.workDirManager,
     userDataDir: ctx.userDataDir,
-    getApiKey: ctx.getApiKey,
-    getBaseUrl: ctx.getBaseUrl,
-    getModel: ctx.getModel,
     remoteContext: ctx.remoteContext,
     getToolsConfig: ctx.getToolsConfig,
     getBrowserConfig: ctx.getBrowserConfig,
@@ -118,5 +111,7 @@ export async function runWeChatRemoteAgent(ctx: {
       logWeChatCliEvent('error', 'wechat.agent.remote.error', { sessionId: ctx.sessionId, error })
     }
     ,emitFactEvent: ctx.emitFactEvent
+    ,confirmationAdapter: ctx.confirmationAdapter
+    ,taskControlSafetyPort: ctx.taskControlSafetyPort
   })
 }

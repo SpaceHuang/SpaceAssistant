@@ -19,7 +19,23 @@ describe('imTypes', () => {
     expect(merged.remoteAllowLocalWrite).toBe(true)
     expect(merged.remoteBrowserRequiresConfirm).toBe(false)
     expect(merged.remoteRateLimitPerMinute).toBe(60)
+    expect(merged.remoteModelSelectionMode).toBe('inherit')
+    expect(merged.remoteThinkingEffort).toBe('low')
     expect(merged.remoteProgressMode).toBe(DEFAULT_REMOTE_IM_COMMON_CONFIG.remoteProgressMode)
+  })
+
+  it('keeps remote model selection mode and thinking effort independent from security migration', () => {
+    const merged = mergeRemoteImCommonConfig({
+      remoteModelSelectionMode: 'explicit',
+      remoteDefaultModelId: 'catalog-model-1',
+      remoteThinkingEffort: 'high'
+    })
+    expect(merged).toMatchObject({
+      remoteModelSelectionMode: 'explicit',
+      remoteDefaultModelId: 'catalog-model-1',
+      remoteThinkingEffort: 'high'
+    })
+    expect(merged.remoteSecurityConfigVersion).toBeUndefined()
   })
 
   it('deep-copies allowlist', () => {

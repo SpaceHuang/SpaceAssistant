@@ -11,6 +11,9 @@ import {
   readLlmServices,
 } from './llmServiceResolver';
 import { decryptSecret } from './secureApiKey';
+import { remoteAuthorizationRegistry } from './remote/remoteAuthorizationRegistry';
+import { createRemoteAuthorizationEpochStore } from './remote/remoteAuthorizationEpochStore';
+import { createDeferredTodoStore } from './confirmation/deferredTodoStore';
 
 vi.mock('electron', () => ({
   app: { getLocale: () => 'zh-CN' },
@@ -180,5 +183,53 @@ describe('config:set API Key transaction boundary', () => {
     await expect(ipc.getHandler('config:get')!()).resolves.toMatchObject({
       apiKeyAccessUpgradeNoticeRequired: true,
     });
+  });
+
+  it('invalidates both remote channels when a workdir profile boundary changes', async () => {
+    const temp = createTempDatabase('sa-config-workdir-revoke-');
+    cleanup = temp.cleanup;
+    const db = temp.db;
+    setConfigValue(db, 'config.workDirProfiles', JSON.stringify([{ id: 'p1', name: 'Project', path: '/project/a', isDefault: true, sensitive: false }]));
+    setConfigValue(db, 'config.activeWorkDirProfileId', 'p1');
+    const invalidate = vi.spyOn(remoteAuthorizationRegistry, 'invalidate');
+    const ipc = makeIpc();
+    registerConfigIpc(ipc as unknown as IpcMain, makeContext(db));
+    await ipc.getHandler('config:set')!({}, {
+      workDirProfiles: [{ id: 'p1', name: 'Project', path: '/project/private', isDefault: true, sensitive: true }],
+      activeWorkDirProfileId: 'p1'
+    });
+    expect(invalidate).toHaveBeenCalledWith('feishu', 'workdir_changed');
+    expect(invalidate).toHaveBeenCalledWith('wechat', 'workdir_changed');
+    invalidate.mockRestore();
+  });
+
+  it('persists channel close and owner changes across re-enable with real todo storage', async () => {
+    const temp = createTempDatabase('sa-config-channel-revocation-');
+    cleanup = temp.cleanup;
+    const db = temp.db;
+    setConfigValue(db, 'config.feishu', JSON.stringify({ enabled: true, remoteEnabled: true, remoteSenderAllowlist: ['owner-a'] }));
+    const epochStore = createRemoteAuthorizationEpochStore(db);
+    remoteAuthorizationRegistry.bindPersistentEpochStore(epochStore);
+    const todos = createDeferredTodoStore(db);
+    const rule = { ruleId: 'write', factsHash: 'b'.repeat(64) };
+    todos.create({ todoId: 'close-reenable-todo', channel: 'feishu', identityKey: 'identity-a', ownerId: 'owner-a', authorizationEpoch: 1,
+      rule, invocationId: 'close-reenable-inv', workflowId: 'wf', taskId: 'task', stepId: 'step', planRevision: 1,
+      originSessionId: 'origin', createdAt: 1, expiresAt: Date.now() + 60_000 });
+    const unregister = remoteAuthorizationRegistry.registerDeferredTodoInvalidator({
+      invalidateByAuthorizationEpoch: (channel, epoch) => { todos.invalidateOlderAuthorizationEpochs(channel, epoch); }
+    }, 'config-ipc-real-todos');
+    const ipc = makeIpc();
+    registerConfigIpc(ipc as unknown as IpcMain, makeContext(db));
+    const setConfig = ipc.getHandler('config:set')!;
+
+    await setConfig({}, { feishu: { remoteEnabled: false } });
+    expect(epochStore.current('feishu')).toBe(2);
+    expect(todos.get('close-reenable-todo', { channel: 'feishu', identityKey: 'identity-a', ownerId: 'owner-a', authorizationEpoch: 1, rule })?.status).toBe('invalidated');
+    await setConfig({}, { feishu: { remoteEnabled: true } });
+    expect(epochStore.current('feishu')).toBe(2);
+    await setConfig({}, { feishu: { remoteSenderAllowlist: ['owner-b'] } });
+    expect(epochStore.current('feishu')).toBe(3);
+    expect(todos.claimForDispatch('close-reenable-todo', { channel: 'feishu', identityKey: 'identity-a', ownerId: 'owner-a', authorizationEpoch: 1, rule })).toBeNull();
+    unregister();
   });
 });

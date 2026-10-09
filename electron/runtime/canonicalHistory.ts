@@ -239,7 +239,7 @@ export type CanonicalSessionSnapshot = Readonly<{
 export function canonicalSessionTranscriptEvents(events: readonly HistoryEvent[]): HistoryEvent[] {
   const transcriptEvents: HistoryEvent[] = []
   for (const event of events) {
-    if (event.kind === 'tool-call-started' || event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') continue
+    if (event.kind === 'tool-call-started' || event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched' || event.kind === 'approval-deferred') continue
     if (event.kind === 'model-response-committed') {
       const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
         ? event.payload as Record<string, unknown> : undefined
@@ -419,12 +419,13 @@ export function rebuildClaudeMessagesFromHistory(
         ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {}), ...(message.id ? { id: message.id } : {}) })
       continue
     }
-    if (event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') {
+    if (event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched' || event.kind === 'approval-deferred') {
       const payload = event.payload as { toolCallId?: unknown; replayContent?: unknown; isError?: unknown }
       if (typeof payload?.toolCallId !== 'string' || !pendingToolCalls.has(payload.toolCallId)) {
         throw new Error(`history tool result has no committed call: ${String(payload?.toolCallId)}`)
       }
       pendingToolCalls.delete(payload.toolCallId)
+      if (event.kind === 'approval-deferred') continue
       const notDispatched = event.kind === 'tool-call-not-dispatched'
       replayResults.set(payload.toolCallId, {
         type: 'tool_result', tool_use_id: payload.toolCallId,

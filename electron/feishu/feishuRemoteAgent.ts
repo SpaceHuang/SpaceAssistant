@@ -24,15 +24,10 @@ export async function runFeishuRemoteAgent(ctx: {
   /** 本回合真实 Turn ID（C17）：供用量统计落库。 */
   turnId?: string
   acceptedTurn?: AcceptedTurn
-  /** 冻结执行配置里的 LLM 服务 ID（DIM3）。 */
-  llmServiceId?: string
   feishuConfig: FeishuConfig
   workDir: string
   workDirManager: WorkDirManager
   userDataDir: string
-  getApiKey: () => Promise<string | null>
-  getBaseUrl: () => string
-  getModel: () => string
   runner: LarkCliRunner
   imChannel: FeishuImChannel
   getToolsConfig: () => ToolsConfig
@@ -41,7 +36,9 @@ export async function runFeishuRemoteAgent(ctx: {
   getShellConfig?: () => ShellConfig
   remoteContext: FeishuRemoteContext
   emitFactEvent?: (event: AssistantFactEvent) => void
-}): Promise<{ summary: string; pendingConfirm: boolean; ok: boolean }> {
+  confirmationAdapter?: NonNullable<Parameters<typeof runImRemoteAgent>[0]['confirmationAdapter']>
+  taskControlSafetyPort?: Parameters<typeof runImRemoteAgent>[0]['taskControlSafetyPort']
+}): Promise<{ summary: string; pendingConfirm: boolean; ok: boolean; parked?: true }> {
   logFeishuCliEvent('info', 'feishu.agent.remote.start', {
     sessionId: ctx.sessionId,
     requestId: ctx.requestId,
@@ -56,13 +53,9 @@ export async function runFeishuRemoteAgent(ctx: {
     requestId: ctx.requestId,
     turnId: ctx.turnId,
     acceptedTurn: ctx.acceptedTurn,
-    llmServiceId: ctx.llmServiceId,
     workDir: ctx.workDir,
     workDirManager: ctx.workDirManager,
     userDataDir: ctx.userDataDir,
-    getApiKey: ctx.getApiKey,
-    getBaseUrl: ctx.getBaseUrl,
-    getModel: ctx.getModel,
     remoteContext: ctx.remoteContext,
     getToolsConfig: ctx.getToolsConfig,
     getBrowserConfig: ctx.getBrowserConfig,
@@ -103,5 +96,7 @@ export async function runFeishuRemoteAgent(ctx: {
       logFeishuCliEvent('error', 'feishu.agent.remote.error', { error, sessionId: ctx.sessionId })
     }
     ,emitFactEvent: ctx.emitFactEvent
+    ,confirmationAdapter: ctx.confirmationAdapter
+    ,taskControlSafetyPort: ctx.taskControlSafetyPort
   })
 }

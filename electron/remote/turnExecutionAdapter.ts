@@ -3,7 +3,7 @@ import type { TurnStarted } from '../../src/shared/turnCoordinator'
 import type { TurnRuntime } from '../turnRuntime'
 import { HostedTurnFinalizedError } from '../runtime/hostedTurnFinalization'
 
-type RemoteResult = { ok: boolean; error?: string; outcome?: 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'interrupted' | 'commit-uncertain' }
+type RemoteResult = { ok: boolean; error?: string; parked?: boolean; outcome?: 'completed' | 'parked' | 'failed' | 'cancelled' | 'timed-out' | 'interrupted' | 'commit-uncertain' }
 
 function persistedUsageFromRemoteResult(result: RemoteResult): unknown {
   if (!('usageJson' in result) || typeof result.usageJson !== 'string') return undefined
@@ -64,6 +64,11 @@ export async function executeRemoteTurn<T extends RemoteResult>(args: {
           outcome: 'commit-uncertain',
           error: { code: 'SESSION_TRANSCRIPT_COMMIT_UNCERTAIN', message: result!.error ?? 'Session transcript commit is uncertain' }
         }
+      }
+      if (result!.parked) {
+        args.runtime!.consumeForRequest(args.requestId, { type: 'source-parked' }, args.prepared!.turnId)
+        resultsForRuntime(args.runtime!).set(args.prepared!.turnId, result!)
+        return { outcome: 'parked' as const }
       }
       const terminal: AssistantFactEvent = result!.ok
         ? { type: 'source-completed' }

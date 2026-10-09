@@ -39,6 +39,9 @@ import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { createSpillStore } from '../storage/spillStore'
+import { createPersistentDeferredTodoAdmission } from '../confirmation/deferredTodoAdmission'
+import { createDeferredApprovalAdapter } from '../confirmation/deferredApprovalAdapter'
+import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 
 const route = { routeId: 'registered-tools', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }
 const requestId = 'req-sdk-host'
@@ -48,6 +51,117 @@ const invocationId = 'inv-sdk-host'
 async function* stream(...chunks: StreamChunk[]) { yield* chunks }
 
 describe('createRegisteredAgentTurnTools', () => {
+  it('executes a deferred original tool without a model turn, after fresh recheck and one-shot permit admission', async () => {
+    const execute = vi.fn(async () => ({ success: true, data: 'approved execution' }))
+    const registry = new TypedToolRegistry()
+    registry.register(defineDirectTool({ name: 'write_file', actionClass: 'write', parseInput: (raw) => raw, execute }))
+    const permits = new InMemorySafetyPermitStore()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('deferred-invocation', ['write_file'])
+    const policyEvaluate = vi.fn(async (binding) => ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion }))
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: {
+      evaluate: policyEvaluate
+    } })
+    const tools = createRegisteredAgentTurnTools({
+      requestId: 'deferred-resume-request', turnId: 'deferred-resume-turn', registry, permits,
+      admission: new InMemoryExecutionAdmissionCoordinator(),
+      createExecutionContext: () => ({ sessionId: 'deferred-session', lane: 'wechat', toolUserConfirmed: false }),
+      resolveAuthorizationVersion: () => 'policy-v2'
+    })
+    const call = { invocationId: 'deferred-invocation', toolCallId: 'deferred-tool-call', toolName: 'write_file', input: { path: 'report.txt', content: 'approved' } }
+    const recheck = vi.fn(async (_initial, binding) => {
+      const initialDecision = await safetyGate.evaluate(_initial)
+      if (initialDecision.kind !== 'allow') return { kind: 'deny' as const, reasonCode: 'POLICY_DENY' }
+      const result = await safetyGate.authorize(binding)
+      return result.kind === 'allow' ? result : { kind: 'deny' as const, reasonCode: 'POLICY_DENY' }
+    })
+
+    const result = await tools.executeDeferred(call, { confirmationReceipt: 'approval:reply-1', authorize: recheck })
+
+    expect(recheck).toHaveBeenCalledOnce()
+    expect(policyEvaluate.mock.calls.map(([binding]) => binding.phase)).toEqual(['initial-compat', 'recheck'])
+    expect(recheck.mock.calls[0]?.[0]).toMatchObject({ phase: 'initial-compat', invocationId: 'deferred-invocation' })
+    expect(recheck.mock.calls[0]?.[1]).toMatchObject({ requestId: 'deferred-resume-request', turnId: 'deferred-resume-turn',
+      invocationId: 'deferred-invocation', toolCallId: 'deferred-tool-call', phase: 'recheck' })
+    expect(execute).toHaveBeenCalledOnce()
+    expect(result).toMatchObject({ output: { success: true, data: 'approved execution' }, isError: false })
+  })
+
+  it('IM 异步审批持久化待办并 park invocation，不继续模型循环或执行原工具', async () => {
+    const db = createMemoryAppDb()
+    const execute = vi.fn(async () => ({ success: true, data: 'must not execute' }))
+    const readExecute = vi.fn(async () => ({ success: true, data: 'must not execute after park' }))
+    const registry = new TypedToolRegistry()
+    registry.register(defineDirectTool({ name: 'write_file', actionClass: 'write', parseInput: (raw) => raw, execute }))
+    registry.register(defineDirectTool({ name: 'read_file', actionClass: 'read', parseInput: (raw) => raw, execute: readExecute }))
+    const permits = new InMemorySafetyPermitStore()
+    const tools = createRegisteredAgentTurnTools({
+      requestId, turnId, registry, permits, admission: new InMemoryExecutionAdmissionCoordinator(),
+      createExecutionContext: () => ({ sessionId: 'async-session', lane: 'wechat' }), resolveAuthorizationVersion: () => 'policy-v1'
+    })
+    const now = Date.now()
+    const todo = {
+      todoId: 'todo-real-turn', invocationId, reservationId: 'reservation-real-turn', channel: 'wechat' as const,
+      identityKey: 'identity-real-turn', ownerId: 'owner-real-turn', authorizationEpoch: 1,
+      rule: { ruleId: 'write-rule', factsHash: 'a'.repeat(64) }, workflowId: 'workflow-real-turn', taskId: 'task-real-turn',
+      stepId: 'step-real-turn', planRevision: 1, originSessionId: 'async-session', createdAt: now,
+      expiresAt: now + 60_000, updatedAt: now
+    }
+    const persistentDispatch = vi.fn()
+    const admission = createPersistentDeferredTodoAdmission(db, { dispatch: persistentDispatch, sendReceipt: vi.fn() })
+    const intentStore = createSecurityActionIntentStore(db)
+    const deferredApproval = createDeferredApprovalAdapter({ admission, dispatch: persistentDispatch, intentStore })
+    const approval = { ok: true as const, verdict: { kind: 'approve' as const, reason: { summary: 'approved' } } }
+    const providers = new ModelProviderRegistry()
+    const responses = [
+      stream({ type: 'tool-call', toolCallId: 'async-write', toolName: 'write_file', input: { path: 'report.txt' } },
+        { type: 'tool-call', toolCallId: 'blocked-read', toolName: 'read_file', input: { path: 'report.txt' } },
+        { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }),
+      stream({ type: 'text-delta', text: '待办已创建' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
+    ]
+    providers.register(route, { providerId: 'async-real-turn', stream: () => responses.shift()! })
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['write_file', 'read_file'])
+    const safetyGate = new SafetyGate({ capabilities, permitStore: permits, policy: {
+      evaluate: async () => ({ kind: 'ask' as const, confirmationId: 'async-write', answerer: 'agent' as const, reasonCode: 'write-policy' })
+    } })
+    const history = new MemoryHistory()
+
+    try {
+      await runAgentTurn({
+        registry: providers, routeId: route.routeId, invocationId, turnId,
+        request: { messages: [{ role: 'user', content: 'write report' }], maxTokens: 50 },
+        safetyGate, prepareTool: tools.prepareTool, toolExecution: tools.toolExecution, history, maxModelTurns: 2, maxConcurrentTools: 1,
+        confirmation: async () => {
+          await deferredApproval.resolve({ approval, eligibility: { kind: 'eligible', todoId: todo.todoId }, todo,
+            ttlMs: 60_000, checkpoint: { checkpointId: 'checkpoint-real-turn', workflowRevision: 2 },
+            policy: { lane: 'wechat', enabled: true, actionClass: 'write', gate: 'eligible', evidence: { kind: 'material', restrictionsComplete: false } } })
+          expect(intentStore.authorizeResume(invocationId)).toBe(true)
+          return { kind: 'deferred', todoId: todo.todoId, invocationId, checkpointRef: { checkpointId: 'checkpoint-real-turn', workflowRevision: 2 } }
+        }
+      })
+
+      expect(execute).not.toHaveBeenCalled()
+      expect(readExecute).not.toHaveBeenCalled()
+      expect(admission.todoStore.get(todo.todoId, {
+        channel: 'wechat', identityKey: todo.identityKey, ownerId: todo.ownerId, authorizationEpoch: 1, rule: todo.rule
+      })).toMatchObject({ status: 'pending', invocationId })
+      expect(intentStore.get(invocationId)).toMatchObject({ state: 'checkpoint_committed', todoId: todo.todoId, checkpointId: 'checkpoint-real-turn' })
+      expect(persistentDispatch).not.toHaveBeenCalled()
+      expect((await history.read(invocationId)).events).toContainEqual(expect.objectContaining({
+        kind: 'approval-deferred', payload: { toolCallId: 'async-write', approvalId: 'async-write', todoId: todo.todoId, invocationId, checkpointId: 'checkpoint-real-turn', workflowRevision: 2 }
+      }))
+      expect(responses).toHaveLength(1)
+      expect((await history.read(invocationId)).events).toContainEqual(expect.objectContaining({
+        kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'blocked-read', reason: 'DEFERRED_APPROVAL_PARKED' })
+      }))
+      expect((await history.read(invocationId)).events.some((event) => event.kind === 'tool-call-started' && (event.payload as { toolCallId?: string }).toolCallId === 'blocked-read')).toBe(false)
+      expect((await history.read(invocationId)).events.at(-1)?.kind).toBe('invocation-parked')
+    } finally {
+      db.close()
+    }
+  })
+
   it('spills the complete production tool result while keeping SDK replay content bounded', async () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)

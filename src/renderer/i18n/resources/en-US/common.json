@@ -115,14 +115,15 @@
   },
   "settings": {
     "feishu": "Feishu",
-    "wechat": "WeChat remote",
+    "wechat": "WeChat",
     "general": "General",
     "models": "LLM Services",
     "skills": "Skills",
     "title": "Settings",
     "tools": "Tools",
     "wiki": "Project Wiki",
-    "remoteIm": "IM remote common",
+    "remoteIm": "Remote common settings",
+    "remoteOperations": "Remote operations",
     "butler": "Scheduled tasks",
     "storage": "Storage"
   },

@@ -65,11 +65,11 @@ interface SafetyPermitStore {
 type SafetyPolicyDecision =
   | { kind: 'allow'; authorizationVersion: string; expiresAt?: number }
   | { kind: 'ask'; confirmationId: string; answerer: 'user' | 'agent'; reasonCode: string; context?: unknown }
-  | { kind: 'deny'; reasonCode: SafetyDenyReason }
+  | { kind: 'deny'; reasonCode: SafetyDenyReason; userMessage?: string }
 
 type SafetyDenyReason =
   | 'UNKNOWN_CAPABILITY' | 'UNAUTHORIZED_CAPABILITY' | 'MISSING_MATERIAL' | 'RULES_FLOOR_VIOLATED'
-  | 'POLICY_DENY' | 'STALE_AUTHORIZATION' | 'SHELL_PRECHECK_DENY' | 'FILE_AUTO_APPROVAL_DENY'
+  | 'POLICY_DENY' | 'FACTS_CHANGED' | 'STALE_AUTHORIZATION' | 'SHELL_PRECHECK_DENY' | 'FILE_AUTO_APPROVAL_DENY'
 
 type SafetyPolicyPort = { evaluate(input: PermitBinding & { capability: CapabilityLookup; signal?: AbortSignal }): Promise<SafetyPolicyDecision> }
 type SafetyPolicyResolver = (binding: PermitBinding) => SafetyPolicyPort
@@ -91,6 +91,15 @@ class SafetyGate {
 - `evaluate`：`signal` 已 abort → `deny('POLICY_DENY')`；能力 `unknown` → `deny('UNKNOWN_CAPABILITY')`；`known-unauthorized` → `deny('UNAUTHORIZED_CAPABILITY')`；策略返回 `allow` 时校验 `authorizationVersion` 与绑定一致，否则 `deny('STALE_AUTHORIZATION')`；策略调用后再查一次 abort。
 - `authorize` = `evaluate` → 仅在 `allow` 时 `issuePermit`：缺省有效期 `Date.now() + 30_000`；`issue` 抛错 → `deny('MISSING_MATERIAL')`；成功后返回 `{ kind: 'allow', permitId, authorizationVersion, phase }`。
 - `discardPermit`：竞态中把已签发但不再使用的许可 `settle` 掉（turn 循环取消路径会调用）。
+
+turn 循环实际消费的是收窄后的公开面（宿主可显式委托包装，直接赋 `SafetyGate` 实例仍兼容）：
+
+```ts
+type SafetyGatePort = Pick<SafetyGate, 'evaluate' | 'authorize' | 'discardPermit'>
+```
+
+- `deny` 决策可携带 `userMessage`：turn 循环把它透传成 `ToolDeniedError.userMessage`，`returnDeniedToolsToModel` 开启时作为 `is_error` 工具结果回给模型（模型可见的区分文案）；缺省走通用 fallback。
+- `FACTS_CHANGED` 表示"事实在准备与终检之间变化"，与 `STALE_AUTHORIZATION`（授权版本变化）是不同拒绝码，装配方不要混用。
 
 ## 4. 执行准入（executionAdmission.ts）
 

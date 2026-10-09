@@ -47,8 +47,8 @@ describe('session content cutover schema', () => {
     const conn = makeV37Database()
     runMigrations(conn)
 
-    expect(DB_SCHEMA_VERSION).toBe(54)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '54' })
+    expect(DB_SCHEMA_VERSION).toBe(82)
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '82' })
     expect(conn.prepare('SELECT content, content_storage_state FROM messages WHERE id=?').get('legacy-message'))
       .toEqual({ content: 'preserve this body', content_storage_state: 'legacy' })
     expect(conn.prepare('SELECT session_id, session_generation, message_revision, api_read_mode, write_mode, cleanup_state FROM session_message_content_cutover ORDER BY session_id').all())
@@ -85,7 +85,7 @@ describe('session content cutover schema', () => {
       INSERT INTO messages(id,session_id,role,content,status,schema_version,timestamp,sequence,content_storage_state) VALUES('m','s','user','body','sent',1,1,1,'canonical-backed-dual-write');
     `)
     runMigrations(upgrade)
-    expect(upgrade.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '54' })
+    expect(upgrade.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '82' })
     expect(upgrade.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name='guard_session_content_cleanup_complete_ledger_immutable'").get())
       .toEqual({ name: 'guard_session_content_cleanup_complete_ledger_immutable' })
     expect(upgrade.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name='guard_session_content_cleanup_complete_ledger_delete'").get())
@@ -132,7 +132,7 @@ describe('session content cutover schema', () => {
 
     runMigrations(conn)
 
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '54' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '82' })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name='guard_session_content_cleanup_complete_ledger_immutable'").get())
       .toEqual({ name: 'guard_session_content_cleanup_complete_ledger_immutable' })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND name='guard_session_content_cleanup_complete_ledger_delete'").get())
@@ -342,7 +342,7 @@ describe('session content cutover schema', () => {
       INSERT INTO messages VALUES('m','s','','canonical-backed-only');
     `)
     runMigrations(conn)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '54' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '82' })
     conn.prepare("DELETE FROM session_message_content_cutover WHERE session_id='s'").run()
     expect(() => conn.prepare("UPDATE messages SET content='legacy fallback' WHERE id='m'").run())
       .toThrow('canonical-backed-only message content is immutable')
@@ -418,7 +418,7 @@ describe('session content cutover schema', () => {
     const conn = new DatabaseSync(':memory:')
     conn.exec(CREATE_TABLES_SQL)
     runMigrations(conn)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '54' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '82' })
     expect(conn.prepare(`SELECT name FROM sqlite_master WHERE type='trigger' AND name IN (
       'track_pending_history_cursor_allocation','settle_pending_history_cursor_allocation',
       'invalidate_session_projections_after_history_cursor_update','invalidate_session_projections_after_history_cursor_delete'
@@ -439,7 +439,7 @@ describe('session content cutover schema', () => {
 
     conn.exec('DROP TRIGGER fail_replayed_v41_version_update')
     expect(() => runMigrations(conn)).not.toThrow()
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '54' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '82' })
     conn.close()
   })
 
@@ -471,7 +471,7 @@ describe('session content cutover schema', () => {
     expect(() => conn.prepare("UPDATE session_message_content_cutover SET cleanup_state='write-stopped'").run()).toThrow()
     conn.exec('DROP TABLE session_message_content_cutover_v44')
     expect(() => runMigrations(conn)).not.toThrow()
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '54' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '82' })
     expect(conn.prepare("UPDATE session_message_content_cutover SET cleanup_state='write-stopped'").run().changes).toBe(1)
     expect(conn.prepare('PRAGMA foreign_key_check').all()).toEqual([])
     conn.close()

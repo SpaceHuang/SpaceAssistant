@@ -5,7 +5,7 @@ export type HistoryEvent = {
   turnId: string
   sequence: number
   schemaVersion: number
-  kind: 'session-input-committed' | 'invocation-context-committed' | 'transcript-compacted' | 'model-request-started' | 'provider-retry-scheduled' | 'model-attempt-discarded' | 'model-response-committed' | 'replay-message-committed' | 'tool-call-started' | 'tool-call-finished' | 'tool-call-not-dispatched' | 'approval-waiting' | 'approval-resolved' | 'approval-updated' | 'invocation-parked' | 'invocation-interrupted' | 'invocation-completed' | 'invocation-failed'
+  kind: 'session-input-committed' | 'invocation-context-committed' | 'transcript-compacted' | 'model-request-started' | 'provider-retry-scheduled' | 'model-attempt-discarded' | 'model-response-committed' | 'replay-message-committed' | 'tool-call-started' | 'tool-call-finished' | 'tool-call-not-dispatched' | 'tool-call-deferred' | 'approval-waiting' | 'approval-resolved' | 'approval-deferred' | 'approval-updated' | 'invocation-parked' | 'invocation-interrupted' | 'invocation-completed' | 'invocation-failed'
   payload: unknown
 }
 
@@ -174,7 +174,7 @@ const HISTORY_EVENT_KINDS = new Set<string>([
   'session-input-committed', 'invocation-context-committed', 'transcript-compacted',
   'model-request-started', 'provider-retry-scheduled', 'model-attempt-discarded',
   'model-response-committed', 'replay-message-committed', 'tool-call-started',
-  'tool-call-finished', 'tool-call-not-dispatched', 'approval-waiting', 'approval-resolved',
+  'tool-call-finished', 'tool-call-not-dispatched', 'tool-call-deferred', 'approval-waiting', 'approval-resolved', 'approval-deferred',
   'approval-updated', 'invocation-parked', 'invocation-interrupted',
   'invocation-completed', 'invocation-failed'
 ])
@@ -228,12 +228,14 @@ export function validateHistoryTransition(previous: readonly HistoryEvent[], inc
   let terminalSeen = false
   const pendingToolCalls = new Set<string>()
   const pendingApprovals = new Set<string>()
+  const deferredTodoIds = new Set<string>()
   const approvalIdentityByPendingId = new Map<string, string>()
   const history = [...previous, ...incoming]
   for (const event of history) {
     const payload = event.payload && typeof event.payload === 'object' ? event.payload as {
-      status?: unknown; toolCallId?: unknown; approvalId?: unknown; approved?: unknown; outcome?: unknown; settledAt?: unknown; cause?: unknown
-      answerer?: unknown; reasonCode?: unknown; requestedAt?: unknown; message?: { toolCalls?: readonly { id?: unknown }[] }
+      status?: unknown; reason?: unknown; toolCallId?: unknown; approvalId?: unknown; approved?: unknown; outcome?: unknown; settledAt?: unknown; cause?: unknown
+      answerer?: unknown; reasonCode?: unknown; requestedAt?: unknown; todoId?: unknown; invocationId?: unknown
+      checkpointId?: unknown; workflowRevision?: unknown; checkpointRef?: unknown; message?: { toolCalls?: readonly { id?: unknown }[] }
     } : undefined
     if (event.kind === 'invocation-completed' && payload?.status !== 'completed') {
       throw new HistoryBatchError('completed invocation terminal requires completed status')
@@ -252,7 +254,7 @@ export function validateHistoryTransition(previous: readonly HistoryEvent[], inc
     if (event.kind === 'tool-call-started' && typeof payload?.toolCallId === 'string' && payload.toolCallId.trim()) {
       pendingToolCalls.add(payload.toolCallId)
     }
-    if ((event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') && typeof payload?.toolCallId === 'string') {
+    if ((event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched' || event.kind === 'tool-call-deferred') && typeof payload?.toolCallId === 'string') {
       pendingToolCalls.delete(payload.toolCallId)
     }
     const approvalId = typeof payload?.toolCallId === 'string'
@@ -293,6 +295,24 @@ export function validateHistoryTransition(previous: readonly HistoryEvent[], inc
       pendingApprovals.delete(approvalId)
       approvalIdentityByPendingId.delete(approvalId)
     }
+    if (event.kind === 'approval-deferred') {
+      if (typeof payload?.toolCallId !== 'string' || !payload.toolCallId.trim() || typeof payload.todoId !== 'string' || !payload.todoId.trim() ||
+        payload.invocationId !== event.invocationId || typeof payload.checkpointId !== 'string' || !payload.checkpointId.trim() ||
+        !Number.isInteger(payload.workflowRevision) || (payload.workflowRevision as number) <= 0 || !pendingApprovals.has(payload.toolCallId) ||
+        (approvalIdentityByPendingId.has(payload.toolCallId) && payload.approvalId !== approvalIdentityByPendingId.get(payload.toolCallId))) {
+        throw new HistoryBatchError('deferred approval binding is invalid')
+      }
+      pendingApprovals.delete(payload.toolCallId)
+      approvalIdentityByPendingId.delete(payload.toolCallId)
+      pendingToolCalls.delete(payload.toolCallId)
+      deferredTodoIds.add(payload.todoId as string)
+    }
+    if (event.kind === 'invocation-parked' && payload?.reason === 'deferred-approval') {
+      if (payload.status !== 'parked' || typeof payload.todoId !== 'string' || !payload.todoId.trim() || !deferredTodoIds.has(payload.todoId) ||
+        pendingToolCalls.size > 0 || pendingApprovals.size > 0) {
+        throw new HistoryBatchError('parked invocation payload requires a settled deferred approval')
+      }
+    }
     if ((event.kind === 'invocation-completed' || event.kind === 'invocation-failed') && (pendingToolCalls.size > 0 || pendingApprovals.size > 0)) {
       throw new HistoryBatchError('cannot terminally settle an invocation with pending tool calls or approvals')
     }
@@ -325,9 +345,10 @@ export function rebuildInvocationStates(snapshot: HistorySnapshot): Map<string, 
       ? payload.toolCallId
       : typeof payload?.approvalId === 'string' ? payload.approvalId : undefined
     if (event.kind === 'tool-call-started' && typeof payload?.toolCallId === 'string') pendingToolCalls.set(payload.toolCallId, event.eventId)
-    if ((event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') && typeof payload?.toolCallId === 'string') pendingToolCalls.delete(payload.toolCallId)
+    if ((event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched' || event.kind === 'tool-call-deferred') && typeof payload?.toolCallId === 'string') pendingToolCalls.delete(payload.toolCallId)
     if (event.kind === 'approval-waiting') pendingApprovals.set(approvalId ?? event.eventId, event.eventId)
     if (event.kind === 'approval-resolved' && approvalId) pendingApprovals.delete(approvalId)
+    if (event.kind === 'approval-deferred' && approvalId) pendingApprovals.delete(approvalId)
     if (event.kind === 'invocation-parked' || event.kind === 'invocation-interrupted') {
       const terminal = event.kind === 'invocation-interrupted' && payload?.status === 'cancelled' ? 'cancelled' : 'interrupted'
       state = { invocationId: snapshot.invocationId, state: terminal, lastEventId: event.eventId }

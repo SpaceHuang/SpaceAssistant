@@ -3,14 +3,17 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { WebContents } from 'electron'
-import { createSession, getDbConnection, getSession, openDatabase, prepareTurnAtomically, type AppDatabase } from '../database'
+import { appendMessage, createSession, createPersistedTurn, getConfigValue, getDbConnection, getSession, openDatabase, prepareTurnAtomically, setConfigValue, updateMessageContent, type AppDatabase } from '../database'
 import { DEFAULT_BROWSER_CONFIG, DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { DEFAULT_REMOTE_PROGRESS_CONFIG } from '../../src/shared/remoteProgressTypes'
 import { SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
 import { reconcileStartupSessionTranscripts } from '../sessionStorage/recovery'
+import { ensureImTurnTaskControl, getTaskControlRecord, putTaskControlRecord, commitDeferredTaskCheckpoint } from '../database/taskControl'
+import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 
 const mockRunToolChatSession = vi.fn()
 const mockResolveLlmCredentialsForModel = vi.fn()
+const mockResolveLlmCredentialsForPair = vi.fn()
 const mockGetMessages = vi.fn(() => [])
 const mockStartRemoteProgressSession = vi.fn()
 const mockStopRemoteProgressSession = vi.fn()
@@ -18,6 +21,8 @@ const mockClearRemoteProgressSession = vi.fn()
 const mockUpdateRemoteProgressSnapshot = vi.fn()
 const mockRequestRendererSessionSwitch = vi.fn()
 const hostedRuntimeFailureInjection = vi.hoisted(() => ({ requestId: '', composeCalls: 0 }))
+const invocationMaterialsCapture = vi.hoisted(() => ({ last: null as unknown }))
+const acceptedTurnFixtures = new Map<string, { db: AppDatabase; acceptedTurn: ReturnType<typeof createAcceptedTurn> }>()
 const mockResolveWorkDirForSession = vi.fn(() => ({
   profileId: 'p1',
   workDir: '/tmp',
@@ -25,7 +30,32 @@ const mockResolveWorkDirForSession = vi.fn(() => ({
 }))
 
 vi.mock('../toolChatLoop', () => ({
-  runToolChatSession: (...args: unknown[]) => mockRunToolChatSession(...args)
+  runToolChatSession: (...args: unknown[]) => {
+    const [invocation, ports, options] = args as [
+      { acceptedTurn?: ReturnType<typeof createAcceptedTurn>; messages?: { currentUserMessageId?: string; list?: Array<{ role?: string; content?: unknown }> }; trace?: { requestId?: string } },
+      unknown,
+      { onHostedTurnHandoff?: (input: Record<string, unknown>) => unknown }
+    ]
+    const originalHandoff = options?.onHostedTurnHandoff
+    const wrappedOptions = originalHandoff ? {
+      ...options,
+      onHostedTurnHandoff: (input: Record<string, unknown>) => {
+        const accepted = invocation.acceptedTurn
+        const fixture = invocation.trace?.requestId ? acceptedTurnFixtures.get(invocation.trace.requestId) : undefined
+        const request = input.request as { messages?: Array<{ role?: string; content?: unknown }> } | undefined
+        const lastUser = [...(request?.messages ?? [])].reverse().find((message) => message.role === 'user')
+        const currentUserMessageId = input.currentUserMessageId ?? accepted?.currentUserMessageId ?? invocation.messages?.currentUserMessageId
+        let requiredUserMessage = input.requiredUserMessage as { id?: string; message?: { role?: string; content?: unknown } } | undefined
+        if (!requiredUserMessage && currentUserMessageId && lastUser && fixture) {
+          const content = typeof lastUser.content === 'string' ? lastUser.content : JSON.stringify(lastUser.content)
+          updateMessageContent(fixture.db, currentUserMessageId, { content })
+          requiredUserMessage = { id: currentUserMessageId, message: { role: 'user', content } }
+        }
+        return originalHandoff({ ...input, ...(currentUserMessageId ? { currentUserMessageId } : {}), ...(requiredUserMessage ? { requiredUserMessage } : {}) })
+      }
+    } : options
+    return mockRunToolChatSession(invocation, ports, wrappedOptions)
+  }
 }))
 
 vi.mock('../runtime/invocationAssembler', async (importOriginal) => {
@@ -33,6 +63,7 @@ vi.mock('../runtime/invocationAssembler', async (importOriginal) => {
   return {
     ...actual,
     assembleInvocation: (...args: Parameters<typeof actual.assembleInvocation>) => {
+      invocationMaterialsCapture.last = args[0]
       const assembled = actual.assembleInvocation(...args)
       if (args[0].requestId === hostedRuntimeFailureInjection.requestId) {
         assembled.agentSdk.createHostedTurnRuntime = () => {
@@ -45,8 +76,10 @@ vi.mock('../runtime/invocationAssembler', async (importOriginal) => {
   }
 })
 
-vi.mock('../llmServiceResolver', () => ({
-  resolveLlmCredentialsForModel: (...args: unknown[]) => mockResolveLlmCredentialsForModel(...args)
+vi.mock('../llmServiceResolver', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../llmServiceResolver')>(),
+  resolveLlmCredentialsForModel: (...args: unknown[]) => mockResolveLlmCredentialsForModel(...args),
+  resolveLlmCredentialsForPair: (...args: unknown[]) => mockResolveLlmCredentialsForPair(...args)
 }))
 
 vi.mock('../database', async (importOriginal) => {
@@ -87,7 +120,7 @@ vi.mock('../workDirManager', async (importOriginal) => {
   }
 })
 
-import { runImRemoteAgent } from './imRemoteAgent'
+import { runImRemoteAgent as runImRemoteAgentImpl } from './imRemoteAgent'
 import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
 import { acceptTurnContext, readAcceptedTurn } from '../database/acceptedTurnStorage'
 import { MODEL_BASELINE } from '../../src/shared/modelBaseline'
@@ -130,6 +163,85 @@ function makeWorkDirManager() {
   }
 }
 
+function prepareAcceptedTestTurn(db: AppDatabase, sessionId: string, model: string, requestId: string, turnId: string, lane: 'feishu' | 'wechat' = 'feishu') {
+  const startToken = `${turnId}-start`
+  const userMessageId = `${turnId}-user`
+  const assistantMessageId = `${turnId}-assistant`
+  const models = JSON.parse(getConfigValue(db, 'config.models') ?? '[]') as Array<Record<string, unknown>>
+  if (!models.some((entry) => entry.name === model)) {
+    models.push({ id: `catalog-${turnId}`, name: model, enabled: true, isVision: false, supportsThinking: true })
+    setConfigValue(db, 'config.models', JSON.stringify(models))
+  }
+  prepareTurnAtomically(db, {
+    user: { id: userMessageId, sessionId, role: 'user', content: 'test remote request', timestamp: Date.now(), status: 'sent' },
+    assistant: { id: assistantMessageId, sessionId, role: 'assistant', content: '', timestamp: Date.now() + 1, status: 'streaming' },
+    turn: { turnId, requestId, sessionId, assistantMessageId, state: 'prepared', startToken }
+  })
+  const acceptedTurn = createAcceptedTurn({
+    turnId, requestId, sessionId, lane, startToken, currentUserMessageId: userMessageId, transcriptVersion: 0,
+    config: { lane, model, llmServiceId: 'svc-1', thinkingEffort: 'low' }
+  })
+  acceptTurnContext(db, acceptedTurn)
+  return acceptedTurn
+}
+
+async function runImRemoteAgent(args: Parameters<typeof runImRemoteAgentImpl>[0]) {
+  if (args.acceptedTurn) {
+    acceptedTurnFixtures.set(args.requestId, { db: args.db, acceptedTurn: args.acceptedTurn })
+    return runImRemoteAgentImpl(args).finally(() => { acceptedTurnFixtures.delete(args.requestId) })
+  }
+  const db = args.db
+  const sessionId = args.sessionId
+  const session = args.sessionStorage.queries.readSession(sessionId)
+  const testArgs = args as typeof args & { getModel?: () => string }
+  const lane = args.remoteContext.source === 'wechat' ? 'wechat' : 'feishu'
+  const model = testArgs.getModel?.() ?? session?.model ?? SUPPORTED_ANTHROPIC_MODEL
+  const models = JSON.parse(getConfigValue(db, 'config.models') ?? '[]') as Array<Record<string, unknown>>
+  if (!models.some((entry) => entry.name === model)) {
+    models.push({ id: `catalog-${args.requestId}`, name: model, enabled: true, isVision: false, supportsThinking: true })
+    setConfigValue(db, 'config.models', JSON.stringify(models))
+  }
+  if (!session) {
+    const turnId = args.turnId ?? args.requestId
+    const acceptedTurn = createAcceptedTurn({
+      turnId, requestId: args.requestId, sessionId, lane, startToken: `auto-start-${turnId}`,
+      currentUserMessageId: `auto-user-${turnId}`, transcriptVersion: 0,
+      config: { lane, model, llmServiceId: 'svc-1', thinkingEffort: 'low' }
+    })
+    acceptedTurnFixtures.set(args.requestId, { db, acceptedTurn })
+    return runImRemoteAgentImpl({ ...args, acceptedTurn }).finally(() => { acceptedTurnFixtures.delete(args.requestId) })
+  }
+  const existing = listPersistedTurns(db).find((turn) => turn.requestId === args.requestId && turn.sessionId === sessionId)
+  const storedAccepted = readAcceptedTurn(db, sessionId, args.requestId)
+  if (storedAccepted) return runImRemoteAgentImpl({ ...args, sessionId, turnId: storedAccepted.turnId, acceptedTurn: storedAccepted })
+  const turnId = existing?.turnId ?? args.turnId ?? args.requestId
+  const userMessageId = existing?.userMessageId ?? `auto-user-${turnId}`
+  const assistantMessageId = existing?.assistantMessageId ?? `auto-assistant-${turnId}`
+  const startToken = existing?.startToken ?? `auto-start-${turnId}`
+  let resolvedUserMessageId = userMessageId
+  if (!existing) {
+    const latestUser = getDbConnection(db).prepare("SELECT id FROM messages WHERE session_id=? AND role='user' ORDER BY sequence DESC LIMIT 1").get(sessionId) as { id: string } | undefined
+    if (latestUser) {
+      // Reuse the latest input message when a direct core test bypasses the router's prepare boundary.
+      resolvedUserMessageId = latestUser.id
+      appendMessage(db, { id: assistantMessageId, sessionId, role: 'assistant', content: '', timestamp: Date.now(), status: 'streaming' })
+      createPersistedTurn(db, { turnId, requestId: args.requestId, sessionId, userMessageId: latestUser.id, assistantMessageId, state: 'prepared', startToken })
+    } else {
+      appendMessage(db, { id: userMessageId, sessionId, role: 'user', content: 'test remote request', timestamp: Date.now(), status: 'sent' })
+      appendMessage(db, { id: assistantMessageId, sessionId, role: 'assistant', content: '', timestamp: Date.now() + 1, status: 'streaming' })
+      createPersistedTurn(db, { turnId, requestId: args.requestId, sessionId, userMessageId, assistantMessageId, state: 'prepared', startToken })
+    }
+  }
+  const acceptedTurn = createAcceptedTurn({
+    turnId, requestId: args.requestId, sessionId, lane, startToken,
+    currentUserMessageId: existing?.userMessageId ?? resolvedUserMessageId, transcriptVersion: 0,
+    config: { lane, model, llmServiceId: 'svc-1', thinkingEffort: 'low' }
+  })
+  acceptTurnContext(db, acceptedTurn)
+  acceptedTurnFixtures.set(args.requestId, { db, acceptedTurn })
+  return runImRemoteAgentImpl({ ...args, turnId, acceptedTurn }).finally(() => { acceptedTurnFixtures.delete(args.requestId) })
+}
+
 function baseArgs(overrides: Record<string, unknown> = {}) {
   const adapter = { channel: 'feishu' as const, reply: vi.fn() }
   const db = overrides.db as AppDatabase | undefined ?? makeDb()
@@ -163,6 +275,7 @@ describe('runImRemoteAgent', () => {
     setCallAdmissionGate(null)
     hostedRuntimeFailureInjection.requestId = ''
     hostedRuntimeFailureInjection.composeCalls = 0
+    invocationMaterialsCapture.last = null
     mockRequestRendererSessionSwitch.mockReset().mockResolvedValue({ desktopSwitched: true, viewChanged: true })
     setDefaultAgentRuntime(createDesktopAgentRuntime())
     mockResolveWorkDirForSession.mockReturnValue({
@@ -175,6 +288,13 @@ describe('runImRemoteAgent', () => {
       baseUrl: 'https://creds.example.com',
       getApiKey: async () => 'creds-key'
     })
+    mockResolveLlmCredentialsForPair.mockImplementation(async (_db: unknown, modelId: string, serviceId: string) => ({
+      model: { id: modelId, name: SUPPORTED_ANTHROPIC_MODEL },
+      serviceId,
+      providerModelName: SUPPORTED_ANTHROPIC_MODEL,
+      baseUrl: 'https://creds.example.com',
+      getApiKey: async () => 'creds-key'
+    }))
     mockRunToolChatSession.mockResolvedValue({
       ok: true,
       content: [{ type: 'text', text: 'done' }],
@@ -182,22 +302,178 @@ describe('runImRemoteAgent', () => {
     })
   })
 
-  it('uses service apiKey and baseUrl when credentials resolve', async () => {
+  it('requires frozen accepted-turn model and service before assembling an IM invocation', async () => {
+    await expect(runImRemoteAgentImpl(baseArgs())).rejects.toThrow('IM_ACCEPTED_TURN_EXECUTION_CONFIG_REQUIRED')
+    expect(mockRunToolChatSession).not.toHaveBeenCalled()
+  })
+
+  it('fails before provider dispatch when the frozen service has been deleted', async () => {
+    const db = makeDb()
+    const session = createSession(db, { name: 'deleted-frozen-service', model: SUPPORTED_ANTHROPIC_MODEL })
+    setConfigValue(db, 'config.models', JSON.stringify([{ id: 'catalog-model', name: SUPPORTED_ANTHROPIC_MODEL, enabled: true }]))
+    prepareTurnAtomically(db, {
+      user: { id: 'deleted-service-user', sessionId: session.id, role: 'user', content: 'run task', timestamp: 1, status: 'sent' },
+      assistant: { id: 'deleted-service-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
+      turn: { turnId: 'deleted-service-turn', requestId: 'deleted-service-request', sessionId: session.id, assistantMessageId: 'deleted-service-assistant', state: 'prepared', startToken: 'deleted-service-token' }
+    })
+    const acceptedTurn = createAcceptedTurn({
+      turnId: 'deleted-service-turn', requestId: 'deleted-service-request', sessionId: session.id, lane: 'feishu',
+      startToken: 'deleted-service-token', currentUserMessageId: 'deleted-service-user', transcriptVersion: 0,
+      config: { lane: 'feishu', model: SUPPORTED_ANTHROPIC_MODEL, llmServiceId: 'deleted-service', thinkingEffort: 'low' }
+    })
+    acceptTurnContext(db, acceptedTurn)
+    mockResolveLlmCredentialsForPair.mockResolvedValueOnce({ error: 'service deleted' })
+
+    await expect(runImRemoteAgent(baseArgs({ db, sessionId: session.id, requestId: acceptedTurn.requestId, turnId: acceptedTurn.turnId, acceptedTurn })))
+      .rejects.toThrow('IM_FROZEN_MODEL_SERVICE_UNAVAILABLE')
+    expect(mockRunToolChatSession).not.toHaveBeenCalled()
+    expect(mockResolveLlmCredentialsForPair).toHaveBeenCalledWith(db, 'catalog-model', 'deleted-service')
+    db.close()
+  })
+
+  it('uses the accepted turn service apiKey and baseUrl when its exact pair resolves', async () => {
+    const db = makeDb()
+    const session = createSession(db, { name: 'exact-service-credentials', model: SUPPORTED_ANTHROPIC_MODEL })
+    setConfigValue(db, 'config.models', JSON.stringify([{ id: 'catalog-model', name: SUPPORTED_ANTHROPIC_MODEL, enabled: true }]))
+    prepareTurnAtomically(db, {
+      user: { id: 'exact-service-user', sessionId: session.id, role: 'user', content: 'run task', timestamp: 1, status: 'sent' },
+      assistant: { id: 'exact-service-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
+      turn: { turnId: 'exact-service-turn', requestId: 'exact-service-request', sessionId: session.id, assistantMessageId: 'exact-service-assistant', state: 'prepared', startToken: 'exact-service-token' }
+    })
+    const acceptedTurn = createAcceptedTurn({
+      turnId: 'exact-service-turn', requestId: 'exact-service-request', sessionId: session.id, lane: 'feishu',
+      startToken: 'exact-service-token', currentUserMessageId: 'exact-service-user', transcriptVersion: 0,
+      config: { lane: 'feishu', model: SUPPORTED_ANTHROPIC_MODEL, llmServiceId: 'svc-frozen', thinkingEffort: 'low' }
+    })
+    acceptTurnContext(db, acceptedTurn)
     let captured: { profile: { baseUrl?: string }; ports: { credentials: { resolveApiKey: () => Promise<string | null> } } } = {} as never
     mockRunToolChatSession.mockImplementation(async (invocation: never, ports: never) => {
       captured = { invocation, ports } as never
       return { ok: true, content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn' }
     })
 
-    await runImRemoteAgent(baseArgs())
+    await runImRemoteAgent(baseArgs({ db, sessionId: session.id, requestId: acceptedTurn.requestId, turnId: acceptedTurn.turnId, acceptedTurn }))
 
-    expect(mockResolveLlmCredentialsForModel).toHaveBeenCalledWith(
-      expect.anything(),
-      SUPPORTED_ANTHROPIC_MODEL,
-      {}
-    )
+    expect(mockResolveLlmCredentialsForPair).toHaveBeenCalledWith(db, 'catalog-model', 'svc-frozen')
     expect(captured.ports.credentials.networkTarget?.baseUrl).toBe('https://creds.example.com')
     expect(await captured.ports.credentials.resolveApiKey()).toBe('creds-key')
+    db.close()
+  })
+
+  it('returns provider quota errors to the caller without resolving another service or model', async () => {
+    const db = makeDb()
+    const session = createSession(db, { name: 'provider-quota-error', model: SUPPORTED_ANTHROPIC_MODEL, llmServiceId: 'svc-frozen' })
+    const args = baseArgs({ db, sessionId: session.id })
+    const acceptedTurn = prepareAcceptedTestTurn(db, session.id, SUPPORTED_ANTHROPIC_MODEL, args.requestId, 'provider-quota-turn')
+    mockRunToolChatSession.mockResolvedValueOnce({ ok: false, error: '429 quota exceeded', content: [], stopReason: 'error' })
+
+    await expect(runImRemoteAgent({ ...args, turnId: acceptedTurn.turnId, acceptedTurn })).resolves.toMatchObject({
+      ok: false,
+      summary: '429 quota exceeded'
+    })
+    expect(mockResolveLlmCredentialsForPair).toHaveBeenCalledOnce()
+    expect(mockResolveLlmCredentialsForPair).toHaveBeenCalledWith(db, expect.any(String), 'svc-1')
+    expect(mockResolveLlmCredentialsForModel).not.toHaveBeenCalled()
+    db.close()
+  })
+
+  it('装配真实 IM Inbox/workflow 工具 registry，而不是只注入测试 fixture', async () => {
+    const db = makeDb()
+    const session = createSession(db, { name: 'real-im-tool-registry', model: SUPPORTED_ANTHROPIC_MODEL })
+    const args = baseArgs({ db, sessionId: session.id, remoteContext: {
+      source: 'feishu', messageId: 'platform-1', confirmPolicy: 'always', authOwner: 'owner-1', chatId: 'chat-1'
+    } })
+    const acceptedTurn = prepareAcceptedTestTurn(db, session.id, SUPPORTED_ANTHROPIC_MODEL, args.requestId, 'real-im-tool-registry-turn')
+    await runImRemoteAgent({ ...args, turnId: acceptedTurn.turnId, acceptedTurn })
+    const materials = invocationMaterialsCapture.last as { imOrchestrationToolRegistry?: { entries(): readonly { name: string }[] } } | null
+    expect(materials?.imOrchestrationToolRegistry?.entries().map(({ name }) => name)).toEqual(expect.arrayContaining([
+      'im_inbox_list', 'im_inbox_claim', 'im_inbox_ack', 'im_inbox_release', 'im_inbox_renew',
+      'im_workflow_state_get', 'im_workflow_state_put', 'task_cancel', 'task_revise_plan'
+    ]))
+  })
+
+  it('adds the durable deferred tool result to the continuation model request without reissuing the action', async () => {
+    const db = makeDb()
+    const session = createSession(db, { name: 'deferred-continuation', model: SUPPORTED_ANTHROPIC_MODEL })
+    appendMessage(db, { id: 'deferred-source-user', sessionId: session.id, role: 'user', content: '发布报告', timestamp: Date.now(), status: 'sent' })
+    const args = baseArgs({ db, sessionId: session.id, remoteContext: {
+      source: 'feishu', messageId: 'completion-message', confirmPolicy: 'always',
+      deferredContinuation: { todoId: 'todo-1', invocationId: 'inv-1', workflowId: 'workflow-1', taskId: 'task-1', stepId: 'publish',
+        planRevision: 3, checkpointId: 'checkpoint-1', dispatchKey: 'dispatch-1', toolCallId: 'tool-1', toolName: 'send_message',
+        canonicalArgs: { channel: 'chat-1', text: 'approved' }, outputRef: 'deferred-result:inv-1',
+        result: { kind: 'completed', outputRef: 'deferred-result:inv-1', value: { ok: true, marker: 'TOOL_RESULT_4321' } } }
+    } })
+    const acceptedTurn = prepareAcceptedTestTurn(db, session.id, SUPPORTED_ANTHROPIC_MODEL, args.requestId, 'deferred-continuation-turn')
+    await runImRemoteAgent({ ...args, turnId: acceptedTurn.turnId, acceptedTurn })
+    const materials = invocationMaterialsCapture.last as { messages: Array<{ role: string; toolCallId?: string; content?: unknown; toolCalls?: Array<{ id: string }> }> } | null
+    expect(materials?.messages).toContainEqual(expect.objectContaining({ role: 'assistant', toolCalls: [expect.objectContaining({ id: 'tool-1', name: 'send_message' })] }))
+    expect(materials?.messages).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'tool-1', isError: false, content: expect.stringContaining('TOOL_RESULT_4321') }))
+    expect(JSON.stringify(materials?.messages)).toContain('TOOL_RESULT_4321')
+    db.close()
+  })
+
+  it('preserves the original task binding when assembling a deferred completion continuation', async () => {
+    const db = makeDb()
+    const session = createSession(db, { name: 'deferred-task-binding', model: SUPPORTED_ANTHROPIC_MODEL })
+    appendMessage(db, { id: 'deferred-binding-source', sessionId: session.id, role: 'user', content: '发布报告', timestamp: Date.now(), status: 'sent' })
+    const task = putTaskControlRecord(db, { sessionId: session.id, ownerId: 'owner-1', workflowId: 'workflow-1', taskId: 'task-1',
+      planRevision: 3, expectedRevision: null, data: { status: 'active', sourceUserMessageId: 'deferred-binding-source',
+        steps: [{ stepId: 'publish', instruction: 'publish' }], outstandingInvocations: [] } })
+    if (!task.ok) throw new Error('test task setup failed')
+    const checkpoint = commitDeferredTaskCheckpoint(db, { sessionId: session.id, ownerId: 'owner-1', workflowId: 'workflow-1', taskId: 'task-1',
+      planRevision: 3, expectedRevision: task.record.revision, invocationId: 'inv-binding', todoId: 'todo-binding', stepId: 'publish' })
+    if (!checkpoint.ok) throw new Error('test checkpoint setup failed')
+    const intents = createSecurityActionIntentStore(db)
+    intents.prepare({ invocationId: 'inv-binding', envelopeInvocationId: 'inv-binding', sessionId: session.id, workflowId: 'workflow-1', taskId: 'task-1', stepId: 'publish', planRevision: 3 })
+    intents.linkTodo('inv-binding', 'todo-binding')
+    intents.commitCheckpoint('inv-binding', { checkpointId: checkpoint.checkpoint.checkpointId, workflowRevision: checkpoint.checkpoint.workflowRevision })
+
+    const args = baseArgs({ db, sessionId: session.id, remoteContext: {
+      source: 'feishu', messageId: 'completion-binding', confirmPolicy: 'always', authOwner: 'owner-1',
+      deferredContinuation: { todoId: 'todo-binding', invocationId: 'inv-binding', workflowId: 'workflow-1', taskId: 'task-1', stepId: 'publish',
+        planRevision: 3, checkpointId: checkpoint.checkpoint.checkpointId, dispatchKey: 'dispatch-binding', toolCallId: 'tool-binding', toolName: 'send_message',
+        canonicalArgs: { channel: 'chat-1', text: 'approved' }, outputRef: 'deferred-result:inv-binding',
+        result: { kind: 'completed', outputRef: 'deferred-result:inv-binding', value: { ok: true } } }
+    } })
+    const acceptedTurn = prepareAcceptedTestTurn(db, session.id, SUPPORTED_ANTHROPIC_MODEL, args.requestId, 'deferred-task-binding-turn')
+    await runImRemoteAgent({ ...args, turnId: acceptedTurn.turnId, acceptedTurn })
+
+    const materials = invocationMaterialsCapture.last as { remoteContext?: { taskBinding?: unknown } } | null
+    expect(materials?.remoteContext?.taskBinding).toMatchObject({ workflowId: 'workflow-1', taskId: 'task-1', stepId: 'publish', planRevision: 3 })
+    expect(getTaskControlRecord(db, { sessionId: session.id, ownerId: 'owner-1', workflowId: 'workflow-1', taskId: 'task-1' })?.planRevision).toBe(3)
+    db.close()
+  })
+
+  it.each([
+    { state: 'cancelled' as const, planRevision: 3 },
+    { state: 'active' as const, planRevision: 4 }
+  ])('fences a deferred completion when the original task is $state or revised', async ({ state, planRevision }) => {
+    const db = makeDb()
+    const session = createSession(db, { name: `deferred-task-fence-${state}-${planRevision}`, model: SUPPORTED_ANTHROPIC_MODEL })
+    appendMessage(db, { id: 'deferred-fence-source', sessionId: session.id, role: 'user', content: '发布报告', timestamp: Date.now(), status: 'sent' })
+    const task = putTaskControlRecord(db, { sessionId: session.id, ownerId: 'owner-1', workflowId: 'workflow-1', taskId: 'task-1',
+      planRevision: 3, expectedRevision: null, data: { status: 'active', sourceUserMessageId: 'deferred-fence-source',
+        steps: [{ stepId: 'publish', instruction: 'publish' }], outstandingInvocations: [] } })
+    if (!task.ok) throw new Error('test task setup failed')
+    const checkpoint = commitDeferredTaskCheckpoint(db, { sessionId: session.id, ownerId: 'owner-1', workflowId: 'workflow-1', taskId: 'task-1',
+      planRevision: 3, expectedRevision: task.record.revision, invocationId: 'inv-fence', todoId: 'todo-fence', stepId: 'publish' })
+    if (!checkpoint.ok) throw new Error('test checkpoint setup failed')
+    const intents = createSecurityActionIntentStore(db)
+    intents.prepare({ invocationId: 'inv-fence', envelopeInvocationId: 'inv-fence', sessionId: session.id, workflowId: 'workflow-1', taskId: 'task-1', stepId: 'publish', planRevision: 3 })
+    intents.linkTodo('inv-fence', 'todo-fence')
+    intents.commitCheckpoint('inv-fence', { checkpointId: checkpoint.checkpoint.checkpointId, workflowRevision: checkpoint.checkpoint.workflowRevision })
+    getDbConnection(db).prepare(`UPDATE im_task_control SET plan_revision=?,revision=revision+1,control_state=?,data_json=?
+      WHERE session_id=? AND owner_id=? AND workflow_id=? AND task_id=?`).run(planRevision, state,
+      JSON.stringify({ ...task.record.data, status: state === 'cancelled' ? 'cancelled' : 'active' }), session.id, 'owner-1', 'workflow-1', 'task-1')
+
+    await expect(runImRemoteAgent(baseArgs({ db, sessionId: session.id, remoteContext: {
+      source: 'feishu', messageId: 'completion-fenced', confirmPolicy: 'always', authOwner: 'owner-1',
+      deferredContinuation: { todoId: 'todo-fence', invocationId: 'inv-fence', workflowId: 'workflow-1', taskId: 'task-1', stepId: 'publish',
+        planRevision: 3, checkpointId: checkpoint.checkpoint.checkpointId, dispatchKey: 'dispatch-fence', toolCallId: 'tool-fence', toolName: 'send_message',
+        canonicalArgs: {}, outputRef: 'deferred-result:inv-fence', result: { kind: 'completed', outputRef: 'deferred-result:inv-fence', value: { ok: true } } }
+    } }))).rejects.toThrow('IM_DEFERRED_CONTINUATION_TASK_FENCED')
+    expect(mockRunToolChatSession).not.toHaveBeenCalled()
+    db.close()
   })
 
   it('Feishu Anthropic invocation freezes its resolved provider route in the invocation profile', async () => {
@@ -211,7 +487,10 @@ describe('runImRemoteAgent', () => {
       return { ok: true, content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn' }
     })
 
-    await runImRemoteAgent(baseArgs({ getModel: () => modelId! }))
+    const args = baseArgs({ getModel: () => modelId! })
+    const session = createSession(args.db, { name: 'provider-route-frozen', model: modelId! })
+    const acceptedTurn = prepareAcceptedTestTurn(args.db, session.id, modelId!, args.requestId, 'provider-route-frozen-turn')
+    await runImRemoteAgent({ ...args, sessionId: session.id, turnId: acceptedTurn.turnId, acceptedTurn })
 
     const routeId = capturedInvocation?.profile.providerRouteId
     expect(routeId).toBeTruthy()
@@ -220,6 +499,51 @@ describe('runImRemoteAgent', () => {
       providerId: 'pi-ai-anthropic-messages'
     })
     expect(capturedOptions?.onHostedTurnHandoff).toEqual(expect.any(Function))
+  })
+
+  it('uses the provider model name for route capability lookup when the catalog ID is numeric', async () => {
+    const db = makeDb()
+    const session = createSession(db, { name: 'numeric-catalog-id', model: 'deepseek-flash' })
+    appendMessage(db, { id: 'numeric-model-user', sessionId: session.id, role: 'user', content: 'test', timestamp: Date.now(), status: 'sent' })
+    setConfigValue(db, 'config.models', JSON.stringify([{
+      id: '5', name: 'deepseek-flash', maximumContext: 65536, maxTokens: 8192,
+      isDefault: false, isFast: true, isVision: false, enabled: true
+    }]))
+    mockResolveLlmCredentialsForPair.mockResolvedValueOnce({
+      model: { id: '5', name: 'deepseek-flash' }, serviceId: 'deepseek-service', providerModelName: 'deepseek-flash',
+      baseUrl: 'https://api.deepseek.com/anthropic', getApiKey: async () => 'key'
+    })
+    mockResolveLlmCredentialsForModel.mockResolvedValue({
+      serviceId: 'deepseek-service', baseUrl: 'https://api.deepseek.com/anthropic', getApiKey: async () => 'key'
+    })
+    let capturedInvocation: { profile: { model: string; providerRouteId?: string; reasoning?: { effort: string } } } | undefined
+    mockRunToolChatSession.mockImplementation(async (invocation: never) => {
+      capturedInvocation = invocation as never
+      return { ok: true, content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn' }
+    })
+
+    const acceptedTurn = createAcceptedTurn({
+      turnId: 'frozen-model-turn', requestId: '00000000-0000-4000-8000-000000000001', sessionId: session.id,
+      lane: 'wechat', startToken: 'frozen-model-start', currentUserMessageId: 'numeric-model-user', transcriptVersion: 1,
+      config: { lane: 'wechat', model: 'deepseek-flash', llmServiceId: 'deepseek-service', thinkingEffort: 'low' }
+    })
+    await runImRemoteAgent(baseArgs({
+      db, sessionId: session.id, acceptedTurn, getModel: () => SUPPORTED_ANTHROPIC_MODEL,
+      remoteContext: { source: 'wechat', messageId: 'numeric-model', confirmPolicy: 'always' }
+    }))
+
+    const routeId = capturedInvocation?.profile.providerRouteId
+    expect(routeId).toBeTruthy()
+    expect(getDefaultAgentRuntime().modelProviders.getRoute(routeId!)).toMatchObject({
+      profile: { modelId: 'deepseek-flash', endpoint: 'https://api.deepseek.com/anthropic' }
+    })
+    expect(capturedInvocation?.profile.model).toBe('deepseek-flash')
+    expect(capturedInvocation?.profile.reasoning?.effort).toBe('low')
+    const materials = invocationMaterialsCapture.last as { modelId?: string } | null
+    expect(materials?.modelId).toBe('5')
+    expect(mockResolveLlmCredentialsForPair).toHaveBeenCalledWith(db, '5', 'deepseek-service')
+    expect((invocationMaterialsCapture.last as { effort?: string } | null)?.effort).toBe('low')
+    db.close()
   })
 
   it('stops the Feishu Hosted turn when complete-gate Runtime composition fails', async () => {
@@ -446,6 +770,7 @@ describe('runImRemoteAgent', () => {
       createProgressAdapter: () => ({ channel: lane, reply: vi.fn() })
     })
     const session = createSession(db, { name: `${lane} checkpoint uncertainty`, model: SUPPORTED_ANTHROPIC_MODEL })
+    setConfigValue(db, 'config.models', JSON.stringify([{ id: 'test-remote-model', name: SUPPORTED_ANTHROPIC_MODEL, enabled: true }]))
     const turnId = `${lane}-checkpoint-turn`
     const userMessageId = `${lane}-checkpoint-user`
     const startToken = `${lane}-checkpoint-start`
@@ -456,7 +781,7 @@ describe('runImRemoteAgent', () => {
     })
     const acceptedTurn = createAcceptedTurn({
       turnId, requestId: args.requestId, sessionId: session.id, lane, startToken,
-      currentUserMessageId: userMessageId, transcriptVersion: 0, config: { lane, model: SUPPORTED_ANTHROPIC_MODEL }
+      currentUserMessageId: userMessageId, transcriptVersion: 0, config: { lane, model: SUPPORTED_ANTHROPIC_MODEL, llmServiceId: 'svc-1', thinkingEffort: 'low' }
     })
     acceptTurnContext(db, acceptedTurn)
     const context = {
@@ -586,6 +911,7 @@ describe('runImRemoteAgent', () => {
       createProgressAdapter: () => ({ channel: lane, reply: vi.fn() })
     })
     const session = createSession(db, { name: `${lane} terminal failure`, model: SUPPORTED_ANTHROPIC_MODEL })
+    setConfigValue(db, 'config.models', JSON.stringify([{ id: 'test-remote-model', name: SUPPORTED_ANTHROPIC_MODEL, enabled: true }]))
     const turnId = `${lane}-history-terminal-turn`
     const userMessageId = `${lane}-history-terminal-user`
     const startToken = `${lane}-history-terminal-start`
@@ -597,7 +923,7 @@ describe('runImRemoteAgent', () => {
     })
     const acceptedTurn = createAcceptedTurn({
       turnId, requestId: args.requestId, sessionId: session.id, lane, startToken,
-      currentUserMessageId: userMessageId, transcriptVersion: 0, config: { lane, model: SUPPORTED_ANTHROPIC_MODEL }
+      currentUserMessageId: userMessageId, transcriptVersion: 0, config: { lane, model: SUPPORTED_ANTHROPIC_MODEL, llmServiceId: 'svc-1', thinkingEffort: 'low' }
     })
     acceptTurnContext(db, acceptedTurn)
     const context = {
@@ -646,6 +972,7 @@ describe('runImRemoteAgent', () => {
   it('Hosted Remote context uses the prepared turn user message instead of the session tail', async () => {
     const db = makeDb()
     const session = createSession(db, { name: 'remote-current-turn-input' })
+    setConfigValue(db, 'config.models', JSON.stringify([{ id: 'test-remote-model', name: SUPPORTED_ANTHROPIC_MODEL, enabled: true }]))
     const { prepareTurnAtomically, appendMessage } = await import('../database')
     prepareTurnAtomically(db, {
       user: { id: 'remote-accepted-user', sessionId: session.id, role: 'user', content: 'accepted remote input', timestamp: 1, status: 'sent' },
@@ -666,7 +993,8 @@ describe('runImRemoteAgent', () => {
 
     const acceptedTurn = createAcceptedTurn({
       turnId: 'remote-accepted-turn', requestId: 'remote-accepted-request', sessionId: session.id, lane: 'feishu',
-      startToken: 'remote-accepted-token', currentUserMessageId: 'remote-accepted-user', transcriptVersion: 0, config: { lane: 'feishu' }
+      startToken: 'remote-accepted-token', currentUserMessageId: 'remote-accepted-user', transcriptVersion: 0,
+      config: { lane: 'feishu', model: SUPPORTED_ANTHROPIC_MODEL, llmServiceId: 'svc-1', thinkingEffort: 'low' }
     })
     await runImRemoteAgent(baseArgs({ db, sessionId: session.id, requestId: 'remote-accepted-request', turnId: 'remote-accepted-turn', acceptedTurn }))
 
@@ -1131,13 +1459,16 @@ describe('runImRemoteAgent', () => {
       { invocationId: 'prior-feishu', turnId: 'prior-feishu-turn', sequence: 2, schemaVersion: 1, eventId: 'prior-feishu-done', idempotencyKey: 'prior-feishu-done', kind: 'invocation-completed', payload: { status: 'completed' } }
     ], 0)
     let handoffError: unknown
-    mockRunToolChatSession.mockImplementation(async (_invocation: never, _ports: never, options: never) => {
+    mockRunToolChatSession.mockImplementation(async (invocation: never, _ports: never, options: never) => {
+      const accepted = (invocation as unknown as { acceptedTurn: ReturnType<typeof createAcceptedTurn> }).acceptedTurn
+      updateMessageContent(args.db, accepted.currentUserMessageId, { content: 'current Feishu question' })
       const callback = (options as unknown as { onHostedTurnHandoff: (input: unknown) => Promise<unknown> }).onHostedTurnHandoff
       try {
         await callback({
           authorizedToolNames: new Set(),
           request: { messages: [{ role: 'user', content: 'stale legacy transcript' }, { role: 'user', content: 'current Feishu question' }], maxTokens: 64 },
-          requiredUserMessage: { id: 'feishu-current-user', message: { role: 'user', content: 'current Feishu question' } }
+          currentUserMessageId: accepted.currentUserMessageId,
+          requiredUserMessage: { id: accepted.currentUserMessageId, message: { role: 'user', content: 'current Feishu question' } }
         })
       } catch (error) { handoffError = error }
       return { ok: false, error: handoffError instanceof Error ? handoffError.message : 'handoff unexpectedly proceeded', content: [], stopReason: 'end_turn' }
@@ -3188,23 +3519,19 @@ describe('runImRemoteAgent', () => {
     db.close()
   })
 
-  it('falls back to getApiKey when credentials resolve with error', async () => {
-    mockResolveLlmCredentialsForModel.mockResolvedValue({
-      serviceId: '',
-      baseUrl: undefined,
-      getApiKey: async () => null,
-      error: '当前无可用服务支持模型「x」'
-    })
-    let captured: { profile: { baseUrl?: string }; ports: { credentials: { resolveApiKey: () => Promise<string | null> } } } = {} as never
-    mockRunToolChatSession.mockImplementation(async (invocation: never, ports: never) => {
-      captured = { invocation, ports } as never
-      return { ok: true, content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn' }
-    })
+  it('does not fall back to a mutable getApiKey callback when the frozen pair is unavailable', async () => {
+    const db = makeDb()
+    const session = createSession(db, { name: 'no-credential-fallback', model: SUPPORTED_ANTHROPIC_MODEL })
+    setConfigValue(db, 'config.models', JSON.stringify([{ id: 'catalog-model', name: SUPPORTED_ANTHROPIC_MODEL, enabled: true }]))
+    const acceptedTurn = prepareAcceptedTestTurn(db, session.id, SUPPORTED_ANTHROPIC_MODEL, 'no-credential-fallback-request', 'no-credential-fallback-turn')
+    mockResolveLlmCredentialsForPair.mockResolvedValueOnce({ error: 'frozen service unavailable' })
+    const getApiKey = vi.fn(async () => 'fallback-key')
 
-    await runImRemoteAgent(baseArgs())
-
-    expect(await captured.ports.credentials.resolveApiKey()).toBe('fallback-key')
-    expect(captured.ports.credentials.networkTarget?.baseUrl).toBe('https://fallback.example.com')
+    await expect(runImRemoteAgent(baseArgs({ db, sessionId: session.id, requestId: acceptedTurn.requestId, turnId: acceptedTurn.turnId, acceptedTurn, getApiKey })))
+      .rejects.toThrow('IM_FROZEN_MODEL_SERVICE_UNAVAILABLE')
+    expect(getApiKey).not.toHaveBeenCalled()
+    expect(mockRunToolChatSession).not.toHaveBeenCalled()
+    db.close()
   })
 
   it('blocks sensitive workdir and still stops progress session', async () => {

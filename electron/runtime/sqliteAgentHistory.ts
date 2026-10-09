@@ -468,13 +468,17 @@ export class SqliteAgentHistory implements HistoryPort {
       if (!transcriptCommit) return appended
       if (!this.sessionId || transcriptCommit.sessionId !== this.sessionId) throw new HistoryBatchError('terminal transcript commit session identity mismatch')
       const terminal = events.length === 1 ? events[0] : undefined
-      if (!terminal || !['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(terminal.kind)) {
+      if (!terminal || !['invocation-completed', 'invocation-failed', 'invocation-interrupted', 'invocation-parked'].includes(terminal.kind)) {
         throw new HistoryBatchError('session transcript commit intent requires one terminal History event')
       }
       const outcomeMatchesTerminal = terminal.kind === 'invocation-completed' ? transcriptCommit.outcome === 'completed'
         : terminal.kind === 'invocation-failed' ? transcriptCommit.outcome === 'failed' || transcriptCommit.outcome === 'timed_out'
-        : transcriptCommit.outcome === 'cancelled' || transcriptCommit.outcome === 'interrupted'
+        : terminal.kind === 'invocation-parked' ? transcriptCommit.outcome === 'interrupted'
+          : transcriptCommit.outcome === 'cancelled' || transcriptCommit.outcome === 'interrupted'
       if (!outcomeMatchesTerminal) throw new HistoryBatchError('terminal History kind does not match the transcript outcome')
+      if (terminal.kind === 'invocation-parked' && transcriptCommit.messageMirror) {
+        throw new HistoryBatchError('parked terminal cannot project an assistant completion mirror')
+      }
       if (transcriptCommit.messageMirror) {
         const expectedStatus = transcriptCommit.outcome === 'completed' ? 'completed'
           : transcriptCommit.outcome === 'cancelled' ? 'cancelled' : 'failed'
@@ -565,7 +569,7 @@ export class SqliteAgentHistory implements HistoryPort {
         }
         const events = streamRows.map((row) => ({ invocationId, sequence: row.sequence, eventId: row.event_id,
           idempotencyKey: row.idempotency_key, turnId: row.turn_id, schemaVersion: row.schema_version,
-          kind: row.kind, payload: JSON.parse(row.payload_json) as unknown })) as HistoryEvent[]
+        kind: row.kind as HistoryEvent['kind'], payload: JSON.parse(row.payload_json) as unknown })) as HistoryEvent[]
         this.validateCanonicalSessionToolTransitions(events)
         const hydratedEvents = this.spillStore ? events.map((event) => this.hydrateLargeToolResultSync(event)) : events
         validateHistoryTransition([], hydratedEvents)
@@ -715,7 +719,8 @@ export class SqliteAgentHistory implements HistoryPort {
     for (const event of events) {
       const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
         ? event.payload as { message?: { toolCalls?: readonly { id?: unknown }[] }; toolCallId?: unknown; approvalId?: unknown;
-          approved?: unknown; success?: unknown; result?: unknown; answerer?: unknown; reasonCode?: unknown; requestedAt?: unknown }
+          approved?: unknown; success?: unknown; result?: unknown; answerer?: unknown; reasonCode?: unknown; requestedAt?: unknown;
+          todoId?: unknown; invocationId?: unknown; checkpointId?: unknown; workflowRevision?: unknown }
         : undefined
       if (event.kind === 'model-response-committed') {
         const responseIds = new Set<string>()
@@ -741,9 +746,20 @@ export class SqliteAgentHistory implements HistoryPort {
           throw new HistoryCorruptionError(event.invocationId, `canonical tool-call-started has no approved matching approval: ${event.eventId}`)
         }
         pending.set(payload.toolCallId, 'started')
-      } else if (event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched') {
+      } else if (event.kind === 'tool-call-finished' || event.kind === 'tool-call-not-dispatched' || event.kind === 'approval-deferred') {
         if (typeof payload?.toolCallId !== 'string' || !payload.toolCallId.trim() || !pending.has(payload.toolCallId)) {
           throw new HistoryCorruptionError(event.invocationId, `canonical tool result has no matching pending call: ${event.eventId}`)
+        }
+        if (event.kind === 'approval-deferred') {
+          const approval = toolApproval.get(payload.toolCallId)
+          if (!approval || typeof payload.todoId !== 'string' || !payload.todoId.trim() || payload.invocationId !== event.invocationId ||
+            typeof payload.checkpointId !== 'string' || !payload.checkpointId.trim() || !Number.isInteger(payload.workflowRevision) ||
+            (payload.workflowRevision as number) <= 0 || payload.approvalId !== approval.approvalId) {
+            throw new HistoryCorruptionError(event.invocationId, `canonical deferred approval binding is invalid: ${event.eventId}`)
+          }
+          toolApproval.delete(payload.toolCallId)
+          pending.delete(payload.toolCallId)
+          continue
         }
         if (event.kind === 'tool-call-finished' && pending.get(payload.toolCallId) !== 'started') {
           throw new HistoryCorruptionError(event.invocationId, `canonical tool result has no matching dispatch start: ${event.eventId}`)
@@ -795,7 +811,7 @@ export class SqliteAgentHistory implements HistoryPort {
       validateHistoryBatch([{ invocationId: row.invocation_id, sequence: row.sequence, eventId: row.event_id,
         idempotencyKey: row.idempotency_key, turnId: row.turn_id, schemaVersion: row.schema_version,
         kind: row.kind as HistoryEvent['kind'], payload }])
-      if (['tool-call-started', 'tool-call-finished', 'tool-call-not-dispatched'].includes(row.kind)) {
+      if (['tool-call-started', 'tool-call-finished', 'tool-call-not-dispatched', 'approval-deferred'].includes(row.kind)) {
         const toolCallId = payload && typeof payload === 'object' ? (payload as { toolCallId?: unknown }).toolCallId : undefined
         if (typeof toolCallId !== 'string' || !toolCallId.trim()) return false
       }

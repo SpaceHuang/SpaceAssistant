@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { sendFeishuTextToTarget } from './feishuReply'
+import { sendFeishuApprovalTextToTarget, sendFeishuTextToTarget } from './feishuReply'
 
 describe('sendFeishuTextToTarget', () => {
   it('uses open_id by default and encodes a text message through the bot API', async () => {
@@ -23,5 +23,19 @@ describe('sendFeishuTextToTarget', () => {
   it('does not treat an API-level rejection as confirmed delivery', async () => {
     const run = vi.fn(async () => ({ exitCode: 0, stdout: '{"code":99991663}', stderr: '', timedOut: false }))
     await expect(sendFeishuTextToTarget({ run } as never, 'ou_123', 'result')).rejects.toThrow('FEISHU_DELIVERY_REJECTED')
+  })
+})
+
+describe('sendFeishuApprovalTextToTarget', () => {
+  it('returns the platform message id needed to bind a reply to the delivered notification', async () => {
+    const run = vi.fn(async () => ({ exitCode: 0, stdout: '{"code":0,"data":{"message_id":"approval-message-1"}}', stderr: '', timedOut: false }))
+    await expect(sendFeishuApprovalTextToTarget({ run } as never, 'ou_123', 'approval notice'))
+      .resolves.toEqual({ messageId: 'approval-message-1' })
+  })
+
+  it('fails closed when the platform response omits a message id', async () => {
+    const run = vi.fn(async () => ({ exitCode: 0, stdout: '{"code":0}', stderr: '', timedOut: false }))
+    await expect(sendFeishuApprovalTextToTarget({ run } as never, 'ou_123', 'approval notice'))
+      .rejects.toThrow('FEISHU_DELIVERY_MESSAGE_ID_MISSING')
   })
 })

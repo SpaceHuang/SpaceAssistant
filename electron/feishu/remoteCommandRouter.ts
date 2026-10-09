@@ -20,7 +20,7 @@ import type { TurnRuntime } from '../turnRuntime'
 import type { SessionStorage } from '../sessionStorage/contracts'
 import { resolveFeishuSession } from './feishuSessionResolver'
 import { tryClaimOrRelease, createProcessedClaimFinalizer } from '../remote/imCommandRouterHelpers'
-import { bindRemoteSessionExecutionId } from '../remote/remoteAgentRegistry'
+import { bindRemoteSessionExecutionId, tryClaimRemoteSession, releaseRemoteSession, isRequestLeaseOwner, getRemoteAgentLease } from '../remote/remoteAgentRegistry'
 import { evaluateImInboundGuard, revalidateImInboundGuard, type ImAuthSnapshot } from '../remote/imInboundGuard'
 import { runFeishuRemoteAgent } from './feishuRemoteAgent'
 import {
@@ -38,7 +38,8 @@ import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
 import { createRateLimiter } from '../remote/imRateLimit'
 import { FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE } from '../remote/remoteConfirmPolicy'
 import { executeRemoteTurn } from '../remote/turnExecutionAdapter'
-import { resolveTrustedTurnExecutionConfig } from '../turnExecutionConfig'
+import { resolveFrozenImTurnExecutionConfig, resolveTrustedTurnExecutionConfig } from '../turnExecutionConfig'
+import { readAcceptedTurn } from '../database/acceptedTurnStorage'
 import { createAcceptedTurnFromPrepared } from '../runtime/acceptedTurnContext'
 import {
   maskOpenId,
@@ -47,6 +48,14 @@ import {
   type FeishuOwnerBindController
 } from './feishuOwnerBind'
 import { CLAIM_LEASE_MS } from '../remote/imProcessedStore'
+import { ackImInboxMessage, appendImInboxMessageWithWakeEvent, claimImInboxMessage, getImInboxMessageContext, listImInboxMessages } from '../database/imInbox'
+import { getTurnByRequestId } from '../database'
+import type { WakeEventLoopInput } from '../remote/wakeEventDispatcher'
+import { buildImQueueScope } from '../../src/shared/queueScope'
+import { isDeferredApprovalReplyCandidate } from '../remote/deferredApprovalIngress'
+import type { WakeEventDispatcher } from '../remote/wakeEventDispatcher'
+import { readDeferredCompletionWake, markDeferredCompletionWakeDelivered } from '../remote/deferredCompletionWake'
+import type { ImTaskSafetyPort } from '../remote/imTaskControlCoordinator'
 
 const rateLimiter = createRateLimiter()
 
@@ -99,6 +108,12 @@ export type RemoteCommandRouterDeps = {
   getWikiConfig?: () => import('../../src/shared/domainTypes').WikiConfig
   getShellConfig?: () => import('../../src/shared/domainTypes').ShellConfig
   turnRuntime?: TurnRuntime
+  wakeEventDispatcher?: WakeEventDispatcher
+  isRemoteAsyncApprovalEnabled?: () => boolean
+  retryDeferredApprovalNotifications?: (scope: { identityKey: string; ownerId: string }) => Promise<unknown>
+  handleDeferredApprovalReply?: (input: { message: FeishuInboundMessage; text: string; replyToMessageId?: string }) => Promise<void>
+  createDeferredConfirmationAdapter?: (remoteContext: import('../tools/types').RemoteContext) => NonNullable<Parameters<typeof runFeishuRemoteAgent>[0]['confirmationAdapter']>
+  taskControlSafetyPort?: ImTaskSafetyPort
 }
 
 export class RemoteCommandRouter {
@@ -107,6 +122,161 @@ export class RemoteCommandRouter {
   private pendingDisambiguation = new Map<string, PendingDisambiguation>()
 
   constructor(private deps: RemoteCommandRouterDeps) {}
+
+  async dispatchWakeEventSet(input: WakeEventLoopInput): Promise<void> {
+    if (!this.deps.sessionStorage) throw new Error('REMOTE_SESSION_STORAGE_REQUIRED')
+    const session = this.deps.sessionStorage.queries.readSession(input.sessionId)
+    const metadata = session?.metadata as { source?: unknown; feishuChatId?: unknown; feishuSenderOpenId?: unknown } | undefined
+    if (!session || metadata?.source !== 'feishu' ||
+      typeof metadata.feishuChatId !== 'string' || typeof metadata.feishuSenderOpenId !== 'string') {
+      throw new Error('FEISHU_WAKE_SESSION_IDENTITY_INVALID')
+    }
+    const config = mergeFeishuConfig(this.deps.getFeishuConfig())
+    const guard = evaluateImInboundGuard({ channel: 'feishu', senderId: metadata.feishuSenderOpenId, getConfig: () => config })
+    if (!guard.ok) throw new Error(`FEISHU_WAKE_AUTH_REJECTED:${guard.reason}`)
+    const assertAuthorized = () => {
+      const revalidated = revalidateImInboundGuard(guard.snapshot, { getConfig: () => mergeFeishuConfig(this.deps.getFeishuConfig()) })
+      if (!revalidated.ok) throw new Error(`FEISHU_WAKE_AUTH_REVOKED:${revalidated.reason}`)
+    }
+
+    const scope = buildImQueueScope('feishu', input.sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    for (const event of input.events) {
+      assertAuthorized()
+      if (event.type === 'safety-recovery' && event.payloadRef.kind === 'safety-approval') {
+        if (event.sessionId !== input.sessionId) throw new Error('FEISHU_COMPLETION_WAKE_SESSION_MISMATCH')
+        const completion = readDeferredCompletionWake(this.deps.db, event.payloadRef.approvalId)
+        if (!completion || completion.todo.channel !== 'feishu' || completion.todo.origin_session_id !== input.sessionId ||
+          completion.todo.identity_key !== metadata.feishuChatId || completion.todo.owner_id !== metadata.feishuSenderOpenId) {
+          throw new Error('FEISHU_COMPLETION_WAKE_BINDING_INVALID')
+        }
+        const context = completion.envelope.executionContext
+        const userMessageId = context.currentUserMessageId
+        const messageId = context.messageId
+        if (typeof userMessageId !== 'string' || typeof messageId !== 'string') throw new Error('FEISHU_COMPLETION_WAKE_CONTEXT_INVALID')
+        const originalMessage = this.deps.sessionStorage.queries.readMessage({ sessionId: input.sessionId, messageId: userMessageId })
+        const originalContent = originalMessage?.content ?? listImInboxMessages(this.deps.db, { queueScope: scope, limit: 100 })
+          .find(({ messageId: queuedId }) => queuedId === userMessageId)?.content
+        if (typeof originalContent !== 'string') throw new Error(`FEISHU_COMPLETION_WAKE_SOURCE_MESSAGE_MISSING:${userMessageId}`)
+        const sourceAcceptedTurn = readAcceptedTurn(this.deps.db, input.sessionId, completion.envelope.requestId)
+        if (!sourceAcceptedTurn || sourceAcceptedTurn.turnId !== completion.envelope.turnId || sourceAcceptedTurn.lane !== 'feishu') {
+          throw new Error('FEISHU_COMPLETION_WAKE_FROZEN_CONFIG_MISSING')
+        }
+        const requestId = `completion:${event.eventId}`
+        const prior = getTurnByRequestId(this.deps.db, input.sessionId, requestId)
+        if (prior && (prior.state !== 'terminal' || !['completed', 'parked'].includes(prior.outcome ?? ''))) throw new Error('FEISHU_COMPLETION_WAKE_PRIOR_TURN_INCOMPLETE')
+        if (!prior) {
+          const currentLease = getRemoteAgentLease(input.sessionId)
+          const alreadyHeld = currentLease?.requestId === input.runId
+          const lease = alreadyHeld ? 'ok' : tryClaimRemoteSession(input.sessionId, requestId, this.deps.getAppConfig().maxParallelChatSessions)
+          if (lease !== 'ok') throw new Error(`FEISHU_COMPLETION_WAKE_SESSION_LEASE_FAILED:${lease}`)
+          const leaseRequestId = alreadyHeld ? input.runId : requestId
+          if (!alreadyHeld) bindRemoteSessionExecutionId(input.sessionId, requestId, requestId)
+          try {
+            const profile = this.deps.workDirManager.listProfiles().find((item) => item.id === context.workDirProfileId) ?? null
+            await this.executePersistedInboundTurn({ sessionId: input.sessionId, requestId, userMessageId, content: originalContent,
+              messageId, chatId: metadata.feishuChatId, senderId: metadata.feishuSenderOpenId, config, profile,
+              authSnapshot: guard.snapshot, leaseRequestId, assertAuthorized,
+              frozenExecutionConfig: sourceAcceptedTurn.config,
+              deferredContinuation: { todoId: completion.todo.todo_id, invocationId: completion.todo.invocation_id,
+                workflowId: completion.todo.workflow_id, taskId: completion.todo.task_id, stepId: completion.todo.step_id,
+                planRevision: completion.todo.plan_revision,
+                ...(completion.todo.checkpoint_id ? { checkpointId: completion.todo.checkpoint_id } : {}),
+                dispatchKey: completion.execution.dispatchKey, toolCallId: completion.envelope.toolCallId, toolName: completion.envelope.toolName,
+                canonicalArgs: completion.envelope.canonicalArgs, result: completion.execution.result ?? {},
+                outputRef: typeof completion.execution.result?.outputRef === 'string' ? completion.execution.result.outputRef : '' } })
+          } finally {
+            if (!alreadyHeld) releaseRemoteSession(input.sessionId, requestId)
+          }
+        }
+        if (!markDeferredCompletionWakeDelivered(this.deps.db, event.payloadRef.approvalId)) throw new Error('FEISHU_COMPLETION_RESULT_ACK_FAILED')
+        continue
+      }
+      if (event.type !== 'im-inbound' || event.payloadRef.kind !== 'im-inbox-message') throw new Error('FEISHU_WAKE_EVENT_UNSUPPORTED')
+      if (event.sessionId !== input.sessionId) throw new Error('FEISHU_WAKE_SESSION_MISMATCH')
+      const messageId = event.payloadRef.messageId
+      const queued = listImInboxMessages(this.deps.db, { queueScope: scope, limit: 100 }).find((item) => item.messageId === messageId)
+      if (!queued) throw new Error('FEISHU_WAKE_INBOX_MESSAGE_MISSING')
+      const channelContext = getImInboxMessageContext(this.deps.db, messageId)
+      if (!channelContext || channelContext.channel !== 'feishu') throw new Error('FEISHU_WAKE_PLATFORM_CONTEXT_MISSING')
+      const lease = claimImInboxMessage(this.deps.db, { queueScope: scope, messageId: queued.messageId, ownerId: input.ownerId })
+      if (!lease) throw new Error('FEISHU_WAKE_INBOX_CLAIM_FAILED')
+      const requestId = `wake:${event.eventId}`
+      const priorTurn = getTurnByRequestId(this.deps.db, session.id, requestId)
+      if (priorTurn) {
+        if (priorTurn.state !== 'terminal' || !['completed', 'parked'].includes(priorTurn.outcome ?? '')) throw new Error('FEISHU_WAKE_PRIOR_TURN_INCOMPLETE')
+        if (!ackImInboxMessage(this.deps.db, { queueScope: scope, messageId: queued.messageId, ownerId: input.ownerId })) throw new Error('FEISHU_WAKE_INBOX_ACK_FAILED')
+        continue
+      }
+
+      const currentLease = getRemoteAgentLease(session.id)
+      const alreadyHeldByDispatcher = currentLease?.requestId === input.runId
+      const sessionLease = alreadyHeldByDispatcher ? 'ok' : tryClaimRemoteSession(session.id, requestId, this.deps.getAppConfig().maxParallelChatSessions)
+      if (sessionLease !== 'ok') throw new Error(`FEISHU_WAKE_SESSION_LEASE_FAILED:${sessionLease}`)
+      const executionLeaseRequestId = alreadyHeldByDispatcher ? input.runId : requestId
+      if (!alreadyHeldByDispatcher) bindRemoteSessionExecutionId(session.id, requestId, requestId)
+
+      const authSnapshot = guard.snapshot
+      const profile = this.deps.workDirManager.listProfiles().find((item) => item.id === session.workDirProfileId) ?? null
+      try {
+        await this.executePersistedInboundTurn({ sessionId: session.id, requestId, userMessageId: queued.messageId,
+          content: queued.content, messageId: channelContext.platformMessageId, chatId: metadata.feishuChatId,
+          senderId: metadata.feishuSenderOpenId, config, profile, authSnapshot, leaseRequestId: executionLeaseRequestId, assertAuthorized })
+        if (!ackImInboxMessage(this.deps.db, { queueScope: scope, messageId: queued.messageId, ownerId: input.ownerId })) throw new Error('FEISHU_WAKE_INBOX_ACK_FAILED')
+      } finally {
+        if (!alreadyHeldByDispatcher) releaseRemoteSession(session.id, requestId)
+      }
+    }
+  }
+
+  private async executePersistedInboundTurn(input: {
+    sessionId: string; requestId: string; userMessageId: string; content: string; messageId: string
+    chatId: string; senderId: string; config: FeishuConfig; profile: WorkDirProfile | null; authSnapshot: ImAuthSnapshot; leaseRequestId: string; assertAuthorized: () => void
+    frozenExecutionConfig?: import('../../src/shared/acceptedTurn').AcceptedTurn['config']
+    deferredContinuation?: import('../tools/types').RemoteContext['deferredContinuation']
+  }): Promise<void> {
+    if (input.deferredContinuation && !input.frozenExecutionConfig) throw new Error('FEISHU_COMPLETION_WAKE_FROZEN_CONFIG_MISSING')
+    const executionConfig = input.frozenExecutionConfig
+      ? await resolveFrozenImTurnExecutionConfig(this.deps.db, 'feishu', input.frozenExecutionConfig)
+      : await resolveTrustedTurnExecutionConfig(this.deps.db, this.deps.sessionStorage!.queries, this.deps.sessionStorage!.commands, input.sessionId, 'feishu')
+    input.assertAuthorized()
+    const queueScope = buildImQueueScope('feishu', input.sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    const prepared = this.deps.turnRuntime?.prepare({ mode: 'reuse-user', requestId: input.requestId, sessionId: input.sessionId,
+      userMessageId: input.userMessageId, excludeMessageIds: [], config: executionConfig, queueScope })
+    if (!prepared) throw new Error('REMOTE_TURN_PREPARE_REQUIRED')
+    if (!bindRemoteSessionExecutionId(input.sessionId, input.leaseRequestId, prepared.turnId)) throw new Error('REMOTE_SESSION_LEASE_LOST')
+    const remoteContext = {
+      source: 'feishu' as const, messageId: input.messageId, confirmPolicy: input.config.remoteConfirmPolicy,
+      feishuConfig: input.config, feishuAttachments: [], imChannel: this.deps.imChannel,
+      confirmTimeoutMessage: FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE, larkCliRunner: this.deps.runner,
+      chatId: input.chatId, userId: input.authSnapshot.owner, authOwner: input.authSnapshot.owner,
+      originSessionId: input.sessionId, outboundSessionId: input.sessionId,
+      workDirProfileId: input.profile?.id ?? this.deps.workDirManager.getActiveProfileId(),
+      ...(input.deferredContinuation ? { deferredContinuation: input.deferredContinuation } : {}),
+      authorizationGeneration: input.authSnapshot.authorizationGeneration, requestId: input.requestId, turnId: prepared.turnId,
+      appendWorkDirSwitchAudit: (profileId: string, profileName: string) => this.deps.auditLogger.append({ type: 'workdir_switch', profileId, profileName }),
+      appendSessionSwitchAudit: (entry: SessionSwitchAuditEntry) => this.deps.auditLogger.append(auditEntryToLoggerPayload(entry))
+    }
+    const acceptedTurn = createAcceptedTurnFromPrepared(prepared, 'feishu', executionConfig ?? { lane: 'feishu' }, this.deps.sessionStorage!.execution)
+    const result = await executeRemoteTurn({ runtime: this.deps.turnRuntime, prepared, requestId: input.requestId,
+      run: () => { input.assertAuthorized(); return runFeishuRemoteAgent({ db: this.deps.db, sessionStorage: this.deps.sessionStorage!, sessionId: input.sessionId,
+        userMessage: input.content, replyMessageId: input.messageId, requestId: input.requestId, turnId: prepared.turnId,
+        acceptedTurn, feishuConfig: input.config,
+        workDir: input.profile?.path ?? this.deps.getWorkDir(), workDirManager: this.deps.workDirManager,
+        runner: this.deps.runner, imChannel: this.deps.imChannel, getToolsConfig: this.deps.getToolsConfig,
+        getBrowserConfig: this.deps.getBrowserConfig, getWikiConfig: this.deps.getWikiConfig, getShellConfig: this.deps.getShellConfig,
+        userDataDir: this.deps.getUserDataPath(), remoteContext,
+        confirmationAdapter: this.deps.createDeferredConfirmationAdapter?.(remoteContext),
+        taskControlSafetyPort: this.deps.taskControlSafetyPort,
+        emitFactEvent: (event) => { if (!['source-completed', 'source-failed', 'source-cancelled', 'source-timeout'].includes(event.type)) this.deps.turnRuntime!.consumeForRequest(input.requestId, event, prepared.turnId) }
+      }) }
+    })
+    if (!result.ok) throw new Error(`FEISHU_WAKE_TURN_FAILED:${result.summary}`)
+    const outcome = getTurnByRequestId(this.deps.db, input.sessionId, input.requestId)?.outcome
+    if (result.parked && outcome === 'parked') return
+    if (outcome !== 'completed') throw new Error('FEISHU_WAKE_TURN_NOT_DURABLY_COMPLETED')
+    await sendFeishuRemoteOutbound({ runner: this.deps.runner, messageId: input.messageId, body: result.summary,
+      sessionId: input.sessionId, touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId: input.sessionId } })
+  }
 
   /**
    * Clear workdir disambiguation pending (rebind / clear owner / remote off).
@@ -172,6 +342,23 @@ export class RemoteCommandRouter {
     pending.timer = setTimeout(() => {
       void this.finalizeDisambiguation(key, pending, 'disambiguation_timeout')
     }, Math.max(0, pending.expiresAt - Date.now()))
+  }
+
+  private persistInboundWake(sessionId: string, message: FeishuInboundMessage, content: string): boolean {
+    try {
+      const queueScope = buildImQueueScope('feishu', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+      appendImInboxMessageWithWakeEvent(this.deps.db, {
+        sessionId, channel: 'feishu', queueScope, channelMessageId: message.messageId, content
+      })
+      return true
+    } catch (error) {
+      logFeishuCliEvent('error', 'feishu.inbound.persistence_failed', {
+        sessionId,
+        messageId: message.messageId,
+        message: error instanceof Error ? error.message : String(error)
+      })
+      return false
+    }
   }
 
   getLastInboundAt(): number | undefined {
@@ -335,6 +522,25 @@ export class RemoteCommandRouter {
       return
     }
 
+    try {
+      await this.deps.retryDeferredApprovalNotifications?.({ identityKey: msg.chatId, ownerId: guard.snapshot.owner })
+    } catch (error) {
+      logFeishuCliEvent('warn', 'feishu.deferred_approval_notification_retry_failed', {
+        messageId: msg.messageId, error: error instanceof Error ? error.message : String(error)
+      })
+    }
+
+    if (isDeferredApprovalReplyCandidate(userContent) && this.deps.isRemoteAsyncApprovalEnabled?.() === true) {
+      try {
+        await this.deps.handleDeferredApprovalReply?.({ message: msg, text: userContent, replyToMessageId: msg.replyToMessageId })
+      } catch (error) {
+        logFeishuCliEvent('error', 'feishu.deferred_approval_ingress_failed', {
+          messageId: msg.messageId, error: error instanceof Error ? error.message : String(error)
+        })
+      }
+      return
+    }
+
     const claimResult = await this.deps.processedStore.tryClaim(msg.messageId)
     if (!claimResult.ok) {
       logFeishuCliEvent('info', 'feishu.inbound.duplicate', { messageId: msg.messageId })
@@ -472,7 +678,8 @@ export class RemoteCommandRouter {
     profile?: WorkDirProfile | null,
     userMessage?: string,
     processedClaimId?: string,
-    authSnapshot?: ImAuthSnapshot
+    authSnapshot?: ImAuthSnapshot,
+    replay?: { requestId: string; sessionId: string; userMessageId: string; ownerId: string }
   ): Promise<void> {
     const claimFinalizer = createProcessedClaimFinalizer({
       messageId: msg.messageId,
@@ -510,7 +717,7 @@ export class RemoteCommandRouter {
 
       const appCfg = this.deps.getAppConfig()
       const content = userMessage ?? msg.content.trim()
-      const { sessionId, isNew } = await resolveFeishuSession(
+      const resolved = replay ? { sessionId: replay.sessionId, isNew: false } : await resolveFeishuSession(
         this.deps.sessionStorage!,
         msg,
         config,
@@ -523,7 +730,9 @@ export class RemoteCommandRouter {
           return
         }
       }
-      const requestId = randomUUID()
+      const sessionId = resolved.sessionId
+      const isNew = resolved.isNew
+      const requestId = replay?.requestId ?? randomUUID()
       logFeishuCliEvent('info', 'feishu.session.resolved', {
         sessionId,
         isNew,
@@ -543,8 +752,34 @@ export class RemoteCommandRouter {
         return
       }
 
-      const claim = tryClaimOrRelease(sessionId, requestId, appCfg.maxParallelChatSessions)
-      if (!claim.ok) {
+      const claim = replay ? null : tryClaimOrRelease(sessionId, requestId, appCfg.maxParallelChatSessions)
+      if (claim && !claim.ok) {
+        if (claim.reason === 'session_busy' && this.deps.wakeEventDispatcher) {
+          if (!this.persistInboundWake(sessionId, msg, content)) {
+            await claimFinalizer.complete('persistence_failed')
+            return
+          }
+          if (processedClaimId) {
+            const executing = await this.deps.processedStore.markExecuting(msg.messageId, processedClaimId)
+            if (!executing) {
+              await claimFinalizer.complete('processed_claim_lost')
+              return
+            }
+          }
+          await claimFinalizer.complete('durably_accepted')
+          if (isNew || config.remoteNotifyOnReceive) {
+            await sendFeishuRemoteOutbound({
+              runner: this.deps.runner, messageId: msg.messageId, body: '已收到，正在处理…', sessionId,
+              touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
+            })
+          }
+          void this.deps.wakeEventDispatcher.dispatchSession(sessionId).catch((error) => {
+            logFeishuCliEvent('error', 'feishu.inbound.dispatch_failed', {
+              sessionId, message: error instanceof Error ? error.message : String(error)
+            })
+          })
+          return
+        }
         if (claim.reason === 'session_busy') {
           logFeishuCliEvent('warn', 'feishu.inbound.session_busy', { sessionId })
         } else {
@@ -609,6 +844,46 @@ export class RemoteCommandRouter {
 
         touchRemoteSessionActivity(this.deps.sessionStorage!.commands, sessionId)
 
+        if (this.deps.wakeEventDispatcher && !replay) {
+          if (!this.persistInboundWake(sessionId, msg, content)) {
+            await claimFinalizer.complete('persistence_failed')
+            return
+          }
+          this.deps.getMainWebContents()?.send('feishu:inbound-message', { sessionId, message: msg })
+          if (processedClaimId) {
+            const executing = await this.deps.processedStore.markExecuting(msg.messageId, processedClaimId)
+            if (!executing) {
+              await claimFinalizer.complete('processed_claim_lost')
+              return
+            }
+          }
+          await claimFinalizer.complete('durably_accepted')
+          if (isNew || config.remoteNotifyOnReceive) {
+            await sendFeishuRemoteOutbound({
+              runner: this.deps.runner,
+              messageId: msg.messageId,
+              body: '已收到，正在处理…',
+              sessionId,
+              touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId }
+            })
+          }
+          try {
+            claim?.release()
+            void this.deps.wakeEventDispatcher.dispatchSession(sessionId).catch((error) => {
+              logFeishuCliEvent('error', 'feishu.inbound.dispatch_failed', {
+                sessionId,
+                message: error instanceof Error ? error.message : String(error)
+              })
+            })
+          } catch (error) {
+            logFeishuCliEvent('error', 'feishu.inbound.dispatch_failed', {
+              sessionId,
+              message: error instanceof Error ? error.message : String(error)
+            })
+          }
+          return
+        }
+
         if (isNew || config.remoteNotifyOnReceive) {
           await sendFeishuRemoteOutbound({
             runner: this.deps.runner,
@@ -667,11 +942,9 @@ export class RemoteCommandRouter {
 
         const executionConfig = await resolveTrustedTurnExecutionConfig(this.deps.db, this.deps.sessionStorage!.queries, this.deps.sessionStorage!.commands, sessionId, 'feishu')
         const prepared = this.deps.turnRuntime?.prepare({
-          mode: 'create-user',
-          requestId,
-          sessionId,
-          input: { text: content },
-          config: executionConfig
+          ...(replay
+            ? { mode: 'reuse-user' as const, requestId, sessionId, userMessageId: replay.userMessageId, excludeMessageIds: [], config: executionConfig }
+            : { mode: 'create-user' as const, requestId, sessionId, input: { text: content }, config: executionConfig })
         })
         if (!prepared) throw new Error('REMOTE_TURN_PREPARE_REQUIRED')
         if (!bindRemoteSessionExecutionId(sessionId, requestId, prepared.turnId)) {
@@ -696,6 +969,7 @@ export class RemoteCommandRouter {
           workDirProfileId: profile?.id ?? this.deps.workDirManager.getActiveProfileId(),
           authorizationGeneration: authSnapshot.authorizationGeneration,
           requestId,
+          turnId: prepared?.turnId ?? requestId,
           appendWorkDirSwitchAudit: (profileId: string, profileName: string) =>
             this.deps.auditLogger.append({ type: 'workdir_switch', profileId, profileName }),
           appendSessionSwitchAudit: (entry: SessionSwitchAuditEntry) =>
@@ -720,13 +994,9 @@ export class RemoteCommandRouter {
             requestId,
             turnId: prepared?.turnId,
             acceptedTurn,
-            llmServiceId: executionConfig?.llmServiceId,
             feishuConfig: config,
             workDir,
             workDirManager: this.deps.workDirManager,
-            getApiKey: this.deps.getApiKey,
-            getBaseUrl: this.deps.getBaseUrl,
-            getModel: this.deps.getModel,
             runner: this.deps.runner,
             imChannel: this.deps.imChannel,
             getToolsConfig: this.deps.getToolsConfig,
@@ -735,6 +1005,8 @@ export class RemoteCommandRouter {
             getShellConfig: this.deps.getShellConfig,
             userDataDir: this.deps.getUserDataPath(),
             remoteContext,
+            confirmationAdapter: this.deps.createDeferredConfirmationAdapter?.(remoteContext),
+            taskControlSafetyPort: this.deps.taskControlSafetyPort,
             emitFactEvent: this.deps.turnRuntime && prepared ? (event) => {
               if (event.type === 'source-completed' || event.type === 'source-failed' || event.type === 'source-cancelled' || event.type === 'source-timeout') return
               this.deps.turnRuntime!.consumeForRequest(requestId, event, prepared!.turnId)
@@ -782,7 +1054,7 @@ export class RemoteCommandRouter {
           wc.send('feishu:pending-confirm', { sessionId, pendingConfirm: true })
         }
       } finally {
-        claim.release()
+        claim?.release()
       }
     } catch (e) {
       const err = e instanceof Error ? e.message : String(e)

@@ -44,6 +44,9 @@ export function shouldAcceptWeChatInbound(msg: WeChatInboundMessage, config: WeC
 export function parseSdkInboundMessage(raw: IncomingMessage): WeChatInboundMessage {
   const messageId = raw.raw.client_id || `${raw.userId}-${raw.timestamp.getTime()}`
   const contextToken = raw._contextToken || raw.raw.context_token || ''
+  const itemList = (raw.raw as unknown as { item_list?: Array<{ ref_msg?: { message_id?: unknown; messageId?: unknown } }> }).item_list
+  const quotedId = itemList?.map((item) => item.ref_msg?.message_id ?? item.ref_msg?.messageId)
+    .find((value): value is string | number => typeof value === 'string' || typeof value === 'number')
 
   return {
     messageId,
@@ -51,6 +54,7 @@ export function parseSdkInboundMessage(raw: IncomingMessage): WeChatInboundMessa
     text: raw.text ?? '',
     type: raw.type,
     timestamp: raw.timestamp.toISOString(),
-    contextToken
+    contextToken,
+    ...(quotedId !== undefined && String(quotedId).trim() ? { quotedMessageId: String(quotedId) } : {})
   }
 }

@@ -430,6 +430,11 @@ export interface SecurityAuditEvent {
   sessionId: string
   /** 请求短号（复用 allocateConfirmId），用于关联 confirm.request/outcome。 */
   requestId?: string
+  /** Deferred approval causal identifiers; never contain user supplied content. */
+  todoId?: string
+  invocationId?: string
+  executionState?: 'consumed' | 'dispatching' | 'completed' | 'failed' | 'outcome_unknown'
+  notificationState?: 'undelivered' | 'delivered'
   toolUseId?: string
   decisionRuleId?: string
   /** 脱敏后的事实关联 id；路径事实不得把原始路径直接写入该字段。 */
@@ -487,6 +492,11 @@ export interface SecurityAuditEvent {
 }
 
 export type SecurityAuditEventKind =
+  | 'deferred-approval.pending'
+  | 'deferred-approval.approved'
+  | 'deferred-approval.dispatch'
+  | 'deferred-approval.notification'
+  | 'deferred-approval.result'
   | 'policy.decision'
   | 'policy.execution-veto'
   | 'file.auto-approve'

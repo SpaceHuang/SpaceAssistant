@@ -50,12 +50,21 @@ export interface RemoteContext {
   workDirProfileId?: string
   /** Immutable request id for lease ownership. */
   requestId?: string
+  currentUserMessageId?: string
+  turnId?: string
+  taskBinding?: { workflowId: string; taskId: string; stepId: string; planRevision: number; revision: number }
+  providerRouteId?: string
+  model?: string
   /**
    * Origin session that owns assistant messages, streaming/completion state, DB writes,
    * progress cleanup and backup scheduling. Immutable for the lifetime of the request —
    * `switch_session` never migrates it.
    */
   originSessionId?: string
+  /** Durable deferred-action continuation bound to the original workflow checkpoint. */
+  deferredContinuation?: Readonly<{ todoId: string; invocationId: string; workflowId: string; taskId: string; stepId: string;
+    planRevision: number; checkpointId?: string; dispatchKey: string; toolCallId: string; toolName: string;
+    canonicalArgs: Record<string, unknown>; result: Record<string, unknown>; outputRef: string }>
 }
 
 /** Gradual-migration aliases — prefer RemoteContext going forward. */

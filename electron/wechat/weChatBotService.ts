@@ -44,6 +44,7 @@ export class WeChatBotService {
   private botIdSuffix?: string
   private boundUserId?: string
   private loggedIn = false
+  private pollStartInFlight: Promise<WeChatConnectionStatus> | null = null
   private verifyCodeResolvers: Array<(code: string) => void> = []
 
   constructor(private deps: WeChatBotServiceDeps) {}
@@ -224,6 +225,19 @@ export class WeChatBotService {
   }
 
   async startPoll(): Promise<WeChatConnectionStatus> {
+    if (this.pollState === 'polling') return this.getStatus()
+    if (this.pollStartInFlight) return this.pollStartInFlight
+
+    const attempt = this.startPollOnce()
+    this.pollStartInFlight = attempt
+    try {
+      return await attempt
+    } finally {
+      if (this.pollStartInFlight === attempt) this.pollStartInFlight = null
+    }
+  }
+
+  private async startPollOnce(): Promise<WeChatConnectionStatus> {
     const bot = await this.ensureBot()
     this.pollState = 'connecting'
     try {

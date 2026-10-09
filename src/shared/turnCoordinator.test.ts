@@ -312,6 +312,18 @@ describe('TurnCoordinator', () => {
     }))
   })
 
+  it('queued reuse 将 IM queue scope 传递给 scope-aware 原子认领', () => {
+    const db = storage()
+    db.getMessage = vi.fn().mockReturnValue({ ...user, status: 'queued' })
+    const coordinator = new TurnCoordinator(db, { now: () => 1, id: (() => { let n = 0; return () => `im-queued-${++n}` })() })
+    const queueScope = { kind: 'im' as const, channel: 'feishu' as const, sessionId: 's1' }
+
+    coordinator.prepare({ mode: 'reuse-user', requestId: 'wake:event-1', sessionId: 's1', userMessageId: 'u1',
+      excludeMessageIds: [], config: {}, queueScope })
+
+    expect(db.claimQueuedAtomic).toHaveBeenCalledWith(expect.objectContaining({ queueScope, requestId: 'wake:event-1' }))
+  })
+
   it('prepare 拒绝跨 session exclude，并禁止排除 required user', () => {
     const db = storage()
     db.getMessage = vi.fn((id) => id === 'u1' ? user : id === 'other' ? { ...user, id: 'other', sessionId: 's2' } : undefined)

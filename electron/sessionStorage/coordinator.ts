@@ -10,6 +10,7 @@ import {
   listStreamingAssistantMessages,
   listRecoverableResidues,
   finalizeResidueMessageKeepingOutcome,
+  finalizeParkedResidueMessage,
   listPersistedTurns,
   hasActiveTurn,
   updateMessageContent,
@@ -65,13 +66,14 @@ export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
       ...(acceptance ? { acceptance } : {})
     })
   },
-    claimQueuedAtomic: (input) => claimQueuedTurnAtomically(db, input),
+  claimQueuedAtomic: (input) => claimQueuedTurnAtomically(db, input),
     update: (messageId, patch) => updateMessageContent(db, messageId, patch),
     updateIfStreaming: (messageId, patch) => updateMessageContentIfStreaming(db, messageId, patch),
     checkpoint: (turnId, version, message) => checkpointTurnAtomically(db, turnId, version, message.id, message),
     listStreaming: () => listStreamingAssistantMessages(db),
     listRecoverableResidues: () => listRecoverableResidues(db),
     finalizeResidueMessage: (messageId, targetStatus) => finalizeResidueMessageKeepingOutcome(db, messageId, targetStatus),
+    finalizeParkedResidueMessage: (messageId) => finalizeParkedResidueMessage(db, messageId),
     listUnfinishedTurns: () => listPersistedTurns(db)
       .filter((turn) => turn.state === 'configuring' || turn.state === 'prepared' || turn.state === 'executing' || turn.state === 'waiting-confirm')
     .map((turn) => ({ turnId: turn.turnId, assistantMessageId: turn.assistantMessageId })),

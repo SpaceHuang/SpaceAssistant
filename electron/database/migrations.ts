@@ -47,6 +47,165 @@ function readSchemaVersion(conn: DatabaseSync): number | undefined {
   return parseSchemaVersion(row?.value)
 }
 
+function migrateQueueScopes(conn: DatabaseSync): void {
+  const tableExists = (table: string) => conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table) !== undefined
+  const getColumns = (table: string) => new Set(
+    (conn.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(({ name }) => name)
+  )
+  const ensureColumn = (table: string, column: string) => {
+    if (!tableExists(table)) return false
+    const columns = getColumns(table)
+    if (!columns.has(column)) conn.exec(`ALTER TABLE ${table} ADD COLUMN ${column} TEXT NOT NULL DEFAULT 'desktop'`)
+    return true
+  }
+
+  const hasMessages = ensureColumn('messages', 'queue_scope')
+  if (hasMessages) {
+    const columns = getColumns('messages')
+    if (columns.has('status')) conn.exec("UPDATE messages SET queue_scope='desktop' WHERE status='queued'")
+    if (columns.has('status') && columns.has('sequence')) {
+      conn.exec('CREATE INDEX IF NOT EXISTS idx_messages_queue_scope_status_order ON messages(queue_scope,status,sequence)')
+    }
+  }
+
+  const hasReceipts = ensureColumn('queue_input_requests', 'queue_scope')
+  if (hasReceipts) {
+    const columns = getColumns('queue_input_requests')
+    if (hasMessages && columns.has('queued_message_id')) {
+      conn.exec(`UPDATE queue_input_requests SET queue_scope=COALESCE(
+        (SELECT messages.queue_scope FROM messages WHERE messages.id=queue_input_requests.queued_message_id),
+        'desktop'
+      );`)
+    }
+    if (columns.has('session_id') && columns.has('request_id')) {
+      conn.exec(`CREATE INDEX IF NOT EXISTS idx_queue_input_requests_scope_session_request
+        ON queue_input_requests(queue_scope,session_id,request_id);`)
+    }
+  }
+}
+
+function migrateQueueReceiptScopeKey(conn: DatabaseSync): void {
+  const tableExists = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='queue_input_requests'").get() !== undefined
+  if (!tableExists) return
+  const columns = new Set((conn.prepare('PRAGMA table_info(queue_input_requests)').all() as Array<{ name: string }>).map(({ name }) => name))
+  const required = ['session_id', 'request_id', 'fingerprint', 'queued_message_id', 'turn_id', 'state', 'created_at', 'updated_at', 'queue_scope']
+  if (!required.every((column) => columns.has(column))) return
+
+  conn.exec(`CREATE TABLE queue_input_requests_v56 (
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    queue_scope TEXT NOT NULL DEFAULT 'desktop',
+    request_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    queued_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+    turn_id TEXT REFERENCES turns(turn_id) ON DELETE SET NULL,
+    state TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(queue_scope,session_id,request_id)
+  );
+  INSERT INTO queue_input_requests_v56(session_id,queue_scope,request_id,fingerprint,queued_message_id,turn_id,state,created_at,updated_at)
+    SELECT session_id,queue_scope,request_id,fingerprint,queued_message_id,turn_id,state,created_at,updated_at FROM queue_input_requests;
+  DROP TABLE queue_input_requests;
+  ALTER TABLE queue_input_requests_v56 RENAME TO queue_input_requests;
+  CREATE INDEX IF NOT EXISTS idx_queue_input_requests_message ON queue_input_requests(queued_message_id);
+  CREATE INDEX IF NOT EXISTS idx_queue_input_requests_scope_session_request ON queue_input_requests(queue_scope,session_id,request_id);`)
+}
+
+function migrateImInboxClaims(conn: DatabaseSync): void {
+  const messagesExist = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages'").get() !== undefined
+  if (!messagesExist) return
+  const columns = new Set((conn.prepare('PRAGMA table_info(messages)').all() as Array<{ name: string }>).map(({ name }) => name))
+  if (!columns.has('queue_scope')) return
+  conn.exec(`CREATE TABLE IF NOT EXISTS im_inbox_claims (
+    message_id TEXT PRIMARY KEY NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    queue_scope TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    claimed_at INTEGER NOT NULL,
+    lease_expires_at INTEGER,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_im_inbox_claims_scope_owner_expiry
+    ON im_inbox_claims(queue_scope,owner_id,lease_expires_at);`)
+}
+
+function migrateImInboxClaimState(conn: DatabaseSync): void {
+  const tableExists = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='im_inbox_claims'").get() !== undefined
+  if (!tableExists) return
+  const columns = new Set((conn.prepare('PRAGMA table_info(im_inbox_claims)').all() as Array<{ name: string }>).map(({ name }) => name))
+  if (!columns.has('state')) {
+    conn.exec("ALTER TABLE im_inbox_claims ADD COLUMN state TEXT NOT NULL DEFAULT 'claimed' CHECK(state IN ('claimed','acked','released'))")
+  }
+  conn.exec(`CREATE INDEX IF NOT EXISTS idx_im_inbox_claims_scope_state_expiry
+    ON im_inbox_claims(queue_scope,state,lease_expires_at);`)
+}
+
+function migrateWakeEvents(conn: DatabaseSync): void {
+  conn.exec(`CREATE TABLE IF NOT EXISTS wake_events (
+    event_id TEXT PRIMARY KEY NOT NULL,
+    reason_key TEXT NOT NULL,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL CHECK(event_type IN ('im-inbound','safety-recovery','continuation')),
+    payload_ref_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','claimed','acked')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(session_id, reason_key)
+  );
+  CREATE INDEX IF NOT EXISTS idx_wake_events_session_status_created
+    ON wake_events(session_id,status,created_at,event_id);`)
+}
+
+function migrateWakeEventClaimOwner(conn: DatabaseSync): void {
+  const exists = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wake_events'").get() !== undefined
+  if (!exists) return
+  const columns = new Set((conn.prepare('PRAGMA table_info(wake_events)').all() as Array<{ name: string }>).map(({ name }) => name))
+  if (!columns.has('claimed_by')) conn.exec('ALTER TABLE wake_events ADD COLUMN claimed_by TEXT')
+}
+
+function migrateWakeEventRunBinding(conn: DatabaseSync): void {
+  const exists = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wake_events'").get() !== undefined
+  if (!exists) return
+  const columns = new Set((conn.prepare('PRAGMA table_info(wake_events)').all() as Array<{ name: string }>).map(({ name }) => name))
+  if (!columns.has('run_id')) conn.exec('ALTER TABLE wake_events ADD COLUMN run_id TEXT')
+}
+
+function migrateWakeEventLease(conn: DatabaseSync): void {
+  const exists = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wake_events'").get() !== undefined
+  if (!exists) return
+  const columns = new Set((conn.prepare('PRAGMA table_info(wake_events)').all() as Array<{ name: string }>).map(({ name }) => name))
+  if (!columns.has('lease_expires_at')) conn.exec('ALTER TABLE wake_events ADD COLUMN lease_expires_at INTEGER')
+}
+
+function migrateWakeEventOutbox(conn: DatabaseSync): void {
+  const exists = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wake_events'").get() !== undefined
+  if (!exists) return
+  conn.exec(`CREATE TABLE IF NOT EXISTS wake_event_outbox (
+    event_id TEXT PRIMARY KEY NOT NULL REFERENCES wake_events(event_id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    state TEXT NOT NULL CHECK(state IN ('pending','dispatched')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_wake_event_outbox_state_created
+    ON wake_event_outbox(state,created_at,event_id);`)
+}
+
+function migrateWakeEventRetryState(conn: DatabaseSync): void {
+  const exists = conn.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wake_events'").get() !== undefined
+  if (!exists) return
+  conn.exec(`CREATE TABLE IF NOT EXISTS wake_event_retry_state (
+    event_id TEXT PRIMARY KEY NOT NULL REFERENCES wake_events(event_id) ON DELETE CASCADE,
+    attempt_count INTEGER NOT NULL,
+    started_at INTEGER NOT NULL,
+    next_attempt_at INTEGER,
+    should_retry INTEGER NOT NULL CHECK(should_retry IN (0,1)),
+    last_failure_json TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_wake_event_retry_due
+    ON wake_event_retry_state(should_retry,next_attempt_at);`)
+}
+
 export function runMigrations(conn: DatabaseSync): void {
   let version = readSchemaVersion(conn)
   if (version === undefined) {
@@ -666,6 +825,548 @@ export function runMigrations(conn: DatabaseSync): void {
       CREATE TRIGGER IF NOT EXISTS spill_reference_generation_transcript_delete AFTER DELETE ON session_transcript_entries BEGIN
         UPDATE spill_reference_meta SET meta_value=meta_value+1 WHERE meta_key='canonical_change_generation'; END;`)
     version = 54
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 54) runInTransaction(conn, () => {
+    migrateQueueScopes(conn)
+    version = 55
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 55) runInTransaction(conn, () => {
+    migrateQueueReceiptScopeKey(conn)
+    version = 56
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 56) runInTransaction(conn, () => {
+    migrateImInboxClaims(conn)
+    version = 57
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 57) runInTransaction(conn, () => {
+    migrateImInboxClaimState(conn)
+    version = 58
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 58) runInTransaction(conn, () => {
+    migrateWakeEvents(conn)
+    version = 59
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 59) runInTransaction(conn, () => {
+    migrateWakeEventClaimOwner(conn)
+    version = 60
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 60) runInTransaction(conn, () => {
+    migrateWakeEventRunBinding(conn)
+    version = 61
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 61) runInTransaction(conn, () => {
+    migrateWakeEventLease(conn)
+    version = 62
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 62) runInTransaction(conn, () => {
+    migrateWakeEventOutbox(conn)
+    version = 63
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 63) runInTransaction(conn, () => {
+    migrateWakeEventRetryState(conn)
+    version = 64
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 64) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS im_workflow_state (
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      workflow_id TEXT NOT NULL,
+      version INTEGER NOT NULL CHECK(version > 0),
+      revision INTEGER NOT NULL CHECK(revision > 0),
+      data_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY(session_id,workflow_id,version)
+    );`)
+    version = 65
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 65) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS im_task_control (
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL,
+      workflow_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      version INTEGER NOT NULL CHECK(version > 0),
+      plan_revision INTEGER NOT NULL CHECK(plan_revision > 0),
+      revision INTEGER NOT NULL CHECK(revision > 0),
+      data_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY(session_id,owner_id,workflow_id,task_id,version)
+    );`)
+    version = 66
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  // Persisted worktree profiles may already carry the planned latest marker while the
+  // workflow-state table was introduced after the wake-event migration chain.
+  if (version === 65) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS im_workflow_state (
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      workflow_id TEXT NOT NULL,
+      version INTEGER NOT NULL CHECK(version > 0),
+      revision INTEGER NOT NULL CHECK(revision > 0),
+      data_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY(session_id,workflow_id,version)
+    );`)
+  })
+  if (version === 66) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS im_workflow_state (
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      workflow_id TEXT NOT NULL,
+      version INTEGER NOT NULL CHECK(version > 0),
+      revision INTEGER NOT NULL CHECK(revision > 0),
+      data_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY(session_id,workflow_id,version)
+    );
+    CREATE TABLE IF NOT EXISTS im_task_control (
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      owner_id TEXT NOT NULL,
+      workflow_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      version INTEGER NOT NULL CHECK(version > 0),
+      plan_revision INTEGER NOT NULL CHECK(plan_revision > 0),
+      revision INTEGER NOT NULL CHECK(revision > 0),
+      data_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY(session_id,owner_id,workflow_id,task_id,version)
+    );`)
+    const taskControlColumns = new Set((conn.prepare('PRAGMA table_info(im_task_control)').all() as Array<{ name: string }>).map(({ name }) => name))
+    if (!taskControlColumns.has('control_state')) {
+      conn.exec("ALTER TABLE im_task_control ADD COLUMN control_state TEXT NOT NULL DEFAULT 'active' CHECK(control_state IN ('active','cancel_pending','cancelled','revise_pending'))")
+    }
+    conn.exec(`CREATE TABLE IF NOT EXISTS im_task_control_operations (
+      operation_id TEXT PRIMARY KEY NOT NULL,
+      session_id TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      workflow_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      operation_type TEXT NOT NULL CHECK(operation_type IN ('cancel','revise')),
+      plan_revision INTEGER NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('requested','reconciliation_required','applied')),
+      payload_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS im_task_control_dispatches (
+      todo_id TEXT PRIMARY KEY NOT NULL,
+      session_id TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      workflow_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      plan_revision INTEGER NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('dispatching','dispatched')),
+      started_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );`)
+    version = 67
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 67) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS im_task_control_operations (
+      operation_id TEXT PRIMARY KEY NOT NULL,
+      session_id TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      workflow_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      operation_type TEXT NOT NULL CHECK(operation_type IN ('cancel','revise')),
+      plan_revision INTEGER NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('requested','reconciliation_required','applied')),
+      payload_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS im_task_control_dispatches (
+      todo_id TEXT PRIMARY KEY NOT NULL,
+      session_id TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      workflow_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      plan_revision INTEGER NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('dispatching','dispatched')),
+      started_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );`)
+  })
+  if (version === 67) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS deferred_call_envelopes (
+      invocation_id TEXT PRIMARY KEY NOT NULL,
+      schema_version INTEGER NOT NULL CHECK(schema_version > 0),
+      canonicalization_version TEXT NOT NULL,
+      envelope_json TEXT NOT NULL,
+      integrity_hash TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );`)
+    version = 68
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 68) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS deferred_call_envelopes (
+      invocation_id TEXT PRIMARY KEY NOT NULL,
+      schema_version INTEGER NOT NULL CHECK(schema_version > 0),
+      canonicalization_version TEXT NOT NULL,
+      envelope_json TEXT NOT NULL,
+      integrity_hash TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );`)
+  })
+  if (version === 68) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS deferred_todos (
+      todo_id TEXT PRIMARY KEY NOT NULL,
+      invocation_id TEXT NOT NULL UNIQUE,
+      channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
+      identity_key TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      authorization_epoch INTEGER NOT NULL CHECK(authorization_epoch > 0),
+      rule_id TEXT NOT NULL,
+      facts_hash TEXT NOT NULL,
+      workflow_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      step_id TEXT NOT NULL,
+      plan_revision INTEGER NOT NULL CHECK(plan_revision > 0),
+      origin_session_id TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('pending','dispatching','consumed','invalidated','expired')),
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_deferred_todos_scope_state_expiry
+      ON deferred_todos(channel,identity_key,owner_id,state,expires_at);
+    CREATE INDEX IF NOT EXISTS idx_deferred_todos_task_state
+      ON deferred_todos(origin_session_id,workflow_id,task_id,plan_revision,state);`)
+    version = 69
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 69) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS deferred_todos (
+      todo_id TEXT PRIMARY KEY NOT NULL,
+      invocation_id TEXT NOT NULL UNIQUE,
+      channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
+      identity_key TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      authorization_epoch INTEGER NOT NULL CHECK(authorization_epoch > 0),
+      rule_id TEXT NOT NULL,
+      facts_hash TEXT NOT NULL,
+      workflow_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      step_id TEXT NOT NULL,
+      plan_revision INTEGER NOT NULL CHECK(plan_revision > 0),
+      origin_session_id TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('pending','dispatching','consumed','invalidated','expired')),
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_deferred_todos_scope_state_expiry
+      ON deferred_todos(channel,identity_key,owner_id,state,expires_at);
+    CREATE INDEX IF NOT EXISTS idx_deferred_todos_task_state
+      ON deferred_todos(origin_session_id,workflow_id,task_id,plan_revision,state);`)
+  })
+  if (version === 69) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS deferred_todo_capacity_reservations (
+      reservation_id TEXT PRIMARY KEY NOT NULL,
+      invocation_id TEXT NOT NULL UNIQUE,
+      session_id TEXT NOT NULL,
+      identity_key TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('prepared','pending','released','expired')),
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_deferred_capacity_identity_state
+      ON deferred_todo_capacity_reservations(identity_key,state,expires_at);
+    CREATE INDEX IF NOT EXISTS idx_deferred_capacity_session_state
+      ON deferred_todo_capacity_reservations(session_id,identity_key,state,expires_at);`)
+    version = 70
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 70) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS deferred_todo_capacity_reservations (
+      reservation_id TEXT PRIMARY KEY NOT NULL,
+      invocation_id TEXT NOT NULL UNIQUE,
+      session_id TEXT NOT NULL,
+      identity_key TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('prepared','pending','released','expired')),
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_deferred_capacity_identity_state
+      ON deferred_todo_capacity_reservations(identity_key,state,expires_at);
+    CREATE INDEX IF NOT EXISTS idx_deferred_capacity_session_state
+      ON deferred_todo_capacity_reservations(session_id,identity_key,state,expires_at);`)
+  })
+  if (version === 70) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS security_action_intents (
+      invocation_id TEXT PRIMARY KEY NOT NULL,
+      session_id TEXT NOT NULL,
+      workflow_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      step_id TEXT NOT NULL,
+      plan_revision INTEGER NOT NULL CHECK(plan_revision > 0),
+      envelope_invocation_id TEXT NOT NULL,
+      todo_id TEXT,
+      checkpoint_id TEXT,
+      checkpoint_workflow_revision INTEGER,
+      state TEXT NOT NULL CHECK(state IN ('prepared','todo_linked','checkpoint_committed','notified')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );`)
+    version = 71
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 71) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS security_action_intents (
+      invocation_id TEXT PRIMARY KEY NOT NULL,
+      session_id TEXT NOT NULL,
+      workflow_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      step_id TEXT NOT NULL,
+      plan_revision INTEGER NOT NULL CHECK(plan_revision > 0),
+      envelope_invocation_id TEXT NOT NULL,
+      todo_id TEXT,
+      checkpoint_id TEXT,
+      checkpoint_workflow_revision INTEGER,
+      state TEXT NOT NULL CHECK(state IN ('prepared','todo_linked','checkpoint_committed','notified')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );`)
+  })
+  if (version === 71) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS security_action_intent_outbox (
+      outbox_id TEXT PRIMARY KEY NOT NULL,
+      invocation_id TEXT NOT NULL,
+      action TEXT NOT NULL CHECK(action IN ('link_todo','commit_checkpoint')),
+      state TEXT NOT NULL CHECK(state IN ('pending','applied','discarded')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(invocation_id,action)
+    );`)
+    version = 72
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 72) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS security_action_intents (
+      invocation_id TEXT PRIMARY KEY NOT NULL,
+      session_id TEXT NOT NULL,
+      workflow_id TEXT NOT NULL,
+      task_id TEXT NOT NULL,
+      step_id TEXT NOT NULL,
+      plan_revision INTEGER NOT NULL CHECK(plan_revision > 0),
+      envelope_invocation_id TEXT NOT NULL,
+      todo_id TEXT,
+      checkpoint_id TEXT,
+      checkpoint_workflow_revision INTEGER,
+      state TEXT NOT NULL CHECK(state IN ('prepared','todo_linked','checkpoint_committed','notified')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS security_action_intent_outbox (
+      outbox_id TEXT PRIMARY KEY NOT NULL,
+      invocation_id TEXT NOT NULL,
+      action TEXT NOT NULL CHECK(action IN ('link_todo','commit_checkpoint')),
+      state TEXT NOT NULL CHECK(state IN ('pending','applied','discarded')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(invocation_id,action)
+    );`)
+  })
+  if (version === 72) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS deferred_execution_results (
+      todo_id TEXT PRIMARY KEY NOT NULL,
+      invocation_id TEXT NOT NULL UNIQUE,
+      dispatch_key TEXT NOT NULL UNIQUE,
+      state TEXT NOT NULL CHECK(state IN ('dispatching','completion_outboxed','delivered','outcome_unknown')),
+      result_json TEXT,
+      dispatch_started_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS deferred_completion_outbox (
+      outbox_id TEXT PRIMARY KEY NOT NULL,
+      todo_id TEXT NOT NULL UNIQUE,
+      invocation_id TEXT NOT NULL UNIQUE,
+      dispatch_key TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('pending','delivered')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );`)
+    version = 73
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 73) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS deferred_execution_results (
+      todo_id TEXT PRIMARY KEY NOT NULL,
+      invocation_id TEXT NOT NULL UNIQUE,
+      dispatch_key TEXT NOT NULL UNIQUE,
+      state TEXT NOT NULL CHECK(state IN ('dispatching','completion_outboxed','delivered','outcome_unknown')),
+      result_json TEXT,
+      dispatch_started_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS deferred_completion_outbox (
+      outbox_id TEXT PRIMARY KEY NOT NULL,
+      todo_id TEXT NOT NULL UNIQUE,
+      invocation_id TEXT NOT NULL UNIQUE,
+      dispatch_key TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('pending','delivered')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS remote_authorization_epochs (
+      channel TEXT PRIMARY KEY NOT NULL CHECK(channel IN ('feishu','wechat')),
+      epoch INTEGER NOT NULL CHECK(epoch > 0),
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS remote_authorization_revocations (
+      channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
+      epoch INTEGER NOT NULL CHECK(epoch > 0),
+      reason TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('pending','completed')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      session_id TEXT,
+      PRIMARY KEY(channel,epoch)
+    );
+    INSERT OR IGNORE INTO remote_authorization_epochs(channel,epoch,updated_at) VALUES('feishu',1,0),('wechat',1,0);`)
+    version = 74
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 74) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS deferred_resume_requests (
+      request_id TEXT PRIMARY KEY NOT NULL,
+      reason_key TEXT NOT NULL UNIQUE,
+      todo_id TEXT NOT NULL REFERENCES deferred_todos(todo_id) ON DELETE CASCADE,
+      invocation_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
+      identity_key TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      authorization_epoch INTEGER NOT NULL CHECK(authorization_epoch > 0),
+      rule_id TEXT NOT NULL,
+      facts_hash TEXT NOT NULL,
+      notification_version INTEGER NOT NULL CHECK(notification_version > 0),
+      message_id TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('pending','dispatching','completed','invalidated','outcome_unknown')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_deferred_resume_requests_session_state
+      ON deferred_resume_requests(session_id,state,created_at,request_id);`)
+    version = 75
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 75) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS deferred_approval_ingress_receipts (
+      channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
+      identity_key TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY(channel,identity_key,message_id)
+    );
+    CREATE TABLE IF NOT EXISTS deferred_approval_code_counters (
+      channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
+      identity_key TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      last_code INTEGER NOT NULL CHECK(last_code BETWEEN 0 AND 99),
+      PRIMARY KEY(channel,identity_key,owner_id)
+    );`)
+    version = 76
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 76) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS deferred_approval_closures (
+      channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
+      identity_key TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      authorization_epoch INTEGER NOT NULL CHECK(authorization_epoch > 0),
+      tombstone TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('closing','reconciliation_required','closed')),
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY(channel,identity_key,owner_id,session_id)
+    );`)
+    version = 77
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 77) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS deferred_approval_notifications (
+      todo_id TEXT NOT NULL REFERENCES deferred_todos(todo_id) ON DELETE CASCADE,
+      notification_version INTEGER NOT NULL CHECK(notification_version > 0),
+      invocation_id TEXT NOT NULL,
+      channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
+      identity_key TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      authorization_epoch INTEGER NOT NULL CHECK(authorization_epoch > 0),
+      rule_id TEXT NOT NULL,
+      facts_hash TEXT NOT NULL,
+      short_code TEXT NOT NULL CHECK(short_code GLOB '[0-9][0-9]'),
+      trusted_message_id TEXT,
+      expires_at INTEGER NOT NULL,
+      dto_json TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('undelivered','delivered','superseded','invalidated')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY(todo_id,notification_version),
+      UNIQUE(channel,identity_key,owner_id,short_code)
+    );
+    CREATE INDEX IF NOT EXISTS idx_deferred_approval_notifications_retry
+      ON deferred_approval_notifications(channel,identity_key,owner_id,state,created_at,todo_id);`)
+    version = 78
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 78) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS remote_async_approval_gate_state (
+      singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+      state TEXT NOT NULL CHECK(state IN ('disabled','enabled','closing')),
+      close_required INTEGER NOT NULL DEFAULT 0 CHECK(close_required IN (0,1)),
+      updated_at INTEGER NOT NULL
+    );
+    INSERT OR IGNORE INTO remote_async_approval_gate_state(singleton,state,close_required,updated_at) VALUES(1,'disabled',0,0);`)
+    version = 79
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 79) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS im_lifecycle_outbox (
+      event_id TEXT PRIMARY KEY NOT NULL,
+      session_id TEXT NOT NULL,
+      stage TEXT NOT NULL CHECK(stage IN ('accepted','plan-confirmation','deferred-wait','resumed','completed','failed')),
+      text TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('pending','delivered')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_im_lifecycle_outbox_pending ON im_lifecycle_outbox(session_id,state,created_at,event_id);`)
+    version = 80
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 80) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS im_inbox_message_context (
+      message_id TEXT PRIMARY KEY NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
+      platform_message_id TEXT NOT NULL,
+      context_token TEXT,
+      created_at INTEGER NOT NULL
+    );`)
+    version = 81
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 81) runInTransaction(conn, () => {
+    conn.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_deferred_resume_requests_notification_once
+      ON deferred_resume_requests(todo_id,notification_version)
+      WHERE state IN ('pending','dispatching','completed','outcome_unknown');`)
+    version = 82
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   } catch (migrationError) {

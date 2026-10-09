@@ -13,8 +13,9 @@ import { FeishuImChannel } from './feishuImChannel'
 import { FeishuAuditLogger } from './feishuAuditLogger'
 import { FeishuEventService } from './feishuEventService'
 import { prepareInboundFeishuAttachments } from './feishuInboundAttachmentDownload'
+import { sendFeishuApprovalTextToTarget } from './feishuReply'
 import { RemoteCommandRouter, type RemoteCommandRouterDeps } from './remoteCommandRouter'
-import type { WorkDirManager } from '../workDirManager'
+import { resolveWorkDirForSession, type WorkDirManager } from '../workDirManager'
 import { getMainWindow } from '../windowRef'
 import type { AppConfig } from '../../src/shared/domainTypes'
 import { mergeToolsConfig } from '../../src/shared/domainTypes'
@@ -23,10 +24,26 @@ import { readShellConfigFromDb } from '../shell/shellConfigDb'
 import { cancelAllActiveChats } from '../chatCancelRegistry'
 import { getRemoteTaskController } from '../remote/remoteTaskController'
 import { remoteAuthorizationRegistry } from '../remote/remoteAuthorizationRegistry'
+import { createRemoteAuthorizationRevocationCoordinator } from '../remote/remoteAuthorizationRevocationCoordinator'
+import { createDeferredTodoCapacityController } from '../confirmation/deferredTodoCapacity'
+import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
+import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
+import { getSecurityAuditLog } from '../confirmation/audit'
+import { createDeferredApprovalNotificationDelivery } from '../remote/deferredApprovalNotificationDelivery'
+import { isRemoteAsyncApprovalGateEnabled } from '../confirmation/remoteAsyncApprovalGate'
+import { createWakeEventDispatcher } from '../remote/wakeEventDispatcher'
+import { createDeferredImBundleRuntime } from '../remote/deferredImBundleRuntime'
+import { recheckDeferredTaskControl } from '../remote/deferredImDispatch'
+import { executeDeferredImTool } from '../remote/imDeferredToolExecutor'
+import { createImDeferredApprovalProducer, createImDeferredConfirmationAdapter } from '../remote/imDeferredApprovalProducer'
+import { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeStore'
+import { createDeferredResumeRequestStore } from '../confirmation/deferredResumeRequestStore'
+import { createDeferredTodoTaskControlSafetyPort } from '../remote/deferredTodoTaskControlAdapter'
 import { flushFeishuCliLogger, logFeishuCliEvent } from './feishuCliLogger'
 import { authUrlHostOnly, FEISHU_CLI_LINE_PREVIEW_MAX, previewText } from './feishuCliLogFields'
 import { parseLarkCliError } from './larkCliErrors'
 import type { TurnRuntime } from '../turnRuntime'
+import { ensureRemoteImModelConfigMigrated } from '../remote/remoteImModelConfigDb'
 import type { SessionStorage } from '../sessionStorage/contracts'
 import {
   FeishuOwnerBindController,
@@ -57,10 +74,15 @@ export type FeishuServiceBundle = {
   auditLogger: FeishuAuditLogger
   eventService: FeishuEventService | null
   router: RemoteCommandRouter | null
+  wakeDispatcher: ReturnType<typeof createWakeEventDispatcher>
   ownerBind: FeishuOwnerBindController
+  recoverDeferredApprovals(): Promise<unknown>
 }
 
 let bundle: FeishuServiceBundle | null = null
+let unregisterFeishuTodoInvalidator: (() => void) | null = null
+let unregisterFeishuPendingCancel: (() => void) | null = null
+let unregisterFeishuCacheClearer: (() => void) | null = null
 
 function notifyFeishuConfigChanged(cfg: FeishuConfig): void {
   getMainWindow()?.webContents?.send('feishu:config-changed', { feishu: cfg })
@@ -75,6 +97,7 @@ function syncOwnerBindWithConfig(cfg: FeishuConfig, ownerBind: FeishuOwnerBindCo
 }
 
 export function readFeishuConfigFromDb(db: AppDatabase): FeishuConfig {
+  ensureRemoteImModelConfigMigrated(db)
   const raw = getConfigValue(db, FEISHU_CONFIG_KEY)
   if (!raw) return mergeFeishuConfig(null)
   try {
@@ -108,22 +131,113 @@ export function createFeishuBundle(deps: {
   onReachabilityChange?: (reachable: boolean) => void
   turnRuntime?: TurnRuntime
 }): FeishuServiceBundle {
+  let dispatchCompletionWake: ((sessionId: string) => Promise<void>) | undefined
   const userData = deps.getUserDataPath()
   const readCfg = () => readFeishuConfigFromDb(deps.db)
   const runner = new LarkCliRunner(() => readCfg().cliPath ?? '')
   const processedStore = new FeishuProcessedStore(userData)
   const auditLogger = new FeishuAuditLogger(userData)
-  const imChannel = new FeishuImChannel({ auditLogger, runner, db: deps.db, sessionStorage: deps.sessionStorage, getGeneration: (channel) => remoteAuthorizationRegistry.getGeneration(channel) })
-  remoteAuthorizationRegistry.registerPendingCancel({
-    cancelByChannel: (ch) => imChannel.cancelByChannel(ch)
+  const deferredTodoCapacity = createDeferredTodoCapacityController(deps.db)
+  const deferredTodos = createDeferredTodoStore(deps.db, { capacity: deferredTodoCapacity })
+  const deferredResumeRequests = createDeferredResumeRequestStore(deps.db)
+  const deferredNotificationDelivery = createDeferredApprovalNotificationDelivery({
+    db: deps.db,
+    todoStore: deferredTodos,
+    intentStore: createSecurityActionIntentStore(deps.db),
+    adapter: { send: (dto, recipient) => sendFeishuApprovalTextToTarget(runner, `open_id:${recipient.ownerId}`, dto.text) },
+    audit: (event) => getSecurityAuditLog().record(event)
   })
+  const deferredIntentStore = createSecurityActionIntentStore(deps.db)
+  const deferredProducer = createImDeferredApprovalProducer({ db: deps.db, channel: 'feishu', todoStore: deferredTodos,
+    capacity: deferredTodoCapacity, intentStore: deferredIntentStore, envelopeStore: createDeferredEnvelopeStore(deps.db),
+    notificationDelivery: deferredNotificationDelivery,
+    isEnabled: () => isRemoteAsyncApprovalGateEnabled(deps.db) && readCfg().remoteEnabled,
+    getAuthorizationEpoch: () => remoteAuthorizationRegistry.getAuthorizationEpoch('feishu'),
+    resolveTaskDigest: (context) => {
+      if (!deps.sessionStorage || !context.currentUserMessageId || !context.originSessionId) return undefined
+      return deps.sessionStorage.queries.readMessages({ sessionId: context.originSessionId }).find((message) => message.id === context.currentUserMessageId)?.content
+    }
+  })
+  const deferredApprovalRuntime = createDeferredImBundleRuntime({
+    db: deps.db, channel: 'feishu', todoStore: deferredTodos, notificationDelivery: deferredNotificationDelivery,
+    isEnabled: () => isRemoteAsyncApprovalGateEnabled(deps.db) && readCfg().remoteEnabled,
+    getAuthorizationEpoch: () => remoteAuthorizationRegistry.getAuthorizationEpoch('feishu'),
+    maxParallel: deps.getMaxParallel(),
+    isOwnerAuthorized: (todo) => {
+      const config = readCfg()
+      const allowlist = config.remoteSenderAllowlist ?? []
+      return config.remoteEnabled && allowlist.includes(todo.ownerId) &&
+        readOwnerOpenIdFromAllowlist(allowlist) === todo.ownerId
+    },
+    recheckTask: (todo, envelope) => recheckDeferredTaskControl(deps.db, todo, envelope),
+    dispatch: async ({ todo, envelope }) => {
+      const context = envelope.executionContext
+      const storage = deps.sessionStorage
+      if (!storage || typeof context.confirmationReceipt !== 'string' || !context.confirmationReceipt.trim() ||
+        typeof context.messageId !== 'string' || typeof context.providerRouteId !== 'string' || typeof context.model !== 'string') {
+        return { dispatched: false }
+      }
+      const resolved = resolveWorkDirForSession(storage.queries, todo.originSessionId,
+        () => deps.workDirManager.listProfiles(), () => deps.workDirManager.getActiveProfileId(), () => deps.workDirManager.getActiveWorkDir())
+      if (!resolved || resolved.isSensitive || resolved.profileId !== context.workDirProfileId) return { dispatched: false }
+      const config = readCfg()
+      const result = await executeDeferredImTool({
+        db: deps.db, sessionStorage: storage, sessionId: todo.originSessionId,
+        requestId: envelope.requestId, turnId: envelope.turnId, invocationId: envelope.invocationId,
+        toolCallId: envelope.toolCallId, toolName: envelope.toolName, input: envelope.canonicalArgs,
+        confirmationReceipt: context.confirmationReceipt, lane: 'feishu', providerRouteId: context.providerRouteId,
+        remoteContext: {
+          source: 'feishu', messageId: context.messageId, confirmPolicy: config.remoteConfirmPolicy,
+          chatId: todo.identityKey, userId: todo.ownerId, authOwner: todo.ownerId, originSessionId: todo.originSessionId,
+          workDirProfileId: resolved.profileId, requestId: envelope.requestId,
+          authorizationGeneration: remoteAuthorizationRegistry.getGeneration('feishu'), feishuConfig: config, larkCliRunner: runner
+        },
+        model: context.model, toolsConfig: deps.getToolsConfig(), workDir: resolved.workDir,
+        userDataDir: deps.getUserDataPath(), getApiKey: deps.getApiKey, getBaseUrl: deps.getBaseUrl,
+        workDirManager: deps.workDirManager, getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
+        getShellConfig: () => readShellConfigFromDb(deps.db), toolChatExtras: { feishuConfig: config, larkCliRunner: runner }
+      })
+      return { dispatched: result !== undefined, result }
+    },
+    onCompletionWake: (sessionId) => dispatchCompletionWake?.(sessionId),
+    audit: (event) => getSecurityAuditLog().record(event)
+  })
+  const taskControlSafetyPort = createDeferredTodoTaskControlSafetyPort({ todoStore: deferredTodos,
+    dispatchDeferred: async ({ sessionId }) => {
+      const results = await deferredApprovalRuntime.resume.dispatchPending(sessionId)
+      return { dispatched: results.length > 0 && results.every(({ status }) => status === 'dispatched') }
+    } })
+  const imChannel = new FeishuImChannel({ auditLogger, runner, db: deps.db, sessionStorage: deps.sessionStorage, getGeneration: (channel) => remoteAuthorizationRegistry.getGeneration(channel) })
+  unregisterFeishuPendingCancel?.()
+  unregisterFeishuPendingCancel = remoteAuthorizationRegistry.registerPendingCancel({
+    cancelByChannel: (ch) => imChannel.cancelByChannel(ch)
+  }, 'feishu-im-channel')
+  unregisterFeishuTodoInvalidator?.()
+  unregisterFeishuTodoInvalidator = remoteAuthorizationRegistry.registerDeferredTodoInvalidator({
+    invalidateByAuthorizationEpoch: (ch, epoch) => {
+      if (ch !== 'feishu') return
+      const result = deferredTodos.invalidateOlderAuthorizationEpochs(ch, epoch)
+      if (result.dispatchingTodoIds.length) throw new Error('REMOTE_AUTHORIZATION_DISPATCHING_TODO_REQUIRES_RECONCILIATION')
+    },
+    invalidateResumeRequests: (ch, epoch) => {
+      if (ch !== 'feishu') return
+      const result = deferredResumeRequests.invalidateOlderAuthorizationEpochs(ch, epoch)
+      if (result.dispatching) throw new Error('REMOTE_AUTHORIZATION_DISPATCHING_RESUME_REQUIRES_RECONCILIATION')
+    },
+    invalidateByOriginSession: (sessionId, ch) => {
+      if (ch !== 'feishu') return
+      const result = deferredTodos.invalidateByOriginSession(sessionId)
+      if (result.dispatchingTodoIds.length) throw new Error('REMOTE_AUTHORIZATION_DISPATCHING_TODO_REQUIRES_RECONCILIATION')
+    }
+  }, 'feishu-deferred-todos')
   // B3：授权撤销/换绑/登出时联动清空本链路会话级确认记忆（remote-write 记N 等）
-  remoteAuthorizationRegistry.registerCacheClearer({
+  unregisterFeishuCacheClearer?.()
+  unregisterFeishuCacheClearer = remoteAuthorizationRegistry.registerCacheClearer({
     clearByChannel: (ch) =>
       ch === 'feishu'
         ? new SqliteDecisionCache(getDbConnection(deps.db)).clearLane('feishu', 'session')
         : 0
-  })
+  }, 'feishu-decision-cache')
   remoteAuthorizationRegistry.registerAuditAppender((event) => {
     void auditLogger.append(event as { type: string })
   })
@@ -178,10 +292,30 @@ export function createFeishuBundle(deps: {
     getToolsConfig: deps.getToolsConfig,
     getBrowserConfig: () => readBrowserConfigFromDb(deps.db),
     getShellConfig: () => readShellConfigFromDb(deps.db),
-    turnRuntime: deps.turnRuntime
+    turnRuntime: deps.turnRuntime,
+    isRemoteAsyncApprovalEnabled: () => isRemoteAsyncApprovalGateEnabled(deps.db),
+    retryDeferredApprovalNotifications: ({ identityKey, ownerId }) => deferredNotificationDelivery.retryForAuthenticatedInbound({
+      channel: 'feishu', identityKey, ownerId, authorizationEpoch: remoteAuthorizationRegistry.getAuthorizationEpoch('feishu')
+    }),
+    handleDeferredApprovalReply: ({ message, text, replyToMessageId }) => deferredApprovalRuntime.handleReply({
+      channel: 'feishu', identityKey: message.chatId, ownerId: message.senderOpenId, messageId: message.messageId,
+      replyToMessageId, text
+    }).then(() => undefined),
+    createDeferredConfirmationAdapter: (remoteContext) => createImDeferredConfirmationAdapter(deferredProducer, remoteContext)
+    ,taskControlSafetyPort
   }
 
   const router = new RemoteCommandRouter(routerDeps)
+  const wakeDispatcher = createWakeEventDispatcher({ db: deps.db, maxParallel: deps.getMaxParallel(),
+    launchLoop: (input) => router.dispatchWakeEventSet(input), onError: (error) => {
+      logFeishuCliEvent('error', 'feishu.wake.retry_failed', { message: error instanceof Error ? error.message : String(error) })
+    } })
+  dispatchCompletionWake = (sessionId) => wakeDispatcher.dispatchSession(sessionId).catch((error) => {
+    logFeishuCliEvent('error', 'feishu.approval.completion_wake_failed', {
+    sessionId, message: error instanceof Error ? error.message : String(error)
+    })
+  })
+  routerDeps.wakeEventDispatcher = wakeDispatcher
   const eventService = new FeishuEventService(runner, (msg) => {
     void (async () => {
       let prepared = msg
@@ -205,7 +339,8 @@ export function createFeishuBundle(deps: {
   }, (status) => deps.onReachabilityChange?.(status.state === 'connected'))
 
   const cfg = readCfg()
-  bundle = { runner, processedStore, imChannel, auditLogger, eventService, router, ownerBind }
+  bundle = { runner, processedStore, imChannel, auditLogger, eventService, router, ownerBind, wakeDispatcher,
+    recoverDeferredApprovals: () => deferredApprovalRuntime.recoverPending() }
   syncOwnerBindWithConfig(cfg, ownerBind)
   logFeishuCliEvent('info', 'feishu.service.bundle_created', {
     hasRunner: true,
@@ -242,6 +377,13 @@ export async function shutdownFeishuServices(): Promise<void> {
   remoteAuthorizationRegistry.invalidate('feishu', 'service_stopped')
   bundle?.imChannel.cancelAllPending()
   await bundle?.eventService?.stop()
+  await bundle?.wakeDispatcher.dispose()
+  unregisterFeishuTodoInvalidator?.()
+  unregisterFeishuTodoInvalidator = null
+  unregisterFeishuPendingCancel?.()
+  unregisterFeishuPendingCancel = null
+  unregisterFeishuCacheClearer?.()
+  unregisterFeishuCacheClearer = null
   logFeishuCliEvent('info', 'feishu.service.shutdown', {})
   await flushFeishuCliLogger()
 }
@@ -513,7 +655,17 @@ export function registerFeishuIpcHandlers(
   ipcMain.handle(
     'remote-security:commit',
     async (_e, patch: RemoteSecurityPatch): Promise<RemoteSecurityCommitResult> => {
-      const result = commitRemoteSecurityConfig(deps.db, patch)
+      const coordinator = createRemoteAuthorizationRevocationCoordinator({
+        writeConfig: () => commitRemoteSecurityConfig(deps.db, patch),
+        advanceEpoch: (channel, reason) => remoteAuthorizationRegistry.advanceAuthorizationEpoch(channel, reason),
+        cascade: (channel, epoch, reason) => remoteAuthorizationRegistry.cascadeAuthorizationRevocation(channel, epoch, reason),
+        completeRevocation: (channel, epoch) => remoteAuthorizationRegistry.completeAuthorizationRevocation(channel, epoch),
+        blockChannels: (channels, reason) => remoteAuthorizationRegistry.blockChannels(channels, reason),
+        markChannelsReady: (channels) => remoteAuthorizationRegistry.markChannelsReady(channels)
+      })
+      const { config: result } = coordinator.commit({
+        channels: ['feishu', 'wechat'], reason: 'remote-security-config-changed', config: patch
+      })
       notifyFeishuConfigChanged(result.feishu)
       getMainWindow()?.webContents?.send('wechat:config-changed', { wechat: result.wechat })
       return result
@@ -549,18 +701,20 @@ export function persistFeishuConfig(db: AppDatabase, partial: Partial<FeishuConf
   const ownerCleared =
     Boolean(readOwnerOpenIdFromAllowlist(prev.remoteSenderAllowlist)) &&
     !readOwnerOpenIdFromAllowlist(next.remoteSenderAllowlist)
-  if ((prev.enabled && !next.enabled) || (prev.remoteEnabled && !next.remoteEnabled)) {
-    remoteAuthorizationRegistry.invalidate(
-      'feishu',
-      !next.enabled ? 'channel_disabled' : 'remote_disabled'
-    )
-  } else if (ownerCleared) {
-    remoteAuthorizationRegistry.invalidate('feishu', 'owner_cleared')
-  } else if (allowlistChanged) {
-    remoteAuthorizationRegistry.invalidate('feishu', 'allowlist_changed')
-  }
-
-  setConfigValue(db, FEISHU_CONFIG_KEY, JSON.stringify(next))
+  const reason = (prev.enabled && !next.enabled) || (prev.remoteEnabled && !next.remoteEnabled)
+    ? (!next.enabled ? 'channel_disabled' : 'remote_disabled')
+    : ownerCleared ? 'owner_cleared' : allowlistChanged ? 'allowlist_changed' : null
+  if (reason) {
+    const coordinator = createRemoteAuthorizationRevocationCoordinator({
+      writeConfig: () => { setConfigValue(db, FEISHU_CONFIG_KEY, JSON.stringify(next)); return next },
+      advanceEpoch: (channel, why) => remoteAuthorizationRegistry.advanceAuthorizationEpoch(channel, why),
+      cascade: (channel, epoch, why) => remoteAuthorizationRegistry.cascadeAuthorizationRevocation(channel, epoch, why),
+      completeRevocation: (channel, epoch) => remoteAuthorizationRegistry.completeAuthorizationRevocation(channel, epoch),
+      blockChannels: (channels, why) => remoteAuthorizationRegistry.blockChannels(channels, why),
+      markChannelsReady: (channels) => remoteAuthorizationRegistry.markChannelsReady(channels)
+    })
+    coordinator.commit({ channels: ['feishu'], reason, config: next })
+  } else setConfigValue(db, FEISHU_CONFIG_KEY, JSON.stringify(next))
   logFeishuCliEvent('info', 'feishu.config.persist', { keys: Object.keys(partial) })
   if (bundle?.ownerBind) {
     const wasRemote = prev.remoteEnabled

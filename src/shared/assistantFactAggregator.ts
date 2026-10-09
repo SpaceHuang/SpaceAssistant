@@ -1,7 +1,8 @@
 import type { ChatImageAttachment, Message, ToolCallRecord } from './domainTypes'
+import type { QueueScope } from './queueScope'
 import { appendProgressOutputRaw } from './terminalScrollback'
 
-export type TurnOutcome = 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'recovered' | 'commit-uncertain'
+export type TurnOutcome = 'completed' | 'parked' | 'failed' | 'cancelled' | 'timed-out' | 'recovered' | 'commit-uncertain'
 
 export type ContinuationSafetySnapshot = Readonly<{
   workDirProfileId: string
@@ -29,7 +30,7 @@ export type TurnExecutionConfig = {
   system?: string
   skillFragments?: string[]
   maxTokens?: number
-  /** Thinking 强度最终档位（发起时解析、调用内冻结）；远程 / Butler lane 恒 off（OQ-10） */
+  /** Thinking 强度最终档位（发起时解析、调用内冻结）；远程 IM 可使用独立设置。 */
   thinkingEffort?: import('./agent/invocation').AgentReasoningEffort
   /**
    * 能力降级前的请求档位（评审 B1）：仅当模型 supportsThinking === false 导致降级时产出（≠ thinkingEffort）。
@@ -58,7 +59,7 @@ export type TurnExecutionConfig = {
 
 export type TurnIntent =
   | { mode: 'create-user'; requestId: string; sessionId: string; input: { text: string; attachments?: ChatImageAttachment[] }; excludeMessageIds?: string[]; continuationIntent?: { kind: 'exact-continue' | 'follow-up'; requestId?: string; payloadSha256?: string; rawText?: string; route?: string; sourceInvocationId?: string; sourceTurnId?: string; sourceSequence?: number }; continuationAcceptance?: { payloadSha256: string; rawText: string; kind: 'exact-continue' | 'follow-up'; route: string; sourceInvocationId?: string; sourceTurnId?: string; sourceSequence?: number }; retryOfMessageId?: string; retryOfInvocationId?: string; config: TurnExecutionConfig }
-  | { mode: 'reuse-user'; requestId: string; sessionId: string; userMessageId: string; excludeMessageIds: string[]; config: TurnExecutionConfig }
+  | { mode: 'reuse-user'; requestId: string; sessionId: string; userMessageId: string; excludeMessageIds: string[]; config: TurnExecutionConfig; queueScope?: QueueScope }
 
 export type TurnTerminal = {
   turnId: string; requestId: string; sessionId: string; assistantMessageId: string; version: number
@@ -109,6 +110,7 @@ type AssistantFactEventPayload =
   | { type: 'compaction-committed'; compactionId: string; windowId: string; outputSurfaceFingerprint: string }
   | { type: 'skill-hint'; text: string }
   | { type: 'source-completed' }
+  | { type: 'source-parked' }
   /** message：失败原因（诊断文本），随事实透出到渲染层，避免只剩一句「回复未能完成」 */
   | { type: 'source-failed'; message?: string }
   | { type: 'source-uncertain'; message?: string }
@@ -298,7 +300,7 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
     }
     closeSegments(next, deps.now)
     delete (next as Message & { _provisionalSnapshot?: unknown })._provisionalSnapshot
-    next.status = event.type === 'source-completed' ? 'completed' : event.type === 'source-cancelled' ? 'cancelled' : 'failed'
+    next.status = event.type === 'source-completed' ? 'completed' : event.type === 'source-parked' ? 'sent' : event.type === 'source-cancelled' ? 'cancelled' : 'failed'
   }
   return next
 }
