@@ -9,7 +9,8 @@ import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import {
   mergeWeChatConfig,
   weChatConfigNeedsPolicyMigration,
-  type WeChatConfig
+  type WeChatConfig,
+  type WeChatConnectionStatus
 } from '../../src/shared/wechatTypes'
 import { WeChatProcessedStore } from './weChatProcessedStore'
 import { WeChatAuditLogger } from './weChatAuditLogger'
@@ -43,6 +44,7 @@ import { createDeferredTodoTaskControlSafetyPort } from '../remote/deferredTodoT
 import { flushWeChatCliLogger, logWeChatCliEvent } from './weChatCliLogger'
 import { isTrayEnabled } from '../tray'
 import type { TurnRuntime } from '../turnRuntime'
+import { ensureRemoteImModelConfigMigrated } from '../remote/remoteImModelConfigDb'
 
 const WECHAT_CONFIG_KEY = 'config.wechat'
 
@@ -62,6 +64,7 @@ export type WeChatServiceBundle = {
   auditLogger: WeChatAuditLogger
   botService: WeChatBotService
   router: WeChatCommandRouter | null
+  wakeDispatcher: ReturnType<typeof createWakeEventDispatcher>
   recoverDeferredApprovals(): Promise<unknown>
 }
 
@@ -71,6 +74,7 @@ let unregisterWeChatPendingCancel: (() => void) | null = null
 let unregisterWeChatCacheClearer: (() => void) | null = null
 
 export function readWeChatConfigFromDb(db: AppDatabase): WeChatConfig {
+  ensureRemoteImModelConfigMigrated(db)
   const raw = getConfigValue(db, WECHAT_CONFIG_KEY)
   if (!raw) return mergeWeChatConfig(null)
   try {
@@ -277,7 +281,9 @@ export function createWeChatBundle(deps: {
     ,taskControlSafetyPort
   })
   const wakeDispatcher = createWakeEventDispatcher({ db: deps.db, maxParallel: deps.getMaxParallel(),
-    launchLoop: (input) => router.dispatchWakeEventSet(input) })
+    launchLoop: (input) => router.dispatchWakeEventSet(input), onError: (error) => {
+      logWeChatCliEvent('error', 'wechat.wake.retry_failed', { message: error instanceof Error ? error.message : String(error) })
+    } })
   dispatchCompletionWake = (sessionId) => wakeDispatcher.dispatchSession(sessionId).catch((error) => {
     logWeChatCliEvent('error', 'wechat.approval.completion_wake_failed', {
     sessionId, message: error instanceof Error ? error.message : String(error)
@@ -299,7 +305,7 @@ export function createWeChatBundle(deps: {
     logWeChatCliEvent('warn', 'wechat.bundle.stale_login', { storageDir })
   }
 
-  bundle = { processedStore, imChannel, auditLogger, botService, router,
+  bundle = { processedStore, imChannel, auditLogger, botService, router, wakeDispatcher,
     recoverDeferredApprovals: () => deferredApprovalRuntime.recoverPending() }
   logWeChatCliEvent('info', 'wechat.service.bundle_created', {
     loggedIn: cfg.loggedIn && hasStoredCredentials,
@@ -325,6 +331,7 @@ export async function autoStartWeChatPollIfNeeded(db: AppDatabase): Promise<void
     return
   }
   const status = await bundle.botService.startPoll()
+  backfillWeChatOwnerAllowlistIfMissing(db, status)
   logWeChatCliEvent(status.pollState === 'polling' ? 'info' : 'error', 'wechat.poll.auto_start', {
     pollState: status.pollState,
     lastError: status.lastError
@@ -342,6 +349,7 @@ export async function shutdownWeChatServices(): Promise<void> {
   remoteAuthorizationRegistry.invalidate('wechat', 'service_stopped')
   bundle?.imChannel.cancelAllPending()
   await bundle?.botService?.stopPoll()
+  await bundle?.wakeDispatcher.dispose()
   unregisterWeChatTodoInvalidator?.()
   unregisterWeChatTodoInvalidator = null
   unregisterWeChatPendingCancel?.()
@@ -391,8 +399,8 @@ export function registerWeChatIpcHandlers(
         remoteEnabled: true,
         displayName: status.displayName,
         botIdSuffix: status.botIdSuffix,
-        ...(allowlist ? { remoteSenderAllowlist: allowlist } : {})
-      })
+        remoteSenderAllowlist: allowlist ?? []
+      }, { allowlist: 'replace' })
       const pollStatus = await b.botService.startPoll()
       logWeChatCliEvent(pollStatus.pollState === 'polling' ? 'info' : 'error', 'wechat.ipc.login_start', {
         ok: r.ok,
@@ -429,8 +437,9 @@ export function registerWeChatIpcHandlers(
       displayName: undefined,
       botIdSuffix: undefined,
       enabled: false,
-      remoteEnabled: false
-    })
+      remoteEnabled: false,
+      remoteSenderAllowlist: []
+    }, { allowlist: 'replace' })
     logWeChatCliEvent('info', 'wechat.ipc.logout', {})
     return { ok: true }
   })
@@ -440,16 +449,12 @@ export function registerWeChatIpcHandlers(
   ipcMain.handle('wechat:poll-start', async () => {
     const status = await b.botService.startPoll()
     const boundUserId = b.botService.getBoundUserId() ?? status.boundUserId
-    const cfg = readWeChatConfigFromDb(deps.db)
-    const patch: Parameters<typeof persistWeChatConfig>[1] = { remoteEnabled: true }
-    if (boundUserId && !cfg.remoteSenderAllowlist?.length) {
-      patch.remoteSenderAllowlist = [boundUserId]
-    }
-    persistWeChatConfig(deps.db, patch)
+    const allowlistBackfilled = backfillWeChatOwnerAllowlistIfMissing(deps.db, { ...status, boundUserId })
+    persistWeChatConfig(deps.db, { remoteEnabled: true })
     logWeChatCliEvent(status.pollState === 'polling' ? 'info' : 'error', 'wechat.poll.start', {
       pollState: status.pollState,
       lastError: status.lastError,
-      allowlistBackfilled: Boolean(boundUserId && !cfg.remoteSenderAllowlist?.length)
+      allowlistBackfilled
     })
     return status
   })
@@ -502,9 +507,16 @@ export function registerWeChatIpcHandlers(
   )
 }
 
-export function persistWeChatConfig(db: AppDatabase, partial: Partial<WeChatConfig>): WeChatConfig {
+export function persistWeChatConfig(
+  db: AppDatabase,
+  partial: Partial<WeChatConfig>,
+  options: { allowlist?: 'preserve' | 'replace' } = {}
+): WeChatConfig {
   const prev = readWeChatConfigFromDb(db)
-  const next = mergeWeChatConfig({ ...prev, ...partial })
+  const allowlist = options.allowlist === 'replace'
+    ? partial.remoteSenderAllowlist ?? []
+    : prev.remoteSenderAllowlist
+  const next = mergeWeChatConfig({ ...prev, ...partial, remoteSenderAllowlist: allowlist })
 
   const allowlistChanged =
     JSON.stringify(prev.remoteSenderAllowlist ?? []) !==
@@ -525,4 +537,17 @@ export function persistWeChatConfig(db: AppDatabase, partial: Partial<WeChatConf
   } else setConfigValue(db, WECHAT_CONFIG_KEY, JSON.stringify(next))
   logWeChatCliEvent('info', 'wechat.config.persist', { keys: Object.keys(partial) })
   return next
+}
+
+/** Recover a missing remote owner from the authenticated account returned by the WeChat SDK. */
+export function backfillWeChatOwnerAllowlistIfMissing(
+  db: AppDatabase,
+  status: Pick<WeChatConnectionStatus, 'loggedIn' | 'boundUserId'>
+): boolean {
+  const boundUserId = status.boundUserId?.trim()
+  if (!status.loggedIn || !boundUserId) return false
+  const config = readWeChatConfigFromDb(db)
+  if (config.remoteSenderAllowlist?.length) return false
+  persistWeChatConfig(db, { remoteSenderAllowlist: [boundUserId] }, { allowlist: 'replace' })
+  return true
 }

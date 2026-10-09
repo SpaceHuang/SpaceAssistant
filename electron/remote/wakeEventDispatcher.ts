@@ -38,18 +38,22 @@ export type WakeEventDispatcherOptions = {
   retryPolicy?: WakeEventRetryConfig
   clock?: WakeEventRetryClock
   scheduleRetry?: (delayMs: number, callback: () => void) => void
+  /** Receives failures from timer-triggered retries; direct dispatch calls still reject normally. */
+  onError?: (error: unknown) => void
   /** Delay before retrying a durable wake that could not acquire the session/global lease. */
   leaseRetryMs?: number
 }
 
 export type WakeEventDispatcher = {
   dispatchSession(sessionId: string): Promise<void>
+  dispose(): Promise<void>
 }
 
 export function createWakeEventDispatcher(options: WakeEventDispatcherOptions): WakeEventDispatcher {
   const activeSessions = new Map<string, Promise<void>>()
   const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
   const scheduledRetries = new Set<string>()
+  let disposed = false
   const createRunId = options.createRunId ?? randomUUID
   const clock = options.clock ?? createWakeEventRetryClock()
   const retryPolicy = options.retryPolicy ?? {
@@ -61,13 +65,21 @@ export function createWakeEventDispatcher(options: WakeEventDispatcherOptions): 
   }
 
   const scheduleRetry = (sessionId: string, nextAttemptAt: number) => {
-    if (scheduledRetries.has(sessionId)) return
+    if (disposed || scheduledRetries.has(sessionId)) return
     scheduledRetries.add(sessionId)
     const delayMs = Math.max(0, nextAttemptAt - clock.now())
     const callback = () => {
       scheduledRetries.delete(sessionId)
       retryTimers.delete(sessionId)
-      void dispatchSession(sessionId)
+      if (disposed) return
+      void dispatchSession(sessionId).catch((error) => {
+        try {
+          if (options.onError) options.onError(error)
+          else console.error('[wake-event-dispatcher] scheduled retry failed', error)
+        } catch (reportError) {
+          console.error('[wake-event-dispatcher] retry error reporter failed', reportError)
+        }
+      })
     }
     if (options.scheduleRetry) {
       options.scheduleRetry(delayMs, callback)
@@ -80,6 +92,7 @@ export function createWakeEventDispatcher(options: WakeEventDispatcherOptions): 
 
   const runSession = async (sessionId: string): Promise<void> => {
     while (true) {
+      if (disposed) return
       const now = clock.now()
       const candidates = listClaimableWakeEventIds(options.db, sessionId, now)
       const eligibleEventIds: string[] = []
@@ -138,6 +151,7 @@ export function createWakeEventDispatcher(options: WakeEventDispatcherOptions): 
   }
 
   function dispatchSession(sessionId: string): Promise<void> {
+    if (disposed) return Promise.resolve()
     const existing = activeSessions.get(sessionId)
     if (existing) return existing
     const run = runSession(sessionId).finally(() => {
@@ -148,6 +162,14 @@ export function createWakeEventDispatcher(options: WakeEventDispatcherOptions): 
   }
 
   return {
-    dispatchSession
+    dispatchSession,
+    async dispose() {
+      if (disposed) return
+      disposed = true
+      for (const timer of retryTimers.values()) clearTimeout(timer)
+      retryTimers.clear()
+      scheduledRetries.clear()
+      await Promise.allSettled(activeSessions.values())
+    }
   }
 }

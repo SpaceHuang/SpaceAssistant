@@ -43,6 +43,7 @@ import { flushFeishuCliLogger, logFeishuCliEvent } from './feishuCliLogger'
 import { authUrlHostOnly, FEISHU_CLI_LINE_PREVIEW_MAX, previewText } from './feishuCliLogFields'
 import { parseLarkCliError } from './larkCliErrors'
 import type { TurnRuntime } from '../turnRuntime'
+import { ensureRemoteImModelConfigMigrated } from '../remote/remoteImModelConfigDb'
 import type { SessionStorage } from '../sessionStorage/contracts'
 import {
   FeishuOwnerBindController,
@@ -73,6 +74,7 @@ export type FeishuServiceBundle = {
   auditLogger: FeishuAuditLogger
   eventService: FeishuEventService | null
   router: RemoteCommandRouter | null
+  wakeDispatcher: ReturnType<typeof createWakeEventDispatcher>
   ownerBind: FeishuOwnerBindController
   recoverDeferredApprovals(): Promise<unknown>
 }
@@ -95,6 +97,7 @@ function syncOwnerBindWithConfig(cfg: FeishuConfig, ownerBind: FeishuOwnerBindCo
 }
 
 export function readFeishuConfigFromDb(db: AppDatabase): FeishuConfig {
+  ensureRemoteImModelConfigMigrated(db)
   const raw = getConfigValue(db, FEISHU_CONFIG_KEY)
   if (!raw) return mergeFeishuConfig(null)
   try {
@@ -304,7 +307,9 @@ export function createFeishuBundle(deps: {
 
   const router = new RemoteCommandRouter(routerDeps)
   const wakeDispatcher = createWakeEventDispatcher({ db: deps.db, maxParallel: deps.getMaxParallel(),
-    launchLoop: (input) => router.dispatchWakeEventSet(input) })
+    launchLoop: (input) => router.dispatchWakeEventSet(input), onError: (error) => {
+      logFeishuCliEvent('error', 'feishu.wake.retry_failed', { message: error instanceof Error ? error.message : String(error) })
+    } })
   dispatchCompletionWake = (sessionId) => wakeDispatcher.dispatchSession(sessionId).catch((error) => {
     logFeishuCliEvent('error', 'feishu.approval.completion_wake_failed', {
     sessionId, message: error instanceof Error ? error.message : String(error)
@@ -334,7 +339,7 @@ export function createFeishuBundle(deps: {
   }, (status) => deps.onReachabilityChange?.(status.state === 'connected'))
 
   const cfg = readCfg()
-  bundle = { runner, processedStore, imChannel, auditLogger, eventService, router, ownerBind,
+  bundle = { runner, processedStore, imChannel, auditLogger, eventService, router, ownerBind, wakeDispatcher,
     recoverDeferredApprovals: () => deferredApprovalRuntime.recoverPending() }
   syncOwnerBindWithConfig(cfg, ownerBind)
   logFeishuCliEvent('info', 'feishu.service.bundle_created', {
@@ -372,6 +377,7 @@ export async function shutdownFeishuServices(): Promise<void> {
   remoteAuthorizationRegistry.invalidate('feishu', 'service_stopped')
   bundle?.imChannel.cancelAllPending()
   await bundle?.eventService?.stop()
+  await bundle?.wakeDispatcher.dispose()
   unregisterFeishuTodoInvalidator?.()
   unregisterFeishuTodoInvalidator = null
   unregisterFeishuPendingCancel?.()

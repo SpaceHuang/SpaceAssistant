@@ -42,6 +42,48 @@ describe('wake event dispatcher', () => {
     db.close()
   })
 
+  it('cancels scheduled retries on dispose and ignores callbacks fired after disposal', async () => {
+    const db = createMemoryAppDb()
+    const sessionId = createSession(db, { name: 'dispatcher-dispose' }).id
+    appendWakeEvent(db, { sessionId, type: 'im-inbound', reasonKey: 'dispatcher-dispose',
+      payloadRef: { kind: 'im-inbox-message', messageId: 'dispatcher-dispose' } })
+    expect(tryClaimRemoteSession(sessionId, 'dispose-owner', 2)).toBe('ok')
+    let retry!: () => void
+    const launchLoop = vi.fn(async () => undefined)
+    const onError = vi.fn()
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop, onError,
+      scheduleRetry: (_delay, callback) => { retry = callback } })
+
+    await dispatcher.dispatchSession(sessionId)
+    await dispatcher.dispose()
+    db.close()
+    retry()
+    await Promise.resolve()
+
+    expect(launchLoop).not.toHaveBeenCalled()
+    expect(onError).not.toHaveBeenCalled()
+    resetRunningRemoteAgentRegistryForTests()
+  })
+
+  it('reports errors from scheduled retry callbacks instead of creating unhandled rejections', async () => {
+    const db = createMemoryAppDb()
+    const sessionId = createSession(db, { name: 'dispatcher-retry-error' }).id
+    appendWakeEvent(db, { sessionId, type: 'im-inbound', reasonKey: 'dispatcher-retry-error',
+      payloadRef: { kind: 'im-inbox-message', messageId: 'dispatcher-retry-error' } })
+    expect(tryClaimRemoteSession(sessionId, 'retry-error-owner', 2)).toBe('ok')
+    let retry!: () => void
+    const onError = vi.fn()
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: vi.fn(async () => undefined), onError,
+      scheduleRetry: (_delay, callback) => { retry = callback } })
+
+    await dispatcher.dispatchSession(sessionId)
+    db.close()
+    retry()
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'Database connection is closed' })))
+    await dispatcher.dispose()
+    resetRunningRemoteAgentRegistryForTests()
+  })
+
   it('starts one Loop for a new event in an idle session and ignores duplicate dispatch signals', async () => {
     const db = createMemoryAppDb()
     const sessionId = createSession(db, { name: 'dispatcher-idle' }).id
