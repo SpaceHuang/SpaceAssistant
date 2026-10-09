@@ -30,12 +30,13 @@ import { WECHAT_REMOTE_CONFIRM_TIMEOUT_MESSAGE } from '../remote/remoteConfirmPo
 import type { TurnRuntime } from '../turnRuntime'
 import type { SessionStorage } from '../sessionStorage/contracts'
 import { ackImInboxMessage, appendImInboxMessageWithWakeEvent, claimImInboxMessage, getImInboxMessageContext, listImInboxMessages } from '../database/imInbox'
-import { getSession, getTurnByRequestId } from '../database'
+import { getTurnByRequestId } from '../database'
 import { buildImQueueScope } from '../../src/shared/queueScope'
 import type { WakeEventDispatcher } from '../remote/wakeEventDispatcher'
 import { isDeferredApprovalReplyCandidate } from '../remote/deferredApprovalIngress'
 import { executeRemoteTurn } from '../remote/turnExecutionAdapter'
-import { resolveTrustedTurnExecutionConfig } from '../turnExecutionConfig'
+import { resolveFrozenImTurnExecutionConfig, resolveTrustedTurnExecutionConfig } from '../turnExecutionConfig'
+import { readAcceptedTurn } from '../database/acceptedTurnStorage'
 import { createAcceptedTurnFromPrepared } from '../runtime/acceptedTurnContext'
 import type { WakeEventLoopInput } from '../remote/wakeEventDispatcher'
 import { readDeferredCompletionWake, markDeferredCompletionWakeDelivered } from '../remote/deferredCompletionWake'
@@ -91,7 +92,7 @@ export class WeChatCommandRouter {
 
   async dispatchWakeEventSet(input: WakeEventLoopInput): Promise<void> {
     if (!this.deps.sessionStorage) throw new Error('REMOTE_SESSION_STORAGE_REQUIRED')
-    const session = getSession(this.deps.db, input.sessionId)
+    const session = this.deps.sessionStorage.queries.readSession(input.sessionId)
     const metadata = session?.metadata as { source?: unknown; wechatMeta?: { userId?: unknown; lastContextToken?: unknown } } | undefined
     if (!session || metadata?.source !== 'wechat' || typeof metadata.wechatMeta?.userId !== 'string') throw new Error('WECHAT_WAKE_SESSION_IDENTITY_INVALID')
     const config = mergeWeChatConfig(this.deps.getWeChatConfig())
@@ -123,9 +124,13 @@ export class WeChatCommandRouter {
         const originalContent = originalMessage?.content ?? listImInboxMessages(this.deps.db, { queueScope: scope, limit: 100 })
           .find(({ messageId: queuedId }) => queuedId === userMessageId)?.content
         if (typeof originalContent !== 'string') throw new Error('WECHAT_COMPLETION_WAKE_SOURCE_MESSAGE_MISSING')
+        const sourceAcceptedTurn = readAcceptedTurn(this.deps.db, input.sessionId, completion.envelope.requestId)
+        if (!sourceAcceptedTurn || sourceAcceptedTurn.turnId !== completion.envelope.turnId || sourceAcceptedTurn.lane !== 'wechat') {
+          throw new Error('WECHAT_COMPLETION_WAKE_FROZEN_CONFIG_MISSING')
+        }
         const requestId = `completion:${event.eventId}`
         const prior = getTurnByRequestId(this.deps.db, input.sessionId, requestId)
-        if (prior && prior.state !== 'terminal') throw new Error('WECHAT_COMPLETION_WAKE_PRIOR_TURN_INCOMPLETE')
+        if (prior && (prior.state !== 'terminal' || !['completed', 'parked'].includes(prior.outcome ?? ''))) throw new Error('WECHAT_COMPLETION_WAKE_PRIOR_TURN_INCOMPLETE')
         if (!prior) {
           const currentLease = getRemoteAgentLease(input.sessionId)
           const alreadyHeld = currentLease?.requestId === input.runId
@@ -143,7 +148,7 @@ export class WeChatCommandRouter {
             await this.executePersistedInboundTurn({ sessionId: input.sessionId, requestId, userMessageId, content: originalContent,
               messageId, userId: metadata.wechatMeta.userId, contextToken, config, authSnapshot: guard.snapshot,
               workDir: resolved?.workDir ?? this.deps.getWorkDir(), workDirProfileId: resolved?.profileId ?? this.deps.workDirManager.getActiveProfileId(),
-              inboundRaw, leaseRequestId, assertAuthorized,
+              inboundRaw, leaseRequestId, assertAuthorized, frozenExecutionConfig: sourceAcceptedTurn.config,
               deferredContinuation: { todoId: completion.todo.todo_id, invocationId: completion.todo.invocation_id,
                 workflowId: completion.todo.workflow_id, taskId: completion.todo.task_id, stepId: completion.todo.step_id,
                 planRevision: completion.todo.plan_revision,
@@ -174,7 +179,7 @@ export class WeChatCommandRouter {
       if (!refreshed) throw new Error('WECHAT_WAKE_SESSION_IDENTITY_REFRESH_FAILED')
       const priorTurn = getTurnByRequestId(this.deps.db, session.id, requestId)
       if (priorTurn) {
-        if (priorTurn.state !== 'terminal' || priorTurn.outcome !== 'completed') throw new Error('WECHAT_WAKE_PRIOR_TURN_INCOMPLETE')
+        if (priorTurn.state !== 'terminal' || !['completed', 'parked'].includes(priorTurn.outcome ?? '')) throw new Error('WECHAT_WAKE_PRIOR_TURN_INCOMPLETE')
         if (!ackImInboxMessage(this.deps.db, { queueScope: scope, messageId, ownerId: input.ownerId })) throw new Error('WECHAT_WAKE_INBOX_ACK_FAILED')
         continue
       }
@@ -202,9 +207,13 @@ export class WeChatCommandRouter {
   private async executePersistedInboundTurn(input: {
     sessionId: string; requestId: string; userMessageId: string; content: string; messageId: string; userId: string;
     contextToken: string; config: WeChatConfig; authSnapshot: ImAuthSnapshot; workDir: string; workDirProfileId: string; inboundRaw: IncomingMessage; leaseRequestId: string; assertAuthorized: () => void
+    frozenExecutionConfig?: import('../../src/shared/acceptedTurn').AcceptedTurn['config']
     deferredContinuation?: import('../tools/types').RemoteContext['deferredContinuation']
   }): Promise<void> {
-    const executionConfig = await resolveTrustedTurnExecutionConfig(this.deps.db, this.deps.sessionStorage!.queries, this.deps.sessionStorage!.commands, input.sessionId, 'wechat')
+    if (input.deferredContinuation && !input.frozenExecutionConfig) throw new Error('WECHAT_COMPLETION_WAKE_FROZEN_CONFIG_MISSING')
+    const executionConfig = input.frozenExecutionConfig
+      ? await resolveFrozenImTurnExecutionConfig(this.deps.db, 'wechat', input.frozenExecutionConfig)
+      : await resolveTrustedTurnExecutionConfig(this.deps.db, this.deps.sessionStorage!.queries, this.deps.sessionStorage!.commands, input.sessionId, 'wechat')
     input.assertAuthorized()
     const queueScope = buildImQueueScope('wechat', input.sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
     const prepared = this.deps.turnRuntime?.prepare({ mode: 'reuse-user', requestId: input.requestId, sessionId: input.sessionId,
@@ -224,8 +233,8 @@ export class WeChatCommandRouter {
     const result = await executeRemoteTurn({ runtime: this.deps.turnRuntime, prepared, requestId: input.requestId,
       run: () => { input.assertAuthorized(); return runWeChatRemoteAgent({ db: this.deps.db, sessionStorage: this.deps.sessionStorage!, sessionId: input.sessionId,
         userMessage: input.content, replyMessageId: input.messageId, requestId: input.requestId, turnId: prepared.turnId, acceptedTurn,
-        llmServiceId: executionConfig?.llmServiceId, wechatConfig: input.config, workDir: input.workDir, workDirManager: this.deps.workDirManager,
-        getApiKey: this.deps.getApiKey, getBaseUrl: this.deps.getBaseUrl, getModel: this.deps.getModel, botService: this.deps.botService,
+        wechatConfig: input.config, workDir: input.workDir, workDirManager: this.deps.workDirManager,
+        botService: this.deps.botService,
         imChannel: this.deps.imChannel, getToolsConfig: this.deps.getToolsConfig, getBrowserConfig: this.deps.getBrowserConfig,
         getWikiConfig: this.deps.getWikiConfig, getShellConfig: this.deps.getShellConfig, userDataDir: this.deps.getUserDataPath(),
         remoteContext, confirmationAdapter: this.deps.createDeferredConfirmationAdapter?.(remoteContext),
@@ -235,7 +244,9 @@ export class WeChatCommandRouter {
       }) }
     })
     if (!result.ok) throw new Error(`WECHAT_WAKE_TURN_FAILED:${result.summary}`)
-    if (getTurnByRequestId(this.deps.db, input.sessionId, input.requestId)?.outcome !== 'completed') throw new Error('WECHAT_WAKE_TURN_NOT_DURABLY_COMPLETED')
+    const outcome = getTurnByRequestId(this.deps.db, input.sessionId, input.requestId)?.outcome
+    if (result.parked && outcome === 'parked') return
+    if (outcome !== 'completed') throw new Error('WECHAT_WAKE_TURN_NOT_DURABLY_COMPLETED')
     const bot = this.deps.botService.getBot()
     if (bot) await replyWeChatSummary(bot, input.inboundRaw, result.summary, { sessionId: input.sessionId,
       touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId: input.sessionId } })
@@ -709,13 +720,9 @@ export class WeChatCommandRouter {
             requestId,
             turnId: prepared?.turnId,
             acceptedTurn,
-            llmServiceId: executionConfig?.llmServiceId,
             wechatConfig: config,
             workDir,
             workDirManager: this.deps.workDirManager,
-            getApiKey: this.deps.getApiKey,
-            getBaseUrl: this.deps.getBaseUrl,
-            getModel: this.deps.getModel,
             botService: this.deps.botService,
             imChannel: this.deps.imChannel,
             getToolsConfig: this.deps.getToolsConfig,

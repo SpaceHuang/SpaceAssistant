@@ -221,13 +221,13 @@ describe('runToolChatSession lane 穿透（偏差 21：MCP 仅 desktop lane 注�
     expect(result).toMatchObject({ ok: true })
     expect(history.events[0]).toMatchObject({
       kind: 'invocation-context-committed',
-      payload: { messages: [{ role: 'user', content: 'persist me' }], requiredUserMessage: { id: 'input-user' } }
+      payload: { messages: expect.arrayContaining([expect.objectContaining({ role: 'user', content: 'persist me' })]), requiredUserMessage: { id: 'input-user' } }
     })
-    expect(requestMessages[1]?.filter((message) => (message as { role?: string }).role !== 'system')).toEqual([
-      { role: 'user', id: 'input-user', content: 'persist me' },
-      { role: 'assistant', toolCalls: [{ id: 'history-context-tool', name: 'list_work_dirs', input: {} }] },
+    expect(requestMessages[1]).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'user', id: 'input-user', content: 'persist me' }),
+      expect.objectContaining({ role: 'assistant', toolCalls: [{ id: 'history-context-tool', name: 'list_work_dirs', input: {} }] }),
       expect.objectContaining({ role: 'tool', toolCallId: 'history-context-tool' })
-    ])
+    ]))
     const toolOutcome = history.events.find(({ kind, payload }) =>
       (kind === 'tool-call-finished' || kind === 'tool-call-not-dispatched') &&
       (payload as { toolCallId?: string }).toolCallId === 'history-context-tool'

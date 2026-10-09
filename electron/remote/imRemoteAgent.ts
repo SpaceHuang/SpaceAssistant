@@ -13,7 +13,7 @@ import { ensureToolResultPairing } from '../../src/shared/toolResultPairing'
 import type { RemoteContext } from '../tools/types'
 import { getCallAdmissionGate } from '../runtime/callAdmissionGate'
 import { readAppLocale } from '../appIpc'
-import { resolveLlmCredentialsForModel } from '../llmServiceResolver'
+import { resolveLlmCredentialsForPair } from '../llmServiceResolver'
 import { logHistoryOversizedToolResult } from '../oversizedToolResultLog'
 import {
   startRemoteProgressSession,
@@ -38,7 +38,8 @@ import { onRemoteTextSegmentClosed } from './remoteProgressHooks'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
 import type { SessionStorage } from '../sessionStorage/contracts'
 import { createImOrchestrationToolRegistry } from './imOrchestrationTools'
-import { ensureImTurnTaskControl } from '../database/taskControl'
+import { ensureImTurnTaskControl, getTaskControlRecord } from '../database/taskControl'
+import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createDeferredTodoTaskControlSafetyPort } from './deferredTodoTaskControlAdapter'
 import type { ImTaskSafetyPort } from './imTaskControlCoordinator'
@@ -66,14 +67,9 @@ export async function runImRemoteAgent(args: {
   /** 本回合真实 Turn ID（C17）：由 router 的 prepared.turnId 下传，供用量统计落库。 */
   turnId?: string
   acceptedTurn?: AcceptedTurn
-  /** 冻结执行配置里的 LLM 服务 ID（DIM3：同模型跨服务分开统计）。 */
-  llmServiceId?: string
   workDir: string
   workDirManager: WorkDirManager
   userDataDir: string
-  getApiKey: () => Promise<string | null>
-  getBaseUrl: () => string
-  getModel: () => string
   remoteContext: RemoteContext
   getToolsConfig: () => ToolsConfig
   getBrowserConfig?: () => BrowserConfig
@@ -199,12 +195,36 @@ export async function runImRemoteAgent(args: {
     const remoteContext = args.remoteContext
     const currentUserMessage = currentUserMessageId ? rawMessages.find((message) => message.id === currentUserMessageId && message.role === 'user') : undefined
     if ((remoteContext.source === 'feishu' || remoteContext.source === 'wechat') && remoteContext.authOwner && currentUserMessageId) {
-      const ensured = ensureImTurnTaskControl(args.db, {
-        sessionId: args.sessionId, ownerId: remoteContext.authOwner, requestId, userMessageId: currentUserMessageId
-      })
-      if (!ensured.ok) throw new Error('IM_TURN_TASK_IDENTITY_CONFLICT')
+      if (deferredContinuation) {
+        const continuation = deferredContinuation
+        const record = getTaskControlRecord(args.db, { sessionId: args.sessionId, ownerId: remoteContext.authOwner,
+          workflowId: continuation.workflowId, taskId: continuation.taskId })
+        const intent = createSecurityActionIntentStore(args.db).get(continuation.invocationId)
+        const steps = Array.isArray(record?.data.steps) ? record.data.steps as Array<{ stepId?: unknown }> : []
+        const invocations = Array.isArray(record?.data.outstandingInvocations)
+          ? record.data.outstandingInvocations as Array<{ invocationId?: unknown; todoId?: unknown; stepId?: unknown }> : []
+        const checkpoint = record?.data.deferredCheckpoints && typeof record.data.deferredCheckpoints === 'object'
+          ? (record.data.deferredCheckpoints as Record<string, { todoId?: unknown; stepId?: unknown; checkpointId?: unknown; workflowRevision?: unknown }>)[continuation.invocationId]
+          : undefined
+        if (!record || record.controlState !== 'active' || record.data.status !== 'active' || record.planRevision !== continuation.planRevision ||
+          !steps.some((step) => step.stepId === continuation.stepId) ||
+          !invocations.some((entry) => entry.invocationId === continuation.invocationId && entry.todoId === continuation.todoId && entry.stepId === continuation.stepId) ||
+          !checkpoint || checkpoint.todoId !== continuation.todoId || checkpoint.stepId !== continuation.stepId ||
+          checkpoint.checkpointId !== continuation.checkpointId || !Number.isInteger(checkpoint.workflowRevision) ||
+          !intent || intent.sessionId !== args.sessionId || intent.workflowId !== continuation.workflowId || intent.taskId !== continuation.taskId ||
+          intent.stepId !== continuation.stepId || intent.planRevision !== continuation.planRevision || intent.todoId !== continuation.todoId ||
+          intent.checkpointId !== continuation.checkpointId || intent.checkpointWorkflowRevision !== checkpoint.workflowRevision ||
+          !['checkpoint_committed', 'notified'].includes(intent.state)) throw new Error('IM_DEFERRED_CONTINUATION_TASK_FENCED')
+        remoteContext.taskBinding = { workflowId: record.workflowId, taskId: record.taskId, stepId: continuation.stepId,
+          planRevision: record.planRevision, revision: record.revision }
+      } else {
+        const ensured = ensureImTurnTaskControl(args.db, {
+          sessionId: args.sessionId, ownerId: remoteContext.authOwner, requestId, userMessageId: currentUserMessageId
+        })
+        if (!ensured.ok) throw new Error('IM_TURN_TASK_IDENTITY_CONFLICT')
+        remoteContext.taskBinding = ensured.taskBinding
+      }
       remoteContext.currentUserMessageId = currentUserMessageId
-      remoteContext.taskBinding = ensured.taskBinding
     }
 
     const browserConfig = args.getBrowserConfig?.()
@@ -217,7 +237,12 @@ export async function runImRemoteAgent(args: {
     const continuation = args.remoteContext.deferredContinuation
     const appendix = continuation ? `${baseAppendix}\n\nDeferred action completion (already executed; do not repeat it):\n${JSON.stringify(continuation)}` : baseAppendix
 
-    const routeModelName = args.getModel()
+    // accepted turn 是 IM Agent Loop 的唯一模型/服务来源；禁止通过可变回调补齐快照。
+    const frozenConfig = args.acceptedTurn?.config
+    if (!frozenConfig?.model?.trim() || !frozenConfig.llmServiceId?.trim() || !frozenConfig.thinkingEffort) {
+      throw new Error('IM_ACCEPTED_TURN_EXECUTION_CONFIG_REQUIRED')
+    }
+    const routeModelName = frozenConfig.model
     remoteContext.model = routeModelName
     let contextWindow: number | undefined
     let contextWindowTrusted = false
@@ -227,17 +252,27 @@ export async function runImRemoteAgent(args: {
       contextWindow = modelWindow.contextWindow
       contextWindowTrusted = modelWindow.trusted
     } catch { /* use adapter fallback */ }
-    const creds = await resolveLlmCredentialsForModel(args.db, routeModelName, {})
-    const baseUrl = creds.baseUrl ?? args.getBaseUrl()
-    const getApiKey = creds.error ? args.getApiKey : creds.getApiKey
     const modelEntry = (() => {
       try { return (JSON.parse(getConfigValue(args.db, 'config.models') ?? '[]') as ModelEntry[]).find((entry) => entry.name === routeModelName) }
       catch { return undefined }
     })()
+    if (!modelEntry?.id) throw new Error(`IM_TURN_MODEL_NOT_FOUND: ${routeModelName}`)
+    const resolvedPair = await resolveLlmCredentialsForPair(args.db, modelEntry.id, frozenConfig.llmServiceId)
+    if ('error' in resolvedPair) {
+      throw new Error(`IM_FROZEN_MODEL_SERVICE_UNAVAILABLE: 当前回合绑定的模型服务不可用（${resolvedPair.error}）。请在“大模型服务”中恢复该服务，或调整设置后重新发送任务。`)
+    }
+    const creds = {
+      serviceId: resolvedPair.serviceId,
+      baseUrl: resolvedPair.baseUrl,
+      getApiKey: resolvedPair.getApiKey
+    }
+    const baseUrl = creds.baseUrl
+    const getApiKey = creds.getApiKey
     const providerRouteId = requireInvocationAnthropicRoute({
-      modelId: modelEntry?.id ?? routeModelName,
+      // MODEL_BASELINE 以 provider 模型名为键；ModelEntry.id 是本地目录身份，不能传给 provider route。
+      modelId: routeModelName,
       endpoint: baseUrl,
-      credentialRef: `llm-service:${creds.serviceId || args.llmServiceId || 'default'}`
+      credentialRef: `llm-service:${creds.serviceId}`
     }, getDefaultAgentRuntime().modelProviders)
     remoteContext.providerRouteId = providerRouteId
     const remoteProgressContext = buildRemoteProgressHookContext(args.sessionId, readAppLocale(args.db))
@@ -247,11 +282,12 @@ export async function runImRemoteAgent(args: {
       sessionId: args.sessionId,
       turnId: args.turnId,
       acceptedTurn: args.acceptedTurn,
-      // DIM3：统计维度以实际解析出的服务为准——resolver 未指定 serviceId 时可能回落默认服务，
-      // 会话冻结配置（args.llmServiceId）仅作 resolver 失败时的兜底（评审 P1-2）。
-      llmServiceId: creds.serviceId || args.llmServiceId,
+      // 该值来自精确冻结服务解析；失败已在上方 fail-fast。
+      llmServiceId: creds.serviceId,
       model: routeModelName,
       ...(modelEntry?.id ? { modelId: modelEntry.id } : {}),
+      effort: frozenConfig.thinkingEffort,
+      ...(frozenConfig.requestedThinkingEffort ? { requestedThinkingEffort: frozenConfig.requestedThinkingEffort } : {}),
       providerRouteId,
       contextWindow,
       contextWindowTrusted,

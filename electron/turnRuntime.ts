@@ -71,7 +71,7 @@ export class TurnRuntime {
       : event
     const turn = this.consume(turnId, nextEvent)
     if (nextEvent.eventSeq != null) this.turnEventSeq.set(turnId, nextEvent.eventSeq)
-    if (nextEvent.type === 'source-completed' || nextEvent.type === 'source-failed' || nextEvent.type === 'source-cancelled' || nextEvent.type === 'source-timeout' || nextEvent.type === 'source-uncertain') this.unbindRequest(requestId, turnId)
+    if (nextEvent.type === 'source-completed' || nextEvent.type === 'source-parked' || nextEvent.type === 'source-failed' || nextEvent.type === 'source-cancelled' || nextEvent.type === 'source-timeout' || nextEvent.type === 'source-uncertain') this.unbindRequest(requestId, turnId)
     return turn
   }
 

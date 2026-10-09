@@ -85,6 +85,7 @@ export {
   listStreamingAssistantMessages,
   listRecoverableResidues,
   finalizeResidueMessageKeepingOutcome,
+  finalizeParkedResidueMessage,
   listSessionsMissingWorkDirProfile,
   resolveRetryContext,
   searchMessages,
@@ -120,5 +121,5 @@ export function getDefaultDbPath(userData: string): string {
 
 export { ackImInboxMessage, appendImInboxMessage, appendImInboxMessageWithWakeEvent, claimImInboxMessage, releaseImInboxMessage, renewImInboxClaim } from './imInbox'
 export type { AppendImInboxMessageInput, AppendImInboxMessageResult, AppendImInboxMessageWithWakeEventResult, ClaimedImInboxMessage, ImInboxChannel } from './imInbox'
-export { ackWakeEvent, ackWakeEventInRun, appendWakeEvent, claimWakeEvent, claimWakeEvents, clearWakeEventRetryState, continueWorkflow, finalizeWakeEvents, listClaimableWakeEventIds, listWakeEvents, readWakeEvent, readWakeEventRetryState, releaseWakeEventClaimsForRetry, saveWakeEventRetryState, waitForEvent } from './wakeEvents'
+export { ackWakeEvent, ackWakeEventInRun, appendWakeEvent, claimWakeEvent, claimWakeEvents, clearWakeEventRetryState, continueWorkflow, finalizeWakeEvents, getWakeEventRecoveryDelayMs, listClaimableWakeEventIds, listWakeEvents, readWakeEvent, readWakeEventRetryState, releaseWakeEventClaimsForRetry, saveWakeEventRetryState, waitForEvent } from './wakeEvents'
 export type { AppendWakeEventResult, ClaimedWakeEventSet, WaitForEventInput } from './wakeEvents'

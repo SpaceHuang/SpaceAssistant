@@ -775,6 +775,47 @@ describe('runAgentTurn', () => {
     expect((await backing.read('mirror-failure-invocation')).events.map(({ kind }) => kind)).toContain('invocation-completed')
   })
 
+  it('commits the accepted user transcript atomically with a deferred parked terminal', async () => {
+    const backing = new MemoryHistory()
+    const transcriptCommits: import('../src/history').SessionTranscriptCommitIntent[] = []
+    const history = {
+      appendBatch: async (events: readonly HistoryEvent[], expectedVersion: number, transcriptCommit?: import('../src/history').SessionTranscriptCommitIntent) => {
+        if (transcriptCommit) transcriptCommits.push(transcriptCommit)
+        return backing.appendBatch(events, expectedVersion)
+      },
+      read: (invocationId: string) => backing.read(invocationId)
+    }
+    const registry = new ModelProviderRegistry()
+    registry.register(route, { providerId: 'deferred-parked-transcript', stream: () => stream(
+      { type: 'tool-call', toolCallId: 'park-tool', toolName: 'write_file', input: { path: 'report.md' } },
+      { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+    ) })
+    const permits = new InMemorySafetyPermitStore()
+    const userMessage = { role: 'user' as const, content: 'write the report' }
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('parked-transcript-invocation', ['write_file'])
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'parked-transcript-invocation', turnId: 'parked-transcript-turn',
+      sessionId: 'parked-transcript-session', currentUserMessageId: 'parked-user', requiredUserMessage: { id: 'parked-user', message: userMessage },
+      sessionTranscriptBaseVersion: 4, assistantMessageId: 'parked-assistant', sessionTranscriptFailureMessages: [userMessage],
+      request: { messages: [userMessage], maxTokens: 32 }, history, maxModelTurns: 2,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits,
+        policy: { evaluate: async (binding) => ({ kind: 'ask' as const, confirmationId: `confirm-${binding.toolCallId}`, answerer: 'user' as const, reasonCode: 'USER_APPROVAL' as const }) } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+        capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: 'done' }))),
+      confirmation: async ({ call }) => ({ kind: 'deferred' as const, todoId: 'park-todo', invocationId: call.invocationId,
+        checkpointRef: { checkpointId: 'park-checkpoint', workflowRevision: 5 } })
+    })
+
+    expect(result).toMatchObject({ parked: true, parkedTodoId: 'park-todo' })
+    expect(transcriptCommits).toHaveLength(1)
+    expect(transcriptCommits[0]).toMatchObject({ sessionId: 'parked-transcript-session', baseVersion: 4, outcome: 'interrupted',
+      messages: [userMessage] })
+    expect(transcriptCommits[0]).not.toHaveProperty('messageMirror')
+    expect((await backing.read('parked-transcript-invocation')).events.at(-1)).toMatchObject({ kind: 'invocation-parked' })
+  })
+
   it('projects canonical assistant text blocks into the failed terminal message mirror', async () => {
     const backing = new MemoryHistory()
     const terminalCommits: import('../src/history').SessionTranscriptCommitIntent[] = []

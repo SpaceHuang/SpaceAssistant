@@ -1,10 +1,12 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { WebContents } from 'electron'
-import { AppDatabase, openDatabase, setConfigValue } from '../database'
+import { AppDatabase, createSession, openDatabase, prepareTurnAtomically, setConfigValue } from '../database'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { buildFeishuRemoteSystemAppendix } from '../../src/shared/feishuPrompts'
 import { MODEL_BASELINE } from '../../src/shared/modelBaseline'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
+import { acceptTurnContext } from '../database/acceptedTurnStorage'
 
 const SUPPORTED_ANTHROPIC_MODEL = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
 
@@ -12,6 +14,7 @@ const mockRunToolChatSession = vi.fn()
 const mockReadAppLocale = vi.fn<[], 'zh-CN' | 'en-US'>(() => 'en-US')
 const mockGetMessages = vi.fn(() => [])
 const mockResolveLlmCredentialsForModel = vi.fn()
+const mockResolveLlmCredentialsForPair = vi.fn()
 
 vi.mock('../toolChatLoop', () => ({
   runToolChatSession: (...args: unknown[]) => mockRunToolChatSession(...args)
@@ -30,7 +33,8 @@ vi.mock('../database', async (importOriginal) => {
 })
 
 vi.mock('../llmServiceResolver', () => ({
-  resolveLlmCredentialsForModel: (...args: unknown[]) => mockResolveLlmCredentialsForModel(...args)
+  resolveLlmCredentialsForModel: (...args: unknown[]) => mockResolveLlmCredentialsForModel(...args),
+  resolveLlmCredentialsForPair: (...args: unknown[]) => mockResolveLlmCredentialsForPair(...args)
 }))
 
 vi.mock('./feishuCliLogger', () => ({
@@ -77,13 +81,29 @@ function makeWorkDirManager() {
 
 function baseCtx(getMainWebContents: () => WebContents | null) {
   const db = makeDb()
+  const modelId = 'feishu-test-model'
+  setConfigValue(db, 'config.models', JSON.stringify([{ id: modelId, name: SUPPORTED_ANTHROPIC_MODEL, enabled: true, supportsThinking: true }]))
+  const session = createSession(db, { name: 'feishu-test-session', model: SUPPORTED_ANTHROPIC_MODEL })
+  prepareTurnAtomically(db, {
+    user: { id: 'feishu-test-user', sessionId: session.id, role: 'user', content: 'hello', timestamp: 1, status: 'sent' },
+    assistant: { id: 'feishu-test-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
+    turn: { turnId: 'feishu-test-turn', requestId: '00000000-0000-4000-8000-000000000001', sessionId: session.id, assistantMessageId: 'feishu-test-assistant', state: 'prepared', startToken: 'feishu-test-start' }
+  })
+  const acceptedTurn = createAcceptedTurn({
+    turnId: 'feishu-test-turn', requestId: '00000000-0000-4000-8000-000000000001', sessionId: session.id, lane: 'feishu',
+    startToken: 'feishu-test-start', currentUserMessageId: 'feishu-test-user', transcriptVersion: 0,
+    config: { lane: 'feishu', model: SUPPORTED_ANTHROPIC_MODEL, llmServiceId: 'svc-1', thinkingEffort: 'low' }
+  })
+  acceptTurnContext(db, acceptedTurn)
   return {
     db,
     sessionStorage: createSqliteSessionStorage(db),
-    sessionId: 'sess-1',
+    sessionId: session.id,
     userMessage: 'hello',
     replyMessageId: 'msg-1',
     requestId: '00000000-0000-4000-8000-000000000001',
+    turnId: acceptedTurn.turnId,
+    acceptedTurn,
     feishuConfig: { remoteConfirmPolicy: 'always' as const, enabled: true },
     workDir: '/tmp',
     workDirManager: makeWorkDirManager(),
@@ -108,6 +128,10 @@ describe('runFeishuRemoteAgent locale', () => {
       baseUrl: 'https://api.example.com',
       getApiKey: async () => 'key'
     })
+    mockResolveLlmCredentialsForPair.mockImplementation(async (_db: AppDatabase, modelId: string, serviceId: string) => ({
+      model: { id: modelId, name: SUPPORTED_ANTHROPIC_MODEL, enabled: true, supportsThinking: true },
+      serviceId, providerModelName: SUPPORTED_ANTHROPIC_MODEL, baseUrl: 'https://api.example.com', getApiKey: async () => 'key'
+    }))
     mockRunToolChatSession.mockResolvedValue({
       ok: true,
       content: [{ type: 'text', text: 'done' }],

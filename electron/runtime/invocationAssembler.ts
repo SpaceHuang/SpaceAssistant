@@ -115,6 +115,8 @@ export interface AgentInvocationMaterials {
   options?: { maxTokens?: number; enableThinking?: boolean }
   /** P4（偏差 6）：显式思维强度档位；优先于 enableThinking 兼容映射；缺省 'off'（零成本档）。 */
   effort?: import('../../src/shared/agent/invocation').AgentReasoningEffort
+  /** IM frozen request effort, kept separate from the effective effort in effort. */
+  requestedThinkingEffort?: import('../../src/shared/agent/invocation').AgentReasoningEffort
   toolsConfig: import('../../src/shared/domainTypes').ToolsConfig
   /** Re-read mutable execution configuration during approved safety recheck and executor refresh. */
   resolveToolsConfig?: () => import('../../src/shared/domainTypes').ToolsConfig
@@ -391,11 +393,14 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
 
   // P4（偏差 6）：effort 解析——显式档位 > enableThinking 兼容映射（true→medium）> off（子调用零成本档）；
   // 宿主按 ModelEntry 能力校验，不支持时按定死规则降级为 off 并留痕（不静默换档）
-  const requestedEffort = materials.effort
+  const requestedEffort = materials.requestedThinkingEffort ?? materials.effort
     ?? (materials.options?.enableThinking === true ? 'medium' : 'off')
-  let reasoningEffort = requestedEffort
+  let reasoningEffort = materials.effort ?? requestedEffort
   let reasoningDegraded: import('../../src/shared/agent/invocation').AgentReasoningProfile['degraded']
-  if (db && reasoningEffort !== 'off') {
+  const isFrozenImEffort = Boolean(materials.acceptedTurn && (materialsLane === 'feishu' || materialsLane === 'wechat'))
+  if (isFrozenImEffort) {
+    if (requestedEffort !== reasoningEffort) reasoningDegraded = { from: requestedEffort, to: reasoningEffort }
+  } else if (db && reasoningEffort !== 'off') {
     const entry = materials.modelId
       ? readStoredModels(db).find((m) => m.id === materials.modelId)
       : readStoredModels(db).find((m) => m.name === materials.model)

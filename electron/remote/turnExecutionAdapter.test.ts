@@ -127,6 +127,27 @@ describe('executeRemoteTurn', () => {
     expect(getPersistedTurn(db, prepared.turnId)).toMatchObject({ state: 'terminal', outcome: 'timed-out' })
   })
 
+  it('parks an approved-wait turn without recording completion', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'remote-parked-wait' })
+    let sequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `remote-parked-${++sequence}` } })
+    const prepared = runtime.prepare({ mode: 'create-user', requestId: 'remote-parked-request', sessionId: session.id, input: { text: 'approve then continue' }, config: {} })
+    const facts: string[] = []
+    runtime.subscribe((_turn, event) => facts.push(event.type))
+
+    const result = await executeRemoteTurn({
+      runtime, prepared, requestId: prepared.requestId,
+      run: vi.fn().mockResolvedValue({ ok: true, parked: true, pendingConfirm: true, summary: '' })
+    })
+
+    expect(result).toMatchObject({ ok: true, parked: true })
+    expect(getPersistedTurn(db, prepared.turnId)).toMatchObject({ state: 'terminal', outcome: 'parked' })
+    expect(facts).not.toContain('source-completed')
+    expect(runtime.coordinator.getTurn(prepared.turnId)?.assistantMessage.status).toBe('sent')
+    db.close()
+  })
+
   it.each([
     { outcome: 'failed' as const, expected: 'failed' as const },
     { outcome: 'cancelled' as const, expected: 'cancelled' as const },

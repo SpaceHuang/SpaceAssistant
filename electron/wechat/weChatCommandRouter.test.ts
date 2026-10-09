@@ -10,7 +10,7 @@ import fs from 'fs/promises'
 import fsSync from 'fs'
 import os from 'os'
 import path from 'path'
-import { openDatabase, createSession, setConfigValue, getPersistedTurn, getSession, getTurnByRequestId, appendMessage as mockedAppendMessage } from '../database'
+import { openDatabase, createSession, getConfigValue, setConfigValue, getPersistedTurn, getSession, getTurnByRequestId, appendMessage as mockedAppendMessage } from '../database'
 import { appendMessage as appendMessageOperation } from '../database/operations'
 import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
@@ -32,6 +32,10 @@ import { createDeferredApprovalNotificationDelivery } from '../remote/deferredAp
 import { createWakeEventDispatcher } from '../remote/wakeEventDispatcher'
 import { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeStore'
 import { createDeferredExecutionResultStore } from '../confirmation/deferredExecutionResultStore'
+import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
+import { acceptTurnContext } from '../database/acceptedTurnStorage'
+
+vi.mock('../secureApiKey', () => ({ isSecretStorageAvailable: vi.fn(() => true), encryptSecret: (value: string) => `enc:${value}`, decryptSecret: (value: string) => value.replace(/^enc:/, '') }))
 
 const mockRunAgent = vi.fn()
 const mockResolveSession = vi.fn()
@@ -233,6 +237,30 @@ describe('WeChatCommandRouter', () => {
       { type: 'im-inbound', status: 'acked' }, { type: 'im-inbound', status: 'acked' }
     ])
     expect(getTurnByRequestId(db, sessionId, `wake:${persisted.eventId}`)).toMatchObject({ requestId: `wake:${persisted.eventId}`, userMessageId: persisted.messageId, outcome: 'completed' })
+    await dispatcher.dispose()
+  })
+
+  it('acks a WeChat inbox wake when the remote turn parks for deferred approval', async () => {
+    const queueScope = buildImQueueScope('wechat', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    const session = getSession(db, sessionId)!
+    const metadata = { ...session.metadata, source: 'wechat', wechatMeta: { userId: 'wx-user@test', lastContextToken: 'parked-context' } }
+    getDbConnection(db).prepare('UPDATE sessions SET metadata=? WHERE id=?').run(JSON.stringify(metadata), sessionId)
+    const persisted = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope,
+      channelMessageId: 'parked-wechat-message', content: '发送并等待审批', contextToken: 'parked-context' })
+    let sequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `parked-wechat-${++sequence}` } })
+    router = makeRouter(undefined)
+    ;(router as unknown as { deps: { turnRuntime?: TurnRuntime } }).deps.turnRuntime = runtime
+    mockRunAgent.mockResolvedValue({ summary: '', pendingConfirm: true, parked: true, ok: true })
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
+
+    await dispatcher.dispatchSession(sessionId)
+
+    expect(getTurnByRequestId(db, sessionId, `wake:${persisted.eventId}`)).toMatchObject({ state: 'terminal', outcome: 'parked' })
+    expect(listWakeEvents(db, sessionId)).toMatchObject([{ eventId: persisted.eventId, status: 'acked' }])
+    expect(getDbConnection(db).prepare('SELECT state FROM im_inbox_claims WHERE message_id=?').get(persisted.messageId)).toEqual({ state: 'acked' })
+    expect(reply).not.toHaveBeenCalled()
+    await dispatcher.dispose()
   })
 
   it('consumes a persisted deferred completion wake and resumes the original WeChat task turn', async () => {
@@ -257,18 +285,37 @@ describe('WeChatCommandRouter', () => {
       toolCallId: 'source-tool', toolName: 'send_message', canonicalArgs: {}, contentVersions: {}, executionContext: {
         currentUserMessageId: persisted.messageId, messageId: 'wechat-completion-source', contextToken: 'completion-context'
       } })
+    acceptTurnContext(db, createAcceptedTurn({ turnId: 'source-turn', requestId: 'wechat-source-request', sessionId, lane: 'wechat',
+      startToken: 'source-start', currentUserMessageId: persisted.messageId, transcriptVersion: 0,
+      config: { lane: 'wechat', model: TEST_MODEL_NAME, llmServiceId: TEST_SERVICE_ID, thinkingEffort: 'low' } }))
     let turnSequence = 0
     const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `wechat-completion-${++turnSequence}` } })
     router = makeRouter(undefined)
     ;(router as unknown as { deps: { turnRuntime?: TurnRuntime } }).deps.turnRuntime = runtime
     const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
+    mockRunAgent.mockImplementationOnce(async () => {
+      const models = JSON.parse(getConfigValue(db, 'config.models') ?? '[]') as Array<Record<string, unknown>>
+      models.push({ id: 'alternate-model', name: 'deepseek-flash', enabled: true, supportsThinking: true })
+      setConfigValue(db, 'config.models', JSON.stringify(models))
+      const services = JSON.parse(getConfigValue(db, 'config.llmServices') ?? '[]') as Array<Record<string, unknown>>
+      services.push({ id: 'alternate-service', name: 'Alternate Service', baseUrl: 'https://alternate.example', supportedModelIds: ['alternate-model'], createdAt: '2', updatedAt: '2' })
+      setConfigValue(db, 'config.llmServices', JSON.stringify(services))
+      setConfigValue(db, 'config.activeLlmServiceIds', JSON.stringify([TEST_SERVICE_ID, 'alternate-service']))
+      setConfigValue(db, 'secrets.llmServiceKeys', JSON.stringify({ [TEST_SERVICE_ID]: 'enc:sk-test', 'alternate-service': 'enc:sk-alternate' }))
+      setConfigValue(db, 'config.wechat', JSON.stringify({ remoteModelSelectionMode: 'explicit', remoteDefaultModelId: 'alternate-model', remoteThinkingEffort: 'high' }))
+      return { summary: '原始任务已接受', pendingConfirm: false, ok: true }
+    })
     await dispatcher.dispatchSession(sessionId)
     const resultStore = createDeferredExecutionResultStore(db)
     resultStore.beginDispatch({ todoId: todo.todoId, invocationId: todo.invocationId, dispatchKey: 'wechat-completion-dispatch' })
     resultStore.commitResult(todo.todoId, { kind: 'completed', outputRef: `deferred-result:${todo.invocationId}`, value: { ok: true, marker: 'REVIEW_TOOL_RESULT_WECHAT' } })
+    mockRunAgent.mockResolvedValueOnce({ summary: '', pendingConfirm: true, parked: true, ok: true })
     await dispatcher.dispatchSession(sessionId)
 
     expect(mockRunAgent).toHaveBeenCalledTimes(2)
+    expect(mockRunAgent.mock.calls[1]?.[0]).toMatchObject({
+      acceptedTurn: { config: { model: TEST_MODEL_NAME, llmServiceId: TEST_SERVICE_ID, thinkingEffort: 'low' } }
+    })
     expect(mockRunAgent.mock.calls[1]?.[0]).toMatchObject({ userMessage: '发送确认后的报告', replyMessageId: 'wechat-completion-source',
       remoteContext: { contextToken: 'completion-context', deferredContinuation: { todoId: todo.todoId, invocationId: todo.invocationId,
         workflowId: 'workflow', taskId: 'task', stepId: 'publish', planRevision: 1, checkpointId: 'wechat-completion-checkpoint',
@@ -276,6 +323,9 @@ describe('WeChatCommandRouter', () => {
         result: { kind: 'completed', outputRef: `deferred-result:${todo.invocationId}`, value: { ok: true, marker: 'REVIEW_TOOL_RESULT_WECHAT' } } } } })
     expect(resultStore.getByTodo(todo.todoId)?.state).toBe('delivered')
     expect(listWakeEvents(db, sessionId).every(({ status }) => status === 'acked')).toBe(true)
+    expect(getTurnByRequestId(db, sessionId, `completion:${listWakeEvents(db, sessionId).find(({ type }) => type === 'safety-recovery')!.eventId}`))
+      .toMatchObject({ state: 'terminal', outcome: 'parked' })
+    await dispatcher.dispose()
   })
 
   it('routes approval replies to the safety ingress before Inbox or the Skill', async () => {

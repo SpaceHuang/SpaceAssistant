@@ -29,6 +29,8 @@ export function createDeferredImBundleRuntime(input: {
   recheckTask(todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): boolean
   dispatch(input: DispatchInput): Promise<{ dispatched: boolean; result?: unknown }>
   onCompletionWake?(sessionId: string): void | Promise<void>
+  scheduleRetry?: (delayMs: number, callback: () => void) => void
+  recoverCompletionWake?: (sessionId: string) => void | Promise<void>
   audit(event: SecurityAuditEvent): void
 }) {
   const executionResults = createDeferredExecutionResultStore(input.db)
@@ -89,7 +91,8 @@ export function createDeferredImBundleRuntime(input: {
     dispatch: ports.dispatch,
     audit: input.audit,
     recoverDispatchingExecutions,
-    recoverCompletionWake: input.onCompletionWake
+    recoverCompletionWake: input.recoverCompletionWake ?? input.onCompletionWake,
+    scheduleRetry: input.scheduleRetry
   })
   const closeCoordinator = createDeferredApprovalCloseCoordinator({
     db: input.db,

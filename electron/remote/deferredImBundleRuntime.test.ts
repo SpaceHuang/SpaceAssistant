@@ -7,7 +7,8 @@ import { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeSto
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 import { createSession } from '../database/operations'
 import { createDeferredExecutionResultStore } from '../confirmation/deferredExecutionResultStore'
-import { listWakeEvents } from '../database/wakeEvents'
+import { appendWakeEvent, claimWakeEvents, listWakeEvents } from '../database/wakeEvents'
+import { createWakeEventDispatcher } from './wakeEventDispatcher'
 
 describe('deferred IM bundle runtime', () => {
   it('composes durable ingress with the production epoch/task dispatch fence', async () => {
@@ -67,5 +68,64 @@ describe('deferred IM bundle runtime', () => {
     await restarted.recoverPending()
     expect(recoveredWake).toHaveBeenCalledWith(sessionId)
     db.close()
+  })
+
+  it('retries a claimed completion wake automatically when its lease expires after restart', async () => {
+    vi.useFakeTimers()
+    try {
+      const db = createMemoryAppDb()
+      const sessionId = createSession(db, { name: 'bundle-claimed-recovery' }).id
+      const todoStore = createDeferredTodoStore(db)
+      const rule = { ruleId: 'write', factsHash: '9'.repeat(64) }
+      const todo = todoStore.create({ todoId: 'claimed-recovery-todo', invocationId: 'claimed-recovery-invocation', channel: 'feishu',
+        identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 3, rule, workflowId: 'workflow', taskId: 'task', stepId: 'step',
+        planRevision: 1, originSessionId: sessionId, createdAt: Date.now(), expiresAt: Date.now() + 60_000 }).todo
+      const intents = createSecurityActionIntentStore(db)
+      intents.prepare({ invocationId: todo.invocationId, envelopeInvocationId: todo.invocationId, sessionId,
+        workflowId: todo.workflowId, taskId: todo.taskId, stepId: todo.stepId, planRevision: 1 })
+      intents.linkTodo(todo.invocationId, todo.todoId)
+      intents.commitCheckpoint(todo.invocationId, { checkpointId: 'claimed-checkpoint', workflowRevision: 1 })
+      const envelopes = createDeferredEnvelopeStore(db)
+      envelopes.put({ invocationId: todo.invocationId, requestId: 'claimed-source-request', turnId: 'claimed-source-turn', toolCallId: 'claimed-tool',
+        toolName: 'write_file', canonicalArgs: {}, contentVersions: {}, executionContext: { sessionId } })
+      const dispatch = vi.fn(async () => ({ dispatched: true, result: { ok: true } }))
+      const onCompletionWake = vi.fn()
+      const dispatcher = createWakeEventDispatcher({ db, maxParallel: 1, scheduleRetry: (delay, callback) => setTimeout(callback, delay), launchLoop: async ({ events }) => {
+        expect(events).toHaveLength(1)
+        onCompletionWake(sessionId)
+      } })
+      const firstRuntime = createDeferredImBundleRuntime({ db, channel: 'feishu', todoStore,
+        notificationDelivery: { resolveCurrent: vi.fn(() => null) } as never, isEnabled: () => true, getAuthorizationEpoch: () => 3,
+        maxParallel: 1, isOwnerAuthorized: () => true, recheckTask: () => true, dispatch, audit: vi.fn(), onCompletionWake })
+      await firstRuntime.resume.requestResume({ requestId: 'claimed-approval', todoId: todo.todoId, channel: 'feishu', identityKey: todo.identityKey,
+        ownerId: todo.ownerId, authorizationEpoch: 3, rule, notificationVersion: 1, messageId: 'trusted', reasonKey: 'reply' })
+      await firstRuntime.resume.dispatchPending(sessionId)
+      appendWakeEvent(db, { sessionId, type: 'safety-recovery', reasonKey: 'deferred-completion:claimed-recovery-todo',
+        payloadRef: { kind: 'safety-approval', approvalId: todo.todoId } })
+      createDeferredExecutionResultStore(db).beginDispatch({ todoId: todo.todoId, invocationId: todo.invocationId, dispatchKey: 'claimed-dispatch' })
+      createDeferredExecutionResultStore(db).commitResult(todo.todoId, { kind: 'completed', outputRef: `deferred-result:${todo.invocationId}`, value: { ok: true } })
+      claimWakeEvents(db, { sessionId, runId: 'dead-run', ownerId: 'dead-owner', now: Date.now() })
+      expect(listWakeEvents(db, sessionId)[0]).toMatchObject({ status: 'claimed' })
+
+      let restartedDispatcher = dispatcher
+      const restarted = createDeferredImBundleRuntime({ db, channel: 'feishu', todoStore,
+        notificationDelivery: { resolveCurrent: vi.fn(() => null) } as never, isEnabled: () => true, getAuthorizationEpoch: () => 3,
+        maxParallel: 1, isOwnerAuthorized: () => true, recheckTask: () => true, dispatch, audit: vi.fn(), onCompletionWake,
+        recoverCompletionWake: (session) => restartedDispatcher.dispatchSession(session),
+        scheduleRetry: (delay, callback) => { setTimeout(callback, delay) } })
+      await restarted.recoverPending()
+      restartedDispatcher = createWakeEventDispatcher({ db, maxParallel: 1, clock: { now: () => Date.now() },
+        launchLoop: async ({ events }) => { onCompletionWake(sessionId) } })
+      expect(onCompletionWake).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(30_001)
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(onCompletionWake).toHaveBeenCalledTimes(1)
+      expect(onCompletionWake).toHaveBeenCalledWith(sessionId)
+      expect(listWakeEvents(db, sessionId)[0]?.status).toBe('acked')
+      db.close()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

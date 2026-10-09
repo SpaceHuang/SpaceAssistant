@@ -13,11 +13,12 @@ const { mockRunHostedAgentTurn, mockRunHostedAgentTurnWithParticipant, mockSessi
     if (participant && input.sessionId && input.turnId && typeof input.sessionTranscriptBaseVersion === 'number') {
       const snapshot = await participant.history.read(invocationId)
       const terminal = [...snapshot.events].reverse().find((event) =>
-        event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted'
+        event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted' || event.kind === 'invocation-parked'
       )
       if (terminal) {
         const payload = terminal.payload && typeof terminal.payload === 'object' ? terminal.payload as { status?: unknown; reason?: unknown } : {}
         const outcome = terminal.kind === 'invocation-completed' ? 'completed'
+          : terminal.kind === 'invocation-parked' ? 'interrupted'
           : payload.status === 'cancelled' ? 'cancelled'
             : payload.reason === 'timeout' ? 'timed_out'
               : terminal.kind === 'invocation-interrupted' ? 'interrupted' : 'failed'
@@ -95,6 +96,28 @@ describe('createHostedTurnHandoff', () => {
     const result = await handoff({ request: { messages: [{ role: 'user', content: 'run this after approval' }] } })
     expect(result.result).toMatchObject({ ok: true, stopReason: 'parked', parked: true, parkedTodoId: 'todo-parked' })
     expect(result.finalization.outcome).toBe('interrupted')
+  })
+
+  it('requires a parked invocation transcript participant to commit before releasing the session turn', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'parked-transcript-participant' })
+    const history = new SqliteAgentHistory(getDbConnection(db))
+    const events: Array<{ kind: string; payload?: unknown }> = []
+    const handoff = createHostedTurnHandoff({ agentSdk: { createHostedTurnRuntime: () => ({ host: {}, dispose: async () => undefined }) },
+      history: { read: async () => ({ events }) } as never, invocationId: 'parked-participant-invocation', turnId: 'parked-participant-turn',
+      routeId: 'route', sessionId: session.id, sessionDb: db })
+    mockRunHostedAgentTurn.mockImplementationOnce(async () => {
+      events.push({ kind: 'invocation-parked', payload: { status: 'parked', reason: 'deferred-approval', todoId: 'todo-parked' } })
+      return { text: '', finishReason: 'end_turn', usage: { inputTokens: 1, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+        messages: [{ role: 'user', content: 'wait' }], modelTurns: 1 }
+    })
+
+    const result = await handoff({ request: { messages: [{ role: 'user', content: 'wait' }] } })
+
+    expect(result.result).toMatchObject({ parked: true, parkedTodoId: 'todo-parked' })
+    expect(readSessionTranscript(db, session.id)).toMatchObject({ status: 'ready', version: 1, lastTurnId: 'parked-participant-turn' })
+    expect(history.read('parked-participant-invocation')).toBeDefined()
+    db.close()
   })
 
   it('rejects a Hosted current user message that conflicts with the AcceptedTurn identity before provider dispatch', async () => {

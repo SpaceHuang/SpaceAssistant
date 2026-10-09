@@ -15,8 +15,14 @@ import type { WorkDirManager } from '../workDirManager'
 import { acceptTurnContext } from '../database/acceptedTurnStorage'
 import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
+import { persistLlmServices } from '../llmServiceResolver'
 
 vi.mock('../appIpc', () => ({ readAppLocale: () => 'zh-CN' }))
+vi.mock('../secureApiKey', () => ({
+  isSecretStorageAvailable: vi.fn(() => true),
+  encryptSecret: (plain: string) => `enc:${plain}`,
+  decryptSecret: (stored: string) => stored.replace(/^enc:/, '')
+}))
 
 describe('Feishu production entry usage attribution SQLite integration', () => {
   let db: AppDatabase | undefined
@@ -48,6 +54,10 @@ describe('Feishu production entry usage attribution SQLite integration', () => {
     db = openDatabase(':memory:')
     workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'feishu-usage-attribution-'))
     const model = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')![0]
+    const modelId = 'feishu-usage-model'
+    const serviceId = 'feishu-usage-service'
+    setConfigValue(db, 'config.models', JSON.stringify([{ id: modelId, name: model, enabled: true, supportsThinking: true }]))
+    persistLlmServices(db, [{ id: serviceId, name: 'Usage attribution fixture', baseUrl: 'https://api.anthropic.com', apiKeyPresent: true, supportedModelIds: [modelId] }], [serviceId], { [serviceId]: 'test-key' })
     const session = createSession(db, { name: 'feishu-usage-attribution', model })
     prepareTurnAtomically(db, {
       user: { id: 'feishu-usage-user', sessionId: session.id, role: 'user', content: 'Check attribution', timestamp: 1, status: 'sent' },
@@ -56,10 +66,10 @@ describe('Feishu production entry usage attribution SQLite integration', () => {
     })
     const acceptedTurn = createAcceptedTurn({
       turnId: 'feishu-usage-turn', requestId: 'feishu-usage-request', sessionId: session.id, lane: 'feishu',
-      startToken: 'feishu-usage-start', currentUserMessageId: 'feishu-usage-user', transcriptVersion: 0, config: { lane: 'feishu', model }
+      startToken: 'feishu-usage-start', currentUserMessageId: 'feishu-usage-user', transcriptVersion: 0,
+      config: { lane: 'feishu', model, llmServiceId: serviceId, thinkingEffort: 'low' }
     })
     acceptTurnContext(db, acceptedTurn)
-    setConfigValue(db, 'config.activeLlmServiceIds', JSON.stringify([]))
 
     const workDirManager: WorkDirManager = {
       listProfiles: () => [], getActiveProfileId: () => 'p1', getActiveWorkDir: () => workDir!,

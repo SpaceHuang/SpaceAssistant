@@ -10,6 +10,7 @@ import {
   listStreamingAssistantMessages,
   listRecoverableResidues,
   finalizeResidueMessageKeepingOutcome,
+  finalizeParkedResidueMessage,
   listPersistedTurns,
   hasActiveTurn,
   updateMessageContent,
@@ -72,6 +73,7 @@ export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
     listStreaming: () => listStreamingAssistantMessages(db),
     listRecoverableResidues: () => listRecoverableResidues(db),
     finalizeResidueMessage: (messageId, targetStatus) => finalizeResidueMessageKeepingOutcome(db, messageId, targetStatus),
+    finalizeParkedResidueMessage: (messageId) => finalizeParkedResidueMessage(db, messageId),
     listUnfinishedTurns: () => listPersistedTurns(db)
       .filter((turn) => turn.state === 'configuring' || turn.state === 'prepared' || turn.state === 'executing' || turn.state === 'waiting-confirm')
     .map((turn) => ({ turnId: turn.turnId, assistantMessageId: turn.assistantMessageId })),

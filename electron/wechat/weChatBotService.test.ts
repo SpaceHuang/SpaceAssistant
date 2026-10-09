@@ -51,6 +51,37 @@ describe('WeChatBotService', () => {
     expect(mockBot.start).toHaveBeenCalled()
   })
 
+  it('shares an in-flight poll start instead of starting the SDK twice', async () => {
+    const svc = new WeChatBotService({
+      storageDir: '/tmp/wechat',
+      appVersion: '0.1.0',
+      getWebContents,
+      onInbound: vi.fn()
+    })
+    await svc.loginStart()
+    mockBot.login.mockClear()
+    mockBot.start.mockClear()
+
+    let finishStart: (() => void) | undefined
+    mockBot.start.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      finishStart = () => {
+        mockBot._state.pollState = 'polling'
+        resolve()
+      }
+    }))
+
+    const first = svc.startPoll()
+    const second = svc.startPoll()
+    await vi.waitFor(() => expect(mockBot.start).toHaveBeenCalledTimes(1))
+    finishStart?.()
+    const [firstStatus, secondStatus] = await Promise.all([first, second])
+
+    expect(firstStatus.pollState).toBe('polling')
+    expect(secondStatus.pollState).toBe('polling')
+    expect(mockBot.login).toHaveBeenCalledTimes(1)
+    expect(mockBot.start).toHaveBeenCalledTimes(1)
+  })
+
   it('startPoll restores credentials when loggedIn mirror is set', async () => {
     const svc = new WeChatBotService({
       storageDir: '/tmp/wechat',

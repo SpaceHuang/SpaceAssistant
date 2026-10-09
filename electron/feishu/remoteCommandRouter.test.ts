@@ -2,7 +2,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { getSession, openDatabase, createSession, setConfigValue, getPersistedTurn, getTurnByRequestId } from '../database'
+import { getSession, openDatabase, createSession, getConfigValue, setConfigValue, getPersistedTurn, getTurnByRequestId } from '../database'
 import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
 import { TurnRuntime } from '../turnRuntime'
 import { createWorkDirManager } from '../workDirManager'
@@ -32,6 +32,10 @@ import { createSecurityActionIntentStore } from '../confirmation/securityActionI
 import { createDeferredApprovalNotificationDelivery } from '../remote/deferredApprovalNotificationDelivery'
 import { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeStore'
 import { createDeferredExecutionResultStore } from '../confirmation/deferredExecutionResultStore'
+import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
+import { acceptTurnContext } from '../database/acceptedTurnStorage'
+
+vi.mock('../secureApiKey', () => ({ isSecretStorageAvailable: vi.fn(() => true), encryptSecret: (value: string) => `enc:${value}`, decryptSecret: (value: string) => value.replace(/^enc:/, '') }))
 
 const mockRunFeishuRemoteAgent = vi.fn()
 const mockResolveFeishuSession = vi.fn()
@@ -380,6 +384,29 @@ describe('RemoteCommandRouter workdir binding', () => {
     expect(getDbConnection(db).prepare('SELECT state FROM im_inbox_claims WHERE message_id=?').get(persisted.messageId)).toEqual({ state: 'acked' })
   })
 
+  it('acks a Feishu inbox wake when the remote turn parks for deferred approval', async () => {
+    const { db, manager } = setupDbAndManager()
+    const session = createSession(db, { name: 'Feishu parked wake', metadata: {
+      source: 'feishu', feishuChatId: 'chat-1', feishuSenderOpenId: 'user-1'
+    } })
+    const scope = buildImQueueScope('feishu', session.id) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    const persisted = appendImInboxMessageWithWakeEvent(db, { sessionId: session.id, channel: 'feishu', queueScope: scope,
+      channelMessageId: 'parked-feishu-message', content: '发布并等待审批' })
+    let sequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `parked-feishu-${++sequence}` } })
+    const { router } = makeRouter(db, manager, { turnRuntime: runtime })
+    mockRunFeishuRemoteAgent.mockResolvedValue({ summary: '', pendingConfirm: true, parked: true, ok: true })
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
+
+    await dispatcher.dispatchSession(session.id)
+
+    expect(getTurnByRequestId(db, session.id, `wake:${persisted.eventId}`)).toMatchObject({ state: 'terminal', outcome: 'parked' })
+    expect(listWakeEvents(db, session.id)).toMatchObject([{ eventId: persisted.eventId, status: 'acked' }])
+    expect(getDbConnection(db).prepare('SELECT state FROM im_inbox_claims WHERE message_id=?').get(persisted.messageId)).toEqual({ state: 'acked' })
+    expect(mockSendFeishuRemoteOutbound).not.toHaveBeenCalled()
+    await dispatcher.dispose()
+  })
+
   it('consumes a persisted deferred completion wake and resumes the original Feishu task turn', async () => {
     const { db, manager } = setupDbAndManager()
     const session = createSession(db, { name: 'Feishu completion wake', metadata: {
@@ -403,6 +430,9 @@ describe('RemoteCommandRouter workdir binding', () => {
       toolCallId: 'source-tool', toolName: 'write_file', canonicalArgs: {}, contentVersions: {}, executionContext: {
         currentUserMessageId: persisted.messageId, messageId: 'completion-source-message'
       } })
+    acceptTurnContext(db, createAcceptedTurn({ turnId: 'source-turn', requestId: 'source-request', sessionId: session.id, lane: 'feishu',
+      startToken: 'source-start', currentUserMessageId: persisted.messageId, transcriptVersion: 0,
+      config: { lane: 'feishu', model: TEST_MODEL_NAME, llmServiceId: TEST_SERVICE_ID, thinkingEffort: 'low' } }))
     expect(createDeferredEnvelopeStore(db).get(todo.invocationId)?.executionContext.currentUserMessageId).toBe(persisted.messageId)
     const resultStore = createDeferredExecutionResultStore(db)
     resultStore.beginDispatch({ todoId: todo.todoId, invocationId: todo.invocationId, dispatchKey: 'feishu-completion-dispatch' })
@@ -411,17 +441,23 @@ describe('RemoteCommandRouter workdir binding', () => {
     let turnSequence = 0
     const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `feishu-completion-${++turnSequence}` } })
     const { router } = makeRouter(db, manager, { turnRuntime: runtime })
-    mockRunFeishuRemoteAgent.mockResolvedValue({ summary: '已继续', pendingConfirm: false, ok: true })
+    mockRunFeishuRemoteAgent.mockImplementationOnce(async () => {
+      setConfigValue(db, 'config.llmServices', JSON.stringify([
+        { id: 'alternate-service', name: 'Alternate Service', baseUrl: 'https://alternate.example', supportedModelIds: [TEST_MODEL_NAME], createdAt: '2', updatedAt: '2' }
+      ]))
+      setConfigValue(db, 'config.activeLlmServiceIds', JSON.stringify(['alternate-service']))
+      setConfigValue(db, 'secrets.llmServiceKeys', JSON.stringify({ 'alternate-service': 'enc:sk-alternate' }))
+      setConfigValue(db, 'config.feishu', JSON.stringify({ remoteModelSelectionMode: 'explicit', remoteDefaultModelId: TEST_MODEL_NAME, remoteThinkingEffort: 'high' }))
+      return { summary: '原始任务已接受', pendingConfirm: false, ok: true }
+    })
+      .mockResolvedValueOnce({ summary: '', pendingConfirm: true, parked: true, ok: true })
     const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
     await dispatcher.dispatchSession(session.id)
-
-    expect(mockRunFeishuRemoteAgent).toHaveBeenCalledTimes(2)
-    expect(mockRunFeishuRemoteAgent.mock.calls[1]?.[0]).toMatchObject({ userMessage: '发布报告', replyMessageId: 'completion-source-message',
-      remoteContext: { deferredContinuation: { todoId: todo.todoId, invocationId: todo.invocationId, workflowId: 'workflow', taskId: 'task', stepId: 'publish',
-        planRevision: 1, checkpointId: 'feishu-completion-checkpoint', dispatchKey: 'feishu-completion-dispatch',
-        outputRef: 'deferred-result:feishu-completion-invocation', result: { kind: 'completed', outputRef: 'deferred-result:feishu-completion-invocation', value: { ok: true, marker: 'REVIEW_TOOL_RESULT_FEISHU' } } } } })
-    expect(resultStore.getByTodo(todo.todoId)?.state).toBe('delivered')
-    expect(listWakeEvents(db, session.id).every(({ status }) => status === 'acked')).toBe(true)
+    expect(mockRunFeishuRemoteAgent).toHaveBeenCalledTimes(1)
+    expect(resultStore.getByTodo(todo.todoId)?.state).toBe('completion_outboxed')
+    expect(mockRunFeishuRemoteAgent).toHaveBeenCalledTimes(1)
+    expect(listWakeEvents(db, session.id).find(({ type }) => type === 'safety-recovery')?.status).toBe('pending')
+    await dispatcher.dispose()
   })
 
   it('runs the production wake dispatcher consumer after SQLite reopen', async () => {
@@ -456,6 +492,7 @@ describe('RemoteCommandRouter workdir binding', () => {
     await expect(dispatch.mock.results[0]?.value).resolves.toBeUndefined()
     expect(listWakeEvents(reopened, session.id)).toMatchObject([{ status: 'acked', eventId: persisted.eventId }])
     expect(mockRunFeishuRemoteAgent).toHaveBeenCalledTimes(1)
+    await dispatcher.dispose()
   })
 
   it('keeps one active Feishu turn when the production dispatcher receives concurrent wake signals', async () => {
@@ -482,6 +519,7 @@ describe('RemoteCommandRouter workdir binding', () => {
 
     expect(mockRunFeishuRemoteAgent).toHaveBeenCalledTimes(1)
     expect(listWakeEvents(db, session.id).every(({ status }) => status === 'acked')).toBe(true)
+    await dispatcher.dispose()
   })
 
   it('persists and dispatches new inbound work instead of rejecting it while the session is busy', async () => {

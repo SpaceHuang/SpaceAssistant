@@ -27,8 +27,9 @@ export type TurnStorage = {
   listStreaming?: () => Message[]
   listRecoverableResidues?: () => Array<{ message: Message; turnId?: string; turnOutcome?: string }>
   finalizeResidueMessage?: (messageId: string, targetStatus: 'completed' | 'cancelled' | 'failed') => boolean
+  finalizeParkedResidueMessage?: (messageId: string) => boolean
   listUnfinishedTurns: () => Array<{ turnId: string; assistantMessageId: string }>
-  recoverTurn: (turnId: string, assistantMessageId: string) => boolean | Extract<TurnOutcome, 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'recovered' | 'commit-uncertain'>
+  recoverTurn: (turnId: string, assistantMessageId: string) => boolean | Extract<TurnOutcome, 'completed' | 'parked' | 'failed' | 'cancelled' | 'timed-out' | 'recovered' | 'commit-uncertain'>
   saveTurn: (turn: { turnId: string; requestId: string; sessionId: string; assistantMessageId: string; state: string; userMessageId?: string; contextBoundarySequence?: number; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig }) => void
   updateTurnState: (turnId: string, state: string, patch?: { version?: number; outcome?: string; usage?: unknown; error?: { code: string; message: string } }) => void
 }
@@ -247,7 +248,7 @@ export class TurnCoordinator {
       if (!terminal) return terminal
       const latest = this.turns.get(turnId) ?? current
       const alreadyTerminal = isTerminalMessageStatus(latest.assistantMessage.status)
-      const status = terminal.outcome === 'completed' ? 'completed' : terminal.outcome === 'cancelled' ? 'cancelled' : 'failed'
+      const status = terminal.outcome === 'completed' ? 'completed' : terminal.outcome === 'parked' ? 'sent' : terminal.outcome === 'cancelled' ? 'cancelled' : 'failed'
       // source 只能报告 outcome/usage/error；权威 Message 必须来自 consume/reducer。
       const message = latest.assistantMessage
       const finalMessage: Message = alreadyTerminal
@@ -440,7 +441,7 @@ export class TurnCoordinator {
         const inMemory = this.turns.get(turn.turnId)
         if (inMemory) {
           const outcome = recovery === true ? 'recovered' : recovery
-          const terminalStatus = outcome === 'completed' ? 'completed' as const : outcome === 'cancelled' ? 'cancelled' as const : 'failed' as const
+          const terminalStatus = outcome === 'completed' ? 'completed' as const : outcome === 'parked' ? 'sent' as const : outcome === 'cancelled' ? 'cancelled' as const : 'failed' as const
           const terminalMessage = { ...acceptedAssistantCheckpoint(inMemory.assistantMessage), status: terminalStatus }
           const recoveredRecord = this.storage.findByRequestId(inMemory.sessionId, inMemory.requestId)
           const recoveredTurn = {
@@ -464,11 +465,14 @@ export class TurnCoordinator {
       const cancelled = residue.turnOutcome === 'cancelled' || owned?.persistedOutcome === 'cancelled'
       const terminalOutcome = residue.turnOutcome ?? owned?.persistedOutcome
       const terminalStatus = terminalOutcome === 'completed' ? 'completed'
+        : terminalOutcome === 'parked' ? 'sent'
         : terminalOutcome === 'cancelled' ? 'cancelled'
           : terminalOutcome && ['failed', 'timed-out', 'recovered', 'commit-uncertain'].includes(terminalOutcome) ? 'failed'
             : undefined
-      const result = terminalStatus
-        ? (this.storage.finalizeResidueMessage?.(m.id, terminalStatus) ?? this.storage.updateIfStreaming(m.id, { ...m, status: terminalStatus }))
+      const result = terminalStatus === 'sent'
+        ? (this.storage.finalizeParkedResidueMessage?.(m.id) ?? this.storage.updateIfStreaming(m.id, { ...m, status: 'sent' }))
+        : terminalStatus
+          ? (this.storage.finalizeResidueMessage?.(m.id, terminalStatus) ?? this.storage.updateIfStreaming(m.id, { ...m, status: terminalStatus }))
         : residue.turnId
         ? (this.storage.recoverTurn(residue.turnId, m.id) ? { message: { ...m, status: 'failed' as const }, sequence: 0 } : null)
         : owned?.turnId

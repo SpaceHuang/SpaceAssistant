@@ -445,7 +445,7 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
         try {
           const snapshot = await input.history.read(input.invocationId)
           const terminal = [...snapshot.events].reverse().find((event) =>
-            event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted'
+            event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted' || event.kind === 'invocation-parked'
           )
           if (!transcriptCommit && terminal?.kind === kind && terminal.invocationId === input.invocationId &&
             terminal.turnId === (input.turnId ?? input.invocationId) &&
@@ -460,7 +460,11 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
     const result = await runAgentTurnLoop(input, appendHistory, writer, (usage) => { lastValidUsage = usage })
     if (result.parked) {
       const terminalPayload = { status: 'parked' as const, reason: 'deferred-approval', todoId: result.parkedTodoId, outputText: result.text, usage: result.usage }
-      await appendTerminalHistory('invocation-parked', terminalPayload)
+      const transcriptCommit = input.sessionId && input.sessionTranscriptBaseVersion !== undefined && input.sessionTranscriptFailureMessages
+        ? { sessionId: input.sessionId, baseVersion: input.sessionTranscriptBaseVersion, outcome: 'interrupted' as const,
+            messages: input.sessionTranscriptFailureMessages.filter((message) => message.role !== 'system') as readonly Readonly<Record<string, unknown>>[] }
+        : undefined
+      await appendTerminalHistory('invocation-parked', terminalPayload, undefined, transcriptCommit)
       return result
     }
     await projectTurnOutput(input.observer, result)
@@ -481,7 +485,7 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
     if (input.history && !(error instanceof AgentTurnHistoryAlreadyTerminalError)) {
       try {
         const snapshot = await input.history.read(input.invocationId)
-        const terminalExists = snapshot.events.some((event) => event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted')
+        const terminalExists = snapshot.events.some((event) => event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted' || event.kind === 'invocation-parked')
         if (!terminalExists) {
           const pending = new Map<string, { id: string; name: string; input: Record<string, unknown> }>()
           const started = new Set<string>()

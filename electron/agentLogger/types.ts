@@ -31,6 +31,7 @@ export type AgentLogEventName =
   | 'session.event.chunk_dropped'
   | 'session.model.migrated'
   | 'session.model.rebound'
+  | 'remote_im.model_config_migrated'
   | 'llm.fetch_models'
   | 'tool.request'
   | 'tool.confirm'

@@ -70,7 +70,7 @@ vi.mock('./database', () => ({
   setConfigValue: vi.fn(),
   appendSearchHistory: vi.fn(),
   listSearchHistory: vi.fn(() => []),
-  getDbConnection: vi.fn(() => ({}))
+  getDbConnection: vi.fn(() => ({ exec: vi.fn() }))
   ,getSessionMessageRevisionSnapshot: vi.fn((_db: unknown, sessionId: string) => ({ sessionId, generation: 'generation-1', messageRevision: 1 }))
 }))
 
@@ -279,6 +279,9 @@ describe('file IPC handlers', () => {
     resetRealDbForwarding?.()
     resetRealDbForwarding = undefined
     vi.clearAllMocks()
+    vi.mocked(database.getDbConnection).mockReturnValue({
+      exec: vi.fn(), prepare: vi.fn(() => ({ get: vi.fn(), all: vi.fn(() => []), run: vi.fn(() => ({ changes: 1 })) }))
+    } as never)
     mockFs.writeFile.mockResolvedValue(undefined)
     mockFs.mkdir.mockResolvedValue(undefined)
     mockFs.rm.mockResolvedValue(undefined)

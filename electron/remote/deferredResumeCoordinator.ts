@@ -6,7 +6,7 @@ import { createDeferredResumeRequestStore, type DeferredResumeRequest } from '..
 import type { DeferredCallEnvelope } from '../confirmation/deferredEnvelopeStore'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 import { createDeferredExecutionResultStore } from '../confirmation/deferredExecutionResultStore'
-import { listClaimableWakeEventIds } from '../database/wakeEvents'
+import { getWakeEventRecoveryDelayMs } from '../database/wakeEvents'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
 import { buildDeferredApprovalAuditEvent } from '../confirmation/deferredApprovalAudit'
 import { releaseRemoteSession, tryClaimRemoteSession } from './remoteAgentRegistry'
@@ -56,7 +56,7 @@ export function createDeferredResumeCoordinator(input: {
     authorizationEpoch: request.authorizationEpoch, rule: request.rule
   })
 
-  return {
+  const coordinator = {
     async requestResume(request: ResumeInput, commitReceipt?: () => boolean): Promise<{ status: 'resume_requested' | 'invalidated'; duplicate?: boolean }> {
       const todo = input.todoStore.get(request.todoId, contextFor(request), request.now)
       if (!todo || todo.status !== 'pending' || todo.invocationId.trim() === '' || todo.originSessionId.trim() === '' ||
@@ -79,15 +79,21 @@ export function createDeferredResumeCoordinator(input: {
 
     getResumeRequest(requestId: string): DeferredResumeRequest | null { return requests.get(requestId) },
     listPendingSessionIds(): string[] { return requests.listPendingSessionIds(input.channel) },
-    listCompletionRecoverySessionIds(): string[] {
+    listCompletionRecoverySessionIds(): Array<{ sessionId: string; delayMs: number }> {
       if (!input.channel) return []
       const conn = getDbConnection(input.db)
       const rows = conn.prepare(`SELECT DISTINCT t.origin_session_id AS session_id FROM deferred_todos t
         JOIN deferred_execution_results r ON r.todo_id=t.todo_id
         JOIN deferred_completion_outbox o ON o.todo_id=t.todo_id
+        JOIN wake_events w ON w.session_id=t.origin_session_id AND w.event_type='safety-recovery'
+          AND json_extract(w.payload_ref_json,'$.approvalId')=t.todo_id
         WHERE t.channel=? AND r.state IN ('completion_outboxed','delivered') AND o.state IN ('pending','delivered')
+          AND w.status IN ('pending','claimed')
         ORDER BY t.origin_session_id`).all(input.channel) as Array<{ session_id: string }>
-      return rows.filter(({ session_id }) => listClaimableWakeEventIds(input.db, session_id).length > 0).map(({ session_id }) => session_id)
+      return rows.flatMap(({ session_id }) => {
+        const delayMs = getWakeEventRecoveryDelayMs(input.db, session_id)
+        return delayMs === null ? [] : [{ sessionId: session_id, delayMs }]
+      })
     },
     recoverDispatchingExecutions: async (queryResult: Parameters<ReturnType<typeof createDeferredExecutionResultStore>['recover']>[1]) => {
       if (!input.channel) return []
@@ -182,4 +188,5 @@ export function createDeferredResumeCoordinator(input: {
       return results
     }
   }
+  return coordinator
 }

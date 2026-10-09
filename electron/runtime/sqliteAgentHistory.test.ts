@@ -19,7 +19,7 @@ import { reconcileTerminalContentSegments, SqliteAgentHistory } from './sqliteAg
 import { toCanonicalModelMessages } from './canonicalHistory'
 import { CREATE_TABLES_SQL } from '../database/schema'
 import { ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, getSessionEventSink, readSessionEvents } from '../sessionEvents'
-import { claimSessionExecution, markSessionExecutionStarted } from '../database/sessionTranscript'
+import { claimSessionExecution, markSessionExecutionStarted, releaseSessionExecution } from '../database/sessionTranscript'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { createTempDatabase } from '../database/testHelpers'
 import { openDatabase } from '../database'
@@ -45,6 +45,56 @@ const event = (id: string, sequence: number): HistoryEvent => ({
 })
 
 describe('SqliteAgentHistory', () => {
+  it('commits a real SDK parked terminal and transcript participant atomically to SQLite', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'sqlite-sdk-parked-transcript', model: 'test-model' })
+    const claim = claimSessionExecution(db, { sessionId: session.id, turnId: 'park-sqlite-turn', ownerId: 'park-sqlite-owner' })
+    if (!claim.acquired) throw new Error('test setup could not claim the session')
+    expect(markSessionExecutionStarted(db, { sessionId: session.id, turnId: 'park-sqlite-turn', ownerId: 'park-sqlite-owner', generation: claim.generation })).toBe(true)
+    const history = new SqliteAgentHistory(getDbConnection(db), 1, Date.now, session.id)
+    const registry = new ModelProviderRegistry()
+    registry.register({ routeId: 'sqlite-parked', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' }, {
+      providerId: 'sqlite-parked-provider', stream: async function* () {
+        yield { type: 'tool-call', toolCallId: 'park-sqlite-tool', toolName: 'write_file', input: { path: 'report.md' } } as const
+        yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
+        yield { type: 'finish', reason: 'tool-calls' } as const
+      }
+    })
+    const permits = new InMemorySafetyPermitStore()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('park-sqlite-invocation', ['write_file'])
+    const userMessage = { role: 'user' as const, content: 'write and wait' }
+    const result = await runAgentTurn({
+      registry, routeId: 'sqlite-parked', invocationId: 'park-sqlite-invocation', turnId: 'park-sqlite-turn', sessionId: session.id,
+      currentUserMessageId: 'park-sqlite-user', requiredUserMessage: { id: 'park-sqlite-user', message: userMessage },
+      sessionTranscriptBaseVersion: 0, sessionTranscriptFailureMessages: [userMessage], assistantMessageId: 'park-sqlite-assistant',
+      request: { messages: [userMessage], maxTokens: 32 }, history, maxModelTurns: 2,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits,
+        policy: { evaluate: async (binding) => ({ kind: 'ask' as const, confirmationId: `confirm-${binding.toolCallId}`, answerer: 'user' as const, reasonCode: 'USER_APPROVAL' as const }) } }),
+      prepareTool: async (call, stage) => ({ requestId: 'request', turnId: 'park-sqlite-turn', invocationId: call.invocationId,
+        toolCallId: call.toolCallId, capabilityId: call.toolName, inputSnapshotHash: 'input', planDigest: 'plan', factsDigest: 'facts',
+        authorizationVersion: 'auth-v1', phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: createPermitBoundToolExecutionPort({ permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck',
+        resolveExpected: async (call) => ({ requestId: 'request', turnId: 'park-sqlite-turn', invocationId: call.invocationId,
+          toolCallId: call.toolCallId, capabilityId: call.toolName, inputSnapshotHash: 'input', planDigest: 'plan', factsDigest: 'facts',
+          authorizationVersion: 'auth-v1', phase: 'recheck' }), execute: vi.fn(async () => ({ output: 'unused' })) }),
+      confirmation: async ({ call }) => ({ kind: 'deferred' as const, todoId: 'park-sqlite-todo', invocationId: call.invocationId,
+        checkpointRef: { checkpointId: 'park-sqlite-checkpoint', workflowRevision: 1 } })
+    })
+
+    expect(result).toMatchObject({ parked: true, parkedTodoId: 'park-sqlite-todo' })
+    expect(history.readSync('park-sqlite-invocation').events.at(-1)).toMatchObject({ kind: 'invocation-parked', turnId: 'park-sqlite-turn' })
+    const transcript = getDbConnection(db).prepare('SELECT version,last_turn_id,status FROM session_transcript_checkpoints WHERE session_id=?').get(session.id)
+    expect(transcript).toEqual({ version: 1, last_turn_id: 'park-sqlite-turn', status: 'ready' })
+    const entry = getDbConnection(db).prepare('SELECT outcome,messages_json FROM session_transcript_entries WHERE session_id=? AND version=1').get(session.id) as { outcome: string; messages_json: string }
+    expect(entry.outcome).toBe('interrupted')
+    expect(JSON.parse(entry.messages_json)).toEqual([userMessage])
+    expect(getDbConnection(db).prepare('SELECT status FROM session_execution_claims WHERE session_id=?').get(session.id)).toEqual({ status: 'transcript_committed' })
+    expect(releaseSessionExecution(db, { sessionId: session.id, turnId: 'park-sqlite-turn', ownerId: 'park-sqlite-owner', generation: claim.generation })).toBe(true)
+    expect(claimSessionExecution(db, { sessionId: session.id, turnId: 'approved-continuation-turn', ownerId: 'continuation-owner' }).acquired).toBe(true)
+    db.close()
+  })
+
   it('fails closed before provider context or interrupted-turn recovery can use a missing source spill', async () => {
     const temp = createTempDatabase('history-spill-fail-closed-')
     const conn = getDbConnection(temp.db)

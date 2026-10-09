@@ -1099,7 +1099,8 @@ export function updatePersistedTurnState(db: AppDatabase, turnId: string, state:
   const terminalMessageStatus = state === 'terminal'
     ? patch.outcome === 'completed' ? 'completed'
       : patch.outcome === 'cancelled' ? 'cancelled'
-        : ['failed', 'timed-out', 'recovered', 'commit-uncertain'].includes(patch.outcome ?? '') ? 'failed' : undefined
+        : patch.outcome === 'parked' ? 'sent'
+      : ['failed', 'timed-out', 'recovered', 'commit-uncertain'].includes(patch.outcome ?? '') ? 'failed' : undefined
     : undefined
   const changed = runInTransaction(conn, () => {
     const result = conn.prepare('UPDATE turns SET state = ?, version = COALESCE(?, version), outcome = COALESCE(?, outcome), terminal_usage_json = COALESCE(?, terminal_usage_json), error_json = COALESCE(?, error_json), updated_at = ? WHERE turn_id = ?').run(state, patch.version ?? null, patch.outcome ?? null, patch.usage === undefined ? null : JSON.stringify(patch.usage), patch.error === undefined ? null : JSON.stringify(patch.error), Date.now(), turnId)
@@ -1120,7 +1121,7 @@ export function updatePersistedTurnState(db: AppDatabase, turnId: string, state:
 
 export function recoverPersistedTurn(db: AppDatabase, turnId: string, assistantMessageId: string, options: {
   completed?: boolean
-  outcome?: 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'recovered' | 'commit-uncertain'
+  outcome?: 'completed' | 'parked' | 'failed' | 'cancelled' | 'timed-out' | 'recovered' | 'commit-uncertain'
   completedOutputText?: string
   completedUsage?: unknown
   completedToolCalls?: Message['toolCalls']
@@ -1211,6 +1212,12 @@ export function finalizeResidueMessageKeepingOutcome(db: AppDatabase, messageId:
     return changesToNumber(updated.changes) === 1
   }
   return updateMessageContent(db, messageId, { status: targetStatus, ...(toolCalls ? { toolCalls } : {}) }) !== null
+}
+
+export function finalizeParkedResidueMessage(db: AppDatabase, messageId: string): boolean {
+  const changed = getDbConnection(db).prepare(`UPDATE messages SET status='sent' WHERE id=? AND role='assistant' AND status='streaming'`).run(messageId)
+  if (changesToNumber(changed.changes) > 0) db.save()
+  return changesToNumber(changed.changes) > 0
 }
 
 export interface MessagesPage {

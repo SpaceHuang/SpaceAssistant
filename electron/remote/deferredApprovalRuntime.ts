@@ -28,6 +28,7 @@ export function createDeferredApprovalRuntime(input: {
   recoverCompletionWake?: (sessionId: string) => void | Promise<void>
 }) {
   const scheduledSessions = new Set<string>()
+  const scheduledCompletionSessions = new Set<string>()
   const resume = createDeferredResumeCoordinator({
     db: input.db, channel: input.channel, todoStore: input.todoStore, envelopeStore: input.envelopeStore,
     maxParallel: input.maxParallel, recheck: input.recheck, dispatch: input.dispatch, audit: input.audit
@@ -73,6 +74,21 @@ export function createDeferredApprovalRuntime(input: {
     if (results.some(({ status }) => status === 'session_busy' || status === 'parallel_full')) schedulePendingRetry(sessionId)
     return results
   }
+  const scheduleCompletionWake = (sessionId: string, delayMs: number) => {
+    if (scheduledCompletionSessions.has(sessionId) || !input.recoverCompletionWake) return
+    scheduledCompletionSessions.add(sessionId)
+    const callback = () => {
+      scheduledCompletionSessions.delete(sessionId)
+      void Promise.resolve(input.recoverCompletionWake?.(sessionId)).catch(() => {
+        scheduleCompletionWake(sessionId, 500)
+      })
+    }
+    if (input.scheduleRetry) input.scheduleRetry(delayMs, callback)
+    else {
+      const timer = setTimeout(callback, delayMs)
+      timer.unref?.()
+    }
+  }
 
   return {
     resume,
@@ -81,10 +97,12 @@ export function createDeferredApprovalRuntime(input: {
       if (input.recoverDispatchingExecutions) await resume.recoverDispatchingExecutions(input.recoverDispatchingExecutions)
       const results = []
       for (const sessionId of resume.listPendingSessionIds()) results.push({ sessionId, dispatch: await dispatchPending(sessionId) })
-      const completionSessions = resume.listCompletionRecoverySessionIds?.() ?? []
-      for (const sessionId of completionSessions) {
-        await input.recoverCompletionWake?.(sessionId)
-        results.push({ sessionId, completionWake: true })
+      const completionSessions = (resume.listCompletionRecoverySessionIds?.() ?? []) as string[] | Array<{ sessionId: string; delayMs: number }>
+      for (const target of completionSessions) {
+        const { sessionId, delayMs } = typeof target === 'string' ? { sessionId: target, delayMs: 0 } : target
+        if (delayMs > 0) scheduleCompletionWake(sessionId, delayMs)
+        else await input.recoverCompletionWake?.(sessionId)
+        results.push({ sessionId, completionWake: delayMs === 0, ...(delayMs > 0 ? { scheduledInMs: delayMs } : {}) })
       }
       return results
     },

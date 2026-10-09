@@ -462,13 +462,17 @@ export class SqliteAgentHistory implements HistoryPort {
       if (!transcriptCommit) return appended
       if (!this.sessionId || transcriptCommit.sessionId !== this.sessionId) throw new HistoryBatchError('terminal transcript commit session identity mismatch')
       const terminal = events.length === 1 ? events[0] : undefined
-      if (!terminal || !['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(terminal.kind)) {
+      if (!terminal || !['invocation-completed', 'invocation-failed', 'invocation-interrupted', 'invocation-parked'].includes(terminal.kind)) {
         throw new HistoryBatchError('session transcript commit intent requires one terminal History event')
       }
       const outcomeMatchesTerminal = terminal.kind === 'invocation-completed' ? transcriptCommit.outcome === 'completed'
         : terminal.kind === 'invocation-failed' ? transcriptCommit.outcome === 'failed' || transcriptCommit.outcome === 'timed_out'
-        : transcriptCommit.outcome === 'cancelled' || transcriptCommit.outcome === 'interrupted'
+        : terminal.kind === 'invocation-parked' ? transcriptCommit.outcome === 'interrupted'
+          : transcriptCommit.outcome === 'cancelled' || transcriptCommit.outcome === 'interrupted'
       if (!outcomeMatchesTerminal) throw new HistoryBatchError('terminal History kind does not match the transcript outcome')
+      if (terminal.kind === 'invocation-parked' && transcriptCommit.messageMirror) {
+        throw new HistoryBatchError('parked terminal cannot project an assistant completion mirror')
+      }
       if (transcriptCommit.messageMirror) {
         const expectedStatus = transcriptCommit.outcome === 'completed' ? 'completed'
           : transcriptCommit.outcome === 'cancelled' ? 'cancelled' : 'failed'

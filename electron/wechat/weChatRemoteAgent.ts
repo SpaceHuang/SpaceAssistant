@@ -25,15 +25,10 @@ export async function runWeChatRemoteAgent(ctx: {
   /** 本回合真实 Turn ID（C17）：供用量统计落库。 */
   turnId?: string
   acceptedTurn?: AcceptedTurn
-  /** 冻结执行配置里的 LLM 服务 ID（DIM3）。 */
-  llmServiceId?: string
   wechatConfig: WeChatConfig
   workDir: string
   workDirManager: WorkDirManager
   userDataDir: string
-  getApiKey: () => Promise<string | null>
-  getBaseUrl: () => string
-  getModel: () => string
   botService: WeChatBotService
   imChannel: WeChatImChannel
   getToolsConfig: () => ToolsConfig
@@ -60,13 +55,9 @@ export async function runWeChatRemoteAgent(ctx: {
     requestId: ctx.requestId,
     turnId: ctx.turnId,
     acceptedTurn: ctx.acceptedTurn,
-    llmServiceId: ctx.llmServiceId,
     workDir: ctx.workDir,
     workDirManager: ctx.workDirManager,
     userDataDir: ctx.userDataDir,
-    getApiKey: ctx.getApiKey,
-    getBaseUrl: ctx.getBaseUrl,
-    getModel: ctx.getModel,
     remoteContext: ctx.remoteContext,
     getToolsConfig: ctx.getToolsConfig,
     getBrowserConfig: ctx.getBrowserConfig,

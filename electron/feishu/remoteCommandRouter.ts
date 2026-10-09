@@ -38,7 +38,8 @@ import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
 import { createRateLimiter } from '../remote/imRateLimit'
 import { FEISHU_REMOTE_CONFIRM_TIMEOUT_MESSAGE } from '../remote/remoteConfirmPolicy'
 import { executeRemoteTurn } from '../remote/turnExecutionAdapter'
-import { resolveTrustedTurnExecutionConfig } from '../turnExecutionConfig'
+import { resolveFrozenImTurnExecutionConfig, resolveTrustedTurnExecutionConfig } from '../turnExecutionConfig'
+import { readAcceptedTurn } from '../database/acceptedTurnStorage'
 import { createAcceptedTurnFromPrepared } from '../runtime/acceptedTurnContext'
 import {
   maskOpenId,
@@ -48,7 +49,7 @@ import {
 } from './feishuOwnerBind'
 import { CLAIM_LEASE_MS } from '../remote/imProcessedStore'
 import { ackImInboxMessage, appendImInboxMessageWithWakeEvent, claimImInboxMessage, getImInboxMessageContext, listImInboxMessages } from '../database/imInbox'
-import { getSession, getTurnByRequestId } from '../database'
+import { getTurnByRequestId } from '../database'
 import type { WakeEventLoopInput } from '../remote/wakeEventDispatcher'
 import { buildImQueueScope } from '../../src/shared/queueScope'
 import { isDeferredApprovalReplyCandidate } from '../remote/deferredApprovalIngress'
@@ -124,7 +125,7 @@ export class RemoteCommandRouter {
 
   async dispatchWakeEventSet(input: WakeEventLoopInput): Promise<void> {
     if (!this.deps.sessionStorage) throw new Error('REMOTE_SESSION_STORAGE_REQUIRED')
-    const session = getSession(this.deps.db, input.sessionId)
+    const session = this.deps.sessionStorage.queries.readSession(input.sessionId)
     const metadata = session?.metadata as { source?: unknown; feishuChatId?: unknown; feishuSenderOpenId?: unknown } | undefined
     if (!session || metadata?.source !== 'feishu' ||
       typeof metadata.feishuChatId !== 'string' || typeof metadata.feishuSenderOpenId !== 'string') {
@@ -156,9 +157,13 @@ export class RemoteCommandRouter {
         const originalContent = originalMessage?.content ?? listImInboxMessages(this.deps.db, { queueScope: scope, limit: 100 })
           .find(({ messageId: queuedId }) => queuedId === userMessageId)?.content
         if (typeof originalContent !== 'string') throw new Error(`FEISHU_COMPLETION_WAKE_SOURCE_MESSAGE_MISSING:${userMessageId}`)
+        const sourceAcceptedTurn = readAcceptedTurn(this.deps.db, input.sessionId, completion.envelope.requestId)
+        if (!sourceAcceptedTurn || sourceAcceptedTurn.turnId !== completion.envelope.turnId || sourceAcceptedTurn.lane !== 'feishu') {
+          throw new Error('FEISHU_COMPLETION_WAKE_FROZEN_CONFIG_MISSING')
+        }
         const requestId = `completion:${event.eventId}`
         const prior = getTurnByRequestId(this.deps.db, input.sessionId, requestId)
-        if (prior && prior.state !== 'terminal') throw new Error('FEISHU_COMPLETION_WAKE_PRIOR_TURN_INCOMPLETE')
+        if (prior && (prior.state !== 'terminal' || !['completed', 'parked'].includes(prior.outcome ?? ''))) throw new Error('FEISHU_COMPLETION_WAKE_PRIOR_TURN_INCOMPLETE')
         if (!prior) {
           const currentLease = getRemoteAgentLease(input.sessionId)
           const alreadyHeld = currentLease?.requestId === input.runId
@@ -171,6 +176,7 @@ export class RemoteCommandRouter {
             await this.executePersistedInboundTurn({ sessionId: input.sessionId, requestId, userMessageId, content: originalContent,
               messageId, chatId: metadata.feishuChatId, senderId: metadata.feishuSenderOpenId, config, profile,
               authSnapshot: guard.snapshot, leaseRequestId, assertAuthorized,
+              frozenExecutionConfig: sourceAcceptedTurn.config,
               deferredContinuation: { todoId: completion.todo.todo_id, invocationId: completion.todo.invocation_id,
                 workflowId: completion.todo.workflow_id, taskId: completion.todo.task_id, stepId: completion.todo.step_id,
                 planRevision: completion.todo.plan_revision,
@@ -197,7 +203,7 @@ export class RemoteCommandRouter {
       const requestId = `wake:${event.eventId}`
       const priorTurn = getTurnByRequestId(this.deps.db, session.id, requestId)
       if (priorTurn) {
-        if (priorTurn.state !== 'terminal' || priorTurn.outcome !== 'completed') throw new Error('FEISHU_WAKE_PRIOR_TURN_INCOMPLETE')
+        if (priorTurn.state !== 'terminal' || !['completed', 'parked'].includes(priorTurn.outcome ?? '')) throw new Error('FEISHU_WAKE_PRIOR_TURN_INCOMPLETE')
         if (!ackImInboxMessage(this.deps.db, { queueScope: scope, messageId: queued.messageId, ownerId: input.ownerId })) throw new Error('FEISHU_WAKE_INBOX_ACK_FAILED')
         continue
       }
@@ -225,9 +231,13 @@ export class RemoteCommandRouter {
   private async executePersistedInboundTurn(input: {
     sessionId: string; requestId: string; userMessageId: string; content: string; messageId: string
     chatId: string; senderId: string; config: FeishuConfig; profile: WorkDirProfile | null; authSnapshot: ImAuthSnapshot; leaseRequestId: string; assertAuthorized: () => void
+    frozenExecutionConfig?: import('../../src/shared/acceptedTurn').AcceptedTurn['config']
     deferredContinuation?: import('../tools/types').RemoteContext['deferredContinuation']
   }): Promise<void> {
-    const executionConfig = await resolveTrustedTurnExecutionConfig(this.deps.db, this.deps.sessionStorage!.queries, this.deps.sessionStorage!.commands, input.sessionId, 'feishu')
+    if (input.deferredContinuation && !input.frozenExecutionConfig) throw new Error('FEISHU_COMPLETION_WAKE_FROZEN_CONFIG_MISSING')
+    const executionConfig = input.frozenExecutionConfig
+      ? await resolveFrozenImTurnExecutionConfig(this.deps.db, 'feishu', input.frozenExecutionConfig)
+      : await resolveTrustedTurnExecutionConfig(this.deps.db, this.deps.sessionStorage!.queries, this.deps.sessionStorage!.commands, input.sessionId, 'feishu')
     input.assertAuthorized()
     const queueScope = buildImQueueScope('feishu', input.sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
     const prepared = this.deps.turnRuntime?.prepare({ mode: 'reuse-user', requestId: input.requestId, sessionId: input.sessionId,
@@ -250,9 +260,8 @@ export class RemoteCommandRouter {
     const result = await executeRemoteTurn({ runtime: this.deps.turnRuntime, prepared, requestId: input.requestId,
       run: () => { input.assertAuthorized(); return runFeishuRemoteAgent({ db: this.deps.db, sessionStorage: this.deps.sessionStorage!, sessionId: input.sessionId,
         userMessage: input.content, replyMessageId: input.messageId, requestId: input.requestId, turnId: prepared.turnId,
-        acceptedTurn, llmServiceId: executionConfig?.llmServiceId, feishuConfig: input.config,
+        acceptedTurn, feishuConfig: input.config,
         workDir: input.profile?.path ?? this.deps.getWorkDir(), workDirManager: this.deps.workDirManager,
-        getApiKey: this.deps.getApiKey, getBaseUrl: this.deps.getBaseUrl, getModel: this.deps.getModel,
         runner: this.deps.runner, imChannel: this.deps.imChannel, getToolsConfig: this.deps.getToolsConfig,
         getBrowserConfig: this.deps.getBrowserConfig, getWikiConfig: this.deps.getWikiConfig, getShellConfig: this.deps.getShellConfig,
         userDataDir: this.deps.getUserDataPath(), remoteContext,
@@ -262,7 +271,9 @@ export class RemoteCommandRouter {
       }) }
     })
     if (!result.ok) throw new Error(`FEISHU_WAKE_TURN_FAILED:${result.summary}`)
-    if (getTurnByRequestId(this.deps.db, input.sessionId, input.requestId)?.outcome !== 'completed') throw new Error('FEISHU_WAKE_TURN_NOT_DURABLY_COMPLETED')
+    const outcome = getTurnByRequestId(this.deps.db, input.sessionId, input.requestId)?.outcome
+    if (result.parked && outcome === 'parked') return
+    if (outcome !== 'completed') throw new Error('FEISHU_WAKE_TURN_NOT_DURABLY_COMPLETED')
     await sendFeishuRemoteOutbound({ runner: this.deps.runner, messageId: input.messageId, body: result.summary,
       sessionId: input.sessionId, touch: { sessionCommands: this.deps.sessionStorage!.commands, sessionId: input.sessionId } })
   }
@@ -983,13 +994,9 @@ export class RemoteCommandRouter {
             requestId,
             turnId: prepared?.turnId,
             acceptedTurn,
-            llmServiceId: executionConfig?.llmServiceId,
             feishuConfig: config,
             workDir,
             workDirManager: this.deps.workDirManager,
-            getApiKey: this.deps.getApiKey,
-            getBaseUrl: this.deps.getBaseUrl,
-            getModel: this.deps.getModel,
             runner: this.deps.runner,
             imChannel: this.deps.imChannel,
             getToolsConfig: this.deps.getToolsConfig,

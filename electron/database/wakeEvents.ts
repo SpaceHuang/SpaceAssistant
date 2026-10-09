@@ -135,6 +135,13 @@ export function listClaimableWakeEventIds(db: AppDatabase, sessionId: string, no
   return rows.map(({ event_id }) => event_id)
 }
 
+/** Returns the earliest dispatch time for unfinished wake events, including active claims. */
+export function getWakeEventRecoveryDelayMs(db: AppDatabase, sessionId: string, now = Date.now()): number | null {
+  const row = getDbConnection(db).prepare(`SELECT MIN(CASE WHEN status='pending' THEN ? ELSE lease_expires_at END) AS next_at
+    FROM wake_events WHERE session_id=? AND (status='pending' OR status='claimed')`).get(now, sessionId) as { next_at: number | null }
+  return row?.next_at == null ? null : Math.max(0, row.next_at - now)
+}
+
 export function releaseWakeEventClaimsForRetry(
   db: AppDatabase,
   input: { sessionId: string; runId: string; ownerId: string; eventIds: readonly string[]; now?: number }

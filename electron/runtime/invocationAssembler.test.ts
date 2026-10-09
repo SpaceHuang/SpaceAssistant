@@ -42,6 +42,27 @@ describe('AcceptedTurn propagation', () => {
     expect(invocation.messages.currentUserMessageId).toBe(acceptedTurn.currentUserMessageId)
   })
 
+  it('uses frozen IM effective effort without recomputing model capability in the assembler', () => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: 'frozen-reasoning' })
+    setConfigValue(db, 'config.models', JSON.stringify([{ id: 'model-id', name: 'test-model', enabled: true, supportsThinking: false }]))
+    const acceptedTurn = Object.freeze({
+      turnId: 'frozen-reasoning-turn', requestId: 'frozen-reasoning-request', sessionId: session.id,
+      lane: 'feishu' as const, startToken: 'frozen-reasoning-start', currentUserMessageId: 'frozen-reasoning-user',
+      transcriptVersion: 1,
+      config: Object.freeze({ lane: 'feishu' as const, model: 'test-model', llmServiceId: 'service-id', thinkingEffort: 'medium' as const, requestedThinkingEffort: 'low' as const })
+    })
+    const { invocation } = assembleInvocation({
+      requestId: acceptedTurn.requestId, sessionId: session.id, lane: 'feishu', acceptedTurn,
+      model: 'test-model', modelId: 'model-id', effort: 'medium', requestedThinkingEffort: 'low',
+      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, getApiKey: async () => 'key',
+      workDir: '/tmp', userDataDir: '/tmp', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+
+    expect(invocation.profile.reasoning).toEqual({ effort: 'medium', degraded: { from: 'low', to: 'medium' } })
+    db.close()
+  })
+
   it('rejects an invocation whose current user message id conflicts with the accepted turn', () => {
     const acceptedTurn = Object.freeze({
       turnId: 'accepted-turn', requestId: 'accepted-request', sessionId: 'accepted-session', lane: 'desktop' as const,

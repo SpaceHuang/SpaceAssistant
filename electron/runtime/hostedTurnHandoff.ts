@@ -341,6 +341,14 @@ export function createHostedTurnHandoff(input: {
           ? terminal.payload as Record<string, unknown> : {}
         const todoId = typeof payload.todoId === 'string' ? payload.todoId : undefined
         if (!todoId || payload.status !== 'parked') throw new HostedTurnFinalizedError(new Error('Hosted parked terminal is invalid'), 'failed')
+        if (ownership && checkpoint) {
+          const committed = input.sessionExecution!.readHostedTranscript(ownership.sessionId)
+          if (committed.status !== 'ready' || committed.version !== checkpoint.version + 1 || committed.lastTurnId !== ownership.turnId) {
+            input.sessionExecution!.markExecutionUncertain(ownership)
+            keepClaimedForReconciliation = true
+            throw new HostedTurnFinalizedError(new Error('SESSION_TRANSCRIPT_COMMIT_UNCERTAIN:parked-terminal-participant-incomplete'), 'commit-uncertain')
+          }
+        }
         return { result: { ok: true, content: [{ type: 'text', text: '' }], stopReason: 'parked', parked: true, parkedTodoId: todoId },
           finalization: { outcome: 'interrupted', usage: { modelTurns: 0, initialMessageCount: request.messages.length, messages: request.messages } } }
       }
@@ -412,7 +420,7 @@ export function createHostedTurnHandoff(input: {
         }
         throw new HostedTurnFinalizedError(new AggregateError([error, historyError], 'Hosted History terminal state could not be read'), 'failed')
       }
-      const terminal = [...snapshot.events].reverse().find((event) => event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted')
+      const terminal = [...snapshot.events].reverse().find((event) => event.kind === 'invocation-completed' || event.kind === 'invocation-failed' || event.kind === 'invocation-interrupted' || event.kind === 'invocation-parked')
       if (!terminal && ownership && checkpoint && executionStarted) {
         keepClaimedForReconciliation = true
         input.sessionExecution!.markExecutionUncertain(ownership)
