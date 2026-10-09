@@ -101,6 +101,6 @@ it('can rerun the migration without duplicating indexes or changing queued data'
     .toEqual({ queue_scope: 'desktop', content: 'repeat safely', status: 'queued' })
   expect(conn.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='index' AND name='idx_messages_queue_scope_status_order'").get())
     .toEqual({ count: 1 })
-  expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '82' })
+  expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '83' })
   db.close()
 })

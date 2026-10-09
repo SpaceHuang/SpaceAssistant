@@ -4,6 +4,7 @@ import http from 'http'
 import https from 'https'
 import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
 import { registerAppIpcHandlers } from './appIpc'
+import { CONFIG_KEYS } from './ipc/ipcShared'
 import { registerClaudeStreamHandlers, type ClaudeChatCreateWithToolsPayload } from './claudeStreamHandlers'
 import { mergeWikiConfig, mergeToolsConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from './browser/browserConfigDb'
@@ -135,7 +136,6 @@ const safeDbMaintenanceRequested = isSafeDbMaintenanceRequested(process.argv)
 
 const API_KEY_CONFIG_KEY = 'secrets.apiKeyEnc'
 const TOOLS_CONFIG_KEY = 'config.tools'
-const WIKI_CONFIG_KEY = 'config.wiki'
 
 // 开发版使用独立的 Electron userData，避免与已安装版或其他分支共用数据库。
 // 必须在 app.whenReady() 前设置，否则 Electron 已经确定了默认 userData 路径。
@@ -1124,7 +1124,7 @@ app.whenReady().then(async () => {
       }
     },
     getWikiConfig: () => {
-      const raw = getConfigValue(db, WIKI_CONFIG_KEY)
+      const raw = getConfigValue(db, CONFIG_KEYS.wiki)
       if (!raw) return mergeWikiConfig(null)
       try {
         return mergeWikiConfig(JSON.parse(raw) as Parameters<typeof mergeWikiConfig>[0])

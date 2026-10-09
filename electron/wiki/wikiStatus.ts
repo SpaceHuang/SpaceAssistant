@@ -1,8 +1,10 @@
 import fs from 'fs'
 import path from 'path'
-import type { WikiConfig, WikiStatus } from '../../src/shared/domainTypes'
-import { isWikiInitialized } from './wikiInit'
+import type { WikiConfig, WikiStatus, WikiProjectSummary } from '../../src/shared/domainTypes'
+import { isWikiInitialized, resolveSharedWikiRoot } from './wikiInit'
 import { resolveWikiRootAbs } from './wikiPaths'
+import type { AppDatabase } from '../database/sqliteStore'
+import { listWikiProjects } from './wikiProjectStore'
 
 function countMarkdownFiles(dir: string): number {
   if (!fs.existsSync(dir)) return 0
@@ -38,20 +40,42 @@ function readLastLogEntry(logPath: string): string | undefined {
   return undefined
 }
 
-export function getWikiStatus(workDir: string, wikiConfig: WikiConfig): WikiStatus {
+export function getWikiStatus(
+  workDir: string,
+  wikiConfig: WikiConfig,
+  opts?: { userDataPath?: string; db?: AppDatabase }
+): WikiStatus {
   const rootRel = wikiConfig.rootPath.replace(/\\/g, '/').replace(/^\/+/, '')
-  const initialized = isWikiInitialized(workDir, wikiConfig)
+  // T1.12a：共享库模式（传 userDataPath）读 {userData}/<rootPath>；projects 映射自 wiki_projects 表（v1.12）
+  const shared = opts?.userDataPath !== undefined
+  const projects: WikiProjectSummary[] | undefined = opts?.db
+    ? listWikiProjects(opts.db).map((row) => ({
+        projectId: row.projectId,
+        displayName: row.displayName,
+        workDir: row.workDir,
+        orphan: row.orphan
+      }))
+    : undefined
+  const newFields = {
+    ...(shared ? { shared: true as const } : {}),
+    ...(opts?.db ? { projectCount: projects!.length } : {}),
+    ...(projects ? { projects } : {}),
+    pendingLegacyMigration: false,
+    legacyRoots: [] as string[]
+  }
+  const initialized = isWikiInitialized(workDir, wikiConfig, opts?.userDataPath)
   if (!initialized) {
     return {
       enabled: wikiConfig.enabled,
       rootPath: rootRel,
       initialized: false,
       pageCount: 0,
-      rawCount: 0
+      rawCount: 0,
+      ...newFields
     }
   }
 
-  const root = resolveWikiRootAbs(workDir, wikiConfig)
+  const root = opts?.userDataPath ? resolveSharedWikiRoot(opts.userDataPath, wikiConfig) : resolveWikiRootAbs(workDir, wikiConfig)
   const wikiDir = path.join(root, 'wiki')
   const rawDir = path.join(root, 'raw')
   const logPath = path.join(wikiDir, 'log.md')
@@ -62,6 +86,7 @@ export function getWikiStatus(workDir: string, wikiConfig: WikiConfig): WikiStat
     initialized: true,
     pageCount: countMarkdownFiles(wikiDir),
     rawCount: countRawFiles(rawDir),
-    lastLogEntry: readLastLogEntry(logPath)
+    lastLogEntry: readLastLogEntry(logPath),
+    ...newFields
   }
 }

@@ -4,9 +4,16 @@ export const DEFAULT_SCHEMA_MD = `# LLM Wiki Schema
 
 ## 目录说明
 
-- \`raw/\`：只读原始资料（用户写入；LLM **仅 read**）
-- \`wiki/\`：LLM 维护的结构化 Markdown 页面（read/write）
+- \`raw/<projectId>/\`：只读原始资料，按来源项目分目录（\`projectId\` 形如 \`p-<hash8>\`；用户/应用写入，LLM **仅 read**）
+- \`wiki/\`：LLM 维护的结构化 Markdown 页面（read/write），**跨项目共享**——写前先读 index + grep 查重，优先更新既有页
+- \`wiki/projects/<projectId>/\`：（可选）仅属于单一项目的专属页面分区
 - \`SCHEMA.md\`：本规范文件
+
+## 共享协作守则
+
+- Wiki 是跨项目共享记忆库：所有项目的 Agent 共享同一份页面。写页面前先读 \`wiki/index.md\` 并 grep 查重，优先更新既有页面；冲突时合并并注明差异场景。
+- 日志条目格式：\`## [YYYY-MM-DD HH:mm] [project:<id>] <动作>\`。
+- 不要用 shell / 终端访问 \`llm-wiki/...\` 路径（shell 不经过共享库映射）；一律使用内置文件工具。
 
 ## 页面类型
 
@@ -95,7 +102,15 @@ author: "SpaceAssistant"
 
 ## 路径约定
 
-Wiki 根目录由项目配置决定（默认 \`llm-wiki/\`）。**必须先读取** \`<wikiRoot>/SCHEMA.md\` 获取领域特定规范。
+Wiki 是 SpaceAssistant 的**跨项目共享记忆库**：所有工作目录共享同一份。路径仍写作 \`llm-wiki/...\`（应用自动映射到共享存储，无需关心物理位置）。**必须先读取** \`llm-wiki/SCHEMA.md\` 获取完整规范。
+
+## 共享协作守则
+
+- 写页面前先 \`read_file\` \`llm-wiki/wiki/index.md\` 并用 \`grep\` 查重，**优先更新既有页面**而非新建平行页；
+- 新建实体/概念页时检查是否与其他项目的知识冲突，冲突时合并并在页内注明差异场景；
+- 归档仅属于单一项目的专属内容时，放置到 \`llm-wiki/wiki/projects/<projectId>/\` 分区（projectId 形如 \`p-<hash8>\`，在 ingest 结果或 wiki:status 中可见）；
+- 日志条目格式：\`## [YYYY-MM-DD HH:mm] [project:<id>] <动作>\`；
+- **不要用 shell / 终端访问 \`llm-wiki/...\` 路径**——shell 工作目录不经过共享库映射，会找不到文件；一律使用内置文件工具。
 
 ## 工具
 

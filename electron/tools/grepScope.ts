@@ -114,6 +114,12 @@ export function planGrepInvocation(opts: {
   searchKind?: 'file' | 'directory'
   /** 设置项要求解除 gitignore（调用方的 include_ignored 为另一来源；生效语义为 OR，§7.9） */
   searchGitignored?: boolean
+  /**
+   * T1.11c（§7.7 去重）：挂载启用期间 workDir 根扫描必须排除的实体目录名
+   * （挂载词汇前缀 + 只读别名前缀）。这是词汇路径唯一性的正确性规则：
+   * 不受 includeIgnored 解除、不因目录不存在而失效（glob 恒追加，改名残留自然失效）。
+   */
+  extraExcludeDirNames?: readonly string[]
 }): GrepInvocationPlan {
   const { workDir, searchPath, args } = opts
   const searchKind = opts.searchKind ?? 'directory'
@@ -138,6 +144,15 @@ export function planGrepInvocation(opts: {
       // include_ignored 一并解除；显式点名只解除被点名成员
       if (!args.includeIgnored && !isExplicitTarget) {
         ignoreGlobs.push(`!**/${name}/**`)
+      }
+    }
+    // T1.11c：挂载词汇前缀实体目录排除（glob 恒追加；实体存在时计入 skipped 范围事实）
+    for (const name of opts.extraExcludeDirNames ?? []) {
+      if (!name) continue
+      ignoreGlobs.push(`!**/${name}/**`)
+      ignoreGlobs.push(`!**/${name}`)
+      if (fs.existsSync(path.join(workDir, name)) && !skipped.some((s) => s.name === name)) {
+        skipped.push({ name, kind: 'directory' })
       }
     }
     // H（§7.10）：敏感条目明示义务——对搜索根做一层浅层 readdir，命中敏感名的条目如实上报。

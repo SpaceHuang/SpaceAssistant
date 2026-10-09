@@ -21,6 +21,7 @@ import { getConfigValue, getNextQueuedMessage, getTurnByRequestId, listPersisted
 import { canonicalQueueInput } from '../../src/shared/queueInputFingerprint'
 import { clampMaxParallelChatSessions } from '../../src/shared/chatParallelConfig'
 import { classifyWikiPath } from '../wiki/wikiPaths'
+import { resolveWikiMount } from '../wiki/wikiMount'
 import { createAnthropicClient } from '../anthropicClientFactory'
 import { createOutboundAcceptor, createOutboundDrainer, computeContextPressureWarnings } from '../outbound/outboundAcceptor'
 import { createSkillHintSystemMessage } from '../../src/shared/skillHintRecords'
@@ -719,7 +720,8 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         const skillFragments = route.skills.map((skill) => `## Skill: ${skill.meta.name}\n\n${skill.content.trim()}`)
         let system: string | undefined
         if (route.skills.some((skill) => skill.meta.name === 'llm-wiki')) {
-          const schema = readWikiSchema(ctx.getWorkDir(), readWikiConfig(ctx.db))?.trim()
+          // T1.14：注入经共享根读全局 SCHEMA（所有 workDir 注入同一份规范）
+          const schema = readWikiSchema(ctx.getWorkDir(), readWikiConfig(ctx.db), ctx.getUserDataPath())?.trim()
           if (schema) system = system ? `${system}\n\n## Wiki Schema（项目规范）\n\n${schema}` : `## Wiki Schema（项目规范）\n\n${schema}`
         }
         const config = {
@@ -836,12 +838,14 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     listSkills: async () => skillManager.list(true),
     getSkill: async (payload) => skillManager.get(payload.name),
     wikiInit: async (payload) =>
+      // T1.12a：init 骨架建共享根 {userData}/<rootPath>（payload 无 rootPath 自定义入口，v2-C5）
       initWikiStructure(ctx.getWorkDir(), readWikiConfig(ctx.db), {
         overwrite: payload?.overwrite === true,
-        installSkill: payload?.installSkill !== false
+        installSkill: payload?.installSkill !== false,
+        userDataPath: ctx.getUserDataPath()
       }),
-    wikiStatus: async () => getWikiStatus(ctx.getWorkDir(), readWikiConfig(ctx.db)),
-    wikiImportRaw: (payload) => importRawFromWorkDir(ctx.getWorkDir(), readWikiConfig(ctx.db), payload.srcRelPath),
+    wikiStatus: async () => getWikiStatus(ctx.getWorkDir(), readWikiConfig(ctx.db), { userDataPath: ctx.getUserDataPath(), db: ctx.db }),
+    wikiImportRaw: (payload) => importRawFromWorkDir(ctx.getWorkDir(), readWikiConfig(ctx.db), payload.srcRelPath, { userDataPath: ctx.getUserDataPath(), db: ctx.db }),
     appendHintMessage: async (sessionId, hint) => {
       const msg = createSkillHintSystemMessage(sessionId, hint)
       const { sequence } = sessionCommands.appendNonTurnMessage(msg)
@@ -1296,7 +1300,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     'wiki:import-raw',
     async (event, payload: { srcRelPath: string }) => {
       const wikiConfig = readWikiConfig(ctx.db)
-      const result = await importRawFromWorkDir(ctx.getWorkDir(), wikiConfig, payload.srcRelPath)
+      const result = await importRawFromWorkDir(ctx.getWorkDir(), wikiConfig, payload.srcRelPath, { userDataPath: ctx.getUserDataPath(), db: ctx.db })
       const treeChange = wikiImportFileTreeChange(result)
       if (treeChange) notifyFileTreeChanged(event.sender, treeChange)
       return result
@@ -1307,7 +1311,8 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
     const wikiConfig = readWikiConfig(ctx.db)
     const result = await initWikiStructure(ctx.getWorkDir(), wikiConfig, {
       overwrite: payload.overwrite === true,
-      installSkill: payload.installSkill !== false
+      installSkill: payload.installSkill !== false,
+      userDataPath: ctx.getUserDataPath()
     })
     if (result.ok) skillManager.invalidateCache()
     return result
@@ -1315,12 +1320,12 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
 
   ipcMain.handle('wiki:status', async (): Promise<WikiStatus> => {
     const wikiConfig = readWikiConfig(ctx.db)
-    return getWikiStatus(ctx.getWorkDir(), wikiConfig)
+    return getWikiStatus(ctx.getWorkDir(), wikiConfig, { userDataPath: ctx.getUserDataPath(), db: ctx.db })
   })
 
   ipcMain.handle('wiki:get-schema', async (): Promise<{ content: string } | null> => {
     const wikiConfig = readWikiConfig(ctx.db)
-    const content = readWikiSchema(ctx.getWorkDir(), wikiConfig)
+    const content = readWikiSchema(ctx.getWorkDir(), wikiConfig, ctx.getUserDataPath())
     return content ? { content } : null
   })
 
@@ -1330,6 +1335,13 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       try {
         const wikiConfig = readWikiConfig(ctx.db)
         const root = ctx.getWorkDir()
+        // T1.15（v3-I2）：absPath 同步经挂载解析为真实路径；只读别名标 readOnly
+        const resolution = resolveWikiMount(root, wikiConfig, ctx.getUserDataPath(), payload.relPath)
+        if (resolution.mounted) {
+          const absPath = resolution.realRel ? resolveSafePath(resolution.realBase, resolution.realRel) : resolution.realBase
+          const kind = classifyWikiPath(root, wikiConfig, resolution.vocabularyPath)
+          return { absPath, kind, ...(resolution.readOnly ? { readOnly: true } : {}) }
+        }
         const absPath = await resolveSafePath(root, payload.relPath)
         const rel = path.relative(root, absPath).replace(/\\/g, '/')
         return { absPath, kind: classifyWikiPath(root, wikiConfig, rel) }

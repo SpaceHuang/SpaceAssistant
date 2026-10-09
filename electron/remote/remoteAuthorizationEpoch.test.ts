@@ -52,7 +52,7 @@ describe('persistent remote authorization epoch', () => {
     const conn = getDbConnection(db)
     conn.exec('DROP TABLE remote_authorization_revocations; DROP TABLE remote_authorization_epochs; UPDATE schema_meta SET value=\'73\' WHERE key=\'schema_version\'')
     runMigrations(conn)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '82' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '83' })
     expect(conn.prepare('SELECT channel,epoch FROM remote_authorization_epochs ORDER BY channel').all()).toEqual([
       { channel: 'feishu', epoch: 1 }, { channel: 'wechat', epoch: 1 }
     ])

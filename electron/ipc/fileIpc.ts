@@ -1,5 +1,6 @@
 // Phase 2 拆分:本文件自 appIpc.ts 纯移动而来,通道名与行为不变(driver-authority-refactor Phase 2)。
 import fs from 'fs/promises'
+import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'path'
 import { createRequire } from 'node:module'
@@ -17,44 +18,83 @@ import { withTransientLockRetry } from '../safeAtomicWrite'
 import { atomicWrite, buildMarkdownDocx, markdownToPrintHtml, isSupportedMarkdownExport, markdownResourceUrls, sameFileIdentity, MAX_MARKDOWN_EXPORT_IMAGES, MAX_MARKDOWN_EXPORT_IMAGE_BYTES, MAX_MARKDOWN_EXPORT_TOTAL_IMAGE_BYTES } from '../markdownExport'
 import { defaultMarkdownExportPath, normalizeMarkdownExportPath, isMarkdownExportablePath, type MarkdownExportResult } from '../../src/shared/markdownExport'
 import { resolveSafeReadPath } from '../pathSecurity'
+import { resolveWikiMount } from '../wiki/wikiMount'
+import { readWikiConfig } from './ipcShared'
+import { assertInsideDir } from '../skills/skillPaths'
+import { WIKI_VOCABULARY_PREFIX, DEFAULT_WIKI_ROOT_DIRNAME } from '../../src/shared/wikiConstants'
+
+/**
+ * T1.15（§7.4）：fileIpc 子通道的挂载解析入口。wiki 停用返回 undefined（行为与现状逐字节一致）。
+ */
+function wikiMountOf(ctx: AppIpcContext, rel: string) {
+  const wikiConfig = readWikiConfig(ctx.db)
+  if (!wikiConfig.enabled) return undefined
+  const resolution = resolveWikiMount(ctx.getWorkDir(), wikiConfig, ctx.getUserDataPath(), rel)
+  return resolution.mounted ? resolution : undefined
+}
 
 export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   ipcMain.handle('file:list-directory', async (_e, rel: string): Promise<FileInfo[]> => {
     const root = ctx.getWorkDir()
     const normalized = normalizeRelPathInput(typeof rel === 'string' ? rel : '')
-    const target = normalized === '' || normalized === '.' ? root : resolveSafePath(root, normalized)
-    const entries = await fs.readdir(target, { withFileTypes: true })
-    const out: FileInfo[] = []
-    for (const ent of entries) {
-      const p = path.join(target, ent.name)
-      let size: number | undefined
-      if (ent.isFile()) {
-        try {
-          const st = await fs.stat(p)
-          size = st.size
-        } catch {
-          size = undefined
-        }
+    const mounted = normalized ? wikiMountOf(ctx, normalized) : undefined
+    const wikiConfig = readWikiConfig(ctx.db)
+    const wikiEnabled = wikiConfig.enabled
+    // §7.7：挂载启用期间，workDir 根列表排除挂载词汇前缀（含只读别名）实体目录——词汇路径由共享根唯一提供
+    const excludedRootNames = wikiEnabled
+      ? [wikiConfig.rootPath || DEFAULT_WIKI_ROOT_DIRNAME, ...(wikiConfig.legacyRootAliases ?? [])]
+      : []
+
+    // 根列表虚拟条目（§7.4-I1）：hideWikiFromFileTree=false 时合成 llm-wiki 目录条目
+    if (wikiEnabled && !wikiConfig.hideWikiFromFileTree && (normalized === '' || normalized === '.') && !mounted) {
+      let sharedRootEntries: FileInfo[] = []
+      const sharedRoot = path.join(ctx.getUserDataPath(), wikiConfig.rootPath || DEFAULT_WIKI_ROOT_DIRNAME)
+      if (existsSync(sharedRoot)) {
+        const r = await listDirectoryEntries(ctx, sharedRoot, root)
+        sharedRootEntries = r.map((e) => ({ ...e, path: normalizeRelPathInput(`${WIKI_VOCABULARY_PREFIX}/${e.path === '.' ? '' : e.path}`) }))
       }
-      out.push({
-        name: ent.name,
-        path: normalizeRelPathInput(path.relative(root, p) || '.'),
-        isDirectory: ent.isDirectory(),
-        size
-      })
+      const virtualEntry: FileInfo = { name: WIKI_VOCABULARY_PREFIX, path: WIKI_VOCABULARY_PREFIX, isDirectory: true, virtual: true }
+      const rest = (await listDirectoryEntries(ctx, root, root)).filter((e) => !excludedRootNames.includes(e.name))
+      return [virtualEntry, ...rest, ...sharedRootEntries]
     }
-    return out.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name))
+
+    const target = mounted
+      ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
+      : normalized === '' || normalized === '.'
+        ? root
+        : resolveSafePath(root, normalized)
+    if (mounted) {
+      // 挂载目录列表：条目路径保持词汇前缀（llm-wiki/...）
+      const entries = await listDirectoryEntries(ctx, target, target)
+      return entries.map((e) => ({
+        ...e,
+        path: normalizeRelPathInput(path.posix.join(mounted.vocabularyPath.replace(/\\/g, '/'), e.path === '.' ? '' : e.path.replace(/\\/g, '/')))
+      }))
+    }
+    const entries = await listDirectoryEntries(ctx, target, root)
+    if (excludedRootNames.length > 0 && (normalized === '' || normalized === '.')) {
+      return entries.filter((e) => !excludedRootNames.includes(e.name))
+    }
+    return entries
   })
 
   ipcMain.handle('file:read-file', async (_e, rel: string) => {
     const root = ctx.getWorkDir()
-    const target = resolveSafePath(root, normalizeRelPathInput(typeof rel === 'string' ? rel : ''))
+    const normalized = normalizeRelPathInput(typeof rel === 'string' ? rel : '')
+    const mounted = wikiMountOf(ctx, normalized)
+    const target = mounted
+      ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
+      : resolveSafePath(root, normalized)
     return readFileForViewer(target)
   })
 
   ipcMain.handle('file:get-metadata', async (_e, rel: string) => {
     const root = ctx.getWorkDir()
-    const target = resolveSafePath(root, normalizeRelPathInput(typeof rel === 'string' ? rel : ''))
+    const normalized = normalizeRelPathInput(typeof rel === 'string' ? rel : '')
+    const mounted = wikiMountOf(ctx, normalized)
+    const target = mounted
+      ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
+      : resolveSafePath(root, normalized)
     return getFileMetadata(target)
   })
 
@@ -68,7 +108,14 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       stopContentWatch()
       return
     }
-    startContentWatch(ctx.getWorkDir(), payload.relPath.trim())
+    const rel = payload.relPath.trim()
+    const mounted = wikiMountOf(ctx, rel)
+    // T1.16：wiki 词汇路径先经挂载解析真实路径再监听（切 workDir 统一停 watcher 行为不变）
+    if (mounted) {
+      startContentWatch(mounted.realBase, mounted.realRel)
+      return
+    }
+    startContentWatch(ctx.getWorkDir(), rel)
   })
 
   ipcMain.handle('file:to-viewer-url', async (_e, rel: unknown) => {
@@ -77,7 +124,10 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
         return { ok: false as const, error: 'invalid path' }
       }
       const root = ctx.getWorkDir()
-      const target = resolveSafePath(root, rel)
+      const mounted = wikiMountOf(ctx, rel)
+      const target = mounted
+        ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
+        : resolveSafePath(root, rel)
       const st = await fs.stat(target)
       if (!st.isFile()) {
         return { ok: false as const, error: 'not a file' }
@@ -91,7 +141,10 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   ipcMain.handle('file:open-in-system', async (_e, rel: string) => {
     try {
       const root = ctx.getWorkDir()
-      const target = resolveSafePath(root, rel)
+      const mounted = wikiMountOf(ctx, rel)
+      const target = mounted
+        ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
+        : resolveSafePath(root, rel)
       const err = await shell.openPath(target)
       if (err) return { ok: false as const, error: err }
       return { ok: true as const }
@@ -103,7 +156,10 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   ipcMain.handle('file:show-in-explorer', async (_e, rel: string) => {
     try {
       const root = ctx.getWorkDir()
-      const target = resolveSafePath(root, rel)
+      const mounted = wikiMountOf(ctx, rel)
+      const target = mounted
+        ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
+        : resolveSafePath(root, rel)
       shell.showItemInFolder(target)
       return { ok: true as const }
     } catch (e) {
@@ -115,7 +171,12 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     if (!isSupportedMarkdownExport(payload?.format) || typeof payload.markdown !== 'string' || typeof payload.sourcePath !== 'string') return { ok: false, error: '导出参数无效' }
     const root = ctx.getWorkDir()
     let source: string
-    try { source = resolveSafePath(root, payload.sourcePath) } catch { return { ok: false, error: '导出参数无效' } }
+    const exportMounted = wikiMountOf(ctx, payload.sourcePath)
+    try {
+      source = exportMounted
+        ? (exportMounted.realRel ? resolveSafePath(exportMounted.realBase, exportMounted.realRel) : exportMounted.realBase)
+        : resolveSafePath(root, payload.sourcePath)
+    } catch { return { ok: false, error: '导出参数无效' } }
     if (!isMarkdownExportablePath(source)) return { ok: false, error: '仅支持导出 Markdown 文件' }
     const win = getMainWindow(); if (!win) return { ok: false, error: ErrorCodes.WINDOW_NOT_READY }
     const saved = await dialog.showSaveDialog(win, { defaultPath: defaultMarkdownExportPath(source, payload.format), filters: [{ name: payload.format === 'docx' ? 'Word 文档' : 'PDF', extensions: [payload.format] }] })
@@ -128,7 +189,11 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       if (++imageCount > MAX_MARKDOWN_EXPORT_IMAGES) { warnings.push(`图片数量超过上限，未嵌入：${resource}`); continue }
       try {
         const decoded = decodeURIComponent(resource); if (/^[a-z]+:/i.test(decoded)) { warnings.push(`未嵌入资源：${resource}`); continue }
-        const file = await resolveSafeReadPath(root, path.resolve(path.dirname(source), decoded)); const ext = path.extname(file).toLowerCase()
+        // T1.17：source 位于共享根时，图片解析根跟随 source 真实目录（wiki 页导出图片不再静默丢弃）
+        const file = exportMounted
+          ? await resolveSafeReadPath(path.dirname(source), path.resolve(path.dirname(source), decoded))
+          : await resolveSafeReadPath(root, path.resolve(path.dirname(source), decoded))
+        const ext = path.extname(file).toLowerCase()
         if (!['.png', '.jpg', '.jpeg', '.gif', '.bmp'].includes(ext)) { warnings.push(`未嵌入不支持的图片：${resource}`); continue }
         const stat = await fs.stat(file); if (stat.size > MAX_MARKDOWN_EXPORT_IMAGE_BYTES || total + stat.size > MAX_MARKDOWN_EXPORT_TOTAL_IMAGE_BYTES) { warnings.push(`图片资源超过大小上限，未嵌入：${resource}`); continue }
         const data = await fs.readFile(file); total += data.length; const type = (ext === '.jpeg' ? 'jpg' : ext.slice(1)) as 'png' | 'jpg' | 'gif' | 'bmp'
@@ -218,20 +283,29 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
 
   ipcMain.handle('file:create-file', async (_e, rel: string): Promise<void> => {
     const root = ctx.getWorkDir()
-    const target = resolveSafePath(root, rel)
+    const mounted = wikiMountOf(ctx, rel)
+    const target = mounted
+      ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
+      : resolveSafePath(root, rel)
     await fs.mkdir(path.dirname(target), { recursive: true })
     await fs.writeFile(target, '')
   })
 
   ipcMain.handle('file:create-directory', async (_e, rel: string): Promise<void> => {
     const root = ctx.getWorkDir()
-    const target = resolveSafePath(root, rel)
+    const mounted = wikiMountOf(ctx, rel)
+    const target = mounted
+      ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
+      : resolveSafePath(root, rel)
     await fs.mkdir(target, { recursive: true })
   })
 
   ipcMain.handle('file:delete', async (_e, rel: string): Promise<void> => {
     const root = ctx.getWorkDir()
-    const target = resolveSafePath(root, rel)
+    const mounted = wikiMountOf(ctx, rel)
+    const target = mounted
+      ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
+      : resolveSafePath(root, rel)
     await fs.rm(target, { recursive: true, force: true })
   })
 
@@ -240,26 +314,89 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       throw new Error(ErrorCodes.NAME_CONTAINS_PATH_SEPARATOR)
     }
     const root = ctx.getWorkDir()
-    const oldPath = resolveSafePath(root, rel)
+    const mounted = wikiMountOf(ctx, rel)
+    const oldPath = mounted
+      ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
+      : resolveSafePath(root, rel)
     const newPath = path.join(path.dirname(oldPath), newName)
+    // §7.4：挂载命中时真实路径断言限 realBase 内
+    if (mounted) assertInsideDir(mounted.realBase, newPath)
     await withTransientLockRetry(() => fs.rename(oldPath, newPath))
   })
 
   ipcMain.handle('file:move', async (_e, srcRel: string, destDirRel: string): Promise<void> => {
     const root = ctx.getWorkDir()
-    const srcPath = resolveSafePath(root, srcRel)
-    const destDirPath = resolveSafePath(root, destDirRel)
+    const srcMounted = wikiMountOf(ctx, srcRel)
+    const destMounted = wikiMountOf(ctx, destDirRel)
+    // §7.4：move 跨挂载边界首版显式拒绝（避免 EXDEV / 部分成功歧义）；copy 允许
+    if (Boolean(srcMounted) !== Boolean(destMounted)) {
+      throw new Error('不能在共享库与工作目录之间移动，请使用复制')
+    }
+    const srcPath = srcMounted
+      ? (srcMounted.realRel ? resolveSafePath(srcMounted.realBase, srcMounted.realRel) : srcMounted.realBase)
+      : resolveSafePath(root, srcRel)
+    const destDirPath = destMounted
+      ? (destMounted.realRel ? resolveSafePath(destMounted.realBase, destMounted.realRel) : destMounted.realBase)
+      : resolveSafePath(root, destDirRel)
     const destStat = await fs.stat(destDirPath)
     if (!destStat.isDirectory()) {
       throw new Error(ErrorCodes.TARGET_NOT_DIRECTORY)
     }
     const srcName = path.basename(srcPath)
+    if (destMounted) assertInsideDir(destMounted.realBase, path.join(destDirPath, srcName))
     await withTransientLockRetry(() => fs.rename(srcPath, path.join(destDirPath, srcName)))
   })
 
   ipcMain.handle('file:copy', async (_e, payload: { srcRelPath: string; destRelPath: string }): Promise<void> => {
-    await copyFileInWorkDir(ctx.getWorkDir(), payload.srcRelPath, payload.destRelPath)
+    const root = ctx.getWorkDir()
+    const srcMounted = wikiMountOf(ctx, payload.srcRelPath)
+    const destMounted = wikiMountOf(ctx, payload.destRelPath)
+    if (!srcMounted && !destMounted) {
+      await copyFileInWorkDir(root, payload.srcRelPath, payload.destRelPath)
+      return
+    }
+    // §7.4：跨边界 copy 允许——主进程两段式：读源侧（其沙箱内）→ 写目标侧（其沙箱内）
+    const srcPath = srcMounted
+      ? (srcMounted.realRel ? resolveSafePath(srcMounted.realBase, srcMounted.realRel) : srcMounted.realBase)
+      : resolveSafePath(root, payload.srcRelPath)
+    let destRelInSandbox: string
+    let destSandbox: string
+    if (destMounted) {
+      destSandbox = destMounted.realBase
+      destRelInSandbox = destMounted.realRel
+    } else {
+      destSandbox = root
+      destRelInSandbox = normalizeRelPathInput(payload.destRelPath)
+    }
+    const destAbs = resolveSafePath(destSandbox, destRelInSandbox)
+    await fs.mkdir(path.dirname(destAbs), { recursive: true })
+    await fs.copyFile(srcPath, destAbs)
   })
+}
+
+/** T1.15：目录条目读取（entryPathBase=条目 path 字段的相对基准）。 */
+async function listDirectoryEntries(ctx: AppIpcContext, target: string, entryPathBase: string): Promise<FileInfo[]> {
+  const entries = await fs.readdir(target, { withFileTypes: true })
+  const out: FileInfo[] = []
+  for (const ent of entries) {
+    const p = path.join(target, ent.name)
+    let size: number | undefined
+    if (ent.isFile()) {
+      try {
+        const st = await fs.stat(p)
+        size = st.size
+      } catch {
+        size = undefined
+      }
+    }
+    out.push({
+      name: ent.name,
+      path: normalizeRelPathInput(path.relative(entryPathBase, p) || '.'),
+      isDirectory: ent.isDirectory(),
+      size
+    })
+  }
+  return out.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name))
 }
 
 /** 将 CSS 中的本地字体/资源引用内联为 data URL（PDF 离屏渲染无文件系统访问）。 */
