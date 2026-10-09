@@ -26,7 +26,7 @@ import { isCanonicalProjectionWatermarkValid } from './canonicalHistory'
 import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
 import { createSpillStoreForDatabase, type SpillDescriptor, type SpillStore } from '../storage/spillStore'
 import { collectSpillDescriptorsStrict } from '../storage/spillProtocol'
-import { projectCanonicalToolResultForSessionLedger } from './sessionLedgerRecovery'
+import { projectCanonicalToolResultForSessionLedger } from './sessionLedgerResultProjection'
 
 const CANONICAL_SESSION_CACHE_VERSION = 1
 

@@ -30,7 +30,7 @@ import { markSessionMessageContentWriteStopped } from '../sessionStorage/mainten
 import { enableCanonicalSessionWriteAuthority } from './sessionContentWriteAuthority'
 import { createSpillStore, reconcileSpillOrphansAgainstCanonicalHistory, type SpillStore } from '../storage/spillStore'
 import { buildAssistantActivityTimeline } from '../../src/shared/assistantActivityTimeline'
-import { projectCanonicalToolResultForSessionLedger } from './sessionLedgerRecovery'
+import { projectCanonicalToolResultForSessionLedger } from './sessionLedgerResultProjection'
 
 function createDb(dbPath = ':memory:'): DatabaseSync {
   const conn = new DatabaseSync(dbPath)
