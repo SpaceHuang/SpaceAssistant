@@ -25,21 +25,22 @@ type CanonicalContentBlock =
 type CanonicalToolCall = Readonly<{ id: string; name: string; input: Readonly<Record<string, unknown>>; thoughtSignature?: string }>
 
 type CanonicalModelMessage =
-  | { role: 'system'; content: string; timestamp?: number }
-  | { role: 'user'; content: string | readonly CanonicalContentBlock[]; timestamp?: number }
-  | { role: 'assistant'; content: string | readonly CanonicalContentBlock[]; toolCalls?: readonly CanonicalToolCall[]; timestamp?: number }
-  | { role: 'assistant'; content?: undefined; toolCalls: readonly CanonicalToolCall[]; timestamp?: number }
+  | { role: 'system'; content: string; timestamp?: number; id?: string }
+  | { role: 'user'; content: string | readonly CanonicalContentBlock[]; timestamp?: number; id?: string }
+  | { role: 'assistant'; content: string | readonly CanonicalContentBlock[]; toolCalls?: readonly CanonicalToolCall[]; timestamp?: number; id?: string }
+  | { role: 'assistant'; content?: undefined; toolCalls: readonly CanonicalToolCall[]; timestamp?: number; id?: string }
   | { role: 'tool'; toolCallId: string; content: unknown; isError: boolean; timestamp?: number }
 ```
 
-注意 `assistant` 有两个分支：纯工具调用消息可不带 `content`。
+注意 `assistant` 有两个分支：纯工具调用消息可不带 `content`。`system` / `user` / `assistant` 可携带可选 `id`（会话存储重构后用于把消息身份贯穿 transcript 镜像与上下文重放身份）；`tool` 分支不参与该身份体系。
 
 ## collectModelAttempt：单次 provider 尝试的收集与校验
 
 ```ts
 async function collectModelAttempt(
   stream: AsyncIterable<StreamChunk>,
-  observer?: ModelStreamObserver
+  observer?: ModelStreamObserver,
+  options?: { idleTimeoutMs?: number }
 ): Promise<CollectedModelStream>
 
 const collectModelStream = collectModelAttempt   // 兼容别名
@@ -80,8 +81,23 @@ type ModelStreamObserver = Readonly<{
 ```
 
 - `onChunk` 在 `finish` 之前逐块回调（不含 `finish`）。
-- `onStreamError` 只在流抛错时回调一次，并会带上已收到的 `usage`（若有）；错误继续向上抛。
+- `onStreamError` 只在流抛错时回调一次，并会带上已收到的 `usage`（若有）；错误继续向上抛。空闲超时护栏抛出的 `ModelStreamIdleTimeoutError` 也走这条通道（见下）。
 - 重试与提交策略由调用方负责，`collectModelAttempt` 只做单次尝试的收集。
+
+## 空闲超时护栏（idle timeout）
+
+```ts
+const PROVIDER_STREAM_IDLE_TIMEOUT = 'PROVIDER_STREAM_IDLE_TIMEOUT' as const
+class ModelStreamIdleTimeoutError extends Error {
+  readonly code = PROVIDER_STREAM_IDLE_TIMEOUT
+  constructor(readonly idleTimeoutMs: number)
+}
+```
+
+- 语义：**相邻两个 chunk 之间**（含等待首字节）的间隔超过 `idleTimeoutMs` 即判定 provider 流挂起；只做"无进展"判定，不设整体时长上限，长回复不受影响。
+- `collectModelAttempt` 缺省不启用；turn 循环用 `providerStreamIdleTimeoutMs ?? 120_000` 传入，`0` / 负值关闭。
+- 超时行为：抛 `ModelStreamIdleTimeoutError`，并对底层流做 best-effort 取消（直接对源 iterator 调 `return()`）。实现刻意不经 async generator 包装转发 `next()` / `return()`——包装后挂起的 `return()` 永不 resolve 也不转发；超时赢下 race 后悬挂的 `next()` 挂空 catch，避免宿主没有 unhandledRejection 兜底时炸进程。
+- 观测：超时同样会触发一次 `onStreamError`（带已收到的 `usage`），宿主恢复层按普通流错误重试即可。
 
 ## provider 接口与请求快照
 
@@ -110,6 +126,8 @@ function snapshotPreparedModelCall(call: PreparedModelCall): Readonly<{
 ```
 
 `route` 全部字段为必填非空字符串（`endpoint` 也在必填校验范围内）；`maxTokens` 必须为正整数。
+
+注意档位枚举有两份，不要混用：请求侧 `request.thinking.effort` 是 `'low' | 'medium' | 'high' | 'max'`（含产品侧最强档）；而 `provider.ts` 的 `ReasoningEffort` 是 `'off' | 'low' | 'medium' | 'high'`（**不含** `max`），后者是旧 provider 适配面的兼容枚举。
 
 ## ModelProviderRegistry
 
@@ -159,12 +177,14 @@ class ProviderInvocation {
 
 - `run` 先检查 `capabilities.reasoning` 是否含请求档位，否则抛 `UnsupportedReasoningError`。
 - 有 `usage` 时补全 `totalTokens ?? (inputTokens ?? 0) + (outputTokens ?? 0)`。
+- `ReasoningEffort` 是 agent-core 自己的四档枚举（`off | low | medium | high`），**不含**产品侧枚举（`src/shared/thinkingEffort.ts`）的 `max`；源码注释显式声明两者暂不统一，如需统一另立需求。
 
 ## 错误类型汇总
 
 | 类 | code | 触发 |
 | --- | --- | --- |
 | `InvalidModelStreamError` | `INVALID_MODEL_STREAM` | 流事件序列 / 载荷非法 |
+| `ModelStreamIdleTimeoutError` | `PROVIDER_STREAM_IDLE_TIMEOUT` | provider 流相邻 chunk 间隔超过 `idleTimeoutMs`（无进展护栏） |
 | `UnknownModelRouteError` | `UNKNOWN_MODEL_ROUTE` | `prepare` 未注册路由 |
 | `ModelRouteChangedError` | `MODEL_ROUTE_CHANGED` | 调用期间路由身份或 provider 变化 |
 | `UnsupportedReasoningError` | `unsupported-reasoning` | provider 不支持请求的思维档 |
