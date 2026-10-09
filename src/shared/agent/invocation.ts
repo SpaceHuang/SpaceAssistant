@@ -169,5 +169,5 @@ export interface AgentInvocation {
 
 /** 调用结果（本期先落形状：ok/cancelled 布尔的四态化在后续阶段收敛为 status）。 */
 export type AgentInvocationResult =
-  | { ok: true; content: unknown[]; stopReason: string; usage?: unknown; finalSurfaceSnapshot?: unknown; finalSurfaceMessages?: unknown[] }
+  | { ok: true; content: unknown[]; stopReason: string; usage?: unknown; parked?: true; parkedTodoId?: string; finalSurfaceSnapshot?: unknown; finalSurfaceMessages?: unknown[] }
   | { ok: false; error: string; usage?: unknown; cancelled?: boolean }

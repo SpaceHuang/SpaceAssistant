@@ -10,7 +10,8 @@ import fs from 'fs/promises'
 import fsSync from 'fs'
 import os from 'os'
 import path from 'path'
-import { openDatabase, createSession, setConfigValue, getPersistedTurn } from '../database'
+import { openDatabase, createSession, setConfigValue, getPersistedTurn, getSession, getTurnByRequestId, appendMessage as mockedAppendMessage } from '../database'
+import { appendMessage as appendMessageOperation } from '../database/operations'
 import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { TurnRuntime } from '../turnRuntime'
@@ -20,9 +21,21 @@ import {
   releaseRemoteSession
 } from '../remote/remoteAgentRegistry'
 import { REMOTE_SESSION_BUSY_MESSAGE } from '../remote/remoteSessionGuardMessages'
+import { listQueuedUserMessages } from '../database/operations'
+import { listWakeEvents } from '../database/wakeEvents'
+import { buildImQueueScope } from '../../src/shared/queueScope'
+import { getDbConnection } from '../database/sqliteStore'
+import { appendImInboxMessageWithWakeEvent, listImInboxMessages } from '../database/imInbox'
+import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
+import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
+import { createDeferredApprovalNotificationDelivery } from '../remote/deferredApprovalNotificationDelivery'
+import { createWakeEventDispatcher } from '../remote/wakeEventDispatcher'
+import { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeStore'
+import { createDeferredExecutionResultStore } from '../confirmation/deferredExecutionResultStore'
 
 const mockRunAgent = vi.fn()
 const mockResolveSession = vi.fn()
+const mockConsumeForRequest = vi.fn()
 
 const testTurnRuntime = {
   bindRequest: vi.fn(),
@@ -37,8 +50,8 @@ const testTurnRuntime = {
     startToken: 'token-test'
   })),
   executeWithSource: vi.fn(async (_turnId: string, _token: string, source: (a: unknown, b: string) => Promise<unknown>) => source({}, 'token-test')),
-  consumeForRequest: vi.fn()
-} as never
+  consumeForRequest: mockConsumeForRequest
+} as unknown as TurnRuntime
 
 vi.mock('./weChatRemoteAgent', () => ({
   runWeChatRemoteAgent: (...args: unknown[]) => mockRunAgent(...args)
@@ -111,31 +124,14 @@ describe('WeChatCommandRouter', () => {
   let sessionId: string
   let closeDb: () => void
 
-  beforeEach(async () => {
-    vi.clearAllMocks()
-    resetRunningRemoteAgentRegistryForTests()
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wechat-router-'))
-    processed = new WeChatProcessedStore(tmpDir)
-    audit = new WeChatAuditLogger(tmpDir)
-    reply = vi.fn(async () => undefined)
-    mockRunAgent.mockResolvedValue({ summary: 'ok', pendingConfirm: false, ok: true })
-
-    const dbPath = path.join(tmpDir, 'test.db')
-    db = openDatabase(dbPath)
-    seedLlmConfig(db)
-    closeDb = () => db.close()
-    const session = createSession(db, { name: 'WeChat Session' })
-    sessionId = session.id
-    mockResolveSession.mockResolvedValue({ sessionId, isNew: true })
-
+  function makeRouter(wakeDispatcher?: { dispatchSession: (sessionId: string) => Promise<void> }, handleDeferredApprovalReply?: (input: { message: import('../../src/shared/wechatTypes').WeChatInboundMessage; text: string }) => Promise<void>, approvalGate?: boolean, retryDeferredApprovalNotifications?: (scope: { identityKey: string; ownerId: string }) => Promise<unknown>): WeChatCommandRouter {
     const mockWorkDirManager = {
       listProfiles: () => [],
       getActiveProfileId: () => 'p1',
       getActiveWorkDir: () => tmpDir,
       checkDirectoryWritable: () => ({ ok: true })
     }
-
-    router = new WeChatCommandRouter({
+    return new WeChatCommandRouter({
       db,
       sessionStorage: createSqliteSessionStorage(db),
       turnRuntime: testTurnRuntime,
@@ -161,11 +157,36 @@ describe('WeChatCommandRouter', () => {
       getBaseUrl: () => 'https://api.example.com',
       getMainWebContents: () => ({ send: vi.fn() }) as never,
       getModel: () => 'm1',
-      getToolsConfig: () => ({ deniedTools: [] }) as never
-    })
+      getToolsConfig: () => ({ deniedTools: [] }) as never,
+      wakeEventDispatcher: wakeDispatcher,
+      handleDeferredApprovalReply,
+      retryDeferredApprovalNotifications,
+      isRemoteAsyncApprovalEnabled: () => approvalGate ?? true
+    } as never)
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks()
+    resetRunningRemoteAgentRegistryForTests()
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wechat-router-'))
+    processed = new WeChatProcessedStore(tmpDir)
+    audit = new WeChatAuditLogger(tmpDir)
+    reply = vi.fn(async () => undefined)
+    mockRunAgent.mockResolvedValue({ summary: 'ok', pendingConfirm: false, ok: true })
+
+    const dbPath = path.join(tmpDir, 'test.db')
+    db = openDatabase(dbPath)
+    seedLlmConfig(db)
+    closeDb = () => db.close()
+    const session = createSession(db, { name: 'WeChat Session' })
+    sessionId = session.id
+    mockResolveSession.mockResolvedValue({ sessionId, isNew: true })
+
+    router = makeRouter()
   })
 
   afterEach(() => {
+    mockedAppendMessage.mockReset()
     resetRunningRemoteAgentRegistryForTests()
     closeDb?.()
     if (tmpDir && fsSync.existsSync(tmpDir)) {
@@ -183,6 +204,135 @@ describe('WeChatCommandRouter', () => {
     expect(reply).toHaveBeenCalled()
   })
 
+  it('recovers a persisted WeChat inbox wake event through the original turn execution path', async () => {
+    const queueScope = buildImQueueScope('wechat', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    const session = getSession(db, sessionId)!
+    const metadata = { ...session.metadata, source: 'wechat', wechatMeta: { userId: 'wx-user@test', lastContextToken: 'context-replay' } }
+    getDbConnection(db).prepare('UPDATE sessions SET metadata=? WHERE id=?').run(JSON.stringify(metadata), sessionId)
+    const persisted = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope,
+      channelMessageId: 'replay-wechat-1', content: '重启后恢复的消息', contextToken: 'context-replay' })
+    const secondPersisted = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope,
+      channelMessageId: 'replay-wechat-2', content: '第二条恢复消息', contextToken: 'context-replay-2' })
+    let turnSequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `wake-wechat-${++turnSequence}` } })
+    const createDeferredConfirmationAdapter = vi.fn(() => ({ defer: vi.fn() }))
+    router = makeRouter(undefined)
+    ;(router as unknown as { deps: { turnRuntime?: TurnRuntime } }).deps.turnRuntime = runtime
+    ;(router as unknown as { deps: { createDeferredConfirmationAdapter?: typeof createDeferredConfirmationAdapter } }).deps.createDeferredConfirmationAdapter = createDeferredConfirmationAdapter
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
+    await dispatcher.dispatchSession(sessionId)
+    expect(mockRunAgent).toHaveBeenCalledTimes(2)
+    expect(mockRunAgent.mock.calls[0]?.[0]).toMatchObject({ userMessage: '重启后恢复的消息', userId: 'wx-user@test' })
+    const firstWakeArgs = mockRunAgent.mock.calls[0]?.[0] as { replyMessageId: string; remoteContext: { contextToken: string; turnId?: string } }
+    expect(firstWakeArgs.replyMessageId).toBe('replay-wechat-1')
+    expect(firstWakeArgs.remoteContext.contextToken).toBe('context-replay')
+    expect(firstWakeArgs.remoteContext.turnId).toBe('wake-wechat-1')
+    expect(createDeferredConfirmationAdapter).toHaveBeenCalledTimes(2)
+    expect(mockRunAgent.mock.calls[1]?.[0]).toMatchObject({ userMessage: '第二条恢复消息', replyMessageId: 'replay-wechat-2', remoteContext: { contextToken: 'context-replay-2' } })
+    expect(listWakeEvents(db, sessionId).map(({ type, status }) => ({ type, status }))).toEqual([
+      { type: 'im-inbound', status: 'acked' }, { type: 'im-inbound', status: 'acked' }
+    ])
+    expect(getTurnByRequestId(db, sessionId, `wake:${persisted.eventId}`)).toMatchObject({ requestId: `wake:${persisted.eventId}`, userMessageId: persisted.messageId, outcome: 'completed' })
+  })
+
+  it('consumes a persisted deferred completion wake and resumes the original WeChat task turn', async () => {
+    mockedAppendMessage.mockImplementation((_db, message) => appendMessageOperation(db, message as never))
+    const session = getSession(db, sessionId)!
+    const metadata = { ...session.metadata, source: 'wechat', wechatMeta: { userId: 'wx-user@test', lastContextToken: 'completion-context' } }
+    getDbConnection(db).prepare('UPDATE sessions SET metadata=? WHERE id=?').run(JSON.stringify(metadata), sessionId)
+    const scope = buildImQueueScope('wechat', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    const persisted = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope: scope,
+      channelMessageId: 'wechat-completion-source', contextToken: 'completion-context', content: '发送确认后的报告' })
+    const todoStore = createDeferredTodoStore(db)
+    const rule = { ruleId: 'write', factsHash: 'a'.repeat(64) }
+    const todo = todoStore.create({ todoId: 'wechat-completion-todo', invocationId: 'wechat-completion-invocation', channel: 'wechat',
+      identityKey: 'wx-user@test', ownerId: 'wx-user@test', authorizationEpoch: 1, rule, workflowId: 'workflow', taskId: 'task', stepId: 'publish',
+      planRevision: 1, originSessionId: sessionId, createdAt: Date.now(), expiresAt: Date.now() + 60_000 }).todo
+    const intents = createSecurityActionIntentStore(db)
+    intents.prepare({ invocationId: todo.invocationId, envelopeInvocationId: todo.invocationId, sessionId,
+      workflowId: todo.workflowId, taskId: todo.taskId, stepId: todo.stepId, planRevision: 1 })
+    intents.linkTodo(todo.invocationId, todo.todoId)
+    intents.commitCheckpoint(todo.invocationId, { checkpointId: 'wechat-completion-checkpoint', workflowRevision: 1 })
+    createDeferredEnvelopeStore(db).put({ invocationId: todo.invocationId, requestId: 'wechat-source-request', turnId: 'source-turn',
+      toolCallId: 'source-tool', toolName: 'send_message', canonicalArgs: {}, contentVersions: {}, executionContext: {
+        currentUserMessageId: persisted.messageId, messageId: 'wechat-completion-source', contextToken: 'completion-context'
+      } })
+    let turnSequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `wechat-completion-${++turnSequence}` } })
+    router = makeRouter(undefined)
+    ;(router as unknown as { deps: { turnRuntime?: TurnRuntime } }).deps.turnRuntime = runtime
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
+    await dispatcher.dispatchSession(sessionId)
+    const resultStore = createDeferredExecutionResultStore(db)
+    resultStore.beginDispatch({ todoId: todo.todoId, invocationId: todo.invocationId, dispatchKey: 'wechat-completion-dispatch' })
+    resultStore.commitResult(todo.todoId, { kind: 'completed', outputRef: `deferred-result:${todo.invocationId}`, value: { ok: true, marker: 'REVIEW_TOOL_RESULT_WECHAT' } })
+    await dispatcher.dispatchSession(sessionId)
+
+    expect(mockRunAgent).toHaveBeenCalledTimes(2)
+    expect(mockRunAgent.mock.calls[1]?.[0]).toMatchObject({ userMessage: '发送确认后的报告', replyMessageId: 'wechat-completion-source',
+      remoteContext: { contextToken: 'completion-context', deferredContinuation: { todoId: todo.todoId, invocationId: todo.invocationId,
+        workflowId: 'workflow', taskId: 'task', stepId: 'publish', planRevision: 1, checkpointId: 'wechat-completion-checkpoint',
+        dispatchKey: 'wechat-completion-dispatch', outputRef: `deferred-result:${todo.invocationId}`,
+        result: { kind: 'completed', outputRef: `deferred-result:${todo.invocationId}`, value: { ok: true, marker: 'REVIEW_TOOL_RESULT_WECHAT' } } } } })
+    expect(resultStore.getByTodo(todo.todoId)?.state).toBe('delivered')
+    expect(listWakeEvents(db, sessionId).every(({ status }) => status === 'acked')).toBe(true)
+  })
+
+  it('routes approval replies to the safety ingress before Inbox or the Skill', async () => {
+    const handleDeferredApprovalReply = vi.fn(async () => undefined)
+    const retryDeferredApprovalNotifications = vi.fn(async () => [])
+    router = makeRouter(undefined, handleDeferredApprovalReply, true, retryDeferredApprovalNotifications)
+    await router.handleSdkInbound(makeIncomingMessage({ text: '批准 07', quotedMessage: { text: '审批通知', type: 'text' } }))
+    expect(handleDeferredApprovalReply).toHaveBeenCalledWith(expect.objectContaining({ text: '批准 07', replyToMessageId: undefined }))
+    expect(retryDeferredApprovalNotifications).toHaveBeenCalledWith({ identityKey: 'wx-user@test', ownerId: 'wx-user@test' })
+    expect(mockResolveSession).not.toHaveBeenCalled()
+    expect(mockRunAgent).not.toHaveBeenCalled()
+  })
+
+  it('routes an approval-shaped message as an ordinary inbound while the durable gate is closed', async () => {
+    const handleDeferredApprovalReply = vi.fn(async () => undefined)
+    const dispatchSession = vi.fn().mockResolvedValue(undefined)
+    router = makeRouter({ dispatchSession }, handleDeferredApprovalReply, false)
+    await router.handleSdkInbound(makeIncomingMessage({ text: '批准 07', raw: { ...makeIncomingMessage().raw, client_id: 'wechat-closed-approval-reply' } }))
+    expect(handleDeferredApprovalReply).not.toHaveBeenCalled()
+    expect(listWakeEvents(db, sessionId)).toHaveLength(1)
+    expect(listWakeEvents(db, sessionId)[0]?.payloadRef.kind).toBe('im-inbox-message')
+    const queueScope = buildImQueueScope('wechat', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    expect(listImInboxMessages(db, { queueScope }).map(({ content }) => content)).toContain('批准 07')
+    expect(dispatchSession).toHaveBeenCalledWith(sessionId)
+  })
+
+  it('retries a real undelivered approval notification after owner authentication', async () => {
+    const todoStore = createDeferredTodoStore(db)
+    const now = Date.now()
+    const todo = todoStore.create({ todoId: 'wechat-router-retry-todo', invocationId: 'wechat-router-retry-invocation', channel: 'wechat',
+      identityKey: 'wx-user@test', ownerId: 'wx-user@test', authorizationEpoch: 4, rule: { ruleId: 'write', factsHash: 'd'.repeat(64) },
+      workflowId: 'workflow', taskId: 'task', stepId: 'step', planRevision: 1, originSessionId: sessionId,
+      createdAt: now, expiresAt: now + 60_000 }).todo
+    const intents = createSecurityActionIntentStore(db)
+    intents.prepare({ invocationId: todo.invocationId, envelopeInvocationId: todo.invocationId, sessionId,
+      workflowId: todo.workflowId, taskId: todo.taskId, stepId: todo.stepId, planRevision: todo.planRevision })
+    intents.linkTodo(todo.invocationId, todo.todoId)
+    intents.commitCheckpoint(todo.invocationId, { checkpointId: 'wechat-router-retry-checkpoint', workflowRevision: 2 })
+    const adapter = { send: vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ messageId: 'wechat-approval-retry-msg' }) }
+    let code = 7
+    const delivery = createDeferredApprovalNotificationDelivery({ db, todoStore, intentStore: intents, adapter,
+      allocateShortCode: () => String(code++).padStart(2, '0'), audit: vi.fn() })
+    await expect(delivery.createAndSend({ todoId: todo.todoId, invocationId: todo.invocationId, channel: 'wechat',
+      identityKey: todo.identityKey, ownerId: todo.ownerId, authorizationEpoch: todo.authorizationEpoch, rule: todo.rule,
+      safeActionSummary: '更新项目说明', userDelegation: '更新项目说明', untrustedMaterial: '' })).resolves.toMatchObject({ state: 'undelivered' })
+
+    mockResolveSession.mockResolvedValue({ sessionId, isNew: false })
+    const dispatchSession = vi.fn().mockResolvedValue(undefined)
+    router = makeRouter({ dispatchSession }, undefined, false, ({ identityKey, ownerId }) => delivery.retryForAuthenticatedInbound({
+      channel: 'wechat', identityKey, ownerId, authorizationEpoch: 4
+    }))
+    await router.handleSdkInbound(makeIncomingMessage({ text: '批准 07', raw: { ...makeIncomingMessage().raw, client_id: 'wechat-authenticated-notification-retry' } }))
+    expect(adapter.send).toHaveBeenCalledTimes(2)
+    expect(delivery.resolveCurrent({ channel: 'wechat', identityKey: 'wx-user@test', ownerId: 'wx-user@test', authorizationEpoch: 4, shortCode: '08' }))
+      .toMatchObject({ trustedMessageId: 'wechat-approval-retry-msg', notificationVersion: 2 })
+  })
+
   it('remote agent 的非终态事实先进入 Runtime，终态由统一 adapter 消费', async () => {
     mockRunAgent.mockImplementation(async ({ emitFactEvent }: { emitFactEvent?: (event: unknown) => void }) => {
       emitFactEvent?.({ type: 'tool-use', id: 'tool-wechat-1', toolName: 'read_file', input: { path: 'README.md' } })
@@ -191,17 +341,17 @@ describe('WeChatCommandRouter', () => {
 
     await router.handleSdkInbound(makeIncomingMessage({ text: 'read it' }))
 
-    expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
+    expect(mockConsumeForRequest).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ type: 'tool-use', id: 'tool-wechat-1' }),
       expect.any(String)
     )
-    expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
+    expect(mockConsumeForRequest).toHaveBeenCalledWith(
       expect.any(String),
       { type: 'source-completed' },
       expect.any(String)
     )
-    const calls = testTurnRuntime.consumeForRequest.mock.calls
+    const calls = mockConsumeForRequest.mock.calls
     expect(calls.findIndex(([, event]) => (event as { type: string }).type === 'tool-use'))
       .toBeLessThan(calls.findIndex(([, event]) => (event as { type: string }).type === 'source-completed'))
   })
@@ -253,7 +403,7 @@ describe('WeChatCommandRouter', () => {
 
     await router.handleSdkInbound(makeIncomingMessage({ text: 'confirm me' }))
 
-    expect(testTurnRuntime.consumeForRequest).toHaveBeenCalledWith(
+    expect(mockConsumeForRequest).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ type: 'confirm-requested', toolUseId: 'tool-wechat-confirm' }),
       expect.any(String)
@@ -266,6 +416,40 @@ describe('WeChatCommandRouter', () => {
     await router.handleSdkInbound(raw)
     await router.handleSdkInbound(raw)
     expect(mockRunAgent).toHaveBeenCalledTimes(1)
+  })
+
+  it('persists a repeated channel message once and schedules one asynchronous wake', async () => {
+    const dispatchSession = vi.fn().mockResolvedValue(undefined)
+    router = makeRouter({ dispatchSession })
+    const raw = makeIncomingMessage({ raw: { ...makeIncomingMessage().raw, client_id: 'wake-dup-1' }, text: 'do this once' })
+
+    await router.handleSdkInbound(raw)
+    await router.handleSdkInbound(raw)
+
+    const queueScope = buildImQueueScope('wechat', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    expect(listQueuedUserMessages(db, { sessionId, queueScope })).toHaveLength(1)
+    expect(listWakeEvents(db, sessionId)).toHaveLength(1)
+    expect(dispatchSession).toHaveBeenCalledTimes(1)
+    expect(mockRunAgent).not.toHaveBeenCalled()
+  })
+
+  it('does not acknowledge or dispatch when WeChat inbound persistence fails', async () => {
+    const dispatchSession = vi.fn().mockResolvedValue(undefined)
+    const markCompleted = vi.spyOn(processed, 'markCompleted')
+    router = makeRouter({ dispatchSession })
+    getDbConnection(db).exec(`CREATE TRIGGER fail_wechat_wake_outbox BEFORE INSERT ON wake_event_outbox
+      BEGIN SELECT RAISE(ABORT, 'injected WeChat persistence failure'); END`)
+
+    await router.handleSdkInbound(makeIncomingMessage({ raw: { ...makeIncomingMessage().raw, client_id: 'wechat-persist-fail' }, text: 'persist first' }))
+
+    expect(listQueuedUserMessages(db, {
+      sessionId,
+      queueScope: buildImQueueScope('wechat', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    })).toEqual([])
+    expect(listWakeEvents(db, sessionId)).toEqual([])
+    expect(dispatchSession).not.toHaveBeenCalled()
+    expect(mockRunAgent).not.toHaveBeenCalled()
+    expect(markCompleted).toHaveBeenCalledWith(expect.any(String), expect.any(String), 'persistence_failed')
   })
 
   it('rejects allowlist sender', async () => {

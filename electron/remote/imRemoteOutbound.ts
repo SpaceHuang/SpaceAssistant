@@ -65,3 +65,21 @@ export async function sendImOutbound(args: {
   await args.reply(text)
   maybeTouchOutboundActivity(args.sessionId, args.touch)
 }
+
+export type ImLifecycleStage = 'accepted' | 'plan-confirmation' | 'deferred-wait' | 'resumed' | 'completed' | 'failed'
+
+const IM_LIFECYCLE_STAGES = new Set<ImLifecycleStage>([
+  'accepted', 'plan-confirmation', 'deferred-wait', 'resumed', 'completed', 'failed'
+])
+
+/** Sends one bounded user-facing lifecycle message; internal runtime events have no stage here. */
+export async function sendImLifecycleMessage(args: {
+  reply: (text: string) => Promise<void>
+  stage: ImLifecycleStage
+  text: string
+}): Promise<void> {
+  if (!IM_LIFECYCLE_STAGES.has(args.stage)) throw new TypeError('UNSUPPORTED_IM_LIFECYCLE_STAGE')
+  const text = args.text.trim()
+  if (!text) throw new TypeError('IM_LIFECYCLE_MESSAGE_REQUIRED')
+  await args.reply(text)
+}

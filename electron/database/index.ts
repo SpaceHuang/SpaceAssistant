@@ -9,6 +9,8 @@ export type { StoredMessage } from './types'
 // 事务入口与 changes 转换 helper 的对外桶导出；实现位于 ./transaction（canonical 路径）。
 export { openSqliteDatabase, openSqliteDatabaseReadOnly, getDbConnection } from './sqliteStore'
 export { changesToNumber, runInTransaction } from './transaction'
+export { listImInboxMessages } from './imInbox'
+export type { ImInboxMessage } from './imInbox'
 
 export type {
   MessagesPage,
@@ -53,10 +55,16 @@ export {
   hasActiveTurn,
   createPersistedTurn,
   getQueueInputReceipt,
+  getQueueInputReceiptInScope,
   createQueueInputReceipt,
+  createQueueInputReceiptInScope,
   enqueueQueuedUserMessage,
+  enqueueQueuedUserMessageInScope,
   claimQueuedTurnAtomically,
+  claimQueuedTurnAtomicallyInScope,
+  desktopQueueCompatibility,
   updateQueueInputReceiptState,
+  updateQueueInputReceiptStateInScope,
   updatePersistedTurnState,
   recoverPersistedTurn,
   getMessages,
@@ -65,7 +73,11 @@ export {
   getTurnContext,
   getMessagesPage,
   getNextQueuedMessage,
+  getNextQueuedMessageInScope,
+  listQueuedUserMessages,
   reorderQueuedUserMessages,
+  reorderQueuedUserMessagesInScope,
+  deleteQueuedUserMessageInScope,
   getSession,
   getSessionUsage,
   listSearchHistory,
@@ -80,6 +92,7 @@ export {
   setSessionUsage,
   updateMessageContent,
   updateQueuedUserMessageContent,
+  updateQueuedUserMessageContentInScope,
   checkpointTurnAtomically,
   updateMessageContentIfStreaming,
   updateSession
@@ -104,3 +117,8 @@ export function openDatabase(inputPath: string): AppDatabase {
 export function getDefaultDbPath(userData: string): string {
   return path.join(userData, 'spaceassistant-data.db')
 }
+
+export { ackImInboxMessage, appendImInboxMessage, appendImInboxMessageWithWakeEvent, claimImInboxMessage, releaseImInboxMessage, renewImInboxClaim } from './imInbox'
+export type { AppendImInboxMessageInput, AppendImInboxMessageResult, AppendImInboxMessageWithWakeEventResult, ClaimedImInboxMessage, ImInboxChannel } from './imInbox'
+export { ackWakeEvent, ackWakeEventInRun, appendWakeEvent, claimWakeEvent, claimWakeEvents, clearWakeEventRetryState, continueWorkflow, finalizeWakeEvents, listClaimableWakeEventIds, listWakeEvents, readWakeEvent, readWakeEventRetryState, releaseWakeEventClaimsForRetry, saveWakeEventRetryState, waitForEvent } from './wakeEvents'
+export type { AppendWakeEventResult, ClaimedWakeEventSet, WaitForEventInput } from './wakeEvents'

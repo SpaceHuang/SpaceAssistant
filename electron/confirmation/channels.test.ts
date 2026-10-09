@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { channelFor, DesktopChannel, ImRequestChannel, DenyChannel, resolveConfirmChannel } from './channels'
+import { channelFor, DesktopChannel, ImRequestChannel, DenyChannel, resolveConfirmChannel, selectConfirmationAnswerer } from './channels'
 import type { AuditSink } from './channels'
 import { ImChannel } from './imChannel'
 import type { ConfirmAnswererMap, ConfirmRequest, SecurityAuditEvent } from '../../src/shared/confirmation/types'
@@ -219,6 +219,30 @@ describe('P0 审计如实归因（B1 收窄范围）：confirm.* 事件 actor �
 })
 
 describe('P1-1 resolveConfirmChannel 二维解析（回答者种类 × 传输通道）', () => {
+  it('async approval strategy selects the safety Agent only for enabled IM lanes', () => {
+    expect(selectConfirmationAnswerer({ lane: 'wechat', remoteAsyncApprovalEnabled: true })).toEqual({ kind: 'agent' })
+    expect(selectConfirmationAnswerer({ lane: 'feishu', remoteAsyncApprovalEnabled: true })).toEqual({ kind: 'agent' })
+    expect(selectConfirmationAnswerer({ lane: 'desktop', remoteAsyncApprovalEnabled: true })).toEqual({ kind: 'user' })
+    expect(selectConfirmationAnswerer({ lane: 'automation', remoteAsyncApprovalEnabled: true })).toEqual({ kind: 'user' })
+    expect(selectConfirmationAnswerer({ lane: 'wechat', remoteAsyncApprovalEnabled: false })).toEqual({ kind: 'user' })
+    const im = new ImChannel({ lane: 'wechat', timeoutMs: 1000, sendPrompt: () => undefined })
+    expect(resolveConfirmChannel({ ...baseArgs, lane: 'wechat', imChannel: im, buildImPending: buildPending })).toBeInstanceOf(ImRequestChannel)
+    const factory = vi.fn(() => ({ request: vi.fn(), cancel: vi.fn() }))
+    resolveConfirmChannel({ ...baseArgs, lane: 'wechat', remoteAsyncApprovalEnabled: true, agentChannelFactory: factory })
+    expect(factory).toHaveBeenCalledOnce()
+  })
+
+  it('IM explicit agent policy is fenced by the independent rollout switch', () => {
+    const im = new ImChannel({ lane: 'wechat', timeoutMs: 1000, sendPrompt: vi.fn() })
+    const factory = vi.fn(() => ({ request: vi.fn(), cancel: vi.fn() }))
+    const closed = resolveConfirmChannel({ ...baseArgs, lane: 'wechat', answererPolicy: { kind: 'agent' }, imChannel: im,
+      buildImPending: () => ({ sessionId: 's-rcc', messageId: 'm1', matchKey: 'u1' }) })
+    expect(closed).toBeInstanceOf(ImRequestChannel)
+    expect(factory).not.toHaveBeenCalled()
+    resolveConfirmChannel({ ...baseArgs, lane: 'wechat', answererPolicy: { kind: 'agent' }, remoteAsyncApprovalEnabled: true, agentChannelFactory: factory })
+    expect(factory).toHaveBeenCalledOnce()
+  })
+
   const baseArgs = {
     requestId: 'req-rcc',
     sessionId: 's-rcc',

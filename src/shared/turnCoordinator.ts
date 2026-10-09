@@ -1,6 +1,7 @@
 import type { Message } from './domainTypes'
 import { acceptedAssistantCheckpoint, reduceAssistantFact, type AssistantFactEvent, type TurnExecutionConfig, type TurnIntent, type TurnTerminal, type TurnOutcome } from './assistantFactAggregator'
 import { canonicalQueueInput } from './queueInputFingerprint'
+import type { QueueScope } from './queueScope'
 import { CheckpointQueue } from './checkpointQueue'
 import { isTerminalMessageStatus } from './messageStatus'
 
@@ -19,7 +20,7 @@ export type TurnStorage = {
     },
     acceptance?: PersistedTurnRecord['continuationAcceptance']
   }) => { user: PersistedMessage; assistant: PersistedMessage }
-  claimQueuedAtomic: (input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig }) => { user: PersistedMessage; assistant: PersistedMessage; executionConfig?: TurnExecutionConfig }
+  claimQueuedAtomic: (input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; queueScope?: QueueScope }) => { user: PersistedMessage; assistant: PersistedMessage; executionConfig?: TurnExecutionConfig }
   update: (messageId: string, patch: Partial<Message>) => PersistedMessage | null
   updateIfStreaming: (messageId: string, patch: Partial<Message>) => PersistedMessage | null
   checkpoint: (turnId: string, version: number, message: Message) => boolean
@@ -102,8 +103,10 @@ export class TurnCoordinator {
     if (intent.mode === 'reuse-user') {
       userMessage = this.storage.getMessage(intent.userMessageId)
       if (!userMessage || userMessage.sessionId !== intent.sessionId) throw new Error('TURN_REUSE_SESSION_MISMATCH')
-      if (userMessage.role !== 'user' || (userMessage.status !== 'sent' && userMessage.status !== 'queued')) throw new Error('TURN_REUSE_TARGET_NOT_USER')
-      if (userMessage.status === 'queued') {
+      const persistedUserStatus: string = userMessage.status
+      const queuedForReuse = persistedUserStatus === 'queued' || (intent.queueScope?.kind === 'im' && persistedUserStatus === 'im-inbox-claimed')
+      if (userMessage.role !== 'user' || (userMessage.status !== 'sent' && !queuedForReuse)) throw new Error('TURN_REUSE_TARGET_NOT_USER')
+      if (queuedForReuse) {
         if (fixedIdentity) throw new Error('CONTINUATION_USER_NOT_SENT')
         const turnId = this.deps.id()
         const assistantId = this.deps.id()
@@ -119,6 +122,7 @@ export class TurnCoordinator {
           intentFingerprint: this.intentFingerprint(intent),
           excludeMessageIds: intent.excludeMessageIds,
           executionConfig: normalizeTurnExecutionConfig(intent.config)
+          ,...(intent.queueScope ? { queueScope: intent.queueScope } : {})
         })
         const started = this.makeStarted(intent, claimed.user.message, claimed.assistant.message, { turnId, startToken, persist: false, state: initialState })
         if (claimed.executionConfig) started.executionConfig = claimed.executionConfig

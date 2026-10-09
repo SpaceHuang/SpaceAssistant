@@ -747,6 +747,28 @@ describe('SqliteAgentHistory', () => {
     db.close()
   })
 
+  it('persists deferred approval as a non-executed, identity-bound terminal proposal and reopens it', async () => {
+    const temp = createTempDatabase('deferred-approval-history-')
+    const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, () => 100, 'deferred-history-session')
+    const invocationId = 'deferred-history-invocation'
+    const chain: HistoryEvent[] = [
+      { ...event('deferred-response', 1), invocationId, kind: 'model-response-committed', payload: { message: { role: 'assistant', toolCalls: [{ id: 'call-deferred', name: 'write_file', input: { path: 'x' } }] } } },
+      { ...event('deferred-wait', 2), invocationId, kind: 'approval-waiting', payload: { toolCallId: 'call-deferred', approvalId: 'approval-deferred', answerer: 'agent', reasonCode: 'policy', requestedAt: 10 } },
+      { ...event('deferred-settled', 3), invocationId, kind: 'approval-deferred', payload: { toolCallId: 'call-deferred', approvalId: 'approval-deferred', todoId: 'todo-deferred', invocationId, checkpointId: 'checkpoint-deferred', workflowRevision: 2 } },
+      { ...event('deferred-terminal', 4), invocationId, kind: 'invocation-completed', payload: { status: 'completed' } }
+    ]
+    await history.appendBatch(chain, 0)
+    temp.db.close()
+
+    const reopened = openDatabase(temp.dbPath)
+    expect(await new SqliteAgentHistory(getDbConnection(reopened), 1, () => 101, 'deferred-history-session').read(invocationId))
+      .toMatchObject({ events: [{ kind: 'model-response-committed' }, { kind: 'approval-waiting' }, { kind: 'approval-deferred', payload: { todoId: 'todo-deferred', checkpointId: 'checkpoint-deferred' } }, { kind: 'invocation-completed' }] })
+    expect(new SqliteAgentHistory(getDbConnection(reopened), 1, () => 101, 'deferred-history-session')
+      .readCompletedToolCallsForSession(invocationId, 'deferred-history-session', 'turn-1')).toBeUndefined()
+    reopened.close()
+    temp.cleanup()
+  })
+
   it('atomically mirrors stable-ID assistant bodies present in a new provider base context', async () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)

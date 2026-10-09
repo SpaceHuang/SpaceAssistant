@@ -408,7 +408,7 @@ export function pickToolLoopReturnUsage(
 }
 
 export type RunToolChatSessionResult =
-  | { ok: true; content: unknown[]; stopReason: string; usage?: ToolLoopUsage; finalSurfaceSnapshot?: ReturnType<typeof buildRequestHeaderPayload>['surfaceSnapshot']; finalSurfaceMessages?: ClaudeContentBlockMessage[] }
+  | { ok: true; content: unknown[]; stopReason: string; usage?: ToolLoopUsage; parked?: true; parkedTodoId?: string; finalSurfaceSnapshot?: ReturnType<typeof buildRequestHeaderPayload>['surfaceSnapshot']; finalSurfaceMessages?: ClaudeContentBlockMessage[] }
   | { ok: false; error: string; usage?: ToolLoopUsage; cancelled?: boolean }
 
 /** 本回合的用量统计计数（runToolChatSession 作用域内创建、随回合结束丢弃，不引入跨模块累加器 —— 需求 §7.3.1）。 */

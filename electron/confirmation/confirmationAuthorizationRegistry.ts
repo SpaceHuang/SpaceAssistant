@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'crypto'
 
 export interface MemoryWritePermitSubject {
+  channel?: 'feishu' | 'wechat'
   invocationId: string
   requestId: string
   toolUseId: string
@@ -119,7 +120,28 @@ export class ConfirmationAuthorizationRegistry {
     if (current?.nonce === recovery.nonce) this.recoveries.delete(recovery.permitId)
   }
 
+  /** 撤销指定 IM 渠道尚未消费的写许可及消费后仍可恢复的许可。 */
+  revokeByChannel(channel: 'feishu' | 'wechat'): number {
+    let revoked = 0
+    for (const [permitId, record] of this.permits) {
+      if (record.permit.subject.channel === channel) {
+        this.permits.delete(permitId)
+        revoked += 1
+      }
+    }
+    for (const [permitId, record] of this.recoveries) {
+      if (record.permit.subject.channel === channel) {
+        this.recoveries.delete(permitId)
+        revoked += 1
+      }
+    }
+    return revoked
+  }
+
   size(): number {
     return this.permits.size
   }
 }
+
+/** 由共享撤销协调器使用的进程级 permit 注册表。 */
+export const confirmationAuthorizationRegistry = new ConfirmationAuthorizationRegistry()

@@ -88,6 +88,7 @@ export function mergeFeishuConfig(
 
 export interface FeishuInboundMessage {
   messageId: string
+  replyToMessageId?: string
   chatId: string
   chatType: 'p2p' | 'group' | string
   senderOpenId: string

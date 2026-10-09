@@ -42,9 +42,11 @@ export async function runWeChatRemoteAgent(ctx: {
   getShellConfig?: () => ShellConfig
   remoteContext: WeChatRemoteContext
   emitFactEvent?: (event: AssistantFactEvent) => void
+  confirmationAdapter?: NonNullable<Parameters<typeof runImRemoteAgent>[0]['confirmationAdapter']>
+  taskControlSafetyPort?: Parameters<typeof runImRemoteAgent>[0]['taskControlSafetyPort']
   inboundRaw: IncomingMessage
   userId: string
-}): Promise<{ summary: string; pendingConfirm: boolean; ok: boolean }> {
+}): Promise<{ summary: string; pendingConfirm: boolean; ok: boolean; parked?: true }> {
   logWeChatCliEvent('info', 'wechat.agent.remote.start', {
     sessionId: ctx.sessionId,
     messageId: ctx.replyMessageId,
@@ -118,5 +120,7 @@ export async function runWeChatRemoteAgent(ctx: {
       logWeChatCliEvent('error', 'wechat.agent.remote.error', { sessionId: ctx.sessionId, error })
     }
     ,emitFactEvent: ctx.emitFactEvent
+    ,confirmationAdapter: ctx.confirmationAdapter
+    ,taskControlSafetyPort: ctx.taskControlSafetyPort
   })
 }

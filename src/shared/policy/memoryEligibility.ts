@@ -22,6 +22,10 @@ export function deriveMemoryEligibility(
     reasons.push('non-human-answerer')
     return { eligibility: 'none', reasons }
   }
+  if (facts.actionClass === 'outbound' && (lane === 'wechat' || lane === 'feishu')) {
+    reasons.push('outbound-never-remembered')
+    return { eligibility: 'none', reasons }
+  }
   if (facts.signals.some((signal) => signal.kind === 'script-network' || signal.kind === 'script-uncertified')) {
     reasons.push('script-network-or-uncertified')
     return { eligibility: 'none', reasons }

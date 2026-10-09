@@ -65,7 +65,7 @@ export function createTurnCoordinatorStorage(db: AppDatabase): TurnStorage {
       ...(acceptance ? { acceptance } : {})
     })
   },
-    claimQueuedAtomic: (input) => claimQueuedTurnAtomically(db, input),
+  claimQueuedAtomic: (input) => claimQueuedTurnAtomically(db, input),
     update: (messageId, patch) => updateMessageContent(db, messageId, patch),
     updateIfStreaming: (messageId, patch) => updateMessageContentIfStreaming(db, messageId, patch),
     checkpoint: (turnId, version, message) => checkpointTurnAtomically(db, turnId, version, message.id, message),

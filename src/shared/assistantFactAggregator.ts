@@ -1,4 +1,5 @@
 import type { ChatImageAttachment, Message, ToolCallRecord } from './domainTypes'
+import type { QueueScope } from './queueScope'
 import { appendProgressOutputRaw } from './terminalScrollback'
 
 export type TurnOutcome = 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'recovered' | 'commit-uncertain'
@@ -58,7 +59,7 @@ export type TurnExecutionConfig = {
 
 export type TurnIntent =
   | { mode: 'create-user'; requestId: string; sessionId: string; input: { text: string; attachments?: ChatImageAttachment[] }; excludeMessageIds?: string[]; continuationIntent?: { kind: 'exact-continue' | 'follow-up'; requestId?: string; payloadSha256?: string; rawText?: string; route?: string; sourceInvocationId?: string; sourceTurnId?: string; sourceSequence?: number }; continuationAcceptance?: { payloadSha256: string; rawText: string; kind: 'exact-continue' | 'follow-up'; route: string; sourceInvocationId?: string; sourceTurnId?: string; sourceSequence?: number }; retryOfMessageId?: string; retryOfInvocationId?: string; config: TurnExecutionConfig }
-  | { mode: 'reuse-user'; requestId: string; sessionId: string; userMessageId: string; excludeMessageIds: string[]; config: TurnExecutionConfig }
+  | { mode: 'reuse-user'; requestId: string; sessionId: string; userMessageId: string; excludeMessageIds: string[]; config: TurnExecutionConfig; queueScope?: QueueScope }
 
 export type TurnTerminal = {
   turnId: string; requestId: string; sessionId: string; assistantMessageId: string; version: number

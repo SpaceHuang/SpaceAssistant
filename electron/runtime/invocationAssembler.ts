@@ -57,6 +57,7 @@ import { sessionDisplayNameRaw } from '../../src/shared/sessionDisplay'
 import { buildSessionDirectoryContextBlock, normalizeDirectoryGrantPath, type SessionDirectoryGrantRecord } from '../../src/shared/sessionDirectoryGrant'
 import { listValidSessionDirectoryGrantsSync } from '../sessionDirectoryGrants'
 import { channelFor, type ResolveConfirmChannelArgs } from '../confirmation/channels'
+import { isRemoteAsyncApprovalGateEnabled } from '../confirmation/remoteAsyncApprovalGate'
 import { AgentChannel } from '../confirmation/agentChannel'
 import { toolIdToOpenAiCompatibleApiToolName } from '../../src/shared/anthropicToolSanitize'
 import { normalizeExternalToolName } from '../../src/shared/toolNameCompatibility'
@@ -79,6 +80,7 @@ import { buildConfirmationDiff } from '../confirmation/confirmDiff'
 import { extractHostname } from '../browser/urlSecurity'
 import { rememberBrowserSessionActTrust, rememberBrowserSessionTrustedUrl } from '../browser/browserSessionTrust'
 import { computeDiffLineStats } from '../../src/shared/writeDiffStats'
+import { getBundledImTaskOrchestrationSkill, IM_TASK_ORCHESTRATION_SKILL_NAME } from '../skills/bundled/imTaskOrchestrationSkill'
 
 /**
  * Runtime 唯一装配点（roadmap「Runtime 是唯一装配点」在主进程的落位）。
@@ -147,6 +149,8 @@ export interface AgentInvocationMaterials {
   locale?: import('../../src/shared/domainTypes').AppLocale
   projectMemoryEnabled?: boolean
   skillFragments?: string[]
+  /** Test composition hook for IM-only orchestration capabilities; production adapters are added by the ordered tool tasks. */
+  imOrchestrationToolRegistry?: import('../tools/plannedToolRegistry').TypedToolRegistry
   currentUserMessageId?: string
   historyFacts?: readonly unknown[]
   assistantMessageId?: string
@@ -184,6 +188,16 @@ function scriptContentMemoryKey(value: unknown): CacheKey | undefined {
     typeof candidate.workdirDigest === 'string' && /^[a-f0-9]{64}$/.test(candidate.workdirDigest)
     ? candidate as Extract<CacheKey, { kind: 'script-content' }>
     : undefined
+}
+
+function mergeImOrchestrationFixtureRegistry(
+  base: import('../tools/plannedToolRegistry').TypedToolRegistry,
+  fixture: import('../tools/plannedToolRegistry').TypedToolRegistry
+): import('../tools/plannedToolRegistry').TypedToolRegistry {
+  const merged = new TypedToolRegistry()
+  for (const tool of base.entries()) merged.register(tool)
+  for (const tool of fixture.entries()) merged.register(tool)
+  return merged
 }
 
 /** R1：会话工作目录单一事实源——装配期解析快照，调用边界经 refresh() 跟随绑定变更。 */
@@ -302,6 +316,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       policy: ReturnType<typeof createAgentSdkSafetyPolicy>
       confirmation: ReturnType<typeof createAgentSdkConfirmationPort>
       host: ReturnType<typeof createHostedAgentTurnHost>
+      executeDeferred(call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }>, confirmationReceipt: string): Promise<unknown>
       dispose(): Promise<void>
     }
   }
@@ -399,6 +414,13 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   }
   const reasoning = { effort: reasoningEffort, ...(reasoningDegraded ? { degraded: reasoningDegraded } : {}) }
 
+  const isImLane = materialsLane === 'feishu' || materialsLane === 'wechat'
+  const orchestrationSkill = isImLane ? getBundledImTaskOrchestrationSkill() : undefined
+  const invocationSkillFragments = [
+    ...(materials.skillFragments ?? []).filter((fragment) => !fragment.includes(`Skill: ${IM_TASK_ORCHESTRATION_SKILL_NAME} `)),
+    ...(orchestrationSkill ? [`--- Skill: ${orchestrationSkill.meta.name} (v${orchestrationSkill.meta.version}) ---\n${orchestrationSkill.content}`] : [])
+  ]
+
   const invocation: AgentInvocation = {
     ...(materials.acceptedTurn ? { acceptedTurn: materials.acceptedTurn } : {}),
     session: { sessionId: materials.sessionId },
@@ -418,7 +440,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       ...(materials.options !== undefined ? { options: materials.options } : {}),
       ...(resolvedLocale !== undefined ? { locale: resolvedLocale } : {}),
       ...(materials.projectMemoryEnabled !== undefined ? { projectMemoryEnabled: materials.projectMemoryEnabled } : {}),
-      ...(materials.skillFragments !== undefined ? { skillFragments: materials.skillFragments } : {}),
+      ...(invocationSkillFragments.length > 0 ? { skillFragments: invocationSkillFragments } : {}),
       tools: {
         toolsConfig: materials.toolsConfig,
         ...(materials.browserConfig !== undefined ? { browserConfig: materials.browserConfig } : {}),
@@ -1010,6 +1032,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         toolUseId: call.toolCallId,
         audit: getSecurityAuditLog(),
         answererPolicy: { kind: confirmation.answerer },
+        remoteAsyncApprovalEnabled: (materialsLane === 'feishu' || materialsLane === 'wechat') && isRemoteAsyncApprovalGateEnabled(db),
         agentChannelFactory: agentChannelFactory ?? hostedAgentChannelFactory,
         ...(materials.remoteContext?.imChannel ? {
           imChannel: materials.remoteContext.imChannel,
@@ -1069,7 +1092,10 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       const runtime = getDefaultAgentRuntime()
       const history = input.hostHistory ?? ports.history
       if (!history) throw new Error('HOSTED_HISTORY_REQUIRED')
-      const toolRegistry = input.registry ?? runtime.builtinRegistry as unknown as import('../tools/plannedToolRegistry').TypedToolRegistry
+      const baseToolRegistry = input.registry ?? runtime.builtinRegistry as unknown as import('../tools/plannedToolRegistry').TypedToolRegistry
+      const toolRegistry = isImLane && materials.imOrchestrationToolRegistry
+        ? mergeImOrchestrationFixtureRegistry(baseToolRegistry, materials.imOrchestrationToolRegistry)
+        : baseToolRegistry
       const capabilities = new CapabilityRegistry()
       const safetyGate = new SafetyGate({ capabilities, permitStore: runtime.safetyPermits, policy: input.policy })
       const toolCallStepIds = new Map<string, string>()
@@ -1290,7 +1316,32 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         }) } : {}),
         resolveRegisteredToolName: resolveToolName
       })
-      return { registeredTools, policy, confirmation, host, dispose: async () => { await manager?.shutdown() } }
+      const executeDeferred = async (call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown> }>, confirmationReceipt: string) => {
+        const capability = resolveToolName(call.toolName)
+        if (!registry.get(capability) || !input.authorizedToolNames.has(capability)) throw new Error('DEFERRED_TOOL_NOT_AUTHORIZED')
+        const capabilities = new CapabilityRegistry()
+        capabilities.define(call.invocationId, [capability])
+        const safetyGate = new SafetyGate({ capabilities, permitStore: runtime.safetyPermits, policy })
+        const resourceKeys = registeredTools.toolResourceKeys(call) ?? [`unknown:${call.invocationId}:${call.toolCallId}`]
+        const resourceLease = await (materials.resourceLocks ?? runtime.resourceLocks).acquire(resourceKeys)
+        try {
+          return await registeredTools.executeDeferred(call, {
+            confirmationReceipt,
+            authorize: async (initial, recheck) => {
+              const initialDecision = await safetyGate.evaluate(initial)
+              if (initialDecision.kind === 'ask') policy.markConfirmed(call, 'user')
+              else if (initialDecision.kind !== 'allow') return { kind: 'deny', reasonCode: initialDecision.reasonCode }
+              const authorization = await safetyGate.authorize(recheck)
+              return authorization.kind === 'allow'
+                ? authorization
+                : { kind: 'deny', reasonCode: authorization.kind === 'deny' ? authorization.reasonCode : 'POLICY_DENY' }
+            }
+          })
+        } finally {
+          resourceLease.release()
+        }
+      }
+      return { registeredTools, policy, confirmation, host, executeDeferred, dispose: async () => { await manager?.shutdown() } }
     }
   }
 

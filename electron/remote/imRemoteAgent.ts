@@ -37,6 +37,11 @@ import { buildRemoteProgressHookContext } from './buildRemoteProgressContext'
 import { onRemoteTextSegmentClosed } from './remoteProgressHooks'
 import type { AcceptedTurn } from '../../src/shared/acceptedTurn'
 import type { SessionStorage } from '../sessionStorage/contracts'
+import { createImOrchestrationToolRegistry } from './imOrchestrationTools'
+import { ensureImTurnTaskControl } from '../database/taskControl'
+import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
+import { createDeferredTodoTaskControlSafetyPort } from './deferredTodoTaskControlAdapter'
+import type { ImTaskSafetyPort } from './imTaskControlCoordinator'
 
 export function extractTextFromContent(content: unknown[]): string {
   let s = ''
@@ -49,7 +54,7 @@ export function extractTextFromContent(content: unknown[]): string {
   return s.trim()
 }
 
-export type ImRemoteAgentResult = { summary: string; pendingConfirm: boolean; ok: boolean; outcome?: 'cancelled' | 'timed-out' }
+export type ImRemoteAgentResult = { summary: string; pendingConfirm: boolean; ok: boolean; parked?: true; outcome?: 'cancelled' | 'timed-out' }
 
 export async function runImRemoteAgent(args: {
   /** B1(偏差 23):准入门注入(测试);缺省全局默认门。 */
@@ -86,6 +91,8 @@ export async function runImRemoteAgent(args: {
   logDone?: (result: ImRemoteAgentResult & { error?: string }) => void
   logError?: (error: string) => void
   emitFactEvent?: (event: AssistantFactEvent) => void
+  confirmationAdapter?: NonNullable<Parameters<typeof createHostedTurnHandoff>[0]['confirmationAdapter']>
+  taskControlSafetyPort?: ImTaskSafetyPort
 }): Promise<ImRemoteAgentResult> {
   const requestId = args.requestId
   const injectedStorage = args.sessionStorage
@@ -182,17 +189,36 @@ export async function runImRemoteAgent(args: {
     })
     const trimmed = trimClaudeToolChatMessages(built, MAX_CHAT_API_MESSAGES)
     const currentUserMessageId = acceptedUserMessageId ?? [...rawMessages].reverse().find((message) => message.role === 'user')?.id
-    const { messages } = ensureToolResultPairing(trimmed, { requiredUserMessageId: currentUserMessageId })
+    const paired = ensureToolResultPairing(trimmed, { requiredUserMessageId: currentUserMessageId })
+    const deferredContinuation = args.remoteContext.deferredContinuation
+    const messages = deferredContinuation ? [...paired.messages,
+      { role: 'assistant' as const, content: '', toolCalls: [{ id: deferredContinuation.toolCallId, name: deferredContinuation.toolName, input: deferredContinuation.canonicalArgs }] },
+      { role: 'tool' as const, toolCallId: deferredContinuation.toolCallId,
+        content: JSON.stringify(deferredContinuation.result.value ?? deferredContinuation.result), isError: deferredContinuation.result.kind === 'failed' }
+    ] : paired.messages
+    const remoteContext = args.remoteContext
+    const currentUserMessage = currentUserMessageId ? rawMessages.find((message) => message.id === currentUserMessageId && message.role === 'user') : undefined
+    if ((remoteContext.source === 'feishu' || remoteContext.source === 'wechat') && remoteContext.authOwner && currentUserMessageId) {
+      const ensured = ensureImTurnTaskControl(args.db, {
+        sessionId: args.sessionId, ownerId: remoteContext.authOwner, requestId, userMessageId: currentUserMessageId
+      })
+      if (!ensured.ok) throw new Error('IM_TURN_TASK_IDENTITY_CONFLICT')
+      remoteContext.currentUserMessageId = currentUserMessageId
+      remoteContext.taskBinding = ensured.taskBinding
+    }
 
     const browserConfig = args.getBrowserConfig?.()
-    const appendix = args.buildSystemAppendix({
+    const baseAppendix = args.buildSystemAppendix({
       browserRemoteHint: resolveFeishuBrowserRemoteHint(
         browserConfig?.enabled,
         browserConfig?.allowRemoteSessions
       )
     })
+    const continuation = args.remoteContext.deferredContinuation
+    const appendix = continuation ? `${baseAppendix}\n\nDeferred action completion (already executed; do not repeat it):\n${JSON.stringify(continuation)}` : baseAppendix
 
     const routeModelName = args.getModel()
+    remoteContext.model = routeModelName
     let contextWindow: number | undefined
     let contextWindowTrusted = false
     try {
@@ -213,6 +239,7 @@ export async function runImRemoteAgent(args: {
       endpoint: baseUrl,
       credentialRef: `llm-service:${creds.serviceId || args.llmServiceId || 'default'}`
     }, getDefaultAgentRuntime().modelProviders)
+    remoteContext.providerRouteId = providerRouteId
     const remoteProgressContext = buildRemoteProgressHookContext(args.sessionId, readAppLocale(args.db))
 
     const { invocation, ports, agentSdk } = assembleInvocation({
@@ -255,7 +282,13 @@ export async function runImRemoteAgent(args: {
       sessionStorage: storage,
       historyForSession: (sessionId: string) => storage.execution.historyFor({ sessionId }),
       ...(sessionEventLocation ? { sessionEventLocation } : {}),
-      remoteContext: args.remoteContext,
+      remoteContext,
+      ...(currentUserMessage?.content ? { approvalTaskDigest: currentUserMessage.content } : {}),
+      ...(args.remoteContext.source === 'feishu' || args.remoteContext.source === 'wechat'
+        ? { imOrchestrationToolRegistry: createImOrchestrationToolRegistry(args.db, args.taskControlSafetyPort ?? createDeferredTodoTaskControlSafetyPort({
+            todoStore: createDeferredTodoStore(args.db), dispatchDeferred: async () => ({ dispatched: false })
+          })) }
+        : {}),
       onRemoteTextActivity: (text) => onRemoteTextSegmentClosed(remoteProgressContext, text),
       locale: readAppLocale(args.db),
       ...args.toolChatExtras
@@ -266,6 +299,7 @@ export async function runImRemoteAgent(args: {
       onHostedTurnHandoff: createHostedTurnHandoff({
         agentSdk, history: ports.history!, invocationId: args.acceptedTurn?.turnId ?? args.turnId ?? requestId, turnId: args.acceptedTurn?.turnId ?? args.turnId ?? requestId, acceptedTurn: args.acceptedTurn,
         sessionQueries: storage.queries, sessionExecution: storage.execution, routeId: providerRouteId, sessionId: args.sessionId, maxToolRounds: invocation.limits.maxToolRounds,
+        ...(args.confirmationAdapter ? { confirmationAdapter: args.confirmationAdapter } : {})
       })
     })
 
@@ -274,6 +308,13 @@ export async function runImRemoteAgent(args: {
       const pending = res.error.includes('确认')
       const result = { summary: res.error, pendingConfirm: pending, ok: false as const, ...(res.cancelled ? { outcome: 'cancelled' as const } : {}) }
       args.logDone?.({ ...result, error: res.error })
+      return result
+    }
+
+    if (res.parked) {
+      sessionEventReason = 'interrupted'
+      const result = { summary: '', pendingConfirm: true, ok: true as const, parked: true as const }
+      args.logDone?.(result)
       return result
     }
 

@@ -94,6 +94,10 @@ export function createRegisteredAgentTurnTools(input: {
   getPreparedCall(identity: Pick<TurnToolCall, 'invocationId' | 'toolCallId'>): TurnToolCall | undefined
   updateExecutionContext(call: TurnToolCall, update: (context: Record<string, unknown>) => void): void
   toolExecution: ReturnType<typeof createPermitBoundToolExecutionPort<TurnToolCall, TurnToolResult>>
+  executeDeferred(call: TurnToolCall, input: {
+    confirmationReceipt: string
+    authorize(initial: PermitBinding, recheck: PermitBinding): Promise<{ kind: 'allow'; permitId: string } | { kind: 'deny'; reasonCode?: string }>
+  }): Promise<TurnToolResult>
   toolResourceKeys(call: TurnToolCall): readonly string[] | undefined
   isApprovalCandidate(call: TurnToolCall): boolean
 } {
@@ -278,12 +282,31 @@ export function createRegisteredAgentTurnTools(input: {
     }
   }
 
+  const executeDeferred = async (call: TurnToolCall, request: {
+    confirmationReceipt: string
+    authorize(initial: PermitBinding, recheck: PermitBinding): Promise<{ kind: 'allow'; permitId: string } | { kind: 'deny'; reasonCode?: string }>
+  }): Promise<TurnToolResult> => {
+    if (!request.confirmationReceipt.trim()) throw new Error('DEFERRED_CONFIRMATION_RECEIPT_REQUIRED')
+    let initial: PermitBinding | undefined
+    try {
+      initial = await prepareTool(call, { kind: 'initial' })
+      const recheck = await prepareTool(call, { kind: 'recheck', confirmation: { receipt: request.confirmationReceipt } })
+      if (!sameRecheckSubject(initial, recheck)) throw new Error('DEFERRED_RECHECK_BINDING_CHANGED')
+      const authorization = await request.authorize(initial, recheck)
+      if (authorization.kind !== 'allow') throw new Error(`DEFERRED_SAFETY_RECHECK_DENIED:${authorization.reasonCode ?? 'POLICY_DENY'}`)
+      return await toolExecution.execute(call, authorization.permitId)
+    } finally {
+      discardPreparedTool(call)
+    }
+  }
+
   return {
     prepareTool,
     discardPreparedTool,
     getPreparedCall,
     updateExecutionContext,
     toolExecution,
+    executeDeferred,
     isApprovalCandidate: (call) => {
       const registeredName = input.resolveRegisteredToolName?.(call.toolName) ?? resolveRegisteredToolName(call.toolName, input.registry)
       const registered = input.registry.get(registeredName)
@@ -300,6 +323,14 @@ export function createRegisteredAgentTurnTools(input: {
       })
     }
   }
+}
+
+function sameRecheckSubject(initial: PermitBinding, recheck: PermitBinding): boolean {
+  return recheck.phase === 'recheck' && initial.requestId === recheck.requestId && initial.turnId === recheck.turnId &&
+    initial.invocationId === recheck.invocationId && initial.toolCallId === recheck.toolCallId &&
+    initial.capabilityId === recheck.capabilityId && initial.inputSnapshotHash === recheck.inputSnapshotHash &&
+    initial.planDigest === recheck.planDigest && initial.factsDigest === recheck.factsDigest &&
+    initial.authorizationVersion === recheck.authorizationVersion
 }
 
 function mapSafeExecutionResult(raw: unknown, call: TurnToolCall, workspaceRoot?: string): TurnToolResult {

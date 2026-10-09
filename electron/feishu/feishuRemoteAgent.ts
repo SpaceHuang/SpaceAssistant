@@ -41,7 +41,9 @@ export async function runFeishuRemoteAgent(ctx: {
   getShellConfig?: () => ShellConfig
   remoteContext: FeishuRemoteContext
   emitFactEvent?: (event: AssistantFactEvent) => void
-}): Promise<{ summary: string; pendingConfirm: boolean; ok: boolean }> {
+  confirmationAdapter?: NonNullable<Parameters<typeof runImRemoteAgent>[0]['confirmationAdapter']>
+  taskControlSafetyPort?: Parameters<typeof runImRemoteAgent>[0]['taskControlSafetyPort']
+}): Promise<{ summary: string; pendingConfirm: boolean; ok: boolean; parked?: true }> {
   logFeishuCliEvent('info', 'feishu.agent.remote.start', {
     sessionId: ctx.sessionId,
     requestId: ctx.requestId,
@@ -103,5 +105,7 @@ export async function runFeishuRemoteAgent(ctx: {
       logFeishuCliEvent('error', 'feishu.agent.remote.error', { error, sessionId: ctx.sessionId })
     }
     ,emitFactEvent: ctx.emitFactEvent
+    ,confirmationAdapter: ctx.confirmationAdapter
+    ,taskControlSafetyPort: ctx.taskControlSafetyPort
   })
 }

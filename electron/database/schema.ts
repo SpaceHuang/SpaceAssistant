@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 54
+export const DB_SCHEMA_VERSION = 82
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (
@@ -10,6 +10,268 @@ CREATE TABLE IF NOT EXISTS scope_versions (
 CREATE TABLE IF NOT EXISTS schema_meta (
   key TEXT PRIMARY KEY NOT NULL,
   value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS im_workflow_state (
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  workflow_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK(version > 0),
+  revision INTEGER NOT NULL CHECK(revision > 0),
+  data_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(session_id,workflow_id,version)
+);
+
+CREATE TABLE IF NOT EXISTS im_task_control (
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  owner_id TEXT NOT NULL,
+  workflow_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK(version > 0),
+  plan_revision INTEGER NOT NULL CHECK(plan_revision > 0),
+  revision INTEGER NOT NULL CHECK(revision > 0),
+  control_state TEXT NOT NULL DEFAULT 'active' CHECK(control_state IN ('active','cancel_pending','cancelled','revise_pending')),
+  data_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(session_id,owner_id,workflow_id,task_id,version)
+);
+
+CREATE TABLE IF NOT EXISTS im_task_control_operations (
+  operation_id TEXT PRIMARY KEY NOT NULL,
+  session_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  workflow_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  operation_type TEXT NOT NULL CHECK(operation_type IN ('cancel','revise')),
+  plan_revision INTEGER NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('requested','reconciliation_required','applied')),
+  payload_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS im_task_control_dispatches (
+  todo_id TEXT PRIMARY KEY NOT NULL,
+  session_id TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  workflow_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  plan_revision INTEGER NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('dispatching','dispatched')),
+  started_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS deferred_call_envelopes (
+  invocation_id TEXT PRIMARY KEY NOT NULL,
+  schema_version INTEGER NOT NULL CHECK(schema_version > 0),
+  canonicalization_version TEXT NOT NULL,
+  envelope_json TEXT NOT NULL,
+  integrity_hash TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS deferred_todos (
+  todo_id TEXT PRIMARY KEY NOT NULL,
+  invocation_id TEXT NOT NULL UNIQUE,
+  channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
+  identity_key TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  authorization_epoch INTEGER NOT NULL CHECK(authorization_epoch > 0),
+  rule_id TEXT NOT NULL,
+  facts_hash TEXT NOT NULL,
+  workflow_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  step_id TEXT NOT NULL,
+  plan_revision INTEGER NOT NULL CHECK(plan_revision > 0),
+  origin_session_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('pending','dispatching','consumed','invalidated','expired')),
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS deferred_resume_requests (
+  request_id TEXT PRIMARY KEY NOT NULL,
+  reason_key TEXT NOT NULL UNIQUE,
+  todo_id TEXT NOT NULL REFERENCES deferred_todos(todo_id) ON DELETE CASCADE,
+  invocation_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
+  identity_key TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  authorization_epoch INTEGER NOT NULL CHECK(authorization_epoch > 0),
+  rule_id TEXT NOT NULL,
+  facts_hash TEXT NOT NULL,
+  notification_version INTEGER NOT NULL CHECK(notification_version > 0),
+  message_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('pending','dispatching','completed','invalidated','outcome_unknown')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_deferred_resume_requests_session_state
+  ON deferred_resume_requests(session_id,state,created_at,request_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_deferred_resume_requests_notification_once
+  ON deferred_resume_requests(todo_id,notification_version)
+  WHERE state IN ('pending','dispatching','completed','outcome_unknown');
+
+CREATE TABLE IF NOT EXISTS deferred_approval_ingress_receipts (
+  channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
+  identity_key TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(channel,identity_key,message_id)
+);
+
+CREATE TABLE IF NOT EXISTS deferred_approval_code_counters (
+  channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
+  identity_key TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  last_code INTEGER NOT NULL CHECK(last_code BETWEEN 0 AND 99),
+  PRIMARY KEY(channel,identity_key,owner_id)
+);
+
+CREATE TABLE IF NOT EXISTS deferred_approval_closures (
+  channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
+  identity_key TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  authorization_epoch INTEGER NOT NULL CHECK(authorization_epoch > 0),
+  tombstone TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('closing','reconciliation_required','closed')),
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(channel,identity_key,owner_id,session_id)
+);
+
+CREATE TABLE IF NOT EXISTS remote_async_approval_gate_state (
+  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+  state TEXT NOT NULL CHECK(state IN ('disabled','enabled','closing')),
+  close_required INTEGER NOT NULL DEFAULT 0 CHECK(close_required IN (0,1)),
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS im_lifecycle_outbox (
+  event_id TEXT PRIMARY KEY NOT NULL,
+  session_id TEXT NOT NULL,
+  stage TEXT NOT NULL CHECK(stage IN ('accepted','plan-confirmation','deferred-wait','resumed','completed','failed')),
+  text TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('pending','delivered')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_im_lifecycle_outbox_pending
+  ON im_lifecycle_outbox(session_id,state,created_at,event_id);
+
+CREATE TABLE IF NOT EXISTS deferred_approval_notifications (
+  todo_id TEXT NOT NULL REFERENCES deferred_todos(todo_id) ON DELETE CASCADE,
+  notification_version INTEGER NOT NULL CHECK(notification_version > 0),
+  invocation_id TEXT NOT NULL,
+  channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
+  identity_key TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  authorization_epoch INTEGER NOT NULL CHECK(authorization_epoch > 0),
+  rule_id TEXT NOT NULL,
+  facts_hash TEXT NOT NULL,
+  short_code TEXT NOT NULL CHECK(short_code GLOB '[0-9][0-9]'),
+  trusted_message_id TEXT,
+  expires_at INTEGER NOT NULL,
+  dto_json TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('undelivered','delivered','superseded','invalidated')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY(todo_id,notification_version),
+  UNIQUE(channel,identity_key,owner_id,short_code)
+);
+
+CREATE INDEX IF NOT EXISTS idx_deferred_approval_notifications_retry
+  ON deferred_approval_notifications(channel,identity_key,owner_id,state,created_at,todo_id);
+
+CREATE INDEX IF NOT EXISTS idx_deferred_todos_scope_state_expiry
+  ON deferred_todos(channel,identity_key,owner_id,state,expires_at);
+CREATE INDEX IF NOT EXISTS idx_deferred_todos_task_state
+  ON deferred_todos(origin_session_id,workflow_id,task_id,plan_revision,state);
+
+CREATE TABLE IF NOT EXISTS deferred_todo_capacity_reservations (
+  reservation_id TEXT PRIMARY KEY NOT NULL,
+  invocation_id TEXT NOT NULL UNIQUE,
+  session_id TEXT NOT NULL,
+  identity_key TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('prepared','pending','released','expired')),
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_deferred_capacity_identity_state
+  ON deferred_todo_capacity_reservations(identity_key,state,expires_at);
+CREATE INDEX IF NOT EXISTS idx_deferred_capacity_session_state
+  ON deferred_todo_capacity_reservations(session_id,identity_key,state,expires_at);
+
+CREATE TABLE IF NOT EXISTS security_action_intents (
+  invocation_id TEXT PRIMARY KEY NOT NULL,
+  session_id TEXT NOT NULL,
+  workflow_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  step_id TEXT NOT NULL,
+  plan_revision INTEGER NOT NULL CHECK(plan_revision > 0),
+  envelope_invocation_id TEXT NOT NULL,
+  todo_id TEXT,
+  checkpoint_id TEXT,
+  checkpoint_workflow_revision INTEGER,
+  state TEXT NOT NULL CHECK(state IN ('prepared','todo_linked','checkpoint_committed','notified')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS security_action_intent_outbox (
+  outbox_id TEXT PRIMARY KEY NOT NULL,
+  invocation_id TEXT NOT NULL,
+  action TEXT NOT NULL CHECK(action IN ('link_todo','commit_checkpoint')),
+  state TEXT NOT NULL CHECK(state IN ('pending','applied','discarded')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(invocation_id,action)
+);
+
+CREATE TABLE IF NOT EXISTS deferred_execution_results (
+  todo_id TEXT PRIMARY KEY NOT NULL,
+  invocation_id TEXT NOT NULL UNIQUE,
+  dispatch_key TEXT NOT NULL UNIQUE,
+  state TEXT NOT NULL CHECK(state IN ('dispatching','completion_outboxed','delivered','outcome_unknown')),
+  result_json TEXT,
+  dispatch_started_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS deferred_completion_outbox (
+  outbox_id TEXT PRIMARY KEY NOT NULL,
+  todo_id TEXT NOT NULL UNIQUE,
+  invocation_id TEXT NOT NULL UNIQUE,
+  dispatch_key TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('pending','delivered')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS remote_authorization_epochs (
+  channel TEXT PRIMARY KEY NOT NULL CHECK(channel IN ('feishu','wechat')),
+  epoch INTEGER NOT NULL CHECK(epoch > 0),
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS remote_authorization_revocations (
+  channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
+  epoch INTEGER NOT NULL CHECK(epoch > 0),
+  reason TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('pending','completed')),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  session_id TEXT,
+  PRIMARY KEY(channel,epoch)
 );
 
 CREATE TABLE IF NOT EXISTS configs (
@@ -54,6 +316,14 @@ CREATE TABLE IF NOT EXISTS messages (
   schema_version INTEGER NOT NULL,
   timestamp INTEGER NOT NULL,
   sequence INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS im_inbox_message_context (
+  message_id TEXT PRIMARY KEY NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
+  platform_message_id TEXT NOT NULL,
+  context_token TEXT,
+  created_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS search_history (

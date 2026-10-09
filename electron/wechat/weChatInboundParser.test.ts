@@ -36,6 +36,19 @@ describe('weChatInboundParser', () => {
     expect(r.userMessage).toBe('list files')
   })
 
+  it('does not infer a trusted quote message id from the SDK quote text', () => {
+    const msg = parseSdkInboundMessage(makeMsg({ quotedMessage: { text: '批准 07' } }))
+    expect(msg.quotedMessageId).toBeUndefined()
+  })
+
+  it('retains an explicit quoted wire message id when the protocol supplies one', () => {
+    const raw = makeMsg({ raw: {
+      ...makeMsg().raw,
+      item_list: [{ type: 1, ref_msg: { message_id: 'approval-notice-1', message_item: { type: 1, text_item: { text: '审批通知' } } } }]
+    } as IncomingMessage['raw'] })
+    expect(parseSdkInboundMessage(raw).quotedMessageId).toBe('approval-notice-1')
+  })
+
   it('rejects empty text', () => {
     const msg = parseSdkInboundMessage(makeMsg({ text: '   ' }))
     expect(shouldAcceptWeChatInbound(msg, DEFAULT_WECHAT_CONFIG).accept).toBe(false)

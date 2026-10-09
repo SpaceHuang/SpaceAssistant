@@ -82,6 +82,21 @@ function createHostedTurnHandoff(input: HostedTurnHandoffFixtureInput) {
 describe('createHostedTurnHandoff', () => {
   beforeEach(() => { mockRunHostedAgentTurn.mockReset(); mockLogAgentEvent.mockReset() })
 
+  it('accepts an SDK parked terminal as an explicit deferred waiting result', async () => {
+    const events: Array<{ kind: string; payload?: unknown }> = []
+    const history = { read: async () => ({ events }) }
+    mockRunHostedAgentTurn.mockImplementationOnce(async ({ invocationId, turnId }: { invocationId: string; turnId: string }) => {
+      events.push({ kind: 'invocation-parked', payload: { status: 'parked', reason: 'deferred-approval', todoId: 'todo-parked' } })
+      return { text: '', finishReason: 'end_turn', usage: { inputTokens: 1, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+        messages: [{ role: 'user', content: 'run this after approval' }], modelTurns: 1, invocationId, turnId }
+    })
+    const handoff = createHostedTurnHandoff({ agentSdk: { createHostedTurnRuntime: () => ({ host: {}, dispose: async () => undefined }) },
+      history: history as never, invocationId: 'parked-invocation', turnId: 'parked-turn', routeId: 'route', sessionId: 'parked-session' })
+    const result = await handoff({ request: { messages: [{ role: 'user', content: 'run this after approval' }] } })
+    expect(result.result).toMatchObject({ ok: true, stopReason: 'parked', parked: true, parkedTodoId: 'todo-parked' })
+    expect(result.finalization.outcome).toBe('interrupted')
+  })
+
   it('rejects a Hosted current user message that conflicts with the AcceptedTurn identity before provider dispatch', async () => {
     const createHostedTurnRuntime = vi.fn(() => ({ host: {}, dispose: async () => undefined }))
     const acceptedTurn = {

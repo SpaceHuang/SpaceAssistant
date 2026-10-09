@@ -28,6 +28,7 @@ import { isMessageEligibleForChatApi } from '../../src/shared/chatMessageQueue'
 import { migrateBuiltinModelName } from '../../src/shared/llmModelConfig'
 import { isThinkingEffort } from '../../src/shared/thinkingEffort'
 import { queueInputFingerprint } from '../queueInputFingerprint'
+import { parseQueueScope, serializeQueueScope, type QueueScope } from '../../src/shared/queueScope'
 import { collectSourceTruthSpillLocators } from '../storage/spillProtocol'
 import { deleteSpillReferenceOwnerInTransaction, spillHistoryOwnerKey, spillTranscriptOwnerKey } from '../storage/spillReferenceIndex'
 import { appendSqliteAgentHistoryBatchInTransaction } from './agentHistoryStorage'
@@ -546,11 +547,11 @@ export function getMessages(db: AppDatabase, sessionId: string, limit = 500, off
   const rows = conn
     .prepare(
       `SELECT * FROM messages
-       WHERE session_id = ?
+       WHERE session_id = ? AND queue_scope = ?
        ORDER BY sequence ASC
        LIMIT ? OFFSET ?`
     )
-    .all(sessionId, limit, offset) as MessageRow[]
+    .all(sessionId, serializeQueueScope({ kind: 'desktop' }), limit, offset) as MessageRow[]
   return rows.map(rowToStoredMessage)
 }
 
@@ -558,7 +559,8 @@ export function getMessages(db: AppDatabase, sessionId: string, limit = 500, off
 export function getMessageSkeletons(db: AppDatabase, sessionId: string): StoredMessageSkeleton[] {
   const rows = getDbConnection(db).prepare(`SELECT id, session_id, role, '' AS content, tool_use, tool_calls, thinking,
     content_segments, skill_hints, attachments, images_delivered_to_api, status, schema_version, timestamp, sequence
-    FROM messages WHERE session_id=? ORDER BY sequence ASC`).all(sessionId) as MessageRow[]
+    FROM messages WHERE session_id=? AND queue_scope=? ORDER BY sequence ASC`)
+    .all(sessionId, serializeQueueScope({ kind: 'desktop' })) as MessageRow[]
   return rows.map((row) => withoutMessageBody(rowToStoredMessage(row)))
 }
 
@@ -826,32 +828,64 @@ export function getMessageSkeleton(db: AppDatabase, messageId: string): StoredMe
 
 export type QueueInputReceipt = {
   sessionId: string; requestId: string; fingerprint: string; queuedMessageId?: string; turnId?: string; state: string
+  queueScope?: QueueScope
+}
+
+const DESKTOP_QUEUE_SCOPE: QueueScope = { kind: 'desktop' }
+
+export function getQueueInputReceiptInScope(
+  db: AppDatabase, sessionId: string, requestId: string, queueScope: QueueScope
+): QueueInputReceipt | undefined {
+  const row = getDbConnection(db).prepare(`SELECT session_id AS sessionId, request_id AS requestId, fingerprint,
+    queued_message_id AS queuedMessageId, turn_id AS turnId, state, queue_scope AS serializedQueueScope
+    FROM queue_input_requests WHERE session_id=? AND request_id=? AND queue_scope=?`)
+    .get(sessionId, requestId, serializeQueueScope(queueScope)) as (Omit<QueueInputReceipt, 'queueScope'> & { serializedQueueScope: string }) | undefined
+  return row ? { ...row, queueScope: parseQueueScope(row.serializedQueueScope) } : undefined
 }
 
 export function getQueueInputReceipt(db: AppDatabase, sessionId: string, requestId: string): QueueInputReceipt | undefined {
-  return getDbConnection(db).prepare('SELECT session_id AS sessionId, request_id AS requestId, fingerprint, queued_message_id AS queuedMessageId, turn_id AS turnId, state FROM queue_input_requests WHERE session_id = ? AND request_id = ?').get(sessionId, requestId) as QueueInputReceipt | undefined
+  return desktopQueueCompatibility.getReceipt(db, sessionId, requestId)
+}
+
+export function createQueueInputReceiptInScope(
+  db: AppDatabase, receipt: QueueInputReceipt, queueScope: QueueScope
+): QueueInputReceipt {
+  const now = Date.now()
+  getDbConnection(db).prepare(`INSERT INTO queue_input_requests
+    (session_id,request_id,fingerprint,queued_message_id,turn_id,state,created_at,updated_at,queue_scope)
+    VALUES (?,?,?,?,?,?,?,?,?)`).run(receipt.sessionId, receipt.requestId, receipt.fingerprint,
+      receipt.queuedMessageId ?? null, receipt.turnId ?? null, receipt.state, now, now, serializeQueueScope(queueScope))
+  db.save()
+  return { ...receipt, queueScope }
 }
 
 export function createQueueInputReceipt(db: AppDatabase, receipt: QueueInputReceipt): QueueInputReceipt {
-  const now = Date.now()
-  getDbConnection(db).prepare('INSERT INTO queue_input_requests (session_id, request_id, fingerprint, queued_message_id, turn_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(receipt.sessionId, receipt.requestId, receipt.fingerprint, receipt.queuedMessageId ?? null, receipt.turnId ?? null, receipt.state, now, now)
-  db.save()
-  return receipt
+  return desktopQueueCompatibility.createReceipt(db, receipt)
 }
 
-export function updateQueueInputReceiptState(db: AppDatabase, sessionId: string, requestId: string, state: string): boolean {
-  const result = getDbConnection(db).prepare('UPDATE queue_input_requests SET state = ?, updated_at = ? WHERE session_id = ? AND request_id = ?').run(state, Date.now(), sessionId, requestId)
+export function updateQueueInputReceiptStateInScope(
+  db: AppDatabase, sessionId: string, requestId: string, state: string, queueScope: QueueScope
+): boolean {
+  const result = getDbConnection(db).prepare(`UPDATE queue_input_requests SET state=?,updated_at=?
+    WHERE session_id=? AND request_id=? AND queue_scope=?`)
+    .run(state, Date.now(), sessionId, requestId, serializeQueueScope(queueScope))
   const changed = changesToNumber(result.changes) === 1
   if (changed) db.save()
   return changed
 }
 
-export function enqueueQueuedUserMessage(
+export function updateQueueInputReceiptState(db: AppDatabase, sessionId: string, requestId: string, state: string): boolean {
+  return desktopQueueCompatibility.updateReceiptState(db, sessionId, requestId, state)
+}
+
+export function enqueueQueuedUserMessageInScope(
   db: AppDatabase,
-  input: { sessionId: string; requestId: string; content: string; attachments?: Message['attachments'] }
+  input: { sessionId: string; requestId: string; content: string; attachments?: Message['attachments']; queueScope: QueueScope }
 ): { receipt: QueueInputReceipt; persisted: PersistedMessageEntry; duplicate: boolean } {
   const fingerprint = queueInputFingerprint({ text: input.content, attachments: input.attachments })
-  const existing = getQueueInputReceipt(db, input.sessionId, input.requestId)
+  const queueScope = input.queueScope
+  const serializedScope = serializeQueueScope(queueScope)
+  const existing = getQueueInputReceiptInScope(db, input.sessionId, input.requestId, queueScope)
   if (existing) {
     if (existing.fingerprint !== fingerprint) throw new Error('QUEUE_REQUEST_FINGERPRINT_MISMATCH')
     const message = existing.queuedMessageId ? getMessage(db, existing.queuedMessageId) : undefined
@@ -865,22 +899,33 @@ export function enqueueQueuedUserMessage(
   const conn = getDbConnection(db)
   return runInTransaction(conn, () => {
     const persisted = appendMessage(db, { id, sessionId: input.sessionId, role: 'user', content: input.content.trim(), attachments: input.attachments, timestamp: now, status: 'queued' })
-    const receipt: QueueInputReceipt = { sessionId: input.sessionId, requestId: input.requestId, fingerprint, queuedMessageId: id, state: 'queued' }
-    createQueueInputReceipt(db, receipt)
+    conn.prepare('UPDATE messages SET queue_scope=? WHERE id=?').run(serializedScope, id)
+    const receipt: QueueInputReceipt = { sessionId: input.sessionId, requestId: input.requestId, fingerprint, queuedMessageId: id, state: 'queued', queueScope }
+    createQueueInputReceiptInScope(db, receipt, queueScope)
     return { receipt, persisted, duplicate: false }
   })
 }
 
-export function claimQueuedTurnAtomically(
+export function enqueueQueuedUserMessage(
   db: AppDatabase,
-  input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig }
+  input: { sessionId: string; requestId: string; content: string; attachments?: Message['attachments'] }
+): { receipt: QueueInputReceipt; persisted: PersistedMessageEntry; duplicate: boolean } {
+  return desktopQueueCompatibility.enqueue(db, input)
+}
+
+export function claimQueuedTurnAtomicallyInScope(
+  db: AppDatabase,
+  input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; queueScope: QueueScope }
 ): { user: PersistedMessageEntry; assistant: PersistedMessageEntry; executionConfig?: TurnExecutionConfig } {
   const conn = getDbConnection(db)
+  const serializedScope = serializeQueueScope(input.queueScope)
   return runInTransaction(conn, () => {
     const active = conn.prepare("SELECT 1 FROM turns WHERE session_id = ? AND state IN ('configuring', 'prepared', 'executing', 'waiting-confirm') LIMIT 1").get(input.sessionId)
     if (active) throw new Error('SESSION_TURN_BUSY')
     const boundary = (conn.prepare('SELECT MAX(sequence) AS sequence FROM messages WHERE session_id = ?').get(input.sessionId) as { sequence?: number | null }).sequence ?? -1
-    const row = conn.prepare("SELECT * FROM messages WHERE id = ? AND session_id = ? AND role = 'user' AND status = 'queued'").get(input.userMessageId, input.sessionId) as MessageRow | undefined
+    const claimableStatus = input.queueScope.kind === 'im' ? "('queued','im-inbox-claimed')" : "('queued')"
+    const row = conn.prepare(`SELECT * FROM messages WHERE id = ? AND session_id = ? AND queue_scope = ? AND role = 'user' AND status IN ${claimableStatus}`)
+      .get(input.userMessageId, input.sessionId, serializedScope) as MessageRow | undefined
     if (!row) throw new Error('QUEUE_MESSAGE_NOT_CLAIMABLE')
     const userResult = updateMessageContent(db, input.userMessageId, { status: 'sent' })
     if (!userResult) throw new Error('QUEUE_MESSAGE_NOT_CLAIMABLE')
@@ -895,10 +940,18 @@ export function claimQueuedTurnAtomically(
     if (continuationIntent) conn.prepare("UPDATE continuation_intents SET status='accepted_turn',target_id=?,updated_at=? WHERE session_id=? AND request_id=? AND status='queued'")
       .run(input.turnId, Date.now(), input.sessionId, input.requestId)
     appendSessionInputHistoryInTransaction(conn, { requestId: input.requestId, turnId: input.turnId, sessionId: input.sessionId, user: userResult.message })
-    const receipt = conn.prepare('UPDATE queue_input_requests SET turn_id = ?, state = ?, updated_at = ? WHERE session_id = ? AND request_id = ? AND state = ?').run(input.turnId, 'claimed', Date.now(), input.sessionId, input.requestId, 'queued')
+    const receipt = conn.prepare('UPDATE queue_input_requests SET turn_id = ?, state = ?, updated_at = ? WHERE session_id = ? AND request_id = ? AND queue_scope = ? AND state = ?').run(input.turnId, 'claimed', Date.now(), input.sessionId, input.requestId, serializedScope, 'queued')
     if (changesToNumber(receipt.changes) !== 1) throw new Error('QUEUE_RECEIPT_NOT_CLAIMABLE')
     return { user: userResult, assistant, ...(executionConfig ? { executionConfig } : {}) }
   })
+}
+
+export function claimQueuedTurnAtomically(
+  db: AppDatabase,
+  input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig; queueScope?: QueueScope }
+): { user: PersistedMessageEntry; assistant: PersistedMessageEntry; executionConfig?: TurnExecutionConfig } {
+  if (input.queueScope) return claimQueuedTurnAtomicallyInScope(db, { ...input, queueScope: input.queueScope })
+  return desktopQueueCompatibility.claim(db, input)
 }
 
 export type PersistedTurn = {
@@ -1123,7 +1176,9 @@ export function recoverPersistedTurn(db: AppDatabase, turnId: string, assistantM
       Date.now(), turnId
     )
     if (changesToNumber(result.changes) !== 1) return false
-    conn.prepare("UPDATE queue_input_requests SET state = ?, updated_at = ? WHERE turn_id = ? AND state = 'claimed'").run(outcome, Date.now(), turnId)
+    conn.prepare(`UPDATE queue_input_requests SET state=?,updated_at=? WHERE turn_id=? AND state='claimed'
+      AND queue_scope=(SELECT messages.queue_scope FROM turns JOIN messages ON messages.id=turns.user_message_id WHERE turns.turn_id=?)`)
+      .run(outcome, Date.now(), turnId, turnId)
     return true
   })
 }
@@ -1192,11 +1247,11 @@ export function getMessagesPageWithSequence(
   const rows = conn
     .prepare(
       `SELECT * FROM messages
-       WHERE session_id = ? AND sequence >= ?
+       WHERE session_id = ? AND sequence >= ? AND queue_scope = ?
        ORDER BY sequence ASC
        LIMIT ?`
     )
-    .all(sessionId, fromSequence, pageSize) as MessageRow[]
+    .all(sessionId, fromSequence, serializeQueueScope({ kind: 'desktop' }), pageSize) as MessageRow[]
   return {
     rows: rows.map((row) => ({ message: rowToStoredMessage(row), sequence: row.sequence })),
     nextSequence: rows.length > 0 ? rows[rows.length - 1]!.sequence + 1 : fromSequence
@@ -1398,19 +1453,19 @@ export function getChatMessagePage(
       ? conn
           .prepare(
             `SELECT * FROM messages
-             WHERE session_id = ?
+             WHERE session_id = ? AND queue_scope = ?
              ORDER BY sequence DESC
              LIMIT ?`
           )
-          .all(sessionId, limit + 1)
+          .all(sessionId, serializeQueueScope({ kind: 'desktop' }), limit + 1)
       : conn
           .prepare(
             `SELECT * FROM messages
-             WHERE session_id = ? AND sequence < ?
+             WHERE session_id = ? AND sequence < ? AND queue_scope = ?
              ORDER BY sequence DESC
              LIMIT ?`
           )
-          .all(sessionId, beforeSequence, limit + 1)
+          .all(sessionId, beforeSequence, serializeQueueScope({ kind: 'desktop' }), limit + 1)
   ) as MessageRow[]
 
   const hasMoreBefore = rows.length > limit
@@ -1519,14 +1574,37 @@ export type QueuedMessageEntry = {
   requestId?: string
 }
 
-export function reorderQueuedUserMessages(
+export function listQueuedUserMessages(
   db: AppDatabase,
-  input: { sessionId: string; messageIds: string[] }
+  input: { sessionId: string; queueScope: QueueScope }
+): QueuedMessageEntry[] {
+  const conn = getDbConnection(db)
+  const scope = serializeQueueScope(input.queueScope)
+  const rows = conn.prepare(`SELECT messages.*,
+      (SELECT queue_input_requests.request_id FROM queue_input_requests WHERE queue_input_requests.queued_message_id=messages.id
+        AND queue_input_requests.queue_scope=messages.queue_scope ORDER BY queue_input_requests.created_at ASC LIMIT 1) AS queue_request_id
+    FROM messages
+    WHERE messages.session_id=? AND messages.queue_scope=? AND messages.status='queued' AND messages.role='user'
+    ORDER BY messages.sequence ASC, messages.id ASC`).all(input.sessionId, scope) as Array<MessageRow & { queue_request_id?: string }>
+  return rows.map((row) => ({
+    message: rowToStoredMessage(row), sequence: row.sequence,
+    ...(row.queue_request_id ? { requestId: row.queue_request_id } : {})
+  }))
+}
+
+export function getNextQueuedMessageInScope(db: AppDatabase, sessionId: string, queueScope: QueueScope): QueuedMessageEntry | null {
+  return listQueuedUserMessages(db, { sessionId, queueScope })[0] ?? null
+}
+
+export function reorderQueuedUserMessagesInScope(
+  db: AppDatabase,
+  input: { sessionId: string; messageIds: string[]; queueScope: QueueScope }
 ): { ok: true; entries: Array<{ message: Message; sequence: number }> } | { ok: false; error: 'queue_changed' } {
   const conn = getDbConnection(db)
+  const serializedScope = serializeQueueScope(input.queueScope)
   return runInTransaction(conn, () => {
-    const rows = conn.prepare("SELECT * FROM messages WHERE session_id = ? AND role = 'user' AND status = 'queued' ORDER BY sequence ASC")
-      .all(input.sessionId) as MessageRow[]
+    const rows = conn.prepare("SELECT * FROM messages WHERE session_id = ? AND queue_scope = ? AND role = 'user' AND status = 'queued' ORDER BY sequence ASC, id ASC")
+      .all(input.sessionId, serializedScope) as MessageRow[]
     const currentIds = rows.map((row) => row.id)
     if (input.messageIds.length !== currentIds.length || new Set(input.messageIds).size !== currentIds.length || input.messageIds.some((id) => !currentIds.includes(id))) {
       return { ok: false, error: 'queue_changed' }
@@ -1536,10 +1614,10 @@ export function reorderQueuedUserMessages(
     }
 
     const maxSequence = (conn.prepare('SELECT COALESCE(MAX(sequence), -1) AS sequence FROM messages WHERE session_id = ?').get(input.sessionId) as { sequence: number }).sequence
-    const updateSequence = conn.prepare('UPDATE messages SET sequence = ? WHERE id = ? AND session_id = ? AND status = \'queued\'')
-    rows.forEach((row, index) => updateSequence.run(maxSequence + index + 1, row.id, input.sessionId))
+    const updateSequence = conn.prepare("UPDATE messages SET sequence = ? WHERE id = ? AND session_id = ? AND queue_scope = ? AND status = 'queued'")
+    rows.forEach((row, index) => updateSequence.run(maxSequence + index + 1, row.id, input.sessionId, serializedScope))
     const sequenceById = new Map(rows.map((row, index) => [input.messageIds[index]!, row.sequence]))
-    for (const [messageId, sequence] of sequenceById) updateSequence.run(sequence, messageId, input.sessionId)
+    for (const [messageId, sequence] of sequenceById) updateSequence.run(sequence, messageId, input.sessionId, serializedScope)
 
     const entries = input.messageIds.map((messageId) => {
       const row = conn.prepare('SELECT * FROM messages WHERE id = ? AND session_id = ?').get(messageId, input.sessionId) as MessageRow
@@ -1552,19 +1630,15 @@ export function reorderQueuedUserMessages(
   })
 }
 
+export function reorderQueuedUserMessages(
+  db: AppDatabase,
+  input: { sessionId: string; messageIds: string[] }
+): { ok: true; entries: Array<{ message: Message; sequence: number }> } | { ok: false; error: 'queue_changed' } {
+  return desktopQueueCompatibility.reorder(db, input)
+}
+
 export function getNextQueuedMessage(db: AppDatabase, sessionId: string): QueuedMessageEntry | null {
-  const conn = getDbConnection(db)
-  const row = conn
-    .prepare(
-      `SELECT * FROM messages
-       WHERE session_id = ? AND status = 'queued' AND role = 'user'
-       ORDER BY sequence ASC
-       LIMIT 1`
-    )
-    .get(sessionId) as MessageRow | undefined
-  if (!row) return null
-  const receipt = conn.prepare('SELECT request_id AS requestId FROM queue_input_requests WHERE queued_message_id = ?').get(row.id) as { requestId?: string } | undefined
-  return { message: rowToStoredMessage(row), sequence: row.sequence, ...(receipt?.requestId ? { requestId: receipt.requestId } : {}) }
+  return desktopQueueCompatibility.getNext(db, sessionId)
 }
 
 export type RetryContextTarget = {
@@ -1660,15 +1734,24 @@ export function deleteQueuedUserMessage(
   db: AppDatabase,
   messageId: string
 ): { ok: true; sessionId: string } | { ok: false; error: string } {
+  return desktopQueueCompatibility.delete(db, messageId)
+}
+
+export function deleteQueuedUserMessageInScope(
+  db: AppDatabase,
+  messageId: string,
+  queueScope: QueueScope
+): { ok: true; sessionId: string } | { ok: false; error: string } {
   const conn = getDbConnection(db)
-  const row = conn.prepare('SELECT * FROM messages WHERE id = ?').get(messageId) as MessageRow | undefined
+  const serializedScope = serializeQueueScope(queueScope)
+  const row = conn.prepare('SELECT * FROM messages WHERE id = ? AND queue_scope = ?').get(messageId, serializedScope) as MessageRow | undefined
   if (!row) return { ok: false, error: 'message_not_found' }
   if (row.role !== 'user' || row.status !== 'queued') return { ok: false, error: 'message_not_queued' }
 
   const sessionId = row.session_id
   return runInTransaction(conn, () => {
-    const receipt = conn.prepare('SELECT session_id, request_id FROM queue_input_requests WHERE queued_message_id = ?').get(messageId) as { session_id: string; request_id: string } | undefined
-    if (receipt) updateQueueInputReceiptState(db, receipt.session_id, receipt.request_id, 'cancelled')
+    const receipt = conn.prepare('SELECT session_id, request_id FROM queue_input_requests WHERE queued_message_id = ? AND queue_scope = ?').get(messageId, serializedScope) as { session_id: string; request_id: string } | undefined
+    if (receipt) updateQueueInputReceiptStateInScope(db, receipt.session_id, receipt.request_id, 'cancelled', queueScope)
     conn.prepare('DELETE FROM messages WHERE id = ?').run(messageId)
 
     const last = conn
@@ -1687,26 +1770,34 @@ export function deleteQueuedUserMessage(
   })
 }
 
-export function updateQueuedUserMessageContent(
+export function updateQueuedUserMessageContentInScope(
   db: AppDatabase,
-  input: { sessionId: string; messageId: string; content: string }
+  input: { sessionId: string; messageId: string; content: string; queueScope: QueueScope }
 ): { ok: true; message: Message; sequence: number } | { ok: false; error: 'message_not_queued' | 'empty_content' } {
   const conn = getDbConnection(db)
+  const serializedScope = serializeQueueScope(input.queueScope)
   return runInTransaction(conn, () => {
-    const row = conn.prepare("SELECT * FROM messages WHERE id = ? AND session_id = ? AND role = 'user' AND status = 'queued'")
-      .get(input.messageId, input.sessionId) as MessageRow | undefined
+    const row = conn.prepare("SELECT * FROM messages WHERE id = ? AND session_id = ? AND queue_scope = ? AND role = 'user' AND status = 'queued'")
+      .get(input.messageId, input.sessionId, serializedScope) as MessageRow | undefined
     if (!row) return { ok: false, error: 'message_not_queued' }
     const content = input.content.trim()
     if (!content) return { ok: false, error: 'empty_content' }
     const updated = updateMessageContent(db, input.messageId, { content })
     if (!updated) return { ok: false, error: 'message_not_queued' }
-    conn.prepare('UPDATE queue_input_requests SET fingerprint = ?, updated_at = ? WHERE queued_message_id = ? AND session_id = ?')
-      .run(queueInputFingerprint({ text: content, attachments: updated.message.attachments }), Date.now(), input.messageId, input.sessionId)
+    conn.prepare('UPDATE queue_input_requests SET fingerprint = ?, updated_at = ? WHERE queued_message_id = ? AND session_id = ? AND queue_scope = ?')
+      .run(queueInputFingerprint({ text: content, attachments: updated.message.attachments }), Date.now(), input.messageId, input.sessionId, serializedScope)
     const last = conn.prepare('SELECT id FROM messages WHERE session_id = ? ORDER BY sequence DESC LIMIT 1').get(input.sessionId) as { id?: string } | undefined
     if (last?.id === input.messageId) updateSession(db, input.sessionId, { preview: content.slice(0, 120) })
     bumpScopeVersionInTx(db, `session:${input.sessionId}:messages`)
     return { ok: true, ...updated }
   })
+}
+
+export function updateQueuedUserMessageContent(
+  db: AppDatabase,
+  input: { sessionId: string; messageId: string; content: string }
+): { ok: true; message: Message; sequence: number } | { ok: false; error: 'message_not_queued' | 'empty_content' } {
+  return desktopQueueCompatibility.updateContent(db, input)
 }
 
 export type PersistedMessageEntry = {
@@ -2339,3 +2430,26 @@ export function deleteUsageFactsBeforeDay(db: AppDatabase, cutoffDayExclusive: s
     }
   })
 }
+
+/** Explicit adapter preserving legacy desktop-only queue calls. New IM callers must pass QueueScope. */
+export const desktopQueueCompatibility = Object.freeze({
+  scope: DESKTOP_QUEUE_SCOPE,
+  getReceipt: (db: AppDatabase, sessionId: string, requestId: string) =>
+    getQueueInputReceiptInScope(db, sessionId, requestId, DESKTOP_QUEUE_SCOPE),
+  createReceipt: (db: AppDatabase, receipt: QueueInputReceipt) =>
+    createQueueInputReceiptInScope(db, receipt, DESKTOP_QUEUE_SCOPE),
+  updateReceiptState: (db: AppDatabase, sessionId: string, requestId: string, state: string) =>
+    updateQueueInputReceiptStateInScope(db, sessionId, requestId, state, DESKTOP_QUEUE_SCOPE),
+  enqueue: (db: AppDatabase, input: { sessionId: string; requestId: string; content: string; attachments?: Message['attachments'] }) =>
+    enqueueQueuedUserMessageInScope(db, { ...input, queueScope: DESKTOP_QUEUE_SCOPE }),
+  claim: (db: AppDatabase, input: { sessionId: string; userMessageId: string; turnId: string; assistantMessageId: string; requestId: string; state?: string; startToken?: string; intentFingerprint?: string; excludeMessageIds?: string[]; executionConfig?: TurnExecutionConfig }) =>
+    claimQueuedTurnAtomicallyInScope(db, { ...input, queueScope: DESKTOP_QUEUE_SCOPE }),
+  reorder: (db: AppDatabase, input: { sessionId: string; messageIds: string[] }) =>
+    reorderQueuedUserMessagesInScope(db, { ...input, queueScope: DESKTOP_QUEUE_SCOPE }),
+  getNext: (db: AppDatabase, sessionId: string) =>
+    getNextQueuedMessageInScope(db, sessionId, DESKTOP_QUEUE_SCOPE),
+  delete: (db: AppDatabase, messageId: string) =>
+    deleteQueuedUserMessageInScope(db, messageId, DESKTOP_QUEUE_SCOPE),
+  updateContent: (db: AppDatabase, input: { sessionId: string; messageId: string; content: string }) =>
+    updateQueuedUserMessageContentInScope(db, { ...input, queueScope: DESKTOP_QUEUE_SCOPE })
+})

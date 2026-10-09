@@ -38,6 +38,7 @@ import { readAppLocale } from './ipcShared'
 import { getSessionEventSink, readCompactionReplay } from '../sessionEvents'
 import { bindSessionStorageContextPort } from '../sessionStorage/contextPortRegistry'
 import { createBoundSessionContextAdapter } from '../sessionStorage/contextPortRegistry'
+import { remoteAuthorizationRegistry } from '../remote/remoteAuthorizationRegistry'
 
 export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   const sessionStorage = ctx.sessionStorage
@@ -286,6 +287,8 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     if (isRemoteAgentRunning(sessionId)) {
       throw new Error(`${ErrorCodes.REMOTE_SESSION_BUSY}: ${REMOTE_SESSION_BUSY_MESSAGE}`)
     }
+    remoteAuthorizationRegistry.invalidateSession('feishu', sessionId)
+    remoteAuthorizationRegistry.invalidateSession('wechat', sessionId)
     clearSessionToolResources(sessionId)
     sessionCommands.deleteSession(sessionId)
     ctx.wakeSourceTruthSpillGc?.()

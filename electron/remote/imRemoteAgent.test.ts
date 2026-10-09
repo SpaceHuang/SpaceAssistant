@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { WebContents } from 'electron'
-import { createSession, getDbConnection, getSession, openDatabase, prepareTurnAtomically, type AppDatabase } from '../database'
+import { appendMessage, createSession, getDbConnection, getSession, openDatabase, prepareTurnAtomically, type AppDatabase } from '../database'
 import { DEFAULT_BROWSER_CONFIG, DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 import { DEFAULT_REMOTE_PROGRESS_CONFIG } from '../../src/shared/remoteProgressTypes'
 import { SENSITIVE_WORKDIR_ERROR } from '../workDirBinding'
@@ -18,6 +18,7 @@ const mockClearRemoteProgressSession = vi.fn()
 const mockUpdateRemoteProgressSnapshot = vi.fn()
 const mockRequestRendererSessionSwitch = vi.fn()
 const hostedRuntimeFailureInjection = vi.hoisted(() => ({ requestId: '', composeCalls: 0 }))
+const invocationMaterialsCapture = vi.hoisted(() => ({ last: null as unknown }))
 const mockResolveWorkDirForSession = vi.fn(() => ({
   profileId: 'p1',
   workDir: '/tmp',
@@ -33,6 +34,7 @@ vi.mock('../runtime/invocationAssembler', async (importOriginal) => {
   return {
     ...actual,
     assembleInvocation: (...args: Parameters<typeof actual.assembleInvocation>) => {
+      invocationMaterialsCapture.last = args[0]
       const assembled = actual.assembleInvocation(...args)
       if (args[0].requestId === hostedRuntimeFailureInjection.requestId) {
         assembled.agentSdk.createHostedTurnRuntime = () => {
@@ -163,6 +165,7 @@ describe('runImRemoteAgent', () => {
     setCallAdmissionGate(null)
     hostedRuntimeFailureInjection.requestId = ''
     hostedRuntimeFailureInjection.composeCalls = 0
+    invocationMaterialsCapture.last = null
     mockRequestRendererSessionSwitch.mockReset().mockResolvedValue({ desktopSwitched: true, viewChanged: true })
     setDefaultAgentRuntime(createDesktopAgentRuntime())
     mockResolveWorkDirForSession.mockReturnValue({
@@ -198,6 +201,35 @@ describe('runImRemoteAgent', () => {
     )
     expect(captured.ports.credentials.networkTarget?.baseUrl).toBe('https://creds.example.com')
     expect(await captured.ports.credentials.resolveApiKey()).toBe('creds-key')
+  })
+
+  it('装配真实 IM Inbox/workflow 工具 registry，而不是只注入测试 fixture', async () => {
+    await runImRemoteAgent(baseArgs({ remoteContext: {
+      source: 'feishu', messageId: 'platform-1', confirmPolicy: 'always', authOwner: 'owner-1', chatId: 'chat-1'
+    } }))
+    const materials = invocationMaterialsCapture.last as { imOrchestrationToolRegistry?: { entries(): readonly { name: string }[] } } | null
+    expect(materials?.imOrchestrationToolRegistry?.entries().map(({ name }) => name)).toEqual(expect.arrayContaining([
+      'im_inbox_list', 'im_inbox_claim', 'im_inbox_ack', 'im_inbox_release', 'im_inbox_renew',
+      'im_workflow_state_get', 'im_workflow_state_put', 'task_cancel', 'task_revise_plan'
+    ]))
+  })
+
+  it('adds the durable deferred tool result to the continuation model request without reissuing the action', async () => {
+    const db = makeDb()
+    const session = createSession(db, { name: 'deferred-continuation', model: SUPPORTED_ANTHROPIC_MODEL })
+    appendMessage(db, { id: 'deferred-source-user', sessionId: session.id, role: 'user', content: '发布报告', timestamp: Date.now(), status: 'sent' })
+    await runImRemoteAgent(baseArgs({ db, sessionId: session.id, remoteContext: {
+      source: 'feishu', messageId: 'completion-message', confirmPolicy: 'always',
+      deferredContinuation: { todoId: 'todo-1', invocationId: 'inv-1', workflowId: 'workflow-1', taskId: 'task-1', stepId: 'publish',
+        planRevision: 3, checkpointId: 'checkpoint-1', dispatchKey: 'dispatch-1', toolCallId: 'tool-1', toolName: 'send_message',
+        canonicalArgs: { channel: 'chat-1', text: 'approved' }, outputRef: 'deferred-result:inv-1',
+        result: { kind: 'completed', outputRef: 'deferred-result:inv-1', value: { ok: true, marker: 'TOOL_RESULT_4321' } } }
+    } }))
+    const materials = invocationMaterialsCapture.last as { messages: Array<{ role: string; toolCallId?: string; content?: unknown; toolCalls?: Array<{ id: string }> }> } | null
+    expect(materials?.messages).toContainEqual(expect.objectContaining({ role: 'assistant', toolCalls: [expect.objectContaining({ id: 'tool-1', name: 'send_message' })] }))
+    expect(materials?.messages).toContainEqual(expect.objectContaining({ role: 'tool', toolCallId: 'tool-1', isError: false, content: expect.stringContaining('TOOL_RESULT_4321') }))
+    expect(JSON.stringify(materials?.messages)).toContain('TOOL_RESULT_4321')
+    db.close()
   })
 
   it('Feishu Anthropic invocation freezes its resolved provider route in the invocation profile', async () => {

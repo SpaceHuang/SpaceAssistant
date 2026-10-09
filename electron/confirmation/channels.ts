@@ -15,6 +15,18 @@ import { ImChannel, type ImPendingInput } from './imChannel'
 
 export type ToolConfirmOutcome = 'approved' | 'rejected' | 'timeout' | 'cancelled' | 'unavailable'
 
+/** Resolves the reviewed answerer policy; the rollout switch is independently default-off. */
+export function selectConfirmationAnswerer(input: {
+  lane: ExecutionLane
+  remoteAsyncApprovalEnabled?: boolean
+}): ConfirmAnswererPolicy {
+  if (input.lane === 'wechat' || input.lane === 'feishu') {
+    return input.remoteAsyncApprovalEnabled === true ? { kind: 'agent' } : { kind: 'user' }
+  }
+  // Preserve resolveConfirmChannel's existing default (user) for desktop and automation.
+  return { kind: 'user' }
+}
+
 /** 最小审计出口：由 SecurityAuditLog 实现，或测试中注入假实现。 */
 export interface AuditSink {
   record(event: SecurityAuditEvent): void
@@ -167,6 +179,8 @@ export interface ResolveConfirmChannelArgs {
   buildImPending?: (req: ConfirmRequest) => ImPendingInput
   /** 维度一：回答者配置（主进程装配方按 lane 解析后传入；缺省用默认值表）。 */
   answererPolicy?: ConfirmAnswererPolicy
+  /** Async IM approval rollout is independently default-off; only affects an unpinned IM answerer. */
+  remoteAsyncApprovalEnabled?: boolean
   /** kind='agent' 的通道工厂（P2 注入 AgentChannel 构造；未注入而配置了 agent → fail-closed）。 */
   agentChannelFactory?: (deps: {
     lane: ExecutionLane
@@ -194,8 +208,14 @@ export interface ResolveConfirmChannelArgs {
 export function resolveConfirmChannel(args: ResolveConfirmChannelArgs): ConfirmationChannel {
   // P3 收缩（§5.3）：回答者由 gate 决策派生（decision.answerer），缺省 user 仅防御未接线的旧调用方；
   // automation 的 agent 回答者同样由引擎派生（automation-default-confirm locked ask）
-  const answerer = args.answererPolicy ?? { kind: 'user' as const }
+  const configuredAnswerer = args.answererPolicy ?? selectConfirmationAnswerer({
+    lane: args.lane,
+    remoteAsyncApprovalEnabled: args.remoteAsyncApprovalEnabled
+  })
   const isLaneWithImTransport = args.lane === 'wechat' || args.lane === 'feishu'
+  const answerer = isLaneWithImTransport && args.remoteAsyncApprovalEnabled !== true && configuredAnswerer.kind === 'agent'
+    ? { kind: 'user' as const }
+    : configuredAnswerer
 
   // 配置损坏：kind 非法 → deny + 告警（无人值守上下文不回退 user；有人值守链路的失败去向由链路策略决定）
   if (answerer.kind !== 'user' && answerer.kind !== 'agent' && answerer.kind !== 'deny') {

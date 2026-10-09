@@ -18,6 +18,12 @@ import { ButlerTaskScheduler } from './butler/taskScheduler'
 import { runButlerTask, type ButlerInvokerDeps } from './butler/butlerInvoker'
 import { syncAutomationTaskRunDeliveryStatuses } from './butler/taskStore'
 import { stagehandService } from './browser/stagehandService'
+import { createRemoteAuthorizationEpochStore } from './remote/remoteAuthorizationEpochStore'
+import { remoteAuthorizationRegistry } from './remote/remoteAuthorizationRegistry'
+import { createDeferredTodoStore } from './confirmation/deferredTodoStore'
+import { createDeferredTodoCapacityController } from './confirmation/deferredTodoCapacity'
+import { createImTaskControlCoordinator } from './remote/imTaskControlCoordinator'
+import { createDeferredTodoTaskControlSafetyPort } from './remote/deferredTodoTaskControlAdapter'
 import {
   autoStartFeishuEventIfNeeded,
   createFeishuBundle,
@@ -394,6 +400,7 @@ app.whenReady().then(async () => {
   let db: ReturnType<typeof openDatabase>
   try {
     db = await measureStartupPhase('database.open-and-migrations', () => openDatabase(dbPath))
+    remoteAuthorizationRegistry.bindPersistentEpochStore(createRemoteAuthorizationEpochStore(db))
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     dialog.showErrorBox(
@@ -1301,6 +1308,31 @@ app.whenReady().then(async () => {
     },
     appVersion: getTelemetryAppVersion()
   })
+
+  try {
+    // Run pending revocation cascades after both lane invalidators are registered and before auto-starting ingress.
+    remoteAuthorizationRegistry.recoverPendingRevocations()
+    const taskControlRecovery = createImTaskControlCoordinator({
+      db,
+      safetyPort: createDeferredTodoTaskControlSafetyPort({
+        todoStore: createDeferredTodoStore(db, { capacity: createDeferredTodoCapacityController(db) }),
+        dispatchDeferred: async () => { throw new Error('DEFERRED_RESUME_DISPATCH_NOT_AVAILABLE_DURING_STARTUP') }
+      })
+    })
+    const recoveredOperations = await taskControlRecovery.recoverPendingOperations()
+    const unresolvedOperations = recoveredOperations.filter(({ status }) => status !== 'cancelled' && status !== 'revised')
+    if (unresolvedOperations.length) throw new Error(`IM_TASK_CONTROL_RECOVERY_INCOMPLETE:${unresolvedOperations.map(({ operationId, status }) => `${operationId}:${status}`).join(',')}`)
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    dialog.showErrorBox('远程授权恢复失败', `授权撤销恢复未完成，远程入口保持关闭。\n\n错误：${detail}`)
+    app.quit()
+    return
+  }
+  try {
+    await Promise.all([getFeishuBundle()?.recoverDeferredApprovals(), getWeChatBundle()?.recoverDeferredApprovals()])
+  } catch (error) {
+    console.error('[deferredApproval] startup recovery failed:', error instanceof Error ? error.message : String(error))
+  }
   void measureStartupPhase('feishu-auto-start', () => autoStartFeishuEventIfNeeded(db))
 
   initTray({

@@ -64,6 +64,14 @@ describe('MemoryEligibility 回答者维度（I3：记忆只源于人类）', ()
     expect(deriveMemoryEligibility(facts(persistable), 'feishu', 'user').eligibility).toBe('session')
     expect(deriveMemoryEligibility(facts(persistable), 'desktop', 'user').eligibility).toBe('persistent')
   })
+
+  it('remote outbound actions never gain reusable memory eligibility', () => {
+    const outbound: ContentFacts = { ...facts([{ kind: 'outbound-target', channel: 'email', recipient: 'owner@example.com' }]), actionClass: 'outbound' }
+    for (const lane of ['wechat', 'feishu'] as const) {
+      expect(deriveMemoryEligibility(outbound, lane, 'user')).toEqual({ eligibility: 'none', reasons: ['outbound-never-remembered'] })
+    }
+    expect(deriveMemoryEligibility(outbound, 'desktop', 'user').eligibility).toBe('persistent')
+  })
 })
 
 describe('B1：unsupported 信号阻断持久记忆资格（决策缓存旁路修复）', () => {

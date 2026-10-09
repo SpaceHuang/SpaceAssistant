@@ -248,6 +248,7 @@ export function createAgentSdkRecheckPort(input: {
   safetyPolicy: SafetyPolicyPort
 } {
   const initialFactsHash = createHash('sha256').update(JSON.stringify(input.initialFacts)).digest('hex')
+  const initialAuthorizationEpoch = input.resolveAuthorizationVersion()
   let latest: { allowed: boolean; authorizationVersion: string; targetVersion: string; factsHash: string } | undefined
   return {
     async recheck() {
@@ -260,7 +261,17 @@ export function createAgentSdkRecheckPort(input: {
           initialFactsHash,
           latestDecision: result.decision,
           latestFactsHash: factsHash,
-          previouslyConfirmed: input.previouslyConfirmed
+          previouslyConfirmed: input.previouslyConfirmed,
+          latestLocked: result.decision.type === 'deny',
+          latestRiskLevel: result.decision.type === 'require-confirm' ? result.decision.riskLevel : undefined,
+          initialCallHash: initialFactsHash,
+          latestCallHash: factsHash,
+          initialAuthorizationEpoch,
+          latestAuthorizationEpoch: input.resolveAuthorizationVersion(),
+          initialEnvironmentHash: initialFactsHash,
+          latestEnvironmentHash: factsHash,
+          initialEgressHash: initialFactsHash,
+          latestEgressHash: factsHash
         }) && !input.isRevoked(),
         authorizationVersion: input.resolveAuthorizationVersion() ?? result.decision.ruleId,
         targetVersion: `${result.decision.ruleId}:${result.decision.type}`,

@@ -7,6 +7,16 @@ const subject: MemoryWritePermitSubject = {
 }
 
 describe('ConfirmationAuthorizationRegistry', () => {
+  it('revokes channel scoped unconsumed permits and consumed recovery windows', () => {
+    const registry = new ConfirmationAuthorizationRegistry()
+    const feishuPermit = registry.issue({ ...subject, channel: 'feishu' })
+    const wechatPermit = registry.issue({ ...subject, channel: 'wechat' })
+    const { recovery } = registry.consumeForWrite(wechatPermit, wechatPermit.subject)
+    expect(registry.revokeByChannel('feishu')).toBe(1)
+    expect(registry.revokeByChannel('wechat')).toBe(1)
+    expect(() => registry.consume(feishuPermit, feishuPermit.subject)).toThrow('MEMORY_WRITE_PERMIT_INVALID')
+    expect(() => registry.restore(wechatPermit, wechatPermit.subject, recovery)).toThrow('MEMORY_WRITE_PERMIT_RECOVERY_INVALID')
+  })
   it('issues an immutable permit bound to invocation identity and digests', () => {
     const registry = new ConfirmationAuthorizationRegistry()
     const permit = registry.issue({ ...subject, now: 1000, ttlMs: 100 })
