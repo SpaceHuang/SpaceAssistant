@@ -12,6 +12,8 @@ import type {
 } from '../../../shared/remoteSecurityMigration'
 import { DEFAULT_REMOTE_PROGRESS_CONFIG } from '../../../shared/remoteProgressTypes'
 import { readRemoteSessionIdleMinutes } from '../../../shared/remoteSessionResolve'
+import { resolveAvailableThinkingEfforts } from '../../services/sessionModelBinding'
+import { THINKING_EFFORT_LEVELS } from '../../../shared/thinkingEffort'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
 import { configModalSelectPopupClassNames } from './configModalUi'
@@ -21,6 +23,7 @@ type Props = {
   value: RemoteImCommonConfig
   onChange: (patch: Partial<RemoteImCommonConfig>) => void
   models?: ModelEntry[]
+  preferredLanguageModelId?: string
   allowRemoteBrowserSessions: boolean
   onAllowRemoteBrowserSessionsChange: (enabled: boolean) => void
 }
@@ -29,11 +32,24 @@ export function RemoteImCommonSettings({
   value,
   onChange,
   models = [],
+  preferredLanguageModelId = '',
   allowRemoteBrowserSessions,
   onAllowRemoteBrowserSessionsChange
 }: Props) {
   const { t } = useTypedTranslation('config')
   const restrictOn = isRemoteRestrictWritesAndOutbound(value)
+  const selectedModelId = value.remoteModelSelectionMode === 'explicit'
+    ? value.remoteDefaultModelId
+    : preferredLanguageModelId
+  const selectedModel = models.find((model) => model.id === selectedModelId)
+  const availableEfforts = selectedModel?.supportsThinking === false
+    ? ['off' as const]
+    : resolveAvailableThinkingEfforts(selectedModel?.name ?? '')
+  const requestedEffort = value.remoteThinkingEffort ?? 'low'
+  const requestedIndex = THINKING_EFFORT_LEVELS.indexOf(requestedEffort)
+  const effectiveEffort = availableEfforts.includes(requestedEffort)
+    ? requestedEffort
+    : [...availableEfforts].reverse().find((effort) => THINKING_EFFORT_LEVELS.indexOf(effort) < requestedIndex) ?? 'off'
 
   const [plan, setPlan] = useState<RemoteSecurityMigrationPlan | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
@@ -109,13 +125,40 @@ export function RemoteImCommonSettings({
 
       <ConfigField label={t('remoteImCommon.remoteDefaultModelLabel')}>
         <Select
-          allowClear
           placeholder={t('remoteImCommon.remoteDefaultModelPlaceholder')}
-          value={value.remoteDefaultModelId}
-          onChange={(remoteDefaultModelId) => onChange({ remoteDefaultModelId })}
+          value={value.remoteModelSelectionMode === 'explicit' ? value.remoteDefaultModelId : '__inherit__'}
+          onChange={(selection) => onChange(selection === '__inherit__'
+            ? { remoteModelSelectionMode: 'inherit', remoteDefaultModelId: preferredLanguageModelId || undefined }
+            : { remoteModelSelectionMode: 'explicit', remoteDefaultModelId: selection })}
           classNames={configModalSelectPopupClassNames}
-          options={models.filter((m) => m.enabled).map((m) => ({ value: m.name, label: m.name }))}
+          options={[
+            { value: '__inherit__', label: `${t('remoteImCommon.remoteModelInherit')} (${models.find((m) => m.id === preferredLanguageModelId)?.name ?? t('remoteImCommon.remoteDefaultModelPlaceholder')})` },
+            ...(value.remoteModelSelectionMode === 'explicit' && value.remoteDefaultModelId && !selectedModel
+              ? [{ value: value.remoteDefaultModelId, label: `${value.remoteDefaultModelId} — ${t('remoteImCommon.remoteModelUnavailable')}`, disabled: true }]
+              : []),
+            ...models.filter((m) => m.enabled).map((m) => ({ value: m.id, label: m.name }))
+          ]}
         />
+        {value.remoteModelSelectionMode === 'explicit' && value.remoteDefaultModelId && !selectedModel ? (
+          <Alert type="warning" showIcon message={t('remoteImCommon.remoteModelUnavailable')} />
+        ) : null}
+      </ConfigField>
+
+      <ConfigField label={t('remoteImCommon.remoteThinkingEffortLabel')}>
+        <Select
+          value={requestedEffort}
+          onChange={(remoteThinkingEffort) => onChange({ remoteThinkingEffort })}
+          classNames={configModalSelectPopupClassNames}
+          options={[
+            ...(!availableEfforts.includes(requestedEffort)
+              ? [{ value: requestedEffort, label: `${t(`remoteImCommon.thinkingEfforts.${requestedEffort}`)} — ${t('remoteImCommon.remoteThinkingUnavailable')}`, disabled: true }]
+              : []),
+            ...availableEfforts.map((effort) => ({ value: effort, label: t(`remoteImCommon.thinkingEfforts.${effort}`) }))
+          ]}
+        />
+        {availableEfforts.includes(requestedEffort) ? null : (
+          <span className="config-field__hint">{t('remoteImCommon.remoteThinkingDowngradeHint', { effort: t(`remoteImCommon.thinkingEfforts.${effectiveEffort}`) })}</span>
+        )}
       </ConfigField>
 
       <Collapse

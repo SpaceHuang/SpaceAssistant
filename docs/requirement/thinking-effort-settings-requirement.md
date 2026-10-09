@@ -2,7 +2,7 @@
 
 **版本：** 1.6
 **日期：** 2026-09-19
-**状态：** 已定稿（OQ 全部闭环；v1.2 / v1.4 两轮评审的阻断项与事实偏差均已修复）
+**状态：** 已定稿（OQ 全部闭环；IM lane 行为由后续需求 [IM 远程模型与思考强度设置](./remote-im-model-and-thinking-settings-requirement.md) 覆盖）
 **关联文档：** [llm-multi-service-model-config-requirement.md](./llm-multi-service-model-config-requirement.md)、[settings-requirement.md](./settings-requirement.md)、[settings-ui-refinement-requirement.md](./settings-ui-refinement-requirement.md)、[../develop/agent-core-contract-path-refactor-plan.md](../develop/agent-core-contract-path-refactor-plan.md)、[../review/thinking-effort-settings-requirement-review.md](../review/thinking-effort-settings-requirement-review.md)（v1.2 评审，B1/N1–N5/C1–C4 已在 v1.3–v1.5 处置）、[../review/thinking-effort-settings-requirement-review-v1.4.md](../review/thinking-effort-settings-requirement-review-v1.4.md)（v1.4 复审，B1'/N1–N3 已在 v1.5 处置）
 
 **变更记录：**
@@ -16,6 +16,7 @@
 | 1.4 | 2026-09-19 | **清空全部「待实测」项**（原仅 C2）：§7.3 的「adaptive + effort 同发」由**推断升为已证实**（官方迁移示例即 A+C 同发，§2.3/§7.3）；同期发现三项需修正的事实并落地——① 服务端档位比 SDK 枚举宽（另有 `xhigh`，§2.3、OQ-1）；② **档位非等距，`low ≈ medium`**，据此调整效果验收基准与对外口径（§4.1、§10.5）；③ effort 作用面超出 thinking（亦影响工具调用频率，§2.3）。另明确 GA 端点无需 beta header（§7.4），并加评审 C 项闭环小结（§11.1） |
 | 1.5 | 2026-09-19 | **修复复审阻断项 B1'**：v1.3 的 C3 结论（四条 lane「无绕过路径」）只核验到调用点、未追到装配入参，**实际不成立**——远程 / Butler lane 的装配点无 thinking 入参，实际恒 `off`。据此新增 **OQ-10** 决策（本期固定 `off`、不接通），并把 §7.6 改写为「按 lane 的档位边界」（原 §7.6 子调用顺延为 §7.7）；§9 远程会话行更正；§10.3 补远程 lane 验收项；§12 标注两文件「本期不改」。另修非阻断项：§10.3 记忆粒度同步为 `llmServiceId + model`、§2.3 表头「三条」→「四条」 |
 | 1.6 | 2026-09-19 | **产品确认 OQ-10 保留方案 B**（远程 / Butler lane 本期固定 `off`，不接通），最后一项开放决策闭环；文档状态由「待评审」转为**已定稿**。§7.6 保留「方案 A 独立立项」的未来路径说明，不改动 |
+| 1.7 | 2026-10-09 | IM 远程模型与 Thinking 设置需求新增飞书/微信独立请求档位和 accepted turn 冻结契约；修订本文 §7.6、§9、§10.3、OQ-10 的适用范围，IM lane 不再固定为 `off`，Butler 仍保持 `off` |
 
 ---
 
@@ -306,7 +307,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 - **不引入** 非 Anthropic 协议 provider 的等价参数（本期以 `anthropic.messages.stream` 为准）；
 - **不实现** `reasoning` 的按模型自动探测（能力标记仍由声明决定）；
 - **不改变** Enter / Shift+Enter 的**实际键位行为**（`handleEnter` 逻辑不动），仅移除 composer 的提示文案（§5.2、OQ-9）；
-- **不做** 远程（飞书 / 微信）与 Butler（automation）lane 的 thinking 接通：这两条 lane 本期**固定 `off`**，不继承全局、不读会话覆盖（OQ-10 决策，理由与影响见 §7.6）。
+- **不做** Butler（automation）lane 的 thinking 接通：Butler 继续固定 `off`，不继承全局、不读会话覆盖（OQ-10 决策，适用范围见 §7.6）。飞书 / 微信的独立远程档位由 [IM 远程模型与思考强度设置](./remote-im-model-and-thinking-settings-requirement.md) 规定，不属于本文的全局 / 会话设置。
 
 ---
 
@@ -407,7 +408,7 @@ type ThinkingEffort = 'off' | 'low' | 'medium' | 'high' | 'max'   // src/shared/
 | 选择「默认」 | 清除会话覆盖（写回 `null`） |
 | 能力联动 | 当前会话模型 `supportsThinking === false` 时，控件禁用并提示「该模型不支持 Thinking」 |
 | 未创建会话时 | 支持草稿：沿用 `resolveSessionModelBinding` 的「composer 先渲染」处理，把此处选择保留到会话创建时一并带入 |
-| 远程会话 | 飞书 / 微信来源会话无 composer，不可从远端调整；桌面打开该会话时可见可控，字段缺省继承全局 |
+| 远程会话 | 飞书 / 微信来源会话无 composer，不可从远端调整；桌面打开该会话时可见可控，仅对桌面 turn 生效。IM turn 使用独立的远程通用设置，见 [IM 远程模型与思考强度设置](./remote-im-model-and-thinking-settings-requirement.md) |
 
 #### 5.2.1 移除 Enter 提示为强度控件腾位（OQ-9，v1.2）
 
@@ -639,9 +640,9 @@ effort 解析结果**并非所有 lane 都消费**。当前只有 **desktop lane
 
 **事实澄清（v1.5 更正 v1.3 的 C3 结论）**：v1.3 曾断言四条 lane「均经统一解析、无绕过路径」。**该结论只对「调用点」成立，对「产出是否生效」不成立**——远程与 Butler 的 router 虽调用了统一解析函数，但其结果中的 thinking 字段被丢弃；且 `imRemoteAgent.ts:125` / `butlerInvoker.ts` 会**自行重新解析** model 与 credentials，即这两条 lane 从未接入冻结执行配置的完整产出。
 
-**后果**：今天飞书 / 微信 / Butler 的 turn **无论全局 `thinkingEnabled` 开关如何，thinking 恒为关**（装配层兜底 `options.enableThinking === true ? 'medium' : 'off'`，`invocationAssembler.ts:181-182`，实参 `undefined` → `'off'`）。
+**历史后果（v1.5/v1.6 状态）**：飞书 / 微信 / Butler 的 turn 曾经恒为 `off`。飞书与微信现由后续需求 [IM 远程模型与思考强度设置](./remote-im-model-and-thinking-settings-requirement.md) 定义独立远程档位，并通过 accepted turn 冻结；本文本节关于 IM 恒 `off` 的旧结论已被替代。Butler 仍按本节保持 `off`。
 
-**本期决策（OQ-10）：保持 `off`，不接通。** 理由：
+**原 OQ-10 决策（仅继续适用于 Butler）：保持 `off`，不接通。** 飞书与微信已由后续需求另行接通且独立配置。原决策理由仍适用于 Butler：
 
 1. IM 场景追求快速回复，长思考与其相悖；
 2. 接通会使 IM / Butler 从「实际 always-off」变为「跟随全局 medium」，**属行为变更**，与 R6（升级后行为不变）冲突；
@@ -650,14 +651,15 @@ effort 解析结果**并非所有 lane 都消费**。当前只有 **desktop lane
 **因此档位的语义边界是：**
 
 ```
-档位（全局默认 / 会话覆盖）→ 仅对 desktop lane（用户直接发起的主对话）生效
-远程（feishu / wechat）与 Butler  lane → 恒 off（与现网一致，不受本需求影响）
+档位（全局默认 / 会话覆盖）→ 对 desktop lane 生效
+飞书 / 微信 → 使用远程通用设置中的请求档位，并在 accepted turn 冻结
+Butler lane → 恒 off
 审批等子调用           → 恒 off（§7.7，既有规则）
 ```
 
-**同一会话在不同 lane 下的表现**：用户在桌面打开一个 IM 来源会话并调档，仅影响其**桌面**发起的 turn；该会话的 IM turn 仍为 `off`。即档位**按 lane 生效，而非按会话全局生效**——这是有意设计，与 §7.7 子调用恒 `off` 同一模式。
+**同一会话在不同 lane 下的表现**：用户在桌面打开一个 IM 来源会话并调桌面档位，仅影响其**桌面**发起的 turn；IM turn 使用远程通用设置的请求档位，不继承桌面全局或会话覆盖。档位按 lane 生效。§7.7 的审批等子调用仍为 `off`。
 
-> 若后续决定接通（方案 A），需额外改动：`remote/imRemoteAgent.ts`、`feishu/feishuRemoteAgent.ts`、`wechat/weChatRemoteAgent.ts`、`butler/butlerInvoker.ts` 四处装配入参，并显式立项记录该行为变更。
+> IM 接通的后续决策与契约见 [IM 远程模型与思考强度设置](./remote-im-model-and-thinking-settings-requirement.md)；本文 OQ-10 不再限制飞书/微信。Butler 如需接通仍需独立立项。
 
 ### 7.7 子调用与安全边界（不变）
 
@@ -721,7 +723,7 @@ effort 解析结果**并非所有 lane 都消费**。当前只有 **desktop lane
 | 会话中途换模型（如切到不支持 Thinking 的模型） | 档位按**当前模型**重新走 ③ 能力校验；覆盖值保留（换回原模型时恢复） |
 | 上游 400 拒绝 `output_config` | 见 §7.4：去掉强度重试一次 + 审计；**同服务同模型**后续请求跳过 `output_config`（进程内记忆，粒度见 §7.4 / OQ-6） |
 | 会话级调整发生在 turn 进行中 | 不影响进行中的 turn（发起时冻结），下次发送生效 |
-| 远程会话（飞书 / 微信） | 无 composer 入口；**本期 thinking 恒 `off`**（OQ-10，§7.6），不继承全局、不读会话覆盖。桌面打开该会话时控件可见、可调，但**仅对其桌面 turn 生效**；IM turn 仍为 `off`。**勿误读为「继承全局」**——v1.3 的 C3 结论已被 v1.5 更正 |
+| 远程会话（飞书 / 微信） | 无 composer 入口；使用远程通用设置的请求档位，按 IM 需求解析能力并冻结到 accepted turn，不继承桌面全局或会话覆盖。桌面打开该会话时控件仅影响桌面 turn。 |
 | composer 在首个会话创建前选择了档位 | 草稿保留，随会话创建一并写入（§5.2、§6.3 第 3 项） |
 | 窄窗口 / 面板拖宽 | idle 态状态区不再渲染；running 态空间不足时折叠为 22px 图标按钮（既有机制，§2.7） |
 | 移除 Enter 提示后 | Shift+Enter 信息失去落点（已知取舍，§5.2.1 / OQ-9）；键位行为不变 |
@@ -767,8 +769,8 @@ effort 解析结果**并非所有 lane 都消费**。当前只有 **desktop lane
 - [ ] 已覆盖的会话在全局改动后**保持不变**
 - [ ] `supportsThinking === false` + 全局 `high`：该模型实际 `off`，且落 `agent.profile.reasoning_degraded`
 - [ ] 上游拒绝 `output_config`：自动去强度重试成功，落 `llm.effort.unsupported`；**同服务同模型**后续请求不再附加 `output_config`（记忆生效），**同服务其他模型不受影响**（记忆粒度为 `llmServiceId + model`，§7.4 / OQ-6）
-- [ ] **远程 / Butler lane 恒 `off`**（OQ-10）：飞书 / 微信 / Butler 的 turn 请求**不含** `output_config`，且 `thinking: { type: 'disabled' }`，与升级前一致
-- [ ] 同一 IM 来源会话：桌面 turn 按档位、IM turn 仍 `off`（§7.6 lane 边界）
+- [ ] Butler lane 恒 `off`（OQ-10）；飞书 / 微信按 [IM 远程模型与思考强度设置](./remote-im-model-and-thinking-settings-requirement.md) 的远程设置执行
+- [ ] 同一 IM 来源会话：桌面 turn 按桌面档位，IM turn 按远程通用设置档位，两者互不继承（§7.6 lane 边界）
 - [ ] 审批 Agent 等子调用仍为 `off`（回归不破）
 - [ ] `llm.request` 日志记录实际档位（不再是布尔）
 
@@ -806,7 +808,7 @@ effort 解析结果**并非所有 lane 都消费**。当前只有 **desktop lane
 | **OQ-7** | 是否加「Thinking 总开关」 | **不加**，`关闭` 已是档位之一，避免语义重叠（§5.1） |
 | **OQ-8**（v1.1 新增） | 是否新增模型列表「思考」列 | **不加**。**论据（v1.3 更正）**：该表除首 / 末列外均为只读展示，插入可编辑控件破坏交互范式；能力位已有快速 / 视觉两列（i18n 亦预留 `models.list.colCaps` 合并位）。改为「仅不支持时显示弱化标记」（§5.3、§2.4）。原「560px 空间不足」论据**不成立**——设置页已是整页 `ConfigSettingsPage`（720px），非 Modal |
 | **OQ-9**（v1.2 新增） | 是否保留 composer「Enter 发送，Shift+Enter 换行」提示 | **移除**（方案 B）。idle 态整块不渲染以腾位给强度控件；`hintRunning*` 保留；已知取舍：Shift+Enter 信息失去落点（§5.2.1、§2.7）。评审曾提方案 A（保留、由既有折叠机制自然让位），但产品判定该提示价值低于强度控件的落位需求，最终选 B |
-| **OQ-10**（v1.5 新增） | 是否接通远程（飞书 / 微信）与 Butler lane 的 thinking | **否，本期固定 `off`**（**v1.6 产品确认保留方案 B**）。这两条 lane 的装配点本就无 thinking 入参（`imRemoteAgent.ts:141`、`butlerInvoker.ts:269`），实际恒 `off`；接通会使 IM / Butler 从 always-off 变为跟随全局，属**行为变更**（与 R6 冲突）且超出本需求目标。档位语义边界见 §7.6。若后续要接通，走方案 A 独立立项（需另改 4 个文件并记录行为变更） |
+| **OQ-10**（v1.5 新增） | 是否接通远程（飞书 / 微信）与 Butler lane 的 thinking | **飞书 / 微信：**后续需求 [IM 远程模型与思考强度设置](./remote-im-model-and-thinking-settings-requirement.md) 已定义接通方式和独立远程档位；**Butler：**继续固定 `off`，不继承全局。本文对 IM 的历史 always-off 描述以该后续需求为准。 |
 
 ### 11.1 评审项闭环（B / C 项）
 

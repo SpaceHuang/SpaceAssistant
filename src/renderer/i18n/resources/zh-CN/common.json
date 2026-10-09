@@ -115,14 +115,15 @@
   },
   "settings": {
     "feishu": "飞书",
-    "wechat": "微信遥控",
+    "wechat": "微信",
     "general": "通用",
     "models": "大模型服务",
     "skills": "技能",
     "title": "设置",
     "tools": "工具",
     "wiki": "项目 Wiki",
-    "remoteIm": "IM 远程通用",
+    "remoteIm": "远程通用设置",
+    "remoteOperations": "远程操作",
     "butler": "定时任务"
     ,"storage": "存储占用"
   },

@@ -73,7 +73,12 @@ describe('resolveTrustedTurnExecutionConfig', () => {
     setConfigValue(db, 'config.locale', 'zh-CN')
 
     await expect(resolveTrustedTurnExecutionConfig(db, session.id, lane)).resolves.toMatchObject({
-      lane, model: 'deepseek-chat', maxTokens: 8192, enableThinking: false, locale: 'zh-CN'
+      lane,
+      model: 'deepseek-chat',
+      maxTokens: 8192,
+      enableThinking: lane === 'desktop' ? false : true,
+      thinkingEffort: lane === 'desktop' ? 'off' : 'low',
+      locale: 'zh-CN'
     })
   })
 

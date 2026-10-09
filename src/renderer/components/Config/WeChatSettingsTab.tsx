@@ -97,11 +97,15 @@ export function WeChatSettingsTab({ wechat, onChange }: Props) {
       )
       const status = await window.api.wechatConnectionStatus()
       setConnection(status)
-      if (status.loggedIn !== wechat.loggedIn) {
+      const boundUserAllowlist = status.boundUserId ? [status.boundUserId] : undefined
+      const allowlistChanged = boundUserAllowlist !== undefined &&
+        (wechat.remoteSenderAllowlist?.length !== 1 || wechat.remoteSenderAllowlist[0] !== status.boundUserId)
+      if (status.loggedIn !== wechat.loggedIn || allowlistChanged) {
         patch({
           loggedIn: status.loggedIn,
           displayName: status.displayName,
-          botIdSuffix: status.botIdSuffix
+          botIdSuffix: status.botIdSuffix,
+          ...(boundUserAllowlist ? { remoteSenderAllowlist: boundUserAllowlist } : {})
         })
       }
     } catch (e) {
@@ -145,8 +149,6 @@ export function WeChatSettingsTab({ wechat, onChange }: Props) {
         setShowQr(false)
         setQrUrl(null)
         setQrExpired(false)
-        void refreshStatus()
-        void startListening()
         message.success(t('settings.wechat.boundSuccess'))
       }
       if (stage === 'expired') {
@@ -162,7 +164,7 @@ export function WeChatSettingsTab({ wechat, onChange }: Props) {
       offQr()
       offProgress()
     }
-  }, [message, patch, refreshStatus, startListening, t])
+  }, [message, patch, refreshStatus, t])
 
   const startBind = async (opts?: { force?: boolean }) => {
     setBinding(true)
@@ -174,6 +176,7 @@ export function WeChatSettingsTab({ wechat, onChange }: Props) {
     patch({ enabled: true })
     try {
       const r = await window.api.wechatLoginStart({ force: Boolean(opts?.force) })
+      if (r.ok) await refreshStatus()
       if (!r.ok && r.error !== 'aborted') {
         message.error(r.error ?? t('settings.wechat.loginFailed'))
         // Keep QR panel on final expiry so user can tap retry; hide for other failures.

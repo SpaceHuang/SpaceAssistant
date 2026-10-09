@@ -15,6 +15,7 @@ import {
 import { store } from '../../store'
 import { setConfig, setSettingsActiveTab, setSettingsOpen } from '../../store/configSlice'
 import { ConfigSettingsPage } from './ConfigModal'
+import { isRemoteSettingsKey, REMOTE_SETTINGS_KEYS } from './remoteSettingsNav'
 
 /** 场景取自真实配置：DeepSeek 官方服务同时支持 deepseek-v4-pro（普通）与 deepseek-flash（快速） */
 const models: ModelEntry[] = [
@@ -180,5 +181,13 @@ describe('ConfigSettingsPage 优选默认模型', () => {
     const added = (payload.models as ModelEntry[]).find((model) => model.name === 'manual-model-x')
     expect(added).toBeTruthy()
     expect((payload.llmServices as Array<{ supportedModelIds: string[] }>)[0]!.supportedModelIds).toContain(added!.id)
+  })
+})
+
+describe('ConfigSettingsPage 远程操作导航', () => {
+  it('将远程通用设置、飞书和微信收进远程操作分组并可切换', async () => {
+    expect(REMOTE_SETTINGS_KEYS).toEqual(['remoteIm', 'feishu', 'wechat'])
+    expect(REMOTE_SETTINGS_KEYS.every(isRemoteSettingsKey)).toBe(true)
+    expect(isRemoteSettingsKey('tools')).toBe(false)
   })
 })

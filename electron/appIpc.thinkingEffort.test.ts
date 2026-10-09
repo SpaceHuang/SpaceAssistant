@@ -42,7 +42,7 @@ vi.mock('./database', () => ({
   deleteConfigValue: vi.fn(),
   appendSearchHistory: vi.fn(),
   listSearchHistory: vi.fn(() => []),
-  getDbConnection: vi.fn(() => ({})),
+  getDbConnection: vi.fn(() => ({ exec: vi.fn() })),
 }))
 
 vi.mock('./llmServiceResolver', () => ({
@@ -57,6 +57,7 @@ vi.mock('./llmServiceResolver', () => ({
     baseUrl: 'config.baseUrl'
   },
   readStoredModels: vi.fn(() => []),
+  resolveLanguagePreferredModelName: vi.fn(() => ''),
   readLlmServices: vi.fn(() => []),
   readActiveLlmServiceIds: vi.fn(() => []),
   readActiveLlmServiceId: vi.fn(() => undefined),
