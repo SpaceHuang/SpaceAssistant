@@ -69,13 +69,9 @@ vi.mock('./toolConfirmRegistry', () => ({
   waitForToolConfirm: vi.fn(async () => 'approved')
 }))
 
-// 与真实实现同语义：remoteContext=true（非 desktop lane）→ 空 snapshot
+// 所有业务 lane 使用同一启用/工具白名单快照。
 vi.mock('./mcp/mcpToolRegistry', () => ({
-  buildSnapshotFromDb: vi.fn((_db: unknown, opts?: { remoteContext?: boolean }) =>
-    opts?.remoteContext
-      ? { entries: new Map(), budgetDropped: [] }
-      : { entries: mcpSnapshotEntries, budgetDropped: [] }
-  ),
+  buildSnapshotFromDb: vi.fn(() => ({ entries: mcpSnapshotEntries, budgetDropped: [] })),
   snapshotEntriesToAnthropicTools: vi.fn((entries: Array<{ mappedName: string; serverName: string; description: string; inputSchema: unknown }>) =>
     entries.map((e) => ({
       name: e.mappedName,
@@ -124,7 +120,7 @@ function makeMcpSnapshotEntry() {
   }
 }
 
-describe('runToolChatSession lane 穿透（偏差 21：MCP 仅 desktop lane 注入）', () => {
+describe('runToolChatSession lane 穿透（MCP 统一快照准入）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mcpSnapshotEntries = new Map([['mcp1_create_issue', makeMcpSnapshotEntry()]])
@@ -211,9 +207,14 @@ describe('runToolChatSession lane 穿透（偏差 21：MCP 仅 desktop lane 注�
     expect(tools).toContain('mcp1_create_issue')
   })
 
-  it('automation lane：MCP 工具不注入（保持「远程与 automation 无 MCP」语义）', async () => {
+  it('automation lane：MCP 工具注入并经同一请求快照约束', async () => {
     const { tools } = await run('automation')
-    expect(tools).not.toContain('mcp1_create_issue')
+    expect(tools).toContain('mcp1_create_issue')
+  })
+
+  it.each(['feishu', 'wechat'] as const)('%s lane：MCP 工具注入', async (lane) => {
+    const { tools } = await run(lane)
+    expect(tools).toContain('mcp1_create_issue')
   })
 
   it.each(['desktop', 'feishu', 'wechat', 'automation'] as const)('%s Hosted lane persists provider context and rebuilds its request from History', async (lane) => {

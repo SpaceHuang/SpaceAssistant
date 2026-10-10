@@ -23,7 +23,7 @@ import type { SessionStorage } from '../sessionStorage/contracts'
 import { safeAppendDiagnostic } from '../mcp/mcpDiagnostics'
 import { recordUserAnswerFromDecision } from '../confirmation/decisionCacheWriter'
 import { evaluateToolCallGate } from '../confirmation/toolCallGate'
-import { buildSnapshotFromDb, sanitizeMcpSnapshotForExecutors, type McpToolSnapshot } from '../mcp/mcpToolRegistry'
+import { buildSnapshotFromDb, getCachedTools, sanitizeMcpSnapshotForExecutors, type McpToolSnapshot } from '../mcp/mcpToolRegistry'
 import { resolveRequestLocale } from '../llmSystemPrompt'
 import { listProfiles } from '../mcp/mcpConfigStore'
 import { getSecret } from '../mcp/mcpSecretStore'
@@ -201,6 +201,25 @@ function mergeImOrchestrationFixtureRegistry(
   for (const tool of base.entries()) merged.register(tool)
   for (const tool of fixture.entries()) merged.register(tool)
   return merged
+}
+
+function mcpConnectionFingerprint(profile: import('../../src/shared/mcpTypes').McpServerProfile): string {
+  return createHash('sha256').update(JSON.stringify({
+    id: profile.id, enabled: profile.enabled, transport: profile.transport, timeoutSec: profile.timeoutSec,
+    // Token rotation / expiry is expected runtime state. Bind to the configured auth
+    // identity instead, so OAuth refresh does not revoke later calls in this turn.
+    auth: {
+      mode: profile.auth.mode,
+      headerName: profile.auth.headerName,
+      valuePrefix: profile.auth.valuePrefix,
+      oauthClientId: profile.auth.oauthClientId,
+      oauthScopes: profile.auth.oauthScopes
+    },
+    stdio: profile.stdio ? { command: profile.stdio.command, args: profile.stdio.args, cwd: profile.stdio.cwd,
+      env: profile.stdio.env.map(({ key, valuePresent }) => ({ key, valuePresent })) } : undefined,
+    http: profile.http,
+    enabledToolNames: profile.enabledToolNames
+  })).digest('hex')
 }
 
 /** R1：会话工作目录单一事实源——装配期解析快照，调用边界经 refresh() 跟随绑定变更。 */
@@ -559,12 +578,16 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   // off 档走现状路径（64/96 KiB 裁剪，10.1.1 逐字节兼容）。档位与 toolChatLoop 的 plan 计算同源
   // （同一份 materials.toolsConfig），快照与 plan 天然一致。
   const mcpDeferredMode = materials.toolsConfig.mcpDeferredLoading ?? 'always'
-  const mcpSnapshotRaw: McpToolSnapshot = db
+  const isApprovalAgent = materials.internalConfirmExemption === 'approval-agent'
+  const mcpSnapshotRaw: McpToolSnapshot = db && !isApprovalAgent
     ? buildSnapshotFromDb(db, {
-        remoteContext: materialsLane !== 'desktop',
         admission: mcpDeferredMode === 'off' ? 'standard' : 'deferred'
       })
     : { entries: new Map(), budgetDropped: [] }
+  const mcpProbeProfilesById: ReadonlyMap<string, import('../../src/shared/mcpTypes').McpServerProfile> | undefined = db && mcpSnapshotRaw.entries.size > 0
+    ? new Map(listProfiles(db).map((p) => [p.id, p]))
+    : undefined
+  const mcpProfileFingerprints = new Map([...(mcpProbeProfilesById?.values() ?? [])].map((profile) => [profile.id, mcpConnectionFingerprint(profile)]))
   const mcpResolveExecutor = db
     ? (toolName: string, manager: McpConnectionManager, profilesById?: ReadonlyMap<string, import('../../src/shared/mcpTypes').McpServerProfile>) => {
         const entry = mcpSnapshotRaw.entries.get(toolName)
@@ -573,10 +596,21 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         if (!profile) return undefined
         const oauthProvider =
           profile.auth.mode === 'oauth' ? createMcpOAuthClientProvider(db, profile) : undefined
+        const expectedProfileFingerprint = mcpProfileFingerprints.get(profile.id) ?? mcpConnectionFingerprint(profile)
         return createMcpToolExecutor(entry, {
           getSession: (serverId: string) =>
             manager.connect(profile, async (kind) => getSecret(db, serverId, kind), { oauthProvider }),
           getProfile: () => profile,
+          expectedProfileFingerprint,
+          getCurrentProfileFingerprint: (currentServerId) => {
+            const current = listProfiles(db).find((candidate) => candidate.id === currentServerId)
+            return current ? mcpConnectionFingerprint(current) : undefined
+          },
+          getCurrentTool: (serverId, originalName) => {
+            const currentProfile = listProfiles(db).find((candidate) => candidate.id === serverId)
+            if (!currentProfile?.enabled || !currentProfile.enabledToolNames.includes(originalName)) return undefined
+            return getCachedTools(db, serverId)?.tools.find((tool) => tool.originalName === originalName)
+          },
           invalidateSession: (serverId: string) => manager.disconnect(serverId),
           getRecentDiagnostics: (serverId: string) => getDiagnostics(db, serverId)
         })
@@ -586,9 +620,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   // 失败条目快照层剔除（索引/deferredNames/授权面/注册表天然同步）+ warn 日志；invoke 降级继续。
   // 全档位一致；这是 off 档「现状逐字节一致」承诺的唯一有意偏离（现状坏条目使整 invoke throw）。
   // 评审 P3：profiles 按 serverId 建 Map 一次读取——探针 O(N) 而非每条目一次 listProfiles 的 O(N²)。
-  const mcpProbeProfilesById: ReadonlyMap<string, import('../../src/shared/mcpTypes').McpServerProfile> | undefined = db && mcpSnapshotRaw.entries.size > 0
-    ? new Map(listProfiles(db).map((p) => [p.id, p]))
-    : undefined
   const mcpSnapshot: McpToolSnapshot = db && mcpSnapshotRaw.entries.size > 0
     ? sanitizeMcpSnapshotForExecutors(mcpSnapshotRaw, (entry) => {
         const executor = mcpResolveExecutor?.(entry.mappedName, {} as McpConnectionManager, mcpProbeProfilesById)

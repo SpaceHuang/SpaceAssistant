@@ -626,6 +626,18 @@ describe('mcp-readonly-allow：只读注解放行不收编远程链路（B5）',
       expect(d.type === 'require-confirm' && d.ruleId).toBe('mcp-tool-ask')
     }
   })
+
+  it('automation lane：MCP 只读注解仍交由 agent 回答者审批', () => {
+    const d = decide(
+      mkFacts('mcp__srv__query', 'read', mcpReadonlySignals, 'medium'),
+      mkContext('automation'),
+      DEFAULT_POLICY_RULES,
+      deps()
+    )
+    expect(d.type).toBe('require-confirm')
+    expect(d.type === 'require-confirm' && d.ruleId).toBe('mcp-tool-ask')
+    expect(d.type === 'require-confirm' && d.answerer).toBe('agent')
+  })
 })
 
 describe('confirm-every-time', () => {

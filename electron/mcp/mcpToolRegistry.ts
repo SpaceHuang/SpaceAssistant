@@ -270,13 +270,12 @@ export function sanitizeMcpSnapshotForExecutors(
   return { entries, budgetDropped: snapshot.budgetDropped, executorDropped }
 }
 
-export function mayBuildMcpToolSnapshot(profiles: McpServerProfile[], remoteContext = false): boolean {
-  return !remoteContext && profiles.some((profile) => profile.enabled && profile.enabledToolNames.length > 0)
+export function mayBuildMcpToolSnapshot(profiles: McpServerProfile[], _remoteContext = false): boolean {
+  return profiles.some((profile) => profile.enabled && profile.enabledToolNames.length > 0)
 }
 
 /**
  * 构建请求级 MCP 工具快照：
- * - 远程 IM 会话（remoteContext 存在）一律不注入（需求 §4.6）。
  * - 仅启用且白名单非空的服务注入；按服务配置数组顺序 → enabledToolNames 保存顺序确定性排列。
  * - 预算：每轮最多 64 个 / 累计 ≤96 KiB，超限按顺序裁剪并记录。
  */
@@ -286,8 +285,6 @@ export function buildSnapshotTools(
   options?: { remoteContext?: boolean; maxCount?: number; maxTotalBytes?: number }
 ): McpToolSnapshot {
   const snapshot: McpToolSnapshot = { entries: new Map(), budgetDropped: [] }
-  if (options?.remoteContext) return snapshot
-
   const ordered: McpToolDescriptor[] = []
   for (const profile of profiles) {
     if (!profile.enabled) continue
@@ -338,7 +335,7 @@ export function snapshotEntriesToAnthropicTools(
 }
 
 /**
- * 从 DB 构建当前快照（toolChatLoop 用，仅桌面会话注入）。
+ * 从 DB 构建当前请求快照；lane 的授权与裁剪由调用方可信宿主材料决定。
  * FR11：admission 'deferred'（auto/always 档）按偏执上限 512/1 MiB 准入（白名单为唯一门槛）；
  * 'standard'（off 档/缺省）保持既有 64 个 / 96 KiB 裁剪（10.1.1 逐字节兼容）。
  */
@@ -347,7 +344,7 @@ export function buildSnapshotFromDb(
   options?: { remoteContext?: boolean; admission?: 'standard' | 'deferred' }
 ): McpToolSnapshot {
   const profiles = listProfiles(db)
-  if (!mayBuildMcpToolSnapshot(profiles, options?.remoteContext)) {
+  if (!mayBuildMcpToolSnapshot(profiles)) {
     return { entries: new Map(), budgetDropped: [] }
   }
   const caches = new Map<string, McpToolCacheEntry>()
