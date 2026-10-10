@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { collectSessionStorageProfile } from './sessionStorageProfile'
+import { collectSessionStorageStrictProfile } from './sessionStorageProfile'
 import { getSessionLedgerRecoveryRoots } from '../runtime/sessionLedgerRecovery'
 import { RETENTION_POLICY_CONFIG_KEYS, resolveRetentionPolicy } from '../storage/retentionPolicy'
 import { readCanonicalSpillReferences } from '../storage/spillStore'
@@ -106,7 +106,7 @@ function inventorySessionEventDirectories(roots: readonly string[], maxSessions:
 
 /** Read-only M4-5 estimate. Candidates are never treated as deletion authorization. */
 export function collectSessionStorageCleanupEstimate(dbPath: string, now = Date.now()): Record<string, unknown> {
-  const profile = collectSessionStorageProfile(dbPath) as {
+  const profile = collectSessionStorageStrictProfile(dbPath) as {
     collectedAt: string; schemaVersion: number | null; dbBytes: number; databaseFiles: { totalBytes: number }
     pageSize: { page_size: number }; pageCount: { page_count: number }; freelistCount: { freelist_count: number }
     dbstat: ProfileObject[] | null; tables: { messages: ProfileTable; canonicalHistory: ProfileTable; transcriptSnapshots: ProfileTable }
