@@ -102,6 +102,7 @@ export function createAgentSdkSafetyPolicy(input: {
             kind: 'ask', confirmationId: binding.toolCallId, answerer: decision.answerer, reasonCode: decision.ruleId,
             context: {
               toolName: gateArgs.toolName,
+              ...(gateArgs.lane ? { lane: gateArgs.lane } : {}),
               ...(args.currentPageUrl ? { currentPageUrl: args.currentPageUrl } : {}),
               ...(args.dangerAssessment ? { dangerAssessment: args.dangerAssessment } : {}),
               ...(args.remoteBudgetState ? { remoteBudgetState: args.remoteBudgetState } : {}),

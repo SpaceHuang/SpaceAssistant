@@ -117,7 +117,8 @@ export function createAgentSdkConfirmationPort(input: {
       let outcome = result.mapped
       if ('outcome' in result && confirmation.answerer === 'agent' &&
         result.outcome.kind !== 'approved-with-action' &&
-        (result.outcome.cause === 'unavailable' || result.outcome.cause === 'timeout') &&
+        (result.outcome.cause === 'unavailable' || result.outcome.cause === 'timeout' ||
+          (result.outcome.cause === 'agent-undetermined' && confirmation.context.lane === 'desktop')) &&
         result.outcome.answererKind === 'agent' && !confirmation.signal?.aborted && input.fallback) {
         outcome = await input.fallback(confirmation.call, confirmation, confirmation.context as GateConfirmationContext, result.outcome) ?? outcome
       }

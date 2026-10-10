@@ -3605,11 +3605,10 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'hosted-browser-config-drift-start',
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'zh-CN' }
     })
-    const mutateDuringApproval = async () => {
-      changeBrowserPolicy()
-      return { ok: true, verdict: { kind: 'approve', reason: { summary: 'browser configuration changed during confirmation' }, riskLevel: 'medium', authorization: 'high' } } as never
-    }
-    vi.mocked(runApprovalAgent).mockImplementationOnce(mutateDuringApproval)
+    const agentRequestsHuman = async () => ({
+      ok: true, verdict: { kind: 'undetermined', reason: { summary: 'browser action requires a human decision' } }
+    } as never)
+    vi.mocked(runApprovalAgent).mockImplementationOnce(agentRequestsHuman)
     vi.mocked(waitForToolConfirm).mockImplementationOnce(async () => {
       changeBrowserPolicy()
       return 'approved' as never
@@ -3743,10 +3742,6 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const registerProvider = runtime.modelProviders.register.bind(runtime.modelProviders)
     runtime.modelProviders.register = (profile, provider) => profile.routeId === route.routeId ? route.routeId : registerProvider(profile, provider)
     setDefaultAgentRuntime(runtime)
-    vi.mocked(runApprovalAgent).mockResolvedValueOnce({
-      ok: true, verdict: { kind: 'approve', reason: { summary: `approved browser ${action} for late-ack test` }, riskLevel: 'medium', authorization: 'high' }
-    } as never)
-
     const session = createSession(db, { name: `hosted-browser-${action}-late-result`, model: modelId, maxTokens: 512 })
     const user = appendMessage(db, { id: `${toolCallId}-user`, sessionId: session.id, role: 'user', content: action === 'navigate' ? 'navigate to the checkout page' : 'click the checkout button', timestamp: 1, status: 'sent' })
     const assistant = appendMessage(db, { id: `${toolCallId}-assistant`, sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
@@ -3758,7 +3753,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const execute = registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
-      getBrowserConfig: () => ({ ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, navigateRequiresConfirm: true, actRequiresConfirm: true }),
+      getBrowserConfig: () => ({ ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, navigateRequiresConfirm: false, actRequiresConfirm: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
@@ -3890,7 +3885,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const execute = registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG }),
-      getBrowserConfig: () => ({ ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, actRequiresConfirm: true }),
+      getBrowserConfig: () => ({ ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, actRequiresConfirm: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir }),
