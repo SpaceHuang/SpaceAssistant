@@ -4,6 +4,7 @@ import http from 'http'
 import https from 'https'
 import { app, BrowserWindow, dialog, ipcMain, Notification } from 'electron'
 import { registerAppIpcHandlers } from './appIpc'
+import type { StorageProfileCoordinator } from './storageProfile/storageProfileCoordinator'
 import { registerClaudeStreamHandlers, type ClaudeChatCreateWithToolsPayload } from './claudeStreamHandlers'
 import { mergeWikiConfig, mergeToolsConfig } from '../src/shared/domainTypes'
 import { readBrowserConfigFromDb } from './browser/browserConfigDb'
@@ -276,6 +277,7 @@ installProcessSafetyNet((event, detail) => {
 let usageStatsStartupMaintenance: (() => void) | null = null
 let startWindowReadyMaintenance: (() => void) | null = null
 let storageLifecycleStop: ((deadlineMs: number) => Promise<{ status: 'quiescent' | 'deadline-exceeded' }>) | null = null
+let storageProfileCoordinator: StorageProfileCoordinator | null = null
 let safeDatabaseMaintenanceInFlight: Promise<void> | undefined
 let isQuitting = false
 let quitCleanupDone = false
@@ -624,7 +626,15 @@ app.whenReady().then(async () => {
     usageStatsStartupMaintenance = null
   }
   appSessionQueries = sessionStorage.queries
-  storageLifecycleStop = (deadlineMs) => sessionStorageHost.lifecycle.stop({ deadlineMs })
+  storageLifecycleStop = async (deadlineMs) => {
+    const [sessionStatus, profileStatus] = await Promise.all([
+      sessionStorageHost.lifecycle.stop({ deadlineMs }),
+      storageProfileCoordinator?.shutdown({ deadlineMs }) ?? Promise.resolve({ status: 'quiescent' as const })
+    ])
+    return sessionStatus.status === 'quiescent' && profileStatus.status === 'quiescent'
+      ? { status: 'quiescent' as const }
+      : { status: 'deadline-exceeded' as const }
+  }
   // Main-process owner only. Execution remains closed until a separately authorized cohort is started.
   sessionProjectionMigrationApplication = new SessionProjectionMigrationApplication(db)
   sessionProjectionMigrationApplication.initialize()
@@ -1168,7 +1178,7 @@ app.whenReady().then(async () => {
     })
   }
 
-  registerAppIpcHandlers(ipcMain, {
+  storageProfileCoordinator = registerAppIpcHandlers(ipcMain, {
     db,
     sessionStorage,
     backup,

@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
 import { openDatabase } from '../electron/database'
 import { getDbConnection } from '../electron/database/sqliteStore'
-import { collectSessionStorageProfile } from '../electron/database/sessionStorageProfile'
+import { collectSessionStorageStrictProfile } from '../electron/database/sessionStorageProfile'
 import { certifyCanonicalSessionApiRead, beginSessionMessageContentCleanup, clearNextSessionMessageContentBatch,
   markSessionMessageContentWriteStopped, setCanonicalApiReadFeatureEnabled, verifyAndCompleteSessionMessageContentCleanup } from '../electron/runtime/sessionStorageCutover'
 import { enableCanonicalSessionWriteAuthority } from '../electron/runtime/sessionContentWriteAuthority'
@@ -41,7 +41,7 @@ function startupSample(dbPath: string): Record<string, unknown> {
 }
 
 function profileSummary(dbPath: string): Record<string, unknown> {
-  const profile = collectSessionStorageProfile(dbPath) as any
+  const profile = collectSessionStorageStrictProfile(dbPath) as any
   return {
     schemaVersion: profile.schemaVersion,
     dbBytes: profile.dbBytes,

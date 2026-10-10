@@ -22,6 +22,7 @@ if (!tsc) {
   process.exit(1)
 }
 const project = path.join(root, 'tsconfig.renderer.gate.json')
+const storageProject = path.join(root, 'tsconfig.storage-type-tests.json')
 
 const result = spawnSync(process.execPath, [tsc, '-p', project, '--noEmit'], {
   cwd: root,
@@ -34,3 +35,11 @@ if (result.status !== 0) {
 }
 
 console.log('[typecheck:shared] ok — tsc -p tsconfig.renderer.gate.json --noEmit')
+
+const storageResult = spawnSync(process.execPath, [tsc, '-p', storageProject, '--noEmit'], {
+  cwd: root,
+  encoding: 'utf8',
+  stdio: 'inherit'
+})
+if (storageResult.status !== 0) process.exit(storageResult.status ?? 1)
+console.log('[typecheck:shared] ok — storage IPC DTO compile-time checks')

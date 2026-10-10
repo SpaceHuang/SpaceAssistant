@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "measurement": {
+    "mode": "sync",
+    "command": "node --import tsx scripts/storage-profile-perf-baseline.ts",
+    "node": "v26.4.0",
+    "npm": "11.17.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "statistic": "median and nearest-rank p95",
+    "thresholds": {
+      "mainProcessResponsivenessProbeP95Ms": 50
+    },
+    "notes": "The timer probe is queued immediately before synchronous profile collection and measures event-loop unavailability. Handler duration and the queued probe are distinct recorded stages; exceeding the target is expected baseline evidence, not a script failure."
+  },
+  "results": [
+    {
+      "fixture": {
+        "version": 1,
+        "seed": 20261010,
+        "size": "small",
+        "rows": 100,
+        "payloadBytes": 256,
+        "spillFiles": 10,
+        "schema": "storage-profile-benchmark-v1",
+        "indexState": "missing"
+      },
+      "warmupRuns": 2,
+      "measuredRuns": 7,
+      "handlerMs": {
+        "median": 2.04,
+        "p95": 2.397,
+        "unit": "ms"
+      },
+      "mainProcessResponsivenessProbeMs": {
+        "median": 2.128,
+        "p95": 3.61,
+        "unit": "ms"
+      }
+    },
+    {
+      "fixture": {
+        "version": 1,
+        "seed": 20261010,
+        "size": "medium",
+        "rows": 2000,
+        "payloadBytes": 1024,
+        "spillFiles": 200,
+        "schema": "storage-profile-benchmark-v1",
+        "indexState": "missing"
+      },
+      "warmupRuns": 2,
+      "measuredRuns": 7,
+      "handlerMs": {
+        "median": 38.914,
+        "p95": 40.192,
+        "unit": "ms"
+      },
+      "mainProcessResponsivenessProbeMs": {
+        "median": 39.025,
+        "p95": 40.243,
+        "unit": "ms"
+      }
+    },
+    {
+      "fixture": {
+        "version": 1,
+        "seed": 20261010,
+        "size": "large",
+        "rows": 20000,
+        "payloadBytes": 4096,
+        "spillFiles": 2000,
+        "schema": "storage-profile-benchmark-v1",
+        "indexState": "missing"
+      },
+      "warmupRuns": 2,
+      "measuredRuns": 7,
+      "handlerMs": {
+        "median": 762.939,
+        "p95": 766.54,
+        "unit": "ms"
+      },
+      "mainProcessResponsivenessProbeMs": {
+        "median": 763.154,
+        "p95": 766.753,
+        "unit": "ms"
+      }
+    }
+  ]
+}

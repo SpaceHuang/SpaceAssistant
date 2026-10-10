@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "measurement": {
+    "mode": "worker",
+    "command": "node --import tsx scripts/storage-profile-perf-baseline.ts --mode=worker --output=docs/plan/evidence/storage-profile-after.json",
+    "node": "v26.4.0",
+    "npm": "11.17.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "statistic": "median and nearest-rank p95",
+    "thresholds": {
+      "mainProcessResponsivenessProbeP95Ms": 50
+    },
+    "notes": "The timer probe is queued immediately before the worker request. Handler duration includes worker startup, collection and exit; responsiveness measures main event-loop unavailability while collection runs in the worker."
+  },
+  "results": [
+    {
+      "fixture": {
+        "version": 1,
+        "seed": 20261010,
+        "size": "small",
+        "rows": 100,
+        "payloadBytes": 256,
+        "spillFiles": 10,
+        "schema": "storage-profile-benchmark-v1",
+        "indexState": "missing"
+      },
+      "warmupRuns": 2,
+      "measuredRuns": 7,
+      "handlerMs": {
+        "median": 85.722,
+        "p95": 86.624,
+        "unit": "ms"
+      },
+      "mainProcessResponsivenessProbeMs": {
+        "median": 1.512,
+        "p95": 1.55,
+        "unit": "ms"
+      }
+    },
+    {
+      "fixture": {
+        "version": 1,
+        "seed": 20261010,
+        "size": "medium",
+        "rows": 2000,
+        "payloadBytes": 1024,
+        "spillFiles": 200,
+        "schema": "storage-profile-benchmark-v1",
+        "indexState": "missing"
+      },
+      "warmupRuns": 2,
+      "measuredRuns": 7,
+      "handlerMs": {
+        "median": 137.893,
+        "p95": 147.669,
+        "unit": "ms"
+      },
+      "mainProcessResponsivenessProbeMs": {
+        "median": 1.505,
+        "p95": 1.601,
+        "unit": "ms"
+      }
+    },
+    {
+      "fixture": {
+        "version": 1,
+        "seed": 20261010,
+        "size": "large",
+        "rows": 20000,
+        "payloadBytes": 4096,
+        "spillFiles": 2000,
+        "schema": "storage-profile-benchmark-v1",
+        "indexState": "missing"
+      },
+      "warmupRuns": 2,
+      "measuredRuns": 7,
+      "handlerMs": {
+        "median": 860.621,
+        "p95": 862.65,
+        "unit": "ms"
+      },
+      "mainProcessResponsivenessProbeMs": {
+        "median": 1.495,
+        "p95": 1.619,
+        "unit": "ms"
+      }
+    }
+  ]
+}

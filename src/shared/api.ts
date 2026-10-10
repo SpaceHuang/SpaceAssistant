@@ -173,7 +173,10 @@ export type TurnExecutePayload = {
 export type SpaceAssistantApi = {
   ping: () => Promise<string>
 
-  storageGetProfile: () => Promise<Record<string, unknown>>
+  storageGetOverview: (force?: boolean) => Promise<import('./storageTypes').StorageOverview>
+  storageRunAudit: () => Promise<import('./storageTypes').StorageAudit>
+  /** Compatibility alias; invokes the explicit strict audit endpoint. */
+  storageGetProfile: () => Promise<import('./storageTypes').StorageAudit>
   storageClearCache: () => Promise<{ cacheRows: number; eligibilityRows: number }>
   storageCompact: () => Promise<{
     archivePath: string

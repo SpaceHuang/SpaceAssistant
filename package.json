@@ -69,7 +69,8 @@
     "check:session-storage-boundary": "node scripts/check-session-storage-boundary.mjs",
     "check:spill-reference-boundary": "node scripts/check-spill-reference-boundary.mjs",
     "bench:spill-reference-index": "node --import tsx scripts/bench-spill-reference-index.mjs",
-    "bench:startup-maintenance": "node --import tsx scripts/bench-startup-maintenance.mjs"
+    "bench:startup-maintenance": "node --import tsx scripts/bench-startup-maintenance.mjs",
+    "storage-profile:local-readonly": "npm run build:electron && cross-env NODE_OPTIONS=--import=tsx electron scripts/storage-profile-local-readonly.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.79.0",
