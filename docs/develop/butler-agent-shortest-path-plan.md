@@ -182,7 +182,7 @@ v2 改为：**偏差项是选择与推进的基本单元。选定了就按偏差
 1. **lane 显式传入（偏差 21 的目标形状）**：`RunToolChatSessionArgs` 新增可选 `lane` 入参（显式声明优先，回退 `remoteContext` 推导，最终回退 `desktop`）。
 2. **lane 穿透 Core 内部全部推导点（评审 B1，E16 清单逐点替换）**——`remoteContext` 推导改为消费显式 lane，否则 automation 被当 desktop、读 desktop 规则与缓存、继承桌面豁免：
    - `toolCallGate.ts:107-117` `laneOf`：`ToolCallGateArgs` 新增 `lane`，`evaluateToolCallGate` 不再自行推导；`loadEffectivePolicyRules(appDb, lane)`（`:185`）与 decision cache 的 lane（`:328`）都消费穿透值——**decision cache 读写以真实 lane 为键，automation 不命中桌面用户的历史信任条目**。
-   - `toolChatLoop.ts:626-641`：`exposureLane` 改用显式 lane；**MCP 快照注入判定同步改**——现状 `remoteContext: Boolean(remoteContext)` 语义是「仅桌面注入」，automation 调用为 false 时**会**注入 MCP 工具；改为按 lane 判定（`lane === 'desktop'` 才注入），保持「远程与 automation 无 MCP」语义。
+   - `toolChatLoop.ts:626-641`：历史计划曾建议 MCP 仅桌面注入。该限制由 2026-10-10 的 `mcp-im-automation-tools-requirement.md` 替代；当前 desktop、feishu、wechat、普通 automation 使用相同请求快照，审批 Agent 仍为空快照。
    - `toolChatLoop.ts:1614-1618` `confirmLane`：改用显式 lane，否则 `channelFor` 永远收不到 `'automation'`，RejectingChannel 接不上。
    - `toolChatLoop.ts:1298/:1512/:1918/:1946` 等审计事件内联三元推导：全部收敛到一次解析的 lane 变量（审计归属正确是偏差 7 / 22 的验收面）。
 3. **通道**：`channelFor` 对 `automation` 返回 `RejectingChannel`。`confirm.outcome` 审计带可区分原因（`cause: 'no-answerer'`，区别于用户拒绝）——现有 `ConfirmOutcome` 形状装不下则扩展 reason 字段并在落审计处透传。

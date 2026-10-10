@@ -95,7 +95,7 @@
    `chatToolSessionService.buildToolChatPayload` 删掉 `filterBuiltinToolsForRenderer` / `sanitizeAnthropicToolsPayloadForStrictGateways` 及 `tools` 组装；
    handler（`claudeStreamHandlers.ts:303`）删掉对 `toolsRaw` 的校验与丢弃。
 3. 将“读状态”和“纯计算”拆开，避免用最终结果决定是否读取它自己的输入：
-   - 编排层先根据请求链路与现有配置做来源预检：内置来源始终可纯计算；MCP 仅桌面链路可能参与，远端链路明确不注入。
+   - 历史实现计划：MCP 仅桌面链路参与。该 lane 限制已由 2026-10-10 的 `mcp-im-automation-tools-requirement.md` 替代；当前 desktop、feishu、wechat 与普通 automation 使用同一请求快照并由策略/调用裁剪约束。
    - MCP 是否值得构建工具快照，由独立的轻量预检决定：先读取/复用服务配置元数据，判断是否存在启用且白名单非空的服务；只有可能产出候选时才读取工具缓存并构建快照。配置元数据读取与工具快照读取在接口和测试计数中分开，不得以“内置集合为空”作为跳过依据。
    - 对允许的来源取得候选：内置定义；以及同一次 `buildSnapshotFromDb` 得到的**请求级完整 MCP 快照**。
    - 纯函数 `computeEffectiveTools(args)` 只接收已取得的候选与配置/链路规则，分别过滤、合并并返回 `{ tools, toolNames, authorizedToolNames }`；最终集合为空的判断只发生在合并之后。
