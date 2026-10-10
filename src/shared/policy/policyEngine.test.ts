@@ -536,15 +536,14 @@ describe('buildMemoryTiers：run_script 记忆封顶（§5.3）', () => {
 })
 
 describe('buildMemoryTiers：远程链路不开放持久档（B4）', () => {
-  it('远程链路 navigate 域名确认只给会话档，不给全局持久档', () => {
+  it('远程 outbound navigate 不提供记忆档位', () => {
     const facts = mkFacts('browser', 'outbound', [
       { kind: 'network-egress', domains: ['example.com'], via: 'browser-navigate' }
     ], 'medium')
     const tiers = buildMemoryTiers(facts, 's1', 'feishu')
-    expect(tiers.length).toBeGreaterThan(0)
-    for (const t of tiers) {
-      expect('sessionId' in t.key && t.key.sessionId).toBe('s1')
-    }
+    // IM outbound is never remembered (memoryEligibility); this is stricter than
+    // the general remote-session-only rule exercised by remote file writes below.
+    expect(tiers).toEqual([])
   })
 
   it('桌面链路仍开放持久档（行为不回退）', () => {
