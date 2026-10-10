@@ -115,8 +115,14 @@ describe('执行层读挂载（T1.8）', () => {
 
     const res = await listDirectoryExecutor.execute({ path: 'llm-wiki/wiki' }, ctx)
     expect(res.success).toBe(true)
-    const entries = (res.data as { entries: Array<{ name: string }> }).entries
+    const entries = (res.data as { entries: Array<{ name: string; path: string }> }).entries
     expect(entries.map((e) => e.name).sort()).toEqual(['index.md', 'page.md'])
+    // BLK-8：条目 path 为词汇路径（无 ../..、无 userData 片段，Agent 可回喂）
+    for (const entry of entries) {
+      expect(entry.path).toMatch(/^llm-wiki\/wiki\//)
+      expect(entry.path).not.toContain('..')
+      expect(entry.path).not.toContain(ctx.userDataDir)
+    }
   })
 
   it('T1.8③ 未挂载读不变：workDir 内文件照常', async () => {

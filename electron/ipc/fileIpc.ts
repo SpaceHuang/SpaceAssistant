@@ -33,6 +33,25 @@ function wikiMountOf(ctx: AppIpcContext, rel: string) {
   return resolution.mounted ? resolution : undefined
 }
 
+/** P1-10（§12.3-2）：读取失败时查 config.wiki.migration.report.renames 改名映射。 */
+function resolveMigratedTarget(ctx: AppIpcContext, relPath: string): string | null {
+  try {
+    const wikiConfig = readWikiConfig(ctx.db)
+    const renames = wikiConfig.migration?.report?.renames ?? []
+    const normalized = relPath.replace(/\\/g, '/')
+    return renames.find((r) => r.from === normalized)?.to ?? null
+  } catch {
+    return null
+  }
+}
+
+/** BLK-9（§9.3）：只读别名（历史自定义根）对全部 UI 写通道显式拒绝 + 引导文案。 */
+function assertWikiWritable(mounted: ReturnType<typeof wikiMountOf>): void {
+  if (mounted?.readOnly) {
+    throw new Error(`该路径为历史迁移保留的只读别名，请在 ${WIKI_VOCABULARY_PREFIX}/ 下的对应位置操作`)
+  }
+}
+
 export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   ipcMain.handle('file:list-directory', async (_e, rel: string): Promise<FileInfo[]> => {
     const root = ctx.getWorkDir()
@@ -40,22 +59,19 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const mounted = normalized ? wikiMountOf(ctx, normalized) : undefined
     const wikiConfig = readWikiConfig(ctx.db)
     const wikiEnabled = wikiConfig.enabled
-    // §7.7：挂载启用期间，workDir 根列表排除挂载词汇前缀（含只读别名）实体目录——词汇路径由共享根唯一提供
+    // §7.7 + BLK-4：排除集恒为词汇前缀（含只读别名）——rootPath 是物理目录名，不参与词汇语义
     const excludedRootNames = wikiEnabled
-      ? [wikiConfig.rootPath || DEFAULT_WIKI_ROOT_DIRNAME, ...(wikiConfig.legacyRootAliases ?? [])]
+      ? [WIKI_VOCABULARY_PREFIX, ...(wikiConfig.legacyRootAliases ?? [])]
       : []
 
-    // 根列表虚拟条目（§7.4-I1）：hideWikiFromFileTree=false 时合成 llm-wiki 目录条目
+    // 根列表虚拟条目（§7.4-I1）：hideWikiFromFileTree=false 时仅合成 llm-wiki 虚拟目录条目
+    // （BLK-7：不做共享根子条目平铺——子内容经虚拟条目展开获取，避免双形态废行）
     if (wikiEnabled && !wikiConfig.hideWikiFromFileTree && (normalized === '' || normalized === '.') && !mounted) {
-      let sharedRootEntries: FileInfo[] = []
-      const sharedRoot = path.join(ctx.getUserDataPath(), wikiConfig.rootPath || DEFAULT_WIKI_ROOT_DIRNAME)
-      if (existsSync(sharedRoot)) {
-        const r = await listDirectoryEntries(ctx, sharedRoot, root)
-        sharedRootEntries = r.map((e) => ({ ...e, path: normalizeRelPathInput(`${WIKI_VOCABULARY_PREFIX}/${e.path === '.' ? '' : e.path}`) }))
-      }
       const virtualEntry: FileInfo = { name: WIKI_VOCABULARY_PREFIX, path: WIKI_VOCABULARY_PREFIX, isDirectory: true, virtual: true }
-      const rest = (await listDirectoryEntries(ctx, root, root)).filter((e) => !excludedRootNames.includes(e.name))
-      return [virtualEntry, ...rest, ...sharedRootEntries]
+      const rest = (await listDirectoryEntries(ctx, root, root)).filter(
+        (e) => !excludedRootNames.some((n) => n.toLowerCase() === e.name.toLowerCase())
+      )
+      return [virtualEntry, ...rest]
     }
 
     const target = mounted
@@ -73,7 +89,7 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     }
     const entries = await listDirectoryEntries(ctx, target, root)
     if (excludedRootNames.length > 0 && (normalized === '' || normalized === '.')) {
-      return entries.filter((e) => !excludedRootNames.includes(e.name))
+      return entries.filter((e) => !excludedRootNames.some((n) => n.toLowerCase() === e.name.toLowerCase()))
     }
     return entries
   })
@@ -85,7 +101,14 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const target = mounted
       ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
       : resolveSafePath(root, normalized)
-    return readFileForViewer(target)
+    try {
+      return await readFileForViewer(target)
+    } catch (error) {
+      // P1-10（§12.3-2）：读取失败查迁移改名映射——命中则返回「已合并至」跳转线索
+      const migratedTo = resolveMigratedTarget(ctx, normalized)
+      if (migratedTo) return { error: error instanceof Error ? error.message : String(error), migratedTo }
+      throw error
+    }
   })
 
   ipcMain.handle('file:get-metadata', async (_e, rel: string) => {
@@ -110,9 +133,10 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     }
     const rel = payload.relPath.trim()
     const mounted = wikiMountOf(ctx, rel)
-    // T1.16：wiki 词汇路径先经挂载解析真实路径再监听（切 workDir 统一停 watcher 行为不变）
+    // T1.16 + BLK-6：wiki 词汇路径先经挂载解析真实路径再监听；广播 scope 用词汇路径
+    // （渲染端按词汇路径过滤——realRel 会产出 file:wiki/index.md 错配 scope）
     if (mounted) {
-      startContentWatch(mounted.realBase, mounted.realRel)
+      startContentWatch(mounted.realBase, mounted.realRel, mounted.vocabularyPath)
       return
     }
     startContentWatch(ctx.getWorkDir(), rel)
@@ -189,9 +213,10 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
       if (++imageCount > MAX_MARKDOWN_EXPORT_IMAGES) { warnings.push(`图片数量超过上限，未嵌入：${resource}`); continue }
       try {
         const decoded = decodeURIComponent(resource); if (/^[a-z]+:/i.test(decoded)) { warnings.push(`未嵌入资源：${resource}`); continue }
-        // T1.17：source 位于共享根时，图片解析根跟随 source 真实目录（wiki 页导出图片不再静默丢弃）
+        // T1.17 + P1-12：source 位于共享根时，图片解析沙箱根用 realBase（wiki 页可引用
+        // 共享根内其他目录的相对图片，如 ../assets/x.png；不收窄到 source 所在目录）
         const file = exportMounted
-          ? await resolveSafeReadPath(path.dirname(source), path.resolve(path.dirname(source), decoded))
+          ? await resolveSafeReadPath(exportMounted.realBase, path.resolve(path.dirname(source), decoded))
           : await resolveSafeReadPath(root, path.resolve(path.dirname(source), decoded))
         const ext = path.extname(file).toLowerCase()
         if (!['.png', '.jpg', '.jpeg', '.gif', '.bmp'].includes(ext)) { warnings.push(`未嵌入不支持的图片：${resource}`); continue }
@@ -284,6 +309,7 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   ipcMain.handle('file:create-file', async (_e, rel: string): Promise<void> => {
     const root = ctx.getWorkDir()
     const mounted = wikiMountOf(ctx, rel)
+    assertWikiWritable(mounted)
     const target = mounted
       ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
       : resolveSafePath(root, rel)
@@ -294,6 +320,7 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   ipcMain.handle('file:create-directory', async (_e, rel: string): Promise<void> => {
     const root = ctx.getWorkDir()
     const mounted = wikiMountOf(ctx, rel)
+    assertWikiWritable(mounted)
     const target = mounted
       ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
       : resolveSafePath(root, rel)
@@ -303,6 +330,11 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
   ipcMain.handle('file:delete', async (_e, rel: string): Promise<void> => {
     const root = ctx.getWorkDir()
     const mounted = wikiMountOf(ctx, rel)
+    assertWikiWritable(mounted)
+    // BLK-9：挂载根本身（llm-wiki）禁止删除——防止递归删除整个共享知识库
+    if (mounted && !mounted.realRel) {
+      throw new Error('不能删除共享库根目录；如需清空请删除其中的具体文件')
+    }
     const target = mounted
       ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
       : resolveSafePath(root, rel)
@@ -315,6 +347,11 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     }
     const root = ctx.getWorkDir()
     const mounted = wikiMountOf(ctx, rel)
+    assertWikiWritable(mounted)
+    // BLK-9：挂载根本身禁止改名（改名共享库请用设置页「共享库目录名」受控改名）
+    if (mounted && !mounted.realRel) {
+      throw new Error('不能直接重命名共享库根目录；请在设置页使用共享库目录名改名')
+    }
     const oldPath = mounted
       ? (mounted.realRel ? resolveSafePath(mounted.realBase, mounted.realRel) : mounted.realBase)
       : resolveSafePath(root, rel)
@@ -328,6 +365,8 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const root = ctx.getWorkDir()
     const srcMounted = wikiMountOf(ctx, srcRel)
     const destMounted = wikiMountOf(ctx, destDirRel)
+    assertWikiWritable(srcMounted)
+    assertWikiWritable(destMounted)
     // §7.4：move 跨挂载边界首版显式拒绝（避免 EXDEV / 部分成功歧义）；copy 允许
     if (Boolean(srcMounted) !== Boolean(destMounted)) {
       throw new Error('不能在共享库与工作目录之间移动，请使用复制')
@@ -351,6 +390,7 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     const root = ctx.getWorkDir()
     const srcMounted = wikiMountOf(ctx, payload.srcRelPath)
     const destMounted = wikiMountOf(ctx, payload.destRelPath)
+    assertWikiWritable(destMounted)
     if (!srcMounted && !destMounted) {
       await copyFileInWorkDir(root, payload.srcRelPath, payload.destRelPath)
       return

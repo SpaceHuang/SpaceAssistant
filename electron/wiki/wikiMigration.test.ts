@@ -248,8 +248,10 @@ describe('T2.2b index/log/SCHEMA 归并', () => {
   it('SCHEMA 三分支：默认模板替换 / 已修改保留 legacy 副本 / 缺失忽略', async () => {
     const world = await setupWorld()
     // 共享库 SCHEMA 先移除，验证「默认模板 → 用新版」分支
+    // BLK-2：fixture 必须用真实 v1 全文（评审实证：截断 stub 哈希不匹配，分支永不命中）
+    const { LEGACY_DEFAULT_SCHEMA_MD_V1 } = await import('./wikiMigration')
     const p1 = world.makeLegacyProfile('proj-f1')
-    fs.writeFileSync(path.join(p1.srcRoot, 'SCHEMA.md'), '# LLM Wiki Schema\n\n> 本文件定义 Wiki 目录约定与 ingest / query / lint 工作流。可与 LLM 协作演化。\n', 'utf8')
+    fs.writeFileSync(path.join(p1.srcRoot, 'SCHEMA.md'), LEGACY_DEFAULT_SCHEMA_MD_V1, 'utf8')
     fs.rmSync(path.join(world.sharedRoot, 'SCHEMA.md'))
     await migrateLegacyWikis({
       db: world.db,
@@ -259,6 +261,20 @@ describe('T2.2b index/log/SCHEMA 归并', () => {
     })
     // 新版模板（含共享守则）被采用
     expect(fs.readFileSync(path.join(world.sharedRoot, 'SCHEMA.md'), 'utf8')).toContain('共享协作守则')
+
+    // BLK-2：真实默认模板 + 共享库已有 SCHEMA → 命中替换分支且共享库 SCHEMA 不被改动、无 legacy 副本
+    const { computeProjectId } = await import('./wikiProjects')
+    const p1b = world.makeLegacyProfile('proj-f1b')
+    fs.writeFileSync(path.join(p1b.srcRoot, 'SCHEMA.md'), LEGACY_DEFAULT_SCHEMA_MD_V1, 'utf8')
+    const sharedSchemaBefore = fs.readFileSync(path.join(world.sharedRoot, 'SCHEMA.md'), 'utf8')
+    await migrateLegacyWikis({
+      db: world.db,
+      userDataPath: world.userData,
+      wikiConfig: wikiConfig(),
+      profiles: [{ workDir: p1b.workDir }]
+    })
+    expect(fs.readFileSync(path.join(world.sharedRoot, 'SCHEMA.md'), 'utf8')).toBe(sharedSchemaBefore)
+    expect(fs.existsSync(path.join(world.sharedRoot, `SCHEMA.legacy-${computeProjectId(p1b.workDir)}.md`))).toBe(false)
 
     // 已修改 → SCHEMA.legacy-<projectId>.md
     const p2 = world.makeLegacyProfile('proj-f2')
@@ -281,6 +297,55 @@ describe('T2.2b index/log/SCHEMA 归并', () => {
       wikiConfig: wikiConfig(),
       profiles: [{ workDir: p3.workDir }]
     })).resolves.toBeDefined()
+  })
+})
+
+describe('BLK-3/BLK-4 存量自定义 rootPath 自动入管线并重置', () => {
+  it('rootPath=my-lib 的存量配置：自动扫入管线、合并到默认目录、配置重置 + 别名注册', async () => {
+    const world = await setupWorld()
+    const p = world.makeLegacyProfile('proj-custom', { customRoot: 'my-lib' })
+    // 存量配置：rootPath 为旧语义自定义值
+    setConfigValue(world.db, CONFIG_KEYS.wiki, JSON.stringify(wikiConfig({ rootPath: 'my-lib' })))
+
+    await migrateLegacyWikis({
+      db: world.db,
+      userDataPath: world.userData,
+      wikiConfig: wikiConfig({ rootPath: 'my-lib' }),
+      profiles: [{ workDir: p.workDir }]
+    })
+
+    // 合并目标为默认目录（共享库归位）
+    expect(fs.existsSync(path.join(world.sharedRoot, 'raw'))).toBe(true)
+    // 旧根改名保留
+    expect(fs.existsSync(p.srcRoot)).toBe(false)
+    // 配置重置为默认 + 别名注册
+    const cfg = readWikiConfig(world.db)
+    expect(cfg.rootPath).toBe('llm-wiki')
+    expect(cfg.legacyRootAliases).toContain('my-lib')
+  })
+
+  it('userData 侧已被 P1 init 建在旧 rootPath 下时：物理目录归位默认目录', async () => {
+    const world = await setupWorld()
+    // 模拟 P1 init 在旧 rootPath 下建过共享库
+    const legacyShared = path.join(world.userData, 'my-lib')
+    fs.mkdirSync(path.join(legacyShared, 'wiki'), { recursive: true })
+    fs.writeFileSync(path.join(legacyShared, 'wiki', 'index.md'), 'earlier init\n', 'utf8')
+
+    const p = world.makeLegacyProfile('proj-custom2', { customRoot: 'my-lib' })
+    await migrateLegacyWikis({
+      db: world.db,
+      userDataPath: world.userData,
+      wikiConfig: wikiConfig({ rootPath: 'my-lib' }),
+      profiles: [{ workDir: p.workDir }]
+    })
+
+    // 两侧并存：默认侧为权威库；旧物理目录改名保留（不丢数据）
+    expect(fs.existsSync(legacyShared)).toBe(false)
+    const preserved = fs.readdirSync(world.userData).filter((n) => n.startsWith('my-lib.pre-migrated-'))
+    expect(preserved).toHaveLength(1)
+    expect(fs.readFileSync(path.join(world.userData, preserved[0], 'wiki', 'index.md'), 'utf8')).toBe('earlier init\n')
+    const cfg = readWikiConfig(world.db)
+    expect(cfg.rootPath).toBe('llm-wiki')
   })
 })
 

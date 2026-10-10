@@ -32,13 +32,15 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
   const { t } = useTypedTranslation('wiki')
   const cfg = useTypedSelector((s) => s.config.config)
   const wiki = cfg?.wiki ?? DEFAULT_WIKI_CONFIG
-  const wikiRoot = wiki.rootPath.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
+  const wikiRoot = WIKI_VOCABULARY_PREFIX // BLK-4（D9）：词汇根恒为常量
 
   const [wikiInitialized, setWikiInitialized] = useState<boolean | null>(null)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const wikiTreeRef = useRef<FileTreeHandle>(null)
   // T2.5：迁移提示条 / 向导 / 项目显示名数据源（wiki:status.projects，v1.12）
   const [pendingMigration, setPendingMigration] = useState<{ legacyRoots: string[] } | null>(null)
+  // P1-14：向导开关独立 state——检测命中只出横幅，点「迁移」才弹向导
+  const [wizardOpen, setWizardOpen] = useState(false)
   const [migrating, setMigrating] = useState(false)
   const [extraRootsInput, setExtraRootsInput] = useState('')
   const [migrationReport, setMigrationReport] = useState<WikiMigrationReport | null>(null)
@@ -141,7 +143,7 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
             style={{ marginBottom: 8 }}
             message={t('migration.banner', { count: pendingMigration.legacyRoots.length })}
             action={
-              <Button size="small" danger type="primary" onClick={() => setMigrationReport(null)}>
+              <Button size="small" danger type="primary" onClick={() => setWizardOpen(true)}>
                 {t('migration.openWizard')}
               </Button>
             }
@@ -153,7 +155,7 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
               <Tooltip key={projectId} title={info.workDir}>
                 <Tag style={{ marginInlineEnd: 0 }}>
                   {info.displayName}
-                  {info.orphan ? ' (orphan)' : ''}
+                  {info.orphan ? ` ${t('migration.orphanSuffix')}` : ''}
                 </Tag>
               </Tooltip>
             ))}
@@ -188,11 +190,11 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
         )}
       </div>
       <Modal
-        open={pendingMigration !== null && migrationReport === null}
+        open={pendingMigration !== null && wizardOpen && migrationReport === null}
         title={t('migration.wizardTitle')}
         confirmLoading={migrating}
         onOk={() => void runMigration()}
-        onCancel={() => setPendingMigration(null)}
+        onCancel={() => setWizardOpen(false)}
         okText={t('migration.runNow')}
         cancelText={t('migration.later')}
       >

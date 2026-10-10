@@ -71,12 +71,12 @@ export interface WikiProjectRegistration {
 /** 登记项目（ingest / 状态查询时由主进程调用）：projectId 按目录哈希，同目录幂等收敛。 */
 export function registerWikiProject(
   db: AppDatabase,
-  input: { workDir: string; profileId?: string; profileName?: string }
+  input: { workDir: string; profileId?: string; profileName?: string; preserveExistingDisplayName?: boolean }
 ): WikiProjectRegistration {
   const projectId = computeProjectId(input.workDir)
   const canonical = canonicalWorkDir(input.workDir)
   const displayName = computeDisplayName(input.workDir, input.profileName, db)
-  insertWikiProject(db, { projectId, workDir: canonical, displayName, profileId: input.profileId })
+  insertWikiProject(db, { projectId, workDir: canonical, displayName, profileId: input.profileId, preserveExistingDisplayName: input.preserveExistingDisplayName })
   // 登记后二次消歧：新行与既有行 basename 撞名（本行 insert 后才可见的冲突）→ 更新本行
   if (!input.profileName) {
     const rows = listWikiProjects(db)

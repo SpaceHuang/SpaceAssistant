@@ -607,8 +607,15 @@ export const listDirectoryExecutor: ToolExecutor = {
         recordPolicyExecutionVeto({ audit: ctx.audit, lane: (ctx.lane as import('../../src/shared/confirmation/types').ExecutionLane | undefined) ?? 'desktop', sessionId: ctx.sessionId, requestId: ctx.requestId, toolUseId: ctx.toolUseId, toolName: 'list_directory', decisionRuleId: ctx.readExecutionPermit?.decisionRuleId, pathZone: ctx.readExecutionPermit?.targets[0]?.zone, factId: ctx.readExecutionPermit?.targets[0]?.factId, failureClass, caseId: snapshot.caseId })
         return { success: false, error: snapshot.caseId === 'read-directory-identity-changed' ? '目录在许可校验后发生变化，已停止枚举。' : '目录不可用，已停止枚举。', diagnostic: { caseId: snapshot.caseId, retryable: false, category: failureClass }, duration: Date.now() - started }
       }
+      // BLK-8（§7.3/§14）：挂载命中（permit 携带 vocabularyPath）时条目 path 以词汇路径为基准，
+      // 不产出 ../.. 相对化真实路径（不泄漏 userData 布局且 Agent 可回喂）
+      const permitVocabularyPath = ctx.readExecutionPermit?.targets[0]?.vocabularyPath
       const rows = snapshot.entries.map((entry) => {
         const entryPath = path.join(target, entry.name)
+        if (permitVocabularyPath) {
+          const relWithin = path.relative(target, entryPath).replace(/\\/g, '/')
+          return { name: entry.name, path: `${permitVocabularyPath}/${relWithin}`, isDirectory: entry.isDirectory, ...(entry.size === undefined ? {} : { size: entry.size }), ...(entry.mtimeMs === undefined ? {} : { mtimeMs: entry.mtimeMs }) }
+        }
         return { name: entry.name, path: path.relative(root, entryPath) || '.', isDirectory: entry.isDirectory, ...(entry.size === undefined ? {} : { size: entry.size }), ...(entry.mtimeMs === undefined ? {} : { mtimeMs: entry.mtimeMs }) }
       })
       rows.sort((a, b) => Number(b.isDirectory) - Number(a.isDirectory) || a.name.localeCompare(b.name))

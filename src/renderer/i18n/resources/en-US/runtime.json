@@ -87,7 +87,8 @@
     "setWorkDir": "Set working directory...",
     "switchWorkDir": "Switch working directory",
     "selectOrCreateSession": "Select or create a session first",
-    "projectFiles": "Project files"
+    "projectFiles": "Project files",
+    "fileMigrated": "This file was merged into {{to}}. Open it at the new location"
   },
   "usage": {
     "compactBillions": "{{value}}M",

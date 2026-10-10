@@ -55,8 +55,9 @@ function wikiProbeContext(
   const rootDirname = wikiConfig.rootPath || DEFAULT_WIKI_ROOT_DIRNAME
   const sensitiveRootExemptions = [path.join(args.userDataDir, rootDirname)]
   const resolution = resolveWikiMount(args.workDir, wikiConfig, args.userDataDir, pathInput)
+  // P1-2：锚点前缀用挂载层带出的 matchedPrefix（多段别名时 split('/') 会退化为首段，与 realRel 不一致）
   const mountAnchors = resolution.mounted
-    ? [{ base: resolution.realBase, vocabularyPrefix: resolution.vocabularyPath.split('/')[0] }]
+    ? [{ base: resolution.realBase, vocabularyPrefix: resolution.matchedPrefix }]
     : undefined
   return { mountAnchors, sensitiveRootExemptions }
 }

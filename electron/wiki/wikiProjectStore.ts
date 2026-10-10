@@ -21,6 +21,8 @@ export interface WikiProjectInsertInput {
   displayName: string
   profileId?: string
   firstSeenAt?: number
+  /** P1-8：裸登记（ingest）不覆盖既有 display_name（§6.2 规则 1 的 profile 名优先级更高） */
+  preserveExistingDisplayName?: boolean
 }
 
 interface WikiProjectRowRaw {
@@ -51,8 +53,8 @@ export function insertWikiProject(db: AppDatabase, input: WikiProjectInsertInput
       `INSERT INTO wiki_projects (project_id, work_dir, display_name, profile_id, first_seen_at, orphan)
        VALUES (@projectId, @workDir, @displayName, @profileId, @firstSeenAt, 0)
        ON CONFLICT(work_dir) DO UPDATE SET
-         display_name = excluded.display_name,
-         profile_id = excluded.profile_id,
+         display_name = CASE WHEN @preserveDisplayName THEN wiki_projects.display_name ELSE excluded.display_name END,
+         profile_id = CASE WHEN @preserveDisplayName THEN wiki_projects.profile_id ELSE excluded.profile_id END,
          orphan = 0`
     )
     .run({
@@ -60,7 +62,8 @@ export function insertWikiProject(db: AppDatabase, input: WikiProjectInsertInput
       workDir: input.workDir,
       displayName: input.displayName,
       profileId: input.profileId ?? null,
-      firstSeenAt: input.firstSeenAt ?? Date.now()
+      firstSeenAt: input.firstSeenAt ?? Date.now(),
+      preserveDisplayName: input.preserveExistingDisplayName ? 1 : 0
     })
 }
 

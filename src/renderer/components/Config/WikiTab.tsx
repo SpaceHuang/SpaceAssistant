@@ -4,6 +4,7 @@ import type { WikiConfig, WikiMigrationState } from '../../../shared/domainTypes
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import { WIKI_VOCABULARY_PREFIX } from '../../../shared/wikiConstants'
 
 type Props = {
   wiki: WikiConfig
@@ -39,7 +40,14 @@ export function WikiTab({ wiki, onChange }: Props) {
     await window.api.skillInvalidateCache()
   }
 
-  const startRename = () => {
+  const startRename = async () => {
+    // P1-16（§11）：存量自定义根未迁移时先展示迁移引导而非直接改名
+    const status = (await window.api.wikiMigrationStatus()) as unknown as MigrationStatus
+    if (status.pendingLegacyMigration) {
+      message.warning(t('wiki.renameBlockedByMigration'))
+      void openMigrationInfo()
+      return
+    }
     setNewRootPath(wiki.rootPath)
     setRenaming(true)
   }
@@ -61,8 +69,24 @@ export function WikiTab({ wiki, onChange }: Props) {
     setMigration(status)
   }
 
+  // BLK-1：设置页弹窗内直接执行迁移（§16-B5 迁移入口必须可达）
+  const [migrating, setMigrating] = useState(false)
+  const runMigration = async () => {
+    setMigrating(true)
+    try {
+      const report = await window.api.wikiMigrateLegacy()
+      const status = (await window.api.wikiMigrationStatus()) as unknown as MigrationStatus
+      setMigration({ ...status, migration: { ...(status.migration ?? { status: 'completed' }), report } })
+    } catch (e) {
+      message.error(formatUserFacingError(e instanceof Error ? e.message : String(e)))
+    } finally {
+      setMigrating(false)
+    }
+  }
+
   const openSharedDir = () => {
-    void window.api.fileShowInExplorer(wiki.rootPath)
+    // BLK-4（D9）：挂载按词汇前缀解析，rootPath 是物理目录名不参与词汇语义
+    void window.api.fileShowInExplorer(WIKI_VOCABULARY_PREFIX)
   }
 
   const report = migration?.migration?.report
@@ -81,7 +105,7 @@ export function WikiTab({ wiki, onChange }: Props) {
             readOnly
             placeholder={t('wiki.rootPathPlaceholder')}
           />
-          <Button onClick={startRename} disabled={!wiki.enabled}>
+          <Button onClick={() => void startRename()} disabled={!wiki.enabled}>
             {t('wiki.renameButton')}
           </Button>
         </Space.Compact>
@@ -138,12 +162,17 @@ export function WikiTab({ wiki, onChange }: Props) {
         width={560}
       >
         {migration?.pendingLegacyMigration ? (
-          <Typography.Paragraph>
-            {t('wiki.migrationPendingHint', { count: migration.legacyRoots?.length ?? 0 })}
-            {migration.legacyRoots?.map((r) => (
-              <Tag key={r}>{r}</Tag>
-            ))}
-          </Typography.Paragraph>
+          <>
+            <Typography.Paragraph>
+              {t('wiki.migrationPendingHint', { count: migration.legacyRoots?.length ?? 0 })}
+              {migration.legacyRoots?.map((r) => (
+                <Tag key={r}>{r}</Tag>
+              ))}
+            </Typography.Paragraph>
+            <Button type="primary" loading={migrating} onClick={() => void runMigration()}>
+              {t('wiki.migrationRunNow')}
+            </Button>
+          </>
         ) : (
           <Typography.Paragraph type="secondary">{t('wiki.migrationUpToDate')}</Typography.Paragraph>
         )}

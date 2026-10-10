@@ -10,8 +10,11 @@ import { DEFAULT_WIKI_ROOT_DIRNAME, WIKI_VOCABULARY_PREFIX } from '../../src/sha
 export type WikiMountResolution =
   | {
       mounted: true
-      /** workDir 相对词汇，如 "llm-wiki/wiki/index.md"（展示、审计、信号判定用，与 Agent 入参逐字一致） */
+      /** workDir 相对词汇，如 "llm-wiki/wiki/index.md"（展示、审计、信号判定用）。
+       * 前缀段恒为命中的规范前缀（大小写规范化，BLK-5），后缀保留入参形态 */
       vocabularyPath: string
+      /** 实际命中的规范前缀（词汇常量或别名原文；多段别名时 gate 锚点直接消费，P1-2） */
+      matchedPrefix: string
       /** {userData}/<wikiConfig.rootPath>（目录名读配置，D9；非硬编码） */
       realBase: string
       /** 挂载内相对路径（根本身命中时为空串） */
@@ -113,13 +116,18 @@ export function resolveWikiMount(
   return { mounted: false }
 }
 
-function buildMounted(vocabularyPath: string, prefix: string, realBase: string, readOnly: boolean): WikiMountResolution {
-  const suffix = vocabularyPath.slice(prefix.length).replace(/^\/+/, '')
+function buildMounted(rawVocabulary: string, prefix: string, realBase: string, readOnly: boolean): WikiMountResolution {
+  // BLK-5：vocabularyPath 前缀段规范化为命中的规范前缀（大小写不敏感命中时，入参可能是
+  // 'LLM-WIKI/...' 变体）——下游 classifyWikiPath 等大小写敏感消费者据此保持 raw deny 语义；
+  // 后缀段保留入参形态。
+  const suffix = rawVocabulary.slice(prefix.length).replace(/^\/+/, '')
   const segments = resolveDotSegments(splitSegments(suffix)) ?? []
+  const vocabularyPath = segments.length > 0 ? `${prefix}/${segments.join('/')}` : prefix
   const realRel = segments.length > 0 ? segments.join(path.sep) : ''
   return {
     mounted: true,
     vocabularyPath,
+    matchedPrefix: prefix,
     realBase,
     realRel,
     realPath: realRel ? path.join(realBase, realRel) : realBase,

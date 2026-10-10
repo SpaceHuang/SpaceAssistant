@@ -39,7 +39,7 @@ export function FileOverlay() {
     registerFileBodyElement
   } = useDetailPanel()
 
-  const wikiRoot = useTypedSelector((s) => s.config.config?.wiki?.rootPath ?? WIKI_VOCABULARY_PREFIX)
+  const wikiRoot = WIKI_VOCABULARY_PREFIX
   const wikiEnabled = useTypedSelector((s) => s.config.config?.wiki?.enabled ?? false)
   const { isIndex, indexView, setIndexView } = useWikiIndexViewState(selectedFile, wikiRoot)
 

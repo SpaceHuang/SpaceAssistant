@@ -16,8 +16,54 @@ import { DEFAULT_SCHEMA_MD } from './wikiTemplates'
  * 语义是「幂等可重试」，不是事务（§12.2/I7）：按目标存在性跳过，失败重跑收敛。
  */
 
-/** v1（ed3dac54）默认 SCHEMA 模板全文：哈希分叉判定基准（§12.2 SCHEMA 行）。 */
-export const LEGACY_DEFAULT_SCHEMA_MD_V1 = '# LLM Wiki Schema\n\n> 本文件定义 Wiki 目录约定与 ingest / query / lint 工作流。可与 LLM 协作演化。\n'
+/** v1（ed3dac54）默认 SCHEMA 模板全文（BLK-2：哈希分叉判定基准，评审实证 882 字符）。
+ *  兼容 LF/CRLF 双哈希（git checkout 平台换行差异）。
+ */
+export const LEGACY_DEFAULT_SCHEMA_MD_V1 = `# LLM Wiki Schema
+
+> 本文件定义 Wiki 目录约定与 ingest / query / lint 工作流。可与 LLM 协作演化。
+
+## 目录说明
+
+- \`raw/\`：只读原始资料（用户写入；LLM **仅 read**）
+- \`wiki/\`：LLM 维护的结构化 Markdown 页面（read/write）
+- \`SCHEMA.md\`：本规范文件
+
+## 页面类型
+
+| 类型 | 目录 | 说明 |
+|------|------|------|
+| entity | wiki/entities/ | 人物、组织、产品等实体 |
+| concept | wiki/concepts/ | 概念与术语 |
+| topic | wiki/topics/ | 主题综合 / 综述 |
+| source | wiki/sources/ | 与 raw 对应的摘要页 |
+| query | wiki/queries/ | 由 Query 归档的分析页 |
+
+## Ingest 工作流
+
+1. \`read_file\` 读取 raw 文件
+2. 分析要点，更新/创建 wiki 下相关页面（entity、concept、topic、source 等）
+3. 更新 \`wiki/index.md\`
+4. 向 \`wiki/log.md\` 追加 ingest 条目
+
+**禁止：** 不得修改 \`raw/\`；不得删除 log 历史。
+
+## Query 工作流
+
+1. \`read_file(wiki/index.md)\` — 按分类定位候选页
+2. \`read_file\` 深入阅读相关页
+3. index 未覆盖时 \`grep(pattern, path=wiki/)\` 补充搜索
+4. 综合回答，正文引用 \`wiki/...\` 路径
+5. 用户要求时归档为 \`wiki/queries/\` 新页
+
+## Lint 工作流
+
+检查：矛盾声明、过时结论、孤儿页、缺页、缺链、index 与文件系统不一致。
+
+## 输出语言
+
+默认 zh-CN。
+`
 
 export interface LegacyRootCandidate {
   workDir: string
@@ -172,8 +218,9 @@ const LOG_ENTRY_RE = /^## \[(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})\]/
 function mergeLogFiles(srcLog: string, sharedLog: string, projectId: string): void {
   const shared = fs.existsSync(sharedLog) ? fs.readFileSync(sharedLog, 'utf8') : ''
   const src = fs.readFileSync(srcLog, 'utf8')
-  const parseEntries = (text: string): Array<{ ts: string; body: string[] }> => {
+  const parseEntries = (text: string): { preamble: string; entries: Array<{ ts: string; body: string[] }> } => {
     const entries: Array<{ ts: string; body: string[] }> = []
+    const preambleLines: string[] = []
     const lines = text.split(/\r?\n/)
     let current: { ts: string; body: string[] } | undefined
     for (const line of lines) {
@@ -183,20 +230,27 @@ function mergeLogFiles(srcLog: string, sharedLog: string, projectId: string): vo
         current = { ts: `${m[1]} ${m[2]}`, body: [line] }
       } else if (current) {
         current.body.push(line)
+      } else {
+        // P1-5：首个条目之前的行（模板头/preamble）不丢弃
+        preambleLines.push(line)
       }
     }
     if (current) entries.push({ ts: current.ts, body: current.body })
-    return entries
+    return { preamble: preambleLines.join('\n'), entries }
   }
-  const prefixed = parseEntries(src).map((e) => ({
+  const srcParsed = parseEntries(src)
+  const sharedParsed = parseEntries(shared)
+  const prefixed = srcParsed.entries.map((e) => ({
     ts: e.ts,
     body: e.body.map((l) => (LOG_ENTRY_RE.test(l) ? l.replace(/^## \[([^\]]+)\]/, `## [$1] [project:${projectId}]`) : l))
   }))
-  const existing = parseEntries(shared)
-  const existingBodies = new Set(existing.map((e) => e.body.join('\n')))
-  const merged = [...existing, ...prefixed.filter((e) => !existingBodies.has(e.body.join('\n')))]
+  const existingBodies = new Set(sharedParsed.entries.map((e) => e.body.join('\n')))
+  const merged = [...sharedParsed.entries, ...prefixed.filter((e) => !existingBodies.has(e.body.join('\n')))]
     .sort((a, b) => a.ts.localeCompare(b.ts))
-  const out = merged.map((e) => e.body.join('\n')).join('\n').replace(/\n{3,}/g, '\n\n')
+  // P1-5：preamble（共享库优先，缺失时用来源侧）保留在首部
+  const preamble = sharedParsed.preamble.trim().length > 0 ? sharedParsed.preamble : srcParsed.preamble
+  const body = merged.map((e) => e.body.join('\n')).join('\n').replace(/\n{3,}/g, '\n\n')
+  const out = preamble.trim().length > 0 ? `${preamble.replace(/\s*$/, '')}\n\n${body}` : body
   fs.writeFileSync(sharedLog, out.endsWith('\n') ? out : `${out}\n`, 'utf8')
 }
 
@@ -204,10 +258,10 @@ function mergeLogFiles(srcLog: string, sharedLog: string, projectId: string): vo
 function migrateSchemaFile(srcSchema: string, sharedSchema: string, newSchemaContent: string, projectId: string): void {
   if (!fs.existsSync(srcSchema)) return
   const content = fs.readFileSync(srcSchema, 'utf8')
+  // BLK-2：真实 v1 全文 LF/CRLF 双哈希（评审实证 7caddb2e…/b2638fbd…）
   const legacyDefaultHashes = new Set([
     sha256(LEGACY_DEFAULT_SCHEMA_MD_V1),
-    // 兼容行尾差异的 v1 模板哈希
-    '5a4c6999cb2bb7734e9e0ff53fb71c5e560399a6549855bae3b49042ca44572e'
+    sha256(LEGACY_DEFAULT_SCHEMA_MD_V1.replace(/\r?\n/g, '\r\n'))
   ])
   if (legacyDefaultHashes.has(sha256(content))) {
     // 未修改 → 共享库用新版模板（共享库已有 SCHEMA 则不动）
@@ -221,11 +275,25 @@ function migrateSchemaFile(srcSchema: string, sharedSchema: string, newSchemaCon
   if (!fs.existsSync(target)) {
     fs.writeFileSync(target, content, 'utf8')
   }
+  // BLK-2 连带：共享库尚无 SCHEMA 时补写新版模板（否则 isWikiInitialized=false、注入为 null）
+  if (!fs.existsSync(sharedSchema)) {
+    fs.mkdirSync(path.dirname(sharedSchema), { recursive: true })
+    fs.writeFileSync(sharedSchema, newSchemaContent, 'utf8')
+  }
 }
 
 /** 旧目录收尾：整目录改名 <root>.migrated-{YYYYMMDD-HHmmss}/（永不自动删除）。 */
+/** P2-4：根目录名单段校验（防 ../ 逃逸）。 */
+function safeRootName(name: string): string | undefined {
+  const trimmed = (name || '').trim()
+  if (!trimmed || /[\/]/.test(trimmed) || trimmed === '.' || trimmed === '..') return undefined
+  return trimmed
+}
+
 function renameLegacyRootAway(srcRoot: string, now: Date): string {
-  const ts = now.toISOString().replace(/[-:T]/g, '').slice(0, 15)
+  // P2-1：§12.2 格式 {YYYYMMDD-HHmmss}（避免 toISOString 毫秒小数点尾随）
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
   const dest = `${srcRoot}.migrated-${ts}`
   fs.renameSync(srcRoot, dest)
   return dest
@@ -244,7 +312,13 @@ function loadMigrationState(db: AppDatabase): WikiConfig['migration'] {
   }
 }
 
-function persistMigrationState(db: AppDatabase, wikiConfig: WikiConfig, migration: NonNullable<WikiConfig['migration']>, legacyRootAliases?: string[]): void {
+function persistMigrationState(
+  db: AppDatabase,
+  wikiConfig: WikiConfig,
+  migration: NonNullable<WikiConfig['migration']>,
+  legacyRootAliases?: string[],
+  resetRootPath?: boolean
+): void {
   const raw = getConfigValue(db, CONFIG_KEYS.wiki)
   let cur: Partial<WikiConfig> = {}
   if (raw) {
@@ -257,6 +331,8 @@ function persistMigrationState(db: AppDatabase, wikiConfig: WikiConfig, migratio
   const next: WikiConfig = { ...wikiConfig, ...cur, migration }
   // T2.3：别名同时写顶层 legacyRootAliases（挂载层消费的字段）
   if (legacyRootAliases) next.legacyRootAliases = legacyRootAliases
+  // BLK-4：存量自定义 rootPath 迁移完成后重置为默认（物理目录已在迁移中归位），否则词汇/物理解耦断裂
+  if (resetRootPath) next.rootPath = DEFAULT_WIKI_ROOT_DIRNAME
   setConfigValue(db, CONFIG_KEYS.wiki, JSON.stringify(next))
 }
 
@@ -268,15 +344,41 @@ export async function migrateLegacyWikis(options: MigrateLegacyWikisOptions): Pr
   const now = options.now ?? (() => new Date())
   const startedAt = now().toISOString()
   const report: WikiMigrationReport = { startedAt, profiles: [], conflicts: [], renames: [] }
-  const rootDirname = options.wikiConfig.rootPath || DEFAULT_WIKI_ROOT_DIRNAME
-  const sharedRoot = path.join(options.userDataPath, rootDirname)
+  // BLK-3/BLK-4：合并目标恒为默认物理目录 {userData}/llm-wiki——存量自定义 rootPath 是旧语义
+  // （workDir 内根名），迁移后配置重置为默认值，旧名转入 legacyRootAliases（§6.3/§12.2）
+  const sharedRoot = path.join(options.userDataPath, DEFAULT_WIKI_ROOT_DIRNAME)
+  const storedCustomRoot = safeRootName(options.wikiConfig.rootPath ?? '')
+    && options.wikiConfig.rootPath !== DEFAULT_WIKI_ROOT_DIRNAME
+    ? options.wikiConfig.rootPath
+    : undefined
+  // 共享库此前被 P1 init 建在旧 rootPath 下时，物理目录归位默认（默认侧已有库则保留两侧、旧目录交别名通道）
+  if (storedCustomRoot) {
+    const legacyShared = path.join(options.userDataPath, storedCustomRoot)
+    if (fs.existsSync(legacyShared)) {
+      if (!fs.existsSync(sharedRoot)) {
+        // 默认侧无共享库：整目录归位
+        fs.renameSync(legacyShared, sharedRoot)
+      } else {
+        // 两侧并存：旧物理目录改名保留（§12.2 永不自动删除；内容不丢，默认侧为权威库）
+        const ts = now().toISOString().replace(/[-:T]/g, '').slice(0, 14)
+        fs.renameSync(legacyShared, `${legacyShared}.pre-migrated-${ts}`)
+      }
+    }
+  }
   const changedVocabPaths = new Set<string>()
   const aliasNames = new Set<string>()
 
   const targets: LegacyRootCandidate[] = [
-    ...options.profiles.flatMap((p) => [{ workDir: p.workDir, rootDirName: DEFAULT_WIKI_ROOT_DIRNAME }]),
+    ...options.profiles.flatMap((p) => {
+      const candidates = [{ workDir: p.workDir, rootDirName: DEFAULT_WIKI_ROOT_DIRNAME }]
+      // BLK-3：存量自定义 rootPath 与默认根同等对待（§12.1/§12.2）——自动并入管线
+      if (storedCustomRoot) candidates.push({ workDir: p.workDir, rootDirName: storedCustomRoot })
+      return candidates
+    }),
     ...(options.extraLegacyRoots ?? [])
   ]
+    .map((c) => ({ ...c, rootDirName: safeRootName(c.rootDirName) ?? '' }))
+    .filter((c) => c.rootDirName)
   const profileNameByWorkDir = new Map(options.profiles.map((p) => [p.workDir, p]))
 
   try {
@@ -365,10 +467,15 @@ export async function migrateLegacyWikis(options: MigrateLegacyWikisOptions): Pr
       const prev = loadMigrationState(options.db)
       const aliases = new Set([...(options.wikiConfig.legacyRootAliases ?? []), ...(prev?.legacyRootAliases ?? []), ...aliasNames])
       const aliasList = [...aliases]
-      persistMigrationState(options.db, options.wikiConfig, { status: 'completed', completedAt: now().toISOString(), report, legacyRootAliases: aliasList }, aliasList)
+      persistMigrationState(options.db, options.wikiConfig, { status: 'completed', completedAt: now().toISOString(), report, legacyRootAliases: aliasList }, aliasList, Boolean(storedCustomRoot))
       options.wikiConfig.legacyRootAliases = aliasList
+      if (storedCustomRoot) options.wikiConfig.rootPath = DEFAULT_WIKI_ROOT_DIRNAME
     } else {
-      persistMigrationState(options.db, options.wikiConfig, { status: 'completed', completedAt: now().toISOString(), report })
+      persistMigrationState(options.db, options.wikiConfig, { status: 'completed', completedAt: now().toISOString(), report }, storedCustomRoot ? [...(options.wikiConfig.legacyRootAliases ?? []), storedCustomRoot] : undefined, Boolean(storedCustomRoot))
+      if (storedCustomRoot) {
+        options.wikiConfig.legacyRootAliases = [...(options.wikiConfig.legacyRootAliases ?? []), storedCustomRoot]
+        options.wikiConfig.rootPath = DEFAULT_WIKI_ROOT_DIRNAME
+      }
     }
     report.completedAt = now().toISOString()
   } catch (e) {

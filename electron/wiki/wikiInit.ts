@@ -151,6 +151,9 @@ export async function initWikiStructure(
     if (options.installSkill !== false) {
       const r = await installBundledLlmWikiSkill(workDir, Boolean(options.overwrite), options.userDataPath)
       skillInstalled = r.installed
+      // P1-9（R1 覆盖陷阱）：共享库模式下项目级旧副本会压过用户级新版——init 时一并清理
+      // （无 userDataPath 的旧形态仍装项目级，不清理）
+      if (options.userDataPath) removeProjectWikiSkillCopy(workDir)
     }
 
     const rootRel = wikiConfig.rootPath.replace(/\\/g, '/').replace(/^\/+/, '')

@@ -62,6 +62,7 @@ describe('WikiTab 受控改名（T2.6①）', () => {
     renderTab(onChange)
 
     fireEvent.click(buttonByText('改名'))
+    await waitFor(() => expect(modalInput()).toBeTruthy())
     fireEvent.change(modalInput(), { target: { value: 'my-lib' } })
     fireEvent.click(modalPrimaryButton())
 
@@ -77,6 +78,7 @@ describe('WikiTab 受控改名（T2.6①）', () => {
     renderTab(onChange)
 
     fireEvent.click(buttonByText('改名'))
+    await waitFor(() => expect(modalInput()).toBeTruthy())
     fireEvent.change(modalInput(), { target: { value: 'my-lib' } })
     fireEvent.click(modalPrimaryButton())
 
@@ -139,7 +141,7 @@ describe('WikiTab 迁移报告查看（T2.6② 数据源 config.wiki.migration�
     )
     fireEvent.click(buttonByText('打开共享库目录'))
     await waitFor(() => {
-      expect(window.api.fileShowInExplorer).toHaveBeenCalledWith('my-lib')
+      expect(window.api.fileShowInExplorer).toHaveBeenCalledWith('llm-wiki')
     })
   })
 })

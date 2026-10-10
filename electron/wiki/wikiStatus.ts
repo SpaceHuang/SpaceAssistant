@@ -22,11 +22,19 @@ function countMarkdownFiles(dir: string): number {
 }
 
 function countRawFiles(rawDir: string): number {
+  // P1-4：共享结构为 raw/<projectId>/<file>，需递归统计（旧扁平结构同样兼容）
   if (!fs.existsSync(rawDir)) return 0
-  return fs.readdirSync(rawDir).filter((n) => {
-    const p = path.join(rawDir, n)
-    return fs.statSync(p).isFile()
-  }).length
+  let count = 0
+  const stack = [rawDir]
+  while (stack.length > 0) {
+    const cur = stack.pop()!
+    for (const ent of fs.readdirSync(cur, { withFileTypes: true })) {
+      const p = path.join(cur, ent.name)
+      if (ent.isDirectory()) stack.push(p)
+      else if (ent.isFile()) count++
+    }
+  }
+  return count
 }
 
 function readLastLogEntry(logPath: string): string | undefined {

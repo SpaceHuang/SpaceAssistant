@@ -132,6 +132,7 @@ export type FileReadResult =
   | { kind: 'image'; content: string; encoding: 'base64'; mimeType: string }
   | { kind: 'unsupported'; ext: string }
   | { kind: 'too_large'; size: number }
+  | { kind: 'error'; error: string; migratedTo?: string }
 
 export type FileMetadata = {
   size: number
@@ -538,7 +539,7 @@ export type SpaceAssistantApi = {
   wikiGetSchema: () => Promise<{ content: string } | null>
   wikiResolvePath: (payload: {
     relPath: string
-  }) => Promise<{ absPath: string; kind: 'raw' | 'wiki' | 'schema' | 'other' } | { error: string }>
+  }) => Promise<{ absPath: string; kind: 'raw' | 'wiki' | 'schema' | 'other'; readOnly?: boolean } | { error: string }>
   wikiImportRaw: (payload: {
     srcRelPath: string
   }) => Promise<{ ok: true; rawRelPath: string; copied: boolean } | { ok: false; error: string }>

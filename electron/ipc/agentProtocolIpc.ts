@@ -1322,8 +1322,15 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   })
 
   ipcMain.handle('wiki:status', async (): Promise<WikiStatus> => {
+    // BLK-1（§10.1/§12.1）：wiki:status 同样携带迁移检测——WikiPane 提示条/向导门控的唯一数据源
     const wikiConfig = readWikiConfig(ctx.db)
-    return getWikiStatus(ctx.getWorkDir(), wikiConfig, { userDataPath: ctx.getUserDataPath(), db: ctx.db })
+    const status = getWikiStatus(ctx.getWorkDir(), wikiConfig, { userDataPath: ctx.getUserDataPath(), db: ctx.db })
+    const detection = detectLegacyWikiRoots({
+      profiles: ctx.workDirManager.listProfiles().map((p) => ({ workDir: p.path })),
+      storedRootPath: wikiConfig.rootPath,
+      sharedRootInitialized: status.initialized === true
+    })
+    return { ...status, pendingLegacyMigration: detection.pendingLegacyMigration, legacyRoots: detection.legacyRoots }
   })
 
   ipcMain.handle('wiki:get-schema', async (): Promise<{ content: string } | null> => {

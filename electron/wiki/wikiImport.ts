@@ -142,26 +142,29 @@ async function importRawToSharedRoot(
   // 项目登记（projectId = workDir 哈希；同目录幂等收敛）
   let projectId: string
   if (shared.db) {
-    projectId = registerWikiProject(shared.db, { workDir }).projectId
+    // P1-8：ingest 为裸登记——不覆盖既有 display_name/profile_id（§6.2 规则 1 profile 名优先）
+    projectId = registerWikiProject(shared.db, { workDir, preserveExistingDisplayName: true }).projectId
   } else {
     projectId = computeProjectId(workDir)
   }
 
   const basename = normalized.split('/').filter(Boolean).pop() || 'untitled'
   const baseRawRelInRoot = `raw/${projectId}/${basename}`
-  const rawRelInRoot = await resolveAvailableRawPath(realBase, baseRawRelInRoot)
-  if (!rawRelInRoot) return { ok: false, error: '无法生成 raw 目标路径' }
-
   try {
-    const destAbs = resolveSafePath(realBase, rawRelInRoot)
-    await fs.mkdir(path.dirname(destAbs), { recursive: true })
-    // §9.4：ingest 落盘经互斥区（与并发 Agent 写同文件串行）
-    await withWikiWriteMutex(destAbs, async () => {
-      await fs.copyFile(srcAbs, destAbs)
+    // P1-7（§9.4）：选名与拷贝整体在互斥区内——并发同名 ingest 不再互相覆盖
+    const destAbs = await withWikiWriteMutex(path.join(realBase, baseRawRelInRoot), async () => {
+      const rawRelInRoot = await resolveAvailableRawPath(realBase, baseRawRelInRoot)
+      if (!rawRelInRoot) throw new Error('无法生成 raw 目标路径')
+      const dest = resolveSafePath(realBase, rawRelInRoot)
+      await fs.mkdir(path.dirname(dest), { recursive: true })
+      await fs.copyFile(srcAbs, dest)
+      return dest
     })
-    const rawRelPath = `${wikiConfig.rootPath || WIKI_VOCABULARY_PREFIX}/${rawRelInRoot}`
+    const finalRel = path.relative(realBase, destAbs).replace(/\\/g, '/')
+    const rawRelPath = `${wikiConfig.rootPath || WIKI_VOCABULARY_PREFIX}/${finalRel}`
     return { ok: true, rawRelPath, copied: true }
   } catch (e) {
+    if (e instanceof Error && e.message === '无法生成 raw 目标路径') return { ok: false, error: e.message }
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
 }

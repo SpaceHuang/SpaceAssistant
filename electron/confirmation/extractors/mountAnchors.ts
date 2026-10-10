@@ -47,6 +47,25 @@ export function matchMountAnchor(
 
   let lexical: string | undefined
   if (path.isAbsolute(trimmed)) {
+    // P1-1（v4-C2）：realBase 绝对形态反向命中——userData 绝对路径写法（模型可能从
+    // list_directory 输出回喂）必须与词汇形态同语义，否则审批卡片泄漏真实路径、zone 漂移
+    for (const anchor of anchors) {
+      const normBase = anchor.base.replace(/\\/g, '/')
+      const normInput = trimmed.replace(/\\/g, '/')
+      const w = normInput.toLowerCase()
+      const b = normBase.toLowerCase()
+      if (w === b || w.startsWith(`${b}/`)) {
+        const suffix = normInput.slice(normBase.length).replace(/^\/+/, '')
+        const segments = resolveDotSegments(suffix.split('/'))
+        if (!segments) return undefined
+        const anchorPrefix = anchor.vocabularyPrefix.replace(/\\/g, '/')
+        return {
+          anchor,
+          vocabularyPath: segments.length > 0 ? `${anchorPrefix}/${segments.join('/')}` : anchorPrefix,
+          relInBase: segments.join('/')
+        }
+      }
+    }
     const rel = path.relative(workDir, trimmed)
     if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return undefined
     lexical = rel.replace(/\\/g, '/')
@@ -62,8 +81,11 @@ export function matchMountAnchor(
     if (!prefix) continue
     const p = prefix.toLowerCase()
     if (normalized === p || normalized.startsWith(`${p}/`)) {
-      const relInBase = normalized.slice(prefix.length).replace(/^\/+/, '')
-      return { anchor, vocabularyPath: normalized, relInBase }
+      // BLK-5 对齐：vocabularyPath 前缀段规范化为锚点声明的规范前缀（大小写变体收口）
+      const hitSegments = resolveDotSegments(normalized.slice(prefix.length).split('/')) ?? []
+      const relInBase = hitSegments.join('/')
+      const vocabularyPath = hitSegments.length > 0 ? `${anchor.vocabularyPrefix}/${hitSegments.join('/')}` : anchor.vocabularyPrefix
+      return { anchor, vocabularyPath, relInBase }
     }
   }
   return undefined

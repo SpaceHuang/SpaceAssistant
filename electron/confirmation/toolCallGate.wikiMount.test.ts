@@ -269,6 +269,20 @@ describe('wiki-raw 信号反向识别（T1.10）', () => {
     expect(r.diagnostics?.ruleId).toBe('wiki-raw-write-deny')
   })
 
+  it('BLK-5：大小写变体 LLM-WIKI/raw → 仍命中 wiki-raw-target deny（不绕过 locked deny）', async () => {
+    const { workDir, userDataDir } = await setupWikiWorld()
+    const r = await evaluateToolCallGate(base({
+      toolName: 'write_file',
+      toolInput: { path: 'LLM-WIKI/raw/evil.md', content: 'x' },
+      workDir,
+      userDataDir,
+      wikiConfig: wikiConfigEnabled()
+    }))
+    expect(r.facts.signals.some((s) => s.kind === 'wiki-raw-target')).toBe(true)
+    expect(r.decision.type).toBe('deny')
+    expect(r.diagnostics?.ruleId).toBe('wiki-raw-write-deny')
+  })
+
   it('T1.10③ realBase 绝对形态 raw → 反向命中 wiki-raw-target（desktop deny）', async () => {
     const { workDir, userDataDir, realBase } = await setupWikiWorld()
     const r = await evaluateToolCallGate(base({

@@ -38,8 +38,8 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-function wikiConfig(enabled = true, hideWikiFromFileTree = true): WikiConfig {
-  return { ...DEFAULT_WIKI_CONFIG, enabled, rootPath: 'llm-wiki', hideWikiFromFileTree }
+function wikiConfig(enabled = true, hideWikiFromFileTree = true, legacyRootAliases: string[] = []): WikiConfig {
+  return { ...DEFAULT_WIKI_CONFIG, enabled, rootPath: 'llm-wiki', hideWikiFromFileTree, legacyRootAliases }
 }
 
 interface World {
@@ -49,7 +49,7 @@ interface World {
   handlers: Map<string, (...args: never[]) => unknown>
 }
 
-async function setupWorld(opts: { wikiEnabled?: boolean; hideWiki?: boolean; withResidue?: boolean } = {}): Promise<World> {
+async function setupWorld(opts: { wikiEnabled?: boolean; hideWiki?: boolean; withResidue?: boolean; legacyRootAliases?: string[] } = {}): Promise<World> {
   const root = tmpdir('wiki-fipc-')
   const workDir = path.join(root, 'proj')
   const userData = path.join(root, 'ud')
@@ -64,7 +64,7 @@ async function setupWorld(opts: { wikiEnabled?: boolean; hideWiki?: boolean; wit
   }
   const db = openDatabase(':memory:')
   dbs.push(db)
-  setConfigValue(db, CONFIG_KEYS.wiki, JSON.stringify(wikiConfig(opts.wikiEnabled ?? true, opts.hideWiki ?? true)))
+  setConfigValue(db, CONFIG_KEYS.wiki, JSON.stringify(wikiConfig(opts.wikiEnabled ?? true, opts.hideWiki ?? true, opts.legacyRootAliases ?? [])))
   const ctx = {
     getWorkDir: () => workDir,
     getUserDataPath: () => userData,
@@ -140,12 +140,50 @@ describe('file:delete/rename/move/copy（T1.15）', () => {
   })
 })
 
+describe('BLK-9 根防护与只读别名（fileIpc 写通道）', () => {
+  it("file:delete('llm-wiki') 挂载根本身被拒绝（不递归删除共享库）", async () => {
+    const { handlers, realBase } = await setupWorld()
+    await expect(handlers.get('file:delete')!(null as never, 'llm-wiki' as never)).rejects.toThrow(/共享库根目录/)
+    expect(fs.existsSync(realBase)).toBe(true)
+  })
+
+  it("file:rename('llm-wiki', ...) 根本身被拒绝", async () => {
+    const { handlers, realBase } = await setupWorld()
+    await expect(handlers.get('file:rename')!(null as never, 'llm-wiki' as never, 'x' as never)).rejects.toThrow(/共享库根目录/)
+    expect(fs.existsSync(path.join(realBase, 'wiki', 'index.md'))).toBe(true)
+  })
+
+  it('只读别名路径的 delete/create 写通道被拒绝（§9.3 别名只读在 UI 通道落实）', async () => {
+    const { handlers } = await setupWorld()
+    // 注册别名后挂载 readOnly
+    const db = dbs[0]
+    const { CONFIG_KEYS } = await import('./ipcShared')
+    const { setConfigValue } = await import('../database/operations')
+    setConfigValue(db, CONFIG_KEYS.wiki, JSON.stringify(wikiConfig(true, true, ['old-wiki'])))
+    await expect(handlers.get('file:delete')!(null as never, 'old-wiki/wiki/index.md' as never)).rejects.toThrow(/只读别名/)
+    await expect(handlers.get('file:create-file')!(null as never, 'old-wiki/new.md' as never)).rejects.toThrow(/只读别名/)
+  })
+})
+
+describe('BLK-7 根列表不平铺', () => {
+  it('根列表仅含虚拟条目 + 非 wiki 条目（无 ../.. 废行、无共享根子条目平铺）', async () => {
+    const { handlers } = await setupWorld({ hideWiki: false })
+    const entries = (await handlers.get('file:list-directory')!(null as never, '' as never)) as Array<{ path: string }>
+    for (const e of entries) {
+      expect(e.path).not.toContain('..')
+    }
+    expect(entries.filter((e) => e.virtual)).toHaveLength(1)
+    // 共享根子条目（wiki/ raw/ SCHEMA.md）不得以根级形态平铺出现
+    expect(entries.filter((e) => ['wiki', 'raw', 'SCHEMA.md'].includes(e.name) && !e.virtual)).toHaveLength(0)
+  })
+})
+
 describe('file:watch-content 挂载（T1.16）', () => {
-  it('①wiki 词汇路径经挂载解析后启动监听（root=realBase）', async () => {
+  it('①wiki 词汇路径经挂载解析后启动监听；广播键为词汇路径（BLK-6）', async () => {
     const { handlers, realBase } = await setupWorld()
     startContentWatchMock.mockClear()
     await handlers.get('file:watch-content')!(null as never, { relPath: 'llm-wiki/wiki/index.md' } as never)
-    expect(startContentWatchMock).toHaveBeenCalledWith(realBase, path.join('wiki', 'index.md'))
+    expect(startContentWatchMock).toHaveBeenCalledWith(realBase, path.join('wiki', 'index.md'), 'llm-wiki/wiki/index.md')
     await handlers.get('file:watch-content')!(null as never, { relPath: null } as never)
     expect(stopContentWatchMock).toHaveBeenCalled()
   })

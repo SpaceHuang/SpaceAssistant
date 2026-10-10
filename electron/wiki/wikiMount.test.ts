@@ -122,6 +122,21 @@ describe('resolveWikiMount 八条规则（T0.5）', () => {
     expect(c).toEqual(d)
   })
 
+  it('BLK-5：大小写变体入参 vocabularyPath 规范化为命中前缀（raw deny 语义保持）', () => {
+    const res = expectMounted(resolveWikiMount(workDir, makeConfig(), userData, 'LLM-WIKI/raw/evil.md'))
+    expect(res.vocabularyPath).toBe('llm-wiki/raw/evil.md')
+    expect(res.matchedPrefix).toBe('llm-wiki')
+    const raw2 = expectMounted(resolveWikiMount(workDir, makeConfig(), userData, 'llm-wiki/RAW/x.md'))
+    expect(raw2.vocabularyPath).toBe('llm-wiki/RAW/x.md'.toLowerCase().replace('raw', 'RAW')) // 后缀保留原样
+    expect(raw2.vocabularyPath.startsWith('llm-wiki/')).toBe(true)
+
+    // 别名前缀规范化：vocabularyPath 用别名原文
+    const aliasConfig = makeConfig({ legacyRootAliases: ['Docs-Wiki'] })
+    const alias = expectMounted(resolveWikiMount(workDir, aliasConfig, userData, 'DOCS-WIKI/x.md'))
+    expect(alias.matchedPrefix).toBe('Docs-Wiki')
+    expect(alias.vocabularyPath).toBe('Docs-Wiki/x.md')
+  })
+
   it('补充：非 wiki 的 workDir 内相对路径不挂载；前缀包含不命中（llm-wiki-notes）', () => {
     expectNotMounted(resolveWikiMount(workDir, makeConfig(), userData, 'src/app.ts'))
     expectNotMounted(resolveWikiMount(workDir, makeConfig(), userData, 'llm-wiki-notes/x.md'))

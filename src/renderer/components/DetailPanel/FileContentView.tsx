@@ -16,6 +16,7 @@ import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { runtimeText } from '../../i18n/runtimeText'
 import { WebView } from './WebView'
 import { MarkdownSearchScope } from '../Search/MarkdownSearchScope'
+import { WIKI_VOCABULARY_PREFIX } from '../../../shared/wikiConstants'
 
 type Props = {
   wikiIndexView?: boolean
@@ -47,7 +48,7 @@ export function FileContentView({ wikiIndexView = false }: Props) {
   } = useDetailPanel()
   const { t } = useTypedTranslation('detailPanel')
   const sourceSearch = useFileSourceSearch(previewContent ?? '')
-  const wikiRoot = useTypedSelector((s) => s.config.config?.wiki?.rootPath ?? DEFAULT_WIKI_CONFIG.rootPath)
+  const wikiRoot = WIKI_VOCABULARY_PREFIX
   const [pendingScrollFragment, setPendingScrollFragment] = useState<string | null>(null)
 
   const handleOpenLinkedFile = useCallback(
