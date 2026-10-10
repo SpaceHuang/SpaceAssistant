@@ -106,7 +106,7 @@ export function registerFileIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     } catch (error) {
       // P1-10（§12.3-2）：读取失败查迁移改名映射——命中则返回「已合并至」跳转线索
       const migratedTo = resolveMigratedTarget(ctx, normalized)
-      if (migratedTo) return { error: error instanceof Error ? error.message : String(error), migratedTo }
+      if (migratedTo) return { kind: 'error' as const, error: error instanceof Error ? error.message : String(error), migratedTo }
       throw error
     }
   })

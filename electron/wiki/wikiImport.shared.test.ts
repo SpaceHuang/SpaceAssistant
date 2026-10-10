@@ -96,6 +96,22 @@ describe('importRawFromWorkDir 共享根（T1.12c）', () => {
     db.close()
   })
 
+  it('复审残余：rootPath 改名（my-lib）时 ingest 返回路径恒为 llm-wiki 词汇前缀', async () => {
+    const workDir = tmpdir('wiki-imp-ren2-')
+    const userData = tmpdir('wiki-imp-ren2-ud-')
+    fs.writeFileSync(path.join(workDir, 'note2.md'), 'x', 'utf8')
+    const db = openDatabase(':memory:')
+    const cfg = { ...DEFAULT_WIKI_CONFIG, enabled: true, rootPath: 'my-lib' }
+    const res = await importRawFromWorkDir(workDir, cfg, 'note2.md', { userDataPath: userData, db })
+    expect(res.ok).toBe(true)
+    if (!res.ok) return
+    expect(res.rawRelPath).toMatch(/^llm-wiki\/raw\//)
+    // 物理落盘在配置目录（my-lib）下
+    const projectId = computeProjectId(workDir)
+    expect(fs.existsSync(path.join(userData, 'my-lib', 'raw', projectId, 'note2.md'))).toBe(true)
+    db.close()
+  })
+
   it('wiki 停用拒绝；workDir 侧 raw/ 显式路径维持现状', async () => {
     const workDir = tmpdir('wiki-imp-off-')
     const userData = tmpdir('wiki-imp-off-ud-')

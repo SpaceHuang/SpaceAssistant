@@ -29,10 +29,12 @@ export type WikiPathKind = 'raw' | 'wiki' | 'schema' | 'other'
 export function classifyWikiPath(workDir: string, wikiConfig: WikiConfig, relPath: string): WikiPathKind {
   if (!wikiConfig.enabled) return 'other'
   // BLK-4（D9/§6.3）：分类基准恒为词汇常量，与 rootPath（物理目录名）解耦
+  // BLK-5 残余：结构段比较大小写不敏感——挂载命中大小写变体（llm-wiki/RAW/x）时
+  // vocabularyPath 保留入参后缀形态，raw deny 语义不得因大小写漏判
   void workDir
-  const normalized = relPath.replace(/\\/g, '/').replace(/^\/+/, '')
+  const normalized = relPath.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase()
   const wikiRootRel = WIKI_VOCABULARY_PREFIX
-  if (normalized === `${wikiRootRel}/SCHEMA.md`) return 'schema'
+  if (normalized === `${wikiRootRel}/SCHEMA.md`.toLowerCase()) return 'schema'
   if (normalized === `${wikiRootRel}/raw` || normalized.startsWith(`${wikiRootRel}/raw/`)) return 'raw'
   if (normalized === `${wikiRootRel}/wiki` || normalized.startsWith(`${wikiRootRel}/wiki/`)) return 'wiki'
   return 'other'

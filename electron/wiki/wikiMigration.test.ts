@@ -349,6 +349,48 @@ describe('BLK-3/BLK-4 存量自定义 rootPath 自动入管线并重置', () => 
   })
 })
 
+describe('复审残余：多段存量 rootPath', () => {
+  it('多段 rootPath（docs/wiki）入管线迁移 + 别名注册（safeRootName 不再过滤多段）', async () => {
+    const world = await setupWorld()
+    const p = world.makeLegacyProfile('proj-multi', { customRoot: 'docs/wiki' })
+    await migrateLegacyWikis({
+      db: world.db,
+      userDataPath: world.userData,
+      wikiConfig: wikiConfig({ rootPath: 'docs/wiki' }),
+      profiles: [{ workDir: p.workDir }]
+    })
+    expect(fs.existsSync(p.srcRoot)).toBe(false)
+    const cfg = readWikiConfig(world.db)
+    expect(cfg.rootPath).toBe('llm-wiki')
+    expect(cfg.legacyRootAliases).toContain('docs/wiki')
+    // 别名挂载命中（多段前缀）
+    const { resolveWikiMount } = await import('./wikiMount')
+    const res = resolveWikiMount(p.workDir, cfg, world.userData, 'docs/wiki/wiki/index.md')
+    expect(res.mounted).toBe(true)
+    expect((res as { readOnly?: boolean }).readOnly).toBe(true)
+  })
+
+  it('逃逸根名被拒绝（../x 不入管线），合法名照常迁移', async () => {
+    const world = await setupWorld()
+    const p = world.makeLegacyProfile('proj-escape', { customRoot: 'normal' })
+    await migrateLegacyWikis({
+      db: world.db,
+      userDataPath: world.userData,
+      wikiConfig: wikiConfig({ rootPath: 'llm-wiki' }),
+      profiles: [{ workDir: p.workDir }],
+      extraLegacyRoots: [
+        { workDir: p.workDir, rootDirName: 'normal' },
+        { workDir: p.workDir, rootDirName: '../escape' }
+      ]
+    })
+    // 合法 normal 根正常迁移；逃逸候选 ../escape 被安全过滤（不抛错、不越界解析）
+    expect(fs.existsSync(p.srcRoot)).toBe(false)
+    const cfg = readWikiConfig(world.db)
+    expect(cfg.legacyRootAliases).toContain('normal')
+    expect(cfg.legacyRootAliases).not.toContain('../escape')
+  })
+})
+
 describe('T2.3 别名注册接通', () => {
   it('迁移后挂载层识别别名（readOnly）；别名前缀写拒绝由挂载/执行层承担', async () => {
     const world = await setupWorld()

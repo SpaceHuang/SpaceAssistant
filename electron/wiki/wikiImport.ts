@@ -161,7 +161,8 @@ async function importRawToSharedRoot(
       return dest
     })
     const finalRel = path.relative(realBase, destAbs).replace(/\\/g, '/')
-    const rawRelPath = `${wikiConfig.rootPath || WIKI_VOCABULARY_PREFIX}/${finalRel}`
+    // 复审残余（BLK-4 延伸）：词汇前缀恒为常量——rootPath 改名后 my-lib/raw/... 不可挂载
+    const rawRelPath = `${WIKI_VOCABULARY_PREFIX}/${finalRel}`
     return { ok: true, rawRelPath, copied: true }
   } catch (e) {
     if (e instanceof Error && e.message === '无法生成 raw 目标路径') return { ok: false, error: e.message }

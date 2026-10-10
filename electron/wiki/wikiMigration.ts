@@ -285,9 +285,12 @@ function migrateSchemaFile(srcSchema: string, sharedSchema: string, newSchemaCon
 /** 旧目录收尾：整目录改名 <root>.migrated-{YYYYMMDD-HHmmss}/（永不自动删除）。 */
 /** P2-4：根目录名单段校验（防 ../ 逃逸）。 */
 function safeRootName(name: string): string | undefined {
-  const trimmed = (name || '').trim()
-  if (!trimmed || /[\/]/.test(trimmed) || trimmed === '.' || trimmed === '..') return undefined
-  return trimmed
+  // 复审残余：允许多段相对根名（如 docs/wiki）；仍禁 ../ 逃逸 / 绝对 / 盘符
+  const trimmed = (name || '').trim().replace(/\\/g, '/')
+  if (!trimmed || trimmed.startsWith('/') || /^[a-z]:/i.test(trimmed)) return undefined
+  const segments = trimmed.split('/').filter((seg) => seg.length > 0)
+  if (segments.length === 0 || segments.some((seg) => seg === '.' || seg === '..')) return undefined
+  return segments.join('/')
 }
 
 function renameLegacyRootAway(srcRoot: string, now: Date): string {

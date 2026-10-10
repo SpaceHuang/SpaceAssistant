@@ -178,6 +178,28 @@ describe('BLK-7 根列表不平铺', () => {
   })
 })
 
+describe('P1-10 残余：read-file 失败返回 kind:error + migratedTo', () => {
+  it('读取不存在文件且改名映射命中 → 返回 { kind:error, migratedTo }（§12.3-2）', async () => {
+    const { handlers } = await setupWorld()
+    const db = dbs[0]
+    const { CONFIG_KEYS } = await import('./ipcShared')
+    const { setConfigValue } = await import('../database/operations')
+    setConfigValue(db, CONFIG_KEYS.wiki, JSON.stringify({
+      ...wikiConfig(true, true),
+      migration: { status: 'completed', report: { renames: [{ from: 'llm-wiki/wiki/merged.md', to: 'llm-wiki/wiki/merged.from-p-12345678.md' }] } }
+    }))
+
+    const res = (await handlers.get('file:read-file')!(null as never, 'llm-wiki/wiki/merged.md' as never)) as { kind?: string; error?: string; migratedTo?: string }
+    expect(res.kind).toBe('error')
+    expect(res.migratedTo).toBe('llm-wiki/wiki/merged.from-p-12345678.md')
+  })
+
+  it('未命中映射 → 维持既有抛错行为（无 migratedTo）', async () => {
+    const { handlers } = await setupWorld()
+    await expect(handlers.get('file:read-file')!(null as never, 'llm-wiki/wiki/absent.md' as never)).rejects.toThrow()
+  })
+})
+
 describe('file:watch-content 挂载（T1.16）', () => {
   it('①wiki 词汇路径经挂载解析后启动监听；广播键为词汇路径（BLK-6）', async () => {
     const { handlers, realBase } = await setupWorld()
