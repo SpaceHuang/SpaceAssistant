@@ -31,6 +31,17 @@ export type StorageOverview = Readonly<{
 }>
 
 export type StorageAuditCoverage = Readonly<Record<string, number | Readonly<Record<string, number>> | null>>
+export type StorageMessageBodyCoverage = Readonly<{
+  messages: number
+  bodyMatched: number
+  byRole: Readonly<Record<string, Readonly<{ messages: number; bodyMatched: number }>>>
+  identityBodyCandidateCount: number
+  identityBodyCandidateBytes: number
+  identityBodyCandidatesByRole: Readonly<Record<string, Readonly<{ messages: number; candidateMatches: number; candidateContentBytes: number }>>>
+  canonicalIdentityCount: number
+  canonicalUniqueBodies: number
+  malformedPayloads: number
+}>
 /** Strict diagnostic result; intentionally excludes raw descriptors and all content. */
 export type StorageAudit = Readonly<{
   collectedAt: string
@@ -39,7 +50,7 @@ export type StorageAudit = Readonly<{
   canonicalCoverage: StorageAuditCoverage | null
   canonicalSessionCoverage: StorageAuditCoverage | null
   canonicalRequiredData: Readonly<{ eventRows: number; eventPayloadBytes: number; streamRows: number; streamTableBytes: number | null }> | null
-  messageBodyCoverage: Readonly<Record<string, number | Readonly<Record<string, number>>>> | null
+  messageBodyCoverage: StorageMessageBodyCoverage | null
   strictSpillReferences: Readonly<{ complete: boolean; descriptors: number | null; uniqueLocators: number | null; errorCodes: readonly string[] }> | null
 }>
 

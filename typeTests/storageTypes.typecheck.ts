@@ -1,4 +1,4 @@
-import type { StorageAudit, StorageOverview } from '../src/shared/storageTypes'
+import type { StorageAudit, StorageMessageBodyCoverage, StorageOverview } from '../src/shared/storageTypes'
 
 const unknownOverview: StorageOverview = {
   collectedAt: new Date(0).toISOString(), status: 'partial', totalBytes: null,
@@ -12,4 +12,17 @@ const audit: StorageAudit = { collectedAt: new Date(0).toISOString(), status: 'p
   canonicalCoverage: null, canonicalSessionCoverage: null, canonicalRequiredData: null, messageBodyCoverage: null,
   strictSpillReferences: null }
 
-void [unknownOverview, audit]
+const actualCoverage: StorageMessageBodyCoverage = {
+  messages: 1,
+  bodyMatched: 1,
+  byRole: { assistant: { messages: 1, bodyMatched: 1 } },
+  identityBodyCandidateCount: 1,
+  identityBodyCandidateBytes: 4,
+  identityBodyCandidatesByRole: { assistant: { messages: 1, candidateMatches: 1, candidateContentBytes: 4 } },
+  canonicalIdentityCount: 1,
+  canonicalUniqueBodies: 1,
+  malformedPayloads: 0
+}
+const auditWithCoverage: StorageAudit = { ...audit, messageBodyCoverage: actualCoverage }
+
+void [unknownOverview, audit, auditWithCoverage]

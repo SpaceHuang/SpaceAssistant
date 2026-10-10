@@ -4,9 +4,19 @@ import { DatabaseSync } from 'node:sqlite'
 import os from 'node:os'
 import path from 'node:path'
 import { readCanonicalSpillReferences } from '../storage/spillStore'
-import type { StorageAudit, StorageOverview, StorageStrictProfile } from '../../src/shared/storageTypes'
+import type { StorageAudit, StorageAuditCoverage, StorageMessageBodyCoverage, StorageOverview, StorageStrictProfile } from '../../src/shared/storageTypes'
 
 type TableMetric = { rows: number; textBytes: number }
+type SessionStorageProfileInternal = StorageStrictProfile & {
+  collectedAt: string
+  canonicalCoverage: StorageAuditCoverage | null
+  canonicalSessionCoverage: StorageAuditCoverage | null
+  canonicalRequiredData: StorageAudit['canonicalRequiredData']
+  messageBodyCoverage: StorageMessageBodyCoverage | null
+  spillFiles: { files: number; complete: boolean; errorCodes: string[]; referenceStats: { descriptorCount: number; uniqueLocatorCount: number } | null }
+  spillReferenceStats: { descriptorCount: number; uniqueLocatorCount: number } | null
+  spillDegraded: { complete: boolean; errorCodes: string[] }
+}
 
 function scanSpillDirectory(root: string): { files: Array<{ locator: string; bytes: number }>; complete: boolean; errorCodes: string[] } {
   const files: Array<{ locator: string; bytes: number }> = []
@@ -82,7 +92,7 @@ function collectSpillMeasurement(conn: DatabaseSync, tables: Set<string>, root: 
 }
 
 /** Collects storage sizes and canonical coverage by inspecting content in memory, without returning bodies or writing to the DB. */
-function collectSessionStorageProfileInternal(dbPath: string): Record<string, unknown> {
+function collectSessionStorageProfileInternal(dbPath: string): SessionStorageProfileInternal {
   const file = fs.statSync(dbPath)
   const databaseFiles = (() => {
     const walPath = `${dbPath}-wal`
@@ -191,7 +201,7 @@ function collectSessionStorageProfileInternal(dbPath: string): Record<string, un
       return { root, files: scan.files.length, observedBytes, totalBytes: scan.complete ? observedBytes : null,
         complete: scan.complete, errorCodes: scan.errorCodes }
     })()
-    const canonicalCoverage = tables.has('agent_history_streams') && tables.has('agent_history_events')
+    const canonicalCoverage: StorageAuditCoverage | null = tables.has('agent_history_streams') && tables.has('agent_history_events')
       ? conn.prepare(`SELECT COUNT(*) AS streams,
           SUM(has_ctx) AS withContext, SUM(has_response) AS withResponse,
           SUM(has_ctx AND has_response) AS withBoth,
@@ -203,9 +213,9 @@ function collectSessionStorageProfileInternal(dbPath: string): Record<string, un
           MAX(e.kind='session-input-committed') AS has_input,
           MAX(e.kind='transcript-compacted') AS has_compacted
           FROM agent_history_streams s LEFT JOIN agent_history_events e ON e.invocation_id=s.invocation_id
-          GROUP BY s.invocation_id)`).get()
+        GROUP BY s.invocation_id)`).get() as StorageAuditCoverage
       : null
-    const canonicalSessionCoverage = tables.has('agent_history_streams') && tables.has('agent_history_events')
+    const canonicalSessionCoverage: StorageAuditCoverage | null = tables.has('agent_history_streams') && tables.has('agent_history_events')
       ? conn.prepare(`SELECT COUNT(*) AS sessions,
           SUM(has_ctx) AS sessionsWithContext, SUM(has_response) AS sessionsWithResponse,
           SUM(has_ctx AND has_response) AS sessionsWithBoth,
@@ -218,7 +228,7 @@ function collectSessionStorageProfileInternal(dbPath: string): Record<string, un
           MAX(e.kind='session-input-committed') AS has_input,
           MAX(e.kind='transcript-compacted') AS has_compacted
           FROM agent_history_streams s LEFT JOIN agent_history_events e ON e.invocation_id=s.invocation_id
-          WHERE s.session_id IS NOT NULL GROUP BY s.session_id)`).get()
+          WHERE s.session_id IS NOT NULL GROUP BY s.session_id)`).get() as StorageAuditCoverage
       : null
     const canonicalRequiredData = (() => {
       const eventPayload = tables.has('agent_history_events')
@@ -338,9 +348,9 @@ function collectSessionStorageProfileInternal(dbPath: string): Record<string, un
 
 /** Strict compatibility entry point for diagnostics, scripts, and maintenance estimates. */
 export function collectSessionStorageAudit(dbPath: string): StorageAudit {
-  const profile = collectSessionStorageProfileInternal(dbPath) as any
-  const spill = profile.spillFiles as { complete?: boolean; errorCodes?: string[]; files?: number }
-  const stats = profile.spillReferenceStats as { descriptorCount?: number; uniqueLocatorCount?: number } | null
+  const profile = collectSessionStorageProfileInternal(dbPath)
+  const spill = profile.spillFiles
+  const stats = profile.spillReferenceStats
   const strictSpillReferences = {
     complete: Boolean(spill?.complete), descriptors: stats?.descriptorCount ?? null,
     uniqueLocators: stats?.uniqueLocatorCount ?? null, errorCodes: [...(spill?.errorCodes ?? [])]
@@ -360,7 +370,7 @@ export function collectSessionStorageAudit(dbPath: string): StorageAudit {
 
 /** Full strict result for existing cleanup-estimate and CLI callers. */
 export function collectSessionStorageStrictProfile(dbPath: string): StorageStrictProfile {
-  return collectSessionStorageProfileInternal(dbPath) as StorageStrictProfile
+  return collectSessionStorageProfileInternal(dbPath)
 }
 
 /** Lightweight storage-size collector. It never scans canonical payload JSON. */

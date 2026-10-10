@@ -4,6 +4,7 @@ import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { collectSessionStorageAudit, collectSessionStorageProfile, collectSessionStorageStrictProfile } from './sessionStorageProfile'
+import type { StorageMessageBodyCoverage } from '../../src/shared/storageTypes'
 
 const tempPaths: string[] = []
 afterEach(() => { for (const file of tempPaths.splice(0)) { try { fs.rmSync(file, { force: true, recursive: true }) } catch { /* best effort */ } } })
@@ -61,6 +62,7 @@ describe('collectSessionStorageProfile', () => {
     const legacy = collectSessionStorageProfile(dbPath) as any
     const strict = collectSessionStorageStrictProfile(dbPath) as any
     const audit = collectSessionStorageAudit(dbPath)
+    const coverage: StorageMessageBodyCoverage | null = audit.messageBodyCoverage
 
     expect(strict).toMatchObject({ tables: legacy.tables, canonicalCoverage: legacy.canonicalCoverage,
       canonicalSessionCoverage: legacy.canonicalSessionCoverage, canonicalRequiredData: legacy.canonicalRequiredData,
@@ -70,6 +72,8 @@ describe('collectSessionStorageProfile', () => {
         complete: legacy.spillFiles.complete, errorCodes: legacy.spillFiles.errorCodes } })
     expect(audit).toMatchObject({ canonicalCoverage: legacy.canonicalCoverage, canonicalSessionCoverage: legacy.canonicalSessionCoverage,
       canonicalRequiredData: legacy.canonicalRequiredData, messageBodyCoverage: legacy.messageBodyCoverage })
+    expect(coverage).toMatchObject({ byRole: { assistant: { messages: 1, bodyMatched: 1 } },
+      identityBodyCandidatesByRole: { assistant: { messages: 1, candidateMatches: 1, candidateContentBytes: Buffer.byteLength('private audit body') } } })
     expect(structuredClone(audit)).toEqual(audit)
     expect(JSON.stringify({ strict, audit })).not.toContain('private audit body')
   })
