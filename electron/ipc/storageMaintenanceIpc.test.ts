@@ -31,7 +31,7 @@ describe('storage maintenance IPC', () => {
     const handlers = new Map<string, (...args: any[]) => unknown>()
     const ipcMain = { handle: (channel: string, handler: (...args: any[]) => unknown) => handlers.set(channel, handler) } as any
     const coordinator = new StorageProfileCoordinator({ run: (request, options) => runStorageProfileWorker(request, {
-      ...options, timeoutMs: 10_000, workerPath: path.join(process.cwd(), 'dist-electron/electron/storageProfile/storageProfileWorker.js')
+      ...options, timeoutMs: 10_000, workerPath: path.join(process.cwd(), 'electron/storageProfile/storageProfileWorker.ts')
     }) })
     registerStorageMaintenanceIpc(ipcMain, { db: temp.db, getUserDataPath: () => temp.dbPath.replace(/test\.db$/, 'user-data'), storageProfileCoordinator: coordinator } as any)
     const before = await handlers.get('storage:get-overview')!() as any

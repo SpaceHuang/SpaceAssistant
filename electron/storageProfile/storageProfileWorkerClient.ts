@@ -25,7 +25,7 @@ function resolveWorkerPath(explicit?: string) {
   const compiled = path.join(__dirname, 'storageProfileWorker.js')
   const source = path.join(__dirname, 'storageProfileWorker.ts')
   if (fs.existsSync(compiled)) return compiled
-  if (fs.existsSync(source) && process.execArgv.some((argument) => argument.includes('tsx'))) return source
+  if (fs.existsSync(source)) return source
   throw new StorageProfileWorkerError('STORAGE_PROFILE_WORKER_ERROR', 'storage profile worker entry is unavailable')
 }
 
@@ -33,7 +33,9 @@ function resolveWorkerPath(explicit?: string) {
 export function runStorageProfileWorker(request: StorageProfileWorkerRequest, options: StorageProfileWorkerOptions = {}): Promise<StorageProfileWorkerResponse> {
   if (options.signal?.aborted) return Promise.reject(new StorageProfileWorkerError('STORAGE_PROFILE_WORKER_EXIT', 'storage profile task cancelled'))
   const workerPath = resolveWorkerPath(options.workerPath)
-  const worker = options.createWorker?.(workerPath) ?? new Worker(workerPath)
+  const worker = options.createWorker?.(workerPath) ?? new Worker(workerPath, workerPath.endsWith('.ts')
+    ? { execArgv: [...process.execArgv.filter((argument) => argument !== '--import=tsx'), '--import=tsx'] }
+    : undefined)
   const id = randomUUID()
   const timeoutMs = options.timeoutMs ?? 60_000
   return new Promise((resolve, reject) => {
