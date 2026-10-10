@@ -24,6 +24,7 @@ import { isBrowserSessionTrustedHost, resetBrowserSessionTrustForTests } from '.
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { createImOrchestrationToolRegistry } from '../remote/imOrchestrationTools'
 import { getToolCache, saveProfiles, saveToolCache } from '../mcp/mcpConfigStore'
+import { executeToolSearch } from '../tools/toolSearchTool'
 
 describe('AcceptedTurn propagation', () => {
   it.each(['feishu', 'wechat', 'automation'] as const)('%s receives the enabled MCP request snapshot', async (lane) => {
@@ -46,6 +47,43 @@ describe('AcceptedTurn propagation', () => {
     })
     expect((ports.mcp?.snapshot as { entries: Map<string, unknown> }).entries.has('mcp_docs_search_12345678')).toBe(true)
     expect(saved[0]?.enabledToolNames).toEqual(['search'])
+    db.close()
+  })
+
+  it.each(['feishu', 'wechat', 'automation'] as const)('%s tool_search only returns MCP entries in the turn authorization set', async (lane) => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: `mcp-trim-${lane}` })
+    const serverId = '11111111-2222-4333-8444-555555555555'
+    await saveProfiles(db, [{ id: serverId, name: 'Docs', enabled: true, transport: 'stdio', timeoutSec: 10,
+      auth: { mode: 'none' }, stdio: { command: 'node', args: ['server.js'], env: [] }, enabledToolNames: ['private_search', 'public_search'] }])
+    await saveToolCache(db, serverId, { tools: [
+      { serverId, originalName: 'private_search', mappedName: 'mcp_docs_private_search_12345678', description: 'private description marker', inputSchema: { type: 'object', properties: { secret: { type: 'string', description: 'private schema marker' } } }, discoveredAt: new Date().toISOString() },
+      { serverId, originalName: 'public_search', mappedName: 'mcp_docs_public_search_87654321', description: 'public description', inputSchema: { type: 'object', properties: { query: { type: 'string' } } }, discoveredAt: new Date().toISOString() }
+    ], protocolVersion: '2025-06-18', discoveredAt: new Date().toISOString() })
+    const { agentSdk } = assembleInvocation({ requestId: `mcp-trim-${lane}`, sessionId: session.id, lane, model: 'test', providerRouteId: 'hosted-route', locale: 'zh-CN', messages: [],
+      toolsConfig: { ...DEFAULT_TOOLS_CONFIG, mcpDeferredLoading: 'always' }, appDb: db, agentSdkHistory: new MemoryHistory(),
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    const registry = new TypedToolRegistry()
+    let capturedContext: Record<string, unknown> | undefined
+    registry.register(definePlannedTool({ name: 'context_probe', parseInput: (raw) => raw as Record<string, unknown>,
+      plan: async (_input, planning) => { capturedContext = planning.executionContext as Record<string, unknown>; return {} }, execute: async () => ({ success: true }) }))
+    const registeredTools = agentSdk.createRegisteredTools({ registry })
+    const createHost = (authorizedToolNames: ReadonlySet<string>) => agentSdk.createHostedTurnHost({ registeredTools, registry, authorizedToolNames,
+      policy: { evaluate: vi.fn(async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' })) } as never })
+
+    createHost(new Set(['tool_search', 'mcp_docs_public_search_87654321']))
+    await registeredTools.prepareTool({ invocationId: `mcp-trim-${lane}`, toolCallId: 'probe-allow-public', toolName: 'context_probe', input: {} }, { kind: 'initial' })
+    const denyFilteredResult = executeToolSearch({ query: '' }, capturedContext as never)
+
+    expect(denyFilteredResult.matches.map(({ name }) => name)).toEqual(['mcp_docs_public_search_87654321'])
+    expect(JSON.stringify(denyFilteredResult)).not.toContain('private description marker')
+    expect(JSON.stringify(denyFilteredResult)).not.toContain('private schema marker')
+
+    createHost(new Set(['tool_search']))
+    await registeredTools.prepareTool({ invocationId: `mcp-trim-${lane}`, toolCallId: 'probe-allow-search-only', toolName: 'context_probe', input: {} }, { kind: 'initial' })
+    const allowFilteredResult = executeToolSearch({ query: '' }, capturedContext as never)
+    expect(allowFilteredResult.matches).toEqual([])
+    expect(JSON.stringify(allowFilteredResult)).not.toContain('mcp_docs_private_search_12345678')
     db.close()
   })
 

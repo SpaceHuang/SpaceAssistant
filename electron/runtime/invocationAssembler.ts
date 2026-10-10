@@ -634,6 +634,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         })
       })
     : mcpSnapshotRaw
+  // 未绑定本轮授权面前，检索视图必须 fail closed；创建 Hosted host 后再填入授权集合。
+  let mcpToolSearchSnapshot: McpToolSnapshot = { ...mcpSnapshot, entries: new Map() }
   const mcp = db
     ? {
         snapshot: mcpSnapshot,
@@ -886,8 +888,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         lane: materialsLane,
         ...(materials.historyFacts ? { historyFacts: materials.historyFacts } : {}),
         // FR2：tool_search 检索域——读 ports.mcp 的实时快照（唯一事实源；装配期构建或宿主注入均可）
-        ...(((ports.mcp?.snapshot) as McpToolSnapshot | undefined) && (ports.mcp?.snapshot as McpToolSnapshot).entries.size
-          ? { mcpToolSnapshot: ports.mcp!.snapshot as McpToolSnapshot }
+        ...(mcpToolSearchSnapshot.entries.size
+          ? { mcpToolSnapshot: mcpToolSearchSnapshot }
           : {})
       }))
       const refreshExecutionContext = async (call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: { confirmation?: { receipt: string } }, current: Record<string, unknown>) => {
@@ -1124,6 +1126,11 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       eagerBudgetDroppedNames?: ReadonlySet<string>
       resolveRegisteredToolName?: (providerToolName: string) => string
     }) => {
+      const currentMcpSnapshot = ports.mcp?.snapshot as McpToolSnapshot | undefined ?? mcpSnapshot
+      mcpToolSearchSnapshot = {
+        ...currentMcpSnapshot,
+        entries: new Map([...currentMcpSnapshot.entries].filter(([name]) => input.authorizedToolNames.has(name)))
+      }
       const routeId = materials.providerRouteId
       if (!routeId) throw new Error('HOSTED_PROVIDER_ROUTE_REQUIRED')
       const runtime = getDefaultAgentRuntime()
