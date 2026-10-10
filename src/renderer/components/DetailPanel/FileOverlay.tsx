@@ -8,6 +8,7 @@ import { FileContentView } from './FileContentView'
 import { useWikiIndexViewState } from './WikiIndexView'
 import { canShowCollectToWiki, collectToWiki } from '../../services/wikiImportService'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import { WIKI_VOCABULARY_PREFIX } from '../../../shared/wikiConstants'
 
 export function FileOverlay() {
   const { message } = App.useApp()
@@ -38,7 +39,7 @@ export function FileOverlay() {
     registerFileBodyElement
   } = useDetailPanel()
 
-  const wikiRoot = useTypedSelector((s) => s.config.config?.wiki?.rootPath ?? 'llm-wiki')
+  const wikiRoot = useTypedSelector((s) => s.config.config?.wiki?.rootPath ?? WIKI_VOCABULARY_PREFIX)
   const wikiEnabled = useTypedSelector((s) => s.config.config?.wiki?.enabled ?? false)
   const { isIndex, indexView, setIndexView } = useWikiIndexViewState(selectedFile, wikiRoot)
 

@@ -15,7 +15,7 @@ import { TurnIntent } from '../../src/shared/assistantFactAggregator'
 import { TurnRuntime as TurnRuntimeImpl } from '../turnRuntime'
 import { TurnStarted } from '../../src/shared/turnCoordinator'
 import { getDbConnection } from '../database'
-import { WikiStatus } from '../../src/shared/domainTypes'
+import { WikiConfig, WikiStatus } from '../../src/shared/domainTypes'
 import { app, shell } from 'electron'
 import { getConfigValue, getNextQueuedMessage, getTurnByRequestId, listPersistedTurns, listTurnErrorsByAssistantMessageIds, setConfigValue } from '../database'
 import { canonicalQueueInput } from '../../src/shared/queueInputFingerprint'
@@ -69,6 +69,7 @@ import { readShellConfigFromDb } from '../shell/shellConfigDb'
 import { loadEffectivePolicyRules, readPolicyPackages, resolveEffectivePolicyRulesWithOrigin } from '../confirmation/policyRulesRuntime'
 import { isActiveTurnAdmissionBlocked, isSessionContextCompactionLocked, isSessionTurnAdmissionBlocked, withSessionTurnAdmission } from '../sessionCompactionLock'
 import type { ContinuationIntentAcceptance, ContinuationSourceRef } from '../sessionStorage/contracts'
+import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 
 export function resolveContinuationSafetySnapshot(ctx: AppIpcContext, sessionId: string, lane: 'desktop' | 'wechat' | 'feishu' | 'automation') {
   const workDir = ctx.sessionStorage ? resolveWorkDirForSession(ctx.sessionStorage.queries, sessionId,
@@ -721,7 +722,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
         }
         const skillFragments = route.skills.map((skill) => `## Skill: ${skill.meta.name}\n\n${skill.content.trim()}`)
         let system: string | undefined
-        if (route.skills.some((skill) => skill.meta.name === 'llm-wiki')) {
+        if (route.skills.some((skill) => skill.meta.name === WIKI_VOCABULARY_PREFIX)) {
           // T1.14：注入经共享根读全局 SCHEMA（所有 workDir 注入同一份规范）
           const schema = readWikiSchema(ctx.getWorkDir(), readWikiConfig(ctx.db), ctx.getUserDataPath())?.trim()
           if (schema) system = system ? `${system}\n\n## Wiki Schema（项目规范）\n\n${schema}` : `## Wiki Schema（项目规范）\n\n${schema}`
@@ -1374,7 +1375,7 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
   // T2.6：受控改名（改配置 + rename + 失效广播 + 失败回滚，§6.3）
   ipcMain.handle('wiki:rename-root', async (_e, payload: { newRootPath: string }): Promise<{ ok: true } | { ok: false; error: string }> => {
     const wikiConfig = readWikiConfig(ctx.db)
-    const currentRootPath = wikiConfig.rootPath || 'llm-wiki'
+    const currentRootPath = wikiConfig.rootPath || WIKI_VOCABULARY_PREFIX
     const result = renameWikiRoot({
       userDataPath: ctx.getUserDataPath(),
       currentRootPath,

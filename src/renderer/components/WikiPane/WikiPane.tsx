@@ -9,6 +9,7 @@ import { projectDisplayMap, summarizeMigrationReport } from './wikiMigrationUi'
 import type { WikiMigrationReport } from '../../../shared/domainTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import './wikiPane.css'
+import { WIKI_VOCABULARY_PREFIX } from '../../../shared/wikiConstants'
 
 export type WikiPaneHandle = {
   refresh: () => void
@@ -180,7 +181,7 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
             onCollectToWiki={onCollectToWiki}
             treeOptions={{
               rootRelPath: wikiRoot,
-              rootDisplayName: wikiRoot.split('/').pop() || 'llm-wiki',
+              rootDisplayName: wikiRoot.split('/').pop() || WIKI_VOCABULARY_PREFIX,
               readOnly: true
             }}
           />

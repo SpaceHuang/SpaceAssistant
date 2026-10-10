@@ -3,6 +3,7 @@ export const CURRENT_SCHEMA_VERSION = 1
 import type { BrowserDependencyToolError } from './browserTypes'
 import type { AppLocale } from './locale'
 import { getBuiltinToolMetadata } from './builtinToolMetadata'
+import { WIKI_VOCABULARY_PREFIX, DEFAULT_WIKI_ROOT_DIRNAME } from './wikiConstants'
 
 export type { AppLocale }
 
@@ -372,7 +373,7 @@ export interface SkillMeta {
 export type SkillScope = 'project' | 'user' | 'builtin'
 
 /** 产品内置 Skill（由应用自动安装/管理，不在设置页 Skill 列表展示） */
-export const PRODUCT_BUILTIN_SKILL_NAMES = ['llm-wiki', 'browser-setup-guide', 'shell-setup-guide'] as const
+export const PRODUCT_BUILTIN_SKILL_NAMES = [WIKI_VOCABULARY_PREFIX, 'browser-setup-guide', 'shell-setup-guide'] as const
 
 /** 一次性聊天启动意图，消费后清空 */
 export interface ChatLaunchIntent {
@@ -484,6 +485,12 @@ export interface WikiMigrationReport {
   conflicts?: Array<{ path: string; keptAs: string; sourceProjectId?: string }>
   /** 改名映射表（原词汇路径 → 新词汇路径，§12.3） */
   renames?: Array<{ from: string; to: string }>
+  /** 拷入页面总数 */
+  mergedPageCount?: number
+  /** 冲突双保留数 */
+  conflictCount?: number
+  /** 同内容跳过页数 */
+  skippedPageCount?: number
 }
 
 export interface WikiMigrationState {
@@ -508,7 +515,7 @@ export interface WikiConfig {
 
 export const DEFAULT_WIKI_CONFIG: WikiConfig = {
   enabled: false,
-  rootPath: 'llm-wiki',
+  rootPath: WIKI_VOCABULARY_PREFIX,
   hideWikiFromFileTree: true,
   interactiveIngest: false,
   maxBatchIngest: 10,

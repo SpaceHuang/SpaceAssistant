@@ -755,7 +755,7 @@ async function recordFileStateAfterWrite(
 
 function writePathErrorMessage(e: unknown, rel: string): string {
   const msg = e instanceof Error ? e.message : String(e)
-  if (msg === 'wiki-readonly-alias-write-denied') return `该路径为历史迁移保留的只读别名，请写入共享库新路径 llm-wiki/ 下的对应位置: ${rel}`
+  if (msg === 'wiki-readonly-alias-write-denied') return `该路径为历史迁移保留的只读别名，请写入共享库新路径 ${WIKI_VOCABULARY_PREFIX}/ 下的对应位置: ${rel}`
   if (msg === 'wiki-mount-consistency-mismatch') return `写入许可与当前共享库配置不一致，请重新发起写入: ${rel}`
   if (msg === 'remote-write-target-outside-workdir') return `远程会话只能写入当前工作目录内的文件: ${rel}`
   if (msg.includes('路径超出') || msg.includes('工作目录')) return `路径超出工作目录范围: ${rel}`

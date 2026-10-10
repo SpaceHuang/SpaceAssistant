@@ -173,7 +173,7 @@ function mergeLogFiles(srcLog: string, sharedLog: string, projectId: string): vo
   const shared = fs.existsSync(sharedLog) ? fs.readFileSync(sharedLog, 'utf8') : ''
   const src = fs.readFileSync(srcLog, 'utf8')
   const parseEntries = (text: string): Array<{ ts: string; body: string[] }> => {
-    const entries: Array<{ ts: string; body: string }> = []
+    const entries: Array<{ ts: string; body: string[] }> = []
     const lines = text.split(/\r?\n/)
     let current: { ts: string; body: string[] } | undefined
     for (const line of lines) {

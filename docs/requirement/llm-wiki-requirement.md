@@ -1,6 +1,6 @@
 # LLM Wiki 支持 — 需求规格
 
-**版本：** 1.6  
+**版本：** 1.7  
 **日期：** 2026-05-24  
 **状态：** 待评审  
 **参考来源：** [Karpathy — LLM Wiki (gist)](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)  
@@ -10,6 +10,8 @@
 
 | 版本 | 日期 | 说明 |
 |------|------|------|
+| 1.7 | 2026-10-10 | 增补「集中共享存储」章节：Wiki 存储从 workDir 迁至 userData 共享库（详见 [wiki-shared-centralized-storage-requirement.md](./wiki-shared-centralized-storage-requirement.md) v1.12），词汇路径 `llm-wiki/...` 与目录约定不变 |
+| 1.6 | 2026-05-24 | （原文） |
 | 1.0 | 2026-05-24 | 初稿：基于 Karpathy LLM Wiki 模式，细化 SpaceAssistant 适配需求 |
 | 1.1 | 2026-05-24 | 文件 Tab 改为 VS Code 式双分段布局（文件列表 + LLM Wiki） |
 | 1.2 | 2026-05-24 | 取消 `wiki_search` 内置工具，Query 检索统一复用 `grep` + `index.md` |
@@ -1006,3 +1008,16 @@ interface WikiStatus {
 **创建日期**: 2026-05-24  
 **更新日期**: 2026-05-24 — UI 文案统一为「收录到 Wiki」（见 wiki-import-ingest-requirement.md v1.1）  
 **适用范围**: SpaceAssistant LLM Wiki 功能
+
+
+---
+
+## 集中共享存储（v1.7 增补）
+
+自 [wiki-shared-centralized-storage-requirement.md](./wiki-shared-centralized-storage-requirement.md)（v1.12 已通过）起：
+
+- **存储位置**：Wiki 根固定为 `{userData}/<wiki.rootPath>/`（默认 `llm-wiki`），所有工作目录（含远程 IM 会话）共享同一记忆库；
+- **路径词汇不变**：Agent 与 UI 继续使用 workDir 相对词汇 `llm-wiki/...`，由主进程挂载层（`wikiMount`）统一重映射到共享库；历史聊天链接、技能、SCHEMA 注入全部透明；
+- **目录约定**：本文的 `raw/`、`wiki/{entities,concepts,topics,sources,queries}/` 结构在共享库中原样保留；新增 `raw/<projectId>/`（按来源项目分目录）与可选 `wiki/projects/<projectId>/` 分区；
+- **存量迁移**：各 workDir 的旧 Wiki 经迁移向导合并进共享库，旧目录改名 `.migrated-{ts}` 保留；历史自定义根注册只读路径别名；
+- 本文其余章节（页面类型、Ingest/Query/Lint 工作流、输出语言）不受影响。

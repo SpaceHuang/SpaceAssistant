@@ -11,6 +11,7 @@ import { markdownHeadingText } from '../../utils/markdownHeadingText'
 import { scrollToMarkdownFragment } from '../../utils/markdownFragmentScroll'
 import { attachMarkdownRenderCopy, mdSourceAttrs, type MdSourceNode } from '../../utils/markdownRenderCopy'
 import type { ComponentProps } from 'react'
+import { WIKI_VOCABULARY_PREFIX } from '../../../shared/wikiConstants'
 
 type Props = {
   content: string
@@ -49,7 +50,7 @@ function mdBlock(Tag: BlockTag): (props: ComponentProps<BlockTag> & ExtraProps) 
 
 export const MarkdownRenderView = memo(function MarkdownRenderView({
   content,
-  wikiRootPath = 'llm-wiki',
+  wikiRootPath = WIKI_VOCABULARY_PREFIX,
   baseRelPath,
   onOpenFile,
   pendingScrollFragment,

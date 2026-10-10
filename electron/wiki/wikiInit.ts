@@ -8,6 +8,7 @@ import { DEFAULT_INDEX_MD, DEFAULT_LOG_MD, DEFAULT_SCHEMA_MD, BUNDLED_LLM_WIKI_S
 import { resolveWikiRootAbs } from './wikiPaths'
 import { DEFAULT_WIKI_ROOT_DIRNAME } from '../../src/shared/wikiConstants'
 import type { WikiConfig } from '../../src/shared/domainTypes'
+import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 
 /** 共享库物理根：{userData}/<wikiConfig.rootPath>（T1.12a；目录名读配置 D9）。 */
 export function resolveSharedWikiRoot(userDataPath: string, wikiConfig: WikiConfig): string {
@@ -18,7 +19,7 @@ async function writeSkillToProject(workDir: string, overwrite: boolean): Promise
   const projectDir = getProjectSkillsDir(workDir)
   if (!projectDir) return { installed: false }
 
-  const targetDir = path.join(projectDir, 'llm-wiki')
+  const targetDir = path.join(projectDir, WIKI_VOCABULARY_PREFIX)
   assertInsideDir(projectDir, targetDir)
 
   if (fs.existsSync(targetDir) && !overwrite) {
@@ -52,7 +53,7 @@ export async function installBundledLlmWikiSkill(
 
 async function writeSkillToUserLevel(userDataPath: string, overwrite: boolean): Promise<{ installed: boolean; skill?: SkillDefinition }> {
   const userDir = getUserSkillsDir(userDataPath)
-  const targetDir = path.join(userDir, 'llm-wiki')
+  const targetDir = path.join(userDir, WIKI_VOCABULARY_PREFIX)
   assertInsideDir(userDir, targetDir)
 
   if (fs.existsSync(targetDir) && !overwrite) {
@@ -69,7 +70,7 @@ async function writeSkillToUserLevel(userDataPath: string, overwrite: boolean): 
 export function removeProjectWikiSkillCopy(workDir: string): boolean {
   const projectDir = getProjectSkillsDir(workDir)
   if (!projectDir) return false
-  const targetDir = path.join(projectDir, 'llm-wiki')
+  const targetDir = path.join(projectDir, WIKI_VOCABULARY_PREFIX)
   if (!fs.existsSync(targetDir)) return false
   fs.rmSync(targetDir, { recursive: true, force: true })
   return true

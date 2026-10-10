@@ -12,6 +12,7 @@ import { resolveSafePath } from '../pathSecurity'
 import { getFileMetadata } from '../fileReadHelpers'
 import { registerWikiProject, computeProjectId } from './wikiProjects'
 import { resolveSharedWikiRoot } from './wikiInit'
+import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 import { withWikiWriteMutex } from './wikiWriteMutex'
 import type { AppDatabase } from '../database/sqliteStore'
 
@@ -158,7 +159,7 @@ async function importRawToSharedRoot(
     await withWikiWriteMutex(destAbs, async () => {
       await fs.copyFile(srcAbs, destAbs)
     })
-    const rawRelPath = `${wikiConfig.rootPath || 'llm-wiki'}/${rawRelInRoot}`
+    const rawRelPath = `${wikiConfig.rootPath || WIKI_VOCABULARY_PREFIX}/${rawRelInRoot}`
     return { ok: true, rawRelPath, copied: true }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }

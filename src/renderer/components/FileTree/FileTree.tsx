@@ -13,6 +13,7 @@ import { buildFileTreeContextMenuItems } from './fileTreeContextMenuItems'
 import { resolveFileTreeNodeKeyFromTarget } from './fileTreeContextMenuDom'
 import { FileTreeContextMenuOverlay } from './FileTreeContextMenuOverlay'
 import './fileTree.css'
+import { WIKI_VOCABULARY_PREFIX } from '../../../shared/wikiConstants'
 
 export type FileTreeHandle = {
   selectPath: (relPath: string) => Promise<void>
@@ -42,7 +43,7 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
     selectedKey: controlledSelectedKey,
     onSelectedKeyChange,
     highlightRelPaths = [],
-    wikiRootPath = 'llm-wiki',
+    wikiRootPath = WIKI_VOCABULARY_PREFIX,
     wikiEnabled = false,
     onCollectToWiki
   },

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { App, Modal } from 'antd'
 import { MessageSquare, MessagesSquare } from 'lucide-react'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
+import { WIKI_VOCABULARY_PREFIX } from '../../../shared/wikiConstants'
 import {
   ackDisplayMessagePersisted,
   mergeTurnFailures,
@@ -891,7 +892,7 @@ export function ChatView() {
 
   const handleOpenFile = useCallback(
     (relPath: string) => {
-      const wikiRoot = cfg?.wiki?.rootPath ?? 'llm-wiki'
+      const wikiRoot = cfg?.wiki?.rootPath ?? WIKI_VOCABULARY_PREFIX
       requestFilePaneSelect({ relPath, preferWiki: isUnderWikiRoot(relPath, wikiRoot) })
       void openFile(relPath).catch((e) => {
         message.error(formatUserFacingError(e instanceof Error ? e.message : String(e)))
@@ -1073,7 +1074,7 @@ export function ChatView() {
         shellConfig={cfg?.shell}
         sessionMetadata={currentSession?.metadata}
         onOpenFile={handleOpenFile}
-        wikiRootPath={cfg?.wiki?.rootPath ?? 'llm-wiki'}
+        wikiRootPath={cfg?.wiki?.rootPath ?? WIKI_VOCABULARY_PREFIX}
       />
     ),
     [

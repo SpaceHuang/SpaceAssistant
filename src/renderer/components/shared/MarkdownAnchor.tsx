@@ -1,6 +1,7 @@
 import type { ComponentProps, RefObject } from 'react'
 import { resolveMarkdownHrefTarget } from '../../../shared/markdownLinkResolve'
 import { scrollToMarkdownFragment } from '../../utils/markdownFragmentScroll'
+import { WIKI_VOCABULARY_PREFIX } from '../../../shared/wikiConstants'
 
 type AnchorProps = ComponentProps<'a'>
 
@@ -14,7 +15,7 @@ type Props = AnchorProps & {
 export function MarkdownAnchor({
   href,
   children,
-  wikiRootPath = 'llm-wiki',
+  wikiRootPath = WIKI_VOCABULARY_PREFIX,
   baseRelPath,
   scrollContainerRef,
   onOpenFile,

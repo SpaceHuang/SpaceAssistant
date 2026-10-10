@@ -12,6 +12,7 @@ import { getCachedSkills, invalidateSkillsCache } from './skillCache'
 import { matchSkills } from './skillMatcher'
 import { routeSkills } from './skillRouter'
 import { getSkillByName } from './skillScanner'
+import { WIKI_VOCABULARY_PREFIX } from '../../src/shared/wikiConstants'
 import {
   deleteUserSkill,
   detectInstallConflict,
@@ -53,12 +54,12 @@ export function createSkillManager(ctx: SkillManagerContext) {
       if (wikiConfig && !wikiConfig.enabled) {
         config = {
           ...config,
-          alwaysLoad: config.alwaysLoad.filter((n) => n !== 'llm-wiki')
+          alwaysLoad: config.alwaysLoad.filter((n) => n !== WIKI_VOCABULARY_PREFIX)
         }
       }
       const matched = matchSkills({ userInput, skills, config, sessionState, sessionMetadata })
       if (wikiConfig && !wikiConfig.enabled) {
-        return matched.filter((s) => s.meta.name !== 'llm-wiki')
+        return matched.filter((s) => s.meta.name !== WIKI_VOCABULARY_PREFIX)
       }
       return matched
     },
@@ -81,7 +82,7 @@ export function createSkillManager(ctx: SkillManagerContext) {
       if (wikiConfig && !wikiConfig.enabled) {
         config = {
           ...config,
-          alwaysLoad: config.alwaysLoad.filter((n) => n !== 'llm-wiki')
+          alwaysLoad: config.alwaysLoad.filter((n) => n !== WIKI_VOCABULARY_PREFIX)
         }
       }
 
@@ -95,7 +96,7 @@ export function createSkillManager(ctx: SkillManagerContext) {
         })
         let filtered = matched
         if (wikiConfig && !wikiConfig.enabled) {
-          filtered = matched.filter((s) => s.meta.name !== 'llm-wiki')
+          filtered = matched.filter((s) => s.meta.name !== WIKI_VOCABULARY_PREFIX)
         }
         return {
           skills: filtered,
@@ -121,7 +122,7 @@ export function createSkillManager(ctx: SkillManagerContext) {
       })
 
       if (wikiConfig && !wikiConfig.enabled) {
-        const filtered = result.skills.filter((s) => s.meta.name !== 'llm-wiki')
+        const filtered = result.skills.filter((s) => s.meta.name !== WIKI_VOCABULARY_PREFIX)
         const sources = Object.fromEntries(
           filtered.map((s) => [s.meta.name, result.meta.sources[s.meta.name]]).filter(([, src]) => src)
         )
