@@ -582,6 +582,8 @@ export interface WikiStatus {
   legacyRoots?: string[]
   /** 项目列表（WikiPane raw 节点展示名数据源，v1.12） */
   projects?: WikiProjectSummary[]
+  /** 迁移状态持久化镜像（T2.6 报告查看数据源 = config.wiki.migration） */
+  migration?: WikiMigrationState
 }
 
 export interface SessionWikiState {

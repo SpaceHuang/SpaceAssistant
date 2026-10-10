@@ -241,6 +241,10 @@ const api: SpaceAssistantApi = {
   wikiGetSchema: () => ipcRenderer.invoke('wiki:get-schema'),
   wikiResolvePath: (payload: { relPath: string }) => ipcRenderer.invoke('wiki:resolve-path', payload),
   wikiImportRaw: (payload: { srcRelPath: string }) => ipcRenderer.invoke('wiki:import-raw', payload),
+  wikiMigrationStatus: () => ipcRenderer.invoke('wiki:migration-status'),
+  wikiMigrateLegacy: (payload?: { profileIds?: string[]; extraLegacyRoots?: Array<{ workDir: string; rootDirName: string }> }) =>
+    ipcRenderer.invoke('wiki:migrate-legacy', payload ?? {}),
+  wikiRenameRoot: (payload: { newRootPath: string }) => ipcRenderer.invoke('wiki:rename-root', payload),
 
   projectMemoryGetState: () => ipcRenderer.invoke('project-memory:get-state'),
   projectMemoryGenerate: () => ipcRenderer.invoke('project-memory:generate'),

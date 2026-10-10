@@ -22,6 +22,8 @@ import { canonicalQueueInput } from '../../src/shared/queueInputFingerprint'
 import { clampMaxParallelChatSessions } from '../../src/shared/chatParallelConfig'
 import { classifyWikiPath } from '../wiki/wikiPaths'
 import { resolveWikiMount } from '../wiki/wikiMount'
+import { detectLegacyWikiRoots, migrateLegacyWikis } from '../wiki/wikiMigration'
+import { renameWikiRoot } from '../wiki/wikiInit'
 import { createAnthropicClient } from '../anthropicClientFactory'
 import { createOutboundAcceptor, createOutboundDrainer, computeContextPressureWarnings } from '../outbound/outboundAcceptor'
 import { createSkillHintSystemMessage } from '../../src/shared/skillHintRecords'
@@ -1350,6 +1352,60 @@ const recordTrustToCache = makeRecordTrustToCache(ctx)
       }
     }
   )
+
+  // T2.4：存量迁移 IPC（§10.1）——轻量检测 + 触发迁移
+  ipcMain.handle('wiki:migration-status', async (): Promise<WikiStatus> => {
+    const wikiConfig = readWikiConfig(ctx.db)
+    const status = getWikiStatus(ctx.getWorkDir(), wikiConfig, { userDataPath: ctx.getUserDataPath(), db: ctx.db })
+    const detection = detectLegacyWikiRoots({
+      profiles: ctx.workDirManager?.listProfiles?.().map((p: { path: string }) => ({ workDir: p.path })) ?? [{ workDir: ctx.getWorkDir() }],
+      storedRootPath: wikiConfig.rootPath,
+      sharedRootInitialized: status.initialized === true
+    })
+    return {
+      ...status,
+      pendingLegacyMigration: detection.pendingLegacyMigration,
+      legacyRoots: detection.legacyRoots,
+      // T2.6：报告查看数据源 = config.wiki.migration（§10.2）
+      migration: wikiConfig.migration
+    }
+  })
+
+  // T2.6：受控改名（改配置 + rename + 失效广播 + 失败回滚，§6.3）
+  ipcMain.handle('wiki:rename-root', async (_e, payload: { newRootPath: string }): Promise<{ ok: true } | { ok: false; error: string }> => {
+    const wikiConfig = readWikiConfig(ctx.db)
+    const currentRootPath = wikiConfig.rootPath || 'llm-wiki'
+    const result = renameWikiRoot({
+      userDataPath: ctx.getUserDataPath(),
+      currentRootPath,
+      newRootPath: payload.newRootPath,
+      broadcast: () => notifyFileTreeChanged(null, { kind: 'paths', relPaths: [] })
+    })
+    if (!result.ok) return result
+    // rename 成功后才持久化配置（失败回滚语义：配置保持原值）
+    const next: WikiConfig = { ...wikiConfig, rootPath: payload.newRootPath }
+    setConfigValue(ctx.db, CONFIG_KEYS.wiki, JSON.stringify(next))
+    return { ok: true }
+  })
+
+  ipcMain.handle(
+    'wiki:migrate-legacy',
+    async (_e, payload: { profileIds?: string[]; extraLegacyRoots?: Array<{ workDir: string; rootDirName: string }> } = {}) => {
+      const wikiConfig = readWikiConfig(ctx.db)
+      const allProfiles = ctx.workDirManager?.listProfiles?.().map((p: { id: string; path: string; name?: string }) => ({ workDir: p.path, profileId: p.id, profileName: p.name })) ?? [{ workDir: ctx.getWorkDir() }]
+      const profiles = payload.profileIds?.length ? allProfiles.filter((p) => payload.profileIds!.includes(p.profileId ?? '')) : allProfiles
+      const report = await migrateLegacyWikis({
+        db: ctx.db,
+        userDataPath: ctx.getUserDataPath(),
+        wikiConfig,
+        profiles,
+        extraLegacyRoots: payload.extraLegacyRoots,
+        onFileTreeChange: (paths) => notifyFileTreeChanged(null, { kind: 'paths', relPaths: paths })
+      })
+      return report
+    }
+  )
+
 
   ipcMain.handle('skill:invalidate-cache', async (): Promise<void> => {
     skillManager.invalidateCache()
