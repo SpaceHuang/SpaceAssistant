@@ -66,6 +66,10 @@ export function shouldPersistMcpArtifact(displayText: string): boolean {
 export type McpToolExecutorDeps = {
   getSession: (serverId: string) => Promise<McpSession>
   getProfile: (serverId: string) => McpServerProfile | undefined
+  /** Resolve the currently enabled tool descriptor for the configured original name. */
+  getCurrentTool?: (serverId: string, originalName: string) => { inputSchema: Record<string, unknown> } | undefined
+  getCurrentProfileFingerprint?: (serverId: string) => string | undefined
+  expectedProfileFingerprint?: string
   invalidateSession: (serverId: string) => Promise<void>
   /** 读取该服务近期脱敏诊断（同步），用于失败时向模型附上下文。 */
   getRecentDiagnostics?: (serverId: string) => McpDiagnosticEntry[]
@@ -149,14 +153,35 @@ export function createMcpToolExecutor(
       if (!validation.ok) {
         return { success: false, error: `MCP 工具参数无效：${validation.reason}` }
       }
-      const profile = deps.getProfile(entry.serverId)
-      if (!profile) {
-        return { success: false, error: 'MCP 服务配置不完整，无法调用该工具。' }
+      const recheckDispatch = (): { profile?: McpServerProfile; failure?: ToolExecutorResult } => {
+        if (ctx.signal.aborted) return { failure: { success: false, error: 'MCP 工具调用超时或已取消。' } }
+        const profile = deps.getProfile(entry.serverId)
+        if (!profile || !profile.enabled || !profile.enabledToolNames.includes(entry.originalName)) {
+          return { failure: { success: false, error: 'MCP 服务或工具已停用，请重新发起调用。' } }
+        }
+        if (deps.expectedProfileFingerprint !== undefined &&
+          deps.getCurrentProfileFingerprint?.(entry.serverId) !== deps.expectedProfileFingerprint) {
+          return { failure: { success: false, error: 'MCP 服务连接配置已变更，请重新发起调用并审批。' } }
+        }
+        if (deps.getCurrentTool) {
+          const currentTool = deps.getCurrentTool(entry.serverId, entry.originalName)
+          if (!currentTool || JSON.stringify(currentTool.inputSchema) !== JSON.stringify(entry.inputSchema)) {
+            return { failure: { success: false, error: 'MCP 工具配置或 schema 已变更，请重新发起调用并审批。' } }
+          }
+        }
+        return { profile }
       }
-
-      const timeoutMs = profile.timeoutSec * 1000
       return gate.run(entry.serverId, async () => {
+          const initialCheck = recheckDispatch()
+          if (initialCheck.failure) return initialCheck.failure
+          const profile = initialCheck.profile!
+          const timeoutMs = profile.timeoutSec * 1000
           const session = await deps.getSession(entry.serverId)
+          const finalCheck = recheckDispatch()
+          if (finalCheck.failure) {
+            void deps.invalidateSession(entry.serverId)
+            return finalCheck.failure
+          }
           try {
             let result: Awaited<ReturnType<typeof session.client.callTool>>
             try {

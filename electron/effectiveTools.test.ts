@@ -21,13 +21,44 @@ describe('computeEffectiveTools', () => {
     expect([...result.authorizedToolNames]).toEqual(result.toolNames)
   })
 
-  it('远端不注入 MCP', () => {
+  it('IM lane 注入本回合快照中的 MCP 工具', () => {
     const result = computeEffectiveTools({
       builtinConfig: cfg,
       remoteContext: { source: 'wechat', messageId: 'm', confirmPolicy: 'always' },
-      mcpSnapshot: { entries: new Map(), budgetDropped: [] }
+      mcpSnapshot: {
+        entries: new Map([['mcp_read', {
+          serverId: 's1', serverName: 'demo', originalName: 'read', mappedName: 'mcp_read', description: 'read', inputSchema: {}
+        }]]), budgetDropped: []
+      }
+    })
+    expect(result.toolNames).toEqual(['mcp_read'])
+  })
+
+  it('trim allow applies to MCP and excludes it from all advertised/authorized surfaces', () => {
+    const result = computeEffectiveTools({
+      builtinConfig: cfg,
+      remoteContext: { source: 'wechat', messageId: 'm', confirmPolicy: 'always' },
+      mcpSnapshot: { entries: new Map([['mcp_read', {
+        serverId: 's1', serverName: 'demo', originalName: 'read', mappedName: 'mcp_read', description: 'read', inputSchema: {}
+      }]]), budgetDropped: [] },
+      trim: { allow: ['safe_builtin'] }
     })
     expect(result.toolNames).toEqual([])
+    expect(result.deferredToolNames).toEqual(new Set())
+  })
+
+  it('trim allow applies to deferred MCP names and their index authorization surface', () => {
+    const entry = { serverId: 's1', serverName: 'demo', originalName: 'read', mappedName: 'mcp_read', description: 'read', inputSchema: {} }
+    const result = computeEffectiveTools({
+      builtinConfig: { enabled: true, allowedTools: ['tool_search'], deniedTools: [] },
+      remoteContext: { source: 'feishu', messageId: 'm', confirmPolicy: 'always' },
+      mcpSnapshot: { entries: new Map([['mcp_read', entry]]), budgetDropped: [] },
+      deferredPlan: { mode: 'deferred', deferredNames: new Set(['mcp_read']), deferredEntries: [entry], eagerAdvertiseBudget: { maxCount: 64, maxTotalBytes: 96 * 1024 } },
+      trim: { allow: ['tool_search'] }
+    })
+    expect(result.toolNames).toEqual(['tool_search'])
+    expect(result.deferredToolNames).toEqual(new Set())
+    expect([...result.authorizedToolNames]).toEqual(['tool_search'])
   })
 })
 

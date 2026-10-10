@@ -233,7 +233,7 @@ describe('buildSnapshotTools', () => {
     expect(mayBuildMcpToolSnapshot([{ enabled: false, enabledToolNames: ['x'] } as McpServerProfile], false)).toBe(false)
     expect(mayBuildMcpToolSnapshot([{ enabled: true, enabledToolNames: [] } as McpServerProfile], false)).toBe(false)
     expect(mayBuildMcpToolSnapshot([{ enabled: true, enabledToolNames: ['x'] } as McpServerProfile], false)).toBe(true)
-    expect(mayBuildMcpToolSnapshot([{ enabled: true, enabledToolNames: ['x'] } as McpServerProfile], true)).toBe(false)
+    expect(mayBuildMcpToolSnapshot([{ enabled: true, enabledToolNames: ['x'] } as McpServerProfile], true)).toBe(true)
   })
   const profileA = {
     id: 'a',
@@ -286,10 +286,10 @@ describe('buildSnapshotTools', () => {
     expect(snapshot.budgetDropped).toHaveLength(0)
   })
 
-  it('returns an empty snapshot for remote contexts', () => {
+  it('builds the same allowlisted snapshot for remote contexts', () => {
     const caches = new Map([['a', cacheFor('a', ['tool_a1'])], ['b', cacheFor('b', ['t1'])]])
     const snapshot = buildSnapshotTools([profileA, profileB], caches, { remoteContext: true })
-    expect(snapshot.entries.size).toBe(0)
+    expect([...snapshot.entries.keys()]).toEqual(['mcp_a_tool_a1_12345678', 'mcp_b_t1_12345678'])
   })
 
   it('excludes disabled profiles and empty whitelists', () => {

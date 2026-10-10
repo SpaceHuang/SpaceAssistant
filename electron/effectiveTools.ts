@@ -119,7 +119,7 @@ export function computeEffectiveTools(args: {
     undefined,
     args.exposureRules
   )
-  const plan = args.remoteContext ? undefined : args.deferredPlan
+  const plan = args.deferredPlan
   const allEntries = [...(args.mcpSnapshot?.entries.values() ?? [])]
   const budget = plan?.eagerAdvertiseBudget
 
@@ -158,9 +158,7 @@ export function computeEffectiveTools(args: {
     eagerBudgetDropped = trimmed.dropped.map((d) => ({ mappedName: d.tool.mappedName, reason: d.reason }))
   }
 
-  const mcp = args.remoteContext
-    ? []
-    : snapshotEntriesToAnthropicTools(advertiseEntries)
+  const mcp = snapshotEntriesToAnthropicTools(advertiseEntries)
   const merged = [...builtinAdvertised, ...mcp] as unknown[]
   // P7：按调用裁剪在 builtin/MCP 合成层统一执行（裁剪落工具集，不落提示词）
   const trimAllow = args.trim?.allow

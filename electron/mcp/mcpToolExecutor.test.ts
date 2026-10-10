@@ -6,7 +6,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import type { McpServerProfile } from '../../src/shared/mcpTypes'
 import type { ToolExecutionContext } from '../tools/types'
 import { McpConnectionManager } from './mcpConnectionManager'
-import { createMcpToolExecutor, shouldPersistMcpArtifact } from './mcpToolExecutor'
+import { createMcpToolExecutor, McpConcurrencyGate, shouldPersistMcpArtifact } from './mcpToolExecutor'
 
 const tempDirs: string[] = []
 afterEach(() => vi.restoreAllMocks())
@@ -147,6 +147,128 @@ describe('mcpToolExecutor', () => {
     }
   })
 
+  it.each([
+    ['disabled server', (profile: McpServerProfile) => ({ ...profile, enabled: false })],
+    ['disabled tool', (profile: McpServerProfile) => ({ ...profile, enabledToolNames: [] })]
+  ])('does not dispatch when %s after approval', async (_label, mutateProfile) => {
+    const profile = mutateProfile(makeProfile('server-revoked', 'unused'))
+    const callTool = vi.fn(async () => ({ content: [{ type: 'text', text: 'should not run' }] }))
+    const executor = createMcpToolExecutor({
+      serverId: 'server-revoked', serverName: 'Echo', originalName: 'echo', mappedName: 'mcp_echo_echo_12345678', description: '', inputSchema: { type: 'object' }
+    }, {
+      getSession: async () => ({ client: { callTool } }) as never,
+      getProfile: () => profile,
+      invalidateSession: async () => undefined
+    })
+    await expect(executor.execute({ text: 'x' }, makeContext())).resolves.toMatchObject({ success: false })
+    expect(callTool).not.toHaveBeenCalled()
+  })
+
+  it('does not dispatch when cached schema differs from the approved request snapshot', async () => {
+    const profile = makeProfile('server-schema', 'unused')
+    const callTool = vi.fn(async () => ({ content: [{ type: 'text', text: 'should not run' }] }))
+    const executor = createMcpToolExecutor({
+      serverId: 'server-schema', serverName: 'Echo', originalName: 'echo', mappedName: 'mcp_echo_echo_12345678', description: '', inputSchema: { type: 'object' }
+    }, {
+      getSession: async () => ({ client: { callTool } }) as never,
+      getProfile: () => profile,
+      getCurrentTool: () => ({ inputSchema: { type: 'object', properties: { text: { type: 'string' } } } }),
+      invalidateSession: async () => undefined
+    })
+    await expect(executor.execute({ text: 'x' }, makeContext())).resolves.toMatchObject({ success: false, error: expect.stringContaining('schema 已变更') })
+    expect(callTool).not.toHaveBeenCalled()
+  })
+
+  it('rechecks enablement after waiting for the shared concurrency gate', async () => {
+    const profile = makeProfile('server-queued-revoke', 'unused')
+    const gate = new McpConcurrencyGate(1, 1)
+    let releaseFirst!: () => void
+    let firstStarted!: () => void
+    const firstStartedPromise = new Promise<void>((resolve) => { firstStarted = resolve })
+    const first = createMcpToolExecutor({ serverId: profile.id, serverName: profile.name, originalName: 'echo', mappedName: 'mcp_echo_1', description: '', inputSchema: {} }, {
+      getSession: async () => ({ client: { callTool: async () => { firstStarted(); await new Promise<void>((resolve) => { releaseFirst = resolve }); return { content: [] } } } }) as never,
+      getProfile: () => profile, invalidateSession: async () => undefined
+    }, gate)
+    const secondCallTool = vi.fn(async () => ({ content: [] }))
+    const getSecondSession = vi.fn(async () => ({ client: { callTool: secondCallTool } }) as never)
+    const second = createMcpToolExecutor({ serverId: profile.id, serverName: profile.name, originalName: 'echo', mappedName: 'mcp_echo_2', description: '', inputSchema: {} }, {
+      getSession: getSecondSession,
+      getProfile: () => profile,
+      invalidateSession: async () => undefined
+    }, gate)
+    const firstPending = first.execute({}, makeContext())
+    await firstStartedPromise
+    const secondPending = second.execute({}, makeContext())
+    profile.enabled = false
+    releaseFirst()
+    await firstPending
+    await expect(secondPending).resolves.toMatchObject({ success: false })
+    expect(getSecondSession).not.toHaveBeenCalled()
+    expect(secondCallTool).not.toHaveBeenCalled()
+  })
+
+  it('rechecks revocation after asynchronous connection completes and before callTool', async () => {
+    const profile = makeProfile('server-connect-revoke', 'unused')
+    const callTool = vi.fn(async () => ({ content: [] }))
+    let finishConnect!: () => void
+    const connecting = new Promise<void>((resolve) => { finishConnect = resolve })
+    const executor = createMcpToolExecutor({ serverId: profile.id, serverName: profile.name, originalName: 'echo', mappedName: 'mcp_echo_revoke', description: '', inputSchema: {} }, {
+      getSession: async () => {
+        await connecting
+        profile.enabled = false
+        return { client: { callTool } } as never
+      },
+      getProfile: () => profile,
+      invalidateSession: async () => undefined
+    })
+    const pending = executor.execute({}, makeContext())
+    await Promise.resolve()
+    finishConnect()
+    await expect(pending).resolves.toMatchObject({ success: false })
+    expect(callTool).not.toHaveBeenCalled()
+  })
+
+  it('rechecks schema and connection fingerprint after asynchronous connection completes', async () => {
+    const profile = makeProfile('server-connect-version', 'unused')
+    const callTool = vi.fn(async () => ({ content: [] }))
+    let finishConnect!: () => void
+    const connecting = new Promise<void>((resolve) => { finishConnect = resolve })
+    let fingerprint = 'approved'
+    let schema: Record<string, unknown> = { type: 'object' }
+    const executor = createMcpToolExecutor({ serverId: profile.id, serverName: profile.name, originalName: 'echo', mappedName: 'mcp_echo_version', description: '', inputSchema: { type: 'object' } }, {
+      getSession: async () => { await connecting; fingerprint = 'changed'; schema = { type: 'object', properties: { text: { type: 'string' } } }; return { client: { callTool } } as never },
+      getProfile: () => profile,
+      expectedProfileFingerprint: 'approved',
+      getCurrentProfileFingerprint: () => fingerprint,
+      getCurrentTool: () => ({ inputSchema: schema }),
+      invalidateSession: async () => undefined
+    })
+    const pending = executor.execute({}, makeContext())
+    await Promise.resolve()
+    finishConnect()
+    await expect(pending).resolves.toMatchObject({ success: false })
+    expect(callTool).not.toHaveBeenCalled()
+  })
+
+  it('rechecks cancellation after asynchronous connection completes and before callTool', async () => {
+    const profile = makeProfile('server-connect-cancel', 'unused')
+    const callTool = vi.fn(async () => ({ content: [] }))
+    let finishConnect!: () => void
+    const connecting = new Promise<void>((resolve) => { finishConnect = resolve })
+    const controller = new AbortController()
+    const executor = createMcpToolExecutor({ serverId: profile.id, serverName: profile.name, originalName: 'echo', mappedName: 'mcp_echo_cancel', description: '', inputSchema: {} }, {
+      getSession: async () => { await connecting; return { client: { callTool } } as never },
+      getProfile: () => profile,
+      invalidateSession: async () => undefined
+    })
+    const pending = executor.execute({}, makeContext({ signal: controller.signal }))
+    await Promise.resolve()
+    controller.abort()
+    finishConnect()
+    await expect(pending).resolves.toMatchObject({ success: false })
+    expect(callTool).not.toHaveBeenCalled()
+  })
+
   it('returns a readable full-text artifact when directory sync is unsupported', async () => {
     const userDataDir = makeTempDir()
     const directory = path.join(userDataDir, 'shell-output', 'mcp')
@@ -272,7 +394,7 @@ describe('mcpToolExecutor', () => {
       })
     }
     const executor = createMcpToolExecutor({
-      serverId: 'server-uncertain', serverName: 'Docs', originalName: 'publish', mappedName: 'mcp_docs_publish', description: '', inputSchema: { type: 'object' }
+      serverId: 'server-uncertain', serverName: 'Docs', originalName: 'echo', mappedName: 'mcp_docs_publish', description: '', inputSchema: { type: 'object' }
     }, {
       getSession: async () => ({ client: { callTool } }) as never,
       getProfile: () => makeProfile('server-uncertain', 'unused'),

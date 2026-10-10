@@ -290,7 +290,7 @@ BUILTIN_TOOL_DEFINITIONS.push(
   // 能力集合（toolkit）网关：模型面恒定两条，能力增删不改变 schema（docs/requirement/agent-toolkit-capability-gateway-requirement.md §3.1）
   { name: 'toolkit.find', description: '查询产品能力集合。需要了解运行环境（产品/系统/开发环境/工作目录/时间/浏览器依赖）或执行产品功能（MCP 管理、会话查询）时，先用本工具按用途描述或能力 id 查询，获取调用方式后再用 toolkit.call 执行。', input_schema: { type: 'object', properties: { query: { type: 'string', description: '自然语言用途描述，或精确能力 id' }, family: { type: 'string', enum: ['env', 'action'], description: '可选：env=环境知觉（只读），action=功能执行' } }, required: ['query'] } },
   { name: 'toolkit.call', description: '调用能力集合中的具体能力。先用 toolkit.find 查询能力 id 与参数说明，再调用本工具；act 类能力需用户确认。', input_schema: { type: 'object', properties: { id: { type: 'string', description: '能力 id（来自 toolkit.find）' }, params: { type: 'object', description: '能力参数，格式见 toolkit.find 返回的 usage' } }, required: ['id'] } },
-  // MCP 工具延迟加载（deferred tool loading）的检索元工具：仅桌面 lane 注入（toolsConfigRuntime 门控）。
+  // MCP 工具延迟加载（deferred tool loading）的检索元工具：按本回合快照、工具开关和调用裁剪准入。
   // 命名保留 tool_search（决策 D7：Claude 系模型对该名有「延迟工具先检索」行为先验）；无点号、compat 恒等映射。
   {
     name: 'tool_search',

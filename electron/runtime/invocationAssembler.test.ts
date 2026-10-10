@@ -23,8 +23,76 @@ import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import { isBrowserSessionTrustedHost, resetBrowserSessionTrustForTests } from '../browser/browserSessionTrust'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { createImOrchestrationToolRegistry } from '../remote/imOrchestrationTools'
+import { getToolCache, saveProfiles, saveToolCache } from '../mcp/mcpConfigStore'
 
 describe('AcceptedTurn propagation', () => {
+  it.each(['feishu', 'wechat', 'automation'] as const)('%s receives the enabled MCP request snapshot', async (lane) => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: `mcp-${lane}` })
+    const serverId = '11111111-2222-4333-8444-555555555555'
+    const saved = await saveProfiles(db, [{
+      id: serverId, name: 'Docs', enabled: true, transport: 'stdio', timeoutSec: 10,
+      auth: { mode: 'none' }, stdio: { command: 'node', args: ['server.js'], env: [] },
+      enabledToolNames: ['search']
+    }])
+    await saveToolCache(db, serverId, {
+      tools: [{ serverId, originalName: 'search', mappedName: 'mcp_docs_search_12345678', description: 'Search docs', inputSchema: { type: 'object' }, discoveredAt: new Date().toISOString() }],
+      protocolVersion: '2025-06-18', discoveredAt: new Date().toISOString()
+    })
+    const { ports } = assembleInvocation({
+      requestId: `mcp-${lane}`, sessionId: session.id, lane, model: 'test', locale: 'zh-CN', messages: [],
+      toolsConfig: { ...DEFAULT_TOOLS_CONFIG, mcpDeferredLoading: 'always' }, appDb: db,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+    expect((ports.mcp?.snapshot as { entries: Map<string, unknown> }).entries.has('mcp_docs_search_12345678')).toBe(true)
+    expect(saved[0]?.enabledToolNames).toEqual(['search'])
+    db.close()
+  })
+
+  it('approval-agent invocation has an empty MCP snapshot even when tools are enabled', async () => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: 'mcp-approval', ownership: 'internal', visibility: 'hidden' })
+    const serverId = '11111111-2222-4333-8444-555555555555'
+    await saveProfiles(db, [{ id: serverId, name: 'Docs', enabled: true, transport: 'stdio', timeoutSec: 10,
+      auth: { mode: 'none' }, stdio: { command: 'node', args: ['server.js'], env: [] }, enabledToolNames: ['search'] }])
+    await saveToolCache(db, serverId, { tools: [{ serverId, originalName: 'search', mappedName: 'mcp_docs_search_12345678', description: '', inputSchema: {}, discoveredAt: new Date().toISOString() }], protocolVersion: '2025-06-18', discoveredAt: new Date().toISOString() })
+    const { ports } = assembleInvocation({ requestId: 'mcp-approval-agent', sessionId: session.id, lane: 'automation', internalConfirmExemption: 'approval-agent', model: 'test', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    expect((ports.mcp?.snapshot as { entries: Map<string, unknown> }).entries.size).toBe(0)
+    db.close()
+  })
+
+  it('allows approved MCP executor after OAuth refresh, but blocks endpoint and schema changes', async () => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: 'mcp-recheck' })
+    const serverId = '11111111-2222-4333-8444-555555555555'
+    const input = { id: serverId, name: 'Docs', enabled: true, transport: 'streamable-http' as const, timeoutSec: 10,
+      auth: { mode: 'oauth' as const, oauthClientId: 'client-id', oauthScopes: ['docs.read'], accessTokenExpiresAt: '2026-10-10T09:00:00.000Z' },
+      http: { endpoint: 'https://docs.example.com/mcp' }, enabledToolNames: ['search'] }
+    await saveProfiles(db, [input])
+    saveToolCache(db, serverId, { tools: [{ serverId, originalName: 'search', mappedName: 'mcp_docs_search_12345678', description: '', inputSchema: { type: 'object' }, discoveredAt: new Date().toISOString() }], protocolVersion: '2025-06-18', discoveredAt: new Date().toISOString() })
+    const { ports } = assembleInvocation({ requestId: 'mcp-recheck', sessionId: session.id, lane: 'feishu', model: 'test', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    const resolveExecutor = ports.mcp?.resolveExecutor as (name: string, manager: McpConnectionManager) => import('../tools/types').ToolExecutor | undefined
+    const callTool = vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }] }))
+    const manager = { connect: vi.fn(async () => ({ client: { callTool } })), disconnect: vi.fn() } as never as McpConnectionManager
+    const executor = resolveExecutor('mcp_docs_search_12345678', manager)!
+    const getSession = vi.spyOn(manager, 'connect')
+
+    await saveProfiles(db, [{ ...input, auth: { ...input.auth, accessTokenExpiresAt: '2026-10-10T10:00:00.000Z' } }])
+    await expect(executor.execute({}, { requestId: 'mcp-recheck', toolUseId: 'tool-refresh-1', signal: new AbortController().signal } as never)).resolves.toMatchObject({ success: true })
+    expect(getSession).toHaveBeenCalledOnce()
+
+    await saveProfiles(db, [{ ...input, http: { endpoint: 'https://changed.example.com/mcp' } }])
+    await expect(executor.execute({}, { requestId: 'mcp-recheck', toolUseId: 'tool-endpoint', signal: new AbortController().signal } as never).then((r) => r.success)).resolves.toBe(false)
+    expect(getSession).toHaveBeenCalledOnce()
+
+    await saveProfiles(db, [input])
+    saveToolCache(db, serverId, { ...getToolCache(db, serverId)!, tools: [{ ...getToolCache(db, serverId)!.tools[0]!, inputSchema: { type: 'object', properties: { q: { type: 'string' } } } }] })
+    const schemaChanged = resolveExecutor('mcp_docs_search_12345678', manager)!
+    await expect(schemaChanged.execute({}, { requestId: 'mcp-recheck', toolUseId: 'tool-schema', signal: new AbortController().signal } as never).then((r) => r.success)).resolves.toBe(false)
+    expect(getSession).toHaveBeenCalledOnce()
+    db.close()
+  })
+
   it('carries the immutable accepted-turn snapshot into the runtime invocation', () => {
     const acceptedTurn = Object.freeze({
       turnId: 'accepted-turn', requestId: 'accepted-request', sessionId: 'accepted-session', lane: 'desktop' as const,

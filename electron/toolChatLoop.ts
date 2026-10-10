@@ -965,7 +965,7 @@ async function runToolChatSessionInner(
       : ('desktop' as const))
   // 套餐/规则覆盖同样作用于 exposure 评估（§4 第 1 区）——P2 起装配期解析（ports.exposure）
   const exposureRules = hostExposureRules as import('../src/shared/confirmation/types').PolicyRule[] | undefined
-  /** 请求级 MCP 工具快照：仅桌面 lane 注入（装配期构建，仍为首循环前）。 */
+  /** 请求级 MCP 工具快照：按真实 lane 策略和调用裁剪开放（装配期构建，仍为首循环前）。 */
   const mcpSnapshot: McpToolSnapshot = hostMcp?.snapshot ?? { entries: new Map(), budgetDropped: [] }
   // FR5/§6.5：延迟加载计划（off 档 = 现状路径；档位/阈值取自 ToolsConfig，缺省 off/16 KiB）
   const deferredMode = toolsConfig.mcpDeferredLoading ?? 'always'

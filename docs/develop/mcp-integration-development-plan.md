@@ -29,7 +29,7 @@ MCP 工具接入现有工具链路，需触及 4 个汇合点：
 - **取消链路**：`electron/chatCancelRegistry.ts`（`signalChatCancel` 级联取消）、`electron/tools/toolExecutionResource.ts` 的 `combineUserAbortAndTimeout`、子进程 `killProcessTree`。
 - **结果截断**：`src/shared/toolResultLimits.ts` + `src/shared/oversizedToolResult.ts` 的 `compactOversizedToolResultContent`，MCP 工具结果走同一压缩入口。
 - **持久化**：`ToolCallRecord` 已作为消息字段存 SQLite messages 表（`electron/messageCodec.ts`），为 MCP 增加可选 `mcp?: { serverId; serverName; originalToolName }` 元数据即可，不改表结构。
-- **远程 IM 隔离**：飞书/微信都走 `imRemoteAgent.ts → runToolChatSession`，差异由 `filterBuiltinToolsForApi` 按 `remoteContext` 过滤。MCP 工具在合并工具集合时判断 `remoteContext` 存在即不注入，天然满足需求 §4.6「远程 IM 不可用」。
+- **远程 IM 开放（2026-10-10 需求替代）**：飞书/微信与普通 automation 使用同一请求级启用工具快照；暴露与执行受真实 lane 策略、宿主工具裁剪、approval-agent 隔离和派发前配置复检约束。旧 §4.6「远程 IM 不可用」已由 `mcp-im-automation-tools-requirement.md` 替代。
 
 ### 1.3 SDK 依赖
 
@@ -142,14 +142,14 @@ electron/mcp/
 **阶段状态：** ✅ 已完成（2026-08-28）；验收结论见第 7 项
 
 1. **工具集合合并（`toolChatLoop.ts`）**：
-   - 在 `runToolChatSessionInner` 构建 tools 参数处（现有 `filterBuiltinToolsForApi` 调用点附近，toolChatLoop.ts:526），新增 `mcpToolRegistry.buildSnapshotTools(ctx)`：仅当 `remoteContext` 为空时注入；输出 Anthropic `Tool[]`，每个工具描述加来源前缀「外部 MCP 服务 `<名称>` 提供的工具」。
+   - 历史实现记录：在 `runToolChatSessionInner` 构建 tools 参数处注入请求级快照；2026-10-10 起该快照对 desktop、feishu、wechat、普通 automation 一致开放，受 lane 策略及宿主裁剪控制。
    - 实施预算：每轮最多 64 个 MCP 工具、累计 ≤96 KiB；超限按「服务配置数组顺序 → enabledToolNames 保存顺序」确定性裁剪，裁剪项记录供设置页展示「因上下文预算未注入」。
    - 快照：`mappedName → {serverId, originalName, discoveredAt}` 存请求级 Map，随请求生命周期。
 
    - **状态：** ✅ 已完成（2026-08-28）—— `mcpToolRegistry.buildSnapshotTools`（仅桌面注入、白名单顺序、64 个 / 96 KiB 确定性预算裁剪 + budgetDropped 记录）；`toolChatLoop.ts:550` 合并 MCP 工具定义（描述带来源前缀）；`buildSnapshotFromDb` 请求级快照。
 2. **Executor 路由扩展**：
    - `builtinExecutors.ts` `getToolExecutor` 增加回退：未命中内置时，从当前请求的 MCP 快照查 `mcpToolExecutor`（通过 `ToolExecutionContext` 新增可选字段 `mcpSnapshot` 传入，避免全局可变状态）。
-   - **伪造映射名分支（评审 A5）**：远程请求不注入 MCP 快照，模型伪造 `mcp_*` 映射名时默认会落入 `toolChatLoop.ts` unknown-tool 通用错误。需在 unknown-tool 分支**之前**按 `mcp_` 前缀 + 快照缺失做区分，返回「MCP 工具已变更或服务不可用」，不暴露是否存在同名服务。
+   - **伪造映射名分支（评审 A5）**：任何 lane 中模型伪造或引用其他请求 `mcp_*` 映射名都不得越过当前请求快照；快照缺失时返回结构化不可用错误，不暴露其他服务信息。
    - `mcpToolExecutor.ts` 实现 `ToolExecutor`：输入 JSON Schema 校验（深度 20、256 KB）、每服务并发 4 / 全局 8 的信号量排队、结果转 `ToolExecutorResult`（>1 MB 走现有 `compactOversizedToolResultContent`）、取消时发送 MCP cancellation notification、`Mcp-Session-Id` 失效重新初始化一次、**不重试 tools/call**。
    - 错误分类按需求 §5.4 映射为安全的模型可见文案；原始错误脱敏后入诊断。
 
@@ -209,7 +209,7 @@ electron/mcp/
 | 共享层单测 | `src/shared/mcpTypes.test.ts` 等 | Profile schema、endpoint 校验、Secret 键隔离、映射名稳定性、预算裁剪排序、脱敏规则、敏感参数检测 |
 | 主进程单测/夹具 | `electron/mcp/*.test.ts` | stdio：正常/异常 stdout/退出/取消/环境继承（含 Windows 必需变量）/全 env 掩码/**Windows `.cmd` 拒绝与引导（B1）**；连接管理器超时与空闲回收；executor 并发上限与排队、取消 notification、结果压缩；**Secret Store 并发写互斥（OAuth 刷新 vs 用户保存/删除，A1）** |
 | HTTP 集成 | `electron/mcp/streamableHttpTransport.test.ts` + mock server | JSON/SSE、session ID、401/OAuth 发现、DCR/预设/手工 clientId、超时、跨 origin 重定向拒绝、DNS/IP 边界 |
-| 工具循环 | 仿 `electron/toolChatLoop.oversizedToolResult.test.ts` | MCP 工具注入、预算裁剪、确认流、拒绝/取消、远程 IM 不注入、伪造映射名拒绝 |
+| 工具循环 | 仿 `electron/toolChatLoop.oversizedToolResult.test.ts` | MCP 工具注入、预算裁剪、确认流、拒绝/取消；desktop、feishu、wechat 与普通 automation 使用统一准入快照，approval-agent 为空快照；伪造映射名拒绝 |
 | 渲染 | `src/renderer/components/Config/McpSettingsTab.test.tsx` 等 | 新增/编辑/清除 token/测试/OAuth 必须先保存/授权状态/工具选择/删除二次确认；草稿丢弃提示 |
 | 契约 | `src/shared/api` + preload 测试 | MCP API 仅从 `window.api` 暴露，无通用 invoke、无第二桥接 |
 
