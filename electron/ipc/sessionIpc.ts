@@ -15,6 +15,7 @@ import { arrayMessagePageReader } from '../sessionBackupManager'
 import { assertValidOptionalAnthropicBaseUrl } from '../claudeRequestGuards'
 import { clearDecisionCacheOnSessionDelete } from '../confirmation/cacheMaintenanceHooks'
 import { clearSessionToolResources } from '../toolChatLoop'
+import { dialectRetryBreaker } from '../shell/dialectRetryBreaker'
 import { deleteSessionUsage, getConfigValue, getSessionUsage, setSessionUsage } from '../database'
 import { deleteSessionChatAttachmentsWithRetry } from '../chatAttachmentManager'
 import { isRemoteAgentRunning } from '../remote/remoteAgentRegistry'
@@ -290,6 +291,8 @@ export function registerSessionIpc(ipcMain: IpcMain, ctx: AppIpcContext): void {
     remoteAuthorizationRegistry.invalidateSession('feishu', sessionId)
     remoteAuthorizationRegistry.invalidateSession('wechat', sessionId)
     clearSessionToolResources(sessionId)
+    // D-8：方言错配计数为会话级作用域，会话删除时一并清理
+    dialectRetryBreaker.forgetSession(sessionId)
     sessionCommands.deleteSession(sessionId)
     ctx.wakeSourceTruthSpillGc?.()
     // §5.3：会话删除时清空会话级 decision_cache 条目；清理失败不阻塞删除流程

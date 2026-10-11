@@ -184,6 +184,27 @@ describe('session events', () => {
     }
   })
 
+  // A-8（§4.3 / turn-loop.md:207）：turn_end 允许携带 errorCode（终态错误码透传），
+  // 恢复修复协议必须把它视为合法诊断字段，否则会误报 terminal projection 冲突
+  it('keeps errorCode terminal diagnostics when repairing an existing turn_end projection', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-turn-end-error-code-'))
+    const sink = getSessionEventSink(root, 'turn-end-error-code', 1000)
+    try {
+      await sink.appendCritical({ type: 'turn_start', payload: { turnId: 'turn-error-code' } })
+      const existing = await sink.appendCritical({
+        type: 'turn_end',
+        payload: { turnId: 'turn-error-code', reason: 'failed', error: 'tool loop limit reached', errorCode: 'TOOL_LOOP_MAX_ROUNDS_EXCEEDED' }
+      })
+
+      await expect(ensureTurnEndEvent(sink, 'turn-error-code', 'failed')).resolves.toEqual(existing)
+      expect((await readSessionEvents(sink.eventsPath)).filter((event) => event.type === 'turn_end')).toHaveLength(1)
+      await expect(ensureTurnEndEvent(sink, 'turn-error-code', 'interrupted')).rejects.toThrow(/conflicting invocation terminal projection/)
+    } finally {
+      await sink.close()
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('rejects ambiguous duplicate turn_start owners during canonical terminal repair', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'session-events-turn-start-duplicate-'))
     const sink = getSessionEventSink(root, 'turn-start-duplicate', 1000)

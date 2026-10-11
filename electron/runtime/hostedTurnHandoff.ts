@@ -360,7 +360,8 @@ export function createHostedTurnHandoff(input: {
           throw new HostedTurnFinalizedError(new ToolLoopRoundLimitError(input.maxToolRounds ?? 0, payload.reason), hostedFailureOutcome(terminal), terminalUsage(terminal))
         }
         if (payload?.errorCode === 'SHELL_DIALECT_MISMATCH' && typeof payload.reason === 'string') {
-          throw new HostedTurnFinalizedError(new Error(payload.reason), hostedFailureOutcome(terminal), terminalUsage(terminal))
+          // 兼容旧 History（修复前该码会产生 fatal 终态）；附加 errorCode 供 turn_end 透传（A-8）
+          throw new HostedTurnFinalizedError(Object.assign(new Error(payload.reason), { errorCode: payload.errorCode }), hostedFailureOutcome(terminal), terminalUsage(terminal))
         }
         throw new HostedTurnFinalizedError(new Error(`Hosted invocation ended as ${terminal.kind}`), hostedFailureOutcome(terminal))
       }
