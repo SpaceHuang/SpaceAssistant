@@ -24,7 +24,7 @@ import {
   MIGRATION_V50_HISTORY_RECOVERY_WORK_SQL, MIGRATION_V50_HISTORY_RECOVERY_WORK_TRIGGERS_SQL,
   MIGRATION_V51_USAGE_MODEL_IDENTITY_COLUMNS, MIGRATION_V52_SESSION_PROJECTION_MIGRATION_CANCEL_SQL,
   MIGRATION_V54_SPILL_REFERENCE_INDEX_SQL, MIGRATION_V84_SESSION_PROJECTION_REJECTIONS_SQL,
-  MIGRATION_V85_INVOCATION_PENDING_VIEWS_SQL, MIGRATION_V86_REPAIR_TERMINAL_STATE_SQL,
+  MIGRATION_V85_INVOCATION_PENDING_VIEWS_SQL, MIGRATION_V86_REPAIR_TERMINAL_COLUMN_SQL,
   SCHEMA_META_KEYS, WIKI_PROJECTS_TABLE_SQL
 } from './schema'
 import { runInTransaction } from './transaction'
@@ -1387,7 +1387,11 @@ export function runMigrations(conn: DatabaseSync): void {
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   if (version === 85) runInTransaction(conn, () => {
-    conn.exec(MIGRATION_V86_REPAIR_TERMINAL_STATE_SQL)
+    // Version-replay (test downgrades, partially stamped profiles) can meet the column already
+    // in place; ALTER TABLE ADD COLUMN has no IF NOT EXISTS, so gate it on table_info like the
+    // v52 shape-repair migration does.
+    const repairColumns = new Set((conn.prepare('PRAGMA table_info(canonical_projection_repairs)').all() as Array<{ name: string }>).map(({ name }) => name))
+    if (!repairColumns.has('terminal_failed')) conn.exec(MIGRATION_V86_REPAIR_TERMINAL_COLUMN_SQL)
     version = 86
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })

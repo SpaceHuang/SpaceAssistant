@@ -21,9 +21,12 @@ describe('projection repair governance (P3-②)', () => {
       error: new Error('ledger path is outside the configured workspace root')
     })
 
-    const row = getDbConnection(db).prepare('SELECT status, attempts FROM canonical_projection_repairs WHERE repair_id=?')
-      .get('gov-workspace-root') as { status: string; attempts: number }
-    expect(row.status).toBe('terminal-failed')
+    // P3-②: the terminal verdict rides in the additive terminal_failed column (the legacy
+    // status CHECK domain is untouched); retry queries exclude the row permanently.
+    const row = getDbConnection(db).prepare('SELECT status, attempts, terminal_failed FROM canonical_projection_repairs WHERE repair_id=?')
+      .get('gov-workspace-root') as { status: string; attempts: number; terminal_failed: number }
+    expect(row.status).toBe('pending')
+    expect(row.terminal_failed).toBe(1)
     expect(row.attempts).toBe(1)
     db.close()
   })
@@ -52,10 +55,10 @@ describe('projection repair governance (P3-②)', () => {
     const summary = history.getStartupRecoveryWorkSummary()
     expect(summary.dueProjectionRepairCount).toBe(0)
 
-    const pendingRepairs = getDbConnection(db).prepare(
-      "SELECT COUNT(*) AS n FROM canonical_projection_repairs WHERE status='pending'"
+    const retryable = getDbConnection(db).prepare(
+      "SELECT COUNT(*) AS n FROM canonical_projection_repairs WHERE status='pending' AND terminal_failed=0"
     ).get() as { n: number }
-    expect(pendingRepairs.n).toBe(0)
+    expect(retryable.n).toBe(0)
     db.close()
   })
 

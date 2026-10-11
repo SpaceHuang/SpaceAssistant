@@ -1328,7 +1328,7 @@ export class SqliteAgentHistory implements HistoryPort {
   /**
    * Pending obligations are retried independently; success is the only transition to completed.
    * P3-②: a deterministically unrecoverable classification (workspace root rejected, storage
-   * access denied) leaves the retry queue as terminal-failed instead of being retried forever.
+   * access denied) flags the row terminal so every retry query excludes it permanently.
    */
   recordProjectionRepairResult(repairId: string, result: { success: true } | { success: false; error: unknown }): void {
     const now = Date.now()
@@ -1338,9 +1338,9 @@ export class SqliteAgentHistory implements HistoryPort {
     } else {
       const message = result.error instanceof Error ? result.error.message : String(result.error)
       const category = classifySessionHistoryRepairFailure(result.error)
-      const status = REPAIR_TERMINAL_FAILURE_CATEGORIES.includes(category) ? 'terminal-failed' : 'pending'
-      this.conn.prepare(`UPDATE canonical_projection_repairs SET status = ?, attempts = attempts + 1,
-        last_error = ?, updated_at = ? WHERE repair_id = ?`).run(status, message, now, repairId)
+      const terminal = REPAIR_TERMINAL_FAILURE_CATEGORIES.includes(category) ? 1 : 0
+      this.conn.prepare(`UPDATE canonical_projection_repairs SET status = 'pending', terminal_failed = ?, attempts = attempts + 1,
+        last_error = ?, updated_at = ? WHERE repair_id = ?`).run(terminal, message, now, repairId)
     }
   }
 
@@ -1377,7 +1377,7 @@ export class SqliteAgentHistory implements HistoryPort {
         COUNT(*) OVER (PARTITION BY repairs.invocation_id) AS invocation_repair_count
         FROM canonical_projection_repairs repairs
         LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=repairs.session_id
-        WHERE repairs.status='pending' AND (cutover.cleanup_state IS NULL OR
+        WHERE repairs.status='pending' AND repairs.terminal_failed=0 AND (cutover.cleanup_state IS NULL OR
           cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))`).all() as Array<{
             attempts: number; updated_at: number; invocation_repair_count: number
           }>
@@ -1866,7 +1866,7 @@ export class SqliteAgentHistory implements HistoryPort {
           repairs.attempts,repairs.updated_at,COUNT(*) OVER (PARTITION BY repairs.invocation_id) AS invocation_repair_count
           FROM canonical_projection_repairs repairs
           LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=repairs.session_id
-          WHERE repairs.status='pending' AND (cutover.cleanup_state IS NULL OR
+          WHERE repairs.status='pending' AND repairs.terminal_failed=0 AND (cutover.cleanup_state IS NULL OR
             cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))
           ORDER BY repairs.updated_at,repairs.repair_id`).all() as Array<{
             repair_id: string; invocation_id: string; repair_kind: string; target_key: string; attempts: number; updated_at: number;
