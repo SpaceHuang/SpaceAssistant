@@ -118,8 +118,9 @@ export async function runDueSessionProjectionRevalidations(db: AppDatabase,
 
 /**
  * Terminal/session-disposition checkpoint for turn end (claudeStreamHandlers finally): the cheap
- * L1 fast path stays synchronous; anything else enqueues background revalidation instead of
- * re-paying a full compare on the event loop (P0-③ async revalidation).
+ * L1 fast path stays synchronous; anything else enqueues background revalidation and kicks the
+ * queue consumer (fire-and-forget, yielding shards) so the verdict is refreshed without ever
+ * blocking the terminal path or a read (P0-③ async revalidation).
  */
 export function checkpointSessionTranscriptProjection(db: AppDatabase, sessionId: string): boolean {
   try {
@@ -129,5 +130,6 @@ export function checkpointSessionTranscriptProjection(db: AppDatabase, sessionId
     }
   } catch { /* fall through to the queue */ }
   enqueueSessionProjectionRevalidation(db, sessionId)
+  void runDueSessionProjectionRevalidations(db).catch(() => { /* revalidation is best-effort */ })
   return false
 }

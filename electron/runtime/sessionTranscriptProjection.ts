@@ -111,8 +111,14 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
   // legacy immediately — only the background revalidator (P0-③) waits on a full compare.
   const rejectionVerdict = consultProjectionRejection(db, sessionId, legacyMessages)
   if (rejectionVerdict) {
-    // Stale verdicts (content drift) defer to the background queue; the read returns legacy now.
-    if (rejectionVerdict === 'stale') enqueueSessionProjectionRevalidation(db, sessionId, { stale: true })
+    // Stale verdicts (content drift) defer to the background queue; the read returns legacy now
+    // and kicks the consumer fire-and-forget so the revalidation never rides on this read.
+    if (rejectionVerdict === 'stale') {
+      enqueueSessionProjectionRevalidation(db, sessionId, { stale: true })
+      void import('./sessionProjectionRevalidation')
+        .then(({ runDueSessionProjectionRevalidations }) => runDueSessionProjectionRevalidations(db))
+        .catch(() => { /* revalidation is best-effort */ })
+    }
     return { source: 'legacy', messages: legacyMessages, reason: 'projection-rejected' }
   }
   try {
