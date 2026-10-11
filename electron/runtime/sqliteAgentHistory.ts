@@ -2106,6 +2106,7 @@ export class SqliteAgentHistory implements HistoryPort {
                 markEventRepair(event.eventId, true)
               } catch (error) {
                 blockedSessionLedgers.add(key)
+                markEventRepair(event.eventId, false, error)
                 try { options.onModelRequestLedgerRepairError?.(error, invocationId, requestId) }
                 catch { /* Diagnostics must not discard the canonical repair envelope. */ }
               }
@@ -2137,6 +2138,7 @@ export class SqliteAgentHistory implements HistoryPort {
               try { await options.repairProviderRetryLedger(repairLocation, requestRetry!); markEventRepair(event.eventId, true) }
               catch (error) {
                 blockedSessionLedgers.add(key)
+                markEventRepair(event.eventId, false, error)
                 try { options.onProviderRetryLedgerRepairError?.(error, invocationId, String(payload.requestId)) }
                 catch { /* Diagnostics must not discard the canonical repair envelope. */ }
               }
@@ -2174,6 +2176,7 @@ export class SqliteAgentHistory implements HistoryPort {
                   }
                 }
                 catch (error) {
+                  markEventRepair(event.eventId, false, error)
                   blockedSessionLedgers.add(key)
                   try { options.onUsageLedgerRepairError?.(error, invocationId, typeof usage.requestId === 'string' ? usage.requestId : 'request-usage') }
                   catch { /* Diagnostics must not discard the canonical repair envelope. */ }
@@ -2198,9 +2201,10 @@ export class SqliteAgentHistory implements HistoryPort {
                     try { await options.repairFinalRequestContextLedger(location as CompactionLedgerLocation, finalContext); markEventRepair(event.eventId, true) }
                     catch (error) {
                       blockedSessionLedgers.add(key)
-                      try { options.onFinalRequestContextLedgerRepairError?.(error, invocationId, expectedUsageRequestId ?? 'final-request-context') }
-                    catch { /* Diagnostics must not discard the canonical repair envelope. */ }
-                  }
+                      markEventRepair(event.eventId, false, error)
+                      try { options.onFinalRequestContextLedgerRepairError?.(error, invocationId, expectedUsageRequestId ?? "final-request-context") }
+                      catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                    }
                 }
               }
             }
@@ -2244,6 +2248,7 @@ export class SqliteAgentHistory implements HistoryPort {
               try { await options.repairToolCallLedger?.(location as CompactionLedgerLocation, { ...toolCall, turnId: event.turnId, stepId: ledger.stepId }); markEventRepair(event.eventId, true) }
               catch (error) {
                 blockedSessionLedgers.add(key)
+                markEventRepair(event.eventId, false, error)
                 try { options.onToolLedgerRepairError?.(error, invocationId, toolCall.toolUseId) }
                 catch { /* Diagnostics must not discard the canonical repair envelope. */ }
                 break
@@ -2304,6 +2309,7 @@ export class SqliteAgentHistory implements HistoryPort {
               markEventRepair(event.eventId, true)
             } catch (error) {
               blockedSessionLedgers.add(key)
+              markEventRepair(event.eventId, false, error)
               try { options.onToolLedgerRepairError?.(error, invocationId, payload.toolCallId) }
               catch { /* Diagnostics must not discard the canonical repair envelope. */ }
             }

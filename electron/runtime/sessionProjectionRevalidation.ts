@@ -7,6 +7,7 @@ import {
   clearProjectionRejection, computeLegacyProjectionDigest, getProjectionRejection,
   projectionRejectionBackoffDelayMs, readProjectionO1Metadata
 } from './sessionProjectionRejection'
+import { logAgentEvent } from '../agentLogger/agentLogger'
 import { drainSessionProjectionRevalidationQueue, enqueueSessionProjectionRevalidation } from './sessionProjectionRevalidationQueue'
 import { hasSessionProjectionEligibility, markSessionProjectionEligible, refreshSessionTranscriptProjectionFastPath } from './sessionTranscriptProjection'
 
