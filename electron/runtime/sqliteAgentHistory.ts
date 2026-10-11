@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from 'node:util'
 import {
   HistoryBatchError,
   HistoryCorruptionError,
+  invocationTerminalStatusMatches,
   rebuildInvocationStates,
   validateHistoryTransition,
   validateHistoryBatch,
@@ -172,6 +173,70 @@ type EventRow = {
   kind: HistoryEvent['kind']
   payload_json: string
   session_id?: string | null
+}
+
+/** P1-②: persisted transition state for one invocation stream (tool/approval + stream invariants). */
+type CanonicalToolTransitionState = {
+  pending: Map<string, 'proposed' | 'started'>
+  toolApproval: Map<string, { approvalId: string; approved?: boolean }>
+  unboundApprovalIds: Set<string>
+  seenApprovalIds: Set<string>
+  pendingApprovals: Set<string>
+  approvalIdentity: Map<string, string>
+  terminalSeen: boolean
+  turnId: string | null
+}
+
+function cloneToolTransitionState(state: CanonicalToolTransitionState): CanonicalToolTransitionState {
+  return {
+    pending: new Map(state.pending),
+    toolApproval: new Map(state.toolApproval),
+    unboundApprovalIds: new Set(state.unboundApprovalIds),
+    seenApprovalIds: new Set(state.seenApprovalIds),
+    pendingApprovals: new Set(state.pendingApprovals),
+    approvalIdentity: new Map(state.approvalIdentity),
+    terminalSeen: state.terminalSeen,
+    turnId: state.turnId
+  }
+}
+
+function serializeToolTransitionState(state: CanonicalToolTransitionState): string {
+  return JSON.stringify({
+    pending: [...state.pending],
+    approvals: [...state.toolApproval],
+    unbound: [...state.unboundApprovalIds],
+    seen: [...state.seenApprovalIds],
+    pendingApprovals: [...state.pendingApprovals],
+    approvalIdentity: [...state.approvalIdentity],
+    terminalSeen: state.terminalSeen,
+    turnId: state.turnId
+  })
+}
+
+function deserializeToolTransitionState(json: string): CanonicalToolTransitionState {
+  const raw = JSON.parse(json) as {
+    pending: Array<[string, 'proposed' | 'started']>
+    approvals: Array<[string, { approvalId: string; approved?: boolean }]>
+    unbound: string[]
+    seen: string[]
+    pendingApprovals?: string[]
+    approvalIdentity?: Array<[string, string]>
+    terminalSeen?: boolean
+    turnId?: string | null
+  }
+  if (!Array.isArray(raw.pending) || !Array.isArray(raw.approvals) || !Array.isArray(raw.unbound) || !Array.isArray(raw.seen)) {
+    throw new Error('invalid pending view payload')
+  }
+  return {
+    pending: new Map(raw.pending),
+    toolApproval: new Map(raw.approvals),
+    unboundApprovalIds: new Set(raw.unbound),
+    seenApprovalIds: new Set(raw.seen),
+    pendingApprovals: new Set(raw.pendingApprovals ?? []),
+    approvalIdentity: new Map(raw.approvalIdentity ?? []),
+    terminalSeen: raw.terminalSeen === true,
+    turnId: typeof raw.turnId === 'string' ? raw.turnId : null
+  }
 }
 
 function projectionRepairRetryDelayMs(attempts: number, invocationRepairCount: number): number {
@@ -352,6 +417,10 @@ export class SqliteAgentHistory implements HistoryPort {
       const appended = appendSqliteAgentHistoryBatchInTransaction(this.conn, storedEvents, expectedVersion, {
         schemaVersion: this.schemaVersion, now: this.now, ...(this.sessionId ? { sessionId: this.sessionId } : {})
       })
+      // P1-②: keep the per-invocation pending tool/approval view in the same transaction; a
+      // transition conflict throws here and rolls the whole append back, exactly like the
+      // historical full-stream validation would have.
+      this.updateCanonicalInvocationPendingViewInTransaction(events)
       if (this.sessionId) {
         for (const event of events) {
           if (event.kind === 'replay-message-committed') {
@@ -737,18 +806,80 @@ export class SqliteAgentHistory implements HistoryPort {
       rows.at(-1)!.sequence === stream.version && rows.every((row) => this.isCanonicalSessionEventRowStructurallyValid(row))
   }
 
-  /** Reject ambiguous tool proposals or results without a matching pending canonical proposal. */
-  private validateCanonicalSessionToolTransitions(events: readonly HistoryEvent[]): void {
-    const pending = new Map<string, 'proposed' | 'started'>()
-    const toolApproval = new Map<string, { approvalId: string; approved?: boolean }>()
-    const unboundApprovalIds = new Set<string>()
-    const seenApprovalIds = new Set<string>()
+  /**
+   * P1-②: replay tool/approval transitions over an optional persisted starting state. With no
+   * initial state this is the exact historical full-stream validation; the append transaction
+   * feeds the persisted view so each append replays only its own events.
+   */
+  private replayCanonicalSessionToolTransitions(events: readonly HistoryEvent[], initial?: CanonicalToolTransitionState): CanonicalToolTransitionState {
+    const state: CanonicalToolTransitionState = initial ? cloneToolTransitionState(initial) : {
+      pending: new Map(), toolApproval: new Map(), unboundApprovalIds: new Set(), seenApprovalIds: new Set(),
+      pendingApprovals: new Set(), approvalIdentity: new Map(), terminalSeen: false, turnId: null
+    }
+    const { pending, toolApproval, unboundApprovalIds, seenApprovalIds } = state
     for (const event of events) {
+      state.turnId = state.turnId ?? event.turnId
+      if (['invocation-completed', 'invocation-failed', 'invocation-interrupted', 'invocation-parked'].includes(event.kind)) {
+        state.terminalSeen = true
+      }
       const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
         ? event.payload as { message?: { toolCalls?: readonly { id?: unknown }[] }; toolCallId?: unknown; approvalId?: unknown;
-          approved?: unknown; success?: unknown; result?: unknown; answerer?: unknown; reasonCode?: unknown; requestedAt?: unknown;
+          approved?: unknown; outcome?: unknown; settledAt?: unknown; cause?: unknown; success?: unknown; result?: unknown; answerer?: unknown; reasonCode?: unknown; requestedAt?: unknown;
           todoId?: unknown; invocationId?: unknown; checkpointId?: unknown; workflowRevision?: unknown }
         : undefined
+      // P1-②: the same approval-lifecycle invariants validateHistoryTransition enforces over the
+      // whole stream, applied incrementally against the persisted state (approval-waiting pending
+      // keys, resolution payload shape, orphan/identity checks, terminal settlement).
+      const historyApprovalId = typeof payload?.toolCallId === 'string'
+        ? payload.toolCallId
+        : typeof payload?.approvalId === 'string' ? payload.approvalId : undefined
+      if (event.kind === 'approval-waiting') {
+        const pendingId = historyApprovalId ?? event.eventId
+        if (state.pendingApprovals.has(pendingId)) {
+          throw new HistoryCorruptionError(event.invocationId, `approval is already pending: ${pendingId}`)
+        }
+        const hasMetadata = ['answerer', 'reasonCode', 'requestedAt'].some((key) => key in (payload ?? {}))
+        if (hasMetadata && (typeof payload?.approvalId !== 'string' || !payload.approvalId.trim() ||
+          (payload.answerer !== 'user' && payload.answerer !== 'agent') || typeof payload.reasonCode !== 'string' || !payload.reasonCode.trim() ||
+          typeof payload.requestedAt !== 'number' || !Number.isFinite(payload.requestedAt))) {
+          throw new HistoryCorruptionError(event.invocationId, `approval waiting metadata is invalid: ${pendingId}`)
+        }
+        state.pendingApprovals.add(pendingId)
+        if (hasMetadata && typeof payload?.approvalId === 'string') state.approvalIdentity.set(pendingId, payload.approvalId)
+      }
+      if (event.kind === 'approval-resolved') {
+        if (typeof payload?.approved !== 'boolean') {
+          throw new HistoryCorruptionError(event.invocationId, 'approval resolution requires an approved boolean')
+        }
+        if (payload.outcome !== undefined) {
+          const outcomes = ['approved', 'denied', 'timeout', 'unavailable', 'cancelled']
+          if (typeof payload.outcome !== 'string' || !outcomes.includes(payload.outcome) || payload.approved !== (payload.outcome === 'approved')) {
+            throw new HistoryCorruptionError(event.invocationId, 'approval outcome conflicts with approved boolean')
+          }
+          if (payload.settledAt !== undefined && (typeof payload.settledAt !== 'number' || !Number.isFinite(payload.settledAt))) {
+            throw new HistoryCorruptionError(event.invocationId, 'approval resolution settledAt is invalid')
+          }
+        }
+        if (payload.answerer !== undefined && payload.answerer !== 'user' && payload.answerer !== 'agent') {
+          throw new HistoryCorruptionError(event.invocationId, 'approval resolution answerer is invalid')
+        }
+        if (payload.cause !== undefined && (typeof payload.cause !== 'string' || !payload.cause.trim())) {
+          throw new HistoryCorruptionError(event.invocationId, 'approval resolution cause is invalid')
+        }
+        if (!historyApprovalId || !state.pendingApprovals.has(historyApprovalId)) {
+          throw new HistoryCorruptionError(event.invocationId, `approval is not pending: ${historyApprovalId ?? event.eventId}`)
+        }
+        const expectedApprovalId = state.approvalIdentity.get(historyApprovalId)
+        if (expectedApprovalId && payload.approvalId !== expectedApprovalId) {
+          throw new HistoryCorruptionError(event.invocationId, `approval resolution identity mismatch: ${historyApprovalId}`)
+        }
+        state.pendingApprovals.delete(historyApprovalId)
+        state.approvalIdentity.delete(historyApprovalId)
+      }
+      if ((event.kind === 'invocation-completed' || event.kind === 'invocation-failed') &&
+        (state.pendingApprovals.size > 0 || state.pending.size > 0)) {
+        throw new HistoryCorruptionError(event.invocationId, 'cannot terminally settle an invocation with pending tool calls or approvals')
+      }
       if (event.kind === 'model-response-committed') {
         const responseIds = new Set<string>()
         for (const call of payload?.message?.toolCalls ?? []) {
@@ -830,6 +961,44 @@ export class SqliteAgentHistory implements HistoryPort {
         approval.approved = payload.approved
       }
     }
+    return state
+  }
+
+  /** Historical full-stream validation is the state-free form of the replay above. */
+  private validateCanonicalSessionToolTransitions(events: readonly HistoryEvent[]): void {
+    this.replayCanonicalSessionToolTransitions(events)
+  }
+
+  /** P1-② write-side maintenance: advance the invocation's persisted pending view in-transaction. */
+  private updateCanonicalInvocationPendingViewInTransaction(events: readonly HistoryEvent[]): void {
+    if (events.length === 0) return
+    const invocationId = events[0]!.invocationId
+    const first = events[0]!.sequence
+    const last = events[events.length - 1]!.sequence
+    const existing = this.conn.prepare('SELECT pending_json, stream_version FROM canonical_invocation_pending_views WHERE invocation_id=?')
+      .get(invocationId) as { pending_json: string; stream_version: number } | undefined
+    let initial: CanonicalToolTransitionState | undefined
+    if (existing && Number(existing.stream_version) === first - 1) {
+      initial = deserializeToolTransitionState(existing.pending_json)
+    } else if (first > 1) {
+      // View missing or non-adjacent: rebuild once from the preceding stream, then fold the new events.
+      const priorRows = this.conn.prepare(`SELECT invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json
+        FROM agent_history_events WHERE invocation_id=? AND sequence<? ORDER BY sequence ASC`).all(invocationId, first) as EventRow[]
+      initial = this.replayCanonicalSessionToolTransitions(priorRows.map(fromRow))
+    }
+    const finalState = this.replayCanonicalSessionToolTransitions(events, initial)
+    this.conn.prepare(`INSERT INTO canonical_invocation_pending_views(invocation_id, pending_json, stream_version, updated_at)
+      VALUES(?, ?, ?, ?) ON CONFLICT(invocation_id) DO UPDATE SET
+      pending_json=excluded.pending_json, stream_version=excluded.stream_version, updated_at=excluded.updated_at`)
+      .run(invocationId, serializeToolTransitionState(finalState), last, Date.now())
+  }
+
+  /** P1-② read-side lookup: undefined when absent or non-adjacent (caller falls back to the full stream). */
+  private readCanonicalInvocationPendingView(invocationId: string, streamVersion: number): CanonicalToolTransitionState | undefined {
+    const row = this.conn.prepare('SELECT pending_json, stream_version FROM canonical_invocation_pending_views WHERE invocation_id=?')
+      .get(invocationId) as { pending_json: string; stream_version: number } | undefined
+    if (!row || Number(row.stream_version) !== streamVersion) return undefined
+    try { return deserializeToolTransitionState(row.pending_json) } catch { return undefined }
   }
 
   private isCanonicalSessionEventRowStructurallyValid(row: OrderedSessionEventRow): boolean {
@@ -965,9 +1134,30 @@ export class SqliteAgentHistory implements HistoryPort {
                 'tool-call-not-dispatched', 'approval-waiting', 'approval-resolved', 'invocation-completed',
                 'invocation-failed', 'invocation-interrupted', 'invocation-parked'].includes(row.kind))) {
                 // A session cache stores transcript state, not the invocation's pending tool/approval state.
-                // State-bearing deltas validate the complete stream so proposals and dispatch facts before
-                // the cache watermark cannot be hidden by the seed.
-                this.validateCanonicalSessionToolTransitions(this.readSync(invocationId).events)
+                // State-bearing deltas validate the transitions so proposals and dispatch facts before the
+                // cache watermark cannot be hidden by the seed. P1-②: the persisted pending view covers
+                // everything before the tail, so only the tail events are replayed; without an adjacent
+                // view the complete stream is re-read exactly as before. The view path still applies the
+                // same per-event schema gate the full-stream read applies through readSync.
+                const view = this.readCanonicalInvocationPendingView(invocationId, invocationRows[0]!.sequence - 1)
+                if (view) {
+                  if (!invocationRows.every((row) => this.isCanonicalSessionEventRowStructurallyValid(row))) {
+                    throw new Error('canonical History tail event schema is invalid')
+                  }
+                  // Stream-level invariants the full-stream read derives from the whole history:
+                  // turn identity, append-after-terminal, and terminal kind/status matching.
+                  if (view.terminalSeen || (view.turnId !== null && invocationRows.some((row) => row.turn_id !== view.turnId)) ||
+                    !invocationRows.every((row) => invocationTerminalStatusMatches({ kind: row.kind as HistoryEvent['kind'],
+                      payload: JSON.parse(row.payload_json) as unknown }))) {
+                    throw new Error('canonical History tail violates stream invariants')
+                  }
+                  this.replayCanonicalSessionToolTransitions(invocationRows.map((row) => ({ invocationId,
+                    sequence: row.sequence, eventId: row.event_id, idempotencyKey: row.idempotency_key,
+                    turnId: row.turn_id, schemaVersion: row.schema_version, kind: row.kind,
+                    payload: JSON.parse(row.payload_json) as unknown })), view)
+                } else {
+                  this.validateCanonicalSessionToolTransitions(this.readSync(invocationId).events)
+                }
               }
               const hasBase = invocationRows.some((row) => row.kind === 'invocation-context-committed' || row.kind === 'transcript-compacted')
               if (!hasBase && !invocationRows.some((row) => ['model-response-committed', 'replay-message-committed', 'tool-call-finished', 'tool-call-not-dispatched'].includes(row.kind))) continue

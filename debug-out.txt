@@ -1,0 +1,5 @@
+view={"pending_json":"{\"pending\":[],\"approvals\":[],\"unbound\":[\"expected-approval-id\"],\"seen\":[\"expected-approval-id\"],\"terminalSeen\":false,\"turnId\":\"mismatched-approval-turn\"}","stream_version":2}
+cache={"session_seq":2}
+outcome=returned canonical:L1
+t2-pre view={"stream_version":2} cache={"session_seq":2} cursor={"next_seq":4}
+t2-post read=matched view={"stream_version":2} cache={"session_seq":4} cursor={"next_seq":4}

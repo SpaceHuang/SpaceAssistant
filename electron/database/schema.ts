@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 84
+export const DB_SCHEMA_VERSION = 85
 
 /** v83：wiki_projects 项目映射表（wiki-shared-centralized-storage §6.2） */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -2083,6 +2083,23 @@ CREATE TABLE IF NOT EXISTS canonical_session_projection_rejections (
   last_reason TEXT NOT NULL DEFAULT 'legacy-mismatch',
   permanent INTEGER NOT NULL DEFAULT 0 CHECK(permanent IN (0,1)),
   stale_metadata INTEGER NOT NULL DEFAULT 0 CHECK(stale_metadata IN (0,1)),
+  updated_at INTEGER NOT NULL
+);
+`
+
+/**
+ * v84 → v85 (P1-②): per-invocation pending tool/approval view.
+ *
+ * The append transaction replays each new event against the view incrementally, so the L1
+ * tail validation can consult the persisted state instead of re-reading the whole active
+ * invocation stream (plan §5 P1 ②, root cause R3). A missing or non-adjacent view falls back
+ * to the full-stream replay on both write and read paths.
+ */
+export const MIGRATION_V85_INVOCATION_PENDING_VIEWS_SQL = `
+CREATE TABLE IF NOT EXISTS canonical_invocation_pending_views (
+  invocation_id TEXT PRIMARY KEY NOT NULL,
+  pending_json TEXT NOT NULL,
+  stream_version INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
 `
