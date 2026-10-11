@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 85
+export const DB_SCHEMA_VERSION = 86
 
 /** v83：wiki_projects 项目映射表（wiki-shared-centralized-storage §6.2） */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -2102,4 +2102,33 @@ CREATE TABLE IF NOT EXISTS canonical_invocation_pending_views (
   stream_version INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+`
+
+/**
+ * v85 → v86 (P3-②): repair governance. The projection-repair ledger gains a terminal-failed
+ * state so deterministically unrecoverable classifications (workspace root rejected, storage
+ * access denied) leave the retry queue instead of being retried forever. SQLite cannot ALTER
+ * a CHECK constraint, so the ledger is rebuilt in place.
+ */
+export const MIGRATION_V86_REPAIR_TERMINAL_STATE_SQL = `
+CREATE TABLE IF NOT EXISTS canonical_projection_repairs_v86 (
+  repair_id TEXT PRIMARY KEY NOT NULL,
+  session_id TEXT,
+  invocation_id TEXT NOT NULL,
+  repair_kind TEXT NOT NULL,
+  target_key TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending', 'completed', 'terminal-failed')),
+  attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts >= 0),
+  last_error TEXT,
+  idempotency_key TEXT NOT NULL UNIQUE,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(invocation_id, repair_kind, target_key)
+);
+INSERT INTO canonical_projection_repairs_v86
+  SELECT repair_id, session_id, invocation_id, repair_kind, target_key, status, attempts, last_error, idempotency_key, updated_at
+  FROM canonical_projection_repairs;
+DROP TABLE canonical_projection_repairs;
+ALTER TABLE canonical_projection_repairs_v86 RENAME TO canonical_projection_repairs;
+CREATE INDEX IF NOT EXISTS idx_canonical_projection_repairs_pending
+  ON canonical_projection_repairs(status, updated_at, repair_id);
 `

@@ -22,6 +22,7 @@ import { sanitizeCapabilityParamsForDisplay } from '../../src/shared/capabilityP
 import { toolIdToOpenAiCompatibleApiToolName } from '../../src/shared/anthropicToolSanitize'
 import { normalizeExternalToolName } from '../../src/shared/toolNameCompatibility'
 import { decodeTerminalOutcome } from './terminalOutcome'
+import { classifySessionHistoryRepairFailure } from './sessionHistoryRecoveryDiagnostics'
 import { canonicalSessionTranscriptEvents, foldClaudeSessionSnapshots, rebuildClaudeMessagesFromHistory, toCanonicalModelMessages, type CanonicalSessionSnapshot } from './canonicalHistory'
 import { isCanonicalProjectionWatermarkValid } from './canonicalHistory'
 import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
@@ -239,9 +240,20 @@ function deserializeToolTransitionState(json: string): CanonicalToolTransitionSt
   }
 }
 
-function projectionRepairRetryDelayMs(attempts: number, invocationRepairCount: number): number {
-  if (attempts <= 0 || invocationRepairCount < 10) return 0
-  return Math.min(24 * 60 * 60 * 1000, 30 * 60 * 1000 * 2 ** Math.min(attempts - 1, 5))
+/** P3-②: a retried repair on any invocation waits at least this long (first attempts stay immediate). */
+export const REPAIR_MIN_RETRY_INTERVAL_MS = 60 * 1000
+
+/** P3-②: failure categories that cannot heal by retrying; they leave the queue terminal-failed. */
+const REPAIR_TERMINAL_FAILURE_CATEGORIES = ['workspace-root-rejected', 'storage-access-denied']
+
+export function projectionRepairRetryDelayMs(attempts: number, invocationRepairCount: number): number {
+  // P3-②: the historical zero-backoff retry for lightly-loaded invocations re-ran a full
+  // read+fold with no delay; a *retry* (attempts >= 1) now carries at least the minimum
+  // interval, and repeated failures keep the exponential backoff up to the daily cap. First
+  // attempts (attempts === 0) remain immediate so fresh obligations still settle during the
+  // startup pass that classified them.
+  if (attempts <= 0) return 0
+  return Math.max(REPAIR_MIN_RETRY_INTERVAL_MS, Math.min(24 * 60 * 60 * 1000, 30 * 60 * 1000 * 2 ** Math.min(attempts - 1, 5)))
 }
 type OrderedSessionEventRow = EventRow & { session_seq: number; commit_order: number; session_id: string; created_at: number }
 
@@ -975,22 +987,29 @@ export class SqliteAgentHistory implements HistoryPort {
     const invocationId = events[0]!.invocationId
     const first = events[0]!.sequence
     const last = events[events.length - 1]!.sequence
-    const existing = this.conn.prepare('SELECT pending_json, stream_version FROM canonical_invocation_pending_views WHERE invocation_id=?')
-      .get(invocationId) as { pending_json: string; stream_version: number } | undefined
-    let initial: CanonicalToolTransitionState | undefined
-    if (existing && Number(existing.stream_version) === first - 1) {
-      initial = deserializeToolTransitionState(existing.pending_json)
-    } else if (first > 1) {
-      // View missing or non-adjacent: rebuild once from the preceding stream, then fold the new events.
-      const priorRows = this.conn.prepare(`SELECT invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json
-        FROM agent_history_events WHERE invocation_id=? AND sequence<? ORDER BY sequence ASC`).all(invocationId, first) as EventRow[]
-      initial = this.replayCanonicalSessionToolTransitions(priorRows.map(fromRow))
+    try {
+      const existing = this.conn.prepare('SELECT pending_json, stream_version FROM canonical_invocation_pending_views WHERE invocation_id=?')
+        .get(invocationId) as { pending_json: string; stream_version: number } | undefined
+      let initial: CanonicalToolTransitionState | undefined
+      if (existing && Number(existing.stream_version) === first - 1) {
+        initial = deserializeToolTransitionState(existing.pending_json)
+      } else if (first > 1) {
+        // View missing or non-adjacent: rebuild once from the preceding stream, then fold the new events.
+        const priorRows = this.conn.prepare(`SELECT invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json
+          FROM agent_history_events WHERE invocation_id=? AND sequence<? ORDER BY sequence ASC`).all(invocationId, first) as EventRow[]
+        initial = this.replayCanonicalSessionToolTransitions(priorRows.map(fromRow))
+      }
+      const finalState = this.replayCanonicalSessionToolTransitions(events, initial)
+      this.conn.prepare(`INSERT INTO canonical_invocation_pending_views(invocation_id, pending_json, stream_version, updated_at)
+        VALUES(?, ?, ?, ?) ON CONFLICT(invocation_id) DO UPDATE SET
+        pending_json=excluded.pending_json, stream_version=excluded.stream_version, updated_at=excluded.updated_at`)
+        .run(invocationId, serializeToolTransitionState(finalState), last, Date.now())
+    } catch {
+      // The write path must keep accepting every stream the append gate accepts. A view that
+      // cannot be derived (loose tool lifecycle mid-write, legacy test shapes) is dropped so the
+      // read path falls back to its exact historical full-stream validation.
+      this.conn.prepare('DELETE FROM canonical_invocation_pending_views WHERE invocation_id=?').run(invocationId)
     }
-    const finalState = this.replayCanonicalSessionToolTransitions(events, initial)
-    this.conn.prepare(`INSERT INTO canonical_invocation_pending_views(invocation_id, pending_json, stream_version, updated_at)
-      VALUES(?, ?, ?, ?) ON CONFLICT(invocation_id) DO UPDATE SET
-      pending_json=excluded.pending_json, stream_version=excluded.stream_version, updated_at=excluded.updated_at`)
-      .run(invocationId, serializeToolTransitionState(finalState), last, Date.now())
   }
 
   /** P1-② read-side lookup: undefined when absent or non-adjacent (caller falls back to the full stream). */
@@ -1306,7 +1325,11 @@ export class SqliteAgentHistory implements HistoryPort {
     })
   }
 
-  /** Pending obligations are retried independently; success is the only transition to completed. */
+  /**
+   * Pending obligations are retried independently; success is the only transition to completed.
+   * P3-②: a deterministically unrecoverable classification (workspace root rejected, storage
+   * access denied) leaves the retry queue as terminal-failed instead of being retried forever.
+   */
   recordProjectionRepairResult(repairId: string, result: { success: true } | { success: false; error: unknown }): void {
     const now = Date.now()
     if (result.success) {
@@ -1314,8 +1337,10 @@ export class SqliteAgentHistory implements HistoryPort {
         last_error = NULL, updated_at = ? WHERE repair_id = ?`).run(now, repairId)
     } else {
       const message = result.error instanceof Error ? result.error.message : String(result.error)
-      this.conn.prepare(`UPDATE canonical_projection_repairs SET status = 'pending', attempts = attempts + 1,
-        last_error = ?, updated_at = ? WHERE repair_id = ?`).run(message, now, repairId)
+      const category = classifySessionHistoryRepairFailure(result.error)
+      const status = REPAIR_TERMINAL_FAILURE_CATEGORIES.includes(category) ? 'terminal-failed' : 'pending'
+      this.conn.prepare(`UPDATE canonical_projection_repairs SET status = ?, attempts = attempts + 1,
+        last_error = ?, updated_at = ? WHERE repair_id = ?`).run(status, message, now, repairId)
     }
   }
 
@@ -1847,7 +1872,7 @@ export class SqliteAgentHistory implements HistoryPort {
             repair_id: string; invocation_id: string; repair_kind: string; target_key: string; attempts: number; updated_at: number;
             invocation_repair_count: number
           }>
-      const retryTime = Date.now()
+      const retryTime = this.now()
       const dueRepairRows = repairRows.filter((row) =>
         retryTime - row.updated_at >= projectionRepairRetryDelayMs(row.attempts, row.invocation_repair_count)
       )

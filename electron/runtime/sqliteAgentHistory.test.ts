@@ -1975,7 +1975,8 @@ describe('SqliteAgentHistory', () => {
     expect(conn.prepare("SELECT status, attempts FROM canonical_projection_repairs WHERE invocation_id='legacy-terminal'").get()).toEqual({ status: 'pending', attempts: 1 })
 
     const succeeds = vi.fn(async () => undefined)
-    await new SqliteAgentHistory(conn).recoverInterruptedInvocations({ repairInvocationTerminal: succeeds })
+    // P3-②: a retry waits at least the minimum interval; the restart clock advances past it.
+    await new SqliteAgentHistory(conn, 1, () => Date.now() + 31 * 60_000).recoverInterruptedInvocations({ repairInvocationTerminal: succeeds })
     expect(succeeds).toHaveBeenCalledTimes(1)
     expect(conn.prepare("SELECT status, attempts FROM canonical_projection_repairs WHERE invocation_id='legacy-terminal'").get()).toEqual({ status: 'completed', attempts: 2 })
     conn.close()
@@ -2256,7 +2257,7 @@ describe('SqliteAgentHistory', () => {
       .toEqual({ status: 'pending', attempts: 1 })
 
     const succeeding = vi.fn(async () => undefined)
-    await new SqliteAgentHistory(conn).recoverInterruptedInvocations({ repairInvocationTerminal: succeeding })
+    await new SqliteAgentHistory(conn, 1, () => Date.now() + 31 * 60_000).recoverInterruptedInvocations({ repairInvocationTerminal: succeeding })
     expect(succeeding).toHaveBeenCalledWith(location, { status: 'completed', turnId: 'terminal-retry-turn', reason: 'completed' })
     expect(conn.prepare("SELECT status, attempts FROM canonical_projection_repairs WHERE invocation_id='terminal-retry-invocation'").get())
       .toEqual({ status: 'completed', attempts: 2 })
@@ -2279,7 +2280,7 @@ describe('SqliteAgentHistory', () => {
       .toEqual({ status: 'pending', attempts: 1 })
 
     const retry = vi.fn(async () => undefined)
-    await new SqliteAgentHistory(conn).recoverInterruptedInvocations({ repairInvocationTerminal: retry })
+    await new SqliteAgentHistory(conn, 1, () => Date.now() + 31 * 60_000).recoverInterruptedInvocations({ repairInvocationTerminal: retry })
     expect(retry).toHaveBeenCalledWith(location, { status: 'completed', turnId: 'terminal-failed-turn', reason: 'completed' })
     expect(conn.prepare("SELECT status, attempts FROM canonical_projection_repairs WHERE invocation_id='terminal-failed-invocation'").get())
       .toEqual({ status: 'completed', attempts: 2 })
@@ -2503,7 +2504,8 @@ describe('SqliteAgentHistory', () => {
     })
     expect(conn.prepare("SELECT COUNT(*) AS count FROM canonical_projection_repairs WHERE status='pending' AND attempts=1").get()).toEqual({ count: 11 })
     expect(conn.prepare("SELECT COUNT(*) AS count FROM canonical_projection_repairs WHERE status='completed'").get()).toEqual({ count: 0 })
-    const retryHistory = new SqliteAgentHistory(conn)
+    // P3-②: the restart clock advances past the minimum retry interval.
+    const retryHistory = new SqliteAgentHistory(conn, 1, () => Date.now() + 31 * 60_000)
     const successOptions = {
       repairModelRequestLedger: vi.fn(async () => undefined),
       repairProviderRetryLedger: vi.fn(async () => undefined),
@@ -4185,7 +4187,8 @@ describe('SqliteAgentHistory', () => {
     conn.close()
 
     conn = createDb(databasePath)
-    history = new SqliteAgentHistory(conn)
+    // P3-②: the restart clock advances past the minimum retry interval.
+    history = new SqliteAgentHistory(conn, 1, () => Date.now() + 31 * 60_000)
     await expect(history.read('retry-invocation')).resolves.toEqual(canonicalBeforeRestart)
 
     const repairProviderRetryLedger = async (repairLocation: typeof location, payload: Record<string, unknown>) => {
@@ -4394,7 +4397,9 @@ describe('SqliteAgentHistory', () => {
 
   it('keeps failed compaction repair retryable even if its diagnostic callback fails', async () => {
     const conn = createDb()
-    const history = new SqliteAgentHistory(conn)
+    // P3-②: the mutable clock advances past the minimum retry interval between the two passes.
+    let now = Date.now()
+    const history = new SqliteAgentHistory(conn, 1, () => now)
     await history.appendBatch([{
       ...event('compacted-retry', 1),
       kind: 'transcript-compacted',
@@ -4415,6 +4420,7 @@ describe('SqliteAgentHistory', () => {
     })).resolves.toMatchObject([{ state: 'interrupted' }])
 
     const retryRepair = vi.fn(async () => undefined)
+    now += 31 * 60_000
     await expect(history.recoverInterruptedInvocations({ repairCompaction: retryRepair })).resolves.toMatchObject([{ state: 'interrupted' }])
     expect(failedRepair).toHaveBeenCalledTimes(1)
     expect(retryRepair).toHaveBeenCalledTimes(1)
@@ -4648,7 +4654,9 @@ describe('SqliteAgentHistory', () => {
 
   it('keeps a completed terminal retryable after SessionEvent projection fails', async () => {
     const conn = createDb()
-    const history = new SqliteAgentHistory(conn)
+    // P3-②: the mutable clock advances past the minimum retry interval between the two passes.
+    let now = Date.now()
+    const history = new SqliteAgentHistory(conn, 1, () => now)
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-history-terminal-retry-'))
     const location = { workDir: root, sessionId: 'session-terminal-retry', createdAt: 1000 }
     const sink = getSessionEventSink(location.workDir, location.sessionId, location.createdAt)
@@ -4674,6 +4682,7 @@ describe('SqliteAgentHistory', () => {
     expect(onRepairError).toHaveBeenCalledWith(expect.any(Error), 'inv-1', 'turn-terminal-retry')
     await expect(readSessionEvents(path.join(root, 'sessions', 'session-terminal-retry-19700101', 'events.jsonl'))).resolves.toHaveLength(1)
 
+    now += 31 * 60_000
     await history.recoverInterruptedInvocations({ repairInvocationTerminal, onInvocationTerminalRepairError: onRepairError })
 
     await expect(history.read('inv-1')).resolves.toEqual(before)
