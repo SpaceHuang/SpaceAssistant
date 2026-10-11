@@ -98,7 +98,7 @@ export function WikiTab({ wiki, onChange }: Props) {
         checked={wiki.enabled}
         onChange={(enabled) => onChange({ ...wiki, enabled })}
       />
-      <ConfigField label={t('wiki.rootPathLabel')}>
+      <ConfigField label={t('wiki.rootPathLabel')} hint={t('wiki.rootPathHelp')}>
         <Space.Compact style={{ width: '100%' }}>
           <Input
             value={wiki.rootPath}
