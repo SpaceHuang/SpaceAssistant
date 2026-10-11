@@ -815,6 +815,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const imRequest = vi.fn(async () => ({ kind: 'approved' as const, cause: 'user-approved' as const }))
     const cancelByRequestId = vi.fn()
     const onConfirmRequest = vi.fn()
+    const emitFactEvent = vi.fn()
     const remoteContext = {
       source: 'feishu', messageId: 'message-1', chatId: 'chat-1', userId: 'user-1', inboundRaw: inbound,
       authOwner: 'owner-1', authorizationGeneration: 7, imChannel: { request: imRequest, cancelByRequestId }
@@ -822,7 +823,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const { agentSdk } = assembleInvocation({
       requestId: 'req-remote-confirm', sessionId: 'session-remote-confirm', lane: 'feishu', remoteContext: remoteContext as never,
       model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
-      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', emitFactEvent, emitSessionEvent: vi.fn(),
       floatingNotificationManager: { onConfirmRequest } as never
     })
     const confirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never, { cancel: vi.fn() })
@@ -836,7 +837,11 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       requestId: 'req-remote-confirm', sessionId: 'session-remote-confirm', toolName: 'write_file', toolInput: { path: 'x' },
       messageId: 'message-1', matchKey: 'chat-1', context: 'chat-1', authOwner: 'owner-1', authorizationGeneration: 7
     }))
+    expect(emitFactEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'confirm-requested', id: 'remote-1', requestId: 'req-remote-confirm', lane: 'feishu'
+    }))
     expect(onConfirmRequest).not.toHaveBeenCalled()
+    expect(isPendingConfirm('req-remote-confirm', 'remote-1', 'session-remote-confirm')).toBe(false)
   })
 
   it('passes Hosted agent answerer decisions to the injected AgentChannel factory', async () => {
