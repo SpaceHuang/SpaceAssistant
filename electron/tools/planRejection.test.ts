@@ -7,7 +7,7 @@ import { PlanRejectedError } from '../../packages/agent-sdk/src/turn'
 const MISMATCH_DETAILS = {
   code: 'SHELL_DIALECT_MISMATCH', detectedSyntax: 'windows-cmd', expectedDialect: 'windows-powershell',
   shellProfileId: 'windows-powershell', executable: 'powershell.exe',
-  signals: ['cmd-exe-chain'], hints: ['命令混入了 cmd 语法，请改写为 PowerShell 等价命令']
+  signals: ['cmd-operator'], hints: ['命令混入了 cmd 语法，请改写为 PowerShell 等价命令']
 }
 
 function mismatchError(): RunShellPlanError {
@@ -27,7 +27,7 @@ describe('planRejectionFromRunShellPlan（§4.3/§4.4：转换层 record + 台�
     expect(parsed).toMatchObject({
       code: 'SHELL_DIALECT_MISMATCH', caseId: 'SHELL-DIALECT-001',
       detectedSyntax: 'windows-cmd', expectedDialect: 'windows-powershell',
-      shellProfileId: 'windows-powershell', signals: ['cmd-exe-chain']
+      shellProfileId: 'windows-powershell', signals: ['cmd-operator']
     })
     expect(Array.isArray(parsed.hints)).toBe(true)
   })
@@ -42,7 +42,7 @@ describe('planRejectionFromRunShellPlan（§4.3/§4.4：转换层 record + 台�
     expect(log).toHaveBeenCalledWith('error', 'shell.exec.plan_failed', expect.objectContaining({
       requestId: 'r1', sessionId: 's1', toolUseId: 't1',
       shell: 'windows-powershell', errorCode: 'SHELL_DIALECT_MISMATCH', caseId: 'SHELL-DIALECT-001',
-      signals: ['cmd-exe-chain'], retryCount: 1, retryExhausted: false
+      signals: ['cmd-operator'], retryCount: 1, retryExhausted: false
     }))
     const logged = log.mock.calls[0]?.[2] as Record<string, unknown>
     expect(typeof logged.commandFingerprint).toBe('string')

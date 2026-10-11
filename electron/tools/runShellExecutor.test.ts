@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import os from 'os'
 import path from 'path'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { appendRawTailBuffer, executePreparedShellExecution, runShellExecutor, resolveShellSpawnSpec } from './runShellExecutor'
+import { appendRawTailBuffer, executePreparedShellExecution, executePreparedShellExecutionWithHostFallback, runShellExecutor, resolveShellSpawnSpec } from './runShellExecutor'
 import { planRunShellExecution } from './runShellPlan'
 import { prepareShellExecution } from '../shell/preparedShellExecution'
 import { dialectRetryBreaker } from '../shell/dialectRetryBreaker'
@@ -873,7 +873,7 @@ describe('runShellExecutor', () => {
     expect(escalatedHints).not.toEqual(firstHints)
     expect(escalatedHints.join(' ')).toContain('Remove-Item')
     // 计数器可恢复：清掉本用例键，避免跨用例污染
-    dialectRetryBreaker.clear('sess', 'windows-powershell', ['cmd-del-switch'])
+    dialectRetryBreaker.clear('sess', WINDOWS_POWERSHELL_PROFILE.id, ['cmd-del-switch'])
   })
 
   it('命令改写成功执行后计数归零：下一次同款错配 retryCount 从 1 重新计（可恢复性断言）', async () => {
@@ -888,6 +888,37 @@ describe('runShellExecutor', () => {
     expect(recovered.success).toBe(true)
     const third = await runShellExecutor.execute({ command: mismatch }, baseCtx(workDir, userDataDir))
     expect(third.data).toMatchObject({ retryCount: 1, retryExhausted: false })
+  })
+
+  // 评审 P2：自定义 shell 配置下 spawnSpec.shellId（可执行文件 basename）≠ record 侧的
+  // dependencySnapshot.profileId（内置 profile id）；成功清除必须按 record 同源键，否则永不清零
+  it('自定义 shell 配置（shellId ≠ profileId）下成功执行仍清除错配计数', async () => {
+    if (!isWindows) return
+    const mismatch = 'del /q dialect-p2-alignment.txt'
+    const first = await runShellExecutor.execute({ command: mismatch }, baseCtx(workDir, userDataDir))
+    expect(first.data).toMatchObject({ retryCount: 1, retryExhausted: false })
+    // 构造 prepared：shellId 为自定义名，dependencySnapshot.profileId 保持内置（与 record 同源）
+    const planned = await planRunShellExecution({ command: 'Get-ChildItem . -Name | Select-Object -First 1' }, baseCtx(workDir, userDataDir))
+    const prepared = prepareShellExecution({
+      command: planned.command,
+      profile: planned.profile,
+      spawnSpec: { ...planned.spawnSpec, shellId: 'my-custom-shell' },
+      cwd: planned.cwd,
+      timeoutMs: planned.timeoutMs,
+      ioMaxBytes: planned.ioMaxBytes,
+      environment: { ...planned.environment },
+      facts: planned.facts,
+      configRevision: planned.configRevision,
+      policyRevision: planned.policyRevision,
+      dependencySnapshot: { ...planned.dependencySnapshot },
+      pathSnapshot: { ...planned.pathSnapshot }
+    })
+    const result = await executePreparedShellExecutionWithHostFallback(prepared, baseCtx(workDir, userDataDir), Date.now(), {})
+    expect(result.success).toBe(true)
+    // 修复前（按 shellId 清）这里会残留计数 → retryCount=2；修复后按 profileId 同源清 → retryCount=1
+    const afterClear = await runShellExecutor.execute({ command: mismatch }, baseCtx(workDir, userDataDir))
+    expect(afterClear.data).toMatchObject({ retryCount: 1, retryExhausted: false })
+    dialectRetryBreaker.clear('sess', WINDOWS_POWERSHELL_PROFILE.id, ['cmd-del-switch'])
   })
 
   /** 事故重放：把 136 字节原样写进指定流，并复现宿主失败退出码（§2.2 / Gate 1）。 */

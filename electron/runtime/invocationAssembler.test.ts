@@ -1235,7 +1235,7 @@ describe('P0-A：计划期失败降级为可回传拒绝（T-3，断言打在生
   // A-2/A-8（§4.4 / D-8）：planned 转换层与 executor 共享同一 breaker——
   // 同会话第 2 次同款错配 → JSON 携带 retryCount/retryExhausted 与升级 hints；turn 不终止
   it('同会话第 2 次同款错配的 PlanRejectedError JSON 含 retryCount=2 与升级 hints（不阻断）', async () => {
-    const details = { ...MISMATCH_DETAILS, signals: ['cmd-exe-chain'], detectedSyntax: 'windows-cmd' }
+    const details = { ...MISMATCH_DETAILS, signals: ['cmd-operator'], detectedSyntax: 'windows-cmd' }
     const composed = buildComposed(async () => {
       throw new RunShellPlanError('SHELL_DIALECT_MISMATCH', 'SHELL_DIALECT_MISMATCH', { ...details })
     })

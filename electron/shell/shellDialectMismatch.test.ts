@@ -66,9 +66,18 @@ describe('detectShellDialectMismatch', () => {
     expect(detectShellDialectMismatch('ls ${HOME}/bin', WINDOWS_POWERSHELL_PROFILE)).toBeUndefined()
   })
 
-  it('cmd 方言混入 PowerShell：exe 链式调用、dir/copy/del 开关、set VAR= 计 cmd-* 信号', () => {
-    expect(detectShellDialectMismatch('where.exe python; where.exe python3', WINDOWS_POWERSHELL_PROFILE)?.signals)
-      .toContain('cmd-exe-chain')
+  it('cmd 方言混入 PowerShell：& 串联、dir/copy/del 开关、set VAR= 计 cmd-* 信号', () => {
+    // 评审 BLK-1 定案：cmd 的串联符是 &（PowerShell 5.1 中「词 & 词」是语法错误）；`;` 是
+    // PowerShell 合法语句分隔符，「exe a; exe b」可正常执行，不再判为 cmd 混入
+    expect(detectShellDialectMismatch('where.exe a & where.exe b', WINDOWS_POWERSHELL_PROFILE)?.signals)
+      .toContain('cmd-operator')
+    expect(detectShellDialectMismatch('echo done & dir /b notes', WINDOWS_POWERSHELL_PROFILE)?.signals)
+      .toContain('cmd-operator')
+    expect(detectShellDialectMismatch('where.exe python; where.exe python3', WINDOWS_POWERSHELL_PROFILE))
+      .toBeUndefined()
+    // PowerShell 合法的 & 调用运算符用法不误报
+    expect(detectShellDialectMismatch('{ & $cmd }', WINDOWS_POWERSHELL_PROFILE)).toBeUndefined()
+    expect(detectShellDialectMismatch('Get-Content f; & "C:\\tools\\x.exe" --run', WINDOWS_POWERSHELL_PROFILE)).toBeUndefined()
     expect(detectShellDialectMismatch('dir /b "%APPDATA%"', WINDOWS_POWERSHELL_PROFILE)?.signals)
       .toContain('cmd-dir-switch')
     expect(detectShellDialectMismatch('copy /y a.txt b.txt', WINDOWS_POWERSHELL_PROFILE)?.signals)
@@ -79,19 +88,24 @@ describe('detectShellDialectMismatch', () => {
       .toContain('cmd-set-var')
   })
 
-  it('§1.2 事故命令仍被拦，但理由为 windows-cmd 类信号且 hints 可直接指导改写（验收红线）', () => {
+  // 评审 BLK-1 定案：§1.2 事故命令是语法合法的 PowerShell（; 分隔 + PS 控制流），方言修复后应放行
+  // 正常执行；§1.2 的真实问题（posix-variable 误报 $p）已由 A-4 修复。真正需要拦截的 cmd 混写
+  //（& 串联、dir /b 等）由 cmd-* 信号覆盖。
+  it('§1.2 事故命令（合法 PowerShell 混写风格）在方言修复后放行', () => {
     const command = [
       'where.exe python; where.exe python3; where.exe uv; where.exe uvx; where.exe pipx;',
       'foreach($p in @("$env:LOCALAPPDATA\\uv","$env:USERPROFILE\\.local\\bin")){ if(Test-Path $p)',
       '{ "== $p"; Get-ChildItem $p -Force | Select-Object -First 15 -ExpandProperty Name } }'
     ].join(' ')
-    const result = detectShellDialectMismatch(command, WINDOWS_POWERSHELL_PROFILE)
-    expect(result?.code).toBe('SHELL_DIALECT_MISMATCH')
+    expect(detectShellDialectMismatch(command, WINDOWS_POWERSHELL_PROFILE)).toBeUndefined()
+  })
+
+  it('detectedSyntax=windows-cmd 时 hints 给出 cmd→PowerShell 等价写法（口径一致）', () => {
+    const result = detectShellDialectMismatch('dir /b notes & echo done', WINDOWS_POWERSHELL_PROFILE)
     expect(result?.detectedSyntax).toBe('windows-cmd')
-    expect(result?.signals).toContain('cmd-exe-chain')
-    expect(result?.signals).not.toContain('posix-variable')
+    expect(result?.signals).toContain('cmd-dir-switch')
     const hints = result?.hints.join(' ') ?? ''
-    expect(hints).toContain('Get-Command')
+    expect(hints).toContain('Get-ChildItem')
     expect(hints).toContain('$env:')
   })
 

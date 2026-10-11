@@ -795,7 +795,8 @@ async function runToolChatSessionInner(
       toolName: call.toolName,
       modelTurn: source?.modelTurn,
       semanticCallSha256: createHash('sha256').update(semanticIdentity).digest('hex'),
-      dispatched: source?.kind !== 'safety-rejection',
+      // plan-rejection 与 safety-rejection 同为「未派发即拒绝」，不得计入 dispatched（评审 P3）
+      dispatched: source?.kind !== 'safety-rejection' && source?.kind !== 'plan-rejection',
       resultCommitted: true,
       success: !resultIsError,
       ...(resultIsError ? { errorClass: normalizeToolErrorClass(errorText, output) } : {}),

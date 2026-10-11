@@ -180,7 +180,9 @@ function markDialectCounterRecoveredOnSuccess(
   ctx: ToolExecutionContext
 ): void {
   if (result.success === false) return
-  dialectRetryBreaker.clearOnSuccess(String(ctx.sessionId ?? ''), prepared.spawnSpec.shellId)
+  // 键必须与 record 侧同源：detect 的 shellProfileId 写自 dependencySnapshot.profileId（内置
+  // profile id），而非 spawnSpec.shellId（自定义 shell 配置下是可执行文件 basename，评审 P2）
+  dialectRetryBreaker.clearOnSuccess(String(ctx.sessionId ?? ''), prepared.dependencySnapshot.profileId)
 }
 
 /**

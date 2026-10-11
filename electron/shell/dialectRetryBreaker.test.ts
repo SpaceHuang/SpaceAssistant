@@ -5,40 +5,40 @@ import { DialectRetryBreaker } from './dialectRetryBreaker'
 describe('DialectRetryBreaker（D-8 作用域化）', () => {
   it('同会话同 profile 同 signals 连续两次后提示升级（tripped），成功后可清除', () => {
     const breaker = new DialectRetryBreaker()
-    expect(breaker.record('session-a', 'profile', ['cmd-exe-chain']).tripped).toBe(false)
-    expect(breaker.record('session-a', 'profile', ['cmd-exe-chain']).tripped).toBe(true)
+    expect(breaker.record('session-a', 'profile', ['cmd-operator']).tripped).toBe(false)
+    expect(breaker.record('session-a', 'profile', ['cmd-operator']).tripped).toBe(true)
     breaker.clearOnSuccess('session-a', 'profile')
-    expect(breaker.record('session-a', 'profile', ['cmd-exe-chain']).count).toBe(1)
+    expect(breaker.record('session-a', 'profile', ['cmd-operator']).count).toBe(1)
   })
 
   it('不同会话分别计数（sessionId 作用域隔离）', () => {
     const breaker = new DialectRetryBreaker()
-    breaker.record('session-a', 'profile', ['cmd-exe-chain'])
-    expect(breaker.record('session-b', 'profile', ['cmd-exe-chain']).count).toBe(1)
-    expect(breaker.record('session-a', 'profile', ['cmd-exe-chain']).count).toBe(2)
+    breaker.record('session-a', 'profile', ['cmd-operator'])
+    expect(breaker.record('session-b', 'profile', ['cmd-operator']).count).toBe(1)
+    expect(breaker.record('session-a', 'profile', ['cmd-operator']).count).toBe(2)
   })
 
   it('clearOnSuccess 只清除该会话与 profile 的最近一次错配键，不波及他者', () => {
     const breaker = new DialectRetryBreaker()
-    breaker.record('session-a', 'profile', ['cmd-exe-chain'])
-    breaker.record('session-a', 'profile', ['cmd-exe-chain'])
+    breaker.record('session-a', 'profile', ['cmd-operator'])
+    breaker.record('session-a', 'profile', ['cmd-operator'])
     breaker.record('session-a', 'other-profile', ['posix-export'])
-    breaker.record('session-b', 'profile', ['cmd-exe-chain'])
+    breaker.record('session-b', 'profile', ['cmd-operator'])
     breaker.clearOnSuccess('session-a', 'profile')
-    expect(breaker.record('session-a', 'profile', ['cmd-exe-chain']).count).toBe(1)
+    expect(breaker.record('session-a', 'profile', ['cmd-operator']).count).toBe(1)
     expect(breaker.record('session-a', 'other-profile', ['posix-export']).count).toBe(2)
-    expect(breaker.record('session-b', 'profile', ['cmd-exe-chain']).count).toBe(2)
+    expect(breaker.record('session-b', 'profile', ['cmd-operator']).count).toBe(2)
   })
 
   it('forgetSession 清除该会话全部键（会话结束一并清理，D-8）', () => {
     const breaker = new DialectRetryBreaker()
-    breaker.record('session-a', 'profile', ['cmd-exe-chain'])
+    breaker.record('session-a', 'profile', ['cmd-operator'])
     breaker.record('session-a', 'profile', ['posix-export'])
-    breaker.record('session-b', 'profile', ['cmd-exe-chain'])
+    breaker.record('session-b', 'profile', ['cmd-operator'])
     breaker.forgetSession('session-a')
-    expect(breaker.record('session-a', 'profile', ['cmd-exe-chain']).count).toBe(1)
+    expect(breaker.record('session-a', 'profile', ['cmd-operator']).count).toBe(1)
     expect(breaker.record('session-a', 'profile', ['posix-export']).count).toBe(1)
-    expect(breaker.record('session-b', 'profile', ['cmd-exe-chain']).count).toBe(2)
+    expect(breaker.record('session-b', 'profile', ['cmd-operator']).count).toBe(2)
   })
 
   it('不变量：任意 record/clear 交错后，同键计数 = record 次数 − clear 次数，且 tripped ⇔ 计数 ≥2', () => {
@@ -51,7 +51,7 @@ describe('DialectRetryBreaker（D-8 作用域化）', () => {
       value = value + 0x6d2b79f5 | 0
       return ((value ^ value >>> 15) >>> 0) / 4294967296
     }
-    const signalSets = [['cmd-exe-chain'], ['posix-export'], ['cmd-exe-chain', 'cmd-dir-switch']] as const
+    const signalSets = [['cmd-operator'], ['posix-export'], ['cmd-operator', 'cmd-dir-switch']] as const
     for (let round = 0; round < 200; round += 1) {
       const breaker = new DialectRetryBreaker()
       // oracle: 键 -> 有效计数

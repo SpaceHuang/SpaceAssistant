@@ -16,14 +16,18 @@ function hasPowerShellScriptBlock(command: string): boolean {
 }
 
 // P0-B（§4.2.1）：仅当出现 PowerShell「无法解释」的 POSIX 变量形态时才计 posix-variable。
-// 位置/特殊参数 $1/$@/$*（$? 在 PowerShell 中合法且常用，不计；$$ 是 PowerShell 进程 PID，不计）。
+// 位置/特殊参数 $1/$@/$*（$? 在 PowerShell 中合法且常用，不计；$$ 在 PowerShell 中为上一行最后一个
+// token 的自动变量，同样合法，不计）。
 const POSIX_POSITIONAL_PARAM_PATTERN = /\$[0-9@*]/
 // bash 参数展开修饰符：${VAR:…} ${VAR#…} ${VAR%…} ${VAR/…} ${VAR[…]}；PowerShell 的 ${name} 仅支持纯名称。
 const POSIX_EXPANSION_PATTERN = /\$\{[A-Za-z_][A-Za-z0-9_]*[:#%/\[]/
 
-// P0-B（§4.2.2）：cmd 方言信号（此前对 cmd-in-PowerShell 只有 cmd-variable 一条，覆盖不到 exe 链）。
-// exe 调用以 `;` 串联：`where.exe a; where.exe b`（cmd 链式写法；PowerShell 下虽可执行但属混方言）。
-const CMD_EXE_CHAIN_PATTERN = /\b[A-Za-z][A-Za-z0-9_-]*\.exe\b[^;\n]*;/
+// P0-B（§4.2.2）：cmd 方言信号（此前对 cmd-in-PowerShell 只有 cmd-variable 一条）。
+// 注意：`;` 是 PowerShell 的合法语句分隔符，「exe a; exe b」在 PowerShell 下可正常执行，
+// 不构成 cmd 混入证据（评审 BLK-1）；真正的 cmd 串联符是 `&`（无条件串联），「词 & 词」在
+// PowerShell 5.1 中是语法错误——以此作为 cmd 方言证据。要求 & 前是词字符，以免误伤
+// PowerShell 合法的调用运算符用法（如 { & cmd }、; & cmd）；`&&` 由 posix-operator 覆盖。
+const CMD_OPERATOR_PATTERN = /\w\s&\s/
 // PowerShell 的 dir/copy/del 是 cmdlet 别名，`/x` 风格开关会解析失败（§1.1 真实失败案例）。
 const CMD_DIR_SWITCH_PATTERN = /\bdir\s+\/[A-Za-z]/i
 const CMD_COPY_SWITCH_PATTERN = /\bcopy\s+\/[A-Za-z]/i
@@ -33,8 +37,9 @@ const CMD_SET_VAR_PATTERN = /(^|[\s;&])set\s+[A-Za-z_][A-Za-z0-9_]*=/
 
 function windowsCmdHints(): string[] {
   return [
-    '命令混入了 cmd 语法，请改写为 PowerShell 等价命令：把 where.exe a; where.exe b 改写为 Get-Command a; Get-Command b',
-    '环境变量使用 $env:NAME；dir 改用 Get-ChildItem，copy 改用 Copy-Item，del 改用 Remove-Item，取前 N 项用 Select-Object -First N'
+    '命令混入了 cmd 语法，请改写为 PowerShell 等价命令',
+    '环境变量使用 $env:NAME；dir 改用 Get-ChildItem，copy 改用 Copy-Item，del 改用 Remove-Item',
+    'cmd 的 & 串联在 PowerShell 中不可用，直接用 ; 分隔各命令即可'
   ]
 }
 
@@ -65,7 +70,7 @@ export function detectShellDialectMismatch(command: string, profile: ShellProfil
     if (command.includes('/dev/null')) signals.push('posix-dev-null')
     if (/\brm\s+-[^\n]*\brf\b/.test(command)) signals.push('posix-rm-rf')
     if (/(^|\s)%[A-Za-z_][A-Za-z0-9_]*%/.test(command)) signals.push('cmd-variable')
-    if (CMD_EXE_CHAIN_PATTERN.test(command)) signals.push('cmd-exe-chain')
+    if (CMD_OPERATOR_PATTERN.test(command)) signals.push('cmd-operator')
     if (CMD_DIR_SWITCH_PATTERN.test(command)) signals.push('cmd-dir-switch')
     if (CMD_COPY_SWITCH_PATTERN.test(command)) signals.push('cmd-copy-switch')
     if (CMD_DEL_SWITCH_PATTERN.test(command)) signals.push('cmd-del-switch')
