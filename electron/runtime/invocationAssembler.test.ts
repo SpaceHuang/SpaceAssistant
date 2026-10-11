@@ -1231,4 +1231,37 @@ describe('P0-A：计划期失败降级为可回传拒绝（T-3，断言打在生
       await composed.dispose()
     }
   })
+
+  // A-2/A-8（§4.4 / D-8）：planned 转换层与 executor 共享同一 breaker——
+  // 同会话第 2 次同款错配 → JSON 携带 retryCount/retryExhausted 与升级 hints；turn 不终止
+  it('同会话第 2 次同款错配的 PlanRejectedError JSON 含 retryCount=2 与升级 hints（不阻断）', async () => {
+    const details = { ...MISMATCH_DETAILS, signals: ['cmd-exe-chain'], detectedSyntax: 'windows-cmd' }
+    const composed = buildComposed(async () => {
+      throw new RunShellPlanError('SHELL_DIALECT_MISMATCH', 'SHELL_DIALECT_MISMATCH', { ...details })
+    })
+    try {
+      const ports = await composed.host.createPorts({
+        invocationId: 'turn-plan-reject', turnId: 'turn-plan-reject', routeId: 'route-plan-reject',
+        request: { messages: [{ role: 'user', content: 'run shell' }], maxTokens: 10, tools: [{ name: 'run_shell', description: 'shell', inputSchema: {} }] }
+      })
+      const escalateCall = { ...prepareCall, toolCallId: 'shell-call-escalate' }
+      const first = await ports.prepareTool!(escalateCall as never, { kind: 'initial' }).then(
+        () => { throw new Error('expected prepareTool to reject') }, (error: unknown) => error
+      ) as PlanRejectedError
+      const firstParsed = JSON.parse(first.userMessage) as { retryCount: number; hints: string[] }
+      expect(firstParsed.retryCount).toBe(1)
+      // 换 toolCallId 再次错配（同会话同 profile 同 signals）
+      const secondCall = { ...escalateCall, toolCallId: 'shell-call-escalate-2' }
+      const second = await ports.prepareTool!(secondCall as never, { kind: 'initial' }).then(
+        () => { throw new Error('expected prepareTool to reject') }, (error: unknown) => error
+      ) as PlanRejectedError
+      const secondParsed = JSON.parse(second.userMessage) as { retryCount: number; retryExhausted: boolean; hints: string[] }
+      expect(secondParsed.retryCount).toBe(2)
+      expect(secondParsed.retryExhausted).toBe(true)
+      expect(secondParsed.hints).not.toEqual(firstParsed.hints)
+      expect(secondParsed.hints.join(' ')).toContain('Get-Command')
+    } finally {
+      await composed.dispose()
+    }
+  })
 })

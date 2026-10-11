@@ -42,6 +42,21 @@ function posixBashHints(): string[] {
   return ['使用 PowerShell 语法重写命令', '环境变量使用 $env:NAME，空输出使用 $null']
 }
 
+/** D-8（v1.4 定案）：同会话第 2 次同款错配不再重复同一句，直接给出改写后的命令形态（提示升级，不阻断）。 */
+export function escalatedDialectMismatchHints(detectedSyntax: ShellDialect): string[] {
+  return detectedSyntax === 'windows-cmd'
+    ? [
+        '同会话内第二次出现同款方言错配：请直接按 PowerShell 形态给出改写后的整条命令，不要再次提交混有 cmd 语法的版本',
+        '改写形态示例：把 where.exe a; where.exe b 改写为 Get-Command a; Get-Command b',
+        '环境变量使用 $env:NAME；dir 改用 Get-ChildItem，copy 改用 Copy-Item，del 改用 Remove-Item，取前 N 项用 Select-Object -First N'
+      ]
+    : [
+        '同会话内第二次出现同款方言错配：请直接按 PowerShell 形态给出改写后的整条命令，不要再次提交 POSIX 语法版本',
+        '改写形态示例：把 export A=1 改写为 $env:A = "1"，把 cmd > /dev/null 改写为 cmd | Out-Null',
+        '环境变量使用 $env:NAME，空输出使用 $null'
+      ]
+}
+
 export function detectShellDialectMismatch(command: string, profile: ShellProfile): ShellDialectMismatch | undefined {
   const signals: string[] = []
   if (profile.dialect === 'windows-powershell') {

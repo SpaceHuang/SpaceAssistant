@@ -7,6 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { appendRawTailBuffer, executePreparedShellExecution, runShellExecutor, resolveShellSpawnSpec } from './runShellExecutor'
 import { planRunShellExecution } from './runShellPlan'
 import { prepareShellExecution } from '../shell/preparedShellExecution'
+import { dialectRetryBreaker } from '../shell/dialectRetryBreaker'
 import { appendProgressOutputRaw, decodeProgressRawTail } from '../../src/shared/terminalScrollback'
 import { PROGRESS_RAW_MAX_BYTES } from '../../src/shared/terminalScrollback'
 import { ACCIDENT_HEX } from '../processOutput/testFixtures'
@@ -854,6 +855,39 @@ describe('runShellExecutor', () => {
     expect(logShellAgentEvent).not.toHaveBeenCalledWith('info', 'shell.exec.spawned', expect.anything())
     const second = await runShellExecutor.execute({ command }, baseCtx(workDir, userDataDir))
     expect(second.data).toMatchObject({ retryCount: 2, retryExhausted: true })
+  })
+
+  // ===== 阶段 3（§4.3/§4.4 / D-7/D-8）：第 2 次同款错配提示升级 + 成功改写即清除（不阻断） =====
+
+  it('第 2 次同款错配时 data.hints 升级为改写形态（不再重复同一句，不阻断）', async () => {
+    if (!isWindows) return
+    const command = 'del /q dialect-escalate-probe.txt'
+    const first = await runShellExecutor.execute({ command }, baseCtx(workDir, userDataDir))
+    expect(first.success).toBe(false)
+    const firstHints = (first.data as { hints?: string[] }).hints ?? []
+    expect(firstHints.join(' ')).toContain('cmd')
+    const second = await runShellExecutor.execute({ command }, baseCtx(workDir, userDataDir))
+    expect(second.success).toBe(false)
+    expect(second.data).toMatchObject({ retryCount: 2, retryExhausted: true })
+    const escalatedHints = (second.data as { hints?: string[] }).hints ?? []
+    expect(escalatedHints).not.toEqual(firstHints)
+    expect(escalatedHints.join(' ')).toContain('Remove-Item')
+    // 计数器可恢复：清掉本用例键，避免跨用例污染
+    dialectRetryBreaker.clear('sess', 'windows-powershell', ['cmd-del-switch'])
+  })
+
+  it('命令改写成功执行后计数归零：下一次同款错配 retryCount 从 1 重新计（可恢复性断言）', async () => {
+    if (!isWindows) return
+    const mismatch = 'copy /y dialect-clear-probe-a.txt dialect-clear-probe-b.txt'
+    const first = await runShellExecutor.execute({ command: mismatch }, baseCtx(workDir, userDataDir))
+    expect(first.data).toMatchObject({ retryCount: 1, retryExhausted: false })
+    const second = await runShellExecutor.execute({ command: mismatch }, baseCtx(workDir, userDataDir))
+    expect(second.data).toMatchObject({ retryCount: 2, retryExhausted: true })
+    // 改写后的合法 PowerShell 命令成功执行 → 成功即 clear（D-8）
+    const recovered = await runShellExecutor.execute({ command: 'Get-ChildItem . -Name | Select-Object -First 1' }, baseCtx(workDir, userDataDir))
+    expect(recovered.success).toBe(true)
+    const third = await runShellExecutor.execute({ command: mismatch }, baseCtx(workDir, userDataDir))
+    expect(third.data).toMatchObject({ retryCount: 1, retryExhausted: false })
   })
 
   /** 事故重放：把 136 字节原样写进指定流，并复现宿主失败退出码（§2.2 / Gate 1）。 */

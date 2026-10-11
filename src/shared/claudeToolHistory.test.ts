@@ -286,6 +286,31 @@ describe('buildToolResultBlock', () => {
       userMessage: '脚本执行失败，请检查代码后重试'
     })
   })
+
+  // A-7（§4.3）：planned 路径 plan 拒绝（not-dispatched）落库形态为 error/data 均为 D-7 JSON 文本；
+  // 历史重建后 signals/hints 必须仍可解析（与实时出口一致，不丢失改写指导）
+  it('失败历史结果保留 D-7 计划拒绝 JSON 文本（signals/hints 不丢失）', () => {
+    const rejectionJson = JSON.stringify({
+      code: 'SHELL_DIALECT_MISMATCH', caseId: 'SHELL-DIALECT-001',
+      detectedSyntax: 'windows-cmd', expectedDialect: 'windows-powershell',
+      shellProfileId: 'windows-powershell', signals: ['cmd-exe-chain'],
+      hints: ['把 where.exe a; where.exe b 改写为 Get-Command a; Get-Command b']
+    })
+    const block = buildToolResultBlock(toolCall({
+      id: 't-plan-rejected',
+      toolName: 'run_shell',
+      result: { success: false, error: rejectionJson, data: rejectionJson }
+    }))
+    expect(block.isError).toBe(true)
+    const rebuilt = JSON.parse(block.content) as { ok: boolean; error: string; data: string }
+    expect(rebuilt.ok).toBe(false)
+    const parsed = JSON.parse(rebuilt.data) as { code: string; signals: string[]; hints: string[] }
+    expect(parsed).toMatchObject({
+      code: 'SHELL_DIALECT_MISMATCH',
+      signals: ['cmd-exe-chain'],
+      hints: ['把 where.exe a; where.exe b 改写为 Get-Command a; Get-Command b']
+    })
+  })
   it('9: marks missing result as synthetic error placeholder', () => {
     const block = buildToolResultBlock(toolCall({ id: 't1' }))
     expect(block.content).toBe(SYNTHETIC_TOOL_RESULT_PLACEHOLDER)
