@@ -216,7 +216,7 @@ describe('main v33 schema compatibility', () => {
     expect(db.prepare("SELECT fixed_work_dir FROM sessions WHERE id='main-v33-session'").get())
       .toEqual({ fixed_work_dir: '/tmp/work' })
     expect((db.prepare('PRAGMA table_info(turns)').all() as Array<{ name: string }>).map(({ name }) => name))
-      .toEqual(['turn_id', 'retry_of_message_id', 'retry_of_invocation_id'])
+      .toEqual(['turn_id', 'retry_of_message_id', 'retry_of_invocation_id', 'track_id'])
     expect((db.prepare('PRAGMA table_info(continuation_intents)').all() as Array<{ name: string }>).map(({ name }) => name))
       .toContain('continuation_context_json')
     expect(db.prepare("SELECT raw_text,continuation_context_json FROM continuation_intents WHERE request_id='main-v33-request'").get())

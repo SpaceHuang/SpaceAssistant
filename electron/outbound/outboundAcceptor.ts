@@ -295,7 +295,7 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
       deps.notifyEnqueued?.(sessionId)
       return { accepted: 'queued' as const, sessionId, queued: { requestId: queued.receipt.requestId, messageId: queued.persisted.message.id, sequence: queued.persisted.sequence } }
     }
-    if (intent.requestId && intent.sessionId && /^(继续|继续执行|接着做|接着刚才的修改|继续上次的任务|接着|刚才|上次)/u.test(intent.text.trim())) {
+    if (intent.requestId && intent.sessionId?.trim() && /^(继续|继续执行|接着做|接着刚才的修改|继续上次的任务|接着|刚才|上次)/u.test(intent.text.trim())) {
       continuationRouting = true
       const fingerprint = createHash('sha256').update(JSON.stringify({ sessionId: intent.sessionId, text: intent.text, attachments: intent.attachments ?? null })).digest('hex')
       const prior = sessionExecution.readContinuationIntent({ requestId: intent.requestId, sessionId: intent.sessionId })
@@ -321,7 +321,7 @@ export function createOutboundAcceptor(deps: OutboundAcceptorDeps) {
         const now = Date.now()
         const exact = ['继续', '继续执行', '接着做', '接着刚才的修改', '继续上次的任务'].includes(intent.text.trim()) && !intent.attachments?.length
         const activeTurnIds = new Set(deps.turnRuntime.listActive(intent.sessionId).map((turn) => turn.turnId))
-        const sourceInspection = sessionQueries.continuationSources.inspect({ sessionId: intent.sessionId, activeTurnIds: [...activeTurnIds], ...(intent.sourceSelection?.sourceAssistantMessageId ? { selectedAssistantMessageId: intent.sourceSelection.sourceAssistantMessageId } : {}) })
+        const sourceInspection = sessionQueries.continuationSources.read({ sessionId: intent.sessionId, activeTurnIds: [...activeTurnIds], ...(intent.sourceSelection?.sourceAssistantMessageId ? { selectedAssistantMessageId: intent.sourceSelection.sourceAssistantMessageId } : {}) })
         if (sourceInspection.kind === 'unavailable') throw new Error(sourceInspection.reason)
         const failedCandidates = sourceInspection.failedCandidates.map((candidate) => ({ ...candidate, invocationId: candidate.source.invocationId, turnId: candidate.source.turnId, sourceRef: candidate.source, snapshot: candidate.snapshot }))
         let source = sourceInspection.selected.kind === 'found'

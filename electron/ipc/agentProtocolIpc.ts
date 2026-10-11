@@ -127,7 +127,7 @@ export async function continueAgentFromCheckpoint(input: {
     if (JSON.stringify(currentSnapshot) !== JSON.stringify(frozenSnapshot)) {
       return { accepted: false, reason: 'CONTINUATION_SAFETY_SNAPSHOT_CHANGED' }
     }
-    const inspection = storage.queries.continuationSources.inspect({ sessionId: payload.sessionId, activeTurnIds: turnRuntime.listActive(payload.sessionId).map((turn) => turn.turnId), selectedAssistantMessageId: sourceTurn.assistantMessageId })
+    const inspection = storage.queries.continuationSources.read({ sessionId: payload.sessionId, activeTurnIds: turnRuntime.listActive(payload.sessionId).map((turn) => turn.turnId), selectedAssistantMessageId: sourceTurn.assistantMessageId })
     if (inspection.kind !== 'available' || inspection.selected.kind !== 'found' || inspection.selected.candidate.source.turnId !== payload.sourceTurnId) {
       return { accepted: false, reason: 'CONTINUATION_SOURCE_IDENTITY_MISMATCH' }
     }

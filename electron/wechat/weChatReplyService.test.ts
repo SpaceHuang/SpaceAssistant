@@ -17,4 +17,5 @@ describe('weChatReplyService', () => {
     const send = async (userId: string, content: string) => { expect(userId).toBe('user-1'); expect(content).toContain('完整过程请查看 SpaceAssistant 桌面会话') }
     await sendWeChatTextToUser({ send } as never, ' user-1 ', 'result')
   })
+
 })

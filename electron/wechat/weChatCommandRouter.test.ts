@@ -10,7 +10,7 @@ import fs from 'fs/promises'
 import fsSync from 'fs'
 import os from 'os'
 import path from 'path'
-import { openDatabase, createSession, getConfigValue, setConfigValue, getPersistedTurn, getSession, getTurnByRequestId, appendMessage as mockedAppendMessage } from '../database'
+import { openDatabase, createSession, getConfigValue, setConfigValue, getPersistedTurn, getSession, getTurnByRequestId, createPersistedTurn, appendMessage as mockedAppendMessage } from '../database'
 import { appendMessage as appendMessageOperation } from '../database/operations'
 import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
@@ -25,7 +25,7 @@ import { listQueuedUserMessages } from '../database/operations'
 import { listWakeEvents } from '../database/wakeEvents'
 import { buildImQueueScope } from '../../src/shared/queueScope'
 import { getDbConnection } from '../database/sqliteStore'
-import { appendImInboxMessageWithWakeEvent, listImInboxMessages } from '../database/imInbox'
+import { appendImInboxMessageWithWakeEvent, listImInboxMessages, parkImInboxMessageForClarification } from '../database/imInbox'
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 import { createDeferredApprovalNotificationDelivery } from '../remote/deferredApprovalNotificationDelivery'
@@ -34,8 +34,13 @@ import { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeSto
 import { createDeferredExecutionResultStore } from '../confirmation/deferredExecutionResultStore'
 import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
 import { acceptTurnContext } from '../database/acceptedTurnStorage'
+import { attributeAndPersistRemoteMessage } from '../remote/remoteTrackAttributionService'
+import { appendRemoteTrackEvent, createRemoteTrack, mapRemoteTrackMessage } from '../database/remoteTrackStore'
+import { formatClarificationHandle } from '../remote/clarificationHandle'
+import { startClarificationSendAttempt, finishClarificationSendAttempt } from '../database/clarificationStore'
 
 vi.mock('../secureApiKey', () => ({ isSecretStorageAvailable: vi.fn(() => true), encryptSecret: (value: string) => `enc:${value}`, decryptSecret: (value: string) => value.replace(/^enc:/, '') }))
+vi.mock('../anthropicClientFactory', () => ({ createAnthropicClient: () => ({ messages: { create: vi.fn(async () => ({ content: [{ type: 'text', text: '{"scores":[]}' }] })) } }) }))
 
 const mockRunAgent = vi.fn()
 const mockResolveSession = vi.fn()
@@ -182,7 +187,7 @@ describe('WeChatCommandRouter', () => {
     db = openDatabase(dbPath)
     seedLlmConfig(db)
     closeDb = () => db.close()
-    const session = createSession(db, { name: 'WeChat Session' })
+    const session = createSession(db, { name: 'WeChat Session', metadata: { source: 'wechat', wechatMeta: { userId: 'wx-user@test' } } })
     sessionId = session.id
     mockResolveSession.mockResolvedValue({ sessionId, isNew: true })
 
@@ -208,6 +213,32 @@ describe('WeChatCommandRouter', () => {
     expect(reply).toHaveBeenCalled()
   })
 
+  it('consumes clarification control text before Agent routing and invokes only the resolver', async () => {
+    const resolve = vi.fn(async () => ({ kind: 'resolved' as const, trackId: 'track-1', workId: 'work-1' }))
+    ;(router as unknown as { deps: { handleClarificationReply?: typeof resolve } }).deps.handleClarificationReply = resolve
+    await router.handleSdkInbound(makeIncomingMessage({ text: '选择 ABCD-EFGH-JK345 2', raw: {
+      from_user_id: 'wx-user@test', to_user_id: 'bot', client_id: 'clarification-reply-1', create_time_ms: Date.now(),
+      message_type: 1, message_state: 2, context_token: 'ctx', item_list: []
+    } as never }))
+    expect(resolve).toHaveBeenCalledWith(expect.objectContaining({
+      channel: 'wechat', identityKey: 'wx-user@test', ownerId: 'wx-user@test', replyMessageId: expect.any(String),
+      handle: 'ABCDEFGHJK345', option: 2
+    }))
+    expect(mockRunAgent).not.toHaveBeenCalled()
+    expect(reply).toHaveBeenCalledWith(expect.anything(), '已收到选择，正在继续处理。')
+  })
+
+  it('does not send malformed clarification control syntax to the Agent', async () => {
+    await router.handleSdkInbound(makeIncomingMessage({ text: '选择 ABCD 1', raw: {
+      from_user_id: 'wx-user@test', to_user_id: 'bot', client_id: 'clarification-malformed-diagnostic', create_time_ms: Date.now(),
+      message_type: 1, message_state: 2, context_token: 'ctx', item_list: []
+    } as never }))
+    expect(mockRunAgent).not.toHaveBeenCalled()
+    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('澄清回复格式无效'))
+    expect(getDbConnection(db).prepare('SELECT channel,platform_message_id,event_kind,reason_code FROM remote_track_diagnostic_events').get())
+      .toEqual({ channel: 'wechat', platform_message_id: 'clarification-malformed-diagnostic', event_kind: 'clarification.reply', reason_code: 'invalid' })
+  })
+
   it('recovers a persisted WeChat inbox wake event through the original turn execution path', async () => {
     const queueScope = buildImQueueScope('wechat', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
     const session = getSession(db, sessionId)!
@@ -227,16 +258,105 @@ describe('WeChatCommandRouter', () => {
     await dispatcher.dispatchSession(sessionId)
     expect(mockRunAgent).toHaveBeenCalledTimes(2)
     expect(mockRunAgent.mock.calls[0]?.[0]).toMatchObject({ userMessage: '重启后恢复的消息', userId: 'wx-user@test' })
-    const firstWakeArgs = mockRunAgent.mock.calls[0]?.[0] as { replyMessageId: string; remoteContext: { contextToken: string; turnId?: string } }
+    const firstWakeArgs = mockRunAgent.mock.calls[0]?.[0] as { replyMessageId: string; inboundRaw: { _contextToken?: string }; remoteContext: { contextToken: string; turnId?: string } }
     expect(firstWakeArgs.replyMessageId).toBe('replay-wechat-1')
+    expect(firstWakeArgs.inboundRaw._contextToken).toBe('context-replay')
     expect(firstWakeArgs.remoteContext.contextToken).toBe('context-replay')
     expect(firstWakeArgs.remoteContext.turnId).toBe('wake-wechat-1')
     expect(createDeferredConfirmationAdapter).toHaveBeenCalledTimes(2)
-    expect(mockRunAgent.mock.calls[1]?.[0]).toMatchObject({ userMessage: '第二条恢复消息', replyMessageId: 'replay-wechat-2', remoteContext: { contextToken: 'context-replay-2' } })
+    expect(mockRunAgent.mock.calls[1]?.[0]).toMatchObject({ userMessage: '第二条恢复消息', replyMessageId: 'replay-wechat-2', inboundRaw: { _contextToken: 'context-replay-2' }, remoteContext: { contextToken: 'context-replay-2' } })
     expect(listWakeEvents(db, sessionId).map(({ type, status }) => ({ type, status }))).toEqual([
       { type: 'im-inbound', status: 'acked' }, { type: 'im-inbound', status: 'acked' }
     ])
     expect(getTurnByRequestId(db, sessionId, `wake:${persisted.eventId}`)).toMatchObject({ requestId: `wake:${persisted.eventId}`, userMessageId: persisted.messageId, outcome: 'completed' })
+    await dispatcher.dispose()
+  })
+
+  it('wake replay rehydrates and validates the persisted Track before building the turn view', async () => {
+    const queueScope = buildImQueueScope('wechat', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    const session = getSession(db, sessionId)!
+    getDbConnection(db).prepare('UPDATE sessions SET metadata=? WHERE id=?').run(JSON.stringify({ ...session.metadata, source: 'wechat',
+      wechatMeta: { userId: 'wx-user@test', lastContextToken: 'track-wake-context' } }), sessionId)
+    const attribution = await attributeAndPersistRemoteMessage(db, { channel: 'wechat', identityKey: 'wx-user@test', ownerId: 'wx-user@test',
+      authorizationEpoch: 1, platformMessageId: 'track-wake-platform', text: 'persisted track task', now: 1, originSessionId: sessionId }, { classify: vi.fn() })
+    if (attribution.kind !== 'attributed') throw new Error('expected a Track for zero candidates')
+    const inbox = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope,
+      channelMessageId: 'track-wake-platform', content: 'persisted track task', contextToken: 'track-wake-context',
+      trackId: attribution.context.trackId, trackEventId: attribution.context.attributionEventId })
+    let turnSequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `track-wake-${++turnSequence}` } })
+    router = makeRouter(undefined)
+    ;(router as unknown as { deps: { turnRuntime?: TurnRuntime } }).deps.turnRuntime = runtime
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
+
+    await dispatcher.dispatchSession(sessionId)
+
+    const [agentArgs] = mockRunAgent.mock.calls[0] as [{ remoteContext: { trackContext?: { trackId: string }; trackModelInputView?: { completeness: string }; turnId: string } }]
+    expect(agentArgs.remoteContext.trackContext?.trackId).toBe(attribution.context.trackId)
+    expect(agentArgs.remoteContext.trackModelInputView).toMatchObject({ completeness: 'complete' })
+    expect(getDbConnection(db).prepare('SELECT track_id FROM turns WHERE turn_id=?').get(agentArgs.remoteContext.turnId)).toEqual({ track_id: attribution.context.trackId })
+    expect(getTurnByRequestId(db, sessionId, `wake:${inbox.eventId}`)).toMatchObject({ state: 'terminal', outcome: 'completed' })
+    await dispatcher.dispose()
+  })
+
+  it('acks an already terminal wake before looking for its consumed inbox message', async () => {
+    const queueScope = buildImQueueScope('wechat', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    const session = getSession(db, sessionId)!
+    const metadata = { ...session.metadata, source: 'wechat', wechatMeta: { userId: 'wx-user@test', lastContextToken: 'terminal-context' } }
+    getDbConnection(db).prepare('UPDATE sessions SET metadata=? WHERE id=?').run(JSON.stringify(metadata), sessionId)
+    const completed = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope,
+      channelMessageId: 'terminal-wechat-message', content: '已完成但唤醒未结算', contextToken: 'terminal-context' })
+    let turnSequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `terminal-wechat-${++turnSequence}` } })
+    router = makeRouter(undefined)
+    ;(router as unknown as { deps: { turnRuntime?: TurnRuntime } }).deps.turnRuntime = runtime
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
+
+    await dispatcher.dispatchSession(sessionId)
+    expect(getTurnByRequestId(db, sessionId, `wake:${completed.eventId}`)).toMatchObject({ state: 'terminal', outcome: 'completed' })
+
+    // Simulate a crash after the turn committed and consumed the queue message, but before
+    // the dispatcher finalized the durable wake event.
+    getDbConnection(db).prepare("UPDATE wake_events SET status='pending',claimed_by=NULL,run_id=NULL,lease_expires_at=NULL WHERE event_id=?")
+      .run(completed.eventId)
+    getDbConnection(db).prepare("UPDATE messages SET status='sent' WHERE id=?").run(completed.messageId)
+    const next = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope,
+      channelMessageId: 'next-wechat-message', content: '下一条消息应继续处理', contextToken: 'next-context' })
+
+    await dispatcher.dispatchSession(sessionId)
+
+    expect(getTurnByRequestId(db, sessionId, `wake:${next.eventId}`)).toMatchObject({ state: 'terminal', outcome: 'completed' })
+    expect(listWakeEvents(db, sessionId).map(({ eventId, status }) => ({ eventId, status }))).toEqual([
+      { eventId: completed.eventId, status: 'acked' },
+      { eventId: next.eventId, status: 'acked' }
+    ])
+    await dispatcher.dispose()
+  })
+
+  it('recovers a nonterminal orphan turn before it can block later WeChat wake events', async () => {
+    const queueScope = buildImQueueScope('wechat', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    const session = getSession(db, sessionId)!
+    const metadata = { ...session.metadata, source: 'wechat', wechatMeta: { userId: 'wx-user@test', lastContextToken: 'orphan-context' } }
+    getDbConnection(db).prepare('UPDATE sessions SET metadata=? WHERE id=?').run(JSON.stringify(metadata), sessionId)
+    const orphan = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope,
+      channelMessageId: 'orphan-wechat-message', content: '上次中断的指令', contextToken: 'orphan-context' })
+    let turnSequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `orphan-wechat-turn-${++turnSequence}` } })
+    appendMessageOperation(db, { id: 'orphan-wechat-assistant', sessionId, role: 'assistant', content: '', timestamp: Date.now(), status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'orphan-wechat-turn-existing', requestId: `wake:${orphan.eventId}`, sessionId,
+      assistantMessageId: 'orphan-wechat-assistant', userMessageId: orphan.messageId, state: 'prepared' })
+    getDbConnection(db).prepare("UPDATE messages SET status='sent' WHERE id=?").run(orphan.messageId)
+    const next = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope,
+      channelMessageId: 'after-orphan-wechat-message', content: '继续处理下一条', contextToken: 'next-context' })
+    router = makeRouter(undefined)
+    ;(router as unknown as { deps: { turnRuntime?: TurnRuntime } }).deps.turnRuntime = runtime
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
+
+    await dispatcher.dispatchSession(sessionId)
+
+    expect(getTurnByRequestId(db, sessionId, `wake:${orphan.eventId}`)).toMatchObject({ state: 'terminal', outcome: 'recovered' })
+    expect(getTurnByRequestId(db, sessionId, `wake:${next.eventId}`), JSON.stringify({ events: listWakeEvents(db, sessionId), retry: getDbConnection(db).prepare('SELECT * FROM wake_event_retry_state').all() })).toMatchObject({ state: 'terminal', outcome: 'completed' })
+    expect(listWakeEvents(db, sessionId).map(({ status }) => status)).toEqual(['acked', 'acked'])
     await dispatcher.dispose()
   })
 
@@ -263,7 +383,7 @@ describe('WeChatCommandRouter', () => {
     await dispatcher.dispose()
   })
 
-  it('consumes a persisted deferred completion wake and resumes the original WeChat task turn', async () => {
+  it('recovers an unfinished deferred completion turn and does not replay it', async () => {
     mockedAppendMessage.mockImplementation((_db, message) => appendMessageOperation(db, message as never))
     const session = getSession(db, sessionId)!
     const metadata = { ...session.metadata, source: 'wechat', wechatMeta: { userId: 'wx-user@test', lastContextToken: 'completion-context' } }
@@ -309,22 +429,21 @@ describe('WeChatCommandRouter', () => {
     const resultStore = createDeferredExecutionResultStore(db)
     resultStore.beginDispatch({ todoId: todo.todoId, invocationId: todo.invocationId, dispatchKey: 'wechat-completion-dispatch' })
     resultStore.commitResult(todo.todoId, { kind: 'completed', outputRef: `deferred-result:${todo.invocationId}`, value: { ok: true, marker: 'REVIEW_TOOL_RESULT_WECHAT' } })
-    mockRunAgent.mockResolvedValueOnce({ summary: '', pendingConfirm: true, parked: true, ok: true })
+    const completionEvent = listWakeEvents(db, sessionId).find(({ type }) => type === 'safety-recovery')!
+    const completionRequestId = `completion:${completionEvent.eventId}`
+    runtime.prepare({ mode: 'reuse-user', requestId: completionRequestId, sessionId, userMessageId: persisted.messageId,
+      excludeMessageIds: [], config: {} })
+    const recoveryNoticeSend = vi.fn(async () => undefined)
+    ;(router as unknown as { deps: { botService: { getRawBot: () => { send: typeof recoveryNoticeSend } } } }).deps.botService.getRawBot = () => ({ send: recoveryNoticeSend })
     await dispatcher.dispatchSession(sessionId)
 
-    expect(mockRunAgent).toHaveBeenCalledTimes(2)
-    expect(mockRunAgent.mock.calls[1]?.[0]).toMatchObject({
-      acceptedTurn: { config: { model: TEST_MODEL_NAME, llmServiceId: TEST_SERVICE_ID, thinkingEffort: 'low' } }
-    })
-    expect(mockRunAgent.mock.calls[1]?.[0]).toMatchObject({ userMessage: '发送确认后的报告', replyMessageId: 'wechat-completion-source',
-      remoteContext: { contextToken: 'completion-context', deferredContinuation: { todoId: todo.todoId, invocationId: todo.invocationId,
-        workflowId: 'workflow', taskId: 'task', stepId: 'publish', planRevision: 1, checkpointId: 'wechat-completion-checkpoint',
-        dispatchKey: 'wechat-completion-dispatch', outputRef: `deferred-result:${todo.invocationId}`,
-        result: { kind: 'completed', outputRef: `deferred-result:${todo.invocationId}`, value: { ok: true, marker: 'REVIEW_TOOL_RESULT_WECHAT' } } } } })
+    expect(mockRunAgent).toHaveBeenCalledTimes(1)
+    expect(recoveryNoticeSend).toHaveBeenCalledWith('wx-user@test', expect.stringContaining('原操作结果已保存'))
     expect(resultStore.getByTodo(todo.todoId)?.state).toBe('delivered')
     expect(listWakeEvents(db, sessionId).every(({ status }) => status === 'acked')).toBe(true)
-    expect(getTurnByRequestId(db, sessionId, `completion:${listWakeEvents(db, sessionId).find(({ type }) => type === 'safety-recovery')!.eventId}`))
-      .toMatchObject({ state: 'terminal', outcome: 'parked' })
+    expect(getTurnByRequestId(db, sessionId, completionRequestId)).toMatchObject({ state: 'terminal', outcome: 'recovered' })
+    expect(getDbConnection(db).prepare("SELECT state FROM im_lifecycle_outbox WHERE event_id=?").get(`deferred-completion-interrupted:${todo.todoId}`))
+      .toEqual({ state: 'delivered' })
     await dispatcher.dispose()
   })
 
@@ -349,7 +468,7 @@ describe('WeChatCommandRouter', () => {
     expect(listWakeEvents(db, sessionId)[0]?.payloadRef.kind).toBe('im-inbox-message')
     const queueScope = buildImQueueScope('wechat', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
     expect(listImInboxMessages(db, { queueScope }).map(({ content }) => content)).toContain('批准 07')
-    expect(dispatchSession).toHaveBeenCalledWith(sessionId)
+    expect(dispatchSession).toHaveBeenCalledWith(sessionId, { retryExhausted: true })
   })
 
   it('retries a real undelivered approval notification after owner authentication', async () => {
@@ -443,6 +562,306 @@ describe('WeChatCommandRouter', () => {
     expect(persisted).toMatchObject({
       requestId: agentArgs.requestId, sessionId, state: 'terminal', outcome: 'completed'
     })
+  })
+
+  it('Track 路由将新消息归属、accepted turn 与模型输入视图绑定后再调用 Agent', async () => {
+    const dispatchSession = vi.fn(async () => undefined)
+    for (const [key, value] of Object.entries({ remoteTrackPersist: 'true', remoteTrackRolloutChannels: '["wechat"]', remoteTrackExecution: 'true',
+      remoteTrackRecovery: 'true', remoteTrackScopedModelInput: 'true', remoteTrackClarification: 'true' })) setConfigValue(db, key, value)
+    let turnSequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 5, id: () => `track-direct-${++turnSequence}` } })
+    router = new WeChatCommandRouter({
+      db, sessionStorage: createSqliteSessionStorage(db), turnRuntime: runtime,
+      botService: { getBot: () => ({ reply, sendTyping: vi.fn(), stopTyping: vi.fn() }), getRawBot: () => null } as never,
+      processedStore: processed, imChannel: new WeChatImChannel(), auditLogger: audit,
+      getWeChatConfig: () => ({ ...DEFAULT_WECHAT_CONFIG, enabled: true, remoteEnabled: true, loggedIn: true, remoteSenderAllowlist: ['wx-user@test'] }),
+      getAppConfig: () => ({ defaultModel: 'm1', maxParallelChatSessions: 3 }), getWorkDir: () => tmpDir,
+      workDirManager: { listProfiles: () => [], getActiveProfileId: () => 'p1', getActiveWorkDir: () => tmpDir, checkDirectoryWritable: () => ({ ok: true }) } as never,
+      getUserDataPath: () => tmpDir, getApiKey: async () => 'key', getBaseUrl: () => 'https://api.example.com',
+      getMainWebContents: () => ({ send: vi.fn() }) as never, getModel: () => 'm1', getToolsConfig: () => ({ deniedTools: [] }) as never,
+      wakeEventDispatcher: { dispatchSession } as never
+    })
+
+    await router.handleSdkInbound(makeIncomingMessage({ text: '新建一个研究任务', raw: { ...makeIncomingMessage().raw, client_id: 'track-direct-root' } }))
+
+    expect(mockRunAgent).not.toHaveBeenCalled()
+    expect(dispatchSession).toHaveBeenCalledWith(sessionId, { retryExhausted: true })
+    const context = getDbConnection(db).prepare(`SELECT context.track_id,context.track_event_id FROM im_inbox_message_context context
+      WHERE context.platform_message_id='track-direct-root'`).get() as { track_id: string; track_event_id: string }
+    expect(context.track_id).toBeTruthy()
+    expect(getDbConnection(db).prepare('SELECT track_id FROM remote_track_events WHERE event_id=?').get(context.track_event_id))
+      .toEqual({ track_id: context.track_id })
+    expect(getDbConnection(db).prepare('SELECT track_id FROM remote_track_message_map WHERE channel=? AND platform_message_id=?').get('wechat', 'track-direct-root'))
+      .toEqual({ track_id: context.track_id })
+    expect(listWakeEvents(db, sessionId)).toMatchObject([{ type: 'im-inbound', status: 'pending' }])
+  })
+
+  it('Track execution 未接入持久 wake consumer 时 fail closed，不创建 Track 或运行 Agent', async () => {
+    for (const [key, value] of Object.entries({ remoteTrackPersist: 'true', remoteTrackRolloutChannels: '["wechat"]', remoteTrackExecution: 'true',
+      remoteTrackRecovery: 'true', remoteTrackScopedModelInput: 'true', remoteTrackClarification: 'true' })) setConfigValue(db, key, value)
+    await router.handleSdkInbound(makeIncomingMessage({ text: '需要可靠执行的任务', raw: { ...makeIncomingMessage().raw, client_id: 'no-wake-track-root' } }))
+
+    expect(mockRunAgent).not.toHaveBeenCalled()
+    expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM remote_tracks WHERE root_message_id='no-wake-track-root'").get())
+      .toEqual({ count: 0 })
+    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('本次未执行'))
+  })
+
+  it('ambiguous Track 消息会原子暂存并发送带句柄的选项，而不会启动 Agent turn', async () => {
+    for (const [key, value] of Object.entries({ remoteTrackPersist: 'true', remoteTrackRolloutChannels: '["wechat"]', remoteTrackExecution: 'true', remoteTrackRecovery: 'true',
+      remoteTrackScopedModelInput: 'true', remoteTrackClarification: 'true' })) setConfigValue(db, key, value)
+    for (const [id, event, occurredAt] of [['clarify-track-a', 'clarify-root-a', 2], ['clarify-track-b', 'clarify-root-b', 1]] as const) {
+      createRemoteTrack(db, { trackId: id, eventId: event, idempotencyKey: `inbound:${id}`, channel: 'wechat', identityKey: 'wx-user@test',
+        ownerId: 'wx-user@test', authorizationEpoch: 1, rootMessageId: `${id}-platform`, originSessionId: sessionId, occurredAt })
+    }
+    router = makeRouter({ dispatchSession: vi.fn(async () => undefined) })
+    mockResolveSession.mockResolvedValue({ sessionId, isNew: false })
+    const raw = makeIncomingMessage({ text: '继续之前的研究', raw: { ...makeIncomingMessage().raw, client_id: 'ambiguous-wechat-input' } })
+    await router.handleSdkInbound(raw)
+
+    expect(mockRunAgent).not.toHaveBeenCalled()
+    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('选择 '))
+    const clarification = getDbConnection(db).prepare(`SELECT clarification_id,parked_input_ref,state,current_version FROM remote_clarifications
+      WHERE source_message_id='ambiguous-wechat-input'`).get() as { clarification_id: string; parked_input_ref: string; state: string; current_version: number }
+    expect(clarification).toMatchObject({ state: 'pending', current_version: 1 })
+    expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=?').get(clarification.parked_input_ref)).toEqual({ status: 'parked' })
+    expect(getDbConnection(db).prepare('SELECT state FROM remote_clarification_send_attempts WHERE clarification_id=?').get(clarification.clarification_id))
+      .toEqual({ state: 'send-fulfilled' })
+    expect(listWakeEvents(db, sessionId)).toEqual([])
+
+    const handle = getDbConnection(db).prepare('SELECT handle FROM remote_clarification_versions WHERE clarification_id=?').get(clarification.clarification_id) as { handle: string }
+    await router.handleSdkInbound(makeIncomingMessage({ text: '1', raw: { ...makeIncomingMessage().raw, client_id: 'legacy-clarification-option' } }))
+    expect(mockRunAgent).not.toHaveBeenCalled()
+    expect(getDbConnection(db).prepare('SELECT state FROM remote_clarifications WHERE clarification_id=?').get(clarification.clarification_id))
+      .toEqual({ state: 'pending' })
+    expect(getDbConnection(db).prepare("SELECT reason_code FROM remote_track_diagnostic_events WHERE platform_message_id='legacy-clarification-option'").get())
+      .toEqual({ reason_code: 'invalid' })
+    mockRunAgent.mockResolvedValue({ summary: 'continued', pendingConfirm: false, ok: true })
+    let turnSequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 5, id: () => `clarification-resume-${++turnSequence}` } })
+    ;(router as unknown as { deps: { turnRuntime?: TurnRuntime } }).deps.turnRuntime = runtime
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
+    router.setWakeEventDispatcher(dispatcher)
+    await router.handleSdkInbound(makeIncomingMessage({ text: `选择 ${formatClarificationHandle(handle.handle)} 1`, raw: {
+      ...makeIncomingMessage().raw, client_id: 'clarification-choice-message'
+    } }))
+    expect(mockRunAgent).toHaveBeenCalledTimes(1)
+    expect(mockRunAgent.mock.calls[0]?.[0]).toMatchObject({ userMessage: '继续之前的研究', remoteContext: { trackContext: { trackId: 'clarify-track-a' } } })
+    expect(getDbConnection(db).prepare('SELECT state FROM remote_clarifications WHERE clarification_id=?').get(clarification.clarification_id)).toEqual({ state: 'resolved' })
+    expect(getDbConnection(db).prepare('SELECT state FROM remote_track_work_queue WHERE clarification_id=?').get(clarification.clarification_id)).toEqual({ state: 'completed' })
+    expect(getDbConnection(db).prepare('SELECT state FROM remote_tracks WHERE track_id=?').get('clarify-track-a')).toEqual({ state: 'completed' })
+    expect(getDbConnection(db).prepare('SELECT session_id,request_id,turn_id,user_message_id,model_view_version FROM remote_track_work_queue WHERE clarification_id=?')
+      .get(clarification.clarification_id)).toMatchObject({ session_id: sessionId, request_id: expect.any(String),
+        turn_id: expect.any(String), user_message_id: clarification.parked_input_ref, model_view_version: expect.stringContaining('view-') })
+    expect(listWakeEvents(db, sessionId).map(({ status }) => status)).toEqual(['acked'])
+    await dispatcher.dispose()
+  })
+
+  it('周期恢复会终结已超时的停放输入，并通过持久 outbox 投递一次回执', async () => {
+    createRemoteTrack(db, { trackId: 'expired-track', eventId: 'expired-track-event', idempotencyKey: 'expired-track-root',
+      channel: 'wechat', identityKey: 'wx-user@test', ownerId: 'wx-user@test', authorizationEpoch: 1,
+      rootMessageId: 'expired-track-root-message', originSessionId: sessionId, occurredAt: 1 })
+    parkImInboxMessageForClarification(db, { sessionId, channel: 'wechat', queueScope: buildImQueueScope('wechat', sessionId),
+      channelMessageId: 'expired-platform-message', content: '原始请求', clarificationId: 'expired-clarification',
+      identityKey: 'wx-user@test', ownerId: 'wx-user@test', authorizationEpoch: 1, handle: 'ABCDEFGHJK345',
+      candidates: [{ trackId: 'expired-track', option: 1, label: '任务', stateAtIssue: 'open' }], expiresAt: 500, now: 100 })
+    const send = vi.fn(async () => undefined)
+    ;(router as unknown as { deps: { botService: { getRawBot: () => unknown } } }).deps.botService.getRawBot = () => ({ send })
+
+    await router.recoverClarificationLifecycle(500)
+
+    expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=(SELECT parked_input_ref FROM remote_clarifications WHERE clarification_id=?)')
+      .get('expired-clarification')).toEqual({ status: 'clarification-expired' })
+    expect(send).toHaveBeenCalledOnce()
+    expect(send.mock.calls[0]).toMatchObject(['wx-user@test', expect.stringContaining('原消息没有执行')])
+    expect(getDbConnection(db).prepare("SELECT state FROM im_lifecycle_outbox WHERE event_id='clarification-terminal:expired-clarification:expired'").get())
+      .toEqual({ state: 'delivered' })
+    await router.recoverClarificationLifecycle(501)
+    expect(send).toHaveBeenCalledOnce()
+  })
+
+  it('重启恢复会对发送结果未知的澄清重用原句柄重发提示', async () => {
+    const now = Date.now()
+    createRemoteTrack(db, { trackId: 'retry-track', eventId: 'retry-track-event', idempotencyKey: 'retry-track-root',
+      channel: 'wechat', identityKey: 'wx-user@test', ownerId: 'wx-user@test', authorizationEpoch: 1,
+      rootMessageId: 'retry-track-root-message', originSessionId: sessionId, occurredAt: 1 })
+    parkImInboxMessageForClarification(db, { sessionId, channel: 'wechat', queueScope: buildImQueueScope('wechat', sessionId),
+      channelMessageId: 'retry-platform-message', content: '继续原请求', clarificationId: 'retry-clarification',
+      identityKey: 'wx-user@test', ownerId: 'wx-user@test', authorizationEpoch: 1, handle: 'BCDEFGHJK3456',
+      candidates: [{ trackId: 'retry-track', option: 1, label: '原任务', stateAtIssue: 'open' }], expiresAt: now + 60_000, now: now - 120_000 })
+    startClarificationSendAttempt(db, { sendAttemptId: 'retry-attempt-1', clarificationId: 'retry-clarification', version: 1, startedAt: now - 110_000 })
+    finishClarificationSendAttempt(db, { sendAttemptId: 'retry-attempt-1', state: 'send-outcome-unknown', finishedAt: now - 100_000 })
+    const send = vi.fn(async () => undefined)
+    ;(router as unknown as { deps: { botService: { getRawBot: () => unknown } } }).deps.botService.getRawBot = () => ({ send })
+
+    await router.recoverClarificationLifecycle(now)
+
+    expect(send).toHaveBeenCalledOnce()
+    expect(send.mock.calls[0]).toMatchObject(['wx-user@test', expect.stringContaining('BCDE-FGHJ-K3456')])
+    expect(getDbConnection(db).prepare(`SELECT state FROM remote_clarification_send_attempts
+      WHERE clarification_id='retry-clarification' ORDER BY started_at DESC LIMIT 1`).get()).toEqual({ state: 'send-fulfilled' })
+    expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=(SELECT parked_input_ref FROM remote_clarifications WHERE clarification_id=?)')
+      .get('retry-clarification')).toEqual({ status: 'parked' })
+  })
+
+  it('重启恢复 prepared accepted turn 时沿用已接受的模型配置快照', async () => {
+    const session = getSession(db, sessionId)!
+    getDbConnection(db).prepare('UPDATE sessions SET metadata=? WHERE id=?').run(JSON.stringify({ ...session.metadata, source: 'wechat',
+      wechatMeta: { userId: 'wx-user@test', lastContextToken: 'prepared-recovery-context' } }), sessionId)
+    const queueScope = buildImQueueScope('wechat', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    const inbox = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope,
+      channelMessageId: 'prepared-recovery-platform-message', content: '恢复原 accepted turn', contextToken: 'prepared-recovery-context' })
+    const frozenConfig = { lane: 'wechat' as const, model: TEST_MODEL_NAME, llmServiceId: TEST_SERVICE_ID,
+      thinkingEffort: 'low' as const, maximumContextTrusted: true, enableThinking: false }
+    appendMessageOperation(db, { id: 'prepared-recovery-assistant', sessionId, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'prepared-recovery-turn', requestId: `wake:${inbox.eventId}`, sessionId,
+      userMessageId: inbox.messageId, assistantMessageId: 'prepared-recovery-assistant', state: 'prepared',
+      startToken: 'prepared-recovery-token', executionConfig: frozenConfig })
+    acceptTurnContext(db, createAcceptedTurn({ turnId: 'prepared-recovery-turn', requestId: `wake:${inbox.eventId}`, sessionId,
+      lane: 'wechat', startToken: 'prepared-recovery-token', currentUserMessageId: inbox.messageId, transcriptVersion: 0, config: frozenConfig }))
+    setConfigValue(db, 'config.wechat', JSON.stringify({ remoteModelSelectionMode: 'explicit', remoteDefaultModelId: 'missing-model', remoteThinkingEffort: 'low' }))
+    mockRunAgent.mockResolvedValue({ summary: 'prepared turn resumed', pendingConfirm: false, ok: true })
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 10, id: () => 'unexpected-second-turn' } })
+    router = makeRouter(undefined)
+    ;(router as unknown as { deps: { turnRuntime?: TurnRuntime } }).deps.turnRuntime = runtime
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
+
+    await dispatcher.dispatchSession(sessionId)
+
+    expect(mockRunAgent).toHaveBeenCalledOnce()
+    expect((mockRunAgent.mock.calls[0]?.[0] as { acceptedTurn: { turnId: string; config: { model: string; llmServiceId: string } } }).acceptedTurn)
+      .toMatchObject({ turnId: 'prepared-recovery-turn', config: { model: TEST_MODEL_NAME, llmServiceId: TEST_SERVICE_ID } })
+    expect(getTurnByRequestId(db, sessionId, `wake:${inbox.eventId}`)).toMatchObject({ state: 'terminal', outcome: 'completed' })
+    expect(listWakeEvents(db, sessionId)).toMatchObject([{ eventId: inbox.eventId, status: 'acked' }])
+    await dispatcher.dispose()
+  })
+
+  it('影子归属只记录脱敏观察，不改动微信既有 Agent 路由', async () => {
+    mockRunAgent.mockResolvedValue({ summary: 'legacy path', pendingConfirm: false, ok: true })
+    setConfigValue(db, 'remoteTrackPersist', 'true')
+    setConfigValue(db, 'remoteTrackShadowAttribution', 'true')
+    setConfigValue(db, 'remoteTrackRolloutChannels', '["wechat"]')
+    router = new WeChatCommandRouter({
+      db, sessionStorage: createSqliteSessionStorage(db), turnRuntime: testTurnRuntime,
+      botService: { getBot: () => ({ reply, sendTyping: vi.fn(), stopTyping: vi.fn() }), getRawBot: () => null } as never,
+      processedStore: processed, imChannel: new WeChatImChannel(), auditLogger: audit,
+      getWeChatConfig: () => ({ ...DEFAULT_WECHAT_CONFIG, enabled: true, remoteEnabled: true, loggedIn: true, remoteSenderAllowlist: ['wx-user@test'] }),
+      getAppConfig: () => ({ defaultModel: 'm1', maxParallelChatSessions: 3 }), getWorkDir: () => tmpDir,
+      workDirManager: { listProfiles: () => [], getActiveProfileId: () => 'p1', getActiveWorkDir: () => tmpDir, checkDirectoryWritable: () => ({ ok: true }) } as never,
+      getUserDataPath: () => tmpDir, getApiKey: async () => 'key', getBaseUrl: () => 'https://api.example.com',
+      getMainWebContents: () => ({ send: vi.fn() }) as never, getModel: () => 'm1', getToolsConfig: () => ({ deniedTools: [] }) as never
+    })
+
+    await router.handleSdkInbound(makeIncomingMessage({ text: 'legacy request', raw: { ...makeIncomingMessage().raw, client_id: 'shadow-wechat-1' } }))
+    await vi.waitFor(() => expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM remote_track_attribution_observations').get()).toEqual({ count: 1 }))
+
+    expect(mockRunAgent).toHaveBeenCalledTimes(1)
+    expect(mockRunAgent.mock.calls[0]?.[0]).not.toHaveProperty('remoteContext.trackContext')
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM remote_tracks').get()).toEqual({ count: 0 })
+    expect(getDbConnection(db).prepare('SELECT decision_kind FROM remote_track_attribution_observations').get()).toEqual({ decision_kind: 'new-track' })
+  })
+
+  it('已有 Track 即使微信 session idle resolver 给出新 session，也继续使用 Track 的 origin session', async () => {
+    mockRunAgent.mockResolvedValue({ summary: 'continued', pendingConfirm: false, ok: true })
+    const unusedSession = createSession(db, { name: 'unused-new-session', metadata: { source: 'wechat', wechatMeta: { userId: 'wx-user@test' } } })
+    mockResolveSession.mockResolvedValue({ sessionId: unusedSession.id, isNew: true })
+    for (const [key, value] of Object.entries({ remoteTrackPersist: 'true', remoteTrackRolloutChannels: '["wechat"]', remoteTrackExecution: 'true',
+      remoteTrackRecovery: 'true', remoteTrackScopedModelInput: 'true', remoteTrackClarification: 'true' })) setConfigValue(db, key, value)
+    createRemoteTrack(db, { trackId: 'origin-track', eventId: 'origin-root-event', idempotencyKey: 'origin-track-root', channel: 'wechat',
+      identityKey: 'wx-user@test', ownerId: 'wx-user@test', authorizationEpoch: 1, rootMessageId: 'origin-root-message',
+      originSessionId: sessionId, occurredAt: 1 })
+    appendRemoteTrackEvent(db, { eventId: 'origin-prompt-event', trackId: 'origin-track', eventKind: 'track.outbound.message',
+      idempotencyKey: 'origin-prompt-event', messageId: 'origin-prompt-message', occurredAt: 2 })
+    mapRemoteTrackMessage(db, { channel: 'wechat', platformMessageId: 'origin-prompt-message', trackId: 'origin-track',
+      eventId: 'origin-prompt-event', direction: 'outbound' })
+    let turnSequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 5, id: () => `origin-track-turn-${++turnSequence}` } })
+    const dispatchSession = vi.fn(async () => undefined)
+    router = new WeChatCommandRouter({
+      db, sessionStorage: createSqliteSessionStorage(db), turnRuntime: runtime,
+      botService: { getBot: () => ({ reply, sendTyping: vi.fn(), stopTyping: vi.fn() }), getRawBot: () => null } as never,
+      processedStore: processed, imChannel: new WeChatImChannel(), auditLogger: audit,
+      getWeChatConfig: () => ({ ...DEFAULT_WECHAT_CONFIG, enabled: true, remoteEnabled: true, loggedIn: true, remoteSenderAllowlist: ['wx-user@test'] }),
+      getAppConfig: () => ({ defaultModel: 'm1', maxParallelChatSessions: 3 }), getWorkDir: () => tmpDir,
+      workDirManager: { listProfiles: () => [], getActiveProfileId: () => 'p1', getActiveWorkDir: () => tmpDir, checkDirectoryWritable: () => ({ ok: true }) } as never,
+      getUserDataPath: () => tmpDir, getApiKey: async () => 'key', getBaseUrl: () => 'https://api.example.com',
+      getMainWebContents: () => ({ send: vi.fn() }) as never, getModel: () => 'm1', getToolsConfig: () => ({ deniedTools: [] }) as never,
+      wakeEventDispatcher: { dispatchSession } as never
+    })
+
+    await router.handleInbound({ messageId: 'origin-track-follow-up', userId: 'wx-user@test', text: '补充研究条件', type: 'text',
+      timestamp: new Date().toISOString(), contextToken: 'ctx', quotedMessageId: 'origin-prompt-message' },
+    makeIncomingMessage({ text: '补充研究条件' }))
+
+    expect(mockRunAgent).not.toHaveBeenCalled()
+    expect(dispatchSession).toHaveBeenCalledWith(sessionId, { retryExhausted: true })
+    expect(listImInboxMessages(db, { queueScope: buildImQueueScope('wechat', sessionId), limit: 10 })).toContainEqual(expect.objectContaining({ content: '补充研究条件' }))
+    expect(mockResolveSession).not.toHaveBeenCalled()
+    expect(getSession(db, unusedSession.id)).toBeDefined()
+  })
+
+  it('在 transcript 准入拒绝时也将 prepared turn 结算失败，避免界面永久显示生成中', async () => {
+    getDbConnection(db).prepare("INSERT INTO session_transcript_checkpoints(session_id,version,last_turn_id,status,updated_at) VALUES(?,0,'uncertain-turn','commit_uncertain',1)").run(sessionId)
+    let turnSequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => Date.now(), id: () => `blocked-wechat-${++turnSequence}` } })
+    router = makeRouter(undefined)
+    ;(router as unknown as { deps: { turnRuntime?: TurnRuntime } }).deps.turnRuntime = runtime
+
+    await router.handleSdkInbound(makeIncomingMessage({ text: '这条请求应明确失败，而不是一直生成' }))
+
+    const turn = getDbConnection(db).prepare('SELECT turn_id,state,outcome,assistant_message_id FROM turns WHERE session_id=? ORDER BY created_at DESC LIMIT 1').get(sessionId) as
+      { turn_id: string; state: string; outcome: string | null; assistant_message_id: string }
+    const assistant = getDbConnection(db).prepare('SELECT status FROM messages WHERE id=?').get(turn.assistant_message_id)
+    expect(turn).toMatchObject({ state: 'terminal', outcome: 'failed' })
+    expect(assistant).toEqual({ status: 'failed' })
+    expect(mockRunAgent).not.toHaveBeenCalled()
+    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED'))
+  })
+
+  it('持久化微信 wake 遇到 transcript 未恢复时终结 turn 并告知用户本次未执行', async () => {
+    const queueScope = buildImQueueScope('wechat', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    const session = getSession(db, sessionId)!
+    const metadata = { ...session.metadata, source: 'wechat', wechatMeta: { userId: 'wx-user@test', lastContextToken: 'blocked-context' } }
+    getDbConnection(db).prepare('UPDATE sessions SET metadata=? WHERE id=?').run(JSON.stringify(metadata), sessionId)
+    const inbox = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope,
+      channelMessageId: 'blocked-transcript-message', content: '本次应明确失败', contextToken: 'blocked-context' })
+    getDbConnection(db).prepare("INSERT INTO session_transcript_checkpoints(session_id,version,last_turn_id,status,updated_at) VALUES(?,0,'uncertain-turn','commit_uncertain',1)").run(sessionId)
+    let turnSequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => Date.now(), id: () => `blocked-wake-${++turnSequence}` } })
+    router = makeRouter(undefined)
+    ;(router as unknown as { deps: { turnRuntime?: TurnRuntime } }).deps.turnRuntime = runtime
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
+
+    await dispatcher.dispatchSession(sessionId)
+
+    expect(getTurnByRequestId(db, sessionId, `wake:${inbox.eventId}`)).toMatchObject({ state: 'terminal', outcome: 'failed' })
+    expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=(SELECT assistant_message_id FROM turns WHERE request_id=?)')
+      .get(`wake:${inbox.eventId}`)).toEqual({ status: 'failed' })
+    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('本次请求尚未执行'))
+    expect(mockRunAgent).not.toHaveBeenCalled()
+    await dispatcher.dispose()
+  })
+
+  it('恢复已有 transcript 失败终态的 wake 时补发此前无法送出的确定性失败回执', async () => {
+    const queueScope = buildImQueueScope('wechat', sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    const session = getSession(db, sessionId)!
+    const metadata = { ...session.metadata, source: 'wechat', wechatMeta: { userId: 'wx-user@test', lastContextToken: 'blocked-context' } }
+    getDbConnection(db).prepare('UPDATE sessions SET metadata=? WHERE id=?').run(JSON.stringify(metadata), sessionId)
+    const inbox = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope,
+      channelMessageId: 'terminal-transcript-failure-message', content: '这条请求曾因历史状态异常失败', contextToken: 'blocked-context' })
+    appendMessageOperation(db, { id: 'failed-assistant-message', sessionId, role: 'assistant', content: '', timestamp: Date.now(), status: 'failed' })
+    createPersistedTurn(db, { turnId: 'terminal-transcript-failure-turn', requestId: `wake:${inbox.eventId}`, sessionId,
+      userMessageId: inbox.messageId, assistantMessageId: 'failed-assistant-message', state: 'terminal', outcome: 'failed',
+      error: { code: 'source-failed', message: 'SESSION_TRANSCRIPT_RECONCILIATION_REQUIRED' } })
+    router = makeRouter()
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
+
+    await dispatcher.dispatchSession(sessionId, { retryExhausted: true })
+
+    expect(reply).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('本次请求尚未执行'))
+    expect(mockRunAgent).not.toHaveBeenCalled()
+    expect(listWakeEvents(db, sessionId).find(({ eventId }) => eventId === inbox.eventId)?.status).toBe('acked')
+    await dispatcher.dispose()
   })
 
   it('confirm-requested 进入 Core，并保留 WeChat pending-confirm 出站结果', async () => {

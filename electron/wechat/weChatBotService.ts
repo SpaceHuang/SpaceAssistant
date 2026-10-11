@@ -7,7 +7,9 @@ import type {
   WeChatSdkDetectResult
 } from '../../src/shared/wechatTypes'
 import type { WeChatReplyBot } from './weChatReplyService'
+import { WeChatConfirmationPromptAdapter } from './weChatConfirmationPromptAdapter'
 import { logWeChatCliEvent } from './weChatCliLogger'
+import { contentHash } from '../remote/imCliLogFields'
 
 type IncomingHandler = (msg: IncomingMessage) => void | Promise<void>
 
@@ -34,6 +36,7 @@ export async function detectWeChatSdk(): Promise<WeChatSdkDetectResult> {
 
 export class WeChatBotService {
   private bot: WeChatBot | null = null
+  private confirmationPromptAdapters = new WeakMap<WeChatBot, WeChatConfirmationPromptAdapter>()
   private pollState: WeChatPollState = 'stopped'
   private lastError?: string
   private processedCount = 0
@@ -68,10 +71,39 @@ export class WeChatBotService {
 
   getBot(): WeChatReplyBot | null {
     if (!this.bot) return null
+    const bot = this.bot
+    let confirmationAdapter = this.confirmationPromptAdapters.get(bot)
+    if (!confirmationAdapter) {
+      confirmationAdapter = new WeChatConfirmationPromptAdapter(bot, {
+        onSettled: (result, { clientId, sendResponseKeys, sendResponseMessageIdPresent, echoedMessageIdPresent }) => {
+          if (result.kind === 'cancelled') return
+          logWeChatCliEvent(result.kind === 'sent' ? 'info' : 'warn', 'wechat.confirm.prompt_delivery_settled', {
+            sendCall: result.sendCall,
+            delivery: result.delivery,
+            clientIdHash: contentHash(clientId),
+            sendResponseKeys,
+            sendResponseMessageIdPresent,
+            echoedMessageIdPresent,
+            ...(result.kind === 'sent' ? { bindingKind: result.binding.kind } : {}),
+            ...(result.kind === 'binding-unavailable' ? { errorCategory: result.errorCategory } : {}),
+            ...(result.kind === 'send-rejected' ? { errorCategory: 'send-rejected' } : {}),
+            ...(result.kind === 'timed-out' ? { errorCategory: 'send-outcome-pending' } : {})
+          })
+        },
+        onEcho: ({ clientId, messageId }) => logWeChatCliEvent('info', 'wechat.confirm.outbound_echo_bound', {
+          clientIdHash: contentHash(clientId), messageIdHash: contentHash(messageId)
+        })
+      })
+      const rawPoller = (bot as unknown as { poller?: { on?: (event: string, listener: (messages: unknown[]) => void) => void } }).poller
+      rawPoller?.on?.('messages', (messages) => confirmationAdapter!.observeWireMessages(messages))
+      this.confirmationPromptAdapters.set(bot, confirmationAdapter)
+    }
+    const sendConfirmationPrompt = (userId: string, content: string, signal?: AbortSignal) => confirmationAdapter!.send(userId, content, signal)
     return {
-      reply: (msg, content) => this.bot!.reply(msg as IncomingMessage, content as never),
-      sendTyping: (userId) => this.bot!.sendTyping(userId),
-      stopTyping: (userId) => this.bot!.stopTyping(userId)
+      reply: (msg, content) => bot.reply(msg as IncomingMessage, content as never),
+      sendToUser: sendConfirmationPrompt,
+      sendTyping: (userId) => bot.sendTyping(userId),
+      stopTyping: (userId) => bot.stopTyping(userId)
     }
   }
 
@@ -258,15 +290,46 @@ export class WeChatBotService {
       return this.getStatus()
     }
     try {
-      await bot.start()
-      this.pollState = 'polling'
-      this.deps.onReachabilityChange?.(true)
-      this.startedAt = this.startedAt ?? Date.now()
-      this.lastError = undefined
-      logWeChatCliEvent('info', 'wechat.poll.started', {
-        processedCount: this.processedCount,
-        startedAt: this.startedAt
+      let startupSettled = false
+      let resolveStarted!: () => void
+      let rejectStarted!: (error: unknown) => void
+      const pollStarted = new Promise<void>((resolve, reject) => {
+        resolveStarted = resolve
+        rejectStarted = reject
       })
+      const onPollStarted = () => {
+        startupSettled = true
+        bot.off('poll:start', onPollStarted)
+        resolveStarted()
+      }
+      bot.once('poll:start', onPollStarted)
+      void bot.start().catch((error: unknown) => {
+        const wasStarted = startupSettled
+        if (!startupSettled) {
+          startupSettled = true
+          bot.off('poll:start', onPollStarted)
+          rejectStarted(error)
+          return
+        }
+        this.lastError = error instanceof Error ? error.message : String(error)
+        if (this.pollState !== 'stopped') this.pollState = 'error'
+        this.deps.onReachabilityChange?.(false)
+        logWeChatCliEvent('error', wasStarted ? 'wechat.poll.error' : 'wechat.poll.start_failed', {
+          lastError: this.lastError,
+          pollState: this.pollState
+        })
+      })
+      await pollStarted
+      if (this.pollState === 'connecting') {
+        this.pollState = 'polling'
+        this.deps.onReachabilityChange?.(true)
+        this.startedAt = this.startedAt ?? Date.now()
+        this.lastError = undefined
+        logWeChatCliEvent('info', 'wechat.poll.started', {
+          processedCount: this.processedCount,
+          startedAt: this.startedAt
+        })
+      }
     } catch (e) {
       this.lastError = e instanceof Error ? e.message : String(e)
       this.pollState = 'error'
@@ -277,6 +340,10 @@ export class WeChatBotService {
   }
 
   async stopPoll(): Promise<WeChatConnectionStatus> {
+    if (this.bot) {
+      this.confirmationPromptAdapters.get(this.bot)?.close()
+      this.confirmationPromptAdapters.delete(this.bot)
+    }
     if (this.bot) {
       await this.bot.stop()
     }

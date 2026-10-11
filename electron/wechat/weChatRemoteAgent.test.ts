@@ -17,6 +17,7 @@ import { listPersistedTurns } from '../database/operations'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, getSessionEventSink, readSessionEvents, SessionEventWriter } from '../sessionEvents'
 import { ImChannel } from '../confirmation/imChannel'
+import { createImChannelForTest } from '../confirmation/imChannelTestUtils'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { readFileExecutor } from '../tools/builtinExecutors'
 import { writeFileExecutor } from '../tools/builtinExecutors'
@@ -364,7 +365,7 @@ describe('runWeChatRemoteAgent', () => {
     const session = createSession(args.db, { name: `wechat-reply-${termination}-before-claim`, model: SUPPORTED_ANTHROPIC_MODEL })
     const requestId = args.requestId
     let channel!: ImChannel
-    channel = new ImChannel({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => channel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: `wechat-reply-${termination}-approved` }
@@ -1617,7 +1618,7 @@ describe('runWeChatRemoteAgent', () => {
     const args = baseCtx(() => null)
     const session = createSession(args.db, { name: 'wechat-hosted-run-script', model: SUPPORTED_ANTHROPIC_MODEL })
     let channel!: ImChannel
-    channel = new ImChannel({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => channel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: 'wechat-run-script-approved' }
@@ -1695,7 +1696,7 @@ describe('runWeChatRemoteAgent', () => {
     const session = createSession(args.db, { name: 'wechat-run-script-config-drift', model: SUPPORTED_ANTHROPIC_MODEL })
     let toolsConfig: typeof DEFAULT_TOOLS_CONFIG = { ...DEFAULT_TOOLS_CONFIG }
     let channel!: ImChannel
-    channel = new ImChannel({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
       toolsConfig = { ...toolsConfig, scriptTimeout: toolsConfig.scriptTimeout + 1 }
       queueMicrotask(() => channel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
@@ -1833,7 +1834,7 @@ describe('runWeChatRemoteAgent', () => {
     const args = baseCtx(() => null)
     const session = createSession(args.db, { name: `wechat-run-script-${termination}-claim`, model: SUPPORTED_ANTHROPIC_MODEL })
     let channel!: ImChannel
-    channel = new ImChannel({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => channel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: `wechat-run-script-${termination}-approved` }
@@ -1943,7 +1944,7 @@ describe('runWeChatRemoteAgent', () => {
     const args = baseCtx(() => null)
     const session = createSession(args.db, { name: `wechat-run-script-postclaim-${termination}`, model: SUPPORTED_ANTHROPIC_MODEL })
     let channel!: ImChannel
-    channel = new ImChannel({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => channel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: `wechat-run-script-postclaim-${termination}-approved` }
@@ -2165,7 +2166,7 @@ describe('runWeChatRemoteAgent', () => {
     const args = baseCtx(() => null, db)
     const session = createSession(args.db, { name: 'wechat-hosted-ledger', model: SUPPORTED_ANTHROPIC_MODEL })
     let imChannel!: ImChannel
-    imChannel = new ImChannel({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
+    imChannel = createImChannelForTest({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => imChannel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: 'wechat-answer-1' }
@@ -2297,7 +2298,7 @@ describe('runWeChatRemoteAgent', () => {
     const args = baseCtx(() => null)
     const session = createSession(args.db, { name: 'wechat-hosted-read-claim-revoke', model: SUPPORTED_ANTHROPIC_MODEL })
     let imChannel!: ImChannel
-    imChannel = new ImChannel({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
+    imChannel = createImChannelForTest({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => imChannel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: 'wechat-read-revoke-approval' }
@@ -2387,7 +2388,7 @@ describe('runWeChatRemoteAgent', () => {
     const args = baseCtx(() => null)
     const session = createSession(args.db, { name: 'wechat-hosted-write-denied', model: SUPPORTED_ANTHROPIC_MODEL })
     let channel!: ImChannel
-    channel = new ImChannel({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => channel.tryResolveFromInbound(
         { kind: 'reject', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: 'wechat-reject-1' }
@@ -2455,7 +2456,7 @@ describe('runWeChatRemoteAgent', () => {
     const args = baseCtx(() => null)
     const session = createSession(args.db, { name: 'wechat-hosted-write-target-drift', model: SUPPORTED_ANTHROPIC_MODEL })
     let channel!: ImChannel
-    channel = new ImChannel({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
       void fs.writeFile(targetPath, 'created-during-approval').then(() => {
         channel.tryResolveFromInbound(
           { kind: 'approve', confirmId: pending.confirmId },
@@ -2525,7 +2526,7 @@ describe('runWeChatRemoteAgent', () => {
     const args = baseCtx(() => null)
     const session = createSession(args.db, { name: 'wechat-hosted-read-identity-drift', model: SUPPORTED_ANTHROPIC_MODEL })
     let channel!: ImChannel
-    channel = new ImChannel({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
       void (async () => {
         await fs.rename(targetPath, `${targetPath}.approved`)
         await fs.writeFile(targetPath, 'SECRET=after')
@@ -2602,7 +2603,7 @@ describe('runWeChatRemoteAgent', () => {
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, customSensitivePrefixes })
     }
     let channel!: ImChannel
-    channel = new ImChannel({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
       autoApproveMaxBytes = 1_000
       customSensitivePrefixes = [targetPath]
       queueMicrotask(() => channel.tryResolveFromInbound(
@@ -2680,7 +2681,7 @@ describe('runWeChatRemoteAgent', () => {
     let prompted!: () => void
     const didPrompt = new Promise<void>((resolve) => { prompted = resolve })
     let channel!: ImChannel
-    channel = new ImChannel({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
       browserConfig = { ...browserConfig, allowRemoteSessions: false }
       prompted()
       queueMicrotask(() => channel.tryResolveFromInbound(
@@ -2747,7 +2748,7 @@ describe('runWeChatRemoteAgent', () => {
     const controller = new AbortController()
     let announcePrompt!: () => void
     const prompted = new Promise<void>((resolve) => { announcePrompt = resolve })
-    const channel = new ImChannel({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: () => announcePrompt() })
+    const channel = createImChannelForTest({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: () => announcePrompt() })
     const context = {
       ...args, sessionId: session.id, workDir,
       workDirManager: { ...args.workDirManager, getActiveWorkDir: () => workDir },
@@ -2806,7 +2807,7 @@ describe('runWeChatRemoteAgent', () => {
     const context = {
       ...args, sessionId: session.id, requestId: 'wechat-hosted-policy-version-update', workDir,
       workDirManager: { ...args.workDirManager, getActiveWorkDir: () => workDir },
-      remoteContext: { ...args.remoteContext, imChannel: new ImChannel({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: () => undefined }) }
+      remoteContext: { ...args.remoteContext, imChannel: createImChannelForTest({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: () => undefined }) }
     }
     mockResolveWorkDirForSession.mockReturnValue({ profileId: 'wechat-policy-change', workDir, isSensitive: false })
     let observedSignal: AbortSignal | undefined

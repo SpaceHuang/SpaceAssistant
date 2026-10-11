@@ -29,6 +29,18 @@ describe('PendingRequestRegistry', () => {
     expect(registry.countPending()).toBe(0)
   })
 
+  it('runs the terminal hook exactly once before resolving the waiter', async () => {
+    const registry = new PendingRequestRegistry<Item>()
+    const events: string[] = []
+    const p = registry.register(makeItem({ id: 'terminal', sessionId: 's1' }), 60_000, {
+      onResolved: (_item, decision) => events.push(`settled:${decision}`)
+    })
+    expect(registry.resolve('terminal', 'y')).toBe(true)
+    expect(registry.resolve('terminal', 'n')).toBe(false)
+    expect(events).toEqual(['settled:y'])
+    await expect(p).resolves.toBe('y')
+  })
+
   it('cancel invokes onCancel then resolves waiter with n', async () => {
     const registry = new PendingRequestRegistry<Item>()
     const onCancel = vi.fn()
@@ -60,6 +72,19 @@ describe('PendingRequestRegistry', () => {
     await expect(p).resolves.toBe('timeout')
     expect(onTimeout).toHaveBeenCalledWith(expect.objectContaining({ id: 't1' }))
     expect(registry.countPending()).toBe(0)
+  })
+
+  it('runs the terminal hook synchronously on timeout before the waiter resumes', async () => {
+    vi.useFakeTimers()
+    const registry = new PendingRequestRegistry<Item>()
+    const events: string[] = []
+    const p = registry.register(makeItem({ id: 'timeout-terminal', sessionId: 's1' }), 5_000, {
+      onResolved: (_item, decision) => events.push(`settled:${decision}`)
+    })
+
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(events).toEqual(['settled:timeout'])
+    await expect(p).resolves.toBe('timeout')
   })
 
   it('clearing via resolve prevents timeout callback', async () => {

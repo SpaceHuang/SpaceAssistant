@@ -5,12 +5,12 @@
  *
  *   可回退 = lane === 'desktop'                              // ① 链路：回退仅装配在桌面
  *     && channelOutcome.answererKind === 'agent'             // ② 来源：主回答者确为 agent（评审 v3 B1）
- *     && cause ∈ { unavailable, timeout }                    // ③ 类别：§4 矩阵可回退两格
+ *     && cause ∈ { unavailable, timeout, agent-undetermined } // ③ 类别：环境失败或有效的「判不了」裁决
  *     && !chatSignal.aborted                                 // ④ 中止守卫之一（评审 v3 B2）
  *     && !sharedApprovalRecoveryFailed                       // ④ 中止守卫之二
  *
  * 判定数据化（§4：判定表放在通道层，不放提示词、不进规则集）。
- * 判据：环境/运行时问题 → 转人工；产品契约 / 结构性问题 → 保持 deny；有效裁决 → 不回退。
+ * 判据：环境/运行时问题或 Agent 明确无法判定 → 转人工；产品契约 / 结构性拒绝 → 保持 deny；批准/拒绝等有效裁决 → 不回退。
  */
 import type { ConfirmOutcome, ConfirmOutcomeCause, ExecutionLane } from '../../src/shared/confirmation/types'
 

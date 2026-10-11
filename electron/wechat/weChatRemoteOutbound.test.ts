@@ -2,6 +2,10 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { sendWeChatRemoteOutbound } from './weChatRemoteOutbound'
 import { touchRemoteSessionActivity } from '../remote/remoteSessionActivity'
 import type { WeChatReplyBot } from './weChatReplyService'
+import { createMemoryAppDb } from '../database/testHelpers'
+import { createSession } from '../database/operations'
+import { createRemoteTrack } from '../database/remoteTrackStore'
+import { getDbConnection } from '../database/sqliteStore'
 
 vi.mock('../remote/remoteSessionActivity', () => ({
   touchRemoteSessionActivity: vi.fn()
@@ -44,5 +48,23 @@ describe('sendWeChatRemoteOutbound', () => {
     const sent = reply.mock.calls[0]![1] as string
     expect(sent.length).toBeLessThanOrEqual(2000)
     expect(sent.endsWith(` 会话$${SESSION_ID}$`)).toBe(true)
+  })
+
+  it('records a fulfilled Track reply as unbound because the WeChat SDK returns no message ID', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'wechat-outbound-track', metadata: { source: 'wechat' } })
+    createRemoteTrack(db, { trackId: 'wechat-outbound-track', eventId: 'wechat-outbound-root', idempotencyKey: 'wechat-outbound-root-key',
+      channel: 'wechat', identityKey: 'user', ownerId: 'owner', authorizationEpoch: 1, rootMessageId: 'inbound-root',
+      originSessionId: session.id, occurredAt: 1 })
+
+    await sendWeChatRemoteOutbound({ bot, inbound, body: 'done', trackDelivery: { db,
+      track: { trackId: 'wechat-outbound-track', channel: 'wechat', identityKey: 'user', ownerId: 'owner',
+        authorizationEpoch: 1, rootMessageId: 'inbound-root', attributionEventId: 'wechat-outbound-root' },
+      requestId: 'request-1', turnId: 'turn-1' } })
+
+    const event = getDbConnection(db).prepare(`SELECT event_kind,payload_json FROM remote_track_events
+      WHERE track_id='wechat-outbound-track' AND event_kind='track.outbound.send_result'`).get() as { event_kind: string; payload_json: string }
+    expect(JSON.parse(event.payload_json)).toMatchObject({ outcome: 'fulfilled', bindingState: 'unavailable', platformMessageId: null })
+    db.close()
   })
 })

@@ -1,6 +1,6 @@
 {
   "extends": "./tsconfig.renderer.gate.json",
   "compilerOptions": { "noEmit": true, "types": ["node"] },
-  "include": ["src/shared/**/*.ts", "typeTests/storageTypes.typecheck.ts"],
+  "include": ["src/shared/**/*.ts", "typeTests/storageTypes.typecheck.ts", "typeTests/remoteTrack.typecheck.ts"],
   "exclude": ["src/shared/**/*.test.ts", "electron/**/*", "src/renderer/**/*"]
 }

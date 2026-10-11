@@ -148,6 +148,8 @@ export interface WeChatInboundMessage {
   timestamp: string
   contextToken: string
   quotedMessageId?: string
+  /** Raw quoted message body from iLink ref_msg.message_item.text_item.text. */
+  quotedMessageText?: string
   images?: WeChatMediaRef[]
   files?: WeChatMediaRef[]
   voices?: WeChatMediaRef[]

@@ -184,6 +184,7 @@
   },
   "confirm": {
     "autoAnswering": "Being auto-adjudicated by the approval agent — no manual confirmation needed",
+    "awaitingIm": "Reply to the confirmation prompt in the corresponding messaging app.",
     "decisionAriaLabel": "Confirm: {{action}}",
     "mcp": {
       "title": "External MCP tool call",

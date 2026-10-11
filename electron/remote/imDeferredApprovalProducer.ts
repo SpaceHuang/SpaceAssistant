@@ -92,6 +92,7 @@ export function createImDeferredApprovalProducer(input: {
       const taskDigest = input.resolveTaskDigest(remoteContext)
       if (!binding || !identityKey || !ownerId || !requestId || !turnId || !messageId || !providerRouteId || !model ||
         !workDirProfileId || !remoteContext.currentUserMessageId || !taskDigest?.trim()) return undefined
+      if (remoteContext.trackContext && remoteContext.trackContext.channel !== input.channel) return undefined
 
       const now = Date.now()
       const todoId = randomUUID()
@@ -140,6 +141,7 @@ export function createImDeferredApprovalProducer(input: {
         eligibility: { kind: 'eligible', todoId },
         todo: {
         todoId, invocationId, reservationId: `reservation:${invocationId}`, originSessionId: remoteContext.originSessionId,
+          ...(remoteContext.trackContext ? { trackId: remoteContext.trackContext.trackId } : {}),
           channel: input.channel,
           identityKey, ownerId, authorizationEpoch, rule, workflowId: binding.workflowId, taskId: binding.taskId,
           stepId: binding.stepId, planRevision: binding.planRevision, taskBinding: binding,

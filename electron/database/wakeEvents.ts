@@ -86,16 +86,19 @@ export function listWakeEvents(db: AppDatabase, sessionId: string): WakeEvent[] 
 
 export function claimWakeEvent(
   db: AppDatabase,
-  input: { sessionId: string; eventId: string; ownerId: string; leaseDurationMs?: number }
+  input: { sessionId: string; eventId: string; ownerId: string; leaseDurationMs?: number; ownerChannel?: 'feishu' | 'wechat' }
 ): WakeEvent | null {
   if (!input.ownerId.trim()) throw new TypeError('Wake event claim ownerId must not be empty')
   const leaseDurationMs = input.leaseDurationMs ?? DEFAULT_WAKE_EVENT_LEASE_MS
   if (!Number.isFinite(leaseDurationMs) || leaseDurationMs <= 0) throw new TypeError('Wake event lease duration must be positive')
   return runInTransaction(getDbConnection(db), () => {
     const now = Date.now()
+    const channelFilter = input.ownerChannel
+      ? ` AND EXISTS (SELECT 1 FROM sessions s WHERE s.id=wake_events.session_id AND json_extract(s.metadata,'$.source')=?)`
+      : ''
     const changed = getDbConnection(db).prepare(`UPDATE wake_events SET status='claimed',claimed_by=?,updated_at=?,lease_expires_at=?
-      WHERE event_id=? AND session_id=? AND (status='pending' OR (status='claimed' AND lease_expires_at<=?))`)
-      .run(input.ownerId, now, now + leaseDurationMs, input.eventId, input.sessionId, now)
+      WHERE event_id=? AND session_id=? AND (status='pending' OR (status='claimed' AND lease_expires_at<=?))${channelFilter}`)
+      .run(input.ownerId, now, now + leaseDurationMs, input.eventId, input.sessionId, now, ...(input.ownerChannel ? [input.ownerChannel] : []))
     if (Number(changed.changes) !== 1) return null
     return readWakeEvent(db, input.eventId)
   })
@@ -103,7 +106,7 @@ export function claimWakeEvent(
 
 export function claimWakeEvents(
   db: AppDatabase,
-  input: { sessionId: string; runId: string; ownerId: string; leaseDurationMs?: number; eventIds?: readonly string[]; now?: number }
+  input: { sessionId: string; runId: string; ownerId: string; leaseDurationMs?: number; eventIds?: readonly string[]; now?: number; ownerChannel?: 'feishu' | 'wechat' }
 ): ClaimedWakeEventSet {
   if (!input.runId.trim()) throw new TypeError('Wake event claim runId must not be empty')
   if (!input.ownerId.trim()) throw new TypeError('Wake event claim ownerId must not be empty')
@@ -114,25 +117,44 @@ export function claimWakeEvents(
     const conn = getDbConnection(db)
     const now = input.now ?? Date.now()
     const idsFilter = input.eventIds ? ` AND event_id IN (${input.eventIds.map(() => '?').join(',')})` : ''
+    const channelFilter = input.ownerChannel
+      ? ` AND EXISTS (SELECT 1 FROM sessions s WHERE s.id=wake_events.session_id AND json_extract(s.metadata,'$.source')=?)`
+      : ''
+    const channelArgs = input.ownerChannel ? [input.ownerChannel] : []
     const rows = conn.prepare(`SELECT event_id FROM wake_events WHERE session_id=? AND
-      (status='pending' OR (status='claimed' AND lease_expires_at<=?))${idsFilter} ORDER BY created_at,event_id`)
-      .all(input.sessionId, now, ...(input.eventIds ?? [])) as Array<{ event_id: string }>
+      (status='pending' OR (status='claimed' AND lease_expires_at<=?))${idsFilter}${channelFilter} ORDER BY created_at,event_id`)
+      .all(input.sessionId, now, ...(input.eventIds ?? []), ...channelArgs) as Array<{ event_id: string }>
     const eventIds: string[] = []
     const update = conn.prepare(`UPDATE wake_events SET status='claimed',claimed_by=?,run_id=?,updated_at=?,lease_expires_at=?
-      WHERE event_id=? AND session_id=? AND (status='pending' OR (status='claimed' AND lease_expires_at<=?))`)
+      WHERE event_id=? AND session_id=? AND (status='pending' OR (status='claimed' AND lease_expires_at<=?))${channelFilter}`)
     for (const { event_id: eventId } of rows) {
-      const changed = update.run(input.ownerId, input.runId, now, now + leaseDurationMs, eventId, input.sessionId, now)
+      const changed = update.run(input.ownerId, input.runId, now, now + leaseDurationMs, eventId, input.sessionId, now, ...channelArgs)
       if (Number(changed.changes) === 1) eventIds.push(eventId)
     }
     return { runId: input.runId, eventIds }
   })
 }
 
-export function listClaimableWakeEventIds(db: AppDatabase, sessionId: string, now = Date.now()): string[] {
+export function listClaimableWakeEventIds(db: AppDatabase, sessionId: string, now = Date.now(), ownerChannel?: 'feishu' | 'wechat'): string[] {
+  const channelFilter = ownerChannel
+    ? ` AND EXISTS (SELECT 1 FROM sessions s WHERE s.id=wake_events.session_id AND json_extract(s.metadata,'$.source')=?)`
+    : ''
   const rows = getDbConnection(db).prepare(`SELECT event_id FROM wake_events WHERE session_id=? AND
-    (status='pending' OR (status='claimed' AND lease_expires_at<=?)) ORDER BY created_at,event_id`)
-    .all(sessionId, now) as Array<{ event_id: string }>
+    (status='pending' OR (status='claimed' AND lease_expires_at<=?))${channelFilter} ORDER BY created_at,event_id`)
+    .all(sessionId, now, ...(ownerChannel ? [ownerChannel] : [])) as Array<{ event_id: string }>
   return rows.map(({ event_id }) => event_id)
+}
+
+/** Sessions with pending or expired-claim wake work that should be recovered after restart. */
+export function listRecoverableWakeSessionIds(db: AppDatabase, now = Date.now(), ownerChannel?: 'feishu' | 'wechat'): string[] {
+  const channelFilter = ownerChannel
+    ? ` AND json_extract(s.metadata,'$.source')=?`
+    : ''
+  const rows = getDbConnection(db).prepare(`SELECT DISTINCT w.session_id FROM wake_events w
+    JOIN sessions s ON s.id=w.session_id WHERE
+    (w.status='pending' OR (w.status='claimed' AND w.lease_expires_at<=?))${channelFilter} ORDER BY w.session_id`)
+    .all(now, ...(ownerChannel ? [ownerChannel] : [])) as Array<{ session_id: string }>
+  return rows.map(({ session_id }) => session_id)
 }
 
 /** Returns the earliest dispatch time for unfinished wake events, including active claims. */

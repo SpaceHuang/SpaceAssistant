@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb, createTempDatabase } from '../database/testHelpers'
 import { createSession } from '../database/operations'
-import { appendWakeEvent, continueWorkflow, listWakeEvents, readWakeEventRetryState } from '../database/wakeEvents'
+import { appendWakeEvent, continueWorkflow, listWakeEvents, readWakeEventRetryState, saveWakeEventRetryState } from '../database/wakeEvents'
 import { getDbConnection } from '../database/sqliteStore'
 import { openDatabase } from '../database'
 import { appendImInboxMessageWithWakeEvent, claimImInboxMessage, releaseImInboxMessage } from '../database/imInbox'
@@ -13,6 +13,46 @@ import { queueInputFingerprint } from '../queueInputFingerprint'
 import { resetRunningRemoteAgentRegistryForTests, tryClaimRemoteSession, releaseRemoteSession } from './remoteAgentRegistry'
 
 describe('wake event dispatcher', () => {
+  it('does not claim or consume retry budget for a session owned by another IM channel', async () => {
+    const db = createMemoryAppDb()
+    const sessionId = createSession(db, { name: 'dispatcher-wechat-isolation', metadata: { source: 'feishu' } }).id
+    const event = appendWakeEvent(db, { sessionId, type: 'continuation', reasonKey: 'dispatcher-cross-channel',
+      payloadRef: { kind: 'continuation', continuationId: 'dispatcher-cross-channel' } })
+    const retryBefore = { eventId: event.eventId, attemptCount: 1, startedAt: 8_000, nextAttemptAt: null,
+      shouldRetry: false, lastFailure: { message: 'earlier failure', failedAt: 9_000 } }
+    saveWakeEventRetryState(db, retryBefore, 9_000)
+    const launchLoop = vi.fn().mockRejectedValue(new Error('WECHAT_WAKE_SESSION_IDENTITY_INVALID'))
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, ownerChannel: 'wechat', launchLoop,
+      clock: createWakeEventRetryClock(() => 10_000),
+      retryPolicy: { maxAttempts: 1, baseDelayMs: 100, maxDelayMs: 1_000, maxElapsedMs: 1_000, jitterRatio: 0, random: () => 0.5 },
+      scheduleRetry: vi.fn() })
+
+    await dispatcher.dispatchSession(sessionId, { retryExhausted: true })
+
+    expect(launchLoop).not.toHaveBeenCalled()
+    expect(readWakeEventRetryState(db, event.eventId)).toEqual(retryBefore)
+    expect(getDbConnection(db).prepare('SELECT status,claimed_by,run_id,lease_expires_at FROM wake_events WHERE event_id=?').get(event.eventId))
+      .toEqual({ status: 'pending', claimed_by: null, run_id: null, lease_expires_at: null })
+    await dispatcher.dispose()
+    db.close()
+  })
+
+  it.each(['wechat', 'feishu'] as const)('still dispatches pending work owned by %s', async (ownerChannel) => {
+    const db = createMemoryAppDb()
+    const sessionId = createSession(db, { name: `dispatcher-owned-${ownerChannel}`, metadata: { source: ownerChannel } }).id
+    const event = appendWakeEvent(db, { sessionId, type: 'continuation', reasonKey: `dispatcher-owned-${ownerChannel}`,
+      payloadRef: { kind: 'continuation', continuationId: ownerChannel } })
+    const launchLoop = vi.fn(async () => undefined)
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, ownerChannel, launchLoop })
+
+    await dispatcher.dispatchSession(sessionId)
+
+    expect(launchLoop).toHaveBeenCalledOnce()
+    expect(listWakeEvents(db, sessionId).find(({ eventId }) => eventId === event.eventId)?.status).toBe('acked')
+    await dispatcher.dispose()
+    db.close()
+  })
+
   it('retries a durable wake after an inbound lease releases the session', async () => {
     const db = createMemoryAppDb()
     const sessionId = createSession(db, { name: 'dispatcher-busy-inbound' }).id
@@ -188,9 +228,8 @@ describe('wake event dispatcher', () => {
     await dispatcher.dispatchSession(sessionId)
 
     expect(retryContinuation).toEqual({ eventId: firstContinuation.eventId, duplicate: true })
-    expect(launchLoop).toHaveBeenCalledTimes(1)
-    expect(launchLoop.mock.calls[0]?.[0].eventIds).toContain(event.eventId)
-    expect(launchLoop.mock.calls[0]?.[0].eventIds).toContain(firstContinuation.eventId)
+    expect(launchLoop).toHaveBeenCalledTimes(2)
+    expect(launchLoop.mock.calls.map(([input]) => input.eventIds)).toEqual(expect.arrayContaining([[event.eventId], [firstContinuation.eventId]]))
     expect(listWakeEvents(reopened, sessionId).every(({ status }) => status === 'acked')).toBe(true)
     reopened.close()
     temp.cleanup()
@@ -310,11 +349,61 @@ describe('wake event dispatcher', () => {
       sessionId, type: 'safety-recovery', reasonKey: 'dispatcher-fresh-recovery',
       payloadRef: { kind: 'safety-approval', approvalId: 'fresh-recovery' }
     })
+    await dispatcher.dispatchSession(sessionId, { retryExhausted: true })
+
+    expect(launchLoop).toHaveBeenCalledTimes(3)
+    expect(launchLoop.mock.calls[1]?.[0].eventIds).toEqual([fresh.eventId])
+    expect(launchLoop.mock.calls[2]?.[0].eventIds).toEqual([exhausted.eventId])
+    expect(listWakeEvents(db, sessionId).find(({ eventId }) => eventId === exhausted.eventId)?.status).toBe('acked')
+    db.close()
+  })
+
+  it('tracks retry exhaustion independently when one event fails beside a successful event', async () => {
+    const db = createMemoryAppDb()
+    const sessionId = createSession(db, { name: 'dispatcher-independent-event-retries' }).id
+    const failing = appendWakeEvent(db, { sessionId, type: 'im-inbound', reasonKey: 'independent-failing',
+      payloadRef: { kind: 'im-inbox-message', messageId: 'independent-failing' } })
+    const succeeding = appendWakeEvent(db, { sessionId, type: 'im-inbound', reasonKey: 'independent-succeeding',
+      payloadRef: { kind: 'im-inbox-message', messageId: 'independent-succeeding' } })
+    const launchLoop = vi.fn(async ({ eventIds }: WakeEventLoopInput) => {
+      if (eventIds.includes(failing.eventId)) throw new Error('one inbound failed')
+    })
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop,
+      clock: createWakeEventRetryClock(() => 9_000),
+      retryPolicy: { maxAttempts: 1, baseDelayMs: 100, maxDelayMs: 1_000, maxElapsedMs: 1_000, jitterRatio: 0, random: () => 0.5 },
+      scheduleRetry: vi.fn() })
+
     await dispatcher.dispatchSession(sessionId)
 
+    expect(launchLoop.mock.calls.map(([input]) => input.eventIds)).toEqual(expect.arrayContaining([[failing.eventId], [succeeding.eventId]]))
+    expect(readWakeEventRetryState(db, failing.eventId)).toMatchObject({ attemptCount: 1, shouldRetry: false })
+    expect(readWakeEventRetryState(db, succeeding.eventId)).toBeNull()
+    expect(listWakeEvents(db, sessionId).find(({ eventId }) => eventId === failing.eventId)?.status).toBe('pending')
+    expect(listWakeEvents(db, sessionId).find(({ eventId }) => eventId === succeeding.eventId)?.status).toBe('acked')
+    await dispatcher.dispose()
+    db.close()
+  })
+
+  it('retries an exhausted durable wake when the owner explicitly requests recovery', async () => {
+    const db = createMemoryAppDb()
+    const sessionId = createSession(db, { name: 'dispatcher-explicit-recovery' }).id
+    const event = appendWakeEvent(db, { sessionId, type: 'im-inbound', reasonKey: 'dispatcher-explicit-recovery',
+      payloadRef: { kind: 'im-inbox-message', messageId: 'dispatcher-explicit-recovery' } })
+    const launchLoop = vi.fn().mockRejectedValueOnce(new Error('transient batch failure')).mockResolvedValue(undefined)
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop,
+      clock: createWakeEventRetryClock(() => 9_000),
+      retryPolicy: { maxAttempts: 1, baseDelayMs: 100, maxDelayMs: 1_000, maxElapsedMs: 1_000, jitterRatio: 0, random: () => 0.5 },
+      scheduleRetry: vi.fn() })
+
+    await dispatcher.dispatchSession(sessionId)
+    expect(readWakeEventRetryState(db, event.eventId)).toMatchObject({ attemptCount: 1, shouldRetry: false })
+
+    await dispatcher.dispatchSession(sessionId, { retryExhausted: true })
+
     expect(launchLoop).toHaveBeenCalledTimes(2)
-    expect(launchLoop.mock.calls[1]?.[0].eventIds).toEqual([fresh.eventId])
-    expect(listWakeEvents(db, sessionId).find(({ eventId }) => eventId === exhausted.eventId)?.status).toBe('pending')
+    expect(readWakeEventRetryState(db, event.eventId)).toBeNull()
+    expect(listWakeEvents(db, sessionId).find(({ eventId }) => eventId === event.eventId)?.status).toBe('acked')
+    await dispatcher.dispose()
     db.close()
   })
 })

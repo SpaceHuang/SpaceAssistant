@@ -33,6 +33,8 @@ export type WakeEventLoopInput = {
 export type WakeEventDispatcherOptions = {
   db: AppDatabase
   maxParallel: number
+  /** Restricts durable wake reads and claims to sessions owned by this channel. */
+  ownerChannel?: 'feishu' | 'wechat'
   launchLoop: (input: WakeEventLoopInput) => Promise<void>
   createRunId?: () => string
   retryPolicy?: WakeEventRetryConfig
@@ -45,7 +47,7 @@ export type WakeEventDispatcherOptions = {
 }
 
 export type WakeEventDispatcher = {
-  dispatchSession(sessionId: string): Promise<void>
+  dispatchSession(sessionId: string, options?: { retryExhausted?: boolean }): Promise<void>
   dispose(): Promise<void>
 }
 
@@ -90,71 +92,96 @@ export function createWakeEventDispatcher(options: WakeEventDispatcherOptions): 
     retryTimers.set(sessionId, timer)
   }
 
-  const runSession = async (sessionId: string): Promise<void> => {
+  const runSession = async (sessionId: string, retryExhausted: boolean): Promise<void> => {
+    let retryExhaustedRequested = retryExhausted
     while (true) {
+      let retryExhaustedAfterFresh = false
       if (disposed) return
       const now = clock.now()
-      const candidates = listClaimableWakeEventIds(options.db, sessionId, now)
+      const candidates = listClaimableWakeEventIds(options.db, sessionId, now, options.ownerChannel)
       const eligibleEventIds: string[] = []
       const nextRetryTimes: number[] = []
       for (const eventId of candidates) {
         const retry = readWakeEventRetryState(options.db, eventId)
-        if (!retry || isWakeEventRetryDue(retry, now)) eligibleEventIds.push(eventId)
+        if (!retry || isWakeEventRetryDue(retry, now) || (retryExhaustedRequested && !retry.shouldRetry)) eligibleEventIds.push(eventId)
         else if (retry.shouldRetry && retry.nextAttemptAt != null) nextRetryTimes.push(retry.nextAttemptAt)
+      }
+      if (retryExhaustedRequested) {
+        retryExhaustedRequested = false
+        const freshOrDueEventIds = eligibleEventIds.filter((eventId) => {
+          const retry = readWakeEventRetryState(options.db, eventId)
+          return !retry || retry.shouldRetry
+        })
+        // Process recoverable work separately from older exhausted work, and settle
+        // each event independently so one event cannot consume another's retry budget.
+        if (freshOrDueEventIds.length > 0) {
+          retryExhaustedAfterFresh = freshOrDueEventIds.length < eligibleEventIds.length
+          eligibleEventIds.splice(0, eligibleEventIds.length, ...freshOrDueEventIds)
+        }
       }
       if (eligibleEventIds.length === 0) {
         if (nextRetryTimes.length > 0) scheduleRetry(sessionId, Math.min(...nextRetryTimes))
         return
       }
-      const runId = createRunId()
-      const ownerId = runId
-      const claimResult = tryClaimRemoteSession(sessionId, runId, options.maxParallel)
-      if (claimResult !== 'ok') {
-        scheduleRetry(sessionId, clock.now() + (options.leaseRetryMs ?? 250))
-        return
-      }
-      let claimed: ClaimedWakeEventSet | undefined
-      try {
-        claimed = claimWakeEvents(options.db, { sessionId, runId, ownerId, eventIds: eligibleEventIds, now })
-        if (claimed.eventIds.length === 0) return
-        const events = claimed.eventIds.flatMap((eventId) => {
+      let selectedEventsSucceeded = true
+      for (const eventId of eligibleEventIds) {
+        if (disposed) return
+        const runId = createRunId()
+        const ownerId = runId
+        const claimResult = tryClaimRemoteSession(sessionId, runId, options.maxParallel)
+        if (claimResult !== 'ok') {
+          scheduleRetry(sessionId, clock.now() + (options.leaseRetryMs ?? 250))
+          return
+        }
+        let claimed: ClaimedWakeEventSet | undefined
+        try {
+          claimed = claimWakeEvents(options.db, { sessionId, runId, ownerId, eventIds: [eventId], now: clock.now(), ownerChannel: options.ownerChannel })
+          if (claimed.eventIds.length === 0) continue
           const event = listWakeEvents(options.db, sessionId).find((candidate) => candidate.eventId === eventId)
-          return event ? [event] : []
-        })
-        if (events.length !== claimed.eventIds.length) return
-        await options.launchLoop({ sessionId, runId, ownerId, eventIds: claimed.eventIds, events })
-        const finalized = finalizeWakeEvents(options.db, {
-          sessionId, runId, ownerId, eventIds: claimed.eventIds, now: clock.now()
-        })
-        if (finalized.length !== claimed.eventIds.length) return
-        for (const eventId of finalized) clearWakeEventRetryState(options.db, eventId)
-      } catch (error) {
-        const failedAt = clock.now()
-        const message = error instanceof Error ? error.message : String(error)
-        if (claimed) {
-          const nextAttemptTimes: number[] = []
-          for (const eventId of claimed.eventIds) {
+          if (!event) continue
+          await options.launchLoop({ sessionId, runId, ownerId, eventIds: [eventId], events: [event] })
+          const finalized = finalizeWakeEvents(options.db, {
+            sessionId, runId, ownerId, eventIds: [eventId], now: clock.now()
+          })
+          if (finalized.length !== 1) {
+            selectedEventsSucceeded = false
+            continue
+          }
+          clearWakeEventRetryState(options.db, eventId)
+        } catch (error) {
+          selectedEventsSucceeded = false
+          const failedAt = clock.now()
+          const message = error instanceof Error ? error.message : String(error)
+          if (claimed?.eventIds.includes(eventId)) {
             const prior = readWakeEventRetryState(options.db, eventId)
             const initial = prior ?? createWakeEventRetryState({ eventId, startedAt: failedAt })
             const retry = recordWakeEventRetryFailure(initial, { message, failedAt }, retryPolicy)
             saveWakeEventRetryState(options.db, retry, failedAt)
-            if (retry.shouldRetry && retry.nextAttemptAt != null) nextAttemptTimes.push(retry.nextAttemptAt)
+            releaseWakeEventClaimsForRetry(options.db, { sessionId, runId, ownerId, eventIds: [eventId], now: failedAt })
+            if (retry.shouldRetry && retry.nextAttemptAt != null) scheduleRetry(sessionId, retry.nextAttemptAt)
           }
-          releaseWakeEventClaimsForRetry(options.db, { sessionId, runId, ownerId, eventIds: claimed.eventIds, now: failedAt })
-          if (nextAttemptTimes.length > 0) scheduleRetry(sessionId, Math.min(...nextAttemptTimes))
+        } finally {
+          releaseRemoteSession(sessionId, runId)
         }
-        return
-      } finally {
-        releaseRemoteSession(sessionId, runId)
       }
+      if (retryExhaustedAfterFresh && selectedEventsSucceeded) {
+        retryExhaustedRequested = true
+        continue
+      }
+      if (retryExhaustedAfterFresh && !selectedEventsSucceeded) return
     }
   }
 
-  function dispatchSession(sessionId: string): Promise<void> {
+  function dispatchSession(sessionId: string, dispatchOptions: { retryExhausted?: boolean } = {}): Promise<void> {
     if (disposed) return Promise.resolve()
     const existing = activeSessions.get(sessionId)
-    if (existing) return existing
-    const run = runSession(sessionId).finally(() => {
+    if (existing) {
+      if (!dispatchOptions.retryExhausted) return existing
+      return existing.finally(() => {
+        if (!disposed) return dispatchSession(sessionId, dispatchOptions)
+      })
+    }
+    const run = runSession(sessionId, dispatchOptions.retryExhausted === true).finally(() => {
       if (activeSessions.get(sessionId) === run) activeSessions.delete(sessionId)
     })
     activeSessions.set(sessionId, run)

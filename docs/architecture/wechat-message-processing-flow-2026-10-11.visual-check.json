@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "ok": false,
+  "command": "visual-check",
+  "status": "skipped",
+  "visualReview": "pending",
+  "artifact": {
+    "path": "/Users/space/Documents/Develop/SpaceAssistant/.worktrees/fix-wechat-confirmation-prompt-delivery-failure/docs/architecture/wechat-message-processing-flow-2026-10-11.html",
+    "sha256": "c3e87934a4603e0ff47318f34f5276f3e85f4501b6e875e6226c3744134927ea",
+    "bytes": 678115
+  },
+  "state": {
+    "detail": "read",
+    "motion": "still"
+  },
+  "chrome": {
+    "status": "unavailable",
+    "executable": null
+  },
+  "containment": {
+    "status": "skipped",
+    "viewports": []
+  },
+  "captures": {
+    "status": "skipped",
+    "screenshots": [],
+    "contactSheet": null
+  },
+  "sidecars": {
+    "receipt": "wechat-message-processing-flow-2026-10-11.visual-check.json",
+    "contactSheet": "wechat-message-processing-flow-2026-10-11.visual-check.html"
+  },
+  "error": "Chrome or Chromium is unavailable. Set ARCHIFY_CHROME to its executable path."
+}

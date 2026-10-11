@@ -99,7 +99,7 @@ export function buildConfirmInstantPrompt(args: {
 }): string {
   const prefix = args.progressPrefix?.trim()
   const header = prefix ? `${prefix}\n` : ''
-  return `${header}${args.summary}\n回复 Y 确认，N 取消（${args.timeoutMinutes} 分钟内有效）`
+  return `${header}${args.summary}\n（${args.timeoutMinutes} 分钟内有效）`
 }
 
 export function buildConfirmHeartbeatText(label: string, maxChars = 400): string {

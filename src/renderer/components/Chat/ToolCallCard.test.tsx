@@ -35,6 +35,16 @@ describe('MCP status mapping', () => {
 })
 
 describe('ToolCallCard approval explanations', () => {
+  it('does not expose a desktop confirmation card for a WeChat confirmation', () => {
+    render(<ToolCallCard record={writeRecord('confirming', {
+      toolName: 'mcp_zhihu_search', input: { query: 'example' }, confirmationLane: 'wechat',
+      mcp: { serverId: 'zhihu', serverName: '知乎MCP', originalToolName: 'zhihu_search' }
+    })} onConfirm={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: '允许' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '拒绝' })).toBeNull()
+    expect(screen.getByRole('status').textContent).toContain('即时通讯')
+  })
+
   it('shows an actionable confirmation card for generic tools such as sensitive reads', () => {
     render(<ToolCallCard record={writeRecord('confirming', {
       toolName: 'read_file', input: { path: 'recovery-a.md' }

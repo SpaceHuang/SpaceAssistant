@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 const afterPack = require('../../scripts/after-pack.cjs') as {
   copyBundledRipgrep: (context: any) => void
   copyOrVerifyLicense: (source: string, target: string, label: string) => void
+  verifyMicromarkRuntimeDependency: (context: any) => void
 }
 
 describe('afterPack bundled ripgrep', () => {
@@ -55,5 +56,30 @@ describe('afterPack bundled ripgrep', () => {
     await fs.writeFile(target, 'different')
     expect(() => afterPack.copyOrVerifyLicense(source, target, 'COPYING')).toThrow(/packaged ripgrep license mismatch: COPYING/)
     await fs.rm(dir, { recursive: true, force: true })
+  })
+})
+
+describe('afterPack micromark runtime closure', () => {
+  it('requires the root micromark-util-subtokenize package in app.asar', async () => {
+    const asar = require('@electron/asar') as { createPackage: (source: string, destination: string) => Promise<void> }
+    const out = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-after-pack-micromark-'))
+    const appResources = path.join(out, 'SpaceAssistant.app', 'Contents', 'Resources')
+    const source = path.join(out, 'source')
+    await fs.mkdir(path.join(source, 'node_modules', 'micromark', 'node_modules', 'micromark-util-subtokenize'), { recursive: true })
+    await fs.mkdir(path.join(source, 'node_modules', 'micromark-core-commonmark'), { recursive: true })
+    await fs.writeFile(path.join(source, 'node_modules', 'micromark', 'node_modules', 'micromark-util-subtokenize', 'index.js'), 'export {}')
+    await fs.writeFile(path.join(source, 'node_modules', 'micromark-core-commonmark', 'lib.js'), 'import "micromark-util-subtokenize"')
+    await fs.mkdir(appResources, { recursive: true })
+    await asar.createPackage(source, path.join(appResources, 'app.asar'))
+    const context = { electronPlatformName: 'darwin', appOutDir: out, packager: { appInfo: { productFilename: 'SpaceAssistant' } } }
+
+    expect(() => afterPack.verifyMicromarkRuntimeDependency(context)).toThrow(/missing micromark-util-subtokenize in app.asar/)
+
+    await fs.mkdir(path.join(source, 'node_modules', 'micromark-util-subtokenize'), { recursive: true })
+    await fs.writeFile(path.join(source, 'node_modules', 'micromark-util-subtokenize', 'index.js'), 'export {}')
+    await fs.rm(path.join(appResources, 'app.asar'))
+    await asar.createPackage(source, path.join(appResources, 'app.asar'))
+    expect(() => afterPack.verifyMicromarkRuntimeDependency(context)).not.toThrow()
+    await fs.rm(out, { recursive: true, force: true })
   })
 })

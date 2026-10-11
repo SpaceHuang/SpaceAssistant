@@ -223,6 +223,11 @@ export type ToolConfirmationResult = Readonly<{
   userMessage?: string
   /** Opaque host-selected confirmation memory; consumed by the host callback and never written to History. */
   selectedMemory?: unknown
+  promptSendFailure?:
+    | Readonly<{ kind: 'confirmation-prompt-send-failed'; state: 'not-attempted'; sendCall: 'not-attempted'; delivery: 'not-attempted'; errorCategory: 'bot-unavailable' | 'inbound-context-missing' | 'credentials-unavailable' | 'api-rejected' | 'transport-failed' | 'message-binding-unavailable' | 'unknown' }>
+    | Readonly<{ kind: 'confirmation-prompt-send-failed'; state: 'send-rejected'; sendCall: 'rejected'; delivery: 'unknown'; errorCategory: 'bot-unavailable' | 'inbound-context-missing' | 'credentials-unavailable' | 'api-rejected' | 'transport-failed' | 'message-binding-unavailable' | 'unknown' }>
+    | Readonly<{ kind: 'confirmation-prompt-send-failed'; state: 'send-pending'; sendCall: 'pending'; delivery: 'unknown'; errorCategory: 'unknown' }>
+    | Readonly<{ kind: 'confirmation-prompt-send-failed'; state: 'binding-unavailable'; sendCall: 'fulfilled'; delivery: 'unavailable'; errorCategory: 'message-binding-unavailable' }>
 }> & (
   | Readonly<{ kind: 'approved'; receipt: string }>
   | Readonly<{ kind: 'deferred'; todoId: string; invocationId: string; checkpointRef: Readonly<{ checkpointId: string; workflowRevision: number }> }>
@@ -1261,7 +1266,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       ? { ...unboundAssistantMessage, id: input.assistantMessageId }
       : unboundAssistantMessage
     const toolDispatchStates = new Map(toolCalls.map((tool) => [tool.toolCallId, 'pending' as 'pending' | 'not-dispatched' | 'started' | 'finished']))
-    const markNotDispatched = async (tool: (typeof toolCalls)[number], reason: string, userMessage?: string): Promise<void> => {
+    const markNotDispatched = async (tool: (typeof toolCalls)[number], reason: string, userMessage?: string, extra?: Record<string, unknown>): Promise<void> => {
       if (toolDispatchStates.get(tool.toolCallId) !== 'pending') return
       const replayContent = userMessage ?? `Tool call was not dispatched (${reason}).`
       const sessionResult = { success: false, data: replayContent }
@@ -1278,6 +1283,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             reason,
             replayContent,
             isError: true,
+            ...(extra ?? {}),
             ...(sessionLedger ? { sessionLedger } : {})
           }
         }])
@@ -1590,6 +1596,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             approvalId: initialDecision.confirmationId,
             answerer: initialDecision.answerer,
             reasonCode: initialDecision.reasonCode,
+            requestId: input.invocationId,
             requestedAt: Date.now()
           }
         }])
@@ -1650,6 +1657,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           outcome: approvalOutcome,
           ...(result.answerer ? { answerer: result.answerer } : {}),
           ...(result.cause ? { cause: result.cause } : {}),
+          ...(result.promptSendFailure ? { promptSendFailure: result.promptSendFailure } : {}),
           settledAt: Date.now()
         }
         await appendHistory([{ kind: 'approval-resolved', payload: resolvedApproval }])
@@ -1659,7 +1667,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         }
         if (result.kind !== 'approved' || !result.receipt.trim()) {
           const reason = `CONFIRMATION_${result.kind.toUpperCase()}`
-          await markNotDispatched(tool, reason, result.userMessage)
+          await markNotDispatched(tool, reason, result.userMessage, result.promptSendFailure ? { promptSendFailure: result.promptSendFailure } : undefined)
           throw new ToolDeniedError(reason, result.userMessage)
         }
         if (input.request.signal?.aborted) {

@@ -23,9 +23,85 @@ import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import { isBrowserSessionTrustedHost, resetBrowserSessionTrustForTests } from '../browser/browserSessionTrust'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { createImOrchestrationToolRegistry } from '../remote/imOrchestrationTools'
+import { ImChannel } from '../confirmation/imChannel'
 import { getToolCache, saveProfiles, saveToolCache } from '../mcp/mcpConfigStore'
 
 describe('AcceptedTurn propagation', () => {
+  it('does not associate IM confirmations with a Track while the confirmation-link gate is off', async () => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: 'track-confirmation-link-disabled' })
+    for (const [key, value] of Object.entries({ remoteTrackPersist: 'true', remoteTrackRolloutChannels: '["wechat"]', remoteTrackExecution: 'true',
+      remoteTrackRecovery: 'true', remoteTrackScopedModelInput: 'true' })) setConfigValue(db, key, value)
+    const imChannel = new ImChannel({ lane: 'wechat', timeoutMs: 60_000, sendPrompt: async () => ({ messageId: 'prompt-1' }),
+      onTrackConfirmationChild: vi.fn() })
+    const trackContext = { trackId: 'track-1', channel: 'wechat' as const, identityKey: 'user-1', ownerId: 'owner-1',
+      authorizationEpoch: 1, rootMessageId: 'root-1', attributionEventId: 'event-1' }
+    const { agentSdk } = assembleInvocation({
+      requestId: 'track-confirmation-link-disabled', sessionId: session.id, lane: 'wechat', model: 'test-model', locale: 'zh-CN',
+      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      remoteContext: { source: 'wechat', messageId: 'inbound-1', confirmPolicy: 'always', userId: 'user-1', imChannel,
+        trackContext } as never
+    })
+    const confirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never, { cancel: vi.fn() })
+    const pending = confirmation({
+      call: { invocationId: 'track-confirmation-link-disabled', toolCallId: 'tool-1', toolName: 'browser', input: { action: 'navigate' } },
+      confirmationId: 'tool-1', answerer: 'user', reasonCode: 'browser-confirm',
+      context: { facts: { toolName: 'browser', actionClass: 'outbound', baseRiskLevel: 'medium', signals: [], summary: { text: 'visit' } },
+        decision: { riskLevel: 'medium', memoryTiers: [], timeoutMs: 60_000, answerer: 'user' } }
+    })
+
+    try {
+      await vi.waitFor(() => expect(imChannel.listPending()).toHaveLength(1))
+      expect(imChannel.listPending()[0]).not.toHaveProperty('trackId')
+      expect(imChannel.listPending()[0]).not.toHaveProperty('trackAttributionEventId')
+      imChannel.resolveFromDesktop(imChannel.listPending()[0]!.id, false)
+      await expect(pending).resolves.toMatchObject({ kind: 'denied' })
+    } finally {
+      for (const entry of imChannel.listPending()) imChannel.resolveFromDesktop(entry.id, false)
+      db.close()
+    }
+  })
+
+  it('associates IM confirmations with the exact Track when the confirmation-link gate is on', async () => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: 'track-confirmation-link-enabled' })
+    for (const [key, value] of Object.entries({ remoteTrackPersist: 'true', remoteTrackRolloutChannels: '["wechat"]', remoteTrackExecution: 'true',
+      remoteTrackRecovery: 'true', remoteTrackScopedModelInput: 'true', remoteTrackConfirmationLink: 'true' })) setConfigValue(db, key, value)
+    const onTrackConfirmationChild = vi.fn()
+    const imChannel = new ImChannel({ lane: 'wechat', timeoutMs: 60_000, sendPrompt: async () => ({ messageId: 'prompt-1' }), onTrackConfirmationChild })
+    const trackContext = { trackId: 'track-1', channel: 'wechat' as const, identityKey: 'user-1', ownerId: 'owner-1',
+      authorizationEpoch: 1, rootMessageId: 'root-1', attributionEventId: 'event-1' }
+    const { agentSdk } = assembleInvocation({
+      requestId: 'track-confirmation-link-enabled', turnId: 'track-confirmation-turn', sessionId: session.id, lane: 'wechat', model: 'test-model', locale: 'zh-CN',
+      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      remoteContext: { source: 'wechat', messageId: 'inbound-1', confirmPolicy: 'always', userId: 'user-1', imChannel,
+        trackContext } as never
+    })
+    const confirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never, { cancel: vi.fn() })
+    const pending = confirmation({
+      call: { invocationId: 'track-confirmation-link-enabled', toolCallId: 'tool-1', toolName: 'browser', input: { action: 'navigate' } },
+      confirmationId: 'tool-1', answerer: 'user', reasonCode: 'browser-confirm',
+      context: { facts: { toolName: 'browser', actionClass: 'outbound', baseRiskLevel: 'medium', signals: [], summary: { text: 'visit' } },
+        decision: { riskLevel: 'medium', memoryTiers: [], timeoutMs: 60_000, answerer: 'user' } }
+    })
+
+    try {
+      await vi.waitFor(() => expect(imChannel.listPending()).toHaveLength(1))
+      expect(imChannel.listPending()[0]).toMatchObject({ trackId: 'track-1', trackAttributionEventId: 'event-1',
+        requestId: 'track-confirmation-link-enabled', turnId: 'track-confirmation-turn', toolUseId: 'tool-1' })
+      expect(onTrackConfirmationChild).toHaveBeenCalledWith(expect.objectContaining({ trackId: 'track-1', trackAttributionEventId: 'event-1',
+        requestId: 'track-confirmation-link-enabled', turnId: 'track-confirmation-turn', toolUseId: 'tool-1' }), 'pending')
+      imChannel.resolveFromDesktop(imChannel.listPending()[0]!.id, false)
+      await expect(pending).resolves.toMatchObject({ kind: 'denied' })
+      expect(onTrackConfirmationChild).toHaveBeenLastCalledWith(expect.objectContaining({ trackId: 'track-1' }), 'settled')
+    } finally {
+      for (const entry of imChannel.listPending()) imChannel.resolveFromDesktop(entry.id, false)
+      db.close()
+    }
+  })
+
   it.each(['feishu', 'wechat', 'automation'] as const)('%s receives the enabled MCP request snapshot', async (lane) => {
     const db = createMemoryAppDb('zh-CN')
     const session = createSession(db, { name: `mcp-${lane}` })

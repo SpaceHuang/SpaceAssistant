@@ -7,7 +7,8 @@ import type { ContinuationSourceQueries, FailedSourceCandidate, ContinuationSour
 /** Session-scoped canonical History inspection; callers choose policy but never enumerate storage. */
 export function inspectContinuationSources(db: AppDatabase): ContinuationSourceQueries {
   const queries: ContinuationSourceQueries = {
-    inspect: ({ sessionId, activeTurnIds, selectedAssistantMessageId }): ContinuationSourceInspection => {
+    read: ({ sessionId, activeTurnIds, selectedAssistantMessageId }): ContinuationSourceInspection => {
+      if (typeof sessionId !== 'string' || !sessionId.trim()) throw new Error('CONTINUATION_SOURCE_SESSION_ID_REQUIRED')
       const conn = getDbConnection(db)
       const history = new SqliteAgentHistory(conn, 1, Date.now, sessionId)
       const ids = history.listInvocationIdsForSession(sessionId)

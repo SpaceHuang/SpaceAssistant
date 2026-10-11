@@ -1,5 +1,5 @@
 import type { AppDatabase } from '../database'
-import { getConfigValue } from '../database'
+import { getConfigValue, getDbConnection } from '../database'
 import { runToolChatSession } from '../toolChatLoop'
 import { assembleInvocation, type AgentInvocationMaterials } from '../runtime/invocationAssembler'
 import { buildResolveWorkDirCallback, resolveWorkDirForSession, type WorkDirManager } from '../workDirManager'
@@ -43,6 +43,14 @@ import { createSecurityActionIntentStore } from '../confirmation/securityActionI
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createDeferredTodoTaskControlSafetyPort } from './deferredTodoTaskControlAdapter'
 import type { ImTaskSafetyPort } from './imTaskControlCoordinator'
+import { appendConfirmationFailureProjection, projectConfirmationSendFailures, type ConfirmationFailureProjection } from './confirmationFailureReceipt'
+import { filterTrackModelInputMessages } from './trackModelInputView'
+import { createCrossSessionTrackScopedHistoryPort } from './trackScopedHistoryPort'
+import { buildTrackModelInputViewRef } from './trackModelInputViewStore'
+import { bindRemoteTrackToTurn, readRemoteTrackSourceChildren, remoteTrackTurnBindingEventId, requestRemoteTrackTerminal } from '../database/remoteTrackStore'
+import { recordTrackModelMessage } from './trackModelInputViewStore'
+import { readRemoteTrackFeatureGates } from './remoteTrackFeatureGates'
+import { recordRemoteTrackRuntimeDiagnostic } from '../database/remoteTrackRuntimeDiagnosticStore'
 
 export function extractTextFromContent(content: unknown[]): string {
   let s = ''
@@ -55,7 +63,21 @@ export function extractTextFromContent(content: unknown[]): string {
   return s.trim()
 }
 
+async function readConfirmationFailureProjection(storage: SessionStorage, sessionId: string, invocationId: string): Promise<ConfirmationFailureProjection | undefined> {
+  try {
+    const history = await storage.execution.historyFor({ sessionId }).read(invocationId)
+    return projectConfirmationSendFailures(history.events)
+  } catch {
+    return undefined
+  }
+}
+
 export type ImRemoteAgentResult = { summary: string; pendingConfirm: boolean; ok: boolean; parked?: true; outcome?: 'cancelled' | 'timed-out' }
+
+export function trackTerminalTargetFromAgentResult(result: { ok: boolean; outcome?: string }): 'completed' | 'cancelled' | 'failed' {
+  if (result.outcome === 'cancelled') return 'cancelled'
+  return result.ok ? 'completed' : 'failed'
+}
 
 export async function runImRemoteAgent(args: {
   /** B1(偏差 23):准入门注入(测试);缺省全局默认门。 */
@@ -94,6 +116,35 @@ export async function runImRemoteAgent(args: {
   const injectedStorage = args.sessionStorage
   if (!injectedStorage) return { summary: '会话存储不可用。', pendingConfirm: false, ok: false }
   const storage: SessionStorage = injectedStorage
+  const remoteTrackChannel = args.remoteContext.source === 'wechat' || args.remoteContext.source === 'feishu'
+    ? args.remoteContext.source : undefined
+  if (!args.remoteContext.trackContext && remoteTrackChannel && readRemoteTrackFeatureGates(args.db, remoteTrackChannel).execution) {
+    try { recordRemoteTrackRuntimeDiagnostic(args.db, { channel: args.remoteContext.source, platformMessageId: args.remoteContext.messageId,
+      eventKind: 'untracked-runtime-invocation', reasonCode: 'track-context-missing', occurredAt: Date.now() }) } catch { /* preserve fail-closed runtime error */ }
+    throw new Error('TRACK_CONTEXT_REQUIRED')
+  }
+  const settleTrack = (turnId: string | undefined, target: 'completed' | 'cancelled' | 'failed') => {
+    const track = args.remoteContext.trackContext
+    if (!track) return
+    if (!turnId) throw new Error('TRACK_TERMINAL_TURN_ID_REQUIRED')
+    const turn = getDbConnection(args.db).prepare('SELECT session_id,assistant_message_id FROM turns WHERE turn_id=? AND track_id=?')
+      .get(turnId, track.trackId) as { session_id: string; assistant_message_id: string } | undefined
+    if (!turn) throw new Error('TRACK_TERMINAL_TURN_BINDING_MISSING')
+    const assistant = storage.queries.readMessage({ sessionId: turn.session_id, messageId: turn.assistant_message_id })
+    if (assistant?.role === 'assistant') {
+      recordTrackModelMessage(args.db, { trackId: track.trackId, eventId: `track-model:${turnId}:${assistant.id}`,
+        idempotencyKey: `track-model:${turnId}:${assistant.id}`, sessionId: turn.session_id, messageId: assistant.id,
+        invocationId: turnId, occurredAt: Date.now(), parentEventId: track.attributionEventId })
+    }
+    requestRemoteTrackTerminal(args.db, {
+      trackId: track.trackId,
+      target,
+      eventId: `track:${track.trackId}:turn:${turnId}:terminal:${target}`,
+      occurredAt: Date.now(),
+      readSourceChildren: (conn, trackId) => readRemoteTrackSourceChildren(conn, trackId, (requestedTrackId) =>
+        args.remoteContext.imChannel?.listPendingTrackConfirmations(requestedTrackId) ?? null)
+    })
+  }
 
   // B1(偏差 23):调用级准入——远端发起入口(四处之一)。票据覆盖整回合,拒绝即答复「资源忙」。
   const admissionGate = args.admissionGate ?? getCallAdmissionGate()
@@ -129,6 +180,7 @@ export async function runImRemoteAgent(args: {
   let sessionEventError: string | undefined
   let sessionEventStarted = false
   let turnIdForEvents = args.turnId ?? requestId
+  let confirmationFailureProjection: ConfirmationFailureProjection | undefined
   let sessionEventLocation: { workDir: string; sessionId: string; createdAt: number } | undefined
   let sessionEventSink: ReturnType<typeof getSessionEventSink> | undefined
   try {
@@ -170,6 +222,73 @@ export async function runImRemoteAgent(args: {
       acceptedUserMessageId = persisted.userMessageId
     } else {
       rawMessages = storage.queries.readMessages({ sessionId: args.sessionId })
+    }
+    let historyForSession = (sessionId: string) => storage.execution.historyFor({ sessionId })
+    if (args.remoteContext.trackContext) {
+      const track = args.remoteContext.trackContext
+      const view = args.remoteContext.trackModelInputView
+      if (!view) throw new Error('TRACK_MODEL_INPUT_VIEW_REQUIRED')
+      if (track.trackId !== view.trackId || view.sessionId !== args.sessionId) throw new Error('TRACK_MODEL_INPUT_SCOPE_MISMATCH')
+      const identityKey = args.remoteContext.source === 'wechat' ? args.remoteContext.userId : args.remoteContext.chatId
+      const durableEpoch = getDbConnection(args.db).prepare('SELECT epoch FROM remote_authorization_epochs WHERE channel=?')
+        .get(track.channel) as { epoch: number } | undefined
+      if (track.channel !== args.remoteContext.source || !identityKey || track.identityKey !== identityKey ||
+        !args.remoteContext.authOwner || track.ownerId !== args.remoteContext.authOwner || !durableEpoch || durableEpoch.epoch !== track.authorizationEpoch) {
+        try { recordRemoteTrackRuntimeDiagnostic(args.db, { channel: args.remoteContext.source, platformMessageId: args.remoteContext.messageId,
+          eventKind: 'track-owner-epoch-mismatch', reasonCode: 'authorization-scope-mismatch', occurredAt: Date.now() }) } catch { /* preserve auth failure */ }
+        throw new Error('TRACK_MODEL_INPUT_AUTH_SCOPE_MISMATCH')
+      }
+      if (!acceptedUserMessageId) throw new Error('TRACK_MODEL_INPUT_ACCEPTED_MESSAGE_REQUIRED')
+      const currentInvocationId = args.acceptedTurn?.turnId ?? args.turnId
+      if (!currentInvocationId) throw new Error('TRACK_MODEL_INPUT_CURRENT_INVOCATION_REQUIRED')
+      const persistedView = buildTrackModelInputViewRef(args.db, {
+        trackId: track.trackId, sessionId: args.sessionId, acceptedUserMessageId, currentInvocationId,
+        channel: track.channel, identityKey: track.identityKey, ownerId: track.ownerId, authorizationEpoch: track.authorizationEpoch,
+        rootMessageId: track.rootMessageId, attributionEventId: track.attributionEventId
+      })
+      if (persistedView.completeness !== 'complete' || persistedView.viewVersion !== view.viewVersion || persistedView.contentHash !== view.contentHash ||
+        JSON.stringify(persistedView.includedMessageIds) !== JSON.stringify(view.includedMessageIds) ||
+        JSON.stringify(persistedView.includedEventIds) !== JSON.stringify(view.includedEventIds) ||
+        JSON.stringify(persistedView.includedInvocationIds) !== JSON.stringify(view.includedInvocationIds) ||
+        JSON.stringify(persistedView.includedSessionIds) !== JSON.stringify(view.includedSessionIds) ||
+        JSON.stringify(persistedView.messageSessionMap) !== JSON.stringify(view.messageSessionMap) ||
+        JSON.stringify(persistedView.permittedParentTrackIds) !== JSON.stringify(view.permittedParentTrackIds) ||
+        JSON.stringify(persistedView.invocationSessionMap) !== JSON.stringify(view.invocationSessionMap)) {
+        throw new Error('TRACK_MODEL_INPUT_VIEW_STALE_OR_UNTRUSTED')
+      }
+      try {
+        bindRemoteTrackToTurn(args.db, {
+          trackId: track.trackId, turnId: currentInvocationId, sessionId: args.sessionId, channel: track.channel,
+          identityKey: track.identityKey, ownerId: track.ownerId, authorizationEpoch: track.authorizationEpoch,
+          eventId: remoteTrackTurnBindingEventId(track.trackId, currentInvocationId), occurredAt: Date.now()
+        })
+      } catch (error) {
+        try { recordRemoteTrackRuntimeDiagnostic(args.db, { channel: args.remoteContext.source, platformMessageId: args.remoteContext.messageId,
+          eventKind: 'track-association-write-failed', reasonCode: 'turn-association-write-failed', occurredAt: Date.now() }) } catch { /* preserve association failure */ }
+        throw error
+      }
+      const acceptedSnapshotMessage = rawMessages.find((message) => message.id === acceptedUserMessageId)
+      const acceptedPersistedMessage = storage.queries.readMessage({ sessionId: args.sessionId, messageId: acceptedUserMessageId })
+      if (!acceptedSnapshotMessage || !acceptedPersistedMessage || acceptedSnapshotMessage.sessionId !== acceptedPersistedMessage.sessionId ||
+        acceptedSnapshotMessage.role !== acceptedPersistedMessage.role || acceptedSnapshotMessage.content !== acceptedPersistedMessage.content) {
+        throw new Error('TRACK_ACCEPTED_INPUT_SNAPSHOT_MISMATCH')
+      }
+      const trackMessages = persistedView.includedMessageIds.map((messageId) => {
+        const sourceSessionId = persistedView.messageSessionMap[messageId]
+        if (!sourceSessionId || !persistedView.includedSessionIds.includes(sourceSessionId)) return undefined
+        return storage.queries.readMessage({ sessionId: sourceSessionId, messageId })
+      })
+      if (trackMessages.some((message) => !message)) throw new Error('TRACK_MODEL_INPUT_MESSAGE_MISSING')
+      rawMessages = filterTrackModelInputMessages(trackMessages as import('../../src/shared/domainTypes').Message[], persistedView, acceptedUserMessageId)
+      const scopedHistory = createCrossSessionTrackScopedHistoryPort(
+        (sessionId) => storage.execution.historyFor({ sessionId }),
+        { currentSessionId: args.sessionId, allowedInvocationIds: persistedView.includedInvocationIds,
+          invocationSessionMap: persistedView.invocationSessionMap }
+      )
+      historyForSession = (sessionId: string) => {
+        if (sessionId !== args.sessionId) throw new Error('TRACK_HISTORY_SESSION_MISMATCH')
+        return scopedHistory
+      }
     }
     const built = buildClaudeToolChatMessages(rawMessages, {
       workspaceRoot: resolved?.workDir,
@@ -316,7 +435,7 @@ export async function runImRemoteAgent(args: {
       getApiKey,
       appDb: args.db,
       sessionStorage: storage,
-      historyForSession: (sessionId: string) => storage.execution.historyFor({ sessionId }),
+      historyForSession,
       ...(sessionEventLocation ? { sessionEventLocation } : {}),
       remoteContext,
       ...(currentUserMessage?.content ? { approvalTaskDigest: currentUserMessage.content } : {}),
@@ -339,33 +458,53 @@ export async function runImRemoteAgent(args: {
       })
     })
 
+    confirmationFailureProjection = await readConfirmationFailureProjection(storage, args.sessionId, args.acceptedTurn?.turnId ?? args.turnId ?? requestId)
+
     if (!res.ok) {
+      settleTrack(args.acceptedTurn?.turnId ?? args.turnId, trackTerminalTargetFromAgentResult(res))
       sessionEventReason = res.cancelled ? 'cancelled' : 'failed'
       const pending = res.error.includes('确认')
-      const result = { summary: res.error, pendingConfirm: pending, ok: false as const, ...(res.cancelled ? { outcome: 'cancelled' as const } : {}) }
+      const result = { summary: appendConfirmationFailureProjection(res.error, confirmationFailureProjection), pendingConfirm: pending, ok: false as const, ...(res.cancelled ? { outcome: 'cancelled' as const } : {}) }
       args.logDone?.({ ...result, error: res.error })
       return result
     }
 
     if (res.parked) {
+      settleTrack(args.acceptedTurn?.turnId ?? args.turnId, trackTerminalTargetFromAgentResult(res))
       sessionEventReason = 'interrupted'
-      const result = { summary: '', pendingConfirm: true, ok: true as const, parked: true as const }
+      const result = confirmationFailureProjection
+        ? { summary: confirmationFailureProjection.summary, pendingConfirm: false, ok: true as const, parked: true as const }
+        : { summary: '', pendingConfirm: true, ok: true as const, parked: true as const }
       args.logDone?.(result)
       return result
     }
 
     const text = extractTextFromContent(res.content)
+    settleTrack(args.acceptedTurn?.turnId ?? args.turnId, trackTerminalTargetFromAgentResult(res))
     sessionEventReason = 'completed'
-    const result = { summary: text || '任务已完成。', pendingConfirm: false, ok: true as const }
+    const result = { summary: confirmationFailureProjection?.summary ?? (text || '任务已完成。'), pendingConfirm: false, ok: true as const }
     args.logDone?.(result)
     return result
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e)
+    try { settleTrack(args.acceptedTurn?.turnId ?? args.turnId, trackTerminalTargetFromAgentResult({ ok: false,
+      ...(e instanceof HostedTurnFinalizedError ? { outcome: e.outcome } : {}) })) }
+    catch (trackError) { args.logError?.(`Track settlement failed: ${trackError instanceof Error ? trackError.message : String(trackError)}`) }
+    confirmationFailureProjection ??= await readConfirmationFailureProjection(storage, args.sessionId, args.acceptedTurn?.turnId ?? args.turnId ?? requestId)
+    if (!confirmationFailureProjection) {
+      if (e instanceof HostedTurnFinalizedError) sessionEventReason = hostedTerminalSessionEventReason(e.outcome)
+      sessionEventError = error
+      args.logError?.(error)
+      if (args.rethrowAsError) throw e instanceof Error ? e : new Error(error)
+      throw e
+    }
+    const errorWithConfirmationFailure = appendConfirmationFailureProjection(error, confirmationFailureProjection)
     if (e instanceof HostedTurnFinalizedError) sessionEventReason = hostedTerminalSessionEventReason(e.outcome)
-    sessionEventError = error
-    args.logError?.(error)
-    if (args.rethrowAsError) throw e instanceof Error ? e : new Error(error)
-    throw e
+    sessionEventError = errorWithConfirmationFailure
+    args.logError?.(errorWithConfirmationFailure)
+    if (e instanceof HostedTurnFinalizedError) throw new HostedTurnFinalizedError(new Error(errorWithConfirmationFailure, { cause: e }), e.outcome, e.usage)
+    if (args.rethrowAsError) throw new Error(errorWithConfirmationFailure, { cause: e })
+    throw new Error(errorWithConfirmationFailure, { cause: e })
   } finally {
     if (sessionEventStarted) {
       if (sessionEventLocation && sessionEventSink) {

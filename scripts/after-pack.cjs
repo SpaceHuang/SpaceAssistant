@@ -6,6 +6,7 @@ const crypto = require('crypto')
 /** @param {import('app-builder-lib').AfterPackContext} context */
 module.exports = async function afterPack(context) {
   const platform = context.electronPlatformName
+  verifyMicromarkRuntimeDependency(context)
   const buildIdentity = writeSessionStorageBuildIdentity(context)
   writeSessionStorageCleanupReleaseMetadata(context, buildIdentity)
   if (platform === 'win32' || platform === 'darwin') copyBundledRipgrep(context)
@@ -17,6 +18,23 @@ module.exports = async function afterPack(context) {
     return adHocSignMacApp(context)
   }
 }
+
+function verifyMicromarkRuntimeDependency(context) {
+  const asarPath = context.electronPlatformName === 'darwin'
+    ? path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources', 'app.asar')
+    : path.join(context.appOutDir, 'resources', 'app.asar')
+  const entry = 'node_modules/micromark-util-subtokenize/index.js'
+  try {
+    const asar = require('@electron/asar')
+    asar.uncache(asarPath)
+    asar.statFile(asarPath, entry)
+  } catch (error) {
+    throw new Error(`[afterPack] missing micromark-util-subtokenize in app.asar: ${entry}`, { cause: error })
+  }
+  console.log('[afterPack] verified micromark-util-subtokenize runtime dependency')
+}
+
+module.exports.verifyMicromarkRuntimeDependency = verifyMicromarkRuntimeDependency
 
 function writeSessionStorageBuildIdentity(context, runGit = execFileSync) {
   const projectDir = context.packager.info.projectDir

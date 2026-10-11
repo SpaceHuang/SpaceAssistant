@@ -1576,7 +1576,10 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
 
     try {
       const runningTurn = execute(makeSender(), { requestId, turnId, turnStartToken: startToken, sessionId: session.id })
-      await atClaim
+      await Promise.race([
+        atClaim,
+        runningTurn.then((result) => { throw new Error(`Hosted turn settled before dispatch claim: ${JSON.stringify(result)}`) })
+      ])
       expect(executor).not.toHaveBeenCalled()
       if (toolName === 'list_directory') await expect(fs.readdir(targetPath)).resolves.toEqual([])
       const expectedReason = invalidation === 'cancel' ? 'REQUEST_CANCELLED' : invalidation === 'revoke' ? 'REVOKED' : 'AUTHORIZATION_STALE'
@@ -3605,10 +3608,10 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'hosted-browser-config-drift-start',
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'zh-CN' }
     })
-    const mutateDuringApproval = async () => {
-      changeBrowserPolicy()
-      return { ok: true, verdict: { kind: 'approve', reason: { summary: 'browser configuration changed during confirmation' }, riskLevel: 'medium', authorization: 'high' } } as never
-    }
+    const mutateDuringApproval = async () => ({
+      ok: true,
+      verdict: { kind: 'undetermined', reason: { summary: '需要用户确认浏览器动作' } }
+    } as never)
     vi.mocked(runApprovalAgent).mockImplementationOnce(mutateDuringApproval)
     vi.mocked(waitForToolConfirm).mockImplementationOnce(async () => {
       changeBrowserPolicy()
@@ -3744,7 +3747,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     runtime.modelProviders.register = (profile, provider) => profile.routeId === route.routeId ? route.routeId : registerProvider(profile, provider)
     setDefaultAgentRuntime(runtime)
     vi.mocked(runApprovalAgent).mockResolvedValueOnce({
-      ok: true, verdict: { kind: 'approve', reason: { summary: `approved browser ${action} for late-ack test` }, riskLevel: 'medium', authorization: 'high' }
+      ok: true, verdict: { kind: 'undetermined', reason: { summary: `user confirmation required for browser ${action}` } }
     } as never)
 
     const session = createSession(db, { name: `hosted-browser-${action}-late-result`, model: modelId, maxTokens: 512 })
@@ -3854,6 +3857,11 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const registerProvider = runtime.modelProviders.register.bind(runtime.modelProviders)
     runtime.modelProviders.register = (profile, provider) => profile.routeId === routeId ? routeId : registerProvider(profile, provider)
     setDefaultAgentRuntime(runtime)
+    // Exercise the documented agent-undetermined → desktop human confirmation path.
+    vi.mocked(runApprovalAgent).mockResolvedValueOnce({
+      ok: true,
+      verdict: { kind: 'undetermined', reason: { summary: '缺少足够证据，需要用户确认' } }
+    } as never)
     const initialPackages = readPolicyPackages(db)
     initialPackages.desktop = 'standard'
     writePolicyPackages(db, initialPackages)
@@ -3900,7 +3908,14 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
 
     try {
       const runningTurn = execute(makeSender(), { requestId, turnId, turnStartToken: startToken, sessionId: session.id })
-      await atClaim
+      await Promise.race([
+        atClaim,
+        runningTurn.then(async (result) => {
+          const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
+          const notDispatched = history.events.find((event) => event.kind === 'tool-call-not-dispatched')
+          throw new Error(`Hosted browser turn settled before dispatch claim: ${JSON.stringify({ result, notDispatched: notDispatched?.payload })}`)
+        })
+      ])
       expect(executeBrowser).not.toHaveBeenCalled()
       if (invalidation === 'cancel') {
         runtime.chatCancels.signalChatCancel(turnId)

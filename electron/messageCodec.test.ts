@@ -79,6 +79,14 @@ describe('deserializeToolCallsFromDb', () => {
       autoApproveFallback: call.autoApproveFallback, currentPageUrl: call.currentPageUrl, dangerInfo: call.dangerInfo, sessionTrustedHint: true
     })
   })
+  it('round-trips the confirmation lane so remote approvals cannot restore as desktop cards', () => {
+    const restored = deserializeToolCallsFromDb(serializeToolCallsForDb([{
+      id: 'wechat-confirmation', toolName: 'mcp_fetch_fetch_server', input: { url: 'https://example.com' },
+      status: 'confirming', riskLevel: 'medium', confirmationLane: 'wechat'
+    }]))?.[0]
+
+    expect(restored?.confirmationLane).toBe('wechat')
+  })
   it('13: returns corrupted placeholder and logs on parse failure', () => {
     const result = deserializeToolCallsFromDb('not-valid-json{{{')
     expect(result).toHaveLength(1)

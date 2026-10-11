@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appendImInboxMessage, appendImInboxMessageWithWakeEvent, ackImInboxMessage, claimImInboxMessage, releaseImInboxMessage, renewImInboxClaim, listImInboxMessages, getImInboxMessageContext } from './imInbox'
+import { appendImInboxMessage, appendImInboxMessageWithWakeEvent, ackImInboxMessage, claimImInboxMessage, releaseImInboxMessage, renewImInboxClaim, listImInboxMessages, getImInboxMessageContext, parkImInboxMessageForClarification, resumeClarificationInboxMessage } from './imInbox'
 import { createMemoryAppDb, createTempDatabase } from './testHelpers'
 import { createSession } from './operations'
 import { listQueuedUserMessages } from './operations'
@@ -9,8 +9,129 @@ import { buildImQueueScope } from '../../src/shared/queueScope'
 import { appendWakeEvent, claimWakeEvents, finalizeWakeEvents, listWakeEvents } from './wakeEvents'
 import { createImInboxMutationToolRegistry } from '../remote/imInboxToolContext'
 import { getWorkflowState, putWorkflowState } from './workflowState'
+import { createRemoteTrack } from './remoteTrackStore'
+import { expireDuePendingClarifications, listPendingClarificationNotices, listRecoverableClarificationPrompts,
+  startClarificationSendAttempt, finishClarificationSendAttempt, resolveClarificationSelection } from './clarificationStore'
 
 describe('IM Inbox persistence', () => {
+  it('expires parked clarification input during recovery and writes one terminal lifecycle notice', () => {
+    const db = createMemoryAppDb()
+    try {
+      const sessionId = createSession(db, { name: 'clarification-expiry-recovery' }).id
+      const queueScope = buildImQueueScope('wechat', sessionId)
+      createRemoteTrack(db, { trackId: 'expire-track', eventId: 'expire-track-event', idempotencyKey: 'expire-track-root', channel: 'wechat',
+        identityKey: 'alice', ownerId: 'owner-a', authorizationEpoch: 1, rootMessageId: 'expire-root', occurredAt: 1 })
+      const parked = parkImInboxMessageForClarification(db, {
+        sessionId, channel: 'wechat', queueScope, channelMessageId: 'expire-platform-message', content: '继续任务',
+        clarificationId: 'expire-clarification', identityKey: 'alice', ownerId: 'owner-a', authorizationEpoch: 1,
+        handle: 'ABCDEFGHJK345', candidates: [{ trackId: 'expire-track', option: 1, label: '任务', stateAtIssue: 'open' }], expiresAt: 500, now: 100
+      })
+      expect(expireDuePendingClarifications(db, 499, 'wechat')).toEqual([])
+      expect(expireDuePendingClarifications(db, 500, 'wechat')).toEqual([{
+        clarificationId: 'expire-clarification', channel: 'wechat', identityKey: 'alice', ownerId: 'owner-a', sessionId,
+        eventId: 'clarification-terminal:expire-clarification:expired', stage: 'failed',
+        text: '这条澄清已超时，原消息没有执行。请重新发送原指令。'
+      }])
+      expect(listPendingClarificationNotices(db, 'wechat')).toEqual([{
+        clarificationId: 'expire-clarification', channel: 'wechat', identityKey: 'alice', ownerId: 'owner-a', sessionId,
+        eventId: 'clarification-terminal:expire-clarification:expired', stage: 'failed',
+        text: '这条澄清已超时，原消息没有执行。请重新发送原指令。'
+      }])
+      expect(expireDuePendingClarifications(db, 501, 'wechat')).toEqual([])
+      expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=?').get(parked.messageId)).toEqual({ status: 'clarification-expired' })
+      expect(getDbConnection(db).prepare("SELECT state FROM queue_input_requests WHERE request_id='expire-platform-message'").get()).toEqual({ state: 'expired' })
+      expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM im_lifecycle_outbox WHERE event_id='clarification-terminal:expire-clarification:expired'").get()).toEqual({ count: 1 })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('parks ambiguous input without a wake and resumes it once with Track attribution and a durable wake', async () => {
+    const db = createMemoryAppDb()
+    try {
+      const sessionId = createSession(db, { name: 'clarification-park-resume' }).id
+      const queueScope = buildImQueueScope('wechat', sessionId)
+      createRemoteTrack(db, { trackId: 'track-a', eventId: 'track-event-a', idempotencyKey: 'track-inbound-a', channel: 'wechat',
+        identityKey: 'alice', ownerId: 'owner-a', authorizationEpoch: 1, rootMessageId: 'root-a', occurredAt: 10 })
+      getDbConnection(db).prepare("UPDATE remote_tracks SET origin_session_id=? WHERE track_id='track-a'").run(sessionId)
+      const parked = parkImInboxMessageForClarification(db, {
+        sessionId, channel: 'wechat', queueScope, channelMessageId: 'ambiguous-platform-message', content: '继续刚才的搜索',
+        clarificationId: 'clarification-park-1', identityKey: 'alice', ownerId: 'owner-a', authorizationEpoch: 1,
+        handle: 'ABCDEFGHJK345', candidates: [{ trackId: 'track-a', option: 1, label: '任务 A', stateAtIssue: 'open' }], expiresAt: 1000, now: 100
+      })
+      expect(parked.duplicate).toBe(false)
+      expect(listImInboxMessages(db, { queueScope })).toEqual([])
+      expect(listWakeEvents(db, sessionId)).toEqual([])
+      expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=?').get(parked.messageId)).toEqual({ status: 'parked' })
+      expect(getDbConnection(db).prepare("SELECT state FROM queue_input_requests WHERE session_id=? AND request_id='ambiguous-platform-message'").get(sessionId))
+        .toEqual({ state: 'parked' })
+      expect(listRecoverableClarificationPrompts(db, 'wechat', 110)).toMatchObject([{
+        clarificationId: 'clarification-park-1', version: 1, handle: 'ABCDEFGHJK345', ownerId: 'owner-a', sessionId,
+        latestAttemptState: null, candidates: [{ trackId: 'track-a', option: 1 }]
+      }])
+      startClarificationSendAttempt(db, { sendAttemptId: 'send-1', clarificationId: 'clarification-park-1', version: 1, startedAt: 110 })
+      expect(listRecoverableClarificationPrompts(db, 'wechat', 120)).toEqual([])
+      finishClarificationSendAttempt(db, { sendAttemptId: 'send-1', state: 'send-outcome-unknown', finishedAt: 130 })
+      expect(listRecoverableClarificationPrompts(db, 'wechat', 130)).toMatchObject([{ latestAttemptState: 'send-outcome-unknown' }])
+      expect(resolveClarificationSelection(db, { handle: 'ABCDEFGHJK345', option: 1, channel: 'wechat', identityKey: 'alice',
+        ownerId: 'owner-a', authorizationEpoch: 1, replyMessageId: 'reply-1', trackEventId: 'consume-event-a', workId: 'work-a', now: 150 }))
+        .toMatchObject({ kind: 'resolved', trackId: 'track-a' })
+
+      const resumed = resumeClarificationInboxMessage(db, {
+        clarificationId: 'clarification-park-1', trackId: 'track-a', trackEventId: 'track-event-a', now: 200
+      })
+      expect(resumed).toMatchObject({ kind: 'resumed', messageId: parked.messageId, sessionId })
+      expect(listImInboxMessages(db, { queueScope })).toHaveLength(1)
+      expect(listWakeEvents(db, sessionId)).toHaveLength(1)
+      expect(getDbConnection(db).prepare("SELECT state FROM queue_input_requests WHERE session_id=? AND request_id='ambiguous-platform-message'").get(sessionId))
+        .toEqual({ state: 'consumed' })
+      expect(getImInboxMessageContext(db, parked.messageId)).toMatchObject({ trackId: 'track-a', trackEventId: 'track-event-a' })
+      expect(resumeClarificationInboxMessage(db, {
+        clarificationId: 'clarification-park-1', trackId: 'track-a', trackEventId: 'track-event-a', now: 201
+      })).toMatchObject({ kind: 'already-resumed', messageId: parked.messageId })
+      expect(listWakeEvents(db, sessionId)).toHaveLength(1)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('moves a cross-session clarification message and its queue receipt to the selected Track session atomically', () => {
+    const db = createMemoryAppDb()
+    try {
+      const trackSessionId = createSession(db, { name: 'clarification-target-session' }).id
+      const intakeSessionId = createSession(db, { name: 'clarification-intake-session' }).id
+      createRemoteTrack(db, { trackId: 'cross-session-track', eventId: 'cross-session-root-event', idempotencyKey: 'cross-session-root',
+        channel: 'wechat', identityKey: 'alice', ownerId: 'owner-a', authorizationEpoch: 1, rootMessageId: 'cross-session-root-message',
+        originSessionId: trackSessionId, occurredAt: 1 })
+      const parked = parkImInboxMessageForClarification(db, { sessionId: intakeSessionId, channel: 'wechat',
+        queueScope: buildImQueueScope('wechat', intakeSessionId), channelMessageId: 'cross-session-source-message', content: '继续原任务',
+        clarificationId: 'cross-session-clarification', identityKey: 'alice', ownerId: 'owner-a', authorizationEpoch: 1,
+        handle: 'EFGHJKMNPQ345', candidates: [{ trackId: 'cross-session-track', option: 1, label: '原任务', stateAtIssue: 'open' }],
+        expiresAt: 10_000, now: 100 })
+      startClarificationSendAttempt(db, { sendAttemptId: 'cross-session-send', clarificationId: 'cross-session-clarification', version: 1, startedAt: 101 })
+      finishClarificationSendAttempt(db, { sendAttemptId: 'cross-session-send', state: 'send-fulfilled', finishedAt: 102 })
+      const selection = resolveClarificationSelection(db, { handle: 'EFGHJKMNPQ345', option: 1, channel: 'wechat', identityKey: 'alice',
+        ownerId: 'owner-a', authorizationEpoch: 1, replyMessageId: 'cross-session-reply', trackEventId: 'cross-session-consumed-event',
+        workId: 'cross-session-work', now: 103 })
+      expect(selection).toMatchObject({ kind: 'resolved', trackId: 'cross-session-track' })
+      if (selection.kind !== 'resolved') throw new Error('cross-session clarification did not resolve')
+
+      const resumed = resumeClarificationInboxMessage(db, { clarificationId: 'cross-session-clarification', trackId: selection.trackId,
+        trackEventId: 'cross-session-consumed-event', now: 104 })
+
+      expect(resumed).toMatchObject({ kind: 'resumed', sessionId: trackSessionId, messageId: parked.messageId })
+      expect(listImInboxMessages(db, { queueScope: buildImQueueScope('wechat', trackSessionId) }).map(({ messageId }) => messageId))
+        .toEqual([parked.messageId])
+      expect(listImInboxMessages(db, { queueScope: buildImQueueScope('wechat', intakeSessionId) })).toEqual([])
+      expect(getDbConnection(db).prepare('SELECT session_id,queue_scope,status FROM messages WHERE id=?').get(parked.messageId))
+        .toEqual({ session_id: trackSessionId, queue_scope: `im:wechat:${trackSessionId}`, status: 'queued' })
+      expect(getDbConnection(db).prepare("SELECT session_id,queue_scope,state FROM queue_input_requests WHERE request_id='cross-session-source-message'").get())
+        .toEqual({ session_id: trackSessionId, queue_scope: `im:wechat:${trackSessionId}`, state: 'consumed' })
+      expect(claimImInboxMessage(db, { queueScope: buildImQueueScope('wechat', trackSessionId), messageId: parked.messageId, ownerId: 'dispatcher' }))
+        .toMatchObject({ messageId: parked.messageId })
+    } finally { db.close() }
+  })
+
   it('stores workflow state with revision CAS and does not overwrite on conflict', () => {
     const db = createMemoryAppDb()
     const sessionId = createSession(db, { name: 'im-workflow-revision-red' }).id
@@ -329,10 +450,12 @@ describe('IM Inbox persistence', () => {
     const db = createMemoryAppDb()
     const sessionId = createSession(db, { name: 'wechat-inbox-context' }).id
     const queueScope = buildImQueueScope('wechat', sessionId)
+    createRemoteTrack(db, { trackId: 'track-1', eventId: 'event-1', idempotencyKey: 'inbound:wechat:user:root', channel: 'wechat',
+      identityKey: 'user', ownerId: 'owner', authorizationEpoch: 1, rootMessageId: 'root', occurredAt: 1 })
     const accepted = appendImInboxMessageWithWakeEvent(db, { sessionId, channel: 'wechat', queueScope,
-      channelMessageId: 'wechat-platform-1', content: 'queued', contextToken: 'context-token-1' })
+      channelMessageId: 'wechat-platform-1', content: 'queued', contextToken: 'context-token-1', trackId: 'track-1', trackEventId: 'event-1' })
     expect(getImInboxMessageContext(db, accepted.messageId)).toEqual({ messageId: accepted.messageId, channel: 'wechat',
-      platformMessageId: 'wechat-platform-1', contextToken: 'context-token-1' })
+      platformMessageId: 'wechat-platform-1', contextToken: 'context-token-1', trackId: 'track-1', trackEventId: 'event-1' })
     db.close()
   })
 

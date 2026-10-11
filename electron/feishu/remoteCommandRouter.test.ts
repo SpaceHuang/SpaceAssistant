@@ -21,11 +21,11 @@ import {
   releaseRemoteSession
 } from '../remote/remoteAgentRegistry'
 import * as workDirBinding from '../workDirBinding'
-import { listQueuedUserMessages } from '../database/operations'
+import { appendMessage as appendMessageOperation, createPersistedTurn, listQueuedUserMessages } from '../database/operations'
 import { listWakeEvents } from '../database/wakeEvents'
 import { buildImQueueScope } from '../../src/shared/queueScope'
 import { getDbConnection } from '../database/sqliteStore'
-import { ackImInboxMessage, appendImInboxMessageWithWakeEvent, listImInboxMessages } from '../database/imInbox'
+import { ackImInboxMessage, appendImInboxMessageWithWakeEvent, listImInboxMessages, parkImInboxMessageForClarification } from '../database/imInbox'
 import { createWakeEventDispatcher } from '../remote/wakeEventDispatcher'
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
@@ -34,6 +34,9 @@ import { createDeferredEnvelopeStore } from '../confirmation/deferredEnvelopeSto
 import { createDeferredExecutionResultStore } from '../confirmation/deferredExecutionResultStore'
 import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
 import { acceptTurnContext } from '../database/acceptedTurnStorage'
+import { attributeAndPersistRemoteMessage } from '../remote/remoteTrackAttributionService'
+import { appendRemoteTrackEvent, createRemoteTrack, mapRemoteTrackMessage } from '../database/remoteTrackStore'
+import { finishClarificationSendAttempt, startClarificationSendAttempt } from '../database/clarificationStore'
 
 vi.mock('../secureApiKey', () => ({ isSecretStorageAvailable: vi.fn(() => true), encryptSecret: (value: string) => `enc:${value}`, decryptSecret: (value: string) => value.replace(/^enc:/, '') }))
 
@@ -180,7 +183,7 @@ describe('RemoteCommandRouter workdir binding', () => {
   function makeRouter(
     db: ReturnType<typeof openDatabase>,
     manager: ReturnType<typeof createWorkDirManager>,
-    options?: { maxParallel?: number; tryResolveConfirm?: boolean; approvalGate?: boolean; wc?: { send: (...args: unknown[]) => void }; turnRuntime?: TurnRuntime; wakeDispatcher?: { dispatchSession: (sessionId: string) => Promise<void> }; retryDeferredApprovalNotifications?: (scope: { identityKey: string; ownerId: string }) => Promise<unknown>; handleDeferredApprovalReply?: (input: { message: FeishuInboundMessage; text: string }) => Promise<void> }
+    options?: { maxParallel?: number; tryResolveConfirm?: boolean; approvalGate?: boolean; wc?: { send: (...args: unknown[]) => void }; turnRuntime?: TurnRuntime; wakeDispatcher?: { dispatchSession: (sessionId: string) => Promise<void> }; retryDeferredApprovalNotifications?: (scope: { identityKey: string; ownerId: string }) => Promise<unknown>; handleDeferredApprovalReply?: (input: { message: FeishuInboundMessage; text: string }) => Promise<void>; handleClarificationReply?: (input: import('../remote/clarificationInbound').ClarificationResolverInput) => Promise<import('../remote/clarificationInbound').ClarificationResolverResult> }
   ) {
     const auditAppend = vi.fn().mockResolvedValue(undefined)
     const processedStore = makeProcessedStore()
@@ -191,7 +194,8 @@ describe('RemoteCommandRouter workdir binding', () => {
       runner: { run: vi.fn() } as never,
       processedStore: processedStore as never,
       imChannel: {
-        tryResolveFromInboundMessage: () => options?.tryResolveConfirm ?? false
+        tryResolveFromInboundMessage: () => options?.tryResolveConfirm ?? false,
+        listPendingTrackConfirmations: () => []
       } as never,
       auditLogger: { append: auditAppend } as never,
       getFeishuConfig: () =>
@@ -218,6 +222,7 @@ describe('RemoteCommandRouter workdir binding', () => {
       wakeEventDispatcher: options?.wakeDispatcher,
       retryDeferredApprovalNotifications: options?.retryDeferredApprovalNotifications,
       handleDeferredApprovalReply: options?.handleDeferredApprovalReply,
+      handleClarificationReply: options?.handleClarificationReply,
       isRemoteAsyncApprovalEnabled: () => options?.approvalGate ?? true
     } as never)
     return { router, auditAppend, processedStore }
@@ -280,6 +285,77 @@ describe('RemoteCommandRouter workdir binding', () => {
     expect(mockResolveFeishuSession).not.toHaveBeenCalled()
     expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
     expect(processedStore.tryClaim).not.toHaveBeenCalled()
+  })
+
+  it('consumes clarification selections before the Agent and delegates only the strict parsed choice', async () => {
+    const { db, manager } = setupDbAndManager()
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: '选择 ABCD-EFGH-JK345 2' })
+    const handleClarificationReply = vi.fn(async () => ({ kind: 'resolved' as const, trackId: 'track-1', workId: 'work-1' }))
+    const { router, processedStore } = makeRouter(db, manager, { handleClarificationReply })
+    await router.handleInbound(makeInbound({ messageId: 'clarification-choice', content: '选择 ABCD-EFGH-JK345 2' }))
+    expect(handleClarificationReply).toHaveBeenCalledWith(expect.objectContaining({
+      channel: 'feishu', identityKey: 'chat-1', ownerId: 'user-1', replyMessageId: 'clarification-choice',
+      handle: 'ABCDEFGHJK345', option: 2
+    }))
+    expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
+    expect(processedStore.markCompleted).toHaveBeenCalledWith('clarification-choice', expect.any(String), 'clarification_resolved')
+  })
+
+  it('resolves a Feishu clarification through the default resolver when chatId differs from senderOpenId', async () => {
+    const { db, manager } = setupDbAndManager()
+    const session = createSession(db, { name: 'Feishu clarification identity', metadata: {
+      source: 'feishu', feishuChatId: 'chat-workspace-42', feishuSenderOpenId: 'user-1'
+    } })
+    createRemoteTrack(db, { trackId: 'feishu-identity-track', eventId: 'feishu-identity-root', idempotencyKey: 'feishu-identity-root-key',
+      channel: 'feishu', identityKey: 'chat-workspace-42', ownerId: 'user-1', authorizationEpoch: 1,
+      rootMessageId: 'feishu-identity-root-message', originSessionId: session.id, occurredAt: 1 })
+    const parked = parkImInboxMessageForClarification(db, { sessionId: session.id, channel: 'feishu',
+      queueScope: buildImQueueScope('feishu', session.id), channelMessageId: 'feishu-identity-source-message', content: '继续工作区任务',
+      clarificationId: 'feishu-identity-clarification', identityKey: 'chat-workspace-42', ownerId: 'user-1', authorizationEpoch: 1,
+      handle: 'GJKMNPQRST234', candidates: [{ trackId: 'feishu-identity-track', option: 1, label: '工作区任务', stateAtIssue: 'open' }],
+      expiresAt: Date.now() + 60_000 })
+    startClarificationSendAttempt(db, { sendAttemptId: 'feishu-identity-send', clarificationId: 'feishu-identity-clarification', version: 1, startedAt: Date.now() })
+    finishClarificationSendAttempt(db, { sendAttemptId: 'feishu-identity-send', state: 'send-fulfilled', finishedAt: Date.now() })
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: '选择 GJKM-NPQR-ST234 1' })
+    for (const [key, value] of Object.entries({ remoteTrackPersist: 'true', remoteTrackRolloutChannels: '["feishu"]', remoteTrackExecution: 'true',
+      remoteTrackRecovery: 'true', remoteTrackScopedModelInput: 'true', remoteTrackClarification: 'true' })) setConfigValue(db, key, value)
+    let sequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `feishu-clarification-${++sequence}` } })
+    mockRunFeishuRemoteAgent.mockResolvedValue({ summary: 'continued', pendingConfirm: false, ok: true })
+    let dispatcher: ReturnType<typeof createWakeEventDispatcher>
+    const dispatchSession = vi.fn(async (sessionId: string) => dispatcher.dispatchSession(sessionId))
+    const { router } = makeRouter(db, manager, { turnRuntime: runtime, wakeDispatcher: { dispatchSession } })
+    dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
+
+    await router.handleInbound(makeInbound({ messageId: 'feishu-identity-reply', chatId: 'chat-workspace-42', senderOpenId: 'user-1',
+      content: '选择 GJKM-NPQR-ST234 1' }))
+
+    expect(getDbConnection(db).prepare('SELECT state,selected_track_id FROM remote_clarifications WHERE clarification_id=?')
+      .get('feishu-identity-clarification')).toEqual({ state: 'resolved', selected_track_id: 'feishu-identity-track' })
+    expect(getDbConnection(db).prepare('SELECT session_id FROM remote_track_work_queue WHERE clarification_id=?')
+      .get('feishu-identity-clarification')).toEqual({ session_id: session.id })
+    expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=?').get(parked.messageId)).toEqual({ status: 'sent' })
+    expect(dispatchSession).toHaveBeenCalledWith(session.id)
+    expect(mockRunFeishuRemoteAgent).toHaveBeenCalledTimes(1)
+    expect(mockRunFeishuRemoteAgent.mock.calls[0]?.[0]).toMatchObject({
+      userMessage: '继续工作区任务', remoteContext: { trackContext: { trackId: 'feishu-identity-track' } }
+    })
+    expect(getDbConnection(db).prepare('SELECT state FROM remote_track_work_queue WHERE clarification_id=?')
+      .get('feishu-identity-clarification')).toEqual({ state: 'completed' })
+    expect(getDbConnection(db).prepare('SELECT state FROM remote_tracks WHERE track_id=?')
+      .get('feishu-identity-track')).toEqual({ state: 'completed' })
+    await dispatcher.dispose()
+  })
+
+  it('reserves malformed clarification control syntax and does not queue it as user input', async () => {
+    const { db, manager } = setupDbAndManager()
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: '选择 ABCD 1' })
+    const { router } = makeRouter(db, manager)
+    await router.handleInbound(makeInbound({ messageId: 'clarification-malformed', content: '选择 ABCD 1' }))
+    expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
+    expect(mockSendFeishuRemoteOutbound).toHaveBeenCalledWith(expect.objectContaining({ body: expect.stringContaining('澄清回复格式无效') }))
+    expect(getDbConnection(db).prepare('SELECT channel,platform_message_id,event_kind,reason_code FROM remote_track_diagnostic_events').get())
+      .toEqual({ channel: 'feishu', platform_message_id: 'clarification-malformed', event_kind: 'clarification.reply', reason_code: 'invalid' })
   })
 
   it('routes an approval-shaped message as an ordinary inbound while the durable gate is closed', async () => {
@@ -370,7 +446,8 @@ describe('RemoteCommandRouter workdir binding', () => {
     })
     let turnSequence = 0
     const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `wake-feishu-${++turnSequence}` } })
-    const { router } = makeRouter(db, manager, { turnRuntime: runtime })
+    const dispatchSession = vi.fn(async () => undefined)
+    const { router } = makeRouter(db, manager, { turnRuntime: runtime, wakeDispatcher: dispatchSession })
     mockRunFeishuRemoteAgent.mockResolvedValue({ summary: 'recovered', pendingConfirm: false, ok: true })
 
     await router.dispatchWakeEventSet({ sessionId: session.id, runId: 'wake-run-1', ownerId: 'wake-run-1',
@@ -663,7 +740,7 @@ describe('RemoteCommandRouter busy guard', () => {
   function makeRouter(
     db: ReturnType<typeof openDatabase>,
     manager: ReturnType<typeof createWorkDirManager>,
-    options?: { maxParallel?: number; tryResolveConfirm?: boolean; turnRuntime?: TurnRuntime }
+    options?: { maxParallel?: number; tryResolveConfirm?: boolean; turnRuntime?: TurnRuntime; wakeDispatcher?: { dispatchSession: (sessionId: string) => Promise<void> } }
   ) {
     const processedStore = makeProcessedStore()
     const router = new RemoteCommandRouter({
@@ -696,7 +773,8 @@ describe('RemoteCommandRouter busy guard', () => {
       getBaseUrl: () => '',
       getMainWebContents: () => null,
       getModel: () => 'claude-sonnet-4-20250514',
-      getToolsConfig: () => DEFAULT_TOOLS_CONFIG
+      getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
+      wakeEventDispatcher: options?.wakeDispatcher as never
     })
     return { router, processedStore }
   }
@@ -820,6 +898,233 @@ describe('RemoteCommandRouter busy guard', () => {
     expect(persisted).toMatchObject({
       requestId: agentArgs.requestId, sessionId: session.id, state: 'terminal', outcome: 'completed'
     })
+  })
+
+  it('Feishu wake replay validates persisted Track attribution and forwards the scoped view', async () => {
+    const { db, manager } = setup()
+    const session = createSession(db, { name: 'Feishu Track wake' })
+    const current = getSession(db, session.id)!
+    getDbConnection(db).prepare('UPDATE sessions SET metadata=? WHERE id=?').run(JSON.stringify({ ...current.metadata, source: 'feishu',
+      feishuChatId: 'chat-1', feishuSenderOpenId: 'user-1' }), session.id)
+    const scope = buildImQueueScope('feishu', session.id) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    const attribution = await attributeAndPersistRemoteMessage(db, { channel: 'feishu', identityKey: 'chat-1', ownerId: 'user-1',
+      authorizationEpoch: 1, platformMessageId: 'feishu-track-wake-platform', text: 'queued research', now: 1, originSessionId: session.id }, { classify: vi.fn() })
+    if (attribution.kind !== 'attributed') throw new Error('expected a Track for zero candidates')
+    const inbox = appendImInboxMessageWithWakeEvent(db, { sessionId: session.id, channel: 'feishu', queueScope: scope,
+      channelMessageId: 'feishu-track-wake-platform', content: 'queued research', trackId: attribution.context.trackId,
+      trackEventId: attribution.context.attributionEventId })
+    let sequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `feishu-track-wake-${++sequence}` } })
+    mockRunFeishuRemoteAgent.mockResolvedValue({ summary: 'done', pendingConfirm: false, ok: true })
+    const { router } = makeRouter(db, manager, { turnRuntime: runtime })
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
+
+    await dispatcher.dispatchSession(session.id)
+
+    const [agentArgs] = mockRunFeishuRemoteAgent.mock.calls[0] as [{ remoteContext: { trackContext?: { trackId: string }; trackModelInputView?: { completeness: string }; turnId: string } }]
+    expect(agentArgs.remoteContext.trackContext?.trackId).toBe(attribution.context.trackId)
+    expect(agentArgs.remoteContext.trackModelInputView).toMatchObject({ completeness: 'complete' })
+    expect(getDbConnection(db).prepare('SELECT track_id FROM turns WHERE turn_id=?').get(agentArgs.remoteContext.turnId)).toEqual({ track_id: attribution.context.trackId })
+    expect(getTurnByRequestId(db, session.id, `wake:${inbox.eventId}`)).toMatchObject({ state: 'terminal', outcome: 'completed' })
+    expect(mockSendFeishuRemoteOutbound).toHaveBeenCalledWith(expect.objectContaining({
+      trackDelivery: expect.objectContaining({ track: expect.objectContaining({ trackId: attribution.context.trackId }),
+        requestId: `wake:${inbox.eventId}`, turnId: agentArgs.remoteContext.turnId })
+    }))
+    await dispatcher.dispose()
+  })
+
+  it('启动恢复会过期 Feishu 停放输入并重试投递未送达的终态回执', async () => {
+    const { db, manager } = setup()
+    const session = createSession(db, { name: 'Feishu clarification expiry', metadata: {
+      source: 'feishu', feishuChatId: 'chat-1', feishuSenderOpenId: 'user-1'
+    } })
+    createRemoteTrack(db, { trackId: 'feishu-expired-track', eventId: 'feishu-expired-event', idempotencyKey: 'feishu-expired-root',
+      channel: 'feishu', identityKey: 'chat-1', ownerId: 'user-1', authorizationEpoch: 1,
+      rootMessageId: 'feishu-expired-root-message', originSessionId: session.id, occurredAt: 1 })
+    parkImInboxMessageForClarification(db, { sessionId: session.id, channel: 'feishu', queueScope: buildImQueueScope('feishu', session.id),
+      channelMessageId: 'feishu-expired-platform-message', content: '原始请求', clarificationId: 'feishu-expired-clarification',
+      identityKey: 'chat-1', ownerId: 'user-1', authorizationEpoch: 1, handle: 'BCDEFGHJK3456',
+      candidates: [{ trackId: 'feishu-expired-track', option: 1, label: '任务', stateAtIssue: 'open' }], expiresAt: 500, now: 100 })
+    const { router } = makeRouter(db, manager)
+    const run = vi.fn(async () => ({ timedOut: false, exitCode: 0, stdout: JSON.stringify({ code: 0 }) }))
+    ;(router as unknown as { deps: { runner: { run: typeof run } } }).deps.runner.run = run
+
+    await router.recoverClarificationLifecycle(500)
+
+    expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=(SELECT parked_input_ref FROM remote_clarifications WHERE clarification_id=?)')
+      .get('feishu-expired-clarification')).toEqual({ status: 'clarification-expired' })
+    expect(run).toHaveBeenCalledOnce()
+    expect(JSON.stringify(run.mock.calls[0]?.[0])).toContain('user-1')
+    expect(getDbConnection(db).prepare("SELECT state FROM im_lifecycle_outbox WHERE event_id='clarification-terminal:feishu-expired-clarification:expired'").get())
+      .toEqual({ state: 'delivered' })
+  })
+
+  it('重启恢复会以同一澄清句柄重试结果未知的飞书提示', async () => {
+    const { db, manager } = setup()
+    const now = Date.now()
+    const session = createSession(db, { name: 'Feishu clarification prompt recovery' })
+    createRemoteTrack(db, { trackId: 'feishu-retry-track', eventId: 'feishu-retry-event', idempotencyKey: 'feishu-retry-root',
+      channel: 'feishu', identityKey: 'chat-1', ownerId: 'user-1', authorizationEpoch: 1,
+      rootMessageId: 'feishu-retry-root-message', originSessionId: session.id, occurredAt: 1 })
+    parkImInboxMessageForClarification(db, { sessionId: session.id, channel: 'feishu', queueScope: buildImQueueScope('feishu', session.id),
+      channelMessageId: 'feishu-retry-platform-message', content: '原始请求', clarificationId: 'feishu-retry-clarification',
+      identityKey: 'chat-1', ownerId: 'user-1', authorizationEpoch: 1, handle: 'CDEFGHJK34567',
+      candidates: [{ trackId: 'feishu-retry-track', option: 1, label: '任务', stateAtIssue: 'open' }], expiresAt: now + 60_000, now: now - 120_000 })
+    startClarificationSendAttempt(db, { sendAttemptId: 'feishu-retry-attempt-1', clarificationId: 'feishu-retry-clarification', version: 1, startedAt: now - 110_000 })
+    finishClarificationSendAttempt(db, { sendAttemptId: 'feishu-retry-attempt-1', state: 'send-outcome-unknown', finishedAt: now - 100_000 })
+    const { router } = makeRouter(db, manager)
+    const run = vi.fn(async () => ({ timedOut: false, exitCode: 0, stdout: JSON.stringify({ code: 0 }) }))
+    ;(router as unknown as { deps: { runner: { run: typeof run } } }).deps.runner.run = run
+
+    await router.recoverClarificationLifecycle(now)
+
+    expect(run).toHaveBeenCalledOnce()
+    expect(JSON.stringify(run.mock.calls[0]?.[0])).toContain('CDEF-GHJK-34567')
+    expect(getDbConnection(db).prepare(`SELECT state FROM remote_clarification_send_attempts
+      WHERE clarification_id='feishu-retry-clarification' ORDER BY started_at DESC LIMIT 1`).get()).toEqual({ state: 'send-fulfilled' })
+    expect(getDbConnection(db).prepare('SELECT status FROM messages WHERE id=(SELECT parked_input_ref FROM remote_clarifications WHERE clarification_id=?)')
+      .get('feishu-retry-clarification')).toEqual({ status: 'parked' })
+  })
+
+  it('重启恢复 prepared accepted turn 时沿用飞书原 accepted 配置', async () => {
+    const { db, manager } = setup()
+    const session = createSession(db, { name: 'Feishu prepared recovery', metadata: {
+      source: 'feishu', feishuChatId: 'chat-1', feishuSenderOpenId: 'user-1'
+    } })
+    const queueScope = buildImQueueScope('feishu', session.id) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }>
+    const inbox = appendImInboxMessageWithWakeEvent(db, { sessionId: session.id, channel: 'feishu', queueScope,
+      channelMessageId: 'feishu-prepared-platform-message', content: '恢复飞书原 accepted turn' })
+    const frozenConfig = { lane: 'feishu' as const, model: 'claude-sonnet-4-20250514', llmServiceId: TEST_SERVICE_ID,
+      thinkingEffort: 'low' as const, maximumContextTrusted: true, enableThinking: false }
+    appendMessageOperation(db, { id: 'feishu-prepared-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 1, status: 'streaming' })
+    createPersistedTurn(db, { turnId: 'feishu-prepared-turn', requestId: `wake:${inbox.eventId}`, sessionId: session.id,
+      userMessageId: inbox.messageId, assistantMessageId: 'feishu-prepared-assistant', state: 'prepared',
+      startToken: 'feishu-prepared-token', executionConfig: frozenConfig })
+    acceptTurnContext(db, createAcceptedTurn({ turnId: 'feishu-prepared-turn', requestId: `wake:${inbox.eventId}`, sessionId: session.id,
+      lane: 'feishu', startToken: 'feishu-prepared-token', currentUserMessageId: inbox.messageId, transcriptVersion: 0, config: frozenConfig }))
+    setConfigValue(db, 'config.feishu', JSON.stringify({ remoteModelSelectionMode: 'explicit', remoteDefaultModelId: 'missing-model', remoteThinkingEffort: 'low' }))
+    mockRunFeishuRemoteAgent.mockResolvedValue({ summary: 'prepared turn resumed', pendingConfirm: false, ok: true })
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 10, id: () => 'unexpected-second-turn' } })
+    const { router } = makeRouter(db, manager, { turnRuntime: runtime })
+    const dispatcher = createWakeEventDispatcher({ db, maxParallel: 2, launchLoop: (input) => router.dispatchWakeEventSet(input) })
+
+    await dispatcher.dispatchSession(session.id)
+
+    expect(mockRunFeishuRemoteAgent).toHaveBeenCalledOnce()
+    expect((mockRunFeishuRemoteAgent.mock.calls[0]?.[0] as { acceptedTurn: { turnId: string; config: { model: string; llmServiceId: string } } }).acceptedTurn)
+      .toMatchObject({ turnId: 'feishu-prepared-turn', config: { model: 'claude-sonnet-4-20250514', llmServiceId: TEST_SERVICE_ID } })
+    expect(getTurnByRequestId(db, session.id, `wake:${inbox.eventId}`)).toMatchObject({ state: 'terminal', outcome: 'completed' })
+    expect(listWakeEvents(db, session.id)).toMatchObject([{ eventId: inbox.eventId, status: 'acked' }])
+    await dispatcher.dispose()
+  })
+
+  it('Track 路由先将 Feishu 新消息持久化到绑定归属的 inbox/wake，再交给 worker 执行', async () => {
+    const { db, manager } = setup()
+    const session = createSession(db, { name: 'Feishu Track attribution', metadata: { source: 'feishu', feishuChatId: 'chat-1', feishuSenderOpenId: 'user-1' } })
+    for (const [key, value] of Object.entries({ remoteTrackPersist: 'true', remoteTrackRolloutChannels: '["feishu"]', remoteTrackExecution: 'true',
+      remoteTrackRecovery: 'true', remoteTrackScopedModelInput: 'true', remoteTrackClarification: 'true' })) setConfigValue(db, key, value)
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: '新建调研' })
+    mockResolveFeishuSession.mockResolvedValue({ sessionId: session.id, isNew: false })
+    const dispatchSession = vi.fn(async () => undefined)
+    const { router } = makeRouter(db, manager, { wakeDispatcher: dispatchSession })
+
+    await router.handleInbound(makeInbound({ messageId: 'track-feishu-root', content: '新建调研' }))
+
+    expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
+    const context = getDbConnection(db).prepare(`SELECT context.track_id,context.track_event_id FROM im_inbox_message_context context
+      WHERE context.platform_message_id='track-feishu-root'`).get() as { track_id: string; track_event_id: string }
+    expect(context.track_id).toBeTruthy()
+    expect(getDbConnection(db).prepare('SELECT track_id FROM remote_track_events WHERE event_id=?').get(context.track_event_id))
+      .toEqual({ track_id: context.track_id })
+    expect(getDbConnection(db).prepare('SELECT track_id FROM remote_track_message_map WHERE channel=? AND platform_message_id=?').get('feishu', 'track-feishu-root'))
+      .toEqual({ track_id: context.track_id })
+    expect(listWakeEvents(db, session.id)).toMatchObject([{ type: 'im-inbound', status: 'pending' }])
+  })
+
+  it('Track execution 未接入持久 wake consumer 时 fail closed，不创建 Track 或运行 Agent', async () => {
+    const { db, manager } = setup()
+    for (const [key, value] of Object.entries({ remoteTrackPersist: 'true', remoteTrackRolloutChannels: '["feishu"]', remoteTrackExecution: 'true',
+      remoteTrackRecovery: 'true', remoteTrackScopedModelInput: 'true', remoteTrackClarification: 'true' })) setConfigValue(db, key, value)
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: '需要可靠执行的任务' })
+    mockResolveFeishuSession.mockResolvedValue({ sessionId: 'unused-session', isNew: true })
+    const { router } = makeRouter(db, manager)
+
+    await router.handleInbound(makeInbound({ messageId: 'no-wake-feishu-root', content: '需要可靠执行的任务' }))
+
+    expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
+    expect(getDbConnection(db).prepare("SELECT COUNT(*) AS count FROM remote_tracks WHERE root_message_id='no-wake-feishu-root'").get())
+      .toEqual({ count: 0 })
+    expect(mockSendFeishuRemoteOutbound).toHaveBeenCalledWith(expect.objectContaining({ body: expect.stringContaining('本次未执行') }))
+  })
+
+  it('影子归属只记录脱敏观察，不改动飞书既有 Agent 路由', async () => {
+    const { db, manager } = setup()
+    const session = createSession(db, { name: 'Feishu shadow attribution' })
+    setConfigValue(db, 'remoteTrackPersist', 'true')
+    setConfigValue(db, 'remoteTrackShadowAttribution', 'true')
+    setConfigValue(db, 'remoteTrackRolloutChannels', '["feishu"]')
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: 'legacy research' })
+    mockResolveFeishuSession.mockResolvedValue({ sessionId: session.id, isNew: false })
+    mockRunFeishuRemoteAgent.mockResolvedValue({ summary: 'legacy path', pendingConfirm: false, ok: true })
+    const { router } = makeRouter(db, manager)
+
+    await router.handleInbound(makeInbound({ messageId: 'shadow-feishu-1', content: 'legacy research' }))
+    await vi.waitFor(() => expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM remote_track_attribution_observations').get()).toEqual({ count: 1 }))
+
+    expect(mockRunFeishuRemoteAgent).toHaveBeenCalledTimes(1)
+    expect(mockRunFeishuRemoteAgent.mock.calls[0]?.[0]).not.toHaveProperty('remoteContext.trackContext')
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM remote_tracks').get()).toEqual({ count: 0 })
+    expect(getDbConnection(db).prepare('SELECT decision_kind FROM remote_track_attribution_observations').get()).toEqual({ decision_kind: 'new-track' })
+  })
+
+  it('微信 canary channel scope does not enable Track shadow attribution on Feishu', async () => {
+    const { db, manager } = setup()
+    const session = createSession(db, { name: 'WeChat-only Track canary' })
+    setConfigValue(db, 'remoteTrackPersist', 'true')
+    setConfigValue(db, 'remoteTrackShadowAttribution', 'true')
+    setConfigValue(db, 'remoteTrackRolloutChannels', '["wechat"]')
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: 'legacy research' })
+    mockResolveFeishuSession.mockResolvedValue({ sessionId: session.id, isNew: false })
+    mockRunFeishuRemoteAgent.mockResolvedValue({ summary: 'legacy path', pendingConfirm: false, ok: true })
+    const { router } = makeRouter(db, manager)
+
+    await router.handleInbound(makeInbound({ messageId: 'outside-wechat-canary', content: 'legacy research' }))
+
+    expect(mockRunFeishuRemoteAgent).toHaveBeenCalledOnce()
+    expect(mockRunFeishuRemoteAgent.mock.calls[0]?.[0]).not.toHaveProperty('remoteContext.trackContext')
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM remote_track_attribution_observations').get())
+      .toEqual({ count: 0 })
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS count FROM remote_tracks').get()).toEqual({ count: 0 })
+  })
+
+  it('已有 Track 即使飞书 session idle resolver 给出新 session，也继续使用 Track 的 origin session', async () => {
+    const { db, manager } = setup()
+    const origin = createSession(db, { name: 'Feishu Track origin', metadata: { source: 'feishu', feishuChatId: 'chat-1', feishuSenderOpenId: 'user-1' } })
+    const unused = createSession(db, { name: 'Feishu unused session', metadata: { source: 'feishu', feishuChatId: 'chat-1', feishuSenderOpenId: 'user-1' } })
+    mockResolveFeishuSession.mockResolvedValue({ sessionId: unused.id, isNew: true })
+    for (const [key, value] of Object.entries({ remoteTrackPersist: 'true', remoteTrackRolloutChannels: '["feishu"]', remoteTrackExecution: 'true',
+      remoteTrackRecovery: 'true', remoteTrackScopedModelInput: 'true', remoteTrackClarification: 'true' })) setConfigValue(db, key, value)
+    createRemoteTrack(db, { trackId: 'feishu-origin-track', eventId: 'feishu-origin-root', idempotencyKey: 'feishu-origin-root-key',
+      channel: 'feishu', identityKey: 'chat-1', ownerId: 'user-1', authorizationEpoch: 1, rootMessageId: 'feishu-origin-platform-root',
+      originSessionId: origin.id, occurredAt: 1 })
+    appendRemoteTrackEvent(db, { eventId: 'feishu-origin-prompt-event', trackId: 'feishu-origin-track', eventKind: 'track.outbound.message',
+      idempotencyKey: 'feishu-origin-prompt-event', messageId: 'feishu-origin-prompt', occurredAt: 2 })
+    mapRemoteTrackMessage(db, { channel: 'feishu', platformMessageId: 'feishu-origin-prompt', trackId: 'feishu-origin-track',
+      eventId: 'feishu-origin-prompt-event', direction: 'outbound' })
+    let turnSequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 5, id: () => `feishu-origin-turn-${++turnSequence}` } })
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: '补充研究条件' })
+    mockRunFeishuRemoteAgent.mockResolvedValue({ summary: 'continued', pendingConfirm: false, ok: true })
+    const dispatchSession = vi.fn(async () => undefined)
+    const { router } = makeRouter(db, manager, { turnRuntime: runtime, wakeDispatcher: dispatchSession })
+
+    await router.handleInbound(makeInbound({ messageId: 'feishu-origin-follow-up', content: '补充研究条件', replyToMessageId: 'feishu-origin-prompt' }))
+
+    expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
+    expect(listImInboxMessages(db, { queueScope: buildImQueueScope('feishu', origin.id), limit: 10 }))
+      .toContainEqual(expect.objectContaining({ content: '补充研究条件' }))
+    expect(mockResolveFeishuSession).not.toHaveBeenCalled()
+    expect(getSession(db, unused.id)).toBeDefined()
   })
 
   it('confirm-requested 进入 Core，并向 Feishu 出站 pending-confirm 提示', async () => {

@@ -3,9 +3,12 @@ import type { WeChatInboundMessage } from '../../src/shared/wechatTypes'
 import type { IncomingMessage } from '@wechatbot/wechatbot'
 import type { WeChatAuditLogger } from './weChatAuditLogger'
 import { logWeChatCliEvent } from './weChatCliLogger'
+import { contentHash } from '../remote/imCliLogFields'
 import { buildConfirmInstantPrompt } from '../remote/remoteProgressHooks'
 import {
   formatImConfirmPromptFooter,
+  IM_CONFIRM_QUOTE_REQUIRED_HINT,
+  IM_CONFIRM_PROMPT_SENDING_HINT,
   IM_CONFIRM_TRUST_MISCLICK_HINT,
   IM_CONFIRM_USAGE_HINT,
   parseImConfirmReply
@@ -16,7 +19,9 @@ import { ImChannel, type ImCommitResult, type ImPendingConfirm } from '../confir
 import { getSecurityAuditLog } from '../confirmation/audit'
 import { recordUserAnswerFromMemoryTiers } from '../confirmation/decisionCacheWriter'
 import { reserveConfirmationSubmission, commitConfirmationSubmissionWithWork, reconcileConfirmationSubmission, ConfirmationCommitRolledBackError, ConfirmationCommitUnknownError } from '../confirmation/persistentConfirmationCommit'
-import type { WeChatReplyBot } from './weChatReplyService'
+import { requireWeChatSentMessageId, type WeChatReplyBot } from './weChatReplyService'
+import type { PromptSendResult } from '../confirmation/promptSend'
+import { recordRemoteTrackConfirmationState } from '../database/remoteTrackStore'
 
 const DEFAULT_CONFIRM_TIMEOUT_MS = 5 * 60_000
 
@@ -55,14 +60,25 @@ export class WeChatImChannel extends ImChannel {
           deps.getWebContents?.()?.send('wechat:pending-confirm', { count: channelRef.current?.countPending() ?? 0 })
         }
       },
-      sendPrompt: (entry) => {
+      sendPrompt: (entry, signal) => {
         const replyBot = deps.getReplyBot?.()
-        if (!replyBot) return Promise.reject(new Error('wechat-bot-unavailable'))
-        const inbound = entry.context as IncomingMessage
-        if (!inbound) return Promise.reject(new Error('wechat-inbound-context-missing'))
-        return replyBot.reply(inbound, buildWeChatConfirmPrompt(entry))
+        if (!replyBot) return { kind: 'not-attempted', errorCategory: 'bot-unavailable' }
+        if (!entry.matchKey) return { kind: 'not-attempted', errorCategory: 'inbound-context-missing' }
+        if (!replyBot.sendToUser) return { kind: 'not-attempted', errorCategory: 'bot-unavailable' }
+        return replyBot.sendToUser(entry.matchKey, buildWeChatConfirmPrompt(entry), signal).then((result) => {
+          if (result && typeof result === 'object' && 'kind' in result) return result as PromptSendResult
+          return requireWeChatSentMessageId(result)
+        })
       },
       onTrust: (entry) => tryAddWeChatShellTrust(deps.db, entry),
+      onTrackConfirmationChild: (entry, state) => {
+        if (!deps.db || !entry.trackId || !entry.trackAttributionEventId) throw new Error('WECHAT_TRACK_CONFIRMATION_LINK_REQUIRED')
+        recordRemoteTrackConfirmationState(deps.db, {
+          trackId: entry.trackId, confirmationId: entry.id, attributionEventId: entry.trackAttributionEventId, state,
+          occurredAt: Date.now(), ...(entry.requestId ? { requestId: entry.requestId } : {}), ...(entry.toolName ? { toolName: entry.toolName } : {}),
+          ...(entry.turnId ? { turnId: entry.turnId } : {}), ...(entry.toolUseId ? { toolUseId: entry.toolUseId } : {})
+        })
+      },
       ...(deps.db ? { onCommit: (entry: ImPendingConfirm, action: { kind: 'trust' | 'memory' | 'decision'; tier?: import('../../src/shared/confirmation/types').MemoryTier; approved: boolean }) => commitWeChatAction(deps.db, entry, action, deps.getGeneration) } : {}),
       // 记N：写 decision_cache（执行链路侧），落 cache.write 审计；无 db 时跳过
       onMemory: (entry, tier) => {
@@ -82,7 +98,7 @@ export class WeChatImChannel extends ImChannel {
       onHint: (entry, kind) => {
         const replyBot = deps.getReplyBot?.()
         if (!replyBot) return
-        const hint = kind === 'trust_misclick' ? IM_CONFIRM_TRUST_MISCLICK_HINT : IM_CONFIRM_USAGE_HINT
+        const hint = kind === 'trust_misclick' ? IM_CONFIRM_TRUST_MISCLICK_HINT : kind === 'prompt_sending' ? IM_CONFIRM_PROMPT_SENDING_HINT : kind === 'quote_required' ? IM_CONFIRM_QUOTE_REQUIRED_HINT : IM_CONFIRM_USAGE_HINT
         void replyBot.reply(entry.context as IncomingMessage, hint).catch(() => undefined)
       },
       onCommitFailure: (entry) => {
@@ -101,10 +117,26 @@ export class WeChatImChannel extends ImChannel {
     const parsed = parseImConfirmReply(msg.text)
     if (parsed.kind === 'not_confirm') return false
 
+    if ('confirmId' in parsed) {
+      const pending = this.listPending().find((entry) => entry.confirmId === parsed.confirmId)
+      if (pending) {
+        const quotedText = msg.quotedMessageText ?? msg.quotedMessage?.text
+        logWeChatCliEvent('info', 'wechat.confirm.reply_binding_check', {
+          toolName: pending.toolName,
+          quotedMessageIdPresent: Boolean(msg.quotedMessageId),
+          quotedMessageTextLen: quotedText?.length ?? 0,
+          ...(msg.quotedMessageId ? { quotedMessageIdHash: contentHash(msg.quotedMessageId) } : {}),
+          ...(pending.promptMessageId ? { promptMessageIdHash: contentHash(pending.promptMessageId) } : {}),
+          quotedMessageIdMatched: Boolean(pending.promptMessageId && msg.quotedMessageId === pending.promptMessageId),
+          quoteMarkerMatched: Boolean(pending.promptQuoteMarker && quotedText?.includes(pending.promptQuoteMarker))
+        })
+      }
+    }
+
     if (!isWeChatConfirmAuthorizedSender(msg, opts?.allowedUserIds)) return false
     return this.tryResolveFromInbound(
       parsed as { kind: string; confirmId?: string; tier?: number },
-      { matchKey: msg.userId, messageId: msg.messageId }
+      { matchKey: msg.userId, messageId: msg.messageId, quotedMessageId: msg.quotedMessageId, quotedMessageText: msg.quotedMessageText }
     )
   }
 }

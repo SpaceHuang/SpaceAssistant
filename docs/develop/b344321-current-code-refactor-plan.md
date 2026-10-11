@@ -140,8 +140,8 @@ Electron ABI 仍由开放式 major 映射得出，Electron 35 会落到 ABI 130�
 1. 将 `ImProcessedStore` 改为单写队列和共享加载 Promise 管理的持久化状态机。每条记录包含 `messageId`、`state`、`claimId`、`claimedAt`、`leaseUntil`、`completedAt` 和审计结果摘要；文件以唯一临时名、`fsync`、原子替换方式保存。
 2. 状态迁移固定为：guard 通过后原子写入 `claimed`；即将调用 Agent 前原子迁移为 `executing`；Agent 的成功、失败、取消和创建确认请求全部迁移为 `completed`。没有取得持久化 claim 时绝不启动 Agent。
 3. 重启恢复时，仅将 lease 过期的 `claimed` 记录回收为可重新 claim；lease 过期的 `executing` 记录标记为 `completed/interrupted_uncertain` 并保留审计信息，不自动重投，防止已产生副作用的任务重复执行。解析、授权、限流和文本长度校验失败发生在 claim 之前，因此可以重试。
-4. 将确认协议定义为 `Y <confirmId>`、`N <confirmId>`、`Y <confirmId> TRUST`。`confirmId` 为每条 pending 使用加密随机生成的 4 位 Crockford Base32，注册时在全局 pending 集合中检查碰撞。确认仍受 owner 私聊校验、既有频率限制和短时过期约束。注册时捕获 WP2 guard 返回的 `channel`、owner、`authorizationGeneration` 和 `requestId`。`remote_write_grant` 是独立确认类型，`Y <confirmId>` 只创建 WP1 定义的受限写入授权并继续当前写入，不会授予 shell、脚本、浏览器或出站消息权限。
-5. 裸 `Y/N`、缺失 ID、格式不符、过期 ID、跨用户 ID、授权 generation 不一致和不具备信任资格的 TRUST 一律不执行，并回复协议提示。若平台提供 reply/thread 元数据，必须同时匹配原确认消息、`confirmId` 与授权发送者；缺少这些元数据时只以 `confirmId + 授权发送者` 匹配。
+4. 将同步工具确认协议定义为 `Y <NN>`、`N <NN>`、`Y <NN> TRUST`，其中 `NN` 严格为 `00`–`99` 两位 ASCII 十进制码。活动码终态/超时后释放，可立即复用；每条 pending 另持有分配租约 token。注册时捕获 WP2 guard 返回的 `channel`、owner、`authorizationGeneration` 和 `requestId`。`remote_write_grant` 仍是独立授权类型，`Y <NN>` 只创建 WP1 定义的受限写入授权并继续当前写入，不会授予 shell、脚本、浏览器或出站消息权限。
+5. 裸 `Y/N`、缺失码、格式不符、过期码、跨用户码、授权 generation 不一致和不具备信任资格的 TRUST 一律不执行，并回复协议提示。批准/拒绝必须匹配 owner 与原提示消息：飞书入站 `replyToMessageId` 或微信入站 `quotedMessageId` 必须精确等于当前 pending 保存的提示 `messageId`；缺失引用元数据时 fail closed。仅 `confirmId + 授权发送者` 不足以防止两位码立即复用后的旧回复串单。
 6. 两个确认管理器使用共享协议解析器、共享 pending 索引和 WP2 的授权 registry；确认注册、授权撤销与确认解析在同一事件循环临界区内完成，避免“第二个请求注册与第一个回复”串单。
 7. 工具循环收到 `y` 后，在调用 executor 的同一同步回合内校验确认的 authorization generation、当前 guard 授权和 request-owned lease；校验与 executor 调用之间不插入 `await`。任一校验失败即记录 `authorization_revoked` 并结束该工具调用，不进入下一轮 Agent。
 

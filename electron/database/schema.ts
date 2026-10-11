@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 82
+export const DB_SCHEMA_VERSION = 94
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (
@@ -323,6 +323,15 @@ CREATE TABLE IF NOT EXISTS im_inbox_message_context (
   channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
   platform_message_id TEXT NOT NULL,
   context_token TEXT,
+  created_at INTEGER NOT NULL,
+  track_id TEXT REFERENCES remote_tracks(track_id) ON DELETE SET NULL,
+  track_event_id TEXT REFERENCES remote_track_events(event_id) ON DELETE SET NULL,
+  clarification_work_id TEXT REFERENCES remote_track_work_queue(work_id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS im_inbox_clarification_park (
+  message_id TEXT PRIMARY KEY NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  clarification_id TEXT NOT NULL UNIQUE REFERENCES remote_clarifications(clarification_id) ON DELETE CASCADE,
   created_at INTEGER NOT NULL
 );
 

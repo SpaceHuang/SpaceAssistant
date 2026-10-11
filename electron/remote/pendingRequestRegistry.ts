@@ -13,6 +13,7 @@ export class PendingRequestRegistry<
   private pending = new Map<string, T>()
   private resolvers = new Map<string, (v: PendingDecision) => void>()
   private timers = new Map<string, ReturnType<typeof setTimeout>>()
+  private onResolved = new Map<string, (item: T, decision: PendingDecision) => void>()
 
   listPending(): T[] {
     return [...this.pending.values()]
@@ -67,9 +68,10 @@ export class PendingRequestRegistry<
   register(
     item: T,
     timeoutMs: number,
-    opts?: { onTimeout?: (item: T) => void }
+    opts?: { onTimeout?: (item: T) => void; onResolved?: (item: T, decision: PendingDecision) => void }
   ): Promise<PendingDecision> {
     this.pending.set(item.id, item)
+    if (opts?.onResolved) this.onResolved.set(item.id, opts.onResolved)
     return new Promise((resolve) => {
       this.resolvers.set(item.id, resolve)
       const timer = setTimeout(() => {
@@ -85,6 +87,7 @@ export class PendingRequestRegistry<
   /** Resolve a pending request. Returns false if id is unknown. */
   resolve(id: string, decision: PendingDecision): boolean {
     if (!this.pending.has(id) && !this.resolvers.has(id)) return false
+    const item = this.pending.get(id)
     const timer = this.timers.get(id)
     if (timer !== undefined) {
       clearTimeout(timer)
@@ -93,6 +96,11 @@ export class PendingRequestRegistry<
     const resolver = this.resolvers.get(id)
     this.resolvers.delete(id)
     this.pending.delete(id)
+    const onResolved = this.onResolved.get(id)
+    this.onResolved.delete(id)
+    if (item) {
+      try { onResolved?.(item, decision) } catch { /* Lifecycle hooks cannot strand the waiter. */ }
+    }
     resolver?.(decision)
     return true
   }

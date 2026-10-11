@@ -39,6 +39,7 @@ describe('weChatInboundParser', () => {
   it('does not infer a trusted quote message id from the SDK quote text', () => {
     const msg = parseSdkInboundMessage(makeMsg({ quotedMessage: { text: '批准 07' } }))
     expect(msg.quotedMessageId).toBeUndefined()
+    expect(msg.quotedMessageText).toBe('批准 07')
   })
 
   it('retains an explicit quoted wire message id when the protocol supplies one', () => {
@@ -47,6 +48,24 @@ describe('weChatInboundParser', () => {
       item_list: [{ type: 1, ref_msg: { message_id: 'approval-notice-1', message_item: { type: 1, text_item: { text: '审批通知' } } } }]
     } as IncomingMessage['raw'] })
     expect(parseSdkInboundMessage(raw).quotedMessageId).toBe('approval-notice-1')
+  })
+
+  it('extracts the runtime iLink quote message id from ref_msg.message_item.msg_id', () => {
+    const raw = makeMsg({ raw: {
+      ...makeMsg().raw,
+      item_list: [{ type: 1, ref_msg: { message_item: {
+        type: 0, msg_id: 'platform-message-123', create_time_ms: 1791691062000, is_completed: true
+      } } }]
+    } as IncomingMessage['raw'] })
+    expect(parseSdkInboundMessage(raw).quotedMessageId).toBe('platform-message-123')
+  })
+
+  it('retains quoted text because the pinned iLink RefMessage has no message ID field', () => {
+    const raw = makeMsg({ raw: {
+      ...makeMsg().raw,
+      item_list: [{ type: 1, ref_msg: { message_item: { type: 1, text_item: { text: '确认提示\u2063\u200b\u200c\u2063' } } } }]
+    } as IncomingMessage['raw'] })
+    expect(parseSdkInboundMessage(raw)).toMatchObject({ quotedMessageText: '确认提示\u2063\u200b\u200c\u2063' })
   })
 
   it('rejects empty text', () => {

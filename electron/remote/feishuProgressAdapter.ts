@@ -9,6 +9,7 @@ import {
 } from '../../src/shared/remoteProgressTypes'
 import type { FeishuConfig } from '../../src/shared/feishuTypes'
 import type { RemoteProgressAdapter } from './remoteProgressCoordinator'
+import type { RemoteTrackOutboundDeliveryContext } from './remoteTrackOutbound'
 
 export function createFeishuProgressAdapter(args: {
   runner: LarkCliRunner
@@ -16,6 +17,7 @@ export function createFeishuProgressAdapter(args: {
   getSessionId: () => string
   config: FeishuConfig
   sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>
+  trackDelivery?: RemoteTrackOutboundDeliveryContext
 }): RemoteProgressAdapter {
   return {
     channel: 'feishu',
@@ -27,6 +29,7 @@ export function createFeishuProgressAdapter(args: {
         messageId: args.messageId,
         body: text,
         sessionId,
+        trackDelivery: args.trackDelivery,
         touch: { sessionCommands: args.sessionCommands, sessionId }
       }).catch(() => undefined)
     },

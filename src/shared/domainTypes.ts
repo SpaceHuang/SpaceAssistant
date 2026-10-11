@@ -616,6 +616,8 @@ export interface ToolCallRecord {
    * §5.8：放宽为 boolean；回退分支发显式 false 清除只读态（恢复人工确认卡可交互）。
    */
   autoAnswerer?: boolean
+  /** 确认由哪个执行链路处理；IM 确认只在对应 IM 通道响应。 */
+  confirmationLane?: import('./confirmation/types').ExecutionLane
   confirmedAt?: number
   startedAt?: number
   completedAt?: number

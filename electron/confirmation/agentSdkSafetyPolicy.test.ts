@@ -98,6 +98,24 @@ describe('createAgentSdkSafetyPolicy', () => {
     await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toEqual({ kind: 'allow', authorizationVersion: 'policy-v1' })
   })
 
+  it('accepts a confirmed browser action when its own approval creates an identical-facts cache hit', async () => {
+    const browserFacts: ContentFacts = { ...facts, toolName: 'browser', actionClass: 'outbound', signals: [{ kind: 'network-egress', target: 'example.test' }] }
+    const initialDecision = { type: 'require-confirm', ruleId: 'browser-navigate-ask-desktop', answerer: 'user', riskLevel: 'low', facts: browserFacts, memoryTiers: [], timeoutMs: 1000 } as const
+    const initial: ToolCallGateResult = { decision: initialDecision, facts: browserFacts, approvedFactIds: [] }
+    const cached: ToolCallGateResult = {
+      decision: { type: 'auto-allow', ruleId: 'cache-hit', reason: 'approved host is now trusted for this session' },
+      facts: browserFacts,
+      approvedFactIds: []
+    }
+    const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(cached)
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => baseArgs, evaluateGate })
+    const confirmedBinding = { ...binding, authorizationVersion: 'policy-v1' }
+
+    await expect(policy.evaluate(confirmedBinding)).resolves.toMatchObject({ kind: 'ask', reasonCode: 'browser-navigate-ask-desktop' })
+    markAgentSdkSafetyDecisionConfirmed(policy, confirmedBinding)
+    await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toEqual({ kind: 'allow', authorizationVersion: 'policy-v1' })
+  })
+
   it('discards the approved initial snapshot when fresh recheck material is unavailable', async () => {
     let recheckAttempts = 0
     const resolveGateArgs = vi.fn(async (current: PermitBinding) => {

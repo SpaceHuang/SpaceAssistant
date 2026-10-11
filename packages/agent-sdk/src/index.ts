@@ -22,6 +22,7 @@ export {
   ToolRevocationRegistry,
   TOOL_REQUEST_LANES,
   type ConfirmIdSpaceLike,
+  type ConfirmCodeLease,
   type ChatCancelRegistryLike,
   type ChatCancelLinks,
   type ToolRevocationEvent,

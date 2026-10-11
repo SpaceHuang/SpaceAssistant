@@ -103,7 +103,7 @@ describe('chat:continue-from-checkpoint IPC orchestration', () => {
   it('typed 继续按 History source 的 turnId 读取原始 Turn，即使 requestId 与 History invocationId 不同', async () => {
     const { session, runtime, ctx } = await setup()
     const storage = (ctx as AppIpcContext).sessionStorage!
-    const inspection = storage.queries.continuationSources.inspect({
+    const inspection = storage.queries.continuationSources.read({
       sessionId: session.id, activeTurnIds: runtime.listActive(session.id).map((turn) => turn.turnId), selectedAssistantMessageId: 'ipc-assistant'
     })
     if (inspection.kind !== 'available' || inspection.selected.kind !== 'found') throw new Error('source checkpoint was not found')

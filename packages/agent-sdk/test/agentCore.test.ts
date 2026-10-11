@@ -20,9 +20,10 @@ describe('@spaceassistant/agent-sdk(纯 node,零宿主依赖)', () => {
     const a = createAgentRuntime()
     const b = createAgentRuntime()
     expect(a.instanceId).not.toBe(b.instanceId)
-    const id = a.confirmIds.allocate()
-    expect(a.confirmIds.isInUse(id)).toBe(true)
-    expect(b.confirmIds.isInUse(id)).toBe(false)
+    const lease = a.confirmIds.allocate()
+    expect(lease.code).toMatch(/^\d{2}$/)
+    expect(a.confirmIds.isInUse(lease.code)).toBe(true)
+    expect(b.confirmIds.isInUse(lease.code)).toBe(false)
   })
 
   it('组件可逐项注入覆盖', () => {
@@ -35,10 +36,10 @@ describe('@spaceassistant/agent-sdk(纯 node,零宿主依赖)', () => {
 
   it('confirmId 一次性消费语义', () => {
     const space = new ConfirmIdSpace()
-    const id = space.allocate()
-    expect(space.isInUse(id)).toBe(true)
-    space.release(id)
-    expect(space.isInUse(id)).toBe(false)
+    const lease = space.allocate()
+    expect(space.isInUse(lease.code)).toBe(true)
+    space.release(lease)
+    expect(space.isInUse(lease.code)).toBe(false)
   })
 
   it('取消注册表:signal 中止 + throwIfCancelled 抛 ChatCancelledError', () => {

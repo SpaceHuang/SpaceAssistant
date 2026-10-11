@@ -155,7 +155,7 @@ export type ContinuationSourceInspection =
     }>
 
 export interface ContinuationSourceQueries {
-  inspect(input: {
+  read(input: {
     sessionId: string
     activeTurnIds: readonly string[]
     selectedAssistantMessageId?: string

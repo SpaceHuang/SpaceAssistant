@@ -258,6 +258,7 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
           ...tool,
           status: 'confirming',
           riskLevel: event.riskLevel,
+          ...(event.lane ? { confirmationLane: event.lane } : {}),
           ...(event.memoryTiers ? { memoryTiers: event.memoryTiers } : {}),
           ...(event.confirmDiff ? { confirmDiff: event.confirmDiff } : {}),
           ...(event.shellSecurityHints ? { shellSecurityHints: event.shellSecurityHints } : {}),

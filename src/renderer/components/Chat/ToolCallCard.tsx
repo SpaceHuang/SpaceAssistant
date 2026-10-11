@@ -111,6 +111,7 @@ function sameToolRecord(a: ToolCallRecord, b: ToolCallRecord): boolean {
     && a.status === b.status
     && a.riskLevel === b.riskLevel
     && a.autoAnswerer === b.autoAnswerer
+    && a.confirmationLane === b.confirmationLane
     && a.confirmedAt === b.confirmedAt
     && a.startedAt === b.startedAt
     && a.completedAt === b.completedAt
@@ -547,6 +548,17 @@ export const ToolCallCard = memo(function ToolCallCard({
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
         <div className="sa-chat-inset-code sa-auto-answering-status" role="status">
           {t('confirm.autoAnswering')}
+        </div>
+        {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
+      </div>
+    )
+  }
+
+  if (record.status === 'confirming' && (record.confirmationLane === 'wechat' || record.confirmationLane === 'feishu')) {
+    return (
+      <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        <div className="sa-chat-inset-code sa-auto-answering-status" role="status">
+          {t('confirm.awaitingIm')}
         </div>
         {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
       </div>

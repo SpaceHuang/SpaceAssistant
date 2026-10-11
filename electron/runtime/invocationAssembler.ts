@@ -16,6 +16,7 @@ import { getDbConnection, getSession, updateSession } from '../database'
 import { readStoredModels } from '../llmServiceResolver'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import type { AppDatabase } from '../database'
+import { readRemoteTrackFeatureGates } from '../remote/remoteTrackFeatureGates'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { recordStepUsage, recordTurnSummary } from '../usageStats/usageStatsRecorder'
 import { scheduleSessionTitleSuggestion } from '../sessionTitleSuggest'
@@ -1089,6 +1090,13 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
               ? { authorizationGeneration: materials.remoteContext!.authorizationGeneration }
               : {}),
             requestId: materials.requestId,
+            turnId: materials.acceptedTurn?.turnId ?? materials.turnId,
+            toolUseId: call.toolCallId,
+            ...(materials.remoteContext!.trackContext && db && (materials.remoteContext!.source === 'wechat' || materials.remoteContext!.source === 'feishu') &&
+              readRemoteTrackFeatureGates(db, materials.remoteContext!.source).confirmationLink ? {
+              trackId: materials.remoteContext!.trackContext.trackId,
+              trackAttributionEventId: materials.remoteContext!.trackContext.attributionEventId
+            } : {}),
             memoryTiers: request.memoryTiers
           })
         } : {})

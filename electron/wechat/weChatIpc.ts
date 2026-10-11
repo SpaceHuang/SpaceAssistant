@@ -16,6 +16,7 @@ import { WeChatProcessedStore } from './weChatProcessedStore'
 import { WeChatAuditLogger } from './weChatAuditLogger'
 import { WeChatImChannel } from './weChatImChannel'
 import { WeChatBotService, detectWeChatSdk } from './weChatBotService'
+import { requireWeChatSentMessageId } from './weChatReplyService'
 import { WeChatCommandRouter, dispatchWeChatSdkInbound } from './weChatCommandRouter'
 import type { WorkDirManager } from '../workDirManager'
 import { resolveWorkDirForSession } from '../workDirManager'
@@ -34,6 +35,7 @@ import { getSecurityAuditLog } from '../confirmation/audit'
 import { createDeferredApprovalNotificationDelivery } from '../remote/deferredApprovalNotificationDelivery'
 import { isRemoteAsyncApprovalGateEnabled } from '../confirmation/remoteAsyncApprovalGate'
 import { createWakeEventDispatcher } from '../remote/wakeEventDispatcher'
+import { scheduleStartupWakeRecovery } from '../remote/startupWakeRecovery'
 import { createDeferredImBundleRuntime } from '../remote/deferredImBundleRuntime'
 import { recheckDeferredTaskControl } from '../remote/deferredImDispatch'
 import { executeDeferredImTool } from '../remote/imDeferredToolExecutor'
@@ -48,16 +50,6 @@ import { ensureRemoteImModelConfigMigrated } from '../remote/remoteImModelConfig
 
 const WECHAT_CONFIG_KEY = 'config.wechat'
 
-function requireWeChatSentMessageId(result: unknown): { messageId: string } {
-  if (typeof result === 'string' && result.trim()) return { messageId: result }
-  if (result && typeof result === 'object' && !Array.isArray(result)) {
-    const value = result as { messageId?: unknown; message_id?: unknown; id?: unknown; data?: { message_id?: unknown } }
-    const messageId = value.messageId ?? value.message_id ?? value.id ?? value.data?.message_id
-    if (typeof messageId === 'string' && messageId.trim()) return { messageId }
-  }
-  throw new Error('WECHAT_DELIVERY_MESSAGE_ID_MISSING')
-}
-
 export type WeChatServiceBundle = {
   processedStore: WeChatProcessedStore
   imChannel: WeChatImChannel
@@ -69,6 +61,7 @@ export type WeChatServiceBundle = {
 }
 
 let bundle: WeChatServiceBundle | null = null
+let clarificationRecoveryTimer: ReturnType<typeof setInterval> | null = null
 let unregisterWeChatTodoInvalidator: (() => void) | null = null
 let unregisterWeChatPendingCancel: (() => void) | null = null
 let unregisterWeChatCacheClearer: (() => void) | null = null
@@ -280,7 +273,7 @@ export function createWeChatBundle(deps: {
     createDeferredConfirmationAdapter: (remoteContext) => createImDeferredConfirmationAdapter(deferredProducer, remoteContext)
     ,taskControlSafetyPort
   })
-  const wakeDispatcher = createWakeEventDispatcher({ db: deps.db, maxParallel: deps.getMaxParallel(),
+  const wakeDispatcher = createWakeEventDispatcher({ db: deps.db, maxParallel: deps.getMaxParallel(), ownerChannel: 'wechat',
     launchLoop: (input) => router.dispatchWakeEventSet(input), onError: (error) => {
       logWeChatCliEvent('error', 'wechat.wake.retry_failed', { message: error instanceof Error ? error.message : String(error) })
     } })
@@ -332,6 +325,29 @@ export async function autoStartWeChatPollIfNeeded(db: AppDatabase): Promise<void
   }
   const status = await bundle.botService.startPoll()
   backfillWeChatOwnerAllowlistIfMissing(db, status)
+  if (clarificationRecoveryTimer) clearInterval(clarificationRecoveryTimer)
+  void bundle.router?.recoverClarificationLifecycle().catch((error) => {
+    logWeChatCliEvent('warn', 'wechat.clarification.recovery_failed', {
+      error: error instanceof Error ? error.message : String(error)
+    })
+  })
+  clarificationRecoveryTimer = setInterval(() => {
+    void bundle?.router?.recoverClarificationLifecycle().catch((error) => {
+      logWeChatCliEvent('warn', 'wechat.clarification.recovery_failed', {
+        error: error instanceof Error ? error.message : String(error)
+      })
+    })
+  }, 30_000)
+  clarificationRecoveryTimer.unref?.()
+  const recoverableSessionIds = await scheduleStartupWakeRecovery(db, 'wechat', bundle.wakeDispatcher, Date.now, (sessionId, error) => {
+    logWeChatCliEvent('error', 'wechat.wake.startup_recovery_failed', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error)
+    })
+  })
+  if (recoverableSessionIds.length > 0) {
+    logWeChatCliEvent('info', 'wechat.wake.startup_recovery_started', { sessionCount: recoverableSessionIds.length })
+  }
   logWeChatCliEvent(status.pollState === 'polling' ? 'info' : 'error', 'wechat.poll.auto_start', {
     pollState: status.pollState,
     lastError: status.lastError
@@ -345,6 +361,8 @@ export async function pauseWeChatPollIfWindowClosed(): Promise<void> {
 }
 
 export async function shutdownWeChatServices(): Promise<void> {
+  if (clarificationRecoveryTimer) clearInterval(clarificationRecoveryTimer)
+  clarificationRecoveryTimer = null
   cancelAllActiveChats()
   remoteAuthorizationRegistry.invalidate('wechat', 'service_stopped')
   bundle?.imChannel.cancelAllPending()

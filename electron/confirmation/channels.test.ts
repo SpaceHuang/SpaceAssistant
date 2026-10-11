@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { channelFor, DesktopChannel, ImRequestChannel, DenyChannel, resolveConfirmChannel, selectConfirmationAnswerer } from './channels'
 import type { AuditSink } from './channels'
 import { ImChannel } from './imChannel'
+import { createImChannelForTest } from './imChannelTestUtils'
 import type { ConfirmAnswererMap, ConfirmRequest, SecurityAuditEvent } from '../../src/shared/confirmation/types'
 
 function req(overrides: Partial<ConfirmRequest> = {}): ConfirmRequest {
@@ -103,7 +104,7 @@ describe('channelFor 远程分支（ImChannel 直连）', () => {
 
   it("入站 'y'→approved，confirm.request/outcome 审计同一 requestId 关联", async () => {
     const audit = auditSink()
-    const im = new ImChannel({ lane: 'wechat', timeoutMs: 1000, audit, sendPrompt: () => undefined })
+    const im = createImChannelForTest({ lane: 'wechat', timeoutMs: 1000, audit, sendPrompt: () => undefined })
     const ch = channelFor({
       lane: 'wechat',
       requestId: 'req-2',
@@ -124,7 +125,7 @@ describe('channelFor 远程分支（ImChannel 直连）', () => {
 
   it("入站 'n'→rejected；缺 imChannel 时兜底 rejected（不发消息）", async () => {
     const audit = auditSink()
-    const im = new ImChannel({ lane: 'feishu', timeoutMs: 1000, audit, sendPrompt: () => undefined })
+    const im = createImChannelForTest({ lane: 'feishu', timeoutMs: 1000, audit, sendPrompt: () => undefined })
     const ch = channelFor({
       lane: 'feishu',
       requestId: 'req-3',
@@ -225,7 +226,7 @@ describe('P1-1 resolveConfirmChannel 二维解析（回答者种类 × 传输通
     expect(selectConfirmationAnswerer({ lane: 'desktop', remoteAsyncApprovalEnabled: true })).toEqual({ kind: 'user' })
     expect(selectConfirmationAnswerer({ lane: 'automation', remoteAsyncApprovalEnabled: true })).toEqual({ kind: 'user' })
     expect(selectConfirmationAnswerer({ lane: 'wechat', remoteAsyncApprovalEnabled: false })).toEqual({ kind: 'user' })
-    const im = new ImChannel({ lane: 'wechat', timeoutMs: 1000, sendPrompt: () => undefined })
+    const im = createImChannelForTest({ lane: 'wechat', timeoutMs: 1000, sendPrompt: () => undefined })
     expect(resolveConfirmChannel({ ...baseArgs, lane: 'wechat', imChannel: im, buildImPending: buildPending })).toBeInstanceOf(ImRequestChannel)
     const factory = vi.fn(() => ({ request: vi.fn(), cancel: vi.fn() }))
     resolveConfirmChannel({ ...baseArgs, lane: 'wechat', remoteAsyncApprovalEnabled: true, agentChannelFactory: factory })
@@ -233,7 +234,7 @@ describe('P1-1 resolveConfirmChannel 二维解析（回答者种类 × 传输通
   })
 
   it('IM explicit agent policy is fenced by the independent rollout switch', () => {
-    const im = new ImChannel({ lane: 'wechat', timeoutMs: 1000, sendPrompt: vi.fn() })
+    const im = createImChannelForTest({ lane: 'wechat', timeoutMs: 1000, sendPrompt: vi.fn() })
     const factory = vi.fn(() => ({ request: vi.fn(), cancel: vi.fn() }))
     const closed = resolveConfirmChannel({ ...baseArgs, lane: 'wechat', answererPolicy: { kind: 'agent' }, imChannel: im,
       buildImPending: () => ({ sessionId: 's-rcc', messageId: 'm1', matchKey: 'u1' }) })
@@ -261,11 +262,11 @@ describe('P1-1 resolveConfirmChannel 二维解析（回答者种类 × 传输通
   })
 
   it('user × wechat / feishu（有 imChannel）→ ImRequestChannel（现状等价）', () => {
-    const im = new ImChannel({ lane: 'wechat', timeoutMs: 1000, sendPrompt: () => undefined })
+    const im = createImChannelForTest({ lane: 'wechat', timeoutMs: 1000, sendPrompt: () => undefined })
     expect(
       resolveConfirmChannel({ ...baseArgs, lane: 'wechat', imChannel: im, buildImPending: buildPending })
     ).toBeInstanceOf(ImRequestChannel)
-    const imF = new ImChannel({ lane: 'feishu', timeoutMs: 1000, sendPrompt: () => undefined })
+    const imF = createImChannelForTest({ lane: 'feishu', timeoutMs: 1000, sendPrompt: () => undefined })
     expect(
       resolveConfirmChannel({ ...baseArgs, lane: 'feishu', imChannel: imF, buildImPending: buildPending })
     ).toBeInstanceOf(ImRequestChannel)

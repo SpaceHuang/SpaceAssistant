@@ -153,6 +153,9 @@ export function deserializeToolCallsFromDb(raw: string | null | undefined): Tool
       ...(typeof c.shellSecurityHints === 'object' && c.shellSecurityHints ? { shellSecurityHints: c.shellSecurityHints } : {}),
       ...(typeof c.autoApproveFallback === 'object' && c.autoApproveFallback ? { autoApproveFallback: c.autoApproveFallback } : {}),
       ...(typeof c.autoAnswerer === 'boolean' ? { autoAnswerer: c.autoAnswerer } : {}),
+      ...(c.confirmationLane === 'desktop' || c.confirmationLane === 'wechat' || c.confirmationLane === 'feishu' || c.confirmationLane === 'automation'
+        ? { confirmationLane: c.confirmationLane }
+        : {}),
       confirmedAt: c.confirmedAt,
       startedAt: c.startedAt,
       completedAt: c.completedAt,

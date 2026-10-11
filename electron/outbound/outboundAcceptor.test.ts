@@ -246,6 +246,29 @@ describe('canonical History failure summary', () => {
 })
 
 describe('continuation intent acceptance persistence', () => {
+  it('does not send a whitespace session ID to continuation source inspection', async () => {
+    const { createTempDatabase } = await import('../database/testHelpers')
+    const { createSqliteSessionStorage } = await import('../sessionStorage/sqliteSessionStorage')
+    const temp = createTempDatabase('sa-continuation-blank-session-')
+    try {
+      const readSources = vi.fn(() => { throw new Error('CONTINUATION_SOURCE_SESSION_ID_REQUIRED') })
+      const storage = createSqliteSessionStorage(temp.db)
+      const acceptor = createOutboundAcceptor({
+        db: temp.db, turnRuntime: { listActive: () => [] }, isDev: () => true, apiKeyPresent: () => true, getMaxParallel: () => 3, maxQueueSize: 10,
+        readWikiConfig: () => ({ ...DEFAULT_WIKI_CONFIG, enabled: true }), listSkills: async () => [], getSkill: async () => null,
+        wikiInit: async () => ({ ok: true as const, rootPath: '', skillInstalled: true }), wikiStatus: async () => ({ enabled: true, rootPath: '', initialized: true, pageCount: 0, rawCount: 0 }),
+        wikiImportRaw: async ({ srcRelPath }) => ({ ok: true as const, rawRelPath: srcRelPath, copied: false }), appendHintMessage: () => undefined,
+        updateSessionState: () => undefined, createSession: () => { throw new Error('unexpected session creation') }, ensureSessionWorkDir: async () => ({ ok: true as const }),
+        startTurn: vi.fn(), newRequestId: () => 'generated', audit: () => undefined,
+        sessionQueries: { ...storage.queries, continuationSources: { read: readSources } } as never
+      })
+
+      await expect(acceptor.submitOutbound({ sessionId: '   ', text: '继续', requestId: 'blank-session-continue' }))
+        .resolves.toMatchObject({ rejected: { reason: 'OUTBOUND_SESSION_NOT_FOUND' } })
+      expect(readSources).not.toHaveBeenCalled()
+    } finally { temp.cleanup() }
+  })
+
   it('canonical-only accepted-turn 重试返回投影后的 assistant 正文', async () => {
     const { createTempDatabase } = await import('../database/testHelpers')
     const { createSession, appendMessage, createPersistedTurn, getDbConnection } = await import('../database')

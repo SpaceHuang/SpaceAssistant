@@ -301,6 +301,14 @@ describe('AssistantFactAggregator：agent 裁决路径标记（H1）', () => {
     ])
     expect(result.toolCalls?.[0]?.autoAnswerer).toBeUndefined()
   })
+
+  it('confirm-requested 保留远程确认 lane，供渲染端避免暴露桌面响应卡', () => {
+    const result = apply([
+      { type: 'tool-use', id: 't-wechat', toolName: 'mcp_zhihu_search', input: {} },
+      { type: 'confirm-requested', id: 't-wechat', riskLevel: 'medium', lane: 'wechat' }
+    ])
+    expect(result.toolCalls?.[0]).toMatchObject({ status: 'confirming', confirmationLane: 'wechat' })
+  })
 })
 
 describe('AssistantFactAggregator：回退显式清除 autoAnswerer（§5.8）', () => {

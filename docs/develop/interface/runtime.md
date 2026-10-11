@@ -36,17 +36,21 @@ interface BuiltinRegistryLike { get(name: string): unknown }
 ## ConfirmIdSpace（确认 ID 空间）
 
 ```ts
+interface ConfirmCodeLease {
+  readonly code: string
+  readonly allocationToken: object
+}
 interface ConfirmIdSpaceLike {
-  allocate(maxAttempts?: number): string   // 默认 32 次尝试
-  release(id: string): void
+  allocate(): ConfirmCodeLease
+  release(lease: ConfirmCodeLease): void
   isInUse(id: string): boolean
   clear(): void
 }
 ```
 
-- 4 字符 Crockford Base32（字母表去 `I`/`L`/`O`/`U`），由 `crypto.randomBytes(3)` 采样 20 bit；返回大写形式。
-- 冲突则重试，`maxAttempts` 用尽抛 `confirmId collision exhausted`。
-- `release` / `isInUse` 对大写归一（内部按大写存储）。
+- 活动确认码严格为 `00`–`99` 两位十进制字符串；从随机起点完整扫描有限编号域，存在空闲码时总能分配，全部占用时抛 `CONFIRM_ID_SPACE_EXHAUSTED`。
+- 每次分配返回独立租约对象。`release` 仅在租约 token 仍是该码的当前 owner 时释放；旧租约和重复释放不会影响已复用该码的新租约。
+- 终态结算或超时后立即释放；pending 同码复用仍由平台提示消息 ID 的精确引用绑定防止旧回复串单。
 
 ## ChatCancelRegistry（聊天取消注册表）
 

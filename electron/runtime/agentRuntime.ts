@@ -3,6 +3,8 @@ import type { AuditSink } from '../confirmation/audit'
 import { InMemoryExecutionAdmissionCoordinator, type ExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
 import { InMemorySafetyPermitStore, type SafetyPermitStore } from '../../packages/agent-sdk/src/safetyPermit'
 import { ModelProviderRegistry } from '../../packages/agent-sdk/src/model'
+import type { ConfirmCodeLease } from '../../packages/agent-sdk/src/runtime/components'
+import { ConfirmIdSpace } from '../../packages/agent-sdk/src/runtime/components'
 
 /**
  * Agent Runtime 纯工厂(A2,偏差 18;P8 结构解环):本模块零业务 import——
@@ -28,8 +30,8 @@ export const DEFAULT_AUDIT_FALLBACK_RETENTION_DAYS = 180
 
 /** 组件最小面(结构类型;桌面类/包纯核类均满足)。 */
 export interface ConfirmIdSpaceLike {
-  allocate(maxAttempts?: number): string
-  release(id: string): void
+  allocate(): ConfirmCodeLease
+  release(lease: ConfirmCodeLease): void
   isInUse(id: string): boolean
   clear(): void
 }
@@ -146,12 +148,7 @@ export function createAgentRuntime(components: AgentRuntimeComponents = {}): Age
 
   return {
     instanceId: randomUUID(),
-    confirmIds: components.confirmIds ?? {
-      allocate: () => '',
-      release: () => undefined,
-      isInUse: () => false,
-      clear: () => undefined
-    },
+    confirmIds: components.confirmIds ?? new ConfirmIdSpace(),
     chatCancels: components.chatCancels ?? {
       register: () => new AbortController().signal,
       signalChatCancel: () => undefined,

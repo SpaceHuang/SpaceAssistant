@@ -1,5 +1,7 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest'
 import { createMemoryAppDb, createTempDatabase } from './testHelpers'
+import { createRemoteTrack } from './remoteTrackStore'
+import { createClarification } from './clarificationStore'
 import {
   appendMessage,
   appendMessagesAtomically,
@@ -141,6 +143,70 @@ describe('atomic turn continuation acceptance', () => {
 })
 
 describe('deleteSession persisted transcript cleanup', () => {
+  it('keeps unknown dispatched tool outcomes as reconciliation blockers when deleting their source session', () => {
+    const db = createMemoryAppDb()
+    try {
+      const session = createSession(db, { name: 'track-unknown-dispatch-delete' })
+      const user = appendMessage(db, { id: 'unknown-dispatch-user', sessionId: session.id, role: 'user', content: 'run tool', timestamp: 1, status: 'sent' })
+      const assistant = appendMessage(db, { id: 'unknown-dispatch-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
+      createRemoteTrack(db, { trackId: 'unknown-dispatch-track', eventId: 'unknown-dispatch-root', idempotencyKey: 'unknown-dispatch-inbound',
+        channel: 'wechat', identityKey: 'alice', ownerId: 'owner', authorizationEpoch: 1, rootMessageId: 'unknown-dispatch-root-message',
+        originSessionId: session.id, occurredAt: 1 })
+      const conn = getDbConnection(db)
+      createPersistedTurn(db, { turnId: 'unknown-dispatch-turn', requestId: 'unknown-dispatch-request', sessionId: session.id,
+        assistantMessageId: assistant.message.id, userMessageId: user.message.id, state: 'terminal', outcome: 'commit-uncertain' })
+      conn.prepare('UPDATE turns SET track_id=? WHERE turn_id=?').run('unknown-dispatch-track', 'unknown-dispatch-turn')
+      conn.prepare('UPDATE messages SET tool_calls=? WHERE id=?').run(JSON.stringify([{ id: 'tool-use-1', status: 'outcome-unknown' }]), assistant.message.id)
+      conn.prepare(`INSERT INTO remote_track_children(track_id,child_kind,child_id,state,updated_at)
+        VALUES('unknown-dispatch-track','tool-dispatch','tool-use-1','outcome-unknown',2)`).run()
+
+      deleteSession(db, session.id, { flush: false })
+
+      expect(conn.prepare('SELECT state FROM remote_tracks WHERE track_id=?').get('unknown-dispatch-track'))
+        .toEqual({ state: 'reconciliation-blocked' })
+      expect(conn.prepare(`SELECT state FROM remote_track_children WHERE track_id=? AND child_kind='tool-dispatch'`).get('unknown-dispatch-track'))
+        .toEqual({ state: 'outcome-unknown' })
+    } finally { db.close() }
+  })
+
+  it('blocks active Tracks with queued work for reconciliation and keeps completed Tracks ineligible after origin deletion', () => {
+    const db = createMemoryAppDb()
+    try {
+      const session = createSession(db, { name: 'track-origin-delete' })
+      createRemoteTrack(db, { trackId: 'active-origin-track', eventId: 'active-origin-event', idempotencyKey: 'active-origin-root',
+        channel: 'wechat', identityKey: 'alice', ownerId: 'owner', authorizationEpoch: 1, rootMessageId: 'active-root',
+        originSessionId: session.id, occurredAt: 1 })
+      createRemoteTrack(db, { trackId: 'completed-origin-track', eventId: 'completed-origin-event', idempotencyKey: 'completed-origin-root',
+        channel: 'wechat', identityKey: 'alice', ownerId: 'owner', authorizationEpoch: 1, rootMessageId: 'completed-root',
+        originSessionId: session.id, occurredAt: 1 })
+      getDbConnection(db).prepare("UPDATE remote_tracks SET state='completed' WHERE track_id='completed-origin-track'").run()
+      createClarification(db, { clarificationId: 'origin-session-clarification', channel: 'wechat', identityKey: 'alice', ownerId: 'owner',
+        authorizationEpoch: 1, sourceMessageId: 'ambiguous-source', parkedInputRef: 'parked-origin-input', createdAt: 1, expiresAt: 1000,
+        version: 1, handle: 'ABCDEFGHJK345', candidates: [{ trackId: 'active-origin-track', option: 1, label: '活动任务', stateAtIssue: 'open' }] })
+      const conn = getDbConnection(db)
+      conn.prepare(`INSERT INTO remote_track_work_queue(work_id,source_key,track_id,clarification_id,source_message_id,state,session_id,created_at,updated_at)
+        VALUES('origin-session-work','clarification:origin-session-clarification','active-origin-track','origin-session-clarification',
+          'ambiguous-source','queued',?,1,1)`).run(session.id)
+      conn.prepare(`INSERT INTO remote_track_children(track_id,child_kind,child_id,state,updated_at)
+        VALUES('active-origin-track','execution-work','origin-session-work','queued',1)`).run()
+
+      deleteSession(db, session.id, { flush: false })
+
+      expect(conn.prepare('SELECT track_id,state,origin_session_id FROM remote_tracks ORDER BY track_id').all()).toEqual([
+        { track_id: 'active-origin-track', state: 'reconciliation-blocked', origin_session_id: null },
+        { track_id: 'completed-origin-track', state: 'completed', origin_session_id: null }
+      ])
+      expect(conn.prepare("SELECT event_kind FROM remote_track_events WHERE track_id='active-origin-track' ORDER BY occurred_at DESC LIMIT 1").get())
+        .toEqual({ event_kind: 'track.session.deleted' })
+      expect(conn.prepare("SELECT state FROM remote_clarifications WHERE clarification_id='origin-session-clarification'").get())
+        .toEqual({ state: 'invalidated' })
+      expect(conn.prepare("SELECT state FROM remote_track_work_queue WHERE work_id='origin-session-work'").get())
+        .toEqual({ state: 'needs-reconciliation' })
+      expect(conn.prepare("SELECT state FROM remote_track_children WHERE track_id='active-origin-track' AND child_id='origin-session-work'").get())
+        .toEqual({ state: 'needs-reconciliation' })
+    } finally { db.close() }
+  })
+
   it('keeps an active session and its records intact when deletion is requested', () => {
     const db = createMemoryAppDb()
     const session = createSession(db, { name: 'active-session-delete' })
