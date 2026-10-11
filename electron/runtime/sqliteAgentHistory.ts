@@ -1181,7 +1181,9 @@ export class SqliteAgentHistory implements HistoryPort {
     | Readonly<{ kind: 'none' }>
     | Readonly<{ kind: 'completed'; snapshot: HistorySnapshot }>
     | Readonly<{ kind: 'cancelled'; snapshot: HistorySnapshot }>
-    | Readonly<{ kind: 'unavailable'; invocationId: string }>
+    // P0-⑤: the unavailable verdict already carries the stream it just read, so callers
+    // (hostedTurnHandoff recovery) never re-read the same full invocation.
+    | Readonly<{ kind: 'unavailable'; invocationId: string; snapshot: HistorySnapshot }>
   > {
     const excluded = new Set([...(options.excludeInvocationId ? [options.excludeInvocationId] : []), ...(options.excludeInvocationIds ?? [])])
     const invocationIds = this.listInvocationIdsForSession(sessionId).filter((id) => !excluded.has(id))
@@ -1191,7 +1193,7 @@ export class SqliteAgentHistory implements HistoryPort {
       const terminal = snapshot.events.at(-1)
       // Open/interrupted streams may represent a crashed turn whose canonical tail is incomplete.
       if (!terminal || !['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(terminal.kind)) {
-        return { kind: 'unavailable', invocationId }
+        return { kind: 'unavailable', invocationId, snapshot }
       }
       // Failed turns are closed attempts. Keep searching for the last complete conversation base.
       if (terminal.kind === 'invocation-failed') continue
@@ -1202,10 +1204,10 @@ export class SqliteAgentHistory implements HistoryPort {
         if (outcome === 'cancelled' && snapshot.events.some(({ kind }) => kind === 'invocation-context-committed' || kind === 'transcript-compacted')) {
           return { kind: 'cancelled', snapshot }
         }
-        return { kind: 'unavailable', invocationId }
+        return { kind: 'unavailable', invocationId, snapshot }
       }
       if (!snapshot.events.some(({ kind }) => kind === 'invocation-context-committed' || kind === 'transcript-compacted')) {
-        return { kind: 'unavailable', invocationId }
+        return { kind: 'unavailable', invocationId, snapshot }
       }
       return { kind: 'completed', snapshot }
     }
