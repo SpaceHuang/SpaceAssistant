@@ -36,7 +36,9 @@ describe('projection repair governance (P3-②)', () => {
     const history = new SqliteAgentHistory(getDbConnection(db))
     insertPendingRepair(db, 'gov-transient')
 
-    history.recordProjectionRepairResult('gov-transient', { success: false, error: new Error('SQLITE_BUSY: database is locked') })
+    // 分类器读 error.code：用真实 code 形态构造，证明瞬态错误不被误判为 terminal。
+    const busy = Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' })
+    history.recordProjectionRepairResult('gov-transient', { success: false, error: busy })
 
     expect(getDbConnection(db).prepare('SELECT status FROM canonical_projection_repairs WHERE repair_id=?')
       .get('gov-transient')).toEqual({ status: 'pending' })

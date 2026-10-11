@@ -13,6 +13,7 @@ export type AgentLogEventName =
   | 'session.transcript.read'
   | 'session.transcript.reconciliation'
   | 'eventloop.delay'
+  | 'session.storage.pending_view'
   | 'storage.spill.source_truth_gc'
   | 'storage.spill.source_truth_gc_failed'
   | 'agent.tools.trim_widen_denied'

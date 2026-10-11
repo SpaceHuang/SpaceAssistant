@@ -113,6 +113,9 @@ export function recordProjectionRejection(db: AppDatabase, sessionId: string, re
   o1: ProjectionO1Metadata, legacyDigest: string): void {
   const now = Date.now()
   const retryAfter = now + projectionRejectionBackoffDelayMs(1)
+  // S6: drop the session's cached transcript so no warm L1 hit can bypass the verdict before
+  // the background revalidator re-adjudicates the divergence.
+  getDbConnection(db).prepare("DELETE FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").run(sessionId)
   getDbConnection(db).prepare(`INSERT INTO canonical_session_projection_rejections(
     session_id, session_generation, fingerprint, watermark_event_id, watermark_invocation_id,
     event_count, legacy_message_count, legacy_max_rowid, legacy_digest, attempts, retry_after, last_reason, permanent, stale_metadata, updated_at

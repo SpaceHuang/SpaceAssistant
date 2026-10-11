@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest'
-import { appendFileSync } from 'node:fs'
 import { appendMessage, createSession } from '../database/operations'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
@@ -73,13 +72,7 @@ describe('per-invocation pending tool/approval view (P1-②)', () => {
     conn.prepare('UPDATE session_event_cursor SET next_seq=4 WHERE session_id=?').run(session.id)
 
     const readSyncSpy = vi.spyOn(SqliteAgentHistory.prototype, 'readSync')
-    const dbg = (label: string) => { appendFileSync('debug-out.txt',
-      label + ' view=' + JSON.stringify(conn.prepare('SELECT stream_version FROM canonical_invocation_pending_views WHERE invocation_id=?').get('resolve-invocation')) +
-      ' cache=' + JSON.stringify(conn.prepare("SELECT session_seq FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id)) +
-      ' cursor=' + JSON.stringify(conn.prepare('SELECT next_seq FROM session_event_cursor WHERE session_id=?').get(session.id)) + '\n') }
-    dbg('t2-pre')
     const read = history.readCanonicalSessionTranscriptWithCache(session.id, 'transcript')
-    dbg('t2-post read=' + read.kind)
     expect(read.kind).toBe('matched')
     // P1-②: the tail validation consults the pending view instead of re-reading the full stream.
     expect(readSyncSpy).not.toHaveBeenCalled()

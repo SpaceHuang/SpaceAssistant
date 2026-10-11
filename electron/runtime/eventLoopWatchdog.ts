@@ -11,8 +11,6 @@ import { logAgentEvent } from '../agentLogger/agentLogger'
 export type EventLoopWatchdogOptions = {
   /** p99 delay above which a breach is logged. */
   thresholdMs?: number
-  /** Histogram sample interval. */
-  sampleIntervalMs?: number
   /** How often the histogram is inspected. */
   checkIntervalMs?: number
   histogram?: IntervalHistogram

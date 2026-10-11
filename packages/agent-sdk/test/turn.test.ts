@@ -2824,8 +2824,11 @@ describe('runAgentTurn', () => {
       messagesCount: request.messages.length
     }
     expect(snapshot.events[0]?.payload).toMatchObject({ requestSnapshot: expectedSnapshot })
+    // 摘要与本地实算比对（不只验证格式）：摘要必须忠实对应被省略的 messages 正文。
+    const { createHash } = await import('node:crypto')
+    const expectedMessagesSha = createHash('sha256').update(JSON.stringify(request.messages), 'utf8').digest('hex')
     expect(snapshot.events[0]?.payload).toMatchObject({
-      requestSnapshot: { messagesSha256: expect.stringMatching(/^[a-f0-9]{64}$/) }
+      requestSnapshot: { messagesSha256: expectedMessagesSha }
     })
     expect(Object.hasOwn((snapshot.events[0]?.payload as { requestSnapshot: { request: Record<string, unknown> } }).requestSnapshot.request, 'messages')).toBe(false)
     expect(snapshot.events.find(({ kind }) => kind === 'model-response-committed')?.payload).toMatchObject({

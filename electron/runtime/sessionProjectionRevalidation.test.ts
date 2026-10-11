@@ -172,3 +172,37 @@ describe('background projection revalidation queue (P0-③/④)', () => {
     db.close()
   })
 })
+
+describe('production revalidation drain (review S1/S2)', () => {
+  it('recovers a healed session through the resident drain without anyone calling runDue directly', async () => {
+    const { startSessionProjectionRevalidationDrain } = await import('./sessionProjectionRevalidation')
+    const { db, session } = await createMismatchedSession('resident')
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('legacy')
+
+    // 修复 legacy 正文使下次全量对比 matched；恢复只依赖常驻 drain（评审 S1）。
+    getDbConnection(db).prepare("DELETE FROM messages WHERE id='resident-user-b'").run()
+    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'legacy', reason: 'projection-rejected' })
+
+    const handle = startSessionProjectionRevalidationDrain(db, 10)
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    handle.stop()
+
+    expect(getProjectionRejection(db, session.id)).toBeUndefined()
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L1')
+    db.close()
+  })
+
+  it('keeps backoff-skipped entries queued for a later drain (review S2)', async () => {
+    const { db, session } = await createMismatchedSession('skipped')
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('legacy')
+    // 例行登记（退避未到期）后 drain：条目不得被丢弃。
+    enqueueSessionProjectionRevalidation(db, session.id)
+    const first = await runDueSessionProjectionRevalidations(db)
+    expect(first.skipped).toBe(1)
+    // 退避到期后的下一次 drain 必须仍能消费到它（自愈/永久化路径可达）。
+    const second = await runDueSessionProjectionRevalidations(db, { now: Date.now() + 60_000 })
+    expect(second.revalidated).toBe(1)
+    expect(getProjectionRejection(db, session.id)?.attempts).toBe(2)
+    db.close()
+  })
+})

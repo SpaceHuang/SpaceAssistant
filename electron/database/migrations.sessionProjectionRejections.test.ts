@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { appendMessage, createSession } from './operations'
 import { createMemoryAppDb } from './testHelpers'
@@ -32,6 +33,13 @@ describe('canonical session projection rejection negative cache (P0-①)', () =>
     const conn = getDbConnection(db)
     const session = createSession(db, { name: 'cursor-trigger exemption', model: 'test' })
     insertRejectionRow(db, session.id, session.generation)
+
+    // 对照组先确认「本应被清空」的数据存在：cursor 维护触发器会清空缓存与资格行
+    // （createSession 已 seed 两行），唯独 rejection 行保留——恒真断言证明不了豁免行为。
+    const emptySha = createHash('sha256').update('[]').digest('hex')
+    const seededCache = conn.prepare("SELECT value_sha256 FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id) as { value_sha256: string } | undefined
+    if (seededCache) expect(seededCache.value_sha256).toBe(emptySha)
+    conn.prepare('INSERT OR REPLACE INTO canonical_session_projection_eligibility(session_id, session_generation, validated_at) VALUES(?, ?, 1)').run(session.id, session.generation)
 
     conn.prepare("INSERT INTO agent_history_commit_cursor(allocated_at) VALUES(1)").run()
     conn.prepare('UPDATE agent_history_commit_cursor SET allocated_at=2 WHERE id=1').run()

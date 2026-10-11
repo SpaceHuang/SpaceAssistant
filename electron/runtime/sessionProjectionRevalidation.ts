@@ -103,8 +103,10 @@ export async function runDueSessionProjectionRevalidations(db: AppDatabase,
     const entry = entries[index]!
     const rejection = getProjectionRejection(db, entry.sessionId)
     // 例行登记（终态/显式刷新）受退避门控（含 permanent 的 7 天 TTL）；内容变化（stale）强制立即重验。
+    // S2: 退避未到期的条目重新入队（而不是丢弃），保证永久化/TTL 在后续 drain 中仍然可达。
     if (!entry.stale && rejection && now < rejection.retryAfter) {
       skipped += 1
+      requeue.push(entry)
       continue
     }
     revalidated += 1
@@ -132,4 +134,19 @@ export function checkpointSessionTranscriptProjection(db: AppDatabase, sessionId
   enqueueSessionProjectionRevalidation(db, sessionId)
   void runDueSessionProjectionRevalidations(db).catch(() => { /* revalidation is best-effort */ })
   return false
+}
+
+/**
+ * S1: production drain for the revalidation queue. Startup owns one resident interval
+ * (unref'd so it cannot hold the process open); every tick consumes due entries. Returns a
+ * stop handle; tests can also drive drainOnce directly for deterministic timing.
+ */
+export function drainOnceSessionProjectionRevalidations(db: AppDatabase): void {
+  void runDueSessionProjectionRevalidations(db).catch(() => { /* revalidation is best-effort */ })
+}
+
+export function startSessionProjectionRevalidationDrain(db: AppDatabase, intervalMs = 60_000): { stop: () => void } {
+  const timer = setInterval(() => drainOnceSessionProjectionRevalidations(db), intervalMs)
+  timer.unref?.()
+  return { stop: () => clearInterval(timer) }
 }
