@@ -139,6 +139,30 @@ describe('T2.2a 迁移文件管线', () => {
     expect(report2.profiles?.[0]?.status).toBe('skipped')
   })
 
+  it('共享库只有 raw/（未经 init 建出 wiki/ 目录）时：归并自动补建目录，迁移成功而非 ENOENT 失败', async () => {
+    const world = await setupWorld()
+    // 真实用户路径退化态：共享库物理目录存在但没有 wiki/ 子目录
+    fs.rmSync(world.sharedRoot, { recursive: true, force: true })
+    fs.mkdirSync(path.join(world.sharedRoot, 'raw'), { recursive: true })
+    // 旧库只有 index.md（无可拷页面——mergeWikiPages 不会隐式建出 wiki/ 目录）
+    const workDir = path.join(world.root, 'proj-bare')
+    const srcRoot = path.join(workDir, 'llm-wiki')
+    fs.mkdirSync(path.join(srcRoot, 'wiki'), { recursive: true })
+    fs.writeFileSync(path.join(srcRoot, 'SCHEMA.md'), 'legacy schema v1 body\n', 'utf8')
+    fs.writeFileSync(path.join(srcRoot, 'wiki', 'index.md'), '- [旧页](entities/old.md)\n', 'utf8')
+
+    const report = await migrateLegacyWikis({
+      db: world.db,
+      userDataPath: world.userData,
+      wikiConfig: wikiConfig(),
+      profiles: [{ workDir }]
+    })
+
+    expect(report.profiles?.[0]?.status).toBe('migrated')
+    expect(fs.readFileSync(path.join(world.sharedRoot, 'wiki', 'index.md'), 'utf8')).toContain('旧页')
+    expect(fs.existsSync(srcRoot)).toBe(false)
+  })
+
   it('冲突双保留 <name>.from-<projectId>.md + 平行版本提示行 + 报告 conflicts/renames', async () => {
     const world = await setupWorld()
     const p = world.makeLegacyProfile('proj-b')

@@ -370,6 +370,9 @@ export async function migrateLegacyWikis(options: MigrateLegacyWikisOptions): Pr
   }
   const changedVocabPaths = new Set<string>()
   const aliasNames = new Set<string>()
+  // 共享库可能只有 raw/（未经 initWikiStructure 建出 wiki/ 目录）——index/log 归并前必须确保目录存在，
+  // 否则 writeFileSync 抛 ENOENT 且该 profile 静默记为 failed（2026-10-11 用户实机回归）
+  fs.mkdirSync(path.join(sharedRoot, 'wiki'), { recursive: true })
 
   const targets: LegacyRootCandidate[] = [
     ...options.profiles.flatMap((p) => {
