@@ -11,6 +11,7 @@
   "electron/outbound/outboundAcceptor.ts|../database|appendMessage",
   "electron/runtime/invocationAssembler.ts|../database|getSession",
   "electron/runtime/sessionProjectionRevalidation.ts|../database/operations|getMessages",
+  "electron/runtime/sessionProjectionRevalidation.ts|./sessionTranscriptProjection|hasSessionProjectionEligibility",
   "electron/runtime/sessionProjectionRevalidation.ts|./sessionTranscriptProjection|markSessionProjectionEligible",
   "electron/runtime/sessionProjectionRevalidation.ts|./sessionTranscriptProjection|refreshSessionTranscriptProjectionFastPath",
   "electron/runtime/sessionProjectionRevalidation.ts|./sqliteAgentHistory|SqliteAgentHistory",
