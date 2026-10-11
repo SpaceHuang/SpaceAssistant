@@ -425,12 +425,12 @@ describe('createAgentSdkSafetyPolicy', () => {
     const currentPageUrl = 'https://example.test/account'
     const dangerAssessment = { dangerous: true, source: 'page-effect' as const, userReason: 'submit', consequence: 'account-change' as const }
     const policy = createAgentSdkSafetyPolicy({
-      resolveGateArgs: async () => ({ ...baseArgs, currentPageUrl, dangerAssessment, remoteBudgetState: { remaining: 2 } } as never),
+      resolveGateArgs: async () => ({ ...baseArgs, lane: 'desktop', currentPageUrl, dangerAssessment, remoteBudgetState: { remaining: 2 } } as never),
       evaluateGate: async () => result({ type: 'require-confirm', ruleId: 'browser-review', answerer: 'user', riskLevel: 'high', facts, memoryTiers: [], timeoutMs: 1000 })
     })
 
     await expect(policy.evaluate(binding)).resolves.toMatchObject({
-      kind: 'ask', context: { toolName: 'read_file', currentPageUrl, dangerAssessment, remoteBudgetState: { remaining: 2 } }
+      kind: 'ask', context: { toolName: 'read_file', lane: 'desktop', currentPageUrl, dangerAssessment, remoteBudgetState: { remaining: 2 } }
     })
   })
 

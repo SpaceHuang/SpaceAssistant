@@ -3608,11 +3608,10 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       contextBoundarySequence: user.sequence, state: 'prepared', startToken: 'hosted-browser-config-drift-start',
       executionConfig: { lane: 'desktop', model: modelId, baseUrl: endpoint, llmServiceId: 'svc-hosted', system: 'system', maxTokens: 512, enableThinking: false, locale: 'zh-CN' }
     })
-    const mutateDuringApproval = async () => ({
-      ok: true,
-      verdict: { kind: 'undetermined', reason: { summary: '需要用户确认浏览器动作' } }
+    const agentRequestsHuman = async () => ({
+      ok: true, verdict: { kind: 'undetermined', reason: { summary: 'browser action requires a human decision' } }
     } as never)
-    vi.mocked(runApprovalAgent).mockImplementationOnce(mutateDuringApproval)
+    vi.mocked(runApprovalAgent).mockImplementationOnce(agentRequestsHuman)
     vi.mocked(waitForToolConfirm).mockImplementationOnce(async () => {
       changeBrowserPolicy()
       return 'approved' as never
@@ -3761,7 +3760,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const execute = registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => DEFAULT_TOOLS_CONFIG,
-      getBrowserConfig: () => ({ ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, navigateRequiresConfirm: true, actRequiresConfirm: true }),
+      getBrowserConfig: () => ({ ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, navigateRequiresConfirm: false, actRequiresConfirm: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db, getBrowserDetectContext: () => ({ workDir }),
       turnRuntime: { bindRequest: vi.fn(), consumeForRequest: vi.fn() } as never
@@ -3898,7 +3897,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     const execute = registerClaudeStreamHandlers(ipcMain, {
       getApiKey: async () => 'test-key', getWorkDir: () => workDir, resolveWorkDirForSession: () => workDir, getUserDataPath: () => hostedTestUserDataDir,
       getToolsConfig: () => ({ ...DEFAULT_TOOLS_CONFIG }),
-      getBrowserConfig: () => ({ ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, actRequiresConfirm: true }),
+      getBrowserConfig: () => ({ ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, actRequiresConfirm: false }),
       getShellConfig: () => ({ enabled: false, shellDefaultTimeoutSec: 300, maxInlineOutputBytes: 1024, rules: [] }),
       getWikiConfig: () => ({ enabled: false }), getAppDatabase: () => db,
       getBrowserDetectContext: () => ({ workDir }),

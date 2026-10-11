@@ -90,7 +90,7 @@ export function ChatMessageList({
                 // §5.8 显式赋值：canonical 记录可能残留 agent 阶段的 autoAnswerer:true（恢复/合并路径），
                 // 投影层已显式给出 false 时必须覆盖，否则合并后卡片仍是只读态
                 ...(live?.display.autoAnswerer !== undefined ? { autoAnswerer: live.display.autoAnswerer } : {}),
-                ...(live?.display.confirmationLane !== undefined ? { confirmationLane: live.display.confirmationLane } : {}),
+                ...(live?.display.remoteConfirmation ? { remoteConfirmation: live.display.remoteConfirmation } : {}),
                 ...(live?.display.progressPreview ? { progressOutput: live.display.progressPreview } : {})
               }
             }) }

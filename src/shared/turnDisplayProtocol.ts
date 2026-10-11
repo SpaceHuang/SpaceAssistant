@@ -19,8 +19,8 @@ export type ToolCallDisplaySummary = {
   confirmRisk: ToolRiskLevel
   /** 审批 Agent 裁决中的工具不属于人工待确认（§5.8：boolean 以支持回退显式清除）。 */
   autoAnswerer?: boolean
-  /** 确认通道用于将远程 IM 确认渲染为只读状态，不能退化为桌面操作卡。 */
-  confirmationLane?: ToolCallRecord['confirmationLane']
+  /** IM 用户确认由远程渠道收取；桌面只展示状态。 */
+  remoteConfirmation?: 'wechat' | 'feishu'
 }
 
 export type ActivityDisplayItem =
@@ -114,7 +114,7 @@ function toolDisplay(tool: ToolCallRecord, identity: string): ToolCallDisplaySum
     confirmRisk: tool.riskLevel,
     // §5.8 显式赋值（可真可假）：条件写入无法把回退清除后的 false 传播到投影层
     ...(tool.autoAnswerer !== undefined ? { autoAnswerer: tool.autoAnswerer } : {}),
-    ...(tool.confirmationLane !== undefined ? { confirmationLane: tool.confirmationLane } : {})
+    ...(tool.remoteConfirmation ? { remoteConfirmation: tool.remoteConfirmation } : {})
   }
   if (tool.status === 'completed') {
     summaryCache.delete(cacheKey)
@@ -169,7 +169,7 @@ export function turnDisplayToMessage(display: TurnDisplay): Message {
     id: display.message.id, sessionId: display.sessionId, role: 'assistant', content: display.message.content,
     timestamp: Date.now(), status: display.lifecycle === 'completed' ? 'completed' : display.lifecycle === 'failed' ? 'failed' : 'streaming', schemaVersion: 1,
     ...(display.message.thinking ? { thinking: display.message.thinking } : {}), ...(display.message.skillHints ? { skillHints: display.message.skillHints } : {}),
-    toolCalls: display.message.toolCalls.map((tool) => ({ id: tool.id, toolName: tool.toolName, input: {}, status: tool.status, riskLevel: tool.display.confirmRisk, ...(tool.display.autoAnswerer !== undefined ? { autoAnswerer: tool.display.autoAnswerer } : {}), ...(tool.display.confirmationLane !== undefined ? { confirmationLane: tool.display.confirmationLane } : {}), ...(tool.startedAt !== undefined ? { startedAt: tool.startedAt } : {}), ...(tool.completedAt !== undefined ? { completedAt: tool.completedAt } : {}), ...(tool.duration !== undefined ? { duration: tool.duration } : {}) })),
+    toolCalls: display.message.toolCalls.map((tool) => ({ id: tool.id, toolName: tool.toolName, input: {}, status: tool.status, riskLevel: tool.display.confirmRisk, ...(tool.display.autoAnswerer !== undefined ? { autoAnswerer: tool.display.autoAnswerer } : {}), ...(tool.display.remoteConfirmation ? { remoteConfirmation: tool.display.remoteConfirmation } : {}), ...(tool.startedAt !== undefined ? { startedAt: tool.startedAt } : {}), ...(tool.completedAt !== undefined ? { completedAt: tool.completedAt } : {}), ...(tool.duration !== undefined ? { duration: tool.duration } : {}) })),
     // 活动轨迹是正文/思考/工具的规范顺序。恢复为轻量 Message 时必须保留，
     // 否则 renderer 会按不完整快照重新推导顺序，待确认卡可能跳到消息末尾。
     activity: (display.message.activity ?? []).map((item) => ({ ...item }))

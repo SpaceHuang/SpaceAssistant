@@ -116,14 +116,14 @@ describe('turn display protocol', () => {
     expect(turnDisplayToMessage(display).toolCalls?.[0]?.autoAnswerer).toBe(true)
   })
 
-  it('保留远程确认 lane，避免 bounded display 将 IM 确认恢复为桌面操作卡', () => {
-    const remoteConfirmation = {
+  it('在 bounded display 往返中保留 IM 确认渠道标记', () => {
+    const messageWithRemoteConfirmation = {
       ...baseMessage,
-      toolCalls: [{ ...baseMessage.toolCalls[0]!, status: 'confirming' as const, confirmationLane: 'wechat' as const }]
+      toolCalls: [{ ...baseMessage.toolCalls[0]!, status: 'confirming' as const, remoteConfirmation: 'wechat' as const }]
     }
-    const display = toTurnDisplay({ turnId: 't-wechat', requestId: 'r-wechat', version: 2, lifecycle: 'awaiting-confirmation', message: remoteConfirmation })
+    const display = toTurnDisplay({ turnId: 't-im-confirm', requestId: 'r-im-confirm', version: 2, lifecycle: 'awaiting-confirmation', message: messageWithRemoteConfirmation })
 
-    expect(display.message.toolCalls[0]?.display.confirmationLane).toBe('wechat')
-    expect(turnDisplayToMessage(display).toolCalls?.[0]?.confirmationLane).toBe('wechat')
+    expect(display.message.toolCalls[0]?.display.remoteConfirmation).toBe('wechat')
+    expect(turnDisplayToMessage(display).toolCalls?.[0]?.remoteConfirmation).toBe('wechat')
   })
 })

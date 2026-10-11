@@ -258,7 +258,6 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
           ...tool,
           status: 'confirming',
           riskLevel: event.riskLevel,
-          ...(event.lane ? { confirmationLane: event.lane } : {}),
           ...(event.memoryTiers ? { memoryTiers: event.memoryTiers } : {}),
           ...(event.confirmDiff ? { confirmDiff: event.confirmDiff } : {}),
           ...(event.shellSecurityHints ? { shellSecurityHints: event.shellSecurityHints } : {}),
@@ -268,6 +267,9 @@ export function reduceAssistantFact(state: Message, event: AssistantFactEvent, d
           ...(event.dangerInfo ? { dangerInfo: event.dangerInfo } : {}),
           ...(event.sessionTrustedHint ? { sessionTrustedHint: true as const } : {}),
           ...(event.mcp ? { mcp: event.mcp } : {}),
+          ...((event.lane === 'wechat' || event.lane === 'feishu')
+            ? { remoteConfirmation: event.autoAnswerer === true ? undefined : event.lane }
+            : event.lane === 'desktop' ? { remoteConfirmation: undefined } : {}),
           ...(event.autoAnswerer !== undefined ? { autoAnswerer: event.autoAnswerer } : {})
         }
           : tool)

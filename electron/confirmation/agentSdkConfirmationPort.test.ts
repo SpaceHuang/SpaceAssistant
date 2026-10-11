@@ -78,11 +78,22 @@ describe('createAgentSdkConfirmationPort', () => {
       cancel: vi.fn(),
       fallback
     })
-    const result = await port({ call: { invocationId: 'inv', toolCallId: 'tool-contract', toolName: 'write_file', input: {} }, confirmationId: 'tool-contract', answerer: 'agent', reasonCode: 'agent-approval', context })
+    const result = await port({ call: { invocationId: 'inv', toolCallId: 'tool-contract', toolName: 'write_file', input: {} }, confirmationId: 'tool-contract', answerer: 'agent', reasonCode: 'agent-approval', context: { ...context, lane: 'wechat' } })
 
     expect(invokeApproval).toHaveBeenCalledOnce()
     expect(result).toMatchObject({ kind: 'denied', answerer: 'agent', cause: 'agent-undetermined', userMessage: '缺少影响范围证据' })
+    expect(fallback).not.toHaveBeenCalled()
+  })
+
+  it('Desktop Agent 无法判定时进入人工 fallback，最终由真人审批', async () => {
+    const channel = { request: vi.fn(async () => ({ kind: 'rejected' as const, cause: 'agent-undetermined' as const, answererKind: 'agent' as const })), cancel: vi.fn() }
+    const fallback = vi.fn(async () => ({ kind: 'approved' as const, answerer: 'user' as const, cause: 'user-approved' as const, receipt: 'user-receipt' }))
+    const port = createAgentSdkConfirmationPort({ createChannel: () => channel, publish: vi.fn(), cancel: vi.fn(), fallback })
+    const result = await port({ call: { invocationId: 'desktop-inv', toolCallId: 'desktop-fallback', toolName: 'browser', input: {} },
+      modelTurn: 1, confirmationId: 'desktop-fallback', answerer: 'agent', reasonCode: 'browser-confirm',
+      context: { ...context, lane: 'desktop', facts: { ...facts, toolName: 'browser', actionClass: 'outbound' } } })
     expect(fallback).toHaveBeenCalledOnce()
+    expect(result).toMatchObject({ kind: 'approved', answerer: 'user', cause: 'user-approved' })
   })
 
   it('Agent cannot turn an IM outbound action into agent-approved', async () => {
@@ -173,7 +184,7 @@ describe('createAgentSdkConfirmationPort', () => {
       .resolves.toMatchObject({ answerer: 'user', cause, kind: expectedKind })
   })
 
-  it.each(['unavailable', 'timeout', 'agent-undetermined'] as const)('allows the host to resolve an agent %s result through a user fallback and confirms only the final approval', async (cause) => {
+  it.each(['unavailable', 'timeout', 'agent-undetermined'] as const)('allows the desktop host to resolve an agent %s result through a user fallback and confirms only the final approval', async (cause) => {
     const order: string[] = []
     const onApproved = vi.fn(() => { order.push('approved') })
     const memory = { kind: 'script-content' as const, digest: 'a'.repeat(64), sessionId: 'session-1' }
@@ -192,13 +203,13 @@ describe('createAgentSdkConfirmationPort', () => {
 
     const result = await port({
       call: { invocationId: 'inv', toolCallId: 'tool-fallback-port', toolName: 'write_file', input: {} },
-      confirmationId: 'tool-fallback-port', answerer: 'agent', reasonCode: 'agent-approval', context
+      confirmationId: 'tool-fallback-port', answerer: 'agent', reasonCode: 'agent-approval', context: { ...context, lane: 'desktop' }
     })
 
     expect(result).toMatchObject({ kind: 'approved', answerer: 'user', cause: 'user-approved' })
     expect(order).toEqual([`fallback:${cause === 'timeout' ? 'timeout' : 'rejected'}:${cause}`, 'approved'])
     expect(onApproved).toHaveBeenCalledOnce()
-    expect(onApproved).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ selectedMemory: memory }), expect.anything(), context, memory)
+    expect(onApproved).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ selectedMemory: memory }), expect.anything(), expect.objectContaining({ lane: 'desktop' }), memory)
   })
 
   it('publish 失败时取消已登记 waiter，并以 unavailable fail closed', async () => {

@@ -114,7 +114,9 @@ class PendingConfirmStore {
 
   /** 从 Core 的完整 assistant snapshot 重建确认展示，不依赖旧 tool IPC。 */
   syncFromProjection(args: { sessionId: string; requestId: string; message: Message; turnId?: string; turnVersion?: number; retryAttempt?: number; terminal?: boolean }): void {
-    const confirming = args.terminal ? [] : (args.message.toolCalls ?? []).filter((tool) => tool.status === 'confirming' && !tool.autoAnswerer)
+    const confirming = args.terminal ? [] : (args.message.toolCalls ?? []).filter((tool) =>
+      tool.status === 'confirming' && !tool.autoAnswerer && !tool.remoteConfirmation
+    )
     if (args.turnId && (args.terminal || confirming.length === 0)) this.latestProjections.delete(args.turnId)
     else if (args.turnId) this.latestProjections.set(args.turnId, args)
     const keep = this.items.filter((item) => item.sessionId !== args.sessionId || item.requestId !== args.requestId)

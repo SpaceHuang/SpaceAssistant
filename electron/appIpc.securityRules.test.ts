@@ -93,6 +93,14 @@ vi.mock('./confirmation/settingsAudit', () => ({
   recordSettingsChange: mockRecordSettingsChange
 }))
 
+// The exposure notification test uses an intentionally minimal AppDatabase
+// fixture. Skip the unrelated persistent IM model migration that requires a
+// real SQLite connection before the config readers can produce exposure data.
+vi.mock('./remote/remoteImModelConfigDb', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./remote/remoteImModelConfigDb')>()),
+  ensureRemoteImModelConfigMigrated: vi.fn()
+}))
+
 vi.mock('./confirmation/audit', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./confirmation/audit')>()),
   getSecurityAuditLog: vi.fn(() => ({ record: vi.fn() }))

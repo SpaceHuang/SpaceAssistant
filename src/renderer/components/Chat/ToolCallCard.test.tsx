@@ -37,12 +37,12 @@ describe('MCP status mapping', () => {
 describe('ToolCallCard approval explanations', () => {
   it('does not expose a desktop confirmation card for a WeChat confirmation', () => {
     render(<ToolCallCard record={writeRecord('confirming', {
-      toolName: 'mcp_zhihu_search', input: { query: 'example' }, confirmationLane: 'wechat',
+      toolName: 'mcp_zhihu_search', input: { query: 'example' }, remoteConfirmation: 'wechat',
       mcp: { serverId: 'zhihu', serverName: '知乎MCP', originalToolName: 'zhihu_search' }
     })} onConfirm={vi.fn()} />)
     expect(screen.queryByRole('button', { name: '允许' })).toBeNull()
     expect(screen.queryByRole('button', { name: '拒绝' })).toBeNull()
-    expect(screen.getByRole('status').textContent).toContain('即时通讯')
+    expect(screen.getByRole('status').textContent).toContain('微信')
   })
 
   it('shows an actionable confirmation card for generic tools such as sensitive reads', () => {
@@ -919,5 +919,20 @@ describe('ToolCallCard 回退后卡片可交互（§5.8）', () => {
     )
     expect(screen.getByText(/正在由审批 Agent 自动裁决/)).toBeDefined()
     expect(screen.queryByRole('button', { name: '允许写入' })).toBeNull()
+  })
+
+  it.each([
+    ['wechat', '等待微信回复确认'],
+    ['feishu', '等待飞书回复确认']
+  ] as const)('%s 人工确认显示远程等待说明，不渲染桌面批准按钮', (remoteConfirmation, message) => {
+    render(
+      <ToolCallCard
+        record={writeRecord('confirming', { remoteConfirmation })}
+        onConfirm={vi.fn()}
+      />
+    )
+    expect(screen.getByText(message)).toBeDefined()
+    expect(screen.queryByRole('button', { name: '允许写入' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '拒绝写入' })).toBeNull()
   })
 })

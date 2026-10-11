@@ -26,7 +26,7 @@ describe('storage profile worker client', () => {
     const { DatabaseSync } = await import('node:sqlite')
     const fixture = createStorageProfileFixture('small')
     try {
-      const workerPath = path.join(process.cwd(), 'dist-electron/electron/storageProfile/storageProfileWorker.js')
+      const workerPath = path.join(process.cwd(), 'electron/storageProfile/storageProfileWorker.ts')
       const response = await runStorageProfileWorker({ type: 'overview', dbPath: fixture.dbPath }, { timeoutMs: 10_000, workerPath })
       expect(response.type).toBe('overview')
       expect(response.result).toMatchObject({ tables: { messages: { rows: 100 } } })
@@ -41,7 +41,7 @@ describe('storage profile worker client', () => {
     const { createStorageProfileFixture } = await import('../../scripts/storage-profile-perf-baseline-fixture')
     const { DatabaseSync } = await import('node:sqlite')
     const fixture = createStorageProfileFixture('large')
-    const workerPath = path.join(process.cwd(), 'dist-electron/electron/storageProfile/storageProfileWorker.js')
+    const workerPath = path.join(process.cwd(), 'electron/storageProfile/storageProfileWorker.ts')
     try {
       await expect(runStorageProfileWorker({ type: 'audit', dbPath: fixture.dbPath }, { timeoutMs: 150, workerPath }))
         .rejects.toMatchObject({ code: 'STORAGE_PROFILE_TIMEOUT' })
@@ -55,7 +55,7 @@ describe('storage profile worker client', () => {
 
   it('settles SQLite open errors and malformed requests without fallback', async () => {
     await expect(runStorageProfileWorker({ type: 'overview', dbPath: '/missing/storage-profile.db' }, {
-      timeoutMs: 1_000, workerPath: path.join(process.cwd(), 'dist-electron/electron/storageProfile/storageProfileWorker.js')
+      timeoutMs: 1_000, workerPath: path.join(process.cwd(), 'electron/storageProfile/storageProfileWorker.ts')
     }))
       .rejects.toMatchObject({ code: 'STORAGE_PROFILE_WORKER_ERROR' })
   })
