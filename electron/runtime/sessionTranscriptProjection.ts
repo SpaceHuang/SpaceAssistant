@@ -7,6 +7,9 @@ import { logAgentEvent } from '../agentLogger/agentLogger'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { consultProjectionRejection, clearProjectionRejection, computeLegacyProjectionDigest, readProjectionO1Metadata, recordProjectionRejection } from './sessionProjectionRejection'
 import { enqueueSessionProjectionRevalidation } from './sessionProjectionRevalidationQueue'
+// 静态引用形成 transcript → revalidation → transcript 的模块环；环上双方都只在函数体内
+// 解引用（调用发生在运行时），CJS/ESM live binding 下安全。动态 import 在该环下会静默失败。
+import { runDueSessionProjectionRevalidations } from './sessionProjectionRevalidation'
 import { resolveSelectedMessageBodies } from '../sessionStorage/internal/messageBodyResolver'
 import { selectRecentTurnRoutingMessages, selectTurnContext } from './sessionTranscriptSelector'
 
@@ -115,9 +118,7 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
     // and kicks the consumer fire-and-forget so the revalidation never rides on this read.
     if (rejectionVerdict === 'stale') {
       enqueueSessionProjectionRevalidation(db, sessionId, { stale: true })
-      void import('./sessionProjectionRevalidation')
-        .then(({ runDueSessionProjectionRevalidations }) => runDueSessionProjectionRevalidations(db))
-        .catch(() => { /* revalidation is best-effort */ })
+      void runDueSessionProjectionRevalidations(db).catch(() => { /* revalidation is best-effort */ })
     }
     return { source: 'legacy', messages: legacyMessages, reason: 'projection-rejected' }
   }
