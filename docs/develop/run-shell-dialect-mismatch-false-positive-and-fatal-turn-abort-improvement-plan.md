@@ -494,6 +494,8 @@ prepareTool: async (call, stage) => {
 - **P2（已修）**：`markDialectCounterRecoveredOnSuccess` 的清除键由 `prepared.spawnSpec.shellId` 改为 `prepared.dependencySnapshot.profileId`（与 record 侧 detect 写入 `shellProfileId` 完全同源）；自定义 shell 配置（shellId = 可执行文件 basename）下成功改写后计数正确归零，新增对齐测试。
 - **P3（已修）**：① `toolChatLoop` 的 `tool.result` 日志 `dispatched` 字段排除 `plan-rejection`（与 `safety-rejection` 同为未派发即拒绝）；② `shellDialectMismatch.ts` 注释更正——PowerShell 的 `$$` 自动变量是「上一行最后一个 token」而非进程 PID（bash 的 `$$` 才是 PID），排除理由更正、排除结果不变（`$$` 在 PS 合法，不计信号）；③ 本计划源文档已入库（此前未提交导致 D-x/A-x 锚点悬空）。
 - 评审核实的非问题（recheck 双计数、双路径重复记录、旧 History 兼容等）维持原实现。
+- **二轮残留处置（同日）**：① 升级提示 `escalatedDialectMismatchHints` 的 windows-cmd 分支同步去除 `where.exe → Get-Command` 示例（首轮漏改），改写示例改为 `&` 串联 → `;` 分隔、`dir /b` → `Get-ChildItem`，`planRejection.test` / `invocationAssembler.test` 的文案锁定断言随之更新（并显式断言不再含 `Get-Command`）；② `claudeToolHistory.test` 夹具的信号名由已撤销的 `cmd-exe-chain` 更新为 `cmd-operator`（profileId 顺带更正为真实内置 id `builtin-windows-powershell`）。
+- **登记观察项（评审二轮，暂不处理）**：`cmd-operator` 模式（`\w\s&\s`）与检测器整体启发式一致地**引号无感**——`echo "Tom & Jerry"` 会误报一次 `cmd-operator`；后果仅为一次可恢复拒绝（模型按 hints 改写即可），与既有 posix/cmd 信号（`%VAR%`、`&&` 等同样引号无感）口径一致。若日后需要，可在正则前增加「`&` 不落在成对引号内」的预处理；本期不引入以免复杂化启发式。
 
 ### 10.5 验收对照（§6）
 

@@ -293,8 +293,8 @@ describe('buildToolResultBlock', () => {
     const rejectionJson = JSON.stringify({
       code: 'SHELL_DIALECT_MISMATCH', caseId: 'SHELL-DIALECT-001',
       detectedSyntax: 'windows-cmd', expectedDialect: 'windows-powershell',
-      shellProfileId: 'windows-powershell', signals: ['cmd-exe-chain'],
-      hints: ['把 where.exe a; where.exe b 改写为 Get-Command a; Get-Command b']
+      shellProfileId: 'builtin-windows-powershell', signals: ['cmd-operator'],
+      hints: ['命令混入了 cmd 语法，请改写为 PowerShell 等价命令']
     })
     const block = buildToolResultBlock(toolCall({
       id: 't-plan-rejected',
@@ -307,8 +307,8 @@ describe('buildToolResultBlock', () => {
     const parsed = JSON.parse(rebuilt.data) as { code: string; signals: string[]; hints: string[] }
     expect(parsed).toMatchObject({
       code: 'SHELL_DIALECT_MISMATCH',
-      signals: ['cmd-exe-chain'],
-      hints: ['把 where.exe a; where.exe b 改写为 Get-Command a; Get-Command b']
+      signals: ['cmd-operator'],
+      hints: ['命令混入了 cmd 语法，请改写为 PowerShell 等价命令']
     })
   })
   it('9: marks missing result as synthetic error placeholder', () => {

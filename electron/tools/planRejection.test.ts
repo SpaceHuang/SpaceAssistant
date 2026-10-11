@@ -60,7 +60,10 @@ describe('planRejectionFromRunShellPlan（§4.3/§4.4：转换层 record + 台�
     expect(parsedSecond.retryExhausted).toBe(true)
     expect(parsedSecond.hints).not.toEqual(firstHints)
     const escalatedText = parsedSecond.hints.join(' ')
-    expect(escalatedText).toContain('Get-Command')
+    // 升级文案与真实 cmd 信号对应（评审 P2 残留：不再引用已撤销的 where.exe→Get-Command 示例）
+    expect(escalatedText).toContain('Get-ChildItem')
+    expect(escalatedText).toContain('$env:')
+    expect(escalatedText).not.toContain('Get-Command')
     expect(log).toHaveBeenLastCalledWith('error', 'shell.exec.plan_failed', expect.objectContaining({ retryCount: 2, retryExhausted: true }))
   })
 

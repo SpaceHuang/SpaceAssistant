@@ -52,8 +52,8 @@ export function escalatedDialectMismatchHints(detectedSyntax: ShellDialect): str
   return detectedSyntax === 'windows-cmd'
     ? [
         '同会话内第二次出现同款方言错配：请直接按 PowerShell 形态给出改写后的整条命令，不要再次提交混有 cmd 语法的版本',
-        '改写形态示例：把 where.exe a; where.exe b 改写为 Get-Command a; Get-Command b',
-        '环境变量使用 $env:NAME；dir 改用 Get-ChildItem，copy 改用 Copy-Item，del 改用 Remove-Item，取前 N 项用 Select-Object -First N'
+        '改写形态示例：cmd 的 & 串联直接改用 ; 分隔命令，dir /b 改用 Get-ChildItem',
+        '环境变量使用 $env:NAME；copy 改用 Copy-Item，del 改用 Remove-Item'
       ]
     : [
         '同会话内第二次出现同款方言错配：请直接按 PowerShell 形态给出改写后的整条命令，不要再次提交 POSIX 语法版本',

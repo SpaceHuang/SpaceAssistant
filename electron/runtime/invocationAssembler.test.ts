@@ -1259,7 +1259,9 @@ describe('P0-A：计划期失败降级为可回传拒绝（T-3，断言打在生
       expect(secondParsed.retryCount).toBe(2)
       expect(secondParsed.retryExhausted).toBe(true)
       expect(secondParsed.hints).not.toEqual(firstParsed.hints)
-      expect(secondParsed.hints.join(' ')).toContain('Get-Command')
+      // 升级文案与真实 cmd 信号对应（评审 P2 残留：不再引用已撤销的 where.exe→Get-Command 示例）
+      expect(secondParsed.hints.join(' ')).toContain('Get-ChildItem')
+      expect(secondParsed.hints.join(' ')).not.toContain('Get-Command')
     } finally {
       await composed.dispose()
     }
