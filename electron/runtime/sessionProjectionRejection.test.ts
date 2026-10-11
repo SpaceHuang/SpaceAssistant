@@ -4,7 +4,7 @@ import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { clearProjectionRejection, getProjectionRejection, readProjectionO1Metadata } from './sessionProjectionRejection'
-import { readSessionTranscriptProjection } from './sessionTranscriptProjection'
+import { getProjectedChatMessagePage, getProjectedMessagesPageWithSequence, readSessionTranscriptProjection } from './sessionTranscriptProjection'
 
 /** Build a mismatched session: legacy holds [A, B] while canonical History folds to [A']. */
 async function createMismatchedSession() {
@@ -107,6 +107,38 @@ describe('session projection rejection negative cache (P0-②)', () => {
     clearProjectionRejection(db, session.id)
 
     expect(getProjectionRejection(db, session.id)).toBeUndefined()
+    db.close()
+  })
+})
+
+describe('first-screen entry regression on a mismatched session (P0-⑦)', () => {
+  it('keeps the chat message page fast after the first full compare establishes the verdict', async () => {
+    const { db, session } = await createMismatchedSession('first-screen')
+    const rebuildSpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript')
+
+    // 首屏第一次分页：负缓存未命中，付一次全款建立结论。
+    const firstPage = getProjectedChatMessagePage(db, session.id, null, 20)
+    expect(rebuildSpy).toHaveBeenCalledTimes(1)
+    expect(firstPage.entries.map(({ message }) => message.content)).toEqual(['legacy-a', 'legacy-b'])
+
+    // 首屏重放 / 会话切回：结论直返，不再全量重建。
+    const secondPage = getProjectedChatMessagePage(db, session.id, null, 20)
+    expect(rebuildSpy).toHaveBeenCalledTimes(1)
+    expect(secondPage.entries.map(({ message }) => message.content)).toEqual(['legacy-a', 'legacy-b'])
+    rebuildSpy.mockRestore()
+    db.close()
+  })
+
+  it('returns legacy sequence pages directly for sessions without canonical-backed rows', async () => {
+    const { db, session } = await createMismatchedSession('seq-page')
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('legacy')
+    const rebuildSpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript')
+
+    // 会话切换路径：无 canonical-backed 行的分页经内联守卫快速返回，零全量重建。
+    const page = getProjectedMessagesPageWithSequence(db, session.id, 0, 20)
+    expect(page.rows.map(({ message }) => message.content)).toEqual(['legacy-a', 'legacy-b'])
+    expect(rebuildSpy).not.toHaveBeenCalled()
+    rebuildSpy.mockRestore()
     db.close()
   })
 })
