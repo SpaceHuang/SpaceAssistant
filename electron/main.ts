@@ -1505,9 +1505,9 @@ app.on('before-quit', (event) => {
   butlerScheduler?.stop()
   destroyTray()
   floatingManager?.destroy()
-  projectionRevalidationDrainStop?.()
+  projectionRevalidationDrainStop?.stop()
   eventLoopWatchdogStop?.()
-    stopMemoryWatcher()
+  stopMemoryWatcher()
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.destroy()
   }
