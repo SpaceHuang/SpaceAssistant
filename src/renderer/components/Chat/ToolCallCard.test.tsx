@@ -910,4 +910,19 @@ describe('ToolCallCard 回退后卡片可交互（§5.8）', () => {
     expect(screen.getByText(/正在由审批 Agent 自动裁决/)).toBeDefined()
     expect(screen.queryByRole('button', { name: '允许写入' })).toBeNull()
   })
+
+  it.each([
+    ['wechat', '等待微信回复确认'],
+    ['feishu', '等待飞书回复确认']
+  ] as const)('%s 人工确认显示远程等待说明，不渲染桌面批准按钮', (remoteConfirmation, message) => {
+    render(
+      <ToolCallCard
+        record={writeRecord('confirming', { remoteConfirmation })}
+        onConfirm={vi.fn()}
+      />
+    )
+    expect(screen.getByText(message)).toBeDefined()
+    expect(screen.queryByRole('button', { name: '允许写入' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '拒绝写入' })).toBeNull()
+  })
 })

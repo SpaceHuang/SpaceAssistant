@@ -122,6 +122,25 @@ describe('pendingConfirmStore', () => {
     expect(pendingConfirmStore.getItems()).toEqual([])
   })
 
+  it.each(['wechat', 'feishu'] as const)('不把 %s 的远程确认放进桌面 pending store', (remoteConfirmation) => {
+    pendingConfirmStore.syncFromProjection({
+      sessionId: `sess-${remoteConfirmation}`,
+      requestId: `req-${remoteConfirmation}`,
+      message: {
+        id: `assistant-${remoteConfirmation}`,
+        sessionId: `sess-${remoteConfirmation}`,
+        role: 'assistant', content: '', timestamp: 1, status: 'streaming', schemaVersion: 1,
+        toolCalls: [{
+          id: `tool-${remoteConfirmation}`, toolName: 'write_file', input: { path: 'a.txt' },
+          status: 'confirming', riskLevel: 'medium', remoteConfirmation
+        }]
+      }
+    })
+
+    expect(pendingConfirmStore.getItems()).toEqual([])
+    expect(window.api.chatGetPendingConfirmation).toBeUndefined()
+  })
+
   it('收到 turn 终态投影时清除未完成的人工确认项', () => {
     seedConfirm({ requestId: 'terminal-request', sessionId: 'terminal-session', toolUseId: 'terminal-tool', toolName: 'read_file', input: { path: 'a.md' }, riskLevel: 'low', turnId: 'terminal-turn' })
     expect(pendingConfirmStore.getItems()).toHaveLength(1)

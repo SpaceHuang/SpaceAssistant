@@ -553,6 +553,17 @@ export const ToolCallCard = memo(function ToolCallCard({
     )
   }
 
+  if (record.status === 'confirming' && record.remoteConfirmation) {
+    return (
+      <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
+        <div className="sa-chat-inset-code sa-auto-answering-status" role="status">
+          {t(record.remoteConfirmation === 'wechat' ? 'confirm.remoteWaitingWechat' : 'confirm.remoteWaitingFeishu')}
+        </div>
+        {earlySearchText ? <pre className="sa-chat-inset-code sa-search-reveal-source" data-search-fragment-id={earlySearchFragmentId}>{earlySearchText}</pre> : null}
+      </div>
+    )
+  }
+
   if (mcpConfirming && onConfirm && confirmationReady !== false) {
     return (
       <div ref={cardRef} className={focus ? 'tool-row--focus' : undefined}>
