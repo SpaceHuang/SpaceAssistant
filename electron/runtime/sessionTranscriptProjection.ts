@@ -7,9 +7,6 @@ import { logAgentEvent } from '../agentLogger/agentLogger'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import { consultProjectionRejection, clearProjectionRejection, computeLegacyProjectionDigest, readProjectionO1Metadata, recordProjectionRejection } from './sessionProjectionRejection'
 import { enqueueSessionProjectionRevalidation } from './sessionProjectionRevalidationQueue'
-// 静态引用形成 transcript → revalidation → transcript 的模块环；环上双方都只在函数体内
-// 解引用（调用发生在运行时），CJS/ESM live binding 下安全。动态 import 在该环下会静默失败。
-import { runDueSessionProjectionRevalidations } from './sessionProjectionRevalidation'
 import { resolveSelectedMessageBodies } from '../sessionStorage/internal/messageBodyResolver'
 import { selectRecentTurnRoutingMessages, selectTurnContext } from './sessionTranscriptSelector'
 
@@ -111,15 +108,11 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
   }
   // P0-② negative cache: a persisted mismatch verdict routes the read to legacy without
   // re-paying the full rebuild+compare. A stale verdict (O(1) metadata drift) still returns
-  // legacy immediately — only the background revalidator (P0-③) waits on a full compare.
+  // legacy immediately and re-queues itself; the consumer runs on the turn-terminal checkpoint
+  // (每轮至多一次后台重验), never on the read path.
   const rejectionVerdict = consultProjectionRejection(db, sessionId, legacyMessages)
   if (rejectionVerdict) {
-    // Stale verdicts (content drift) defer to the background queue; the read returns legacy now
-    // and kicks the consumer fire-and-forget so the revalidation never rides on this read.
-    if (rejectionVerdict === 'stale') {
-      enqueueSessionProjectionRevalidation(db, sessionId, { stale: true })
-      void runDueSessionProjectionRevalidations(db).catch(() => { /* revalidation is best-effort */ })
-    }
+    if (rejectionVerdict === 'stale') enqueueSessionProjectionRevalidation(db, sessionId, { stale: true })
     return { source: 'legacy', messages: legacyMessages, reason: 'projection-rejected' }
   }
   try {
