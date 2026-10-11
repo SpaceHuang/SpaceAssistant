@@ -2,7 +2,7 @@ import type { IpcMain, WebContents } from 'electron'
 import type { BrowserConfig, ShellConfig, ToolsConfig, WikiConfig } from '../src/shared/domainTypes'
 import { assertValidModel, assertValidOptionalAnthropicBaseUrl, assertValidRequestId } from './claudeRequestGuards'
 import { logAgentEvent } from './agentLogger/agentLogger'
-import { refreshSessionTranscriptProjectionCache } from './runtime/sessionTranscriptProjection'
+import { checkpointSessionTranscriptProjection } from './runtime/sessionProjectionRevalidation'
 import { serializeErrorCauseChain } from './agentLogger/errorCauseChain'
 import { notifyFileTreeChanged } from './fileTreeSyncNotify'
 import type { AgentLogFields } from './agentLogger/types'
@@ -710,7 +710,9 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
       } finally {
         const refreshSessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
         try {
-          if (refreshSessionId) refreshSessionTranscriptProjectionCache(deps.getAppDatabase(), refreshSessionId)
+          // P0-③: turn-terminal checkpoints stay on the cheap fast path; anything else
+          // enqueues background revalidation instead of a synchronous full compare here.
+          if (refreshSessionId) checkpointSessionTranscriptProjection(deps.getAppDatabase(), refreshSessionId)
         } catch (error) {
           logAgentEvent('warn', 'history.cutover', {
             requestId: requestId || undefined,
