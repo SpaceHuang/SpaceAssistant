@@ -666,7 +666,9 @@
     "migrationReportTitle": "Last migration report",
     "migrationReportSummary": "Migrated {{migrated}} project root(s), {{conflicts}} conflict(s), {{renames}} rename mapping(s)",
     "migrationConflictsTitle": "Conflict duplicates (manual merge needed)",
-    "migrationNoReport": "No migration record yet"
+    "migrationNoReport": "No migration record yet",
+    "migrationFailedTitle": "Failed items (retryable; legacy folders untouched)",
+    "migrationReportClose": "Got it"
   },
   "feishuAudit": {
     "title": "Feishu activity log",

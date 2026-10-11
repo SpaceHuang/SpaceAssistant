@@ -1,7 +1,7 @@
 import React from 'react'
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { changeAppLocale } from '../../i18n/localeSync'
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { Provider } from 'react-redux'
 import { configureStore } from '@reduxjs/toolkit'
 import { App } from 'antd'
@@ -30,13 +30,14 @@ vi.mock('../FileTree/FileTree', () => ({
   })
 }))
 
-function renderWikiPane(wikiInitialized = true) {
-  const wikiStatus = vi.fn().mockResolvedValue({ initialized: wikiInitialized })
+function renderWikiPane(wikiInitialized = true, apiOverride: Record<string, unknown> = {}) {
+  const wikiStatus = (apiOverride.wikiStatus as ReturnType<typeof vi.fn>) ?? vi.fn().mockResolvedValue({ initialized: wikiInitialized })
   ;(window as Record<string, unknown>).api = {
     wikiStatus,
     wikiInit: vi.fn(),
     skillInvalidateCache: vi.fn(),
-    fileShowInExplorer: vi.fn()
+    fileShowInExplorer: vi.fn(),
+    ...apiOverride
   }
 
   const onSwitchToWikiTab = vi.fn()
@@ -111,5 +112,95 @@ describe('WikiPane', () => {
     requestFilePaneSelect({ relPath: 'llm-wiki/wiki/index.md', preferWiki: true })
     expect(onSwitchToWikiTab).toHaveBeenCalled()
     expect(selectPath).toHaveBeenCalledWith('llm-wiki/wiki/index.md')
+  })
+})
+
+describe('WikiPane 迁移流回归（横幅 → 向导 → 报告）', () => {
+  const PENDING_STATUS = {
+    enabled: true,
+    initialized: true,
+    pendingLegacyMigration: true,
+    legacyRoots: ['llm-wiki'],
+    projects: []
+  }
+
+  beforeEach(async () => {
+    await changeAppLocale('zh-CN')
+    resetFilePaneNavigationForTests()
+  })
+
+  afterEach(() => cleanup())
+
+  function buttonByText(text: string): HTMLElement {
+    const el = Array.from(document.querySelectorAll('button')).find(
+      (b) => b.textContent?.replace(/\s/g, '') === text
+    )
+    if (!el) throw new Error(`button not found: ${text}`)
+    return el
+  }
+
+  // antd Modal 关闭后 DOM 仍驻留（jsdom 无动效结束事件）——断言「不可见」而非「不存在」
+  function expectModalClosed(titleText: string) {
+    return waitFor(() => {
+      const title = Array.from(document.querySelectorAll('.ant-modal-title')).find(
+        (t) => t.textContent === titleText
+      )
+      if (!title) return
+      const wrap = title.closest('.ant-modal-wrap') as HTMLElement | null
+      expect(!title.isConnected || wrap?.style.display === 'none').toBe(true)
+    })
+  }
+
+  it('迁移产生失败项：报告可见、关闭报告后向导不复活、横幅按真实状态保留', async () => {
+    const wikiStatus = vi.fn()
+      .mockResolvedValueOnce(PENDING_STATUS)
+      .mockResolvedValue(PENDING_STATUS)
+    const wikiMigrateLegacy = vi.fn().mockResolvedValue({
+      startedAt: '2026-10-11T04:23:52.017Z',
+      profiles: [{ workDir: 'F:\\新工作目录\\写作', rootDirName: 'llm-wiki', status: 'failed', error: 'ENOENT: no such file or directory, open index.md' }],
+      conflicts: [],
+      renames: []
+    })
+    renderWikiPane(true, { wikiStatus, wikiMigrateLegacy })
+
+    expect(await screen.findByText(/检测到 1 个项目/)).toBeTruthy()
+    fireEvent.click(buttonByText('迁移'))
+    expect(await screen.findByText('迁移本地 Wiki 到共享记忆库')).toBeTruthy()
+
+    fireEvent.click(buttonByText('立即迁移'))
+    expect(await screen.findByText('迁移完成')).toBeTruthy()
+    // 失败项不再静默
+    expect(await screen.findByText(/ENOENT/)).toBeTruthy()
+    expect(screen.getByText(/迁移失败项/)).toBeTruthy()
+
+    // 关闭报告后：向导不复活；迁移确实未完成 → 横幅保留
+    fireEvent.click(buttonByText('知道了'))
+    await expectModalClosed('迁移本地 Wiki 到共享记忆库')
+    expect(screen.queryByText(/检测到 1 个项目/)).toBeTruthy()
+  })
+
+  it('迁移成功（旧根已改名走）：状态刷新后横幅消失、报告无失败项', async () => {
+    const wikiStatus = vi.fn()
+      .mockResolvedValueOnce(PENDING_STATUS)
+      .mockResolvedValue({ ...PENDING_STATUS, pendingLegacyMigration: false, legacyRoots: [] })
+    const wikiMigrateLegacy = vi.fn().mockResolvedValue({
+      startedAt: '2026-10-11T04:23:52.017Z',
+      profiles: [{ workDir: 'F:\\w', rootDirName: 'llm-wiki', status: 'migrated' }],
+      conflicts: [],
+      renames: []
+    })
+    renderWikiPane(true, { wikiStatus, wikiMigrateLegacy })
+
+    expect(await screen.findByText(/检测到 1 个项目/)).toBeTruthy()
+    fireEvent.click(buttonByText('迁移'))
+    expect(await screen.findByText('迁移本地 Wiki 到共享记忆库')).toBeTruthy()
+    fireEvent.click(buttonByText('立即迁移'))
+
+    expect(await screen.findByText('迁移完成')).toBeTruthy()
+    expect(screen.queryByText(/迁移失败项/)).toBeNull()
+    fireEvent.click(buttonByText('知道了'))
+    // 迁移真实完成 → 状态刷新后横幅消失
+    await expectModalClosed('迁移本地 Wiki 到共享记忆库')
+    expect(screen.queryByText(/检测到 1 个项目/)).toBeNull()
   })
 })

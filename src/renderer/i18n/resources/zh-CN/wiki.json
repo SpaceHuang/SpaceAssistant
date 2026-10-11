@@ -22,6 +22,8 @@
     "extraRootsPlaceholder": "例如：old-notes, my-wiki",
     "reportTitle": "迁移完成",
     "reportSummary": "已迁移 {{migrated}} 个项目根，冲突 {{conflicts}} 处，改名映射 {{renames}} 条",
-    "conflictsTitle": "冲突双保留清单（待人工合并）"
+    "conflictsTitle": "冲突双保留清单（待人工合并）",
+    "failedTitle": "迁移失败项（可重试，旧目录未动）",
+    "reportClose": "知道了"
   }
 }

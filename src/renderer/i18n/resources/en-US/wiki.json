@@ -22,6 +22,8 @@
     "extraRootsPlaceholder": "e.g. old-notes, my-wiki",
     "reportTitle": "Migration completed",
     "reportSummary": "Migrated {{migrated}} project root(s), {{conflicts}} conflict(s), {{renames}} rename mapping(s)",
-    "conflictsTitle": "Conflict duplicates (manual merge needed)"
+    "conflictsTitle": "Conflict duplicates (manual merge needed)",
+    "failedTitle": "Failed items (retryable; legacy folders untouched)",
+    "reportClose": "Got it"
   }
 }

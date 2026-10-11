@@ -1,9 +1,10 @@
-import { App, Button, Input, InputNumber, Modal, Space, Switch, Tag, Typography } from 'antd'
+import { App, Button, Input, InputNumber, Modal, Space, Switch, Typography } from 'antd'
 import { useState } from 'react'
 import type { WikiConfig, WikiMigrationState } from '../../../shared/domainTypes'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import { LegacyRootChips, MigrationConflictSection, MigrationFailureSection, MigrationSummary } from '../WikiPane/wikiMigrationShared'
 import { WIKI_VOCABULARY_PREFIX } from '../../../shared/wikiConstants'
 
 type Props = {
@@ -163,13 +164,11 @@ export function WikiTab({ wiki, onChange }: Props) {
       >
         {migration?.pendingLegacyMigration ? (
           <>
-            <Typography.Paragraph>
+            <Typography.Paragraph style={{ marginBottom: 0 }}>
               {t('wiki.migrationPendingHint', { count: migration.legacyRoots?.length ?? 0 })}
-              {migration.legacyRoots?.map((r) => (
-                <Tag key={r}>{r}</Tag>
-              ))}
             </Typography.Paragraph>
-            <Button type="primary" loading={migrating} onClick={() => void runMigration()}>
+            <LegacyRootChips roots={migration.legacyRoots ?? []} />
+            <Button type="primary" loading={migrating} onClick={() => void runMigration()} style={{ marginTop: 12 }}>
               {t('wiki.migrationRunNow')}
             </Button>
           </>
@@ -178,27 +177,36 @@ export function WikiTab({ wiki, onChange }: Props) {
         )}
         {report ? (
           <>
-            <Typography.Title level={5}>{t('wiki.migrationReportTitle')}</Typography.Title>
-            <Typography.Paragraph>
-              {t('wiki.migrationReportSummary', {
+            <Typography.Title level={5} style={{ marginTop: 16, marginBottom: 6 }}>
+              {t('wiki.migrationReportTitle')}
+            </Typography.Title>
+            <MigrationSummary
+              text={t('wiki.migrationReportSummary', {
                 migrated: report.profiles?.filter((p) => p.status === 'migrated').length ?? 0,
                 conflicts: report.conflicts?.length ?? 0,
                 renames: report.renames?.length ?? 0
               })}
-            </Typography.Paragraph>
-            {(report.conflicts?.length ?? 0) > 0 && (
-              <>
-                <Typography.Title level={5}>{t('wiki.migrationConflictsTitle')}</Typography.Title>
-                {report.conflicts!.map((c) => (
-                  <Typography.Paragraph key={`${c.path}-${c.keptAs}`} style={{ marginBottom: 4 }}>
-                    <code>{c.path}</code> → <code>{c.keptAs}</code>
-                  </Typography.Paragraph>
-                ))}
-              </>
-            )}
+            />
+            <MigrationConflictSection
+              title={t('wiki.migrationConflictsTitle')}
+              conflicts={report.conflicts}
+            />
+            <MigrationFailureSection
+              title={t('wiki.migrationFailedTitle')}
+              failures={(report.profiles ?? []).filter((p) => p.status === 'failed')}
+            />
+            <Button
+              type="primary"
+              style={{ marginTop: 12 }}
+              onClick={() => setMigration(null)}
+            >
+              {t('wiki.migrationReportClose')}
+            </Button>
           </>
         ) : (
-          <Typography.Paragraph type="secondary">{t('wiki.migrationNoReport')}</Typography.Paragraph>
+          <Typography.Paragraph type="secondary" style={{ marginTop: 12 }}>
+            {t('wiki.migrationNoReport')}
+          </Typography.Paragraph>
         )}
       </Modal>
     </ConfigSettingsStack>

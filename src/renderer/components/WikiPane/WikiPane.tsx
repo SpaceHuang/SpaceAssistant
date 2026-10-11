@@ -1,11 +1,12 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
-import { Alert, App, Button, Modal, Tag, Tooltip, Typography } from 'antd'
+import { Alert, App, Button, Input, Modal, Tooltip, Typography } from 'antd'
 import { useTypedSelector } from '../../hooks'
 import { DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
 import { FileTree, type FileTreeHandle } from '../FileTree/FileTree'
 import { isUnderWikiRoot, subscribeFilePaneSelect } from '../../services/filePaneNavigation'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
 import { projectDisplayMap, summarizeMigrationReport } from './wikiMigrationUi'
+import { LegacyRootChips, MigrationConflictSection, MigrationFailureSection, MigrationSummary } from './wikiMigrationShared'
 import type { WikiMigrationReport } from '../../../shared/domainTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import './wikiPane.css'
@@ -111,6 +112,8 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
         .map((rootDirName) => ({ workDir, rootDirName }))
       const report = await window.api.wikiMigrateLegacy({ extraLegacyRoots: extraLegacyRoots.length ? extraLegacyRoots : undefined })
       setMigrationReport(report)
+      // 向导立即退役：即使迁移未彻底完成（refreshWikiStatus 重新检出 pending），关闭报告后也不得弹回向导
+      setWizardOpen(false)
       setPendingMigration(null)
       await refreshWikiStatus()
       void wikiTreeRef.current?.refresh()
@@ -143,20 +146,21 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
             style={{ marginBottom: 8 }}
             message={t('migration.banner', { count: pendingMigration.legacyRoots.length })}
             action={
-              <Button size="small" danger type="primary" onClick={() => setWizardOpen(true)}>
+              // 迁移是「永不自动删除」的安全操作：品牌橙主按钮引导前进，danger 只留给真破坏性动作
+              <Button size="small" type="primary" onClick={() => setWizardOpen(true)}>
                 {t('migration.openWizard')}
               </Button>
             }
           />
         )}
         {projectNames.size > 0 && (
-          <div style={{ marginBottom: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+          <div className="wiki-migration-chips wiki-migration-chips-pane">
             {[...projectNames.entries()].map(([projectId, info]) => (
               <Tooltip key={projectId} title={info.workDir}>
-                <Tag style={{ marginInlineEnd: 0 }}>
+                <span className={info.orphan ? 'wiki-migration-chip wiki-migration-chip-orphan' : 'wiki-migration-chip'}>
                   {info.displayName}
                   {info.orphan ? ` ${t('migration.orphanSuffix')}` : ''}
-                </Tag>
+                </span>
               </Tooltip>
             ))}
           </div>
@@ -199,43 +203,47 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
         cancelText={t('migration.later')}
       >
         <Typography.Paragraph>{t('migration.wizardDesc', { count: pendingMigration?.legacyRoots.length ?? 0 })}</Typography.Paragraph>
-        {pendingMigration?.legacyRoots.map((r) => (
-          <Tag key={r}>{r}</Tag>
-        ))}
-        <Typography.Paragraph type="secondary" style={{ marginTop: 12 }}>
+        <LegacyRootChips roots={pendingMigration?.legacyRoots ?? []} />
+        <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 8 }}>
           {t('migration.extraRootsHint')}
         </Typography.Paragraph>
-        <input
+        <Input
           value={extraRootsInput}
           onChange={(e) => setExtraRootsInput(e.target.value)}
           placeholder={t('migration.extraRootsPlaceholder')}
-          style={{ width: '100%' }}
         />
       </Modal>
       <Modal
         open={migrationReport !== null}
         title={t('migration.reportTitle')}
-        footer={null}
+        footer={
+          <Button
+            type="primary"
+            onClick={() => {
+              setMigrationReport(null)
+              setExtraRootsInput('')
+            }}
+          >
+            {t('migration.reportClose')}
+          </Button>
+        }
         onCancel={() => {
           setMigrationReport(null)
           setExtraRootsInput('')
         }}
+        width={560}
       >
         {migrationReport && (
           <>
-            <Typography.Paragraph>
-              {t('migration.reportSummary', summarizeMigrationReport(migrationReport))}
-            </Typography.Paragraph>
-            {(migrationReport.conflicts?.length ?? 0) > 0 && (
-              <>
-                <Typography.Title level={5}>{t('migration.conflictsTitle')}</Typography.Title>
-                {migrationReport.conflicts!.map((c) => (
-                  <Typography.Paragraph key={`${c.path}-${c.keptAs}`} style={{ marginBottom: 4 }}>
-                    <code>{c.path}</code> → <code>{c.keptAs}</code>
-                  </Typography.Paragraph>
-                ))}
-              </>
-            )}
+            <MigrationSummary text={t('migration.reportSummary', summarizeMigrationReport(migrationReport))} />
+            <MigrationConflictSection
+              title={t('migration.conflictsTitle')}
+              conflicts={migrationReport.conflicts}
+            />
+            <MigrationFailureSection
+              title={t('migration.failedTitle')}
+              failures={(migrationReport.profiles ?? []).filter((p) => p.status === 'failed')}
+            />
           </>
         )}
       </Modal>

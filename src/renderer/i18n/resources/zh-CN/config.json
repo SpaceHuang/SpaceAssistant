@@ -666,7 +666,9 @@
     "migrationReportTitle": "上次迁移报告",
     "migrationReportSummary": "已迁移 {{migrated}} 个项目根，冲突 {{conflicts}} 处，改名映射 {{renames}} 条",
     "migrationConflictsTitle": "冲突双保留清单",
-    "migrationNoReport": "尚无迁移记录"
+    "migrationNoReport": "尚无迁移记录",
+    "migrationFailedTitle": "迁移失败项（可重试，旧目录未动）",
+    "migrationReportClose": "知道了"
   },
   "feishuAudit": {
     "title": "飞书操作记录",
