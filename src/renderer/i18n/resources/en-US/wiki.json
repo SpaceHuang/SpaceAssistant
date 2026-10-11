@@ -9,5 +9,19 @@
   "toolbar": {
     "openInExplorer": "Reveal in file explorer",
     "refresh": "Refresh"
+  },
+  "migration": {
+    "banner": "Found local Wiki(s) from {{count}} project(s) (including custom roots). Migrate into the shared library",
+    "orphanSuffix": "(orphan)",
+    "openWizard": "Migrate",
+    "wizardTitle": "Migrate local Wikis into the shared library",
+    "wizardDesc": "The following {{count}} local Wiki root(s) will be merged into the shared library. Old folders are renamed (with a .migrated- timestamp) and never auto-deleted",
+    "runNow": "Migrate now",
+    "later": "Not now",
+    "extraRootsHint": "Can't find your old Wiki? Specify extra legacy folder names manually (comma-separated; applies to the current working directory)",
+    "extraRootsPlaceholder": "e.g. old-notes, my-wiki",
+    "reportTitle": "Migration completed",
+    "reportSummary": "Migrated {{migrated}} project root(s), {{conflicts}} conflict(s), {{renames}} rename mapping(s)",
+    "conflictsTitle": "Conflict duplicates (manual merge needed)"
   }
 }

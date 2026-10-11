@@ -1,12 +1,15 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
-import { App, Button } from 'antd'
+import { Alert, App, Button, Modal, Tag, Tooltip, Typography } from 'antd'
 import { useTypedSelector } from '../../hooks'
 import { DEFAULT_WIKI_CONFIG } from '../../../shared/domainTypes'
 import { FileTree, type FileTreeHandle } from '../FileTree/FileTree'
 import { isUnderWikiRoot, subscribeFilePaneSelect } from '../../services/filePaneNavigation'
 import { formatUserFacingError } from '../../utils/formatUserFacingError'
+import { projectDisplayMap, summarizeMigrationReport } from './wikiMigrationUi'
+import type { WikiMigrationReport } from '../../../shared/domainTypes'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import './wikiPane.css'
+import { WIKI_VOCABULARY_PREFIX } from '../../../shared/wikiConstants'
 
 export type WikiPaneHandle = {
   refresh: () => void
@@ -29,11 +32,19 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
   const { t } = useTypedTranslation('wiki')
   const cfg = useTypedSelector((s) => s.config.config)
   const wiki = cfg?.wiki ?? DEFAULT_WIKI_CONFIG
-  const wikiRoot = wiki.rootPath.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
+  const wikiRoot = WIKI_VOCABULARY_PREFIX // BLK-4（D9）：词汇根恒为常量
 
   const [wikiInitialized, setWikiInitialized] = useState<boolean | null>(null)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const wikiTreeRef = useRef<FileTreeHandle>(null)
+  // T2.5：迁移提示条 / 向导 / 项目显示名数据源（wiki:status.projects，v1.12）
+  const [pendingMigration, setPendingMigration] = useState<{ legacyRoots: string[] } | null>(null)
+  // P1-14：向导开关独立 state——检测命中只出横幅，点「迁移」才弹向导
+  const [wizardOpen, setWizardOpen] = useState(false)
+  const [migrating, setMigrating] = useState(false)
+  const [extraRootsInput, setExtraRootsInput] = useState('')
+  const [migrationReport, setMigrationReport] = useState<WikiMigrationReport | null>(null)
+  const [projectNames, setProjectNames] = useState<ReturnType<typeof projectDisplayMap>>(new Map())
 
   const wikiIndexPath = `${wikiRoot}/wiki/index.md`
   const highlightPaths = useMemo(() => [wikiIndexPath], [wikiIndexPath])
@@ -43,8 +54,12 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
       setWikiInitialized(null)
       return
     }
-    const status = await window.api.wikiStatus()
+    const status = (await window.api.wikiStatus()) as import('../../../shared/domainTypes').WikiStatus
     setWikiInitialized(status.initialized)
+    setPendingMigration(
+      status.enabled && status.pendingLegacyMigration ? { legacyRoots: status.legacyRoots ?? [] } : null
+    )
+    setProjectNames(projectDisplayMap(status.projects))
   }, [wiki.enabled])
 
   useEffect(() => {
@@ -86,6 +101,26 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
     onFileSelect(relPath)
   }
 
+  const runMigration = async () => {
+    setMigrating(true)
+    try {
+      const extraLegacyRoots = extraRootsInput
+        .split(/[,;，；]/)
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .map((rootDirName) => ({ workDir, rootDirName }))
+      const report = await window.api.wikiMigrateLegacy({ extraLegacyRoots: extraLegacyRoots.length ? extraLegacyRoots : undefined })
+      setMigrationReport(report)
+      setPendingMigration(null)
+      await refreshWikiStatus()
+      void wikiTreeRef.current?.refresh()
+    } catch (e) {
+      message.error(formatUserFacingError(e instanceof Error ? e.message : String(e)))
+    } finally {
+      setMigrating(false)
+    }
+  }
+
   const initWiki = async () => {
     const result = await window.api.wikiInit({ installSkill: true })
     if (!result.ok) {
@@ -101,6 +136,31 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
   return (
     <div className="wiki-pane">
       <div className="wiki-pane-body">
+        {pendingMigration && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 8 }}
+            message={t('migration.banner', { count: pendingMigration.legacyRoots.length })}
+            action={
+              <Button size="small" danger type="primary" onClick={() => setWizardOpen(true)}>
+                {t('migration.openWizard')}
+              </Button>
+            }
+          />
+        )}
+        {projectNames.size > 0 && (
+          <div style={{ marginBottom: 8, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+            {[...projectNames.entries()].map(([projectId, info]) => (
+              <Tooltip key={projectId} title={info.workDir}>
+                <Tag style={{ marginInlineEnd: 0 }}>
+                  {info.displayName}
+                  {info.orphan ? ` ${t('migration.orphanSuffix')}` : ''}
+                </Tag>
+              </Tooltip>
+            ))}
+          </div>
+        )}
         {wikiInitialized === false ? (
           <div className="wiki-pane-empty">
             <p className="wiki-pane-empty-title">{t('empty.title')}</p>
@@ -123,12 +183,62 @@ export const WikiPane = forwardRef<WikiPaneHandle, Props>(function WikiPane(
             onCollectToWiki={onCollectToWiki}
             treeOptions={{
               rootRelPath: wikiRoot,
-              rootDisplayName: wikiRoot.split('/').pop() || 'llm-wiki',
+              rootDisplayName: wikiRoot.split('/').pop() || WIKI_VOCABULARY_PREFIX,
               readOnly: true
             }}
           />
         )}
       </div>
+      <Modal
+        open={pendingMigration !== null && wizardOpen && migrationReport === null}
+        title={t('migration.wizardTitle')}
+        confirmLoading={migrating}
+        onOk={() => void runMigration()}
+        onCancel={() => setWizardOpen(false)}
+        okText={t('migration.runNow')}
+        cancelText={t('migration.later')}
+      >
+        <Typography.Paragraph>{t('migration.wizardDesc', { count: pendingMigration?.legacyRoots.length ?? 0 })}</Typography.Paragraph>
+        {pendingMigration?.legacyRoots.map((r) => (
+          <Tag key={r}>{r}</Tag>
+        ))}
+        <Typography.Paragraph type="secondary" style={{ marginTop: 12 }}>
+          {t('migration.extraRootsHint')}
+        </Typography.Paragraph>
+        <input
+          value={extraRootsInput}
+          onChange={(e) => setExtraRootsInput(e.target.value)}
+          placeholder={t('migration.extraRootsPlaceholder')}
+          style={{ width: '100%' }}
+        />
+      </Modal>
+      <Modal
+        open={migrationReport !== null}
+        title={t('migration.reportTitle')}
+        footer={null}
+        onCancel={() => {
+          setMigrationReport(null)
+          setExtraRootsInput('')
+        }}
+      >
+        {migrationReport && (
+          <>
+            <Typography.Paragraph>
+              {t('migration.reportSummary', summarizeMigrationReport(migrationReport))}
+            </Typography.Paragraph>
+            {(migrationReport.conflicts?.length ?? 0) > 0 && (
+              <>
+                <Typography.Title level={5}>{t('migration.conflictsTitle')}</Typography.Title>
+                {migrationReport.conflicts!.map((c) => (
+                  <Typography.Paragraph key={`${c.path}-${c.keptAs}`} style={{ marginBottom: 4 }}>
+                    <code>{c.path}</code> → <code>{c.keptAs}</code>
+                  </Typography.Paragraph>
+                ))}
+              </>
+            )}
+          </>
+        )}
+      </Modal>
     </div>
   )
 })

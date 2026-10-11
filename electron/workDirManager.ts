@@ -46,6 +46,22 @@ export function checkDirectoryWritable(dirPath: string): { ok: boolean; error?: 
   }
 }
 
+/** P1-11：删除 profile 后，无任何 profile 指向的 workDir 的 wiki_projects 行置 orphan（保留历史归属）。 */
+function markWikiProjectsOrphanByWorkDirPath(db: AppDatabase, removedWorkDir: string, remainingPaths: string[]): void {
+  try {
+    const { markWikiProjectOrphan, listWikiProjects } = require('./wiki/wikiProjectStore') as typeof import('./wiki/wikiProjectStore')
+    const { canonicalWorkDir } = require('./wiki/wikiProjects') as typeof import('./wiki/wikiProjects')
+    const remaining = new Set(remainingPaths.map((p) => canonicalWorkDir(p).toLowerCase()))
+    const canonical = canonicalWorkDir(removedWorkDir)
+    const row = listWikiProjects(db).find((r) => r.workDir.toLowerCase() === canonical.toLowerCase())
+    if (row && !remaining.has(row.workDir.toLowerCase())) {
+      markWikiProjectOrphan(db, row.projectId, true)
+    }
+  } catch {
+    // wiki 模块不可用时静默跳过（profile 删除不被阻断）
+  }
+}
+
 function readProfiles(db: AppDatabase): WorkDirProfile[] {
   const raw = getConfigValue(db, PROFILES_KEY)
   if (!raw) return []
@@ -319,6 +335,7 @@ export function createWorkDirManager(ctx: {
     if (index < 0) return { success: false, error: '目录不存在' }
 
     const wasDefault = profiles[index].isDefault
+    const removedPath = profiles[index].path
     profiles.splice(index, 1)
     if (wasDefault && profiles.length > 0) {
       profiles[0].isDefault = true
@@ -327,6 +344,9 @@ export function createWorkDirManager(ctx: {
       ctx.setWorkDir(profiles[0].path)
     }
     writeProfiles(ctx.db, profiles)
+    // P1-11（§13 orphan 边界）：被删 profile 的 workDir 若已无任何 profile 指向 → 置 orphan=1
+    // （wiki_projects 行与历史 raw 分区保留）
+    markWikiProjectsOrphanByWorkDirPath(ctx.db, removedPath, profiles.map((p) => p.path))
     return { success: true }
   }
 

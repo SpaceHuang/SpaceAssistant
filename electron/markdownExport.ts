@@ -13,6 +13,7 @@ import { normalizeMarkdownMath } from '../src/shared/markdownMathNormalize'
 import { expandWikilinks } from '../src/shared/wikiMarkdown'
 import { remarkSemanticStatusEmoji } from '../src/shared/markdownSemanticStatusEmoji'
 import type { MarkdownExportFormat } from '../src/shared/markdownExport'
+import { WIKI_VOCABULARY_PREFIX } from '../src/shared/wikiConstants'
 
 export const MAX_MARKDOWN_EXPORT_IMAGES = 64
 export const MAX_MARKDOWN_EXPORT_IMAGE_BYTES = 10 * 1024 * 1024
@@ -51,7 +52,7 @@ function imageTransformation(data: Buffer): { width: number; height: number } {
 }
 
 export async function markdownToPrintHtml(markdown: string, images: Map<string, { data: Buffer; mime: string }> = new Map()): Promise<string> {
-  const source = expandWikilinks(normalizeMarkdownMath(normalizeAsciiTables(markdown)), 'llm-wiki')
+  const source = expandWikilinks(normalizeMarkdownMath(normalizeAsciiTables(markdown)), WIKI_VOCABULARY_PREFIX)
   const processor = unified().use(remarkParse).use(remarkGfm).use(remarkSemanticStatusEmoji).use(remarkMath).use(remarkRehype).use(rehypeKatex).use(rehypeStringify)
   let html = String(await processor.process(source))
   html = html.replace(/<a href="sa-md-status-dot:(success|warning|error|neutral)">\u200b<\/a>/g, (_match, tone) => ({ success: '✅', warning: '⚠️', error: '❌', neutral: '•' } as Record<string, string>)[tone])

@@ -1,5 +1,15 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 82
+export const DB_SCHEMA_VERSION = 83
+
+/** v83：wiki_projects 项目映射表（wiki-shared-centralized-storage §6.2） */
+export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
+  project_id     TEXT PRIMARY KEY NOT NULL,
+  work_dir       TEXT NOT NULL UNIQUE,
+  display_name   TEXT NOT NULL,
+  profile_id     TEXT,
+  first_seen_at  INTEGER NOT NULL,
+  orphan         INTEGER NOT NULL DEFAULT 0
+);`
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS scope_versions (

@@ -9,5 +9,19 @@
   "toolbar": {
     "openInExplorer": "在资源管理器中打开",
     "refresh": "刷新"
+  },
+  "migration": {
+    "banner": "检测到 {{count}} 个项目的本地 Wiki（含自定义根目录），迁移到共享记忆库",
+    "orphanSuffix": "（已失效）",
+    "openWizard": "迁移",
+    "wizardTitle": "迁移本地 Wiki 到共享记忆库",
+    "wizardDesc": "将以下 {{count}} 个本地 Wiki 根合并进共享库；旧目录将改名保留（.migrated-时间戳），永不自动删除",
+    "runNow": "立即迁移",
+    "later": "暂不迁移",
+    "extraRootsHint": "未找到旧 Wiki？可手动指定额外旧目录名（多个用逗号分隔，作用于当前工作目录）",
+    "extraRootsPlaceholder": "例如：old-notes, my-wiki",
+    "reportTitle": "迁移完成",
+    "reportSummary": "已迁移 {{migrated}} 个项目根，冲突 {{conflicts}} 处，改名映射 {{renames}} 条",
+    "conflictsTitle": "冲突双保留清单（待人工合并）"
   }
 }

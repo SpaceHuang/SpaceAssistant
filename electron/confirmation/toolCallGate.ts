@@ -40,6 +40,41 @@ import { validateDesktopReadV1 } from '../../src/shared/policy/readPolicyV1'
 import type { SessionDirectoryGrantRecord } from '../../src/shared/sessionDirectoryGrant'
 import { matchSessionDirectoryGrant } from './sessionDirectoryGrantMatcher'
 import { DEFAULT_USER_CONFIRMATION_TIMEOUT_MS } from './confirmationTimeout'
+
+/**
+ * T1.2/T1.3：以 resolveWikiMount 为本次路径入参构造探测锚点与敏感根豁免。
+ * 锚点仅在该入参挂载命中时返回（单元素数组）；豁免仅在 wiki 启用时返回（面 = 共享库子树）。
+ * wiki 停用返回空对象——探测入参与现状逐字节一致。
+ */
+function wikiProbeContext(
+  args: { workDir: string; userDataDir: string; wikiConfig?: WikiConfig },
+  pathInput: string
+): { mountAnchors?: MountAnchor[]; sensitiveRootExemptions?: string[] } {
+  const wikiConfig = args.wikiConfig
+  if (!wikiConfig?.enabled) return {}
+  const rootDirname = wikiConfig.rootPath || DEFAULT_WIKI_ROOT_DIRNAME
+  const sensitiveRootExemptions = [path.join(args.userDataDir, rootDirname)]
+  const resolution = resolveWikiMount(args.workDir, wikiConfig, args.userDataDir, pathInput)
+  // P1-2：锚点前缀用挂载层带出的 matchedPrefix（多段别名时 split('/') 会退化为首段，与 realRel 不一致）
+  const mountAnchors = resolution.mounted
+    ? [{ base: resolution.realBase, vocabularyPrefix: resolution.matchedPrefix }]
+    : undefined
+  return { mountAnchors, sensitiveRootExemptions }
+}
+
+/**
+ * T1.10：wiki-raw 信号判定。挂载命中（含 realBase 绝对形态的反向命中）一律以 vocabularyPath
+ * 参与分类；未挂载维持既有词汇判定，deny 规则本体零改动。
+ */
+function isWikiRawSignalTarget(args: { workDir: string; userDataDir: string; wikiConfig?: WikiConfig }, rawPath: string): boolean {
+  const wikiConfig = args.wikiConfig
+  if (!wikiConfig?.enabled) return false
+  const resolution = resolveWikiMount(args.workDir, wikiConfig, args.userDataDir, rawPath)
+  const vocabulary = resolution.mounted
+    ? resolution.vocabularyPath
+    : resolveWikiRelPath(args.workDir, wikiConfig, rawPath)
+  return classifyWikiPath(args.workDir, wikiConfig, vocabulary) === 'raw'
+}
 import { extractScriptSignals } from './extractors/scriptAnalysisExtractor'
 import { analyzeScriptContent, parsePythonModule, type ScriptAnalysisResult } from '../shell/scriptContentSecurity'
 import type { IrModule } from '../shell/scriptIr/types'
@@ -65,6 +100,9 @@ import { auditFactId } from './auditFactId'
 import { effectiveActionFor, type PolicyPackage } from '../../src/shared/policy/policyPackages'
 import type { ShellAnalysisResult } from '../shell/shellTypes'
 import { classifyWikiPath, resolveWikiRelPath } from '../wiki/wikiPaths'
+import { resolveWikiMount } from '../wiki/wikiMount'
+import type { MountAnchor } from './extractors/mountAnchors'
+import { DEFAULT_WIKI_ROOT_DIRNAME } from '../../src/shared/wikiConstants'
 import { buildSafetyDiagnostics, type SafetyDiagnostics } from '../../src/shared/confirmation/diagnostics'
 import { extractMcpInvocationSignal } from './extractors/mcpPayloadExtractor'
 import { approvalPayloadDeclForMcp, assertApprovalPayloadComplete } from './extractors/approvalPayloadDecl'
@@ -580,16 +618,20 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       }
     } else if (descriptor && rawPath !== undefined) {
       try {
+        const wikiProbe = wikiProbeContext(args, rawPath)
         writePathFact = await probeWritePathFact({
           rawPath,
           workDir: args.workDir,
           userDataDir: args.userDataDir,
           homeDir: os.homedir(),
-          customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? []
+          customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [],
+          mountAnchors: wikiProbe.mountAnchors,
+          sensitiveRootExemptions: wikiProbe.sensitiveRootExemptions
         })
         let writeScope: 'inside-workdir' | 'outside-workdir' | 'unknown'
         try {
-          writeScope = await classifyWriteTargetScope(writePathFact.normalizedPath, args.workDir)
+          // T1.4：挂载命中时以 scopeBase（realBase）为包含判定根；未挂载行为不变
+          writeScope = await classifyWriteTargetScope(writePathFact.normalizedPath, writePathFact.scopeBase ?? args.workDir)
         } catch {
           writeScope = 'unknown'
         }
@@ -598,19 +640,20 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
           actionClass: descriptor.actionClass,
           baseRiskLevel: descriptor.riskLevel,
           signals: [
-            { kind: 'path-target', path: writePathFact.normalizedPath, zone: writePathFact.zone },
+            // T1.6②：审批卡片/审计展示词汇路径（挂载命中时），真实 userData 路径不进渲染层
+            { kind: 'path-target', path: writePathFact.vocabularyPath ?? writePathFact.normalizedPath, zone: writePathFact.zone },
             { kind: 'write-target-scope', scope: writeScope }
           ],
           summary: { text: `${args.toolName} 写入目标已检查` }
         }
         if (writePathFact.targetKind !== 'file' && writePathFact.targetKind !== 'missing') facts.signals.push({ kind: 'write-target-unsupported' })
-        if (args.wikiConfig?.enabled && classifyWikiPath(args.workDir, args.wikiConfig, resolveWikiRelPath(args.workDir, args.wikiConfig, rawPath)) === 'raw') {
+        if (isWikiRawSignalTarget(args, rawPath)) {
           facts.signals.push({ kind: 'wiki-raw-target' })
         }
       } catch (error) {
         if (!(error instanceof WritePathProbeError)) throw error
         writePathProbeFailure = error
-        wikiRawTargetFailure = args.wikiConfig?.enabled === true && classifyWikiPath(args.workDir, args.wikiConfig, resolveWikiRelPath(args.workDir, args.wikiConfig, rawPath)) === 'raw'
+        wikiRawTargetFailure = isWikiRawSignalTarget(args, rawPath)
         facts = {
           toolName: descriptor.toolName,
           actionClass: descriptor.actionClass,
@@ -632,11 +675,16 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
     if (descriptor) {
       if (args.toolName === 'list_directory' || args.toolName === 'grep' || (args.toolName === 'read_file' && extractPathField(args.toolInput) !== undefined)) {
         try {
+          const readRawPath = extractPathField(args.toolInput)
+            ?? (args.toolName === 'list_directory' || args.toolName === 'grep' ? '.' : '')
+          const readWikiProbe = wikiProbeContext(args, readRawPath)
           const readResult = await runExtractorsWithReadPathFact(descriptor, args.toolInput, {
             ...env,
             userDataDir: args.userDataDir,
             homeDir: os.homedir(),
-            customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? []
+            customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [],
+            mountAnchors: readWikiProbe.mountAnchors,
+            sensitiveRootExemptions: readWikiProbe.sensitiveRootExemptions
           })
           facts = readResult.facts
           readPathFact = readResult.readPathFact
@@ -675,15 +723,19 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
             : undefined
         if (mediaPath) {
           try {
+            const mediaWikiProbe = wikiProbeContext(args, mediaPath)
             wechatMediaPathFact = await probeReadPathFact({
               rawPath: mediaPath,
               workDir: args.workDir,
               userDataDir: args.userDataDir,
               homeDir: os.homedir(),
-              customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? []
+              customSensitivePrefixes: args.shellConfig?.customSensitivePrefixes ?? [],
+              mountAnchors: mediaWikiProbe.mountAnchors,
+              sensitiveRootExemptions: mediaWikiProbe.sensitiveRootExemptions
             })
             let workdirScope: 'inside-workdir' | 'outside-workdir' | 'unknown'
             try {
+              // media 附件语义保持 workDir 基准：wiki 附件真实路径在 userData → outside-workdir → 门禁拒绝（§13 决议）
               workdirScope = await classifyWriteTargetScope(wechatMediaPathFact.normalizedPath, args.workDir)
             } catch {
               workdirScope = 'unknown'
@@ -972,7 +1024,7 @@ export async function evaluateToolCallGate(args: ToolCallGateArgs): Promise<Tool
       toolName: args.toolName as 'read_file' | 'grep' | 'list_directory',
       decisionRuleId: decision.ruleId,
       input: args.toolInput,
-      facts: [{ factId: `fact-${readPathFact.normalizedPath}`, decisionRuleId: decision.ruleId, normalizedPath: readPathFact.normalizedPath, zone: readPathFact.zone, targetKind: permitTargetKind, ...(permitScope ? { scope: permitScope } : {}), ...(readPathFact.resolvedKind ? { resolvedKind: readPathFact.resolvedKind } : {}), ...(readPathFact.identity ? { identity: readPathFact.identity } : {}), ...(selectedDirectoryGrant ? { directoryGrant: { grantId: selectedDirectoryGrant.grantId, sessionId: selectedDirectoryGrant.sessionId, realPath: selectedDirectoryGrant.realPath, identity: selectedDirectoryGrant.identity } } : {}) }]
+      facts: [{ factId: `fact-${readPathFact.normalizedPath}`, decisionRuleId: decision.ruleId, normalizedPath: readPathFact.normalizedPath, zone: readPathFact.zone, targetKind: permitTargetKind, ...(permitScope ? { scope: permitScope } : {}), ...(readPathFact.resolvedKind ? { resolvedKind: readPathFact.resolvedKind } : {}), ...(readPathFact.identity ? { identity: readPathFact.identity } : {}), ...(readPathFact.vocabularyPath ? { vocabularyPath: readPathFact.vocabularyPath } : {}), ...(selectedDirectoryGrant ? { directoryGrant: { grantId: selectedDirectoryGrant.grantId, sessionId: selectedDirectoryGrant.sessionId, realPath: selectedDirectoryGrant.realPath, identity: selectedDirectoryGrant.identity } } : {}) }]
     })
   } else if (args.phase !== 'recheck' && readPathFact && decision.type === 'require-confirm' && decision.answerer === 'user' && (readPathFact.targetKind !== 'directory' || directoryPermittable)) {
     const registry = args.readConfirmationRegistry ?? readConfirmationRegistry

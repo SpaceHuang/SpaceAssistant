@@ -40,7 +40,7 @@
 
 ### 1.1 背景
 
-[llm-wiki-requirement.md](./llm-wiki-requirement.md) 规定：**Ingest 只处理 `{wikiRoot}/raw/` 下的只读源文件**。Phase 2 已在 **Wiki 分段树** 内为 `raw/` 文件提供右键「收录到 Wiki」（实现时 Phase 2 曾用「Ingest 到 Wiki」，Phase 2.5 起统一更名）。
+[llm-wiki-requirement.md](./llm-wiki-requirement.md) 规定：**Ingest 只处理 `{wikiRoot}/raw/` 下的只读源文件**（集中共享存储后 ingest 目标为 `raw/<projectId>/`，按来源项目分目录，见 [wiki-shared-centralized-storage-requirement.md](./wiki-shared-centralized-storage-requirement.md)）。Phase 2 已在 **Wiki 分段树** 内为 `raw/` 文件提供右键「收录到 Wiki」（实现时 Phase 2 曾用「Ingest 到 Wiki」，Phase 2.5 起统一更名）。
 
 但用户自然的使用路径是：
 

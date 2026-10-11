@@ -3,6 +3,7 @@ export const CURRENT_SCHEMA_VERSION = 1
 import type { BrowserDependencyToolError } from './browserTypes'
 import type { AppLocale } from './locale'
 import { getBuiltinToolMetadata } from './builtinToolMetadata'
+import { WIKI_VOCABULARY_PREFIX, DEFAULT_WIKI_ROOT_DIRNAME } from './wikiConstants'
 
 export type { AppLocale }
 
@@ -372,7 +373,7 @@ export interface SkillMeta {
 export type SkillScope = 'project' | 'user' | 'builtin'
 
 /** 产品内置 Skill（由应用自动安装/管理，不在设置页 Skill 列表展示） */
-export const PRODUCT_BUILTIN_SKILL_NAMES = ['llm-wiki', 'browser-setup-guide', 'shell-setup-guide'] as const
+export const PRODUCT_BUILTIN_SKILL_NAMES = [WIKI_VOCABULARY_PREFIX, 'browser-setup-guide', 'shell-setup-guide'] as const
 
 /** 一次性聊天启动意图，消费后清空 */
 export interface ChatLaunchIntent {
@@ -465,25 +466,91 @@ export function normalizeSessionSkillsState(state?: Partial<SessionSkillsState> 
   }
 }
 
+/** 共享库迁移状态（config.wiki.migration，§10.2；报告结构见 §12.2） */
+export type WikiMigrationStateStatus = 'idle' | 'running' | 'completed' | 'failed'
+
+export interface WikiMigrationReport {
+  startedAt?: string
+  completedAt?: string
+  profiles?: Array<{
+    workDir: string
+    rootDirName: string
+    projectId?: string
+    status: 'migrated' | 'skipped' | 'failed'
+    mergedPageCount?: number
+    conflictCount?: number
+    error?: string
+  }>
+  /** 冲突双保留清单：path = 共享库既有页，keptAs = 后合并方保存路径 */
+  conflicts?: Array<{ path: string; keptAs: string; sourceProjectId?: string }>
+  /** 改名映射表（原词汇路径 → 新词汇路径，§12.3） */
+  renames?: Array<{ from: string; to: string }>
+  /** 拷入页面总数 */
+  mergedPageCount?: number
+  /** 冲突双保留数 */
+  conflictCount?: number
+  /** 同内容跳过页数 */
+  skippedPageCount?: number
+}
+
+export interface WikiMigrationState {
+  status: WikiMigrationStateStatus
+  completedAt?: string
+  report?: WikiMigrationReport
+  legacyRootAliases?: string[]
+}
+
 export interface WikiConfig {
   enabled: boolean
+  /** 共享库在 userData 下的目录名（D7/D9；不再表示 workDir 内相对路径） */
   rootPath: string
   hideWikiFromFileTree: boolean
   interactiveIngest: boolean
   maxBatchIngest: number
+  /** 历史自定义根名词汇表（只读别名，§6.3/§12.2） */
+  legacyRootAliases?: string[]
+  /** 存量迁移状态持久化（§10.2） */
+  migration?: WikiMigrationState
 }
 
 export const DEFAULT_WIKI_CONFIG: WikiConfig = {
   enabled: false,
-  rootPath: 'llm-wiki',
+  rootPath: WIKI_VOCABULARY_PREFIX,
   hideWikiFromFileTree: true,
   interactiveIngest: false,
-  maxBatchIngest: 10
+  maxBatchIngest: 10,
+  legacyRootAliases: [],
+  migration: { status: 'idle' }
+}
+
+const WIKI_MIGRATION_STATUSES: WikiMigrationStateStatus[] = ['idle', 'running', 'completed', 'failed']
+
+function normalizeWikiLegacyRootAliases(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+}
+
+function normalizeWikiMigrationState(value: unknown): WikiMigrationState {
+  const fallback: WikiMigrationState = { status: 'idle' }
+  if (!value || typeof value !== 'object') return fallback
+  const raw = value as Partial<WikiMigrationState>
+  const status = WIKI_MIGRATION_STATUSES.includes(raw.status as WikiMigrationStateStatus)
+    ? (raw.status as WikiMigrationStateStatus)
+    : 'idle'
+  const normalized: WikiMigrationState = { status }
+  if (typeof raw.completedAt === 'string') normalized.completedAt = raw.completedAt
+  if (raw.report && typeof raw.report === 'object') normalized.report = raw.report as WikiMigrationReport
+  const aliases = normalizeWikiLegacyRootAliases(raw.legacyRootAliases)
+  if (aliases.length > 0) normalized.legacyRootAliases = aliases
+  return normalized
 }
 
 export function mergeWikiConfig(partial?: Partial<WikiConfig> | null): WikiConfig {
   if (!partial || typeof partial !== 'object') return { ...DEFAULT_WIKI_CONFIG }
-  return { ...DEFAULT_WIKI_CONFIG, ...partial }
+  const merged: WikiConfig = { ...DEFAULT_WIKI_CONFIG, ...partial }
+  merged.legacyRootAliases = normalizeWikiLegacyRootAliases(partial.legacyRootAliases)
+  merged.migration = normalizeWikiMigrationState(partial.migration)
+  return merged
 }
 
 export interface FilePaneSectionUiState {
@@ -498,6 +565,13 @@ export const DEFAULT_FILE_PANE_SECTION_UI: FilePaneSectionUiState = {
   fileListHeightRatio: 0.6
 }
 
+export interface WikiProjectSummary {
+  projectId: string
+  displayName: string
+  workDir: string
+  orphan: boolean
+}
+
 export interface WikiStatus {
   enabled: boolean
   rootPath: string
@@ -505,6 +579,18 @@ export interface WikiStatus {
   pageCount: number
   rawCount: number
   lastLogEntry?: string
+  /** 存储已切换为 userData 共享库（v1.12） */
+  shared?: boolean
+  /** 已登记项目数（wiki_projects 表） */
+  projectCount?: number
+  /** 仍存在未迁移的旧项目级 Wiki 根（§12.1） */
+  pendingLegacyMigration?: boolean
+  /** 检测到的存量根目录名（含自定义根） */
+  legacyRoots?: string[]
+  /** 项目列表（WikiPane raw 节点展示名数据源，v1.12） */
+  projects?: WikiProjectSummary[]
+  /** 迁移状态持久化镜像（T2.6 报告查看数据源 = config.wiki.migration） */
+  migration?: WikiMigrationState
 }
 
 export interface SessionWikiState {
@@ -910,4 +996,6 @@ export interface FileInfo {
   path: string
   isDirectory: boolean
   size?: number
+  /** 合成的虚拟目录条目（如共享库挂载的根词条目，§7.4-I1；无磁盘实体） */
+  virtual?: boolean
 }

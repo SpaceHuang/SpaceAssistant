@@ -1,6 +1,7 @@
 import type { SessionSkillsState, WikiConfig, WikiStatus } from '../domainTypes'
 import { normalizeSessionSkillsState } from '../domainTypes'
 import { resolveWikiAbsolutePathLink } from '../markdownLinkResolve'
+import { WIKI_VOCABULARY_PREFIX } from '../wikiConstants'
 
 export type WikiCommandResult =
   | { type: 'chat'; text: string }
@@ -18,7 +19,7 @@ export type WikiCommandDeps = {
   }) => Promise<{ ok: true; rawRelPath: string; copied: boolean } | { ok: false; error: string }>
 }
 
-const WIKI_SKILL = 'llm-wiki'
+const WIKI_SKILL = WIKI_VOCABULARY_PREFIX
 const INGEST_ALIASES = new Set(['ingest', '摄取', '提取'])
 
 function normalizeWikiSubcommand(sub: string | undefined): string | undefined {
@@ -74,7 +75,7 @@ export async function parseWikiCommand(
     if (!result.ok) return { type: 'command', hint: `[Wiki] 初始化失败: ${result.error}` }
     return {
       type: 'command',
-      hint: `[Wiki] 已初始化 Wiki（${result.rootPath}）${result.skillInstalled ? '，已安装 llm-wiki Skill' : ''}`
+      hint: `[Wiki] 已初始化 Wiki（${result.rootPath}）${result.skillInstalled ? `，已安装 ${WIKI_SKILL} Skill` : ''}`
     }
   }
 
@@ -155,6 +156,6 @@ export async function parseWikiCommand(
   }
 }
 
-export function isWikiPathLink(href: string, wikiRootPath = 'llm-wiki'): string | null {
+export function isWikiPathLink(href: string, wikiRootPath = WIKI_VOCABULARY_PREFIX): string | null {
   return resolveWikiAbsolutePathLink(href, wikiRootPath)
 }

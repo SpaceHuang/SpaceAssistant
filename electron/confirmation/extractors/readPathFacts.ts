@@ -2,6 +2,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import type { PathZone } from '../../../src/shared/confirmation/types'
 import { getBuiltinSensitivePrefixes, matchSensitive } from '../../shell/shellSensitivePaths'
+import { matchMountAnchor, type MountAnchor } from './mountAnchors'
 
 export type ReadTargetKind = 'file' | 'directory' | 'missing' | 'symlink' | 'special' | 'unknown'
 
@@ -13,6 +14,10 @@ export type ReadPathFact = {
   resolvedKind?: 'file' | 'directory' | 'special'
   identity?: { dev: number; ino: number; mode: number; size: number; mtimeMs: number }
   scope?: 'single-target' | 'direct-entries-snapshot'
+  /** wiki 挂载命中时的 workDir 相对词汇路径（T1.1；审批卡片/审计/信号判定用） */
+  vocabularyPath?: string
+  /** wiki 挂载命中时的包含判定基准（= realBase）；写范围分类以此为根（T1.4） */
+  scopeBase?: string
 }
 
 type ProbeInput = {
@@ -21,6 +26,10 @@ type ProbeInput = {
   userDataDir: string
   homeDir: string
   customSensitivePrefixes: readonly string[]
+  /** wiki 挂载锚点（gate 以 resolveWikiMount 结果构造；缺省 = 行为与现状逐字节一致） */
+  mountAnchors?: readonly MountAnchor[]
+  /** wiki 启用时 gate 传入的敏感根豁免（仅含共享库子树；豁免优先，T1.3） */
+  sensitiveRootExemptions?: readonly string[]
 }
 
 export class ReadPathProbeError extends Error {
@@ -68,6 +77,16 @@ function isSystemDir(candidate: string): boolean {
 /** 路径 zone 的唯一纯分类入口，读写事实探测共同消费其结果。 */
 export function classifyReadPathZone(input: ProbeInput & { resolvedPath: string }): PathZone {
   const platform = isWindowsAbsolute(input.resolvedPath) ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'posix'
+  const exemptedByWikiRoot = (input.sensitiveRootExemptions ?? []).some((prefix) => prefix && under(input.resolvedPath, prefix))
+  if (exemptedByWikiRoot) {
+    // 豁免优先（B7）：短路全部敏感前缀匹配（含 AppData\Roaming / ~/Library 祖先级前缀），
+    // zone 继续走 system-dir → 包含判定；不放松任何包含校验。
+    return isSystemDir(input.resolvedPath)
+      ? 'system-dir'
+      : under(input.resolvedPath, input.workDir)
+        ? 'workdir-normal'
+        : 'outside-workdir'
+  }
   return matchSensitive({
     resolvedPath: input.resolvedPath,
     userDataDir: input.userDataDir,
@@ -90,6 +109,13 @@ function identityOf(stat: import('fs').Stats) {
 
 /** 只探测事实；不做放行或拒绝判定。 */
 export async function probeReadPathFact(input: ProbeInput): Promise<ReadPathFact> {
+  // T1.1：锚点命中时探测的 lexical 锚点从 workDir 换为 realBase（base），入参换为挂载内相对路径。
+  const anchorHit = matchMountAnchor(input.rawPath, input.workDir, input.mountAnchors)
+  const effectiveInput: ProbeInput = {
+    ...input,
+    rawPath: anchorHit ? anchorHit.relInBase : input.rawPath,
+    workDir: anchorHit ? anchorHit.anchor.base : input.workDir
+  }
   const fallbackIfMissing = (error: unknown, fallback: string): string => {
     const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
     if (code === 'ENOENT' || code === 'ENOTDIR') return fallback
@@ -103,23 +129,23 @@ export async function probeReadPathFact(input: ProbeInput): Promise<ReadPathFact
     if (!isWindowsAbsolute(value)) return canonical(value)
     try { return await fs.realpath(value) } catch (error) { return fallbackIfMissing(error, path.win32.normalize(value)) }
   }
-  const effectiveInput: ProbeInput = {
-    ...input,
-    workDir: await canonicalPlatformPath(input.workDir),
-    userDataDir: await canonicalPlatformPath(input.userDataDir),
-    homeDir: await canonicalPlatformPath(input.homeDir),
-    customSensitivePrefixes: await Promise.all(input.customSensitivePrefixes.map(canonicalPlatformPath))
+  const canonicalInput: ProbeInput = {
+    ...effectiveInput,
+    workDir: await canonicalPlatformPath(effectiveInput.workDir),
+    userDataDir: await canonicalPlatformPath(effectiveInput.userDataDir),
+    homeDir: await canonicalPlatformPath(effectiveInput.homeDir),
+    customSensitivePrefixes: await Promise.all(effectiveInput.customSensitivePrefixes.map(canonicalPlatformPath))
   }
-  const rawIsWindowsAbsolute = isWindowsAbsolute(input.rawPath)
+  const rawIsWindowsAbsolute = isWindowsAbsolute(canonicalInput.rawPath)
   // 三态分派：win32 绝对 → win32 API；POSIX 绝对 → posix API；相对路径 → 按 workDir 的语法 resolve。
   const pathApi = rawIsWindowsAbsolute
     ? path.win32
-    : input.rawPath.startsWith('/')
+    : canonicalInput.rawPath.startsWith('/')
       ? path.posix
-      : isWindowsAbsolute(effectiveInput.workDir) ? path.win32 : path.posix
+      : isWindowsAbsolute(canonicalInput.workDir) ? path.win32 : path.posix
   const lexical = rawIsWindowsAbsolute
-    ? path.win32.normalize(input.rawPath)
-    : pathApi.resolve(effectiveInput.workDir, input.rawPath)
+    ? path.win32.normalize(canonicalInput.rawPath)
+    : pathApi.resolve(canonicalInput.workDir, canonicalInput.rawPath)
   let normalizedPath = lexical
   let targetKind: ReadTargetKind = 'missing'
   let resolvedKind: 'file' | 'directory' | 'special' | undefined
@@ -159,7 +185,7 @@ export async function probeReadPathFact(input: ProbeInput): Promise<ReadPathFact
     }
   }
 
-  const zone = classifyReadPathZone({ ...effectiveInput, resolvedPath: normalizedPath })
+  const zone = classifyReadPathZone({ ...canonicalInput, resolvedPath: normalizedPath })
 
   return {
     rawPath: input.rawPath,
@@ -168,6 +194,12 @@ export async function probeReadPathFact(input: ProbeInput): Promise<ReadPathFact
     targetKind,
     ...(resolvedKind ? { resolvedKind } : {}),
     ...(stat ? { identity: identityOf(stat) } : {}),
-    scope: 'single-target'
+    scope: 'single-target',
+    ...(anchorHit
+      ? {
+          vocabularyPath: anchorHit.vocabularyPath,
+          scopeBase: canonicalInput.workDir
+        }
+      : {})
   }
 }
