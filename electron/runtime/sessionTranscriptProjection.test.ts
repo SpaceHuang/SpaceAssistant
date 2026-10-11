@@ -1530,7 +1530,10 @@ describe('session transcript projection P2 read path', () => {
       { message: { id: 'projection-assistant', content: 'answer', status: 'sent' }, sequence: 1 }
     ] })
     getDbConnection(db).prepare("UPDATE messages SET content='question' WHERE id='projection-user'").run()
-    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
+    // P0-② negative-cache semantics: the repaired legacy body invalidates the persisted verdict,
+    // but recovery is checkpoint-driven (background/terminal revalidation), not a synchronous L2
+    // retry inside the read path. The refresh clears the verdict and re-grants eligibility.
+    expect(refreshSessionTranscriptProjectionCache(db, session.id)).toBe(true)
     expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L1')
     db.close()
   })
@@ -2132,7 +2135,8 @@ describe('session transcript projection P2 read path', () => {
     expect(pageWithUnmappedHistory.entries.some(({ message }) => message.id === 'page-known-assistant')).toBe(false)
     const olderPage = getProjectedChatMessagePage(db, session.id, pageWithUnmappedHistory.oldestSequence, 20)
     expect(olderPage.entries.find(({ message }) => message.id === 'page-known-assistant')?.message.content).toBe('known reply')
-    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'legacy', reason: 'legacy-mismatch' })
+    // The persisted mismatch verdict routes repeat reads to legacy without a full rebuild (P0-②).
+    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'legacy', reason: 'projection-rejected' })
     db.close()
   })
 })

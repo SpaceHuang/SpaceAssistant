@@ -5,6 +5,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
+import { consultProjectionRejection, clearProjectionRejection, computeLegacyProjectionDigest, readProjectionO1Metadata, recordProjectionRejection } from './sessionProjectionRejection'
 import { resolveSelectedMessageBodies } from '../sessionStorage/internal/messageBodyResolver'
 import { selectRecentTurnRoutingMessages, selectTurnContext } from './sessionTranscriptSelector'
 
@@ -104,6 +105,13 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
   if (legacyMessages.some(({ role }) => role !== 'user' && role !== 'assistant')) {
     return { source: 'legacy', messages: legacyMessages, reason: 'field-not-eligible' }
   }
+  // P0-② negative cache: a persisted mismatch verdict routes the read to legacy without
+  // re-paying the full rebuild+compare. A stale verdict (O(1) metadata drift) still returns
+  // legacy immediately — only the background revalidator (P0-③) waits on a full compare.
+  const rejectionVerdict = consultProjectionRejection(db, sessionId, legacyMessages)
+  if (rejectionVerdict) {
+    return { source: 'legacy', messages: legacyMessages, reason: 'projection-rejected' }
+  }
   try {
     const conn = getDbConnection(db)
     const history = new SqliteAgentHistory(conn)
@@ -122,6 +130,10 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
     return { source: 'legacy', messages: legacyMessages, reason: 'canonical-read-failed' }
   }
   if (canonical.kind === 'unavailable') {
+    if (canonical.reason === 'legacy-mismatch' && !hasCanonicalBackedRows) {
+      recordProjectionRejection(db, sessionId, canonical.reason, readProjectionO1Metadata(db, sessionId),
+        computeLegacyProjectionDigest(legacyMessages))
+    }
     if (hasCanonicalBackedRows) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
     return { source: 'legacy', messages: legacyMessages, reason: canonical.reason }
   }
@@ -439,16 +451,30 @@ export function refreshSessionTranscriptProjectionCache(db: AppDatabase, session
     const history = new SqliteAgentHistory(getDbConnection(db))
     const canonical = history.readCanonicalSessionTranscriptWithCache(sessionId, 'transcript')
     const skeletons = getMessageSkeletons(db, sessionId)
-    if (canonical.kind === 'matched' && hasSessionProjectionEligibility(db, sessionId) && mergeCanonicalBodies(canonical.messages, skeletons)) return true
+    if (canonical.kind === 'matched' && hasSessionProjectionEligibility(db, sessionId) && mergeCanonicalBodies(canonical.messages, skeletons)) {
+      // A live matched projection supersedes any earlier mismatch verdict (P0-④ explicit clear).
+      clearProjectionRejection(db, sessionId)
+      return true
+    }
     const legacyMessages = getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
     if (legacyMessages.some(({ role }) => role !== 'user' && role !== 'assistant')) return false
     const verified = history.readCanonicalSessionTranscript(sessionId, legacyMessages.map(({ id, role, content, timestamp }) => ({
       id, role: role as 'user' | 'assistant', content, timestamp
     })))
-    if (verified.kind !== 'matched' || !mergeCanonicalBodies(verified.messages, skeletons)) return false
+    if (verified.kind !== 'matched' || !mergeCanonicalBodies(verified.messages, skeletons)) {
+      if (verified.kind === 'unavailable' && verified.reason === 'legacy-mismatch') {
+        recordProjectionRejection(db, sessionId, verified.reason, readProjectionO1Metadata(db, sessionId),
+          computeLegacyProjectionDigest(legacyMessages))
+      }
+      return false
+    }
     const conn = getDbConnection(db)
-    return runInTransaction(conn, () => history.writeCanonicalSessionCache({ ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages) }) &&
-      markSessionProjectionEligible(db, sessionId, verified.sessionGeneration))
+    return runInTransaction(conn, () => {
+      const cached = history.writeCanonicalSessionCache({ ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages) }) &&
+        markSessionProjectionEligible(db, sessionId, verified.sessionGeneration)
+      if (cached) clearProjectionRejection(db, sessionId)
+      return cached
+    })
   } catch {
     return false
   }

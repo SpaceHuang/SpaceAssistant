@@ -1,5 +1,5 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 83
+export const DB_SCHEMA_VERSION = 84
 
 /** v83：wiki_projects 项目映射表（wiki-shared-centralized-storage §6.2） */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
@@ -2055,4 +2055,34 @@ CREATE TABLE IF NOT EXISTS spill_reference_meta (
   meta_value INTEGER NOT NULL
 );
 INSERT OR IGNORE INTO spill_reference_meta(meta_key,meta_value) VALUES('canonical_change_generation',0);
+`
+
+/**
+ * v83 → v84 (P0-①): canonical projection rejection negative cache.
+ *
+ * A persisted mismatch verdict lives here so the synchronous read path can route by
+ * conclusion instead of re-paying the full rebuild+compare on every read. This table is
+ * intentionally independent of canonical_session_projection_eligibility: message-mutation
+ * and v46 cursor triggers clear eligibility/cache wholesale, but a rejection verdict only
+ * loses meaning when the underlying content changes, which the O(1) metadata columns
+ * (event_count + watermark ids + legacy row count/max rowid) detect at read time.
+ */
+export const MIGRATION_V84_SESSION_PROJECTION_REJECTIONS_SQL = `
+CREATE TABLE IF NOT EXISTS canonical_session_projection_rejections (
+  session_id TEXT PRIMARY KEY NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  session_generation TEXT NOT NULL,
+  fingerprint TEXT NOT NULL DEFAULT '',
+  watermark_event_id TEXT,
+  watermark_invocation_id TEXT,
+  event_count INTEGER NOT NULL DEFAULT 0,
+  legacy_message_count INTEGER NOT NULL DEFAULT 0,
+  legacy_max_rowid INTEGER NOT NULL DEFAULT 0,
+  legacy_digest TEXT NOT NULL DEFAULT '',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  retry_after INTEGER NOT NULL DEFAULT 0,
+  last_reason TEXT NOT NULL DEFAULT 'legacy-mismatch',
+  permanent INTEGER NOT NULL DEFAULT 0 CHECK(permanent IN (0,1)),
+  stale_metadata INTEGER NOT NULL DEFAULT 0 CHECK(stale_metadata IN (0,1)),
+  updated_at INTEGER NOT NULL
+);
 `

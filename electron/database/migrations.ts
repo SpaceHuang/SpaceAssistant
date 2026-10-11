@@ -23,7 +23,8 @@ import {
   MIGRATION_V48_SESSION_PROJECTION_LEGACY_POLICY_SQL, MIGRATION_V49_SESSION_PROJECTION_SCOPE_SQL,
   MIGRATION_V50_HISTORY_RECOVERY_WORK_SQL, MIGRATION_V50_HISTORY_RECOVERY_WORK_TRIGGERS_SQL,
   MIGRATION_V51_USAGE_MODEL_IDENTITY_COLUMNS, MIGRATION_V52_SESSION_PROJECTION_MIGRATION_CANCEL_SQL,
-  MIGRATION_V54_SPILL_REFERENCE_INDEX_SQL, SCHEMA_META_KEYS, WIKI_PROJECTS_TABLE_SQL
+  MIGRATION_V54_SPILL_REFERENCE_INDEX_SQL, MIGRATION_V84_SESSION_PROJECTION_REJECTIONS_SQL,
+  SCHEMA_META_KEYS, WIKI_PROJECTS_TABLE_SQL
 } from './schema'
 import { runInTransaction } from './transaction'
 
@@ -1372,6 +1373,11 @@ export function runMigrations(conn: DatabaseSync): void {
   if (version === 82) runInTransaction(conn, () => {
     conn.exec(WIKI_PROJECTS_TABLE_SQL)
     version = 83
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 83) runInTransaction(conn, () => {
+    conn.exec(MIGRATION_V84_SESSION_PROJECTION_REJECTIONS_SQL)
+    version = 84
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   } catch (migrationError) {
