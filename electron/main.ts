@@ -278,7 +278,7 @@ installProcessSafetyNet((event, detail) => {
 let usageStatsStartupMaintenance: (() => void) | null = null
 let startWindowReadyMaintenance: (() => void) | null = null
 let storageLifecycleStop: ((deadlineMs: number) => Promise<{ status: 'quiescent' | 'deadline-exceeded' }>) | null = null
-let projectionRevalidationDrainStop: (() => void) | null = null
+let projectionRevalidationDrainStop: { stop: () => void } | null = null
 let eventLoopWatchdogStop: (() => void) | null = null
 let safeDatabaseMaintenanceInFlight: Promise<void> | undefined
 let isQuitting = false
