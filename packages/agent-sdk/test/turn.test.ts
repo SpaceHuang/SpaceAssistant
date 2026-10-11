@@ -2812,27 +2812,24 @@ describe('runAgentTurn', () => {
     })
 
     const snapshot = await history.read('inv-request-snapshot')
+    // P2a: the snapshot keeps route + request options and carries the omitted messages body as
+    // count + digest at the top level; the rebuilders never read messages from the snapshot.
+    const expectedSnapshot = {
+      route: routeProfile,
+      request: {
+        maxTokens: 96,
+        tools: request.tools,
+        thinking: { enabled: true, effort: 'high' }
+      },
+      messagesCount: request.messages.length
+    }
+    expect(snapshot.events[0]?.payload).toMatchObject({ requestSnapshot: expectedSnapshot })
     expect(snapshot.events[0]?.payload).toMatchObject({
-      requestSnapshot: {
-        route: routeProfile,
-        request: {
-          messages: request.messages,
-          maxTokens: 96,
-          tools: request.tools,
-          thinking: { enabled: true, effort: 'high' }
-        }
-      }
+      requestSnapshot: { messagesSha256: expect.stringMatching(/^[a-f0-9]{64}$/) }
     })
+    expect(Object.hasOwn((snapshot.events[0]?.payload as { requestSnapshot: { request: Record<string, unknown> } }).requestSnapshot.request, 'messages')).toBe(false)
     expect(snapshot.events.find(({ kind }) => kind === 'model-response-committed')?.payload).toMatchObject({
-      requestSnapshot: {
-        route: routeProfile,
-        request: {
-          messages: request.messages,
-          maxTokens: 96,
-          tools: request.tools,
-          thinking: { enabled: true, effort: 'high' }
-        }
-      }
+      requestSnapshot: expectedSnapshot
     })
     expect(JSON.stringify(snapshot.events)).not.toContain('must-not-be-persisted')
   })
