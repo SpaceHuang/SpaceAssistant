@@ -115,6 +115,7 @@ export async function runDueSessionProjectionRevalidations(db: AppDatabase,
     await new Promise((resolve) => setImmediate(resolve))
   }
   for (const entry of requeue) enqueueSessionProjectionRevalidation(db, entry.sessionId, { stale: entry.stale })
+  try { logAgentEvent('info', 'session.transcript.revalidation', { drained: entries.length, revalidated, deferred: requeue.length, skipped }) } catch { /* observability */ }
   return { revalidated, deferred: requeue.length, skipped }
 }
 
@@ -132,6 +133,7 @@ export function checkpointSessionTranscriptProjection(db: AppDatabase, sessionId
     }
   } catch { /* fall through to the queue */ }
   enqueueSessionProjectionRevalidation(db, sessionId)
+  try { logAgentEvent('info', 'session.transcript.revalidation', { checkpoint: sessionId, enqueued: true }) } catch { /* observability */ }
   void runDueSessionProjectionRevalidations(db).catch(() => { /* revalidation is best-effort */ })
   return false
 }
