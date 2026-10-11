@@ -53,6 +53,8 @@ import type { GateConfirmationContext } from '../confirmation/agentSdkConfirmati
 import type { PermitBinding } from '../../packages/agent-sdk/src/safetyPermit'
 import type { ToolCallGateArgs } from '../confirmation/toolCallGate'
 import { createRegisteredAgentTurnTools } from '../tools/registeredAgentTurnTools'
+import { RunShellPlanError } from '../tools/runShellPlan'
+import { toPlanRejectedError } from '../tools/planRejection'
 import { classifyWorkDirProfileTarget } from '../workDirBinding'
 import { sessionDisplayNameRaw } from '../../src/shared/sessionDisplay'
 import { buildSessionDirectoryContextBlock, normalizeDirectoryGrantPath, type SessionDirectoryGrantRecord } from '../../src/shared/sessionDirectoryGrant'
@@ -1284,6 +1286,12 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
                   ? `工具 ${call.toolName} 因本轮上下文预算未注入（已被裁剪），本轮无法调用。请减少同时启用的 MCP 工具，或在设置页查看工具预算裁剪记录。`
                   : `工具 ${call.toolName} 当前不可用：MCP 工具可能已变更或服务不可用。请确认服务连接，并在设置页刷新工具列表后重试。`
               )
+            }
+            // P0-A（D-1）：可回传的 run_shell 计划期失败降级为 PlanRejectedError——SDK 视为「拒绝即回模型」，
+            // turn 继续到下一模型轮，不再整轮终止（白名单外异常原样 rethrow，保持 fatal）。
+            if (error instanceof RunShellPlanError) {
+              const rejected = toPlanRejectedError(error)
+              if (rejected) throw rejected
             }
             throw error
           }
