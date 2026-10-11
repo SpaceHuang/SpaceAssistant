@@ -465,7 +465,10 @@ export class SqliteAgentHistory implements HistoryPort {
           if (Number(mirrored.changes) !== 1) throw new HistoryBatchError('canonical assistant response mirror target is missing or not streaming')
         }
       }
-      if (!transcriptCommit) return appended
+      if (!transcriptCommit) {
+        this.advanceProjectionCacheAfterAppend()
+        return appended
+      }
       if (!this.sessionId || transcriptCommit.sessionId !== this.sessionId) throw new HistoryBatchError('terminal transcript commit session identity mismatch')
       const terminal = events.length === 1 ? events[0] : undefined
       if (!terminal || !['invocation-completed', 'invocation-failed', 'invocation-interrupted', 'invocation-parked'].includes(terminal.kind)) {
@@ -517,8 +520,32 @@ export class SqliteAgentHistory implements HistoryPort {
         )
         if (Number(result.changes) !== 1) throw new HistoryBatchError('terminal message mirror target is missing or not an assistant message')
       }
+      this.advanceProjectionCacheAfterAppend()
       return appended
     })
+  }
+
+  /**
+   * P1-①: advance the transcript projection cache to the just-appended watermark inside the
+   * same transaction (P1 roadmap ①). The write path just mirrored every canonical message into
+   * its legacy row, so a successful incremental tail fold is exactly the consistency proof the
+   * read-time verification used to re-derive; re-grant eligibility here instead of letting the
+   * message-mutation triggers push every read back into a full rebuild. Any ambiguity leaves
+   * the cache untouched — reads keep their existing fail-closed staircase.
+   */
+  private advanceProjectionCacheAfterAppend(): void {
+    if (!this.sessionId) return
+    try {
+      const canonical = this.readCanonicalSessionTranscriptWithCache(this.sessionId, 'transcript')
+      if (canonical.kind !== 'matched') return
+      const generation = (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as
+        { generation: string } | undefined)?.generation
+      if (!generation) return
+      this.conn.prepare(`INSERT INTO canonical_session_projection_eligibility(session_id, session_generation, validated_at)
+        VALUES(?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET
+        session_generation=excluded.session_generation, validated_at=excluded.validated_at`)
+        .run(this.sessionId, generation, Date.now())
+    } catch { /* 任何推进障碍都保持现状兜底：读路径缓存阶梯自行验证。 */ }
   }
 
   /** Fold session-owned canonical snapshots and require exact equality for every legacy field this API can represent. */

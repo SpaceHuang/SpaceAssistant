@@ -1712,12 +1712,14 @@ describe('SqliteAgentHistory', () => {
       ]
     } }], 0)
 
+    // P1-①: the append transaction already folded this suffix into the cache, so the explicit
+    // read replays nothing while still returning the fully folded transcript.
     expect(history.readCanonicalSessionTranscriptWithCache('session-l1', 'transcript', [
       { id: 'l1-user-1', role: 'user', content: 'one', timestamp: 1 },
       { id: 'l1-assistant-1', role: 'assistant', content: 'two', timestamp: 2 }
     ])).toMatchObject({ kind: 'matched', source: 'L1', messages: [
       { id: 'l1-user-1' }, { id: 'l1-assistant-1' }
-    ], replayedEvents: 1 })
+    ], replayedEvents: 0 })
     conn.close()
   })
 
@@ -1767,7 +1769,8 @@ describe('SqliteAgentHistory', () => {
     expect(history.readCanonicalSessionTranscriptWithCache('session-l1-response', 'transcript', [
       { id: 'l1-response-user', role: 'user', content: 'question', timestamp: 1 },
       { id: 'l1-response-assistant', role: 'assistant', content: 'answer', timestamp: 2 }
-    ])).toMatchObject({ kind: 'matched', source: 'L1', replayedEvents: 2, messages: [
+    // P1-①: the append transaction already folded these events into the cache.
+    ])).toMatchObject({ kind: 'matched', source: 'L1', replayedEvents: 0, messages: [
       { id: 'l1-response-user' }, { id: 'l1-response-assistant', timestamp: 2 }
     ] })
     conn.prepare("DELETE FROM agent_history_events WHERE event_id='l1-response-answer'").run()
@@ -1794,7 +1797,7 @@ describe('SqliteAgentHistory', () => {
     } }], 0)
     expect(history.readCanonicalSessionTranscriptWithCache('session-empty-cache', 'transcript', [
         { id: 'empty-first-user', role: 'user', content: 'first', timestamp: 1 }
-    ])).toMatchObject({ kind: 'matched', source: 'L1', replayedEvents: 1 })
+    ])).toMatchObject({ kind: 'matched', source: 'L1', replayedEvents: 0 })
     conn.close()
   })
 
@@ -2725,7 +2728,8 @@ describe('SqliteAgentHistory', () => {
       kind: 'invocation-context-committed', payload: { messages: [{ role: 'user', content: 'in progress' }] }
     }], 0)
 
-    await expect(history.readLatestInvocationForSession('session-latest-state')).resolves.toEqual({ kind: 'unavailable', invocationId: 'latest-incomplete' })
+    // P0-⑤: unavailable verdicts carry the stream snapshot they just read.
+    await expect(history.readLatestInvocationForSession('session-latest-state')).resolves.toMatchObject({ kind: 'unavailable', invocationId: 'latest-incomplete' })
     conn.close()
   })
 

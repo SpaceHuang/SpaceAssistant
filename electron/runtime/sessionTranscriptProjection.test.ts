@@ -2048,7 +2048,9 @@ describe('session transcript projection P2 read path', () => {
       payload: { messages: [{ role: 'user', id: 'eligible-row', content: 'same content', timestamp: 1 }] }
     }], 0)
 
-    expect(readSessionTranscriptProjection(db, eligible.id).source).toBe('canonical:L2')
+    // P1-①: the write path advanced the cache and granted eligibility during the append, so
+    // even the first read is served from the warm L1 seed.
+    expect(readSessionTranscriptProjection(db, eligible.id).source).toBe('canonical:L1')
     expect(readSessionTranscriptProjection(db, eligible.id).source).toBe('canonical:L1')
     expect(readSessionTranscriptProjection(db, legacy.id)).toMatchObject({ source: 'legacy', reason: 'history-absent' })
     expect(getProjectedChatMessagePage(db, eligible.id, null, 20).entries[0]?.message.content).toBe('same content')
@@ -2074,7 +2076,7 @@ describe('session transcript projection P2 read path', () => {
       eventId: 'pending-canonical-context', idempotencyKey: 'pending-canonical-context', kind: 'invocation-context-committed',
       payload: { messages: [{ role: 'user', id: 'pending-canonical-user', content: 'committed question', timestamp: 1 }] }
     }], 0)
-    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L1')
     appendMessage(db, { id: 'pending-not-canonical-yet', sessionId: session.id, role: 'user', content: 'queued question', timestamp: 2, status: 'queued' })
 
     expect(getProjectedChatMessagePage(db, session.id, undefined, 20)).toMatchObject({ entries: [
