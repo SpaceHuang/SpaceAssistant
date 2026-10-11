@@ -1,4 +1,0 @@
-t2-pre view={"stream_version":2} cache={"session_seq":2} cursor={"next_seq":4}
-t2-post read=matched view={"stream_version":2} cache={"session_seq":4} cursor={"next_seq":4}
-t2-pre view={"stream_version":2} cache={"session_seq":2} cursor={"next_seq":4}
-t2-post read=matched view={"stream_version":2} cache={"session_seq":4} cursor={"next_seq":4}
