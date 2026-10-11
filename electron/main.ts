@@ -535,7 +535,11 @@ app.whenReady().then(async () => {
           prepareProjectionForRetention: createCanonicalSessionProjectionRetentionPreparer(db), shouldRetainSessionDir: shouldRetain
         })
         for (const failure of result.summary.failures) console.warn('[sessionEvents] retention cleanup failed:', failure.sessionName, failure.error)
-        if (result.summary.failures.length) throw new Error('session-event-retention-incomplete')
+        if (result.summary.failures.length) {
+          // 透传首个失败的平台错误码（EPERM/EBUSY…），watermark 报告的 lastError 才有诊断价值
+          const firstCode = result.summary.failures.find((failure) => failure.error && typeof failure.error === 'object' && 'code' in failure.error)?.error as { code?: string } | undefined
+          throw Object.assign(new Error('session-event-retention-incomplete'), { code: firstCode?.code ?? 'RETENTION_INCOMPLETE' })
+        }
         return result.summary.removed + result.summary.retained.length
       })),
       dailyRetentionTask('spill-degradable-retention', () => String(resolveRetentionPolicyFromDb(db).degradableSpillRetentionDays), () => path.join(app.getPath('userData'), 'spill'), async () => {
