@@ -12,6 +12,7 @@ export type AgentLogEventName =
   | 'session.history.repair.failed'
   | 'session.transcript.read'
   | 'session.transcript.reconciliation'
+  | 'eventloop.delay'
   | 'storage.spill.source_truth_gc'
   | 'storage.spill.source_truth_gc_failed'
   | 'agent.tools.trim_widen_denied'

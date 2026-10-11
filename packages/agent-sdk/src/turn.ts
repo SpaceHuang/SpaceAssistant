@@ -1927,10 +1927,7 @@ async function assertHostCommittedResponse(history: HistoryPort | undefined, inv
   }
 }
 
-function canonicalRequestSnapshot(call: PreparedModelCall): Readonly<{
-  route: PreparedModelCall['route']
-  request: Omit<PreparedModelCall['request'], 'credentials' | 'signal'>
-}> {
+function canonicalRequestSnapshot(call: PreparedModelCall): ReturnType<typeof snapshotPreparedModelCall> {
   return snapshotPreparedModelCall(call)
 }
 

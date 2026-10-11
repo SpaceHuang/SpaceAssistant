@@ -5,10 +5,10 @@ import { getDbConnection } from '../database/sqliteStore'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
 import {
   clearProjectionRejection, computeLegacyProjectionDigest, getProjectionRejection,
-  hasSessionProjectionEligibility, projectionRejectionBackoffDelayMs, readProjectionO1Metadata
+  projectionRejectionBackoffDelayMs, readProjectionO1Metadata
 } from './sessionProjectionRejection'
 import { drainSessionProjectionRevalidationQueue, enqueueSessionProjectionRevalidation } from './sessionProjectionRevalidationQueue'
-import { markSessionProjectionEligible, refreshSessionTranscriptProjectionFastPath } from './sessionTranscriptProjection'
+import { hasSessionProjectionEligibility, markSessionProjectionEligible, refreshSessionTranscriptProjectionFastPath } from './sessionTranscriptProjection'
 
 /**
  * P0-③ background revalidation executor (plan §4 保障链 / §5 ③). Full rebuild+compare runs
