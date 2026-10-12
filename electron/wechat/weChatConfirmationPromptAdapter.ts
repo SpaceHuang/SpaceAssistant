@@ -25,8 +25,8 @@ type PendingSend = {
   onAbort?: () => void
   settled: boolean
   sendCall: 'pending' | 'fulfilled'
-  sendApiAcknowledgement: boolean
   sendResponseKeys: string[]
+  sendResponseMessageIdShape: string
   acknowledgedMessageId?: string
   echoedMessageId?: string
 }
@@ -43,6 +43,47 @@ type RawWireMessage = {
   message_id?: unknown
 }
 
+const losslessFetchWrappers = new WeakSet<typeof fetch>()
+
+/**
+ * The pinned SDK parses JSON with JSON.parse, which rounds iLink's int64
+ * message_id before the confirmation adapter can bind a quote. Preserve the
+ * decimal token as a string only for the sendmessage response.
+ */
+export function wrapFetchForLosslessWeChatMessageId(fetchImplementation: typeof fetch): typeof fetch {
+  const wrapped: typeof fetch = async (input, init) => {
+    const response = await fetchImplementation.call(globalThis, input, init)
+    let url: URL
+    try {
+      const inputUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      url = new URL(inputUrl)
+    } catch {
+      return response
+    }
+    if (url.pathname.replace(/\/+$/, '') !== '/ilink/bot/sendmessage') return response
+
+    const rawBody = await response.clone().text()
+    const losslessBody = rawBody.replace(/(^|[,{]\s*"message_id"\s*:\s*)(-?\d+)(?=\s*[,}])/g, '$1"$2"')
+    if (losslessBody === rawBody) return response
+    const headers = new Headers(response.headers)
+    headers.delete('content-length')
+    headers.delete('content-encoding')
+    return new Response(losslessBody, {
+      status: response.status,
+      statusText: response.statusText,
+      headers
+    })
+  }
+  losslessFetchWrappers.add(wrapped)
+  return wrapped
+}
+
+function installLosslessWeChatMessageIdFetch(): void {
+  const currentFetch = globalThis.fetch
+  if (losslessFetchWrappers.has(currentFetch)) return
+  globalThis.fetch = wrapFetchForLosslessWeChatMessageId(currentFetch)
+}
+
 function messageIdFromSendResponse(value: unknown): string | undefined {
   if (!value || typeof value !== 'object') return undefined
   const response = value as Record<string, unknown>
@@ -52,6 +93,26 @@ function messageIdFromSendResponse(value: unknown): string | undefined {
     if (typeof id === 'number' && Number.isSafeInteger(id) && id > 0) return String(id)
   }
   return undefined
+}
+
+function messageIdShapeFromSendResponse(value: unknown): string {
+  if (!value || typeof value !== 'object') return 'no-response-object'
+  const response = value as Record<string, unknown>
+  if (!Object.prototype.hasOwnProperty.call(response, 'message_id')
+    && !Object.prototype.hasOwnProperty.call(response, 'msg_id')
+    && !Object.prototype.hasOwnProperty.call(response, 'messageId')) return 'missing'
+  const id = response.message_id ?? response.msg_id ?? response.messageId
+  if (id === null || id === undefined) return 'nullish'
+  if (typeof id === 'string') return id.trim() ? 'non-empty-string' : 'empty-string'
+  if (typeof id === 'number') {
+    if (!Number.isFinite(id)) return 'non-finite-number'
+    if (!Number.isInteger(id)) return 'non-integer-number'
+    if (id === 0) return 'zero'
+    if (id < 0) return 'negative-integer'
+    if (!Number.isSafeInteger(id)) return 'unsafe-positive-integer'
+    return 'positive-integer'
+  }
+  return `unsupported-${typeof id}`
 }
 
 function responseKeys(value: unknown): string[] {
@@ -68,15 +129,19 @@ export class WeChatConfirmationPromptAdapter {
     private readonly bot: WeChatBot,
     private readonly options: {
       sendTimeoutMs?: number
+      bindingTimeoutMs?: number
       onSettled?: (result: PromptSendResult, metadata: {
         clientId: string
         sendResponseKeys: string[]
         sendResponseMessageIdPresent: boolean
+        sendResponseMessageIdShape: string
         echoedMessageIdPresent: boolean
       }) => void
       onEcho?: (metadata: { clientId: string; messageId: string }) => void
     } = {}
-  ) {}
+  ) {
+    installLosslessWeChatMessageIdFetch()
+  }
 
   get pendingCount(): number {
     return this.pending.size
@@ -115,8 +180,8 @@ export class WeChatConfirmationPromptAdapter {
         ...(signal ? { signal } : {}),
         settled: false,
         sendCall: 'pending',
-        sendApiAcknowledgement: this.canReadSendApiResponse(),
-        sendResponseKeys: []
+        sendResponseKeys: [],
+        sendResponseMessageIdShape: 'pending'
       }
       operation.timer.unref?.()
       if (signal) {
@@ -139,14 +204,12 @@ export class WeChatConfirmationPromptAdapter {
       void Promise.resolve(sendPromise).then((response) => {
         operation.sendCall = 'fulfilled'
         operation.sendResponseKeys = responseKeys(response)
+        operation.sendResponseMessageIdShape = messageIdShapeFromSendResponse(response)
         operation.acknowledgedMessageId = messageIdFromSendResponse(response)
         try { void this.bot.stopTyping(userId).catch(() => undefined) } catch { /* best-effort typing cleanup */ }
         this.settleIfBound(operation)
         if (operation.settled) return
-        if (operation.sendApiAcknowledgement && !operation.acknowledgedMessageId && !operation.echoedMessageId) {
-          this.finish(operation, { kind: 'binding-unavailable', sendCall: 'fulfilled', delivery: 'unbound', errorCategory: 'message-binding-unavailable' })
-          return
-        }
+        this.waitForMessageBinding(operation)
       }, (error: unknown) => {
         this.finish(operation, { kind: 'send-rejected', sendCall: 'rejected', delivery: 'unknown', error })
       })
@@ -175,12 +238,12 @@ export class WeChatConfirmationPromptAdapter {
     })
   }
 
-  private canReadSendApiResponse(): boolean {
-    const access = this.bot as unknown as SendApiAccess
-    const credentials = access.getCredentials?.()
-    return typeof access.api?.sendMessage === 'function'
-      && typeof credentials?.baseUrl === 'string'
-      && typeof credentials.token === 'string'
+  private waitForMessageBinding(operation: PendingSend): void {
+    clearTimeout(operation.timer)
+    operation.timer = setTimeout(() => this.finish(operation, {
+      kind: 'binding-unavailable', sendCall: 'fulfilled', delivery: 'unbound', errorCategory: 'message-binding-unavailable'
+    }), this.options.bindingTimeoutMs ?? 5_000)
+    operation.timer.unref?.()
   }
 
   private sendPromptPayload(payload: unknown): Promise<unknown> {
@@ -205,6 +268,7 @@ export class WeChatConfirmationPromptAdapter {
         clientId: operation.clientId,
         sendResponseKeys: operation.sendResponseKeys,
         sendResponseMessageIdPresent: Boolean(operation.acknowledgedMessageId),
+        sendResponseMessageIdShape: operation.sendResponseMessageIdShape,
         echoedMessageIdPresent: Boolean(operation.echoedMessageId)
       })
     } catch { /* Diagnostics cannot affect send settlement. */ }

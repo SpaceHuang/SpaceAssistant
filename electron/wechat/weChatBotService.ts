@@ -75,7 +75,7 @@ export class WeChatBotService {
     let confirmationAdapter = this.confirmationPromptAdapters.get(bot)
     if (!confirmationAdapter) {
       confirmationAdapter = new WeChatConfirmationPromptAdapter(bot, {
-        onSettled: (result, { clientId, sendResponseKeys, sendResponseMessageIdPresent, echoedMessageIdPresent }) => {
+        onSettled: (result, { clientId, sendResponseKeys, sendResponseMessageIdPresent, sendResponseMessageIdShape, echoedMessageIdPresent }) => {
           if (result.kind === 'cancelled') return
           logWeChatCliEvent(result.kind === 'sent' ? 'info' : 'warn', 'wechat.confirm.prompt_delivery_settled', {
             sendCall: result.sendCall,
@@ -83,6 +83,7 @@ export class WeChatBotService {
             clientIdHash: contentHash(clientId),
             sendResponseKeys,
             sendResponseMessageIdPresent,
+            sendResponseMessageIdShape,
             echoedMessageIdPresent,
             ...(result.kind === 'sent' ? { bindingKind: result.binding.kind } : {}),
             ...(result.kind === 'binding-unavailable' ? { errorCategory: result.errorCategory } : {}),

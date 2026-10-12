@@ -4,7 +4,7 @@ import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { createMockWeChatBot } from './__mocks__/wechatBotMock'
-import { WeChatConfirmationPromptAdapter, WECHAT_CONFIRMATION_QUOTE_CONTRACT } from './weChatConfirmationPromptAdapter'
+import { WeChatConfirmationPromptAdapter, WECHAT_CONFIRMATION_QUOTE_CONTRACT, wrapFetchForLosslessWeChatMessageId } from './weChatConfirmationPromptAdapter'
 import { createWeChatQuoteMarker } from './weChatQuoteBinding'
 
 function deferred<T>() {
@@ -15,6 +15,32 @@ function deferred<T>() {
 }
 
 describe('WeChatConfirmationPromptAdapter protocol', () => {
+  it('preserves int64 sendmessage message_id digits as a string before the SDK JSON parser runs', async () => {
+    const exactId = '17917655126112345'
+    const fetchImpl = vi.fn(async () => new Response(`{"ret":0,"message_id":${exactId}}`))
+    const fetchWithLosslessIds = wrapFetchForLosslessWeChatMessageId(fetchImpl as typeof fetch)
+
+    const response = await fetchWithLosslessIds('https://ilink.test/ilink/bot/sendmessage', { method: 'POST' })
+
+    await expect(response.json()).resolves.toEqual({ ret: 0, message_id: exactId })
+    expect(fetchImpl).toHaveBeenCalledOnce()
+  })
+
+  it('does not rewrite message_id-looking text or responses from other endpoints', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => new Response(
+      typeof input === 'string' && input.includes('/sendmessage')
+        ? '{"ret":0,"errmsg":"literal \\"message_id\\":17917655126112345"}'
+        : '{"message_id":17917655126112345}'
+    ))
+    const fetchWithLosslessIds = wrapFetchForLosslessWeChatMessageId(fetchImpl as typeof fetch)
+
+    const sendResponse = await fetchWithLosslessIds('https://ilink.test/ilink/bot/sendmessage', { method: 'POST' })
+    const otherResponse = await fetchWithLosslessIds('https://ilink.test/ilink/bot/getupdates', { method: 'POST' })
+
+    await expect(sendResponse.json()).resolves.toEqual({ ret: 0, errmsg: 'literal "message_id":17917655126112345' })
+    await expect(otherResponse.json()).resolves.toEqual({ message_id: 17917655126112345 })
+  })
+
   it('checks the pinned SDK protocol: sendRaw discards the send response and parser drops ref msg_id', () => {
     const require = createRequire(import.meta.url)
     const packageRoot = resolve(dirname(require.resolve('@wechatbot/wechatbot')), '..')
@@ -85,6 +111,52 @@ describe('WeChatConfirmationPromptAdapter protocol', () => {
     adapter.close()
   })
 
+  it('binds an exact int64 message_id returned through the lossless SDK fetch shim', async () => {
+    const exactId = '17917655126112345'
+    const bot = createMockWeChatBot()
+    const fetchWithLosslessIds = wrapFetchForLosslessWeChatMessageId(vi.fn(async () => new Response(
+      `{"ret":0,"message_id":${exactId}}`
+    )) as typeof fetch)
+    const sendMessage = vi.fn(async () => {
+      const response = await fetchWithLosslessIds('https://ilink.test/ilink/bot/sendmessage', { method: 'POST' })
+      return response.json()
+    })
+    Object.assign(bot, {
+      getCredentials: () => ({ baseUrl: 'https://ilink.test', token: 'test-token' }),
+      api: { sendMessage }
+    })
+    const adapter = new WeChatConfirmationPromptAdapter(bot as never, { sendTimeoutMs: 1000 })
+
+    await expect(adapter.send('owner', 'prompt')).resolves.toMatchObject({
+      kind: 'sent', delivery: 'bound', binding: { kind: 'message-id', value: exactId }
+    })
+    adapter.close()
+  })
+
+  it('waits for a correlated BOT echo when sendmessage has no usable message_id', async () => {
+    const bot = createMockWeChatBot()
+    const acknowledgement = deferred<unknown>()
+    const sendMessage = vi.fn(() => acknowledgement.promise)
+    Object.assign(bot, {
+      getCredentials: () => ({ baseUrl: 'https://ilink.test', token: 'test-token' }),
+      api: { sendMessage }
+    })
+    const adapter = new WeChatConfirmationPromptAdapter(bot as never, { sendTimeoutMs: 1000 })
+    const resultPromise = adapter.send('owner', 'prompt')
+    const payload = sendMessage.mock.calls[0]![2] as { client_id: string }
+
+    acknowledgement.resolve({ message_id: 0, ret: 0 })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(adapter.pendingCount).toBe(1)
+    adapter.observeWireMessages([{ client_id: payload.client_id, to_user_id: 'owner', message_type: 2, message_id: 1846 }])
+    await expect(resultPromise).resolves.toMatchObject({
+      kind: 'sent', sendCall: 'fulfilled', delivery: 'bound',
+      binding: { kind: 'message-id', value: '1846', clientId: payload.client_id }
+    })
+    adapter.close()
+  })
+
   it('accepts the protocol msg_id alias in the sendmessage acknowledgement', async () => {
     const bot = createMockWeChatBot()
     Object.assign(bot, {
@@ -123,7 +195,7 @@ describe('WeChatConfirmationPromptAdapter protocol', () => {
     adapter.close()
   })
 
-  it('fails binding immediately when sendmessage succeeds without an ID and no echo has arrived', async () => {
+  it('waits briefly for a poller echo before failing binding without an acknowledged ID', async () => {
     const bot = createMockWeChatBot()
     const sendMessage = vi.fn(async () => ({ ret: 0, errmsg: '' }))
     Object.assign(bot, {
@@ -131,7 +203,7 @@ describe('WeChatConfirmationPromptAdapter protocol', () => {
       api: { sendMessage }
     })
     const onSettled = vi.fn()
-    const adapter = new WeChatConfirmationPromptAdapter(bot as never, { sendTimeoutMs: 1000, onSettled })
+    const adapter = new WeChatConfirmationPromptAdapter(bot as never, { sendTimeoutMs: 1000, bindingTimeoutMs: 5, onSettled })
 
     await expect(adapter.send('owner', 'prompt')).resolves.toMatchObject({
       kind: 'binding-unavailable', sendCall: 'fulfilled', delivery: 'unbound'
@@ -139,8 +211,30 @@ describe('WeChatConfirmationPromptAdapter protocol', () => {
     expect(bot.sendRaw).not.toHaveBeenCalled()
     expect(adapter.pendingCount).toBe(0)
     expect(onSettled).toHaveBeenCalledWith(expect.objectContaining({ kind: 'binding-unavailable' }), expect.objectContaining({
-      sendResponseKeys: ['ret', 'errmsg'], sendResponseMessageIdPresent: false, echoedMessageIdPresent: false
+      sendResponseKeys: ['ret', 'errmsg'], sendResponseMessageIdPresent: false,
+      sendResponseMessageIdShape: 'missing', echoedMessageIdPresent: false
     }))
+    adapter.close()
+  })
+
+  it.each([
+    [{ message_id: 0 }, 'zero'],
+    [{ message_id: '' }, 'empty-string'],
+    [{ message_id: Number.MAX_SAFE_INTEGER + 1 }, 'unsafe-positive-integer'],
+    [{ message_id: 'server-message-301' }, 'non-empty-string']
+  ])('records the send acknowledgement ID shape without exposing the ID value', async (response, expectedShape) => {
+    const bot = createMockWeChatBot()
+    Object.assign(bot, {
+      getCredentials: () => ({ baseUrl: 'https://ilink.test', token: 'test-token' }),
+      api: { sendMessage: vi.fn(async () => response) }
+    })
+    const onSettled = vi.fn()
+    const adapter = new WeChatConfirmationPromptAdapter(bot as never, { sendTimeoutMs: 1000, bindingTimeoutMs: 5, onSettled })
+
+    await adapter.send('owner', 'prompt')
+
+    expect(onSettled.mock.calls[0]?.[1]).toMatchObject({ sendResponseMessageIdShape: expectedShape })
+    expect(JSON.stringify(onSettled.mock.calls[0]?.[1])).not.toContain('server-message-301')
     adapter.close()
   })
 
@@ -229,9 +323,9 @@ describe('WeChatConfirmationPromptAdapter protocol', () => {
     send.resolve()
   })
 
-  it('classifies fulfilled send without a BOT echo as binding-unavailable', async () => {
+  it('classifies fulfilled send without a BOT echo as binding-unavailable after the binding wait', async () => {
     const bot = createMockWeChatBot()
-    const adapter = new WeChatConfirmationPromptAdapter(bot as never, { sendTimeoutMs: 5 })
+    const adapter = new WeChatConfirmationPromptAdapter(bot as never, { sendTimeoutMs: 1000, bindingTimeoutMs: 5 })
     await expect(adapter.send('owner', 'prompt')).resolves.toMatchObject({
       kind: 'binding-unavailable', sendCall: 'fulfilled', delivery: 'unbound', errorCategory: 'message-binding-unavailable'
     })
