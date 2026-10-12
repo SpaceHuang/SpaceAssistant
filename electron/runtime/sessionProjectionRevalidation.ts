@@ -58,13 +58,13 @@ function recordRevalidationFailure(db: AppDatabase, sessionId: string): void {
 }
 
 /** One full revalidate cycle for a session; a mismatch updates the verdict, a match clears it. */
-function revalidateSession(db: AppDatabase, sessionId: string): void {
+function revalidateSession(db: AppDatabase, sessionId: string): 'matched' | 'mismatch' | 'other' {
   const legacyMessages = getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
   if (legacyMessages.some(({ role }) => role !== 'user' && role !== 'assistant')) {
     // Sessions outside the projection's field contract never re-enter canonical reads; a stale
     // verdict would only keep forcing pointless background work (P0-④ explicit clear path).
     clearProjectionRejection(db, sessionId)
-    return
+    return 'other'
   }
   const history = new SqliteAgentHistory(getDbConnection(db))
   const verified = history.readCanonicalSessionTranscript(sessionId, legacyMessages.map(({ id, role, content, timestamp }) => ({
@@ -74,9 +74,10 @@ function revalidateSession(db: AppDatabase, sessionId: string): void {
     const granted = history.writeCanonicalSessionCache({ ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages) })
     if (granted) markSessionProjectionEligible(db, sessionId, verified.sessionGeneration)
     clearProjectionRejection(db, sessionId)
-    return
+    return 'matched'
   }
-  if (verified.reason === 'legacy-mismatch') recordRevalidationFailure(db, sessionId)
+  if (verified.reason === 'legacy-mismatch') { recordRevalidationFailure(db, sessionId); return 'mismatch' }
+  return 'other'
 }
 
 export type RevalidationRunResult = Readonly<{ revalidated: number; deferred: number; skipped: number }>
@@ -95,6 +96,7 @@ export async function runDueSessionProjectionRevalidations(db: AppDatabase,
   let skipped = 0
   const entries = drainSessionProjectionRevalidationQueue(db)
   const requeue: typeof entries = []
+  const sessionOutcomes: Array<{ sessionId: string; stale: boolean; outcome: string }> = []
   for (let index = 0; index < entries.length; index += 1) {
     if (revalidated >= maxSessions) {
       // 预算耗尽：未处理的会话保留在队列，下轮 runDue 继续（分片间不丢任务）。
@@ -111,12 +113,13 @@ export async function runDueSessionProjectionRevalidations(db: AppDatabase,
       continue
     }
     revalidated += 1
-    revalidateSession(db, entry.sessionId)
+    const outcome = revalidateSession(db, entry.sessionId)
+    sessionOutcomes.push({ sessionId: entry.sessionId.slice(0, 8), stale: entry.stale, outcome })
     // 单片让步：分片之间把事件循环还给排队的 IPC / 定时器。
     await new Promise((resolve) => setImmediate(resolve))
   }
   for (const entry of requeue) enqueueSessionProjectionRevalidation(db, entry.sessionId, { stale: entry.stale })
-  try { logAgentEvent('info', 'session.transcript.revalidation', { drained: entries.length, revalidated, deferred: requeue.length, skipped }) } catch { /* observability */ }
+  try { logAgentEvent('info', 'session.transcript.revalidation', { drained: entries.length, revalidated, deferred: requeue.length, skipped, sessions: sessionOutcomes }) } catch { /* observability */ }
   return { revalidated, deferred: requeue.length, skipped }
 }
 

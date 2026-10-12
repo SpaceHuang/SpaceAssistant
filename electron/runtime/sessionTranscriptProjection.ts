@@ -156,6 +156,7 @@ export function readSessionTranscriptProjection(db: AppDatabase, sessionId: stri
       logAgentEvent('info', 'session.transcript.read', {
         sessionId, consumer: 'transcript', source: result.source,
         outcome: result.source.startsWith('canonical:') ? 'canonical' : 'legacy',
+        reason: result.source === 'legacy' ? result.reason : undefined,
         durationMs: Math.max(0, Math.round(performance.now() - startedAt))
       })
     } catch { /* Observation logging cannot change a transcript read. */ }
