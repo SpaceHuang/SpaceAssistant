@@ -142,3 +142,36 @@ describe('first-screen entry regression on a mismatched session (P0-⑦)', () =>
     db.close()
   })
 })
+
+describe('negative cache covers non-mismatch unavailable kinds (install-shipping fix)', () => {
+  it('caches a snapshot-invalid stream so repeated opens stop re-paying the full rebuild', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'snapshot-invalid session', model: 'test' })
+    const user = appendMessage(db, { id: 'si-user', sessionId: session.id, role: 'user', content: 'question', timestamp: 1, status: 'sent' }).message
+    const assistant = appendMessage(db, { id: 'si-assistant', sessionId: session.id, role: 'assistant', content: 'answer', timestamp: 2, status: 'completed' }).message
+    const conn = getDbConnection(db)
+    const history = new SqliteAgentHistory(conn, 1, Date.now, session.id)
+    await history.appendBatch([
+      { invocationId: 'si-invocation', turnId: 'si-turn', sequence: 1, schemaVersion: 1,
+        eventId: 'si-context', idempotencyKey: 'si-context', kind: 'invocation-context-committed',
+        payload: { messages: [user, assistant].map(({ id, role, content, timestamp }) => ({ id, role, content, timestamp })) } },
+      { invocationId: 'si-invocation', turnId: 'si-turn', sequence: 2, schemaVersion: 1,
+        eventId: 'si-conflict', idempotencyKey: 'si-conflict', kind: 'tool-call-finished',
+        payload: { toolCallId: 'si-call', success: true, result: { success: false, error: 'contradictory result' } } }
+    ], 0)
+    // canonical 流处于 snapshot-invalid（completed tool terminal 与 result success 矛盾）。
+
+    const rebuildSpy = vi.spyOn(SqliteAgentHistory.prototype, 'readCanonicalSessionTranscript')
+    const first = readSessionTranscriptProjection(db, session.id)
+    expect(first).toMatchObject({ source: 'legacy', reason: 'snapshot-invalid' })
+    expect(rebuildSpy).toHaveBeenCalledTimes(1)
+    expect(getProjectionRejection(db, session.id)).toMatchObject({ lastReason: 'snapshot-invalid' })
+
+    // 第二次读（重开/刷新会话）：负缓存直返，不再重付全量 rebuild+对比。
+    const second = readSessionTranscriptProjection(db, session.id)
+    expect(second).toMatchObject({ source: 'legacy', reason: 'projection-rejected' })
+    expect(rebuildSpy).toHaveBeenCalledTimes(1)
+    rebuildSpy.mockRestore()
+    db.close()
+  })
+})
