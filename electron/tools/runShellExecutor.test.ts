@@ -888,7 +888,7 @@ describe('runShellExecutor', () => {
     expect(recovered.success).toBe(true)
     const third = await runShellExecutor.execute({ command: mismatch }, baseCtx(workDir, userDataDir))
     expect(third.data).toMatchObject({ retryCount: 1, retryExhausted: false })
-  })
+  }, SPAWN_TEST_TIMEOUT_MS)
 
   // 评审 P2：自定义 shell 配置下 spawnSpec.shellId（可执行文件 basename）≠ record 侧的
   // dependencySnapshot.profileId（内置 profile id）；成功清除必须按 record 同源键，否则永不清零
@@ -912,7 +912,7 @@ describe('runShellExecutor', () => {
       policyRevision: planned.policyRevision,
       dependencySnapshot: { ...planned.dependencySnapshot },
       pathSnapshot: { ...planned.pathSnapshot }
-    })
+    }, SPAWN_TEST_TIMEOUT_MS)
     const result = await executePreparedShellExecutionWithHostFallback(prepared, baseCtx(workDir, userDataDir), Date.now(), {})
     expect(result.success).toBe(true)
     // 修复前（按 shellId 清）这里会残留计数 → retryCount=2；修复后按 profileId 同源清 → retryCount=1
