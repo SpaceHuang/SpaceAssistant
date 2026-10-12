@@ -14,7 +14,7 @@
 | **B1**（阻断）漏列必改测试 `electron/appIpc.thinkingEffort.test.ts`（断言 `max` 非法） | 新增 **P1-T11** 专责断言反转；P0-T2 基线纳入该文件；P1-G 定向集已含它；风险表补 **R9** |
 | **M1** `P0-T1` 核查对象过时（`appIpc.ts` 已无档位校验，实际在 `electron/ipc/*.ts`） | `P0-T1` 改核查 `configIpc.ts` / `sessionIpc.ts`；新增 **P1-T10** 同步三处硬编码错误文案；风险表补 **R10** |
 | **M2** `P1-G` 引用不存在的 `npm run test:shared` | 改为 `npm exec vitest run <定向集>` + `npm run test:renderer`（`src/shared/*.test.ts` 归属 renderer project） |
-| Minor 1 `packages/agent-core` 重复枚举 | 记入 **R11** + P1-T1 备注（本次不扩，另立需求） |
+| Minor 1 `packages/agent-sdk` 重复枚举 | 记入 **R11** + P1-T1 备注（本次不扩，另立需求） |
 | Minor 2 需求文档 A26 无法溯源 | 加入 **P6-T6**（补删除留痕 + 提交入库） |
 | Minor 3 `modelServiceSuffix` 全角/半角 | 加入 **P4-T2** 备注（须走 i18n，不得写死） |
 | Minor 4 `gpt-5-pro` 基线描述不完整 | 修正 **P3-T2** 表格描述（期望值不变） |
@@ -285,7 +285,7 @@ npm run typecheck:shared
 - [x] 注释同步（原文「思维强度档位：off 为零成本档」保留，可补一行说明 max 为最强档）
 - [x] `npm run typecheck:shared` 通过
 - [x] 未新增任何 `as` / `@ts-expect-error` / `any`
-- [x] 已确认**不**需同步 `packages/agent-core/src/provider.ts:1` 的独立 `ReasoningEffort`（其无生产消费方），并在该处或本计划备注「agent-core 档位枚举独立于产品枚举，暂不暴露 `max`」（见 R11）
+- [x] 已确认**不**需同步 `packages/agent-sdk/src/provider.ts:1` 的独立 `ReasoningEffort`（其无生产消费方），并在该处或本计划备注「agent-sdk 档位枚举独立于产品枚举，暂不暴露 `max`」（见 R11）
 
 ### P1-T2 `THINKING_EFFORT_LEVELS` 扩为 5 项
 
@@ -1336,7 +1336,7 @@ npm test
 | R8 | 两处 `onSelect` 之一漏写 `setOpen(false)` | 行为不一致 | P4-T11 用例⑧双向覆盖 |
 | R9 | **漏列必改测试**导致阶段门禁出现无归属红色用例（第 1 轮 B1：`appIpc.thinkingEffort.test.ts`；第 2 轮 B1(v2)/B2(v2)：`ComposerThinkingPicker.test.tsx`、`thinkingAvailability.test.ts`；第 3 轮 B1(v3)：`visionModelRouting.test.ts`） | 门禁卡住、执行者误判为回归 | **已可执行化**：P0-T2 内置**两组**波及面检索（A. 档位类 15 文件 / B. 字段类 9 文件），全部「转红」文件各有归属任务（P1-T3/T6/T11/T12、P2-T3/T4/T6）；P1-G / P2-G 门禁要求逐项核对。**教训（三轮收敛后）**：凡改动**产品常量、生成规则或被消费字段**，都须检索其**全部断言消费方**——不仅是「断言档位非法」的测试，还包括断言**档位数量/序列**、**输出全集**（如 memo 返回 `[...PRODUCT_EFFORTS]`）、以及**透传该字段的任何模块**（如 `visionModelRouting` 透传 `displayName`） |
 | R10 | IPC 错误文案硬编码档位清单随枚举过时 | 报错信息与实际可接受值不符 | P1-T10 改为从 `THINKING_EFFORT_LEVELS` 派生；P0-T1 已登记三处位置 |
-| R11 | `packages/agent-core` 存在**独立重复**的 `ReasoningEffort` 枚举（`provider.ts:1`），未随产品枚举扩展 | 名义不一致 | 当前仅被其自身测试引用（`packages/agent-core/test/provider.test.ts`），**无生产消费方**，不影响编译与运行。**本次不扩**，仅在 P1-T1 备注标注「agent-core 档位枚举独立于产品枚举，暂不暴露 `max`」，如需统一另立需求 |
+| R11 | `packages/agent-sdk` 存在**独立重复**的 `ReasoningEffort` 枚举（`provider.ts:1`），未随产品枚举扩展 | 名义不一致 | 当前仅被其自身测试引用（`packages/agent-sdk/test/provider.test.ts`），**无生产消费方**，不影响编译与运行。**本次不扩**，仅在 P1-T1 备注标注「agent-sdk 档位枚举独立于产品枚举，暂不暴露 `max`」，如需统一另立需求 |
 | R12 | 测试文件内联的**档位类型注解**（非常量引用）随枚举扩展失去同步（`electron/toolChatLoop.usageStream.test.ts:134` 声明 4 项档位） | 类型检查报错或静默不同步 | 按赋值方向判断：4 项类型是 5 项的**子集**，传入期望 `AgentReasoningEffort` 的参数**类型兼容**，故大概率无害。**已登记为 P0-T2 核查项**：P1 后跑一次 `typecheck` / `test:electron` 确认；若报错则把该注解补为 5 项 |
 | R13 | **门禁断言某资源已存在，但无任务负责创建**（第 4 轮 B1(v4)：P4-G 自注「组件引用的所有键已存在」，却无任务新建 8 个 `composer.prefs.*` 键；因 `t()` 强类型，键缺失直接编译报错） | 阶段门禁必卡，且红色错误无归属任务 | 已补 **P4-T0** 专责建键；P4-G 改为挂载到该任务。**通用对策**：凡门禁中出现「某资源已存在 / 已对齐 / 已同步」类断言，**必须能指回一个明确创建或同步该资源的任务**，否则即为计划缺口 |
 | R14 | **改动值的「精确形态」被其它规则隐式依赖**（第 5 轮：`modelServiceSuffix` en-US 多一个尾空格 → 与 `chipSeparator` 前导空格叠加成双倍间距；徽章样式靠 `.composer-model-picker` **后代选择器**生效，容器改类名 → 徽章样式**静默失效**、无报错） | 视觉缺陷且无编译/测试信号，易漏过 | 已分别落为 P4-T0（去尾空格 + 成因说明）、P4-T2（单空格核对）、P4-T10 + P6-T4（作用域二选一）。**通用对策**：凡改动**类名 / 资源名 / 文案值**，都须复核「是否有其它规则或拼接依赖该值的**精确形态**」（含前后空格、大小写、类名作为选择器锚点等） |

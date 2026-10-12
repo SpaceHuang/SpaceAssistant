@@ -93,7 +93,7 @@ docs/knowledge/               ← Wiki 根
 | 模块 id | 名称 | 代码锚点（示例） |
 |---------|------|------------------|
 | `s-runtime` | Agent SDK Runtime | `electron/runtime/invocationAssembler.ts:32`、`src/shared/agent/invocation.ts:250` |
-| `s-core` | Agent SDK Core | `electron/toolChatLoop.ts:773`、`packages/agent-core/src/index.ts:1` |
+| `s-core` | Agent SDK Core | `electron/toolChatLoop.ts:773`、`packages/agent-sdk/src/index.ts:1` |
 | `s-safety` | Safety Boundary | `electron/confirmation/toolCallGate.ts:1`、`src/shared/policy/policyEngine.ts:1` |
 | `s-capability` | Capability Registry | `electron/tools/builtinExecutors.ts:1439`、`electron/effectiveTools.ts:12` |
 | `s-history` | History / Storage Port | `src/shared/agent/invocation.ts:178`、`electron/chatMessageBuild.ts:7` |
@@ -103,7 +103,7 @@ docs/knowledge/               ← Wiki 根
 
 | 模块 id | 名称 | 代码锚点（示例） |
 |---------|------|------------------|
-| `x-providers` | Provider Adapters | `electron/anthropicClientFactory.ts:1`、`packages/agent-core/src/index.ts:1` |
+| `x-providers` | Provider Adapters | `electron/anthropicClientFactory.ts:1`、`packages/agent-sdk/src/index.ts:1` |
 
 ### 1.4 宿主扩展域（架构图未覆盖）
 

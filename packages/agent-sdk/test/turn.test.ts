@@ -4176,7 +4176,7 @@ describe('runAgentTurn', () => {
         prepareTool: async () => { throw planRejection },
         toolExecution: toolExecutionPort(permits, async () => ({ output: 'unexpected execution' })),
         maxModelTurns: 2, toolResourceKeys: () => [], returnDeniedToolsToModel: true,
-        observer: { onToolFinished: (_call, _result, source) => { if (source) afterToolResultSources.push({ kind: source.kind, reasonCode: source.reasonCode }) } },
+        observer: { onToolFinished: () => { /* source-side assertions live on afterToolResult */ } },
         afterToolResult: (_call, _result, source) => { if (source) afterToolResultSources.push({ kind: source.kind, reasonCode: source.reasonCode }) }
       })
       expect(result).toMatchObject({ text: 'recovered after plan rejection' })

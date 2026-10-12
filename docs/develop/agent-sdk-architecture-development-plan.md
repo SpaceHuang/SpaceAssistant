@@ -3,6 +3,7 @@
 > 状态：实施中（隔离 worktree `codex/agent-sdk-architecture-tdd`）
 > 制定日期：2026-09-25；基于 `main` 最新核对更新：2026-09-26
 > 架构依据：[Agent SDK 理想态（交互图）](./architect/agent-sdk-architecture-design.html) 与 [架构源数据](./architect/agent-sdk-architecture-design.architecture.json)
+> 命名沿革：文中 `agent-core`（及「Agent Core」）是 V1 阶段的旧包名，该包已在 V1 阶段退出核验时原子更名为 `packages/agent-sdk`（见下文「实施进度与证据」中的 2026-09-29 V1 条目）。§1 基线表与 V1 计划步骤保留了当时的命名与时态，属历史记录，未逐处改写。
 
 ## 实施进度与证据
 

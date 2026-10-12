@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>会话读路径热路径性能改进计划 v2 · SpaceAssistant</title>
+<style>
+  :root {
+    --ink: #1c2733;
+    --ink-soft: #55636f;
+    --line: #dde4ea;
+    --bg: #f6f8fa;
+    --card: #ffffff;
+    --blue: #2563eb;
+    --blue-soft: #eaf1fe;
+    --red: #d64541;
+    --red-soft: #fdf0ef;
+    --red-line: #f0c8c6;
+    --green: #1d8a5a;
+    --green-soft: #edf8f2;
+    --amber: #b8860b;
+    --amber-soft: #fdf6e3;
+    --mono: "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: var(--ink); background: var(--bg); line-height: 1.65;
+    font-size: 15px; padding: 0 0 80px;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 28px; }
+
+  header { background: #16202b; color: #fff; padding: 44px 0 36px; margin-bottom: 36px; }
+  header h1 { font-size: 26px; font-weight: 650; letter-spacing: .5px; }
+  header .sub { color: #9db2c7; margin-top: 10px; font-size: 14px; }
+  header .meta { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 18px; font-size: 12.5px; color: #7e93a8; }
+  header .meta span { background: #223140; padding: 3px 12px; border-radius: 999px; }
+
+  nav.toc { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 20px; margin-bottom: 34px; font-size: 13.5px; }
+  nav.toc b { color: var(--ink-soft); font-weight: 600; margin-right: 10px; }
+  nav.toc a { color: var(--blue); text-decoration: none; margin-right: 16px; white-space: nowrap; }
+  nav.toc a:hover { text-decoration: underline; }
+
+  section { margin-bottom: 46px; }
+  h2 { font-size: 20px; padding-bottom: 10px; border-bottom: 2px solid var(--line); margin-bottom: 20px; font-weight: 650; }
+  h2 .no { color: var(--blue); margin-right: 8px; font-family: var(--mono); font-size: 17px; }
+  h3 { font-size: 16px; margin: 24px 0 12px; font-weight: 650; }
+  p { margin-bottom: 12px; }
+  p.note { color: var(--ink-soft); font-size: 13.5px; }
+  code { font-family: var(--mono); font-size: 12.5px; background: #eef2f6; border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
+  ul.tight { margin: 0 0 12px 22px; }
+  ul.tight li { margin-bottom: 6px; }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px 22px; margin-bottom: 16px; }
+  .card.hl-red { border-left: 4px solid var(--red); }
+  .card.hl-blue { border-left: 4px solid var(--blue); }
+  .card.hl-green { border-left: 4px solid var(--green); }
+  .card.hl-amber { border-left: 4px solid var(--amber); }
+
+  .grid { display: grid; gap: 14px; }
+  .grid.c4 { grid-template-columns: repeat(4, 1fr); }
+  .grid.c3 { grid-template-columns: repeat(3, 1fr); }
+  .grid.c2 { grid-template-columns: repeat(2, 1fr); }
+  @media (max-width: 860px) { .grid.c4, .grid.c3 { grid-template-columns: repeat(2, 1fr); } .grid.c2 { grid-template-columns: 1fr; } }
+
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .stat .v { font-size: 22px; font-weight: 700; font-family: var(--mono); }
+  .stat .v.red { color: var(--red); }
+  .stat .v.amber { color: var(--amber); }
+  .stat .k { font-size: 12.5px; color: var(--ink-soft); margin-top: 4px; }
+  .stat .d { font-size: 11.5px; color: #8b98a5; margin-top: 2px; }
+
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; font-size: 13.5px; margin-bottom: 14px; }
+  th { text-align: left; background: #eef2f6; padding: 9px 14px; font-weight: 650; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 9px 14px; border-bottom: 1px solid #edf1f5; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.num { font-family: var(--mono); white-space: nowrap; }
+
+  /* ---------- 流程图组件 ---------- */
+  .flow { display: flex; flex-direction: column; align-items: center; }
+  .fnode {
+    width: min(620px, 100%); background: var(--card); border: 1.5px solid #b9c6d2;
+    border-radius: 8px; padding: 10px 16px; text-align: left; position: relative;
+  }
+  .fnode .t { font-weight: 650; font-size: 14px; }
+  .fnode .s { font-size: 12.5px; color: var(--ink-soft); margin-top: 2px; }
+  .fnode .loc { font-family: var(--mono); font-size: 11px; color: #8b98a5; display: block; margin-top: 4px; }
+  .fnode.actor { background: #223140; border-color: #223140; color: #fff; width: min(320px,100%); text-align: center; }
+  .fnode.actor .s { color: #9db2c7; }
+  .fnode.hot { border-color: var(--red); background: var(--red-soft); }
+  .fnode.hot .t::before { content: "▲ "; color: var(--red); }
+  .fnode.ok { border-color: var(--green); background: var(--green-soft); }
+  .fnode.new { border-color: var(--blue); background: var(--blue-soft); border-style: dashed; }
+  .fnode.new .t::after { content: " ＋"; color: var(--blue); font-size: 12px; }
+  .fnode.warm { border-color: var(--amber); background: var(--amber-soft); }
+  .farrow { display: flex; flex-direction: column; align-items: center; padding: 2px 0; }
+  .farrow .stem { width: 2px; height: 12px; background: #b9c6d2; }
+  .farrow .head { width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 7px solid #b9c6d2; }
+  .farrow.red .stem { background: var(--red-line); } .farrow.red .head { border-top-color: var(--red); }
+  .farrow.green .stem { background: #bfe3d2; } .farrow.green .head { border-top-color: var(--green); }
+  .farrow .lbl { font-size: 11.5px; color: var(--ink-soft); margin: 1px 0 2px; background: var(--bg); padding: 0 8px; }
+  .fbadges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .badge { font-size: 11px; font-family: var(--mono); border-radius: 4px; padding: 1px 8px; white-space: nowrap; }
+  .badge.r { background: var(--red); color: #fff; }
+  .badge.a { background: var(--amber-soft); color: var(--amber); border: 1px solid #ecd9a0; }
+  .badge.g { background: var(--green-soft); color: var(--green); border: 1px solid #bfe3d2; }
+  .badge.b { background: var(--blue-soft); color: var(--blue); border: 1px solid #c5d9fb; }
+
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+  @media (max-width: 900px) { .twocol { grid-template-columns: 1fr; } }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 14px 20px; }
+  .panel > .pt { font-weight: 650; text-align: center; margin-bottom: 14px; font-size: 14.5px; }
+  .panel.now { border-top: 4px solid var(--red); }
+  .panel.goal { border-top: 4px solid var(--green); }
+
+  /* ---------- 泳道线框 ---------- */
+  .lanes { border: 1px dashed #b9c6d2; border-radius: 10px; background: #fbfcfd; padding: 14px; }
+  .lane { display: grid; grid-template-columns: 118px 1fr; gap: 10px; align-items: stretch; margin-bottom: 10px; }
+  .lane:last-child { margin-bottom: 0; }
+  .lane .lh { display: flex; align-items: center; justify-content: center; font-size: 12.5px; font-weight: 650; border-radius: 6px; padding: 6px; text-align: center; }
+  .lane.main .lh { background: #223140; color: #fff; }
+  .lane.worker .lh { background: var(--blue-soft); color: var(--blue); border: 1px dashed var(--blue); }
+  .lane .lb { border: 1px solid var(--line); border-radius: 6px; background: #fff; padding: 8px 10px; font-size: 12.5px; color: var(--ink-soft); }
+  .lane .lb b { color: var(--ink); font-size: 13px; }
+
+  svg text { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+
+  /* ---------- 路线图 ---------- */
+  .phase { display: grid; grid-template-columns: 92px 1fr; gap: 0; }
+  .phase .ph-tag { text-align: center; font-family: var(--mono); font-weight: 700; font-size: 15px; padding: 10px 6px; border-radius: 8px 0 0 8px; color: #fff; }
+  .phase.p0 .ph-tag { background: var(--red); }
+  .phase.p1 .ph-tag { background: var(--amber); }
+  .phase.p2 .ph-tag { background: var(--blue); }
+  .phase.p2x .ph-tag { background: #4f46e5; }
+  .phase.p3 .ph-tag { background: #55636f; }
+  .phase .ph-body { background: var(--card); border: 1px solid var(--line); border-left: none; border-radius: 0 8px 8px 0; padding: 12px 18px; margin-bottom: 12px; }
+  .phase .ph-body h4 { font-size: 15px; margin-bottom: 6px; }
+  .phase .ph-body .aim { font-size: 12.5px; color: var(--ink-soft); margin-bottom: 8px; }
+  .kv { display: grid; grid-template-columns: 74px 1fr; gap: 4px 10px; font-size: 13px; }
+  .kv .k { color: var(--ink-soft); font-weight: 600; white-space: nowrap; }
+
+  footer { color: #8b98a5; font-size: 12.5px; text-align: center; margin-top: 30px; }
+  .fixmark { font-size: 11px; font-family: var(--mono); color: var(--blue); background: var(--blue-soft); border-radius: 3px; padding: 0 5px; margin-left: 4px; white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <h1>会话读路径热路径性能改进计划 <span style="font-size:15px;color:#7e93a8">v4</span></h1>
+    <div class="sub">把「canonical 迁移验证」从每次指令执行的同步读路径上移出去：读时验证 → 写后异步重验 + 内容指纹负缓存 + 增量投影 · v4 补 P0-⑥ 并发/过渡态设计（N1/N2）与 M1/M2 澄清</div>
+    <div class="meta">
+      <span>2026-10-11 · v4（首轮 B1–B4/E1–E5 已通过复审；v2 复审有条件通过，本版补 N1/N2 设计 + M1/M2）</span>
+      <span>基于运行实例诊断（v0.2.5 打包版 / workDir = 本仓库）</span>
+      <span>状态：P0-①②③④⑤⑦/P1/P2a/P3 已放行实施 · P0-⑥ 设计补齐待实施评审</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<nav class="toc">
+  <b>目录</b>
+  <a href="#tldr">TL;DR</a>
+  <a href="#evidence">一 · 问题现场</a>
+  <a href="#current">二 · 现状链路</a>
+  <a href="#root">三 · 根因分层</a>
+  <a href="#target">四 · 目标架构</a>
+  <a href="#roadmap">五 · 改进路线图</a>
+  <a href="#acceptance">六 · 验收指标</a>
+  <a href="#risk">七 · 风险与回滚</a>
+  <a href="#changelog">八 · 修订记录</a>
+</nav>
+
+<!-- ==================== TL;DR ==================== -->
+<section id="tldr">
+  <h2><span class="no">§0</span>TL;DR</h2>
+  <div class="card hl-red">
+    <p><b>现象</b>：每次输入指令，主进程冻结 15–34 秒，应用几乎失去响应。</p>
+    <p><b>直接原因</b>：会话存储正处于「legacy messages 表 → canonical 事件流」的迁移期。读路径采用<b>读时验证</b>的信任模型——每次读取都同步执行「canonical 全量重建 + 与 legacy 双向字节级对比」（L2 兜底分支一遍；其中每条流的 payload 实际被解析两遍），对比失败回退 legacy 但<b>没有失败负缓存</b>，下一次输入原样重付全款。活跃会话的事件流已累积约 150MB（事件内嵌完整请求快照，O(n²) 膨胀），单次重建+对比即 15–34 秒，全部跑在主进程事件循环上。</p>
+    <p><b>判断</b>：迁移验证本质是<b>一次性的离线工作</b>，把它放在每次指令执行的热路径上不是合理权衡，是设计失误。摊销假设（L1 缓存命中后近零成本）被击穿：未割接会话的消息写入触发器持续删除 eligibility（L1 快路径门禁）、mismatch 无负缓存、活跃流的状态承载事件触发全量回读。</p>
+  </div>
+  <div class="card hl-green">
+    <p><b>改进方向</b>（详见 §4/§5）：验证出栈——读路径只消费持久化结论（<b>内容指纹 + 退避键控的负缓存</b> 与 eligibility），一致性改由<b>写路径增量维护</b> + <b>后台异步重验</b>保证；事件负载停止内嵌全量快照。P0 即包含重验异步化（v2 前置，评审 B1）：负缓存命中期间读路径立即走 legacy，全量重验在后台预算化分片执行——<b>读路径永不阻塞等待对比</b>。P2 拆为 P2a（requestSnapshot 瘦身，唯一消费方比较前即剥离 messages，小改动拿大头）与 P2b（context 基线增量链，大改造单独评估）。</p>
+  </div>
+</section>
+
+<!-- ==================== 一、问题现场 ==================== -->
+<section id="evidence">
+  <h2><span class="no">§1</span>问题现场（2026-10-11 实测）</h2>
+  <div class="grid c4">
+    <div class="stat"><div class="v red">33.9s</div><div class="k">单次 transcript 读取最长耗时</div><div class="d">session.transcript.read · 当日 33 次合计 295.6s</div></div>
+    <div class="stat"><div class="v red">723MB</div><div class="k">spaceassistant-data.db 总大小</div><div class="d">freelist 仅 3 页，全部为有效数据</div></div>
+    <div class="stat"><div class="v red">430MB</div><div class="k">agent_history_events 事件流</div><div class="d">2,581 事件 · 平均 170KB/条</div></div>
+    <div class="stat"><div class="v amber">744KB</div><div class="k">单个 requestSnapshot 事件 payload</div><div class="d">随对话线性增长（同会话内 25KB → 744KB）</div></div>
+    <div class="stat"><div class="v amber">123.7s</div><div class="k">启动历史恢复单次耗时</div><div class="d">session.history.recovery · 2 次合计 152s</div></div>
+    <div class="stat"><div class="v amber">151</div><div class="k">投影修复队列 pending 积压</div><div class="d">含 workspace-root-rejected 等不可自愈项 · 当日 repair.failed 62 次</div></div>
+    <div class="stat"><div class="v">733s / 2h</div><div class="k">主进程累计 CPU（渲染 32s · GPU 1.8s）</div><div class="d">瓶颈明确在主进程；空闲期 CPU ≈ 0，属按需触发</div></div>
+    <div class="stat"><div class="v">0.27MB</div><div class="k">活跃会话 legacy 实际数据量</div><div class="d">18 条消息 · 最终返回的就是它，前面的重建全部白算</div></div>
+  </div>
+  <p class="note">证据来源：进程采样（PID 34232 及子进程）、<code>Agent-20261011.log</code> 耗时统计、只读 SQL 探查（dbstat / 分组聚合）。日志工作目录即本仓库 <code>.agent/logs/</code>。根因断言已经 2026-10-11 评审逐条对照代码核实（R1–R6 成立，其中同轮重复读与 payload 双重解析比初稿所述更强）。</p>
+</section>
+
+<!-- ==================== 二、现状链路 ==================== -->
+<section id="current">
+  <h2><span class="no">§2</span>现状：一次「输入指令」在主进程里发生了什么</h2>
+
+  <div class="card hl-red" style="margin-bottom:20px">
+    <b>v3 新增：启动与首屏链路（用户可感知的第二条冻结入口）</b>
+    <p style="margin-top:6px">应用启动存在三层叠加，今天实测时间线：进程 09:08:11 启动 → <b>09:10:17 才完成 canonical-history.recovery（123.7s，串行 await，期间 31 次 repair.failed）</b> → 09:10:19 窗口子进程出现 → <b>09:10:35 首屏加载最近会话触发 12.1s transcript.read</b>（会话 c151853c）。</p>
+    <ul class="tight">
+      <li><b>窗口创建前的串行恢复</b>：<code>createMainWindow()</code>（main.ts:1440）之前串行 await canonical-history.classification / recovery（123.7s）→ orphan 清理 → session-ledger reconcile → spill GC → session-storage.recovery（main.ts:653-1038；其中会话备份 / chatAttachment orphan 清理 :977/:980 为 fire-and-forget，不阻塞）。应用启动到主界面可用 ≈ 2 分钟。</li>
+      <li><b>首屏自动加载最近会话（真正的 IPC 冻结）</b>：渲染挂载即 <code>setSession(list[0].id)</code>（App.tsx:212-219，无持久化的「上次会话」，固定取列表第一个=最近）→ ChatView 挂载 <code>chatGetMessagePage</code>（ChatView.tsx:246/460）→ <code>getProjectedMessagesPageWithSequence</code>：会话含 canonical-backed 行且<b>缓存阶梯未命中</b>时触发 <code>readSessionTranscriptProjection</code> 全量投影（15-34s；稳态成本取决于 L1/L2 命中率），<b>同步跑在 IPC handler 里 → 主进程对一切 IPC 无响应</b>。纯 legacy 会话经内联守卫快速跳过（:320），但随迁移割接推进，踩中概率单调上升。另注意：中断态会话投影会 throw <code>CANONICAL_SESSION_CONTENT_UNAVAILABLE</code> 而非降级（:318/322/329），首屏恰最可能选中中断会话——冻结与报错是同一链路的两种表现。</li>
+      <li><b>周期重放</b>：turnDisplayReconciliation 每 5s reconcile（App.tsx:242，known 全局、不随会话切换重置）；会话切换（ChatView :254 effect 依赖 [sessionId]）重演的是分页投影链，两者分开计。</li>
+    </ul>
+  </div>
+
+  <div class="card" style="margin-bottom:20px">
+    <svg viewBox="0 0 960 168" width="100%" role="img" aria-label="启动时序线框">
+      <defs><marker id="ah2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#8b98a5"/></marker></defs>
+      <line x1="60" y1="130" x2="930" y2="130" stroke="#8b98a5" stroke-width="1.5" marker-end="url(#ah2)"/>
+      <text x="60" y="150" font-size="11" fill="#8b98a5">09:08:11 进程启动</text><text x="330" y="150" font-size="11" fill="#8b98a5">09:10:17</text><text x="560" y="150" font-size="11" fill="#8b98a5">09:10:19 窗口</text><text x="800" y="150" font-size="11" fill="#8b98a5">09:10:35</text>
+      <text x="14" y="40" font-size="12" font-weight="700" fill="#223140">主进程</text>
+      <rect x="60" y="24" width="270" height="26" rx="4" fill="#d64541"/>
+      <text x="195" y="42" font-size="11.5" fill="#fff" text-anchor="middle">串行 await：classification + recovery 123.7s + …</text>
+      <rect x="330" y="24" width="120" height="26" rx="4" fill="#eef2f6" stroke="#dde4ea"/>
+      <text x="390" y="42" font-size="11" fill="#55636f" text-anchor="middle">ledger/spill/GC…</text>
+      <rect x="450" y="24" width="110" height="26" rx="4" fill="#223140"/>
+      <text x="505" y="42" font-size="11" fill="#fff" text-anchor="middle">createWindow</text>
+      <rect x="560" y="24" width="240" height="26" rx="4" fill="#d64541"/>
+      <text x="680" y="42" font-size="11.5" fill="#fff" text-anchor="middle">首屏 chatGetMessagePage → 全量投影 12s</text>
+      <rect x="800" y="24" width="130" height="26" rx="4" fill="#edf8f2" stroke="#1d8a5a"/>
+      <text x="865" y="42" font-size="11" fill="#1d8a5a" text-anchor="middle">消息列表就绪</text>
+      <g><rect x="600" y="86" width="14" height="18" rx="2" fill="#b8860b"/><rect x="650" y="86" width="14" height="18" rx="2" fill="#b8860b"/><rect x="700" y="86" width="14" height="18" rx="2" fill="#b8860b"/>
+      <text x="730" y="100" font-size="11.5" fill="#b8860b">← 首屏 12s 内一切 IPC 排队（UI 已显示但无响应）</text></g>
+      <text x="60" y="80" font-size="12" font-weight="700" fill="#b8860b">用户视角</text>
+      <text x="60" y="100" font-size="11" fill="#8b98a5">启动横幅「正在整理历史会话数据…」</text>
+    </svg>
+    <p class="note">启动时序线框：前 2 分钟无窗口（恢复串行）；窗口出现后首屏加载又冻结 ~12s。两层都源自同一套「读时全量验证 + 修复积压」机制，加上启动编排把重恢复放在了窗口创建之前。</p>
+  </div>
+
+  <div class="panel now">
+    <div class="pt">现状读路径（同步 · 全部在主进程事件循环上）<span class="fixmark">E1/E2/E4 修正</span></div>
+    <div class="flow">
+      <div class="fnode actor"><div class="t">用户输入指令</div><div class="s">渲染进程 → IPC invoke</div></div>
+      <div class="farrow"><div class="stem"></div><div class="head"></div></div>
+      <div class="fnode"><div class="t">Codex-chat-send-stream 处理链启动</div><div class="s">读 transcript → 组装请求 → 工具循环</div><span class="loc">electron/claudeStreamHandlers.ts · toolChatLoop.ts</span></div>
+      <div class="farrow red"><div class="lbl">L1 探测（不带 legacy 参数）</div><div class="stem"></div><div class="head"></div></div>
+      <div class="fnode warm"><div class="t">L1 快路径不可用（几乎必然）</div>
+        <div class="s">缓存行缺失 / watermark / cursor 校验失败时<b>直接返回 unavailable，不做全量重建</b>；另一浪费：L1 尾部增量重放成功的结果因 eligibility 缺失被门控丢弃（<code>:74</code>），白做了尾部 fold</div>
+        <span class="loc">sessionTranscriptProjection.ts:66 → sqliteAgentHistory.ts:1004（v2 修正：并非两遍全量重建）</span>
+        <div class="fbadges"><span class="badge a">未割接会话命中窗口 ≈ 0（消息触发器删 eligibility 行 = 快路径门禁，schema.ts:964-975；write_mode=canonical 的会话不受影响）</span></div>
+      </div>
+      <div class="farrow red"><div class="lbl">L2 兜底（本次读唯一一遍全量）</div><div class="stem"></div><div class="head"></div></div>
+      <div class="fnode hot"><div class="t">canonical 全量重建 + 双向字节级对比</div>
+        <div class="s">全量 SELECT 会话事件（活跃会话 ~150MB）→ <b>每条流先 parse 一遍</b>（行序校验 <code>:669-681</code>）→ <b>fromRow 再 parse 一遍</b>（payload 实际解析 ×2）→ spill 同步回填 → 转换校验重放 → fold 重建 → stable() 深排序 + 双份 JSON.stringify 与 legacy 比对 → MISMATCH（repair 积压 151 条，canonical 侧长期对不齐）</div>
+        <span class="loc">sqliteAgentHistory.ts:525 readCanonicalSessionTranscript · :595-597 对比 · :1220 readSync</span>
+        <div class="fbadges"><span class="badge r">O(会话全量) · 不可扩展</span><span class="badge r">同步阻塞</span><span class="badge a">永远 matched 不了</span><span class="badge a">无失败负缓存</span></div>
+      </div>
+      <div class="farrow red"><div class="lbl">返回 legacy（无负缓存 → 下次读重付全款）</div><div class="stem"></div><div class="head"></div></div>
+      <div class="fnode hot"><div class="t">toolChatLoop 再读 3 次 + cutover 反向遍历</div>
+        <div class="s">同一轮请求内 readSync ×3（三读全部发生在首次模型请求前，两两之间无任何写入）；cutover 反向逐流全量 read，unavailable 分支把刚读过的流再读一遍</div>
+        <span class="loc">toolChatLoop.ts:619/1026/1065 · hostedTurnHandoff.ts:205/218/226</span>
+      </div>
+      <div class="farrow red"><div class="stem"></div><div class="head"></div></div>
+      <div class="fnode hot"><div class="t">shadow 对比：两个消费方各自独立全量 fold</div>
+        <div class="s">turn-routing / api-context 各做一遍 canonical fold + 哈希对拍</div>
+        <span class="loc">sessionStorageShadow.ts:62-116</span>
+      </div>
+      <div class="farrow red"><div class="stem"></div><div class="head"></div></div>
+      <div class="fnode actor" style="width:min(460px,100%)"><div class="t">主进程冻结 15–34s</div><div class="s">全部 IPC / 窗口消息排队 · 用户感知「失去响应」</div></div>
+    </div>
+  </div>
+
+  <h3>事件循环时间线（线框示意）</h3>
+  <div class="card">
+    <svg viewBox="0 0 960 190" width="100%" role="img" aria-label="现状事件循环时间线">
+      <defs>
+        <marker id="ah" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#8b98a5"/></marker>
+      </defs>
+      <line x1="70" y1="150" x2="930" y2="150" stroke="#8b98a5" stroke-width="1.5" marker-end="url(#ah)"/>
+      <text x="70" y="170" font-size="11" fill="#8b98a5">t₀ 输入指令</text>
+      <text x="470" y="170" font-size="11" fill="#8b98a5">~30s 后</text>
+      <text x="860" y="170" font-size="11" fill="#8b98a5">t₀+34s</text>
+      <text x="10" y="42" font-size="12" font-weight="700" fill="#223140">主进程</text>
+      <text x="10" y="58" font-size="10" fill="#8b98a5">事件循环</text>
+      <rect x="70" y="26" width="26" height="26" rx="4" fill="#2563eb" opacity=".75"/>
+      <rect x="96" y="26" width="560" height="26" rx="4" fill="#d64541"/>
+      <text x="376" y="44" font-size="12" fill="#fff" text-anchor="middle">同步：全量重建+对比（payload 解析×2）+ 重读×3 + shadow 双 fold（15–34s 冻结）</text>
+      <rect x="656" y="26" width="90" height="26" rx="4" fill="#edf8f2" stroke="#1d8a5a"/>
+      <text x="701" y="44" font-size="11" fill="#1d8a5a" text-anchor="middle">返回 legacy</text>
+      <rect x="746" y="26" width="180" height="26" rx="4" fill="#eef2f6" stroke="#dde4ea"/>
+      <text x="836" y="44" font-size="11" fill="#55636f" text-anchor="middle">LLM 网络等待（不冻结）</text>
+      <g>
+        <rect x="120" y="86" width="14" height="18" rx="2" fill="#b8860b"/><rect x="190" y="86" width="14" height="18" rx="2" fill="#b8860b"/>
+        <rect x="260" y="86" width="14" height="18" rx="2" fill="#b8860b"/><rect x="330" y="86" width="14" height="18" rx="2" fill="#b8860b"/>
+        <rect x="400" y="86" width="14" height="18" rx="2" fill="#b8860b"/><rect x="470" y="86" width="14" height="18" rx="2" fill="#b8860b"/>
+        <text x="500" y="100" font-size="11.5" fill="#b8860b">← 排队的 IPC / 定时器 / 窗口消息（全部冻结）</text>
+      </g>
+      <text x="70" y="80" font-size="12" font-weight="700" fill="#b8860b">渲染/系统请求</text>
+      <text x="96" y="132" font-size="11" fill="#d64541">▲ 今日累计 733s CPU ≈ 大 payload 双重解析 + 重放的纯计算</text>
+    </svg>
+  </div>
+
+  <h3>事件存储为何越大越慢：O(n²) 快照膨胀 <span class="fixmark">E3 修正</span></h3>
+  <div class="card">
+    <svg viewBox="0 0 960 150" width="100%" role="img" aria-label="事件负载增长示意">
+      <line x1="60" y1="110" x2="930" y2="110" stroke="#8b98a5" stroke-width="1.5" marker-end="url(#ah)"/>
+      <text x="60" y="130" font-size="11" fill="#8b98a5">对话轮次 →</text>
+      <text x="14" y="70" font-size="11" fill="#8b98a5" transform="rotate(-90 20,70)">单事件 payload</text>
+      <g fill="#d64541" opacity=".85">
+        <rect x="80"  y="102" width="22" height="8"/>
+        <rect x="140" y="99"  width="22" height="11"/>
+        <rect x="200" y="94"  width="22" height="16"/>
+        <rect x="260" y="86"  width="22" height="24"/>
+        <rect x="320" y="76"  width="22" height="34"/>
+        <rect x="380" y="62"  width="22" height="48"/>
+        <rect x="440" y="46"  width="22" height="64"/>
+        <rect x="500" y="28"  width="22" height="82"/>
+        <rect x="560" y="14"  width="22" height="96"/>
+      </g>
+      <text x="571" y="10" font-size="11.5" fill="#d64541">744KB（实测当前会话）</text>
+      <g fill="#1d8a5a" opacity=".85">
+        <rect x="640" y="102" width="22" height="8"/><rect x="700" y="102" width="22" height="8"/>
+        <rect x="760" y="102" width="22" height="9"/><rect x="820" y="102" width="22" height="9"/>
+        <rect x="880" y="102" width="22" height="10"/>
+      </g>
+      <text x="750" y="86" font-size="11.5" fill="#1d8a5a">目标：增量事件 O(1)/轮</text>
+      <text x="80" y="145" font-size="11" fill="#8b98a5">每轮 model-request-started / model-response-committed 内嵌截至当轮的完整 requestSnapshot</text>
+    </svg>
+    <p class="note">每轮把「完整历史」再存一遍 → 事件流总字节 O(n²)。这是重建成本的单价放大器。范围澄清：spill 机制实际已覆盖 model-response 正文、context/compacted messages（含 image data）、completed outputText 与 tool result（<code>sqliteAgentHistory.ts:1286-1383</code>）；<b>requestSnapshot 是所有事件字段中唯一完全不走 spill 的大负载</b>——P2a 的瘦身目标是「扩一类字段」，不是从零建机制。</p>
+  </div>
+</section>
+
+<!-- ==================== 三、根因分层 ==================== -->
+<section id="root">
+  <h2><span class="no">§3</span>根因分层 <span class="fixmark">按评审 E1–E5 修正表述</span></h2>
+  <table>
+    <tr><th style="width:46px">#</th><th style="width:190px">根因</th><th>机制</th><th style="width:270px">代码位置</th></tr>
+    <tr>
+      <td class="num">R1</td><td><b>读时验证的信任模型错位</b><br><span style="color:var(--ink-soft);font-size:12px">架构层 · 最根本</span></td>
+      <td>L1 投影缓存与 eligibility 被定性为不可信派生数据，「读出正确正文」靠每次读时与事件流对账自证。一致性本应由写路径维护（写时失效/增量更新），读路径只查结论。读时验证给出「无漂移窗口」的最强保证，代价是 O(会话全量) 且随写入持续过期——活跃会话每次读都需重新验证，结构上不可摊销。</td>
+      <td><code>sessionTranscriptProjection.ts:63</code><br><code>sqliteAgentHistory.ts:886</code></td>
+    </tr>
+    <tr>
+      <td class="num">R2</td><td><b>验证失败无负缓存</b><br><span style="color:var(--ink-soft);font-size:12px">缺陷 · P0 修复点</span></td>
+      <td>字节级对比 mismatch 后不持久化任何结论（eligibility 表三列无失败状态，写入点全部在验证成功分支）。对不齐的会话永远停留在「迁移期验证」状态，每次读取全额重付 L2 全量重建+对比。次要浪费：L1 尾部增量重放的结果被 eligibility 门控丢弃（<code>:74</code>）。<span class="fixmark">E1：单次读只有一遍全量重建（L2），v1 所述「两遍」不属实</span></td>
+      <td><code>sqliteAgentHistory.ts:595-597</code><br><code>sessionTranscriptProjection.ts:103-119</code></td>
+    </tr>
+    <tr>
+      <td class="num">R3</td><td><b>状态承载事件触发活跃流全量回读</b><br><span style="color:var(--ink-soft);font-size:12px">缺陷 · 摊销杀手</span></td>
+      <td>带缓存的增量读取（只拉 watermark 之后的 tail）本可摊销成本，但 tail 中出现 model-response-committed 等状态承载事件时，为防缓存 seed 掩盖 watermark 前的 pending 状态，会 readSync <b>当前活跃 invocation 整条流</b>做全量工具转换校验（旧 invocation 不重读；但活跃流自身随轮次线性增长）。活跃会话每轮必产生该事件 → 增量名存实亡。</td>
+      <td><code>sqliteAgentHistory.ts:943</code><span class="fixmark">E2：位置与范围收紧</span></td>
+    </tr>
+    <tr>
+      <td class="num">R4</td><td><b>事件负载 O(n²) 膨胀</b><br><span style="color:var(--ink-soft);font-size:12px">数据层 · 单价放大器</span></td>
+      <td>model-request-started / model-response-committed 每轮 structuredClone 完整 request.messages 写入 requestSnapshot（25KB → 744KB），430MB 事件流由此而来。spill 已覆盖其余大文本字段，唯 requestSnapshot 不走 spill。<b>同源遗漏：session_transcript_entries.messages_json 每轮终态存完整 transcript JSON</b>，同属 O(n²)。</td>
+      <td><code>packages/agent-sdk/src/turn.ts:940-950/1103-1113/1330-1346</code><br><code>electron/database/sessionTranscript.ts:70</code></td>
+    </tr>
+    <tr>
+      <td class="num">R5</td><td><b>同轮请求内重复读</b><br><span style="color:var(--ink-soft);font-size:12px">缺陷 · 纯浪费</span></td>
+      <td>toolChatLoop 三处 history.read 两两之间无任何写入（均发生在首次模型请求前）；cutover 的 unavailable 分支重读刚读过的流；shadow 两个消费方各自独立全量 fold。同一份 150MB 数据在一次输入内被解析多次，叠加每条流 payload 的双重解析。</td>
+      <td><code>toolChatLoop.ts:619/1026/1065</code><br><code>hostedTurnHandoff.ts:218</code> · <code>sessionStorageShadow.ts:62-116</code></td>
+    </tr>
+    <tr>
+      <td class="num">R6</td><td><b>同步执行 + 修复队列死循环</b><br><span style="color:var(--ink-soft);font-size:12px">执行层 · 体验放大器</span></td>
+      <td>read() 是 readSync() 直通，全程 DatabaseSync 同步 API，30s 计算即 30s 全应用冻结。151 条 pending repair 含 workspace-root-rejected 等确定性不可自愈分类，无终态转换；单流 pending &lt;10 条时零退避、每次启动立即重试，每次重试为全量 read+fold。读延迟观察门禁协议（阈值/样本数/窗口）从未批准执行——但观察工具链代码已落地且有测试，未落地的是协议本身。</td>
+      <td><code>sqliteAgentHistory.ts:1215-1217</code> · 恢复编排 <code>main.ts:642-821</code><br>工具链 <code>sessionProjectionObservation.ts</code> + <code>scripts/session-projection-observation-report.ts</code><span class="fixmark">E5</span></td>
+    </tr>
+    <tr>
+      <td class="num">R7</td><td><b>启动编排阻塞 + 首屏自动加载触发投影</b><br><span style="color:var(--ink-soft);font-size:12px">入口层 · v3 新增</span></td>
+      <td>① <b>启动串行恢复挡在窗口创建前</b>：createMainWindow（main.ts:1440）之前串行 await canonical-history recovery（实测 123.7s）与 ledger/spill/GC 序列（:653-1038，少量 fire-and-forget 清理除外），启动到可用 ≈ 2min。② <b>首屏自动加载最近会话</b>：App.tsx:212-219 自动选中 list[0] → ChatView 挂载 chatGetMessagePage（:246/460）→ 分页投影：会话含 canonical-backed 行且<b>缓存阶梯未命中</b>时触发全量投影（稳态取决于命中率），同步跑在 IPC handler → <b>窗口已显示但对一切 IPC 无响应</b>（实测首屏 12.1s）；纯 legacy 会话经内联守卫（:320）跳过，但随割接推进踩中率单调上升；中断态会话则 throw CANONICAL_SESSION_CONTENT_UNAVAILABLE（:318/322/329）——冻结与报错同源。③ turnDisplayReconciliation 每 5s 重放（known 全局不随切换重置）；会话切换走分页投影链（:254）。根因与 R1/R2 同源（readSessionTranscriptProjection 是全部入口的汇聚点），启动编排是独立新增的修复面。</td>
+      <td><code>main.ts:653-1038 / :1440</code> · <code>App.tsx:217</code><br><code>ChatView.tsx:246/460</code> · <code>sessionTranscriptProjection.ts:301-330</code></td>
+    </tr>
+  </table>
+</section>
+
+<!-- ==================== 四、目标架构 ==================== -->
+<section id="target">
+  <h2><span class="no">§4</span>目标架构：验证出栈，读路径只消费结论</h2>
+
+  <div class="twocol">
+    <div class="panel goal">
+      <div class="pt">目标读路径（命中路径 · 主进程只剩短脉冲）</div>
+      <div class="flow">
+        <div class="fnode actor"><div class="t">用户输入指令</div><div class="s">渲染进程 → IPC invoke</div></div>
+        <div class="farrow green"><div class="stem"></div><div class="head"></div></div>
+        <div class="fnode"><div class="t">读 transcript = 查结论，不重放</div>
+          <div class="s">① watermark 匹配的增量投影缓存 → 直接返回；② 查 <b>读适配表</b>（eligibility ∪ <b>rejection 负缓存</b>），按内容指纹 + 退避窗口命中即按结论路由</div>
+          <span class="loc">sessionTranscriptProjection（改造）</span>
+          <div class="fbadges"><span class="badge g">目标 &lt; 50ms</span></div>
+        </div>
+        <div class="farrow green"><div class="lbl">结论 = verified</div><div class="stem"></div><div class="head"></div></div>
+        <div class="fnode ok"><div class="t">返回 canonical 投影（缓存/增量拼装）</div><div class="s">fail-closed 语义保留：结论不可用 → 快速降级 legacy，<b>读路径永不等待全量对比</b></div></div>
+        <div class="farrow green"><div class="lbl">结论 = mismatch（含永久分叉）</div><div class="stem"></div><div class="head"></div></div>
+        <div class="fnode ok"><div class="t">快速降级 legacy + 登记后台重验</div><div class="s">一次 getMessages（0.27MB 级）直接返回；同轮请求内 memoize（写入即失效），后续读 / cutover / shadow 复用同一快照</div>
+          <div class="fbadges"><span class="badge g">目标 &lt; 200ms</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="border-top:4px solid var(--blue)">
+      <div class="pt">目标保障链（新增 · 全部异步/离线）<span class="fixmark">B1/B2 重设计</span></div>
+      <div class="lanes">
+        <div class="lane main">
+          <div class="lh">主进程<br>写路径</div>
+          <div class="lb"><b>写时维护一致性（R1 的替代信任模型）</b><br>
+            事件 append 同事务内：推进 watermark 与 commit_order（<b>已是现状</b>，agentHistoryStorage.ts:85-98）、<b>增量维护投影缓存（P1 全新机制）</b>、登记「待重验」标记；legacy 消息写入继续双写。</div>
+        </div>
+        <div class="lane worker">
+          <div class="lh">后台重验<br>（P0 即具备）</div>
+          <div class="lb"><b>预算化分片重验（替代读时对比）</b><br>
+            负缓存命中期间与轮次终态后，低优先级队列对全量重建+对比做<b>分片让步执行（单片 ≤50ms，事件循环让步）</b>，结论写回读适配表；永久分叉类经 N 次重验后转长期 TTL。<br>
+            <b>读路径永不阻塞等待对比——这是 P0 达成 &lt;2s 的必要条件。</b></div>
+        </div>
+        <div class="lane worker">
+          <div class="lh">后台治理<br>（worker_threads · P3）</div>
+          <div class="lb"><b>repair 终态化 + 事件瘦身迁移</b><br>
+            workspace-root-rejected 等不可自愈项标记 terminal-failed，退出零退避重试；新事件格式（P2a requestSnapshot 瘦身 → P2b 增量链）版本化写入。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>目标事件循环时间线（线框示意）</h3>
+  <div class="card">
+    <svg viewBox="0 0 960 200" width="100%" role="img" aria-label="目标事件循环时间线">
+      <!-- 主进程行 -->
+      <text x="10" y="42" font-size="12" font-weight="700" fill="#223140">主进程</text>
+      <text x="10" y="58" font-size="10" fill="#8b98a5">事件循环</text>
+      <rect x="70" y="26" width="26" height="26" rx="4" fill="#2563eb" opacity=".75"/>
+      <rect x="96" y="26" width="46" height="26" rx="4" fill="#edf8f2" stroke="#1d8a5a"/>
+      <text x="119" y="44" font-size="10.5" fill="#1d8a5a" text-anchor="middle">查结论</text>
+      <rect x="142" y="26" width="66" height="26" rx="4" fill="#edf8f2" stroke="#1d8a5a"/>
+      <text x="175" y="44" font-size="10.5" fill="#1d8a5a" text-anchor="middle">legacy 返回</text>
+      <rect x="208" y="26" width="200" height="26" rx="4" fill="#eef2f6" stroke="#dde4ea"/>
+      <text x="308" y="44" font-size="11" fill="#55636f" text-anchor="middle">LLM 网络等待</text>
+      <rect x="408" y="26" width="80" height="26" rx="4" fill="#eaf1fe" stroke="#2563eb"/>
+      <text x="448" y="44" font-size="10.5" fill="#2563eb" text-anchor="middle">流式 delta…</text>
+      <text x="70" y="76" font-size="11" fill="#1d8a5a">▲ 单次阻塞预算 &lt; 200ms，IPC 不排队</text>
+      <!-- 后台重验行 -->
+      <text x="10" y="122" font-size="12" font-weight="700" fill="#2563eb">后台重验</text>
+      <text x="10" y="138" font-size="10" fill="#8b98a5">分片让步</text>
+      <g>
+        <rect x="240" y="106" width="30" height="26" rx="3" fill="#eaf1fe" stroke="#2563eb"/>
+        <rect x="286" y="106" width="30" height="26" rx="3" fill="#eaf1fe" stroke="#2563eb"/>
+        <rect x="332" y="106" width="30" height="26" rx="3" fill="#eaf1fe" stroke="#2563eb"/>
+        <rect x="378" y="106" width="30" height="26" rx="3" fill="#eaf1fe" stroke="#2563eb"/>
+        <rect x="424" y="106" width="30" height="26" rx="3" fill="#eaf1fe" stroke="#2563eb"/>
+        <rect x="470" y="106" width="30" height="26" rx="3" fill="#eaf1fe" stroke="#2563eb"/>
+        <text x="530" y="124" font-size="11" fill="#2563eb">全量重建+对比分片执行（30s 工作量摊到后台，互不阻塞 UI）</text>
+      </g>
+      <!-- 结论回流 -->
+      <path d="M 400 132 C 400 165, 150 165, 150 56" fill="none" stroke="#2563eb" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#ah)"/>
+      <text x="240" y="182" font-size="11" fill="#2563eb">结论（verified / mismatch + 指纹 + 退避）写回读适配表 → 下次读直接消费</text>
+    </svg>
+  </div>
+
+  <h3>等价性论证：去掉「读时验证」为什么不破坏 fail-closed <span class="fixmark">B1 张力正面回应</span></h3>
+  <div class="card hl-blue">
+    <ul class="tight">
+      <li><b>不变量保持</b>：读出的正文仍只有两种来源——已验证的 canonical 投影，或 legacy 本体。任何时刻都不返回「未验证的 canonical 正文」，fail-closed 语义不变。</li>
+      <li><b>负缓存键控（v2 重设计）</b>：mismatch 结论不与 watermark 等值绑定——那会在活跃会话上每轮失效（每轮 append 多个事件必推进 cursor，B1）。改为：<b>内容指纹</b>（canonical 事件区间聚合哈希 + legacy 消息摘要）标识「同样的输入」，<b>退避窗口</b>（mismatch 后 N 轮 / 指纹未变期间）内直接走 legacy。指纹变化 ≠ 立即同步重验，而是「立即走 legacy + 登记后台重验」——安全侧（不放过新分叉的验证机会）与性能侧（读路径不阻塞）同时成立，代价是把重验延迟到后台窗口，与现状「mismatch 回退 legacy」的实际行为等价。</li>
+      <li><b>永久分叉的诚实处理</b>：重验 N 次仍 mismatch 且无对应 repair 义务的会话标记 permanent，转长期 TTL；不假装它会被修复。清除路径不依赖 recordProjectionRepairResult 钩子（mismatch 与 repair 队列现状无接线，B2）。</li>
+      <li><b>迁移目标不受损</b>：eligibility 判定从「读时碰运气」改为「后台确定性推进」，割接（cutover）收敛速度反而可度量、可门禁。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ==================== 五、改进路线图 ==================== -->
+<section id="roadmap">
+  <h2><span class="no">§5</span>改进路线图（P0 → P3）<span class="fixmark">B1/B2/B3/B4 重构</span></h2>
+
+  <div class="phase p0">
+    <div class="ph-tag">P0</div>
+    <div class="ph-body">
+      <h4>止血：指纹+退避负缓存 · 重验异步化 · 去重复读</h4>
+      <div class="aim">目标：读路径永不阻塞等待全量对比——mismatch 活跃会话读路径 &lt; 2s（v2 前置重验异步化，B1）；其他会话 &lt; 2s。①–⑤⑦改动小、无 schema 破坏、可独立发布；⑥ 涉及启动编排与多入口并发，需先过实施评审（v2 复审放行范围）。</div>
+      <div class="kv">
+        <div class="k">改动点</div>
+        <div>
+          ① <b>独立 rejection 表</b>（B2.3 决断：不与 eligibility 同表，避免接入 5 类既有触发器的整行 DELETE 语义）：<code>canonical_session_projection_rejections(session_id PK, fingerprint, watermark_seq_at_record, event_count, attempts, retry_after, last_reason, permanent)</code>；<b>显式豁免 v46 cursor 维护触发器</b>（schema.ts:1806-1825 现状全表清空 eligibility，若同机制会引发集中重验风暴，B2.2）。<br>
+          ② <b>键控（M1 收紧：读路径检测必须 O(1)）</b>：<b>读路径的变化检测只用水位/计数类 O(1) 元数据</b>——event_count + watermark_event_id + legacy 消息行数/max(rowid)；<b>逐事件 kind/turn 签名与 content-hash 只在后台重验时计算</b>（重验结果连同完整指纹一并写回 rejection 表），legacy 摘要挂在 getMessages 返回路径上捎带累计。命中条件 = O(1) 元数据未变 <b>或</b> 退避窗口未到（attempts 指数退避，上限 7 天）；O(1) 元数据变化 ≠ 同步重验，而是「立即走 legacy + 登记后台重验」。<br>
+          ③ <b>重验异步化（P0 必备）</b>：读路径命中负缓存 → 立即返回 legacy + 若指纹已变则登记重验任务；后台队列分片让步执行（单片 ≤50ms），完成后刷新 rejection / 转 eligibility。轮次终态后与启动空闲期触发。<br>
+          ④ <b>清除路径三分</b>：指纹变化（触发后台重验）/ 退避到期（后台重验）/ 显式动作（repair 对应义务完成、用户重建索引）。不依赖 repair 成功钩子。<br>
+          ⑤ <b>同轮读合并</b>（评审建议 4.1 边界）：memo 作用域 = 单次 runToolChatSession 调用；<b>任何 appendHistoryEvents / appendBatch 写入即失效</b>（否则续轮拿到缺上一轮 tool result 的过期 transcript）；memo key = requestId 解析后的 invocationId（避免重试串流）。toolChatLoop:1026/1065 复用、hostedTurnHandoff:218 复用、单次读内按 invocationId memoize readSync。<br>
+          ⑥ <b>启动顺序解耦（v3 新增 · R7① · v4 补 N1/N2 设计，实施前需过实施评审）</b>：createMainWindow 提前至 db open + 最小 IPC 注册之后；canonical-history recovery / ledger reconcile / spill GC 等重恢复改为窗口就绪后的后台分片任务（复用 ③ 的重验队列基础设施）。<br>
+          <b>N1 并发设计（决断：admission 按会话互斥为主，入口延迟为降级选项）</b>：(b1) 把「会话级恢复未完成」纳入统一调用级准入（admission）的排队理由——<b>所有 turn 驱动入口</b>（渲染 IPC、飞书 :1424、butler :1433、微信 :1435）统一经 admission 排队等待目标会话恢复完成，而非只覆盖渲染输入；(b2) IM/butler 进程级启动可保持现状时序（它们本就在全部恢复 await 之后才启动，现状无损失），但其触发的 turn 受 (b1) 约束；(b3) <b>会话台账 JSONL 文件级互斥</b>：恢复写 repair 事件（main.ts:694-755 getSessionEventSink）与 turn 执行读 ledger 必须按会话单写者顺序化（WAL/runInTransaction 只覆盖 SQLite，不覆盖 JSONL）；(a) 降级选项：若 admission 集成复杂度超预期，P0-⑥ 先落地「IM/butler 延迟到后台恢复完成后启动」（与现状时序等价，无回退风险），(b3) 仍必须做。<b>重排时逐对核对已明写的顺序不变量</b>：persisted-orphan cleanup 先于 runtime recovery（:822-823）、admission 活跃段清零先于门构造（:1206-1207，反序会读入幻影票据）、usageStats 版本快照先于 IM/butler 启动（:1074-1077）、butlerScheduler.start 晚于 initTray（:1427-1432 托盘前提校验）；每对补回归测试。<br>
+          <b>N2 过渡态设计</b>：「恢复未完成期间历史读走 legacy」的假设不成立——中断态会话投影 throw <code>CANONICAL_SESSION_CONTENT_UNAVAILABLE</code>（sessionTranscriptProjection.ts:318/322/329），且首屏自动选中的 list[0] 恰是最可能中断的会话。方案：分页/投影读路径对「恢复中」会话返回<b>显式 recovering 过渡态</b>——legacy 骨架行照常返回（内联守卫 :320 本就快速），canonical-backed 正文先以骨架/占位呈现，ChatView 显示「会话恢复中」横幅；恢复完成经事件推送（复用 session/turn 桥）刷新正文。禁止静默吞异常（ChatView :465 静默 catch 不再扩散）。splash 改造：showStartupStatus 现为窗口前独立 splash 且主窗口 show 后即销毁（main.ts:200-233/:419），需延后关闭或改造为窗口内进度条。<br>
+          ⑦ <b>首屏入口回归（v3 新增 · R7②）</b>：负缓存/结论查询位于 readSessionTranscriptProjection 汇聚点，天然覆盖 chatGetMessagePage / getProjectedMessages / turn display 等首屏入口；为 chat:get-message-page 与会话切换补「mismatch 会话首屏 &lt;500ms」红绿测试；<b>并入 N2 过渡态测试（v4）</b>：中断态会话首屏 → recovering 骨架 + 横幅、恢复完成后事件推送刷新、恢复期间该会话 turn 在 admission 排队。
+        </div>
+        <div class="k">验收<br>（两档）</div>
+        <div><b>mismatch 活跃会话（最差案例）</b>：读路径 &lt; 2s（负缓存/退避命中，legacy 直返）；每轮至多一次后台重验，重验期间 UI 无冻结。<b>其他会话</b>：输入指令 → 首个流式 delta p95 &lt; 2s。<code>session.transcript.read</code> durationMs p95 &lt; 500ms。<b>启动（v3）</b>：进程启动 → 主界面可交互 p95 &lt; 5s（恢复后置分片）；首屏/切换会话 chatGetMessagePage p95 &lt; 500ms。</div>
+        <div class="k">风险</div>
+        <div>负缓存 stale → O(1) 元数据变化检测 + 后台重验兜底；观察期保留 shadow 日志核对降级正确性；v46 触发器豁免需单测锁定（负缓存不随 cursor 维护被清空）。⑥ 专属：admission 排队语义扩展到 IM/butler 后需回归「远程消息在恢复期间到达」场景（排队不丢弃、恢复后按序放行）；JSONL 会话台账单写者互斥需并发红绿测试；启动重排逐对核对四组顺序不变量（:822-823 / :1206-1207 / :1074-1077 / butler 晚于 initTray）；recovering 过渡态不得静默吞异常。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="phase p1">
+    <div class="ph-tag">P1</div>
+    <div class="ph-body">
+      <h4>读路径去重放：一致性改由写路径维护</h4>
+      <div class="aim">目标：命中路径 &lt; 50ms；canonical 对比彻底离开用户请求路径（含后台队列也只做增量窗口）。</div>
+      <div class="kv">
+        <div class="k">改动点</div>
+        <div>① <b>同事务维护投影缓存（全新机制，评审建议 4.2 拆分表述）</b>：watermark/commit_order 推进已是现状（agentHistoryStorage.ts:85-98），P1 新增的是 append 事务内增量更新投影缓存（新增消息追加），替代「eligibility 被消息触发器删 + 读时全量重放自证」。② 状态承载事件的工具转换校验增量化：维护 per-invocation pending tool/approval 视图（写时更新），校验查视图而非 readSync 活跃流全量。③ 字节级对拍收窄到增量窗口：turn 终态后对拍「自上次结论以来的新增事件」，全量对拍仅后台周期巡检。④ cutover / shadow 消费同一份结论与 memoize 快照。</div>
+        <div class="k">验收</div>
+        <div>主进程单次事件循环阻塞 max &lt; 200ms（perf_hooks monitorEventLoopDelay 常驻采样）；活跃会话 L1 命中率 &gt; 90%。</div>
+        <div class="k">风险</div>
+        <div>写路径复杂度上升 → 增量更新与全量重建的等价性用对拍测试锁定（红绿回归：增量结果 == 全量结果）；写路径故障回退 = 清缓存走 legacy，与现状兜底一致。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="phase p2">
+    <div class="ph-tag">P2a</div>
+    <div class="ph-body">
+      <h4>requestSnapshot 瘦身（小改动拿大头）<span class="fixmark">B4.3 拆分依据</span></h4>
+      <div class="aim">目标：消除每轮 O(n) 冗余写入的主体；改动半径最小。</div>
+      <div class="kv">
+        <div class="k">改动点</div>
+        <div>代码事实支撑：<b>重建器 rebuildClaudeMessagesFromHistory 不读 requestSnapshot</b>（基线来自 context-committed/compacted 事件）；唯一消费方 <code>assertHistoryRequestCompatibility</code>（turn.ts:637-676）比较前已 <code>withoutMessages()</code> 剥离 messages。因此 ① 事件写入时 requestSnapshot 仅保留 route + request 除 messages 外的字段（messages 可留长度/哈希供诊断）；② 存量不回填，读取端对 pre/post 格式统一按「有 messages 忽略、无 messages 兼容」处理（消费方本来就是可选字段跳过，pre-snapshot 事件已有跳过先例）。</div>
+        <div class="k">验收</div>
+        <div>新增每轮事件字节与轮次无关（O(1)，基准测试）；canonicalHistory 重建行为零变化（对拍测试）。</div>
+        <div class="k">风险</div>
+        <div>丢失请求正文取证能力 → 若需保留，messages 走 spill 引用（复用既有 spillStore，属「扩一类字段」而非新建机制）；requestSnapshot 完整性断言测试同步调整。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="phase p2x">
+    <div class="ph-tag">P2b</div>
+    <div class="ph-body">
+      <h4>context 基线增量链 + 双版本读路径 + transcript 表瘦身（大改造，单独评估）</h4>
+      <div class="aim">目标：重建成本与「基线 + 增量」线性；完整终止 O(n²)。工作量为独立立项，不与 P2a 绑定。</div>
+      <div class="kv">
+        <div class="k">改动点</div>
+        <div>① 「基线 + 增量链」触及 invocation-context-committed.messages 全量基线语义，消费方必须逐一枚举改造（B4.1）：<code>validateCanonicalInvocationMessages</code>（要求完整 content）、<code>mirrorCanonicalContextMessages</code>（legacy 镜像需正文）、<code>requiredUserMessage</code> 逐字节匹配、<code>foldClaudeSessionSnapshots</code> 身份链校验、L1 seed 伪造成 context-committed 事件的路径（sqliteAgentHistory.ts:954-958）、recovery 修复器。② <b>双版本读路径是全新工作项</b>（B3）：readSync 现状对 schema 不匹配硬失败（HistoryCorruptionError 'unsupported schema version'），「旧格式读兼容」不存在现成机制，需实现版本化解码层 + 红绿测试。③ <b>session_transcript_entries.messages_json 纳入瘦身</b>（B4.2）：每轮终态存完整 transcript JSON，同属 O(n²)，改为增量游标 + 基线引用。</div>
+        <div class="k">验收</div>
+        <div>同规模会话重建耗时较改造前下降 ≥ 80%；混合新旧格式库读写回归全绿。</div>
+        <div class="k">风险</div>
+        <div>改造半径大 → 独立技术设计先行；存量迁移默认关闭、审批后执行（沿用 A-07 cleanup gate 授权纪律）。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="phase p3">
+    <div class="ph-tag">P3</div>
+    <div class="ph-body">
+      <h4>执行模型与治理：长任务出主进程 + 观察门禁补课</h4>
+      <div class="aim">目标：任何 O(会话) 计算不再可能冻结 UI；性能问题自此有门禁兜底。</div>
+      <div class="kv">
+        <div class="k">改动点</div>
+        <div>① 全量重建/审计/对拍迁移到 worker_threads（WAL 只读连接并发安全；写操作仍由主进程单连接串行化）。<b>先以 probe:sqlite 同款探测方式验证目标 Electron 版本在 worker 中加载 node:sqlite 的可用性，再锁定架构</b>（评审建议 4.3）。② repair 治理：workspace-root-rejected 等不可自愈分类标记 terminal-failed，退出零退避；单流 pending &lt;10 条的立即重试改为带最小间隔。③ 观察门禁协议落地（R-06/R-07）：复用已落地的 sessionProjectionObservation.ts + report CLI，补 owner 批准的阈值/样本数/观察窗口，纳入发布自检；monitorEventLoopDelay 超阈值告警进 agent 日志。④ 数据库膨胀止血（用户侧配套）：老会话归档、可选 VACUUM。</div>
+        <div class="k">验收</div>
+        <div>repair 队列单调收敛（无永久 pending）；每次发布携带真实 profile 读延迟 p95 证据。</div>
+        <div class="k">风险</div>
+        <div>node:sqlite 单连接约束 → worker 仅只读，写经消息回主进程；治理动作触碰真实数据 → 沿用现有授权/审批纪律。</div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note">依赖关系：P0 独立可先行；P1 依赖 P0 的读适配表；P2a 与 P0/P1 并行（数据层写入格式，读端天然兼容）；P2b 依赖 P2a 与 P1 的结论沉淀，独立立项；P3 的 worker 化承接 P0 后台队列的升级。每阶段收尾跑定向测试 + 真实 profile 只读观察，全量回归按仓库测试纪律执行。</p>
+</section>
+
+<!-- ==================== 六、验收指标 ==================== -->
+<section id="acceptance">
+  <h2><span class="no">§6</span>验收指标（现状 → 目标）<span class="fixmark">B1 对齐：P0 拆两档</span></h2>
+  <table>
+    <tr><th>指标</th><th>现状（2026-10-11 实测）</th><th>P0 后</th><th>P1+P2a 后</th></tr>
+    <tr><td>输入指令 → 首个流式 delta（p95）</td><td class="num">~30s+</td><td class="num">&lt; 2s（两档口径均适用：mismatch 会话经负缓存直返 legacy）</td><td class="num">&lt; 1s</td></tr>
+    <tr><td>主进程单次事件循环阻塞（max）</td><td class="num">15–34s</td><td class="num">&lt; 2s（重验分片 ≤50ms/片，后台执行）</td><td class="num">&lt; 200ms</td></tr>
+    <tr><td>session.transcript.read（p95）</td><td class="num">30,545ms</td><td class="num">&lt; 500ms</td><td class="num">&lt; 50ms（命中路径）</td></tr>
+    <tr><td>单轮输入内全量重放次数</td><td class="num">L2 一遍 + 当轮流读×3 + shadow 独立 fold×2（payload 逐次双重解析）</td><td class="num">读路径 0（命中结论）；后台 ≤1 次分片重验/轮</td><td class="num">0（读路径）· 后台仅增量窗口</td></tr>
+    <tr><td>每轮新增事件字节</td><td class="num">O(n)（744KB/轮）</td><td class="num">不变</td><td class="num">O(1)（P2a）</td></tr>
+    <tr><td>repair 队列</td><td class="num">151 pending · 零退避 · 不收敛</td><td class="num">不变（P3 治理）</td><td class="num">单调收敛 · 不可修复终态化</td></tr>
+    <tr><td>启动历史恢复（总时长）</td><td class="num">123.7s · 阻塞启动关键路径</td><td class="num">总时长不变，但后置分片不再阻塞启动（⑥；负缓存减少其中重复重验）</td><td class="num">&lt; 10s（worker 分片）</td></tr>
+    <tr><td>进程启动 → 主界面可交互 <span class="fixmark">v3</span></td><td class="num">~2min（恢复串行挡在窗口创建前）</td><td class="num">&lt; 5s（P0-⑥ 恢复后置分片）</td><td class="num">&lt; 5s</td></tr>
+    <tr><td>首屏/切换会话消息分页（大会话）<span class="fixmark">v3</span></td><td class="num">12–34s（canonical-backed 会话全量投影，实测首屏 12.1s）</td><td class="num">&lt; 500ms（结论直返）</td><td class="num">&lt; 100ms（L1 命中）</td></tr>
+  </table>
+</section>
+
+<!-- ==================== 七、风险与回滚 ==================== -->
+<section id="risk">
+  <h2><span class="no">§7</span>风险与回滚</h2>
+  <div class="grid c2">
+    <div class="card hl-amber">
+      <b>不破坏迁移既有投资</b>
+      <ul class="tight" style="margin-top:8px">
+        <li>eligibility / cutover / dual-write / spill / repair 全套机制保留，只改变<b>验证发生的位置与时机</b>；rejection 表是独立新增的读侧结论，不动 eligibility 语义与既有触发器。</li>
+        <li>fail-closed 不变量（永不返回未验证 canonical 正文）以等价性测试锁定，改造前后行为对拍。</li>
+        <li>P0 memoize 的正确性边界（评审建议 4.1）：写入即失效 + invocationId 键控，防「续轮拿到缺上一轮 tool result 的过期 transcript」这一最大陷阱。</li>
+      </ul>
+    </div>
+    <div class="card hl-amber">
+      <b>回滚路径</b>
+      <ul class="tight" style="margin-top:8px">
+        <li>P0 负缓存带开关（config），异常时关闭即回到现状行为（代价是恢复卡顿，不丢数据）；rejection 表独立，回滚即停止读取，无需清理。</li>
+        <li>P1 增量投影失败 → 写路径清缓存 + legacy 兜底，与现状降级路径一致；kill switch（config.sessionStorageCanonicalApiRead 等）沿用现有体系。</li>
+        <li>P2a 消费方天然兼容可选字段（pre-snapshot 跳过先例）；P2b 新事件格式版本化解码层独立立项，旧读取路径保留可读 v1；存量压缩默认关闭、审批后执行。</li>
+      </ul>
+    </div>
+  </div>
+  <div class="card hl-blue">
+    <b>配套的用户侧即时缓解（不等代码发布）</b>
+    <ul class="tight" style="margin-top:8px">
+      <li>当前卡顿会话（事件流 ~150MB）新建会话续聊，单次重建成本立即趋近于零。</li>
+      <li>归档/删除不再使用的大会话；<code>.agent/logs</code> 历史日志（单日最高 488MB）可清理归档。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ==================== 八、修订记录 ==================== -->
+<section id="changelog">
+  <h2><span class="no">§8</span>修订记录</h2>
+  <table>
+    <tr><th style="width:70px">版本</th><th style="width:120px">日期</th><th>变更</th></tr>
+    <tr>
+      <td class="num">v1</td><td>2026-10-11</td><td>初稿：诊断（R1–R6）+ 四阶段路线图（P0–P3）。</td>
+    </tr>
+    <tr>
+      <td class="num">v2</td><td>2026-10-11</td>
+      <td>吸收评审 <code>docs/review/2026-10-11-session-storage-read-hot-path-perf-plan-review.md</code>：
+        <b>B1</b> 负缓存键控从「watermark 等值绑定」重设计为「内容指纹 + 退避」，重验异步化从 P1/P3 前置到 P0，等价性论证改写并正面回应安全/性能张力，P0 验收拆两档口径；
+        <b>B2</b> 表归属决断为独立 rejection 表（豁免 v46 全表清空触发器），清除路径三分（指纹变化/退避到期/显式动作），区分可修复 mismatch 与永久分叉，移除对 repair 成功钩子的依赖；
+        <b>B3</b> 双版本读路径列为 P2b 明确工作项（readSync 现状硬失败）；
+        <b>B4</b> P2 拆分为 P2a（requestSnapshot 瘦身，依据：重建器不读 requestSnapshot、唯一消费方比较前剥离 messages）/ P2b（context 基线增量链，枚举六类消费方），session_transcript_entries.messages_json 纳入 R4 与 P2b；
+        <b>E1</b> 修正「两遍全量重建」为「单遍 L2 + payload 双重解析 + L1 尾部结果被门控丢弃」；<b>E2</b> 全量回读位置 :943、范围收紧为活跃 invocation 整条流；<b>E3</b> spill 覆盖面修正（requestSnapshot 是唯一不走 spill 的大字段）；<b>E4</b> 触发器删除对象与适用会话范围收紧；<b>E5</b> 观察工具链已落地/协议未落地区分，恢复编排位置修正；
+        另吸收非阻断建议 4.1（memoize 边界）、4.2（watermark 现状/新增机制拆分表述）、4.3（worker 先探测）、4.4（验收两档）。</td>
+    </tr>
+    <tr>
+      <td class="num">v3</td><td>2026-10-11</td>
+      <td>补充诊断「启动与首屏链路」，新增 <b>R7</b>（启动编排阻塞 + 首屏自动加载触发投影）：启动时序线框图与实测时间线（recovery 123.7s 挡在 createMainWindow 前；首屏 chatGetMessagePage → 全量投影 12.1s 冻结一切 IPC）。P0 新增改动点 <b>⑥ 启动顺序解耦</b>（窗口先行，重恢复后置为后台分片，按会话粒度排队）与 <b>⑦ 首屏入口回归测试</b>；验收表新增「启动 → 主界面可交互」与「首屏/切换会话分页」两行指标。根因判定：首屏冻结与 R1/R2 同源（readSessionTranscriptProjection 汇聚点，P0 负缓存天然覆盖），启动编排为独立新增修复面。</td>
+    </tr>
+    <tr>
+      <td class="num">v4</td><td>2026-10-11</td>
+      <td>吸收 v2 复审 <code>docs/review/2026-10-11-session-storage-read-hot-path-perf-plan-review-v2.md</code>（有条件通过）：
+        <b>N1</b> P0-⑥ 补并发设计：决断「admission 按会话互斥为主（覆盖渲染/飞书/butler/微信全部 turn 入口）+ 会话台账 JSONL 文件级单写者互斥；IM/butler 延迟启动列为降级选项」；重排逐对核对四组已明写顺序不变量（:822-823 orphan 先于 recovery、:1206-1207 admission 清零先于门构造、:1074-1077 usageStats 版本先于 IM/butler、butler 晚于 initTray）并各补回归测试；
+        <b>N2</b> P0-⑥ 补过渡态设计：中断态会话投影 throw 而非降级的事实写入 R7/§2，恢复中会话首屏返回显式 recovering 骨架 + 横幅 + 恢复完成事件推送刷新，禁止静默吞异常，红绿测试并入 P0-⑦；splash 现为窗口前独立横幅、主窗口 show 即销毁（:200-233/:419），需改造或延后关闭；
+        <b>M1</b> P0-② 键控收紧：读路径变化检测仅用 O(1) 元数据（event_count + watermark_event_id + legacy 行数/max rowid），逐事件签名与 content-hash 仅后台重验时计算；
+        <b>M2</b> 两处措辞收紧：R7②/§2 补「缓存阶梯未命中」限定（稳态取决于命中率），§6「启动历史恢复」P0 列改为「总时长不变、后置分片不再阻塞启动」；另吸收 R7 核对表澄清（:977/:980 fire-and-forget 不阻塞、turnDisplay 与会话切换分开计）。
+        <b>放行范围对齐复审</b>：P0-①②③④⑤⑦ / P1 / P2a / P3 可进入实施；P0-⑥ 补齐设计后随实施评审一并核对，无需全量复审。</td>
+    </tr>
+  </table>
+</section>
+
+<footer>
+  SpaceAssistant · 会话读路径热路径性能改进计划 v4 · 2026-10-11 · 证据与代码位置以当日 main / v0.2.5 打包实例为准，评审记录见 docs/review/
+</footer>
+
+</div>
+</body>
+</html>
