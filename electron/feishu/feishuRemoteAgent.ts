@@ -67,7 +67,9 @@ export async function runFeishuRemoteAgent(ctx: {
         messageId: ctx.replyMessageId,
         getSessionId,
         config: ctx.feishuConfig,
-        sessionCommands: ctx.sessionStorage.commands
+        sessionCommands: ctx.sessionStorage.commands,
+        ...(ctx.remoteContext.trackContext ? { trackDelivery: { db: ctx.db, track: ctx.remoteContext.trackContext,
+          requestId: ctx.requestId, turnId: ctx.turnId } } : {})
       }),
     buildSystemAppendix: ({ browserRemoteHint }) =>
       buildFeishuRemoteSystemAppendix({

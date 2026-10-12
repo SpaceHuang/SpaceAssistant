@@ -4,22 +4,41 @@ import { DatabaseSync } from 'node:sqlite'
 import os from 'node:os'
 import path from 'node:path'
 import { readCanonicalSpillReferences } from '../storage/spillStore'
+import type { StorageAudit, StorageAuditCoverage, StorageMessageBodyCoverage, StorageOverview, StorageStrictProfile } from '../../src/shared/storageTypes'
 
 type TableMetric = { rows: number; textBytes: number }
+type SessionStorageProfileInternal = StorageStrictProfile & {
+  collectedAt: string
+  canonicalCoverage: StorageAuditCoverage | null
+  canonicalSessionCoverage: StorageAuditCoverage | null
+  canonicalRequiredData: StorageAudit['canonicalRequiredData']
+  messageBodyCoverage: StorageMessageBodyCoverage | null
+  spillFiles: { files: number; complete: boolean; errorCodes: string[]; referenceStats: { descriptorCount: number; uniqueLocatorCount: number } | null }
+  spillReferenceStats: { descriptorCount: number; uniqueLocatorCount: number } | null
+  spillDegraded: { complete: boolean; errorCodes: string[] }
+}
 
 function scanSpillDirectory(root: string): { files: Array<{ locator: string; bytes: number }>; complete: boolean; errorCodes: string[] } {
+  const files: Array<{ locator: string; bytes: number }> = []
+  let complete = true
+  const errorCodes: string[] = []
   try {
     const rootStat = fs.lstatSync(root)
     if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) return { files: [], complete: false, errorCodes: ['SPILL_ROOT_NOT_DIRECTORY'] }
-    const files: Array<{ locator: string; bytes: number }> = []
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
       if (!entry.name.endsWith('.spill')) continue
       const filePath = path.join(root, entry.name)
-      const stat = fs.lstatSync(filePath)
-      if (stat.isSymbolicLink() || !stat.isFile()) return { files, complete: false, errorCodes: ['SPILL_ENTRY_NOT_REGULAR_FILE'] }
-      files.push({ locator: entry.name, bytes: stat.size })
+      try {
+        const stat = fs.lstatSync(filePath)
+        if (stat.isSymbolicLink() || !stat.isFile()) { complete = false; errorCodes.push('SPILL_ENTRY_NOT_REGULAR_FILE'); continue }
+        files.push({ locator: entry.name, bytes: stat.size })
+      } catch (error) {
+        const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : 'UNKNOWN_ERROR'
+        complete = false
+        errorCodes.push(code)
+      }
     }
-    return { files, complete: true, errorCodes: [] }
+    return { files, complete, errorCodes }
   } catch (error) {
     const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : ''
     if (code === 'ENOENT') return { files: [], complete: true, errorCodes: [] }
@@ -28,8 +47,52 @@ function scanSpillDirectory(root: string): { files: Array<{ locator: string; byt
   }
 }
 
+type SpillMeasurement = {
+  root: string
+  files: number
+  observedBytes: number
+  totalBytes: number | null
+  sourceOfTruthBytes: number | null
+  degradableBytes: number | null
+  orphanBytes: number | null
+  complete: boolean
+  classification: 'complete' | 'unknown'
+  errorCodes: string[]
+}
+
+function readTrustedSpillIndex(conn: DatabaseSync, tables: Set<string>): Map<string, 'source-of-truth' | 'degradable'> | null {
+  if (!tables.has('spill_reference_backfill_state') || !tables.has('spill_reference_meta') || !tables.has('spill_reference_index')) return null
+  try {
+    const state = conn.prepare(`SELECT owner_table,status,protocol_version,verified_generation FROM spill_reference_backfill_state
+      WHERE owner_table IN ('agent_history_events','session_transcript_entries') ORDER BY owner_table`).all() as Array<{
+      owner_table: string; status: string; protocol_version: number; verified_generation: number | null
+    }>
+    const generation = conn.prepare("SELECT meta_value FROM spill_reference_meta WHERE meta_key='canonical_change_generation'").get() as { meta_value: number } | undefined
+    const owners = new Set(state.map((item) => item.owner_table))
+    if (state.length !== 2 || owners.size !== 2 || !generation || !state.every((item) => item.status === 'complete' && item.protocol_version === 1 && item.verified_generation === generation.meta_value)) return null
+    const rows = conn.prepare('SELECT locator,kind FROM spill_reference_index').all() as Array<{ locator: string; kind: string }>
+    if (rows.some(({ kind }) => kind !== 'source-of-truth' && kind !== 'degradable')) return null
+    return new Map(rows.map(({ locator, kind }) => [locator, kind as 'source-of-truth' | 'degradable']))
+  } catch { return null }
+}
+
+function collectSpillMeasurement(conn: DatabaseSync, tables: Set<string>, root: string, useTrustedIndex: boolean): SpillMeasurement {
+  const scan = scanSpillDirectory(root)
+  const files = scan.files
+  const observedBytes = files.reduce((sum, file) => sum + file.bytes, 0)
+  const indexed = useTrustedIndex ? readTrustedSpillIndex(conn, tables) : null
+  const canClassify = indexed !== null && scan.complete
+  const sourceOfTruthBytes = canClassify ? files.filter(({ locator }) => indexed.get(locator) === 'source-of-truth').reduce((sum, file) => sum + file.bytes, 0) : null
+  const degradableBytes = canClassify ? files.filter(({ locator }) => indexed.get(locator) === 'degradable').reduce((sum, file) => sum + file.bytes, 0) : null
+  const orphanBytes = canClassify ? files.filter(({ locator }) => !indexed.has(locator)).reduce((sum, file) => sum + file.bytes, 0) : null
+  const referenceErrorCodes = useTrustedIndex && !indexed ? ['SPILL_REFERENCE_INDEX_UNAVAILABLE'] : []
+  return { root, files: files.length, observedBytes, totalBytes: scan.complete ? observedBytes : null,
+    sourceOfTruthBytes, degradableBytes, orphanBytes, complete: scan.complete && (useTrustedIndex ? indexed !== null : true),
+    classification: canClassify ? 'complete' : 'unknown', errorCodes: [...scan.errorCodes, ...referenceErrorCodes] }
+}
+
 /** Collects storage sizes and canonical coverage by inspecting content in memory, without returning bodies or writing to the DB. */
-export function collectSessionStorageProfile(dbPath: string): Record<string, unknown> {
+function collectSessionStorageProfileInternal(dbPath: string): SessionStorageProfileInternal {
   const file = fs.statSync(dbPath)
   const databaseFiles = (() => {
     const walPath = `${dbPath}-wal`
@@ -59,7 +122,7 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
     const sqliteVersion = (conn.prepare('SELECT sqlite_version() AS version').get() as { version: string }).version
     const spillFiles = (() => {
       const spillRoot = path.join(path.dirname(dbPath), 'spill')
-      const scan = scanSpillDirectory(spillRoot)
+      const physical = scanSpillDirectory(spillRoot)
       let references: ReturnType<typeof readCanonicalSpillReferences> | undefined
       try {
         const indexTables = tables.has('spill_reference_backfill_state') && tables.has('spill_reference_meta') && tables.has('spill_reference_index')
@@ -88,20 +151,22 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
         if (!trusted) references = readCanonicalSpillReferences(conn, { allowMissingTables: true })
       } catch { /* Report unknown reference classes below; do not turn an unreadable source into zero bytes. */ }
       const kindByLocator = new Map(references?.descriptors.map(({ locator, kind }) => [locator, kind]) ?? [])
-      const files = scan.files.map(({ locator, bytes }) => ({ locator, bytes, kind: kindByLocator.get(locator) ?? 'orphan' }))
+      const files = physical.files.map(({ locator, bytes }) => ({ locator, bytes, kind: kindByLocator.get(locator) ?? 'orphan' }))
       const referenceScanComplete = references !== undefined
       return {
         root: spillRoot,
         files: files.length,
         observedBytes: files.reduce((sum, file) => sum + file.bytes, 0),
-        totalBytes: scan.complete ? files.reduce((sum, file) => sum + file.bytes, 0) : null,
+        totalBytes: physical.complete ? files.reduce((sum, file) => sum + file.bytes, 0) : null,
         sourceOfTruthBytes: referenceScanComplete ? files.filter(({ kind }) => kind === 'source-of-truth').reduce((sum, file) => sum + file.bytes, 0) : null,
         degradableBytes: referenceScanComplete ? files.filter(({ kind }) => kind === 'degradable').reduce((sum, file) => sum + file.bytes, 0) : null,
         orphanBytes: referenceScanComplete ? files.filter(({ kind }) => kind === 'orphan').reduce((sum, file) => sum + file.bytes, 0) : null,
-        complete: scan.complete && referenceScanComplete,
-        errorCodes: [...scan.errorCodes, ...(!referenceScanComplete ? ['CANONICAL_SPILL_REFERENCE_SCAN_FAILED'] : [])]
+        complete: physical.complete && referenceScanComplete,
+        errorCodes: [...physical.errorCodes, ...(!referenceScanComplete ? ['CANONICAL_SPILL_REFERENCE_SCAN_FAILED'] : [])],
+        referenceStats: references?.stats ?? null
       }
     })()
+    const overviewSpillFiles = collectSpillMeasurement(conn, tables, path.join(path.dirname(dbPath), 'spill'), true)
     const sourceTruthGc = (() => {
       const root = path.join(path.dirname(dbPath), 'spill')
       try {
@@ -136,7 +201,7 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
       return { root, files: scan.files.length, observedBytes, totalBytes: scan.complete ? observedBytes : null,
         complete: scan.complete, errorCodes: scan.errorCodes }
     })()
-    const canonicalCoverage = tables.has('agent_history_streams') && tables.has('agent_history_events')
+    const canonicalCoverage: StorageAuditCoverage | null = tables.has('agent_history_streams') && tables.has('agent_history_events')
       ? conn.prepare(`SELECT COUNT(*) AS streams,
           SUM(has_ctx) AS withContext, SUM(has_response) AS withResponse,
           SUM(has_ctx AND has_response) AS withBoth,
@@ -148,9 +213,9 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
           MAX(e.kind='session-input-committed') AS has_input,
           MAX(e.kind='transcript-compacted') AS has_compacted
           FROM agent_history_streams s LEFT JOIN agent_history_events e ON e.invocation_id=s.invocation_id
-          GROUP BY s.invocation_id)`).get()
+        GROUP BY s.invocation_id)`).get() as StorageAuditCoverage
       : null
-    const canonicalSessionCoverage = tables.has('agent_history_streams') && tables.has('agent_history_events')
+    const canonicalSessionCoverage: StorageAuditCoverage | null = tables.has('agent_history_streams') && tables.has('agent_history_events')
       ? conn.prepare(`SELECT COUNT(*) AS sessions,
           SUM(has_ctx) AS sessionsWithContext, SUM(has_response) AS sessionsWithResponse,
           SUM(has_ctx AND has_response) AS sessionsWithBoth,
@@ -163,7 +228,7 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
           MAX(e.kind='session-input-committed') AS has_input,
           MAX(e.kind='transcript-compacted') AS has_compacted
           FROM agent_history_streams s LEFT JOIN agent_history_events e ON e.invocation_id=s.invocation_id
-          WHERE s.session_id IS NOT NULL GROUP BY s.session_id)`).get()
+          WHERE s.session_id IS NOT NULL GROUP BY s.session_id)`).get() as StorageAuditCoverage
       : null
     const canonicalRequiredData = (() => {
       const eventPayload = tables.has('agent_history_events')
@@ -259,6 +324,8 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
       autoVacuum: conn.prepare('PRAGMA auto_vacuum').get(),
       dbstat,
       spillFiles,
+      overviewSpillFiles,
+      spillReferenceStats: spillFiles.referenceStats,
       sourceTruthGc,
       tables: {
         messages: metric('messages', "length(content)+length(COALESCE(tool_calls,''))+length(COALESCE(thinking,''))+length(COALESCE(attachments,''))+length(COALESCE(content_segments,''))"),
@@ -277,4 +344,99 @@ export function collectSessionStorageProfile(dbPath: string): Record<string, unk
     if (snapshotOpen) { try { conn.exec('ROLLBACK') } catch { /* connection close will discard a failed snapshot */ } }
     conn.close()
   }
+}
+
+/** Strict compatibility entry point for diagnostics, scripts, and maintenance estimates. */
+export function collectSessionStorageAudit(dbPath: string): StorageAudit {
+  const profile = collectSessionStorageProfileInternal(dbPath)
+  const spill = profile.spillFiles
+  const stats = profile.spillReferenceStats
+  const strictSpillReferences = {
+    complete: Boolean(spill?.complete), descriptors: stats?.descriptorCount ?? null,
+    uniqueLocators: stats?.uniqueLocatorCount ?? null, errorCodes: [...(spill?.errorCodes ?? [])]
+  }
+  const errorCodes = [...(profile.spillFiles?.errorCodes ?? []), ...(profile.spillDegraded?.errorCodes ?? [])]
+  return {
+    collectedAt: profile.collectedAt,
+    status: strictSpillReferences.complete && profile.spillDegraded?.complete !== false && errorCodes.length === 0 ? 'complete' : 'partial',
+    errorCodes,
+    canonicalCoverage: profile.canonicalCoverage,
+    canonicalSessionCoverage: profile.canonicalSessionCoverage,
+    canonicalRequiredData: profile.canonicalRequiredData,
+    messageBodyCoverage: profile.messageBodyCoverage,
+    strictSpillReferences
+  }
+}
+
+/** Full strict result for existing cleanup-estimate and CLI callers. */
+export function collectSessionStorageStrictProfile(dbPath: string): StorageStrictProfile {
+  return collectSessionStorageProfileInternal(dbPath)
+}
+
+/** Lightweight storage-size collector. It never scans canonical payload JSON. */
+export function collectSessionStorageOverview(dbPath: string): StorageOverview {
+  const file = fs.statSync(dbPath)
+  const databaseFiles = (() => {
+    const fileSize = (filePath: string) => {
+      try { return fs.statSync(filePath).size }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0; throw error }
+    }
+    const walBytes = fileSize(`${dbPath}-wal`)
+    const shmBytes = fileSize(`${dbPath}-shm`)
+    return { dbBytes: file.size, walBytes, shmBytes, totalBytes: file.size + walBytes + shmBytes }
+  })()
+  const conn = new DatabaseSync(dbPath, { readOnly: true })
+  let snapshotOpen = false
+  try {
+    conn.exec('BEGIN DEFERRED')
+    snapshotOpen = true
+    const tables = new Set((conn.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(({ name }) => name))
+    const metric = (table: string, expression: string): TableMetric | null => tables.has(table)
+      ? conn.prepare(`SELECT COUNT(*) AS rows, COALESCE(SUM(${expression}), 0) AS textBytes FROM ${table}`).get() as TableMetric
+      : null
+    const spill = collectSpillMeasurement(conn, tables, path.join(path.dirname(dbPath), 'spill'), true)
+    const spillDegradedScan = scanSpillDirectory(path.join(path.dirname(dbPath), 'spill-degraded'))
+    const spillDegradedBytes = spillDegradedScan.files.reduce((sum, item) => sum + item.bytes, 0)
+    const spillDegraded = { root: path.join(path.dirname(dbPath), 'spill-degraded'), files: spillDegradedScan.files.length,
+      observedBytes: spillDegradedBytes, totalBytes: spillDegradedScan.complete ? spillDegradedBytes : null,
+      complete: spillDegradedScan.complete, errorCodes: spillDegradedScan.errorCodes }
+    let pendingGc: StorageOverview['pendingGc'] = { files: 0, bytes: 0, complete: true }
+    try {
+      if (tables.has('source_truth_spill_gc_queue')) {
+        const pending = conn.prepare("SELECT locator FROM source_truth_spill_gc_queue WHERE status='pending'").all() as Array<{ locator: string }>
+        let bytes = 0
+        let complete = true
+        const spillRoot = path.join(path.dirname(dbPath), 'spill')
+        for (const { locator } of pending) {
+          try {
+            const entry = fs.lstatSync(path.join(spillRoot, locator))
+            if (!entry.isFile() || entry.isSymbolicLink()) { complete = false; continue }
+            bytes += entry.size
+          } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') complete = false }
+        }
+        pendingGc = { files: pending.length, bytes, complete }
+      }
+    } catch { pendingGc = { files: null, bytes: null, complete: false } }
+    const pageBytes = spill.totalBytes !== null && spillDegraded.totalBytes !== null
+    const status = pageBytes && spill.classification === 'complete' && pendingGc.complete ? 'complete' : 'partial'
+    const totalBytes = status === 'complete' ? databaseFiles.totalBytes + spill.totalBytes! + spillDegraded.totalBytes! : null
+    conn.exec('COMMIT')
+    snapshotOpen = false
+    return { collectedAt: new Date().toISOString(), status, totalBytes,
+      database: { dbBytes: file.size, walBytes: databaseFiles.walBytes, shmBytes: databaseFiles.shmBytes, complete: true },
+      spill: { files: spill.files, observedBytes: spill.observedBytes, totalBytes: spill.totalBytes,
+        classification: spill.classification, sourceOfTruthBytes: spill.sourceOfTruthBytes, degradableBytes: spill.degradableBytes,
+        orphanBytes: spill.orphanBytes, complete: spill.complete, errorCodes: spill.errorCodes },
+      spillDegraded: { files: spillDegraded.files, observedBytes: spillDegraded.observedBytes, totalBytes: spillDegraded.totalBytes,
+        complete: spillDegraded.complete, errorCodes: spillDegraded.errorCodes },
+      pendingGc, tables: { messages: metric('messages', "length(content)+length(COALESCE(tool_calls,''))+length(COALESCE(thinking,''))+length(COALESCE(attachments,''))+length(COALESCE(content_segments,''))") } }
+  } finally {
+    if (snapshotOpen) { try { conn.exec('ROLLBACK') } catch { /* close will release snapshot */ } }
+    conn.close()
+  }
+}
+
+/** Backward-compatible complete profile projection retained for existing callers. */
+export function collectSessionStorageProfile(dbPath: string): Record<string, unknown> {
+  return collectSessionStorageProfileInternal(dbPath)
 }

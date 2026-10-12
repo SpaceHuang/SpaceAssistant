@@ -24,7 +24,6 @@ import { InvocationHistoryWriter, type HistoryEvent, type HistoryPort } from '..
 import { createTurnScopedHistoryMemo } from './runtime/turnScopedHistoryMemo'
 import { CanonicalCompactionCommitUncertainError, toCanonicalModelMessages } from './runtime/canonicalHistory'
 import { rebuildClaudeMessagesFromHistory } from './runtime/canonicalHistory'
-import { planRunShellExecution, RunShellPlanError } from './tools/runShellPlan'
 import type { PreparedShellExecution } from './shell/preparedShellExecution'
 import { McpConnectionManager } from './mcp/mcpConnectionManager'
 import { getDiagnostics, safeAppendDiagnostic } from './mcp/mcpDiagnostics'
@@ -800,7 +799,8 @@ async function runToolChatSessionInner(
       toolName: call.toolName,
       modelTurn: source?.modelTurn,
       semanticCallSha256: createHash('sha256').update(semanticIdentity).digest('hex'),
-      dispatched: source?.kind !== 'safety-rejection',
+      // plan-rejection 与 safety-rejection 同为「未派发即拒绝」，不得计入 dispatched（评审 P3）
+      dispatched: source?.kind !== 'safety-rejection' && source?.kind !== 'plan-rejection',
       resultCommitted: true,
       success: !resultIsError,
       ...(resultIsError ? { errorClass: normalizeToolErrorClass(errorText, output) } : {}),
@@ -969,7 +969,7 @@ async function runToolChatSessionInner(
       : ('desktop' as const))
   // 套餐/规则覆盖同样作用于 exposure 评估（§4 第 1 区）——P2 起装配期解析（ports.exposure）
   const exposureRules = hostExposureRules as import('../src/shared/confirmation/types').PolicyRule[] | undefined
-  /** 请求级 MCP 工具快照：仅桌面 lane 注入（装配期构建，仍为首循环前）。 */
+  /** 请求级 MCP 工具快照：按真实 lane 策略和调用裁剪开放（装配期构建，仍为首循环前）。 */
   const mcpSnapshot: McpToolSnapshot = hostMcp?.snapshot ?? { entries: new Map(), budgetDropped: [] }
   // FR5/§6.5：延迟加载计划（off 档 = 现状路径；档位/阈值取自 ToolsConfig，缺省 off/16 KiB）
   const deferredMode = toolsConfig.mcpDeferredLoading ?? 'always'

@@ -1,6 +1,6 @@
 {
   "name": "spaceassistant",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "license": "Apache-2.0",
   "description": "Electron + React + TypeScript desktop assistant",
@@ -14,6 +14,8 @@
     "pretest": "npm run build:agent-provider-pi-ai",
     "test:watch": "vitest",
     "test:related": "vitest related --run",
+    "remote-track:shadow": "node --import tsx scripts/remote-track-shadow-review.ts",
+    "remote-track:metrics": "node --import tsx scripts/remote-track-shadow-review.ts",
     "test:electron": "vitest run --project electron",
     "test:shell-lifecycle": "vitest run electron/shell electron/tools/runShellExecutor.test.ts electron/tools/plannedToolRegistry.test.ts electron/tools/toolInvocationCoordinator.test.ts electron/spawnUtil.test.ts",
     "test:renderer": "vitest run --project renderer",
@@ -69,7 +71,8 @@
     "check:session-storage-boundary": "node scripts/check-session-storage-boundary.mjs",
     "check:spill-reference-boundary": "node scripts/check-spill-reference-boundary.mjs",
     "bench:spill-reference-index": "node --import tsx scripts/bench-spill-reference-index.mjs",
-    "bench:startup-maintenance": "node --import tsx scripts/bench-startup-maintenance.mjs"
+    "bench:startup-maintenance": "node --import tsx scripts/bench-startup-maintenance.mjs",
+    "storage-profile:local-readonly": "npm run build:electron && cross-env NODE_OPTIONS=--import=tsx electron scripts/storage-profile-local-readonly.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.79.0",

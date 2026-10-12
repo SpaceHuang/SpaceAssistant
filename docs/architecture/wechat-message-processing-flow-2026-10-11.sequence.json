@@ -1,0 +1,556 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "微信消息处理与审核全链路",
+    "output": "docs/architecture/wechat-message-processing-flow-2026-10-11.html",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "views": [
+      {
+        "id": "inbound",
+        "label": "消息接入与组装",
+        "focus": [
+          "wechat",
+          "sdk",
+          "router",
+          "session",
+          "agent",
+          "runtime"
+        ],
+        "note": "检查原始消息如何成为带权限和会话上下文的 Agent turn。"
+      },
+      {
+        "id": "approval",
+        "label": "确认与审核",
+        "focus": [
+          "runtime",
+          "policy",
+          "channel",
+          "im",
+          "wechat",
+          "desktop",
+          "dispatch"
+        ],
+        "note": "区分微信 IM waiter、桌面代答桥接 IPC 和通用桌面确认 registry。"
+      },
+      {
+        "id": "failures",
+        "label": "失败与日志证据",
+        "focus": [
+          "sdk",
+          "im",
+          "router",
+          "runtime",
+          "logs",
+          "desktop"
+        ],
+        "note": "检查 lane 标记、卡片按钮 IPC 路由、提示绑定和最终状态。"
+      },
+      {
+        "id": "correlation",
+        "label": "消息关联与边界",
+        "focus": [
+          "wechat",
+          "sdk",
+          "router",
+          "session",
+          "agent",
+          "runtime",
+          "im",
+          "logs"
+        ],
+        "note": "区分发送者会话、单条指令、turn、toolUse 和确认请求各自的身份。"
+      }
+    ],
+    "viewBox": [
+      2500,
+      1600
+    ]
+  },
+  "participants": [
+    {
+      "id": "wechat",
+      "type": "external",
+      "label": "微信用户",
+      "sublabel": "指令 / 引用 / 确认码"
+    },
+    {
+      "id": "sdk",
+      "type": "messagebus",
+      "label": "iLink SDK / Poller",
+      "sublabel": "SDK + 原始 wire"
+    },
+    {
+      "id": "router",
+      "type": "backend",
+      "label": "WeChat Router",
+      "sublabel": "入站优先分流"
+    },
+    {
+      "id": "session",
+      "type": "database",
+      "label": "身份 / Session",
+      "sublabel": "鉴权、去重、会话映射"
+    },
+    {
+      "id": "agent",
+      "type": "backend",
+      "label": "WeChat Agent",
+      "sublabel": "组装 remoteContext"
+    },
+    {
+      "id": "runtime",
+      "type": "backend",
+      "label": "Agent Runtime",
+      "sublabel": "Host turn / MCP 调度"
+    },
+    {
+      "id": "policy",
+      "type": "security",
+      "label": "工具策略与复核",
+      "sublabel": "风险、权限、执行前复核"
+    },
+    {
+      "id": "channel",
+      "type": "security",
+      "label": "确认端口",
+      "sublabel": "逐工具等待"
+    },
+    {
+      "id": "im",
+      "type": "messagebus",
+      "label": "微信确认通道",
+      "sublabel": "提示、租约、结算"
+    },
+    {
+      "id": "desktop",
+      "type": "frontend",
+      "label": "聊天渲染器",
+      "sublabel": "微信 lane 应为只读等待态"
+    },
+    {
+      "id": "dispatch",
+      "type": "cloud",
+      "label": "MCP / 工具",
+      "sublabel": "审核通过后派发"
+    },
+    {
+      "id": "logs",
+      "type": "database",
+      "label": "History / Audit",
+      "sublabel": "请求、工具、确认、回执"
+    },
+    {
+      "id": "desktop-registry",
+      "type": "database",
+      "label": "桌面确认 Registry",
+      "sublabel": "tool:confirm-response waiter"
+    }
+  ],
+  "segments": [
+    {
+      "from": 160,
+      "to": 445,
+      "label": "入站、鉴权与会话组装"
+    },
+    {
+      "from": 470,
+      "to": 985,
+      "label": "工具审核、IM 确认与桌面投影/桥接"
+    },
+    {
+      "from": 1025,
+      "to": 1245,
+      "label": "执行结果与用户回执"
+    },
+    {
+      "from": 1280,
+      "to": 1510,
+      "label": "失败分支与当前实机证据"
+    }
+  ],
+  "messages": [
+    {
+      "id": "inbound",
+      "from": "wechat",
+      "to": "sdk",
+      "y": 180,
+      "label": "发送普通指令（或回复确认提示）",
+      "variant": "emphasis"
+    },
+    {
+      "id": "sdk-router",
+      "from": "sdk",
+      "to": "router",
+      "y": 220,
+      "label": "onMessage 入站；解析文本 / 发送者 / 引用消息 ID",
+      "variant": "default",
+      "note": "引用 ID 读 raw item_list.ref_msg.message_item.msg_id；引用文本保留 SDK projection fallback。"
+    },
+    {
+      "id": "confirm-first",
+      "from": "router",
+      "to": "im",
+      "y": 300,
+      "label": "先尝试匹配 IM 确认回复",
+      "variant": "security",
+      "note": "匹配成功就结算并 return；确认失败后才继续普通入站判断。"
+    },
+    {
+      "id": "guard",
+      "from": "router",
+      "to": "session",
+      "y": 340,
+      "label": "普通指令：owner / allowlist / enabled 检查",
+      "variant": "security"
+    },
+    {
+      "id": "dedupe",
+      "from": "router",
+      "to": "session",
+      "y": 380,
+      "label": "处理延迟审批分流；普通指令按 messageId claim 去重",
+      "variant": "default"
+    },
+    {
+      "id": "session-resolve",
+      "from": "router",
+      "to": "session",
+      "y": 420,
+      "label": "resolveWeChatSession + session execution lease",
+      "variant": "default"
+    },
+    {
+      "id": "prepare",
+      "from": "router",
+      "to": "agent",
+      "y": 460,
+      "label": "prepare AcceptedTurn；附 remoteContext / authOwner / requestId",
+      "variant": "emphasis"
+    },
+    {
+      "id": "run-agent",
+      "from": "agent",
+      "to": "runtime",
+      "y": 500,
+      "label": "runWeChatRemoteAgent → hosted Agent turn",
+      "variant": "emphasis"
+    },
+    {
+      "id": "tool-proposal",
+      "from": "runtime",
+      "to": "policy",
+      "y": 540,
+      "label": "模型提出 MCP 工具调用；逐 toolUse 评估权限、风险与信任规则",
+      "variant": "default"
+    },
+    {
+      "id": "confirmation-port",
+      "from": "policy",
+      "to": "channel",
+      "y": 620,
+      "label": "允许 / 拒绝 / require-confirm",
+      "variant": "security"
+    },
+    {
+      "id": "channel-route",
+      "from": "channel",
+      "to": "im",
+      "y": 660,
+      "label": "WeChat lane + user answerer → 微信 IM 确认通道",
+      "variant": "security",
+      "note": "resolveConfirmChannel 对 WeChat lane 注入 ImChannel + pending 参数时选 ImRequestChannel；实际 answerer 和 remote async approval 配置仍参与决策。"
+    },
+    {
+      "id": "register-audit",
+      "from": "im",
+      "to": "logs",
+      "y": 700,
+      "label": "注册待确认项与两位码租约；记录确认请求",
+      "variant": "dashed"
+    },
+    {
+      "id": "prompt",
+      "from": "im",
+      "to": "sdk",
+      "y": 740,
+      "label": "sendmessage acknowledgement / BOT echo 尝试关联确认提示消息 ID",
+      "variant": "emphasis",
+      "note": "SDK sendRaw() 不返回 ID；adapter 尝试读取低层 sendMessage response，poller echo 是回退。"
+    },
+    {
+      "id": "ack",
+      "from": "sdk",
+      "to": "im",
+      "y": 780,
+      "label": "sendmessage acknowledgement / BOT echo 尝试关联消息 ID",
+      "variant": "return",
+      "note": "SDK sendRaw() 本身不返回 ID；adapter 使用低层 sendMessage acknowledgement，poller echo 为回退关联。"
+    },
+    {
+      "id": "prompt-to-user",
+      "from": "sdk",
+      "to": "wechat",
+      "y": 820,
+      "label": "发出确认提示：要求引用原提示并回复确认码 + Y / N",
+      "variant": "return"
+    },
+    {
+      "id": "desktop-projection",
+      "from": "runtime",
+      "to": "desktop",
+      "y": 860,
+      "label": "confirm-requested(lane=wechat) 投影到聊天；ToolCallCard 应显示“等待 IM 确认”只读态",
+      "variant": "dashed",
+      "note": "ToolCallCard.tsx 对 wechat/feishu lane 在 MCP 按钮卡分支之前 return，不渲染允许/拒绝按钮；有对应测试。"
+    },
+    {
+      "id": "desktop-bridge",
+      "from": "desktop",
+      "to": "im",
+      "y": 900,
+      "label": "可用桥接：wechat:confirm-response → resolveFromDesktop(requestId, approved)",
+      "variant": "security",
+      "note": "主进程 handler 确实结算同一个 ImChannel registry；但 renderer 仓库内没有 wechatConfirmResponse 调用点。"
+    },
+    {
+      "id": "reply",
+      "from": "wechat",
+      "to": "sdk",
+      "y": 900,
+      "label": "引用确认提示，回复两位码 + Y / N",
+      "variant": "emphasis"
+    },
+    {
+      "id": "generic-desktop-submit",
+      "from": "desktop",
+      "to": "desktop-registry",
+      "y": 940,
+      "label": "可操作确认卡 → pendingConfirmStore.respond → tool:confirm-response",
+      "variant": "security",
+      "note": "这是通用桌面 ToolConfirmRegistry 路径；它不是 ImChannel waiter。若微信项误显示此卡，点击不会自动走 wechat:confirm-response。"
+    },
+    {
+      "id": "reply-ingress",
+      "from": "sdk",
+      "to": "router",
+      "y": 940,
+      "label": "SDK 入站；原始 ref_msg 与解析后引用字段一并进入",
+      "variant": "default"
+    },
+    {
+      "id": "resolve-confirm",
+      "from": "router",
+      "to": "im",
+      "y": 980,
+      "label": "IM 回复校验 owner、确认码和原提示引用；提交/终结 IM waiter",
+      "variant": "security"
+    },
+    {
+      "id": "settle-return",
+      "from": "im",
+      "to": "channel",
+      "y": 1020,
+      "label": "返回批准 / 拒绝 / 超时 / 取消 / unavailable",
+      "variant": "return",
+      "note": "终态由同一 IM confirmation lifecycle 结算，并释放本请求持有的码租约。"
+    },
+    {
+      "id": "outcome",
+      "from": "im",
+      "to": "channel",
+      "y": 1060,
+      "label": "ConfirmationPort 收到结构化确认结果",
+      "variant": "return"
+    },
+    {
+      "id": "recheck",
+      "from": "channel",
+      "to": "policy",
+      "y": 1100,
+      "label": "批准后执行前复核权限与批准范围",
+      "variant": "security"
+    },
+    {
+      "id": "dispatch",
+      "from": "policy",
+      "to": "dispatch",
+      "y": 1140,
+      "label": "复核通过才派发 MCP / 工具",
+      "variant": "emphasis"
+    },
+    {
+      "id": "tool-result",
+      "from": "dispatch",
+      "to": "runtime",
+      "y": 1180,
+      "label": "结果 / 错误；被拒或不可用则标记未派发",
+      "variant": "return"
+    },
+    {
+      "id": "finalize",
+      "from": "runtime",
+      "to": "logs",
+      "y": 1220,
+      "label": "写入工具、审批、turn 与发送状态历史",
+      "variant": "dashed"
+    },
+    {
+      "id": "reply-user",
+      "from": "runtime",
+      "to": "wechat",
+      "y": 1260,
+      "label": "Agent 汇总后经 replyWeChatSummary 返回最终回执",
+      "variant": "return"
+    },
+    {
+      "id": "reply-audit",
+      "from": "router",
+      "to": "logs",
+      "y": 1300,
+      "label": "记录 reply success、agent_done 和处理终态",
+      "variant": "dashed"
+    },
+    {
+      "id": "binding-fail",
+      "from": "sdk",
+      "to": "im",
+      "y": 1340,
+      "label": "若发送 fulfilled 但无法绑定消息 ID → confirmation unavailable，不派发工具",
+      "variant": "security"
+    },
+    {
+      "id": "timeout-fail",
+      "from": "im",
+      "to": "runtime",
+      "y": 1380,
+      "label": "拒绝 / 超时 / 取消 / unavailable → 工具不派发，结果返回 Agent",
+      "variant": "security"
+    },
+    {
+      "id": "evidence",
+      "from": "sdk",
+      "to": "logs",
+      "y": 1420,
+      "label": "运行日志：sendCall fulfilled，但没有可用消息 ID，delivery=unbound",
+      "variant": "dashed",
+      "note": "之后多个 fetch toolUse 返回 CONFIRMATION_UNAVAILABLE；MCP 未派发。"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "router",
+      "from": 210,
+      "to": 480,
+      "type": "backend"
+    },
+    {
+      "participant": "session",
+      "from": 340,
+      "to": 460,
+      "type": "database"
+    },
+    {
+      "participant": "agent",
+      "from": 460,
+      "to": 520,
+      "type": "backend"
+    },
+    {
+      "participant": "runtime",
+      "from": 500,
+      "to": 1265,
+      "type": "backend"
+    },
+    {
+      "participant": "policy",
+      "from": 540,
+      "to": 1160,
+      "type": "security"
+    },
+    {
+      "participant": "channel",
+      "from": 620,
+      "to": 1110,
+      "type": "security"
+    },
+    {
+      "participant": "im",
+      "from": 660,
+      "to": 1080,
+      "type": "messagebus"
+    },
+    {
+      "participant": "dispatch",
+      "from": 1140,
+      "to": 1190,
+      "type": "cloud"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "入站会话组装要点",
+      "items": [
+        "普通消息流程：SDK onMessage → parse → owner / allowlist guard → dedupe claim → resolve session → AcceptedTurn → runWeChatRemoteAgent。",
+        "remoteContext 携带 source=wechat、messageId、userId、authOwner、confirmPolicy、sessionId、requestId、turnId 和 IM confirmation channel。",
+        "本图展示职责边界；当前上下文中未把工具目录裁剪、工具授权集合和实际发给模型的最终 prompt 投影完全展开，需审核这些 runtime 组装点。"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "不要混淆三种确认界面/机制",
+      "items": [
+        "ConfirmationPort 按 lane 和 answerer 选择 channel；WeChat user-answerer 的常规路径是 ImRequestChannel，等待项保存在 ImChannel registry。",
+        "正确带 confirmationLane=wechat 的 ToolCallCard 提前返回只读“等待即时通讯确认”状态；测试明确断言不出现允许/拒绝按钮。",
+        "另有 wechat:confirm-response IPC，主进程调用 ImChannel.resolveFromDesktop()，确实能结算 IM waiter；但当前 renderer 只有 API 暴露，没有调用点。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "本轮日志与异常语义",
+      "items": [
+        "聊天卡按钮的通用路径是 pendingConfirmStore.respond → window.api.toolConfirmResponse → tool:confirm-response → submitToolConfirmResponse（桌面 ToolConfirmRegistry）。",
+        "此通用 IPC 与 wechat:confirm-response → ImChannel.resolveFromDesktop 是不同入口、不同 registry。若微信请求显示可点 MCP 卡片，卡片可能未带/丢失 confirmationLane，或它属于另一条桌面请求；截图本身不能证明是哪一种。",
+        "本次确认提示日志 sendCall=fulfilled，但无可用消息 ID、delivery=unbound；随后 fetch toolUse 返回 CONFIRMATION_UNAVAILABLE，MCP 未派发。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "建议审核的代码边界",
+      "items": [
+        "发布 lane：invocationAssembler 构造 confirm-requested fact 时写 lane=materialsLane；assistantFactAggregator 把它保存为 confirmationLane。",
+        "传播 lane：turnDisplayProtocol 编解码保留 confirmationLane；ChatMessageList 合并 live projection；ToolCallCard 检查 wechat/feishu lane 并切换为只读态。",
+        "IPC 分流：通用确认卡按钮用 tool:confirm-response；微信专用桌面桥接是 wechat:confirm-response，但在 src/renderer 中无调用点。下一步应沿截图请求的 requestId/toolUseId 核对 lane 是否一路保持 wechat。"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "关联身份：代码实际采用多层 ID",
+      "items": [
+        "messageId 标识一条微信入站消息，用于去重并作为确认提示的原始上下文；sessionId 按 userId 和空闲窗口复用，表示对话历史容器，不是这条指令的事务 ID。",
+        "requestId 标识一次远程处理/唤醒；turnId 标识 runtime turn；toolUseId 标识模型的一次工具调用；ImChannel 再生成内部 UUID 与两位确认码，并绑定提示 messageId 或引用标记。它们各自有用途，不能互相替代。",
+        "imChannel 的 pending 数据携带原始 messageId、sessionId、requestId、owner，但 buildImPending 没有传 toolUseId；确认请求日志也没有 toolUseId。两个调用共享 requestId/sessionId/toolName 时，日志无法确定某个 confirm 对应哪个 toolUse。"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "日志直接证据：分流结果被误命名且链条断开",
+      "items": [
+        "04:21:24 与 04:21:38 两条回复均无 ref_msg / 引用 ID；reply_binding_check 两个匹配项都是 false，但 router 仍记录 wechat.inbound.confirm_resolved 并消费消息。该事件其实只表示“被确认解析器拦截”，并不等于已批准或 waiter 已结算。",
+        "04:21:05 同一个 requestId/sessionId/toolName 在 6ms 内创建两条确认；04:34 同一 request 下有两条并行确认，之后 toolUseId 分别出现于 Agent 日志。确认日志未记 toolUseId，因此只能按时间猜配对。",
+        "04:21、04:34、04:40 的提示发送均 fulfilled 但 delivery=unbound，后续 fetch tool.result 为 CONFIRMATION_UNAVAILABLE，未派发 MCP。04:40 的 sendResponseKeys=[message_id] 但 messageId 未提取，且 inbound 用户消息仍能复用同一 session；这说明 IM 连接正常不代表确认绑定契约成功。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "对系统设计判断的结论",
+      "items": [
+        "你的判断基本成立：目前把身份关系分散在 parser、router、session resolver、wake event、runtime、ImChannel 和 prompt adapter 中维护。session 复用让历史连贯，但不能自动把一条指令、它触发的多个工具调用、确认提示及回复建成一个显式业务对象。",
+        "需要收敛的是关联模型与生命周期所有权，不是简单再叠一个 session 字段：建议以 inbound interactionId 为根，显式关联 messageId、sessionId、requestId/turnId、toolUseId、confirmationId、promptMessageId 和 replyMessageId；所有排队、超时、取消、终态回执沿该根追踪。",
+        "当前引用校验仍是安全门：回复必须匹配发送者、两位码及提示引用。建立根关联不能降低这项校验；它要解决的是系统内部可追踪、可取消、可审计和可恢复。"
+      ]
+    }
+  ]
+}

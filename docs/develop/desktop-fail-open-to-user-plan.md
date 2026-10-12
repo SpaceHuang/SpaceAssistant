@@ -441,7 +441,7 @@ desktop 走 agent 裁决时，卡片会被渲染成**只读态**：`ToolCallCard
 
 ### 5.9 `approval-updated` 当前未接线（但回退分支必须在其之前）
 
-本次验证确认：`approval-updated` 这个 fact 事件**目前在 `electron/` 下没有生产点**——只在 `packages/agent-core/src/history.ts` 的 `HistoryEvent.kind`（另一套语义）与 `assistantFactAggregator`（消费端）出现，属 SDK 迁移预留路径。
+本次验证确认：`approval-updated` 这个 fact 事件**目前在 `electron/` 下没有生产点**——只在 `packages/agent-sdk/src/history.ts` 的 `HistoryEvent.kind`（另一套语义）与 `assistantFactAggregator`（消费端）出现，属 SDK 迁移预留路径。
 
 但消费端行为已经就位：`assistantFactAggregator` 收到该事件且 `status` 为 `denied` / `unavailable` / `timed-out` / `cancelled` 时，会把工具置为 `rejected` 终态。
 

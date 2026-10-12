@@ -4,7 +4,9 @@ import type { SpaceAssistantApi } from '../src/shared/api'
 
 const api: SpaceAssistantApi = {
   ping: () => ipcRenderer.invoke('ping'),
-  storageGetProfile: () => ipcRenderer.invoke('storage:get-profile'),
+  storageGetOverview: (force = false) => ipcRenderer.invoke('storage:get-overview', { force }),
+  storageRunAudit: () => ipcRenderer.invoke('storage:run-audit'),
+  storageGetProfile: () => ipcRenderer.invoke('storage:run-audit'),
   storageClearCache: () => ipcRenderer.invoke('storage:clear-cache'),
   storageCompact: () => ipcRenderer.invoke('storage:compact'),
   storageOnMaintenanceProgress: (cb) => {

@@ -7,6 +7,12 @@ type MockBotState = {
   pollState: 'stopped' | 'polling'
 }
 
+type MockMessageBuilder = {
+  withClientId: (id: string) => MockMessageBuilder
+  text: (text: string) => MockMessageBuilder
+  build: () => Record<string, unknown>
+}
+
 export type MockWeChatBot = EventEmitter & {
   login: ReturnType<typeof vi.fn>
   logout: ReturnType<typeof vi.fn>
@@ -14,6 +20,9 @@ export type MockWeChatBot = EventEmitter & {
   stop: ReturnType<typeof vi.fn>
   reply: ReturnType<typeof vi.fn>
   send: ReturnType<typeof vi.fn>
+  sendRaw: ReturnType<typeof vi.fn>
+  createMessage: (userId: string) => MockMessageBuilder
+  poller: EventEmitter
   sendTyping: ReturnType<typeof vi.fn>
   stopTyping: ReturnType<typeof vi.fn>
   download: ReturnType<typeof vi.fn>
@@ -52,6 +61,7 @@ export function makeIncomingMessage(partial: Partial<IncomingMessage> = {}): Inc
 export function createMockWeChatBot(): MockWeChatBot {
   let messageHandler: ((msg: IncomingMessage) => void) | undefined
   const bot = new EventEmitter() as MockWeChatBot
+  bot.poller = new EventEmitter()
   bot._state = { loggedIn: false, pollState: 'stopped' }
   bot.use = vi.fn()
   bot.login = vi.fn(async () => {
@@ -63,12 +73,25 @@ export function createMockWeChatBot(): MockWeChatBot {
   })
   bot.start = vi.fn(async () => {
     bot._state.pollState = 'polling'
+    bot.emit('poll:start')
   })
   bot.stop = vi.fn(async () => {
     bot._state.pollState = 'stopped'
   })
   bot.reply = vi.fn(async () => undefined)
   bot.send = vi.fn(async () => undefined)
+  bot.createMessage = (userId) => {
+    const payload: Record<string, unknown> = { to_user_id: userId, client_id: '', text: '' }
+    const builder = {
+      withClientId: (id: string) => { payload.client_id = id; return builder },
+      text: (text: string) => { payload.text = text; return builder },
+      build: () => payload
+    }
+    return builder
+  }
+  bot.sendRaw = vi.fn(async (payload: Record<string, unknown>) => {
+    bot.poller.emit('messages', [{ ...payload, message_type: 2, message_id: 123456 }])
+  })
   bot.sendTyping = vi.fn(async () => undefined)
   bot.stopTyping = vi.fn(async () => undefined)
   bot.download = vi.fn(async () => ({

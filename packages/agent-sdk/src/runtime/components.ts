@@ -3,52 +3,52 @@
  * 无宿主依赖;宿主侧(electron)经组合注入联动实现。
  */
 
-/** Crockford Base32 alphabet (no I, L, O, U). */
-const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+import { randomInt } from 'crypto'
+
+/** Opaque capability returned for one active two-digit confirmation allocation. */
+export interface ConfirmCodeLease {
+  readonly code: string
+  /** Identity token: release succeeds only while this exact token owns code. */
+  readonly allocationToken: object
+}
 
 export interface ConfirmIdSpaceLike {
-  allocate(maxAttempts?: number): string
-  release(id: string): void
+  allocate(): ConfirmCodeLease
+  release(lease: ConfirmCodeLease): void
   isInUse(id: string): boolean
   clear(): void
 }
 
 export class ConfirmIdSpace implements ConfirmIdSpaceLike {
-  private readonly ids = new Set<string>()
+  private readonly leases = new Map<string, ConfirmCodeLease>()
 
-  allocate(maxAttempts = 32): string {
-    for (let i = 0; i < maxAttempts; i++) {
-      const buf = randomBytes(3)
-      let id = ''
-      // 4 chars from 20 bits
-      let n = ((buf[0]! << 16) | (buf[1]! << 8) | buf[2]!) >>> 0
-      for (let c = 0; c < 4; c++) {
-        id = CROCKFORD[n & 31]! + id
-        n >>>= 5
-      }
-      const upper = id.toUpperCase()
-      if (!this.ids.has(upper)) {
-        this.ids.add(upper)
-        return upper
+  allocate(): ConfirmCodeLease {
+    const start = randomInt(100)
+    for (let offset = 0; offset < 100; offset++) {
+      const code = String((start + offset) % 100).padStart(2, '0')
+      if (!this.leases.has(code)) {
+        const lease = Object.freeze({ code, allocationToken: Object.freeze({}) })
+        this.leases.set(code, lease)
+        return lease
       }
     }
-    throw new Error('confirmId collision exhausted')
+    throw new Error('CONFIRM_ID_SPACE_EXHAUSTED')
   }
 
-  release(id: string): void {
-    this.ids.delete(id.toUpperCase())
+  release(lease: ConfirmCodeLease): void {
+    if (!lease || typeof lease !== 'object' || typeof lease.code !== 'string') return
+    const current = this.leases.get(lease.code)
+    if (current?.allocationToken === lease.allocationToken) this.leases.delete(lease.code)
   }
 
   isInUse(id: string): boolean {
-    return this.ids.has(id.toUpperCase())
+    return this.leases.has(id)
   }
 
   clear(): void {
-    this.ids.clear()
+    this.leases.clear()
   }
 }
-
-import { randomBytes } from 'crypto'
 
 export const CHAT_CANCELLED_MESSAGE = 'CHAT_CANCELLED'
 

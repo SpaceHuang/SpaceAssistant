@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { AgentTurnCancelledError, runAgentTurn, runHostedAgentTurn, type AgentTurnHost } from '../src/turn'
+import { AgentTurnCancelledError, PlanRejectedError, runAgentTurn, runHostedAgentTurn, type AgentTurnHost } from '../src/turn'
 import { ModelProviderRegistry, type CanonicalModelMessage, type StreamChunk } from '../src/model'
 import { CapabilityRegistry } from '../src/capability'
 import { InMemorySafetyPermitStore, type PermitBinding } from '../src/safetyPermit'
@@ -4142,6 +4142,129 @@ describe('runAgentTurn', () => {
     expect((await histories.B.read(sessionB.invocationId)).events.at(-1)).toMatchObject({ kind: 'invocation-completed', payload: { status: 'completed' } })
     expect((await histories.B.read(sessionB.invocationId)).events.find((event) => event.kind === 'approval-resolved')).toMatchObject({
       kind: 'approval-resolved', payload: { toolCallId: 'tool-B', approved: true, outcome: 'approved' }
+    })
+  })
+
+  describe('PlanRejectedError（计划期拒绝回传模型，D-1 定案）', () => {
+    const planRejectionJson = '{"code":"SHELL_DIALECT_MISMATCH","caseId":"SHELL-DIALECT-001","signals":["posix-variable"],"hints":["改写命令"]}'
+
+    it('prepareTool 抛 PlanRejectedError 时 turn 继续，拒绝物化为 is_error tool 消息回传模型', async () => {
+      const registry = new ModelProviderRegistry()
+      let modelCalls = 0
+      let secondTurnToolMessages: CanonicalModelMessage[] = []
+      registry.register(route, { providerId: 'fake', stream: (call) => {
+        modelCalls += 1
+        if (modelCalls === 1) {
+          return stream(
+            { type: 'tool-call', toolCallId: 'tc-plan-reject', toolName: 'lookup', input: { query: 'mixed dialect' } },
+            { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+          )
+        }
+        secondTurnToolMessages = call.request.messages.filter((message) => message.role === 'tool') as CanonicalModelMessage[]
+        return stream({ type: 'text-delta', text: 'recovered after plan rejection' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
+      } })
+      const capabilities = new CapabilityRegistry()
+      capabilities.define('inv', ['lookup'])
+      const permits = new InMemorySafetyPermitStore()
+      const history = new MemoryHistory()
+      const planRejection = new PlanRejectedError('SHELL_DIALECT_MISMATCH', planRejectionJson)
+      const afterToolResultSources: Array<{ kind: string; reasonCode?: string }> = []
+      const result = await runAgentTurn({
+        registry, routeId: route.routeId, invocationId: 'inv', history,
+        request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 100 },
+        safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion }) } }),
+        prepareTool: async () => { throw planRejection },
+        toolExecution: toolExecutionPort(permits, async () => ({ output: 'unexpected execution' })),
+        maxModelTurns: 2, toolResourceKeys: () => [], returnDeniedToolsToModel: true,
+        observer: { onToolFinished: () => { /* source-side assertions live on afterToolResult */ } },
+        afterToolResult: (_call, _result, source) => { if (source) afterToolResultSources.push({ kind: source.kind, reasonCode: source.reasonCode }) }
+      })
+      expect(result).toMatchObject({ text: 'recovered after plan rejection' })
+      expect(modelCalls).toBe(2)
+      expect(secondTurnToolMessages).toHaveLength(1)
+      expect(secondTurnToolMessages[0]).toMatchObject({ role: 'tool', toolCallId: 'tc-plan-reject', content: planRejectionJson, isError: true })
+      const events = (await history.read('inv')).events
+      expect(events).toContainEqual(expect.objectContaining({
+        kind: 'tool-call-not-dispatched',
+        payload: expect.objectContaining({ toolCallId: 'tc-plan-reject', reason: 'SHELL_DIALECT_MISMATCH', replayContent: planRejectionJson, isError: true })
+      }))
+      // 审计口径与「策略拒绝」（safety-rejection）分离（D-1）
+      expect(afterToolResultSources).toContainEqual({ kind: 'plan-rejection', reasonCode: 'SHELL_DIALECT_MISMATCH' })
+    })
+
+    it('PlanRejectedError 走 drain 语义：不中断 in-flight 工具，排队工具继续派发', async () => {
+      const registry = new ModelProviderRegistry()
+      let modelCalls = 0
+      registry.register(route, { providerId: 'fake', stream: () => {
+        modelCalls += 1
+        return modelCalls === 1
+          ? stream(
+            { type: 'tool-call', toolCallId: 'tc-reject', toolName: 'lookup', input: { query: 'reject' } },
+            { type: 'tool-call', toolCallId: 'tc-slow', toolName: 'lookup', input: { query: 'slow' } },
+            { type: 'tool-call', toolCallId: 'tc-queued', toolName: 'lookup', input: { query: 'queued' } },
+            { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+          )
+          : stream({ type: 'text-delta', text: 'resumed' }, { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
+      } })
+      const capabilities = new CapabilityRegistry()
+      capabilities.define('inv', ['lookup'])
+      const permits = new InMemorySafetyPermitStore()
+      const history = new MemoryHistory()
+      let releaseSlow!: () => void
+      const slowGate = new Promise<void>((resolve) => { releaseSlow = resolve })
+      const started: string[] = []
+      const executed: string[] = []
+      const execution = createPermitBoundToolExecutionPort<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }, { output: unknown }>({
+        permits, admission: new InMemoryExecutionAdmissionCoordinator(), allowedPhase: 'recheck',
+        resolveExpected: async (call) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: 'recheck' }),
+        execute: async (call) => {
+          started.push(call.toolCallId)
+          if (call.input.query === 'slow') await slowGate
+          executed.push(call.toolCallId)
+          return { output: call.toolCallId }
+        }
+      })
+      const turn = runAgentTurn({
+        registry, routeId: route.routeId, invocationId: 'inv', history,
+        request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 100 },
+        safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion }) } }),
+        prepareTool: async (call, stage) => {
+          if (call.toolCallId === 'tc-reject' && stage.kind === 'initial') throw new PlanRejectedError('SHELL_DIALECT_MISMATCH', planRejectionJson)
+          return { ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId, capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }
+        },
+        toolExecution: execution, maxModelTurns: 2, maxConcurrentTools: 2, toolResourceKeys: () => [], returnDeniedToolsToModel: true
+      })
+      await vi.waitFor(() => expect(started).toContain('tc-slow'))
+      releaseSlow()
+      await expect(turn).resolves.toMatchObject({ text: 'resumed' })
+      expect(executed).toEqual(['tc-slow', 'tc-queued'])
+      expect(modelCalls).toBe(2)
+    })
+
+    it('returnDeniedToolsToModel 未开启时 PlanRejectedError 仍致命（fatal-by-default 不变）', async () => {
+      const registry = new ModelProviderRegistry()
+      let modelCalls = 0
+      registry.register(route, { providerId: 'fake', stream: () => {
+        modelCalls += 1
+        return stream(
+          { type: 'tool-call', toolCallId: 'tc-plan-reject', toolName: 'lookup', input: { query: 'mixed dialect' } },
+          { type: 'usage', inputTokens: 1, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+        )
+      } })
+      const capabilities = new CapabilityRegistry()
+      capabilities.define('inv', ['lookup'])
+      const permits = new InMemorySafetyPermitStore()
+      const history = new MemoryHistory()
+      const planRejection = new PlanRejectedError('SHELL_DIALECT_MISMATCH', planRejectionJson)
+      await expect(runAgentTurn({
+        registry, routeId: route.routeId, invocationId: 'inv', history,
+        request: { messages: [{ role: 'user', content: 'go' }], maxTokens: 100 },
+        safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) => ({ kind: 'allow', authorizationVersion: binding.authorizationVersion }) } }),
+        prepareTool: async () => { throw planRejection },
+        toolExecution: toolExecutionPort(permits, async () => ({ output: 'unexpected execution' })),
+        maxModelTurns: 2, toolResourceKeys: () => []
+      })).rejects.toBe(planRejection)
+      expect(modelCalls).toBe(1)
     })
   })
 })

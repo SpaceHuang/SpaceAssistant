@@ -11,6 +11,7 @@ import { sendWeChatRemoteOutbound } from '../wechat/weChatRemoteOutbound'
 import type { WeChatBotService } from '../wechat/weChatBotService'
 import { logWeChatCliEvent } from '../wechat/weChatCliLogger'
 import type { RemoteProgressAdapter } from './remoteProgressCoordinator'
+import type { RemoteTrackOutboundDeliveryContext } from './remoteTrackOutbound'
 
 export function createWeChatProgressAdapter(args: {
   botService: WeChatBotService
@@ -19,6 +20,7 @@ export function createWeChatProgressAdapter(args: {
   getSessionId: () => string
   config: WeChatConfig
   sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>
+  trackDelivery?: RemoteTrackOutboundDeliveryContext
 }): RemoteProgressAdapter {
   const progressConfig = mergeRemoteProgressConfig(
     pickWeChatProgressConfig(args.config),
@@ -47,6 +49,7 @@ export function createWeChatProgressAdapter(args: {
         inbound: args.inboundRaw,
         body: text,
         sessionId,
+        trackDelivery: args.trackDelivery,
         touch: { sessionCommands: args.sessionCommands, sessionId }
       }).catch(() => undefined)
     },

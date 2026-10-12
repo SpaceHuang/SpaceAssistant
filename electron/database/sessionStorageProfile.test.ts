@@ -2,13 +2,82 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { afterEach, describe, expect, it } from 'vitest'
-import { collectSessionStorageProfile } from './sessionStorageProfile'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { collectSessionStorageAudit, collectSessionStorageProfile, collectSessionStorageStrictProfile } from './sessionStorageProfile'
+import type { StorageMessageBodyCoverage } from '../../src/shared/storageTypes'
 
 const tempPaths: string[] = []
 afterEach(() => { for (const file of tempPaths.splice(0)) { try { fs.rmSync(file, { force: true, recursive: true }) } catch { /* best effort */ } } })
 
 describe('collectSessionStorageProfile', () => {
+  it('reports audit as partial when the degraded spill root is not a directory', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'storage-profile-audit-invalid-root-'))
+    tempPaths.push(root)
+    const dbPath = path.join(root, 'spaceassistant.db')
+    fs.writeFileSync(path.join(root, 'spill-degraded'), 'not a directory')
+    const db = new DatabaseSync(dbPath)
+    db.close()
+
+    const audit = collectSessionStorageAudit(dbPath)
+
+    expect(audit.status).toBe('partial')
+    expect(audit.errorCodes).toContain('SPILL_ROOT_NOT_DIRECTORY')
+  })
+
+  it('reports audit as partial when degraded spill scanning returns a permission error', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'storage-profile-audit-eacces-'))
+    tempPaths.push(root)
+    const dbPath = path.join(root, 'spaceassistant.db')
+    const spillRoot = path.join(root, 'spill')
+    const degradedRoot = path.join(root, 'spill-degraded')
+    fs.mkdirSync(spillRoot)
+    fs.mkdirSync(degradedRoot)
+    const db = new DatabaseSync(dbPath)
+    db.close()
+    const readdir = fs.readdirSync.bind(fs)
+    const spy = vi.spyOn(fs, 'readdirSync').mockImplementation(((target: fs.PathLike, ...args: unknown[]) => {
+      if (String(target) === degradedRoot) throw Object.assign(new Error('permission denied'), { code: 'EACCES' })
+      return (readdir as (...callArgs: unknown[]) => unknown)(target, ...args)
+    }) as never)
+
+    try {
+      const audit = collectSessionStorageAudit(dbPath)
+      expect(audit.status).toBe('partial')
+      expect(audit.errorCodes).toContain('EACCES')
+    } finally { spy.mockRestore() }
+  })
+
+  it('keeps the strict audit DTO structured-cloneable, redacted, and equivalent to the legacy collector', () => {
+    const dbPath = path.join(os.tmpdir(), `storage-profile-audit-${process.pid}.db`)
+    tempPaths.push(dbPath)
+    const db = new DatabaseSync(dbPath)
+    db.exec(`CREATE TABLE messages(id TEXT, session_id TEXT, role TEXT, content TEXT, tool_calls TEXT, thinking TEXT, attachments TEXT, content_segments TEXT);
+      CREATE TABLE agent_history_streams(invocation_id TEXT, session_id TEXT);
+      CREATE TABLE agent_history_events(invocation_id TEXT, kind TEXT, payload_json TEXT);
+      INSERT INTO messages VALUES('m','s','assistant','private audit body',NULL,NULL,NULL,NULL);
+      INSERT INTO agent_history_streams VALUES('i','s');
+      INSERT INTO agent_history_events VALUES('i','model-response-committed','{"message":{"id":"m","role":"assistant","content":"private audit body"}}');`)
+    db.close()
+
+    const legacy = collectSessionStorageProfile(dbPath) as any
+    const strict = collectSessionStorageStrictProfile(dbPath) as any
+    const audit = collectSessionStorageAudit(dbPath)
+    const coverage: StorageMessageBodyCoverage | null = audit.messageBodyCoverage
+
+    expect(strict).toMatchObject({ tables: legacy.tables, canonicalCoverage: legacy.canonicalCoverage,
+      canonicalSessionCoverage: legacy.canonicalSessionCoverage, canonicalRequiredData: legacy.canonicalRequiredData,
+      messageBodyCoverage: legacy.messageBodyCoverage, spillFiles: { files: legacy.spillFiles.files,
+        observedBytes: legacy.spillFiles.observedBytes, sourceOfTruthBytes: legacy.spillFiles.sourceOfTruthBytes,
+        degradableBytes: legacy.spillFiles.degradableBytes, orphanBytes: legacy.spillFiles.orphanBytes,
+        complete: legacy.spillFiles.complete, errorCodes: legacy.spillFiles.errorCodes } })
+    expect(audit).toMatchObject({ canonicalCoverage: legacy.canonicalCoverage, canonicalSessionCoverage: legacy.canonicalSessionCoverage,
+      canonicalRequiredData: legacy.canonicalRequiredData, messageBodyCoverage: legacy.messageBodyCoverage })
+    expect(coverage).toMatchObject({ byRole: { assistant: { messages: 1, bodyMatched: 1 } },
+      identityBodyCandidatesByRole: { assistant: { messages: 1, candidateMatches: 1, candidateContentBytes: Buffer.byteLength('private audit body') } } })
+    expect(structuredClone(audit)).toEqual(audit)
+    expect(JSON.stringify({ strict, audit })).not.toContain('private audit body')
+  })
+
   it('captures the schema/runtime context and byte volume of retained canonical history', () => {
     const dbPath = path.join(os.tmpdir(), `storage-profile-required-${process.pid}.db`)
     tempPaths.push(dbPath)

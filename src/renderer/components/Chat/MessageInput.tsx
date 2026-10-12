@@ -585,27 +585,26 @@ export const MessageInput = forwardRef<MessageInputHandle, Props>(function Messa
         />
         <div className="composer-footer">
           <div ref={leftRowRef} className="composer-footer__start">
-            <Tooltip title={tooManyHint ? t('input.tooManyImages', { max: MAX_CHAT_IMAGE_ATTACHMENTS }) : undefined}>
-              <Dropdown
-                trigger={['click']}
-                open={plusMenuOpen}
-                onOpenChange={setPlusMenuOpen}
-                placement="topLeft"
-                menu={{ items: plusMenuItems, onClick: handlePlusMenuClick }}
+            <Dropdown
+              trigger={['click']}
+              open={plusMenuOpen}
+              onOpenChange={setPlusMenuOpen}
+              placement="topLeft"
+              menu={{ items: plusMenuItems, onClick: handlePlusMenuClick }}
+            >
+              <button
+                ref={attachButtonRef}
+                type="button"
+                className="composer-add-attachment"
+                disabled={disabled || !sessionId}
+                aria-label={t('input.addImage')}
+                aria-haspopup="menu"
+                aria-expanded={plusMenuOpen}
+                title={tooManyHint ? t('input.tooManyImages', { max: MAX_CHAT_IMAGE_ATTACHMENTS }) : undefined}
               >
-                <button
-                  ref={attachButtonRef}
-                  type="button"
-                  className="composer-add-attachment"
-                  disabled={disabled || !sessionId}
-                  aria-label={t('input.addImage')}
-                  aria-haspopup="menu"
-                  aria-expanded={plusMenuOpen}
-                >
-                  <Plus size={16} strokeWidth={1.75} aria-hidden />
-                </button>
-              </Dropdown>
-            </Tooltip>
+                <Plus size={16} strokeWidth={1.75} aria-hidden />
+              </button>
+            </Dropdown>
             {prefsSlot ? <span ref={prefsChipRef}>{prefsSlot}</span> : null}
             {/* §5.2.1（OQ-9）：idle 态唯一内容是 hintIdle，移除后整块不渲染（腾位给强度控件）；
                 running 态的「生成中」/耗时/队列/脉冲点走独立通道，全部保留 */}

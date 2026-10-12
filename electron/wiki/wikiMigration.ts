@@ -133,10 +133,12 @@ function sha256(content: string): string {
 
 const PARALLEL_VERSION_NOTE = `> [wiki-migration] 本页存在来自其他项目的平行版本（冲突双保留），请人工核对合并。\n`
 
-async function copyFileLocked(srcAbs: string, destAbs: string): Promise<void> {
+async function copyFileLocked(srcAbs: string, destAbs: string, options: { overwrite?: boolean } = {}): Promise<boolean> {
   fs.mkdirSync(path.dirname(destAbs), { recursive: true })
-  await withWikiWriteMutex(destAbs, async () => {
+  return withWikiWriteMutex(destAbs, async () => {
+    if (!options.overwrite && fs.existsSync(destAbs)) return false
     fs.copyFileSync(srcAbs, destAbs)
+    return true
   })
 }
 
@@ -179,12 +181,14 @@ async function mergeWikiPages(
     const ext = dot > 0 ? ent.name.slice(dot) : '.md'
     const parallelName = `${stem}.from-${projectId}${ext}`
     const parallelAbs = path.join(sharedWikiDir, parallelName)
+    // Retries after a later migration-stage failure must preserve an existing conflict
+    // copy: it may have been reviewed or edited by the user since the first attempt.
     await copyFileLocked(srcAbs, parallelAbs)
     // 提示行（幂等：已含标注则不重复加）
     const annotate = async (abs: string, note: string): Promise<void> => {
-      const content = fs.readFileSync(abs, 'utf8')
-      if (content.includes('[wiki-migration]')) return
       await withWikiWriteMutex(abs, async () => {
+        const content = fs.readFileSync(abs, 'utf8')
+        if (content.includes('[wiki-migration]')) return
         fs.writeFileSync(abs, note + content, 'utf8')
       })
     }

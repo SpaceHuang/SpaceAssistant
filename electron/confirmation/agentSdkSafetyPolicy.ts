@@ -76,9 +76,11 @@ export function createAgentSdkSafetyPolicy(input: {
           const sameFeishuMediaTarget = stableSerialize(previous.result.feishuMediaFact) === stableSerialize(result.feishuMediaFact)
           const sameWriteApprovalConfiguration = !previous.result.writePathFact ||
             writeApprovalConfigurationSnapshot(previous.args) === writeApprovalConfigurationSnapshot(gateArgs)
+          const sameConfirmedDecisionRule = decision.ruleId === previous.result.decision.ruleId ||
+            (decision.type === 'auto-allow' && decision.ruleId === 'cache-hit' && previous.result.decision.type === 'require-confirm')
           const sameConfirmedDecision = previous.confirmed &&
             (decision.type === 'auto-allow' || decision.type === 'require-confirm') &&
-            decision.ruleId === previous.result.decision.ruleId && sameFacts
+            sameConfirmedDecisionRule && sameFacts
           const recheckAllowed = sameAuthorizationVersion && sameWriteTarget && sameReadTarget && sameFeishuMediaTarget && sameWriteApprovalConfiguration &&
             (previous.confirmed ? sameConfirmedDecision : decision.type === 'auto-allow')
           initial.delete(key)
@@ -102,6 +104,7 @@ export function createAgentSdkSafetyPolicy(input: {
             kind: 'ask', confirmationId: binding.toolCallId, answerer: decision.answerer, reasonCode: decision.ruleId,
             context: {
               toolName: gateArgs.toolName,
+              ...(gateArgs.lane ? { lane: gateArgs.lane } : {}),
               ...(args.currentPageUrl ? { currentPageUrl: args.currentPageUrl } : {}),
               ...(args.dangerAssessment ? { dangerAssessment: args.dangerAssessment } : {}),
               ...(args.remoteBudgetState ? { remoteBudgetState: args.remoteBudgetState } : {}),

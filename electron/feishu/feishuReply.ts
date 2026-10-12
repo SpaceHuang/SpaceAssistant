@@ -1,6 +1,6 @@
 import type { LarkCliRunner } from './larkCliRunner'
 import { logFeishuCliEvent } from './feishuCliLogger'
-import { sendFeishuRemoteOutbound } from './feishuRemoteOutbound'
+import { sendFeishuRemoteOutbound, sendFeishuRemoteOutboundWithId } from './feishuRemoteOutbound'
 
 /** Send a scheduled result to a stable recipient through the bot identity. */
 export async function sendFeishuTextToTarget(runner: LarkCliRunner, rawTarget: string, text: string): Promise<void> {
@@ -43,22 +43,47 @@ export async function sendFeishuApprovalTextToTarget(runner: LarkCliRunner, rawT
   return { messageId: apiResult.data.message_id }
 }
 
-export async function replyFeishuTextRaw(
+async function replyFeishuTextRawInternal(
   runner: LarkCliRunner,
   messageId: string,
-  text: string
-): Promise<void> {
+  text: string,
+  requireMessageId: boolean
+): Promise<string | undefined> {
   const body = JSON.stringify({ msg_type: 'text', content: JSON.stringify({ text }) })
   const r = await runner.run({
     args: ['api', 'POST', `/open-apis/im/v1/messages/${messageId}/reply`, '--data', body, '--as', 'bot', '--format', 'json'],
     timeoutSec: 30
   })
+  if (r.timedOut || r.exitCode !== 0) throw new Error(`FEISHU_REPLY_FAILED:${r.timedOut ? 'timeout' : r.exitCode}`)
+  let response: unknown
+  try { response = JSON.parse(r.stdout) as unknown } catch { throw new Error('FEISHU_REPLY_RESPONSE_UNKNOWN') }
+  if (!response || typeof response !== 'object' || Array.isArray(response)) throw new Error('FEISHU_REPLY_REJECTED')
+  const apiResult = response as { code?: unknown; data?: { message_id?: unknown } }
+  if (apiResult.code !== 0) throw new Error('FEISHU_REPLY_REJECTED')
+  const sentMessageId = typeof apiResult.data?.message_id === 'string' && apiResult.data.message_id.trim()
+    ? apiResult.data.message_id
+    : undefined
+  if (requireMessageId && !sentMessageId) throw new Error('FEISHU_DELIVERY_MESSAGE_ID_MISSING')
   logFeishuCliEvent('info', 'feishu.reply.send', {
     messageId,
     textLen: text.length,
     truncated: false,
     exitCode: r.exitCode
   })
+  return sentMessageId
+}
+
+/** Ordinary replies do not require a response ID, but return one when the API provides it. */
+export async function replyFeishuTextRaw(runner: LarkCliRunner, messageId: string, text: string): Promise<{ messageId: string } | undefined> {
+  const sentMessageId = await replyFeishuTextRawInternal(runner, messageId, text, false)
+  return sentMessageId ? { messageId: sentMessageId } : undefined
+}
+
+/** Confirmation prompts need a response ID so later replies can be bound to this exact prompt. */
+export async function replyFeishuTextRawWithId(runner: LarkCliRunner, messageId: string, text: string): Promise<{ messageId: string }> {
+  const sentMessageId = await replyFeishuTextRawInternal(runner, messageId, text, true)
+  if (!sentMessageId) throw new Error('FEISHU_DELIVERY_MESSAGE_ID_MISSING')
+  return { messageId: sentMessageId }
 }
 
 /** Tier-0 早退出站；Tier-1 请使用 sendFeishuRemoteOutbound */
@@ -68,4 +93,12 @@ export async function replyFeishuText(
   text: string
 ): Promise<void> {
   await sendFeishuRemoteOutbound({ runner, messageId, body: text })
+}
+
+export async function replyFeishuTextWithId(
+  runner: LarkCliRunner,
+  messageId: string,
+  text: string
+): Promise<{ messageId: string }> {
+  return sendFeishuRemoteOutboundWithId({ runner, messageId, body: text })
 }

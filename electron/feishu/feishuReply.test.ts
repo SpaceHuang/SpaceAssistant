@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { sendFeishuApprovalTextToTarget, sendFeishuTextToTarget } from './feishuReply'
+import { replyFeishuTextRaw, replyFeishuTextRawWithId, sendFeishuApprovalTextToTarget, sendFeishuTextToTarget } from './feishuReply'
 
 describe('sendFeishuTextToTarget', () => {
   it('uses open_id by default and encodes a text message through the bot API', async () => {
@@ -37,5 +37,32 @@ describe('sendFeishuApprovalTextToTarget', () => {
     const run = vi.fn(async () => ({ exitCode: 0, stdout: '{"code":0}', stderr: '', timedOut: false }))
     await expect(sendFeishuApprovalTextToTarget({ run } as never, 'ou_123', 'approval notice'))
       .rejects.toThrow('FEISHU_DELIVERY_MESSAGE_ID_MISSING')
+  })
+})
+
+describe('replyFeishuTextRawWithId', () => {
+  it('returns the reply message ID needed by synchronous confirmation binding', async () => {
+    const run = vi.fn(async () => ({ exitCode: 0, stdout: '{"code":0,"data":{"message_id":"confirm-prompt-1"}}', stderr: '', timedOut: false }))
+    await expect(replyFeishuTextRawWithId({ run } as never, 'inbound-1', 'confirmation prompt'))
+      .resolves.toEqual({ messageId: 'confirm-prompt-1' })
+  })
+
+  it('fails closed when the reply API does not return a message ID', async () => {
+    const run = vi.fn(async () => ({ exitCode: 0, stdout: '{"code":0}', stderr: '', timedOut: false }))
+    await expect(replyFeishuTextRawWithId({ run } as never, 'inbound-1', 'confirmation prompt'))
+      .rejects.toThrow('FEISHU_DELIVERY_MESSAGE_ID_MISSING')
+  })
+
+  it('keeps ordinary reply delivery independent of an optional response message ID', async () => {
+    const run = vi.fn(async () => ({ exitCode: 0, stdout: '{"code":0}', stderr: '', timedOut: false }))
+    await expect(replyFeishuTextRaw({ run } as never, 'inbound-1', 'ordinary reply')).resolves.toBeUndefined()
+  })
+})
+
+describe('replyFeishuTextRaw optional ID', () => {
+  it('returns a platform message ID when the reply API provides one', async () => {
+    const run = vi.fn(async () => ({ exitCode: 0, stdout: '{"code":0,"data":{"message_id":"ordinary-reply-1"}}', stderr: '', timedOut: false }))
+    await expect(replyFeishuTextRaw({ run } as never, 'inbound-1', 'ordinary reply'))
+      .resolves.toEqual({ messageId: 'ordinary-reply-1' })
   })
 })

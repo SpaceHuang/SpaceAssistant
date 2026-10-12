@@ -702,6 +702,8 @@ export interface ToolCallRecord {
    * §5.8：放宽为 boolean；回退分支发显式 false 清除只读态（恢复人工确认卡可交互）。
    */
   autoAnswerer?: boolean
+  /** 用户确认由微信/飞书远程入站完成；桌面只展示等待状态，不注册本地确认 waiter。 */
+  remoteConfirmation?: 'wechat' | 'feishu'
   confirmedAt?: number
   startedAt?: number
   completedAt?: number

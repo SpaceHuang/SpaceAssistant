@@ -1,0 +1,332 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "IM 安全审核：现状与目标架构",
+    "output": "docs/architecture/im-security-current-vs-target-architecture.html",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1600,
+      1050
+    ]
+  },
+  "components": [
+    {
+      "id": "wechat",
+      "type": "external",
+      "label": "微信入口",
+      "sublabel": "身份 / 收发 / 渠道配置",
+      "pos": [
+        35,
+        95
+      ],
+      "size": [
+        190,
+        76
+      ]
+    },
+    {
+      "id": "feishu",
+      "type": "external",
+      "label": "飞书入口",
+      "sublabel": "身份 / 收发 / 渠道配置",
+      "pos": [
+        35,
+        235
+      ],
+      "size": [
+        190,
+        76
+      ]
+    },
+    {
+      "id": "oldcfgw",
+      "type": "database",
+      "label": "微信安全设置",
+      "sublabel": "独立档位与覆盖",
+      "pos": [
+        285,
+        85
+      ],
+      "size": [
+        200,
+        76
+      ]
+    },
+    {
+      "id": "oldcfgf",
+      "type": "database",
+      "label": "飞书安全设置",
+      "sublabel": "独立档位 / 写入开关",
+      "pos": [
+        285,
+        225
+      ],
+      "size": [
+        200,
+        76
+      ]
+    },
+    {
+      "id": "oldengine",
+      "type": "backend",
+      "label": "策略引擎与调用装配",
+      "sublabel": "IM 规则未接入自动审核",
+      "pos": [
+        555,
+        155
+      ],
+      "size": [
+        220,
+        90
+      ]
+    },
+    {
+      "id": "oldapproval",
+      "type": "security",
+      "label": "人工确认路径",
+      "sublabel": "逐次确认 / 超时阻塞",
+      "pos": [
+        845,
+        155
+      ],
+      "size": [
+        205,
+        90
+      ]
+    },
+    {
+      "id": "oldtools",
+      "type": "external",
+      "label": "工具与外发出口",
+      "sublabel": "能力和外发边界分散",
+      "pos": [
+        1120,
+        155
+      ],
+      "size": [
+        210,
+        90
+      ]
+    },
+    {
+      "id": "targetwechat",
+      "type": "external",
+      "label": "微信适配器",
+      "sublabel": "身份 / 收发 / 能力声明",
+      "pos": [
+        35,
+        560
+      ],
+      "size": [
+        190,
+        76
+      ]
+    },
+    {
+      "id": "targetfeishu",
+      "type": "external",
+      "label": "飞书适配器",
+      "sublabel": "身份 / 收发 / 能力声明",
+      "pos": [
+        35,
+        700
+      ],
+      "size": [
+        190,
+        76
+      ]
+    },
+    {
+      "id": "impolicy",
+      "type": "database",
+      "label": "统一 IM 策略域",
+      "sublabel": "一份档位 / 规则 / 能力许可",
+      "pos": [
+        300,
+        620
+      ],
+      "size": [
+        230,
+        92
+      ],
+      "tag": "共同策略源"
+    },
+    {
+      "id": "facts",
+      "type": "backend",
+      "label": "事实提取与确定性检查",
+      "sublabel": "身份 / 能力 / 参数 / 路径",
+      "pos": [
+        600,
+        620
+      ],
+      "size": [
+        235,
+        92
+      ]
+    },
+    {
+      "id": "reviewagent",
+      "type": "security",
+      "label": "安全审核 Agent",
+      "sublabel": "快通道后审核授权与风险",
+      "pos": [
+        910,
+        565
+      ],
+      "size": [
+        230,
+        92
+      ]
+    },
+    {
+      "id": "todo",
+      "type": "messagebus",
+      "label": "异步人工待办",
+      "sublabel": "必要时通知；任务可继续",
+      "pos": [
+        910,
+        715
+      ],
+      "size": [
+        230,
+        92
+      ]
+    },
+    {
+      "id": "dispatch",
+      "type": "backend",
+      "label": "复核与受控派发",
+      "sublabel": "指纹 / 版本 / 撤销代次",
+      "pos": [
+        1220,
+        620
+      ],
+      "size": [
+        235,
+        92
+      ]
+    },
+    {
+      "id": "replyguard",
+      "type": "security",
+      "label": "统一出口边界",
+      "sublabel": "受控回复与主动外发区分",
+      "pos": [
+        1220,
+        790
+      ],
+      "size": [
+        235,
+        76
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "wechat",
+      "to": "oldcfgw",
+      "label": "读写渠道策略",
+      "labelDy": 65
+    },
+    {
+      "from": "feishu",
+      "to": "oldcfgf",
+      "label": "读写渠道策略",
+      "labelDy": 65
+    },
+    {
+      "from": "oldcfgw",
+      "to": "oldengine"
+    },
+    {
+      "from": "oldcfgf",
+      "to": "oldengine"
+    },
+    {
+      "from": "oldengine",
+      "to": "oldapproval",
+      "label": "IM 多落到 ask"
+    },
+    {
+      "from": "oldapproval",
+      "to": "oldtools",
+      "label": "批准后尝试执行",
+      "labelDy": 65
+    },
+    {
+      "from": "targetwechat",
+      "to": "impolicy",
+      "label": "lane 映射到 im"
+    },
+    {
+      "from": "targetfeishu",
+      "to": "impolicy",
+      "label": "lane 映射到 im"
+    },
+    {
+      "from": "impolicy",
+      "to": "facts",
+      "label": "共享生效规则"
+    },
+    {
+      "from": "facts",
+      "to": "reviewagent",
+      "label": "auto-evaluator"
+    },
+    {
+      "from": "reviewagent",
+      "to": "dispatch",
+      "label": "审核通过",
+      "labelDy": -55
+    },
+    {
+      "from": "reviewagent",
+      "to": "todo",
+      "label": "不确定 / 需人工",
+      "variant": "security",
+      "labelDy": 35
+    },
+    {
+      "from": "todo",
+      "to": "dispatch",
+      "label": "精确批准后重验"
+    },
+    {
+      "from": "dispatch",
+      "to": "replyguard",
+      "label": "所有出口统一检查",
+      "labelDy": 35
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "当前架构",
+      "items": [
+        "微信与飞书各存安全设置，新增渠道会增加分支",
+        "IM 路径常要求逐次确认；部分调用没有进入审核 Agent",
+        "外发兜底与异步待办规则存在不一致"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "目标架构",
+      "items": [
+        "微信、飞书只做身份和能力适配，共用 IM 策略域",
+        "完整事实经确定性规则与审核 Agent；不确定时进入异步待办",
+        "派发前复核版本和动作，所有回复与外发经过统一边界"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "实施约束",
+      "items": [
+        "新增设计尚未实现；自动审核仍受门禁控制",
+        "人审、禁止、可自动审核保持不同语义",
+        "策略统一不共享身份、待办或跨渠道批准"
+      ]
+    }
+  ]
+}

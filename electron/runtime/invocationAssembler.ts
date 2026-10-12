@@ -16,6 +16,7 @@ import { getDbConnection, getSession, updateSession } from '../database'
 import { readStoredModels } from '../llmServiceResolver'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import type { AppDatabase } from '../database'
+import { readRemoteTrackFeatureGates } from '../remote/remoteTrackFeatureGates'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { recordStepUsage, recordTurnSummary } from '../usageStats/usageStatsRecorder'
 import { scheduleSessionTitleSuggestion } from '../sessionTitleSuggest'
@@ -23,7 +24,7 @@ import type { SessionStorage } from '../sessionStorage/contracts'
 import { safeAppendDiagnostic } from '../mcp/mcpDiagnostics'
 import { recordUserAnswerFromDecision } from '../confirmation/decisionCacheWriter'
 import { evaluateToolCallGate } from '../confirmation/toolCallGate'
-import { buildSnapshotFromDb, sanitizeMcpSnapshotForExecutors, type McpToolSnapshot } from '../mcp/mcpToolRegistry'
+import { buildSnapshotFromDb, getCachedTools, sanitizeMcpSnapshotForExecutors, type McpToolSnapshot } from '../mcp/mcpToolRegistry'
 import { resolveRequestLocale } from '../llmSystemPrompt'
 import { listProfiles } from '../mcp/mcpConfigStore'
 import { getSecret } from '../mcp/mcpSecretStore'
@@ -53,6 +54,8 @@ import type { GateConfirmationContext } from '../confirmation/agentSdkConfirmati
 import type { PermitBinding } from '../../packages/agent-sdk/src/safetyPermit'
 import type { ToolCallGateArgs } from '../confirmation/toolCallGate'
 import { createRegisteredAgentTurnTools } from '../tools/registeredAgentTurnTools'
+import { RunShellPlanError } from '../tools/runShellPlan'
+import { planRejectionFromRunShellPlan } from '../tools/planRejection'
 import { classifyWorkDirProfileTarget } from '../workDirBinding'
 import { sessionDisplayNameRaw } from '../../src/shared/sessionDisplay'
 import { buildSessionDirectoryContextBlock, normalizeDirectoryGrantPath, type SessionDirectoryGrantRecord } from '../../src/shared/sessionDirectoryGrant'
@@ -201,6 +204,25 @@ function mergeImOrchestrationFixtureRegistry(
   for (const tool of base.entries()) merged.register(tool)
   for (const tool of fixture.entries()) merged.register(tool)
   return merged
+}
+
+function mcpConnectionFingerprint(profile: import('../../src/shared/mcpTypes').McpServerProfile): string {
+  return createHash('sha256').update(JSON.stringify({
+    id: profile.id, enabled: profile.enabled, transport: profile.transport, timeoutSec: profile.timeoutSec,
+    // Token rotation / expiry is expected runtime state. Bind to the configured auth
+    // identity instead, so OAuth refresh does not revoke later calls in this turn.
+    auth: {
+      mode: profile.auth.mode,
+      headerName: profile.auth.headerName,
+      valuePrefix: profile.auth.valuePrefix,
+      oauthClientId: profile.auth.oauthClientId,
+      oauthScopes: profile.auth.oauthScopes
+    },
+    stdio: profile.stdio ? { command: profile.stdio.command, args: profile.stdio.args, cwd: profile.stdio.cwd,
+      env: profile.stdio.env.map(({ key, valuePresent }) => ({ key, valuePresent })) } : undefined,
+    http: profile.http,
+    enabledToolNames: profile.enabledToolNames
+  })).digest('hex')
 }
 
 /** R1：会话工作目录单一事实源——装配期解析快照，调用边界经 refresh() 跟随绑定变更。 */
@@ -559,12 +581,16 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   // off 档走现状路径（64/96 KiB 裁剪，10.1.1 逐字节兼容）。档位与 toolChatLoop 的 plan 计算同源
   // （同一份 materials.toolsConfig），快照与 plan 天然一致。
   const mcpDeferredMode = materials.toolsConfig.mcpDeferredLoading ?? 'always'
-  const mcpSnapshotRaw: McpToolSnapshot = db
+  const isApprovalAgent = materials.internalConfirmExemption === 'approval-agent'
+  const mcpSnapshotRaw: McpToolSnapshot = db && !isApprovalAgent
     ? buildSnapshotFromDb(db, {
-        remoteContext: materialsLane !== 'desktop',
         admission: mcpDeferredMode === 'off' ? 'standard' : 'deferred'
       })
     : { entries: new Map(), budgetDropped: [] }
+  const mcpProbeProfilesById: ReadonlyMap<string, import('../../src/shared/mcpTypes').McpServerProfile> | undefined = db && mcpSnapshotRaw.entries.size > 0
+    ? new Map(listProfiles(db).map((p) => [p.id, p]))
+    : undefined
+  const mcpProfileFingerprints = new Map([...(mcpProbeProfilesById?.values() ?? [])].map((profile) => [profile.id, mcpConnectionFingerprint(profile)]))
   const mcpResolveExecutor = db
     ? (toolName: string, manager: McpConnectionManager, profilesById?: ReadonlyMap<string, import('../../src/shared/mcpTypes').McpServerProfile>) => {
         const entry = mcpSnapshotRaw.entries.get(toolName)
@@ -573,10 +599,21 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         if (!profile) return undefined
         const oauthProvider =
           profile.auth.mode === 'oauth' ? createMcpOAuthClientProvider(db, profile) : undefined
+        const expectedProfileFingerprint = mcpProfileFingerprints.get(profile.id) ?? mcpConnectionFingerprint(profile)
         return createMcpToolExecutor(entry, {
           getSession: (serverId: string) =>
             manager.connect(profile, async (kind) => getSecret(db, serverId, kind), { oauthProvider }),
           getProfile: () => profile,
+          expectedProfileFingerprint,
+          getCurrentProfileFingerprint: (currentServerId) => {
+            const current = listProfiles(db).find((candidate) => candidate.id === currentServerId)
+            return current ? mcpConnectionFingerprint(current) : undefined
+          },
+          getCurrentTool: (serverId, originalName) => {
+            const currentProfile = listProfiles(db).find((candidate) => candidate.id === serverId)
+            if (!currentProfile?.enabled || !currentProfile.enabledToolNames.includes(originalName)) return undefined
+            return getCachedTools(db, serverId)?.tools.find((tool) => tool.originalName === originalName)
+          },
           invalidateSession: (serverId: string) => manager.disconnect(serverId),
           getRecentDiagnostics: (serverId: string) => getDiagnostics(db, serverId)
         })
@@ -586,9 +623,6 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   // 失败条目快照层剔除（索引/deferredNames/授权面/注册表天然同步）+ warn 日志；invoke 降级继续。
   // 全档位一致；这是 off 档「现状逐字节一致」承诺的唯一有意偏离（现状坏条目使整 invoke throw）。
   // 评审 P3：profiles 按 serverId 建 Map 一次读取——探针 O(N) 而非每条目一次 listProfiles 的 O(N²)。
-  const mcpProbeProfilesById: ReadonlyMap<string, import('../../src/shared/mcpTypes').McpServerProfile> | undefined = db && mcpSnapshotRaw.entries.size > 0
-    ? new Map(listProfiles(db).map((p) => [p.id, p]))
-    : undefined
   const mcpSnapshot: McpToolSnapshot = db && mcpSnapshotRaw.entries.size > 0
     ? sanitizeMcpSnapshotForExecutors(mcpSnapshotRaw, (entry) => {
         const executor = mcpResolveExecutor?.(entry.mappedName, {} as McpConnectionManager, mcpProbeProfilesById)
@@ -603,6 +637,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         })
       })
     : mcpSnapshotRaw
+  // 未绑定本轮授权面前，检索视图必须 fail closed；创建 Hosted host 后再填入授权集合。
+  let mcpToolSearchSnapshot: McpToolSnapshot = { ...mcpSnapshot, entries: new Map() }
   const mcp = db
     ? {
         snapshot: mcpSnapshot,
@@ -855,8 +891,8 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         lane: materialsLane,
         ...(materials.historyFacts ? { historyFacts: materials.historyFacts } : {}),
         // FR2：tool_search 检索域——读 ports.mcp 的实时快照（唯一事实源；装配期构建或宿主注入均可）
-        ...(((ports.mcp?.snapshot) as McpToolSnapshot | undefined) && (ports.mcp?.snapshot as McpToolSnapshot).entries.size
-          ? { mcpToolSnapshot: ports.mcp!.snapshot as McpToolSnapshot }
+        ...(mcpToolSearchSnapshot.entries.size
+          ? { mcpToolSnapshot: mcpToolSearchSnapshot }
           : {})
       }))
       const refreshExecutionContext = async (call: Readonly<{ invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }>, stage: { confirmation?: { receipt: string } }, current: Record<string, unknown>) => {
@@ -1058,6 +1094,13 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
               ? { authorizationGeneration: materials.remoteContext!.authorizationGeneration }
               : {}),
             requestId: materials.requestId,
+            turnId: materials.acceptedTurn?.turnId ?? materials.turnId,
+            toolUseId: call.toolCallId,
+            ...(materials.remoteContext!.trackContext && db && (materials.remoteContext!.source === 'wechat' || materials.remoteContext!.source === 'feishu') &&
+              readRemoteTrackFeatureGates(db, materials.remoteContext!.source).confirmationLink ? {
+              trackId: materials.remoteContext!.trackContext.trackId,
+              trackAttributionEventId: materials.remoteContext!.trackContext.attributionEventId
+            } : {}),
             memoryTiers: request.memoryTiers
           })
         } : {})
@@ -1093,6 +1136,11 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       eagerBudgetDroppedNames?: ReadonlySet<string>
       resolveRegisteredToolName?: (providerToolName: string) => string
     }) => {
+      const currentMcpSnapshot = ports.mcp?.snapshot as McpToolSnapshot | undefined ?? mcpSnapshot
+      mcpToolSearchSnapshot = {
+        ...currentMcpSnapshot,
+        entries: new Map([...currentMcpSnapshot.entries].filter(([name]) => input.authorizedToolNames.has(name)))
+      }
       const routeId = materials.providerRouteId
       if (!routeId) throw new Error('HOSTED_PROVIDER_ROUTE_REQUIRED')
       const runtime = getDefaultAgentRuntime()
@@ -1284,6 +1332,20 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
                   ? `工具 ${call.toolName} 因本轮上下文预算未注入（已被裁剪），本轮无法调用。请减少同时启用的 MCP 工具，或在设置页查看工具预算裁剪记录。`
                   : `工具 ${call.toolName} 当前不可用：MCP 工具可能已变更或服务不可用。请确认服务连接，并在设置页刷新工具列表后重试。`
               )
+            }
+            // P0-A（D-1/D-7/D-8）：可回传的 run_shell 计划期失败降级为 PlanRejectedError——SDK 视为
+            // 「拒绝即回模型」，turn 继续到下一模型轮；转换点同一 payload 写 plan_failed 台账并维护
+            // 方言错配计数（第 2 次同款升级提示）。白名单外异常原样 rethrow，保持 fatal。
+            if (error instanceof RunShellPlanError) {
+              const rejected = planRejectionFromRunShellPlan(error, {
+                sessionId: materials.sessionId,
+                requestId: materials.requestId,
+                toolUseId: call.toolCallId,
+                command: typeof call.input === 'object' && call.input !== null && typeof (call.input as { command?: unknown }).command === 'string'
+                  ? (call.input as { command: string }).command
+                  : undefined
+              })
+              if (rejected) throw rejected
             }
             throw error
           }

@@ -19,13 +19,52 @@ export function inboundSummaryForLog(msg: WeChatInboundMessage): Record<string, 
     timestamp: msg.timestamp,
     textLen: text.length,
     textHash: contentHash(text),
-    hasQuoted: Boolean(msg.quotedMessage?.text),
+    hasQuoted: Boolean(msg.quotedMessageText ?? msg.quotedMessage?.text),
+    quotedMessageIdPresent: Boolean(msg.quotedMessageId),
+    quotedMessageTextLen: (msg.quotedMessageText ?? msg.quotedMessage?.text)?.length ?? 0,
     attachmentCounts: {
       images: msg.images?.length ?? 0,
       files: msg.files?.length ?? 0,
       voices: msg.voices?.length ?? 0,
       videos: msg.videos?.length ?? 0
     }
+  }
+}
+
+/** Redacted comparison between iLink's raw ref_msg and the SDK quote projection. */
+export function quoteWireSummaryForLog(
+  raw: { item_list?: Array<{ ref_msg?: { message_item?: { text_item?: { text?: unknown } } } }> } | undefined,
+  sdkQuote: { text?: string } | undefined
+): Record<string, unknown> {
+  const ref = raw?.item_list?.map((item) => item.ref_msg).find((item) => item !== undefined)
+  const messageItem = ref?.message_item
+  const textItem = messageItem?.text_item
+  const rawText = ref?.message_item?.text_item?.text
+  const sdkText = sdkQuote?.text
+  const messageItemRecord = messageItem && typeof messageItem === 'object' ? messageItem as Record<string, unknown> : undefined
+  const rawQuoteMessageId = messageItemRecord?.msg_id
+  const payloadKinds = ['text_item', 'image_item', 'voice_item', 'file_item', 'video_item', 'ref_msg']
+    .filter((key) => messageItemRecord?.[key] !== undefined)
+  const rawTextIsString = typeof rawText === 'string'
+  const sdkTextIsString = typeof sdkText === 'string'
+  return {
+    rawRefMessagePresent: ref !== undefined,
+    rawRefMessageItemPresent: messageItem !== undefined,
+    rawRefMessageItemType: typeof messageItemRecord?.type === 'number' ? messageItemRecord.type : undefined,
+    rawQuoteMessageIdType: rawQuoteMessageId === null ? 'null' : typeof rawQuoteMessageId,
+    rawQuoteMessageIdLen: typeof rawQuoteMessageId === 'string' || typeof rawQuoteMessageId === 'number' ? String(rawQuoteMessageId).length : 0,
+    rawQuoteMessageIdHash: typeof rawQuoteMessageId === 'string' || typeof rawQuoteMessageId === 'number' ? contentHash(String(rawQuoteMessageId)) : undefined,
+    rawRefMessageItemKeys: messageItemRecord ? Object.keys(messageItemRecord).sort() : [],
+    rawRefMessagePayloadKinds: payloadKinds,
+    rawTextItemPresent: textItem !== undefined,
+    rawTextValueType: rawText === null ? 'null' : typeof rawText,
+    rawRefTitlePresent: typeof (ref as { title?: unknown } | undefined)?.title === 'string',
+    rawQuotedTextLen: rawTextIsString ? rawText.length : 0,
+    sdkQuotedTextPresent: sdkTextIsString,
+    sdkQuotedTextLen: sdkTextIsString ? sdkText.length : 0,
+    quoteTextProjectionMatches: ref === undefined
+      ? !sdkTextIsString
+      : rawTextIsString && sdkTextIsString && rawText === sdkText
   }
 }
 

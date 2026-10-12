@@ -1,9 +1,9 @@
 # LLM Wiki 支持 — 需求规格
 
-**版本：** 1.7  
-**日期：** 2026-05-24  
-**状态：** 待评审  
-**参考来源：** [Karpathy — LLM Wiki (gist)](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)  
+**版本：** 1.7
+**日期：** 2026-05-24
+**状态：** 待评审
+**参考来源：** [Karpathy — LLM Wiki (gist)](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
 **关联文档：** [skills-requirement.md](./skills-requirement.md)、[tools-requirement.md](./tools-requirement.md)、[file-pane-tree-requirement.md](./file-pane-tree-requirement.md)、[file-content-viewer-requirement.md](./file-content-viewer-requirement.md)、[referenced-files-requirement.md](./referenced-files-requirement.md)、[wiki-import-ingest-requirement.md](./wiki-import-ingest-requirement.md)
 
 **变更记录：**
@@ -464,7 +464,7 @@ LLM read_file(wiki/index.md) → 选定相关页
     ↓
 （index 未覆盖时）LLM grep(pattern, path=wiki/) → 补充候选页
     ↓
-LLM read_file(相关 wiki 页…) 
+LLM read_file(相关 wiki 页…)
     ↓
 综合回答，正文内引用 `wiki/...` 路径
     ↓
@@ -1004,9 +1004,9 @@ interface WikiStatus {
 
 ---
 
-**文档版本**: v1.4  
-**创建日期**: 2026-05-24  
-**更新日期**: 2026-05-24 — UI 文案统一为「收录到 Wiki」（见 wiki-import-ingest-requirement.md v1.1）  
+**文档版本**: v1.4
+**创建日期**: 2026-05-24
+**更新日期**: 2026-05-24 — UI 文案统一为「收录到 Wiki」（见 wiki-import-ingest-requirement.md v1.1）
 **适用范围**: SpaceAssistant LLM Wiki 功能
 
 

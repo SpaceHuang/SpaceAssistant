@@ -340,9 +340,11 @@
   - `ShellDialectMismatch` 结构化结果包含上述字段及 `signals`/`hints`，并在 spawn 前返回。
 - [x] 增加连续两次同类 mismatch 的重试熔断。
   - 按 profile id 和规范化 signal 计数；第二次返回 `retryExhausted=true`。
+  - **2026-10 更新（D-8 定案）**：计数键已作用域化为 `sessionId + profileId + signals`；命令改写成功执行即 `clearOnSuccess` 归零、会话删除时 `forgetSession` 清理；第 2 次同款错配后果为**提示升级**（不阻断执行）。
 - [x] 确保 mismatch 在 spawn 前返回，不进入 Shell 执行。
 - [x] 增加 Agent 收到 mismatch 后不得原样重试的主循环测试。
-  - `shouldStopToolRetry()` 在 mismatch breaker 已触发时立即停止 `run_shell` 原样重试，并有策略单测；主循环已接入。
+  - ~~`shouldStopToolRetry()` 在 mismatch breaker 已触发时立即停止 `run_shell` 原样重试，并有策略单测；主循环已接入。~~
+    **（2026-10 漂移更正）**：上文与现状不符——`shouldStopToolRetry()`（`electron/toolErrorRetryPolicy.ts`）除自身策略单测外**没有生产调用方**；现行「同一语义调用反复失败」拦截由 `electron/toolChatLoop.ts` 的 `beforeToolDispatch` 钩子承担（`REPEATED_SEMANTIC_CALL`，经 `SemanticToolRetryTracker` + `buildCommandRetryKey`，SDK 侧 `markNotDispatched` 并把 `is_error` 消息回给模型、turn 继续）。该函数**不复活**（见 run-shell-dialect-mismatch 改进计划 §4.4(c)）。
   - executor 已返回 retryCount/retryExhausted，主循环行为测试仍待接入。
 
 ## 6. Phase 3A：通用 direct/planned 生命周期

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { DeferredTodo, DeferredTodoStatus } from '../../src/shared/confirmation/deferredTodo'
 import { getDbConnection, type AppDatabase } from '../database/sqliteStore'
+import { appendRemoteTrackEvent, applyRemoteTrackLifecycleEvent } from '../database/remoteTrackStore'
+import { recordRemoteTrackRuntimeDiagnostic } from '../database/remoteTrackRuntimeDiagnosticStore'
 import { runInTransaction } from '../database/transaction'
 import type { DeferredTodoCapacityLifecycle } from './deferredTodoCapacity'
 
@@ -36,12 +38,12 @@ export type CreateDeferredTodoInput = Omit<DeferredTodoRecord, 'todoId' | 'statu
 type TodoRow = {
   todo_id: string; invocation_id: string; channel: 'feishu' | 'wechat'; identity_key: string; owner_id: string
   authorization_epoch: number; rule_id: string; facts_hash: string; workflow_id: string; task_id: string; step_id: string
-  plan_revision: number; origin_session_id: string; state: DeferredTodoStatus; created_at: number; expires_at: number; updated_at: number
+  plan_revision: number; origin_session_id: string; track_id: string | null; state: DeferredTodoStatus; created_at: number; expires_at: number; updated_at: number
 }
 
 function rowToTodo(row: TodoRow): DeferredTodoRecord {
   return {
-    todoId: row.todo_id, invocationId: row.invocation_id, channel: row.channel, identityKey: row.identity_key,
+    todoId: row.todo_id, ...(row.track_id ? { trackId: row.track_id } : {}), invocationId: row.invocation_id, channel: row.channel, identityKey: row.identity_key,
     ownerId: row.owner_id, authorizationEpoch: row.authorization_epoch, rule: { ruleId: row.rule_id, factsHash: row.facts_hash },
     workflowId: row.workflow_id, taskId: row.task_id, stepId: row.step_id, planRevision: row.plan_revision,
     originSessionId: row.origin_session_id, status: row.state, createdAt: row.created_at, expiresAt: row.expires_at,
@@ -50,7 +52,7 @@ function rowToTodo(row: TodoRow): DeferredTodoRecord {
 }
 
 const TODO_COLUMNS = `todo_id,invocation_id,channel,identity_key,owner_id,authorization_epoch,rule_id,facts_hash,
-  workflow_id,task_id,step_id,plan_revision,origin_session_id,state,created_at,expires_at,updated_at`
+  workflow_id,task_id,step_id,plan_revision,origin_session_id,state,created_at,expires_at,updated_at,track_id`
 
 function isAuthorized(todo: DeferredTodoRecord, context: DeferredTodoAuthorization): boolean {
   return todo.channel === context.channel && todo.identityKey === context.identityKey && todo.ownerId === context.ownerId
@@ -69,6 +71,7 @@ function validateCreate(input: CreateDeferredTodoInput, expiresAt: number): void
   }
   if (!Number.isInteger(input.planRevision) || input.planRevision <= 0) throw new TypeError('DEFERRED_TODO_PLAN_REVISION_REQUIRED')
   if (input.status !== undefined && input.status !== 'pending') throw new TypeError('DEFERRED_TODO_MUST_START_PENDING')
+  if (input.trackId !== undefined && !input.trackId.trim()) throw new TypeError('DEFERRED_TODO_TRACK_ID_INVALID')
   if (!Number.isFinite(input.createdAt) || !Number.isFinite(expiresAt) || expiresAt <= input.createdAt) {
     throw new TypeError('DEFERRED_TODO_TTL_INVALID')
   }
@@ -95,9 +98,26 @@ export function createDeferredTodoStore(db: AppDatabase, options: { capacity?: D
   }
 
   function transition(todoId: string, from: DeferredTodoStatus, to: DeferredTodoStatus, now: number): boolean {
+    const linked = conn.prepare('SELECT track_id FROM deferred_todos WHERE todo_id=?').get(todoId) as { track_id: string | null } | undefined
     const changed = conn.prepare('UPDATE deferred_todos SET state=?,updated_at=? WHERE todo_id=? AND state=?')
       .run(to, now, todoId, from)
     if (Number(changed.changes) === 1) {
+      if (linked?.track_id) {
+        conn.prepare(`INSERT INTO remote_track_children(track_id,child_kind,child_id,state,updated_at)
+          VALUES(?,'async-todo',?,?,?) ON CONFLICT(track_id,child_kind,child_id) DO UPDATE SET state=excluded.state,updated_at=excluded.updated_at`)
+          .run(linked.track_id, todoId, to, now)
+        conn.prepare('UPDATE remote_tracks SET version=version+1,updated_at=? WHERE track_id=?').run(now, linked.track_id)
+        if (from === 'pending' && to === 'dispatching') {
+          const track = conn.prepare('SELECT state FROM remote_tracks WHERE track_id=?').get(linked.track_id) as { state: string }
+          if (track.state === 'waiting-async-approval') {
+            const transition = applyRemoteTrackLifecycleEvent(db, { trackId: linked.track_id,
+              eventId: `event:track:${linked.track_id}:todo:${todoId}:resume-accepted`,
+              idempotencyKey: `track:${linked.track_id}:todo:${todoId}:resume-accepted`, occurredAt: now,
+              event: { type: 'resume-accepted' } })
+            if (transition.rejected) throw new Error(`DEFERRED_TODO_TRACK_RESUME_REJECTED:${transition.rejected}`)
+          }
+        }
+      }
       db.save()
       if (to === 'consumed' || to === 'invalidated' || to === 'expired') {
         const todo = find(todoId)
@@ -111,24 +131,63 @@ export function createDeferredTodoStore(db: AppDatabase, options: { capacity?: D
     create(input: CreateDeferredTodoInput): { ok: true; todo: DeferredTodoRecord; duplicate: boolean } {
       const expiresAt = input.expiresAt ?? input.createdAt + (input.ttlMs ?? DEFAULT_DEFERRED_TODO_TTL_MS)
       validateCreate(input, expiresAt)
-      const prior = findByInvocation(input.invocationId)
-      if (prior) {
-        const sameBinding = prior.channel === input.channel && prior.identityKey === input.identityKey && prior.ownerId === input.ownerId
-          && prior.authorizationEpoch === input.authorizationEpoch && prior.rule.ruleId === input.rule.ruleId
-          && prior.rule.factsHash === input.rule.factsHash && prior.workflowId === input.workflowId && prior.taskId === input.taskId
-          && prior.stepId === input.stepId && prior.planRevision === input.planRevision && prior.originSessionId === input.originSessionId
-        if (!sameBinding) throw new Error('DEFERRED_TODO_INVOCATION_BINDING_CONFLICT')
-        return { ok: true, todo: prior, duplicate: true }
+      let result: { ok: true; todo: DeferredTodoRecord; duplicate: boolean }
+      try {
+        result = runInTransaction(conn, () => {
+        const prior = findByInvocation(input.invocationId)
+        if (prior) {
+          const sameBinding = prior.channel === input.channel && prior.identityKey === input.identityKey && prior.ownerId === input.ownerId
+            && prior.authorizationEpoch === input.authorizationEpoch && prior.rule.ruleId === input.rule.ruleId
+            && prior.rule.factsHash === input.rule.factsHash && prior.workflowId === input.workflowId && prior.taskId === input.taskId
+            && prior.stepId === input.stepId && prior.planRevision === input.planRevision && prior.originSessionId === input.originSessionId
+            && prior.trackId === input.trackId
+          if (!sameBinding) throw new Error('DEFERRED_TODO_INVOCATION_BINDING_CONFLICT')
+          return { ok: true as const, todo: prior, duplicate: true }
+        }
+        const todoId = input.todoId || randomUUID()
+        const now = input.updatedAt ?? input.createdAt
+        conn.prepare(`INSERT INTO deferred_todos(${TODO_COLUMNS}) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+          todoId, input.invocationId, input.channel, input.identityKey, input.ownerId, input.authorizationEpoch,
+          input.rule.ruleId, input.rule.factsHash, input.workflowId, input.taskId, input.stepId, input.planRevision,
+          input.originSessionId, 'pending', input.createdAt, expiresAt, now, input.trackId ?? null
+        )
+        if (input.trackId) {
+          const track = conn.prepare('SELECT state FROM remote_tracks WHERE track_id=?').get(input.trackId) as { state: string } | undefined
+          if (!track || ['completed', 'cancelled', 'expired', 'failed'].includes(track.state)) throw new Error('DEFERRED_TODO_TRACK_NOT_ACTIVE')
+          conn.prepare(`INSERT INTO remote_track_children(track_id,child_kind,child_id,state,updated_at)
+            VALUES(?,'async-todo',?,'pending',?) ON CONFLICT(track_id,child_kind,child_id) DO UPDATE SET state=excluded.state,updated_at=excluded.updated_at`)
+            .run(input.trackId, todoId, now)
+          conn.prepare('UPDATE remote_tracks SET version=version+1,updated_at=? WHERE track_id=?').run(now, input.trackId)
+          appendRemoteTrackEvent(db, { eventId: `event:track:${input.trackId}:todo:${todoId}:linked`, trackId: input.trackId,
+            eventKind: 'track.async_todo.linked', idempotencyKey: `track:${input.trackId}:todo:${todoId}:linked`,
+            occurredAt: now, payload: { todoId, invocationId: input.invocationId } })
+          const transitionState = (type: 'execution-started' | 'async-approval-pending') => {
+            const transition = applyRemoteTrackLifecycleEvent(db, { trackId: input.trackId!,
+              eventId: `event:track:${input.trackId}:todo:${todoId}:${type}`,
+              idempotencyKey: `track:${input.trackId}:todo:${todoId}:${type}`, occurredAt: now, event: { type } })
+            if (transition.rejected) throw new Error(`DEFERRED_TODO_TRACK_LIFECYCLE_REJECTED:${transition.rejected}`)
+            return transition.state
+          }
+          let trackState = track.state
+          if (trackState === 'open' || trackState === 'resuming') trackState = transitionState('execution-started')
+          if (trackState === 'processing') transitionState('async-approval-pending')
+        }
+        return { ok: true as const, todo: find(todoId)!, duplicate: false }
+        })
+      } catch (error) {
+        if (input.trackId) {
+          const track = conn.prepare('SELECT channel,root_message_id FROM remote_tracks WHERE track_id=?').get(input.trackId) as
+            { channel: 'wechat' | 'feishu'; root_message_id: string } | undefined
+          if (track) {
+            try { recordRemoteTrackRuntimeDiagnostic(db, { channel: track.channel, platformMessageId: track.root_message_id,
+              eventKind: 'track-association-write-failed', reasonCode: 'turn-association-write-failed', occurredAt: input.updatedAt ?? input.createdAt }) }
+            catch { /* retain the original todo transaction error */ }
+          }
+        }
+        throw error
       }
-      const todoId = input.todoId || randomUUID()
-      const now = input.updatedAt ?? input.createdAt
-      conn.prepare(`INSERT INTO deferred_todos(${TODO_COLUMNS}) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-        todoId, input.invocationId, input.channel, input.identityKey, input.ownerId, input.authorizationEpoch,
-        input.rule.ruleId, input.rule.factsHash, input.workflowId, input.taskId, input.stepId, input.planRevision,
-        input.originSessionId, 'pending', input.createdAt, expiresAt, now
-      )
-      db.save()
-      return { ok: true, todo: find(todoId)!, duplicate: false }
+      if (!result.duplicate) db.save()
+      return result
     },
 
     get(todoId: string, context: DeferredTodoAuthorization, now = Date.now()): DeferredTodoRecord | null {

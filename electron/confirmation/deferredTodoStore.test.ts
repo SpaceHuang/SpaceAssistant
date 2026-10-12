@@ -4,6 +4,7 @@ import { getDbConnection } from '../database/sqliteStore'
 import { createTempDatabase } from '../database/testHelpers'
 import { openDatabase } from '../database'
 import { createDeferredTodoStore, DEFAULT_DEFERRED_TODO_TTL_MS } from './deferredTodoStore'
+import { applyRemoteTrackLifecycleEvent, createRemoteTrack } from '../database/remoteTrackStore'
 
 const trustedTodo = {
   todoId: 'todo-store-1',
@@ -24,6 +25,40 @@ const trustedTodo = {
 }
 
 describe('deferred todo authorization binding', () => {
+  it('persists the Track association on the todo source row and keeps the child projection in sync', () => {
+    const db = createMemoryAppDb()
+    createRemoteTrack(db, { trackId: 'todo-track', eventId: 'todo-track-root', idempotencyKey: 'todo-track-inbound', channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8, rootMessageId: 'root-message', occurredAt: 1 })
+    applyRemoteTrackLifecycleEvent(db, { trackId: 'todo-track', eventId: 'todo-track-started', idempotencyKey: 'todo-track-started', occurredAt: 2, event: { type: 'execution-started' } })
+    const store = createDeferredTodoStore(db)
+    const result = store.create({ ...trustedTodo, todoId: 'tracked-todo', invocationId: 'tracked-invocation', trackId: 'todo-track' })
+    expect(result.todo).toMatchObject({ trackId: 'todo-track' })
+    expect(getDbConnection(db).prepare('SELECT track_id FROM deferred_todos WHERE todo_id=?').get('tracked-todo'))
+      .toEqual({ track_id: 'todo-track' })
+    expect(getDbConnection(db).prepare("SELECT state FROM remote_track_children WHERE track_id='todo-track' AND child_kind='async-todo' AND child_id='tracked-todo'").get())
+      .toEqual({ state: 'pending' })
+    expect(getDbConnection(db).prepare('SELECT state FROM remote_tracks WHERE track_id=?').get('todo-track')).toEqual({ state: 'waiting-async-approval' })
+    const claimed = store.claimForDispatch('tracked-todo', { channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1',
+      authorizationEpoch: 8, rule: trustedTodo.rule }, 110)
+    expect(claimed?.status).toBe('dispatching')
+    expect(getDbConnection(db).prepare('SELECT state FROM remote_tracks WHERE track_id=?').get('todo-track')).toEqual({ state: 'resuming' })
+    db.close()
+  })
+
+  it('records a closed Track-link failure fact when todo child association cannot be written', () => {
+    const db = createMemoryAppDb()
+    createRemoteTrack(db, { trackId: 'todo-link-failed-track', eventId: 'todo-link-failed-root', idempotencyKey: 'todo-link-failed-inbound',
+      channel: 'feishu', identityKey: 'identity-1', ownerId: 'owner-1', authorizationEpoch: 8, rootMessageId: 'todo-link-platform-message', occurredAt: 1 })
+    getDbConnection(db).exec(`CREATE TRIGGER fail_remote_track_child_insert BEFORE INSERT ON remote_track_children
+      BEGIN SELECT RAISE(ABORT,'injected child link failure'); END`)
+    const store = createDeferredTodoStore(db)
+    expect(() => store.create({ ...trustedTodo, todoId: 'link-failed-todo', invocationId: 'link-failed-invocation', trackId: 'todo-link-failed-track' }))
+      .toThrow('injected child link failure')
+    expect(getDbConnection(db).prepare(`SELECT event_kind,reason_code FROM remote_track_runtime_diagnostics
+      WHERE platform_message_id='todo-link-platform-message'`).get())
+      .toEqual({ event_kind: 'track-association-write-failed', reason_code: 'turn-association-write-failed' })
+    db.close()
+  })
+
   it('invalidates pending work when its origin session is deleted', () => {
     const db = createMemoryAppDb()
     const store = createDeferredTodoStore(db)

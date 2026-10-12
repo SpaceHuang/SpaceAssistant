@@ -41,6 +41,17 @@ describe('file-tool descriptions hint the path field name', () => {
     expect(pathProp.description).not.toContain('不支持目录递归')
   })
 
+
+  it("grep 支持调用级 timeout 参数（超时可操作引导,产品增强）", () => {
+    const def = BUILTIN_TOOL_DEFINITIONS.find((d) => d.name === 'grep')!
+    const timeoutProp = def.input_schema.properties.timeout as { type: string; minimum: number; maximum: number } | undefined
+    expect(timeoutProp).toBeDefined()
+    expect(timeoutProp!.type).toBe('number')
+    expect(timeoutProp!.minimum).toBe(5)
+    expect(timeoutProp!.maximum).toBe(600)
+    expect(def.input_schema.required).not.toContain('timeout')
+  })
+
   it('grep description 首句改为文件/目录搜索根契约', () => {
     const def = BUILTIN_TOOL_DEFINITIONS.find((d) => d.name === 'grep')!
     expect(def.description).toContain('搜索根为文件或目录')

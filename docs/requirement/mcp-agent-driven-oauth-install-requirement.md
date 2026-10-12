@@ -63,7 +63,7 @@
 
 ### 2.3 Agent 工具面：没有任何 MCP 管理工具
 
-`electron/tools/`（内置执行器目录）与 `plannedToolRegistry.ts` 中检索 `mcp` 仅命中结果展示类型引用（`McpResultDisplay`），不存在添加连接、发起授权、刷新工具之类的 Agent 可调用工具。聊天循环中 MCP 工具快照仅桌面 lane 注入，远程 lane（飞书/微信）显式为空（`toolChatLoop.ts:630` 注释）。
+`electron/tools/`（内置执行器目录）与 `plannedToolRegistry.ts` 中检索 `mcp` 仅命中结果展示类型引用（`McpResultDisplay`），不存在添加连接、发起授权、刷新工具之类的 Agent 可调用工具。本专项不提供 MCP 管理/OAuth 自助工具。MCP 业务工具跨 IM/automation 的暴露范围已由 `mcp-im-automation-tools-requirement.md` 更新；该能力不改变此处的管理工具结论。
 
 ---
 

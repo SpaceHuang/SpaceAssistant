@@ -75,11 +75,11 @@ describe('createAgentRuntime(偏差 18:模块级状态 → 实例)', () => {
   it('confirmId 空间互不串:a 实例分配的 id 在 b 实例未占用,一次性消费语义各自独立', () => {
     const a = createAgentRuntime(assembleComponents())
     const b = createAgentRuntime(assembleComponents())
-    const idA = a.confirmIds.allocate()
-    expect(a.confirmIds.isInUse(idA)).toBe(true)
-    expect(b.confirmIds.isInUse(idA)).toBe(false)
-    a.confirmIds.release(idA)
-    expect(a.confirmIds.isInUse(idA)).toBe(false)
+    const leaseA = a.confirmIds.allocate()
+    expect(a.confirmIds.isInUse(leaseA.code)).toBe(true)
+    expect(b.confirmIds.isInUse(leaseA.code)).toBe(false)
+    a.confirmIds.release(leaseA)
+    expect(a.confirmIds.isInUse(leaseA.code)).toBe(false)
   })
 
   it('取消注册表互不串:a 实例的请求不因 b 实例 cancelAll 而中止', () => {
@@ -131,11 +131,11 @@ describe('默认 runtime 装配与兼容转发(行为等价)', () => {
     const rt = createAgentRuntime(assembleComponents())
     setDefaultAgentRuntime(rt)
 
-    const id = legacyAllocateConfirmId()
-    expect(rt.confirmIds.isInUse(id)).toBe(true)
-    expect(legacyIsConfirmIdInUse(id)).toBe(true)
-    legacyReleaseConfirmId(id)
-    expect(rt.confirmIds.isInUse(id)).toBe(false)
+    const lease = legacyAllocateConfirmId()
+    expect(rt.confirmIds.isInUse(lease.code)).toBe(true)
+    expect(legacyIsConfirmIdInUse(lease.code)).toBe(true)
+    legacyReleaseConfirmId(lease)
+    expect(rt.confirmIds.isInUse(lease.code)).toBe(false)
 
     const signal = legacyRegisterChatCancel('req-legacy')
     legacySignalChatCancel('req-legacy')

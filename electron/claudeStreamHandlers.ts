@@ -272,6 +272,19 @@ function toEventPersistenceFailure(error: unknown): EventPersistenceFailure {
   }
 }
 
+/** 沿 cause 链提取终态 errorCode（ToolLoopRoundLimitError.code / 恢复重构 Error.errorCode），供 turn_end 透传。 */
+function resolveTurnEndErrorCode(err: unknown): string | undefined {
+  let current: unknown = err
+  for (let depth = 0; current instanceof Error && depth < 5; depth += 1) {
+    const code = (current as { code?: unknown }).code
+    if (typeof code === 'string' && code) return code
+    const errorCode = (current as { errorCode?: unknown }).errorCode
+    if (typeof errorCode === 'string' && errorCode) return errorCode
+    current = (current as { cause?: unknown }).cause
+  }
+  return undefined
+}
+
 export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStreamDeps): ClaudeTurnExecution {
   const injectedStorage = deps.sessionStorage
   if (!injectedStorage) throw new Error('SESSION_STORAGE_REQUIRED')
@@ -286,7 +299,9 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
       // 这里只累计，由 finalizeTurn 统一上报为 eventPersistenceFailed。
       const eventAppendFailures: EventPersistenceFailure[] = []
       let droppedChunkEvents = 0
-      const finalizeTurn = (turnId: string, reason: string, error?: string, finalSurfaceSnapshot?: unknown): Promise<FinalizeResult> => {
+      // A-8（§4.3 / turn-loop.md:207）：turn_end 透传终态 errorCode（如 TOOL_LOOP_MAX_ROUNDS_EXCEEDED、
+      // 旧会话恢复重放的 SHELL_DIALECT_MISMATCH），不再只有裸 message
+      const finalizeTurn = (turnId: string, reason: string, error?: string, finalSurfaceSnapshot?: unknown, errorCode?: string): Promise<FinalizeResult> => {
         if (finalizePromise) return finalizePromise
         finalizePromise = (async () => {
           const failures: EventPersistenceFailure[] = [...eventAppendFailures]
@@ -296,7 +311,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
             failures.push(toEventPersistenceFailure(finalizeError))
           }
           try {
-            await eventWriter?.appendCritical({ type: 'turn_end', payload: { turnId, reason, ...(error ? { error } : {}), ...(finalSurfaceSnapshot ? { finalSurfaceSnapshot } : {}) } })
+            await eventWriter?.appendCritical({ type: 'turn_end', payload: { turnId, reason, ...(error ? { error } : {}), ...(errorCode ? { errorCode } : {}), ...(finalSurfaceSnapshot ? { finalSurfaceSnapshot } : {}) } })
           } catch (finalizeError) {
             failures.push(toEventPersistenceFailure(finalizeError))
           }
@@ -679,7 +694,7 @@ export function registerClaudeStreamHandlers(ipcMain: IpcMain, deps: ClaudeStrea
         let finalized: FinalizeResult | undefined
         if (eventWriter && eventTurnId) {
           const reason = err instanceof HostedTurnFinalizedError ? hostedTerminalSessionEventReason(err.outcome) : 'error'
-          finalized = await finalizeTurn(eventTurnId, reason, message)
+          finalized = await finalizeTurn(eventTurnId, reason, message, undefined, resolveTurnEndErrorCode(err))
         }
         logAgentEvent('error', 'llm.error', err instanceof LlmKeyAccessError
           ? { requestId: requestId || undefined, serviceId: err.serviceId, stage: 'credential-read', code: err.code }

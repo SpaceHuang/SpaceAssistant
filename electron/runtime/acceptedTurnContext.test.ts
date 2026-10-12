@@ -50,6 +50,16 @@ describe('createAcceptedTurnFromPrepared', () => {
     expect(readAcceptedTurn(db, session.id, 'remote-request')).toEqual(accepted)
   })
 
+  it('keeps a desktop turn on the desktop policy lane even when the session originated in WeChat', () => {
+    const session = createSession(db, { name: 'wechat-session-desktop-turn', metadata: { source: 'wechat', wechatMeta: { userId: 'owner' } } })
+    const accepted = createAcceptedTurnFromPrepared(db, {
+      turnId: 'desktop-turn-in-wechat-session', requestId: 'desktop-request-in-wechat-session', sessionId: session.id,
+      startToken: 'desktop-turn-start', userMessage: { id: 'desktop-user-input' }
+    }, 'desktop', { lane: 'desktop', model: 'desktop-model' })
+
+    expect(accepted).toMatchObject({ lane: 'desktop', config: { lane: 'desktop', model: 'desktop-model' } })
+  })
+
   it('reuses the original accepted snapshot when the same prepared turn is retried after checkpoint advances', () => {
     const session = createSession(db, { name: 'accepted-turn-retry' })
     const prepared = { turnId: 'retry-turn', requestId: 'retry-request', sessionId: session.id, startToken: 'retry-token', userMessage: { id: 'retry-user' } }

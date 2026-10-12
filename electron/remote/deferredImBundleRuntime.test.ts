@@ -100,8 +100,8 @@ describe('deferred IM bundle runtime', () => {
       await firstRuntime.resume.requestResume({ requestId: 'claimed-approval', todoId: todo.todoId, channel: 'feishu', identityKey: todo.identityKey,
         ownerId: todo.ownerId, authorizationEpoch: 3, rule, notificationVersion: 1, messageId: 'trusted', reasonKey: 'reply' })
       await firstRuntime.resume.dispatchPending(sessionId)
-      appendWakeEvent(db, { sessionId, type: 'safety-recovery', reasonKey: 'deferred-completion:claimed-recovery-todo',
-        payloadRef: { kind: 'safety-approval', approvalId: todo.todoId } })
+      // commitResult already persists the durable completion wake. Re-append would
+      // create a second recovery event and test duplicate work rather than restart recovery.
       createDeferredExecutionResultStore(db).beginDispatch({ todoId: todo.todoId, invocationId: todo.invocationId, dispatchKey: 'claimed-dispatch' })
       createDeferredExecutionResultStore(db).commitResult(todo.todoId, { kind: 'completed', outputRef: `deferred-result:${todo.invocationId}`, value: { ok: true } })
       claimWakeEvents(db, { sessionId, runId: 'dead-run', ownerId: 'dead-owner', now: Date.now() })
@@ -116,6 +116,9 @@ describe('deferred IM bundle runtime', () => {
       await restarted.recoverPending()
       restartedDispatcher = createWakeEventDispatcher({ db, maxParallel: 1, clock: { now: () => Date.now() },
         launchLoop: async ({ events }) => { onCompletionWake(sessionId) } })
+      // The first completion invokes the live wake callback. From this point the
+      // assertion tracks only the restarted runtime's retry after the lease expires.
+      onCompletionWake.mockClear()
       expect(onCompletionWake).not.toHaveBeenCalled()
       await vi.advanceTimersByTimeAsync(30_001)
       await vi.advanceTimersByTimeAsync(1)

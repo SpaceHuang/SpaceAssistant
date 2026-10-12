@@ -3,6 +3,7 @@ import { appendMessage, createPersistedTurn, createSession, enqueueQueuedUserMes
 import { createMemoryAppDb } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
 import { runMigrations } from './migrations'
+import { DB_SCHEMA_VERSION } from './schema'
 
 function restoreLegacyV54Schema(db: ReturnType<typeof createMemoryAppDb>): void {
   const conn = getDbConnection(db)
@@ -101,6 +102,6 @@ it('can rerun the migration without duplicating indexes or changing queued data'
     .toEqual({ queue_scope: 'desktop', content: 'repeat safely', status: 'queued' })
   expect(conn.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='index' AND name='idx_messages_queue_scope_status_order'").get())
     .toEqual({ count: 1 })
-  expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '86' })
+  expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
   db.close()
 })

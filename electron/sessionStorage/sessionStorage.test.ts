@@ -551,9 +551,16 @@ describe('SQLite session storage public queries', () => {
     const turn = getDbConnection(db).prepare('INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?)')
     turn.run('failed-turn', 'failed-invocation', session.id, 'failed-assistant', 'failed', 1, 1)
 
-    const inspection = createSqliteSessionStorage(db).queries.continuationSources.inspect({ sessionId: session.id, activeTurnIds: [] })
+    const inspection = createSqliteSessionStorage(db).queries.continuationSources.read({ sessionId: session.id, activeTurnIds: [] })
     expect(inspection).toMatchObject({ kind: 'available', boundary: 'newer-input', failedCandidates: [] })
     if (inspection.kind === 'available') expect(inspection.fallback).toBeUndefined()
+  })
+
+  it('rejects a continuation source inspection without a non-empty session ID at the boundary', () => {
+    db = createMemoryAppDb()
+    const queries = createSqliteSessionStorage(db).queries.continuationSources
+    expect(() => queries.read({ sessionId: undefined as unknown as string, activeTurnIds: [] }))
+      .toThrow('CONTINUATION_SOURCE_SESSION_ID_REQUIRED')
   })
 
   it('returns explicit selected candidates and treats a running latest invocation as superseding failed work', async () => {
@@ -571,12 +578,12 @@ describe('SQLite session storage public queries', () => {
     const insertTurn = getDbConnection(db).prepare('INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?)')
     insertTurn.run('candidate-turn', 'failed-invocation-2', session.id, 'candidate-assistant', 'terminal', 1, 1)
     const queries = createSqliteSessionStorage(db).queries
-    const selected = queries.continuationSources.inspect({ sessionId: session.id, activeTurnIds: [], selectedAssistantMessageId: 'candidate-assistant' })
+    const selected = queries.continuationSources.read({ sessionId: session.id, activeTurnIds: [], selectedAssistantMessageId: 'candidate-assistant' })
     expect(selected).toMatchObject({ kind: 'available', selected: { kind: 'found', candidate: { source: { invocationId: 'failed-invocation-2' } } } })
     await history.appendBatch([
       { invocationId: 'running-invocation', turnId: 'running-turn', sequence: 1, schemaVersion: 1, eventId: 'running-1', idempotencyKey: 'running-key-1', kind: 'invocation-context-committed', payload: { messages: [] } }
     ], 0)
-    const running = queries.continuationSources.inspect({ sessionId: session.id, activeTurnIds: ['running-turn'] })
+    const running = queries.continuationSources.read({ sessionId: session.id, activeTurnIds: ['running-turn'] })
     expect(running).toMatchObject({ kind: 'available', boundary: 'running-turn-superseded', failedCandidates: [] })
   })
 
@@ -599,9 +606,9 @@ describe('SQLite session storage public queries', () => {
       .run('fallback-turn', 'fallback-invocation', session.id, 'fallback-assistant', 'terminal', 1, 1)
 
     const queries = createSqliteSessionStorage(db).queries.continuationSources
-    const inspection = queries.inspect({ sessionId: session.id, activeTurnIds: [] })
+    const inspection = queries.read({ sessionId: session.id, activeTurnIds: [] })
     expect(inspection).toMatchObject({ kind: 'available', fallback: { source: { invocationId: 'fallback-invocation', turnId: 'fallback-turn' }, assistantMessageId: 'fallback-assistant' } })
-    expect(queries.inspect({ sessionId: session.id, activeTurnIds: [], selectedAssistantMessageId: 'fallback-assistant' }))
+    expect(queries.read({ sessionId: session.id, activeTurnIds: [], selectedAssistantMessageId: 'fallback-assistant' }))
       .toMatchObject({ kind: 'available', selected: { kind: 'found', candidate: { source: { invocationId: 'fallback-invocation' } } }, selectedFallback: { source: { invocationId: 'fallback-invocation' } } })
   })
 
@@ -619,9 +626,9 @@ describe('SQLite session storage public queries', () => {
       .run('completed-turn', 'completed-invocation', session.id, 'completed-assistant', 'terminal', 1, 1)
 
     const queries = createSqliteSessionStorage(db).queries.continuationSources
-    expect(queries.inspect({ sessionId: session.id, activeTurnIds: [], selectedAssistantMessageId: 'completed-assistant' }))
+    expect(queries.read({ sessionId: session.id, activeTurnIds: [], selectedAssistantMessageId: 'completed-assistant' }))
       .toMatchObject({ kind: 'available', selected: { kind: 'not-recoverable' } })
-    expect(queries.inspect({ sessionId: session.id, activeTurnIds: [], selectedAssistantMessageId: 'other-assistant' }))
+    expect(queries.read({ sessionId: session.id, activeTurnIds: [], selectedAssistantMessageId: 'other-assistant' }))
       .toMatchObject({ kind: 'available', selected: { kind: 'not-found' } })
   })
 
@@ -632,7 +639,7 @@ describe('SQLite session storage public queries', () => {
     await history.appendBatch([
       { invocationId: 'open-invocation', turnId: 'open-turn', sequence: 1, schemaVersion: 1, eventId: 'open-1', idempotencyKey: 'open-key-1', kind: 'invocation-context-committed', payload: { messages: [] } }
     ], 0)
-    expect(createSqliteSessionStorage(db).queries.continuationSources.inspect({ sessionId: session.id, activeTurnIds: [] }))
+    expect(createSqliteSessionStorage(db).queries.continuationSources.read({ sessionId: session.id, activeTurnIds: [] }))
       .toEqual({ kind: 'unavailable', reason: 'CONTINUATION_INTENT_HISTORY_UNAVAILABLE' })
   })
 
@@ -648,7 +655,7 @@ describe('SQLite session storage public queries', () => {
     getDbConnection(db).prepare('INSERT INTO turns(turn_id,request_id,session_id,assistant_message_id,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?)')
       .run('interrupted-turn', 'interrupted-invocation', session.id, 'interrupted-assistant', 'terminal', 1, 1)
 
-    expect(createSqliteSessionStorage(db).queries.continuationSources.inspect({ sessionId: session.id, activeTurnIds: [] }))
+    expect(createSqliteSessionStorage(db).queries.continuationSources.read({ sessionId: session.id, activeTurnIds: [] }))
       .toMatchObject({ kind: 'available', failedCandidates: [{ source: { invocationId: 'interrupted-invocation', turnId: 'interrupted-turn', checkpointSequence: 1 } }] })
   })
 })

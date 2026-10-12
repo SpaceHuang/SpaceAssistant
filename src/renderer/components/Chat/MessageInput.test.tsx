@@ -1,3 +1,4 @@
+import { StrictMode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 
@@ -75,6 +76,18 @@ function renderInput(props: Partial<React.ComponentProps<typeof MessageInput>> =
 }
 
 describe('MessageInput', () => {
+  it('does not trigger findDOMNode deprecation warnings under StrictMode', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const store = configureStore({ reducer: { chat: chatReducer, config: configReducer } })
+      store.dispatch(setConfig(makeConfig()))
+      render(<StrictMode><Provider store={store}><MessageInput sessionId="sess-1" onSend={vi.fn()} /></Provider></StrictMode>)
+      expect(error.mock.calls.flat().join(' ')).not.toContain('findDOMNode is deprecated')
+    } finally {
+      error.mockRestore()
+    }
+  })
+
   it(
     'renders textarea and attach button',
     () => {

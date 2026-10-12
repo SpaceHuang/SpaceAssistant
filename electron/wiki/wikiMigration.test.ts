@@ -103,6 +103,72 @@ describe('T2.1 迁移检测', () => {
   })
 })
 
+describe('Wiki 迁移失败重试保护', () => {
+  it('重试时保留已生成并被用户编辑的冲突副本', async () => {
+    const world = await setupWorld()
+    const p = world.makeLegacyProfile('retry-conflict')
+    const projectId = computeProjectId(p.workDir)
+    const sharedPage = path.join(world.sharedRoot, 'wiki', 'entities', 'old.md')
+    fs.writeFileSync(sharedPage, 'SHARED VERSION\n', 'utf8')
+    const parallelPage = path.join(world.sharedRoot, 'wiki', 'entities', `old.from-${projectId}.md`)
+    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => { throw new Error('simulated rename lock') })
+
+    const first = await migrateLegacyWikis({ db: world.db, userDataPath: world.userData, wikiConfig: wikiConfig(), profiles: [{ workDir: p.workDir }] })
+    expect(first.profiles?.[0]?.status).toBe('failed')
+    expect(fs.existsSync(parallelPage)).toBe(true)
+    fs.writeFileSync(parallelPage, 'USER_EDIT_MUST_SURVIVE\n', 'utf8')
+
+    const second = await migrateLegacyWikis({ db: world.db, userDataPath: world.userData, wikiConfig: wikiConfig(), profiles: [{ workDir: p.workDir }] })
+    expect(second.profiles?.[0]?.status).toBe('migrated')
+    expect(fs.readFileSync(parallelPage, 'utf8')).toContain('USER_EDIT_MUST_SURVIVE')
+    renameSpy.mockRestore()
+  })
+
+  it('注释并发等待文件锁时读取锁内最新正文，保留先完成的编辑', async () => {
+    const world = await setupWorld()
+    const p = world.makeLegacyProfile('parallel-annotation')
+    const projectId = computeProjectId(p.workDir)
+    fs.writeFileSync(path.join(world.sharedRoot, 'wiki', 'entities', 'old.md'), 'SHARED_VERSION\n', 'utf8')
+    fs.writeFileSync(path.join(p.srcRoot, 'wiki', 'entities', 'old.md'), 'USER_OLD_EDIT\n', 'utf8')
+    const parallelPage = path.join(world.sharedRoot, 'wiki', 'entities', `old.from-${projectId}.md`)
+    const mutex = await import('./wikiWriteMutex')
+    let announceEditorEntered!: () => void
+    let releaseEditor!: () => void
+    const editorEntered = new Promise<void>((resolve) => { announceEditorEntered = resolve })
+    const editorRelease = new Promise<void>((resolve) => { releaseEditor = resolve })
+    let editorWrite: Promise<void> | undefined
+    let parallelLockCalls = 0
+    const originalMutex = mutex.withWikiWriteMutex.bind(mutex)
+    const mutexSpy = vi.spyOn(mutex, 'withWikiWriteMutex').mockImplementation((async (absPath: string, fn: () => Promise<unknown> | unknown) => {
+      if (absPath === parallelPage && ++parallelLockCalls === 2) {
+        // Queue the editor immediately before annotate's lock request. In the old code,
+        // its USER_OLD_EDIT snapshot has already been captured; in the fixed code, reading
+        // happens inside the lock and therefore observes USER_NEW_EDIT after this write.
+        editorWrite = originalMutex(parallelPage, async () => {
+          announceEditorEntered()
+          await editorRelease
+          fs.writeFileSync(parallelPage, 'USER_NEW_EDIT\n', 'utf8')
+        })
+      }
+      return originalMutex(absPath, fn)
+    }) as typeof mutex.withWikiWriteMutex)
+
+    try {
+      const migration = migrateLegacyWikis({ db: world.db, userDataPath: world.userData, wikiConfig: wikiConfig(), profiles: [{ workDir: p.workDir }] })
+      await editorEntered
+      releaseEditor()
+      await editorWrite
+      const report = await migration
+      expect(report.profiles?.[0]?.status).toBe('migrated')
+      expect(fs.readFileSync(parallelPage, 'utf8')).toContain('USER_NEW_EDIT')
+      expect(fs.readFileSync(parallelPage, 'utf8').match(/\[wiki-migration\]/g)).toHaveLength(1)
+    } finally {
+      releaseEditor()
+      mutexSpy.mockRestore()
+    }
+  })
+})
+
 describe('T2.2a 迁移文件管线', () => {
   it('raw 拷入 raw/<projectId>/、页面拷入、技能副本删除、旧目录改名、幂等重跑收敛', async () => {
     const world = await setupWorld()

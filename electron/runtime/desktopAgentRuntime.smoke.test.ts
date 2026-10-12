@@ -25,14 +25,14 @@ describe('createDesktopAgentRuntime(生产装配 smoke)', () => {
 
   it('confirmIds 分配非空 id 且占用语义生效(非空串桩)', () => {
     const rt = createDesktopAgentRuntime()
-    const id = rt.confirmIds.allocate()
-    expect(id).not.toBe('')
-    expect(rt.confirmIds.isInUse(id)).toBe(true)
+    const lease = rt.confirmIds.allocate()
+    expect(lease.code).toMatch(/^\d{2}$/)
+    expect(rt.confirmIds.isInUse(lease.code)).toBe(true)
     // 兼容转发链同样真实
     setDefaultAgentRuntime(rt)
-    const legacyId = allocateConfirmId()
-    expect(legacyId).not.toBe('')
-    expect(isConfirmIdInUse(legacyId)).toBe(true)
+    const legacyLease = allocateConfirmId()
+    expect(legacyLease.code).toMatch(/^\d{2}$/)
+    expect(isConfirmIdInUse(legacyLease.code)).toBe(true)
   })
 
   it('chatCancels.register 返回真实可中止 signal(非永不 abort 桩)', () => {

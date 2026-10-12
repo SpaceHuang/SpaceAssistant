@@ -213,6 +213,35 @@ describe('ChatMessageList confirmationReadyByToolId stability', () => {
     expect(lastBubbleProps().message.toolCalls?.[0]).toMatchObject({ status: 'confirming', autoAnswerer: true })
   })
 
+  it('bounded display 保留 IM 确认渠道以阻止桌面卡片交互', () => {
+    const message = streamingAssistantMessage({
+      id: 'm-feishu-confirm',
+      toolCalls: [{
+        id: 'tool-feishu', toolName: 'write_file', input: { path: 'notes.txt' }, status: 'calling', riskLevel: 'medium'
+      }]
+    })
+    mockedUseTurnDisplay.mockReturnValue(toTurnDisplay({
+      turnId: 'turn-feishu', requestId: 'request-feishu', version: 2, lifecycle: 'awaiting-confirmation',
+      message: { ...message, toolCalls: [{ ...message.toolCalls![0]!, status: 'confirming', remoteConfirmation: 'feishu' }] }
+    }))
+
+    render(
+      <ChatMessageList
+        messages={[message]}
+        turnId="turn-feishu"
+        confirmationReadyBySession={{}}
+        pendingConfirmItems={[]}
+        actions={undefined}
+        resolveToolsInteractive={() => undefined}
+        showArchiveToWiki={() => false}
+        canRetry={() => false}
+        canCancelQueued={() => false}
+      />
+    )
+
+    expect(lastBubbleProps().message.toolCalls?.[0]).toMatchObject({ status: 'confirming', remoteConfirmation: 'feishu' })
+  })
+
   it('turn display 缺少已恢复 pending 工具时按原始发起时间补回活动顺序', () => {
     const message = streamingAssistantMessage({
       id: 'm-origin',

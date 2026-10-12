@@ -181,8 +181,9 @@ type AgentTurnResult = Readonly<{
 **聚合与收尾**（并发返回之后）：
 
 - **空洞物化**：fatal 中止留下的未认领槽位逐个 `markNotDispatched(signal 已 abort ? 'REQUEST_CANCELLED' : 'TURN_STOPPED_BEFORE_DISPATCH')`，计数经 `onUndispatchedToolsMaterialized` 留痕；若某槽位既未认领又非 `pending`，抛内部错误（防止派发空洞被静默吞掉）。
-- **诊断**：致命拒绝（非 `ToolDeniedError`）先发 `onDispatchStoppedWithPending`（`reason` 取 `AgentTurnHistoryAppendError.kinds` 拼接或错误 name）与 `onToolDispatchFailureContext`，再进入失败结算。
+- **诊断**：致命拒绝（非 `ToolDeniedError` 且非 `PlanRejectedError`）先发 `onDispatchStoppedWithPending`（`reason` 取 `AgentTurnHistoryAppendError.kinds` 拼接或错误 name）与 `onToolDispatchFailureContext`，再进入失败结算。
 - **回灌被拒工具**：`returnDeniedToolsToModel = true` 时不会终止回合，而是生成 `role: 'tool'` 的拒绝结果（内容取 `ToolDeniedError.userMessage`，缺省 `Tool call was not dispatched (<reasonCode>).`）回灌模型，并 `afterToolResult(..., { kind: 'safety-rejection', reasonCode })`。
+- **回灌计划期拒绝**（2026-10 新增，D-1 定案）：`prepareTool` 在 plan 阶段抛出的 `PlanRejectedError`（宿主注入的「可改写重试」计划失败，`reasonCode` 为宿主业务码、`userMessage` 为宿主构造的拒绝文本）与 `ToolDeniedError` 同走回灌通道——`markNotDispatched` 落 History、物化为 `is_error` tool 消息、`afterToolResult(..., { kind: 'plan-rejection', reasonCode })`（审计口径与策略拒绝分离）；`returnDeniedToolsToModel` 未开启时仍 fatal（fatal-by-default 不变）。
 - **上抛选择**：其余拒绝按优先级取一个上抛——`ToolExecutionAfterDispatchError` > `AgentTurnHistoryAppendError`（`kinds` 含 `tool-call-finished`）> 请求生命周期错误（取消 / 超时）> 第一个拒绝；上抛前把仍 pending 的工具补 `markNotDispatched`。
 - 回灌给模型的工具结果顺序**按 provider 的 tool-call 顺序**排列，与派发完成顺序无关。
 
@@ -204,7 +205,7 @@ type AgentTurnResult = Readonly<{
 
 - 结算前先读一次 history：已有终态事件（`invocation-completed` / `invocation-failed`）则跳过补写与终态追加；否则对"仍 pending 且未 started"的工具补写 `tool-call-not-dispatched`（reason `TURN_FAILED_BEFORE_TOOL_DISPATCH`），补写失败即标记为"结果持久化不确定"（归入 `interrupted`）。
 - 「先抛出的错误」判定中，`AgentTurnCancelledError` 与 `AgentTurnTimedOutError` 等价看待（都是请求生命周期错误，优先于其它拒绝码）。
-- 终态事件 payload 会带上 `status`、`reason`（如 `timeout`、`host-projection-failed`、`tool-projection-failed`、`turn-boundary-ledger-projection-failed`、`unknown-after-dispatch`、拒绝码），`TOOL_LOOP_MAX_ROUNDS_EXCEEDED` / `SHELL_DIALECT_MISMATCH` 额外带 `errorCode`，并附 `lastValidUsage`（本回合最后一次被接受的用量）。
+- 终态事件 payload 会带上 `status`、`reason`（如 `timeout`、`host-projection-failed`、`tool-projection-failed`、`turn-boundary-ledger-projection-failed`、`unknown-after-dispatch`、拒绝码），`TOOL_LOOP_MAX_ROUNDS_EXCEEDED` / `SHELL_DIALECT_MISMATCH` 额外带 `errorCode`，并附 `lastValidUsage`（本回合最后一次被接受的用量）。**2026-10 更新（D-1 定案）**：`SHELL_DIALECT_MISMATCH` 不再由 planned 链路产生终态——run_shell 计划期失败已由宿主降级为 `PlanRejectedError` 回模型（turn 继续）；该 `errorCode` 特判仅保留用于兼容修复前 History 的恢复重构。桌面事件流的 `turn_end` 在终态错误码可得时同样透传 `errorCode`（与 canonical History 终态 payload 对齐）。
 - **会话 transcript 镜像**（同时给了 `sessionId` 与 `sessionTranscriptBaseVersion` 时）：终态追加携带 `transcriptCommit`。失败路径的消息视图优先从 history 的最后一次 `transcript-compacted` 反推（能定位到必需 user 消息时取其前缀），否则退回 `sessionTranscriptFailureMessages`；`outcome` 映射为 `cancelled` / `timed_out` / `interrupted` / `failed`；有 `assistantMessageId` 时附 `messageMirror`（`cancelled` 或 `failed`，`content` 取该 assistant 消息的文本投影）。
 - `appendTerminalHistory` 的行为：带 `transcriptCommit` 追加失败时会**降级重试一次"不带 transcriptCommit"**（先保住终态事实，让宿主能对会话做栅栏 / 对账）；无 `transcriptCommit`、或重试后仍失败时，读回 history 确认终态是否已等价落库——等价则吞掉错误，否则上抛并转 `onObservationError(error, 'history-terminal')`。
 - 若 history 已是终态（`AgentTurnHistoryAlreadyTerminalError`），不再重复写终态。
@@ -217,6 +218,7 @@ type AgentTurnResult = Readonly<{
 | 类 | code | 备注 |
 | --- | --- | --- |
 | `ToolDeniedError` | `TOOL_DENIED` | 含 `reasonCode`、可选 `userMessage` |
+| `PlanRejectedError` | `PLAN_REJECTED` | 2026-10 新增（D-1）：宿主注入的计划期拒绝；含 `reasonCode`（宿主业务码，SDK 零感知）与必填 `userMessage`（宿主构造的拒绝文本）；`returnDeniedToolsToModel` 开启时回模型、turn 继续 |
 | `ModelTurnLimitError` | `MODEL_TURN_LIMIT` | |
 | `ModelPreflightRejectedError` | `MODEL_PREFLIGHT_REJECTED` | `reasonCode` 目前仅 `OVER_BUDGET` |
 | `ToolLoopRoundLimitError` | `TOOL_LOOP_MAX_ROUNDS_EXCEEDED` | |

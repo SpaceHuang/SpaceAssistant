@@ -22,6 +22,7 @@ export function mapAgentSdkConfirmationOutcome(outcome: ConfirmOutcome, requeste
   const answerer = answererKind === 'deny' ? undefined
     : answererKind ?? (outcome.cause.startsWith('user-') ? 'user' : outcome.cause.startsWith('agent-') ? 'agent' : requestedAnswerer)
   const attribution = { ...(answerer ? { answerer } : {}), cause: outcome.cause }
+  const promptSendFailure = 'promptSendFailure' in outcome && outcome.promptSendFailure ? { promptSendFailure: outcome.promptSendFailure } : {}
   const reason = 'reason' in outcome && outcome.reason && typeof outcome.reason.summary === 'string' && outcome.reason.summary.trim()
     ? { userMessage: outcome.reason.summary.trim() }
     : {}
@@ -33,7 +34,7 @@ export function mapAgentSdkConfirmationOutcome(outcome: ConfirmOutcome, requeste
   }
   if (outcome.kind === 'timeout') return { kind: 'timeout', ...attribution, ...reason }
   if (outcome.cause === 'cancelled') return { kind: 'cancelled', ...attribution, ...reason }
-  if (outcome.cause === 'unavailable' || outcome.cause === 'config-error' || outcome.cause === 'no-answerer') return { kind: 'unavailable', ...attribution, ...reason }
+  if (outcome.cause === 'unavailable' || outcome.cause === 'config-error' || outcome.cause === 'no-answerer') return { kind: 'unavailable', ...attribution, ...reason, ...promptSendFailure }
   return { kind: 'denied', ...attribution, ...reason }
 }
 
@@ -117,7 +118,8 @@ export function createAgentSdkConfirmationPort(input: {
       let outcome = result.mapped
       if ('outcome' in result && confirmation.answerer === 'agent' &&
         result.outcome.kind !== 'approved-with-action' &&
-        (result.outcome.cause === 'unavailable' || result.outcome.cause === 'timeout') &&
+        (result.outcome.cause === 'unavailable' || result.outcome.cause === 'timeout' ||
+          (result.outcome.cause === 'agent-undetermined' && confirmation.context.lane === 'desktop')) &&
         result.outcome.answererKind === 'agent' && !confirmation.signal?.aborted && input.fallback) {
         outcome = await input.fallback(confirmation.call, confirmation, confirmation.context as GateConfirmationContext, result.outcome) ?? outcome
       }

@@ -32,6 +32,7 @@ import { getSecurityAuditLog } from '../confirmation/audit'
 import { createDeferredApprovalNotificationDelivery } from '../remote/deferredApprovalNotificationDelivery'
 import { isRemoteAsyncApprovalGateEnabled } from '../confirmation/remoteAsyncApprovalGate'
 import { createWakeEventDispatcher } from '../remote/wakeEventDispatcher'
+import { scheduleStartupWakeRecovery } from '../remote/startupWakeRecovery'
 import { createDeferredImBundleRuntime } from '../remote/deferredImBundleRuntime'
 import { recheckDeferredTaskControl } from '../remote/deferredImDispatch'
 import { executeDeferredImTool } from '../remote/imDeferredToolExecutor'
@@ -80,6 +81,7 @@ export type FeishuServiceBundle = {
 }
 
 let bundle: FeishuServiceBundle | null = null
+let clarificationRecoveryTimer: ReturnType<typeof setInterval> | null = null
 let unregisterFeishuTodoInvalidator: (() => void) | null = null
 let unregisterFeishuPendingCancel: (() => void) | null = null
 let unregisterFeishuCacheClearer: (() => void) | null = null
@@ -306,7 +308,7 @@ export function createFeishuBundle(deps: {
   }
 
   const router = new RemoteCommandRouter(routerDeps)
-  const wakeDispatcher = createWakeEventDispatcher({ db: deps.db, maxParallel: deps.getMaxParallel(),
+  const wakeDispatcher = createWakeEventDispatcher({ db: deps.db, maxParallel: deps.getMaxParallel(), ownerChannel: 'feishu',
     launchLoop: (input) => router.dispatchWakeEventSet(input), onError: (error) => {
       logFeishuCliEvent('error', 'feishu.wake.retry_failed', { message: error instanceof Error ? error.message : String(error) })
     } })
@@ -357,6 +359,29 @@ export async function autoStartFeishuEventIfNeeded(db: AppDatabase): Promise<voi
   const cfg = readFeishuConfigFromDb(db)
   if (cfg.enabled && cfg.remoteEnabled && cfg.appConfigured && bundle?.eventService) {
     await bundle.eventService.start()
+    if (clarificationRecoveryTimer) clearInterval(clarificationRecoveryTimer)
+    void bundle.router?.recoverClarificationLifecycle().catch((error) => {
+      logFeishuCliEvent('warn', 'feishu.clarification.recovery_failed', {
+        error: error instanceof Error ? error.message : String(error)
+      })
+    })
+    clarificationRecoveryTimer = setInterval(() => {
+      void bundle?.router?.recoverClarificationLifecycle().catch((error) => {
+        logFeishuCliEvent('warn', 'feishu.clarification.recovery_failed', {
+          error: error instanceof Error ? error.message : String(error)
+        })
+      })
+    }, 30_000)
+    clarificationRecoveryTimer.unref?.()
+    const recoverableSessionIds = await scheduleStartupWakeRecovery(db, 'feishu', bundle.wakeDispatcher, Date.now, (sessionId, error) => {
+      logFeishuCliEvent('error', 'feishu.wake.startup_recovery_failed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    })
+    if (recoverableSessionIds.length > 0) {
+      logFeishuCliEvent('info', 'feishu.wake.startup_recovery_started', { sessionCount: recoverableSessionIds.length })
+    }
     logFeishuCliEvent('info', 'feishu.ipc.auto_start', { started: true })
     return
   }
@@ -373,6 +398,8 @@ export async function autoStartFeishuEventIfNeeded(db: AppDatabase): Promise<voi
 }
 
 export async function shutdownFeishuServices(): Promise<void> {
+  if (clarificationRecoveryTimer) clearInterval(clarificationRecoveryTimer)
+  clarificationRecoveryTimer = null
   cancelAllActiveChats()
   remoteAuthorizationRegistry.invalidate('feishu', 'service_stopped')
   bundle?.imChannel.cancelAllPending()

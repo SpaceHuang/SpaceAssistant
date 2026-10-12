@@ -2,9 +2,60 @@ import { describe, expect, it } from 'vitest'
 import { createMemoryAppDb } from './testHelpers'
 import { getDbConnection } from './sqliteStore'
 import { createSession } from './operations'
-import { ackWakeEvent, ackWakeEventInRun, appendWakeEvent, claimWakeEvent, claimWakeEvents, continueWorkflow, finalizeWakeEvents, listWakeEvents, waitForEvent } from './wakeEvents'
+import { ackWakeEvent, ackWakeEventInRun, appendWakeEvent, claimWakeEvent, claimWakeEvents, continueWorkflow, finalizeWakeEvents, listRecoverableWakeSessionIds, listWakeEvents, waitForEvent } from './wakeEvents'
 
 describe('wake event persistence', () => {
+  it('lists sessions with pending or expired claimed events for startup recovery', () => {
+    const db = createMemoryAppDb()
+    const pendingSessionId = createSession(db, { name: 'wake-pending-recovery' }).id
+    const expiredSessionId = createSession(db, { name: 'wake-expired-recovery' }).id
+    const activeSessionId = createSession(db, { name: 'wake-active-claim' }).id
+    const ackedSessionId = createSession(db, { name: 'wake-acked-session' }).id
+
+    appendWakeEvent(db, { sessionId: pendingSessionId, type: 'continuation', reasonKey: 'pending-recovery', payloadRef: { kind: 'continuation', continuationId: 'pending' } })
+    const expired = appendWakeEvent(db, { sessionId: expiredSessionId, type: 'continuation', reasonKey: 'expired-recovery', payloadRef: { kind: 'continuation', continuationId: 'expired' } })
+    const active = appendWakeEvent(db, { sessionId: activeSessionId, type: 'continuation', reasonKey: 'active-claim', payloadRef: { kind: 'continuation', continuationId: 'active' } })
+    const acked = appendWakeEvent(db, { sessionId: ackedSessionId, type: 'continuation', reasonKey: 'acked', payloadRef: { kind: 'continuation', continuationId: 'acked' } })
+    claimWakeEvent(db, { sessionId: expiredSessionId, eventId: expired.eventId, ownerId: 'expired-owner', leaseDurationMs: 1 })
+    claimWakeEvent(db, { sessionId: activeSessionId, eventId: active.eventId, ownerId: 'active-owner', leaseDurationMs: 60_000 })
+    claimWakeEvent(db, { sessionId: ackedSessionId, eventId: acked.eventId, ownerId: 'acked-owner', leaseDurationMs: 1 })
+    ackWakeEvent(db, { sessionId: ackedSessionId, eventId: acked.eventId, ownerId: 'acked-owner' })
+
+    expect(listRecoverableWakeSessionIds(db, Date.now() + 100)).toEqual([expiredSessionId, pendingSessionId].sort())
+    db.close()
+  })
+
+  it('scopes startup recovery candidates to the owning IM channel', () => {
+    const db = createMemoryAppDb()
+    const wechatSessionId = createSession(db, { name: 'wake-recovery-wechat', metadata: { source: 'wechat' } }).id
+    const feishuSessionId = createSession(db, { name: 'wake-recovery-feishu', metadata: { source: 'feishu' } }).id
+    const desktopSessionId = createSession(db, { name: 'wake-recovery-desktop', metadata: { source: 'desktop' } }).id
+    appendWakeEvent(db, { sessionId: wechatSessionId, type: 'continuation', reasonKey: 'recovery-wechat',
+      payloadRef: { kind: 'continuation', continuationId: 'wechat' } })
+    const feishuEvent = appendWakeEvent(db, { sessionId: feishuSessionId, type: 'continuation', reasonKey: 'recovery-feishu',
+      payloadRef: { kind: 'continuation', continuationId: 'feishu' } })
+    appendWakeEvent(db, { sessionId: desktopSessionId, type: 'continuation', reasonKey: 'recovery-desktop',
+      payloadRef: { kind: 'continuation', continuationId: 'desktop' } })
+    claimWakeEvent(db, { sessionId: feishuSessionId, eventId: feishuEvent.eventId, ownerId: 'expired-feishu-owner', leaseDurationMs: 1 })
+    const recoveryNow = Date.now() + 100
+
+    expect(listRecoverableWakeSessionIds(db, recoveryNow, 'wechat')).toEqual([wechatSessionId])
+    expect(listRecoverableWakeSessionIds(db, recoveryNow, 'feishu')).toEqual([feishuSessionId])
+    db.close()
+  })
+
+  it('does not let a channel-scoped claim claim another channel session event', () => {
+    const db = createMemoryAppDb()
+    const feishuSessionId = createSession(db, { name: 'wake-claim-feishu', metadata: { source: 'feishu' } }).id
+    const event = appendWakeEvent(db, { sessionId: feishuSessionId, type: 'continuation', reasonKey: 'claim-feishu',
+      payloadRef: { kind: 'continuation', continuationId: 'claim-feishu' } })
+
+    expect(claimWakeEvents(db, { sessionId: feishuSessionId, runId: 'wechat-run', ownerId: 'wechat-owner', ownerChannel: 'wechat' }).eventIds).toEqual([])
+    expect(getDbConnection(db).prepare('SELECT status,claimed_by,run_id FROM wake_events WHERE event_id=?').get(event.eventId))
+      .toEqual({ status: 'pending', claimed_by: null, run_id: null })
+    db.close()
+  })
+
   it('returns the original event for a repeated reasonKey without inserting a second row', () => {
     const db = createMemoryAppDb()
     const sessionId = createSession(db, { name: 'wake-session-1' }).id

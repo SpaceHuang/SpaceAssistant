@@ -51,7 +51,7 @@ export function buildSimpleOutboundText(args: {
 }
 
 export async function sendImOutbound(args: {
-  reply: (text: string) => Promise<void>
+  reply: (text: string) => Promise<unknown>
   body: string
   sessionId?: string
   maxLen: number
@@ -60,10 +60,11 @@ export async function sendImOutbound(args: {
   formatWithSession?: (body: string, sessionId: string) => string
   sessionSuffixLength?: (sessionId: string) => number
   touch?: { sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>; sessionId: string }
-}): Promise<void> {
+}): Promise<unknown> {
   const text = buildSimpleOutboundText(args)
-  await args.reply(text)
+  const result = await args.reply(text)
   maybeTouchOutboundActivity(args.sessionId, args.touch)
+  return result
 }
 
 export type ImLifecycleStage = 'accepted' | 'plan-confirmation' | 'deferred-wait' | 'resumed' | 'completed' | 'failed'

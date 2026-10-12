@@ -4,6 +4,7 @@ import { formatRemoteOutboundMessage, sessionSuffixLength } from '../../src/shar
 import { maybeTouchOutboundActivity } from '../remote/imRemoteOutbound'
 import { formatWeChatSummary, type WeChatReplyBot } from './weChatReplyService'
 import { logWeChatCliEvent } from './weChatCliLogger'
+import { sendRemoteTrackOutbound, type RemoteTrackOutboundDeliveryContext } from '../remote/remoteTrackOutbound'
 
 const WECHAT_SUMMARY_MAX = 2000
 
@@ -13,6 +14,7 @@ export async function sendWeChatRemoteOutbound(args: {
   body: string
   sessionId?: string
   touch?: { sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>; sessionId: string }
+  trackDelivery?: RemoteTrackOutboundDeliveryContext
 }): Promise<void> {
   const { bot, inbound, body, sessionId, touch } = args
   const base = formatWeChatSummary(body)
@@ -36,12 +38,12 @@ export async function sendWeChatRemoteOutbound(args: {
     text = base
   }
 
-  await bot.reply(inbound, text)
-  const chunks = Math.ceil(text.length / WECHAT_SUMMARY_MAX)
-  logWeChatCliEvent('info', 'wechat.reply.send', {
-    textLen: text.length,
-    chunksSent: Math.max(1, chunks)
-  })
-
-  maybeTouchOutboundActivity(sessionId, touch)
+  const send = async () => {
+    await bot.reply(inbound, text)
+    const chunks = Math.ceil(text.length / WECHAT_SUMMARY_MAX)
+    logWeChatCliEvent('info', 'wechat.reply.send', { textLen: text.length, chunksSent: Math.max(1, chunks) })
+    maybeTouchOutboundActivity(sessionId, touch)
+  }
+  if (!args.trackDelivery) return send()
+  await sendRemoteTrackOutbound({ delivery: args.trackDelivery, send, readPlatformMessageId: () => undefined })
 }

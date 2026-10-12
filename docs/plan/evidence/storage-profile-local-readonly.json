@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "sampleStatus": "concurrent-change/inconclusive",
+  "identity": "8105775627bf7c6d",
+  "profileStatus": "partial",
+  "sampledAt": "2026-10-09T18:24:46.428Z",
+  "dbBytes": 90112,
+  "walBytes": 0,
+  "rowCounts": {
+    "messages": 0
+  },
+  "spill": {
+    "classification": "unknown",
+    "files": 0,
+    "observedBytes": 0,
+    "complete": false
+  },
+  "status": "partial",
+  "errorCodes": [
+    "SPILL_REFERENCE_INDEX_UNAVAILABLE"
+  ],
+  "durationMs": 78.183,
+  "eventLoopDelayMs": 3.138,
+  "notes": "The canonical userData database was unique and read-only open succeeded. File metadata changed during sampling, so this sample is inconclusive for concurrent change and is not evidence of sampler writes or a static snapshot. No path or content was recorded."
+}

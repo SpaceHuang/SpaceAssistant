@@ -320,4 +320,15 @@ describe('resolveMessageToolsInteractive', () => {
       })
     ).toEqual({ requestId: 'req-live' })
   })
+
+  it.each(['wechat', 'feishu'] as const)('不为 %s 远程待确认工具创建桌面交互入口', (remoteConfirmation) => {
+    const message: Message = {
+      ...confirmingMessage,
+      toolCalls: [{ ...confirmingMessage.toolCalls![0]!, remoteConfirmation }]
+    }
+
+    expect(messageHasConfirmingTool(message)).toBe(false)
+    expect(resolveRequestIdForConfirmingMessage({ sessionId: message.sessionId, message, pendingItems: [] })).toBeNull()
+    expect(resolveMessageToolsInteractive({ message, sessionId: message.sessionId, pendingItems: [] })).toBeUndefined()
+  })
 })

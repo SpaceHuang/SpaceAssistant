@@ -392,7 +392,7 @@ describe('computeEffectiveTools 广告/授权面分离（FR3 / FR11 / O3 / O5）
     })).toThrow(/compat 名撞名/)
   })
 
-  it('remoteContext lane：延迟计划不生效（边界 6）', () => {
+  it('remoteContext lane：延迟计划可用，且调用裁剪同步收窄索引授权面', () => {
     const a = makeEntry()
     const plan = computeDeferredPlan({
       mcpSnapshot: makeSnapshot([a]),
@@ -404,8 +404,11 @@ describe('computeEffectiveTools 广告/授权面分离（FR3 / FR11 / O3 / O5）
       builtinConfig: { ...DEFAULT_TOOLS_CONFIG },
       remoteContext: { source: 'feishu', messageId: 'm1', confirmPolicy: 'always' },
       mcpSnapshot: makeSnapshot([a]),
-      deferredPlan: plan
+      deferredPlan: plan,
+      trim: { allow: ['tool_search'] }
     })
-    expect(result.deferredToolNames.size).toBe(0)
+    expect(result.deferredToolNames).toEqual(new Set())
+    expect(result.toolNames).toContain('tool_search')
+    expect(result.toolNames).not.toContain(a.mappedName)
   })
 })

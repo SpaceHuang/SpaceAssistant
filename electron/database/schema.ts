@@ -1,7 +1,7 @@
 /** SQLite schema version; bump when DDL changes require migration steps. */
-export const DB_SCHEMA_VERSION = 86
+export const DB_SCHEMA_VERSION = 95
 
-/** v83：wiki_projects 项目映射表（wiki-shared-centralized-storage §6.2） */
+/** wiki-shared-centralized-storage：持久化项目到 WorkDir 的映射。 */
 export const WIKI_PROJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS wiki_projects (
   project_id     TEXT PRIMARY KEY NOT NULL,
   work_dir       TEXT NOT NULL UNIQUE,
@@ -333,6 +333,15 @@ CREATE TABLE IF NOT EXISTS im_inbox_message_context (
   channel TEXT NOT NULL CHECK(channel IN ('feishu','wechat')),
   platform_message_id TEXT NOT NULL,
   context_token TEXT,
+  created_at INTEGER NOT NULL,
+  track_id TEXT REFERENCES remote_tracks(track_id) ON DELETE SET NULL,
+  track_event_id TEXT REFERENCES remote_track_events(event_id) ON DELETE SET NULL,
+  clarification_work_id TEXT REFERENCES remote_track_work_queue(work_id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS im_inbox_clarification_park (
+  message_id TEXT PRIMARY KEY NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  clarification_id TEXT NOT NULL UNIQUE REFERENCES remote_clarifications(clarification_id) ON DELETE CASCADE,
   created_at INTEGER NOT NULL
 );
 
@@ -2115,6 +2124,3 @@ CREATE TABLE IF NOT EXISTS canonical_invocation_pending_views (
 export const MIGRATION_V86_REPAIR_TERMINAL_COLUMN_SQL = `
 ALTER TABLE canonical_projection_repairs ADD COLUMN terminal_failed INTEGER NOT NULL DEFAULT 0 CHECK(terminal_failed IN (0,1));
 `
-
-
-

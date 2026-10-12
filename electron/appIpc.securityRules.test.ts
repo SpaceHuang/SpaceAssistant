@@ -64,6 +64,12 @@ vi.mock('./claudeRequestGuards', () => ({
 }))
 
 const mockSend = vi.fn()
+const mockPushExposure = vi.hoisted(() => vi.fn(async (_lane: string) => undefined))
+
+vi.mock('./ipc/ipcShared', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./ipc/ipcShared')>(),
+  makePushExposureToolsChanged: () => mockPushExposure
+}))
 
 vi.mock('./windowRef', () => ({
   getMainWindow: vi.fn(() => ({ webContents: { send: mockSend } }))
@@ -85,6 +91,14 @@ vi.mock('./confirmation/policyRuleStore', () => ({
 
 vi.mock('./confirmation/settingsAudit', () => ({
   recordSettingsChange: mockRecordSettingsChange
+}))
+
+// The exposure notification test uses an intentionally minimal AppDatabase
+// fixture. Skip the unrelated persistent IM model migration that requires a
+// real SQLite connection before the config readers can produce exposure data.
+vi.mock('./remote/remoteImModelConfigDb', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./remote/remoteImModelConfigDb')>()),
+  ensureRemoteImModelConfigMigrated: vi.fn()
 }))
 
 vi.mock('./confirmation/audit', async (importOriginal) => ({
@@ -181,6 +195,7 @@ describe('security:set-rule-enabled 仅限 locked+deny 系统保护规则（fail
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mockPushExposure.mockClear()
     mockReadDisabledIds.mockReturnValue([])
     ipc = mockIpcMain()
     registerAppIpcHandlers(ipc as unknown as import('electron').IpcMain, makeCtx())
@@ -207,8 +222,7 @@ describe('security:set-rule-enabled 仅限 locked+deny 系统保护规则（fail
   it('切换成功后重推 exposure:tools-changed（三条链路）', async () => {
     const r = await invoke({ ruleId: 'remote-shell-disabled', enabled: false })
     expect(r.ok).toBe(true)
-    const pushes = mockSend.mock.calls.filter((c) => c[0] === 'exposure:tools-changed')
-    expect(pushes.map((c) => (c[1] as { lane: string }).lane).sort()).toEqual(['desktop', 'feishu', 'wechat'])
+    expect(mockPushExposure.mock.calls.map(([lane]) => lane).sort()).toEqual(['desktop', 'feishu', 'wechat'])
   })
 
   it('变更远程专属保护规则只发布受影响 lane 的授权版本', async () => {

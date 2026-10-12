@@ -6,6 +6,7 @@ import { resolveConfirmChannel } from './channels'
 import { createPersistentDeferredTodoAdmission } from './deferredTodoAdmission'
 import { createDeferredApprovalAdapter } from './deferredApprovalAdapter'
 import { ImChannel } from './imChannel'
+import { createImChannelForTest } from './imChannelTestUtils'
 
 const request: ConfirmRequest = {
   facts: { toolName: 'write_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'write a file' } },
@@ -52,7 +53,7 @@ describe('IM async approval outcome integration', () => {
 
   it.each(['wechat', 'feishu'] as const)('%s remains on the existing user answerer when rollout is off', async (lane) => {
     const db = createMemoryAppDb()
-    const imChannel = new ImChannel({ lane, timeoutMs: 1000, sendPrompt: vi.fn() })
+    const imChannel = createImChannelForTest({ lane, timeoutMs: 1000, sendPrompt: vi.fn() })
     const agentFactory = vi.fn(() => new AgentChannel({ lane, requestId: 'unused', sessionId: 'unused', toolName: 'write_file',
       policy: { kind: 'agent' }, invokeApproval: async () => ({ ok: true, verdict: { kind: 'approve', reason: { summary: 'unexpected' } } }) }))
     const resolved = resolveConfirmChannel({ lane, requestId: `closed-${lane}`, sessionId: `closed-session-${lane}`, toolName: 'write_file',

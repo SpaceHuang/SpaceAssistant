@@ -70,7 +70,9 @@ export async function runWeChatRemoteAgent(ctx: {
         inboundRaw: ctx.inboundRaw,
         getSessionId,
         config: ctx.wechatConfig,
-        sessionCommands: ctx.sessionStorage.commands
+        sessionCommands: ctx.sessionStorage.commands,
+        ...(ctx.remoteContext.trackContext ? { trackDelivery: { db: ctx.db, track: ctx.remoteContext.trackContext,
+          requestId: ctx.requestId, turnId: ctx.turnId } } : {})
       }),
     buildSystemAppendix: ({ browserRemoteHint }) =>
       buildWeChatRemoteSystemAppendix({

@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "微信消息处理与审核全链路",
+    "output": "docs/architecture/wechat-message-processing-flow-2026-10-11.html",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "full-path", "label": "完整消息链路", "focus": ["wechat", "poller", "parser", "router", "session", "agent", "policy", "decision", "prompt", "pending", "imreply", "lease", "recheck", "tool", "answer", "send"], "note": "从微信消息进入，到工具结果和最终回复返回微信。" },
+      { "id": "approval-path", "label": "审批与确认", "focus": ["policy", "decision", "prompt", "pending", "imreply", "lease", "recheck", "tool", "blocked", "card"], "note": "区分实际审批通道、桌面卡片展示、拒绝、超时和执行前复核。" },
+      { "id": "failure-points", "label": "失败与待核实", "focus": ["parser", "router", "prompt", "pending", "imreply", "blocked", "evidence", "card"], "note": "聚焦当前日志暴露的确认绑定、引用解析和桌面卡片语义。" }
+    ],
+    "viewBox": [720, 1420]
+  },
+  "lanes": [
+    { "id": "user", "label": "微信用户 / 展示面" },
+    { "id": "transport", "label": "微信 iLink / SDK" },
+    { "id": "ingress", "label": "消息解析与路由" },
+    { "id": "session", "label": "身份、会话与去重" },
+    { "id": "agent", "label": "Agent / MCP 执行" },
+    { "id": "policy", "label": "策略与安全复核" },
+    { "id": "confirm", "label": "工具确认生命周期" },
+    { "id": "outbound", "label": "结果回执" },
+    { "id": "audit", "label": "审计与历史" },
+    { "id": "exceptions", "label": "异常 / 待核实", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "receive", "label": "接收与路由", "fromCol": 0, "toCol": 2 },
+    { "id": "prepare", "label": "会话组装与工具决策", "fromCol": 3, "toCol": 3 },
+    { "id": "approval", "label": "确认与安全审核", "fromCol": 4, "toCol": 4 },
+    { "id": "finish", "label": "派发、回复与记录", "fromCol": 5, "toCol": 5 }
+  ],
+  "mainPath": ["wechat", "poller", "parser", "router", "session", "agent", "policy", "decision", "prompt", "pending", "imreply", "lease", "recheck", "tool", "answer", "send"],
+  "nodes": [
+    { "id": "wechat", "lane": "user", "col": 0, "type": "external", "label": "用户发消息", "sublabel": "指令 / 引用 / 确认码" },
+    { "id": "poller", "lane": "transport", "col": 1, "type": "messagebus", "label": "iLink 收包", "sublabel": "SDK 回调 + 原始 wire" },
+    { "id": "parser", "lane": "ingress", "col": 2, "type": "backend", "label": "解析入站消息", "sublabel": "文本、发送者、引用消息 ID" },
+    { "id": "router", "lane": "ingress", "col": 3, "type": "backend", "label": "优先识别确认回复", "sublabel": "再分流延迟审批或普通指令", "width": 118 },
+    { "id": "session", "lane": "session", "col": 3, "type": "database", "label": "鉴权 / 去重 / 会话", "sublabel": "绑定 owner、session 和消息", "width": 118 },
+    { "id": "agent", "lane": "agent", "col": 3, "type": "backend", "label": "组装 Agent turn", "sublabel": "接受消息、历史、执行配置", "width": 112 },
+    { "id": "policy", "lane": "policy", "col": 4, "type": "security", "label": "工具安全策略", "sublabel": "权限、风险、确认要求" },
+    { "id": "decision", "lane": "confirm", "col": 4, "type": "security", "label": "逐个工具请求确认", "sublabel": "工具调用各自有 request / tool ID", "width": 118 },
+    { "id": "prompt", "lane": "transport", "col": 4, "type": "messagebus", "label": "发送 IM 确认提示", "sublabel": "两位码 + 提示关联标识", "width": 118 },
+    { "id": "pending", "lane": "confirm", "col": 5, "type": "security", "label": "等待批准 / 拒绝", "sublabel": "owner、引用、过期、取消", "width": 112 },
+    { "id": "imreply", "lane": "ingress", "col": 4, "type": "backend", "label": "确认消息入站", "sublabel": "确认码 + 原提示引用", "width": 112 },
+    { "id": "lease", "lane": "confirm", "col": 5, "type": "database", "label": "结算确认终态", "sublabel": "批准 / 拒绝 / 超时 / 取消", "width": 112, "yOffset": 34 },
+    { "id": "recheck", "lane": "policy", "col": 5, "type": "security", "label": "派发前复核", "sublabel": "批准仍有效且范围未变", "width": 108 },
+    { "id": "tool", "lane": "agent", "col": 5, "type": "cloud", "label": "派发 MCP / 工具", "sublabel": "审核通过后执行", "width": 106 },
+    { "id": "answer", "lane": "outbound", "col": 5, "type": "backend", "label": "汇总本轮结果", "sublabel": "数据 / 阻断原因 / 失败状态", "width": 112 },
+    { "id": "send", "lane": "user", "col": 5, "type": "messagebus", "label": "发送微信回执", "sublabel": "按执行与发送事实表述", "width": 108, "yOffset": 34 },
+    { "id": "audit", "lane": "audit", "col": 5, "type": "database", "label": "写入历史与审计", "sublabel": "requestId、toolUseId、结果", "width": 112 },
+    { "id": "reject", "lane": "exceptions", "col": 2, "type": "security", "label": "拒绝 / 不启动", "sublabel": "未授权、重复或无会话", "width": 108 },
+    { "id": "blocked", "lane": "exceptions", "col": 5, "type": "security", "label": "不派发工具", "sublabel": "拒绝、超时、不可用、复核失败", "width": 118 },
+    { "id": "evidence", "lane": "exceptions", "col": 4, "type": "database", "label": "线上日志观察", "sublabel": "发送 fulfilled；确认绑定无 ID", "width": 112, "yOffset": 34 },
+    { "id": "card", "lane": "user", "col": 4, "type": "frontend", "label": "桌面确认卡片", "sublabel": "可见投影；动作是否能结算 IM 待核实", "width": 118 }
+  ],
+  "edges": [
+    { "id": "user-to-poller", "from": "wechat", "to": "poller", "label": "入站消息", "variant": "emphasis", "role": "main" },
+    { "id": "poller-to-parser", "from": "poller", "to": "parser", "label": "SDK + wire", "variant": "default", "role": "main" },
+    { "id": "parser-to-router", "from": "parser", "to": "router", "variant": "emphasis", "role": "main" },
+    { "id": "router-to-session", "from": "router", "to": "session", "label": "普通指令", "variant": "default", "role": "main", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "id": "session-to-agent", "from": "session", "to": "agent", "label": "鉴权通过", "variant": "emphasis", "role": "main", "fromSide": "right", "toSide": "right", "route": "return-left" },
+    { "id": "session-to-reject", "from": "session", "to": "reject", "label": "拒绝 / 重复", "variant": "security", "role": "error", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "id": "agent-to-policy", "from": "agent", "to": "policy", "label": "工具调用", "variant": "emphasis", "role": "main" },
+    { "id": "policy-to-decision", "from": "policy", "to": "decision", "label": "策略要求确认", "variant": "security", "role": "main", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "id": "policy-direct-tool", "from": "policy", "to": "tool", "label": "无需确认 / 已信任", "variant": "default", "role": "branch", "fromSide": "bottom", "toSide": "bottom", "route": "bottom-channel" },
+    { "id": "decision-to-prompt", "from": "decision", "to": "prompt", "label": "创建独立待确认项", "variant": "security", "role": "main", "fromSide": "left", "toSide": "right", "route": "return-left" },
+    { "id": "prompt-to-pending", "from": "prompt", "to": "pending", "label": "提示发送 / 关联", "variant": "security", "role": "main", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "id": "prompt-to-card", "from": "prompt", "to": "card", "label": "确认请求事件投影", "variant": "dashed", "role": "async", "fromSide": "left", "toSide": "right", "route": "return-left" },
+    { "id": "prompt-to-evidence", "from": "prompt", "to": "evidence", "label": "日志：无可用消息 ID", "variant": "security", "role": "error", "fromSide": "bottom", "toSide": "left", "route": "drop" },
+    { "id": "pending-to-user", "from": "pending", "to": "wechat", "label": "提示发给用户", "variant": "dashed", "role": "async", "fromSide": "top", "toSide": "top", "route": "up-channel" },
+    { "id": "user-to-imreply", "from": "wechat", "to": "imreply", "label": "批准 / 拒绝 + 引用", "variant": "emphasis", "role": "async", "fromSide": "right", "toSide": "left", "route": "drop" },
+    { "id": "imreply-to-router", "from": "imreply", "to": "router", "label": "确认优先处理", "variant": "security", "role": "main", "fromSide": "top", "toSide": "bottom", "route": "up-channel" },
+    { "id": "imreply-to-lease", "from": "imreply", "to": "lease", "label": "owner / 引用校验", "variant": "security", "role": "main", "fromSide": "right", "toSide": "left", "route": "drop" },
+    { "id": "lease-to-recheck", "from": "lease", "to": "recheck", "label": "批准", "variant": "security", "role": "main" },
+    { "id": "lease-to-blocked", "from": "lease", "to": "blocked", "label": "拒绝 / 超时 / 取消", "variant": "security", "role": "error", "fromSide": "right", "toSide": "left", "route": "drop" },
+    { "id": "pending-to-blocked", "from": "pending", "to": "blocked", "label": "提示未绑定 / 不可用", "variant": "security", "role": "error", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "id": "recheck-to-tool", "from": "recheck", "to": "tool", "label": "复核通过", "variant": "emphasis", "role": "main", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "id": "recheck-to-blocked", "from": "recheck", "to": "blocked", "label": "失效 / 越权", "variant": "security", "role": "error", "fromSide": "bottom", "toSide": "bottom", "route": "bottom-channel" },
+    { "id": "tool-to-answer", "from": "tool", "to": "answer", "label": "工具结果", "variant": "default", "role": "main", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "id": "answer-to-send", "from": "answer", "to": "send", "variant": "emphasis", "role": "main", "fromSide": "left", "toSide": "right", "route": "return-left" },
+    { "id": "send-to-user", "from": "send", "to": "wechat", "label": "最终回执", "variant": "emphasis", "role": "return", "fromSide": "top", "toSide": "top", "route": "outside-right" },
+    { "id": "answer-to-audit", "from": "answer", "to": "audit", "label": "事实状态", "variant": "dashed", "role": "async", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "id": "send-to-audit", "from": "send", "to": "audit", "label": "发送结果", "variant": "dashed", "role": "async", "fromSide": "bottom", "toSide": "right", "route": "outside-right" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "按当前代码理解的主链", "items": ["SDK onMessage 入站后交给 WeChatCommandRouter；先尝试 IM 确认回复，再识别延迟审批候选，普通指令才进入去重、鉴权与 session 执行。", "普通指令准备 AcceptedTurn 与 remoteContext，再进入 Agent runtime；MCP 每个 toolUse 各自经过策略与 ConfirmationPort。", "WeChat lane 注入 ImChannel 时，用户回答路径应走微信确认提示；桌面界面可收到确认事实投影，不能据此认定桌面点击会结算 IM 等待器。"] },
+    { "dot": "rose", "title": "确认审核的完整门槛", "items": ["策略检查决定允许、拒绝或要求确认；确认请求建立独立 ID 与两位码租约，发送提示，等待批准/拒绝/超时/取消。", "微信回复要经过入站解析、确认优先路由、owner 与原提示关联校验；结算后，工具在真正派发前再次安全复核。", "只有策略直接允许，或用户批准且执行前复核通过，才派发 MCP；拒绝、超时、确认不可用、取消和复核失败都不得派发。"] },
+    { "dot": "amber", "title": "代码与线上证据的边界", "items": ["WeChatConfirmationPromptAdapter 尝试读取 sendmessage acknowledgement，并用 poller BOT echo 作为回退关联；代码契约明确 platformQuoteRoundTripVerified=false。", "本次用户提供的运行日志显示确认提示 sendCall=fulfilled，但未获得可用消息 ID，delivery=unbound；随后工具调用以 CONFIRMATION_UNAVAILABLE 结束，MCP 未派发。", "同一轮两个并行 MCP 调用有不同 requestId/toolUseId，因此分别出现两张确认卡可能是两个真实待确认项。桌面卡片按钮是否操作同一 IM waiter、会话组装上下文是否完整，仍需结合 UI 路由和日志继续核对。"] },
+    { "dot": "emerald", "title": "审查时请重点核对", "items": ["确认回复在缺少 quote/ref_msg 时到底走普通命令、被忽略，还是会给用户可见反馈？", "桌面卡片只是 turn fact 的展示，还是存在能批准 WeChat lane 待确认项的明确桥接？点击允许/拒绝时，真正 resolve 的 registry/channel 是哪一个？", "发送回执如何表达“提示已发但无法关联”“发送结果未确定”“确认超时”“工具未派发”，并确保每一种状态与日志、会话历史一致？"] }
+  ]
+}

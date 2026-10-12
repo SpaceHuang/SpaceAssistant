@@ -23,8 +23,192 @@ import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import { isBrowserSessionTrustedHost, resetBrowserSessionTrustForTests } from '../browser/browserSessionTrust'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { createImOrchestrationToolRegistry } from '../remote/imOrchestrationTools'
+import { ImChannel } from '../confirmation/imChannel'
+import { getToolCache, saveProfiles, saveToolCache } from '../mcp/mcpConfigStore'
+import { executeToolSearch } from '../tools/toolSearchTool'
+import { RunShellPlanError } from '../tools/runShellPlan'
+import { PlanRejectedError } from '../../packages/agent-sdk/src/turn'
 
 describe('AcceptedTurn propagation', () => {
+  it('does not associate IM confirmations with a Track while the confirmation-link gate is off', async () => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: 'track-confirmation-link-disabled' })
+    for (const [key, value] of Object.entries({ remoteTrackPersist: 'true', remoteTrackRolloutChannels: '["wechat"]', remoteTrackExecution: 'true',
+      remoteTrackRecovery: 'true', remoteTrackScopedModelInput: 'true' })) setConfigValue(db, key, value)
+    const imChannel = new ImChannel({ lane: 'wechat', timeoutMs: 60_000, sendPrompt: async () => ({ messageId: 'prompt-1' }),
+      onTrackConfirmationChild: vi.fn() })
+    const trackContext = { trackId: 'track-1', channel: 'wechat' as const, identityKey: 'user-1', ownerId: 'owner-1',
+      authorizationEpoch: 1, rootMessageId: 'root-1', attributionEventId: 'event-1' }
+    const { agentSdk } = assembleInvocation({
+      requestId: 'track-confirmation-link-disabled', sessionId: session.id, lane: 'wechat', model: 'test-model', locale: 'zh-CN',
+      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      remoteContext: { source: 'wechat', messageId: 'inbound-1', confirmPolicy: 'always', userId: 'user-1', imChannel,
+        trackContext } as never
+    })
+    const confirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never, { cancel: vi.fn() })
+    const pending = confirmation({
+      call: { invocationId: 'track-confirmation-link-disabled', toolCallId: 'tool-1', toolName: 'browser', input: { action: 'navigate' } },
+      confirmationId: 'tool-1', answerer: 'user', reasonCode: 'browser-confirm',
+      context: { facts: { toolName: 'browser', actionClass: 'outbound', baseRiskLevel: 'medium', signals: [], summary: { text: 'visit' } },
+        decision: { riskLevel: 'medium', memoryTiers: [], timeoutMs: 60_000, answerer: 'user' } }
+    })
+
+    try {
+      await vi.waitFor(() => expect(imChannel.listPending()).toHaveLength(1))
+      expect(imChannel.listPending()[0]).not.toHaveProperty('trackId')
+      expect(imChannel.listPending()[0]).not.toHaveProperty('trackAttributionEventId')
+      imChannel.resolveFromDesktop(imChannel.listPending()[0]!.id, false)
+      await expect(pending).resolves.toMatchObject({ kind: 'denied' })
+    } finally {
+      for (const entry of imChannel.listPending()) imChannel.resolveFromDesktop(entry.id, false)
+      db.close()
+    }
+  })
+
+  it('associates IM confirmations with the exact Track when the confirmation-link gate is on', async () => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: 'track-confirmation-link-enabled' })
+    for (const [key, value] of Object.entries({ remoteTrackPersist: 'true', remoteTrackRolloutChannels: '["wechat"]', remoteTrackExecution: 'true',
+      remoteTrackRecovery: 'true', remoteTrackScopedModelInput: 'true', remoteTrackConfirmationLink: 'true' })) setConfigValue(db, key, value)
+    const onTrackConfirmationChild = vi.fn()
+    const imChannel = new ImChannel({ lane: 'wechat', timeoutMs: 60_000, sendPrompt: async () => ({ messageId: 'prompt-1' }), onTrackConfirmationChild })
+    const trackContext = { trackId: 'track-1', channel: 'wechat' as const, identityKey: 'user-1', ownerId: 'owner-1',
+      authorizationEpoch: 1, rootMessageId: 'root-1', attributionEventId: 'event-1' }
+    const { agentSdk } = assembleInvocation({
+      requestId: 'track-confirmation-link-enabled', turnId: 'track-confirmation-turn', sessionId: session.id, lane: 'wechat', model: 'test-model', locale: 'zh-CN',
+      messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp',
+      getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      remoteContext: { source: 'wechat', messageId: 'inbound-1', confirmPolicy: 'always', userId: 'user-1', imChannel,
+        trackContext } as never
+    })
+    const confirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never, { cancel: vi.fn() })
+    const pending = confirmation({
+      call: { invocationId: 'track-confirmation-link-enabled', toolCallId: 'tool-1', toolName: 'browser', input: { action: 'navigate' } },
+      confirmationId: 'tool-1', answerer: 'user', reasonCode: 'browser-confirm',
+      context: { facts: { toolName: 'browser', actionClass: 'outbound', baseRiskLevel: 'medium', signals: [], summary: { text: 'visit' } },
+        decision: { riskLevel: 'medium', memoryTiers: [], timeoutMs: 60_000, answerer: 'user' } }
+    })
+
+    try {
+      await vi.waitFor(() => expect(imChannel.listPending()).toHaveLength(1))
+      expect(imChannel.listPending()[0]).toMatchObject({ trackId: 'track-1', trackAttributionEventId: 'event-1',
+        requestId: 'track-confirmation-link-enabled', turnId: 'track-confirmation-turn', toolUseId: 'tool-1' })
+      expect(onTrackConfirmationChild).toHaveBeenCalledWith(expect.objectContaining({ trackId: 'track-1', trackAttributionEventId: 'event-1',
+        requestId: 'track-confirmation-link-enabled', turnId: 'track-confirmation-turn', toolUseId: 'tool-1' }), 'pending')
+      imChannel.resolveFromDesktop(imChannel.listPending()[0]!.id, false)
+      await expect(pending).resolves.toMatchObject({ kind: 'denied' })
+      expect(onTrackConfirmationChild).toHaveBeenLastCalledWith(expect.objectContaining({ trackId: 'track-1' }), 'settled')
+    } finally {
+      for (const entry of imChannel.listPending()) imChannel.resolveFromDesktop(entry.id, false)
+      db.close()
+    }
+  })
+
+  it.each(['feishu', 'wechat', 'automation'] as const)('%s receives the enabled MCP request snapshot', async (lane) => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: `mcp-${lane}` })
+    const serverId = '11111111-2222-4333-8444-555555555555'
+    const saved = await saveProfiles(db, [{
+      id: serverId, name: 'Docs', enabled: true, transport: 'stdio', timeoutSec: 10,
+      auth: { mode: 'none' }, stdio: { command: 'node', args: ['server.js'], env: [] },
+      enabledToolNames: ['search']
+    }])
+    await saveToolCache(db, serverId, {
+      tools: [{ serverId, originalName: 'search', mappedName: 'mcp_docs_search_12345678', description: 'Search docs', inputSchema: { type: 'object' }, discoveredAt: new Date().toISOString() }],
+      protocolVersion: '2025-06-18', discoveredAt: new Date().toISOString()
+    })
+    const { ports } = assembleInvocation({
+      requestId: `mcp-${lane}`, sessionId: session.id, lane, model: 'test', locale: 'zh-CN', messages: [],
+      toolsConfig: { ...DEFAULT_TOOLS_CONFIG, mcpDeferredLoading: 'always' }, appDb: db,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+    expect((ports.mcp?.snapshot as { entries: Map<string, unknown> }).entries.has('mcp_docs_search_12345678')).toBe(true)
+    expect(saved[0]?.enabledToolNames).toEqual(['search'])
+    db.close()
+  })
+
+  it.each(['feishu', 'wechat', 'automation'] as const)('%s tool_search only returns MCP entries in the turn authorization set', async (lane) => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: `mcp-trim-${lane}` })
+    const serverId = '11111111-2222-4333-8444-555555555555'
+    await saveProfiles(db, [{ id: serverId, name: 'Docs', enabled: true, transport: 'stdio', timeoutSec: 10,
+      auth: { mode: 'none' }, stdio: { command: 'node', args: ['server.js'], env: [] }, enabledToolNames: ['private_search', 'public_search'] }])
+    await saveToolCache(db, serverId, { tools: [
+      { serverId, originalName: 'private_search', mappedName: 'mcp_docs_private_search_12345678', description: 'private description marker', inputSchema: { type: 'object', properties: { secret: { type: 'string', description: 'private schema marker' } } }, discoveredAt: new Date().toISOString() },
+      { serverId, originalName: 'public_search', mappedName: 'mcp_docs_public_search_87654321', description: 'public description', inputSchema: { type: 'object', properties: { query: { type: 'string' } } }, discoveredAt: new Date().toISOString() }
+    ], protocolVersion: '2025-06-18', discoveredAt: new Date().toISOString() })
+    const { agentSdk } = assembleInvocation({ requestId: `mcp-trim-${lane}`, sessionId: session.id, lane, model: 'test', providerRouteId: 'hosted-route', locale: 'zh-CN', messages: [],
+      toolsConfig: { ...DEFAULT_TOOLS_CONFIG, mcpDeferredLoading: 'always' }, appDb: db, agentSdkHistory: new MemoryHistory(),
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    const registry = new TypedToolRegistry()
+    let capturedContext: Record<string, unknown> | undefined
+    registry.register(definePlannedTool({ name: 'context_probe', parseInput: (raw) => raw as Record<string, unknown>,
+      plan: async (_input, planning) => { capturedContext = planning.executionContext as Record<string, unknown>; return {} }, execute: async () => ({ success: true }) }))
+    const registeredTools = agentSdk.createRegisteredTools({ registry })
+    const createHost = (authorizedToolNames: ReadonlySet<string>) => agentSdk.createHostedTurnHost({ registeredTools, registry, authorizedToolNames,
+      policy: { evaluate: vi.fn(async () => ({ kind: 'deny', reasonCode: 'POLICY_DENY' })) } as never })
+
+    createHost(new Set(['tool_search', 'mcp_docs_public_search_87654321']))
+    await registeredTools.prepareTool({ invocationId: `mcp-trim-${lane}`, toolCallId: 'probe-allow-public', toolName: 'context_probe', input: {} }, { kind: 'initial' })
+    const denyFilteredResult = executeToolSearch({ query: '' }, capturedContext as never)
+
+    expect(denyFilteredResult.matches.map(({ name }) => name)).toEqual(['mcp_docs_public_search_87654321'])
+    expect(JSON.stringify(denyFilteredResult)).not.toContain('private description marker')
+    expect(JSON.stringify(denyFilteredResult)).not.toContain('private schema marker')
+
+    createHost(new Set(['tool_search']))
+    await registeredTools.prepareTool({ invocationId: `mcp-trim-${lane}`, toolCallId: 'probe-allow-search-only', toolName: 'context_probe', input: {} }, { kind: 'initial' })
+    const allowFilteredResult = executeToolSearch({ query: '' }, capturedContext as never)
+    expect(allowFilteredResult.matches).toEqual([])
+    expect(JSON.stringify(allowFilteredResult)).not.toContain('mcp_docs_private_search_12345678')
+    db.close()
+  })
+
+  it('approval-agent invocation has an empty MCP snapshot even when tools are enabled', async () => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: 'mcp-approval', ownership: 'internal', visibility: 'hidden' })
+    const serverId = '11111111-2222-4333-8444-555555555555'
+    await saveProfiles(db, [{ id: serverId, name: 'Docs', enabled: true, transport: 'stdio', timeoutSec: 10,
+      auth: { mode: 'none' }, stdio: { command: 'node', args: ['server.js'], env: [] }, enabledToolNames: ['search'] }])
+    await saveToolCache(db, serverId, { tools: [{ serverId, originalName: 'search', mappedName: 'mcp_docs_search_12345678', description: '', inputSchema: {}, discoveredAt: new Date().toISOString() }], protocolVersion: '2025-06-18', discoveredAt: new Date().toISOString() })
+    const { ports } = assembleInvocation({ requestId: 'mcp-approval-agent', sessionId: session.id, lane: 'automation', internalConfirmExemption: 'approval-agent', model: 'test', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    expect((ports.mcp?.snapshot as { entries: Map<string, unknown> }).entries.size).toBe(0)
+    db.close()
+  })
+
+  it('allows approved MCP executor after OAuth refresh, but blocks endpoint and schema changes', async () => {
+    const db = createMemoryAppDb('zh-CN')
+    const session = createSession(db, { name: 'mcp-recheck' })
+    const serverId = '11111111-2222-4333-8444-555555555555'
+    const input = { id: serverId, name: 'Docs', enabled: true, transport: 'streamable-http' as const, timeoutSec: 10,
+      auth: { mode: 'oauth' as const, oauthClientId: 'client-id', oauthScopes: ['docs.read'], accessTokenExpiresAt: '2026-10-10T09:00:00.000Z' },
+      http: { endpoint: 'https://docs.example.com/mcp' }, enabledToolNames: ['search'] }
+    await saveProfiles(db, [input])
+    saveToolCache(db, serverId, { tools: [{ serverId, originalName: 'search', mappedName: 'mcp_docs_search_12345678', description: '', inputSchema: { type: 'object' }, discoveredAt: new Date().toISOString() }], protocolVersion: '2025-06-18', discoveredAt: new Date().toISOString() })
+    const { ports } = assembleInvocation({ requestId: 'mcp-recheck', sessionId: session.id, lane: 'feishu', model: 'test', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG, appDb: db, workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn() })
+    const resolveExecutor = ports.mcp?.resolveExecutor as (name: string, manager: McpConnectionManager) => import('../tools/types').ToolExecutor | undefined
+    const callTool = vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }] }))
+    const manager = { connect: vi.fn(async () => ({ client: { callTool } })), disconnect: vi.fn() } as never as McpConnectionManager
+    const executor = resolveExecutor('mcp_docs_search_12345678', manager)!
+    const getSession = vi.spyOn(manager, 'connect')
+
+    await saveProfiles(db, [{ ...input, auth: { ...input.auth, accessTokenExpiresAt: '2026-10-10T10:00:00.000Z' } }])
+    await expect(executor.execute({}, { requestId: 'mcp-recheck', toolUseId: 'tool-refresh-1', signal: new AbortController().signal } as never)).resolves.toMatchObject({ success: true })
+    expect(getSession).toHaveBeenCalledOnce()
+
+    await saveProfiles(db, [{ ...input, http: { endpoint: 'https://changed.example.com/mcp' } }])
+    await expect(executor.execute({}, { requestId: 'mcp-recheck', toolUseId: 'tool-endpoint', signal: new AbortController().signal } as never).then((r) => r.success)).resolves.toBe(false)
+    expect(getSession).toHaveBeenCalledOnce()
+
+    await saveProfiles(db, [input])
+    saveToolCache(db, serverId, { ...getToolCache(db, serverId)!, tools: [{ ...getToolCache(db, serverId)!.tools[0]!, inputSchema: { type: 'object', properties: { q: { type: 'string' } } } }] })
+    const schemaChanged = resolveExecutor('mcp_docs_search_12345678', manager)!
+    await expect(schemaChanged.execute({}, { requestId: 'mcp-recheck', toolUseId: 'tool-schema', signal: new AbortController().signal } as never).then((r) => r.success)).resolves.toBe(false)
+    expect(getSession).toHaveBeenCalledOnce()
+    db.close()
+  })
+
   it('carries the immutable accepted-turn snapshot into the runtime invocation', () => {
     const acceptedTurn = Object.freeze({
       turnId: 'accepted-turn', requestId: 'accepted-request', sessionId: 'accepted-session', lane: 'desktop' as const,
@@ -709,6 +893,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const imRequest = vi.fn(async () => ({ kind: 'approved' as const, cause: 'user-approved' as const }))
     const cancelByRequestId = vi.fn()
     const onConfirmRequest = vi.fn()
+    const emitFactEvent = vi.fn()
     const remoteContext = {
       source: 'feishu', messageId: 'message-1', chatId: 'chat-1', userId: 'user-1', inboundRaw: inbound,
       authOwner: 'owner-1', authorizationGeneration: 7, imChannel: { request: imRequest, cancelByRequestId }
@@ -716,7 +901,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     const { agentSdk } = assembleInvocation({
       requestId: 'req-remote-confirm', sessionId: 'session-remote-confirm', lane: 'feishu', remoteContext: remoteContext as never,
       model: 'test-model', locale: 'zh-CN', messages: [], toolsConfig: DEFAULT_TOOLS_CONFIG,
-      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', emitFactEvent: vi.fn(), emitSessionEvent: vi.fn(),
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key', emitFactEvent, emitSessionEvent: vi.fn(),
       floatingNotificationManager: { onConfirmRequest } as never
     })
     const confirmation = agentSdk.createConfirmationPort({ evaluate: vi.fn(), markConfirmed: vi.fn() } as never, { cancel: vi.fn() })
@@ -730,7 +915,11 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       requestId: 'req-remote-confirm', sessionId: 'session-remote-confirm', toolName: 'write_file', toolInput: { path: 'x' },
       messageId: 'message-1', matchKey: 'chat-1', context: 'chat-1', authOwner: 'owner-1', authorizationGeneration: 7
     }))
+    expect(emitFactEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'confirm-requested', id: 'remote-1', requestId: 'req-remote-confirm', lane: 'feishu'
+    }))
     expect(onConfirmRequest).not.toHaveBeenCalled()
+    expect(isPendingConfirm('req-remote-confirm', 'remote-1', 'session-remote-confirm')).toBe(false)
   })
 
   it('passes Hosted agent answerer decisions to the injected AgentChannel factory', async () => {
@@ -1125,5 +1314,143 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     })
 
     expect(ports).not.toHaveProperty('storage')
+  })
+})
+
+describe('P0-A：计划期失败降级为可回传拒绝（T-3，断言打在生产包装层 ports.prepareTool 上）', () => {
+  let runtime: ReturnType<typeof createAgentRuntime>
+  beforeEach(() => {
+    resetDefaultAgentRuntimeForTests()
+    runtime = createAgentRuntime({ builtinRegistry: { getLegacyExecutor: () => undefined, get: () => undefined, entries: () => [] } })
+    setDefaultAgentRuntime(runtime)
+    ;(runtime.modelProviders as ModelProviderRegistry).register(
+      { routeId: 'route-plan-reject', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' },
+      { providerId: 'plan-reject-provider', stream: async function* () { yield { type: 'finish' as const, reason: 'stop' as const } } }
+    )
+  })
+  afterEach(() => { resetDefaultAgentRuntimeForTests() })
+
+  const MISMATCH_DETAILS = {
+    code: 'SHELL_DIALECT_MISMATCH', detectedSyntax: 'posix-bash', expectedDialect: 'windows-powershell',
+    shellProfileId: 'windows-powershell', executable: 'powershell.exe',
+    signals: ['posix-variable'], hints: ['使用 PowerShell 语法重写命令', '环境变量使用 $env:NAME，空输出使用 $null']
+  }
+  const buildComposed = (plan: (input: Record<string, unknown>) => Promise<unknown>) => {
+    const registry = new TypedToolRegistry()
+    registry.register(definePlannedTool({
+      name: 'run_shell', actionClass: 'write',
+      parseInput: (raw) => raw as { command: string },
+      plan: plan as never,
+      execute: async () => ({ success: true })
+    }))
+    const { agentSdk } = assembleInvocation({
+      requestId: 'req-plan-reject', sessionId: 'session-plan-reject', turnId: 'turn-plan-reject',
+      model: 'test-model', providerRouteId: 'route-plan-reject', locale: 'zh-CN',
+      messages: [{ role: 'user', content: 'run shell' }], toolsConfig: DEFAULT_TOOLS_CONFIG,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key',
+      agentSdkHistory: new MemoryHistory(), emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+    return agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['run_shell']) })
+  }
+  const prepareCall = { invocationId: 'turn-plan-reject', toolCallId: 'shell-call-1', toolName: 'run_shell', input: { command: 'export A=1 && echo $A' } }
+
+  it('run_shell plan 抛 SHELL_DIALECT_MISMATCH 时被转换为 PlanRejectedError，携带可解析的 D-7 JSON 提示', async () => {
+    const composed = buildComposed(async () => {
+      throw new RunShellPlanError('SHELL_DIALECT_MISMATCH', 'SHELL_DIALECT_MISMATCH', { ...MISMATCH_DETAILS })
+    })
+    try {
+      const ports = await composed.host.createPorts({
+        invocationId: 'turn-plan-reject', turnId: 'turn-plan-reject', routeId: 'route-plan-reject',
+        request: { messages: [{ role: 'user', content: 'run shell' }], maxTokens: 10, tools: [{ name: 'run_shell', description: 'shell', inputSchema: {} }] }
+      })
+      const rejection = await ports.prepareTool!(prepareCall as never, { kind: 'initial' }).then(
+        () => { throw new Error('expected prepareTool to reject') },
+        (error: unknown) => error
+      )
+      expect(rejection).toBeInstanceOf(PlanRejectedError)
+      expect(rejection).toMatchObject({ reasonCode: 'SHELL_DIALECT_MISMATCH', name: 'PlanRejectedError' })
+      // D-7：拒绝文本为紧凑单行 JSON，固定字段、可解析、不加 Markdown 围栏
+      const parsed = JSON.parse((rejection as PlanRejectedError).userMessage) as Record<string, unknown>
+      expect(parsed).toMatchObject({
+        code: 'SHELL_DIALECT_MISMATCH', caseId: 'SHELL-DIALECT-001',
+        detectedSyntax: 'posix-bash', expectedDialect: 'windows-powershell', shellProfileId: 'windows-powershell',
+        signals: ['posix-variable'], hints: ['使用 PowerShell 语法重写命令', '环境变量使用 $env:NAME，空输出使用 $null']
+      })
+    } finally {
+      await composed.dispose()
+    }
+  })
+
+  it('plan 失败后无 prepared 残留：同一 call 可重新 prepareTool（不报 PREPARED_CALL_ALREADY_EXISTS）', async () => {
+    let attempts = 0
+    const composed = buildComposed(async () => {
+      attempts += 1
+      if (attempts === 1) throw new RunShellPlanError('SHELL_DIALECT_MISMATCH', 'SHELL_DIALECT_MISMATCH', { ...MISMATCH_DETAILS })
+      return { command: 'ok' }
+    })
+    try {
+      const ports = await composed.host.createPorts({
+        invocationId: 'turn-plan-reject', turnId: 'turn-plan-reject', routeId: 'route-plan-reject',
+        request: { messages: [{ role: 'user', content: 'run shell' }], maxTokens: 10, tools: [{ name: 'run_shell', description: 'shell', inputSchema: {} }] }
+      })
+      await expect(ports.prepareTool!(prepareCall as never, { kind: 'initial' })).rejects.toBeInstanceOf(PlanRejectedError)
+      await expect(ports.prepareTool!(prepareCall as never, { kind: 'initial' })).resolves.toMatchObject({ capabilityId: 'run_shell' })
+      composed.registeredTools.discardPreparedTool(prepareCall as never)
+    } finally {
+      await composed.dispose()
+    }
+  })
+
+  it('白名单外异常（普通 Error）原样 rethrow，保持 fatal 语义不变（A-3）', async () => {
+    const composed = buildComposed(async () => { throw new Error('RUN_SHELL_RUNTIME_CONTEXT_REQUIRED') })
+    try {
+      const ports = await composed.host.createPorts({
+        invocationId: 'turn-plan-reject', turnId: 'turn-plan-reject', routeId: 'route-plan-reject',
+        request: { messages: [{ role: 'user', content: 'run shell' }], maxTokens: 10, tools: [{ name: 'run_shell', description: 'shell', inputSchema: {} }] }
+      })
+      const rejection = await ports.prepareTool!(prepareCall as never, { kind: 'initial' }).then(
+        () => { throw new Error('expected prepareTool to reject') },
+        (error: unknown) => error
+      )
+      expect(rejection).not.toBeInstanceOf(PlanRejectedError)
+      expect((rejection as Error).message).toBe('RUN_SHELL_RUNTIME_CONTEXT_REQUIRED')
+    } finally {
+      await composed.dispose()
+    }
+  })
+
+  // A-2/A-8（§4.4 / D-8）：planned 转换层与 executor 共享同一 breaker——
+  // 同会话第 2 次同款错配 → JSON 携带 retryCount/retryExhausted 与升级 hints；turn 不终止
+  it('同会话第 2 次同款错配的 PlanRejectedError JSON 含 retryCount=2 与升级 hints（不阻断）', async () => {
+    const details = { ...MISMATCH_DETAILS, signals: ['cmd-operator'], detectedSyntax: 'windows-cmd' }
+    const composed = buildComposed(async () => {
+      throw new RunShellPlanError('SHELL_DIALECT_MISMATCH', 'SHELL_DIALECT_MISMATCH', { ...details })
+    })
+    try {
+      const ports = await composed.host.createPorts({
+        invocationId: 'turn-plan-reject', turnId: 'turn-plan-reject', routeId: 'route-plan-reject',
+        request: { messages: [{ role: 'user', content: 'run shell' }], maxTokens: 10, tools: [{ name: 'run_shell', description: 'shell', inputSchema: {} }] }
+      })
+      const escalateCall = { ...prepareCall, toolCallId: 'shell-call-escalate' }
+      const first = await ports.prepareTool!(escalateCall as never, { kind: 'initial' }).then(
+        () => { throw new Error('expected prepareTool to reject') }, (error: unknown) => error
+      ) as PlanRejectedError
+      const firstParsed = JSON.parse(first.userMessage) as { retryCount: number; hints: string[] }
+      expect(firstParsed.retryCount).toBe(1)
+      // 换 toolCallId 再次错配（同会话同 profile 同 signals）
+      const secondCall = { ...escalateCall, toolCallId: 'shell-call-escalate-2' }
+      const second = await ports.prepareTool!(secondCall as never, { kind: 'initial' }).then(
+        () => { throw new Error('expected prepareTool to reject') }, (error: unknown) => error
+      ) as PlanRejectedError
+      const secondParsed = JSON.parse(second.userMessage) as { retryCount: number; retryExhausted: boolean; hints: string[] }
+      expect(secondParsed.retryCount).toBe(2)
+      expect(secondParsed.retryExhausted).toBe(true)
+      expect(secondParsed.hints).not.toEqual(firstParsed.hints)
+      // 升级文案与真实 cmd 信号对应（评审 P2 残留：不再引用已撤销的 where.exe→Get-Command 示例）
+      expect(secondParsed.hints.join(' ')).toContain('Get-ChildItem')
+      expect(secondParsed.hints.join(' ')).not.toContain('Get-Command')
+    } finally {
+      await composed.dispose()
+    }
   })
 })

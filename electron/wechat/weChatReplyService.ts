@@ -1,6 +1,8 @@
 import type { IncomingMessage, WeChatBot } from '@wechatbot/wechatbot'
 import type { SessionCommands } from '../sessionStorage/contracts'
 import { sendWeChatRemoteOutbound } from './weChatRemoteOutbound'
+import type { PromptSendResult } from '../confirmation/promptSend'
+import type { RemoteTrackOutboundDeliveryContext } from '../remote/remoteTrackOutbound'
 
 const SUMMARY_MAX = 2000
 const FOOTER = '\n\n完整过程请查看 SpaceAssistant 桌面会话'
@@ -38,21 +40,34 @@ export async function sendWeChatTextToUser(bot: Pick<WeChatBot, 'send'>, userId:
 
 export interface WeChatReplyBot {
   reply: (msg: IncomingMessage, content: string | { text: string }) => Promise<void>
+  /** Sends one prompt; WeChat confirmations bind replies through quoted prompt content. */
+  sendToUser?: (userId: string, content: string, signal?: AbortSignal) => Promise<PromptSendResult | { messageId: string }>
   sendTyping: (userId: string) => Promise<void>
   stopTyping?: (userId: string) => Promise<void>
+}
+
+export function requireWeChatSentMessageId(result: unknown): { messageId: string } {
+  if (typeof result === 'string' && result.trim()) return { messageId: result }
+  if (result && typeof result === 'object' && !Array.isArray(result)) {
+    const value = result as { messageId?: unknown; message_id?: unknown; id?: unknown; data?: { message_id?: unknown } }
+    const messageId = value.messageId ?? value.message_id ?? value.id ?? value.data?.message_id
+    if (typeof messageId === 'string' && messageId.trim()) return { messageId }
+  }
+  throw new Error('WECHAT_DELIVERY_MESSAGE_ID_MISSING')
 }
 
 export async function replyWeChatSummary(
   bot: WeChatReplyBot,
   inboundMsg: IncomingMessage,
   summary: string,
-  opts?: { sessionId?: string; touch?: { sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>; sessionId: string } }
+  opts?: { sessionId?: string; touch?: { sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>; sessionId: string }; trackDelivery?: RemoteTrackOutboundDeliveryContext }
 ): Promise<{ chunksSent: number }> {
   await sendWeChatRemoteOutbound({
     bot,
     inbound: inboundMsg,
     body: summary,
     sessionId: opts?.sessionId,
+    trackDelivery: opts?.trackDelivery,
     touch: opts?.touch
   })
   return { chunksSent: 1 }

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
-import { allocateDeferredApprovalShortCode, createDeferredApprovalIngress } from './deferredApprovalIngress'
+import { allocateDeferredApprovalShortCode, createDeferredApprovalIngress, parseDeferredApprovalReply } from './deferredApprovalIngress'
+import { parseImConfirmReply } from './imConfirmReply'
 
 type NotificationBinding = {
   channel: 'feishu' | 'wechat'; identityKey: string; ownerId: string; todoId: string
@@ -39,6 +40,13 @@ const binding: NotificationBinding = {
 }
 
 describe('deferred approval ingress binding contract', () => {
+  it('keeps an identical two digit display value in separate command namespaces', () => {
+    expect(parseDeferredApprovalReply('批准 07')).toEqual({ action: 'approve', shortCode: '07' })
+    expect(parseDeferredApprovalReply('Y 07')).toBeNull()
+    expect(parseImConfirmReply('Y 07')).toEqual({ kind: 'approve', confirmId: '07' })
+    expect(parseImConfirmReply('批准 07')).toEqual({ kind: 'not_confirm' })
+  })
+
   it.each(['feishu', 'wechat'] as const)('parses the dedicated short approval syntax for %s only', async (channel) => {
     const channelBinding = { ...binding, channel }
     const { db, ingress, requestResume } = setup([channelBinding])

@@ -1898,7 +1898,14 @@ async function buildWikiGrepPermit(ctx: ToolExecutionContext, input: Record<stri
     customSensitivePrefixes: ctx.shellConfig?.customSensitivePrefixes ?? [],
     sensitiveRootExemptions: [resolution.realBase]
   })
-  if (!(fact.targetKind === 'directory' || fact.resolvedKind === 'directory')) return false
+  // The wiki mount exemption applies only while its canonical target remains inside the
+  // configured shared root. A replaced/symlinked root must not mint a permit for an
+  // arbitrary or sensitive directory.
+  const canonicalSharedRoot = await fs.realpath(resolution.realBase).catch(() => undefined)
+  const canonicalUserDataDir = await fs.realpath(ctx.userDataDir).catch(() => undefined)
+  const expectedSharedRoot = canonicalUserDataDir ? path.join(canonicalUserDataDir, wc.rootPath || DEFAULT_WIKI_ROOT_DIRNAME) : undefined
+  if (!canonicalSharedRoot || canonicalSharedRoot !== expectedSharedRoot || fact.normalizedPath !== canonicalSharedRoot || fact.zone !== 'workdir-normal' ||
+      !(fact.targetKind === 'directory' || fact.resolvedKind === 'directory')) return false
   const wikiInput = { ...input, path: plan.vocabularyPrefix }
   ctx.readExecutionPermit = buildReadExecutionPermit({
     requestId: ctx.requestId,

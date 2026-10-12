@@ -23,6 +23,7 @@ import {
 } from '../messageCodec'
 import { getDbConnection, type AppDatabase } from './sqliteStore'
 import { changesToNumber, runInTransaction } from './transaction'
+import { invalidateRemoteTracksForSessionDeletion } from './remoteTrackStore'
 import { bumpScopeVersionInTx } from './scopeVersion'
 import { isMessageEligibleForChatApi } from '../../src/shared/chatMessageQueue'
 import { migrateBuiltinModelName } from '../../src/shared/llmModelConfig'
@@ -501,6 +502,7 @@ export function deleteSession(db: AppDatabase, sessionId: string, options?: { fl
     conn.prepare('DELETE FROM session_execution_queue WHERE session_id = ?').run(sessionId)
     conn.prepare('DELETE FROM session_execution_claims WHERE session_id = ?').run(sessionId)
     conn.prepare('DELETE FROM session_usages WHERE session_id = ?').run(sessionId)
+    invalidateRemoteTracksForSessionDeletion(conn, sessionId, Date.now())
     conn.prepare('DELETE FROM sessions WHERE id = ?').run(sessionId)
     bumpScopeVersionInTx(db, 'session-list')
   })

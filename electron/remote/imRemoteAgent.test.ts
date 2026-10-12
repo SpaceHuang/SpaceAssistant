@@ -120,7 +120,7 @@ vi.mock('../workDirManager', async (importOriginal) => {
   }
 })
 
-import { runImRemoteAgent as runImRemoteAgentImpl } from './imRemoteAgent'
+import { runImRemoteAgent as runImRemoteAgentImpl, trackTerminalTargetFromAgentResult } from './imRemoteAgent'
 import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
 import { acceptTurnContext, readAcceptedTurn } from '../database/acceptedTurnStorage'
 import { MODEL_BASELINE } from '../../src/shared/modelBaseline'
@@ -129,6 +129,7 @@ import { createDesktopAgentRuntime } from '../runtime/desktopAgentRuntime'
 import { setDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
 import { ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, getSessionEventSink, readSessionEvents, SessionEventWriter } from '../sessionEvents'
 import { ImChannel } from '../confirmation/imChannel'
+import { createImChannelForTest } from '../confirmation/imChannelTestUtils'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { editFileExecutor, grepExecutor, listDirectoryExecutor, readFileExecutor, runScriptExecutor, writeFileExecutor } from '../tools/builtinExecutors'
 import { runShellExecutor } from '../tools/runShellExecutor'
@@ -300,6 +301,20 @@ describe('runImRemoteAgent', () => {
       content: [{ type: 'text', text: 'done' }],
       stopReason: 'end_turn'
     })
+  })
+
+  it('records and rejects an IM runtime invocation without TrackContext while Track execution is enabled', async () => {
+    const db = makeDb()
+    const session = createSession(db, { name: 'remote-track-context-required' })
+    for (const [key, value] of Object.entries({ remoteTrackPersist: 'true', remoteTrackRolloutChannels: '["feishu"]', remoteTrackExecution: 'true', remoteTrackRecovery: 'true',
+      remoteTrackScopedModelInput: 'true' })) setConfigValue(db, key, value)
+    await expect(runImRemoteAgent(baseArgs({ db, sessionId: session.id, remoteContext: {
+      source: 'feishu', messageId: 'missing-track-context-message', confirmPolicy: 'always'
+    } }))).rejects.toThrow('TRACK_CONTEXT_REQUIRED')
+    expect(getDbConnection(db).prepare('SELECT event_kind,reason_code FROM remote_track_runtime_diagnostics WHERE platform_message_id=?')
+      .get('missing-track-context-message')).toEqual({ event_kind: 'untracked-runtime-invocation', reason_code: 'track-context-missing' })
+    expect(mockRunToolChatSession).not.toHaveBeenCalled()
+    db.close()
   })
 
   it('requires frozen accepted-turn model and service before assembling an IM invocation', async () => {
@@ -476,6 +491,56 @@ describe('runImRemoteAgent', () => {
     db.close()
   })
 
+  it('提示发送失败后 provider 异常仍通过失败结果附带确定性回执', async () => {
+    const previousRuntime = getDefaultAgentRuntime()
+    const runtime = createDesktopAgentRuntime()
+    setDefaultAgentRuntime(runtime)
+    const args = baseArgs()
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-confirm-send-provider-fail-'))
+    const session = createSession(args.db, { name: 'im-confirm-send-provider-fail', model: SUPPORTED_ANTHROPIC_MODEL })
+    const executor = vi.spyOn(runShellExecutor, 'execute')
+    const imChannel = createImChannelForTest({ lane: 'wechat', timeoutMs: 500, sendPrompt: () => Promise.reject(Object.assign(new Error('transport'), { code: 'ECONNRESET' })) })
+    const context = {
+      ...args, sessionId: session.id, workDir,
+      workDirManager: { ...args.workDirManager, getActiveWorkDir: () => workDir },
+      getShellConfig: () => ({ enabled: true, shellDefaultTimeoutSec: 10, maxInlineOutputBytes: 1024, rules: [] }),
+      remoteContext: { ...args.remoteContext, source: 'wechat' as const, messageId: 'provider-fail-message', userId: 'owner@test', imChannel }
+    }
+    mockResolveWorkDirForSession.mockReturnValue({ profileId: 'im-confirm-send-provider-fail', workDir, isSensitive: false })
+    let providerCalls = 0
+    mockRunToolChatSession.mockImplementation(async (invocation: never, _ports: never, options: never) => {
+      const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
+      const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)!
+      runtime.modelProviders.register(route.profile, { providerId: 'im-confirm-provider-failure-fixture', stream: async function* () {
+        if (providerCalls++ === 0) {
+          yield { type: 'tool-call', toolCallId: 'provider-failed-script', toolName: 'run_script', input: { language: 'javascript', code: 'custom_api()' } } as const
+          yield { type: 'usage', inputTokens: 1, outputTokens: 1 } as const
+          yield { type: 'finish', reason: 'tool-calls' } as const
+          return
+        }
+        throw new Error('REVIEW_PROVIDER_FAILURE_AFTER_CONFIRMATION')
+      } })
+      const handoff = (options as unknown as { onHostedTurnHandoff: (input: unknown) => Promise<{ result: unknown }> }).onHostedTurnHandoff
+      return (await handoff({
+        authorizedToolNames: new Set(['run_script']),
+        request: { messages: [{ role: 'user', content: '执行脚本' }], maxTokens: 64, credentials: { apiKey: 'key' }, tools: [{ name: 'run_script', description: 'Run script', inputSchema: { type: 'object', properties: { language: { type: 'string' }, code: { type: 'string' } }, required: ['code'] } }] },
+        windowId: record.trace.windowId
+      })).result
+    })
+    try {
+      await expect(runImRemoteAgent(context)).rejects.toThrow(/REVIEW_PROVIDER_FAILURE_AFTER_CONFIRMATION[\s\S]*provider-failed-script[\s\S]*无法确认是否送达/)
+      expect(executor).not.toHaveBeenCalled()
+      const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
+      expect(history.events.find((event) => event.kind === 'approval-resolved')?.payload).toMatchObject({ promptSendFailure: { delivery: 'unknown' } })
+      expect(history.events.at(-1)?.kind).toBe('invocation-failed')
+    } finally {
+      executor.mockRestore()
+      setDefaultAgentRuntime(previousRuntime)
+      await fs.rm(workDir, { recursive: true, force: true })
+      args.db.close()
+    }
+  })
+
   it('Feishu Anthropic invocation freezes its resolved provider route in the invocation profile', async () => {
     const modelId = Object.entries(MODEL_BASELINE).find(([, baseline]) => baseline.sourceProvider === 'anthropic')?.[0]
     expect(modelId).toBeTruthy()
@@ -617,7 +682,7 @@ describe('runImRemoteAgent', () => {
     const args = baseArgs({ db })
     const session = createSession(args.db, { name: 'remote-hosted-ledger', model: SUPPORTED_ANTHROPIC_MODEL })
     let imChannel!: ImChannel
-    imChannel = new ImChannel({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
+    imChannel = createImChannelForTest({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => imChannel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: 'remote-answer-1' }
@@ -1006,6 +1071,145 @@ describe('runImRemoteAgent', () => {
     db.close()
   })
 
+  it('Track-routed IM turn filters provider messages and history to its frozen allowlist', async () => {
+    const db = makeDb()
+    const session = createSession(db, { name: 'remote-track-model-view' })
+    setConfigValue(db, 'config.models', JSON.stringify([{ id: 'test-remote-model', name: SUPPORTED_ANTHROPIC_MODEL, enabled: true }]))
+    const { prepareTurnAtomically, appendMessage } = await import('../database')
+    prepareTurnAtomically(db, {
+      user: { id: 'track-a-user', sessionId: session.id, role: 'user', content: 'Track A input', timestamp: 1, status: 'sent' },
+      assistant: { id: 'track-a-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
+      turn: { turnId: 'track-a-turn', requestId: 'track-a-request', sessionId: session.id, assistantMessageId: 'track-a-assistant', state: 'prepared', startToken: 'track-a-token' }
+    })
+    const { bindRemoteTrackToTurn, createRemoteTrack, remoteTrackTurnBindingEventId } = await import('../database/remoteTrackStore')
+    const { buildTrackModelInputViewRef, recordTrackModelMessage } = await import('./trackModelInputViewStore')
+    createRemoteTrack(db, {
+      trackId: 'track-a', eventId: 'track-a-root', idempotencyKey: 'track-a-inbound', channel: 'feishu',
+      identityKey: 'sender-a', ownerId: 'owner-a', authorizationEpoch: 1, rootMessageId: 'track-a-user', originSessionId: session.id, occurredAt: 1
+    })
+    // Mirror router prebinding; runImRemoteAgent must accept this same durable association.
+    bindRemoteTrackToTurn(db, { trackId: 'track-a', turnId: 'track-a-turn', sessionId: session.id, channel: 'feishu',
+      identityKey: 'sender-a', ownerId: 'owner-a', authorizationEpoch: 1,
+      eventId: remoteTrackTurnBindingEventId('track-a', 'track-a-turn'), occurredAt: 1 })
+    recordTrackModelMessage(db, {
+      trackId: 'track-a', eventId: 'track-a-model-message', idempotencyKey: 'track-a-model-message', sessionId: session.id,
+      messageId: 'track-a-user', invocationId: 'track-a-turn', occurredAt: 2, parentEventId: 'track-a-root'
+    })
+    appendMessage(db, { id: 'track-b-user', sessionId: session.id, role: 'user', content: 'Track B secret context', timestamp: 3, status: 'sent' })
+    mockGetMessages.mockReturnValueOnce([
+      { id: 'track-a-user', sessionId: session.id, role: 'user', content: 'Track A input', timestamp: 1, status: 'sent' },
+      { id: 'track-a-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' },
+      { id: 'track-b-user', sessionId: session.id, role: 'user', content: 'Track B secret context', timestamp: 3, status: 'sent' }
+    ] as never)
+    mockRunToolChatSession.mockResolvedValue({ ok: true, content: [{ type: 'text', text: 'ok' }], stopReason: 'end_turn' })
+    const acceptedTurn = createAcceptedTurn({
+      turnId: 'track-a-turn', requestId: 'track-a-request', sessionId: session.id, lane: 'feishu',
+      startToken: 'track-a-token', currentUserMessageId: 'track-a-user', transcriptVersion: 0,
+      config: { lane: 'feishu', model: SUPPORTED_ANTHROPIC_MODEL, llmServiceId: 'svc-1', thinkingEffort: 'low' }
+    })
+    const args = baseArgs({
+      db, sessionId: session.id, requestId: 'track-a-request', turnId: 'track-a-turn', acceptedTurn,
+      remoteContext: {
+        source: 'feishu', messageId: 'track-a-user', confirmPolicy: 'always', chatId: 'sender-a', authOwner: 'owner-a',
+        trackContext: { trackId: 'track-a', channel: 'feishu', identityKey: 'sender-a', ownerId: 'owner-a', authorizationEpoch: 1, rootMessageId: 'track-a-user', attributionEventId: 'track-a-root' },
+        trackModelInputView: buildTrackModelInputViewRef(db, {
+          trackId: 'track-a', sessionId: session.id, acceptedUserMessageId: 'track-a-user', currentInvocationId: 'track-a-turn',
+          channel: 'feishu', identityKey: 'sender-a', ownerId: 'owner-a', authorizationEpoch: 1,
+          rootMessageId: 'track-a-user', attributionEventId: 'track-a-root'
+        })
+      }
+    })
+    const readMessage = vi.fn(args.sessionStorage.queries.readMessage)
+    const observableStorage = { ...args.sessionStorage, queries: { ...args.sessionStorage.queries, readMessage } }
+    await runImRemoteAgent({ ...args, sessionStorage: observableStorage })
+
+    const materials = invocationMaterialsCapture.last as {
+      messages: Array<{ role: string; content: unknown }>
+      historyForSession: (sessionId: string) => { read(invocationId: string): Promise<unknown> }
+    } | null
+    expect(materials?.messages.map(({ content }) => content)).not.toContain('Track B secret context')
+    expect(materials?.messages).toHaveLength(1)
+    expect(readMessage).toHaveBeenCalledWith({ sessionId: session.id, messageId: 'track-a-user' })
+    expect(getDbConnection(db).prepare('SELECT track_id FROM turns WHERE turn_id=?').get('track-a-turn')).toEqual({ track_id: 'track-a' })
+    expect(getDbConnection(db).prepare("SELECT event_kind FROM remote_track_events WHERE idempotency_key=?").get('turn:track-a-turn'))
+      .toEqual({ event_kind: 'track.turn.bound' })
+    const history = materials!.historyForSession(session.id)
+    await expect(history.read('track-a-turn')).resolves.toBeDefined()
+    await expect(history.read('track-b-turn')).rejects.toThrow('TRACK_HISTORY_INVOCATION_OUT_OF_SCOPE')
+    db.close()
+  })
+
+  it('Track-routed continuation carries explicitly ledgered messages from its prior session into provider input', async () => {
+    const db = makeDb()
+    const origin = createSession(db, { name: 'remote-track-origin' })
+    const current = createSession(db, { name: 'remote-track-current' })
+    setConfigValue(db, 'config.models', JSON.stringify([{ id: 'test-remote-model', name: SUPPORTED_ANTHROPIC_MODEL, enabled: true }]))
+    const { prepareTurnAtomically, appendMessage } = await import('../database')
+    appendMessage(db, { id: 'track-origin-user', sessionId: origin.id, role: 'user', content: 'original instruction', timestamp: 1, status: 'sent' })
+    appendMessage(db, { id: 'track-origin-assistant', sessionId: origin.id, role: 'assistant', content: 'original result', timestamp: 2, status: 'sent' })
+    prepareTurnAtomically(db, {
+      user: { id: 'track-current-user', sessionId: current.id, role: 'user', content: 'continue that task', timestamp: 3, status: 'sent' },
+      assistant: { id: 'track-current-assistant', sessionId: current.id, role: 'assistant', content: '', timestamp: 4, status: 'streaming' },
+      turn: { turnId: 'track-current-turn', requestId: 'track-current-request', sessionId: current.id, assistantMessageId: 'track-current-assistant', state: 'prepared', startToken: 'track-current-token' }
+    })
+    const { createRemoteTrack } = await import('../database/remoteTrackStore')
+    const { buildTrackModelInputViewRef, recordTrackModelMessage } = await import('./trackModelInputViewStore')
+    createRemoteTrack(db, { trackId: 'cross-session-track', eventId: 'cross-session-root', idempotencyKey: 'cross-session-root-key', channel: 'feishu',
+      identityKey: 'sender-a', ownerId: 'owner-a', authorizationEpoch: 1, rootMessageId: 'track-origin-user', originSessionId: origin.id, occurredAt: 1 })
+    for (const [eventId, messageId, sessionId, turnId] of [
+      ['origin-user-event', 'track-origin-user', origin.id, 'origin-turn'],
+      ['origin-assistant-event', 'track-origin-assistant', origin.id, 'origin-turn'],
+      ['current-user-event', 'track-current-user', current.id, 'track-current-turn']
+    ]) {
+      recordTrackModelMessage(db, { trackId: 'cross-session-track', eventId, idempotencyKey: eventId, sessionId, messageId, invocationId: turnId,
+        occurredAt: 2, parentEventId: eventId === 'origin-user-event' ? 'cross-session-root' : undefined })
+    }
+    const acceptedTurn = createAcceptedTurn({
+      turnId: 'track-current-turn', requestId: 'track-current-request', sessionId: current.id, lane: 'feishu',
+      startToken: 'track-current-token', currentUserMessageId: 'track-current-user', transcriptVersion: 0,
+      config: { lane: 'feishu', model: SUPPORTED_ANTHROPIC_MODEL, llmServiceId: 'svc-1', thinkingEffort: 'low' }
+    })
+    const args = baseArgs({
+      db, sessionId: current.id, requestId: 'track-current-request', turnId: 'track-current-turn', acceptedTurn,
+      remoteContext: {
+        source: 'feishu', messageId: 'track-current-user', confirmPolicy: 'always', chatId: 'sender-a', authOwner: 'owner-a',
+        trackContext: { trackId: 'cross-session-track', channel: 'feishu', identityKey: 'sender-a', ownerId: 'owner-a', authorizationEpoch: 1,
+          rootMessageId: 'track-origin-user', attributionEventId: 'cross-session-root' },
+        trackModelInputView: buildTrackModelInputViewRef(db, { trackId: 'cross-session-track', sessionId: current.id,
+          acceptedUserMessageId: 'track-current-user', currentInvocationId: 'track-current-turn', channel: 'feishu', identityKey: 'sender-a',
+          ownerId: 'owner-a', authorizationEpoch: 1, rootMessageId: 'track-origin-user', attributionEventId: 'cross-session-root' })
+      }
+    })
+    mockRunToolChatSession.mockResolvedValue({ ok: true, content: [{ type: 'text', text: 'continued' }], stopReason: 'end_turn' })
+    await runImRemoteAgent(args)
+
+    const materials = invocationMaterialsCapture.last as { messages: Array<{ role: string; content: unknown }> } | null
+    expect(materials?.messages.map(({ content }) => content)).toContain('original instruction')
+    expect(materials?.messages.map(({ content }) => content)).toContain('original result')
+    expect(materials?.messages.map(({ content }) => content)).toContain('continue that task')
+    db.close()
+  })
+
+  it('Track-routed IM turn fails before model assembly if its complete view is missing', async () => {
+    const db = makeDb()
+    const session = createSession(db, { name: 'remote-track-view-required' })
+    appendMessage(db, { id: 'track-required-user', sessionId: session.id, role: 'user', content: 'input', timestamp: 1, status: 'sent' })
+    const acceptedTurn = createAcceptedTurn({
+      turnId: 'track-required-turn', requestId: 'track-required-request', sessionId: session.id, lane: 'feishu',
+      startToken: 'track-required-token', currentUserMessageId: 'track-required-user', transcriptVersion: 0,
+      config: { lane: 'feishu', model: SUPPORTED_ANTHROPIC_MODEL, llmServiceId: 'svc-1', thinkingEffort: 'low' }
+    })
+    await expect(runImRemoteAgent(baseArgs({
+      db, sessionId: session.id, requestId: 'track-required-request', acceptedTurn,
+      remoteContext: { source: 'feishu', messageId: 'track-required-user', confirmPolicy: 'always', trackContext: {
+        trackId: 'track-required', channel: 'feishu', identityKey: 'sender-a', ownerId: 'owner-a', authorizationEpoch: 1,
+        rootMessageId: 'track-required-user', attributionEventId: 'event-required'
+      } }
+    }))).rejects.toThrow('TRACK_MODEL_INPUT_VIEW_REQUIRED')
+    expect(invocationMaterialsCapture.last).toBeNull()
+    db.close()
+  })
+
   it('Hosted Remote fails closed if accepted user content changes before execution', async () => {
     const db = makeDb()
     const session = createSession(db, { name: 'remote-input-fingerprint' })
@@ -1041,6 +1245,116 @@ describe('runImRemoteAgent', () => {
     db.close()
   })
 
+  it.each([
+    ['省略说明', '其他工作已处理。', 'send-rejected'],
+    ['空内容', '', 'send-rejected'],
+    ['矛盾成功总结', 'run_script 已执行成功。', 'send-rejected'],
+    ['同轮另一调用成功', '读取文件成功。', 'send-rejected'],
+    ['模型重复调用两次', '再重试一次以确认。', 'binding-unavailable'],
+    ['发送调用超时', '已完成。', 'send-pending'],
+    ['发送成功但回显绑定失败', '已完成。', 'binding-unavailable'],
+    ['发送前置条件失败', '已完成。', 'not-attempted']
+  ] as const)('IM 确认提示 %s 时通过 History 返回准确回执（模型%s）', async (label, modelText, failureState) => {
+    const previousRuntime = getDefaultAgentRuntime()
+    const runtime = createDesktopAgentRuntime()
+    setDefaultAgentRuntime(runtime)
+    const args = baseArgs()
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'im-confirm-send-failure-'))
+    await fs.writeFile(path.join(workDir, 'note.txt'), 'successful read fixture')
+    const session = createSession(args.db, { name: 'im-confirm-send-failure', model: SUPPORTED_ANTHROPIC_MODEL })
+    const executor = vi.spyOn(runShellExecutor, 'execute')
+    const promptSendResult = failureState === 'send-pending'
+        ? { kind: 'timed-out' as const, sendCall: 'pending' as const, delivery: 'unknown' as const }
+        : failureState === 'binding-unavailable'
+          ? { kind: 'binding-unavailable' as const, sendCall: 'fulfilled' as const, delivery: 'unbound' as const, errorCategory: 'message-binding-unavailable' as const }
+          : { kind: 'not-attempted' as const, errorCategory: 'bot-unavailable' as const }
+    const imChannel = createImChannelForTest({ lane: 'wechat', timeoutMs: 500, sendPrompt: () => failureState === 'send-rejected'
+      ? Promise.reject(Object.assign(new Error('private text'), { code: 'ECONNRESET' }))
+      : promptSendResult })
+    const context = {
+      ...args, sessionId: session.id, workDir,
+      workDirManager: { ...args.workDirManager, getActiveWorkDir: () => workDir },
+      getShellConfig: () => ({ enabled: true, shellDefaultTimeoutSec: 10, maxInlineOutputBytes: 1024, rules: [] }),
+      remoteContext: { ...args.remoteContext, source: 'wechat' as const, messageId: 'im-fail-message', userId: 'owner@test', imChannel }
+    }
+    mockResolveWorkDirForSession.mockReturnValue({ profileId: 'im-confirm-send-failure', workDir, isSensitive: false })
+    let providerCalls = 0
+    mockRunToolChatSession.mockImplementation(async (invocation: never, _ports: never, options: never) => {
+      const record = invocation as unknown as { profile: { providerRouteId: string }; trace: { windowId?: string } }
+      const route = runtime.modelProviders.getRoute(record.profile.providerRouteId)!
+      runtime.modelProviders.register(route.profile, { providerId: 'im-confirm-send-failure-fixture', stream: async function* () {
+        const providerCall = providerCalls++
+        if (providerCall === 0 && label === '同轮另一调用成功') {
+          yield { type: 'tool-call', toolCallId: 'successful-read', toolName: 'read_file', input: { path: 'note.txt' } } as const
+          yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
+          yield { type: 'finish', reason: 'tool-calls' } as const
+          return
+        }
+        if (providerCall === (label === '同轮另一调用成功' ? 1 : 0) || (label === '模型重复调用两次' && providerCall === 1)) {
+          yield { type: 'tool-call', toolCallId: label === '模型重复调用两次' && providerCall === 1 ? 'failed-script-retry' : 'failed-script', toolName: 'run_script', input: { language: 'javascript', code: 'custom_api()' } } as const
+          yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
+          yield { type: 'finish', reason: 'tool-calls' } as const
+          return
+        }
+        yield { type: 'text-delta', text: modelText } as const
+        yield { type: 'usage', inputTokens: 2, outputTokens: 1 } as const
+        yield { type: 'finish', reason: 'stop' } as const
+        return
+      } })
+      const handoff = (options as unknown as { onHostedTurnHandoff: (input: unknown) => Promise<{ result: unknown }> }).onHostedTurnHandoff
+      return (await handoff({
+        authorizedToolNames: new Set(['run_script', 'read_file']),
+        request: { messages: [{ role: 'user', content: '执行脚本' }], maxTokens: 64, credentials: { apiKey: 'creds-key' }, tools: [
+          { name: 'run_script', description: 'Run script', inputSchema: { type: 'object', properties: { language: { type: 'string' }, code: { type: 'string' } }, required: ['code'] } },
+          { name: 'read_file', description: 'Read file', inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } }
+        ] },
+        windowId: record.trace.windowId
+      })).result
+    })
+    try {
+      const result = await runImRemoteAgent(context)
+      const expectedReceipt = failureState === 'binding-unavailable' ? '发送调用已成功，但无法绑定'
+        : failureState === 'send-pending' ? '发送调用尚未完成'
+          : failureState === 'not-attempted' ? '未尝试发送' : '无法确认是否送达'
+      expect(result.summary).toContain(expectedReceipt)
+      expect(result.summary).toContain('run_script')
+      expect(result.summary).not.toContain('已执行成功')
+      if (label === '模型重复调用两次') {
+        expect(result.summary).not.toContain('再重试一次')
+        expect(result.summary.match(/工具调用/g)).toHaveLength(2)
+      }
+      if (label === '同轮另一调用成功') {
+        expect(result.summary).not.toContain('读取文件成功')
+        expect(result.summary.match(/工具调用/g)).toHaveLength(1)
+        const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
+        expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({ toolCallId: 'successful-read', success: true })
+      }
+      expect(executor).not.toHaveBeenCalled()
+      expect(imChannel.countPending()).toBe(0)
+      const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
+      const failedApprovals = history.events.filter((event) => event.kind === 'approval-resolved' && (event.payload as { promptSendFailure?: unknown }).promptSendFailure)
+      expect(failedApprovals).toHaveLength(label === '模型重复调用两次' ? 2 : 1)
+      expect(failedApprovals[0]?.payload).toMatchObject({
+        toolCallId: 'failed-script', outcome: 'unavailable',
+        promptSendFailure: { kind: 'confirmation-prompt-send-failed', state: failureState, ...(
+          failureState === 'send-rejected' ? { sendCall: 'rejected', delivery: 'unknown', errorCategory: 'transport-failed' }
+            : failureState === 'send-pending' ? { sendCall: 'pending', delivery: 'unknown', errorCategory: 'unknown' }
+              : failureState === 'binding-unavailable' ? { sendCall: 'fulfilled', delivery: 'unavailable', errorCategory: 'message-binding-unavailable' }
+                : { sendCall: 'not-attempted', delivery: 'not-attempted', errorCategory: 'bot-unavailable' }
+        ) }
+      })
+      expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({ toolCallId: 'failed-script', reason: 'CONFIRMATION_UNAVAILABLE' })
+      if (label === '模型重复调用两次') {
+        expect(history.events.filter((event) => event.kind === 'tool-call-not-dispatched' && (event.payload as { reason?: string }).reason === 'CONFIRMATION_UNAVAILABLE')).toHaveLength(2)
+      }
+    } finally {
+      executor.mockRestore()
+      setDefaultAgentRuntime(previousRuntime)
+      await fs.rm(workDir, { recursive: true, force: true })
+      args.db.close()
+    }
+  })
+
   it.each(['feishu', 'wechat'] as const)('%s Hosted caller executes list_directory and commits matching History projections', async (lane) => {
     const previousRuntime = getDefaultAgentRuntime()
     const runtime = createDesktopAgentRuntime()
@@ -1049,7 +1363,7 @@ describe('runImRemoteAgent', () => {
     await fs.writeFile(path.join(workDir, 'visible.txt'), 'directory fixture')
     const args = baseArgs()
     const session = createSession(args.db, { name: `${lane}-hosted-directory`, model: SUPPORTED_ANTHROPIC_MODEL })
-    const imChannel = new ImChannel({ lane, timeoutMs: 1_000, sendPrompt: vi.fn() })
+    const imChannel = createImChannelForTest({ lane, timeoutMs: 1_000, sendPrompt: vi.fn() })
     const sessionArgs = {
       ...args, sessionId: session.id, workDir,
       workDirManager: { ...args.workDirManager, getActiveWorkDir: () => workDir },
@@ -1137,7 +1451,7 @@ describe('runImRemoteAgent', () => {
     const args = baseArgs()
     const session = createSession(args.db, { name: `${lane}-${toolName}-drift`, model: SUPPORTED_ANTHROPIC_MODEL })
     let imChannel!: ImChannel
-    imChannel = new ImChannel({ lane, timeoutMs: 1_000, sendPrompt: (pending) => {
+    imChannel = createImChannelForTest({ lane, timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => imChannel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: `${lane}-${toolName}-identity-drift-approved` }
@@ -1252,7 +1566,7 @@ describe('runImRemoteAgent', () => {
       const args = baseArgs()
       const session = createSession(args.db, { name: `${lane}-${toolName}-auth-version`, model: SUPPORTED_ANTHROPIC_MODEL })
       let imChannel!: ImChannel
-      imChannel = new ImChannel({ lane, timeoutMs: 1_000, sendPrompt: (pending) => {
+      imChannel = createImChannelForTest({ lane, timeoutMs: 1_000, sendPrompt: (pending) => {
         queueMicrotask(() => imChannel.tryResolveFromInbound(
           { kind: 'approve', confirmId: pending.confirmId },
           { matchKey: pending.matchKey, messageId: `${lane}-${toolName}-auth-version-approved` }
@@ -1488,7 +1802,7 @@ describe('runImRemoteAgent', () => {
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `feishu-hosted-cli-${termination}-`))
     const session = createSession(args.db, { name: `feishu-hosted-cli-${termination}`, model: SUPPORTED_ANTHROPIC_MODEL })
     let imChannel!: ImChannel
-    imChannel = new ImChannel({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
+    imChannel = createImChannelForTest({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => imChannel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: `cli-${termination}-approved` }
@@ -1590,7 +1904,7 @@ describe('runImRemoteAgent', () => {
     const args = baseArgs()
     const session = createSession(args.db, { name: `feishu-lark-cli-${termination}`, model: SUPPORTED_ANTHROPIC_MODEL })
     let channel!: ImChannel
-    channel = new ImChannel({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => channel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: `feishu-lark-cli-${termination}-approved` }
@@ -1701,7 +2015,7 @@ describe('runImRemoteAgent', () => {
     const session = createSession(args.db, { name: `${lane}-write-${termination}`, model: SUPPORTED_ANTHROPIC_MODEL })
     const requestId = args.requestId
     let channel!: ImChannel
-    channel = new ImChannel({ lane, timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane, timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => channel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: `${lane}-write-${termination}-approved` }
@@ -1834,7 +2148,7 @@ describe('runImRemoteAgent', () => {
     const session = createSession(args.db, { name: `${lane}-write-post-claim-${termination}`, model: SUPPORTED_ANTHROPIC_MODEL })
     const requestId = args.requestId
     let channel!: ImChannel
-    channel = new ImChannel({ lane, timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane, timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => channel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: `${lane}-write-post-claim-${termination}-approved` }
@@ -1947,7 +2261,7 @@ describe('runImRemoteAgent', () => {
     const session = createSession(args.db, { name: `${lane}-browser-${termination}`, model: SUPPORTED_ANTHROPIC_MODEL })
     const requestId = args.requestId
     let imChannel!: ImChannel
-    imChannel = new ImChannel({ lane, timeoutMs: 1_000, sendPrompt: (pending) => {
+    imChannel = createImChannelForTest({ lane, timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => imChannel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: `${lane}-browser-${termination}-approved` }
@@ -2066,7 +2380,7 @@ describe('runImRemoteAgent', () => {
     const requestId = args.requestId
     const browserConfig = { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, actRequiresConfirm: true }
     let imChannel!: ImChannel
-    imChannel = new ImChannel({ lane, timeoutMs: 1_000, sendPrompt: (pending) => {
+    imChannel = createImChannelForTest({ lane, timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => imChannel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: `${lane}-browser-post-claim-${termination}-approved` }
@@ -2174,7 +2488,7 @@ describe('runImRemoteAgent', () => {
     const session = createSession(args.db, { name: `${lane}-browser-confirmed-success`, model: SUPPORTED_ANTHROPIC_MODEL })
     const browserConfig = { ...DEFAULT_BROWSER_CONFIG, enabled: true, allowRemoteSessions: true, actRequiresConfirm: true }
     let imChannel!: ImChannel
-    imChannel = new ImChannel({ lane, timeoutMs: 1_000, sendPrompt: (pending) => {
+    imChannel = createImChannelForTest({ lane, timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => imChannel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: `${lane}-browser-confirmed-success-approved` }
@@ -2253,7 +2567,7 @@ describe('runImRemoteAgent', () => {
     const args = baseArgs({ workDir, remoteContext: { source: 'feishu' as const, messageId: 'feishu-revoke-message', chatId: 'feishu-revoke-chat' } })
     const session = createSession(args.db, { name: 'feishu-hosted-read-claim-revoke', model: SUPPORTED_ANTHROPIC_MODEL })
     let channel!: ImChannel
-    channel = new ImChannel({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => channel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: 'feishu-read-revoke-approval' }
@@ -2342,7 +2656,7 @@ describe('runImRemoteAgent', () => {
       run: vi.fn(async () => ({ exitCode: 0, stdout: '{"title":"Quarterly plan"}', stderr: '', timedOut: false }))
     }
     let imChannel!: ImChannel
-    imChannel = new ImChannel({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
+    imChannel = createImChannelForTest({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => imChannel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: 'lark-cli-answer-1' }
@@ -2440,7 +2754,7 @@ describe('runImRemoteAgent', () => {
     }
     const feishuConfig = { larkCliDefaultTimeoutSec: 45, larkCliWriteRequiresConfirm: true }
     let imChannel!: ImChannel
-    imChannel = new ImChannel({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
+    imChannel = createImChannelForTest({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
       feishuConfig.larkCliDefaultTimeoutSec = 90
       queueMicrotask(() => imChannel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
@@ -2508,7 +2822,7 @@ describe('runImRemoteAgent', () => {
     const args = baseArgs()
     const session = createSession(args.db, { name: 'remote-hosted-run-script', model: SUPPORTED_ANTHROPIC_MODEL })
     let imChannel!: ImChannel
-    imChannel = new ImChannel({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
+    imChannel = createImChannelForTest({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => imChannel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: 'run-script-answer-1' }
@@ -2594,7 +2908,7 @@ describe('runImRemoteAgent', () => {
     const session = createSession(args.db, { name: 'feishu-run-script-config-drift', model: SUPPORTED_ANTHROPIC_MODEL })
     let toolsConfig: typeof DEFAULT_TOOLS_CONFIG = { ...DEFAULT_TOOLS_CONFIG }
     let imChannel!: ImChannel
-    imChannel = new ImChannel({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
+    imChannel = createImChannelForTest({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
       toolsConfig = changeConfig(toolsConfig)
       queueMicrotask(() => imChannel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
@@ -2667,7 +2981,7 @@ describe('runImRemoteAgent', () => {
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `feishu-run-script-${termination}-`))
     const session = createSession(args.db, { name: `feishu-run-script-${termination}`, model: SUPPORTED_ANTHROPIC_MODEL })
     let channel!: ImChannel
-    channel = new ImChannel({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => channel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: `feishu-run-script-${termination}-approved` }
@@ -2774,7 +3088,7 @@ describe('runImRemoteAgent', () => {
     const session = createSession(args.db, { name: `feishu-run-script-postclaim-${termination}`, model: SUPPORTED_ANTHROPIC_MODEL })
     const requestId = `feishu-run-script-postclaim-${termination}`
     let channel!: ImChannel
-    channel = new ImChannel({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => channel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: `${requestId}-approved` }
@@ -3018,7 +3332,7 @@ describe('runImRemoteAgent', () => {
       getActiveWorkDir: () => currentDir
     }
     const session = createSession(args.db, { name: 'feishu-workdir-switch-success', model: SUPPORTED_ANTHROPIC_MODEL, workDirProfileId: 'current-profile' })
-    const channel = new ImChannel({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
+    const channel = createImChannelForTest({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => channel.tryResolveFromInbound(
         { kind: 'approve', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: 'feishu-workdir-switch-approved' }
@@ -3094,7 +3408,7 @@ describe('runImRemoteAgent', () => {
       getActiveWorkDir: () => currentDir
     }
     const session = createSession(args.db, { name: `feishu-workdir-${termination}`, model: SUPPORTED_ANTHROPIC_MODEL, workDirProfileId: 'current-profile' })
-    const channel = new ImChannel({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: vi.fn() })
+    const channel = createImChannelForTest({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: vi.fn() })
     const requestId = args.requestId
     const context = {
       ...args, sessionId: session.id, workDir: currentDir, workDirManager: manager,
@@ -3201,7 +3515,7 @@ describe('runImRemoteAgent', () => {
       getActiveWorkDir: () => currentDir
     }
     const session = createSession(args.db, { name: `feishu-workdir-postclaim-${termination}`, model: SUPPORTED_ANTHROPIC_MODEL, workDirProfileId: 'current-profile' })
-    const channel = new ImChannel({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: vi.fn() })
+    const channel = createImChannelForTest({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: vi.fn() })
     const requestId = args.requestId
     const context = {
       ...args, sessionId: session.id, workDir: currentDir, workDirManager: manager,
@@ -3574,11 +3888,46 @@ describe('runImRemoteAgent', () => {
     expect(result).toMatchObject({ ok: false, pendingConfirm: false, outcome: 'cancelled' })
   })
 
+  it('maps an explicit user cancellation to a cancelled Track terminal request', () => {
+    expect(trackTerminalTargetFromAgentResult({ ok: false, outcome: 'cancelled' })).toBe('cancelled')
+    expect(trackTerminalTargetFromAgentResult({ ok: false })).toBe('failed')
+    expect(trackTerminalTargetFromAgentResult({ ok: true })).toBe('completed')
+  })
+
   it('rethrowAsError preserves Hosted terminal classification for the remote turn adapter', async () => {
     const terminalError = new HostedTurnFinalizedError(new Error('provider deadline exceeded'), 'timed-out')
     mockRunToolChatSession.mockRejectedValue(terminalError)
 
     await expect(runImRemoteAgent(baseArgs({ rethrowAsError: true }))).rejects.toBe(terminalError)
+  })
+
+  it.each(['timed-out', 'interrupted', 'commit-uncertain'] as const)('rethrowAsError adds the confirmation failure receipt without losing Hosted %s classification', async (outcome) => {
+    const args = baseArgs({ rethrowAsError: true })
+    const terminalError = new HostedTurnFinalizedError(new Error(`terminal ${outcome}`), outcome)
+    const originalStorage = args.sessionStorage
+    const originalExecution = originalStorage.execution
+    const execution = Object.assign(Object.create(Object.getPrototypeOf(originalExecution)), originalExecution) as typeof originalExecution
+    const originalHistoryFor = originalExecution.historyFor.bind(originalExecution)
+    execution.historyFor = (input) => {
+      const history = originalHistoryFor(input)
+      return Object.assign(Object.create(Object.getPrototypeOf(history)), history, {
+        read: async (invocationId: string) => invocationId === args.requestId
+          ? { events: [
+          { kind: 'model-response-committed', payload: { message: { toolCalls: [{ id: 'protected-call', name: 'run_script' }] } } },
+            { kind: 'approval-resolved', payload: { toolCallId: 'protected-call', promptSendFailure: { kind: 'confirmation-prompt-send-failed', state: 'send-pending', sendCall: 'pending', delivery: 'unknown', errorCategory: 'unknown' } } }
+          ] }
+          : history.read(invocationId)
+      })
+    }
+    const sessionStorage = { ...originalStorage, execution }
+    mockRunToolChatSession.mockRejectedValue(terminalError)
+
+    await expect(runImRemoteAgent({ ...args, sessionStorage })).rejects.toMatchObject({
+      name: 'HostedTurnFinalizedError',
+      outcome,
+      historyTerminalCommitted: true,
+      message: expect.stringContaining('发送调用尚未完成')
+    })
   })
 })
 
@@ -3634,7 +3983,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
     const args = baseArgs()
     const session = createSession(args.db, { name: 'feishu-hosted-write-denied', model: SUPPORTED_ANTHROPIC_MODEL })
     let channel!: ImChannel
-    channel = new ImChannel({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
       queueMicrotask(() => channel.tryResolveFromInbound(
         { kind: 'reject', confirmId: pending.confirmId },
         { matchKey: pending.matchKey, messageId: 'feishu-reject-1' }
@@ -3702,7 +4051,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
     const args = baseArgs()
     const session = createSession(args.db, { name: 'feishu-hosted-write-target-drift', model: SUPPORTED_ANTHROPIC_MODEL })
     let channel!: ImChannel
-    channel = new ImChannel({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
       void fs.writeFile(targetPath, 'created-during-approval').then(() => {
         channel.tryResolveFromInbound(
           { kind: 'approve', confirmId: pending.confirmId },
@@ -3772,7 +4121,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
     const args = baseArgs()
     const session = createSession(args.db, { name: 'feishu-hosted-read-identity-drift', model: SUPPORTED_ANTHROPIC_MODEL })
     let channel!: ImChannel
-    channel = new ImChannel({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane: 'feishu', timeoutMs: 1_000, sendPrompt: (pending) => {
       void (async () => {
         await fs.rename(targetPath, `${targetPath}.approved`)
         await fs.writeFile(targetPath, 'SECRET=after')
@@ -4200,7 +4549,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
     let prompted!: () => void
     const didPrompt = new Promise<void>((resolve) => { prompted = resolve })
     let channel!: ImChannel
-    channel = new ImChannel({ lane, timeoutMs: 1_000, sendPrompt: (pending) => {
+    channel = createImChannelForTest({ lane, timeoutMs: 1_000, sendPrompt: (pending) => {
       browserConfig = { ...browserConfig, allowRemoteSessions: false }
       prompted()
       queueMicrotask(() => channel.tryResolveFromInbound(
@@ -4581,7 +4930,7 @@ describe('调用方契约特征化（P0：入参 → Core args 平移）', () =>
     const controller = new AbortController()
     let announcePrompt!: () => void
     const prompted = new Promise<void>((resolve) => { announcePrompt = resolve })
-    const channel = new ImChannel({ lane, timeoutMs: 1_000, sendPrompt: () => announcePrompt() })
+    const channel = createImChannelForTest({ lane, timeoutMs: 1_000, sendPrompt: () => announcePrompt() })
     const context = {
       ...args, sessionId: session.id, workDir,
       workDirManager: { ...args.workDirManager, getActiveWorkDir: () => workDir },

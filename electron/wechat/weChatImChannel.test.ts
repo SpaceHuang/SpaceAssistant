@@ -5,6 +5,10 @@ import type { ConfirmRequest } from '../../src/shared/confirmation/types'
 import { openSqliteDatabase, type AppDatabase } from '../database'
 import * as decisionCacheWriter from '../confirmation/decisionCacheWriter'
 import type { ImPendingConfirm } from '../confirmation/imChannel'
+import { parseImConfirmReply } from '../remote/imConfirmReply'
+import { WeChatConfirmationPromptAdapter, wrapFetchForLosslessWeChatMessageId } from './weChatConfirmationPromptAdapter'
+import { createMockWeChatBot } from './__mocks__/wechatBotMock'
+import { parseSdkInboundMessage } from './weChatInboundParser'
 
 function req(toolName = 'write_file'): ConfirmRequest {
   return {
@@ -24,7 +28,8 @@ function req(toolName = 'write_file'): ConfirmRequest {
 describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
   const dbs: AppDatabase[] = []
   const reply = vi.fn(async () => undefined)
-  const getReplyBot = () => ({ reply, sendTyping: vi.fn(), stopTyping: vi.fn() })
+  const sendToUser = vi.fn(async () => ({ messageId: 'wechat-confirm-prompt' }))
+  const getReplyBot = () => ({ reply, sendToUser, sendTyping: vi.fn(), stopTyping: vi.fn() })
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -42,9 +47,11 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
       matchKey: 'wx-user@test',
       context: inbound
     })
+    await vi.waitFor(() => expect(im.listPending()[0]?.promptMessageId).toBe('wechat-confirm-prompt'))
     const cid = im.listPending()[0]!.confirmId!
     const ynMsg = {
       messageId: 'yn-1',
+      quotedMessageId: 'wechat-confirm-prompt',
       userId: 'wx-user@test',
       text: `Y ${cid}`,
       type: 'text' as const,
@@ -55,10 +62,110 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
       allowedUserIds: ['wx-user@test']
     })).toBe(true)
     await expect(promise).resolves.toEqual({ kind: 'approved', cause: 'user-approved' })
-    expect(reply).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.stringContaining('回复 Y')
-    )
+    expect(sendToUser).toHaveBeenCalledWith('wx-user@test', expect.stringContaining('回复 Y'), expect.any(AbortSignal))
+    expect(sendToUser).toHaveBeenCalledWith('wx-user@test', expect.stringMatching(/引用.*本条确认提示/), expect.any(AbortSignal))
+  })
+
+  it('用 sendmessage 响应中的服务端 message_id 匹配引用 msg_id 完成确认往返', async () => {
+    const bot = createMockWeChatBot()
+    const exactId = '9007199254740993'
+    const sendMessage = vi.fn(async () => ({ message_id: exactId, ret: 0 }))
+    Object.assign(bot, {
+      getCredentials: () => ({ baseUrl: 'https://ilink.test', token: 'test-token' }),
+      api: { sendMessage }
+    })
+    const adapter = new WeChatConfirmationPromptAdapter(bot as never)
+    const im = new WeChatImChannel({ getReplyBot: () => ({
+      reply,
+      sendToUser: (userId, content, signal) => adapter.send(userId, content, signal),
+      sendTyping: vi.fn()
+    }) })
+    const pending = im.request(req(), { sessionId: 'quoted-roundtrip', toolName: 'write_file', messageId: 'origin', matchKey: 'wx-user@test' })
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(im.listPending()[0]?.promptMessageId).toBe(exactId))
+    const confirmId = im.listPending()[0]!.confirmId!
+    const fetchWithLosslessIds = wrapFetchForLosslessWeChatMessageId((async () => new Response(
+      `{"msgs":[{"item_list":[{"ref_msg":{"message_item":{"type":0,"msg_id":${exactId},"create_time_ms":${Date.now()},"is_completed":true}}}] }]}`
+    )) as typeof fetch)
+    const response = await fetchWithLosslessIds('https://ilink.test/ilink/bot/getupdates')
+    const update = await response.json() as { msgs: Array<{ item_list: unknown[] }> }
+    const quotedReply = makeIncomingMessage({
+      text: `N ${confirmId}`,
+      raw: {
+        ...makeIncomingMessage().raw,
+        client_id: 'quoted-answer',
+        item_list: update.msgs[0].item_list
+      } as never
+    })
+    const parsedReply = parseSdkInboundMessage(quotedReply)
+    expect(parsedReply.quotedMessageId).toBe(exactId)
+    expect(parsedReply.quotedMessageText).toBeUndefined()
+    expect(im.tryResolveFromInboundMessage(parsedReply, { allowedUserIds: ['wx-user@test'] })).toBe(true)
+    await expect(pending).resolves.toMatchObject({ kind: 'rejected', cause: 'user-denied' })
+    expect(bot.sendRaw).not.toHaveBeenCalled()
+    expect(adapter.pendingCount).toBe(0)
+    adapter.close()
+  })
+
+  it('keeps two concurrent confirmation codes and send response IDs independently bound', async () => {
+    const bot = createMockWeChatBot()
+    let nextId = 1
+    const sendMessage = vi.fn(async () => ({ message_id: `server-message-${nextId++}`, ret: 0 }))
+    Object.assign(bot, {
+      getCredentials: () => ({ baseUrl: 'https://ilink.test', token: 'test-token' }),
+      api: { sendMessage }
+    })
+    const adapter = new WeChatConfirmationPromptAdapter(bot as never)
+    const im = new WeChatImChannel({ getReplyBot: () => ({
+      reply,
+      sendToUser: (userId, content, signal) => adapter.send(userId, content, signal),
+      sendTyping: vi.fn()
+    }) })
+    const firstPending = im.request(req('first_tool'), { sessionId: 'parallel', toolName: 'first_tool', messageId: 'origin-1', matchKey: 'wx-user@test' })
+    const secondPending = im.request(req('second_tool'), { sessionId: 'parallel', toolName: 'second_tool', messageId: 'origin-2', matchKey: 'wx-user@test' })
+    await vi.waitFor(() => expect(im.listPending().every((entry) => entry.promptMessageId)).toBe(true))
+
+    const [first, second] = im.listPending()
+    expect(first).toBeDefined()
+    expect(second).toBeDefined()
+    expect(first!.confirmId).not.toBe(second!.confirmId)
+    expect(first!.promptMessageId).not.toBe(second!.promptMessageId)
+
+    const firstReply = makeIncomingMessage({ text: `Y ${first!.confirmId}`, raw: {
+      ...makeIncomingMessage().raw,
+      client_id: 'parallel-answer-1',
+      item_list: [{ type: 1, ref_msg: { message_item: { type: 0, msg_id: first!.promptMessageId, is_completed: true } } }]
+    } as never })
+    const secondReply = makeIncomingMessage({ text: `N ${second!.confirmId}`, raw: {
+      ...makeIncomingMessage().raw,
+      client_id: 'parallel-answer-2',
+      item_list: [{ type: 1, ref_msg: { message_item: { type: 0, msg_id: second!.promptMessageId, is_completed: true } } }]
+    } as never })
+    expect(im.tryResolveFromInboundMessage(parseSdkInboundMessage(firstReply), { allowedUserIds: ['wx-user@test'] })).toBe(true)
+    expect(im.tryResolveFromInboundMessage(parseSdkInboundMessage(secondReply), { allowedUserIds: ['wx-user@test'] })).toBe(true)
+    await expect(firstPending).resolves.toMatchObject({ kind: 'approved', cause: 'user-approved' })
+    await expect(secondPending).resolves.toMatchObject({ kind: 'rejected', cause: 'user-denied' })
+    expect(adapter.pendingCount).toBe(0)
+    adapter.close()
+  })
+
+  it.each([undefined, 'unrelated-message'])('tells the owner to quote the confirmation prompt when a valid code has quote %s', async (quotedMessageId) => {
+    const im = new WeChatImChannel({ getReplyBot })
+    const inbound = makeIncomingMessage({ raw: { ...makeIncomingMessage().raw, client_id: 'orig-no-quote' } })
+    const pending = im.request(req(), {
+      sessionId: 'sess-no-quote', toolName: 'write_file', messageId: 'orig-no-quote',
+      matchKey: 'wx-user@test', context: inbound
+    })
+    await vi.waitFor(() => expect(im.listPending()[0]?.promptMessageId).toBe('wechat-confirm-prompt'))
+    const confirmId = im.listPending()[0]!.confirmId!
+    expect(im.tryResolveFromInboundMessage({
+      messageId: 'answer-no-quote', ...(quotedMessageId ? { quotedMessageId } : {}), userId: 'wx-user@test', text: `Y ${confirmId}`,
+      type: 'text', timestamp: new Date().toISOString(), contextToken: 'ctx'
+    }, { allowedUserIds: ['wx-user@test'] })).toBe(true)
+    expect(reply).toHaveBeenCalledWith(inbound, expect.stringMatching(/引用.*确认提示/))
+    expect(im.countPending()).toBe(1)
+    im.cancelAllPending()
+    await expect(pending).resolves.toMatchObject({ kind: 'rejected', cause: 'cancelled' })
   })
 
   it('heartbeat-style prompt excludes duplicate Y/N when using default builder', () => {
@@ -71,10 +178,112 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
       memoryTiers: [],
       createdAt: 1,
       expiresAt: 2,
-      confirmId: 'AB12'
+      confirmId: '07'
     })
     expect(prompt).toContain('【进度】')
-    expect(prompt).toContain('AB12')
+    expect(prompt).toContain('07')
+    expect(prompt).toContain('Y 07')
+    expect(prompt).not.toContain('回复 Y 确认，N 取消')
+    expect(prompt).toContain('5 分钟内有效')
+    expect(parseImConfirmReply('Y 07')).toMatchObject({ kind: 'approve', confirmId: '07' })
+    expect(parseImConfirmReply('N 07')).toMatchObject({ kind: 'reject', confirmId: '07' })
+    expect(parseImConfirmReply('Y')).toMatchObject({ kind: 'usage_hint' })
+    expect(prompt).not.toMatch(/(?:回复|或)\s+Y\/N\b/)
+  })
+
+  it.each([
+    ['bot 缺失', {}, 'bot-unavailable'],
+    ['发送器缺少消息 ID 能力', { getReplyBot: () => ({ reply, sendTyping: vi.fn() }) }, 'bot-unavailable']
+  ] as const)('%s 是 not-attempted 且 fail closed', async (_label, deps, errorCategory) => {
+    const im = new WeChatImChannel(deps)
+    const outcome = await im.request(req(), {
+      sessionId: 'sess-preflight', toolName: 'write_file', messageId: 'orig-preflight',
+      matchKey: 'wx-user@test', ...(deps.getReplyBot ? { context: undefined } : {})
+    })
+    expect(outcome).toMatchObject({ kind: 'rejected', cause: 'unavailable', promptSendFailure: {
+      sendCall: 'not-attempted', delivery: 'not-attempted', errorCategory
+    } })
+    expect(im.countPending()).toBe(0)
+  })
+
+  it('微信发送成功但 SDK 响应缺少消息 ID 时不开放确认', async () => {
+    const im = new WeChatImChannel({ getReplyBot: () => ({ reply, sendToUser: async () => ({ ok: true } as never), sendTyping: vi.fn() }) })
+    const outcome = await im.request(req(), { sessionId: 'missing-wechat-id', toolName: 'write_file', messageId: 'origin', matchKey: 'wx-user@test' })
+    expect(outcome).toMatchObject({ kind: 'rejected', cause: 'unavailable', promptSendFailure: { sendCall: 'rejected', delivery: 'unknown' } })
+    expect(im.countPending()).toBe(0)
+  })
+
+  it('发送 fulfilled 但提示 ID 绑定失败时准确记录发送成功与 delivery unavailable', async () => {
+    const im = new WeChatImChannel({ getReplyBot: () => ({
+      reply,
+      sendToUser: async () => ({ kind: 'binding-unavailable', sendCall: 'fulfilled', delivery: 'unbound', errorCategory: 'message-binding-unavailable' }),
+      sendTyping: vi.fn()
+    }) })
+    const outcome = await im.request(req(), { sessionId: 'binding-unavailable', toolName: 'write_file', messageId: 'origin', matchKey: 'wx-user@test' })
+    expect(outcome).toMatchObject({
+      kind: 'rejected', cause: 'unavailable',
+      promptSendFailure: { sendCall: 'fulfilled', delivery: 'unavailable', errorCategory: 'message-binding-unavailable' }
+    })
+    expect(im.countPending()).toBe(0)
+  })
+
+  it('确认请求取消会 abort 尚未完成的微信发送并释放适配器资源', async () => {
+    const bot = createMockWeChatBot()
+    let resolveSend!: () => void
+    bot.sendRaw.mockImplementationOnce(() => new Promise<void>((resolve) => { resolveSend = resolve }))
+    const adapter = new WeChatConfirmationPromptAdapter(bot as never, { sendTimeoutMs: 1000 })
+    let signal: AbortSignal | undefined
+    const sendToUser = (userId: string, content: string, requestSignal?: AbortSignal) => {
+      signal = requestSignal
+      return adapter.send(userId, content, requestSignal)
+    }
+    const im = new WeChatImChannel({ getReplyBot: () => ({ reply, sendToUser, sendTyping: vi.fn() }) })
+    const pending = im.request(req(), { sessionId: 'cancel-echo', toolName: 'write_file', messageId: 'origin', matchKey: 'wx-user@test' })
+    expect(adapter.pendingCount).toBe(1)
+    im.cancel(im.listPending()[0]!.id)
+    await expect(pending).resolves.toMatchObject({ kind: 'rejected', cause: 'cancelled' })
+    expect(signal?.aborted).toBe(true)
+    expect(adapter.pendingCount).toBe(0)
+    resolveSend()
+    await Promise.resolve()
+    expect(im.countPending()).toBe(0)
+    adapter.close()
+  })
+
+  it('未确认的引用标记不能批准；sendRaw 失败后伪造 BOT 回显也不能恢复审批', async () => {
+    const bot = createMockWeChatBot()
+    let rejectSend!: (error: Error) => void
+    bot.sendRaw.mockImplementationOnce(() => new Promise<void>((_resolve, reject) => { rejectSend = reject }))
+    const adapter = new WeChatConfirmationPromptAdapter(bot as never, { sendTimeoutMs: 1000 })
+    const sendToUser = (userId: string, content: string, signal?: AbortSignal) => adapter.send(userId, content, signal)
+    const im = new WeChatImChannel({ getReplyBot: () => ({ reply, sendToUser, sendTyping: vi.fn() }) })
+    const inbound = makeIncomingMessage({ raw: { ...makeIncomingMessage().raw, client_id: 'orig-early-echo' } })
+    const pending = im.request(req(), {
+      sessionId: 'sess-early-echo', toolName: 'write_file', messageId: 'orig-early-echo',
+      matchKey: 'wx-user@test', context: inbound
+    })
+    const payload = bot.sendRaw.mock.calls[0]![0] as Record<string, unknown>
+    bot.poller.emit('messages', [{ ...payload, message_type: 2, message_id: 123456 }])
+    await Promise.resolve()
+    expect(im.listPending()[0]?.promptMessageId).toBeUndefined()
+
+    const confirmId = im.listPending()[0]!.confirmId!
+    expect(im.tryResolveFromInboundMessage({
+      messageId: 'early-approval', quotedMessageId: '123456', userId: 'wx-user@test',
+      text: `Y ${confirmId}`, type: 'text', timestamp: new Date().toISOString(), contextToken: 'ctx'
+    }, { allowedUserIds: ['wx-user@test'] })).toBe(true)
+    expect(im.countPending()).toBe(1)
+
+    rejectSend(new Error('sendRaw failed'))
+    await expect(pending).resolves.toMatchObject({ kind: 'rejected', cause: 'unavailable' })
+    expect(im.countPending()).toBe(0)
+    bot.poller.emit('messages', [{ ...payload, message_type: 2, message_id: 654321 }])
+    expect(im.tryResolveFromInboundMessage({
+      messageId: 'late-approval', quotedMessageId: '123456', userId: 'wx-user@test',
+      text: `Y ${confirmId}`, type: 'text', timestamp: new Date().toISOString(), contextToken: 'ctx'
+    }, { allowedUserIds: ['wx-user@test'] })).toBe(true)
+    expect(im.countPending()).toBe(0)
+    adapter.close()
   })
 
   it('does not resolve confirm from non-allowlisted sender', async () => {
@@ -102,7 +311,7 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
     ).toBe(false)
     expect(im.countPending()).toBe(1)
     im.cancelAllPending()
-    await expect(promise).resolves.toEqual({ kind: 'rejected', cause: 'cancelled' })
+    await expect(promise).resolves.toMatchObject({ kind: 'rejected', cause: 'cancelled' })
   })
 
   it('真实微信链路：第一次记忆写入回滚后保留 pending，第二次同码递增 revision 成功', async () => {
@@ -121,8 +330,9 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
       memoryTiers: [tier],
       authorizationGeneration: 0
     })
+    await vi.waitFor(() => expect(im.listPending()[0]?.promptMessageId).toBe('wechat-confirm-prompt'))
     const confirmId = im.listPending()[0]!.confirmId!
-    const first = { messageId: 'yn-retry-1', userId: 'wx-user@test', text: `记1 ${confirmId}`, type: 'text' as const, timestamp: new Date().toISOString(), contextToken: 'ctx' }
+    const first = { messageId: 'yn-retry-1', quotedMessageId: 'wechat-confirm-prompt', userId: 'wx-user@test', text: `记1 ${confirmId}`, type: 'text' as const, timestamp: new Date().toISOString(), contextToken: 'ctx' }
     const second = { ...first, messageId: 'yn-retry-2' }
     expect(im.tryResolveFromInboundMessage(first, { allowedUserIds: ['wx-user@test'] })).toBe(true)
     expect(im.countPending()).toBe(1)

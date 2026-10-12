@@ -37,7 +37,7 @@ describe('deferred approval cache policy', () => {
       dispatch: vi.fn()
     })
     const result = await adapter.resolve({ approval: { ok: true, verdict: { kind: 'approve', reason: { summary: 'ok' } } },
-      eligibility: { kind: 'eligible', todoId: 'todo-cache' }, todo: { todoId: 'todo-cache', invocationId: 'inv', reservationId: 'res', originSessionId: 's', identityKey: 'i' }, ttlMs: 10 })
+      eligibility: { kind: 'eligible', todoId: 'todo-cache' }, todo: { todoId: 'todo-cache', invocationId: 'inv', reservationId: 'res', originSessionId: 's', identityKey: 'i', channel: 'feishu', ownerId: 'owner' }, ttlMs: 10 })
     expect(result).toMatchObject({ kind: 'deferred' })
     expect(write).not.toHaveBeenCalled()
     expect(result).not.toHaveProperty('memory')
@@ -49,7 +49,7 @@ describe('deferred approval cache policy', () => {
     const adapter = createDeferredApprovalAdapter({ admission: { defer: async () => ({ kind: 'deferred' }) }, dispatch: vi.fn() })
     const result = await adapter.resolve({ approval: { ok: true, verdict: { kind: 'approve', reason: { summary: 'approved' } } },
       eligibility: { kind: 'eligible', todoId: 'todo-no-cache' }, todo: { todoId: 'todo-no-cache', invocationId: 'inv-no-cache', reservationId: 'res-no-cache',
-        originSessionId: 'session-no-cache', identityKey: 'identity-no-cache' }, ttlMs: 1000 })
+        originSessionId: 'session-no-cache', identityKey: 'identity-no-cache', channel: 'feishu', ownerId: 'owner-no-cache' }, ttlMs: 1000 })
     expect(result).toMatchObject({ kind: 'deferred' })
     expect(cacheWrite).not.toHaveBeenCalled()
     expect(recordUserAnswerFromMemoryTiers).toBeTypeOf('function')

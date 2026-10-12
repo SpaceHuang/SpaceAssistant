@@ -33,6 +33,8 @@ const ALLOWED_KEYS = new Set([
   // P0-B（D2）：宿主初始化类故障的关键诊断字段——此前被 allowlist 丢弃，
   // 线上日志查不到 0x8009001D 本体，只能回 sessions/*/events.jsonl 取证。
   'hresult', 'exitCodeAdvice', 'degradedFrom',
+  // P0-A/R4（§4.3）：planned 路径 plan_failed 台账的方言信号列表（信号名为固定枚举，非用户内容）
+  'signals',
   // P0-D3 组 1/组 5（§5.4.3）：run_script 执行期事件字段与 env 快照（键计数 + 哈希，值永不落盘）
   'interpreter', 'envKeyCount', 'envKeysSha256', 'envEntriesSha256'
 ])

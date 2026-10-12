@@ -15,10 +15,12 @@ import type { ImPendingConfirm } from '../confirmation/imChannel'
 
 
 vi.mock('./feishuReply', () => ({
-  replyFeishuText: vi.fn().mockResolvedValue(undefined)
+  replyFeishuText: vi.fn().mockResolvedValue(undefined),
+  replyFeishuTextWithId: vi.fn().mockResolvedValue({ messageId: 'feishu-confirm-prompt' })
 }))
 vi.mock('./feishuRemoteOutbound', () => ({
-  sendFeishuRemoteOutbound: vi.fn().mockResolvedValue(undefined)
+  sendFeishuRemoteOutbound: vi.fn().mockResolvedValue(undefined),
+  sendFeishuRemoteOutboundWithId: vi.fn().mockResolvedValue({ messageId: 'feishu-confirm-prompt' })
 }))
 
 const owner = 'ou_owner'
@@ -48,9 +50,11 @@ function p2p(overrides: {
   senderOpenId?: string
   content?: string
   chatType?: 'p2p' | 'group'
+  replyToMessageId?: string | null
 } = {}) {
   return {
     messageId: overrides.messageId ?? 'm2',
+    replyToMessageId: overrides.replyToMessageId === null ? undefined : (overrides.replyToMessageId ?? 'feishu-confirm-prompt'),
     chatId: overrides.chatId ?? 'c1',
     chatType: overrides.chatType ?? ('p2p' as const),
     senderOpenId: overrides.senderOpenId ?? owner,
@@ -104,6 +108,21 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
     expect(im.countPending()).toBe(1)
     im.cancelAllPending()
     await expect(p).resolves.toEqual({ kind: 'rejected', cause: 'cancelled' })
+  })
+
+  it('asks the owner to quote the current prompt when a valid code arrives unquoted', async () => {
+    const { replyFeishuText: sendHint } = await import('./feishuReply')
+    const im = new FeishuImChannel({ runner: {} as LarkCliRunner })
+    const pending = im.request(req(), {
+      sessionId: 's-no-quote', toolName: 'write_file', messageId: 'm1', matchKey: 'c1'
+    })
+    await vi.waitFor(() => expect(im.listPending()[0]?.promptMessageId).toBe('feishu-confirm-prompt'))
+    const confirmId = im.listPending()[0]!.confirmId!
+    expect(im.tryResolveFromInboundMessage(p2p({ content: `Y ${confirmId}`, replyToMessageId: null }), confirmOpts)).toBe(true)
+    expect(sendHint).toHaveBeenCalledWith(expect.anything(), 'm1', expect.stringMatching(/引用.*确认提示/))
+    expect(im.countPending()).toBe(1)
+    im.cancelAllPending()
+    await expect(pending).resolves.toMatchObject({ kind: 'rejected', cause: 'cancelled' })
   })
 
   it('does not resolve confirm when owner unbound', async () => {
@@ -161,7 +180,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
   })
 
   it('rejects bare 信任 without approving', async () => {
-    const im = new FeishuImChannel()
+    const im = new FeishuImChannel({ runner: {} as LarkCliRunner })
     const p = im.request(req('run_shell'), {
       sessionId: 's-trust',
       toolName: 'run_shell',
@@ -171,6 +190,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
       context: 'c1',
       trustEligible: true
     })
+    await vi.waitFor(() => expect(im.listPending()[0]?.promptMessageId).toBe('feishu-confirm-prompt'))
     const cid = im.listPending()[0]!.confirmId!
     expect(
       im.tryResolveFromInboundMessage(p2p({ content: '信任' }), confirmOpts)
@@ -181,7 +201,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
   })
 
   it('approve_and_trust without eligibility does not resolve', async () => {
-    const im = new FeishuImChannel()
+    const im = new FeishuImChannel({ runner: {} as LarkCliRunner })
     const p = im.request(req('run_shell'), {
       sessionId: 's-notrust',
       toolName: 'run_shell',
@@ -191,6 +211,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
       context: 'c1',
       trustEligible: false
     })
+    await vi.waitFor(() => expect(im.listPending()[0]?.promptMessageId).toBe('feishu-confirm-prompt'))
     const cid = im.listPending()[0]!.confirmId!
     expect(
       im.tryResolveFromInboundMessage(p2p({ content: `Y ${cid} TRUST` }), confirmOpts)
@@ -215,6 +236,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
       memoryTiers: [tier],
       authorizationGeneration: 0
     })
+    await vi.waitFor(() => expect(im.listPending()[0]?.promptMessageId).toBe('feishu-confirm-prompt'))
     const confirmId = im.listPending()[0]!.confirmId!
     expect(im.tryResolveFromInboundMessage(p2p({ content: `记1 ${confirmId}` }), confirmOpts)).toBe(true)
     expect(im.countPending()).toBe(1)

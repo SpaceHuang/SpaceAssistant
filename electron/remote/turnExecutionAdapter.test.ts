@@ -23,6 +23,20 @@ describe('executeRemoteTurn', () => {
     db.close()
   })
 
+  it('invokes terminal convergence only after the turn terminal has been durably written', async () => {
+    const db = createMemoryAppDb()
+    const session = createSession(db, { name: 'remote-terminal-convergence-order' })
+    let sequence = 0
+    const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(db), deps: { now: () => 1, id: () => `remote-convergence-${++sequence}` } })
+    const prepared = runtime.prepare({ mode: 'create-user', requestId: 'remote-convergence-request', sessionId: session.id, input: { text: 'run' }, config: {} })
+    const onTerminal = vi.fn(() => expect(getPersistedTurn(db, prepared.turnId)).toMatchObject({ state: 'terminal', outcome: 'completed' }))
+
+    await executeRemoteTurn({ runtime, prepared, requestId: prepared.requestId, run: async () => ({ ok: true, summary: 'done' }), onTerminal })
+
+    expect(onTerminal).toHaveBeenCalledOnce()
+    db.close()
+  })
+
   it('does not reuse a completed result for the same requestId in another runtime database', async () => {
     const firstDb = createMemoryAppDb()
     const firstSession = createSession(firstDb, { name: 'remote-result-cache-first' })

@@ -348,6 +348,15 @@ export type ConfirmOutcomeCause =
   | 'gate-materials-missing'
   | 'rules-violated'
 
+/** Safe, narrow diagnostic fact for a failed IM confirmation prompt send.
+ * `state` is the protocol discriminator: each branch fixes the only valid send/delivery pair.
+ */
+export type ConfirmationPromptSendFailure =
+  | Readonly<{ kind: 'confirmation-prompt-send-failed'; state: 'not-attempted'; sendCall: 'not-attempted'; delivery: 'not-attempted'; errorCategory: 'bot-unavailable' | 'inbound-context-missing' | 'credentials-unavailable' | 'api-rejected' | 'transport-failed' | 'message-binding-unavailable' | 'unknown' }>
+  | Readonly<{ kind: 'confirmation-prompt-send-failed'; state: 'send-rejected'; sendCall: 'rejected'; delivery: 'unknown'; errorCategory: 'bot-unavailable' | 'inbound-context-missing' | 'credentials-unavailable' | 'api-rejected' | 'transport-failed' | 'message-binding-unavailable' | 'unknown' }>
+  | Readonly<{ kind: 'confirmation-prompt-send-failed'; state: 'send-pending'; sendCall: 'pending'; delivery: 'unknown'; errorCategory: 'unknown' }>
+  | Readonly<{ kind: 'confirmation-prompt-send-failed'; state: 'binding-unavailable'; sendCall: 'fulfilled'; delivery: 'unavailable'; errorCategory: 'message-binding-unavailable' }>
+
 export type ConfirmOutcome =
   | {
       kind: 'approved'
@@ -355,6 +364,7 @@ export type ConfirmOutcome =
       reason?: ApprovalReason
       /** 本次批准的回答者；缺省视为 user（既有桌面 / IM 路径）。非 user 不得产生任何记忆写入（I3）。 */
       answererKind?: ConfirmAnswererKind
+      promptSendFailure?: ConfirmationPromptSendFailure
       cause: ConfirmOutcomeCause
     }
   | {
@@ -362,6 +372,7 @@ export type ConfirmOutcome =
       memory?: CacheKey
       reason?: ApprovalReason
       answererKind?: ConfirmAnswererKind
+      promptSendFailure?: ConfirmationPromptSendFailure
       cause: ConfirmOutcomeCause
     }
   | { kind: 'timeout'; reason?: ApprovalReason; answererKind?: ConfirmAnswererKind; cause: ConfirmOutcomeCause }

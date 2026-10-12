@@ -17,6 +17,8 @@ import { registerSecurityIpc } from './ipc/securityIpc'
 import { registerSessionIpc } from './ipc/sessionIpc'
 import { registerStorageMaintenanceIpc } from './ipc/storageMaintenanceIpc'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
+import { StorageProfileCoordinator } from './storageProfile/storageProfileCoordinator'
+import { runStorageProfileWorker } from './storageProfile/storageProfileWorkerClient'
 import type { SessionStorage } from './sessionStorage/contracts'
 
 // 兼容 re-export:既有外部消费方(butler/main/llmSystemPrompt)从本文件导入
@@ -24,6 +26,7 @@ export { readAppLocale } from './ipc/ipcShared'
 
 export type AppIpcContext = {
   db: AppDatabase
+  storageProfileCoordinator?: StorageProfileCoordinator
   /** Bound session capabilities created once at this composition root. */
   sessionStorage?: SessionStorage
   backup: DebouncedSessionBackupManager
@@ -46,8 +49,11 @@ export type AppIpcContext = {
 /**
  * 组合器:按域注册全部 IPC handler。保留既有导出名以兼容装配方与测试。
  */
-export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): void {
-  const context = { ...ctx, sessionStorage: ctx.sessionStorage ?? createSqliteSessionStorage(ctx.db) }
+export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): StorageProfileCoordinator {
+  const storageProfileCoordinator = ctx.storageProfileCoordinator ?? new StorageProfileCoordinator({
+    run: (request, options) => runStorageProfileWorker(request, { signal: options.signal })
+  })
+  const context = { ...ctx, storageProfileCoordinator, sessionStorage: ctx.sessionStorage ?? createSqliteSessionStorage(ctx.db) }
   registerDesktopIpc(ipcMain, context)
   registerAgentIpc(ipcMain, context)
   registerSessionIpc(ipcMain, context)
@@ -57,4 +63,5 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
   registerConfigIpc(ipcMain, context)
   registerSecurityIpc(ipcMain, context)
   registerMcpIpcHandlers(ipcMain, context)
+  return storageProfileCoordinator
 }

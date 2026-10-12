@@ -13,6 +13,7 @@ import type { HistoryFact } from '../../src/shared/historyReader'
 import type { RegisteredFeishuAttachment } from '../feishu/feishuAttachmentRegistry'
 import type { ChildProcess, spawn as nodeSpawn } from 'child_process'
 import type { SessionCommands, SessionQueries } from '../sessionStorage/contracts'
+import type { RemoteTrackContext, TrackModelInputViewRef } from '../../src/shared/remoteTrack'
 
 export interface RemoteContext {
   source: 'feishu' | 'wechat'
@@ -51,6 +52,9 @@ export interface RemoteContext {
   /** Immutable request id for lease ownership. */
   requestId?: string
   currentUserMessageId?: string
+  /** Track association and frozen provider/history allowlist for Track-routed remote turns. */
+  trackContext?: RemoteTrackContext
+  trackModelInputView?: TrackModelInputViewRef
   turnId?: string
   taskBinding?: { workflowId: string; taskId: string; stepId: string; planRevision: number; revision: number }
   providerRouteId?: string

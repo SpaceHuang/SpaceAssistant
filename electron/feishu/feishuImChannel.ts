@@ -2,12 +2,14 @@ import type { FeishuInboundMessage } from '../../src/shared/feishuTypes'
 import { logFeishuCliEvent } from './feishuCliLogger'
 import type { FeishuAuditLogger } from './feishuAuditLogger'
 import type { LarkCliRunner } from './larkCliRunner'
-import { replyFeishuText } from './feishuReply'
-import { sendFeishuRemoteOutbound } from './feishuRemoteOutbound'
+import { replyFeishuText, replyFeishuTextWithId } from './feishuReply'
+import { sendFeishuRemoteOutboundWithId } from './feishuRemoteOutbound'
 import { formatFeishuRemoteProgressPrefix } from './feishuRemoteProgress'
 import type { AppDatabase } from '../database'
 import {
   formatImConfirmPromptFooter,
+  IM_CONFIRM_QUOTE_REQUIRED_HINT,
+  IM_CONFIRM_PROMPT_SENDING_HINT,
   IM_CONFIRM_TRUST_MISCLICK_HINT,
   IM_CONFIRM_USAGE_HINT,
   parseImConfirmReply
@@ -18,6 +20,7 @@ import { getSecurityAuditLog } from '../confirmation/audit'
 import { recordUserAnswerFromMemoryTiers } from '../confirmation/decisionCacheWriter'
 import type { SessionStorage } from '../sessionStorage/contracts'
 import { reserveConfirmationSubmission, commitConfirmationSubmissionWithWork, reconcileConfirmationSubmission, ConfirmationCommitRolledBackError, ConfirmationCommitUnknownError } from '../confirmation/persistentConfirmationCommit'
+import { recordRemoteTrackConfirmationState } from '../database/remoteTrackStore'
 
 export interface FeishuImChannelDeps {
   auditLogger?: FeishuAuditLogger
@@ -61,6 +64,14 @@ export class FeishuImChannel extends ImChannel {
         return inbound.matchKey === entry.matchKey && entry.messageId !== inbound.messageId
       },
       onTrust: (entry) => tryAddFeishuShellTrust(deps.db, entry),
+      onTrackConfirmationChild: (entry, state) => {
+        if (!deps.db || !entry.trackId || !entry.trackAttributionEventId) throw new Error('FEISHU_TRACK_CONFIRMATION_LINK_REQUIRED')
+        recordRemoteTrackConfirmationState(deps.db, {
+          trackId: entry.trackId, confirmationId: entry.id, attributionEventId: entry.trackAttributionEventId, state,
+          occurredAt: Date.now(), ...(entry.requestId ? { requestId: entry.requestId } : {}), ...(entry.toolName ? { toolName: entry.toolName } : {}),
+          ...(entry.turnId ? { turnId: entry.turnId } : {}), ...(entry.toolUseId ? { toolUseId: entry.toolUseId } : {})
+        })
+      },
       ...(deps.db ? { onCommit: (entry: ImPendingConfirm, action: { kind: 'trust' | 'memory' | 'decision'; tier?: import('../../src/shared/confirmation/types').MemoryTier; approved: boolean }) => commitFeishuAction(deps.db, entry, action, deps.getGeneration) } : {}),
       // 记N：写 decision_cache（执行链路侧），落 cache.write 审计；无 db 时跳过
       onMemory: (entry, tier) => {
@@ -80,7 +91,7 @@ export class FeishuImChannel extends ImChannel {
       onHint: (entry, kind) => {
         const runner = deps.runner
         if (!runner) return
-        const hint = kind === 'trust_misclick' ? IM_CONFIRM_TRUST_MISCLICK_HINT : IM_CONFIRM_USAGE_HINT
+        const hint = kind === 'trust_misclick' ? IM_CONFIRM_TRUST_MISCLICK_HINT : kind === 'prompt_sending' ? IM_CONFIRM_PROMPT_SENDING_HINT : kind === 'quote_required' ? IM_CONFIRM_QUOTE_REQUIRED_HINT : IM_CONFIRM_USAGE_HINT
         void replyFeishuText(runner, entry.messageId, hint).catch(() => undefined)
       },
       onCommitFailure: (entry) => {
@@ -101,7 +112,7 @@ export class FeishuImChannel extends ImChannel {
     if (!isFeishuConfirmAuthorizedSender(msg, opts?.ownerOpenId)) return false
     return this.tryResolveFromInbound(
       parsed as { kind: string; confirmId?: string; tier?: number },
-      { matchKey: msg.chatId, messageId: msg.messageId }
+      { matchKey: msg.chatId, messageId: msg.messageId, quotedMessageId: msg.replyToMessageId }
     )
   }
 }
@@ -167,20 +178,20 @@ function tryAddFeishuShellTrust(db: AppDatabase | undefined, pending: ImPendingC
   return true
 }
 
-function notifyFeishuConfirmPrompt(deps: FeishuImChannelDeps, entry: ImPendingConfirm): Promise<void> {
+function notifyFeishuConfirmPrompt(deps: FeishuImChannelDeps, entry: ImPendingConfirm): Promise<{ messageId: string }> {
   const { runner, db, sessionStorage } = deps
   if (!runner) return Promise.reject(new Error('feishu-runner-unavailable'))
   const text = buildFeishuConfirmPromptText(entry)
   const send = db
     ? () =>
-        sendFeishuRemoteOutbound({
+        sendFeishuRemoteOutboundWithId({
           runner,
           messageId: entry.messageId,
           body: text,
           sessionId: entry.sessionId,
           ...(sessionStorage ? { touch: { sessionCommands: sessionStorage.commands, sessionId: entry.sessionId } } : {})
         })
-    : () => replyFeishuText(runner, entry.messageId, text)
+    : () => replyFeishuTextWithId(runner, entry.messageId, text)
   return send().catch((e) => {
     logFeishuCliEvent('error', 'feishu.confirm.prompt_failed', {
       confirmId: entry.id,

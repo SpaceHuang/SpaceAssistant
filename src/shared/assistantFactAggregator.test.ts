@@ -301,6 +301,14 @@ describe('AssistantFactAggregator：agent 裁决路径标记（H1）', () => {
     ])
     expect(result.toolCalls?.[0]?.autoAnswerer).toBeUndefined()
   })
+
+  it.each(['wechat', 'feishu'] as const)('%s 人工确认被投影为远程等待状态', (lane) => {
+    const result = apply([
+      { type: 'tool-use', id: `t-${lane}`, toolName: 'write_file', input: { path: 'notes.txt' } },
+      { type: 'confirm-requested', id: `t-${lane}`, lane, riskLevel: 'medium' }
+    ])
+    expect(result.toolCalls?.[0]).toMatchObject({ status: 'confirming', remoteConfirmation: lane })
+  })
 })
 
 describe('AssistantFactAggregator：回退显式清除 autoAnswerer（§5.8）', () => {

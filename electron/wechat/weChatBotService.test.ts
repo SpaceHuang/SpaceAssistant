@@ -2,8 +2,10 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { createMockWeChatBot } from './__mocks__/wechatBotMock'
 
 const mockBot = createMockWeChatBot()
+const originalGetCredentials = mockBot.getCredentials
 
 vi.mock('@wechatbot/wechatbot', () => ({
+  MessageType: { USER: 1, BOT: 2 },
   WeChatBot: class MockWeChatBot {
     constructor() {
       return mockBot
@@ -20,6 +22,8 @@ describe('WeChatBotService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mockBot.getCredentials = originalGetCredentials
+    delete (mockBot as unknown as { api?: unknown }).api
     mockBot._state = { loggedIn: false, pollState: 'stopped' }
   })
 
@@ -38,6 +42,25 @@ describe('WeChatBotService', () => {
     expect(send).toHaveBeenCalledWith('wechat:login-progress', expect.objectContaining({ stage: 'confirmed' }))
   })
 
+  it('binds confirmation replies from the sendmessage acknowledgement returned by the SDK API', async () => {
+    const svc = new WeChatBotService({ storageDir: '/tmp/wechat', appVersion: '0.1.0', getWebContents, onInbound: vi.fn() })
+    await svc.loginStart()
+    const sendMessage = vi.fn(async () => ({ message_id: '123456', ret: 0 }))
+    Object.assign(mockBot, {
+      getCredentials: () => ({ baseUrl: 'https://ilink.test', token: 'test-token' }),
+      api: { sendMessage }
+    })
+    const bot = svc.getBot()!
+    const result = await bot.sendToUser!('wx-user@test', 'confirm prompt')
+    expect(result).toMatchObject({ kind: 'sent', sendCall: 'fulfilled', delivery: 'bound', binding: { kind: 'message-id', value: '123456' } })
+    expect(sendMessage).toHaveBeenCalledWith('https://ilink.test', 'test-token', expect.objectContaining({
+      to_user_id: 'wx-user@test',
+      client_id: expect.stringMatching(/^spaceassistant-confirm:/),
+      text: 'confirm prompt'
+    }))
+    expect(mockBot.sendRaw).not.toHaveBeenCalled()
+  })
+
   it('startPoll transitions to polling', async () => {
     const svc = new WeChatBotService({
       storageDir: '/tmp/wechat',
@@ -49,6 +72,23 @@ describe('WeChatBotService', () => {
     const status = await svc.startPoll()
     expect(status.pollState).toBe('polling')
     expect(mockBot.start).toHaveBeenCalled()
+  })
+
+  it('startPoll resolves after the SDK emits poll:start while its long-poll promise keeps running', async () => {
+    const svc = new WeChatBotService({
+      storageDir: '/tmp/wechat',
+      appVersion: '0.1.0',
+      getWebContents,
+      onInbound: vi.fn()
+    })
+    await svc.loginStart()
+    mockBot.start.mockImplementationOnce(() => new Promise<void>(() => undefined))
+
+    const starting = svc.startPoll()
+    await vi.waitFor(() => expect(mockBot.start).toHaveBeenCalled())
+    mockBot.emit('poll:start')
+
+    await expect(starting).resolves.toMatchObject({ pollState: 'polling', loggedIn: true })
   })
 
   it('shares an in-flight poll start instead of starting the SDK twice', async () => {
@@ -66,6 +106,7 @@ describe('WeChatBotService', () => {
     mockBot.start.mockImplementationOnce(() => new Promise<void>((resolve) => {
       finishStart = () => {
         mockBot._state.pollState = 'polling'
+        mockBot.emit('poll:start')
         resolve()
       }
     }))
@@ -73,7 +114,7 @@ describe('WeChatBotService', () => {
     const first = svc.startPoll()
     const second = svc.startPoll()
     await vi.waitFor(() => expect(mockBot.start).toHaveBeenCalledTimes(1))
-    finishStart?.()
+      finishStart?.()
     const [firstStatus, secondStatus] = await Promise.all([first, second])
 
     expect(firstStatus.pollState).toBe('polling')
