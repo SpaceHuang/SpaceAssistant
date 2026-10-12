@@ -31,8 +31,8 @@ describe('session projection migration application coordinator', () => {
       await expect(coordinator.start()).rejects.toThrow('execution is disabled')
       expect(getDbConnection(temp.db).prepare('SELECT COUNT(*) AS count FROM session_projection_migration_runs').get())
         .toEqual({ count: 0 })
-      expect(getDbConnection(temp.db).prepare('SELECT 1 FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id))
-        .toBeUndefined()
+      expect(getDbConnection(temp.db).prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_eligibility').get())
+        .toEqual({ count: 1 }) // P1-①：写路径授予的 eligibility 保持存在；migration 默认关闭不得触碰它
     } finally {
       temp.cleanup()
     }
