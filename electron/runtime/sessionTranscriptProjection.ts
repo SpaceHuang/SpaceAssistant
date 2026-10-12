@@ -133,7 +133,10 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
     return { source: 'legacy', messages: legacyMessages, reason: 'canonical-read-failed' }
   }
   if (canonical.kind === 'unavailable') {
-    if (canonical.reason === 'legacy-mismatch' && !hasCanonicalBackedRows) {
+    // 任何 canonical 不可用形态（legacy-mismatch / snapshot-invalid / order-invalid …）都落
+    // 负缓存 verdict：canonical 流当前不可信，读路径按结论路由（legacy 直返），后台重验裁决。
+    // 仅 session-missing（会话不存在）不落。可回退 legacy 的会话（无 canonical-backed 行）才能落。
+    if (canonical.reason !== 'session-missing' && canonical.reason !== 'history-absent' && !hasCanonicalBackedRows) {
       recordProjectionRejection(db, sessionId, canonical.reason, readProjectionO1Metadata(db, sessionId),
         computeLegacyProjectionDigest(legacyMessages))
     }
