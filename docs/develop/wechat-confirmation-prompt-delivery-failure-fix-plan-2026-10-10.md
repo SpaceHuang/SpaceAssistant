@@ -1,8 +1,8 @@
 # 微信 IM 确认提示发送失败修复计划
 
-**状态：已完成（2026-10-10）**
-**日期：2026-10-10**
-**关联会话：** `e2e4143a-86e2-40ab-a7c0-3cf91866ab72`
+**状态：待实施**  
+**日期：2026-10-10**  
+**关联会话：** `e2e4143a-86e2-40ab-a7c0-3cf91866ab72`  
 **范围：** 修复 IM 工具确认从“策略要求确认”到“提示发送状态被准确记录并反馈”之间的可观测性与失败体验。此计划不改变安全判定结果，也不假设发送调用成功就等于用户实际收到提示。
 
 ## 1. 目标
@@ -82,7 +82,6 @@
 - `packages/agent-sdk/src/turn.ts` 及其测试（将结构化未派发事实持久化）
 - `electron/remote/imRemoteAgent.ts`
 - `electron/remote/imRemoteAgent.test.ts`
-- `electron/remote/remoteProgressHooks.ts`
 - 对应的 `*.test.ts`
 
 **改动**
@@ -165,55 +164,3 @@
 - 每项行为改动先补针对性回归测试，再实现；优先使用 fake IM sender / fake bot，不调用真实微信接口。
 - 执行前记录 `git status --short`，只修改本计划列出的实现与测试文件，不覆盖已有工作区改动。
 - 完成阶段后更新本计划状态、具体文件和测试结果；本计划当前只记录待实施工作，不代表修复已完成。
-
-## 8. 实施记录
-
-### 阶段 A：结构化发送诊断 — 已完成
-
-- `electron/confirmation/imChannel.ts` 在确认登记、发送调用开始、fulfilled/rejected 后记录关联事件；诊断只记录 `lane`、`sessionId`、`requestId`、内部 `confirmId`、工具名、状态、稳定错误分类与时间，不序列化异常对象或记录 prompt、工具参数和用户正文。
-- 发送 fulfilled 记录 `sendCall: fulfilled / delivery: unconfirmed`；发送调用 reject 记录 `sendCall: rejected / delivery: unknown`；微信 bot 或入站上下文缺失在调用 reply 前返回 `sendCall: not-attempted / delivery: not-attempted`。失败都会释放短确认码并结算 `unavailable`。
-- 稳定分类覆盖 bot 缺失、上下文缺失、凭据不可用、API reject、常见传输错误和 unknown；不记录原始错误消息、类实例或 payload。
-- 诊断 logger 与 audit sink 抛错不会改变已结算结果，也不会逸出破坏 History 终态。
-- `electron/confirmation/imChannel.test.ts` 覆盖同步抛错、异步 reject、preflight、fulfilled、敏感字段排除、logger 异常、迟到回答和取消语义；`electron/wechat/weChatImChannel.test.ts` 覆盖 bot/context preflight。
-
-### 阶段 B：fail-closed 结算与确定性回执 — 已完成
-
-- `src/shared/confirmation/types.ts`、`electron/confirmation/agentSdkConfirmationPort.ts` 与 `packages/agent-sdk/src/turn.ts` 传递窄范围 `promptSendFailure` 事实，并写入本 Turn 的 `approval-resolved`、`tool-call-not-dispatched` History；工具调用未派发。
-- `electron/remote/imRemoteAgent.ts` 按当前 invocation History 生成确定性回执，替换模型总结；回执仅列出失败调用，明确调用 reject 时投递结果未知。
-- `electron/remote/imRemoteAgent.test.ts` 使用 fake provider 验证模型省略、空内容、矛盾总结及同一 Turn 中另一个工具已成功；executor 对失败调用的执行次数为 0，History 留有 unavailable 与未派发事实，回执仅列出失败调用。
-
-### 阶段 C：提示文案与 parser 合同 — 已完成
-
-- `electron/wechat/weChatImChannel.test.ts` 检查完整生成提示：`Y <确认码>` / `N <确认码>` 能由共享 parser 解析，裸 `Y` 返回用法提示；外层进度 builder 仅添加有效时限，不再追加与 parser 冲突的裸 `Y/N` 操作说明。飞书共用通道测试通过。
-
-### 阶段 D：回归与运行记录 — 已完成
-
-- 未调用真实微信账号、生产数据库或真实发送接口；使用 fake sender、fake bot 行为和 fake model/provider。
-- 验证：
-  - `npx vitest run electron/confirmation/imChannel.test.ts electron/wechat/weChatImChannel.test.ts electron/remote/imConfirmReply.test.ts electron/confirmation/agentSdkConfirmationPort.test.ts electron/confirmation/agentSdkSafetyPolicy.test.ts electron/remote/imRemoteAgent.test.ts electron/wechat/weChatRemoteAgent.test.ts electron/feishu/feishuImChannel.test.ts electron/confirmation/channels.test.ts packages/agent-sdk/test/turn.test.ts` — 10 个测试文件、447 项通过。
-  - `npm run typecheck:agent-sdk`、`npm run typecheck:renderer`、`npm run typecheck:shared`、`npm run check:agent-sdk`、`npx tsc -p tsconfig.electron.json --noEmit` — 均通过。
-  - `git diff --check` — 通过。
-- `npm run build:electron:incremental` 未能完成：先行的 `check:pi-ai-runtime-closure` 报告当前 `node_modules/@earendil-works/pi-ai/dist` 缺少清单要求的 `api/anthropic-messages.js`、`utils/transcript.js`，实际闭包为空；该依赖完整性问题发生在 TypeScript 编译之前。独立 Electron TypeScript 检查已通过。
-
-**变更文件：**
-
-- `src/shared/confirmation/types.ts`
-- `electron/confirmation/imChannel.ts`、`electron/confirmation/imChannel.test.ts`、`electron/confirmation/agentSdkConfirmationPort.ts`
-- `packages/agent-sdk/src/turn.ts`
-- `electron/remote/imRemoteAgent.ts`、`electron/remote/imRemoteAgent.test.ts`
-- `electron/wechat/weChatImChannel.ts`、`electron/wechat/weChatImChannel.test.ts`
-
-### 重审跟进：Hosted 异常包装 — 已完成（2026-10-10）
-
-- 修复确认发送失败回执包装与 `rethrowAsError` 的先后顺序：对于 `HostedTurnFinalizedError`，先保留 Hosted 顶层异常合同，再附加失败回执；`outcome`、`usage`、`historyTerminalCommitted` 与原始 cause 链均保留。普通异常继续遵循 `rethrowAsError` 行为。
-- 在 `electron/remote/imRemoteAgent.test.ts` 以 TDD 增加组合测试，覆盖 `timed-out`、`interrupted`、`commit-uncertain`；新增用例修复前三项均失败，修复后通过。
-- 重审回归验证：相关 10 个测试文件 456 项通过；Agent SDK、renderer、shared、Electron 类型检查及 Agent SDK 边界检查通过；`git diff --check` 通过。
-- 第二轮评审报告：`docs/review/2026-10-10-wechat-confirmation-prompt-delivery-failure-review-v2.md`。完整测试套件、完整构建和真实微信账号联调仍未运行。
-
-### 运行故障跟进：持久化微信消息缺少 SDK 回复上下文 — 已完成（2026-10-10）
-
-- 现场 `WeChatCli` / `SecurityAudit` 记录显示 wake 请求的确认提示均为 `errorCategory: inbound-context-missing`、SDK `NO_CONTEXT`，工具以 `CONFIRMATION_UNAVAILABLE` fail-closed，未派发。
-- 根因：持久化 wake 与 completion wake 恢复分支合成 `IncomingMessage` 时只带应用自有的 `contextToken`，微信 SDK 的 `reply()` 读取 `_contextToken`，因此拒绝发送确认提示。
-- `electron/wechat/weChatCommandRouter.ts` 抽取完整的恢复消息构造器，同时修复两条重放路径；`electron/wechat/weChatCommandRouter.test.ts` 先断言 SDK 私有 context token（修复前失败），再覆盖修复后的 token 传递。
-- 验证：WeChat router、微信确认通道及共享 IM 确认测试共 3 个文件、53 项通过；Electron 类型检查、`git diff --check` 通过。完整打包成功，x64 / arm64 app.asar 均验证包含 `_contextToken` 修复与 `micromark-util-subtokenize`。
-- 未执行真实微信发送联调；重打包 DMG 需要重新安装验证。
