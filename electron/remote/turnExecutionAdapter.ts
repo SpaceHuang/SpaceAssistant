@@ -30,6 +30,7 @@ export async function executeRemoteTurn<T extends RemoteResult>(args: {
   prepared?: TurnStarted
   requestId: string
   run: () => Promise<T>
+  onTerminal?: (outcome: 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'parked' | 'recovered' | 'commit-uncertain') => void | Promise<void>
 }): Promise<T> {
   if (!args.runtime || !args.prepared) throw new Error('REMOTE_TURN_REQUIRES_RUNTIME')
 
@@ -87,6 +88,10 @@ export async function executeRemoteTurn<T extends RemoteResult>(args: {
     })
   } finally {
     args.runtime.unbindRequest(args.requestId, args.prepared.turnId)
+  }
+  if (execution && 'outcome' in execution && args.onTerminal &&
+    ['completed', 'failed', 'cancelled', 'timed-out', 'parked', 'recovered'].includes(execution.outcome)) {
+    await args.onTerminal(execution.outcome as 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'parked' | 'recovered')
   }
   const runtimeResults = resultsForRuntime(args.runtime!)
   if (result?.outcome === 'interrupted' || result?.outcome === 'commit-uncertain') runtimeResults.set(args.prepared.turnId, result)

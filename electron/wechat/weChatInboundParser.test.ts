@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_WECHAT_CONFIG } from '../../src/shared/wechatTypes'
 import { parseSdkInboundMessage, shouldAcceptWeChatInbound } from './weChatInboundParser'
+import { wrapFetchForLosslessWeChatMessageId } from './weChatConfirmationPromptAdapter'
 import type { IncomingMessage } from '@wechatbot/wechatbot'
 
 function makeMsg(partial: Partial<IncomingMessage>): IncomingMessage {
@@ -58,6 +59,18 @@ describe('weChatInboundParser', () => {
       } } }]
     } as IncomingMessage['raw'] })
     expect(parseSdkInboundMessage(raw).quotedMessageId).toBe('platform-message-123')
+  })
+
+  it('keeps an int64 quote ID exact through wire protection and SDK inbound parsing', async () => {
+    const exactId = '9007199254740993'
+    const fetch = wrapFetchForLosslessWeChatMessageId((async () => new Response(
+      `{"msgs":[{"item_list":[{"ref_msg":{"message_item":{"msg_id":${exactId}}}}]}]}`
+    )) as typeof globalThis.fetch)
+    const response = await fetch('https://ilink.test/ilink/bot/getupdates')
+    const body = await response.json() as { msgs: Array<{ item_list: unknown[] }> }
+    const raw = makeMsg({ raw: { ...makeMsg().raw, item_list: body.msgs[0].item_list } as IncomingMessage['raw'] })
+
+    expect(parseSdkInboundMessage(raw).quotedMessageId).toBe(exactId)
   })
 
   it('retains quoted text because the pinned iLink RefMessage has no message ID field', () => {

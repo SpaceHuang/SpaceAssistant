@@ -811,6 +811,30 @@ describe('createHostedTurnHandoff', () => {
     db.close()
   })
 
+  it('keeps an explicitly scoped Track request out of a shared session checkpoint', async () => {
+    const db = createMemoryAppDb()
+    const history = { read: vi.fn(async () => ({ events: [{ kind: 'invocation-completed', payload: { status: 'completed' } }] })) }
+    const agentSdk = { createHostedTurnRuntime: vi.fn(() => ({ host: {}, dispose: async () => undefined })) }
+    mockRunHostedAgentTurn
+      .mockResolvedValueOnce({ text: 'private answer', modelTurns: 1, finishReason: 'stop', usage: {}, messages: [
+        { role: 'user', content: 'Track B private instruction' }, { role: 'assistant', content: 'Track B answer' }
+      ] })
+      .mockResolvedValueOnce({ text: 'scoped answer', modelTurns: 1, finishReason: 'stop', usage: {}, messages: [
+        { role: 'user', content: 'Track A current input' }, { role: 'assistant', content: 'scoped answer' }
+      ] })
+    const first = createHostedTurnHandoff({ agentSdk, history: history as never, invocationId: 'track-b-turn', turnId: 'track-b-turn', routeId: 'route', sessionId: 'track-shared-session', sessionDb: db })
+    await first({ request: { messages: [{ role: 'user', content: 'Track B private instruction' }] }, requiredUserMessage: {
+      id: 'track-b-user', message: { role: 'user', content: 'Track B private instruction' }
+    } })
+    const second = createHostedTurnHandoff({ agentSdk, history: history as never, invocationId: 'track-a-turn', turnId: 'track-a-turn', routeId: 'route', sessionId: 'track-shared-session', sessionDb: db, trackScopedModelInput: true })
+    const trackAInput = { role: 'user' as const, content: 'Track A current input' }
+    await second({ request: { messages: [trackAInput] }, requiredUserMessage: { id: 'track-a-user', message: trackAInput } })
+
+    expect(mockRunHostedAgentTurn.mock.calls.at(-1)?.[0].request.messages).toEqual([trackAInput])
+    expect(readSessionTranscript(db, 'track-shared-session')).toMatchObject({ version: 2, status: 'ready' })
+    db.close()
+  })
+
   it('does not persist prior system instructions across three successful turns', async () => {
     const db = createMemoryAppDb()
     const history = { read: vi.fn(async () => ({ events: [{ kind: 'invocation-completed', payload: { status: 'completed' } }] })) }

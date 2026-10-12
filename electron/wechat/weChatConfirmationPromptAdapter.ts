@@ -48,7 +48,7 @@ const losslessFetchWrappers = new WeakSet<typeof fetch>()
 /**
  * The pinned SDK parses JSON with JSON.parse, which rounds iLink's int64
  * message_id before the confirmation adapter can bind a quote. Preserve the
- * decimal token as a string only for the sendmessage response.
+ * decimal tokens as strings for send acknowledgements and getupdates echoes / quotes.
  */
 export function wrapFetchForLosslessWeChatMessageId(fetchImplementation: typeof fetch): typeof fetch {
   const wrapped: typeof fetch = async (input, init) => {
@@ -60,10 +60,11 @@ export function wrapFetchForLosslessWeChatMessageId(fetchImplementation: typeof 
     } catch {
       return response
     }
-    if (url.pathname.replace(/\/+$/, '') !== '/ilink/bot/sendmessage') return response
+    const endpoint = url.pathname.replace(/\/+$/, '')
+    if (endpoint !== '/ilink/bot/sendmessage' && endpoint !== '/ilink/bot/getupdates') return response
 
     const rawBody = await response.clone().text()
-    const losslessBody = rawBody.replace(/(^|[,{]\s*"message_id"\s*:\s*)(-?\d+)(?=\s*[,}])/g, '$1"$2"')
+    const losslessBody = rawBody.replace(/(^|[,{]\s*"(?:message_id|msg_id)"\s*:\s*)(-?\d+)(?=\s*[,}\]])/g, '$1"$2"')
     if (losslessBody === rawBody) return response
     const headers = new Headers(response.headers)
     headers.delete('content-length')
@@ -154,7 +155,7 @@ export class WeChatConfirmationPromptAdapter {
       if (!value || typeof value !== 'object') continue
       const wire = value as RawWireMessage
       if (typeof wire.client_id !== 'string' || typeof wire.to_user_id !== 'string' || wire.message_type !== 2) continue
-      if (typeof wire.message_id !== 'string' && typeof wire.message_id !== 'number') continue
+      if (typeof wire.message_id !== 'string' && !(typeof wire.message_id === 'number' && Number.isSafeInteger(wire.message_id))) continue
       const operation = this.pending.get(wire.client_id)
       if (!operation || operation.userId !== wire.to_user_id) continue
       operation.echoedMessageId = String(wire.message_id)

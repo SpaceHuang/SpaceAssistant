@@ -428,6 +428,11 @@ export class WeChatCommandRouter {
     let result: { ok: boolean; summary: string; pendingConfirm: boolean; parked?: true; outcome?: 'cancelled' | 'timed-out' }
     try {
       result = await executeRemoteTurn({ runtime: this.deps.turnRuntime, prepared, requestId: input.requestId,
+      ...(input.trackContext ? { onTerminal: (outcome) => {
+        const target = outcome === 'completed' || outcome === 'parked' ? 'completed' : outcome === 'cancelled' ? 'cancelled' : 'failed'
+        convergeRemoteTrackTerminal(this.deps.db, { trackId: input.trackContext!.trackId, target, occurredAt: Date.now(),
+          readActiveConfirmations: (trackId) => this.deps.imChannel.listPendingTrackConfirmations(trackId) })
+      } } : {}),
       run: () => {
         input.assertAuthorized()
         const acceptedTurn = createAcceptedTurnFromPrepared(prepared, 'wechat', executionConfig ?? { lane: 'wechat' }, this.deps.sessionStorage!.execution)
@@ -1107,6 +1112,11 @@ export class WeChatCommandRouter {
             runtime: this.deps.turnRuntime,
             prepared,
             requestId,
+            ...(trackContext ? { onTerminal: (outcome) => {
+              const target = outcome === 'completed' || outcome === 'parked' ? 'completed' : outcome === 'cancelled' ? 'cancelled' : 'failed'
+              convergeRemoteTrackTerminal(this.deps.db, { trackId: trackContext.trackId, target, occurredAt: Date.now(),
+                readActiveConfirmations: (trackId) => this.deps.imChannel.listPendingTrackConfirmations(trackId) })
+            } } : {}),
             run: () => {
             const acceptedTurn = prepared
               ? createAcceptedTurnFromPrepared(prepared, 'wechat', executionConfig ?? { lane: 'wechat' }, this.deps.sessionStorage!.execution)

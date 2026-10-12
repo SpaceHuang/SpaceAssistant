@@ -26,7 +26,21 @@ describe('WeChatConfirmationPromptAdapter protocol', () => {
     expect(fetchImpl).toHaveBeenCalledOnce()
   })
 
-  it('does not rewrite message_id-looking text or responses from other endpoints', async () => {
+  it('preserves int64 quote and BOT echo IDs in getupdates before SDK parsing', async () => {
+    const exactId = '9007199254740993'
+    const fetchWithLosslessIds = wrapFetchForLosslessWeChatMessageId(vi.fn(async () => new Response(
+      `{"msgs":[{"message_type":1,"item_list":[{"ref_msg":{"message_item":{"msg_id":${exactId}}}}]},{"message_type":2,"message_id":${exactId}}]}`
+    )) as typeof fetch)
+
+    const response = await fetchWithLosslessIds('https://ilink.test/ilink/bot/getupdates', { method: 'POST' })
+
+    await expect(response.json()).resolves.toEqual({ msgs: [
+      { message_type: 1, item_list: [{ ref_msg: { message_item: { msg_id: exactId } } }] },
+      { message_type: 2, message_id: exactId }
+    ] })
+  })
+
+  it('does not rewrite message_id-looking text but preserves getupdates message IDs', async () => {
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => new Response(
       typeof input === 'string' && input.includes('/sendmessage')
         ? '{"ret":0,"errmsg":"literal \\"message_id\\":17917655126112345"}'
@@ -38,7 +52,7 @@ describe('WeChatConfirmationPromptAdapter protocol', () => {
     const otherResponse = await fetchWithLosslessIds('https://ilink.test/ilink/bot/getupdates', { method: 'POST' })
 
     await expect(sendResponse.json()).resolves.toEqual({ ret: 0, errmsg: 'literal "message_id":17917655126112345' })
-    await expect(otherResponse.json()).resolves.toEqual({ message_id: 17917655126112345 })
+    await expect(otherResponse.json()).resolves.toEqual({ message_id: '17917655126112345' })
   })
 
   it('checks the pinned SDK protocol: sendRaw discards the send response and parser drops ref msg_id', () => {

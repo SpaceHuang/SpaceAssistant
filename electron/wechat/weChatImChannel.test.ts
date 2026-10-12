@@ -6,7 +6,7 @@ import { openSqliteDatabase, type AppDatabase } from '../database'
 import * as decisionCacheWriter from '../confirmation/decisionCacheWriter'
 import type { ImPendingConfirm } from '../confirmation/imChannel'
 import { parseImConfirmReply } from '../remote/imConfirmReply'
-import { WeChatConfirmationPromptAdapter } from './weChatConfirmationPromptAdapter'
+import { WeChatConfirmationPromptAdapter, wrapFetchForLosslessWeChatMessageId } from './weChatConfirmationPromptAdapter'
 import { createMockWeChatBot } from './__mocks__/wechatBotMock'
 import { parseSdkInboundMessage } from './weChatInboundParser'
 
@@ -68,7 +68,8 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
 
   it('用 sendmessage 响应中的服务端 message_id 匹配引用 msg_id 完成确认往返', async () => {
     const bot = createMockWeChatBot()
-    const sendMessage = vi.fn(async () => ({ message_id: '12345', ret: 0 }))
+    const exactId = '9007199254740993'
+    const sendMessage = vi.fn(async () => ({ message_id: exactId, ret: 0 }))
     Object.assign(bot, {
       getCredentials: () => ({ baseUrl: 'https://ilink.test', token: 'test-token' }),
       api: { sendMessage }
@@ -81,18 +82,23 @@ describe('WeChatImChannel（原 WeChatConfirmManager 回归）', () => {
     }) })
     const pending = im.request(req(), { sessionId: 'quoted-roundtrip', toolName: 'write_file', messageId: 'origin', matchKey: 'wx-user@test' })
     await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
-    await vi.waitFor(() => expect(im.listPending()[0]?.promptMessageId).toBe('12345'))
+    await vi.waitFor(() => expect(im.listPending()[0]?.promptMessageId).toBe(exactId))
     const confirmId = im.listPending()[0]!.confirmId!
+    const fetchWithLosslessIds = wrapFetchForLosslessWeChatMessageId((async () => new Response(
+      `{"msgs":[{"item_list":[{"ref_msg":{"message_item":{"type":0,"msg_id":${exactId},"create_time_ms":${Date.now()},"is_completed":true}}}] }]}`
+    )) as typeof fetch)
+    const response = await fetchWithLosslessIds('https://ilink.test/ilink/bot/getupdates')
+    const update = await response.json() as { msgs: Array<{ item_list: unknown[] }> }
     const quotedReply = makeIncomingMessage({
       text: `N ${confirmId}`,
       raw: {
         ...makeIncomingMessage().raw,
         client_id: 'quoted-answer',
-        item_list: [{ type: 1, ref_msg: { message_item: { type: 0, msg_id: 12345, create_time_ms: Date.now(), is_completed: true } } }]
+        item_list: update.msgs[0].item_list
       } as never
     })
     const parsedReply = parseSdkInboundMessage(quotedReply)
-    expect(parsedReply.quotedMessageId).toBe('12345')
+    expect(parsedReply.quotedMessageId).toBe(exactId)
     expect(parsedReply.quotedMessageText).toBeUndefined()
     expect(im.tryResolveFromInboundMessage(parsedReply, { allowedUserIds: ['wx-user@test'] })).toBe(true)
     await expect(pending).resolves.toMatchObject({ kind: 'rejected', cause: 'user-denied' })

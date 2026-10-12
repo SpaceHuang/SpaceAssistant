@@ -155,6 +155,8 @@ export function createHostedTurnHandoff(input: {
   recoverProviderAttempt?: import('../../packages/agent-sdk/src/turn').AgentTurnPorts['recoverProviderAttempt']
   refreshExecutionContext?: NonNullable<Parameters<HostedRuntimeFactory['createHostedTurnRuntime']>[0]['refreshExecutionContext']>
   confirmationAdapter?: Partial<Parameters<typeof createAgentSdkConfirmationPort>[0]>
+  /** When true, request.messages is already built from a verified Track view. */
+  trackScopedModelInput?: boolean
 }): NonNullable<RunToolChatSessionArgs['onHostedTurnHandoff']> {
   if (input.sessionExecution && !input.sessionQueries) throw new Error('SESSION_QUERIES_REQUIRED')
   if (input.acceptedTurn && (input.acceptedTurn.turnId !== input.turnId || input.acceptedTurn.sessionId !== input.sessionId ||
@@ -194,10 +196,10 @@ export function createHostedTurnHandoff(input: {
       }
     }
     let request = handoff.request
-    if (checkpoint && checkpoint.version > 0 && handoff.requiredUserMessage) {
+    if (!input.trackScopedModelInput && checkpoint && checkpoint.version > 0 && handoff.requiredUserMessage) {
       const systemMessages = handoff.request.messages.filter((message) => message.role === 'system')
       request = { ...handoff.request, messages: [...systemMessages, ...committedTranscriptMessages(checkpoint.messages as CanonicalModelMessage[]), handoff.requiredUserMessage.message] }
-    } else if (input.sessionId && handoff.requiredUserMessage && hasSessionHistoryQueries(input.history)) {
+    } else if (!input.trackScopedModelInput && input.sessionId && handoff.requiredUserMessage && hasSessionHistoryQueries(input.history)) {
       // Existing streams must never silently fall back to legacy session messages.
       const sessionHistory = input.history
       let latest: Awaited<ReturnType<SessionHistoryPort['readLatestInvocationForSession']>>
