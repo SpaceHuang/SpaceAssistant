@@ -52,10 +52,12 @@ describe('session projection migration inventory', () => {
     expect(inventory.databaseSessionCount).toBe(3)
     expect(inventory.dataVersion).toEqual(expect.any(Number))
     expect(inventory.classifiedSessionCount).toBe(4)
-    expect(inventory.counts).toEqual({ projection_migrated: 1, projection_eligible: 1, legacy_required: 1, deleted: 1 })
+    // P1-①：写路径覆盖的会话（eligibility + 缓存由 append 事务授予）满足 hasCurrentProjectionCache，
+    // inventory 如实归类为 projection_migrated（等效已迁移，migration 无需再处理）。
+    expect(inventory.counts).toEqual({ projection_migrated: 2, projection_eligible: 0, legacy_required: 1, deleted: 1 })
     expect(inventory.sessions).toEqual(expect.arrayContaining([
       expect.objectContaining({ sessionId: migrated.id, disposition: 'projection_migrated' }),
-      expect.objectContaining({ sessionId: eligible.id, sessionGeneration: expect.any(String), disposition: 'projection_eligible' }),
+      expect.objectContaining({ sessionId: eligible.id, sessionGeneration: expect.any(String), disposition: 'projection_migrated' }),
       expect.objectContaining({ sessionId: legacy.id, sessionGeneration: expect.any(String), disposition: 'legacy_required', reason: 'history-absent' }),
       expect.objectContaining({ sessionId: 'deleted-before-scan', disposition: 'deleted' })
     ]))
@@ -187,13 +189,13 @@ describe('session projection migration inventory', () => {
     expect(inventory.excludedInternalHiddenSessionCount).toBe(2)
     expect(inventory.internalHistory).toMatchObject({ sessionCount: 2, withHistoryCount: 1, healthyCount: 1, unhealthyCount: 0 })
     expect(inventory.classifiedSessionCount).toBe(4)
-    expect(inventory.counts).toEqual({ projection_migrated: 0, projection_eligible: 3, legacy_required: 0, deleted: 1 })
+    expect(inventory.counts).toEqual({ projection_migrated: 3, projection_eligible: 0, legacy_required: 0, deleted: 1 })
     expect(inventory.sessions.map(({ sessionId }) => sessionId)).not.toContain(internalWithHistory.id)
     expect(inventory.sessions.map(({ sessionId }) => sessionId)).not.toContain(internalEmpty.id)
     expect(inventory.sessions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ sessionId: user.id, disposition: 'projection_eligible' }),
-      expect.objectContaining({ sessionId: remote.id, disposition: 'projection_eligible' }),
-      expect.objectContaining({ sessionId: automation.id, disposition: 'projection_eligible' }),
+      expect.objectContaining({ sessionId: user.id, disposition: 'projection_migrated' }),
+      expect.objectContaining({ sessionId: remote.id, disposition: 'projection_migrated' }),
+      expect.objectContaining({ sessionId: automation.id, disposition: 'projection_migrated' }),
       expect.objectContaining({ sessionId: 'deleted-product-session', disposition: 'deleted' })
     ]))
     expect(conn.prepare('SELECT ownership,visibility,metadata FROM sessions WHERE id=?').get(remote.id)).toMatchObject({
