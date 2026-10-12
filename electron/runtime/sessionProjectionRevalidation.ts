@@ -31,7 +31,7 @@ export function computeCanonicalProjectionFingerprint(db: AppDatabase, sessionId
   return hash.digest('hex')
 }
 
-function recordRevalidationFailure(db: AppDatabase, sessionId: string): void {
+function recordRevalidationFailure(db: AppDatabase, sessionId: string, reason: string): void {
   const existing = getProjectionRejection(db, sessionId)
   const o1 = readProjectionO1Metadata(db, sessionId)
   const legacyDigest = computeLegacyProjectionDigest(getMessages(db, sessionId, Number.MAX_SAFE_INTEGER))
@@ -45,7 +45,7 @@ function recordRevalidationFailure(db: AppDatabase, sessionId: string): void {
     session_id, session_generation, fingerprint, watermark_event_id, watermark_invocation_id,
     event_count, legacy_message_count, legacy_max_rowid, legacy_digest, attempts, retry_after, last_reason,
     permanent, stale_metadata, updated_at
-  ) VALUES(?, (SELECT generation FROM sessions WHERE id=?), ?, ?, ?, ?, ?, ?, ?, ?, ?, 'legacy-mismatch', ?, 0, ?)
+  ) VALUES(?, (SELECT generation FROM sessions WHERE id=?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
   ON CONFLICT(session_id) DO UPDATE SET
     fingerprint=excluded.fingerprint, watermark_event_id=excluded.watermark_event_id, watermark_invocation_id=excluded.watermark_invocation_id,
     event_count=excluded.event_count, legacy_message_count=excluded.legacy_message_count, legacy_max_rowid=excluded.legacy_max_rowid,
@@ -53,12 +53,12 @@ function recordRevalidationFailure(db: AppDatabase, sessionId: string): void {
     last_reason=excluded.last_reason, permanent=excluded.permanent, stale_metadata=0, updated_at=excluded.updated_at
   `).run(
     sessionId, sessionId, fingerprint, o1.watermarkEventId, o1.watermarkInvocationId, o1.eventCount,
-    o1.legacyMessageCount, o1.legacyMaxRowid, legacyDigest, attempts, retryAfter, permanent ? 1 : 0, now
+    o1.legacyMessageCount, o1.legacyMaxRowid, legacyDigest, attempts, retryAfter, reason, permanent ? 1 : 0, now
   )
 }
 
 /** One full revalidate cycle for a session; a mismatch updates the verdict, a match clears it. */
-function revalidateSession(db: AppDatabase, sessionId: string): 'matched' | 'mismatch' | 'other' {
+function revalidateSession(db: AppDatabase, sessionId: string): string {
   const legacyMessages = getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
   if (legacyMessages.some(({ role }) => role !== 'user' && role !== 'assistant')) {
     // Sessions outside the projection's field contract never re-enter canonical reads; a stale
@@ -76,8 +76,10 @@ function revalidateSession(db: AppDatabase, sessionId: string): 'matched' | 'mis
     clearProjectionRejection(db, sessionId)
     return 'matched'
   }
-  if (verified.reason === 'legacy-mismatch') { recordRevalidationFailure(db, sessionId); return 'mismatch' }
-  return 'other'
+  // legacy-mismatch 与其他 unavailable（order/snapshot-invalid 等）都纳入退避治理：canonical
+  // 流当前不可信，verdict 保持 + 指数退避重验，避免每个操作都触发全量 fold（review R1 延伸）。
+  recordRevalidationFailure(db, sessionId, verified.reason)
+  return verified.reason === 'legacy-mismatch' ? 'mismatch' : 'other:' + verified.reason
 }
 
 export type RevalidationRunResult = Readonly<{ revalidated: number; deferred: number; skipped: number }>
@@ -113,7 +115,8 @@ export async function runDueSessionProjectionRevalidations(db: AppDatabase,
       continue
     }
     revalidated += 1
-    const outcome = revalidateSession(db, entry.sessionId)
+    let outcome = 'threw'
+    try { outcome = revalidateSession(db, entry.sessionId) } catch (error) { try { logAgentEvent('warn', 'session.transcript.revalidation', { sessionId: entry.sessionId.slice(0, 8), threw: error instanceof Error ? error.message : String(error) }) } catch { /* observability */ } }
     sessionOutcomes.push({ sessionId: entry.sessionId.slice(0, 8), stale: entry.stale, outcome })
     // 单片让步：分片之间把事件循环还给排队的 IPC / 定时器。
     await new Promise((resolve) => setImmediate(resolve))

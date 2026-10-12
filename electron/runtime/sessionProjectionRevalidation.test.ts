@@ -91,11 +91,17 @@ describe('background projection revalidation queue (P0-③/④)', () => {
 
   it('respects the per-run session budget and defers the rest', async () => {
     const { db, session: sessionA } = await createMismatchedSession('budget-a')
-    const second = await createMismatchedSession('budget-b')
-    readSessionTranscriptProjection(db, sessionA.id)
-    readSessionTranscriptProjection(second.db, second.session.id)
+    const conn = getDbConnection(db)
+    // 同库第二个 mismatch 会话（enqueue 与重验都必须落在同一数据库上下文内）。
+    const sessionB = createSession(db, { name: 'budget-b', model: 'test' })
+    conn.prepare(`INSERT INTO messages(id, session_id, role, content, status, schema_version, timestamp, sequence) VALUES('budget-b-user', ?, 'user', 'legacy-a', 'sent', 1, 1, 1)`).run(sessionB.id)
+    conn.prepare(`INSERT INTO messages(id, session_id, role, content, status, schema_version, timestamp, sequence) VALUES('budget-b-user-2', ?, 'user', 'legacy-b', 'sent', 1, 2, 2)`).run(sessionB.id)
+    conn.prepare(`INSERT INTO agent_history_streams(invocation_id, version, schema_version, session_id) VALUES('budget-b-invocation', 1, 1, ?)`).run(sessionB.id)
+    conn.prepare(`INSERT INTO agent_history_events(invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json, created_at, session_id, commit_order, session_seq)
+      VALUES('budget-b-invocation', 1, 'budget-b-ctx', 'budget-b-ctx', 'budget-b-turn', 1, 'invocation-context-committed', ?, 1, ?, 500, 1)`)
+      .run(JSON.stringify({ messages: [{ id: 'budget-b-user', role: 'user', content: 'legacy-a', timestamp: 1 }] }), sessionB.id)
     enqueueSessionProjectionRevalidation(db, sessionA.id)
-    enqueueSessionProjectionRevalidation(db, second.session.id)
+    enqueueSessionProjectionRevalidation(db, sessionB.id)
 
     const later = Date.now() + 60_000
     const result = await runDueSessionProjectionRevalidations(db, { maxSessions: 1, now: later })
@@ -104,7 +110,6 @@ describe('background projection revalidation queue (P0-③/④)', () => {
     expect(result.deferred).toBe(1)
     expect(await runDueSessionProjectionRevalidations(db, { now: later })).toMatchObject({ revalidated: 1 })
     db.close()
-    second.db.close()
   })
 
   it('enqueues a stale verdict from the read path instead of revalidating synchronously', async () => {
