@@ -23,7 +23,9 @@ function verifyMicromarkRuntimeDependency(context) {
   const asarPath = context.electronPlatformName === 'darwin'
     ? path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources', 'app.asar')
     : path.join(context.appOutDir, 'resources', 'app.asar')
-  const entry = 'node_modules/micromark-util-subtokenize/index.js'
+  // @electron/asar 的 statFile 按平台分隔符切分查找路径，Windows 上不接受 '/'
+  // （正斜杠形式必报 not found，本机打包实证）；用 path.join 产出平台正确形式。
+  const entry = path.join('node_modules', 'micromark-util-subtokenize', 'index.js')
   try {
     const asar = require('@electron/asar')
     asar.uncache(asarPath)
