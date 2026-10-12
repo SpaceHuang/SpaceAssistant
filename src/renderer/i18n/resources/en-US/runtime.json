@@ -114,8 +114,7 @@
     "importedRaw": "Imported raw: {{name}}. Ingest started.",
     "ingestStarted": "Ingest started: {{name}}",
     "enableFirst": "Enable Wiki in Settings first",
-    "initializeFirst": "Wiki is not initialized. Initialize it in Settings or from a Wiki segment first.",
-    "schemaSection": "## Wiki Schema (Project Conventions)"
+    "initializeFirst": "Wiki is not initialized. Initialize it in Settings or from a Wiki segment first."
   },
   "workDir": {
     "switchFailed": "Failed to switch working directory"
