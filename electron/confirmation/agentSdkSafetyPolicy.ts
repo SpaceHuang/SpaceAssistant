@@ -71,7 +71,7 @@ export function createAgentSdkSafetyPolicy(input: {
           if (!previous) return deny(binding, 'MISSING_MATERIAL')
           const sameFacts = createHash('sha256').update(JSON.stringify(previous.result.facts)).digest('hex') === createHash('sha256').update(JSON.stringify(result.facts)).digest('hex')
           const sameAuthorizationVersion = previous.binding.authorizationVersion === binding.authorizationVersion
-          const sameWriteTarget = stableSerialize(previous.result.writePathFact) === stableSerialize(result.writePathFact)
+          const sameWriteTarget = writeTargetScopeKey(previous.result.writePathFact) === writeTargetScopeKey(result.writePathFact)
           const sameReadTarget = stableSerialize(previous.result.readPathFact) === stableSerialize(result.readPathFact)
           const sameFeishuMediaTarget = stableSerialize(previous.result.feishuMediaFact) === stableSerialize(result.feishuMediaFact)
           const sameWriteApprovalConfiguration = !previous.result.writePathFact ||
@@ -191,6 +191,17 @@ function stableSerialize(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'undefined'
   if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`
   return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => `${JSON.stringify(key)}:${stableSerialize((value as Record<string, unknown>)[key])}`).join(',')}}`
+}
+
+/**
+ * 写目标范围比对不得比 writePermitExecutor 的父目录身份语义更严：父目录的 size/mtimeMs/nlink
+ * 会随良性宿主活动漂移（防抖会话备份在审批窗口内创建 sessions/ 子树是常态），执行器只钉住
+ * dev/ino/mode；范围比对沿用同一口径，否则已批准写入被 FACTS_CHANGED 误拒。目标文件自身的
+ * identity（存在时）仍整体参与比对——目标在审批后被改动必须拒绝。
+ */
+function writeTargetScopeKey(fact: ToolCallGateResult['writePathFact']): string {
+  if (!fact) return 'absent'
+  return stableSerialize({ ...fact, parentIdentity: { dev: fact.parentIdentity.dev, ino: fact.parentIdentity.ino, mode: fact.parentIdentity.mode } })
 }
 
 /** File-write approval is tied to the threshold and sensitive-path configuration shown at approval time. */

@@ -65,6 +65,42 @@ describe('createAgentSdkSafetyPolicy', () => {
     expect(evaluateGate).toHaveBeenCalledTimes(2)
   })
 
+  it('allows a confirmed write when only the parent directory volatile fields drift before recheck', async () => {
+    const approvedTarget = { rawPath: 'new.txt', normalizedPath: '/workspace/new.txt', zone: 'workdir-normal' as const, targetKind: 'missing' as const, parentReal: '/workspace', parentIdentity: { dev: 1, ino: 2, mode: 0o40755, size: 4096, mtimeMs: 1000, nlink: 3 } }
+    // 审批窗口内的良性宿主活动（如防抖会话备份在 workDir 创建 sessions/ 子树）会漂移父目录的
+    // size/mtimeMs/nlink；目录身份 dev/ino/mode 未变。执行器 writePermitExecutor 只钉住这三个
+    // 字段，范围比对沿用同一口径，不得更严。
+    const driftedParent = { ...approvedTarget, parentIdentity: { ...approvedTarget.parentIdentity, size: 4096, mtimeMs: 1320.5, nlink: 4 } }
+    const writeFacts: ContentFacts = { toolName: 'write_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'write new file' } }
+    const initial: ToolCallGateResult = { decision: { type: 'require-confirm', ruleId: 'write-confirm', answerer: 'user', riskLevel: 'medium', facts: writeFacts, memoryTiers: [], timeoutMs: 1000 }, facts: writeFacts, approvedFactIds: [], writePathFact: approvedTarget }
+    const drifted: ToolCallGateResult = { ...initial, writePathFact: driftedParent }
+    const args = { ...baseArgs, toolName: 'write_file', toolInput: { path: 'new.txt', content: 'x' }, workDir: '/workspace' } as ToolCallGateArgs
+    const testBinding = { ...binding, capabilityId: 'write_file', inputSnapshotHash: createHash('sha256').update('{"content":"x","path":"new.txt"}').digest('hex'), capability: { state: 'known-authorized' as const, id: 'write_file' } }
+    const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(drifted)
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => args, evaluateGate })
+
+    await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'write-v1' })).resolves.toMatchObject({ kind: 'ask', reasonCode: 'write-confirm' })
+    markAgentSdkSafetyDecisionConfirmed(policy, testBinding)
+    await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'write-v1', phase: 'recheck' })).resolves.toEqual({ kind: 'allow', authorizationVersion: 'write-v1' })
+  })
+
+  it('still denies a confirmed write when the parent directory itself was replaced before recheck', async () => {
+    const approvedTarget = { rawPath: 'new.txt', normalizedPath: '/workspace/new.txt', zone: 'workdir-normal' as const, targetKind: 'missing' as const, parentReal: '/workspace', parentIdentity: { dev: 1, ino: 2, mode: 0o40755, size: 4096, mtimeMs: 1000, nlink: 3 } }
+    // ino 变化意味着父目录本体被替换（symlink 攻击面），必须继续 FACTS_CHANGED。
+    const swappedParent = { ...approvedTarget, parentIdentity: { ...approvedTarget.parentIdentity, ino: 9 } }
+    const writeFacts: ContentFacts = { toolName: 'write_file', actionClass: 'write', baseRiskLevel: 'medium', signals: [], summary: { text: 'write new file' } }
+    const initial: ToolCallGateResult = { decision: { type: 'require-confirm', ruleId: 'write-confirm', answerer: 'user', riskLevel: 'medium', facts: writeFacts, memoryTiers: [], timeoutMs: 1000 }, facts: writeFacts, approvedFactIds: [], writePathFact: approvedTarget }
+    const swapped: ToolCallGateResult = { ...initial, writePathFact: swappedParent }
+    const args = { ...baseArgs, toolName: 'write_file', toolInput: { path: 'new.txt', content: 'x' }, workDir: '/workspace' } as ToolCallGateArgs
+    const testBinding = { ...binding, capabilityId: 'write_file', inputSnapshotHash: createHash('sha256').update('{"content":"x","path":"new.txt"}').digest('hex'), capability: { state: 'known-authorized' as const, id: 'write_file' } }
+    const evaluateGate = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(swapped)
+    const policy = createAgentSdkSafetyPolicy({ resolveGateArgs: async () => args, evaluateGate })
+
+    await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'write-v1' })).resolves.toMatchObject({ kind: 'ask', reasonCode: 'write-confirm' })
+    markAgentSdkSafetyDecisionConfirmed(policy, testBinding)
+    await expect(policy.evaluate({ ...testBinding, authorizationVersion: 'write-v1', phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'FACTS_CHANGED' })
+  })
+
   it('rejects an approved ask when recheck becomes auto-allow under changed facts', async () => {
     const changedFacts: ContentFacts = { ...facts, signals: [{ kind: 'path-target', path: '/tmp/changed.txt', zone: 'workdir-normal' }] }
     const initial = result({ type: 'require-confirm', ruleId: 'confirmed-read-rule', answerer: 'user', riskLevel: 'medium', facts, memoryTiers: [], timeoutMs: 1000 })
