@@ -37,6 +37,7 @@ interface World {
   userDataDir: string
   realBase: string
   ctx: ToolExecutionContext
+  root: string
 }
 
 async function setupWorld(opts: { wikiEnabled?: boolean; withResidue?: boolean } = {}): Promise<World> {
@@ -66,7 +67,7 @@ async function setupWorld(opts: { wikiEnabled?: boolean; withResidue?: boolean }
     toolsConfig: { ...DEFAULT_TOOLS_CONFIG },
     wikiConfig: wikiConfig(opts.wikiEnabled ?? true)
   }
-  return { workDir, userDataDir, realBase, ctx }
+  return { workDir, userDataDir, realBase, ctx, root }
 }
 
 /** 模拟 gate：无 path 的 grep 以 workDir 根目录 subtree permit 签发（'.' 探测） */
@@ -138,6 +139,33 @@ async function runGrep(ctx: ToolExecutionContext, input: Record<string, unknown>
 }
 
 describe('grep 双根编排（T1.11a）', () => {
+  it('无 path 双根搜索拒绝指向自定义敏感目录的共享根符号链接', async () => {
+    const world = await setupWorld()
+    const sensitiveDir = path.join(world.root, 'custom-sensitive')
+    await fs.mkdir(sensitiveDir, { recursive: true })
+    await fs.writeFile(path.join(sensitiveDir, 'secret.md'), 'PRIVATE_CUSTOM_SENSITIVE_CONTENT needle\n')
+    await fs.rm(world.realBase, { recursive: true })
+    await fs.symlink(sensitiveDir, world.realBase, 'dir')
+    world.ctx.shellConfig = { customSensitivePrefixes: [sensitiveDir] } as ToolExecutionContext['shellConfig']
+
+    const res = await runGrep(world.ctx, { pattern: 'needle', output_mode: 'content' })
+    expect(res.output).not.toContain('PRIVATE_CUSTOM_SENSITIVE_CONTENT')
+    expect(res.output).not.toContain('secret.md')
+  })
+
+  it('无 path 双根搜索拒绝指向共享库外普通目录的共享根符号链接', async () => {
+    const world = await setupWorld()
+    const externalDir = path.join(world.root, 'external-wiki')
+    await fs.mkdir(externalDir, { recursive: true })
+    await fs.writeFile(path.join(externalDir, 'outside.md'), 'OUTSIDE_SHARED_ROOT needle\n')
+    await fs.rm(world.realBase, { recursive: true })
+    await fs.symlink(externalDir, world.realBase, 'dir')
+
+    const res = await runGrep(world.ctx, { pattern: 'needle', output_mode: 'content' })
+    expect(res.output).not.toContain('OUTSIDE_SHARED_ROOT')
+    expect(res.output).not.toContain('outside.md')
+  })
+
   it('a① 无 path + wiki 启用 → workDir 与共享根双根命中，wiki 路径为词汇形态', async () => {
     const { ctx } = await setupWorld()
     const res = await runGrep(ctx, { pattern: 'needle', output_mode: 'content' })
