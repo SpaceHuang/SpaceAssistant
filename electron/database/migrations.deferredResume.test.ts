@@ -26,7 +26,7 @@ describe('deferred resume request migration', () => {
     conn.prepare("UPDATE schema_meta SET value='74' WHERE key='schema_version'").run()
     runMigrations(conn)
 
-    expect(DB_SCHEMA_VERSION).toBe(94)
+    expect(DB_SCHEMA_VERSION).toBe(95)
     expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
     expect(conn.prepare("SELECT state,close_required FROM remote_async_approval_gate_state WHERE singleton=1").get())
       .toEqual({ state: 'disabled', close_required: 0 })

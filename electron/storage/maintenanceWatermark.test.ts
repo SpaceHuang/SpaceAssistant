@@ -21,6 +21,20 @@ describe('private maintenance watermarks', () => {
     expect(await shouldRunMaintenance(file, { ...policy, localDay: '2026-10-09' })).toBe(true)
   })
 
+  it('persists watermarks on platforms that cannot fsync directories (win32 raises EPERM)', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'maintenance-watermark-fsync-'))
+    roots.push(root)
+    const file = path.join(root, 'cleanup.json')
+    const input = { localDay: '2026-10-08', policyFingerprint: 'v1', rootFingerprint: '/tmp/a', algorithmVersion: 1 }
+    await recordMaintenanceSuccess(file, input, 1_000)
+    await recordMaintenanceFailure(file, input, 'EPERM', 2_000)
+    await recordMaintenanceSuccess(file, input, 3_000)
+    const watermark = await readMaintenanceWatermark(file)
+    expect(watermark).toMatchObject({ lastSuccessDay: '2026-10-08' })
+    expect(watermark?.lastError).toBeUndefined()
+    expect(await shouldRunMaintenance(file, input)).toBe(false)
+  })
+
   it('keeps the previous success waterline after failure and retries instead of skipping', async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'maintenance-watermark-fail-'))
     roots.push(root)

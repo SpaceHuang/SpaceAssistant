@@ -5,6 +5,8 @@ import { getDbConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { SqliteAgentHistory } from './sqliteAgentHistory'
+import { consultProjectionRejection, clearProjectionRejection, computeLegacyProjectionDigest, readProjectionO1Metadata, recordProjectionRejection } from './sessionProjectionRejection'
+import { enqueueSessionProjectionRevalidation } from './sessionProjectionRevalidationQueue'
 import { resolveSelectedMessageBodies } from '../sessionStorage/internal/messageBodyResolver'
 import { selectRecentTurnRoutingMessages, selectTurnContext } from './sessionTranscriptSelector'
 
@@ -37,7 +39,7 @@ function sqliteLikeContainsLiteral(value: string, query: string): boolean {
   return false
 }
 
-function hasSessionProjectionEligibility(db: AppDatabase, sessionId: string): boolean {
+export function hasSessionProjectionEligibility(db: AppDatabase, sessionId: string): boolean {
   try {
     return getDbConnection(db).prepare(`SELECT 1 FROM canonical_session_projection_eligibility eligibility
       JOIN sessions ON sessions.id=eligibility.session_id AND sessions.generation=eligibility.session_generation
@@ -45,7 +47,7 @@ function hasSessionProjectionEligibility(db: AppDatabase, sessionId: string): bo
   } catch { return false }
 }
 
-function markSessionProjectionEligible(db: AppDatabase, sessionId: string, generation: string): boolean {
+export function markSessionProjectionEligible(db: AppDatabase, sessionId: string, generation: string): boolean {
   try {
     const result = getDbConnection(db).prepare(`INSERT INTO canonical_session_projection_eligibility(session_id, session_generation, validated_at)
       VALUES(?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET session_generation=excluded.session_generation, validated_at=excluded.validated_at`)
@@ -104,6 +106,15 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
   if (legacyMessages.some(({ role }) => role !== 'user' && role !== 'assistant')) {
     return { source: 'legacy', messages: legacyMessages, reason: 'field-not-eligible' }
   }
+  // P0-② negative cache: a persisted mismatch verdict routes the read to legacy without
+  // re-paying the full rebuild+compare. A stale verdict (O(1) metadata drift) still returns
+  // legacy immediately and re-queues itself; the consumer runs on the turn-terminal checkpoint
+  // (每轮至多一次后台重验), never on the read path.
+  const rejectionVerdict = consultProjectionRejection(db, sessionId, legacyMessages)
+  if (rejectionVerdict) {
+    if (rejectionVerdict === 'stale') enqueueSessionProjectionRevalidation(db, sessionId, { stale: true })
+    return { source: 'legacy', messages: legacyMessages, reason: 'projection-rejected' }
+  }
   try {
     const conn = getDbConnection(db)
     const history = new SqliteAgentHistory(conn)
@@ -122,6 +133,13 @@ function readSessionTranscriptProjectionImpl(db: AppDatabase, sessionId: string)
     return { source: 'legacy', messages: legacyMessages, reason: 'canonical-read-failed' }
   }
   if (canonical.kind === 'unavailable') {
+    // 任何 canonical 不可用形态（legacy-mismatch / snapshot-invalid / order-invalid …）都落
+    // 负缓存 verdict：canonical 流当前不可信，读路径按结论路由（legacy 直返），后台重验裁决。
+    // 仅 session-missing（会话不存在）不落。可回退 legacy 的会话（无 canonical-backed 行）才能落。
+    if (canonical.reason !== 'session-missing' && canonical.reason !== 'history-absent' && !hasCanonicalBackedRows) {
+      recordProjectionRejection(db, sessionId, canonical.reason, readProjectionO1Metadata(db, sessionId),
+        computeLegacyProjectionDigest(legacyMessages))
+    }
     if (hasCanonicalBackedRows) throw new Error('CANONICAL_SESSION_CONTENT_UNAVAILABLE')
     return { source: 'legacy', messages: legacyMessages, reason: canonical.reason }
   }
@@ -141,6 +159,7 @@ export function readSessionTranscriptProjection(db: AppDatabase, sessionId: stri
       logAgentEvent('info', 'session.transcript.read', {
         sessionId, consumer: 'transcript', source: result.source,
         outcome: result.source.startsWith('canonical:') ? 'canonical' : 'legacy',
+        reason: result.source === 'legacy' ? result.reason : undefined,
         durationMs: Math.max(0, Math.round(performance.now() - startedAt))
       })
     } catch { /* Observation logging cannot change a transcript read. */ }
@@ -433,26 +452,54 @@ function mergeCanonicalBodies(canonicalMessages: readonly import('../../src/shar
   return projected
 }
 
-/** Best-effort terminal/session-disposition checkpoint; it never performs an L2 full legacy scan. */
+/**
+ * Cheap L1 fast path only: a matched cached projection with live eligibility. Never performs
+ * an L2 full legacy scan; the terminal checkpoint and the explicit refresh build on it.
+ */
+export function refreshSessionTranscriptProjectionFastPath(db: AppDatabase, sessionId: string): boolean {
+  const history = new SqliteAgentHistory(getDbConnection(db))
+  const canonical = history.readCanonicalSessionTranscriptWithCache(sessionId, 'transcript')
+  const skeletons = getMessageSkeletons(db, sessionId)
+  return canonical.kind === 'matched' && hasSessionProjectionEligibility(db, sessionId) &&
+    mergeCanonicalBodies(canonical.messages, skeletons) !== undefined
+}
+
+/** Best-effort explicit checkpoint; the turn-terminal path uses the queued checkpoint instead. */
 export function refreshSessionTranscriptProjectionCache(db: AppDatabase, sessionId: string): boolean {
   try {
     const history = new SqliteAgentHistory(getDbConnection(db))
-    const canonical = history.readCanonicalSessionTranscriptWithCache(sessionId, 'transcript')
-    const skeletons = getMessageSkeletons(db, sessionId)
-    if (canonical.kind === 'matched' && hasSessionProjectionEligibility(db, sessionId) && mergeCanonicalBodies(canonical.messages, skeletons)) return true
+    if (refreshSessionTranscriptProjectionFastPath(db, sessionId)) {
+      // A live matched projection supersedes any earlier mismatch verdict (P0-④ explicit clear).
+      clearProjectionRejection(db, sessionId)
+      return true
+    }
     const legacyMessages = getMessages(db, sessionId, Number.MAX_SAFE_INTEGER)
     if (legacyMessages.some(({ role }) => role !== 'user' && role !== 'assistant')) return false
     const verified = history.readCanonicalSessionTranscript(sessionId, legacyMessages.map(({ id, role, content, timestamp }) => ({
       id, role: role as 'user' | 'assistant', content, timestamp
     })))
-    if (verified.kind !== 'matched' || !mergeCanonicalBodies(verified.messages, skeletons)) return false
+    if (verified.kind !== 'matched' || !mergeCanonicalBodies(verified.messages, getMessageSkeletons(db, sessionId))) {
+      if (verified.kind === 'unavailable' && verified.reason === 'legacy-mismatch') {
+        recordProjectionRejection(db, sessionId, verified.reason, readProjectionO1Metadata(db, sessionId),
+          computeLegacyProjectionDigest(legacyMessages))
+        // P0-③: a failed checkpoint registers background revalidation instead of letting the
+        // next read re-pay the full compare.
+        enqueueSessionProjectionRevalidation(db, sessionId)
+      }
+      return false
+    }
     const conn = getDbConnection(db)
-    return runInTransaction(conn, () => history.writeCanonicalSessionCache({ ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages) }) &&
-      markSessionProjectionEligible(db, sessionId, verified.sessionGeneration))
+    return runInTransaction(conn, () => {
+      const cached = history.writeCanonicalSessionCache({ ...verified, cacheKey: 'transcript', value: JSON.stringify(verified.messages) }) &&
+        markSessionProjectionEligible(db, sessionId, verified.sessionGeneration)
+      if (cached) clearProjectionRejection(db, sessionId)
+      return cached
+    })
   } catch {
     return false
   }
 }
+
 
 /** Preserve the existing cursor/page contract while sourcing eligible message bodies from canonical History. */
 export function getProjectedChatMessagePage(

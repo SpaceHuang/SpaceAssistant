@@ -91,7 +91,7 @@ describe('deferred execution result recovery', () => {
     conn.exec('DROP TABLE deferred_completion_outbox; DROP TABLE deferred_execution_results')
     conn.prepare("UPDATE schema_meta SET value='72' WHERE key='schema_version'").run()
     runMigrations(conn)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '94' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '95' })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='deferred_execution_results'").get())
       .toEqual({ name: 'deferred_execution_results' })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='deferred_completion_outbox'").get())

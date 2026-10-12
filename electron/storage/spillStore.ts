@@ -8,6 +8,7 @@ import { logAgentEvent } from '../agentLogger/agentLogger'
 import type { AppDatabase } from '../database'
 import { getDbConnection } from '../database/sqliteStore'
 import { resolveRetentionPolicyFromDb } from './retentionPolicy'
+import { syncDirectoryBestEffort } from './directorySync'
 import { collectSpillDescriptorsStrict, SpillContentUnavailableError, readSourceTruthSpillSync, type SpillDescriptor } from './spillProtocol'
 
 export { SpillContentUnavailableError } from './spillProtocol'
@@ -78,8 +79,7 @@ export function createSpillStore(root: string) {
       await file.sync()
       await file.close()
       file = undefined
-      const directory = await fs.open(root, 'r')
-      try { await directory.sync() } finally { await directory.close() }
+      await syncDirectoryBestEffort(root)
       const persisted = await fs.readFile(absolutePath)
       if (persisted.byteLength !== bytes.byteLength || sha256(persisted) !== sha256(bytes)) {
         throw new Error('spill verification failed')
@@ -197,8 +197,7 @@ export function createSpillStore(root: string) {
 }
 
 async function syncDirectory(root: string): Promise<void> {
-  const directory = await fs.open(root, 'r')
-  try { await directory.sync() } finally { await directory.close() }
+  await syncDirectoryBestEffort(root)
 }
 
 export type SpillReferenceScanStats = Readonly<{

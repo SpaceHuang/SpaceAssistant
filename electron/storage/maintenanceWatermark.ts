@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { syncDirectoryBestEffort } from './directorySync'
 
 export type MaintenanceWatermarkInput = Readonly<{
   localDay: string
@@ -44,10 +45,7 @@ async function serializedWrite(filePath: string, update: (current: MaintenanceWa
     try { await handle.writeFile(content, 'utf8'); await handle.sync() } finally { await handle.close() }
     try {
       await fs.rename(tempPath, filePath)
-      try {
-        const directory = await fs.open(path.dirname(filePath), 'r')
-        try { await directory.sync() } finally { await directory.close() }
-      } catch (error) { if (!['EINVAL', 'ENOTSUP', 'EISDIR'].includes(errorCode(error) ?? '')) throw error }
+      await syncDirectoryBestEffort(path.dirname(filePath))
     } catch (error) {
       await fs.unlink(tempPath).catch(() => undefined)
       throw error

@@ -51,7 +51,7 @@ export type AgentTurnPorts = Readonly<{
   isApprovalCandidate?(call: CanonicalToolExecutionCall): boolean
   sessionLedgerForToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult): Promise<Record<string, unknown>> | Record<string, unknown>
   /** Host product policy after a tool result is durably committed and before the next model request. */
-  afterToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult, source?: Readonly<{ kind: 'execution' | 'safety-rejection'; reasonCode?: string; modelTurn?: number }>): void | Promise<void>
+  afterToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult, source?: Readonly<{ kind: 'execution' | 'safety-rejection' | 'plan-rejection'; reasonCode?: string; modelTurn?: number }>): void | Promise<void>
   /** Single planner for initial-request and accepted-response context replacement. */
   planContextReplacement?(input: ContextReplacementPlanInput): Promise<ContextReplacementPlanResult | void>
   sessionLedgerForNotDispatched?(call: CanonicalToolExecutionCall, reason: string, result: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>
@@ -249,6 +249,17 @@ export class ToolDeniedError extends Error {
   constructor(readonly reasonCode: SafetyDenyReason | string, readonly userMessage?: string) { super(`tool call denied: ${reasonCode}`); this.name = 'ToolDeniedError' }
 }
 
+/**
+ * 宿主—SDK 中性的「计划期拒绝」：prepareTool 的 plan 阶段判定输入不可执行，但可改写重试。
+ * 由宿主决定哪些计划错误映射为它（reasonCode 为宿主业务码，SDK 对其零感知）；
+ * SDK 只负责在 returnDeniedToolsToModel 开启时把它物化为 is_error tool 消息回传模型、turn 继续。
+ * 审计口径与 ToolDeniedError（策略拒绝）分离（afterToolResult source.kind='plan-rejection'）。
+ */
+export class PlanRejectedError extends Error {
+  readonly code = 'PLAN_REJECTED'
+  constructor(readonly reasonCode: string, readonly userMessage: string) { super(`tool plan rejected: ${reasonCode}`); this.name = 'PlanRejectedError' }
+}
+
 export class ModelTurnLimitError extends Error {
   readonly code = 'MODEL_TURN_LIMIT'
   constructor(readonly maxModelTurns: number) { super(`model turn limit reached: ${maxModelTurns}`); this.name = 'ModelTurnLimitError' }
@@ -362,7 +373,7 @@ export type RunAgentTurnInput = {
   toolResourceKeys?(call: CanonicalToolExecutionCall): readonly string[] | undefined
   isApprovalCandidate?(call: CanonicalToolExecutionCall): boolean
   sessionLedgerForToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult): Promise<Record<string, unknown>> | Record<string, unknown>
-  afterToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult, source?: Readonly<{ kind: 'execution' | 'safety-rejection'; reasonCode?: string; modelTurn?: number }>): void | Promise<void>
+  afterToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult, source?: Readonly<{ kind: 'execution' | 'safety-rejection' | 'plan-rejection'; reasonCode?: string; modelTurn?: number }>): void | Promise<void>
   sessionLedgerForNotDispatched?(call: CanonicalToolExecutionCall, reason: string, result: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>
   sessionLedgerForModelResponse?(message: CanonicalTurnMessage, modelTurn: number, attempt: number, committedSessionLedger?: unknown): Promise<Record<string, unknown>> | Record<string, unknown>
   sessionLedgerForAttemptUsage?(attempt: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>
@@ -1555,7 +1566,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         } catch (error) {
           // FR12②：host 侧 prepareTool 可抛 ToolDeniedError（如 REGISTERED_TOOL_NOT_FOUND → 结构化拒绝）；
           // 与 safetyGate deny 路径一致，先解除 pending 再抛，避免 invocation 终态校验挂起。
-          if (error instanceof ToolDeniedError) {
+          // D-1：PlanRejectedError（宿主注入的计划期拒绝）同走此通道：markNotDispatched 落 History 后回传模型。
+          if (error instanceof ToolDeniedError || error instanceof PlanRejectedError) {
             await markNotDispatched(tool, error.reasonCode, error.userMessage)
           }
           throw error
@@ -1774,8 +1786,9 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         if (approvalPermitHeld) approvalSlots.release()
         releaseCandidate?.()
       }
-    }, { shouldDrain: (reason) => reason instanceof ToolDeniedError })
-    const fatalRejection = settledTools.find((settled) => settled?.status === 'rejected' && !(settled.reason instanceof ToolDeniedError))
+    }, { shouldDrain: (reason) => reason instanceof ToolDeniedError || reason instanceof PlanRejectedError })
+    const fatalRejection = settledTools.find((settled) => settled?.status === 'rejected' &&
+      !(settled.reason instanceof ToolDeniedError) && !(settled.reason instanceof PlanRejectedError))
     const pendingToolCallIds = toolCalls.flatMap((tool, index) => settledTools[index] === undefined ? [tool.toolCallId] : [])
     if (fatalRejection?.status === 'rejected') {
       const attemptedCount = settledTools.filter((settled) => settled !== undefined).length
@@ -1821,15 +1834,19 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
     if (input.returnDeniedToolsToModel) {
       for (const [index, settled] of settledTools.entries()) {
         if (!settled) continue
-        if (settled.status !== 'rejected' || !(settled.reason instanceof ToolDeniedError)) continue
+        if (settled.status !== 'rejected') continue
+        // D-1：PlanRejectedError 与 ToolDeniedError 同走「拒绝即回模型」物化通道，
+        // 从而被下方 rejectedTools 选择器排除（否则会在 :throw 处终止整轮）。
+        if (!(settled.reason instanceof ToolDeniedError) && !(settled.reason instanceof PlanRejectedError)) continue
+        const reasonCode = settled.reason.reasonCode
         const matchingTool = toolCalls[index]
         if (!matchingTool) continue
-        const content = settled.reason.userMessage ?? `Tool call was not dispatched (${settled.reason.reasonCode}).`
+        const content = settled.reason.userMessage ?? `Tool call was not dispatched (${reasonCode}).`
         const executionCall = { invocationId, toolCallId: matchingTool.toolCallId, toolName: matchingTool.toolName, input: structuredClone(matchingTool.input), ...(input.request.signal ? { signal: input.request.signal } : {}) }
         const result = { output: content, replayContent: content, isError: true }
         deniedToolResults.set(matchingTool.toolCallId, { role: 'tool', toolCallId: matchingTool.toolCallId, content, isError: true })
         await projectTool(input.observer, 'tool-finished', () => input.observer?.onToolFinished?.(executionCall, result))
-        try { await input.afterToolResult?.(executionCall, result, { kind: 'safety-rejection', reasonCode: settled.reason.reasonCode }) }
+        try { await input.afterToolResult?.(executionCall, result, { kind: settled.reason instanceof PlanRejectedError ? 'plan-rejection' : 'safety-rejection', reasonCode }) }
         catch (error) { await observe(input.observer, 'tool-finished', () => input.observer?.onObservationError?.(error, 'tool-finished')) }
       }
     }
@@ -1935,10 +1952,7 @@ async function assertHostCommittedResponse(history: HistoryPort | undefined, inv
   }
 }
 
-function canonicalRequestSnapshot(call: PreparedModelCall): Readonly<{
-  route: PreparedModelCall['route']
-  request: Omit<PreparedModelCall['request'], 'credentials' | 'signal'>
-}> {
+function canonicalRequestSnapshot(call: PreparedModelCall): ReturnType<typeof snapshotPreparedModelCall> {
   return snapshotPreparedModelCall(call)
 }
 

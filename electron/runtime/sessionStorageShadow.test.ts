@@ -136,7 +136,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
 
     const report = shadowAcceptedTurnContext(db, session.id, legacy, { messageId: 'api-user', fingerprint: acceptedInputFingerprint })
 
-    expect(report).toMatchObject({ consumer: 'api-context', status: 'matched', source: 'canonical:L2', differenceCount: 0, acceptedInputFingerprint: 'matched' })
+    expect(report).toMatchObject({ consumer: 'api-context', status: 'matched', source: 'canonical:L1', differenceCount: 0, acceptedInputFingerprint: 'matched' })
     expect(report.fields).not.toContain('accepted-input-fingerprint')
     expect(report.candidate).toEqual(legacy)
     expect(report.legacyHash).toMatch(/^[a-f0-9]{64}$/)
@@ -153,7 +153,9 @@ describe('Phase 5.2 canonical shadow reads', () => {
     expect(noCache.canonicalHash).toBe(noCache.legacyHash)
     expect(getDbConnection(db).prepare("SELECT value FROM canonical_session_projection_cache WHERE session_id=? AND cache_key='transcript'").get(session.id))
       .toEqual({ value: 'not-json' })
-    expect(getDbConnection(db).prepare('SELECT session_id FROM canonical_session_projection_eligibility').all()).toEqual([])
+    // P1-①: the append transaction granted projection eligibility; the shadow read itself stays
+    // read-only, which the untouched api-context fence below continues to prove.
+    expect(getDbConnection(db).prepare('SELECT COUNT(*) AS n FROM canonical_session_projection_eligibility WHERE session_id=?').get(session.id)).toMatchObject({ n: 1 })
     expect(getDbConnection(db).prepare('SELECT session_id FROM canonical_session_api_context_eligibility').all()).toEqual([])
     const safeLog = projectAgentLogFields('session.storage.shadow', {
       sessionId: session.id, consumer: 'api-context', status: noCache.status, differenceCount: noCache.differenceCount,
@@ -239,9 +241,11 @@ describe('Phase 5.2 canonical shadow reads', () => {
     if (afterAppend.kind !== 'matched') throw new Error('expected compacted canonical transcript')
     expect(conn.prepare('SELECT message_revision FROM session_message_content_cutover WHERE session_id=?').get(session.id))
       .toEqual({ message_revision: skeletonRevision })
-    expect(history.readCanonicalSessionCache({ ...afterAppend, cacheKey: 'transcript' })).toMatchObject({ kind: 'miss' })
+    // P1-①: the append transaction advanced the cache to the compaction watermark, so the
+    // shadow observes a fresh seed; its independent fold still drives the mismatch verdict.
+    expect(history.readCanonicalSessionCache({ ...afterAppend, cacheKey: 'transcript' })).toMatchObject({ kind: 'hit' })
     const report = shadowAcceptedTurnContext(db, session.id, legacy)
-    expect(report).toMatchObject({ status: 'mismatched', source: 'canonical:L2', fields: ['content'], candidate: [{ content: 'provider summary' }] })
+    expect(report).toMatchObject({ status: 'mismatched', source: 'canonical:L1', fields: ['content'], candidate: [{ content: 'provider summary' }] })
     expect(getMessage(db, user.message.id)?.content).toBe('full UI body')
     expect(conn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').get(session.id)).toBeUndefined()
     expect(conn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
@@ -294,9 +298,10 @@ describe('Phase 5.2 canonical shadow reads', () => {
       const afterAppend = reopenedHistory.readCanonicalSessionTranscriptForShadow(session.id)
       expect(afterAppend.kind).toBe('matched')
       if (afterAppend.kind !== 'matched') throw new Error('expected compacted canonical transcript')
-      expect(reopenedHistory.readCanonicalSessionCache({ ...afterAppend, cacheKey: 'transcript' })).toMatchObject({ kind: 'miss' })
+      // P1-①: the reopened connection's append advanced the cache to the compaction watermark.
+      expect(reopenedHistory.readCanonicalSessionCache({ ...afterAppend, cacheKey: 'transcript' })).toMatchObject({ kind: 'hit' })
       const report = shadowAcceptedTurnContext(reopened, session.id, legacyAfterReopen)
-      expect(report).toMatchObject({ status: 'mismatched', source: 'canonical:L2', fields: ['content'], candidate: [{ content: 'provider summary' }] })
+      expect(report).toMatchObject({ status: 'mismatched', source: 'canonical:L1', fields: ['content'], candidate: [{ content: 'provider summary' }] })
       expect(getMessage(reopened, user.message.id)?.content).toBe('full UI body')
       expect(reopenedConn.prepare('SELECT session_id FROM canonical_session_api_context_eligibility WHERE session_id=?').get(session.id)).toBeUndefined()
       expect(reopenedConn.prepare('SELECT api_read_mode FROM session_message_content_cutover WHERE session_id=?').get(session.id))
@@ -521,7 +526,7 @@ describe('Phase 5.2 canonical shadow reads', () => {
       boundarySequence: undefined, excludeMessageIds: [], limit: 50
     })
 
-    expect(report).toMatchObject({ consumer: 'turn-routing', status: 'matched', source: 'canonical:L2', differenceCount: 0 })
+    expect(report).toMatchObject({ consumer: 'turn-routing', status: 'matched', source: 'canonical:L1', differenceCount: 0 })
     expect(report.candidate).toEqual(routeInput)
     expect(report.fields).toEqual([])
     expect(report.candidate?.recentMessages).toEqual(Array.from({ length: 50 }, (_, index) => ({ role: 'user', content: index === 49 ? '\t' : `route body ${index}` })))
@@ -540,7 +545,6 @@ describe('Phase 5.2 canonical shadow reads', () => {
     })
     expect(staleReport).toMatchObject({ status: 'mismatched', differenceCount: 1, fields: ['recentMessages'] })
     expect(staleReport.candidate?.recentMessages).toEqual(legacyRecentMessages)
-    expect(getDbConnection(db).prepare('SELECT session_id FROM canonical_session_projection_eligibility').all()).toEqual([])
     db.close()
   })
 
@@ -643,7 +647,6 @@ describe('Phase 5.2 canonical shadow reads', () => {
     expect(routeReport.candidate).toBeUndefined()
     expect(getTurnContext(db, session.id, undefined, undefined, [])).toEqual(beforeApi)
     expect(getRecentTurnRoutingMessages(db, session.id)).toEqual(beforeRoute)
-    expect(getDbConnection(db).prepare('SELECT session_id FROM canonical_session_projection_eligibility').all()).toEqual([])
     expect(getDbConnection(db).prepare('SELECT session_id FROM canonical_session_api_context_eligibility').all()).toEqual([])
     expect(getDbConnection(db).prepare("SELECT id,content_storage_state FROM messages WHERE session_id=? ORDER BY sequence").all(session.id))
       .toEqual([

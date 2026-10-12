@@ -26,6 +26,8 @@ import { createImOrchestrationToolRegistry } from '../remote/imOrchestrationTool
 import { ImChannel } from '../confirmation/imChannel'
 import { getToolCache, saveProfiles, saveToolCache } from '../mcp/mcpConfigStore'
 import { executeToolSearch } from '../tools/toolSearchTool'
+import { RunShellPlanError } from '../tools/runShellPlan'
+import { PlanRejectedError } from '../../packages/agent-sdk/src/turn'
 
 describe('AcceptedTurn propagation', () => {
   it('does not associate IM confirmations with a Track while the confirmation-link gate is off', async () => {
@@ -1312,5 +1314,143 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
     })
 
     expect(ports).not.toHaveProperty('storage')
+  })
+})
+
+describe('P0-A：计划期失败降级为可回传拒绝（T-3，断言打在生产包装层 ports.prepareTool 上）', () => {
+  let runtime: ReturnType<typeof createAgentRuntime>
+  beforeEach(() => {
+    resetDefaultAgentRuntimeForTests()
+    runtime = createAgentRuntime({ builtinRegistry: { getLegacyExecutor: () => undefined, get: () => undefined, entries: () => [] } })
+    setDefaultAgentRuntime(runtime)
+    ;(runtime.modelProviders as ModelProviderRegistry).register(
+      { routeId: 'route-plan-reject', protocol: 'anthropic-messages', dialect: 'test-v1', adapterVersion: '1', modelId: 'test-model' },
+      { providerId: 'plan-reject-provider', stream: async function* () { yield { type: 'finish' as const, reason: 'stop' as const } } }
+    )
+  })
+  afterEach(() => { resetDefaultAgentRuntimeForTests() })
+
+  const MISMATCH_DETAILS = {
+    code: 'SHELL_DIALECT_MISMATCH', detectedSyntax: 'posix-bash', expectedDialect: 'windows-powershell',
+    shellProfileId: 'windows-powershell', executable: 'powershell.exe',
+    signals: ['posix-variable'], hints: ['使用 PowerShell 语法重写命令', '环境变量使用 $env:NAME，空输出使用 $null']
+  }
+  const buildComposed = (plan: (input: Record<string, unknown>) => Promise<unknown>) => {
+    const registry = new TypedToolRegistry()
+    registry.register(definePlannedTool({
+      name: 'run_shell', actionClass: 'write',
+      parseInput: (raw) => raw as { command: string },
+      plan: plan as never,
+      execute: async () => ({ success: true })
+    }))
+    const { agentSdk } = assembleInvocation({
+      requestId: 'req-plan-reject', sessionId: 'session-plan-reject', turnId: 'turn-plan-reject',
+      model: 'test-model', providerRouteId: 'route-plan-reject', locale: 'zh-CN',
+      messages: [{ role: 'user', content: 'run shell' }], toolsConfig: DEFAULT_TOOLS_CONFIG,
+      workDir: '/tmp', userDataDir: '/tmp', getApiKey: async () => 'test-key',
+      agentSdkHistory: new MemoryHistory(), emitFactEvent: vi.fn(), emitSessionEvent: vi.fn()
+    })
+    return agentSdk.createHostedTurnRuntime({ registry, authorizedToolNames: new Set(['run_shell']) })
+  }
+  const prepareCall = { invocationId: 'turn-plan-reject', toolCallId: 'shell-call-1', toolName: 'run_shell', input: { command: 'export A=1 && echo $A' } }
+
+  it('run_shell plan 抛 SHELL_DIALECT_MISMATCH 时被转换为 PlanRejectedError，携带可解析的 D-7 JSON 提示', async () => {
+    const composed = buildComposed(async () => {
+      throw new RunShellPlanError('SHELL_DIALECT_MISMATCH', 'SHELL_DIALECT_MISMATCH', { ...MISMATCH_DETAILS })
+    })
+    try {
+      const ports = await composed.host.createPorts({
+        invocationId: 'turn-plan-reject', turnId: 'turn-plan-reject', routeId: 'route-plan-reject',
+        request: { messages: [{ role: 'user', content: 'run shell' }], maxTokens: 10, tools: [{ name: 'run_shell', description: 'shell', inputSchema: {} }] }
+      })
+      const rejection = await ports.prepareTool!(prepareCall as never, { kind: 'initial' }).then(
+        () => { throw new Error('expected prepareTool to reject') },
+        (error: unknown) => error
+      )
+      expect(rejection).toBeInstanceOf(PlanRejectedError)
+      expect(rejection).toMatchObject({ reasonCode: 'SHELL_DIALECT_MISMATCH', name: 'PlanRejectedError' })
+      // D-7：拒绝文本为紧凑单行 JSON，固定字段、可解析、不加 Markdown 围栏
+      const parsed = JSON.parse((rejection as PlanRejectedError).userMessage) as Record<string, unknown>
+      expect(parsed).toMatchObject({
+        code: 'SHELL_DIALECT_MISMATCH', caseId: 'SHELL-DIALECT-001',
+        detectedSyntax: 'posix-bash', expectedDialect: 'windows-powershell', shellProfileId: 'windows-powershell',
+        signals: ['posix-variable'], hints: ['使用 PowerShell 语法重写命令', '环境变量使用 $env:NAME，空输出使用 $null']
+      })
+    } finally {
+      await composed.dispose()
+    }
+  })
+
+  it('plan 失败后无 prepared 残留：同一 call 可重新 prepareTool（不报 PREPARED_CALL_ALREADY_EXISTS）', async () => {
+    let attempts = 0
+    const composed = buildComposed(async () => {
+      attempts += 1
+      if (attempts === 1) throw new RunShellPlanError('SHELL_DIALECT_MISMATCH', 'SHELL_DIALECT_MISMATCH', { ...MISMATCH_DETAILS })
+      return { command: 'ok' }
+    })
+    try {
+      const ports = await composed.host.createPorts({
+        invocationId: 'turn-plan-reject', turnId: 'turn-plan-reject', routeId: 'route-plan-reject',
+        request: { messages: [{ role: 'user', content: 'run shell' }], maxTokens: 10, tools: [{ name: 'run_shell', description: 'shell', inputSchema: {} }] }
+      })
+      await expect(ports.prepareTool!(prepareCall as never, { kind: 'initial' })).rejects.toBeInstanceOf(PlanRejectedError)
+      await expect(ports.prepareTool!(prepareCall as never, { kind: 'initial' })).resolves.toMatchObject({ capabilityId: 'run_shell' })
+      composed.registeredTools.discardPreparedTool(prepareCall as never)
+    } finally {
+      await composed.dispose()
+    }
+  })
+
+  it('白名单外异常（普通 Error）原样 rethrow，保持 fatal 语义不变（A-3）', async () => {
+    const composed = buildComposed(async () => { throw new Error('RUN_SHELL_RUNTIME_CONTEXT_REQUIRED') })
+    try {
+      const ports = await composed.host.createPorts({
+        invocationId: 'turn-plan-reject', turnId: 'turn-plan-reject', routeId: 'route-plan-reject',
+        request: { messages: [{ role: 'user', content: 'run shell' }], maxTokens: 10, tools: [{ name: 'run_shell', description: 'shell', inputSchema: {} }] }
+      })
+      const rejection = await ports.prepareTool!(prepareCall as never, { kind: 'initial' }).then(
+        () => { throw new Error('expected prepareTool to reject') },
+        (error: unknown) => error
+      )
+      expect(rejection).not.toBeInstanceOf(PlanRejectedError)
+      expect((rejection as Error).message).toBe('RUN_SHELL_RUNTIME_CONTEXT_REQUIRED')
+    } finally {
+      await composed.dispose()
+    }
+  })
+
+  // A-2/A-8（§4.4 / D-8）：planned 转换层与 executor 共享同一 breaker——
+  // 同会话第 2 次同款错配 → JSON 携带 retryCount/retryExhausted 与升级 hints；turn 不终止
+  it('同会话第 2 次同款错配的 PlanRejectedError JSON 含 retryCount=2 与升级 hints（不阻断）', async () => {
+    const details = { ...MISMATCH_DETAILS, signals: ['cmd-operator'], detectedSyntax: 'windows-cmd' }
+    const composed = buildComposed(async () => {
+      throw new RunShellPlanError('SHELL_DIALECT_MISMATCH', 'SHELL_DIALECT_MISMATCH', { ...details })
+    })
+    try {
+      const ports = await composed.host.createPorts({
+        invocationId: 'turn-plan-reject', turnId: 'turn-plan-reject', routeId: 'route-plan-reject',
+        request: { messages: [{ role: 'user', content: 'run shell' }], maxTokens: 10, tools: [{ name: 'run_shell', description: 'shell', inputSchema: {} }] }
+      })
+      const escalateCall = { ...prepareCall, toolCallId: 'shell-call-escalate' }
+      const first = await ports.prepareTool!(escalateCall as never, { kind: 'initial' }).then(
+        () => { throw new Error('expected prepareTool to reject') }, (error: unknown) => error
+      ) as PlanRejectedError
+      const firstParsed = JSON.parse(first.userMessage) as { retryCount: number; hints: string[] }
+      expect(firstParsed.retryCount).toBe(1)
+      // 换 toolCallId 再次错配（同会话同 profile 同 signals）
+      const secondCall = { ...escalateCall, toolCallId: 'shell-call-escalate-2' }
+      const second = await ports.prepareTool!(secondCall as never, { kind: 'initial' }).then(
+        () => { throw new Error('expected prepareTool to reject') }, (error: unknown) => error
+      ) as PlanRejectedError
+      const secondParsed = JSON.parse(second.userMessage) as { retryCount: number; retryExhausted: boolean; hints: string[] }
+      expect(secondParsed.retryCount).toBe(2)
+      expect(secondParsed.retryExhausted).toBe(true)
+      expect(secondParsed.hints).not.toEqual(firstParsed.hints)
+      // 升级文案与真实 cmd 信号对应（评审 P2 残留：不再引用已撤销的 where.exe→Get-Command 示例）
+      expect(secondParsed.hints.join(' ')).toContain('Get-ChildItem')
+      expect(secondParsed.hints.join(' ')).not.toContain('Get-Command')
+    } finally {
+      await composed.dispose()
+    }
   })
 })

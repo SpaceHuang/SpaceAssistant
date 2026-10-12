@@ -5,6 +5,7 @@ import { FileTree, type FileTreeHandle } from '../FileTree/FileTree'
 import { FileTreeToolbar } from '../FileTree/FileTreeToolbar'
 import { WorkDirSelector } from './WorkDirSelector'
 import { isUnderWikiRoot, subscribeFilePaneSelect } from '../../services/filePaneNavigation'
+import { WIKI_VOCABULARY_PREFIX } from '../../../shared/wikiConstants'
 
 type Props = {
   workDir: string
@@ -17,7 +18,7 @@ export function DetailPanelFileList({ workDir, onFileSelect, onCollectToWiki }: 
   const activeProfileId =
     cfg?.activeWorkDirProfileId ?? cfg?.workDirProfiles?.find((p) => p.isDefault)?.id ?? ''
   const wiki = cfg?.wiki ?? DEFAULT_WIKI_CONFIG
-  const wikiRoot = wiki.rootPath.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
+  const wikiRoot = WIKI_VOCABULARY_PREFIX // BLK-4（D9）：词汇根恒为常量
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
 

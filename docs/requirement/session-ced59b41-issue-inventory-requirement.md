@@ -520,10 +520,10 @@ export const ENV_OVERRIDES = {
 
 | # | 会话基线行为 | 已改动 |
 | --- | --- | --- |
-| 5 | 审批声明 `disposition: 'reject'`，拿不到准入位**立即失败**并表现为「审批拒绝」；`queueLimit` 对审批路径实际不生效 | 新增 `ApprovalAdmission`（`packages/agent-core/src/approval.ts`）：独立 `concurrency` / `queueLimit` / `maxInFlightPerParent` + 超时 + `cancel`，**有界排队** |
+| 5 | 审批声明 `disposition: 'reject'`，拿不到准入位**立即失败**并表现为「审批拒绝」；`queueLimit` 对审批路径实际不生效 | 新增 `ApprovalAdmission`（`packages/agent-sdk/src/approval.ts`）：独立 `concurrency` / `queueLimit` / `maxInFlightPerParent` + 超时 + `cancel`，**有界排队** |
 | 6 | 审批与任务**共用同一小时配额**：嵌套准入 `lane` 继承等待方，`applyAdmit` 再计一次，`applyRelease` 不回退 `windowStarts` → 双计（标称 120/h 实际约 60 个带审批回合） | 新增 `ApprovalAdmissionLike` 分支：存在时**不占用任务启动准入计数**；`CapacityLedger`（`capacity.ts`）把 application lease 与 approval candidate 分账 |
 | 7 | 恢复已受理身份会重复计小时配额 | 新增 `judgeResumeAdmission` / `applyResume`（`electron/runtime/callAdmission.ts`），**不重复计入**小时启动次数 |
-| 8 | 同 turn 工具逐个 `await`（`for (const tu of toolUses)`），一个审批阻塞后续所有工具（含只读） | 引入 `packages/agent-core/src/scheduler.ts`、`resourceLock.ts`、`semaphore.ts`；`toolChatLoop.ts` 改动 417 行接入 `activeApprovalChannels` / `approvalSemaphore` / `waitingApprovalNodes`；`plannedToolRegistry` 增加 `resourceKeys`（工具资源互斥声明） |
+| 8 | 同 turn 工具逐个 `await`（`for (const tu of toolUses)`），一个审批阻塞后续所有工具（含只读） | 引入 `packages/agent-sdk/src/scheduler.ts`、`resourceLock.ts`、`semaphore.ts`；`toolChatLoop.ts` 改动 417 行接入 `activeApprovalChannels` / `approvalSemaphore` / `waitingApprovalNodes`；`plannedToolRegistry` 增加 `resourceKeys`（工具资源互斥声明） |
 
 ### 6.3 结论可解释性
 

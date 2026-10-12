@@ -1080,6 +1080,7 @@ export function describeTuiRejection(match: ShellTuiMatch): string {
 
 - `via` 为可选字段（§4.2.2 第 2 点），仅在经过包装链/二次解释时有值；把穿透路径写进 `reason` 是评审 B2 的直接要求——否则用户看到 `env sudo vim f` 被拒时无法理解「命中的不是 `env`」。
 - **方言错配不受影响（评审 B1）**：`SHELL_DIALECT_MISMATCH` 的 `reason`、`retryCount`、`retryExhausted` 与 `dialectRetryBreaker` 语义**全部保持**，本次只新增两类 TUI 错误的 `reason` 文案与 `diagnostic`。
+  > **2026-10 变更登记（run-shell-dialect-mismatch 改进计划 §4.4 / D-8 定案，上行部分契约随之修订）**：单键计数判定式不变（`count`、`tripped = count >= 2`），但作用域与可恢复性有变——① 键由 `profileId + signals` 改为 **`sessionId + profileId + signals`**；② 新增「命令改写成功执行即 `clearOnSuccess`」接线（`executePreparedShellExecutionWithHostFallback` 统一入口）与 `session:delete` 时的 `forgetSession` 清理，**不再保留「进程级永不清理」**；③ 熔断后果明确为**提示升级**（第 2 次同款错配给出改写形态 hints），不阻断执行、不终止 turn，「反复撞墙」兜底交给 `REPEATED_SEMANTIC_CALL`；④ planned 路径（assembler 转换层）与 legacy executor 共享同一进程级计数实例。
 
 - 投影层 `hasPlanDiagnosticMarker` 对 `code` 匹配 `^SHELL_[A-Z0-9_]{1,48}$` 者放行 `reason` 自由文本（`processResultProjection.ts:366-375`），通道已存在，本次是把内容填进去。
 - `reason` 长度受 `sanitizeAdviceText` 约束（≤512 字符），文案需留余量。

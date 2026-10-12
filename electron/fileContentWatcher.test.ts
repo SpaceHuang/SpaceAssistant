@@ -52,10 +52,8 @@ describe('fileContentWatcher', () => {
     await fs.writeFile(b, 'b', 'utf8')
 
     const { startContentWatch, stopContentWatch, getWatchedRelPathForTests } = await import('./fileContentWatcher')
-    const sender = { send: sendMock, isDestroyed: () => false } as never
-
-    startContentWatch(tmpDir, 'a.txt', sender)
-    startContentWatch(tmpDir, 'b.txt', sender)
+    startContentWatch(tmpDir, 'a.txt')
+    startContentWatch(tmpDir, 'b.txt')
     expect(getWatchedRelPathForTests()).toBe('b.txt')
 
     stopContentWatch()
@@ -67,9 +65,7 @@ describe('fileContentWatcher', () => {
     await fs.writeFile(filePath, 'c', 'utf8')
 
     const { startContentWatch, stopContentWatch, getWatchedRelPathForTests } = await import('./fileContentWatcher')
-    const sender = { send: sendMock, isDestroyed: () => false } as never
-
-    startContentWatch(tmpDir, 'c.txt', sender)
+    startContentWatch(tmpDir, 'c.txt')
     stopContentWatch()
     expect(getWatchedRelPathForTests()).toBeNull()
 

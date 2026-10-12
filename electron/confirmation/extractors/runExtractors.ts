@@ -114,7 +114,15 @@ export function runExtractors(
 export async function runExtractorsWithReadPathFact(
   descriptor: ToolActionDescriptor,
   toolInput: Record<string, unknown>,
-  env: EnvFacts & { userDataDir: string; homeDir: string; customSensitivePrefixes?: readonly string[] }
+  env: EnvFacts & {
+    userDataDir: string
+    homeDir: string
+    customSensitivePrefixes?: readonly string[]
+    /** wiki 挂载锚点（T1.2，gate 以 resolveWikiMount 结果构造） */
+    mountAnchors?: readonly import('./mountAnchors').MountAnchor[]
+    /** wiki 敏感根豁免（T1.3，仅含共享库子树） */
+    sensitiveRootExemptions?: readonly string[]
+  }
 ): Promise<{ facts: ContentFacts; readPathFact: ReadPathFact }> {
   // path 省略时 grep 与 list_directory 一致，按工作目录根（'.'）探测——grep 递归搜索能力释放 §7.3
   const rawPath = extractPathField(toolInput)
@@ -124,7 +132,9 @@ export async function runExtractorsWithReadPathFact(
     workDir: env.workDir,
     userDataDir: env.userDataDir,
     homeDir: env.homeDir,
-    customSensitivePrefixes: env.customSensitivePrefixes ?? []
+    customSensitivePrefixes: env.customSensitivePrefixes ?? [],
+    mountAnchors: env.mountAnchors,
+    sensitiveRootExemptions: env.sensitiveRootExemptions
   })
   const readPathFact = descriptor.toolName === 'list_directory'
     ? { ...probedFact, scope: 'direct-entries-snapshot' as const }
@@ -132,6 +142,7 @@ export async function runExtractorsWithReadPathFact(
     ? { ...probedFact, targetKind: 'unknown' as const, identity: undefined }
     : probedFact
   const facts = runExtractors(descriptor, toolInput, env)
-  facts.signals.push({ kind: 'path-target', path: readPathFact.normalizedPath, zone: readPathFact.zone })
+  // T1.8④：审批卡片展示词汇路径（挂载命中时），真实 userData 路径不进渲染层
+  facts.signals.push({ kind: 'path-target', path: readPathFact.vocabularyPath ?? readPathFact.normalizedPath, zone: readPathFact.zone })
   return { facts, readPathFact }
 }

@@ -23,7 +23,9 @@ import {
   MIGRATION_V48_SESSION_PROJECTION_LEGACY_POLICY_SQL, MIGRATION_V49_SESSION_PROJECTION_SCOPE_SQL,
   MIGRATION_V50_HISTORY_RECOVERY_WORK_SQL, MIGRATION_V50_HISTORY_RECOVERY_WORK_TRIGGERS_SQL,
   MIGRATION_V51_USAGE_MODEL_IDENTITY_COLUMNS, MIGRATION_V52_SESSION_PROJECTION_MIGRATION_CANCEL_SQL,
-  MIGRATION_V54_SPILL_REFERENCE_INDEX_SQL, SCHEMA_META_KEYS
+  MIGRATION_V54_SPILL_REFERENCE_INDEX_SQL, MIGRATION_V84_SESSION_PROJECTION_REJECTIONS_SQL,
+  MIGRATION_V85_INVOCATION_PENDING_VIEWS_SQL, MIGRATION_V86_REPAIR_TERMINAL_COLUMN_SQL,
+  SCHEMA_META_KEYS, WIKI_PROJECTS_TABLE_SQL
 } from './schema'
 import { runInTransaction } from './transaction'
 
@@ -54,6 +56,146 @@ function hasTable(conn: DatabaseSync, tableName: string): boolean {
 function hasColumn(conn: DatabaseSync, tableName: string, columnName: string): boolean {
   if (!hasTable(conn, tableName)) return false
   return (conn.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>).some(({ name }) => name === columnName)
+}
+
+/**
+ * The remote main and the local Track branch both advanced schema versions from the same
+ * base. An origin/main database can therefore report v86 while not having run local Track
+ * migrations v83-v86. Install their shared prerequisites before resuming at v87.
+ */
+function ensureRemoteTrackCoreSchema(conn: DatabaseSync): void {
+  conn.exec(`CREATE TABLE IF NOT EXISTS remote_tracks (
+    track_id TEXT PRIMARY KEY NOT NULL,
+    channel TEXT NOT NULL CHECK(channel IN ('wechat','feishu')),
+    identity_key TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    authorization_epoch INTEGER NOT NULL CHECK(authorization_epoch > 0),
+    state TEXT NOT NULL CHECK(state IN ('open','processing','waiting-user','waiting-async-approval','resuming','cancelling','reconciliation-blocked','completed','cancelled','expired','failed')),
+    root_message_id TEXT NOT NULL,
+    parent_track_id TEXT REFERENCES remote_tracks(track_id) ON DELETE RESTRICT,
+    origin_session_id TEXT,
+    version INTEGER NOT NULL DEFAULT 0,
+    terminal_reason TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_remote_tracks_owner_state
+    ON remote_tracks(channel,identity_key,owner_id,authorization_epoch,state,updated_at);
+  CREATE TABLE IF NOT EXISTS remote_track_events (
+    event_id TEXT PRIMARY KEY NOT NULL,
+    track_id TEXT NOT NULL REFERENCES remote_tracks(track_id) ON DELETE CASCADE,
+    event_kind TEXT NOT NULL,
+    parent_event_id TEXT REFERENCES remote_track_events(event_id) ON DELETE RESTRICT,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    message_id TEXT,
+    request_id TEXT,
+    turn_id TEXT,
+    tool_use_id TEXT,
+    confirmation_id TEXT,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    occurred_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_remote_track_events_track_time ON remote_track_events(track_id,occurred_at,event_id);
+  CREATE TABLE IF NOT EXISTS remote_track_message_map (
+    channel TEXT NOT NULL CHECK(channel IN ('wechat','feishu')),
+    platform_message_id TEXT NOT NULL,
+    track_id TEXT NOT NULL REFERENCES remote_tracks(track_id) ON DELETE CASCADE,
+    event_id TEXT NOT NULL REFERENCES remote_track_events(event_id) ON DELETE CASCADE,
+    direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound')),
+    binding_state TEXT NOT NULL CHECK(binding_state IN ('bound','unavailable','unbound')),
+    PRIMARY KEY(channel,platform_message_id)
+  );
+  CREATE TABLE IF NOT EXISTS remote_track_children (
+    track_id TEXT NOT NULL REFERENCES remote_tracks(track_id) ON DELETE CASCADE,
+    child_kind TEXT NOT NULL,
+    child_id TEXT NOT NULL,
+    state TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(track_id,child_kind,child_id)
+  );
+  CREATE TABLE IF NOT EXISTS remote_clarifications (
+    clarification_id TEXT PRIMARY KEY NOT NULL,
+    channel TEXT NOT NULL CHECK(channel IN ('wechat','feishu')),
+    identity_key TEXT NOT NULL,
+    owner_id TEXT NOT NULL,
+    authorization_epoch INTEGER NOT NULL CHECK(authorization_epoch > 0),
+    source_message_id TEXT NOT NULL,
+    parked_input_ref TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('pending','resolved','expired','invalidated')),
+    current_version INTEGER NOT NULL CHECK(current_version > 0),
+    expires_at INTEGER NOT NULL,
+    resolved_by_message_id TEXT,
+    selected_track_id TEXT REFERENCES remote_tracks(track_id) ON DELETE RESTRICT,
+    selected_option INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(channel,identity_key,source_message_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_remote_clarifications_scope_state_expiry
+    ON remote_clarifications(channel,identity_key,owner_id,authorization_epoch,state,expires_at);
+  CREATE TABLE IF NOT EXISTS remote_clarification_versions (
+    clarification_id TEXT NOT NULL REFERENCES remote_clarifications(clarification_id) ON DELETE CASCADE,
+    version INTEGER NOT NULL CHECK(version > 0),
+    handle TEXT NOT NULL UNIQUE,
+    candidate_snapshot_json TEXT NOT NULL,
+    snapshot_hash TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('current','superseded','expired')),
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY(clarification_id,version)
+  );
+  CREATE TABLE IF NOT EXISTS remote_clarification_send_attempts (
+    send_attempt_id TEXT PRIMARY KEY NOT NULL,
+    clarification_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('attempt-started','send-fulfilled','send-rejected','send-outcome-unknown')),
+    platform_message_id TEXT,
+    started_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    FOREIGN KEY(clarification_id,version) REFERENCES remote_clarification_versions(clarification_id,version) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_remote_clarification_attempts_version
+    ON remote_clarification_send_attempts(clarification_id,version,started_at,send_attempt_id);
+  CREATE TABLE IF NOT EXISTS remote_track_work_queue (
+    work_id TEXT PRIMARY KEY NOT NULL,
+    source_key TEXT NOT NULL UNIQUE,
+    track_id TEXT NOT NULL REFERENCES remote_tracks(track_id) ON DELETE RESTRICT,
+    clarification_id TEXT REFERENCES remote_clarifications(clarification_id) ON DELETE RESTRICT,
+    source_message_id TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('queued','claimed','completed','needs-reconciliation')),
+    session_id TEXT,
+    request_id TEXT,
+    turn_id TEXT,
+    user_message_id TEXT,
+    model_view_version TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    lease_owner TEXT,
+    lease_expires_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_remote_track_work_queue_claim ON remote_track_work_queue(state,lease_expires_at,created_at,work_id);`)
+
+  if (hasTable(conn, 'turns') && !hasColumn(conn, 'turns', 'track_id')) {
+    conn.exec('ALTER TABLE turns ADD COLUMN track_id TEXT REFERENCES remote_tracks(track_id) ON DELETE SET NULL')
+  }
+  if (hasTable(conn, 'deferred_todos') && !hasColumn(conn, 'deferred_todos', 'track_id')) {
+    conn.exec('ALTER TABLE deferred_todos ADD COLUMN track_id TEXT REFERENCES remote_tracks(track_id) ON DELETE SET NULL')
+  }
+  if (hasColumn(conn, 'turns', 'track_id') && hasColumn(conn, 'turns', 'state')) {
+    conn.exec('CREATE INDEX IF NOT EXISTS idx_turns_track_state ON turns(track_id,state)')
+  }
+  if (hasColumn(conn, 'deferred_todos', 'track_id') && hasColumn(conn, 'deferred_todos', 'state')) {
+    conn.exec('CREATE INDEX IF NOT EXISTS idx_deferred_todos_track_state ON deferred_todos(track_id,state)')
+  }
+  if (hasTable(conn, 'im_inbox_message_context')) {
+    if (!hasColumn(conn, 'im_inbox_message_context', 'track_id')) {
+      conn.exec('ALTER TABLE im_inbox_message_context ADD COLUMN track_id TEXT REFERENCES remote_tracks(track_id) ON DELETE SET NULL')
+    }
+    if (!hasColumn(conn, 'im_inbox_message_context', 'track_event_id')) {
+      conn.exec('ALTER TABLE im_inbox_message_context ADD COLUMN track_event_id TEXT REFERENCES remote_track_events(event_id) ON DELETE SET NULL')
+    }
+    conn.exec('CREATE INDEX IF NOT EXISTS idx_im_inbox_context_track ON im_inbox_message_context(track_id,track_event_id)')
+  }
 }
 
 function migrateQueueScopes(conn: DatabaseSync): void {
@@ -239,6 +381,11 @@ export function runMigrations(conn: DatabaseSync): void {
       DROP TRIGGER IF EXISTS invalidate_session_projections_after_history_cursor_delete;`)
   }
   try {
+  // origin/main independently used schema versions 83–86 for storage migrations. Its v86
+  // databases need Track's prerequisite tables before the remaining local v87–v94 steps run.
+  if (version === 86 && !hasTable(conn, 'remote_track_events')) {
+    runInTransaction(conn, () => ensureRemoteTrackCoreSchema(conn))
+  }
   if (version === 1) runInTransaction(conn, () => {
     conn.exec(CREATE_TABLES_SQL)
     version = 3
@@ -1643,6 +1790,18 @@ export function runMigrations(conn: DatabaseSync): void {
       }
     }
     version = 94
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 94) runInTransaction(conn, () => {
+    // Reconcile the other schema branch's v83–v86 migrations without reusing their version
+    // numbers, which already identify Track migrations in local databases.
+    conn.exec(WIKI_PROJECTS_TABLE_SQL)
+    conn.exec(MIGRATION_V84_SESSION_PROJECTION_REJECTIONS_SQL)
+    conn.exec(MIGRATION_V85_INVOCATION_PENDING_VIEWS_SQL)
+    if (hasTable(conn, 'canonical_projection_repairs') && !hasColumn(conn, 'canonical_projection_repairs', 'terminal_failed')) {
+      conn.exec(MIGRATION_V86_REPAIR_TERMINAL_COLUMN_SQL)
+    }
+    version = 95
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   } catch (migrationError) {

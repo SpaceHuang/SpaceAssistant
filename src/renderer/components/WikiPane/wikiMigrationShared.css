@@ -1,0 +1,103 @@
+/* Wiki 迁移系列界面共享视觉件（WikiPane 侧栏与设置页 WikiTab 弹窗共用）。
+   暖灰安静 chip + bg-subtle 冲突行，全部走 --sa-* token。 */
+
+.wiki-migration-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0 0;
+  min-width: 0;
+}
+
+/* 侧栏面板顶部常驻项目行：贴住面板、与下方树留一档间距 */
+.wiki-migration-chips-pane {
+  margin: 0 0 8px;
+}
+
+.wiki-migration-chip {
+  display: inline-block;
+  max-width: 100%;
+  padding: 1px 8px;
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-xs);
+  background: var(--sa-bg-subtle);
+  color: var(--sa-text-secondary);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 失效项目：警示只落在底色与描边上，文字保持正文色保对比度 */
+.wiki-migration-chip-orphan {
+  background: color-mix(in srgb, var(--sa-warning, #d48806) 9%, var(--sa-bg-elevated));
+  border-color: color-mix(in srgb, var(--sa-warning, #d48806) 32%, var(--sa-border));
+  color: var(--sa-text);
+}
+
+.wiki-migration-summary {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--sa-text-secondary);
+}
+
+.wiki-migration-conflicts {
+  margin-top: 12px;
+}
+
+.wiki-migration-conflicts-title {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  color: var(--sa-text);
+}
+
+.wiki-migration-conflict-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wiki-migration-conflict-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 5px 10px;
+  border: 1px solid var(--sa-border);
+  border-radius: var(--sa-radius-xs);
+  background: var(--sa-bg-subtle);
+}
+
+.wiki-migration-conflict-path {
+  font-family: var(--sa-font-mono);
+  font-size: 12px;
+  color: var(--sa-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wiki-migration-conflict-arrow {
+  flex: 0 0 auto;
+  color: var(--sa-text-tertiary);
+}
+
+/* 失败项：路径 + 错误信息两行排布，错误用语义色（AA 对比：#cf1322 于 bg-subtle ≥4.5:1） */
+.wiki-migration-failure-texts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wiki-migration-failure-error {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--sa-error, #cf1322);
+  word-break: break-all;
+}

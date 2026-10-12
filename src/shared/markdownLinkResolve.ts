@@ -1,4 +1,5 @@
 import { normalizeRelPath, normalizeWikiRoot } from './wikiImportPaths'
+import { WIKI_VOCABULARY_PREFIX } from './wikiConstants'
 
 const MARKDOWN_EXT = new Set(['.md', '.mdx', '.rst'])
 
@@ -36,7 +37,7 @@ function joinPosix(baseDir: string, hrefPath: string): string {
 }
 
 /** Wiki 绝对或简写路径（不依赖 baseRelPath） */
-export function resolveWikiAbsolutePathLink(href: string, wikiRootPath = 'llm-wiki'): string | null {
+export function resolveWikiAbsolutePathLink(href: string, wikiRootPath = WIKI_VOCABULARY_PREFIX): string | null {
   if (!href || href.startsWith('http://') || href.startsWith('https://') || href.startsWith('#')) {
     return null
   }
@@ -140,7 +141,7 @@ export function resolveMarkdownInternalLink(
   baseRelPath?: string | null,
   options?: ResolveMarkdownInternalLinkOptions
 ): string | null {
-  const wikiRootPath = options?.wikiRootPath ?? 'llm-wiki'
+  const wikiRootPath = options?.wikiRootPath ?? WIKI_VOCABULARY_PREFIX
   if (!href || href === '#') return null
   if (href.startsWith('#')) return null
   if (href.startsWith('mailto:')) return null

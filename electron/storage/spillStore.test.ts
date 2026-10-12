@@ -269,7 +269,8 @@ describe('spillStore P-5 protocol', () => {
     temp.cleanup()
   })
 
-  it('keeps a pending obligation when directory fsync fails after unlink and retries idempotently', async () => {
+  // win32 上目录 fsync 被有意跳过（平台不支持，sync 恒抛 EPERM），本用例的故障场景仅在 POSIX 可达
+  it.runIf(process.platform !== 'win32')('keeps a pending obligation when directory fsync fails after unlink and retries idempotently', async () => {
     const temp = createTempDatabase('spill-gc-fsync-failure-')
     const session = createSession(temp.db, { name: 'fsync retry' })
     const history = new SqliteAgentHistory(getDbConnection(temp.db), 1, Date.now, session.id)

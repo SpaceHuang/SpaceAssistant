@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { syncDirectoryBestEffort } from '../storage/directorySync'
 
 const FILE_NAME = '.mcp-artifact-capacity.json'
 export const MCP_ARTIFACT_QUOTA_BYTES = 256 * 1024 * 1024
@@ -19,12 +20,6 @@ let capacityRequest: (() => void) | undefined
 export function setMcpArtifactCapacityRequest(callback: (() => void) | undefined): void { capacityRequest = callback }
 export function requestMcpArtifactCapacitySweep(): void { capacityRequest?.() }
 function capacityPath(directory: string): string { return path.join(directory, FILE_NAME) }
-function errorCode(error: unknown): string | undefined {
-  return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : undefined
-}
-function directorySyncUnsupported(error: unknown): boolean {
-  return ['EINVAL', 'ENOTSUP', 'EISDIR'].includes(errorCode(error) ?? '')
-}
 function isState(value: unknown): value is State {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const item = value as Record<string, unknown>
@@ -53,10 +48,7 @@ async function update(directory: string, change: (state: State) => State): Promi
     try { await handle.writeFile(`${JSON.stringify({ ...result, updatedAt: Date.now() })}\n`, 'utf8'); await handle.sync() } finally { await handle.close() }
     try { await fs.rename(temp, filePath) }
     catch (error) { await fs.unlink(temp).catch(() => undefined); throw error }
-    try {
-      const dirHandle = await fs.open(directory, 'r')
-      try { await dirHandle.sync() } finally { await dirHandle.close() }
-    } catch (error) { if (!directorySyncUnsupported(error)) throw error }
+    await syncDirectoryBestEffort(directory)
   })
   writes.set(filePath, next)
   try { await next } finally { if (writes.get(filePath) === next) writes.delete(filePath) }

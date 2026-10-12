@@ -8,6 +8,7 @@ import { useReferencedFiles } from './useReferencedFiles'
 import { ReferencedFileItem } from './ReferencedFileItem'
 import { isUnderWikiRoot, requestFilePaneSelect } from '../../services/filePaneNavigation'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
+import { WIKI_VOCABULARY_PREFIX } from '../../../shared/wikiConstants'
 
 interface ReferencedFilesPanelProps {
   sessionId: string | null
@@ -19,7 +20,7 @@ export function ReferencedFilesPanel({ sessionId }: ReferencedFilesPanelProps) {
   const { t } = useTypedTranslation('detailPanel')
   const files = useReferencedFiles(sessionId)
   const { selectedFile, openFile } = useDetailPanel()
-  const wikiRoot = useTypedSelector((s) => s.config.config?.wiki?.rootPath ?? DEFAULT_WIKI_CONFIG.rootPath)
+  const wikiRoot = WIKI_VOCABULARY_PREFIX
   const wikiEnabled = useTypedSelector((s) => s.config.config?.wiki?.enabled ?? false)
   const [filter, setFilter] = useState<WikiFilter>('all')
 

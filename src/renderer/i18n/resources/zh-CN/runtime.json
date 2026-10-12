@@ -87,7 +87,8 @@
     "setWorkDir": "设置工作目录...",
     "switchWorkDir": "切换工作目录",
     "selectOrCreateSession": "请先选择或创建一个会话",
-    "projectFiles": "项目文件"
+    "projectFiles": "项目文件",
+    "fileMigrated": "该文件已合并至 {{to}}，请在新位置打开"
   },
   "usage": {
     "compactBillions": "{{value}} 亿",

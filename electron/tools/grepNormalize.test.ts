@@ -64,3 +64,32 @@ describe('normalizeGrepArgs（R7 单一入口：校验与执行同源）', () =>
     expect(validateGrepInput({ output_mode: 'bogus' })).toBeTruthy()
   })
 })
+
+describe('timeout 调用级超时参数（产品增强：超时可操作引导）', () => {
+  const base = { output_mode: 'files_with_matches' }
+
+  it('数字 timeout 归一为 timeoutSeconds', () => {
+    const r = normalizeGrepArgs({ ...base, timeout: 180 })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.args.timeoutSeconds).toBe(180)
+  })
+
+  it('clamp 到 5~600：过小取 5、过大取 600', () => {
+    const small = normalizeGrepArgs({ ...base, timeout: 1 })
+    const big = normalizeGrepArgs({ ...base, timeout: 9999 })
+    expect(small.ok && small.args.timeoutSeconds).toBe(5)
+    expect(big.ok && big.args.timeoutSeconds).toBe(600)
+  })
+
+  it.each([0, -5, 'abc', true])('非法 timeout(%p) → paramConflict', (bad) => {
+    const r = normalizeGrepArgs({ ...base, timeout: bad })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error.field).toBe('timeout')
+  })
+
+  it('缺省时不产生 timeoutSeconds(回落设置值)', () => {
+    const r = normalizeGrepArgs({ ...base })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.args.timeoutSeconds).toBeUndefined()
+  })
+})

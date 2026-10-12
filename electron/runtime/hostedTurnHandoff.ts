@@ -217,7 +217,9 @@ export function createHostedTurnHandoff(input: {
         let snapshotVersion: number | undefined
         let recoveredRestartInput = false
         try {
-          const snapshot = await sessionHistory.read(latest.invocationId)
+          // P0-⑤: the unavailable verdict already read this stream; only fall back to a
+          // re-read for ports whose unavailable result predates the snapshot carry.
+          const snapshot = latest.snapshot ?? await sessionHistory.read(latest.invocationId)
           snapshotVersion = snapshot.version
           previousTurnId = snapshot.events.at(-1)?.turnId
           const acceptedInput = input.sessionExecution && handoff.requiredUserMessage
@@ -362,7 +364,8 @@ export function createHostedTurnHandoff(input: {
           throw new HostedTurnFinalizedError(new ToolLoopRoundLimitError(input.maxToolRounds ?? 0, payload.reason), hostedFailureOutcome(terminal), terminalUsage(terminal))
         }
         if (payload?.errorCode === 'SHELL_DIALECT_MISMATCH' && typeof payload.reason === 'string') {
-          throw new HostedTurnFinalizedError(new Error(payload.reason), hostedFailureOutcome(terminal), terminalUsage(terminal))
+          // 兼容旧 History（修复前该码会产生 fatal 终态）；附加 errorCode 供 turn_end 透传（A-8）
+          throw new HostedTurnFinalizedError(Object.assign(new Error(payload.reason), { errorCode: payload.errorCode }), hostedFailureOutcome(terminal), terminalUsage(terminal))
         }
         throw new HostedTurnFinalizedError(new Error(`Hosted invocation ended as ${terminal.kind}`), hostedFailureOutcome(terminal))
       }

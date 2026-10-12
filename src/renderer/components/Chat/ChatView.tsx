@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { App, Modal } from 'antd'
 import { MessageSquare, MessagesSquare } from 'lucide-react'
 import { useTypedSelector, useAppDispatch } from '../../hooks'
+import { WIKI_VOCABULARY_PREFIX } from '../../../shared/wikiConstants'
 import {
   ackDisplayMessagePersisted,
   mergeTurnFailures,
@@ -872,7 +873,7 @@ export function ChatView() {
   const handleArchiveToWiki = useCallback(
     (assistantContent: string) => {
       if (!sessionId) return
-      const wikiRoot = (cfg?.wiki?.rootPath ?? DEFAULT_WIKI_CONFIG.rootPath).replace(/\\/g, '/').replace(/^\/+/, '')
+      const wikiRoot = WIKI_VOCABULARY_PREFIX // BLK-4（D9）：词汇根恒为常量
       const date = new Date().toISOString().slice(0, 10)
       const relPath = `${wikiRoot}/wiki/queries/${date}-archive.md`
       const excerpt = assistantContent.trim().slice(0, 12000)
@@ -886,18 +887,18 @@ export function ChatView() {
         })
       void send(runtimeText('chat.wikiArchivePrompt', { name: date, content: excerpt }))
     },
-    [send, sessionId, cfg?.wiki?.rootPath, currentSession?.metadata, dispatch]
+    [send, sessionId, currentSession?.metadata, dispatch]
   )
 
   const handleOpenFile = useCallback(
     (relPath: string) => {
-      const wikiRoot = cfg?.wiki?.rootPath ?? 'llm-wiki'
+      const wikiRoot = WIKI_VOCABULARY_PREFIX
       requestFilePaneSelect({ relPath, preferWiki: isUnderWikiRoot(relPath, wikiRoot) })
       void openFile(relPath).catch((e) => {
         message.error(formatUserFacingError(e instanceof Error ? e.message : String(e)))
       })
     },
-    [message, openFile, cfg?.wiki?.rootPath]
+    [message, openFile]
   )
 
   const pendingConfirmItems = usePendingConfirmSnapshot()
@@ -1073,7 +1074,7 @@ export function ChatView() {
         shellConfig={cfg?.shell}
         sessionMetadata={currentSession?.metadata}
         onOpenFile={handleOpenFile}
-        wikiRootPath={cfg?.wiki?.rootPath ?? 'llm-wiki'}
+        wikiRootPath={WIKI_VOCABULARY_PREFIX}
       />
     ),
     [
@@ -1093,7 +1094,7 @@ export function ChatView() {
       pendingConfirmItems,
       cfg?.workDir,
       cfg?.shell,
-      cfg?.wiki?.rootPath,
+
       currentSession?.metadata,
       handleOpenFile
     ]

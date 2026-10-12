@@ -2,6 +2,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
 import { runMigrations } from './migrations'
 import { DB_SCHEMA_VERSION } from './schema'
+import { getDbConnection } from './sqliteStore'
+import { createMemoryAppDb } from './testHelpers'
 
 describe('remote Track schema migration', () => {
   it('adds Track tables to an existing v82 database and is repeatable', () => {
@@ -23,6 +25,36 @@ describe('remote Track schema migration', () => {
       expect(() => runMigrations(conn)).not.toThrow()
     } finally {
       conn.close()
+    }
+  })
+
+  it('upgrades a remote-main v86 database with the Track schema branch before later Track migrations', () => {
+    const db = createMemoryAppDb()
+    const conn = getDbConnection(db)
+    conn.exec('PRAGMA foreign_keys=OFF')
+    conn.exec(`DROP TABLE remote_track_work_queue;
+      DROP TABLE im_inbox_clarification_park;
+      DROP TABLE remote_track_diagnostic_events;
+      DROP TABLE remote_track_runtime_diagnostics;
+      DROP TABLE remote_track_attribution_observations;
+      DROP TABLE remote_track_children;
+      DROP TABLE remote_track_message_map;
+      DROP TABLE remote_clarification_send_attempts;
+      DROP TABLE remote_clarification_versions;
+      DROP TABLE remote_clarifications;
+      DROP TABLE remote_track_events;
+      DROP TABLE remote_tracks;
+      UPDATE schema_meta SET value='86' WHERE key='schema_version';`)
+
+    try {
+      expect(() => runMigrations(conn)).not.toThrow()
+      expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
+      expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='remote_track_work_queue'").get())
+        .toEqual({ name: 'remote_track_work_queue' })
+      expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='canonical_invocation_pending_views'").get())
+        .toEqual({ name: 'canonical_invocation_pending_views' })
+    } finally {
+      db.close()
     }
   })
 
@@ -69,7 +101,7 @@ describe('remote Track schema migration', () => {
       runMigrations(conn)
       expect(conn.prepare('SELECT track_id FROM turns WHERE turn_id=?').get('legacy-turn')).toEqual({ track_id: null })
       expect(conn.prepare('SELECT track_id FROM deferred_todos WHERE todo_id=?').get('legacy-todo')).toEqual({ track_id: null })
-      expect(DB_SCHEMA_VERSION).toBe(94)
+      expect(DB_SCHEMA_VERSION).toBe(95)
     } finally {
       conn.close()
     }
@@ -87,7 +119,7 @@ describe('remote Track schema migration', () => {
       runMigrations(conn)
       expect(conn.prepare('SELECT track_id,track_event_id FROM im_inbox_message_context WHERE message_id=?').get('legacy-message'))
         .toEqual({ track_id: null, track_event_id: null })
-      expect(DB_SCHEMA_VERSION).toBe(94)
+      expect(DB_SCHEMA_VERSION).toBe(95)
       expect(conn.prepare('PRAGMA table_info(im_inbox_message_context)').all()).toEqual(expect.arrayContaining([
         expect.objectContaining({ name: 'clarification_work_id' })
       ]))
@@ -116,7 +148,7 @@ describe('remote Track schema migration', () => {
         FROM remote_track_attribution_observations WHERE observation_id='old'`).get())
         .toEqual({ classifier_invoked: null, provider_call_made: null, input_tokens: null, estimated_cost_usd: null, review_outcome: null, reviewed_at: null,
           pricing_source_url: null, pricing_effective_at: null, pricing_verified_at: null, pricing_verified_by: null })
-      expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '94' })
+      expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
       expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='remote_track_diagnostic_events'").get())
         .toEqual({ name: 'remote_track_diagnostic_events' })
     } finally { conn.close() }

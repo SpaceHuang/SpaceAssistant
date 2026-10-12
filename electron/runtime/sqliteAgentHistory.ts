@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from 'node:util'
 import {
   HistoryBatchError,
   HistoryCorruptionError,
+  invocationTerminalStatusMatches,
   rebuildInvocationStates,
   validateHistoryTransition,
   validateHistoryBatch,
@@ -21,6 +22,8 @@ import { sanitizeCapabilityParamsForDisplay } from '../../src/shared/capabilityP
 import { toolIdToOpenAiCompatibleApiToolName } from '../../src/shared/anthropicToolSanitize'
 import { normalizeExternalToolName } from '../../src/shared/toolNameCompatibility'
 import { decodeTerminalOutcome } from './terminalOutcome'
+import { classifySessionHistoryRepairFailure } from './sessionHistoryRecoveryDiagnostics'
+import { logAgentEvent } from '../agentLogger/agentLogger'
 import { canonicalSessionTranscriptEvents, foldClaudeSessionSnapshots, rebuildClaudeMessagesFromHistory, toCanonicalModelMessages, type CanonicalSessionSnapshot } from './canonicalHistory'
 import { isCanonicalProjectionWatermarkValid } from './canonicalHistory'
 import type { ClaudeChatMessageWithBlocks } from '../../src/shared/api'
@@ -174,9 +177,84 @@ type EventRow = {
   session_id?: string | null
 }
 
-function projectionRepairRetryDelayMs(attempts: number, invocationRepairCount: number): number {
-  if (attempts <= 0 || invocationRepairCount < 10) return 0
-  return Math.min(24 * 60 * 60 * 1000, 30 * 60 * 1000 * 2 ** Math.min(attempts - 1, 5))
+/** P1-②: persisted transition state for one invocation stream (tool/approval + stream invariants). */
+type CanonicalToolTransitionState = {
+  pending: Map<string, 'proposed' | 'started'>
+  toolApproval: Map<string, { approvalId: string; approved?: boolean }>
+  unboundApprovalIds: Set<string>
+  seenApprovalIds: Set<string>
+  pendingApprovals: Set<string>
+  approvalIdentity: Map<string, string>
+  terminalSeen: boolean
+  turnId: string | null
+}
+
+function cloneToolTransitionState(state: CanonicalToolTransitionState): CanonicalToolTransitionState {
+  return {
+    pending: new Map(state.pending),
+    toolApproval: new Map(state.toolApproval),
+    unboundApprovalIds: new Set(state.unboundApprovalIds),
+    seenApprovalIds: new Set(state.seenApprovalIds),
+    pendingApprovals: new Set(state.pendingApprovals),
+    approvalIdentity: new Map(state.approvalIdentity),
+    terminalSeen: state.terminalSeen,
+    turnId: state.turnId
+  }
+}
+
+function serializeToolTransitionState(state: CanonicalToolTransitionState): string {
+  return JSON.stringify({
+    pending: [...state.pending],
+    approvals: [...state.toolApproval],
+    unbound: [...state.unboundApprovalIds],
+    seen: [...state.seenApprovalIds],
+    pendingApprovals: [...state.pendingApprovals],
+    approvalIdentity: [...state.approvalIdentity],
+    terminalSeen: state.terminalSeen,
+    turnId: state.turnId
+  })
+}
+
+function deserializeToolTransitionState(json: string): CanonicalToolTransitionState {
+  const raw = JSON.parse(json) as {
+    pending: Array<[string, 'proposed' | 'started']>
+    approvals: Array<[string, { approvalId: string; approved?: boolean }]>
+    unbound: string[]
+    seen: string[]
+    pendingApprovals?: string[]
+    approvalIdentity?: Array<[string, string]>
+    terminalSeen?: boolean
+    turnId?: string | null
+  }
+  if (!Array.isArray(raw.pending) || !Array.isArray(raw.approvals) || !Array.isArray(raw.unbound) || !Array.isArray(raw.seen)) {
+    throw new Error('invalid pending view payload')
+  }
+  return {
+    pending: new Map(raw.pending),
+    toolApproval: new Map(raw.approvals),
+    unboundApprovalIds: new Set(raw.unbound),
+    seenApprovalIds: new Set(raw.seen),
+    pendingApprovals: new Set(raw.pendingApprovals ?? []),
+    approvalIdentity: new Map(raw.approvalIdentity ?? []),
+    terminalSeen: raw.terminalSeen === true,
+    turnId: typeof raw.turnId === 'string' ? raw.turnId : null
+  }
+}
+
+/** P3-②: a retried repair on any invocation waits at least this long (first attempts stay immediate). */
+export const REPAIR_MIN_RETRY_INTERVAL_MS = 60 * 1000
+
+/** P3-②: failure categories that cannot heal by retrying; they leave the queue terminal-failed. */
+const REPAIR_TERMINAL_FAILURE_CATEGORIES = ['workspace-root-rejected', 'storage-access-denied']
+
+export function projectionRepairRetryDelayMs(attempts: number, invocationRepairCount: number): number {
+  // P3-②: the historical zero-backoff retry for lightly-loaded invocations re-ran a full
+  // read+fold with no delay; a *retry* (attempts >= 1) now carries at least the minimum
+  // interval, and repeated failures keep the exponential backoff up to the daily cap. First
+  // attempts (attempts === 0) remain immediate so fresh obligations still settle during the
+  // startup pass that classified them.
+  if (attempts <= 0) return 0
+  return Math.max(REPAIR_MIN_RETRY_INTERVAL_MS, Math.min(24 * 60 * 60 * 1000, 30 * 60 * 1000 * 2 ** Math.min(attempts - 1, 5)))
 }
 type OrderedSessionEventRow = EventRow & { session_seq: number; commit_order: number; session_id: string; created_at: number }
 
@@ -465,7 +543,15 @@ export class SqliteAgentHistory implements HistoryPort {
           if (Number(mirrored.changes) !== 1) throw new HistoryBatchError('canonical assistant response mirror target is missing or not streaming')
         }
       }
-      if (!transcriptCommit) return appended
+      if (!transcriptCommit) {
+        // P1-②: the cache advances first (its tail validation needs the pending view still
+        // adjacent to the appended events), then the view is folded forward to the new stream
+        // head. Reversing the order makes every in-transaction tail validation miss the view
+        // and degrade to a full-stream readSync (S7).
+        this.advanceProjectionCacheAfterAppend()
+        this.updateCanonicalInvocationPendingViewInTransaction(events)
+        return appended
+      }
       if (!this.sessionId || transcriptCommit.sessionId !== this.sessionId) throw new HistoryBatchError('terminal transcript commit session identity mismatch')
       const terminal = events.length === 1 ? events[0] : undefined
       if (!terminal || !['invocation-completed', 'invocation-failed', 'invocation-interrupted', 'invocation-parked'].includes(terminal.kind)) {
@@ -517,8 +603,40 @@ export class SqliteAgentHistory implements HistoryPort {
         )
         if (Number(result.changes) !== 1) throw new HistoryBatchError('terminal message mirror target is missing or not an assistant message')
       }
+      this.advanceProjectionCacheAfterAppend()
+      this.updateCanonicalInvocationPendingViewInTransaction(events)
       return appended
     })
+  }
+
+  /**
+   * P1-①: advance the transcript projection cache to the just-appended watermark inside the
+   * same transaction (P1 roadmap ①). The write path just mirrored every canonical message into
+   * its legacy row, so a successful incremental tail fold is exactly the consistency proof the
+   * read-time verification used to re-derive; re-grant eligibility here instead of letting the
+   * message-mutation triggers push every read back into a full rebuild. Any ambiguity leaves
+   * the cache untouched — reads keep their existing fail-closed staircase.
+   */
+  private advanceProjectionCacheAfterAppend(): void {
+    if (!this.sessionId) return
+    try {
+      // S6: a persisted rejection verdict means the canonical-vs-legacy divergence has not been
+      // re-adjudicated by the background revalidator yet. Re-granting eligibility here would
+      // let the next read hit the warm L1 (whose merge does not compare legacy bodies) and
+      // silently mask the divergence, so the write path stays out of the verdict's jurisdiction.
+      const rejection = this.conn.prepare('SELECT 1 FROM canonical_session_projection_rejections WHERE session_id=?')
+        .get(this.sessionId)
+      if (rejection) return
+      const canonical = this.readCanonicalSessionTranscriptWithCache(this.sessionId, 'transcript')
+      if (canonical.kind !== 'matched') return
+      const generation = (this.conn.prepare('SELECT generation FROM sessions WHERE id=?').get(this.sessionId) as
+        { generation: string } | undefined)?.generation
+      if (!generation) return
+      this.conn.prepare(`INSERT INTO canonical_session_projection_eligibility(session_id, session_generation, validated_at)
+        VALUES(?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET
+        session_generation=excluded.session_generation, validated_at=excluded.validated_at`)
+        .run(this.sessionId, generation, Date.now())
+    } catch { /* 任何推进障碍都保持现状兜底：读路径缓存阶梯自行验证。 */ }
   }
 
   /** Fold session-owned canonical snapshots and require exact equality for every legacy field this API can represent. */
@@ -710,18 +828,80 @@ export class SqliteAgentHistory implements HistoryPort {
       rows.at(-1)!.sequence === stream.version && rows.every((row) => this.isCanonicalSessionEventRowStructurallyValid(row))
   }
 
-  /** Reject ambiguous tool proposals or results without a matching pending canonical proposal. */
-  private validateCanonicalSessionToolTransitions(events: readonly HistoryEvent[]): void {
-    const pending = new Map<string, 'proposed' | 'started'>()
-    const toolApproval = new Map<string, { approvalId: string; approved?: boolean }>()
-    const unboundApprovalIds = new Set<string>()
-    const seenApprovalIds = new Set<string>()
+  /**
+   * P1-②: replay tool/approval transitions over an optional persisted starting state. With no
+   * initial state this is the exact historical full-stream validation; the append transaction
+   * feeds the persisted view so each append replays only its own events.
+   */
+  private replayCanonicalSessionToolTransitions(events: readonly HistoryEvent[], initial?: CanonicalToolTransitionState): CanonicalToolTransitionState {
+    const state: CanonicalToolTransitionState = initial ? cloneToolTransitionState(initial) : {
+      pending: new Map(), toolApproval: new Map(), unboundApprovalIds: new Set(), seenApprovalIds: new Set(),
+      pendingApprovals: new Set(), approvalIdentity: new Map(), terminalSeen: false, turnId: null
+    }
+    const { pending, toolApproval, unboundApprovalIds, seenApprovalIds } = state
     for (const event of events) {
+      state.turnId = state.turnId ?? event.turnId
+      if (['invocation-completed', 'invocation-failed', 'invocation-interrupted', 'invocation-parked'].includes(event.kind)) {
+        state.terminalSeen = true
+      }
       const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload)
         ? event.payload as { message?: { toolCalls?: readonly { id?: unknown }[] }; toolCallId?: unknown; approvalId?: unknown;
-          approved?: unknown; success?: unknown; result?: unknown; answerer?: unknown; reasonCode?: unknown; requestedAt?: unknown;
+          approved?: unknown; outcome?: unknown; settledAt?: unknown; cause?: unknown; success?: unknown; result?: unknown; answerer?: unknown; reasonCode?: unknown; requestedAt?: unknown;
           todoId?: unknown; invocationId?: unknown; checkpointId?: unknown; workflowRevision?: unknown }
         : undefined
+      // P1-②: the same approval-lifecycle invariants validateHistoryTransition enforces over the
+      // whole stream, applied incrementally against the persisted state (approval-waiting pending
+      // keys, resolution payload shape, orphan/identity checks, terminal settlement).
+      const historyApprovalId = typeof payload?.toolCallId === 'string'
+        ? payload.toolCallId
+        : typeof payload?.approvalId === 'string' ? payload.approvalId : undefined
+      if (event.kind === 'approval-waiting') {
+        const pendingId = historyApprovalId ?? event.eventId
+        if (state.pendingApprovals.has(pendingId)) {
+          throw new HistoryCorruptionError(event.invocationId, `approval is already pending: ${pendingId}`)
+        }
+        const hasMetadata = ['answerer', 'reasonCode', 'requestedAt'].some((key) => key in (payload ?? {}))
+        if (hasMetadata && (typeof payload?.approvalId !== 'string' || !payload.approvalId.trim() ||
+          (payload.answerer !== 'user' && payload.answerer !== 'agent') || typeof payload.reasonCode !== 'string' || !payload.reasonCode.trim() ||
+          typeof payload.requestedAt !== 'number' || !Number.isFinite(payload.requestedAt))) {
+          throw new HistoryCorruptionError(event.invocationId, `approval waiting metadata is invalid: ${pendingId}`)
+        }
+        state.pendingApprovals.add(pendingId)
+        if (hasMetadata && typeof payload?.approvalId === 'string') state.approvalIdentity.set(pendingId, payload.approvalId)
+      }
+      if (event.kind === 'approval-resolved') {
+        if (typeof payload?.approved !== 'boolean') {
+          throw new HistoryCorruptionError(event.invocationId, 'approval resolution requires an approved boolean')
+        }
+        if (payload.outcome !== undefined) {
+          const outcomes = ['approved', 'denied', 'timeout', 'unavailable', 'cancelled']
+          if (typeof payload.outcome !== 'string' || !outcomes.includes(payload.outcome) || payload.approved !== (payload.outcome === 'approved')) {
+            throw new HistoryCorruptionError(event.invocationId, 'approval outcome conflicts with approved boolean')
+          }
+          if (payload.settledAt !== undefined && (typeof payload.settledAt !== 'number' || !Number.isFinite(payload.settledAt))) {
+            throw new HistoryCorruptionError(event.invocationId, 'approval resolution settledAt is invalid')
+          }
+        }
+        if (payload.answerer !== undefined && payload.answerer !== 'user' && payload.answerer !== 'agent') {
+          throw new HistoryCorruptionError(event.invocationId, 'approval resolution answerer is invalid')
+        }
+        if (payload.cause !== undefined && (typeof payload.cause !== 'string' || !payload.cause.trim())) {
+          throw new HistoryCorruptionError(event.invocationId, 'approval resolution cause is invalid')
+        }
+        if (!historyApprovalId || !state.pendingApprovals.has(historyApprovalId)) {
+          throw new HistoryCorruptionError(event.invocationId, `approval is not pending: ${historyApprovalId ?? event.eventId}`)
+        }
+        const expectedApprovalId = state.approvalIdentity.get(historyApprovalId)
+        if (expectedApprovalId && payload.approvalId !== expectedApprovalId) {
+          throw new HistoryCorruptionError(event.invocationId, `approval resolution identity mismatch: ${historyApprovalId}`)
+        }
+        state.pendingApprovals.delete(historyApprovalId)
+        state.approvalIdentity.delete(historyApprovalId)
+      }
+      if ((event.kind === 'invocation-completed' || event.kind === 'invocation-failed') &&
+        (state.pendingApprovals.size > 0 || state.pending.size > 0)) {
+        throw new HistoryCorruptionError(event.invocationId, 'cannot terminally settle an invocation with pending tool calls or approvals')
+      }
       if (event.kind === 'model-response-committed') {
         const responseIds = new Set<string>()
         for (const call of payload?.message?.toolCalls ?? []) {
@@ -803,6 +983,53 @@ export class SqliteAgentHistory implements HistoryPort {
         approval.approved = payload.approved
       }
     }
+    return state
+  }
+
+  /** Historical full-stream validation is the state-free form of the replay above. */
+  private validateCanonicalSessionToolTransitions(events: readonly HistoryEvent[]): void {
+    this.replayCanonicalSessionToolTransitions(events)
+  }
+
+  /** P1-② write-side maintenance: advance the invocation's persisted pending view in-transaction. */
+  private updateCanonicalInvocationPendingViewInTransaction(events: readonly HistoryEvent[]): void {
+    if (events.length === 0) return
+    const invocationId = events[0]!.invocationId
+    const first = events[0]!.sequence
+    const last = events[events.length - 1]!.sequence
+    try {
+      const existing = this.conn.prepare('SELECT pending_json, stream_version FROM canonical_invocation_pending_views WHERE invocation_id=?')
+        .get(invocationId) as { pending_json: string; stream_version: number } | undefined
+      let initial: CanonicalToolTransitionState | undefined
+      if (existing && Number(existing.stream_version) === first - 1) {
+        initial = deserializeToolTransitionState(existing.pending_json)
+      } else if (first > 1) {
+        // View missing or non-adjacent: rebuild once from the preceding stream, then fold the new events.
+        const priorRows = this.conn.prepare(`SELECT invocation_id, sequence, event_id, idempotency_key, turn_id, schema_version, kind, payload_json
+          FROM agent_history_events WHERE invocation_id=? AND sequence<? ORDER BY sequence ASC`).all(invocationId, first) as EventRow[]
+        initial = this.replayCanonicalSessionToolTransitions(priorRows.map(fromRow))
+      }
+      const finalState = this.replayCanonicalSessionToolTransitions(events, initial)
+      this.conn.prepare(`INSERT INTO canonical_invocation_pending_views(invocation_id, pending_json, stream_version, updated_at)
+        VALUES(?, ?, ?, ?) ON CONFLICT(invocation_id) DO UPDATE SET
+        pending_json=excluded.pending_json, stream_version=excluded.stream_version, updated_at=excluded.updated_at`)
+        .run(invocationId, serializeToolTransitionState(finalState), last, Date.now())
+    } catch (error) {
+      // The write path must keep accepting every stream the append gate accepts. A view that
+      // cannot be derived (loose tool lifecycle mid-write, legacy test shapes) is dropped so the
+      // read path falls back to its exact historical full-stream validation — log it so a mass
+      // fall-out (e.g. a new invariant tripping on legacy streams) is observable.
+      try { logAgentEvent('warn', 'session.storage.pending_view', { invocationId, reason: error instanceof Error ? error.message : String(error) }) } catch { /* logging cannot fail the append */ }
+      this.conn.prepare('DELETE FROM canonical_invocation_pending_views WHERE invocation_id=?').run(invocationId)
+    }
+  }
+
+  /** P1-② read-side lookup: undefined when absent or non-adjacent (caller falls back to the full stream). */
+  private readCanonicalInvocationPendingView(invocationId: string, streamVersion: number): CanonicalToolTransitionState | undefined {
+    const row = this.conn.prepare('SELECT pending_json, stream_version FROM canonical_invocation_pending_views WHERE invocation_id=?')
+      .get(invocationId) as { pending_json: string; stream_version: number } | undefined
+    if (!row || Number(row.stream_version) !== streamVersion) return undefined
+    try { return deserializeToolTransitionState(row.pending_json) } catch { return undefined }
   }
 
   private isCanonicalSessionEventRowStructurallyValid(row: OrderedSessionEventRow): boolean {
@@ -868,6 +1095,19 @@ export class SqliteAgentHistory implements HistoryPort {
     try {
       JSON.parse(input.value)
       const valueSha256 = sha256(input.value)
+      // S7: an append whose tail fold reproduces the cached transcript byte-for-byte (duplicate
+      // append, no transcript-visible delta) must not rewrite the whole cached JSON per append.
+      // The skip requires every cached identity column to match too — a drifted generation,
+      // watermark or a corrupted cache_version must still be rewritten.
+      const unchanged = this.conn.prepare(`SELECT value_sha256, cache_version, session_generation, session_seq, commit_order,
+        watermark_event_id, watermark_invocation_id, event_count
+        FROM canonical_session_projection_cache WHERE session_id=? AND cache_key=?`)
+        .get(input.sessionId, input.cacheKey) as { value_sha256: string; cache_version: number; session_generation: string;
+        session_seq: number; commit_order: number; watermark_event_id: string | null; watermark_invocation_id: string | null; event_count: number } | undefined
+      if (unchanged && unchanged.value_sha256 === valueSha256 && unchanged.cache_version === CANONICAL_SESSION_CACHE_VERSION &&
+        unchanged.session_generation === input.sessionGeneration && unchanged.session_seq === input.sessionSeq &&
+        unchanged.commit_order === input.commitOrder && unchanged.watermark_event_id === input.watermarkEventId &&
+        unchanged.watermark_invocation_id === input.watermarkInvocationId && unchanged.event_count === input.eventCount) return true
       const result = this.conn.prepare(`INSERT INTO canonical_session_projection_cache(
         session_id, cache_key, cache_version, session_generation, session_seq, commit_order, watermark_event_id, watermark_invocation_id,
         event_count, value, value_sha256, updated_at
@@ -938,9 +1178,30 @@ export class SqliteAgentHistory implements HistoryPort {
                 'tool-call-not-dispatched', 'approval-waiting', 'approval-resolved', 'invocation-completed',
                 'invocation-failed', 'invocation-interrupted', 'invocation-parked'].includes(row.kind))) {
                 // A session cache stores transcript state, not the invocation's pending tool/approval state.
-                // State-bearing deltas validate the complete stream so proposals and dispatch facts before
-                // the cache watermark cannot be hidden by the seed.
-                this.validateCanonicalSessionToolTransitions(this.readSync(invocationId).events)
+                // State-bearing deltas validate the transitions so proposals and dispatch facts before the
+                // cache watermark cannot be hidden by the seed. P1-②: the persisted pending view covers
+                // everything before the tail, so only the tail events are replayed; without an adjacent
+                // view the complete stream is re-read exactly as before. The view path still applies the
+                // same per-event schema gate the full-stream read applies through readSync.
+                const view = this.readCanonicalInvocationPendingView(invocationId, invocationRows[0]!.sequence - 1)
+                if (view) {
+                  if (!invocationRows.every((row) => this.isCanonicalSessionEventRowStructurallyValid(row))) {
+                    throw new Error('canonical History tail event schema is invalid')
+                  }
+                  // Stream-level invariants the full-stream read derives from the whole history:
+                  // turn identity, append-after-terminal, and terminal kind/status matching.
+                  if (view.terminalSeen || (view.turnId !== null && invocationRows.some((row) => row.turn_id !== view.turnId)) ||
+                    !invocationRows.every((row) => invocationTerminalStatusMatches({ kind: row.kind as HistoryEvent['kind'],
+                      payload: JSON.parse(row.payload_json) as unknown }))) {
+                    throw new Error('canonical History tail violates stream invariants')
+                  }
+                  this.replayCanonicalSessionToolTransitions(invocationRows.map((row) => ({ invocationId,
+                    sequence: row.sequence, eventId: row.event_id, idempotencyKey: row.idempotency_key,
+                    turnId: row.turn_id, schemaVersion: row.schema_version, kind: row.kind,
+                    payload: JSON.parse(row.payload_json) as unknown })), view)
+                } else {
+                  this.validateCanonicalSessionToolTransitions(this.readSync(invocationId).events)
+                }
               }
               const hasBase = invocationRows.some((row) => row.kind === 'invocation-context-committed' || row.kind === 'transcript-compacted')
               if (!hasBase && !invocationRows.some((row) => ['model-response-committed', 'replay-message-committed', 'tool-call-finished', 'tool-call-not-dispatched'].includes(row.kind))) continue
@@ -1089,7 +1350,11 @@ export class SqliteAgentHistory implements HistoryPort {
     })
   }
 
-  /** Pending obligations are retried independently; success is the only transition to completed. */
+  /**
+   * Pending obligations are retried independently; success is the only transition to completed.
+   * P3-②: a deterministically unrecoverable classification (workspace root rejected, storage
+   * access denied) flags the row terminal so every retry query excludes it permanently.
+   */
   recordProjectionRepairResult(repairId: string, result: { success: true } | { success: false; error: unknown }): void {
     const now = Date.now()
     if (result.success) {
@@ -1097,8 +1362,10 @@ export class SqliteAgentHistory implements HistoryPort {
         last_error = NULL, updated_at = ? WHERE repair_id = ?`).run(now, repairId)
     } else {
       const message = result.error instanceof Error ? result.error.message : String(result.error)
-      this.conn.prepare(`UPDATE canonical_projection_repairs SET status = 'pending', attempts = attempts + 1,
-        last_error = ?, updated_at = ? WHERE repair_id = ?`).run(message, now, repairId)
+      const category = classifySessionHistoryRepairFailure(result.error)
+      const terminal = REPAIR_TERMINAL_FAILURE_CATEGORIES.includes(category) ? 1 : 0
+      this.conn.prepare(`UPDATE canonical_projection_repairs SET status = 'pending', terminal_failed = ?, attempts = attempts + 1,
+        last_error = ?, updated_at = ? WHERE repair_id = ?`).run(terminal, message, now, repairId)
     }
   }
 
@@ -1135,7 +1402,7 @@ export class SqliteAgentHistory implements HistoryPort {
         COUNT(*) OVER (PARTITION BY repairs.invocation_id) AS invocation_repair_count
         FROM canonical_projection_repairs repairs
         LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=repairs.session_id
-        WHERE repairs.status='pending' AND (cutover.cleanup_state IS NULL OR
+        WHERE repairs.status='pending' AND repairs.terminal_failed=0 AND (cutover.cleanup_state IS NULL OR
           cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))`).all() as Array<{
             attempts: number; updated_at: number; invocation_repair_count: number
           }>
@@ -1181,7 +1448,9 @@ export class SqliteAgentHistory implements HistoryPort {
     | Readonly<{ kind: 'none' }>
     | Readonly<{ kind: 'completed'; snapshot: HistorySnapshot }>
     | Readonly<{ kind: 'cancelled'; snapshot: HistorySnapshot }>
-    | Readonly<{ kind: 'unavailable'; invocationId: string }>
+    // P0-⑤: the unavailable verdict already carries the stream it just read, so callers
+    // (hostedTurnHandoff recovery) never re-read the same full invocation.
+    | Readonly<{ kind: 'unavailable'; invocationId: string; snapshot: HistorySnapshot }>
   > {
     const excluded = new Set([...(options.excludeInvocationId ? [options.excludeInvocationId] : []), ...(options.excludeInvocationIds ?? [])])
     const invocationIds = this.listInvocationIdsForSession(sessionId).filter((id) => !excluded.has(id))
@@ -1191,7 +1460,7 @@ export class SqliteAgentHistory implements HistoryPort {
       const terminal = snapshot.events.at(-1)
       // Open/interrupted streams may represent a crashed turn whose canonical tail is incomplete.
       if (!terminal || !['invocation-completed', 'invocation-failed', 'invocation-interrupted'].includes(terminal.kind)) {
-        return { kind: 'unavailable', invocationId }
+        return { kind: 'unavailable', invocationId, snapshot }
       }
       // Failed turns are closed attempts. Keep searching for the last complete conversation base.
       if (terminal.kind === 'invocation-failed') continue
@@ -1202,10 +1471,10 @@ export class SqliteAgentHistory implements HistoryPort {
         if (outcome === 'cancelled' && snapshot.events.some(({ kind }) => kind === 'invocation-context-committed' || kind === 'transcript-compacted')) {
           return { kind: 'cancelled', snapshot }
         }
-        return { kind: 'unavailable', invocationId }
+        return { kind: 'unavailable', invocationId, snapshot }
       }
       if (!snapshot.events.some(({ kind }) => kind === 'invocation-context-committed' || kind === 'transcript-compacted')) {
-        return { kind: 'unavailable', invocationId }
+        return { kind: 'unavailable', invocationId, snapshot }
       }
       return { kind: 'completed', snapshot }
     }
@@ -1622,13 +1891,13 @@ export class SqliteAgentHistory implements HistoryPort {
           repairs.attempts,repairs.updated_at,COUNT(*) OVER (PARTITION BY repairs.invocation_id) AS invocation_repair_count
           FROM canonical_projection_repairs repairs
           LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=repairs.session_id
-          WHERE repairs.status='pending' AND (cutover.cleanup_state IS NULL OR
+          WHERE repairs.status='pending' AND repairs.terminal_failed=0 AND (cutover.cleanup_state IS NULL OR
             cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))
           ORDER BY repairs.updated_at,repairs.repair_id`).all() as Array<{
             repair_id: string; invocation_id: string; repair_kind: string; target_key: string; attempts: number; updated_at: number;
             invocation_repair_count: number
           }>
-      const retryTime = Date.now()
+      const retryTime = this.now()
       const dueRepairRows = repairRows.filter((row) =>
         retryTime - row.updated_at >= projectionRepairRetryDelayMs(row.attempts, row.invocation_repair_count)
       )
@@ -1654,7 +1923,10 @@ export class SqliteAgentHistory implements HistoryPort {
       const ledgerKey = (location: CompactionLedgerLocation) => JSON.stringify([location.workDir, location.sessionId, location.createdAt])
       const recoveryLocations = new Map<string, CompactionLedgerLocation>()
       const requestIdsByTurn = new Map<string, string>()
-      const repairOutcomes = new Map<string, boolean>()
+      // S4: keep the real callback error per repair so the governance classifier can see
+      // workspace-root-rejected / storage-access-denied categories; the boolean folding made
+      // the terminal categories unreachable for every repair kind except invocation-terminal.
+      const repairOutcomes = new Map<string, { ok: boolean; error?: unknown }>()
       const unrepairableRepairIds = new Set<string>()
       const repairLedgerKeys = new Map<string, string>()
       const repairIdsByTarget = new Map<string, string[]>()
@@ -1672,15 +1944,16 @@ export class SqliteAgentHistory implements HistoryPort {
       }
       const flushRepairOutcomes = () => {
         for (const repairId of repairIds) {
-          const success = repairOutcomes.get(repairId) === true && !unrepairableRepairIds.has(repairId) &&
+          const outcome = repairOutcomes.get(repairId)
+          const success = outcome?.ok === true && !unrepairableRepairIds.has(repairId) &&
             !blockedSessionLedgers.has(repairLedgerKeys.get(repairId) ?? '')
           this.recordProjectionRepairResult(repairId, success
             ? { success: true }
-            : { success: false, error: new Error('one or more canonical projections remain incomplete') })
+            : { success: false, error: outcome?.error ?? new Error('one or more canonical projections remain incomplete') })
         }
       }
-      const markEventRepair = (eventId: string, success: boolean) => {
-        for (const repairId of repairIdsByTarget.get(eventId) ?? []) repairOutcomes.set(repairId, success)
+      const markEventRepair = (eventId: string, success: boolean, error?: unknown) => {
+        for (const repairId of repairIdsByTarget.get(eventId) ?? []) repairOutcomes.set(repairId, { ok: success, error })
       }
       for (const event of snapshot.events) {
         if (event.kind !== 'model-request-started') continue
@@ -1752,7 +2025,7 @@ export class SqliteAgentHistory implements HistoryPort {
               markEventRepair(event.eventId, true)
             }
             catch (error) {
-              markEventRepair(event.eventId, false)
+              markEventRepair(event.eventId, false, error)
               try { options.onInvocationTerminalRepairError?.(error, invocationId, ledger.turnId) }
               catch { /* Keep startup recovery moving while preserving the canonical terminal for retry. */ }
             }
@@ -1833,6 +2106,7 @@ export class SqliteAgentHistory implements HistoryPort {
                 markEventRepair(event.eventId, true)
               } catch (error) {
                 blockedSessionLedgers.add(key)
+                markEventRepair(event.eventId, false, error)
                 try { options.onModelRequestLedgerRepairError?.(error, invocationId, requestId) }
                 catch { /* Diagnostics must not discard the canonical repair envelope. */ }
               }
@@ -1864,6 +2138,7 @@ export class SqliteAgentHistory implements HistoryPort {
               try { await options.repairProviderRetryLedger(repairLocation, requestRetry!); markEventRepair(event.eventId, true) }
               catch (error) {
                 blockedSessionLedgers.add(key)
+                markEventRepair(event.eventId, false, error)
                 try { options.onProviderRetryLedgerRepairError?.(error, invocationId, String(payload.requestId)) }
                 catch { /* Diagnostics must not discard the canonical repair envelope. */ }
               }
@@ -1901,6 +2176,7 @@ export class SqliteAgentHistory implements HistoryPort {
                   }
                 }
                 catch (error) {
+                  markEventRepair(event.eventId, false, error)
                   blockedSessionLedgers.add(key)
                   try { options.onUsageLedgerRepairError?.(error, invocationId, typeof usage.requestId === 'string' ? usage.requestId : 'request-usage') }
                   catch { /* Diagnostics must not discard the canonical repair envelope. */ }
@@ -1925,9 +2201,10 @@ export class SqliteAgentHistory implements HistoryPort {
                     try { await options.repairFinalRequestContextLedger(location as CompactionLedgerLocation, finalContext); markEventRepair(event.eventId, true) }
                     catch (error) {
                       blockedSessionLedgers.add(key)
-                      try { options.onFinalRequestContextLedgerRepairError?.(error, invocationId, expectedUsageRequestId ?? 'final-request-context') }
-                    catch { /* Diagnostics must not discard the canonical repair envelope. */ }
-                  }
+                      markEventRepair(event.eventId, false, error)
+                      try { options.onFinalRequestContextLedgerRepairError?.(error, invocationId, expectedUsageRequestId ?? "final-request-context") }
+                      catch { /* Diagnostics must not discard the canonical repair envelope. */ }
+                    }
                 }
               }
             }
@@ -1971,6 +2248,7 @@ export class SqliteAgentHistory implements HistoryPort {
               try { await options.repairToolCallLedger?.(location as CompactionLedgerLocation, { ...toolCall, turnId: event.turnId, stepId: ledger.stepId }); markEventRepair(event.eventId, true) }
               catch (error) {
                 blockedSessionLedgers.add(key)
+                markEventRepair(event.eventId, false, error)
                 try { options.onToolLedgerRepairError?.(error, invocationId, toolCall.toolUseId) }
                 catch { /* Diagnostics must not discard the canonical repair envelope. */ }
                 break
@@ -2031,6 +2309,7 @@ export class SqliteAgentHistory implements HistoryPort {
               markEventRepair(event.eventId, true)
             } catch (error) {
               blockedSessionLedgers.add(key)
+              markEventRepair(event.eventId, false, error)
               try { options.onToolLedgerRepairError?.(error, invocationId, payload.toolCallId) }
               catch { /* Diagnostics must not discard the canonical repair envelope. */ }
             }
