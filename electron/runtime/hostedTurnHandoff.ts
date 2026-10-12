@@ -215,7 +215,9 @@ export function createHostedTurnHandoff(input: {
         let snapshotVersion: number | undefined
         let recoveredRestartInput = false
         try {
-          const snapshot = await sessionHistory.read(latest.invocationId)
+          // P0-⑤: the unavailable verdict already read this stream; only fall back to a
+          // re-read for ports whose unavailable result predates the snapshot carry.
+          const snapshot = latest.snapshot ?? await sessionHistory.read(latest.invocationId)
           snapshotVersion = snapshot.version
           previousTurnId = snapshot.events.at(-1)?.turnId
           const acceptedInput = input.sessionExecution && handoff.requiredUserMessage

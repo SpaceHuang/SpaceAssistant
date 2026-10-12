@@ -98,6 +98,8 @@ import { initFeishuCliLogger } from './feishu/feishuCliLogger'
 import { initWeChatCliLogger } from './wechat/weChatCliLogger'
 import { encryptSecret } from './secureApiKey'
 import { loadProjectMemory, startMemoryWatcher, stopMemoryWatcher } from './projectMemory'
+import { startEventLoopWatchdog } from './runtime/eventLoopWatchdog'
+import { startSessionProjectionRevalidationDrain } from './runtime/sessionProjectionRevalidation'
 import {
   getActiveLlmService,
   migrateLegacyLlmServicesIfNeeded,
@@ -276,6 +278,8 @@ installProcessSafetyNet((event, detail) => {
 let usageStatsStartupMaintenance: (() => void) | null = null
 let startWindowReadyMaintenance: (() => void) | null = null
 let storageLifecycleStop: ((deadlineMs: number) => Promise<{ status: 'quiescent' | 'deadline-exceeded' }>) | null = null
+let projectionRevalidationDrainStop: { stop: () => void } | null = null
+let eventLoopWatchdogStop: (() => void) | null = null
 let safeDatabaseMaintenanceInFlight: Promise<void> | undefined
 let isQuitting = false
 let quitCleanupDone = false
@@ -794,7 +798,7 @@ app.whenReady().then(async () => {
     pendingSessionHistoryRepairs = (getDbConnection(db).prepare(`SELECT COUNT(*) AS count
       FROM canonical_projection_repairs repairs
       LEFT JOIN session_message_content_cutover cutover ON cutover.session_id=repairs.session_id
-      WHERE repairs.status='pending' AND (cutover.cleanup_state IS NULL OR
+      WHERE repairs.status='pending' AND repairs.terminal_failed=0 AND (cutover.cleanup_state IS NULL OR
         cutover.cleanup_state NOT IN ('write-stopped','pending','complete'))`).get() as { count: number }).count
     sessionHistoryRecoverySucceeded = sessionHistoryRepairFailureCount === 0 && pendingSessionHistoryRepairs === 0
     if (interrupted.length > 0) console.warn('[agentHistory] interrupted invocations recovered:', interrupted.map(({ invocationId }) => invocationId))
@@ -1077,6 +1081,14 @@ app.whenReady().then(async () => {
   setUsageStatsAppVersion(getTelemetryAppVersion())
   // 注册维护任务；实际执行时机在下方 createMainWindow 完成之后（评审 P1-3）。
   usageStatsStartupMaintenance = runUsageStatsStartupMaintenance
+
+  // P0-③（评审 S1）：重校验队列的常驻生产 drain——入队方（读路径 stale / 终态检查点）之外
+  // 必须有消费方，否则 mismatch verdict 永不重验/清除。unref 不阻碍进程退出。
+  projectionRevalidationDrainStop = startSessionProjectionRevalidationDrain(db)
+  // P3-③（评审 S3）：常驻事件循环延迟采样——p99 超阈值（200ms）落 agent 日志，作为
+  // monitorEventLoopDelay 门禁证据；只告警不干预。
+  const eventLoopWatchdog = startEventLoopWatchdog({ thresholdMs: 200 })
+  eventLoopWatchdogStop = eventLoopWatchdog.stop
 
   const getApiKey = async (): Promise<string | null> => {
     return getActiveLlmService(db).getApiKey()
@@ -1493,6 +1505,8 @@ app.on('before-quit', (event) => {
   butlerScheduler?.stop()
   destroyTray()
   floatingManager?.destroy()
+  projectionRevalidationDrainStop?.stop()
+  eventLoopWatchdogStop?.()
   stopMemoryWatcher()
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.destroy()

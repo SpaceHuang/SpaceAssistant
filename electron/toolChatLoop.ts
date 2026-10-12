@@ -21,6 +21,7 @@ import { FileStateCache } from './fileStateCache'
 import { getCallAdmissionGate } from './runtime/callAdmissionGate'
 import { coordinatorConfirmHook } from './tools/coordinatorConfirmationAdapter'
 import { InvocationHistoryWriter, type HistoryEvent, type HistoryPort } from '../packages/agent-sdk/src/history'
+import { createTurnScopedHistoryMemo } from './runtime/turnScopedHistoryMemo'
 import { CanonicalCompactionCommitUncertainError, toCanonicalModelMessages } from './runtime/canonicalHistory'
 import { rebuildClaudeMessagesFromHistory } from './runtime/canonicalHistory'
 import type { PreparedShellExecution } from './shell/preparedShellExecution'
@@ -564,6 +565,9 @@ function expandInvocation(invocation: AgentInvocation, ports: AgentHostPorts): R
 
 export async function runToolChatSession(invocation: AgentInvocation, ports: RunToolChatSessionPorts, options: Pick<RunToolChatSessionArgs, 'onHostedTurnHandoff'> = {}): Promise<AgentInvocationResult> {
   const args = { ...expandInvocation(invocation, ports), ...options, hostHistory: ports.hostHistory }
+  // P0-⑤ 同轮读合并：同一 invocation 流在本回合被读取多次（terminal 检查 / 消息重建 / base 归属
+  // 检查），中间无写入；按 invocationId memoize，任何 append 即整体失效，防止续轮读到过期 transcript。
+  if (args.history) args.history = createTurnScopedHistoryMemo(args.history)
   const executionId = args.turnId ?? args.requestId
   const historyWriter = args.history ? new InvocationHistoryWriter(args.history as never, { invocationId: executionId, turnId: executionId }) : undefined
   const appendHistoryEvents = async (events: readonly Readonly<{ kind: HistoryEvent['kind']; payload: unknown }>[]): Promise<void> => {

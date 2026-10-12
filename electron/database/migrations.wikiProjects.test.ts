@@ -10,7 +10,7 @@ function createMigratedDb(): AppDatabase {
 
 describe('schema v83 wiki_projects 表迁移（T0.3）', () => {
   it('DB_SCHEMA_VERSION 为 83', () => {
-    expect(DB_SCHEMA_VERSION).toBe(83)
+    expect(DB_SCHEMA_VERSION).toBe(86)
   })
 
   it('v82 旧库升级后 wiki_projects 表结构正确且幂等', () => {
@@ -22,7 +22,7 @@ describe('schema v83 wiki_projects 表迁移（T0.3）', () => {
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run('82', SCHEMA_META_KEYS.schemaVersion)
 
     expect(() => runMigrations(conn)).not.toThrow()
-    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('83')
+    expect(getSchemaMeta(conn, SCHEMA_META_KEYS.schemaVersion)).toBe('86')
 
     const columns = (conn.prepare('PRAGMA table_info(wiki_projects)').all() as Array<{ name: string }>).map((c) => c.name)
     expect(columns).toEqual(expect.arrayContaining(['project_id', 'work_dir', 'display_name', 'profile_id', 'first_seen_at', 'orphan']))

@@ -2812,27 +2812,27 @@ describe('runAgentTurn', () => {
     })
 
     const snapshot = await history.read('inv-request-snapshot')
+    // P2a: the snapshot keeps route + request options and carries the omitted messages body as
+    // count + digest at the top level; the rebuilders never read messages from the snapshot.
+    const expectedSnapshot = {
+      route: routeProfile,
+      request: {
+        maxTokens: 96,
+        tools: request.tools,
+        thinking: { enabled: true, effort: 'high' }
+      },
+      messagesCount: request.messages.length
+    }
+    expect(snapshot.events[0]?.payload).toMatchObject({ requestSnapshot: expectedSnapshot })
+    // 摘要与本地实算比对（不只验证格式）：摘要必须忠实对应被省略的 messages 正文。
+    const { createHash } = await import('node:crypto')
+    const expectedMessagesSha = createHash('sha256').update(JSON.stringify(request.messages), 'utf8').digest('hex')
     expect(snapshot.events[0]?.payload).toMatchObject({
-      requestSnapshot: {
-        route: routeProfile,
-        request: {
-          messages: request.messages,
-          maxTokens: 96,
-          tools: request.tools,
-          thinking: { enabled: true, effort: 'high' }
-        }
-      }
+      requestSnapshot: { messagesSha256: expectedMessagesSha }
     })
+    expect(Object.hasOwn((snapshot.events[0]?.payload as { requestSnapshot: { request: Record<string, unknown> } }).requestSnapshot.request, 'messages')).toBe(false)
     expect(snapshot.events.find(({ kind }) => kind === 'model-response-committed')?.payload).toMatchObject({
-      requestSnapshot: {
-        route: routeProfile,
-        request: {
-          messages: request.messages,
-          maxTokens: 96,
-          tools: request.tools,
-          thinking: { enabled: true, effort: 'high' }
-        }
-      }
+      requestSnapshot: expectedSnapshot
     })
     expect(JSON.stringify(snapshot.events)).not.toContain('must-not-be-persisted')
   })

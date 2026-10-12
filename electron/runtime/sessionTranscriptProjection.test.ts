@@ -1530,7 +1530,10 @@ describe('session transcript projection P2 read path', () => {
       { message: { id: 'projection-assistant', content: 'answer', status: 'sent' }, sequence: 1 }
     ] })
     getDbConnection(db).prepare("UPDATE messages SET content='question' WHERE id='projection-user'").run()
-    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
+    // P0-② negative-cache semantics: the repaired legacy body invalidates the persisted verdict,
+    // but recovery is checkpoint-driven (background/terminal revalidation), not a synchronous L2
+    // retry inside the read path. The refresh clears the verdict and re-grants eligibility.
+    expect(refreshSessionTranscriptProjectionCache(db, session.id)).toBe(true)
     expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L1')
     db.close()
   })
@@ -2045,7 +2048,9 @@ describe('session transcript projection P2 read path', () => {
       payload: { messages: [{ role: 'user', id: 'eligible-row', content: 'same content', timestamp: 1 }] }
     }], 0)
 
-    expect(readSessionTranscriptProjection(db, eligible.id).source).toBe('canonical:L2')
+    // P1-①: the write path advanced the cache and granted eligibility during the append, so
+    // even the first read is served from the warm L1 seed.
+    expect(readSessionTranscriptProjection(db, eligible.id).source).toBe('canonical:L1')
     expect(readSessionTranscriptProjection(db, eligible.id).source).toBe('canonical:L1')
     expect(readSessionTranscriptProjection(db, legacy.id)).toMatchObject({ source: 'legacy', reason: 'history-absent' })
     expect(getProjectedChatMessagePage(db, eligible.id, null, 20).entries[0]?.message.content).toBe('same content')
@@ -2071,7 +2076,7 @@ describe('session transcript projection P2 read path', () => {
       eventId: 'pending-canonical-context', idempotencyKey: 'pending-canonical-context', kind: 'invocation-context-committed',
       payload: { messages: [{ role: 'user', id: 'pending-canonical-user', content: 'committed question', timestamp: 1 }] }
     }], 0)
-    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L2')
+    expect(readSessionTranscriptProjection(db, session.id).source).toBe('canonical:L1')
     appendMessage(db, { id: 'pending-not-canonical-yet', sessionId: session.id, role: 'user', content: 'queued question', timestamp: 2, status: 'queued' })
 
     expect(getProjectedChatMessagePage(db, session.id, undefined, 20)).toMatchObject({ entries: [
@@ -2132,7 +2137,8 @@ describe('session transcript projection P2 read path', () => {
     expect(pageWithUnmappedHistory.entries.some(({ message }) => message.id === 'page-known-assistant')).toBe(false)
     const olderPage = getProjectedChatMessagePage(db, session.id, pageWithUnmappedHistory.oldestSequence, 20)
     expect(olderPage.entries.find(({ message }) => message.id === 'page-known-assistant')?.message.content).toBe('known reply')
-    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'legacy', reason: 'legacy-mismatch' })
+    // The persisted mismatch verdict routes repeat reads to legacy without a full rebuild (P0-②).
+    expect(readSessionTranscriptProjection(db, session.id)).toMatchObject({ source: 'legacy', reason: 'projection-rejected' })
     db.close()
   })
 })

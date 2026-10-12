@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 export type StreamChunk =
   | { type: 'text-delta'; text: string }
   | { type: 'thinking-delta'; text: string }
@@ -159,13 +161,26 @@ export type PreparedModelCall = Readonly<{
   }>
 }>
 
-/** Persistable canonical request identity; ephemeral credentials and cancellation signals are excluded. */
+/**
+ * Persistable canonical request identity; ephemeral credentials and cancellation signals are
+ * excluded. P2a: the messages body is also omitted (the rebuilders never read it from the
+ * snapshot and the sole consumer compares options after stripping messages); the count and a
+ * content digest ride at the top level for forensics without the O(turn-count) payload.
+ */
 export function snapshotPreparedModelCall(call: PreparedModelCall): Readonly<{
   route: PreparedModelCall['route']
-  request: Omit<PreparedModelCall['request'], 'credentials' | 'signal'>
+  request: Omit<PreparedModelCall['request'], 'credentials' | 'signal' | 'messages'>
+  messagesCount: number
+  messagesSha256: string
 }> {
-  const { credentials: _credentials, signal: _signal, ...request } = call.request
-  return structuredClone({ route: call.route, request })
+  const { credentials: _credentials, signal: _signal, messages, ...request } = call.request
+  const messagesSha256 = createHash('sha256').update(JSON.stringify(messages), 'utf8').digest('hex')
+  return structuredClone({
+    route: call.route,
+    request,
+    messagesCount: messages.length,
+    messagesSha256
+  })
 }
 
 export type RegisteredPreparedModelCall = PreparedModelCall & Readonly<{ generation: number }>

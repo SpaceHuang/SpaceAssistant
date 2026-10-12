@@ -13,7 +13,7 @@ describe('deferred resume request migration', () => {
 
     runMigrations(conn)
 
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '83' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '86' })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='im_inbox_message_context'").get())
       .toEqual({ name: 'im_inbox_message_context' })
     db.close()
@@ -26,8 +26,8 @@ describe('deferred resume request migration', () => {
     conn.prepare("UPDATE schema_meta SET value='74' WHERE key='schema_version'").run()
     runMigrations(conn)
 
-    expect(DB_SCHEMA_VERSION).toBe(83)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '83' })
+    expect(DB_SCHEMA_VERSION).toBe(86)
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '86' })
     expect(conn.prepare("SELECT state,close_required FROM remote_async_approval_gate_state WHERE singleton=1").get())
       .toEqual({ state: 'disabled', close_required: 0 })
     expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='deferred_resume_requests'").get())
@@ -48,7 +48,7 @@ describe('deferred resume request migration', () => {
     conn.exec('DROP TABLE deferred_approval_notifications')
     conn.prepare("UPDATE schema_meta SET value='77' WHERE key='schema_version'").run()
     runMigrations(conn)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '83' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '86' })
     const columns = conn.prepare('PRAGMA table_info(deferred_approval_notifications)').all() as Array<{ name: string }>
     expect(columns.map(({ name }) => name)).toEqual(expect.arrayContaining([
       'todo_id', 'notification_version', 'short_code', 'trusted_message_id', 'expires_at', 'dto_json', 'state'
@@ -61,7 +61,7 @@ describe('deferred resume request migration', () => {
     const conn = getDbConnection(db)
     conn.prepare("UPDATE schema_meta SET value='78' WHERE key='schema_version'").run()
     runMigrations(conn)
-    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '83' })
+    expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '86' })
     expect(conn.prepare("SELECT state,close_required FROM remote_async_approval_gate_state WHERE singleton=1").get())
       .toEqual({ state: 'disabled', close_required: 0 })
     db.close()

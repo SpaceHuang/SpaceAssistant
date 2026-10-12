@@ -583,7 +583,7 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
     const committed = writtenEvents.find(({ kind }) => kind === 'model-response-committed')
     expect((committed?.payload as { message?: { id?: string } }).message?.id).toBe(assistantMessageId)
     expect(rebuildClaudeMessagesFromHistory(writtenEvents).map(({ id }) => id)).toContain(assistantMessageId)
-    expect(committed?.payload).toMatchObject({ requestSnapshot: { route: { routeId: providerRouteId, modelId: 'claude-sonnet-4-20250514' }, request: { maxTokens: expect.any(Number), messages: expect.any(Array) } } })
+    expect(committed?.payload).toMatchObject({ requestSnapshot: { route: { routeId: providerRouteId, modelId: 'claude-sonnet-4-20250514' }, request: { maxTokens: expect.any(Number) }, messagesCount: expect.any(Number) } })
     expect(JSON.stringify(committed?.payload)).not.toContain('apiKey')
     const requestLog = vi.mocked(logAgentEvent).mock.calls.find((call) => call[1] === 'llm.request')
     expect(requestLog?.[2]).toMatchObject({
@@ -592,8 +592,13 @@ describe('runToolChatSession(invocation, ports) 行为等价（P1）', () => {
     expect(requestLog?.[2]).not.toHaveProperty('messages')
     expect(requestLog?.[2]).not.toHaveProperty('system')
     expect(JSON.stringify(requestLog?.[2])).not.toContain('hello')
-    const snapshot = (committed?.payload as { requestSnapshot: { route: unknown; request: Record<string, unknown> } }).requestSnapshot
-    const { credentials: _credentials, signal: _signal, ...persistableRequest } = providerCalls[0]!.request as { credentials?: unknown; signal?: unknown }
+    // P2a：快照剥离 messages 正文（count/digest 顶层承载）。此处是「持久化快照 == 实际
+    // provider 请求（去凭证/信号/消息体）」的唯一集成级对拍，剥离口径必须与写路径一致。
+    const snapshot = (committed?.payload as { requestSnapshot: { route: unknown; request: Record<string, unknown>; messagesCount: number; messagesSha256: string } }).requestSnapshot
+    const providerRequest = providerCalls[0]!.request as { credentials?: unknown; signal?: unknown; messages?: readonly unknown[] }
+    const { credentials: _credentials, signal: _signal, messages: _messages, ...persistableRequest } = providerRequest
+    expect(snapshot.messagesCount).toBe(Array.isArray(providerRequest.messages) ? providerRequest.messages.length : 0)
+    expect(snapshot.messagesSha256).toMatch(/^[a-f0-9]{64}$/)
     expect(snapshot.route).toEqual(providerCalls[0]!.route)
     expect(snapshot.request).toEqual(persistableRequest)
   })

@@ -79,7 +79,9 @@ export type SessionHistoryPort = HistoryPort & Readonly<{
     | Readonly<{ kind: 'none' }>
     | Readonly<{ kind: 'completed'; snapshot: HistorySnapshot }>
     | Readonly<{ kind: 'cancelled'; snapshot: HistorySnapshot }>
-    | Readonly<{ kind: 'unavailable'; invocationId: string }>
+    // P0-⑤: the unavailable verdict carries the stream snapshot it just read so callers
+    // never re-read the same full invocation; ports without it fall back to a re-read.
+    | Readonly<{ kind: 'unavailable'; invocationId: string; snapshot?: HistorySnapshot }>
   >
 }>
 export type ContinuationIntentAcceptance = Readonly<{

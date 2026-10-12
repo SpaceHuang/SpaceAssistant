@@ -217,6 +217,19 @@ const TERMINAL_INVOCATION_EVENTS = new Set<HistoryEvent['kind']>([
 ])
 
 /** A persisted terminal or parked event closes an invocation stream permanently. */
+/**
+ * Single-event form of the terminal kind/status invariants inside validateHistoryTransition.
+ * P1-②: the persisted pending-view tail validation replays events incrementally and applies
+ * this predicate per tail row instead of re-reading the whole invocation stream.
+ */
+export function invocationTerminalStatusMatches(event: Pick<HistoryEvent, 'kind' | 'payload'>): boolean {
+  const payload = event.payload && typeof event.payload === 'object' ? (event.payload as { status?: unknown }).status : undefined
+  if (event.kind === 'invocation-completed') return payload === 'completed'
+  if (event.kind === 'invocation-failed') return payload === 'failed' || payload === 'denied'
+  if (event.kind === 'invocation-interrupted') return payload === 'interrupted' || payload === 'cancelled'
+  return true
+}
+
 export function validateHistoryTransition(previous: readonly HistoryEvent[], incoming: readonly HistoryEvent[]): void {
   const invocationTurnId = previous[0]?.turnId ?? incoming[0]?.turnId
   if (invocationTurnId && (previous.some((event) => event.turnId !== invocationTurnId) || incoming.some((event) => event.turnId !== invocationTurnId))) {
