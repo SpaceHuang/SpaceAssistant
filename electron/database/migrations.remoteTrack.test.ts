@@ -6,6 +6,25 @@ import { getDbConnection } from './sqliteStore'
 import { createMemoryAppDb } from './testHelpers'
 
 describe('remote Track schema migration', () => {
+  it.each([83, 84, 85, 86])('repairs the alternate remote schema v%s before advancing to v95', (version) => {
+    const conn = new DatabaseSync(':memory:')
+    try {
+      conn.exec(`CREATE TABLE schema_meta(key TEXT PRIMARY KEY NOT NULL,value TEXT NOT NULL);
+        INSERT INTO schema_meta VALUES('schema_version','${version}');
+        CREATE TABLE wiki_projects(project_id TEXT PRIMARY KEY,work_dir TEXT NOT NULL,display_name TEXT NOT NULL,profile_id TEXT,first_seen_at INTEGER NOT NULL,orphan INTEGER NOT NULL DEFAULT 0);`)
+      runMigrations(conn)
+      const tables = conn.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+      expect(tables.map(({ name }) => name)).toEqual(expect.arrayContaining([
+        'remote_tracks', 'remote_track_events', 'remote_track_message_map', 'remote_track_children',
+        'remote_clarifications', 'remote_clarification_versions', 'remote_clarification_send_attempts', 'remote_track_work_queue'
+      ]))
+      expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: String(DB_SCHEMA_VERSION) })
+      expect(() => runMigrations(conn)).not.toThrow()
+    } finally {
+      conn.close()
+    }
+  })
+
   it('adds Track tables to an existing v82 database and is repeatable', () => {
     const conn = new DatabaseSync(':memory:')
     try {

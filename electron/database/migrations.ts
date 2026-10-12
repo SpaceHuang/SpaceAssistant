@@ -381,9 +381,9 @@ export function runMigrations(conn: DatabaseSync): void {
       DROP TRIGGER IF EXISTS invalidate_session_projections_after_history_cursor_delete;`)
   }
   try {
-  // origin/main independently used schema versions 83–86 for storage migrations. Its v86
-  // databases need Track's prerequisite tables before the remaining local v87–v94 steps run.
-  if (version === 86 && !hasTable(conn, 'remote_track_events')) {
+  // origin/main independently used schema versions 83–86 for storage migrations. Those
+  // databases need Track's prerequisites regardless of which point in that range they report.
+  if (version >= 83 && version <= 86 && hasTable(conn, 'wiki_projects') && !hasTable(conn, 'remote_tracks')) {
     runInTransaction(conn, () => ensureRemoteTrackCoreSchema(conn))
   }
   if (version === 1) runInTransaction(conn, () => {
