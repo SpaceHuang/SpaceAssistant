@@ -137,21 +137,6 @@ describe('Desktop Hosted checkpoint restart', () => {
     const retryResult = await execute(makeSender(), { requestId: 'desktop-write-checkpoint-request', turnId: 'desktop-write-checkpoint-turn',
       turnStartToken: 'desktop-write-checkpoint-token', sessionId: session.id })
 
-    // TEMP-DIAG: ubuntu-only failure (execute spy 0) — dump all first/retry-turn state before
-    // any assertion so diagnostics always reach the log even when an expect throws.
-    const diagConn = getDbConnection(db)
-    const diagHistory = await new SqliteAgentHistory(diagConn).read('desktop-write-checkpoint-turn')
-    console.log('TEMP-DIAG firstResult:', JSON.stringify(firstResult))
-    console.log('TEMP-DIAG retryResult:', JSON.stringify(retryResult))
-    console.log('TEMP-DIAG providerCalls:', providerCalls)
-    console.log('TEMP-DIAG writeSpyCalls:', writeSpy.mock.calls.length)
-    console.log('TEMP-DIAG history:', JSON.stringify(diagHistory.events.map((e) => ({ k: e.kind, s: e.sequence, t: e.turnId }))))
-    console.log('TEMP-DIAG toolEvents:', JSON.stringify(diagHistory.events.filter((e) => e.kind.startsWith('tool-call') || e.kind.startsWith('approval')).map((e) => ({ k: e.kind, p: e.payload }))))
-    console.log('TEMP-DIAG turns:', JSON.stringify(diagConn.prepare('SELECT state,version FROM turns WHERE turn_id=?').all('desktop-write-checkpoint-turn')))
-    console.log('TEMP-DIAG checkpoints:', JSON.stringify(diagConn.prepare('SELECT * FROM session_transcript_checkpoints').all()))
-    console.log('TEMP-DIAG pendingViews:', JSON.stringify(diagConn.prepare('SELECT invocation_id,stream_version FROM canonical_invocation_pending_views').all()))
-    console.log('TEMP-DIAG rejections:', JSON.stringify(diagConn.prepare('SELECT session_id,last_reason,attempts FROM canonical_session_projection_rejections').all()))
-
     expect(retryResult).toMatchObject({ ok: false })
     expect(writeSpy).toHaveBeenCalledTimes(1)
     expect(providerCalls).toBe(2)

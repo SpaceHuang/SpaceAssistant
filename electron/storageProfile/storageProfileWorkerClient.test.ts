@@ -54,11 +54,12 @@ describe('storage profile worker client', () => {
   }, 30_000)
 
   it('settles SQLite open errors and malformed requests without fallback', async () => {
+    // 源码 worker 需要真实的 tsx 线程引导（1s 在 Windows 冷环境下不够引导完成）
     await expect(runStorageProfileWorker({ type: 'overview', dbPath: '/missing/storage-profile.db' }, {
-      timeoutMs: 1_000, workerPath: path.join(process.cwd(), 'electron/storageProfile/storageProfileWorker.ts')
+      timeoutMs: 15_000, workerPath: path.join(process.cwd(), 'electron/storageProfile/storageProfileWorker.ts')
     }))
       .rejects.toMatchObject({ code: 'STORAGE_PROFILE_WORKER_ERROR' })
-  })
+  }, 30_000)
 
   it('settles unexpected worker exit and missing loader paths with stable errors', async () => {
     const worker = Object.assign(new EventEmitter(), { postMessage: vi.fn(), terminate: vi.fn(async () => 1) }) as unknown as Worker

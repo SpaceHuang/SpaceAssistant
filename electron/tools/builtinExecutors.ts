@@ -1198,7 +1198,8 @@ export function normalizeGrepArgs(input: Record<string, unknown>): GrepNormalize
   const GREP_TIMEOUT_MAX = 600
   let timeoutSeconds: number | undefined
   if (input.timeout !== undefined) {
-    if (typeof input.timeout !== 'number' || !Number.isFinite(input.timeout)) {
+    // 非法值（非数字 / 非正数）直接 paramConflict；只有正数才进入 clamp
+    if (typeof input.timeout !== 'number' || !Number.isFinite(input.timeout) || input.timeout <= 0) {
       return {
         ok: false,
         error: {
