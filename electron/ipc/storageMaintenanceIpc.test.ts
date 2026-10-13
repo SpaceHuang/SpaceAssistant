@@ -3,7 +3,17 @@ import { createTempDatabase } from '../database/testHelpers'
 import { registerStorageMaintenanceIpc } from './storageMaintenanceIpc'
 import { StorageProfileCoordinator } from '../storageProfile/storageProfileCoordinator'
 import { runStorageProfileWorker } from '../storageProfile/storageProfileWorkerClient'
+import { compactSessionDatabase, StorageMaintenanceError } from '../storage/sessionStorageMaintenance'
 import path from 'node:path'
+
+// 默认透传真实实现；错误映射用例经 mockRejectedValueOnce 注入 StorageMaintenanceError。
+vi.mock('../storage/sessionStorageMaintenance', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../storage/sessionStorageMaintenance')>()
+  return {
+    ...actual,
+    compactSessionDatabase: vi.fn((...args: Parameters<typeof actual.compactSessionDatabase>) => actual.compactSessionDatabase(...args))
+  }
+})
 
 describe('storage maintenance IPC', () => {
   it('exposes profile/cache operations and forwards compaction progress', async () => {
@@ -42,6 +52,21 @@ describe('storage maintenance IPC', () => {
     expect(compacted.pageCountAfter).toEqual(expect.any(Number))
     expect(coordinator.activeWorkerCount).toBe(0)
     expect(send).toHaveBeenCalledWith('storage:maintenance-progress', expect.objectContaining({ phase: 'complete' }))
+    temp.cleanup()
+  })
+
+  it('maps StorageMaintenanceError codes to stable messages even when the message is an English sentence', async () => {
+    const temp = createTempDatabase('storage-maintenance-ipc-code-map-')
+    const handlers = new Map<string, (...args: any[]) => unknown>()
+    const ipcMain = { handle: (channel: string, handler: (...args: any[]) => unknown) => handlers.set(channel, handler) } as any
+    const coordinator = new StorageProfileCoordinator({ run: async () => { throw new Error('unused by this test') } })
+    registerStorageMaintenanceIpc(ipcMain, { db: temp.db, getUserDataPath: () => temp.dbPath.replace(/test\.db$/, 'user-data'), storageProfileCoordinator: coordinator } as any)
+    vi.mocked(compactSessionDatabase).mockRejectedValueOnce(
+      new StorageMaintenanceError('STORAGE_MAINTENANCE_BUSY', 'database maintenance requires all session turns to be idle'))
+    await expect(handlers.get('storage:compact')!({ sender: { send: vi.fn() } })).rejects.toThrow('STORAGE_MAINTENANCE_BUSY')
+    vi.mocked(compactSessionDatabase).mockRejectedValueOnce(
+      new StorageMaintenanceError('STORAGE_MAINTENANCE_INSUFFICIENT_SPACE', 'database maintenance requires an estimated 100 bytes; 0 bytes are available'))
+    await expect(handlers.get('storage:compact')!({ sender: { send: vi.fn() } })).rejects.toThrow('STORAGE_MAINTENANCE_INSUFFICIENT_SPACE')
     temp.cleanup()
   })
 

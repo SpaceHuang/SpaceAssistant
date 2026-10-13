@@ -61,6 +61,7 @@ import { pruneAgentLogs } from './storage/agentLogRetention'
 import { resolveRetentionPolicyFromDb } from './storage/retentionPolicy'
 import { createSpillStore, runSourceTruthSpillGcMaintenance, runSpillRetentionMaintenance, scheduleSourceTruthSpillGcMaintenance } from './storage/spillStore'
 import { isSafeDbMaintenanceRequested, runSafeDbMaintenance } from './storage/safeDbMaintenance'
+import { reconcileInterruptedCompaction } from './storage/sessionStorageMaintenance'
 import { schedulePeriodicSqliteMaintenance } from './storage/periodicSqliteMaintenance'
 import { archiveLegacyDatabaseJsonBackup } from './storage/legacyDatabaseBackup'
 import { cleanupUsageFactsByRetention, reconcileUsageTurnFacts } from './usageStats/usageStatsMaintenance'
@@ -461,6 +462,8 @@ app.whenReady().then(async () => {
   let db: ReturnType<typeof openDatabase>
   try {
     await showStartupStatus('正在检查或升级本地数据库，请稍候…')
+    // 压缩换入崩溃对账必须在 openDatabase 之前：DatabaseSync 打开缺失路径会静默建空库。
+    measureStartupPhase('database.compact-recovery', () => reconcileInterruptedCompaction(dbPath))
     db = await measureStartupPhase('database.open-and-migrations', () => openDatabase(dbPath))
     remoteAuthorizationRegistry.bindPersistentEpochStore(createRemoteAuthorizationEpochStore(db))
   } catch (e) {

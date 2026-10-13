@@ -96,6 +96,7 @@ export function StorageSettingsTab() {
     } catch (reason) {
       setProgress(null)
       if (reason instanceof Error && reason.message.includes('STORAGE_MAINTENANCE_BUSY')) setError(t('storage.busy'))
+      else if (reason instanceof Error && reason.message.includes('STORAGE_MAINTENANCE_INSUFFICIENT_SPACE')) setError(t('storage.insufficientSpace'))
       else setError(t('storage.operationFailed'))
     }
   }
@@ -165,7 +166,11 @@ export function StorageSettingsTab() {
     </Space>
     {progress ? <div style={{ marginTop: 16 }} aria-live="polite">
       <Typography.Text>{t(`storage.phase.${progress.phase}`)}</Typography.Text>
-      <Progress percent={progress.phase === 'complete' ? 100 : progress.phase === 'archive' ? 20 : progress.phase === 'vacuum' ? 55 : 80} status={progress.phase === 'complete' ? 'success' : 'active'} />
+      <Progress percent={progress.phase === 'complete' ? 100
+        : progress.completedBytes != null && progress.totalBytes
+          ? Math.min(100, Math.floor((progress.completedBytes / progress.totalBytes) * 100))
+          : progress.phase === 'archive' ? 20 : progress.phase === 'vacuum' ? 55 : 80}
+        status={progress.phase === 'complete' ? 'success' : 'active'} />
     </div> : null}
   </section>
 }
