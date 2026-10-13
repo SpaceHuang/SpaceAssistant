@@ -280,6 +280,13 @@ G3/G4（post-claim 后迟到的 browser 结果不得投影；同一 `it.each` �
 1. **finishing 5 秒窗口**：保留。工具能被杀之后执行方会在窗口内退出并提前收敛；若落地后日志显示窗口仍频繁打满再评估缩到 2~3 秒。
 2. **finishing 期间消息继续滚动**：保留（流式尾巴数据不丢）。可选体验增强：中止被接受后状态区显示「正在中止…」——与 Phase 3 的提示文案一起做，不阻塞。
 
+### 合并评审观察项（2026-10-13，非阻断，供后续立项）
+
+1. **llm.cancel 打点口径略宽**：条件为 `chatSignal.aborted`——abort 后任何到达 Inner catch 的错误（含与 LLM 无关者）都会记为 `llm.cancel`。计划文档已声明此为实测口径，可接受；若后续要收紧，可在判定处叠加错误形态白名单。
+2. **abortSessionRun 的 IPC 异常文案**：`chatCancelTurn` 被 `.catch(() => false)` 兜底后返回 false，UI 会显示「该任务已结束」——把 IPC 故障误标为 turn 终态。概率低；如需更真实可区分「IPC 失败」与「受理拒绝」两种 false。
+3. **既存遗留（非本分支引入）**：`chatCancelRegistry.signalChatCancel` 内部仍以收到的 turnId 键调 `cancelAllToolConfirmsForRequest` / `cancelAllToolsForRequest`（requestId 键域，静默 no-op——Phase 1 的 main.ts 钥匙补齐只解决了确认卡一半）；且 `registerToolCancel` 已无任何生产调用方，属死路径。建议后续单独清理。
+4. **真机验收清单未关单**：本计划真机项（长 shell 秒停、确认卡即时取消、无进程残留等）仍需按 4.3 逐项过一遍。已实测一项：长命令执行中点中止，三事件齐全、107ms 收敛、终态 `cancelled`（见 1.4 实施回写）；剩余项待真机补齐后方可关单。
+
 ---
 
 ## 四、测试计划
