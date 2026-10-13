@@ -69,8 +69,7 @@ import { sanitizeCapabilityParamsForDisplay } from '../../src/shared/capabilityP
 import { CapabilityRegistry } from '../../packages/agent-sdk/src/capability'
 import { SafetyGate } from '../../packages/agent-sdk/src/safetyGate'
 import { createHostedAgentTurnHost } from './hostedAgentTurnHost'
-import { AgentTurnLifecycleInvalidatedError } from '../../packages/agent-sdk/src/turn'
-import type { ConfirmationPort } from '../../packages/agent-sdk/src/turn'
+import { AgentTurnLifecycleInvalidatedError, MAX_MODEL_TURNS_PER_INVOCATION, type ConfirmationPort } from '../../packages/agent-sdk/src/turn'
 import { FileStateCache } from '../fileStateCache'
 import { resolveEffectiveShellOutputMode } from '../../src/shared/shellOutputMode'
 import { assessActDanger } from '../browser/actDangerAssessor'
@@ -1202,7 +1201,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         recoverOutputLimit: createAgentSdkOutputRecovery({ location: materials.sessionEventLocation, turnId: runtimeTurnId, stepId: materials.requestId }),
         ...(ports.planContextReplacement ? { planContextReplacement: ports.planContextReplacement as never } : {}),
         maxConcurrentTools: materials.toolExecutionConcurrency ?? runtime.toolExecutionConcurrency,
-        maxModelTurns: Math.max(12, (materials.maxToolLoopRounds ?? 0) + 1),
+        maxModelTurns: MAX_MODEL_TURNS_PER_INVOCATION,
         ...(materials.maxToolLoopRounds !== undefined ? { maxToolRounds: materials.maxToolLoopRounds } : {}),
         resourceLocks: (materials.resourceLocks ?? runtime.resourceLocks) as never,
         toolResourceKeys: input.registeredTools.toolResourceKeys,
