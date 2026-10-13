@@ -15,6 +15,8 @@ import type { PromptSendErrorCategory, PromptSendNotAttemptedErrorCategory, Prom
 import type { AuditSink } from './channels'
 
 export interface ImPendingConfirm {
+  /** Friendly metadata copied from the host MCP snapshot for user-facing confirmation only. */
+  mcp?: import('./mcpConfirmPrompt').McpConfirmPromptMetadata
   id: string
   sessionId: string
   toolName?: string
@@ -32,6 +34,11 @@ export interface ImPendingConfirm {
   toolUseId?: string
   trackId?: string
   trackAttributionEventId?: string
+  envelopeHash?: string
+  factsHash?: string
+  policyBehaviorVersion?: string
+  policySnapshotRevision?: number
+  policyRevision?: string
   createdAt: number
   expiresAt: number
   memoryTiers: MemoryTier[]
@@ -239,7 +246,11 @@ export class ImChannel {
       expiresAt: now + this.deps.timeoutMs
     }
     if (entry.trackId) {
-      if (!entry.trackAttributionEventId || !entry.requestId || !entry.turnId || !entry.toolUseId || !this.deps.onTrackConfirmationChild) {
+      if (!entry.trackAttributionEventId || !entry.requestId || !entry.turnId || !entry.toolUseId ||
+        !entry.envelopeHash || !entry.factsHash || !entry.policyBehaviorVersion ||
+        !Number.isSafeInteger(entry.policySnapshotRevision) || !entry.policyRevision ||
+        !Number.isSafeInteger(entry.authorizationGeneration) || entry.authorizationGeneration! < 0 ||
+        !this.deps.onTrackConfirmationChild) {
         if (this.deps.confirmIds) this.deps.confirmIds.release(lease)
         else releaseConfirmId(lease)
         return Promise.resolve({ kind: 'rejected', cause: 'unavailable' })

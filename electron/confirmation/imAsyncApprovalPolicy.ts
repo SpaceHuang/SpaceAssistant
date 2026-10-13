@@ -5,7 +5,7 @@ export type ImAsyncApprovalPolicyInput = {
   enabled: boolean
   ttlMs: number
   actionClass: 'read' | 'write' | 'execute' | 'outbound'
-  gate: 'eligible' | 'config-error' | 'locked' | 'critical' | 'recursion-blocked'
+  gate: 'eligible' | 'human-required' | 'config-error' | 'locked' | 'critical' | 'recursion-blocked'
   evidence: { kind: 'direct' | 'material' | 'incomplete'; restrictionsComplete: boolean }
   approval: ApprovalInvocationResult
   answererAvailable?: boolean
@@ -18,22 +18,25 @@ export type ImAsyncApprovalPolicyInput = {
 
 export type ImAsyncApprovalDisposition =
   | { kind: 'agent-approved' }
-  | { kind: 'deferred'; cause: 'agent-deny' | 'agent-undetermined' | 'unavailable' | 'timeout' | 'unparsable' | 'outbound-requires-human' | 'insufficient-delegation-evidence' }
-  | { kind: 'deny'; cause: 'config-error' | 'locked' | 'critical' | 'recursion-blocked' | 'ttl-zero' | 'no-answerer' }
+  | { kind: 'deferred'; cause: 'human-required' | 'agent-deny' | 'agent-undetermined' | 'unavailable' | 'timeout' | 'unparsable' | 'outbound-requires-human' | 'insufficient-delegation-evidence' }
+  | { kind: 'deny'; cause: 'agent-deny' | 'unparsable' | 'config-error' | 'locked' | 'critical' | 'recursion-blocked' | 'ttl-zero' | 'no-answerer' }
   | { kind: 'user-fallback' }
 
 /** The final synchronous/async IM exit matrix. Never treats untrusted materials as delegation evidence. */
 export function resolveImAsyncApprovalDisposition(input: ImAsyncApprovalPolicyInput): ImAsyncApprovalDisposition {
   if (input.lane === 'desktop' || input.lane === 'automation' || !input.enabled) return { kind: 'user-fallback' }
+  if (input.gate === 'human-required') return { kind: 'deferred', cause: 'human-required' }
   if (input.gate !== 'eligible') return { kind: 'deny', cause: input.gate }
   if (input.ttlMs === 0) return { kind: 'deny', cause: 'ttl-zero' }
   if (input.answererAvailable === false) return { kind: 'deny', cause: 'no-answerer' }
 
   if (!input.approval.ok) {
-    if (input.approval.cause === 'config-error') return { kind: 'deny', cause: 'config-error' }
+    if (input.approval.cause === 'config-error' || input.approval.cause === 'unparsable') {
+      return { kind: 'deny', cause: input.approval.cause }
+    }
     return { kind: 'deferred', cause: input.approval.cause }
   }
-  if (input.approval.verdict.kind === 'deny') return { kind: 'deferred', cause: 'agent-deny' }
+  if (input.approval.verdict.kind === 'deny') return { kind: 'deny', cause: 'agent-deny' }
   if (input.approval.verdict.kind === 'undetermined') return { kind: 'deferred', cause: 'agent-undetermined' }
 
   if (input.actionClass === 'outbound') return { kind: 'deferred', cause: 'outbound-requires-human' }

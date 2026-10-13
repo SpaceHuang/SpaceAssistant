@@ -7,10 +7,16 @@ import { createDeferredApprovalNotificationDelivery } from './deferredApprovalNo
 import { createDeferredApprovalRuntime } from './deferredApprovalRuntime'
 import { getDbConnection } from '../database/sqliteStore'
 import { releaseRemoteSession, resetRunningRemoteAgentRegistryForTests, tryClaimRemoteSession } from './remoteAgentRegistry'
+import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
+
+function seedImPolicy(db: ReturnType<typeof createMemoryAppDb>, eventId: string): void {
+  commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId })
+}
 
 describe('production deferred approval runtime composition', () => {
   it('binds a real SQLite notification to an approved resume and dispatches the same envelope for its origin session', async () => {
     const db = createMemoryAppDb()
+    seedImPolicy(db, 'runtime-policy-1')
     const now = Date.now()
     const rule = { ruleId: 'write-rule', factsHash: 'a'.repeat(64) }
     const todoStore = createDeferredTodoStore(db)
@@ -25,29 +31,76 @@ describe('production deferred approval runtime composition', () => {
     const envelopeStore = createDeferredEnvelopeStore(db)
     envelopeStore.put({ invocationId: todo.invocationId, requestId: 'request-original', turnId: 'turn-original', toolCallId: 'tool-original',
       toolName: 'write_file', canonicalArgs: { path: 'publish.md', content: 'original' }, contentVersions: { policy: 4 },
-      executionContext: { sessionId: todo.originSessionId, lane: 'feishu', ownerId: todo.ownerId, identityKey: todo.identityKey,
-        providerRouteId: 'route-original', messageId: 'source-message' }, now })
+      executionContext: { sessionId: todo.originSessionId, channel: 'feishu', ownerId: todo.ownerId, identityKey: todo.identityKey,
+        authorizationEpoch: todo.authorizationEpoch, invocationId: todo.invocationId, toolName: 'write_file',
+        toolInput: { path: 'publish.md', content: 'original' }, requestId: 'request-original', turnId: 'turn-original',
+        toolCallId: 'tool-original', providerRouteId: 'route-original', messageId: 'source-message',
+        policyBehaviorVersion: todo.policyBehaviorVersion, policyRevision: todo.policyRevision, policyEpoch: todo.policyEpoch,
+        ruleId: rule.ruleId, factsHash: rule.factsHash }, now })
     const audits: Array<{ event: string }> = []
     const notificationDelivery = createDeferredApprovalNotificationDelivery({ db, todoStore, intentStore: intents,
-      adapter: { send: async () => ({ messageId: 'trusted-notification' }) }, audit: (event) => audits.push(event as { event: string }) })
+      adapter: { send: async (dto) => ({ messageId: dto.todoId === 'todo-other-track' ? 'trusted-notification-other-track' : 'trusted-notification' }) },
+      audit: (event) => audits.push(event as { event: string }) })
     const notification = await notificationDelivery.createAndSend({ todoId: todo.todoId, invocationId: todo.invocationId,
       channel: 'feishu', identityKey: todo.identityKey, ownerId: todo.ownerId, authorizationEpoch: todo.authorizationEpoch,
       rule, safeActionSummary: 'publish update', userDelegation: 'publish the approved update', untrustedMaterial: '', now })
     expect(notification.state).toBe('delivered')
+    const otherRule = { ruleId: 'other-track-write-rule', factsHash: 'e'.repeat(64) }
+    const otherTodo = todoStore.create({ todoId: 'todo-other-track', invocationId: 'inv-other-track', channel: 'feishu',
+      identityKey: todo.identityKey, ownerId: todo.ownerId, authorizationEpoch: todo.authorizationEpoch, rule: otherRule,
+      workflowId: 'workflow-other', taskId: 'task-other', stepId: 'publish-other', planRevision: 1,
+      originSessionId: 'other-track-session', createdAt: now, expiresAt: now + 60_000 }).todo
+    intents.prepare({ invocationId: otherTodo.invocationId, envelopeInvocationId: otherTodo.invocationId,
+      sessionId: otherTodo.originSessionId, workflowId: otherTodo.workflowId, taskId: otherTodo.taskId,
+      stepId: otherTodo.stepId, planRevision: otherTodo.planRevision, now })
+    intents.linkTodo(otherTodo.invocationId, otherTodo.todoId, now)
+    intents.commitCheckpoint(otherTodo.invocationId, { checkpointId: 'other-track-checkpoint', workflowRevision: 1 }, now)
+    const otherNotification = await notificationDelivery.createAndSend({ todoId: otherTodo.todoId, invocationId: otherTodo.invocationId,
+      channel: 'feishu', identityKey: otherTodo.identityKey, ownerId: otherTodo.ownerId,
+      authorizationEpoch: otherTodo.authorizationEpoch, rule: otherRule, safeActionSummary: 'other track action',
+      userDelegation: 'do the other track action', untrustedMaterial: '', now })
+    expect(otherNotification.state).toBe('delivered')
     const execute = vi.fn(async (_request, _todo, envelope) => ({ dispatched: envelope.integrityHash.length > 0 }))
     const runtime = createDeferredApprovalRuntime({ db, channel: 'feishu', todoStore, envelopeStore, notificationDelivery,
       isEnabled: () => true, getAuthorizationEpoch: () => 7, maxParallel: 1,
       recheck: async (request, currentTodo, currentEnvelope) => ({ allowed: request.sessionId === currentTodo.originSessionId && currentEnvelope.invocationId === todo.invocationId }),
       dispatch: execute, audit: (event) => audits.push(event as { event: string }) })
 
+    await expect(runtime.handleReply({ channel: 'feishu', identityKey: 'chat-1', ownerId: 'owner-1', messageId: 'wrong-code-reply',
+      replyToMessageId: 'trusted-notification', text: '批准 99', now: now + 1 })).resolves.toMatchObject({ status: 'rejected' })
+    expect(runtime.resume.listResumeRequests(todo.originSessionId)).toHaveLength(0)
+    expect(execute).not.toHaveBeenCalled()
+    await expect(runtime.handleReply({ channel: 'feishu', identityKey: todo.identityKey, ownerId: todo.ownerId,
+      messageId: 'cross-track-short-code-reply', replyToMessageId: 'trusted-notification-other-track',
+      text: `批准 ${notificationDelivery.list(todo.todoId)[0]!.shortCode}`, now: now + 1 }))
+      .resolves.toMatchObject({ status: 'rejected' })
+    expect(runtime.resume.listResumeRequests(todo.originSessionId)).toHaveLength(0)
+    expect(runtime.resume.listResumeRequests(otherTodo.originSessionId)).toHaveLength(0)
+    expect(execute).not.toHaveBeenCalled()
+    expect(todoStore.get(todo.todoId, { channel: 'feishu', identityKey: todo.identityKey, ownerId: todo.ownerId,
+      authorizationEpoch: 7, originSessionId: todo.originSessionId, rule })?.status).toBe('pending')
+    expect(todoStore.get(otherTodo.todoId, { channel: 'feishu', identityKey: otherTodo.identityKey, ownerId: otherTodo.ownerId,
+      authorizationEpoch: 7, originSessionId: otherTodo.originSessionId, rule: otherRule })?.status).toBe('pending')
+    getDbConnection(db).prepare('UPDATE deferred_approval_notifications SET expires_at=? WHERE todo_id=?').run(now + 2, todo.todoId)
+    await expect(runtime.handleReply({ channel: 'feishu', identityKey: 'chat-1', ownerId: 'owner-1', messageId: 'expired-code-reply',
+      replyToMessageId: 'trusted-notification', text: `批准 ${notificationDelivery.list(todo.todoId)[0]!.shortCode}`, now: now + 3 }))
+      .resolves.toMatchObject({ status: 'rejected' })
+    expect(runtime.resume.listResumeRequests(todo.originSessionId)).toHaveLength(0)
+    expect(execute).not.toHaveBeenCalled()
+    getDbConnection(db).prepare('UPDATE deferred_approval_notifications SET expires_at=? WHERE todo_id=?').run(todo.expiresAt, todo.todoId)
+
     const reply = await runtime.handleReply({ channel: 'feishu', identityKey: 'chat-1', ownerId: 'owner-1', messageId: 'approval-reply',
-      replyToMessageId: 'trusted-notification', text: `批准 ${notificationDelivery.list(todo.todoId)[0]!.shortCode}`, now: now + 1 })
+      replyToMessageId: 'trusted-notification', text: `批准 ${notificationDelivery.list(todo.todoId)[0]!.shortCode}`, now: now + 4 })
 
     expect(reply).toMatchObject({ status: 'resume_requested', sessionId: 'origin-session', dispatch: [{ status: 'dispatched' }] })
     expect(execute).toHaveBeenCalledOnce()
     expect(execute.mock.calls[0]?.[2]).toMatchObject({ requestId: 'request-original', turnId: 'turn-original', toolCallId: 'tool-original',
       canonicalArgs: { path: 'publish.md', content: 'original' } })
-    expect(todoStore.get(todo.todoId, { channel: 'feishu', identityKey: 'chat-1', ownerId: 'owner-1', authorizationEpoch: 7, rule })?.status).toBe('consumed')
+    expect(todoStore.get(todo.todoId, { channel: 'feishu', identityKey: 'chat-1', ownerId: 'owner-1', authorizationEpoch: 7, originSessionId: todo.originSessionId, rule })?.status).toBe('consumed')
+    await expect(runtime.handleReply({ channel: 'feishu', identityKey: 'chat-1', ownerId: 'owner-1', messageId: 'approval-reply',
+      replyToMessageId: 'trusted-notification', text: `批准 ${notificationDelivery.list(todo.todoId)[0]!.shortCode}`, now: now + 2 }))
+      .resolves.toMatchObject({ status: 'already_consumed' })
+    expect(execute).toHaveBeenCalledOnce()
     db.close()
   })
 
@@ -68,6 +121,7 @@ describe('production deferred approval runtime composition', () => {
 
   it('commits the inbound receipt with the resume request through the production runtime', async () => {
     const db = createMemoryAppDb()
+    seedImPolicy(db, 'runtime-policy-3')
     const now = Date.now()
     const rule = { ruleId: 'write-rule', factsHash: 'd'.repeat(64) }
     const todoStore = createDeferredTodoStore(db)
@@ -81,7 +135,11 @@ describe('production deferred approval runtime composition', () => {
     intents.commitCheckpoint(todo.invocationId, { checkpointId: 'receipt-checkpoint', workflowRevision: 1 }, now)
     const envelopeStore = createDeferredEnvelopeStore(db)
     envelopeStore.put({ invocationId: todo.invocationId, toolName: 'write_file', canonicalArgs: {}, contentVersions: {},
-      executionContext: { sessionId: todo.originSessionId }, now })
+      executionContext: { sessionId: todo.originSessionId, channel: 'wechat', ownerId: todo.ownerId, identityKey: todo.identityKey,
+        authorizationEpoch: todo.authorizationEpoch, invocationId: todo.invocationId, toolName: 'write_file', toolInput: {},
+        requestId: todo.invocationId, turnId: todo.invocationId, toolCallId: todo.invocationId, providerRouteId: 'route',
+        policyBehaviorVersion: todo.policyBehaviorVersion, policyRevision: todo.policyRevision, policyEpoch: todo.policyEpoch,
+        ruleId: rule.ruleId, factsHash: rule.factsHash }, now })
     const notificationDelivery = createDeferredApprovalNotificationDelivery({ db, todoStore, intentStore: intents,
       adapter: { send: async () => ({ messageId: 'trusted-approval' }) }, audit: vi.fn() })
     const notification = await notificationDelivery.createAndSend({ todoId: todo.todoId, invocationId: todo.invocationId,
@@ -102,6 +160,7 @@ describe('production deferred approval runtime composition', () => {
 
   it('retries an approved resume after slot contention without another inbound reply', async () => {
     const db = createMemoryAppDb()
+    seedImPolicy(db, 'runtime-policy-4')
     const now = Date.now()
     const sessionId = 'resume-retry-session'
     const rule = { ruleId: 'write-rule', factsHash: 'f'.repeat(64) }
@@ -116,7 +175,11 @@ describe('production deferred approval runtime composition', () => {
     intents.commitCheckpoint(todo.invocationId, { checkpointId: 'retry-checkpoint', workflowRevision: 1 }, now)
     const envelopeStore = createDeferredEnvelopeStore(db)
     envelopeStore.put({ invocationId: todo.invocationId, requestId: 'source-request', turnId: 'source-turn', toolCallId: 'source-tool',
-      toolName: 'write_file', canonicalArgs: {}, contentVersions: {}, executionContext: {}, now })
+      toolName: 'write_file', canonicalArgs: {}, contentVersions: {}, executionContext: { sessionId, channel: 'wechat', ownerId: todo.ownerId,
+        identityKey: todo.identityKey, authorizationEpoch: todo.authorizationEpoch, invocationId: todo.invocationId, toolName: 'write_file',
+        toolInput: {}, requestId: 'source-request', turnId: 'source-turn', toolCallId: 'source-tool', providerRouteId: 'route',
+        policyBehaviorVersion: todo.policyBehaviorVersion, policyRevision: todo.policyRevision, policyEpoch: todo.policyEpoch,
+        ruleId: rule.ruleId, factsHash: rule.factsHash }, now })
     const notificationDelivery = createDeferredApprovalNotificationDelivery({ db, todoStore, intentStore: intents,
       adapter: { send: async () => ({ messageId: 'retry-notice' }) }, audit: vi.fn() })
     const notification = await notificationDelivery.createAndSend({ todoId: todo.todoId, invocationId: todo.invocationId,

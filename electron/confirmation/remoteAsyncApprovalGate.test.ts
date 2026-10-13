@@ -10,9 +10,11 @@ import { selectConfirmationAnswerer } from './channels'
 
 const p1Ids = ['P1-1', 'P1-2', 'P1-3', 'P1-4', 'P1-5', 'P1-6', 'P1-7'] as const
 const oqIds = ['OQ-1', 'OQ-2', 'OQ-3', 'OQ-4', 'OQ-5', 'OQ-6', 'OQ-7', 'OQ-8'] as const
+const behaviorVersion = 'im-security-review-code-policy-v1'
 
 function evidence(): RemoteAsyncApprovalGateEvidence {
   return {
+    behaviorVersion,
     safetyReview: { status: 'approved', reviewId: 'security-review-2026-10' },
     controls: Object.fromEntries(p1Ids.map((id) => [id, { passed: true, evidenceId: `test-${id}` }])) as RemoteAsyncApprovalGateEvidence['controls'],
     integrationRuns: Object.fromEntries(['6.5.16', '6.5.17', '6.5.18', '6.5.19'].map((taskId) => [taskId, {
@@ -51,7 +53,7 @@ describe('remote asynchronous approval release gate', () => {
 
   it('persists disabled by default and refuses to enable without complete evidence', async () => {
     const db = createMemoryAppDb()
-    const gate = createRemoteAsyncApprovalGate({ db, getEvidence: () => ({ ...evidence(), safetyReview: { status: 'pending', reviewId: 'pending' } }), closeAll: async () => ({ status: 'closed' }) })
+    const gate = createRemoteAsyncApprovalGate({ db, getEvidence: () => ({ ...evidence(), safetyReview: { status: 'pending', reviewId: 'pending' } }), currentBehaviorVersion: behaviorVersion, closeAll: async () => ({ status: 'closed' }) })
     expect(gate.getState()).toMatchObject({ state: 'disabled' })
     expect(gate.isEnabled()).toBe(false)
     await expect(gate.setEnabled(true)).resolves.toMatchObject({ state: 'disabled', enabled: false })
@@ -62,7 +64,7 @@ describe('remote asynchronous approval release gate', () => {
   it('durably fences dispatch before closing and can reconcile a failed close after restart', async () => {
     const db = createMemoryAppDb()
     let closeResult: { status: 'closed' | 'reconciliation_required' } = { status: 'closed' }
-    const input = { db, getEvidence: evidence, closeAll: async () => closeResult }
+    const input = { db, getEvidence: evidence, currentBehaviorVersion: behaviorVersion, closeAll: async () => closeResult }
     const gate = createRemoteAsyncApprovalGate(input)
     await expect(gate.setEnabled(true)).resolves.toMatchObject({ state: 'enabled', enabled: true })
     closeResult = { status: 'reconciliation_required' }
@@ -77,10 +79,67 @@ describe('remote asynchronous approval release gate', () => {
     db.close()
   })
 
+  it('refuses to reopen while close reconciliation is pending, including through a fresh gate instance', async () => {
+    const db = createMemoryAppDb()
+    let closeResult: { status: 'closed' | 'reconciliation_required' } = { status: 'reconciliation_required' }
+    const input = { db, getEvidence: evidence, currentBehaviorVersion: behaviorVersion, closeAll: vi.fn(async () => closeResult) }
+    const gate = createRemoteAsyncApprovalGate(input)
+    await expect(gate.setEnabled(true)).resolves.toMatchObject({ state: 'enabled', enabled: true })
+    await expect(gate.setEnabled(false)).resolves.toMatchObject({ state: 'closing', enabled: false, closeRequired: true })
+    expect(isRemoteAsyncApprovalGateEnabled(db, behaviorVersion)).toBe(false)
+
+    await expect(gate.setEnabled(true)).resolves.toMatchObject({ state: 'closing', enabled: false, closeRequired: true })
+    const restarted = createRemoteAsyncApprovalGate(input)
+    await expect(restarted.setEnabled(true)).resolves.toMatchObject({ state: 'closing', enabled: false, closeRequired: true })
+    expect(isRemoteAsyncApprovalGateEnabled(db, behaviorVersion)).toBe(false)
+    expect(input.closeAll).toHaveBeenCalledTimes(1)
+
+    closeResult = { status: 'closed' }
+    await expect(restarted.reconcilePendingClose()).resolves.toMatchObject({ state: 'disabled', closeRequired: false })
+    await expect(restarted.setEnabled(true)).resolves.toMatchObject({ state: 'enabled', enabled: true })
+    db.close()
+  })
+
+  it('does not enable when release evidence is bound to a different code and policy behavior version', async () => {
+    const db = createMemoryAppDb()
+    const gate = createRemoteAsyncApprovalGate({
+      db,
+      getEvidence: () => ({ ...evidence(), behaviorVersion: 'code-policy-v1' } as never),
+      currentBehaviorVersion: 'code-policy-v2',
+      closeAll: async () => ({ status: 'closed' })
+    })
+    await expect(gate.setEnabled(true)).resolves.toMatchObject({ state: 'disabled', enabled: false })
+    expect(isRemoteAsyncApprovalGateEnabled(db, 'code-policy-v2')).toBe(false)
+    db.close()
+  })
+
+  it('closes a persisted enabled gate when the application behavior version changes', async () => {
+    const db = createMemoryAppDb()
+    const previous = createRemoteAsyncApprovalGate({ db, getEvidence: evidence, currentBehaviorVersion: behaviorVersion,
+      closeAll: async () => ({ status: 'closed' }) })
+    await expect(previous.setEnabled(true)).resolves.toMatchObject({ state: 'enabled', enabled: true })
+    expect(isRemoteAsyncApprovalGateEnabled(db, behaviorVersion)).toBe(true)
+
+    const currentBehavior = 'im-standard-v2:im-security-review-2026-10-13-v2'
+    const closeAll = vi.fn(async () => ({ status: 'closed' as const }))
+    const restarted = createRemoteAsyncApprovalGate({ db,
+      getEvidence: () => ({ ...evidence(), behaviorVersion: currentBehavior }),
+      currentBehaviorVersion: currentBehavior,
+      closeAll
+    })
+    expect(restarted.isEnabled()).toBe(false)
+    await expect(restarted.setEnabled(true)).resolves.toMatchObject({ state: 'disabled', enabled: false, closeRequired: false })
+    expect(closeAll).toHaveBeenCalledTimes(1)
+    expect(isRemoteAsyncApprovalGateEnabled(db, currentBehavior)).toBe(false)
+    expect(getDbConnection(db).prepare('SELECT behavior_version FROM remote_async_approval_gate_state WHERE singleton=1').get())
+      .toEqual({ behavior_version: '' })
+    db.close()
+  })
+
   it('prevents old pending resume work from reaching dispatch once the durable gate is closing', async () => {
     const db = createMemoryAppDb()
     const conn = getDbConnection(db)
-    const gate = createRemoteAsyncApprovalGate({ db, getEvidence: evidence, closeAll: async () => ({ status: 'closed' }) })
+    const gate = createRemoteAsyncApprovalGate({ db, getEvidence: evidence, currentBehaviorVersion: behaviorVersion, closeAll: async () => ({ status: 'closed' }) })
     await gate.setEnabled(true)
     const now = Date.now()
     conn.prepare(`INSERT INTO deferred_todos(todo_id,invocation_id,channel,identity_key,owner_id,authorization_epoch,rule_id,facts_hash,
@@ -103,15 +162,15 @@ describe('remote asynchronous approval release gate', () => {
 
   it('exposes only durable enabled state to the production confirmation selector', async () => {
     const db = createMemoryAppDb()
-    expect(isRemoteAsyncApprovalGateEnabled(db)).toBe(false)
-    const answerer = () => selectConfirmationAnswerer({ lane: 'feishu', remoteAsyncApprovalEnabled: isRemoteAsyncApprovalGateEnabled(db) })
+    expect(isRemoteAsyncApprovalGateEnabled(db, behaviorVersion)).toBe(false)
+    const answerer = () => selectConfirmationAnswerer({ lane: 'feishu', remoteAsyncApprovalEnabled: isRemoteAsyncApprovalGateEnabled(db, behaviorVersion) })
     expect(answerer()).toEqual({ kind: 'user' })
-    const gate = createRemoteAsyncApprovalGate({ db, getEvidence: evidence, closeAll: async () => ({ status: 'closed' }) })
+    const gate = createRemoteAsyncApprovalGate({ db, getEvidence: evidence, currentBehaviorVersion: behaviorVersion, closeAll: async () => ({ status: 'closed' }) })
     await gate.setEnabled(true)
-    expect(isRemoteAsyncApprovalGateEnabled(db)).toBe(true)
+    expect(isRemoteAsyncApprovalGateEnabled(db, behaviorVersion)).toBe(true)
     expect(answerer()).toEqual({ kind: 'agent' })
     await gate.setEnabled(false)
-    expect(isRemoteAsyncApprovalGateEnabled(db)).toBe(false)
+    expect(isRemoteAsyncApprovalGateEnabled(db, behaviorVersion)).toBe(false)
     expect(answerer()).toEqual({ kind: 'user' })
     db.close()
   })

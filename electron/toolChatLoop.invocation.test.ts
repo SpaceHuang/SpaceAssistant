@@ -180,7 +180,7 @@ describe('assembleInvocation 键位平移（P1 契约形状）', () => {
 
   it('trace / session / profile / limits / safety / additionalContext / driverContext 落位', () => {
     const materials = baseMaterials({
-      lane: 'automation',
+      lane: 'feishu',
       internalConfirmExemption: 'approval-agent',
       maxToolLoopRounds: 3,
       approvalTaskDigest: 'task-digest-x',
@@ -203,7 +203,7 @@ describe('assembleInvocation 键位平移（P1 契约形状）', () => {
     expect(ports.credentials.networkTarget?.baseUrl).toBe('https://relay.example.com')
     expect(invocation.profile.system).toBe('sys')
     expect(invocation.profile.locale).toBe('zh-CN')
-    expect(invocation.profile.lane).toBe('automation')
+    expect(invocation.profile.lane).toBe('feishu')
     expect(invocation.profile.tools.toolsConfig).toBe(DEFAULT_TOOLS_CONFIG)
     expect(invocation.limits.maxToolRounds).toBe(3)
     expect(invocation.safety.recursionGuard).toBe('approval-agent')

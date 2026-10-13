@@ -88,10 +88,15 @@ describe('remote Track persistence', () => {
       createRemoteTrack(db, { trackId: 'confirm-track', eventId: 'confirm-root', idempotencyKey: 'confirm-inbound', channel: 'wechat', identityKey: 'user', ownerId: 'owner', authorizationEpoch: 1, rootMessageId: 'root-message', occurredAt: 1 })
       applyRemoteTrackLifecycleEvent(db, { trackId: 'confirm-track', eventId: 'confirm-start', idempotencyKey: 'confirm-start-key', occurredAt: 2, event: { type: 'execution-started' } })
       recordRemoteTrackConfirmationState(db, { trackId: 'confirm-track', confirmationId: 'confirm-1', attributionEventId: 'confirm-root', state: 'pending', occurredAt: 2,
-        requestId: 'request-1', turnId: 'turn-1', toolUseId: 'tool-use-1', toolName: 'fetch' })
+        requestId: 'request-1', turnId: 'turn-1', toolUseId: 'tool-use-1', toolName: 'fetch',
+        envelopeHash: 'e'.repeat(64), factsHash: 'f'.repeat(64), policyBehaviorVersion: 'im-standard-v2',
+        policySnapshotRevision: 3, policyRevision: 'authorization-revision', authorizationGeneration: 2 })
       expect(getDbConnection(db).prepare('SELECT state FROM remote_tracks WHERE track_id=?').get('confirm-track')).toEqual({ state: 'waiting-user' })
       expect(getDbConnection(db).prepare("SELECT request_id,turn_id,tool_use_id,confirmation_id FROM remote_track_events WHERE event_kind='track.confirmation.created'").get())
         .toEqual({ request_id: 'request-1', turn_id: 'turn-1', tool_use_id: 'tool-use-1', confirmation_id: 'confirm-1' })
+      const binding = getDbConnection(db).prepare("SELECT payload_json FROM remote_track_events WHERE event_kind='track.confirmation.created'").get() as { payload_json: string }
+      expect(JSON.parse(binding.payload_json)).toEqual({ toolName: 'fetch', envelopeHash: 'e'.repeat(64), factsHash: 'f'.repeat(64),
+        policyBehaviorVersion: 'im-standard-v2', policySnapshotRevision: 3, policyRevision: 'authorization-revision', authorizationGeneration: 2 })
       expect(getDbConnection(db).prepare("SELECT state FROM remote_track_children WHERE track_id=? AND child_kind='confirmation' AND child_id=?").get('confirm-track', 'confirm-1'))
         .toEqual({ state: 'pending' })
       recordRemoteTrackConfirmationState(db, { trackId: 'confirm-track', confirmationId: 'confirm-1', attributionEventId: 'confirm-root', state: 'settled', occurredAt: 3,

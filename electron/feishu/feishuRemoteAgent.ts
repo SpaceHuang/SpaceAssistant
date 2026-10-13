@@ -38,12 +38,12 @@ export async function runFeishuRemoteAgent(ctx: {
   emitFactEvent?: (event: AssistantFactEvent) => void
   confirmationAdapter?: NonNullable<Parameters<typeof runImRemoteAgent>[0]['confirmationAdapter']>
   taskControlSafetyPort?: Parameters<typeof runImRemoteAgent>[0]['taskControlSafetyPort']
+  resolveAgentSdkGateSupplement?: import('../runtime/invocationAssembler').AgentInvocationMaterials['resolveAgentSdkGateSupplement']
 }): Promise<{ summary: string; pendingConfirm: boolean; ok: boolean; parked?: true }> {
   logFeishuCliEvent('info', 'feishu.agent.remote.start', {
     sessionId: ctx.sessionId,
     requestId: ctx.requestId,
-    workDir: ctx.workDir,
-    confirmPolicy: ctx.feishuConfig.remoteConfirmPolicy
+    workDir: ctx.workDir
   })
 
   return runImRemoteAgent({
@@ -65,23 +65,26 @@ export async function runFeishuRemoteAgent(ctx: {
       createFeishuProgressAdapter({
         runner: ctx.runner,
         messageId: ctx.replyMessageId,
+        outboundIdentity: { identityKey: ctx.remoteContext.chatId ?? ctx.remoteContext.authOwner ?? 'unknown',
+          ownerId: ctx.remoteContext.authOwner ?? ctx.remoteContext.userId ?? 'unknown',
+          chatType: ctx.remoteContext.chatType ?? 'unknown' },
         getSessionId,
         config: ctx.feishuConfig,
         sessionCommands: ctx.sessionStorage.commands,
         ...(ctx.remoteContext.trackContext ? { trackDelivery: { db: ctx.db, track: ctx.remoteContext.trackContext,
           requestId: ctx.requestId, turnId: ctx.turnId } } : {})
       }),
-    buildSystemAppendix: ({ browserRemoteHint }) =>
+    buildSystemAppendix: ({ browserRemoteHint, policySnapshot }) =>
       buildFeishuRemoteSystemAppendix({
-        messageId: ctx.replyMessageId,
-        confirmPolicy: ctx.feishuConfig.remoteConfirmPolicy,
+        policySnapshot,
         browserRemoteHint
       }),
     progressDefaults: FEISHU_DEFAULT_REMOTE_PROGRESS_CONFIG,
     progressConfig: pickFeishuProgressConfig(ctx.feishuConfig),
     toolChatExtras: {
       feishuConfig: ctx.feishuConfig,
-      larkCliRunner: ctx.runner
+      larkCliRunner: ctx.runner,
+      ...(ctx.resolveAgentSdkGateSupplement ? { resolveAgentSdkGateSupplement: ctx.resolveAgentSdkGateSupplement } : {})
     },
     logSensitiveBlocked: () => {
       logFeishuCliEvent('warn', 'feishu.agent.remote.sensitive_blocked', { sessionId: ctx.sessionId })

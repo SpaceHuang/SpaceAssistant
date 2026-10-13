@@ -56,6 +56,11 @@ vi.mock('electron', () => ({
     removeHandler: vi.fn((channel: string) => handlers.delete(channel))
   }
 }))
+vi.mock('./secureApiKey', () => ({
+  isSecretStorageAvailable: vi.fn(() => true),
+  encryptSecret: vi.fn((plain: string) => `enc:${plain}`),
+  decryptSecret: vi.fn((value: string) => value.replace(/^enc:/, ''))
+}))
 
 let sessionEvents: Array<{ seq: number; time: number; type: string; payload: Record<string, unknown> }>
 let failNextSessionEventType: string | undefined
@@ -4128,6 +4133,7 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
   })
 
   it('rechecks a Hosted sensitive read after the approved file identity changes while confirmation is pending', async () => {
+    vi.mocked(waitForToolConfirm).mockReset().mockResolvedValue('approved' as never)
     workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-sdk-hosted-read-identity-drift-'))
     const targetPath = path.join(workDir, '.env')
     await fs.writeFile(targetPath, 'SECRET=before')
@@ -4164,8 +4170,9 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       await fs.writeFile(targetPath, 'SECRET=after')
       return 'approved'
     })
+    vi.mocked(waitForToolConfirm).mockResolvedValueOnce('rejected' as never)
 
-    const session = createSession(db, { name: 'hosted-read-identity-drift', model: modelId, maxTokens: 512 })
+    const session = createSession(db, { id: 'hosted-read-identity-drift-session', name: 'hosted-read-identity-drift', model: modelId, maxTokens: 512 })
     const user = appendMessage(db, { id: 'hosted-read-identity-drift-user', sessionId: session.id, role: 'user', content: '读取环境配置', timestamp: 1, status: 'sent' })
     const assistant = appendMessage(db, { id: 'hosted-read-identity-drift-assistant', sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
     createPersistedTurn(db, {
@@ -4192,11 +4199,11 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     try {
       expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: '确认期间文件发生变化，已停止读取。' }] })
       expect(providerCalls).toBe(2)
-      expect(waitForToolConfirm).toHaveBeenCalledOnce()
+      expect(waitForToolConfirm).toHaveBeenCalledTimes(2)
       expect(executeRead).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(db)).read('hosted-read-identity-drift-request')
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'desktop-read-identity-drift', reason: 'FACTS_CHANGED'
+        toolCallId: 'desktop-read-identity-drift', reason: 'CONFIRMATION_DENIED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {
@@ -4251,8 +4258,9 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
       }
       return 'approved'
     })
+    vi.mocked(waitForToolConfirm).mockResolvedValueOnce('rejected' as never)
 
-    const session = createSession(db, { name: `hosted-${toolName}-read-drift`, model: modelId, maxTokens: 512 })
+    const session = createSession(db, { id: `hosted-${toolName}-read-drift-session`, name: `hosted-${toolName}-read-drift`, model: modelId, maxTokens: 512 })
     const user = appendMessage(db, { id: `hosted-${toolName}-read-drift-user`, sessionId: session.id, role: 'user', content: '读取环境信息', timestamp: 1, status: 'sent' })
     const assistant = appendMessage(db, { id: `hosted-${toolName}-read-drift-assistant`, sessionId: session.id, role: 'assistant', content: '', timestamp: 2, status: 'streaming' })
     createPersistedTurn(db, {
@@ -4279,11 +4287,11 @@ describe('claudeStreamHandlers Hosted production handoff', () => {
     try {
       expect(result).toMatchObject({ ok: true, content: [{ type: 'text', text: '确认期间目录发生变化，已停止读取。' }] })
       expect(providerCalls).toBe(2)
-      expect(waitForToolConfirm).toHaveBeenCalledOnce()
+      expect(waitForToolConfirm).toHaveBeenCalledTimes(2)
       expect(executeDirectory).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(`hosted-${toolName}-read-drift-request`)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: `desktop-${toolName}-read-drift`, reason: 'FACTS_CHANGED'
+        toolCallId: `desktop-${toolName}-read-drift`, reason: 'CONFIRMATION_DENIED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {

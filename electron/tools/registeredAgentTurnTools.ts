@@ -59,6 +59,7 @@ type PreparedRecord = {
   disposeSignal(): void
   unregisterActiveCancellation?: () => void
   binding: PermitBinding
+  userConfirmationReceipt?: string
   cleaned?: boolean
 }
 
@@ -165,6 +166,7 @@ export function createRegisteredAgentTurnTools(input: {
     const record = prepared.get(key)
     if (!record || !sameCall(record.call, call)) throw new Error('PREPARED_CALL_MISMATCH')
     if (stage.confirmation && !stage.confirmation.receipt.trim()) throw new Error('CONFIRMATION_RECEIPT_REQUIRED')
+    record.userConfirmationReceipt = stage.confirmation?.receipt
     try {
       if (input.refreshExecutionContext) {
         const currentContext = record.runtimeContext
@@ -177,8 +179,8 @@ export function createRegisteredAgentTurnTools(input: {
         record.runtimeContext = { ...refreshed, ...safetyOwned }
       }
       if (record.handle.state === 'planned') record.handle.awaitConfirmation()
-      if (record.handle.state !== 'awaiting-confirm') throw new Error('PREPARED_TOOL_NOT_AWAITING_CONFIRMATION')
-      record.handle.confirm()
+      if (record.handle.state === 'awaiting-confirm') record.handle.confirm()
+      else if (record.handle.state !== 'confirmed') throw new Error('PREPARED_TOOL_NOT_AWAITING_CONFIRMATION')
       record.handle.beginValidation()
       await record.handle.validatePrepared(executionContextFor(record, call.signal ?? record.signal))
       record.handle.finishValidation()
@@ -378,6 +380,7 @@ function executionContextFor(record: PreparedRecord, signal: AbortSignal): ToolE
     toolUseId: record.handle.prepared.toolUseId,
     toolName: record.handle.prepared.toolName,
     runtimeContext: record.runtimeContext as ToolExecutionContext['runtimeContext'],
+    ...(record.userConfirmationReceipt ? { userConfirmationReceipt: record.userConfirmationReceipt } : {}),
     signal
   }
 }

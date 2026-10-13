@@ -4,6 +4,7 @@ import { openDatabase } from '../database'
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createSecurityActionIntentStore } from '../confirmation/securityActionIntentStore'
 import { createDeferredApprovalNotificationDelivery } from './deferredApprovalNotificationDelivery'
+import { getDbConnection } from '../database/sqliteStore'
 
 function seed(db: ReturnType<typeof openDatabase>) {
   const todoStore = createDeferredTodoStore(db)
@@ -20,10 +21,44 @@ function seed(db: ReturnType<typeof openDatabase>) {
   return { todoStore, intentStore, todo, now }
 }
 
-const safeContent = { safeActionSummary: '更新项目说明', userDelegation: '请更新项目说明。', untrustedMaterial: 'raw command and token are omitted' }
+const safeContent = { safeActionSummary: '更新项目说明', safeTargetSummary: '工作区内目标', impactSummary: 'write, high impact',
+  reasonSummary: 'confirm-every-time', userDelegation: '请更新项目说明。', untrustedMaterial: 'raw command and token are omitted' }
 const scope = { channel: 'feishu' as const, identityKey: 'delivery-chat', ownerId: 'delivery-owner', authorizationEpoch: 8 }
 
 describe('deferred approval notification delivery reconciliation contract', () => {
+  it('recovers an undelivered notification after database reopen without changing todo scope or expiry', async () => {
+    const temp = createTempDatabase('approval-notification-reopen-')
+    const stores = seed(temp.db)
+    const firstAdapter = { send: vi.fn().mockRejectedValue(new Error('offline')) }
+    const firstDelivery = createDeferredApprovalNotificationDelivery({ db: temp.db, todoStore: stores.todoStore,
+      intentStore: stores.intentStore, adapter: firstAdapter, allocateShortCode: () => '11', audit: vi.fn() })
+    await expect(firstDelivery.createAndSend({ todoId: stores.todo.todoId, invocationId: stores.todo.invocationId,
+      ...scope, rule: stores.todo.rule, ...safeContent })).resolves.toMatchObject({ state: 'undelivered', notificationVersion: 1 })
+    expect(firstDelivery.list(stores.todo.todoId)).toMatchObject([{ state: 'undelivered', trustedMessageId: null, notificationVersion: 1 }])
+    temp.db.close()
+
+    const reopened = openDatabase(temp.dbPath)
+    const todoStore = createDeferredTodoStore(reopened)
+    const intentStore = createSecurityActionIntentStore(reopened)
+    const adapter = { send: vi.fn().mockResolvedValue({ messageId: 'reopened-message' }) }
+    const delivery = createDeferredApprovalNotificationDelivery({ db: reopened, todoStore, intentStore, adapter,
+      allocateShortCode: () => '12', audit: vi.fn() })
+    await expect(delivery.retryForAuthenticatedInbound({ ...scope, now: stores.now + 1 }))
+      .resolves.toMatchObject([{ todoId: stores.todo.todoId, state: 'delivered', notificationVersion: 2, messageId: 'reopened-message' }])
+    expect(delivery.list(stores.todo.todoId)).toMatchObject([
+      { state: 'superseded', notificationVersion: 1, trustedMessageId: null },
+      { state: 'delivered', notificationVersion: 2, trustedMessageId: 'reopened-message' }
+    ])
+    expect(delivery.resolveCurrent({ ...scope, shortCode: '11', now: stores.now + 1 })).toBeNull()
+    expect(delivery.resolveCurrent({ ...scope, shortCode: '12', now: stores.now + 1 }))
+      .toMatchObject({ notificationVersion: 2, trustedMessageId: 'reopened-message' })
+    expect(todoStore.get(stores.todo.todoId, { ...scope, originSessionId: stores.todo.originSessionId, rule: stores.todo.rule }, stores.now + 1))
+      .toMatchObject({ originSessionId: stores.todo.originSessionId, expiresAt: stores.todo.expiresAt })
+    expect(adapter.send).toHaveBeenCalledTimes(1)
+    reopened.close()
+    temp.cleanup()
+  })
+
   it('retains failed delivery as undelivered and retries only on the same authenticated scope with a rotated code/version', async () => {
     const temp = createTempDatabase('approval-notification-reconcile-')
     const stores = seed(temp.db)
@@ -36,13 +71,23 @@ describe('deferred approval notification delivery reconciliation contract', () =
     expect(delivery.list(stores.todo.todoId)).toMatchObject([{ state: 'undelivered', trustedMessageId: null, notificationVersion: 1 }])
     expect(await delivery.retryForAuthenticatedInbound({ ...scope, now: stores.now + 1 }))
       .toMatchObject([{ state: 'delivered', notificationVersion: 2, messageId: 'feishu-message-v2' }])
+    await expect(delivery.retryForAuthenticatedInbound({ ...scope, now: stores.now + 2 })).resolves.toEqual([])
+    expect(getDbConnection(temp.db).prepare('SELECT COUNT(*) AS count FROM deferred_todos WHERE invocation_id=?')
+      .get(stores.todo.invocationId)).toEqual({ count: 1 })
+    expect(delivery.list(stores.todo.todoId)).toHaveLength(2)
+    expect(adapter.send).toHaveBeenCalledTimes(2)
     expect(allocateShortCode).toHaveBeenCalledTimes(2)
     expect(adapter.send.mock.calls.map(([dto]) => dto.shortCode)).toEqual(['01', '02'])
+    expect(adapter.send.mock.calls[1]?.[0]).toMatchObject({ sections: expect.arrayContaining([
+      expect.objectContaining({ kind: 'target-summary', text: '工作区内目标' }),
+      expect.objectContaining({ kind: 'impact-summary', text: 'write, high impact' }),
+      expect.objectContaining({ kind: 'reason-summary', text: 'confirm-every-time' })
+    ]) })
     expect(delivery.resolveCurrent({ ...scope, shortCode: '01' })).toBeNull()
     expect(delivery.resolveCurrent({ ...scope, shortCode: '02' })).toMatchObject({
       todoId: stores.todo.todoId, notificationVersion: 2, trustedMessageId: 'feishu-message-v2'
     })
-    expect(stores.todoStore.get(stores.todo.todoId, { ...scope, rule: stores.todo.rule })?.expiresAt).toBe(stores.todo.expiresAt)
+    expect(stores.todoStore.get(stores.todo.todoId, { ...scope, originSessionId: stores.todo.originSessionId, rule: stores.todo.rule })?.expiresAt).toBe(stores.todo.expiresAt)
     temp.db.close()
     temp.cleanup()
   })
@@ -64,6 +109,21 @@ describe('deferred approval notification delivery reconciliation contract', () =
     temp.cleanup()
   })
 
+  it('does not disclose an existing notification state through createAndSend for a mismatched scope', async () => {
+    const temp = createTempDatabase('approval-notification-create-scope-')
+    const stores = seed(temp.db)
+    const adapter = { send: vi.fn().mockResolvedValue({ messageId: 'feishu-message' }) }
+    const delivery = createDeferredApprovalNotificationDelivery({ db: temp.db, todoStore: stores.todoStore,
+      intentStore: stores.intentStore, adapter, allocateShortCode: () => '05', audit: vi.fn() })
+    await delivery.createAndSend({ todoId: stores.todo.todoId, invocationId: stores.todo.invocationId,
+      ...scope, rule: stores.todo.rule, ...safeContent })
+    await expect(delivery.createAndSend({ todoId: stores.todo.todoId, invocationId: stores.todo.invocationId,
+      ...scope, channel: 'wechat', rule: stores.todo.rule, ...safeContent })).resolves.toEqual({ state: 'not_ready' })
+    expect(adapter.send).toHaveBeenCalledTimes(1)
+    temp.db.close()
+    temp.cleanup()
+  })
+
   it('does not retry after todo TTL and never extends its expiry', async () => {
     const temp = createTempDatabase('approval-notification-ttl-')
     const stores = seed(temp.db)
@@ -73,7 +133,7 @@ describe('deferred approval notification delivery reconciliation contract', () =
     await delivery.createAndSend({ todoId: stores.todo.todoId, invocationId: stores.todo.invocationId, ...scope, rule: stores.todo.rule, ...safeContent })
     await expect(delivery.retryForAuthenticatedInbound({ ...scope, now: stores.todo.expiresAt })).resolves.toEqual([])
     expect(adapter.send).toHaveBeenCalledTimes(1)
-    expect(stores.todoStore.get(stores.todo.todoId, { ...scope, rule: stores.todo.rule }, stores.todo.expiresAt)?.expiresAt).toBe(stores.todo.expiresAt)
+    expect(stores.todoStore.get(stores.todo.todoId, { ...scope, originSessionId: stores.todo.originSessionId, rule: stores.todo.rule }, stores.todo.expiresAt)?.expiresAt).toBe(stores.todo.expiresAt)
     temp.db.close()
     temp.cleanup()
   })

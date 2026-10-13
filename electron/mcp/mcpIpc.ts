@@ -9,6 +9,7 @@ import {
 } from '../../src/shared/mcpTypes'
 import {
   deleteServer,
+  clearMcpAccountAuthorizations,
   getToolCache,
   listProfiles,
   refreshProfilesSecretFlags,
@@ -73,6 +74,8 @@ export function writeInputToProfile(input: McpServerWriteInput): McpServerProfil
       ? { http: { endpoint: input.http.endpoint, ...(input.http.allowPrivateNetwork === true ? { allowPrivateNetwork: true as const } : {}) } }
       : {}),
     enabledToolNames: input.enabledToolNames,
+    ...(input.publicReadOnlyTools ? { publicReadOnlyTools: { ...input.publicReadOnlyTools } } : {}),
+    ...(input.accountAuthorizedTools ? { accountAuthorizedTools: { ...input.accountAuthorizedTools } } : {}),
     ...(input.alwaysLoad !== undefined ? { alwaysLoad: input.alwaysLoad } : {}),
     status: 'untested',
     createdAt: input.createdAt ?? now,
@@ -107,7 +110,9 @@ function revokeMcpToolsThatBecameUnavailable(
       commandTrustedAt: profile.stdio.commandTrustedAt
     },
     http: profile.http,
-    enabledToolNames: profile.enabledToolNames
+    enabledToolNames: profile.enabledToolNames,
+    publicReadOnlyTools: profile.publicReadOnlyTools,
+    accountAuthorizedTools: profile.accountAuthorizedTools
   })
   for (const oldProfile of previous) {
     const nextProfile = nextById.get(oldProfile.id)
@@ -174,7 +179,10 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
       ))
       .map((server) => server.id))
     revokeMcpToolsThatBecameUnavailable(ctx.db, previous, next, secretChangedServerIds)
-    const servers = await saveProfiles(ctx.db, parsed.servers)
+    const servers = await saveProfiles(ctx.db, parsed.servers, {
+      allowPublicReadTrustChanges: true,
+      allowAccountAuthorizationChanges: true
+    })
     return { servers }
   })
 
@@ -226,7 +234,10 @@ export function registerMcpIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): vo
     const serverId = typeof payload?.serverId === 'string' ? payload.serverId : ''
     if (!serverId) throw new Error('serverId 不能为空')
     const result = await startOAuthFlow(ctx.db, serverId)
-    if (result.ok) revokeMcpProfileTools(ctx.db, listProfiles(ctx.db).find((profile) => profile.id === serverId))
+    if (result.ok) {
+      await clearMcpAccountAuthorizations(ctx.db, serverId)
+      revokeMcpProfileTools(ctx.db, listProfiles(ctx.db).find((profile) => profile.id === serverId))
+    }
     return result
   })
 

@@ -52,8 +52,8 @@ describe('RemoteImCommonSettings', () => {
     expect(screen.getByText('处理远程任务的大模型')).toBeTruthy()
     expect(screen.getByText('思考强度')).toBeTruthy()
     expect(screen.getByText('远程进展同步')).toBeTruthy()
-    expect(screen.getByText('限制远程写入与出站')).toBeTruthy()
-    expect(screen.getByText('禁止远程出站（微信发送 / 飞书写工具）')).toBeTruthy()
+    expect(screen.queryByText('限制远程写入与出站')).toBeNull()
+    expect(screen.queryByText('禁止远程出站（微信发送 / 飞书写工具）')).toBeNull()
     expect(screen.getByText(/消息频率限制/)).toBeTruthy()
     expect(screen.getByText('已绑定发送者（只读）')).toBeTruthy()
     // P4：确认/信任管理项已迁移到「安全策略」页，此处不再展示

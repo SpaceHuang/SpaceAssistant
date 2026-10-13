@@ -80,6 +80,7 @@ describe('SqliteAgentHistory', () => {
           toolCallId: call.toolCallId, capabilityId: call.toolName, inputSnapshotHash: 'input', planDigest: 'plan', factsDigest: 'facts',
           authorizationVersion: 'auth-v1', phase: 'recheck' }), execute: vi.fn(async () => ({ output: 'unused' })) }),
       confirmation: async ({ call }) => ({ kind: 'deferred' as const, todoId: 'park-sqlite-todo', invocationId: call.invocationId,
+        cause: 'human-required' as const, executionState: 'not-executed' as const, retryable: false, nextStep: 'await-user' as const,
         checkpointRef: { checkpointId: 'park-sqlite-checkpoint', workflowRevision: 1 } })
     })
 

@@ -7,6 +7,8 @@ import { listProfiles } from './mcpConfigStore'
 import { addMcpServer, writeProfileFromInput } from './mcpService'
 import type { McpOAuthClientPreset } from './oauthClientPresets'
 
+vi.hoisted(() => vi.resetModules())
+
 vi.mock('../secureApiKey', () => ({
   isSecretStorageAvailable: () => true,
   encryptSecret: (plain: string) => `enc:${plain}`,

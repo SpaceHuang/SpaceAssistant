@@ -4,7 +4,12 @@ import type { ConfirmOutcome, ConfirmRequest, ConfirmationChannel } from '../../
 
 export type GateConfirmationContext = Readonly<{
   facts: ConfirmRequest['facts']
-  decision: Pick<ConfirmRequest, 'riskLevel' | 'memoryTiers' | 'timeoutMs'> & { answerer?: 'user' | 'agent' }
+  /** Host-derived references to controlled evidence used for the current facts snapshot. */
+  evidenceReferences?: readonly string[]
+  decision: Pick<ConfirmRequest, 'riskLevel' | 'memoryTiers' | 'timeoutMs'> & {
+    answerer?: 'user' | 'agent'
+    disposition?: 'human-required' | 'auto-eligible'
+  }
   [key: string]: unknown
 }>
 
@@ -12,6 +17,8 @@ function isGateContext(value: unknown): value is GateConfirmationContext {
   if (!value || typeof value !== 'object') return false
   const candidate = value as Partial<GateConfirmationContext>
   return !!candidate.facts && !!candidate.decision && typeof candidate.decision === 'object'
+    && (candidate.evidenceReferences === undefined || (Array.isArray(candidate.evidenceReferences) &&
+      candidate.evidenceReferences.length <= 32 && candidate.evidenceReferences.every((reference) => typeof reference === 'string' && reference.trim().length > 0)))
     && Array.isArray(candidate.decision.memoryTiers)
     && (candidate.decision.riskLevel === 'low' || candidate.decision.riskLevel === 'medium' || candidate.decision.riskLevel === 'high')
     && (candidate.decision.timeoutMs === null || typeof candidate.decision.timeoutMs === 'number')
@@ -56,7 +63,7 @@ export function createAgentSdkConfirmationPort(input: {
     confirmation: Parameters<ConfirmationPort>[0],
     context: GateConfirmationContext,
     primaryOutcome: ConfirmOutcome
-  ): Promise<Extract<ToolConfirmationResult, { kind: 'deferred' }> | undefined>
+  ): Promise<ToolConfirmationResult | undefined>
   fallback?(
     call: Parameters<ConfirmationPort>[0]['call'],
     confirmation: Parameters<ConfirmationPort>[0],
@@ -82,6 +89,13 @@ export function createAgentSdkConfirmationPort(input: {
     const request: ConfirmRequest = {
       facts: confirmation.context.facts,
       ...confirmation.context.decision
+    }
+    if (confirmation.answerer === 'user' && confirmation.context.decision.disposition === 'human-required' && input.defer) {
+      const deferred = await input.defer(confirmation.call,
+        { kind: 'denied', answerer: 'user', cause: 'human-required' }, confirmation,
+        confirmation.context as GateConfirmationContext,
+        { kind: 'rejected', cause: 'no-answerer', answererKind: 'user' })
+      if (deferred) return deferred
     }
     const channel = input.createChannel(confirmation.call, confirmation)
     const cancel = () => {

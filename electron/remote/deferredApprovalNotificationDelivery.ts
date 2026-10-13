@@ -60,7 +60,8 @@ export function createDeferredApprovalNotificationDelivery(input: {
   }
 
   function buildDto(todo: NonNullable<ReturnType<TodoStore['get']>>, version: number, code: string, safeContent: {
-    safeActionSummary: string; userDelegation: string; untrustedMaterial: string
+    safeActionSummary: string; safeTargetSummary?: string; impactSummary?: string; reasonSummary?: string
+    userDelegation: string; untrustedMaterial: string
   }): DeferredApprovalNotificationDto {
     return buildDeferredApprovalNotification({
       channel: todo.channel, todoId: todo.todoId, notificationVersion: version, shortCode: code,
@@ -92,13 +93,14 @@ export function createDeferredApprovalNotificationDelivery(input: {
 
   function createAuthorizedRecord(request: {
     todoId: string; invocationId: string; channel: Scope['channel']; identityKey: string; ownerId: string; authorizationEpoch: number
-    rule: { ruleId: string; factsHash: string }; safeActionSummary: string; userDelegation: string; untrustedMaterial: string; now: number
+    rule: { ruleId: string; factsHash: string }; safeActionSummary: string; safeTargetSummary?: string; impactSummary?: string
+    reasonSummary?: string; userDelegation: string; untrustedMaterial: string; now: number
   }): { todo: NonNullable<ReturnType<TodoStore['get']>>; dto: DeferredApprovalNotificationDto } | null {
     const intent = input.intentStore.get(request.invocationId)
     if (!intent || intent.todoId !== request.todoId || !input.intentStore.authorizeResume(request.invocationId)) return null
     const todo = input.todoStore.get(request.todoId, {
       channel: request.channel, identityKey: request.identityKey, ownerId: request.ownerId,
-      authorizationEpoch: request.authorizationEpoch, rule: request.rule
+      authorizationEpoch: request.authorizationEpoch, originSessionId: sessionForTodo(request.todoId), rule: request.rule
     }, request.now)
     if (!todo || todo.invocationId !== request.invocationId || todo.status !== 'pending') return null
     const latest = list(todo.todoId).at(-1)
@@ -122,9 +124,15 @@ export function createDeferredApprovalNotificationDelivery(input: {
   return {
     async createAndSend(request: {
       todoId: string; invocationId: string; channel: Scope['channel']; identityKey: string; ownerId: string; authorizationEpoch: number
-      rule: { ruleId: string; factsHash: string }; safeActionSummary: string; userDelegation: string; untrustedMaterial: string; now?: number
+      rule: { ruleId: string; factsHash: string }; safeActionSummary: string; safeTargetSummary?: string; impactSummary?: string
+      reasonSummary?: string; userDelegation: string; untrustedMaterial: string; now?: number
     }): Promise<{ state: 'not_ready' | 'undelivered' | 'delivered'; notificationVersion?: number }> {
       const now = request.now ?? Date.now()
+      const authorizedTodo = input.todoStore.get(request.todoId, {
+        channel: request.channel, identityKey: request.identityKey, ownerId: request.ownerId,
+        authorizationEpoch: request.authorizationEpoch, originSessionId: sessionForTodo(request.todoId), rule: request.rule
+      }, now)
+      if (!authorizedTodo || authorizedTodo.invocationId !== request.invocationId || authorizedTodo.status !== 'pending') return { state: 'not_ready' }
       const latest = list(request.todoId).at(-1)
       if (latest) return { state: latest.state === 'delivered' ? 'delivered' : 'undelivered', notificationVersion: latest.notificationVersion }
       const created = createAuthorizedRecord({ ...request, now })
@@ -145,7 +153,7 @@ export function createDeferredApprovalNotificationDelivery(input: {
         const mapped = mapRow(row)
         const todo = input.todoStore.get(mapped.todoId, {
           channel: request.channel, identityKey: request.identityKey, ownerId: request.ownerId,
-          authorizationEpoch: request.authorizationEpoch, rule: mapped.rule
+          authorizationEpoch: request.authorizationEpoch, originSessionId: sessionForTodo(mapped.todoId), rule: mapped.rule
         }, now)
         if (!todo || todo.status !== 'pending' || todo.expiresAt <= now || !input.intentStore.authorizeResume(mapped.invocationId)) {
           conn.prepare(`UPDATE deferred_approval_notifications SET state='invalidated',updated_at=?
@@ -156,6 +164,9 @@ export function createDeferredApprovalNotificationDelivery(input: {
         const prior = list(todo.todoId).at(-1)
         const content = {
           safeActionSummary: prior?.dto.sections.find(({ kind }) => kind === 'action-summary')?.text ?? '（动作摘要不可用，请拒绝）',
+          safeTargetSummary: prior?.dto.sections.find(({ kind }) => kind === 'target-summary')?.text ?? '（目标摘要不可用）',
+          impactSummary: prior?.dto.sections.find(({ kind }) => kind === 'impact-summary')?.text ?? '（影响摘要不可用）',
+          reasonSummary: prior?.dto.sections.find(({ kind }) => kind === 'reason-summary')?.text ?? '（策略要求人工确认）',
           userDelegation: prior?.dto.sections.find(({ kind }) => kind === 'user-delegation')?.text ?? '（未提供安全摘要）',
           untrustedMaterial: ''
         }
@@ -183,9 +194,10 @@ export function createDeferredApprovalNotificationDelivery(input: {
         .get(request.channel, request.identityKey, request.ownerId, request.shortCode, request.authorizationEpoch) as NotificationRow | undefined
       if (!row || row.expires_at <= now) return null
       const todo = input.todoStore.get(row.todo_id, { channel: row.channel, identityKey: row.identity_key, ownerId: row.owner_id,
-        authorizationEpoch: row.authorization_epoch, rule: { ruleId: row.rule_id, factsHash: row.facts_hash } }, now)
-      if (!todo || todo.status !== 'pending') return null
-      return mapRow(row)
+        authorizationEpoch: row.authorization_epoch, originSessionId: sessionForTodo(row.todo_id),
+        rule: { ruleId: row.rule_id, factsHash: row.facts_hash } }, now)
+      if (!todo || (todo.status !== 'pending' && todo.status !== 'consumed')) return null
+      return { ...mapRow(row), originSessionId: todo.originSessionId, todoStatus: todo.status }
     }
   }
 }

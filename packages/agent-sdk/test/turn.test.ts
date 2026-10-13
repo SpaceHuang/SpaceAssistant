@@ -805,6 +805,7 @@ describe('runAgentTurn', () => {
         capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
       toolExecution: toolExecutionPort(permits, vi.fn(async () => ({ output: 'done' }))),
       confirmation: async ({ call }) => ({ kind: 'deferred' as const, todoId: 'park-todo', invocationId: call.invocationId,
+        cause: 'human-required' as const, executionState: 'not-executed' as const, retryable: false, nextStep: 'await-user' as const,
         checkpointRef: { checkpointId: 'park-checkpoint', workflowRevision: 5 } })
     })
 
@@ -814,6 +815,124 @@ describe('runAgentTurn', () => {
       messages: [userMessage] })
     expect(transcriptCommits[0]).not.toHaveProperty('messageMirror')
     expect((await backing.read('parked-transcript-invocation')).events.at(-1)).toMatchObject({ kind: 'invocation-parked' })
+  })
+
+  it('defers a fresh human-required decision when the post-Agent recheck changes scope', async () => {
+    const registry = new ModelProviderRegistry()
+    registry.register(route, { providerId: 'agent-recheck-human-defer', stream: () => stream(
+      { type: 'tool-call', toolCallId: 'changed-write', toolName: 'write_file', input: { path: 'report.md', content: 'reviewed' } },
+      { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+    ) })
+    const permits = new InMemorySafetyPermitStore()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('agent-recheck-human-defer', ['write_file'])
+    const evaluate = vi.fn(async (binding: PermitBinding) => binding.phase === 'initial-compat'
+      ? { kind: 'ask' as const, confirmationId: binding.toolCallId, answerer: 'agent' as const, reasonCode: 'im-low-risk-create' }
+      : { kind: 'ask' as const, confirmationId: binding.toolCallId, answerer: 'user' as const, reasonCode: 'im-write-ask',
+          context: { decision: { disposition: 'human-required' } } })
+    const execute = vi.fn(async () => ({ output: 'must not execute' }))
+    const confirmation = vi.fn(async ({ answerer }: { answerer: 'user' | 'agent' }) => answerer === 'agent'
+      ? { kind: 'approved' as const, receipt: 'agent-receipt', answerer: 'agent' as const }
+      : { kind: 'deferred' as const, todoId: 'fresh-human-todo', invocationId: 'agent-recheck-human-defer',
+          cause: 'human-required' as const, executionState: 'not-executed' as const, retryable: false, nextStep: 'await-user' as const,
+          checkpointRef: { checkpointId: 'fresh-human-checkpoint', workflowRevision: 2 } })
+    const history = new MemoryHistory()
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'agent-recheck-human-defer', history,
+      request: { messages: [{ role: 'user', content: 'create a report' }], maxTokens: 32 }, maxModelTurns: 2,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+        capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      confirmation: confirmation as never,
+      toolExecution: toolExecutionPort(permits, execute)
+    })
+
+    expect(result).toMatchObject({ parked: true, parkedTodoId: 'fresh-human-todo' })
+    expect(confirmation.mock.calls.map(([call]) => call.answerer)).toEqual(['agent', 'user'])
+    expect(execute).not.toHaveBeenCalled()
+    expect((await history.read('agent-recheck-human-defer')).events).toContainEqual(expect.objectContaining({ kind: 'approval-deferred',
+      payload: expect.objectContaining({ toolCallId: 'changed-write', todoId: 'fresh-human-todo', cause: 'human-required', executionState: 'not-executed' }) }))
+  })
+
+  it('finishes an independent tool already running when another tool becomes deferred', async () => {
+    const registry = new ModelProviderRegistry()
+    registry.register(route, { providerId: 'deferred-independent-action', stream: () => stream(
+      { type: 'tool-call', toolCallId: 'deferred-write', toolName: 'write_file', input: { path: 'report.md' } },
+      { type: 'tool-call', toolCallId: 'independent-read', toolName: 'lookup', input: { query: 'public status' } },
+      { type: 'tool-call', toolCallId: 'dependent-publish', toolName: 'publish', input: { dependsOnToolCallId: 'deferred-write' } },
+      { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' }
+    ) })
+    const permits = new InMemorySafetyPermitStore()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('deferred-independent-invocation', ['write_file', 'lookup', 'publish'])
+    let markLookupStarted!: () => void
+    const lookupStarted = new Promise<void>((resolve) => { markLookupStarted = resolve })
+    const execute = vi.fn(async (call: { toolCallId: string }) => {
+      if (call.toolCallId === 'independent-read') markLookupStarted()
+      return { output: 'public status' }
+    })
+    const history = new MemoryHistory()
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'deferred-independent-invocation', request: { messages: [{ role: 'user', content: 'write and look up' }], maxTokens: 32 },
+      history, maxModelTurns: 2, maxConcurrentTools: 2,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) =>
+        binding.capabilityId === 'write_file'
+          ? { kind: 'ask' as const, confirmationId: `confirm-${binding.toolCallId}`, answerer: 'user' as const, reasonCode: 'USER_APPROVAL' as const }
+          : { kind: 'allow' as const, reasonCode: 'READ_ALLOWED' as const, authorizationVersion: binding.authorizationVersion }
+      } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+        capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, execute),
+      confirmation: async ({ call }) => {
+        await lookupStarted
+        return { kind: 'deferred' as const, todoId: 'independent-todo', invocationId: call.invocationId,
+          cause: 'human-required' as const, executionState: 'not-executed' as const, retryable: false, nextStep: 'await-user' as const,
+          checkpointRef: { checkpointId: 'independent-checkpoint', workflowRevision: 1 } }
+      }
+    })
+    expect(result).toMatchObject({ parked: true, parkedTodoId: 'independent-todo' })
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({ toolCallId: 'independent-read' }), expect.any(AbortSignal))
+    const events = (await history.read('deferred-independent-invocation')).events
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-not-dispatched',
+      payload: expect.objectContaining({ toolCallId: 'dependent-publish', reason: 'DEFERRED_APPROVAL_PARKED' }) }))
+  })
+
+  it('returns a pending-existing hint to the model without creating a todo or dispatching the duplicate action', async () => {
+    const registry = new ModelProviderRegistry()
+    let modelRound = 0
+    registry.register(route, { providerId: 'pending-existing-hint', stream: () => {
+      modelRound += 1
+      return modelRound === 1
+        ? stream({ type: 'tool-call', toolCallId: 'duplicate-write', toolName: 'write_file', input: { path: 'report.md', content: 'new body' } },
+            { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'tool-calls' })
+        : stream({ type: 'text-delta', text: '该目标已有待审批操作，请使用原审批通知。' },
+            { type: 'usage', inputTokens: 2, outputTokens: 1 }, { type: 'finish', reason: 'stop' })
+    } })
+    const permits = new InMemorySafetyPermitStore()
+    const capabilities = new CapabilityRegistry()
+    capabilities.define('pending-existing-invocation', ['write_file'])
+    const execute = vi.fn(async () => ({ output: 'must not execute' }))
+    const history = new MemoryHistory()
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId: 'pending-existing-invocation',
+      request: { messages: [{ role: 'user', content: 'write report' }], maxTokens: 32 },
+      history, maxModelTurns: 2, returnDeniedToolsToModel: true,
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) =>
+        ({ kind: 'ask' as const, confirmationId: `confirm-${binding.toolCallId}`, answerer: 'user' as const, reasonCode: 'USER_APPROVAL' as const })
+      } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+        capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, execute),
+      confirmation: async () => ({ kind: 'denied' as const, answerer: 'user', cause: 'pending-existing',
+        userMessage: '已有同目标操作正在等待审批。本次请求未创建新的待办，也未执行；请先处理原审批通知。' })
+    })
+    expect(result).toMatchObject({ text: '该目标已有待审批操作，请使用原审批通知。' })
+    expect(execute).not.toHaveBeenCalled()
+    expect(modelRound).toBe(2)
+    expect((await history.read('pending-existing-invocation')).events).toContainEqual(expect.objectContaining({
+      kind: 'tool-call-not-dispatched', payload: expect.objectContaining({ toolCallId: 'duplicate-write', reason: 'CONFIRMATION_DENIED' })
+    }))
   })
 
   it('projects canonical assistant text blocks into the failed terminal message mirror', async () => {

@@ -131,15 +131,10 @@ import {
   type RunShellPrecheckResult
 } from './shell/shellToolLoopHelpers'
 import {
-  REMOTE_CONFIRM_TIMEOUT_MESSAGES,
-  resolveRemoteContextConfirmPolicy
-} from './remote/remoteConfirmPolicy'
-import {
   beginLlm,
   clearRequest,
   endLlm
 } from './remote/remoteSessionSwitchState'
-import { shouldRequestImConfirm } from '../src/shared/remoteConfirmPolicy'
 import {
   ChatCancelledError,
   clearChatCancel,

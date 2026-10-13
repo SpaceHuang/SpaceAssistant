@@ -1,4 +1,5 @@
 import type { SessionCommands } from '../sessionStorage/contracts'
+import { assertImOutboundAllowed, createHostImOutboundFacts, type ImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
 import type { LarkCliRunner } from './larkCliRunner'
 import { replyFeishuTextRaw, replyFeishuTextRawWithId } from './feishuReply'
 import { sendImOutbound } from '../remote/imRemoteOutbound'
@@ -14,8 +15,16 @@ export async function sendFeishuRemoteOutbound(args: {
   sessionId?: string
   touch?: { sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>; sessionId: string }
   trackDelivery?: RemoteTrackOutboundDeliveryContext
+  outboundDeliveryFacts?: ImOutboundFacts
+  recipient?: string
+  outboundIdentity?: { identityKey: string; ownerId: string; chatType: 'p2p' | 'group' | 'unknown' }
 }): Promise<{ messageId: string } | undefined> {
   const { runner, messageId, body, sessionId, touch } = args
+  if (!sessionId || !args.recipient || (!args.outboundIdentity && !args.outboundDeliveryFacts)) throw new Error('FEISHU_OUTBOUND_FINAL_CHECK_REQUIRED')
+  const outboundFacts = args.outboundDeliveryFacts ?? createHostImOutboundFacts({ channel: 'feishu', purpose: 'system-reply', body,
+    sessionId, identityKey: args.outboundIdentity!.identityKey, ownerId: args.outboundIdentity!.ownerId,
+    recipient: args.recipient, chatType: args.outboundIdentity!.chatType, destinationId: messageId })
+  assertImOutboundAllowed(outboundFacts, { channel: 'feishu', body, sessionId, recipient: args.recipient, destinationId: messageId })
   const send = () => sendImOutbound({
     reply: (text) => replyFeishuTextRaw(runner, messageId, text),
     body,
@@ -43,10 +52,13 @@ export async function sendFeishuRemoteOutboundWithId(args: {
   runner: LarkCliRunner
   messageId: string
   body: string
-  sessionId?: string
+  sessionId: string
+  recipient: string
+  outboundDeliveryFacts: ImOutboundFacts
   touch?: { sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>; sessionId: string }
 }): Promise<{ messageId: string }> {
   const { runner, messageId, body, sessionId, touch } = args
+  assertImOutboundAllowed(args.outboundDeliveryFacts, { channel: 'feishu', body, sessionId, recipient: args.recipient, destinationId: messageId })
   const result = await sendImOutbound({
     reply: (text) => replyFeishuTextRawWithId(runner, messageId, text),
     body,

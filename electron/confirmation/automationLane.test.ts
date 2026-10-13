@@ -196,6 +196,7 @@ describe('automation lane 门控运行时行为（评审 B1 核心验收）', ()
           serverId: 'srv1',
           serverName: 'srv1',
           originalName: 'some_mcp_tool',
+          inputSchema: { type: 'object', properties: {} },
           annotations: { readOnlyHint: true }
         } as never,
         appDb: openDb()

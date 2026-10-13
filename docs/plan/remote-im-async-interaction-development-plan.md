@@ -17,6 +17,17 @@
 - 执行前记录 `git status --short`；只修改本计划任务明确列出的目标文件，不覆盖或清理已有工作区改动。发现目标文件存在未提交改动时，先记录并在其上做最小修改。
 - 本计划中“本地测试”只使用 Vitest、临时 SQLite/文件、fake IM adapter 和 fake LLM/provider；不得调用真实 IM 服务、真实模型 API 或生产用户数据。
 
+## 0. 当前安全审核改进契约覆盖（2026-10-12）
+
+本文 0–7 阶段及历史 RED/GREEN 记录证明的是当时版本，不自动构成本次策略或启用证据。本段与 [IM 安全审核改进需求/计划](../requirement/2026-10-11-im-security-review-improvement-requirement.md) 及 `docs/plan/2026-10-11-im-security-review-improvement-todo.md` 同步；冲突时依下列新矩阵执行，并保持当前自动审批门禁关闭，直到本计划 11.1/11.2 完整验收。
+
+- 策略按本次可信入口选择：desktop→desktop；wechat/feishu→共同 im。Track 只绑定任务，不是策略域。新指令跨入口重裁决；既有 todo/确认仍绑定原 channel、identity、originSession、Track、behaviorVersion 和精确动作。
+- 桌面 IPC 不得消费 IM pending；IM 审批/fallback 只在原渠道。已有桌面 renderer 过滤仅是只读投影，不能替代主进程拒绝和真实入口端到端证据。
+- `locked` 只锁定编辑：locked deny/critical 终局拒绝无 todo；locked ask/confirm-every-time 直接原 IM 精确人工 todo；Agent deny 终局拒绝无 todo；undetermined/timeout/暂时 unavailable 进原 IM todo；config/parse/recursion/hard-deny 失败关闭。
+- standard 仅 auto-eligible 候选经 Agent approve 且最终检查通过后可免确认。strict 的同步码与异步待办编号空间分开，并分别绑定 Track + 精确调用/envelope。任何人工批准仅授权当前动作、没有长期 cache 写入。
+- “全部 outbound 都需真人批准”只作为旧矩阵；当前增加受控 owner 任务回复的窄例外（当前任务、原 owner 单聊、可信冻结目的地、内容/附件检查和每次发送 final check 全部通过）。任意 recipient、第三方/群聊、敏感或批量本地导出仍按主动外发逐次人工或禁止。所有工具/system/media/retry/缓存/Agent 路径统一最终检查。
+- R13/R14 真实入口来源与审批隔离、R15 standard 结果边界、R16 strict Track 精确确认，以及回复文案检查只以 `2026-10-11-im-security-review-improvement-todo.md` 中对应集成任务为实施/证据来源。不得把本计划已完成的 P1-1…P1-7 历史证据直接复用为新代码/策略版本的最终启用证据。
+
 ## 实施门槛（不是开发任务）
 
 本计划以安全需求 v1.1 为实现基线；该需求已于 2026-10-08 通过需求复审，见第二轮复审报告。复审通过表示安全需求契约已获评审认可，不代表实现、测试或生产启用门禁已完成。v1.1 已明确 OQ-1（默认 24h、合法待办重启保留）、OQ-2（保留 pending、校验身份/epoch/TTL 后补发）、OQ-5（普通追认不写缓存，独立记忆选择默认关闭），这些不得再作为未决阻塞项或由实现者改写。安全基础实现可按已明确契约推进。
@@ -442,7 +453,7 @@
   - 实现：`resolveConfirmChannel` 增加独立 `remoteAsyncApprovalEnabled` 可选开关；默认及关闭时仍按 user 路径，显式打开仅将 IM 默认回答者切至 Agent，desktop/automation 默认回答者不变。AgentChannel/SDK port 沿用既有可注入接线与 fallback 语义，选择器未接入生产装配配置，当前生产保持关闭。
   - GREEN：通道、AgentChannel、SDK port、adapter focused suites：4 files / 67 tests passed；Electron tsc、shared typecheck、`git diff --check` passed。
 - [x] **6.3.7** RED：新增真实双渠道集成测试，从飞书/微信真实确认入口经 gate/adapter 到持久化待办；覆盖 approve、deny、undetermined、unavailable、timeout、unparsable，以及 config-error、locked/critical、递归限制不进入待办。
-  - RED：新增 `imAsyncApproval.integration.test.ts`，真实 `resolveConfirmChannel` / `AgentChannel` 与 persistent admission 首次暴露容量预留缺失 session/identity 绑定；后续裁决矩阵确认 deny/undetermined/服务失败应 deferred，配置错误与安全 gate 阻断仍不得产生待办。
+  - 历史 RED：新增 `imAsyncApproval.integration.test.ts`，真实 `resolveConfirmChannel` / `AgentChannel` 与 persistent admission 首次暴露容量预留缺失 session/identity 绑定；旧版本裁决矩阵曾将 Agent deny/undetermined/服务失败统一映射为 deferred。当前规则以顶部覆盖和 IM 安全改进契约为准：Agent deny 终局拒绝；undetermined/暂时服务不可用进入原渠道待办；不可解析、配置错误与安全 gate 阻断失败关闭。
   - GREEN：`npx vitest run --project electron electron/confirmation/imAsyncApproval.integration.test.ts electron/confirmation/deferredApprovalAdapter.test.ts electron/confirmation/deferredTodoAdmission.test.ts electron/confirmation/deferredTodoStore.test.ts`：4 files / 24 tests passed；最终矩阵回归 9 Electron files / 156 tests passed；Electron tsc、shared typecheck、`git diff --check` passed。
 - [x] **6.3.8** RED：新增飞书与微信入口集成测试，从真实确认调用链贯通至临时数据库待办；只验证关闭态/显式测试开关，不提前启用默认异步行为。
   - GREEN/特征验证：集成用例验证 wechat/feishu 显式测试开关开启时走 Agent 到真实临时 SQLite todo；开关关闭时保持原 IM 确认 waiter 且 Agent factory 未调用。`npx vitest run --project electron electron/confirmation/imAsyncApproval.integration.test.ts`：1 file / 14 tests passed；Electron tsc、`git diff --check` passed。
@@ -452,10 +463,10 @@
 - [x] **6.3.10** GREEN：首版不实现“批准并记住”；普通追认只授权当前动作且不得写长期缓存，本地测试验证没有任何待办追认路径产生长期授权写入。
   - 实现：DeferredApprovalResult 不含 memory/cache key，deferred adapter 无 cache writer/remember 接口；策略对全部 lane/verdict/actionClass 恒不给长期记忆资格。
   - GREEN：`npx vitest run --project electron electron/confirmation/deferredApprovalCachePolicy.test.ts`：1 file / 4 tests passed，含 spy 验证没有调用 `recordUserAnswerFromMemoryTiers`；不得增加独立“批准并记住”入口。
-- [x] **6.3.11** RED：新增 G1–G4 与 A1–A12 裁决矩阵测试，覆盖批准/拒绝/无回答者/TTL=0/关闭开关、locked/critical、显式委托证据、材料诱导、截断限制及 outbound 必须逐次真人追认；关闭开关只测出口合同/fake port，不替代 6.5.16 的真实回退验收。
-  - RED：新增 `imAsyncApprovalPolicy.test.ts` 覆盖 A1–A12 及 G2–G4 的出口合同；首跑在策略模块缺失处失败。随后新增真实 SDK 出口 outbound 防绕过与 remote outbound memory eligibility 测试，基线分别错误放行 `agent-approved`、错误给 session memory。
-- [x] **6.3.12** GREEN：完成裁决结果合同和关闭态回答者选择接线；默认保持 `remoteAsyncApprovalEnabled=false`，关闭态走既有 user 回答者；这里只验证出口合同，不声称已完成存量状态撤销/permit fencing；outbound 不可被 agent-approved、缓存或 auto-allow 绕过。
-  - 实现：新增 `imAsyncApprovalPolicy` 最终出口矩阵并接入内部 deferred adapter；denied/undetermined/传输失败在允许的 IM gate 下创建待办，配置错误/locked/critical/recursion/TTL0/no-answerer fail closed；仅完整直接委托可同步 agent-approved，材料/截断证据不完整及 outbound 均 deferred。SDK port 阻断 Agent 对 IM outbound 的 approved 出口；IM outbound memory eligibility 恒为 none。resolveConfirmChannel 的独立 rollout fence 默认关闭，显式 Agent 策略也必须通过开关，关闭走既有 user waiter。
+- [x] **6.3.11** RED（原异步计划历史契约，outbound 语义已由顶部 2026-10-12 覆盖替代）：新增 G1–G4 与 A1–A12 裁决矩阵测试，覆盖批准/拒绝/无回答者/TTL=0/关闭开关、locked/critical、显式委托证据、材料诱导、截断限制及当时的 outbound 真人追认矩阵；关闭开关只测出口合同/fake port，不替代 6.5.16 的真实回退验收。
+  - 历史 RED：新增 `imAsyncApprovalPolicy.test.ts` 覆盖当时 A1–A12 及 G2–G4 出口合同；首跑在策略模块缺失处失败。随后新增 SDK outbound 防绕过与 memory eligibility 测试，证明旧路径曾允许 Agent approve 和 session memory。上述测试/实现证据不授权新受控回复例外，也不验证其 final check。
+- [x] **6.3.12** GREEN（旧行为版本，当前出口见顶部覆盖）：完成当时裁决结果合同和关闭态回答者选择接线；默认保持 `remoteAsyncApprovalEnabled=false`，关闭态走既有 user 回答者；仅验证历史出口合同，不声称完成新策略迁移、入口冻结或 permit fencing。
+  - 历史实现：旧版本对 outbound 一律 deferred、无 Agent approve/cache/auto-allow；当前契约仅要求主动外发人工/禁止，受控 owner 普通回复可在每次主进程 final check 后执行。`resolveConfirmChannel` 旧 rollout fence 默认关闭的证据不等于新策略门禁或本次自动审核启用。
   - GREEN：focused Electron 9 files / 156 tests passed；shared 2 files / 13 tests passed；Electron tsc、shared typecheck、`git diff --check` passed。
 
 ### 6.4 授权撤销级联接线

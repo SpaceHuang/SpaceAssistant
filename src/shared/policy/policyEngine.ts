@@ -26,6 +26,7 @@ export interface InvocationPolicyConstraints {
 /** 把事实集合映射为"信号 token 集合"，供 `match.signals` 的包含语义匹配。 */
 export function signalTokenSet(facts: ContentFacts): Set<string> {
   const tokens = new Set<string>()
+  const hasVerifiedReadOnlyMcpDescriptor = facts.signals.some((signal) => signal.kind === 'mcp-readonly')
   for (const signal of facts.signals) {
     switch (signal.kind) {
       case 'script-analysis':
@@ -80,6 +81,10 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
       case 'lark-subcommand':
         tokens.add(signal.kind)
         tokens.add(`lark-${signal.impact}`)
+        if (signal.category) tokens.add(`lark-category:${signal.category}`)
+        if (signal.impact === 'low_write' && signal.completeness === 'complete' &&
+          (signal.category === 'doc_write' || signal.category === 'calendar')) tokens.add('lark-standard-low-write')
+        if (signal.messageTarget) tokens.add(`lark-message-target:${signal.messageTarget}`)
         // high_impact / unknown 归并到 write 域（fail-closed，与 isOutboundWriteTool 一致）
         if (signal.impact !== 'read') tokens.add('lark-write')
         break
@@ -90,9 +95,25 @@ export function signalTokenSet(facts: ContentFacts): Set<string> {
         tokens.add(`toolkit-capability:${signal.capabilityId}`)
         tokens.add(signal.risk === 'act' ? 'toolkit-act' : 'toolkit-read')
         break
+      case 'mcp-invocation':
+        tokens.add(signal.kind)
+        tokens.add(`mcp-query-source:${signal.querySource}`)
+        tokens.add(`mcp-account-authorization:${signal.accountAuthorization}`)
+        // This candidate token requires the independent descriptor-validation signal plus all host-derived
+        // provenance and completeness facts. `readOnlyHint` alone never creates this token.
+        if (
+          hasVerifiedReadOnlyMcpDescriptor && signal.querySource === 'public' &&
+          signal.accountAuthorization === 'authorized' && signal.sideEffect === 'read' &&
+          signal.completeness === 'complete' && signal.dataDestinations.length === 0
+        ) tokens.add('mcp-public-read')
+        if (signal.accountAuthorization === 'unauthorized') tokens.add('mcp-account-unauthorized')
+        if (signal.completeness === 'capability-description-stale') tokens.add('mcp-capability-description-stale')
+        break
       case 'browser-action':
         tokens.add(signal.kind)
         tokens.add(`browser-${signal.action}`)
+        if (signal.action === 'act' && signal.dangerous === false && signal.completeness === 'complete' &&
+          (signal.sideEffect === 'read' || signal.sideEffect === 'navigate')) tokens.add('browser-act-low-risk')
         if (signal.action === 'act' && signal.dangerous) tokens.add('browser-act-dangerous')
         break
       case 'command-sequence':
@@ -249,6 +270,21 @@ function ruleMatchesInvocation(
   return true
 }
 
+/** Classify a matched policy rule before it reaches an executor or confirmation channel. */
+export function resolvePolicyOutcome(rule: PolicyRule): {
+  disposition: 'forbidden' | 'human-required' | 'auto-eligible'
+  cause: string
+  reason: string
+} {
+  if (rule.action === 'deny') {
+    return { disposition: 'forbidden', cause: rule.denyClass ?? 'hard-deny', reason: rule.reason }
+  }
+  if (rule.humanRequired || rule.action === 'ask' || rule.action === 'confirm-every-time') {
+    return { disposition: 'human-required', cause: rule.humanRequired ? 'human-required' : rule.id, reason: rule.reason }
+  }
+  return { disposition: 'auto-eligible', cause: rule.id, reason: rule.reason }
+}
+
 /** askUnless：门控满足时把 ask 降为 allow（"问除非不满足条件"）。 */
 function askUnlessHolds(rule: PolicyRule, deps: PolicyEngineDeps): boolean {
   if (!rule.askUnless) return false
@@ -272,10 +308,14 @@ function requireConfirm(
   constraints?: InvocationPolicyConstraints,
   answerer: 'user' | 'agent' = askAnswererFor(lane)
 ): Decision {
+  const outcome = resolvePolicyOutcome(rule)
   return {
     type: 'require-confirm',
     ruleId: rule.id,
     answerer,
+    disposition: answerer === 'user' ? 'human-required' : 'auto-eligible',
+    cause: outcome.cause,
+    reason: outcome.reason,
     riskLevel: facts.baseRiskLevel,
     facts,
     memoryTiers: buildMemoryTiers(facts, sessionId, lane, constraints),
@@ -284,11 +324,12 @@ function requireConfirm(
 }
 
 function autoAllow(ruleId: string, facts: ContentFacts, cacheKey?: CacheKey): Decision {
-  return { type: 'auto-allow', ruleId, reason: ruleId, ...(cacheKey ? { cacheKey } : {}) }
+  void facts
+  return { type: 'auto-allow', ruleId, reason: ruleId, disposition: 'auto-eligible', cause: ruleId, ...(cacheKey ? { cacheKey } : {}) }
 }
 
-function deny(ruleId: string, reason: string): Decision {
-  return { type: 'deny', ruleId, reason }
+function deny(ruleId: string, reason: string, cause = 'hard-deny'): Decision {
+  return { type: 'deny', ruleId, reason, disposition: 'forbidden', cause }
 }
 
 function lookupCache(
@@ -412,6 +453,14 @@ export function decide(
   )
   if (policyDeny) return deny(policyDeny.id, policyDeny.reason)
 
+  // Human-required is a semantic floor, independent of locked/editability and rule array position.
+  const humanRequiredRule = invocationRules.find(
+    (r) => r.humanRequired === true && ruleMatchesInvocation(r, facts, context, deps)
+  )
+  if (humanRequiredRule) {
+    return requireConfirm(humanRequiredRule, facts, context.sessionId, context.lane, constraints, 'user')
+  }
+
   // 系统 locked confirm-every-time 规则位于缓存之前：即使存在旧 allow cache，也必须逐次确认。
   const confirmEveryTime = invocationRules.find(
     (r) => r.locked && r.action === 'confirm-every-time' && ruleMatchesInvocation(r, facts, context, deps)
@@ -484,18 +533,22 @@ export function decide(
 
 /**
  * 消息入口时机（ingress）判定：输入是接续事实（lane + origin），无工具调用。
- * 只消费 `when === 'ingress'` 的规则，首条命中即返回；未命中默认放行。
+ * 只消费 `when === 'ingress'` 的规则；任何匹配 deny 优先于 allow，未命中默认放行。
  */
 export function decideIngress(
   facts: IngressFacts,
   rules: PolicyRule[]
 ): { action: 'allow' | 'deny'; ruleId: string; reason: string } {
-  for (const rule of rules) {
-    if (rule.when !== 'ingress') continue
+  const matches = (rule: PolicyRule): boolean => {
+    if (rule.when !== 'ingress') return false
     const m = rule.match
-    if (m?.lane && !m.lane.includes(facts.lane)) continue
-    if (m?.origin && facts.origin.kind !== m.origin) continue
-    return { action: rule.action === 'deny' ? 'deny' : 'allow', ruleId: rule.id, reason: rule.reason }
+    if (m?.lane && !m.lane.includes(facts.lane)) return false
+    if (m?.origin && facts.origin.kind !== m.origin) return false
+    return true
   }
+  const denyRule = rules.find((rule) => rule.action === 'deny' && matches(rule))
+  if (denyRule) return { action: 'deny', ruleId: denyRule.id, reason: denyRule.reason }
+  const allowRule = rules.find((rule) => matches(rule))
+  if (allowRule) return { action: 'allow', ruleId: allowRule.id, reason: allowRule.reason }
   return { action: 'allow', ruleId: 'ingress-default-allow', reason: '默认放行' }
 }

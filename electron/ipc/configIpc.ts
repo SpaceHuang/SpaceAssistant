@@ -381,18 +381,6 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
         const feishuAuthorizationChanged = (payload.feishu.enabled === false && prevFeishu.enabled)
           || (payload.feishu.remoteEnabled === false && prevFeishu.remoteEnabled)
           || (payload.feishu.remoteSenderAllowlist !== undefined && JSON.stringify(payload.feishu.remoteSenderAllowlist ?? []) !== JSON.stringify(prevFeishu.remoteSenderAllowlist ?? []))
-        for (const key of [
-          'remoteAllowLocalWrite',
-          'remoteDenyOutbound',
-          'remoteScriptRequiresConfirm',
-          'remoteBrowserNavigateRequiresConfirm',
-          'remoteBrowserActRequiresConfirm'
-        ] as const) {
-          const nextVal = payload.feishu[key]
-          if (nextVal !== undefined && nextVal !== prevFeishu[key]) {
-            recordSettings({ kind: 'policy-change', lane: 'feishu', key, before: prevFeishu[key], after: nextVal })
-          }
-        }
         persistFeishuConfig(ctx.db, payload.feishu)
       }
       if (payload.wechat !== undefined) {
@@ -401,18 +389,6 @@ const pushExposureToolsChanged = makePushExposureToolsChanged(ctx)
           || (payload.wechat.remoteEnabled === false && prevWechat.remoteEnabled)
           || (payload.wechat.loggedIn === false && prevWechat.loggedIn)
           || (payload.wechat.remoteSenderAllowlist !== undefined && JSON.stringify(payload.wechat.remoteSenderAllowlist ?? []) !== JSON.stringify(prevWechat.remoteSenderAllowlist ?? []))
-        for (const key of [
-          'remoteAllowLocalWrite',
-          'remoteDenyOutbound',
-          'remoteScriptRequiresConfirm',
-          'remoteBrowserNavigateRequiresConfirm',
-          'remoteBrowserActRequiresConfirm'
-        ] as const) {
-          const nextVal = payload.wechat[key]
-          if (nextVal !== undefined && nextVal !== prevWechat[key]) {
-            recordSettings({ kind: 'policy-change', lane: 'wechat', key, before: prevWechat[key], after: nextVal })
-          }
-        }
         persistWeChatConfig(ctx.db, payload.wechat)
       }
       if (payload.workDirProfiles !== undefined) {

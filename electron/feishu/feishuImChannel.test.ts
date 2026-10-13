@@ -83,6 +83,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
       toolName: 'write_file',
       messageId: 'm1',
       matchKey: 'c1',
+      authOwner: owner,
       context: 'c1'
     })
     expect(
@@ -100,6 +101,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
       toolName: 'write_file',
       messageId: 'm1',
       matchKey: 'c1',
+      authOwner: owner,
       context: 'c1'
     })
     expect(
@@ -111,15 +113,16 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
   })
 
   it('asks the owner to quote the current prompt when a valid code arrives unquoted', async () => {
-    const { replyFeishuText: sendHint } = await import('./feishuReply')
+    const { sendFeishuRemoteOutbound: sendHint } = await import('./feishuRemoteOutbound')
     const im = new FeishuImChannel({ runner: {} as LarkCliRunner })
     const pending = im.request(req(), {
-      sessionId: 's-no-quote', toolName: 'write_file', messageId: 'm1', matchKey: 'c1'
+      sessionId: 's-no-quote', toolName: 'write_file', messageId: 'm1', matchKey: 'c1', authOwner: owner
     })
     await vi.waitFor(() => expect(im.listPending()[0]?.promptMessageId).toBe('feishu-confirm-prompt'))
     const confirmId = im.listPending()[0]!.confirmId!
     expect(im.tryResolveFromInboundMessage(p2p({ content: `Y ${confirmId}`, replyToMessageId: null }), confirmOpts)).toBe(true)
-    expect(sendHint).toHaveBeenCalledWith(expect.anything(), 'm1', expect.stringMatching(/引用.*确认提示/))
+    expect(sendHint).toHaveBeenCalledWith(expect.objectContaining({ messageId: 'm1', recipient: owner,
+      body: expect.stringMatching(/引用.*确认提示/), outboundDeliveryFacts: expect.objectContaining({ channel: 'feishu', ownerId: owner }) }))
     expect(im.countPending()).toBe(1)
     im.cancelAllPending()
     await expect(pending).resolves.toMatchObject({ kind: 'rejected', cause: 'cancelled' })
@@ -132,6 +135,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
       toolName: 'write_file',
       messageId: 'm1',
       matchKey: 'c1',
+      authOwner: owner,
       context: 'c1'
     })
     expect(im.tryResolveFromInboundMessage(p2p({ content: 'Y' }), {})).toBe(false)
@@ -154,6 +158,19 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
     })
     expect(text).toContain('https://example.com/article')
     expect(text).toContain('回复 Y')
+  })
+
+  it('MCP confirmation explains the tool and request instead of showing its internal mapped name', () => {
+    const text = buildFeishuConfirmPromptText({
+      id: 'mcp-1', sessionId: 's-mcp', toolName: 'mcp_fetch_fetch_deadbeef',
+      toolInput: { url: 'https://example.com/pricing' },
+      mcp: { serverName: 'Fetch Server', originalToolName: 'fetch', description: 'Fetch a URL and extract its contents.' },
+      messageId: 'm1', channel: 'feishu', memoryTiers: [], createdAt: 0, expiresAt: 0, confirmId: '09'
+    })
+    expect(text).toContain('MCP 工具：fetch（服务：Fetch Server）')
+    expect(text).toContain('Fetch a URL and extract its contents.')
+    expect(text).toContain('https://example.com/pricing')
+    expect(text).not.toContain('mcp_fetch_fetch_deadbeef')
   })
 
   it('includes progress prefix in confirm text', async () => {
@@ -187,6 +204,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
       toolInput: { command: 'npm test' },
       messageId: 'm1',
       matchKey: 'c1',
+      authOwner: owner,
       context: 'c1',
       trustEligible: true
     })
@@ -208,6 +226,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
       toolInput: { command: 'rm -rf /' },
       messageId: 'm1',
       matchKey: 'c1',
+      authOwner: owner,
       context: 'c1',
       trustEligible: false
     })
@@ -232,6 +251,7 @@ describe('FeishuImChannel（原 FeishuConfirmManager 回归）', () => {
       toolInput: { command: 'npm test' },
       messageId: 'm1',
       matchKey: 'c1',
+      authOwner: owner,
       context: 'c1',
       memoryTiers: [tier],
       authorizationGeneration: 0

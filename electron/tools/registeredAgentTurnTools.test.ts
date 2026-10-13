@@ -137,19 +137,24 @@ describe('createRegisteredAgentTurnTools', () => {
             ttlMs: 60_000, checkpoint: { checkpointId: 'checkpoint-real-turn', workflowRevision: 2 },
             policy: { lane: 'wechat', enabled: true, actionClass: 'write', gate: 'eligible', evidence: { kind: 'material', restrictionsComplete: false } } })
           expect(intentStore.authorizeResume(invocationId)).toBe(true)
-          return { kind: 'deferred', todoId: todo.todoId, invocationId, checkpointRef: { checkpointId: 'checkpoint-real-turn', workflowRevision: 2 } }
+          return { kind: 'deferred', todoId: todo.todoId, invocationId, cause: 'insufficient-delegation-evidence',
+            executionState: 'not-executed', retryable: false, nextStep: 'await-user',
+            checkpointRef: { checkpointId: 'checkpoint-real-turn', workflowRevision: 2 } }
         }
       })
 
       expect(execute).not.toHaveBeenCalled()
       expect(readExecute).not.toHaveBeenCalled()
       expect(admission.todoStore.get(todo.todoId, {
-        channel: 'wechat', identityKey: todo.identityKey, ownerId: todo.ownerId, authorizationEpoch: 1, rule: todo.rule
+        channel: 'wechat', identityKey: todo.identityKey, ownerId: todo.ownerId, authorizationEpoch: 1,
+        originSessionId: todo.originSessionId, rule: todo.rule
       })).toMatchObject({ status: 'pending', invocationId })
       expect(intentStore.get(invocationId)).toMatchObject({ state: 'checkpoint_committed', todoId: todo.todoId, checkpointId: 'checkpoint-real-turn' })
       expect(persistentDispatch).not.toHaveBeenCalled()
       expect((await history.read(invocationId)).events).toContainEqual(expect.objectContaining({
-        kind: 'approval-deferred', payload: { toolCallId: 'async-write', approvalId: 'async-write', todoId: todo.todoId, invocationId, checkpointId: 'checkpoint-real-turn', workflowRevision: 2 }
+        kind: 'approval-deferred', payload: { toolCallId: 'async-write', approvalId: 'async-write', todoId: todo.todoId, invocationId,
+          cause: 'insufficient-delegation-evidence', executionState: 'not-executed', retryable: false, nextStep: 'await-user',
+          checkpointId: 'checkpoint-real-turn', workflowRevision: 2 }
       }))
       expect(responses).toHaveLength(1)
       expect((await history.read(invocationId)).events).toContainEqual(expect.objectContaining({
@@ -296,15 +301,15 @@ describe('createRegisteredAgentTurnTools', () => {
           return { kind: 'approved', receipt: 'feishu-confirmed' }
         },
         maxModelTurns: 2, history
-      })).rejects.toMatchObject({ reasonCode: 'PREPARED_RECHECK_FAILED' })
+      })).rejects.toMatchObject({ reasonCode: 'MISSING_MATERIAL' })
       const events = (await history.read(invocationId)).events
       expect(executor).not.toHaveBeenCalled()
       expect(providerCalls).toBe(1)
       expect(events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'confirmed-attachment', reason: 'PREPARED_RECHECK_FAILED'
+        toolCallId: 'confirmed-attachment', reason: 'MISSING_MATERIAL'
       })
       expect(events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
-      expect(events.at(-1)).toMatchObject({ kind: 'invocation-failed', payload: { status: 'denied', reason: 'PREPARED_RECHECK_FAILED' } })
+      expect(events.at(-1)).toMatchObject({ kind: 'invocation-failed', payload: { status: 'denied', reason: 'MISSING_MATERIAL' } })
     } finally {
       executor.mockRestore()
       await fs.rm(userDataDir, { recursive: true, force: true })
@@ -714,6 +719,31 @@ describe('createRegisteredAgentTurnTools', () => {
     })
   })
 
+  it('allows a confirmed prepared tool to re-enter validation after a renewed confirmation', async () => {
+    const validate = vi.fn()
+    const registry = new TypedToolRegistry()
+    registry.register(definePlannedTool({
+      name: 'read_file', parseInput: (raw) => raw as { path: string },
+      plan: async (input) => input, validate, execute: async () => ({ success: true })
+    }))
+    const tools = createRegisteredAgentTurnTools({
+      requestId, turnId, registry,
+      permits: new InMemorySafetyPermitStore(), admission: new InMemoryExecutionAdmissionCoordinator(),
+      createExecutionContext: () => ({ workDir: '/workspace' } as never),
+      resolveAuthorizationVersion: () => 'policy-material-v1'
+    })
+    const call = { invocationId, toolCallId: 'read-renewed-confirmation', toolName: 'read_file', input: { path: 'note.txt' } }
+
+    await tools.prepareTool(call, { kind: 'initial' })
+    await tools.prepareTool(call, { kind: 'recheck', confirmation: { receipt: 'first-approval' } })
+    await expect(tools.prepareTool(call, { kind: 'recheck', confirmation: { receipt: 'renewed-approval' } })).resolves.toMatchObject({
+      phase: 'recheck', invocationId, toolCallId: call.toolCallId
+    })
+
+    expect(validate).toHaveBeenCalledTimes(2)
+    tools.discardPreparedTool(call)
+  })
+
   it('未获批准或复检拒绝时不进入 registered executor', async () => {
     const execute = vi.fn(async () => 'must not execute')
     const registry = new TypedToolRegistry()
@@ -776,12 +806,13 @@ describe('createRegisteredAgentTurnTools', () => {
 
   it('SDK 用户确认 receipt 绑定到同一个 planned handle 后才 dispatch', async () => {
     const events: string[] = []
+    let executionReceipt: string | undefined
     const registry = new TypedToolRegistry()
     registry.register(definePlannedTool({
       name: 'write_file', parseInput: (raw) => raw as { path: string },
       plan: async (input) => { events.push('plan'); return input },
       validate: async () => { events.push('validate') },
-      execute: async () => { events.push('execute'); return 'written' }
+      execute: async (_plan, execution) => { executionReceipt = execution.userConfirmationReceipt; events.push('execute'); return 'written' }
     }))
     const permits = new InMemorySafetyPermitStore()
     const admission = new InMemoryExecutionAdmissionCoordinator()
@@ -814,6 +845,7 @@ describe('createRegisteredAgentTurnTools', () => {
       }
     })
     expect(events).toEqual(['plan', 'confirm:confirm-1', 'validate', 'validate', 'execute'])
+    expect(executionReceipt).toBe('receipt-1')
     expect(admission.executorEntries).toBe(1)
   })
 

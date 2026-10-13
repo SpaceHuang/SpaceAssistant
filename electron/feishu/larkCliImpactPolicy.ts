@@ -14,6 +14,27 @@ export type LarkCliImpactResult = {
   category?: string
 }
 
+export type LarkMessageTarget = 'self' | 'direct-other' | 'group-or-multiple' | 'unknown'
+
+/** Classify message target against the authenticated Feishu actor; argv alone never establishes self. */
+export function classifyLarkMessageTarget(argv: readonly string[], trustedActorOpenId?: string): LarkMessageTarget {
+  if (argv[0]?.toLowerCase() !== 'message' || !['send', 'create', 'reply'].includes(argv[1]?.toLowerCase() ?? '')) return 'unknown'
+  const rest = argv.slice(2).map((arg) => arg.toLowerCase())
+  if (rest.includes('--chat-type') && rest[rest.indexOf('--chat-type') + 1] === 'group') return 'group-or-multiple'
+  const userIdsIndex = rest.findIndex((token) => token === '--user-ids')
+  if (userIdsIndex >= 0) {
+    const ids = rest[userIdsIndex + 1]
+    if (ids?.includes(',')) return 'group-or-multiple'
+  }
+  const receiveTypeIndex = rest.findIndex((token) => token === '--receive-id-type')
+  const receiveType = receiveTypeIndex >= 0 ? rest[receiveTypeIndex + 1] : undefined
+  const receiveIdIndex = rest.findIndex((token) => token === '--receive-id')
+  const recipient = receiveIdIndex >= 0 ? argv[2 + receiveIdIndex + 1] : undefined
+  if (recipient?.includes(',')) return 'group-or-multiple'
+  if (receiveType !== 'open_id' || !recipient || !trustedActorOpenId?.startsWith('ou_')) return 'unknown'
+  return recipient === trustedActorOpenId ? 'self' : 'direct-other'
+}
+
 const HIGH_MESSAGE = new Set(['group', 'chat'])
 const DELETE_TOKENS = new Set(['delete', 'remove', 'batch-delete', 'batch_delete', 'destroy'])
 const PERM_TOKENS = new Set(['permission', 'permissions', 'share', 'acl', 'member', 'members', 'role'])

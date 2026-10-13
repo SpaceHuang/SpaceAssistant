@@ -2,11 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_REMOTE_IM_COMMON_CONFIG,
   DEFAULT_REMOTE_TASK_BUDGET,
-  applyRemoteRestrictWritesAndOutbound,
-  isRemoteRestrictWritesAndOutbound,
   mergeRemoteImCommonConfig,
-  migrateRemoteReadOnlyPolicy,
-  normalizeImConfirmPolicy,
   resolveRemoteTaskBudget
 } from './imTypes'
 
@@ -14,10 +10,9 @@ describe('imTypes', () => {
   it('mergeRemoteImCommonConfig returns defaults for null', () => {
     const merged = mergeRemoteImCommonConfig(null)
     expect(merged.remoteEnabled).toBe(DEFAULT_REMOTE_IM_COMMON_CONFIG.remoteEnabled)
-    expect(merged.remoteConfirmPolicy).toBe('always')
-    expect(merged.remoteDenyOutbound).toBe(false)
-    expect(merged.remoteAllowLocalWrite).toBe(true)
-    expect(merged.remoteBrowserRequiresConfirm).toBe(false)
+    expect(merged).not.toHaveProperty('remoteDenyOutbound')
+    expect(merged).not.toHaveProperty('remoteAllowLocalWrite')
+    expect(merged).not.toHaveProperty('remoteBrowserRequiresConfirm')
     expect(merged.remoteRateLimitPerMinute).toBe(60)
     expect(merged.remoteModelSelectionMode).toBe('inherit')
     expect(merged.remoteThinkingEffort).toBe('low')
@@ -35,7 +30,7 @@ describe('imTypes', () => {
       remoteDefaultModelId: 'catalog-model-1',
       remoteThinkingEffort: 'high'
     })
-    expect(merged.remoteSecurityConfigVersion).toBeUndefined()
+    expect(merged).not.toHaveProperty('remoteSecurityConfigVersion')
   })
 
   it('deep-copies allowlist', () => {
@@ -58,42 +53,16 @@ describe('imTypes', () => {
     )
   })
 
-  it('normalizes legacy confirm policies to im_confirm', () => {
-    expect(normalizeImConfirmPolicy('feishu_confirm')).toBe('im_confirm')
-    expect(normalizeImConfirmPolicy('wechat_confirm')).toBe('im_confirm')
-    expect(mergeRemoteImCommonConfig({ remoteConfirmPolicy: 'feishu_confirm' }).remoteConfirmPolicy).toBe(
-      'im_confirm'
-    )
-  })
-
-  it('migrates remote_read_only to deny write + deny outbound', () => {
-    const merged = mergeRemoteImCommonConfig({ remoteConfirmPolicy: 'remote_read_only' })
-    expect(merged.remoteConfirmPolicy).toBe('remote_read_only')
-    expect(merged.remoteAllowLocalWrite).toBe(false)
-    expect(merged.remoteDenyOutbound).toBe(true)
-  })
-
-  it('forces deny write + deny outbound for full legacy remote_read_only stock configs', () => {
-    // Typical stored shape: policy remote_read_only + historical allowLocalWrite:true default.
-    const merged = mergeRemoteImCommonConfig({
-      remoteConfirmPolicy: 'remote_read_only',
-      remoteAllowLocalWrite: true,
-      remoteDenyOutbound: false
-    })
-    expect(merged.remoteAllowLocalWrite).toBe(false)
-    expect(merged.remoteDenyOutbound).toBe(true)
-  })
-
   it('does NOT fabricate remoteSecurityConfigVersion when fields missing', () => {
     const merged = mergeRemoteImCommonConfig({ remoteEnabled: true })
-    expect(merged.remoteSecurityConfigVersion).toBeUndefined()
-    expect(merged.remoteScriptRequiresConfirm).toBeUndefined()
-    expect(merged.remoteBrowserNavigateRequiresConfirm).toBeUndefined()
-    expect(merged.remoteBrowserActRequiresConfirm).toBeUndefined()
+    expect(merged).not.toHaveProperty('remoteSecurityConfigVersion')
+    expect(merged).not.toHaveProperty('remoteScriptRequiresConfirm')
+    expect(merged).not.toHaveProperty('remoteBrowserNavigateRequiresConfirm')
+    expect(merged).not.toHaveProperty('remoteBrowserActRequiresConfirm')
     expect(merged.remoteTaskBudget).toBeUndefined()
   })
 
-  it('carries through explicit new security fields', () => {
+  it('does not project legacy security version metadata into normalized runtime config', () => {
     const merged = mergeRemoteImCommonConfig({
       remoteSecurityConfigVersion: 1,
       remoteSecurityPresetSource: 'upgrade-recommended',
@@ -102,11 +71,11 @@ describe('imTypes', () => {
       remoteBrowserActRequiresConfirm: true,
       remoteTaskBudget: { maxToolCalls: 20 } as never
     })
-    expect(merged.remoteSecurityConfigVersion).toBe(1)
-    expect(merged.remoteSecurityPresetSource).toBe('upgrade-recommended')
-    expect(merged.remoteScriptRequiresConfirm).toBe(false)
-    expect(merged.remoteBrowserNavigateRequiresConfirm).toBe(false)
-    expect(merged.remoteBrowserActRequiresConfirm).toBe(true)
+    expect(merged).not.toHaveProperty('remoteSecurityConfigVersion')
+    expect(merged).not.toHaveProperty('remoteSecurityPresetSource')
+    expect(merged).not.toHaveProperty('remoteScriptRequiresConfirm')
+    expect(merged).not.toHaveProperty('remoteBrowserNavigateRequiresConfirm')
+    expect(merged).not.toHaveProperty('remoteBrowserActRequiresConfirm')
     expect(merged.remoteTaskBudget).toEqual({
       maxToolCalls: 20,
       maxExecutionWallSec: DEFAULT_REMOTE_TASK_BUDGET.maxExecutionWallSec,
@@ -123,19 +92,4 @@ describe('imTypes', () => {
     )
   })
 
-  it('migrateRemoteReadOnlyPolicy and one-click restrict helpers', () => {
-    expect(
-      migrateRemoteReadOnlyPolicy({
-        policy: 'always',
-        defaults: { remoteAllowLocalWrite: true, remoteDenyOutbound: false }
-      })
-    ).toEqual({ remoteAllowLocalWrite: true, remoteDenyOutbound: false })
-
-    const restricted = applyRemoteRestrictWritesAndOutbound(true)
-    expect(restricted).toEqual({ remoteAllowLocalWrite: false, remoteDenyOutbound: true })
-    expect(isRemoteRestrictWritesAndOutbound({ ...DEFAULT_REMOTE_IM_COMMON_CONFIG, ...restricted })).toBe(
-      true
-    )
-    expect(isRemoteRestrictWritesAndOutbound(DEFAULT_REMOTE_IM_COMMON_CONFIG)).toBe(false)
-  })
 })

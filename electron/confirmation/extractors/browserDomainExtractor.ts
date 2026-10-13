@@ -38,10 +38,13 @@ export function extractBrowserSignals(toolInput: Record<string, unknown>, env: E
       signals.push({
         kind: 'browser-action',
         action: 'navigate-open',
+        sideEffect: 'navigate',
+        querySensitivity: 'public',
+        completeness: host ? 'complete' : 'partial',
         ...(host ? { host } : {})
       })
     } else {
-      signals.push({ kind: 'browser-action', action: 'navigate' })
+      signals.push({ kind: 'browser-action', action: 'navigate', sideEffect: 'navigate', querySensitivity: 'unknown', completeness: host ? 'complete' : 'partial' })
     }
     const summary = host ? `访问 ${host}（动作：${action}）` : `动作：${action}`
     return { signals, summary }
@@ -50,9 +53,24 @@ export function extractBrowserSignals(toolInput: Record<string, unknown>, env: E
   if (action === 'act') {
     const host = env.browserAct?.currentHost
     const dangerous = env.browserAct?.dangerous === true
+    const instruction = typeof toolInput.instruction === 'string' ? toolInput.instruction : typeof toolInput.text === 'string' ? toolInput.text : ''
+    const instructionLower = instruction.toLowerCase()
+    const sideEffect: Extract<FactSignal, { kind: 'browser-action' }>['sideEffect'] =
+      /pay|payment|purchase|checkout|支付|付款|购买|结账/i.test(instruction) ? 'payment' :
+        /authori[sz]e|grant access|permission|授权|授予权限/i.test(instruction) ? 'authorization' :
+          /upload|attach|上传|附件/i.test(instruction) ? 'upload' :
+            /delete|remove|删除|移除/i.test(instruction) ? 'delete' :
+              /submit|send|提交|发送/i.test(instruction) ? 'submit' :
+                /search|query|find|lookup|搜索|查询/i.test(instruction) ? 'read' : 'unknown'
+    const querySensitivity = /private|personal|account|balance|medical|customer|sensitive|私人|个人|账号|账户|余额|病历|客户|敏感/i.test(instruction)
+      ? 'private' as const
+      : sideEffect === 'read' ? 'public' as const : 'unknown' as const
     signals.push({
       kind: 'browser-action',
       action: 'act',
+      sideEffect,
+      querySensitivity,
+      completeness: instruction ? 'complete' : 'partial',
       ...(host ? { host } : {}),
       ...(dangerous ? { dangerous } : {})
     })

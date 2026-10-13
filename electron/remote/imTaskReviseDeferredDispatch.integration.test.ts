@@ -38,7 +38,7 @@ function setup() {
     intents.commitCheckpoint(invocationId, { checkpointId: `cp-${todoId}`, workflowRevision: 1 })
     envelopeStore.put({ invocationId, toolName: 'publish', canonicalArgs: { content: `approved-${todoId}` },
       contentVersions: { document: 1 }, executionContext: { sessionId, workflowId, taskId, stepId: step.stepId } })
-    void resume.requestResume({ requestId: `request-${todoId}`, todoId, channel: 'wechat', identityKey: 'revise-identity', ownerId,
+    void resume.requestResume({ requestId: `request-${todoId}`, todoId, sessionId, channel: 'wechat', identityKey: 'revise-identity', ownerId,
       authorizationEpoch: 6, rule, notificationVersion: 1, messageId: `notice-${todoId}`, reasonKey: `reason-${todoId}` })
   }
   putTaskControlRecord(db, { sessionId, ownerId, workflowId, taskId, planRevision: 1, expectedRevision: null,
@@ -63,9 +63,9 @@ describe('task.revisePlan and real deferred dispatcher integration', () => {
       newSteps: [{ stepId: 'stable-v2', instruction: 'Publish exact approved content' }, { stepId: 'new', instruction: 'Do new work' }],
       stepMapping: [{ fromStepId: 'stable', toStepId: 'stable-v2' }] })).resolves.toMatchObject({ status: 'revised' })
     expect(f.todoStore.get('stable-todo', { channel: 'wechat', identityKey: 'revise-identity', ownerId: f.ownerId,
-      authorizationEpoch: 6, rule: f.rule })?.status).toBe('pending')
+      authorizationEpoch: 6, originSessionId: f.sessionId, rule: f.rule })?.status).toBe('pending')
     expect(f.todoStore.get('replace-todo', { channel: 'wechat', identityKey: 'revise-identity', ownerId: f.ownerId,
-      authorizationEpoch: 6, rule: f.rule })?.status).toBe('invalidated')
+      authorizationEpoch: 6, originSessionId: f.sessionId, rule: f.rule })?.status).toBe('invalidated')
     await expect(controls.resumeDeferred({ sessionId: f.sessionId, ownerId: f.ownerId, workflowId: f.workflowId, taskId: f.taskId,
       planRevision: 2, todoId: 'stable-todo' })).resolves.toMatchObject({ status: 'dispatched' })
     expect(f.executor).toHaveBeenCalledTimes(1)
@@ -82,7 +82,7 @@ describe('task.revisePlan and real deferred dispatcher integration', () => {
       newSteps: [{ stepId: 'stable-v2', instruction: 'Publish different content' }],
       stepMapping: [{ fromStepId: 'stable', toStepId: 'stable-v2' }] })).resolves.toMatchObject({ status: 'revised' })
     expect(f.todoStore.get('stable-todo', { channel: 'wechat', identityKey: 'revise-identity', ownerId: f.ownerId,
-      authorizationEpoch: 6, rule: f.rule })?.status).toBe('invalidated')
+      authorizationEpoch: 6, originSessionId: f.sessionId, rule: f.rule })?.status).toBe('invalidated')
     const outcomes = await f.resume.dispatchPending(f.sessionId)
     expect(outcomes).toHaveLength(2)
     expect(outcomes.every(({ status }) => status === 'invalidated')).toBe(true)

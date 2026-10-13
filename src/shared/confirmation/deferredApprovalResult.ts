@@ -6,15 +6,22 @@ export type DeferredApprovalEligibility =
   | { kind: 'eligible'; todoId: string }
   | { kind: 'config-error' | 'locked' | 'critical' | 'recursion-blocked' }
 
+export type DeferredApprovalCause = 'human-required' | 'agent-deny' | 'agent-undetermined' | 'unavailable' | 'timeout' |
+  'unparsable' | 'outbound-requires-human' | 'insufficient-delegation-evidence'
+
 /** 审批调用结果的跨边界表达；deferred 只表示已持久化待办，不代表动作已执行。 */
 export type DeferredApprovalResult =
   | { kind: 'approve'; verdict: Extract<ApprovalInvocationResult, { ok: true }>['verdict'] }
-  | { kind: 'deny'; summary?: string; cause?: 'agent-deny' | 'config-error' | 'locked' | 'critical' | 'recursion-blocked' }
+  | { kind: 'deny'; summary?: string; cause?: 'agent-deny' | 'unparsable' | 'config-error' | 'locked' | 'critical' | 'recursion-blocked' }
   | { kind: 'undetermined'; summary: string }
   | { kind: 'unavailable'; summary?: string }
   | { kind: 'timeout'; summary?: string }
   | { kind: 'unparsable'; summary?: string }
-  | { kind: 'deferred'; todoId: string; cause?: 'agent-deny' | 'agent-undetermined' | 'unavailable' | 'timeout' | 'unparsable' | 'outbound-requires-human' | 'insufficient-delegation-evidence' }
+  | { kind: 'deferred'; todoId: string; cause: DeferredApprovalCause; executionState: 'not-executed'; retryable: boolean; nextStep: 'await-user' }
+
+function deferred(todoId: string, cause: DeferredApprovalCause): DeferredApprovalResult {
+  return { kind: 'deferred', todoId, cause, executionState: 'not-executed', retryable: false, nextStep: 'await-user' }
+}
 
 /** 只允许有效 approve 且通过可信 gate 的结果映射为 deferred。 */
 export function mapDeferredApprovalResult(
@@ -30,7 +37,7 @@ export function mapDeferredApprovalResult(
   if (result.verdict.kind === 'undetermined') return { kind: 'undetermined', summary: result.verdict.reason.summary }
 
   if (eligibility.kind === 'not-requested') return { kind: 'approve', verdict: result.verdict }
-  if (eligibility.kind === 'eligible') return { kind: 'deferred', todoId: eligibility.todoId }
+  if (eligibility.kind === 'eligible') return deferred(eligibility.todoId, 'insufficient-delegation-evidence')
   return { kind: 'deny', cause: eligibility.kind, summary: '异步审批资格未通过' }
 }
 
@@ -39,9 +46,11 @@ export function parseDeferredApprovalResult(value: unknown): DeferredApprovalRes
   if (!value || typeof value !== 'object') return null
   const candidate = value as Record<string, unknown>
   if (candidate.kind === 'deferred' && typeof candidate.todoId === 'string' && candidate.todoId.length > 0) {
-    const allowedCauses = ['agent-deny', 'agent-undetermined', 'unavailable', 'timeout', 'unparsable', 'outbound-requires-human', 'insufficient-delegation-evidence'] as const
-    if (candidate.cause !== undefined && !allowedCauses.includes(candidate.cause as typeof allowedCauses[number])) return null
-    return { kind: 'deferred', todoId: candidate.todoId, ...(candidate.cause !== undefined ? { cause: candidate.cause as typeof allowedCauses[number] } : {}) }
+    const allowedCauses = ['human-required', 'agent-deny', 'agent-undetermined', 'unavailable', 'timeout', 'unparsable', 'outbound-requires-human', 'insufficient-delegation-evidence'] as const
+    if (!allowedCauses.includes(candidate.cause as typeof allowedCauses[number]) || candidate.executionState !== 'not-executed' ||
+      typeof candidate.retryable !== 'boolean' || candidate.nextStep !== 'await-user') return null
+    return { kind: 'deferred', todoId: candidate.todoId, cause: candidate.cause as DeferredApprovalCause,
+      executionState: 'not-executed', retryable: candidate.retryable, nextStep: 'await-user' }
   }
   if (candidate.kind === 'approve' && candidate.verdict && typeof candidate.verdict === 'object') {
     const verdict = candidate.verdict as Record<string, unknown>
@@ -49,7 +58,13 @@ export function parseDeferredApprovalResult(value: unknown): DeferredApprovalRes
       return { kind: 'approve', verdict: verdict as DeferredApprovalResult & never }
     }
   }
-  if (candidate.kind === 'deny') return { kind: 'deny', ...(typeof candidate.summary === 'string' ? { summary: candidate.summary } : {}) }
+  if (candidate.kind === 'deny') {
+    const allowedCauses = ['agent-deny', 'unparsable', 'config-error', 'locked', 'critical', 'recursion-blocked'] as const
+    if (candidate.cause !== undefined && !allowedCauses.includes(candidate.cause as typeof allowedCauses[number])) return null
+    return { kind: 'deny',
+      ...(typeof candidate.cause === 'string' ? { cause: candidate.cause as typeof allowedCauses[number] } : {}),
+      ...(typeof candidate.summary === 'string' ? { summary: candidate.summary } : {}) }
+  }
   if (candidate.kind === 'undetermined' && typeof candidate.summary === 'string') return { kind: 'undetermined', summary: candidate.summary }
   if (candidate.kind === 'unavailable' || candidate.kind === 'timeout' || candidate.kind === 'unparsable') {
     return { kind: candidate.kind, ...(typeof candidate.summary === 'string' ? { summary: candidate.summary } : {}) }

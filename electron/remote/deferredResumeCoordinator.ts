@@ -10,12 +10,14 @@ import { getWakeEventRecoveryDelayMs } from '../database/wakeEvents'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
 import { buildDeferredApprovalAuditEvent } from '../confirmation/deferredApprovalAudit'
 import { releaseRemoteSession, tryClaimRemoteSession } from './remoteAgentRegistry'
+import { readImPolicySnapshot } from '../confirmation/imPolicyStore'
 
 type TodoStore = {
   get(todoId: string, context: DeferredTodoAuthorization, now?: number): DeferredTodoRecord | null
   claimForDispatch(todoId: string, context: DeferredTodoAuthorization, now?: number): DeferredTodoRecord | null
   markConsumed(todoId: string, context: DeferredTodoAuthorization, now?: number): boolean
   invalidate(todoId: string, now?: number): boolean
+  invalidateDispatching?(todoId: string, now?: number): boolean
   invalidateByScope(scope: { channel: 'feishu' | 'wechat'; identityKey: string; ownerId: string; originSessionId: string }, now?: number): { invalidatedTodoIds: string[]; dispatchingTodoIds: string[] }
   invalidateAssociated(input: { originSessionId: string; workflowId: string; taskId: string; throughPlanRevision: number; now?: number }): unknown
 }
@@ -23,6 +25,7 @@ type TodoStore = {
 type ResumeInput = {
   requestId: string
   todoId: string
+  sessionId: string
   channel: 'feishu' | 'wechat'
   identityKey: string
   ownerId: string
@@ -40,6 +43,7 @@ export function createDeferredResumeCoordinator(input: {
   channel?: 'feishu' | 'wechat'
   todoStore: TodoStore
   maxParallel: number
+  requirePolicyFence?: boolean
   envelopeStore: { get(invocationId: string): DeferredCallEnvelope | null }
   recheck(request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): Promise<{ allowed: boolean }>
   dispatch(request: DeferredResumeRequest, todo: DeferredTodoRecord, envelope: DeferredCallEnvelope): Promise<{ dispatched: boolean }>
@@ -51,15 +55,41 @@ export function createDeferredResumeCoordinator(input: {
   const scopeClosed = (scope: { channel: 'feishu' | 'wechat'; identityKey: string; ownerId: string; sessionId: string }): boolean =>
     getDbConnection(input.db).prepare(`SELECT 1 FROM deferred_approval_closures WHERE channel=? AND identity_key=? AND owner_id=? AND session_id=?`)
       .get(scope.channel, scope.identityKey, scope.ownerId, scope.sessionId) !== undefined
-  const contextFor = (request: Pick<ResumeInput, 'channel' | 'identityKey' | 'ownerId' | 'authorizationEpoch' | 'rule'>): DeferredTodoAuthorization => ({
+  const contextFor = (request: Pick<ResumeInput, 'sessionId' | 'channel' | 'identityKey' | 'ownerId' | 'authorizationEpoch' | 'rule'>): DeferredTodoAuthorization => ({
     channel: request.channel, identityKey: request.identityKey, ownerId: request.ownerId,
-    authorizationEpoch: request.authorizationEpoch, rule: request.rule
+    authorizationEpoch: request.authorizationEpoch, originSessionId: request.sessionId, rule: request.rule
   })
+  const policyFenceCurrent = (todo: DeferredTodoRecord): boolean => {
+    if (!input.requirePolicyFence) return true
+    if (!todo.policyBehaviorVersion || !Number.isSafeInteger(todo.policyRevision) || !Number.isSafeInteger(todo.policyEpoch)) return false
+    try {
+      const conn = getDbConnection(input.db)
+      const snapshot = readImPolicySnapshot(conn, { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })
+      const epoch = conn.prepare("SELECT epoch FROM policy_authorization_epochs WHERE domain='im'").get() as { epoch: number } | undefined
+      return Boolean(epoch && snapshot.policyBehaviorVersion === todo.policyBehaviorVersion && snapshot.revision === todo.policyRevision && epoch.epoch === todo.policyEpoch)
+    } catch { return false }
+  }
 
   const coordinator = {
     async requestResume(request: ResumeInput, commitReceipt?: () => boolean): Promise<{ status: 'resume_requested' | 'invalidated'; duplicate?: boolean }> {
       const todo = input.todoStore.get(request.todoId, contextFor(request), request.now)
-      if (!todo || todo.status !== 'pending' || todo.invocationId.trim() === '' || todo.originSessionId.trim() === '' ||
+      if (!todo || todo.status !== 'pending') return { status: 'invalidated' }
+      if (!policyFenceCurrent(todo)) {
+        input.todoStore.invalidate(todo.todoId, request.now)
+        return { status: 'invalidated' }
+      }
+      const envelope = input.envelopeStore.get(todo.invocationId)
+      if (!envelope || envelope.invocationId !== todo.invocationId ||
+        (todo.policyBehaviorVersion !== undefined &&
+          (envelope.executionContext.toolName !== envelope.toolName ||
+            JSON.stringify(envelope.executionContext.toolInput) !== JSON.stringify(envelope.canonicalArgs) ||
+            envelope.executionContext.ruleId !== todo.rule.ruleId || envelope.executionContext.factsHash !== todo.rule.factsHash ||
+            envelope.executionContext.policyBehaviorVersion !== todo.policyBehaviorVersion ||
+            envelope.executionContext.policyRevision !== todo.policyRevision || envelope.executionContext.policyEpoch !== todo.policyEpoch))) {
+        input.todoStore.invalidate(todo.todoId, request.now)
+        return { status: 'invalidated' }
+      }
+      if (todo.invocationId.trim() === '' || todo.originSessionId.trim() === '' ||
         scopeClosed({ channel: todo.channel, identityKey: todo.identityKey, ownerId: todo.ownerId, sessionId: todo.originSessionId }) ||
         !intents.authorizeResume(todo.invocationId)) return { status: 'invalidated' }
       const created = runInTransaction(getDbConnection(input.db), () => {
@@ -130,7 +160,7 @@ export function createDeferredResumeCoordinator(input: {
         try {
           const authorization = contextFor(request)
           const todo = input.todoStore.get(request.todoId, authorization)
-          if (!todo || todo.status !== 'pending' || todo.invocationId !== request.invocationId || todo.originSessionId !== request.sessionId ||
+          if (!todo || todo.status !== 'pending' || !policyFenceCurrent(todo) || todo.invocationId !== request.invocationId || todo.originSessionId !== request.sessionId ||
             todo.workflowId.trim() === '' || todo.taskId.trim() === '' || todo.stepId.trim() === '' ||
             !intents.authorizeResume(todo.invocationId)) {
             requests.invalidateByTodo(request.todoId)
@@ -138,14 +168,20 @@ export function createDeferredResumeCoordinator(input: {
             continue
           }
           const envelope = input.envelopeStore.get(request.invocationId)
-          if (!envelope || envelope.invocationId !== todo.invocationId) {
+          if (!envelope || envelope.invocationId !== todo.invocationId ||
+            (todo.policyBehaviorVersion !== undefined &&
+              (envelope.executionContext.toolName !== envelope.toolName ||
+                JSON.stringify(envelope.executionContext.toolInput) !== JSON.stringify(envelope.canonicalArgs) ||
+                envelope.executionContext.ruleId !== todo.rule.ruleId || envelope.executionContext.factsHash !== todo.rule.factsHash ||
+                envelope.executionContext.policyBehaviorVersion !== todo.policyBehaviorVersion ||
+                envelope.executionContext.policyRevision !== todo.policyRevision || envelope.executionContext.policyEpoch !== todo.policyEpoch))) {
             input.todoStore.invalidate(request.todoId)
             requests.invalidateByTodo(request.todoId)
             results.push({ requestId: request.requestId, status: 'invalidated' })
             continue
           }
           const latest = await input.recheck(request, todo, envelope)
-          if (!latest.allowed) {
+          if (!latest.allowed || !policyFenceCurrent(todo)) {
             input.todoStore.invalidate(request.todoId)
             requests.invalidateByTodo(request.todoId)
             results.push({ requestId: request.requestId, status: 'invalidated' })
@@ -163,7 +199,15 @@ export function createDeferredResumeCoordinator(input: {
             continue
           }
           input.audit?.(buildDeferredApprovalAuditEvent({ kind: 'dispatch', lane: todo.channel, sessionId: todo.originSessionId,
-            todoId: todo.todoId, invocationId: todo.invocationId, consumed: true }))
+            todoId: todo.todoId, invocationId: todo.invocationId, consumed: true,
+            policyBehaviorVersion: todo.policyBehaviorVersion, policyRevision: todo.policyRevision, dispatchKey: request.requestId }))
+          // Last synchronous fence before entering the executor port. A policy change during
+          // recheck/claim/audit consumes no execution and invalidates this resume receipt.
+          if (!policyFenceCurrent(todo)) {
+            requests.setState(request.requestId, 'dispatching', 'invalidated')
+            results.push({ requestId: request.requestId, status: 'invalidated' })
+            continue
+          }
           try {
             const dispatched = await input.dispatch(request, todo, envelope)
             if (!dispatched.dispatched) {

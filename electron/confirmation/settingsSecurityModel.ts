@@ -66,7 +66,13 @@ export function toRuleViews(
       locked: rule.locked === true,
       reason: rule.reason,
       overridden: o != null && o.action !== rule.action,
-      ...(rule.match?.lane ? { lanes: rule.match.lane } : {})
+      ...(rule.match?.lane ? { lanes: rule.match.lane } : {}),
+      ...(rule.match ? {
+        capabilities: [...new Set([
+          ...(rule.match.toolName ? (Array.isArray(rule.match.toolName) ? rule.match.toolName : [rule.match.toolName]) : []),
+          ...(rule.match.signals ?? []).flatMap((signal) => signal.startsWith('toolkit-capability:') ? [signal.slice('toolkit-capability:'.length)] : [])
+        ])]
+      } : {})
     }
   })
 }

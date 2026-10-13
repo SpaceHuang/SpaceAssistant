@@ -69,7 +69,7 @@ describe('remote Track schema migration', () => {
       runMigrations(conn)
       expect(conn.prepare('SELECT track_id FROM turns WHERE turn_id=?').get('legacy-turn')).toEqual({ track_id: null })
       expect(conn.prepare('SELECT track_id FROM deferred_todos WHERE todo_id=?').get('legacy-todo')).toEqual({ track_id: null })
-      expect(DB_SCHEMA_VERSION).toBe(94)
+      expect(DB_SCHEMA_VERSION).toBe(97)
     } finally {
       conn.close()
     }
@@ -87,7 +87,7 @@ describe('remote Track schema migration', () => {
       runMigrations(conn)
       expect(conn.prepare('SELECT track_id,track_event_id FROM im_inbox_message_context WHERE message_id=?').get('legacy-message'))
         .toEqual({ track_id: null, track_event_id: null })
-      expect(DB_SCHEMA_VERSION).toBe(94)
+      expect(DB_SCHEMA_VERSION).toBe(97)
       expect(conn.prepare('PRAGMA table_info(im_inbox_message_context)').all()).toEqual(expect.arrayContaining([
         expect.objectContaining({ name: 'clarification_work_id' })
       ]))
@@ -116,7 +116,7 @@ describe('remote Track schema migration', () => {
         FROM remote_track_attribution_observations WHERE observation_id='old'`).get())
         .toEqual({ classifier_invoked: null, provider_call_made: null, input_tokens: null, estimated_cost_usd: null, review_outcome: null, reviewed_at: null,
           pricing_source_url: null, pricing_effective_at: null, pricing_verified_at: null, pricing_verified_by: null })
-      expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '94' })
+      expect(conn.prepare("SELECT value FROM schema_meta WHERE key='schema_version'").get()).toEqual({ value: '97' })
       expect(conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='remote_track_diagnostic_events'").get())
         .toEqual({ name: 'remote_track_diagnostic_events' })
     } finally { conn.close() }

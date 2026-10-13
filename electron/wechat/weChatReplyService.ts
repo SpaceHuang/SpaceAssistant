@@ -5,7 +5,6 @@ import type { PromptSendResult } from '../confirmation/promptSend'
 import type { RemoteTrackOutboundDeliveryContext } from '../remote/remoteTrackOutbound'
 
 const SUMMARY_MAX = 2000
-const FOOTER = '\n\n完整过程请查看 SpaceAssistant 桌面会话'
 
 /** 简易 Markdown 清理（链接保留可读 URL） */
 export function stripMarkdownForWeChat(text: string): string {
@@ -22,13 +21,12 @@ export function stripMarkdownForWeChat(text: string): string {
 
 export function formatWeChatSummary(raw: string): string {
   const stripped = stripMarkdownForWeChat(raw)
-  const withFooter = stripped + FOOTER
-  if (withFooter.length <= SUMMARY_MAX) return withFooter
-  const budget = SUMMARY_MAX - FOOTER.length - 1
+  if (stripped.length <= SUMMARY_MAX) return stripped
+  const budget = SUMMARY_MAX - 1
   let truncated = stripped.slice(0, budget)
   const lastPara = truncated.lastIndexOf('\n\n')
   if (lastPara > budget * 0.6) truncated = truncated.slice(0, lastPara)
-  return `${truncated}…${FOOTER}`
+  return `${truncated}…`
 }
 
 /** Send an automation result to the configured stable WeChat user ID. */
@@ -60,13 +58,14 @@ export async function replyWeChatSummary(
   bot: WeChatReplyBot,
   inboundMsg: IncomingMessage,
   summary: string,
-  opts?: { sessionId?: string; touch?: { sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>; sessionId: string }; trackDelivery?: RemoteTrackOutboundDeliveryContext }
+  opts?: { sessionId?: string; ownerId?: string; outboundDeliveryFacts?: import('../../src/shared/confirmation/outboundClassification').ImOutboundFacts; touch?: { sessionCommands: Pick<SessionCommands, 'recordRemoteSessionActivity'>; sessionId: string }; trackDelivery?: RemoteTrackOutboundDeliveryContext }
 ): Promise<{ chunksSent: number }> {
   await sendWeChatRemoteOutbound({
     bot,
     inbound: inboundMsg,
     body: summary,
     sessionId: opts?.sessionId,
+    ownerId: opts?.ownerId, outboundDeliveryFacts: opts?.outboundDeliveryFacts,
     trackDelivery: opts?.trackDelivery,
     touch: opts?.touch
   })

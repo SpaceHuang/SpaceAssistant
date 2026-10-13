@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_POLICY_RULES } from './defaultRules'
 import { effectiveActionFor, LANE_PROFILES } from './policyPackages'
+import { imEffectiveActionFor } from './imPolicyBehavior'
 
 describe('恢复档位覆盖的安全 floor', () => {
   it('desktop loose 档按云端语义放行未建模调用规则', () => {
@@ -24,6 +25,22 @@ describe('恢复档位覆盖的安全 floor', () => {
     expect(effectiveActionFor('desktop', 'loose', { id: 'default-write-execute-ask', action: 'ask' })).toBe('allow')
     expect(effectiveActionFor('desktop', 'loose', { id: 'browser-navigate-ask-desktop', action: 'ask' })).toBe('ask')
     expect(effectiveActionFor('wechat', 'loose', { id: 'script-network-ask-desktop', action: 'ask' })).toBe('ask')
+  })
+
+  it('IM standard 将明确的普通网页导航候选交给 auto-evaluator', () => {
+    const navigation = DEFAULT_POLICY_RULES.find((candidate) => candidate.id === 'browser-navigate-ask-remote')
+    expect(navigation).toBeDefined()
+    expect(imEffectiveActionFor('im', 'standard', navigation!)).toBe('auto-evaluator')
+  })
+
+  it('IM standard 将宿主已验证的公开只读检索候选交给 auto-evaluator', () => {
+    const publicSearch = { id: 'im-mcp-public-read-review', action: 'ask' as const }
+    expect(imEffectiveActionFor('im', 'standard', publicSearch)).toBe('auto-evaluator')
+  })
+
+  it('IM standard 将 env.time 报时调用识别为 auto-evaluator 候选', () => {
+    const timeQuery = { id: 'im-time-query-review', action: 'ask' as const }
+    expect(imEffectiveActionFor('im', 'standard', timeQuery)).toBe('auto-evaluator')
   })
 
   it('档位动作不能放宽 deny、locked、必须真人确认或 custom', () => {

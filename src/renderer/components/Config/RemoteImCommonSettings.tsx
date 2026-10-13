@@ -1,15 +1,8 @@
-import { useEffect, useState } from 'react'
-import { Alert, Button, Checkbox, Collapse, Input, InputNumber, Select, Space } from 'antd'
+import { Alert, Checkbox, Collapse, Input, InputNumber, Select, Space } from 'antd'
 import type { ModelEntry } from '../../../shared/domainTypes'
 import {
-  applyRemoteRestrictWritesAndOutbound,
-  isRemoteRestrictWritesAndOutbound,
   type RemoteImCommonConfig
 } from '../../../shared/imTypes'
-import type {
-  RemoteSecurityMigrationPlan,
-  RemoteSecurityPatch
-} from '../../../shared/remoteSecurityMigration'
 import { DEFAULT_REMOTE_PROGRESS_CONFIG } from '../../../shared/remoteProgressTypes'
 import { readRemoteSessionIdleMinutes } from '../../../shared/remoteSessionResolve'
 import { resolveAvailableThinkingEfforts } from '../../services/sessionModelBinding'
@@ -17,7 +10,6 @@ import { THINKING_EFFORT_LEVELS } from '../../../shared/thinkingEffort'
 import { useTypedTranslation } from '../../i18n/useTypedTranslation'
 import { ConfigField, ConfigSettingsStack, ConfigSwitchRow } from './ConfigField'
 import { configModalSelectPopupClassNames } from './configModalUi'
-import { RemoteSecurityUpgradeModal } from './RemoteSecurityUpgradeModal'
 
 type Props = {
   value: RemoteImCommonConfig
@@ -37,7 +29,6 @@ export function RemoteImCommonSettings({
   onAllowRemoteBrowserSessionsChange
 }: Props) {
   const { t } = useTypedTranslation('config')
-  const restrictOn = isRemoteRestrictWritesAndOutbound(value)
   const selectedModelId = value.remoteModelSelectionMode === 'explicit'
     ? value.remoteDefaultModelId
     : preferredLanguageModelId
@@ -51,53 +42,9 @@ export function RemoteImCommonSettings({
     ? requestedEffort
     : [...availableEfforts].reverse().find((effort) => THINKING_EFFORT_LEVELS.indexOf(effort) < requestedIndex) ?? 'off'
 
-  const [plan, setPlan] = useState<RemoteSecurityMigrationPlan | null>(null)
-  const [modalOpen, setModalOpen] = useState(false)
-
-  useEffect(() => {
-    let alive = true
-    const load = window.api?.remoteSecurityPlan
-    if (!load) return
-    void load().then((p) => {
-      if (alive) setPlan(p)
-    }).catch(() => {})
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  const handleCommit = async (patch: RemoteSecurityPatch): Promise<void> => {
-    await window.api.remoteSecurityCommit(patch)
-    // Reflect the confirmed switches into the in-memory config (dual-write to both channels).
-    onChange({ ...patch.common })
-    setPlan((prev) => (prev ? { ...prev, needsSummary: false, isMigrated: true } : prev))
-    setModalOpen(false)
-  }
-
   return (
     <ConfigSettingsStack>
       <p className="config-field__hint">{t('remoteImCommon.hint')}</p>
-
-      {plan?.needsSummary && (
-        <Alert
-          type="warning"
-          showIcon
-          message={t('remoteSecurityUpgrade.title')}
-          description={t('remoteSecurityUpgrade.intro')}
-          action={
-            <Button size="small" type="primary" onClick={() => setModalOpen(true)}>
-              {t('remoteSecurityUpgrade.confirm')}
-            </Button>
-          }
-        />
-      )}
-
-      <RemoteSecurityUpgradeModal
-        open={modalOpen}
-        plan={plan}
-        onCommit={handleCommit}
-        onCancel={() => setModalOpen(false)}
-      />
 
       <ConfigSwitchRow
         label={t('remoteImCommon.allowRemoteBrowserLabel')}
@@ -224,20 +171,6 @@ export function RemoteImCommonSettings({
           }
         ]}
       />
-
-      <ConfigSwitchRow
-        label={t('remoteImCommon.restrictWritesAndOutbound')}
-        hint={t('remoteImCommon.restrictWritesAndOutboundHint')}
-        checked={restrictOn}
-        onChange={(enabled) => onChange(applyRemoteRestrictWritesAndOutbound(Boolean(enabled)))}
-      />
-
-      <Checkbox
-        checked={value.remoteDenyOutbound}
-        onChange={(e) => onChange({ remoteDenyOutbound: e.target.checked })}
-      >
-        {t('remoteImCommon.remoteDenyOutbound')}
-      </Checkbox>
 
       <ConfigField label={t('remoteImCommon.rateLimitLabel')}>
         <InputNumber

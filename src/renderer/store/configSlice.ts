@@ -22,15 +22,36 @@ const initialState: ConfigState = {
   usageStatsOpen: false
 }
 
+const LEGACY_CHANNEL_POLICY_FIELDS = new Set([
+  'remoteConfirmPolicy', 'remoteWechatConfirm', 'remoteAllowLocalWrite', 'remoteDenyOutbound',
+  'remoteBrowserRequiresConfirm', 'remoteBrowserNavigateRequiresConfirm', 'remoteBrowserActRequiresConfirm',
+  'remoteScriptRequiresConfirm', 'remoteSecurityConfigVersion', 'remoteSecurityPresetSource', 'larkCliWriteRequiresConfirm'
+])
+
+function stripLegacyChannelPolicyFields<T extends Record<string, unknown>>(source: T): T {
+  const sanitized = { ...source }
+  for (const key of LEGACY_CHANNEL_POLICY_FIELDS) delete sanitized[key]
+  return sanitized
+}
+
+function sanitizeChannelConfigs(config: AppConfig): AppConfig {
+  return {
+    ...config,
+    feishu: stripLegacyChannelPolicyFields(config.feishu as unknown as Record<string, unknown>) as unknown as AppConfig['feishu'],
+    wechat: stripLegacyChannelPolicyFields(config.wechat as unknown as Record<string, unknown>) as unknown as AppConfig['wechat']
+  }
+}
+
 /** Dual-write shared remote IM fields onto both channel configs. */
 export function applyRemoteImCommonPatch<T extends { feishu: AppConfig['feishu']; wechat: AppConfig['wechat'] }>(
   config: T,
   patch: Partial<RemoteImCommonConfig>
 ): T {
+  const safePatch = stripLegacyChannelPolicyFields(patch as Record<string, unknown>)
   return {
     ...config,
-    feishu: { ...config.feishu, ...patch },
-    wechat: { ...config.wechat, ...patch }
+    feishu: { ...config.feishu, ...safePatch },
+    wechat: { ...config.wechat, ...safePatch }
   }
 }
 
@@ -39,7 +60,7 @@ export const configSlice = createSlice({
   initialState,
   reducers: {
     setConfig(state, action: PayloadAction<AppConfig | null>) {
-      state.config = action.payload
+      state.config = action.payload ? sanitizeChannelConfigs(action.payload) : null
     },
     setSettingsOpen(state, action: PayloadAction<boolean>) {
       state.settingsOpen = action.payload
@@ -58,6 +79,9 @@ export const configSlice = createSlice({
         if (tab === 'browser') {
           state.settingsActiveTab = 'tools'
           state.settingsToolsSubTab = 'browser'
+        } else if (tab === 'remote-security' || tab === 'remote-security-upgrade' || tab === 'remote-im-security') {
+          state.settingsActiveTab = 'tools'
+          state.settingsToolsSubTab = 'security'
         } else if (tab === 'llm-service' || tab === 'llm-defaults') {
           state.settingsActiveTab = 'models'
         } else {

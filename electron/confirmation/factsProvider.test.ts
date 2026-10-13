@@ -117,6 +117,7 @@ describe('AutoEvaluator 数据化（P5：预过滤器路由由规则数据驱动
       toolName: 'write_file',
       toolInput: { path: 'x.txt', content: 'v' },
       lane: 'wechat',
+      imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: {} },
       fileAutoApproval: async () => ({ approve: true, reason: 'ok', reasonCode: 'ok' })
     }))
     // 路由仅 desktop 注册 → 评估器不批准 → 落 im-write-ask 确认（user）

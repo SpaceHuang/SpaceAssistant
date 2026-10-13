@@ -11,7 +11,6 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { createSession, getDbConnection, getSession } from '../database'
-import { createAcceptedTurn } from '../../src/shared/acceptedTurn'
 import { acceptTurnContext, readAcceptedTurn } from '../database/acceptedTurnStorage'
 import { listPersistedTurns } from '../database/operations'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
@@ -23,6 +22,10 @@ import { readFileExecutor } from '../tools/builtinExecutors'
 import { writeFileExecutor } from '../tools/builtinExecutors'
 import { browserExecutor } from '../tools/browserExecutor'
 import { readPolicyPackages, writePolicyPackages } from '../confirmation/policyRulesRuntime'
+import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
+import { createTurnCoordinatorStorage } from '../sessionStorage/coordinator'
+import { TurnRuntime } from '../turnRuntime'
+import { buildImQueueScope } from '../../src/shared/queueScope'
 import { wechatReplyExecutor } from '../tools/wechatExecutors'
 import { WeChatOutboundExecutionUncertainError } from '../tools/weChatToolExecutor'
 import { switchWorkDirExecutor } from '../tools/workDirExecutors'
@@ -144,6 +147,10 @@ import { runWeChatRemoteAgent as runWeChatRemoteAgentImpl } from './weChatRemote
 function makeDb(): AppDatabase {
   const db = openDatabase(':memory:')
   setConfigValue(db, 'config.locale', 'en-US')
+  commitImPolicySnapshot(getDbConnection(db), {
+    policyBehaviorVersion: 'im-v1.6', snapshot: { selectedPackage: 'standard' }, updatedAt: 1,
+    eventId: `wechat-remote-agent-test-policy-${Math.random().toString(36).slice(2)}`
+  })
   return db
 }
 
@@ -190,11 +197,18 @@ function baseCtx(getMainWebContents: () => WebContents | null, db: AppDatabase =
 
 async function runWeChatRemoteAgent(ctx: Parameters<typeof runWeChatRemoteAgentImpl>[0]) {
   if (ctx.acceptedTurn) {
+    const sessionExists = ctx.sessionStorage.queries.readSession(ctx.acceptedTurn.sessionId)
+    if (sessionExists && !readAcceptedTurn(ctx.db, ctx.acceptedTurn.sessionId, ctx.acceptedTurn.requestId)) {
+      acceptTurnContext(ctx.db, ctx.acceptedTurn)
+    }
     acceptedTurnFixtures.set(ctx.requestId, { db: ctx.db, acceptedTurn: ctx.acceptedTurn })
     return runWeChatRemoteAgentImpl(ctx).finally(() => { acceptedTurnFixtures.delete(ctx.requestId) })
   }
-  const session = ctx.sessionStorage.queries.readSession(ctx.sessionId)
+  let session = ctx.sessionStorage.queries.readSession(ctx.sessionId)
   const model = session?.model ?? (ctx as typeof ctx & { getModel?: () => string }).getModel?.() ?? SUPPORTED_ANTHROPIC_MODEL
+  if (!session) session = createSession(ctx.db, { name: 'wechat-test-session', model })
+  const sessionId = session.id
+  ctx = { ...ctx, sessionId }
   const models = JSON.parse(getConfigValue(ctx.db, 'config.models') ?? '[]') as Array<Record<string, unknown>>
   if (!models.some((entry) => entry.name === model)) {
     models.push({ id: `wechat-test-${ctx.requestId}`, name: model, enabled: true, isVision: false, supportsThinking: true })
@@ -208,29 +222,45 @@ async function runWeChatRemoteAgent(ctx: Parameters<typeof runWeChatRemoteAgentI
     acceptedTurnFixtures.set(ctx.requestId, { db: ctx.db, acceptedTurn: storedAccepted })
     return runWeChatRemoteAgentImpl({ ...ctx, turnId: storedAccepted.turnId, acceptedTurn: storedAccepted }).finally(() => { acceptedTurnFixtures.delete(ctx.requestId) })
   }
-  const turnId = existing?.turnId ?? ctx.turnId ?? ctx.requestId
-  const startToken = existing?.startToken ?? `wechat-test-start-${turnId}`
-  let userMessageId = existing?.userMessageId
-  if (session && !existing) {
-    const latestUser = getDbConnection(ctx.db).prepare("SELECT id FROM messages WHERE session_id=? AND role='user' ORDER BY sequence DESC LIMIT 1").get(ctx.sessionId) as { id: string } | undefined
-    userMessageId = latestUser?.id ?? `wechat-test-user-${turnId}`
-    if (!latestUser) appendMessage(ctx.db, { id: userMessageId, sessionId: ctx.sessionId, role: 'user', content: ctx.userMessage, timestamp: Date.now(), status: 'sent' })
-    const assistantMessageId = `wechat-test-assistant-${turnId}`
-    appendMessage(ctx.db, { id: assistantMessageId, sessionId: ctx.sessionId, role: 'assistant', content: '', timestamp: Date.now() + 1, status: 'streaming' })
-    createPersistedTurn(ctx.db, { turnId, requestId: ctx.requestId, sessionId: ctx.sessionId, userMessageId, assistantMessageId, state: 'prepared', startToken })
+  let turnId = existing?.turnId ?? ctx.turnId ?? ctx.requestId
+  let acceptedTurn: import('../../src/shared/acceptedTurn').AcceptedTurn
+  if (session) {
+    if (!existing) {
+      let generatedId = 0
+      const runtime = new TurnRuntime({ storage: createTurnCoordinatorStorage(ctx.db), deps: {
+        now: () => Date.now(), id: () => {
+          generatedId += 1
+          if (generatedId === 3) return ctx.turnId ?? ctx.requestId
+          return `wechat-test-${ctx.requestId}-${generatedId}`
+        }
+      } })
+      const started = runtime.prepare({ mode: 'create-user', requestId: ctx.requestId, sessionId: ctx.sessionId,
+        input: { text: ctx.userMessage }, config: { lane: 'wechat', model, llmServiceId: 'svc-1', thinkingEffort: 'low' },
+        queueScope: buildImQueueScope('wechat', ctx.sessionId) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }> })
+      turnId = started.turnId
+      acceptedTurn = ctx.sessionStorage.execution.acceptPrepared({
+        prepared: { turnId, requestId: ctx.requestId, sessionId: ctx.sessionId, startToken: started.startToken, userMessage: started.userMessage },
+        lane: 'wechat', config: { lane: 'wechat', model, llmServiceId: 'svc-1', thinkingEffort: 'low' }
+      })
+    } else {
+      const persisted = ctx.sessionStorage.execution.readTurn({ sessionId: ctx.sessionId, turnId })
+      const persistedConfig = persisted?.executionConfig ?? { lane: 'wechat' as const, model, llmServiceId: 'svc-1', thinkingEffort: 'low' as const }
+      acceptedTurn = ctx.sessionStorage.execution.readAccepted({ sessionId: ctx.sessionId, requestId: ctx.requestId }) ??
+        ctx.sessionStorage.execution.acceptPrepared({
+          prepared: { turnId, requestId: ctx.requestId, sessionId: ctx.sessionId, startToken: persisted?.startToken ?? `wechat-test-start-${turnId}`,
+            ...(persisted?.userMessageId ? { userMessage: { id: persisted.userMessageId } } : {}) }, lane: 'wechat', config: persistedConfig
+        })
+    }
+  } else {
+    throw new Error('WECHAT_TEST_SESSION_REQUIRED_FOR_ACCEPTED_TURN')
   }
-  const acceptedTurn = createAcceptedTurn({
-    turnId, requestId: ctx.requestId, sessionId: ctx.sessionId, lane: 'wechat', startToken,
-    currentUserMessageId: userMessageId ?? `wechat-test-user-${turnId}`, transcriptVersion: 0,
-    config: { lane: 'wechat', model, llmServiceId: 'svc-1', thinkingEffort: 'low' }
-  })
-  if (session) acceptTurnContext(ctx.db, acceptedTurn)
   acceptedTurnFixtures.set(ctx.requestId, { db: ctx.db, acceptedTurn })
-  return runWeChatRemoteAgentImpl({ ...ctx, ...(session ? { turnId } : {}), acceptedTurn }).finally(() => { acceptedTurnFixtures.delete(ctx.requestId) })
+  return runWeChatRemoteAgentImpl({ ...ctx, turnId, acceptedTurn }).finally(() => { acceptedTurnFixtures.delete(ctx.requestId) })
 }
 
 describe('runWeChatRemoteAgent', () => {
   beforeEach(() => {
+    vi.restoreAllMocks()
     vi.clearAllMocks()
     mockRequestRendererSessionSwitch.mockReset().mockResolvedValue({ desktopSwitched: true, viewChanged: true })
     hostedRuntimeFailureInjection.requestId = ''
@@ -477,7 +507,8 @@ describe('runWeChatRemoteAgent', () => {
     setDefaultAgentRuntime(runtime)
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wechat-reply-hosted-success-'))
     const args = baseCtx(() => null)
-    const session = createSession(args.db, { name: 'wechat-reply-hosted-success', model: SUPPORTED_ANTHROPIC_MODEL })
+    const session = createSession(args.db, { name: 'wechat-reply-hosted-success', model: SUPPORTED_ANTHROPIC_MODEL,
+      metadata: { source: 'wechat', wechatMeta: { userId: 'wx-user@test' } } })
     const inbound = { userId: 'wx-user@test', timestamp: new Date(1_000), raw: { client_id: 'msg-1' } }
     const reply = vi.fn(async () => undefined)
     const bundle = {
@@ -486,11 +517,12 @@ describe('runWeChatRemoteAgent', () => {
       router: { getInboundForSession: () => inbound }
     }
     mockGetWeChatBundle.mockReturnValue(bundle)
+    args.sessionStorage.commands.recordRemoteSessionIdentity(session.id, { channel: 'wechat', userId: 'wx-user@test', messageId: 'msg-1', contextToken: 'ctx' })
     const context = {
       ...args, sessionId: session.id, workDir,
       workDirManager: { ...args.workDirManager, getActiveWorkDir: () => workDir },
       botService: { getBot: () => null, getRawBot: () => ({ reply }) } as never,
-      remoteContext: { ...args.remoteContext, messageId: 'msg-1', originSessionId: session.id }
+      remoteContext: { ...args.remoteContext, messageId: 'msg-1', authOwner: 'wx-user@test', originSessionId: session.id }
     }
     mockResolveWorkDirForSession.mockReturnValue({ profileId: 'wechat-reply-hosted-success', workDir, isSensitive: false })
     let providerCalls = 0
@@ -525,7 +557,7 @@ describe('runWeChatRemoteAgent', () => {
       await expect(runWeChatRemoteAgent(context)).resolves.toMatchObject({ ok: true, summary: '微信回复已发送。' })
       expect(providerCalls).toBe(2)
       expect(reply).toHaveBeenCalledOnce()
-      expect(reply).toHaveBeenCalledWith(inbound, 'Approved reply text\n\n完整过程请查看 SpaceAssistant 桌面会话')
+      expect(reply).toHaveBeenCalledWith(inbound, 'Approved reply text')
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId: 'wechat-reply-hosted-success' })
       expect(history.events.find((event) => event.kind === 'tool-call-finished')?.payload).toMatchObject({ toolCallId: 'wechat-reply-hosted-success', success: true })
@@ -537,7 +569,9 @@ describe('runWeChatRemoteAgent', () => {
         expect(projected.find((event) => event.type === 'tool_result')?.payload).toMatchObject({
           toolUseId: 'wechat-reply-hosted-success', result: { success: true }
         })
-        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ turnId: args.requestId, reason: 'completed' })
+        expect(projected.find((event) => event.type === 'turn_end')?.payload).toMatchObject({
+          turnId: readAcceptedTurn(args.db, session.id, args.requestId)?.turnId, reason: 'completed'
+        })
       } finally { await sink.close() }
     } finally {
       mockGetWeChatBundle.mockReset()
@@ -553,7 +587,8 @@ describe('runWeChatRemoteAgent', () => {
     setDefaultAgentRuntime(runtime)
     const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `wechat-reply-${termination}-post-claim-`))
     const args = baseCtx(() => null)
-    const session = createSession(args.db, { name: `wechat-reply-${termination}-post-claim`, model: SUPPORTED_ANTHROPIC_MODEL })
+    const session = createSession(args.db, { name: `wechat-reply-${termination}-post-claim`, model: SUPPORTED_ANTHROPIC_MODEL,
+      metadata: { source: 'wechat', wechatMeta: { userId: 'wx-user@test' } } })
     const requestId = args.requestId
     let finishBotReply!: () => void
     let botReplyEntered!: () => void
@@ -569,11 +604,12 @@ describe('runWeChatRemoteAgent', () => {
       router: { getInboundForSession: () => ({ userId: 'wx-user@test', timestamp: new Date(1_000), raw: { client_id: 'msg-1' } }) }
     }
     mockGetWeChatBundle.mockReturnValue(bundle)
+    args.sessionStorage.commands.recordRemoteSessionIdentity(session.id, { channel: 'wechat', userId: 'wx-user@test', messageId: 'msg-1', contextToken: 'ctx' })
     const context = {
       ...args, sessionId: session.id, workDir,
       workDirManager: { ...args.workDirManager, getActiveWorkDir: () => workDir },
       botService: { getBot: () => null, ...bundle.botService } as never,
-      remoteContext: { ...args.remoteContext, messageId: 'msg-1', originSessionId: session.id }
+      remoteContext: { ...args.remoteContext, messageId: 'msg-1', authOwner: 'wx-user@test', originSessionId: session.id }
     }
     mockResolveWorkDirForSession.mockReturnValue({ profileId: `wechat-reply-${termination}-post-claim`, workDir, isSensitive: false })
     const packages = readPolicyPackages(args.db)
@@ -2164,6 +2200,10 @@ describe('runWeChatRemoteAgent', () => {
     const dbPath = path.join(workDir, 'history.db')
     let db = openDatabase(dbPath)
     const args = baseCtx(() => null, db)
+    commitImPolicySnapshot(getDbConnection(args.db), {
+      policyBehaviorVersion: 'im-v1.6', snapshot: { selectedPackage: 'standard' }, updatedAt: 1,
+      eventId: `wechat-hosted-ledger-policy-${args.requestId}`
+    })
     const session = createSession(args.db, { name: 'wechat-hosted-ledger', model: SUPPORTED_ANTHROPIC_MODEL })
     let imChannel!: ImChannel
     imChannel = createImChannelForTest({ lane: 'wechat', timeoutMs: 1_000, sendPrompt: (pending) => {
@@ -2506,7 +2546,7 @@ describe('runWeChatRemoteAgent', () => {
       await expect(fs.readFile(targetPath, 'utf8')).resolves.toBe('created-during-approval')
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'wechat-write-target-drift', reason: 'FACTS_CHANGED'
+        toolCallId: 'wechat-write-target-drift', reason: 'WRITE_PREPARED_PERMIT_CHANGED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {
@@ -2577,7 +2617,7 @@ describe('runWeChatRemoteAgent', () => {
       expect(executeRead).not.toHaveBeenCalled()
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'wechat-read-identity-drift', reason: 'FACTS_CHANGED'
+        toolCallId: 'wechat-read-identity-drift', reason: 'RECHECK_REQUIRES_CONFIRMATION'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {
@@ -2653,7 +2693,7 @@ describe('runWeChatRemoteAgent', () => {
       await expect(fs.access(targetPath)).rejects.toMatchObject({ code: 'ENOENT' })
       const history = await new SqliteAgentHistory(getDbConnection(args.db)).read(args.requestId)
       expect(history.events.find((event) => event.kind === 'tool-call-not-dispatched')?.payload).toMatchObject({
-        toolCallId: 'wechat-write-config-drift', reason: 'FACTS_CHANGED'
+        toolCallId: 'wechat-write-config-drift', reason: 'WRITE_PREPARED_PERMIT_CHANGED'
       })
       expect(history.events.some((event) => event.kind === 'tool-call-started' || event.kind === 'tool-call-finished')).toBe(false)
     } finally {

@@ -230,7 +230,17 @@ export type ToolConfirmationResult = Readonly<{
     | Readonly<{ kind: 'confirmation-prompt-send-failed'; state: 'binding-unavailable'; sendCall: 'fulfilled'; delivery: 'unavailable'; errorCategory: 'message-binding-unavailable' }>
 }> & (
   | Readonly<{ kind: 'approved'; receipt: string }>
-  | Readonly<{ kind: 'deferred'; todoId: string; invocationId: string; checkpointRef: Readonly<{ checkpointId: string; workflowRevision: number }> }>
+  | Readonly<{
+      kind: 'deferred'
+      todoId: string
+      invocationId: string
+      cause: 'human-required' | 'agent-deny' | 'agent-undetermined' | 'unavailable' | 'timeout' | 'unparsable' |
+        'outbound-requires-human' | 'insufficient-delegation-evidence'
+      executionState: 'not-executed'
+      retryable: boolean
+      nextStep: 'await-user'
+      checkpointRef: Readonly<{ checkpointId: string; workflowRevision: number }>
+    }>
   | Readonly<{ kind: 'denied' | 'timeout' | 'unavailable' | 'cancelled' }>
 )
 export type ConfirmationPort = (input: {
@@ -1634,6 +1644,13 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           if (approvalPermitHeld) { approvalSlots.release(); approvalPermitHeld = false }
         }
         if (result.kind === 'deferred') {
+          const deferredCauses = ['human-required', 'agent-deny', 'agent-undetermined', 'unavailable', 'timeout', 'unparsable',
+            'outbound-requires-human', 'insufficient-delegation-evidence']
+          if (!deferredCauses.includes(result.cause) || result.executionState !== 'not-executed' ||
+            typeof result.retryable !== 'boolean' || result.nextStep !== 'await-user') {
+            await markNotDispatched(tool, 'DEFERRED_RESULT_INVALID')
+            throw new ToolDeniedError('DEFERRED_RESULT_INVALID')
+          }
           if (!result.todoId.trim() || result.invocationId !== input.invocationId || !result.checkpointRef.checkpointId.trim() ||
             !Number.isInteger(result.checkpointRef.workflowRevision) || result.checkpointRef.workflowRevision <= 0) {
             await markNotDispatched(tool, 'DEFERRED_CHECKPOINT_INVALID')
@@ -1641,6 +1658,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           }
           await appendHistory([{ kind: 'approval-deferred', payload: {
             toolCallId: tool.toolCallId, approvalId: initialDecision.confirmationId, todoId: result.todoId, invocationId: result.invocationId,
+            cause: result.cause, executionState: result.executionState, retryable: result.retryable, nextStep: result.nextStep,
             checkpointId: result.checkpointRef.checkpointId, workflowRevision: result.checkpointRef.workflowRevision
           } }])
           toolDispatchStates.set(tool.toolCallId, 'finished')
@@ -1698,11 +1716,92 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           await markNotDispatched(tool, 'STALE_AUTHORIZATION')
           throw new ToolDeniedError('STALE_AUTHORIZATION')
         }
-        const authorization = await input.safetyGate.authorize(recheckBinding, input.request.signal)
+        let authorization = await input.safetyGate.authorize(recheckBinding, input.request.signal)
         if (input.request.signal?.aborted && authorization.kind === 'allow') {
           input.safetyGate.discardPermit(authorization.permitId)
         }
         throwIfAborted(input.request.signal)
+        if (authorization.kind === 'ask') {
+          if (!input.confirmation) {
+            await markNotDispatched(tool, 'RECHECK_REQUIRES_CONFIRMATION')
+            throw new ToolDeniedError('RECHECK_REQUIRES_CONFIRMATION')
+          }
+          try {
+            await approvalSlots.acquire(input.request.signal ? { signal: input.request.signal } : {})
+            approvalPermitHeld = true
+          } catch (error) {
+            await markNotDispatched(tool, input.request.signal?.aborted ? 'REQUEST_CANCELLED' : 'CONFIRMATION_CAPACITY_UNAVAILABLE')
+            throw error
+          }
+          await appendHistory([{ kind: 'approval-waiting', payload: {
+            toolCallId: tool.toolCallId, approvalId: authorization.confirmationId, answerer: authorization.answerer,
+            reasonCode: authorization.reasonCode, requestId: input.invocationId, requestedAt: Date.now()
+          } }])
+          let renewed: ToolConfirmationResult
+          try {
+            renewed = await input.confirmation({
+              call: executionCall, modelTurn: modelTurns, confirmationId: authorization.confirmationId,
+              answerer: authorization.answerer, reasonCode: authorization.reasonCode,
+              ...(authorization.context !== undefined ? { context: structuredClone(authorization.context) } : {}),
+              ...(input.request.signal ? { signal: input.request.signal } : {})
+            })
+          } catch (error) {
+            await appendHistory([{ kind: 'approval-resolved', payload: {
+              toolCallId: tool.toolCallId, approvalId: authorization.confirmationId, approved: false, outcome: 'unavailable', settledAt: Date.now()
+            } }])
+            throw error
+          } finally {
+            if (approvalPermitHeld) { approvalSlots.release(); approvalPermitHeld = false }
+          }
+          if (renewed.kind === 'deferred') {
+            const deferredCauses = ['human-required', 'agent-deny', 'agent-undetermined', 'unavailable', 'timeout', 'unparsable',
+              'outbound-requires-human', 'insufficient-delegation-evidence']
+            if (!deferredCauses.includes(renewed.cause) || renewed.executionState !== 'not-executed' ||
+              typeof renewed.retryable !== 'boolean' || renewed.nextStep !== 'await-user' || !renewed.todoId.trim() ||
+              renewed.invocationId !== input.invocationId || !renewed.checkpointRef.checkpointId.trim() ||
+              !Number.isInteger(renewed.checkpointRef.workflowRevision) || renewed.checkpointRef.workflowRevision <= 0) {
+              await markNotDispatched(tool, 'DEFERRED_RESULT_INVALID')
+              throw new ToolDeniedError('DEFERRED_RESULT_INVALID')
+            }
+            await appendHistory([{ kind: 'approval-deferred', payload: {
+              toolCallId: tool.toolCallId, approvalId: authorization.confirmationId, todoId: renewed.todoId, invocationId: renewed.invocationId,
+              cause: renewed.cause, executionState: renewed.executionState, retryable: renewed.retryable, nextStep: renewed.nextStep,
+              checkpointId: renewed.checkpointRef.checkpointId, workflowRevision: renewed.checkpointRef.workflowRevision
+            } }])
+            toolDispatchStates.set(tool.toolCallId, 'finished')
+            parkRequested = true
+            parkedTodoId = renewed.todoId
+            throw new DeferredTurnParkedError()
+          }
+          const renewedApproved = renewed.kind === 'approved' && Boolean(renewed.receipt.trim())
+          await appendHistory([{ kind: 'approval-resolved', payload: {
+            toolCallId: tool.toolCallId, approvalId: authorization.confirmationId, approved: renewedApproved,
+            outcome: renewed.kind === 'approved' ? (renewedApproved ? 'approved' : 'denied') : renewed.kind,
+            ...(renewed.answerer ? { answerer: renewed.answerer } : {}),
+            ...(renewed.cause ? { cause: renewed.cause } : {}), settledAt: Date.now()
+          } }])
+          if (renewed.kind !== 'approved' || !renewed.receipt.trim()) {
+            const reason = renewed.kind === 'approved' ? 'CONFIRMATION_DENIED' : `CONFIRMATION_${renewed.kind.toUpperCase()}`
+            await markNotDispatched(tool, reason, renewed.userMessage)
+            throw new ToolDeniedError(reason, renewed.userMessage)
+          }
+          confirmation = { receipt: renewed.receipt }
+          try {
+            recheckBinding = await input.prepareTool(executionCall, { kind: 'recheck', confirmation })
+          } catch (error) {
+            throwIfAborted(input.request.signal)
+            const message = error instanceof Error ? error.message : ''
+            const reasonCode = /^[A-Z0-9_]{1,64}$/.test(message) ? message : 'PREPARED_RECHECK_FAILED'
+            await markNotDispatched(tool, reasonCode)
+            throw new ToolDeniedError(reasonCode)
+          }
+          if (!matchesRecheckBinding(initialBinding, recheckBinding)) {
+            await markNotDispatched(tool, 'STALE_AUTHORIZATION')
+            throw new ToolDeniedError('STALE_AUTHORIZATION')
+          }
+          authorization = await input.safetyGate.authorize(recheckBinding, input.request.signal)
+          throwIfAborted(input.request.signal)
+        }
         if (authorization.kind !== 'allow') {
           const reason = authorization.kind === 'deny' ? authorization.reasonCode : 'RECHECK_REQUIRES_CONFIRMATION'
           await markNotDispatched(tool, reason)

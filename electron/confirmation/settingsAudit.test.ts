@@ -26,6 +26,13 @@ describe('settingsAudit（设置变更审计，§5.6-6）', () => {
     expect(a.events[0]!.actor).toBe('user')
   })
 
+  it('records shared policy domain and user actor for IM policy changes', () => {
+    const a = audit()
+    recordSettingsChange(a, { kind: 'policy-change', lane: 'feishu', sessionId: 's-im', key: 'im-policy-revision',
+      before: 3, after: 4 })
+    expect(a.events[0]).toMatchObject({ event: 'settings.policy-change', lane: 'feishu', policyDomain: 'im', actor: 'user' })
+  })
+
   it('tool-toggle 落 settings.tool-toggle 事件', () => {
     const a = audit()
     recordSettingsChange(a, {

@@ -23,7 +23,8 @@ export const wechatReplyExecutor: ToolExecutor = {
           sessionQueries: ctx.sessionQueries!,
           sessionId: ctx.sessionId,
           expectedMessageId: ctx.remoteContext?.source === 'wechat' ? ctx.remoteContext.messageId : undefined,
-          signal: ctx.signal
+          signal: ctx.signal,
+          outboundDeliveryFacts: ctx.outboundDeliveryFacts
         }
       )
       void bundle.auditLogger.append({
@@ -77,7 +78,9 @@ export const wechatSendExecutor: ToolExecutor = {
           workDir: ctx.workDir,
           botService: bundle.botService,
           getWeChatConfig: () => readWeChatConfigFromDb(ctx.appDatabase!),
-          signal: ctx.signal
+          signal: ctx.signal,
+          outboundDeliveryFacts: ctx.outboundDeliveryFacts,
+          sessionId: ctx.sessionId
         }
       )
       void bundle.auditLogger.append({

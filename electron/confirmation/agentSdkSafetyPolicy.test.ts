@@ -189,7 +189,7 @@ describe('createAgentSdkSafetyPolicy', () => {
     await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'FACTS_CHANGED' })
   })
 
-  it('rechecks a user-confirmed Feishu attachment against the real gate identity snapshot', async () => {
+  it('requires a fresh human decision when a confirmed Feishu attachment identity changes', async () => {
     const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-sdk-feishu-confirmed-attachment-'))
     const mediaDir = path.join(userDataDir, 'feishu-media', 'cache', 'message-1')
     const attachmentPath = path.join(mediaDir, 'brief.txt')
@@ -207,6 +207,7 @@ describe('createAgentSdkSafetyPolicy', () => {
       toolName: 'read_feishu_attachment', toolInput, sessionId: 'feishu-session', requestId: 'feishu-request', toolUseId: 'feishu-tool',
       workDir: path.join(userDataDir, 'work'), userDataDir, lane: 'feishu' as const,
       remoteContext: { source: 'feishu' as const, messageId: 'message-1', confirmPolicy: 'im_confirm' as const, feishuAttachments: [{ id: 'attachment-1', messageId: 'message-1', localPath: attachmentPath, fileName: 'brief.txt', mimeType: 'text/plain' }] },
+      imPolicySnapshot: { domain: 'im' as const, policyBehaviorVersion: 'im-v1.6', revision: 0, snapshot: {} },
       toolsConfig: DEFAULT_TOOLS_CONFIG, effectiveRules: confirmedAttachmentRules, lanePackage: 'standard', decisionCache: { lookup: () => null },
       shellPrecheck: { touchTrustedCommand() {} }, audit: { record() {} }, readConfirmationRegistry
     } as unknown as ToolCallGateArgs
@@ -234,7 +235,9 @@ describe('createAgentSdkSafetyPolicy', () => {
       expect(executionContext.readExecutionPermit).toMatchObject({ toolName: 'read_feishu_attachment', targets: [{ identity: { ino: expect.any(Number) } }] })
       await fs.rename(attachmentPath, `${attachmentPath}.approved`)
       await fs.writeFile(attachmentPath, 'replacement')
-      await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toMatchObject({ kind: 'deny', reasonCode: 'FACTS_CHANGED' })
+      await expect(policy.evaluate({ ...confirmedBinding, phase: 'recheck' })).resolves.toMatchObject({
+        kind: 'ask', answerer: 'user', context: { decision: { disposition: 'human-required' } }
+      })
     } finally {
       await fs.rm(userDataDir, { recursive: true, force: true })
     }

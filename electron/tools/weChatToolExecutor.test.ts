@@ -4,15 +4,33 @@ import path from 'path'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { createMockWeChatBot } from '../wechat/__mocks__/wechatBotMock'
 import { DEFAULT_WECHAT_CONFIG } from '../../src/shared/wechatTypes'
+import { classifyImOutbound } from '../../src/shared/confirmation/outboundClassification'
 import { canCreateSymlinks } from '../../src/test/symlinkCapability'
 
-const { getBundle } = vi.hoisted(() => ({ getBundle: vi.fn() }))
+const { getBundle, readWeChatConfig } = vi.hoisted(() => ({ getBundle: vi.fn(), readWeChatConfig: vi.fn() }))
 vi.mock('../wechat/weChatIpc', () => ({
-  getWeChatBundle: getBundle
+  getWeChatBundle: getBundle,
+  readWeChatConfigFromDb: readWeChatConfig
 }))
 
-import { executeWeChatReply, executeWeChatSend } from './weChatToolExecutor'
-import { wechatReplyExecutor } from './wechatExecutors'
+import { executeWeChatReply, executeWeChatSend, inspectWeChatTaskReplyAttachment } from './weChatToolExecutor'
+import { wechatReplyExecutor, wechatSendExecutor } from './wechatExecutors'
+import { createWeChatOutboundRegisteredTools } from './wechatOutboundRegisteredTools'
+import { executeRegisteredTool } from './toolInvocationCoordinator'
+
+const confirmedSendFacts = (body: string, recipient = 'u1', sessionId = 'session-current') => ({
+  channel: 'wechat' as const, purpose: 'active-send' as const, originSessionId: sessionId, activeSessionId: sessionId,
+  identityKey: 'wx-owner', ownerId: 'wx-owner', recipient, modelRecipient: recipient, chatType: 'p2p' as const,
+  content: body, contentAssessment: { source: 'host' as const, content: body, classification: 'ordinary' as const, classifierVersion: 'test-v1' },
+  contentCompleteness: 'complete' as const, hasAttachment: false, attachmentAuthorized: false,
+  userConfirmationReceipt: 'test-user-confirmation-receipt'
+})
+const confirmedReplyFacts = (body: string, recipient = 'wx-user', sessionId = 'session-current') => ({
+  channel: 'wechat' as const, purpose: 'task-reply' as const, originSessionId: sessionId, activeSessionId: sessionId,
+  identityKey: recipient, ownerId: recipient, trustedRecipient: recipient, recipient, chatType: 'p2p' as const,
+  content: body, contentAssessment: { source: 'host' as const, content: body, classification: 'ordinary' as const, classifierVersion: 'test-v1' },
+  contentCompleteness: 'complete' as const, hasAttachment: false, attachmentAuthorized: false
+})
 
 describe('executeWeChatSend', () => {
   let workDir: string
@@ -47,7 +65,8 @@ describe('executeWeChatSend', () => {
       {
         workDir,
         botService: { getRawBot: () => mockBot } as never,
-        getWeChatConfig: () => ({ ...DEFAULT_WECHAT_CONFIG, enabled: true, loggedIn: true })
+        getWeChatConfig: () => ({ ...DEFAULT_WECHAT_CONFIG, enabled: true, loggedIn: true }),
+        outboundDeliveryFacts: confirmedSendFacts('hello'), sessionId: 'session-current'
       }
     )
     expect(result.success).toBe(false)
@@ -114,7 +133,8 @@ describe('executeWeChatSend', () => {
       {
         workDir,
         botService: { getRawBot: () => mockBot } as never,
-        getWeChatConfig: () => ({ ...DEFAULT_WECHAT_CONFIG, enabled: true, loggedIn: true })
+        getWeChatConfig: () => ({ ...DEFAULT_WECHAT_CONFIG, enabled: true, loggedIn: true }),
+        outboundDeliveryFacts: confirmedSendFacts('hello'), sessionId: 'session-current'
       }
     )
     expect(result.success).toBe(true)
@@ -129,7 +149,8 @@ describe('executeWeChatSend', () => {
       {
         workDir,
         botService: { getRawBot: () => mockBot } as never,
-        getWeChatConfig: () => ({ ...DEFAULT_WECHAT_CONFIG, enabled: true, loggedIn: true })
+        getWeChatConfig: () => ({ ...DEFAULT_WECHAT_CONFIG, enabled: true, loggedIn: true }),
+        outboundDeliveryFacts: confirmedSendFacts('hello'), sessionId: 'session-current'
       }
     )).rejects.toMatchObject({ name: 'WeChatOutboundExecutionUncertainError' })
 
@@ -163,7 +184,7 @@ describe('executeWeChatSend', () => {
         workDir,
         botService: { getRawBot: () => mockBot } as never,
         getWeChatConfig: () => ({ ...DEFAULT_WECHAT_CONFIG, enabled: true, loggedIn: true }),
-        signal: controller.signal
+        signal: controller.signal, outboundDeliveryFacts: confirmedSendFacts('hello'), sessionId: 'session-current'
       }
     )
 
@@ -188,7 +209,8 @@ describe('executeWeChatSend', () => {
         botService: { getRawBot: () => mockBot } as never,
         sessionQueries: { readSession: vi.fn() } as never,
         sessionId: 'session-current',
-        expectedMessageId: 'message-approved'
+        expectedMessageId: 'message-approved',
+        outboundDeliveryFacts: confirmedReplyFacts('reply text')
       }
     )
 
@@ -231,7 +253,7 @@ describe('executeWeChatSend', () => {
         botService: { getRawBot: () => mockBot } as never,
         sessionQueries: { readSession: vi.fn() } as never,
         sessionId: 'session-current',
-        expectedMessageId: 'message-approved'
+        expectedMessageId: 'message-approved', outboundDeliveryFacts: confirmedReplyFacts('reply text')
       }
     )).rejects.toMatchObject({ name: 'WeChatOutboundExecutionUncertainError', operation: 'reply' })
 
@@ -256,6 +278,9 @@ describe('executeWeChatSend', () => {
       requestId: 'wechat-request',
       toolUseId: 'wechat-reply-call',
       sessionId: 'session-current',
+      outboundDeliveryFacts: { channel: 'wechat', purpose: 'active-send', modelRecipient: 'wx-user',
+        contentCompleteness: 'unknown', hasAttachment: false, attachmentAuthorized: false },
+      toolUserConfirmed: true,
       sendProgress: vi.fn(),
       signal: new AbortController().signal,
       fileStateCache: {} as never,
@@ -272,6 +297,83 @@ describe('executeWeChatSend', () => {
 
     expect(result).toMatchObject({ success: false, error: '微信入站消息已变化，请重新授权回复' })
     expect(mockBot.reply).not.toHaveBeenCalled()
+  })
+
+  it('wechat_reply refuses the side effect when the main process did not bind outbound delivery facts', async () => {
+    const inbound = { userId: 'wx-user', timestamp: new Date(1_000), raw: { client_id: 'message-approved' } }
+    getBundle.mockReturnValue({
+      botService: { getRawBot: () => mockBot },
+      auditLogger: { append: vi.fn().mockResolvedValue(undefined) },
+      router: { getInboundForSession: () => inbound }
+    })
+    mockBot.reply.mockClear()
+
+    const result = await wechatReplyExecutor.execute({ text: 'reply text', userId: 'attacker-recipient' }, {
+      workDir, userDataDir: workDir, requestId: 'wechat-request', toolUseId: 'wechat-reply-no-delivery-facts',
+      sessionId: 'session-current', sendProgress: vi.fn(), signal: new AbortController().signal,
+      fileStateCache: {} as never, toolsConfig: {} as never, appDatabase: {} as never,
+      sessionQueries: { readSession: vi.fn() } as never,
+      remoteContext: { source: 'wechat', messageId: 'message-approved', userId: 'wx-user', authOwner: 'wx-user',
+        originSessionId: 'session-current' }
+    })
+    expect(mockBot.reply).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ success: false, error: '微信外发缺少主进程最终检查事实' })
+  })
+
+  it('wechat_send refuses a credential file even when main-process ordinary-content assessment says allow', async () => {
+    await fs.writeFile(path.join(workDir, 'client.pem'), '-----BEGIN PRIVATE KEY-----\nsecret-key\n-----END PRIVATE KEY-----')
+    getBundle.mockReturnValue({ botService: { getRawBot: () => mockBot }, auditLogger: { append: vi.fn().mockResolvedValue(undefined) } })
+    readWeChatConfig.mockReturnValue({ ...DEFAULT_WECHAT_CONFIG, enabled: true, loggedIn: true })
+    mockBot.send.mockClear()
+    const result = await wechatSendExecutor.execute({ userId: 'owner-user', text: 'see attachment', filePath: 'client.pem' }, {
+      workDir, userDataDir: workDir, requestId: 'wechat-send-secret-media', toolUseId: 'wechat-send-secret-media-call', sessionId: 'session-current',
+      outboundDeliveryFacts: { channel: 'wechat', purpose: 'task-reply', originSessionId: 'session-current', activeSessionId: 'session-current',
+        identityKey: 'owner-user', ownerId: 'owner-user', trustedRecipient: 'owner-user', chatType: 'p2p', content: 'see attachment',
+        contentAssessment: { source: 'host', content: 'see attachment', classification: 'ordinary', classifierVersion: 'host-test-v1' },
+        contentCompleteness: 'complete', hasAttachment: true, attachmentAuthorized: true,
+        attachmentContentVersion: 'prepared-file-hash', checkedAttachmentContentVersion: 'prepared-file-hash' },
+      toolUserConfirmed: true, sendProgress: vi.fn(), signal: new AbortController().signal, fileStateCache: {} as never,
+      toolsConfig: {} as never, appDatabase: {} as never
+    })
+    expect(mockBot.send).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ success: false, error: '微信外发缺少主进程最终检查事实' })
+  })
+
+  it('wechat_send media refuses to send without the same main-process final check', async () => {
+    await fs.writeFile(path.join(workDir, 'report.txt'), 'approved report')
+    getBundle.mockReturnValue({ botService: { getRawBot: () => mockBot }, auditLogger: { append: vi.fn().mockResolvedValue(undefined) } })
+    readWeChatConfig.mockReturnValue({ ...DEFAULT_WECHAT_CONFIG, enabled: true, loggedIn: true })
+    mockBot.send.mockClear()
+
+    const result = await wechatSendExecutor.execute({ userId: 'owner-user', text: 'report', filePath: 'report.txt' }, {
+      workDir, userDataDir: workDir, requestId: 'wechat-send-media', toolUseId: 'wechat-send-media-call', sessionId: 'session-current',
+      sendProgress: vi.fn(), signal: new AbortController().signal, fileStateCache: {} as never, toolsConfig: {} as never,
+      appDatabase: {} as never
+    })
+    expect(mockBot.send).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ success: false, error: '微信外发缺少主进程最终检查事实' })
+  })
+
+  it.each([
+    ['credential attachment', 'client.pem', '-----BEGIN PRIVATE KEY-----\nsecret-key\n-----END PRIVATE KEY-----'],
+    ['local export attachment', 'private-export.txt', 'customer records and private messages']
+  ])('wechat_send refuses %s even when an ordinary approval marker is present', async (_label, filename, contents) => {
+    await fs.writeFile(path.join(workDir, filename), contents)
+    getBundle.mockReturnValue({ botService: { getRawBot: () => mockBot }, auditLogger: { append: vi.fn().mockResolvedValue(undefined) } })
+    readWeChatConfig.mockReturnValue({ ...DEFAULT_WECHAT_CONFIG, enabled: true, loggedIn: true })
+    mockBot.send.mockClear()
+    const result = await wechatSendExecutor.execute({ userId: 'owner-user', text: 'see attachment', filePath: filename }, {
+      workDir, userDataDir: workDir, requestId: 'wechat-send-sensitive-media', toolUseId: 'wechat-send-sensitive-media-call',
+      sessionId: 'session-current', outboundDeliveryFacts: { channel: 'wechat', purpose: 'task-reply', originSessionId: 'session-current',
+        activeSessionId: 'session-current', identityKey: 'owner-user', ownerId: 'owner-user', trustedRecipient: 'owner-user',
+        chatType: 'p2p', content: 'see attachment', contentAssessment: { source: 'host', content: 'see attachment',
+          classification: 'ordinary', classifierVersion: 'test-v1' }, contentCompleteness: 'complete', hasAttachment: true,
+        attachmentAuthorized: true, attachmentContentVersion: 'stale-version', checkedAttachmentContentVersion: 'checked-other-version' },
+      toolUserConfirmed: true, sendProgress: vi.fn(), signal: new AbortController().signal, fileStateCache: {} as never,
+      toolsConfig: {} as never, appDatabase: {} as never
+    })
+    expect(mockBot.send).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ success: false, error: '微信外发缺少主进程最终检查事实' })
   })
 
   it('Hosted wechat_reply 的撤权 signal 传到发送前边界并阻止 bot.reply', async () => {
@@ -293,6 +395,9 @@ describe('executeWeChatSend', () => {
       requestId: 'wechat-request',
       toolUseId: 'wechat-reply-call',
       sessionId: 'session-current',
+      outboundDeliveryFacts: { channel: 'wechat', purpose: 'active-send', modelRecipient: 'wx-user',
+        contentCompleteness: 'unknown', hasAttachment: false, attachmentAuthorized: false },
+      toolUserConfirmed: true,
       sendProgress: vi.fn(),
       signal: controller.signal,
       fileStateCache: {} as never,
@@ -304,5 +409,82 @@ describe('executeWeChatSend', () => {
 
     expect(result).toMatchObject({ success: false, error: '微信回复已取消' })
     expect(mockBot.reply).not.toHaveBeenCalled()
+  })
+
+  it('allows a safe task-deliverable attachment through registered reply planning and the real executor', async () => {
+    mockBot.reply.mockResolvedValue(undefined)
+    const fileName = 'task-report.txt'
+    await fs.writeFile(path.join(workDir, fileName), 'Your requested project status report is ready.')
+    expect(await inspectWeChatTaskReplyAttachment(workDir, undefined, fileName)).toMatchObject({ attachmentAuthorized: true })
+    expect(await inspectWeChatTaskReplyAttachment(workDir, undefined, path.join(workDir, fileName))).toMatchObject({ attachmentAuthorized: true })
+    const inbound = { userId: 'wx-owner', timestamp: new Date(1_000), raw: { client_id: 'inbound-task-message' } }
+    getBundle.mockReturnValue({ router: { getInboundForSession: () => inbound } })
+    const runtime = {
+      workDir,
+      sessionId: 'session-current',
+      lane: 'wechat',
+      remoteContext: { source: 'wechat' as const, messageId: 'inbound-task-message', userId: 'wx-owner', authOwner: 'wx-owner',
+        chatType: 'p2p' as const, originSessionId: 'session-current', currentUserMessageId: 'current-user-message',
+        taskBinding: { workflowId: 'task-workflow', taskId: 'current-task', stepId: 'deliver-report', planRevision: 1, revision: 1 } }
+    }
+    const replyTool = createWeChatOutboundRegisteredTools({
+      send: { name: 'wechat_send', execute: vi.fn() } as never,
+      reply: {
+        name: 'wechat_reply',
+        execute: async (input, context) => {
+          expect(context.outboundDeliveryFacts).toMatchObject({ hasAttachment: true, attachmentAuthorized: true,
+            attachmentPath: expect.stringContaining(fileName), contentCompleteness: 'complete' })
+          expect(classifyImOutbound(context.outboundDeliveryFacts!)).toEqual({ kind: 'controlled-reply', channel: 'wechat', recipient: 'wx-owner', sessionId: 'session-current' })
+          return executeWeChatReply({ text: String(input.text), filePath: String(input.filePath) }, {
+          workDir: context.workDir,
+          botService: { getRawBot: () => mockBot } as never,
+          sessionQueries: { readSession: vi.fn() } as never,
+          sessionId: context.sessionId,
+          expectedMessageId: context.remoteContext?.messageId,
+          outboundDeliveryFacts: context.outboundDeliveryFacts
+          })
+        }
+      } as never
+    }).find(({ name }) => name === 'wechat_reply')!
+
+    const result = await executeRegisteredTool(replyTool, { text: 'Here is the requested report.', filePath: fileName }, {
+      requestId: 'task-attachment-request', toolUseId: 'task-attachment-call', signal: new AbortController().signal,
+      executionContext: runtime as never
+    }, { confirm: async () => true })
+
+    expect(result.error).toBeUndefined()
+    expect(result).toMatchObject({ success: true })
+    expect(mockBot.reply).toHaveBeenCalledOnce()
+    expect(mockBot.reply).toHaveBeenCalledWith(inbound, expect.objectContaining({
+      file: expect.any(Buffer), fileName, caption: expect.stringContaining('Here is the requested report.')
+    }))
+  })
+
+  it('rejects a task attachment changed after planning and before confirmation completes', async () => {
+    const fileName = 'task-report.txt'
+    const filePath = path.join(workDir, fileName)
+    await fs.writeFile(filePath, 'Your requested project status report is ready.')
+    const executor = vi.fn(async () => ({ success: true }))
+    const replyTool = createWeChatOutboundRegisteredTools({
+      send: { name: 'wechat_send', execute: vi.fn() } as never,
+      reply: { name: 'wechat_reply', execute: executor } as never
+    }).find(({ name }) => name === 'wechat_reply')!
+    const runtime = {
+      workDir,
+      sessionId: 'session-current',
+      remoteContext: { source: 'wechat' as const, messageId: 'inbound-task-message', userId: 'wx-owner', authOwner: 'wx-owner',
+        originSessionId: 'session-current', currentUserMessageId: 'current-user-message',
+        taskBinding: { workflowId: 'task-workflow', taskId: 'current-task', stepId: 'deliver-report', planRevision: 1, revision: 1 } }
+    }
+
+    await expect(executeRegisteredTool(replyTool, { text: 'Here is the requested report.', filePath: fileName }, {
+      requestId: 'task-attachment-drift-request', toolUseId: 'task-attachment-drift-call', signal: new AbortController().signal,
+      executionContext: runtime as never
+    }, { confirm: async () => {
+      await fs.writeFile(filePath, 'sk-12345678901234567890')
+      return true
+    } })).rejects.toThrow('WECHAT_OUTBOUND_PREPARED_BINDING_CHANGED')
+
+    expect(executor).not.toHaveBeenCalled()
   })
 })

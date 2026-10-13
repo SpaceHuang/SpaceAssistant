@@ -8,6 +8,8 @@ import {
 } from '../../src/shared/mcpTypes'
 import { appendDiagnostic, clearDiagnostics, getDiagnostics } from './mcpDiagnostics'
 
+vi.hoisted(() => vi.resetModules())
+
 vi.mock('../secureApiKey', () => ({
   isSecretStorageAvailable: () => true,
   encryptSecret: (plain: string) => `enc:${plain}`,

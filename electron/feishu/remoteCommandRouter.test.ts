@@ -37,6 +37,10 @@ import { acceptTurnContext } from '../database/acceptedTurnStorage'
 import { attributeAndPersistRemoteMessage } from '../remote/remoteTrackAttributionService'
 import { appendRemoteTrackEvent, createRemoteTrack, mapRemoteTrackMessage } from '../database/remoteTrackStore'
 import { finishClarificationSendAttempt, startClarificationSendAttempt } from '../database/clarificationStore'
+import { createDeferredApprovalRuntime } from '../remote/deferredApprovalRuntime'
+import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
+import { FeishuImChannel } from './feishuImChannel'
+import { assertImOutboundAllowed, type ImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
 
 vi.mock('../secureApiKey', () => ({ isSecretStorageAvailable: vi.fn(() => true), encryptSecret: (value: string) => `enc:${value}`, decryptSecret: (value: string) => value.replace(/^enc:/, '') }))
 
@@ -45,6 +49,18 @@ const mockResolveFeishuSession = vi.fn()
 const mockSendFeishuRemoteOutbound = vi.fn()
 const mockShouldAcceptInbound = vi.fn()
 const mockConsumeForRequest = vi.fn()
+
+function installFeishuOutboundGateMock(): void {
+  mockSendFeishuRemoteOutbound.mockImplementation(async (value: unknown) => {
+    const args = value as { body?: string; sessionId?: string; messageId?: string; recipient?: string; outboundDeliveryFacts?: ImOutboundFacts }
+    if (!args.outboundDeliveryFacts || !args.body || !args.sessionId || !args.recipient || !args.messageId) {
+      throw new Error('FEISHU_ROUTER_OUTBOUND_FACTS_MISSING')
+    }
+    assertImOutboundAllowed(args.outboundDeliveryFacts, { channel: 'feishu', body: args.body, sessionId: args.sessionId,
+      recipient: args.recipient, destinationId: args.messageId })
+    return undefined
+  })
+}
 
 const testTurnRuntime = {
   bindRequest: vi.fn(),
@@ -71,7 +87,7 @@ vi.mock('./feishuSessionResolver', () => ({
 }))
 
 vi.mock('./feishuRemoteOutbound', () => ({
-  sendFeishuRemoteOutbound: (...args: unknown[]) => mockSendFeishuRemoteOutbound(...args)
+  sendFeishuRemoteOutbound: (...args: unknown[]) => mockSendFeishuRemoteOutbound(...args),
 }))
 
 vi.mock('./feishuInboundParser', () => ({
@@ -164,12 +180,12 @@ describe('RemoteCommandRouter workdir binding', () => {
   const openDbs: Array<{ close: () => void }> = []
 
   beforeEach(() => {
-    mockSendFeishuRemoteOutbound.mockResolvedValue(undefined)
+    installFeishuOutboundGateMock()
   })
 
   afterEach(() => {
     vi.clearAllMocks()
-    mockSendFeishuRemoteOutbound.mockResolvedValue(undefined)
+    mockSendFeishuRemoteOutbound.mockReset()
     resetRunningRemoteAgentRegistryForTests()
     for (const db of openDbs.splice(0)) {
       db.close()
@@ -183,7 +199,7 @@ describe('RemoteCommandRouter workdir binding', () => {
   function makeRouter(
     db: ReturnType<typeof openDatabase>,
     manager: ReturnType<typeof createWorkDirManager>,
-    options?: { maxParallel?: number; tryResolveConfirm?: boolean; approvalGate?: boolean; wc?: { send: (...args: unknown[]) => void }; turnRuntime?: TurnRuntime; wakeDispatcher?: { dispatchSession: (sessionId: string) => Promise<void> }; retryDeferredApprovalNotifications?: (scope: { identityKey: string; ownerId: string }) => Promise<unknown>; handleDeferredApprovalReply?: (input: { message: FeishuInboundMessage; text: string }) => Promise<void>; handleClarificationReply?: (input: import('../remote/clarificationInbound').ClarificationResolverInput) => Promise<import('../remote/clarificationInbound').ClarificationResolverResult> }
+    options?: { maxParallel?: number; tryResolveConfirm?: boolean; imChannel?: FeishuImChannel; approvalGate?: boolean; wc?: { send: (...args: unknown[]) => void }; turnRuntime?: TurnRuntime; wakeDispatcher?: { dispatchSession: (sessionId: string) => Promise<void> }; retryDeferredApprovalNotifications?: (scope: { identityKey: string; ownerId: string }) => Promise<unknown>; handleDeferredApprovalReply?: (input: { message: FeishuInboundMessage; text: string }) => Promise<void>; handleClarificationReply?: (input: import('../remote/clarificationInbound').ClarificationResolverInput) => Promise<import('../remote/clarificationInbound').ClarificationResolverResult> }
   ) {
     const auditAppend = vi.fn().mockResolvedValue(undefined)
     const processedStore = makeProcessedStore()
@@ -193,7 +209,7 @@ describe('RemoteCommandRouter workdir binding', () => {
       sessionStorage: createSqliteSessionStorage(db),
       runner: { run: vi.fn() } as never,
       processedStore: processedStore as never,
-      imChannel: {
+      imChannel: options?.imChannel ?? {
         tryResolveFromInboundMessage: () => options?.tryResolveConfirm ?? false,
         listPendingTrackConfirmations: () => []
       } as never,
@@ -285,6 +301,86 @@ describe('RemoteCommandRouter workdir binding', () => {
     expect(mockResolveFeishuSession).not.toHaveBeenCalled()
     expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
     expect(processedStore.tryClaim).not.toHaveBeenCalled()
+  })
+
+  it('routes a strict synchronous confirmation through the Feishu adapter before async approval ingress', async () => {
+    const { db, manager } = setupDbAndManager()
+    const imChannel = new FeishuImChannel({ sendConfirmationPrompt: async () => ({ messageId: 'strict-feishu-trusted-prompt' }) })
+    const confirmation = imChannel.request({ facts: { toolName: 'write_file', actionClass: 'write', baseRiskLevel: 'medium',
+      signals: [], summary: { text: 'write report.md' } }, riskLevel: 'medium', memoryTiers: [], timeoutMs: 60_000 },
+    { sessionId: 'strict-feishu-session', toolName: 'write_file', toolInput: { path: 'report.md' },
+      messageId: 'strict-feishu-origin', matchKey: 'chat-1', authOwner: 'user-1' })
+    await vi.waitFor(() => expect(imChannel.listPending()).toHaveLength(1))
+    const confirmId = imChannel.listPending()[0]!.confirmId!
+    expect(confirmId).toMatch(/^\d{2}$/)
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: `Y ${confirmId}` })
+    const asyncApprovalIngress = vi.fn(async () => undefined)
+    const { router, processedStore } = makeRouter(db, manager, { imChannel, handleDeferredApprovalReply: asyncApprovalIngress })
+
+    await router.handleInbound(makeInbound({ messageId: 'strict-feishu-reply', replyToMessageId: 'strict-feishu-trusted-prompt',
+      content: `Y ${confirmId}` }))
+
+    await expect(confirmation).resolves.toMatchObject({ kind: 'approved', cause: 'user-approved' })
+    expect(imChannel.listPending()).toHaveLength(0)
+    expect(asyncApprovalIngress).not.toHaveBeenCalled()
+    expect(processedStore.tryClaim).not.toHaveBeenCalled()
+    expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
+  })
+
+  it('routes a Feishu adapter reply with a valid short code through SQLite approval runtime to one dispatch', async () => {
+    const { db, manager } = setupDbAndManager()
+    const session = createSession(db, { name: 'feishu-real-approval-ingress' })
+    const now = Date.now()
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' },
+      updatedAt: now, eventId: 'feishu-adapter-approval-policy' })
+    const rule = { ruleId: 'write-rule', factsHash: 'b'.repeat(64) }
+    const todoStore = createDeferredTodoStore(db)
+    const todo = todoStore.create({ todoId: 'feishu-adapter-todo', invocationId: 'feishu-adapter-invocation', channel: 'feishu',
+      identityKey: 'chat-1', ownerId: 'user-1', authorizationEpoch: 4, rule, workflowId: 'workflow', taskId: 'task',
+      stepId: 'step', planRevision: 1, originSessionId: session.id, createdAt: now, expiresAt: now + 60_000 }).todo
+    const intents = createSecurityActionIntentStore(db)
+    intents.prepare({ invocationId: todo.invocationId, envelopeInvocationId: todo.invocationId, sessionId: session.id,
+      workflowId: todo.workflowId, taskId: todo.taskId, stepId: todo.stepId, planRevision: todo.planRevision, now })
+    intents.linkTodo(todo.invocationId, todo.todoId, now)
+    intents.commitCheckpoint(todo.invocationId, { checkpointId: 'feishu-adapter-checkpoint', workflowRevision: 1 }, now)
+    const envelopeStore = createDeferredEnvelopeStore(db)
+    envelopeStore.put({ invocationId: todo.invocationId, requestId: 'feishu-source-request', turnId: 'feishu-source-turn',
+      toolCallId: 'feishu-source-tool', toolName: 'write_file', canonicalArgs: { path: 'approved.md', content: 'approved' },
+      contentVersions: {}, executionContext: { sessionId: session.id, channel: 'feishu', ownerId: todo.ownerId, identityKey: todo.identityKey,
+        authorizationEpoch: todo.authorizationEpoch, invocationId: todo.invocationId, toolName: 'write_file',
+        toolInput: { path: 'approved.md', content: 'approved' }, requestId: 'feishu-source-request', turnId: 'feishu-source-turn',
+        toolCallId: 'feishu-source-tool', providerRouteId: 'feishu-route', messageId: 'source-message',
+        policyBehaviorVersion: todo.policyBehaviorVersion, policyRevision: todo.policyRevision, policyEpoch: todo.policyEpoch,
+        ruleId: rule.ruleId, factsHash: rule.factsHash }, now })
+    const notificationDelivery = createDeferredApprovalNotificationDelivery({ db, todoStore, intentStore: intents,
+      adapter: { send: async () => ({ messageId: 'feishu-trusted-notice' }) }, allocateShortCode: () => '07', audit: vi.fn() })
+    const notification = await notificationDelivery.createAndSend({ todoId: todo.todoId, invocationId: todo.invocationId,
+      channel: 'feishu', identityKey: todo.identityKey, ownerId: todo.ownerId, authorizationEpoch: todo.authorizationEpoch,
+      rule, safeActionSummary: '更新项目说明', userDelegation: '更新项目说明', untrustedMaterial: '', now })
+    expect(notification.state).toBe('delivered')
+    const dispatch = vi.fn(async (_request, _currentTodo, envelope) => ({ dispatched: envelope.integrityHash.length > 0 }))
+    const approvalRuntime = createDeferredApprovalRuntime({ db, channel: 'feishu', todoStore, envelopeStore, notificationDelivery,
+      isEnabled: () => true, getAuthorizationEpoch: () => 4, maxParallel: 1,
+      recheck: async (request, currentTodo, envelope) => ({ allowed: request.sessionId === currentTodo.originSessionId
+        && envelope.invocationId === todo.invocationId && envelope.canonicalArgs.path === 'approved.md' }),
+      dispatch, audit: vi.fn() })
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: '批准 07' })
+    const { router } = makeRouter(db, manager, { handleDeferredApprovalReply: async ({ message, text, replyToMessageId }) => {
+      await approvalRuntime.handleReply({ channel: 'feishu', identityKey: message.chatId, ownerId: message.senderOpenId,
+        messageId: message.messageId, replyToMessageId, text, now: now + 1 })
+    } })
+
+    expect(dispatch).not.toHaveBeenCalled()
+    await router.handleInbound(makeInbound({ messageId: 'feishu-adapter-approval-reply', replyToMessageId: 'feishu-trusted-notice', content: '批准 07' }))
+
+    expect(dispatch).toHaveBeenCalledOnce()
+    expect(dispatch.mock.calls[0]?.[2]).toMatchObject({ requestId: 'feishu-source-request', toolCallId: 'feishu-source-tool',
+      canonicalArgs: { path: 'approved.md', content: 'approved' } })
+    expect(todoStore.get(todo.todoId, { channel: 'feishu', identityKey: 'chat-1', ownerId: 'user-1', authorizationEpoch: 4,
+      originSessionId: session.id, rule })?.status)
+      .toBe('consumed')
+    expect(listImInboxMessages(db, { queueScope: buildImQueueScope('feishu', session.id) as Extract<ReturnType<typeof buildImQueueScope>, { kind: 'im' }> }))
+      .toHaveLength(0)
   })
 
   it('consumes clarification selections before the Agent and delegates only the strict parsed choice', async () => {
@@ -650,7 +746,7 @@ describe('RemoteCommandRouter workdir binding', () => {
     const session = createSession(db, { name: 'Failed Feishu turn' })
     mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: 'run and fail' })
     mockResolveFeishuSession.mockResolvedValue({ sessionId: session.id, isNew: false })
-    mockRunFeishuRemoteAgent.mockResolvedValue({ summary: 'provider failed', pendingConfirm: false, ok: false })
+    mockRunFeishuRemoteAgent.mockRejectedValue(new Error('E_PROVIDER_TIMEOUT'))
 
     const { router, auditAppend } = makeRouter(db, manager)
     await router.handleInbound(makeInbound({ messageId: 'failed-turn-1' }))
@@ -663,6 +759,10 @@ describe('RemoteCommandRouter workdir binding', () => {
     expect(auditAppend).toHaveBeenCalledWith(expect.objectContaining({
       type: 'agent_done', sessionId: session.id, success: false
     }))
+    const outboundBodies = mockSendFeishuRemoteOutbound.mock.calls.map(([args]) => String((args as { body?: unknown }).body))
+    const failureBodies = outboundBodies.filter((body) => body !== '已收到，正在处理…')
+    expect(failureBodies).toHaveLength(1)
+    expect(failureBodies[0]).not.toMatch(/E_PROVIDER_TIMEOUT|请打开 SpaceAssistant/)
   })
 
   it('completion/audit/pending-confirm stay on the origin session after a mid-run switch_session, while outbound reply follows the switched session', async () => {
@@ -721,12 +821,12 @@ describe('RemoteCommandRouter busy guard', () => {
   const openDbs: Array<{ close: () => void }> = []
 
   beforeEach(() => {
-    mockSendFeishuRemoteOutbound.mockResolvedValue(undefined)
+    installFeishuOutboundGateMock()
   })
 
   afterEach(() => {
     vi.clearAllMocks()
-    mockSendFeishuRemoteOutbound.mockResolvedValue(undefined)
+    installFeishuOutboundGateMock()
     resetRunningRemoteAgentRegistryForTests()
     for (const db of openDbs.splice(0)) {
       db.close()
@@ -811,7 +911,29 @@ describe('RemoteCommandRouter busy guard', () => {
       expect.objectContaining({
         messageId: 'm2',
         body: REMOTE_SESSION_BUSY_MESSAGE,
-        sessionId: session.id
+        sessionId: session.id,
+        recipient: 'user-1',
+        outboundIdentity: { identityKey: 'chat-1', ownerId: 'user-1', chatType: 'p2p' },
+        outboundDeliveryFacts: expect.objectContaining({
+          channel: 'feishu',
+          purpose: 'system-reply',
+          originSessionId: session.id,
+          activeSessionId: session.id,
+          identityKey: 'chat-1',
+          ownerId: 'user-1',
+          trustedRecipient: 'user-1',
+          recipient: 'user-1',
+          chatType: 'p2p',
+          content: REMOTE_SESSION_BUSY_MESSAGE,
+          contentAssessment: {
+            source: 'host',
+            content: REMOTE_SESSION_BUSY_MESSAGE,
+            classification: 'ordinary',
+            classifierVersion: 'host-im-outbound-v1'
+          },
+          destinationId: 'm2',
+          contentCompleteness: 'complete'
+        })
       })
     )
     expect(processedStore.markCompleted).toHaveBeenCalledWith('m2', expect.any(String), 'session_busy')
@@ -898,6 +1020,23 @@ describe('RemoteCommandRouter busy guard', () => {
     expect(persisted).toMatchObject({
       requestId: agentArgs.requestId, sessionId: session.id, state: 'terminal', outcome: 'completed'
     })
+  })
+
+  it('uses the authenticated Feishu entry when the existing session metadata says WeChat', async () => {
+    const { db, manager } = setup()
+    const session = createSession(db, { name: 'Feishu entry over WeChat metadata', metadata: { source: 'wechat', wechatMeta: { userId: 'wx-user' } } })
+    mockShouldAcceptInbound.mockReturnValue({ accept: true, userMessage: 'feishu entry' })
+    mockResolveFeishuSession.mockResolvedValue({ sessionId: session.id, isNew: false })
+    mockRunFeishuRemoteAgent.mockResolvedValue({ summary: 'done', pendingConfirm: false, ok: true })
+
+    const { router } = makeRouter(db, manager)
+    await router.handleInbound(makeInbound({ messageId: 'feishu-entry-over-wechat-session' }))
+
+    const agentArgs = mockRunFeishuRemoteAgent.mock.calls[0]?.[0] as { requestId: string; sessionId: string; acceptedTurn: { lane: string } }
+    expect(agentArgs.acceptedTurn).toMatchObject({ lane: 'feishu' })
+    expect(agentArgs.sessionId).toBe(session.id)
+    expect(createSqliteSessionStorage(db).execution.readAccepted({ sessionId: session.id, requestId: agentArgs.requestId }))
+      .toMatchObject({ lane: 'feishu', requestId: agentArgs.requestId })
   })
 
   it('Feishu wake replay validates persisted Track attribution and forwards the scoped view', async () => {

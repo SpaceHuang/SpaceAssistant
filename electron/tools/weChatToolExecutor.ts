@@ -5,6 +5,8 @@ import type { SessionQueries } from '../sessionStorage/contracts'
 import { resolveSafeWorkDirPath } from '../pathSecurity'
 import type { WeChatBotService } from '../wechat/weChatBotService'
 import type { WeChatConfig } from '../../src/shared/wechatTypes'
+import { createHash } from 'node:crypto'
+import { assessImOutboundContent, assertImOutboundAllowed, type ImOutboundFacts } from '../../src/shared/confirmation/outboundClassification'
 
 export class WeChatOutboundExecutionUncertainError extends Error {
   constructor(readonly operation: 'send' | 'reply') {
@@ -26,6 +28,8 @@ async function readMedia(
 ): Promise<{
   buffer?: Buffer
   fileName?: string
+  contentVersion?: string
+  resolvedPath?: string
   error?: string
   diagnostic?: { caseId: string; retryable: boolean; category: 'mechanism' }
 }> {
@@ -41,7 +45,7 @@ async function readMedia(
       return { error: `文件大小超过限制（最大 ${Math.round(max / 1024 / 1024)}MB）` }
     }
     const buffer = await fs.readFile(abs)
-    return { buffer, fileName: path.basename(abs) }
+    return { buffer, fileName: path.basename(abs), contentVersion: createHash('sha256').update(buffer).digest('hex'), resolvedPath: abs }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     if (msg.includes('工作目录') || msg.includes('workDir')) {
@@ -54,6 +58,35 @@ async function readMedia(
   }
 }
 
+async function attachmentHasSensitiveMaterial(media: Awaited<ReturnType<typeof readMedia>>, workDir: string): Promise<boolean> {
+  if (!media.buffer || !media.fileName || !media.resolvedPath) return false
+  let relativePath: string
+  try { relativePath = path.relative(await fs.realpath(workDir), media.resolvedPath) }
+  catch { return true }
+  const pathFacts = `${media.fileName} ${relativePath}`.toLowerCase()
+  if (/(^|[/\\.])(?:\.env|credentials?|secrets?|private|exports?)([/\\._-]|$)|\.(?:pem|key|p12|pfx)$/i.test(pathFacts)) return true
+  const content = media.buffer.toString('utf8')
+  return /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|(?:api[_-]?key|access[_-]?token|password)\s*[:=]|(?:sk-[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{16,})|\b[\w.+-]+@[\w.-]+\.[A-Z]{2,}\b|\b(?:\+?\d[\d ()-]{8,}\d)\b|(?:客户|用户|联系人).{0,16}(?:邮箱|电话|地址|身份证|记录|信息)/i.test(content)
+}
+
+/** Host inspection for the prepared reply path; binary and non-reviewable attachments stay unapproved. */
+export async function inspectWeChatTaskReplyAttachment(workDir: string, imagePath?: string, filePath?: string): Promise<Pick<ImOutboundFacts,
+  'attachmentAuthorized' | 'attachmentPath' | 'checkedAttachmentPath' | 'attachmentContentVersion' | 'checkedAttachmentContentVersion'>> {
+  const requestedPath = imagePath ?? filePath
+  const media = await readMedia(workDir, imagePath, filePath)
+  const denied = { attachmentAuthorized: false, ...(requestedPath ? { attachmentPath: requestedPath } : {}) }
+  if (!requestedPath || media.error || !media.buffer || !media.fileName || !media.resolvedPath || !media.contentVersion) return denied
+  if (!['.txt', '.md'].includes(path.extname(media.fileName).toLowerCase()) || media.buffer.length > 20_000) return denied
+  let content: string
+  try { content = new TextDecoder('utf-8', { fatal: true }).decode(media.buffer) }
+  catch { return denied }
+  const sensitive = await attachmentHasSensitiveMaterial(media, workDir)
+  const classification = assessImOutboundContent(content)
+  if (sensitive || classification !== 'ordinary') return denied
+  return { attachmentAuthorized: true, attachmentPath: media.resolvedPath, checkedAttachmentPath: media.resolvedPath,
+    attachmentContentVersion: media.contentVersion, checkedAttachmentContentVersion: media.contentVersion }
+}
+
 export async function executeWeChatSend(
   input: { userId: string; text: string; imagePath?: string; filePath?: string },
   ctx: {
@@ -61,6 +94,8 @@ export async function executeWeChatSend(
     botService: WeChatBotService
     getWeChatConfig: () => WeChatConfig
     signal?: AbortSignal
+    outboundDeliveryFacts?: ImOutboundFacts
+    sessionId?: string
   }
 ): Promise<{ success: boolean; chunksSent?: number; error?: string; diagnostic?: { caseId: string; retryable: boolean; category: 'mechanism' } }> {
   const cfg = ctx.getWeChatConfig()
@@ -75,6 +110,13 @@ export async function executeWeChatSend(
   if (ctx.signal?.aborted) return { success: false, error: '微信发送已取消' }
 
   const text = formatWeChatSummary(input.text)
+  const facts = ctx.outboundDeliveryFacts
+  if (!facts || media.buffer && (!facts.hasAttachment || !facts.attachmentAuthorized || facts.attachmentContentVersion !== media.contentVersion ||
+      facts.checkedAttachmentContentVersion !== media.contentVersion || facts.attachmentPath !== media.resolvedPath ||
+      facts.checkedAttachmentPath !== media.resolvedPath || await attachmentHasSensitiveMaterial(media, ctx.workDir))) {
+    return { success: false, error: '微信外发缺少主进程最终检查事实' }
+  }
+  assertImOutboundAllowed(facts, { channel: 'wechat', body: input.text, sessionId: ctx.sessionId ?? '', recipient: input.userId })
   try {
     if (media.buffer && media.fileName) {
       const ext = path.extname(media.fileName).toLowerCase()
@@ -101,6 +143,7 @@ export async function executeWeChatReply(
     sessionId?: string
     expectedMessageId?: string
     signal?: AbortSignal
+    outboundDeliveryFacts?: ImOutboundFacts
   }
 ): Promise<{ success: boolean; chunksSent?: number; error?: string; diagnostic?: { caseId: string; retryable: boolean; category: 'mechanism' } }> {
   const bot = ctx.botService.getRawBot()
@@ -131,6 +174,13 @@ export async function executeWeChatReply(
   if (ctx.signal?.aborted) return { success: false, error: '微信回复已取消' }
 
   const text = formatWeChatSummary(input.text)
+  const facts = ctx.outboundDeliveryFacts
+  if (!facts || media.buffer && (!facts.hasAttachment || !facts.attachmentAuthorized || facts.attachmentContentVersion !== media.contentVersion ||
+      facts.checkedAttachmentContentVersion !== media.contentVersion || facts.attachmentPath !== media.resolvedPath ||
+      facts.checkedAttachmentPath !== media.resolvedPath || await attachmentHasSensitiveMaterial(media, ctx.workDir))) {
+    return { success: false, error: '微信外发缺少主进程最终检查事实' }
+  }
+  assertImOutboundAllowed(facts, { channel: 'wechat', body: input.text, sessionId: ctx.sessionId ?? '', recipient: inboundRaw.userId })
   try {
     if (media.buffer && media.fileName) {
       const ext = path.extname(media.fileName).toLowerCase()

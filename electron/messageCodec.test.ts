@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import { deserializeSkillHintsFromDb, deserializeToolCallsFromDb, serializeSkillHintsForDb, serializeToolCallsForDb } from './messageCodec'
 
+vi.hoisted(() => vi.resetModules())
+
 vi.mock('./agentLogger/agentLogger', () => ({
   logAgentEvent: vi.fn()
 }))
@@ -82,10 +84,10 @@ describe('deserializeToolCallsFromDb', () => {
   it('round-trips the confirmation lane so remote approvals cannot restore as desktop cards', () => {
     const restored = deserializeToolCallsFromDb(serializeToolCallsForDb([{
       id: 'wechat-confirmation', toolName: 'mcp_fetch_fetch_server', input: { url: 'https://example.com' },
-      status: 'confirming', riskLevel: 'medium', confirmationLane: 'wechat'
+      status: 'confirming', riskLevel: 'medium', remoteConfirmation: 'wechat'
     }]))?.[0]
 
-    expect(restored?.confirmationLane).toBe('wechat')
+    expect(restored?.remoteConfirmation).toBe('wechat')
   })
   it('13: returns corrupted placeholder and logs on parse failure', () => {
     const result = deserializeToolCallsFromDb('not-valid-json{{{')

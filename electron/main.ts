@@ -22,6 +22,7 @@ import { stagehandService } from './browser/stagehandService'
 import { createRemoteAuthorizationEpochStore } from './remote/remoteAuthorizationEpochStore'
 import { remoteAuthorizationRegistry } from './remote/remoteAuthorizationRegistry'
 import { createDeferredTodoStore } from './confirmation/deferredTodoStore'
+import { ensureImPolicySnapshotAtStartup } from './confirmation/legacyImConfigBoundary'
 import { createDeferredTodoCapacityController } from './confirmation/deferredTodoCapacity'
 import { createImTaskControlCoordinator } from './remote/imTaskControlCoordinator'
 import { createDeferredTodoTaskControlSafetyPort } from './remote/deferredTodoTaskControlAdapter'
@@ -469,6 +470,12 @@ app.whenReady().then(async () => {
     return
   }
   appDb = db
+  try {
+    ensureImPolicySnapshotAtStartup(db)
+  } catch (error) {
+    // Keep startup available, but leave IM dispatch fail-closed when legacy policy cannot be read.
+    console.error('[im-policy] startup snapshot migration failed; IM tool calls will remain blocked:', error instanceof Error ? error.message : String(error))
+  }
   let turnRuntime!: TurnRuntime
   let sessionHistoryRepairFailureCount = 0
   let recoveredInvocationCount = 0
@@ -1194,6 +1201,7 @@ app.whenReady().then(async () => {
       devRoot: path.join(__dirname, '..', '..')
     }),
     floatingNotificationManager: floatingManager,
+    isPackaged: app.isPackaged,
     isTrayEnabled,
     turnRuntime,
     wakeSourceTruthSpillGc: () => {

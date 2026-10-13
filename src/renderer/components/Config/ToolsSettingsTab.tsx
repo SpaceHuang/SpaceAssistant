@@ -226,8 +226,6 @@ export function ToolsSettingsTab({
             active
             browser={browserUi}
             onBrowserChange={setBrowserUi}
-            feishu={feishuUi}
-            onFeishuChange={setFeishuUi}
           />
         )
       default:

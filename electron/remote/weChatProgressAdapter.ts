@@ -16,6 +16,7 @@ import type { RemoteTrackOutboundDeliveryContext } from './remoteTrackOutbound'
 export function createWeChatProgressAdapter(args: {
   botService: WeChatBotService
   userId: string
+  ownerId: string
   inboundRaw: IncomingMessage
   getSessionId: () => string
   config: WeChatConfig
@@ -48,7 +49,7 @@ export function createWeChatProgressAdapter(args: {
         bot,
         inbound: args.inboundRaw,
         body: text,
-        sessionId,
+        sessionId, ownerId: args.ownerId,
         trackDelivery: args.trackDelivery,
         touch: { sessionCommands: args.sessionCommands, sessionId }
       }).catch(() => undefined)

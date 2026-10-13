@@ -16,6 +16,7 @@ import { registerSearchIpc } from './ipc/searchIpc'
 import { registerSecurityIpc } from './ipc/securityIpc'
 import { registerSessionIpc } from './ipc/sessionIpc'
 import { registerStorageMaintenanceIpc } from './ipc/storageMaintenanceIpc'
+import { registerPolicyIpc } from './ipc/policyIpc'
 import { createSqliteSessionStorage } from './sessionStorage/sqliteSessionStorage'
 import { StorageProfileCoordinator } from './storageProfile/storageProfileCoordinator'
 import { runStorageProfileWorker } from './storageProfile/storageProfileWorkerClient'
@@ -44,6 +45,8 @@ export type AppIpcContext = {
   executeTurn?: ClaudeTurnExecution
   /** P0 托盘常驻前提：管家定时任务依赖「关窗进程存活」，设置页据此提示。 */
   isTrayEnabled?: () => boolean
+  /** Required to keep developer-only IPC controls unavailable in packaged builds. */
+  isPackaged?: boolean
 }
 
 /**
@@ -61,6 +64,7 @@ export function registerAppIpcHandlers(ipcMain: IpcMain, ctx: AppIpcContext): St
   registerFileIpc(ipcMain, context)
   registerSearchIpc(ipcMain, context)
   registerConfigIpc(ipcMain, context)
+  registerPolicyIpc(ipcMain, context.db, { isPackaged: context.isPackaged ?? true })
   registerSecurityIpc(ipcMain, context)
   registerMcpIpcHandlers(ipcMain, context)
   return storageProfileCoordinator

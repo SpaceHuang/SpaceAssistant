@@ -8,10 +8,9 @@ import configReducer from '../../store/configSlice'
 import { changeAppLocale } from '../../i18n/localeSync'
 import type { SecuritySettingsModelPayload } from '../../../shared/confirmation/settingsCenter'
 import { DEFAULT_BROWSER_CONFIG } from '../../../shared/domainTypes'
-import { DEFAULT_FEISHU_CONFIG } from '../../../shared/feishuTypes'
 
 const MODEL: SecuritySettingsModelPayload = {
-  packages: { desktop: 'standard', wechat: 'custom', feishu: 'standard', automation: 'standard' },
+  packages: { desktop: 'standard', wechat: 'standard', feishu: 'standard', automation: 'standard' },
   deniedTools: [],
   memoryEntries: [],
   audit: { retentionDays: 180, haveAuditLog: true },
@@ -86,8 +85,6 @@ const MODEL: SecuritySettingsModelPayload = {
 function renderTab(overrides?: {
   browser?: typeof DEFAULT_BROWSER_CONFIG
   onBrowserChange?: (next: typeof DEFAULT_BROWSER_CONFIG) => void
-  feishu?: typeof DEFAULT_FEISHU_CONFIG
-  onFeishuChange?: (next: typeof DEFAULT_FEISHU_CONFIG) => void
 }) {
   const store = configureStore({ reducer: { config: configReducer } })
   render(
@@ -98,8 +95,6 @@ function renderTab(overrides?: {
             active
             browser={overrides?.browser ?? DEFAULT_BROWSER_CONFIG}
             onBrowserChange={overrides?.onBrowserChange ?? (() => {})}
-            feishu={overrides?.feishu ?? DEFAULT_FEISHU_CONFIG}
-            onFeishuChange={overrides?.onFeishuChange ?? (() => {})}
           />
         </App>
       </ConfigProvider>
@@ -119,6 +114,11 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     window.api = {
       ...window.api,
       securityGetSettingsModel: vi.fn().mockResolvedValue(MODEL),
+      securityReadPolicyForLane: vi.fn().mockResolvedValue({
+        domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 5, snapshot: { selectedPackage: 'standard' }
+      }),
+      securityWritePolicy: vi.fn().mockResolvedValue({ status: 'committed', revision: 6 }),
+      securitySetImAutoReviewTestMode: vi.fn().mockImplementation(async ({ enabled }) => ({ enabled })),
       securitySetPolicyPackage: vi.fn().mockResolvedValue({ ok: true }),
       securitySetRuleOverride: vi.fn().mockResolvedValue({ ok: true }),
       securitySetRuleEnabled: vi.fn().mockResolvedValue({ ok: true }),
@@ -143,6 +143,103 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     } as typeof window.api
   })
 
+  it('IM 套餐写入共同策略快照并携带读取到的 revision', { timeout: 20000 }, async () => {
+    renderTab()
+    const panel = await openLaneTab('IM 远程')
+    const packageSelect = (await within(panel).findAllByRole('combobox'))[0]!
+    fireEvent.mouseDown(packageSelect)
+    fireEvent.click(await screen.findByText('严格'))
+    await waitFor(() => {
+      expect(window.api.securityWritePolicy).toHaveBeenCalledWith({
+        lane: 'wechat', expectedRevision: 5, change: { kind: 'package', package: 'strict' }
+      })
+    })
+    expect(window.api.securitySetPolicyPackage).not.toHaveBeenCalledWith({ lane: 'wechat', package: 'strict' })
+  })
+
+  it('旧版 IM 策略必须展示差异并经用户确认后切换新版标准', { timeout: 20000 }, async () => {
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 5, snapshot: { selectedPackage: 'standard' }
+    })
+    renderTab()
+    const panel = await openLaneTab('IM 远程')
+    fireEvent.click(await within(panel).findByRole('button', { name: '查看变化并切换' }))
+    expect(await screen.findByText(/公开网页抓取等已分类的只读 MCP 调用/)).toBeTruthy()
+    expect(screen.getByText(/标准策略会按规则把适合自动审核的操作交给审核 Agent/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '我已查看变化，确认切换' }))
+    await waitFor(() => {
+      expect(window.api.securityWritePolicy).toHaveBeenCalledWith({
+        lane: 'wechat', expectedRevision: 5,
+        change: {
+          kind: 'switch-to-standard', userChoiceConfirmed: true,
+          displayedDiffs: [
+            'mcp-public-read-auto',
+            'low-risk-browser-and-feishu-auto',
+            'sensitive-write-and-external-outbound-manual'
+          ]
+        }
+      })
+    })
+  })
+
+  it('IM 套餐展示共同快照中的选择值，不被旧设置模型覆盖', { timeout: 20000 }, async () => {
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL, packages: { ...MODEL.packages, wechat: 'standard' }
+    })
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 8, snapshot: { selectedPackage: 'strict' }
+    })
+    renderTab()
+    const panel = await openLaneTab('IM 远程')
+    await waitFor(() => expect(within(panel).getByText('严格')).toBeTruthy())
+  })
+
+  it('IM 自动审核门禁关闭时显示未启用状态和快照原因', { timeout: 20000 }, async () => {
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 8,
+      snapshot: { selectedPackage: 'standard', enabled: false, disabledReason: 'rollback_required' }
+    })
+    renderTab()
+    const panel = await openLaneTab('IM 远程')
+    expect(await within(panel).findByText('异步人工审批通知尚未启用')).toBeTruthy()
+    expect(within(panel).getByText('正式渠道的安全关闭或回退状态仍生效。')).toBeTruthy()
+  })
+
+  it('开发实例显示自动审核测试开关并将选择写入主进程', { timeout: 20000 }, async () => {
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 5,
+      snapshot: { selectedPackage: 'standard', enabled: false, developmentAutoReviewTestAvailable: true, developmentAutoReviewTestEnabled: false }
+    })
+    renderTab()
+    const panel = await openLaneTab('IM 远程')
+    expect(within(panel).getByText('开发测试：自动审核')).toBeTruthy()
+    fireEvent.click(within(panel).getAllByRole('switch')[0]!)
+    await waitFor(() => expect(window.api.securitySetImAutoReviewTestMode).toHaveBeenCalledWith({ enabled: true }))
+  })
+
+  it('普通 gate 关闭时只说明当前审批仍由用户确认', { timeout: 20000 }, async () => {
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 8,
+      snapshot: { selectedPackage: 'standard', enabled: false }
+    })
+    renderTab()
+    const panel = await openLaneTab('IM 远程')
+    expect(await within(panel).findByText(/需要人工确认的操作仍会发给你批准/)).toBeTruthy()
+    expect(within(panel).queryByText(/灰度账号范围/)).toBeNull()
+    expect(within(panel).queryByText(/引用\/短码匹配验证/)).toBeNull()
+  })
+
+  it('共同快照 revision 冲突时说明需刷新重试', { timeout: 20000 }, async () => {
+    await changeAppLocale('en-US')
+    window.api.securityWritePolicy = vi.fn().mockResolvedValue({ status: 'conflict', currentRevision: 9 })
+    renderTab()
+    const panel = await openLaneTab('Remote IM')
+    const packageSelect = (await within(panel).findAllByRole('combobox'))[0]!
+    fireEvent.mouseDown(packageSelect)
+    fireEvent.click(await screen.findByText('Strict'))
+    expect(await screen.findByText('The policy changed elsewhere. Refresh and try again.')).toBeTruthy()
+  })
+
   it('渲染各区标题（策略套餐/确认记忆/安全审计）并加载模型/记忆/审计', { timeout: 20000 }, async () => {
     renderTab()
     expect(await screen.findByText('策略套餐')).toBeTruthy()
@@ -155,21 +252,6 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     })
     // 记忆条目摘要展示
     expect(await screen.findByText('git status')).toBeTruthy()
-  })
-
-  it('飞书写确认开关渲染在策略套餐区，切换时调用 onFeishuChange', { timeout: 20000 }, async () => {
-    const onFeishuChange = vi.fn()
-    renderTab({ feishu: { ...DEFAULT_FEISHU_CONFIG, larkCliWriteRequiresConfirm: false }, onFeishuChange })
-    expect(await screen.findByText('飞书写操作需确认')).toBeTruthy()
-    const row = screen.getByText('飞书写操作需确认').closest('.config-field')!
-    const sw = row.querySelector('.ant-switch')!
-    expect(sw.className).not.toContain('ant-switch-checked')
-    fireEvent.click(sw)
-    await waitFor(() => {
-      expect(onFeishuChange).toHaveBeenCalledWith(
-        expect.objectContaining({ larkCliWriteRequiresConfirm: true })
-      )
-    })
   })
 
   it('act 会话级信任开关渲染在确认记忆区，切换时调用 onBrowserChange', { timeout: 20000 }, async () => {
@@ -230,13 +312,13 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     })
   })
 
-  it('策略套餐区按链路拆 Tab：默认桌面 Tab 只展示适用规则，无硬约束开关', { timeout: 20000 }, async () => {
+  it('策略套餐区只提供桌面与共享 IM 两个区域，并说明当前覆盖微信与飞书', { timeout: 20000 }, async () => {
     renderTab()
-    // 三个链路 Tab 标题
     expect(await screen.findByRole('tab', { name: '桌面' })).toBeTruthy()
-    expect(screen.getByRole('tab', { name: '微信' })).toBeTruthy()
-    expect(screen.getByRole('tab', { name: '飞书' })).toBeTruthy()
-    // 默认桌面 Tab：桌面规则 + 通用规则可见，远程规则不可见
+    expect(screen.getByRole('tab', { name: 'IM 远程' })).toBeTruthy()
+    expect(screen.queryByRole('tab', { name: '微信' })).toBeNull()
+    expect(screen.queryByRole('tab', { name: '飞书' })).toBeNull()
+    expect(screen.getByText(/现有的微信和飞书远程入口/)).toBeTruthy()
     const panel = await screen.findByRole('tabpanel')
     expect(await within(panel).findByText('script-clean-allow-desktop')).toBeTruthy()
     expect(within(panel).getByText('universal-no-lane')).toBeTruthy()
@@ -246,9 +328,29 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     expect(within(panel).queryByText('链路硬约束')).toBeNull()
   })
 
-  it('微信 Tab 展示系统保护规则（locked）的「启用/不启用」开关，不渲染锁定标记', { timeout: 20000 }, async () => {
+  it('分开显示 IM 能力支持渠道与当前策略许可', { timeout: 20000 }, async () => {
+    const supportRules = [
+      { id: 'im-low-risk-create', when: 'invocation', action: 'ask', defaultAction: 'ask', enabled: true, locked: false,
+        reason: 'low risk create', overridden: false, lanes: ['wechat', 'feishu'], capabilities: ['write_file'] },
+      { id: 'lark-write-ask', when: 'invocation', action: 'ask', defaultAction: 'ask', enabled: true, locked: false,
+        reason: 'Feishu resource write', overridden: false, lanes: ['feishu'], capabilities: ['run_lark_cli'] }
+    ] as unknown as SecuritySettingsModelPayload['rules']
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({ ...MODEL, rules: [...MODEL.rules, ...supportRules] })
     renderTab()
-    const panel = await openLaneTab('微信')
+    const panel = await openLaneTab('IM 远程')
+    const fileWrite = within(panel).getByTestId('im-capability-workspace.file.write')
+    expect(fileWrite.textContent).toContain('本地文件写入')
+    expect(fileWrite.textContent).toContain('微信、飞书')
+    expect(fileWrite.textContent).toContain('策略许可: 自动审核')
+    const feishuWrite = within(panel).getByTestId('im-capability-feishu.resource.write')
+    expect(feishuWrite.textContent).toContain('飞书资源写入')
+    expect(feishuWrite.textContent).toContain('支持渠道: 飞书')
+    expect(feishuWrite.textContent).toContain('策略许可: 自动审核')
+  })
+
+  it('IM 远程 Tab 展示系统保护规则（locked）的「启用/不启用」开关，不渲染锁定标记', { timeout: 20000 }, async () => {
+    renderTab()
+    const panel = await openLaneTab('IM 远程')
     expect(await within(panel).findByText('im-write-ask')).toBeTruthy()
     expect(within(panel).getByText('remote-shell-disabled')).toBeTruthy()
     // locked 系统保护规则用「启用/不启用」Switch，不再显示「锁定」标记
@@ -261,16 +363,16 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     expect(within(panel).queryByText('script-clean-allow-desktop')).toBeNull()
   })
 
-  it('系统保护规则开关切换调用 securitySetRuleEnabled（启用→不启用）', { timeout: 20000 }, async () => {
+  it('IM 系统保护规则开关通过共同快照禁用 locked deny', { timeout: 20000 }, async () => {
     renderTab()
-    const panel = await openLaneTab('微信')
+    const panel = await openLaneTab('IM 远程')
     const ruleRow = (await within(panel).findByText('remote-shell-disabled')).closest('tr')!
     const sw = ruleRow.querySelector('.ant-switch')!
     fireEvent.click(sw)
     await waitFor(() => {
-      expect(window.api.securitySetRuleEnabled).toHaveBeenCalledWith({
-        ruleId: 'remote-shell-disabled',
-        enabled: false
+      expect(window.api.securityWritePolicy).toHaveBeenCalledWith({
+        lane: 'wechat', expectedRevision: 5,
+        change: { kind: 'rule-enabled', ruleId: 'remote-shell-disabled', enabled: false }
       })
     })
   })
@@ -296,39 +398,64 @@ describe('ToolsSecuritySettingsTab（§7 五区）', () => {
     else expect(within(row as HTMLElement).queryByRole('combobox')).toBeNull()
   })
 
-  it('自定义套餐链路（微信）下修改规则动作调用 securitySetRuleOverride', { timeout: 20000 }, async () => {
+  it('共享 IM 自定义套餐修改规则通过版本化策略快照写入', { timeout: 20000 }, async () => {
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
+      ...MODEL,
+      packages: { ...MODEL.packages, wechat: 'custom' }
+    })
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 5, snapshot: { selectedPackage: 'custom' }
+    })
     renderTab()
-    const panel = await openLaneTab('微信')
+    const panel = await openLaneTab('IM 远程')
     const ruleRow = (await within(panel).findByText('im-write-ask')).closest('tr')!
     const select = ruleRow.querySelector('.ant-select-selector')!
     fireEvent.mouseDown(select)
-    const options = await screen.findAllByText('允许')
+    const options = await screen.findAllByText(/直接执行|Execute directly/)
     fireEvent.click(options[options.length - 1]!)
     await waitFor(() => {
-      expect(window.api.securitySetRuleOverride).toHaveBeenCalledWith({ ruleId: 'im-write-ask', action: 'allow', lane: 'wechat' })
+      expect(window.api.securityWritePolicy).toHaveBeenCalledWith({
+        lane: 'wechat', expectedRevision: 5, change: { kind: 'rule-override', ruleId: 'im-write-ask', action: 'allow' }
+      })
     })
   })
 })
 
 describe('生效动作与动作域（P2：显示=实际，动作域按 lane）', () => {
-  it('标准套餐桌面：mcp-tool-ask 行显示「自动」（ask 经 effectiveActionFor 变换）且只读', { timeout: 20000 }, async () => {
+  it('IM 规则显示 shared resolver 的四种最终动作和各自适用能力', { timeout: 20000 }, async () => {
+    const scopedRules = [
+      { id: 'im-low-risk-create', when: 'invocation', action: 'ask', defaultAction: 'ask', enabled: true, locked: false,
+        reason: 'low risk create', overridden: false, lanes: ['wechat', 'feishu'], capabilities: ['write_file'] },
+      { id: 'im-direct-read', when: 'invocation', action: 'allow', defaultAction: 'allow', enabled: true, locked: false,
+        reason: 'ordinary read', overridden: false, lanes: ['wechat', 'feishu'], capabilities: ['read_file'] },
+      { id: 'im-human-confirm', when: 'invocation', action: 'confirm-every-time', defaultAction: 'confirm-every-time', enabled: true, locked: true,
+        reason: 'human required', overridden: false, lanes: ['wechat', 'feishu'], capabilities: ['run_script'] }
+    ] as unknown as SecuritySettingsModelPayload['rules']
+    await changeAppLocale('zh-CN')
+    window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({ ...MODEL, rules: [...MODEL.rules, ...scopedRules] })
+    window.api.securityReadPolicyForLane = vi.fn().mockResolvedValue({
+      domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 5, snapshot: { selectedPackage: 'standard' }
+    })
+    renderTab()
+    const panel = await openLaneTab('IM 远程')
+    expect(await within(panel).findByText(/禁止|Forbidden/)).toBeTruthy()
+    expect((await within(panel).findAllByText(/直接执行|Execute directly/)).length).toBeGreaterThan(0)
+    expect((await within(panel).findAllByText(/人工批准|Manual approval/)).length).toBeGreaterThan(0)
+    const writeRow = (await within(panel).findByText('im-low-risk-create')).closest('tr')!
+    expect(within(writeRow).getByText(/自动审核|Automatic review/)).toBeTruthy()
+    expect(within(writeRow).getByText(/write_file/)).toBeTruthy()
+  })
+
+  it('标准套餐桌面：mcp-tool-ask 行显示「自动审核」（ask 经 effectiveActionFor 变换）且只读', { timeout: 20000 }, async () => {
     renderTab()
     const panel = await screen.findByRole('tabpanel')
     const row = (await within(panel).findByText('mcp-tool-ask')).closest('tr')!
-    expect(within(row as HTMLElement).getByText('自动')).toBeTruthy()
+    expect(within(row as HTMLElement).getByText(/自动审核|Automatic review/)).toBeTruthy()
     // 非 custom 档只读：不渲染动作 Select
     expect(within(row as HTMLElement).queryByRole('combobox')).toBeNull()
   })
 
-  it('标准套餐飞书：同一条通用规则显示「询问」（standard 恒等）且只读', { timeout: 20000 }, async () => {
-    renderTab()
-    const panel = await openLaneTab('飞书')
-    const row = (await within(panel).findByText('mcp-tool-ask')).closest('tr')!
-    expect(within(row as HTMLElement).getByText('询问')).toBeTruthy()
-    expect(within(row as HTMLElement).queryByRole('combobox')).toBeNull()
-  })
-
-  it('自定义套餐桌面：动作域 4 态（含「自动」），选「自动」二次确认后写规则覆盖（B2）', { timeout: 20000 }, async () => {
+  it('自定义套餐桌面：动作域 4 态（含「自动审核」），选「自动审核」二次确认后写规则覆盖（B2）', { timeout: 20000 }, async () => {
     window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
       ...MODEL,
       packages: { ...MODEL.packages, desktop: 'custom' }
@@ -338,9 +465,9 @@ describe('生效动作与动作域（P2：显示=实际，动作域按 lane）',
     const row = (await within(panel).findByText('mcp-tool-ask')).closest('tr')!
     const select = within(row as HTMLElement).getByRole('combobox')
     fireEvent.mouseDown(select)
-    const options = await screen.findAllByText('自动')
+    const options = await screen.findAllByText(/自动审核|Automatic review/)
     fireEvent.click(options[options.length - 1]!)
-    // 自动 = 开启自动审批：保留二次确认
+    // 自动审核 = 开启自动审批：保留二次确认
     const dialog = await screen.findByRole('dialog')
     fireEvent.click(within(dialog).getByRole('button', { name: '确认开启' }))
     await waitFor(() => {
@@ -352,7 +479,7 @@ describe('生效动作与动作域（P2：显示=实际，动作域按 lane）',
     })
   })
 
-  it('自定义套餐桌面：shell-precheck-auto-allow 行动作域含「自动」（desktop availableActions）', { timeout: 20000 }, async () => {
+  it('自定义套餐桌面：shell-precheck-auto-allow 行动作域含「自动审核」（desktop availableActions）', { timeout: 20000 }, async () => {
     window.api.securityGetSettingsModel = vi.fn().mockResolvedValue({
       ...MODEL,
       packages: { ...MODEL.packages, desktop: 'custom' }
@@ -362,6 +489,6 @@ describe('生效动作与动作域（P2：显示=实际，动作域按 lane）',
     const row = (await within(panel).findByText('shell-precheck-auto-allow')).closest('tr')!
     const select = within(row as HTMLElement).getByRole('combobox')
     expect(select.closest('.ant-select')!.className).not.toContain('ant-select-disabled')
-    expect(within(row as HTMLElement).getByText('自动')).toBeTruthy()
+    expect(within(row as HTMLElement).getByText(/自动审核|Automatic review/)).toBeTruthy()
   })
 })

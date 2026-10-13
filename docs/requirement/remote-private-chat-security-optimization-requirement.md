@@ -1,8 +1,8 @@
 # 远程一对一私聊模型安全机制优化需求规格
 
-> 版本：v1.6  
+> 版本：v1.7 (2026-10-12 policy-domain overlay)
 > 创建日期：2026年7月15日  
-> 修订日期：2026年7月15日  
+> 修订日期：2026年10月12日
 > 状态：方案补强 / P0 未关闭，不得全量发布  
 > 前置依赖：[wechat-remote-outbound-confirm-removal-requirement.md](./wechat-remote-outbound-confirm-removal-requirement.md)、[confirmation-card-trust-requirement.md](./confirmation-card-trust-requirement.md)  
 > 关联分析：[../analyze/remote-security-analysis.md](../analyze/remote-security-analysis.md)（**采纳其 §3 方向，并纠正「前提未落地却按已兑现推演」的问题**；不以分析稿 §6/§8「必须保留确认」为冲突依据）  
@@ -11,6 +11,23 @@
 
 ---
 
+## 0. 当前 IM 安全策略源覆盖（2026-10-12）
+
+本节是对 v1.6 的当前实现方向补充并取代冲突配置条款；v1.6 其余身份校验、私聊限制、脚本/浏览器事实提取、审计、资源边界和关闭门禁继续有效。本节与 [IM 安全审核改进需求/计划](./2026-10-11-im-security-review-improvement-requirement.md) 一致。
+
+### 被替代条款
+
+- §0.1、§2.3.1–2.3.4、§3.1–3.3 的 `remote_read_only`→`remoteAllowLocalWrite`/`remoteDenyOutbound`/其他 per-channel boolean 方案不再规定最终策略存储形状；所有 legacy 安全字段及 `remoteConfirmPolicy` 作为一次性迁移输入，按冻结的旧 policyBehaviorVersion 展开，再迁移到共同 `im` 策略快照。未完成迁移或版本未知时 fail closed，不能用新版 standard 解析旧数据。
+- §3.2 / §3.3 和各项 AC 中把远程安全决定放在 `WeChatConfig`、`FeishuConfig` 或共享 IM 接入配置上的字段（包括 `remoteAllowLocalWrite`、`remoteDenyOutbound`、`remoteConfirmPolicy`、浏览器/脚本/飞书写入确认、敏感路径/规则覆盖和能力许可），仅保留为旧版本迁移定义；运行时不得按渠道写出两套生效安全档位或许可。目标删除边界见本项目详细计划 2.3、10.1。
+- §5.2/§5.6 AC、§7 中“开关为 false 即免确认/活动 `remoteDenyOutbound` 拒绝”的结论均按新共同规则解析取代；写入或回复只有在入口可信、规则 auto-eligible、能力支持、事实完整且 final check 通过时执行。
+
+### 当前有效边界
+
+- 适配器设置只保存凭据、连接状态、启用状态、可信 owner 绑定及协议专属配置。`remoteRateLimitPerMinute` 等连接级限速是否留在 adapter 由 2.3 RED 逐项核实；任何影响风险/确认/动作许可的开关（包括 `remoteAllowLocalWrite`、`remoteDenyOutbound`、remote browser/script confirm、飞书写确认、敏感路径/规则覆盖和能力许可）属于共享安全策略域；用户仅见 desktop 与 IM 两个策略区域。
+- 能力和许可分开：adapter capability 说明此渠道是否能执行某能力；policy permission 说明共享 IM 策略是否允许该能力。缺能力返回 capability-unavailable，不能创建“批准即可执行”的待办；有能力也不代表获许可。
+- 旧微信/飞书字段仅能由版本化一次性迁移器读取，并记录行为版本、差异、revision/epoch 与撤销；旧 IPC/config import 只能映射共同域或拒绝，不得复活渠道私有生效策略。
+- 既有账号/单聊身份绑定、群聊拒绝、owner 白名单、安全目录、脚本审查和资源预算仍作为共享域底线与接入能力事实保留，不能通过合并策略削弱。
+
 ## 0. 修订摘要
 
 ### 0.1 相对 v1.0
@@ -18,7 +35,7 @@
 | 决策 | 说明 |
 |------|------|
 | G5 改为「开关一览」 | 不引入通用「每工具确认」配置；确认/拒绝由明确开关与行为规则控制 |
-| `remote_read_only` 有替代 | `remoteAllowLocalWrite=false` + `remoteDenyOutbound=true`；废止前置对该枚举的永久依赖 |
+| 旧 `remote_read_only` 迁移 | v1.6 曾映射为两个 boolean；该目标形状由 v1.7 policy-domain overlay 替代，旧值现只输入冻结迁移器 |
 | 威胁叙事降调 | 不声称关闭 prompt injection |
 | `run_script` 分析升格 | deny/ask/allow 矩阵、绕过面、负例 AC |
 | 绑定 / 信任协议规格化 | 生命周期 + IM 协议进正文 |
@@ -162,7 +179,7 @@ SpaceAssistant 支持通过飞书 Bot 和微信 Bot 接收远程指令。历史�
 
 ---
 
-## 2. 需求详情
+## 2. 需求详情（v1.6 历史行为与迁移事实；当前策略源见 §0）
 
 ### 2.1 飞书 Owner 绑定与 P2P Only（地基）
 
@@ -217,18 +234,17 @@ SpaceAssistant 支持通过飞书 Bot 和微信 Bot 接收远程指令。历史�
 
 ---
 
-### 2.2 确认机制简化
+### 2.2 v1.6 确认机制简化草案（旧字段仅作为迁移输入）
 
-#### 2.2.1 移除本地文件写入逐次确认（P0）
+#### 2.2.1 本地文件写入旧行为（P0；当前许可规则见 §0）
 
 | 项 | 现状 | 目标 |
 |----|------|------|
-| `write_file` / `edit_file` 远程确认 | 当前工作树已按 `remoteAllowLocalWrite` 分流 | 保持 `true` 时跳过确认、`false` 时硬拒绝 |
+| `write_file` / `edit_file` 远程确认 | v1.6 工作树由 `remoteAllowLocalWrite` 分流 | 冻结为旧行为迁移事实；当前许可由共同 `im` 快照、行为版本、能力和最终复检决定 |
 
 **实现要点：**
 
-- 对**新安装或已完成安全摘要的规范化配置**，`evaluateRemoteToolBlock` 中 `remoteAllowLocalWrite` 的 fallback 保持 `?? true`（对齐新装默认）；原始 legacy 配置必须先经过 §2.3.3 的保守迁移层，不能直接依赖该宽松 fallback  
-- `remoteAllowLocalWrite === false` 时**硬拒绝** `write_file` / `edit_file`（见 §2.3.3）  
+- v1.6 中 `remoteAllowLocalWrite` 的 `?? true` fallback 和 `false` 硬拒绝仅用于还原旧版本行为，不是当前运行时读取规则；迁移器须将旧动作写入共同策略快照后停止消费该 boolean。
 - 写入 diff 仍在会话历史可见  
 
 **安全保障（不变）：** 路径沙箱、敏感工作目录拦截、`toolInputGuards`。
@@ -418,9 +434,9 @@ analyzeScriptContent(code: string, ctx?: { remote?: boolean }): {
 
 ---
 
-### 2.3 策略与访问控制（G5 薄方案）
+### 2.3 策略与访问控制（v1.6 迁移事实；当前目标见 §0）
 
-#### 2.3.1 废除 `remoteConfirmPolicy` 行为消费
+#### 2.3.1 一次性迁移旧 `remoteConfirmPolicy`（当前规则）
 
 **不是**「每个工具一个确认开关」的通用配置系统。
 
@@ -428,37 +444,21 @@ analyzeScriptContent(code: string, ctx?: { remote?: boolean }): {
 - 类型与配置字段标记 `@deprecated`，读取不抛错  
 - 确认行为仅由 §3 总表驱动  
 
-#### 2.3.2 废弃 `remote_read_only`，用诚实开关替代
+#### 2.3.2 v1.6 历史迁移映射（非当前活动策略）
 
-前置需求已于 **v1.1** 改为过渡期语义（见该文档 §0）；本需求落地后完成迁移：
+v1.6 的下表只作为冻结旧行为版本解析器的迁移夹具，不创建活动的 boolean 策略源。新迁移把旧值展开为旧行为版本下的动作、条件与许可，再写入共同 `im` 策略快照；升级本身不放宽，也不自动选择新 standard。
 
-| 新能力 | 语义 |
-|--------|------|
-| `remoteAllowLocalWrite=false` | 硬拒绝 `write_file` / `edit_file` |
-| `remoteDenyOutbound=true`（当前工作树已存在，默认 `false`） | 硬拒绝 `wechat_reply` / `wechat_send`；飞书侧硬拒绝 `run_lark_cli` 写类调用（与 legacy read-only 对 lark 写拦截对齐） |
+| 旧值 / 状态 | 冻结迁移解释 | 当前运行时 |
+|-------------|-------------|------------|
+| `remoteConfirmPolicy=remote_read_only` | 还原旧版本的 read-only/deny 动作集合 | 只按共同 policyBehaviorVersion 解析，不读旧字段 |
+| `remoteAllowLocalWrite=false` / `remoteDenyOutbound=true` | 保留对应旧动作硬拒绝事实 | 映射成共同 IM 规则/许可；不保留渠道 boolean |
+| browser/script/lark confirm flags、`deniedTools`、敏感路径 | 逐条还原旧条件/规则；不可表达时收紧并显示差异 | 由共同 IM 策略、adapter capability 与最终检查决定 |
+| legacy confirm=always/always-ask | 保留旧人工动作与条件 | 不能等价成 allow；仅显式切换版本可用新映射 |
 
-**明确不承诺：** 不拦截 `run_script` / `run_shell` 副作用写。若要「真正只读远程」，另开需求。
+连接/凭据、渠道 enabled 与 owner 绑定继续归 adapter。能力支持与 policy permission 分开判断；能力缺失返回 capability-unavailable，不能因为用户审批而执行适配器不支持的动作。
+#### 2.3.3 v1.6 升级摘要迁移事实（P0；当前版本与快照见 §0）
 
-**迁移矩阵：**
-
-| 旧值 / 状态 | 迁移结果 |
-|-------------|----------|
-| `remoteConfirmPolicy=remote_read_only` | `remoteAllowLocalWrite=false` + `remoteDenyOutbound=true`；策略字段保留但忽略 |
-| `always` / `im_confirm` / `inherit` / legacy confirm | 等价「允许出站、确认走各工具开关」 |
-| 已手动 `deniedTools` 含出站工具 | 保持 deny；与 `remoteDenyOutbound` 取更严 |
-
-上述矩阵只定义字段语义，**不能作为存量用户自动放宽确认的依据**。存量升级另遵循 §2.3.3。
-
-**一键 UX：** 设置页开关「限制远程写入与出站」（英文建议：`Restrict remote file writes & outbound`）。
-
-文案要点（须 i18n，诚实声明）：
-
-- 中文：开启后：禁止远程 `write_file`/`edit_file`，并禁止微信出站与飞书写工具。**不会**禁止 `run_script` / `run_shell` 对文件或网络的副作用。  
-- English: Blocks remote file-write tools and IM/Feishu outbound writes. Does **not** block side effects from `run_script` / `run_shell`.
-
-#### 2.3.3 新安装与存量升级策略（P0）
-
-新增持久化版本 `remoteSecurityConfigVersion`（具体命名可在设计中调整，语义不可省略）。仅当用户完成本版一次性安全摘要并保存选择后写入当前版本；不得仅因应用启动或配置 merge 自动推进版本。
+下表记录 v1.6 原迁移意图，仅作为源版本行为和既有配置解释素材。当前迁移必须冻结旧 `policyBehaviorVersion`，将旧动作条件原子转换为共同 `im` 策略快照，并记录 revision/authorization epoch；`remoteSecurityConfigVersion` 不能替代行为版本，迁移完成后不得作为运行许可来源。不得因启动或 config merge 隐式切换到新 standard。
 
 | 场景 | 行为 |
 |------|------|
@@ -476,7 +476,7 @@ analyzeScriptContent(code: string, ctx?: { remote?: boolean }): {
 
 摘要保存必须是一次原子配置事务，并记录选择来源和配置版本。之后可在 Remote IM 设置中逐项修改。
 
-#### 2.3.4 `remoteAllowLocalWrite` 语义
+#### 2.3.4 `remoteAllowLocalWrite` 的旧版语义（仅迁移解释）
 
 | 状态 | 行为 |
 |------|------|
@@ -557,23 +557,23 @@ analyzeScriptContent(code: string, ctx?: { remote?: boolean }): {
 
 ---
 
-## 3. 配置项与行为变更总表
+## 3. 旧配置项与行为迁移总表（目标运行时策略源见 §0）
 
 ### 3.1 配置项变更
 
 | 配置项 | 当前工作树 | 目标约束 | 优先级 |
 |--------|------|------|--------|
-| `remoteAllowLocalWrite` | 默认与 fallback 均为 `true` | `false`=硬拒绝两文件写工具 | P0 |
-| `remoteDenyOutbound` | 已有，默认 `false` | 保持显式硬拒绝语义 | P0 |
-| `remoteBrowserNavigateRequiresConfirm` | 待新增 | 新装可 `false`；存量保持旧强度；仅控制 navigate | P1 |
-| `remoteBrowserActRequiresConfirm` | 待新增 | 默认 `true`；高影响动作始终 ask | P1 |
+| `remoteAllowLocalWrite` | v1.6 channel boolean | 仅迁移为共同 IM 规则/许可；迁移后删除活动读写 | P0 |
+| `remoteDenyOutbound` | v1.6 channel/shared boolean | 仅迁移为共同 IM 规则；不保留第二活动源 | P0 |
+| `remoteBrowserNavigateRequiresConfirm` | v1.6 独立确认字段 | 旧行为迁移为共同 browser action 规则；运行时按能力与策略分别判断 | P1 |
+| `remoteBrowserActRequiresConfirm` | v1.6 独立确认字段 | 高影响底线迁移为共同规则；不能由 boolean 取代事实分类/final check | P1 |
 | `remoteBrowserRequiresConfirm` | 已有组合字段 | deprecated，仅用于保守迁移 | P1 |
-| `remoteScriptRequiresConfirm` | 待新增 | 新装可 `false`；存量默认 `true`；不覆盖分析器 ask/deny | P1 |
-| `remoteSecurityConfigVersion` | 待新增 | 仅在用户完成升级摘要后推进 | P0 |
-| `remoteConfirmPolicy` | 兼容字段仍可透传 | 禁止行为消费；旧值按 §2.3.2 迁移 | P0 |
+| `remoteScriptRequiresConfirm` | v1.6 独立确认字段 | 旧行为按版本迁移；脚本事实、能力与策略规则共同决定出口 | P1 |
+| `remoteSecurityConfigVersion` | v1.6 migration marker | 由 policyBehaviorVersion + revision 的版本化迁移替代；升级门禁不隐式切新规则 | P0 |
+| `remoteConfirmPolicy` | legacy 字段 | 只由冻结迁移器读取；运行时不得读取/写入 | P0 |
 | `remoteSenderAllowlist` | 类型可空，路由层 fail closed | 远程可用时必须有绑定身份 | P0 |
 | `remoteGroupTrigger` / `remoteCommandPrefix` | legacy 字段可读取 | 废弃忽略，不得恢复群聊入口 | P0 |
-| `larkCliWriteRequiresConfirm` | 当前工作树默认 `false` | 分类器未达标前全量发布必须为 `true` | P1 |
+| `larkCliWriteRequiresConfirm` | v1.6 飞书独立门控 | 作为迁移输入；能力事实与共同 IM 规则分开判断 | P1 |
 | `remoteRateLimitPerMinute` | 默认 `60` | 保持 `60` | P1 |
 | 远程任务预算（工具数/累计执行时长/并行执行/连续外部写） | 待新增统一预算 | 默认 `50 / 900s / 1 / 10`，达限暂停而非丢弃 | P1 |
 | `autoAllowScriptExecution` | legacy 配置仍可能存在 | 不得绕过内容分析 | P0 |
@@ -655,8 +655,8 @@ analyzeScriptContent(code: string, ctx?: { remote?: boolean }): {
 
 | # | 验收条件 |
 |---|---------|
-| AC5 | 已完成当前安全配置版本且 `remoteAllowLocalWrite===true` 时远程写文件无 IM Y/N；未完成存量迁移时保持旧确认 |
-| AC6 | 分析 `allow` 且 `remoteScriptRequiresConfirm=false` 的脚本可免确认；开关为 true 时仍 ask |
+| AC5 | 仅可信入口、共同策略 auto-eligible、能力可用、动作事实完整且最终检查通过时可免确认；human-required 必须进原 IM todo |
+| AC6 | 脚本出口由版本化共同规则、完整分析事实与最终复检决定；legacy `remoteScriptRequiresConfirm` 不作为活动旁路 |
 | AC7 | 分析 `ask` 的脚本仍确认；桌面全文；IM 超长可截断并引导桌面 |
 | AC7b | 分析 `deny` 的脚本直接拒绝，无 Y/N |
 | AC7c | 外联明显模式：**远程 deny**、**桌面 ask** |
@@ -673,11 +673,11 @@ analyzeScriptContent(code: string, ctx?: { remote?: boolean }): {
 
 | # | 验收条件 |
 |---|---------|
-| AC12 | 旧 `remote_read_only` 不抛错，迁移后本地写拒绝 + 出站拒绝 |
+| AC12 | 旧 `remote_read_only` 不抛错；迁移器须把对应旧行为版本的本地写/出站拒绝动作写入共同 `im` 快照，不生成活动 boolean 策略源 |
 | AC13 | 旧群聊/前缀字段不抛错，被忽略 |
-| AC14 | 运行时改由新开关，不再靠 `policy==='remote_read_only'` |
-| AC15 | 新装/已迁移规范化配置的 `remoteAllowLocalWrite` fallback 为 `true`；raw legacy 缺字段先进入保守迁移，不被此 fallback 静默放宽 |
-| AC-Policy-Migrate | 迁移矩阵有测试；一键开关可用；文案含「不拦 run_script/run_shell」要点 |
+| AC14 | 当前运行时只读共同 `im` 策略快照与固定行为版本；不得消费 `policy==='remote_read_only'` 或渠道 boolean |
+| AC15 | 迁移回归证明 raw legacy 缺字段先由冻结旧行为版本解析；不能由 `remoteAllowLocalWrite` fallback 静默放宽 |
+| AC-Policy-Migrate | 迁移矩阵测试覆盖旧字段差异和原子写入共同策略快照；旧“一键开关”仅为历史 UX 提案，不构成当前许可入口 |
 | AC-Upgrade-Safe | 覆盖各 legacy policy、缺字段和自定义配置；摘要完成前各能力不比升级前更宽 |
 | AC-Upgrade-Atomic | 摘要取消/关闭/异常退出不写配置版本、不部分保存；重启仍保持旧行为 |
 | AC-Upgrade-Presets | “推荐/更安全”摘要覆盖文件、脚本/Shell、navigate、act、飞书外部写及非真正只读说明；保存后可在设置修改 |
@@ -708,12 +708,12 @@ analyzeScriptContent(code: string, ctx?: { remote?: boolean }): {
 
 | # | 验收条件 |
 |---|---------|
-| AC22 | 高影响飞书动作最小集合均默认 ask；分类不可靠时 `larkCliWriteRequiresConfirm=true`；设置含外部影响警示 |
+| AC22 | 高影响动作由共同 IM 规则 hard-deny 或 human-required；adapter capability 单独声明支持；分类不完整 fail closed |
 | AC-Lark-Classify | 群/多人消息、批量/删除文档、日历邀请、权限/共享变更均有正反例；解析失败按 ask |
-| AC-Browser-Scope | navigate 与 act 使用独立远程策略；新装 navigate 可免确认、act 默认确认；桌面默认不变 |
+| AC-Browser-Scope | navigate/act 作为不同能力事实进入共同 IM 策略；adapter 能力与策略许可分开；桌面 domain 独立 |
 | AC-Browser-HighRisk | 提交、发送、购买/支付、删除、授权、账号/权限修改始终 ask；分类失败 ask |
 | AC24 | `remoteRateLimitPerMinute` 默认 **60** |
-| AC-Outbound-Deny | `remoteDenyOutbound=true` 时 wechat 出站与飞书写被硬拒绝 |
+| AC-Outbound-Deny | 共同 IM policy 的 hard-deny 对 wechat/feishu 对等生效；主动外发按目标/正文/附件规则裁决，受控回复须 final check |
 
 ### 5.7 可观测性、文案、i18n、测试
 
@@ -782,18 +782,18 @@ analyzeScriptContent(code: string, ctx?: { remote?: boolean }): {
 
 ---
 
-## 7. 与当前代码事实对齐
+## 7. 2026-07 历史工作树事实与后续约束
 
 | 事实（2026-07-15 当前工作树） | 需求约束 / 尚需证明 |
 |------|------|
-| `remoteAllowLocalWrite` 默认及运行时 fallback 均为 `true`；关闭时文件工具硬拒绝 | 迁移、缺省配置和飞书/微信两端都要有回归 |
+| v1.6 的 `remoteAllowLocalWrite` 默认及硬拒绝 | 作为源版本迁移夹具保留；新运行时只读取共同 IM 行为版本 |
 | 飞书路由拒绝群聊并校验 owner；当前绑定仍是窗口内首条 p2p | 必须替换为 §2.1.2 一次性配对码；这是 P0，不可仅补测试 |
 | 微信路由在 allowlist 为空或不匹配时拒绝；IPC 会从扫码绑定结果回填 allowlist | 需覆盖旧配置升级、解绑再启用和登录态变化 |
 | `scriptContentSecurity.ts` 已实现 A/B 命中编号、常量折叠、别名跟踪和 B11 窗口；R 有独立残余测试 | 仍以 §5.4 全部门禁为准；分析失败必须 ask，远程外联必须 deny |
 | `toolChatLoop.ts` 已接入脚本分析、过滤环境、组合式远程浏览器覆盖、lark 写默认免确认和显式访问控制 | 仍需脚本独立开关/预算、navigate/act 拆分和 lark 高影响分类；deny 不能进入确认桥 |
 | `imConfirmReply.ts` 已统一 `Y/N/Y trust/确认并信任`；两端 ConfirmManager 已接入；底层信任仍为前缀匹配 | 回复 UX 保持；底层必须按 §2.4.3 改为结构化信任，P0 未关闭 |
-| `remoteDenyOutbound`、组合式 `remoteBrowserRequiresConfirm` 已进入共享类型、默认配置和设置页；限流默认 60 | 新增保守升级版本、脚本开关、navigate/act 拆分；验证桌面默认不变 |
-| `remoteConfirmPolicy` 及旧 UI/类型仍可能为兼容而存在，路由上下文仍可透传该值 | 允许兼容存在；禁止在工具执行路径把它作为确认/拒绝依据；`remote_read_only` 仅允许在 merge/migration 层映射显式开关 |
+| v1.6 `remoteDenyOutbound`/browser 字段已进入 shared types/settings | 作为旧存储事实迁移；新配置统一落入 IM policy snapshot，勿按共享类型误认共享策略源 |
+| `remoteConfirmPolicy` 及旧 UI/类型存在 | 仅冻结迁移读取；删除路由行为消费，旧字段不能映射为独立 boolean active source |
 | `redirection`、`command_substitution`、`multiline` 已从 Shell 硬拦列表移除 | 结构化信任落地前，含这些元语法的命令必须强制 ask；持续回归其他危险规则 |
 
 若实现与本表再次偏离，应先更新本节的代码证据和风险判断，再调整目标或验收；不得只修改“现状”文字掩盖安全语义变化。

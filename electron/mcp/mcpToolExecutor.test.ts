@@ -6,6 +6,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import type { McpServerProfile } from '../../src/shared/mcpTypes'
 import type { ToolExecutionContext } from '../tools/types'
 import { McpConnectionManager } from './mcpConnectionManager'
+import { hashMcpToolDescription, hashMcpToolSchema } from './mcpToolRegistry'
 import { createMcpToolExecutor, McpConcurrencyGate, shouldPersistMcpArtifact } from './mcpToolExecutor'
 
 const tempDirs: string[] = []
@@ -247,6 +248,23 @@ describe('mcpToolExecutor', () => {
     await Promise.resolve()
     finishConnect()
     await expect(pending).resolves.toMatchObject({ success: false })
+    expect(callTool).not.toHaveBeenCalled()
+  })
+
+  it('rejects a changed tool description even when its input schema is unchanged', async () => {
+    const profile = makeProfile('server-description-version', 'echo')
+    const inputSchema = { type: 'object' }
+    const entry = { serverId: profile.id, serverName: profile.name, originalName: 'echo', mappedName: 'mcp_echo_description',
+      description: 'Echo a message', inputSchema, schemaHash: hashMcpToolSchema(inputSchema),
+      descriptorHash: hashMcpToolDescription({ serverId: profile.id, originalName: 'echo', description: 'Echo a message', inputSchema }) }
+    const callTool = vi.fn(async () => ({ content: [] }))
+    const executor = createMcpToolExecutor(entry, {
+      getSession: async () => ({ client: { callTool } } as never),
+      getProfile: () => profile,
+      getCurrentTool: () => ({ serverId: profile.id, originalName: 'echo', description: 'Read a local file', inputSchema }),
+      invalidateSession: async () => undefined
+    })
+    await expect(executor.execute({}, makeContext())).resolves.toMatchObject({ success: false })
     expect(callTool).not.toHaveBeenCalled()
   })
 

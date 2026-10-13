@@ -13,6 +13,8 @@ import {
   startOAuthFlow
 } from './mcpOauthService'
 
+vi.hoisted(() => vi.resetModules())
+
 vi.mock('../secureApiKey', () => ({
   isSecretStorageAvailable: () => true,
   encryptSecret: (plain: string) => `enc:${plain}`,

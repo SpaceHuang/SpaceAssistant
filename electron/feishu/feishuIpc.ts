@@ -53,18 +53,9 @@ import {
   type FeishuOwnerBindSnapshot
 } from './feishuOwnerBind'
 import type { FeishuBindWindowResult } from '../../src/shared/feishuTypes'
-import {
-  commitRemoteSecurityConfig,
-  type CommitResult as RemoteSecurityCommitResult
-} from '../remote/remoteSecurityConfigDb'
-import {
-  planRemoteSecurityMigration,
-  type RemoteSecurityMigrationPlan,
-  type RemoteSecurityPatch
-} from '../../src/shared/remoteSecurityMigration'
+import { migrateLegacyImConfigBeforeChannelWrite, stripChannelPolicyFields } from '../confirmation/legacyImConfigBoundary'
 
 const FEISHU_CONFIG_KEY = 'config.feishu'
-const WECHAT_CONFIG_KEY = 'config.wechat'
 const WORKDIR_PROFILES_KEY = 'config.workDirProfiles'
 const ACTIVE_WORKDIR_KEY = 'config.activeWorkDirProfileId'
 
@@ -189,7 +180,7 @@ export function createFeishuBundle(deps: {
         toolCallId: envelope.toolCallId, toolName: envelope.toolName, input: envelope.canonicalArgs,
         confirmationReceipt: context.confirmationReceipt, lane: 'feishu', providerRouteId: context.providerRouteId,
         remoteContext: {
-          source: 'feishu', messageId: context.messageId, confirmPolicy: config.remoteConfirmPolicy,
+          source: 'feishu', messageId: context.messageId,
           chatId: todo.identityKey, userId: todo.ownerId, authOwner: todo.ownerId, originSessionId: todo.originSessionId,
           workDirProfileId: resolved.profileId, requestId: envelope.requestId,
           authorizationGeneration: remoteAuthorizationRegistry.getGeneration('feishu'), feishuConfig: config, larkCliRunner: runner
@@ -675,49 +666,10 @@ export function registerFeishuIpcHandlers(
     return b.ownerBind.getSnapshot()
   })
 
-  ipcMain.handle('remote-security:plan', async () => {
-    return buildRemoteSecurityPlanFromDb(deps.db)
-  })
-
-  ipcMain.handle(
-    'remote-security:commit',
-    async (_e, patch: RemoteSecurityPatch): Promise<RemoteSecurityCommitResult> => {
-      const coordinator = createRemoteAuthorizationRevocationCoordinator({
-        writeConfig: () => commitRemoteSecurityConfig(deps.db, patch),
-        advanceEpoch: (channel, reason) => remoteAuthorizationRegistry.advanceAuthorizationEpoch(channel, reason),
-        cascade: (channel, epoch, reason) => remoteAuthorizationRegistry.cascadeAuthorizationRevocation(channel, epoch, reason),
-        completeRevocation: (channel, epoch) => remoteAuthorizationRegistry.completeAuthorizationRevocation(channel, epoch),
-        blockChannels: (channels, reason) => remoteAuthorizationRegistry.blockChannels(channels, reason),
-        markChannelsReady: (channels) => remoteAuthorizationRegistry.markChannelsReady(channels)
-      })
-      const { config: result } = coordinator.commit({
-        channels: ['feishu', 'wechat'], reason: 'remote-security-config-changed', config: patch
-      })
-      notifyFeishuConfigChanged(result.feishu)
-      getMainWindow()?.webContents?.send('wechat:config-changed', { wechat: result.wechat })
-      return result
-    }
-  )
-}
-
-function buildRemoteSecurityPlanFromDb(db: AppDatabase): RemoteSecurityMigrationPlan {
-  const feishuRaw = getConfigValue(db, FEISHU_CONFIG_KEY)
-  const wechatRaw = getConfigValue(db, WECHAT_CONFIG_KEY)
-  const feishu = feishuRaw ? (safeParse(feishuRaw) as Partial<FeishuConfig>) : undefined
-  const wechat = wechatRaw ? (safeParse(wechatRaw) as Record<string, unknown>) : undefined
-  const isNewInstall = !feishuRaw && !wechatRaw
-  return planRemoteSecurityMigration({ feishu, wechat: wechat as never, isNewInstall })
-}
-
-function safeParse(raw: string): unknown {
-  try {
-    return JSON.parse(raw)
-  } catch {
-    return {}
-  }
 }
 
 export function persistFeishuConfig(db: AppDatabase, partial: Partial<FeishuConfig>): FeishuConfig {
+  migrateLegacyImConfigBeforeChannelWrite(db)
   const prev = readFeishuConfigFromDb(db)
   const next = mergeFeishuConfig({ ...prev, ...partial })
 
@@ -733,7 +685,7 @@ export function persistFeishuConfig(db: AppDatabase, partial: Partial<FeishuConf
     : ownerCleared ? 'owner_cleared' : allowlistChanged ? 'allowlist_changed' : null
   if (reason) {
     const coordinator = createRemoteAuthorizationRevocationCoordinator({
-      writeConfig: () => { setConfigValue(db, FEISHU_CONFIG_KEY, JSON.stringify(next)); return next },
+      writeConfig: () => { setConfigValue(db, FEISHU_CONFIG_KEY, JSON.stringify(stripChannelPolicyFields(next as unknown as Record<string, unknown>))); return next },
       advanceEpoch: (channel, why) => remoteAuthorizationRegistry.advanceAuthorizationEpoch(channel, why),
       cascade: (channel, epoch, why) => remoteAuthorizationRegistry.cascadeAuthorizationRevocation(channel, epoch, why),
       completeRevocation: (channel, epoch) => remoteAuthorizationRegistry.completeAuthorizationRevocation(channel, epoch),
@@ -741,7 +693,7 @@ export function persistFeishuConfig(db: AppDatabase, partial: Partial<FeishuConf
       markChannelsReady: (channels) => remoteAuthorizationRegistry.markChannelsReady(channels)
     })
     coordinator.commit({ channels: ['feishu'], reason, config: next })
-  } else setConfigValue(db, FEISHU_CONFIG_KEY, JSON.stringify(next))
+  } else setConfigValue(db, FEISHU_CONFIG_KEY, JSON.stringify(stripChannelPolicyFields(next as unknown as Record<string, unknown>)))
   logFeishuCliEvent('info', 'feishu.config.persist', { keys: Object.keys(partial) })
   if (bundle?.ownerBind) {
     const wasRemote = prev.remoteEnabled

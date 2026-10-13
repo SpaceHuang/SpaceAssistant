@@ -1,6 +1,6 @@
 /** UUID v4，与 sessions.id 一致 */
 export const SESSION_SUFFIX_REGEX =
-  / 会话\$[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\$$/
+  / 会话(?:#[0-9a-fA-F]{8}|\$[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\$)$/
 
 export const REMOTE_PROCESSING_PLACEHOLDERS = [
   '已收到，正在处理…',
@@ -26,7 +26,8 @@ export function formatRemoteOutboundMessage(
     return trimmed
   }
   const stripped = stripSessionSuffix(trimmed)
-  return `${stripped} 会话$${sessionId}$`
+  const sessionRef = sessionId.replace(/-/g, '').slice(0, 8).toUpperCase()
+  return `${stripped} 会话#${sessionRef}`
 }
 
 /** 进度 dedupe 用：剥后缀后的正文 */

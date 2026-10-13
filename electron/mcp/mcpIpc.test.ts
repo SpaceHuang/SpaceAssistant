@@ -14,13 +14,18 @@ import { registerMcpIpcHandlers, writeInputToProfile } from './mcpIpc'
 import * as mcpOauthService from './mcpOauthService'
 import { setSecret } from './mcpSecretStore'
 import { clearToolRevocationRequest, isToolRevoked, registerToolRevocationRequest } from '../toolRevocationRegistry'
-import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
+import { getDefaultAgentRuntime, resetDefaultAgentRuntimeForTests, setDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
+import { createAgentRuntime } from '../runtime/agentRuntime'
+import { ToolRevocationRegistry } from '../toolRevocationRegistry'
+import { McpConcurrencyGate } from './mcpToolExecutor'
 import { createRegisteredMcpTool } from './registeredMcpTool'
 import { executeRegisteredTool } from '../tools/toolInvocationCoordinator'
 import { createPermitBoundCoordinatorDispatch } from '../tools/permitBoundCoordinatorDispatch'
 import { InMemoryExecutionAdmissionCoordinator } from '../../packages/agent-sdk/src/executionAdmission'
 import { McpConnectionManager } from './mcpConnectionManager'
 import { rejectPendingConfirmsForToolAcrossLanes, waitForToolConfirm } from '../toolConfirmRegistry'
+
+vi.hoisted(() => vi.resetModules())
 
 vi.mock('../secureApiKey', () => ({
   isSecretStorageAvailable: () => true,
@@ -242,6 +247,7 @@ describe('mcp IPC handlers', () => {
   let handlers: HandlerMap
 
   beforeEach(() => {
+    setDefaultAgentRuntime(createAgentRuntime({ toolRevocations: new ToolRevocationRegistry(), mcpGate: new McpConcurrencyGate() }))
     const temp = createTempDatabase('sa-mcp-ipc-')
     db = temp.db
     cleanup = temp.cleanup
@@ -253,6 +259,7 @@ describe('mcp IPC handlers', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     cleanup()
+    resetDefaultAgentRuntimeForTests()
   })
 
   it('mcp:list returns stored profiles', async () => {
@@ -276,6 +283,21 @@ describe('mcp IPC handlers', () => {
         servers: [{ ...makeInput(), status: 'connected' }]
       })
     ).rejects.toThrow()
+  })
+
+  it('mcp:save-profiles accepts explicit local public-read trust settings', async () => {
+    const result = await handlers['mcp:save-profiles']!(null, {
+      servers: [makeInput({ enabledToolNames: ['search'], publicReadOnlyTools: { search: 'a'.repeat(64) } })]
+    }) as { servers: Array<{ publicReadOnlyTools?: Record<string, string> }> }
+    expect(result.servers[0]?.publicReadOnlyTools).toEqual({ search: 'a'.repeat(64) })
+  })
+
+  it('mcp:save-profiles accepts explicit descriptor-bound account-use authorization separately', async () => {
+    const result = await handlers['mcp:save-profiles']!(null, {
+      servers: [makeInput({ enabledToolNames: ['search'], accountAuthorizedTools: { search: 'b'.repeat(64) } })]
+    }) as { servers: Array<{ publicReadOnlyTools?: Record<string, string>; accountAuthorizedTools?: Record<string, string> }> }
+    expect(result.servers[0]?.accountAuthorizedTools).toEqual({ search: 'b'.repeat(64) })
+    expect(result.servers[0]?.publicReadOnlyTools).toBeUndefined()
   })
 
   it('mcp:clear-secret removes the token and returns fresh profiles', async () => {
@@ -364,6 +386,29 @@ describe('mcp IPC handlers', () => {
     } finally {
       for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
         clearToolRevocationRequest(`${lane}-mcp-clear-secret`)
+      }
+    }
+  })
+
+  it('revoking account-use authorization invalidates active MCP tools across every lane', async () => {
+    const profileId = 'mcp-account-grant-revocation'
+    const toolName = 'lookup_authorized_account'
+    const server = makeInput({ id: profileId, name: 'Account grant revocation', enabled: true, transport: 'streamable-http',
+      http: { endpoint: 'https://account.example.test/mcp' }, enabledToolNames: [toolName],
+      accountAuthorizedTools: { [toolName]: 'a'.repeat(64) } })
+    await handlers['mcp:save-profiles']!(null, { servers: [server] })
+    for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
+      registerToolRevocationRequest(`${lane}-mcp-account-grant`, lane, `${lane}-mcp-account-grant`)
+    }
+
+    try {
+      await handlers['mcp:save-profiles']!(null, { servers: [{ ...server, accountAuthorizedTools: {} }] })
+      for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
+        expect(isToolRevoked(`${lane}-mcp-account-grant`, toolName)).toBe(true)
+      }
+    } finally {
+      for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
+        clearToolRevocationRequest(`${lane}-mcp-account-grant`)
       }
     }
   })
@@ -759,9 +804,10 @@ rl.on('line', (line) => {
       servers: [makeInput({
         id: profileId, name: 'OAuth reauthorization', enabled: true, transport: 'streamable-http',
         http: { endpoint: 'https://oauth.example.test/mcp' }, auth: { mode: 'oauth', oauthClientId: 'client' },
-        enabledToolNames: [toolName]
+        enabledToolNames: [toolName], accountAuthorizedTools: { [toolName]: 'a'.repeat(64) }
       })]
     })
+    expect(listProfiles(db).find(({ id }) => id === profileId)?.accountAuthorizedTools).toEqual({ [toolName]: 'a'.repeat(64) })
     const startOAuth = vi.spyOn(mcpOauthService, 'startOAuthFlow').mockResolvedValue({ ok: true } as never)
     for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
       registerToolRevocationRequest(`${lane}-mcp-oauth-reauth`, lane, `${lane}-mcp-oauth-reauth`)
@@ -769,6 +815,7 @@ rl.on('line', (line) => {
 
     try {
       await handlers['mcp:oauth-start']!(null, { serverId: profileId })
+      expect(listProfiles(db).find(({ id }) => id === profileId)?.accountAuthorizedTools).toBeUndefined()
       for (const lane of ['desktop', 'feishu', 'wechat', 'automation'] as const) {
         expect(isToolRevoked(`${lane}-mcp-oauth-reauth`, toolName)).toBe(true)
       }

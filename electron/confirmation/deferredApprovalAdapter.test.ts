@@ -1,10 +1,45 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createDeferredApprovalAdapter } from './deferredApprovalAdapter'
+import { createPersistentDeferredTodoAdmission } from './deferredTodoAdmission'
 import { createMemoryAppDb } from '../database/testHelpers'
+import { getDbConnection } from '../database/sqliteStore'
+import { commitImPolicySnapshot } from './imPolicyStore'
 import { createSecurityActionIntentStore } from './securityActionIntentStore'
 import { createDeferredEnvelopeStore } from './deferredEnvelopeStore'
 
 describe('deferred approval adapter', () => {
+  it.each([
+    ['human-required', { ok: true, verdict: { kind: 'approve', reason: { summary: 'not used' } } }, 'human-required', 'deferred', 'human-required', true],
+    ['agent-deny', { ok: true, verdict: { kind: 'deny', reason: { summary: 'denied' } } }, 'eligible', 'deny', 'agent-deny', false],
+    ['agent-undetermined', { ok: true, verdict: { kind: 'undetermined', reason: { summary: 'uncertain' } } }, 'eligible', 'deferred', 'agent-undetermined', true],
+    ['timeout', { ok: false, cause: 'timeout' }, 'eligible', 'deferred', 'timeout', true],
+    ['unavailable', { ok: false, cause: 'unavailable' }, 'eligible', 'deferred', 'unavailable', true],
+    ['unparsable', { ok: false, cause: 'unparsable' }, 'eligible', 'deny', 'unparsable', false],
+    ['config-error', { ok: false, cause: 'config-error' }, 'eligible', 'deny', 'config-error', false],
+    ['locked', { ok: true, verdict: { kind: 'approve', reason: { summary: 'approved' } } }, 'locked', 'deny', 'locked', false],
+    ['critical', { ok: true, verdict: { kind: 'approve', reason: { summary: 'approved' } } }, 'critical', 'deny', 'critical', false],
+    ['capability-unavailable', { ok: true, verdict: { kind: 'approve', reason: { summary: 'approved' } } }, 'eligible', 'deny', 'no-answerer', false, false]
+  ] as const)('maps %s to a stable outcome and only persists eligible pending work', async (_case, approval, gate, expectedKind, expectedCause, shouldPersist, answererAvailable = true) => {
+    const db = createMemoryAppDb()
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-v1.6', snapshot: {}, updatedAt: Date.now(), eventId: `approval-adapter-${_case}` })
+    const admission = createPersistentDeferredTodoAdmission(db, { dispatch: vi.fn(), sendReceipt: vi.fn() })
+    const dispatch = vi.fn()
+    const adapter = createDeferredApprovalAdapter({ admission, dispatch })
+    const todoId = `todo-cause-${_case}`
+    const rule = { ruleId: 'cause-matrix-rule', factsHash: 'd'.repeat(64) }
+    const createdAt = Date.now()
+    const todo = { todoId, invocationId: `inv-cause-${_case}`, reservationId: `res-cause-${_case}`, originSessionId: 'origin',
+      identityKey: 'identity', channel: 'feishu', ownerId: 'owner', authorizationEpoch: 1, rule,
+      workflowId: 'workflow', taskId: 'task', stepId: 'step', planRevision: 1, createdAt, expiresAt: createdAt + 60_000, updatedAt: createdAt }
+    const result = await adapter.resolve({ approval: approval as never, eligibility: { kind: 'eligible', todoId }, todo, ttlMs: 60_000,
+      policy: { lane: 'feishu', enabled: true, actionClass: 'write', gate, evidence: { kind: 'direct', restrictionsComplete: true }, answererAvailable } })
+    expect(result).toMatchObject({ kind: expectedKind, cause: expectedCause, ...(expectedKind === 'deferred' ? { todoId } : {}) })
+    expect(admission.todoStore.get(todoId, { channel: 'feishu', identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 1, originSessionId: 'origin', rule })?.status ?? null)
+      .toBe(shouldPersist ? 'pending' : null)
+    expect(dispatch).not.toHaveBeenCalled()
+    db.close()
+  })
+
   it('persists the exact original tool-call identity and immutable input before admitting a deferred todo', async () => {
     const db = createMemoryAppDb()
     const envelopeStore = createDeferredEnvelopeStore(db)
@@ -88,7 +123,8 @@ describe('deferred approval adapter', () => {
       eligibility: { kind: 'eligible', todoId: 'todo-1' },
       todo: { todoId: 'todo-1', invocationId: 'inv-1', reservationId: 'res-1', originSessionId: 'session-1', identityKey: 'identity-1', channel: 'feishu', ownerId: 'owner' }, ttlMs: 10_000
     })
-    expect(result).toEqual({ kind: 'deferred', todoId: 'todo-1' })
+    expect(result).toEqual({ kind: 'deferred', todoId: 'todo-1', cause: 'insufficient-delegation-evidence',
+      executionState: 'not-executed', retryable: false, nextStep: 'await-user' })
     expect(admission.defer).toHaveBeenCalledOnce()
     expect(dispatch).not.toHaveBeenCalled()
   })

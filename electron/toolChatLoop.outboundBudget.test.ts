@@ -25,6 +25,12 @@ const larkMessageSend = { args: ['message', 'send', '--receive-id', 'ou_1'] }
 const larkDocGet = { args: ['doc', 'get', '--token', 't'] }
 
 const toolsConfig: ToolsConfig = { ...DEFAULT_TOOLS_CONFIG, deniedTools: [] }
+const imPolicySnapshot = {
+  domain: 'im' as const,
+  policyBehaviorVersion: 'im-v1.6',
+  revision: 1,
+  snapshot: {}
+}
 
 function gateArgs(
   toolName: string,
@@ -39,6 +45,7 @@ function gateArgs(
     userDataDir: '/tmp/ud',
     toolsConfig,
     audit: { record: () => undefined },
+    imPolicySnapshot,
     ...gateDefaultMaterials(),
     ...overrides
   }
@@ -138,24 +145,25 @@ describe('outbound write budget gate (经 toolCallGate + 规则 remote-outbound-
 
 describe('denyOutbound uses impact classifier (规则 remote-deny-lark-write-outbound)', () => {
   const denyCfg = { ...DEFAULT_FEISHU_CONFIG, remoteDenyOutbound: true }
+  const denySnapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: { denyOutbound: true } }
 
   it('blocks doc delete / permission even when old write-pair list misses them', async () => {
     for (const input of [{ args: ['doc', 'delete', '--token', 't'] }, { args: ['doc', 'permission', 'update'] }]) {
       const r = await evaluateToolCallGate(
-        gateArgs('run_lark_cli', input, { remoteContext: feishuRemote, feishuConfig: denyCfg })
+        gateArgs('run_lark_cli', input, { remoteContext: feishuRemote, feishuConfig: denyCfg, imPolicySnapshot: denySnapshot })
       )
       expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'remote-deny-lark-write-outbound' })
       expect(r.decision.type === 'deny' && r.decision.reason).toMatch(/禁止/)
     }
     const read = await evaluateToolCallGate(
-      gateArgs('run_lark_cli', larkDocGet, { remoteContext: feishuRemote, feishuConfig: denyCfg })
+      gateArgs('run_lark_cli', larkDocGet, { remoteContext: feishuRemote, feishuConfig: denyCfg, imPolicySnapshot: denySnapshot })
     )
     expect(read.decision.type).not.toBe('deny')
   })
 
   it('non-string args are rejected without throwing when denyOutbound', async () => {
     const r = await evaluateToolCallGate(
-      gateArgs('run_lark_cli', { args: [1] }, { remoteContext: feishuRemote, feishuConfig: denyCfg })
+      gateArgs('run_lark_cli', { args: [1] }, { remoteContext: feishuRemote, feishuConfig: denyCfg, imPolicySnapshot: denySnapshot })
     )
     expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'remote-deny-lark-write-outbound' })
   })

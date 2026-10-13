@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import path from 'node:path'
 import type {
   AgentEventSink,
@@ -17,6 +18,7 @@ import { readStoredModels } from '../llmServiceResolver'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import type { AppDatabase } from '../database'
 import { readRemoteTrackFeatureGates } from '../remote/remoteTrackFeatureGates'
+import { readImPolicySnapshot } from '../confirmation/imPolicyStore'
 import { logAgentEvent } from '../agentLogger/agentLogger'
 import { recordStepUsage, recordTurnSummary } from '../usageStats/usageStatsRecorder'
 import { scheduleSessionTitleSuggestion } from '../sessionTitleSuggest'
@@ -26,6 +28,8 @@ import { recordUserAnswerFromDecision } from '../confirmation/decisionCacheWrite
 import { evaluateToolCallGate } from '../confirmation/toolCallGate'
 import { buildSnapshotFromDb, getCachedTools, sanitizeMcpSnapshotForExecutors, type McpToolSnapshot } from '../mcp/mcpToolRegistry'
 import { resolveRequestLocale } from '../llmSystemPrompt'
+import { resolvePublicMcpReadAuthorization } from '../mcp/publicMcpReadTrust'
+import { isPolicyPackage } from '../../src/shared/policy/policyPackages'
 import { listProfiles } from '../mcp/mcpConfigStore'
 import { getSecret } from '../mcp/mcpSecretStore'
 import { getDiagnostics } from '../mcp/mcpDiagnostics'
@@ -60,6 +64,7 @@ import { buildSessionDirectoryContextBlock, normalizeDirectoryGrantPath, type Se
 import { listValidSessionDirectoryGrantsSync } from '../sessionDirectoryGrants'
 import { channelFor, type ResolveConfirmChannelArgs } from '../confirmation/channels'
 import { isRemoteAsyncApprovalGateEnabled } from '../confirmation/remoteAsyncApprovalGate'
+import { isImAutoReviewTestModeEnabled } from '../confirmation/imAutoReviewTestMode'
 import { AgentChannel } from '../confirmation/agentChannel'
 import { toolIdToOpenAiCompatibleApiToolName } from '../../src/shared/anthropicToolSanitize'
 import { normalizeExternalToolName } from '../../src/shared/toolNameCompatibility'
@@ -344,10 +349,35 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     }
   }
 } {
+  if (materials.acceptedTurn && materials.sessionStorage) {
+    const persistedAcceptedTurn = materials.sessionStorage.execution.readAccepted({
+      sessionId: materials.sessionId,
+      requestId: materials.requestId
+    })
+    if (!persistedAcceptedTurn || !isDeepStrictEqual(persistedAcceptedTurn, materials.acceptedTurn)) {
+      throw new Error('ACCEPTED_TURN_PERSISTED_CONTEXT_MISMATCH')
+    }
+  }
   if (materials.acceptedTurn && (materials.acceptedTurn.requestId !== materials.requestId ||
     materials.acceptedTurn.sessionId !== materials.sessionId ||
     (materials.turnId !== undefined && materials.acceptedTurn.turnId !== materials.turnId))) {
     throw new Error('ACCEPTED_TURN_INVOCATION_IDENTITY_MISMATCH')
+  }
+  if (materials.remoteContext && materials.remoteContext.source !== 'feishu' && materials.remoteContext.source !== 'wechat') {
+    throw new Error('INVOCATION_REMOTE_SOURCE_INVALID')
+  }
+  const remoteLane = materials.remoteContext
+    ? materials.remoteContext.source
+    : undefined
+  if (!materials.acceptedTurn && remoteLane !== undefined && materials.lane !== undefined && remoteLane !== materials.lane) {
+    throw new Error('INVOCATION_ORIGIN_MISMATCH')
+  }
+  if (materials.acceptedTurn && (
+    (materials.lane !== undefined && materials.lane !== materials.acceptedTurn.lane) ||
+    (remoteLane !== undefined && remoteLane !== materials.acceptedTurn.lane) ||
+    (materials.acceptedTurn.config.lane !== undefined && materials.acceptedTurn.config.lane !== materials.acceptedTurn.lane)
+  )) {
+    throw new Error('ACCEPTED_TURN_ORIGIN_MISMATCH')
   }
   if (materials.acceptedTurn && materials.currentUserMessageId !== undefined &&
     materials.currentUserMessageId !== materials.acceptedTurn.currentUserMessageId) {
@@ -363,7 +393,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   // by display name here would make unrelated Hosted/remote invocations depend on a
   // second catalog read and can select the wrong entry when names are not unique.
   const modelId = materials.modelId
-  const materialsLane = materials.lane
+  const materialsLane = materials.acceptedTurn?.lane ?? materials.lane
     ?? (materials.remoteContext
       ? materials.remoteContext.source === 'feishu' ? 'feishu' : 'wechat'
       : 'desktop')
@@ -509,8 +539,25 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
   // 档位来源：显式声明（无库宿主 / 测试收紧）优先；有库宿主读实际配置；否则 standard
   const explicitLanePackage = (materials as { policyLanePackage?: import('../../src/shared/policy/policyPackages').PolicyPackage })
     .policyLanePackage
-  const lanePackage =
-    explicitLanePackage ?? (db ? readPolicyPackages(db)[materialsLane] ?? 'standard' : 'standard')
+  const currentImPolicyBinding = () => {
+    if (!db || (materialsLane !== 'wechat' && materialsLane !== 'feishu')) return null
+    try {
+      const snapshot = readImPolicySnapshot(getDbConnection(db), { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] })
+      return { domain: snapshot.domain, policyBehaviorVersion: snapshot.policyBehaviorVersion, revision: snapshot.revision, snapshot: snapshot.snapshot }
+    } catch {
+      return { invalid: true as const }
+    }
+  }
+  const resolveLanePackage = () => {
+    const legacyPackage = db ? readPolicyPackages(db)[materialsLane] ?? 'standard' : 'standard'
+    if (materialsLane !== 'wechat' && materialsLane !== 'feishu') return legacyPackage
+    const binding = currentImPolicyBinding()
+    if (binding && !('invalid' in binding) && binding.policyBehaviorVersion === 'im-standard-v2') {
+      return isPolicyPackage(binding.snapshot.selectedPackage) ? binding.snapshot.selectedPackage : 'standard'
+    }
+    return legacyPackage
+  }
+  const lanePackage = explicitLanePackage ?? resolveLanePackage()
   const resolveCurrentAuthorization = () => {
     const currentOrigin = db
       ? resolveEffectivePolicyRulesWithOrigin(db, materialsLane)
@@ -518,11 +565,12 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     const currentRules = materials.policyRuleFloor
       ? intersectPolicyRulesWithFloor(currentOrigin.rules, materials.policyRuleFloor)
       : currentOrigin.rules
-    const currentLanePackage = explicitLanePackage ?? (db ? readPolicyPackages(db)[materialsLane] ?? 'standard' : 'standard')
+    const currentLanePackage = explicitLanePackage ?? resolveLanePackage()
     const version = createHash('sha256').update(JSON.stringify({
       effectiveRules: currentRules,
       lanePackage: currentLanePackage,
-      policyOrigins: currentOrigin.origins
+      policyOrigins: currentOrigin.origins,
+      imPolicyBinding: currentImPolicyBinding()
     })).digest('hex')
     return { effectiveRules: currentRules, lanePackage: currentLanePackage, policyOrigins: currentOrigin.origins, disabledRuleIds: currentOrigin.disabledRuleIds, authorizationVersion: version }
   }
@@ -716,6 +764,21 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
     const currentSessionDirectoryGrants = materialsLane === 'desktop' && db
       ? (sessionStorage?.queries.readSession(materials.sessionId)?.metadata?.sessionDirectoryGrants as SessionDirectoryGrantRecord[] | undefined) ?? []
       : []
+    const imPolicySnapshot = materialsLane === 'wechat' || materialsLane === 'feishu'
+      ? (() => {
+          try {
+            return db ? readImPolicySnapshot(getDbConnection(db), { supportedBehaviorVersions: ['im-v1.6', 'im-standard-v2'] }) : undefined
+          } catch (error) {
+            logAgentEvent('warn', 'im.policy_snapshot.load_failed', {
+              requestId: binding.requestId,
+              sessionId: materials.sessionId,
+              lane: materialsLane,
+              error: error instanceof Error ? error.message : String(error)
+            })
+            return undefined
+          }
+        })()
+      : undefined
     return {
       toolName,
       toolInput: structuredClone(call.input),
@@ -732,6 +795,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       ...(currentBrowserConfig !== undefined ? { browserConfig: currentBrowserConfig } : {}),
       ...(materials.feishuConfig !== undefined ? { feishuConfig: materials.feishuConfig } : {}),
       ...(materials.wechatConfig !== undefined ? { wechatConfig: materials.wechatConfig } : {}),
+      ...(imPolicySnapshot ? { imPolicySnapshot } : {}),
       ...(currentWikiConfig !== undefined ? { wikiConfig: currentWikiConfig } : {}),
       effectiveRules: current.effectiveRules,
       disabledPolicyRuleIds: current.disabledRuleIds,
@@ -739,7 +803,16 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       policyOrigins: current.policyOrigins,
       decisionCache: policy.decisionCache as import('../confirmation/toolCallGate').GateDecisionCache,
       shellPrecheck: policy.shellPrecheck,
-      ...(mcpSnapshot.entries.get(toolName) ? { mcpEntry: mcpSnapshot.entries.get(toolName) } : {}),
+      ...(mcpSnapshot.entries.get(toolName) ? {
+        mcpEntry: mcpSnapshot.entries.get(toolName),
+        ...(db ? (() => {
+          const entry = mcpSnapshot.entries.get(toolName)!
+          const currentProfile = listProfiles(db).find((candidate) => candidate.id === entry.serverId)
+          if (!currentProfile) return {}
+          const authorization = resolvePublicMcpReadAuthorization(currentProfile, entry)
+          return { mcpQuerySource: authorization.querySource, mcpAccountAuthorization: authorization.accountAuthorization }
+        })() : {})
+      } : {}),
       ...(materials.internalConfirmExemption ? { internalConfirmExemption: materials.internalConfirmExemption } : {}),
       ...(toolName === 'switch_work_dir' ? { factsProvider: ({ toolInput }: { toolName: string; toolInput: Record<string, unknown> }) => {
         const profiles = materials.workDirManager?.listProfiles()
@@ -1073,6 +1146,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         audit: getSecurityAuditLog(),
         answererPolicy: { kind: confirmation.answerer },
         remoteAsyncApprovalEnabled: (materialsLane === 'feishu' || materialsLane === 'wechat') && isRemoteAsyncApprovalGateEnabled(db),
+        imAutoReviewTestEnabled: (materialsLane === 'feishu' || materialsLane === 'wechat') && isImAutoReviewTestModeEnabled(),
         agentChannelFactory: agentChannelFactory ?? hostedAgentChannelFactory,
         ...(materials.remoteContext?.imChannel ? {
           imChannel: materials.remoteContext.imChannel,
@@ -1080,6 +1154,11 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
             sessionId: materials.sessionId,
             toolName: call.toolName,
             toolInput: call.input,
+            ...(mcpSnapshot.entries.get(call.toolName) ? (() => {
+              const entry = mcpSnapshot.entries.get(call.toolName)!
+              return { mcp: { serverName: entry.serverName, originalToolName: entry.originalName,
+                ...(entry.description ? { description: entry.description } : {}) } }
+            })() : {}),
             messageId: materials.remoteContext!.messageId,
             matchKey: materials.remoteContext!.source === 'feishu'
               ? (materials.remoteContext!.chatId ?? '')
@@ -1094,6 +1173,17 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
             requestId: materials.requestId,
             turnId: materials.acceptedTurn?.turnId ?? materials.turnId,
             toolUseId: call.toolCallId,
+            envelopeHash: createHash('sha256').update(JSON.stringify({ invocationId: call.invocationId, toolUseId: call.toolCallId,
+              toolName: call.toolName, input: call.input })).digest('hex'),
+            factsHash: createHash('sha256').update(JSON.stringify(request.facts)).digest('hex'),
+            policyRevision: authorizationVersion,
+            ...(materialsLane === 'feishu' || materialsLane === 'wechat' ? (() => {
+              const binding = currentImPolicyBinding()
+              return binding && !('invalid' in binding) ? {
+                policyBehaviorVersion: binding.policyBehaviorVersion,
+                policySnapshotRevision: binding.revision
+              } : {}
+            })() : {}),
             ...(materials.remoteContext!.trackContext && db && (materials.remoteContext!.source === 'wechat' || materials.remoteContext!.source === 'feishu') &&
               readRemoteTrackFeatureGates(db, materials.remoteContext!.source).confirmationLink ? {
               trackId: materials.remoteContext!.trackContext.trackId,

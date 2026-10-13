@@ -1,5 +1,5 @@
 export type DeferredApprovalNotificationSection = {
-  kind: 'user-delegation' | 'untrusted-material' | 'action-summary'
+  kind: 'user-delegation' | 'untrusted-material' | 'target-summary' | 'impact-summary' | 'reason-summary' | 'action-summary'
   title: string
   text: string
 }
@@ -38,6 +38,9 @@ export function buildDeferredApprovalNotification(input: {
   expiresAt: number
   toolName: string
   safeActionSummary: string
+  safeTargetSummary?: string
+  impactSummary?: string
+  reasonSummary?: string
   userDelegation: string
   untrustedMaterial: string
 }): DeferredApprovalNotificationDto {
@@ -48,6 +51,9 @@ export function buildDeferredApprovalNotification(input: {
   const sections: DeferredApprovalNotificationSection[] = [
     { kind: 'user-delegation', title: '用户委托', text: safeText(input.userDelegation, '（未提供安全摘要）') },
     { kind: 'untrusted-material', title: '待审查材料', text: '原始材料已隔离省略；请仅基于安全界面中的内容审查。' },
+    { kind: 'target-summary', title: '作用目标', text: safeText(input.safeTargetSummary ?? '', '（目标摘要不可用）') },
+    { kind: 'impact-summary', title: '动作影响', text: safeText(input.impactSummary ?? '', '（影响摘要不可用）') },
+    { kind: 'reason-summary', title: '确认原因', text: safeText(input.reasonSummary ?? '', '（策略要求人工确认）') },
     { kind: 'action-summary', title: '待执行动作', text: safeText(input.safeActionSummary, '（动作摘要不可用，请拒绝）') }
   ]
   const text = [

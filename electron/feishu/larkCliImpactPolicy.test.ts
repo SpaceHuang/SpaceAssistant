@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyLarkCliImpact, larkCliWriteNeedsConfirm } from './larkCliImpactPolicy'
+import { classifyLarkCliImpact, classifyLarkMessageTarget, larkCliWriteNeedsConfirm } from './larkCliImpactPolicy'
 
 describe('larkCliImpactPolicy', () => {
   it('classifies group message as high-impact', () => {
@@ -10,6 +10,16 @@ describe('larkCliImpactPolicy', () => {
   it('classifies single message as low_write', () => {
     const r = classifyLarkCliImpact(['message', 'send', '--receive-id', 'ou_one'])
     expect(r.impact).toBe('low_write')
+  })
+
+  it('classifies Feishu message recipients only from explicit open_id and trusted actor identity', () => {
+    expect(classifyLarkMessageTarget(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_self'], 'ou_self')).toBe('self')
+    expect(classifyLarkMessageTarget(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_other'], 'ou_self')).toBe('direct-other')
+    expect(classifyLarkMessageTarget(['message', 'send', '--receive-id', 'ou_self'], 'ou_self')).toBe('unknown')
+    expect(classifyLarkMessageTarget(['message', 'send', '--receive-id-type', 'user_id', '--receive-id', 'u_self'], 'ou_self')).toBe('unknown')
+    expect(classifyLarkMessageTarget(['message', 'send', '--chat-type', 'group', '--receive-id', 'oc_group'], 'ou_self')).toBe('group-or-multiple')
+    expect(classifyLarkMessageTarget(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_a,ou_b'], 'ou_self')).toBe('group-or-multiple')
+    expect(classifyLarkMessageTarget(['message', 'send', '--receive-id-type', 'chat_id', '--receive-id', 'oc_unknown'], 'ou_self')).toBe('unknown')
   })
 
   it('classifies doc delete / batch / permission as high-impact', () => {

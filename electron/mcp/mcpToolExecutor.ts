@@ -17,7 +17,7 @@ import type { ToolExecutionContext, ToolExecutor, ToolExecutorResult } from '../
 import type { McpSession } from './mcpConnectionManager'
 import { Semaphore, withSemaphore } from './semaphore'
 import { getDefaultAgentRuntime } from '../runtime/agentRuntimeDefaults'
-import type { McpToolSnapshotEntry } from './mcpToolRegistry'
+import { hashMcpToolDescription, hashMcpToolSchema, type McpToolSnapshotEntry } from './mcpToolRegistry'
 import { resolveMcpArtifactOwnerPath } from './mcpArtifactPath'
 
 /**
@@ -67,7 +67,13 @@ export type McpToolExecutorDeps = {
   getSession: (serverId: string) => Promise<McpSession>
   getProfile: (serverId: string) => McpServerProfile | undefined
   /** Resolve the currently enabled tool descriptor for the configured original name. */
-  getCurrentTool?: (serverId: string, originalName: string) => { inputSchema: Record<string, unknown> } | undefined
+  getCurrentTool?: (serverId: string, originalName: string) => {
+    serverId?: string
+    originalName?: string
+    description?: string
+    inputSchema: Record<string, unknown>
+    annotations?: import('../../src/shared/mcpTypes').McpToolAnnotations
+  } | undefined
   getCurrentProfileFingerprint?: (serverId: string) => string | undefined
   expectedProfileFingerprint?: string
   invalidateSession: (serverId: string) => Promise<void>
@@ -165,7 +171,19 @@ export function createMcpToolExecutor(
         }
         if (deps.getCurrentTool) {
           const currentTool = deps.getCurrentTool(entry.serverId, entry.originalName)
-          if (!currentTool || JSON.stringify(currentTool.inputSchema) !== JSON.stringify(entry.inputSchema)) {
+          const currentSchemaHash = currentTool ? hashMcpToolSchema(currentTool.inputSchema) : undefined
+          const currentDescriptorHash = currentTool ? hashMcpToolDescription({
+            serverId: currentTool.serverId ?? entry.serverId,
+            originalName: currentTool.originalName ?? entry.originalName,
+            description: currentTool.description ?? entry.description,
+            inputSchema: currentTool.inputSchema,
+            ...(currentTool.annotations ? { annotations: currentTool.annotations } : {})
+          }) : undefined
+          if (!currentTool || (currentTool.serverId !== undefined && currentTool.serverId !== entry.serverId) ||
+            (currentTool.originalName !== undefined && currentTool.originalName !== entry.originalName) ||
+            JSON.stringify(currentTool.inputSchema) !== JSON.stringify(entry.inputSchema) ||
+            (entry.schemaHash !== undefined && currentSchemaHash !== entry.schemaHash) ||
+            (entry.descriptorHash !== undefined && currentDescriptorHash !== entry.descriptorHash)) {
             return { failure: { success: false, error: 'MCP 工具配置或 schema 已变更，请重新发起调用并审批。' } }
           }
         }

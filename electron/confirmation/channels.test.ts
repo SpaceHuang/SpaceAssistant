@@ -244,6 +244,24 @@ describe('P1-1 resolveConfirmChannel 二维解析（回答者种类 × 传输通
     expect(factory).toHaveBeenCalledOnce()
   })
 
+  it('keeps human-required IM actions on the user confirmation channel even when development auto-review is enabled', () => {
+    const im = createImChannelForTest({ lane: 'wechat', timeoutMs: 1000, sendPrompt: vi.fn() })
+    const factory = vi.fn(() => ({ request: vi.fn(), cancel: vi.fn() }))
+    const channel = resolveConfirmChannel({ ...baseArgs, lane: 'wechat', answererPolicy: { kind: 'user' },
+      imAutoReviewTestEnabled: true, remoteAsyncApprovalEnabled: false, imChannel: im, buildImPending: buildPending,
+      agentChannelFactory: factory })
+    expect(channel).toBeInstanceOf(ImRequestChannel)
+    expect(factory).not.toHaveBeenCalled()
+  })
+
+  it('allows Agent auto-review in an explicitly enabled development test session without opening the async approval gate', () => {
+    const im = createImChannelForTest({ lane: 'wechat', timeoutMs: 1000, sendPrompt: vi.fn() })
+    const factory = vi.fn(() => ({ request: vi.fn(), cancel: vi.fn() }))
+    resolveConfirmChannel({ ...baseArgs, lane: 'wechat', answererPolicy: { kind: 'agent' }, imChannel: im,
+      imAutoReviewTestEnabled: true, buildImPending: buildPending, agentChannelFactory: factory })
+    expect(factory).toHaveBeenCalledOnce()
+  })
+
   const baseArgs = {
     requestId: 'req-rcc',
     sessionId: 's-rcc',

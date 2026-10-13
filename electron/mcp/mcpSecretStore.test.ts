@@ -9,6 +9,8 @@ import {
   setSecret
 } from './mcpSecretStore'
 
+vi.hoisted(() => vi.resetModules())
+
 vi.mock('../secureApiKey', () => ({
   isSecretStorageAvailable: () => true,
   encryptSecret: (plain: string) => `enc:${plain}`,

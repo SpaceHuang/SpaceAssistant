@@ -196,6 +196,19 @@ describe('browserDomainExtractor', () => {
     )
     expect(facts.signals.some((s) => s.kind === 'network-egress')).toBe(true)
   })
+
+  it.each([
+    { action: 'navigate', url: 'https://example.com/search?q=public', expected: { sideEffect: 'navigate', querySensitivity: 'public' } },
+    { action: 'act', instruction: 'search my private account balance', expected: { sideEffect: 'read', querySensitivity: 'private' } },
+    { action: 'act', instruction: 'upload the selected file', expected: { sideEffect: 'upload', querySensitivity: 'unknown' } },
+    { action: 'act', instruction: 'submit payment and authorize account', expected: { sideEffect: 'payment', querySensitivity: 'private' } },
+    { action: 'act', instruction: 'delete this record', expected: { sideEffect: 'delete', querySensitivity: 'unknown' } },
+  ] as const)('3.2.7 RED: browser $action action extracts side effect and query sensitivity', ({ action, expected, ...input }) => {
+    const r = extractBrowserSignals({ action, ...input }, env)
+    expect(r.signals.find((signal) => signal.kind === 'browser-action')).toMatchObject({
+      kind: 'browser-action', sideEffect: expected.sideEffect, querySensitivity: expected.querySensitivity
+    })
+  })
 })
 
 describe('outbound / lark 提取器', () => {
@@ -218,5 +231,32 @@ describe('outbound / lark 提取器', () => {
       env
     )
     expect(facts.signals.some((s) => s.kind === 'outbound-target')).toBe(true)
+    expect(facts.signals).toContainEqual(expect.objectContaining({ kind: 'lark-subcommand', impact: 'read', category: 'read', completeness: 'complete' }))
+  })
+
+  it('lark message target is compared to host-authenticated Feishu identity, not model-authored identity', () => {
+    const descriptor = { toolName: 'run_lark_cli', actionClass: 'execute' as const, riskLevel: 'high' as const, extractors: ['lark-subcommand'] }
+    const self = runExtractors(descriptor, { args: ['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_owner'] }, env,
+      { trustedFeishuActorOpenId: 'ou_owner' })
+    const other = runExtractors(descriptor, { args: ['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_other'] }, env,
+      { trustedFeishuActorOpenId: 'ou_owner' })
+    const untrusted = runExtractors(descriptor, { args: ['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_owner'] }, env)
+    expect(self.signals).toContainEqual(expect.objectContaining({ kind: 'lark-subcommand', messageTarget: 'self' }))
+    expect(other.signals).toContainEqual(expect.objectContaining({ kind: 'lark-subcommand', messageTarget: 'direct-other' }))
+    expect(untrusted.signals).toContainEqual(expect.objectContaining({ kind: 'lark-subcommand', messageTarget: 'unknown' }))
+  })
+
+  it.each([
+    { args: ['doc', 'update', '--token', 'd1'], expected: { impact: 'low_write', category: 'doc_write', completeness: 'complete' } },
+    { args: ['api', 'invoke', '--path', '/docs'], expected: { impact: 'unknown', category: 'unknown', completeness: 'partial' } },
+    { args: ['doc', 'delete', '--token', 'd1'], expected: { impact: 'high_impact', category: 'delete', completeness: 'complete' } },
+    { args: ['message', 'send', '--receive-id', 'ou_1'], expected: { impact: 'low_write', category: 'message', completeness: 'complete' } },
+    { args: ['doc', 'permission', 'update', '--token', 'd1'], expected: { impact: 'high_impact', category: 'permission', completeness: 'complete' } }
+  ])('3.2.9/3.2.10: lark facts carry the classified impact and completeness', ({ args, expected }) => {
+    const facts = runExtractors(
+      { toolName: 'run_lark_cli', actionClass: 'execute', riskLevel: 'high', extractors: ['lark-subcommand'] },
+      { args }, env
+    )
+    expect(facts.signals).toContainEqual(expect.objectContaining({ kind: 'lark-subcommand', ...expected }))
   })
 })

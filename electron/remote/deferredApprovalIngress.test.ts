@@ -119,10 +119,12 @@ describe('deferred approval ingress binding contract', () => {
     duplicate.db.close()
   })
 
-  it.each(['consumed', 'invalidated', 'expired'])('rejects a todo already marked %s and does not request resume', async (status) => {
+  it.each(['consumed', 'invalidated', 'expired'])('does not resume a todo already marked %s', async (status) => {
     const { db, ingress, requestResume } = setup([binding], status)
     await expect(ingress.handle({ channel: 'wechat', identityKey: 'identity-a', ownerId: 'owner-a', messageId: 'used-reply',
-      replyToMessageId: 'trusted-origin-message', text: '批准 07', now: 100 })).resolves.toMatchObject({ status: 'rejected' })
+      replyToMessageId: 'trusted-origin-message', text: '批准 07', now: 100 })).resolves.toMatchObject({
+        status: status === 'consumed' ? 'already_consumed' : 'rejected'
+      })
     expect(requestResume).not.toHaveBeenCalled()
     db.close()
   })

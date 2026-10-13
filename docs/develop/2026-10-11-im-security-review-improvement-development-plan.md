@@ -69,6 +69,20 @@
 | 待办编号、身份代次、消息关联、附件句柄 | channel + identity + originSession + owner + Track + 精确动作；异步待办另绑 todo/notificationVersion/authorizationEpoch |
 | 审计 | 同时记录 policyDomain=im 和实际 lane/channel |
 
+实现前共享类型草案（行为契约，具体文件名在 1.1 RED 任务确定）：
+
+```ts
+type SecurityPolicyDomain = 'desktop' | 'im' | 'automation'
+type ExecutionLane = 'desktop' | 'wechat' | 'feishu' | 'automation'
+type PolicyBehaviorVersion = string // 必须是注册的固定版本；缺失/未知 fail closed
+type PolicyDisposition = 'forbidden' | 'human-required' | 'auto-eligible' | 'capability-unavailable' | 'config-error'
+type ReviewOutcome = 'agent-approved' | 'agent-denied' | 'undetermined' | 'timeout' | 'temporarily-unavailable'
+type ApprovalActor = 'user' | 'agent' | 'system'
+type DeliveryPurpose = 'task-reply' | 'approval-notification' | 'active-outbound' | 'system-status'
+```
+
+`locked` 是规则编辑元数据，不属于 disposition。规则解析先产出 disposition/reason；hard-deny/critical → forbidden，无 todo；human-required/locked ask → 原渠道精确 todo；auto-eligible 才能请求 Agent。Agent approve 只有 final check 通过后放行，actor=agent；确定性放行 actor=system；人工批准只授权当前动作、actor=user。能力或配置错误 fail closed，不生成“批准即可执行”的 todo。Agent deny 终局拒绝无 todo；undetermined/timeout/暂时不可用只允许原 IM todo。Track 是任务归属键，永远不能替代 `SecurityPolicyDomain`。所有结果还携带 policy revision/behavior version、lane、cause 与 todo/dispatch 关联。
+
 策略共享不共享用户身份。不能在飞书批准微信动作，不能因为两个绑定账号看起来相同就移交待办。桌面确认只对 desktop-origin 动作有效；不存在桌面代答 IM 的例外。IM 的 approve、deny、timeout、unavailable 和 Agent 降级均留在原渠道或转为该渠道的精确待办。
 
 入口来源在受理边界由主进程创建不可变来源上下文，关联 accepted turn ID、当前用户消息 ID、入口类型、source channel/identity、originSession 与执行配置。桌面 submit IPC 固定为 desktop；微信/飞书路由从已验证消息构造对应来源；共享 `session.metadata.source` 仅供展示/兼容，不得作为当前指令策略依据。assembler 必须校验 materials lane、remoteContext、acceptedTurn execution config 和 durable origin context 一致；矛盾、缺失或未知来源 fail closed。唤醒/恢复从待办或 Track 冻结来源重建上下文，不能采用触发唤醒的当前渠道改写原动作来源。
@@ -79,7 +93,7 @@
 
 支持能力与许可能力分开：适配器说“我支持导航”，统一策略说“当前允许导航”，两者都满足才可审核和执行。能力不存在时返回 capability-unavailable，不能建“批准就能执行”的待办。
 
-新增渠道接入契约包括：可信身份、单聊来源、能力清单、工具事实提取、受控回复、待办通知及入站关联、附件边界。未完成安全契约的渠道不得启用自动审核；不能因它映射到 im 就天然获得全部能力。
+对现有 WeChat、Feishu 适配器核对并落实统一安全契约：可信身份、单聊来源、能力清单、工具事实提取、受控回复、待办通知及入站关联、附件边界。缺少必要能力的现有渠道不得启用自动审核；渠道来源本身不代表它具备全部能力。本计划不新增生产渠道、工具或 MCP server。
 
 ### 3.3 IPC 和设置
 
@@ -208,9 +222,9 @@ Agent 超时沿用现有上界和并发 admission，不把它变成另一种长�
 
 不要在审计里写完整正文、凭据和敏感路径。用受控引用与摘要/hash，必要的复核材料仍保存在主进程受控存储。审计展示“为什么自动”“为什么还要人”“是否已执行”，而不只显示 risk=high。
 
-建立固定普通任务集：公开检索、报时、多轮检索、生成新文件、低影响协作修改、普通回复。每例用相同委托、工作目录、事实和能力条件分别跑桌面标准与 IM 标准；能力不可比项单列，不混进对比。
+建立固定普通任务集：公开检索、报时、多轮检索、生成新文件、低影响协作修改、普通回复。按 IM 固定分母运行并记录每项结果；桌面数据仅作诊断旁列，不参与 IM 验收。
 
-统计无真人且成功执行的调用比例、整任务完成率、人工通知数、待办率、审核超时率、审核耗时、等待时长、未授权派发数。报告样本的目标是合格搜索/报时零人工；普通任务集 IM 自动完成比例高于桌面，危险集未授权派发为零。固定任务集版本，保留每项分母，不靠提前结束任务提高数字。
+统计无真人且成功执行的调用比例、整任务完成率、人工通知数、待办率、审核超时率、审核耗时、等待时长、未授权派发数。报告样本的目标是合格搜索/报时零人工；普通任务集按固定绝对门槛验收：11/11 合格调用自动完成、6/6 任务完成，危险集未授权派发为零。桌面结果仅作旁列观测，不参与通过/失败判断。固定任务集版本，保留每项分母，不靠提前结束任务提高数字。
 
 ## 10. 分期和完成条件
 
@@ -218,11 +232,12 @@ Agent 超时沿用现有上界和并发 admission，不把它变成另一种长�
 |---|---|---|
 | P0 契约 | 明确锁定规则出口、普通回复例外、共同配置和旧文档冲突 | 需求/类型/矩阵同口径，现网不变 |
 | P1 统一源 | 共同存储、迁移、IPC、设置、prompt | 两渠道只读共同源；差异迁移和回滚通过，旧 API 无旁路 |
-| P2 事实与路径 | MCP/脚本/新文件事实，IM 自动动作与 assembler 接入 | shadow 对比通过；硬规则无退化，真实链路调用 Agent |
+| P2 事实与路径 | MCP/脚本/新文件事实，IM 自动动作与 assembler 接入 | IM 固定验收集通过；硬规则无退化，集成链路调用 Agent |
 | P3 待办 | 强制人工异步出口、结果 cause、去重、独立任务继续 | 精确批准、撤销、重启、并发和通知失败通过；远程审批仅原渠道消费 |
-| P4 回复与启用 | 受控回复、全出口外发检查、跨入口端到端门禁和灰度 | 旧外发契约同步；R13/R14 入口与审批隔离矩阵通过；既有门禁证据齐全，指标达标 |
+| P4 回复与技术验收 | 受控回复、全出口外发检查、跨入口端到端安全验收 | 旧外发契约同步；R13/R14 入口与审批隔离矩阵及既有技术安全门禁通过。此阶段允许在隔离测试环境验证功能，不要求灰度账号或值班运营资料 |
+| P5 发布后灰度 | 在 P4 技术验收通过后，按计划逐步开放既有 IM 身份 | 开始灰度流量前确定账号范围、监控指标/告警阈值、回退触发条件和当班负责人；这些是灰度运营就绪条件，不是开发、功能测试或构建门禁 |
 
-shadow 只计算决策，不执行、不通知、不写授权缓存；敏感事实仍按现有隔离约束提供。灰度针对同一 IM 策略域/合法身份范围，不再产生微信一套、飞书一套用户配置。实施前先核实已有门禁证据，不能把文档里“机制已具备”当成验收通过。
+shadow 只计算决策，不执行、不通知、不写授权缓存；敏感事实仍按现有隔离约束提供。灰度针对同一 IM 策略域/合法身份范围，不再产生微信一套、飞书一套用户配置。实施前先核实已有技术门禁证据，不能把文档里“机制已具备”当成验收通过。灰度账号、指标、阈值和当班负责人只在 P4 技术验收后、实际开始 P5 灰度前准备；没有这些资料不得开始灰度，但不阻止本地/隔离环境的功能验证。
 
 复用 remoteAsyncApprovalGate 及既有开发计划 6.7：enabled 且 close_required=0、P1-1～P1-7、既有集成运行和 OQ 决议必须满足。新增验收证据绑定策略/代码版本，旧版本证据不能自动为新回复例外背书。
 

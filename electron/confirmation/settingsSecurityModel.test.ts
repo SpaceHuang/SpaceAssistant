@@ -63,6 +63,15 @@ describe('toRuleViews（规则合并视图）', () => {
     expect(views[2]).toMatchObject({ id: 'automation-default-confirm', enabled: true, locked: true })
   })
 
+  it('projects matched tools and explicit toolkit capability ids for settings display', async () => {
+    const { toRuleViews } = await import('./settingsSecurityModel')
+    const rules = [{
+      id: 'capability-ask', when: 'invocation' as const, action: 'ask' as const, reason: 'r',
+      match: { toolName: ['toolkit.call', 'run_lark_cli'], signals: ['toolkit-capability:action.mcp.add'] }
+    }]
+    expect(toRuleViews(rules, [])[0]?.capabilities).toEqual(['toolkit.call', 'run_lark_cli', 'action.mcp.add'])
+  })
+
   it('lanes 透传 match.lane（无 lane 限定的规则保持缺省=全链路通用）', async () => {
     const { toRuleViews } = await import('./settingsSecurityModel')
     const rules = [

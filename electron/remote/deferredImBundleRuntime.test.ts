@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createMemoryAppDb } from '../database/testHelpers'
+import { commitImPolicySnapshot } from '../confirmation/imPolicyStore'
+import { getDbConnection } from '../database/sqliteStore'
 import { createDeferredTodoStore } from '../confirmation/deferredTodoStore'
 import { createDeferredApprovalNotificationDelivery } from './deferredApprovalNotificationDelivery'
 import { createDeferredImBundleRuntime } from './deferredImBundleRuntime'
@@ -9,10 +11,12 @@ import { createSession } from '../database/operations'
 import { createDeferredExecutionResultStore } from '../confirmation/deferredExecutionResultStore'
 import { appendWakeEvent, claimWakeEvents, listWakeEvents } from '../database/wakeEvents'
 import { createWakeEventDispatcher } from './wakeEventDispatcher'
+import { putTaskControlRecord } from '../database/taskControl'
 
 describe('deferred IM bundle runtime', () => {
   it('composes durable ingress with the production epoch/task dispatch fence', async () => {
     const db = createMemoryAppDb()
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'bundle-policy-seed-1' })
     const todoStore = createDeferredTodoStore(db)
     const notificationDelivery = { resolveCurrent: vi.fn(() => null) } as never
     const dispatch = vi.fn(async () => ({ dispatched: true }))
@@ -29,6 +33,7 @@ describe('deferred IM bundle runtime', () => {
 
   it('persists the executed tool result, completion outbox, and a safety recovery wake', async () => {
     const db = createMemoryAppDb()
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'bundle-policy-seed-2' })
     const sessionId = createSession(db, { name: 'bundle-completion' }).id
     const todoStore = createDeferredTodoStore(db)
     const rule = { ruleId: 'write', factsHash: 'e'.repeat(64) }
@@ -46,13 +51,14 @@ describe('deferred IM bundle runtime', () => {
       executionContext: { sessionId, workflowId: todo.workflowId, taskId: todo.taskId, stepId: todo.stepId,
         planRevision: 1, channel: 'feishu', identityKey: todo.identityKey, ownerId: todo.ownerId, authorizationEpoch: 3,
         invocationId: todo.invocationId, toolName: 'write_file', toolInput: {}, requestId: 'original-request', turnId: 'turn',
-        toolCallId: 'tool', providerRouteId: 'provider' } })
+        toolCallId: 'tool', providerRouteId: 'provider', policyBehaviorVersion: 'im-standard-v2', policyRevision: 1, policyEpoch: 1,
+        ruleId: rule.ruleId, factsHash: rule.factsHash } })
     const dispatch = vi.fn(async () => ({ dispatched: true, result: { ok: false, error: 'provider rejected the write' } }))
     const runtime = createDeferredImBundleRuntime({ db, channel: 'feishu', todoStore,
       notificationDelivery: { resolveCurrent: vi.fn(() => null) } as never, isEnabled: () => true,
       getAuthorizationEpoch: () => 3, maxParallel: 1, isOwnerAuthorized: () => true, recheckTask: () => true,
       dispatch, audit: vi.fn(), onCompletionWake: vi.fn() })
-    await runtime.resume.requestResume({ requestId: 'bundle-approval', todoId: todo.todoId, channel: 'feishu', identityKey: todo.identityKey,
+    await runtime.resume.requestResume({ requestId: 'bundle-approval', todoId: todo.todoId, sessionId, channel: 'feishu', identityKey: todo.identityKey,
       ownerId: todo.ownerId, authorizationEpoch: 3, rule, notificationVersion: 1, messageId: 'trusted', reasonKey: 'reply' })
     await expect(runtime.resume.dispatchPending(sessionId)).resolves.toEqual([{ requestId: 'bundle-approval', status: 'dispatched' }])
 
@@ -70,10 +76,57 @@ describe('deferred IM bundle runtime', () => {
     db.close()
   })
 
+  it('keeps an unknown executor outcome consumed and never replays it during recovery', async () => {
+    const db = createMemoryAppDb()
+    commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1,
+      eventId: 'bundle-policy-unknown' })
+    const sessionId = createSession(db, { name: 'bundle-unknown-outcome' }).id
+    const todoStore = createDeferredTodoStore(db)
+    const rule = { ruleId: 'write', factsHash: 'c'.repeat(64) }
+    const todo = todoStore.create({ todoId: 'unknown-outcome-todo', invocationId: 'unknown-outcome-invocation', channel: 'feishu',
+      identityKey: 'identity', ownerId: 'owner', authorizationEpoch: 3, rule, workflowId: 'workflow', taskId: 'task', stepId: 'step',
+      planRevision: 1, originSessionId: sessionId, createdAt: Date.now(), expiresAt: Date.now() + 60_000 }).todo
+    const intents = createSecurityActionIntentStore(db)
+    intents.prepare({ invocationId: todo.invocationId, envelopeInvocationId: todo.invocationId, sessionId,
+      workflowId: todo.workflowId, taskId: todo.taskId, stepId: todo.stepId, planRevision: 1 })
+    intents.linkTodo(todo.invocationId, todo.todoId)
+    intents.commitCheckpoint(todo.invocationId, { checkpointId: 'unknown-checkpoint', workflowRevision: 1 })
+    putTaskControlRecord(db, { sessionId, ownerId: todo.ownerId, workflowId: todo.workflowId, taskId: todo.taskId,
+      planRevision: todo.planRevision, expectedRevision: null, data: { steps: [{ stepId: todo.stepId }],
+        outstandingInvocations: [{ invocationId: todo.invocationId, todoId: todo.todoId, stepId: todo.stepId }] } })
+    createDeferredEnvelopeStore(db).put({ invocationId: todo.invocationId, toolName: 'write_file', canonicalArgs: {}, contentVersions: {},
+      executionContext: { channel: 'feishu', sessionId, ownerId: todo.ownerId, identityKey: todo.identityKey, authorizationEpoch: 3,
+        invocationId: todo.invocationId, toolName: 'write_file', toolInput: {}, requestId: todo.invocationId, turnId: todo.invocationId,
+        toolCallId: todo.invocationId, providerRouteId: 'unknown-provider', workflowId: todo.workflowId, taskId: todo.taskId,
+        stepId: todo.stepId, planRevision: todo.planRevision, policyBehaviorVersion: todo.policyBehaviorVersion,
+        policyRevision: todo.policyRevision, policyEpoch: todo.policyEpoch, ruleId: rule.ruleId, factsHash: rule.factsHash } })
+    const dispatch = vi.fn(async () => ({ dispatched: false }))
+    const runtime = createDeferredImBundleRuntime({ db, channel: 'feishu', todoStore,
+      notificationDelivery: { resolveCurrent: vi.fn(() => null) } as never, isEnabled: () => true,
+      getAuthorizationEpoch: () => 3, maxParallel: 1, isOwnerAuthorized: () => true, recheckTask: () => true,
+      dispatch, audit: vi.fn() })
+    await runtime.resume.requestResume({ requestId: 'unknown-request', todoId: todo.todoId, sessionId, channel: 'feishu', identityKey: todo.identityKey,
+      ownerId: todo.ownerId, authorizationEpoch: todo.authorizationEpoch, rule, notificationVersion: 1, messageId: 'trusted', reasonKey: 'reply' })
+    await expect(runtime.resume.dispatchPending(sessionId)).resolves.toEqual([{ requestId: 'unknown-request', status: 'outcome_unknown' }])
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    expect(createDeferredExecutionResultStore(db).getByTodo(todo.todoId)).toMatchObject({ state: 'outcome_unknown' })
+
+    const restarted = createDeferredImBundleRuntime({ db, channel: 'feishu', todoStore,
+      notificationDelivery: { resolveCurrent: vi.fn(() => null) } as never, isEnabled: () => true,
+      getAuthorizationEpoch: () => 3, maxParallel: 1, isOwnerAuthorized: () => true, recheckTask: () => true,
+      dispatch, audit: vi.fn() })
+    await expect(restarted.recoverPending()).resolves.toEqual([])
+    await expect(restarted.resume.dispatchPending(sessionId)).resolves.toEqual([])
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    expect(restarted.resume.getResumeRequest('unknown-request')?.state).toBe('outcome_unknown')
+    db.close()
+  })
+
   it('retries a claimed completion wake automatically when its lease expires after restart', async () => {
     vi.useFakeTimers()
     try {
       const db = createMemoryAppDb()
+      commitImPolicySnapshot(getDbConnection(db), { policyBehaviorVersion: 'im-standard-v2', snapshot: { selectedPackage: 'standard' }, updatedAt: 1, eventId: 'bundle-policy-seed-3' })
       const sessionId = createSession(db, { name: 'bundle-claimed-recovery' }).id
       const todoStore = createDeferredTodoStore(db)
       const rule = { ruleId: 'write', factsHash: '9'.repeat(64) }
@@ -97,7 +150,7 @@ describe('deferred IM bundle runtime', () => {
       const firstRuntime = createDeferredImBundleRuntime({ db, channel: 'feishu', todoStore,
         notificationDelivery: { resolveCurrent: vi.fn(() => null) } as never, isEnabled: () => true, getAuthorizationEpoch: () => 3,
         maxParallel: 1, isOwnerAuthorized: () => true, recheckTask: () => true, dispatch, audit: vi.fn(), onCompletionWake })
-      await firstRuntime.resume.requestResume({ requestId: 'claimed-approval', todoId: todo.todoId, channel: 'feishu', identityKey: todo.identityKey,
+      await firstRuntime.resume.requestResume({ requestId: 'claimed-approval', todoId: todo.todoId, sessionId, channel: 'feishu', identityKey: todo.identityKey,
         ownerId: todo.ownerId, authorizationEpoch: 3, rule, notificationVersion: 1, messageId: 'trusted', reasonKey: 'reply' })
       await firstRuntime.resume.dispatchPending(sessionId)
       // commitResult already persists the durable completion wake. Re-append would

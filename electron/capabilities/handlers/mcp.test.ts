@@ -11,6 +11,8 @@ import { callCapability } from '../callCapability'
 import { CapabilityRegistry } from '../registry'
 import type { CapabilityContext } from '../types'
 
+vi.hoisted(() => vi.resetModules())
+
 vi.mock('../../secureApiKey', () => ({
   isSecretStorageAvailable: () => true,
   encryptSecret: (plain: string) => `enc:${plain}`,

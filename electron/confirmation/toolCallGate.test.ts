@@ -11,6 +11,7 @@ import { touchTrustedCommand } from '../shell/shellCommandTrust'
 import { DEFAULT_POLICY_RULES } from '../../src/shared/policy/defaultRules'
 import { effectiveActionFor } from '../../src/shared/policy/policyPackages'
 import { buildToolCallGateArgs, evaluateToolCallGate, type ToolCallGateArgs } from './toolCallGate'
+import { hashMcpToolDescription, hashMcpToolSchema } from '../mcp/mcpToolRegistry'
 import { canonicalKeyJson } from './sqliteDecisionCache'
 import { PolicyRuleStore } from './policyRuleStore'
 import { writePolicyPackages } from './policyRulesRuntime'
@@ -121,6 +122,7 @@ function base(overrides: Partial<ToolCallGateArgs> = {}): ToolCallGateArgs {
     toolsConfig: toolsConfig(),
     audit: { record: () => undefined },
     ...gateMaterialsFor(legacyDb, lane),
+    ...(lane !== 'desktop' ? { imPolicySnapshot: { domain: 'im' as const, policyBehaviorVersion: 'im-v1.6', revision: 0, snapshot: {} } } : {}),
     ...rest
   }
 }
@@ -131,6 +133,44 @@ function auditSink(): { record: (e: SecurityAuditEvent) => void; events: Securit
 }
 
 describe('evaluateToolCallGate 诊断契约（R2）', () => {
+  it('persists the shared IM policy and decision evidence on policy.decision events', async () => {
+    const audit = auditSink()
+    const result = await evaluateToolCallGate(base({
+      audit,
+      lane: 'wechat',
+      remoteContext: remoteContext(),
+      imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 17, snapshot: {} }
+    }))
+    const event = audit.events.find((entry) => entry.event === 'policy.decision')
+    expect(event).toMatchObject({
+      policyDomain: 'im',
+      lane: 'wechat',
+      policyBehaviorVersion: 'im-standard-v2',
+      policyRevision: 17,
+      decision: result.decision.type,
+      factsCompleteness: 'unknown',
+      reviewPath: 'deterministic-policy'
+    })
+    expect(event).not.toHaveProperty('fallbackCause')
+    expect(event).not.toHaveProperty('todoId')
+    expect(event).not.toHaveProperty('dispatchKey')
+  })
+
+  it('records reported completeness from extracted MCP facts instead of assuming completeness', async () => {
+    const audit = auditSink()
+    await evaluateToolCallGate(base({ audit, toolName: 'mcp__server__read', toolInput: {}, lane: 'wechat',
+      remoteContext: remoteContext(),
+      imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 2, snapshot: {} },
+      mcpEntry: { serverId: 'server', toolName: 'read', inputSchema: {}, annotations: {} } as never }))
+    expect(audit.events.find((entry) => entry.event === 'policy.decision')?.factsCompleteness).toBe('capability-description-stale')
+  })
+
+  it('fails closed before policy evaluation when an IM invocation has no validated shared snapshot', async () => {
+    const audit = auditSink()
+    await expect(evaluateToolCallGate(base({ audit, remoteContext: remoteContext(), imPolicySnapshot: undefined }))).rejects.toThrow('IM_POLICY_SNAPSHOT_REQUIRED')
+    expect(audit.events).toContainEqual(expect.objectContaining({ event: 'policy.decision', decision: 'deny', ruleId: 'im-policy-snapshot-missing' }))
+  })
+
   it('deny 决策携带结构化诊断：ruleId/denyClass/basis/messageKey/cause 齐全，审计同步 denyClass', async () => {
     const audit = auditSink()
     const r = await evaluateToolCallGate(base({
@@ -206,7 +246,7 @@ describe('evaluateToolCallGate 诊断契约（R2）', () => {
 
 describe('evaluateToolCallGate MCP 载荷（R3）', () => {
   function mcpEntry(overrides: Record<string, unknown> = {}) {
-    return {
+    const value = {
       serverId: 'srv1',
       serverName: 'Example',
       originalName: 'fetch_url',
@@ -219,6 +259,17 @@ describe('evaluateToolCallGate MCP 载荷（R3）', () => {
       },
       ...overrides
     } as NonNullable<ToolCallGateArgs['mcpEntry']>
+    return {
+      ...value,
+      schemaHash: Object.hasOwn(overrides, 'schemaHash') ? overrides.schemaHash as string | undefined : hashMcpToolSchema(value.inputSchema),
+      descriptorHash: Object.hasOwn(overrides, 'descriptorHash') ? overrides.descriptorHash as string | undefined : hashMcpToolDescription({
+        serverId: value.serverId,
+        originalName: value.originalName,
+        description: value.description,
+        inputSchema: value.inputSchema,
+        ...(value.annotations ? { annotations: value.annotations } : {})
+      })
+    }
   }
 
   it('T-R3-1：只读抓取（带 url）——载荷含 mcp-invocation.targetUrl 与 argsDigest，不被 payload-incomplete 拒', async () => {
@@ -267,14 +318,77 @@ describe('evaluateToolCallGate MCP 载荷（R3）', () => {
     const r = await evaluateToolCallGate(base({
       toolName: 'mcp_example_fetch_url',
       toolInput: { url: 'https://example.com' },
+      mcpQuerySource: 'public',
+      mcpAccountAuthorization: 'authorized',
       mcpEntry: mcpEntry({ annotations: { readOnlyHint: true, destructiveHint: false } })
     }))
     expect(r.decision.type).toBe('auto-allow')
+    expect(r.facts.signals).toContainEqual({ kind: 'mcp-readonly', serverId: 'srv1', toolName: 'fetch_url' })
     const sig = r.facts.signals.find((x) => x.kind === 'mcp-invocation')
     if (sig?.kind === 'mcp-invocation') {
       expect(sig.actionClass).toBe('read')
       expect(sig.classificationBasis).toBe('annotations-readonly')
+      expect(sig).toMatchObject({ querySource: 'public', accountAuthorization: 'authorized', completeness: 'complete', dataDestinations: [] })
     }
+  })
+
+  it.each(['missing', 'stale'] as const)('does not trust readOnlyHint when the registered description/schema hash is %s', async (hashState) => {
+    const entry = mcpEntry({ annotations: { readOnlyHint: true, destructiveHint: false },
+      ...(hashState === 'stale' ? { descriptorHash: '0'.repeat(64) } : { descriptorHash: undefined }) })
+    const r = await evaluateToolCallGate(base({
+      toolName: 'mcp_example_fetch_url',
+      toolInput: { url: 'https://example.com' },
+      mcpEntry: entry
+    }))
+    const sig = r.facts.signals.find((x) => x.kind === 'mcp-invocation')
+    expect(sig).toMatchObject({ actionClass: 'write', classificationBasis: 'default-write', sideEffect: 'unknown', completeness: 'capability-description-stale' })
+    expect(r.decision.type).toBe('require-confirm')
+  })
+
+  it('unknown MCP capability without a trusted descriptor cannot receive read-only treatment', async () => {
+    const r = await evaluateToolCallGate(base({
+      toolName: 'mcp_example_fetch_url',
+      toolInput: { url: 'https://example.com/data' }
+    }))
+    expect(r.decision.type).toBe('require-confirm')
+    expect(r.facts.actionClass).not.toBe('read')
+    expect(r.facts.signals.some((signal) => signal.kind === 'mcp-readonly')).toBe(false)
+  })
+
+  it.each([
+    ['local-sensitive query source', 'local-sensitive', 'authorized', 'require-confirm'],
+    ['unknown query source', 'unknown', 'authorized', 'require-confirm'],
+    ['unknown account permission', 'public', 'unknown', 'require-confirm'],
+    ['denied account permission', 'public', 'unauthorized', 'deny']
+  ] as const)('does not auto-allow an annotated read with %s', async (_caseName, mcpQuerySource, mcpAccountAuthorization, expectedDecision) => {
+    const r = await evaluateToolCallGate(base({
+      toolName: 'mcp_example_search',
+      toolInput: { query: 'account balance', account: 'acct-7' },
+      mcpQuerySource,
+      mcpAccountAuthorization,
+      mcpEntry: mcpEntry({
+        originalName: 'search',
+        annotations: { readOnlyHint: true, destructiveHint: false },
+        inputSchema: { type: 'object', required: ['query', 'account'] }
+      })
+    }))
+    expect(r.decision.type).toBe(expectedDecision)
+    if (expectedDecision === 'deny') expect(r.decision).toMatchObject({ ruleId: 'mcp-account-unauthorized-deny' })
+    expect(r.facts.signals.some((signal) => signal.kind === 'mcp-readonly')).toBe(false)
+  })
+
+  it.each([
+    ['missing required account', { query: 'balance' }],
+    ['write destination', { query: 'balance', account: 'acct-7', destination: 'local-cache' }]
+  ] as const)('does not auto-allow a read hint with %s', async (_caseName, toolInput) => {
+    const r = await evaluateToolCallGate(base({
+      toolName: 'mcp_example_search', toolInput,
+      mcpQuerySource: 'public', mcpAccountAuthorization: 'authorized',
+      mcpEntry: mcpEntry({ originalName: 'search', annotations: { readOnlyHint: true, destructiveHint: false },
+        inputSchema: { type: 'object', required: ['query', 'account'] } })
+    }))
+    expect(r.decision.type).toBe('require-confirm')
+    expect(r.facts.signals.some((signal) => signal.kind === 'mcp-readonly')).toBe(false)
   })
 
   it('secret 类入参（token）摘要只留键名不留值', async () => {
@@ -933,6 +1047,127 @@ describe('evaluateToolCallGate', () => {
     expect(parseSpy).toHaveBeenCalledTimes(1)
     expect(gate.facts.signals).toContainEqual(expect.objectContaining({ kind: 'script-path-extraction', completeness: 'complete', dynamicAccess: false, contentDigest: expect.any(String) }))
     expect(gate.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-clean-allow-desktop' })
+    const binding = gate.facts.signals.find((signal) => signal.kind === 'script-path-extraction')
+    expect(binding).toMatchObject({ parametersDigest: expect.any(String), environmentDigest: expect.any(String), authenticationVersion: expect.any(String) })
+  })
+
+  it('remote clean script requires positive certification before shared policy can auto-allow', async () => {
+    const imPolicySnapshot = {
+      domain: 'im' as const, policyBehaviorVersion: 'im-v1.6', revision: 1,
+      snapshot: { remoteScriptRequiresConfirm: false }
+    }
+    const uncertified = await evaluateToolCallGate(base({
+      lane: 'feishu', remoteContext: remoteContext(), imPolicySnapshot,
+      toolName: 'run_script', toolInput: { code: "print('hi')()" }
+    }))
+    expect(uncertified.facts.signals).toContainEqual({ kind: 'script-uncertified' })
+    expect(uncertified.decision).toMatchObject({ type: 'require-confirm', ruleId: 'script-uncertified-ask-remote' })
+
+    const certified = await evaluateToolCallGate(base({
+      lane: 'feishu', remoteContext: remoteContext(), imPolicySnapshot,
+      toolName: 'run_script', toolInput: { code: 'print("hello")' }
+    }))
+    expect(certified.facts.signals).not.toContainEqual({ kind: 'script-uncertified' })
+    expect(certified.decision).toMatchObject({ type: 'auto-allow', ruleId: 'script-clean-certified-remote' })
+  })
+
+  it('applies the version-pinned IM standard candidate map in the real policy gate', async () => {
+    const legacy = await evaluateToolCallGate(base({ lane: 'feishu', remoteContext: remoteContext(),
+      toolName: 'browser', toolInput: { action: 'navigate', url: 'https://example.com' },
+      effectiveRules: loadEffectivePolicyRules(openDb(), 'feishu'),
+      imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: {} } }))
+    expect(legacy.decision).toMatchObject({ type: 'require-confirm', ruleId: 'browser-navigate-ask-remote', answerer: 'user' })
+
+    const current = await evaluateToolCallGate(base({ lane: 'feishu', remoteContext: remoteContext(),
+      toolName: 'browser', toolInput: { action: 'navigate', url: 'https://example.com' },
+      effectiveRules: loadEffectivePolicyRules(openDb(), 'feishu'),
+      imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 1, snapshot: {} } }))
+    expect(current.decision).toMatchObject({ type: 'require-confirm', ruleId: 'browser-navigate-ask-remote', answerer: 'agent', disposition: 'auto-eligible' })
+  })
+
+  it('routes only a new ordinary in-workspace IM write through the standard review candidate', async () => {
+    const root = await fs.realpath(await fs.mkdtemp('/tmp/im-low-risk-create-'))
+    const candidateDb = openDb()
+    const imSnapshot = { domain: 'im' as const, policyBehaviorVersion: 'im-standard-v2', revision: 1, snapshot: {} }
+    try {
+      const makeArgs = (input: Record<string, unknown>, overrides: Partial<ToolCallGateArgs> = {}) => base({
+        lane: 'feishu', remoteContext: remoteContext(), workDir: root, userDataDir: path.join(root, '.userdata'),
+        toolName: 'write_file', toolInput: input, effectiveRules: loadEffectivePolicyRules(candidateDb, 'feishu'),
+        imPolicySnapshot: imSnapshot, ...overrides
+      })
+      const fresh = await evaluateToolCallGate(makeArgs({ path: 'new.md', content: 'draft' }))
+      expect(fresh).toMatchObject({ decision: { type: 'require-confirm', ruleId: 'im-low-risk-create', answerer: 'agent', disposition: 'auto-eligible' },
+        writePathFact: { targetKind: 'missing', zone: 'workdir-normal' } })
+      const legacy = await evaluateToolCallGate(makeArgs({ path: 'legacy.md', content: 'draft' }, {
+        imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: {} }
+      }))
+      expect(legacy.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-ask', answerer: 'user' })
+      const strict = await evaluateToolCallGate(makeArgs({ path: 'strict.md', content: 'draft' }, { lanePackage: 'strict' }))
+      expect(strict.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-low-risk-create', answerer: 'user' })
+
+      const existingPath = path.join(root, 'existing.md')
+      await fs.writeFile(existingPath, 'prior')
+      const overwrite = await evaluateToolCallGate(makeArgs({ path: existingPath, content: 'replacement' }))
+      expect(overwrite.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-ask', answerer: 'user' })
+
+      const editCandidate = await evaluateToolCallGate(base({ lane: 'feishu', remoteContext: remoteContext(), workDir: root,
+        userDataDir: path.join(root, '.userdata'), toolName: 'edit_file',
+        toolInput: { path: existingPath, old_string: 'prior', new_string: 'updated' },
+        effectiveRules: loadEffectivePolicyRules(candidateDb, 'feishu'), imPolicySnapshot: imSnapshot }))
+      expect(editCandidate).toMatchObject({ decision: { type: 'require-confirm', ruleId: 'im-low-risk-edit', answerer: 'agent', disposition: 'auto-eligible' },
+        writePathFact: { targetKind: 'file', zone: 'workdir-normal' } })
+
+      const legacyEdit = await evaluateToolCallGate(base({ lane: 'feishu', remoteContext: remoteContext(), workDir: root,
+        userDataDir: path.join(root, '.userdata'), toolName: 'edit_file',
+        toolInput: { path: existingPath, old_string: 'prior', new_string: 'updated' },
+        effectiveRules: loadEffectivePolicyRules(candidateDb, 'feishu'),
+        imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1, snapshot: {} } }))
+      expect(legacyEdit.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-ask', answerer: 'user' })
+
+      const strictEdit = await evaluateToolCallGate(base({ lane: 'feishu', remoteContext: remoteContext(), workDir: root,
+        userDataDir: path.join(root, '.userdata'), toolName: 'edit_file',
+        toolInput: { path: existingPath, old_string: 'prior', new_string: 'updated' },
+        effectiveRules: loadEffectivePolicyRules(candidateDb, 'feishu'), imPolicySnapshot: imSnapshot, lanePackage: 'strict' }))
+      expect(strictEdit.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-low-risk-edit', answerer: 'user' })
+
+      const sensitiveDir = path.join(root, 'private')
+      await fs.mkdir(sensitiveDir)
+      const sensitive = await evaluateToolCallGate(makeArgs({ path: path.join(sensitiveDir, 'new.md'), content: 'private' }, {
+        shellConfig: { ...DEFAULT_SHELL_CONFIG, customSensitivePrefixes: [sensitiveDir] }
+      }))
+      expect(sensitive.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-write-ask', answerer: 'user' })
+
+      const outside = await evaluateToolCallGate(makeArgs({ path: '/etc/im-security-review-test-new.md', content: 'blocked' }))
+      expect(outside.decision).toMatchObject({ type: 'deny', ruleId: 'remote-outside-write-deny' })
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('3.2.4: script review facts change when code, parameters or environment change', async () => {
+    const readBinding = (gate: Awaited<ReturnType<typeof evaluateToolCallGate>>) => {
+      const binding = gate.facts.signals.find((signal) => signal.kind === 'script-path-extraction')
+      if (binding?.kind !== 'script-path-extraction') throw new Error('script review binding is missing')
+      return binding
+    }
+    const baseGate = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { code: 'print("hello")', args: ['one'] } }))
+    const parameterChanged = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { code: 'print("hello")', args: ['two'] } }))
+    const codeChanged = await evaluateToolCallGate(base({ toolName: 'run_script', toolInput: { code: 'print("goodbye")', args: ['one'] } }))
+    const environmentChanged = await evaluateToolCallGate(base({
+      toolName: 'run_script', toolInput: { code: 'print("hello")', args: ['one'] },
+      workDir: path.join(os.tmpdir(), 'script-review-alternate-workdir'),
+      userDataDir: path.join(os.tmpdir(), 'script-review-alternate-userdata')
+    }))
+
+    const initial = readBinding(baseGate)
+    const changedArgs = readBinding(parameterChanged)
+    const changedCode = readBinding(codeChanged)
+    const changedEnvironment = readBinding(environmentChanged)
+    expect(initial).toMatchObject({ contentDigest: expect.any(String), parametersDigest: expect.any(String), environmentDigest: expect.any(String), authenticationVersion: 'script-certifier-v1' })
+    expect(changedArgs).toMatchObject({ contentDigest: initial.contentDigest, environmentDigest: initial.environmentDigest })
+    expect(changedArgs.parametersDigest).not.toBe(initial.parametersDigest)
+    expect(changedCode.contentDigest).not.toBe(initial.contentDigest)
+    expect(changedEnvironment.environmentDigest).not.toBe(initial.environmentDigest)
   })
 
   it('V3 AST 重定向目标进入 shell 路径事实并触发敏感路径确认', async () => {
@@ -1657,6 +1892,26 @@ describe('evaluateToolCallGate', () => {
     )
     expect(r.decision.type).toBe('auto-allow')
     expect(r.decision.ruleId).toBe('default-write-execute-ask')
+    expect(r.writePathFact).toMatchObject({ targetKind: 'missing', zone: 'workdir-normal' })
+    expect(r.writeExecutionPermit).toBeUndefined()
+  })
+
+  it('3.2.5 RED: existing target must not be eligible for the new-file fast path', async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'write-existing-target-')))
+    const target = path.join(root, 'existing.txt')
+    await fs.writeFile(target, 'before')
+    const fastTrack = vi.fn(async () => ({ approve: true as const }))
+    try {
+      const result = await evaluateToolCallGate(base({ workDir: root, userDataDir: path.join(root, '.userdata'), toolName: 'write_file',
+        toolInput: { path: target, content: 'replacement' }, fileAutoApproval: fastTrack }))
+      expect(result.writePathFact).toMatchObject({ targetKind: 'file', identity: { size: 6 } })
+      expect(result.fileAutoApproved).toBe(false)
+      expect(result.decision.type).not.toBe('auto-allow')
+      expect(result.autoApproveFallback?.reasonCode).toBe('unsafe_target')
+      expect(fastTrack).toHaveBeenCalledWith(expect.objectContaining({ writePathFact: result.writePathFact }))
+    } finally {
+      await fs.rm(root, { recursive: true, force: true })
+    }
   })
 
   it('仅 Hosted recheck 重算无副作用的桌面文件快通道，旧 loop recheck 仍 fail closed', async () => {
@@ -1807,16 +2062,36 @@ describe('evaluateToolCallGate', () => {
     expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'remote-browser-disabled' })
   })
 
-  it('远程 lark 写 + remoteDenyOutbound → deny(remote-deny-lark-write-outbound)', async () => {
+  it('远程 lark 写使用共同 IM policy snapshot 的 remoteDenyOutbound → deny(remote-deny-lark-write-outbound)', async () => {
     const r = await evaluateToolCallGate(
       base({
         toolName: 'run_lark_cli',
         toolInput: { args: ['doc', 'create'] },
         remoteContext: remoteContext(),
-        feishuConfig: { remoteDenyOutbound: true } as never
+        feishuConfig: { remoteDenyOutbound: false } as never,
+        imPolicySnapshot: {
+          domain: 'im', policyBehaviorVersion: 'im-v1.6', revision: 1,
+          snapshot: { remoteDenyOutbound: true }
+        }
       })
     )
     expect(r.decision).toMatchObject({ type: 'deny', ruleId: 'remote-deny-lark-write-outbound' })
+  })
+
+  it('IM standard compares Feishu message targets to the authenticated actor and splits policy outcomes', async () => {
+    const run = async (args: string[]) => evaluateToolCallGate(base({
+      toolName: 'run_lark_cli', toolInput: { args },
+      remoteContext: remoteContext({ authOwner: 'ou_owner' }),
+      imPolicySnapshot: { domain: 'im', policyBehaviorVersion: 'im-standard-v2', revision: 1, snapshot: { selectedPackage: 'standard' } }
+    }))
+    const self = await run(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_owner'])
+    const other = await run(['message', 'send', '--receive-id-type', 'open_id', '--receive-id', 'ou_other'])
+    const group = await run(['message', 'send', '--chat-type', 'group', '--receive-id', 'oc_group'])
+    const unknown = await run(['message', 'send', '--receive-id-type', 'user_id', '--receive-id', 'user_owner'])
+    expect(self.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-self-review', answerer: 'agent' })
+    expect(other.decision).toMatchObject({ type: 'require-confirm', ruleId: 'im-lark-message-direct-review', answerer: 'agent' })
+    expect(group.decision).toMatchObject({ type: 'require-confirm', ruleId: 'lark-message-group-human', answerer: 'user' })
+    expect(unknown.decision).toMatchObject({ type: 'require-confirm', ruleId: 'lark-message-target-unknown-human', answerer: 'user' })
   })
 
   it('出站写预算耗尽 → deny(remote-outbound-budget-pause-*) + budgetPause 消息', async () => {
@@ -1835,7 +2110,7 @@ describe('evaluateToolCallGate', () => {
     expect(r.budgetPause?.message).toContain('继续')
   })
 
-  it('远程 write_file 默认（无会话写信任）→ require-confirm(im-write-ask)', async () => {
+  it('远程 write_file 默认（无新版策略快照）→ require-confirm(im-write-ask)', async () => {
     const workDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'remote-write-gate-')))
     try {
       const r = await evaluateToolCallGate(
@@ -2028,11 +2303,14 @@ describe('evaluateToolCallGate', () => {
       mappedName: 'mcp__srv1__list_issues',
       description: '',
       inputSchema: {},
-      annotations: { readOnlyHint: true, destructiveHint: false }
+      annotations: { readOnlyHint: true, destructiveHint: false },
+      schemaHash: hashMcpToolSchema({}),
+      descriptorHash: hashMcpToolDescription({ serverId: 'srv1', originalName: 'list_issues', description: '', inputSchema: {},
+        annotations: { readOnlyHint: true, destructiveHint: false } })
     }
     // 注解安全：额外产 mcp-readonly 信号 → 命中 mcp-readonly-allow 放行，actionClass 降 read
     const r1 = await evaluateToolCallGate(
-      base({ toolName: readonlyEntry.mappedName, toolInput: {}, mcpEntry: readonlyEntry, appDb: db })
+      base({ toolName: readonlyEntry.mappedName, toolInput: {}, mcpQuerySource: 'public', mcpAccountAuthorization: 'authorized', mcpEntry: readonlyEntry, appDb: db })
     )
     expect(r1.decision.type).toBe('auto-allow')
     expect(r1.decision.ruleId).toBe('mcp-readonly-allow')
@@ -2072,10 +2350,13 @@ describe('evaluateToolCallGate', () => {
       mappedName: 'mcp__srv1__list_issues',
       description: '',
       inputSchema: {},
-      annotations: { readOnlyHint: true }
+      annotations: { readOnlyHint: true },
+      schemaHash: hashMcpToolSchema({}),
+      descriptorHash: hashMcpToolDescription({ serverId: 'srv1', originalName: 'list_issues', description: '', inputSchema: {},
+        annotations: { readOnlyHint: true } })
     }
     const r = await evaluateToolCallGate(
-      base({ toolName: readonlyEntry.mappedName, toolInput: {}, mcpEntry: readonlyEntry, appDb: db })
+      base({ toolName: readonlyEntry.mappedName, toolInput: {}, mcpQuerySource: 'public', mcpAccountAuthorization: 'authorized', mcpEntry: readonlyEntry, appDb: db })
     )
     expect(r.decision.type).toBe('require-confirm')
     if (r.decision.type === 'require-confirm') expect(r.decision.ruleId).toBe('mcp-readonly-allow')

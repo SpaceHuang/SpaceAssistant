@@ -28,6 +28,33 @@ export function createAgentSdkSafetyPolicy(input: {
     if (binding.phase === 'recheck') initial.delete(callKey(binding))
     return { kind: 'deny' as const, reasonCode }
   }
+  const ask = (binding: PermitBinding, result: ToolCallGateResult, args: ToolCallGateArgs) => {
+    const decision = result.decision
+    if (decision.type !== 'require-confirm') return deny(binding, 'POLICY_DENY')
+    return {
+      kind: 'ask' as const, confirmationId: binding.toolCallId, answerer: decision.answerer, reasonCode: decision.ruleId,
+      context: {
+        toolName: args.toolName,
+        ...(args.lane ? { lane: args.lane } : {}),
+        ...(args.currentPageUrl ? { currentPageUrl: args.currentPageUrl } : {}),
+        ...(args.dangerAssessment ? { dangerAssessment: args.dangerAssessment } : {}),
+        ...(args.remoteBudgetState ? { remoteBudgetState: args.remoteBudgetState } : {}),
+        decision: { riskLevel: decision.riskLevel, memoryTiers: decision.memoryTiers, timeoutMs: decision.timeoutMs,
+          answerer: decision.answerer, disposition: decision.disposition },
+        facts: result.facts,
+        approvedFactIds: result.approvedFactIds,
+        ...(result.readTargetMapping ? { readTargetMapping: result.readTargetMapping } : {}),
+        ...(result.readPathFact ? { readPathFact: result.readPathFact } : {}),
+        ...(result.readExecutionPermit ? { readExecutionPermit: result.readExecutionPermit } : {}),
+        ...(result.writePathFact ? { writePathFact: result.writePathFact } : {}),
+        ...(result.writeExecutionPermit ? { writeExecutionPermit: result.writeExecutionPermit } : {}),
+        ...(result.shellPrecheck ? { shellPrecheck: result.shellPrecheck } : {}),
+        ...(result.autoApproveFallback ? { autoApproveFallback: result.autoApproveFallback } : {}),
+        ...(result.mcpEntry ? { mcpEntry: result.mcpEntry } : {}),
+        ...(result.scriptPathHint ? { scriptPathHint: result.scriptPathHint } : {})
+      }
+    }
+  }
   return {
     markConfirmed(call: Pick<PermitBinding, 'invocationId' | 'toolCallId'>, answerer: 'user' | 'agent' = 'user', memory?: import('../../src/shared/confirmation/types').CacheKey) {
       const decision = initial.get(JSON.stringify([call.invocationId, call.toolCallId]))
@@ -85,11 +112,15 @@ export function createAgentSdkSafetyPolicy(input: {
             (previous.confirmed ? sameConfirmedDecision : decision.type === 'auto-allow')
           initial.delete(key)
           if (!recheckAllowed) {
-            const confirmationScopeChanged = Boolean(previous.confirmed) && (
-              !sameFacts || !sameWriteTarget || !sameReadTarget || !sameFeishuMediaTarget ||
-              !sameWriteApprovalConfiguration || !sameConfirmedDecision
-            )
-            return { kind: 'deny', reasonCode: confirmationScopeChanged ? 'FACTS_CHANGED' : 'POLICY_DENY' }
+            const confirmationScopeChanged = !sameFacts || !sameWriteTarget || !sameReadTarget || !sameFeishuMediaTarget ||
+              !sameWriteApprovalConfiguration || (previous.confirmed && !sameConfirmedDecision)
+            if (confirmationScopeChanged && sameAuthorizationVersion && decision.type === 'require-confirm' &&
+              decision.answerer === 'user' && decision.disposition === 'human-required') {
+              await input.onInitialGateResult?.(structuredClone(binding), structuredClone(result), gateArgs)
+              initial.set(key, { binding: structuredClone(binding), result: structuredClone(result), args: gateArgs, confirmed: false })
+              return ask(binding, result, gateArgs)
+            }
+            return { kind: 'deny', reasonCode: confirmationScopeChanged && previous.confirmed ? 'FACTS_CHANGED' : 'POLICY_DENY' }
           }
           return { kind: 'allow', authorizationVersion: binding.authorizationVersion }
         }
@@ -100,28 +131,7 @@ export function createAgentSdkSafetyPolicy(input: {
         }
         if (decision.type === 'require-confirm') {
           initial.set(key, { binding: structuredClone(binding), result: structuredClone(result), args: gateArgs, confirmed: false })
-          return {
-            kind: 'ask', confirmationId: binding.toolCallId, answerer: decision.answerer, reasonCode: decision.ruleId,
-            context: {
-              toolName: gateArgs.toolName,
-              ...(gateArgs.lane ? { lane: gateArgs.lane } : {}),
-              ...(args.currentPageUrl ? { currentPageUrl: args.currentPageUrl } : {}),
-              ...(args.dangerAssessment ? { dangerAssessment: args.dangerAssessment } : {}),
-              ...(args.remoteBudgetState ? { remoteBudgetState: args.remoteBudgetState } : {}),
-              decision: { riskLevel: decision.riskLevel, memoryTiers: decision.memoryTiers, timeoutMs: decision.timeoutMs, answerer: decision.answerer },
-              facts: result.facts,
-              approvedFactIds: result.approvedFactIds,
-              ...(result.readTargetMapping ? { readTargetMapping: result.readTargetMapping } : {}),
-              ...(result.readPathFact ? { readPathFact: result.readPathFact } : {}),
-              ...(result.readExecutionPermit ? { readExecutionPermit: result.readExecutionPermit } : {}),
-              ...(result.writePathFact ? { writePathFact: result.writePathFact } : {}),
-              ...(result.writeExecutionPermit ? { writeExecutionPermit: result.writeExecutionPermit } : {}),
-              ...(result.shellPrecheck ? { shellPrecheck: result.shellPrecheck } : {}),
-              ...(result.autoApproveFallback ? { autoApproveFallback: result.autoApproveFallback } : {}),
-              ...(result.mcpEntry ? { mcpEntry: result.mcpEntry } : {}),
-              ...(result.scriptPathHint ? { scriptPathHint: result.scriptPathHint } : {})
-            }
-          }
+          return ask(binding, result, gateArgs)
         }
         initial.delete(key)
         return { kind: 'deny', reasonCode: 'POLICY_DENY' }

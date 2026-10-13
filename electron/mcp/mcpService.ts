@@ -329,9 +329,10 @@ export function writeProfileFromInput(input: McpServerWriteInput) {
       ? { http: { endpoint: input.http.endpoint, ...(input.http.allowPrivateNetwork === true ? { allowPrivateNetwork: true as const } : {}) } }
       : {}),
     enabledToolNames: input.enabledToolNames,
+    ...(input.publicReadOnlyTools ? { publicReadOnlyTools: { ...input.publicReadOnlyTools } } : {}),
+    ...(input.accountAuthorizedTools ? { accountAuthorizedTools: { ...input.accountAuthorizedTools } } : {}),
     status: 'untested' as const,
     createdAt: input.createdAt ?? now,
     updatedAt: input.updatedAt ?? now
   }
 }
-

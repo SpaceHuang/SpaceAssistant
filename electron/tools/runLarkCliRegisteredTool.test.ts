@@ -22,7 +22,7 @@ function setup() {
     workDir: '/workspace', userDataDir: '/data', requestId: 'r', toolUseId: 'u', sessionId: 's',
     sendProgress: () => undefined, signal: new AbortController().signal,
     fileStateCache: new Map() as never, toolsConfig: {} as never,
-    feishuConfig: { cliPath: '/configured/lark-cli', larkCliDefaultTimeoutSec: 45, larkCliWriteRequiresConfirm: true } as never,
+    feishuConfig: { cliPath: '/configured/lark-cli', larkCliDefaultTimeoutSec: 45 } as never,
     lane: 'feishu',
     remoteContext: { source: 'feishu', messageId: 'm1', confirmPolicy: {} as never, authOwner: 'owner', authorizationGeneration: 7 },
     larkCliRunner: { resolveExecutable: () => executable, run } as never

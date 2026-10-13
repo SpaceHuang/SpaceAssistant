@@ -1,9 +1,10 @@
-import type { WeChatRemoteConfirmPolicy } from './wechatTypes'
 import type { FeishuBrowserRemoteHint } from './browserRemotePolicy'
+import type { ImPolicyPromptSnapshot } from './policy/policyPromptContext'
+import { formatImPolicyPromptContext } from './policy/policyPromptContext'
 
 export function buildWeChatRemoteSystemAppendix(opts: {
   userId: string
-  confirmPolicy: WeChatRemoteConfirmPolicy
+  policySnapshot?: ImPolicyPromptSnapshot
   browserRemoteHint?: FeishuBrowserRemoteHint
 }): string {
   let browserHint = ''
@@ -18,7 +19,7 @@ export function buildWeChatRemoteSystemAppendix(opts: {
 <wechat_remote_command>
 来源：微信 iLink Bot 远程指令（手机微信）
 回复要求：执行完成后由系统将摘要发回微信；不要假设用户能看到桌面界面
-安全：当前会话 source=wechat，写操作确认策略见 wechat.remoteConfirmPolicy=${opts.confirmPolicy}
+安全：当前会话 source=wechat。${formatImPolicyPromptContext(opts.policySnapshot)}
 输出：使用简洁中文纯文本，避免复杂 Markdown
 用户 ID：${opts.userId}${browserHint}
 </wechat_remote_command>`
@@ -29,5 +30,5 @@ export const WECHAT_REMOTE_SKILL_HINT = `
 微信远程指令约束：
 - 回复长度建议控制在 2000 字以内
 - 避免 Markdown 表格与复杂格式
-- 出站消息使用 wechat_reply / wechat_send 工具，调用即发送。
+- 普通任务结果由系统发回当前聊天，不要重复调用发送工具。不要因为发送工具可用就向其他用户或群聊外发内容；这类外发必须经过本次用户确认。
 </wechat_remote>`

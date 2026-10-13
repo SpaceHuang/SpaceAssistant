@@ -5,11 +5,11 @@ import type { FeishuInboundMessage } from '../../src/shared/feishuTypes'
 import { mergeFeishuConfig } from '../../src/shared/feishuTypes'
 import { DEFAULT_TOOLS_CONFIG } from '../../src/shared/domainTypes'
 
-const mockReplyFeishuText = vi.fn().mockResolvedValue(undefined)
 const mockRunFeishuRemoteAgent = vi.fn()
+const mockSendFeishuRemoteOutbound = vi.fn().mockResolvedValue(undefined)
 
-vi.mock('./feishuReply', () => ({
-  replyFeishuText: (...args: unknown[]) => mockReplyFeishuText(...args)
+vi.mock('./feishuRemoteOutbound', () => ({
+  sendFeishuRemoteOutbound: (...args: unknown[]) => mockSendFeishuRemoteOutbound(...args)
 }))
 
 vi.mock('./feishuRemoteAgent', () => ({
@@ -51,7 +51,7 @@ describe('RemoteCommandRouter pairing-code bind', () => {
     remoteEnabled = true
     allowlist = undefined
     auditAppend = vi.fn().mockResolvedValue(undefined)
-    mockReplyFeishuText.mockClear()
+    mockSendFeishuRemoteOutbound.mockClear()
     mockRunFeishuRemoteAgent.mockClear()
     ownerBind = new FeishuOwnerBindController({
       getOwnerOpenId: () => owner,
@@ -114,7 +114,7 @@ describe('RemoteCommandRouter pairing-code bind', () => {
     expect(owner).toBe('ou_owner')
     expect(processSpy).not.toHaveBeenCalled()
     expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
-    const replies = mockReplyFeishuText.mock.calls.map((c) => String(c[2]))
+    const replies = mockSendFeishuRemoteOutbound.mock.calls.map((c) => String((c[0] as { body?: unknown }).body))
     expect(replies.some((t) => t.includes('已绑定'))).toBe(true)
   })
 
@@ -131,8 +131,7 @@ describe('RemoteCommandRouter pairing-code bind', () => {
     await router.handleInbound(p2p({ messageId: 'm1', senderOpenId: 'ou_x', content: '绑定 WRONGXXX' }))
     expect(owner).toBeUndefined()
     expect(processSpy).not.toHaveBeenCalled()
-    const replies = mockReplyFeishuText.mock.calls.map((c) => String(c[2]))
-    expect(replies.some((t) => t.includes('配对码错误'))).toBe(true)
+    expect(mockSendFeishuRemoteOutbound).not.toHaveBeenCalled()
   })
 
   it('concurrent bind: exactly one sender wins, other does not enter Agent', async () => {
@@ -147,7 +146,7 @@ describe('RemoteCommandRouter pairing-code bind', () => {
     expect(owner).toBe('ou_first')
     expect(processSpy).not.toHaveBeenCalled()
     expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
-    const replies = mockReplyFeishuText.mock.calls.map((c) => String(c[2]))
+    const replies = mockSendFeishuRemoteOutbound.mock.calls.map((c) => String((c[0] as { body?: unknown }).body))
     expect(replies.some((t) => t.includes('已绑定'))).toBe(true)
   })
 

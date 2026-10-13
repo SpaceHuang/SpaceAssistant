@@ -11,14 +11,9 @@ import { getSession, openDatabase, createSession } from '../database'
 import { createWorkDirManager } from '../workDirManager'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 
-const mockReplyFeishuText = vi.fn().mockResolvedValue(undefined)
 const mockRunFeishuRemoteAgent = vi.fn()
 const mockResolveFeishuSession = vi.fn()
 const mockSendFeishuRemoteOutbound = vi.fn().mockResolvedValue(undefined)
-
-vi.mock('./feishuReply', () => ({
-  replyFeishuText: (...args: unknown[]) => mockReplyFeishuText(...args)
-}))
 
 vi.mock('./feishuRemoteAgent', () => ({
   runFeishuRemoteAgent: (...args: unknown[]) => mockRunFeishuRemoteAgent(...args)
@@ -78,7 +73,6 @@ describe('RemoteCommandRouter workdir disambiguation identity', () => {
     markCompleted = vi.fn().mockResolvedValue(true)
     markExecuting = vi.fn().mockResolvedValue(true)
     tryClaim = vi.fn().mockResolvedValue({ ok: true, claimId: 'claim-1' })
-    mockReplyFeishuText.mockClear()
     mockRunFeishuRemoteAgent.mockClear()
     mockSendFeishuRemoteOutbound.mockClear()
   })
@@ -138,7 +132,7 @@ describe('RemoteCommandRouter workdir disambiguation identity', () => {
         content: '/sa @alpha list files'
       })
     )
-    expect(mockReplyFeishuText.mock.calls.some((c) => String(c[2]).includes('1)'))).toBe(true)
+    expect(mockSendFeishuRemoteOutbound.mock.calls.some((c) => String((c[0] as { body?: unknown }).body).includes('1)'))).toBe(true)
     expect(processSpy).not.toHaveBeenCalled()
 
     // Rebind: clear A's pending + switch owner to B
@@ -155,7 +149,7 @@ describe('RemoteCommandRouter workdir disambiguation identity', () => {
     )
     expect(processSpy).not.toHaveBeenCalled()
     expect(mockRunFeishuRemoteAgent).not.toHaveBeenCalled()
-    const replies = mockReplyFeishuText.mock.calls.map((c) => String(c[2]))
+    const replies = mockSendFeishuRemoteOutbound.mock.calls.map((c) => String((c[0] as { body?: unknown }).body))
     expect(replies.some((t) => t.includes('不是已绑定'))).toBe(true)
   })
 
@@ -169,8 +163,6 @@ describe('RemoteCommandRouter workdir disambiguation identity', () => {
       })
     )
     processSpy?.mockClear()
-    mockReplyFeishuText.mockClear()
-
     await router.handleInbound(
       p2p({
         messageId: 'm-intruder',
@@ -179,7 +171,7 @@ describe('RemoteCommandRouter workdir disambiguation identity', () => {
       })
     )
     expect(processSpy).not.toHaveBeenCalled()
-    const replies = mockReplyFeishuText.mock.calls.map((c) => String(c[2]))
+    const replies = mockSendFeishuRemoteOutbound.mock.calls.map((c) => String((c[0] as { body?: unknown }).body))
     expect(replies.some((t) => t.includes('不是已绑定'))).toBe(true)
   })
 

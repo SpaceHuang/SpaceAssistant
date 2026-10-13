@@ -83,6 +83,9 @@ export function extractMcpInvocationSignal(input: {
   toolInput: Record<string, unknown>
   annotationsSafe: boolean
   actionClass?: 'read' | 'write'
+  querySource?: 'public' | 'local-sensitive' | 'unknown'
+  accountAuthorization?: 'authorized' | 'unauthorized' | 'unknown'
+  descriptorValid?: boolean
   inputSchema: Record<string, unknown>
 }): FactSignal {
   const actionClass: 'read' | 'write' =
@@ -102,6 +105,23 @@ export function extractMcpInvocationSignal(input: {
       ? sanitizeAgentText(input.toolInput.path).text
       : undefined
   const method = typeof input.toolInput.method === 'string' ? input.toolInput.method : undefined
+  const required = Array.isArray(input.inputSchema.required)
+    ? input.inputSchema.required.filter((item): item is string => typeof item === 'string')
+    : []
+  const missingFacts = required.filter((key) => !Object.hasOwn(input.toolInput, key))
+  const completeness: 'complete' | 'partial' | 'capability-description-stale' = input.descriptorValid === false
+    ? 'capability-description-stale'
+    : missingFacts.length ? 'partial' : 'complete'
+  const queryText = ['query', 'search_query', 'q', 'prompt'].map((key) => input.toolInput[key])
+    .find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+  const dataSources = Object.keys(input.toolInput).filter((key) =>
+    /^(source|account|collection|database|index|workspace|repository|url|path|file|page|cursor|offset|limit)$/i.test(key))
+  const dataDestinations = Object.keys(input.toolInput).filter((key) =>
+    /^(destination|target|recipient|to|output|write_path|file_path)$/i.test(key))
+  const searchLike = /search|query|find|lookup/i.test(input.toolName)
+  const sideEffect: 'read' | 'write' | 'unknown' = input.descriptorValid === false ? 'unknown' :
+    dataDestinations.length > 0 || /^(POST|PUT|PATCH|DELETE)$/i.test(method ?? '') ? 'write' :
+      completeness === 'complete' && (searchLike || input.annotationsSafe) ? 'read' : 'unknown'
   const summary = summarizeMcpArgs(input.toolInput)
   return {
     kind: 'mcp-invocation',
@@ -114,6 +134,14 @@ export function extractMcpInvocationSignal(input: {
     argNames: summary.argNames,
     argsDigest: summary.argsDigest,
     argsTruncated: summary.argsTruncated,
-    classificationBasis
+    classificationBasis,
+    sideEffect,
+    dataSources,
+    dataDestinations,
+    ...(queryText ? { queryText: sanitizeAgentText(queryText).text } : {}),
+    querySource: input.querySource ?? 'unknown',
+    accountAuthorization: input.accountAuthorization ?? 'unknown',
+    completeness,
+    missingFacts
   }
 }

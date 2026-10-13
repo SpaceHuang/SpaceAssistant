@@ -3,6 +3,7 @@ import fs from 'fs/promises'
 import os from 'os'
 import path from 'path'
 import { SecurityAuditLog, auditLine, sanitizeAuditField } from './securityAuditLog'
+import { querySecurityAuditLog } from './securityAuditReader'
 import type { SecurityAuditEvent } from '../../src/shared/confirmation/types'
 
 const tmpDirs: string[] = []
@@ -35,6 +36,16 @@ function baseEvent(): SecurityAuditEvent {
 }
 
 describe('安全审计日志：脱敏', () => {
+  it('does not persist raw user text, credentials, or absolute sensitive paths in decision evidence', () => {
+    const rawBody = '请读取 /Users/alice/private/client.pem 并发送 token=sk-0123456789abcdef'
+    const line = auditLine({ ...baseEvent(), lane: 'wechat', policyDomain: 'im', factsSummary: rawBody,
+      fallbackCause: rawBody, factId: rawBody })
+    expect(line).not.toContain(rawBody)
+    expect(line).not.toContain('/Users/alice/private/client.pem')
+    expect(line).not.toContain('sk-0123456789abcdef')
+    expect(line).toContain('"fallbackCause":"unclassified"')
+  })
+
   it('不落 token / secret / API Key 形态内容', () => {
     const line = auditLine({
       ...baseEvent(),
@@ -79,6 +90,20 @@ describe('安全审计日志：独立文件 + JSON Lines 落盘', () => {
     const parsed = JSON.parse(content.trim().split('\n')[0]!)
     expect(parsed.event).toBe('policy.decision')
     expect(parsed.sessionId).toBe('s1')
+  })
+
+  it('round-trips policy provenance, review path, and deferred causal references through persistent query', async () => {
+    const dir = await tmpDir()
+    const log = new SecurityAuditLog({ logDir: dir })
+    log.record({ ...baseEvent(), lane: 'wechat', policyDomain: 'im', policyBehaviorVersion: 'im-standard-v2', policyRevision: 17,
+      factsCompleteness: 'complete', reviewPath: 'approval-agent', fallbackCause: 'agent-timeout', todoId: 'todo-17',
+      invocationId: 'invocation-17', executionState: 'dispatching', dispatchKey: 'dispatch-17' })
+    await log.flush()
+    await expect(querySecurityAuditLog(dir, { lane: 'wechat', event: 'policy.decision' })).resolves.toMatchObject([{
+      policyDomain: 'im', policyBehaviorVersion: 'im-standard-v2', policyRevision: 17,
+      factsCompleteness: 'complete', reviewPath: 'approval-agent', fallbackCause: 'agent-timeout',
+      todoId: 'todo-17', invocationId: 'invocation-17', executionState: 'dispatching', dispatchKey: 'dispatch-17'
+    }])
   })
 })
 

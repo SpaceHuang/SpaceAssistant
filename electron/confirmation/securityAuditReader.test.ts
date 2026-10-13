@@ -28,6 +28,15 @@ describe('securityAuditReader（设置页第 5 区只读查询）', () => {
     expect(out.map((e) => e.ts)).toEqual([1, 2])
   })
 
+  it('sanitizes decision evidence from historical JSONL before exposing it to readers', () => {
+    const raw = '/Users/alice/private/client.pem token=sk-0123456789abcdef'
+    const parsed = parseSecurityAuditLines(JSON.stringify(ev({ lane: 'wechat', policyDomain: 'im', factsSummary: raw,
+      fallbackCause: raw, factId: raw })))
+    expect(JSON.stringify(parsed)).not.toContain('/Users/alice/private/client.pem')
+    expect(JSON.stringify(parsed)).not.toContain('sk-0123456789abcdef')
+    expect(parsed[0]?.factsSummary).toMatch(/^sha256:[0-9a-f]{24}$/)
+  })
+
   it('filterSecurityAuditEvents：按时间/链路/事件/工具过滤，倒序 + limit', () => {
     const events = [
       ev({ ts: 1, lane: 'desktop', event: 'cache.hit', toolName: 'run_shell' }),

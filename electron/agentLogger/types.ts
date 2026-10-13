@@ -94,6 +94,7 @@ export type AgentLogEventName =
   | 'mcp.deferred_unused_surfaced'
   | 'mcp.deferredDegradedToEager'
   | 'mcp.snapshot.executor_dropped'
+  | 'im.policy_snapshot.load_failed'
   | 'tool.deferred_unsurfaced'
   | 'tool.confirm.remote_write_grant_required'
   | 'tool.confirm.authorization_revoked'

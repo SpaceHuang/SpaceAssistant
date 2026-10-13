@@ -27,7 +27,8 @@ describe('createAgentSdkConfirmationPort', () => {
 
   it('returns a durable deferred confirmation from the explicit IM deferral callback', async () => {
     const channel = { request: vi.fn(async () => ({ kind: 'rejected', cause: 'agent-deny', answererKind: 'agent' })), cancel: vi.fn() }
-    const defer = vi.fn(async () => ({ kind: 'deferred' as const, todoId: 'todo-1', invocationId: 'inv-1',
+    const defer = vi.fn(async () => ({ kind: 'deferred' as const, todoId: 'todo-1', invocationId: 'inv-1', cause: 'agent-undetermined' as const,
+      executionState: 'not-executed' as const, retryable: false, nextStep: 'await-user' as const,
       checkpointRef: { checkpointId: 'checkpoint-1', workflowRevision: 2 } }))
     const port = createAgentSdkConfirmationPort({ createChannel: () => channel, publish: vi.fn(), cancel: vi.fn(), defer })
     const result = await port({ call: { invocationId: 'inv-1', toolCallId: 'call-1', toolName: 'write_file', input: {} },
@@ -37,9 +38,26 @@ describe('createAgentSdkConfirmationPort', () => {
     expect(defer).toHaveBeenCalledOnce()
   })
 
+  it('routes strict human-required invocation to durable deferral before opening a channel', async () => {
+    const channel = { request: vi.fn(), cancel: vi.fn() }
+    const publish = vi.fn()
+    const defer = vi.fn(async () => ({ kind: 'deferred' as const, todoId: 'human-todo', invocationId: 'human-inv', cause: 'human-required' as const,
+      executionState: 'not-executed' as const, retryable: false, nextStep: 'await-user' as const,
+      checkpointRef: { checkpointId: 'human-checkpoint', workflowRevision: 1 } }))
+    const port = createAgentSdkConfirmationPort({ createChannel: () => channel, publish, cancel: vi.fn(), defer })
+    const result = await port({ call: { invocationId: 'human-inv', toolCallId: 'human-call', toolName: 'write_file', input: { path: 'a' } },
+      modelTurn: 1, confirmationId: 'human-call', answerer: 'user', reasonCode: 'locked-confirm-every-time',
+      context: { ...context, decision: { ...context.decision, answerer: 'user', disposition: 'human-required' } } })
+    expect(result).toMatchObject({ kind: 'deferred', todoId: 'human-todo', invocationId: 'human-inv' })
+    expect(defer).toHaveBeenCalledOnce()
+    expect(channel.request).not.toHaveBeenCalled()
+    expect(publish).not.toHaveBeenCalled()
+  })
+
   it('offers agent-approved outcomes to policy so insufficient direct delegation can still defer', async () => {
     const channel = { request: vi.fn(async () => ({ kind: 'approved', cause: 'agent-approved', answererKind: 'agent' })), cancel: vi.fn() }
-    const defer = vi.fn(async () => ({ kind: 'deferred' as const, todoId: 'todo-low-evidence', invocationId: 'inv-2',
+    const defer = vi.fn(async () => ({ kind: 'deferred' as const, todoId: 'todo-low-evidence', invocationId: 'inv-2', cause: 'insufficient-delegation-evidence' as const,
+      executionState: 'not-executed' as const, retryable: false, nextStep: 'await-user' as const,
       checkpointRef: { checkpointId: 'checkpoint-2', workflowRevision: 3 } }))
     const port = createAgentSdkConfirmationPort({ createChannel: () => channel, publish: vi.fn(), cancel: vi.fn(), defer })
     const result = await port({ call: { invocationId: 'inv-2', toolCallId: 'call-2', toolName: 'write_file', input: {} },

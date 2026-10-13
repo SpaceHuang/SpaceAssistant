@@ -224,7 +224,7 @@ describe('config:set API Key transaction boundary', () => {
 
     await setConfig({}, { feishu: { remoteEnabled: false } });
     expect(epochStore.current('feishu')).toBe(2);
-    expect(todos.get('close-reenable-todo', { channel: 'feishu', identityKey: 'identity-a', ownerId: 'owner-a', authorizationEpoch: 1, rule })?.status).toBe('invalidated');
+    expect(todos.get('close-reenable-todo', { channel: 'feishu', identityKey: 'identity-a', ownerId: 'owner-a', authorizationEpoch: 1, originSessionId: 'origin', rule })?.status).toBe('invalidated');
     await setConfig({}, { feishu: { remoteEnabled: true } });
     expect(epochStore.current('feishu')).toBe(2);
     await setConfig({}, { feishu: { remoteSenderAllowlist: ['owner-b'] } });

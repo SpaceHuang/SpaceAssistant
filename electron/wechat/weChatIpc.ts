@@ -8,7 +8,6 @@ import { getDbConnection } from '../database'
 import { SqliteDecisionCache } from '../confirmation/sqliteDecisionCache'
 import {
   mergeWeChatConfig,
-  weChatConfigNeedsPolicyMigration,
   type WeChatConfig,
   type WeChatConnectionStatus
 } from '../../src/shared/wechatTypes'
@@ -47,6 +46,7 @@ import { flushWeChatCliLogger, logWeChatCliEvent } from './weChatCliLogger'
 import { isTrayEnabled } from '../tray'
 import type { TurnRuntime } from '../turnRuntime'
 import { ensureRemoteImModelConfigMigrated } from '../remote/remoteImModelConfigDb'
+import { migrateLegacyImConfigBeforeChannelWrite, stripChannelPolicyFields } from '../confirmation/legacyImConfigBoundary'
 
 const WECHAT_CONFIG_KEY = 'config.wechat'
 
@@ -73,13 +73,6 @@ export function readWeChatConfigFromDb(db: AppDatabase): WeChatConfig {
   try {
     const stored = JSON.parse(raw) as Partial<WeChatConfig>
     const merged = mergeWeChatConfig(stored)
-    if (weChatConfigNeedsPolicyMigration(stored, merged)) {
-      setConfigValue(db, WECHAT_CONFIG_KEY, JSON.stringify(merged))
-      logWeChatCliEvent('info', 'wechat.config.migrated', {
-        from: stored.remoteConfirmPolicy,
-        to: merged.remoteConfirmPolicy
-      })
-    }
     return merged
   } catch {
     return mergeWeChatConfig(null)
@@ -163,7 +156,7 @@ export function createWeChatBundle(deps: {
         toolCallId: envelope.toolCallId, toolName: envelope.toolName, input: envelope.canonicalArgs,
         confirmationReceipt: context.confirmationReceipt, lane: 'wechat', providerRouteId: context.providerRouteId,
         remoteContext: {
-          source: 'wechat', messageId: context.messageId, confirmPolicy: config.remoteConfirmPolicy,
+          source: 'wechat', messageId: context.messageId,
           userId: todo.ownerId, authOwner: todo.ownerId, originSessionId: todo.originSessionId,
           workDirProfileId: resolved.profileId, requestId: envelope.requestId,
           authorizationGeneration: remoteAuthorizationRegistry.getGeneration('wechat'),
@@ -495,8 +488,8 @@ export function registerWeChatIpcHandlers(
   ipcMain.handle('wechat:pending-confirms', async () => b.imChannel.listPending())
 
   ipcMain.handle('wechat:confirm-response', async (_e, payload: { requestId: string; approved: boolean }) => {
-    const ok = b.imChannel.resolveFromDesktop(payload.requestId, payload.approved)
-    return { ok }
+    void payload
+    return { ok: false, error: 'desktop_remote_confirmation_forbidden' }
   })
 
   ipcMain.handle(
@@ -530,6 +523,7 @@ export function persistWeChatConfig(
   partial: Partial<WeChatConfig>,
   options: { allowlist?: 'preserve' | 'replace' } = {}
 ): WeChatConfig {
+  migrateLegacyImConfigBeforeChannelWrite(db)
   const prev = readWeChatConfigFromDb(db)
   const allowlist = options.allowlist === 'replace'
     ? partial.remoteSenderAllowlist ?? []
@@ -544,7 +538,7 @@ export function persistWeChatConfig(
     : prev.loggedIn && !next.loggedIn ? 'logout' : allowlistChanged ? 'allowlist_changed' : null
   if (reason) {
     const coordinator = createRemoteAuthorizationRevocationCoordinator({
-      writeConfig: () => { setConfigValue(db, WECHAT_CONFIG_KEY, JSON.stringify(next)); return next },
+      writeConfig: () => { setConfigValue(db, WECHAT_CONFIG_KEY, JSON.stringify(stripChannelPolicyFields(next as unknown as Record<string, unknown>))); return next },
       advanceEpoch: (channel, why) => remoteAuthorizationRegistry.advanceAuthorizationEpoch(channel, why),
       cascade: (channel, epoch, why) => remoteAuthorizationRegistry.cascadeAuthorizationRevocation(channel, epoch, why),
       completeRevocation: (channel, epoch) => remoteAuthorizationRegistry.completeAuthorizationRevocation(channel, epoch),
@@ -552,7 +546,7 @@ export function persistWeChatConfig(
       markChannelsReady: (channels) => remoteAuthorizationRegistry.markChannelsReady(channels)
     })
     coordinator.commit({ channels: ['wechat'], reason, config: next })
-  } else setConfigValue(db, WECHAT_CONFIG_KEY, JSON.stringify(next))
+  } else setConfigValue(db, WECHAT_CONFIG_KEY, JSON.stringify(stripChannelPolicyFields(next as unknown as Record<string, unknown>)))
   logWeChatCliEvent('info', 'wechat.config.persist', { keys: Object.keys(partial) })
   return next
 }

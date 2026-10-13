@@ -1340,6 +1340,7 @@ export function runMigrations(conn: DatabaseSync): void {
       singleton INTEGER PRIMARY KEY CHECK(singleton=1),
       state TEXT NOT NULL CHECK(state IN ('disabled','enabled','closing')),
       close_required INTEGER NOT NULL DEFAULT 0 CHECK(close_required IN (0,1)),
+      behavior_version TEXT NOT NULL DEFAULT '',
       updated_at INTEGER NOT NULL
     );
     INSERT OR IGNORE INTO remote_async_approval_gate_state(singleton,state,close_required,updated_at) VALUES(1,'disabled',0,0);`)
@@ -1643,6 +1644,68 @@ export function runMigrations(conn: DatabaseSync): void {
       }
     }
     version = 94
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 94) runInTransaction(conn, () => {
+    conn.exec(`CREATE TABLE IF NOT EXISTS policy_behavior_snapshots (
+      domain TEXT PRIMARY KEY NOT NULL CHECK(domain IN ('desktop','im','automation')),
+      policy_behavior_version TEXT NOT NULL CHECK(length(policy_behavior_version) > 0),
+      revision INTEGER NOT NULL CHECK(revision >= 0),
+      snapshot_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL CHECK(updated_at >= 0)
+    );
+    CREATE INDEX IF NOT EXISTS idx_policy_behavior_domain_revision
+      ON policy_behavior_snapshots(domain,revision);`)
+    conn.exec(`CREATE TABLE IF NOT EXISTS policy_behavior_snapshot_history (
+      history_id TEXT PRIMARY KEY NOT NULL,
+      domain TEXT NOT NULL CHECK(domain IN ('desktop','im','automation')),
+      policy_behavior_version TEXT NOT NULL CHECK(length(policy_behavior_version) > 0),
+      snapshot_json TEXT NOT NULL,
+      archived_at INTEGER NOT NULL CHECK(archived_at >= 0)
+    );`)
+    conn.exec(`CREATE TABLE IF NOT EXISTS policy_authorization_epochs (
+      domain TEXT PRIMARY KEY NOT NULL CHECK(domain IN ('desktop','im','automation')),
+      epoch INTEGER NOT NULL CHECK(epoch >= 0)
+    );
+    CREATE TABLE IF NOT EXISTS policy_deferred_todos (
+      todo_id TEXT PRIMARY KEY NOT NULL,
+      domain TEXT NOT NULL CHECK(domain IN ('desktop','im','automation')),
+      status TEXT NOT NULL CHECK(status IN ('active','invalidated','completed'))
+    );
+    CREATE TABLE IF NOT EXISTS policy_authorizations (
+      authorization_id TEXT PRIMARY KEY NOT NULL,
+      domain TEXT NOT NULL CHECK(domain IN ('desktop','im','automation')),
+      status TEXT NOT NULL CHECK(status IN ('active','revoked','consumed'))
+    );
+    CREATE TABLE IF NOT EXISTS policy_audit_events (
+      event_id TEXT PRIMARY KEY NOT NULL,
+      domain TEXT NOT NULL CHECK(domain IN ('desktop','im','automation')),
+      event_json TEXT NOT NULL
+    );`)
+    version = 95
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 95) runInTransaction(conn, () => {
+    if (hasTable(conn, 'deferred_todos')) {
+      const columns: Array<[string, string]> = [
+        ['policy_behavior_version', 'TEXT'],
+        ['policy_revision', 'INTEGER'],
+        ['policy_epoch', 'INTEGER']
+      ]
+      for (const [name, declaration] of columns) {
+        if (!hasColumn(conn, 'deferred_todos', name)) {
+          conn.exec(`ALTER TABLE deferred_todos ADD COLUMN ${name} ${declaration}`)
+        }
+      }
+    }
+    version = 96
+    conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
+  })
+  if (version === 96) runInTransaction(conn, () => {
+    if (hasTable(conn, 'remote_async_approval_gate_state') && !hasColumn(conn, 'remote_async_approval_gate_state', 'behavior_version')) {
+      conn.exec("ALTER TABLE remote_async_approval_gate_state ADD COLUMN behavior_version TEXT NOT NULL DEFAULT ''")
+    }
+    version = 97
     conn.prepare('UPDATE schema_meta SET value = ? WHERE key = ?').run(String(version), SCHEMA_META_KEYS.schemaVersion)
   })
   } catch (migrationError) {
