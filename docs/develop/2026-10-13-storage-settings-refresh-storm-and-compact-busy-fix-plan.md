@@ -1,6 +1,6 @@
 # 存储占用页修复与压缩优化计划：刷新风暴 + 归档卡 20% 根因修复（P1–P3）+ 压缩 I/O 效率与 worker 化（P4–P5）
 
-> 状态：**v3 待实施**（基准重定为 HEAD `ea273da6`；v1 基于 `6fe55d43` 定位根因，v2 新增 P4/P5，v3 吸收评审 `docs/review/2026-10-13-storage-settings-refresh-storm-and-compact-busy-fix-plan-review.md` 阻断项 B1–B3，并经实测修正其 B2 结论——见 §1.2 D2 第二条）
+> 状态：**v3 已实施（P1–P5 代码与单测全部完成，2026-10-13）**（基准重定为 HEAD `ea273da6`；v1 基于 `6fe55d43` 定位根因，v2 新增 P4/P5，v3 吸收评审 `docs/review/2026-10-13-storage-settings-refresh-storm-and-compact-busy-fix-plan-review.md` 阻断项 B1–B3，并经实测修正其 B2 结论——见 §1.2 D2 第二条；实施分支 `fix/storage-compact-busy-io-worker`，worktree `.worktrees/fix-storage-compact`。P5-T10 与 §五 V5–V7 为真机验收项，待安装环境执行；§1.1 症状 A 复现验证仍待真机，P3 已按防御性口径实施，若验证确认症状 A 消失可整体移除）
 > 日期：2026-10-13（v3 同日修订）
 > 关联现象：用户报告「设置-存储占用页面进入之后一直在自动刷新用量；归档并压缩按钮点击后，一直卡在 20%」（本机安装环境，旧构建）。**注意：`ce06b3b5`（profile 扫描移入 managed workers）已重写症状 A 的根因链代码，症状 A 是否仍复现需先在当前打包版本验证（§1.1），再决定是否移除 §1.1/P3 与收敛标题。**
 > 关联模块：`electron/storage/sessionStorageMaintenance.ts`、`electron/ipc/storageMaintenanceIpc.ts`、`src/renderer/components/Config/StorageSettingsTab.tsx`、`electron/storageProfile/storageProfileCoordinator.ts`
@@ -243,44 +243,57 @@ worker 用**只读连接**对源库执行 `VACUUM INTO '<staging>'`：只读源�
 
 **先决 spike（评审补充建议，排在 P5-T2 之前，各半天内产出结论回填本节）**：
 
-- [ ] **P5-S1 只读连接执行 `VACUUM INTO` 的 WAL 可行性**：node:sqlite `readOnly` 打开在 WAL 模式下依赖 `-shm/-wal` 可读与目录写权限，`VACUUM INTO` 的快照读语义需用本机 764MB 库实测一次（含：worker 线程内打开、staging 落盘、目标文件已存在时报错语义）。
+- [x] **P5-S1 只读连接执行 `VACUUM INTO` 的 WAL 可行性**：node:sqlite `readOnly` 打开在 WAL 模式下依赖 `-shm/-wal` 可读与目录写权限，`VACUUM INTO` 的快照读语义需用本机 764MB 库实测一次（含：worker 线程内打开、staging 落盘、目标文件已存在时报错语义）。
   - **DoD**： spike 脚本 + 结论小节（可行 / 需 RW 打开 + 补偿 fence / 不可行则 P5 核心机制改选 in-place VACUUM-in-worker 变体并重估 §5.0）。
-- [ ] **P5-S2 临界区 close/reopen 对其它 `AppDatabase` 持有方的影响面**：主连接经 `getDbConnection` 共享，close→rename→reopen 窗口内的读请求落点需逐一清点。已知持有方：`StorageProfileCoordinator`（现状 `runMaintenance` 已先 abort/排干 started readers、`maintenanceByDatabase` fence 拒绝窗口内新请求，`storageProfileCoordinator.ts:87-90`/`:47`/`:70`——编排器继续经由 IPC handler 的 `withMaintenance` 包装即可继承该 fence）、IM 桥、spill worker、periodic maintenance 定时器。
+  - **S1 结论（2026-10-13，Node 24 / node:sqlite / Windows 实测）**：**可行**。① RW 连接持有时 `readOnly` 打开 WAL 库成功，quick_check ok；② `PRAGMA data_version` 探针有效（RW 连接提交后 2→3）；③ `VACUUM INTO` 对已存在目标报错（"file is not a database"，语义=目标必须不存在，worker 先 `rmSync` 保证）；④ staging 产物 freelist=0、auto_vacuum 继承源库；⑤ 3MB 库 VACUUM INTO 仅 15ms，staging 字节轮询须由编排器侧定时器承担（worker 线程在 exec 期间阻塞，自身无法轮询）——已按此实现（编排器 200ms statSync 轮询 + externalHeartbeat 喂 watchdog）。764MB 真库量级留待 V7 真机复核。
+- [x] **P5-S2 临界区 close/reopen 对其它 `AppDatabase` 持有方的影响面**：主连接经 `getDbConnection` 共享，close→rename→reopen 窗口内的读请求落点需逐一清点。已知持有方：`StorageProfileCoordinator`（现状 `runMaintenance` 已先 abort/排干 started readers、`maintenanceByDatabase` fence 拒绝窗口内新请求，`storageProfileCoordinator.ts:87-90`/`:47`/`:70`——编排器继续经由 IPC handler 的 `withMaintenance` 包装即可继承该 fence）、IM 桥、spill worker、periodic maintenance 定时器。
   - **DoD**：持有方清单表（每方：窗口内行为 / 是否被既有 fence 覆盖 / 需要编排器补的动作）；若存在未被覆盖方，编排器临界区前置显式排干步骤（进 P5-T3 任务范围）。
+  - **S2 持有方清单（实施口径）**：
 
-- [ ] **P5-T1 协议与类型**
+    | 持有方 | 窗口内行为 | 既有 fence 覆盖 | 编排器动作 |
+    | --- | --- | --- | --- |
+    | StorageProfileCoordinator | 排干 readers、拒绝新请求 | ✅ `withMaintenance` | 无（继承） |
+    | 聊天/IM 出站轮次 | 窗口内 getDbConnection 抛 "Database connection is closed"，轮次失败一次、可重试 | ❌ | 依赖忙碌预检查（起压时无活跃轮次）+ 秒级窗口；不补代码（计划 §5.0 口径） |
+    | periodic maintenance 定时器 | `schedulePeriodicSqliteMaintenance` 内部 try/catch → onResult('failed') | ✅ 自捕获 | 无 |
+    | spill worker | 只解析已读取的 payload 字符串，不持有主连接 | ✅ 天然隔离 | 无 |
+    | butler / usage-stats / metrics 等按需查询方 | 窗口内单次查询报错 | ❌ | 同聊天口径（窗口毫秒~秒级）；已通过 `reopenDatabaseConnection` 保持 AppDatabase 对象身份，reopen 后全部持有方自动恢复 |
+    | 防抖 save 定时器 | `close()` 先 `flushNow`（清定时器）再关连接；`reopenDatabaseConnection` 重建 `db.save` 闭包 | ✅ | 无 |
+
+    关键实现：`sqliteStore.reopenDatabaseConnection(db)` 以 `Object.assign` 原位换入新连接（save/flushSave/close 闭包全部重建、WeakMap 重挂），**AppDatabase 对象身份不变**——所有捕获了 `db` 引用的持有方无需任何改动。
+
+- [x] **P5-T1 协议与类型**
   - 新文件：`electron/storage/sessionStorageMaintenanceWorkerProtocol.ts`（主/worker 共用消息类型：`{type:'progress', phase, completedBytes, totalBytes} | {type:'result', …现状返回值} | {type:'error', code, message}`）；`src/shared/storageTypes.ts` phase 联合增 `'swap'`。
   - **DoD**：`npm run typecheck:shared` + `typecheck:renderer` 通过。
 
-- [ ] **P5-T2 worker 模块**
+- [x] **P5-T2 worker 模块**
   - 新文件：`electron/storage/sessionStorageMaintenanceWorker.ts`（`parentPort` 消息驱动，模式照抄 `spillReferenceCollectorWorker.ts`）
   - 职责：接收 `{dbPath, spillRoot, degradedRoot, stagingPath, archivePath}` → 复制归档（复用 P4-T1/T2，含双侧哈希）→ quick_check 归档 → **只读连接** `VACUUM INTO staging`（staging 路径先确保不存在）→ `quick_check` staging → 按 200ms 轮询 staging 字节 + 复制回调上报进度（节流 ≥100ms 或 ≥8 MB）→ 回 result。
   - **DoD**：worker 单测（`new Worker` 直拉，覆盖进度上报、归档校验失败、VACUUM INTO 失败路径）；进度消息速率被断言（≤10 条/秒）。
 
-- [ ] **P5-T3 main 编排器重构**
+- [x] **P5-T3 main 编排器重构**
   - 文件：`sessionStorageMaintenance.ts`——`compactSessionDatabase` 拆为编排器（保持现有签名与返回值字段全部兼容）：fence/precheck（P1 谓词不动）→ 记 `data_version` → spawn worker（双路径解析 + 进程内降级，仿 `spillReferenceWorker.ts:38-45`）→ 透传进度到既有 `storage:maintenance-progress` → 临界区（§5.0）→ 写报告（P4-T6 字段）。
   - **DoD**：`sessionStorageMaintenance.test.ts` 既有用例全绿（外部行为不变，仅时长分布变化）；新增「worker 缺失编译产物时进程内降级」用例。
 
-- [ ] **P5-T4 快照一致性**
+- [x] **P5-T4 快照一致性**
   - **DoD**：单测两条——worker 整理期间主连接写入（触发 data_version 变更）→ 断言重做且换入后数据含该写入；连续 3 次变更 → 断言报忙碌、归档保留语义与现状一致（`:216-226`）。
 
-- [ ] **P5-T5 崩溃恢复对账**
+- [x] **P5-T5 崩溃恢复对账**
   - 文件：`main.ts` 启动序列（`safeDbMaintenanceRequested` 判定附近，`:138`/`:665`）
   - **DoD**：单测两条（构造文件布局）——live 在+staging 孤儿 → 启动删除 staging；live 缺失+staging 在 → 完成替换、库可打开、报告补记 `recoveredAtSwap: true`。
 
-- [ ] **P5-T6 watchdog 与取消通道**
+- [x] **P5-T6 watchdog 与取消通道**
   - 实现：worker 无字节进展 >120s → `terminate()` + 清理 staging + 抛 `STORAGE_MAINTENANCE_TIMEOUT`（新错误码，渲染层落通用失败文案）；`AbortSignal` 贯穿 worker 消息（P4-T1 已埋 chunk 级检查）。
   - **DoD**：单测——注入停滞 worker → 断言 terminate、staging 清理、错误码正确。
 
-- [ ] **P5-T7 回退开关**
+- [x] **P5-T7 回退开关**
   - **DoD**：单测——env 置位时断言进程内路径函数被调用、worker 未 fork；未置位走 worker。
 
-- [ ] **P5-T8 渲染层收口**
+- [x] **P5-T8 渲染层收口**
   - 文件：`StorageSettingsTab.tsx`、i18n `storage.phase.*`
   - 改动：新增 `swap` 阶段文案（zh：「正在切换压缩后数据库…」/ en 对应）；percent 全程取 `completedBytes/totalBytes`（P4-T5 通道），无长时间停滞后突跳。
   - **DoD**：渲染测试——收到带 bytes 的进度序列时 percent 单调推进；`npm run i18n:check` 通过。
 
-- [ ] **P5-T9 `safeDbMaintenance` 接入编排器**
+- [x] **P5-T9 `safeDbMaintenance` 接入编排器**
   - 文件：`safeDbMaintenance.ts:12`——启动修复模式同样走 worker 路径（启动期不再冻结）；`main.ts:138`（`safeDbMaintenanceRequested`）与 `:665`（启动接入点）的 `measureStartupPhase` 包装保留。
   - **DoD**：`--safe-db-maintenance` 模式冒烟（dev 启动参数）+ 关联测试绿。
 

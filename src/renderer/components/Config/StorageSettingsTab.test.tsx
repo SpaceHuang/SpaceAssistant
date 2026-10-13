@@ -160,6 +160,9 @@ describe('StorageSettingsTab', () => {
     expect(document.querySelector('.ant-progress-text')?.textContent).toBe('100%')
     await act(async () => { handler({ phase: 'vacuum' }) })
     expect(screen.getByText('55%')).toBeTruthy()
+    await act(async () => { handler({ phase: 'swap', completedBytes: 30, totalBytes: 100 }) })
+    expect(screen.getByText('正在切换压缩后数据库…')).toBeTruthy()
+    expect(screen.getByText('30%')).toBeTruthy()
     await act(async () => {
       resolveCompact({ archivePath: '/archive', bytesBefore: 100, bytesAfter: 60, reclaimedPages: 2 })
     })

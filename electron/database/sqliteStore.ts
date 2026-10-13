@@ -78,6 +78,32 @@ export function openSqliteDatabase(dbPath: string, options?: OpenSqliteDatabaseO
   return db
 }
 
+/**
+ * 为既有 AppDatabase 换入全新底层连接（压缩换入临界区专用）。
+ * 必须保持对象身份不变——主进程各持有方（IPC ctx、history、调度器）都捕获了同一个 AppDatabase 引用。
+ * 调用方必须持有维护 fence，保证窗口内无并发访问；schema 初始化由换入前的校验承担，此处不做。
+ */
+export function reopenDatabaseConnection(db: AppDatabase): AppDatabase {
+  const conn = new DatabaseSync(db.filePath, { timeout: DEFAULT_BUSY_TIMEOUT_MS })
+  configureConnection(conn)
+  const { schedule, flushNow } = createDebouncedDbSave(() => walCheckpoint(conn, false))
+  Object.assign(db, {
+    save: schedule,
+    flushSave: () => {
+      flushNow()
+      walCheckpoint(conn, true)
+    },
+    close: () => {
+      flushNow()
+      walCheckpoint(conn, true)
+      conn.close()
+      connMap.delete(db)
+    }
+  })
+  connMap.set(db, conn)
+  return db
+}
+
 /** Open an existing database without schema initialization, migration, WAL configuration, or write capability. */
 export function openSqliteDatabaseReadOnly(dbPath: string): AppDatabase {
   const conn = new DatabaseSync(dbPath, { readOnly: true })

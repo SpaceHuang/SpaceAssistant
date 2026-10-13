@@ -3,23 +3,32 @@ import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { performance } from 'node:perf_hooks'
+import type { Worker } from 'node:worker_threads'
 import type { AppDatabase } from '../database'
-import { getDbConnection } from '../database/sqliteStore'
+import { getDbConnection, reopenDatabaseConnection } from '../database/sqliteStore'
 import { runInTransaction } from '../database/transaction'
 import { clearSessionProjectionCaches } from './sessionProjectionCacheMaintenance'
 import { StorageMaintenanceError } from './storageMaintenanceError'
 import { copyFileWithHash, copyTreeWithManifest } from './streamingCopy'
 import type { CopyTreeWithManifestResult } from './streamingCopy'
+import { runSessionMaintenanceWorker, COMPACTION_WORKER_ENTRY_UNAVAILABLE } from './sessionStorageMaintenanceWorkerClient'
 
 export { clearSessionProjectionCaches } from './sessionProjectionCacheMaintenance'
 export { StorageMaintenanceError } from './storageMaintenanceError'
 
-export type StorageMaintenanceProgress = Readonly<{ phase: 'archive' | 'vacuum' | 'reclaim' | 'complete'; completedPages?: number; remainingPages?: number; completedBytes?: number; totalBytes?: number }>
+export type StorageMaintenanceProgress = Readonly<{ phase: 'archive' | 'vacuum' | 'reclaim' | 'swap' | 'complete'; completedPages?: number; remainingPages?: number; completedBytes?: number; totalBytes?: number }>
 
 export type StorageMaintenanceVacuumMode = 'none' | 'incremental' | 'full'
+export type StorageMaintenanceExecutionTarget = 'worker' | 'in-process'
 
 /** L1 快路径（仅 incremental_vacuum）允许的最大 freelist/page 比；超出则回退全量 VACUUM。 */
 export const FULL_VACUUM_FREELIST_RATIO = 0.3
+
+/** 快照一致性重做上限：data_version 连续变化达到该次数即报忙碌，永不换入过期 staging。 */
+export const COMPACT_SNAPSHOT_RETRY_LIMIT = 3
+/** Windows 上换入 rename 撞瞬态只读句柄（profile 收集等）的有限重试。 */
+export const COMPACT_SWAP_RENAME_RETRY_LIMIT = 5
+export const COMPACT_SWAP_RENAME_RETRY_DELAY_MS = 200
 
 /** 归档复制阶段产生的字节恒等证据；verify 优先复用，避免对源/归档重复整遍哈希。 */
 export type SessionMaintenanceArchiveEvidence = {
@@ -27,6 +36,15 @@ export type SessionMaintenanceArchiveEvidence = {
   dbDestSha256?: string
   spillSourceManifest?: string[]
   spillDegradedSourceManifest?: string[]
+}
+
+export type CompactSessionDatabaseResult = {
+  archivePath: string; bytesBefore: number; bytesAfter: number; reclaimedPages: number; durationMs: number;
+  pageCountBefore: number; pageCountAfter: number; freelistCountBefore: number; freelistCountAfter: number;
+  walBytesBefore: number; walBytesAfter: number; shmBytesBefore: number; shmBytesAfter: number;
+  archiveBytes: number; availableBytesBefore: number; peakSpaceEstimateBytes: number; manifestPath: string;
+  vacuumMode: StorageMaintenanceVacuumMode; executionTarget: StorageMaintenanceExecutionTarget;
+  snapshotAttempts: number
 }
 
 function directoryFileBytes(root: string): number {
@@ -137,16 +155,261 @@ function maintenanceBusyError(): Error & { code: string } {
   return new StorageMaintenanceError('STORAGE_MAINTENANCE_BUSY', 'database maintenance requires all session turns to be idle')
 }
 
+function renameWithRetry(sourcePath: string, destPath: string): void {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.renameSync(sourcePath, destPath)
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code
+      const transient = code === 'EBUSY' || code === 'EPERM' || code === 'EACCES'
+      if (!transient || attempt >= COMPACT_SWAP_RENAME_RETRY_LIMIT) throw error
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, COMPACT_SWAP_RENAME_RETRY_DELAY_MS)
+    }
+  }
+}
+
+function removeStagingArtifacts(stagingPath: string): void {
+  for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${stagingPath}${suffix}`, { force: true })
+}
+
+/**
+ * 启动对账：清理崩溃遗留的压缩 staging；live 缺失且 staging 在时完成换入（rename 原子性保证不存在半截 live）。
+ * 必须在 openDatabase 之前调用——DatabaseSync 打开不存在的路径会静默建空库。
+ */
+export function reconcileInterruptedCompaction(dbPath: string): { recoveredAtSwap: boolean; removedStaleStaging: number } {
+  const directory = path.dirname(dbPath)
+  const base = path.basename(dbPath)
+  const stagingPaths = fs.existsSync(directory)
+    ? fs.readdirSync(directory).filter((name) => name.startsWith(`${base}.compact-staging-`)).map((name) => path.join(directory, name))
+    : []
+  if (!fs.existsSync(dbPath)) {
+    const candidate = stagingPaths
+      .map((stagingPath) => ({ stagingPath, modifiedAt: fs.statSync(stagingPath).mtimeMs }))
+      // mtime 同毫秒平局时按文件名降序（staging 名含 Date.now() 时间戳，后者更新）。
+      .sort((left, right) => right.modifiedAt - left.modifiedAt || (left.stagingPath < right.stagingPath ? 1 : -1))[0]
+    if (!candidate) return { recoveredAtSwap: false, removedStaleStaging: 0 }
+    for (const suffix of ['-wal', '-shm']) fs.rmSync(`${candidate.stagingPath}${suffix}`, { force: true })
+    renameWithRetry(candidate.stagingPath, dbPath)
+    for (const stagingPath of stagingPaths) if (stagingPath !== candidate.stagingPath) removeStagingArtifacts(stagingPath)
+    try {
+      fs.writeFileSync(`${dbPath}.compact-recovery.json`,
+        `${JSON.stringify({ recoveredAtSwap: true, recordedAt: new Date().toISOString() }, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
+    } catch { /* 恢复记录失败不影响换入结果。 */ }
+    return { recoveredAtSwap: true, removedStaleStaging: stagingPaths.length - 1 }
+  }
+  for (const stagingPath of stagingPaths) removeStagingArtifacts(stagingPath)
+  return { recoveredAtSwap: false, removedStaleStaging: stagingPaths.length }
+}
+
 export async function compactSessionDatabase(
   db: AppDatabase,
   userDataDir: string,
   onProgress?: (progress: StorageMaintenanceProgress) => void,
+  options: { clearProjectionCachesAfterArchive?: boolean; signal?: AbortSignal; availableBytes?: () => number; createWorker?: (workerPath: string) => Worker; workerPath?: string; watchdogTimeoutMs?: number } = {}
+): Promise<CompactSessionDatabaseResult> {
+  // 发布保底开关：置位时走 P4 的进程内路径（会阻塞主进程但行为完全已知）。
+  if (process.env.SPACEASSISTANT_IN_PROCESS_COMPACT === '1') {
+    return compactSessionDatabaseInProcess(db, userDataDir, onProgress, options)
+  }
+  const startedAt = performance.now()
+  if (activeSessionTurnCount(db) > 0) throw maintenanceBusyError()
+  const dbPath = db.filePath
+  db.flushSave()
+  const conn = getDbConnection(db)
+  const checkpointBeforeArchive = conn.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy: number; log: number; checkpointed: number }
+  if (checkpointBeforeArchive.busy !== 0 || checkpointBeforeArchive.log !== checkpointBeforeArchive.checkpointed) {
+    throw new Error('database WAL checkpoint is incomplete; retry storage maintenance')
+  }
+  const filesBefore = sqliteFileSizes(dbPath)
+  const bytesBefore = filesBefore.dbBytes
+  const spillRoot = path.join(userDataDir, 'spill')
+  const degradedSpillRoot = path.join(userDataDir, 'spill-degraded')
+  const originalSpillBytes = directoryFileBytes(spillRoot)
+  const originalDegradedSpillBytes = directoryFileBytes(degradedSpillRoot)
+  const statfs = fs.statfsSync(path.dirname(dbPath))
+  const actualAvailableBytesBefore = Number(statfs.bavail ?? statfs.bfree) * Number(statfs.bsize)
+  const getAvailableBytes = options.availableBytes ?? (() => {
+    const current = fs.statfsSync(path.dirname(dbPath))
+    return Number(current.bavail ?? current.bfree) * Number(current.bsize)
+  })
+  const availableBytesBefore = options.availableBytes ? getAvailableBytes() : actualAvailableBytesBefore
+  const peakSpaceEstimateBytes = filesBefore.dbBytes + filesBefore.walBytes + filesBefore.shmBytes +
+    originalSpillBytes + originalDegradedSpillBytes + filesBefore.dbBytes * 2
+  const ensureNotAborted = () => {
+    if (options.signal?.aborted) throw new StorageMaintenanceError('STORAGE_MAINTENANCE_CANCELLED', 'database maintenance was cancelled')
+  }
+  if (availableBytesBefore < peakSpaceEstimateBytes) {
+    throw new StorageMaintenanceError('STORAGE_MAINTENANCE_INSUFFICIENT_SPACE',
+      `database maintenance requires an estimated ${peakSpaceEstimateBytes} bytes; ${availableBytesBefore} bytes are available`)
+  }
+  const archiveRoot = path.join(userDataDir, 'session-archives')
+  const archivePath = path.join(archiveRoot, `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`)
+  const archivedDbPath = path.join(archivePath, path.basename(dbPath))
+  const stagingPath = `${dbPath}.compact-staging-${Date.now()}-${randomUUID()}`
+  const schemaVersionBefore = Number((conn.prepare('PRAGMA schema_version').get() as { schema_version: number }).schema_version)
+  const originalPages = Number((conn.prepare('PRAGMA page_count').get() as { page_count: number }).page_count)
+  const originalFreelist = Number((conn.prepare('PRAGMA freelist_count').get() as { freelist_count: number }).freelist_count)
+  let archiveVerified = false
+  let phase: StorageMaintenanceProgress['phase'] = 'archive'
+  try {
+    ensureNotAborted()
+    fs.mkdirSync(archivePath, { recursive: true, mode: 0o700 })
+    onProgress?.({ phase: 'archive' })
+    let workerResult!: Awaited<ReturnType<typeof runSessionMaintenanceWorker>>
+    let snapshotAttempts = 0
+    for (;;) {
+      ensureNotAborted()
+      // 防线①：换入前重查忙碌谓词（P1）；重试时同样适用。
+      if (activeSessionTurnCount(db) > 0) throw maintenanceBusyError()
+      removeStagingArtifacts(stagingPath)
+      snapshotAttempts += 1
+      let externalActivityAt = 0
+      // 整理阶段真实字节进度：VACUUM INTO 在 worker 线程内同步执行，staging 文件大小由编排器轮询。
+      const vacuumPoller = setInterval(() => {
+        try {
+          const size = fs.statSync(stagingPath).size
+          externalActivityAt = Date.now()
+          onProgress?.({ phase: 'vacuum', completedBytes: size, totalBytes: bytesBefore })
+        } catch { /* staging 尚未创建；下一轮再试。 */ }
+      }, 200)
+      vacuumPoller.unref?.()
+      try {
+        workerResult = await runSessionMaintenanceWorker(
+          { dbPath, archivePath, spillRoot, degradedSpillRoot, stagingPath },
+          {
+            signal: options.signal,
+            createWorker: options.createWorker,
+            workerPath: options.workerPath,
+            watchdogTimeoutMs: options.watchdogTimeoutMs,
+            onProgress: (progress) => {
+              // 防线前置：worker 只有在归档 quick_check 通过后才发 vacuum 进度 → 此后失败保留归档。
+              if (progress.phase === 'vacuum') archiveVerified = true
+              if (phase === 'archive') phase = 'vacuum'
+              onProgress?.(progress)
+            },
+            externalHeartbeat: () => externalActivityAt
+          })
+      } catch (error) {
+        // worker 入口不可用（打包缺产物/tsx 引导缺失）→ 降级 P4 进程内路径；其余失败原样上抛。
+        if (error instanceof StorageMaintenanceError && error.message.includes(COMPACTION_WORKER_ENTRY_UNAVAILABLE)) {
+          return compactSessionDatabaseInProcess(db, userDataDir, onProgress, options)
+        }
+        throw error
+      } finally {
+        clearInterval(vacuumPoller)
+      }
+      // 防线②：data_version 探针——快照期间主库有提交即丢弃 staging 重做；永不换入过期数据。
+      if (workerResult.dataVersionBefore !== workerResult.dataVersionAfter) {
+        removeStagingArtifacts(stagingPath)
+        if (snapshotAttempts >= COMPACT_SNAPSHOT_RETRY_LIMIT) {
+          throw new StorageMaintenanceError('STORAGE_MAINTENANCE_BUSY',
+            'database snapshot kept changing during compaction; retry when all session turns are idle')
+        }
+        continue
+      }
+      break
+    }
+    phase = 'archive'
+    archiveVerified = fs.statSync(archivedDbPath).size === bytesBefore &&
+      directoryFileBytes(path.join(archivePath, 'spill')) === originalSpillBytes &&
+      directoryFileBytes(path.join(archivePath, 'spill-degraded')) === originalDegradedSpillBytes &&
+      verifySessionMaintenanceArchive(dbPath, archivePath, userDataDir, {
+        dbSourceSha256: workerResult.dbSourceSha256,
+        dbDestSha256: workerResult.dbDestSha256,
+        spillSourceManifest: workerResult.spillSourceManifest,
+        spillDegradedSourceManifest: workerResult.spillDegradedSourceManifest
+      })
+    if (!archiveVerified) throw new Error('database/spill archive verification failed')
+    ensureNotAborted()
+    const availableBytesForSwap = getAvailableBytes()
+    if (availableBytesForSwap < filesBefore.dbBytes) {
+      throw new StorageMaintenanceError('STORAGE_MAINTENANCE_INSUFFICIENT_SPACE',
+        `database maintenance requires ${filesBefore.dbBytes} bytes for the swap working copy; ${availableBytesForSwap} bytes are available after archiving`)
+    }
+    if (options.clearProjectionCachesAfterArchive) clearSessionProjectionCaches(db)
+    phase = 'swap'
+    onProgress?.({ phase: 'swap' })
+    const swapStartedAt = performance.now()
+    const preSwapCheckpoint = conn.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy: number; log: number; checkpointed: number }
+    if (preSwapCheckpoint.busy !== 0 || preSwapCheckpoint.log !== preSwapCheckpoint.checkpointed) {
+      throw new Error('database WAL checkpoint is incomplete; retry storage maintenance')
+    }
+    db.close()
+    try {
+      // worker 的快照副本让位给「最终 live 文件」：close+checkpoint 后的旧库即归档副本，免一遍复制。
+      fs.rmSync(archivedDbPath, { force: true })
+      renameWithRetry(dbPath, archivedDbPath)
+      renameWithRetry(stagingPath, dbPath)
+    } catch (swapError) {
+      if (!fs.existsSync(dbPath) && fs.existsSync(archivedDbPath)) renameWithRetry(archivedDbPath, dbPath)
+      reopenDatabaseConnection(db)
+      removeStagingArtifacts(stagingPath)
+      throw swapError
+    }
+    reopenDatabaseConnection(db)
+    const reopenedConn = getDbConnection(db)
+    const pageCountAfter = Number((reopenedConn.prepare('PRAGMA page_count').get() as { page_count: number }).page_count)
+    const freelistCountAfter = Number((reopenedConn.prepare('PRAGMA freelist_count').get() as { freelist_count: number }).freelist_count)
+    const stagedSchemaVersion = Number((reopenedConn.prepare('PRAGMA schema_version').get() as { schema_version: number }).schema_version)
+    const quickCheck = reopenedConn.prepare('PRAGMA quick_check').get() as { quick_check: string } | undefined
+    // schema_version 不做等值断言：VACUUM INTO 会递增 schema cookie，quick_check + 页数 + freelist 已足够换入校验。
+    const swapVerified = quickCheck?.quick_check === 'ok' && stagedSchemaVersion >= schemaVersionBefore &&
+      pageCountAfter > 0 && freelistCountAfter === 0
+    if (!swapVerified) {
+      db.close()
+      for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${dbPath}${suffix}`, { force: true })
+      renameWithRetry(archivedDbPath, dbPath)
+      reopenDatabaseConnection(db)
+      throw new Error('compaction swap verification failed; restored the pre-compaction database from the archive')
+    }
+    const swapDurationMs = performance.now() - swapStartedAt
+    db.flushSave()
+    const filesAfter = sqliteFileSizes(dbPath)
+    const archiveBytes = directoryFileBytes(archivePath)
+    const durationMs = performance.now() - startedAt
+    phase = 'complete'
+    const reclaimedPages = Math.max(0, originalPages - pageCountAfter)
+    onProgress?.({ phase, completedPages: reclaimedPages, remainingPages: freelistCountAfter })
+    const result: CompactSessionDatabaseResult = {
+      archivePath, bytesBefore, bytesAfter: filesAfter.dbBytes, reclaimedPages, durationMs,
+      pageCountBefore: originalPages, pageCountAfter, freelistCountBefore: originalFreelist, freelistCountAfter,
+      walBytesBefore: filesBefore.walBytes, walBytesAfter: filesAfter.walBytes,
+      shmBytesBefore: filesBefore.shmBytes, shmBytesAfter: filesAfter.shmBytes,
+      archiveBytes, availableBytesBefore, peakSpaceEstimateBytes, manifestPath: '',
+      vacuumMode: 'full', executionTarget: 'worker', snapshotAttempts
+    }
+    const roundMs = (value: number) => Math.round(value * 1000) / 1000
+    result.manifestPath = writeMaintenanceReport(archivePath, {
+      formatVersion: 2, recordedAt: new Date().toISOString(), status: 'complete', ...result,
+      stageDurationsMs: { ...workerResult.stageDurationsMs, swap: roundMs(swapDurationMs), total: roundMs(durationMs) },
+      stageBytes: { archive: workerResult.archiveBytes, staging: workerResult.stagingBytes },
+      archivePath: undefined,
+      note: 'peakSpaceEstimateBytes is a conservative bound for the source DB, archived DB/spills and one VACUUM working copy; it is not an observed instantaneous peak.'
+    })
+    return result
+  } catch (error) {
+    removeStagingArtifacts(stagingPath)
+    if (!archiveVerified) fs.rmSync(archivePath, { recursive: true, force: true })
+    else {
+      const failureCode = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+        ? error.code : error instanceof Error ? error.name : 'UNKNOWN_ERROR'
+      try {
+        writeMaintenanceReport(archivePath, { formatVersion: 2, recordedAt: new Date().toISOString(), status: 'failed', phase, failureCode,
+          ...(error instanceof Error ? { failureMessage: error.message } : {}) })
+      } catch { /* Preserve the verified DB/spill archive even if its failure report cannot be written. */ }
+      if (error && typeof error === 'object') Object.assign(error, { archivePath, archivePreserved: true, phase })
+    }
+    throw error
+  }
+}
+
+async function compactSessionDatabaseInProcess(
+  db: AppDatabase,
+  userDataDir: string,
+  onProgress?: (progress: StorageMaintenanceProgress) => void,
   options: { clearProjectionCachesAfterArchive?: boolean; signal?: AbortSignal; availableBytes?: () => number } = {}
-): Promise<{ archivePath: string; bytesBefore: number; bytesAfter: number; reclaimedPages: number; durationMs: number;
-  pageCountBefore: number; pageCountAfter: number; freelistCountBefore: number; freelistCountAfter: number;
-  walBytesBefore: number; walBytesAfter: number; shmBytesBefore: number; shmBytesAfter: number;
-  archiveBytes: number; availableBytesBefore: number; peakSpaceEstimateBytes: number; manifestPath: string;
-  vacuumMode: StorageMaintenanceVacuumMode }> {
+): Promise<CompactSessionDatabaseResult> {
   const startedAt = performance.now()
   if (activeSessionTurnCount(db) > 0) throw maintenanceBusyError()
   const dbPath = db.filePath
@@ -267,7 +530,7 @@ export async function compactSessionDatabase(
       pageCountBefore: originalPages, pageCountAfter, freelistCountBefore: originalFreelist, freelistCountAfter,
       walBytesBefore: filesBefore.walBytes, walBytesAfter: filesAfter.walBytes,
       shmBytesBefore: filesBefore.shmBytes, shmBytesAfter: filesAfter.shmBytes,
-      archiveBytes, availableBytesBefore, peakSpaceEstimateBytes, vacuumMode }
+      archiveBytes, availableBytesBefore, peakSpaceEstimateBytes, vacuumMode, executionTarget: 'in-process' as const, snapshotAttempts: 0 }
     const roundMs = (value: number) => Math.round(value * 1000) / 1000
     const manifestPath = writeMaintenanceReport(archivePath, {
       formatVersion: 2, recordedAt: new Date().toISOString(), status: 'complete', ...result,

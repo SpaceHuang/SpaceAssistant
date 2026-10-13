@@ -14,6 +14,19 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) throw new StorageMaintenanceError('STORAGE_MAINTENANCE_CANCELLED', 'database maintenance was cancelled')
 }
 
+/** 目录内全部常规文件的字节合计（跳过 symlink；根不存在返回 0）。 */
+export function directoryBytes(root: string): number {
+  if (!fs.existsSync(root)) return 0
+  let bytes = 0
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const filePath = path.join(root, entry.name)
+    if (entry.isSymbolicLink()) continue
+    if (entry.isDirectory()) bytes += directoryBytes(filePath)
+    else if (entry.isFile()) bytes += fs.statSync(filePath).size
+  }
+  return bytes
+}
+
 /**
  * 流式复制单个文件：读源即算 sourceSha256 并写入 dest（省掉 copyFileSync 的独立一遍读），
  * 写毕读回 dest 流式算 destSha256（保持读回校验强度）。dest 以 'wx' 打开，等价 COPYFILE_EXCL。
