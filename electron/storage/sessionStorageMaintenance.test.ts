@@ -8,7 +8,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { createTempDatabase } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { appendMessage, createPersistedTurn, createSession, getApiContextBaseline } from '../database/operations'
-import { compactSessionDatabase, verifySessionMaintenanceArchive } from './sessionStorageMaintenance'
+import { cancelQueuedSessionExecution, claimSessionExecution, commitSessionTranscript, releaseSessionExecution } from '../database/sessionTranscript'
+import { activeSessionTurnCount, compactSessionDatabase, verifySessionMaintenanceArchive } from './sessionStorageMaintenance'
 import { clearSessionProjectionCaches } from './sessionProjectionCacheMaintenance'
 import { readSessionTranscriptProjection } from '../runtime/sessionTranscriptProjection'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
@@ -167,18 +168,43 @@ describe('session storage maintenance', () => {
     temp.cleanup()
   })
 
-  it.each(['session_execution_claims', 'session_execution_queue'] as const)('refuses compaction for a queued turn in %s', async (table) => {
-    const temp = createTempDatabase(`storage-maintenance-queued-${table}-`)
+  it('treats a released idle claim row (status queued with empty turn) as compactable', async () => {
+    const temp = createTempDatabase('storage-maintenance-idle-claim-')
     const conn = getDbConnection(temp.db)
-    if (table === 'session_execution_claims') {
-      conn.prepare(`INSERT INTO session_execution_claims(session_id,turn_id,owner_id,generation,status,enqueued_at,updated_at)
-        VALUES('queued-s','queued-t','owner',1,'queued',1,1)`).run()
-    } else {
-      conn.prepare(`INSERT INTO session_execution_queue(session_id,turn_id,owner_id,generation,status,enqueued_at,updated_at)
-        VALUES('queued-s','queued-t','owner',1,'queued',1,1)`).run()
-    }
+    conn.prepare(`INSERT INTO session_execution_claims(session_id,turn_id,owner_id,generation,status,enqueued_at,updated_at)
+      VALUES('idle-s','','',1,'queued',1,1)`).run()
+
+    const result = await compactSessionDatabase(temp.db, path.dirname(temp.dbPath))
+
+    expect(JSON.parse(await fs.readFile(result.manifestPath, 'utf8'))).toMatchObject({ status: 'complete' })
+    temp.cleanup()
+  })
+
+  it('refuses compaction for a queued turn in session_execution_queue', async () => {
+    const temp = createTempDatabase('storage-maintenance-queued-queue-')
+    const conn = getDbConnection(temp.db)
+    conn.prepare(`INSERT INTO session_execution_queue(session_id,turn_id,owner_id,generation,status,enqueued_at,updated_at)
+      VALUES('queued-s','queued-t','owner',1,'queued',1,1)`).run()
 
     await expect(compactSessionDatabase(temp.db, path.dirname(temp.dbPath))).rejects.toMatchObject({ code: 'STORAGE_MAINTENANCE_BUSY' })
+    temp.cleanup()
+  })
+
+  it('allows compaction after every claim has been released', async () => {
+    const temp = createTempDatabase('storage-maintenance-released-')
+    const conn = getDbConnection(temp.db)
+    conn.exec("CREATE TABLE maintenance_payload(value TEXT NOT NULL); INSERT INTO maintenance_payload VALUES(zeroblob(1000000)); DELETE FROM maintenance_payload;")
+    temp.db.flushSave()
+    const claim = claimSessionExecution(temp.db, { sessionId: 'released-s', turnId: 'released-t', ownerId: 'released-owner' })
+    if (!claim.acquired) throw new Error('expected to acquire the session execution claim')
+    expect(releaseSessionExecution(temp.db, { sessionId: 'released-s', turnId: 'released-t', ownerId: 'released-owner', generation: claim.generation })).toBe(true)
+    const idleClaim = conn.prepare("SELECT status, turn_id, owner_id FROM session_execution_claims WHERE session_id='released-s'").get() as { status: string; turn_id: string; owner_id: string }
+    expect(idleClaim).toEqual({ status: 'queued', turn_id: '', owner_id: '' })
+
+    const result = await compactSessionDatabase(temp.db, path.dirname(temp.dbPath))
+
+    expect(result.freelistCountAfter).toBe(0)
+    expect(JSON.parse(await fs.readFile(result.manifestPath, 'utf8'))).toMatchObject({ status: 'complete' })
     temp.cleanup()
   })
 
@@ -388,3 +414,93 @@ describe('session storage maintenance', () => {
 function afterSourceTruth(store: ReturnType<typeof createSpillStore>, descriptor: SpillDescriptor): Promise<string> {
   return store.readSourceTruth(descriptor)
 }
+
+/** mulberry32(AGENTS.md 不变量测试纪律:确定性伪随机)。 */
+function mulberry32(seed: number): () => number {
+  let state = seed
+  return () => {
+    state |= 0
+    state = (state + 0x6d2b79f5) | 0
+    let t = Math.imul(state ^ (state >>> 15), 1 | state)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+describe('activeSessionTurnCount 不变量(mulberry32 随机操作序列 + 跨函数成对性)', () => {
+  it('忙碌计数 ⇔ 存在活跃票据；全部票据释放后必为 0', () => {
+    const temp = createTempDatabase('storage-maintenance-invariant-')
+    const db = temp.db
+    const conn = getDbConnection(temp.db)
+    const random = mulberry32(20261013)
+    const pick = <T,>(items: readonly T[]): T => items[Math.floor(random() * items.length)]!
+    const sessionIds = ['inv-s1', 'inv-s2', 'inv-s3', 'inv-s4']
+    type Holder = { turnId: string; ownerId: string; generation: number; committed: boolean }
+    type Waiter = { turnId: string; ownerId: string }
+    const holders = new Map<string, Holder>()
+    const waiters = new Map<string, Waiter[]>(sessionIds.map((id) => [id, []]))
+    const versions = new Map<string, number>(sessionIds.map((id) => [id, 0]))
+    const activeRows = () => ({
+      claims: Number((conn.prepare(`SELECT COUNT(*) AS c FROM session_execution_claims
+        WHERE status IN ('claimed','executing','transcript_committed','commit_uncertain')`).get() as { c: number }).c),
+      queue: Number((conn.prepare('SELECT COUNT(*) AS c FROM session_execution_queue').get() as { c: number }).c),
+      turns: Number((conn.prepare(`SELECT COUNT(*) AS c FROM turns
+        WHERE state IN ('configuring','prepared','executing','waiting-confirm')`).get() as { c: number }).c),
+      messages: Number((conn.prepare(`SELECT COUNT(*) AS c FROM messages WHERE status IN ('queued','streaming')`).get() as { c: number }).c)
+    })
+    const expectInvariants = () => {
+      const busy = activeSessionTurnCount(db)
+      const rows = activeRows()
+      const activeExists = rows.claims > 0 || rows.queue > 0 || rows.turns > 0 || rows.messages > 0
+      expect(busy > 0, `busy=${busy} 但活跃票据=${JSON.stringify(rows)}`).toBe(activeExists)
+      expect(busy).toBe(rows.claims + rows.queue + rows.turns + rows.messages)
+    }
+
+    expect(activeSessionTurnCount(db)).toBe(0)
+    let turnSeq = 0
+    for (let step = 0; step < 160; step += 1) {
+      const sessionId = pick(sessionIds)
+      const holder = holders.get(sessionId)
+      const pending = waiters.get(sessionId)!
+      const roll = random()
+      if (!holder && roll < 0.45) {
+        const turnId = `inv-t${turnSeq += 1}`
+        const ownerId = `inv-owner${turnSeq}`
+        const claim = claimSessionExecution(db, { sessionId, turnId, ownerId })
+        if (claim.acquired) holders.set(sessionId, { turnId, ownerId, generation: claim.generation, committed: false })
+        else if (claim.reason === 'owned') pending.push({ turnId, ownerId }) // FIFO 头部被更早的等待者占据
+      } else if (holder && roll < 0.6) {
+        const turnId = `inv-q${turnSeq += 1}`
+        const ownerId = `inv-waiter${turnSeq}`
+        const claim = claimSessionExecution(db, { sessionId, turnId, ownerId })
+        expect(claim).toEqual({ acquired: false, reason: 'owned' })
+        pending.push({ turnId, ownerId })
+      } else if (holder && !holder.committed && roll < 0.78) {
+        const commit = commitSessionTranscript(db, { sessionId, turnId: holder.turnId, baseVersion: versions.get(sessionId)!,
+          outcome: 'completed', messages: [] })
+        if (commit.committed) {
+          versions.set(sessionId, commit.version)
+          holder.committed = true
+        }
+      } else if (holder && roll < 0.9) {
+        expect(releaseSessionExecution(db, { sessionId, turnId: holder.turnId, ownerId: holder.ownerId, generation: holder.generation })).toBe(true)
+        holders.delete(sessionId)
+      } else if (pending.length > 0) {
+        const target = pending.splice(Math.floor(random() * pending.length), 1)[0]!
+        expect(cancelQueuedSessionExecution(db, { sessionId, turnId: target.turnId, ownerId: target.ownerId })).toBe(true)
+      }
+      expectInvariants()
+    }
+
+    // 终局排干:claims 全部释放、queue 全部撤销后,忙碌计数必须归零(回退 P1 谓词修复该断言转红)。
+    for (const [sessionId, holder] of holders) {
+      expect(releaseSessionExecution(db, { sessionId, turnId: holder.turnId, ownerId: holder.ownerId, generation: holder.generation })).toBe(true)
+    }
+    for (const [sessionId, pending] of waiters) {
+      for (const waiter of pending) expect(cancelQueuedSessionExecution(db, { sessionId, turnId: waiter.turnId, ownerId: waiter.ownerId })).toBe(true)
+    }
+    expect(holders.size > 0 || [...waiters.values()].some((pending) => pending.length > 0)).toBe(true)
+    expect(activeSessionTurnCount(db)).toBe(0)
+    temp.cleanup()
+  })
+})
