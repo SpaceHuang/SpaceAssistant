@@ -144,4 +144,26 @@ describe('StorageSettingsTab', () => {
     expect(await screen.findByText('磁盘剩余空间不足，归档压缩需要约与数据库相当的空间')).toBeTruthy()
     expect(screen.queryByText('存储维护失败，请稍后重试')).toBeNull()
   })
+
+  it('derives percent from byte progress and falls back to phase tiers without bytes', async () => {
+    let handler!: (progress: any) => void
+    subscribe.mockImplementation((callback: typeof handler) => { handler = callback; return () => {} })
+    let resolveCompact!: (value: unknown) => void
+    compact.mockImplementationOnce(() => new Promise((resolve) => { resolveCompact = resolve }))
+    render(<ConfigProvider><App><StorageSettingsTab /></App></ConfigProvider>)
+    await screen.findByText('会话存储')
+    fireEvent.click(screen.getByRole('button', { name: '归档并压缩' }))
+    await act(async () => { handler({ phase: 'archive', completedBytes: 50, totalBytes: 100 }) })
+    expect(screen.getByText('50%')).toBeTruthy()
+    await act(async () => { handler({ phase: 'archive', completedBytes: 100, totalBytes: 100 }) })
+    // antd 在 percent=100 时以成功图标替代文本，用状态类断言满进度。
+    expect(document.querySelector('.ant-progress-text')?.textContent).toBe('100%')
+    await act(async () => { handler({ phase: 'vacuum' }) })
+    expect(screen.getByText('55%')).toBeTruthy()
+    await act(async () => {
+      resolveCompact({ archivePath: '/archive', bytesBefore: 100, bytesAfter: 60, reclaimedPages: 2 })
+    })
+    expect(await screen.findByText('维护完成')).toBeTruthy()
+    expect(document.querySelector('.ant-progress')!.className).toContain('ant-progress-status-success')
+  })
 })

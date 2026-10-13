@@ -9,12 +9,25 @@ import { createTempDatabase } from '../database/testHelpers'
 import { getDbConnection } from '../database/sqliteStore'
 import { appendMessage, createPersistedTurn, createSession, getApiContextBaseline } from '../database/operations'
 import { cancelQueuedSessionExecution, claimSessionExecution, commitSessionTranscript, releaseSessionExecution } from '../database/sessionTranscript'
-import { activeSessionTurnCount, compactSessionDatabase, verifySessionMaintenanceArchive } from './sessionStorageMaintenance'
+import { activeSessionTurnCount, compactSessionDatabase, FULL_VACUUM_FREELIST_RATIO, verifySessionMaintenanceArchive } from './sessionStorageMaintenance'
+import type { StorageMaintenanceProgress } from './sessionStorageMaintenance'
+import { copyTreeWithManifest } from './streamingCopy'
 import { clearSessionProjectionCaches } from './sessionProjectionCacheMaintenance'
 import { readSessionTranscriptProjection } from '../runtime/sessionTranscriptProjection'
 import { SqliteAgentHistory } from '../runtime/sqliteAgentHistory'
 import { createSpillStore } from './spillStore'
 import type { SpillDescriptor } from './spillProtocol'
+
+// 默认透传真实实现；spill 篡改用例经 mockImplementation 注入同尺寸不同内容的归档副本。
+// 注意只能 mock 树级原语：copyTreeWithManifest 对单文件原语的调用是模块内绑定，不经过模块导出。
+vi.mock('./streamingCopy', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./streamingCopy')>()
+  const passthrough = Object.assign(
+    vi.fn((...args: Parameters<typeof actual.copyTreeWithManifest>) => actual.copyTreeWithManifest(...args)),
+    { actual: actual.copyTreeWithManifest }
+  )
+  return { ...actual, copyTreeWithManifest: passthrough }
+})
 
 describe('session storage maintenance', () => {
   it('verifies archived database integrity and every spill file content hash', async () => {
@@ -53,18 +66,20 @@ describe('session storage maintenance', () => {
     await fs.mkdir(spillRoot)
     await fs.writeFile(path.join(spillRoot, 'source.spill'), 'same')
     temp.db.flushSave()
-    const originalCopy = fsSync.cpSync.bind(fsSync)
-    vi.spyOn(fsSync, 'cpSync').mockImplementation((source, destination, options) => {
-      const result = originalCopy(source, destination, options)
-      if (String(destination).endsWith(`${path.sep}spill`)) fsSync.writeFileSync(path.join(String(destination), 'source.spill'), 'evil')
+    const actualCopyTree = (copyTreeWithManifest as unknown as { actual: typeof copyTreeWithManifest }).actual
+    const progress: string[] = []
+    vi.mocked(copyTreeWithManifest).mockImplementation(async (source, dest, options) => {
+      const result = await actualCopyTree(source, dest, options)
+      if (path.basename(String(dest)) === 'spill') await fs.writeFile(path.join(String(dest), 'source.spill'), 'evil')
       return result
     })
-    const progress: string[] = []
 
-    await expect(compactSessionDatabase(temp.db, userDataDir, (step) => progress.push(step.phase)))
-      .rejects.toThrow('database/spill archive verification failed')
-
-    vi.restoreAllMocks()
+    try {
+      await expect(compactSessionDatabase(temp.db, userDataDir, (step) => progress.push(step.phase)))
+        .rejects.toThrow('database/spill archive verification failed')
+    } finally {
+      vi.mocked(copyTreeWithManifest).mockRestore()
+    }
     expect(progress).toContain('archive')
     expect(progress).not.toContain('vacuum')
     expect(conn.prepare('SELECT value FROM archive_payload').get()).toEqual({ value: 'must remain' })
@@ -121,9 +136,14 @@ describe('session storage maintenance', () => {
     expect(result.peakSpaceEstimateBytes).toBeGreaterThan(result.bytesBefore)
     expect(result.archiveBytes).toBeGreaterThanOrEqual(result.bytesBefore)
     expect(result.availableBytesBefore).toBeGreaterThan(0)
+    expect(result.vacuumMode).toBe('full')
     const report = JSON.parse(await fs.readFile(result.manifestPath, 'utf8'))
-    expect(report).toMatchObject({ status: 'complete', pageCountBefore: result.pageCountBefore,
-      pageCountAfter: result.pageCountAfter, bytesBefore: result.bytesBefore, bytesAfter: result.bytesAfter })
+    expect(report).toMatchObject({ status: 'complete', formatVersion: 2, vacuumMode: 'full',
+      pageCountBefore: result.pageCountBefore, pageCountAfter: result.pageCountAfter,
+      bytesBefore: result.bytesBefore, bytesAfter: result.bytesAfter,
+      stageDurationsMs: { archive: expect.any(Number), verify: expect.any(Number), vacuum: expect.any(Number), total: expect.any(Number) },
+      stageBytes: { archive: expect.any(Number) } })
+    expect(report.stageDurationsMs.total).toBeGreaterThanOrEqual(report.stageDurationsMs.archive)
     expect(conn.prepare('PRAGMA auto_vacuum').get()).toEqual({ auto_vacuum: 2 })
     await expect(fs.readFile(path.join(result.archivePath, 'spill', 'source.spill'), 'utf8')).resolves.toBe('source truth remains archived')
     await expect(fs.readFile(path.join(result.archivePath, 'spill-degraded', 'copy.spill'), 'utf8')).resolves.toBe('degradable copy')
@@ -220,6 +240,136 @@ describe('session storage maintenance', () => {
     temp.cleanup()
   })
 
+  it('rejects verification when the archived db is structurally corrupt despite byte-identical hashes', async () => {
+    const temp = createTempDatabase('storage-maintenance-quick-check-')
+    const userDataDir = path.dirname(temp.dbPath)
+    const conn = getDbConnection(temp.db)
+    conn.exec("CREATE TABLE archive_payload(value TEXT NOT NULL); INSERT INTO archive_payload VALUES('durable');")
+    temp.db.flushSave()
+    temp.db.close()
+    const archivePath = path.join(userDataDir, 'archive-corrupt-fixture')
+    await fs.mkdir(archivePath)
+    fsSync.copyFileSync(temp.dbPath, path.join(archivePath, path.basename(temp.dbPath)))
+    const flipHeaderByte = async (filePath: string) => {
+      const handle = await fs.open(filePath, 'r+')
+      try {
+        const byte = Buffer.alloc(1)
+        await handle.read(byte, 0, 1, 0)
+        byte[0] ^= 0xff
+        await handle.write(byte, 0, 1, 0)
+      } finally { await handle.close() }
+    }
+    await flipHeaderByte(temp.dbPath)
+    await flipHeaderByte(path.join(archivePath, path.basename(temp.dbPath)))
+
+    expect(verifySessionMaintenanceArchive(temp.dbPath, archivePath, userDataDir)).toBe(false)
+    temp.cleanup()
+  })
+
+  it('runs a full VACUUM on the first compaction of a fragmented legacy database (L2)', async () => {
+    const temp = createTempDatabase('storage-maintenance-vacuum-l2-')
+    const conn = getDbConnection(temp.db)
+    conn.exec('CREATE TABLE maintenance_payload(value BLOB NOT NULL); INSERT INTO maintenance_payload VALUES(zeroblob(2000000)); DELETE FROM maintenance_payload;')
+    temp.db.flushSave()
+    const result = await compactSessionDatabase(temp.db, path.dirname(temp.dbPath))
+    expect(result.vacuumMode).toBe('full')
+    expect(result.freelistCountAfter).toBe(0)
+    temp.cleanup()
+  })
+
+  it('takes the incremental fast path for a small freelist ratio once auto_vacuum is incremental (L1)', async () => {
+    const temp = createTempDatabase('storage-maintenance-vacuum-l1-')
+    const userDataDir = path.dirname(temp.dbPath)
+    const conn = getDbConnection(temp.db)
+    conn.exec(`CREATE TABLE maintenance_payload(value BLOB NOT NULL);
+      INSERT INTO maintenance_payload VALUES(zeroblob(1000000));
+      INSERT INTO maintenance_payload VALUES(zeroblob(1000000));
+      DELETE FROM maintenance_payload WHERE length(value)=1000000 AND rowid=(SELECT MIN(rowid) FROM maintenance_payload);`)
+    temp.db.flushSave()
+    const first = await compactSessionDatabase(temp.db, userDataDir)
+    expect(first.vacuumMode).toBe('full')
+    conn.exec('INSERT INTO maintenance_payload VALUES(zeroblob(200000)); DELETE FROM maintenance_payload WHERE length(value)=200000;')
+    temp.db.flushSave()
+    const ratioBefore = Number((conn.prepare('PRAGMA freelist_count').get() as { freelist_count: number }).freelist_count) /
+      Number((conn.prepare('PRAGMA page_count').get() as { page_count: number }).page_count)
+    expect(ratioBefore).toBeLessThanOrEqual(FULL_VACUUM_FREELIST_RATIO)
+
+    const second = await compactSessionDatabase(temp.db, userDataDir)
+
+    expect(second.vacuumMode).toBe('incremental')
+    expect(second.freelistCountAfter).toBe(0)
+    temp.cleanup()
+  })
+
+  it('skips reorganization entirely when the freelist is empty (L0)', async () => {
+    const temp = createTempDatabase('storage-maintenance-vacuum-l0-')
+    const conn = getDbConnection(temp.db)
+    conn.exec("CREATE TABLE maintenance_payload(value TEXT NOT NULL); INSERT INTO maintenance_payload VALUES('compact');")
+    temp.db.flushSave()
+    await compactSessionDatabase(temp.db, path.dirname(temp.dbPath))
+    expect(Number((conn.prepare('PRAGMA freelist_count').get() as { freelist_count: number }).freelist_count)).toBe(0)
+
+    const second = await compactSessionDatabase(temp.db, path.dirname(temp.dbPath))
+
+    expect(second.vacuumMode).toBe('none')
+    expect(second.reclaimedPages).toBe(0)
+    expect(second.freelistCountAfter).toBe(0)
+    temp.cleanup()
+  })
+
+  it('compacts twice in a row with the second run on a fast tier and shorter duration', async () => {
+    const temp = createTempDatabase('storage-maintenance-vacuum-twice-')
+    const userDataDir = path.dirname(temp.dbPath)
+    const conn = getDbConnection(temp.db)
+    conn.exec(`CREATE TABLE maintenance_payload(value BLOB NOT NULL);
+      INSERT INTO maintenance_payload VALUES(zeroblob(8000000));
+      INSERT INTO maintenance_payload VALUES(zeroblob(1000000));
+      DELETE FROM maintenance_payload WHERE length(value)=1000000;`)
+    temp.db.flushSave()
+    const first = await compactSessionDatabase(temp.db, userDataDir)
+    expect(first.vacuumMode).toBe('full')
+    conn.exec('INSERT INTO maintenance_payload VALUES(zeroblob(1000000)); DELETE FROM maintenance_payload WHERE length(value)=1000000;')
+    temp.db.flushSave()
+
+    const second = await compactSessionDatabase(temp.db, userDataDir)
+
+    expect(['none', 'incremental']).toContain(second.vacuumMode)
+    expect(second.freelistCountAfter).toBe(0)
+    expect(second.durationMs).toBeLessThan(first.durationMs)
+    temp.cleanup()
+  })
+
+  it('emits byte-accurate monotonic progress across the archive stage', async () => {
+    const temp = createTempDatabase('storage-maintenance-progress-bytes-')
+    const userDataDir = path.dirname(temp.dbPath)
+    const conn = getDbConnection(temp.db)
+    conn.exec('CREATE TABLE maintenance_payload(value BLOB NOT NULL); INSERT INTO maintenance_payload VALUES(zeroblob(1000000)); DELETE FROM maintenance_payload;')
+    const spillDir = path.join(userDataDir, 'spill')
+    const degradedDir = path.join(userDataDir, 'spill-degraded')
+    await fs.mkdir(spillDir, { recursive: true })
+    await fs.mkdir(degradedDir, { recursive: true })
+    await fs.writeFile(path.join(spillDir, 'a.spill'), Buffer.alloc(5000, 7))
+    await fs.writeFile(path.join(degradedDir, 'b.spill'), Buffer.alloc(3000, 9))
+    temp.db.flushSave()
+    const dbBytesBefore = (await fs.stat(temp.dbPath)).size
+    const events: StorageMaintenanceProgress[] = []
+
+    await compactSessionDatabase(temp.db, userDataDir, (progress) => events.push({ ...progress }))
+
+    const byteEvents = events.filter((event) => event.totalBytes != null)
+    expect(byteEvents.length).toBeGreaterThan(0)
+    const totalBytes = byteEvents[0]!.totalBytes!
+    expect(totalBytes).toBe(dbBytesBefore + 5000 + 3000)
+    let previous = 0
+    for (const event of byteEvents) {
+      expect(event.totalBytes).toBe(totalBytes)
+      expect(event.completedBytes!).toBeGreaterThanOrEqual(previous)
+      previous = event.completedBytes!
+    }
+    expect(previous).toBe(totalBytes)
+    temp.cleanup()
+  })
+
   it('preserves the verified archive and allows retry after post-vacuum maintenance failure', async () => {
     const temp = createTempDatabase('storage-maintenance-vacuum-fault-')
     const userDataDir = path.dirname(temp.dbPath)
@@ -247,6 +397,7 @@ describe('session storage maintenance', () => {
     temp.cleanup()
   })
 
+  // 独立 30s 超时：Windows Defender 对刚被 checkpoint 触碰过的 db 文件重扫可能拖慢 readFile 断言 10s+。
   it('rejects insufficient space before creating an archive or touching the source database', async () => {
     const temp = createTempDatabase('storage-maintenance-no-space-')
     const conn = getDbConnection(temp.db)
@@ -259,7 +410,7 @@ describe('session storage maintenance', () => {
     expect(conn.prepare('SELECT value FROM maintenance_payload').get()).toEqual({ value: 'must remain' })
     await expect(fs.readdir(path.join(path.dirname(temp.dbPath), 'session-archives'))).rejects.toMatchObject({ code: 'ENOENT' })
     temp.cleanup()
-  })
+  }, 30_000)
 
   it('cancels after a verified archive and before vacuum without changing the source database', async () => {
     const temp = createTempDatabase('storage-maintenance-cancel-')

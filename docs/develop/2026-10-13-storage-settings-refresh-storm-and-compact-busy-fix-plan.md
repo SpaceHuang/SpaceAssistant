@@ -181,23 +181,23 @@
 
 设计原则：**归档（恢复用备份）保持「读回校验」强度不降；省的是重复读与过度校验**。本阶段全部改动在 P5 中原样复用，无抛弃工作量。
 
-- [ ] **P4-T1 流式复制 + 双侧哈希原语 `copyFileWithHash`**
+- [x] **P4-T1 流式复制 + 双侧哈希原语 `copyFileWithHash`**
   - 新文件：`electron/storage/streamingCopy.ts`
   - 签名：`copyFileWithHash(sourcePath, destPath, options?: { signal?: AbortSignal; onProgress?: (bytes: number) => void }): Promise<{ bytes: number; sourceSha256: string; destSha256: string }>`
   - 实现：4 MiB chunk 循环——读源即更新 sourceSha256 并写入 dest（省掉 `copyFileSync` 的独立一遍读）；写毕读回 dest 流式算 destSha256（**保持现状读回校验强度**）；每 chunk 检查 signal、回调 onProgress。
   - **DoD**：`electron/storage/streamingCopy.test.ts` 新建，用例：随机 5 MB 文件双哈希与 `fileSha256` 一致；onProgress 单调递增至 bytes；abort 中途抛 `STORAGE_MAINTENANCE_CANCELLED`；dest 注入坏字节 → destSha256 失配可检出。
 
-- [ ] **P4-T2 目录流式复制 + 双侧清单 `copyTreeWithManifest`**
+- [x] **P4-T2 目录流式复制 + 双侧清单 `copyTreeWithManifest`**
   - 文件：同上；签名 `copyTreeWithManifest(sourceRoot, destRoot, options?): Promise<{ bytes: number; sourceManifest: string[]; destManifest: string[] }>`
   - 实现：一遍遍历完成复制+双侧逐文件哈希清单（替代 `cpSync` + `directoryContentManifest` ×2，spill 从 3 遍读降为 1 遍读 + 1 遍读回）；保留现语义：symlink / 非常规文件抛错（对齐 `:61-64` 的错误消息）、空目录/不存在返回空清单。
   - **DoD**：单测覆盖嵌套目录、空 spill、根不存在、symlink 拒绝、进度字节合计；`verifySessionMaintenanceArchive`（:82-85）改用返回的 manifest 比对后既有测试全绿。
 
-- [ ] **P4-T3 归档校验瘦身：`integrity_check` + `foreign_key_check` → `quick_check`**
+- [x] **P4-T3 归档校验瘦身：`integrity_check` + `foreign_key_check` → `quick_check`**
   - 文件：`sessionStorageMaintenance.ts:76-81`
   - 论证：字节恒等（哈希对）已排除复制引入的损坏；FK 违例不可能由复制产生（源库自身状态随文件原样复制），`foreign_key_check` 的逐行索引回查是纯冗余；保留 `quick_check` 单遍结构兜底（防「源库在快照前已损坏」的场景）。
   - **DoD**：新增用例——归档 DB 注入损坏（翻转页字节）→ 哈希失配或 quick_check 拒绝、compact 报错且归档被清理（未过校验路径 :216）；既有 verify/maintenance 测试全绿。
 
-- [ ] **P4-T4 二级快路径：消灭重复全库 VACUUM**
+- [x] **P4-T4 二级快路径：消灭重复全库 VACUUM**
   - 文件：`sessionStorageMaintenance.ts:184-195`
   - 分档（导出常量 `FULL_VACUUM_FREELIST_RATIO = 0.3`）：
     - **L0**：`freelist_count === 0` → 跳过整理，直接 complete（`reclaimedPages = 0`，报告 `vacuumMode: 'none'`）；
@@ -206,12 +206,12 @@
   - 收益：第二次起（多数真实使用形态：删了东西→点压缩）从数分钟降为秒级。
   - **DoD**：三档各一条单测；「连续两次 compact」用例断言第二次 `vacuumMode ∈ {none, incremental}` 且 `durationMs` 显著小于首次；L1 下 `freelist_count` 归零被断言。
 
-- [ ] **P4-T5 字节级进度埋点 + UI 真百分比（同步路径版）**
+- [x] **P4-T5 字节级进度埋点 + UI 真百分比（同步路径版）**
   - 文件：`src/shared/storageTypes.ts`、`sessionStorageMaintenance.ts`、`StorageSettingsTab.tsx`（compact `:86-98`、Progress 组件 `:168`）
   - 改动：`StorageMaintenanceProgress` 增加可选 `completedBytes?: number; totalBytes?: number`（向后兼容，既有 `completedPages/remainingPages` 保留）；archive/verify 阶段经 onProgress 发真实字节（源自 P4-T1/T2 的 onProgress）；渲染层 percent 优先 `completedBytes/totalBytes` 计算、缺字节时回落 `:168` 的旧档位映射。
   - **DoD**：主进程测试断言进度序列按字节单调不减、`totalBytes` 与实际一致；渲染测试断言 percent 由 bytes 推导。
 
-- [ ] **P4-T6 维护报告增补**
+- [x] **P4-T6 维护报告增补**
   - 文件：`writeMaintenanceReport`（:97-103）调用点（:209-213）
   - 新增字段：`vacuumMode`、`stageDurationsMs: { archive, verify, vacuum, total }`、各阶段字节数。`formatVersion` 升 2（增量字段，向后兼容）。
   - **DoD**：报告 schema 测试更新；为 §五 V6 的前后对比提供数据。
