@@ -891,12 +891,14 @@ describe('runShellExecutor', () => {
   }, SPAWN_TEST_TIMEOUT_MS)
 
   // 评审 P2：自定义 shell 配置下 spawnSpec.shellId（可执行文件 basename）≠ record 侧的
-  // dependencySnapshot.profileId（内置 profile id）；成功清除必须按 record 同源键，否则永不清零
+  // dependencySnapshot.profileId（内置 profile id）；成功清除必须按 record 同源键，否则永不清零。
+  // 计数用 breaker.record 直接播种（不再真实跑两次错配命令）：record 与生产登记同样会建
+  // lastMismatchKeys 的会话+profile 范围，clearOnSuccess 的定向清除语义被完整钉住；
+  // 真实拉起只保留成功触发那一次（生产清除路径本体），CI 容器慢不再构成墙钟风险。
   it('自定义 shell 配置（shellId ≠ profileId）下成功执行仍清除错配计数', async () => {
     if (!isWindows) return
-    const mismatch = 'del /q dialect-p2-alignment.txt'
-    const first = await runShellExecutor.execute({ command: mismatch }, baseCtx(workDir, userDataDir))
-    expect(first.data).toMatchObject({ retryCount: 1, retryExhausted: false })
+    const seeded = dialectRetryBreaker.record('sess', WINDOWS_POWERSHELL_PROFILE.id, ['cmd-del-switch'])
+    expect(seeded.count).toBe(1)
     // 构造 prepared：shellId 为自定义名，dependencySnapshot.profileId 保持内置（与 record 同源）
     const planned = await planRunShellExecution({ command: 'Get-ChildItem . -Name | Select-Object -First 1' }, baseCtx(workDir, userDataDir))
     const prepared = prepareShellExecution({
@@ -915,12 +917,9 @@ describe('runShellExecutor', () => {
     }, SPAWN_TEST_TIMEOUT_MS)
     const result = await executePreparedShellExecutionWithHostFallback(prepared, baseCtx(workDir, userDataDir), Date.now(), {})
     expect(result.success).toBe(true)
-    // 修复前（按 shellId 清）这里会残留计数 → retryCount=2；修复后按 profileId 同源清 → retryCount=1
-    const afterClear = await runShellExecutor.execute({ command: mismatch }, baseCtx(workDir, userDataDir))
-    expect(afterClear.data).toMatchObject({ retryCount: 1, retryExhausted: false })
+    // 修复前（按 shellId 清）播种的计数会残留 → record 返回 2；按 profileId 同源清后 → 1
+    expect(dialectRetryBreaker.record('sess', WINDOWS_POWERSHELL_PROFILE.id, ['cmd-del-switch']).count).toBe(1)
     dialectRetryBreaker.clear('sess', WINDOWS_POWERSHELL_PROFILE.id, ['cmd-del-switch'])
-    // 五次真实进程拉起（两次 del 各含方言重试 + 一次 prepared PowerShell），
-    // CI runner 上 PowerShell 冷启动慢，15s 默认值不够——与 fa94ac90 同类处置
   }, SPAWN_TEST_TIMEOUT_MS)
 
   /** 事故重放：把 136 字节原样写进指定流，并复现宿主失败退出码（§2.2 / Gate 1）。 */
