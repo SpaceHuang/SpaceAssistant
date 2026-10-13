@@ -3,7 +3,7 @@ import type { IpcMain } from 'electron'
 import type { AppIpcContext } from '../appIpc'
 import { StorageProfileCoordinator } from '../storageProfile/storageProfileCoordinator'
 import { runStorageProfileWorker } from '../storageProfile/storageProfileWorkerClient'
-import { clearSessionProjectionCaches, compactSessionDatabase } from '../storage/sessionStorageMaintenance'
+import { clearSessionProjectionCaches, compactSessionDatabase, StorageMaintenanceError } from '../storage/sessionStorageMaintenance'
 
 export function registerStorageMaintenanceIpc(ipcMain: IpcMain, ctx: AppIpcContext): StorageProfileCoordinator {
   const coordinator = ctx.storageProfileCoordinator ?? new StorageProfileCoordinator({
@@ -40,6 +40,8 @@ function stableStorageProfileError(error: unknown): string {
 }
 
 function stableMaintenanceError(error: unknown): string {
+  // StorageMaintenanceError 的 message 是英文句子，稳定码只在 code 上；message.includes 仅作其他层拼接的兜底。
+  if (error instanceof StorageMaintenanceError) return error.code
   if (error instanceof Error && error.message.includes('MAINTENANCE_BUSY')) return 'STORAGE_MAINTENANCE_BUSY'
   return 'STORAGE_MAINTENANCE_FAILED'
 }

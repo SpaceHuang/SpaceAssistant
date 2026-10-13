@@ -964,6 +964,7 @@
     "loadFailed": "Failed to load storage usage",
     "operationFailed": "Storage maintenance failed. Try again later.",
     "busy": "A session is still running. Wait for it to finish before compacting.",
+    "insufficientSpace": "Not enough free disk space. Archiving and compaction need space roughly equal to the database size.",
     "clearSuccess": "Cleared {{count}} cache records",
     "compactSuccess": "Database compacted: {{before}} → {{after}}",
     "phase": { "archive": "Archiving database and spill files…", "vacuum": "Compacting database…", "reclaim": "Reclaiming space…", "complete": "Maintenance complete" }

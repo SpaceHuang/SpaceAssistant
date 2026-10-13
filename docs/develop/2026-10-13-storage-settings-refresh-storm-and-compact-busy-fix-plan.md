@@ -134,13 +134,13 @@
 
 > v2 的「code-as-message 重构」已无必要：错误稳定化层已存在（评审 B2 正确部分），渲染层 `setProgress(null)` 与 busy 文案分支也已在。剩余缺口实测为 §1.2-② 的谓词失效 + INSUFFICIENT_SPACE 未映射，两条小任务即可闭合。
 
-- [ ] **P2-T1 修复 `stableMaintenanceError` 谓词 + 补映射 + IPC 层测试**
+- [x] **P2-T1 修复 `stableMaintenanceError` 谓词 + 补映射 + IPC 层测试**
   - 文件：`electron/ipc/storageMaintenanceIpc.ts:42-45`
   - 改动：判别从 `error.message.includes('MAINTENANCE_BUSY')` 改为对 `StorageMaintenanceError` 的 code 判别（`import { StorageMaintenanceError } from '../storage/sessionStorageMaintenance'`，`error instanceof StorageMaintenanceError ? error.code : ...` 兜底现有 message.includes 以防其他层拼接）；返回值三分：`STORAGE_MAINTENANCE_BUSY` / `STORAGE_MAINTENANCE_INSUFFICIENT_SPACE` / `STORAGE_MAINTENANCE_FAILED`。
   - 测试：`storageMaintenanceIpc.test.ts` 新增——注入 `StorageMaintenanceError('STORAGE_MAINTENANCE_BUSY', '英文句子')` 形态的错误，断言 handler 抛出的 message 恰为 `'STORAGE_MAINTENANCE_BUSY'`（当前实现此用例必红，即本任务的红色验证）；INSUFFICIENT_SPACE 同理。
   - **DoD**：两条新用例红→绿；`storageMaintenanceIpc.test.ts` 既有断言（含 `:19` get-profile 不存在）全绿；`npm run build:electron:incremental` 通过。
 
-- [ ] **P2-T2 渲染层 INSUFFICIENT_SPACE 文案 + i18n key**
+- [x] **P2-T2 渲染层 INSUFFICIENT_SPACE 文案 + i18n key**
   - 文件：`src/renderer/components/Config/StorageSettingsTab.tsx:95-97`（compact catch）
   - 改动：错误分支加第三支：`reason.message.includes('STORAGE_MAINTENANCE_INSUFFICIENT_SPACE')` → `t('storage.insufficientSpace')`；busy 分支不动（P2-T1 修复后即可生效）。
   - i18n：`zh-CN/config.json` 与 `en-US/config.json` 的 `storage` 命名空间新增 `insufficientSpace`（zh 建议：「磁盘剩余空间不足，归档压缩需要约与数据库相当的空间」），随后 `npm run i18n:generate-types`。

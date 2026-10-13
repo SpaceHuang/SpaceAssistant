@@ -96,6 +96,7 @@ export function StorageSettingsTab() {
     } catch (reason) {
       setProgress(null)
       if (reason instanceof Error && reason.message.includes('STORAGE_MAINTENANCE_BUSY')) setError(t('storage.busy'))
+      else if (reason instanceof Error && reason.message.includes('STORAGE_MAINTENANCE_INSUFFICIENT_SPACE')) setError(t('storage.insufficientSpace'))
       else setError(t('storage.operationFailed'))
     }
   }

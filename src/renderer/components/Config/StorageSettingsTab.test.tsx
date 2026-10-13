@@ -125,4 +125,23 @@ describe('StorageSettingsTab', () => {
     await waitFor(() => expect(overview).toHaveBeenCalledTimes(2))
     expect(overview).toHaveBeenLastCalledWith(true)
   })
+
+  it('explains a busy rejection with the dedicated copy instead of the generic failure', async () => {
+    compact.mockRejectedValueOnce(new Error('STORAGE_MAINTENANCE_BUSY'))
+    render(<ConfigProvider><App><StorageSettingsTab /></App></ConfigProvider>)
+    await screen.findByText('会话存储')
+    fireEvent.click(screen.getByRole('button', { name: '归档并压缩' }))
+    expect(await screen.findByText('仍有会话运行中，请等待会话结束后再压缩')).toBeTruthy()
+    expect(screen.queryByText('存储维护失败，请稍后重试')).toBeNull()
+    await waitFor(() => expect(screen.getByRole('button', { name: '归档并压缩' }).className).not.toContain('ant-btn-loading'))
+  })
+
+  it('explains an insufficient-space rejection with the dedicated copy instead of the generic failure', async () => {
+    compact.mockRejectedValueOnce(new Error('STORAGE_MAINTENANCE_INSUFFICIENT_SPACE'))
+    render(<ConfigProvider><App><StorageSettingsTab /></App></ConfigProvider>)
+    await screen.findByText('会话存储')
+    fireEvent.click(screen.getByRole('button', { name: '归档并压缩' }))
+    expect(await screen.findByText('磁盘剩余空间不足，归档压缩需要约与数据库相当的空间')).toBeTruthy()
+    expect(screen.queryByText('存储维护失败，请稍后重试')).toBeNull()
+  })
 })
