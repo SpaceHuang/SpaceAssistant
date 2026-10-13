@@ -1213,6 +1213,21 @@ async function runToolChatSessionInner(
     throw new HostedTurnHandoffError(new Error('HOSTED_HANDOFF_REQUIRED'))
   } catch (error) {
     retractAttemptPreview()
+    // llm.cancel 审计（abort → catch 延迟）。条件按 hosted 实测口径取 chatSignal.aborted：
+    // 原生 ChatCancelledError 只在 pre-LLM 判定抛出，流中段取消以
+    // HostedTurnFinalizedError(cancelled/interrupted) 或包装 HandoffError 到达本 catch，
+    // signal 状态判定可一并覆盖；loopRound 是本层局部变量，故打点必须在此层。
+    // 计时起点由公共落点（registerChatCancel 旁的 abort 监听）经 cancelTimestamps 写入；
+    // 取不到时省略字段（宿主边界，不编造数值）。
+    if (chatSignal.aborted) {
+      const abortedAt = cancelTimestamps.get(chatSignal)
+      logAgentEvent('warn', 'llm.cancel', {
+        requestId,
+        sessionId,
+        loopRound,
+        ...(abortedAt === undefined ? {} : { abortToCatchMs: Math.max(0, Math.round(performance.now() - abortedAt)) })
+      })
+    }
     if (error instanceof ChatCancelledError || error instanceof HostedTurnFinalizedError || error instanceof HostedTurnHandoffError || error instanceof ToolLoopRoundLimitError) throw error
     throw new HostedTurnHandoffError(error)
   } finally {

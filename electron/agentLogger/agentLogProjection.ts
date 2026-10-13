@@ -8,6 +8,7 @@ const TARGET_EVENTS = new Set<AgentLogEventName>([
   'retention.spill.cleaned',
   'storage.spill.source_truth_gc', 'storage.spill.source_truth_gc_failed',
   'llm.silent_overflow',
+  'llm.cancel', 'turn.cancel', 'turn.cancel.tools',
   'tool.request', 'tool.error', 'tool.result', 'tool.result.contract-violation',
   'trust.remove',
   'history.cutover', 'session.storage.shadow', 'session.history.recovery', 'session.history.repair.failed', 'session.transcript.read', 'session.transcript.reconciliation',
@@ -30,6 +31,7 @@ const COMMON_KEYS = new Set([
   'reason', 'terminated', 'elapsedMs', 'terminationState', 'pendingRepairs',
   'dataBytes', 'dataSha256', 'outputTruncated', 'outputRedacted', 'invariants', 'violationCount',
   'turnId', 'stage', 'historyStreamId', 'previousTurnId', 'snapshotVersion', 'transcriptVersion', 'reconciledCount',
+  'accepted', 'abortToCatchMs', 'cancelledTools',
   'consumer', 'source', 'differenceCount', 'fieldNames', 'legacyHash', 'canonicalHash', 'acceptedInputFingerprint',
   'appVersion',
   'releasedUnstarted', 'markedUncertain', 'repairedCheckpoints', 'phase', 'pending', 'completed', 'sharedReference', 'failed'
