@@ -35,9 +35,6 @@ coverage/
 resources/ripgrep/*
 !resources/ripgrep/.gitkeep
 
-# Agent 本地配置文件
-AGENTS.md
-
 # Mingcute 图标库源码（已复制所需图标到 src/renderer/assets/）
 res/mingcute-icons-main/
 
