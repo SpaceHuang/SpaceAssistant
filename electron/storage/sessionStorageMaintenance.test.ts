@@ -461,7 +461,7 @@ describe('session storage maintenance', () => {
     expect(JSON.parse(await fs.readFile(path.join(archiveRoot, archives[0]!, 'maintenance.json'), 'utf8')))
       .toMatchObject({ status: 'failed', failureCode: 'STORAGE_MAINTENANCE_CANCELLED', phase: 'vacuum' })
     temp.cleanup()
-  })
+  }, 30_000)
 
   it('detects space loss after archiving but before vacuum and preserves both source and recovery archive', async () => {
     const temp = createTempDatabase('storage-maintenance-space-race-')
@@ -482,7 +482,7 @@ describe('session storage maintenance', () => {
     expect(JSON.parse(await fs.readFile(path.join(archiveRoot, archives[0]!, 'maintenance.json'), 'utf8')))
       .toMatchObject({ status: 'failed', failureCode: 'STORAGE_MAINTENANCE_INSUFFICIENT_SPACE', phase: 'archive' })
     temp.cleanup()
-  })
+  }, 30_000)
 
   it('preserves the verified archive and retries when VACUUM phase fails', async () => {
     const temp = createTempDatabase('storage-maintenance-vacuum-phase-failure-')

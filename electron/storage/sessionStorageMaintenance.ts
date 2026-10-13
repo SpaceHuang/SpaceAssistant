@@ -327,7 +327,6 @@ export async function compactSessionDatabase(
       throw new StorageMaintenanceError('STORAGE_MAINTENANCE_INSUFFICIENT_SPACE',
         `database maintenance requires ${filesBefore.dbBytes} bytes for the swap working copy; ${availableBytesForSwap} bytes are available after archiving`)
     }
-    if (options.clearProjectionCachesAfterArchive) clearSessionProjectionCaches(db)
     phase = 'swap'
     onProgress?.({ phase: 'swap' })
     const swapStartedAt = performance.now()
@@ -364,6 +363,9 @@ export async function compactSessionDatabase(
       throw new Error('compaction swap verification failed; restored the pre-compaction database from the archive')
     }
     const swapDurationMs = performance.now() - swapStartedAt
+    // 可重建投影缓存的清理必须在换入之后：worker 的 VACUUM INTO 快照早于清理，
+    // 若在换入前清理，staging 会把已清行原样带回来（归档中仍保有这些行，语义不变）。
+    if (options.clearProjectionCachesAfterArchive) clearSessionProjectionCaches(db)
     db.flushSave()
     const filesAfter = sqliteFileSizes(dbPath)
     const archiveBytes = directoryFileBytes(archivePath)

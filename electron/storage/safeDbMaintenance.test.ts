@@ -24,8 +24,10 @@ describe('safe database maintenance startup mode', () => {
     await runSafeDbMaintenance(temp.db, require('node:path').dirname(temp.dbPath))
 
     expect(before).toEqual({ count: 1 })
-    expect(conn.prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_cache').get()).toEqual({ count: 0 })
-    expect(conn.prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_eligibility').get()).toEqual({ count: 0 })
+    // 压缩换入临界区重建了底层连接，须重取后再断言。
+    const reopenedConn = getDbConnection(temp.db)
+    expect(reopenedConn.prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_cache').get()).toEqual({ count: 0 })
+    expect(reopenedConn.prepare('SELECT COUNT(*) AS count FROM canonical_session_projection_eligibility').get()).toEqual({ count: 0 })
     const archives = require('node:fs').readdirSync(require('node:path').join(require('node:path').dirname(temp.dbPath), 'session-archives'))
     expect(archives).toHaveLength(1)
     const archiveDb = new (require('node:sqlite').DatabaseSync)(require('node:path').join(require('node:path').dirname(temp.dbPath), 'session-archives', archives[0], require('node:path').basename(temp.dbPath)), { readOnly: true })
