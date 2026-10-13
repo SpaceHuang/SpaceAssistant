@@ -12,6 +12,7 @@ import { StorageMaintenanceError } from './storageMaintenanceError'
 import { copyFileWithHash, copyTreeWithManifest } from './streamingCopy'
 import type { CopyTreeWithManifestResult } from './streamingCopy'
 import { runSessionMaintenanceWorker, COMPACTION_WORKER_ENTRY_UNAVAILABLE } from './sessionStorageMaintenanceWorkerClient'
+import { logAgentEvent } from '../agentLogger/agentLogger'
 
 export { clearSessionProjectionCaches } from './sessionProjectionCacheMaintenance'
 export { StorageMaintenanceError } from './storageMaintenanceError'
@@ -151,6 +152,16 @@ export function activeSessionTurnCount(db: AppDatabase): number {
     (SELECT COUNT(*) FROM messages WHERE status IN ('queued','streaming')) AS count`).get() as { count: number }).count)
 }
 
+/** 压缩失败的统一日志：失败点（phase）+ 稳定错误码 + 原因消息；经 logAgentEvent 统一脱敏。 */
+function logCompactFailure(target: 'worker' | 'in-process', phase: string, error: unknown): void {
+  const failureCode = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+    ? error.code : error instanceof Error ? error.name : 'UNKNOWN_ERROR'
+  logAgentEvent('warn', 'storage.maintenance.compact_failed', {
+    executionTarget: target, phase, errorCode: failureCode,
+    reason: error instanceof Error ? error.message : String(error)
+  })
+}
+
 function maintenanceBusyError(): Error & { code: string } {
   return new StorageMaintenanceError('STORAGE_MAINTENANCE_BUSY', 'database maintenance requires all session turns to be idle')
 }
@@ -226,6 +237,7 @@ export async function compactSessionDatabase(
   }
   const startedAt = performance.now()
   if (activeSessionTurnCount(db) > 0) throw maintenanceBusyError()
+  logAgentEvent('info', 'storage.maintenance.compact', { executionTarget: 'worker', stage: 'start' })
   const dbPath = db.filePath
   db.flushSave()
   const conn = getDbConnection(db)
@@ -320,6 +332,7 @@ export async function compactSessionDatabase(
         if (error instanceof StorageMaintenanceError && error.message.includes(COMPACTION_WORKER_ENTRY_UNAVAILABLE)) {
           // N3：降级前清掉本轮归档目录（进程内路径会另建自己的归档目录）。
           fs.rmSync(archivePath, { recursive: true, force: true })
+          logAgentEvent('warn', 'storage.maintenance.compact', { executionTarget: 'worker', stage: 'degraded-to-in-process' })
           return compactSessionDatabaseInProcess(db, userDataDir, onProgress, options)
         }
         throw error
@@ -457,8 +470,13 @@ export async function compactSessionDatabase(
       archivePath: undefined,
       note: 'peakSpaceEstimateBytes is a conservative bound for the source DB, archived DB/spills and one VACUUM working copy; it is not an observed instantaneous peak.'
     })
+    logAgentEvent('info', 'storage.maintenance.compact', {
+      executionTarget: 'worker', stage: 'complete', durationMs: Math.round(durationMs),
+      vacuumMode: 'full', snapshotAttempts, bytesBefore, bytesAfter: filesAfter.dbBytes
+    })
     return result
   } catch (error) {
+    logCompactFailure('worker', phase, error)
     removeStagingArtifacts(stagingPath)
     if (!archiveVerified) fs.rmSync(archivePath, { recursive: true, force: true })
     else {
@@ -482,6 +500,7 @@ async function compactSessionDatabaseInProcess(
 ): Promise<CompactSessionDatabaseResult> {
   const startedAt = performance.now()
   if (activeSessionTurnCount(db) > 0) throw maintenanceBusyError()
+  logAgentEvent('info', 'storage.maintenance.compact', { executionTarget: 'in-process', stage: 'start' })
   const dbPath = db.filePath
   db.flushSave()
   const conn = getDbConnection(db)
@@ -614,8 +633,13 @@ async function compactSessionDatabaseInProcess(
       archivePath: undefined,
       note: 'peakSpaceEstimateBytes is a conservative bound for the source DB, archived DB/spills and one VACUUM working copy; it is not an observed instantaneous peak.'
     })
+    logAgentEvent('info', 'storage.maintenance.compact', {
+      executionTarget: 'in-process', stage: 'complete', durationMs: Math.round(durationMs),
+      vacuumMode, snapshotAttempts: 0, bytesBefore, bytesAfter: filesAfter.dbBytes
+    })
     return { ...result, manifestPath }
   } catch (error) {
+    logCompactFailure('in-process', phase, error)
     if (!archiveVerified) fs.rmSync(archivePath, { recursive: true, force: true })
     else {
       const failureCode = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'

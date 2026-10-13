@@ -4,6 +4,7 @@ import type { AppIpcContext } from '../appIpc'
 import { StorageProfileCoordinator } from '../storageProfile/storageProfileCoordinator'
 import { runStorageProfileWorker } from '../storageProfile/storageProfileWorkerClient'
 import { clearSessionProjectionCaches, compactSessionDatabase, StorageMaintenanceError } from '../storage/sessionStorageMaintenance'
+import { logAgentEvent } from '../agentLogger/agentLogger'
 
 export function registerStorageMaintenanceIpc(ipcMain: IpcMain, ctx: AppIpcContext): StorageProfileCoordinator {
   const coordinator = ctx.storageProfileCoordinator ?? new StorageProfileCoordinator({
@@ -11,15 +12,20 @@ export function registerStorageMaintenanceIpc(ipcMain: IpcMain, ctx: AppIpcConte
   })
   ipcMain.handle('storage:get-overview', async (_event, options?: { force?: boolean }) => {
     try { return (await coordinator.request({ dbPath: ctx.db.filePath, type: 'overview', force: options?.force === true })).result }
-    catch (error) { throw new Error(stableStorageProfileError(error)) }
+    catch (error) { throw new Error(logProfileRequestFailure('overview', error)) }
   })
   ipcMain.handle('storage:run-audit', async () => {
     try { return (await coordinator.request({ dbPath: ctx.db.filePath, type: 'audit', force: true })).result }
-    catch (error) { throw new Error(stableStorageProfileError(error)) }
+    catch (error) { throw new Error(logProfileRequestFailure('audit', error)) }
   })
   ipcMain.handle('storage:clear-cache', async () => {
     try { return await coordinator.withMaintenance(ctx.db.filePath, async () => clearSessionProjectionCaches(ctx.db)) }
-    catch (error) { throw new Error(stableMaintenanceError(error)) }
+    catch (error) {
+      const stable = stableMaintenanceError(error)
+      logAgentEvent('warn', 'storage.profile.request_failed', { request: 'clear-cache', errorCode: stable,
+        reason: error instanceof Error ? error.message : String(error) })
+      throw new Error(stable)
+    }
   })
   ipcMain.handle('storage:compact', async (event) => {
     try {
@@ -29,6 +35,16 @@ export function registerStorageMaintenanceIpc(ipcMain: IpcMain, ctx: AppIpcConte
     } catch (error) { throw new Error(stableMaintenanceError(error)) }
   })
   return coordinator
+}
+
+/** 概览/审计/清缓存失败的诊断日志：设置页「部分容量数据暂不可用」警示的根因在此可查。 */
+function logProfileRequestFailure(request: 'overview' | 'audit' | 'clear-cache', error: unknown): string {
+  const stable = stableStorageProfileError(error)
+  logAgentEvent('warn', 'storage.profile.request_failed', {
+    request, errorCode: stable,
+    reason: error instanceof Error ? error.message : String(error)
+  })
+  return stable
 }
 
 function stableStorageProfileError(error: unknown): string {
