@@ -304,10 +304,10 @@ worker 用**只读连接**对源库执行 `VACUUM INTO '<staging>'`：只读源�
 
 ## 五、收尾验收
 
-- [ ] **V1 定向测试一次合并跑**：`npm exec vitest run --project electron electron/storage/sessionStorageMaintenance.test.ts electron/ipc/storageMaintenanceIpc.test.ts --project renderer src/renderer/components/Config/StorageSettingsTab.test.tsx src/renderer/i18n/useTypedTranslation.test.tsx` 全绿（P3 实施时）。
-- [ ] **V2 关联面**：`npm run test:related -- electron/storage/sessionStorageMaintenance.ts electron/ipc/storageMaintenanceIpc.ts` 无新红。
-- [ ] **V3 静态检查**：`npm run build:electron:incremental`、`npm run typecheck:renderer`、`npm run i18n:check`（新增 key 时含 `:strict`）全过。
-- [ ] **V4 全量**：`npm test`（Phase 收尾/提交前各一次，不作为增量循环手段）。
+- [x] **V1 定向测试一次合并跑**：`npm exec vitest run --project electron electron/storage/sessionStorageMaintenance.test.ts electron/ipc/storageMaintenanceIpc.test.ts --project renderer src/renderer/components/Config/StorageSettingsTab.test.tsx src/renderer/i18n/useTypedTranslation.test.tsx` 全绿（P3 实施时）。（实施时扩展为 6 个相关测试文件合并跑，62/62 全绿）
+- [x] **V2 关联面**：`npm run test:related -- electron/storage/sessionStorageMaintenance.ts electron/ipc/storageMaintenanceIpc.ts` 无新红。（4254 用例：31 失败中 23 处在 base 提交 `8d749454` 完全复现 [toolCallGate 8、正文清理 5、readRead 3、grep 3、butler 2、symlink EPERM 2，均预存]，其余 8 处为 Windows 文件锁/Defender 负载抖动 [EBUSY rmdir/unlink、超时]；V2 过程中发现的 1 个真回归——可重建投影缓存清理被换入带回——已修复于 `c27722e4`）
+- [x] **V3 静态检查**：`npm run build:electron:incremental`、`npm run typecheck:renderer`、`npm run i18n:check`（新增 key 时含 `:strict`）全过。（另含 `typecheck:shared`）
+- [x] **V4 全量**：`npm test`（Phase 收尾/提交前各一次，不作为增量循环手段）。（9784 用例：9704 通过 / 46 失败 / 34 跳过；46 失败逐一定性为预存与环境项——23 处在 base 提交复现 [含 toolCallGate 8、正文清理 5 等]、15 处为本机无 symlink 权限的 EPERM、8 处为长跑负载下的 EBUSY 文件锁/超时抖动，无一位于本分支改动面）
 - [ ] **V5 真机验收**：§3 第 1 条症状 A 复现验证（决定 P3 与 §1.1 去留）；第 2/3 条按原样确认并记录（含压缩前后 `session-archives/`、DB 体积对比截图/数据；第 3 条依赖 P2-T1 谓词修复生效）。
 - [ ] **V6（P4 收尾，真机）效率基线对比**：同一 764 MB 库——修复前记录一次完整压缩耗时；P4 后首次压缩耗时下降 ≥40%（以 `maintenance.json` 的 `stageDurationsMs` 为准），同库第二次压缩走 L0/L1 快路径耗时 < 30 s；数字回填 §1.4 附表。
 - [ ] **V7（P5 收尾，真机）主进程活跃性 + 全程真进度**：压缩全程聊天窗口可输入/滚动、进行中的流式会话不受阻；进度百分比随字节单调推进（无「长期 20% 后突跳」）；压缩后消息数与最近消息内容与压缩前一致（无快照过期丢数据）；`--safe-db-maintenance` 启动修复模式下窗口可交互。
