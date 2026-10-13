@@ -151,12 +151,12 @@
 
 > 定性（评审 B1/B3）：`typedT` 仍无 `useCallback` 属实，但全仓已无把 `t` 放进依赖数组的消费方——**不修任何现存 bug**。价值仅是消除未来踩坑面；§1.1 复现验证若确认症状 A 消失，本 Phase 整体移除。
 
-- [ ] **P3-T1（可选）hook 用 `useCallback` 固定 `t`**
+- [x] **P3-T1（可选）hook 用 `useCallback` 固定 `t`**
   - 文件：`src/renderer/i18n/useTypedTranslation.ts:9-15`
   - 改动：`typedT` 包 `useCallback`，deps `[t]`（react-i18next 的 `t` 仅在语言/命名空间变化时变引用）；`i18n`、`ready` 透传不变。
   - **DoD**：`npm run typecheck:renderer` 通过；全仓渲染测试无新红。
 
-- [ ] **P3-T2（可选）在既有测试文件追加引用稳定性用例（评审 B3：文件已存在，勿新建）**
+- [x] **P3-T2（可选）在既有测试文件追加引用稳定性用例（评审 B3：文件已存在，勿新建）**
   - 文件：`src/renderer/i18n/useTypedTranslation.test.tsx`（已存在，21 行，追加而非新建）
   - 追加用例（`renderHook`）：rerender 多次后 `result.current.t` 引用不变；`i18n.changeLanguage('en-US')` 后引用变化且译文正确。
   - **DoD**：`npm exec vitest run --project renderer src/renderer/i18n/useTypedTranslation.test.tsx` 全绿。
