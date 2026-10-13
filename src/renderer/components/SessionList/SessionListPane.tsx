@@ -57,16 +57,20 @@ export function SessionListPane() {
       ? [{ label: t('session.butlerSection'), sessions: butlerSessions }, ...groupSessionsByTime(primarySessions)]
       : groupSessionsByTime(primarySessions)
 
-  const stopRun = (id: string) => {
-    abortSessionRun(id)
-    message.info(t('session.aborted'))
+  const stopRun = async (id: string) => {
+    // 提示说真话：只有取消被主进程接受才报「已中止」；turn 已终态时如实告知无需中止。
+    // await 的是一次很快的 IPC invoke，此时本地止血（按钮消失）已完成，不会出现倒挂。
+    const accepted = await abortSessionRun(id)
+    if (accepted) message.info(t('session.aborted'))
+    else message.info(t('session.alreadyEnded'))
   }
 
   const del = async (id: string): Promise<boolean> => {
     if (deletingId) return false
     setDeletingId(id)
     try {
-      abortSessionRun(id)
+      // 删除场景 accepted 不影响后续 sessionDelete，静默中止即可
+      void abortSessionRun(id)
       await window.api.sessionDelete(id)
       dispatch(removeSession(id))
       if (currentId === id) dispatch(setSession(null))

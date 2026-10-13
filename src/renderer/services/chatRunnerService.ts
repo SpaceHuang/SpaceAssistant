@@ -161,15 +161,18 @@ export function finishSessionRun(sessionId: string, requestId: string, assistant
   unregisterRunRequest(requestId, sessionId)
 }
 
-export function abortSessionRun(sessionId: string): void {
+/** 中止会话运行：IPC 受理结果与本地止血解耦——先同步发起取消并完成本地清理
+ *（按钮立即消失，不被 IPC 返回拖延），再等受理结果。返回取消是否被主进程接受
+ *（turn 不存在或 IPC 失败时为 false），供列表按钮区分「已中止」与「任务已结束」。 */
+export async function abortSessionRun(sessionId: string): Promise<boolean> {
   const meta = store.getState().chat.runningSessions[sessionId]
-  if (meta) {
-    if (meta.turnId) void window.api.chatCancelTurn(meta.turnId)
-    unregisterRunRequest(meta.requestId, sessionId)
-  } else {
-    unregisterRunRequestsForSession(sessionId)
-  }
+  const cancelPromise = meta?.turnId
+    ? Promise.resolve(window.api.chatCancelTurn(meta.turnId)).catch(() => false)
+    : Promise.resolve(false)
+  if (meta) unregisterRunRequest(meta.requestId, sessionId)
+  else unregisterRunRequestsForSession(sessionId)
   pendingConfirmStore.rejectAllForSession(sessionId)
   clearLiveSession(sessionId)
   store.dispatch(removeRunningSession(sessionId))
+  return meta ? cancelPromise : false
 }
