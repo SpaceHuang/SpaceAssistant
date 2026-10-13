@@ -69,6 +69,7 @@ import { sanitizeCapabilityParamsForDisplay } from '../../src/shared/capabilityP
 import { CapabilityRegistry } from '../../packages/agent-sdk/src/capability'
 import { SafetyGate } from '../../packages/agent-sdk/src/safetyGate'
 import { createHostedAgentTurnHost } from './hostedAgentTurnHost'
+import { AgentTurnLifecycleInvalidatedError } from '../../packages/agent-sdk/src/turn'
 import type { ConfirmationPort } from '../../packages/agent-sdk/src/turn'
 import { FileStateCache } from '../fileStateCache'
 import { resolveEffectiveShellOutputMode } from '../../src/shared/shellOutputMode'
@@ -1183,6 +1184,14 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         ...(input.sessionLedgerForInvocationTerminal ? { sessionLedgerForInvocationTerminal: input.sessionLedgerForInvocationTerminal } : {}),
         prepareTool: input.registeredTools.prepareTool,
         discardPreparedTool: input.registeredTools.discardPreparedTool,
+        beforeModelRequest: () => {
+          const revoked = [...input.authorizedToolNames].some((toolName) =>
+            runtime.toolRevocations.isToolRevoked(materials.requestId, toolName)
+          )
+          if (revoked) throw new AgentTurnLifecycleInvalidatedError('revoked')
+          const current = resolveCurrentAuthorization().authorizationVersion
+          if (current !== authorizationVersion) throw new AgentTurnLifecycleInvalidatedError('authorization-changed')
+        },
         ...(input.confirmation ? { confirmation: input.confirmation } : {}),
         toolExecution: input.registeredTools.toolExecution,
         ...(input.afterToolResult ? { afterToolResult: input.afterToolResult } : {}),
@@ -1198,15 +1207,23 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
         resourceLocks: (materials.resourceLocks ?? runtime.resourceLocks) as never,
         toolResourceKeys: input.registeredTools.toolResourceKeys,
         isApprovalCandidate: input.registeredTools.isApprovalCandidate,
-        ...(materials.sessionEventLocation ? { sessionLedgerForToolResult: (call: { toolCallId: string; toolName: string; input: Record<string, unknown> }, execution: { output: unknown; isError?: boolean; auditRef?: string }) => {
+        ...(materials.sessionEventLocation ? { sessionLedgerForToolResult: (call: { toolCallId: string; toolName: string; input: Record<string, unknown> }, execution: { output: unknown; isError?: boolean; auditRef?: string; executionOutcome?: string; executorEntry?: string; errorCode?: string; invocationDisposition?: string }) => {
           const isError = execution.isError ?? false
           const result = projectCanonicalToolResultForSessionLedger({
             rawResult: execution.output, isError, toolName: call.toolName, workspaceRoot: materials.resolveWorkDir?.() ?? materials.workDir,
-            ...(execution.auditRef ? { auditRef: execution.auditRef } : {})
+            ...(execution.auditRef ? { auditRef: execution.auditRef } : {}),
+            ...(execution.executionOutcome ? { executionOutcome: execution.executionOutcome as import('../../src/shared/domainTypes').ToolCallResultPersisted['executionOutcome'] } : {}),
+            ...(execution.executorEntry ? { executorEntry: execution.executorEntry as import('../../src/shared/domainTypes').ToolCallResultPersisted['executorEntry'] } : {}),
+            ...(execution.errorCode ? { executionErrorCode: execution.errorCode } : {}),
+            ...(execution.invocationDisposition ? { invocationDisposition: execution.invocationDisposition as import('../../src/shared/domainTypes').ToolCallResultPersisted['invocationDisposition'] } : {})
           })
           // FR8/AD10：延迟工具未浮现直调 → 持久化面标记（不进 wire 面工具结果块，B4）
           const record = execution.output && typeof execution.output === 'object' && !Array.isArray(execution.output) ? execution.output as Record<string, unknown> : undefined
           if (!(isError || record?.success === false) && input.deferredUnsurfacedCheck?.(call.toolName)) result.deferredUnsurfaced = true
+          if (execution.executionOutcome) result.executionOutcome = execution.executionOutcome as NonNullable<typeof result.executionOutcome>
+          if (execution.executorEntry) result.executorEntry = execution.executorEntry as NonNullable<typeof result.executorEntry>
+          if (execution.errorCode) result.executionErrorCode = execution.errorCode
+          if (execution.invocationDisposition) result.invocationDisposition = execution.invocationDisposition as NonNullable<typeof result.invocationDisposition>
           return {
             location: materials.sessionEventLocation, stepId: toolStepId(call.toolCallId), result,
             requestId: materials.requestId, invocationRequestId: materials.requestId,
@@ -1500,7 +1517,7 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
       onUsageAttribution: ({ modelTurn, attribution }) => attributionByModelTurn.set(modelTurn, attribution),
       onTurnToolAttribution: (dimension) => { turnToolAttribution = dimension },
       onDispatchDiagnostic: (event) => {
-        const eventName = event.type === 'tools.dispatch_stopped_with_pending' || event.type === 'tools.undispatched_slots_materialized' || event.type === 'tools.dispatch_failure_context'
+        const eventName = event.type === 'tools.dispatch_stopped_with_pending' || event.type === 'tools.undispatched_slots_materialized' || event.type === 'tools.dispatch_failure_context' || event.type === 'tools.execution_summary'
           ? event.type
           : 'tool.error'
         logAgentEvent('warn', eventName, {
@@ -1531,7 +1548,11 @@ export function assembleInvocation(materials: AgentInvocationMaterials): {
           ...(typeof record?.error === 'string' ? { error: record.error } : {}),
           ...(typeof record?.userMessage === 'string' ? { userMessage: record.userMessage } : {}),
           ...(typeof record?.decisionRuleId === 'string' ? { decisionRuleId: record.decisionRuleId } : {}),
-          ...(record?.autoApprovedWrite && typeof record.autoApprovedWrite === 'object' ? { autoApprovedWrite: record.autoApprovedWrite as import('../../src/shared/domainTypes').AutoApprovedWriteMeta } : {})
+          ...(record?.autoApprovedWrite && typeof record.autoApprovedWrite === 'object' ? { autoApprovedWrite: record.autoApprovedWrite as import('../../src/shared/domainTypes').AutoApprovedWriteMeta } : {}),
+          ...(typeof record?.executionOutcome === 'string' ? { executionOutcome: record.executionOutcome as import('../../src/shared/domainTypes').ToolCallResultPersisted['executionOutcome'] } : {}),
+          ...(typeof record?.executorEntry === 'string' ? { executorEntry: record.executorEntry as import('../../src/shared/domainTypes').ToolCallResultPersisted['executorEntry'] } : {}),
+          ...(typeof record?.executionErrorCode === 'string' ? { executionErrorCode: record.executionErrorCode } : {}),
+          ...(typeof record?.invocationDisposition === 'string' ? { invocationDisposition: record.invocationDisposition as import('../../src/shared/domainTypes').ToolCallResultPersisted['invocationDisposition'] } : {})
         }, { workspaceRoot: materials.workDir, processTool: isProcessToolName(call.toolName) })
         if (projected.success && projected.autoApprovedWrite) {
           logAgentEvent('info', 'file.auto_approve', { requestId: materials.requestId, sessionId: materials.sessionId,

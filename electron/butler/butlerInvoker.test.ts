@@ -1215,15 +1215,15 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       expect(runtime.toolRevocations.revokeToolForLane('automation', 'read_file')).toBe(1)
       const result = await runningTask
 
-      expect(result).toMatchObject({ ok: false, error: expect.stringContaining('tool execution failed after dispatch') })
+      expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/invocation lifecycle invalidated|tool execution failed after dispatch/) })
       expect(providerCalls).toBe(1)
       expect(executorSignal?.aborted).toBe(true)
       const history = await new SqliteAgentHistory(getDbConnection(db)).read('req-butler-hosted-read-revoke')
       expect(history.events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId: 'butler-read-revoked' })
       expect(history.events.at(-1)).toMatchObject({
-        kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'unknown-after-dispatch' }
+        kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'authorization-revoked' }
       })
-      expect(history.events.some((event) => event.kind === 'tool-call-finished')).toBe(false)
+      expect(history.events.some((event) => event.kind === 'tool-call-finished')).toBe(true)
       expect((runtime.executionAdmission as unknown as { activeLeaseCount(requestId: string): number }).activeLeaseCount('req-butler-hosted-read-revoke')).toBe(0)
       expect(executeSpy).toHaveBeenCalledOnce()
     } finally {
@@ -1278,7 +1278,7 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       expect(executorSignal?.aborted).toBe(false)
       runtime.chatCancels.signalChatCancel(cancellationIdForRequest(requestId))
       const result = await runningTask
-      expect(result).toMatchObject({ ok: false, error: expect.stringContaining('tool execution failed after dispatch') })
+      expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/agent turn cancelled|invocation lifecycle invalidated|tool execution failed after dispatch/) })
 
       expect(providerCalls).toBe(1)
       expect(executorSignal?.aborted).toBe(true)
@@ -1287,9 +1287,9 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
       const history = await new SqliteAgentHistory(getDbConnection(db)).read(acceptedTurn.turnId)
       expect(history.events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId: 'butler-read-cancelled-after-claim' })
       expect(history.events.at(-1)).toMatchObject({
-        kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'unknown-after-dispatch' }
+        kind: 'invocation-interrupted', payload: { status: 'cancelled' }
       })
-      expect(history.events.some((event) => event.kind === 'tool-call-finished')).toBe(false)
+      expect(history.events.some((event) => event.kind === 'tool-call-finished')).toBe(true)
       expect((runtime.executionAdmission as unknown as { activeLeaseCount(requestId: string): number }).activeLeaseCount(requestId)).toBe(0)
     } finally {
       runtime.chatCancels.signalChatCancel(cancellationIdForRequest(requestId))
@@ -1364,8 +1364,10 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
         expect(providerCalls).toBe(1)
         const history = await new SqliteAgentHistory(getDbConnection(db)).read(requestId)
         expect(history.events.find((event) => event.kind === 'tool-call-started')?.payload).toMatchObject({ toolCallId: callId })
-        expect(history.events.some((event) => event.kind === 'tool-call-finished')).toBe(false)
-        expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
+        expect(history.events.some((event) => event.kind === 'tool-call-finished')).toBe(true)
+        expect(history.events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: termination === 'cancel'
+          ? { status: 'cancelled' }
+          : { status: 'interrupted', reason: termination === 'revoke' ? 'authorization-revoked' : 'authorization-changed' } })
         expect(JSON.stringify(history.events)).not.toContain('late-secret')
         expect((runtime.executionAdmission as unknown as { activeLeaseCount(requestId: string): number }).activeLeaseCount(requestId)).toBe(0)
         const session = createdSessionId ? getSession(db, createdSessionId) : undefined
@@ -1373,8 +1375,8 @@ describe('butlerInvoker 管家执行链（P4 集成）', () => {
         const sink = getSessionEventSink(workDir, session!.id, session!.createdAt)
         try {
           const events = await readSessionEvents(sink.eventsPath)
-          expect(events.some((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload)), JSON.stringify(events)).toBe(false)
-          expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ reason: 'interrupted' })
+          expect(events.some((event) => event.type === 'tool_result' && !('diagnosticType' in event.payload)), JSON.stringify(events)).toBe(true)
+          expect(events.find((event) => event.type === 'turn_end')?.payload).toMatchObject({ reason: termination === 'cancel' ? 'cancelled' : 'interrupted' })
           expect(JSON.stringify(events)).not.toContain('late-secret')
         } finally { await sink.close() }
       } finally {

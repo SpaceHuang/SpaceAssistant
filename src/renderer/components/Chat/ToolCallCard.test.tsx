@@ -73,6 +73,14 @@ describe('ToolCallCard approval explanations', () => {
 })
 
 describe('ToolCallCard file write expand behavior', () => {
+  it('explains an unknown post-dispatch outcome and makes the error code secondary', () => {
+    render(<ToolCallCard record={writeRecord('failed', {
+      result: { success: false, executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered', executionErrorCode: 'TOOL_TIMEOUT' }
+    })} />)
+    expect(screen.getByText(/调用可能已经生效/)).toBeDefined()
+    expect(screen.getByText(/TOOL_TIMEOUT/)).toBeDefined()
+  })
+
   it('失败结果优先显示 userMessage 而非机器错误码', () => {
     render(
       <ToolCallCard

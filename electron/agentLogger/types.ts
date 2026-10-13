@@ -129,6 +129,7 @@ export type AgentLogEventName =
   | 'tools.dispatch_stopped_with_pending'
   | 'tools.undispatched_slots_materialized'
   | 'tools.dispatch_failure_context'
+  | 'tools.execution_summary'
   | 'startup.streaming_cleanup'
   | 'startup.legacy_workspace_layout_cleanup'
   | 'startup.legacy_workspace_layout_cleanup_failed'

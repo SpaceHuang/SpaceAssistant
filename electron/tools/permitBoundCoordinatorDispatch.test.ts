@@ -100,7 +100,7 @@ describe('permit-bound coordinator dispatch adapter', () => {
     expect(admission.activeLeaseCount('req')).toBe(0)
   })
 
-  it('真实 permit-bound executor 不响应 lease abort 时等待 settle 并以 unknown-after-dispatch 关闭 prepared handle', async () => {
+  it('真实 permit-bound executor 不响应 lease abort 时尽快按 unknown-after-dispatch 关闭 prepared handle', async () => {
     const { toolRevocations } = setup()
     const admission = new InMemoryExecutionAdmissionCoordinator()
     const dispatch = createPermitBoundCoordinatorDispatch({
@@ -125,18 +125,20 @@ describe('permit-bound coordinator dispatch adapter', () => {
     const pending = executeRegisteredTool(tool, { query: 'weather' }, {
       requestId: 'req', toolUseId: 'non-cooperative', signal: controller.signal
     }, { confirm: async (handle) => { handleRef = handle; return true }, dispatch }).then((value) => { completed = true; return value })
-
+    const outcome = pending.then(() => ({ kind: 'resolved' as const }), (error: unknown) => ({ kind: 'rejected' as const, error }))
     await atExecutor
     expect(admission.activeLeaseCount('req')).toBe(1)
     controller.abort(new Error('cancel after dispatch claim'))
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(leaseSignal?.aborted).toBe(true)
+    const finalOutcome = await outcome
+    const executionError = finalOutcome.kind === 'rejected' ? finalOutcome.error : undefined
+    expect(executionError).toBeInstanceOf(ToolExecutionAfterDispatchError)
     expect(completed).toBe(false)
-    expect(handleRef?.state).toBe('executing')
-    expect(admission.activeLeaseCount('req')).toBe(1)
 
     settle('settled after abort')
-    await expect(pending).rejects.toBeInstanceOf(ToolExecutionAfterDispatchError)
+    await (executionError as ToolExecutionAfterDispatchError).executorSettled
+    await vi.waitFor(() => expect(admission.activeLeaseCount('req')).toBe(0))
     expect(handleRef?.state).toBe('settled')
     await expect(handleRef?.execute({ requestId: 'req', toolUseId: 'non-cooperative', signal: new AbortController().signal } as never)).rejects.toThrow('INVOCATION_ALREADY_EXECUTED')
     expect(admission.activeLeaseCount('req')).toBe(0)

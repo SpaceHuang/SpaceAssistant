@@ -270,7 +270,7 @@ describe('browserExecutor', () => {
     const admission = new InMemoryExecutionAdmissionCoordinator()
     const permits = new InMemorySafetyPermitStore()
     const revocations = new ToolRevocationRegistry()
-    revocations.registerToolRevocationRequest(requestId, 'desktop', requestId)
+    revocations.registerToolRevocationRequest(requestId, 'desktop', turnId)
     const registry = new TypedToolRegistry()
     registry.register(createBrowserRegisteredTool(browserExecutor))
     const tools = createRegisteredAgentTurnTools({
@@ -316,10 +316,14 @@ describe('browserExecutor', () => {
     } else {
       controller.abort()
     }
-    await expect(turn).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+    await expect(turn).rejects.toMatchObject(invalidation === 'revoke'
+      ? { name: 'AgentTurnLifecycleInvalidatedError', reason: 'revoked' }
+      : { name: 'AgentTurnCancelledError' })
     const events = (await history.read(invocationId)).events
-    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
-    expect(events.some(({ kind }) => kind === 'tool-call-finished')).toBe(false)
+    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: invalidation === 'revoke'
+      ? { status: 'interrupted', reason: 'authorization-revoked' }
+      : { status: 'cancelled' } })
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'tool-call-finished', payload: expect.objectContaining({ executionOutcome: 'unknown-after-dispatch' }) }))
     expect(providerCalls).toBe(1)
     expect(admission.activeLeaseCount(requestId, invocationId)).toBe(0)
     expect(mockCloseSession).toHaveBeenCalledWith('browser-hosted-session')

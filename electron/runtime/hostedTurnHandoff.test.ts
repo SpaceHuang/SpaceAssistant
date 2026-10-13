@@ -65,6 +65,7 @@ import { reconcileStartupSessionTranscripts } from '../sessionStorage/recovery'
 import { queueInputFingerprint } from '../queueInputFingerprint'
 import { createSqliteSessionStorage } from '../sessionStorage/sqliteSessionStorage'
 import { getProjectedMessage, readSessionTranscriptProjection } from './sessionTranscriptProjection'
+import type { HistoryEvent } from '../../packages/agent-sdk/src/history'
 
 type HostedTurnHandoffFixtureInput = Omit<Parameters<typeof createComposedHostedTurnHandoff>[0], 'sessionDb'> & { sessionDb?: AppDatabase }
 function createHostedTurnHandoff(input: HostedTurnHandoffFixtureInput) {
@@ -201,7 +202,8 @@ describe('createHostedTurnHandoff', () => {
       ], 0)
       return { text: 'done', modelTurns: 1, finishReason: 'stop', usage: { inputTokens: 2, outputTokens: 1 }, messages: [] }
     })
-    const handoff = createHostedTurnHandoff({ agentSdk, history, invocationId: 'current', turnId: 'new-turn', routeId: 'route', sessionId: 'session-shadow' })
+    const handoff = createHostedTurnHandoff({ agentSdk, history, invocationId: 'current', turnId: 'new-turn', routeId: 'route', sessionId: 'session-shadow',
+      continuationContext: { mode: 'context-fallback', fallbackReason: 'UNKNOWN_SIDE_EFFECT', sourceInvocationId: 'failed-inv', sourceTurnId: 'failed-turn', historySequence: 9, state: 'unknown', summary: 'the prior tool result is unknown; do not assume it failed' } })
 
     await expect(handoff({ request, requiredUserMessage: { id: 'current-user', message: currentMessage }, beforeToolDispatch })).resolves.toMatchObject({ result: { ok: true } })
 
@@ -212,9 +214,46 @@ describe('createHostedTurnHandoff', () => {
     expect(mockRunHostedAgentTurn).toHaveBeenCalledOnce()
     expect(agentSdk.createHostedTurnRuntime).toHaveBeenCalledWith(expect.objectContaining({ beforeToolDispatch }))
     expect(mockRunHostedAgentTurn.mock.calls[0]?.[0]).toMatchObject({
-      request: { messages: [{ role: 'system', content: 'dynamic' }, ...priorMessages, currentMessage] }
+      request: { messages: [{ role: 'system', content: 'dynamic' }, ...priorMessages, currentMessage,
+        { role: 'system', content: expect.stringMatching(/Continuation mode: context-fallback; fallback reason: UNKNOWN_SIDE_EFFECT[\s\S]*the prior tool result is unknown; do not assume it failed/) }] },
+      requiredUserMessage: { id: 'current-user', message: currentMessage }
     })
     await conn.close()
+  })
+
+  it('preserves supplemental context when no prior canonical History exists', async () => {
+    const events: HistoryEvent[] = []
+    const history = {
+      readLatestInvocationForSession: vi.fn(async () => ({ kind: 'none' as const })),
+      read: vi.fn(async () => ({ invocationId: 'empty-current', version: events.length, schemaVersion: 1, events })),
+      appendBatch: vi.fn(async (batch: readonly HistoryEvent[], _expectedVersion: number) => {
+        events.push(...batch)
+        return { version: events.length, duplicate: false }
+      })
+    }
+    mockRunHostedAgentTurn.mockImplementationOnce(async ({ invocationId, turnId, request }: {
+      invocationId: string; turnId: string; request: { messages: readonly { role: string; content?: unknown }[] }
+    }) => {
+      await history.appendBatch([
+        { invocationId, turnId, sequence: 1, schemaVersion: 1, eventId: 'none-context', idempotencyKey: 'none-context', kind: 'invocation-context-committed', payload: { messages: request.messages } },
+        { invocationId, turnId, sequence: 2, schemaVersion: 1, eventId: 'none-done', idempotencyKey: 'none-done', kind: 'invocation-completed', payload: { status: 'completed' } }
+      ], 0)
+      return { text: 'done', modelTurns: 1, finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 1 }, messages: [...request.messages, { role: 'assistant', content: 'done' }] }
+    })
+    const handoff = createHostedTurnHandoff({
+      agentSdk: { createHostedTurnRuntime: vi.fn(() => ({ host: {}, dispose: async () => undefined })) },
+      history: history as never, invocationId: 'empty-current', turnId: 'empty-turn', routeId: 'route', sessionId: 'empty-session',
+      continuationContext: { mode: 'context-fallback', fallbackReason: 'UNKNOWN_SIDE_EFFECT', sourceInvocationId: 'empty-source',
+        sourceTurnId: 'empty-source-turn', historySequence: 3, state: 'unknown', summary: 'prior work remains unknown' }
+    })
+    const user = { role: 'user' as const, content: 'continue' }
+
+    await expect(handoff({ request: { messages: [user], maxTokens: 32 }, requiredUserMessage: { id: 'empty-user', message: user } }))
+      .resolves.toMatchObject({ result: { ok: true } })
+
+    expect(mockRunHostedAgentTurn.mock.calls.at(-1)?.[0].request.messages).toEqual([user, expect.objectContaining({
+      role: 'system', content: expect.stringMatching(/Continuation mode: context-fallback; fallback reason: UNKNOWN_SIDE_EFFECT[\s\S]*prior work remains unknown/)
+    })])
   })
 
   it('fails closed on request transcript drift before creating the Hosted runtime', async () => {
@@ -401,19 +440,26 @@ describe('createHostedTurnHandoff', () => {
     const handoff = createHostedTurnHandoff({
       agentSdk: { createHostedTurnRuntime: vi.fn(() => ({ host: {}, dispose: async () => undefined })) },
       history, invocationId: 'restart-retry-invocation', turnId: 'restart-retry-turn', routeId: 'route',
-      sessionId: session.id, sessionDb: db, sessionQueries: Object.freeze({ ...baseQueries, readMessage })
+      sessionId: session.id, sessionDb: db, sessionQueries: Object.freeze({ ...baseQueries, readMessage }),
+      continuationContext: { mode: 'context-fallback', fallbackReason: 'UNKNOWN_SIDE_EFFECT', sourceInvocationId: 'failed-source',
+        sourceTurnId: 'failed-source-turn', historySequence: 8, state: 'unknown', summary: 'a prior tool result remains unknown after restart' }
     })
 
     await expect(handoff({ request, requiredUserMessage: { id: 'current-user', message: current } })).resolves.toMatchObject({ result: { ok: true } })
+    expect(mockRunHostedAgentTurn.mock.calls.at(-1)?.[0].request.messages).toContainEqual(expect.objectContaining({
+      role: 'system', content: expect.stringMatching(/Continuation mode: context-fallback; fallback reason: UNKNOWN_SIDE_EFFECT[\s\S]*a prior tool result remains unknown after restart/)
+    }))
 
     expect(readMessage).toHaveBeenCalledWith({ sessionId: session.id, messageId: prior.id })
     expect(mockRunHostedAgentTurn.mock.calls.at(-1)?.[0]).toMatchObject({ request: { messages: [
       { role: 'system', content: 'dynamic' }, ...earlierTranscript,
-      { role: 'user', content: prior.content }, current
+      { role: 'user', content: prior.content }, current,
+      { role: 'system', content: expect.stringMatching(/Continuation mode: context-fallback; fallback reason: UNKNOWN_SIDE_EFFECT/) }
     ] } })
     expect(readSessionTranscript(db, session.id)).toMatchObject({ version: 1, status: 'ready', messages: [
       ...earlierTranscript, { role: 'user', content: prior.content }, current, { role: 'assistant', content: 'done' }
     ] })
+    expect(JSON.stringify(readSessionTranscript(db, session.id))).not.toContain('a prior tool result remains unknown after restart')
     expect(conn.prepare('SELECT content FROM messages WHERE id=?').get(prior.id)).toEqual({ content: '' })
 
     const nextUser = { role: 'user' as const, content: 'request ending in provider failure' }
@@ -801,13 +847,16 @@ describe('createHostedTurnHandoff', () => {
     await first({ request: { messages: [firstUser] }, requiredUserMessage: { id: 'u1', message: firstUser } })
     expect(readSessionTranscript(db, 'checkpoint-session')).toMatchObject({ version: 1, lastTurnId: 'turn-1', status: 'ready' })
 
-    const second = createHostedTurnHandoff({ agentSdk, history: history as never, invocationId: 'legacy-r2', turnId: 'turn-2', routeId: 'route', sessionId: 'checkpoint-session', sessionDb: db })
+    const second = createHostedTurnHandoff({ agentSdk, history: history as never, invocationId: 'legacy-r2', turnId: 'turn-2', routeId: 'route', sessionId: 'checkpoint-session', sessionDb: db,
+      continuationContext: { mode: 'context-fallback', fallbackReason: 'UNKNOWN_SIDE_EFFECT', sourceInvocationId: 'checkpoint-source', sourceTurnId: 'checkpoint-source-turn', historySequence: 4, state: 'unknown', summary: 'checkpoint source had an unknown tool result' } })
     const secondUser = { role: 'user' as const, content: 'second' }
     await second({ request: { messages: [{ role: 'system', content: 'dynamic' }, secondUser] }, requiredUserMessage: { id: 'u2', message: secondUser } })
     expect(mockRunHostedAgentTurn.mock.calls.at(-1)?.[0]).toMatchObject({ request: { messages: [
-      { role: 'system', content: 'dynamic' }, { role: 'user', content: 'first' }, { role: 'assistant', content: 'answer-1' }, secondUser
+      { role: 'system', content: 'dynamic' }, { role: 'user', content: 'first' }, { role: 'assistant', content: 'answer-1' }, secondUser,
+      { role: 'system', content: expect.stringMatching(/checkpoint source had an unknown tool result/) }
     ] } })
     expect(readSessionTranscript(db, 'checkpoint-session')).toMatchObject({ version: 2, lastTurnId: 'turn-2', status: 'ready' })
+    expect(JSON.stringify(readSessionTranscript(db, 'checkpoint-session'))).not.toContain('checkpoint source had an unknown tool result')
     db.close()
   })
 
@@ -826,12 +875,16 @@ describe('createHostedTurnHandoff', () => {
     await first({ request: { messages: [{ role: 'user', content: 'Track B private instruction' }] }, requiredUserMessage: {
       id: 'track-b-user', message: { role: 'user', content: 'Track B private instruction' }
     } })
-    const second = createHostedTurnHandoff({ agentSdk, history: history as never, invocationId: 'track-a-turn', turnId: 'track-a-turn', routeId: 'route', sessionId: 'track-shared-session', sessionDb: db, trackScopedModelInput: true })
+    const second = createHostedTurnHandoff({ agentSdk, history: history as never, invocationId: 'track-a-turn', turnId: 'track-a-turn', routeId: 'route', sessionId: 'track-shared-session', sessionDb: db, trackScopedModelInput: true,
+      continuationContext: { mode: 'context-fallback', fallbackReason: 'UNKNOWN_SIDE_EFFECT', sourceInvocationId: 'track-source', sourceTurnId: 'track-source-turn', historySequence: 2, state: 'unknown', summary: 'track source has unknown work' } })
     const trackAInput = { role: 'user' as const, content: 'Track A current input' }
     await second({ request: { messages: [trackAInput] }, requiredUserMessage: { id: 'track-a-user', message: trackAInput } })
 
-    expect(mockRunHostedAgentTurn.mock.calls.at(-1)?.[0].request.messages).toEqual([trackAInput])
+    expect(mockRunHostedAgentTurn.mock.calls.at(-1)?.[0].request.messages).toEqual([trackAInput, expect.objectContaining({
+      role: 'system', content: expect.stringMatching(/track source has unknown work/)
+    })])
     expect(readSessionTranscript(db, 'track-shared-session')).toMatchObject({ version: 2, status: 'ready' })
+    expect(JSON.stringify(readSessionTranscript(db, 'track-shared-session'))).not.toContain('track source has unknown work')
     db.close()
   })
 

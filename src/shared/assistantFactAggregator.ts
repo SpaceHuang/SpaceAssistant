@@ -13,11 +13,24 @@ export type ContinuationSafetySnapshot = Readonly<{
 }>
 
 export type ContinuationSource = Readonly<{
+  /** Present on newly created checkpoint continuations; omitted only by legacy rows. */
+  mode?: 'checkpoint-resume'
   continuationId: string
   invocationId: string
   sourceTurnId: string
   checkpointSequence: number
   checkpointSha256: string
+}>
+
+export type ContinuationFallbackReason = 'UNKNOWN_SIDE_EFFECT' | 'CHECKPOINT_UNAVAILABLE' | 'FOLLOW_UP_CONTEXT'
+export type ContinuationContext = Readonly<{
+  mode: 'context-fallback'
+  fallbackReason: ContinuationFallbackReason
+  sourceInvocationId: string
+  sourceTurnId: string
+  historySequence: number
+  summary: string
+  state: 'known' | 'unknown'
 }>
 
 /** prepare 时冻结的非敏感执行快照；API key、授权凭据和工具 permit 禁止进入该结构。 */
@@ -45,13 +58,7 @@ export type TurnExecutionConfig = {
   continuationSafetySnapshot?: ContinuationSafetySnapshot
   continuationSource?: ContinuationSource
   /** 仅由主进程从 canonical History 派生的最近失败执行摘要。 */
-  continuationContext?: {
-    sourceInvocationId: string
-    sourceTurnId: string
-    historySequence: number
-    summary: string
-    state: 'known' | 'unknown'
-  }
+  continuationContext?: ContinuationContext
   /** 重试关系锚点；原失败 Turn 和消息保持不变。 */
   retryOfMessageId?: string
   retryOfInvocationId?: string

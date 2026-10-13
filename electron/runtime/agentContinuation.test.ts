@@ -118,6 +118,11 @@ describe('agent continuation checkpoint', () => {
     unknown.events.splice(3, 1)
     expect(() => validateContinuationCheckpoint(unknown)).toThrow('UNKNOWN_SIDE_EFFECT')
 
+    const startedOnlyAfterCrash = snapshot()
+    startedOnlyAfterCrash.events.splice(3, 1)
+    startedOnlyAfterCrash.events[2] = event(3, 'tool-call-started', { toolCallId: 'tool-1', executorEntry: 'unknown' })
+    expect(() => validateContinuationCheckpoint(startedOnlyAfterCrash)).toThrow('UNKNOWN_SIDE_EFFECT')
+
     const unresolved = snapshot()
     unresolved.events.splice(2, unresolved.events.length - 2, event(3, 'approval-waiting', { toolCallId: 'tool-1' }), event(4, 'invocation-failed', { status: 'failed' }))
     unresolved.events.forEach((item, index) => { item.sequence = index + 1 })
@@ -295,6 +300,7 @@ describe('agent continuation checkpoint', () => {
     expect(started).toMatchObject({ accepted: true, turn: { requestId: started.continuation.targetInvocationId, turnId: started.continuation.targetTurnId } })
     expect(started.turn?.startToken).toBe(started.continuation.targetStartToken)
     expect(started.turn?.executionConfig?.continuationSource).toEqual({
+      mode: 'checkpoint-resume',
       continuationId: started.continuation.continuationId, invocationId: started.continuation.sourceInvocationId, sourceTurnId: started.continuation.sourceTurnId,
       checkpointSequence: started.continuation.checkpointSequence, checkpointSha256: started.continuation.checkpointSha256
     })
