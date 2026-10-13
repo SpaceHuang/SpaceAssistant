@@ -173,6 +173,18 @@ function removeStagingArtifacts(stagingPath: string): void {
   for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${stagingPath}${suffix}`, { force: true })
 }
 
+/** 换入前快照窗口探测：主库 size/mtime 与 WAL size 的变化等价于窗口内发生了提交。 */
+function liveDatabaseFileSnapshot(dbPath: string): { dbSize: number; dbMtimeMs: number; walSize: number } {
+  const stat = fs.statSync(dbPath)
+  const wal = fs.existsSync(`${dbPath}-wal`) ? fs.statSync(`${dbPath}-wal`) : undefined
+  return { dbSize: stat.size, dbMtimeMs: stat.mtimeMs, walSize: wal?.size ?? 0 }
+}
+
+function liveDatabaseFileChanged(before: ReturnType<typeof liveDatabaseFileSnapshot>, after: ReturnType<typeof liveDatabaseFileSnapshot>): boolean {
+  // WAL 的 mtime 在空 checkpoint 时也会刷新，只比较 size；主库 size/mtime 任一变化即视为有提交。
+  return before.dbSize !== after.dbSize || before.dbMtimeMs !== after.dbMtimeMs || before.walSize !== after.walSize
+}
+
 /**
  * 启动对账：清理崩溃遗留的压缩 staging；live 缺失且 staging 在时完成换入（rename 原子性保证不存在半截 live）。
  * 必须在 openDatabase 之前调用——DatabaseSync 打开不存在的路径会静默建空库。
@@ -258,17 +270,30 @@ export async function compactSessionDatabase(
     onProgress?.({ phase: 'archive' })
     let workerResult!: Awaited<ReturnType<typeof runSessionMaintenanceWorker>>
     let snapshotAttempts = 0
+    const readMainDataVersion = () => Number((conn.prepare('PRAGMA data_version').get() as { data_version: number }).data_version)
     for (;;) {
       ensureNotAborted()
-      // 防线①：换入前重查忙碌谓词（P1）；重试时同样适用。
       if (activeSessionTurnCount(db) > 0) throw maintenanceBusyError()
+      // B1：每次尝试从零开始。worker 复制以 'wx' 独占创建，归档残留会让第二次尝试必撞 EEXIST；
+      // 归档尚未通过换入前证据复核，清理不违反「已验证归档保留」语义（archiveVerified 随之复位）。
       removeStagingArtifacts(stagingPath)
+      fs.rmSync(archivePath, { recursive: true, force: true })
+      fs.mkdirSync(archivePath, { recursive: true, mode: 0o700 })
+      archiveVerified = false
       snapshotAttempts += 1
+      // 快照窗口基线：flushSave 先把防抖写入落盘，避免把自身待检查点误报为窗口写入。
+      db.flushSave()
+      const windowSnapshotBefore = liveDatabaseFileSnapshot(dbPath)
+      const mainDataVersionBefore = readMainDataVersion()
       let externalActivityAt = 0
+      let lastPolledStagingSize = -1
       // 整理阶段真实字节进度：VACUUM INTO 在 worker 线程内同步执行，staging 文件大小由编排器轮询。
+      // B2：仅当 staging 字节增长才刷新 watchdog 心跳——「staging 已建但停止增长」的卡死必须能触发 terminate。
       const vacuumPoller = setInterval(() => {
         try {
           const size = fs.statSync(stagingPath).size
+          if (size === lastPolledStagingSize) return
+          lastPolledStagingSize = size
           externalActivityAt = Date.now()
           onProgress?.({ phase: 'vacuum', completedBytes: size, totalBytes: bytesBefore })
         } catch { /* staging 尚未创建；下一轮再试。 */ }
@@ -293,48 +318,89 @@ export async function compactSessionDatabase(
       } catch (error) {
         // worker 入口不可用（打包缺产物/tsx 引导缺失）→ 降级 P4 进程内路径；其余失败原样上抛。
         if (error instanceof StorageMaintenanceError && error.message.includes(COMPACTION_WORKER_ENTRY_UNAVAILABLE)) {
+          // N3：降级前清掉本轮归档目录（进程内路径会另建自己的归档目录）。
+          fs.rmSync(archivePath, { recursive: true, force: true })
           return compactSessionDatabaseInProcess(db, userDataDir, onProgress, options)
         }
         throw error
       } finally {
         clearInterval(vacuumPoller)
       }
-      // 防线②：data_version 探针——快照期间主库有提交即丢弃 staging 重做；永不换入过期数据。
-      if (workerResult.dataVersionBefore !== workerResult.dataVersionAfter) {
+      // 防线②（worker 返回后立即复核）：worker 内部 data_version 探针覆盖其自身 vacuum 窗口，
+      // 主库文件快照 + 主连接 data_version 覆盖「spawn 前到 worker 返回」的窗口——
+      // 任一变化即丢弃 staging 与归档重做，重做读到的快照已包含该写入；永不换入过期快照。
+      db.flushSave()
+      const staleSnapshot = workerResult.dataVersionBefore !== workerResult.dataVersionAfter ||
+        liveDatabaseFileChanged(windowSnapshotBefore, liveDatabaseFileSnapshot(dbPath)) ||
+        readMainDataVersion() !== mainDataVersionBefore
+      if (staleSnapshot) {
         removeStagingArtifacts(stagingPath)
+        fs.rmSync(archivePath, { recursive: true, force: true })
         if (snapshotAttempts >= COMPACT_SNAPSHOT_RETRY_LIMIT) {
           throw new StorageMaintenanceError('STORAGE_MAINTENANCE_BUSY',
             'database snapshot kept changing during compaction; retry when all session turns are idle')
         }
         continue
       }
+      // 归档证据复核（主线程同步秒级；期间的新提交由下方换入前最终复核兜住）。
+      phase = 'archive'
+      archiveVerified = fs.statSync(archivedDbPath).size === bytesBefore &&
+        directoryFileBytes(path.join(archivePath, 'spill')) === originalSpillBytes &&
+        directoryFileBytes(path.join(archivePath, 'spill-degraded')) === originalDegradedSpillBytes &&
+        verifySessionMaintenanceArchive(dbPath, archivePath, userDataDir, {
+          dbSourceSha256: workerResult.dbSourceSha256,
+          dbDestSha256: workerResult.dbDestSha256,
+          spillSourceManifest: workerResult.spillSourceManifest,
+          spillDegradedSourceManifest: workerResult.spillDegradedSourceManifest
+        })
+      if (!archiveVerified) throw new Error('database/spill archive verification failed')
+      ensureNotAborted()
+      const availableBytesForSwap = getAvailableBytes()
+      if (availableBytesForSwap < filesBefore.dbBytes) {
+        throw new StorageMaintenanceError('STORAGE_MAINTENANCE_INSUFFICIENT_SPACE',
+          `database maintenance requires ${filesBefore.dbBytes} bytes for the swap working copy; ${availableBytesForSwap} bytes are available after archiving`)
+      }
+      // 防线①（换入前最终复核，B3）：紧贴临界区。复核期间（含归档 quick_check 全量扫描）落库的
+      // 任何提交——含忙碌谓词拦不住的 appendMessage 类同连接写入——都会改变文件快照或 data_version，
+      // 在此拦截并重做；重做读到的快照已包含该写入。
+      db.flushSave()
+      const staleBeforeSwap = liveDatabaseFileChanged(windowSnapshotBefore, liveDatabaseFileSnapshot(dbPath)) ||
+        readMainDataVersion() !== mainDataVersionBefore
+      if (staleBeforeSwap || activeSessionTurnCount(db) > 0) {
+        removeStagingArtifacts(stagingPath)
+        fs.rmSync(archivePath, { recursive: true, force: true })
+        archiveVerified = false
+        if (snapshotAttempts >= COMPACT_SNAPSHOT_RETRY_LIMIT) {
+          throw new StorageMaintenanceError('STORAGE_MAINTENANCE_BUSY',
+            'database changed while the swap was being prepared; retry when all session turns are idle')
+        }
+        continue
+      }
       break
-    }
-    phase = 'archive'
-    archiveVerified = fs.statSync(archivedDbPath).size === bytesBefore &&
-      directoryFileBytes(path.join(archivePath, 'spill')) === originalSpillBytes &&
-      directoryFileBytes(path.join(archivePath, 'spill-degraded')) === originalDegradedSpillBytes &&
-      verifySessionMaintenanceArchive(dbPath, archivePath, userDataDir, {
-        dbSourceSha256: workerResult.dbSourceSha256,
-        dbDestSha256: workerResult.dbDestSha256,
-        spillSourceManifest: workerResult.spillSourceManifest,
-        spillDegradedSourceManifest: workerResult.spillDegradedSourceManifest
-      })
-    if (!archiveVerified) throw new Error('database/spill archive verification failed')
-    ensureNotAborted()
-    const availableBytesForSwap = getAvailableBytes()
-    if (availableBytesForSwap < filesBefore.dbBytes) {
-      throw new StorageMaintenanceError('STORAGE_MAINTENANCE_INSUFFICIENT_SPACE',
-        `database maintenance requires ${filesBefore.dbBytes} bytes for the swap working copy; ${availableBytesForSwap} bytes are available after archiving`)
     }
     phase = 'swap'
     onProgress?.({ phase: 'swap' })
     const swapStartedAt = performance.now()
+    // 写栅栏：BEGIN IMMEDIATE 阻塞其它连接提交，把「最终复核 → close」的残余窗口压到同语句级；
+    // 空写事务 COMMIT 不产生任何变更。栅栏获取失败说明有并发写入者，按忙碌处理（保留归档）。
+    try {
+      conn.exec('BEGIN IMMEDIATE')
+      conn.exec('COMMIT')
+    } catch (fenceError) {
+      throw new StorageMaintenanceError('STORAGE_MAINTENANCE_BUSY',
+        `could not take the pre-swap write fence: ${fenceError instanceof Error ? fenceError.message : String(fenceError)}`)
+    }
     const preSwapCheckpoint = conn.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy: number; log: number; checkpointed: number }
     if (preSwapCheckpoint.busy !== 0 || preSwapCheckpoint.log !== preSwapCheckpoint.checkpointed) {
       throw new Error('database WAL checkpoint is incomplete; retry storage maintenance')
     }
-    db.close()
+    try {
+      db.close()
+    } catch (closeError) {
+      // N4：close 抛错也必须尽力恢复连接可用性，否则全部持有方挂到重启。
+      try { reopenDatabaseConnection(db) } catch { /* 连接不可恢复时保持关闭，仅上抛 */ }
+      throw closeError
+    }
     try {
       // worker 的快照副本让位给「最终 live 文件」：close+checkpoint 后的旧库即归档副本，免一遍复制。
       fs.rmSync(archivedDbPath, { force: true })
@@ -363,6 +429,8 @@ export async function compactSessionDatabase(
       throw new Error('compaction swap verification failed; restored the pre-compaction database from the archive')
     }
     const swapDurationMs = performance.now() - swapStartedAt
+    // N2：VACUUM INTO 即全量重建，vacuumMode 如实报 'full'；staging 继承源库 auto_vacuum，
+    // 非空库上该 pragma 需 VACUUM 才能生效（实测），legacy 库由进程内回退路径首次运行时经 L2 转换。
     // 可重建投影缓存的清理必须在换入之后：worker 的 VACUUM INTO 快照早于清理，
     // 若在换入前清理，staging 会把已清行原样带回来（归档中仍保有这些行，语义不变）。
     if (options.clearProjectionCachesAfterArchive) clearSessionProjectionCaches(db)

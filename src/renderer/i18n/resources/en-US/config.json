@@ -967,7 +967,7 @@
     "insufficientSpace": "Not enough free disk space. Archiving and compaction need space roughly equal to the database size.",
     "clearSuccess": "Cleared {{count}} cache records",
     "compactSuccess": "Database compacted: {{before}} → {{after}}",
-    "phase": { "archive": "Archiving database and spill files…", "vacuum": "Compacting database…", "reclaim": "Reclaiming space…", "complete": "Maintenance complete" , "swap": "Swapping in the compacted database…"}
+    "phase": { "archive": "Archiving database and spill files…", "vacuum": "Compacting database…", "reclaim": "Reclaiming space…", "complete": "Maintenance complete", "swap": "Swapping in the compacted database…"}
   },
   "butler": {
     "create": "New task",

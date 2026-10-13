@@ -1,6 +1,6 @@
 # 存储占用页修复与压缩优化计划：刷新风暴 + 归档卡 20% 根因修复（P1–P3）+ 压缩 I/O 效率与 worker 化（P4–P5）
 
-> 状态：**v3 已实施（P1–P5 代码与单测全部完成，2026-10-13）**（基准重定为 HEAD `ea273da6`；v1 基于 `6fe55d43` 定位根因，v2 新增 P4/P5，v3 吸收评审 `docs/review/2026-10-13-storage-settings-refresh-storm-and-compact-busy-fix-plan-review.md` 阻断项 B1–B3，并经实测修正其 B2 结论——见 §1.2 D2 第二条；实施分支 `fix/storage-compact-busy-io-worker`，worktree `.worktrees/fix-storage-compact`。P5-T10 与 §五 V5–V7 为真机验收项，待安装环境执行；§1.1 症状 A 复现验证仍待真机，P3 已按防御性口径实施，若验证确认症状 A 消失可整体移除）
+> 状态：**v3 已实施 + 评审阻断项已修复（2026-10-14）**（评审 `docs/review/2026-10-13-fix-storage-compact-branch-review.md`：B1 重试路径归档残留撞 EEXIST、B2 vacuum 阶段 watchdog 心跳失效、B3 换入前防线缺口均已修复并各配红验证回归用例；N2 以注释与本文档说明收敛 [非空库 auto_vacuum 需 VACUUM 才生效，fallback 首跑自动 L2 转换]、N3 降级前清归档、N4 close 抛错 reopen 兜底、N5 JSON 间距；N1 [换入前主线程同步复核] 暂保留——防篡改 TOCTOU 价值优先，后续可移入 worker 阶段；文档 `npm exec vitest run --project` 命令已补 `--` 分隔）。（原状态：v3 已实施，P1–P5 代码与单测全部完成，2026-10-13）（基准重定为 HEAD `ea273da6`；v1 基于 `6fe55d43` 定位根因，v2 新增 P4/P5，v3 吸收评审 `docs/review/2026-10-13-storage-settings-refresh-storm-and-compact-busy-fix-plan-review.md` 阻断项 B1–B3，并经实测修正其 B2 结论——见 §1.2 D2 第二条；实施分支 `fix/storage-compact-busy-io-worker`，worktree `.worktrees/fix-storage-compact`。P5-T10 与 §五 V5–V7 为真机验收项，待安装环境执行；§1.1 症状 A 复现验证仍待真机，P3 已按防御性口径实施，若验证确认症状 A 消失可整体移除）
 > 日期：2026-10-13（v3 同日修订）
 > 关联现象：用户报告「设置-存储占用页面进入之后一直在自动刷新用量；归档并压缩按钮点击后，一直卡在 20%」（本机安装环境，旧构建）。**注意：`ce06b3b5`（profile 扫描移入 managed workers）已重写症状 A 的根因链代码，症状 A 是否仍复现需先在当前打包版本验证（§1.1），再决定是否移除 §1.1/P3 与收敛标题。**
 > 关联模块：`electron/storage/sessionStorageMaintenance.ts`、`electron/ipc/storageMaintenanceIpc.ts`、`src/renderer/components/Config/StorageSettingsTab.tsx`、`electron/storageProfile/storageProfileCoordinator.ts`
@@ -106,7 +106,7 @@
 - [x] **P1-T1 红：先写「完整释放后可压缩」回归测试（当前代码必须跑红）**
   - 文件：`electron/storage/sessionStorageMaintenance.test.ts`
   - 新增用例 `allows compaction after every claim has been released`：对同一 session 依次调用公开 API `claimSessionExecution` → `releaseSessionExecution`（import 自 `electron/database/sessionTranscript.ts`）走完整一轮，然后直接调用 `compactSessionDatabase`。
-  - **DoD**：`npm exec vitest run --project electron electron/storage/sessionStorageMaintenance.test.ts` 中该用例**红**（当前抛 `STORAGE_MAINTENANCE_BUSY`），其余既有用例全绿。
+  - **DoD**：`npm exec vitest run -- --project electron electron/storage/sessionStorageMaintenance.test.ts` 中该用例**红**（当前抛 `STORAGE_MAINTENANCE_BUSY`），其余既有用例全绿。
   - 注意：测试库走 `createTempDatabase`，compact 会真实 VACUUM，用小数据量即可。
 
 - [x] **P1-T2 绿：修正 `activeSessionTurnCount` 的 claims 谓词**
@@ -119,7 +119,7 @@
   - 文件：`electron/storage/sessionStorageMaintenance.test.ts:171-183`
   - 现状：`it.each(['session_execution_claims','session_execution_queue'])('refuses compaction for a queued turn in %s')` 中 claims 分支手工插入 `status='queued'` 且 `turn_id='queued-t'` 的行——真实流程不产生此形状，断言了错误语义。
   - 改动：**claims 从 `it.each` 中移出**；queue 分支保留原断言（queue 的 queued 仍拒绝）；新增用例断言「claims 空闲行（`turn_id=''、status='queued'`，即 release 后形状）**不**触发 busy」。
-  - **DoD**：改名后用例 `refuses compaction for a queued turn in session_execution_queue` 单独存在；`npm exec vitest run --project electron electron/storage/sessionStorageMaintenance.test.ts` 全绿。
+  - **DoD**：改名后用例 `refuses compaction for a queued turn in session_execution_queue` 单独存在；`npm exec vitest run -- --project electron electron/storage/sessionStorageMaintenance.test.ts` 全绿。
 
 - [x] **P1-T4 不变量测试（AGENTS.md「票据类模块」强制要求）**
   - 文件：`electron/storage/sessionStorageMaintenance.test.ts` 末组新增
@@ -145,7 +145,7 @@
   - 改动：错误分支加第三支：`reason.message.includes('STORAGE_MAINTENANCE_INSUFFICIENT_SPACE')` → `t('storage.insufficientSpace')`；busy 分支不动（P2-T1 修复后即可生效）。
   - i18n：`zh-CN/config.json` 与 `en-US/config.json` 的 `storage` 命名空间新增 `insufficientSpace`（zh 建议：「磁盘剩余空间不足，归档压缩需要约与数据库相当的空间」），随后 `npm run i18n:generate-types`。
   - 测试：`StorageSettingsTab.test.tsx` 追加——compact reject message 为 `STORAGE_MAINTENANCE_INSUFFICIENT_SPACE` → 渲染 insufficientSpace 文案；再补一条 busy → `storage.busy`（钉住 P2-T1 的端到端效果）。
-  - **DoD**：`npm exec vitest run --project renderer src/renderer/components/Config/StorageSettingsTab.test.tsx` 全绿；`npm run i18n:check` 与 `:strict` 通过；`npm run typecheck:renderer` 通过。
+  - **DoD**：`npm exec vitest run -- --project renderer src/renderer/components/Config/StorageSettingsTab.test.tsx` 全绿；`npm run i18n:check` 与 `:strict` 通过；`npm run typecheck:renderer` 通过。
 
 ### Phase 3（可选，防御性）：`useTypedTranslation` 引用稳定化
 
@@ -159,7 +159,7 @@
 - [x] **P3-T2（可选）在既有测试文件追加引用稳定性用例（评审 B3：文件已存在，勿新建）**
   - 文件：`src/renderer/i18n/useTypedTranslation.test.tsx`（已存在，21 行，追加而非新建）
   - 追加用例（`renderHook`）：rerender 多次后 `result.current.t` 引用不变；`i18n.changeLanguage('en-US')` 后引用变化且译文正确。
-  - **DoD**：`npm exec vitest run --project renderer src/renderer/i18n/useTypedTranslation.test.tsx` 全绿。
+  - **DoD**：`npm exec vitest run -- --project renderer src/renderer/i18n/useTypedTranslation.test.tsx` 全绿。
 
 ### Phase 4：压缩 I/O 效率优化（保持进程内执行，为 P5 备料）
 
@@ -304,7 +304,7 @@ worker 用**只读连接**对源库执行 `VACUUM INTO '<staging>'`：只读源�
 
 ## 五、收尾验收
 
-- [x] **V1 定向测试一次合并跑**：`npm exec vitest run --project electron electron/storage/sessionStorageMaintenance.test.ts electron/ipc/storageMaintenanceIpc.test.ts --project renderer src/renderer/components/Config/StorageSettingsTab.test.tsx src/renderer/i18n/useTypedTranslation.test.tsx` 全绿（P3 实施时）。（实施时扩展为 6 个相关测试文件合并跑，62/62 全绿）
+- [x] **V1 定向测试一次合并跑**：`npm exec vitest run -- --project electron electron/storage/sessionStorageMaintenance.test.ts electron/ipc/storageMaintenanceIpc.test.ts --project renderer src/renderer/components/Config/StorageSettingsTab.test.tsx src/renderer/i18n/useTypedTranslation.test.tsx` 全绿（P3 实施时）。（实施时扩展为 6 个相关测试文件合并跑，62/62 全绿）
 - [x] **V2 关联面**：`npm run test:related -- electron/storage/sessionStorageMaintenance.ts electron/ipc/storageMaintenanceIpc.ts` 无新红。（4254 用例：31 失败中 23 处在 base 提交 `8d749454` 完全复现 [toolCallGate 8、正文清理 5、readRead 3、grep 3、butler 2、symlink EPERM 2，均预存]，其余 8 处为 Windows 文件锁/Defender 负载抖动 [EBUSY rmdir/unlink、超时]；V2 过程中发现的 1 个真回归——可重建投影缓存清理被换入带回——已修复于 `c27722e4`）
 - [x] **V3 静态检查**：`npm run build:electron:incremental`、`npm run typecheck:renderer`、`npm run i18n:check`（新增 key 时含 `:strict`）全过。（另含 `typecheck:shared`）
 - [x] **V4 全量**：`npm test`（Phase 收尾/提交前各一次，不作为增量循环手段）。（9784 用例：9704 通过 / 46 失败 / 34 跳过；46 失败逐一定性为预存与环境项——23 处在 base 提交复现 [含 toolCallGate 8、正文清理 5 等]、15 处为本机无 symlink 权限的 EPERM、8 处为长跑负载下的 EBUSY 文件锁/超时抖动，无一位于本分支改动面）

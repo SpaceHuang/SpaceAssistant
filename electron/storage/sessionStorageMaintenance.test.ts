@@ -782,6 +782,112 @@ describe('worker compaction orchestration', () => {
     temp.cleanup()
   })
 
+  it('cleans the archive between snapshot retries so a real worker can run the second attempt', async () => {
+    const temp = createTempDatabase('storage-maintenance-retry-archive-')
+    const userDataDir = path.dirname(temp.dbPath)
+    const conn = getDbConnection(temp.db)
+    conn.exec("CREATE TABLE maintenance_payload(value TEXT NOT NULL); INSERT INTO maintenance_payload VALUES('retry-content');")
+    temp.db.flushSave()
+    let attempts = 0
+    const createWorker = (workerPath: string) => {
+      attempts += 1
+      if (attempts === 1) {
+        const stub = new StubCompactionWorker()
+        // 复刻真实 worker 的文件形态（B1）：归档复制以 'wx' 独占创建落盘，然后才上报快照失配。
+        stub.postMessage = (value: unknown) => {
+          const request = value as { dbPath: string; archivePath: string }
+          queueMicrotask(() => {
+            fsSync.mkdirSync(request.archivePath, { recursive: true })
+            fsSync.copyFileSync(request.dbPath, path.join(request.archivePath, path.basename(request.dbPath)))
+            stub.emit('message', snapshotMismatchResult(1, 2))
+          })
+        }
+        return stub as unknown as Worker
+      }
+      const real = spawnSessionMaintenanceSourceWorker(workerPath)
+      const proxy = new StubCompactionWorker()
+      proxy.postMessage = (value: unknown) => real.postMessage(value)
+      proxy.terminate = () => real.terminate()
+      real.on('message', (message) => proxy.emit('message', message))
+      real.once('error', (error) => proxy.emit('error', error))
+      real.once('exit', (code) => proxy.emit('exit', code))
+      return proxy as unknown as Worker
+    }
+
+    const result = await compactSessionDatabase(temp.db, userDataDir, undefined, { createWorker })
+
+    expect(result.snapshotAttempts).toBe(2)
+    expect(result.executionTarget).toBe('worker')
+    expect(getDbConnection(temp.db).prepare('SELECT value FROM maintenance_payload').get()).toEqual({ value: 'retry-content' })
+    temp.cleanup()
+  }, 30_000)
+
+  it('times out when the staging file exists but stops growing during VACUUM INTO', async () => {
+    const temp = createTempDatabase('storage-maintenance-staged-stall-')
+    const userDataDir = path.dirname(temp.dbPath)
+    const conn = getDbConnection(temp.db)
+    conn.exec("CREATE TABLE maintenance_payload(value TEXT NOT NULL); INSERT INTO maintenance_payload VALUES('stable');")
+    temp.db.flushSave()
+    const createWorker = () => {
+      const stub = new StubCompactionWorker()
+      // 复刻真实卡死形态（B2）：staging 已创建、字节停止增长、worker 阻塞后再无任何消息。
+      stub.postMessage = (value: unknown) => {
+        const request = value as { stagingPath: string }
+        queueMicrotask(() => {
+          fsSync.writeFileSync(request.stagingPath, Buffer.alloc(8192, 1))
+        })
+      }
+      return stub as unknown as Worker
+    }
+
+    await expect(compactSessionDatabase(temp.db, userDataDir, undefined, { createWorker, watchdogTimeoutMs: 600 }))
+      .rejects.toMatchObject({ code: 'STORAGE_MAINTENANCE_TIMEOUT' })
+
+    expect(fsSync.readdirSync(path.dirname(temp.dbPath)).filter((name) => name.includes('.compact-staging-'))).toEqual([])
+    temp.cleanup()
+  }, 30_000)
+
+  it('redoes the compaction when a write lands between the worker result and the swap', async () => {
+    const temp = createTempDatabase('storage-maintenance-window-write-')
+    const userDataDir = path.dirname(temp.dbPath)
+    const conn = getDbConnection(temp.db)
+    conn.exec("CREATE TABLE maintenance_payload(value TEXT NOT NULL); INSERT INTO maintenance_payload VALUES('base-content');")
+    temp.db.flushSave()
+    let attempts = 0
+    const createWorker = (workerPath: string) => {
+      attempts += 1
+      if (attempts === 1) {
+        const stub = new StubCompactionWorker()
+        // 复刻换入窗口写入（B3）：worker 返回前后，同连接落一条忙碌谓词拦不住的写入；
+        // worker 内部 data_version 探针特意报匹配，只能靠换入前的文件快照复核兜住。
+        stub.postMessage = (value: unknown) => {
+          queueMicrotask(() => {
+            conn.exec("INSERT INTO maintenance_payload VALUES('window-write')")
+            stub.emit('message', snapshotMismatchResult(1, 1))
+          })
+        }
+        return stub as unknown as Worker
+      }
+      const real = spawnSessionMaintenanceSourceWorker(workerPath)
+      const proxy = new StubCompactionWorker()
+      proxy.postMessage = (value: unknown) => real.postMessage(value)
+      proxy.terminate = () => real.terminate()
+      real.on('message', (message) => proxy.emit('message', message))
+      real.once('error', (error) => proxy.emit('error', error))
+      real.once('exit', (code) => proxy.emit('exit', code))
+      return proxy as unknown as Worker
+    }
+
+    const result = await compactSessionDatabase(temp.db, userDataDir, undefined, { createWorker })
+
+    expect(result.snapshotAttempts).toBe(2)
+    // 窗口写入必须随重做进入换入后的库（「永不换入过期 staging」）。
+    const values = (getDbConnection(temp.db).prepare('SELECT value FROM maintenance_payload ORDER BY rowid').all() as Array<{ value: string }>)
+      .map((row) => row.value)
+    expect(values).toEqual(['base-content', 'window-write'])
+    temp.cleanup()
+  }, 30_000)
+
   it('honors the in-process fallback switch and the worker default', async () => {
     const temp = createTempDatabase('storage-maintenance-execution-target-')
     const userDataDir = path.dirname(temp.dbPath)
