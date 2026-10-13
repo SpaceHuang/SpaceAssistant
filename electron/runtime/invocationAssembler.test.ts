@@ -956,7 +956,7 @@ describe('assembleInvocation runtime tool revocation adapter', () => {
       request: { messages: [{ role: 'user', content: 'run probe' }], maxTokens: 10, tools: [{ name: 'probe-tool', description: 'probe', inputSchema: {} }] }
     })
 
-    expect(ports).toMatchObject({ invocationId: turnId, turnId, routeId, confirmation: composed.confirmation, observer: expect.any(Object) })
+    expect(ports).toMatchObject({ invocationId: turnId, turnId, routeId, confirmation: composed.confirmation, observer: expect.any(Object), maxModelTurns: 1000 })
     // FR12②：ports.prepareTool 是注册表 prepareTool 的结构化拒绝包装（共享同一 prepared 状态机，行为透传）
     expect(typeof ports.prepareTool).toBe('function')
     const binding = await ports.prepareTool!({ invocationId: turnId, toolCallId: 'probe-identity', toolName: 'probe-tool', input: { value: 1 } } as never, { kind: 'initial' })

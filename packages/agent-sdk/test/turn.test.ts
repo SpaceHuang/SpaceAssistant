@@ -25,6 +25,55 @@ function toolExecutionPort(permits: InMemorySafetyPermitStore, execute: (call: {
 }
 
 describe('runAgentTurn', () => {
+  it('adds transient system loop-check messages every 20 completed model turns without persisting them', async () => {
+    const registry = new ModelProviderRegistry()
+    const requests: CanonicalModelMessage[][] = []
+    let modelCall = 0
+    registry.register(route, { providerId: 'periodic-loop-check', stream: async function* (call) {
+      modelCall += 1
+      requests.push(structuredClone([...call.request.messages]))
+      if (modelCall <= 40) {
+        yield { type: 'tool-call', toolCallId: `loop-check-${modelCall}`, toolName: 'lookup', input: { index: modelCall } }
+        yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+        yield { type: 'finish', reason: 'tool-calls' }
+        return
+      }
+      yield { type: 'text-delta', text: 'done' }
+      yield { type: 'usage', inputTokens: 1, outputTokens: 1 }
+      yield { type: 'finish', reason: 'stop' }
+    } })
+    const invocationId = 'periodic-loop-check'
+    const capabilities = new CapabilityRegistry()
+    capabilities.define(invocationId, ['lookup'])
+    const permits = new InMemorySafetyPermitStore()
+    const history = new MemoryHistory()
+    const result = await runAgentTurn({
+      registry, routeId: route.routeId, invocationId, history,
+      request: { messages: [{ role: 'user', content: 'complete a long task' }], maxTokens: 32 },
+      safetyGate: new SafetyGate({ capabilities, permitStore: permits, policy: { evaluate: async (binding) =>
+        ({ kind: 'allow' as const, authorizationVersion: binding.authorizationVersion })
+      } }),
+      prepareTool: async (call, stage) => ({ ...toolBinding, invocationId: call.invocationId, toolCallId: call.toolCallId,
+        capabilityId: call.toolName, phase: stage.kind === 'initial' ? 'initial-compat' as const : 'recheck' as const }),
+      toolExecution: toolExecutionPort(permits, async () => ({ output: 'step complete' })),
+      maxModelTurns: 41
+    })
+
+    const checkpoint = (count: number) => `循环检查：本次用户请求已调用大模型 ${count} 次。请检查当前执行过程是否陷入重复或无限循环。如果是，请停止继续调用工具，并向用户简要说明已完成的工作和剩余阻碍；如果任务仍在取得实质进展，请继续完成任务。`
+    expect(result.modelTurns).toBe(41)
+    expect(requests[19]?.some((message) => message.role === 'system')).toBe(false)
+    expect(requests[20]).toContainEqual(expect.objectContaining({ role: 'system', content: checkpoint(20) }))
+    expect(requests[21]?.some((message) => message.role === 'system')).toBe(false)
+    expect(requests[39]?.some((message) => message.role === 'system')).toBe(false)
+    expect(requests[40]).toContainEqual(expect.objectContaining({ role: 'system', content: checkpoint(40) }))
+    expect(result.messages.some((message) => message.role === 'system' && message.content === checkpoint(20))).toBe(false)
+    expect(result.messages.some((message) => message.role === 'system' && message.content === checkpoint(40))).toBe(false)
+    const events = (await history.read(invocationId)).events
+    const committedMessages = events.filter((event) => event.kind === 'model-response-committed')
+      .map((event) => (event.payload as { message: CanonicalModelMessage }).message)
+    expect(committedMessages.some((message) => message.role === 'system')).toBe(false)
+  })
+
   it('maintains dispatch and transcript invariants across 1000 deterministic randomized batches', async () => {
     let seed = 0x5eed1234
     const random = () => {

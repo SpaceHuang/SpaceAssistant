@@ -62,6 +62,17 @@ export type AgentTurnPorts = Readonly<{
   sessionTranscriptFailureMessages?: readonly CanonicalTurnMessage[]
 }>
 
+export const MAX_MODEL_TURNS_PER_INVOCATION = 1000
+
+const MODEL_TURN_LOOP_CHECK_INTERVAL = 20
+
+function modelTurnLoopCheckMessage(completedModelTurns: number): CanonicalModelMessage {
+  return {
+    role: 'system',
+    content: `循环检查：本次用户请求已调用大模型 ${completedModelTurns} 次。请检查当前执行过程是否陷入重复或无限循环。如果是，请停止继续调用工具，并向用户简要说明已完成的工作和剩余阻碍；如果任务仍在取得实质进展，请继续完成任务。`
+  }
+}
+
 export type ContextReplacementPlanInput = Readonly<{
   phase: 'preflight'
   invocationId: string
@@ -861,7 +872,12 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
 
   for (let modelTurns = 1; modelTurns <= input.maxModelTurns; modelTurns += 1) {
     throwIfAborted(input.request.signal)
-    let call = input.registry.prepare(input.routeId, { ...requestTemplate, messages })
+    const completedModelTurns = modelTurns - 1
+    const loopCheckMessage = completedModelTurns > 0 && completedModelTurns % MODEL_TURN_LOOP_CHECK_INTERVAL === 0
+      ? modelTurnLoopCheckMessage(completedModelTurns)
+      : undefined
+    const messagesForModelTurn = () => loopCheckMessage ? [...messages, loopCheckMessage] : messages
+    let call = input.registry.prepare(input.routeId, { ...requestTemplate, messages: messagesForModelTurn() })
     await ensureInitialHistoryContext(input, call, appendHistory)
     const initialResponse = modelTurns === 1 ? input.initialResponse : undefined
     let requestObservation = { modelTurn: modelTurns, attempt: 1, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: call.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
@@ -933,11 +949,11 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         if (result.status === 'commit-uncertain') throw new AgentTurnBoundaryProjectionError(result.error)
         if (result.status === 'committed') {
           requestTemplate = { ...requestTemplate }
-          call = input.registry.prepare(input.routeId, { ...requestTemplate, messages })
+          call = input.registry.prepare(input.routeId, { ...requestTemplate, messages: messagesForModelTurn() })
           requestObservation = { modelTurn: modelTurns, attempt: 1, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: call.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
           preparedRequestProjection = await input.observer?.prepareModelRequest?.(requestObservation)
         }
-        call = input.registry.prepare(input.routeId, { ...requestTemplate, messages })
+        call = input.registry.prepare(input.routeId, { ...requestTemplate, messages: messagesForModelTurn() })
         requestObservation = { modelTurn: modelTurns, attempt: 1, routeId: input.routeId, ...(activeWindowId ? { windowId: activeWindowId } : {}), request: call.request, ...(input.currentUserMessageId ? { currentUserMessageId: input.currentUserMessageId } : {}), ...(input.requiredUserMessage ? { requiredUserMessage: input.requiredUserMessage } : {}) }
         preparedRequestProjection = await input.observer?.prepareModelRequest?.(requestObservation)
       }
@@ -1109,7 +1125,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       throwIfAborted(input.request.signal)
       messages.splice(0, messages.length, ...recoveredMessages)
       requestTemplate = { ...requestTemplate, ...(recovery.requestPatch ?? {}) }
-        const retryCall = input.registry.prepare(input.routeId, { ...requestTemplate, messages })
+        const retryCall = input.registry.prepare(input.routeId, { ...requestTemplate, messages: messagesForModelTurn() })
         const retryProvider = input.registry.getProvider(retryCall)
         if (!sameRouteIdentity(retryCall.route, call.route) || retryProvider !== provider) throw new ModelRouteChangedError(input.routeId)
         recoveredAttempt = true
