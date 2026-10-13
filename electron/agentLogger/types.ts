@@ -30,6 +30,7 @@ export type AgentLogEventName =
   | 'llm.response'
   | 'llm.output_recovery'
   | 'llm.silent_overflow'
+  | 'turn.cancel.tools'
   | 'llm.error'
   | 'session.event.finalize_failed'
   | 'session.event.chunk_dropped'

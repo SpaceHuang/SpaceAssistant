@@ -52,6 +52,7 @@ import { createMaintenanceScheduler } from './storage/maintenanceScheduler'
 import { flushPendingSessionBackups } from './sessionBackupShutdown'
 import type { SessionQueries } from './sessionStorage/contracts'
 import { signalChatCancel } from './chatCancelRegistry'
+import { cancelAllToolConfirmsForRequest } from './toolConfirmRegistry'
 import type { AppDatabase } from './database'
 import { cleanupStreamingResiduesOnStartup } from './database/streamingCleanup'
 import { beginSessionEventShutdown, ensureCompactionTransaction, ensureFinalRequestContextEvent, ensureRequestProjectionEvents, ensureRequestRetryEvent, ensureRequestUsageEvent, ensureToolCallEvent, ensureToolResultEvent, ensureTurnEndEvent, ensureTurnStartEvent, flushAllSessionEventSinks, getSessionEventSink, reconcileSessionEventFilesDetailed } from './sessionEvents'
@@ -1001,7 +1002,12 @@ app.whenReady().then(async () => {
   turnRuntime = new TurnRuntime({
     storage: sessionStorage.execution.coordinator,
     deps: { now: Date.now, id: randomUUID },
-    onCancel: (turn) => signalChatCancel(turn.turnId),
+    onCancel: (turn) => {
+      signalChatCancel(turn.turnId)
+      // 撤确认卡必须按 requestId 索引（toolConfirmRegistry 的 pending 按 requestId 登记）；
+      // signalChatCancel 收到的钥匙是 turnId，查不到确认卡，这里用完整 turn 对象上的真实 requestId 补齐
+      cancelAllToolConfirmsForRequest(turn.requestId)
+    },
     onEvent: (turn, event) => {
       const display = turnToDisplay(turn)
       if (event.type === 'source-cancelled') display.outcome = 'cancelled'
