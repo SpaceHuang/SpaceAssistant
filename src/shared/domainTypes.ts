@@ -650,6 +650,10 @@ export interface AutoApprovedWriteMeta {
 
 export interface ToolCallResultPersisted {
   success: boolean
+  executionOutcome?: 'succeeded' | 'known-failure' | 'unknown-after-dispatch' | 'not-dispatched'
+  executorEntry?: 'not-entered' | 'entered' | 'unknown'
+  executionErrorCode?: string
+  invocationDisposition?: 'cancelled' | 'timed-out' | 'authorization-invalidated'
   /** Opaque host audit correlation for the canonical execution record. */
   auditRef?: string
   /** Gate 决策规则 ID，用于串联 policy.decision 与执行结果审计。 */

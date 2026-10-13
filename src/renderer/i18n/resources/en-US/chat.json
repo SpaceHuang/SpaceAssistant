@@ -49,6 +49,7 @@
     "pending": "Still running…",
     "rejected": "Rejected",
     "failed": "Failed",
+    "unknownAfterDispatch": "The call may have taken effect, but its result could not be confirmed. It was not retried automatically.",
     "completed": "Succeeded",
     "empty": "(empty)",
     "fileFallback": "File",

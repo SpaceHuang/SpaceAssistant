@@ -57,6 +57,22 @@ describe('permit-bound ToolExecutionPort', () => {
     expect(admission.activeLeaseCount(binding.requestId)).toBe(0)
   })
 
+  it('records every executor throw as an unknown outcome even while the lease remains active', async () => {
+    const permits = new InMemorySafetyPermitStore()
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    const permitId = permits.issue(binding, Date.now() + 10_000)
+    const port = createPermitBoundToolExecutionPort({
+      permits, admission, resolveExpected: async () => binding,
+      execute: async () => { throw Object.assign(new Error('transport failed'), { code: 'ETIMEDOUT' }) }
+    })
+
+    await expect(port.execute(call, permitId)).rejects.toMatchObject({
+      name: 'ToolExecutionAfterDispatchError', code: 'TOOL_EXECUTION_UNKNOWN_AFTER_DISPATCH', executorEntry: 'entered', lifecycleInvalidation: undefined
+    })
+    expect(admission.closedOutcomes.get(permitId)).toBe('unknown-after-dispatch')
+    expect(admission.activeLeaseCount(binding.requestId)).toBe(0)
+  })
+
   it.each(['cancelled', 'revoked', 'authorization-changed'] as const)(
     'does not enter executor when %s invalidates the claimed lease while dispatch-start is pending',
     async (invalidation) => {
@@ -194,7 +210,9 @@ describe('permit-bound ToolExecutionPort', () => {
     admission.invalidate({ requestId: binding.requestId, invocationId: binding.invocationId }, 'revoked')
     expect(executorSignal.aborted).toBe(true)
     releaseExecutor()
-    await expect(pending).rejects.toThrow('executor cancelled after dispatch')
+    await expect(pending).rejects.toMatchObject({
+      name: 'ToolExecutionAfterDispatchError', lifecycleInvalidation: 'revoked'
+    })
     expect(admission.closedOutcomes.get(permitId)).toBe('unknown-after-dispatch')
     expect(admission.activeLeaseCount(binding.requestId)).toBe(0)
   })
@@ -222,6 +240,38 @@ describe('permit-bound ToolExecutionPort', () => {
     expect(executorSignal.aborted).toBe(true)
     await expect(pending).rejects.toBeInstanceOf(ToolExecutionAfterDispatchError)
     expect(unsubscribed).toBe(true)
+    expect(admission.closedOutcomes.get(permitId)).toBe('unknown-after-dispatch')
+    expect(admission.activeLeaseCount(binding.requestId)).toBe(0)
+  })
+
+  it('settles unknown promptly when lifecycle aborts an executor that ignores its signal', async () => {
+    const permits = new InMemorySafetyPermitStore()
+    const admission = new InMemoryExecutionAdmissionCoordinator()
+    const permitId = permits.issue(binding, Date.now() + 10_000)
+    let onRevocation!: () => void
+    let executorSignal!: AbortSignal
+    let finishExecutor!: () => void
+    const port = createPermitBoundToolExecutionPort({
+      permits, admission, resolveExpected: async () => binding,
+      subscribeRevocation: (_call, listener) => { onRevocation = listener; return () => undefined },
+      execute: async (_call, signal) => {
+        executorSignal = signal
+        await new Promise<void>((resolve) => { finishExecutor = resolve })
+        return { output: 'never acknowledged' }
+      }
+    })
+
+    const pending = port.execute(call, permitId)
+    await vi.waitFor(() => expect(executorSignal).toBeDefined())
+    onRevocation()
+
+    await expect(pending).rejects.toMatchObject({
+      name: 'ToolExecutionAfterDispatchError', lifecycleInvalidation: 'revoked'
+    })
+    expect(admission.activeLeaseCount(binding.requestId)).toBe(1)
+    expect(admission.closedOutcomes.has(permitId)).toBe(false)
+    finishExecutor()
+    await vi.waitFor(() => expect(admission.closedOutcomes.get(permitId)).toBe('unknown-after-dispatch'))
     expect(admission.closedOutcomes.get(permitId)).toBe('unknown-after-dispatch')
     expect(admission.activeLeaseCount(binding.requestId)).toBe(0)
   })

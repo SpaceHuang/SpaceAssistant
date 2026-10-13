@@ -178,7 +178,7 @@ export function createOrGetAgentContinuation(input: {
         kind: 'invocation-context-committed' as const,
         payload: {
           messages: toCanonicalModelMessages(checkpoint.transcript),
-          continuationSource: { continuationId: retry.continuation_id, invocationId: retry.source_invocation_id, turnId: retry.source_turn_id, checkpointSequence: retry.checkpoint_sequence, checkpointSha256: retry.checkpoint_sha256 },
+          continuationSource: { mode: 'checkpoint-resume', continuationId: retry.continuation_id, invocationId: retry.source_invocation_id, turnId: retry.source_turn_id, checkpointSequence: retry.checkpoint_sequence, checkpointSha256: retry.checkpoint_sha256 },
           requiredUserMessage: structuredClone(checkpoint.requiredUserMessage)
         }
       }
@@ -203,6 +203,7 @@ export function createOrGetAgentContinuation(input: {
       payload: {
         messages: toCanonicalModelMessages(checkpoint.transcript),
         continuationSource: {
+          mode: 'checkpoint-resume',
           continuationId: record.continuation_id,
           invocationId: record.source_invocation_id,
           turnId: record.source_turn_id,
@@ -313,6 +314,7 @@ export async function startAgentContinuation(input: {
     let finalRecord = continuation
     if (continuation.status === 'pending') {
       const source = {
+        mode: 'checkpoint-resume' as const,
         continuationId: continuation.continuationId, invocationId: continuation.sourceInvocationId, sourceTurnId: continuation.sourceTurnId,
         checkpointSequence: continuation.checkpointSequence, checkpointSha256: continuation.checkpointSha256
       }

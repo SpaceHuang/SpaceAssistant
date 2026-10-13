@@ -49,6 +49,7 @@
     "pending": "仍在运行…",
     "rejected": "已拒绝",
     "failed": "失败",
+    "unknownAfterDispatch": "调用可能已经生效，但系统无法确认结果。系统未自动重试。",
     "completed": "成功",
     "empty": "(空)",
     "fileFallback": "文件",

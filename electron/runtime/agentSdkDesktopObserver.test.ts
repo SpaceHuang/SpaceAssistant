@@ -22,7 +22,8 @@ describe('createAgentSdkDesktopObserver', () => {
     })
     await (observer as AgentTurnObserver).onUndispatchedToolsMaterialized?.({ modelTurn: 3, count: 2 })
     await (observer as AgentTurnObserver).onToolDispatchFailureContext?.({
-      modelTurn: 3, stepId: 'inv:turn:3', toolCallId: 'c2', toolName: 'edit_file', reasonCode: 'ToolExecutionAfterDispatchError'
+      modelTurn: 3, stepId: 'inv:turn:3', toolCallId: 'c2', toolName: 'edit_file', reasonCode: 'ToolExecutionAfterDispatchError',
+      errorCode: 'ETIMEDOUT', executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered', invocationDisposition: 'active'
     })
     expect(events).toContainEqual(expect.objectContaining({
       type: 'tool_result', payload: expect.objectContaining({ diagnosticType: 'tools.dispatch_stopped_with_pending', reason: 'ToolExecutionAfterDispatchError', attemptedCount: 2, undispatchedToolCallIds: ['c3', 'c4'] })
@@ -30,6 +31,9 @@ describe('createAgentSdkDesktopObserver', () => {
     expect(diagnostics.mock.calls.map(([event]) => event.type)).toEqual([
       'tools.dispatch_stopped_with_pending', 'tools.undispatched_slots_materialized', 'tools.dispatch_failure_context'
     ])
+    expect(events).toContainEqual(expect.objectContaining({ type: 'tool_result', payload: expect.objectContaining({
+      diagnosticType: 'tools.dispatch_failure_context', errorCode: 'ETIMEDOUT', executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered', invocationDisposition: 'active'
+    }) }))
   })
   it('accumulates each model request tool declaration into the persisted turn dimensions', async () => {
     let turnDimensions: unknown
@@ -300,9 +304,11 @@ describe('createAgentSdkDesktopObserver', () => {
   it('projects accepted chunks and tool lifecycle into legacy session events and facts in source order', async () => {
     const order: string[] = []
     const projectedSessionEvents: Array<{ type: string; payload: Record<string, unknown> }> = []
+    const diagnostics: Array<Readonly<Record<string, unknown>>> = []
     const observer = createAgentSdkDesktopObserver({
       requestId: 'request-1', sessionId: 'session-1', turnId: 'turn-1', assistantMessageId: 'assistant-1',
       emitSessionEvent: async (event) => { const normalized = event as { type: string; payload: Record<string, unknown> }; projectedSessionEvents.push(normalized); order.push(`session:${event.type}:${(event.payload as { toolUseId?: string }).toolUseId ?? ''}`) },
+      onDispatchDiagnostic: (event) => { diagnostics.push(event) },
       emitFactEvent: (event) => { order.push(`fact:${event.type}:${'id' in event ? event.id : ''}`) }
     })
     const typed = observer as Required<Pick<AgentTurnObserver, 'onModelChunk' | 'onModelResponseCommitted' | 'onToolStarted' | 'onToolFinished' | 'onTurnFinished'>>
@@ -312,7 +318,10 @@ describe('createAgentSdkDesktopObserver', () => {
     await typed.onModelChunk({ type: 'usage', inputTokens: 2, outputTokens: 1 })
     await typed.onModelResponseCommitted({ modelTurn: 1, finishReason: 'tool-calls', usage: { type: 'usage', inputTokens: 2, outputTokens: 1 }, message: { role: 'assistant', content: [{ type: 'text', text: 'hello' }], toolCalls: [{ id: 'tool-1', name: 'lookup', input: { query: 'q' } }] } })
     await typed.onToolStarted({ invocationId: 'request-1', toolCallId: 'tool-1', toolName: 'lookup', input: { query: 'q' } })
-    await typed.onToolFinished({ invocationId: 'request-1', toolCallId: 'tool-1', toolName: 'lookup', input: { query: 'q' } }, { output: { rows: 1 } })
+    await typed.onToolFinished({ invocationId: 'request-1', toolCallId: 'tool-1', toolName: 'lookup', input: { query: 'q' } }, {
+      output: { rows: 1 }, executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered',
+      errorCode: 'TOOL_TIMEOUT', invocationDisposition: 'timed-out'
+    })
     await typed.onTurnFinished({ text: 'hello', messages: [], modelTurns: 1, finishReason: 'stop', usage: { inputTokens: 2, outputTokens: 1 } })
 
     expect(order).toEqual([
@@ -326,6 +335,49 @@ describe('createAgentSdkDesktopObserver', () => {
     expect(sessionEvents.slice(0, 10).map((entry) => entry.split(':')[1])).toEqual(['request_context', ...Array(8).fill('assistant_chunk'), 'tool_call'])
     expect(projectedSessionEvents[5]?.payload.delta).toEqual({ type: 'tool_call_delta', index: 1, partialJson: '' })
     expect(projectedSessionEvents[9]?.payload.args).toEqual({ query: 'q' })
+    const toolResultEvent = projectedSessionEvents.find((event) => event.type === 'tool_result')
+    expect(toolResultEvent?.payload.result).toMatchObject({
+      executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered',
+      executionErrorCode: 'TOOL_TIMEOUT', invocationDisposition: 'timed-out'
+    })
+    expect(diagnostics.at(-1)).toMatchObject({ type: 'tools.execution_summary',
+      proposalCount: 1, executorEntryCount: 1, knownFailureCount: 0, unknownOutcomeCount: 1, notDispatchedCount: 0 })
+  })
+
+  it('emits per-turn proposal, entry, outcome, and undispatched counts without tool inputs', async () => {
+    const diagnostics: Array<Readonly<Record<string, unknown>>> = []
+    const observer = createAgentSdkDesktopObserver({
+      requestId: 'counts-request', sessionId: 'counts-session', turnId: 'counts-turn',
+      onDispatchDiagnostic: (event) => { diagnostics.push(event) }
+    })
+    await observer.prepareModelRequest?.({ modelTurn: 1, attempt: 1, routeId: 'route',
+      request: { messages: [{ role: 'user', content: 'query' }], maxTokens: 32, tools: [] } })
+    await observer.onModelResponseCommitted?.({
+      modelTurn: 1, finishReason: 'tool-calls', usage: { type: 'usage', inputTokens: 1, outputTokens: 1 },
+      message: { role: 'assistant', toolCalls: [
+        { id: 'count-unknown', name: 'lookup', input: { secret: 'private-input' } },
+        { id: 'count-unstarted', name: 'lookup', input: { secret: 'private-input' } },
+        { id: 'count-known-failure', name: 'lookup', input: { secret: 'private-input' } },
+        { id: 'count-entry-unknown', name: 'lookup', input: { secret: 'private-input' } }
+      ] }
+    })
+    await observer.onToolFinished?.({ invocationId: 'counts-request', toolCallId: 'count-unknown', toolName: 'lookup', input: { secret: 'private-input' } }, {
+      output: 'unknown', isError: true, executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered'
+    })
+    await observer.onToolNotDispatched?.({ invocationId: 'counts-request', toolCallId: 'count-unstarted', toolName: 'lookup', input: { secret: 'private-input' } }, 'TURN_STOPPED_BEFORE_DISPATCH')
+    await observer.onToolFinished?.({ invocationId: 'counts-request', toolCallId: 'count-known-failure', toolName: 'lookup', input: { secret: 'private-input' } }, {
+      output: { success: false, error: 'business failure' }, isError: true
+    })
+    await observer.onToolFinished?.({ invocationId: 'counts-request', toolCallId: 'count-entry-unknown', toolName: 'lookup', input: { secret: 'private-input' } }, {
+      output: { success: false, executionOutcome: 'unknown-after-dispatch' }, isError: true,
+      executionOutcome: 'unknown-after-dispatch', executorEntry: 'unknown'
+    })
+    await observer.onTurnFinished?.({ text: '', messages: [], modelTurns: 1, finishReason: 'tool-calls', usage: { inputTokens: 1, outputTokens: 1 } })
+
+    const summary = diagnostics.at(-1)
+    expect(summary).toMatchObject({ type: 'tools.execution_summary', proposalCount: 4,
+      executorEntryCount: 2, knownFailureCount: 1, unknownOutcomeCount: 2, notDispatchedCount: 1 })
+    expect(JSON.stringify(summary)).not.toContain('private-input')
   })
 
   it('keeps text, tool, thinking, and later text in provider source order in the accepted activity timeline', async () => {

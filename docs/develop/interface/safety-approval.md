@@ -160,7 +160,7 @@ function createPermitBoundToolExecutionPort<TCall, TResult>(deps: {
 4. `permits.consume` → 失败转 `ToolExecutionRejectedError(consumed.reason)` → `admission.markPermitConsumed` → `admission.beginDispatch`。
 5. `onDispatchClaimed(cancel)`（SDK turn 循环在此写 `tool-call-started`）；该回调抛错会 `lease.close('failed')` 并原样抛出。
 6. **派发前复检**（进入执行器前最后一道同步判定）：`onDispatchClaimed` 可能异步（例如 History 写入），其间 lease 可能被撤销 / 授权变更 / 取消；因此若 `dispatch.signal.aborted`，则 `lease.close('cancelled')` 并按 `signal.reason` 抛 `ToolExecutionRejectedError('REVOKED' | 'AUTHORIZATION_STALE' | 'CANCELLED')` —— 该路径可证执行器**未进入**（turn 循环据此把已写的 `tool-call-started` 提案回退为未派发）。
-7. `lease.markEntered()` → `execute(call, dispatch.signal)`；执行成功但 signal 已 abort → 抛 `Execution lease aborted before acknowledgement`；执行抛错 → 一律包成 `ToolExecutionAfterDispatchError`（进入执行器后异常无法证明无副作用），`outcome` 记为 `unknown-after-dispatch`（被 abort 时）或 `failed`。
+7. `lease.markEntered()` → `execute(call, dispatch.signal)`；执行成功但 signal 已 abort → 抛 `Execution lease aborted before acknowledgement`；执行器抛错 → 一律包成 `ToolExecutionAfterDispatchError`（进入执行器后异常无法证明无副作用），准入 lease outcome 记为 `unknown-after-dispatch`，并携带已观察到的撤权/授权变更/取消原因（若有）。
 8. `finally`：移除监听、`admission.settle` 与 `permits.settle`。
 
 相关错误：
@@ -168,7 +168,7 @@ function createPermitBoundToolExecutionPort<TCall, TResult>(deps: {
 ```ts
 type ToolExecutionRejectReason = PermitConsumeResult 的失败 reason | 'REVOKED' | 'PERMIT_NOT_CONSUMED'
 class ToolExecutionRejectedError extends Error   // code = 'TOOL_EXECUTION_REJECTED'
-class ToolExecutionAfterDispatchError extends Error  // code = 'TOOL_EXECUTION_UNKNOWN_AFTER_DISPATCH'，持有 originalError
+class ToolExecutionAfterDispatchError extends Error  // code = 'TOOL_EXECUTION_UNKNOWN_AFTER_DISPATCH'，持有 originalError、executorEntry='entered' 与可选 lifecycleInvalidation
 ```
 
 `resolveExpected` 必须读宿主私有准备记录与当前调用上下文，**不得**从 permitId 或公开许可字段反推期望值。

@@ -52,6 +52,8 @@ export type AgentTurnPorts = Readonly<{
   sessionLedgerForToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult): Promise<Record<string, unknown>> | Record<string, unknown>
   /** Host product policy after a tool result is durably committed and before the next model request. */
   afterToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult, source?: Readonly<{ kind: 'execution' | 'safety-rejection' | 'plan-rejection'; reasonCode?: string; modelTurn?: number }>): void | Promise<void>
+  /** Revalidate host-owned authorization/lifecycle state before another model request. */
+  beforeModelRequest?(): void | Promise<void>
   /** Single planner for initial-request and accepted-response context replacement. */
   planContextReplacement?(input: ContextReplacementPlanInput): Promise<ContextReplacementPlanResult | void>
   sessionLedgerForNotDispatched?(call: CanonicalToolExecutionCall, reason: string, result: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>
@@ -115,10 +117,15 @@ export type AgentTurnObserver = Readonly<{
   onModelChunk?(chunk: Exclude<import('./model').StreamChunk, { type: 'finish' }>): void | Promise<void>
   onModelResponseCommitted?(response: Readonly<{ message: CanonicalTurnMessage; finishReason: Extract<import('./model').StreamChunk, { type: 'finish' }>['reason']; usage: Extract<StreamChunk, { type: 'usage' }>; modelTurn: number; alreadyProjected?: boolean; committedStepId?: string }>): void | Promise<void>
   onToolStarted?(call: CanonicalToolExecutionCall): void | Promise<void>
+  onToolNotDispatched?(call: CanonicalToolExecutionCall, reason: string): void | Promise<void>
   onToolFinished?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult): void | Promise<void>
   onDispatchStoppedWithPending?(event: Readonly<{ modelTurn: number; reason: string; attemptedCount: number; undispatchedToolCallIds: readonly string[] }>): void | Promise<void>
   onUndispatchedToolsMaterialized?(event: Readonly<{ modelTurn: number; count: number }>): void | Promise<void>
-  onToolDispatchFailureContext?(event: Readonly<{ modelTurn: number; stepId: string; toolCallId: string; toolName: string; reasonCode: string }>): void | Promise<void>
+  onToolDispatchFailureContext?(event: Readonly<{
+    modelTurn: number; stepId: string; toolCallId: string; toolName: string; reasonCode: string
+    errorCode?: string; executionOutcome?: 'unknown-after-dispatch'; executorEntry?: 'entered' | 'unknown'
+    invocationDisposition?: 'active' | 'cancelled' | 'timed-out' | 'authorization-invalidated'
+  }>): void | Promise<void>
   onTurnOutputReady?(result: AgentTurnResult): void | Promise<void>
   onTurnFinished?(result: AgentTurnResult): void | Promise<void>
   onTurnFailed?(failure: Readonly<{ error: unknown; status: 'cancelled' | 'interrupted' | 'denied' | 'failed' }>): void | Promise<void>
@@ -213,7 +220,16 @@ export type { CanonicalContentBlock, CanonicalToolCall } from './model'
 export type CanonicalTurnMessage = CanonicalModelMessage
 
 type CanonicalToolExecutionCall = { invocationId: string; toolCallId: string; toolName: string; input: Record<string, unknown>; signal?: AbortSignal }
-type CanonicalToolExecutionResult = { output: unknown; replayContent?: unknown; isError?: boolean; auditRef?: string }
+type CanonicalToolExecutionResult = {
+  output: unknown
+  replayContent?: unknown
+  isError?: boolean
+  auditRef?: string
+  executionOutcome?: 'succeeded' | 'known-failure' | 'unknown-after-dispatch' | 'not-dispatched'
+  executorEntry?: 'not-entered' | 'entered' | 'unknown'
+  errorCode?: string
+  invocationDisposition?: 'cancelled' | 'timed-out' | 'authorization-invalidated'
+}
 export type ToolPreparationStage =
   | Readonly<{ kind: 'initial' }>
   | Readonly<{ kind: 'recheck'; confirmation?: Readonly<{ receipt: string }> }>
@@ -290,6 +306,14 @@ export const AGENT_TURN_TIMEOUT_ABORT_REASON = 'agent-turn-timeout' as const
 export class AgentTurnTimedOutError extends Error {
   readonly code = 'TURN_TIMED_OUT'
   constructor() { super('agent turn timed out'); this.name = 'AgentTurnTimedOutError' }
+}
+
+export class AgentTurnLifecycleInvalidatedError extends Error {
+  readonly code = 'INVOCATION_LIFECYCLE_INVALIDATED'
+  constructor(readonly reason: 'revoked' | 'authorization-changed') {
+    super(`invocation lifecycle invalidated: ${reason}`)
+    this.name = 'AgentTurnLifecycleInvalidatedError'
+  }
 }
 
 function isTurnTimeoutSignal(signal?: AbortSignal): boolean {
@@ -374,6 +398,7 @@ export type RunAgentTurnInput = {
   isApprovalCandidate?(call: CanonicalToolExecutionCall): boolean
   sessionLedgerForToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult): Promise<Record<string, unknown>> | Record<string, unknown>
   afterToolResult?(call: CanonicalToolExecutionCall, result: CanonicalToolExecutionResult, source?: Readonly<{ kind: 'execution' | 'safety-rejection' | 'plan-rejection'; reasonCode?: string; modelTurn?: number }>): void | Promise<void>
+  beforeModelRequest?(): void | Promise<void>
   sessionLedgerForNotDispatched?(call: CanonicalToolExecutionCall, reason: string, result: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>
   sessionLedgerForModelResponse?(message: CanonicalTurnMessage, modelTurn: number, attempt: number, committedSessionLedger?: unknown): Promise<Record<string, unknown>> | Record<string, unknown>
   sessionLedgerForAttemptUsage?(attempt: Record<string, unknown>): Promise<Record<string, unknown>> | Record<string, unknown>
@@ -536,7 +561,7 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
                 ? await input.sessionLedgerForNotDispatched({ invocationId: input.invocationId, toolCallId: tool.id, toolName: tool.name, input: structuredClone(tool.input) }, reason, sessionResult)
                 : undefined
               await appendHistory([{ kind: 'tool-call-not-dispatched', payload: {
-                toolCallId: tool.id, reason, replayContent: sessionResult.data, isError: true,
+                toolCallId: tool.id, reason, replayContent: sessionResult.data, isError: true, executorEntry: 'not-entered', executionOutcome: 'not-dispatched',
                 ...(sessionLedger ? { sessionLedger } : {})
               } }])
             } catch {
@@ -554,18 +579,21 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
     const boundaryProjectionUncertain = error instanceof AgentTurnBoundaryProjectionError
     const hostProjectionFailed = error instanceof AgentTurnHostProjectionError
     const toolProjectionFailed = error instanceof AgentTurnToolProjectionError
+    const lifecycleInvalidated = error instanceof AgentTurnLifecycleInvalidatedError
     const status = error instanceof AgentTurnCancelledError
       ? 'cancelled' as const
-      : resultPersistenceUncertain || executionUncertain || hostProjectionFailed || toolProjectionFailed || boundaryProjectionUncertain
+      : resultPersistenceUncertain || executionUncertain || hostProjectionFailed || toolProjectionFailed || boundaryProjectionUncertain || lifecycleInvalidated
         ? 'interrupted' as const
         : error instanceof ToolDeniedError ? 'denied' as const : 'failed' as const
     if (!(error instanceof AgentTurnHistoryAlreadyTerminalError)) {
       try {
-        const terminalKind = error instanceof AgentTurnCancelledError || resultPersistenceUncertain || executionUncertain || hostProjectionFailed || toolProjectionFailed || boundaryProjectionUncertain ? 'invocation-interrupted' : 'invocation-failed'
+        const terminalKind = error instanceof AgentTurnCancelledError || resultPersistenceUncertain || executionUncertain || hostProjectionFailed || toolProjectionFailed || boundaryProjectionUncertain || lifecycleInvalidated ? 'invocation-interrupted' : 'invocation-failed'
         const terminalPayload = error instanceof AgentTurnCancelledError
             ? { status: 'cancelled', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
             : error instanceof AgentTurnTimedOutError
               ? { status: 'failed', reason: 'timeout', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
+            : lifecycleInvalidated
+              ? { status: 'interrupted', reason: error.reason === 'revoked' ? 'authorization-revoked' : 'authorization-changed', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
             : hostProjectionFailed
               ? { status: 'interrupted', reason: 'host-projection-failed', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
             : toolProjectionFailed
@@ -582,7 +610,9 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
                 : { status: 'failed', ...(lastValidUsage ? { usage: lastValidUsage } : {}) }
         const status = terminalKind === 'invocation-interrupted' ? 'interrupted' as const : 'failed' as const
         const sessionLedger = input.sessionLedgerForInvocationTerminal
-          ? await input.sessionLedgerForInvocationTerminal({ status, turnId: input.turnId ?? input.invocationId, ...(error instanceof AgentTurnCancelledError ? { sessionEventReason: 'cancelled' } : {}) })
+          ? await input.sessionLedgerForInvocationTerminal({ status, turnId: input.turnId ?? input.invocationId,
+              ...(error instanceof AgentTurnCancelledError || error instanceof ToolExecutionAfterDispatchError && (error.lifecycleInvalidation === 'cancelled' || input.request.signal?.aborted && !isTurnTimeoutSignal(input.request.signal)) ? { sessionEventReason: 'cancelled' as const }
+                : error instanceof AgentTurnTimedOutError || lifecycleInvalidated ? { sessionEventReason: 'interrupted' as const } : {}) })
           : undefined
         const transcriptOutcome: import('./history').SessionTranscriptCommitIntent['outcome'] = error instanceof AgentTurnCancelledError ? 'cancelled'
           : error instanceof AgentTurnTimedOutError ? 'timed_out'
@@ -953,6 +983,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
     pinnedRoute ??= call.route
     pinnedProvider ??= provider
     if (!initialResponse) {
+      // Context planning and History projection can await host work; revalidate at the actual request boundary.
       await appendHistory([{
         kind: 'model-request-started',
         payload: {
@@ -1130,6 +1161,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         const onRetryModelRequest = () => input.observer?.onModelRequest?.(retryRequestObservation)
         if (input.observer?.criticalModelRequestProjection) await onRetryModelRequest()
         else await observe(input.observer, 'model-request', onRetryModelRequest)
+      await input.beforeModelRequest?.()
+      throwIfAborted(input.request.signal)
       return collectProviderAttempt(retryProvider.stream(retryCall), modelTurns, 2)
     }
     const settleCancelledAttempt = async (cancelled: CollectedModelStream): Promise<never> => {
@@ -1168,6 +1201,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       collected = collectCanonicalHostResponse(initialResponse)
     } else {
       try {
+        await input.beforeModelRequest?.()
+        throwIfAborted(input.request.signal)
         collected = await collectProviderAttempt(provider.stream(call), modelTurns, recoveredAttempt ? 2 : 1)
       } catch (error) {
         throwIfAborted(input.request.signal)
@@ -1294,6 +1329,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             reason,
             replayContent,
             isError: true,
+            executorEntry: 'not-entered',
+            executionOutcome: 'not-dispatched',
             ...(extra ?? {}),
             ...(sessionLedger ? { sessionLedger } : {})
           }
@@ -1309,6 +1346,9 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         await observe(input.observer, 'prepared-tool-discard', () => input.observer?.onObservationError?.(error, 'prepared-tool-discard'))
       }
       if (appendFailed) throw appendError
+      await observe(input.observer, 'dispatch-diagnostic', () => input.observer?.onToolNotDispatched?.({
+        invocationId, toolCallId: tool.toolCallId, toolName: tool.toolName, input: structuredClone(tool.input)
+      }, reason))
     }
     let committedInitialResponseStepId: string | undefined
     if (initialResponse) {
@@ -1409,6 +1449,8 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
             reason: 'MODEL_OUTPUT_TRUNCATED',
             replayContent: toolCallErrorContent,
             isError: true,
+            executorEntry: 'not-entered',
+            executionOutcome: 'not-dispatched',
             ...(sessionLedger ? { sessionLedger } : {})
           } }
         })),
@@ -1690,6 +1732,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       }
 
       let resourceLease: { release(): void } | undefined
+      let resourceReleaseDeferred = false
       let executionResult: CanonicalToolExecutionResult
       try {
         const resourceKeys = input.toolResourceKeys?.(executionCall) ?? [`unknown:${invocationId}`]
@@ -1727,6 +1770,7 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
               payload: {
                 toolCallId: tool.toolCallId,
                 toolName: tool.toolName,
+                executorEntry: 'unknown',
                 inputHash: createHash('sha256').update(JSON.stringify(tool.input)).digest('hex'),
                 decisionRuleId: recheckBinding.authorizationVersion
               }
@@ -1749,11 +1793,15 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           throw error
         }
       } catch (error) {
+        if (error instanceof ToolExecutionAfterDispatchError && error.executorSettled) {
+          resourceReleaseDeferred = true
+          void error.executorSettled.then(() => resourceLease?.release())
+        }
         if (error instanceof ToolExecutionAfterDispatchError) throw error
         throwIfAborted(input.request.signal)
         throw error
       } finally {
-        resourceLease?.release()
+        if (!resourceReleaseDeferred) resourceLease?.release()
       }
       const replayContent = executionResult.replayContent ?? executionResult.output
       const committedToolResult = await appendHistory([{
@@ -1764,12 +1812,16 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
           result: executionResult.output,
           replayContent,
           isError: executionResult.isError ?? false,
+          executionOutcome: executionResult.executionOutcome ?? (executionResult.isError ? 'known-failure' : 'succeeded'),
+          executorEntry: executionResult.executorEntry ?? 'entered',
+          ...(executionResult.errorCode ? { errorCode: executionResult.errorCode } : {}),
+          ...(executionResult.invocationDisposition ? { invocationDisposition: executionResult.invocationDisposition } : {}),
           ...(executionResult.auditRef ? { auditRef: executionResult.auditRef } : {}),
           ...(input.sessionLedgerForToolResult ? { sessionLedger: await input.sessionLedgerForToolResult({ ...tool, invocationId: input.invocationId }, executionResult) } : {})
         }
       }])
       toolDispatchStates.set(tool.toolCallId, 'finished')
-      const committedPayload = committedToolResult[0]?.payload as { toolCallId?: string; result?: unknown; replayContent?: unknown; success?: boolean; isError?: boolean } | undefined
+      const committedPayload = committedToolResult[0]?.payload as { toolCallId?: string; result?: unknown; replayContent?: unknown; success?: boolean; isError?: boolean; executionOutcome?: 'succeeded' | 'known-failure' | 'unknown-after-dispatch' | 'not-dispatched'; executorEntry?: 'not-entered' | 'entered' | 'unknown'; errorCode?: string; invocationDisposition?: 'cancelled' | 'timed-out' | 'authorization-invalidated' } | undefined
       const canonicalResult: CanonicalTurnMessage = {
         role: 'tool',
         toolCallId: committedPayload?.toolCallId ?? tool.toolCallId,
@@ -1786,9 +1838,17 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         if (approvalPermitHeld) approvalSlots.release()
         releaseCandidate?.()
       }
-    }, { shouldDrain: (reason) => reason instanceof ToolDeniedError || reason instanceof PlanRejectedError })
-    const fatalRejection = settledTools.find((settled) => settled?.status === 'rejected' &&
-      !(settled.reason instanceof ToolDeniedError) && !(settled.reason instanceof PlanRejectedError))
+    }, {
+      shouldDrain: (reason) => reason instanceof ToolDeniedError || reason instanceof PlanRejectedError,
+      shouldStop: (reason) => reason instanceof ToolExecutionAfterDispatchError
+    })
+    const isLifecycleFailure = (reason: unknown): boolean =>
+      reason instanceof AgentTurnCancelledError || reason instanceof AgentTurnTimedOutError ||
+      reason instanceof AgentTurnLifecycleInvalidatedError ||
+      reason instanceof ToolExecutionAfterDispatchError && (reason.lifecycleInvalidation !== undefined || input.request.signal?.aborted === true)
+    const rejectedForFatalSelection = settledTools.filter((settled): settled is PromiseRejectedResult => settled?.status === 'rejected')
+    const fatalRejection = rejectedForFatalSelection.find(({ reason }) => isLifecycleFailure(reason)) ?? rejectedForFatalSelection.find(({ reason }) =>
+      !(reason instanceof ToolDeniedError) && !(reason instanceof PlanRejectedError))
     const pendingToolCallIds = toolCalls.flatMap((tool, index) => settledTools[index] === undefined ? [tool.toolCallId] : [])
     if (fatalRejection?.status === 'rejected') {
       const attemptedCount = settledTools.filter((settled) => settled !== undefined).length
@@ -1803,10 +1863,18 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       const failedIndex = settledTools.findIndex((settled) => settled?.status === 'rejected' && settled.reason === fatalRejection.reason)
       const failedTool = toolCalls[failedIndex]
       if (failedTool) {
+        const unknownError = fatalRejection.reason instanceof ToolExecutionAfterDispatchError ? fatalRejection.reason : undefined
+      const invocationDisposition = unknownError
+          ? input.request.signal?.aborted ? isTurnTimeoutSignal(input.request.signal) ? 'timed-out' as const : 'cancelled' as const
+            : unknownError.lifecycleInvalidation === 'revoked' || unknownError.lifecycleInvalidation === 'authorization-changed'
+              ? 'authorization-invalidated' as const
+              : unknownError.lifecycleInvalidation === 'cancelled' ? 'cancelled' as const : 'active' as const
+          : undefined
         await observe(input.observer, 'dispatch-diagnostic', () => input.observer?.onToolDispatchFailureContext?.({
           modelTurn: modelTurns, stepId: `${invocationId}:turn:${modelTurns}`, toolCallId: failedTool.toolCallId,
           toolName: failedTool.toolName,
-          reasonCode: fatalRejection.reason instanceof AgentTurnHistoryAppendError ? fatalRejection.reason.kinds.join(',') : fatalRejection.reason instanceof Error ? fatalRejection.reason.name : 'UNKNOWN'
+          reasonCode: fatalRejection.reason instanceof AgentTurnHistoryAppendError ? fatalRejection.reason.kinds.join(',') : fatalRejection.reason instanceof Error ? fatalRejection.reason.name : 'UNKNOWN',
+          ...(unknownError ? { errorCode: unknownError.code, executionOutcome: 'unknown-after-dispatch' as const, executorEntry: unknownError.executorEntry, invocationDisposition } : {})
         }))
       }
     }
@@ -1830,6 +1898,69 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
       materializedCount += 1
     }
     if (materializedCount > 0) await observe(input.observer, 'dispatch-diagnostic', () => input.observer?.onUndispatchedToolsMaterialized?.({ modelTurn: modelTurns, count: materializedCount }))
+    for (const [index, settled] of settledTools.entries()) {
+      if (!settled || settled.status !== 'rejected' || !(settled.reason instanceof ToolExecutionAfterDispatchError)) continue
+      const tool = toolCalls[index]
+      if (!tool) throw new Error('unknown execution result has no matching tool call')
+      const error = settled.reason
+      const invocationDisposition = input.request.signal?.aborted
+        ? isTurnTimeoutSignal(input.request.signal) ? 'timed-out' : 'cancelled'
+        : error.lifecycleInvalidation === 'revoked' || error.lifecycleInvalidation === 'authorization-changed'
+          ? 'authorization-invalidated'
+          : error.lifecycleInvalidation === 'cancelled' ? 'cancelled' : undefined
+      const originalCode = error.originalError && typeof error.originalError === 'object' && 'code' in error.originalError
+        && typeof error.originalError.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(error.originalError.code)
+        ? error.originalError.code
+        : error.originalError instanceof Error && /^[A-Z0-9_]{1,64}$/.test(error.originalError.name)
+          ? error.originalError.name
+          : error.code
+      const result: CanonicalToolExecutionResult = {
+        output: {
+          success: false,
+          error: 'The tool may have executed, but its result could not be confirmed. The SDK did not retry it.',
+          errorCode: originalCode,
+          executionOutcome: 'unknown-after-dispatch',
+          executorEntry: error.executorEntry,
+          automaticRetry: false,
+          ...(invocationDisposition ? { invocationDisposition } : {})
+        },
+        replayContent: `Tool result is unknown after dispatch (${originalCode}). The tool may have executed; the SDK did not retry it.`,
+        isError: true,
+        executionOutcome: 'unknown-after-dispatch',
+        executorEntry: error.executorEntry,
+        errorCode: originalCode,
+        ...(invocationDisposition ? { invocationDisposition } : {})
+      }
+      const committed = await appendHistory([{
+        kind: 'tool-call-finished',
+        payload: {
+          toolCallId: tool.toolCallId,
+          success: false,
+          result: result.output,
+          replayContent: result.replayContent,
+          isError: true,
+          executionOutcome: result.executionOutcome,
+          executorEntry: result.executorEntry,
+          errorCode: result.errorCode,
+          ...(result.invocationDisposition ? { invocationDisposition: result.invocationDisposition } : {}),
+          ...(input.sessionLedgerForToolResult ? { sessionLedger: await input.sessionLedgerForToolResult({ ...tool, invocationId: input.invocationId }, result) } : {})
+        }
+      }])
+      toolDispatchStates.set(tool.toolCallId, 'finished')
+      await projectTool(input.observer, 'tool-finished', () => input.observer?.onToolFinished?.({ ...tool, invocationId }, result))
+      try { await input.afterToolResult?.({ ...tool, invocationId }, result, { kind: 'execution', modelTurn: modelTurns }) }
+      catch (observerError) { await observe(input.observer, 'tool-finished', () => input.observer?.onObservationError?.(observerError, 'tool-finished')) }
+      const payload = committed[0]?.payload as { toolCallId?: string; replayContent?: unknown; result?: unknown } | undefined
+      settledTools[index] = invocationDisposition
+        ? { status: 'rejected', reason: invocationDisposition === 'cancelled' ? new AgentTurnCancelledError()
+          : invocationDisposition === 'timed-out' ? new AgentTurnTimedOutError()
+            : new AgentTurnLifecycleInvalidatedError(error.lifecycleInvalidation === 'revoked' ? 'revoked' : 'authorization-changed') }
+        : { status: 'fulfilled', value: {
+            role: 'tool', toolCallId: payload?.toolCallId ?? tool.toolCallId,
+            content: payload && 'replayContent' in payload ? payload.replayContent : payload?.result ?? result.replayContent,
+          isError: true
+        } }
+    }
     const deniedToolResults = new Map<string, CanonicalTurnMessage>()
     if (input.returnDeniedToolsToModel) {
       for (const [index, settled] of settledTools.entries()) {
@@ -1843,7 +1974,10 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
         if (!matchingTool) continue
         const content = settled.reason.userMessage ?? `Tool call was not dispatched (${reasonCode}).`
         const executionCall = { invocationId, toolCallId: matchingTool.toolCallId, toolName: matchingTool.toolName, input: structuredClone(matchingTool.input), ...(input.request.signal ? { signal: input.request.signal } : {}) }
-        const result = { output: content, replayContent: content, isError: true }
+        const result: CanonicalToolExecutionResult = {
+          output: content, replayContent: content, isError: true,
+          executionOutcome: 'not-dispatched', executorEntry: 'not-entered'
+        }
         deniedToolResults.set(matchingTool.toolCallId, { role: 'tool', toolCallId: matchingTool.toolCallId, content, isError: true })
         await projectTool(input.observer, 'tool-finished', () => input.observer?.onToolFinished?.(executionCall, result))
         try { await input.afterToolResult?.(executionCall, result, { kind: settled.reason instanceof PlanRejectedError ? 'plan-rejection' : 'safety-rejection', reasonCode }) }
@@ -1852,9 +1986,9 @@ async function runAgentTurnLoop(input: RunAgentTurnInput, appendHistory: AppendT
     }
     const rejectedTools = settledTools.filter((settled, index): settled is PromiseRejectedResult => settled?.status === 'rejected' &&
       !(input.returnDeniedToolsToModel && deniedToolResults.has(toolCalls[index]?.toolCallId ?? '')))
-    const rejectedTool = rejectedTools.find(({ reason }) => reason instanceof ToolExecutionAfterDispatchError)
+    const rejectedTool = rejectedTools.find(({ reason }) => reason instanceof AgentTurnCancelledError || reason instanceof AgentTurnTimedOutError || reason instanceof AgentTurnLifecycleInvalidatedError)
+      ?? rejectedTools.find(({ reason }) => reason instanceof ToolExecutionAfterDispatchError)
       ?? rejectedTools.find(({ reason }) => reason instanceof AgentTurnHistoryAppendError && reason.kinds.includes('tool-call-finished'))
-      ?? rejectedTools.find(({ reason }) => reason instanceof AgentTurnCancelledError || reason instanceof AgentTurnTimedOutError)
       ?? rejectedTools[0]
     if (rejectedTool) {
       if (rejectedTool.reason instanceof DeferredTurnParkedError) {
@@ -1961,7 +2095,7 @@ function sameRouteIdentity(left: PreparedModelCall['route'], right: PreparedMode
   return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right))
 }
 
-async function mapWithConcurrency<T, R>(items: readonly T[], limit: number, run: (item: T, index: number) => Promise<R>, options: { shouldDrain?: (reason: unknown) => boolean } = {}): Promise<Array<PromiseSettledResult<R> | undefined>> {
+async function mapWithConcurrency<T, R>(items: readonly T[], limit: number, run: (item: T, index: number) => Promise<R>, options: { shouldDrain?: (reason: unknown) => boolean; shouldStop?: (reason: unknown) => boolean } = {}): Promise<Array<PromiseSettledResult<R> | undefined>> {
   if (!Number.isInteger(limit) || limit < 1) throw new Error('maxConcurrentTools must be a positive integer')
   const results = new Array<PromiseSettledResult<R>>(items.length)
   let nextIndex = 0
@@ -1996,6 +2130,8 @@ async function mapWithConcurrency<T, R>(items: readonly T[], limit: number, run:
         results[index] = { status: 'rejected', reason }
         if (options.shouldDrain?.(reason)) {
           if (state === 'running') state = 'draining-after-denial'
+        } else if (options.shouldStop?.(reason)) {
+          state = 'stopped'
         } else {
           state = 'stopped'
         }

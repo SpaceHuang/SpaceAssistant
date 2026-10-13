@@ -175,16 +175,16 @@ type AgentTurnResult = Readonly<{
    - signal abort 复检（确认前后各一次）→ `markNotDispatched('REQUEST_TIMEOUT' | 'REQUEST_CANCELLED')`；
    - 未获批 → `markNotDispatched('CONFIRMATION_<KIND>')` + `ToolDeniedError(reason, userMessage)`，`receipt` 为空也视为未获批。
 5. **资源锁 → 终检 → 授权**：先 `resourceLocks.acquire(toolResourceKeys?.(call) ?? ['unknown:<invocationId>'])`，再 `prepareTool(call, { kind: 'recheck', confirmation? })`（失败按 `^[A-Z0-9_]{1,64}$` 判定 reasonCode，否则 `PREPARED_RECHECK_FAILED`），`matchesRecheckBinding` 不匹配 → `STALE_AUTHORIZATION`，然后 `safetyGate.authorize`；非 `allow` → `markNotDispatched(reasonCode 或 'RECHECK_REQUIRES_CONFIRMATION')`；取消竞态下已签发 permit 用 `discardPermit` 回收。
-6. **执行**：`toolExecution.execute(call, permitId, onDispatchClaimed)`；`onDispatchClaimed` 内追加 `tool-call-started`（含 `inputHash`、`decisionRuleId`）并把派发状态记为 `started`。执行端口在 `onDispatchClaimed` 返回后、进入执行器之前还有**一次 abort 复检**（[safety-approval.md](./safety-approval.md) 第 5 节）：此刻若已取消 / 撤权 / 授权变更则抛 `ToolExecutionRejectedError`。循环收到该错误时把 `tool-call-started` 提案**回退为未派发**（派发状态回到 `pending`，随后补写 `tool-call-not-dispatched`），再按原因转成 `AgentTurnCancelledError` / `AgentTurnTimedOutError` 或 `ToolDeniedError(reason)`；`ToolExecutionAfterDispatchError` 原样上抛。
-7. **结果提交**：追加 `tool-call-finished`（`success` / `result` / `replayContent` / `isError` / 可选 `auditRef` / 可选 `sessionLedger`）→ 派发状态置 `finished`；返回给模型的 canonical 工具消息以**已提交**的 history payload 为准（`replayContent` 优先）→ `onToolFinished` 与 `afterToolResult(..., { kind: 'execution', modelTurn })`（后者失败只走 `onObservationError`，stage `tool-finished`）。
+6. **执行**：`toolExecution.execute(call, permitId, onDispatchClaimed)`；`onDispatchClaimed` 内追加 `tool-call-started`（含 `inputHash`、`decisionRuleId`、`executorEntry: 'unknown'`）并把派发状态记为 `started`。执行端口在回调返回后、进入执行器前还有 abort 复检：此刻若已取消 / 撤权 / 授权变更则抛 `ToolExecutionRejectedError`，循环把 started 提案回退为 `tool-call-not-dispatched`（`executorEntry: 'not-entered'`）。executor 已进入后抛错则包装为 `ToolExecutionAfterDispatchError`；调度器停止领取新槽位并等待已启动 sibling 结算，之后把该调用写成 `executionOutcome: 'unknown-after-dispatch'`、`executorEntry: 'entered'`。宿主生命周期已失效时仍持久化 unknown 事实，但按取消 / timeout / 撤权或授权变更终止，不进入下一次模型请求。
+7. **结果提交**：追加 `tool-call-finished`（`success` / `result` / `replayContent` / `isError` / `executionOutcome` / `executorEntry` / 可选 `errorCode` / 可选 `auditRef` / 可选 `sessionLedger`）→ 派发状态置 `finished`；返回给模型的 canonical 工具消息以**已提交**的 history payload 为准（`replayContent` 优先）→ `onToolFinished` 与 `afterToolResult(..., { kind: 'execution', modelTurn })`（后者失败只走 `onObservationError`，stage `tool-finished`）。unknown 作为 is-error 工具结果回灌；SDK 不自动重试原调用。
 
 **聚合与收尾**（并发返回之后）：
 
-- **空洞物化**：fatal 中止留下的未认领槽位逐个 `markNotDispatched(signal 已 abort ? 'REQUEST_CANCELLED' : 'TURN_STOPPED_BEFORE_DISPATCH')`，计数经 `onUndispatchedToolsMaterialized` 留痕；若某槽位既未认领又非 `pending`，抛内部错误（防止派发空洞被静默吞掉）。
+- **空洞物化**：dispatch 后 unknown 停止领取留下的未认领槽位逐个 `markNotDispatched(signal 已 abort ? 'REQUEST_CANCELLED' : 'TURN_STOPPED_BEFORE_DISPATCH')`，明确写入 `executorEntry: 'not-entered'`，计数经 `onUndispatchedToolsMaterialized` 留痕；若某槽位既未认领又非 `pending`，抛内部错误（防止派发空洞被静默吞掉）。
 - **诊断**：致命拒绝（非 `ToolDeniedError` 且非 `PlanRejectedError`）先发 `onDispatchStoppedWithPending`（`reason` 取 `AgentTurnHistoryAppendError.kinds` 拼接或错误 name）与 `onToolDispatchFailureContext`，再进入失败结算。
 - **回灌被拒工具**：`returnDeniedToolsToModel = true` 时不会终止回合，而是生成 `role: 'tool'` 的拒绝结果（内容取 `ToolDeniedError.userMessage`，缺省 `Tool call was not dispatched (<reasonCode>).`）回灌模型，并 `afterToolResult(..., { kind: 'safety-rejection', reasonCode })`。
 - **回灌计划期拒绝**（2026-10 新增，D-1 定案）：`prepareTool` 在 plan 阶段抛出的 `PlanRejectedError`（宿主注入的「可改写重试」计划失败，`reasonCode` 为宿主业务码、`userMessage` 为宿主构造的拒绝文本）与 `ToolDeniedError` 同走回灌通道——`markNotDispatched` 落 History、物化为 `is_error` tool 消息、`afterToolResult(..., { kind: 'plan-rejection', reasonCode })`（审计口径与策略拒绝分离）；`returnDeniedToolsToModel` 未开启时仍 fatal（fatal-by-default 不变）。
-- **上抛选择**：其余拒绝按优先级取一个上抛——`ToolExecutionAfterDispatchError` > `AgentTurnHistoryAppendError`（`kinds` 含 `tool-call-finished`）> 请求生命周期错误（取消 / 超时）> 第一个拒绝；上抛前把仍 pending 的工具补 `markNotDispatched`。
+- **上抛选择**：dispatch 后 unknown 本身不参与致命拒绝选择；它先转为规范 History 工具结果。History / host 投影错误、授权与安全失效、取消和总时限仍按 fatal / 生命周期路径处理。上抛前把仍 pending 的工具补 `markNotDispatched`。
 - 回灌给模型的工具结果顺序**按 provider 的 tool-call 顺序**排列，与派发完成顺序无关。
 
 `markNotDispatched` 使用的原因码覆盖：纯准入拒绝（宿主 `beforeToolDispatch` 返回的 reasonCode）、准备 / 授权类（`PREPARED_CALL_MISMATCH`、`PREPARED_RECHECK_FAILED`、`STALE_AUTHORIZATION`、`RECHECK_REQUIRES_CONFIRMATION`）、策略与确认类（策略 `reasonCode`、`CONFIRMATION_REQUIRED`、`CONFIRMATION_<KIND>`、`CONFIRMATION_CAPACITY_UNAVAILABLE`）、请求生命周期类（`REQUEST_TIMEOUT`、`REQUEST_CANCELLED`、`TURN_FAILED_BEFORE_TOOL_DISPATCH`、`TURN_STOPPED_BEFORE_DISPATCH`）、输出上限（`MODEL_OUTPUT_TRUNCATED`）、额度（`tool_loop_max_rounds_exceeded`）、宿主投影失败（`HOST_PROJECTION_FAILED`）与执行端口拒绝原因（`ToolExecutionRejectReason`）。
@@ -199,7 +199,7 @@ type AgentTurnResult = Readonly<{
 | --- | --- | --- |
 | `AgentTurnCancelledError` | `cancelled` | `invocation-interrupted` |
 | `AgentTurnTimedOutError` | `failed` | `invocation-failed`（`reason: 'timeout'`） |
-| 结果持久化不确定（含 `AgentTurnHistoryAppendError` 且 `kinds` 含 `tool-call-finished`） / `ToolExecutionAfterDispatchError` / 宿主投影失败 / 工具投影失败 / **上下文替换的提交不确定**（`commit-uncertain`） | `interrupted` | `invocation-interrupted` |
+| 结果持久化不确定（含 `AgentTurnHistoryAppendError` 且 `kinds` 含 `tool-call-finished`） / 宿主投影失败 / 工具投影失败 / 授权撤销或变更 / **上下文替换的提交不确定**（`commit-uncertain`） | `interrupted` | `invocation-interrupted` |
 | `ToolDeniedError` | `denied` | `invocation-failed` |
 | 其他 | `failed` | `invocation-failed` |
 

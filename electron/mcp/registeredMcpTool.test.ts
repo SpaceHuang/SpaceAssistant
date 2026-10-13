@@ -101,15 +101,15 @@ describe('createRegisteredMcpTool', () => {
     expect(observedSignal?.aborted).toBe(false)
     expect(revocations.revokeToolForLane('desktop', toolName)).toBe(1)
     expect(observedSignal?.aborted).toBe(true)
-    await expect(turn).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+    await expect(turn).rejects.toMatchObject({ name: 'AgentTurnLifecycleInvalidatedError', reason: 'revoked' })
     expect(execute).toHaveBeenCalledTimes(1)
     expect(resolveExecutor).toHaveBeenCalledExactlyOnceWith(toolName, manager)
     expect(providerCalls).toBe(1)
     expect(admission.activeLeaseCount(requestId)).toBe(0)
     expect(admission.executorEntries).toBe(1)
     const events = (await history.read(invocationId)).events
-    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
-    expect(events.some(({ kind }) => kind === 'tool-call-finished')).toBe(false)
+    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'authorization-revoked' } })
+    expect(events.some(({ kind }) => kind === 'tool-call-finished')).toBe(true)
   })
 
   it('real Hosted Host blocks MCP executor when revocation wins after permit consume but before dispatch claim', async () => {
@@ -426,14 +426,14 @@ describe('createRegisteredMcpTool', () => {
     authorizationVersion = 'mcp-policy-v2'
     expect(policyChanges.publish('desktop')).toBe(1)
     expect(executeSignal?.aborted).toBe(true)
-    await expect(turn).rejects.toMatchObject({ name: 'ToolExecutionAfterDispatchError' })
+    await expect(turn).rejects.toMatchObject({ name: 'AgentTurnLifecycleInvalidatedError', reason: 'authorization-changed' })
     expect(execute).toHaveBeenCalledTimes(1)
     expect(providerCalls).toBe(1)
     expect(admission.activeLeaseCount(requestId)).toBe(0)
     expect(admission.executorEntries).toBe(1)
     const events = (await history.read(requestId)).events
-    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { reason: 'unknown-after-dispatch' } })
-    expect(events.some(({ kind }) => kind === 'tool-call-finished')).toBe(false)
+    expect(events.at(-1)).toMatchObject({ kind: 'invocation-interrupted', payload: { status: 'interrupted', reason: 'authorization-changed' } })
+    expect(events.some(({ kind }) => kind === 'tool-call-finished')).toBe(true)
     await manager.shutdown()
   })
 })

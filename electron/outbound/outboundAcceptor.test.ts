@@ -200,6 +200,7 @@ describe('canonical History failure summary', () => {
     expect(summary.summary).toContain('wrote intro')
     expect(summary.summary).toContain('middle edit failed')
     expect(summary.summary).toContain('Side-effect state unknown')
+    expect(summary.summary).toContain('unknown executor entry')
     expect(summary.state).toBe('unknown')
   })
 
@@ -212,6 +213,23 @@ describe('canonical History failure summary', () => {
     expect(summary.state).toBe('unknown')
   })
 
+  it('summarizes settled unknown outcomes and undispatched sibling calls without exposing arguments', () => {
+    const summary = summarizeFailedInvocation({ invocationId: 'inv-failed', version: 5, schemaVersion: 1, events: [
+      evt(1, 'invocation-context-committed', { requiredUserMessage: { message: { content: 'check queue' } } }),
+      evt(2, 'tool-call-started', { toolCallId: 'mcp-1', toolName: 'adhoc_get_query_status' }),
+      evt(3, 'tool-call-finished', { toolCallId: 'mcp-1', toolName: 'adhoc_get_query_status', success: false, isError: true,
+        executionOutcome: 'unknown-after-dispatch', executorEntry: 'entered', errorCode: 'ETIMEDOUT', result: { secret: 'private response data' } }),
+      evt(4, 'tool-call-not-dispatched', { toolCallId: 'mcp-2', toolName: 'adhoc_get_query_status', reason: 'TURN_STOPPED_BEFORE_DISPATCH' }),
+      evt(5, 'invocation-interrupted', { reason: 'unknown-after-dispatch' })
+    ] } as never, 'inv-failed', 'turn-failed')
+
+    expect(summary.state).toBe('unknown')
+    expect(summary.summary).toContain('outcome unknown after dispatch')
+    expect(summary.summary).toContain('The SDK did not retry this call')
+    expect(summary.summary).toContain('not dispatched (TURN_STOPPED_BEFORE_DISPATCH)')
+    expect(summary.summary).not.toContain('private response data')
+  })
+
   it('uses canonical success flags and the committed proposal to describe a failed write', () => {
     const summary = summarizeFailedInvocation({ invocationId: 'inv-failed', version: 4, schemaVersion: 1, events: [
       evt(1, 'model-response-committed', { toolCalls: [{ id: 'w1', name: 'write_file', input: { path: 'notes.md' } }] }),
@@ -219,7 +237,7 @@ describe('canonical History failure summary', () => {
       evt(3, 'tool-call-finished', { toolCallId: 'w1', success: false, result: { success: true, message: 'preview generated' } }),
       evt(4, 'invocation-failed', { message: 'write failed' })
     ] } as never, 'inv-failed', 'turn-failed')
-    expect(summary.summary).toContain('Failed tool results: history#3 write_file notes.md')
+    expect(summary.summary).toContain('Failed tool results: history#3 write_file:')
     expect(summary.summary).not.toContain('Committed successful tool results: history#3')
   })
 
@@ -429,7 +447,8 @@ describe('continuation intent acceptance persistence', () => {
         appendMessage(temp.db, { id: `latest-failed-${index}`, sessionId: session.id, role: 'assistant', content: `failed ${index}`, timestamp: index + 1, status: 'failed' })
         await history.appendBatch([
           { invocationId: `latest-inv-${index}`, turnId: `latest-turn-${index}`, sequence: 1, schemaVersion: 1, eventId: `latest-${index}-1`, idempotencyKey: `latest-i-${index}-1`, kind: 'invocation-context-committed', payload: { messages: [] } },
-          { invocationId: `latest-inv-${index}`, turnId: `latest-turn-${index}`, sequence: 2, schemaVersion: 1, eventId: `latest-${index}-2`, idempotencyKey: `latest-i-${index}-2`, kind: 'invocation-failed', payload: { status: 'failed', message: `failed ${index}` } }
+          { invocationId: `latest-inv-${index}`, turnId: `latest-turn-${index}`, sequence: 2, schemaVersion: 1, eventId: `latest-${index}-2`, idempotencyKey: `latest-i-${index}-2`, kind: 'tool-call-started', payload: { toolCallId: `latest-tool-${index}`, toolName: 'adhoc_get_query_status' } },
+          { invocationId: `latest-inv-${index}`, turnId: `latest-turn-${index}`, sequence: 3, schemaVersion: 1, eventId: `latest-${index}-3`, idempotencyKey: `latest-i-${index}-3`, kind: 'invocation-interrupted', payload: { status: 'interrupted', message: `failed ${index}` } }
         ], 0)
       }
       const started = vi.fn(createPersistedTurnStarter(temp.db, (requestId) => `turn-${requestId}`))
@@ -443,7 +462,7 @@ describe('continuation intent acceptance persistence', () => {
       const intent = { sessionId: session.id, text: '继续', requestId: 'latest-choice' }
       expect(await acceptor.submitOutbound(intent)).toMatchObject({ rejected: { reason: 'CONTINUATION_SOURCE_SELECTION_REQUIRED' } })
       expect(await acceptor.submitOutbound({ ...intent, sourceSelection: { chooseLatest: true } })).toMatchObject({ accepted: 'turn-started' })
-      expect(started).toHaveBeenCalledWith(expect.objectContaining({ turnIntent: expect.objectContaining({ requestId: 'latest-choice', config: expect.objectContaining({ continuationContext: expect.objectContaining({ sourceInvocationId: 'latest-inv-1' }) }) }) }))
+      expect(started).toHaveBeenCalledWith(expect.objectContaining({ turnIntent: expect.objectContaining({ requestId: 'latest-choice', config: expect.objectContaining({ continuationContext: expect.objectContaining({ mode: 'context-fallback', fallbackReason: 'UNKNOWN_SIDE_EFFECT', sourceInvocationId: 'latest-inv-1', state: 'unknown' }) }) }) }))
     } finally { temp.cleanup() }
   })
 
@@ -517,7 +536,7 @@ describe('continuation intent acceptance persistence', () => {
         const queued = getNextQueuedMessage(reopened, session.id)!
         expect(getDbConnection(reopened).prepare('SELECT route,status FROM continuation_intents WHERE request_id=?').get(requestId)).toMatchObject({ route: 'context-queue', status: 'queued' })
         claimQueuedTurnAtomically(reopened, { sessionId: session.id, userMessageId: queued.message.id, turnId: 'queued-continuation-turn', assistantMessageId: 'queued-continuation-assistant', requestId })
-        expect(getPersistedTurn(reopened, 'queued-continuation-turn')?.executionConfig?.continuationContext).toMatchObject({ sourceInvocationId: 'queue-source', sourceTurnId: 'queue-source-turn', state: 'known' })
+        expect(getPersistedTurn(reopened, 'queued-continuation-turn')?.executionConfig?.continuationContext).toMatchObject({ mode: 'context-fallback', fallbackReason: 'FOLLOW_UP_CONTEXT', sourceInvocationId: 'queue-source', sourceTurnId: 'queue-source-turn', state: 'known' })
         expect(getPersistedTurn(reopened, 'queued-continuation-turn')?.executionConfig?.continuationContext?.summary).toContain('stopped after first write')
         expect(getDbConnection(reopened).prepare('SELECT status,target_id FROM continuation_intents WHERE request_id=?').get(requestId)).toMatchObject({ status: 'accepted_turn', target_id: 'queued-continuation-turn' })
       } finally {

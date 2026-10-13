@@ -10,6 +10,10 @@ export interface AgentToolResultInput {
   userMessage?: string
   /** MCP 延迟加载观测（AD10）：延迟工具未浮现直调标记；仅持久化/事件面，不进 wire 面（B4）。 */
   deferredUnsurfaced?: true
+  executionOutcome?: import('./domainTypes').ToolCallResultPersisted['executionOutcome']
+  executorEntry?: import('./domainTypes').ToolCallResultPersisted['executorEntry']
+  executionErrorCode?: string
+  invocationDisposition?: import('./domainTypes').ToolCallResultPersisted['invocationDisposition']
 }
 
 import { projectAgentToolResultForSink, type ProcessProjectionOptions } from './processResultProjection'

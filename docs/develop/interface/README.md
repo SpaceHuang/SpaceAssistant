@@ -102,7 +102,7 @@ SDK 只定义契约与循环，装配由宿主完成，大致为：
 | `InvalidTurnBoundaryError` (`INVALID_TURN_BOUNDARY`) | `turn.ts` | 边界投影破坏了必需消息或待派发提案 |
 | `ModelAttemptRecoveryRejectedError` (`MODEL_ATTEMPT_RECOVERY_REJECTED`) | `turn.ts` | provider 尝试恢复被拒绝 |
 | `ToolExecutionRejectedError` (`TOOL_EXECUTION_REJECTED`) | `toolExecutionPort.ts` | 执行前被拒（未进入执行器） |
-| `ToolExecutionAfterDispatchError` (`TOOL_EXECUTION_UNKNOWN_AFTER_DISPATCH`) | `toolExecutionPort.ts` | 已进入执行器，异常无法证明无副作用 |
+| `ToolExecutionAfterDispatchError` (`TOOL_EXECUTION_UNKNOWN_AFTER_DISPATCH`) | `toolExecutionPort.ts` | 已进入执行器，异常结果按 unknown 工具结果结算；宿主生命周期失效时仍终止 Invocation |
 | `ChatCancelledError` (`CHAT_CANCELLED`) | `runtime/components.ts` | 聊天取消 |
 | `AgentTurnHistoryAppendError`（未导出，按 name 判定） | `turn.ts` | history 追加失败；`kinds` 含 `tool-call-finished` 视为结果持久化不确定 |
 | `AgentTurnHostProjectionError` / `AgentTurnToolProjectionError` / `AgentTurnBoundaryProjectionError`（均未导出） | `turn.ts` | critical 投影提交失败 / 上下文替换的投影与提交失败，回合结算 `interrupted` |
