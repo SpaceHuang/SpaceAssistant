@@ -919,7 +919,9 @@ describe('runShellExecutor', () => {
     const afterClear = await runShellExecutor.execute({ command: mismatch }, baseCtx(workDir, userDataDir))
     expect(afterClear.data).toMatchObject({ retryCount: 1, retryExhausted: false })
     dialectRetryBreaker.clear('sess', WINDOWS_POWERSHELL_PROFILE.id, ['cmd-del-switch'])
-  })
+    // 五次真实进程拉起（两次 del 各含方言重试 + 一次 prepared PowerShell），
+    // CI runner 上 PowerShell 冷启动慢，15s 默认值不够——与 fa94ac90 同类处置
+  }, SPAWN_TEST_TIMEOUT_MS)
 
   /** 事故重放：把 136 字节原样写进指定流，并复现宿主失败退出码（§2.2 / Gate 1）。 */
   function accidentReplayCommand(stream: 'stdout' | 'stderr' = 'stderr'): string {
